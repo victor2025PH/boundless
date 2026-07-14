@@ -1,0 +1,12 @@
+{
+  "_comment": "demo_record 修改前的 Bandicam 原始配置备份(HKCU\\Software\\BANDISOFT\\BANDICAM\\OPTION),恢复用 demo_record/restore_bandicam.ps1",
+  "sOutputFolder": "C:\\Users\\user\\Documents\\Bandicam",
+  "bTargetFullScreen": 0,
+  "nTargetDisplay": 0,
+  "bTargetFullHideControl": 0,
+  "bTargetAlwaysOnTop": 1,
+  "VideoFormat.VideoKBitrate": 4000,
+  "VideoFormat.VideoQuality": 80,
+  "nTargetMode": 1,
+  "bVideoNoCursor": 1
+}

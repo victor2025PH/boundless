@@ -1,0 +1,1067 @@
+{% extends "base.html" %}
+{% block title %}{{ (i18n or {}).get('dv_s001', "开发者工具") }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('dv_s001', "开发者工具") }}{% endblock %}
+{% block head %}
+<style>
+.dev-login{max-width:400px;margin:4rem auto;text-align:center}
+.dev-login h2{font-size:1.4rem;font-weight:700;margin-bottom:.5rem}
+.dev-login p{font-size:.85rem;color:var(--t2);margin-bottom:1.5rem}
+.dev-login .f-inp{text-align:center;font-size:1rem;letter-spacing:.1em;padding:.65rem 1rem}
+.dev-login .btn{width:100%;margin-top:.8rem;padding:.65rem}
+.dev-login .err-msg{color:var(--red);font-size:.82rem;margin-top:.5rem;min-height:1.2em}
+.settings-grid{display:grid;grid-template-columns:1fr;gap:1rem;max-width:min(920px,96vw)}
+.acc{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden}
+.acc-hd{display:flex;align-items:center;gap:.75rem;padding:1rem 1.25rem;cursor:pointer;
+  user-select:none;transition:background .15s}
+.acc-hd:hover{background:var(--input)}
+.acc-hd.open{background:var(--ps)}
+.acc-hd-icon{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;
+  justify-content:center;flex-shrink:0}
+.acc-hd-icon svg{width:16px;height:16px;color:#fff}
+.acc-title{font-weight:700;font-size:.9rem;flex:1}
+.acc-sub{font-size:.75rem;color:var(--t2);margin-top:.1rem}
+.acc-arrow{width:18px;height:18px;transition:transform .2s;flex-shrink:0;color:var(--t3)}
+.acc-hd.open .acc-arrow{transform:rotate(180deg)}
+.acc-body{padding:1.2rem 1.4rem;border-top:1px solid var(--bd);display:none}
+.acc-body.open{display:block}
+.f-grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem}
+@media(max-width:560px){.f-grid{grid-template-columns:1fr}}
+.f-row{margin-bottom:.85rem}
+.f-row:last-child{margin-bottom:0}
+.f-lbl{display:flex;align-items:center;gap:.35rem;font-size:.78rem;font-weight:600;
+  color:var(--t2);margin-bottom:.3rem}
+.f-lbl .badge-opt{font-size:.62rem;padding:.08rem .4rem;border-radius:10px;
+  background:var(--bd);color:var(--t3);font-weight:500;margin-left:auto}
+.f-inp{width:100%;padding:.5rem .8rem;border:1.5px solid var(--bd);border-radius:9px;
+  font-size:.85rem;font-family:inherit;background:var(--input);color:var(--t);
+  outline:none;transition:all .2s}
+.f-inp:focus{border-color:var(--p);box-shadow:0 0 0 3px var(--ps)}
+.f-hint{font-size:.71rem;color:var(--t3);margin-top:.25rem;line-height:1.4}
+.f-check-row{display:flex;align-items:center;gap:.5rem;font-size:.84rem;margin-bottom:.6rem}
+.f-check-row input{accent-color:var(--p);width:15px;height:15px}
+.save-bar{display:flex;align-items:center;gap:.6rem;justify-content:flex-end;margin-top:.9rem;
+  padding-top:.75rem;border-top:1px solid var(--bd)}
+.save-result{font-size:.8rem;flex:1}
+.save-result.ok{color:var(--green)}.save-result.err{color:var(--red)}
+.masked-row{position:relative}
+.masked-row .f-inp{padding-right:2.5rem}
+.show-btn{position:absolute;right:.6rem;top:50%;transform:translateY(-50%);
+  background:none;border:none;cursor:pointer;color:var(--t3);font-size:.75rem;padding:.2rem}
+.dev-warn-banner{background:linear-gradient(135deg,rgba(239,68,68,.08),rgba(245,158,11,.08));border:1.5px solid rgba(239,68,68,.2);border-radius:10px;padding:.7rem 1rem;margin-bottom:1rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem;max-width:min(920px,96vw)}
+.dev-warn-banner strong{color:var(--t)}
+.dev-logout-btn{background:none;border:1px solid var(--bd);color:var(--t3);cursor:pointer;font-size:.75rem;padding:.3rem .7rem;border-radius:6px;margin-left:auto;flex-shrink:0}
+.dev-logout-btn:hover{background:var(--input);color:var(--t)}
+.ai-status-card{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.65rem;padding:.75rem;border:1px solid var(--bd);border-radius:10px;background:rgba(91,124,246,.06);margin-bottom:.9rem}
+.ai-status-item{min-width:0}
+.ai-status-lbl{font-size:.68rem;color:var(--t3);margin-bottom:.18rem}
+.ai-status-val{font-size:.82rem;color:var(--t);font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ai-mode-grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin:.45rem 0 .85rem}
+.ai-mode-card{border:1.5px solid var(--bd);border-radius:11px;padding:.8rem;background:var(--input);cursor:pointer;transition:all .16s}
+.ai-mode-card:hover{border-color:var(--p);transform:translateY(-1px)}
+.ai-mode-card.active{border-color:var(--p);box-shadow:0 0 0 3px var(--ps)}
+.ai-mode-title{display:flex;align-items:center;gap:.45rem;font-size:.86rem;font-weight:750;color:var(--t)}
+.ai-mode-desc{font-size:.72rem;color:var(--t2);margin-top:.35rem;line-height:1.5}
+.ai-mode-meta{display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.55rem}
+.ai-pill{font-size:.65rem;color:var(--t2);border:1px solid var(--bd);border-radius:999px;padding:.1rem .45rem}
+@media(max-width:720px){.ai-status-card,.ai-mode-grid{grid-template-columns:1fr}}
+</style>
+{% endblock %}
+{% block content %}
+{% set active="developer" %}
+
+{% if not dev_unlocked %}
+{# ── Password Gate ───────────────────────────────────── #}
+<div class="dev-login">
+  <div style="font-size:2.5rem;margin-bottom:.5rem">🔐</div>
+  <h2>{{ (i18n or {}).get('developer', "开发者工具") }}</h2>
+  <p>{{ (i18n or {}).get('dv_s002', "此区域包含 API 密钥、底层配置等敏感操作，") }}<br>{{ (i18n or {}).get('dv_s003', "需要输入开发者密码才能访问。") }}</p>
+  <form id="dev-login-form" method="POST" action="/developer/auth">
+    <input class="f-inp" type="password" name="password" id="dev-pass-input" placeholder="{{ (i18n or {}).get('dv_s004', '输入开发者密码') }}" autocomplete="off" autofocus>
+    <button class="btn btn-p" type="submit">{{ (i18n or {}).get('dv_s005', "验证并进入") }}</button>
+  </form>
+  <div class="err-msg" id="dev-err">{% if dev_error %}{{ dev_error }}{% endif %}</div>
+</div>
+{% else %}
+{# ── Developer Console ────────────────────────────────── #}
+<div class="dev-warn-banner">
+  <span style="font-size:1.1rem;flex-shrink:0;margin-top:.1rem">⚠️</span>
+  <div>
+    <strong>{{ (i18n or {}).get('dv_s006', "开发者区域") }}</strong>
+    <div style="margin-top:.2rem;line-height:1.6">{{ (i18n or {}).get('dv_s007', "此页面包含 API 密钥、系统安全、Bot 核心参数等高级配置。修改不当可能导致系统异常，请谨慎操作。") }}</div>
+  </div>
+  <form method="POST" action="/developer/logout" style="margin:0">
+    <button class="dev-logout-btn" type="submit">{{ (i18n or {}).get('dv_s008', "锁定退出") }}</button>
+  </form>
+</div>
+
+<div class="settings-grid">
+
+  <!-- ══ AI 接口配置 ═════════════════════════════════════════ -->
+  <div class="acc">
+    <div class="acc-hd open" onclick="toggleAcc(this)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#5b7cf6,#8b5cf6)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+      </div>
+      <div>
+        <div class="acc-title">AI {{ (i18n or {}).get('dv_s009', "接口配置") }}</div>
+              <div class="acc-sub">API Key, {{ (i18n or {}).get('dv_s010', "模型、请求参数") }}</div>
+      </div>
+      <svg class="acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+    <div class="acc-body open" id="body-ai">
+      <div class="ai-status-card">
+        <div class="ai-status-item">
+          <div class="ai-status-lbl">{{ (i18n or {}).get('dv_s011', "当前模式") }}</div>
+          <div class="ai-status-val" id="ai-status-mode">{{ (i18n or {}).get('dv_s012', "自动识别中") }}</div>
+        </div>
+        <div class="ai-status-item">
+          <div class="ai-status-lbl">{{ (i18n or {}).get('dv_s013', "当前模型") }}</div>
+          <div class="ai-status-val" id="ai-status-model">{{ ai.get('model','—') }}</div>
+        </div>
+        <div class="ai-status-item">
+          <div class="ai-status-lbl">Base URL</div>
+          <div class="ai-status-val" id="ai-status-base">{{ ai.get('base_url','—') }}</div>
+        </div>
+        <div class="ai-status-item">
+          <div class="ai-status-lbl">{{ (i18n or {}).get('dv_s014', "最近测试") }}</div>
+          <div class="ai-status-val" id="ai-status-test">{{ (i18n or {}).get('dv_s015', "未测试") }}</div>
+        </div>
+      </div>
+      <div class="f-row">
+        <div class="f-lbl">
+          API Key
+          <span class="badge-opt">{{ (i18n or {}).get('dv_s016', "保密") }}</span>
+        </div>
+        <div class="masked-row">
+          <input class="f-inp" type="password" id="ai-api_key"
+            placeholder="{{ (i18n or {}).get('dv_s017', '输入新 Key 才会更新，留空保留原值') }}"
+            value="">
+          <button type="button" class="show-btn" onclick="toggleMask('ai-api_key',this)">{{ (i18n or {}).get('dv_s018', "显示") }}</button>
+        </div>
+        <div class="f-hint">{{ (i18n or {}).get('dv_s019', "留空则保留服务器中已存储的值，只有输入新内容才会更新") }}</div>
+      </div>
+      <div class="f-row">
+        <label class="f-lbl">AI {{ (i18n or {}).get('dv_s020', "模式切换") }}</label>
+        <div class="ai-mode-grid">
+          <div class="ai-mode-card" id="ai-card-local" onclick="switchAiPreset('local')">
+            <div class="ai-mode-title">🏠 {{ (i18n or {}).get('dv_s021', "本地低成本模式") }}</div>
+            <div class="ai-mode-desc">{{ (i18n or {}).get('dv_s022', "数据不出网，适合日常自动回复；依赖本地 Ollama/局域网模型可用性。") }}</div>
+            <div class="ai-mode-meta">
+              <span class="ai-pill">{{ (i18n or {}).get('dv_s023', "低成本") }}</span><span class="ai-pill">{{ (i18n or {}).get('dv_s024', "高隐私") }}</span><span class="ai-pill">{{ (i18n or {}).get('dv_s025', "局域网") }}</span>
+            </div>
+          </div>
+          <div class="ai-mode-card" id="ai-card-deepseek" onclick="switchAiPreset('deepseek')">
+            <div class="ai-mode-title">☁️ {{ (i18n or {}).get('dv_s026', "云端 DeepSeek 高质量模式") }}</div>
+            <div class="ai-mode-desc">{{ (i18n or {}).get('dv_s027', "回复质量更强，适合复杂咨询和高价值客户；需要有效 API Key。") }}</div>
+            <div class="ai-mode-meta">
+              <span class="ai-pill">{{ (i18n or {}).get('dv_s028', "高质量") }}</span><span class="ai-pill">{{ (i18n or {}).get('dv_s029', "按量计费") }}</span><span class="ai-pill">{{ (i18n or {}).get('tg_s041', "云端") }}</span>
+            </div>
+          </div>
+        </div>
+        <div class="f-hint">{{ (i18n or {}).get('dv_s030', "点击模式卡会自动保存并测试连接；API Key 留空时保留服务器原值。") }}</div>
+      </div>
+      <input type="hidden" id="ai-mode" value="{{ ai.get('mode','') }}">
+      <div class="f-grid">
+        <div class="f-row">
+          <label class="f-lbl">Base URL</label>
+          <input class="f-inp" type="text" id="ai-base_url"
+            value="{{ ai.get('base_url','https://api.deepseek.com') }}"
+            placeholder="https://api.deepseek.com">
+        </div>
+        <div class="f-row">
+          <label class="f-lbl">Chat {{ (i18n or {}).get('msg_js_1218', "模型") }}</label>
+          <input class="f-inp" type="text" id="ai-model"
+            value="{{ ai.get('model','deepseek-chat') }}"
+            placeholder="deepseek-chat">
+        </div>
+      </div>
+      <div class="f-grid">
+        <div class="f-row">
+          <label class="f-lbl">Embedding {{ (i18n or {}).get('msg_js_1218', "模型") }} <span class="badge-opt">{{ (i18n or {}).get('msg_s416', "可选") }}</span></label>
+          <input class="f-inp" type="text" id="ai-embedding_model"
+            value="{{ ai.get('embedding_model','') }}"
+            placeholder="text-embedding-v2">
+          <div class="f-hint">{{ (i18n or {}).get('dv_s031', "语义搜索需要，留空禁用向量化") }}</div>
+        </div>
+        <div class="f-row">
+          <label class="f-lbl">Temperature</label>
+          <input class="f-inp" type="number" step="0.1" min="0" max="2" id="ai-temperature"
+            value="{{ ai.get('temperature', 0.7) }}">
+        </div>
+      </div>
+      <div class="f-grid">
+        <div class="f-row">
+          <label class="f-lbl">{{ (i18n or {}).get('dv_s032', "最大回复 Token 数") }}</label>
+          <input class="f-inp" type="number" id="ai-max_tokens"
+            value="{{ ai.get('max_tokens', 1024) }}">
+        </div>
+        <div class="f-row">
+          <label class="f-lbl">API {{ (i18n or {}).get('dv_s033', "超时（秒）") }}</label>
+          <input class="f-inp" type="number" id="ai-timeout"
+            value="{{ ai.get('timeout', 30) }}">
+        </div>
+      </div>
+      <div class="save-bar">
+        <span class="save-result" id="save-res-ai"></span>
+        <button class="btn btn-s btn-sm" onclick="testApiConn()">{{ (i18n or {}).get('dv_s034', "测试连接") }}</button>
+        <button class="btn btn-p btn-sm" onclick="saveSection('ai')">{{ (i18n or {}).get('dv_s035', "保存 AI 配置") }}</button>
+      </div>
+
+      <div style="height:1px;background:var(--bd);margin:1rem 0"></div>
+
+      <!-- ☁️ 云端凭证 / 备用 Key 池（P-KeyPool 2026-07-12）：主 Key 挂了自动切备用；
+           此卡=余额/探活体检 + 备用 Key 编辑（保存即热生效，无需重启）。 -->
+      <div class="f-row">
+        <div class="f-lbl">☁️ {{ (i18n or {}).get('dv_cc_title', "云端凭证体检 / 备用 Key 池") }}</div>
+        <div class="f-hint">{{ (i18n or {}).get('dv_cc_sub', "主 Key 失效（欠费/被封）时自动切换备用 Key，全部失败才落本地模型。备用 Key 余额每小时巡检、每日探活，异常会弹窗提醒。") }}</div>
+        <div id="dvcc-status" style="margin:.5rem 0;font-size:.8rem;color:var(--t2)">{{ (i18n or {}).get('dv_cc_loading', "加载中…") }}</div>
+        <div id="dvcc-pool-list" style="display:flex;flex-direction:column;gap:.4rem;margin:.4rem 0"></div>
+        <div class="f-grid" style="grid-template-columns:1fr 1.4fr 1.2fr .9fr auto;gap:.4rem;align-items:end">
+          <div class="f-row"><label class="f-lbl">{{ (i18n or {}).get('dv_cc_f_name', "名称") }}</label>
+            <input class="f-inp" type="text" id="dvcc-new-name" placeholder="ds-backup"></div>
+          <div class="f-row"><label class="f-lbl">API Key</label>
+            <input class="f-inp" type="password" id="dvcc-new-key" placeholder="sk-..."></div>
+          <div class="f-row"><label class="f-lbl">Base URL <span class="badge-opt">{{ (i18n or {}).get('msg_s416', "可选") }}</span></label>
+            <input class="f-inp" type="text" id="dvcc-new-base" placeholder="{{ (i18n or {}).get('dv_cc_inherit', "留空=继承主链") }}"></div>
+          <div class="f-row"><label class="f-lbl">{{ (i18n or {}).get('msg_js_1218', "模型") }} <span class="badge-opt">{{ (i18n or {}).get('msg_s416', "可选") }}</span></label>
+            <input class="f-inp" type="text" id="dvcc-new-model" placeholder="deepseek-chat"></div>
+          <button class="btn btn-s btn-sm" style="margin-bottom:2px" onclick="dvccAddKey()">＋ {{ (i18n or {}).get('dv_cc_btn_add', "添加") }}</button>
+        </div>
+        <div class="save-bar">
+          <span class="save-result" id="dvcc-save-res"></span>
+          <button class="btn btn-s btn-sm" onclick="dvccProbe()">{{ (i18n or {}).get('dv_cc_btn_probe', "立即体检") }}</button>
+          <button class="btn btn-p btn-sm" onclick="dvccSave()">{{ (i18n or {}).get('dv_cc_btn_save', "保存并生效") }}</button>
+        </div>
+      </div>
+
+      <div style="height:1px;background:var(--bd);margin:1rem 0"></div>
+      {% set vp = voice_ai.get('voice_profile', {}) if voice_ai else {} %}
+      <div class="f-row">
+        <div class="f-lbl">
+          {{ (i18n or {}).get('dv_s036', "语音模型 Key（阿里 DashScope）") }}
+          <span class="badge-opt">{{ (i18n or {}).get('dv_s016', "保密") }}</span>
+        </div>
+        <div class="masked-row">
+          <input class="f-inp" type="password" id="vai-dashscope_api_key"
+            placeholder="{{ (i18n or {}).get('dv_s017', '输入新 Key 才会更新，留空保留原值') }}" value="">
+          <button type="button" class="show-btn" onclick="toggleMask('vai-dashscope_api_key',this)">{{ (i18n or {}).get('dv_s018', "显示") }}</button>
+        </div>
+        <div class="f-hint">{{ (i18n or {}).get('dv_s037', "用于 Qwen Voice Cloning / Qwen3-TTS，自有音色后台语音回复") }}</div>
+      </div>
+      <div class="f-grid">
+        <div class="f-row">
+          <label class="f-lbl">Region</label>
+          <input class="f-inp" type="text" id="vai-region"
+            value="{{ voice_ai.get('dashscope_region','cn') if voice_ai else 'cn' }}"
+            placeholder="cn">
+        </div>
+        <div class="f-row">
+          <label class="f-lbl">{{ (i18n or {}).get('dv_s038', "语音模型") }}</label>
+          <input class="f-inp" type="text" id="vai-model"
+            value="{{ voice_ai.get('model','qwen3-tts-vc-2026-01-22') if voice_ai else 'qwen3-tts-vc-2026-01-22' }}">
+        </div>
+      </div>
+      <div class="f-grid">
+        <div class="f-row">
+          <label class="f-lbl">voice_id / {{ (i18n or {}).get('dv_s039', "声音") }}</label>
+          <input class="f-inp" type="text" id="vai-voice"
+            value="{{ voice_ai.get('voice','my_voice') if voice_ai else 'my_voice' }}"
+            placeholder="my_voice {{ (i18n or {}).get('set_s145', '或') }} qwen-tts-vc-...">
+        </div>
+        <div class="f-row">
+          <label class="f-lbl">voice profile JSON</label>
+          <input class="f-inp" type="text" id="vai-voice_profile_path"
+            value="{{ voice_ai.get('voice_profile_path','D:/workspace/telegram-mtproto-ai/voice_samples/qwen_my_voice.json') if voice_ai else 'D:/workspace/telegram-mtproto-ai/voice_samples/qwen_my_voice.json' }}">
+        </div>
+      </div>
+      <div class="f-grid">
+        <div class="f-row">
+          <label class="f-lbl">{{ (i18n or {}).get('msg_s298', "参考音频路径") }}</label>
+          <input class="f-inp" type="text" id="vai-reference_audio_path"
+            value="{{ vp.get('reference_audio_path','D:/workspace/telegram-mtproto-ai/voice_samples/my_voice.wav') }}">
+        </div>
+        <div class="f-row">
+          <label class="f-lbl">{{ (i18n or {}).get('dv_s040', "发送审计目录") }}</label>
+          <input class="f-inp" type="text" id="vai-send_audit_dir"
+            value="{{ voice_ai.get('send_audit_dir','tmp_messenger_rpa') if voice_ai else 'tmp_messenger_rpa' }}">
+        </div>
+      </div>
+      <div class="f-grid">
+        <label class="f-check-row"><input type="checkbox" id="vai-enabled" {% if voice_ai and voice_ai.get('enabled') %}checked{% endif %}>{{ (i18n or {}).get('dv_s041', "启用语音模型") }}</label>
+        <label class="f-check-row"><input type="checkbox" id="vai-profile_enabled" {% if vp.get('enabled', True) %}checked{% endif %}>{{ (i18n or {}).get('msg_s295', "启用自有音色") }}</label>
+        <label class="f-check-row"><input type="checkbox" id="vai-owner_consent" {% if vp.get('owner_consent', True) %}checked{% endif %}>{{ (i18n or {}).get('dv_s042', "确认本人/已授权声音") }}</label>
+        <label class="f-check-row"><input type="checkbox" id="vai-auto_voice" {% if voice_ai and voice_ai.get('mode') == 'auto_voice' %}checked{% endif %}>{{ (i18n or {}).get('dv_s043', "后台自动语音发送") }}</label>
+      </div>
+      <div class="save-bar">
+        <span class="save-result" id="save-res-vai"></span>
+        <button class="btn btn-p btn-sm" onclick="saveVoiceAi()">{{ (i18n or {}).get('dv_s044', "保存语音模型配置") }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ 意图路由管理 ══════════════════════════════════ -->
+  <div class="acc">
+    <div class="acc-hd" onclick="toggleAcc(this)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#8b5cf6,#7c3aed)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+      </div>
+      <div>
+        <div class="acc-title">{{ (i18n or {}).get('dv_s045', "意图路由管理") }}</div>
+        <div class="acc-sub">{{ (i18n or {}).get('dv_s046', "编辑意图关键词、测试路由") }} — {{ (i18n or {}).get('dv_s047', "保存即时生效，无需重启") }}</div>
+      </div>
+      <svg class="acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+    <div class="acc-body" id="body-intent">
+      <div style="margin-bottom:1rem;padding:.75rem;background:var(--bg);border-radius:var(--r-sm);border:1px solid var(--bd)">
+        <div style="font-size:.85rem;font-weight:600;margin-bottom:.4rem">{{ (i18n or {}).get('dv_s048', "意图路由测试") }}</div>
+        <div style="display:flex;gap:.5rem;align-items:center">
+          <input class="f-inp" id="intent-test-input" placeholder="{{ (i18n or {}).get('dv_s049', '输入用户消息测试路由…') }}" style="flex:1">
+          <button class="btn btn-p btn-sm" onclick="testIntent()">{{ (i18n or {}).get('wa_js_108', "测试") }}</button>
+        </div>
+        <div id="intent-test-result" style="font-size:.8rem;margin-top:.3rem;color:var(--t3)"></div>
+      </div>
+      <div id="intent-kw-editor" style="font-size:.82rem;color:var(--t3)">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div>
+      <div class="save-bar" style="margin-top:.75rem">
+        <span class="save-result" id="save-res-intent"></span>
+        <button class="btn btn-p btn-sm" onclick="saveIntentKeywords()">{{ (i18n or {}).get('dv_s050', "保存意图关键词") }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ Web 管理安全 ════════════════════════════════════════ -->
+  <div class="acc">
+    <div class="acc-hd" onclick="toggleAcc(this)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#10b981,#059669)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+      </div>
+      <div>
+        <div class="acc-title">Web {{ (i18n or {}).get('dv_s051', "管理安全") }}</div>
+        <div class="acc-sub">{{ (i18n or {}).get('dv_s052', "会话超时、访问令牌") }}</div>
+      </div>
+      <svg class="acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+    <div class="acc-body" id="body-wb">
+      <div class="f-grid">
+        <div class="f-row">
+          <label class="f-lbl">{{ (i18n or {}).get('dv_s053', "会话超时（秒）") }}</label>
+          <input class="f-inp" type="number" id="wb-session_max_age"
+            value="{{ wb.get('session_max_age', 7200) }}">
+          <div class="f-hint">{{ (i18n or {}).get('dv_s054', "默认 7200（2小时），修改需重启生效") }}</div>
+        </div>
+        <div class="f-row">
+          <label class="f-lbl">{{ (i18n or {}).get('dv_s055', "访问令牌（Token 登录）") }}<span class="badge-opt">{{ (i18n or {}).get('dv_s016', "保密") }}</span></label>
+          <div class="masked-row">
+            <input class="f-inp" type="password" id="wb-auth_token"
+              placeholder="{{ (i18n or {}).get('dv_s056', '留空保留原值') }}">
+            <button type="button" class="show-btn" onclick="toggleMask('wb-auth_token',this)">{{ (i18n or {}).get('dv_s018', "显示") }}</button>
+          </div>
+        </div>
+      </div>
+      <div class="f-row">
+        <label class="f-lbl">Session {{ (i18n or {}).get('dv_s057', "密钥（Secret Key）") }}<span class="badge-opt">{{ (i18n or {}).get('dv_s016', "保密") }}</span></label>
+        <div class="masked-row">
+          <input class="f-inp" type="password" id="wb-secret_key"
+            placeholder="{{ (i18n or {}).get('dv_s056', '留空保留原值') }}">
+          <button type="button" class="show-btn" onclick="toggleMask('wb-secret_key',this)">{{ (i18n or {}).get('dv_s018', "显示") }}</button>
+        </div>
+        <div class="f-hint">{{ (i18n or {}).get('dv_s058', "用于加密 Cookie，修改会导致所有会话失效（需重新登录）") }}</div>
+      </div>
+      <div class="save-bar">
+        <span class="save-result" id="save-res-wb"></span>
+        <button class="btn btn-p btn-sm" onclick="saveSection('web_admin')">{{ (i18n or {}).get('dv_s059', "保存安全配置") }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ 通知 Webhook ═════════════════════════════════════════ -->
+  <div class="acc">
+    <div class="acc-hd" onclick="toggleAcc(this)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#f59e0b,#d97706)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+      </div>
+      <div>
+        <div class="acc-title">{{ (i18n or {}).get('notifications', "通知") }} Webhook</div>
+        <div class="acc-sub">{{ (i18n or {}).get('dv_s060', "配置变更、异常告警推送") }}</div>
+      </div>
+      <svg class="acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+    <div class="acc-body" id="body-notif">
+      <div class="f-row">
+        <label class="f-lbl">Webhook URL <span class="badge-opt">{{ (i18n or {}).get('msg_s416', "可选") }}</span></label>
+        <input class="f-inp" type="url" id="notif-webhook_url"
+          value="{{ notif.get('webhook_url','') }}"
+          placeholder="https://hooks.example.com/…">
+        <div class="f-hint">{{ (i18n or {}).get('dv_s061', "支持飞书/钉钉/Slack/企微 Bot Webhook，留空则禁用推送") }}</div>
+      </div>
+      <div class="f-row">
+        <label class="f-lbl">{{ (i18n or {}).get('dv_s062', "推送事件") }}</label>
+        <div class="f-check-row">
+          <input type="checkbox" id="notif-on_config_change"
+            {% if notif.get('on_config_change', True) %}checked{% endif %}>
+          <label for="notif-on_config_change">{{ (i18n or {}).get('im_s026', "配置变更") }}</label>
+        </div>
+        <div class="f-check-row">
+          <input type="checkbox" id="notif-on_channel_status"
+            {% if notif.get('on_channel_status', True) %}checked{% endif %}>
+          <label for="notif-on_channel_status">{{ (i18n or {}).get('dv_s063', "通道状态变化") }}</label>
+        </div>
+        <div class="f-check-row">
+          <input type="checkbox" id="notif-on_error"
+            {% if notif.get('on_error', True) %}checked{% endif %}>
+          <label for="notif-on_error">{{ (i18n or {}).get('dv_s064', "系统错误告警") }}</label>
+        </div>
+      </div>
+      <div class="save-bar">
+        <span class="save-result" id="save-res-notif"></span>
+        <button class="btn btn-s btn-sm" onclick="testWebhook()">{{ (i18n or {}).get('dv_s065', "发送测试消息") }}</button>
+        <button class="btn btn-p btn-sm" onclick="saveSection('notifications')">{{ (i18n or {}).get('dv_s066', "保存通知配置") }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ Bot 行为配置 ══════════════════════════════════════════════ -->
+  <div class="acc">
+    <div class="acc-hd" onclick="toggleAcc(this)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#06b6d4,#0891b2)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+      </div>
+      <div>
+        <div class="acc-title">Bot {{ (i18n or {}).get('set_s010', "行为配置") }}</div>
+        <div class="acc-sub">{{ (i18n or {}).get('dv_s067', "消息处理、并发、冷却") }}</div>
+      </div>
+      <svg class="acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+    <div class="acc-body" id="body-tg">
+      <div class="f-grid">
+        <div class="f-row">
+          <label class="f-lbl">{{ (i18n or {}).get('dv_s068', "最大并发工作线程") }}</label>
+          <input class="f-inp" type="number" id="tg-max_workers"
+            value="{{ tg.get('max_workers', 5) }}">
+        </div>
+        <div class="f-row">
+          <label class="f-lbl">{{ (i18n or {}).get('dv_s069', "消息队列大小") }}</label>
+          <input class="f-inp" type="number" id="tg-message_queue_size"
+            value="{{ tg.get('message_queue_size', 100) }}">
+        </div>
+      </div>
+      <div class="f-row">
+        <label class="f-lbl">{{ (i18n or {}).get('dv_s070', "处理范围") }}</label>
+        <div class="f-check-row">
+          <input type="checkbox" id="tg-process_private"
+            {% if tg.get('process_private', True) %}checked{% endif %}>
+          <label for="tg-process_private">{{ (i18n or {}).get('dv_s071', "私聊消息（勾选") }} = {{ (i18n or {}).get('dv_s072', "允许按业务逻辑处理私聊；取消") }} = {{ (i18n or {}).get('dv_s073', "仅自动回复下方引导语）") }}</label>
+        </div>
+        <div class="f-check-row">
+          <input type="checkbox" id="tg-process_groups"
+            {% if tg.get('process_groups', True) %}checked{% endif %}>
+          <label for="tg-process_groups">{{ (i18n or {}).get('dv_s074', "群组消息") }}</label>
+        </div>
+      </div>
+      <div class="f-row" id="row-reject-msg" style="{% if tg.get('process_private', True) %}display:none{% endif %}">
+        <label class="f-lbl">{{ (i18n or {}).get('dv_s075', "私聊拒绝话术") }}</label>
+        <textarea class="f-inp" id="tg-private_reject_message" rows="2"
+          style="resize:vertical;font-family:inherit;font-size:.83rem"
+          placeholder="{{ (i18n or {}).get('dv_s076', '关闭私聊后自动回复此内容') }}">{{ tg.get('private_reject_message', (i18n or {}).get('dv_s_reject_default', '亲，抱歉，我们不接受私聊处理问题，请在群内联系我或者@我，我将竭诚为您服务。')) }}</textarea>
+      </div>
+      <div class="f-grid" id="row-reject-cd" style="{% if tg.get('process_private', True) %}display:none{% endif %}">
+        <div class="f-row">
+          <label class="f-lbl">{{ (i18n or {}).get('dv_s077', "引导语冷却 (秒") }})</label>
+          <input class="f-inp" type="number" id="tg-private_reject_cooldown"
+            value="{{ tg.get('private_reject_cooldown', 60) }}" min="5" max="3600">
+          <span style="font-size:.7rem;color:var(--t3);margin-top:2px">{{ (i18n or {}).get('dv_s078', "同一用户在此时间内只回复一次") }}</span>
+        </div>
+      </div>
+      <div class="save-bar">
+        <span class="save-result" id="save-res-tg"></span>
+        <span style="font-size:.75rem;color:var(--t3)">{{ (i18n or {}).get('dv_s079', "保存后立即生效，无需重启") }}</span>
+        <button class="btn btn-p btn-sm" onclick="saveSection('telegram')">{{ (i18n or {}).get('dv_s080', "保存 Bot 配置") }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ 回复逻辑管理 ══════════════════════════════════════════ -->
+  <div class="acc">
+    <div class="acc-hd" onclick="toggleAcc(this)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#ec4899,#db2777)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+      </div>
+      <div>
+        <div class="acc-title">{{ (i18n or {}).get('dv_s081', "回复逻辑管理") }}</div>
+        <div class="acc-sub">{{ (i18n or {}).get('dv_s082', "控制 Bot 何时回复、四层触发、回复频率") }}</div>
+      </div>
+      <svg class="acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+    <div class="acc-body" id="body-rl">
+      <div style="background:var(--input);border-radius:var(--r-sm);padding:.85rem 1rem;margin-bottom:1rem">
+        <div style="font-weight:700;font-size:.84rem;margin-bottom:.6rem">{{ (i18n or {}).get('dv_s083', "核心模式选择") }}</div>
+        <div class="f-check-row">
+          <input type="checkbox" id="rl-trigger_enabled">
+          <label for="rl-trigger_enabled"><strong>{{ (i18n or {}).get('dv_s084', "四层智能触发") }}</strong> (L1 {{ (i18n or {}).get('dv_s085', "关键词") }} → L2 {{ (i18n or {}).get('db_js_031', "语义") }} → L3 {{ (i18n or {}).get('dv_s086', "上下文") }} → {{ (i18n or {}).get('dv_s087', "静默") }})</label>
+        </div>
+        <div class="f-hint" style="margin-left:2rem;margin-top:-.2rem">
+          {{ (i18n or {}).get('dv_s088', "开启：Bot 只在判断消息与业务相关时才回复（推荐）") }}<br>
+          {{ (i18n or {}).get('dv_s089', "关闭：退回简单模式，按下方") }} "{{ (i18n or {}).get('dv_s090', "群消息回复模式") }}" {{ (i18n or {}).get('dv_s091', "决定何时回复") }}
+        </div>
+      </div>
+      <div class="f-row">
+        <label class="f-lbl">{{ (i18n or {}).get('dv_s092', "群消息回复模式（四层触发关闭时使用）") }}</label>
+        <select class="f-inp" id="rl-group_reply_mode" style="max-width:320px">
+          <option value="mention_or_keyword">@ {{ (i18n or {}).get('dv_s093', "或关键词") }}</option>
+          <option value="mention_only">{{ (i18n or {}).get('dv_s094', "仅被") }} @ {{ (i18n or {}).get('dv_s095', "时回复") }}</option>
+          <option value="keyword_only">{{ (i18n or {}).get('dv_s096', "仅关键词触发") }}</option>
+          <option value="always">{{ (i18n or {}).get('dv_s097', "每句都回复") }}</option>
+        </select>
+        <div class="f-hint">
+          <strong>@ {{ (i18n or {}).get('dv_s093', "或关键词") }}</strong>: {{ (i18n or {}).get('dv_s098', "只在被") }} @ {{ (i18n or {}).get('dv_s099', "或消息含业务关键词时回复（推荐）") }}<br>
+          <strong>{{ (i18n or {}).get('dv_s094', "仅被") }} @ {{ (i18n or {}).get('dv_s095', "时回复") }}</strong>: {{ (i18n or {}).get('dv_s100', "最严格，只回复") }} @ {{ (i18n or {}).get('dv_s101', "了 Bot 的消息") }}<br>
+          <strong>{{ (i18n or {}).get('dv_s096', "仅关键词触发") }}</strong>: {{ (i18n or {}).get('dv_s102', "只对含关键词的消息回复") }}<br>
+          <strong>{{ (i18n or {}).get('dv_s097', "每句都回复") }}</strong>: {{ (i18n or {}).get('dv_s103', "回复所有群消息（不推荐）") }}
+        </div>
+      </div>
+      <hr style="border:none;border-top:1px solid var(--bd);margin:1rem 0">
+      <div style="font-weight:700;font-size:.84rem;margin-bottom:.6rem">{{ (i18n or {}).get('dv_s104', "回复策略子开关") }}</div>
+      <div class="f-check-row">
+        <input type="checkbox" id="rl-reply_chain_enabled">
+        <label for="rl-reply_chain_enabled">{{ (i18n or {}).get('dv_s105', "回复链触发") }} — {{ (i18n or {}).get('dv_s106', "用户回复 Bot 之前发的消息时必回") }}</label>
+      </div>
+      <div class="f-check-row">
+        <input type="checkbox" id="rl-follow_up_enabled">
+        <label for="rl-follow_up_enabled">{{ (i18n or {}).get('dv_s107', "追问检测") }} — {{ (i18n or {}).get('dv_s108', "近期 Bot 回过的用户，后续消息可能回复") }}</label>
+      </div>
+      <div class="f-grid" style="margin-left:2rem;margin-bottom:.6rem">
+        <div class="f-row">
+          <label class="f-lbl">{{ (i18n or {}).get('dv_s109', "追问回看条数") }}</label>
+          <input class="f-inp" type="number" id="rl-follow_up_lookback" min="3" max="30" style="max-width:100px">
+          <span class="f-hint">{{ (i18n or {}).get('dv_s110', "往前看多少条消息判断是否追问") }}</span>
+        </div>
+      </div>
+      <div class="f-check-row">
+        <input type="checkbox" id="rl-session_window_enabled">
+        <label for="rl-session_window_enabled">{{ (i18n or {}).get('dv_s111', "会话窗口") }} — {{ (i18n or {}).get('dv_s112', "在最近回过的时间窗口内更积极回复") }}</label>
+      </div>
+      <div class="f-grid" style="margin-left:2rem;margin-bottom:.6rem">
+        <div class="f-row">
+          <label class="f-lbl">{{ (i18n or {}).get('dv_s113', "窗口时长（分钟）") }}</label>
+          <input class="f-inp" type="number" id="rl-session_window_minutes" min="5" max="120" style="max-width:100px">
+          <span class="f-hint">{{ (i18n or {}).get('dv_s114', "最近回复过后，在此时间内对同一用户更积极") }}</span>
+        </div>
+      </div>
+      <div class="f-check-row">
+        <input type="checkbox" id="rl-l2_fallback_enabled">
+        <label for="rl-l2_fallback_enabled">L2 {{ (i18n or {}).get('db_js_090', "兜底") }} — {{ (i18n or {}).get('dv_s115', "四层触发未命中时，用 AI 二次判断是否回复") }}</label>
+      </div>
+      <div class="f-check-row">
+        <input type="checkbox" id="rl-ai_context_reply_enabled">
+        <label for="rl-ai_context_reply_enabled">AI {{ (i18n or {}).get('dv_s116', "上下文判断") }} — {{ (i18n or {}).get('dv_s117', "让 AI 根据上下文决定是否值得回复") }}</label>
+      </div>
+      <hr style="border:none;border-top:1px solid var(--bd);margin:1rem 0">
+      <div style="font-weight:700;font-size:.84rem;margin-bottom:.6rem">{{ (i18n or {}).get('dv_s118', "关键参数") }}</div>
+      <div class="f-grid">
+        <div class="f-row">
+          <label class="f-lbl">L2 {{ (i18n or {}).get('dv_s119', "语义回复阈值") }}</label>
+          <div style="display:flex;align-items:center;gap:.5rem">
+            <input type="range" id="rl-l2_reply_threshold" min="0.3" max="1.0" step="0.05"
+              style="flex:1" oninput="document.getElementById('rl-l2-val').textContent=this.value">
+            <span id="rl-l2-val" style="font-weight:600;font-size:.88rem;min-width:2.5rem;text-align:center">0.75</span>
+          </div>
+          <div class="f-hint">{{ (i18n or {}).get('dv_s120', "越高越严格（回复越少）；") }}0.75 = 75% {{ (i18n or {}).get('dv_s121', "以上把握才回复。调到 0.85 可大幅减少回复。") }}</div>
+        </div>
+        <div class="f-row">
+          <label class="f-lbl">L3 {{ (i18n or {}).get('tg_s018', "冷却时间（秒）") }}</label>
+          <input class="f-inp" type="number" id="rl-l3_cooldown_seconds" min="10" max="600" style="max-width:120px">
+          <div class="f-hint">{{ (i18n or {}).get('dv_s122', "回复后冷却期内不再回复同一用户。90秒") }} = {{ (i18n or {}).get('dv_s123', "至少间隔1.5分钟。") }}</div>
+        </div>
+      </div>
+      <div class="save-bar">
+        <span class="save-result" id="save-res-rl"></span>
+        <span style="font-size:.75rem;color:var(--t3)">{{ (i18n or {}).get('dv_s079', "保存后立即生效，无需重启") }}</span>
+        <button class="btn btn-p btn-sm" onclick="saveReplyLogic()">{{ (i18n or {}).get('dv_s124', "保存回复逻辑") }}</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endif %}
+
+{% if dev_unlocked %}
+<script>
+function toggleAcc(hd){
+  hd.classList.toggle('open');
+  hd.nextElementSibling.classList.toggle('open');
+}
+function toggleMask(id, btn){
+  const inp = document.getElementById(id);
+  if(!inp) return;
+  if(inp.type==='password'){ inp.type='text'; btn.textContent=window.T('msg_js_2037'); }
+  else { inp.type='password'; btn.textContent=window.T('dv_s018'); }
+}
+
+(function(){
+  const cb = document.getElementById('tg-process_private');
+  if(!cb) return;
+  cb.addEventListener('change', function(){
+    const show = !this.checked;
+    document.getElementById('row-reject-msg').style.display = show ? '' : 'none';
+    document.getElementById('row-reject-cd').style.display  = show ? '' : 'none';
+  });
+})();
+
+function _getFields(prefix){
+  const fields = {};
+  document.querySelectorAll(`[id^="${prefix}-"]`).forEach(el=>{
+    const key = el.id.slice(prefix.length + 1);
+    if(el.type === 'checkbox') fields[key] = el.checked;
+    else if(el.value !== undefined) fields[key] = el.value;
+  });
+  return fields;
+}
+
+function detectAiMode(){
+  const explicit = (document.getElementById('ai-mode')?.value || '').trim();
+  if(explicit === 'local' || explicit === 'deepseek') return explicit;
+  const base = (document.getElementById('ai-base_url')?.value || '').toLowerCase();
+  const model = (document.getElementById('ai-model')?.value || '').toLowerCase();
+  if(base.includes('11434') || base.includes('ollama') || model.includes('qwen')) return 'local';
+  if(base.includes('deepseek') || model.includes('deepseek')) return 'deepseek';
+  return 'custom';
+}
+
+function refreshAiStatus(testText){
+  const mode = detectAiMode();
+  const modeText = mode === 'local' ? window.T('dv_s021')
+                : mode === 'deepseek' ? window.T('dv_js001')
+                : window.T('dv_js002');
+  document.getElementById('ai-status-mode').textContent = modeText;
+  document.getElementById('ai-status-model').textContent = document.getElementById('ai-model').value || '—';
+  document.getElementById('ai-status-base').textContent = document.getElementById('ai-base_url').value || '—';
+  if(testText) document.getElementById('ai-status-test').textContent = testText;
+  document.getElementById('ai-card-local')?.classList.toggle('active', mode === 'local');
+  document.getElementById('ai-card-deepseek')?.classList.toggle('active', mode === 'deepseek');
+}
+
+async function saveSection(section){
+  const prefix = section === 'web_admin' ? 'wb'
+               : section === 'notifications' ? 'notif'
+               : section === 'telegram' ? 'tg' : 'ai';
+  const resEl = document.getElementById(`save-res-${prefix}`);
+  resEl.textContent = window.T('ov_js_saving'); resEl.className = 'save-result';
+  try{
+    const fields = _getFields(prefix);
+    const r = await fetch('/api/settings/save',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({section, fields}),
+    });
+    const d = await r.json();
+    if(!r.ok){ resEl.textContent = window.T('ov_js_save_fail_e')+(d.detail||window.T('inbox.voice.unknown_err')); resEl.className='save-result err'; return null; }
+    resEl.textContent = window.Tf('dv_saved_n', {n: d.updated.length}); resEl.className='save-result ok';
+    if(section === 'ai') refreshAiStatus(window.T('dv_js003'));
+    setTimeout(()=>{ resEl.textContent=''; }, 4000);
+    return d;
+  }catch(e){
+    resEl.textContent = window.T('tg_js_011')+e.message; resEl.className='save-result err';
+    return null;
+  }
+}
+
+async function switchAiPreset(kind){
+  const presets = {
+    local: {
+      mode: 'local',
+      /* 176(5090) 与 ai.fallback 兜底同栈同模型（旧值 192.168.0.184 是网段迁移前的死主机）；
+         timeout 120 覆盖冷载 ~30-60s，热答秒级 */
+      base_url: 'http://192.168.0.176:11434/v1',
+      model: 'qwen3:30b-a3b-instruct-2507-q4_K_M',
+      embedding_model: '',
+      temperature: '0.8',
+      max_tokens: '2048',
+      timeout: '120',
+    },
+    deepseek: {
+      mode: 'deepseek',
+      base_url: 'https://api.deepseek.com/v1',
+      model: 'deepseek-chat',
+      embedding_model: '',
+      temperature: '0.7',
+      max_tokens: '2048',
+      timeout: '60',
+    },
+  };
+  const p = presets[kind];
+  if(!p) return;
+  document.getElementById('ai-mode').value = p.mode;
+  document.getElementById('ai-base_url').value = p.base_url;
+  document.getElementById('ai-model').value = p.model;
+  document.getElementById('ai-embedding_model').value = p.embedding_model;
+  document.getElementById('ai-temperature').value = p.temperature;
+  document.getElementById('ai-max_tokens').value = p.max_tokens;
+  document.getElementById('ai-timeout').value = p.timeout;
+  refreshAiStatus(window.T('psn_js_034'));
+  const resEl = document.getElementById('save-res-ai');
+  resEl.textContent = kind === 'local' ? window.T('dv_js004') : window.T('dv_js005');
+  resEl.className = 'save-result';
+  const saved = await saveSection('ai');
+  if(saved) await testApiConn({silent:false});
+}
+
+async function saveVoiceAi(){
+  const resEl = document.getElementById('save-res-vai');
+  resEl.textContent = window.T('ov_js_saving'); resEl.className = 'save-result';
+  const fields = {
+    dashscope_api_key: document.getElementById('vai-dashscope_api_key').value.trim(),
+    enabled: document.getElementById('vai-enabled').checked,
+    mode: document.getElementById('vai-auto_voice').checked ? 'auto_voice' : 'approval_only',
+    trigger: document.getElementById('vai-auto_voice').checked ? 'always' : 'when_peer_voice',
+    backend: 'voice_clone_command',
+    voice: document.getElementById('vai-voice').value.trim() || 'my_voice',
+    model: document.getElementById('vai-model').value.trim() || 'qwen3-tts-vc-2026-01-22',
+    format: 'wav',
+    region: document.getElementById('vai-region').value.trim() || 'cn',
+    voice_profile_path: document.getElementById('vai-voice_profile_path').value.trim(),
+    reference_audio_path: document.getElementById('vai-reference_audio_path').value.trim(),
+    send_audit_dir: document.getElementById('vai-send_audit_dir').value.trim() || 'tmp_messenger_rpa',
+    profile_enabled: document.getElementById('vai-profile_enabled').checked,
+    owner_consent: document.getElementById('vai-owner_consent').checked,
+  };
+  try{
+    const r = await fetch('/api/settings/save',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({section:'voice_ai', fields}),
+    });
+    const d = await r.json();
+    if(!r.ok){ resEl.textContent = window.T('ov_js_save_fail_e')+(d.detail||window.T('inbox.voice.unknown_err')); resEl.className='save-result err'; return; }
+    document.getElementById('vai-dashscope_api_key').value = '';
+    resEl.textContent = window.Tf('dv_saved_n', {n: d.updated.length}); resEl.className='save-result ok';
+    setTimeout(()=>{ resEl.textContent=''; }, 4000);
+  }catch(e){
+    resEl.textContent = window.T('tg_js_011')+e.message; resEl.className='save-result err';
+  }
+}
+
+async function testApiConn(opts){
+  opts = opts || {};
+  const resEl = document.getElementById('save-res-ai');
+  resEl.textContent = window.T('dv_js006'); resEl.className='save-result';
+  refreshAiStatus(window.T('dv_js006'));
+  try{
+    const r = await fetch('/api/setup/test-ai',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        api_key:  document.getElementById('ai-api_key').value.trim() || '_keep_',
+        base_url: document.getElementById('ai-base_url').value.trim(),
+        model:    document.getElementById('ai-model').value.trim(),
+      }),
+    });
+    const d = await r.json();
+    resEl.textContent = (d.ok?'✓ ':'✗ ') + d.msg;
+    resEl.className = 'save-result '+(d.ok?'ok':'err');
+    refreshAiStatus(d.ok ? (window.T('dv_js007') + (d.msg || window.T('dv_js008'))) : (window.T('dv_js009') + (d.msg || window.T('dv_js010'))));
+    return d;
+  }catch(e){
+    resEl.textContent=window.T('tg_js_011')+e.message; resEl.className='save-result err';
+    refreshAiStatus(window.T('dv_js011') + e.message);
+    return {ok:false, msg:e.message};
+  }
+}
+
+// ── ☁️ 云端凭证体检 / 备用 Key 池（P-KeyPool 2026-07-12）──────────
+// 主 Key 失效自动切备用（ai.key_pool）；此卡读 /api/setup/cloud-credentials 出
+// 余额/探活/顶班现状，编辑走 POST /api/setup/key-pool（掩码回传保真密钥，热生效）。
+let _dvccKeys = [];
+
+function _dvccEsc(s){
+  const d = document.createElement('div');
+  d.textContent = String(s == null ? '' : s);
+  return d.innerHTML;
+}
+
+function _dvccRender(rt, pings){
+  rt = rt || {}; pings = pings || {};
+  const box = document.getElementById('dvcc-pool-list');
+  if(!box) return;
+  if(!_dvccKeys.length){
+    box.innerHTML = '<div style="font-size:.78rem;color:var(--t2)">' + window.T('dv_cc_js_none') + '</div>';
+    return;
+  }
+  box.innerHTML = _dvccKeys.map((k, i)=>{
+    const r = rt[k.name] || {};
+    const p = pings[k.name];
+    const chips = [];
+    if(r.cooling) chips.push('<span class="ai-pill" style="color:#dc2626">' + window.Tf('dv_cc_js_cooling', {s: r.cooldown_remaining_sec || 0}) + '</span>');
+    if(p) chips.push('<span class="ai-pill">' + window.T('dv_cc_js_ping') + ' ' + (p.ok ? '🟢' : '🔴') + '</span>');
+    return '<div style="display:flex;gap:.6rem;align-items:center;font-size:.8rem;border:1px solid var(--bd);border-radius:8px;padding:.35rem .6rem">'
+      + '<b style="min-width:90px">' + _dvccEsc(k.name) + '</b>'
+      + '<code style="opacity:.8">' + _dvccEsc(k.api_key || '') + '</code>'
+      + '<span style="flex:1;opacity:.7">' + _dvccEsc(k.base_url || window.T('dv_cc_js_inherit')) + (k.model ? (' · ' + _dvccEsc(k.model)) : '') + '</span>'
+      + chips.join('')
+      + '<button class="btn btn-s btn-sm" data-dvcc-del="' + i + '" title="del">✕</button></div>';
+  }).join('');
+}
+
+async function dvccLoad(probe){
+  const st = document.getElementById('dvcc-status');
+  if(!st) return;
+  try{
+    const r = await fetch('/api/setup/cloud-credentials' + (probe ? '?probe=1' : ''), {credentials:'same-origin'});
+    const d = await r.json();
+    if(!d.ok) throw new Error('bad response');
+    const parts = [];
+    (d.balances || []).forEach(b=>{
+      const bal = (b.balance == null) ? '—' : (Number(b.balance).toFixed(2) + ' ' + (b.currency || ''));
+      const icon = b.status === 'low' ? '🔴' : (b.status === 'auth_failed' ? '⛔' : (b.status === 'ok' ? '🟢' : '⚪'));
+      const bad = (b.status === 'low' || b.status === 'auth_failed');
+      parts.push('<span style="margin-right:.9rem">' + icon + ' ' + _dvccEsc(b.provider) + ' '
+        + window.T('dv_cc_js_bal') + ' <b style="color:' + (bad ? '#dc2626' : 'inherit') + '">' + _dvccEsc(bal) + '</b></span>');
+    });
+    const stats = (d.pool && d.pool.stats) || {};
+    if(stats.calls){
+      parts.push('<span>🛟 ' + window.Tf('dv_cc_js_takeover', {n: stats.ok || 0})
+        + (stats.last_key ? (' · ' + _dvccEsc(stats.last_key)) : '') + '</span>');
+    }
+    // 出话分布（进程启动以来）：主链 / 备用池 / 本地兜底 各出了多少话、花了多少钱
+    const u = d.usage || {};
+    if(u.primary || u.key_pool || u.local_fallback){
+      const seg = [];
+      [['primary', 'dv_cc_js_u_primary'], ['key_pool', 'dv_cc_js_u_pool'],
+       ['local_fallback', 'dv_cc_js_u_local']].forEach(pair=>{
+        const g = u[pair[0]];
+        if(g && g.calls){
+          seg.push(window.T(pair[1]) + ' ' + g.calls
+            + (g.cost_usd ? ('($' + Number(g.cost_usd).toFixed(3) + ')') : ''));
+        }
+      });
+      if(seg.length) parts.push('<span style="margin-left:.9rem">📊 ' + window.T('dv_cc_js_usage') + ' ' + seg.join(' · ') + '</span>');
+    }
+    st.innerHTML = parts.join('') || window.T('dv_cc_js_no_balance');
+    _dvccKeys = ((d.pool && d.pool.keys) || []).map(k=>({
+      name: k.name, api_key: k.api_key_masked || '',
+      base_url: k.base_url || '', model: k.model || '',
+    }));
+    const rt = {};
+    ((d.pool && d.pool.runtime) || []).forEach(e=>{ rt[e.name] = e; });
+    _dvccRender(rt, d.pings || {});
+  }catch(e){
+    st.textContent = window.T('inbox.voice.unknown_err');
+  }
+}
+
+function dvccAddKey(){
+  const res = document.getElementById('dvcc-save-res');
+  const name = document.getElementById('dvcc-new-name').value.trim();
+  const key = document.getElementById('dvcc-new-key').value.trim();
+  if(!name || !key){ res.textContent = window.T('dv_cc_js_need_name_key'); res.className = 'save-result err'; return; }
+  if(_dvccKeys.some(k=>k.name === name)){ res.textContent = window.Tf('dv_cc_js_dup', {name: name}); res.className = 'save-result err'; return; }
+  _dvccKeys.push({
+    name: name, api_key: key,
+    base_url: document.getElementById('dvcc-new-base').value.trim(),
+    model: document.getElementById('dvcc-new-model').value.trim(),
+  });
+  ['dvcc-new-name','dvcc-new-key','dvcc-new-base','dvcc-new-model'].forEach(id=>{
+    const el = document.getElementById(id); if(el) el.value = '';
+  });
+  res.textContent = ''; res.className = 'save-result';
+  _dvccRender();
+}
+
+async function dvccSave(){
+  const res = document.getElementById('dvcc-save-res');
+  res.textContent = window.T('ov_js_saving'); res.className = 'save-result';
+  try{
+    const r = await fetch('/api/setup/key-pool', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({keys: _dvccKeys}),
+    });
+    const d = await r.json();
+    if(!d.ok){ res.textContent = '✗ ' + (d.detail || ''); res.className = 'save-result err'; return; }
+    res.textContent = '✓ ' + (d.detail || '') + (d.ai_ready ? '' : (' · ' + window.T('dv_cc_js_reload_warn')));
+    res.className = 'save-result ok';
+    await dvccLoad(false);
+  }catch(e){
+    res.textContent = window.T('tg_js_011') + e.message; res.className = 'save-result err';
+  }
+}
+
+async function dvccProbe(){
+  const res = document.getElementById('dvcc-save-res');
+  res.textContent = window.T('dv_cc_js_probing'); res.className = 'save-result';
+  await dvccLoad(true);
+  res.textContent = '';
+}
+
+(function(){
+  const box = document.getElementById('dvcc-pool-list');
+  if(box){
+    // 删除按钮走事件委托（容器一次绑定），不给动态行拼 inline onclick
+    box.addEventListener('click', function(ev){
+      const b = ev.target && ev.target.closest ? ev.target.closest('[data-dvcc-del]') : null;
+      if(!b) return;
+      const i = parseInt(b.getAttribute('data-dvcc-del'), 10);
+      if(!isNaN(i)){ _dvccKeys.splice(i, 1); _dvccRender(); }
+    });
+  }
+  dvccLoad(false);
+})();
+
+async function testWebhook(){
+  const resEl = document.getElementById('save-res-notif');
+  resEl.textContent = window.T('rpa_js_st_sending'); resEl.className='save-result';
+  try{
+    const r = await fetch('/api/settings/test-webhook');
+    const d = await r.json();
+    resEl.textContent = (d.ok?'✓ '+window.T('dv_js012'):'✗ '+window.T('dv_js013')+(d.error||d.status));
+    resEl.className = 'save-result '+(d.ok?'ok':'err');
+  }catch(e){ resEl.textContent=window.T('tg_js_011')+e.message; resEl.className='save-result err'; }
+}
+
+/* ── Intent Keywords ─────────────────────────────── */
+let _intentKeywords = {};
+const _intentLabels = {
+  greeting:window.T('rpa_intent_greeting'), order_query:window.T('kb_s111'), channel_info:window.T('tp_nm_channel_info'),
+  status_check:window.T('tp_nm_status_check'), price_check:window.T('dv_js014'), complaint:window.T('dv_js015'),
+  small_talk:window.T('tp_nm_small_talk'), test:window.T('wa_js_108'), gxp_command:'GXP '+window.T('dv_js016'),
+  enhanced_quota_config:window.T('dv_js017'), quota_config:window.T('dv_js018'),
+};
+
+async function loadIntentKeywords(){
+  const el=document.getElementById('intent-kw-editor');
+  try{
+    const r=await fetch('/api/settings/intent-keywords');
+    const d=await r.json();
+    _intentKeywords=d.keywords||{};
+    renderIntentEditor();
+  }catch(e){
+    el.innerHTML='<div style="color:var(--red)">'+window.T('rpa_load_failed')+'</div>';
+  }
+}
+function renderIntentEditor(){
+  const el=document.getElementById('intent-kw-editor');
+  const intents=Object.keys(_intentKeywords);
+  if(!intents.length){
+    el.innerHTML='<div style="color:var(--t3)">'+window.T('dv_js019')+'</div>';
+    return;
+  }
+  el.innerHTML=intents.map(intent=>{
+    const label=_intentLabels[intent]||intent;
+    const kws=_intentKeywords[intent]||[];
+    return `
+    <div style="margin-bottom:.75rem;border:1px solid var(--bd);border-radius:var(--r-sm);padding:.5rem .65rem;background:var(--card)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.35rem">
+        <span style="font-weight:600;font-size:.82rem;color:var(--t)">${label} <code style="font-size:.7rem;color:var(--t3)">${intent}</code></span>
+        <span style="font-size:.72rem;color:var(--t3)">${kws.length} ${window.T('dv_js023')}</span>
+      </div>
+      <textarea class="f-inp intent-kw-area" data-intent="${intent}"
+        style="min-height:2.5rem;font-size:.78rem;font-family:monospace;line-height:1.6"
+        placeholder="${window.T('dv_js024')}">${kws.join('\n')}</textarea>
+    </div>`;
+  }).join('');
+}
+async function saveIntentKeywords(){
+  const resEl=document.getElementById('save-res-intent');
+  resEl.textContent=window.T('ov_js_saving'); resEl.className='save-result';
+  const areas=document.querySelectorAll('.intent-kw-area');
+  const updated={};
+  areas.forEach(area=>{
+    const intent=area.dataset.intent;
+    const lines=area.value.split('\n').map(l=>l.trim()).filter(l=>l);
+    updated[intent]=lines;
+  });
+  try{
+    const r=await fetch('/api/settings/intent-keywords',{
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({keywords:updated}),
+    });
+    const d=await r.json();
+    if(d.ok){
+      _intentKeywords=updated;
+      resEl.textContent='✓ '+window.T('dv_js020'); resEl.className='save-result ok';
+    }else{
+      resEl.textContent=window.T('ov_js_save_fail'); resEl.className='save-result err';
+    }
+  }catch(e){
+    resEl.textContent=window.T('tg_js_011')+e.message; resEl.className='save-result err';
+  }
+}
+async function testIntent(){
+  const input=document.getElementById('intent-test-input');
+  const resEl=document.getElementById('intent-test-result');
+  const text=input.value.trim();
+  if(!text){ resEl.textContent=window.T('dv_js021'); return; }
+  resEl.textContent=window.T('dv_js006');
+  try{
+    const r=await fetch('/api/settings/test-intent',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text}),
+    });
+    const d=await r.json();
+    const label=_intentLabels[d.intent]||d.intent;
+    resEl.innerHTML=`${window.T('dv_js025')}: <b style="color:var(--p)">${label}</b> (<code>${d.intent}</code>) — ${window.T('dv_js026')}: ${d.matched_by}`;
+  }catch(e){
+    resEl.textContent=window.T('dv_js009')+e.message;
+  }
+}
+loadIntentKeywords();
+
+refreshAiStatus();
+['ai-base_url','ai-model','ai-mode'].forEach(id=>{
+  document.getElementById(id)?.addEventListener('input', ()=>refreshAiStatus());
+});
+
+/* ── Reply Logic ─────────────────────────────────── */
+async function loadReplyLogic(){
+  try{
+    const r = await fetch('/api/reply-logic');
+    const d = await r.json();
+    document.getElementById('rl-trigger_enabled').checked = !!d.trigger_enabled;
+    document.getElementById('rl-group_reply_mode').value = d.group_reply_mode || 'mention_or_keyword';
+    document.getElementById('rl-reply_chain_enabled').checked = d.reply_chain_enabled !== false;
+    document.getElementById('rl-follow_up_enabled').checked = d.follow_up_enabled !== false;
+    document.getElementById('rl-follow_up_lookback').value = d.follow_up_lookback || 10;
+    document.getElementById('rl-session_window_enabled').checked = d.session_window_enabled !== false;
+    document.getElementById('rl-session_window_minutes').value = d.session_window_minutes || 45;
+    document.getElementById('rl-l2_fallback_enabled').checked = d.l2_fallback_enabled !== false;
+    document.getElementById('rl-ai_context_reply_enabled').checked = d.ai_context_reply_enabled !== false;
+    const slider = document.getElementById('rl-l2_reply_threshold');
+    slider.value = d.l2_reply_threshold || 0.75;
+    document.getElementById('rl-l2-val').textContent = slider.value;
+    document.getElementById('rl-l3_cooldown_seconds').value = d.l3_cooldown_seconds || 90;
+  }catch(e){ console.error(window.T('dv_js022'), e); }
+}
+async function saveReplyLogic(){
+  const resEl = document.getElementById('save-res-rl');
+  resEl.textContent = window.T('ov_js_saving'); resEl.className = 'save-result';
+  try{
+    const body = {
+      trigger_enabled: document.getElementById('rl-trigger_enabled').checked,
+      group_reply_mode: document.getElementById('rl-group_reply_mode').value,
+      reply_chain_enabled: document.getElementById('rl-reply_chain_enabled').checked,
+      follow_up_enabled: document.getElementById('rl-follow_up_enabled').checked,
+      follow_up_lookback: parseInt(document.getElementById('rl-follow_up_lookback').value) || 10,
+      session_window_enabled: document.getElementById('rl-session_window_enabled').checked,
+      session_window_minutes: parseInt(document.getElementById('rl-session_window_minutes').value) || 45,
+      l2_fallback_enabled: document.getElementById('rl-l2_fallback_enabled').checked,
+      ai_context_reply_enabled: document.getElementById('rl-ai_context_reply_enabled').checked,
+      l2_reply_threshold: parseFloat(document.getElementById('rl-l2_reply_threshold').value) || 0.75,
+      l3_cooldown_seconds: parseInt(document.getElementById('rl-l3_cooldown_seconds').value) || 90,
+    };
+    const r = await fetch('/api/reply-logic',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(body),
+    });
+    const d = await r.json();
+    if(!r.ok){ resEl.textContent=window.T('ov_js_save_fail_e')+(d.detail||window.T('inbox.voice.unknown_err')); resEl.className='save-result err'; return; }
+    resEl.textContent=window.Tf('dv_saved_n', {n: d.updated.length}); resEl.className='save-result ok';
+    setTimeout(()=>{ resEl.textContent=''; }, 4000);
+  }catch(e){
+    resEl.textContent=window.T('tg_js_011')+e.message; resEl.className='save-result err';
+  }
+}
+loadReplyLogic();
+</script>
+{% endif %}
+
+{% endblock %}

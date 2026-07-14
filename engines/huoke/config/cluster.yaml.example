@@ -1,0 +1,31 @@
+# OpenClaw 集群配置 (模板) — 复制为 config/cluster.yaml
+#   cp config/cluster.yaml.example config/cluster.yaml
+# 含 shared_secret，属敏感文件，真实 cluster.yaml 已被 .gitignore 忽略、不入库。
+
+# role: coordinator (主控) | worker (工作节点) | standalone (单机，默认)
+role: standalone
+
+# Worker 模式: 主控节点地址 (coordinator / standalone 模式忽略)
+coordinator_url: ""
+
+# 本机 API 端口 (应与 config/launch.env 的 OPENCLAW_PORT 一致)
+local_port: 18080
+
+# 集群通信密钥 (所有节点必须一致)
+# 生成强随机值：python -c "import secrets;print(secrets.token_hex(16))"
+shared_secret: "CHANGE_ME_32_HEX_CHARS"
+
+# 心跳间隔 (秒) — 200 台设备场景建议 10 秒
+heartbeat_interval: 10
+
+# 主机离线超时 (秒) — 3 倍心跳，30 秒无心跳判定离线
+host_timeout: 30
+
+# 启动时自动加入集群 (worker 模式有效)
+auto_join: true
+
+# 主机显示名称 (空则使用系统主机名)
+host_name: ""
+
+# 主机唯一标识 (空则自动由 主机名+MAC 生成；建议每台 Worker 填固定值，如 "worker-01")
+host_id: ""

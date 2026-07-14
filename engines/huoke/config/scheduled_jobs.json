@@ -1,0 +1,302 @@
+[
+  {
+    "id": "e8a525de",
+    "name": "VPN auto rotate (test)",
+    "cron": "0 */2 * * *",
+    "action": "vpn_rotate",
+    "params": {
+      "strategy": "round-robin",
+      "apply": true
+    },
+    "enabled": false,
+    "last_run": "2026-04-04 12:00:15"
+  },
+  {
+    "id": "bade715a",
+    "name": "VPN auto rotate",
+    "cron": "0 */2 * * *",
+    "action": "vpn_rotate",
+    "params": {
+      "strategy": "round-robin",
+      "apply": true
+    },
+    "enabled": false,
+    "last_run": "2026-04-04 12:00:15"
+  },
+  {
+    "id": "tiktok_inbox_10m",
+    "name": "TikTok 收件箱自动回复 (每10分钟)",
+    "cron": "*/10 * * * *",
+    "action": "tiktok_check_inbox",
+    "params": {
+      "max_conversations": 50,
+      "auto_reply": true
+    },
+    "enabled": false,
+    "last_run": "2026-04-13 04:10:02"
+  },
+  {
+    "id": "tiktok_follow_daily",
+    "name": "TikTok 自动关注 (每天上午9点和下午3点)",
+    "cron": "0 9,15 * * *",
+    "action": "tiktok_follow",
+    "params": {
+      "target_country": "italy",
+      "max_follows": 30
+    },
+    "enabled": false,
+    "last_run": "2026-04-05 15:00:19"
+  },
+  {
+    "id": "tiktok_warmup_post_follow_am",
+    "name": "TikTok 关注后暖机 (上午10:30)",
+    "cron": "30 10 * * *",
+    "action": "tiktok_warmup",
+    "params": {
+      "target_country": "italy",
+      "duration_minutes": 25
+    },
+    "enabled": false,
+    "last_run": "2026-04-05 10:30:17"
+  },
+  {
+    "id": "tiktok_warmup_post_follow_pm",
+    "name": "TikTok 关注后暖机 (下午4:30)",
+    "cron": "30 16 * * *",
+    "action": "tiktok_warmup",
+    "params": {
+      "target_country": "italy",
+      "duration_minutes": 25
+    },
+    "enabled": false,
+    "last_run": "2026-04-05 16:30:27"
+  },
+  {
+    "id": "tiktok_warmup_prime_time",
+    "name": "TikTok 黄金时段暖机 意大利晚9点",
+    "cron": "0 21 * * *",
+    "action": "tiktok_warmup",
+    "params": {
+      "target_country": "italy",
+      "duration_minutes": 30
+    },
+    "enabled": false,
+    "last_run": ""
+  },
+  {
+    "id": "tiktok_chat_2h",
+    "name": "TikTok 回关私信 (每2小时)",
+    "cron": "0 */2 * * *",
+    "action": "tiktok_check_and_chat_followbacks",
+    "params": {
+      "target_country": "italy",
+      "max_chats": 10
+    },
+    "enabled": false,
+    "last_run": "2026-04-05 20:00:03"
+  },
+  {
+    "id": "tiktok_sync_w03_1h",
+    "name": "W03线索同步到本地DB (每小时)",
+    "cron": "5 * * * *",
+    "action": "tiktok_sync_leads",
+    "params": {
+      "limit": 200
+    },
+    "enabled": false,
+    "last_run": "2026-04-13 04:05:02"
+  },
+  {
+    "id": "tiktok_followup_noon",
+    "name": "TikTok 合格线索跟进 (每天中午12点)",
+    "cron": "0 12 * * *",
+    "action": "tiktok_follow_up",
+    "params": {
+      "target_country": "italy",
+      "max_leads": 30,
+      "target_language": "italian"
+    },
+    "enabled": false,
+    "last_run": "2026-04-12 12:00:15"
+  },
+  {
+    "id": "daily_report_2350",
+    "name": "运营日报自动生成 (每天23:50)",
+    "cron": "50 23 * * *",
+    "action": "analytics_daily_report",
+    "params": {
+      "period": "today",
+      "use_ai": true,
+      "notify_ws": true
+    },
+    "enabled": false,
+    "last_run": "2026-04-12 23:50:30"
+  },
+  {
+    "id": "purge_old_tasks",
+    "name": "清理7天前旧任务 (每天凌晨3点)",
+    "cron": "0 3 * * *",
+    "action": "purge_old_tasks",
+    "params": {
+      "days": 7
+    },
+    "enabled": false,
+    "last_run": "2026-04-13 03:00:27"
+  },
+  {
+    "id": "tiktok_ai_rescore_4h",
+    "name": "TikTok OPTIONAL线索AI重评 (每4小时)",
+    "cron": "0 */4 * * *",
+    "action": "tiktok_ai_rescore",
+    "params": {
+      "limit": 30,
+      "platform": "tiktok"
+    },
+    "enabled": false,
+    "last_run": "2026-04-13 04:00:01"
+  },
+  {
+    "id": "leads_merge_daily",
+    "name": "线索跨设备去重合并 (每天凌晨2点)",
+    "cron": "0 2 * * *",
+    "action": "leads_merge_duplicates",
+    "params": {
+      "platform": "tiktok"
+    },
+    "enabled": false,
+    "last_run": "2026-04-13 02:00:04"
+  },
+  {
+    "id": "cross_interact_daily",
+    "name": "账号互动 互相点赞观看 (每天10点和18点)",
+    "cron": "0 10,18 * * *",
+    "action": "cross_interact_all",
+    "params": {
+      "watch_seconds": 15,
+      "do_like": true,
+      "do_comment": false,
+      "cooldown_hours": 6
+    },
+    "enabled": false,
+    "last_run": "2026-04-05 18:00:11"
+  },
+  {
+    "id": "cross_follow_daily",
+    "name": "账号互养 互相关注 (每天早8点)",
+    "cron": "0 8 * * *",
+    "action": "cross_follow_all",
+    "params": {},
+    "enabled": false,
+    "last_run": "2026-04-05 08:00:12"
+  },
+  {
+    "id": "geo_check_all_4h",
+    "name": "IP 地理巡检 意大利出口验证 (每4小时)",
+    "cron": "0 */4 * * *",
+    "action": "geo_check_all",
+    "params": {
+      "country": "italy"
+    },
+    "enabled": false,
+    "last_run": "2026-04-05 20:00:03"
+  },
+  {
+    "id": "line_dispatch_30min",
+    "name": "LINE 派发 (每 30 分钟扫 greeting_replied 合格线索)",
+    "cron": "*/30 * * * *",
+    "action": "facebook_line_dispatch_from_reply",
+    "params": {
+      "hours_window": 6,
+      "dedupe_hours": 24,
+      "require_l2_verified": true,
+      "persona_key": "jp_female_midlife",
+      "region": "jp",
+      "min_score": 70,
+      "limit": 20,
+      "dispatch_mode": "messenger_text",
+      "write_contact_event": true,
+      "event_type": "line_dispatch_planned"
+    },
+    "enabled": true,
+    "last_run": ""
+  },
+  {
+    "id": "send_referral_replies_30min",
+    "name": "LINE 引流发送 (每 30 分钟, 错开 dispatch 10 分钟)",
+    "cron": "10,40 * * * *",
+    "action": "facebook_send_referral_replies",
+    "params": {
+      "hours_window": 2,
+      "dedupe_hours": 24,
+      "strict_device_match": true,
+      "limit": 10
+    },
+    "enabled": true,
+    "last_run": ""
+  },
+  {
+    "id": "recycle_dead_peers_daily",
+    "name": "Referral dead peer 7 天后自动复活 (daily 04:17)",
+    "cron": "17 4 * * *",
+    "action": "facebook_recycle_dead_peers",
+    "params": {
+      "days": 7,
+      "limit": 500
+    },
+    "enabled": true,
+    "last_run": ""
+  },
+  {
+    "id": "daily_referral_summary_2355",
+    "name": "Referral 闭环每日摘要 (23:55, 写 logs/daily_summary + 可选 Slack)",
+    "cron": "55 23 * * *",
+    "action": "facebook_daily_referral_summary",
+    "params": {
+      "hours_window": 24,
+      "write_file": true,
+      "send_webhook": true
+    },
+    "enabled": true,
+    "last_run": ""
+  },
+  {
+    "id": "alert_check_hourly",
+    "name": "Referral hourly alert 检测 (24h 抑制重复, 仅严重时 Slack)",
+    "cron": "5 * * * *",
+    "action": "facebook_alert_check_hourly",
+    "params": {
+      "hours_window": 24,
+      "cooldown_hours": 24,
+      "alert_send_rate_threshold": 0.3,
+      "alert_reject_threshold": 10
+    },
+    "enabled": false,
+    "last_run": ""
+  },
+  {
+    "id": "check_referral_replies_15min",
+    "name": "Phase 20.1 Messenger inbox 找 referral 回复 (B 侧实装后启用)",
+    "cron": "*/15 * * * *",
+    "action": "facebook_check_referral_replies",
+    "params": {
+      "hours_back": 48,
+      "limit": 50,
+      "max_messages_per_peer": 5
+    },
+    "enabled": false,
+    "last_run": ""
+  },
+  {
+    "id": "mark_stale_referrals_daily",
+    "name": "Phase 20.2 SLA 死信回收 (每天 04:30, sent 48h 未 replied → stale, 7d → dead)",
+    "cron": "30 4 * * *",
+    "action": "facebook_mark_stale_referrals",
+    "params": {
+      "stale_hours": 48,
+      "escalate_to_dead_days": 7,
+      "limit": 500
+    },
+    "enabled": false,
+    "last_run": ""
+  }
+]

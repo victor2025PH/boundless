@@ -1,0 +1,28 @@
+# 整帧超分（Real-ESRGAN）依赖说明 —— enhance_server.py 的 /superres_image|/superres_video（端口 8092）
+#
+# 运行环境：facefusion conda env（与 GFPGAN 人脸增强共用同一服务/环境）。
+# 关键：本功能**自含推理**，仅依赖 basicsr（facefusion env 已装），**无需** realesrgan 包即可运行。
+#
+# 必需（facefusion env 通常已具备）：
+#   torch            # cu128，已随 facefusion 环境安装
+#   basicsr          # 提供 RRDBNet / SRVGGNetCompact 架构（超分网络）
+#   opencv-python    # 视频/图像编解码
+#   numpy
+#   fastapi
+#   uvicorn
+#
+# 可选（装了则优先用其成熟分块/dni 去噪，否则用自含推理，二者皆可）：
+#   realesrgan       # pip install realesrgan
+#
+# 模型权重（按需自动下载到 models/realesrgan/，无网则端点优雅 503）：
+#   realesr-general-x4v3.pth   （默认·轻量快·自带去噪强度·适合视频）
+#     https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth
+#   RealESRGAN_x4plus.pth      （可选·RRDB·更锐·更重；set SUPERRES_MODEL_NAME=RealESRGAN_x4plus.pth）
+#     https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth
+#
+# 环境变量：
+#   SUPERRES_MODEL=<.pth 绝对路径>   覆盖权重（按文件名自动判别架构）
+#   SUPERRES_MODEL_NAME=<文件名>      默认 realesr-general-x4v3.pth
+#   SUPERRES_FP32=1                  强制 fp32（默认 fp16，卷积超分网数值安全）
+#   SUPERRES_TILE=400                分块大小（低显存/超大图；0=整图，默认）
+#   SUPERRES_TILE_PAD=10             分块重叠像素（防接缝）

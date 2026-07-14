@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Stream Final Test</title></head>
+<body style="background:#111;color:#0f0;font:13px monospace;padding:20px">
+<h2>Worker 实时流最终诊断</h2>
+<div>
+  <label>设备ID: <input id="did" value="" style="width:260px;padding:4px"></label>
+  <button onclick="go()" style="padding:6px 16px">开始测试</button>
+</div>
+<pre id="log" style="margin-top:10px;max-height:250px;overflow:auto;background:#000;padding:10px;border:1px solid #333"></pre>
+<canvas id="cvs" width="360" height="800" style="margin-top:10px;border:1px solid #333;background:#000;max-width:360px"></canvas>
+<script>
+const L=document.getElementById('log'), C=document.getElementById('cvs'), ctx=C.getContext('2d');
+function log(m){L.textContent+=m+'\n';L.scrollTop=L.scrollHeight;}
+
+// 页面加载时自动获取设备
+fetch('/devices').then(r=>r.json()).then(ds=>{
+  const on=ds.filter(d=>d.status==='connected');
+  if(on.length){document.getElementById('did').value=on[0].device_id;log('设备: '+on[0].device_id.substring(0,12)+' (共'+on.length+'台在线)');}
+  else log('无在线设备');
+  log('SecureContext='+window.isSecureContext+' VideoDecoder='+(typeof VideoDecoder!=='undefined'));
+}).catch(e=>log('获取设备失败: '+e));
+
+function go(){
+  const did=document.getElementById('did').value.trim();
+  if(!did){log('请输入设备ID');return;}
+
+  const hasWC=typeof VideoDecoder!=='undefined';
+  log('\n--- 开始测试 ---');
+  log('VideoDecoder: '+(hasWC?'YES':'NO'));
+
+  const proto=location.protocol==='https:'?'wss:':'ws:';
+  const url=proto+'//'+location.host+'/devices/'+did+'/stream/ws';
+  log('WS: '+url);
+
+  const ws=new WebSocket(url);
+  ws.binaryType='arraybuffer';
+  let decoder=null, configured=false, sps=null, pps=null, frames=0;
+
+  ws.onopen=()=>log('WS OPEN');
+  ws.onerror=()=>log('WS ERROR');
+  ws.onclose=e=>log('WS CLOSE code='+e.code);
+
+  if(hasWC){
+    decoder=new VideoDecoder({
+      output:frame=>{
+        frames++;
+        if(C.width!==frame.displayWidth||C.height!==frame.displayHeight){
+          C.width=frame.displayWidth;C.height=frame.displayHeight;
+          log('Canvas: '+frame.displayWidth+'x'+frame.displayHeight);
+        }
+        ctx.drawImage(frame,0,0);
+        frame.close();
+        if(frames<=3||frames%50===0) log('DECODED frame #'+frames);
+      },
+      error:e=>log('DECODER ERROR: '+e.message)
+    });
+    log('VideoDecoder created');
+  }
+
+  ws.onmessage=ev=>{
+    if(typeof ev.data==='string'){
+      log('TEXT: '+ev.data.substring(0,120));
+      return;
+    }
+    const buf=ev.data;
+    if(buf.byteLength<12) return;
+
+    // 跳过12字节scrcpy header
+    const h264=new Uint8Array(buf,12);
+    if(h264.length<4) return;
+
+    // 分割NAL
+    const nals=[];
+    let s=-1;
+    for(let i=0;i<h264.length-3;i++){
+      if(h264[i]===0&&h264[i+1]===0){
+        if(h264[i+2]===1){if(s>=0)nals.push(h264.slice(s,i));s=i+3;i+=2;}
+        else if(h264[i+2]===0&&i+3<h264.length&&h264[i+3]===1){if(s>=0)nals.push(h264.slice(s,i));s=i+4;i+=3;}
+      }
+    }
+    if(s>=0&&s<h264.length)nals.push(h264.slice(s));
+
+    let isKey=false;
+    const videoNals=[];
+    for(const n of nals){
+      if(!n.length)continue;
+      const t=n[0]&0x1f;
+      if(t===7){sps=n;log('SPS('+n.length+'b)');}
+      else if(t===8){pps=n;log('PPS('+n.length+'b)');}
+      else if(t===6||t===9){log('Skip NAL type '+t);}
+      else{
+        if(t===5){isKey=true;log('*** IDR KEYFRAME ***');}
+        videoNals.push(n);
+      }
+    }
+
+    // 配置decoder
+    if(sps&&pps&&!configured&&hasWC){
+      const p=sps[1],c=sps[2],l=sps[3];
+      const codec='avc1.'+p.toString(16).padStart(2,'0')+c.toString(16).padStart(2,'0')+l.toString(16).padStart(2,'0');
+      log('Configure: '+codec);
+      // 构建AVCDecoderConfigurationRecord
+      const sz=11+sps.length+pps.length;
+      const ab=new ArrayBuffer(sz),dv=new DataView(ab),a=new Uint8Array(ab);
+      dv.setUint8(0,1);dv.setUint8(1,p);dv.setUint8(2,c);dv.setUint8(3,l);
+      dv.setUint8(4,0xFF);dv.setUint8(5,0xE1);
+      dv.setUint16(6,sps.length);a.set(sps,8);
+      dv.setUint8(8+sps.length,1);
+      dv.setUint16(9+sps.length,pps.length);
+      a.set(pps,11+sps.length);
+      try{
+        decoder.configure({codec:codec,optimizeForLatency:true,description:new Uint8Array(ab)});
+        configured=true;
+        log('Decoder configured OK!');
+      }catch(e){log('Configure FAILED: '+e.message);}
+    }
+
+    if(!videoNals.length)return;
+    if(!configured||!hasWC){
+      if(!hasWC)log('No WebCodecs, frame skipped');
+      return;
+    }
+
+    // AVCC格式
+    const parts=[];
+    for(const n of videoNals){
+      const len=new Uint8Array(4);
+      len[0]=(n.length>>24)&0xff;len[1]=(n.length>>16)&0xff;
+      len[2]=(n.length>>8)&0xff;len[3]=n.length&0xff;
+      parts.push(len,n);
+    }
+    let total=0;for(const p of parts)total+=p.length;
+    const avcc=new Uint8Array(total);
+    let off=0;for(const p of parts){avcc.set(p,off);off+=p.length;}
+
+    const dv2=new DataView(buf);
+    const ts=((dv2.getUint32(0)&0x3FFFFFFF)*4294967296+dv2.getUint32(4));
+
+    try{
+      decoder.decode(new EncodedVideoChunk({type:isKey?'key':'delta',timestamp:ts,data:avcc}));
+    }catch(e){log('DECODE THROW: '+e.message);}
+  };
+}
+</script>
+</body></html>

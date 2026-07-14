@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="robots" content="noindex, nofollow" />
+<title>无界科技 BOUNDLESS · 下一步上线与商业化计划</title>
+<style>
+  :root{
+    --bg:#05070f; --bg2:#080c1a; --panel:rgba(255,255,255,.035);
+    --panel-2:rgba(255,255,255,.05); --border:rgba(255,255,255,.09);
+    --border-2:rgba(255,255,255,.16); --ink:#eaf0fb; --muted:#93a1bd;
+    --dim:#5f6d89; --cyan:#22d3ee; --purple:#a855f7; --blue:#3b82f6;
+    --green:#34d399; --amber:#fbbf24; --rose:#fb7185;
+    --radius:18px; --maxw:1200px;
+    --font:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth;scroll-padding-top:82px}
+  body{font-family:var(--font);background:var(--bg);color:var(--ink);line-height:1.65;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+  body::before{content:"";position:fixed;inset:0;z-index:-2;
+    background:
+      radial-gradient(900px 600px at 12% -8%, rgba(34,211,238,.14), transparent 60%),
+      radial-gradient(900px 700px at 92% 6%, rgba(168,85,247,.16), transparent 60%),
+      radial-gradient(1000px 800px at 50% 108%, rgba(59,130,246,.12), transparent 60%),
+      linear-gradient(180deg,var(--bg),var(--bg2))}
+  body::after{content:"";position:fixed;inset:0;z-index:-1;opacity:.4;
+    background-image:linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.03) 1px,transparent 1px);
+    background-size:64px 64px;mask:radial-gradient(circle at 50% 30%,#000,transparent 85%)}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+
+  header.nav{position:sticky;top:0;z-index:50;backdrop-filter:blur(14px);background:rgba(6,9,17,.72);border-bottom:1px solid var(--border)}
+  .nav-inner{display:flex;align-items:center;justify-content:space-between;height:64px}
+  .brand{display:flex;align-items:center;gap:11px;font-weight:700;letter-spacing:.3px}
+  .brand .logo{width:34px;height:34px;display:grid;place-items:center;border-radius:10px;background:linear-gradient(135deg,var(--cyan),var(--purple));color:#04060d;font-size:19px;font-weight:900;box-shadow:0 4px 20px rgba(168,85,247,.4)}
+  .brand small{display:block;font-size:11px;color:var(--muted);font-weight:500;letter-spacing:1.2px}
+  .nav-links{display:flex;gap:4px;flex-wrap:wrap}
+  .nav-links a{font-size:13px;color:var(--muted);padding:8px 12px;border-radius:9px;transition:.2s;font-weight:500;white-space:nowrap}
+  .nav-links a:hover{color:var(--ink);background:var(--panel-2)}
+  .nav-links a.active{color:var(--ink);background:rgba(34,211,238,.12);box-shadow:inset 0 0 0 1px rgba(34,211,238,.25)}
+  .nav-toggle{display:none;background:none;border:1px solid var(--border);color:var(--ink);border-radius:9px;padding:7px 11px;font-size:18px;cursor:pointer}
+
+  .hero{position:relative;padding:90px 0 56px;text-align:center}
+  .hero .inf{font-size:64px;line-height:1;font-weight:900;background:linear-gradient(135deg,var(--cyan),var(--purple) 55%,var(--blue));-webkit-background-clip:text;background-clip:text;color:transparent;filter:drop-shadow(0 6px 30px rgba(168,85,247,.45));margin-bottom:12px}
+  .kicker{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--cyan);border:1px solid rgba(34,211,238,.3);background:rgba(34,211,238,.08);padding:6px 15px;border-radius:999px;margin-bottom:20px;letter-spacing:.5px}
+  .kicker .dot{width:7px;height:7px;border-radius:50%;background:var(--cyan);box-shadow:0 0 10px var(--cyan);animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .hero h1{font-size:clamp(28px,4.6vw,46px);font-weight:800;letter-spacing:-.5px;line-height:1.18}
+  .hero h1 .grad{background:linear-gradient(135deg,var(--cyan),var(--purple));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero p.sub{color:var(--muted);font-size:clamp(15px,2vw,17px);max-width:730px;margin:18px auto 0}
+  .hero .meta{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:24px}
+  .tag{font-size:12.5px;color:var(--muted);border:1px solid var(--border);background:var(--panel);padding:6px 13px;border-radius:999px}
+  .tag b{color:var(--ink);font-weight:600}
+
+  section{padding:52px 0;position:relative}
+  .sec-head{margin-bottom:30px}
+  .sec-idx{font-size:13px;color:var(--cyan);font-weight:700;letter-spacing:2px}
+  .sec-head h2{font-size:clamp(23px,3.3vw,32px);font-weight:800;margin-top:6px;letter-spacing:-.4px}
+  .sec-head p{color:var(--muted);margin-top:10px;max-width:800px;font-size:15px}
+  .divider{height:1px;background:linear-gradient(90deg,transparent,var(--border-2),transparent);max-width:var(--maxw);margin:0 auto}
+  .reveal{opacity:0;transform:translateY(24px);transition:.7s cubic-bezier(.2,.7,.2,1)}
+  .reveal.in{opacity:1;transform:none}
+
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+  .stat{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:20px;position:relative;overflow:hidden;transition:.3s}
+  .stat:hover{border-color:var(--border-2);transform:translateY(-3px);background:var(--panel-2)}
+  .stat .n{font-size:32px;font-weight:800;letter-spacing:-1px;background:linear-gradient(135deg,var(--cyan),var(--purple));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .stat .l{color:var(--muted);font-size:13px;margin-top:4px}
+  .stat .glow{position:absolute;right:-30px;top:-30px;width:90px;height:90px;border-radius:50%;background:radial-gradient(circle,rgba(34,211,238,.25),transparent 70%);filter:blur(6px)}
+
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:22px;transition:.3s}
+  .card:hover{border-color:var(--border-2);background:var(--panel-2)}
+  .feat-list{list-style:none;margin-top:12px;display:flex;flex-direction:column;gap:9px}
+  .feat-list li{position:relative;padding-left:22px;color:var(--muted);font-size:14px}
+  .feat-list li::before{content:"";position:absolute;left:2px;top:8px;width:8px;height:8px;border-radius:2px;background:linear-gradient(135deg,var(--cyan),var(--purple))}
+  .feat-list li b{color:var(--ink);font-weight:600}
+
+  /* 三梯队 */
+  .tier{border-radius:var(--radius);padding:22px;border:1px solid var(--border);background:var(--panel);position:relative;overflow:hidden}
+  .tier::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px}
+  .tier.go::before{background:linear-gradient(180deg,var(--green),var(--cyan))}
+  .tier.hold::before{background:linear-gradient(180deg,var(--amber),#f59e0b)}
+  .tier.self::before{background:linear-gradient(180deg,var(--purple),var(--blue))}
+  .tier-badge{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:700;padding:5px 12px;border-radius:999px;margin-bottom:12px}
+  .tier.go .tier-badge{color:#04140d;background:linear-gradient(135deg,var(--green),var(--cyan))}
+  .tier.hold .tier-badge{color:#1a1204;background:linear-gradient(135deg,var(--amber),#f59e0b)}
+  .tier.self .tier-badge{color:#0b0420;background:linear-gradient(135deg,var(--purple),var(--blue))}
+  .tier h3{font-size:17px;font-weight:700;margin-bottom:4px}
+  .tier .why{font-size:13px;color:var(--dim);margin-bottom:12px}
+  .prodline{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--border);font-size:13.5px}
+  .prodline:first-of-type{border-top:none}
+  .prodline .nm{font-weight:600;color:var(--ink);min-width:120px}
+  .prodline .ds{color:var(--muted);font-size:12.5px}
+  .prodline .od{margin-left:auto;font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;white-space:nowrap}
+  .od.o1{color:#04140d;background:rgba(52,211,153,.2);border:1px solid rgba(52,211,153,.4)}
+  .od.o2{color:var(--amber);background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.3)}
+  .od.o3{color:var(--purple);background:rgba(168,85,247,.14);border:1px solid rgba(168,85,247,.35)}
+
+  /* 甘特图 */
+  .gantt{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:22px;overflow-x:auto}
+  .gantt-grid{min-width:720px}
+  .gantt-weeks{display:grid;grid-template-columns:160px repeat(8,1fr);gap:0;margin-bottom:8px}
+  .gantt-weeks .wk{font-size:11px;color:var(--dim);text-align:center;padding:6px 0;border-left:1px solid var(--border)}
+  .gantt-weeks .wk:first-child{border-left:none}
+  .gantt-row{display:grid;grid-template-columns:160px repeat(8,1fr);align-items:center;min-height:40px;border-top:1px solid rgba(255,255,255,.05)}
+  .gantt-row .lbl{font-size:13px;color:var(--ink);font-weight:600;padding-right:10px}
+  .gantt-track{grid-column:2 / -1;position:relative;height:40px}
+  .gantt-track .bar{position:absolute;top:9px;height:22px;border-radius:7px;display:flex;align-items:center;padding:0 10px;font-size:11px;font-weight:600;color:#04060d;white-space:nowrap;overflow:hidden}
+  .bar.b-cyan{background:linear-gradient(90deg,#22d3ee,#0891b2)}
+  .bar.b-purple{background:linear-gradient(90deg,#c084fc,#a855f7);color:#fff}
+  .bar.b-blue{background:linear-gradient(90deg,#60a5fa,#3b82f6);color:#fff}
+  .bar.b-green{background:linear-gradient(90deg,#34d399,#10b981)}
+  .bar.b-amber{background:linear-gradient(90deg,#fbbf24,#f59e0b)}
+  .milestone{position:absolute;top:6px;width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-top:12px solid var(--rose);transform:translateX(-7px)}
+
+  /* 定价 */
+  .price-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  .price{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:22px;position:relative}
+  .price.feature{border-color:rgba(34,211,238,.4);box-shadow:0 0 0 1px rgba(34,211,238,.2),0 10px 40px rgba(34,211,238,.08)}
+  .price .pname{font-size:16px;font-weight:700}
+  .price .pen{font-size:12px;color:var(--muted);margin-bottom:14px}
+  .tierrow{display:flex;justify-content:space-between;align-items:baseline;padding:8px 0;border-top:1px solid var(--border);font-size:13.5px}
+  .tierrow .t{color:var(--muted)}
+  .tierrow .p{font-weight:700;color:var(--ink)}
+  .tierrow .p span{font-size:11px;color:var(--dim);font-weight:500}
+
+  /* 表格 */
+  .tbl{width:100%;border-collapse:collapse;font-size:13.5px;overflow:hidden;border-radius:12px}
+  .tbl th,.tbl td{padding:11px 14px;text-align:left;border-bottom:1px solid var(--border)}
+  .tbl thead th{background:rgba(255,255,255,.04);color:var(--ink);font-weight:700;font-size:12.5px;letter-spacing:.3px}
+  .tbl td{color:var(--muted)}
+  .tbl td b{color:var(--ink)}
+  .tbl .c-cons{color:#fca5a5}
+  .tbl .c-base{color:var(--cyan)}
+  .tbl .c-opt{color:var(--green)}
+  .tbl tbody tr:hover{background:rgba(255,255,255,.02)}
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px}
+
+  /* 漏斗 */
+  .funnel{display:flex;flex-direction:column;gap:6px;align-items:center}
+  .fstep{border-radius:8px;padding:11px 16px;text-align:center;font-size:13px;color:#04060d;font-weight:600;background:linear-gradient(90deg,#22d3ee,#a855f7);position:relative}
+  .fstep .fv{font-weight:800}
+  .fstep .fl{font-size:11px;font-weight:500;opacity:.85}
+  .fstep.s1{width:100%} .fstep.s2{width:82%} .fstep.s3{width:60%} .fstep.s4{width:40%;color:#fff;background:linear-gradient(90deg,#a855f7,#3b82f6)}
+
+  /* 单位经济卡 */
+  .ue{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .ue .u{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:16px}
+  .ue .u .uk{font-size:12px;color:var(--muted)}
+  .ue .u .uv{font-size:24px;font-weight:800;margin-top:4px;background:linear-gradient(135deg,var(--cyan),var(--purple));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .ue .u .un{font-size:11px;color:var(--dim);margin-top:2px}
+
+  /* 预算环形 */
+  .budget-wrap{display:flex;gap:26px;align-items:center;flex-wrap:wrap}
+  .donut{width:170px;height:170px;border-radius:50%;flex:none;
+    background:conic-gradient(#22d3ee 0 45%,#a855f7 45% 70%,#3b82f6 70% 88%,#34d399 88% 100%);
+    display:grid;place-items:center;position:relative}
+  .donut::after{content:"运营成本\A结构";white-space:pre;text-align:center;width:104px;height:104px;border-radius:50%;background:var(--bg2);display:grid;place-items:center;font-size:12px;color:var(--muted)}
+  .legend{display:flex;flex-direction:column;gap:9px;font-size:13.5px}
+  .legend .li{display:flex;align-items:center;gap:9px;color:var(--muted)}
+  .legend .sw{width:12px;height:12px;border-radius:3px;flex:none}
+
+  /* 流程 */
+  .flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap}
+  .fnode{flex:1;min-width:150px;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:16px;position:relative}
+  .fnode h4{font-size:14px;font-weight:700;display:flex;align-items:center;gap:8px}
+  .fnode .ic{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;background:rgba(255,255,255,.05);border:1px solid var(--border)}
+  .fnode .ic svg{width:17px;height:17px;color:var(--cyan)}
+  .fnode p{font-size:12.5px;color:var(--muted);margin-top:8px}
+  .farrow{display:grid;place-items:center;color:var(--dim);font-size:22px;padding:0 4px;flex:none}
+
+  .note{margin-top:16px;font-size:12.5px;color:var(--dim);border:1px dashed var(--border);border-radius:12px;padding:14px 16px;background:rgba(255,255,255,.02)}
+  .note b{color:var(--muted)}
+  .callout{border:1px solid rgba(52,211,153,.3);background:rgba(52,211,153,.06);border-radius:12px;padding:14px 16px;font-size:13.5px;color:var(--muted);margin-top:16px}
+  .callout b{color:var(--green)}
+
+  footer{border-top:1px solid var(--border);padding:32px 0;margin-top:36px;text-align:center;color:var(--dim);font-size:13px}
+  footer .slogan{font-size:16px;font-weight:700;color:var(--ink);margin-bottom:8px}
+  footer .slogan .grad{background:linear-gradient(135deg,var(--cyan),var(--purple));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .progress{position:fixed;top:0;left:0;height:3px;z-index:60;width:0;background:linear-gradient(90deg,var(--cyan),var(--purple),var(--blue))}
+
+  @media(max-width:900px){
+    .stats,.ue{grid-template-columns:repeat(2,1fr)}
+    .grid-3,.price-grid{grid-template-columns:1fr}
+    .nav-links{position:fixed;top:64px;right:0;left:0;flex-direction:column;gap:2px;background:rgba(6,9,17,.97);backdrop-filter:blur(14px);padding:12px 20px;border-bottom:1px solid var(--border);transform:translateY(-160%);transition:.3s;z-index:40}
+    .nav-links.open{transform:none}
+    .nav-toggle{display:block}
+    .farrow{transform:rotate(90deg);padding:6px 0;width:100%}
+  }
+  @media(max-width:620px){
+    .stats,.ue,.grid-2{grid-template-columns:1fr}
+    .hero{padding:60px 0 36px}
+  }
+</style>
+</head>
+<body>
+<div class="progress" id="scrollbar"></div>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top"><span class="logo">&#8734;</span><span>无界科技 BOUNDLESS<small>下一步上线与商业化计划</small></span></a>
+    <button class="nav-toggle" id="navToggle" aria-label="menu">&#9776;</button>
+    <nav class="nav-links" id="navLinks">
+      <a href="#overview">概览</a>
+      <a href="#strategy">分层策略</a>
+      <a href="#timeline">8周计划</a>
+      <a href="#pricing">商业化</a>
+      <a href="#growth">推广与费用</a>
+      <a href="#finance">收益测算</a>
+      <a href="#selfops">自运营</a>
+      <a href="#risk">里程碑</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero" id="top">
+  <div class="wrap">
+    <div class="inf">&#8734;</div>
+    <div class="kicker"><span class="dot"></span>内部决策 · 8 周极速上线冲刺</div>
+    <h1>轻资产先跑，重资产先自用<br/><span class="grad">8 周</span>把云端产品推上线并造血</h1>
+    <p class="sub">优先上线"用户轻量安装、云端即用"的 SaaS 产品；重本地部署/GPU 产品暂缓面向散户；用现有账号与设备做自运营获客，为新产品免费导流、验证、造血。</p>
+    <div class="meta">
+      <span class="tag"><b>周期</b> 8 周极速 MVP</span>
+      <span class="tag"><b>市场</b> 出海欧美 · $29–199/月</span>
+      <span class="tag"><b>预算</b> 低投放 · 自运营主导</span>
+      <span class="tag"><b>自运营</b> ~30 台设备 / 上百账号</span>
+    </div>
+  </div>
+</div>
+
+<!-- OVERVIEW -->
+<section id="overview">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-idx">01 / OVERVIEW</div>
+      <h2>一页速览</h2>
+      <p>本计划回答四件事：先上什么、多久上线、怎么赚钱、怎么用现有资源自己把量跑起来。以下为核心目标（中性情景，具体随真实数据校正）。</p>
+    </div>
+    <div class="stats reveal">
+      <div class="stat"><div class="glow"></div><div class="n">3</div><div class="l">首批云端 SaaS 产品</div></div>
+      <div class="stat"><div class="glow"></div><div class="n">8<span style="font-size:18px">周</span></div><div class="l">首款上线 → 全部上线</div></div>
+      <div class="stat"><div class="glow"></div><div class="n">≈$2k<span style="font-size:16px">/月</span></div><div class="l">首月末新增 MRR（中性）</div></div>
+      <div class="stat"><div class="glow"></div><div class="n">25:1</div><div class="l">自运营 LTV / CAC（中性）</div></div>
+    </div>
+    <div class="callout reveal">
+      <b>一句话战略：</b>把"需要本地部署/GPU"的重资产（换脸/直播/同传/真机获客）从"卖给散户"改为"我们托管或自用"；对外只卖轻量云端订阅，对内用重资产驱动增长——低预算也能滚起来。
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- STRATEGY -->
+<section id="strategy">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-idx">02 / STRATEGY</div>
+      <h2>产品分层策略 · 三梯队</h2>
+      <p>按"用户上手成本"而非"技术炫酷度"排序：能云端即用的先上，需用户自建 GPU/真机的暂缓，重资产转为我们自己的增长引擎。</p>
+    </div>
+    <div class="grid-3 reveal">
+      <div class="tier go">
+        <span class="tier-badge">第一梯队 · 立即上线</span>
+        <h3>轻量安装 / 云端即用</h3>
+        <div class="why">SaaS 订阅，注册即用，零本地部署。8 周内全部上线。</div>
+        <div class="prodline"><span class="nm">通译 LingoX</span><span class="ds">聊天翻译，网页/插件轻客户端</span><span class="od o1">① 首发</span></div>
+        <div class="prodline"><span class="nm">智聊 ChatX 云版</span><span class="ds">走官方渠道 API，授权即用</span><span class="od o1">② 次发</span></div>
+        <div class="prodline"><span class="nm">幻声 VoiceX 云 API</span><span class="ds">我们托管 GPU，用户 API 调用</span><span class="od o1">③ 三发</span></div>
+      </div>
+      <div class="tier hold">
+        <span class="tier-badge">第二梯队 · 暂缓产品化</span>
+        <h3>重本地部署 / 实时 GPU</h3>
+        <div class="why">用户自建成本高、实时算力贵。8 周内不做轻量化，走定制/项目制承接。</div>
+        <div class="prodline"><span class="nm">幻颜 FaceX</span><span class="ds">图片/视频换脸，GPU 重</span><span class="od o2">暂缓</span></div>
+        <div class="prodline"><span class="nm">幻影 LiveX</span><span class="ds">实时直播换脸换声，延迟敏感</span><span class="od o2">暂缓</span></div>
+        <div class="prodline"><span class="nm">通传 VoxX</span><span class="ds">会议同传，实时语音算力</span><span class="od o2">暂缓</span></div>
+      </div>
+      <div class="tier self">
+        <span class="tier-badge">第三梯队 · 转自运营</span>
+        <h3>不卖散户 · 自己用来获客</h3>
+        <div class="why">用现有账号+设备驱动获客承接，为第一梯队免费导流、造血。</div>
+        <div class="prodline"><span class="nm">智拓 ReachX</span><span class="ds">手机集群真机批量获客</span><span class="od o3">自用</span></div>
+        <div class="prodline"><span class="nm">智聊 ChatX 个号版</span><span class="ds">个人号 AI 承接转化</span><span class="od o3">自用</span></div>
+        <div class="prodline"><span class="nm">重资产 GPU</span><span class="ds">自托管，支撑云 API 与内容</span><span class="od o3">自用</span></div>
+      </div>
+    </div>
+    <div class="note reveal"><b>为什么 VoiceX 归第一梯队？</b> 它虽需 GPU，但可做成"我们托管、用户按量调用云 API"的形态，用户端零部署——符合"轻量即用"。真正暂缓的是<b>实时低延迟</b>类（直播换脸/同传），它们算力成本与运维复杂度在 8 周窗口内不划算。</div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- TIMELINE -->
+<section id="timeline">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-idx">03 / TIMELINE</div>
+      <h2>8 周上线计划（并行冲刺）</h2>
+      <p>W0 搭 SaaS 底座（多租户/计费/授权/开通流），三条产品线错峰并行，自运营引擎第 1 周即启动持续导流。红色标记为对外上线里程碑。</p>
+    </div>
+    <div class="gantt reveal">
+      <div class="gantt-grid">
+        <div class="gantt-weeks">
+          <div class="wk" style="text-align:left;padding-left:2px">工作流 / 周</div>
+          <div class="wk">W1</div><div class="wk">W2</div><div class="wk">W3</div><div class="wk">W4</div>
+          <div class="wk">W5</div><div class="wk">W6</div><div class="wk">W7</div><div class="wk">W8</div>
+        </div>
+        <div class="gantt-row"><div class="lbl">SaaS 底座</div><div class="gantt-track"><div class="bar b-green" style="left:0%;width:25%">多租户·计费·授权·开通流</div></div></div>
+        <div class="gantt-row"><div class="lbl">通译 LingoX</div><div class="gantt-track"><div class="bar b-cyan" style="left:0%;width:50%">轻客户端 + 云翻译 + 计费</div><div class="milestone" style="left:50%" title="LingoX 上线"></div></div></div>
+        <div class="gantt-row"><div class="lbl">智聊 ChatX 云版</div><div class="gantt-track"><div class="bar b-blue" style="left:12.5%;width:62.5%">官方渠道接入 + 托管 + 坐席SaaS</div><div class="milestone" style="left:75%" title="ChatX 上线"></div></div></div>
+        <div class="gantt-row"><div class="lbl">幻声 VoiceX 云API</div><div class="gantt-track"><div class="bar b-purple" style="left:37.5%;width:62.5%">GPU托管 + API网关 + 额度计费</div><div class="milestone" style="left:100%;left:calc(100% - 3px)" title="VoiceX 上线"></div></div></div>
+        <div class="gantt-row"><div class="lbl">自运营获客引擎</div><div class="gantt-track"><div class="bar b-amber" style="left:0%;width:100%">养号→批量触达→承接→导流SaaS（持续）</div></div></div>
+        <div class="gantt-row"><div class="lbl">增长 / 数据看板</div><div class="gantt-track"><div class="bar b-green" style="left:62.5%;width:37.5%">埋点·漏斗看板·投放测试·迭代</div></div></div>
+      </div>
+    </div>
+    <div class="grid-3 reveal" style="margin-top:18px">
+      <div class="card"><div class="sec-idx" style="color:var(--cyan)">W1–W4</div><h3 style="font-size:16px;margin:6px 0">阶段一：首款落地</h3><ul class="feat-list"><li>SaaS 底座 + <b>LingoX 上线</b>（W4）</li><li>Stripe/Paddle 计费、免费试用漏斗</li><li>自运营引擎启动，首批导流</li></ul></div>
+      <div class="card"><div class="sec-idx" style="color:var(--blue)">W3–W6</div><h3 style="font-size:16px;margin:6px 0">阶段二：矩阵成型</h3><ul class="feat-list"><li><b>ChatX 云版上线</b>（W6）官方渠道托管</li><li>坐席工作台 SaaS 化、多租户隔离</li><li>内容/SEO 起量，社群铺开</li></ul></div>
+      <div class="card"><div class="sec-idx" style="color:var(--purple)">W5–W8</div><h3 style="font-size:16px;margin:6px 0">阶段三：三品齐发</h3><ul class="feat-list"><li><b>VoiceX 云 API 上线</b>（W8）按量计费</li><li>投放小额测试，验证付费 CAC</li><li>数据看板闭环，进入放量迭代</li></ul></div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- PRICING -->
+<section id="pricing">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-idx">04 / MONETIZATION</div>
+      <h2>商业化与定价</h2>
+      <p>面向欧美的订阅制 + 免费试用，正规支付（Stripe / Paddle，弃 USDT 单一口径）。三款产品分档如下（美元/月，最终以压测毛利后微调）。</p>
+    </div>
+    <div class="price-grid reveal">
+      <div class="price feature">
+        <div class="pname">通译 LingoX</div>
+        <div class="pen">聊天翻译 · 按席位 / 字数</div>
+        <div class="tierrow"><span class="t">Free 试用</span><span class="p">$0 <span>限额</span></span></div>
+        <div class="tierrow"><span class="t">Pro</span><span class="p">$29 <span>/月</span></span></div>
+        <div class="tierrow"><span class="t">Team</span><span class="p">$99 <span>/月</span></span></div>
+      </div>
+      <div class="price">
+        <div class="pname">智聊 ChatX 云版</div>
+        <div class="pen">AI 客服坐席 · 按坐席 / 消息量</div>
+        <div class="tierrow"><span class="t">Starter</span><span class="p">$99 <span>/月</span></span></div>
+        <div class="tierrow"><span class="t">Growth</span><span class="p">$299 <span>/月</span></span></div>
+        <div class="tierrow"><span class="t">Scale</span><span class="p">$699 <span>/月</span></span></div>
+      </div>
+      <div class="price">
+        <div class="pname">幻声 VoiceX 云 API</div>
+        <div class="pen">声音克隆 / TTS · 按量 credits</div>
+        <div class="tierrow"><span class="t">按量</span><span class="p">$0.3 <span>/千字符</span></span></div>
+        <div class="tierrow"><span class="t">Creator</span><span class="p">$49 <span>/月</span></span></div>
+        <div class="tierrow"><span class="t">Studio</span><span class="p">$149 <span>/月</span></span></div>
+      </div>
+    </div>
+    <div class="grid-2 reveal" style="margin-top:18px">
+      <div class="card"><h3 style="font-size:16px">收入模型</h3><ul class="feat-list"><li><b>主收入</b>：月/年订阅（年付 8 折锁定现金流与留存）</li><li><b>加购</b>：VoiceX 按量 credits、ChatX 超量消息包</li><li><b>转化钩子</b>：Free 试用限额 → 到量提示升级</li><li><b>增长杠杆</b>：推荐返佣、免费版带品牌水印</li></ul></div>
+      <div class="card"><h3 style="font-size:16px">阶段收入目标（中性）</h3>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr><th>节点</th><th>付费用户</th><th>MRR</th></tr></thead><tbody>
+          <tr><td>第 1 月末</td><td><b>10–20</b></td><td>≈ $2k</td></tr>
+          <tr><td>第 3 月末</td><td><b>50–100</b></td><td>≈ $4–6k</td></tr>
+          <tr><td>第 6 月末</td><td><b>200+</b></td><td>≈ $15k+</td></tr>
+        </tbody></table></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- GROWTH -->
+<section id="growth">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-idx">05 / GROWTH</div>
+      <h2>推广方式与费用</h2>
+      <p>预算低（&lt;¥1万/月投放），因此以<b style="color:var(--ink)">自运营私域获客为主力</b>（近乎零边际成本），付费投放仅作小额验证。渠道矩阵与月度成本结构如下。</p>
+    </div>
+    <div class="grid-2 reveal">
+      <div class="card">
+        <h3 style="font-size:16px">渠道矩阵（按性价比排序）</h3>
+        <div class="tbl-wrap" style="margin-top:12px"><table class="tbl"><thead><tr><th>渠道</th><th>成本</th><th>作用</th></tr></thead><tbody>
+          <tr><td><b>自运营私域</b> FB/TikTok/IG 真机触达</td><td class="c-opt">极低</td><td>主力获客</td></tr>
+          <tr><td><b>内容/SEO</b> 官网多语种</td><td class="c-opt">低（人力）</td><td>自然流量</td></tr>
+          <tr><td><b>社群/KOL</b> 出海·跨境社群</td><td class="c-base">低/置换</td><td>信任背书</td></tr>
+          <tr><td><b>付费投放</b> Google/Meta/TG</td><td class="c-cons">&lt;¥1万/月</td><td>验证CAC</td></tr>
+          <tr><td><b>产品自增长</b> 水印/返佣</td><td class="c-opt">零</td><td>裂变</td></tr>
+        </tbody></table></div>
+      </div>
+      <div class="card">
+        <h3 style="font-size:16px">月度成本结构（估算 · 人民币）</h3>
+        <div class="budget-wrap" style="margin-top:14px">
+          <div class="donut"></div>
+          <div class="legend">
+            <div class="li"><span class="sw" style="background:#22d3ee"></span>付费投放 ≈ ¥7,000（45%）</div>
+            <div class="li"><span class="sw" style="background:#a855f7"></span>自运营(代理/卡/折旧) ≈ ¥4,000（25%）</div>
+            <div class="li"><span class="sw" style="background:#3b82f6"></span>云基础设施/CDN/DB ≈ ¥3,000（18%）</div>
+            <div class="li"><span class="sw" style="background:#34d399"></span>LLM/翻译/GPU API ≈ ¥2,000（12%）</div>
+            <div class="li" style="color:var(--ink);font-weight:600;margin-top:4px">合计 ≈ ¥1.6万/月（不含人力）</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="note reveal"><b>关键点：</b>付费投放只占约 ¥7,000/月做"点火测试"，跑通单渠道正 ROI 再逐步放量；主力靠自运营，因此在预算极低时仍能持续获客。</div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- FINANCE -->
+<section id="finance">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-idx">06 / UNIT ECONOMICS</div>
+      <h2>收益测算（保守 / 中性 / 乐观三档）</h2>
+      <p>核心引擎是自运营获客漏斗。下表为可调参数模型，<b style="color:var(--ink)">数字为假设，需用真实产品数据校正</b>。基准：约 30 台设备满负荷、混合 ARPU、月流失 8%。</p>
+    </div>
+
+    <div class="grid-2 reveal">
+      <div class="card">
+        <h3 style="font-size:16px;margin-bottom:12px">自运营获客漏斗（中性 / 月）</h3>
+        <div class="funnel">
+          <div class="fstep s1"><span class="fv">36,000</span> <span class="fl">有效触达（30台×40/天×30）</span></div>
+          <div class="fstep s2"><span class="fv">1,800</span> <span class="fl">有效对话（响应率 5%）</span></div>
+          <div class="fstep s3"><span class="fv">540</span> <span class="fl">注册试用（转化 30%）</span></div>
+          <div class="fstep s4"><span class="fv">32</span> <span class="fl">付费转化（6%）→ 新增 MRR ≈ $1.9k</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3 style="font-size:16px;margin-bottom:12px">单位经济（中性）</h3>
+        <div class="ue" style="grid-template-columns:1fr 1fr">
+          <div class="u"><div class="uk">混合 ARPU</div><div class="uv">$60</div><div class="un">/月/付费用户</div></div>
+          <div class="u"><div class="uk">毛利率</div><div class="uv">80%</div><div class="un">扣 API/支付/算力</div></div>
+          <div class="u"><div class="uk">LTV</div><div class="uv">$600</div><div class="un">$48×12.5月生命周期</div></div>
+          <div class="u"><div class="uk">自运营 CAC</div><div class="uv">$24</div><div class="un">LTV/CAC ≈ 25 · 回本&lt;1月</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tbl-wrap reveal" style="margin-top:18px">
+      <table class="tbl">
+        <thead><tr><th>指标（月）</th><th class="c-cons">保守</th><th class="c-base">中性</th><th class="c-opt">乐观</th></tr></thead>
+        <tbody>
+          <tr><td>有效触达量</td><td class="c-cons">22,500</td><td class="c-base">36,000</td><td class="c-opt">54,000</td></tr>
+          <tr><td>响应率 → 有效对话</td><td class="c-cons">3% · 675</td><td class="c-base">5% · 1,800</td><td class="c-opt">8% · 4,320</td></tr>
+          <tr><td>试用注册率 → 试用数</td><td class="c-cons">20% · 135</td><td class="c-base">30% · 540</td><td class="c-opt">40% · 1,728</td></tr>
+          <tr><td>付费转化率 → 新增付费</td><td class="c-cons">3% · 4</td><td class="c-base">6% · 32</td><td class="c-opt">10% · 173</td></tr>
+          <tr><td>混合 ARPU</td><td class="c-cons">$50</td><td class="c-base">$60</td><td class="c-opt">$75</td></tr>
+          <tr><td><b>新增 MRR / 月</b></td><td class="c-cons"><b>≈ $200</b></td><td class="c-base"><b>≈ $1,900</b></td><td class="c-opt"><b>≈ $13,000</b></td></tr>
+          <tr><td>叠加投放增量（&lt;¥1万）</td><td class="c-cons">+$300</td><td class="c-base">+$420</td><td class="c-opt">+$700</td></tr>
+          <tr><td><b>3 月末累计 MRR</b>（含8%流失）</td><td class="c-cons"><b>≈ $1.4k</b></td><td class="c-base"><b>≈ $6k</b></td><td class="c-opt"><b>≈ $28k</b></td></tr>
+          <tr><td>月运营成本</td><td class="c-cons">¥1.6万</td><td class="c-base">¥1.6万</td><td class="c-opt">¥2.2万</td></tr>
+          <tr><td><b>现金流转正</b></td><td class="c-cons">第 3–4 月</td><td class="c-base"><b>第 2 月</b></td><td class="c-opt">第 1 月</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note reveal"><b>口径与假设：</b>真机社媒触达配额（防封）、各级转化率、ARPU、流失率均为行业经验区间的假设值，用于建立可调模型，非承诺业绩。上线后用真实漏斗数据替换即得"你的精准版"。投放 CAC 约 $150–200（LTV/CAC≈3，临界，跑通再放量）；自运营 CAC 极低是低预算能滚动的根本原因。</div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- SELFOPS -->
+<section id="selfops">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-idx">07 / SELF-OPERATION</div>
+      <h2>现有账号与设备自运营方案</h2>
+      <p>把重资产（手机集群 + 账号 + 自托管 GPU）变成"自己的增长团队"：全自动获客 → AI 承接 → 引导注册 SaaS → 付费，形成不依赖大预算的造血闭环。</p>
+    </div>
+    <div class="flow reveal">
+      <div class="fnode"><h4><span class="ic">${ICON_reachx}</span>获客</h4><p>智拓 ReachX 手机集群：FB/TikTok/IG 批量加友、打招呼、群提取，锁定欧美目标人群。</p></div>
+      <div class="farrow">&#8594;</div>
+      <div class="fnode"><h4><span class="ic">${ICON_chatx}</span>承接</h4><p>智聊 ChatX 个人号：AI 拟人多语种自动应答、答疑、跟进，7×24 不漏客。</p></div>
+      <div class="farrow">&#8594;</div>
+      <div class="fnode"><h4><span class="ic">${ICON_lingox}</span>转化</h4><p>对话中植入价值点与试用链接，引导注册 LingoX/ChatX/VoiceX 免费试用。</p></div>
+      <div class="farrow">&#8594;</div>
+      <div class="fnode"><h4><span class="ic">${ICON_pay}</span>付费</h4><p>试用到量 → 升级订阅；数据回流漏斗看板，反哺话术与投放。</p></div>
+    </div>
+
+    <div class="grid-3 reveal" style="margin-top:18px">
+      <div class="card"><h3 style="font-size:16px">产能测算（30 台）</h3><ul class="feat-list"><li>每台/天有效触达 <b>25–60</b>（防封配额内）</li><li>满负荷月触达 <b>2.2万–5.4万</b></li><li>折算月新增付费 <b>4–170+</b>（三档）</li></ul></div>
+      <div class="card"><h3 style="font-size:16px">风控与防封</h3><ul class="feat-list"><li>配额管控 + 人类行为模拟（已内建）</li><li>代理 IP 池轮换 + 出口健康检查</li><li>养号节奏 + Cloudflare 抗封（已有基础）</li></ul></div>
+      <div class="card"><h3 style="font-size:16px">运营 SOP</h3><ul class="feat-list"><li>分组养号 → 分批触达 → 话术 A/B 选优</li><li>坐席工作台接管高意向对话</li><li>每日漏斗数据复盘，迭代话术/人群</li></ul></div>
+    </div>
+    <div class="callout reveal"><b>闭环价值：</b>自运营既是"免费获客渠道"，又是"产品真实用户与数据来源"，还顺带验证了 ReachX/ChatX 的实战效果——三重收益，且几乎不吃投放预算。</div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- RISK / MILESTONE -->
+<section id="risk">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-idx">08 / MILESTONES</div>
+      <h2>关键里程碑与风险</h2>
+      <p>8 周内的验收点，以及需要提前防范的风险与对策。</p>
+    </div>
+    <div class="grid-2 reveal">
+      <div class="card">
+        <h3 style="font-size:16px">里程碑（验收标准）</h3>
+        <ul class="feat-list">
+          <li><b>W4</b>：LingoX 上线，可注册付费、跑通计费闭环</li>
+          <li><b>W6</b>：ChatX 云版上线，官方渠道托管可用</li>
+          <li><b>W8</b>：VoiceX 云 API 上线，三品齐发 + 漏斗看板上线</li>
+          <li><b>第2月</b>：自运营现金流转正（中性）</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3 style="font-size:16px">风险与对策</h3>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr><th>风险</th><th>对策</th></tr></thead><tbody>
+          <tr><td>账号批量封禁</td><td>配额/养号/代理池/多平台分散</td></tr>
+          <tr><td>8周排期过紧</td><td>LingoX 保底先上，后两款可顺延</td></tr>
+          <tr><td>支付合规/风控</td><td>Stripe/Paddle 正规通道，产品口径干净</td></tr>
+          <tr><td>转化不及预期</td><td>先小样本验证漏斗，再投设备/投放</td></tr>
+          <tr><td>GPU 成本失控</td><td>VoiceX 按量计费透传成本 + 额度上限</td></tr>
+        </tbody></table></div>
+      </div>
+    </div>
+    <div class="note reveal"><b>下一步待办（拍板后）：</b>①确认三款定价 → ②搭 SaaS 底座与支付 → ③LingoX 冲刺 W4 上线 → ④自运营引擎排班启动 → ⑤埋点看板 → ⑥按真实数据校正本测算并迭代放量。</div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="slogan">让沟通，<span class="grad">无界</span> · 轻资产先跑，重资产先自用</div>
+    <div>无界科技 BOUNDLESS · 下一步上线与商业化计划 · 内部资料（noindex）· 2026-07</div>
+  </div>
+</footer>
+
+<script>
+  var S = 'stroke="currentColor" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"';
+  var ICONS = {
+    reachx:'<svg viewBox="0 0 24 24" '+S+'><circle cx="12" cy="12" r="2.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><path d="M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" opacity=".55"/><circle cx="12" cy="12" r="9" opacity=".35"/></svg>',
+    chatx:'<svg viewBox="0 0 24 24" '+S+'><path d="M4 5.5h13a2 2 0 0 1 2 2V14a2 2 0 0 1-2 2H9l-4 3.5V16H4a1 1 0 0 1-1-1V6.5A1 1 0 0 1 4 5.5Z"/><path d="M7.5 9.5h8M7.5 12.5h5"/></svg>',
+    lingox:'<svg viewBox="0 0 24 24" '+S+'><path d="M4 6h7M7.5 6c0 4-1.5 7-4 8.5M6 10c1 2 3 3.5 5 4"/><path d="M13 19l3.5-8 3.5 8M14.4 16h4.2"/></svg>',
+    pay:'<svg viewBox="0 0 24 24" '+S+'><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18M7 14h4"/></svg>'
+  };
+  document.querySelectorAll('.ic, .prod-ico').forEach(function(el){
+    var m = el.textContent.trim().match(/^\$\{ICON_([a-z]+)\}$/);
+    if(m && ICONS[m[1]]) el.innerHTML = ICONS[m[1]];
+  });
+
+  var prog = document.getElementById('scrollbar');
+  function onScroll(){ var h=document.documentElement; prog.style.width=(h.scrollTop/(h.scrollHeight-h.clientHeight)*100)+'%'; }
+  window.addEventListener('scroll', onScroll, {passive:true});
+
+  var io = new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});},{threshold:.12});
+  document.querySelectorAll('.reveal').forEach(function(el){io.observe(el);});
+
+  var secs=document.querySelectorAll('section[id]'), navA=document.querySelectorAll('.nav-links a');
+  var navIO=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){var id=e.target.getAttribute('id');navA.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}});},{rootMargin:'-45% 0px -50% 0px'});
+  secs.forEach(function(s){navIO.observe(s);});
+
+  var tgl=document.getElementById('navToggle'), links=document.getElementById('navLinks');
+  tgl.addEventListener('click',function(){links.classList.toggle('open');});
+  navA.forEach(function(a){a.addEventListener('click',function(){links.classList.remove('open');});});
+  onScroll();
+</script>
+</body>
+</html>

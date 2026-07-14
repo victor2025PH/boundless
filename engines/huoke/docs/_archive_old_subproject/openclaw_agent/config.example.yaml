@@ -1,0 +1,21 @@
+# 手机端 OpenClaw Agent 配置示例
+# 复制为 config.yaml 后修改
+
+# 主机任务 API 根地址（手机与电脑需同网或可访问）
+host_url: "http://192.168.1.100:8000"
+
+# 本机设备 ID，与主机侧设备一致（用于拉取任务、上报结果）
+device_id: "89NZVGKFD6BYUO5P"
+
+# 在主机上运行 agent 时设为 true，用主机 ADB 控制已连接手机（device_id 填手机序列号）
+use_host_adb: false
+
+# 本机 ADB 自连（无线调试，use_host_adb 为 false 时使用）
+adb_host: "127.0.0.1"
+adb_port: 37123
+
+# 轮询间隔（秒）
+poll_interval: 10
+
+# 可选：主机 AI 接口（生成回复等）
+# ai_url: "http://192.168.1.100:8000/ai/chat"

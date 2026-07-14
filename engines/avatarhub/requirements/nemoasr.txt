@@ -1,0 +1,26 @@
+# nemoasr conda 环境（Nemotron 3.5 ASR · nemotron_stt_server.py · 端口 7857）—— 种子依赖清单
+# 说明：最小种子，非完整 pip freeze。目标机建环境并安装后，执行
+#       pip freeze > requirements/nemoasr.txt  覆盖为可复现实测基线（与其它 env 一致）。
+#
+# 建环境（参考，与现有隔离环境同套路）：
+#   conda create -n nemoasr python=3.11 -y
+#   conda activate nemoasr
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+#   pip install Cython packaging            # NeMo 源码构建前置
+#   pip install -r requirements/nemoasr.txt # 需本机已装 git（拉取 NeMo main 源码构建）
+#   # 模型由 ASRModel.from_pretrained("nvidia/nemotron-3.5-asr-streaming-0.6b") 自动下载（OpenMDW-1.1）
+#   # 运行需 NeMo >= 26.06（=git main / 3.1+）；输入须单声道 16k
+#
+# 关键：PyPI 上的 nemo_toolkit(2.7.x) 缺 Nemotron-3.5 流式模型的具体类，from_pretrained 会回退到
+#       抽象基类 ASRModel 而报错。官方模型卡要求按 git main 安装（实测产出 3.1.0+），故此处直接用 git URL。
+nemo_toolkit[asr] @ git+https://github.com/NVIDIA/NeMo.git@main   # NVIDIA NeMo（含 Nemotron 3.5 FastConformer-RNNT）
+transformers               # MarianMT（/translate，与 stt_server 一致）
+sentencepiece
+soundfile
+numpy
+fastapi
+uvicorn
+python-multipart           # FastAPI 表单/上传端点（/transcribe 接收音频文件）必需，缺失则启动即崩
+requests
+pydantic
+websockets                 # /ws/transcribe 流式增量

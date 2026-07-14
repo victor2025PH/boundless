@@ -1,0 +1,21 @@
+{
+  "name": "无界 BOUNDLESS · 幻影 LiveX",
+  "short_name": "无界 LiveX",
+  "description": "无界科技 BOUNDLESS · AI 声音克隆与实时数字人对话平台",
+  "start_url": "/phone",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#080b10",
+  "theme_color": "#080b10",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "screenshots": [],
+  "categories": ["entertainment", "utilities"]
+}

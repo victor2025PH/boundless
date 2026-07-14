@@ -1,0 +1,15 @@
+[
+  {
+    "name": "demo-compose-test",
+    "mode": "compose",
+    "input": "C:/Users/user/Desktop/明星/bandicam 2026-06-27 05-00-33-320.mp4",
+    "main_face": "faces/默认.jpg",
+    "corner": "tr",
+    "seconds": 6,
+    "title_zh": "实时换脸 · 素人秒变超级美女",
+    "title_en": "Real-time face swap · anyone becomes a stunning beauty",
+    "desc_zh": "右上小窗是换脸前的真人，大画面是换脸后的超级美女——转头、眨眼、说话逐帧一致，只有脸变了。概念演示。",
+    "desc_en": "Corner window is the real face before the swap; main view is a stunning beauty — every move matches frame for frame, only the face changes. Concept demo.",
+    "queue": false
+  }
+]

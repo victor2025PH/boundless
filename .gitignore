@@ -57,3 +57,14 @@ _pending_models/
 
 # keep empty structure
 !**/.gitkeep
+
+# ---- per-engine tracked-secret guards (wujie migration 20260715) ----
+**/users.json
+**/routers.json
+**/device_registry.json
+**/registry.key
+*.keystore
+*.tgz
+**/config/config.yaml
+**/config/config.local.yaml
+**/config/cluster.yaml

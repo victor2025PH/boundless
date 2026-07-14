@@ -1,0 +1,31 @@
+# UTF-8. PyInstaller Windows 版本资源（--version-file）。
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 12, 0),
+    prodvers=(1, 0, 12, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '080404B0',
+        [
+          StringStruct('CompanyName', '无界科技 BOUNDLESS'),
+          StringStruct('FileDescription', '无界幻境 BOUNDLESS Studio 控制台'),
+          StringStruct('FileVersion', '1.0.12.0'),
+          StringStruct('InternalName', 'AvatarHub'),
+          StringStruct('LegalCopyright', '© 2026 无界科技 BOUNDLESS · https://ai26.sbs'),
+          StringStruct('OriginalFilename', 'AvatarHub.exe'),
+          StringStruct('ProductName', '无界幻境 BOUNDLESS Studio'),
+          StringStruct('ProductVersion', '1.0.12.0')
+        ]
+      )
+    ]),
+    VarFileInfo([VarStruct('Translation', [2052, 1200])])
+  ]
+)

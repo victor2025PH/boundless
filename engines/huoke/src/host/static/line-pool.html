@@ -1,0 +1,734 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>LINE Pool 管理 · Phase 11</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #1a222c;
+    --border: #2a3644;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --success: #3fb950;
+    --warn: #d29922;
+    --danger: #f85149;
+    --hover: #22303d;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI"; }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; margin: 0 0 12px; display: flex;
+       align-items: center; gap: 10px; }
+  h1 .badge { font-size: 12px; background: var(--accent); color: #fff;
+              padding: 2px 8px; border-radius: 10px; font-weight: normal; }
+  .panel { background: var(--panel); border: 1px solid var(--border);
+           border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; }
+  .panel h2 { font-size: 14px; margin: 0 0 8px; color: var(--muted);
+              text-transform: uppercase; letter-spacing: 0.04em; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  label { color: var(--muted); font-size: 12px; }
+  input, select, textarea, button {
+    font: inherit; padding: 6px 10px; border-radius: 4px;
+    border: 1px solid var(--border); background: #0d1117; color: var(--text);
+  }
+  input[type=file] { padding: 4px; }
+  button { cursor: pointer; background: var(--accent); color: #fff;
+           border-color: transparent; padding: 6px 14px; }
+  button:hover { filter: brightness(1.1); }
+  button.sec { background: #30363d; }
+  button.danger { background: var(--danger); }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { text-align: left; padding: 8px 10px;
+           border-bottom: 1px solid var(--border); vertical-align: middle; }
+  th { font-size: 12px; color: var(--muted); text-transform: uppercase;
+       letter-spacing: 0.04em; }
+  tr:hover td { background: var(--hover); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px;
+          font-size: 11px; }
+  .pill.active { background: #0d4429; color: var(--success); }
+  .pill.cooldown { background: #4a3e00; color: var(--warn); }
+  .pill.banned, .pill.disabled { background: #4a1d1d; color: var(--danger); }
+  .log { font-family: ui-monospace, monospace; font-size: 12px;
+         background: #0d1117; padding: 8px; border-radius: 4px;
+         max-height: 160px; overflow: auto; white-space: pre-wrap; }
+  .log .ok { color: var(--success); }
+  .log .err { color: var(--danger); }
+  .muted { color: var(--muted); }
+  .flex-1 { flex: 1 1 auto; }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap;
+             align-items: flex-end; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>LINE Pool 管理 <span class="badge">Phase 11+12</span></h1>
+
+  <!-- ── Dry Run 预览 (Phase 12.4) ── -->
+  <div class="panel">
+    <h2>Dry Run 预览 — 启用 scheduled 前看一眼会发什么</h2>
+    <div class="toolbar">
+      <div><label>device_id</label><br>
+        <input id="dr_device" placeholder="8DWOF6CYY5R8YHX8" style="width:200px"></div>
+      <div><label>hours_window</label><br>
+        <input id="dr_hours" type="number" value="24" style="width:80px"></div>
+      <div><label>region</label><br>
+        <input id="dr_region" value="jp" style="width:60px"></div>
+      <div><label>persona_key</label><br>
+        <input id="dr_persona" value="jp_female_midlife" style="width:160px"></div>
+      <div><label>limit</label><br>
+        <input id="dr_limit" type="number" value="5" style="width:60px"></div>
+      <button onclick="onDryRun()">▶ 跑预览 (零写入)</button>
+      <button class="sec" onclick="clearDryRunStorage()" title="清空保存的表单值">×</button>
+      <span class="muted" id="dr_status"></span>
+    </div>
+    <div id="dr_dispatch_block" style="margin-top:8px; display:none">
+      <h3 style="font-size:12px; color:var(--muted); margin:6px 0">① 派发计划 (line_dispatch_from_reply)</h3>
+      <table>
+        <thead><tr>
+          <th>peer</th><th>line_id</th><th>age</th><th>gender</th><th>template</th>
+        </tr></thead>
+        <tbody id="dr_dispatch_tbl"></tbody>
+      </table>
+    </div>
+    <div id="dr_send_block" style="margin-top:8px; display:none">
+      <h3 style="font-size:12px; color:var(--muted); margin:6px 0">② 实际会发送 (send_referral_replies)</h3>
+      <table>
+        <thead><tr>
+          <th>peer</th><th>line_id</th><th>err_code</th><th>would_send_template</th>
+        </tr></thead>
+        <tbody id="dr_send_tbl"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── 单条新增 ── -->
+  <div class="panel">
+    <h2>单条新增</h2>
+    <div class="row">
+      <input id="f_line_id" placeholder="line_id (@xxx / URL / phone)" style="min-width:220px">
+      <input id="f_owner" placeholder="owner_device_id (可空)" style="width:200px">
+      <input id="f_persona" placeholder="persona_key (可空)" style="width:150px">
+      <input id="f_region" placeholder="region (jp/it/...)" style="width:90px">
+      <select id="f_status">
+        <option value="active">active</option>
+        <option value="cooldown">cooldown</option>
+        <option value="disabled">disabled</option>
+        <option value="banned">banned</option>
+      </select>
+      <input id="f_cap" type="number" min="1" value="20" style="width:70px" title="daily_cap">
+      <input id="f_notes" placeholder="notes" style="flex:1 1 200px">
+      <button onclick="onAdd()">+ 添加</button>
+    </div>
+  </div>
+
+  <!-- ── 批量导入 CSV ── -->
+  <div class="panel">
+    <h2>批量导入 CSV</h2>
+    <div class="row">
+      <input type="file" id="f_csv" accept=".csv">
+      <button class="sec" onclick="onUploadCsv()">上传 CSV</button>
+      <span class="muted">首行 header: <code>line_id,owner_device_id,persona_key,region,status,daily_cap,notes</code></span>
+    </div>
+    <div id="import_log" class="log" style="margin-top:8px; display:none"></div>
+  </div>
+
+  <!-- ── 筛选 + 列表 ── -->
+  <div class="panel">
+    <h2>账号列表</h2>
+    <div class="toolbar">
+      <div><label>状态</label><br>
+        <select id="q_status">
+          <option value="">全部</option>
+          <option value="active">active</option>
+          <option value="cooldown">cooldown</option>
+          <option value="disabled">disabled</option>
+          <option value="banned">banned</option>
+        </select>
+      </div>
+      <div><label>region</label><br>
+        <input id="q_region" placeholder="" style="width:80px">
+      </div>
+      <div><label>persona</label><br>
+        <input id="q_persona" placeholder="" style="width:140px">
+      </div>
+      <div><label>owner</label><br>
+        <input id="q_owner" placeholder="" style="width:160px">
+      </div>
+      <button class="sec" onclick="reload()">刷新</button>
+      <button class="sec" onclick="exportPoolCsv()">⬇ CSV</button>
+      <span class="muted flex-1" style="text-align:right"
+            id="count_label">—</span>
+    </div>
+    <table>
+      <thead><tr>
+        <th>ID</th><th>line_id</th><th>region</th><th>persona</th>
+        <th>owner</th><th>status</th><th>cap</th>
+        <th>used (24h / total)</th>
+        <th>last_used_at</th><th>notes</th><th></th>
+      </tr></thead>
+      <tbody id="tbl"></tbody>
+    </table>
+  </div>
+
+  <!-- ── 已死 peers (referral_dead) ── Phase 12.3+12.4 -->
+  <div class="panel">
+    <h2>已死 peers (referral_dead) — 点"恢复"给第二次机会</h2>
+    <div class="row" style="margin-bottom:6px">
+      <button class="sec" onclick="reloadDeadPeers()">刷新</button>
+      <button class="sec" id="btn_dead_prev" onclick="prevDeadPage()">‹ 上一页</button>
+      <button class="sec" id="btn_dead_next" onclick="nextDeadPage()">下一页 ›</button>
+      <button class="danger" id="btn_revive_all" onclick="onReviveAllOnPage()">⤴ 复活当前页全部</button>
+      <button class="sec" onclick="exportDeadCsv()">⬇ CSV</button>
+      <span class="muted" id="dead_count_label">—</span>
+    </div>
+    <table>
+      <thead><tr>
+        <th>canonical</th><th>peer</th><th>platform</th>
+        <th>dead_reason</th><th>dead_at</th>
+        <th>fail counts</th><th></th>
+      </tr></thead>
+      <tbody id="dead_tbl"></tbody>
+    </table>
+  </div>
+
+  <!-- ── 最近分发日志 ── -->
+  <div class="panel">
+    <h2>最近分发日志 (dispatch_log)</h2>
+    <div class="row" style="margin-bottom:6px">
+      <button class="sec" onclick="reloadLog()">刷新日志</button>
+      <button class="sec" onclick="exportLogCsv()">⬇ CSV</button>
+    </div>
+    <table>
+      <thead><tr>
+        <th>ID</th><th>time</th><th>line_id</th>
+        <th>canonical</th><th>peer</th><th>source</th>
+        <th>status</th><th>note</th>
+      </tr></thead>
+      <tbody id="log_tbl"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const API_KEY = new URLSearchParams(location.search).get("api_key") ||
+                localStorage.getItem("OPENCLAW_API_KEY") || "";
+if (API_KEY) localStorage.setItem("OPENCLAW_API_KEY", API_KEY);
+
+function $(id) { return document.getElementById(id); }
+
+// Phase 12.5: Loading state helper
+function setLoading(tbodyId, colspan = 6) {
+  const tb = $(tbodyId);
+  if (tb) tb.innerHTML = `<tr><td colspan="${colspan}" class="muted" style="text-align:center;padding:12px">⏳ 加载中...</td></tr>`;
+}
+
+// Phase 12.6: 按钮 disable 状态 (防连点)
+function setBtnBusy(id, busy, busyLabel = "处理中...") {
+  const b = $(id);
+  if (!b) return;
+  if (busy) {
+    b.dataset._origLabel = b.textContent;
+    b.textContent = busyLabel;
+    b.disabled = true;
+  } else {
+    if (b.dataset._origLabel) b.textContent = b.dataset._origLabel;
+    b.disabled = false;
+  }
+}
+
+// Phase 12.6: CSV 导出辅助. UTF-8 BOM 防 Excel 乱码.
+function _csvEscape(v) {
+  if (v == null) return "";
+  const s = String(v);
+  if (s.includes(",") || s.includes("\"") || s.includes("\n")) {
+    return "\"" + s.replace(/"/g, "\"\"") + "\"";
+  }
+  return s;
+}
+
+function downloadCsv(filename, headers, rows) {
+  const BOM = "﻿";  // UTF-8 BOM
+  const lines = [headers.map(_csvEscape).join(",")];
+  for (const r of rows) {
+    lines.push(headers.map(h => _csvEscape(r[h])).join(","));
+  }
+  const blob = new Blob([BOM + lines.join("\n")], {type: "text/csv"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function _ts() {
+  const d = new Date();
+  return d.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+}
+
+async function exportPoolCsv() {
+  try {
+    const data = await api("/line-pool?limit=2000&includes_24h_stats=true");
+    const headers = ["id", "line_id", "region", "persona_key",
+                      "owner_device_id", "status", "daily_cap",
+                      "used_24h", "times_used", "last_used_at", "notes",
+                      "created_at", "updated_at"];
+    downloadCsv(`line_pool_${_ts()}.csv`, headers, data.results || []);
+  } catch (e) { alert(e.message); }
+}
+
+async function exportLogCsv() {
+  try {
+    const data = await api("/line-pool/dispatch-log?limit=2000");
+    const headers = ["id", "created_at", "line_account_id", "line_id",
+                      "canonical_id", "peer_name", "source_device_id",
+                      "source_event_id", "status", "note"];
+    downloadCsv(`dispatch_log_${_ts()}.csv`, headers, data.results || []);
+  } catch (e) { alert(e.message); }
+}
+
+async function exportDeadCsv() {
+  try {
+    const data = await api(
+      "/lead-mesh/leads/l2-verified?include_tags=referral_dead&limit=2000");
+    // 扁平化 metadata 里关键字段
+    const rows = (data.results || []).map(r => ({
+      canonical_id: r.canonical_id,
+      display_name: r.display_name,
+      platform: r.platform,
+      dead_reason: (r.metadata || {}).referral_dead_reason,
+      dead_at: (r.metadata || {}).referral_dead_at,
+      age_band: (r.metadata || {}).age_band,
+      gender: (r.metadata || {}).gender,
+      l2_score: r.l2_score,
+      fail_counts: Object.keys(r.metadata || {})
+        .filter(k => k.startsWith("referral_fail_count_"))
+        .map(k => `${k.replace("referral_fail_count_","")}:${r.metadata[k]}`)
+        .join("|"),
+    }));
+    const headers = ["canonical_id", "display_name", "platform",
+                      "dead_reason", "dead_at", "age_band", "gender",
+                      "l2_score", "fail_counts"];
+    downloadCsv(`dead_peers_${_ts()}.csv`, headers, rows);
+  } catch (e) { alert(e.message); }
+}
+
+// Phase 12.5: Dry Run 表单 sticky 工具
+const DR_FIELDS = ["dr_device", "dr_hours", "dr_region",
+                    "dr_persona", "dr_limit"];
+const DR_LS_PREFIX = "lp_dryrun_";
+
+function loadDryRunSticky() {
+  for (const id of DR_FIELDS) {
+    const v = localStorage.getItem(DR_LS_PREFIX + id);
+    if (v != null && $(id)) $(id).value = v;
+  }
+}
+
+function bindDryRunSticky() {
+  for (const id of DR_FIELDS) {
+    const el = $(id);
+    if (!el) continue;
+    el.addEventListener("change", () => {
+      try {
+        localStorage.setItem(DR_LS_PREFIX + id, el.value);
+      } catch (e) { /* private mode? ignore */ }
+    });
+  }
+}
+
+function clearDryRunStorage() {
+  for (const id of DR_FIELDS) {
+    try { localStorage.removeItem(DR_LS_PREFIX + id); } catch (e) {}
+  }
+  // 重置默认值
+  if ($("dr_device")) $("dr_device").value = "";
+  if ($("dr_hours")) $("dr_hours").value = "24";
+  if ($("dr_region")) $("dr_region").value = "jp";
+  if ($("dr_persona")) $("dr_persona").value = "jp_female_midlife";
+  if ($("dr_limit")) $("dr_limit").value = "5";
+  $("dr_status").textContent = "已清空表单 ✓";
+}
+
+function headers() {
+  const h = {"Content-Type": "application/json"};
+  if (API_KEY) h["X-API-Key"] = API_KEY;
+  return h;
+}
+
+async function api(path, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({}, opts.headers || {}, headers());
+  const r = await fetch(path, opts);
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`${r.status}: ${text}`);
+  }
+  return r.json();
+}
+
+async function reload() {
+  const params = new URLSearchParams();
+  if ($("q_status").value) params.set("status", $("q_status").value);
+  if ($("q_region").value) params.set("region", $("q_region").value);
+  if ($("q_persona").value) params.set("persona_key", $("q_persona").value);
+  if ($("q_owner").value) params.set("owner_device_id", $("q_owner").value);
+  params.set("limit", "500");
+  params.set("includes_24h_stats", "true");
+  setLoading("tbl", 11);
+  try {
+    const data = await api("/line-pool?" + params);
+    render(data.results || []);
+    $("count_label").textContent = `共 ${data.count} 条`;
+  } catch (e) {
+    $("tbl").innerHTML = `<tr><td colspan="11" style="color:var(--danger)">加载失败: ${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+function render(rows) {
+  const body = $("tbl");
+  body.innerHTML = "";
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${r.id}</td>
+      <td><code>${escapeHtml(r.line_id)}</code></td>
+      <td>${escapeHtml(r.region)}</td>
+      <td>${escapeHtml(r.persona_key)}</td>
+      <td>${escapeHtml(r.owner_device_id) || '<span class="muted">—</span>'}</td>
+      <td><span class="pill ${r.status}">${r.status}</span></td>
+      <td>${r.daily_cap}</td>
+      <td>${r.used_24h != null ? r.used_24h : "?"} / ${r.times_used}</td>
+      <td class="muted">${r.last_used_at || "—"}</td>
+      <td class="muted" style="max-width:200px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(r.notes || "")}</td>
+      <td>
+        ${btnForStatus(r.id, r.status)}
+        <button class="danger" onclick="onDelete(${r.id})">删</button>
+      </td>
+    `;
+    body.appendChild(tr);
+  }
+  // 近 24h 使用次数: 查 dispatch_log 计算 (后端 daily_cap 自己有校验, UI 先 ? 占位)
+  // 后端暂未暴露 per-account 计数 API, 保持 ? / total 用户能看到已 allocate 过几次.
+}
+
+function escapeHtml(s) {
+  return String(s || "").replace(/[&<>"']/g,
+    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+// Phase 12.3: 按当前 status 返回合适的 toggle 按钮 HTML.
+//   active   → "停用"  (toggle -> disabled)
+//   cooldown → "恢复"  (toggle -> active, 一键解封)
+//   disabled → "启用"  (toggle -> active)
+//   banned   → "启用"  (operator 确认后才给 active)
+function btnForStatus(id, status) {
+  const toActive = (status === "cooldown" || status === "disabled" || status === "banned");
+  const label = status === "active" ? "停用"
+              : status === "cooldown" ? "恢复"
+              : "启用";
+  const next = toActive ? "active" : "disabled";
+  return `<button class="sec" onclick="onSetStatus(${id}, '${next}')">${label}</button>`;
+}
+
+async function onAdd() {
+  const body = {
+    line_id: $("f_line_id").value.trim(),
+    owner_device_id: $("f_owner").value.trim(),
+    persona_key: $("f_persona").value.trim(),
+    region: $("f_region").value.trim(),
+    status: $("f_status").value,
+    daily_cap: Number($("f_cap").value) || 20,
+    notes: $("f_notes").value.trim(),
+  };
+  if (!body.line_id) { alert("line_id 必填"); return; }
+  try {
+    await api("/line-pool", {method: "POST",
+      body: JSON.stringify(body)});
+    $("f_line_id").value = "";
+    $("f_notes").value = "";
+    await reload();
+  } catch (e) { alert(e.message); }
+}
+
+async function onSetStatus(id, next) {
+  try {
+    await api(`/line-pool/${id}`, {method: "PUT",
+      body: JSON.stringify({status: next})});
+    await reload();
+  } catch (e) { alert(e.message); }
+}
+
+async function onDelete(id) {
+  if (!confirm("确认删除账号 " + id + " ?")) return;
+  try {
+    await api(`/line-pool/${id}`, {method: "DELETE"});
+    await reload();
+  } catch (e) { alert(e.message); }
+}
+
+async function onUploadCsv() {
+  const f = $("f_csv").files[0];
+  if (!f) { alert("请选文件"); return; }
+  const fd = new FormData();
+  fd.append("file", f);
+  const h = {};
+  if (API_KEY) h["X-API-Key"] = API_KEY;
+  const r = await fetch("/line-pool/bulk-import-csv",
+    {method: "POST", headers: h, body: fd});
+  const data = await r.json();
+  const log = $("import_log");
+  log.style.display = "block";
+  if (r.ok) {
+    log.innerHTML = `<div class="ok">✓ 总 ${data.total} | 新增 ${data.inserted} | 重复 ${data.duplicate} | 无效 ${data.invalid}</div>` +
+      (data.errors && data.errors.length
+        ? data.errors.map(e => `<div class="err">× ${escapeHtml(e.line_id)}: ${escapeHtml(e.reason)}</div>`).join("")
+        : "");
+    await reload();
+  } else {
+    log.innerHTML = `<div class="err">× ${r.status}: ${JSON.stringify(data)}</div>`;
+  }
+}
+
+async function reloadLog() {
+  setLoading("log_tbl", 8);
+  try {
+    const data = await api("/line-pool/dispatch-log?limit=100");
+    const body = $("log_tbl");
+    body.innerHTML = "";
+    for (const r of data.results || []) {
+      const tr = document.createElement("tr");
+      const lineDisplay = r.line_id
+        ? `<code>${escapeHtml(r.line_id)}</code>`
+        : `<span class="muted">(skipped·no-acct)</span>`;
+      tr.innerHTML = `
+        <td>${r.id}</td>
+        <td class="muted">${r.created_at}</td>
+        <td>${lineDisplay}</td>
+        <td class="muted" style="font-family:ui-monospace">${escapeHtml(r.canonical_id.slice(0,12))}</td>
+        <td>${escapeHtml(r.peer_name || "")}</td>
+        <td class="muted">${escapeHtml(r.source_device_id || "")}</td>
+        <td><span class="pill ${r.status === 'sent' ? 'active' : (r.status === 'failed' ? 'banned' : 'cooldown')}">${r.status}</span></td>
+        <td class="muted" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;font-size:11px">${escapeHtml(r.note || "")}</td>
+      `;
+      body.appendChild(tr);
+    }
+  } catch (e) { alert(e.message); }
+}
+
+// Phase 12.3 + 12.4: dead peers (referral_dead) 管理
+let _deadPage = 0;
+const _deadPageSize = 50;
+let _currentDeadIds = [];
+
+function prevDeadPage() { if (_deadPage > 0) { _deadPage--; reloadDeadPeers(); } }
+function nextDeadPage() { _deadPage++; reloadDeadPeers(); }
+
+async function reloadDeadPeers() {
+  setLoading("dead_tbl", 7);
+  try {
+    const offset = _deadPage * _deadPageSize;
+    const data = await api(
+      `/lead-mesh/leads/l2-verified?include_tags=referral_dead`
+      + `&limit=${_deadPageSize}&offset=${offset}`
+      + `&with_total=true`);
+    const body = $("dead_tbl");
+    body.innerHTML = "";
+    const rows = data.results || [];
+    _currentDeadIds = rows.map(r => r.canonical_id);
+    const total = data.total != null ? data.total : "?";
+    let label = `本页 ${rows.length} / 共 ${total} 条 (offset=${offset})`;
+    // Phase 12.5: 大量 dead 时给 warning
+    if (typeof total === "number" && total > 50) {
+      label +=
+        " — 建议小批量复活 (一次性恢复 50+ 后 dispatcher 集中重试可能再 cooldown)";
+    }
+    // Phase 12.6: 末尾提示 + 翻页按钮 disable
+    if ($("btn_dead_prev")) $("btn_dead_prev").disabled = (_deadPage === 0);
+    if ($("btn_dead_next")) {
+      const atEnd = (typeof total === "number"
+                      && offset + rows.length >= total);
+      $("btn_dead_next").disabled = atEnd;
+      if (atEnd && offset > 0) label += " · 已到末尾";
+    }
+    if ($("btn_revive_all")) {
+      $("btn_revive_all").disabled = (rows.length === 0);
+    }
+    $("dead_count_label").textContent = label;
+    for (const r of rows) {
+      const meta = r.metadata || {};
+      // fail counts 汇总: metadata 里 referral_fail_count_* 字段
+      const failCounts = Object.keys(meta)
+        .filter(k => k.startsWith("referral_fail_count_"))
+        .map(k => `${k.replace("referral_fail_count_","")}:${meta[k]}`)
+        .join(", ");
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td class="muted" style="font-family:ui-monospace">${escapeHtml(r.canonical_id.slice(0,12))}</td>
+        <td>${escapeHtml(r.display_name)}</td>
+        <td class="muted">${escapeHtml(r.platform)}</td>
+        <td><span class="pill banned">${escapeHtml(meta.referral_dead_reason || "?")}</span></td>
+        <td class="muted" style="font-size:11px">${escapeHtml(meta.referral_dead_at || "")}</td>
+        <td class="muted" style="font-size:11px">${escapeHtml(failCounts)}</td>
+        <td><button class="sec" onclick="onRevive('${r.canonical_id}')">恢复</button></td>
+      `;
+      body.appendChild(tr);
+    }
+  } catch (e) { alert(e.message); }
+}
+
+async function onRevive(cid) {
+  if (!confirm("确认把 " + cid.slice(0,12) + " 从 referral_dead 恢复?\n" +
+                "(dispatcher 下次会重新评估这个 peer)")) return;
+  try {
+    const r = await api(`/lead-mesh/leads/${cid}/revive-referral`,
+                         {method: "POST",
+                          body: JSON.stringify({actor: "operator_ui"})});
+    if (!r.ok) alert("未恢复: 目标可能不存在或本来就不是 dead");
+    await reloadDeadPeers();
+  } catch (e) { alert(e.message); }
+}
+
+// Phase 12.4 + 12.6: 批量复活当前页所有
+async function onReviveAllOnPage() {
+  if (_currentDeadIds.length === 0) {
+    alert("当前页没有 dead peer"); return;
+  }
+  if (!confirm("确认把当前页 " + _currentDeadIds.length + " 个 dead peer 全部复活?")) return;
+  setBtnBusy("btn_revive_all", true, "⏳ 复活中...");
+  try {
+    const r = await api("/lead-mesh/leads/revive-referral-batch",
+      {method: "POST",
+       body: JSON.stringify({canonical_ids: _currentDeadIds,
+                              actor: "operator_ui_batch"})});
+    alert(`已复活: ${r.revived} 条; 跳过: ${r.skipped} 条; 错误: ${(r.errors||[]).length}`);
+    await reloadDeadPeers();
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    setBtnBusy("btn_revive_all", false);
+  }
+}
+
+// Phase 12.4 + 12.6: Dry Run 预览面板
+async function onDryRun() {
+  const dev = $("dr_device").value.trim();
+  if (!dev) { alert("device_id 必填"); return; }
+  // Phase 12.6: 防连点
+  const btn = document.querySelector("button[onclick='onDryRun()']");
+  if (btn) { btn.disabled = true; btn.dataset._orig = btn.textContent; btn.textContent = "▶ 跑中..."; }
+  const params = {
+    hours_window: Number($("dr_hours").value) || 24,
+    region: $("dr_region").value.trim() || null,
+    persona_key: $("dr_persona").value.trim() || null,
+    limit: Number($("dr_limit").value) || 5,
+    dry_run: true,
+    require_l2_verified: true,
+    write_contact_event: false,
+  };
+  $("dr_status").textContent = "running ① dispatcher ...";
+  $("dr_dispatch_block").style.display = "none";
+  $("dr_send_block").style.display = "none";
+  let stats1, stats2;
+  try {
+    stats1 = await _runTaskAndPoll("facebook_line_dispatch_from_reply",
+                                     dev, params);
+  } catch (e) {
+    alert("① 失败: " + e.message);
+    $("dr_status").textContent = "";
+    const b1 = document.querySelector("button[onclick='onDryRun()']");
+    if (b1) { b1.disabled = false; if (b1.dataset._orig) b1.textContent = b1.dataset._orig; }
+    return;
+  }
+  // 渲染 ①
+  const dispBody = $("dr_dispatch_tbl"); dispBody.innerHTML = "";
+  for (const d of (stats1.dispatches || [])) {
+    const meta = d.metadata || {};
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${escapeHtml(d.peer_name)}</td>
+      <td><code>${escapeHtml(d.line_id || "")}</code></td>
+      <td class="muted">${escapeHtml(meta.age_band || "")}</td>
+      <td class="muted">${escapeHtml(meta.gender || "")}</td>
+      <td class="muted" style="max-width:380px;overflow:hidden;text-overflow:ellipsis;font-size:11px">${escapeHtml(d.message_template || "")}</td>
+    `;
+    dispBody.appendChild(tr);
+  }
+  $("dr_dispatch_block").style.display = "block";
+  $("dr_status").textContent = `① scanned=${stats1.scanned} dispatched=${stats1.dispatched} filtered=${stats1.filtered_out}; running ② sender ...`;
+
+  // ② send_referral
+  try {
+    stats2 = await _runTaskAndPoll("facebook_send_referral_replies", dev, {
+      hours_window: params.hours_window, dry_run: true,
+      strict_device_match: false,  // 预览不做设备过滤, 看全
+      max_retry: 0, min_interval_sec: 0, max_interval_sec: 0,
+      limit: params.limit,
+    });
+  } catch (e) {
+    alert("② 失败: " + e.message);
+    const b2 = document.querySelector("button[onclick='onDryRun()']");
+    if (b2) { b2.disabled = false; if (b2.dataset._orig) b2.textContent = b2.dataset._orig; }
+    return;
+  }
+  const sendBody = $("dr_send_tbl"); sendBody.innerHTML = "";
+  for (const o of (stats2.outcomes || [])) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${escapeHtml(o.peer_name)}</td>
+      <td><code>${escapeHtml(o.line_id || "")}</code></td>
+      <td class="muted">${escapeHtml(o.err_code || "")}</td>
+      <td class="muted" style="max-width:380px;overflow:hidden;text-overflow:ellipsis;font-size:11px">${escapeHtml(o.would_send_template || "")}</td>
+    `;
+    sendBody.appendChild(tr);
+  }
+  $("dr_send_block").style.display = "block";
+  // Phase 12.6: 加上 simulated_duration_human 让运营看真跑耗时预估
+  const simH = stats2.simulated_duration_human || "?";
+  const simMs = stats2.simulated_duration_ms || 0;
+  $("dr_status").textContent =
+    `① dispatched=${stats1.dispatched} ② would_send=${(stats2.outcomes||[]).filter(x=>x.err_code==='dry_run').length}/${stats2.scanned}`
+    + ` · 真跑预计: ${simH} (${simMs}ms)`;
+  // 按钮恢复
+  const btn2 = document.querySelector("button[onclick='onDryRun()']");
+  if (btn2) {
+    btn2.disabled = false;
+    if (btn2.dataset._orig) btn2.textContent = btn2.dataset._orig;
+  }
+}
+
+async function _runTaskAndPoll(taskType, deviceId, params) {
+  const ret = await api("/tasks", {method: "POST",
+    body: JSON.stringify({type: taskType, device_id: deviceId, params})});
+  const tid = ret.task_id;
+  if (!tid) throw new Error("no task_id: " + JSON.stringify(ret));
+  // poll
+  const t0 = Date.now();
+  while (Date.now() - t0 < 90000) {
+    await new Promise(r => setTimeout(r, 1500));
+    const t = await api(`/tasks/${tid}`);
+    if (["completed", "failed", "error", "timeout"].includes(t.status)) {
+      if (t.status !== "completed") {
+        throw new Error(`task ${tid} ${t.status}: ${t.error || ""}`);
+      }
+      return t.result || {};
+    }
+  }
+  throw new Error("task " + tid + " timeout");
+}
+
+// Phase 12.5: 启动顺序 — 先恢复 sticky 表单, 再 reload 各表
+loadDryRunSticky();
+bindDryRunSticky();
+reload();
+reloadLog();
+reloadDeadPeers();
+</script>
+</body>
+</html>

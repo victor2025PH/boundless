@@ -1,0 +1,82 @@
+package: com.zhiliaoapp.musically
+name: TikTok
+behavior_profile: tiktok
+
+compliance:
+  hourly_total: 45
+  daily_total: 200
+  actions:
+    follow: {hourly: 8, daily: 30}
+    like: {hourly: 15, daily: 80}
+    comment: {hourly: 8, daily: 50}
+    send_dm: {hourly: 5, daily: 15}
+    search: {hourly: 12, daily: 60}
+
+actions:
+  search_users:
+    description: "Search for users/creators"
+    params: [query]
+    steps:
+      - find: "Discover or Search icon"
+        action: tap
+      - find: "Search input field"
+        action: tap
+      - find: "Search text box"
+        action: type
+        param: query
+      - find: "Users or Accounts tab"
+        action: tap
+        optional: true
+
+  follow_user:
+    description: "Follow a user"
+    steps:
+      - find: "Follow button"
+        action: tap
+
+  like_video:
+    description: "Like the current video"
+    steps:
+      - find: "Heart or like icon on the right side"
+        action: tap
+
+  comment_video:
+    description: "Comment on a video"
+    params: [comment_text]
+    steps:
+      - find: "Comment icon (speech bubble)"
+        action: tap
+        wait_after: 1.0
+      - find: "Add comment text input"
+        action: type
+        param: comment_text
+      - find: "Post or send comment button"
+        action: tap
+
+  send_dm:
+    description: "Send a direct message"
+    params: [recipient, message]
+    steps:
+      - find: "Inbox or messages icon"
+        action: tap
+      - find: "New message or compose"
+        action: tap
+      - find: "Search for user input"
+        action: type
+        param: recipient
+      - find: "First matching contact"
+        action: tap
+        wait_after: 1.0
+      - find: "Message text input"
+        action: type
+        param: message
+      - find: "Send button"
+        action: tap
+
+  browse_feed:
+    description: "Scroll through the For You feed"
+    steps:
+      - find: "For You feed area"
+        action: swipe
+        wait_after: 4.0
+        context: "Swipe up to see next video. Watch for 3-8 seconds."

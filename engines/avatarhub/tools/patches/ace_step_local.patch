@@ -1,0 +1,77 @@
+diff --git a/acestep/music_dcae/music_dcae_pipeline.py b/acestep/music_dcae/music_dcae_pipeline.py
+index 8112638..20610c4 100644
+--- a/acestep/music_dcae/music_dcae_pipeline.py
++++ b/acestep/music_dcae/music_dcae_pipeline.py
+@@ -10,7 +10,8 @@ import os
+ import torch
+ from diffusers import AutoencoderDC
+ import torchaudio
+-import torchvision.transforms as transforms
++# [local patch] torchvision was imported only for transforms.Normalize(0.5, 0.5);
++# replaced with plain arithmetic below to avoid a ~2GB dependency (ymsvc env).
+ from diffusers.models.modeling_utils import ModelMixin
+ from diffusers.loaders import FromOriginalModelMixin
+ from diffusers.configuration_utils import ConfigMixin, register_to_config
+@@ -45,11 +46,8 @@ class MusicDCAE(ModelMixin, ConfigMixin, FromOriginalModelMixin):
+ 
+         self.resampler = torchaudio.transforms.Resample(source_sample_rate, 44100)
+ 
+-        self.transform = transforms.Compose(
+-            [
+-                transforms.Normalize(0.5, 0.5),
+-            ]
+-        )
++        # [local patch] equivalent to torchvision transforms.Normalize(0.5, 0.5)
++        self.transform = lambda x: (x - 0.5) / 0.5
+         self.min_mel_value = -11.0
+         self.max_mel_value = 3.0
+         self.audio_chunk_size = int(round((1024 * 512 / 44100 * 48000)))
+@@ -60,7 +58,11 @@ class MusicDCAE(ModelMixin, ConfigMixin, FromOriginalModelMixin):
+         self.shift_factor = -1.9091
+ 
+     def load_audio(self, audio_path):
+-        audio, sr = torchaudio.load(audio_path)
++        # [local patch] torchaudio 2.11 routes load() to torchcodec (not installed);
++        # read via soundfile ((T, C) -> (C, T)), same treatment as save_wav_file.
++        import soundfile as _sf
++        data, sr = _sf.read(audio_path, dtype="float32", always_2d=True)
++        audio = torch.from_numpy(data.T)
+         if audio.shape[0] == 1:
+             audio = audio.repeat(2, 1)
+         return audio, sr
+diff --git a/acestep/pipeline_ace_step.py b/acestep/pipeline_ace_step.py
+index a734d1a..47f74ed 100644
+--- a/acestep/pipeline_ace_step.py
++++ b/acestep/pipeline_ace_step.py
+@@ -1406,13 +1406,13 @@ class ACEStepPipeline:
+                 output_path_wav = save_path
+ 
+         target_wav = target_wav.float()
+-        backend = "soundfile"
+-        if format == "ogg":
+-            backend = "sox"
+-        logger.info(f"Saving audio to {output_path_wav} using backend {backend}")
+-        torchaudio.save(
+-            output_path_wav, target_wav, sample_rate=sample_rate, format=format, backend=backend
+-        )
++        # [local patch] torchaudio 2.11 routes save() to torchcodec (not installed);
++        # write via soundfile directly ((C, T) -> (T, C)). PCM_16 keeps a 4-min song
++        # ~45MB instead of ~92MB float32 (downstream stores b64 in history JSON).
++        import soundfile as _sf
++        logger.info(f"Saving audio to {output_path_wav} via soundfile")
++        _sf.write(output_path_wav, target_wav.cpu().numpy().T, sample_rate,
++                  subtype="PCM_16")
+         return output_path_wav
+ 
+     @cpu_offload("music_dcae")
+@@ -1433,7 +1433,9 @@ class ACEStepPipeline:
+                 lora_download_path = lora_name_or_path
+             if self.lora_path != "none":
+                 self.ace_step_transformer.unload_lora()
+-            self.ace_step_transformer.load_lora_adapter(os.path.join(lora_download_path, "pytorch_lora_weights.safetensors"), adapter_name="ace_step_lora", with_alpha=True, prefix=None)
++            # [local patch] diffusers 0.33 离线模式(_fetch_state_dict)拿到"文件全路径"会走
++            # _best_guess_weight_name 直接 raise——按新约定传"目录 + weight_name"。
++            self.ace_step_transformer.load_lora_adapter(lora_download_path, weight_name="pytorch_lora_weights.safetensors", adapter_name="ace_step_lora", with_alpha=True, prefix=None)
+             logger.info(f"Loading lora weights from: {lora_name_or_path} download path is: {lora_download_path} weight: {lora_weight}")
+             set_weights_and_activate_adapters(self.ace_step_transformer, ["ace_step_lora"], [lora_weight])
+             self.lora_path = lora_name_or_path

@@ -1,0 +1,31 @@
+# 出口/VPN 形态档案（P1）— 供控制台与策略 API 展示；与 gate_matrix 的 preflight 模式配合使用。
+#
+# 说明：
+# - id: 稳定标识，可被任务 params.exit_profile 引用（后续阶段）
+# - preflight_hint: 建议的预检强度 full | network_only | none（默认由 tier 矩阵决定，此处为文档/提示）
+# - health: 可选，健康检查提示（不自动执行，仅展示）
+
+profiles:
+  - id: phone_v2ray
+    label: 手机 V2RayNG
+    description: ADB 检测 V2RayNG 连接；适合传统「一机一出口」。
+    preflight_hint: full
+    tags: [adb, v2ray]
+
+  - id: router_wifi
+    label: 路由器 / GL.iNet / 同网 WiFi 出口
+    description: 手机仅需外网可达，不要求本机 VPN App；对应 balanced+L1 的 network_only。
+    preflight_hint: network_only
+    tags: [router, wifi]
+
+  - id: socks_pool
+    label: 代理池 SOCKS（ip2up 等）
+    description: 出口由池分配；健康依赖代理中心与池同步任务。
+    preflight_hint: full
+    tags: [socks, pool]
+
+  - id: direct
+    label: 直连（仅低风险/调试）
+    description: 不保证跨境一致性；仅与 dev 或显式 L0 策略一起使用。
+    preflight_hint: none
+    tags: [direct, dev]

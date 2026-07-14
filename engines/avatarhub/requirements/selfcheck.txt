@@ -1,0 +1,17 @@
+# 自检 / 发布门禁专用依赖（非产品运行时）
+# ─────────────────────────────────────────────────────────────
+# 仅「完整回归自检」需要：deliver_check.py / acceptance.py 的浏览器 E2E
+# （_fe_smoke.py 前端冲烟、_e2e_phone.py 加载/对话/降级/WebRTC 出画）。
+#
+# 基础交付自检无需本文件：doctor.py(--preflight) / pack_acceptance.py --quick /
+# 启动器「一键验收」 都不依赖 playwright。
+#
+# 运行环境＝跑 deliver_check 的解释器（默认 facefusion 环境，见 deliver_check.bat 的 FACEFUSION_PY）。
+# numpy / pillow 已在 requirements/facefusion.txt 固定，故此处不再重复。
+#
+# 安装（在 facefusion 环境）：
+#   "%CONDA_ROOT%\envs\facefusion\python.exe" -m pip install -r requirements/selfcheck.txt
+#   "%CONDA_ROOT%\envs\facefusion\python.exe" -m playwright install chromium
+# 说明：playwright 的浏览器二进制由 `playwright install chromium` 单独下载（不是 pip 包），
+#       缺浏览器时 acceptance.py 会把前端冲烟/E2E 标记为 SKIP（不阻断「可交付」），并提示本步骤。
+playwright==1.60.0

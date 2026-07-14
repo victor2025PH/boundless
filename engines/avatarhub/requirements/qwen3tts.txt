@@ -1,0 +1,29 @@
+# qwen3tts conda 环境（Qwen3-TTS 克隆 TTS · qwen3_tts_server.py · 端口 7858）—— 种子依赖清单
+# 说明：本文件为「最小种子」，非完整 pip freeze。在目标机用 conda 建环境并 pip 安装后，
+#       应执行  pip freeze > requirements/qwen3tts.txt  覆盖为可复现实测基线（与其它 env 一致）。
+#
+# 建环境（参考，与现有隔离环境同套路）：
+#   conda create -n qwen3tts python=3.10 -y
+#   conda activate qwen3tts
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+#   pip install -r requirements/qwen3tts.txt
+#   # 模型：默认 from_pretrained("Qwen/Qwen3-TTS-12Hz-1.7B-Base") 自动下载；
+#   #       离线/内网可先下到本地目录并 set QWEN3_TTS_MODEL_DIR=...（见 qwen3_tts_server.py 顶部）。
+#
+# —— 核心 —— 
+qwen-tts               # 阿里 Qwen3-TTS（Qwen3TTSModel / Qwen3TTSTokenizer）
+transformers           # generate_voice_clone 透传 HF generate kwargs（max_new_tokens/top_p…）
+modelscope             # 可选：经 ModelScope 拉权重（国内更快）
+huggingface_hub        # 可选：经 HuggingFace 拉权重
+soundfile              # 参考音 base64↔numpy 解码 + 调试落盘
+numpy
+fastapi
+uvicorn
+requests
+pydantic
+#
+# —— 可选加速（按显卡/CUDA 选装；缺失会自动回退 sdpa，不影响起服务）——
+# flash-attn           # attn_implementation=flash_attention_2（更快）；装不上设 QWEN3_TTS_ATTN=sdpa
+#
+# —— 可选：高并发/真流式生产后端（官方 day-0 支持，按官方源码安装）——
+# vllm-omni            # vLLM-Omni 离线推理 Qwen3-TTS（后续将支持在线流式服务）

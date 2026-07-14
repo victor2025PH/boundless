@@ -1,0 +1,76 @@
+[2026-07-14 17:40:11] [INFO] ai_chat_assistant: 开始初始化AI聊天助手...
+[2026-07-14 17:40:11] [INFO] ai_chat_assistant: 配置加载成功
+[2026-07-14 17:40:12] [INFO] ai_chat_assistant.LocalTTSSupervisor: 本机 IndexTTS2 已在 http://127.0.0.1:7899 运行（model_loaded=True）→ 复用，不重复拉起
+[2026-07-14 17:40:12] [INFO] ai_chat_assistant: AvatarHub 语音预热已调度（后台）
+[2026-07-14 17:40:12] [INFO] ai_chat_assistant: 日志已重新配置: level=INFO, file=logs/app.log
+[2026-07-14 17:40:12] [INFO] ai_chat_assistant.AIClient: AI 客户端初始化
+[2026-07-14 17:40:12] [INFO] ai_chat_assistant.AIClient: LLM 成本追踪：已加载 5 个模型的价格表
+[2026-07-14 17:40:19] [INFO] ai_chat_assistant.AIClient: Embedding 使用独立端点 x2: http://192.168.0.140:11434/v1, http://192.168.0.176:11434/v1
+[2026-07-14 17:40:20] [INFO] ai_chat_assistant.AIClient: 本地兜底对话模型已配置: qwen3:30b-a3b-instruct-2507-q4_K_M @ http://192.168.0.176:11434/v1（主模型不可达/熔断时启用，原生 /api/chat）
+[2026-07-14 17:40:22] [INFO] ai_chat_assistant.AIClient: 云端 Key 备用池已配置: 1 个（dashscope-qwen）
+[2026-07-14 17:40:25] [INFO] ai_chat_assistant.AIClient: AI API 连接测试成功
+[2026-07-14 17:40:25] [INFO] ai_chat_assistant.AIClient: ✅ AI 客户端初始化成功 — OpenAI 兼容 API (模型: deepseek-chat, base: https://api.deepseek.com/v1)
+[2026-07-14 17:40:25] [INFO] ai_chat_assistant: AI客户端初始化成功
+[2026-07-14 17:40:25] [INFO] ai_chat_assistant.SkillManager: 情景记忆已启用: D:\workspace\telegram-mtproto-ai\config\bot.db
+[2026-07-14 17:40:25] [INFO] ai_chat_assistant.SkillManager: Skill管理器初始化
+[2026-07-14 17:40:26] [INFO] ai_chat_assistant.SkillManager: Domain hook registered: ConversionDomainHook
+[2026-07-14 17:40:26] [INFO] ai_chat_assistant.SkillManager: Domain persona set: 线上陪伴
+[2026-07-14 17:40:26] [INFO] ai_chat_assistant.SkillManager: KB categories set from domain 'conversion': ['产品价值', '常见问题', '转化话术', '异议处理', '命理', '其他']
+[2026-07-14 17:40:26] [INFO] ai_chat_assistant.AIClient: System prompt loaded from domain pack (1868 chars)
+[2026-07-14 17:40:26] [INFO] ai_chat_assistant.SkillManager: Pruned intent config for unregistered skills: ['channel_info', 'enhanced_quota_config', 'gxp_command', 'order_query', 'price_check', 'quota_config', 'status_check']
+[2026-07-14 17:40:26] [INFO] ai_chat_assistant.SkillManager: 已注册 4 个技能
+[2026-07-14 17:40:26] [INFO] ai_chat_assistant: Skill管理器初始化成功
+[2026-07-14 17:40:26] [INFO] ai_chat_assistant: Telegram 协议号未配置（桌面模式），跳过协议客户端初始化；统一收件箱 / 内嵌网页翻译 / RPA / QR 登录不受影响
+[2026-07-14 17:40:26] [INFO] ai_chat_assistant: ✅ AI聊天助手初始化完成
+[2026-07-14 17:40:26] [INFO] ai_chat_assistant: 🔑 授权：社区模式（未检测到授权文件）
+[2026-07-14 17:40:26] [WARNING] ai_chat_assistant: 生产基线：Web 监听 0.0.0.0 表示绑定所有网卡，请确认仅内网可达或前置反向代理与访问控制。
+[2026-07-14 17:40:26] [INFO] ai_chat_assistant: 配置提示：情景记忆「启动补全」与「周期补全」均已开启，启动补全将自动跳过以避免重复嵌入。
+[2026-07-14 17:40:26] [INFO] ai_chat_assistant: LINE RPA 账号 [line_ij8] 已构建 serial=IJ8HZLORS485PJWW
+[2026-07-14 17:40:27] [INFO] ai_chat_assistant: Messenger RPA 服务已构建（autostart=False）
+[2026-07-14 17:40:27] [INFO] ai_chat_assistant: WhatsApp RPA 账号 [wa_ij8] 已构建 serial=IJ8HZLORS485PJWW
+[2026-07-14 17:40:27] [INFO] ai_chat_assistant.contacts: ContactGateway 已接入 intimacy_engine（msg_in 自动 refresh）
+[2026-07-14 17:40:27] [INFO] ai_chat_assistant: Contacts 子系统已启用（daily_cap=15, readiness_threshold=70）
+[2026-07-14 17:40:27] [INFO] ai_chat_assistant: Telegram A 线已接入关系事实源 (只读 intimacy/funnel；contacts_recording 未开)
+[2026-07-14 17:40:27] [INFO] ai_chat_assistant: Messenger RPA 已接入 ContactHooks
+[2026-07-14 17:40:27] [INFO] ai_chat_assistant: LINE RPA 已接入 ContactHooks
+[2026-07-14 17:40:27] [INFO] ai_chat_assistant: WhatsApp RPA [wa_ij8] 已接入 ContactHooks
+[2026-07-14 17:40:27] [INFO] ai_chat_assistant: Mobile Bridge 已构建 (openclaw=D:\workspace\mobile-auto0423\data\openclaw.db mobile_api=http://127.0.0.1:18080 poll=15s)
+[2026-07-14 17:40:28] [INFO] ai_chat_assistant.persona_routes: 人设加载完成: config=0 canonical=0 runtime=7；共 7 个人设，7 个配了克隆/真声 backend
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: Kill-Switch 已就绪（D:\workspace\telegram-mtproto-ai\config\runtime_flags.db）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: 统一收件箱持久层已挂载（D:\workspace\telegram-mtproto-ai\config\inbox.db）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: 统一草稿层已挂载（/api/drafts）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: AutosendWorker 出站自动翻译已启用（src=zh）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: AutosendWorker 已启动（min=60s max=600s deliver=True）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: SLAWatcher 已启动（sla=4h tick=60s absent=300s）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: AutoClaimWorker 已启动（默认关，按 auto_claim.enabled 热生效）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: InboundXlateBackfill 已启动（默认关，按 backfill.enabled 热生效）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: WebhookNotifier 已启动（1 个 webhook）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: HealthWatchdog 已启动（interval=300s alert_on_warn=False）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: AutoDraft 已启用（per-conv 优先, 全局默认 mode=auto_ai min_len=0 persona_enrich=True skip=set() skip_groups=True）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: Phase C/P56 服务已预置（意图LLM=False, 翻译记忆=True, 引擎=ollama_mt→ai, 术语=9, 保护词=0）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: Contacts Web 路由已注册（/api/contacts /ops/contacts）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: Web 管理后台正在绑定 http://0.0.0.0:18799（独立线程隔离，避免抢占主 event loop）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: 监控 API 线程已启动，正在绑定 127.0.0.1:19199（若端口被占用将在线程内失败，见日志）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: 🚀 启动AI聊天助手...
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: 无 Telegram 协议号（桌面/未配置），跳过 Telegram 启动；Web 后台 / 收件箱 / RPA 正常启动
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: ✅ AI聊天助手已启动，等待消息...
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: ✅ LINE RPA [line_ij8] 后台循环已启动
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: ✅ WhatsApp RPA [wa_ij8] 后台循环已启动
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: Messenger RPA 后台循环未自动启动（见配置）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: ✅ reactivation_loop 已启动（interval=600s max_per_tick=3）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: C 端变现未启用（monetization.enabled=false）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: proactive_care 未启用（companion.proactive_care.enabled=false）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: 多平台 deferred 队列未启用（companion.multiplatform_deferred.enabled=false）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: 质量趋势持久化未启用（companion.quality_trend.enabled=false）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: TTS 成本落库未启用（voice_routing.cost_log.enabled=false）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: ✅ 翻译置信度趋势落库已就绪（retention=90d）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: 实时语音趋势落库未启用（realtime_voice.trend_log=false）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: 出站路由趋势落库未启用（inbox.send_route.trend_log=false）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: 会话身份趋势落库未启用（inbox.identity.trend_log=false）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: ✅ 媒体承诺趋势落库已就绪（retention=90d）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: ✅ 每人设相册/媒体注册表就绪（persona_media.db）
+[2026-07-14 17:40:31] [INFO] ai_chat_assistant: ingest contact_id 回写未启用（companion.relations_health.ingest_contact_id_writeback=false）
+[2026-07-14 17:40:32] [INFO] ai_chat_assistant: ✅ companion proactive_topic 调度已启动（interval=900s min_silent=4.0h cooldown=6h dry_run=False）
+[2026-07-14 17:40:32] [INFO] ai_chat_assistant: ✅ 收件箱实时 ingest 轮询已启动（interval=10.0s）
+[2026-07-14 17:40:32] [INFO] ai_chat_assistant: ✅ Mobile Bridge 已启动
+[2026-07-14 17:40:32] [INFO] ai_chat_assistant: 情景记忆启动补全已跳过（已启用周期补全 memory.vector.backfill_periodic，避免重复嵌入）

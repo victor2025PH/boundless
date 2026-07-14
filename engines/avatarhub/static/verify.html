@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>内容验真 · 无界科技 BOUNDLESS</title>
+<link rel="stylesheet" href="/static/brand.css"/>
+<script src="/static/brand.js"></script>
+<script src="/static/cert.js"></script>
+<style>
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  body{ background:var(--bd-bg); color:var(--bd-txt); font-family:var(--bd-font);
+        min-height:100dvh; background-image:var(--bd-glow); }
+  .wrap{ max-width:760px; margin:0 auto; padding:28px 18px 56px; }
+  header.top{ text-align:center; margin-bottom:18px; }
+  header.top h1{ font-size:var(--bd-fs-hero); font-weight:800; letter-spacing:.5px; }
+  header.top .sub{ color:var(--bd-txt2); font-size:var(--bd-fs-sm); margin-top:6px; }
+  .trustbar{ display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin:14px 0 22px; }
+  .card{ background:var(--bd-surface); border:1px solid var(--bd-border); border-radius:var(--bd-r-md);
+         padding:18px; margin-bottom:16px; box-shadow:var(--bd-shadow-sm); }
+  .card h2{ font-size:var(--bd-fs-h1); font-weight:700; margin-bottom:4px; display:flex; align-items:center; gap:8px; }
+  .card .hint{ color:var(--bd-mut); font-size:var(--bd-fs-sm); margin-bottom:14px; line-height:1.6; }
+  .row{ display:flex; justify-content:space-between; align-items:center; gap:12px;
+        padding:9px 0; border-bottom:1px solid var(--bd-border); font-size:var(--bd-fs-body); }
+  .row:last-child{ border-bottom:none; }
+  .row .k{ color:var(--bd-txt2); }
+  .row .v{ color:var(--bd-txt); font-weight:600; text-align:right; }
+  .dot{ display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+  .ok{ color:var(--bd-ok); } .warn{ color:var(--bd-warn); } .bad{ color:var(--bd-danger); }
+  .dot.ok{ background:var(--bd-ok); } .dot.warn{ background:var(--bd-warn); } .dot.bad{ background:var(--bd-danger); }
+  .drop{ border:1.5px dashed var(--bd-border-strong); border-radius:var(--bd-r-md); padding:26px 16px;
+         text-align:center; color:var(--bd-mut); cursor:pointer; transition:.18s; background:var(--bd-surface2); }
+  .drop:hover, .drop.dragover{ border-color:var(--bd-acc); color:var(--bd-txt2); background:var(--bd-acc-weak); }
+  .drop b{ color:var(--bd-txt); }
+  .btn{ display:inline-flex; align-items:center; gap:6px; cursor:pointer; border:none;
+        background:var(--bd-grad); color:#fff; font-weight:700; font-size:var(--bd-fs-body);
+        padding:11px 22px; border-radius:var(--bd-r-pill); box-shadow:var(--bd-cta-glow); transition:.15s; }
+  .btn:hover{ filter:brightness(1.08); transform:translateY(-1px); }
+  .btn:disabled{ opacity:.5; cursor:not-allowed; transform:none; box-shadow:none; }
+  .btn.ghost{ background:var(--bd-surface); color:var(--bd-txt2); border:1px solid var(--bd-border);
+              box-shadow:none; font-weight:600; }
+  .actions{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:14px; }
+  .fname{ color:var(--bd-txt2); font-size:var(--bd-fs-sm); }
+  .result{ margin-top:16px; }
+  .verdict{ display:flex; align-items:center; gap:12px; padding:14px 16px; border-radius:var(--bd-r-md);
+            font-weight:700; font-size:17px; margin-bottom:12px; border:1px solid var(--bd-border); }
+  .verdict.good{ background:var(--bd-ok-soft); border-color:var(--bd-ok); color:var(--bd-ok); }
+  .verdict.mid{ background:rgba(251,191,36,.14); border-color:var(--bd-warn); color:var(--bd-warn); }
+  .verdict.none{ background:var(--bd-surface2); color:var(--bd-txt2); }
+  .verdict .ico{ font-size:26px; line-height:1; }
+  .maker{ display:flex; align-items:center; gap:6px; padding:10px 14px; margin-bottom:10px;
+          border-radius:var(--bd-r-sm); background:var(--bd-acc-weak); border:1px solid var(--bd-acc);
+          color:var(--bd-txt); font-size:14px; }
+  .maker b{ color:var(--bd-acc); font-weight:700; }
+  .certbtn{ margin-top:12px; width:100%; padding:11px; border-radius:var(--bd-r-sm); cursor:pointer;
+            background:var(--bd-acc-weak); border:1px solid var(--bd-acc); color:var(--bd-acc);
+            font-size:14px; font-weight:600; transition:filter .15s; }
+  .certbtn:hover{ filter:brightness(1.15); }
+  .certbtn:disabled{ opacity:.6; cursor:default; }
+  code.pem{ display:block; white-space:pre-wrap; word-break:break-all; background:#000a; color:var(--bd-txt2);
+            border:1px solid var(--bd-border); border-radius:var(--bd-r-sm); padding:12px; font-size:12px;
+            margin-top:10px; max-height:200px; overflow:auto; }
+  .ep{ border:1px solid var(--bd-border); border-radius:var(--bd-r-sm); padding:12px; margin-top:12px; background:var(--bd-surface2); }
+  .ep .epm{ display:inline-block; font-size:12px; font-weight:700; padding:1px 7px; border-radius:5px; margin-right:7px; vertical-align:middle; }
+  .ep .epm.get{ background:var(--bd-ok-soft); color:var(--bd-ok); }
+  .ep .epm.post{ background:var(--bd-acc-weak); color:var(--bd-acc); }
+  .ep .epp{ font-size:13px; color:var(--bd-txt); font-weight:600; }
+  .ep .epd{ color:var(--bd-mut); font-size:12px; margin:5px 0 2px; }
+  .ep .epresp{ color:var(--bd-faint); font-size:12px; margin-top:4px; }
+  .ep pre{ position:relative; white-space:pre-wrap; word-break:break-all; background:#000a; color:var(--bd-txt2);
+           border:1px solid var(--bd-border); border-radius:var(--bd-r-sm); padding:10px 10px; font-size:11.5px; margin-top:8px;
+           font-family:ui-monospace,Menlo,Consolas,monospace; }
+  .ep .cp{ position:absolute; top:6px; right:6px; font-size:12px; padding:2px 8px; border-radius:6px; cursor:pointer;
+           background:var(--bd-surface); color:var(--bd-txt2); border:1px solid var(--bd-border); }
+  .ep .cp:hover{ color:var(--bd-acc); border-color:var(--bd-acc); }
+  #devCard summary::-webkit-details-marker{ display:none; }
+  a.lnk{ color:var(--bd-acc); text-decoration:none; } a.lnk:hover{ text-decoration:underline; }
+  footer{ text-align:center; color:var(--bd-faint); font-size:var(--bd-fs-xs); margin-top:26px; line-height:1.7; }
+  .spin{ width:15px; height:15px; border:2px solid #ffffff66; border-top-color:#fff; border-radius:50%;
+         display:inline-block; animation:sp .7s linear infinite; }
+  @keyframes sp{ to{ transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>🏷 <span class="bd-grad-text">内容验真</span></h1>
+    <div class="sub"><span data-bd-name>无界科技 BOUNDLESS</span> · 验证音频是否由本系统生成 / 是否被篡改（C2PA 风格凭证 + Ed25519 签名）</div>
+    <div class="trustbar">
+      <span class="bd-trust">🔒 本地验真 · 文件不出本机</span>
+      <span class="bd-trust" id="algBadge">🔑 加载中…</span>
+    </div>
+  </header>
+
+  <!-- 溯源能力 -->
+  <div class="card">
+    <h2>🛡 溯源能力</h2>
+    <div class="hint">本系统对每段生成音频内嵌不可见水印 + 内容凭证（manifest），并以下述算法签名。
+      第三方仅凭公钥即可离线验真，符合 EU AI Act Art.50 对 AI 生成内容标识的要求。</div>
+    <div id="statusBox" aria-live="polite">
+      <div class="row"><span class="k">读取中…</span><span class="v">—</span></div>
+    </div>
+  </div>
+
+  <!-- 验真 -->
+  <div class="card">
+    <h2>🔍 验证音频 / 视频</h2>
+    <div class="hint">选择或拖入文件：<b>音频</b>(建议 WAV) 走不可见水印 + 凭证仓库；<b>视频</b>(MP4) 走标准 C2PA 内嵌。验真在本机完成，文件不会上传公网。</div>
+    <div class="drop" id="drop" role="button" tabindex="0" aria-label="选择或拖入音频/视频文件进行验真">
+      <div>📎 点击选择 或 拖入 音频 / 视频文件</div>
+      <div style="margin-top:6px;font-size:12px;">音频 .wav/.mp3（WAV 最准）· 视频 .mp4（数字人/换脸内嵌 C2PA）</div>
+    </div>
+    <input type="file" id="file" accept="audio/*,video/*" style="display:none"/>
+    <div class="actions">
+      <button class="btn" id="goBtn" disabled><span id="goLabel">验真</span></button>
+      <span class="fname" id="fname">未选择文件</span>
+    </div>
+    <div class="result" id="result" aria-live="polite"></div>
+  </div>
+
+  <!-- 离线验真 / 公钥 -->
+  <div class="card">
+    <h2>📤 离线验真 · 公钥</h2>
+    <div class="hint">把下面的 Ed25519 公钥交给任意第三方，他们无需访问本系统即可离线验证我们出品音频的签名真伪。
+      视频文件内嵌标准 C2PA，可直接用 <a class="lnk" href="https://contentcredentials.org/verify" target="_blank" rel="noopener">Content Credentials Verify</a> 或 <code style="color:var(--bd-txt2)">c2patool</code> 查看。</div>
+    <div class="actions">
+      <button class="btn ghost" id="pkBtn">取回公钥（PEM）</button>
+      <button class="btn ghost" id="pkCopy" style="display:none">复制</button>
+    </div>
+    <code class="pem" id="pkBox" style="display:none"></code>
+  </div>
+
+  <!-- 开发者 / 接入：把验真做成"可对接的能力" -->
+  <details class="card" id="devCard">
+    <summary style="cursor:pointer;font-size:var(--bd-fs-h1);font-weight:700;display:flex;align-items:center;gap:8px;">🧩 开发者 / 接入（API）</summary>
+    <div class="hint" style="margin-top:12px;">下列端点均为本机 HTTP（公开只读 / 验真），可被你的系统或第三方/监管工具直接调用，实现离线验真接入。
+      Base：<code id="apiBase" style="color:var(--bd-txt2)"></code></div>
+    <div id="apiList"></div>
+    <div class="hint" style="margin-top:6px;">
+      离线验签：用 <code style="color:var(--bd-txt2)">/api/provenance/pubkey</code> 取回 Ed25519 公钥，对音频凭证签名做独立验证（无需访问本系统）；
+      视频内嵌标准 C2PA，可用 <a class="lnk" href="https://contentcredentials.org/verify" target="_blank" rel="noopener">CAI Verify</a> / <code style="color:var(--bd-txt2)">c2patool</code> 校验。
+    </div>
+  </details>
+
+  <footer>
+    <span data-bd-name>无界科技 BOUNDLESS</span> · 幻声 VoiceX / 幻影 LiveX / 幻颜 FaceX<br/>
+    内容凭证算法对齐 C2PA / CAI；签名公钥可对外分发离线验真。
+  </footer>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+/* —— 溯源能力 —— */
+fetch('/api/provenance/status').then(r=>r.json()).then(d=>{
+  const pub = !!d.public_verifiable, c2pa = !!d.c2pa_embedded, on = !!d.enabled && !!d.loaded;
+  $('#algBadge').textContent = '🔑 ' + (d.signature_alg || 'HMAC-SHA256') + (pub ? ' · 可离线验真' : '');
+  $('#statusBox').innerHTML =
+    row('内容凭证', on ? '已开启' : '未开启', on?'ok':'warn')
+    + row('签名算法', esc(d.signature_alg||'—'), pub?'ok':'warn')
+    + row('公钥离线验真', pub ? '支持（Ed25519 非对称）' : '对称签名（需本系统验真）', pub?'ok':'warn')
+    + row('标准 C2PA 嵌入', c2pa ? 'CAI/Verify 工具可直读' : '未启用（音频走凭证仓库）', c2pa?'ok':'warn')
+    + '<div class="row"><span class="k">算法说明</span><span class="v" style="max-width:60%;font-weight:400;color:var(--bd-mut);font-size:12px">'+esc(d.algorithm||'')+'</span></div>';
+}).catch(()=>{ $('#statusBox').innerHTML = row('溯源服务','未加载（503）','bad'); $('#algBadge').textContent='🔑 不可用'; });
+
+function row(k,v,tone){ return '<div class="row"><span class="k">'+esc(k)+'</span><span class="v '+(tone||'')+'"><span class="dot '+(tone||'')+'"></span>'+esc(v)+'</span></div>'; }
+// 出品方：把凭证里的品牌署名（claim_generator）做醒目展示——验真第一眼看见“由谁生成”。
+function maker(gen){ return '<div class="maker">🏢 出品方　<b>'+esc(gen)+'</b></div>'; }
+
+/* —— 可下载「验真证书」：复用全站共享生成器 /static/cert.js（window.__cert） —— */
+function showCertBtn(certData){
+  if(!(window.__cert&&window.__cert.generate)) return;
+  const b=document.createElement('button'); b.className='certbtn'; b.id='certBtn';
+  b.textContent='📜 生成验真证书（PNG）';
+  b.onclick=async()=>{ b.disabled=true; b.textContent='生成中…';
+    try{ await window.__cert.generate(certData); }catch(e){ alert('证书生成失败：'+(e.message||e)); }
+    finally{ b.disabled=false; b.textContent='📜 生成验真证书（PNG）'; } };
+  $('#result').appendChild(b);
+}
+
+/* —— 选文件 + 验真 —— */
+let picked = null;
+const drop=$('#drop'), file=$('#file'), goBtn=$('#goBtn');
+drop.onclick = ()=> file.click();
+drop.addEventListener('keydown', e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); file.click(); } });  // 键盘可选文件（此前 div+隐藏 input 键盘不可达）
+file.onchange = e => setFile(e.target.files[0]);
+['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('dragover');}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('dragover');}));
+drop.addEventListener('drop', e=> setFile(e.dataTransfer.files[0]));
+function setFile(f){ if(!f) return; picked=f; $('#fname').textContent=f.name+' ('+Math.round(f.size/1024)+' KB)'; goBtn.disabled=false; $('#result').innerHTML=''; }
+
+function isVideo(f){ return /^video\//.test(f.type||'') || /\.(mp4|mov|m4v|webm)$/i.test(f.name||''); }
+goBtn.onclick = async ()=>{
+  if(!picked) return;
+  goBtn.disabled=true; $('#goLabel').innerHTML='<span class="spin"></span> 验真中';
+  try{
+    const b64 = await toB64(picked);
+    if (isVideo(picked)){
+      const r = await fetch('/api/provenance/verify_media', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({media_base64:b64, mime_type:(picked.type||'video/mp4')})});
+      if(!r.ok) throw new Error('HTTP '+r.status+(r.status===503?'（溯源服务未加载）':''));
+      renderVideoResult(await r.json());
+    } else {
+      const r = await fetch('/api/provenance/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({audio_base64:b64})});
+      if(!r.ok) throw new Error('HTTP '+r.status+(r.status===503?'（溯源服务未加载）':''));
+      renderResult(await r.json());
+    }
+  }catch(err){ $('#result').innerHTML='<div class="verdict none"><span class="ico">⚠</span><div>验真失败：'+esc(err.message)+'</div></div>'; }
+  finally{ goBtn.disabled=false; $('#goLabel').textContent='验真'; }
+};
+
+function renderResult(d){
+  const det = d.detection || {};
+  const wm = !!d.has_watermark, sig = !!d.signature_valid, ai = d.ai_generated;
+  let v;
+  if (wm && sig && ai) v = {cls:'good', ico:'✅', t:'确认：本系统生成 · 签名有效 · 未被篡改'};
+  else if (wm && sig) v = {cls:'good', ico:'✅', t:'凭证有效 · 签名通过'};
+  else if (wm && !sig) v = {cls:'mid', ico:'⚠', t:'检出水印，但签名未通过（可能被篡改或由其他实例生成）'};
+  else if (wm) v = {cls:'mid', ico:'⚠', t:'检出 AI 水印（疑似 AI 生成）'};
+  else v = {cls:'none', ico:'—', t:'未检出本系统凭证（非本系统出品，或已被重编码/降采样）'};
+  let html = '<div class="verdict '+v.cls+'"><span class="ico">'+v.ico+'</span><div>'+v.t+'</div></div>';
+  const gen = d.manifest && d.manifest.claim_generator;
+  if (wm && gen) html += maker(gen);
+  html += row('含内容水印', wm?'是':'否', wm?'ok':'warn');
+  html += row('签名验证', sig?'通过':'未通过', sig?'ok':(wm?'bad':'warn'));
+  html += row('AI 生成判定', ai===true?'是':(ai===false?'否':'未知'), ai===true?'ok':'warn');
+  if (det.confidence!=null) html += row('置信度', Math.round(det.confidence*100)+'%  ·  '+esc(det.method||''), det.confidence>=0.9?'ok':(det.confidence>0?'warn':''));
+  if (d.payload_id) html += row('凭证 ID', esc(d.payload_id), 'ok');
+  if (d.created_str) html += row('生成时间', esc(d.created_str), '');
+  if (d.note) html += '<div class="row"><span class="k">备注</span><span class="v" style="font-weight:400;color:var(--bd-mut);font-size:12px;max-width:62%">'+esc(d.note)+'</span></div>';
+  $('#result').innerHTML = html;
+  if (wm){
+    showCertBtn({kind:'音频', tone:v.cls, verdict:v.t, maker:(gen||''), file:(picked&&picked.name),
+      rows:[['内容水印', wm?'存在':'未检出'],['签名验证', sig?'通过（有效）':'未通过'],
+            ['AI 生成判定', ai===true?'是':(ai===false?'否':'未知')]]
+        .concat(d.payload_id?[['凭证 ID', d.payload_id]]:[])
+        .concat(d.created_str?[['生成时间', d.created_str]]:[]) });
+  }
+}
+
+/* 视频（标准 C2PA）验真结果 */
+function renderVideoResult(d){
+  if (d.c2pa_supported === false){
+    $('#result').innerHTML = '<div class="verdict none"><span class="ico">—</span><div>本机未安装 C2PA 读取库，无法验证视频凭证（音频验真不受影响）。</div></div>';
+    return;
+  }
+  const has = !!d.has_c2pa, intact = !!d.integrity_ok, trusted = !!d.trusted, ai = d.ai_generated;
+  let v;
+  if (has && intact && ai) v = {cls:'good', ico:'✅', t:'确认：内嵌 C2PA · 内容完整未篡改 · 标记为 AI 生成'};
+  else if (has && intact) v = {cls:'good', ico:'✅', t:'内嵌 C2PA · 内容完整未篡改'};
+  else if (has && !intact) v = {cls:'mid', ico:'⚠', t:'检出 C2PA，但内容完整性校验失败（疑似被篡改/二次编辑）'};
+  else v = {cls:'none', ico:'—', t:'未检出 C2PA 凭证（非本系统出品，或导出时凭证已被剥离）'};
+  let html = '<div class="verdict '+v.cls+'"><span class="ico">'+v.ico+'</span><div>'+v.t+'</div></div>';
+  if (has && d.claim_generator) html += maker(d.claim_generator);
+  html += row('内嵌 C2PA', has?'是':'否', has?'ok':'warn');
+  if (has){
+    html += row('内容完整性', intact?'未篡改':'校验失败', intact?'ok':'bad');
+    html += row('证书信任', trusted?'公共可信链':'自签链（本系统/离线可验，非公共锚）', trusted?'ok':'warn');
+    html += row('AI 生成标记', ai===true?'是':(ai===false?'否':'未标记'), ai===true?'ok':'warn');
+    if (d.signature_issuer) html += row('签发者', esc(d.signature_issuer), '');
+    if (d.signed_time) html += row('签名时间', esc(d.signed_time), '');
+    if (d.digital_source_type) html += '<div class="row"><span class="k">来源类型</span><span class="v" style="font-weight:400;color:var(--bd-mut);font-size:12px;max-width:62%">'+esc(d.digital_source_type)+'</span></div>';
+    if (d.validation_status && d.validation_status.length){
+      const codes = d.validation_status.map(x=>esc(x.code||x.explanation||JSON.stringify(x))).join('；');
+      html += '<div class="row"><span class="k">校验告警</span><span class="v warn" style="font-weight:400;font-size:12px;max-width:62%">'+codes+'</span></div>';
+    }
+  }
+  if (d.note) html += '<div class="row"><span class="k">备注</span><span class="v" style="font-weight:400;color:var(--bd-mut);font-size:12px;max-width:62%">'+esc(d.note)+'</span></div>';
+  html += '<div style="margin-top:10px;font-size:12px;color:var(--bd-mut)">视频凭证亦可用 <a class="lnk" href="https://contentcredentials.org/verify" target="_blank" rel="noopener">Content Credentials Verify</a> 第三方独立核验。</div>';
+  $('#result').innerHTML = html;
+  if (has){
+    showCertBtn({kind:'视频/图片', tone:v.cls, verdict:v.t, maker:(d.claim_generator||''), file:(picked&&picked.name),
+      rows:[['内嵌 C2PA','是'],['内容完整性', intact?'未篡改':'校验失败'],
+            ['证书信任', trusted?'公共可信链':'自签链（离线可验）'],
+            ['AI 生成标记', ai===true?'是':(ai===false?'否':'未标记')]]
+        .concat(d.signed_time?[['签名时间', d.signed_time]]:[])
+        .concat(d.signature_issuer?[['签发者', d.signature_issuer]]:[]) });
+  }
+}
+
+function toB64(f){ return new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(String(fr.result).split(',')[1]||''); fr.onerror=rej; fr.readAsDataURL(f); }); }
+
+/* —— 公钥 —— */
+$('#pkBtn').onclick = async ()=>{
+  try{
+    const r = await fetch('/api/provenance/pubkey');
+    if(!r.ok) throw new Error('HTTP '+r.status+(r.status===503?'（当前为对称 HMAC 签名，无公钥）':''));
+    const d = await r.json();
+    $('#pkBox').textContent = d.public_key || '(空)';
+    $('#pkBox').style.display='block'; $('#pkCopy').style.display='inline-flex';
+  }catch(err){ $('#pkBox').textContent='取回失败：'+err.message; $('#pkBox').style.display='block'; }
+};
+$('#pkCopy').onclick = ()=>{ navigator.clipboard.writeText($('#pkBox').textContent).then(()=>{ $('#pkCopy').textContent='已复制'; setTimeout(()=>$('#pkCopy').textContent='复制',1500); }); };
+
+/* —— 开发者 / 接入：按真实 host 渲染端点 + 可复制 curl —— */
+(function(){
+  var H = window.location.origin;
+  var base = $('#apiBase'); if(base) base.textContent = H;
+  var eps = [
+    { m:'GET', p:'/api/provenance/status', d:'能力探测：签名算法、是否可公钥离线验真、是否标准 C2PA 嵌入。',
+      resp:'→ {enabled, loaded, signature_alg, public_verifiable, c2pa_embedded, algorithm}',
+      curl:'curl '+H+'/api/provenance/status' },
+    { m:'POST', p:'/api/provenance/verify', d:'音频验真：提取不可见水印 → 解析 manifest → 验签 + AI 生成判定。',
+      resp:'→ {has_watermark, payload_id, signature_valid, ai_generated, created_str, detection:{confidence,method}}',
+      curl:'curl -X POST '+H+'/api/provenance/verify \\\n  -H "Content-Type: application/json" \\\n  -d "{\\"audio_base64\\":\\"<WAV 的 base64>\\"}"' },
+    { m:'POST', p:'/api/provenance/verify_media', d:'视频/图片验真：读取标准 C2PA，区分内容完整性与证书信任度。',
+      resp:'→ {has_c2pa, integrity_ok, trusted, ai_generated, claim_generator, signature_issuer, validation_status}',
+      curl:'curl -X POST '+H+'/api/provenance/verify_media \\\n  -H "Content-Type: application/json" \\\n  -d "{\\"media_base64\\":\\"<MP4 的 base64>\\",\\"mime_type\\":\\"video/mp4\\"}"' },
+    { m:'GET', p:'/api/provenance/pubkey', d:'取回 Ed25519 公钥（PEM）：任意第三方仅凭此公钥即可离线验签。',
+      resp:'→ {alg:"Ed25519", format:"PEM/SubjectPublicKeyInfo", public_key}',
+      curl:'curl '+H+'/api/provenance/pubkey' }
+  ];
+  var html = eps.map(function(e, i){
+    return '<div class="ep">'
+      + '<span class="epm '+e.m.toLowerCase()+'">'+e.m+'</span><span class="epp">'+esc(e.p)+'</span>'
+      + '<div class="epd">'+esc(e.d)+'</div>'
+      + '<div class="epresp">'+esc(e.resp)+'</div>'
+      + '<pre id="ep'+i+'"><button class="cp" data-t="ep'+i+'">复制</button>'+esc(e.curl)+'</pre>'
+      + '</div>';
+  }).join('');
+  var list = $('#apiList'); if(list) list.innerHTML = html;
+  document.querySelectorAll('#apiList .cp').forEach(function(btn, i){
+    btn.onclick = function(){
+      navigator.clipboard.writeText(eps[i].curl).then(function(){ btn.textContent='已复制'; setTimeout(function(){btn.textContent='复制';},1500); });
+    };
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
+<title>看板 · 只读</title>
+<script src="/static/_clientlog.js"></script>
+<style>
+  :root{ --bg:#0a0e16; --card:#121826; --bord:#1f2a3c; --txt:#e5edf7; --mut:#7c8aa0;
+         --grn:#22c55e; --ylw:#fbbf24; --red:#ef4444; --acc:#7cc4ff; --acc2:#a78bfa; }
+  *{box-sizing:border-box} html,body{margin:0}
+  body{background:var(--bg);color:var(--txt);font:15px/1.55 system-ui,"Microsoft YaHei",sans-serif;padding:14px;}
+  h1{font-size:17px;margin:0 0 4px;} .sub{color:var(--mut);font-size:12px;margin-bottom:12px;}
+  .card{background:var(--card);border:1px solid var(--bord);border-radius:14px;padding:14px;margin-bottom:12px;}
+  .card h2{font-size:12px;margin:0 0 10px;color:var(--mut);letter-spacing:.5px;text-transform:uppercase;}
+  .big{font-size:26px;font-weight:800;}
+  .meter{display:flex;gap:10px;text-align:center;} .meter .m{flex:1;}
+  .meter small{color:var(--mut);display:block;font-size:12px;}
+  .chips{display:flex;flex-wrap:wrap;gap:7px;}
+  .chip{padding:4px 10px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid var(--bord);}
+  .chip.up{background:rgba(34,197,94,.14);border-color:rgba(34,197,94,.4);color:#bbf7d0;}
+  .chip.busy{background:rgba(251,191,36,.14);border-color:rgba(251,191,36,.4);color:#fde68a;}
+  .chip.down{background:rgba(239,68,68,.16);border-color:rgba(239,68,68,.45);color:#fecaca;}
+  .row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px dashed var(--bord);}
+  .row:last-child{border-bottom:none;} .row .k{color:var(--mut);}
+  .pill{display:inline-block;padding:3px 9px;border-radius:8px;font-weight:700;font-size:13px;}
+  .pill.ok{background:rgba(34,197,94,.16);color:#bbf7d0;} .pill.warn{background:rgba(251,191,36,.16);color:#fde68a;}
+  .pill.crit{background:rgba(239,68,68,.18);color:#fecaca;}
+  .muted{color:var(--mut);font-size:12px;} .banner{border-radius:10px;padding:9px 12px;margin-bottom:12px;font-size:13px;}
+  .banner.warn{background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.4);color:#fde68a;}
+  .banner.crit{background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.4);color:#fecaca;}
+</style>
+</head>
+<body>
+<h1>稳健性看板 · 只读</h1>
+<div class="sub" id="upd">连接中…</div>
+<div id="banner"></div>
+
+<div class="card">
+  <h2>系统压力</h2>
+  <div class="meter">
+    <div class="m"><div class="big" id="gpu">–</div><small>GPU %</small></div>
+    <div class="m"><div class="big" id="ram">–</div><small>内存 %</small></div>
+    <div class="m"><div class="big" id="press">–</div><small>压力</small></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>上线体检</h2>
+  <div id="acc"><span class="muted">加载中…</span></div>
+</div>
+
+<div class="card">
+  <h2>真出声质量（每角色声纹）</h2>
+  <div id="vq"><span class="muted">加载中…</span></div>
+</div>
+
+<div class="card">
+  <h2>关键服务</h2>
+  <div class="chips" id="svc"><span class="muted">加载中…</span></div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const token=new URLSearchParams(location.search).get('token')||'';
+function spark(series, lo, hi, color){
+  if(!series||!series.length) return '';
+  const W=110,H=22,p=2,n=series.length, x=i=>p+(i/Math.max(1,n-1))*(W-2*p),
+        y=v=>H-p-((Math.min(hi,Math.max(lo,v))-lo)/(hi-lo||1))*(H-2*p);
+  let d=''; series.forEach((v,i)=>{ d+=(i?'L':'M')+x(i).toFixed(1)+' '+y(v).toFixed(1)+' '; });
+  return '<svg width="'+W+'" height="'+H+'" style="vertical-align:middle"><path d="'+d.trim()+'" fill="none" stroke="'+color+'" stroke-width="1.5"/></svg>';
+}
+async function tick(){
+  let d;
+  try{ d=await (await fetch('/api/share/ops?token='+encodeURIComponent(token),{cache:'no-store'})).json(); }
+  catch(e){ $('upd').textContent='⚠ 拉取失败 '+new Date().toLocaleTimeString(); return; }
+  if(!d.ok){ $('upd').textContent='⚠ token 无效'; return; }
+  $('upd').textContent='更新于 '+new Date().toLocaleTimeString();
+  const press=d.pressure||'?';
+  $('press').textContent=press==='green'?'正常':press==='yellow'?'偏高':press==='red'?'吃紧':press;
+  $('gpu').textContent=(d.gpu_util>=0?d.gpu_util:'–'); $('ram').textContent=(d.ram_percent>=0?Math.round(d.ram_percent):'–');
+  // 顶部告警
+  const banner=[]; const A=d.acceptance||{}, V=d.voice_quality||{};
+  if(A.alert==='crit') banner.push(['crit','体检失败：'+(A.alert_msg||'')]);
+  else if(A.alert==='warn') banner.push(['warn',A.alert_msg||'']);
+  if(V.alert==='warn') banner.push(['warn',V.alert_msg||'']);
+  if(d.pref_warn) banner.push(['warn',d.pref_warn]);
+  $('banner').innerHTML=banner.map(b=>'<div class="banner '+b[0]+'">⚠ '+b[1]+'</div>').join('');
+  // 体检
+  const L=A.latest;
+  if(!L){ $('acc').innerHTML='<span class="muted">尚未运行体检</span>'; }
+  else{ const cls=L.overall?'ok':'crit'; const ageH=A.age_sec!=null?(A.age_sec/3600).toFixed(1)+'h前':'';
+    $('acc').innerHTML='<div class="row"><span class="k">结果</span><span><span class="pill '+cls+'">'+(L.overall?'全部通过':'存在失败')+'</span> '+L.pass+'/'+L.total+'</span></div>'
+      +'<div class="row"><span class="k">模式/距今</span><span>'+(L.mode||'')+' · '+ageH+(A.stale?' · 已陈旧':'')+'</span></div>'
+      +'<div class="chips" style="margin-top:8px">'+(L.results||[]).map(r=>'<span class="chip '+(r.ok?'up':'down')+'">'+r.title+(r.ok?'':' ✘')+'</span>').join('')+'</div>'; }
+  // 质量
+  const vq=$('vq'); vq.innerHTML='';
+  (V.profiles||[]).forEach(p=>{ const c=p.last_cos, bl=p.band_low, base=p.baseline;
+    const reg=bl!=null&&c!=null&&c<bl; const col=c==null?'#7c8aa0':(reg?'#ef4444':(p.near_ceiling?'#fbbf24':'#22c55e'));
+    const tag=p.near_ceiling?'<span class="muted"> 源已到顶</span>':'';
+    const r=document.createElement('div'); r.className='row';
+    r.innerHTML='<span class="k">'+p.name+tag+'</span><span style="display:flex;gap:8px;align-items:center">'
+      +'<span style="color:'+col+';font-weight:700">'+(c==null?'—':c.toFixed(3))+'</span>'
+      +spark(p.cos_series,(base!=null?base-0.1:0.4),1,'#7cc4ff')+'</span>';
+    vq.appendChild(r); });
+  if(!(V.profiles||[]).length) vq.innerHTML='<span class="muted">尚无质量样本</span>';
+  // 服务
+  const busy=new Set(d.services_busy||[]); const svc=$('svc'); svc.innerHTML='';
+  Object.entries(d.services||{}).forEach(([n,ok])=>{
+    if(['enhance','rvc','hair','tryon','latentsync','tts','singing'].includes(n)&&!ok) return;
+    const s=document.createElement('span'); s.className='chip '+(ok?(busy.has(n)?'busy':'up'):'down');
+    s.textContent=n+(busy.has(n)?' 忙':''); svc.appendChild(s); });
+}
+tick(); setInterval(tick, 15000);
+</script>
+</body>
+</html>

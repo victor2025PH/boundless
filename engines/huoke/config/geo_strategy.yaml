@@ -1,0 +1,641 @@
+# Geographic Content Strategy Configuration
+#
+# Per-country automation behavior:
+#   - hashtags: TikTok search hashtags for feed training
+#   - comments: comment templates in the target language
+#   - engagement: like/comment/save probabilities per phase
+#   - detection: text/emoji signals for content classification
+#   - timezone: for smart scheduling alignment
+#   - warmup: phase-specific behavior tuning
+
+countries:
+  italy:
+    timezone: "Europe/Rome"
+    language: "italian"
+    flag_emoji: "🇮🇹"
+
+    hashtags:
+      popular:
+        - "#italia"
+        - "#italiano"
+        - "#italiani"
+        - "#madeinitaly"
+        - "#roma"
+        - "#milano"
+        - "#napoli"
+        - "#firenze"
+        - "#venezia"
+        - "#sicilia"
+      niche:
+        - "#cucinaitaliana"
+        - "#italiacalcio"
+        - "#bellaitalia"
+        - "#vitaitaliana"
+        - "#modaitaliana"
+      trending:
+        - "#italiantiktok"
+        - "#fyitalia"
+        - "#tiktokit"
+
+    # 种子账号: 意大利本土大号（粉丝中意大利人比例 >70%）
+    # 选择标准: 1)意大利本地内容创作者 2)粉丝50K+ 3)意大利语内容为主
+    seed_accounts:
+      - "khaborossi"          # 意大利生活博主
+      - "gianlucavacchi"      # 意大利富豪/网红
+      - "chiaraferragni"      # 意大利时尚博主
+      - "fedez"               # 意大利说唱歌手
+      - "ilaryblasi"          # 意大利电视主持人
+      - "mediaaborossi"       # 意大利媒体
+      - "trash_italiano"      # 意大利流行文化
+      - "willwoosh"           # 意大利 YouTuber
+      - "caborossi"           # 意大利内容
+      - "thefaborossi"        # 意大利博主
+
+    comments:
+      generic:
+        - "Bellissimo! 🇮🇹"
+        - "Fantastico 👏"
+        - "Troppo bello!"
+        - "Grande! 💪"
+        - "Che bello!"
+        - "Wow incredibile 🔥"
+      food:
+        - "Che buono! 😋"
+        - "La vera cucina italiana 🍝"
+      travel:
+        - "Che posto meraviglioso! 😍"
+        - "Italia sempre bella 🇮🇹"
+
+    engagement:
+      cold_start:
+        like_probability: 0.08
+        comment_probability: 0.00
+        save_probability: 0.02
+        target_boost: 1.5
+      interest_building:
+        like_probability: 0.18
+        comment_probability: 0.03
+        save_probability: 0.05
+        target_boost: 2.0
+      active:
+        like_probability: 0.22
+        comment_probability: 0.02
+        save_probability: 0.04
+        target_boost: 1.8
+
+    detection:
+      cities: ["roma", "milano", "napoli", "firenze", "venezia", "torino", "palermo", "bologna", "genova"]
+      words: ["ciao", "grazie", "buongiorno", "buonasera", "bello", "italiano", "italiana"]
+      name_patterns: ["mario", "marco", "luca", "giuseppe", "antonio", "giovanni"]
+
+  germany:
+    timezone: "Europe/Berlin"
+    language: "german"
+    flag_emoji: "🇩🇪"
+
+    hashtags:
+      popular:
+        - "#deutschland"
+        - "#deutsch"
+        - "#german"
+        - "#berlin"
+        - "#münchen"
+        - "#hamburg"
+        - "#köln"
+      niche:
+        - "#deutschetiktok"
+        - "#germanfood"
+        - "#bundesliga"
+      trending:
+        - "#fydeutschland"
+        - "#tiktokde"
+
+    comments:
+      generic:
+        - "Super! 👏"
+        - "Toll! 🔥"
+        - "Richtig gut!"
+        - "Mega! 💪"
+        - "Krass! 😍"
+
+    engagement:
+      cold_start:
+        like_probability: 0.08
+        comment_probability: 0.00
+        save_probability: 0.02
+        target_boost: 1.5
+      interest_building:
+        like_probability: 0.18
+        comment_probability: 0.03
+        save_probability: 0.05
+        target_boost: 2.0
+      active:
+        like_probability: 0.22
+        comment_probability: 0.02
+        save_probability: 0.04
+        target_boost: 1.8
+
+    detection:
+      cities: ["berlin", "münchen", "hamburg", "köln", "frankfurt", "stuttgart", "düsseldorf"]
+      words: ["hallo", "danke", "guten", "deutsch", "deutsche"]
+      name_patterns: ["hans", "peter", "thomas", "michael", "stefan", "andreas"]
+
+  france:
+    timezone: "Europe/Paris"
+    language: "french"
+    flag_emoji: "🇫🇷"
+
+    hashtags:
+      popular:
+        - "#france"
+        - "#français"
+        - "#paris"
+        - "#lyon"
+        - "#marseille"
+      niche:
+        - "#tiktokfrance"
+        - "#cuisinefrançaise"
+        - "#ligue1"
+      trending:
+        - "#fyfrance"
+        - "#pourtoi"
+
+    comments:
+      generic:
+        - "Magnifique! 🇫🇷"
+        - "Incroyable! 👏"
+        - "Trop bien! 🔥"
+        - "Génial! 💪"
+        - "C'est beau! 😍"
+
+    engagement:
+      cold_start:
+        like_probability: 0.08
+        comment_probability: 0.00
+        save_probability: 0.02
+        target_boost: 1.5
+      interest_building:
+        like_probability: 0.18
+        comment_probability: 0.03
+        save_probability: 0.05
+        target_boost: 2.0
+      active:
+        like_probability: 0.22
+        comment_probability: 0.02
+        save_probability: 0.04
+        target_boost: 1.8
+
+    detection:
+      cities: ["paris", "lyon", "marseille", "toulouse", "nice", "bordeaux", "lille"]
+      words: ["bonjour", "merci", "français", "française", "salut", "bonsoir"]
+      name_patterns: ["jean", "pierre", "louis", "philippe", "jacques", "françois"]
+
+  spain:
+    timezone: "Europe/Madrid"
+    language: "spanish"
+    flag_emoji: "🇪🇸"
+
+    hashtags:
+      popular:
+        - "#españa"
+        - "#español"
+        - "#madrid"
+        - "#barcelona"
+        - "#sevilla"
+      niche:
+        - "#tiktokespaña"
+        - "#laliga"
+        - "#cocina"
+      trending:
+        - "#fyespaña"
+        - "#parati"
+
+    comments:
+      generic:
+        - "Increíble! 🇪🇸"
+        - "Genial! 👏"
+        - "Qué bien! 🔥"
+        - "Me encanta! 😍"
+        - "Brutal! 💪"
+
+    engagement:
+      cold_start:
+        like_probability: 0.08
+        comment_probability: 0.00
+        save_probability: 0.02
+        target_boost: 1.5
+      interest_building:
+        like_probability: 0.18
+        comment_probability: 0.03
+        save_probability: 0.05
+        target_boost: 2.0
+      active:
+        like_probability: 0.22
+        comment_probability: 0.02
+        save_probability: 0.04
+        target_boost: 1.8
+
+    detection:
+      cities: ["madrid", "barcelona", "sevilla", "valencia", "malaga", "bilbao"]
+      words: ["hola", "gracias", "español", "española", "buenos", "buenas"]
+      name_patterns: ["carlos", "jose", "miguel", "antonio", "pedro", "juan"]
+
+  philippines:
+    timezone: "Asia/Manila"
+    language: "filipino"
+    flag_emoji: "🇵🇭"
+
+    hashtags:
+      popular:
+        - "#philippines"
+        - "#pilipinas"
+        - "#pinoy"
+        - "#pinay"
+        - "#manila"
+        - "#cebu"
+        - "#davao"
+        - "#ph"
+        - "#filipina"
+      niche:
+        - "#pinoybeauty"
+        - "#pinoylifestyle"
+        - "#pinoyfood"
+        - "#phtiktok"
+        - "#philippinesbusiness"
+        - "#pinoyentrepreneur"
+        - "#phfashion"
+        - "#mnl"
+      trending:
+        - "#fyp"
+        - "#foryoupage"
+        - "#phliving"
+        - "#pinoyph"
+        - "#tiktokph"
+
+    seed_accounts:
+      - "aldubrayn"
+      - "mainedcm"
+      - "donny_pangilinan"
+      - "kathrynbernardo"
+      - "viceganda"
+
+    comments:
+      generic:
+        - "Grabe! 🇵🇭"
+        - "Ganda naman! 😍"
+        - "Sobrang ganda! 🔥"
+        - "Wow amazing! 👏"
+        - "Talaga? Impressed! 💪"
+        - "Sana all! 😄"
+        - "Love this! ❤️"
+      beauty:
+        - "So pretty! 😍 What's your secret?"
+        - "Ganda mo! Ano gamit mo?"
+      business:
+        - "Inspiring! 💼 Keep it up!"
+        - "Great tips! Will try this!"
+
+    engagement:
+      cold_start:
+        like_probability: 0.10
+        comment_probability: 0.00
+        save_probability: 0.03
+        target_boost: 1.5
+      interest_building:
+        like_probability: 0.20
+        comment_probability: 0.04
+        save_probability: 0.06
+        target_boost: 2.0
+      active:
+        like_probability: 0.25
+        comment_probability: 0.03
+        save_probability: 0.05
+        target_boost: 1.8
+
+    detection:
+      cities: ["manila", "cebu", "davao", "quezon", "makati", "pasig", "taguig", "caloocan"]
+      words: ["po", "salamat", "kumusta", "mahal", "ganda", "pilipinas", "pinoy", "pinay", "grabe", "naman"]
+      name_patterns: ["maria", "jose", "juan", "ana", "mark", "angelica", "kristine", "sarah"]
+
+  usa:
+    timezone: "America/New_York"
+    language: "english"
+    flag_emoji: "🇺🇸"
+
+    hashtags:
+      popular:
+        - "#usa"
+        - "#america"
+        - "#american"
+        - "#nyc"
+        - "#losangeles"
+        - "#chicago"
+        - "#miami"
+        - "#houston"
+      niche:
+        - "#usabusiness"
+        - "#americanlifestyle"
+        - "#usentrepreneur"
+        - "#smallbusiness"
+        - "#sidehustle"
+        - "#makemoneyonline"
+      trending:
+        - "#fyp"
+        - "#viral"
+        - "#trending"
+        - "#foryoupage"
+        - "#tiktokusa"
+
+    seed_accounts:
+      - "charlidamelio"
+      - "addisonre"
+      - "bellapoarch"
+      - "khabylame"
+      - "zachking"
+
+    comments:
+      generic:
+        - "This is amazing! 🔥"
+        - "Love this! ❤️"
+        - "Wow, incredible! 👏"
+        - "Absolutely love it! 😍"
+        - "Keep it up! 💪"
+        - "So good! 🙌"
+      business:
+        - "Great content! Following for more 🚀"
+        - "This is gold! Sharing this!"
+      lifestyle:
+        - "Goals! 🎯"
+        - "Living the dream! ✨"
+
+    engagement:
+      cold_start:
+        like_probability: 0.08
+        comment_probability: 0.00
+        save_probability: 0.02
+        target_boost: 1.5
+      interest_building:
+        like_probability: 0.18
+        comment_probability: 0.03
+        save_probability: 0.05
+        target_boost: 2.0
+      active:
+        like_probability: 0.22
+        comment_probability: 0.02
+        save_probability: 0.04
+        target_boost: 1.8
+
+    detection:
+      cities: ["new york", "los angeles", "chicago", "houston", "miami", "atlanta", "boston", "seattle", "dallas"]
+      words: ["awesome", "amazing", "love", "great", "omg", "lol", "literally", "honestly"]
+      name_patterns: ["james", "john", "robert", "michael", "william", "david", "jessica", "sarah", "emily"]
+
+  brazil:
+    timezone: "America/Sao_Paulo"
+    language: "portuguese"
+    flag_emoji: "🇧🇷"
+
+    hashtags:
+      popular:
+        - "#brasil"
+        - "#brazil"
+        - "#brasileiro"
+        - "#saopaulo"
+        - "#riodejaneiro"
+        - "#minas"
+        - "#nordeste"
+      niche:
+        - "#tiktokbrasil"
+        - "#brasileiros"
+        - "#bolsonaros"
+        - "#moda"
+        - "#beleza"
+        - "#empreendedor"
+        - "#negocio"
+      trending:
+        - "#fyp"
+        - "#paravocê"
+        - "#viral"
+        - "#tiktokers"
+
+    comments:
+      generic:
+        - "Incrível! 🇧🇷"
+        - "Que legal! 👏"
+        - "Demais! 🔥"
+        - "Top demais! 💪"
+        - "Amei! 😍"
+        - "Perfeito! ✨"
+
+    engagement:
+      cold_start:
+        like_probability: 0.10
+        comment_probability: 0.00
+        save_probability: 0.03
+        target_boost: 1.5
+      interest_building:
+        like_probability: 0.20
+        comment_probability: 0.04
+        save_probability: 0.06
+        target_boost: 2.0
+      active:
+        like_probability: 0.24
+        comment_probability: 0.03
+        save_probability: 0.05
+        target_boost: 1.8
+
+    detection:
+      cities: ["são paulo", "rio de janeiro", "belo horizonte", "salvador", "fortaleza", "brasilia", "curitiba"]
+      words: ["oi", "obrigado", "tudo bem", "legal", "ótimo", "incrível", "demais"]
+      name_patterns: ["joao", "pedro", "lucas", "carlos", "ana", "maria", "julia", "camila"]
+
+  japan:
+    timezone: "Asia/Tokyo"
+    language: "japanese"
+    flag_emoji: "🇯🇵"
+
+    hashtags:
+      popular:
+        - "#japan"
+        - "#japan🇯🇵"
+        - "#tokyo"
+        - "#osaka"
+        - "#kyoto"
+        - "#japanese"
+        - "#日本"
+        - "#東京"
+        - "#大阪"
+      niche:
+        - "#japanesefood"
+        - "#japanesebeauty"
+        - "#japaneselifestyle"
+        - "#japantravel"
+        - "#otaku"
+        - "#anime"
+        - "#cosplay"
+      trending:
+        - "#fyp"
+        - "#viral"
+        - "#tiktokjapan"
+        - "#tiktokviral"
+
+    comments:
+      generic:
+        - "素晴らしい！🇯🇵"
+        - "かわいい！ 😍"
+        - "すごい！👏"
+        - "最高！🔥"
+        - "いいね！💪"
+      food:
+        - "美味しそう！😋"
+        - "食べたい！🍜"
+
+    engagement:
+      cold_start:
+        like_probability: 0.08
+        comment_probability: 0.00
+        save_probability: 0.02
+        target_boost: 1.5
+      interest_building:
+        like_probability: 0.15
+        comment_probability: 0.02
+        save_probability: 0.04
+        target_boost: 2.0
+      active:
+        like_probability: 0.20
+        comment_probability: 0.02
+        save_probability: 0.03
+        target_boost: 1.8
+
+    detection:
+      cities: ["tokyo", "osaka", "kyoto", "yokohama", "nagoya", "sapporo", "fukuoka"]
+      words: ["ありがとう", "すごい", "かわいい", "日本語", "東京", "大阪"]
+      name_patterns: ["yuki", "sato", "tanaka", "suzuki", "ito", "kato", "yamamoto"]
+
+  thailand:
+    timezone: "Asia/Bangkok"
+    language: "thai"
+    flag_emoji: "🇹🇭"
+
+    hashtags:
+      popular:
+        - "#thailand"
+        - "#thai"
+        - "#bangkok"
+        - "#chiangmai"
+        - "#phuket"
+        - "#thaifood"
+        - "#thaigirl"
+      niche:
+        - "#thaitiktok"
+        - "#thaibeauty"
+        - "#thaibusiness"
+        - "#thaientrepreneur"
+        - "#tiktokthailand"
+      trending:
+        - "#fyp"
+        - "#viral"
+        - "#tiktokthai"
+
+    comments:
+      generic:
+        - "สวยมาก! 🇹🇭"
+        - "เยี่ยมมาก! 👏"
+        - "ดีมากเลย! 🔥"
+        - "Amazing! 😍"
+        - "So beautiful! 💪"
+
+    engagement:
+      cold_start:
+        like_probability: 0.10
+        comment_probability: 0.00
+        save_probability: 0.03
+        target_boost: 1.5
+      interest_building:
+        like_probability: 0.20
+        comment_probability: 0.04
+        save_probability: 0.06
+        target_boost: 2.0
+      active:
+        like_probability: 0.24
+        comment_probability: 0.03
+        save_probability: 0.05
+        target_boost: 1.8
+
+    detection:
+      cities: ["bangkok", "chiang mai", "phuket", "pattaya", "chonburi", "nakhon"]
+      words: ["ขอบคุณ", "สวย", "ดีมาก", "ยอดเยี่ยม", "สุดยอด"]
+      name_patterns: ["nong", "pim", "nam", "fah", "joy", "gift", "aom"]
+
+  vietnam:
+    timezone: "Asia/Ho_Chi_Minh"
+    language: "vietnamese"
+    flag_emoji: "🇻🇳"
+
+    hashtags:
+      popular:
+        - "#vietnam"
+        - "#vietnamese"
+        - "#hanoi"
+        - "#hochiminh"
+        - "#saigon"
+        - "#vietnam🇻🇳"
+      niche:
+        - "#tiktok_vietnam"
+        - "#vietnamesegirl"
+        - "#vietnamesefood"
+        - "#vietbusiness"
+        - "#vn"
+      trending:
+        - "#fyp"
+        - "#viral"
+        - "#tiktokviralvn"
+
+    comments:
+      generic:
+        - "Tuyệt vời! 🇻🇳"
+        - "Hay quá! 👏"
+        - "Đẹp quá! 😍"
+        - "Awesome! 🔥"
+        - "Love it! 💪"
+
+    engagement:
+      cold_start:
+        like_probability: 0.10
+        comment_probability: 0.00
+        save_probability: 0.03
+        target_boost: 1.5
+      interest_building:
+        like_probability: 0.20
+        comment_probability: 0.04
+        save_probability: 0.06
+        target_boost: 2.0
+      active:
+        like_probability: 0.24
+        comment_probability: 0.03
+        save_probability: 0.05
+        target_boost: 1.8
+
+    detection:
+      cities: ["hanoi", "ho chi minh", "saigon", "da nang", "hai phong", "can tho"]
+      words: ["cảm ơn", "đẹp", "tuyệt", "hay quá", "việt nam"]
+      name_patterns: ["nguyen", "tran", "le", "pham", "hoang", "huong", "linh"]
+
+# Default fallback for unlisted countries
+default:
+  engagement:
+    cold_start:
+      like_probability: 0.08
+      comment_probability: 0.00
+      save_probability: 0.02
+      target_boost: 1.5
+    interest_building:
+      like_probability: 0.18
+      comment_probability: 0.03
+      save_probability: 0.05
+      target_boost: 2.0
+    active:
+      like_probability: 0.22
+      comment_probability: 0.02
+      save_probability: 0.04
+      target_boost: 1.8

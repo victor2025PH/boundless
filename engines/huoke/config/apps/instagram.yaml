@@ -1,0 +1,103 @@
+package: com.instagram.android
+name: Instagram
+behavior_profile: instagram
+
+compliance:
+  hourly_total: 50
+  daily_total: 250
+  actions:
+    follow: {hourly: 10, daily: 60}
+    like: {hourly: 20, daily: 100}
+    comment: {hourly: 8, daily: 30}
+    send_dm: {hourly: 5, daily: 20}
+    search: {hourly: 15, daily: 80}
+
+actions:
+  search_users:
+    description: "Search for users by keyword"
+    params: [query]
+    steps:
+      - find: "Search tab icon at bottom navigation"
+        action: tap
+      - find: "Search input field"
+        action: tap
+      - find: "Search text box"
+        action: type
+        param: query
+      - find: "Accounts tab or People filter"
+        action: tap
+        optional: true
+
+  follow_user:
+    description: "Follow a user from their profile"
+    steps:
+      - find: "Follow button"
+        action: tap
+
+  like_post:
+    description: "Like a post"
+    steps:
+      - find: "Like button (heart icon)"
+        action: tap
+
+  comment_post:
+    description: "Comment on a post"
+    params: [comment_text]
+    steps:
+      - find: "Comment icon"
+        action: tap
+      - find: "Add a comment input field"
+        action: type
+        param: comment_text
+      - find: "Post comment button"
+        action: tap
+
+  send_dm:
+    description: "Send a direct message"
+    params: [recipient, message]
+    steps:
+      - find: "Direct messages icon (paper plane)"
+        action: tap
+      - find: "New message or compose icon"
+        action: tap
+      - find: "Search recipient field"
+        action: type
+        param: recipient
+      - find: "First matching user in results"
+        action: tap
+      - find: "Next or Chat button"
+        action: tap
+        optional: true
+        wait_after: 1.0
+      - find: "Message text input"
+        action: type
+        param: message
+      - find: "Send button"
+        action: tap
+
+  browse_hashtag:
+    description: "Browse posts for a hashtag"
+    params: [hashtag]
+    steps:
+      - find: "Search tab icon"
+        action: tap
+      - find: "Search input field"
+        action: tap
+      - find: "Search text box"
+        action: type
+        param: hashtag
+      - find: "Tags tab"
+        action: tap
+        optional: true
+      - find: "First matching hashtag"
+        action: tap
+
+  browse_feed:
+    description: "Scroll through the home feed"
+    steps:
+      - find: "Home tab icon"
+        action: tap
+        optional: true
+      - find: "Feed area"
+        action: swipe
+        wait_after: 2.0

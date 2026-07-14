@@ -1,0 +1,184 @@
+# ── 机密 / 密钥（绝不入库）──
+secrets.bat
+secrets/
+*.key
+*.pem
+.env
+.env.*
+
+# ── 含密钥/可变运行配置 ──
+llm_backends.json
+release.config.json
+
+# ── 运行时产物 / 日志 ──
+_hub.log
+_hub.err.log
+*.log
+logs/
+__pycache__/
+*.pyc
+# 进程启动/运行重定向日志与坏文件备份（boot/run 重定向、*.broken*、*_backup、*.bak*）
+*.out
+*.err
+*.bak
+*.bak_*
+*.broken*
+*_backup
+
+# ── 大文件 / 媒体产物 ──
+recordings/
+clone_outputs/
+share_covers/
+video_output/
+voice_clones/
+voice_previews/
+history_audio/
+faces/
+hair_styles/
+golden_packages/
+data/*
+声音包/
+avatar_videos/
+*.wav
+*.mp4
+*.mp3
+*.flac
+*.avi
+*.mov
+*.mkv
+
+# ── 模型权重 / 大二进制（绝不入库，由 provision 单独部署）──
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.pt
+*.bin
+*.gguf
+*.tar
+*.zip
+*.rar
+*.7z
+*.exe
+*.jsonl
+*.migrated
+
+# ── 根目录调试/临时产物（下划线前缀 = 一次性探针/抓帧/临时脚本，不入库；
+#    已入库的下划线文件如 _voice_quality.py 仍正常跟踪，gitignore 不影响已跟踪文件）──
+_*.png
+_*.jpg
+_*.jpeg
+_*.mp4
+_*.wav
+_*.py
+_*.bat
+_*.ps1
+_*.txt
+_*.out
+_*.err
+_*.bin
+# tools/ 下的下划线脚本是长期维护的验收/演练工具（_song_p*_e2e、_station_e2e 等
+# 被交付文档引用「可随时重跑」），豁免上面的全局下划线忽略
+!tools/_*.py
+
+# ── 数据库 / 缓存 ──
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+.cache/
+_alive_cache/
+_lipsync_frames/
+opener_cache/
+
+# ── 运行时状态（自动生成，不入库）──
+realtime_status.json
+camera_status.json
+camera_index.txt
+active_profile.txt
+metrics_snapshot.json
+share_stats.json
+config.json
+.service_pids.json
+license_state.json
+subtitle_overlay_settings.json
+hub_config.json
+launcher_settings.json
+service_discovery.json
+
+# ── 启动器虚拟环境（仅 PySide6，按机器本地生成，不入库）──
+.venv_launcher/
+
+# ── 打包产物（PyInstaller，本地生成，不入库；源在 launcher_qt.py / build_launcher.bat）──
+build/
+dist/
+*.spec
+selftest_result.txt
+
+# ── 分发包安装产物（pack_installer 在用户机生成，绝不入库）──
+runtime/
+_pack_cache/
+assets/app.png
+
+# ────────────────────────────────────────────────────────────
+# 第三方模型 / 引擎仓库（约 48GB，由 provision.bat / MANIFEST.json 单独部署，不入库）
+# ────────────────────────────────────────────────────────────
+Sonic/
+LatentSync/
+CosyVoice/
+MuseTalk/
+Retrieval-based-Voice-Conversion-WebUI/
+RVC/
+facefusion/
+fish-speech/
+fish-speech-v1.5/
+LivePortrait/
+Deep-Live-Cam/
+CodeFormer/
+CodeFormer_backup/
+gfpgan/
+GaussianTalker/
+GPT-SoVITS/
+HairFastGAN/
+alltalk_tts/
+scrcpy/
+# 唱歌引擎与自研虚拟摄像头（嵌套 git 仓库；本地补丁经 tools/patches/ 管理与回打）
+ACE-Step/
+YingMusic-SVC/
+vendor/
+# 唱歌引擎权重（setup_song_studio/setup_ace_lora 部署）与运营者曲库
+models/
+songs/
+
+# ── 运行产物 / 本机临时 ──
+checkpoints/
+backups/
+bench_out/
+tmp/
+# 独立实验室(llama.cpp 二进制等,复测引擎用,tools/_p5_mt2_lab_probe.py 的运行时依赖)
+lab/
+*.msi
+broadcast_mode.txt
+# UI 阶段过程截图（回归基线 baseline/ 仍入库）
+ui_snapshots/phases/
+
+# ── UI 可视化回归（ui_visual_regress.py）：按机器指纹分目录的基线入库
+#    （ui_snapshots/baseline/<平台-edge大版本>/*.png），当前/差异/临时产物不入库 ──
+ui_snapshots/current/
+ui_snapshots/diff/
+static/_regress_*.html
+
+# ── 保留入库：archive/（历史归档）、requirements/（依赖基线）、static/、installer/、tools/、ui_snapshots/baseline/ ──
+
+# 2026-07-11 ȫ���ύǰ���䣺�����ģ��/������/��ʱĿ¼�����
+_pending_models/
+dfm_workspace/
+temp/
+voice_pack_aishell3/
+downloads/
+
+# ── 启动角色包（占位形象+音色）入库：覆盖上面的 data/*、*.wav、*.mp3 忽略。
+#    全新装机 Hub 首启据此播种示例角色（消灭"无音色样本"）；随安装器/应用内更新分发。──
+!data/starter_profiles/
+!data/starter_profiles/**

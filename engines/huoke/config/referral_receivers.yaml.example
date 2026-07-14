@@ -1,0 +1,58 @@
+# ─────────────────────────────────────────────────────────────────
+# 接收方账号配置 (Phase 6.B · 2026-04-23)
+# 把真实文件改名为 `referral_receivers.yaml` 使用 (该文件在 .gitignore 里)
+#
+# 语义: 每个 receiver 是一个**接收引流的账号**, 如一个运营的 LINE 号,
+# handoff 生成时根据 channel + persona 自动选择 receiver, 并在其
+# daily_cap 满时轮转到 backup。
+# ─────────────────────────────────────────────────────────────────
+
+version: 1
+
+# 各渠道轮转冷却配置
+defaults:
+  daily_cap: 15                # 默认日上限(未指定 per-receiver 时用)
+  cap_reset_tz: "+09:00"       # 日界限时区(日本时间)
+  rotation_mode: "least_loaded"  # "least_loaded" (剩余多的优先) / "round_robin"
+
+# 接收方账号清单
+receivers:
+  line_jp_primary:
+    channel: line
+    account_id: "@jpline01"
+    display_name: "日本首要 LINE"
+    daily_cap: 15
+    backup_key: line_jp_secondary   # 配额满 → 轮转到这个
+    enabled: true
+    # 可选: 只接这些 persona 的 lead; 空/null = 接所有 persona
+    persona_filter: ["jp_female_midlife"]
+    tags: ["primary", "japan"]
+    webhook_url: ""              # 可选: handoff 入账时单独 POST (除 webhook_targets 外)
+
+  line_jp_secondary:
+    channel: line
+    account_id: "@jpline02"
+    display_name: "日本备用 LINE"
+    daily_cap: 20
+    backup_key: null
+    enabled: true
+    persona_filter: ["jp_female_midlife"]
+
+  # 另一个渠道示例 - WhatsApp
+  wa_global_primary:
+    channel: whatsapp
+    account_id: "+819012345678"
+    display_name: "全球 WhatsApp 主号"
+    daily_cap: 30
+    backup_key: null
+    enabled: true
+    persona_filter: []            # 接所有 persona
+
+  # 禁用示例 (account 有风险暂停)
+  line_jp_tertiary:
+    channel: line
+    account_id: "@jpline03"
+    display_name: "日本三号(停用)"
+    daily_cap: 10
+    enabled: false
+    persona_filter: ["jp_female_midlife"]

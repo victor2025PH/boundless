@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="robots" content="noindex, nofollow" />
+<title>无界科技 BOUNDLESS · 产品功能与工作汇报</title>
+<style>
+  :root{
+    --bg:#05070f; --bg2:#080c1a; --panel:rgba(255,255,255,.035);
+    --panel-2:rgba(255,255,255,.05); --border:rgba(255,255,255,.09);
+    --border-2:rgba(255,255,255,.16); --ink:#eaf0fb; --muted:#93a1bd;
+    --dim:#5f6d89; --cyan:#22d3ee; --purple:#a855f7; --blue:#3b82f6;
+    --green:#34d399; --amber:#fbbf24;
+    --growth:#22d3ee; --studio:#a855f7; --lingo:#3b82f6;
+    --radius:18px; --maxw:1200px;
+    --font:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth;scroll-padding-top:82px}
+  body{
+    font-family:var(--font); background:var(--bg); color:var(--ink);
+    line-height:1.65; -webkit-font-smoothing:antialiased; overflow-x:hidden;
+  }
+  /* backdrop glow */
+  body::before{
+    content:""; position:fixed; inset:0; z-index:-2;
+    background:
+      radial-gradient(900px 600px at 12% -8%, rgba(34,211,238,.14), transparent 60%),
+      radial-gradient(900px 700px at 92% 6%, rgba(168,85,247,.16), transparent 60%),
+      radial-gradient(1000px 800px at 50% 108%, rgba(59,130,246,.12), transparent 60%),
+      linear-gradient(180deg,var(--bg),var(--bg2));
+  }
+  body::after{
+    content:""; position:fixed; inset:0; z-index:-1; opacity:.4;
+    background-image:linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(255,255,255,.03) 1px,transparent 1px);
+    background-size:64px 64px; mask:radial-gradient(circle at 50% 30%,#000,transparent 85%);
+  }
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+
+  /* ===== NAV ===== */
+  header.nav{
+    position:sticky;top:0;z-index:50;backdrop-filter:blur(14px);
+    background:rgba(6,9,17,.72);border-bottom:1px solid var(--border);
+  }
+  .nav-inner{display:flex;align-items:center;justify-content:space-between;height:64px}
+  .brand{display:flex;align-items:center;gap:11px;font-weight:700;letter-spacing:.3px}
+  .brand .logo{width:34px;height:34px;display:grid;place-items:center;
+    border-radius:10px;background:linear-gradient(135deg,var(--cyan),var(--purple));
+    color:#04060d;font-size:19px;font-weight:900;box-shadow:0 4px 20px rgba(168,85,247,.4)}
+  .brand small{display:block;font-size:11px;color:var(--muted);font-weight:500;letter-spacing:1.5px}
+  .nav-links{display:flex;gap:4px}
+  .nav-links a{
+    font-size:13.5px;color:var(--muted);padding:8px 13px;border-radius:9px;
+    transition:.2s;font-weight:500;white-space:nowrap;
+  }
+  .nav-links a:hover{color:var(--ink);background:var(--panel-2)}
+  .nav-links a.active{color:var(--ink);background:rgba(34,211,238,.12);
+    box-shadow:inset 0 0 0 1px rgba(34,211,238,.25)}
+  .nav-toggle{display:none;background:none;border:1px solid var(--border);color:var(--ink);
+    border-radius:9px;padding:7px 11px;font-size:18px;cursor:pointer}
+
+  /* ===== HERO ===== */
+  .hero{position:relative;padding:96px 0 64px;text-align:center}
+  .hero .inf{font-size:74px;line-height:1;font-weight:900;
+    background:linear-gradient(135deg,var(--cyan),var(--purple) 55%,var(--blue));
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+    filter:drop-shadow(0 6px 30px rgba(168,85,247,.45));margin-bottom:14px}
+  .kicker{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--cyan);
+    border:1px solid rgba(34,211,238,.3);background:rgba(34,211,238,.08);
+    padding:6px 15px;border-radius:999px;margin-bottom:22px;letter-spacing:.5px}
+  .kicker .dot{width:7px;height:7px;border-radius:50%;background:var(--cyan);
+    box-shadow:0 0 10px var(--cyan);animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .hero h1{font-size:clamp(30px,5vw,52px);font-weight:800;letter-spacing:-.5px;line-height:1.15}
+  .hero h1 .grad{background:linear-gradient(135deg,var(--cyan),var(--purple));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero p.sub{color:var(--muted);font-size:clamp(15px,2vw,18px);max-width:720px;
+    margin:20px auto 0}
+  .hero .meta{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:26px}
+  .tag{font-size:12.5px;color:var(--muted);border:1px solid var(--border);
+    background:var(--panel);padding:6px 13px;border-radius:999px}
+  .tag b{color:var(--ink);font-weight:600}
+
+  /* ===== SECTION ===== */
+  section{padding:56px 0;position:relative}
+  .sec-head{margin-bottom:34px}
+  .sec-idx{font-size:13px;color:var(--cyan);font-weight:700;letter-spacing:2px}
+  .sec-head h2{font-size:clamp(24px,3.5vw,34px);font-weight:800;margin-top:6px;letter-spacing:-.4px}
+  .sec-head p{color:var(--muted);margin-top:10px;max-width:760px;font-size:15px}
+  .divider{height:1px;background:linear-gradient(90deg,transparent,var(--border-2),transparent);
+    max-width:var(--maxw);margin:0 auto}
+
+  /* reveal anim */
+  .reveal{opacity:0;transform:translateY(26px);transition:.7s cubic-bezier(.2,.7,.2,1)}
+  .reveal.in{opacity:1;transform:none}
+
+  /* ===== STAT GRID ===== */
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+  .stat{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+    padding:22px;position:relative;overflow:hidden;transition:.3s}
+  .stat:hover{border-color:var(--border-2);transform:translateY(-3px);background:var(--panel-2)}
+  .stat .n{font-size:38px;font-weight:800;letter-spacing:-1px;
+    background:linear-gradient(135deg,var(--cyan),var(--purple));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .stat .l{color:var(--muted);font-size:13.5px;margin-top:4px}
+  .stat .glow{position:absolute;right:-30px;top:-30px;width:90px;height:90px;border-radius:50%;
+    background:radial-gradient(circle,rgba(34,211,238,.25),transparent 70%);filter:blur(6px)}
+
+  /* ===== CARD & GRID ===== */
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+    padding:24px;transition:.3s}
+  .card:hover{border-color:var(--border-2);background:var(--panel-2)}
+  .card h3{font-size:18px;font-weight:700;display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  .card .ico{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;flex:none;
+    background:rgba(255,255,255,.05);border:1px solid var(--border)}
+  .card .ico svg{width:20px;height:20px}
+  .feat-list{list-style:none;margin-top:12px;display:flex;flex-direction:column;gap:9px}
+  .feat-list li{position:relative;padding-left:22px;color:var(--muted);font-size:14px}
+  .feat-list li::before{content:"";position:absolute;left:2px;top:8px;width:8px;height:8px;
+    border-radius:2px;background:linear-gradient(135deg,var(--cyan),var(--purple))}
+  .feat-list li b{color:var(--ink);font-weight:600}
+
+  /* ===== PILLS ===== */
+  .pills{display:flex;flex-wrap:wrap;gap:7px;margin-top:14px}
+  .pill{font-size:12px;padding:4px 11px;border-radius:999px;border:1px solid var(--border);
+    color:var(--muted);background:rgba(255,255,255,.03)}
+  .pill.on{color:var(--ink);border-color:rgba(34,211,238,.35);background:rgba(34,211,238,.08)}
+
+  /* ===== TECH STACK CHIPS ===== */
+  .chips{display:flex;flex-wrap:wrap;gap:8px}
+  .chip{font-size:13px;padding:7px 14px;border-radius:10px;border:1px solid var(--border);
+    background:var(--panel);color:var(--ink);font-weight:500}
+  .chip span{color:var(--cyan)}
+
+  /* ===== PRODUCT SYSTEM ===== */
+  .sysblock{margin-bottom:34px}
+  .sys-title{display:flex;align-items:center;gap:14px;margin-bottom:18px;flex-wrap:wrap}
+  .sys-badge{font-size:13px;font-weight:700;padding:7px 15px;border-radius:999px;letter-spacing:.5px}
+  .sys-title h3{font-size:21px;font-weight:800}
+  .sys-title .break{font-size:13px;color:var(--dim);border-left:1px solid var(--border);padding-left:14px}
+  .sys-growth .sys-badge{color:#04121a;background:linear-gradient(135deg,#22d3ee,#0ea5b7)}
+  .sys-studio .sys-badge{color:#100420;background:linear-gradient(135deg,#c084fc,#a855f7)}
+  .sys-lingo  .sys-badge{color:#020c1f;background:linear-gradient(135deg,#60a5fa,#3b82f6)}
+
+  .prod{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+    padding:22px;display:flex;flex-direction:column;transition:.3s;position:relative;overflow:hidden}
+  .prod::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;opacity:.9}
+  .sys-growth .prod::before{background:linear-gradient(180deg,#22d3ee,transparent)}
+  .sys-studio .prod::before{background:linear-gradient(180deg,#a855f7,transparent)}
+  .sys-lingo  .prod::before{background:linear-gradient(180deg,#3b82f6,transparent)}
+  .prod:hover{transform:translateY(-4px);border-color:var(--border-2);background:var(--panel-2)}
+  .prod-top{display:flex;align-items:flex-start;gap:13px}
+  .prod-ico{width:46px;height:46px;border-radius:12px;flex:none;display:grid;place-items:center;color:#fff}
+  .sys-growth .prod-ico{background:linear-gradient(135deg,#22d3ee,#0891b2);box-shadow:0 6px 20px rgba(34,211,238,.3)}
+  .sys-studio .prod-ico{background:linear-gradient(135deg,#a855f7,#7c3aed);box-shadow:0 6px 20px rgba(168,85,247,.3)}
+  .sys-lingo  .prod-ico{background:linear-gradient(135deg,#3b82f6,#2563eb);box-shadow:0 6px 20px rgba(59,130,246,.3)}
+  .prod-ico svg{width:24px;height:24px}
+  .prod-name{font-size:17px;font-weight:700;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+  .prod-name .en{font-size:13px;color:var(--muted);font-weight:500;letter-spacing:.5px}
+  .prod-role{font-size:12px;color:var(--dim);margin-top:2px}
+  .prod-desc{font-size:13.5px;color:var(--muted);margin-top:12px;flex:1}
+  .prod-desc b{color:var(--ink)}
+  .prod-meta{margin-top:14px;padding-top:14px;border-top:1px solid var(--border)}
+  .maturity{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted);margin-bottom:9px}
+  .bar{flex:1;height:6px;border-radius:999px;background:rgba(255,255,255,.07);overflow:hidden}
+  .bar > i{display:block;height:100%;border-radius:999px;width:0;transition:width 1.4s cubic-bezier(.2,.7,.2,1)}
+  .sys-growth .bar > i{background:linear-gradient(90deg,#22d3ee,#0891b2)}
+  .sys-studio .bar > i{background:linear-gradient(90deg,#c084fc,#a855f7)}
+  .sys-lingo  .bar > i{background:linear-gradient(90deg,#60a5fa,#3b82f6)}
+  .backend{font-size:11.5px;color:var(--dim)}
+  .backend code{color:var(--muted);background:rgba(255,255,255,.05);padding:1px 6px;border-radius:5px;font-size:11px}
+
+  /* ===== TIMELINE ===== */
+  .timeline{position:relative;padding-left:28px}
+  .timeline::before{content:"";position:absolute;left:7px;top:6px;bottom:6px;width:2px;
+    background:linear-gradient(180deg,var(--cyan),var(--purple),transparent)}
+  .tl-item{position:relative;margin-bottom:22px}
+  .tl-item::before{content:"";position:absolute;left:-26px;top:5px;width:14px;height:14px;
+    border-radius:50%;background:var(--bg);border:2px solid var(--cyan);box-shadow:0 0 12px rgba(34,211,238,.6)}
+  .tl-item h4{font-size:16px;font-weight:700;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .tl-item .when{font-size:11.5px;color:var(--cyan);border:1px solid rgba(34,211,238,.3);
+    padding:2px 9px;border-radius:999px;font-weight:600}
+  .tl-item p{color:var(--muted);font-size:14px;margin-top:6px}
+
+  /* ===== ENGINEERING BARS ===== */
+  .metric{margin-bottom:18px}
+  .metric-top{display:flex;justify-content:space-between;font-size:14px;margin-bottom:7px}
+  .metric-top b{font-weight:600}
+  .metric-top span{color:var(--muted)}
+  .mbar{height:8px;border-radius:999px;background:rgba(255,255,255,.07);overflow:hidden}
+  .mbar > i{display:block;height:100%;width:0;border-radius:999px;
+    background:linear-gradient(90deg,var(--cyan),var(--purple));transition:width 1.5s cubic-bezier(.2,.7,.2,1)}
+
+  /* ===== NEXT / ROADMAP ===== */
+  .road{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  .road .card{border-top:2px solid transparent}
+  .road .card:nth-child(1){border-top-color:var(--cyan)}
+  .road .card:nth-child(2){border-top-color:var(--purple)}
+  .road .card:nth-child(3){border-top-color:var(--blue)}
+  .road h4{font-size:15px;font-weight:700;margin-bottom:12px;color:var(--ink)}
+
+  .note{margin-top:16px;font-size:12.5px;color:var(--dim);border:1px dashed var(--border);
+    border-radius:12px;padding:14px 16px;background:rgba(255,255,255,.02)}
+  .note b{color:var(--muted)}
+
+  /* ===== FOOTER ===== */
+  footer{border-top:1px solid var(--border);padding:34px 0;margin-top:40px;text-align:center;
+    color:var(--dim);font-size:13px}
+  footer .slogan{font-size:16px;font-weight:700;color:var(--ink);margin-bottom:8px}
+  footer .slogan .grad{background:linear-gradient(135deg,var(--cyan),var(--purple));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+
+  /* ===== SCROLL PROGRESS ===== */
+  .progress{position:fixed;top:0;left:0;height:3px;z-index:60;width:0;
+    background:linear-gradient(90deg,var(--cyan),var(--purple),var(--blue))}
+
+  /* ===== RESPONSIVE ===== */
+  @media(max-width:900px){
+    .stats{grid-template-columns:repeat(2,1fr)}
+    .grid-3,.road{grid-template-columns:1fr 1fr}
+    .nav-links{position:fixed;top:64px;right:0;left:0;flex-direction:column;gap:2px;
+      background:rgba(6,9,17,.97);backdrop-filter:blur(14px);padding:12px 20px;
+      border-bottom:1px solid var(--border);transform:translateY(-140%);transition:.3s;z-index:40}
+    .nav-links.open{transform:none}
+    .nav-links a{padding:11px 13px}
+    .nav-toggle{display:block}
+  }
+  @media(max-width:620px){
+    .stats,.grid-2,.grid-3,.road{grid-template-columns:1fr}
+    .hero{padding:64px 0 40px}
+  }
+</style>
+</head>
+<body>
+<div class="progress" id="scrollbar"></div>
+
+<!-- NAV -->
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top">
+      <span class="logo">&#8734;</span>
+      <span>无界科技 BOUNDLESS<small>产品功能与工作汇报</small></span>
+    </a>
+    <button class="nav-toggle" id="navToggle" aria-label="menu">&#9776;</button>
+    <nav class="nav-links" id="navLinks">
+      <a href="#overview">速览</a>
+      <a href="#website">官网</a>
+      <a href="#products">产品矩阵</a>
+      <a href="#engineering">工程质量</a>
+      <a href="#progress">近期工作</a>
+      <a href="#roadmap">下一步</a>
+    </nav>
+  </div>
+</header>
+
+<!-- HERO -->
+<div class="hero" id="top">
+  <div class="wrap">
+    <div class="inf">&#8734;</div>
+    <div class="kicker"><span class="dot"></span>内部汇报 · 全量产品技术盘点</div>
+    <h1>让沟通，<span class="grad">无界</span><br/>产品功能与工作汇报</h1>
+    <p class="sub">用 AI 打破容貌、声音、语言、沟通、身份的边界 —— 面向出海获客、成交与内容创作的全链路 AI 产品矩阵。本报告盘点母品牌旗下三大产品系、官网门面与工程进展。</p>
+    <div class="meta">
+      <span class="tag"><b>母品牌</b> 无界科技 BOUNDLESS</span>
+      <span class="tag"><b>3</b> 大产品系 · <b>7</b> 款产品</span>
+      <span class="tag"><b>私有部署</b> 数据不出网</span>
+      <span class="tag">更新 <b>2026-07</b></span>
+    </div>
+  </div>
+</div>
+
+<!-- OVERVIEW -->
+<section id="overview">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-idx">01 / OVERVIEW</div>
+      <h2>一页速览</h2>
+      <p>无界科技定位为母品牌/控股背书，下设多个各自独立开发、分布式部署的软件产品。官网作为统一销售门面，按"三系"陈列产品。以下为当前整体现状的关键指标。</p>
+    </div>
+    <div class="stats reveal">
+      <div class="stat"><div class="glow"></div><div class="n">3</div><div class="l">产品系（智连 · 幻境 · 通达）</div></div>
+      <div class="stat"><div class="glow"></div><div class="n">7</div><div class="l">款产品（…X 系列）</div></div>
+      <div class="stat"><div class="glow"></div><div class="n">10<span style="font-size:22px">+</span></div><div class="l">触达 / 承接平台渠道</div></div>
+      <div class="stat"><div class="glow"></div><div class="n">30<span style="font-size:22px">+</span></div><div class="l">支持语种（拟人翻译）</div></div>
+      <div class="stat"><div class="glow"></div><div class="n">2</div><div class="l">生产级后端主项目</div></div>
+      <div class="stat"><div class="glow"></div><div class="n">4</div><div class="l">官网语言（中英韩日）</div></div>
+      <div class="stat"><div class="glow"></div><div class="n">6.5k<span style="font-size:22px"></span></div><div class="l">回归测试项（智聊后端）</div></div>
+      <div class="stat"><div class="glow"></div><div class="n">24/7</div><div class="l">无人值守自动运行</div></div>
+    </div>
+    <div class="grid-3 reveal" style="margin-top:18px">
+      <div class="card">
+        <h3><span class="ico" style="color:var(--growth)">${ICON_reachx}</span>智连系 Growth</h3>
+        <p style="color:var(--muted);font-size:14px">打破<b style="color:var(--ink)">沟通与成交之界</b>：从真机自动获客到 AI 自动成交聊天，覆盖出海引流全漏斗。</p>
+        <div class="pills"><span class="pill on">智拓 ReachX</span><span class="pill on">智聊 ChatX</span></div>
+      </div>
+      <div class="card">
+        <h3><span class="ico" style="color:var(--studio)">${ICON_facex}</span>幻境系 Studio</h3>
+        <p style="color:var(--muted);font-size:14px">打破<b style="color:var(--ink)">容貌 / 声音 / 身份之界</b>：换脸、声音克隆、实时直播分身与数字人内容生产。</p>
+        <div class="pills"><span class="pill on">幻颜 FaceX</span><span class="pill on">幻声 VoiceX</span><span class="pill on">幻影 LiveX</span></div>
+      </div>
+      <div class="card">
+        <h3><span class="ico" style="color:var(--lingo)">${ICON_lingox}</span>通达系 Lingo</h3>
+        <p style="color:var(--muted);font-size:14px">打破<b style="color:var(--ink)">语言之界</b>：实时聊天双向翻译与会议/直播场景的同声传译。</p>
+        <div class="pills"><span class="pill on">通译 LingoX</span><span class="pill on">通传 VoxX</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- WEBSITE -->
+<section id="website">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-idx">02 / WEBSITE</div>
+      <h2>官网 · 统一销售门面</h2>
+      <p>无界科技官方营销站，承担品牌陈列、产品落地、线索收集、下单与运营后台职能。已上线运行于自建服务器，中英双语并配韩日 SEO 落地页。</p>
+    </div>
+
+    <div class="grid-2 reveal">
+      <div class="card">
+        <h3><span class="ico">${ICON_stack}</span>技术栈</h3>
+        <div class="chips" style="margin-top:14px">
+          <span class="chip">Next.js <span>14</span></span>
+          <span class="chip">React 18</span>
+          <span class="chip">TypeScript</span>
+          <span class="chip">Tailwind CSS</span>
+          <span class="chip">Framer Motion</span>
+          <span class="chip">自研 i18n</span>
+        </div>
+        <ul class="feat-list">
+          <li><b>App Router</b> 架构，20+ 页面路由，30+ 业务 API 接口</li>
+          <li><b>中英双语路由</b>（/ 与 /en）+ 韩/日 Voice SEO 落地页，hreflang 全覆盖</li>
+          <li>自研文案字典驱动（content.ts 约 1600 行），品牌数据单一数据源 brand.ts</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="ico">${ICON_pages}</span>已上线能力</h3>
+        <ul class="feat-list">
+          <li><b>首页</b> 25+ 内容区块：品牌家族、产品矩阵、AI 自动成交、实时换脸换声、定价、案例</li>
+          <li><b>产品落地页</b>：/voice 声音克隆、/face 换脸、/interpreting 实时翻译</li>
+          <li><b>交易闭环</b>：/order 下单、/download 客户端、/videos 效果演示、留资表单</li>
+          <li><b>Telegram Mini App</b>（/app）内嵌小程序 + 运营后台（/admin）</li>
+          <li><b>SEO 基建</b>：sitemap / robots / manifest / OG 图 / JSON-LD / IndexNow 推送</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card reveal" style="margin-top:18px">
+      <h3><span class="ico">${ICON_deploy}</span>部署与运维</h3>
+      <div class="grid-3" style="margin-top:8px;gap:14px">
+        <ul class="feat-list">
+          <li><b>自建 VPS</b>：PM2 + Nginx 反代，非 Vercel/Docker</li>
+          <li><b>原子部署</b> deploy.sh：备份 → rsync → build → 重启 → 探活 → 失败自动回滚</li>
+        </ul>
+        <ul class="feat-list">
+          <li><b>一键初始化</b> provision：Node 20 / PM2 / Nginx / Let's Encrypt 证书</li>
+          <li><b>健康看护</b> watchdog：连续失败自动重启 + Telegram 告警</li>
+        </ul>
+        <ul class="feat-list">
+          <li><b>安全响应头</b> + /admin 强制 noindex</li>
+          <li><b>私域抗封</b>：Cloudflare 接入、域名防封策略</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- PRODUCTS -->
+<section id="products">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-idx">03 / PRODUCTS</div>
+      <h2>产品矩阵 · 三系七品</h2>
+      <p>命名体系："字系"区分类别（智=获客成交 / 幻=生成分身 / 通=跨语），"双字 + …X"保持系列感。母品牌"无界"统一背书，各产品独立开发、分布式部署。成熟度进度条为工程完成度的相对评估。</p>
+    </div>
+
+    <!-- 智连系 -->
+    <div class="sysblock sys-growth reveal">
+      <div class="sys-title">
+        <span class="sys-badge">智连系 · Growth</span>
+        <h3>社交增长</h3>
+        <span class="break">打破 沟通与成交之界</span>
+      </div>
+      <div class="grid-2">
+        <div class="prod" data-maturity="88">
+          <div class="prod-top">
+            <div class="prod-ico">${ICON_reachx}</div>
+            <div>
+              <div class="prod-name">智拓 <span class="en">ReachX</span></div>
+              <div class="prod-role">真机 RPA 全自动获客引流</div>
+            </div>
+          </div>
+          <div class="prod-desc"><b>真机多号自动加友、打招呼、群成员提取</b>，7×24 全自动获客引流进私域。手机集群（Coordinator + 多 Worker），Scrcpy 低延迟群控，风控配额 + 人类行为模拟。</div>
+          <div class="pills">
+            <span class="pill on">Facebook</span><span class="pill on">Messenger</span><span class="pill on">TikTok</span>
+            <span class="pill">Instagram</span><span class="pill">X</span><span class="pill">LinkedIn</span><span class="pill">WhatsApp</span>
+          </div>
+          <div class="prod-meta">
+            <div class="maturity"><span>成熟度</span><span class="bar"><i></i></span><span>生产级</span></div>
+            <div class="backend">后端 <code>mobile-auto0423</code> · FastAPI + uiautomator2 · 43 路由 · 真机集群实战部署</div>
+          </div>
+        </div>
+        <div class="prod" data-maturity="90">
+          <div class="prod-top">
+            <div class="prod-ico">${ICON_chatx}</div>
+            <div>
+              <div class="prod-name">智聊 <span class="en">ChatX</span></div>
+              <div class="prod-role">多平台 AI 自动成交聊天坐席</div>
+            </div>
+          </div>
+          <div class="prod-desc"><b>聚合多平台统一收件箱 + AI 自动接客成交 + 拟人翻译 + 转人工</b>。以你的人设 7×24 答疑、跟进、促单，跨语言零障碍。四层触发/意图、知识库混合检索、情感陪伴、语音通话。</div>
+          <div class="pills">
+            <span class="pill on">Telegram</span><span class="pill on">LINE</span><span class="pill on">Messenger</span><span class="pill on">WhatsApp</span>
+            <span class="pill">Web Chat</span><span class="pill">Facebook</span><span class="pill">Instagram</span><span class="pill">Zalo</span>
+          </div>
+          <div class="prod-meta">
+            <div class="maturity"><span>成熟度</span><span class="bar"><i></i></span><span>生产级</span></div>
+            <div class="backend">后端 <code>telegram-mtproto-ai</code> · FastAPI + Pyrogram · 管理后台/坐席工作台/网页 Widget + Electron 桌面端</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 幻境系 -->
+    <div class="sysblock sys-studio reveal">
+      <div class="sys-title">
+        <span class="sys-badge">幻境系 · Studio</span>
+        <h3>数字分身</h3>
+        <span class="break">打破 容貌 / 声音 / 身份之界</span>
+      </div>
+      <div class="grid-3">
+        <div class="prod" data-maturity="80">
+          <div class="prod-top">
+            <div class="prod-ico">${ICON_facex}</div>
+            <div>
+              <div class="prod-name">幻颜 <span class="en">FaceX</span></div>
+              <div class="prod-role">AI 图片 / 视频换脸</div>
+            </div>
+          </div>
+          <div class="prod-desc">影视级 AI 换脸，图片/视频里随心变幻容貌。官网已上线 <b>/face</b> 落地页。</div>
+          <div class="pills"><span class="pill">图片</span><span class="pill">视频</span></div>
+          <div class="prod-meta">
+            <div class="maturity"><span>成熟度</span><span class="bar"><i></i></span><span>独立后端</span></div>
+            <div class="backend">真实后端在<b>异机 GPU 主机</b> · 本工作区为调用客户端</div>
+          </div>
+        </div>
+        <div class="prod" data-maturity="85">
+          <div class="prod-top">
+            <div class="prod-ico">${ICON_voicex}</div>
+            <div>
+              <div class="prod-name">幻声 <span class="en">VoiceX</span></div>
+              <div class="prod-role">零样本声音克隆 TTS</div>
+            </div>
+          </div>
+          <div class="prod-desc">惟妙惟肖的配音与语音合成，<b>情感与时长可控</b>，支持视频配音口型时长对齐。官网已上线 <b>/voice</b>。</div>
+          <div class="pills"><span class="pill on">音色克隆</span><span class="pill">情感控制</span><span class="pill">配音</span></div>
+          <div class="prod-meta">
+            <div class="maturity"><span>成熟度</span><span class="bar"><i></i></span><span>引擎就绪</span></div>
+            <div class="backend">引擎 <code>index-tts / IndexTTS2</code> · 零样本自回归 TTS</div>
+          </div>
+        </div>
+        <div class="prod" data-maturity="72">
+          <div class="prod-top">
+            <div class="prod-ico">${ICON_livex}</div>
+            <div>
+              <div class="prod-name">幻影 <span class="en">LiveX</span></div>
+              <div class="prod-role">实时直播换脸换声 + 数字人</div>
+            </div>
+          </div>
+          <div class="prod-desc">直播/连麦<b>实时换脸 + 变声</b>，低延迟百变分身，含活体数字人口播/直播。</div>
+          <div class="pills"><span class="pill">实时直播</span><span class="pill">数字人</span></div>
+          <div class="prod-meta">
+            <div class="maturity"><span>成熟度</span><span class="bar"><i></i></span><span>独立后端</span></div>
+            <div class="backend">真实后端在<b>异机</b> · 客户端引擎 AvatarHub 承载</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 通达系 -->
+    <div class="sysblock sys-lingo reveal">
+      <div class="sys-title">
+        <span class="sys-badge">通达系 · Lingo</span>
+        <h3>跨语沟通</h3>
+        <span class="break">打破 语言之界</span>
+      </div>
+      <div class="grid-2">
+        <div class="prod" data-maturity="82">
+          <div class="prod-top">
+            <div class="prod-ico">${ICON_lingox}</div>
+            <div>
+              <div class="prod-name">通译 <span class="en">LingoX</span></div>
+              <div class="prod-role">实时聊天双向翻译</div>
+            </div>
+          </div>
+          <div class="prod-desc"><b>语音 + 文字同声互译</b>，多平台实时双向翻译 SCRM，可从智聊坐席软件抽出的独立轻产品。官网已上线 <b>/interpreting</b>。</div>
+          <div class="pills"><span class="pill on">30+ 语种</span><span class="pill">语音</span><span class="pill">文字</span></div>
+          <div class="prod-meta">
+            <div class="maturity"><span>成熟度</span><span class="bar"><i></i></span><span>可交付</span></div>
+            <div class="backend">依托 <code>telegram-mtproto-ai</code> 翻译栈子集</div>
+          </div>
+        </div>
+        <div class="prod" data-maturity="68">
+          <div class="prod-top">
+            <div class="prod-ico">${ICON_voxx}</div>
+            <div>
+              <div class="prod-name">通传 <span class="en">VoxX</span></div>
+              <div class="prod-role">会议 / 直播同声传译</div>
+            </div>
+          </div>
+          <div class="prod-desc">会议、直播场景的<b>实时语音口译</b>（同声传译），低延迟语音到语音链路。</div>
+          <div class="pills"><span class="pill">会议</span><span class="pill">直播</span><span class="pill">语音同传</span></div>
+          <div class="prod-meta">
+            <div class="maturity"><span>成熟度</span><span class="bar"><i></i></span><span>独立后端</span></div>
+            <div class="backend">真实后端在<b>异机</b> · 新增产品线</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="note reveal">
+      <b>底座：无界底座 / BOUNDLESS Engine（客户端 AvatarHub）</b> —— 用户自备算力、引擎本地运行、数据不出网，托起幻境系与通达系的实时能力，不按字符/时长计费。
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ENGINEERING -->
+<section id="engineering">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-idx">04 / ENGINEERING</div>
+      <h2>工程与质量</h2>
+      <p>两大后端主项目均已进入生产级工程状态：完善的自动化测试、CI 双版本矩阵、可观测性与部署 runbook，并具备商业化授权能力。</p>
+    </div>
+    <div class="grid-2">
+      <div class="card reveal">
+        <h3><span class="ico">${ICON_chatx}</span>智聊后端 · telegram-mtproto-ai</h3>
+        <div class="metric" data-v="95"><div class="metric-top"><b>回归测试</b><span>约 6500 项 / ~50s</span></div><div class="mbar"><i></i></div></div>
+        <div class="metric" data-v="100"><div class="metric-top"><b>CI 矩阵</b><span>Python 3.12 / 3.13 双版本</span></div><div class="mbar"><i></i></div></div>
+        <div class="metric" data-v="90"><div class="metric-top"><b>可观测性</b><span>Prometheus + Grafana 仪表盘</span></div><div class="mbar"><i></i></div></div>
+        <div class="metric" data-v="85"><div class="metric-top"><b>高可用</b><span>Docker HA + Litestream</span></div><div class="mbar"><i></i></div></div>
+        <ul class="feat-list">
+          <li>三类前端：管理后台 · 坐席工作台 · 客户网页 Widget，另有 Electron 桌面端</li>
+          <li>Ed25519 离线授权与额度控制，多主机部署文档齐全</li>
+        </ul>
+      </div>
+      <div class="card reveal">
+        <h3><span class="ico">${ICON_reachx}</span>获客后端 · mobile-auto0423</h3>
+        <div class="metric" data-v="85"><div class="metric-top"><b>测试用例</b><span>约 145 个测试文件 + e2e 全链路</span></div><div class="mbar"><i></i></div></div>
+        <div class="metric" data-v="100"><div class="metric-top"><b>CI</b><span>tests + ci 双工作流</span></div><div class="mbar"><i></i></div></div>
+        <div class="metric" data-v="92"><div class="metric-top"><b>实战部署</b><span>多 Worker 真机集群（13 台设备记录）</span></div><div class="mbar"><i></i></div></div>
+        <div class="metric" data-v="88"><div class="metric-top"><b>运维手册</b><span>架构 + Runbook + 部署 SSOT</span></div><div class="mbar"><i></i></div></div>
+        <ul class="feat-list">
+          <li>Web 控制台 43 路由，实时流 &lt;20ms 群控，工作流引擎 21 action</li>
+          <li>风控合规：配额管控 · 代理健康 · 自适应节奏 · A/B 自动选优</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- PROGRESS -->
+<section id="progress">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-idx">05 / PROGRESS</div>
+      <h2>近期重点工作（2026-07）</h2>
+      <p>本阶段核心是"品牌统一 + 产品收敛 + 官网升级 + 资产沉淀 + 工程瘦身"，把散落的能力收编为一个可对外销售的母品牌矩阵。</p>
+    </div>
+    <div class="timeline reveal">
+      <div class="tl-item">
+        <h4>品牌升级：华灵 → 无界科技 BOUNDLESS <span class="when">已落地</span></h4>
+        <p>确立"打破五界"品牌叙事与"让沟通，无界"Slogan；旧品牌（华灵/华影/灵犀）作为 SEO 承接。</p>
+      </div>
+      <div class="tl-item">
+        <h4>三系产品命名体系落地 <span class="when">已落地</span></h4>
+        <p>体系化为智连 / 幻境 / 通达三系 + "…X"后缀；新增智拓 ReachX、通传 VoxX，补齐 7 产品；全站 11 处文件文案统一（UI + Bot 话术 + system prompt），避免口径分裂。</p>
+      </div>
+      <div class="tl-item">
+        <h4>官网信息架构方案 <span class="when">方案就绪</span></h4>
+        <p>从"单页锚点"升级为"多产品站"：类别导航 + 独立落地页 + 数据驱动陈列；规划新增 /translate、/avatar、/dubbing 落地页。</p>
+      </div>
+      <div class="tl-item">
+        <h4>品牌资产库建设 <span class="when">已落地</span></h4>
+        <p>统一 logo / favicon / 单色标、7 款产品专属图标、公司与产品锁定组合（lockups）、多平台社媒背景图与品牌字体。</p>
+      </div>
+      <div class="tl-item">
+        <h4>私域化与抗封接入 <span class="when">进行中</span></h4>
+        <p>域名防封策略、Cloudflare 抗封接入清单，保障获客与承接链路稳定。</p>
+      </div>
+      <div class="tl-item">
+        <h4>工程瘦身与清理 <span class="when">已落地</span></h4>
+        <p>两大主项目从 17+ GB 隔离瘦身至可维护体积（智聊 15.68GB→470MB，获客 1.58GB→349MB），运行产物入隔离区、可恢复。</p>
+      </div>
+      <div class="tl-item">
+        <h4>市场与竞品分析 <span class="when">已产出</span></h4>
+        <p>欧美市场获客与 AI 转化系统改造评估、竞品对标与商业变现三视角分析，指导产品拆分与落地方向。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ROADMAP -->
+<section id="roadmap">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-idx">06 / NEXT</div>
+      <h2>下一步规划</h2>
+      <p>围绕"把方案落成可售的多产品站 + 补齐产品线完成度"推进。</p>
+    </div>
+    <div class="road reveal">
+      <div class="card">
+        <h4>官网 · 多产品站落地</h4>
+        <ul class="feat-list">
+          <li>Navbar 改为按系下拉导航</li>
+          <li>新增 /translate · /avatar · /dubbing 落地页</li>
+          <li>brand.ts 升级两级（类别 → 产品）数据驱动</li>
+          <li>补齐 reachx / voxx 专属图标上线</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>产品 · 完成度补齐</h4>
+        <ul class="feat-list">
+          <li>通传 VoxX / 幻影 LiveX 后端联调打通</li>
+          <li>中央客户画像 L2（PG）能力落地</li>
+          <li>TikTok 获客链路完善</li>
+          <li>统一收件箱 × 获客漏斗数据打通</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>运营 · 可售与增长</h4>
+        <ul class="feat-list">
+          <li>定价与支付方式（弃 USDT 单一口径）评审</li>
+          <li>KPI 埋点与增长看板</li>
+          <li>私域抗封策略持续加固</li>
+          <li>副本合并主干，避免分叉</li>
+        </ul>
+      </div>
+    </div>
+    <div class="note reveal">
+      <b>数据口径：</b>本报告的产品能力与工程指标基于代码结构与项目文档梳理；异机产品（幻颜 / 幻影 / 通传）按官网描述与已知信息呈现，未深入其独立主机实现；测试与体量数字来源于各项目 README 与实施记录。成熟度进度条为相对完成度评估，非精确统计。
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="slogan">让沟通，<span class="grad">无界</span> · Communication, Boundless.</div>
+    <div>无界科技 BOUNDLESS · 产品功能与工作汇报 · 内部资料（noindex）· 2026-07</div>
+  </div>
+</footer>
+
+<script>
+  // ---- 图标注入（内联 SVG，自包含）----
+  var S = 'stroke="currentColor" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"';
+  var ICONS = {
+    reachx:'<svg viewBox="0 0 24 24" '+S+'><circle cx="12" cy="12" r="2.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><path d="M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" opacity=".55"/><circle cx="12" cy="12" r="9" opacity=".35"/></svg>',
+    chatx:'<svg viewBox="0 0 24 24" '+S+'><path d="M4 5.5h13a2 2 0 0 1 2 2V14a2 2 0 0 1-2 2H9l-4 3.5V16H4a1 1 0 0 1-1-1V6.5A1 1 0 0 1 4 5.5Z"/><path d="M7.5 9.5h8M7.5 12.5h5"/></svg>',
+    facex:'<svg viewBox="0 0 24 24" '+S+'><path d="M12 3a7 7 0 0 1 7 7c0 4-3 8-7 10-4-2-7-6-7-10a7 7 0 0 1 7-7Z"/><circle cx="9.3" cy="10" r="1"/><circle cx="14.7" cy="10" r="1"/><path d="M9 14c1 1.4 4 1.4 5 0"/><path d="M12 3v17" opacity=".4" stroke-dasharray="2 2"/></svg>',
+    voicex:'<svg viewBox="0 0 24 24" '+S+'><path d="M3 12h2M7 8v8M11 4v16M15 7v10M19 10v4M21 12h0"/></svg>',
+    livex:'<svg viewBox="0 0 24 24" '+S+'><circle cx="12" cy="12" r="8.5"/><path d="M10 9l5 3-5 3z" fill="currentColor" stroke="none"/><path d="M4 12a8 8 0 0 1 .3-2M20 12a8 8 0 0 1-.3 2" opacity=".5"/></svg>',
+    lingox:'<svg viewBox="0 0 24 24" '+S+'><path d="M4 6h7M7.5 6c0 4-1.5 7-4 8.5M6 10c1 2 3 3.5 5 4"/><path d="M13 19l3.5-8 3.5 8M14.4 16h4.2"/></svg>',
+    voxx:'<svg viewBox="0 0 24 24" '+S+'><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v3M9 20h6"/></svg>',
+    stack:'<svg viewBox="0 0 24 24" '+S+'><path d="M12 3l8 4.5-8 4.5-8-4.5L12 3Z"/><path d="M4 12l8 4.5 8-4.5M4 16.5 12 21l8-4.5"/></svg>',
+    pages:'<svg viewBox="0 0 24 24" '+S+'><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>',
+    deploy:'<svg viewBox="0 0 24 24" '+S+'><path d="M5 15a4 4 0 0 1 .5-8 5.5 5.5 0 0 1 10.6-1.3A4 4 0 0 1 17 15"/><path d="M12 12v8M9 15l3-3 3 3"/></svg>'
+  };
+  document.querySelectorAll('.ico, .prod-ico').forEach(function(el){
+    var m = el.textContent.trim().match(/^\$\{ICON_([a-z]+)\}$/);
+    if(m && ICONS[m[1]]) el.innerHTML = ICONS[m[1]];
+  });
+
+  // ---- 滚动进度条 ----
+  var prog = document.getElementById('scrollbar');
+  function onScroll(){
+    var h = document.documentElement;
+    var pct = (h.scrollTop) / (h.scrollHeight - h.clientHeight) * 100;
+    prog.style.width = pct + '%';
+  }
+  window.addEventListener('scroll', onScroll, {passive:true});
+
+  // ---- reveal + 进度条动画 ----
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting){
+        e.target.classList.add('in');
+        io.unobserve(e.target);
+      }
+    });
+  }, {threshold:.15});
+  document.querySelectorAll('.reveal').forEach(function(el){ io.observe(el); });
+
+  // ---- 成熟度 & metric 进度条填充 ----
+  var barIO = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting){
+        var el = e.target;
+        if(el.classList.contains('prod')){
+          var v = el.getAttribute('data-maturity');
+          var i = el.querySelector('.bar > i'); if(i) i.style.width = v + '%';
+        }
+        if(el.classList.contains('metric')){
+          var v2 = el.getAttribute('data-v');
+          var i2 = el.querySelector('.mbar > i'); if(i2) i2.style.width = v2 + '%';
+        }
+        barIO.unobserve(el);
+      }
+    });
+  }, {threshold:.4});
+  document.querySelectorAll('.prod, .metric').forEach(function(el){ barIO.observe(el); });
+
+  // ---- 导航高亮 ----
+  var secs = document.querySelectorAll('section[id]');
+  var navA = document.querySelectorAll('.nav-links a');
+  var navIO = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting){
+        var id = e.target.getAttribute('id');
+        navA.forEach(function(a){
+          a.classList.toggle('active', a.getAttribute('href') === '#'+id);
+        });
+      }
+    });
+  }, {rootMargin:'-45% 0px -50% 0px'});
+  secs.forEach(function(s){ navIO.observe(s); });
+
+  // ---- 移动端菜单 ----
+  var tgl = document.getElementById('navToggle');
+  var links = document.getElementById('navLinks');
+  tgl.addEventListener('click', function(){ links.classList.toggle('open'); });
+  navA.forEach(function(a){ a.addEventListener('click', function(){ links.classList.remove('open'); }); });
+
+  onScroll();
+</script>
+</body>
+</html>

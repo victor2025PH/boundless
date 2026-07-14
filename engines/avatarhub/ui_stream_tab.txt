@@ -1,0 +1,51 @@
+g-green-700 hover:bg-green-600 text-white text-sm font-semibold py-2 rounded-lg transition">
+      ✅ 创建角色
+    </button>
+    <div x-show="createMsg" x-text="createMsg"
+         :class="createOk?'text-hub-green bg-green-900/20':'text-hub-red bg-red-900/20'"
+         class="text-xs text-center py-1.5 rounded-lg mt-2"></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     Tab 2: 开播
+═══════════════════════════════════════════ -->
+<div x-show="tab==='stream'" class="fade space-y-3">
+  <div class="grid sm:grid-cols-2 gap-3">
+
+    <!-- 一键开播 -->
+    <div class="bg-hub-card border border-hub-border rounded-xl p-4">
+      <h2 class="text-hub-blue font-bold text-sm mb-2">📡 一键开播</h2>
+      <div class="text-xs text-hub-muted mb-3 space-y-0.5">
+        <div>📹 摄像头 → FaceSwap → OBS Virtual Cam</div>
+        <div>🎙️ 麦克风 → RVC 变声 → VB-Cable</div>
+      </div>
+      <div class="flex gap-2">
+        <button @click="oneClickStart()" :disabled="streaming"
+                class="flex-1 bg-green-700 hover:bg-green-600 disabled:bg-gray-700 text-white font-bold py-2.5 rounded-xl text-sm transition">
+          <span x-show="!streaming">🚀 一键开播</span>
+          <span x-show="streaming" class="pulse">⏳ 启动中...</span>
+        </button>
+        <button @click="oneClickStop()"
+                class="px-4 bg-hub-red/70 hover:bg-hub-red text-white font-bold py-2.5 rounded-xl text-sm transition">⏹</button>
+      </div>
+      <div x-show="streamSteps.length" class="mt-2.5 space-y-1">
+        <template x-for="s in streamSteps" :key="s.step">
+          <div class="flex items-start gap-1.5 text-xs">
+            <span :class="s.ok?'text-hub-green':'text-hub-red'" x-text="s.ok?'✅':'❌'"></span>
+            <span x-text="stepLabels[s.step]||s.step"></span>
+            <span class="text-hub-muted flex-1" x-text="typeof s.detail==='string'?s.detail:''"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- MJPEG 预览 + 摄像头选择 -->
+    <div class="bg-hub-card border border-hub-border rounded-xl p-4">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="text-hub-blue font-bold text-sm">🖥️ 实时预览</h2>
+        <div class="flex items-center gap-2">
+          <!-- FPS 徽章 -->
+          <span class="text-[10px] text-hub-muted">frame-v2</span>
+          <span x-show="perf.fps>0 && perf.streaming"
+                class="text-[10px] bg-green-900/40 tex

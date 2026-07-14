@@ -1,0 +1,470 @@
+# Facebook 目标画像定义
+# ---------------------------------------------------------------------
+# 本文件热加载（mtime-based），改完保存即生效，无需重启服务。
+# 由 src/host/fb_target_personas.py 读取。
+#
+# 每个 persona 代表一个"要找的人群"，ProfileClassifier 会按 persona
+# 做 L1(规则) + L2(VLM) 分级识别。
+#
+# 当前启用：jp_female_midlife（日本 37-60 岁女性）
+# ---------------------------------------------------------------------
+
+version: 1
+default_persona: jp_female_midlife
+
+# 全局识别配额（每台设备每天上限，防风控）
+# L1 = 头像+昵称快速筛，L2 = 全页面深度判
+quotas:
+  l1_per_device_per_day: 1000    # 轻筛
+  l2_per_device_per_day: 100     # 深判（点开 profile）
+  l2_per_device_per_hour: 30     # ★ Sprint C-1 新增：防止 100 候选一次烧满 GPU 2 小时
+  l2_min_interval_sec: 20        # L2 两次之间最小间隔（模拟真人）
+  l2_jitter_sec: [6, 14]         # 额外随机抖动
+
+# 去重窗口：同一 target_key 在窗口内不重复判定
+dedup_window_hours: 168          # 7 天
+
+# VLM 配置
+# ---------------------------------------------------------------------------
+# 当前默认识别：Ollama + qwen2.5vl:7b（省显存、速度快）。
+# 提高 L2 精准度：① 设 model_l2 为更大视觉模型；② 或环境变量 FB_VLM_MODEL_L2
+#   例：model_l2: qwen2.5vl:32b  （需 ollama pull，显存约 24GB 级）
+#   OCR 可与 L2 分工：model 保持 7b，model_l2 用 32b；model_ocr 不设则同 model。
+# ---------------------------------------------------------------------------
+vlm:
+  provider: ollama
+  model: qwen2.5vl:7b            # 默认 / OCR / warmup 主模型
+  # model_l2: qwen2.5vl:32b      # 取消注释启用高端 L2（未 pull 时请保持注释）
+  # model_ocr: qwen2.5vl:7b      # 可选：专用于 fb_profile_ocr；不设则沿用 model
+  endpoint: http://127.0.0.1:11434
+  # Sprint E: 冷启动 + 3 张图多模态推理实测需要 15-25s，留一倍余量。
+  # warmup 机制能让大多数 classify 在热路径下 3-8s 完成，此 timeout 只在
+  # 未 warmup 就直跑 VLM 的边缘场景生效。
+  timeout_sec: 60
+  # timeout_sec_l2: 120         # 大模型 L2 建议更长超时（与 model_l2 同时启用）
+  # timeout_sec_ocr: 45         # 可选：仅 OCR 场景超时
+  max_retries: 2
+  temperature: 0.2               # 判定类任务要稳，低温
+  # 每次 L2 最多喂几张图（主页头像/封面/下滑截图）
+  max_images_per_call: 3
+  # 输入图压缩：长边不超过该像素，省显存省推理时间
+  max_image_side_px: 1280
+  jpeg_quality: 85
+  # ★ 关键：context 长度。qwen2.5vl 默认 128K 会让 12GB 卡 OOM。
+  #   画像识别任务 4096 足够（1 张 1280px 图 ≈ 1200 tokens + prompt 约 500 + 输出 300）
+  num_ctx: 4096
+  # 模型保持加载的时间（避免每次 L2 都冷启动 60s）
+  keep_alive: "30m"
+  # 月度本地成本上限（Ollama 本地=0；此字段仅作为"云 VLM 预算"占位）
+  monthly_budget_usd: 50.0
+
+# 风控：当同一设备出现以下情况时，暂停 L2（只保留 L1）
+risk_guard:
+  pause_l2_after_risk_hours: 12      # 硬暂停：近 12h 有风控，L2 彻底暂停
+  max_profile_visits_per_hour: 30    # 点开主页频率上限
+  # ★ Sprint D-1 新增：软降档（风控二级阶梯）
+  soft_throttle_window_hours: 24     # 近 N 小时有风控就进入"软降档"
+  soft_throttle_cap_ratio: 0.5       # L2 日/小时 cap × 0.5
+  soft_throttle_interval_factor: 2.0 # inter_target 间隔 × 2（更慢节奏）
+
+# ─────────────────────────────────────────────────────────────────
+# 画像：日本 37-60 岁女性
+# ─────────────────────────────────────────────────────────────────
+personas:
+  jp_female_midlife:
+    name: "日本 37-60 岁女性"
+    active: true
+
+    # ── 前端展示层（P2-UI Sprint 新增）──────────────────────────
+    # display_flag/display_label/short_label 供前端下拉、预设卡片、引流账号
+    # 弹窗文案直接使用，避免硬编码中文字符串散在多处。
+    display_flag: "🇯🇵"
+    display_label: "🇯🇵 日本 · 女性 · 37-60"
+    short_label: "日本中年女性"
+    country_code: JP
+    country_zh: "日本"
+    language: ja
+
+    # 引流账号渠道优先级（覆盖 routers/facebook.py 的硬编码 ["whatsapp", ...]）
+    # 日本中年女性场景 LINE > Instagram > WhatsApp ≫ Telegram
+    # 前端 /facebook/referral-config 会按此顺序渲染输入框与表格列。
+    referral_priority:
+      - line
+      - instagram
+      - whatsapp
+      - telegram
+
+    # 兴趣主题（供 5 套预设卡片 & feed_by_interest 任务引用）
+    # 37-60 女性在日本 FB 上真实活跃的话题，已去掉 20 代风（动漫/推し活）。
+    interest_topics:
+      - 子育て
+      - 料理
+      - 美容・健康
+      - 節約・家計
+      - 韓ドラ
+      - 旅行
+      - 手芸
+      - ペット
+      - ガーデニング
+      - 更年期
+
+    # 种子群搜索关键词（供 facebook_browse_groups 默认填充）
+    seed_group_keywords:
+      - "ママ友"
+      - "アラフィフ 趣味"
+      - "アラフォー 女子会"
+      - "韓ドラ 好き"
+      - "節約生活"
+      - "手芸部"
+
+    # 硬约束（用于最终判定 match=True/False）
+    age_min: 37
+    age_max: 60
+    gender: female
+    locale: ja-JP
+
+
+    # L1 规则评分（0-100），>= pass_threshold 进入 L2
+    # 每条规则命中加分，多条相加，上限 100
+    l1:
+      pass_threshold: 20   # W1 优化：降低从30→20，提升召回率。单个名字匹配即进L2
+      rules:
+        # 日文姓名字典命中 +30
+        - kind: name_contains_any
+          value: [田, 山, 中, 村, 木, 井, 本, 原, 川, 野, 藤, 川, 佐, 鈴, 高, 松, 桥, 橋,
+                  子, 香, 美, 恵, 惠, 奈, 花, 理, 裕, 麻, 智, 由,
+                  ゆ, み, あ, か, さ, ま, り, え,
+                  ちゃん, さん]
+          weight: 30
+        # 昵称是纯日文假名/汉字（没有拉丁字母）
+        - kind: name_script_japanese
+          weight: 25
+        # Bio 含日文
+        - kind: bio_has_japanese
+          weight: 20
+        # 用户名后缀看起来像日本 id（全角或 .jp / ._jp）
+        - kind: username_japanese_like
+          weight: 15
+        # 性别暗示词（女士/太太/妈妈系昵称）
+        - kind: name_contains_any
+          value: [ママ, 主婦, 奥様, 先生]
+          weight: 10
+        # 罗马字日文女名（应对"Miyuki Tanaka"这类国际化写法）
+        - kind: name_contains_any_ci
+          value:
+            # 女性常见名（W1扩充至50+）
+            - Miyuki
+            - Sakura
+            - Yuki
+            - Mika
+            - Ayumi
+            - Hanako
+            - Tomoko
+            - Kazuko
+            - Mieko
+            - Yumiko
+            - Keiko
+            - Yoshiko
+            - Aiko
+            - Hiroko
+            - Yuko
+            - Michiko
+            - Emiko
+            - Satsuki
+            - Rieko
+            - Masako
+            - Chiyo
+            - Nobuko
+            - Fumiko
+            - Chieko
+            - Teruko
+            - Sumiko
+            - Setsuko
+            - Mikiko
+            - Noriko
+            - Yoko
+            - Kyoko
+            - Etsuko
+            - Sachiko
+            - Hisako
+            - Reiko
+            - Naoko
+            - Haruko
+            - Mineko
+            - Kimiko
+            - Yumiko
+            - Akiko
+            - Yukiko
+            - Mariko
+            - Junko
+            - Kanako
+            - Miho
+            - Natsuko
+            - Ruriko
+            - Tomoe
+            - Hana
+            - Nana
+            - Risa
+            - Yumi
+            - Ryoko
+            - Miho
+            - Yuka
+            - Rika
+            - Nana
+            - Moe
+            - Yui
+            - Saki
+            - Ai
+          weight: 20
+        # 罗马字日文姓氏（女性+男性通用，女性判定再靠 VLM 头像）
+        - kind: name_contains_any_ci
+          value:
+            - Tanaka
+            - Yamada
+            - Sato
+            - Suzuki
+            - Takahashi
+            - Watanabe
+            - Ito
+            - Nakamura
+            - Kobayashi
+            - Yoshida
+            - Yamamoto
+            - Matsumoto
+            - Inoue
+            - Kimura
+            - Hayashi
+            - Shimizu
+            - Saito
+            - Ishikawa
+            - Mori
+            - Abe
+            - Ikeda
+            - Hashimoto
+            - Yamazaki
+            - Ogawa
+            - Goto
+            - Okada
+            - Nishimura
+            - Fujita
+            - Fujii
+            - Kato
+            - Yamashita
+            - Taniguchi
+            - Ueda
+            - Miura
+            - Nishida
+            - Okamoto
+            - Murata
+            - Aoki
+            - Ono
+            - Goto
+          weight: 15
+
+        # ── 负向规则（惩罚非目标：男性名/非日文名）──────────────
+        # 罗马字日文男性名（命中即扣分，防 Takuma/Hideo 等漏网）
+        - kind: name_contains_any_ci_negative
+          value:
+            - Takuma
+            - Hideo
+            - Takeshi
+            - Hiroshi
+            - Masashi
+            - Daisuke
+            - Kenji
+            - Yusuke
+            - Tatsuya
+            - Kenta
+            - Shota
+            - Ryota
+            - Kazuki
+            - Takuya
+            - Naoki
+            - Akira
+            - Makoto
+            - Satoshi
+            - Koji
+            - Taro
+            - Jiro
+            - Ichiro
+            - Kenichi
+            - Yoshio
+            - Tadashi
+            - Tsutomu
+            - Masato
+            - Takashi
+            - Hideki
+            - Toshio
+            - Kazuo
+            - Minoru
+            - Osamu
+            - Shinji
+            - Yuji
+            - Koichi
+            - Shuichi
+            - Noboru
+          weight: -50
+        # 日文汉字中常见男性名字用字（慶/雄/夫/太/郎/男/彦/正/勇/武/豊/博/哲/浩/剛）
+        - kind: name_contains_any_negative
+          value: [雄, 夫, 太郎, 郎, 朗, 男, 彦, 勇, 武, 豊, 博, 哲, 浩, 剛, 翔, 亮, 健, 隆, 徹, 進, 修, 太, 介, 助, 司, 志, 蔵]
+          weight: -40
+        # 明显非日文的罗马字名（南亚/中东/英文男性常用名）
+        - kind: name_contains_any_ci_negative
+          value:
+            - Khan
+            - Singh
+            - Mohammad
+            - Ahmed
+            - Ali
+            - Kumar
+            - Ram
+            - Abdul
+            - Hassan
+            - Muhammad
+            - John
+            - Mike
+            - David
+            - James
+            - Robert
+            - William
+            - Richard
+            - George
+            - Kevin
+            - Brian
+            - Mark
+            - Paul
+            - Peter
+            - Steve
+            - Chris
+            - Tom
+            - Bob
+            - Carlos
+            - Jose
+            - Pedro
+            - Ivan
+            - Vladimir
+          weight: -40
+        # 纯拉丁字母且无任何日文字符 → 大概率非日本人（扣分但不致命）
+        - kind: name_no_japanese_script
+          weight: -15
+
+    # L2 VLM prompt：让模型以 JSON 返回
+    # 占位符 {persona_name} 会自动替换
+    # Phase 10.1 (2026-04-24) 严化: 加 has_face/is_profile_page 字段, 防 launcher
+    # 等非 profile 截图被误判 PASS (2026-04-24 partial smoke 实测 launcher 95.5).
+    vlm_prompt: |
+      あなたはソーシャルメディアのプロフィール分析アシスタントです。
+      画像に写っている**プロフィール写真**を分析し、「{persona_name}」に
+      該当するかを判定してください。
+      必ず以下の JSON のみを返してください（他の文章不要）:
+
+      {
+        "has_face": true|false,
+        "is_profile_page": true|false,
+        "age_band": "teen|20s|30s|40s|50s|60s|70s+|unknown",
+        "gender": "female|male|nonbinary|unknown",
+        "is_japanese": true|false,
+        "is_japanese_confidence": 0.0-1.0,
+        "topics": ["料理", "旅行", "家族", "ファッション", "健康", "ペット", "仕事", "その他"],
+        "overall_confidence": 0.0-1.0,
+        "reasons": ["短い根拠を2-3個、日本語で"]
+      }
+
+      **重要な事前判定 (これに失敗したら他は unknown を返す)**:
+      - **has_face**: 画像に明確な人物の顔が写っていれば true。アプリホーム画面・
+        設定画面・ランチャー・空白画面・風景・物体だけ → false。
+      - **is_profile_page**: Facebook/Instagram などの**プロフィールページ典型 UI**
+        (プロフィール写真+自己紹介+投稿一覧 など) が写っていれば true。
+        他のアプリ画面 / ホーム / 設定 → false。
+
+      **has_face=false または is_profile_page=false の場合**:
+        age_band, gender, is_japanese は必ず "unknown" / false / 0.0 を返す。
+        overall_confidence は 0.0 とする。推測しない。
+
+      判定基準 (has_face=true かつ is_profile_page=true の場合のみ):
+      - 37-60歳で女性なら age_band は 30s/40s/50s のいずれか + gender=female
+      - 日本語の投稿・画像・文脈があれば is_japanese=true
+        (注意: ROM の中文/英文 UI 文字列だけでは is_japanese=true にしない)
+      - 確信が持てない場合は unknown を返す (推測しない)
+
+    # 最终命中条件（VLM 返回后的 hard check）
+    # Phase 10.1: require_has_face / require_is_profile_page 早期门禁 (新加)
+    # 2026-05-03 v22 真机第 26 轮反馈调宽: 13 候选全 score=0 reject, 因 FB
+    # 用户头像普遍是宠物/风景/模糊照 → has_face=false → 直接 REJECT, 即使
+    # 名字明显是日本女性. 改为允许 has_face=false (不直接拒绝, 由名字 +
+    # bio 判定); 接受 unknown gender / age_band (视觉不准时不强求); 置信度
+    # 阈值 0.55→0.40 让"中等可能"候选也通过.
+    match_criteria:
+      require_has_face: false                   # v22 放宽: 宠物头像不直接 REJECT
+      require_is_profile_page: false            # v23 放宽: profile dump 抢失败时也放行
+      age_bands_allowed: [30s, 40s, 50s, 60s, unknown]
+      genders_allowed: [female, unknown]
+      require_is_japanese: false                # v23 放宽: 名字判定为主, 不强求 LLM 标注
+      min_overall_confidence: 0.0               # v23 临时: 让 LLM 不返回 0 分都通过
+      min_japanese_confidence: 0.0              # v23 临时
+
+  # ─────────────────────────────────────────────────────────────────
+  # 画像：中文女性（30-55岁，东南亚/台港澳华人圈）
+  # ─────────────────────────────────────────────────────────────────
+  zh_female_midlife:
+    name: "中文圈 30-55 女性"
+    active: true
+    display_flag: "🇨🇳"
+    display_label: "🇨🇳 中文圈 · 女性 · 30-55"
+    short_label: "中文女性"
+    country_code: CN
+    country_zh: "中文圈"
+    language: zh
+    referral_priority:
+      - whatsapp
+      - telegram
+      - instagram
+      - line
+    interest_topics:
+      - 育儿
+      - 美食
+      - 护肤
+      - 理财
+      - 旅行
+      - 健身
+      - 穿搭
+    seed_group_keywords:
+      - "宝妈交流"
+      - "女性创业"
+      - "美容护肤"
+      - "海外华人"
+      - "理财投资"
+    age_min: 30
+    age_max: 55
+    gender: female
+    locale: zh-CN
+
+  # ─────────────────────────────────────────────────────────────────
+  # 画像：全球通用（不限性别年龄，用于测试或泛拓展）
+  # ─────────────────────────────────────────────────────────────────
+  global_generic:
+    name: "全球通用"
+    active: true
+    display_flag: "🌐"
+    display_label: "🌐 全球 · 通用拓展"
+    short_label: "全球通用"
+    country_code: ""
+    country_zh: "全球"
+    language: en
+    referral_priority:
+      - whatsapp
+      - telegram
+      - instagram
+      - line
+    interest_topics:
+      - business
+      - wellness
+      - lifestyle
+    seed_group_keywords:
+      - "women entrepreneurs"
+      - "wellness community"
+      - "lifestyle tips"
+    age_min: 25
+    age_max: 65
+    gender: ""
+    locale: en

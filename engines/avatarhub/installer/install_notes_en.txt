@@ -1,0 +1,30 @@
+BOUNDLESS Studio - Setup Notes
+
+BOUNDLESS Technology - Communication, Boundless.
+
+You are installing the "Studio" series digital-human live suite:
+  - FaceX  : AI face swap for images / video / live streaming
+  - VoiceX : zero-shot voice cloning and real-time voice changing
+  - LiveX  : live digital avatar with real-time face & voice swap
+
+This installer is small (tens of MB) and only installs the console.
+All AI runtime components are downloaded automatically on first launch.
+
+First run after installation:
+  1. Double-click "BOUNDLESS Studio" on your desktop.
+  2. The app detects your GPU and recommends the right edition;
+     click "Install" to continue.
+  3. Downloads show progress, speed and ETA (about 11-35 GB depending
+     on edition, one-time only).
+  4. The console opens automatically when ready.
+
+Requirements:
+  - NVIDIA GPU (6 GB VRAM or more; more VRAM unlocks more features,
+    a feature list for your machine is shown during setup).
+  - Stable network connection and enough free disk space.
+
+Website & support:
+  - Website: https://ai26.sbs
+  - Telegram channel: https://t.me/hykj7
+  - Telegram support group: https://t.me/hykjz
+  Official support avatars carry a "Support" badge - beware of fakes.

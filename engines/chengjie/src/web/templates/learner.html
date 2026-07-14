@@ -1,0 +1,392 @@
+{% extends "base.html" %}
+{% block title %}{{ (i18n or {}).get('lr_s001', "智能学习 ·") }} {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ (i18n or {}).get('lr_s002', "智能学习") }}</h1>
+    <p class="page-desc">{{ (i18n or {}).get('lr_s003', "自动收集未命中问题") }} → AI {{ (i18n or {}).get('lr_s004', "生成知识草稿") }} → {{ (i18n or {}).get('lr_s005', "人工审核入库") }}</p>
+  </div>
+  <div style="display:flex;gap:.5rem">
+    <button class="btn btn-outline" onclick="loadDrafts()" data-help="btn_refresh">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+      {{ (i18n or {}).get('dash.refresh', "刷新") }}
+    </button>
+    <button class="btn btn-primary pro-only" onclick="runLearning()" id="btn-run">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg>
+      {{ (i18n or {}).get('lr_s006', "立即学习") }}
+    </button>
+  </div>
+</div>
+
+{% if ui_mode == 'simple' %}
+<div class="simple-guide" style="background:linear-gradient(135deg,rgba(139,92,246,.06),rgba(91,124,246,.06));border:1px solid rgba(139,92,246,.15);border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem">
+  <span style="font-size:1.1rem;flex-shrink:0;margin-top:.1rem">🧠</span>
+  <div>
+    <strong style="color:var(--t);font-size:.85rem">{{ (i18n or {}).get('cases_guide_title', "操作说明") }}</strong>
+    <div style="margin-top:.25rem;line-height:1.6">AI {{ (i18n or {}).get('lr_s007', "自动分析用户未命中的问题并生成知识草稿。请审核每条草稿：点击") }} <strong style="color:var(--green)">{{ (i18n or {}).get('lr_s008', "通过入库") }}</strong> {{ (i18n or {}).get('lr_s009', "将其加入知识库，或点击") }} <strong style="color:var(--red)">{{ (i18n or {}).get('rpa_js_act_reject', "拒绝") }}</strong> {{ (i18n or {}).get('lr_s010', "丢弃。也可先") }} <strong>{{ (i18n or {}).get('edit', "编辑") }}</strong> {{ (i18n or {}).get('lr_s011', "再通过。") }}</div>
+    <button onclick="this.closest('.simple-guide').style.display='none';localStorage.setItem('_guide_learner','1')" style="background:none;border:none;color:var(--p);cursor:pointer;font-size:.78rem;font-weight:600;padding:0;margin-top:.3rem">{{ (i18n or {}).get('cases_guide_dismiss', "知道了，不再显示") }}</button>
+  </div>
+</div>
+<script>if(localStorage.getItem('_guide_learner')==='1')document.querySelector('.simple-guide').style.display='none';</script>
+{% endif %}
+<!-- Stats Cards -->
+<div class="row g-3 mb-4" id="stats-row">
+  <div class="col-4">
+    <div class="card p-3 text-center">
+      <div class="stat-value" id="stat-pending" style="font-size:2rem;font-weight:800;color:var(--amber)">-</div>
+      <div class="text-muted" style="font-size:.82rem">{{ (i18n or {}).get('kb_s080', "待审核") }}</div>
+    </div>
+  </div>
+  <div class="col-4 pro-only">
+    <div class="card p-3 text-center">
+      <div class="stat-value" id="stat-approved" style="font-size:2rem;font-weight:800;color:var(--green)">-</div>
+      <div class="text-muted" style="font-size:.82rem">{{ (i18n or {}).get('msg_js_1928', "已通过") }}</div>
+    </div>
+  </div>
+  <div class="col-4 pro-only">
+    <div class="card p-3 text-center">
+      <div class="stat-value" id="stat-rejected" style="font-size:2rem;font-weight:800;color:var(--red)">-</div>
+      <div class="text-muted" style="font-size:.82rem">{{ (i18n or {}).get('draft.tab.rejected', "已拒绝") }}</div>
+    </div>
+  </div>
+  <div class="col-4 pro-only">
+    <div class="card p-3 text-center">
+      <div class="stat-value" id="stat-dup" style="font-size:2rem;font-weight:800;color:var(--amber)">-</div>
+      <div class="text-muted" style="font-size:.82rem">{{ (i18n or {}).get('lr_s012', "疑似重复") }}</div>
+    </div>
+  </div>
+</div>
+
+<!-- Filter Tabs -->
+<div class="card mb-4">
+  <div style="display:flex;align-items:center;gap:.5rem;padding:.75rem 1rem;border-bottom:1px solid var(--bd)">
+    <button class="btn btn-sm active" onclick="filterDrafts('pending',this)" data-filter="pending">{{ (i18n or {}).get('kb_s080', "待审核") }}</button>
+    <button class="btn btn-sm pro-only" onclick="filterDrafts('approved',this)" data-filter="approved">{{ (i18n or {}).get('msg_js_1928', "已通过") }}</button>
+    <button class="btn btn-sm pro-only" onclick="filterDrafts('rejected',this)" data-filter="rejected">{{ (i18n or {}).get('draft.tab.rejected', "已拒绝") }}</button>
+    <button class="btn btn-sm pro-only" onclick="filterDrafts('all',this)" data-filter="all">{{ (i18n or {}).get('rpa_all', "全部") }}</button>
+    <select id="sort-select" onchange="loadDrafts()" style="font-size:.76rem;padding:.2rem .4rem;border:1px solid var(--bd);border-radius:5px;background:var(--input);color:var(--t2);margin-left:.5rem">
+      <option value="priority">{{ (i18n or {}).get('lr_s013', "排序") }}: {{ (i18n or {}).get('lr_s014', "综合优先级") }}</option>
+      <option value="confidence">{{ (i18n or {}).get('lr_s013', "排序") }}: AI{{ (i18n or {}).get('lr_s015', "自信度") }}</option>
+      <option value="hit_count">{{ (i18n or {}).get('lr_s013', "排序") }}: {{ (i18n or {}).get('lr_s016', "命中次数") }}</option>
+      <option value="time">{{ (i18n or {}).get('lr_s013', "排序") }}: {{ (i18n or {}).get('lr_s017', "最新时间") }}</option>
+    </select>
+    <div style="flex:1"></div>
+    <button class="btn btn-sm btn-green" onclick="approveAll()" id="btn-approve-all" style="display:none">
+      {{ (i18n or {}).get('lr_s018', "全部通过") }}
+    </button>
+  </div>
+
+  <!-- A2: Batch action bar -->
+  <div id="batch-bar" style="display:none;padding:.5rem 1rem;background:rgba(91,124,246,.06);border-bottom:1px solid rgba(91,124,246,.18);font-size:.82rem;align-items:center;gap:.6rem">
+    <input type="checkbox" id="batch-all" onchange="toggleAllChecks(this.checked)" style="margin-right:.3rem">
+    <span id="batch-count">0</span> {{ (i18n or {}).get('lr_s019', "条已选") }}
+    <button class="btn btn-sm btn-green" onclick="batchAction('approve')" style="margin-left:.5rem">✔ {{ (i18n or {}).get('lr_s020', "批量通过") }}</button>
+    <button class="btn btn-sm btn-red" onclick="batchAction('reject')">✖ {{ (i18n or {}).get('draft.bulk.reject', "批量拒绝") }}</button>
+    <button class="btn btn-sm" onclick="clearBatch()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
+  </div>
+  <div id="drafts-container" style="min-height:200px">
+    <div style="padding:3rem;text-align:center;color:var(--t3)">{{ (i18n or {}).get('msg_js_1047', "加载中") }}...</div>
+  </div>
+</div>
+
+<!-- Edit Modal -->
+<div id="edit-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.5);backdrop-filter:blur(4px)">
+  <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(600px,90vw);max-height:80vh;overflow-y:auto;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--s2);padding:1.5rem">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+      <h3 style="margin:0;font-size:1.1rem">{{ (i18n or {}).get('lr_s021', "编辑草稿") }}</h3>
+      <button onclick="closeModal()" style="background:none;border:none;cursor:pointer;font-size:1.3rem;color:var(--t3)">&times;</button>
+    </div>
+    <input type="hidden" id="edit-id">
+    <div class="form-group" style="margin-bottom:.75rem">
+      <label style="font-size:.82rem;font-weight:600;margin-bottom:.3rem;display:block">{{ (i18n or {}).get('lr_s022', "原始问题") }}</label>
+      <div id="edit-query" style="padding:.5rem .75rem;background:var(--input);border-radius:var(--r-sm);color:var(--t2);font-size:.88rem"></div>
+    </div>
+    <div class="form-group" style="margin-bottom:.75rem">
+      <label style="font-size:.82rem;font-weight:600;margin-bottom:.3rem;display:block">{{ (i18n or {}).get('kb_s108', "分类") }}</label>
+      <input type="text" id="edit-category" class="form-input" style="width:100%;padding:.45rem .75rem;border:1px solid var(--bd);border-radius:var(--r-sm);background:var(--input)">
+    </div>
+    <div class="form-group" style="margin-bottom:.75rem">
+      <label style="font-size:.82rem;font-weight:600;margin-bottom:.3rem;display:block">{{ (i18n or {}).get('kb_s106', "标题") }}</label>
+      <input type="text" id="edit-title" class="form-input" style="width:100%;padding:.45rem .75rem;border:1px solid var(--bd);border-radius:var(--r-sm);background:var(--input)">
+    </div>
+    <div class="form-group" style="margin-bottom:.75rem">
+      <label style="font-size:.82rem;font-weight:600;margin-bottom:.3rem;display:block">{{ (i18n or {}).get('lr_s023', "触发词（逗号分隔）") }}</label>
+      <input type="text" id="edit-triggers" class="form-input" style="width:100%;padding:.45rem .75rem;border:1px solid var(--bd);border-radius:var(--r-sm);background:var(--input)">
+    </div>
+    <div class="form-group" style="margin-bottom:1rem">
+      <label style="font-size:.82rem;font-weight:600;margin-bottom:.3rem;display:block">{{ (i18n or {}).get('inbox.ai.suggested_reply', "建议回复") }}</label>
+      <textarea id="edit-reply" rows="4" style="width:100%;padding:.45rem .75rem;border:1px solid var(--bd);border-radius:var(--r-sm);background:var(--input);resize:vertical;font-family:inherit"></textarea>
+    </div>
+    <div style="display:flex;gap:.5rem;justify-content:flex-end">
+      <button class="btn btn-outline" onclick="closeModal()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
+      <button class="btn btn-primary" onclick="saveDraft()">{{ (i18n or {}).get('kb_js_155', "保存修改") }}</button>
+    </div>
+  </div>
+</div>
+
+<style>
+.row{display:flex;gap:.75rem;flex-wrap:wrap}
+.col-4{flex:1;min-width:120px}
+.draft-card{padding:1rem;border-bottom:1px solid var(--bd);transition:background .15s}
+.draft-card:hover{background:var(--input)}
+.draft-card:last-child{border-bottom:none}
+.draft-header{display:flex;align-items:center;gap:.5rem;margin-bottom:.4rem}
+.draft-source{font-size:.7rem;padding:.15rem .45rem;border-radius:4px;font-weight:600}
+.source-miss{background:var(--rs);color:var(--red)}
+.source-negative_feedback{background:var(--as);color:var(--amber)}
+.source-weak_hit{background:var(--prs);color:var(--purple)}
+.draft-query{font-weight:600;font-size:.92rem;flex:1}
+.draft-count{font-size:.75rem;color:var(--t3)}
+.draft-body{margin:.4rem 0;font-size:.85rem;color:var(--t2)}
+.draft-ai{font-style:italic;color:var(--t3);font-size:.78rem;margin-top:.3rem}
+.draft-actions{display:flex;gap:.4rem;margin-top:.5rem}
+.btn-sm{font-size:.78rem;padding:.3rem .65rem;border-radius:6px;border:1px solid var(--bd);background:var(--card);color:var(--t);cursor:pointer;transition:.15s;font-weight:500}
+.btn-sm:hover{border-color:var(--p);color:var(--p)}
+.btn-sm.active{background:var(--p);color:#fff;border-color:var(--p)}
+.btn-green{background:var(--green)!important;color:#fff!important;border-color:var(--green)!important}
+.btn-green:hover{opacity:.85}
+.btn-red{background:none;color:var(--red);border-color:var(--red)}
+.btn-red:hover{background:var(--rs)}
+.draft-title{font-size:.85rem;margin-bottom:.2rem}
+.draft-title b{color:var(--p)}
+.draft-triggers{font-size:.78rem;color:var(--t3)}
+.draft-triggers span{background:var(--ps);color:var(--p);padding:.1rem .4rem;border-radius:4px;margin-right:.25rem;font-size:.72rem}
+.draft-reply{background:var(--input);padding:.5rem .75rem;border-radius:var(--r-sm);font-size:.82rem;margin-top:.4rem;border-left:3px solid var(--p);line-height:1.5}
+.status-badge{font-size:.7rem;padding:.15rem .45rem;border-radius:4px;font-weight:600}
+.status-approved{background:var(--gs);color:var(--green)}
+.status-rejected{background:var(--rs);color:var(--red)}
+.status-pending{background:var(--as);color:var(--amber)}
+.empty-state{padding:3rem;text-align:center;color:var(--t3)}
+.empty-state svg{width:48px;height:48px;margin-bottom:.75rem;opacity:.3}
+.conf-badge{display:inline-flex;align-items:center;gap:.2rem;font-size:.68rem;padding:.1rem .4rem;border-radius:4px;font-weight:700;flex-shrink:0}
+.conf-high{background:rgba(16,185,129,.12);color:var(--green)}
+.conf-mid{background:rgba(245,158,11,.1);color:var(--amber)}
+.conf-low{background:rgba(239,68,68,.1);color:var(--red)}
+.draft-check{margin-right:.5rem;cursor:pointer;width:16px;height:16px;flex-shrink:0}
+#batch-bar{display:flex}
+.dup-badge{display:inline-flex;align-items:center;gap:.2rem;font-size:.68rem;padding:.12rem .45rem;border-radius:4px;font-weight:700;background:rgba(245,158,11,.12);color:var(--amber);flex-shrink:0;cursor:help}
+.dup-warn{background:linear-gradient(135deg,rgba(245,158,11,.07),rgba(239,68,68,.05));border:1px solid rgba(245,158,11,.25);border-radius:8px;padding:.45rem .7rem;margin:.35rem 0;font-size:.78rem;display:flex;align-items:center;gap:.5rem;color:var(--t2)}
+.dup-warn .dup-title{font-weight:600;color:var(--amber)}
+.dup-warn .dup-link{color:var(--p);text-decoration:underline;cursor:pointer;font-weight:600}
+.dup-warn .dup-score{font-size:.72rem;color:var(--t3);margin-left:.3rem}
+.dup-recheck{background:none;border:1px solid var(--bd);border-radius:4px;font-size:.7rem;padding:.15rem .4rem;cursor:pointer;color:var(--t3);margin-left:auto}
+.dup-recheck:hover{border-color:var(--p);color:var(--p)}
+</style>
+
+<script>
+let currentFilter='pending';
+
+async function loadStats(){
+  try{
+    const r=await fetch('/api/learner/stats');
+    const d=await r.json();
+    document.getElementById('stat-pending').textContent=d.pending||0;
+    document.getElementById('stat-approved').textContent=d.approved||0;
+    document.getElementById('stat-rejected').textContent=d.rejected||0;
+    var dupEl=document.getElementById('stat-dup');
+    if(dupEl)dupEl.textContent=d.dup_flagged||0;
+    document.getElementById('btn-approve-all').style.display=(d.pending>0&&currentFilter==='pending')?'':'none';
+  }catch(e){}
+}
+
+let currentSort='priority';
+async function loadDrafts(){
+  loadStats();
+  currentSort=document.getElementById('sort-select').value;
+  const c=document.getElementById('drafts-container');
+  c.innerHTML='<div style="padding:2rem;text-align:center;color:var(--t3)">'+window.T('msg_js_1047')+'...</div>';
+  try{
+    const r=await fetch('/api/learner/drafts?status='+currentFilter+'&sort='+currentSort);
+    const d=await r.json();
+    renderDrafts(d.drafts||[]);
+  }catch(e){
+    var _sm2=document.documentElement.getAttribute('data-ui-mode')==='simple';
+    c.innerHTML=_sm2?'<div class="empty-state"><p style="font-weight:600;color:var(--red)">'+window.T('rpa_load_failed')+'</p><p style="font-size:.82rem;color:var(--t3);margin-top:.3rem">'+window.T('lr_js001')+'「'+window.T('as_s058')+window.T('rpa_retry')+'</p></div>':'<div class="empty-state">'+window.T('rpa_load_failed')+'</div>';
+  }
+  clearBatch();
+}
+
+function renderDrafts(drafts){
+  const c=document.getElementById('drafts-container');
+  if(!drafts.length){
+    var _sm=document.documentElement.getAttribute('data-ui-mode')==='simple';
+    const msgs={pending:_sm?window.T('lr_js002'):window.T('lr_js003')+'「'+window.T('lr_js004')+window.T('lr_js005'),
+                approved:window.T('lr_js006'),rejected:window.T('lr_js007'),all:window.T('draft.empty.none')};
+    c.innerHTML='<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg><p>'+(msgs[currentFilter]||msgs.all)+'</p></div>';
+    return;
+  }
+  const srcLabels={miss:window.T('kb_s083'),negative_feedback:window.T('lr_js008'),weak_hit:window.T('lr_js009')};
+  let html='';
+  drafts.forEach(d=>{
+    const src=srcLabels[d.source]||d.source;
+    const triggers=(d.triggers||'').split(',').filter(Boolean).map(t=>'<span>'+t.trim()+'</span>').join('');
+    const conf=d.confidence||0;
+    const confCls=conf>=75?'conf-high':conf>=40?'conf-mid':'conf-low';
+    const confLabel=conf>=75?'✔️':conf>=40?'⚠️':'❓';
+    const showCheck=d.status==='pending';
+    html+=`<div class="draft-card" data-id="${d.id}">
+      <div class="draft-header">
+        ${showCheck?'<input type="checkbox" class="draft-check" value="'+d.id+'" onchange="updateBatch()">':''}
+        <span class="draft-source source-${d.source}">${src}</span>
+        <span class="draft-query">${esc(d.query)}</span>
+        <span class="draft-count">${d.hit_count}${window.T('kb_js_174')}</span>
+        <span class="conf-badge ${confCls}" title="AI${window.T('lr_s015')}">${confLabel} ${conf}</span>
+        ${d.dup_score>0?'<span class="dup-badge" title="'+window.T('lr_js010')+'">⚠ '+window.T('lr_s012')+' '+Math.round(d.dup_score*100)+'%</span>':''}
+        ${d.status!=='pending'?'<span class="status-badge status-'+d.status+'">'+(d.status==='approved'?window.T('msg_js_1928'):window.T('draft.tab.rejected'))+'</span>':''}
+      </div>
+      ${d.dup_score>0?'<div class="dup-warn"><span class="dup-title">⚠ '+window.T('lr_js011')+':</span> <span class="dup-link" onclick="window.open(\'/knowledge#entry-'+d.dup_entry_id+'\',\'_blank\')">['+esc(d.dup_entry_id)+'] '+esc(d.dup_entry_title)+'</span><span class="dup-score">('+Math.round(d.dup_score*100)+'% · '+(d.dup_method||'auto')+')</span>'+(d.status==='pending'?'<button class="dup-recheck" onclick="recheckDup(\''+d.id+'\',this)">🔄 '+window.T('db_s050')+'</button>':'')+'</div>':''}
+      <div class="draft-title"><b>${esc(d.title)}</b> · ${esc(d.category)}</div>
+      <div class="draft-triggers">${triggers}</div>
+      ${d.example_reply?'<div class="draft-reply">'+esc(d.example_reply)+'</div>':''}
+      ${d.ai_reasoning?'<div class="draft-ai">AI: '+esc(d.ai_reasoning)+'</div>':''}
+      <div class="draft-actions">
+        ${d.status==='pending'?`
+          <button class="btn-sm btn-green" onclick="approveDraft('${d.id}')">${window.T('lr_s008')}</button>
+          <button class="btn-sm btn-red" onclick="rejectDraft('${d.id}')">${window.T('rpa_js_act_reject')}</button>
+          <button class="btn-sm" onclick="editDraft('${d.id}')">${window.T('edit')}</button>
+        `:''}
+      </div>
+    </div>`;
+  });
+  c.innerHTML=html;
+}
+
+function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+function filterDrafts(status,btn){
+  currentFilter=status;
+  document.querySelectorAll('[data-filter]').forEach(b=>b.classList.remove('active'));
+  if(btn)btn.classList.add('active');
+  loadDrafts();
+}
+
+async function runLearning(){
+  const btn=document.getElementById('btn-run');
+  btn.disabled=true;btn.textContent=window.T('lr_js012')+'...';
+  try{
+    const r=await fetch('/api/learner/run',{method:'POST'});
+    const d=await r.json();
+    if(typeof showToast==='function')showToast(window.Tf('lr_learn_done', {c: d.collected, g: d.generated, s: d.saved}),'success');
+    loadDrafts();
+  }catch(e){
+    if(typeof showToast==='function')showToast(window.T('lr_js013')+': '+e.message,'error');
+  }finally{
+    btn.disabled=false;btn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg> '+window.T('lr_s006');
+  }
+}
+
+async function recheckDup(id,btn){
+  if(btn){btn.disabled=true;btn.textContent=window.T('tg_s121')+'...'}
+  try{
+    const r=await fetch('/api/learner/drafts/'+id+'/recheck-dup',{method:'POST'});
+    const d=await r.json();
+    if(d.dup){
+      if(typeof showToast==='function')showToast(window.T('lr_js014')+': '+d.dup.entry_title+' ('+Math.round(d.dup.score*100)+'%)','warning');
+    }else{
+      if(typeof showToast==='function')showToast(window.T('lr_js015'),'success');
+    }
+    loadDrafts();
+  }catch(e){if(typeof showToast==='function')showToast(window.T('ov_js_detect_fail'),'error')}
+}
+
+async function approveDraft(id){
+  var card=document.querySelector('.draft-card[data-id="'+id+'"]');
+  var hasDup=card&&card.querySelector('.dup-warn');
+  var msg=hasDup?'⚠ '+window.T('lr_js016'):window.T('lr_js017');
+  if(!confirm(msg))return;
+  try{
+    await fetch('/api/learner/drafts/'+id+'/approve',{method:'POST'});
+    if(typeof showToast==='function')showToast(window.T('lr_js018'),'success');
+    loadDrafts();
+  }catch(e){if(typeof showToast==='function')showToast(window.T('ov_js_op_fail'),'error')}
+}
+
+async function rejectDraft(id){
+  try{
+    await fetch('/api/learner/drafts/'+id+'/reject',{method:'POST'});
+    if(typeof showToast==='function')showToast(window.T('draft.tab.rejected'),'info');
+    loadDrafts();
+  }catch(e){}
+}
+
+async function approveAll(){
+  if(!confirm(window.T('lr_js019')))return;
+  try{
+    const r=await fetch('/api/learner/drafts/approve-all',{method:'POST'});
+    const d=await r.json();
+    if(typeof showToast==='function')showToast(window.Tf('lr_batch_approved', {n: d.approved}),'success');
+    loadDrafts();
+  }catch(e){}
+}
+
+function editDraft(id){
+  fetch('/api/learner/drafts/'+id).then(r=>r.json()).then(d=>{
+    document.getElementById('edit-id').value=d.id;
+    document.getElementById('edit-query').textContent=d.query;
+    document.getElementById('edit-category').value=d.category||'';
+    document.getElementById('edit-title').value=d.title||'';
+    document.getElementById('edit-triggers').value=d.triggers||'';
+    document.getElementById('edit-reply').value=d.example_reply||'';
+    document.getElementById('edit-modal').style.display='block';
+  });
+}
+
+function closeModal(){document.getElementById('edit-modal').style.display='none'}
+
+async function saveDraft(){
+  const id=document.getElementById('edit-id').value;
+  const body={
+    category:document.getElementById('edit-category').value,
+    title:document.getElementById('edit-title').value,
+    triggers:document.getElementById('edit-triggers').value,
+    example_reply:document.getElementById('edit-reply').value,
+  };
+  try{
+    await fetch('/api/learner/drafts/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(typeof showToast==='function')showToast(window.T('wa_js_053'),'success');
+    closeModal();
+    loadDrafts();
+  }catch(e){if(typeof showToast==='function')showToast(window.T('ov_js_save_fail'),'error')}
+}
+
+// ── A2: Batch selection ─────────────────────────────────
+function getSelectedIds(){
+  return Array.from(document.querySelectorAll('.draft-check:checked')).map(cb=>cb.value);
+}
+function updateBatch(){
+  const ids=getSelectedIds();
+  const bar=document.getElementById('batch-bar');
+  bar.style.display=ids.length?'flex':'none';
+  document.getElementById('batch-count').textContent=ids.length;
+}
+function toggleAllChecks(on){
+  document.querySelectorAll('.draft-check').forEach(cb=>{cb.checked=on});
+  updateBatch();
+}
+function clearBatch(){
+  document.querySelectorAll('.draft-check').forEach(cb=>{cb.checked=false});
+  const bar=document.getElementById('batch-bar');
+  if(bar)bar.style.display='none';
+  const ba=document.getElementById('batch-all');
+  if(ba)ba.checked=false;
+}
+async function batchAction(action){
+  const ids=getSelectedIds();
+  if(!ids.length)return;
+  const label=action==='approve'?window.T('lr_s008'):window.T('rpa_js_act_reject');
+  if(!confirm(window.Tf('lr_confirm_batch', {n: ids.length, label: label})))return;
+  try{
+    const r=await fetch('/api/learner/drafts/batch-action',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ids,action})
+    });
+    const d=await r.json();
+    if(typeof showToast==='function')showToast(window.Tf('lr_batch_result', {label: label, a: d.approved||0, r: d.rejected||0}),'success');
+    loadDrafts();
+  }catch(e){if(typeof showToast==='function')showToast(window.T('msg_js_1760'),'error')}
+}
+
+loadDrafts();
+</script>
+{% endblock %}

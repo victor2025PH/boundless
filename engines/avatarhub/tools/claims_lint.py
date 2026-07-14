@@ -1,0 +1,123 @@
+# -*- coding: utf-8 -*-
+"""能力宣称 lint（Phase 12-E）：capability_matrix.json ↔ 仓库真实代码 的一致性门禁。
+
+背景：官网/使用说明/销售一页纸各写一份能力描述，产品演进后互相打架、售前过度承诺
+（「无痕/看不出/32FPS 一刀切」）是差评与交付纠纷的源头。本工具把「文案与能力对齐」
+从人肉核对变成机器门禁：
+
+  1) 证据核验：每条 claim 的 evidence(file+needle) 必须真实存在——宣称的能力没有
+     代码背书 = 红灯（新卖点先登记证据再写文案）。
+  2) 措辞禁区：营销面（使用说明/销售一页纸/首页功能注册表）不得出现 banned_phrases
+     （无痕/无审查/自动成交…——官网对齐方案 §2 的机器化版本）。
+  3) lab 条目审计：status=lab 的能力，claim 文本必须自带「离线」或「实验室」字样，
+     防止实验室功能被写成实时能力。
+
+用法：python tools/claims_lint.py            退出码 0=通过 / 1=违规 / 2=自身故障
+      from tools 导入 check() 供 test_phase12 门禁调用。
+"""
+import json
+import re
+import sys
+from pathlib import Path
+
+BASE = Path(__file__).resolve().parent.parent
+MATRIX = BASE / "capability_matrix.json"
+
+
+def _read(p: Path) -> str:
+    return p.read_text(encoding="utf-8", errors="replace")
+
+
+def _surface_text(surf: dict) -> tuple:
+    """取营销面文本：整文件，或指定 block（如 avatar_hub.py 的 FEATURE_REGISTRY 列表）。
+    返回 (label, text)；文件缺失返回 (label, None)。"""
+    f = BASE / surf["file"]
+    label = surf["file"] + (f"::{surf['block']}" if surf.get("block") else "")
+    if not f.exists():
+        return label, None
+    text = _read(f)
+    if surf.get("block") == "FEATURE_REGISTRY":
+        m = re.search(r"FEATURE_REGISTRY\s*=\s*\[(.*?)\n\]", text, re.S)
+        text = m.group(1) if m else ""
+    return label, text
+
+
+def check() -> tuple:
+    """返回 (violations, oks)：violations 非空即门禁红灯。"""
+    cm = json.loads(MATRIX.read_text(encoding="utf-8-sig"))
+    violations, oks = [], []
+
+    # 1) 证据核验
+    for c in cm.get("claims", []):
+        cid, status = c.get("id", "?"), c.get("status", "full")
+        if status == "external":
+            if c.get("evidence"):
+                violations.append(f"{cid}: external 条目不应携带引擎证据（独立产品线勿混述）")
+            else:
+                oks.append(f"{cid}: external（引擎不背书,仅登记口径）")
+            continue
+        evs = c.get("evidence") or []
+        if not evs:
+            violations.append(f"{cid}: 无任何代码证据——宣称能力必须有 evidence")
+            continue
+        bad = []
+        for ev in evs:
+            f = BASE / ev["file"]
+            if not f.exists():
+                bad.append(f"{ev['file']} 不存在")
+            elif ev["needle"].lower() not in _read(f).lower():
+                bad.append(f"{ev['file']} 中找不到「{ev['needle']}」")
+        if bad:
+            violations.append(f"{cid}: 证据失效 → {'; '.join(bad)}")
+        else:
+            oks.append(f"{cid}: {len(evs)} 条证据在位")
+        # 3) lab 条目措辞审计
+        if status == "lab" and not any(w in c.get("claim", "") for w in ("离线", "实验室")):
+            violations.append(f"{cid}: lab 条目 claim 未标注「离线/实验室」，会被读成实时能力")
+
+    # 2) 营销面措辞禁区（负面清单语境豁免：出现在「不承诺/红线/禁止」等否定句里的禁用词
+    #    是护栏文案而非承诺——销售一页纸的「不承诺的事」清单必须能点名这些词）
+    _NEG = re.compile(r"不承诺|勿写|不得|禁止|红线|❌|避免|不做|不能|另页|独立产品线|物理分页|勿与|删除/降级")
+    banned = cm.get("banned_phrases") or []
+    for surf in cm.get("marketing_surfaces", []):
+        label, text = _surface_text(surf)
+        if text is None:
+            violations.append(f"营销面缺失: {label}")
+            continue
+        bad_hits, guard_hits = [], []
+        for p in banned:
+            if p not in text:
+                continue
+            lines = [(i + 1, ln) for i, ln in enumerate(text.splitlines()) if p in ln]
+            naked = [i for i, ln in lines if not _NEG.search(ln)]
+            if naked:
+                bad_hits.append(f"「{p}」(行 {naked})")
+            else:
+                guard_hits.append(p)
+        if bad_hits:
+            violations.append(f"营销面 {label} 出现肯定语境禁用措辞: {'; '.join(bad_hits)}")
+        else:
+            extra = f"（护栏语境提及: {guard_hits}）" if guard_hits else ""
+            oks.append(f"营销面 {label} 无过度承诺措辞{extra}")
+    return violations, oks
+
+
+def main() -> int:
+    try:
+        violations, oks = check()
+    except Exception as e:
+        print(f"claims_lint 自身故障: {e}")
+        return 2
+    for line in oks:
+        print(f"  一致: {line}")
+    for line in violations:
+        print(f"  违规: {line}")
+    if violations:
+        print(f"结论: 违规 {len(violations)} 处（文案与能力不对齐,先修再发）")
+        return 1
+    print(f"结论: 对齐（{len(oks)} 项）")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

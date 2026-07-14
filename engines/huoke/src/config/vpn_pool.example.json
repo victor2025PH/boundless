@@ -1,0 +1,21 @@
+{
+  "configs": [
+    {
+      "id": "proxy_ip2up_slot13",
+      "uri": "socks5://BASE64(user:pass)@eu-relay.ip2up.com:1337#remark",
+      "protocol": "socks5",
+      "server": "eu-relay.ip2up.com",
+      "port": "1337",
+      "username": "YOUR_USER",
+      "remark": "主控-13-ip2up",
+      "country": "eu",
+      "label": "主控-13-ip2up",
+      "added_at": "",
+      "proxy_mode": "router"
+    }
+  ],
+  "assignments": {
+    "YOUR_USB_SERIAL_13": "proxy_ip2up_slot13",
+    "YOUR_USB_SERIAL_14": "proxy_ip2up_slot14"
+  }
+}

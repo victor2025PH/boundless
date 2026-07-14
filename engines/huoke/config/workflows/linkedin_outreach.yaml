@@ -1,0 +1,42 @@
+# LinkedIn Outreach Campaign
+# Automated: check quota → outreach each target → notify via Telegram
+
+name: linkedin_outreach_campaign
+description: >
+  Search LinkedIn profiles, view naturally, send connection requests
+  with AI-rewritten notes, then notify results via Telegram.
+
+variables:
+  device_id: ""
+  targets:
+    - {name: "Alice Smith", company: "Google", field: "AI Research"}
+    - {name: "Bob Jones", company: "Meta", field: "Machine Learning"}
+  note_template: "Hi {name}, I noticed your work at {company} in {field}. Would love to connect!"
+  notification_user: "@my_bot"
+
+steps:
+  - id: check_quota
+    action: compliance.check_remaining
+    params:
+      platform: linkedin
+      action: send_connection
+
+  - id: outreach
+    action: linkedin.smart_outreach
+    for_each: targets
+    params:
+      name: "{item.name}"
+      note_template: "{variables.note_template}"
+      context:
+        name: "{item.name}"
+        company: "{item.company}"
+        field: "{item.field}"
+    on_error: continue
+    depends_on: [check_quota]
+
+  - id: notify
+    action: telegram.send_text_message
+    params:
+      message: "LinkedIn outreach complete: {steps.outreach.result.success_count}/{steps.outreach.result.total} sent"
+    depends_on: [outreach]
+    on_error: continue

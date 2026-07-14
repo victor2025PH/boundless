@@ -1,0 +1,259 @@
+# ═══════════════════════════════════════════════════════
+# 账号人设库 — 按目标国家+人群定义"伪垂类"策略
+# 批判者指出：无垂类账号算法无法推流。
+# 解法：给每个账号分配伪垂类，内容围绕垂类生成，
+#        但最终CTA引流到我们的聊天平台。
+# ═══════════════════════════════════════════════════════
+
+personas:
+
+  # ── 意大利 · 生活方式 ──
+  italy_lifestyle:
+    display_name: "意大利生活方式号"
+    niche: lifestyle_fitness
+    country: italy
+    language: italian
+    target_gender: male
+    target_age: "25-35"
+    content_themes:
+      - "gym motivation and fitness tips"
+      - "healthy Italian Mediterranean diet"
+      - "morning routine productivity hacks"
+      - "street style and fashion in Italian cities"
+      - "travel hidden gems in Italy"
+    tone: "energetic, motivational, friendly"
+    cta_hook: "Unisciti alla nostra community esclusiva 🔥"
+    platform_strategy:
+      tiktok: video        # AI生成真实感视频
+      instagram: video     # Reels
+      telegram: slideshow  # 图文帖子
+      facebook: video      # Facebook Reels
+      twitter: video       # X 视频
+      whatsapp: video      # WhatsApp Status
+      xiaohongshu: slideshow
+    hashtags:
+      tiktok:
+        - "#fitness"
+        - "#lifestyle"
+        - "#benessere"
+        - "#motivazione"
+        - "#italia"
+        - "#vitasana"
+        - "#gym"
+        - "#allenamento"
+      instagram:
+        - "#fitnessitalia"
+        - "#lifestyleitaliano"
+        - "#wellness"
+        - "#motivation"
+        - "#italianlifestyle"
+      facebook:
+        - "#fitness"
+        - "#italia"
+        - "#lifestyle"
+        - "#benessere"
+      twitter:
+        - "#fitness"
+        - "#lifestyle"
+        - "#italia"
+      xiaohongshu:
+        - "健身"
+        - "意大利生活"
+        - "生活方式"
+        - "健康饮食"
+    posting_schedule:
+      tiktok: ["08:00", "13:30", "20:00"]
+      instagram: ["09:00", "14:00", "21:00"]
+      facebook: ["10:00", "18:00"]
+      twitter: ["09:30", "15:00", "20:30"]
+      whatsapp: ["11:00", "19:00"]
+      telegram: ["10:00", "19:00"]
+
+  # ── 巴西 · 美妆生活 ──
+  brazil_beauty:
+    display_name: "巴西美妆生活号"
+    niche: beauty_fashion
+    country: brazil
+    language: portuguese
+    target_gender: female
+    target_age: "20-32"
+    content_themes:
+      - "skincare routine for tropical climate"
+      - "Brazilian beach fashion looks"
+      - "affordable beauty tips"
+      - "self-care Sunday routines"
+      - "natural beauty secrets from Brazil"
+    tone: "warm, fun, empowering"
+    cta_hook: "Entra no nosso grupo VIP de beleza 💄"
+    platform_strategy:
+      tiktok: video
+      instagram: video
+      telegram: slideshow
+      facebook: video
+      twitter: video
+      whatsapp: video
+      xiaohongshu: slideshow
+    hashtags:
+      tiktok:
+        - "#beleza"
+        - "#skincare"
+        - "#dicasdebeleza"
+        - "#brasil"
+        - "#maquiagem"
+        - "#autocuidado"
+      instagram:
+        - "#belezabrasileira"
+        - "#skincarerotina"
+        - "#modapraia"
+        - "#vidasaudavel"
+      facebook:
+        - "#beleza"
+        - "#skincare"
+        - "#brasil"
+      twitter:
+        - "#beleza"
+        - "#skincare"
+        - "#brasil"
+    posting_schedule:
+      tiktok: ["09:00", "14:00", "20:00"]
+      instagram: ["10:00", "15:00", "21:00"]
+      facebook: ["10:30", "19:00"]
+      twitter: ["09:00", "14:30", "21:00"]
+      whatsapp: ["12:00", "20:00"]
+      telegram: ["11:00", "20:00"]
+
+  # ── 全球 · 副业财务 ──
+  global_hustle:
+    display_name: "全球副业财务号"
+    niche: side_hustle_finance
+    country: global
+    language: english
+    target_gender: all
+    target_age: "22-40"
+    content_themes:
+      - "passive income ideas that actually work"
+      - "how to make money online from anywhere"
+      - "digital nomad lifestyle tips"
+      - "investing basics for beginners"
+      - "side hustle success stories"
+      - "remote work opportunities"
+    tone: "inspiring, practical, trustworthy"
+    cta_hook: "Join 10k+ people building income online 💰"
+    platform_strategy:
+      tiktok: video
+      instagram: video
+      linkedin: video
+      twitter: video
+      telegram: slideshow
+      facebook: video
+      whatsapp: video
+    hashtags:
+      tiktok:
+        - "#sidehustle"
+        - "#passiveincome"
+        - "#makemoneyonline"
+        - "#financialfreedom"
+        - "#remotework"
+        - "#digitalnomad"
+      instagram:
+        - "#sidehustleideas"
+        - "#financialfreedom"
+        - "#onlinebusiness"
+        - "#wealthmindset"
+      linkedin:
+        - "#remotework"
+        - "#entrepreneurship"
+        - "#passiveincome"
+      facebook:
+        - "#sidehustle"
+        - "#makemoneyonline"
+        - "#financialfreedom"
+      twitter:
+        - "#sidehustle"
+        - "#passiveincome"
+        - "#digitalnomad"
+    posting_schedule:
+      tiktok: ["07:00", "12:00", "19:00"]
+      instagram: ["08:00", "13:00", "20:00"]
+      linkedin: ["09:00", "17:00"]
+      twitter: ["10:00", "15:00", "21:00"]
+      facebook: ["08:30", "18:30"]
+      whatsapp: ["12:00", "20:00"]
+      telegram: ["12:00", "20:00"]
+
+  # ── 阿拉伯 · 商业成功 ──
+  arabic_business:
+    display_name: "阿拉伯商业成功号"
+    niche: business_success
+    country: saudi_arabia
+    language: arabic
+    target_gender: male
+    target_age: "25-45"
+    content_themes:
+      - "business success mindset"
+      - "entrepreneurship tips in Arabic"
+      - "investment opportunities in MENA"
+      - "leadership and personal development"
+      - "success stories from Arab entrepreneurs"
+    tone: "authoritative, inspiring, respectful"
+    cta_hook: "انضم إلى مجتمعنا للنجاح الأعمال 🚀"
+    platform_strategy:
+      tiktok: video
+      instagram: video
+      telegram: slideshow
+    hashtags:
+      tiktok:
+        - "#أعمال"
+        - "#ريادة_الأعمال"
+        - "#نجاح"
+        - "#استثمار"
+        - "#تطوير_الذات"
+      instagram:
+        - "#businessarabic"
+        - "#entrepreneur"
+        - "#success"
+        - "#investment"
+    posting_schedule:
+      tiktok: ["09:00", "14:00", "21:00"]
+      instagram: ["10:00", "15:00", "22:00"]
+      telegram: ["12:00", "20:00"]
+
+  # ── 印度 · 科技职场 ──
+  india_tech:
+    display_name: "印度科技职场号"
+    niche: tech_career
+    country: india
+    language: english
+    target_gender: all
+    target_age: "20-35"
+    content_themes:
+      - "tech career growth tips"
+      - "coding tutorials for beginners"
+      - "how to get remote tech jobs"
+      - "startup culture in India"
+      - "AI tools that boost productivity"
+    tone: "educational, practical, enthusiastic"
+    cta_hook: "Join our tech community for exclusive opportunities 💻"
+    platform_strategy:
+      tiktok: video
+      instagram: video
+      linkedin: video
+      twitter: text
+      telegram: slideshow
+    hashtags:
+      tiktok:
+        - "#techcareer"
+        - "#coding"
+        - "#remotework"
+        - "#india"
+        - "#techjobs"
+        - "#programming"
+      instagram:
+        - "#techstartup"
+        - "#softwareengineer"
+        - "#indiatech"
+        - "#codingtips"
+    posting_schedule:
+      tiktok: ["07:30", "13:00", "20:00"]
+      instagram: ["08:00", "13:30", "21:00"]
+      linkedin: ["09:00", "18:00"]

@@ -1,0 +1,443 @@
+{% extends "base.html" %}
+{% block title %}{{ (i18n or {}).get('mo_s001', "变现营收 ·") }} {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('monetization', "变现营收") }}{% endblock %}
+{% block head %}
+<style>
+.mz-cards{display:flex;flex-wrap:wrap;gap:.8rem;margin-bottom:1rem}
+.mz-card{flex:1;min-width:150px;padding:.85rem 1rem;background:var(--input);border-radius:10px}
+.mz-card .lb{font-size:.72rem;color:var(--t3);text-transform:uppercase;letter-spacing:.04em}
+.mz-card .v{font-size:1.5rem;font-weight:700;color:var(--t1);margin-top:.25rem}
+.mz-card .v.green{color:var(--green)}
+.mz-card .sub{font-size:.72rem;color:var(--t2);margin-top:.2rem}
+.mz-filters{display:flex;flex-wrap:wrap;gap:.6rem;align-items:flex-end;margin-bottom:1rem}
+.table-wrap{overflow-x:auto}
+.mz-table{width:100%;border-collapse:collapse;font-size:.82rem;margin-bottom:1rem}
+.mz-table th,.mz-table td{padding:.5rem .65rem;border-bottom:1px solid var(--bd);text-align:left;vertical-align:top}
+.mz-table th{color:var(--t3);font-weight:600;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em}
+.mz-table tr:hover td{background:rgba(91,124,246,.04)}
+.mono{font-family:Consolas,monospace;font-size:.76rem;word-break:break-all}
+.badge-k{display:inline-block;padding:.12rem .45rem;border-radius:4px;font-size:.65rem;font-weight:700}
+.badge-k.subscribe{background:rgba(91,124,246,.15);color:var(--p)}
+.badge-k.unlock{background:rgba(16,185,129,.15);color:var(--green)}
+.badge-k.gift{background:rgba(245,158,11,.15);color:var(--amber)}
+.mz-grant{display:flex;flex-wrap:wrap;gap:.5rem;align-items:flex-end;padding:.75rem;background:var(--input);border-radius:10px;margin-bottom:1rem}
+.mz-grant input,.mz-grant select{min-width:110px}
+.mz-ent{font-size:.82rem;color:var(--t2);margin-top:.5rem;padding:.6rem .8rem;background:var(--input);border-radius:8px;display:none}
+.mz-ent strong{color:var(--t1)}
+.section-h{font-size:.9rem;font-weight:700;color:var(--t1);margin:.4rem 0 .6rem}
+.mz-fc-result{margin-top:.7rem;display:none}
+.mz-allow{padding:.55rem .8rem;border-radius:8px;font-size:.85rem;font-weight:600;background:rgba(16,185,129,.12);color:var(--green)}
+.upsell-card{border:1px solid rgba(168,85,247,.35);border-radius:12px;padding:1rem 1.1rem;background:linear-gradient(135deg,rgba(168,85,247,.08),rgba(91,124,246,.06));max-width:380px}
+.upsell-card .uc-pitch{font-size:.95rem;color:var(--t1);margin-bottom:.6rem;line-height:1.5}
+.upsell-card .uc-meta{font-size:.8rem;color:var(--t2);margin-bottom:.7rem}
+.upsell-card .uc-meta .price{font-size:1.3rem;font-weight:700;color:#a855f7}
+.upsell-card .uc-grants{font-size:.74rem;color:var(--t3);margin-bottom:.7rem}
+.upsell-card .uc-cta{display:flex;gap:.5rem;flex-wrap:wrap}
+.uc-btn{border:none;border-radius:8px;padding:.4rem .9rem;font-size:.82rem;font-weight:600;cursor:pointer;color:#fff;background:#a855f7}
+.uc-btn.tg{background:#229ED9}
+.uc-btn:hover{opacity:.9}
+.uc-paylink{margin-top:.6rem;font-size:.78rem;word-break:break-all}
+</style>
+{% endblock %}
+{% block content %}
+{% set active="monetization" %}
+
+<div class="card fa">
+  <h2>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+    C {{ (i18n or {}).get('mo_s002', "端变现营收") }}
+    <span style="font-size:.75rem;font-weight:400;color:var(--t2);margin-left:.4rem">{{ (i18n or {}).get('mo_s003', "端用户订阅 / 付费解锁 / 打赏 · 需开启") }} monetization.enabled</span>
+  </h2>
+
+  <div class="mz-filters">
+    <div class="f-grp"><label class="f-lb">{{ (i18n or {}).get('mo_s004', "统计窗口（天）") }}</label><input type="number" id="mz-days" value="30" min="1" max="365" class="f-input" style="width:100px"></div>
+    <button type="button" class="btn btn-p" onclick="mzLoad();mzFunnels()">{{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
+    <span id="mz-flag" style="font-size:.78rem;color:var(--t3)"></span>
+  </div>
+
+  <div class="mz-cards" id="mz-cards"></div>
+
+  <div class="section-h">Top {{ (i18n or {}).get('mo_s005', "消费端用户") }}</div>
+  <div class="table-wrap">
+    <table class="mz-table">
+      <thead><tr><th style="min-width:160px">{{ (i18n or {}).get('msg_js_1034', "联系人") }}</th><th style="width:120px">{{ (i18n or {}).get('mo_s006', "累计消费") }}</th><th style="width:90px">{{ (i18n or {}).get('mo_s007', "笔数") }}</th></tr></thead>
+      <tbody id="mz-spenders"><tr><td colspan="3" style="padding:1.2rem;color:var(--t3)">{{ (i18n or {}).get('dash.loading', "加载中…") }}</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="section-h">{{ (i18n or {}).get('mo_s008', "最近交易流水") }}</div>
+  <div class="table-wrap">
+    <table class="mz-table">
+      <thead><tr><th style="width:70px">{{ (i18n or {}).get('msg_js_1042', "类型") }}</th><th style="min-width:140px">{{ (i18n or {}).get('msg_js_1034', "联系人") }}</th><th style="min-width:90px">{{ (i18n or {}).get('mo_s009', "项目") }}</th><th style="width:90px">{{ (i18n or {}).get('mo_s010', "金额") }}</th><th style="width:90px">{{ (i18n or {}).get('psn_js_120', "来源") }}</th><th style="width:150px">{{ (i18n or {}).get('time', "时间") }}</th></tr></thead>
+      <tbody id="mz-tx"><tr><td colspan="6" style="padding:1.2rem;color:var(--t3)">{{ (i18n or {}).get('dash.loading', "加载中…") }}</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="section-h">{{ (i18n or {}).get('mo_s011', "流失付费挽回榜") }} <span style="font-size:.72rem;font-weight:400;color:var(--t3)">{{ (i18n or {}).get('mo_s012', "有历史付费但近期断付的端用户，按累计 LTV 降序") }}——{{ (i18n or {}).get('mo_s013', "优先挽回高价值") }}</span></div>
+  <div class="table-wrap">
+    <table class="mz-table">
+      <thead><tr><th style="min-width:160px">{{ (i18n or {}).get('msg_js_1034', "联系人") }}</th><th style="width:110px">{{ (i18n or {}).get('msg_js_1043', "累计") }} LTV</th><th style="width:120px">{{ (i18n or {}).get('mo_s014', "距上次付费") }}</th><th style="width:80px">{{ (i18n or {}).get('mo_s015', "原档") }}</th><th style="width:90px">{{ (i18n or {}).get('ov_js_th_action', "操作") }}</th></tr></thead>
+      <tbody id="mz-retention"><tr><td colspan="5" style="padding:1.2rem;color:var(--t3)">{{ (i18n or {}).get('dash.loading', "加载中…") }}</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card fa">
+  <h2>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+    {{ (i18n or {}).get('mo_s016', "转化漏斗") }}
+    <span style="font-size:.75rem;font-weight:400;color:var(--t2);margin-left:.4rem">{{ (i18n or {}).get('mo_s017', "付费预告") }}→{{ (i18n or {}).get('mo_s018', "剧情解锁 · 自拍触墙") }}→{{ (i18n or {}).get('mo_s019', "专属相册 · 复用上方统计窗口，归因窗 14 天") }}</span>
+  </h2>
+
+  <div class="section-h">{{ (i18n or {}).get('mo_s020', "付费预告漏斗") }} <span style="font-size:.72rem;font-weight:400;color:var(--t3)">{{ (i18n or {}).get('mo_s021', "沉默期发出的剧情付费预告") }} → tx_ledger {{ (i18n or {}).get('mo_s022', "已付归因（精确") }}={{ (i18n or {}).get('mo_s023', "已付项命中预告 feature）") }}</span></div>
+  <div class="mz-cards" id="mz-teaser-cards"></div>
+  <div class="section-h" style="font-size:.78rem">{{ (i18n or {}).get('mo_s024', "按场景分布") }}</div>
+  <div class="table-wrap">
+    <table class="mz-table">
+      <thead><tr><th style="min-width:140px">{{ (i18n or {}).get('kb_js_072', "场景") }}</th><th style="width:90px">{{ (i18n or {}).get('mo_s025', "预告数") }}</th><th style="width:90px">{{ (i18n or {}).get('mo_s026', "触达人数") }}</th><th style="width:80px">{{ (i18n or {}).get('psn_js_269', "转化") }}</th><th style="width:90px">{{ (i18n or {}).get('mo_s027', "转化率") }}</th></tr></thead>
+      <tbody id="mz-teaser-scn"><tr><td colspan="5" style="padding:1.2rem;color:var(--t3)">{{ (i18n or {}).get('dash.loading', "加载中…") }}</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="section-h" style="margin-top:1.1rem">{{ (i18n or {}).get('mo_s028', "自拍 / 形象照漏斗") }} <span style="font-size:.72rem;font-weight:400;color:var(--t3)">{{ (i18n or {}).get('mo_s029', "自拍请求") }} → {{ (i18n or {}).get('mo_s030', "触墙") }}(locked) → exclusive_album {{ (i18n or {}).get('mo_s031', "付费（转化率分母") }}={{ (i18n or {}).get('mo_s032', "触墙端用户数）") }}</span></div>
+  <div class="mz-cards" id="mz-selfie-cards"></div>
+
+  <div class="section-h" style="margin-top:1.1rem">{{ (i18n or {}).get('mo_s033', "全局出图预算") }} <span style="font-size:.72rem;font-weight:400;color:var(--t3)">companion.selfie.daily_global_cap · {{ (i18n or {}).get('mo_s034', "跨所有端用户/账号的当日出图硬上限，护出图 API 账单 · 按") }} UTC+8 0 {{ (i18n or {}).get('mo_s035', "点归零") }}</span></div>
+  <div class="mz-cards" id="mz-selfiecap-cards"></div>
+
+  <div class="section-h" style="margin-top:1.1rem">{{ (i18n or {}).get('mo_s036', "名单下钻") }} <span style="font-size:.72rem;font-weight:400;color:var(--t3)">{{ (i18n or {}).get('mo_s037', "点开看具体端用户") }}——{{ (i18n or {}).get('mo_s038', "谁触墙该挽回 / 谁被预算拦 / 谁是出图重度用户 / 谁被预告（复用上方统计窗口，归因窗 14 天）") }}</span></div>
+  <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.6rem">
+    <button type="button" class="btn btn-p" onclick="mzSelfieContacts('locked')">{{ (i18n or {}).get('mo_s039', "触墙名单") }}</button>
+    <button type="button" class="btn btn-p" onclick="mzSelfieContacts('capped')">{{ (i18n or {}).get('mo_s040', "被预算拦名单") }}</button>
+    <button type="button" class="btn btn-p" onclick="mzSelfieContacts('delivered')">{{ (i18n or {}).get('mo_s041', "送达名单") }}</button>
+    <button type="button" class="btn btn-p" onclick="mzTeaserContacts()">{{ (i18n or {}).get('mo_s042', "预告触达名单") }}</button>
+  </div>
+  <div class="table-wrap">
+    <table class="mz-table">
+      <thead><tr><th id="mz-drill-h" style="min-width:160px">{{ (i18n or {}).get('mo_s043', "端用户") }}</th><th style="width:80px">{{ (i18n or {}).get('mo_s044', "次数") }}</th><th style="width:120px">{{ (i18n or {}).get('msg_js_1206', "最近") }}</th><th style="width:90px">{{ (i18n or {}).get('psn_js_269', "转化") }}</th></tr></thead>
+      <tbody id="mz-drill"><tr><td colspan="4" style="padding:1.2rem;color:var(--t3)">{{ (i18n or {}).get('mo_s045', "点上方按钮查看具体名单") }}</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card fa">
+  <h2>{{ (i18n or {}).get('mo_s046', "运营手动开通 / 查询权益") }}</h2>
+  <div class="mz-grant">
+    <div class="f-grp"><label class="f-lb">{{ (i18n or {}).get('msg_js_1034', "联系人") }} key</label><input type="text" id="g-contact" class="f-input" placeholder="conversation_id"></div>
+    <div class="f-grp"><label class="f-lb">{{ (i18n or {}).get('msg_js_1042', "类型") }}</label>
+      <select id="g-kind" class="f-input" style="width:130px">
+        <option value="subscribe">{{ (i18n or {}).get('mo_s047', "订阅会员") }}</option>
+        <option value="unlock">{{ (i18n or {}).get('mo_s048', "解锁内容") }}</option>
+        <option value="gift">{{ (i18n or {}).get('mo_s049', "打赏礼物") }}</option>
+      </select>
+    </div>
+    <div class="f-grp"><label class="f-lb">{{ (i18n or {}).get('mo_s009', "项目") }} ID</label><input type="text" id="g-item" class="f-input" placeholder="vip / story_ch1 / rose"></div>
+    <div class="f-grp"><label class="f-lb">{{ (i18n or {}).get('mo_s050', "订阅天数") }}</label><input type="number" id="g-days" class="f-input" value="30" min="1" style="width:90px"></div>
+    <button type="button" class="btn btn-p" onclick="mzGrant()">{{ (i18n or {}).get('mo_s051', "开通 / 入账") }}</button>
+    <button type="button" class="btn" onclick="mzLookup()">{{ (i18n or {}).get('mo_s052', "查权益") }}</button>
+  </div>
+  <div class="mz-ent" id="g-ent"></div>
+</div>
+
+<div class="card fa">
+  <h2>
+    {{ (i18n or {}).get('mo_s053', "功能门控 / 升级卡片预览") }}
+    <span style="font-size:.75rem;font-weight:400;color:var(--t2);margin-left:.4rem">{{ (i18n or {}).get('mo_s054', "模拟端用户触达付费墙时看到的升级引导（消费 feature-check 的") }} upsell + pitch_hint）</span>
+  </h2>
+  <div class="mz-grant">
+    <div class="f-grp"><label class="f-lb">{{ (i18n or {}).get('msg_js_1034', "联系人") }} key</label><input type="text" id="fc-contact" class="f-input" placeholder="conversation_id"></div>
+    <div class="f-grp"><label class="f-lb">{{ (i18n or {}).get('mo_s055', "功能位") }}</label>
+      <select id="fc-feature" class="f-input" style="width:170px">
+        <option value="unlimited_proactive">unlimited_proactive {{ (i18n or {}).get('mo_s056', "主动陪伴") }}</option>
+        <option value="voice_reply">voice_reply {{ (i18n or {}).get('msg_js_280', "语音回复") }}</option>
+        <option value="priority_reply">priority_reply {{ (i18n or {}).get('mo_s057', "优先回复") }}</option>
+        <option value="exclusive_persona">exclusive_persona {{ (i18n or {}).get('mo_s058', "专属人设") }}</option>
+        <option value="all_story">all_story {{ (i18n or {}).get('mo_s059', "全部剧情") }}</option>
+        <option value="story_ch1">story_ch1 {{ (i18n or {}).get('mo_s060', "剧情第一章") }}</option>
+        <option value="exclusive_album">exclusive_album {{ (i18n or {}).get('mo_s061', "专属相册") }}</option>
+      </select>
+    </div>
+    <button type="button" class="btn btn-p" onclick="mzFeatureCheck()">{{ (i18n or {}).get('mo_s062', "检查门控") }}</button>
+    <span id="fc-flag" style="font-size:.78rem;color:var(--t3)"></span>
+  </div>
+  <div class="mz-fc-result" id="fc-result"></div>
+</div>
+
+<script>
+function esc(s){return String(s||'').replace(/</g,'&lt;').replace(/"/g,'&quot;');}
+function kBadge(k){return '<span class="badge-k '+esc(k)+'">'+esc(k||'—')+'</span>';}
+
+async function mzLoad(){
+  const days=document.getElementById('mz-days').value||30;
+  const cards=document.getElementById('mz-cards');
+  const sp=document.getElementById('mz-spenders');
+  const tx=document.getElementById('mz-tx');
+  const flag=document.getElementById('mz-flag');
+  try{
+    const res=await fetch('/api/monetize/overview?days='+encodeURIComponent(days));
+    if(!res.ok){flag.textContent=window.T('ln_js_036')+' '+res.status;return;}
+    const d=await res.json();
+    flag.textContent=d.enabled?window.T('mo_js001'):window.T('mo_js002')+' (monetization.enabled=false, '+window.T('mo_js003');
+    const rev=d.revenue||{};
+    const bk=rev.by_kind||{};
+    const cur=rev.currency||'USD';
+    function kindAmt(k){return (bk[k]&&bk[k].amount||0).toFixed(2);}
+    cards.innerHTML=
+      '<div class="mz-card"><div class="lb">'+window.T('em_js013')+(d.window_days||30)+window.T('mo_js004')+'</div><div class="v green">'+cur+' '+((rev.total||0).toFixed(2))+'</div><div class="sub">'+(rev.count||0)+' '+window.T('mo_js005')+'</div></div>'+
+      '<div class="mz-card"><div class="lb">'+window.T('mo_js006')+'</div><div class="v">'+(d.active_subscriptions||0)+'</div><div class="sub">'+window.T('mo_js007')+'</div></div>'+
+      '<div class="mz-card"><div class="lb">'+window.T('mo_js008')+'</div><div class="v">'+cur+' '+kindAmt('subscribe')+'</div><div class="sub">'+((bk.subscribe&&bk.subscribe.count)||0)+' '+window.T('mo_js005')+'</div></div>'+
+      '<div class="mz-card"><div class="lb">'+window.T('mo_js009')+'</div><div class="v">'+cur+' '+kindAmt('unlock')+'</div><div class="sub">'+((bk.unlock&&bk.unlock.count)||0)+' '+window.T('mo_js005')+'</div></div>'+
+      '<div class="mz-card"><div class="lb">'+window.T('mo_js010')+'</div><div class="v">'+cur+' '+kindAmt('gift')+'</div><div class="sub">'+((bk.gift&&bk.gift.count)||0)+' '+window.T('mo_js005')+'</div></div>';
+    const spenders=d.top_spenders||[];
+    sp.innerHTML=spenders.length?spenders.map(function(s){
+      return '<tr><td class="mono">'+esc(s.contact_key)+'</td><td>'+cur+' '+((s.spent||0).toFixed(2))+'</td><td>'+(s.tx_count||0)+'</td></tr>';
+    }).join(''):'<tr><td colspan="3" style="padding:1.2rem;color:var(--t3)">'+window.T('mo_js011')+'</td></tr>';
+    const txs=d.recent_tx||[];
+    tx.innerHTML=txs.length?txs.map(function(t){
+      var ts=t.ts?window.wsFmtDateTime(t.ts):'—';
+      return '<tr><td>'+kBadge(t.kind)+'</td><td class="mono">'+esc(t.contact_key)+'</td><td>'+esc(t.item_id||'—')+'</td><td>'+esc(t.currency||cur)+' '+((t.amount||0).toFixed(2))+'</td><td style="color:var(--t3);font-size:.74rem">'+esc(t.source||'—')+'</td><td class="mono">'+ts+'</td></tr>';
+    }).join(''):'<tr><td colspan="6" style="padding:1.2rem;color:var(--t3)">'+window.T('mo_js012')+'</td></tr>';
+  }catch(e){flag.textContent=window.T('ov_js_req_fail')+': '+e;}
+}
+
+function pct(x){return ((Number(x)||0)*100).toFixed(1)+'%';}
+function fCard(lb,v,sub,green){
+  return '<div class="mz-card"><div class="lb">'+esc(lb)+'</div><div class="v'+(green?' green':'')+'">'+esc(v)+'</div>'+(sub?'<div class="sub">'+esc(sub)+'</div>':'')+'</div>';
+}
+
+async function mzFunnels(){
+  const days=document.getElementById('mz-days').value||30;
+  await mzTeaserFunnel(days);
+  await mzSelfieFunnel(days);
+  await mzSelfieCap();
+}
+
+async function mzTeaserFunnel(days){
+  const cards=document.getElementById('mz-teaser-cards');
+  const scn=document.getElementById('mz-teaser-scn');
+  try{
+    const res=await fetch('/api/monetize/teaser-funnel?window_days='+encodeURIComponent(days)+'&attribution_days=14');
+    const d=await res.json();
+    const f=(d&&d.funnel)||{};
+    if(!d.enabled){
+      cards.innerHTML='<div class="mz-card"><div class="lb">'+window.T('mo_s020')+'</div><div class="v" style="font-size:1rem;color:var(--t3)">'+window.T('ov_js_not_enabled')+'</div><div class="sub">'+window.T('mo_js013')+' monetization + companion.story.paid_teaser</div></div>';
+      scn.innerHTML='<tr><td colspan="5" style="padding:1.2rem;color:var(--t3)">—</td></tr>';
+      return;
+    }
+    cards.innerHTML=
+      fCard(window.T('mo_js014'),f.teasers||0)+
+      fCard(window.T('mo_s026'),f.contacts_teased||0)+
+      fCard(window.T('psn_js_269'),f.conversions||0,(f.feature_conversions||0)+' '+window.T('mo_js015'))+
+      fCard(window.T('mo_s027'),pct(f.conversion_rate),window.T('mo_js015')+' '+pct(f.feature_conversion_rate),true);
+    const by=f.by_scenario||[];
+    scn.innerHTML=by.length?by.map(function(s){
+      return '<tr><td class="mono">'+esc(s.scenario_id||'—')+'</td><td>'+(s.teasers||0)+'</td><td>'+(s.contacts||0)+'</td><td>'+(s.conversions||0)+'</td><td>'+pct(s.conversion_rate)+'</td></tr>';
+    }).join(''):'<tr><td colspan="5" style="padding:1.2rem;color:var(--t3)">'+window.T('mo_js016')+'</td></tr>';
+  }catch(e){cards.innerHTML='<div class="mz-card"><div class="lb">'+window.T('mo_s020')+'</div><div class="v" style="font-size:.9rem;color:var(--amber)">'+window.T('ov_js_req_fail')+'</div></div>';}
+}
+
+async function mzSelfieFunnel(days){
+  const cards=document.getElementById('mz-selfie-cards');
+  try{
+    const res=await fetch('/api/monetize/selfie-funnel?window_days='+encodeURIComponent(days)+'&attribution_days=14');
+    const d=await res.json();
+    const f=(d&&d.funnel)||{};
+    if(!d.enabled){
+      cards.innerHTML='<div class="mz-card"><div class="lb">'+window.T('mo_js017')+'</div><div class="v" style="font-size:1rem;color:var(--t3)">'+window.T('ov_js_not_enabled')+'</div><div class="sub">'+window.T('mo_js013')+' monetization + companion.selfie</div></div>';
+      return;
+    }
+    cards.innerHTML=
+      fCard(window.T('mo_s029'),f.requests||0,(f.contacts||0)+' '+window.T('dash.mp.people'))+
+      fCard(window.T('mo_s030')+'(locked)',f.locked||0,(f.locked_contacts||0)+' '+window.T('dash.mp.people'))+
+      fCard(window.T('mo_js018'),f.delivered||0,(f.capped||0)+' '+window.T('mo_js019'))+
+      fCard(window.T('mo_js020'),f.conversions||0)+
+      fCard(window.T('mo_js021'),pct(f.conversion_rate),window.T('mo_s030')+'→'+window.T('mo_js022'),true);
+  }catch(e){cards.innerHTML='<div class="mz-card"><div class="lb">'+window.T('mo_js017')+'</div><div class="v" style="font-size:.9rem;color:var(--amber)">'+window.T('ov_js_req_fail')+'</div></div>';}
+}
+
+async function mzSelfieCap(){
+  const cards=document.getElementById('mz-selfiecap-cards');
+  try{
+    const res=await fetch('/api/monetize/selfie-cap');
+    const d=await res.json();
+    if(!d.enabled){
+      cards.innerHTML='<div class="mz-card"><div class="lb">'+window.T('mo_s033')+'</div><div class="v" style="font-size:1rem;color:var(--t3)">'+window.T('rpa_unlimited')+'</div><div class="sub">daily_global_cap=0 ('+window.T('mo_js023')+'</div></div>';
+      return;
+    }
+    const used=d.daily_sent||0, cap=d.daily_cap||0, rem=(d.remaining==null?-1:d.remaining);
+    let resetTxt='—';
+    if(d.reset_at_ts&&d.reset_at_ts>0){
+      const mins=Math.max(0,Math.round((d.reset_at_ts*1000-Date.now())/60000));
+      resetTxt=(mins>=60?(Math.floor(mins/60)+'h'+(mins%60)+'m'):mins+'m')+' '+window.T('mo_js024');
+    }
+    const low=(cap>0&&rem>=0&&rem<=Math.max(1,Math.ceil(cap*0.1)));
+    cards.innerHTML=
+      fCard(window.T('mo_js025'),used,window.T('ov_js_cap_limit')+' '+cap)+
+      fCard(window.T('mo_js026'),(rem<0?'∞':rem),resetTxt,!low)+
+      fCard(window.T('base.nav.usage'),pct(cap>0?used/cap:0),low?'⚠ '+window.T('mo_js027'):'')+
+      fCard(window.T('mo_js028'),d.selfie_enabled?window.T('mo_js029'):window.T('mo_js030'));
+  }catch(e){cards.innerHTML='<div class="mz-card"><div class="lb">'+window.T('mo_s033')+'</div><div class="v" style="font-size:.9rem;color:var(--amber)">'+window.T('ov_js_req_fail')+'</div></div>';}
+}
+
+function drillTs(ts){
+  if(!ts) return '—';
+  var d=new Date(ts*1000);
+  return (d.getMonth()+1)+'/'+d.getDate()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+}
+function drillRender(items,showConv){
+  var tb=document.getElementById('mz-drill');
+  if(!items||!items.length){tb.innerHTML='<tr><td colspan="4" style="padding:1.2rem;color:var(--t3)">'+window.T('mo_js031')+'</td></tr>';return;}
+  tb.innerHTML=items.map(function(it){
+    var conv=showConv?(it.converted?'<span class="green">'+window.T('dash.stage.CONVERTED')+'</span>':'<span style="color:var(--t3)">'+window.T('mo_js032')+'</span>'):'—';
+    return '<tr><td class="mono">'+esc(it.contact_key)+'</td><td>'+(it.count||0)+'</td><td>'+drillTs(it.last_ts)+'</td><td>'+conv+'</td></tr>';
+  }).join('');
+}
+async function mzSelfieContacts(kind){
+  var days=document.getElementById('mz-days').value||30;
+  var tb=document.getElementById('mz-drill');
+    document.getElementById('mz-drill-h').textContent=window.T('mo_js033')+kind+')';
+  tb.innerHTML='<tr><td colspan="4" style="padding:1.2rem;color:var(--t3)">'+window.T('dash.loading')+'</td></tr>';
+  try{
+    var res=await fetch('/api/monetize/selfie-contacts?kind='+encodeURIComponent(kind)+'&window_days='+encodeURIComponent(days)+'&attribution_days=14&limit=100');
+    var d=await res.json();
+    if(!d.enabled){tb.innerHTML='<tr><td colspan="4" style="padding:1.2rem;color:var(--t3)">'+window.T('mo_js034')+'</td></tr>';return;}
+    drillRender(d.items,kind==='locked');
+  }catch(e){tb.innerHTML='<tr><td colspan="4" style="padding:1.2rem;color:var(--amber)">'+window.T('ov_js_req_fail')+'</td></tr>';}
+}
+async function mzTeaserContacts(){
+  var days=document.getElementById('mz-days').value||30;
+  var tb=document.getElementById('mz-drill');
+  document.getElementById('mz-drill-h').textContent=window.T('mo_js035');
+  tb.innerHTML='<tr><td colspan="4" style="padding:1.2rem;color:var(--t3)">'+window.T('dash.loading')+'</td></tr>';
+  try{
+    var res=await fetch('/api/monetize/teaser-contacts?window_days='+encodeURIComponent(days)+'&attribution_days=14&limit=100');
+    var d=await res.json();
+    if(!d.enabled){tb.innerHTML='<tr><td colspan="4" style="padding:1.2rem;color:var(--t3)">'+window.T('mo_js034')+'</td></tr>';return;}
+    drillRender(d.items,true);
+  }catch(e){tb.innerHTML='<tr><td colspan="4" style="padding:1.2rem;color:var(--amber)">'+window.T('ov_js_req_fail')+'</td></tr>';}
+}
+
+async function mzRetention(){
+  const tb=document.getElementById('mz-retention');
+  try{
+    const res=await fetch('/api/monetize/retention?recent_days=30&limit=50');
+    if(!res.ok){tb.innerHTML='<tr><td colspan="5" style="padding:1.2rem;color:var(--t3)">'+window.T('ln_js_036')+' '+res.status+'</td></tr>';return;}
+    const d=await res.json();
+    const cur=d.currency||'USD';
+    const items=d.items||[];
+    if(!items.length){tb.innerHTML='<tr><td colspan="5" style="padding:1.2rem;color:var(--t3)">'+window.T('em_js013')+' '+(d.recent_days||30)+' '+window.T('mo_js036')+' 🎉</td></tr>';return;}
+    tb.innerHTML=items.map(function(it){
+      var tier=(it.tier&&it.tier!=='free')?'<span class="badge-tier" style="display:inline-block;padding:.1rem .4rem;border-radius:4px;font-size:.62rem;font-weight:700;background:rgba(168,85,247,.16);color:#a855f7;text-transform:uppercase">'+esc(it.tier)+'</span>':'<span style="color:var(--t3)">—</span>';
+      var dsp=(it.days_since_paid!=null)?(it.days_since_paid+' '+window.T('wa_s158')):'—';
+      return '<tr><td class="mono">'+esc(it.contact_key)+'</td>'+
+        '<td><strong style="color:var(--amber)">'+cur+' '+(it.ltv||0)+'</strong></td>'+
+        '<td>'+dsp+'</td>'+
+        '<td>'+tier+'</td>'+
+        '<td><button type="button" class="btn" style="font-size:.72rem;padding:.2rem .55rem" onclick="mzPickContact(\''+esc(it.contact_key)+'\')">'+window.T('mo_js037')+'</button></td></tr>';
+    }).join('');
+  }catch(e){tb.innerHTML='<tr><td colspan="5" style="padding:1.2rem;color:var(--t3)">'+window.T('ov_js_req_fail')+': '+e+'</td></tr>';}
+}
+
+function mzPickContact(ck){
+  document.getElementById('g-contact').value=ck;
+  document.getElementById('fc-contact').value=ck;
+  mzLookup();
+  document.getElementById('g-contact').scrollIntoView({behavior:'smooth',block:'center'});
+}
+
+document.getElementById('g-kind').addEventListener('change',function(){
+  document.getElementById('g-days').parentElement.style.display=this.value==='subscribe'?'':'none';
+});
+
+async function mzGrant(){
+  const contact=document.getElementById('g-contact').value.trim();
+  const kind=document.getElementById('g-kind').value;
+  const item=document.getElementById('g-item').value.trim();
+  if(!contact||!item){alert(window.T('mo_js038'));return;}
+  const payload={contact_key:contact,kind:kind,item_id:item};
+  if(kind==='subscribe')payload.days=parseFloat(document.getElementById('g-days').value||'30');
+  try{
+    const res=await fetch('/api/monetize/grant',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const d=await res.json();
+    if(!d.ok){alert(window.T('rpa_js_fail_colon')+(d.message||d.reason));return;}
+    if(d.entitlement)renderEnt(d.entitlement);
+    mzLoad();mzRetention();
+  }catch(e){alert(e);}
+}
+
+async function mzLookup(){
+  const contact=document.getElementById('g-contact').value.trim();
+  if(!contact){alert(window.T('mo_js039')+' key');return;}
+  try{
+    const res=await fetch('/api/monetize/entitlement?contact_key='+encodeURIComponent(contact));
+    const d=await res.json();
+    if(!d.ok){alert(window.T('rpa_js_fail_colon')+(d.message||d.reason));return;}
+    renderEnt(d.entitlement);
+  }catch(e){alert(e);}
+}
+
+function renderEnt(ent){
+  const box=document.getElementById('g-ent');
+  box.style.display='block';
+  var until=ent.active_until?window.wsFmtDateTime(ent.active_until):'—';
+  box.innerHTML='<strong>'+esc(ent.contact_key)+'</strong> · '+window.T('mo_js040')+'<strong>'+esc(ent.tier)+'</strong>'+
+    (ent.active?' ('+window.T('mo_js041')+' '+until+')':' ('+window.T('mo_js042'))+
+    ' · '+window.T('mo_js043')+(ent.grants&&ent.grants.length?ent.grants.map(esc).join(', '):'—')+
+    ' · '+window.T('mo_js044')+(ent.unlocked&&ent.unlocked.length?ent.unlocked.map(esc).join(', '):'—');
+}
+
+async function mzFeatureCheck(){
+  const contact=document.getElementById('fc-contact').value.trim();
+  const feature=document.getElementById('fc-feature').value;
+  const flag=document.getElementById('fc-flag');
+  const box=document.getElementById('fc-result');
+  if(!contact){alert(window.T('mo_js039')+' key');return;}
+  flag.textContent=window.T('kb_js_092');box.style.display='none';
+  try{
+    const res=await fetch('/api/monetize/feature-check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contact_key:contact,feature:feature})});
+    const d=await res.json();
+    if(!d.ok){flag.textContent=window.T('rpa_js_fail_colon')+(d.message||d.reason);return;}
+    flag.textContent=d.gate_enabled?window.T('mo_js045'):window.T('mo_js046')+' (gate.enabled=false → '+window.T('mo_js047');
+    box.style.display='block';
+    if(d.allowed){
+      box.innerHTML='<div class="mz-allow">✅ '+window.T('mo_js048')+' "'+esc(feature)+'" '+window.T('mo_js049')+'</div>';
+      return;
+    }
+    box.innerHTML=renderUpsellCard(contact,d.upsell,d.pitch_hint);
+  }catch(e){flag.textContent=window.T('ov_js_req_fail')+': '+e;}
+}
+
+function renderUpsellCard(contact,offer,pitch){
+  if(!offer)return '<div class="mz-allow" style="background:rgba(245,158,11,.12);color:var(--amber)">'+window.T('mo_js050')+'</div>';
+  var grants=(offer.grants||[]);
+  var cur=esc(offer.currency||'USD');
+  var html='<div class="upsell-card">'+
+    '<div class="uc-pitch">'+esc(pitch||(window.T('mo_js051')+' "'+(offer.label||offer.tier)+'" '+window.T('mo_js052')))+'</div>'+
+    '<div class="uc-meta">'+esc(offer.label||offer.item_id)+' · <span class="price">'+cur+' '+(offer.amount||0)+'</span>'+(offer.kind==='subscribe'?' / '+window.T('mo_js053'):'')+'</div>';
+  if(grants.length)html+='<div class="uc-grants">'+window.T('mo_js054')+grants.map(esc).join(', ')+'</div>';
+  html+='<div class="uc-cta">'+
+    '<button type="button" class="uc-btn" onclick="mzCheckout(this,\''+esc(contact)+'\',\''+esc(offer.kind)+'\',\''+esc(offer.item_id)+'\',\'stripe\')">Stripe '+window.T('mo_js055')+'</button>'+
+    '<button type="button" class="uc-btn tg" onclick="mzCheckout(this,\''+esc(contact)+'\',\''+esc(offer.kind)+'\',\''+esc(offer.item_id)+'\',\'telegram\')">Telegram Stars</button>'+
+    '</div>'+
+    '<div class="uc-paylink" id="uc-paylink"></div>'+
+    '</div>';
+  return html;
+}
+
+async function mzCheckout(btn,contact,kind,item,provider){
+  const link=document.getElementById('uc-paylink');
+  btn.disabled=true;link.textContent=window.T('mo_js056');
+  try{
+    const res=await fetch('/api/monetize/checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contact_key:contact,kind:kind,item_id:item,provider:provider})});
+    const d=await res.json();
+    if(!d.ok){
+      link.innerHTML='<span style="color:var(--amber)">'+esc(d.message||d.reason||window.T('rpa_js_st_failed'))+'</span>';
+      return;
+    }
+    link.innerHTML=window.T('mo_js057')+'<a href="'+esc(d.pay_url)+'" target="_blank" rel="noopener">'+esc(d.pay_url)+'</a>';
+  }catch(e){link.textContent=window.T('ov_js_req_fail')+': '+e;}finally{btn.disabled=false;}
+}
+
+document.addEventListener('DOMContentLoaded',function(){mzLoad();mzRetention();mzFunnels();});
+</script>
+{% endblock %}

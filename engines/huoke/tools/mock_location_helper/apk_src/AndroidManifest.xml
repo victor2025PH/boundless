@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.openclaw.mocklocation"
+    android:versionCode="1"
+    android:versionName="1.0">
+
+    <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="33" />
+
+    <!--
+        ACCESS_MOCK_LOCATION 在 Android 6+ 已被废弃，真机需通过
+        开发者选项 > 选择模拟位置应用 授权，而非此权限。
+        但部分 ROM（小米/华为）仍使用此权限作为额外校验，所以保留。
+    -->
+    <uses-permission android:name="android.permission.ACCESS_MOCK_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+
+    <application
+        android:label="OpenClaw MockLoc"
+        android:allowBackup="false"
+        android:debuggable="false">
+
+        <!--
+            MockLocationReceiver: 接收来自 ADB 的广播并设置 Mock GPS 位置
+            用法:
+              adb shell am broadcast -a com.openclaw.SET_MOCK_LOCATION \
+                  --ef latitude 40.7128 --ef longitude -74.0060 \
+                  --ef altitude 0.0 \
+                  -n com.openclaw.mocklocation/.MockLocationReceiver
+        -->
+        <receiver android:name=".MockLocationReceiver"
+                  android:exported="true">
+            <intent-filter>
+                <action android:name="com.openclaw.SET_MOCK_LOCATION" />
+                <!-- 也响应通用 MockLocation Action，提升兼容性 -->
+                <action android:name="android.intent.action.MOCK_LOCATION" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+            MockLocationService: 保持 Mock Provider 持续活跃的前台服务
+            某些 Android 版本在 Receiver 处理完后会移除 Mock Provider，
+            Service 确保位置持续生效（对于长时间使用的场景）
+        -->
+        <service android:name=".MockLocationService"
+                 android:exported="false"
+                 android:foregroundServiceType="location" />
+
+    </application>
+</manifest>

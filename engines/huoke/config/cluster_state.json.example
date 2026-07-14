@@ -1,0 +1,9 @@
+{
+  "__doc__": "集群运行态快照模板。真实 cluster_state.json 由 coordinator 运行时自动写入(含 worker 内网 IP)，已被 .gitignore 忽略、不入库、无需手工维护。下面为示例结构。",
+  "worker-01": {
+    "host_name": "W01",
+    "host_ip": "192.168.0.100",
+    "port": 18080,
+    "last_heartbeat": 0
+  }
+}

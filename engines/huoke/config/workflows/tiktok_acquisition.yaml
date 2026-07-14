@@ -1,0 +1,146 @@
+# TikTok Lead Acquisition Workflow
+# 全链路: 养号 → 关注测试 → 智能关注 → 回关聊天 → 转化
+#
+# 由 OpenClaw WorkflowExecutor 编排，Scheduler 驱动。
+# 每个 step 通过 ActionRegistry 调用 TikTokAutomation 实例方法。
+
+name: tiktok_acquisition
+description: |
+  Phase-driven TikTok lead acquisition pipeline.
+  - Cold start: browse feed, build algorithm profile
+  - Interest building: hashtag search, engagement, follow tests
+  - Active: smart follow + DM follow-backs
+  Adapts behavior based on account maturity signals.
+
+target_platforms:
+  - tiktok
+
+variables:
+  target_country: italy
+  target_language: italian
+  target_gender: male
+  target_min_age: 30
+  max_follows_per_run: 15
+  max_chats_per_run: 10
+  warmup_duration_cold: 30
+  warmup_duration_interest: 40
+  warmup_duration_active: 35
+  like_probability_cold: 0.15
+  like_probability_interest: 0.25
+  like_probability_active: 0.30
+
+stages:
+  cold_start:
+    description: "Pure browsing — build algorithm fingerprint"
+    actions:
+      - action: tiktok.warmup_session
+        params:
+          duration_minutes: "{variables.warmup_duration_cold}"
+          target_country: "{variables.target_country}"
+          phase: "cold_start"
+
+  interest_building:
+    description: "Hashtag search, higher engagement, random follow tests"
+    actions:
+      - action: tiktok.warmup_session
+        params:
+          duration_minutes: "{variables.warmup_duration_interest}"
+          target_country: "{variables.target_country}"
+          phase: "interest_building"
+
+  active_follow:
+    description: "Smart follow from seed account follower lists"
+    actions:
+      - action: tiktok.smart_follow
+        params:
+          max_follows: "{variables.max_follows_per_run}"
+
+  active_chat:
+    description: "Check for follow-backs and send DMs"
+    actions:
+      - action: tiktok.check_and_chat_followbacks
+        params:
+          max_chats: "{variables.max_chats_per_run}"
+
+  discovery:
+    description: "Search and collect leads from TikTok"
+    platforms: [tiktok]
+    actions:
+      - action: tiktok.search_and_collect_leads
+        params:
+          max_leads: 10
+
+# Workflow steps — executed sequentially by WorkflowExecutor
+steps:
+  - id: warmup
+    action: tiktok.warmup_session
+    params:
+      duration_minutes: "{variables.warmup_duration_active}"
+      target_country: "{variables.target_country}"
+      phase: "active"
+
+  - id: discover_leads
+    action: tiktok.search_and_collect_leads
+    params:
+      query: "{variables.target_country}"
+      max_leads: 10
+    depends_on: [warmup]
+    on_error: continue
+
+  - id: smart_follow
+    action: tiktok.smart_follow
+    params:
+      max_follows: "{variables.max_follows_per_run}"
+    depends_on: [warmup]
+    on_error: continue
+
+  - id: post_follow_browse
+    action: tiktok.browse_feed
+    params:
+      video_count: 5
+      like_probability: 0.3
+    depends_on: [smart_follow]
+    on_error: continue
+
+  - id: check_followbacks
+    action: tiktok.check_and_chat_followbacks
+    params:
+      max_chats: "{variables.max_chats_per_run}"
+    depends_on: [post_follow_browse]
+    on_error: continue
+
+  - id: log_complete
+    action: util.log
+    params:
+      message: "TikTok acquisition cycle complete"
+    depends_on: [check_followbacks]
+
+# Cross-platform escalation rules
+escalation_rules:
+  - trigger_event: "tiktok.follow_received"
+    from_stage: "warmed_up"
+    to_stage: "contacted"
+    delay_min: 1800
+    delay_max: 7200
+    priority: 10
+    actions:
+      - action: tiktok.send_dm
+        params:
+          message: ""
+
+  - trigger_event: "tiktok.user_followed"
+    to_stage: "warmed_up"
+    priority: 5
+    actions:
+      - action: util.log
+        params:
+          message: "User followed on TikTok, monitoring for follow-back"
+
+  - trigger_event: "tiktok.dm_sent"
+    from_stage: "contacted"
+    to_stage: "engaged"
+    priority: 8
+    actions:
+      - action: util.log
+        params:
+          message: "DM sent on TikTok, lead engaged"

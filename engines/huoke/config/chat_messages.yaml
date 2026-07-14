@@ -1,0 +1,113 @@
+country: italy
+device_referrals:
+  89NZVGKFD6BYUO5P:
+    telegram: '@dthb3'
+    whatsapp: '+639270135480'
+  8D7DWWUKQGJRNN79:
+    telegram: '@djv159'
+    whatsapp: '+639952948809'
+  BIIVOZFQZTXGVOBU:
+    telegram: '@ykj123'
+countries:
+  jp:
+    language: ja
+    referral_priority:
+    - line
+    - instagram
+    - whatsapp
+    - telegram
+    friend_request_notes:
+    - はじめまして🌸同じ{interest}好きで繋がりたくて、よろしければ仲良くしてください☕️
+    - こんにちは！プロフィール拝見して素敵だなと思いました🌿よろしくお願いします
+    - 突然失礼します🙇‍♀️同世代で共通の話題があれば嬉しいです🌼
+    greeting_messages:
+    - はじめまして😊友達になってくれてありがとうございます🌸
+    - こんにちは！フォロー返ししてくれてありがとう✨少しずつ仲良くしてください
+    - '{name}さん、繋がれて嬉しいです🌿素敵な投稿楽しみにしています'
+    - こんばんは🌙友達申請受けてくれてありがとう、よろしくお願いします🍀
+    - 初めまして！プロフィール見て親近感を持ちました😌お話しできたら嬉しいです
+    - '{name}さん、こんにちは☀️繋がれて光栄です、今後ともよろしくお願いします✨'
+    - はじめまして🙇‍♀️同年代の方と知り合えて嬉しいです、これからよろしくお願いします🌷
+    - こんにちは😊同じような趣味の方と繋がれて嬉しいです、仲良くしてくださいね🎵
+    message_variants:
+    - id: jp_v1_gentle
+      name: 穏やか型（推奨）
+      description: 敬语 + 低压力 + LINE 切换自然
+      weight: 70
+      greeting_messages:
+      - '{name}さん、こんにちは☕️最近いかがお過ごしですか？'
+      - いつも楽しい投稿ありがとうございます🌸{name}さんのセンス素敵です
+      referral_line:
+      - 'もしよかったらLINEの方でお話ししませんか？ID: {line}（ご無理のない範囲で✨）'
+      - LINEだともう少しゆっくりお話できるので良かったらどうぞ🌿 {line}
+      referral_instagram:
+      - Instagram もやっています、よかったらどうぞ🌼 {instagram}
+    - id: jp_v2_direct
+      name: 率直型（フォロー後 3 日経過）
+      description: 直接切入，但仍带敬语
+      weight: 30
+      greeting_messages:
+      - '{name}さん、一つお誘いしたいことがあるのですがお時間ありますか？'
+      referral_line:
+      - 詳しくはLINEでお伝えします → {line}
+    comment_templates:
+    - わかる～！うちも同じです🥹
+    - 素敵ですね🌸参考にさせていただきます
+    - おしゃれ✨憧れます
+    - ありがとうございます🌿今度試してみます
+  it:
+    language: it
+    referral_priority:
+    - whatsapp
+    - telegram
+    - instagram
+    - line
+    friend_request_notes:
+    - Ciao {name}! Mi piacerebbe connettermi con te, abbiamo interessi in comune 🌟
+    greeting_messages:
+    - Ciao {name}! Grazie per il follow back! Mi piacciono molto i tuoi contenuti!
+    - Hey {name}! Ho visto che mi segui, grazie! Parliamone!
+    - Grazie {name} per il follow! I tuoi video sono fantastici!
+greeting_messages:
+- Ciao {name}! Grazie per il follow back! Mi piacciono molto i tuoi contenuti!
+- Hey {name}! Ho visto che mi segui, grazie! Parliamone!
+- Grazie {name} per il follow! I tuoi video sono fantastici!
+message_variants:
+- description: 侧重建立情感连接
+  greeting_messages:
+  - Ciao {name}! Grazie per il follow back! Mi piacciono molto i tuoi contenuti! Come
+    stai?
+  - Hey {name}! Ho notato i tuoi contenuti fantastici! Grazie per il follow! 🌟
+  - Ciao {name}! Che bello seguirci! I tuoi video sono davvero ispiranti!
+  id: v1_warm
+  name: 温暖型
+  referral_telegram:
+  - 'Parliamo di più su Telegram: {telegram} Ti aspetto! 😊'
+  - 'Se vuoi conoscermi meglio, scrivimi su Telegram: {telegram}'
+  referral_whatsapp:
+  - 'Puoi anche scrivermi su WhatsApp: {whatsapp} Sempre disponibile!'
+  weight: 85
+- description: 直接切入重点，商务效率
+  greeting_messages:
+  - Ciao {name}! Grazie per il follow. Ho qualcosa di interessante per te!
+  - Hey {name}! Ottimi contenuti! Possiamo parlare di un'opportunità?
+  - Ciao {name}! Follow back apprezzato! Ho una proposta interessante.
+  id: v2_direct
+  name: 直接型
+  referral_telegram:
+  - 'Dettagli su Telegram: {telegram} Scrivimi quando puoi.'
+  - 'Contattami su Telegram: {telegram} per un''opportunità esclusiva.'
+  referral_whatsapp:
+  - 'O su WhatsApp: {whatsapp} per risposta rapida.'
+  weight: 66
+messages:
+- 'Ciao {name}! Grazie per il follow back! Contattami su Telegram: {telegram}'
+- 'Hey {name}! Parliamone su Telegram: {telegram} o WhatsApp: {whatsapp}'
+- 'Grazie {name}! Scrivimi su Telegram: {telegram} per restare in contatto!'
+referral_telegram:
+- 'Scrivimi su Telegram: {telegram} per parlare di piu!'
+- 'Contattami su Telegram: {telegram} Ho qualcosa di interessante!'
+- 'Ti aspetto su Telegram: {telegram} Li possiamo chattare meglio!'
+referral_whatsapp:
+- 'Oppure scrivimi su WhatsApp: {whatsapp}'
+- 'Contattami anche su WhatsApp: {whatsapp} Sarei felice di conoscerti!'

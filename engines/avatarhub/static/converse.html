@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>无界 BOUNDLESS · 幻影 LiveX</title>
+<link rel="stylesheet" href="/static/brand.css"/>
+<script src="/static/brand.js"></script>
+<script src="/static/cert.js"></script>
+<script src="/static/_errutil.js"></script>
+<style>
+  :root {
+    --bg:      #0f1117;
+    --surface: #1a1d2e;
+    --card:    #222540;
+    --accent:  rgb(var(--bd-acc-rgb, 79 122 255));   /* 跟随 brand.js 中央三元组（跨设备白标）；默认 = #4f7aff */
+    --accent2: #a855f7;
+    --green:   #00d68f;
+    --red:     #ff3860;
+    --text:    #e8e8f0;
+    --muted:   #888aaa;
+    --radius:  14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'PingFang SC','Microsoft YaHei',sans-serif; height: 100dvh; display: flex; flex-direction: column; }
+
+  /* ── top bar ── */
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 18px; background: var(--surface); border-bottom: 1px solid #ffffff18; }
+  header .logo { font-size: 20px; font-weight: 700; background: linear-gradient(135deg,var(--accent),var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  header .status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); box-shadow: 0 0 6px var(--green); animation: pulse 2s infinite; cursor: help; }
+  /* C1-2: 状态点三态——绿=就绪 / 黄=部分服务掉线(降级) / 红=Hub 不可达 */
+  header .status-dot.warn { background: #fbbf24; box-shadow: 0 0 6px #fbbf24; }
+  header .status-dot.err  { background: var(--red); box-shadow: 0 0 6px var(--red); animation: pulse .8s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  header select { margin-left: auto; background: var(--card); border: 1px solid #ffffff25; color: var(--text); padding: 5px 10px; border-radius: 8px; font-size: 13px; cursor: pointer; }
+
+  /* ── settings bar ── */
+  .settings { display: flex; gap: 8px; padding: 8px 14px; background: var(--surface); border-bottom: 1px solid #ffffff10; flex-wrap: wrap; align-items: center; font-size: 13px; }
+  .settings label { color: var(--muted); }
+  .settings select, .settings input[type=checkbox] { background: var(--card); border: 1px solid #ffffff25; color: var(--text); padding: 3px 7px; border-radius: 6px; cursor: pointer; }
+  .settings .tag { background: var(--card); border-radius: 6px; padding: 3px 8px; color: var(--muted); font-size: 12px; }
+
+  /* ── chat area ── */
+  .chat { flex: 1; overflow-y: auto; padding: 16px 14px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { display: flex; gap: 10px; max-width: 88%; }
+  .msg.user   { align-self: flex-end; flex-direction: row-reverse; }
+  .msg.bot    { align-self: flex-start; }
+  .bubble {
+    padding: 10px 14px; border-radius: var(--radius);
+    font-size: 14px; line-height: 1.6; word-break: break-word;
+  }
+  .user .bubble  { background: linear-gradient(135deg,var(--accent),#8b5cf6); border-radius: var(--radius) 4px var(--radius) var(--radius); }
+  .bot  .bubble  { background: var(--card); border-radius: 4px var(--radius) var(--radius) var(--radius); }
+  .bubble .label { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .bubble audio  { margin-top: 8px; width: 100%; height: 30px; filter: invert(1) hue-rotate(180deg); }
+  .bubble .mini-timing { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .verify-wrap { margin-top: 6px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+  .vrf-btn { font-size: 12px; padding: 3px 10px; border-radius: 20px; cursor: pointer;
+    background: rgba(255,255,255,.06); color: var(--text); border: 1px solid #ffffff25; }
+  .vrf-btn:hover { border-color: var(--accent); }
+  .vrf-btn:disabled { opacity:.5; cursor:not-allowed; }
+  .verify-line { font-size: 12px; }
+  .verify-line.good { color: var(--green); }
+  .verify-line.mid  { color: #fbbf24; }
+  .verify-line.none, .verify-line.loading { color: var(--muted); }
+  .verify-line a { color: var(--accent); text-decoration: none; }
+  .verify-line a:hover { text-decoration: underline; }
+  .avatar-icon { width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg,var(--accent2),var(--accent)); display: flex; align-items: center; justify-content: center; font-size: 17px; flex-shrink: 0; overflow: hidden; }
+  .avatar-icon img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }  /* C2-2: 角色缩略图头像 */
+  /* C2-1: 恢复历史/系统注记（居中小胶囊） */
+  .sys-note { align-self: center; font-size: 12px; color: var(--muted); background: rgba(255,255,255,.04); border: 1px solid #ffffff14; border-radius: 20px; padding: 3px 12px; }
+  /* C2-4: 免提状态胶囊（听/想/说/你在说 四态） */
+  .hf-pill { font-size: 12px; color: var(--muted); background: var(--card); border: 1px solid #ffffff20; border-radius: 20px; padding: 5px 10px; }
+
+  /* typing indicator */
+  .typing { display: flex; gap: 4px; padding: 10px 14px; }
+  .typing span { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite; }
+  .typing span:nth-child(2){animation-delay:.2s} .typing span:nth-child(3){animation-delay:.4s}
+  @keyframes blink{0%,80%,100%{transform:scale(.8);opacity:.4}40%{transform:scale(1.1);opacity:1}}
+
+  /* ── bottom control ── */
+  footer { padding: 14px 16px; background: var(--surface); border-top: 1px solid #ffffff18; }
+  .text-row { display: flex; gap: 8px; margin-bottom: 10px; }
+  .text-row input {
+    flex: 1; background: var(--card); border: 1px solid #ffffff20; color: var(--text);
+    padding: 10px 14px; border-radius: 10px; font-size: 14px; outline: none;
+  }
+  .text-row input:focus { border-color: var(--accent); }
+  .text-row button { background: var(--accent); border: none; color: #fff; padding: 10px 16px; border-radius: 10px; cursor: pointer; font-size: 14px; transition: opacity .2s; }
+  .text-row button:hover { opacity: .85; }
+
+  .mic-row { display: flex; justify-content: center; align-items: center; gap: 14px; }
+  #mic-btn {
+    width: 68px; height: 68px; border-radius: 50%; border: none; cursor: pointer;
+    background: radial-gradient(circle at 40% 35%, #7c6fff, var(--accent));
+    box-shadow: 0 4px 20px #6c63ff55; font-size: 26px;
+    transition: transform .15s, box-shadow .15s;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #mic-btn.recording {
+    background: radial-gradient(circle at 40% 35%, #ff5f7e, var(--red));
+    box-shadow: 0 0 0 0 #ff386088; animation: ripple 1s infinite;
+  }
+  @keyframes ripple {
+    0%  { box-shadow: 0 0 0 0   #ff386066; }
+    70% { box-shadow: 0 0 0 18px #ff386000; }
+    100%{ box-shadow: 0 0 0 0   #ff386000; }
+  }
+  #mic-hint { font-size: 12px; color: var(--muted); text-align: center; }
+
+  /* waveform */
+  #wave-canvas { display: none; width: 120px; height: 30px; }
+  #mic-btn.recording ~ #wave-canvas { display: block; }
+
+  /* interrupt btn */
+  #stop-btn { display: none; background: var(--card); border: 1px solid #ffffff20; color: var(--muted); padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+  #stop-btn.visible { display: block; }
+
+  /* scrollbar */
+  .chat::-webkit-scrollbar { width: 4px; }
+  .chat::-webkit-scrollbar-track { background: transparent; }
+  .chat::-webkit-scrollbar-thumb { background: #ffffff18; border-radius: 4px; }
+
+  /* P4 大字模式：与控制台共用 localStorage hub_large_text（同源偏好跨页跟随）。
+     本页全 px 排版，root 字号无效 → 逐类精准 +2px，不用 zoom（避免整版缩放引起布局漂移）。*/
+  html.bd-large-text .bubble { font-size: 16px; }
+  html.bd-large-text .bubble .label, html.bd-large-text .bubble .mini-timing,
+  html.bd-large-text .verify-line, html.bd-large-text .vrf-btn { font-size: 13.5px; }
+  html.bd-large-text .settings { font-size: 15px; }
+  html.bd-large-text .settings .tag { font-size: 13.5px; }
+  html.bd-large-text .text-row input, html.bd-large-text .text-row button { font-size: 16px; }
+  html.bd-large-text #stop-btn, html.bd-large-text #handsfree-btn, html.bd-large-text header select { font-size: 15px; }
+  html.bd-large-text #mic-hint { font-size: 13.5px; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="logo"><span data-bd-logo>🎭</span> <span data-bd-name>无界 BOUNDLESS</span> · <span data-bd-product>幻影 LiveX</span></span>
+  <div class="status-dot" id="status-dot" title="正在检查服务…"></div>
+  <!-- C1-1: 角色选项由 /profiles 动态填充（不再硬编码人名），选择记 localStorage -->
+  <select id="profile-sel" title="切换对话角色（声音与人设跟随）"></select>
+</header>
+<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;padding:6px 10px;background:var(--surface);border-bottom:1px solid #ffffff14;">
+  <span class="bd-trust" title="所有推理在本机完成，音视频与素材不上传公网">🔒 本地运行 · 数据不出本机</span>
+  <a class="bd-trust" href="/verify" target="_blank" rel="noopener" style="text-decoration:none;cursor:pointer;" title="点击打开验真工具：上传音频，离线验证是否本系统生成 / 是否被篡改">🏷 AI 生成 · 可验真伪 ↗</a>
+</div>
+
+<div class="settings">
+  <!-- 客户/工程分离：默认客户态，只露「新对话」；引擎选择(LLM/STT/口型/优先级)收到「⚙ 高级」后面，避免演示时露出工程细节 -->
+  <button id="advToggle" onclick="toggleAdv()" title="显示/隐藏开发者高级选项（LLM/STT/口型/优先级）"
+          style="background:var(--card);border:1px solid #ffffff20;color:var(--muted);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px;">⚙ 高级</button>
+  <span id="engControls" style="display:none;gap:8px;align-items:center;flex-wrap:wrap;">
+    <label>LLM:</label>
+    <select id="llm-sel">
+      <option value="qwen2.5-14b">Qwen2.5-14B (快)</option>
+      <option value="qwen2.5-32b">Qwen2.5-32B (慢/强)</option>
+      <option value="mock_llm">Mock (测试)</option>
+    </select>
+    <label>STT:</label>
+    <select id="stt-sel">
+      <option value="whisper_stt">Whisper</option>
+      <option value="nemotron_stt">Nemotron 3.5（流式·可商用）</option>
+      <option value="mock_stt">Mock</option>
+    </select>
+    <label>口型:</label>
+    <input type="checkbox" id="lipsync-chk" title="生成口型（需 MuseTalk）">
+    <label>优先级:</label>
+    <input type="number" id="prio-input" value="0" step="1" title="并发满载时排队优先级，越大越先被服务" style="width:48px;background:var(--card);border:1px solid #ffffff20;color:var(--muted);border-radius:6px;padding:3px 6px;">
+  </span>
+  <span class="tag" id="session-tag">session: default</span>
+  <button onclick="clearSession()" style="background:var(--card);border:1px solid #ffffff20;color:var(--muted);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px;">🔄 新对话</button>
+  <!-- UC3: 会话导出——手机页早有此动线而桌面页缺；本页记录关标签页即清，导出是唯一带走方式 -->
+  <button onclick="exportSession()" title="把本轮对话导出为 Markdown 文字稿（本页记录关标签页即清空，导出是唯一留档方式）"
+          style="background:var(--card);border:1px solid #ffffff20;color:var(--muted);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px;">⬇ 导出记录</button>
+  <button id="largeTextBtn" onclick="toggleLargeText()" title="字号整体 +2px（偏好与控制台互通）"
+          style="background:var(--card);border:1px solid #ffffff20;color:var(--muted);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px;">🔤 大字</button>
+</div>
+<script>
+  // P4 大字模式：偏好键与控制台一致（hub_large_text），任一端开启另一端跟随。
+  function _ltApply(on){
+    document.documentElement.classList.toggle('bd-large-text', !!on);
+    var b=document.getElementById('largeTextBtn');
+    if(b) b.style.color = on ? 'var(--accent)' : 'var(--muted)';
+  }
+  function toggleLargeText(){
+    var on = !document.documentElement.classList.contains('bd-large-text');
+    _ltApply(on);
+    try{ localStorage.setItem('hub_large_text', on?'1':'0'); }catch(_){}
+  }
+  try{ _ltApply(localStorage.getItem('hub_large_text')==='1'); }catch(_){}
+
+  // 高级选项显隐（客户/工程分离）：默认隐藏，偏好记 localStorage；?dev=1 或 #dev 强制显示。
+  function _advWanted(){
+    try{ if(location.search.indexOf('dev=1')>=0 || location.hash.indexOf('dev')>=0) return true;
+         return localStorage.getItem('converse_adv')==='1'; }catch(_){ return false; }
+  }
+  function _applyAdv(on){
+    var el=document.getElementById('engControls'), btn=document.getElementById('advToggle');
+    if(el) el.style.display = on ? 'inline-flex' : 'none';
+    if(btn){ btn.style.borderColor = on ? 'var(--accent)' : '#ffffff20';
+             btn.style.color = on ? 'var(--accent)' : 'var(--muted)'; }
+  }
+  function toggleAdv(){
+    var on=!_advWanted(); try{ localStorage.setItem('converse_adv', on?'1':'0'); }catch(_){}
+    _applyAdv(on);
+  }
+  document.addEventListener('DOMContentLoaded', function(){ _applyAdv(_advWanted()); });
+</script>
+
+<div class="chat" id="chat"></div>
+
+<footer>
+  <div class="text-row">
+    <input type="text" id="text-input" placeholder="直接输入文字发送，或按下方麦克风录音…" />
+    <button onclick="sendText()">发送</button>
+  </div>
+  <div class="mic-row">
+    <button id="stop-btn" onclick="interrupt()">⏹ 停止回复</button>
+    <span id="hf-state" class="hf-pill" style="display:none"></span>
+    <button id="handsfree-btn" title="免提模式：常开麦克风，一开口即打断、静音自动续问（流式 STT）" style="background:var(--card);border:1px solid #ffffff20;color:var(--muted);padding:6px 12px;border-radius:8px;cursor:pointer;font-size:13px;">📞 免提</button>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:6px">
+      <button id="mic-btn" title="点击录音 / 再次点击停止" aria-label="录音：点击开始/停止">🎙</button>
+      <canvas id="wave-canvas" width="120" height="30" style="display:none"></canvas>
+      <span id="mic-hint">点击麦克风开始录音</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+const HUB = location.origin;   // http://127.0.0.1:9000
+
+/* ── C1-1: 角色动态化（/profiles 填充下拉，选择记忆到 localStorage）── */
+let activeProfile = '';
+let profileThumbs = {};   // C2-2: name → 缩略图 b64（气泡头像用）
+function currentProfileName(){
+  const sel = document.getElementById('profile-sel');
+  return (sel && sel.value) || activeProfile || '数字人';
+}
+// C2-2: 机器人气泡头像——有角色缩略图用真人头像，否则保留 🎤 渐变圆标
+function avatarHtml(){
+  const t = profileThumbs[currentProfileName()];
+  return '<div class="avatar-icon">' + (t ? `<img src="data:image/jpeg;base64,${t}" alt="">` : '🎤') + '</div>';
+}
+async function loadProfiles(){
+  const sel = document.getElementById('profile-sel');
+  try{
+    const d = await fetch(HUB + '/profiles?fields=name,has_voice,thumbnail').then(r => r.json());
+    const ps = d.profiles || [];
+    activeProfile = d.active || '';
+    sel.innerHTML = '';
+    for(const p of ps){
+      if(p.thumbnail) profileThumbs[p.name] = p.thumbnail;
+      const o = document.createElement('option');
+      o.value = p.name;
+      o.textContent = (p.has_voice ? '🎤 ' : '👤 ') + p.name;
+      sel.appendChild(o);
+    }
+    const def = document.createElement('option');
+    def.value = ''; def.textContent = '默认角色';
+    sel.appendChild(def);
+    // 选中优先级：上次选择（getItem null=从没选过，区别于选过"默认角色"的空串）> 服务端 active > 列表第一个
+    let saved = null; try{ saved = localStorage.getItem('converse_profile'); }catch(_){}
+    if(saved !== null && (saved === '' || ps.some(p => p.name === saved))) sel.value = saved;
+    else if(activeProfile && ps.some(p => p.name === activeProfile)) sel.value = activeProfile;
+  }catch(_){
+    sel.innerHTML = '<option value="">默认角色</option>';   // Hub 不可达兜底，红点会说明原因
+  }
+}
+document.getElementById('profile-sel').addEventListener('change', function(){
+  try{ localStorage.setItem('converse_profile', this.value); }catch(_){}
+  addBot('已切换到「' + (this.value || '默认角色') + '」，接下来的回复用这个角色的声音和人设。');
+});
+
+/* ── C1-2: 顶栏状态点三态（绿=就绪 / 黄=部分能力降级 / 红=Hub 不可达）── */
+async function pollHealth(){
+  const dot = document.getElementById('status-dot');
+  if(!dot) return;
+  try{
+    const d = await fetch(HUB + '/health').then(r => r.json());
+    const s = d.services || {};
+    const issues = [];
+    if(!(s.tts || s.fish_tts || s.emotion_tts || s.qwen3_tts)) issues.push('语音合成离线（只能纯文字回复）');
+    if(!(s.stt || s.nemo_stt)) issues.push('语音识别离线（麦克风/免提不可用，文字仍可）');
+    if(d.pressure === 'red') issues.push('系统高负载（回复可能变慢）');
+    dot.className = 'status-dot' + (issues.length ? ' warn' : '');
+    dot.title = issues.length ? ('部分能力降级：' + issues.join('；')) : '服务就绪，可以对话';
+    // UH2 巡检：能力诚实对齐语音页——STT 全离线时麦克风/免提灰化+给原因与去处，
+    //   而不是让用户录完一整段话才失败。探测没数据(services 空)不做假告警。
+    _applySttGate(!Object.keys(s).length || !!(s.stt || s.nemo_stt));
+  }catch(_){
+    dot.className = 'status-dot err';
+    dot.title = 'Hub 不可达：对话暂时无法进行，请检查主程序是否在运行';
+  }
+}
+let _sttGateHintOn = false;   // UK2: 记住"离线提示是我写的"，恢复在线时才好只还原自己的文案
+function _applySttGate(sttUp){
+  const mic = document.getElementById('mic-btn');
+  if(mic && !isRecording){   // 录音进行中不抢按钮（下轮探测再收）
+    mic.disabled = !sttUp;
+    mic.style.opacity = sttUp ? '' : '.4';
+    mic.title = sttUp ? '点击录音 / 再次点击停止'
+                      : '语音识别离线：麦克风暂不可用（文字输入仍可）。请到控制台「交付体检」启动 STT';
+  }
+  const hfb = document.getElementById('handsfree-btn');
+  if(hfb && !(typeof hf !== 'undefined' && hf.on)){
+    hfb.disabled = !sttUp;
+    hfb.style.opacity = sttUp ? '' : '.4';
+    hfb.title = sttUp ? '免提模式：常开麦克风，一开口即打断、静音自动续问（流式 STT）'
+                      : '语音识别离线，免提暂不可用';
+  }
+  // UK2: title 悬停才可见且点不了——离线时给可点的「去启动」链接（?fix=stt 直落体检页 STT 行），
+  //   空闲态才改提示（录音/免提中不抢），恢复在线只还原自己写的文案
+  const hint = document.getElementById('mic-hint');
+  if(hint && !isRecording && !(typeof hf !== 'undefined' && hf.on)){
+    if(!sttUp){
+      hint.innerHTML = '语音识别离线 · <a href="/ui?fix=stt" target="_blank" style="color:var(--blue,#3b82f6)">去启动 ↗</a> · 文字输入仍可用';
+      _sttGateHintOn = true;
+    } else if(_sttGateHintOn){
+      hint.textContent = '点击麦克风开始录音';
+      _sttGateHintOn = false;
+    }
+  }
+}
+
+/* ── session ── */
+let sessionId = 'web_' + Math.random().toString(36).slice(2, 8);
+document.getElementById('session-tag').textContent = 'session: ' + sessionId;
+function clearSession() {
+  sessionId = 'web_' + Math.random().toString(36).slice(2, 8);
+  document.getElementById('session-tag').textContent = 'session: ' + sessionId;
+  document.getElementById('chat').innerHTML = '';
+  sessTurns = [];   // C2-1: 新对话=文字记录一并清空（服务端旧上下文随新 session id 自然脱离）
+  try{ sessionStorage.removeItem(SESS_KEY); }catch(_){}
+  addBot('对话已重置，你好！请问有什么需要帮助的？');
+  // 免提开启时重连，使打断/续问绑定到新 session
+  if (typeof hf !== 'undefined' && hf.on) { stopHandsFree(); setTimeout(startHandsFree, 250); }
+}
+
+/* ── UC3: 会话导出（与手机页 exportSession 同一后端端点，口径一致）──
+   sessionStorage 关标签页即清是隐私设计，但"聊出好话术想留底"是真实诉求——
+   导出走服务端会话记录（含滚动摘要），比前端气泡更完整。 */
+function exportSession(){
+  if(!sessTurns.length){
+    // 空会话导出=下载一个空文件的 dead-end，按本页 sys-note 惯例就地说明
+    const note = document.createElement('div');
+    note.className = 'sys-note';
+    note.textContent = '还没有对话内容，聊几句再导出吧';
+    document.getElementById('chat').appendChild(note);
+    note.scrollIntoView({behavior:'smooth', block:'end'});
+    return;
+  }
+  const prof = encodeURIComponent(document.getElementById('profile-sel')?.value || '');
+  window.location.href = HUB + '/api/converse/session/export?session_id='
+    + encodeURIComponent(sessionId) + '&fmt=md&profile=' + prof;
+}
+
+/* ── C2-1: 会话文字持久化（sessionStorage，关标签页即清；音频体积大不保留）──
+   连 session id 一起存：刷新后服务端 LLM 上下文接得上，恢复的不只是"看起来还在"，
+   是真的还在同一轮对话里。localStorage 不合适——对话有隐私预期，关页即清才对。 */
+const SESS_KEY = 'converse_session_v1';
+let sessTurns = [];
+function _recordTurn(role, text, hadAudio, who){
+  sessTurns.push({role, text: String(text || '').slice(0, 2000),
+                  hadAudio: !!hadAudio, who: who || '', ts: Date.now()});
+  sessTurns = sessTurns.slice(-30);
+  try{ sessionStorage.setItem(SESS_KEY, JSON.stringify({sessionId, turns: sessTurns})); }catch(_){}
+}
+function restoreSession(){
+  let d = null;
+  try{ d = JSON.parse(sessionStorage.getItem(SESS_KEY) || 'null'); }catch(_){}
+  if(!d || !Array.isArray(d.turns) || !d.turns.length) return false;
+  sessTurns = d.turns.slice(-30);
+  if(d.sessionId){   // 复用服务端 session：LLM 记忆连续，不是只恢复气泡壳
+    sessionId = d.sessionId;
+    document.getElementById('session-tag').textContent = 'session: ' + sessionId;
+  }
+  const note = document.createElement('div');
+  note.className = 'sys-note';
+  note.textContent = '已恢复本会话 ' + sessTurns.length + ' 条文字记录（语音不保留 · 关标签页即清空）';
+  document.getElementById('chat').appendChild(note);
+  for(const t of sessTurns){
+    if(t.role === 'user'){ addUser(t.text); }
+    else{
+      const div = addBot(t.text, null, t.who);
+      if(t.hadAudio){
+        const b = div.querySelector('.bubble');
+        const n = document.createElement('div');
+        n.className = 'mini-timing';
+        n.textContent = '🔇 语音未保留（刷新前的回复只回看文字）';
+        b.appendChild(n);
+      }
+    }
+  }
+  return true;
+}
+
+/* ── audio playback queue ── */
+let audioCtx = null;
+let playQueue = [];
+let isPlaying = false;
+function getAudioCtx() {
+  if (!audioCtx || audioCtx.state === 'closed') audioCtx = new AudioContext();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+async function enqueueAudio(b64) {
+  playQueue.push(b64);
+  if (!isPlaying) drainQueue();
+}
+async function drainQueue() {
+  if (!playQueue.length) { isPlaying = false; return; }
+  isPlaying = true;
+  const b64 = playQueue.shift();
+  try {
+    const buf = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const ctx = getAudioCtx();
+    const decoded = await ctx.decodeAudioData(buf.buffer);
+    const src = ctx.createBufferSource();
+    src.buffer = decoded;
+    src.connect(ctx.destination);
+    src.onended = drainQueue;
+    src.start();
+  } catch(e) {
+    console.warn('audio decode error', e);
+    drainQueue();
+  }
+}
+
+/* ── chat messages ── */
+function addUser(text) {
+  const div = document.createElement('div');
+  div.className = 'msg user';
+  div.innerHTML = `<div class="bubble">${esc(text)}</div><div class="avatar-icon">👤</div>`;
+  document.getElementById('chat').appendChild(div);
+  scrollBottom();
+  return div;
+}
+function addBot(text, audioBlobs, who) {
+  const div = document.createElement('div');
+  div.className = 'msg bot';
+  let audioHtml = '';
+  if (audioBlobs && audioBlobs.length) {
+    const blob = new Blob(audioBlobs, {type:'audio/wav'});
+    const url  = URL.createObjectURL(blob);
+    audioHtml  = `<audio controls src="${url}"></audio>`;
+  }
+  // C2: 头像走角色缩略图；who 供恢复历史时保留"当时是谁说的"（切过角色后署名不漂移）
+  div.innerHTML = `${avatarHtml()}<div class="bubble"><div class="label">${esc(who || currentProfileName())}</div>${esc(text)}${audioHtml}</div>`;
+  document.getElementById('chat').appendChild(div);
+  scrollBottom();
+  return div;
+}
+// C2-3: 被打断的回复气泡就地标注——半截话不再看起来像"说完了"
+function markInterrupted(div) {
+  const b = div && div.querySelector('.bubble');
+  if (!b || b.querySelector('.int-note')) return;
+  const n = document.createElement('div');
+  n.className = 'mini-timing int-note';
+  n.textContent = '⏹ 已打断（回复未说完）';
+  b.appendChild(n);
+}
+// C1-3: 失败/忙碌气泡追加「重发」按钮——同 payload 原样重试，不用重新打字/重新录音
+function addRetry(botDiv, payload) {
+  const bubble = botDiv && botDiv.querySelector('.bubble');
+  if (!bubble || !payload) return;
+  const btn = document.createElement('button');
+  btn.className = 'vrf-btn';
+  btn.style.marginTop = '6px';
+  btn.textContent = '🔁 重发这条';
+  btn.onclick = () => { btn.disabled = true; btn.textContent = '已重发'; sendConverse(payload); };
+  bubble.appendChild(document.createElement('br'));
+  bubble.appendChild(btn);
+}
+// C1-4: 回复气泡 👍👎 反馈（与手机端/工作室同一 /api/metrics/feedback 闭环，source=converse）
+function attachFeedback(botDiv, replyText) {
+  const bubble = botDiv && botDiv.querySelector('.bubble');
+  if (!bubble) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'verify-wrap';
+  wrap.innerHTML = `<button class="vrf-btn" data-r="1" title="这条回复不错">👍</button>
+    <button class="vrf-btn" data-r="-1" title="回复质量差（连续差评会触发调音建议）">👎</button>`;
+  bubble.appendChild(wrap);
+  wrap.querySelectorAll('button').forEach(b => b.onclick = async () => {
+    wrap.querySelectorAll('button').forEach(x => x.disabled = true);
+    try {
+      // profile 传真实选择值（默认角色=空串），不传显示用的「数字人」兜底名，别污染按角色聚合的好评率
+      const _pv = document.getElementById('profile-sel').value || activeProfile || '';
+      await fetch(HUB + '/api/metrics/feedback', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({profile: _pv, rating: parseInt(b.dataset.r, 10),
+                              source: 'converse', text_preview: (replyText || '').slice(0, 80)})});
+      wrap.innerHTML = `<span class="verify-line good"> 已记录反馈 ${b.textContent}</span>`;
+    } catch(_) {
+      wrap.innerHTML = `<span class="verify-line none"> 反馈未送达（不影响使用）</span>`;
+    }
+  });
+}
+function addTyping() {
+  const div = document.createElement('div');
+  div.className = 'msg bot';
+  div.id = 'typing-indicator';
+  div.innerHTML = `<div class="avatar-icon">🎤</div><div class="bubble"><div class="typing"><span></span><span></span><span></span></div></div>`;
+  document.getElementById('chat').appendChild(div);
+  scrollBottom();
+}
+function removeTyping() {
+  document.getElementById('typing-indicator')?.remove();
+}
+function scrollBottom() {
+  const c = document.getElementById('chat');
+  c.scrollTop = c.scrollHeight;
+}
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>'); }
+
+// 9-7: 在回答气泡下渲染可折叠「参考资料」引用脚注（来源/相关度 + 低置信提示）
+function renderCitations(bot, rag) {
+  if (!bot || !rag) return;
+  const bubble = bot.querySelector('.bubble'); if (!bubble) return;
+  const hits = (rag.hits || []).filter(h => h && (h.text_full || h.text));
+  const lowConf = !!rag.low_confidence;
+  if (!hits.length) {
+    if (rag.no_hits) {   // 无命中：明确标注「凭通用知识作答」，避免误以为有出处
+      const w = document.createElement('div');
+      w.className = 'mini-timing';
+      w.style.cssText = 'margin-top:6px;color:rgba(251,191,36,.85)';
+      w.textContent = '⚠️ 知识库未命中相关段落，本回答基于通用知识，请谨慎采信';
+      bubble.appendChild(w);
+    }
+    return;
+  }
+  const det = document.createElement('details');
+  det.style.cssText = 'margin-top:8px;font-size:12px;border-top:1px solid rgba(255,255,255,.12);padding-top:6px';
+  const badge = lowConf
+    ? '<span style="color:#fbbf24">· 低置信，已提示勿编造</span>' : '';
+  const eng = rag.engine ? (' · ' + esc(rag.engine)) : '';
+  let html = `<summary style="cursor:pointer;color:rgba(160,200,255,.95)">📚 参考资料 ${hits.length} 条${eng} ${badge}</summary>`;
+  html += '<ol style="margin:6px 0 0;padding-left:18px;line-height:1.5">';
+  hits.forEach(h => {
+    const src = h.source ? `<b>${esc(h.source)}</b> · ` : '';
+    const sc = (h.score != null) ? `<span style="opacity:.6">${h.score}</span> ` : '';
+    const txt = esc((h.text_full || h.text || '').slice(0, 300));
+    html += `<li style="margin-bottom:4px">${src}${sc}${txt}</li>`;
+  });
+  html += '</ol>';
+  det.innerHTML = html;
+  bubble.appendChild(det);
+  scrollBottom();
+}
+
+/* ── 一键验真：核验本条回复音频（合并后的 WAV 字节）是否本系统生成 / 未被篡改 ── */
+function u8ToB64(u8){ let s=''; const CH=0x8000; for(let i=0;i<u8.length;i+=CH){ s+=String.fromCharCode.apply(null, u8.subarray(i,i+CH)); } return btoa(s); }
+function attachVerify(botDiv, u8){
+  const bubble = botDiv && botDiv.querySelector('.bubble'); if(!bubble || !u8 || !u8.length) return;
+  const wrap = document.createElement('div'); wrap.className='verify-wrap';
+  wrap.innerHTML = `<button class="vrf-btn">🏷 验真</button><span class="verify-line"></span>`;
+  bubble.appendChild(wrap);
+  const btn=wrap.querySelector('.vrf-btn'), out=wrap.querySelector('.verify-line');
+  btn.onclick=async()=>{
+    btn.disabled=true; out.className='verify-line loading'; out.textContent=' 验真中…';
+    try{
+      const b64=u8ToB64(u8);
+      const r=await fetch(HUB+'/api/provenance/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({audio_base64:b64})});
+      if(!r.ok) throw new Error('HTTP '+r.status+(r.status===503?'（溯源未加载）':''));
+      const d=await r.json(); const wm=!!d.has_watermark, sig=!!d.signature_valid, ai=d.ai_generated===true;
+      let cls,txt;
+      if(wm&&sig&&ai){ cls='good'; txt='✅ 已验真 · 本系统生成 · 签名有效'; }
+      else if(wm&&sig){ cls='good'; txt='✅ 凭证有效 · 签名通过'; }
+      else if(wm&&!sig){ cls='mid'; txt='⚠ 检出水印但签名未过（疑似篡改）'; }
+      else if(wm){ cls='mid'; txt='⚠ 检出 AI 水印'; }
+      else { cls='none'; txt='— 未检出本系统凭证'; }
+      const gen=wm&&d.manifest&&d.manifest.claim_generator; const verdict=txt; if(gen) txt+=' · 出品方 '+gen;
+      out.className='verify-line '+cls; out.innerHTML=' '+esc(txt)+' · <a href="/verify" target="_blank" rel="noopener">详情↗</a>';
+      if(wm && window.__cert && window.__cert.generate){
+        const cb=document.createElement('a'); cb.href='#'; cb.textContent=' 📜 存证'; cb.title='生成可下载的品牌化验真证书（PNG）';
+        const certData={kind:'音频', tone:cls, verdict, maker:(gen||''),
+          rows:[['内容水印','存在'],['签名验证', sig?'通过（有效）':'未通过'],['AI 生成判定', ai?'是':'未知']]
+            .concat(d.payload_id?[['凭证 ID', d.payload_id]]:[]).concat(d.created_str?[['生成时间', d.created_str]]:[])};
+        cb.onclick=async(e)=>{ e.preventDefault(); try{ await window.__cert.generate(certData, HUB); }catch(err){ alert('证书生成失败：'+(err.message||err)); } };
+        out.appendChild(document.createTextNode(' · ')); out.appendChild(cb);
+      }
+    }catch(e){ out.className='verify-line none'; out.textContent=' 验真失败：'+(e.message||e); }
+    finally{ btn.disabled=false; }
+  };
+}
+
+/* ── interrupt ── */
+let currentAbort = null;
+function interrupt() {
+  if (currentAbort) { currentAbort.abort(); currentAbort = null; }
+  playQueue = []; isPlaying = false;
+  fetch(HUB + '/api/converse/interrupt?session_id=' + encodeURIComponent(sessionId), {method:'POST'}).catch(()=>{});
+  document.getElementById('stop-btn').classList.remove('visible');
+  removeTyping();
+}
+
+/* ── send via SSE ── */
+async function sendConverse(payload) {
+  const stopBtn = document.getElementById('stop-btn');
+  stopBtn.classList.add('visible');
+  addTyping();
+
+  const ac = new AbortController();
+  currentAbort = ac;
+  playQueue = []; isPlaying = false;
+
+  let recognized = '';
+  let reply = '';
+  let audioBuffers = [];
+  let timings = {};
+  let botDiv = null;
+  let sttDone = false;
+  let lastRag = null;   // 9-7: 本轮 RAG 检索命中（用于回答引用脚注）
+
+  try {
+    const resp = await fetch(HUB + '/api/converse/stream', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+      signal: ac.signal,
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        let ev;
+        try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
+        const ph = ev.phase;
+
+        if (ph === 'queue') {
+          const sec = (ev.eta_ms!=null) ? Math.max(1, Math.round(ev.eta_ms/1000)) : null;
+          document.getElementById('session-tag').textContent =
+            '排队中 #' + (ev.position||1) + (sec ? (' · 预计~'+sec+'s') : '');
+          continue;
+        }
+        if (ph === 'busy') {
+          removeTyping();
+          addRetry(addBot('⏳ ' + (ev.message || '数字人正忙，请稍后再试')), payload);   // C1-3: 忙碌不留死胡同
+          break;
+        }
+
+        if (ph === 'stt_done') {
+          recognized = ev.text || '';
+          sttDone = true;
+          removeTyping();
+          addUser('🎤 ' + recognized);
+          _recordTurn('user', '🎤 ' + recognized);   // C2-1: 语音轮的识别文字入持久化
+          addTyping();
+
+        } else if (ph === 'rag') {
+          lastRag = ev;   // 引用脚注在 done 时随气泡渲染
+
+        } else if (ph === 'sentence') {
+          reply += (reply ? ' ' : '') + ev.text;
+          removeTyping();
+          if (!botDiv) {
+            botDiv = document.createElement('div');
+            botDiv.className = 'msg bot';
+            // C1-5: 原来用固定 id（bot-text/bot-audio-area），多轮后 getElementById 永远命中第一轮的
+            //   气泡——第二轮起文字/播放器都会串写到最早那条回复里。改 class + botDiv 内查找根治。
+            botDiv.innerHTML = `<div class="avatar-icon">🎤</div><div class="bubble"><div class="label">${esc(currentProfileName())}</div><span class="bot-text"></span><span class="bot-audio-area"></span></div>`;
+            document.getElementById('chat').appendChild(botDiv);
+          }
+          const span = botDiv.querySelector('.bot-text');
+          if (span) span.textContent = reply;
+          scrollBottom();
+
+        } else if (ph === 'tts_chunk') {
+          const ab64 = ev.audio_base64 || '';
+          if (ab64) {
+            audioBuffers.push(Uint8Array.from(atob(ab64), c => c.charCodeAt(0)));
+            enqueueAudio(ab64);
+          }
+
+        } else if (ph === 'tts_unavailable') {
+          const n = document.createElement('div');
+          n.className = 'msg bot';
+          n.innerHTML = `<div class="avatar-icon">⚠️</div><div class="bubble" style="border-color:rgba(251,191,36,.5)">${esc(ev.detail || '语音引擎暂不可用，已切为纯文字回复')}</div>`;
+          document.getElementById('chat').appendChild(n);
+          scrollBottom();
+
+        } else if (ph === 'done') {
+          timings = ev.timings || {};
+          removeTyping();
+          // attach combined audio player
+          if (botDiv && audioBuffers.length) {
+            const allBuf = concatUint8(audioBuffers);
+            const blob = new Blob([allBuf], {type:'audio/wav'});
+            const url  = URL.createObjectURL(blob);
+            const area = botDiv.querySelector('.bot-audio-area');   // C1-5: 定位到本轮气泡
+            if (area) area.innerHTML = `<audio controls src="${url}" style="margin-top:8px;width:100%;height:30px;filter:invert(1) hue-rotate(180deg)"></audio>
+              <div class="mini-timing">首token:${timings.llm_first_token_ms||'?'}ms 首音频:${timings.first_audio_ms||'?'}ms</div>`;
+            attachVerify(botDiv, allBuf);
+          }
+          renderCitations(botDiv, lastRag);   // 9-7: 回答引用脚注（可折叠）
+          if (botDiv && reply) attachFeedback(botDiv, reply);   // C1-4: 👍👎 听感/回复质量闭环
+          if (reply) _recordTurn('bot', reply, audioBuffers.length > 0, currentProfileName());
+          break;
+
+        } else if (ph === 'error') {
+          removeTyping();
+          addRetry(addBot('❌ ' + (ev.message || '出错了')), payload);   // C1-3: 错误可一键重发
+          break;
+
+        } else if (ph === 'cancelled') {
+          removeTyping();
+          markInterrupted(botDiv);   // C2-3: 服务端取消（新一轮顶掉旧轮）也标注
+          if (reply) _recordTurn('bot', reply + '（已打断）', false, currentProfileName());
+          break;
+        }
+      }
+    }
+  } catch(e) {
+    if (e.name !== 'AbortError') {
+      removeTyping();
+      addRetry(addBot('❌ ' + friendlyErr(e)), payload);   // C1-3: 网络层失败同样可重发
+    } else {
+      markInterrupted(botDiv);   // C2-3: 本地打断（⏹按钮/免提抢话）——半截话如实标注
+      if (reply) _recordTurn('bot', reply + '（已打断）', false, currentProfileName());
+    }
+  } finally {
+    currentAbort = null;
+    stopBtn.classList.remove('visible');
+    // 排队提示（queue phase 会改写 session-tag）用完即还原，不让「排队中#1」永久留在顶栏
+    document.getElementById('session-tag').textContent = 'session: ' + sessionId;
+  }
+}
+
+function concatUint8(arrays) {
+  const total = arrays.reduce((n, a) => n + a.length, 0);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const a of arrays) { out.set(a, off); off += a.length; }
+  return out;
+}
+
+/* ── text send ── */
+function sendText() {
+  const inp = document.getElementById('text-input');
+  const text = inp.value.trim();
+  if (!text) return;
+  inp.value = '';
+  addUser(text);
+  _recordTurn('user', text);   // C2-1
+  sendConverse({
+    text,
+    session_id: sessionId,
+    profile: document.getElementById('profile-sel').value,
+    llm_engine: document.getElementById('llm-sel').value,
+    stt_engine: '',
+    speak: true,
+    generate_lipsync: document.getElementById('lipsync-chk').checked,
+    language: 'zh-cn',
+    priority: parseInt(document.getElementById('prio-input').value, 10) || 0,
+  });
+}
+document.getElementById('text-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(); }
+});
+
+/* ── microphone recording ── */
+let mediaRec = null;
+let recChunks = [];
+let isRecording = false;
+let analyserNode = null, animFrame = null;
+const micBtn  = document.getElementById('mic-btn');
+const micHint = document.getElementById('mic-hint');
+const waveCanvas = document.getElementById('wave-canvas');
+const waveCtx = waveCanvas.getContext('2d');
+
+micBtn.addEventListener('click', async () => {
+  if (isRecording) stopRecording();
+  else await startRecording();
+});
+
+// friendlyErr 由全站共享的 /static/_errutil.js 提供（window.friendlyErr）
+
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    mediaRec = new MediaRecorder(stream, {mimeType: 'audio/webm'});
+    recChunks = [];
+    mediaRec.ondataavailable = e => recChunks.push(e.data);
+    mediaRec.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      if (animFrame) { cancelAnimationFrame(animFrame); animFrame = null; }
+      waveCanvas.style.display = 'none';
+      const blob = new Blob(recChunks, {type:'audio/webm'});
+      const arrayBuf = await blob.arrayBuffer();
+      const b64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuf)));
+      micHint.textContent = '处理中…';
+      // [P8] 去重：不再加"识别中…"占位气泡；stt_done 会补上带识别文字的用户气泡，避免同一句话出现两个气泡（处理中提示已由 micHint 承担）
+      sendConverse({
+        audio_base64: b64,
+        session_id: sessionId,
+        profile: document.getElementById('profile-sel').value,
+        llm_engine: document.getElementById('llm-sel').value,
+        stt_engine: document.getElementById('stt-sel').value,
+        speak: true,
+        generate_lipsync: document.getElementById('lipsync-chk').checked,
+        language: 'zh-cn',
+        priority: parseInt(document.getElementById('prio-input').value, 10) || 0,
+      }).then(() => { micHint.textContent = '点击麦克风开始录音'; });
+    };
+
+    // waveform visualizer
+    const ctx = getAudioCtx();
+    const src2 = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    src2.connect(analyser);
+    analyserNode = analyser;
+    waveCanvas.style.display = 'block';
+    drawWave();
+
+    mediaRec.start();
+    isRecording = true;
+    micBtn.classList.add('recording');
+    micBtn.textContent = '⏹';
+    micHint.textContent = '录音中… 再次点击停止';
+  } catch (e) {
+    alert(friendlyErr(e));
+  }
+}
+
+function stopRecording() {
+  if (mediaRec && isRecording) {
+    isRecording = false;
+    micBtn.classList.remove('recording');
+    micBtn.textContent = '🎙';
+    micHint.textContent = '点击麦克风开始录音';
+    mediaRec.stop();
+    mediaRec = null;
+  }
+}
+
+function drawWave() {
+  if (!analyserNode) return;
+  animFrame = requestAnimationFrame(drawWave);
+  const data = new Uint8Array(analyserNode.frequencyBinCount);
+  analyserNode.getByteTimeDomainData(data);
+  waveCtx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
+  waveCtx.strokeStyle = '#6c63ff';
+  waveCtx.lineWidth = 1.5;
+  waveCtx.beginPath();
+  const step = waveCanvas.width / data.length;
+  data.forEach((v, i) => {
+    const y = (v / 128.0 - 1) * (waveCanvas.height / 2) + waveCanvas.height / 2;
+    i === 0 ? waveCtx.moveTo(0, y) : waveCtx.lineTo(i * step, y);
+  });
+  waveCtx.stroke();
+}
+
+/* ── 免提模式：常开麦克风 → 流式 STT(/api/converse/listen) → 一开口即打断 + 静音自动续问 ──
+   打断由服务端在收到 Nemotron 增量 partial 时即时触发(亚秒)，前端只需停本地播放；句末(静音)
+   由前端能量 VAD 判定后发 eou 取整句，再作为下一轮自动提交——避免 barge-in 等整句的延迟。 */
+const WS_BASE = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+const HF_SIL_MS = 600;        // 句末静音判定阈值(→ 发 eou 取整句)
+const HF_MIN_VOICE_MS = 250;  // 最短有效语音(滤咳嗽/杂音)
+let hf = { on:false, ws:null, stream:null, ctx:null, node:null, sink:null,
+           active:false, silMs:0, voiceMs:0, floor:0.0015 };
+// 纯流式(4-A)：localStorage.ah_server_eou='1' → 连续推流、由服务端静音 VAD 自动定稿，前端不发 eou/VAD。
+const HF_SERVER_EOU = (localStorage.getItem('ah_server_eou') === '1');
+const hfBtn = document.getElementById('handsfree-btn');
+hfBtn && hfBtn.addEventListener('click', () => hf.on ? stopHandsFree() : startHandsFree());
+
+async function startHandsFree(){
+  try{
+    hf.stream = await navigator.mediaDevices.getUserMedia({audio:{
+      echoCancellation:true, noiseSuppression:true, autoGainControl:true }});
+    hf.ctx = new AudioContext();
+    hf.ws = new WebSocket(WS_BASE + '/api/converse/listen?session_id='
+                          + encodeURIComponent(sessionId) + '&language=zh'
+                          + (HF_SERVER_EOU ? '&auto_eou=1' : ''));
+    hf.ws.binaryType = 'arraybuffer';
+    hf.ws.onmessage = onHfMessage;
+    hf.ws.onclose = () => { if(hf.on) micHint.textContent = '免提连接已断开'; };
+    // AudioWorklet 采集(off main thread)，主线程重采样→16k + 能量 VAD + WS 上行
+    const code = "class Cap extends AudioWorkletProcessor{constructor(){super();this._b=[];this._n=0;this._t=Math.round(sampleRate*0.04);}process(ins){const c=ins[0]&&ins[0][0];if(c){this._b.push(Float32Array.from(c));this._n+=c.length;if(this._n>=this._t){const o=new Float32Array(this._n);let k=0;for(const x of this._b){o.set(x,k);k+=x.length;}this._b=[];this._n=0;this.port.postMessage(o,[o.buffer]);}}return true;}}registerProcessor('cap',Cap);";
+    await hf.ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([code],{type:'application/javascript'})));
+    const src = hf.ctx.createMediaStreamSource(hf.stream);
+    hf.node = new AudioWorkletNode(hf.ctx, 'cap');
+    hf.node.port.onmessage = e => onHfFrame(e.data, hf.ctx.sampleRate);
+    hf.sink = hf.ctx.createGain(); hf.sink.gain.value = 0;   // 静音汇点：驱动 worklet 渲染，且不外放
+    src.connect(hf.node); hf.node.connect(hf.sink); hf.sink.connect(hf.ctx.destination);
+    hf.on = true; hf.active = false; hf.silMs = 0; hf.voiceMs = 0;
+    hfBtn.style.background = '#2ecc71'; hfBtn.style.color = '#0b1020'; hfBtn.textContent = '📞 免提中';
+    micHint.textContent = '免提开启：直接说话即可，一开口会打断我';
+  }catch(e){ alert('免提开启失败：' + friendlyErr(e)); stopHandsFree(); }
+}
+
+function stopHandsFree(){
+  hf.on = false;
+  try{ if(hf.ws && hf.ws.readyState <= 1) hf.ws.send(JSON.stringify({event:'close'})); }catch(e){}
+  try{ hf.ws && hf.ws.close(); }catch(e){}
+  try{ hf.node && hf.node.disconnect(); }catch(e){}
+  try{ hf.sink && hf.sink.disconnect(); }catch(e){}
+  try{ hf.stream && hf.stream.getTracks().forEach(t=>t.stop()); }catch(e){}
+  try{ hf.ctx && hf.ctx.close(); }catch(e){}
+  hf.ws = hf.node = hf.sink = hf.stream = hf.ctx = null;
+  if(hfBtn){ hfBtn.style.background = 'var(--card)'; hfBtn.style.color = 'var(--muted)'; hfBtn.textContent = '📞 免提'; }
+  micHint.textContent = '点击麦克风开始录音';
+}
+
+function hfSend(data){ try{ if(hf.ws && hf.ws.readyState === 1) hf.ws.send(data); }catch(e){} }
+
+function onHfFrame(f32, srcRate){
+  if(!hf.on) return;
+  const x = downsampleTo16k(f32, srcRate);
+  if(HF_SERVER_EOU){ hfSend(f32ToPCM16(x).buffer); return; }   // 纯流式：连续推流，服务端自动定稿
+  let s = 0; for(let i=0;i<x.length;i++) s += x[i]*x[i];
+  const rms = Math.sqrt(s / Math.max(1, x.length));
+  const frMs = x.length / 16000 * 1000;
+  if(rms < hf.floor * 1.5) hf.floor = hf.floor * 0.97 + rms * 0.03;   // 静默期自适应噪声底
+  let thr = Math.max(0.006, hf.floor * 3.0);
+  if(isPlaying) thr *= 1.8;   // AI 发声期间抬高阈值，抑制回声自打断(配合浏览器 AEC)
+  if(rms > thr){
+    if(!hf.active){ hf.active = true; hf.voiceMs = 0; hfSend(JSON.stringify({event:'reset'})); }
+    hf.voiceMs += frMs; hf.silMs = 0;
+    hfSend(f32ToPCM16(x).buffer);
+  } else if(hf.active){
+    hf.silMs += frMs;
+    hfSend(f32ToPCM16(x).buffer);   // 含一小段尾音，便于收尾识别
+    if(hf.silMs >= HF_SIL_MS){
+      hf.active = false;
+      hfSend(JSON.stringify({event: hf.voiceMs >= HF_MIN_VOICE_MS ? 'eou' : 'reset'}));
+    }
+  }
+}
+
+function onHfMessage(ev){
+  let m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
+  if(m.error){ micHint.textContent = '免提：' + m.error; return; }
+  if(m.barge_in){ stopLocalPlayback(); micHint.textContent = '🎙 ' + (m.partial||'') + ' …（已打断）'; return; }
+  if(typeof m.partial === 'string'){ micHint.textContent = '🎙 ' + m.partial + ' …'; return; }
+  if(typeof m.final === 'string'){
+    const t = (m.final||'').trim();
+    micHint.textContent = '免提开启：直接说话即可，一开口会打断我';
+    if(t.length >= 2) hfSubmit(t);
+  }
+}
+
+function stopLocalPlayback(){
+  playQueue = []; isPlaying = false;
+  if(currentAbort){ try{ currentAbort.abort(); }catch(e){} currentAbort = null; }
+  document.getElementById('stop-btn').classList.remove('visible');
+  removeTyping();
+}
+
+function hfSubmit(text){
+  addUser('🎤 ' + text);
+  _recordTurn('user', '🎤 ' + text);   // C2-1: 免提轮次同样入持久化
+  sendConverse({ text, session_id: sessionId,
+    profile: document.getElementById('profile-sel').value,
+    llm_engine: document.getElementById('llm-sel').value,
+    stt_engine: '', speak: true,
+    generate_lipsync: document.getElementById('lipsync-chk').checked,
+    language: 'zh-cn',
+    priority: parseInt(document.getElementById('prio-input').value, 10) || 0 });
+}
+
+/* ── C2-4: 免提状态胶囊——把"现在轮到谁"从一行小字升格为可视四态 ── */
+function hfStateText(){
+  if(hf.active) return '🎙 你在说…';
+  if(isPlaying) return '🗣 回答中 · 开口即打断';
+  if(currentAbort) return '💭 思考中…';
+  return '👂 在听（直接说话）';
+}
+setInterval(() => {
+  const el = document.getElementById('hf-state');
+  if(!el) return;
+  el.style.display = hf.on ? '' : 'none';
+  if(hf.on) el.textContent = hfStateText();
+}, 400);
+
+function downsampleTo16k(f32, srcRate){
+  if(!srcRate || srcRate === 16000) return f32;
+  const ratio = srcRate / 16000, n = Math.max(1, Math.round(f32.length / ratio)), out = new Float32Array(n);
+  for(let i=0;i<n;i++){ const idx = i*ratio, lo = Math.floor(idx), hi = Math.min(lo+1, f32.length-1), fr = idx-lo;
+    out[i] = f32[lo]*(1-fr) + f32[hi]*fr; }
+  return out;
+}
+function f32ToPCM16(f32){ const b = new Int16Array(f32.length);
+  for(let i=0;i<f32.length;i++){ let v = Math.max(-1, Math.min(1, f32[i])); b[i] = v<0 ? v*0x8000 : v*0x7FFF; } return b; }
+
+/* ── init ── */
+// C1-1/C1-2: 先取角色（头像/署名跟随，不再硬编码人名）；C2-1: 有存档则恢复上下文，没有才发欢迎语
+(async () => {
+  await loadProfiles();
+  if (!restoreSession()) {
+    addBot('你好！我是「' + currentProfileName() + '」。你可以对我说话，或在下方输入文字。');
+  }
+  pollHealth();
+  setInterval(pollHealth, 15000);
+})();
+</script>
+</body>
+</html>

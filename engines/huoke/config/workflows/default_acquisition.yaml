@@ -1,0 +1,135 @@
+# Default Multi-Platform Acquisition Workflow
+#
+# Pipeline: Discover → Warm-up → Engage → Qualify → Convert
+# Uses EventBus escalation rules for cross-platform coordination.
+
+name: default_acquisition
+description: |
+  Automated multi-platform customer acquisition workflow.
+  Discovers leads across social platforms, warms them up with light engagement,
+  then escalates to direct messaging for qualification.
+
+target_platforms:
+  - linkedin
+  - twitter
+  - tiktok
+  - telegram
+  - whatsapp
+
+variables:
+  max_leads_per_keyword: 10
+  warmup_delay_hours: 2
+  engage_delay_hours: 24
+  follow_up_delay_hours: 48
+  max_follow_ups: 3
+
+# Stage definitions — what happens at each pipeline stage
+stages:
+  discovery:
+    description: "Find potential leads by keywords"
+    platforms: [linkedin, twitter, tiktok]
+    actions:
+      - action: search_and_collect_leads
+        params:
+          max_leads: "{variables.max_leads_per_keyword}"
+
+  warm_up:
+    description: "Light engagement to build familiarity"
+    platforms: [twitter, tiktok, instagram]
+    actions:
+      - platform: twitter
+        action: browse_timeline
+        params:
+          scroll_count: 3
+          like_probability: 0.4
+      - platform: tiktok
+        action: browse_feed
+        params:
+          video_count: 5
+          like_probability: 0.3
+          follow_probability: 0.15
+
+  engage:
+    description: "Direct outreach via DM"
+    platforms: [linkedin, twitter, telegram]
+    actions:
+      - action: send_dm
+        params:
+          message: ""  # AI-generated based on lead profile
+
+  qualify:
+    description: "Evaluate response quality and intent"
+    criteria:
+      min_interactions: 2
+      response_required: true
+      min_score: 20.0
+
+  convert:
+    description: "Move to WhatsApp/Telegram for deeper conversation"
+    platforms: [whatsapp, telegram]
+
+# Cross-platform escalation rules
+# When event X fires → move lead to stage Y → execute actions Z
+escalation_rules:
+  # When a lead responds on any platform → mark as engaged
+  - trigger_event: "*.message_received"
+    from_stage: "contacted"
+    to_stage: "responded"
+    priority: 10
+    actions:
+      - action: util.log
+        params:
+          message: "Lead responded! Scheduling qualification."
+
+  # When lead is discovered on LinkedIn → follow on Twitter if available
+  - trigger_event: "linkedin.lead_discovered"
+    to_stage: "discovered"
+    delay_min: 30
+    delay_max: 120
+    actions:
+      - action: twitter.follow_user
+        params: {}
+
+  # When LinkedIn connection accepted → send warm DM on LinkedIn
+  - trigger_event: "linkedin.connection_accepted"
+    from_stage: "discovered"
+    to_stage: "contacted"
+    delay_min: 3600
+    delay_max: 14400
+    actions:
+      - action: linkedin.send_dm
+        params:
+          message: ""  # AI-generated
+
+  # TikTok follow-back → escalate to DM
+  - trigger_event: "tiktok.follow_received"
+    from_stage: "warmed_up"
+    to_stage: "contacted"
+    delay_min: 1800
+    delay_max: 7200
+    actions:
+      - action: tiktok.send_dm
+        params:
+          message: ""
+
+  # Twitter reply/like received → follow back + engage
+  - trigger_event: "twitter.interaction_received"
+    from_stage: "warmed_up"
+    to_stage: "contacted"
+    delay_min: 600
+    delay_max: 3600
+    actions:
+      - action: twitter.follow_user
+        params: {}
+
+  # Qualified lead → move to WhatsApp/Telegram for conversion
+  - trigger_event: "lead.qualified"
+    from_stage: "qualified"
+    to_stage: "converting"
+    delay_min: 0
+    delay_max: 300
+    priority: 20
+    actions:
+      - action: util.log
+        params:
+          message: "Lead qualified! Moving to conversion platform."

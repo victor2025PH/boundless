@@ -1,0 +1,9 @@
+{
+  "uri": "vless://eae168f2-f8a9-4828-afb7-6e001c4183de@172.232.203.87:22571?encryption=none&security=none&type=ws&path=%2F#0315%E6%84%8F%E5%A4%A7%E5%88%A9",
+  "protocol": "vless",
+  "server": "172.232.203.87",
+  "port": "22571",
+  "remark": "0315意大利",
+  "transport": "ws",
+  "updated_at": "2026-04-14 16:33:40"
+}

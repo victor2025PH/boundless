@@ -1,0 +1,29 @@
+{
+  "_comment": "对话/同传 LLM 后端清单【模板】。复制为 llm_backends.json 即生效（Hub 启动读取、UI 增删改即时落盘）。内部伙伴部署两条路任选：A=本地 Ollama 离线自给（数据不出机房、无需公网）；B=云端 API（伙伴机只需网络，密钥走环境变量不落盘）。default 指向要用的那个 name。",
+
+  "_comment_local": "A 本地：base_url 指向伙伴机 Ollama（默认 11434）。model 用母机 `ollama list` 里的 tag。qwen2.5:14b 实测能全量进 5090/4090 显存、~140tok/s、单句中位 236ms，是对话+同传+术语纠错的主力；模型随介质用 tools/export_llm_pack.py 导出（qwen2.5:14b+bge-m3 约 9.4GB）。",
+  "_comment_cloud": "B 云端：api_key 留空，改由环境变量注入（secrets.bat 里 set CONV_DEEPSEEK_API_KEY=...），不写盘明文。",
+  "_comment_default": "把 default 设成实际要用的后端 name：本地自给填 qwen2.5-14b-local；接云端填 deepseek。",
+
+  "default": "qwen2.5-14b-local",
+  "backends": [
+    {
+      "name": "qwen2.5-14b-local",
+      "kind": "local",
+      "label": "Qwen2.5-14B · 本地(Ollama)",
+      "base_url": "http://127.0.0.1:11434",
+      "model": "qwen2.5:14b",
+      "api_key": "",
+      "keep_alive": "30m"
+    },
+    {
+      "name": "deepseek",
+      "kind": "cloud",
+      "label": "DeepSeek · 云端(可选)",
+      "base_url": "https://api.deepseek.com",
+      "model": "deepseek-chat",
+      "api_key": "",
+      "keep_alive": ""
+    }
+  ]
+}

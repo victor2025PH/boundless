@@ -1,0 +1,5 @@
+# 构建上下文瘦身：Dockerfile.service 只 COPY docker/requirements 与 docker/entrypoint.sh，
+# 模型/代码运行时经卷挂载进容器——这里把重资产全排除，构建上下文从 ~百GB 降到 MB 级。
+*
+!docker/requirements/
+!docker/entrypoint.sh

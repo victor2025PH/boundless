@@ -1,0 +1,57 @@
+﻿studio:
+  active_persona: italy_lifestyle
+  api_keys:
+    anthropic: ''
+    fal_ai: ''
+    openai: ''
+    serper: ''
+  cta:
+    messenger_link: m.me/yourpage
+    primary_link: t.me/yourchannel
+    primary_platform: telegram
+    secondary_link: wa.me/1234567890
+    secondary_platform: whatsapp
+  dashboard_url: http://localhost:8000
+  generation:
+    default_style: slideshow
+    image_model: fal-ai/flux/schnell
+    images_per_video: 6
+    llm_model: gpt-4o-mini
+    llm_provider: openai
+    variants_per_platform: 2
+    video_duration: 15
+    video_model: wan/v2.6/text-to-video
+    video_resolution: 720p
+  mode: semi_auto
+  publishing:
+    all_platforms:
+    - tiktok
+    - instagram
+    - facebook
+    - linkedin
+    - twitter
+    - whatsapp
+    - xiaohongshu
+    - telegram
+    enabled_platforms:
+    - tiktok
+    - instagram
+    - telegram
+    max_posts_per_platform_per_day: 3
+    warmup_days: 14
+  storage:
+    audio_dir: data/studio/audio
+    base_dir: data/studio
+    final_dir: data/studio/final
+    images_dir: data/studio/images
+    music_dir: data/studio/music
+    videos_dir: data/studio/videos
+  strategy:
+    competitors:
+    - platform: tiktok
+      url: https://tiktok.com/@fitlifestyle
+    daily_posts: 2
+    preferred_hour: 20
+  telegram_notify:
+    bot_token: ${BOT_TOKEN}
+    chat_id: '5433982810'

@@ -1,0 +1,16 @@
+# 多语言话术片段示例 — 可按 GEO 覆盖；与 TikTok 流程配置中的 country 联动（前端 localStorage / 后端 devices）
+# 实际使用时可复制为 script_snippets.yaml 并由后续版本加载
+
+defaults:
+  icebreaker_suffix: "Keep it under 2 short sentences."
+
+by_country:
+  IT:
+    language_hints: ["it", "en"]
+    sample_tone: "Informale, caloroso, una domanda aperta."
+  US:
+    language_hints: ["en"]
+    sample_tone: "Casual, one genuine question."
+  BR:
+    language_hints: ["pt"]
+    sample_tone: "Descontraído, uma pergunta aberta."

@@ -1,0 +1,55 @@
+{
+  "_README": "复制本文件为 release.config.json 后按需填写；真实配置已在 .gitignore，不入库。用 publish_release.py 一键发布。",
+
+  "version": "1.0.0",
+  "base_url": "https://REPLACE_ME.example.com/avatarhub/1.0.0",
+  "_base_url_help": "下载站该版本根 URL（真实发布必填，须含 packs/manifest.json 同布局）；含 REPLACE_ME 会被拒绝。",
+
+  "arch_tag": "cu128",
+  "channel": "stable",
+  "_channel_help": "本次发布登记到的通道：stable（求稳）/ beta（灰度）。",
+
+  "shared": true,
+  "include_models": true,
+  "with_installer": true,
+  "_build_help": "shared=共享基座分片省下载；include_models=连模型一起打；with_installer=编译 Inno 安装包（需 ISCC）。",
+
+  "mirrors": [],
+  "_mirrors_help": "可选备用下载根 URL 列表（多 CDN/镜像，客户端失败自动切换）。",
+
+  "site_root": "",
+  "_site_root_help": "可选：站点稳定根（versions.json / channels.json 所在）；留空则从 base_url 推导。",
+
+  "prev_manifest": "",
+  "_prev_manifest_help": "可选：上一版 manifest（路径/URL）；给定则产出增量发布报告与各档位老用户升级下载量。",
+
+  "smoke_envs": [],
+  "_smoke_envs_help": "可选：仅对这些环境做发布烟测（import torch+CUDA）；留空=全部。",
+
+  "telemetry_url": "",
+  "telemetry_token": "",
+  "_telemetry_help": "匿名遥测/崩溃上报端点与令牌（写入 manifest，客户端崩溃/心跳/反馈上报用；留空=不外发）。",
+
+  "sign_release": true,
+  "_sign_release_help": "发布清单 Ed25519 验签（release_sign.py 的钉死公钥；防下载站/CDN 被篡改推恶意组件）。强烈建议保持 true——客户端一旦见过签名即拒无签名（防降级），关掉会让存量客户端拒绝新清单。",
+
+  "rollout_percent": 100,
+  "_rollout_percent_help": "本次发布 app 程序热修的初始灰度百分比（0-100，按机器稳定分桶）。首发大改建议 10 起，观察看板错误率后用 tools/rollout_ctl.py 扩量；纯全量填 100。",
+
+  "verify_hash": false,
+  "_verify_hash_help": "发布后本地自检是否对每个组件做 sha256 比对（更稳但慢，36GB 级；默认只比体积）。也可命令行 --hash 临时开启。",
+
+  "_signing_help": "【两种签名，别混淆】① 下面的 sign = Windows 代码签名证书（Authenticode，付费，只影响 SmartScreen 是否弹『未知发布者』；没有证书可留 enabled:false 照常发布，用户首次运行点『更多信息→仍要运行』即可）。② 上面的 sign_release = 更新清单 Ed25519 签名（自签免费、已内置，保证更新不被篡改，与代码证书无关，务必保持 true）。无证书上线路径：sign.enabled=false + sign_release=true。",
+  "sign": {
+    "enabled": false,
+    "_enabled_help": "true 才签 exe/安装包（消除 SmartScreen 未知发布者告警）；需 Windows SDK 的 signtool + 证书。无证书留 false 即可发布，不阻断。只填下面三种来源之一。",
+    "sha1": "",
+    "_sha1_help": "证书库指纹 / EV 硬件令牌（推荐，EV 给 SmartScreen 即时信誉）。",
+    "pfx": "",
+    "pfx_pw": "",
+    "_pfx_help": "或 OV 证书 PFX 文件路径 + 密码。",
+    "subject": "",
+    "_subject_help": "或证书主体名（证书已在证书库时）。",
+    "timestamp": "http://timestamp.digicert.com"
+  }
+}

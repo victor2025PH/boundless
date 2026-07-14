@@ -1,0 +1,33 @@
+{
+ "in": [
+  "Microsoft 声音映射器 - Input (MME)",
+  "CABLE Output (VB-Audio Virtual  (MME)",
+  "主声音捕获驱动程序 (Windows DirectSound)",
+  "CABLE Output (VB-Audio Virtual Cable) (Windows DirectSound)",
+  "CABLE Output (VB-Audio Virtual Cable) (Windows WASAPI)",
+  "CABLE Output (VB-Audio Point) (Windows WDM-KS)",
+  "Input (VB-Audio Point) (Windows WDM-KS)",
+  "麦克风 (Realtek HD Audio Mic input) (Windows WDM-KS)",
+  "立体声混音 (Realtek HD Audio Stereo input) (Windows WDM-KS)",
+  "线路输入 (Realtek HD Audio Line input) (Windows WDM-KS)",
+  "耳机 (@System32\\drivers\\bthhfenum.sys,#2;%1 Hands-Free%0\r\n;(EDIFIER EvoBuds Pro)) (Windows WDM-KS)"
+ ],
+ "out": [
+  "Microsoft 声音映射器 - Output (MME)",
+  "24G11ZE (NVIDIA High Definition (MME)",
+  "CABLE Input (VB-Audio Virtual C (MME)",
+  "CABLE In 16ch (VB-Audio Virtual (MME)",
+  "主声音驱动程序 (Windows DirectSound)",
+  "24G11ZE (NVIDIA High Definition Audio) (Windows DirectSound)",
+  "CABLE Input (VB-Audio Virtual Cable) (Windows DirectSound)",
+  "CABLE In 16ch (VB-Audio Virtual Cable) (Windows DirectSound)",
+  "CABLE Input (VB-Audio Virtual Cable) (Windows WASAPI)",
+  "24G11ZE (NVIDIA High Definition Audio) (Windows WASAPI)",
+  "CABLE In 16ch (VB-Audio Virtual Cable) (Windows WASAPI)",
+  "Output (VB-Audio Point) (Windows WDM-KS)",
+  "Speakers (Realtek HD Audio output) (Windows WDM-KS)",
+  "Output (NVIDIA High Definition Audio) (Windows WDM-KS)",
+  "耳机 () (Windows WDM-KS)",
+  "耳机 (@System32\\drivers\\bthhfenum.sys,#2;%1 Hands-Free%0\r\n;(EDIFIER EvoBuds Pro)) (Windows WDM-KS)"
+ ]
+}

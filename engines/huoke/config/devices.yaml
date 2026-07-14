@@ -1,0 +1,30 @@
+connection:
+  adb_path: C:/platform-tools/adb.exe
+  max_retries: 3
+  # 同一手机 USB + 无线同时在线时，GET /devices 合并为一条（device_id 用 USB），避免界面双卡片；ADB 仍保留两路。
+  merge_dual_transport_in_api: true
+  # 健康监控用 Wi-Fi 点掉 USB 授权弹窗后，是否保持「adb connect IP:5555」（true=双通道冗余，默认 true）
+  wifi_recovery_keep_adb_connected: true
+  # 同一指纹 USB+无线同时在线时，ADB/u2 命令失败是否自动尝试另一路
+  adb_failover_to_alternate: true
+  # 全局 ADB 默认超时（秒）。过小易导致 push/部分 shell 在慢机或 Worker 上偶发失败；壁纸模块对关键命令另有单独超时。
+  timeout_seconds: 25
+  # 健康检查：连续 N 次扫描均未在 adb devices 中见到设备，才判「掉线」并告警（减轻无线 ADB 瞬抖误报）。设为 1 即关闭防抖。
+  # 环境变量 OPENCLAW_DISCONNECT_CONFIRM_ROUNDS 优先；运行时 POST /preflight/settings 可再覆盖（见 disconnect_confirm_rounds 字段）。
+  health_monitor:
+    disconnect_confirm_rounds: 2
+  # VPN 强制要求: true=VPN未连接则中止任务, false=警告但继续执行
+  # 注意: 设为true前请确保所有设备已配置好 V2RayNG 并可自动重连
+  vpn_required: false
+
+# ── 代理健康监控阈值配置 ──────────────────────────────────────────────────
+# 修改此节后无需重启服务，监控线程每轮自动热重载
+proxy_health:
+  # 定期检查间隔（秒）。默认 300s (5min)
+  check_interval: 300
+  # 连续 leak/no_ip 次数达到阈值后打开熔断，停止任务并告警
+  circuit_threshold: 3
+  # 熔断打开后的冷却期（秒）。冷却期内即使 IP 恢复也不自动关闭熔断
+  circuit_cooldown: 900
+
+devices: {}

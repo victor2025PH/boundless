@@ -1,0 +1,188 @@
+# VLM prompt quality regression dataset
+#
+# 每个 case: screenshot 文件名 + VLM target/context + ground truth bbox.
+# bbox 格式: [x1, y1, x2, y2] (left-top + right-bottom pixel coords).
+#
+# Screenshot 文件存放位置 (优先级):
+#   1. scripts/vlm_eval_dataset/screenshots/<name>
+#   2. scripts/vlm_eval_dataset/<name>
+#   3. cwd/<name>
+#   4. 绝对路径
+#
+# **screenshots/ 目录 gitignored** — 含真实对话截图的隐私图片不 commit,
+# 开发者本地跑 eval 时自行 populate (可从 real_inbox.png 等 repo 根的测试
+# 截图 copy 过去: `cp real_inbox.png scripts/vlm_eval_dataset/screenshots/`)。
+#
+# 跑: `python scripts/messenger_vlm_prompt_eval.py`
+# JSON: `python scripts/messenger_vlm_prompt_eval.py --json`
+
+- screenshot: real_inbox.png
+  target: "Messenger search bar (input field with magnifying glass icon)"
+  context: |
+    Horizontal rounded rectangle at top of inbox, BELOW the messenger
+    logo row and ABOVE the stories avatars row. Placeholder text
+    '问问 Meta AI' (Chinese) or 'Ask Meta AI' / 'Search in Messenger' (English).
+  ground_truth_bbox: [32, 277, 688, 357]
+  note: >
+    Key case — VLM must distinguish from logo header above. 2026-04-24
+    baseline eval: Gemini 2.5 Flash 初版 prompt (no BELOW/ABOVE) 命中率 50%
+    (常返 y≈205 打 logo header)。精确化 prompt 后待验证。
+
+- screenshot: real_inbox.png
+  target: "Kim Joy conversation row (list item)"
+  context: |
+    Conversation list item in Messenger inbox, showing peer name Kim Joy
+    with avatar on the left and 'you: [TEST]...' preview text. Below
+    the stories avatars row.
+  ground_truth_bbox: [0, 380, 720, 470]
+  note: >
+    Baseline — VLM can handle list rows with peer names. 2026-04-24
+    baseline eval: Gemini 2.5 Flash 命中 (540, 438) 在 bbox 内。
+
+- screenshot: screen_typed.png
+  target: "Send message button (blue paper-plane icon)"
+  context: |
+    At RIGHT end of composer bar at bottom of screen, right of the text
+    input field. Blue arrow/paper-plane shape. Distinguish from:
+    (a) emoji/smiley button (middle-right, inside text area); (b)
+    camera/gallery/microphone icons on LEFT side of composer;
+    (c) the '>' collapse arrow on far-left.
+    Typically x > 85% width, y > 88% height.
+  ground_truth_bbox: [640, 1430, 700, 1490]
+  note: >
+    Compose UI — send button often Compose-rendered, not in
+    AccessibilityNode tree. VLM is primary means to locate.
+
+- screenshot: screen_typed.png
+  target: "Messenger message composer (text input field)"
+  context: |
+    Bottom bar of conversation, horizontal rounded input area with
+    placeholder text '发消息' (Chinese) or 'Message...' (English).
+    Between mic icon on left and emoji/send icons on right.
+  ground_truth_bbox: [320, 1404, 560, 1488]
+  note: >
+    Composer focus verification — needed BEFORE type_text to ensure
+    focused widget for set_text Unicode path.
+
+# ─── P6 扩容 2026-04-24: first-contact fallback / note popup / DM screen
+#     支撑 P1 `_tap_first_search_result` 4 级 fallback 的 VLM 层可信度验证,
+#     以及真机常见 blocker (note popup) 的自动 dismiss prompt 调优 signal.
+
+- screenshot: screen_search.png
+  target: "first search result contact card"
+  context: |
+    Looking for the FIRST contact row in the search results list below
+    the search bar. Full-width row with circular profile avatar on the
+    LEFT and contact name text on the RIGHT. NOT the search bar at top,
+    NOT the '近期搜索' (Recent searches) avatars circle-row, NOT the
+    '推荐' (Recommended) section header. First row in 推荐 list is
+    'さとう たかひろ' with a green online dot. Typically near y ≈ 27-32%
+    of screen height.
+  ground_truth_bbox: [0, 430, 720, 520]
+  note: >
+    P1 primary case — validates VLM can find first result row in search
+    screen (Messenger 2026 Compose UI, SDUI). Expected HIT for Gemini.
+
+- screenshot: screen_search.png
+  target: "Kim Joy search result row"
+  context: |
+    Second contact in the '推荐' (Recommended) list below '近期搜索'.
+    Full-width row with profile avatar on the left and the text 'Kim Joy'
+    on the right. Between 'さとう たかひろ' (above) and 'Miko Clarke'
+    (below).
+  ground_truth_bbox: [0, 525, 720, 620]
+  note: >
+    Named-target precision — VLM should locate Kim Joy specifically, not
+    just first row. Tests query plausible-match at VLM layer.
+
+- screenshot: screen_search.png
+  target: "back arrow navigation button"
+  context: |
+    Top-left back arrow (<-) icon, left of the search bar. Used to exit
+    search and return to inbox. Small icon button, roughly square. NOT
+    the magnifying glass icon inside the search bar.
+  ground_truth_bbox: [0, 70, 80, 140]
+  note: >
+    Retreat action — used when search fails / wrong UI state to go back.
+    Small target, tests VLM precision on top-nav icons.
+
+- screenshot: screen_search.png
+  target: "edit recent searches button"
+  context: |
+    Blue text link '编辑' (Edit) at the right side of the '近期搜索'
+    (Recent searches) section header row, opposite the section label.
+    Only the text, not a button-shaped element.
+  ground_truth_bbox: [600, 155, 700, 210]
+  note: >
+    Tests VLM on text-link target (no button visual affordance). Stretch
+    goal — Gemini may struggle with pure text link without rect shape.
+
+- screenshot: real_after_coord.png
+  target: "OK/Confirm button to dismiss this popup"
+  context: |
+    Prominent blue solid-color button with '确定' (Chinese OK/Confirm)
+    text, full-width-ish at the BOTTOM of the popup card. The popup has
+    Chinese title '从其他便签获取灵感' above an illustration of notes.
+    NOT the X close icon at top-right. NOT the status bar icons.
+  ground_truth_bbox: [40, 1480, 680, 1590]
+  note: >
+    Real device blocker — 2026-04-24 autonomous loop 真机跑观察到该 popup
+    反复出现堵 Messenger flow, 急需自动 dismiss。VLM 命中率直接影响
+    B Claude 无人值守连跑稳定性。
+
+- screenshot: real_after_coord.png
+  target: "close popup X button"
+  context: |
+    Small 'X' close icon at the top-right corner of the popup / screen.
+    Next to the status bar icons at top. Should NOT be confused with the
+    avatar circle or '...' dots.
+  ground_truth_bbox: [620, 60, 720, 150]
+  note: >
+    Alternative dismiss path — if 确定 click 触发 additional action, X
+    exit is cleaner。Tests VLM for very small top-right icons.
+
+- screenshot: screen_messenger.png
+  target: "OK/Confirm button to dismiss this note popup"
+  context: |
+    Prominent blue solid-color button with '确定' (Chinese OK) text at
+    the BOTTOM of the popup card. Popup title is '便签心情不再以消息形式
+    发送' with illustration of heart speech bubbles above it.
+  ground_truth_bbox: [40, 1480, 680, 1590]
+  note: >
+    Variant note popup — same dismiss mechanic but different popup
+    content, validates VLM generalizes across popup variants.
+
+- screenshot: screen_kim_dm.png
+  target: "Messenger message composer text input"
+  context: |
+    Bottom bar of conversation screen showing '发消息' (Send message)
+    placeholder text. Horizontal rounded rect input area BETWEEN the
+    microphone icon on the LEFT and the emoji smiley icon on the RIGHT.
+  ground_truth_bbox: [200, 1460, 470, 1530]
+  note: >
+    DM-screen composer, peer=Kim Joy. Validates composer locator on
+    different conversation context than eval baseline (screen_typed).
+
+- screenshot: screen_kim_dm.png
+  target: "thumb-up send button (default action when composer is empty)"
+  context: |
+    Rightmost blue thumbs-up icon on the bottom composer bar. When no
+    text is typed, the normal send arrow is replaced by this thumbs-up
+    'quick like' send action. NOT the emoji smiley (to its left inside
+    the input area). NOT the attachments '+' icon on the far left.
+  ground_truth_bbox: [640, 1460, 710, 1530]
+  note: >
+    Edge case — empty-composer state has a different send control than
+    the paper-plane icon in screen_typed. Tests VLM on compose-state-
+    conditional UI variants.
+
+- screenshot: screen_kim_dm.png
+  target: "back arrow navigation button in conversation"
+  context: |
+    Top-left back arrow (<-) to exit conversation and return to the
+    inbox. Left of the peer avatar and name 'Kim Joy'. Do not confuse
+    with the avatar circle itself or the status-bar back-triangle.
+  ground_truth_bbox: [0, 60, 70, 140]
+  note: >
+    DM-exit action. Small top-left target — validates VLM precision on
+    leading navigation icons on DM screen (different chrome than inbox).

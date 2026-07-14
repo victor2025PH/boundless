@@ -1,0 +1,9 @@
+# 复制为 daily_report.yaml 后可被 /system/daily-report-config 读取
+# 定时推送需配合 job_scheduler 或外部 cron 调用 /system/daily-report/trigger
+
+enabled: false
+telegram:
+  bot_token: ""   # BotFather
+  chat_id: ""     # 群组或用户 ID
+schedule_cron: "0 8 * * *"  # 每天 08:00（机器本地时区，依部署而定）
+timezone: "Europe/Rome"

@@ -1,0 +1,15 @@
+{
+  "__doc__": "设备别名表模板。真实 device_aliases.json 含设备序列号/内网 IP 等，已被 .gitignore 忽略、不入库。下面为示例结构。",
+  "REPLACE_WITH_DEVICE_HW_SERIAL": {
+    "number": 1,
+    "alias": "01号",
+    "display_name": "",
+    "wallpaper_error": ""
+  },
+  "192.168.0.100:5555": {
+    "number": 9,
+    "alias": "09号",
+    "display_name": "",
+    "host_scope": "unknown"
+  }
+}

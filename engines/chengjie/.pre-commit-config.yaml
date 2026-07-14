@@ -1,0 +1,47 @@
+repos:
+  - repo: local
+    hooks:
+      - id: web-admin-tests
+        name: Web Admin Tests
+        # 2026-07-12 修正：language 从 python 改为 system。原 python 模式下 pre-commit
+        # 建的隔离 venv 无 pytest/fastapi 等应用依赖，pre-push 时报 "No module named
+        # pytest"。system 模式用开发环境（已装全部依赖）跑，才能真正执行 web 回归。
+        language: system
+        entry: python -m pytest
+        args:
+          - tests/test_web_auth.py
+          - tests/test_web_templates.py
+          - tests/test_web_users.py
+          - tests/test_web_diff_rollback.py
+          - tests/test_web_api.py
+          - tests/test_web_alert.py
+          - "--tb=short"
+          - "-q"
+          - "-p"
+          - "no:warnings"
+        pass_filenames: false
+        always_run: false
+        # Only run when web source files change
+        files: "^(src/web/|src/utils/|tests/)"
+        stages: [pre-push]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: "^docs/"
+      - id: end-of-file-fixer
+        exclude: "^docs/"
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: debug-statements
+        language_version: python3
+      - id: check-added-large-files
+        args: ["--maxkb=2048"]     # 拦截 >2MB 大文件(截图/dump/权重)误入库
+
+  # ── 密钥泄露扫描 (2026-07-11 新增；防 api_key / session / creds 入库) ──
+  # 启用后如需忽略误报，用 .gitleaksignore 或行内 gitleaks:allow
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks

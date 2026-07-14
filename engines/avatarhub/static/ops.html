@@ -1,0 +1,1783 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>运维总览 · 无界科技 BOUNDLESS</title>
+<link rel="icon" type="image/svg+xml" href="/static/icon.svg"/>
+<link rel="stylesheet" href="/static/brand.css"/>
+<script src="/static/brand.js"></script>
+<script src="/static/_clientlog.js"></script>
+<script src="/static/_authtoken.js"></script>
+<style>
+  /* 收敛到全站品牌令牌（brand.css 单一真相）：主色/语义色随白标联动，不再各页一套色。 */
+  :root{ --bg:var(--bd-bg); --card:#121826; --bord:#1f2a3c; --txt:#e5edf7; --mut:#7c8aa0;
+         --grn:var(--bd-ok); --ylw:var(--bd-warn); --red:var(--bd-danger); --acc:var(--bd-acc); --acc2:var(--bd-acc2); }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 system-ui,"Microsoft YaHei",sans-serif;}
+  header{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--bord);
+         position:sticky;top:0;background:rgba(10,14,22,.92);backdrop-filter:blur(8px);z-index:5;}
+  header h1{font-size:16px;margin:0;font-weight:700;}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;}
+  .dot.green{background:var(--grn);box-shadow:0 0 8px var(--grn);}
+  .dot.yellow{background:var(--ylw);box-shadow:0 0 8px var(--ylw);}
+  .dot.red{background:var(--red);box-shadow:0 0 8px var(--red);}
+  .upd{margin-left:auto;color:var(--mut);font-size:12px;}
+  .wrap{padding:18px 20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;max-width:1280px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--bord);border-radius:14px;padding:16px 18px;}
+  .card h2{font-size:13px;margin:0 0 12px;color:var(--mut);font-weight:600;letter-spacing:.5px;text-transform:uppercase;}
+  .big{font-size:30px;font-weight:800;line-height:1;}
+  .row{display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px dashed var(--bord);}
+  .row:last-child{border-bottom:none;}
+  .row .k{color:var(--mut);} .row .v{font-weight:600;font-variant-numeric:tabular-nums;}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;}
+  .chip{padding:4px 10px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid var(--bord);}
+  .chip.up{background:rgba(34,197,94,.14);border-color:rgba(34,197,94,.4);color:#bbf7d0;}
+  .chip.busy{background:rgba(251,191,36,.14);border-color:rgba(251,191,36,.4);color:#fde68a;}
+  .chip.down{background:rgba(239,68,68,.16);border-color:rgba(239,68,68,.45);color:#fecaca;}
+  .gauge{height:10px;border-radius:6px;background:#0c111c;overflow:hidden;border:1px solid var(--bord);}
+  .gauge>i{display:block;height:100%;background:linear-gradient(90deg,var(--acc),var(--acc2));border-radius:6px;transition:width .4s;}
+  .meter{display:flex;gap:14px;margin-bottom:10px;}
+  .meter .m{flex:1;text-align:center;}
+  .meter .m small{color:var(--mut);display:block;margin-top:3px;}
+  .split{display:flex;height:18px;border-radius:6px;overflow:hidden;border:1px solid var(--bord);margin:8px 0;}
+  .split>span{display:flex;align-items:center;justify-content:center;font-size:10px;color:#0a0e16;font-weight:700;min-width:0;transition:flex .4s;}
+  .s-fish{background:var(--acc);} .s-cosy{background:var(--acc2);} .s-other{background:#3a475c;color:#cbd5e1;}
+  .muted{color:var(--mut);font-size:12px;}
+  .warnbar{background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.4);color:#fecaca;
+           border-radius:10px;padding:8px 12px;margin:0 20px 0;display:none;}
+  .warnbar.show{display:block;}
+  /* GPU 总开关 */
+  .gpubtn{padding:10px 20px;border-radius:10px;border:0;font-weight:700;font-size:14px;cursor:pointer;transition:opacity .2s;white-space:nowrap;}
+  .gpubtn:disabled{opacity:.5;cursor:default;}
+  .gpubtn.release{background:var(--red);color:#fff;}
+  .gpubtn.engage{background:linear-gradient(90deg,var(--acc),var(--acc2));color:#04101f;}
+  #gpuCard.released{border-color:rgba(124,196,255,.5);}
+  /* 离线引擎 预热/释放 */
+  .engrow{display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px dashed var(--bord);flex-wrap:wrap;}
+  .engrow:last-child{border-bottom:none;}
+  .engrow .nm{font-weight:600;}
+  .engrow .gpubtn{margin-left:auto;padding:7px 16px;font-size:13px;}
+  /* 开播健康 · 甘特复盘 */
+  .lg{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:middle;}
+  .lg-ok{background:var(--grn);} .lg-lag{background:var(--ylw);} .lg-noface{background:#f0883e;}
+  .lg-svc{background:var(--red);} .lg-warm{background:#556174;}
+  .gantt-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px dashed var(--bord);flex-wrap:wrap;}
+  .gantt-row:last-child{border-bottom:none;}
+  .gantt-head{min-width:132px;font-size:12px;line-height:1.35;}
+  .gantt-head .dur{color:var(--mut);font-size:11px;}
+  .gantt-bar{position:relative;flex:1;min-width:220px;height:26px;}
+  .gantt-track{position:absolute;left:0;right:0;bottom:0;height:15px;display:flex;border-radius:5px;
+               overflow:hidden;background:#0c111c;border:1px solid var(--bord);}
+  .gantt-track>span{height:100%;min-width:1px;}
+  .g-ok{background:var(--grn);} .g-lag{background:var(--ylw);} .g-noface{background:#f0883e;}
+  .g-svc_down{background:var(--red);} .g-warmup{background:#556174;}
+  .gantt-mark{position:absolute;top:-1px;transform:translateX(-50%);font-size:12px;line-height:1;cursor:default;}
+  .gantt-sum{font-size:11px;color:var(--mut);min-width:130px;text-align:right;flex:0 0 auto;}
+  .gantt-sum .bad{color:#fca5a5;font-weight:600;} .gantt-sum .good{color:#bbf7d0;}
+  .gantt-row.expandable{cursor:pointer;} .gantt-row.expandable:hover{background:rgba(124,196,255,.05);}
+  .gantt-detail{padding:2px 0 10px 14px;border-bottom:1px dashed var(--bord);}
+  .gantt-detail-in{display:flex;gap:28px;flex-wrap:wrap;font-size:11px;color:var(--mut);}
+  .gantt-detail-in b{color:var(--txt);display:block;margin-bottom:4px;font-size:11px;}
+  .gantt-detail-in .seg-dot{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;vertical-align:middle;}
+  .minibtn{background:#182233;border:1px solid var(--bord);color:var(--txt);border-radius:8px;
+           padding:4px 11px;font-size:12px;cursor:pointer;transition:.15s;white-space:nowrap;}
+  .minibtn:hover{border-color:var(--acc);color:var(--acc);}
+  .minibtn:disabled{opacity:.5;cursor:default;}
+  .stcard{background:#0e1420;border:1px solid var(--bord);border-radius:10px;padding:10px 12px;margin:8px 0;}
+  /* ── 可读性层（全站字阶 v2，2026-07）：10/11px 信息文字统一抬到 12px 下限。
+     末尾最高源顺序 + !important，连带覆盖行内 style；.split>span（甘特窄条内嵌数字）除外。
+     整段删除即回退。 */
+  .gantt-head .dur, .gantt-sum, .gantt-detail-in, .gantt-detail-in b,
+  [style*="font-size:10px"], [style*="font-size:11px"]{ font-size:12px !important; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot green" id="pdot"></span>
+  <h1>运维总览 · 稳健性看板</h1>
+  <a href="/phone" style="color:var(--acc);text-decoration:none;font-size:13px;">→ 直播间</a>
+  <a href="/dashboard" style="color:var(--acc);text-decoration:none;font-size:13px;">→ 音质看板</a>
+  <span class="upd" id="upd">连接中…</span>
+</header>
+<div class="warnbar" id="warn"></div>
+<div class="wrap">
+
+  <div class="card" id="gpuCard" style="grid-column:1/-1;">
+    <h2>显存调度 · GPU 总开关（多机共享同一张卡）</h2>
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+      <span id="gpuState" class="chip">状态加载中…</span>
+      <span class="muted" id="gpuMeta"></span>
+      <button id="gpuBtn" class="gpubtn" style="margin-left:auto;" disabled>…</button>
+    </div>
+    <div class="muted" id="gpuHint" style="margin-top:8px;">用时一键拉起全部 GPU 服务；不用时一键释放显存（停服务+卸载本地 LLM），让另一台机器载入显存使用。Hub/同传等非 GPU 服务始终保留，本页不断。</div>
+    <div class="chips" id="gpuSvc" style="margin-top:10px;"></div>
+  </div>
+
+  <div class="card" id="rtCard" style="grid-column:1/-1;display:none;">
+    <h2>实时口型 · 引擎与负载门控（单卡满载自动回落，绝不掉帧）</h2>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <span class="muted">默认档</span><span class="chip" id="rtDefault">…</span>
+      <span class="muted">→ 实际生效</span><span class="chip" id="rtEff">…</span>
+      <span class="chip" id="rtGate" style="margin-left:auto;">…</span>
+    </div>
+    <div class="muted" id="rtHint" style="margin-top:8px;"></div>
+    <div id="rtWarn" style="display:none;margin-top:10px;padding:8px 12px;border-radius:8px;background:rgba(248,81,73,.12);border:1px solid rgba(248,81,73,.5);color:#f85149;font-size:13px;"></div>
+  </div>
+
+  <div class="card" id="swapCard" style="grid-column:1/-1;display:none;">
+    <h2>实时换脸 · 预设 / 负载自适应（运行时即时切换 · 时延偏高自动降档保实时）</h2>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <span class="muted" id="swapPresetLbl">预设</span>
+      <span id="swapPresets" style="display:inline-flex;gap:6px;flex-wrap:wrap;"></span>
+      <span class="chip" id="swapEng" style="margin-left:auto;" title="换脸引擎真相(代理 faceswap_api /health)">…</span>
+    </div>
+    <div class="muted" id="swapAuto" style="display:none;margin-top:6px;"></div>
+    <div class="muted" id="swapParams" style="margin-top:8px;"></div>
+    <div class="muted" id="swapStats" style="margin-top:4px;"></div>
+    <div class="muted" id="swapTrend" style="margin-top:4px;display:none;" title="换脸性能跨时间趋势(logs/swap_stats.json，跨重启连续) · 推荐启动档=近期生效档众数"></div>
+    <div id="swapWarn" style="display:none;margin-top:10px;padding:8px 12px;border-radius:8px;background:rgba(248,81,73,.12);border:1px solid rgba(248,81,73,.5);color:#f85149;font-size:13px;"></div>
+  </div>
+
+  <div class="card" id="trCard" style="grid-column:1/-1;display:none;">
+    <h2>同传转写 / 字幕导出（会议纪要 · 给录像配字幕 · TXT/SRT/JSON）</h2>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <span class="muted">内容</span>
+      <select id="trContent" style="background:#0e1420;color:var(--txt);border:1px solid var(--bord);border-radius:6px;padding:4px 8px;font-size:12px;"><option value="both">双语(原文+译文)</option><option value="src">仅原文</option><option value="trans">仅译文</option></select>
+      <span class="muted">说话人</span>
+      <select id="trWho" style="background:#0e1420;color:var(--txt);border:1px solid var(--bord);border-radius:6px;padding:4px 8px;font-size:12px;"><option value="all">全部</option><option value="me">我</option><option value="other">对方</option></select>
+      <span class="chip" id="trLive" style="margin-left:auto;" title="当前/最近会话转写条数与语向(代理 live_interpreter)">当前会话 …</span>
+    </div>
+    <div id="trCur" style="margin-top:10px;"></div>
+    <div class="muted" style="margin-top:12px;">往期会话（结束后自动留存于 logs/interp_transcript_*.json）</div>
+    <div id="trList" style="margin-top:6px;"></div>
+    <div id="trWarn" style="display:none;margin-top:10px;padding:8px 12px;border-radius:8px;background:rgba(248,81,73,.12);border:1px solid rgba(248,81,73,.5);color:#f85149;font-size:13px;"></div>
+  </div>
+
+  <div class="card" id="tqCard" style="grid-column:1/-1;display:none;">
+    <h2>同传 · 翻译质量与词表（缓存命中 · 预热战果 · 术语 CSV 批量维护）</h2>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <span class="chip" id="tqCache" title="翻译缓存(TM)命中统计(代理 live_interpreter)">缓存 …</span>
+      <span class="chip" id="tqWarm" title="最近一次翻译记忆预热战果：预调句数(自学并入数)/耗时">预热 …</span>
+      <span class="chip" id="tqGloss" title="术语锁定表条数与开关">术语 …</span>
+      <span class="chip" id="tqTrend" title="跨会话命中率趋势(logs/interp_tm_stats.json)：本场命中率 · 近 N 场累计">趋势 …</span>
+      <span class="chip" id="tqSurv" title="术语占位「真·存活率」在线自检：带词表的翻译里，占位符经该语向 MT 后仍能还原成术语的比例。低于阈值=该向术语锁定正被 MT 打散(已自愈退回无保护译文，不吐残迹但术语未锁)。?=样本不足暂不判定">占位存活 …</span>
+      <button class="minibtn" id="tqWarmBtn" style="margin-left:auto;" title="立即对当前语向预译高频句(后台跑，降高频句首延)">⚡ 立即预热</button>
+      <button class="minibtn" id="tqProbeBtn" title="用一组术语密集句过当前 MT 双向实测占位真·存活率(绕缓存)。开播前/换 MT 后端后一键自检；结果并入「占位存活」徽章，某向被打散会触发系统告警">🔬 测存活率</button>
+    </div>
+    <div class="muted" id="tqMiss" style="margin-top:8px;font-size:12px;"></div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;">
+      <span class="muted">术语表 CSV（Excel 批量维护）</span>
+      <a class="chip" id="tqExport" style="cursor:pointer;text-decoration:none;" href="/interp/glossary.csv?download=1" target="_blank" title="导出全部术语为 CSV(列 dir,src,dst)">⬇ 导出 CSV</a>
+      <select id="tqMode" style="background:#0e1420;color:var(--txt);border:1px solid var(--bord);border-radius:6px;padding:4px 8px;font-size:12px;" title="导入方式：合并=并入现有(同语向同源覆盖)；替换=整表覆盖真实语向"><option value="merge">合并导入</option><option value="replace">整表替换</option></select>
+      <button class="minibtn" id="tqImportBtn" title="从 CSV 批量导入术语(在 Excel 编辑后回传)">⬆ 导入 CSV</button>
+      <input type="file" id="tqFile" accept=".csv,text/csv" style="display:none">
+      <span class="muted" id="tqMsg" style="margin-left:4px;"></span>
+    </div>
+    <div id="tqWarn" style="display:none;margin-top:10px;padding:8px 12px;border-radius:8px;background:rgba(248,81,73,.12);border:1px solid rgba(248,81,73,.5);color:#f85149;font-size:13px;"></div>
+  </div>
+
+  <div class="card" id="csCard" style="grid-column:1/-1;display:none;">
+    <h2>通话质量趋势（每场自动落盘 · 越用越好的证据）</h2>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <span class="chip" id="csTotals" title="近 7 天合计：场次/累计时长/端到端延迟中位">近7天 …</span>
+      <span class="chip" id="csDrops" title="近 7 天分层拦截合计：gate=底噪门 halluc=幻听 spk=声纹拦截 echo=回声闸">拦截 …</span>
+      <span class="chip" id="csLearn" style="display:none" title="纠错自学习：同一修正对出现 2 次自动进术语热词，识别源头防错">学习 …</span>
+      <a class="chip" href="javascript:void(0)" onclick="window.open('//'+location.hostname+':7900/review')" title="P3 转写复盘：逐句回放+对错标注，算真实字错率趋势">复盘标注 ↗</a>
+    </div>
+    <div id="csDaily" style="margin-top:10px;"></div>
+    <div class="muted" style="margin-top:12px;">最近场次（时长 · 延迟 · 拦截 · 声纹/朗读）</div>
+    <div id="csList" style="margin-top:6px;"></div>
+  </div>
+
+  <div class="card" id="engCard" style="grid-column:1/-1;">
+    <h2>离线引擎 · 预热 / 释放（出片前拉起，用完释放显存）</h2>
+    <div class="muted" id="engHint" style="margin-bottom:6px;">EchoMimic / LatentSync 等离线高清出片引擎冷启较慢、占数 GB 显存：出片前点「预热」拉起，用完点「释放」让出显存。仅在「GPU 已启用」时可预热。</div>
+    <div class="muted" id="engVram" style="margin-bottom:10px;"></div>
+    <div id="engList"><span class="muted">加载中…</span></div>
+  </div>
+
+  <div class="card">
+    <h2>系统压力</h2>
+    <div class="meter">
+      <div class="m"><div class="big" id="gpu">–</div><small>GPU %</small></div>
+      <div class="m"><div class="big" id="ram">–</div><small>内存 %</small></div>
+      <div class="m"><div class="big" id="press">–</div><small>压力</small></div>
+    </div>
+    <div class="gauge"><i id="gpubar" style="width:0%"></i></div>
+  </div>
+
+  <div class="card">
+    <h2>关键服务</h2>
+    <div class="chips" id="svc"><span class="muted">加载中…</span></div>
+  </div>
+
+  <div class="card">
+    <h2>进程守护 · 自愈</h2>
+    <div id="sup"><span class="muted">加载中…</span></div>
+  </div>
+
+  <div class="card">
+    <h2>TTS 双通道分流</h2>
+    <div class="row"><span class="k">fish 并发占用</span><span class="v" id="fishnow">–</span></div>
+    <div class="split" id="splitbar" title="本进程累计：fish vs CosyVoice 溢出 vs 其它"></div>
+    <div id="chanrows"></div>
+  </div>
+
+  <div class="card">
+    <h2>近窗对话延迟</h2>
+    <div class="row"><span class="k">感知首音 中位</span><span class="v" id="pttfa">–</span></div>
+    <div class="row"><span class="k">真实首音</span><span class="v" id="ttfa">–</span></div>
+    <div class="row"><span class="k">采样轮次</span><span class="v" id="turns">–</span></div>
+  </div>
+
+  <div class="card">
+    <h2>数字人预计算 · 就绪态</h2>
+    <div class="meter">
+      <div class="m"><div class="big" id="fp-ready">–</div><small>成功就绪</small></div>
+      <div class="m"><div class="big" id="fp-eta">–</div><small>ETA(秒)</small></div>
+      <div class="m"><div class="big" id="fp-failrate">–</div><small>真实失败率</small></div>
+    </div>
+    <div id="fp-rows" style="margin-top:8px;"></div>
+    <div class="muted" id="fp-meta" style="margin-top:6px;">加载中…</div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1;">
+    <h2>实时并发 · 多卡负载</h2>
+    <div class="meter">
+      <div class="m"><div class="big" id="cap-k">–</div><small>并发 K</small></div>
+      <div class="m"><div class="big" id="cap-active">–</div><small>在用</small></div>
+      <div class="m"><div class="big" id="cap-wait">–</div><small>排队</small></div>
+    </div>
+    <div class="muted" id="cap-meta" style="margin-top:6px;">加载中…</div>
+    <div class="muted" id="stream-meta" style="margin-top:6px;"></div>
+    <div id="poolrows" style="margin-top:10px;"></div>
+  </div>
+
+  <div class="card" id="audCard" style="grid-column:1/-1;display:none;">
+    <h2>观众互动 · 提问/点赞/自动应答/公屏</h2>
+    <div class="meter">
+      <div class="m"><div class="big" id="aud-pend">–</div><small>排队</small></div>
+      <div class="m"><div class="big" id="aud-qpm">–</div><small>提问/分</small></div>
+      <div class="m"><div class="big" id="aud-like">–</div><small>点赞/分</small></div>
+      <div class="m"><div class="big" id="aud-top">–</div><small>最高赞</small></div>
+      <div class="m"><div class="big" id="aud-wall">–</div><small>公屏端</small></div>
+      <div class="m"><div class="big" id="aud-hl">–</div><small>精彩问答</small></div>
+      <div class="m"><div class="big" id="aud-stream">–</div><small>观众首音 p50</small></div>
+    </div>
+    <div class="muted" id="aud-meta" style="margin-top:6px;"></div>
+    <div class="muted" id="aud-dm" style="margin-top:4px;"></div>
+  </div>
+
+  <div class="card" id="secCard" style="grid-column:1/-1;">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <h2 style="margin:0;">安全体检 · 对外暴露面</h2>
+      <span class="chip" id="secRisk" style="margin-left:auto;">加载中…</span>
+    </div>
+    <div class="muted" style="margin-top:6px;">看管理面/子服务面是否「同网可达且未设令牌」——给风险等级与可执行整改。仅本机或授权可见。</div>
+    <div class="chips" id="secGuard" style="margin-top:10px;"></div>
+    <div class="chips" id="secFacts" style="margin-top:6px;"></div>
+    <div id="secFindings" style="margin-top:10px;"></div>
+    <div class="muted" id="secMeta" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="card" id="stabCard" style="grid-column:1/-1;">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <h2 style="margin:0;">Hub 稳定性账本 · 设备栈隔离验收(P10)</h2>
+      <span class="chip" id="stabVerdict" style="margin-left:auto;">加载中…</span>
+    </div>
+    <div class="muted" style="margin-top:6px;">守护拉活 × Windows 崩溃事件(1000) × 启动溯源 三源自动对账：Hub 到底有没有非计划重启、崩在哪个模块。探测子进程里的崩溃(已隔离·不伤 Hub)单独计。</div>
+    <div class="chips" id="stabChips" style="margin-top:10px;"></div>
+    <div id="stabRows" style="margin-top:8px;"></div>
+    <div class="muted" id="stabMeta" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1;">
+    <h2>上线前体检 · acceptance</h2>
+    <div class="muted" id="acceptmeta">加载中…</div>
+    <div class="chips" id="acceptitems" style="margin-top:10px;"></div>
+    <div class="muted" style="margin-top:8px;">历史：<span id="accepthist"></span></div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1;">
+    <h2>前端交互日巡 · fe_patrol</h2>
+    <div class="muted" id="fepmeta">加载中…</div>
+    <div class="chips" id="fepchips" style="margin-top:10px;"></div>
+    <div class="muted" style="margin-top:8px;">历史(计划任务 AvatarHub_FePatrol)：<span id="fephist"></span></div>
+    <div class="muted" style="margin-top:6px;font-size:11px;">Hub 离线或 playwright 未装 → 日巡 SKIP 不误报；失败经 alerts.py 外发（fe_patrol:smoke / fe_patrol:interact）。手动：fe_patrol_once.bat</div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1;">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <h2 style="margin:0;">全链路自检 · 健康 + 延迟 + 红旗</h2>
+      <button class="minibtn" id="scBtn" onclick="selfcheck(1,0)"
+              title="并发探各服务 /health + 测 NMT/STT/TTS 关键延迟，高亮换脸掉CPU/核心离线/阶段偏慢等红旗（只读探测，不改运行状态）">▶ 运行自检</button>
+      <button class="minibtn" id="scBtnQuick" onclick="selfcheck(0,0)"
+              title="只做健康扫描（更快，不测延迟）">⚡ 仅健康</button>
+      <button class="minibtn" id="scBtnAlert" onclick="selfcheck(1,1)"
+              title="跑自检并把红旗同步到告警系统 alerts.py：换脸掉CPU/核心离线/阶段偏慢会触发告警(去抖)、恢复自动清除。等价于命令行 --alert">🔔 自检+告警</button>
+    </div>
+    <div class="muted" id="scmeta" style="margin-top:8px;">点「运行自检」开始（触发真实探测，约数秒；仅本机/授权可用）</div>
+    <div class="chips" id="scitems" style="margin-top:10px;"></div>
+    <div id="sclat" style="margin-top:8px;"></div>
+    <div id="scflags" style="margin-top:6px;"></div>
+    <div class="muted" style="margin-top:8px;">历史(含定时巡检)：<span id="schist"></span></div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1;">
+    <h2>真出声质量 · 每角色声纹/自然度</h2>
+    <div class="muted" id="vqmeta">加载中…</div>
+    <div id="vqrows" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1;">
+    <h2>集群显存 · 预算 vs 实测（cluster_map 门禁的运行时可视）</h2>
+    <div class="muted" id="vbmeta">加载中…</div>
+    <div id="vbrows" style="margin-top:8px;"></div>
+    <div class="muted" style="margin-top:8px;font-size:11px;">浅蓝底条=登记预算(cluster_map.vram_budget)，实心条=nvidia-smi 实测(绿=限内/红=超上限)；数字=实测/预算/上限(物理×阈值)。实测超限说明有服务没登记就上机——先补预算过 lint 再部署。</div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1;">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <h2 style="margin:0;">分机部署 · 拓扑向导（cluster_map → env 片段 + 漂移 lint）</h2>
+      <button class="minibtn" onclick="clusterWizard()" title="重读 cluster_map.json 并重跑拓扑/显存 lint">↻ 重新生成</button>
+      <button class="minibtn" id="cwCopyBtn" onclick="cwCopyEnv()" style="display:none"
+              title="复制 SVC_* 片段，粘贴进 env_config.bat 即完成路由对齐">⧉ 复制 env 片段</button>
+    </div>
+    <div class="muted" id="cwMeta" style="margin-top:8px;">加载中…</div>
+    <div id="cwHosts" style="margin-top:8px;"></div>
+    <pre id="cwEnv" style="display:none;margin-top:8px;padding:10px;background:#0c111c;border:1px solid var(--bord);border-radius:8px;font-size:11px;line-height:1.7;overflow:auto;"></pre>
+    <div class="muted" style="margin-top:6px;font-size:11px;">单一数据源=cluster_map.json：改机器/搬迁只改它，此处生成可粘贴的 env_config 片段；lint 红=运行时路由(env_config.bat)与拓扑不一致或显存超编，先对齐再部署。</div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1;">
+    <h2>前端运行时错误 · client errors</h2>
+    <div class="muted" id="clemeta">加载中…</div>
+    <div id="clerows" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="card" id="funnelCard" style="grid-column:1/-1;">
+    <h2>入口热度 · 首页点击漏斗（前门埋点）</h2>
+    <div class="muted" id="fnMeta">加载中…</div>
+    <div class="chips" id="fnEv" style="margin-top:10px;"></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px;margin-top:14px;">
+      <div><div class="muted" style="margin-bottom:6px;">最热功能入口</div><div id="fnFeat"></div></div>
+      <div><div class="muted" style="margin-bottom:6px;">角色分流</div><div id="fnRole"></div></div>
+      <div><div class="muted" style="margin-bottom:6px;">产品线热度</div><div id="fnLine"></div></div>
+    </div>
+    <div class="muted" style="margin-top:10px;font-size:11px;">数据源：首页 <code>data-ev</code> 点击埋点（logs/ui_events.jsonl，仅入口 id 无 PII，跨重启留痕、自动截断）。用于看「哪些入口被真正点」，指导首页排序与市场投放。</div>
+  </div>
+
+  <div class="card" id="devflowCard" style="grid-column:1/-1;">
+    <h2>设备自愈漏斗 · 拔插一键恢复达成率（P4 埋点）</h2>
+    <div class="muted" id="dfMeta">加载中…</div>
+    <div id="dfBars" style="margin-top:10px;max-width:560px;"></div>
+    <div class="chips" id="dfSrc" style="margin-top:8px;"></div>
+    <div class="muted" style="margin-top:10px;font-size:11px;">口径：曝光=缺席警告条上「⚡ 一键热切」按钮真亮出（每次缺席只记一次，轮询不刷分母）；来源 strip=警告条 / diag=无声诊断 / back=切回首选 / fresh-pick=转换中新插设备 / auto=服务端自动热切（P6，曝光=守护确认缺席并动手）/ rescue=自动切失败后的自救卡（P8）。「开启建议」为 P7-2 建议条效果（advice_* 独立键，不进主漏斗分母）。数据 data/devflow_stats.json 留 60 天。用于验证「10 秒手工恢复压到 1 键」的真实达成率。
+      <span id="dfWeekly"></span></div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1;">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <h2 style="margin:0;">开播健康 · 场次复盘（甘特）</h2>
+      <button class="minibtn" id="hgDrillBtn" onclick="healSelftest()"
+              title="安全演练：不碰硬件/不发告警/不动管线——用真决策跑护栏矩阵 + 真聚合复盘合成坏态回合，验证自愈会按预期动">🩺 一键演练</button>
+      <button class="minibtn" id="hgCsvBtn" onclick="healExportCsv()"
+              title="把当前场次摘要导出为 CSV（Excel 可直接打开），便于交接/存档复盘">⬇ 导出CSV</button>
+    </div>
+    <div id="hgSelftest" style="display:none;"></div>
+    <div class="muted" id="hgMeta" style="margin-top:8px;">加载中…</div>
+    <div class="muted" style="display:flex;gap:14px;flex-wrap:wrap;margin:8px 0 2px;font-size:11px;">
+      <span><i class="lg lg-ok"></i>顺滑</span><span><i class="lg lg-lag"></i>卡顿</span>
+      <span><i class="lg lg-noface"></i>丢脸</span><span><i class="lg lg-svc"></i>掉线</span>
+      <span><i class="lg lg-warm"></i>检测中</span><span>🔄换源重启 · 🧹腾显存 · 🚨告警</span>
+    </div>
+    <div id="hgRows" style="margin-top:6px;"><span class="muted">加载中…</span></div>
+    <div class="muted" style="margin-top:6px;font-size:11px;">条=一场直播的时间轴（按坏态时长着色）；上方图标=服务端自愈/告警发生时刻；右侧第二行=本场画质摘要（裁剪命中·时延中位·降档占比，服务端自动采样）。<b>点任意一场可展开本场明细+完整画质报告</b>。数据来自服务端守护，跨重启留痕，CSV 一并带画质列。</div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1;">
+    <h2>历史趋势 · 落盘留痕</h2>
+    <div class="muted" id="trendmeta">加载中…</div>
+    <svg id="spark" width="100%" height="70" preserveAspectRatio="none" style="margin-top:10px;display:block;"></svg>
+    <div class="muted" style="margin-top:6px;">蓝线＝感知首音(ms)，红点＝该时刻有关键服务掉线/熔断</div>
+    <svg id="spark-fp" width="100%" height="70" preserveAspectRatio="none" style="margin-top:10px;display:block;"></svg>
+    <div class="muted" style="margin-top:6px;">琥珀线＝人脸预计算 ETA(秒)，红点＝该时刻真实失败率&gt;0（error；service_off 属正常降级不打点）</div>
+  </div>
+
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+function fmtms(v){ return (v==null||v==='')?'–':(Math.round(v)+'ms'); }
+async function tick(){
+  let d;
+  try{ d=await (await fetch('/api/ops/snapshot',{cache:'no-store'})).json(); }
+  catch(e){ $('upd').textContent='⚠ 拉取失败 '+new Date().toLocaleTimeString(); return; }
+  $('upd').textContent='更新于 '+new Date().toLocaleTimeString();
+  window.__secGuard = d.security || null;   // 鉴权守护三指标：供安全卡 secGuard() 渲染(数据随 snapshot 一起来)
+  try{ secGuard(window.__secGuard); }catch(_){}   // 即时刷新守护 chips(不必等 30s 的 security())
+  // 压力
+  const press=d.pressure||'?';
+  $('press').textContent=press==='green'?'正常':press==='yellow'?'偏高':press==='red'?'吃紧':press;
+  $('gpu').textContent=(d.gpu_util>=0?d.gpu_util:'–');
+  $('ram').textContent=(d.ram_percent>=0?Math.round(d.ram_percent):'–');
+  $('gpubar').style.width=Math.max(0,Math.min(100,d.gpu_util||0))+'%';
+  $('pdot').className='dot '+(press==='red'?'red':press==='yellow'?'yellow':'green');
+  // 服务
+  const busy=new Set(d.services_busy||[]);
+  const svc=$('svc'); svc.innerHTML='';
+  Object.entries(d.services||{}).forEach(([n,ok])=>{
+    if(['enhance','rvc','hair','tryon','latentsync','tts','singing'].includes(n) && !ok) return; // 隐藏未启用可选服务
+    const cls=ok?(busy.has(n)?'busy':'up'):'down';
+    const lat=(d.latency_ms||{})[n]; const lt=(lat!=null?' '+lat+'ms':'');
+    const s=document.createElement('span'); s.className='chip '+cls;
+    s.textContent=n+(busy.has(n)?' 忙':'')+lt; svc.appendChild(s);
+  });
+  // 守护
+  const sup=$('sup'); sup.innerHTML=''; const warns=[];
+  Object.entries(d.supervisor||{}).forEach(([n,s])=>{
+    const r=document.createElement('div'); r.className='row';
+    let tag = s.offloaded?'已迁远端':(s.alive?'在线':'掉线');
+    if(s.tripped){ tag='熔断待人工'; warns.push(n+' 熔断'); }
+    r.innerHTML='<span class="k">'+n+'</span><span class="v">'+tag+
+                (s.restarts?(' · 重启×'+s.restarts):'')+'</span>';
+    sup.appendChild(r);
+    if(!s.offloaded && !s.alive) warns.push(n+' 掉线');
+  });
+  // 双通道
+  const ch=d.tts_channel||{}; const st=ch.stats||{};
+  $('fishnow').textContent=(ch.fish_turns_now||0)+' / '+(ch.fish_max_turns||0)+(ch.dual_tts_on?'  (分流开)':'  (分流关)');
+  const fish=st.fish||0, cosy=(st.cosy_overflow||0)+(st.cosy_notready||0), other=(st.passthrough||0)+(st.fish_queue||0);
+  const tot=Math.max(1,fish+cosy+other);
+  const sb=$('splitbar'); sb.innerHTML='';
+  [['s-fish',fish,'fish'],['s-cosy',cosy,'cosy'],['s-other',other,'其它']].forEach(([c,v,lbl])=>{
+    if(v<=0) return; const sp=document.createElement('span'); sp.className=c;
+    sp.style.flex=v; sp.textContent=(v/tot>0.12?lbl+' '+v:''); sb.appendChild(sp);
+  });
+  const cr=$('chanrows'); cr.innerHTML=
+    '<div class="row"><span class="k">fish 高质量轮</span><span class="v">'+fish+'</span></div>'+
+    '<div class="row"><span class="k">溢出→CosyVoice</span><span class="v">'+(st.cosy_overflow||0)+'</span></div>'+
+    '<div class="row"><span class="k">fish忙→cosy兜底</span><span class="v">'+(st.cosy_notready||0)+'</span></div>'+
+    '<div class="row"><span class="k">峰值并发fish</span><span class="v">'+(st.peak_fish_turns||0)+'</span></div>';
+  // 延迟
+  const mx=d.metrics||{};
+  $('pttfa').textContent=fmtms(mx.perceived_ttfa_ms);
+  $('ttfa').textContent=fmtms(mx.ttfa_ms);
+  $('turns').textContent=(mx.turns!=null?mx.turns:'–');
+  // 数字人预计算 · 就绪态（P5：ready/失败/归因/ETA/耗时分位；真实失败率只计 error，service_off 属正常降级不计）
+  const fp=d.face_prep||{};
+  $('fp-ready').textContent=(fp.ready!=null?fp.ready:'–');
+  $('fp-eta').textContent=(fp.eta_s!=null?fp.eta_s:'–');
+  const _frate=(fp.real_fail_rate!=null?fp.real_fail_rate:0);
+  $('fp-failrate').textContent=(fp.settled?Math.round(_frate*100)+'%':'–');
+  const _rs=fp.fail_reasons||{}, _so=_rs.service_off||0, _err=_rs.error||0;
+  const _p50=(fp.dur_p50_s!=null?fp.dur_p50_s+'s':'–'), _p95=(fp.dur_p95_s!=null?fp.dur_p95_s+'s':'–');
+  $('fp-rows').innerHTML=
+    '<div class="row"><span class="k">成功就绪 / 已结算</span><span class="v">'+(fp.ready||0)+' / '+(fp.settled||0)+'</span></div>'+
+    '<div class="row"><span class="k">耗时 p50 / p95</span><span class="v">'+_p50+' / '+_p95+'（'+(fp.dur_samples||0)+' 样）</span></div>'+
+    '<div class="row"><span class="k">正常降级 service_off</span><span class="v" style="color:var(--mut)">'+_so+'</span></div>'+
+    '<div class="row"><span class="k">真异常 error</span><span class="v" style="color:'+(_err>0?'#f05560':'inherit')+'">'+_err+'</span></div>'+
+    (fp.preparing_now?'<div class="row"><span class="k">当前准备中</span><span class="v">'+fp.preparing_now+'</span></div>':'');
+  $('fp-meta').textContent=(fp.settled?('自启动累计 '+fp.settled+' 次 · 真实失败率仅计 error（service_off 为刻意降级不计）'):'尚无预计算记录（激活角色后累计）');
+  if(_err>0 && _frate>=0.2) warns.push('人脸预计算真实失败率 '+Math.round(_frate*100)+'%');
+  // 实时并发 · 多卡负载（准入 K / 在用 / 排队 + 每卡在途热力与健康）
+  const cap=d.capacity||{}; const gp=cap.gpu_pools||{}; const pools=gp.pools||{};
+  const pr=$('poolrows');
+  if(!cap.enabled){
+    $('cap-k').textContent='关'; $('cap-active').textContent='–'; $('cap-wait').textContent='–';
+    $('cap-meta').textContent='准入未启用（CONV_MAX_CONCURRENT=0）。多卡时设为 auto 即按健康卡数自动定 K。';
+    pr.innerHTML='';
+  }else{
+    $('cap-k').textContent=cap.max;
+    $('cap-active').textContent=cap.active;
+    $('cap-wait').textContent=cap.waiting;
+    $('cap-meta').textContent=(cap.auto?'auto（K=健康卡数）':'固定 K')+' · 推荐 '+(gp.recommended_concurrency!=null?gp.recommended_concurrency:'–')+
+      (cap.avg_turn_ms?(' · 平均整轮 '+cap.avg_turn_ms+'ms'):'')+(cap.max_queue?(' · 队列上限 '+cap.max_queue):'');
+    if(cap.waiting>0) warns.push('对话排队 '+cap.waiting+' 路');
+    pr.innerHTML='';
+    const names=Object.keys(pools);
+    if(!names.length){ pr.innerHTML='<span class="muted">单卡部署（未配置多副本 SVC_*）</span>'; }
+    names.forEach(name=>{
+      const p=pools[name]||{};
+      const head=document.createElement('div'); head.className='row';
+      const degraded=(p.healthy<p.size);
+      head.innerHTML='<span class="k">'+name+'</span><span class="v" style="color:'+(degraded?'#f0a020':'inherit')+'">'+p.healthy+' / '+p.size+' 健康</span>';
+      pr.appendChild(head);
+      if(p.size>1){
+        (p.replicas||[]).forEach((r,i)=>{
+          const row=document.createElement('div'); row.className='row';
+          const bar='<span style="display:inline-block;height:7px;min-width:2px;width:'+Math.min(120,(r.inflight||0)*33)+'px;background:'+(r.down?'#f05560':'#3b82f6')+';border-radius:3px;vertical-align:middle;margin-left:8px"></span>';
+          row.innerHTML='<span class="k" style="font-size:11px;color:var(--mut)">'+(r.down?'🔴':'🟢')+' #'+i+' '+(r.url||'').replace(/^https?:\/\//,'')+'</span>'+
+            '<span class="v">在途 '+(r.inflight||0)+bar+' · 累计 '+(r.served||0)+'</span>';
+          pr.appendChild(row);
+        });
+      }
+      if(degraded) warns.push(name+' 多卡掉 '+(p.size-p.healthy)+' 张');
+    });
+  }
+  // 单句内流式 TTS · 首音分位(流式 vs 整句对照)
+  const stt=cap.streaming_tts||{};
+  const sm=$('stream-meta');
+  if(!stt.enabled){
+    sm.textContent='流式 TTS：关（CONV_TTS_STREAMING=0，观众/对话均走整句合成）';
+  }else{
+    const m=stt.metrics||{}, cs=m.conv_stream||{}, cw=m.conv_whole||{};
+    const co=stt.coalesce||{};
+    const elig=stt.eligible?('就绪 · '+((stt.profile||'')||'当前角色')):'未就绪(需 fish_speech + 克隆音)';
+    const slo=stt.slo_ttfa_p95_ms||0;
+    sm.textContent='流式 TTS：开 · '+elig+
+      ' · 流式首块 p50/p95 '+fmtms(cs.p50_ms)+' / '+fmtms(cs.p95_ms)+
+      ' (n='+(cs.samples||0)+') · 整句对照 '+fmtms(cw.p50_ms)+' / '+fmtms(cw.p95_ms)+
+      ' · 合并 '+co.first_ms+'/'+co.chunk_ms+'ms'+(slo?(' · SLO p95≤'+slo+'ms'):'');
+    if(!stt.eligible) warns.push('流式TTS已开但未就绪(缺 fish 克隆音)');
+    // SLO 告警：有足够样本(≥10)且流式首块 p95 超标 → 黄条提示调参/查卡
+    if(stt.eligible && slo>0 && (cs.samples||0)>=10 && cs.p95_ms>slo)
+      warns.push('流式首音 p95 '+Math.round(cs.p95_ms)+'ms 超 SLO('+slo+'ms)');
+  }
+  // 观众互动 · 提问/点赞/自动应答/公屏
+  const au=d.audience, ac=$('audCard');
+  if(!au){ ac.style.display='none'; }
+  else{
+    ac.style.display='';
+    $('aud-pend').textContent=(au.pending||0)+' / '+(au.max_q||0);
+    $('aud-qpm').textContent=au.qpm||0;
+    $('aud-like').textContent=au.likes_pm||0;
+    $('aud-top').textContent=au.top_likes||0;
+    $('aud-wall').textContent=au.wall_clients||0;
+    $('aud-hl').textContent=au.highlights||0;
+    const astr=au.streaming_tts||{}, am=astr.metrics||{};
+    if(astr.enabled && astr.eligible){
+      $('aud-stream').textContent=fmtms(am.p50_ms);
+    }else if(astr.enabled){
+      $('aud-stream').textContent='未就绪';
+    }else{
+      $('aud-stream').textContent='关';
+    }
+    const a=au.auto||{}, st=au.stats||{};
+    const sr=(au.auto_success_rate!=null)?(Math.round(au.auto_success_rate*100)+'%'):'–';
+    const autotxt=(!a.available)?'自动应答不可用'
+      :('自动应答 '+(a.on?'开':'关')+(a.inflight?'·作答中':'')+' · 已答 '+(a.answered||0)+' · 失败 '+(a.errors||0)+' · 成功率 '+sr);
+    $('aud-meta').textContent=autotxt+' · 累计提交 '+(st.submitted||0)+
+      ' · 拒绝(限流/重复/满) '+(st.rejected_rate||0)+'/'+(st.rejected_dup||0)+'/'+(st.rejected_full||0);
+    if(a.available && a.errors>0) warns.push('自动应答失败 '+a.errors+' 次');
+    if((au.pending||0)>=(au.max_q||1)) warns.push('观众队列已满');
+    // P0-3 弹幕网关：来源/连接/转发漏斗一行速览(详情与启停走 /api/danmaku/*)
+    const dm=au.danmaku, de=$('aud-dm');
+    if(!dm||!dm.running){ de.textContent='弹幕接入：未运行（POST /api/danmaku/start 开启 B站直连/通用WS/Webhook 直推）'; }
+    else{
+      const s=dm.stats||{}, drops=Object.entries(s.dropped||{}).map(([k,v])=>k+'×'+v).join(' ');
+      de.textContent='弹幕接入：'+dm.source+(dm.connected?'（已连接）':'（重连中…）')
+        +' · 收 '+(s.received||0)+' → 转 '+(s.forwarded||0)+' · 礼物 '+(s.gifts||0)
+        +(drops?(' · 滤 '+drops):'')+(s.last_error?(' · 最近错误 '+s.last_error):'');
+      if(dm.running && !dm.connected) warns.push('弹幕源断线重连中');
+    }
+  }
+  // 偏好锁语种提醒（脏数据可见性）
+  if(d.pref_warn) warns.push(d.pref_warn);
+  // 体检 + 质量告警并入主告警条
+  if(window.__acceptWarn) warns.push(window.__acceptWarn);
+  if(window.__fepWarn) warns.push(window.__fepWarn);
+  if(window.__vqWarn) warns.push(window.__vqWarn);
+  if(window.__vbWarn) warns.push(window.__vbWarn);
+  if(window.__cleWarn) warns.push(window.__cleWarn);
+  if(window.__scWarn) warns.push(window.__scWarn);
+  // 告警条
+  const wb=$('warn');
+  if(warns.length){ wb.textContent='⚠ '+warns.join(' · '); wb.classList.add('show'); }
+  else wb.classList.remove('show');
+}
+async function accept(){
+  let d;
+  try{ d=await (await fetch('/api/ops/acceptance?history=40',{cache:'no-store'})).json(); }catch(e){ return; }
+  const meta=$('acceptmeta'), items=$('acceptitems'), hist=$('accepthist'), L=d.latest;
+  if(!L){ meta.textContent='尚未运行（命令：python acceptance.py）'; items.innerHTML=''; hist.textContent=''; }
+  else{
+    const ageH=(d.age_sec!=null)?((d.age_sec/3600).toFixed(1)+'h 前'):'';
+    meta.innerHTML='<b style="color:'+(L.overall?'#bbf7d0':'#fecaca')+'">'+(L.overall?'全部通过':'存在失败项')
+      +'</b> · '+L.pass+'/'+L.total+' · '+(L.mode||'')+' · '+ageH+(d.stale?' · <span style="color:#fde68a">已陈旧</span>':'');
+    items.innerHTML='';
+    (L.results||[]).forEach(r=>{ const s=document.createElement('span');
+      s.className='chip '+(r.ok?'up':'down'); s.textContent=r.title+(r.ok?'':' ✘');
+      s.title=r.summary||''; items.appendChild(s); });
+    hist.innerHTML=(d.history||[]).slice(-40).map(h=>'<span title="'
+      +new Date(h.ts*1000).toLocaleString()+' '+(h.mode||'')+' '+h.pass+'/'+h.total
+      +'" style="color:'+(h.overall?'#22c55e':'#ef4444')+';font-size:15px">●</span>').join(' ');
+  }
+  window.__acceptWarn = (d.alert==='crit') ? ('体检失败：'+d.alert_msg)
+                      : (d.alert==='warn') ? d.alert_msg : '';
+}
+async function fePatrol(){
+  let d;
+  try{ d=await (await fetch('/api/ops/fe_patrol?history=40',{cache:'no-store'})).json(); }catch(e){ return; }
+  const meta=$('fepmeta'), chips=$('fepchips'), hist=$('fephist'), L=d.last;
+  if(!L){ meta.textContent='尚未运行（fe_patrol_once.bat 或 register_fe_patrol_task.ps1）'; chips.innerHTML=''; hist.textContent=''; }
+  else{
+    const ageH=(d.age_sec!=null)?((d.age_sec/3600).toFixed(1)+'h 前'):'';
+    const tone=L.skip?'#94a3b8':(L.ok!==false && L.overall!=='FAIL'?'#bbf7d0':'#fecaca');
+    meta.innerHTML='<b style="color:'+tone+'">'+(L.overall|| (L.ok?'PASS':'FAIL'))+'</b> · '+ageH
+      +(d.stale?' · <span style="color:#fde68a">已陈旧</span>':'')
+      +(d.last_scope?(' · '+String(d.last_scope).replace(/</g,'&lt;')):'');
+    chips.innerHTML='';
+    if(L.skip){
+      const s=document.createElement('span'); s.className='chip muted'; s.textContent='SKIP · '+(L.detail||L.skip_reason||''); chips.appendChild(s);
+    }else{
+      [['smoke','零pageerror'],['interact','交互冒烟']].forEach(([k,lab])=>{
+        const ok=L[k+'_ok']; if(ok==null) return;
+        const s=document.createElement('span'); s.className='chip '+(ok?'up':'down');
+        s.textContent=lab+(ok?' ✓':' ✘'); s.title=L[k+'_scope']||''; chips.appendChild(s);
+      });
+    }
+  }
+  hist.innerHTML=(d.history||[]).slice(-40).map(h=>'<span title="'
+    +new Date((h.ts||0)*1000).toLocaleString()+' '+(h.overall||'')+' smoke='+(h.smoke_ok)
+    +' interact='+(h.interact_ok)+'" style="color:'
+    +(h.skip?'#94a3b8':(h.ok!==false&&h.overall!=='FAIL'?'#22c55e':'#ef4444'))+';font-size:15px">●</span>').join(' ');
+  window.__fepWarn = (d.alert==='crit') ? ('前端日巡失败：'+d.alert_msg)
+                   : (d.alert==='warn') ? d.alert_msg : '';
+}
+function _scHist(hist){
+  const el=$('schist'); if(!el) return;
+  if(!hist||!hist.length){ el.textContent='尚无记录（命令行/计划任务或点上方按钮均会留痕）'; return; }
+  el.innerHTML=hist.slice(-40).map(h=>'<span title="'
+    +new Date((h.ts||0)*1000).toLocaleString()+'  '+(h.up||0)+'/'+(h.total||0)+'在线'
+    +(h.nflags?('  '+h.nflags+'红旗'):'')+(h.nmt_ms!=null?('  NMT'+h.nmt_ms+'ms'):'')
+    +(h.stt_ms!=null?('  STT'+h.stt_ms+'ms'):'')+(h.tts_fish_ttfa!=null?('  首包'+h.tts_fish_ttfa+'ms'):'')
+    +'" style="color:'+(h.ok?'#22c55e':'#ef4444')+';font-size:15px">●</span>').join(' ');
+}
+async function scHistoryLoad(){
+  let d; try{ d=await (await fetch('/api/ops/selfcheck?run=0&history=40',{cache:'no-store'})).json(); }catch(e){ return; }
+  _scHist(d.history);
+  const L=d.last, meta=$('scmeta');
+  if(L && meta.dataset.ran!=='1'){        // 未手动跑过时，用历史里最近一条作概览
+    meta.innerHTML='上次(历史)：<b style="color:'+(L.ok?'#bbf7d0':'#fecaca')+'">'+(L.ok?'健康':'需关注')+'</b> · '
+      +(L.up||0)+'/'+(L.total||0)+'在线'+(L.nflags?(' · '+L.nflags+'红旗'):'')
+      +' · '+new Date((L.ts||0)*1000).toLocaleTimeString()+' · 点上方按钮现跑一次';
+  }
+}
+function secGuard(g){
+  const box=$('secGuard'); if(!box) return; box.innerHTML='';
+  if(!g){ return; }   // snapshot 尚未回来（首刷时序），下个 tick 会补
+  const chip=(label,state,title)=>{ const s=document.createElement('span');
+    s.className='chip '+(state||''); s.textContent=label; if(title) s.title=title; box.appendChild(s); };
+  // 上次演习
+  const ld=g.last_drill;
+  if(ld && ld.result){
+    const pass=String(ld.result).toUpperCase()==='PASS';
+    chip('上次演习 '+(pass?'✔ 通过':'⛔ 失败')+(ld.target?('（'+ld.target+'）'):''),
+         pass?'up':'down', (ld.ts||'')+(ld.detail?(' · '+ld.detail):''));
+  } else { chip('上次演习 尚无记录','busy'); }
+  // 下次演习预告（周轮转）
+  const nd=g.next_drill;
+  if(nd && nd.target){ chip('下次演习 '+nd.target,'', '计划 '+(nd.at||'')+'（ISO周'+(nd.iso_week!=null?nd.iso_week:'?')+' 轮转）'); }
+  // S7 换脸容灾演练（周日 04:30 FaceSwap_Drill：杀 .104 引擎→副本接管→看门狗自愈→自动回切）
+  const fd=g.faceswap_drill;
+  if(fd && fd.result){
+    const fp=String(fd.result).toUpperCase()==='PASS';
+    chip('换脸演练 '+(fp?'✔':'⛔')+(fd.recover_s!=null?(' 自愈'+fd.recover_s+'s'):''), fp?'up':'down',
+         (fd.ts||'')+(fd.takeover?(' · 宕机窗副本顶帧 '+fd.takeover):'')
+         +(fd.switchback_s!=null?(' · 杀→回切全程 '+fd.switchback_s+'s'):'')
+         +'（每周日 04:30 自动演练，账本 _logs/faceswap_drill.jsonl）');
+  } else { chip('换脸演练 尚无记录','busy','FaceSwap_Drill 周任务未跑过或账本缺失'); }
+  // S8-2 换脸容灾实时态（副本接管=画质降级；与活动告警 faceswap_failover 互补）
+  const ff=g.faceswap_failover;
+  if(ff && ff.on_replica){
+    chip('换脸容灾 副本接管中','busy',
+         (ff.degrade_hint||'无锐化增强')+' · 已顶 '+((ff.served_by_replica||0))+' 帧 · 主引擎恢复后自动回切');
+  } else if(ff && ff.enabled){
+    chip('换脸容灾 就绪','up','主引擎 .104 + 本机副本 8003；演练台账见上方「换脸演练」芯片');
+  }
+  // S8-3 同传 STT 单点容灾（主转写节点 .140 失联→备用端点接管；主恢复金丝雀自动切回）
+  const sf=g.stt_failover;
+  if(sf && sf.on_fallback){
+    chip('STT容灾 备用接管中','busy',
+         '主转写节点('+(sf.primary||'')+')失联 '+(sf.engaged_s||0)+'s，备用('+(sf.active||'')+')顶了 '+(sf.served_by_fallback||0)+' 次；主恢复后自动切回');
+  } else if(sf && sf.endpoints>1){
+    chip('STT容灾 就绪','up','主+备 '+sf.endpoints+' 个转写端点，主失联自动切备用（SVC_STT_FALLBACK）');
+  } else if(sf){
+    chip('STT容灾 单端点','busy','仅配主转写节点('+(sf.primary||'')+')，建议配 SVC_STT_FALLBACK 备用端点消除单点');
+  }
+  // S9-1 单点保护全景：核心依赖→保护方式一张图，裸单点一眼可见
+  const spm=g.single_point_map;
+  if(spm && spm.deps){
+    const gs=spm.n_bare>0?'down':(spm.n_soft>0?'busy':'up');
+    chip('单点保护 '+(spm.n_bare>0?('⚠ '+spm.n_bare+'个裸单点'):(spm.n_soft>0?(spm.n_soft+'个仅远端自愈'):'✔ 全覆盖')),
+         gs, '核心依赖'+spm.n+'项：ok=有冗余/降级 · soft=仅远端SSH自愈(有窗口) · bare=裸单点，需配副本/备端点');
+    const gm={ok:['#22c55e','✔'],soft:['#f59e0b','◐'],bare:['#ef4444','✖']};
+    let rows=spm.deps.map(d=>{ const gg=gm[d.grade]||gm.bare;
+      return '<div style="display:flex;gap:8px;align-items:baseline;padding:2px 0;border-bottom:1px solid #1f2937">'
+        +'<span style="color:'+gg[0]+';width:14px">'+gg[1]+'</span>'
+        +'<b style="min-width:96px">'+d.label+(d.hard?' <span title="硬实时关键路径" style="color:#f87171">*</span>':'')+'</b>'
+        +'<span style="color:#94a3b8;min-width:120px">'+(d.local?'本机':(d.hosts.join(',')||'?'))+(d.pool>1?(' ×'+d.pool):'')+'</span>'
+        +'<span style="color:#cbd5e1">'+(d.protections.join(' · ')||'—')+'</span></div>'; }).join('');
+    const det=document.createElement('div'); det.style.cssText='margin-top:6px;font-size:12px;line-height:1.5;width:100%';
+    det.innerHTML='<div style="color:#94a3b8;margin-bottom:2px">核心依赖单点保护地图（* = 硬实时关键路径）</div>'+rows;
+    box.appendChild(det);
+  }
+  // S9-2 自训素材就绪度：辨识度闭环的「料」环节——练之前先看料够不够
+  const tm=g.train_material;
+  if(tm && tm.chars && Object.keys(tm.chars).length){
+    const ns=tm.n_starved||0, nt=tm.n_thin||0, nr=tm.n_ready||0;
+    const ts=ns>0?'down':(nt>0?'busy':'up');
+    chip('自训素材 '+(ns>0?('⚠ '+ns+'角色料不足'):(nt>0?(nt+'角色偏少'):'✔ '+nr+'达标')),
+         ts, '达标线'+tm.target+'张对齐脸：ready=可达社区辨识度 · thin=天花板受限 · starved=练必废被拦');
+    const im={ready:['#22c55e','✔'],thin:['#f59e0b','◐'],starved:['#ef4444','✖']};
+    let rows=Object.values(tm.chars).map(c=>{ const ic=im[c.grade]||im.starved;
+      const sf=(c.side_frac!=null)?(Math.round(c.side_frac*100)+'%'):'?';
+      return '<div style="display:flex;gap:8px;align-items:baseline;padding:2px 0;border-bottom:1px solid #1f2937">'
+        +'<span style="color:'+ic[0]+';width:14px">'+ic[1]+'</span>'
+        +'<b style="min-width:96px">'+c.char+'</b>'
+        +'<span style="color:#94a3b8;min-width:130px">对齐脸 '+c.aligned+'/'+c.target+' · 侧脸'+sf+'</span>'
+        +'<span style="color:#cbd5e1">'+((c.needs&&c.needs.length)?c.needs.join(' · '):'达标')+'</span></div>'; }).join('');
+    const det=document.createElement('div'); det.style.cssText='margin-top:6px;font-size:12px;line-height:1.5;width:100%';
+    det.innerHTML='<div style="color:#94a3b8;margin-bottom:2px">自训素材就绪度（辨识度北极星的「料」环节，达标线 '+tm.target+' 张）</div>'+rows;
+    box.appendChild(det);
+  }
+  // 令牌年龄
+  const tk=g.token;
+  if(tk && tk.age_days!=null){
+    chip('令牌 '+tk.age_days+' 天'+(tk.stale?' ⚠ 建议轮换':''), tk.stale?'busy':'up',
+         tk.stale?('超过 '+tk.stale_after_days+' 天未轮换，点右侧「一键轮换」'):'服务令牌年龄（轮换会重置）');
+  } else { chip('令牌 未加固','down','未检出 secrets/service_token.txt'); }
+  // 一键轮换（后台跑 harden_remote rotate：下发新令牌→重启子服务→复验；直播中服务端会拒绝）
+  const rot=g.rotate||{};
+  if(rot.running){
+    chip('⏳ 轮换中…（约1-2分钟）','busy','新令牌下发→服务重启→复验，完成后此处更新');
+  } else {
+    const btn=document.createElement('span');
+    btn.className='chip'; btn.style.cursor='pointer'; btn.textContent='🔄 一键轮换';
+    btn.title='生成新令牌→三机下发→重启子服务→复验旧令牌失效（约1-2分钟）。直播/同传进行中会被拒绝。'
+      +(rot.result?('\n上次：'+rot.result+(rot.detail?(' · '+rot.detail):'')) : '');
+    if(rot.result==='FAIL'){ btn.textContent='🔄 一键轮换（上次失败）'; btn.className='chip down'; btn.style.cursor='pointer'; }
+    btn.onclick=async ()=>{
+      if(!confirm('将生成新服务令牌并下发到全部机器、重启子服务（约1-2分钟）。\n直播/同传进行中会被自动拒绝。确认轮换？')) return;
+      btn.textContent='⏳ 启动中…';
+      try{
+        const r=await (await fetch('/api/security/rotate_token',{method:'POST'})).json();
+        if(r.ok){ btn.textContent='⏳ 轮换中…'; }
+        else { alert('未启动：'+(r.detail||'未知原因')); btn.textContent='🔄 一键轮换'; }
+      }catch(e){ alert('请求失败：'+e); btn.textContent='🔄 一键轮换'; }
+    };
+    box.appendChild(btn);
+  }
+  // 拓扑一致性
+  const tp=g.topology;
+  if(tp){ chip('拓扑 '+(tp.ok?'✔ 一致':'⛔ 漂移'+((tp.drifts&&tp.drifts.length)?('×'+tp.drifts.length):'')),
+               tp.ok?'up':'down', tp.ok?('cluster_map ↔ env_config 一致（'+(tp.oks||0)+' 项）· '+(tp.ts||'')
+                                          ):((tp.drifts||[]).join('; ')||'见 topology_lint')); }
+  else { chip('拓扑 未巡检','busy','跑一次 harden_remote.ps1 -Mode verify 即生成'); }
+}
+async function security(){
+  const rk=$('secRisk');
+  // 守护三指标数据在 snapshot.security(非敏感读)。tick() 会缓存到 __secGuard；首刷若 tick 未回，
+  // 本函数自取一次，保证安全卡首屏即完整（不依赖 tick 的 2s 时序，headless 截图也能抓到）。
+  let g=window.__secGuard;
+  if(!g){ try{ g=(await (await fetch('/api/ops/snapshot',{cache:'no-store'})).json()).security; window.__secGuard=g; }catch(_){} }
+  secGuard(g);
+  let d; try{ d=await (await fetch('/api/security/posture',{cache:'no-store'})).json(); }
+  catch(e){ if(rk){ rk.className='chip'; rk.textContent='加载失败'; } return; }
+  if(!d || !d.ok){                                  // 启用令牌且当前未授权 → 敏感读被拦(401)
+    if(rk){ rk.className='chip busy'; rk.textContent='需授权'; }
+    $('secFacts').innerHTML=''; $('secFindings').innerHTML='';
+    $('secMeta').textContent='管理面已启用令牌：请在顶部输入运维令牌后查看暴露面。';
+    return;
+  }
+  const risk=d.risk||'low';
+  rk.className='chip '+({high:'down',medium:'busy',low:'up'}[risk]||'up');
+  rk.textContent='风险：'+({high:'⛔ 高风险',medium:'⚠ 需关注',low:'✔ 良好'}[risk]||risk);
+  secGuard(window.__secGuard);   // 鉴权守护三指标(演习预告/令牌年龄/拓扑一致)，数据来自 /api/ops/snapshot.security
+  const facts=$('secFacts'); facts.innerHTML='';
+  const fact=(label,good)=>{ const s=document.createElement('span');
+    s.className='chip '+(good?'up':'busy'); s.textContent=label; facts.appendChild(s); };
+  fact(d.exposed_bind?'绑定 0.0.0.0':'绑定 127.0.0.1(仅本机)', !d.exposed_bind);
+  fact(d.api_token_set?'管理令牌 已启用':'管理令牌 未设', !!d.api_token_set);
+  const svcOk=d.service_token_set||d.service_allow_ips_set;
+  fact(svcOk?'子服务面 已加固':'子服务面 未加固', !!svcOk);
+  fact(d.cors_wildcard?'CORS 通配(*)':'CORS 收敛', !d.cors_wildcard);
+  if(d.license_enforcing) fact('授权强制 开', true);
+  const fx=$('secFindings'); fx.innerHTML='';
+  const todo=(d.findings||[]).filter(f=>f && f.level && f.level!=='ok');
+  if(!todo.length){
+    fx.innerHTML='<div class="muted" style="color:#bbf7d0;">✔ 无待处理项，暴露面收敛良好。</div>';
+  } else {
+    todo.forEach(f=>{ const dv=document.createElement('div'); dv.className='stcard';
+      dv.style.borderColor=(f.level==='high')?'rgba(239,68,68,.5)':'rgba(251,191,36,.5)';
+      const t=document.createElement('div');
+      t.style.cssText='font-weight:600;color:'+((f.level==='high')?'#fecaca':'#fde68a')+';';
+      t.textContent=(f.level==='high'?'⛔ ':'⚠ ')+(f.msg||''); dv.appendChild(t);
+      if(f.fix){ const fd=document.createElement('div'); fd.className='muted';
+        fd.style.marginTop='4px'; fd.textContent='→ '+f.fix; dv.appendChild(fd); }
+      fx.appendChild(dv); });
+  }
+  $('secMeta').textContent='请求来源：'+(d.remote_request?'远端':'本机回环')
+    +' · 绑定 '+(d.bind_host||'?')+' · 每 30s 刷新';
+}
+async function stability(){
+  // P11 稳定性账本：/api/ops/stability = 守护重启×崩溃事件×启动溯源 三源关联(服务端5min缓存)
+  const v=$('stabVerdict'); let d;
+  try{ d=await (await fetch('/api/ops/stability',{cache:'no-store'})).json(); }
+  catch(e){ if(v){ v.className='chip'; v.textContent='加载失败'; } return; }
+  if(!d || !d.ok){ if(v){ v.className='chip busy'; v.textContent=(d&&d.detail)||'不可用'; } return; }
+  const s=d.summary||{};
+  v.className='chip '+({good:'up',warn:'busy',bad:'down'}[s.tone]||'busy');
+  v.textContent=({good:'✔',warn:'⚠',bad:'⛔'}[s.tone]||'')+' P10后 守护拉活 '+(s.restarts_after_p10||0)+' 次';
+  v.title=s.verdict||'';
+  const chips=$('stabChips'); chips.innerHTML='';
+  const add=(t,cls,tip)=>{ const el=document.createElement('span'); el.className='chip '+(cls||'');
+    el.textContent=t; if(tip) el.title=tip; chips.appendChild(el); };
+  add('P10后 '+(s.restarts_after_p10||0)+' 次拉活 / '+(s.span_after_h||0)+'h',
+      ({good:'up',warn:'busy',bad:'down'}[s.tone]||'busy'),
+      '守护发现 Hub 进程消失而自动拉起的次数。颜色按裁决:有崩溃实锤=红,无实锤(人工/部署)=琥珀,零=绿');
+  add('P10前 '+(s.restarts_before_p10||0)+' 次 / '+(s.span_before_h||0)+'h','',
+      '统计窗内 P10 部署前的守护拉活次数(对照组)');
+  add('已隔离崩溃 '+(s.crashes_not_hub_after_p10||0)+' 次',
+      (s.crashes_not_hub_after_p10||0)>0?'busy':'up',
+      'P10 后未击中 Hub 的 python 崩溃(设备探测子进程/视频管线等)——隔离层在吸收伤害');
+  add('人工/部署重启 '+(s.manual_boots_after_p10||0)+' 次','',
+      '启动记录里无守护拉活也无崩溃前科的部分(关窗重开/部署脚本,中性)');
+  Object.entries(s.crash_buckets||{}).forEach(([k,n])=>add(k+' ×'+n,'',
+      '统计窗内 python.exe 崩溃按故障模块归类'));
+  const rows=$('stabRows'); rows.innerHTML='';
+  (d.watchdog_restarts||[]).slice(-6).reverse().forEach(r=>{
+    const div=document.createElement('div'); div.className='row';
+    const c=r.crash;
+    div.innerHTML='<span>'+new Date(r.ts*1000).toLocaleString()+' 守护拉活</span>'
+      +'<span class="muted">'+(c?('崩溃 '+(c.module||'?')+' · '+(c.bucket||'')):'无崩溃实锤(人工杀/静默死)')+'</span>';
+    rows.appendChild(div);
+  });
+  $('stabMeta').textContent=(s.verdict||'')+' · 事件日志通道'+(d.evtlog_ok?'正常':'不可用')
+    +' · 统计窗 '+(d.window_days||0)+' 天 · 基线(P10部署) '
+    +new Date(((d.baseline||{}).p10_deploy_ts||0)*1000).toLocaleString();
+}
+async function selfcheck(latency, alert){
+  const meta=$('scmeta'), items=$('scitems'), lat=$('sclat'), flags=$('scflags');
+  const b1=$('scBtn'), b2=$('scBtnQuick'), b3=$('scBtnAlert');
+  b1.disabled=true; b2.disabled=true; b3.disabled=true; meta.dataset.ran='1';
+  meta.textContent='自检运行中… '+(latency?'（含延迟探测，约数秒）':'（仅健康扫描）')+(alert?' + 同步告警':'');
+  items.innerHTML=''; lat.innerHTML=''; flags.innerHTML='';
+  let d;
+  try{ d=await (await fetch('/api/ops/selfcheck?run=1&latency='+(latency?1:0)+'&alert='+(alert?1:0),{cache:'no-store'})).json(); }
+  catch(e){ meta.textContent='⚠ 自检请求失败：'+e; b1.disabled=false; b2.disabled=false; b3.disabled=false; return; }
+  if(d.error){ meta.textContent='⚠ '+d.error; b1.disabled=false; b2.disabled=false; b3.disabled=false; window.__scWarn=''; return; }
+  const up=d.up||0, total=d.total||0, nflag=(d.flags||[]).length;
+  let mh='<b style="color:'+(d.ok?'#bbf7d0':'#fecaca')+'">'+(d.ok?'链路健康':'需关注')+'</b> · '
+    +up+'/'+total+' 在线 · '+(nflag?('<span style="color:#fecaca">'+nflag+' 红旗</span>'):'无红旗')
+    +' · '+new Date().toLocaleTimeString();
+  if(d.alert_sync){ const a=d.alert_sync;
+    mh += a.error ? ' · <span style="color:#fde68a">告警同步失败</span>'
+      : (' · <span style="color:#93c5fd">告警 +'+((a.fired||[]).length)+' / 恢复 '+((a.cleared||[]).length)+'</span>'); }
+  meta.innerHTML=mh;
+  // 服务健康 chips（★=核心；点上去看后端/URL）
+  (d.health||[]).forEach(r=>{ const s=document.createElement('span');
+    s.className='chip '+(r.up?'up':'down');
+    s.textContent=(r.core?'★':'')+r.key+(r.up?(' '+r.ms+'ms'):' ✘');
+    s.title=(r.label||'')+' — '+(r.up?(r.info||'ok'):((r.err||'')+' '+(r.url||''))); items.appendChild(s); });
+  // 关键阶段延迟
+  const L=d.latency||{}; let lh='';
+  if(L.nmt) lh+='<span class="chip">NMT '+(L.nmt.ms!=null?(L.nmt.ms+'ms'):('失败 '+(L.nmt.err||'')))+'</span> ';
+  if(L.stt) lh+='<span class="chip">STT '+(L.stt.ms!=null?(L.stt.ms+'ms'):('失败 '+(L.stt.err||'')))+'</span> ';
+  Object.keys(L.tts||{}).forEach(eng=>{ const t=L.tts[eng]||{}; if(t.up===false) return;
+    let s='TTS['+eng+']'; if(t.clone_ms!=null) s+=' clone '+t.clone_ms+'ms';
+    if(t.stream_ttfa_ms!=null) s+=' 首包 '+t.stream_ttfa_ms+'ms';
+    if(t.clone_err||t.stream_err) s+=' 失败'; lh+='<span class="chip">'+s+'</span> '; });
+  lat.innerHTML = lh ? ('<span class="muted">关键延迟：</span> '+lh) : '';
+  // 红旗（createElement 置文本，避免任何注入）
+  flags.innerHTML='';
+  (d.flags||[]).forEach(f=>{ const dv=document.createElement('div');
+    dv.style.cssText='color:#fecaca;font-size:12px;margin-top:3px;'; dv.textContent='⚠ '+f; flags.appendChild(dv); });
+  _scHist(d.history);
+  window.__scWarn = (!d.ok && nflag) ? ('自检红旗：'+(d.flags||[])[0]) : '';
+  b1.disabled=false; b2.disabled=false; b3.disabled=false;
+}
+function _spark(series, lo, hi, color){
+  if(!series||!series.length) return '';
+  const W=120,H=22,p=2,n=series.length;
+  const x=i=>p+(i/Math.max(1,n-1))*(W-2*p);
+  const y=v=>H-p-((Math.min(hi,Math.max(lo,v))-lo)/(hi-lo||1))*(H-2*p);
+  let path=''; series.forEach((v,i)=>{ path+=(i?'L':'M')+x(i).toFixed(1)+' '+y(v).toFixed(1)+' '; });
+  return '<svg width="'+W+'" height="'+H+'" style="vertical-align:middle"><path d="'+path.trim()
+    +'" fill="none" stroke="'+color+'" stroke-width="1.5"/></svg>';
+}
+async function vquality(){
+  let d;
+  try{ d=await (await fetch('/api/ops/voice_quality?history=30',{cache:'no-store'})).json(); }catch(e){ return; }
+  const meta=$('vqmeta'), rows=$('vqrows');
+  if(!d.runs){ meta.textContent='尚无质量样本（运行 python _voice_quality.py 或上线体检后生成）'; rows.innerHTML=''; window.__vqWarn=''; return; }
+  const cmin=d.cos_min||0.45;
+  const nreg=(d.regressed||[]).length, nweak=(d.weak||[]).length;
+  meta.innerHTML='共 '+d.runs+' 次采样 · 个体基线带告警(回归优先) · 到顶目标 '+(d.ceil_target||0.55).toFixed(2)
+    +(nreg?' · <span style="color:#ef4444">'+nreg+' 个回归</span>':'')
+    +(nweak?' · <span style="color:#fde68a">'+nweak+' 个异常低</span>':((!nreg)?' · 全部稳定':''));
+  rows.innerHTML='';
+  (d.profiles||[]).forEach(p=>{
+    const last=p.last||{}; const c=last.cos, nat=last.nat, bl=p.band_low, base=p.baseline;
+    const reg = bl!=null && c!=null && c<bl;
+    const cColor = (c==null)?'#7c8aa0':(reg?'#ef4444':(p.near_ceiling?'#fbbf24':'#22c55e'));
+    const tag = p.near_ceiling?'<span class="muted" title="基线偏低且稳定，疑似源录音到顶，仅回归才告警"> 源已到顶</span>':'';
+    const blTxt = (base!=null)?(' <span class="muted">基线'+base.toFixed(3)+(p.std!=null?'±'+p.std.toFixed(3):'')+'</span>'):' <span class="muted">建基线中</span>';
+    const r=document.createElement('div'); r.className='row';
+    r.innerHTML='<span class="k">'+p.name+tag+'</span><span class="v" style="display:flex;gap:10px;align-items:center">'
+      +'<span style="color:'+cColor+'">cos '+(c==null?'—':c.toFixed(3))+'</span>'+blTxt
+      +_spark(p.cos_series,Math.min((base!=null?base-0.1:cmin-0.05),...(p.cos_series.length?p.cos_series:[cmin])),1,'#7cc4ff')
+      +'<span style="color:#a78bfa">nat '+(nat==null?'—':nat.toFixed(2))+'</span></span>';
+    rows.appendChild(r);
+  });
+  window.__vqWarn = (d.alert==='warn') ? d.alert_msg : '';
+}
+async function vrambudget(){
+  let d; try{ d=await (await fetch('/api/ops/vram_budget',{cache:'no-store'})).json(); }catch(e){ return; }
+  const meta=$('vbmeta'), rows=$('vbrows');
+  if(!d.ok){ meta.textContent=d.detail||'不可用'; rows.innerHTML=''; return; }
+  const age = d.ts? Math.max(0,Math.round(Date.now()/1000-d.ts)) : null;
+  meta.textContent='阈值 '+Math.round((d.threshold||0.92)*100)+'% · 实测'
+    +(age==null||!d.ts?'采集中…':' '+age+'s 前')+(d.collecting?' · 刷新中…':'');
+  rows.innerHTML='';
+  (d.hosts||[]).forEach(h=>{
+    const cap=h.cap_gb||1;
+    const bPct=Math.min(100,(h.budget_gb/cap)*100);
+    const aPct=(h.actual_used_gb!=null)?Math.min(100,(h.actual_used_gb/cap)*100):null;
+    const bad=h.actual_over||h.budget_over;
+    const svcTip=Object.entries(h.services||{}).map(([k,v])=>k+' '+v+'G').join(' · ')||'（空池）';
+    const r=document.createElement('div'); r.className='row'; r.title=svcTip;
+    r.innerHTML='<span class="k">'+h.ip.replace('192.168.0.','.')+' <span class="muted">'+(h.gpu||'')+'</span></span>'
+      +'<span class="v" style="display:flex;gap:10px;align-items:center;flex:1;max-width:66%">'
+      +'<span style="flex:1;height:10px;background:#141d29;border-radius:5px;overflow:hidden;position:relative;min-width:120px">'
+      +'<i style="position:absolute;left:0;top:0;bottom:0;width:'+bPct.toFixed(0)+'%;background:rgba(124,196,255,.30)"></i>'
+      +(aPct!=null?('<i style="position:absolute;left:0;top:3px;bottom:3px;width:'+aPct.toFixed(0)+'%;background:'+(bad?'#ef4444':'#22c55e')+';border-radius:3px"></i>'):'')
+      +'</span>'
+      +'<span style="color:'+(bad?'#ef4444':'#9fb2c8')+';white-space:nowrap;font-size:12px">'
+      +(h.actual_used_gb!=null?h.actual_used_gb.toFixed(1):'—')+' / '+(h.budget_gb!=null?h.budget_gb.toFixed(1):'—')+' / '+cap.toFixed(1)+'G'
+      +(h.gpu_util!=null?' · GPU '+h.gpu_util+'%':'')+'</span></span>';
+    rows.appendChild(r);
+  });
+  window.__vbWarn = (d.hosts||[]).some(h=>h.actual_over) ? '有机器显存实测超上限——查看「集群显存」卡' : '';
+}
+async function trend(){
+  let d;
+  try{ d=await (await fetch('/api/ops/history?limit=240',{cache:'no-store'})).json(); }catch(e){ return; }
+  const sm=d.samples||[];
+  const meta=$('trendmeta');
+  if(!sm.length){ meta.textContent=d.persist_on?'尚无落盘样本（启动后约 '+(d.interval_sec||60)+'s 起采）':'落盘已关闭'; return; }
+  const span=sm.length*(d.interval_sec||60);
+  const downs=sm.filter(s=>(s.down&&s.down.length)||(s.tripped&&s.tripped.length)).length;
+  meta.textContent='共 '+sm.length+' 个样本 · 跨度 ~'+Math.round(span/60)+' 分钟 · 异常时刻 '+downs+' · 写入 '+(d.writes||sm.length)+' 次';
+  const W=1000,H=70,pad=4;
+  const vals=sm.map(s=>(typeof s.ttfa==='number'?s.ttfa:null));
+  const valid=vals.filter(v=>v!=null&&v>0);
+  const mx=Math.max(1500,...(valid.length?valid:[1500]));
+  const n=sm.length;
+  const x=i=>pad+(i/(Math.max(1,n-1)))*(W-2*pad);
+  const y=v=>H-pad-(Math.min(v,mx)/mx)*(H-2*pad);
+  let path=''; let started=false;
+  vals.forEach((v,i)=>{ if(v==null||v<=0){started=false;return;}
+    path+=(started?'L':'M')+x(i).toFixed(1)+' '+y(v).toFixed(1)+' '; started=true; });
+  const dots=sm.map((s,i)=>(((s.down&&s.down.length)||(s.tripped&&s.tripped.length))
+    ?'<circle cx="'+x(i).toFixed(1)+'" cy="'+(H-pad-3)+'" r="3" fill="#ef4444"/>':'')).join('');
+  $('spark').setAttribute('viewBox','0 0 '+W+' '+H);
+  $('spark').innerHTML='<path d="'+path.trim()+'" fill="none" stroke="#7cc4ff" stroke-width="2"/>'+dots;
+  // 人脸预计算 ETA 趋势（P5.1）：琥珀线=ETA(秒)；红点=该时刻累计真实失败率>0（error；service_off 不计不打点）
+  const fpv=sm.map(s=>{ const f=s.face_prep||{}; return (typeof f.eta_s==='number'?f.eta_s:null); });
+  const fpvalid=fpv.filter(v=>v!=null&&v>0);
+  const fmax=Math.max(20,...(fpvalid.length?fpvalid:[20]));   // 至少 20s 量程，抗抖动
+  const fy=v=>H-pad-(Math.min(v,fmax)/fmax)*(H-2*pad);
+  let fpath=''; let fstarted=false;
+  fpv.forEach((v,i)=>{ if(v==null||v<=0){fstarted=false;return;}
+    fpath+=(fstarted?'L':'M')+x(i).toFixed(1)+' '+fy(v).toFixed(1)+' '; fstarted=true; });
+  const fdots=sm.map((s,i)=>{ const f=s.face_prep||{};
+    return (typeof f.real_fail_rate==='number'&&f.real_fail_rate>0)
+      ?'<circle cx="'+x(i).toFixed(1)+'" cy="'+(H-pad-3)+'" r="3" fill="#ef4444"/>':''; }).join('');
+  $('spark-fp').setAttribute('viewBox','0 0 '+W+' '+H);
+  $('spark-fp').innerHTML='<path d="'+fpath.trim()+'" fill="none" stroke="#fbbf24" stroke-width="2"/>'+fdots;
+}
+async function clienterrs(){
+  let d;
+  try{ d=await (await fetch('/api/clientlog/recent?limit=30',{cache:'no-store'})).json(); }catch(e){ return; }
+  const meta=$('clemeta'), rows=$('clerows');
+  if(!d.ok){ meta.textContent='不可用'; rows.innerHTML=''; window.__cleWarn=''; return; }
+  const items=d.items||[];
+  const now=Date.now()/1000;
+  const recent=items.filter(it=>(now-(it.ts||0))<86400);  // 近24h
+  if(!items.length){ meta.innerHTML='<span style="color:#bbf7d0">近期无前端错误上报 ✓</span>'; rows.innerHTML=''; window.__cleWarn=''; return; }
+  meta.innerHTML='累计留存 '+(d.total||items.length)+' 条 · 近24h <b style="color:'+(recent.length?'#fecaca':'#bbf7d0')+'">'+recent.length+'</b> 条';
+  rows.innerHTML='';
+  items.slice(0,12).forEach(it=>{
+    const ago=it.ts?((now-it.ts)/60):0;
+    const agoTxt = ago<60?(ago.toFixed(0)+'m前'):((ago/60).toFixed(1)+'h前');
+    const col = it.level==='warn'?'#fbbf24':'#ef4444';
+    const r=document.createElement('div'); r.className='row';
+    r.innerHTML='<span class="k" style="max-width:62%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'
+      +((it.stack||'').replace(/"/g,"'")+' @'+(it.src||''))+'">'
+      +'<span style="color:'+col+'">['+(it.kind||'err')+']</span> '+((it.msg||'').replace(/</g,'&lt;'))+'</span>'
+      +'<span class="v muted">'+((it.page||'')+' · '+agoTxt)+'</span>';
+    rows.appendChild(r);
+  });
+  window.__cleWarn = recent.length ? ('前端近24h有 '+recent.length+' 条运行时错误上报') : '';
+}
+// ── 显存调度 · GPU 总开关（自包含，独立轮询 /api/gpu/status）──
+async function gpuToggleTick(){
+  let d;
+  try{ d=await (await fetch('/api/gpu/status',{cache:'no-store'})).json(); }catch(e){ return; }
+  if(!d||!d.ok) return;
+  const st=$('gpuState'), btn=$('gpuBtn'), meta=$('gpuMeta'), hint=$('gpuHint'), svc=$('gpuSvc'), card=$('gpuCard');
+  const v=d.vram||{};
+  const g=n=>Math.round((n||0)/1024*10)/10;
+  const vramTxt=(v.total_mb>0)?('显存 '+g(v.used_mb)+'/'+g(v.total_mb)+'GB · 空闲 '+g(v.free_mb)+'GB'):'';
+  card.classList.toggle('released', !!d.released);
+  const lz=d.lease||{};
+  if(lz.held){
+    st.className='chip busy'; st.textContent='已被另一台机器占用';
+    btn.disabled=false; btn.className='gpubtn release'; btn.textContent='强制收回（打断对方）'; btn.onclick=gpuForceReclaim;
+    meta.textContent='holder '+(lz.holder||'?')+(lz.expires_in!=null?(' · 剩余租约 '+lz.expires_in+'s'):'')+(vramTxt?(' · '+vramTxt):'');
+  }else if(d.busy){
+    st.className='chip busy'; st.textContent='启用中…';
+    btn.disabled=true; btn.className='gpubtn engage'; btn.textContent='启用中…';
+    meta.textContent=(d.last&&d.last.detail)||'正在拉起服务';
+  }else if(d.released){
+    st.className='chip down'; st.textContent='已释放显存';
+    btn.disabled=false; btn.className='gpubtn engage'; btn.textContent='启用全部服务'; btn.onclick=gpuEngage;
+    meta.textContent='显存已让给其它机器'+(vramTxt?(' · 本机'+vramTxt):'');
+  }else{
+    st.className='chip up'; st.textContent='占用中（'+d.up+'/'+d.total+' GPU 服务在线）';
+    btn.className='gpubtn release'; btn.textContent='释放显存'; btn.onclick=gpuRelease;
+    btn.disabled=!!d.streaming;
+    meta.textContent=vramTxt;
+  }
+  if(lz.held){
+    hint.style.color='#fde68a';
+    hint.textContent='另一台机器正通过租约独占本卡（自动互斥，'+(lz.holder||'peer')+'）；它退出或心跳超时会自动归还并恢复本机服务。点「强制收回」会打断对方。';
+  }else if(d.streaming){
+    hint.style.color='#fde68a';
+    hint.textContent='⚠ 正在推流/直播：释放已禁用，避免中断直播。停止推流后即可释放。';
+  }else{
+    hint.style.color='';
+    hint.textContent='用时一键拉起全部 GPU 服务；不用时一键释放显存（停服务+卸载本地 LLM），让另一台机器载入显存使用。Hub/同传等非 GPU 服务始终保留，本页不断。';
+  }
+  svc.innerHTML='';
+  Object.entries(d.gpu_services||{}).forEach(([n,ok])=>{
+    const s=document.createElement('span'); s.className='chip '+(ok?'up':'down'); s.textContent=n; svc.appendChild(s);
+  });
+  rtRender(d);
+}
+function rtRender(d){
+  const card=$('rtCard'); if(!card) return;
+  const def=d.lipsync_rt_default||'', eff=d.lipsync_rt_effective||'', lg=d.lipsync_rt_loadgate||{};
+  if(!def){ card.style.display='none'; return; }   // 未设实时高清默认档 → 该卡无意义，隐藏
+  card.style.display='';
+  const nm=x=>({ditto:'Ditto 全脸512', musetalk:'MuseTalk 256'}[x]||x||'—');
+  $('rtDefault').textContent=nm(def);
+  const gated=(eff && eff!==def);
+  const stuck=(lg.overloaded && !gated && lg.base_ready===false);   // 满载需回落但落点未就绪→维持 ditto 降级
+  const eel=$('rtEff'); eel.className='chip '+((gated||stuck)?'busy':'up'); eel.textContent=nm(eff);
+  const gel=$('rtGate');
+  if(!lg.enabled){ gel.className='chip'; gel.textContent='门控已关闭'; }
+  else if(lg.overloaded){ gel.className='chip busy'; gel.textContent='门控已触发 · 显存'+(lg.vram_level||'?'); }
+  else { gel.className='chip up'; gel.textContent='门控待命 · 显存'+(lg.vram_level||'?'); }
+  $('rtHint').textContent = gated
+    ? ('单卡满载，已自动回落 '+nm(eff)+' 保实时（防 512 渲染 RTF>1 掉帧）；显存回落后自动恢复 '+nm(def)+'。')
+    : stuck
+      ? ('单卡满载需回落，但落点 MuseTalk 未就绪 → 维持 '+nm(def)+' 降级出帧（RTF 可能>1，偶有掉帧）。拉起基线即可恢复防掉帧能力。')
+      : ('实时/流式口型走 '+nm(def)+'；满载时自动回落 MuseTalk 256（'+(lg.enabled?('阈值 显存'+(lg.vram_gate||'high')+(lg.util_gate>0?(' / GPU'+lg.util_gate+'%'):'')):'门控关闭')+'）。');
+  const warn=$('rtWarn');
+  if(def!=='musetalk' && lg.base_ready===false){
+    warn.style.display='';
+    warn.textContent='⚠ 回落落点 MuseTalk(lipsync:8090) 未就绪：满载回落时实时口型将无可用引擎。请用上方「启用全部服务」拉起基线，或设 HUB_SUP_LIPSYNC=1 让其常驻。';
+  } else { warn.style.display='none'; }
+}
+async function gpuRelease(){
+  if(!confirm('释放显存：将停止本机所有 GPU 服务并卸载本地 LLM，进行中的对话/合成会中断。\n释放后另一台机器即可使用本机整张显卡。确定释放？')) return;
+  const btn=$('gpuBtn'); btn.disabled=true; btn.textContent='释放中…';
+  try{
+    const r=await fetch('/api/gpu/release',{method:'POST'});
+    if(!r.ok){ const e=await r.json().catch(()=>({})); alert('释放失败：'+(e.detail||('HTTP '+r.status))); }
+  }catch(e){ alert('释放失败：'+e); }
+  gpuToggleTick();
+}
+async function gpuEngage(){
+  const btn=$('gpuBtn'); btn.disabled=true; btn.textContent='启用中…';
+  try{
+    const r=await fetch('/api/gpu/engage?scope=all',{method:'POST'});
+    if(!r.ok){ const e=await r.json().catch(()=>({})); alert('启用失败：'+(e.detail||('HTTP '+r.status))); }
+  }catch(e){ alert('启用失败：'+e); }
+  setTimeout(gpuToggleTick, 800);
+}
+async function gpuForceReclaim(){
+  if(!confirm('另一台机器正通过租约独占本卡。强制收回会打断对方程序并恢复本机服务。确定收回？')) return;
+  const btn=$('gpuBtn'); btn.disabled=true; btn.textContent='收回中…';
+  try{
+    const r=await fetch('/api/gpu/lease/release',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    if(!r.ok){ const e=await r.json().catch(()=>({})); alert('收回失败：'+(e.detail||('HTTP '+r.status))); }
+  }catch(e){ alert('收回失败：'+e); }
+  setTimeout(gpuToggleTick, 800);
+}
+// ── 离线引擎 · 预热/释放（自包含，独立轮询 /api/engine/list）──
+const engPending={};   // name -> {act:'start'|'stop', ts} 乐观态；轮询见到目标态或超时(3min)即清
+let engLast={engines:[], released:false, vram:{}};
+function engClearStale(d){
+  const now=Date.now();
+  Object.keys(engPending).forEach(n=>{
+    const e=(d.engines||[]).find(x=>x.name===n), p=engPending[n];
+    if(!e){ delete engPending[n]; return; }
+    if(p.act==='start'&&e.alive) delete engPending[n];
+    else if(p.act==='stop'&&!e.alive) delete engPending[n];
+    else if(now-p.ts>180000) delete engPending[n];   // 兜底：久未达成→回落真实态，避免按钮卡死
+  });
+}
+function engRender(){
+  const list=$('engList'), vram=$('engVram'), v=engLast.vram||{};
+  const g=n=>Math.round((n||0)/1024*10)/10;
+  vram.textContent=(v.total_mb>0)?('当前显存空闲 '+g(v.free_mb)+'GB / 共 '+g(v.total_mb)+'GB'+(engLast.released?'　·　已释放，预热前请先在上方「启用全部服务」':'')):'';
+  if(!engLast.engines.length){ list.innerHTML='<span class="muted">无离线引擎</span>'; return; }
+  list.innerHTML='';
+  engLast.engines.forEach(e=>{
+    const p=engPending[e.name]; let cls,txt;
+    if(p&&p.act==='start'){ cls='busy'; txt='预热中…'; }
+    else if(p&&p.act==='stop'){ cls='busy'; txt='释放中…'; }
+    else if(e.alive){ cls='up'; txt='已就绪'; }
+    else { cls='down'; txt='未启动'; }
+    const row=document.createElement('div'); row.className='engrow';
+    const info=document.createElement('span'); info.style.cssText='display:flex;align-items:center;gap:10px;flex-wrap:wrap;';
+    info.innerHTML='<span class="nm"></span><span class="chip '+cls+'">'+txt+'</span>';
+    info.querySelector('.nm').textContent=e.label;
+    const btn=document.createElement('button'); btn.className='gpubtn';
+    if(p){ btn.disabled=true; btn.classList.add(e.alive?'release':'engage'); btn.textContent=(p.act==='start'?'预热中…':'释放中…'); }
+    else if(e.alive){ btn.classList.add('release'); btn.textContent='释放'; btn.onclick=()=>engAct(e.name,'stop'); }
+    else { btn.classList.add('engage'); btn.textContent='预热'; btn.onclick=()=>engAct(e.name,'start');
+           if(engLast.released){ btn.disabled=true; btn.title='请先在上方「启用全部服务」'; } }
+    row.appendChild(info); row.appendChild(btn); list.appendChild(row);
+  });
+}
+async function engTick(){
+  let d; try{ d=await (await fetch('/api/engine/list',{cache:'no-store'})).json(); }catch(e){ return; }
+  if(!d||!d.ok) return;
+  engLast=d; engClearStale(d); engRender();
+}
+async function engAct(name, action){
+  engPending[name]={act:action, ts:Date.now()}; engRender();
+  try{
+    const r=await fetch('/api/engine/'+action+'?name='+encodeURIComponent(name),{method:'POST'});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||j.ok===false){ alert((action==='start'?'预热':'释放')+'失败：'+(j.reason||j.detail||('HTTP '+r.status))); delete engPending[name]; engRender(); }
+  }catch(e){ alert('操作失败：'+e); delete engPending[name]; engRender(); }
+  setTimeout(engTick, 600);
+}
+// ── 开播健康 · 甘特复盘（自包含，轮询 /realtime/health_gantt）──
+function hgClock(ts){ if(!ts) return '—'; return new Date(ts*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}); }
+function hgDate(ts){ if(!ts) return '—'; const d=new Date(ts*1000);
+  return (d.getMonth()+1)+'/'+d.getDate()+' '+d.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}); }
+function hgDur(s){ s=Math.max(0,s|0); if(s<60) return s+'s'; const m=Math.floor(s/60);
+  if(m<60) return m+'m'+(s%60?(' '+(s%60)+'s'):''); const h=Math.floor(m/60); return h+'h'+(m%60?(' '+(m%60)+'m'):''); }
+const HG_LABEL={ok:'顺滑',lag:'卡顿',noface:'丢脸',svc_down:'掉线',warmup:'检测中'};
+const HM_LABEL={good:'好',ok:'一般',bad:'差'};   // [P7 五期] 主观速记(停播成绩单点选)的展示映射
+function hgMarkIcon(mk){ if(mk.kind==='alert') return '🚨';
+  if(mk.kind==='device') return '🎚️';   // P4-1 设备热切(拔插一键恢复)标记
+  if(mk.kind==='dfm') return '🎭';       // S5 场内换脸角色热切标记(切到谁/载入耗时)
+  const l=mk.label||''; return /free_vram/.test(l)?'🧹':(/restart/.test(l)?'🔄':'🔧'); }
+let hgLast={sessions:[],now:0};   // 缓存最近一次甘特数据，供导出CSV / 下钻复用
+let hgQLast=null;                 // 缓存最近一次场次画质报告（/realtime/swap/sessions），配对进甘特行/CSV
+const HG_COLOR={ok:'var(--grn)',lag:'var(--ylw)',noface:'#f0883e',svc_down:'var(--red)',warmup:'#556174'};
+// [观察自动化] 给甘特场次配对画质报告：两份账本由同一守护循环产出、边界都定在健康态跳迁上
+// → 起点相差 ≤60s 即同一场；进行中的场(open)配 current(半场预览)。配不上=升级前旧场/极短场，如实显示无报告。
+function hgQualityFor(s, q){
+  if(!q) return null;
+  if(s.open && q.current) return q.current;
+  let best=null, bd=61;
+  (q.sessions||[]).forEach(r=>{ const dv=Math.abs((r.start||0)-(s.start||0)); if(dv<bd){ bd=dv; best=r; } });
+  return best;
+}
+async function healthGantt(){
+  let d; try{ d=await (await fetch('/realtime/health_gantt?limit=10',{cache:'no-store'})).json(); }catch(e){ return; }
+  try{ hgQLast=await (await fetch('/realtime/swap/sessions?limit=12',{cache:'no-store'})).json(); }catch(e){}
+  const meta=$('hgMeta'), box=$('hgRows'); const ss=(d&&d.sessions)||[];
+  hgLast=d||hgLast;
+  if(!ss.length){ meta.textContent='暂无开播记录（开播后由服务端守护自动记录，跨重启留痕）'; box.innerHTML=''; return; }
+  const now=d.now||Math.floor(Date.now()/1000);
+  const live=ss.some(s=>s.open);
+  const bad=ss.filter(s=>s.noface||s.svc_down||s.restart||s.alert).length;
+  meta.innerHTML='最近 '+ss.length+' 场'+(live?' · <span style="color:#22c55e">● 正在直播</span>':'')
+    +(bad?(' · <span style="color:#fca5a5">'+bad+' 场有坏态/自愈</span>'):' · <span style="color:#bbf7d0">全部平稳</span>');
+  box.innerHTML='';
+  ss.forEach(s=>{
+    const dur=Math.max(1,s.dur_s||1);
+    const row=document.createElement('div'); row.className='gantt-row';
+    const head=document.createElement('div'); head.className='gantt-head';
+    head.innerHTML='<div>'+(s.open?'🔴 ':'')+hgDate(s.start)+'</div><div class="dur">'+hgDur(s.dur_s)+(s.open?' · 进行中':'')+'</div>';
+    const bar=document.createElement('div'); bar.className='gantt-bar';
+    const track=document.createElement('div'); track.className='gantt-track';
+    (s.segments||[]).forEach(seg=>{
+      const sp=document.createElement('span'); sp.className='g-'+seg.state;
+      sp.style.flexGrow=Math.max(0.0001,seg.dur); sp.style.flexBasis='0';
+      sp.title=(HG_LABEL[seg.state]||seg.state)+' · '+hgClock(seg.t0)+'→'+hgClock(seg.t1)+' ('+hgDur(seg.dur)+')';
+      track.appendChild(sp);
+    });
+    bar.appendChild(track);
+    (s.markers||[]).forEach(mk=>{
+      const left=Math.max(0,Math.min(100,((mk.ts-s.start)/dur)*100));
+      const el=document.createElement('span'); el.className='gantt-mark'; el.style.left=left+'%';
+      el.textContent=hgMarkIcon(mk); el.title=(mk.label||mk.kind)+' · '+hgClock(mk.ts);
+      bar.appendChild(el);
+    });
+    const sum=document.createElement('div'); sum.className='gantt-sum'; const bits=[];
+    if(s.noface) bits.push('<span class="bad">丢脸×'+s.noface+'</span>');
+    if(s.svc_down) bits.push('<span class="bad">掉线×'+s.svc_down+'</span>');
+    if(s.lag) bits.push('卡顿×'+s.lag);
+    if(s.restart) bits.push('🔄'+s.restart);
+    if(s.free_vram) bits.push('🧹'+s.free_vram);
+    if(s.hot_switch) bits.push('🎚️'+s.hot_switch);
+    if(s.dfm_switch) bits.push('🎭'+s.dfm_switch);
+    if(s.alert) bits.push('🚨'+s.alert);
+    if(s.recovered) bits.push('<span class="good">恢复×'+s.recovered+'</span>');
+    // [观察自动化] 第二行=本场画质摘要（配对 /realtime/swap/sessions）：裁剪命中·时延中位·降档占比
+    const q=hgQualityFor(s, hgQLast);
+    const qLine=q?('<div style="margin-top:2px;" title="裁剪命中率 · 单帧换脸时延中位 · 自动降档时长占比（点行展开完整报告）">'
+      +'裁'+(q.crop&&q.crop.hit_pct!=null?q.crop.hit_pct+'%':'—')
+      +' · '+(q.latency_ms&&q.latency_ms.med!=null?q.latency_ms.med+'ms':'—')
+      +' · 降'+((q.degraded_pct||0)>30?'<span class="bad">':'<span>')+(q.degraded_pct||0)+'%</span></div>'):'';
+    sum.innerHTML=(bits.length?bits.join(' · '):'<span class="good">全程稳定 ✓</span>')+qLine;
+    row.appendChild(head); row.appendChild(bar); row.appendChild(sum);
+    // 下钻：点击本场展开「状态时段 + 自愈/告警明细 + 画质报告」
+    row.classList.add('expandable');
+    const detail=document.createElement('div'); detail.className='gantt-detail'; detail.style.display='none';
+    const segHtml=(s.segments||[]).map(seg=>'<div><span class="seg-dot" style="background:'+(HG_COLOR[seg.state]||'#556174')+'"></span>'
+      +hgClock(seg.t0)+'–'+hgClock(seg.t1)+' <span style="color:'+(HG_COLOR[seg.state]||'#cbd5e1')+'">'+(HG_LABEL[seg.state]||seg.state)+'</span> · '+hgDur(seg.dur)+'</div>').join('')||'<div class="muted">无</div>';
+    const mkHtml=(s.markers||[]).map(mk=>'<div>'+hgClock(mk.ts)+' '+hgMarkIcon(mk)+' '+((mk.label||mk.kind)+'').replace(/</g,'&lt;')+'</div>').join('')||'<div class="muted">本场无自愈/告警/热切</div>';
+    const topk=o=>Object.entries(o||{}).sort((a,b)=>b[1]-a[1]).map(e=>e[0]+'×'+e[1]).join(' ');
+    const qHtml=q?(
+      '<div>时延 中位 <b style="display:inline">'+(q.latency_ms&&q.latency_ms.med!=null?q.latency_ms.med+'ms':'—')+'</b>'
+        +(q.latency_ms&&q.latency_ms.p95!=null?(' · p95 '+q.latency_ms.p95+'ms'):'')
+        +(q.latency_ms&&q.latency_ms.max!=null?(' · 峰值 '+q.latency_ms.max+'ms'):'')+'</div>'
+      +'<div>出帧 '+(q.fps&&q.fps.med!=null?q.fps.med+'fps':'—')+(q.fps&&q.fps.min!=null?(' (最低 '+q.fps.min+')'):'')
+        +' · 换脸 '+((q.swap&&q.swap.ok)||0)+' 成/'+((q.swap&&q.swap.fail)||0)+' 败</div>'
+      // [P8] 离席拆账：离席(无脸)时段单列，失败率剔除离席才是画质真实体检
+      +(q.away_s?('<div>离席 '+Math.round(q.away_s/60)+'分'+(q.away_s%60)+'秒'
+        +(q.swap&&q.swap.fail_pct_active!=null?(' · 有效失败率 <b style="display:inline">'+q.swap.fail_pct_active+'%</b>'
+          +(q.swap.fail_pct!=null?('（含离席 '+q.swap.fail_pct+'%）'):'')):'')+'</div>'):'')
+      +'<div>裁剪 '+((q.crop&&q.crop.hits)||0)+' 中/'+((q.crop&&q.crop.miss)||0)+' 回退'
+        +(q.crop&&q.crop.hit_pct!=null?(' ('+q.crop.hit_pct+'%)'):'')+'</div>'
+      +'<div>档位 '+(topk(q.presets)||'—')+(q.degraded_ticks?(' · 降档原因 '+(topk(q.degrade_reasons)||'—')):'')+'</div>'
+      +'<div>精修 '+(topk(q.enhance)||'—')+' · 背景 '+(topk(q.bg)||'—')
+        +(q.miss_samples?(' · <span class="bad">缺样 '+q.miss_samples+'</span>'):'')+'</div>'
+      // [P7 五期] 主播的主观速记(贴缝/精修观感,停播成绩单点选入账)——量化+主观同屏复盘
+      +(q.human&&(q.human.seam||q.human.enhance||q.human.note)?('<div>主观 贴缝 '+(HM_LABEL[q.human.seam]||'—')
+        +' · 精修 '+(HM_LABEL[q.human.enhance]||'—')
+        +(q.human.note?(' · '+String(q.human.note).replace(/</g,'&lt;')):'')+'</div>'):'')
+      +(q===((hgQLast||{}).current)?'<div class="muted">（进行中 · 半场预览）</div>':'')
+    ):'<div class="muted">本场无画质报告（升级前旧场/极短场）</div>';
+    detail.innerHTML='<div class="gantt-detail-in"><div style="min-width:220px"><b>状态时段（'+(s.segments||[]).length+'）</b>'+segHtml
+      +'</div><div style="min-width:220px"><b>自愈 / 告警</b>'+mkHtml+'</div>'
+      +'<div style="min-width:240px"><b>画质报告（自动采样）</b>'+qHtml+'</div></div>';
+    row.onclick=()=>{ detail.style.display=(detail.style.display==='none'?'':'none'); };
+    box.appendChild(row); box.appendChild(detail);
+  });
+}
+// 一键演练：调 /api/heal/selftest（服务端安全自诊断），把 15 项护栏/复盘结果画成勾叉
+async function healSelftest(){
+  const btn=$('hgDrillBtn'), box=$('hgSelftest'); const old=btn.textContent;
+  btn.disabled=true; btn.textContent='演练中…';
+  box.style.display=''; box.innerHTML='<div class="stcard"><span class="muted">正在演练（安全·不碰硬件/不发告警/不动管线）…</span></div>';
+  try{
+    const d=await (await fetch('/api/heal/selftest',{cache:'no-store'})).json();
+    const chips=(d.checks||[]).map(c=>'<span class="chip '+(c.ok?'up':'down')+'" title="'+((c.detail||'')+'').replace(/"/g,"'")+'">'+(c.ok?'✓':'✗')+' '+((c.name||'')+'').replace(/</g,'&lt;')+'</span>').join(' ');
+    box.innerHTML='<div class="stcard"><div style="margin-bottom:8px"><b style="color:'+(d.ok?'#bbf7d0':'#fecaca')+'">'
+      +(d.ok?'✅ 自愈演练通过':'⚠ 自愈演练存在失败项')+'</b> · '+(d.pass||0)+'/'+(d.total||0)
+      +' <span class="muted">· 不碰硬件/不发告警/不动管线，可反复跑</span></div><div class="chips">'+chips+'</div></div>';
+  }catch(e){ box.innerHTML='<div class="stcard"><span style="color:#fca5a5">演练失败：'+e+'</span></div>'; }
+  btn.disabled=false; btn.textContent=old;
+}
+// 导出CSV：把当前场次摘要落成 CSV（带 BOM，Excel 直开不乱码）
+function healExportCsv(){
+  const ss=(hgLast&&hgLast.sessions)||[];
+  if(!ss.length){ alert('暂无场次可导出'); return; }
+  const hdr=['开播时间','时长(秒)','丢脸','卡顿','掉线','自动重启','腾显存','热切','告警','恢复','进行中',
+             '裁剪命中%','时延中位ms','时延p95ms','出帧fps','降档%','降档原因','精修引擎','背景',
+             '离席s','有效失败率%','主观贴缝','主观精修','主观备注'];
+  const _top=o=>Object.entries(o||{}).sort((a,b)=>b[1]-a[1]).map(e=>e[0]+'×'+e[1]).join(' ');
+  const rows=ss.map(s=>{
+    const q=hgQualityFor(s, hgQLast)||{};
+    const hm=q.human||{};
+    return [new Date((s.start||0)*1000).toLocaleString('zh-CN'),s.dur_s||0,s.noface||0,s.lag||0,
+      s.svc_down||0,s.restart||0,s.free_vram||0,s.hot_switch||0,s.alert||0,s.recovered||0,(s.open?'是':'否'),
+      (q.crop&&q.crop.hit_pct!=null)?q.crop.hit_pct:'',(q.latency_ms&&q.latency_ms.med!=null)?q.latency_ms.med:'',
+      (q.latency_ms&&q.latency_ms.p95!=null)?q.latency_ms.p95:'',(q.fps&&q.fps.med!=null)?q.fps.med:'',
+      (q.degraded_pct!=null)?q.degraded_pct:'',_top(q.degrade_reasons),_top(q.enhance),_top(q.bg),
+      (q.away_s!=null)?q.away_s:'',(q.swap&&q.swap.fail_pct_active!=null)?q.swap.fail_pct_active:'',
+      HM_LABEL[hm.seam]||'',HM_LABEL[hm.enhance]||'',hm.note||''];
+  });
+  const esc=x=>{const v=String(x); return /[",\n]/.test(v)?('"'+v.replace(/"/g,'""')+'"'):v;};
+  const csv=[hdr].concat(rows).map(r=>r.map(esc).join(',')).join('\r\n');
+  const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='health_sessions_'+new Date().toISOString().slice(0,19).replace(/[:T]/g,'')+'.csv';
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+}
+// ── 实时换脸 · 预设/引擎（自包含，独立轮询 Hub /realtime/swap/status；探不到=隐藏卡，不打扰非换脸用户）──
+const SWAP_LABEL={natural:'自然',beauty:'美颜',hd:'高清',eco:'省电'};
+let swapBusy=false;
+function _nv(x,fb){ return (x===null||x===undefined)?fb:x; }
+async function swapTick(){
+  let d; try{ d=await (await fetch('/realtime/swap/status',{cache:'no-store'})).json(); }catch(e){ return; }
+  const card=$('swapCard'); if(!card) return;
+  if(!d || !d.up){ card.style.display='none'; return; }   // realtime_stream 控制台未运行 → 隐藏
+  card.style.display=''; swapRender(d);
+  swapTrendTick();                                        // 附带取一次性能趋势(独立失败不影响主卡)
+}
+// 迷你趋势图(内联 SVG)：折线 + 逐点透明热点(原生 <title> 悬停 tooltip，零额外 JS 事件)。
+// vals/labels 并行过滤(丢非数值点时对齐 tooltip)；<2 有效点→空串(不画)。
+function spark(vals, color, labels){
+  labels=labels||[];
+  const pairs=[];
+  (vals||[]).forEach((y,i)=>{ if(typeof y==='number' && isFinite(y)) pairs.push([y, labels[i]]); });
+  if(pairs.length<2) return '';
+  const W=88, H=20, P=1.5, ys=pairs.map(p=>p[0]);
+  const mn=Math.min.apply(null,ys), mx=Math.max.apply(null,ys), rng=(mx-mn)||1;
+  const pts=[]; let dots='';
+  pairs.forEach((p,i)=>{
+    const x=P+(i*(W-2*P)/(pairs.length-1));
+    const yy=H-P-((p[0]-mn)/rng)*(H-2*P);
+    pts.push(x.toFixed(1)+','+yy.toFixed(1));
+    const t=p[1]?String(p[1]).replace(/[<>&]/g,''):'';
+    dots+='<circle cx="'+x.toFixed(1)+'" cy="'+yy.toFixed(1)+'" r="3" fill="transparent" pointer-events="all">'
+      +(t?('<title>'+t+'</title>'):'')+'</circle>';
+  });
+  return '<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" '
+    +'style="vertical-align:middle;margin:0 5px;background:rgba(255,255,255,.03);border-radius:3px">'
+    +'<polyline points="'+pts.join(' ')+'" fill="none" stroke="'+color+'" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>'
+    +dots+'</svg>';
+}
+// 换脸性能跨时间趋势：sparkline(悬停看时刻/值) + 均/最低出帧 + 均/p95/峰时延 + 推荐启动档 + 降档占比 + 掉 CPU
+async function swapTrendTick(){
+  const el=$('swapTrend'); if(!el) return;
+  let st; try{ st=await (await fetch('/realtime/swap/stats?n=60',{cache:'no-store'})).json(); }catch(e){ el.style.display='none'; return; }
+  const tr=(st&&st.trend)||[];
+  if(!st || st.up===false || !st.on || !tr.length){ el.style.display='none'; return; }
+  const sm=st.summary||{};
+  const num=(x,d)=> (typeof x==='number')? x.toFixed(d) : '—';
+  const hhmmss=(ts)=>{ if(typeof ts!=='number') return ''; const d=new Date(ts*1000), p=n=>('0'+n).slice(-2); return p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds()); };
+  const fpsSeries=tr.map(s=>s.fps);
+  const latSeries=tr.map(s=>(typeof s.lat_max==='number')?s.lat_max:s.latency_ms);   // 优先每窗峰值，反映尾时延
+  const fpsLabels=tr.map(s=>{ const t=hhmmss(s.ts); return (t?t+' · ':'')+(typeof s.fps==='number'?s.fps.toFixed(1)+'fps':''); });
+  const latLabels=tr.map(s=>{ const v=(typeof s.lat_max==='number')?s.lat_max:s.latency_ms; const t=hhmmss(s.ts); return (t?t+' · ':'')+(typeof v==='number'?Math.round(v)+'ms':'')+(s.effective?(' · '+(SWAP_LABEL[s.effective]||s.effective)):''); });
+  const rec=st.recommended_start, cpu=_nv(st.cpu_only_snaps,0), bt=sm.below_target_pct;
+  const p95=sm.lat_p95, hot=(typeof p95==='number' && p95>=120);                      // p95≥120ms→尾部卡顿显著,标红
+  el.style.display='';
+  el.innerHTML='趋势 · 近'+tr.length+'点'
+    +' · 出帧'+spark(fpsSeries,'#22c55e',fpsLabels)+'均 '+num(sm.fps_avg,1)+' / 最低 '+num(sm.fps_min,1)+'fps'
+    +' · 时延'+spark(latSeries,'#f0b429',latLabels)+'均 '+num(sm.lat_avg,0)+' / p95 <b style="color:'+(hot?'#f85149':'#c9d1d9')+'">'+num(p95,0)+'</b> / 峰 '+num(sm.lat_max,0)+'ms'
+    +(rec?(' · 推荐启动档 <b style="color:#58a6ff">'+(SWAP_LABEL[rec]||rec)+'</b>'+(st.remember_on?' <span style="color:#22c55e">(记忆已启用)</span>':' <span class="muted">(SWAP_AUTO_REMEMBER=1 可下次从此起)</span>')):'')
+    +((typeof bt==='number')?(' · '+(bt>0?('<span style="color:'+(bt>=50?'#f85149':'#f0b429')+'" title="自适应下生效档低于目标档的时间比，越高说明硬件越吃紧">降档运行 '+bt+'%</span>'):'<span style="color:#22c55e" title="全程稳在目标画质档">始终满目标档</span>')):'')
+    +(cpu>0?(' · <span style="color:#f0b429">掉 CPU '+cpu+' 次</span>'):'')
+    +' <span class="muted">(累计 '+_nv(st.count,tr.length)+' 快照)</span>';
+}
+function swapRender(d){
+  const au=d.auto||{};
+  const eff=d.preset||'';                                 // 实际生效档
+  const sel=(au.enabled && au.target)?au.target:eff;      // 高亮"目标档"(自适应下=用户意图)，否则=生效档
+  const names=d.presets||[];
+  const box=$('swapPresets'); box.innerHTML='';
+  names.forEach(n=>{
+    const c=document.createElement('span');
+    c.className='chip'+(n===sel?' up':''); c.style.cursor=(n===sel||swapBusy)?'default':'pointer';
+    c.textContent=(SWAP_LABEL[n]||n)+(n===sel?' ✓':'');
+    c.title=(au.enabled?'设为目标档「':'切到「')+(SWAP_LABEL[n]||n)+'」（运行时即时生效）';
+    if(n!==sel && !swapBusy) c.onclick=()=>swapSet(n);
+    box.appendChild(c);
+  });
+  $('swapPresetLbl').textContent = au.enabled ? '目标档' : '预设';
+  const auEl=$('swapAuto');
+  if(au.enabled){
+    auEl.style.display='';
+    const reduced=(eff && au.target && eff!==au.target);
+    auEl.innerHTML='负载自适应 <b style="color:#22c55e">开</b> · 目标 '+(SWAP_LABEL[au.target]||au.target||'—')
+      +' → 生效 <b style="color:'+(reduced?'#f0b429':'#22c55e')+'">'+(SWAP_LABEL[eff]||eff||'—')+'</b>'
+      +(au.reason?(' · '+(''+au.reason).replace(/[<>&]/g,'')):'')
+      +' <span class="muted">(降档阈 '+_nv(au.down_ms,'—')+'ms / 升档阈 '+_nv(au.up_ms,'—')+'ms)</span>';
+  } else { auEl.style.display='none'; }
+  const p=d.params||{}, s=d.stats||{}, e=d.engine||{};
+  $('swapParams').textContent='参数 · 处理宽 '+_nv(p.proc_w,'—')+'px · '+_nv(p.swap_fps,'—')+'fps'
+    +((typeof p.fps_cap==='number'&&p.fps_cap>0)?('(上限'+p.fps_cap+')'):'')+' · 增强 '+_nv(p.enhance,'—')
+    +' · 锐化 '+_nv(p.sharpen,'—')+' · 送检q '+_nv(p.jpeg_q,'—')+' · 输出q '+_nv(p.out_jpeg_q,'—')
+    +' · 并发 '+_nv(p.workers,'—')
+    +((p.pinned&&p.pinned.length)?(' · 已钉住 '+p.pinned.join('/')+'(env 显式设置,换档不覆盖)'):'');
+  // 脸区裁剪通道(P2)：状态 + 点击热切。active=当前真在裁剪(单人脸且框新鲜)；仅 on 而未 active=在全帧发现/回退段
+  const cr=d.crop||{};
+  let crEl=$('swapCrop');
+  if(!crEl){ crEl=document.createElement('span'); crEl.id='swapCrop'; crEl.className='chip'; crEl.style.cursor='pointer'; crEl.style.marginLeft='8px';
+    crEl.onclick=async()=>{ try{ await fetch('/realtime/swap/crop?on='+(crEl.dataset.on==='1'?'0':'1'),{cache:'no-store'}); }catch(e){} swapTick(); };
+    $('swapEng').parentNode.appendChild(crEl); }
+  crEl.dataset.on = cr.on?'1':'0';
+  crEl.className='chip '+(cr.on?(cr.active?'up':'busy'):'down');
+  crEl.textContent='脸区原生 '+(cr.on?(cr.active?'✓ 裁剪中':'开(全帧段)'):'关');
+  crEl.title='脸区原生分辨率通道：按上一帧脸框裁原图送检,脸不过降采样、背景原生直出。点击切换。命中 '+_nv(cr.hits,0)+' / 回退 '+_nv(cr.miss,0)+(cr.rect?(' · 窗 '+cr.rect.join(',')):'');
+  $('swapStats').textContent='实时 · 出帧 '+_nv(s.fps,'—')+'fps · 时延 '+_nv(s.latency_ms,'—')+'ms · 成功 '+_nv(s.ok,0)+' / 失败 '+_nv(s.fail,0);
+  const eel=$('swapEng');
+  if(!e || e.ok===false){ eel.className='chip down'; eel.textContent='引擎离线'; eel.title=(e&&e.error)||'faceswap_api /health 探测失败'; }
+  else {
+    const gpu=!!e.gpu, trt=!!e.trt;
+    const ec=e.enh_concurrency, ep=e.enh_pool||{};
+    eel.className='chip '+(gpu?'up':'busy');
+    eel.textContent=(e.model||'换脸')+' · '+(gpu?('GPU'+(trt?'·TRT':'')):'CPU')+(e.backend?(' · '+e.backend):'')
+      +((typeof ec==='number'&&ec>1)?(' · 增强×'+ec):'');
+    eel.title='providers: '+(((e.providers_active||[]).join(', '))||'—')
+      +((typeof ec==='number')?('\n增强并发 '+ec+(ep.gf?' · GFPGAN池开':' · GFPGAN池关')+(ep.cf?' · CF池开':' · CF池关')):'');
+  }
+  const warn=$('swapWarn');
+  if(e && e.ok!==false && e.cpu_only){
+    warn.style.display=''; warn.textContent='⚠ 换脸引擎跑在 CPU（实时基本不可用/严重掉帧）：请检查 faceswap_api 的 GPU/TRT 是否就绪。';
+  } else { warn.style.display='none'; }
+}
+async function swapSet(n){
+  if(swapBusy) return; swapBusy=true;
+  try{ await fetch('/realtime/swap/preset?name='+encodeURIComponent(n),{cache:'no-store'}); }catch(e){}
+  swapBusy=false; swapTick();
+}
+
+// 同传转写/字幕导出：代理 live_interpreter，列当前+往期会话，选内容/说话人后一键下 TXT/SRT/JSON
+function trParams(session){
+  let p='content='+encodeURIComponent($('trContent').value)+'&who='+encodeURIComponent($('trWho').value)+'&download=1';
+  if(session){ p+='&session='+encodeURIComponent(session); }
+  return p;
+}
+function trFmt(s){ const m=/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/.exec(s||''); return m?(m[1]+'-'+m[2]+'-'+m[3]+' '+m[4]+':'+m[5]+':'+m[6]):(s||''); }
+function trDl(session){
+  return ['txt','srt','json'].map(k=>'<a class="chip" style="cursor:pointer;text-decoration:none;" href="/interp/transcript.'+k+'?'+trParams(session)+'" target="_blank">'+k.toUpperCase()+'</a>').join(' ');
+}
+async function trTick(){
+  const card=$('trCard'); if(!card) return;
+  let lg; try{ lg=await (await fetch('/interp/langs',{cache:'no-store'})).json(); }catch(e){ card.style.display='none'; return; }
+  if(!lg || !lg.up){ card.style.display='none'; return; }   // 同传(LingoX)未运行 → 隐藏卡
+  card.style.display='';
+  let ls; try{ ls=await (await fetch('/interp/transcript/list',{cache:'no-store'})).json(); }catch(e){ ls={sessions:[]}; }
+  trRender(lg, ls);
+}
+function trRender(lg, ls){
+  const cnt=_nv(lg.transcript_count,0), on=(lg.transcript_on!==false);
+  const langs=(lg.src||'?')+' \u21c4 '+(lg.dst||'?');
+  $('trLive').className='chip'+(cnt>0?' up':'');
+  $('trLive').textContent='当前 '+cnt+' 条 · '+langs;
+  $('trCur').innerHTML='<div class="stcard" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;"><b>当前 / 最近会话</b><span class="muted">'+langs+' · '+cnt+' 条</span><span style="margin-left:auto;">'+trDl('')+'</span></div>';
+  const sess=(ls&&ls.sessions)||[];
+  const box=$('trList');
+  if(!sess.length){ box.innerHTML='<div class="muted">暂无往期会话（结束一次同传后自动留存）。</div>'; }
+  else { box.innerHTML=sess.map(o=>'<div class="stcard" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;"><b>'+trFmt(o.session)+'</b><span class="muted">'+((o.src||'?')+' \u21c4 '+(o.dst||'?'))+' · '+_nv(o.count,'—')+' 条</span><span style="margin-left:auto;">'+trDl(o.session)+'</span></div>').join(''); }
+  const warn=$('trWarn');
+  if(!on){ warn.style.display=''; warn.textContent='⚠ 转写留存当前关闭（INTERP_TRANSCRIPT=0），导出将为空。'; }
+  else { warn.style.display='none'; }
+}
+if($('trContent')){ $('trContent').onchange=trTick; }
+if($('trWho')){ $('trWho').onchange=trTick; }
+
+// 同传翻译质量与词表：代理 live_interpreter，观测缓存命中/预热战果/术语规模 + CSV 导出导入 + 立即预热
+async function tqTick(){
+  const card=$('tqCard'); if(!card) return;
+  let tc; try{ tc=await (await fetch('/interp/translate_cache',{cache:'no-store'})).json(); }catch(e){ card.style.display='none'; return; }
+  if(!tc || !tc.up){ card.style.display='none'; return; }   // 同传(LingoX)未运行 → 隐藏卡
+  card.style.display='';
+  let lg; try{ lg=await (await fetch('/interp/langs',{cache:'no-store'})).json(); }catch(e){ lg={}; }
+  let st; try{ st=await (await fetch('/interp/tm_stats?misses=6',{cache:'no-store'})).json(); }catch(e){ st={}; }
+  tqRender(tc, lg, st);
+}
+function tqRender(tc, lg, st){
+  const on=(tc.on!==false), size=_nv(tc.size,0), hr=_nv(tc.hit_rate,0);
+  $('tqCache').className='chip'+(on&&size>0?' up':'');
+  $('tqCache').textContent='缓存 '+(on?(size+' 条 · 命中率 '+Math.round(hr*100)+'%'):'关闭');
+  const w=tc.warmup||{}, done=_nv(w.done,0), learned=_nv(w.learned,0), ms=_nv(w.ms,0), won=(tc.warmup_on!==false);
+  $('tqWarm').className='chip'+(done>0?' up':'');
+  $('tqWarm').textContent='预热 '+(won?(done>0?(done+' 句(自学 '+learned+') · '+ms+'ms'):'待触发'):'关闭');
+  const gc=_nv(lg.glossary_count,0), gon=(lg.glossary_on!==false);
+  $('tqGloss').className='chip'+(gon&&gc>0?' up':'');
+  $('tqGloss').textContent='术语 '+(gon?(gc+' 条'):'关闭');
+  st=st||{};
+  const sc=_nv(st.session_count,0), rr=st.recent_rate, lr=_nv(st.lifetime_rate,0);
+  $('tqTrend').className='chip'+(sc>0?' up':'');
+  $('tqTrend').textContent=(sc>0)?('趋势 本场 '+Math.round((rr==null?0:rr)*100)+'% · 近'+sc+'场 '+Math.round(lr*100)+'%'):'趋势 无场次';
+  const missTop=(st.misses||[]).slice(0,6).map(m=>(m.text||'')+'×'+_nv(m.n,0)).filter(Boolean);
+  $('tqMiss').textContent=missTop.length?('高频未命中(可加词表/开反哺)：'+missTop.join(' · ')):'';
+  const sv=tc.survival||{}, svp=(sv.pairs||[]), svBelow=(sv.below||[]);
+  if(sv.on===false){ $('tqSurv').className='chip'; $('tqSurv').textContent='占位存活 关闭'; }
+  else if(!svp.length){ $('tqSurv').className='chip'; $('tqSurv').textContent='占位存活 待样本'; }
+  else {
+    const txt=svp.map(p=>p.pair+' '+Math.round(_nv(p.rate,0)*100)+'%'+(p.enough?'':'?')).join(' · ');
+    $('tqSurv').className='chip'+(svBelow.length?' down':(svp.some(p=>p.enough)?' up':''));
+    $('tqSurv').textContent='占位存活 '+txt;
+  }
+  const warn=$('tqWarn'), msgs=[];
+  if(tc.on===false){ msgs.push('翻译缓存关闭(INTERP_TRANSLATE_CACHE=0)，预热/命中不生效'); }
+  if(lg.glossary_on===false){ msgs.push('术语锁定关闭(INTERP_GLOSSARY=0)'); }
+  svBelow.forEach(function(pr){ const p=svp.find(x=>x.pair===pr)||{};
+    msgs.push('术语占位存活率偏低：'+pr+' '+Math.round(_nv(p.rate,0)*100)+'%（<'+Math.round(_nv(sv.warn,.85)*100)+'%，'+_nv(p.ph,0)+' 占位）——该向术语锁定正被 MT 打散，已自愈回退无保护译文；建议核查该向 MT 后端/模型，或换更稳的占位符（已同步系统告警）'); });
+  if(msgs.length){ warn.style.display=''; warn.textContent='⚠ '+msgs.join('；')+'。'; } else { warn.style.display='none'; }
+}
+async function tqWarmupNow(){
+  $('tqMsg').textContent='预热触发中…';
+  try{ const j=await (await fetch('/interp/tm_warmup',{method:'POST'})).json();
+    $('tqMsg').textContent=(j&&j.started)?'已触发预热（后台跑，稍后看命中）':'预热未触发（缓存/预热已关）'; }
+  catch(e){ $('tqMsg').textContent='预热触发失败'; }
+  setTimeout(tqTick, 1500);
+}
+async function tqProbeNow(){
+  const b=$('tqProbeBtn'); if(b){ b.disabled=true; }
+  $('tqMsg').textContent='存活率实测中（过真实 MT，稍候）…';
+  try{ const j=await (await fetch('/interp/glossary/survival_probe',{method:'POST'})).json();
+    const ds=(j&&j.dirs)||[];
+    if(!ds.length){ $('tqMsg').textContent='实测无结果（词表为空或无术语命中）'; }
+    else { const pv=j.prev_ts?('（对比上次同后端 '+j.prev_ts+'）'):'';
+      $('tqMsg').textContent='实测'+pv+'：'+ds.map(function(d){
+        var s=d.pair+' '+(d.rate==null?'—':Math.round(d.rate*100)+'%')+'('+d.surv+'/'+d.ph+')';
+        if(d.regress){ s+=' ⚠↓'+Math.round(Math.abs(d.delta)*100)+'pp'; }
+        else if(d.delta!=null && Math.abs(d.delta)>=0.01){ s+=(d.delta>0?' ↑':' ↓')+Math.round(Math.abs(d.delta)*100)+'pp'; }
+        if(d.verdict==='degraded'){ s+=' ⚠打散'; }
+        return s; }).join('　·　'); }
+  }catch(e){ $('tqMsg').textContent='存活率实测失败'; }
+  if(b){ b.disabled=false; }
+  tqTick();   // 探针已并入在线自检 → 刷新「占位存活」徽章
+}
+function tqImportNow(){
+  const fs=$('tqFile').files, f=fs&&fs[0]; if(!f){ return; }
+  const mode=$('tqMode').value;
+  if(mode==='replace' && !confirm('整表替换：将用该 CSV 覆盖所有语向的现有术语，确定？')){ $('tqFile').value=''; return; }
+  const rd=new FileReader();
+  rd.onload=function(){
+    $('tqMsg').textContent='导入中…';
+    fetch('/interp/glossary/import_csv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({csv:String(rd.result||''),mode:mode})})
+      .then(r=>r.json().then(j=>({ok:r.ok,j:j})))
+      .then(res=>{
+        if(res.ok && res.j && res.j.ok){ $('tqMsg').textContent='导入成功（'+res.j.mode+'）：解析 '+res.j.parsed+' / 跳过 '+res.j.skipped+' → 现 '+res.j.count+' 条'; tqTick(); }
+        else { $('tqMsg').textContent='导入失败：'+((res.j&&(res.j.detail||res.j.error))||'未知错误'); }
+      }).catch(e=>{ $('tqMsg').textContent='导入失败：'+e; });
+  };
+  rd.onerror=function(){ $('tqMsg').textContent='读取文件失败'; };
+  rd.readAsText(f,'utf-8'); $('tqFile').value='';
+}
+if($('tqWarmBtn')){ $('tqWarmBtn').onclick=tqWarmupNow; }
+if($('tqProbeBtn')){ $('tqProbeBtn').onclick=tqProbeNow; }
+if($('tqImportBtn')){ $('tqImportBtn').onclick=function(){ $('tqFile').click(); }; }
+if($('tqFile')){ $('tqFile').onchange=tqImportNow; }
+
+// ── P3-4 通话质量趋势：每场落盘摘要 + 近 7 天按天聚合（代理 live_interpreter）──
+const CS_DROP_LABEL={gate:'底噪门',halluc:'幻听',filler:'幻影词',lowconf:'低置信',dedup:'去重',spk:'声纹拦',echo:'回声闸'};
+function csDur(s){ s=Math.round(s||0); return s>=3600?(Math.floor(s/3600)+'h'+Math.round(s%3600/60)+'m'):(s>=60?(Math.floor(s/60)+'m'+(s%60)+'s'):(s+'s')); }
+function csDropTxt(d){ d=d||{}; const parts=Object.keys(d).filter(k=>d[k]>0).map(k=>(CS_DROP_LABEL[k]||k)+' '+d[k]); return parts.length?parts.join(' · '):'无'; }
+async function csTick(){
+  const card=$('csCard'); if(!card) return;
+  let wk; try{ wk=await (await fetch('/interp/session_weekly?days=7',{cache:'no-store'})).json(); }catch(e){ card.style.display='none'; return; }
+  if(!wk || !wk.up){ card.style.display='none'; return; }    // 同传(LingoX)未运行 → 隐藏卡
+  card.style.display='';
+  let ls; try{ ls=await (await fetch('/interp/sessions?limit=8',{cache:'no-store'})).json(); }catch(e){ ls={sessions:[]}; }
+  const t=wk.totals||{};
+  $('csTotals').className='chip'+(t.n>0?' up':'');
+  $('csTotals').textContent='近7天 '+_nv(t.n,0)+' 场 · 累计 '+csDur(t.dur_s)+(t.e2e_med?(' · 端到端中位 '+Math.round(t.e2e_med)+'ms'):'')
+    +(t.onscreen_rate!=null?(' · 上屏率 '+Math.round(t.onscreen_rate*100)+'%'):'')
+    +(t.review&&t.review.marked?(' · 人工标注'+t.review.marked+'句 句准'+Math.round((t.review.acc||0)*100)+'%'
+      +(t.review.cer!=null?(' 真实CER '+(t.review.cer*100).toFixed(1)+'%'):'')):'');
+  $('csDrops').className='chip';
+  const g=t.ger||{};
+  $('csDrops').textContent='拦截 '+csDropTxt(t.drops)
+    +((g.checked||g.revived)?(' ｜ 复核'+_nv(g.checked,0)+' 纠'+_nv(g.fixed,0)+' 救回'+_nv(g.revived,0)+' 撤'+_nv(g.vetoed,0)):'');
+  try{ // P1-4 自学习台账：累计修正对/已进热词数；未采纳的给 P2 一键采纳按钮（未运行时静默隐藏）
+    const gl=await (await fetch('/interp/ger_learned',{cache:'no-store'})).json();
+    const el=$('csLearn');
+    if(el){
+      if(gl&&gl.up&&gl.count>0){
+        window._csLearnItems=(gl.items||[]).slice(0,3);
+        el.style.display='';
+        el.innerHTML='学习 '+gl.count+' 对 · 已进热词 '+_nv(gl.adopted,0)+' ｜ '
+          +window._csLearnItems.map((e,i)=>{
+            const pair=String(e.wrong+'→'+e.right+'×'+e.n).replace(/</g,'&lt;');
+            return pair+(e.adopted?' ✓':' <a href="javascript:void(0)" onclick="csAdopt('+i+')" style="color:var(--acc)" title="立即写入术语热词，下一句识别生效">采纳</a>');
+          }).join(' · ');
+      } else el.style.display='none';
+    }
+  }catch(e){ if($('csLearn')) $('csLearn').style.display='none'; }
+  const daily=(wk.daily||[]);
+  if(!daily.length){ $('csDaily').innerHTML='<div class="muted">近 7 天暂无会话记录（结束一次同传/通话后自动累计）。</div>'; }
+  else{
+    const maxN=Math.max(1,...daily.map(d=>d.n||0));
+    $('csDaily').innerHTML=daily.map(d=>{
+      const w=Math.round((d.n||0)/maxN*100);
+      return '<div class="row" style="border:none;padding:3px 0;">'
+        +'<span class="k" style="min-width:52px">'+d.date+'</span>'
+        +'<span style="flex:1;margin:0 10px;height:8px;background:#0c111c;border-radius:5px;overflow:hidden;border:1px solid var(--bord)">'
+        +'<i style="display:block;height:100%;width:'+w+'%;background:linear-gradient(90deg,var(--acc),var(--acc2));border-radius:5px"></i></span>'
+        +'<span class="v" style="white-space:nowrap">'+d.n+' 场 · '+csDur(d.dur_s)+(d.e2e_med?(' · '+Math.round(d.e2e_med)+'ms'):'')
+        +((d.spk||d.echo)?(' · 声纹拦'+_nv(d.spk,0)+'/回声'+_nv(d.echo,0)):'')+'</span></div>';
+    }).join('');
+  }
+  const sess=(ls&&ls.sessions)||[];
+  $('csList').innerHTML=!sess.length?'<div class="muted">暂无场次。</div>':sess.map(o=>{
+    const vl=o.voicelock||{}, st=o.stream||{}, gg=o.ger||{}, kp=o.kpi||{};
+    return '<div class="stcard" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+      +'<b>'+(o.ended_at||(o.log||'').replace('interp_session_','').replace('.json','')||'—')+'</b>'
+      +'<span class="muted">'+(o.mode||'')+(st.part?(' · 流式'):'')+' · '+csDur(o.dur_s)
+      +' · 段 '+_nv((o.counts||{}).a,0)+'/'+_nv((o.counts||{}).b,0)
+      +(o.e2e_ms?(' · e2e '+Math.round(o.e2e_ms)+'ms'):'')
+      +(kp.onscreen_rate!=null?(' · 上屏'+Math.round(kp.onscreen_rate*100)+'%'):'')+'</span>'
+      +'<span class="muted" style="margin-left:auto;">拦截 '+csDropTxt(o.drops)
+      +(gg.checked?(' · 复核'+gg.checked+'纠'+_nv(gg.fixed,0)+(gg.revived?('救'+gg.revived):'')):'')
+      +(o.discont?(' · 环回断点'+o.discont):'')
+      +(vl.enrolled?(' · 声纹✓'+_nv(vl.accepts,0)+'/✗'+_nv(vl.rejects,0)):'')
+      +(o.readback_used?' · 朗读✓':'')+'</span></div>';
+  }).join('');
+}
+
+async function csAdopt(i){ // P2 一键采纳：修正对立即进术语热词
+  const it=(window._csLearnItems||[])[i]; if(!it||!it.key) return;
+  try{
+    const r=await (await fetch('/interp/ger_adopt',{method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({key:it.key})})).json();
+    if(r&&r.ok){ it.adopted=true; }
+  }catch(e){}
+  csTick();
+}
+
+// ── 入口热度 · 首页点击漏斗（聚合 /api/ui/events/summary；接口未上线/无数据均优雅降级）──
+const EV_LABEL={feature:'功能卡',role:'角色分流',cta:'进入工作室',trust:'信任条',pro:'版位/PRO',sysbar:'状态条',click:'其它'};
+const ROLE_LABEL={voice:'我要创作',stream:'我要直播',phone:'我要对话',interp:'我要同传',ops:'我要运维'};
+function fnBars(el, items, kind){
+  el.innerHTML='';
+  if(!items || !items.length){ el.innerHTML='<span class="muted">暂无</span>'; return; }
+  const max=Math.max(1,...items.map(x=>x.n||0));
+  items.forEach(it=>{
+    const label = kind==='feat' ? (it.name||it.id)
+                : kind==='role' ? (ROLE_LABEL[it.k]||it.k)
+                : it.k;
+    const w=Math.round(((it.n||0)/max)*100);
+    const row=document.createElement('div'); row.className='row'; row.style.border='none'; row.style.padding='3px 0';
+    row.innerHTML='<span class="k" style="min-width:84px;max-width:44%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+String(label).replace(/</g,'&lt;')+'</span>'
+      +'<span style="flex:1;margin:0 10px;height:8px;background:#0c111c;border-radius:5px;overflow:hidden;border:1px solid var(--bord)">'
+      +'<i style="display:block;height:100%;width:'+w+'%;background:linear-gradient(90deg,var(--acc),var(--acc2));border-radius:5px"></i></span>'
+      +'<span class="v">'+(it.n||0)+'</span>';
+    el.appendChild(row);
+  });
+}
+async function funnelTick(){
+  const card=$('funnelCard'); if(!card) return;
+  let resp,d;
+  try{ resp=await fetch('/api/ui/events/summary?limit=8',{cache:'no-store'}); d=await resp.json(); }
+  catch(e){ $('fnMeta').textContent='入口埋点接口暂不可达。'; return; }
+  if(resp && resp.status===404){ $('fnMeta').textContent='入口埋点接口未就绪（重载 Hub 后激活 /api/ui/events/summary）。'; return; }
+  if(!d || !d.ok){ $('fnMeta').textContent='入口埋点不可用。'; return; }
+  const clear=()=>{ $('fnEv').innerHTML=''; $('fnFeat').innerHTML=''; $('fnRole').innerHTML=''; $('fnLine').innerHTML=''; };
+  if(!d.available){ $('fnMeta').innerHTML='<span style="color:#bbf7d0">埋点已就绪，尚无点击数据（前门被点击后即累计）。</span>'; clear(); return; }
+  const span=(d.since&&d.until)?(new Date(d.since*1000).toLocaleDateString()+'–'+new Date(d.until*1000).toLocaleDateString()):'';
+  $('fnMeta').innerHTML='累计 <b>'+d.total+'</b> 次点击 · <b>'+d.sessions+'</b> 个会话'+(span?(' · '+span):'')+' <span class="muted">（最近 5000 条埋点）</span>';
+  const ev=$('fnEv'); ev.innerHTML='';
+  Object.keys(d.by_ev||{}).sort((a,b)=>d.by_ev[b]-d.by_ev[a]).forEach(k=>{
+    const s=document.createElement('span'); s.className='chip'; s.textContent=(EV_LABEL[k]||k)+' '+d.by_ev[k]; ev.appendChild(s);
+  });
+  fnBars($('fnFeat'), d.top_features, 'feat');
+  fnBars($('fnRole'), d.top_roles, 'role');
+  fnBars($('fnLine'), d.top_lines, 'line');
+}
+
+// ── P5-1 设备自愈漏斗：/api/metrics/devflow（P4 埋点）→ 曝光→点击→成功 转化条 + 来源细分 ──
+async function devflowTick(){
+  const card=$('devflowCard'); if(!card) return;
+  let resp,d;
+  try{ resp=await fetch('/api/metrics/devflow',{cache:'no-store'}); d=await resp.json(); }
+  catch(e){ $('dfMeta').textContent='漏斗接口暂不可达。'; return; }
+  if(resp && resp.status===404){ $('dfMeta').textContent='漏斗接口未就绪（重载 Hub 后激活 /api/metrics/devflow）。'; return; }
+  if(!d || !d.ok){ $('dfMeta').textContent='漏斗数据不可用。'; return; }
+  const f=d.funnel||{};
+  if(!(f.expose||f.click||f.ok||f.fail)){
+    $('dfMeta').innerHTML='<span style="color:#bbf7d0">埋点已就绪，尚无数据——设备从未缺席过（好事），或还没人用过一键热切。</span>';
+    $('dfBars').innerHTML=''; $('dfSrc').innerHTML=''; return;
+  }
+  $('dfMeta').innerHTML='累计（'+(d.days_kept||0)+' 天）：曝光 <b>'+(f.expose||0)+'</b> → 点击 <b>'+(f.click||0)+'</b> → 成功 <b>'+(f.ok||0)+'</b>'
+    +(f.fail?(' · <span style="color:#fca5a5">失败 '+f.fail+'</span>'):'')
+    +(f.click_rate!=null?(' · 点击率 <b>'+Math.round(f.click_rate*100)+'%</b>'):'')
+    +(f.success_rate!=null?(' · 成功率 <b style="color:'+((f.success_rate>=0.9)?'#4ade80':'#fbbf24')+'">'+Math.round(f.success_rate*100)+'%</b>'):'');
+  const stages=[['曝光(CTA亮出)',f.expose||0,'var(--acc)'],['点击',f.click||0,'var(--acc2)'],
+                ['切换成功',f.ok||0,'#4ade80'],['切换失败',f.fail||0,'#f87171']];
+  const max=Math.max(1,...stages.map(x=>x[1]));
+  $('dfBars').innerHTML=stages.map(([k,n,c])=>'<div class="row" style="border:none;padding:3px 0;">'
+    +'<span class="k" style="min-width:110px;">'+k+'</span>'
+    +'<span style="flex:1;margin:0 10px;height:8px;background:#0c111c;border-radius:5px;overflow:hidden;border:1px solid var(--bord)">'
+    +'<i style="display:block;height:100%;width:'+Math.round(n/max*100)+'%;background:'+c+';border-radius:5px"></i></span>'
+    +'<span class="v">'+n+'</span></div>').join('');
+  // 来源细分（服务端跨天聚合 src_total：ev:src → n），一眼看出用户从哪个入口点的热切
+  const srcAgg=d.src_total||{};
+  let srcHtml=Object.keys(srcAgg).length
+    ? ('<span class="muted" style="margin-right:4px;">来源:</span>'+Object.entries(srcAgg).sort((a,b)=>b[1]-a[1])
+        .map(([k,n])=>'<span class="chip">'+String(k).replace(/</g,'&lt;')+' '+n+'</span>').join(' '))
+    : '';
+  // P8-2 建议条效果（独立于主漏斗）：数据说服的转化率——有曝光才占位
+  const adv=d.advice||{};
+  if(adv.expose){
+    srcHtml+=(srcHtml?' &nbsp; ':'')+'<span class="muted" style="margin-right:4px;">开启建议:</span>'
+      +'<span class="chip">曝光 '+adv.expose+'</span> <span class="chip" style="color:#4ade80">采纳 '+(adv.enable||0)
+      +(adv.enable_rate!=null?('（'+Math.round(adv.enable_rate*100)+'%）'):'')+'</span>'
+      +' <span class="chip">不再提示 '+(adv.dismiss||0)+'</span>';
+  }
+  $('dfSrc').innerHTML=srcHtml;
+}
+// P6-2 周报状态（只在进页时取一次，不跟 30s 轮询）：自动发送开关/上次已发周 → 卡片脚注
+async function devflowWeeklyNote(){
+  const el=$('dfWeekly'); if(!el) return;
+  try{
+    const d=await (await fetch('/api/metrics/devflow/weekly',{cache:'no-store'})).json();
+    if(!d || !d.ok || !d.weekly_auto) return;
+    const wa=d.weekly_auto;
+    el.textContent=' 周报：'+(wa.enabled&&wa.alerts_on?('每周一 '+wa.hour+' 点后自动推送上周达成率至告警通道'):'自动推送已关')
+      +(wa.last_sent_week?('（上次已发 '+wa.last_sent_week+' 那周）'):'（尚未发过）');
+  }catch(_){}
+}
+
+// ── D-4 分机部署向导：cluster_map → 每机服务清单 + env 片段 + lint 红绿 ──
+let _cwEnvText='';
+function cwCopyEnv(){
+  if(!_cwEnvText) return;
+  navigator.clipboard.writeText(_cwEnvText).then(
+    ()=>{ $('cwCopyBtn').textContent='✓ 已复制'; setTimeout(()=>{ $('cwCopyBtn').textContent='⧉ 复制 env 片段'; },1600); },
+    ()=>{ $('cwEnv').style.display='block'; });   // 剪贴板被拒(非 https 等)：至少展开可手动选
+}
+async function clusterWizard(){
+  let d;
+  try{ d=await (await fetch('/api/cluster/wizard',{cache:'no-store'})).json(); }
+  catch(e){ $('cwMeta').textContent='向导接口不可达（重载 Hub 后激活 /api/cluster/wizard）。'; return; }
+  if(!d.ok){ $('cwMeta').textContent=d.detail||'不可用'; return; }
+  const lint=d.lint||{};
+  const lintTxt = lint.ok===true ? '<span style="color:#4ade80">lint 一致（'+lint.oks+' 项）</span>'
+    : lint.ok===false ? '<span style="color:#f87171">lint 漂移 '+ (lint.drifts||[]).length +' 处</span>'
+    : '<span style="color:#fbbf24">lint 未判定</span>';
+  $('cwMeta').innerHTML='Hub '+((d.hub||{}).ip||'?')+':'+((d.hub||{}).port||'?')+' · 分机 '+ (d.hosts||[]).length +' 台 · '+lintTxt;
+  const esc=s=>String(s==null?'':s).replace(/</g,'&lt;');
+  let html='';
+  (d.hosts||[]).forEach(h=>{
+    const svc=(h.svcs||[]).map(s=>
+      '<span class="chip" title="'+esc(s.server)+' · 计划任务 '+esc(s.task)+'">'
+      +esc(s.name)+' :'+esc(s.port)+(s.env_key?(' → '+esc(s.env_key)):'')+'</span>').join(' ');
+    html+='<div class="stcard" style="margin-bottom:6px;">'
+      +'<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">'
+      +'<b>'+esc(h.ip)+'</b><span class="muted" style="font-size:11px;">'+esc(h.dir)+'</span></div>'
+      +'<div class="chips" style="margin-top:6px;">'+svc+'</div></div>';
+  });
+  (lint.drifts||[]).forEach(t=>{ html+='<div style="color:#f87171;font-size:11px;margin-top:4px;">⚠ '+esc(t)+'</div>'; });
+  $('cwHosts').innerHTML=html||'<span class="muted">cluster_map 中没有分机</span>';
+  _cwEnvText=d.env_fragment||'';
+  if(_cwEnvText){ $('cwCopyBtn').style.display=''; $('cwEnv').textContent=_cwEnvText; $('cwEnv').style.display='block'; }
+  else { $('cwCopyBtn').style.display='none'; $('cwEnv').style.display='none'; }
+}
+
+gpuToggleTick(); setInterval(gpuToggleTick, 4000);
+engTick(); setInterval(engTick, 4000);
+swapTick(); setInterval(swapTick, 3000);
+trTick(); setInterval(trTick, 5000);
+tqTick(); setInterval(tqTick, 5000);
+csTick(); setInterval(csTick, 15000);
+tick(); setInterval(tick, 2000);
+trend(); setInterval(trend, 30000);
+accept(); setInterval(accept, 30000);
+fePatrol(); setInterval(fePatrol, 30000);
+vquality(); setInterval(vquality, 30000);
+vrambudget(); setInterval(vrambudget, 60000);
+clienterrs(); setInterval(clienterrs, 30000);
+funnelTick(); setInterval(funnelTick, 30000);
+devflowTick(); setInterval(devflowTick, 30000);
+devflowWeeklyNote();
+scHistoryLoad(); setInterval(scHistoryLoad, 30000);
+security(); setInterval(security, 30000);
+stability(); setInterval(stability, 120000);
+healthGantt(); setInterval(healthGantt, 5000);
+clusterWizard();   // D-4 分机部署向导：静态拓扑，载入跑一次，改图后手动 ↻
+</script>
+</body>
+</html>

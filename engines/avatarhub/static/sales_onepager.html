@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>无界科技 BOUNDLESS · 数字人引擎 一页纸</title>
+<link rel="stylesheet" href="/static/brand.css">
+<style>
+  /* 一页纸：屏幕=深色品牌页；打印(Ctrl+P)=白底 A4 单页，自动去阴影去背景 */
+  body{margin:0;background:var(--bd-bg);color:var(--bd-txt);font-family:var(--bd-font);
+       font-size:13px;line-height:1.55;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .page{max-width:900px;margin:0 auto;padding:28px 30px}
+  header{display:flex;align-items:baseline;gap:14px;border-bottom:2px solid var(--bd-acc);padding-bottom:10px;margin-bottom:14px}
+  h1{font-size:22px;margin:0}
+  header .sub{color:var(--bd-mut);font-size:12px}
+  h2{font-size:14px;margin:16px 0 8px;color:var(--bd-acc);border-left:3px solid var(--bd-acc);padding-left:8px}
+  .tagline{font-size:15px;font-weight:700;padding:10px 14px;border:1px solid var(--bd-border);
+           border-radius:12px;background:var(--bd-surface);margin:0}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{border:1px solid var(--bd-border);padding:5px 8px;text-align:left;vertical-align:top}
+  th{background:var(--bd-surface2);color:var(--bd-txt2);font-weight:600;white-space:nowrap}
+  td b{color:var(--bd-txt)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 22px}
+  ul{margin:6px 0;padding-left:18px}
+  li{margin:3px 0}
+  .foot{margin-top:14px;padding-top:8px;border-top:1px solid var(--bd-border);color:var(--bd-faint);font-size:12px}
+  .no{color:var(--bd-danger)}
+  @media print{
+    body{background:#fff;color:#111}
+    :root{--bd-txt:#111;--bd-txt2:#333;--bd-mut:#555;--bd-faint:#777;
+          --bd-border:#bbb;--bd-surface:#f5f6fa;--bd-surface2:#eceef5}
+    .page{max-width:none;padding:0}
+    h2{color:#2743a8;border-color:#2743a8}
+    header{border-color:#2743a8}
+    .tagline{background:#f0f3ff}
+    @page{size:A4;margin:12mm}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <h1><span class="bd-grad-text">无界科技 BOUNDLESS</span> · 数字人引擎</h1>
+    <span class="sub">销售一页纸 v1 · 2026-07 · 数据=引擎实测</span>
+  </header>
+
+  <p class="tagline">唯一本地可部署的：克隆同传 + 高清换脸 + 术语锁定 + 合规水印 —— 数据不出机房，一场直播全套交付。</p>
+
+  <h2>四产品线</h2>
+  <table>
+    <tr><th>产品线</th><th>主打能力</th><th>最低硬件</th><th>一句话话术</th></tr>
+    <tr><td><b>幻声 VoiceX</b></td><td>3 秒零样本克隆 · 双引擎自动推荐(实时/出片) · 实时变声</td><td>4060Ti 16G</td><td>「本地克隆，数据不出机房」</td></tr>
+    <tr><td><b>幻影 LiveX</b></td><td>高清脸换脸(脸区原生 4.5×) · 活体口型 · 虚拟背景 · 双人同框</td><td><b>4090 / 5090</b></td><td>「720p 高清默认·1080p 超清档·不换房间换场景」</td></tr>
+    <tr><td><b>通译 LingoX</b></td><td>术语锁定 · 克隆音同传 · 一键通话套餐 · OBS 双语字幕</td><td>5090 或分机</td><td>「会议同传术语不翻车：美团永远 Meituan」</td></tr>
+    <tr><td><b>幻颜 FaceX</b></td><td>离线图/视频换脸 · 双人 face_map · 开播前发型定妆/试衣</td><td>4070+</td><td>「成片换脸 + 开播前 AI 定妆」</td></tr>
+  </table>
+
+  <div class="grid2">
+    <div>
+      <h2>按客户群开场白</h2>
+      <table>
+        <tr><th>客户群</th><th>我们的答案</th></tr>
+        <tr><td>出海直播</td><td>一场直播 = 克隆同传 + 换脸 + OBS 字幕</td></tr>
+        <tr><td>会议同传</td><td>术语锁定 + 状态条可见 + 探针值守</td></tr>
+        <tr><td>政企/教育</td><td>本地全栈 + C2PA 可验真 + 安全闸门</td></tr>
+        <tr><td>MCN</td><td>双人播客各换各脸（2 槽自动对位）</td></tr>
+        <tr><td>电商</td><td>开播前 30s 定妆照（发型/试衣离线）</td></tr>
+      </table>
+    </div>
+    <div>
+      <h2>定价锚点（三档）</h2>
+      <table>
+        <tr><th>档</th><th>包含</th><th>硬件</th></tr>
+        <tr><td><b>Standard</b></td><td>LiveX 720p 高清脸 + Fish 克隆 + 单脸</td><td>4070/4080</td></tr>
+        <tr><td><b>Pro</b></td><td>+ 同传 + OBS 字幕 + 虚拟背景 + 双人</td><td>4090/5090</td></tr>
+        <tr><td><b>Enterprise</b></td><td>+ 分机拓扑 + S2S 可选 + 无水印授权档</td><td>5090+分机</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <h2>信任与合规（政企必讲）</h2>
+  <ul>
+    <li><b>C2PA 标准嵌入 + Ed25519 可对外验真</b>：产出物可被第三方验证「AI 生成 + 谁生成」。</li>
+    <li><b>不可见水印 + AI 生成标识默认开</b>（仅 pro 授权档可关，合同写清）；克隆伦理校验 + 安全闸门。</li>
+    <li><b>离线授权</b>：机器指纹 + 有效期 + 档位，只降级不崩溃；<b>开播前 3 秒设备体检</b>，红灯先修再播。</li>
+  </ul>
+
+  <h2>实测指标速查（引用区间，勿编单点数）</h2>
+  <table>
+    <tr><th>指标</th><th>数值（实测硬件）</th><th>指标</th><th>数值（实测硬件）</th></tr>
+    <tr><td>换脸单帧 hd+GFPGAN</td><td>~230–260ms（4070·裁剪）</td><td>口型渲染</td><td>~17–25ms/帧（5090）</td></tr>
+    <tr><td>3 路并发聚合</td><td>GFPGAN 8.8fps / CodeFormer 5.5fps</td><td>对话首音(缓存)</td><td>~150ms（5090）</td></tr>
+    <tr><td>脸区清晰度(裁剪通道)</td><td>4.5×（同源 A/B）</td><td>虚拟背景抠像</td><td>~5ms/帧@720p（CPU）</td></tr>
+    <tr><td>1080p 超清档并发均值</td><td>~323ms &lt; 650ms 预算</td><td>克隆零样本</td><td>秒级（几十秒样本）</td></tr>
+  </table>
+
+  <p class="foot"><span class="no">不承诺</span>：入门卡跑实时高清数字人 · 直播中实时换发型/试衣 · &gt;2 人同框各换各脸 · 「完全无痕」（默认带合规水印）。
+  本页仅讲「合规可溯源」叙事，与其他产品线叙事物理分页。打印：浏览器 Ctrl+P → A4 单页。</p>
+</div>
+</body>
+</html>

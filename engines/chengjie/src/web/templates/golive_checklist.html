@@ -1,0 +1,72 @@
+{% extends "workspace_base.html" %}
+{% block title %}{{ (i18n or {}).get('base.nav.golive', "上线自检") }}{% endblock %}
+{% block head %}
+<style>
+  .gl-wrap{height:100%;overflow-y:auto;background:var(--tk-bg);padding:18px;max-width:760px;margin:0 auto;}
+  .gl-back{font-size:12px;color:var(--tk-brand);text-decoration:none;}
+  .gl-light{display:flex;align-items:center;gap:16px;background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:16px;padding:22px 24px;margin:12px 0 18px;}
+  .gl-dot{width:54px;height:54px;border-radius:50%;flex-shrink:0;box-shadow:0 0 0 6px rgba(0,0,0,.06);}
+  .gl-dot.green{background:var(--tk-emerald);} .gl-dot.yellow{background:var(--tk-amber);} .gl-dot.red{background:var(--tk-danger);}
+  .gl-light h2{margin:0 0 4px;font-size:20px;color:var(--tk-text);}
+  .gl-light p{margin:0;font-size:13px;color:var(--tk-text-muted);}
+  .gl-sum{margin-left:auto;text-align:right;font-size:12px;color:var(--tk-text-muted);}
+  .gl-sum b{font-size:18px;}
+  .gl-item{display:flex;align-items:center;gap:14px;background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:12px;padding:14px 18px;margin-bottom:10px;}
+  .gl-ico{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:#fff;flex-shrink:0;}
+  .gl-ico.ok{background:var(--tk-emerald);} .gl-ico.warn{background:var(--tk-amber);} .gl-ico.fail{background:var(--tk-danger);}
+  .gl-body{flex:1;min-width:0;}
+  .gl-name{font-size:14px;font-weight:600;color:var(--tk-text);}
+  .gl-detail{font-size:12px;color:var(--tk-text-muted);margin-top:2px;}
+  .gl-act{font-size:12px;font-weight:600;color:var(--tk-brand);text-decoration:none;border:1px solid rgba(59,130,246,.35);border-radius:8px;padding:6px 12px;background:rgba(59,130,246,.12);white-space:nowrap;}
+  .gl-act:hover{background:rgba(59,130,246,.2);}
+  .gl-refresh{font-size:12px;color:var(--tk-brand);cursor:pointer;border:1px solid var(--tk-border);border-radius:8px;padding:6px 12px;background:var(--tk-surface);}
+  .gl-refresh:hover{background:var(--tk-surface-2);}
+</style>
+{% endblock %}
+{% block content %}
+<div class="gl-wrap">
+  <a class="gl-back" href="/workspace/setup">← {{ (i18n or {}).get('ks_s002', "返回接入向导") }}</a>
+  <div class="gl-light" id="gl-light">
+    <div class="gl-dot" id="gl-dot"></div>
+    <div><h2 id="gl-title">{{ (i18n or {}).get('kb_js_105', "检测中…") }}</h2><p id="gl-sub"></p></div>
+    <div class="gl-sum" id="gl-sum"></div>
+  </div>
+  <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
+    <span class="gl-refresh" onclick="load()">↻ {{ (i18n or {}).get('db_s050', "重新检测") }}</span>
+  </div>
+  <div id="gl-list"></div>
+</div>
+
+<script>
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+
+var LIGHT={green:{t:'✅ '+window.T('gl_js_001'),s:window.T('gl_js_002')},
+           yellow:{t:'⚠ '+window.T('gl_js_003'),s:window.T('gl_js_004')},
+           red:{t:'⛔ '+window.T('gl_js_005'),s:window.T('gl_js_006')}};
+
+function icon(st){ return st==='ok'?'<div class="gl-ico ok">✓</div>'
+  :(st==='warn'?'<div class="gl-ico warn">!</div>':'<div class="gl-ico fail">✕</div>'); }
+
+function render(d){
+  var light=d.light||'red', meta=LIGHT[light]||LIGHT.red;
+  document.getElementById('gl-dot').className='gl-dot '+light;
+  document.getElementById('gl-title').textContent=meta.t;
+  document.getElementById('gl-sub').textContent=meta.s;
+  var s=d.summary||{};
+  document.getElementById('gl-sum').innerHTML=window.Tf('gl_tf_sum',{ok:s.ok||0,warn:s.warn||0,fail:s.fail||0});
+  document.getElementById('gl-list').innerHTML=(d.checks||[]).map(function(c){
+    var act=c.action_url?'<a class="gl-act" href="'+esc(c.action_url)+'">'+esc(c.action_label||window.T('gl_js_action'))+'</a>':'';
+    return '<div class="gl-item">'+icon(c.status)
+      +'<div class="gl-body"><div class="gl-name">'+esc(c.name)+'</div>'
+      +'<div class="gl-detail">'+esc(c.detail)+'</div></div>'+act+'</div>';
+  }).join('');
+}
+
+function load(){
+  fetch('/api/setup/checklist').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.ok) return; render(d);
+  }).catch(function(){});
+}
+load();
+</script>
+{% endblock %}

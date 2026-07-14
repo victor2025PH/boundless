@@ -1,0 +1,15 @@
+{
+  "__doc__": "通知配置模板。真实 notify_config.json 的 history 数组会累积含真实设备序列号/内网 IP 的告警记录(PII)，已被 .gitignore 忽略、不入库。复制为 notify_config.json 后填 webhook_url。",
+  "webhook_url": "",
+  "webhook_type": "generic",
+  "enabled_events": [
+    "device.disconnected",
+    "task.failed",
+    "watchdog.captcha_detected"
+  ],
+  "quiet_hours": {
+    "start": "23:00",
+    "end": "07:00"
+  },
+  "history": []
+}

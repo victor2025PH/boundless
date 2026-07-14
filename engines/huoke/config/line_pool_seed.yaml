@@ -1,0 +1,19 @@
+# LINE pool 启动时的默认账号 (仅空池时注入, 已有账号不会被覆盖).
+# 运营可在 /static/line-pool.html 增改/停用, 无需改本文件.
+# 若要重新触发 seed: 先在 UI 里删光所有账号 + 重启服务.
+
+accounts:
+  - line_id: "along2026"
+    region: "jp"
+    persona_key: "jp_female_midlife"
+    daily_cap: 20
+    status: "active"
+    notes: "Phase 11 默认 LINE 引流账号 (seed). Messenger 引流话术使用."
+
+  # 示例 — 可按需增加更多账号 (重启前生效)
+  # - line_id: "@secondary2026"
+  #   region: "jp"
+  #   persona_key: ""
+  #   owner_device_id: "8DWOF6CYY5R8YHX8"
+  #   daily_cap: 15
+  #   notes: "备用账号, 绑定主控机"

@@ -1,0 +1,71 @@
+# 智能社群互动引擎配置
+# 2026-05-12 v1: 仅 B 类 (点赞+加友), A 类评论待 Phase 3 开放
+
+default:
+  # ─── 基础节奏 ───
+  posts_per_session: 10         # 每次进群浏览帖子数
+  max_scrolls: 15               # 最大滚屏次数
+  min_read_time_sec: 2          # 每条帖子最少阅读时间
+  max_read_time_sec: 8          # 最多阅读时间
+  session_max_duration_sec: 1800 # 单次会话最长 30 分钟
+
+  # ─── 目标国家 ───
+  target_country: JP            # 名字评分的目标国家
+
+  # ─── 分层阈值 ───
+  min_l1_score: 20              # L1 名字评分门槛 (低于此直接判 C 类)
+  tier_a_threshold: 60          # 综合得分 >= 60 为 A 类
+  tier_b_threshold: 30          # 综合得分 >= 30 为 B 类
+
+  # ─── 互动决策 ───
+  like_probability_a: 1.0
+  like_probability_b: 0.8
+  enable_comment_tier_a: false  # v1 关闭, Phase 3 开放
+  enable_comment_tier_b: false
+  add_friend_tier_a: true
+  add_friend_tier_b: true
+
+  # ─── Profile 停留 ───
+  profile_dwell_sec: [10, 20]   # B 类在 profile 停留秒数
+  profile_dwell_sec_a: [30, 60] # A 类在 profile 停留秒数
+
+  # ─── 加友策略 ───
+  delay_between_adds_sec: [30, 90]
+  max_friends_per_session: 6
+
+  # ─── L1 过滤 ───
+  min_l1_score: 20
+
+  # ─── 内容评分 ───
+  use_content_scoring: true
+
+  # ─── 回复 (Phase 3) ───
+  reply_language: "ja"
+  reply_style: "sympathetic"
+  reply_max_chars: 80
+  max_comments_per_session: 0   # v1: 0 = 不评论
+
+  # ─── 好友附言模板 ───
+  friend_note_templates:
+    - "こんにちは🌸{group_name}で見かけました。ぜひお友達になりたいです☺️"
+    - "はじめまして😊同じグループにいたので、友達申請させていただきました🌿"
+    - "グループで投稿を拝見しました✨ぜひつながりたいです🌸"
+
+  # ─── 降级策略 ───
+  consecutive_c_before_switch_group: 5  # 连续 5 个 C 类 → 换群
+  fallback_to_members_list: true        # 全群低质量 → 降级 Members 路径
+
+  # ─── 跨设备错峰 ───
+  cross_device_cooldown_hours: 4
+
+  # ─── 安全 ───
+  max_likes_per_hour: 15
+  max_profile_visits_per_hour: 12
+  risk_cooldown_sec: 600
+
+jp_female_midlife:
+  min_l1_score: 25
+  reply_language: "ja"
+  posts_per_session: 10
+  max_friends_per_session: 6
+  profile_dwell_sec: [12, 25]

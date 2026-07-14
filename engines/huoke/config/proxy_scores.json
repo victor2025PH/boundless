@@ -1,0 +1,14 @@
+{
+  "px-A": {
+    "success": 2,
+    "fail": 1,
+    "total_latency_ms": 220.0,
+    "last_test": 1775879270.4299538
+  },
+  "px-Z": {
+    "success": 3,
+    "fail": 0,
+    "total_latency_ms": 165.0,
+    "last_test": 1775879270.4321752
+  }
+}

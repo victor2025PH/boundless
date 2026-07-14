@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>观众墙 · 直播问答</title>
+<link rel="stylesheet" href="/static/brand.css"/>
+<script src="/static/brand.js"></script>
+<style>
+  :root{
+    --accent:var(--bd-acc,#5b8cff); --accent-rgb:var(--bd-acc-rgb,91 140 255); --accent2:#7af0c8; --ink:#eaf1fb; --mut:#9fb0cc;
+    --card:rgba(20,27,45,.82); --line:rgb(var(--accent-rgb) / .22);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;color:var(--ink)}
+  body{background:radial-gradient(1200px 700px at 75% -10%,rgb(var(--accent-rgb) / .16) 0,transparent 60%),
+       linear-gradient(160deg,#0a0f1c 0%,#0d1424 55%,#0a1120 100%);overflow:hidden}
+  body.transparent{background:transparent}
+  .wrap{height:100vh;display:flex;flex-direction:column;padding:34px 40px;gap:22px}
+  /* header */
+  .top{display:flex;align-items:center;gap:16px;flex:0 0 auto}
+  .dot{width:13px;height:13px;border-radius:50%;background:#ff5b6e;box-shadow:0 0 14px #ff5b6e;animation:pulse 1.6s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .title{font-size:30px;font-weight:800;letter-spacing:1px}
+  .title .who{color:var(--accent2)}
+  .badges{margin-left:auto;display:flex;gap:12px;align-items:center}
+  .badge{font-size:17px;font-weight:700;padding:8px 16px;border-radius:999px;background:var(--card);
+         border:1px solid var(--line);color:var(--mut)}
+  .badge b{color:var(--ink)}
+  .badge.on{color:#0a1120;background:linear-gradient(90deg,var(--accent2),#54d0ff);border:0}
+  /* main grid */
+  .grid{flex:1 1 auto;display:grid;grid-template-columns:1.9fr 1fr;gap:24px;min-height:0}
+  .hero{background:var(--card);border:1px solid var(--line);border-radius:26px;padding:40px 44px;
+        display:flex;flex-direction:column;justify-content:center;gap:30px;position:relative;overflow:hidden}
+  .hero::before{content:"";position:absolute;inset:0;background:
+    radial-gradient(600px 300px at 110% -20%,rgb(var(--accent-rgb) / .18),transparent 70%);pointer-events:none}
+  .qrow{display:flex;align-items:flex-start;gap:18px}
+  .ava{flex:0 0 auto;width:62px;height:62px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+       font-size:26px;font-weight:800;color:#0a1120;background:linear-gradient(135deg,var(--accent),#9b6bff)}
+  .qmeta{font-size:19px;color:var(--mut);margin-bottom:6px}
+  .qmeta b{color:var(--ink)}
+  .qtext{font-size:34px;font-weight:700;line-height:1.32;word-break:break-word}
+  .ansbox{border-top:1px dashed var(--line);padding-top:26px}
+  .anslabel{font-size:17px;color:var(--accent2);font-weight:800;letter-spacing:2px;margin-bottom:12px;display:flex;align-items:center;gap:10px}
+  .anslabel .eq{display:inline-flex;gap:4px}
+  .eq i{width:4px;height:15px;background:var(--accent2);border-radius:2px;animation:eq 1s infinite ease-in-out}
+  .eq i:nth-child(2){animation-delay:.18s}.eq i:nth-child(3){animation-delay:.36s}.eq i:nth-child(4){animation-delay:.12s}
+  @keyframes eq{0%,100%{transform:scaleY(.4)}50%{transform:scaleY(1)}}
+  .caption{font-size:42px;font-weight:800;line-height:1.34;letter-spacing:.5px;
+           background:linear-gradient(90deg,#fff,#dbe6ff);-webkit-background-clip:text;background-clip:text;color:transparent;
+           min-height:1.3em;transition:opacity .2s}
+  .idle{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;height:100%;color:var(--mut)}
+  .idle .big{font-size:40px;font-weight:800;color:var(--ink)}
+  .idle .qr{font-size:21px}
+  .idle .qr b{color:var(--accent2)}
+  /* queue */
+  .side{display:flex;flex-direction:column;gap:16px;min-height:0}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:22px 24px;display:flex;flex-direction:column;min-height:0}
+  .panel h3{font-size:19px;color:var(--mut);font-weight:800;letter-spacing:1px;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+  .panel h3 .n{margin-left:auto;color:var(--accent);font-size:18px}
+  .qlist{display:flex;flex-direction:column;gap:11px;overflow:hidden}
+  .qi{background:rgba(12,19,34,.7);border:1px solid rgb(var(--accent-rgb) / .14);border-radius:14px;padding:13px 15px;
+      animation:slidein .35s ease}
+  @keyframes slidein{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  .qi .nm{font-size:15px;color:var(--accent);font-weight:700;margin-bottom:4px}
+  .qi .tx{font-size:20px;color:var(--ink);line-height:1.3;
+          display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .empty{color:var(--mut);font-size:18px;text-align:center;padding:18px 0;opacity:.7}
+  .ansli .tx{color:var(--mut)}
+  .foot{flex:0 0 auto;text-align:center;color:var(--mut);font-size:15px;opacity:.6}
+  .off{height:100vh;display:flex;align-items:center;justify-content:center;font-size:34px;color:var(--mut)}
+  /* P14-5 断连可感知：实时通道断开→轮询兜底期间的常驻贴片 + 恢复瞬时 toast */
+  #reChip{display:none;position:fixed;top:14px;right:16px;z-index:99;align-items:center;gap:8px;
+    font-size:15px;font-weight:700;color:#fde68a;background:rgba(60,48,16,.92);
+    border:1px solid rgba(245,158,11,.5);border-radius:999px;padding:7px 16px;
+    box-shadow:0 6px 24px rgba(0,0,0,.4)}
+  #reChip .rdot{width:9px;height:9px;border-radius:50%;background:#f59e0b;animation:pulse 1.2s infinite}
+  #reToast{display:none;position:fixed;top:14px;right:16px;z-index:99;font-size:15px;font-weight:700;
+    color:#a7f3d0;background:rgba(6,42,30,.92);border:1px solid rgba(52,211,153,.5);
+    border-radius:999px;padding:7px 16px;box-shadow:0 6px 24px rgba(0,0,0,.4)}
+</style>
+</head>
+<body>
+<div id="app" class="wrap" style="display:none">
+  <div class="top">
+    <span class="dot"></span>
+    <span class="title">直播问答 · <span class="who" id="who">数字人</span></span>
+    <div class="badges">
+      <span class="badge" id="bAuto">手动应答</span>
+      <span class="badge">排队 <b id="bPend">0</b></span>
+      <span class="badge">已答 <b id="bAns">0</b></span>
+    </div>
+  </div>
+  <div class="grid">
+    <div class="hero" id="hero"></div>
+    <div class="side">
+      <div class="panel" style="flex:2 1 0">
+        <h3>排队中 <span class="n" id="qN">0</span></h3>
+        <div class="qlist" id="qlist"></div>
+      </div>
+      <div class="panel" style="flex:1 1 0">
+        <h3>刚刚回答</h3>
+        <div class="qlist" id="alist"></div>
+      </div>
+    </div>
+  </div>
+  <div class="foot">扫码提问，你的问题可能被 TA 当场回答 · /ask</div>
+</div>
+<div id="off" class="off" style="display:none">观众提问未开启</div>
+<div id="reChip"><span class="rdot"></span>实时通道重连中 · 已切轮询兜底</div>
+<div id="reToast">✓ 实时通道已恢复</div>
+
+<script>
+const params = new URLSearchParams(location.search);
+if(params.get('transparent')==='1') document.body.classList.add('transparent');
+const POLL = Math.max(600, parseInt(params.get('poll')||'1200',10));
+const $ = id => document.getElementById(id);
+const esc = s => (s||'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+const initial = s => (s||'观').trim().charAt(0).toUpperCase();
+
+let lastNowKey = '';
+function renderHero(now){
+  const h = $('hero');
+  if(!now){
+    h.innerHTML = '<div class="idle"><div class="big">等待提问…</div>'+
+      '<div class="qr">手机扫码或访问 <b>/ask</b> 向 TA 提问</div></div>';
+    lastNowKey=''; return;
+  }
+  const key = now.text+'|'+now.name+'|'+now.manual;
+  if(key!==lastNowKey){
+    lastNowKey=key;
+    h.innerHTML =
+      '<div class="qrow"><div class="ava">'+esc(initial(now.name))+'</div>'+
+        '<div><div class="qmeta"><b>'+esc(now.name||'观众')+'</b> 问</div>'+
+        '<div class="qtext">'+esc(now.text)+'</div></div></div>'+
+      '<div class="ansbox"><div class="anslabel">'+
+        '<span class="eq"><i></i><i></i><i></i><i></i></span> TA 正在回答</div>'+
+        '<div class="caption" id="cap"></div></div>';
+  }
+  setCaption(now.caption || (now.manual ? '主播作答中…' : '正在思考…'));
+}
+// 逐字打字机：字幕变化时从当前位置增量"打"到目标；非续写则快速重打
+let _capTarget='', _capShown='', _capTimer=null;
+function setCaption(txt){
+  if(txt===_capTarget) return;
+  _capTarget=txt;
+  if(!txt.startsWith(_capShown)) _capShown='';   // 换了一句→从头打
+  if(_capTimer) return;
+  _capTimer=setInterval(()=>{
+    const cap=$('cap'); if(!cap){ clearInterval(_capTimer);_capTimer=null;return; }
+    if(_capShown.length<_capTarget.length){
+      _capShown=_capTarget.slice(0,_capShown.length+1);
+      cap.textContent=_capShown;
+    } else { clearInterval(_capTimer); _capTimer=null; }
+  },28);
+}
+function renderList(el, items, answered){
+  if(!items.length){ el.innerHTML='<div class="empty">'+(answered?'还没有回答':'暂无排队提问')+'</div>'; return; }
+  el.innerHTML = items.map(q=>(
+    '<div class="qi'+(answered?' ansli':'')+'"><div class="nm">'+esc(q.name||'观众')+
+      (q.likes?'<span style="float:right;color:#ff6b8b;font-weight:800">♥ '+q.likes+'</span>':'')+'</div>'+
+    '<div class="tx">'+esc(q.text)+'</div></div>'
+  )).join('');
+}
+function applyState(d){
+  if(!d) return;
+  if(d.enabled===false){ $('app').style.display='none'; $('off').style.display='flex'; return; }
+  $('off').style.display='none'; $('app').style.display='flex';
+  $('who').textContent = d.profile || '数字人';
+  const st = d.stats||{};
+  $('bPend').textContent = st.pending||0;
+  $('bAns').textContent = st.answered||0;
+  $('qN').textContent = (d.pending||[]).length;
+  const ba=$('bAuto');
+  if(st.auto_on){ ba.textContent='自动应答中'; ba.classList.add('on'); }
+  else{ ba.textContent='主播应答'; ba.classList.remove('on'); }
+  renderHero(d.now);
+  renderList($('qlist'), d.pending||[], false);
+  renderList($('alist'), d.answered||[], true);
+}
+async function poll(){
+  try{ applyState(await (await fetch('/api/wall/state?pending=7&answered=4',{cache:'no-store'})).json()); }catch(e){}
+}
+// 优先 WebSocket 实时推送；断线自动回退轮询，恢复后重连。
+// P14-5 断连可感知：曾连上过的实时通道掉线 → 常驻「重连中」贴片（轮询兜底仍在刷内容，
+// 观众看到的是降级不是死机）；重连成功 → 瞬时恢复 toast。uivr=1 抑制（像素回归确定性）。
+let _ws=null, _pollTimer=null, _retry=null, _wsWasUp=false;
+const _UIVR = params.get('uivr')==='1';
+function _reChip(on){ if(_UIVR) return; $('reChip').style.display=on?'flex':'none'; }
+function _reOk(){ if(_UIVR) return; const t=$('reToast'); t.style.display='block';
+  setTimeout(()=>{ t.style.display='none'; }, 2600); }
+function startPoll(){ if(!_pollTimer){ poll(); _pollTimer=setInterval(poll, POLL); } }
+function stopPoll(){ if(_pollTimer){ clearInterval(_pollTimer); _pollTimer=null; } }
+function connectWS(){
+  try{
+    const proto = location.protocol==='https:'?'wss':'ws';
+    _ws = new WebSocket(proto+'://'+location.host+'/ws/wall');
+    _ws.onopen = ()=>{ stopPoll(); if(_wsWasUp) _reOk(); _wsWasUp=true; _reChip(false); };
+    _ws.onmessage = e=>{ try{ applyState(JSON.parse(e.data)); }catch(x){} };
+    _ws.onclose = ()=>{ _ws=null; startPoll(); if(_wsWasUp) _reChip(true); scheduleReconnect(); };
+    _ws.onerror = ()=>{ try{_ws.close();}catch(x){} };
+  }catch(e){ startPoll(); scheduleReconnect(); }
+}
+function scheduleReconnect(){ if(_retry) return; _retry=setTimeout(()=>{ _retry=null; if(!_ws) connectWS(); }, 3000); }
+poll();            // 首帧立即出
+connectWS();       // 再切实时
+</script>
+</body>
+</html>

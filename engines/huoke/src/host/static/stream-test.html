@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Stream Test</title></head>
+<body style="background:#111;color:#0f0;font:14px monospace;padding:20px">
+<h2>实时流诊断页面</h2>
+<div>
+  <label>设备ID: <input id="did" value="" style="width:300px;padding:4px"></label>
+  <label style="margin-left:10px"><input type="checkbox" id="cluster"> 集群代理(/cluster)</label>
+  <button onclick="startTest()" style="padding:6px 16px">测试流</button>
+  <button onclick="stopTest()" style="padding:6px 16px">停止</button>
+</div>
+<pre id="log" style="margin-top:10px;max-height:300px;overflow:auto;background:#000;padding:10px;border:1px solid #333"></pre>
+<canvas id="cvs" width="360" height="800" style="margin-top:10px;border:1px solid #333;background:#000"></canvas>
+
+<script>
+let ws=null, decoder=null, pending=0, frames=0;
+const _wcOk = typeof VideoDecoder !== 'undefined';
+const log=document.getElementById('log');
+const cvs=document.getElementById('cvs');
+const ctx=cvs.getContext('2d');
+
+function addLog(msg){ log.textContent+=msg+'\n'; log.scrollTop=log.scrollHeight; }
+
+function stopTest(){
+  if(ws){try{ws.close();}catch(e){}} ws=null;
+  if(decoder){try{decoder.close();}catch(e){}} decoder=null;
+  addLog('-- stopped --');
+}
+
+function startTest(){
+  stopTest();
+  frames=0; pending=0;
+  const did=document.getElementById('did').value.trim();
+  if(!did){addLog('ERROR: 输入设备ID'); return;}
+
+  // WebCodecs check
+  if(typeof VideoDecoder==='undefined'){
+    addLog('ERROR: 浏览器不支持 WebCodecs (VideoDecoder)');
+    addLog('请使用 Chrome 94+ 或 Edge 94+');
+    return;
+  }
+  addLog('WebCodecs: OK');
+
+  // Init decoder
+  let sps=null, pps=null, configured=false;
+  decoder = new VideoDecoder({
+    output: frame => {
+      pending--;
+      if(cvs.width!==frame.displayWidth||cvs.height!==frame.displayHeight){
+        cvs.width=frame.displayWidth; cvs.height=frame.displayHeight;
+        addLog('Canvas resize: '+frame.displayWidth+'x'+frame.displayHeight);
+      }
+      ctx.drawImage(frame,0,0);
+      frame.close();
+      frames++;
+      if(frames<=3||frames%30===0) addLog('Decoded frame #'+frames);
+    },
+    error: e => { pending=0; addLog('DECODE ERROR: '+e.message); }
+  });
+  addLog('VideoDecoder created');
+
+  // Connect WS — 自动检测是否需要集群前缀
+  const host=location.host;
+  const proto=location.protocol==='https:'?'wss:':'ws:';
+  const isCluster=document.getElementById('cluster').checked;
+  const prefix=isCluster?'/cluster':'';
+  const url=proto+'//'+host+prefix+'/devices/'+did+'/stream/ws';
+  addLog('Connecting: '+url);
+  addLog('Secure context: '+window.isSecureContext+' | WebCodecs: '+_wcOk+' | Cluster: '+isCluster);
+
+  ws=new WebSocket(url);
+  ws.binaryType='arraybuffer';
+
+  ws.onopen=()=>{ addLog('WS OPEN'); };
+  ws.onerror=()=>{ addLog('WS ERROR'); };
+  ws.onclose=e=>{ addLog('WS CLOSE code='+e.code+' reason='+e.reason); };
+
+  ws.onmessage=ev=>{
+    if(typeof ev.data==='string'){
+      addLog('TEXT: '+ev.data.substring(0,200));
+      try{
+        const cfg=JSON.parse(ev.data);
+        if(cfg.error) addLog('SERVER ERROR: '+cfg.error);
+        if(cfg.type==='config') addLog('CONFIG OK: '+cfg.width+'x'+cfg.height+' ctrl='+cfg.has_control);
+      }catch(e){}
+    }else{
+      const buf=ev.data;
+      if(buf.byteLength<12){addLog('SHORT FRAME: '+buf.byteLength+'b'); return;}
+
+      const dv=new DataView(buf);
+      const ts=((dv.getUint32(0)&0x3FFFFFFF)*4294967296+dv.getUint32(4));
+      const h264=new Uint8Array(buf,12);
+
+      if(frames<3) addLog('BIN: total='+buf.byteLength+'b h264='+h264.length+'b');
+
+      // Parse NALs
+      const nals=splitNals(h264);
+      let isKey=false;
+      const videoNals=[];
+      for(const n of nals){
+        if(!n.length) continue;
+        const t=n[0]&0x1f;
+        if(t===7){sps=n; addLog('SPS found ('+n.length+'b)');}
+        else if(t===8){pps=n; addLog('PPS found ('+n.length+'b)');}
+        else if(t===6||t===9){addLog('Skip SEI/AUD NAL type='+t);}
+        else{
+          if(t===5){isKey=true; addLog('IDR keyframe found!');}
+          videoNals.push(n);
+        }
+      }
+
+      // Configure decoder with SPS
+      if(sps&&pps&&!configured){
+        const p=sps[1],c=sps[2],l=sps[3];
+        const codec='avc1.'+p.toString(16).padStart(2,'0')+c.toString(16).padStart(2,'0')+l.toString(16).padStart(2,'0');
+        addLog('Configuring decoder: '+codec);
+        try{
+          decoder.configure({codec:codec, optimizeForLatency:true});
+          configured=true;
+          addLog('Decoder configured OK');
+        }catch(e){addLog('CONFIGURE FAILED: '+e.message);}
+      }
+
+      if(!videoNals.length) return;
+      if(!configured){addLog('Skipping frame (not configured yet)'); return;}
+      if(pending>3&&!isKey) return;
+
+      // Build AVCC
+      const parts=[];
+      for(const n of videoNals){
+        const len=new Uint8Array(4);
+        len[0]=(n.length>>24)&0xff; len[1]=(n.length>>16)&0xff;
+        len[2]=(n.length>>8)&0xff; len[3]=n.length&0xff;
+        parts.push(len,n);
+      }
+      const total=parts.reduce((s,p)=>s+p.length,0);
+      const avcc=new Uint8Array(total);
+      let off=0;
+      for(const p of parts){avcc.set(p,off);off+=p.length;}
+
+      try{
+        decoder.decode(new EncodedVideoChunk({type:isKey?'key':'delta',timestamp:ts,data:avcc}));
+        pending++;
+      }catch(e){addLog('DECODE THROW: '+e.message);}
+    }
+  };
+}
+
+function splitNals(data){
+  const nals=[];
+  let start=-1;
+  for(let i=0;i<data.length-3;i++){
+    if(data[i]===0&&data[i+1]===0){
+      if(data[i+2]===1){
+        if(start>=0) nals.push(data.slice(start,i));
+        start=i+3; i+=2;
+      }else if(data[i+2]===0&&i+3<data.length&&data[i+3]===1){
+        if(start>=0) nals.push(data.slice(start,i));
+        start=i+4; i+=3;
+      }
+    }
+  }
+  if(start>=0&&start<data.length) nals.push(data.slice(start));
+  return nals;
+}
+
+// 自动填入第一个设备（先试本地，再试集群）
+addLog('isSecureContext='+window.isSecureContext+' WebCodecs='+_wcOk);
+fetch('/devices').then(r=>r.json()).then(devs=>{
+  const online=devs.filter(d=>d.status==='connected');
+  if(online.length){
+    document.getElementById('did').value=online[0].device_id;
+    addLog('Local: '+online.length+' online. First: '+online[0].device_id.substring(0,12));
+  }else{
+    addLog('No local devices ('+devs.length+' total). Trying /cluster/devices...');
+    fetch('/cluster/devices').then(r=>r.json()).then(cd=>{
+      const cdevs=Array.isArray(cd)?cd:(cd.devices||[]);
+      const conline=cdevs.filter(d=>d.status==='connected');
+      if(conline.length){
+        document.getElementById('did').value=conline[0].device_id;
+        document.getElementById('cluster').checked=true;
+        addLog('Cluster: '+conline.length+' online. First: '+conline[0].device_id.substring(0,12)+' (auto-checked cluster)');
+      }else{
+        addLog('No cluster devices either');
+      }
+    }).catch(e=>addLog('Cluster fetch failed: '+e));
+  }
+}).catch(e=>addLog('Failed to load devices: '+e));
+</script>
+</body></html>

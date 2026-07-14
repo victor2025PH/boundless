@@ -1,0 +1,84 @@
+# Preset: TikTok -> Telegram 引流
+# 一键执行: POST /workflows/run {"workflow": "preset_tiktok_telegram_funnel"}
+# 适用: TikTok 上找到目标用户 -> DM 引导 -> Telegram 自动接住
+
+name: preset_tiktok_telegram_funnel
+description: |
+  TikTok->Telegram 引流漏斗。先在 TikTok 上浏览养号，
+  检查回关用户并发送 AI 改写的引流 DM，然后切换到 Telegram
+  检查新消息并自动回复。全链路自动化。
+
+variables:
+  target_country: italy
+  max_follows: 8
+  max_chats: 5
+  telegram_check_count: 10
+  dm_template: "Hey! Love your content. I share more tips on my Telegram, check it out: {tg_link}"
+  tg_link: "@openclaw_channel"
+
+steps:
+  # Phase 1: TikTok 养号
+  - id: tk_warmup
+    action: tiktok.browse_feed
+    params:
+      video_count: 10
+      like_probability: 0.3
+      target_country: "{variables.target_country}"
+    on_error: continue
+    retry: 1
+
+  - id: tk_pause_1
+    action: util.wait
+    params:
+      seconds: 5
+    depends_on: [tk_warmup]
+
+  # Phase 2: TikTok 智能关注
+  - id: tk_follow
+    action: tiktok.smart_follow
+    params:
+      max_follows: "{variables.max_follows}"
+    depends_on: [tk_pause_1]
+    on_error: continue
+
+  - id: tk_pause_2
+    action: util.wait
+    params:
+      seconds: 8
+    depends_on: [tk_follow]
+
+  # Phase 3: TikTok 回关检测 + DM 引流
+  - id: tk_chat_followbacks
+    action: tiktok.check_and_chat_followbacks
+    params:
+      max_chats: "{variables.max_chats}"
+    depends_on: [tk_pause_2]
+    on_error: continue
+
+  - id: tk_pause_3
+    action: util.wait
+    params:
+      seconds: 10
+    depends_on: [tk_chat_followbacks]
+
+  # Phase 4: Telegram 接住流量
+  - id: tg_check_messages
+    action: telegram.check_new_messages
+    params:
+      max_conversations: "{variables.telegram_check_count}"
+    depends_on: [tk_pause_3]
+    on_error: continue
+
+  - id: tg_auto_reply
+    action: telegram.auto_reply_pending
+    params:
+      max_replies: 5
+    depends_on: [tg_check_messages]
+    on_error: continue
+    condition: "{steps.tg_check_messages.result.new_messages > 0}"
+
+  - id: done
+    action: util.log
+    params:
+      message: "TikTok->Telegram funnel cycle complete"
+    depends_on: [tg_auto_reply]

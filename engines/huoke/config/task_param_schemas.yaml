@@ -1,0 +1,230 @@
+# 任务参数模式 — 按应用/任务类型细分字段、默认值与边界，供归一化与 AI 精炼。
+# 与 executor 中 TargetProfile / tiktok 任务实际读取的 params 键对齐。
+version: 1
+options:
+  allow_unknown_keys: true
+
+apps:
+  tiktok:
+    tasks_by_prefix:
+      "tiktok_follow":
+        label: TikTok 关注与人群筛选
+        fields:
+          target_country:
+            type: string
+            default: italy
+            description: 目标国家代码 italy/usa/germany/france/spain 等
+          country:
+            type: string
+            default: ""
+          keyword:
+            type: string
+            default: ""
+          max_follows:
+            type: int
+            default: 20
+            min: 1
+            max: 500
+          count:
+            type: int
+            default: 0
+            min: 0
+            max: 500
+          gender:
+            type: string
+            default: ""
+            enum: ["", "male", "female"]
+          min_age:
+            type: int
+            default: 0
+            min: 0
+            max: 100
+          max_age:
+            type: int
+            default: 0
+            min: 0
+            max: 100
+          language:
+            type: string
+            default: italian
+          min_followers:
+            type: int
+            default: 0
+            min: 0
+          max_followers:
+            type: int
+            default: 0
+            min: 0
+          min_score:
+            type: float
+            default: 0.5
+            min: 0.0
+            max: 1.0
+          geo_filter:
+            type: bool
+            default: false
+          comment_warmup:
+            type: bool
+            default: false
+          seed_accounts:
+            type: string
+            default: ""
+
+      "tiktok_warmup":
+        label: TikTok 养号
+        fields:
+          duration_minutes:
+            type: int
+            default: 30
+            min: 1
+            max: 240
+          target_country:
+            type: string
+            default: italy
+          phase:
+            type: string
+            default: auto
+            enum: [auto, cold_start, interest_building, active]
+
+      "tiktok_check_inbox":
+        label: TikTok 收件箱
+        fields:
+          auto_reply:
+            type: bool
+            default: true
+          max_conversations:
+            type: int
+            default: 50
+            min: 1
+            max: 200
+          reply_with_ai:
+            type: bool
+            default: true
+
+      "tiktok_send_dm":
+        label: TikTok 发私信
+        fields:
+          recipient:
+            type: string
+            default: ""
+          message:
+            type: string
+            default: ""
+          target_country:
+            type: string
+            default: italy
+
+      "tiktok_browse_feed":
+        label: TikTok 刷视频
+        fields:
+          duration_minutes:
+            type: int
+            default: 15
+            min: 1
+            max: 120
+
+      "tiktok_live_engage":
+        label: TikTok 直播间互动
+        fields:
+          target_country:
+            type: string
+            default: italy
+            description: 目标国家
+          max_live_rooms:
+            type: int
+            default: 3
+            min: 1
+            max: 10
+            description: 最多进入几个直播间
+          comments_per_room:
+            type: int
+            default: 2
+            min: 1
+            max: 5
+            description: 每个直播间发几条评论
+          follow_active_viewers:
+            type: bool
+            default: true
+            description: 是否关注活跃观众
+          gender:
+            type: string
+            default: ""
+            enum: ["", "male", "female"]
+          min_age:
+            type: int
+            default: 0
+            min: 0
+            max: 100
+          max_age:
+            type: int
+            default: 0
+            min: 0
+            max: 100
+          min_followers:
+            type: int
+            default: 0
+            min: 0
+
+      "tiktok_comment_engage":
+        label: TikTok 评论区互动
+        fields:
+          target_country:
+            type: string
+            default: italy
+          keyword:
+            type: string
+            default: ""
+            description: 搜索关键词
+          max_videos:
+            type: int
+            default: 5
+            min: 1
+            max: 20
+            description: 最多互动几个视频
+          comments_per_video:
+            type: int
+            default: 3
+            min: 1
+            max: 5
+          gender:
+            type: string
+            default: ""
+            enum: ["", "male", "female"]
+          min_age:
+            type: int
+            default: 0
+            min: 0
+            max: 100
+          max_age:
+            type: int
+            default: 0
+            min: 0
+            max: 100
+
+      "tiktok_":
+        label: TikTok 通用回退
+        fields:
+          target_country:
+            type: string
+            default: italy
+
+  telegram:
+    tasks_by_prefix:
+      "telegram_":
+        label: Telegram 通用
+        fields:
+          chat_id:
+            type: string
+            default: ""
+          message:
+            type: string
+            default: ""
+
+  whatsapp:
+    tasks_by_prefix:
+      "whatsapp_":
+        label: WhatsApp 通用
+        fields:
+          message:
+            type: string
+            default: ""

@@ -1,0 +1,44 @@
+{
+  "project": "AvatarHub",
+  "version": "1.0",
+  "copied_files": 50,
+  "model_requirements": [
+    {
+      "name": "CosyVoice3",
+      "path": "CosyVoice/pretrained_models/Fun-CosyVoice3-0.5B",
+      "size": "~3GB"
+    },
+    {
+      "name": "GFPGAN",
+      "path": "GFPGANv1.4.pth",
+      "size": "~350MB"
+    },
+    {
+      "name": "RVC Models",
+      "path": "RVC/assets/weights/*.pth",
+      "size": "~500MB"
+    },
+    {
+      "name": "FaceFusion",
+      "path": "facefusion/.assets/models/",
+      "size": "~500MB"
+    },
+    {
+      "name": "MuseTalk",
+      "path": "MuseTalk/models/",
+      "size": "~1.5GB"
+    },
+    {
+      "name": "HairFastGAN",
+      "path": "HairFastGAN/pretrained_models/",
+      "size": "~1GB"
+    }
+  ],
+  "conda_envs": [
+    "facefusion",
+    "rvc",
+    "cosyvoice",
+    "musethepeak",
+    "gptsovits"
+  ]
+}

@@ -1,0 +1,52 @@
+# Platform compliance limits — loaded by ComplianceGuard
+# Modify these values to tune rate limiting per platform.
+
+telegram:
+  actions:
+    send_message:    { hourly: 25, daily: 150, cooldown_sec: 3 }
+    search_user:     { hourly: 20, daily: 100, cooldown_sec: 5 }
+    send_file:       { hourly: 10, daily: 50,  cooldown_sec: 8 }
+    forward_message: { hourly: 15, daily: 80,  cooldown_sec: 4 }
+    join_group:      { hourly: 5,  daily: 15,  cooldown_sec: 60 }
+    switch_account:  { hourly: 20, daily: 100, cooldown_sec: 2 }
+  daily_total: 500
+  hourly_total: 60
+
+linkedin:
+  actions:
+    send_message:       { hourly: 8,  daily: 30,  cooldown_sec: 30 }
+    send_connection:    { hourly: 6,  daily: 25,  cooldown_sec: 45 }
+    search_profile:     { hourly: 15, daily: 60,  cooldown_sec: 10 }
+    view_profile:       { hourly: 15, daily: 80,  cooldown_sec: 8 }
+    like_post:          { hourly: 10, daily: 40,  cooldown_sec: 15 }
+    comment_post:       { hourly: 5,  daily: 20,  cooldown_sec: 45 }
+    endorse_skill:      { hourly: 5,  daily: 15,  cooldown_sec: 30 }
+    post_update:        { hourly: 3,  daily: 5,   cooldown_sec: 120 }
+    accept_connections: { hourly: 15, daily: 50,  cooldown_sec: 5 }
+  daily_total: 100
+  hourly_total: 25
+
+whatsapp:
+  actions:
+    send_message:       { hourly: 18, daily: 80,  cooldown_sec: 5 }
+    send_media:         { hourly: 8,  daily: 30,  cooldown_sec: 12 }
+    send_group_message: { hourly: 10, daily: 40,  cooldown_sec: 10 }
+    search_contact:     { hourly: 15, daily: 60,  cooldown_sec: 5 }
+    post_status:        { hourly: 3,  daily: 10,  cooldown_sec: 60 }
+  daily_total: 200
+  hourly_total: 35
+
+tiktok:
+  actions:
+    browse_feed:     { hourly: 60, daily: 300, cooldown_sec: 0 }
+    like:            { hourly: 15, daily: 80,  cooldown_sec: 3 }
+    comment:         { hourly: 6,  daily: 30,  cooldown_sec: 30 }
+    follow:          { hourly: 8,  daily: 30,  cooldown_sec: 15 }
+    unfollow:        { hourly: 10, daily: 60,  cooldown_sec: 10 }
+    send_dm:         { hourly: 5,  daily: 20,  cooldown_sec: 60 }
+    search:          { hourly: 10, daily: 50,  cooldown_sec: 5 }
+    favorite:        { hourly: 10, daily: 50,  cooldown_sec: 5 }
+    share:           { hourly: 5,  daily: 20,  cooldown_sec: 15 }
+    view_profile:    { hourly: 15, daily: 80,  cooldown_sec: 5 }
+  daily_total: 350
+  hourly_total: 50

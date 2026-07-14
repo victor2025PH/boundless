@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>交付自检 · 无界科技 BOUNDLESS</title>
+<link rel="stylesheet" href="/static/brand.css"/>
+<script src="/static/brand.js"></script>
+<style>
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  body{ background:var(--bd-bg); color:var(--bd-txt); font-family:var(--bd-font);
+        min-height:100dvh; background-image:var(--bd-glow); }
+  .wrap{ max-width:720px; margin:0 auto; padding:28px 18px 56px; }
+  header.top{ text-align:center; margin-bottom:18px; }
+  header.top h1{ font-size:var(--bd-fs-hero); font-weight:800; }
+  header.top .sub{ color:var(--bd-txt2); font-size:var(--bd-fs-sm); margin-top:6px; }
+  .verdict{ display:flex; align-items:center; gap:14px; padding:18px 20px; border-radius:var(--bd-r-lg);
+            margin:18px 0; border:1px solid var(--bd-border); background:var(--bd-surface); }
+  .verdict .big{ font-size:30px; line-height:1; }
+  .verdict .txt{ font-size:18px; font-weight:800; }
+  .verdict .meta{ color:var(--bd-mut); font-size:var(--bd-fs-sm); margin-top:3px; font-weight:400; }
+  .verdict.ready{ background:var(--bd-ok-soft); border-color:var(--bd-ok); }
+  .verdict.ready .txt{ color:var(--bd-ok); }
+  .verdict.notready{ background:rgba(248,113,113,.12); border-color:var(--bd-danger); }
+  .verdict.notready .txt{ color:var(--bd-danger); }
+  .card{ background:var(--bd-surface); border:1px solid var(--bd-border); border-radius:var(--bd-r-md);
+         overflow:hidden; margin-bottom:16px; }
+  .item{ display:flex; align-items:flex-start; gap:12px; padding:14px 16px; border-bottom:1px solid var(--bd-border); }
+  .item:last-child{ border-bottom:none; }
+  .item .dot{ width:11px; height:11px; border-radius:50%; margin-top:4px; flex-shrink:0; }
+  .dot.ok{ background:var(--bd-ok); } .dot.warn{ background:var(--bd-warn); } .dot.fail{ background:var(--bd-danger); }
+  .item .body{ flex:1; }
+  .item .label{ font-weight:700; font-size:var(--bd-fs-body); }
+  .item .label .tag{ font-size:12px; font-weight:600; margin-left:8px; padding:1px 8px; border-radius:20px; }
+  .tag.ok{ background:var(--bd-ok-soft); color:var(--bd-ok); }
+  .tag.warn{ background:rgba(251,191,36,.16); color:var(--bd-warn); }
+  .tag.fail{ background:rgba(248,113,113,.16); color:var(--bd-danger); }
+  .item .detail{ color:var(--bd-txt2); font-size:var(--bd-fs-sm); margin-top:3px; }
+  .item .fix{ color:var(--bd-mut); font-size:12px; margin-top:4px; }
+  .item .fix b{ color:var(--bd-warn); font-weight:600; }
+  .actions{ display:flex; gap:10px; flex-wrap:wrap; justify-content:center; margin-top:6px; }
+  .btn{ display:inline-flex; align-items:center; gap:6px; cursor:pointer; border:none;
+        background:var(--bd-grad); color:#fff; font-weight:700; font-size:var(--bd-fs-body);
+        padding:10px 20px; border-radius:var(--bd-r-pill); box-shadow:var(--bd-cta-glow); transition:.15s; }
+  .btn:hover{ filter:brightness(1.08); transform:translateY(-1px); }
+  .btn.ghost{ background:var(--bd-surface); color:var(--bd-txt2); border:1px solid var(--bd-border); box-shadow:none; font-weight:600; }
+  .links{ text-align:center; margin-top:18px; font-size:var(--bd-fs-sm); }
+  .links a{ color:var(--bd-acc); text-decoration:none; margin:0 8px; } .links a:hover{ text-decoration:underline; }
+  footer{ text-align:center; color:var(--bd-faint); font-size:var(--bd-fs-xs); margin-top:24px; line-height:1.7; }
+  .spin{ width:16px; height:16px; border:2px solid #ffffff66; border-top-color:#fff; border-radius:50%;
+         display:inline-block; animation:sp .7s linear infinite; }
+  @keyframes sp{ to{ transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>🧪 <span class="bd-grad-text">交付自检</span></h1>
+    <div class="sub"><span data-bd-name>无界科技 BOUNDLESS</span> · 一键核验本机部署的授权 / 合规 / 页面 / 服务 / 白标 是否就绪</div>
+  </header>
+
+  <div id="verdict" class="verdict" role="status" aria-live="polite"><span class="big" aria-hidden="true">⏳</span><div><div class="txt">正在自检…</div><div class="meta" id="verdictMeta">读取部署状态</div></div></div>
+
+  <div class="card" id="list"></div>
+
+  <div class="actions">
+    <button class="btn" id="reBtn">↻ 重新自检</button>
+    <button class="btn ghost" id="copyBtn">📋 复制验收报告</button>
+    <button class="btn ghost" id="mdBtn">📄 导出交付单(.md)</button>
+  </div>
+
+  <div class="links">
+    <a href="/ui" target="_blank">控制台</a>·<a href="/verify" target="_blank">内容验真</a>·<a href="/setup" target="_blank">运行向导</a>·<a href="/dashboard" target="_blank">看板</a>
+  </div>
+
+  <footer>
+    <span data-bd-name>无界科技 BOUNDLESS</span> · 交付验收以本页全绿（无红项）为准；黄项为建议优化、不阻断交付。
+  </footer>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+const ICON = {ok:'✅', warn:'⚠', fail:'❌'};
+const TAG  = {ok:'通过', warn:'建议', fail:'未就绪'};
+let lastData = null;
+
+/* 前端补检：品牌/白标（属浏览器 localStorage，后端看不到） */
+function brandCheck(){
+  let cfg = {};
+  try{ cfg = (window.__brandConfig && window.__brandConfig.get()) || {}; }catch(_){}
+  const hasName = !!cfg.name, hasColor = !!cfg.color, hasLogo = !!cfg.logo, hasProduct = !!cfg.product;
+  if (hasName || hasColor || hasLogo || hasProduct){
+    const bits = [hasName?('名称「'+cfg.name+'」'):'', hasProduct?('产品「'+cfg.product+'」'):'', hasColor?'主色':'', hasLogo?'图标':''].filter(Boolean);
+    return {key:'brand', label:'品牌 / 白标', status:'ok', detail:'已定制：'+bits.join(' · ')};
+  }
+  return {key:'brand', label:'品牌 / 白标', status:'warn', detail:'仍为默认品牌（未白标）', fix:'在控制台右上角 🎨 设置产品名/主色/图标，或导入 brand-config.json'};
+}
+
+async function run(){
+  $('#verdict').className='verdict'; $('#verdict').innerHTML='<span class="big" aria-hidden="true"><span class="spin"></span></span><div><div class="txt">正在自检…</div><div class="meta">读取部署状态</div></div>';
+  $('#list').innerHTML='';
+  let data;
+  try{
+    const r = await fetch('/api/delivery_selfcheck');
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    data = await r.json();
+  }catch(err){
+    $('#verdict').className='verdict notready';
+    $('#verdict').innerHTML='<span class="big" aria-hidden="true">❌</span><div><div class="txt">自检失败</div><div class="meta">'+esc(err.message)+'</div></div>';
+    return;
+  }
+  // 合并前端品牌检查
+  const checks = (data.checks||[]).slice();
+  checks.push(brandCheck());
+  data.checks = checks;
+  lastData = data;
+
+  const nFail = checks.filter(c=>c.status==='fail').length;
+  const nWarn = checks.filter(c=>c.status==='warn').length;
+  const nOk   = checks.filter(c=>c.status==='ok').length;
+  const ready = nFail===0;
+  $('#verdict').className = 'verdict '+(ready?'ready':'notready');
+  $('#verdict').innerHTML = '<span class="big" aria-hidden="true">'+(ready?'✅':'❌')+'</span>'
+    + '<div><div class="txt">'+(ready?'部署就绪，可交付':'尚未就绪，存在阻断项')+'</div>'
+    + '<div class="meta">通过 '+nOk+' · 建议 '+nWarn+' · 阻断 '+nFail+' · 自检于 '+esc(data.ts||'')+'</div></div>';
+
+  $('#list').innerHTML = checks.map(c=>
+    '<div class="item"><span class="dot '+c.status+'"></span><div class="body">'
+    + '<div class="label">'+esc(c.label)+'<span class="tag '+c.status+'">'+(ICON[c.status]||'')+' '+(TAG[c.status]||'')+'</span></div>'
+    + '<div class="detail">'+esc(c.detail||'')+'</div>'
+    + (c.fix?'<div class="fix">💡 <b>建议</b>：'+esc(c.fix)+'</div>':'')
+    + '</div></div>').join('');
+}
+
+function report(){
+  if(!lastData) return '';
+  const lines = ['【'+(brandName())+' · 交付验收报告】', '自检时间: '+(lastData.ts||''),
+    '结论: '+(lastData.checks.filter(c=>c.status==='fail').length===0?'就绪可交付':'存在阻断项'), '———'];
+  lastData.checks.forEach(c=>{ lines.push('['+(TAG[c.status]||c.status)+'] '+c.label+': '+(c.detail||'')+(c.fix?('  · 建议:'+c.fix):'')); });
+  return lines.join('\n');
+}
+function brandName(){ try{ const c=window.__brandConfig&&window.__brandConfig.get(); if(c&&c.name) return c.name; }catch(_){} return '无界科技 BOUNDLESS'; }
+
+/* 导出交付单（Markdown）：品牌抬头 + 结论 + 明细表，可直接进交付文档/工单 */
+function buildMd(){
+  if(!lastData) return '';
+  const cks = lastData.checks||[];
+  const nFail = cks.filter(c=>c.status==='fail').length;
+  const nWarn = cks.filter(c=>c.status==='warn').length;
+  const nOk   = cks.filter(c=>c.status==='ok').length;
+  const mdEsc = s => String(s==null?'':s).replace(/\|/g,'\\|').replace(/\n/g,' ');
+  let md = '# '+brandName()+' · 交付验收单\n\n'
+    + '- 自检时间：'+(lastData.ts||'')+'\n'
+    + '- 验收结论：'+(nFail===0?'✅ 就绪，可交付上线':'❌ 存在阻断项，暂不可交付')+'\n'
+    + '- 概览：通过 '+nOk+' · 建议 '+nWarn+' · 阻断 '+nFail+'\n\n'
+    + '## 自检明细\n\n'
+    + '| 项目 | 状态 | 详情 | 建议 |\n|---|---|---|---|\n';
+  cks.forEach(c=>{ md += '| '+mdEsc(c.label)+' | '+(TAG[c.status]||c.status)+' | '+mdEsc(c.detail)+' | '+mdEsc(c.fix||'—')+' |\n'; });
+  md += '\n---\n本验收单由 '+brandName()+' 控制台 `/delivery` 自动生成。验收以无「未就绪(阻断)」项为准；「建议」项为优化项，不阻断交付。\n';
+  return md;
+}
+
+$('#reBtn').onclick = run;
+$('#copyBtn').onclick = ()=>{ const t=report(); if(!t) return; navigator.clipboard.writeText(t).then(()=>{ $('#copyBtn').textContent='✓ 已复制报告'; setTimeout(()=>$('#copyBtn').textContent='📋 复制验收报告',1600); }); };
+$('#mdBtn').onclick = ()=>{ const md=buildMd(); if(!md) return; const blob=new Blob([md],{type:'text/markdown;charset=utf-8'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='delivery-acceptance.md'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); $('#mdBtn').textContent='✓ 已导出'; setTimeout(()=>$('#mdBtn').textContent='📄 导出交付单(.md)',1600); };
+run();
+</script>
+</body>
+</html>

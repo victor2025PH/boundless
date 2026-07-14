@@ -1,0 +1,42 @@
+# AvatarHub 行尾与二进制策略
+# 目的：锁定 Windows 批处理/脚本为 CRLF（cmd.exe 解析 .bat 必须 CRLF，否则 goto/if/set 控制流错乱），
+#       锁定 shell 脚本为 LF，并防止模型/媒体/数据库等二进制被误当文本规范化而损坏。
+# 说明：故意不设全局 `* text=auto`，避免对现有文件触发大面积 CRLF<->LF 重规范化 churn。
+#       新增本文件后，如需让历史文件一次性对齐，可在提交时执行：git add --renormalize .
+
+# ── Windows 脚本：检出为 CRLF ──
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+*.psm1  text eol=crlf
+*.iss   text eol=crlf
+
+# ── *nix 脚本：检出为 LF ──
+*.sh    text eol=lf
+
+# ── 二进制（不做行尾/文本处理，不参与 diff 合并） ──
+*.pt            binary
+*.pth           binary
+*.ckpt          binary
+*.safetensors   binary
+*.onnx          binary
+*.bin           binary
+*.zip           binary
+*.7z            binary
+*.gz            binary
+*.exe           binary
+*.dll           binary
+*.pyd           binary
+*.db            binary
+*.sqlite        binary
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.webp          binary
+*.wav           binary
+*.mp3           binary
+*.mp4           binary
+*.woff          binary
+*.woff2         binary

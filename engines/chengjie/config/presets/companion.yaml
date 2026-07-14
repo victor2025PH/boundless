@@ -1,0 +1,222 @@
+# 场景预设：AI 情感陪伴 · 全自动 7×24（陪伴模式）
+# ─────────────────────────────────────────────────────────────────────
+# 适用：把扫码/手机登录的「个人号」纳管成有灵魂的 AI 陪伴数字员工——
+#   记忆/人设/情绪/共情/语音图片/四层触发全在线，协议号 7×24 自动收发。
+# 与 outreach（引流转化）预设的区别：本预设核心是「关系深度·留存」，
+#   且把【反封号闸门 + 危机安全网】默认开（陪伴+全自动的商业准入底线）。
+#
+# 开局只需填：① ai.api_key ② telegram（api_id/api_hash/phone/session）
+# 填完运行：python main.py --check   应为 0 错误。
+#
+# ⚠️ 激进上量提示：本预设把 protocol_autoreply + companion_runtime 默认开（真·全自动）。
+#   首轮务必先用 1 个测试号灰度，盯 /api/accounts/fleet-health 红黄绿灯稳定再扩面；
+#   companion_send_gate（预热爬坡）已默认开，不要关——它是不烧号的最后一道闸。
+# ─────────────────────────────────────────────────────────────────────
+
+domain: conversion
+
+ai:
+  provider: openai_compatible
+  api_key: "YOUR_API_KEY"            # ← 必填
+  base_url: "https://api.deepseek.com"
+  model: "deepseek-chat"
+  temperature: 0.85                  # 陪伴更口语、更有温度，温度略高
+  max_tokens: 1024
+  timeout: 30
+
+telegram:
+  api_id: "YOUR_API_ID"              # ← 必填
+  api_hash: "YOUR_API_HASH"          # ← 必填
+  phone_number: "+8612345678900"     # ← 必填
+  session_name: companion_bot
+  process_private: true
+  process_groups: false              # 陪伴以私聊一对一为主
+
+skills:
+  enabled: [greeting, small_talk]    # 陪伴以问候 + 闲聊为主，不挂业务技能
+
+# ── 协议多开登录 / 编排器 / 统一运行时（N 线核心）──────────────────
+# 让协议号被纳管、7×24 在线，并跑 A 线「有灵魂」的陪聊 client。
+platform_login:
+  enabled: true
+  orchestrator_enabled: true         # 账号池编排器：失败指数退避自动重启
+  telegram:
+    protocol_enabled: true           # 关联设备二维码登录 provider
+    companion_runtime: true          # ★ 协议号跑 A 线全功能（记忆/人设/情绪/四层触发/收发镜像）
+    backfill_dialogs: 20
+    contacts_recording: true         # 收/发写入 contacts → IntimacyEngine 关系阶段融合
+  whatsapp:
+    protocol_enabled: false
+
+# ── 协议号 7×24 自动回复（双闸门：全局 enabled + 账号 meta.auto_reply 皆开才发）──
+protocol_autoreply:
+  enabled: true                      # ★ 全局闸门开（账号侧仍需 meta.auto_reply=true）
+  delay:                             # 拟人随机延迟，降低机器感与风控
+    min_sec: 3
+    max_sec: 18
+  hours:
+    enabled: false                   # 如需「营业时段外转人工」可开并填 start/end/tz_offset
+
+# ── 反封号发送闸门（不可关的护栏）────────────────────────────────────
+# A/B 两线共用：按账号健康（天龄/代理/今日发送量/熔断）给红黄绿灯 + 预热爬坡。
+companion_send_gate:
+  enabled: true                      # ★ 护栏默认开：新号自动从 warmup_start_cap 爬坡到 target_cap
+  target_cap: 15                     # 养熟后单号日发上限
+  warmup_start_cap: 2                # 新号第 0 天日发上限
+  warmup_ramp_days: 14               # 14 天内从 start 爬到 target
+  block_on_red: true                 # 红灯（高风险）直接拒发——不烧号的最后一道闸
+
+# ── 陪伴关系阶段 + 安全网（陪伴模式的灵魂与底线）──────────────────
+companion:
+  enabled: true
+  natural_dialogue:
+    enabled: true                    # 自然口语、克制连发
+  intimacy_fusion:
+    enabled: true                    # 长沉默自动降阶 + 久别回暖问候
+  empathy_strategy:
+    enabled: true                    # STRIDE-ED 式共情策略选择
+  persona_guard:
+    enabled: true                    # 后置剥离「作为AI」自曝/客服腔
+  # 主动话题发起（P1/P2）：沉默一段时间后，自然回访对方真正在意的高置信记忆
+  #   （「上次你说在备考，结果怎么样？」），而非干巴巴「好久没聊」。这是「记得住」
+  #   护城河最直观的体现。只回访 user_stated/已确认事实，绝不拿 AI 猜测开口。
+  #   发送经 companion_send_gate 预热爬坡 + 冷却，与 messenger 约定驱动的 care 互补。
+  proactive_topic:
+    enabled: true                    # ★ 记忆驱动的主动惦记开场（仅 Telegram 协议号）
+    min_silent_hours: 24             # 沉默不足此时长不主动打扰（避免插话活跃用户）
+    scan_limit: 200                  # 每轮扫描候选会话上限
+    # Stage R：生日主动采集——关系够深却还不知生日时，借最没话说的 gentle_checkin 顺势问一句，
+    #   让生日仪式真正转得起来。只升级 gentle_checkin；危机/低落不问；已知永不问；冷却内不重问。
+    birthday_ask:
+      enabled: true                  # ★ 陪伴模式默认开：让生日仪式"会主动了解"
+      min_intimacy: 45               # 关系够深才问（问生日更私人，门槛更高）
+      cooldown_days: 30              # 问过这么多天内不再问同一人
+    name_ask:
+      enabled: true                  # ★ 陪伴模式默认开：主动了解"该怎么称呼TA"
+      min_intimacy: 35               # 关系略熟即可问（称呼没那么私人，门槛更低）
+      cooldown_days: 30              # 问过这么多天内不再问同一人
+    # Stage L：每日仪式感主动问候（晨安 / 晚安）——日活留存核心钩子，与沉默回访互补。
+    #   时段驱动、每日每档去重；按用户历史活跃时段择时（早起的人早收、夜猫子晚收）。
+    daily_ritual:
+      enabled: true                  # ★ 陪伴模式默认开：每天到点的晨 / 晚安仪式感
+      morning_window: [7, 10]        # 早安时段 [起,止)（闭开区间），个性化点落此内才采纳
+      night_window: [21, 24]         # 晚安时段 [起,止)
+      min_intimacy: 20               # 关系太浅不做仪式问候（不对刚认识的人道"早安亲爱的"）
+      min_quiet_gap_hours: 3         # 距上次互动不足此时长不问候（人还在场，道早晚安多余）
+      max_per_tick: 5                # 每轮最多问候人数
+      personalize_active_hour: true  # 按用户历史消息活跃时段择时；关则统一在窗口起点问候
+    # Stage P：纪念日·节日仪式（认识 N 天 / 节日）——高情感节点，「记得重要日子」。
+    milestone_ritual:
+      enabled: true                  # ★ 陪伴模式默认开：认识 N 天纪念 + 节日祝福
+      greet_hour: 10                 # 节点问候只在此整点触发一次（与晨/晚安错开）
+      min_intimacy: 30               # 关系够深才庆节点（比每日问候门槛高）
+      max_per_tick: 5                # 每轮最多问候人数
+      celebrate_birthday: true       # ★ 生日仪式（最高优先级）：从记忆扫出生日，当天庆生
+      anniversary_days: [7, 30, 100, 180, 365, 520, 1000, 1314]  # 认识 N 天里程碑
+      holiday_calendar:              # 公历固定日期；农历节日按年自配当年公历日期
+        "01-01": "元旦"
+        "02-14": "情人节"
+        "12-24": "平安夜"
+        "12-25": "圣诞节"
+        "12-31": "跨年夜"
+  # 关系成长系统（Phase ②）：让用户「看见关系在变深」——等级/进度/里程碑经健康卡透出，
+  #   并让 AI 在 intimate/steady 阶段或刚达成纪念点时自然流露关系厚度（克制、不播报）。
+  bond_level:
+    enabled: true                    # ★ 陪伴模式默认开：AI 感知关系深度/里程碑
+    unlocks:                         # 按关系等级解锁预览（真放行仍由 monetization 判）
+      intimate: [exclusive_album]
+      steady: [all_story]
+  # 剧情/场景 roleplay（Phase ③/④）：场景化沉浸玩法 + 付费解锁点，咬合 bond_level/变现。
+  #   「剧情列表」查看 ·「开始剧情 <名称>」进入 ·「结束剧情」退出。
+  # Phase ④ 闭环：beat 设 branch 选择点 → 按用户回应路由不同 endings；剧终把 memory
+  #   写回情景记忆（高置信，可被巩固/被 proactive_topic 日后主动回访）→ 记忆/成长/剧情成正循环。
+  story:
+    enabled: true                    # ★ 陪伴模式默认开
+    advance_turns: 3
+    max_intimacy_bonus: 12           # 剧情累计关系加成封顶（防刷满；约一个等级带）
+    proactive_prefer_category: story # 主动开场优先回访剧情回写的共享经历
+    scenarios:
+      coffee_date:                   # 免费：关系到「试探/升温」即可解锁；带分支多结局
+        title: "初次咖啡约会"
+        min_bond_level: 2
+        beats:
+          - {id: arrive,  directive: "场景：你和对方约在安静的咖啡馆初次见面，自然描述环境、点单，营造轻松氛围。"}
+          - {id: chat,    directive: "场景推进：你们聊起彼此近况，气氛渐渐熟络，多倾听、多回应对方。"}
+          - id: ask
+            directive: "场景选择点：约会接近尾声，你自然地问对方愿不愿意再约下一次。"
+            branch:
+              - {keywords: ["好", "愿意", "想", "约", "可以"], ending: warm}
+              - {keywords: ["算了", "忙", "不", "下次再说"],    ending: cool}
+            default_ending: warm
+        endings:
+          warm: {directive: "结局：对方答应了，你们开心约好下次再见，温柔道别。", memory: "我们约好了下次再一起喝咖啡", intimacy_bonus: 4}
+          cool: {directive: "结局：对方没多说，你体贴地不勉强，礼貌温柔地道别。", memory: "我们一起喝过一次咖啡", intimacy_bonus: 1}
+      starry_night:                  # 付费专属续作：需关系够深 + 先以 warm 结局走过 coffee_date + all_story 权益
+        title: "星空下的约定"
+        min_bond_level: 3
+        requires_story:              # 跨场景因果：前传 coffee_date 须以 warm 结局完成
+          - {scenario: coffee_date, ending: warm}
+        require_unlock: all_story
+        beats:
+          - {id: rooftop, directive: "场景：你们在天台并肩看星空，气氛安静而亲密，轻声分享心事。"}
+          - {id: promise, directive: "场景推进：聊到彼此对未来的期待，自然许下一个温柔的小约定。"}
+        on_complete: {memory: "我们在星空下许下过一个温柔的约定", intimacy_bonus: 5}
+  # 安全底线守卫：危机识别 + 反谄媚 + 回复红线兜底。陪伴+全自动场景默认全开（漏接危机最坏）。
+  wellbeing:
+    enabled: true
+    anti_sycophancy: true
+    crisis_escalation: true          # ★ severe 危机 → escalation_needed webhook，真人介入
+    escalate_after: 1
+    crisis_audit: true               # ★ 危机事件落库（复盘/合规/人工处置追踪）
+    crisis_resources: ""             # 可选：填求助热线文案，severe 时自然附带
+
+# ── 陪伴记忆闭环（Phase D：让 AI「记得住」——陪伴产品的核心护城河）──────────
+# 闲聊里抽取用户事实（喜好/工作/家人/经历）→ 复发/情绪浓的晋升 stable（永不被裁剪）→
+# 新证据推翻旧结论（搬家/分手）→ 按来源分级置信（用户原话>AI 推断）。陪伴模式默认全开。
+memory:
+  enabled: true
+  extract:
+    enabled: true
+    match_all: true              # ★ 陪伴「全记」：任何闲聊都尝试抽取（非陪伴部署留空走白名单）
+    intents: [greeting, small_talk, direct_chat, casual_chat, chitchat, free_chat]
+    use_llm: true                # LLM 抽取要点（与启发式正则并行；有 cooldown 控成本）
+    min_user_chars: 4
+    cooldown_seconds: 20
+  consolidation:
+    enabled: true                # ★ 离线巩固：复发/情绪浓 → 晋升 stable
+    min_hits: 2
+    semantic_dedup: 0.92         # 语义近义合并（避免「喜欢猫」反复存多条）
+    resolve_contradictions: true # 矛盾消解（旧「住北京」vs 新「搬上海」）
+    supersede_stable: true       # 新证据可推翻旧 stable 结论
+    source_aware: true           # 按来源分级置信（ai_inferred 晋升门槛更高）
+  salience_rerank:
+    enabled: true                # 显著性加权（情绪强/首次披露的事实更不易被裁剪）；
+                                 # ★ 键名须为 salience_rerank（曾误写 salience 导致静默失效）
+  # 语义向量召回（按意思而非字面找记忆）：需 embedding-capable 的 ai provider。
+  # deepseek-chat 无 embeddings 端点时本块自动降级为纯关键词召回，不报错。
+  # 接入可嵌入模型后开启即生效（行内 embeddings 已随 semantic_dedup 生成）。
+  # vector:
+  #   enabled: true
+  #   inject_fusion: true
+
+# 统一收件箱：高风险/危机/转人工时坐席可见、可接管
+inbox:
+  enabled: true
+  sla_warn_sec: 1800
+  sla_crit_sec: 7200
+
+# 健康看门狗：周期巡检 + 异常 webhook 推送（配合反封号闸门盯机群）
+health_watchdog:
+  enabled: true
+  interval_sec: 300
+
+web_admin:
+  site_name: AI 陪伴运营台
+  host: 127.0.0.1
+  port: 18787
+  auth_token: "YOUR_ADMIN_TOKEN"
+  secret_key: "YOUR_FLASK_SECRET_KEY"
+
+logging:
+  level: INFO
+  file: logs/app.log

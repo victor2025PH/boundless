@@ -1,0 +1,28 @@
+{
+  "key": "proactive-guard",
+  "label": {
+    "zh": "主动触达情绪护栏",
+    "en": "Proactive outreach guard"
+  },
+  "cmd": "python -m scripts.run_eval --proactive-guard --json",
+  "status": "pass",
+  "report": {
+    "summary": {
+      "total": 13,
+      "accuracy": 1.0,
+      "severe_block_recall": 1.0,
+      "under_suppress": 0,
+      "over_suppress": 0
+    },
+    "passed": true
+  },
+  "headline": {
+    "metric": {
+      "zh": "severe 窗口抑制召回",
+      "en": "Severe-window suppression recall"
+    },
+    "value": "100%",
+    "sample": 13
+  },
+  "generated_at": "2026-07-12T17:14:37+0800"
+}

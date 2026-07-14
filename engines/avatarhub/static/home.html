@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<meta name="theme-color" content="#080b10"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-title" content="无界 BOUNDLESS"/>
+<link rel="manifest" href="/static/manifest.json"/>
+<link rel="icon" type="image/svg+xml" href="/static/icon.svg"/>
+<link rel="apple-touch-icon" href="/static/icon.svg"/>
+<script src="/static/_clientlog.js"></script>
+<script src="/static/_authtoken.js"></script>
+<script src="/static/_errutil.js"></script>
+<title>无界 BOUNDLESS · 数字人平台</title>
+<link rel="stylesheet" href="/static/brand.css"/>
+<script src="/static/brand.js"></script>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:var(--bd-bg);
+    color:var(--bd-txt);
+    font-family:var(--bd-font);
+    font-size:var(--bd-fs-body);
+    line-height:var(--bd-lh-base);
+    min-height:100vh;
+    -webkit-font-smoothing:antialiased;
+  }
+  /* 顶部品牌光晕（复用 brand.css 渐变令牌）*/
+  body::before{
+    content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+    background:var(--bd-glow);
+  }
+  .wrap{position:relative;z-index:1;max-width:1120px;margin:0 auto;padding:28px 20px 56px}
+
+  /* ── 顶栏 ── */
+  .top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  .brand h1{margin:0;font-size:var(--bd-fs-hero);font-weight:800;letter-spacing:.5px}
+  .brand .sub{margin:6px 0 0;color:var(--bd-txt2);font-size:var(--bd-fs-sm)}
+  .badges{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .top-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .edition{display:inline-flex;align-items:center;gap:6px;font-size:var(--bd-fs-label);font-weight:700;
+    padding:5px 11px;border-radius:var(--bd-r-pill);border:1px solid var(--bd-border);
+    color:var(--bd-txt);background:var(--bd-surface)}
+  .edition .dot{width:7px;height:7px;border-radius:50%;background:var(--bd-acc)}
+  .edition{cursor:pointer;font-family:inherit;transition:border-color var(--bd-dur-fast) var(--bd-ease)}
+  .edition:hover{border-color:var(--bd-acc)}
+  .edition .ed-caret{opacity:.55;font-size:10px;margin-left:1px}
+
+  /* 信任条：验真/授权两枚可点，克制升级差异化护城河卖点（M3）*/
+  a.bd-trust{text-decoration:none;
+    transition:border-color var(--bd-dur-fast) var(--bd-ease),color var(--bd-dur-fast) var(--bd-ease)}
+  a.bd-trust:hover{border-color:var(--bd-acc)}
+  a.bd-trust:hover b{color:var(--bd-acc)}
+
+  /* PRO 说明弹窗（原生 <dialog>：自带 Esc/背景遮罩/焦点管理，零依赖）*/
+  .prodlg{border:0;padding:0;background:transparent;color:var(--bd-txt);
+    max-width:440px;width:calc(100% - 32px)}
+  .prodlg::backdrop{background:rgba(3,6,12,.62)}
+  .pd-card{background:var(--bd-surface);border:1px solid var(--bd-border);border-radius:var(--bd-r-md);
+    padding:20px;box-shadow:0 20px 48px rgba(0,0,0,.5);animation:pd-in .16s var(--bd-ease)}
+  @keyframes pd-in{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:none}}
+  .pd-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+  .pd-title{font-weight:800;font-size:16px;display:inline-flex;align-items:center;gap:8px}
+  .pd-title::before{content:"PRO";font-size:12px;font-weight:700;color:#1a1206;background:var(--bd-gold);
+    padding:2px 7px;border-radius:var(--bd-r-pill)}
+  .pd-x{border:0;background:transparent;color:var(--bd-mut);cursor:pointer;font-size:14px;
+    width:28px;height:28px;border-radius:8px;line-height:1}
+  .pd-x:hover{color:var(--bd-txt);background:var(--bd-surface2)}
+  .pd-edition{font-size:var(--bd-fs-sm);color:var(--bd-txt2);margin:2px 0 10px}
+  .pd-lead{font-size:var(--bd-fs-sm);color:var(--bd-mut);margin:0 0 12px}
+  .pd-list{list-style:none;margin:0 0 16px;padding:0;display:flex;flex-direction:column;gap:8px}
+  .pd-list li{display:flex;align-items:center;gap:10px;font-size:var(--bd-fs-sm)}
+  .pd-list .pd-ic{width:30px;height:30px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;
+    border-radius:9px;background:rgb(var(--bd-acc-rgb) / .12);border:1px solid rgb(var(--bd-acc-rgb) / .18)}
+  .pd-list .pd-nm{font-weight:700;color:var(--bd-txt)}
+  .pd-list .pd-ln{margin-left:auto;font-size:var(--bd-fs-label);color:var(--bd-mut)}
+  .pd-empty{color:var(--bd-mut)}
+  .pd-foot{display:flex;justify-content:flex-end;gap:10px}
+
+  /* ── 快速开始 · 角色分流（按目标直达；图标取目标产品线色，与下方分区呼应而非重复）── */
+  .quickstart-h{display:flex;align-items:baseline;gap:10px;margin:26px 0 10px;flex-wrap:wrap}
+  .quickstart-h .qs-t{font-weight:800;font-size:15px}
+  .quickstart-h .qs-d{color:var(--bd-mut);font-size:var(--bd-fs-label)}
+  .roles{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:0 0 8px}
+  @media(max-width:880px){.roles{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:520px){.roles{grid-template-columns:1fr}}
+  .role{display:flex;flex-direction:column;gap:6px;padding:16px;border-radius:var(--bd-r-md);
+    border:1px solid var(--bd-border);background:var(--bd-surface);text-decoration:none;color:inherit;
+    transition:transform var(--bd-dur-fast) var(--bd-ease),border-color var(--bd-dur-fast) var(--bd-ease),
+      box-shadow var(--bd-dur-fast) var(--bd-ease)}
+  .role:hover{transform:translateY(-3px);border-color:rgb(var(--line-rgb, 79 122 255));
+    box-shadow:0 8px 22px rgb(var(--line-rgb, 79 122 255) / .18)}
+  .role .ic{display:inline-flex;align-items:center;justify-content:center;width:42px;height:42px;
+    border-radius:12px;font-size:22px;line-height:1;
+    background:rgb(var(--line-rgb, 79 122 255) / .13);border:1px solid rgb(var(--line-rgb, 79 122 255) / .20)}
+  .role .t{font-weight:700}
+  .role .d{font-size:var(--bd-fs-label);color:var(--bd-mut)}
+
+  /* ── 功能搜索（客户端即时过滤）── */
+  .toolbar{margin:24px 0 2px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .qcount{font-size:var(--bd-fs-label);color:var(--bd-mut);white-space:nowrap}
+  .qcount:empty{display:none}
+  .search{position:relative;display:flex;align-items:center;max-width:460px}
+  .search .si{position:absolute;left:13px;font-size:15px;opacity:.7;pointer-events:none}
+  .search input{width:100%;height:40px;padding:0 40px;border-radius:var(--bd-r-pill);
+    border:1px solid var(--bd-border);background:var(--bd-surface);color:var(--bd-txt);
+    font-size:var(--bd-fs-sm);outline:none;transition:border-color var(--bd-dur-fast) var(--bd-ease)}
+  .search input:focus{border-color:var(--bd-acc)}
+  .search input::placeholder{color:var(--bd-mut)}
+  .qclear{position:absolute;right:8px;display:none;align-items:center;justify-content:center;
+    width:24px;height:24px;border-radius:50%;border:0;background:transparent;color:var(--bd-mut);
+    cursor:pointer;font-size:12px;line-height:1}
+  .qclear:hover{color:var(--bd-txt);background:var(--bd-surface2)}
+  .search.has .qclear{display:inline-flex}
+  /* 搜索态：隐藏"快速开始"角色区与"最近使用"，聚焦结果 */
+  body.searching .roles,body.searching .quickstart-h{display:none}
+  .card.hide,.section.hide{display:none}
+  /* 键盘导航高亮：用卡片自持线色描边，与产品线视觉一致 */
+  .card.kbdon{outline:2px solid rgb(var(--line-rgb,79 122 255));outline-offset:2px;
+    box-shadow:0 8px 24px rgb(var(--line-rgb,79 122 255) / .28)}
+
+  /* ── 首启引导（未就绪才显示）── */
+  .onboard{margin:22px 0 0;padding:16px 18px;border-radius:var(--bd-r-md);
+    border:1px solid rgba(251,191,36,.34);background:rgba(251,191,36,.08);
+    align-items:center;gap:14px;flex-wrap:wrap}
+  .onboard .ic{font-size:26px;line-height:1}
+  .onboard .body{flex:1;min-width:220px}
+  .onboard .t{font-weight:700;color:var(--bd-txt)}
+  .onboard .d{font-size:var(--bd-fs-sm);color:var(--bd-txt2);margin-top:3px}
+  .onboard .steps{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .onboard .step{font-size:var(--bd-fs-label);padding:2px 8px;border-radius:var(--bd-r-pill);
+    border:1px solid rgba(251,191,36,.4);color:var(--bd-warn)}
+
+  /* ── 系统就绪度总览（运行时状态条，复用 /health）── */
+  .sysbar{margin:16px 0 0;padding:9px 14px;border-radius:var(--bd-r-md);
+    border:1px solid var(--bd-border);background:var(--bd-surface);
+    align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .sysbar.warn{border-color:rgba(251,191,36,.4)}
+  .sysbar.bad{border-color:rgba(248,113,113,.45);background:rgba(248,113,113,.06)}
+  .sb-items{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .sb-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .sb-chip{display:inline-flex;align-items:center;gap:6px;font-size:var(--bd-fs-label);
+    padding:3px 10px;border-radius:var(--bd-r-pill);border:1px solid var(--bd-border);color:var(--bd-txt2)}
+  .sb-chip::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--bd-faint)}
+  .sb-chip.ok{color:var(--bd-ok)} .sb-chip.ok::before{background:var(--bd-ok);box-shadow:0 0 0 3px var(--bd-ok-soft)}
+  .sb-chip.warn{color:var(--bd-warn)} .sb-chip.warn::before{background:var(--bd-warn)}
+  .sb-chip.bad{color:var(--bd-danger)} .sb-chip.bad::before{background:var(--bd-danger)}
+
+  /* ── 分区 ── */
+  /* 入场淡入：不用 fill:both，静止态=自然可见（动效不跑/被暂停也绝不留空白，守"永不白屏"）*/
+  .section{margin-top:34px;animation:bd-sec-in .5s var(--bd-ease)}
+  .section-h{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  /* 分区标题色点：取当前产品线色（--line-rgb 由 hub.js 在 section 上注入）*/
+  .section-h .dot{flex-shrink:0;width:10px;height:10px;border-radius:3px;
+    background:rgb(var(--line-rgb, 79 122 255));
+    box-shadow:0 0 0 4px rgb(var(--line-rgb, 79 122 255) / .14)}
+  .section-h .line{font-size:var(--bd-fs-h2);font-weight:800}
+  .section-h .count{font-size:var(--bd-fs-label);color:var(--bd-mut);
+    border:1px solid var(--bd-border);border-radius:var(--bd-r-pill);padding:2px 9px}
+  /* 固定响应式列：单卡分区（LiveX/LingoX）不再被 auto-fill 拉满整行留白 */
+  .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+  @media(max-width:1000px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+  @media(max-width:760px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:520px){.grid{grid-template-columns:1fr}}
+  /* 首屏骨架：复用 brand.css .bd-skeleton 微光 + .grid 布局；冷启(无缓存)零白屏，render() 到位即替换 */
+  .skel-sec{margin:26px 0}
+  .skel-h{width:150px;height:15px;margin:0 0 14px}
+  .skel-card{height:132px;border-radius:var(--bd-r-md)}
+  /* 最近使用：置顶(pin)覆盖按钮 + 一键清除；仅"最近使用"分区套 .recent-item 包裹，其它分区结构不变 */
+  .recent-item{position:relative;height:100%}
+  .recent-item>.card{height:100%}
+  .pin-btn{position:absolute;top:8px;right:8px;z-index:2;width:26px;height:26px;
+    display:flex;align-items:center;justify-content:center;border-radius:50%;
+    border:1px solid var(--bd-border);background:var(--bd-surface);color:var(--bd-mut);
+    cursor:pointer;font-size:12px;line-height:1;opacity:.5;
+    transition:opacity var(--bd-dur-fast) var(--bd-ease),transform var(--bd-dur-fast) var(--bd-ease)}
+  .recent-item:hover .pin-btn,.pin-btn:focus-visible,.pin-btn.on{opacity:1}
+  .pin-btn:hover{transform:scale(1.08)}
+  .pin-btn.on{color:#f59e0b;border-color:rgb(245 158 11 / .55);background:rgb(245 158 11 / .14)}
+  .recent-clear{margin-left:auto;font-size:var(--bd-fs-label);color:var(--bd-mut);
+    background:transparent;border:0;cursor:pointer;padding:3px 8px;border-radius:var(--bd-r-pill)}
+  .recent-clear:hover{color:var(--bd-txt);background:var(--bd-surface2)}
+  @keyframes bd-sec-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+  /* ── 功能卡 ── */
+  .card{position:relative;overflow:hidden;display:flex;flex-direction:column;gap:10px;padding:16px;
+    border-radius:var(--bd-r-md);background:#141a24;border:1px solid #262f42;box-shadow:var(--bd-shadow-sm);
+    transition:transform var(--bd-dur-fast) var(--bd-ease),border-color var(--bd-dur-fast) var(--bd-ease),
+      box-shadow var(--bd-dur-fast) var(--bd-ease)}
+  /* hover 用当前产品线色描边 + 同色微光（--line-rgb 由 section 继承下来）*/
+  .card:hover{transform:translateY(-3px);border-color:rgb(var(--line-rgb, 79 122 255) / .75);
+    box-shadow:0 14px 34px rgb(var(--line-rgb, 79 122 255) / .18)}
+  /* 旗舰卡：同尺寸不改结构，仅加线色描边 + 顶部微光渐变，建立视觉主次 */
+  .card.feat{border-color:rgb(var(--line-rgb, 79 122 255) / .4);
+    background:linear-gradient(180deg, rgb(var(--line-rgb, 79 122 255) / .07), transparent 46%), #141a24}
+  .card .head{display:flex;align-items:center;gap:10px}
+  /* 图标 chip：线色半透明底，让 emoji 从"裸字符"变成有设计感的入口标识 */
+  .card .ic{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;
+    width:40px;height:40px;border-radius:12px;font-size:20px;line-height:1;
+    background:rgb(var(--line-rgb, 79 122 255) / .14);border:1px solid rgb(var(--line-rgb, 79 122 255) / .22)}
+  .card .name{font-weight:700;font-size:var(--bd-fs-body);display:flex;align-items:center;gap:7px}
+  /* 两行截断保证卡片等高（替代 min-height:38px 魔法数）*/
+  .card .desc{color:var(--bd-txt2);font-size:var(--bd-fs-sm);
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+    min-height:calc(var(--bd-fs-sm) * var(--bd-lh-base) * 2)}
+  .card .foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px}
+  .tags{display:flex;align-items:center;gap:6px}
+  .ready{display:inline-flex;align-items:center;gap:5px;font-size:var(--bd-fs-label);color:var(--bd-mut)}
+  .ready .dot{width:8px;height:8px;border-radius:50%;background:var(--bd-faint)}
+  .ready.on .dot{background:var(--bd-ok);box-shadow:0 0 0 3px var(--bd-ok-soft)}
+  .ready.on{color:var(--bd-ok)}
+  .ready.off .dot{background:var(--bd-danger)}
+  .ready.off{color:var(--bd-danger)}
+  .pro{font-size:var(--bd-fs-label);font-weight:700;padding:2px 8px;border-radius:var(--bd-r-pill);
+    color:#1a1206;background:var(--bd-gold)}
+  .enter{flex-shrink:0}
+
+  .foot-note{margin-top:48px;padding-top:18px;border-top:1px solid var(--bd-border);
+    display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+    color:var(--bd-faint);font-size:var(--bd-fs-label)}
+  .foot-note a{color:var(--bd-txt2);text-decoration:none}
+  .foot-note a:hover{color:var(--bd-acc)}
+  .skeleton{opacity:.5}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <!-- 顶栏 -->
+  <header class="top">
+    <div class="brand">
+      <h1><span class="bd-grad-text">无界 BOUNDLESS</span> · 数字人平台</h1>
+      <p class="sub">本地实时数字人 · 音色克隆 / 实时对话 / 直播换脸口型 / 实时同传 · 一站式入口</p>
+      <div class="badges">
+        <span class="bd-trust">🔒 <b>全程本地运行</b> · 数据不出本机</span>
+        <a class="bd-trust" data-ev="trust" data-id="verify" href="/verify">🛡️ <b>内容可验真</b> · C2PA/水印</a>
+        <a class="bd-trust" data-ev="trust" data-id="license" href="/delivery">🎫 <b>授权合规</b> · 版位/有效期可查</a>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button class="edition" id="edition" type="button" data-ev="pro" data-id="edition" aria-haspopup="dialog" title="查看版位与 PRO 能力">
+        <span class="dot"></span><span id="editionText">本地版</span><span class="ed-caret" aria-hidden="true">▾</span></button>
+      <a class="bd-btn bd-btn-primary" data-ev="cta" data-id="studio" href="/ui">进入工作室</a>
+    </div>
+  </header>
+
+  <!-- 首启引导（仅在系统未就绪时显示，串联 /setup） -->
+  <section id="onboard" class="onboard" style="display:none"></section>
+
+  <!-- 系统就绪度总览（运行时状态，复用 /health；只读 + 直达运维）-->
+  <section id="sysbar" class="sysbar" style="display:none" aria-label="系统状态"></section>
+
+  <!-- 快速开始 · 角色分流（按目标直达；图标取目标产品线色，与下方分区呼应而非重复）-->
+  <div class="quickstart-h">
+    <span class="qs-t">快速开始</span>
+    <span class="qs-d">按目标直达常用入口 · 或在下方按产品线浏览全部功能</span>
+  </div>
+  <nav class="roles" aria-label="快速分流">
+    <a class="role" data-ev="role" data-id="voice"  data-line="VoiceX 音色" style="--line-rgb:79 122 255" href="/ui#voice"><span class="ic" aria-hidden="true">🎙️</span><span class="t">我要创作</span><span class="d">克隆音色·合成语音</span></a>
+    <a class="role" data-ev="role" data-id="stream" data-line="LiveX 直播"  style="--line-rgb:168 85 247" href="/ui#stream"><span class="ic" aria-hidden="true">📡</span><span class="t">我要直播</span><span class="d">换脸·口型·开播</span></a>
+    <a class="role" data-ev="role" data-id="phone"  data-line="ChatX 对话"  style="--line-rgb:45 212 191" href="/phone"><span class="ic" aria-hidden="true">💬</span><span class="t">我要对话</span><span class="d">免提语音数字人</span></a>
+    <a class="role" data-ev="role" data-id="interp" data-line="LingoX 同传" style="--line-rgb:56 189 248" href="/ui#interp"><span class="ic" aria-hidden="true">🌐</span><span class="t">我要同传</span><span class="d">多语种实时互译</span></a>
+    <a class="role" data-ev="role" data-id="ops"    data-line="运营"        style="--line-rgb:245 158 11" href="/ops"><span class="ic" aria-hidden="true">🩺</span><span class="t">我要运维</span><span class="d">健康·监控·自愈</span></a>
+  </nav>
+
+  <!-- 功能搜索（客户端即时过滤；空词=全展示）-->
+  <div class="toolbar">
+    <div class="search" id="searchBox">
+      <span class="si" aria-hidden="true">🔎</span>
+      <input id="q" type="text" autocomplete="off" spellcheck="false"
+             placeholder="搜索功能…（支持中文/拼音，如 直播 · zhibo · zb）  按 / 聚焦" aria-label="搜索功能"/>
+      <button id="qClear" class="qclear" type="button" aria-label="清除搜索" title="清除">✕</button>
+    </div>
+    <span id="qCount" class="qcount" aria-live="polite"></span>
+    <span id="srStatus" class="bd-sr-only" aria-live="polite"></span>
+  </div>
+
+  <!-- 功能分区（由 /api/features + /health 渲染；含置顶"最近使用"）-->
+  <!-- 冷启占位骨架：无缓存时先占位，render() 清空 #sections 即自动替换；aria-hidden 不扰读屏 -->
+  <main id="sections" aria-live="polite">
+    <div class="skeleton" aria-hidden="true">
+      <div class="skel-sec">
+        <div class="bd-skeleton skel-h"></div>
+        <div class="grid"><div class="bd-skeleton skel-card"></div><div class="bd-skeleton skel-card"></div><div class="bd-skeleton skel-card"></div><div class="bd-skeleton skel-card"></div></div>
+      </div>
+      <div class="skel-sec">
+        <div class="bd-skeleton skel-h"></div>
+        <div class="grid"><div class="bd-skeleton skel-card"></div><div class="bd-skeleton skel-card"></div><div class="bd-skeleton skel-card"></div></div>
+      </div>
+    </div>
+  </main>
+  <div id="searchEmpty" class="bd-empty" style="display:none">
+    <div class="bd-empty-ico" aria-hidden="true">🔍</div>
+    <div class="bd-empty-title">没有匹配的功能</div>
+    <div class="bd-empty-sub">试试 直播 / zhibo / zb · 克隆 / kelong / kl · 同传 / tc（支持中文与拼音）</div>
+  </div>
+
+  <footer class="foot-note">
+    <span>无界科技 BOUNDLESS · 数字人平台 · 全程本地运行，数据不出本机</span>
+    <span>
+      <a href="/delivery">交付体检</a> ·
+      <a href="/verify">内容验真</a> ·
+      <a href="/setup">首启向导</a> ·
+      <a href="/ops">运维</a>
+    </span>
+  </footer>
+</div>
+
+<!-- PRO 说明弹窗（内容由 buildProDialog 动态填充；原生 <dialog> 自带遮罩/Esc/焦点）-->
+<dialog id="proDlg" class="prodlg" aria-label="PRO 能力说明"></dialog>
+
+<script>
+(function(){
+  "use strict";
+  var FALLBACK = {lines:["VoiceX 音色","ChatX 对话","LiveX 直播","LingoX 同传","运营","合规·可信"], features:[]};
+  var lastSetup = null, gpuReleased = false;   // GPU 释放态：由 /health.gpu_released 驱动，影响引导卡/状态条
+  var licState = null, lastFeats = [], lastHealth = null;   // 版位状态 + 当前功能清单（供 PRO 弹窗取真）+ 最近一次 /health（供"最近使用"pin/清除就地重渲）
+
+  // 产品线视觉身份（P0 美化·纯前端单一真相；后续可迁移到 /api/features 注册表字段）。
+  // 值为 "R G B" 三元组，供 CSS rgb(var(--line-rgb) / α) 派生描边/底色/微光，与 brand.css 取色方式一致。
+  var LINE_RGB = {
+    "VoiceX 音色": "79 122 255",   // 无界蓝（品牌主）
+    "ChatX 对话":  "45 212 191",   // 青（对话气泡）
+    "LiveX 直播":  "168 85 247",   // 幻紫
+    "LingoX 同传": "56 189 248",   // 天蓝
+    "运营":        "245 158 11",   // 琥珀（仪表/监控）
+    "合规·可信":   "52 211 153"    // 翠绿（信任/安全）
+  };
+  // 旗舰功能：加线色描边微光建立层级（同尺寸、不改结构、不做强拦截）
+  var FEATURED = {clone:1, stream:1, phone:1, interp:1};
+
+  // 拼音检索【兜底】：优先用后端 /api/features 的 feat.pysearch（单一真源）；仅在旧缓存/离线/端点未升级时用本表。
+  //   为固定功能目录内的汉字建映射（覆盖名称+产品线，多音字按语境取音）；未收录字优雅跳过，中文/英文/ID 子串仍可搜。
+  var PY = {
+    "角":"jiao","色":"se","库":"ku","声":"sheng","音":"yin","克":"ke","隆":"long",
+    "语":"yu","合":"he","成":"cheng","唱":"chang","歌":"ge","批":"pi","量":"liang","配":"pei",
+    "实":"shi","时":"shi","对":"dui","话":"hua","测":"ce","试":"shi","台":"tai",
+    "开":"kai","播":"bo","中":"zhong","枢":"shu","同":"tong","传":"chuan",
+    "数":"shu","据":"ju","看":"kan","板":"ban","运":"yun","维":"wei","监":"jian","控":"kong",
+    "历":"li","史":"shi","记":"ji","录":"lu","交":"jiao","付":"fu","体":"ti","检":"jian",
+    "日":"ri","志":"zhi","设":"she","置":"zhi","白":"bai","标":"biao","内":"nei","容":"rong",
+    "验":"yan","真":"zhen","知":"zhi","识":"shi","问":"wen","答":"da","首":"shou","启":"qi",
+    "向":"xiang","导":"dao","直":"zhi","营":"ying","规":"gui","可":"ke","信":"xin"
+  };
+  function pyIndex(str){                        // → " 全拼 首字母"（供既有 indexOf 匹配 zhibo / zb 两种输入）
+    if(!str) return "";
+    var full="", ini="";
+    for(var i=0;i<str.length;i++){ var p=PY[str[i]]; if(p){ full+=p; ini+=p[0]; } }
+    return (full||ini) ? (" "+full+" "+ini) : "";
+  }
+
+  function el(tag, cls, html){ var e=document.createElement(tag); if(cls) e.className=cls; if(html!=null) e.innerHTML=html; return e; }
+  function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]; }); }
+
+  // 安全 fetch：失败/超时不抛错（首页永不白屏）
+  function jget(url, ms){
+    var ctrl = ("AbortController" in window) ? new AbortController() : null;
+    var to = ctrl ? setTimeout(function(){ try{ctrl.abort();}catch(_){}}, ms||4000) : 0;
+    return fetch(url, ctrl?{signal:ctrl.signal}:undefined)
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .catch(function(){ return null; })
+      .then(function(j){ if(to) clearTimeout(to); return j; });
+  }
+
+  // ── E4 入口埋点：独立事件通道（sendBeacon，导航前可靠送达；失败静默，端点未上线也无害）──
+  //   刻意不复用 window.__clientlog：那条通道是"错误"语义 + 去重/限流，会丢点击并污染错误面板。
+  var _sid=(function(){ try{ var v=sessionStorage.getItem("bd_sid");
+    if(!v){ v=Date.now().toString(36)+Math.random().toString(36).slice(2,8); sessionStorage.setItem("bd_sid",v); }
+    return v; }catch(_){ return ""; } })();
+  function track(ev, extra){
+    try{
+      var rec={ev:ev,sid:_sid,page:location.pathname};
+      if(extra){ for(var k in extra){ if(extra[k]!=null && extra[k]!=="") rec[k]=extra[k]; } }
+      var body=JSON.stringify(rec);
+      if(navigator.sendBeacon){ navigator.sendBeacon("/api/ui/event", new Blob([body],{type:"application/json"})); return; }
+      fetch("/api/ui/event",{method:"POST",body:body,headers:{"Content-Type":"application/json"},keepalive:true}).catch(function(){});
+    }catch(_){}
+  }
+  // 事件委托（捕获阶段→跳转前触发）：任何带 data-ev 的入口点击都记一笔漏斗
+  document.addEventListener("click", function(e){
+    try{ var t=e.target && e.target.closest && e.target.closest("[data-ev]"); if(!t) return;
+      var ev=t.getAttribute("data-ev"), id=t.getAttribute("data-id");
+      track(ev, {id:id, line:t.getAttribute("data-line"), href:t.getAttribute("href")});
+      if(ev==="feature" && id) pushRecent(id);   // 记入"最近使用"（点击即跳转，写盘先于导航）
+    }catch(_){}
+  }, true);
+
+  // 搜索交互：输入即时过滤 / 清除 / Esc 清空 / "/" 聚焦（applySearch 为函数声明，已提升）
+  (function(){
+    var inp=document.getElementById("q"), clr=document.getElementById("qClear");
+    // 深链：/?q=关键词 → 预填并过滤（可分享的筛选视图；render 末尾的 applySearch 会应用）
+    try{ var m=/[?&]q=([^&#]*)/.exec(location.search); if(m && m[1] && inp) inp.value=decodeURIComponent(m[1].replace(/\+/g," ")); }catch(_){}
+    if(inp){
+      inp.addEventListener("input", applySearch);
+      inp.addEventListener("keydown", function(e){
+        if(e.key==="Escape"){ inp.value=""; applySearch(); inp.blur(); return; }
+        if(!document.body.classList.contains("searching")) return;
+        var list=resultCards(); if(!list.length) return;
+        if(e.key==="ArrowDown"){ e.preventDefault();
+          if(!_kbNav){ _kbNav=true; } else { _kbActive=Math.min((_kbActive<0?-1:_kbActive)+1, list.length-1); }
+          setActive(list, true); }                                    // announce=true：读屏播报"名称·第 N/共 M"
+        else if(e.key==="ArrowUp"){ e.preventDefault();
+          if(!_kbNav){ _kbNav=true; } else { _kbActive=Math.max((_kbActive<0?0:_kbActive)-1, 0); }
+          setActive(list, true); }
+        else if(e.key==="Enter"){ e.preventDefault(); (list[_kbActive>=0?_kbActive:0]).click(); }  // 直达=真实点击，复用埋点+最近使用
+      });
+    }
+    if(clr){ clr.addEventListener("click", function(){ if(inp){ inp.value=""; applySearch(); inp.focus(); } }); }
+    document.addEventListener("keydown", function(e){
+      if(e.key!=="/" || e.ctrlKey || e.metaKey || e.altKey) return;
+      var ae=document.activeElement, tag=(ae&&ae.tagName)||"";
+      if(inp && ae!==inp && tag!=="INPUT" && tag!=="TEXTAREA"){ e.preventDefault(); inp.focus(); }
+    });
+    // PRO 说明弹窗：版位按钮打开；点遮罩或"关闭/暂不"关闭（原生 dialog 自带 Esc）
+    var edBtn=document.getElementById("edition"), dlg=document.getElementById("proDlg");
+    if(edBtn && dlg && dlg.showModal){ edBtn.addEventListener("click", function(){ try{ dlg.showModal(); }catch(_){} }); }
+    if(dlg){ dlg.addEventListener("click", function(e){
+      if(e.target===dlg || (e.target.closest && e.target.closest("[data-close]"))){ e.preventDefault(); dlg.close(); }
+    }); }
+  })();
+
+  // ── E5 注册表本地缓存（stale-while-revalidate）：二次访问先用缓存瞬时出框架，再后台校准 ──
+  var FEAT_CACHE_KEY="bd_features_v1";
+  function readFeatCache(){ try{ var j=JSON.parse(localStorage.getItem(FEAT_CACHE_KEY)||"null");
+    return (j && j.features && j.features.length) ? j : null; }catch(_){ return null; } }
+  function writeFeatCache(reg){ try{ if(reg && reg.features && reg.features.length)
+    localStorage.setItem(FEAT_CACHE_KEY, JSON.stringify({lines:reg.lines||null, features:reg.features})); }catch(_){} }
+
+  // 就绪点：站内页面恒"就绪"；外部服务依 /health 显示在线/离线。带 data-svc 便于定时就地刷新（不重渲染）。
+  function applyReady(span, health){
+    var svc = span.getAttribute("data-svc") || "";
+    var rs;
+    if(!svc) rs = {cls:"on", txt:"就绪"};
+    else if(!health || !health.services) rs = {cls:"", txt:"检测中"};
+    else rs = health.services[svc] ? {cls:"on", txt:"在线"} : {cls:"off", txt:"离线"};
+    span.className = "ready" + (rs.cls?(" "+rs.cls):"");
+    span.innerHTML = '<span class="dot"></span>'+esc(rs.txt);
+  }
+
+  function cardEl(feat, health){
+    var a = el("a", "card" + (FEATURED[feat.id] ? " feat" : "")); a.href = feat.href || "#";
+    a.setAttribute("data-ev","feature"); a.setAttribute("data-id",feat.id||""); a.setAttribute("data-line",feat.line||"");
+    var _py = feat.pysearch ? (" " + String(feat.pysearch).toLowerCase())   // 后端单一真源（名称+产品线·全拼&首字母）
+                            : (pyIndex(feat.name) + pyIndex(feat.line));     // 兜底：旧缓存/离线/端点未升级时用前端字表
+    a.setAttribute("data-search",
+      ((feat.name||"")+" "+(feat.desc||"")+" "+(feat.line||"")+" "+(feat.id||"")).toLowerCase() + _py);
+    a.style.setProperty("--line-rgb", LINE_RGB[feat.line] || "79 122 255");   // 卡片自持线色："最近使用"混合分区里各卡仍正确
+    var head = el("div","head");
+    var ic = el("span","ic", esc(feat.icon||"•")); ic.setAttribute("aria-hidden","true");
+    head.appendChild(ic);
+    head.appendChild(el("span","name", esc(feat.name||feat.id)));
+    a.appendChild(head);
+    a.appendChild(el("div","desc", esc(feat.desc||"")));
+    var foot = el("div","foot");
+    var tags = el("div","tags");
+    var ready = el("span","ready");
+    ready.setAttribute("data-svc", feat.service||"");
+    applyReady(ready, health);
+    tags.appendChild(ready);
+    if((feat.edition||"")==="pro"){ var pb=el("span","pro","PRO"); pb.setAttribute("title","PRO 能力 · 点击右上角版位了解"); tags.appendChild(pb); }
+    foot.appendChild(tags);
+    var enter = el("span","bd-btn bd-btn-ghost enter","进入");
+    foot.appendChild(enter);
+    a.appendChild(foot);
+    return a;
+  }
+
+  function render(reg, health){
+    var root = document.getElementById("sections");
+    root.innerHTML = "";
+    var lines = (reg && reg.lines && reg.lines.length) ? reg.lines : FALLBACK.lines;
+    var feats = (reg && reg.features) ? reg.features : [];
+    renderRecentSection(root, feats, health);   // 置顶"最近使用"（回访快速路径）
+    lines.forEach(function(line){
+      var items = feats.filter(function(f){ return f.line===line; });
+      if(!items.length) return;
+      var sec = el("section","section");
+      sec.style.setProperty("--line-rgb", LINE_RGB[line] || "79 122 255");   // 产品线色：卡片/色点经继承共用
+      var h = el("div","section-h");
+      h.appendChild(el("span","dot"));
+      h.appendChild(el("span","line", esc(line)));
+      h.appendChild(el("span","count", items.length+" 项"));
+      sec.appendChild(h);
+      var grid = el("div","grid");
+      items.forEach(function(f){ grid.appendChild(cardEl(f, health)); });
+      sec.appendChild(grid);
+      root.appendChild(sec);
+    });
+    if(!root.children.length){
+      root.appendChild(el("p","desc","功能清单加载失败，请稍后刷新，或直接进入 <a href=\"/ui\">工作室</a>。"));
+    }
+    applySearch();                              // 重渲染后保持当前搜索筛选态
+  }
+
+  // ── I2: 最近使用（localStorage）+ 客户端即时搜索 ──
+  function recentIds(){ try{ return JSON.parse(localStorage.getItem("bd_recent_v1")||"[]")||[]; }catch(_){ return []; } }
+  function pushRecent(id){ try{
+    var a=recentIds().filter(function(x){ return x!==id; }); a.unshift(id);
+    localStorage.setItem("bd_recent_v1", JSON.stringify(a.slice(0,8)));
+  }catch(_){} }
+  // 置顶(pin)：独立存储，永不随时效淘汰；渲染时排在"最近使用"最前
+  function pinnedIds(){ try{ return JSON.parse(localStorage.getItem("bd_pinned_v1")||"[]")||[]; }catch(_){ return []; } }
+  function togglePin(id){ try{ var p=pinnedIds(), i=p.indexOf(id);
+    if(i>=0) p.splice(i,1); else p.unshift(id);
+    localStorage.setItem("bd_pinned_v1", JSON.stringify(p.slice(0,8))); }catch(_){} }
+  function clearRecent(){ try{ localStorage.removeItem("bd_recent_v1"); }catch(_){} }   // 只清自动历史，保留置顶
+  function rerenderRecent(){ var root=document.getElementById("sections"); if(!root) return;
+    var old=root.querySelector(".recent-sec"); if(old) old.remove();
+    renderRecentSection(root, lastFeats, lastHealth); }                                 // 就地重渲，不动其它分区/不重播入场动画
+  function renderRecentSection(root, feats, health){
+    feats = feats || [];
+    var byId={}; feats.forEach(function(f){ byId[f.id]=f; });
+    var pins=pinnedIds(), pinSet={}; pins.forEach(function(id){ pinSet[id]=1; });
+    var pinItems=pins.map(function(id){ return byId[id]; }).filter(Boolean);           // 置顶（存在于清单者）
+    var recItems=recentIds().map(function(id){ return byId[id]; })
+                  .filter(function(f){ return f && !pinSet[f.id]; });                   // 最近（排除已置顶，避免重复）
+    var items=pinItems.concat(recItems).slice(0,8);
+    if(!items.length) return;
+    var sec=el("section","section recent-sec");
+    sec.style.setProperty("--line-rgb","148 163 184");     // 分区色点=中性石板；卡片各自保留线色
+    var h=el("div","section-h");
+    h.appendChild(el("span","dot"));
+    h.appendChild(el("span","line","最近使用"));
+    h.appendChild(el("span","count", items.length+" 项"));
+    if(recItems.length){                                    // 有自动历史才给"清除"（置顶项不受影响）
+      var clr=el("button","recent-clear"); clr.type="button"; clr.textContent="清除";
+      clr.title="清除最近使用记录（保留已置顶）"; clr.setAttribute("aria-label","清除最近使用记录，保留已置顶");
+      clr.addEventListener("click", function(e){ e.preventDefault(); e.stopPropagation(); clearRecent(); rerenderRecent(); });
+      h.appendChild(clr);
+    }
+    sec.appendChild(h);
+    var grid=el("div","grid");
+    items.forEach(function(f){
+      var wrap=el("div","recent-item");
+      wrap.appendChild(cardEl(f, health));                  // 复用同款卡片（就绪点/线色/埋点一致）
+      var on=!!pinSet[f.id];
+      var pin=el("button","pin-btn"+(on?" on":"")); pin.type="button"; pin.textContent="📌";
+      pin.setAttribute("aria-pressed", on?"true":"false");
+      pin.setAttribute("aria-label",(on?"取消置顶：":"置顶：")+(f.name||f.id));
+      pin.title = on?"取消置顶":"置顶到最前";
+      pin.addEventListener("click", function(e){ e.preventDefault(); e.stopPropagation(); togglePin(f.id); rerenderRecent(); });
+      wrap.appendChild(pin);                                 // 按钮为卡片"兄弟"，不嵌 <a> 内（合法+无障碍独立可聚焦）
+      grid.appendChild(wrap);
+    });
+    sec.appendChild(grid);
+    root.insertBefore(sec, root.firstChild);                // 置顶插入：初次(root 空)=首个；pin/清除重渲仍居首
+  }
+  // 搜索结果键盘导航：↑/↓ 选中、Enter 直达（_kbActive=活动项索引，-1=无；_kbNav=本次搜索是否已按过方向键）
+  var _kbActive = -1, _kbNav = false;
+  function resultCards(){                        // 当前可见命中卡（排除"最近使用"，按 DOM 顺序）
+    var n=document.querySelectorAll("#sections .section:not(.recent-sec):not(.hide) .card:not(.hide)"), out=[];
+    for(var i=0;i<n.length;i++) out.push(n[i]);
+    return out;
+  }
+  function setActive(list, announce){
+    list = list || resultCards();
+    for(var i=0;i<list.length;i++){
+      var on=(i===_kbActive);
+      list[i].classList.toggle("kbdon", on);
+      if(on){ list[i].setAttribute("aria-current","true"); } else { list[i].removeAttribute("aria-current"); }
+    }
+    var cur=(_kbActive>=0 && list[_kbActive]) ? list[_kbActive] : null;
+    if(cur) cur.scrollIntoView({block:"nearest"});
+    var sr=document.getElementById("srStatus");
+    if(sr){
+      if(announce && cur){                        // 仅方向键显式切换时播报（逐键输入交给 #qCount 计数，避免双重打扰）
+        var nm=cur.querySelector(".name");
+        sr.textContent=(nm?nm.textContent:"结果")+"，第 "+(_kbActive+1)+" 项 / 共 "+list.length+" 项";
+      } else if(!cur){ sr.textContent=""; }       // 退出搜索/无选中：清空离屏播报，避免陈旧内容
+    }
+  }
+  function applySearch(){
+    var inp=document.getElementById("q"); var q=inp?(inp.value||"").trim().toLowerCase():"";
+    var searching=!!q;
+    document.body.classList.toggle("searching", searching);
+    var box=document.getElementById("searchBox"); if(box) box.classList.toggle("has", searching);
+    var cards=document.querySelectorAll("#sections .card");
+    for(var i=0;i<cards.length;i++){
+      var hit=!q || (cards[i].getAttribute("data-search")||"").indexOf(q)>=0;
+      cards[i].classList.toggle("hide", !hit);
+    }
+    var secs=document.querySelectorAll("#sections .section"), total=0;
+    for(var j=0;j<secs.length;j++){
+      var isRecent=secs[j].classList.contains("recent-sec");
+      var vis=secs[j].querySelectorAll(".card:not(.hide)").length;
+      secs[j].classList.toggle("hide", searching && (isRecent || vis===0));   // 搜索态隐藏"最近使用"与无命中分区
+      if(searching && !isRecent) total+=vis;
+    }
+    var empty=document.getElementById("searchEmpty");
+    if(empty) empty.style.display=(searching && total===0)?"flex":"none";
+    // 结果计数 + 键盘导航活动项（搜索态默认高亮首个→Enter 直达；非搜索态清除）
+    var cnt=document.getElementById("qCount");
+    if(cnt) cnt.textContent = searching ? (total+" 项匹配") : "";
+    var list=resultCards();
+    if(searching && list.length){ if(_kbActive<0 || _kbActive>=list.length) _kbActive=0; }
+    else { _kbActive=-1; }
+    _kbNav=false;                                 // 每次输入重置：首次方向键先读当前项(不跳过第一项)
+    setActive(list);
+  }
+
+  function applyEdition(lic){
+    var st = (lic && lic.state) || lic;        // /api/license/status 实为 {state:{…}}；兼容扁平结构
+    if(!st) return;
+    licState = st;
+    var label = st.edition_label || st.edition;
+    if(label){ var t=document.getElementById("editionText"); if(t) t.textContent = label; }
+    buildProDialog(lastFeats, licState);        // 版位到位→刷新弹窗（版位/有效期显真，M5 续费提示）
+  }
+
+  // M-pro: PRO 说明弹窗——动态列出 edition==="pro" 的功能 + 当前版位/有效期 + 导向真实授权页(/delivery)。
+  //   不臆造价格/联系方式；PRO 在本平台是"展示标注 + license 对 HD/多副本的强制"，故仅解释与导流，不做假门。
+  function buildProDialog(feats, st){
+    var dlg=document.getElementById("proDlg"); if(!dlg) return;
+    var pros=(feats||[]).filter(function(f){ return (f.edition||"")==="pro"; });
+    var edEl=document.getElementById("editionText");
+    var edLabel=(st && (st.edition_label||st.edition)) || (edEl?edEl.textContent:"") || "本地版";
+    var tail="";
+    if(st){
+      var dl=st.days_left;
+      if(typeof dl==="number" && dl>=0){ tail=" · 剩 "+dl+" 天"+(st.expiring_soon?"（即将到期）":""); }
+      else if(st.status_label){ tail=" · "+st.status_label; }
+    }
+    var items = pros.length ? pros.map(function(f){
+      return '<li><span class="pd-ic" aria-hidden="true">'+esc(f.icon||"•")+'</span>'
+        +'<span class="pd-nm">'+esc(f.name||f.id)+'</span>'
+        +'<span class="pd-ln">'+esc(f.line||"")+'</span></li>';
+    }).join("") : '<li class="pd-empty">当前版本未标注 PRO 功能。</li>';
+    var licensed = !!(st && (st.status==="valid" || st.valid===true));   // 已授权→安抚而非推销（M5）
+    var lead = licensed
+      ? '你当前版位已包含以下 PRO 能力，可直接使用：'
+      : 'PRO 解锁高级能力（高清换脸 / 多副本并发等）。以下功能标注为 PRO：';
+    var ctaText = licensed ? '查看授权状态 →' : '查看授权与交付体检 →';
+    dlg.innerHTML =
+      '<div class="pd-card">'
+      + '<div class="pd-head"><span class="pd-title">能力</span>'
+      +   '<button class="pd-x" type="button" data-close aria-label="关闭">✕</button></div>'
+      + '<div class="pd-edition">当前版位：<b>'+esc(edLabel)+'</b>'+esc(tail)+'</div>'
+      + '<p class="pd-lead">'+esc(lead)+'</p>'
+      + '<ul class="pd-list">'+items+'</ul>'
+      + '<div class="pd-foot">'
+      +   '<button class="bd-btn bd-btn-ghost" type="button" data-ev="pro" data-id="dismiss" data-close>暂不</button>'
+      +   '<a class="bd-btn bd-btn-primary" data-ev="pro" data-id="delivery" href="/delivery">'+esc(ctaText)+'</a>'
+      + '</div>'
+      + '</div>';
+    // 深链 /#pro → 直接打开（可分享的"了解 PRO"入口，市场可外链；也便于验证）
+    if(location.hash==="#pro" && dlg.showModal && !dlg.open){ try{ dlg.showModal(); }catch(_){} }
+  }
+
+  // P1: 首启引导——未就绪时在首页置顶引导到 /setup（就绪则不打扰）。
+  //   I4：前门只给"人话归因 + 一个按钮"，技术命令（bat/脚本）留在 /setup 向导内，不吓退非技术用户；
+  //   与状态条同轴（都由 broadcast 判核心）→ 服务就绪即整卡消失，不再与"系统就绪"自相矛盾。
+  function renderOnboard(s){
+    var box=document.getElementById("onboard"); if(!box) return;
+    if(s!==undefined) lastSetup=s;              // 允许无参刷新：用缓存的 setup 状态重渲染
+    s=lastSetup;
+    if(gpuReleased){ box.style.display="none"; return; }   // 释放态由状态条说明（去启用），不重复出首启引导
+    if(!s || s.ready){ box.style.display="none"; return; }
+    var blk=s.blocking||[], title, desc;        // 按阻塞项归因，给一句人话（不回显后端技术命令）
+    if(blk.indexOf("services")>=0){ title="启动核心服务即可开始"; desc="部分核心服务尚未运行，向导会带你一键启动。"; }
+    else if(blk.indexOf("profile")>=0){ title="创建你的第一个数字人"; desc="添加一个角色并绑定参考音，即可开始创作。"; }
+    else { title="完成最后几步设置"; desc="还有关键项未就绪，前往向导继续。"; }
+    var bad=(s.steps||[]).filter(function(x){ return !x.ok && x.severity==="critical"; });
+    var chips=bad.map(function(x){ return '<span class="step">'+esc(x.title)+'</span>'; }).join("");
+    box.innerHTML=''
+      +'<span class="ic" aria-hidden="true">🚀</span>'
+      +'<div class="body"><div class="t">'+esc(title)+'</div>'
+      +'<div class="d">'+esc(desc)+'</div>'
+      +(chips?'<div class="steps">'+chips+'</div>':'')
+      +'</div>'
+      +'<a class="bd-btn bd-btn-primary" href="/setup">前往向导 →</a>';
+    box.style.display="flex";
+  }
+
+  // P2: 系统就绪度总览（运行时状态条）——复用同一份 /health，只读 + 直达 /ops（控制动作归运维页，前门不放回暖以免鉴权/误触）。
+  //     不显示"N/总"误导比（很多引擎有意常关）：健康时不吓人。
+  //   I3+E1：核心健康以后端 h.broadcast（开播模式感知的核心真相，na 服务不报警）为单一真相，
+  //   前端不再硬编码核心清单；基调"不以负面打头"——核心就绪=自信绿，核心待启动=琥珀可行动(非血红)，仅过载=红。
+  function chip(txt, tone){ return '<span class="sb-chip'+(tone?(" "+tone):"")+'">'+esc(txt)+'</span>'; }
+  function renderStatus(h){
+    var box=document.getElementById("sysbar"); if(!box) return;
+    if(!h || !h.services){ box.style.display="none"; return; }
+    gpuReleased = !!h.gpu_released;             // 同步 GPU 释放态，供引导卡判定
+    if(gpuReleased){                            // 释放态：友好提示"已释放·去启用"，不报红色"核心掉线"（那是有意停的）
+      var pr=({green:"流畅",yellow:"偏高",red:"过载"})[h.pressure]||"—";
+      box.className="sysbar warn";
+      box.innerHTML='<div class="sb-items">'+chip("显存已释放（让给其它机器）","warn")+chip("压力 "+pr,"")+'</div>'
+        +'<div class="sb-actions"><a class="bd-btn bd-btn-ghost" data-ev="sysbar" data-id="engage" href="/ops">去启用 →</a></div>';
+      box.style.display="flex"; renderOnboard(); return;
+    }
+    var svc=h.services, names=Object.keys(svc), up=0;
+    for(var i=0;i<names.length;i++){ if(svc[names[i]]) up++; }
+    // 核心健康：优先用后端 broadcast 单一真相（开播模式感知、na 不报警、消除误报）；老后端缺该字段才回退近似
+    var bc=h.broadcast, coreDown, coreBusy=(bc && bc.core_busy) ? bc.core_busy : [];
+    if(bc && bc.core_down){ coreDown = bc.core_down; }
+    else { coreDown = ["fish_tts","stt","lipsync"].filter(function(k){ return (k in svc) && !svc[k]; }); }
+    var coreOk = !coreDown.length;
+    var SHORT={fish_tts:"语音合成",stt:"语音识别",lipsync:"口型",vcam:"广播",faceswap:"换脸",nemo_stt:"语音识别"};
+    var pmap={green:["流畅","ok"],yellow:["偏高","warn"],red:["过载","bad"]};
+    var p=pmap[h.pressure]||["未知",""];
+    // 基调不以负面打头：核心就绪→自信绿；核心待启动→琥珀(可行动)；核心降级(仅去抖判活)→琥珀提醒；仅过载→红
+    var lead, tone, action="运维详情 →";
+    if(!coreOk){
+      var named=coreDown.map(function(k){ return SHORT[k]||k; });
+      lead=chip(named.length<=2 ? (named.join("、")+"待启动") : (coreDown.length+" 项核心服务待启动"), "warn");
+      tone="warn"; action="去启动 →";
+    } else if(h.pressure==="red"){        // 过载(红)比"去抖判活繁忙"更严重，优先呈现，不被降级态掩盖
+      lead=chip("算力过载","bad"); tone="bad";
+    } else if(coreBusy.length){           // 核心仅去抖判活=降级：琥珀提醒(可见但不阻断，非掉线)
+      var nb=coreBusy.map(function(k){ return SHORT[k]||k; });
+      lead=chip(nb.length<=2 ? (nb.join("、")+"繁忙") : (coreBusy.length+" 项核心繁忙"), "warn");
+      tone="warn";
+    } else {
+      lead=chip("系统就绪","ok"); tone=(h.pressure==="yellow"?"warn":"");
+    }
+    // 次要指标：中性呈现，仅真高阈值才染色（不与基调抢眼）
+    var chips = lead + chip(up+" 服务在线","") + chip("压力 "+p[0], p[1]);
+    if(typeof h.gpu_util==="number" && h.gpu_util>=0) chips+=chip("GPU "+h.gpu_util+"%", h.gpu_util>90?"bad":(h.gpu_util>70?"warn":""));
+    if(typeof h.ram_percent==="number" && h.ram_percent>=0) chips+=chip("内存 "+h.ram_percent+"%", h.ram_percent>90?"bad":(h.ram_percent>75?"warn":""));
+    if(h.profile_count) chips+=chip(h.profile_count+" 个角色","");
+    box.className="sysbar"+(tone?(" "+tone):"");
+    box.innerHTML='<div class="sb-items">'+chips+'</div>'
+      +'<div class="sb-actions"><a class="bd-btn bd-btn-ghost" data-ev="sysbar" data-id="'+(coreOk?"ops":"start")+'" href="/ops">'+esc(action)+'</a></div>';
+    box.style.display="flex";
+    renderOnboard();                            // 用缓存 setup 状态刷新引导（从释放态切回时恢复显示）
+  }
+  // 定时把最新 /health 应用到卡片就绪点（就地更新，不重建 DOM→无闪烁/不丢 hover）
+  function refreshDots(h){
+    var spans=document.querySelectorAll("#sections .ready[data-svc]");
+    for(var i=0;i<spans.length;i++) applyReady(spans[i], h);
+  }
+
+  // E5：有缓存则先用缓存瞬时渲染框架（就绪点先"检测中"，待 /health 到位再点亮），首屏不空白
+  var _cachedReg = readFeatCache();
+  if(_cachedReg){ render(_cachedReg, null); lastFeats=_cachedReg.features||[]; buildProDialog(lastFeats, null); }
+  function _regKey(r){ return r ? JSON.stringify({lines:r.lines||null, features:r.features||null}) : ""; }
+
+  // 并行拉取：注册表 + 健康 + 版位。注册表失败则回退（仍出五大入口与页脚）。
+  Promise.all([ jget("/api/features",4000), jget("/health",4000), jget("/api/license/status",3000) ])
+    .then(function(res){
+      var reg=res[0], health=res[1], lic=res[2];
+      lastHealth = health || lastHealth;
+      lastFeats = (reg && reg.features) ? reg.features : ((_cachedReg && _cachedReg.features) || FALLBACK.features || []);
+      if(reg && reg.features){
+        // 拉到新鲜注册表：仅当内容变化才重渲染（避免闪烁）；未变则就地点亮就绪点
+        if(!_cachedReg || _regKey(reg)!==_regKey(_cachedReg)){ render(reg, health); writeFeatCache(reg); }
+        else { refreshDots(health); }
+      } else if(!_cachedReg){
+        render(FALLBACK, health);            // 无缓存且拉取失败→回退（仍出分区/页脚）
+      } else {
+        refreshDots(health);                 // 有缓存、拉取失败→保留缓存框架，只点亮就绪点
+      }
+      applyEdition(lic);
+      renderStatus(health);                 // P2: 同一份 /health 直接喂总览，零额外请求
+    });
+  jget("/api/setup/status",5000).then(renderOnboard);   // P1: 首启引导（独立拉取，不阻塞主渲染）
+  // P2: 总览条 + 卡片就绪点定时刷新（仅一发 /health；页面隐藏时不轮询，省资源/省电）
+  setInterval(function(){
+    if(document.hidden) return;
+    jget("/health",4000).then(function(h){ if(!h) return; lastHealth=h; renderStatus(h); refreshDots(h); });
+  }, 25000);
+})();
+</script>
+</body>
+</html>

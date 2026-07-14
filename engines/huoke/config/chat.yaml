@@ -1,0 +1,61 @@
+﻿# OpenClaw 聊天控制配置
+# AI 模型用于解析用户中文指令 → 结构化 API 调用
+
+ai:
+  provider: zhipu                         # zhipu / deepseek / qwen / openai
+  model: glm-4-flash                      # 智谱GLM-4 Flash (免费)
+  api_key: "${GLM_API_KEY}"
+  base_url: https://open.bigmodel.cn/api/paas/v4
+  temperature: 0.05
+  max_tokens: 800
+
+# 用户自定义设备编号 → ADB 序列号
+# 用户说 "01号手机" 时映射到对应的 ADB serial
+device_aliases:
+  "01": "AIUKQ8WSKZBUQK4X"
+  "02": "8D7DWWUKQGJRNN79"
+  "03": "8XINBU4HNF9TSOXW"
+  "04": "BMNJCMH69HVGAUMN"
+  "05": "HIXOOB7DEIQ4RCDI"
+  "06": "JFIJYPR86TUW9TAM"
+  "07": "L7EYZDQOOZ8LDAKN"
+  "08": "ON9HSC7LA6LV8HNN"
+  "09": "OZMZKRDMGIOJGEKF"
+  "10": "IJDMAUJFZH6XG6RS"
+  "11": "KBXO6L6HS8Q4GQWG"
+
+# 默认参数
+defaults:
+  target_country: italy
+  warmup_duration: 30
+  max_follows: 20
+  warmup_phase: auto
+
+# OpenClaw API 地址
+api:
+  base_url: http://localhost:18080
+
+# AI 指令分流（/chat）
+# OPENCLAW_CHAT_TRIAGE_DISABLE=1 — 关闭分流，行为与旧版一致（全部走意图解析）
+# OPENCLAW_CHAT_TRIAGE_STRATEGY=llm_first|rules_first — 覆盖本处 strategy
+triage:
+  enabled: true
+  # llm_first：用 chat.yaml 的同源「ai」模型（get_llm_client）一次 JSON 分类 — 推荐生产
+  # rules_first：仅用轻量规则（供单测/无网环境；pytest 默认通过 conftest 设 rules_first）
+  strategy: llm_first
+  rules_fallback: true
+
+# 单次 LLM 合并「分流 + 意图解析」（ChatAI.parse_unified）；失败自动回退 triage+parse_intent
+# OPENCLAW_UNIFIED_PARSE=1|0 可覆盖 enabled
+unified_parse:
+  enabled: true
+
+# AI 指令（/chat）执行任务前：对目标设备做预检，不通过则不下发任务（减少必失败任务）
+# 环境变量 OPENCLAW_CHAT_PREFLIGHT=1 强制开启；=0 强制关闭（单测默认 0，见 tests/conftest.py）
+preflight_before_execute:
+  enabled: true
+  max_devices: 12
+  # network_only：仅测外网（快）；full：网络 → GEO/VPN（出口国与任务一致可跳过 VPN）→ 账号
+  # 本地 SIM 已在目标国、需走「免 VPN」逻辑时请用 full；也可用 OPENCLAW_CHAT_PREFLIGHT_MODE=full
+  # API 调试：GET/POST /task-dispatch/preflight-… ?task_target_country=philippines（仅 mode=full 生效）
+  mode: network_only

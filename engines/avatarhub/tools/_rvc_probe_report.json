@@ -1,0 +1,152 @@
+{
+  "ts": 1783571211,
+  "n": 9,
+  "rows": {
+    "weights/CN_男声-01号.pth": {
+      "sr": 40000,
+      "voiced_frames": 126,
+      "centroid_hz": 897.1,
+      "rolloff85_hz": 1543.0,
+      "presence_2_5k": 0.0042,
+      "air_5_8k": 0.0,
+      "tilt_db": -16.41,
+      "convert_s": 1.7,
+      "cached": false,
+      "centroid_z": -1.45,
+      "bucket": "暗厚",
+      "rank_dark_to_bright": 2,
+      "borderline_with": [
+        "weights/CN_男声-03号.pth"
+      ]
+    },
+    "weights/CN_男声-02号.pth": {
+      "sr": 40000,
+      "voiced_frames": 130,
+      "centroid_hz": 1614.5,
+      "rolloff85_hz": 2636.7,
+      "presence_2_5k": 0.012,
+      "air_5_8k": 0.0001,
+      "tilt_db": -11.45,
+      "convert_s": 2.3,
+      "cached": false,
+      "centroid_z": 0.46,
+      "bucket": "明亮",
+      "rank_dark_to_bright": 7,
+      "borderline_with": [
+        "weights/CN_男声-08号.pth"
+      ]
+    },
+    "weights/CN_男声-03号.pth": {
+      "sr": 40000,
+      "voiced_frames": 133,
+      "centroid_hz": 870.3,
+      "rolloff85_hz": 1347.7,
+      "presence_2_5k": 0.0013,
+      "air_5_8k": 0.0,
+      "tilt_db": -17.79,
+      "convert_s": 2.5,
+      "cached": false,
+      "centroid_z": -1.52,
+      "bucket": "暗厚",
+      "rank_dark_to_bright": 1,
+      "borderline_with": [
+        "weights/CN_男声-01号.pth"
+      ]
+    },
+    "weights/CN_男声-04号.pth": {
+      "sr": 40000,
+      "voiced_frames": 133,
+      "centroid_hz": 1865.6,
+      "rolloff85_hz": 3535.2,
+      "presence_2_5k": 0.0071,
+      "air_5_8k": 0.0006,
+      "tilt_db": -15.33,
+      "convert_s": 2.4,
+      "cached": false,
+      "centroid_z": 1.13,
+      "bucket": "明亮",
+      "rank_dark_to_bright": 8
+    },
+    "weights/CN_男声-06号.pth": {
+      "sr": 40000,
+      "voiced_frames": 128,
+      "centroid_hz": 1155.1,
+      "rolloff85_hz": 2246.1,
+      "presence_2_5k": 0.0047,
+      "air_5_8k": 0.0001,
+      "tilt_db": -18.18,
+      "convert_s": 2.4,
+      "cached": false,
+      "centroid_z": -0.76,
+      "bucket": "暗厚",
+      "rank_dark_to_bright": 3
+    },
+    "weights/CN_男声-07号.pth": {
+      "sr": 40000,
+      "voiced_frames": 132,
+      "centroid_hz": 2018.7,
+      "rolloff85_hz": 3750.0,
+      "presence_2_5k": 0.0035,
+      "air_5_8k": 0.0001,
+      "tilt_db": -19.79,
+      "convert_s": 2.4,
+      "cached": false,
+      "centroid_z": 1.54,
+      "bucket": "明亮",
+      "rank_dark_to_bright": 9
+    },
+    "weights/CN_男声-08号.pth": {
+      "sr": 40000,
+      "voiced_frames": 132,
+      "centroid_hz": 1571.2,
+      "rolloff85_hz": 3125.0,
+      "presence_2_5k": 0.0044,
+      "air_5_8k": 0.0009,
+      "tilt_db": -19.12,
+      "convert_s": 2.8,
+      "cached": false,
+      "centroid_z": 0.35,
+      "bucket": "中性",
+      "rank_dark_to_bright": 6,
+      "borderline_with": [
+        "weights/CN_男声-10号.pth",
+        "weights/CN_男声-02号.pth"
+      ]
+    },
+    "weights/CN_男声-09号.pth": {
+      "sr": 40000,
+      "voiced_frames": 138,
+      "centroid_hz": 1446.7,
+      "rolloff85_hz": 2949.2,
+      "presence_2_5k": 0.0125,
+      "air_5_8k": 0.0003,
+      "tilt_db": -12.73,
+      "convert_s": 2.3,
+      "cached": false,
+      "centroid_z": 0.02,
+      "bucket": "中性",
+      "rank_dark_to_bright": 4,
+      "borderline_with": [
+        "weights/CN_男声-10号.pth"
+      ]
+    },
+    "weights/CN_男声-10号.pth": {
+      "sr": 40000,
+      "voiced_frames": 126,
+      "centroid_hz": 1530.3,
+      "rolloff85_hz": 2910.2,
+      "presence_2_5k": 0.0065,
+      "air_5_8k": 0.0002,
+      "tilt_db": -16.7,
+      "convert_s": 2.4,
+      "cached": false,
+      "centroid_z": 0.24,
+      "bucket": "中性",
+      "rank_dark_to_bright": 5,
+      "borderline_with": [
+        "weights/CN_男声-09号.pth",
+        "weights/CN_男声-08号.pth"
+      ]
+    }
+  }
+}

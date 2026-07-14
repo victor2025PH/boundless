@@ -1,0 +1,41 @@
+# pre-commit 钩子 (2026-07-11 安全加固新增)
+# 启用(一次性，需联网下载 hook 环境；属环境变更，请在确认后执行)：
+#   pip install pre-commit
+#   pre-commit install                    # 装 pre-commit 钩子
+#   pre-commit install --hook-type pre-push
+#   pre-commit autoupdate                 # 把下面各 rev 更新到最新稳定版
+#   pre-commit run --all-files            # 首次全量扫描
+repos:
+  # ── OpenClaw 自带守卫（防提交到 main / 防 staged runtime 配置）──
+  # 用 pre-commit 的 local hook 经 PowerShell 运行原 scripts/ops/pre_commit.ps1，
+  # 取代 migration-mode 的 .legacy 链（后者在 Windows 因缺 /bin/sh 无法执行）。
+  - repo: local
+    hooks:
+      - id: openclaw-guard
+        name: OpenClaw commit guard (branch/runtime-config)
+        entry: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ops/pre_commit.ps1
+        language: system
+        pass_filenames: false
+        always_run: true
+
+  # ── 密钥泄露扫描（防止 shared_secret / api_key / 设备指纹再次入库）──
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  # ── 通用卫生钩子 ──
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: "^docs/"
+      - id: end-of-file-fixer
+        exclude: "^docs/"
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=2048"]     # 拦截 >2MB 的大文件误入库(截图/dump/权重)
+      - id: debug-statements
+        language_version: python3

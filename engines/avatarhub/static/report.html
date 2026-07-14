@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>运营战报 · 无界科技 BOUNDLESS</title>
+<style>
+  /* 战报页刻意全内联（零外链）：Ctrl+S 存单文件、微信/投屏离线可看 */
+  :root{ --acc:#4f7aff; --acc2:#a855f7; --bg:#0a0e17; --card:#131a2b; --bord:#26314b;
+         --txt:#e8eefb; --mut:#8b96b0; --ok:#34d399; --warn:#fbbf24; --bad:#f87171; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:
+        radial-gradient(110% 45% at 100% 0%, rgba(79,122,255,.10), transparent 55%),
+        radial-gradient(110% 45% at 0% 100%, rgba(168,85,247,.08), transparent 50%),
+        var(--bg);
+        color:var(--txt); font-family:-apple-system,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif; }
+  .page{ max-width:760px; margin:0 auto; padding:28px 24px 40px; }
+  .no-print{ display:flex; gap:8px; justify-content:flex-end; margin-bottom:10px; }
+  .no-print button{ background:var(--card); color:var(--txt); border:1px solid var(--bord);
+        border-radius:20px; padding:7px 16px; font-size:13px; cursor:pointer; }
+  .no-print button:hover{ border-color:var(--acc); }
+  header{ display:flex; align-items:center; gap:12px; margin-bottom:6px; }
+  .logo{ width:34px; height:34px; border-radius:10px; flex:none;
+         background:linear-gradient(135deg,var(--acc),var(--acc2));
+         display:flex; align-items:center; justify-content:center; font-size:17px; }
+  h1{ font-size:21px; margin:0; letter-spacing:.5px;
+      background:linear-gradient(135deg,var(--acc),var(--acc2));
+      -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .sub{ color:var(--mut); font-size:12px; margin:2px 0 20px 46px; }
+  .kpis{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:14px; }
+  .kpi{ background:var(--card); border:1px solid var(--bord); border-radius:14px; padding:14px 16px; }
+  .kpi .v{ font-size:26px; font-weight:800; line-height:1.15; font-variant-numeric:tabular-nums; }
+  .kpi .v small{ font-size:13px; font-weight:400; color:var(--mut); }
+  .kpi .k{ font-size:12px; color:var(--mut); margin-top:5px; }
+  .card{ background:var(--card); border:1px solid var(--bord); border-radius:14px;
+         padding:14px 16px; margin-bottom:12px; }
+  .card h2{ font-size:13px; margin:0 0 10px; color:var(--mut); font-weight:600; letter-spacing:.4px; }
+  .bars{ display:flex; align-items:flex-end; gap:3px; height:70px; }
+  .bars .c{ flex:1; display:flex; flex-direction:column; justify-content:flex-end;
+            align-items:center; gap:3px; min-width:0; }
+  .bars .b{ width:72%; border-radius:3px 3px 0 0; background:linear-gradient(180deg,var(--acc),var(--acc2)); }
+  .bars .d{ font-size:12px; color:#5b6b8c; white-space:nowrap; transform:scale(.85); }
+  .frow{ margin:7px 0; }
+  .frow .t{ display:flex; justify-content:space-between; font-size:12px; color:#cbd5e1; margin-bottom:3px; }
+  .frow .track{ height:10px; background:#0d1424; border-radius:6px; overflow:hidden; }
+  .frow .fill{ height:100%; border-radius:6px; background:linear-gradient(90deg,var(--acc),var(--acc2)); }
+  table{ width:100%; border-collapse:collapse; font-size:12px; }
+  th,td{ text-align:left; padding:6px 8px; border-bottom:1px solid var(--bord); }
+  th{ color:var(--mut); font-weight:600; } td.r,th.r{ text-align:right; }
+  .hl{ background:linear-gradient(90deg, rgba(79,122,255,.14), rgba(168,85,247,.10));
+       border:1px solid rgba(79,122,255,.35); border-radius:14px; padding:12px 16px;
+       font-size:14px; line-height:1.6; margin-bottom:12px; }
+  .hl b{ color:#c7d6ff; }
+  .daydiff{ margin-top:6px; padding-top:6px; border-top:1px dashed rgba(79,122,255,.25);
+            font-size:12.5px; color:#8b96b3; }
+  .daydiff .gd{ color:#34d399; font-weight:700; } .daydiff .bd{ color:#f87171; font-weight:700; }
+  footer{ color:#5b6b8c; font-size:12px; text-align:center; margin-top:22px; }
+  .empty{ color:var(--mut); font-size:12px; padding:10px 0; }
+  @media print{
+    body{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    .no-print{ display:none; }
+    .page{ padding:10px 4px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="no-print">
+    <button onclick="savePng(this)" title="生成整页长图（适合直接发微信）">📸 保存长图</button>
+    <button onclick="window.print()">🖨 打印 / 存 PDF</button>
+    <button onclick="location.reload()">↻ 刷新数据</button>
+  </div>
+  <header>
+    <div class="logo">🎙</div>
+    <div>
+      <h1 id="brandName">无界 BOUNDLESS · 数字人运营战报</h1>
+      <div class="sub" style="margin:2px 0 0 0" id="meta">—</div>
+    </div>
+  </header>
+  <div class="sub"></div>
+
+  <div class="hl" id="headline">加载中…</div>
+  <div class="kpis" id="kpis"></div>
+
+  <div class="card">
+    <h2>近 14 天 · 对话量与好评率</h2>
+    <div id="dailyChart"><div class="empty">暂无数据</div></div>
+  </div>
+
+  <div class="card">
+    <h2>传播转化 · 分享出去之后发生了什么</h2>
+    <div id="funnel"><div class="empty">暂无数据</div></div>
+  </div>
+
+  <div class="card">
+    <h2>角色音色档案 · 相似度（0~1，越高越像本人）</h2>
+    <div id="profTable"><div class="empty">暂无角色</div></div>
+  </div>
+
+  <footer id="foot">本报告由 BOUNDLESS 控制台自动生成</footer>
+</div>
+
+<script>
+const DATA = /*__REPORT_DATA__*/null;
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+function fmtMs(ms){ return !ms ? '—' : (ms>=1000 ? (ms/1000).toFixed(2)+'s' : Math.round(ms)+'ms'); }
+// 白标联动（离线保存后 localStorage 不在也不报错）
+try{ const c = JSON.parse(localStorage.getItem('bd_brand_config')||'{}');
+     if(c.color) document.documentElement.style.setProperty('--acc','rgb('+String(c.color).replace(/,/g,' ')+')');
+     if(c.name) $('brandName').textContent = c.name + ' · 数字人运营战报'; }catch(_){}
+
+function kpi(v, k){ return `<div class="kpi"><div class="v">${v}</div><div class="k">${k}</div></div>`; }
+
+async function savePng(btn){
+  const old=btn.textContent;
+  btn.disabled=true; btn.textContent='生成中…（约 5 秒）';
+  try{
+    const r=await fetch('/api/dashboard/report?fmt=png');
+    if(!r.ok){
+      let msg='长图生成失败';
+      try{ msg=(await r.json()).detail||msg; }catch(_){}
+      alert(msg); return;
+    }
+    const blob=await r.blob();
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download=(r.headers.get('Content-Disposition')||'').match(/filename="([^"]+)"/)?.[1]
+      ||`report_${Date.now()}.png`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }catch(e){ alert('长图生成失败：'+e); }
+  finally{ btn.disabled=false; btn.textContent=old; }
+}
+
+function render(d){
+  if(!d){ $('headline').textContent='请从看板页的「战报」按钮打开本页（直接访问静态文件无数据）。'; return; }
+  const m = d.metrics||{}, fb = m.feedback||{}, pt = m.perceived_ttfa_ms||{}, cs = m.clone_scores||{};
+  const share = d.share||{};
+  $('meta').textContent = `${d.generated_at} 生成 · 当前角色 ${d.active_profile||'—'}`;
+
+  // 头条：挑最有说服力的一句
+  const gT=(share.ab_guess_right||0)+(share.ab_guess_wrong||0);
+  const guessPct = gT ? Math.round((share.ab_guess_right||0)/gT*100) : null;
+  const bits=[];
+  if(fb.n) bits.push(`听众好评率 <b>${(fb.rate*100).toFixed(0)}%</b>（${fb.n} 次评分）`);
+  if(guessPct!=null && guessPct<=55) bits.push(`盲听测试中只有 <b>${guessPct}%</b> 的人分辨出是克隆声音`);
+  else if(guessPct!=null) bits.push(`已有 <b>${gT}</b> 位访客参与真人/克隆盲听对比`);
+  if(pt.n) bits.push(`开口速度中位 <b>${fmtMs(pt.p50)}</b>`);
+  if(m.total_turns_alltime) bits.push(`累计对话 <b>${m.total_turns_alltime}</b> 轮`);
+  $('headline').innerHTML = bits.length ? bits.join('，')+'。' : '数据积累中——发起几轮对话后战报会更精彩。';
+
+  // 较昨日（战报 v5）：老板最关心的不是绝对值，是方向。双方都有数才比，避免"从 0 涨到 1"式误导
+  const dd = d.daily||[];
+  if(dd.length>=2){
+    const t=dd[dd.length-1], y=dd[dd.length-2], parts=[];
+    const arrow=(v,goodUp)=>{ const good=(v>0)===goodUp;
+      return `<span class="${good?'gd':'bd'}">${v>0?'▲':'▼'}${Math.abs(v)}</span>`; };
+    const dT=(t.turns||0)-(y.turns||0);
+    if((t.turns||0)+(y.turns||0)>0 && dT!==0) parts.push(`对话 ${arrow(dT,true)} 轮`);
+    if(t.fb_rate!=null && y.fb_rate!=null){
+      const dr=Math.round((t.fb_rate-y.fb_rate)*100);
+      if(dr!==0) parts.push(`好评率 ${arrow(dr,true)}%`);
+    }
+    if(t.perceived_avg>0 && y.perceived_avg>0){
+      const dp=Math.round(t.perceived_avg-y.perceived_avg);
+      if(dp!==0) parts.push(`开口等待 ${arrow(dp,false)}ms`);
+    }
+    if(parts.length) $('headline').innerHTML += `<div class="daydiff">较昨日：${parts.join(' · ')}</div>`;
+  }
+
+  $('kpis').innerHTML = [
+    kpi(fb.n ? (fb.rate*100).toFixed(0)+'<small>%</small>' : '—', `听感好评率 · 👍${fb.up||0} 👎${fb.down||0}`),
+    kpi(pt.n ? fmtMs(pt.p50) : '—', '开口速度（听到第一声）'),
+    kpi(cs.n ? cs.avg.toFixed(2) : '—', '音色相似度均值（0~1）'),
+    kpi(m.total_turns_alltime||0, '累计对话轮数'),
+    kpi(share.open||0, '分享卡被打开次数'),
+    kpi(guessPct!=null ? guessPct+'<small>%</small>' : '—', '盲听猜中率（越低越像）'),
+  ].join('');
+
+  // 近 14 天
+  const days=(d.daily||[]);
+  const anyDay = days.some(x=>x.turns>0 || (x.fb_up+x.fb_down)>0);
+  if(anyDay){
+    const max=Math.max(1,...days.map(x=>x.turns));
+    $('dailyChart').innerHTML =
+      `<div class="bars">`+days.map(x=>{
+        const h=Math.round(x.turns/max*58);
+        const rate=x.fb_rate!=null?` · 好评 ${(x.fb_rate*100).toFixed(0)}%`:'';
+        return `<div class="c" title="${x.date} · ${x.turns} 轮${rate}">
+          <div class="b" style="height:${Math.max(x.turns?3:0,h)}px"></div>
+          <div class="d">${x.date.slice(5)}</div></div>`;
+      }).join('')+`</div>`;
+  }
+
+  // 漏斗
+  const st=[['分享卡被打开',share.open||0],['进入落地页',share.land||0],
+            ['参与盲听对比',gT],['留下联系方式/拉新',share.cta||0]];
+  if(st[0][1]>0){
+    const base=Math.max(st[0][1],1);
+    $('funnel').innerHTML = st.map((s,i)=>{
+      const pct=Math.round(s[1]/base*100);
+      const conv=i>0&&st[i-1][1]?` · 转化 ${Math.round(s[1]/st[i-1][1]*100)}%`:'';
+      return `<div class="frow"><div class="t"><span>${s[0]}</span><span>${s[1]}${conv}</span></div>
+        <div class="track"><div class="fill" style="width:${pct}%"></div></div></div>`;
+    }).join('');
+  }
+
+  // 角色表
+  const profs=Object.entries(d.profiles||{})
+    .map(([n,qa])=>({n, cos:+(qa.cosine||0), nat:+(qa.naturalness||0)}))
+    .filter(p=>p.cos>0||p.nat>0).sort((a,b)=>b.cos-a.cos).slice(0,8);
+  if(profs.length){
+    $('profTable').innerHTML = `<table><thead><tr><th>角色</th><th class="r">音色相似度</th><th class="r">自然度</th></tr></thead><tbody>`+
+      profs.map(p=>`<tr><td>${esc(p.n)}</td><td class="r">${p.cos?p.cos.toFixed(3):'—'}</td>
+        <td class="r">${p.nat?p.nat.toFixed(3):'—'}</td></tr>`).join('')+`</tbody></table>`;
+  }
+  $('foot').textContent = `本报告由 BOUNDLESS 控制台自动生成 · ${d.generated_at}`;
+}
+render(DATA);
+</script>
+</body>
+</html>

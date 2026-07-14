@@ -1,0 +1,9 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>set mode</title></head>
+<body><script>
+/* 门禁/截图辅助：?expert=1 → 专家模式；否则用户模式。设置后跳开播页。 */
+try{
+  var q=new URLSearchParams(location.search);
+  localStorage.setItem('hub_stream_simple', q.get('expert')==='1' ? '0' : '1');
+}catch(e){}
+location.replace('/ui#stream');
+</script></body></html>

@@ -1,0 +1,26 @@
+# CI 精简依赖 — 仅覆盖 contacts/handoff 定向回归所需
+# 完整 requirements.txt 含 whisper/torch ~2.5GB 拖慢 CI，且定向测试用不到
+
+pytest>=7.4.0
+PyYAML>=6.0.1
+fastapi>=0.100.0
+uvicorn>=0.22.0
+itsdangerous>=2.1.0
+python-multipart>=0.0.6
+loguru>=0.7.2
+aiohttp>=3.9.0      # tests/test_line_webhook.py / test_facebook_webhook.py collection 需要
+colorama>=0.4.6
+httpx>=0.24.0       # starlette.testclient 的传递依赖，conftest.py 导入 TestClient 时必需
+jinja2>=3.1.0       # fastapi.Jinja2Templates 的传递依赖，src/web/admin.py 里用
+watchdog>=3.0.0     # P26-A: tests/test_intent_tags_watcher.py 需要 watchdog Observer
+pytest-xdist>=3.0   # -n auto 并行; file 级隔离缓解 fixture 污染
+pytest-asyncio>=0.21.0  # asyncio_mode=auto 需要; 自动识别 async def test_
+Pillow>=10.0.0      # tests/test_line_rpa_screen.py 等 PIL 相关测试 collection 需要
+requests>=2.28.0    # src/integrations/line_rpa/chat_list_scanner.py 用的 HTTP client
+cryptography>=42.0.0  # C0-1 授权 Ed25519 签发/验签；tests/test_licensing.py 需要
+langdetect>=1.0.9   # tests/test_wa_lang_detect.py Latin 语种路径需要
+python-docx>=1.1.0  # L2 文档翻译；tests/test_document_file_translate.py 需要
+openpyxl>=3.1.0  # L2b .xlsx 文档翻译
+pdfminer.six>=20221105  # L2b .pdf 文本抽取翻译
+openai>=1.40.0  # tests/test_companion_selfie.py::test_openai_missing_key_raises 需 import openai（纯 Python 小依赖，非 torch/whisper 级）
+lunar_python>=1.4.0  # tests/test_bazi_*.py 八字排盘（纯 Python 零依赖小库）

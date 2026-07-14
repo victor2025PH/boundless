@@ -1,0 +1,39 @@
+{
+  "1.2.3.4": {
+    "ip": "1.2.3.4",
+    "country_code": "GB",
+    "country": "United Kingdom",
+    "city": "London",
+    "isp": "BT",
+    "ok": true,
+    "cached_at": 1775879270.3893225
+  },
+  "5.6.7.8": {
+    "ip": "5.6.7.8",
+    "country_code": "FR",
+    "country": "France",
+    "city": "Paris",
+    "isp": "OVH",
+    "ok": true,
+    "cached_at": 1775879270.4269202
+  },
+  "10.0.0.1": {
+    "ip": "10.0.0.1",
+    "country_code": "JP",
+    "country": "Japan",
+    "city": "Tokyo",
+    "isp": "NTT",
+    "ok": true,
+    "cached_at": 1775879270.427279
+  },
+  "8.8.8.8": {
+    "ip": "8.8.8.8",
+    "country_code": "US",
+    "country": "United States",
+    "city": "Ashburn",
+    "isp": "Google LLC",
+    "org": "Google Public DNS",
+    "ok": true,
+    "cached_at": 1775879329.3714285
+  }
+}

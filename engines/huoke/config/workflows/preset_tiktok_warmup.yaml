@@ -1,0 +1,75 @@
+# Preset: TikTok 养号
+# 一键执行: POST /workflows/run {"workflow": "preset_tiktok_warmup"}
+# 适用: 新号冷启动/日常养号，自动控速
+
+name: preset_tiktok_warmup
+description: |
+  TikTok 一键养号工作流。自动浏览 For You 页面，点赞热门视频，
+  少量关注目标用户，模拟真实用户行为。合规守卫自动控速。
+  适用于新号冷启动和日常养号。
+
+variables:
+  browse_count: 15
+  like_probability: 0.25
+  follow_max: 3
+  target_country: italy
+  session_minutes: 20
+
+steps:
+  - id: compliance_check
+    action: compliance.check_remaining
+    params:
+      platform: tiktok
+      action: browse_feed
+    on_error: abort
+
+  - id: browse_feed
+    action: tiktok.browse_feed
+    params:
+      video_count: "{variables.browse_count}"
+      like_probability: "{variables.like_probability}"
+      target_country: "{variables.target_country}"
+    depends_on: [compliance_check]
+    on_error: continue
+    retry: 1
+
+  - id: rest_pause_1
+    action: util.wait
+    params:
+      seconds: 8
+    depends_on: [browse_feed]
+
+  - id: search_hashtag
+    action: tiktok.search_and_collect_leads
+    params:
+      query: "{variables.target_country}"
+      max_leads: 5
+    depends_on: [rest_pause_1]
+    on_error: continue
+
+  - id: rest_pause_2
+    action: util.wait
+    params:
+      seconds: 5
+    depends_on: [search_hashtag]
+
+  - id: light_follow
+    action: tiktok.smart_follow
+    params:
+      max_follows: "{variables.follow_max}"
+    depends_on: [rest_pause_2]
+    on_error: continue
+
+  - id: cooldown_browse
+    action: tiktok.browse_feed
+    params:
+      video_count: 5
+      like_probability: 0.15
+    depends_on: [light_follow]
+    on_error: continue
+
+  - id: done
+    action: util.log
+    params:
+      message: "TikTok warmup session complete"
+    depends_on: [cooldown_browse]

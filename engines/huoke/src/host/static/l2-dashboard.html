@@ -1,0 +1,1761 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>L2 中央花名册 — 运营看板</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; padding:0; background:#0f172a; color:#e2e8f0;
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif; }
+  a { color:#60a5fa; text-decoration:none; }
+  a:hover { text-decoration:underline; }
+
+  /* ── topbar ─────────────────────────────────────────────────── */
+  .topbar { background:#1e293b; padding:12px 24px; display:flex;
+    justify-content:space-between; align-items:center;
+    border-bottom:1px solid #334155; flex-wrap:wrap; gap:10px; }
+  .topbar h1 { margin:0; font-size:18px; font-weight:600; display:flex; align-items:center; gap:8px; }
+  .topbar .meta { font-size:12px; color:#94a3b8; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .topbar a.back-link { background:rgba(96,165,250,.12); border:1px solid rgba(96,165,250,.4);
+    padding:5px 12px; border-radius:6px; color:#60a5fa; }
+  .topbar input.cs-id { background:#0f172a; border:1px solid #334155; color:#e2e8f0;
+    padding:5px 10px; border-radius:6px; font-size:12px; width:140px; }
+  .topbar button { background:rgba(96,165,250,.15); color:#60a5fa;
+    border:1px solid rgba(96,165,250,.4); border-radius:6px; padding:5px 12px;
+    font-size:12px; cursor:pointer; }
+  .topbar button:hover { background:rgba(96,165,250,.25); }
+
+  /* ── container ─────────────────────────────────────────────── */
+  .container { max-width:1280px; margin:0 auto; padding:20px; }
+
+  /* ── stat cards ─────────────────────────────────────────────── */
+  .stats-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));
+    gap:14px; margin-bottom:24px; }
+  .stat-card { background:#1e293b; border:1px solid #334155; border-radius:12px;
+    padding:16px; transition:all .25s; }
+  .stat-card:hover { transform:translateY(-2px); box-shadow:0 8px 24px rgba(0,0,0,.35); border-color:#475569; }
+  .stat-card .label { font-size:11px; color:#94a3b8; text-transform:uppercase;
+    letter-spacing:0.5px; }
+  .stat-card .value { font-size:32px; font-weight:700; margin-top:4px; line-height:1.1; }
+  .stat-card.green .value { color:#22c55e; }
+  .stat-card.amber .value { color:#f59e0b; }
+  .stat-card.red .value { color:#ef4444; }
+  .stat-card.cyan .value { color:#06b6d4; }
+  .stat-card.purple .value { color:#a855f7; }
+  .spark { display:block; width:100%; height:30px; margin-top:6px; opacity:.85; }
+  /* Phase-8: handoff SLA 超时行高亮 */
+  tbody tr.sla-breach { background:rgba(239,68,68,.08); border-left:3px solid #ef4444; }
+  tbody tr.sla-breach:hover { background:rgba(239,68,68,.14); }
+  tbody tr.sla-breach td:first-child::before { content:"⏰ "; }
+  @keyframes sla-pulse { 0%,100% { opacity:.6 } 50% { opacity:1 } }
+  #sla-breach-badge { animation: sla-pulse 1.6s ease-in-out infinite; }
+
+  /* ── panel ─────────────────────────────────────────────────── */
+  .panel { background:#1e293b; border:1px solid #334155; border-radius:12px;
+    padding:18px; margin-bottom:18px; transition:border .2s; }
+  .panel:hover { border-color:#475569; }
+  .panel h2 { margin:0 0 14px; font-size:15px; font-weight:600; color:#cbd5e1;
+    display:flex; align-items:center; gap:8px; }
+  .panel .panel-hint { font-size:11px; color:#64748b; font-weight:400; margin-left:auto; }
+
+  /* ── table ─────────────────────────────────────────────────── */
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th { text-align:left; padding:10px 8px; color:#94a3b8; font-weight:500;
+    border-bottom:1px solid #334155; font-size:11px;
+    text-transform:uppercase; letter-spacing:0.3px; }
+  tbody tr { transition:background .15s; cursor:pointer; }
+  tbody tr:hover { background:rgba(96,165,250,.08); }
+  td { padding:11px 8px; border-bottom:1px solid #1e293b; }
+  td.mono { font-family:ui-monospace, Menlo, monospace; font-size:11px; color:#94a3b8; }
+  td .name { font-weight:600; color:#e2e8f0; }
+  td .name-flag { font-size:11px; color:#64748b; margin-left:6px; }
+
+  /* ── status pill ───────────────────────────────────────────── */
+  .pill { display:inline-flex; align-items:center; gap:4px;
+    padding:3px 10px; border-radius:14px; font-size:10px; font-weight:600;
+    border:1px solid transparent; }
+  .pill.in_funnel       { background:rgba(148,163,184,.2); color:#cbd5e1; border-color:rgba(148,163,184,.3); }
+  .pill.in_messenger    { background:rgba(96,165,250,.2);  color:#60a5fa; border-color:rgba(96,165,250,.3); }
+  .pill.in_line         { background:rgba(34,197,94,.2);   color:#22c55e; border-color:rgba(34,197,94,.3); }
+  .pill.accepted_by_human { background:rgba(168,85,247,.2); color:#c084fc; border-color:rgba(168,85,247,.3); }
+  .pill.converted       { background:rgba(34,197,94,.3);   color:#22c55e; border-color:rgba(34,197,94,.5); font-weight:700; }
+  .pill.lost            { background:rgba(239,68,68,.2);   color:#f87171; border-color:rgba(239,68,68,.3); }
+
+  /* ── handoff button ─────────────────────────────────────────── */
+  .btn-accept { padding:5px 12px; background:rgba(168,85,247,.18);
+    color:#c084fc; border:1px solid rgba(168,85,247,.4); border-radius:6px;
+    font-size:11px; cursor:pointer; font-weight:600; transition:all .15s; }
+  .btn-accept:hover { background:rgba(168,85,247,.3); transform:translateY(-1px); }
+  .btn-secondary { padding:4px 10px; background:rgba(148,163,184,.1);
+    color:#94a3b8; border:1px solid rgba(148,163,184,.2); border-radius:6px;
+    font-size:11px; cursor:pointer; }
+  .btn-secondary:hover { background:rgba(148,163,184,.2); }
+
+  /* ── ai summary 结构化 ──────────────────────────────────────── */
+  .ai-summary { font-size:11px; max-width:340px; }
+  .ai-summary span { display:inline-block; margin:1px 4px 1px 0; padding:2px 7px;
+    border-radius:4px; background:rgba(168,85,247,.1); color:#c084fc; }
+  .ai-summary span.last-in { background:rgba(96,165,250,.1); color:#60a5fa; }
+  .ai-summary span.last-out { background:rgba(34,197,94,.1); color:#4ade80; }
+
+  .empty { text-align:center; padding:30px; color:#64748b; font-size:13px; }
+  .footer-note { color:#64748b; font-size:11px; padding:12px;
+    border-top:1px dashed #334155; margin-top:18px; }
+
+  /* ── modal ─────────────────────────────────────────────────── */
+  .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.7);
+    z-index:9000; display:none; align-items:flex-start; justify-content:center; padding:30px 16px; overflow-y:auto; }
+  .modal-overlay.active { display:flex; }
+  .modal-card { background:#1e293b; border:1px solid #475569; border-radius:14px;
+    width:100%; max-width:880px; padding:0; box-shadow:0 24px 60px rgba(0,0,0,.6); }
+  .modal-header { padding:18px 22px; border-bottom:1px solid #334155;
+    display:flex; justify-content:space-between; align-items:center; gap:10px; }
+  .modal-header h3 { margin:0; font-size:16px; font-weight:600; }
+  .modal-header .close { background:none; border:1px solid #475569; color:#cbd5e1;
+    padding:5px 12px; border-radius:6px; cursor:pointer; }
+  .modal-body { padding:22px; max-height:70vh; overflow-y:auto; }
+  .modal-section { margin-bottom:20px; }
+  .modal-section h4 { font-size:12px; color:#94a3b8; text-transform:uppercase;
+    letter-spacing:0.5px; margin:0 0 10px; }
+  .kv-grid { display:grid; grid-template-columns:auto 1fr; gap:6px 14px; font-size:13px; }
+  .kv-grid .k { color:#94a3b8; }
+  .kv-grid .v { color:#e2e8f0; word-break:break-all; }
+
+  .timeline { display:flex; flex-direction:column; gap:8px; }
+  .timeline-item { display:flex; gap:10px; padding:8px 12px;
+    background:rgba(15,23,42,.5); border-radius:8px; border-left:3px solid #475569; }
+  .timeline-item.incoming { border-left-color:#60a5fa; }
+  .timeline-item.outgoing { border-left-color:#22c55e; }
+  .timeline-item .ts { font-size:10px; color:#64748b; min-width:90px; }
+  .timeline-item .body { flex:1; font-size:13px; }
+  .timeline-item .lang { font-size:10px; color:#64748b; margin-left:6px; }
+  .timeline-item .ai-tag { font-size:9px; padding:1px 5px; background:rgba(168,85,247,.2);
+    color:#c084fc; border-radius:3px; margin-left:6px; }
+
+  /* ── 响应式 ─────────────────────────────────────────────────── */
+  @media (max-width:768px) {
+    .topbar { padding:10px 14px; }
+    .topbar h1 { font-size:16px; }
+    .topbar input.cs-id { width:100px; }
+    .container { padding:12px; }
+    .stat-card .value { font-size:24px; }
+    .stats-grid { grid-template-columns:repeat(2, 1fr); gap:10px; }
+    .panel { padding:14px; }
+    table { font-size:11px; }
+    th, td { padding:8px 6px; }
+    td .name { font-size:12px; }
+    .ai-summary { max-width:200px; }
+    .modal-card { max-width:100%; border-radius:8px; }
+    .modal-body { padding:14px; max-height:80vh; }
+    .kv-grid { grid-template-columns:1fr; }
+    .kv-grid .k { color:#64748b; font-size:11px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="topbar">
+  <h1>📊 L2 中央花名册 — 运营看板</h1>
+  <div class="meta">
+    主控 192.168.0.118 ·
+    <span id="last-update">未刷新</span> ·
+    <a href="/dashboard" class="back-link" title="跳到主后台 / 客服中心">↩ 主后台</a>
+    <select id="days-select" onchange="changeDays()" class="cs-id" style="width:120px" title="数据时间窗口">
+      <option value="1">今天</option>
+      <option value="7">7 天</option>
+      <option value="30" selected>30 天</option>
+      <option value="90">90 天</option>
+      <option value="365">365 天</option>
+    </select>
+    <input id="cs-id" class="cs-id" placeholder="客服 ID (e.g. agent_001)" title="接管客户时记录是谁接的"/>
+    <span id="sla-breach-badge" style="display:none;background:rgba(239,68,68,.18);color:#f87171;border:1px solid rgba(239,68,68,.5);padding:5px 10px;border-radius:14px;font-size:12px;font-weight:600;cursor:pointer" onclick="document.getElementById('handoff-tbody').scrollIntoView({behavior:'smooth'})" title="点跳到待接管面板">⏰ <span id="sla-breach-count">0</span> 超时</span>
+    <button onclick="openChatSearch()" title="全文搜聊天内容">🔎 搜聊天</button>
+    <button onclick="exportCsv()" title="导出客户列表 CSV">📥 导出</button>
+    <button onclick="refresh()">🔄 刷新</button>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- Phase-7: A/B current experiment 面板 -->
+  <div class="panel" id="ab-experiment-panel" style="display:none;background:linear-gradient(135deg,rgba(168,85,247,.08),rgba(96,165,250,.08))">
+    <h2>🧪 当前 A/B 实验
+      <span class="panel-hint" id="ab-experiment-meta">—</span>
+    </h2>
+    <div id="ab-experiment-body" style="font-size:13px"></div>
+  </div>
+
+  <!-- 6 stat cards (Phase-7: 含 sparkline) -->
+  <div class="stats-grid">
+    <div class="stat-card cyan"><div class="label">客户总数</div><div class="value" id="stat-customers">—</div><svg id="spark-customers" class="spark"></svg></div>
+    <div class="stat-card amber"><div class="label">in_messenger 中</div><div class="value" id="stat-messenger">—</div><svg id="spark-messenger" class="spark"></svg></div>
+    <div class="stat-card amber"><div class="label">in_line (已引)</div><div class="value" id="stat-line">—</div><svg id="spark-line" class="spark"></svg></div>
+    <div class="stat-card purple"><div class="label">accepted_by_human</div><div class="value" id="stat-accepted">—</div><svg id="spark-accepted" class="spark"></svg></div>
+    <div class="stat-card green"><div class="label">已转化</div><div class="value" id="stat-converted">—</div><svg id="spark-converted" class="spark"></svg></div>
+    <div class="stat-card red"><div class="label">流失</div><div class="value" id="stat-lost">—</div><svg id="spark-lost" class="spark"></svg></div>
+  </div>
+
+  <!-- Pending handoff queue -->
+  <div class="panel">
+    <h2>📥 待人工接管队列 <span class="panel-hint">点行看详情 · 点按钮接管</span></h2>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:110px">handoff</th>
+          <th>客户名</th>
+          <th style="width:160px">persona / 国家</th>
+          <th style="width:120px">来源 → 目标</th>
+          <th>AI 摘要</th>
+          <th style="width:80px">等待</th>
+          <th style="width:90px">动作</th>
+        </tr>
+      </thead>
+      <tbody id="handoff-tbody">
+        <tr><td colspan="7" class="empty">加载中…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Phase-10: 主动出击面板 (高优先级 + 高 frustration Top 10) -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(380px, 1fr));gap:14px;margin-bottom:18px">
+    <div class="panel" style="background:linear-gradient(135deg,rgba(34,197,94,.04),rgba(34,197,94,.02));border-color:rgba(34,197,94,.2);margin-bottom:0">
+      <h2>🔥 高优先级 Top 10 <span class="panel-hint">未接管未转化, 主动跟进</span></h2>
+      <div id="top-high-priority" style="font-size:12px"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="panel" style="background:linear-gradient(135deg,rgba(239,68,68,.04),rgba(239,68,68,.02));border-color:rgba(239,68,68,.2);margin-bottom:0">
+      <h2>😣 高 frustration Top 10 <span class="panel-hint">近 7 天 frustration > 0.7, 主动安抚</span></h2>
+      <div id="top-frustrated" style="font-size:12px"><div class="empty">加载中…</div></div>
+    </div>
+  </div>
+
+  <!-- Recent customers + 搜索过滤 -->
+  <div class="panel">
+    <h2>👥 客户列表 <span class="panel-hint">点行看完整档案 · 含最近聊天预览</span></h2>
+    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
+      <input id="search-q" placeholder="搜索姓名 / customer_id..." oninput="debounceSearch()" style="background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:6px 10px;border-radius:6px;font-size:12px;flex:1;min-width:140px"/>
+      <select id="search-priority" onchange="doSearch()" style="background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:6px 8px;border-radius:6px;font-size:12px">
+        <option value="">所有 priority</option>
+        <option value="high">🔥 high</option>
+        <option value="medium">⚡ medium</option>
+        <option value="low">💤 low</option>
+      </select>
+      <select id="search-status" onchange="doSearch()" style="background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:6px 8px;border-radius:6px;font-size:12px">
+        <option value="">所有 status</option>
+        <option value="in_funnel">in_funnel</option>
+        <option value="in_messenger">in_messenger</option>
+        <option value="in_line">in_line</option>
+        <option value="accepted_by_human">accepted_by_human</option>
+        <option value="converted">converted</option>
+        <option value="lost">lost</option>
+      </select>
+      <select id="search-ab" onchange="doSearch()" style="background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:6px 8px;border-radius:6px;font-size:12px">
+        <option value="">所有 variant</option>
+        <option value="v1">v1</option>
+        <option value="v2">v2</option>
+      </select>
+      <button onclick="resetSearch()" style="background:none;border:1px solid #475569;color:#cbd5e1;padding:6px 12px;border-radius:6px;font-size:11px;cursor:pointer">清空</button>
+    </div>
+    <!-- Phase-7: 保存的视图 -->
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;font-size:11px;color:#94a3b8">
+      <span style="color:#64748b">📌 视图:</span>
+      <select id="view-select" onchange="loadView()" style="background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:5px 8px;border-radius:6px;font-size:11px;flex:1;min-width:180px">
+        <option value="">— 选已保存的视图 —</option>
+      </select>
+      <button onclick="saveCurrentView()" title="把当前过滤条件存为视图" style="background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.4);color:#22c55e;padding:5px 10px;border-radius:6px;font-size:11px;cursor:pointer">💾 保存当前</button>
+      <button onclick="deleteSelectedView()" title="删当前选中的视图" style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:#f87171;padding:5px 10px;border-radius:6px;font-size:11px;cursor:pointer">🗑️ 删</button>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:100px">customer</th>
+          <th>姓名 / 最近聊天</th>
+          <th style="width:140px">状态</th>
+          <th style="width:130px">worker</th>
+          <th style="width:120px">device</th>
+          <th style="width:90px">更新</th>
+        </tr>
+      </thead>
+      <tbody id="customers-tbody">
+        <tr><td colspan="6" class="empty">加载中…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Phase-11: 引流决策聚合看板 -->
+  <div class="panel" style="background:linear-gradient(135deg,rgba(168,85,247,.04),rgba(96,165,250,.04));border-color:rgba(168,85,247,.2)">
+    <h2>📊 引流决策分析 <span class="panel-hint" id="rd-meta">近 30 天 · admin 调 gate 阈值用</span></h2>
+    <div id="rd-content"><div class="empty">加载中…</div></div>
+  </div>
+
+  <!-- Phase-3: 历史漏斗时序图 -->
+  <div class="panel">
+    <h2>📈 30 天漏斗趋势 <span class="panel-hint">每天事件量 + 转化数</span></h2>
+    <div id="ts-chart" style="height:240px"></div>
+    <div id="ts-legend" style="margin-top:10px;display:flex;gap:14px;flex-wrap:wrap;font-size:11px"></div>
+  </div>
+
+  <!-- Agent SLA 主管视角 -->
+  <div class="panel">
+    <h2>🏆 SLA 看板
+      <span class="panel-hint">
+        <button id="sla-by-agents" onclick="switchSla('agents')" style="background:#3b82f6;color:#fff;border:none;padding:3px 10px;border-radius:5px;font-size:11px;cursor:pointer;margin-right:4px">按客服</button>
+        <button id="sla-by-variants" onclick="switchSla('variants')" style="background:none;border:1px solid #475569;color:#cbd5e1;padding:3px 10px;border-radius:5px;font-size:11px;cursor:pointer">按 A/B variant</button>
+      </span>
+    </h2>
+    <table>
+      <thead id="sla-thead">
+        <tr>
+          <th>客服</th>
+          <th>接管</th>
+          <th>成交</th>
+          <th>流失</th>
+          <th>跟进中</th>
+          <th>转化率</th>
+          <th>平均处理 (min)</th>
+        </tr>
+      </thead>
+      <tbody id="sla-tbody"><tr><td colspan="7" class="empty">加载中…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- 任务失败原因分析 (B2B 客户调试核心面板) -->
+  <div class="panel" style="background:linear-gradient(135deg,rgba(239,68,68,.04),rgba(245,158,11,.04));border-color:rgba(239,68,68,.2)">
+    <h2>🔴 任务失败分析 <span class="panel-hint" id="ea-meta">近 24h · admin 看出现在卡哪个失败模式</span></h2>
+    <div id="ea-content"><div class="empty">加载中…</div></div>
+  </div>
+
+  <!-- Events stats -->
+  <div class="panel">
+    <h2>📈 7 天事件统计</h2>
+    <div id="events-stats" class="empty">加载中…</div>
+  </div>
+
+  <!-- Push queue metrics -->
+  <div class="panel" style="background:rgba(96,165,250,.05)">
+    <h2 style="color:#60a5fa">🔧 推送队列状态</h2>
+    <div id="push-metrics" class="empty">加载中…</div>
+  </div>
+
+  <div class="footer-note">
+    数据源 PostgreSQL <code>openclaw.db</code> · 30 秒自动刷新 · 点客户行查看完整档案 · 点"我接手"接管客户
+  </div>
+</div>
+
+<!-- Modal -->
+<div id="modal-overlay" class="modal-overlay" onclick="if(event.target===this)closeModal()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3 id="modal-title">客户详情</h3>
+      <button class="close" onclick="closeModal()">关闭 ✕</button>
+    </div>
+    <div class="modal-body" id="modal-body">加载中…</div>
+  </div>
+</div>
+
+<script>
+const TIMER_MS = 30000;
+let _selectedDays = 30;
+function changeDays() {
+  _selectedDays = parseInt(document.getElementById('days-select').value, 10) || 30;
+  refresh();
+}
+
+// ─── helpers ────────────────────────────────────────────────────
+function fmtTime(s) {
+  if (!s) return '—';
+  try {
+    const d = new Date(s);
+    const diffMin = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (diffMin < 1) return '刚刚';
+    if (diffMin < 60) return diffMin + ' 分前';
+    if (diffMin < 1440) return Math.floor(diffMin / 60) + ' 小时前';
+    return Math.floor(diffMin / 1440) + ' 天前';
+  } catch (e) { return s; }
+}
+
+function fmtDateTime(s) {
+  if (!s) return '—';
+  try {
+    const d = new Date(s);
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  } catch (e) { return s; }
+}
+
+function safeText(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function getCsId() {
+  return localStorage.getItem('oc_cs_id') || '';
+}
+function setCsId(v) {
+  v = (v || '').trim();
+  if (v) localStorage.setItem('oc_cs_id', v);
+  else localStorage.removeItem('oc_cs_id');
+}
+
+// init cs-id from localStorage
+document.getElementById('cs-id').value = getCsId();
+document.getElementById('cs-id').addEventListener('change', e => setCsId(e.target.value));
+
+async function fetchJson(url, options) {
+  const headers = options && options.headers ? options.headers : {};
+  const token = localStorage.getItem('oc_token') || '';
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  const r = await fetch(url, Object.assign({}, options || {}, { headers }));
+  if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url);
+  return r.json();
+}
+
+// ─── 加载主数据 ─────────────────────────────────────────────────
+async function loadFunnel() {
+  try {
+    const data = await fetchJson('/cluster/customers/funnel/stats?days=' + _selectedDays);
+    const cs = data.customers_by_status || {};
+    document.getElementById('stat-customers').innerText = Object.values(cs).reduce((a,b)=>a+b, 0);
+    document.getElementById('stat-messenger').innerText = cs.in_messenger || 0;
+    document.getElementById('stat-line').innerText = cs.in_line || 0;
+    document.getElementById('stat-accepted').innerText = cs.accepted_by_human || 0;
+    document.getElementById('stat-converted').innerText = cs.converted || 0;
+    document.getElementById('stat-lost').innerText = cs.lost || 0;
+    // Phase-7: 同时拉 7 天 sparkline 数据
+    loadSparklines();
+
+    const ev = data.events_by_type || {};
+    const evSorted = Object.entries(ev).sort((a, b) => b[1] - a[1]);
+    if (evSorted.length === 0) {
+      document.getElementById('events-stats').innerHTML = '<span class="empty">7 天内无事件</span>';
+    } else {
+      document.getElementById('events-stats').innerHTML = evSorted.map(([k, v]) =>
+        '<div style="display:inline-block;margin:4px 8px 4px 0;padding:6px 14px;background:rgba(148,163,184,.1);border-radius:8px;font-size:12px;border:1px solid rgba(148,163,184,.15)">'
+        + '<b style="color:#cbd5e1">' + safeText(k) + '</b> '
+        + '<span style="color:#06b6d4;font-weight:700;margin-left:6px">' + v + '</span>'
+        + '</div>'
+      ).join('');
+    }
+  } catch (e) {
+    console.error('funnel:', e);
+  }
+}
+
+function renderAiSummary(s) {
+  if (!s) return '<span style="color:#64748b">(无)</span>';
+  // 解析 "persona=xxx | intent=xxx | last_in: ... | last_out: ..." 格式
+  const parts = String(s).split('|').map(p => p.trim()).filter(Boolean);
+  if (parts.length === 0) return safeText(s);
+  return parts.map(p => {
+    if (p.startsWith('last_in:')) {
+      return '<span class="last-in">📩 ' + safeText(p.replace('last_in:', '').trim()) + '</span>';
+    }
+    if (p.startsWith('last_out:')) {
+      return '<span class="last-out">📤 ' + safeText(p.replace('last_out:', '').trim()) + '</span>';
+    }
+    return '<span>' + safeText(p) + '</span>';
+  }).join('');
+}
+
+// Phase-8/9: handoff SLA 阈值. Phase-9 按 priority 分层
+const SLA_BREACH_MIN = {high: 15, medium: 30, low: 60}; // 分钟
+let _slaPrevBreachCount = 0;
+
+function _slaThresholdMin(priority) {
+  return SLA_BREACH_MIN[priority] || SLA_BREACH_MIN.medium;
+}
+
+function _isSlaBreach(initiatedAt, priority) {
+  if (!initiatedAt) return false;
+  try {
+    const ageMin = (Date.now() - new Date(initiatedAt).getTime()) / 60000;
+    return ageMin >= _slaThresholdMin(priority);
+  } catch (e) { return false; }
+}
+
+function _slaBeep() {
+  // 单声轻提示, AudioContext 在用户首次点击页面后才被允许 → 跳过初次 0→N 也 OK
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.value = 880; g.gain.value = 0.04;
+    o.connect(g); g.connect(ctx.destination);
+    o.start();
+    setTimeout(() => { o.stop(); ctx.close(); }, 220);
+  } catch (e) {}
+}
+
+async function loadHandoffPending() {
+  try {
+    const data = await fetchJson('/cluster/customers/handoff/pending?limit=50');
+    const handoffs = data.handoffs || [];
+    // Phase-8: 客户端算 SLA breach
+    let breachCount = 0;
+    handoffs.forEach(h => { if (_isSlaBreach(h.initiated_at, h.priority_tag)) breachCount++; });
+    const badge = document.getElementById('sla-breach-badge');
+    document.getElementById('sla-breach-count').innerText = breachCount;
+    badge.style.display = breachCount > 0 ? '' : 'none';
+    if (breachCount > _slaPrevBreachCount && _slaPrevBreachCount === 0) {
+      _slaBeep(); // 0 → N 时响一下
+    }
+    _slaPrevBreachCount = breachCount;
+
+    if (handoffs.length === 0) {
+      document.getElementById('handoff-tbody').innerHTML = '<tr><td colspan="7" class="empty">没有待接管的 handoff</td></tr>';
+      return;
+    }
+    // 超时排前面
+    handoffs.sort((a, b) => {
+      const ba = _isSlaBreach(a.initiated_at, a.priority_tag) ? 1 : 0;
+      const bb = _isSlaBreach(b.initiated_at, b.priority_tag) ? 1 : 0;
+      if (ba !== bb) return bb - ba;
+      // 同样未超时, 按 priority 排序: high 在前
+      const pr = {high: 0, medium: 1, low: 2};
+      const pa = pr[a.priority_tag || 'medium'], pb = pr[b.priority_tag || 'medium'];
+      if (pa !== pb) return pa - pb;
+      return new Date(a.initiated_at || 0) - new Date(b.initiated_at || 0);
+    });
+    const _prEmoji = {high: '🔥', medium: '⚡', low: '💤'};
+    document.getElementById('handoff-tbody').innerHTML = handoffs.map(h => {
+      const aiSum = h.ai_summary || '';
+      const breach = _isSlaBreach(h.initiated_at, h.priority_tag);
+      const cls = breach ? 'sla-breach' : '';
+      const prTag = h.priority_tag || 'medium';
+      const prEmoji = _prEmoji[prTag] || '';
+      const prHint = '阈值 ' + _slaThresholdMin(prTag) + ' min';
+      return '<tr class="' + cls + '" onclick="openCustomer(\'' + safeText(h.customer_id) + '\')">'
+        + '<td class="mono">' + safeText((h.handoff_id || '').substring(0, 12)) + '…</td>'
+        + '<td>' + prEmoji + ' <span class="name">' + safeText(h.primary_name || '—') + '</span><span class="name-flag">🇯🇵</span></td>'
+        + '<td>' + safeText((h.ai_profile && h.ai_profile.persona_key) || '—') + ' / ' + safeText(h.country || '—') + '</td>'
+        + '<td class="mono" style="color:#cbd5e1">' + safeText(h.from_stage || '—') + ' → ' + safeText(h.to_stage || '—') + '</td>'
+        + '<td><div class="ai-summary">' + renderAiSummary(aiSum) + '</div></td>'
+        + '<td' + (breach ? ' style="color:#ef4444;font-weight:600"' : '') + ' title="' + prHint + '">' + fmtTime(h.initiated_at) + '</td>'
+        + '<td><button class="btn-accept" onclick="event.stopPropagation();acceptHandoff(\'' + safeText(h.handoff_id) + '\',\'' + safeText(h.primary_name || '') + '\')">🙋 我接手</button></td>'
+        + '</tr>';
+    }).join('');
+  } catch (e) {
+    document.getElementById('handoff-tbody').innerHTML = '<tr><td colspan="7" class="empty">加载失败: ' + safeText(e.message) + '</td></tr>';
+  }
+}
+
+async function loadCustomers() {
+  await _renderCustomers('/cluster/customers?limit=50');
+}
+
+async function _renderCustomers(url) {
+  try {
+    const data = await fetchJson(url);
+    const customers = data.customers || data || [];
+    if (customers.length === 0) {
+      document.getElementById('customers-tbody').innerHTML = '<tr><td colspan="6" class="empty">没有匹配的客户</td></tr>';
+      return;
+    }
+    const priorityEmoji = { 'high': '🔥', 'medium': '⚡', 'low': '💤' };
+    document.getElementById('customers-tbody').innerHTML = customers.map(c => {
+      const tag = c.priority_tag || 'medium';
+      const emoji = priorityEmoji[tag] || '';
+      const last = c.last_chat || null;
+      const preview = last
+        ? '<div style="font-size:11px;color:#64748b;font-style:italic;margin-top:3px">'
+          + (last.direction === 'incoming' ? '📩 ' : '📤 ')
+          + safeText((last.content || '').substring(0, 60))
+          + ((last.content || '').length > 60 ? '…' : '')
+          + '</div>'
+        : '';
+      const customTags = (c.custom_tags || []).map(t =>
+        '<span style="display:inline-block;font-size:10px;padding:1px 7px;margin:1px 2px 1px 0;background:rgba(168,85,247,.15);color:#c084fc;border-radius:8px">' + safeText(t) + '</span>'
+      ).join('');
+      return '<tr onclick="openCustomer(\'' + safeText(c.customer_id) + '\')">'
+        + '<td class="mono">' + safeText((c.customer_id || '').substring(0, 12)) + '…</td>'
+        + '<td>' + emoji + ' <span class="name">' + safeText(c.primary_name || '—') + '</span><span class="name-flag">🇯🇵</span>'
+        + (customTags ? '<div style="margin-top:3px">' + customTags + '</div>' : '')
+        + preview + '</td>'
+        + '<td><span class="pill ' + safeText(c.status) + '">' + safeText(c.status || 'in_funnel') + '</span></td>'
+        + '<td class="mono">' + safeText(c.last_worker_id || '—') + '</td>'
+        + '<td class="mono">' + safeText((c.last_device_id || '—').substring(0, 14)) + '</td>'
+        + '<td>' + fmtTime(c.updated_at) + '</td>'
+        + '</tr>';
+    }).join('');
+  } catch (e) {
+    document.getElementById('customers-tbody').innerHTML = '<tr><td colspan="6" class="empty">加载失败: ' + safeText(e.message) + '</td></tr>';
+  }
+}
+
+let _searchTimer = null;
+function debounceSearch() {
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(doSearch, 300);
+}
+
+function doSearch() {
+  const q = document.getElementById('search-q').value;
+  const priority = document.getElementById('search-priority').value;
+  const status = document.getElementById('search-status').value;
+  const ab = document.getElementById('search-ab').value;
+  if (!q && !priority && !status && !ab) {
+    return loadCustomers();
+  }
+  const qs = new URLSearchParams();
+  if (q) qs.set('q', q);
+  if (priority) qs.set('priority', priority);
+  if (status) qs.set('status', status);
+  if (ab) qs.set('ab_variant', ab);
+  qs.set('limit', '100');
+  return _renderCustomers('/cluster/customers-search?' + qs.toString());
+}
+
+function resetSearch() {
+  document.getElementById('search-q').value = '';
+  document.getElementById('search-priority').value = '';
+  document.getElementById('search-status').value = '';
+  document.getElementById('search-ab').value = '';
+  loadCustomers();
+}
+
+async function loadTimeseries() {
+  try {
+    const data = await fetchJson('/cluster/customers/funnel/timeseries?days=' + _selectedDays);
+    const series = data.series || [];
+    if (series.length === 0) {
+      document.getElementById('ts-chart').innerHTML = '<div class="empty">无数据</div>';
+      return;
+    }
+    // 4 条线 + 转化率 (右 y 轴, 红/橙渐变)
+    const lines = [
+      { key: 'friend_request_sent', color: '#06b6d4', label: '加好友' },
+      { key: 'greeting_sent', color: '#a855f7', label: '打招呼' },
+      { key: 'message_received', color: '#60a5fa', label: '客户回复' },
+      { key: 'customer_converted', color: '#22c55e', label: '成交' },
+    ];
+    const W = 1200, H = 260, P = 36;
+    let maxY = 1;
+    series.forEach(s => lines.forEach(l => { if (s[l.key] > maxY) maxY = s[l.key]; }));
+    const xStep = (W - 2 * P) / Math.max(1, series.length - 1);
+    const yScale = (H - 2 * P) / maxY;
+
+    // Phase-4: 转化率 (converted/greeting * 100), 用右 y 轴 0-100%
+    const rates = series.map(s => {
+      const denom = s.greeting_sent || 0;
+      return denom > 0 ? (s.customer_converted / denom * 100) : 0;
+    });
+    const maxRate = Math.max(10, Math.max.apply(null, rates) * 1.2);
+    const ratePts = rates.map((r, i) => {
+      const x = P + i * xStep;
+      const y = H - P - (r / maxRate) * (H - 2 * P);
+      return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+    }).join(' ');
+
+    // Spike 检测: converted 比 7 天滑动均值 > 1.5x 标记红圈
+    const spikes = [];
+    series.forEach((s, i) => {
+      if (i < 7) return;
+      const recent = series.slice(i - 7, i).map(x => x.customer_converted || 0);
+      const avg = recent.reduce((a, b) => a + b, 0) / 7;
+      if ((s.customer_converted || 0) >= avg * 1.5 + 1) {
+        spikes.push({ x: P + i * xStep, y: H - P - (s.customer_converted || 0) * yScale, val: s.customer_converted });
+      }
+    });
+
+    const paths = lines.map(l => {
+      const pts = series.map((s, i) => {
+        const x = P + i * xStep;
+        const y = H - P - (s[l.key] || 0) * yScale;
+        return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+      }).join(' ');
+      return '<path d="' + pts + '" stroke="' + l.color + '" stroke-width="2" fill="none"/>';
+    }).join('');
+
+    // tooltip via title element (hover shows native browser tooltip)
+    const dotsAndTooltips = series.map((s, i) => {
+      const x = P + i * xStep;
+      const tooltip = `${s.date}\n加好友:${s.friend_request_sent} 打招呼:${s.greeting_sent}\n回复:${s.message_received} 成交:${s.customer_converted} 流失:${s.customer_lost}`;
+      return lines.map(l => {
+        const y = H - P - (s[l.key] || 0) * yScale;
+        return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" fill="${l.color}"><title>${tooltip}</title></circle>`;
+      }).join('');
+    }).join('');
+
+    // spike 红圈
+    const spikeMarkers = spikes.map(sp =>
+      `<circle cx="${sp.x.toFixed(1)}" cy="${sp.y.toFixed(1)}" r="6" fill="none" stroke="#ef4444" stroke-width="2"><title>峰值! 当天成交 ${sp.val} (>1.5x 7天均值)</title></circle>`
+    ).join('');
+
+    // 转化率 dashed line
+    const rateLine = `<path d="${ratePts}" stroke="#ef4444" stroke-width="1.8" fill="none" stroke-dasharray="4 3" opacity="0.85"/>`;
+
+    const xLabels = series.map((s, i) => {
+      if (i % 5 !== 0 && i !== series.length - 1) return '';
+      const x = P + i * xStep;
+      const dt = new Date(s.date);
+      return '<text x="' + x.toFixed(1) + '" y="' + (H - 10) + '" fill="#64748b" font-size="10" text-anchor="middle">'
+        + (dt.getMonth()+1) + '/' + dt.getDate() + '</text>';
+    }).join('');
+    const yLabels = ''
+      + '<text x="' + (P - 4) + '" y="' + (P + 4) + '" fill="#94a3b8" font-size="10" text-anchor="end">' + maxY + '</text>'
+      + '<text x="' + (P - 4) + '" y="' + (H - P + 4) + '" fill="#94a3b8" font-size="10" text-anchor="end">0</text>'
+      + '<text x="' + (W - P + 4) + '" y="' + (P + 4) + '" fill="#ef4444" font-size="10" text-anchor="start">' + maxRate.toFixed(0) + '%</text>'
+      + '<text x="' + (W - P + 4) + '" y="' + (H - P + 4) + '" fill="#ef4444" font-size="10" text-anchor="start">0%</text>';
+    const grid = '<line x1="' + P + '" y1="' + (H - P) + '" x2="' + (W - P) + '" y2="' + (H - P) + '" stroke="#334155" stroke-width="1"/>'
+      + '<line x1="' + P + '" y1="' + P + '" x2="' + P + '" y2="' + (H - P) + '" stroke="#334155" stroke-width="1"/>'
+      + '<line x1="' + (W - P) + '" y1="' + P + '" x2="' + (W - P) + '" y2="' + (H - P) + '" stroke="#ef4444" stroke-width="0.5" opacity="0.4"/>';
+
+    document.getElementById('ts-chart').innerHTML =
+      '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:100%;display:block">'
+      + grid + paths + rateLine + dotsAndTooltips + spikeMarkers + xLabels + yLabels + '</svg>';
+
+    document.getElementById('ts-legend').innerHTML = lines.map(l =>
+      '<div style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;background:' + l.color + ';border-radius:50%"></span>'
+      + '<span style="color:#cbd5e1">' + l.label + '</span></div>'
+    ).join('') + '<div style="display:flex;align-items:center;gap:5px"><span style="width:14px;height:2px;background:#ef4444"></span><span style="color:#cbd5e1">转化率% (右轴)</span></div>'
+      + (spikes.length > 0 ? '<div style="display:flex;align-items:center;gap:5px;color:#ef4444"><span style="width:10px;height:10px;border:2px solid #ef4444;border-radius:50%"></span><span>异常峰值 (' + spikes.length + ')</span></div>' : '');
+  } catch (e) {
+    document.getElementById('ts-chart').innerHTML = '<div class="empty">加载失败: ' + safeText(e.message) + '</div>';
+  }
+}
+
+let _slaMode = 'agents';
+async function loadAgentSla() {
+  try {
+    if (_slaMode === 'variants') {
+      const data = await fetchJson('/cluster/customers/sla/variants?days=' + _selectedDays);
+      const variants = data.variants || [];
+      document.getElementById('sla-thead').innerHTML = '<tr>'
+        + '<th>variant</th><th>接管</th><th>成交</th><th>流失</th><th>跟进中</th><th>转化率</th><th>平均处理 (min)</th></tr>';
+      if (variants.length === 0) {
+        document.getElementById('sla-tbody').innerHTML = '<tr><td colspan="7" class="empty">还没有真人接管记录</td></tr>';
+        return;
+      }
+      document.getElementById('sla-tbody').innerHTML = variants.map(v => {
+        const rate = (v.conversion_rate || 0);
+        const rateColor = rate >= 0.5 ? '#22c55e' : rate >= 0.3 ? '#f59e0b' : '#ef4444';
+        const avg = v.avg_minutes != null ? v.avg_minutes.toFixed(1) : '—';
+        const variantBadge = v.variant === 'v1' ? '🌸 v1' : v.variant === 'v2' ? '🎯 v2' : v.variant;
+        return '<tr>'
+          + '<td><b style="color:#a855f7">' + safeText(variantBadge) + '</b></td>'
+          + '<td>' + (v.handled || 0) + '</td>'
+          + '<td style="color:#22c55e;font-weight:600">' + (v.converted_n || 0) + '</td>'
+          + '<td style="color:#ef4444">' + (v.lost_n || 0) + '</td>'
+          + '<td style="color:#f59e0b">' + (v.pending_n || 0) + '</td>'
+          + '<td><b style="color:' + rateColor + '">' + (rate * 100).toFixed(1) + '%</b></td>'
+          + '<td class="mono">' + avg + '</td>'
+          + '</tr>';
+      }).join('');
+      return;
+    }
+    // agents
+    const data = await fetchJson('/cluster/customers/sla/agents?days=' + _selectedDays);
+    const agents = data.agents || [];
+    document.getElementById('sla-thead').innerHTML = '<tr>'
+      + '<th>客服</th><th>接管</th><th>成交</th><th>流失</th><th>跟进中</th><th>转化率</th><th>平均处理 (min)</th>'
+      + '<th title="initiated → accepted 平均分钟">响应 (min)</th>'
+      + '<th title="accepted → converted 平均分钟">→ 成交 (min)</th></tr>';
+    if (agents.length === 0) {
+      document.getElementById('sla-tbody').innerHTML = '<tr><td colspan="9" class="empty">还没有真人接管记录</td></tr>';
+      return;
+    }
+    document.getElementById('sla-tbody').innerHTML = agents.map(a => {
+      const rate = (a.conversion_rate || 0);
+      const rateColor = rate >= 0.5 ? '#22c55e' : rate >= 0.3 ? '#f59e0b' : '#ef4444';
+      const avg = a.avg_minutes != null ? a.avg_minutes.toFixed(1) : '—';
+      const accept = a.avg_accept_minutes != null ? a.avg_accept_minutes.toFixed(1) : '—';
+      const convert = a.avg_convert_minutes != null ? a.avg_convert_minutes.toFixed(1) : '—';
+      // Phase-12/13: 接管响应 < 15min 绿, < 30 黄, 否则红; 样本数 < 3 灰色低置信度
+      const acceptN = a.accept_n || 0;
+      const convertN = a.convert_n_with_time || 0;
+      let acceptColor = a.avg_accept_minutes == null ? '#94a3b8'
+        : a.avg_accept_minutes < 15 ? '#22c55e'
+        : a.avg_accept_minutes < 30 ? '#f59e0b' : '#ef4444';
+      let convertColor = '#22c55e';
+      if (acceptN > 0 && acceptN < 3) acceptColor = '#94a3b8';  // 低置信度灰
+      if (convertN > 0 && convertN < 3) convertColor = '#94a3b8';
+      const acceptN_str = acceptN > 0
+        ? ' <span style="font-size:10px;color:#64748b">(n=' + acceptN + ')</span>' : '';
+      const convertN_str = convertN > 0
+        ? ' <span style="font-size:10px;color:#64748b">(n=' + convertN + ')</span>' : '';
+      return '<tr>'
+        + '<td><b>' + safeText(a.accepted_by_human) + '</b></td>'
+        + '<td>' + (a.handled || 0) + '</td>'
+        + '<td style="color:#22c55e;font-weight:600">' + (a.converted_n || 0) + '</td>'
+        + '<td style="color:#ef4444">' + (a.lost_n || 0) + '</td>'
+        + '<td style="color:#f59e0b">' + (a.pending_n || 0) + '</td>'
+        + '<td><b style="color:' + rateColor + '">' + (rate * 100).toFixed(1) + '%</b></td>'
+        + '<td class="mono">' + avg + '</td>'
+        + '<td class="mono" style="color:' + acceptColor + '">' + accept + acceptN_str + '</td>'
+        + '<td class="mono" style="color:' + convertColor + '">' + convert + convertN_str + '</td>'
+        + '</tr>';
+    }).join('');
+  } catch (e) {
+    document.getElementById('sla-tbody').innerHTML = '<tr><td colspan="7" class="empty">加载失败: ' + safeText(e.message) + '</td></tr>';
+  }
+}
+
+function switchSla(mode) {
+  _slaMode = mode;
+  ['agents', 'variants'].forEach(m => {
+    const el = document.getElementById('sla-by-' + m);
+    if (m === mode) {
+      el.style.background = '#3b82f6'; el.style.color = '#fff'; el.style.border = 'none';
+    } else {
+      el.style.background = 'none'; el.style.color = '#cbd5e1';
+      el.style.border = '1px solid #475569';
+    }
+  });
+  loadAgentSla();
+}
+
+function exportCsv() {
+  window.open('/cluster/customers-export.csv', '_blank');
+}
+
+async function openChatSearch() {
+  const q = prompt('搜索聊天内容 (含日文/英文):', '');
+  if (!q || q.length < 2) return;
+  try {
+    const data = await fetchJson('/cluster/chats-search?q=' + encodeURIComponent(q) + '&limit=30');
+    const chats = data.chats || [];
+    let html = '<div class="modal-section"><h4>搜索 "' + safeText(q) + '" 命中 ' + chats.length + ' 条</h4>';
+    if (chats.length === 0) {
+      html += '<div class="empty">无匹配</div>';
+    } else {
+      html += '<div class="timeline">' + chats.map(ch => {
+        const cls = ch.direction === 'incoming' ? 'incoming' : 'outgoing';
+        const who = ch.direction === 'incoming' ? '客户' : '我';
+        return '<div class="timeline-item ' + cls + '" onclick="closeModal();openCustomer(\'' + safeText(ch.customer_id) + '\')" style="cursor:pointer">'
+          + '<div class="ts">' + fmtDateTime(ch.ts) + '<br><b style="color:#cbd5e1">' + safeText(ch.primary_name || '?') + '</b></div>'
+          + '<div class="body"><b>' + who + ':</b> ' + safeText(ch.content) + '</div></div>';
+      }).join('') + '</div>';
+    }
+    html += '</div>';
+    document.getElementById('modal-title').innerText = '🔎 聊天搜索: ' + q;
+    document.getElementById('modal-body').innerHTML = html;
+    document.getElementById('modal-overlay').classList.add('active');
+  } catch (e) {
+    showToast('搜索失败: ' + e.message, '#ef4444');
+  }
+}
+
+async function loadPushMetrics() {
+  try {
+    const data = await fetchJson('/cluster/customers/push/metrics');
+    const m = data.metrics || {};
+    const drain = data.drain || {};
+    document.getElementById('push-metrics').innerHTML = ''
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;font-size:12px">'
+      + ['push_total', 'push_success', 'push_failure', 'push_4xx',
+         'push_async_enqueue', 'queue_pending', 'drain_success',
+         'drain_failure', 'dead_letter_pending'].map(k =>
+        '<div><span style="color:#94a3b8">' + k + ':</span> <b>' + (m[k] || 0) + '</b></div>'
+      ).join('')
+      + '<div><span style="color:#94a3b8">drain 线程:</span> <b style="color:'
+      + (drain.running ? '#22c55e' : '#ef4444') + '">' + (drain.running ? '运行中' : '停止') + '</b></div>'
+      + '<div><span style="color:#94a3b8">drain 周期:</span> <b>' + (drain.iterations || 0) + '</b></div>'
+      + '</div>';
+  } catch (e) {
+    document.getElementById('push-metrics').innerHTML = '<span class="empty">加载失败: ' + safeText(e.message) + '</span>';
+  }
+}
+
+// ─── modal: 客户详情 ─────────────────────────────────────────────
+let _currentCustomerId = '';
+async function openCustomer(customerId) {
+  if (!customerId) return;
+  _currentCustomerId = customerId;
+  document.getElementById('modal-title').innerText = '客户详情 · ' + customerId.substring(0, 12);
+  document.getElementById('modal-body').innerHTML = '加载中…';
+  document.getElementById('modal-overlay').classList.add('active');
+  try {
+    const c = await fetchJson('/cluster/customers/' + encodeURIComponent(customerId));
+    renderCustomerDetail(c);
+  } catch (e) {
+    document.getElementById('modal-body').innerHTML = '<div class="empty">加载失败: ' + safeText(e.message) + '</div>';
+  }
+}
+
+// Phase-9: 客服回复模板 (lazy load 一次, 全局复用)
+let _replyTemplates = null;
+async function _loadReplyTemplates() {
+  if (_replyTemplates) return _replyTemplates;
+  try {
+    const r = await fetch('/static/replies/ja.json');
+    _replyTemplates = (await r.json()).templates || [];
+  } catch (e) {
+    _replyTemplates = [];
+  }
+  return _replyTemplates;
+}
+
+function _matchTemplatesForConcerns(concerns, templates) {
+  // 部分关键词匹配 (lowercase substring), 同模板只返一次
+  const matched = [];
+  const seen = new Set();
+  (concerns || []).forEach(c => {
+    const lc = (c || '').toLowerCase();
+    templates.forEach(tpl => {
+      if (seen.has(tpl.id)) return;
+      const hits = (tpl.keywords || []).some(k => lc.includes(k.toLowerCase()));
+      if (hits) { matched.push(tpl); seen.add(tpl.id); }
+    });
+  });
+  // 兜底: 一个都没命中给 _default
+  if (matched.length === 0) {
+    const def = templates.find(t => t.id === '_default');
+    if (def) matched.push(def);
+  }
+  return matched;
+}
+
+// Phase-10: 模板里的 〇〇さん 替换成客户名
+let _currentCustomerName = '';
+function _renderTemplateText(text) {
+  const name = (_currentCustomerName || '').trim() || 'あなた';
+  return (text || '').replace(/〇〇さん/g, name);
+}
+
+function _copyReply(text) {
+  try {
+    navigator.clipboard.writeText(text);
+    showToast('📋 已复制到剪贴板', '#22c55e');
+  } catch (e) {
+    // fallback
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    showToast('📋 已复制', '#22c55e');
+  }
+}
+
+async function _renderReplyTemplates(concerns) {
+  const target = document.getElementById('reply-templates-body');
+  if (!target) return;
+  const templates = await _loadReplyTemplates();
+  const matched = _matchTemplatesForConcerns(concerns, templates);
+  if (matched.length === 0) { target.innerHTML = ''; return; }
+  target.innerHTML = matched.map(tpl => {
+    const replies = (tpl.replies || []).map((rep, i) => {
+      const filled = _renderTemplateText(rep);
+      const escaped = filled.replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+      return '<div style="background:#0f172a;border:1px solid #334155;border-radius:6px;padding:8px 10px;margin:4px 0;font-size:12px;line-height:1.5;color:#e2e8f0;cursor:pointer" '
+        + 'onclick="_copyReply(\'' + escaped + '\')" title="点击复制">'
+        + '<span style="font-size:10px;color:#64748b;margin-right:6px">候选 ' + (i + 1) + '</span>'
+        + safeText(filled)
+        + '</div>';
+    }).join('');
+    return '<div style="margin-bottom:10px">'
+      + '<div style="font-size:11px;color:#94a3b8;margin-bottom:4px">📂 ' + safeText(tpl.label) + '</div>'
+      + replies + '</div>';
+  }).join('');
+}
+
+// Phase-12: 客户旅程横向 SVG 时间线 (events + handoffs 合并)
+const JOURNEY_EVENT_TYPES = [
+  // 顺序就是 Y 轴分层 (上 → 下)
+  {key: 'friend_request_sent', label: '加好友', color: '#06b6d4'},
+  {key: 'greeting_sent', label: '打招呼', color: '#a855f7'},
+  {key: 'message_received', label: '客户回复', color: '#60a5fa'},
+  {key: 'greeting_fallback', label: 'fallback', color: '#f59e0b'},
+  {key: 'wa_referral_sent', label: '引流发出', color: '#22c55e'},
+  {key: 'priority_changed', label: 'priority 变', color: '#a855f7'},
+  {key: 'referral_decision', label: '决策', color: '#94a3b8'},
+  {key: 'handoff_initiated', label: 'handoff 发起', color: '#fb923c'},
+  {key: 'handoff_accepted', label: 'handoff 接管', color: '#fb923c'},
+  {key: 'handoff_converted', label: '✓ 成交', color: '#22c55e'},
+  {key: 'handoff_lost', label: '✗ 流失', color: '#ef4444'},
+];
+
+function _renderJourneyTimeline(events, handoffs) {
+  // 把 handoff 拆 3 个伪事件: initiated / accepted / converted/lost
+  const items = [];
+  events.forEach(ev => {
+    items.push({type: ev.event_type, ts: ev.ts, meta: ev.meta || {}});
+  });
+  handoffs.forEach(h => {
+    if (h.initiated_at) items.push({type: 'handoff_initiated', ts: h.initiated_at, meta: {handoff_id: h.handoff_id}});
+    if (h.accepted_at) items.push({type: 'handoff_accepted', ts: h.accepted_at, meta: {by: h.accepted_by_human}});
+    if (h.completed_at && h.outcome === 'converted') items.push({type: 'handoff_converted', ts: h.completed_at, meta: {}});
+    if (h.completed_at && h.outcome === 'lost') items.push({type: 'handoff_lost', ts: h.completed_at, meta: {}});
+  });
+  if (items.length === 0) return '';
+  items.sort((a, b) => new Date(a.ts) - new Date(b.ts));
+
+  const tMin = new Date(items[0].ts).getTime();
+  const tMax = new Date(items[items.length - 1].ts).getTime();
+  const span = Math.max(60000, tMax - tMin); // 至少 1 min 防除零
+
+  const W = 800, H = 280, padL = 100, padR = 20, padT = 20, padB = 30;
+  const innerW = W - padL - padR;
+  const lanes = JOURNEY_EVENT_TYPES;
+  const laneH = (H - padT - padB) / lanes.length;
+  const laneIdx = {};
+  lanes.forEach((l, i) => { laneIdx[l.key] = i; });
+
+  // SVG 元素
+  let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;background:#0f172a;border-radius:8px">';
+  // Y 轴 lane 标签 + 横线
+  lanes.forEach((l, i) => {
+    const y = padT + i * laneH + laneH / 2;
+    svg += '<line x1="' + padL + '" y1="' + y + '" x2="' + (W - padR) + '" y2="' + y + '" stroke="#1e293b" stroke-width="0.5"/>';
+    svg += '<text x="' + (padL - 8) + '" y="' + (y + 3) + '" fill="#94a3b8" font-size="10" text-anchor="end">' + safeText(l.label) + '</text>';
+  });
+
+  // 事件圆点
+  items.forEach(it => {
+    const idx = laneIdx[it.type];
+    if (idx == null) return; // 类型不在显示列表
+    const t = new Date(it.ts).getTime();
+    const x = padL + ((t - tMin) / span) * innerW;
+    const y = padT + idx * laneH + laneH / 2;
+    const color = lanes[idx].color;
+    const tooltip = (lanes[idx].label) + '\n' + new Date(it.ts).toLocaleString();
+    svg += '<circle cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="4" fill="' + color + '" opacity="0.9">'
+      + '<title>' + safeText(tooltip) + '</title></circle>';
+  });
+
+  // X 轴时间标签 (头/中/尾)
+  const fmt = ts => {
+    const d = new Date(ts);
+    return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0');
+  };
+  svg += '<text x="' + padL + '" y="' + (H - 8) + '" fill="#64748b" font-size="9">' + fmt(tMin) + '</text>';
+  svg += '<text x="' + (padL + innerW / 2) + '" y="' + (H - 8) + '" fill="#64748b" font-size="9" text-anchor="middle">' + fmt((tMin + tMax) / 2) + '</text>';
+  svg += '<text x="' + (W - padR) + '" y="' + (H - 8) + '" fill="#64748b" font-size="9" text-anchor="end">' + fmt(tMax) + '</text>';
+  svg += '</svg>';
+
+  return '<div class="modal-section">'
+    + '<h4>🛤️ 客户旅程时间线 <span style="font-size:10px;color:#64748b;font-weight:400;margin-left:6px">' + items.length + ' 事件 · 鼠标悬停看时间</span></h4>'
+    + svg
+    + '</div>';
+}
+
+// Phase-8: LLM 客户洞察 (lazy: 用户点开 modal 才异步请求)
+async function loadLlmInsight(customerId, force) {
+  const target = document.getElementById('llm-insight-body');
+  if (!target) return;
+  target.innerHTML = '<div style="color:#94a3b8;font-size:11px">🧠 LLM 思考中… (首次约 3-5 秒, 命中缓存即时)</div>';
+  try {
+    const url = '/cluster/customers/' + encodeURIComponent(customerId) + '/llm-insight' + (force ? '?force=1' : '');
+    const r = await fetchJson(url);
+    const cached = r.cached ? '<span style="font-size:10px;color:#64748b;margin-left:8px">(缓存)</span>' : '';
+    const refreshBtn = '<button onclick="loadLlmInsight(\'' + safeText(customerId) + '\', 1)" style="background:none;border:1px solid #475569;color:#cbd5e1;padding:3px 8px;border-radius:5px;font-size:10px;cursor:pointer;margin-left:8px">🔄 强制重算</button>';
+    if (!r.ok) {
+      target.innerHTML = '<div style="color:#f59e0b">⚠️ ' + safeText(r.summary || r.error) + '</div>' + refreshBtn;
+      return;
+    }
+    const ready = (r.conversion_readiness || 0);
+    const readyColor = ready > 0.7 ? '#22c55e' : ready > 0.4 ? '#f59e0b' : '#94a3b8';
+    const concerns = (r.key_concerns || []).map(c =>
+      '<li style="margin:3px 0;color:#cbd5e1">' + safeText(c) + '</li>').join('');
+    target.innerHTML = ''
+      + '<div style="display:flex;flex-wrap:wrap;gap:14px;margin-bottom:10px">'
+      +   (r.urgent_signal ? '<span style="background:rgba(239,68,68,.15);color:#f87171;padding:3px 10px;border-radius:8px;font-size:11px;font-weight:600">🚨 急需接管</span>' : '')
+      +   '<span style="background:rgba(' + (ready > 0.7 ? '34,197,94' : ready > 0.4 ? '245,158,11' : '148,163,184') + ',.15);color:' + readyColor + ';padding:3px 10px;border-radius:8px;font-size:11px;font-weight:600">引流成熟度: ' + (ready * 100).toFixed(0) + '%</span>'
+      +   cached + refreshBtn
+      + '</div>'
+      + '<div style="color:#e2e8f0;font-size:13px;line-height:1.6;margin-bottom:10px">' + safeText(r.summary) + '</div>'
+      + (concerns ? '<div style="margin-bottom:10px"><b style="color:#94a3b8;font-size:11px">关键诉求:</b><ul style="margin:4px 0 0 20px;padding:0;font-size:12px">' + concerns + '</ul></div>' : '')
+      + '<div style="background:rgba(96,165,250,.08);border-left:3px solid #60a5fa;padding:8px 12px;border-radius:4px;font-size:12px;margin-bottom:10px"><b style="color:#60a5fa">建议: </b>' + safeText(r.recommended_action) + '</div>'
+      + '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:11px;color:#c084fc;font-weight:600;padding:4px 0">💬 推荐回复 (按客户诉求自动匹配, 点击复制)</summary>'
+      + '<div id="reply-templates-body" style="margin-top:8px"></div></details>';
+    _renderReplyTemplates(r.key_concerns || []);
+  } catch (e) {
+    target.innerHTML = '<div style="color:#ef4444">❌ ' + safeText(e.message) + '</div>';
+  }
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('active');
+}
+
+function renderCustomerDetail(c) {
+  const aiProfile = c.ai_profile || {};
+  const events = c.events || [];
+  const chats = c.chats || [];
+  const handoffs = c.handoffs || [];
+  // Phase-10: 模板渲染时用得到
+  _currentCustomerName = c.primary_name || '';
+
+  let html = '';
+
+  // 基本信息
+  html += '<div class="modal-section">'
+    + '<h4>基本信息</h4>'
+    + '<div class="kv-grid">'
+    + '<div class="k">customer_id</div><div class="v mono">' + safeText(c.customer_id) + '</div>'
+    + '<div class="k">姓名</div><div class="v"><b>' + safeText(c.primary_name || '—') + '</b> 🇯🇵</div>'
+    + '<div class="k">状态</div><div class="v"><span class="pill ' + safeText(c.status) + '">' + safeText(c.status) + '</span></div>'
+    + '<div class="k">canonical 来源</div><div class="v">' + safeText(c.canonical_source) + ' / ' + safeText(c.canonical_id) + '</div>'
+    + '<div class="k">persona</div><div class="v">' + safeText(aiProfile.persona_key || '—') + '</div>'
+    + '<div class="k">country</div><div class="v">' + safeText(c.country || '—') + '</div>'
+    + '<div class="k">interests</div><div class="v">' + safeText((c.interests || []).join(', ') || '—') + '</div>'
+    + '<div class="k">last worker</div><div class="v mono">' + safeText(c.last_worker_id || '—') + '</div>'
+    + '<div class="k">last device</div><div class="v mono">' + safeText(c.last_device_id || '—') + '</div>'
+    + '<div class="k">创建</div><div class="v">' + fmtDateTime(c.created_at) + '</div>'
+    + '<div class="k">更新</div><div class="v">' + fmtDateTime(c.updated_at) + '</div>'
+    + '</div></div>';
+
+  // Phase-8: LLM 客户洞察 (lazy load)
+  html += '<div class="modal-section" style="background:rgba(168,85,247,.04);border:1px solid rgba(168,85,247,.2);border-radius:8px;padding:14px 16px">'
+    + '<h4 style="color:#c084fc">🧠 AI 客户洞察 <span style="font-size:10px;color:#64748b;font-weight:400;margin-left:6px">基于最近 50 条聊天</span></h4>'
+    + '<div id="llm-insight-body"></div>'
+    + '</div>';
+
+  // Phase-12: 客户旅程时间线 (events + handoffs 合并按 ts ASC)
+  if (events.length > 0 || handoffs.length > 0) {
+    html += _renderJourneyTimeline(events, handoffs);
+  }
+
+  // ai_profile
+  if (aiProfile && Object.keys(aiProfile).length > 0) {
+    html += '<div class="modal-section"><h4>AI 画像 (ai_profile)</h4>'
+      + '<pre style="background:#0f172a;padding:10px 12px;border-radius:8px;font-size:11px;color:#cbd5e1;overflow:auto">'
+      + safeText(JSON.stringify(aiProfile, null, 2))
+      + '</pre></div>';
+  }
+
+  // handoffs
+  if (handoffs.length > 0) {
+    html += '<div class="modal-section"><h4>Handoff 历史 (' + handoffs.length + ')</h4>';
+    handoffs.forEach(h => {
+      const outcomePill = h.outcome
+        ? '<span class="pill ' + h.outcome + '">' + h.outcome + '</span>'
+        : '<span class="pill in_funnel">未完结</span>';
+      html += '<div class="timeline-item">'
+        + '<div class="ts">' + fmtDateTime(h.initiated_at) + '</div>'
+        + '<div class="body">'
+        + '<b>' + safeText(h.from_stage) + ' → ' + safeText(h.to_stage) + '</b> · ' + outcomePill
+        + (h.accepted_by_human ? ' · 接管人 <code>' + safeText(h.accepted_by_human) + '</code>' : '')
+        + (h.ai_summary ? '<br><span style="font-size:11px;color:#94a3b8">' + safeText(h.ai_summary) + '</span>' : '')
+        + '</div></div>';
+    });
+    html += '</div>';
+  }
+
+  // chat 历史
+  if (chats.length > 0) {
+    html += '<div class="modal-section"><h4>聊天历史 (' + chats.length + ')</h4>'
+      + '<div class="timeline">';
+    chats.slice().reverse().forEach(ch => {
+      const cls = ch.direction === 'incoming' ? 'incoming' : 'outgoing';
+      const who = ch.direction === 'incoming' ? '客户' : '我';
+      html += '<div class="timeline-item ' + cls + '">'
+        + '<div class="ts">' + fmtDateTime(ch.ts) + '</div>'
+        + '<div class="body"><b>' + who + ':</b> ' + safeText(ch.content)
+        + (ch.content_lang ? '<span class="lang">[' + safeText(ch.content_lang) + ']</span>' : '')
+        + (ch.ai_generated ? '<span class="ai-tag">AI</span>' : '')
+        + (ch.template_id ? '<span class="ai-tag" style="background:rgba(96,165,250,.15);color:#60a5fa">tpl:' + safeText(ch.template_id) + '</span>' : '')
+        + '</div></div>';
+    });
+    html += '</div></div>';
+  }
+
+  // Phase-10: 引流决策历史 (referral_decision 类事件高亮独立 section)
+  const refDecs = events.filter(ev => ev.event_type === 'referral_decision');
+  if (refDecs.length > 0) {
+    html += '<div class="modal-section"><h4>📊 引流决策历史 (' + refDecs.length + ')</h4>'
+      + '<div class="timeline">';
+    refDecs.slice().reverse().slice(0, 20).forEach(ev => {
+      const m = ev.meta || {};
+      const refColor = m.refer ? '#22c55e' : '#94a3b8';
+      const levelColor = m.level === 'hard_allow' ? '#22c55e'
+        : m.level === 'hard_block' ? '#ef4444'
+        : m.level === 'soft_pass' ? '#3b82f6' : '#64748b';
+      const scores = [];
+      // Phase-13: readiness explainability — raw vs consensus 不一致时高亮
+      if (m.readiness != null) {
+        let rTxt = 'readiness=' + Number(m.readiness).toFixed(2);
+        if (m.raw_readiness != null && Math.abs(Number(m.raw_readiness) - Number(m.readiness)) > 0.05) {
+          rTxt += '<span style="color:#f59e0b" title="LLM 实测 raw 与共识值不一致, 共识降级防误判">'
+            + ' (raw=' + Number(m.raw_readiness).toFixed(2) + ' 共识降级)</span>';
+        }
+        scores.push(rTxt);
+      }
+      if (m.frustration != null) scores.push('frust=' + Number(m.frustration).toFixed(2));
+      if (m.emotion_overall != null) scores.push('emo=' + Number(m.emotion_overall).toFixed(2));
+      const reasons = (m.reasons || []).slice(0, 3).join(' · ');
+      html += '<div class="timeline-item" style="border-left-color:' + refColor + '">'
+        + '<div class="ts">' + fmtDateTime(ev.ts) + '</div>'
+        + '<div class="body">'
+        + '<b style="color:' + refColor + '">' + (m.refer ? '✅ 引流' : '⛔ 不引') + '</b>'
+        + ' <span style="background:rgba(' + (m.level === 'hard_allow' || m.level === 'soft_pass' ? '34,197,94' : '239,68,68') + ',.12);color:' + levelColor + ';padding:1px 8px;border-radius:8px;font-size:10px;font-weight:600">' + safeText(m.level || '—') + '</span>'
+        + (m.score != null ? ' <span style="font-size:10px;color:#64748b">score=' + m.score + '/' + (m.threshold || 0) + '</span>' : '')
+        + (scores.length ? '<br><span style="font-size:10px;color:#94a3b8">' + scores.join(' · ') + '</span>' : '')
+        + (reasons ? '<br><span style="font-size:11px;color:#cbd5e1">' + safeText(reasons) + '</span>' : '')
+        + '</div></div>';
+    });
+    html += '</div></div>';
+  }
+
+  // events 流水
+  if (events.length > 0) {
+    html += '<div class="modal-section"><h4>业务事件流水 (' + events.length + ')</h4>'
+      + '<div class="timeline">';
+    events.slice().reverse().forEach(ev => {
+      html += '<div class="timeline-item">'
+        + '<div class="ts">' + fmtDateTime(ev.ts) + '</div>'
+        + '<div class="body"><b>' + safeText(ev.event_type) + '</b> · '
+        + '<code style="font-size:10px">' + safeText(ev.worker_id || '') + '</code>'
+        + (ev.device_id ? ' / <code style="font-size:10px">' + safeText(ev.device_id.substring(0,12)) + '</code>' : '')
+        + (ev.meta && Object.keys(ev.meta).length > 0
+          ? '<details style="margin-top:4px"><summary style="cursor:pointer;color:#64748b;font-size:11px">meta</summary><pre style="font-size:10px;background:#0f172a;padding:6px 8px;border-radius:6px;margin:4px 0">'
+            + safeText(JSON.stringify(ev.meta, null, 2)) + '</pre></details>'
+          : '')
+        + '</div></div>';
+    });
+    html += '</div></div>';
+  }
+
+  document.getElementById('modal-body').innerHTML = html;
+  // Phase-8: 异步拉 LLM 洞察, 不阻塞 modal 渲染
+  if (c.customer_id) {
+    setTimeout(() => loadLlmInsight(c.customer_id, 0), 50);
+  }
+}
+
+// ─── 接管 handoff ───────────────────────────────────────────────
+async function acceptHandoff(handoffId, peerName) {
+  let csId = getCsId();
+  if (!csId) {
+    csId = prompt('请输入你的客服 ID (留下来后 localStorage 记住):', 'agent_001');
+    if (!csId) return;
+    setCsId(csId);
+    document.getElementById('cs-id').value = csId;
+  }
+  if (!confirm('确认 ' + csId + ' 接手客户 ' + (peerName || handoffId.substring(0,12)) + ' ?')) return;
+  try {
+    const r = await fetchJson(
+      '/cluster/customers/handoff/' + encodeURIComponent(handoffId) + '/accept',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({accepted_by_human: csId}),
+      }
+    );
+    if (r.accepted) {
+      showToast('✅ 接手成功 · 客户已绑定到你', '#22c55e');
+      refresh();
+    } else {
+      showToast('⚠️ 已被别人接走 (idempotent)', '#f59e0b');
+    }
+  } catch (e) {
+    showToast('❌ 失败: ' + e.message, '#ef4444');
+  }
+}
+
+// ─── toast ─────────────────────────────────────────────────────
+function showToast(msg, color) {
+  const t = document.createElement('div');
+  t.style.cssText = 'position:fixed;bottom:30px;left:50%;transform:translateX(-50%);'
+    + 'background:#1e293b;border:1px solid ' + (color || '#475569')
+    + ';color:' + (color || '#e2e8f0') + ';padding:12px 20px;border-radius:10px;'
+    + 'font-size:13px;z-index:10000;box-shadow:0 8px 30px rgba(0,0,0,.5);';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3500);
+}
+
+// ─── Phase-7: sparkline (7 天迷你趋势) ──────────────────────────
+function _renderSpark(svgId, values, color) {
+  const svg = document.getElementById(svgId);
+  if (!svg) return;
+  const w = 120, h = 30, p = 2;
+  const maxV = Math.max(1, ...values);
+  if (values.length < 2) { svg.innerHTML = ''; return; }
+  const pts = values.map((v, i) => {
+    const x = p + (i * (w - 2 * p) / (values.length - 1));
+    const y = h - p - ((v / maxV) * (h - 2 * p));
+    return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
+  // 末点 dot 突出今日
+  const lastX = p + ((values.length - 1) * (w - 2 * p) / (values.length - 1));
+  const lastY = h - p - ((values[values.length - 1] / maxV) * (h - 2 * p));
+  svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+  svg.innerHTML = '<path d="' + pts + '" stroke="' + color + '" stroke-width="1.5" fill="none" opacity="0.85"/>'
+    + '<circle cx="' + lastX.toFixed(1) + '" cy="' + lastY.toFixed(1) + '" r="2.2" fill="' + color + '"/>';
+}
+
+async function loadSparklines() {
+  try {
+    const data = await fetchJson('/cluster/customers/funnel/timeseries?days=7');
+    const series = (data.series || []).slice(-7);
+    if (series.length < 2) return;
+    // 客户总数 = 加好友累计 (用 friend_request_sent 当增量代理)
+    _renderSpark('spark-customers', series.map(s => s.friend_request_sent || 0), '#06b6d4');
+    // in_messenger 进入 = message_received 入站量趋势
+    _renderSpark('spark-messenger', series.map(s => s.message_received || 0), '#f59e0b');
+    // in_line = wa_referral_sent 引流量趋势
+    _renderSpark('spark-line', series.map(s => s.wa_referral_sent || 0), '#f59e0b');
+    // 接管 ≈ greeting_sent 当代理 (没有现成 daily 接管数, 与"打招呼"等比)
+    _renderSpark('spark-accepted', series.map(s => s.greeting_sent || 0), '#a855f7');
+    _renderSpark('spark-converted', series.map(s => s.customer_converted || 0), '#22c55e');
+    _renderSpark('spark-lost', series.map(s => s.customer_lost || 0), '#ef4444');
+  } catch (e) {
+    console.debug('spark:', e);
+  }
+}
+
+// ─── Phase-7: A/B current experiment 面板 ────────────────────────
+async function loadAbExperiment() {
+  try {
+    const exp = await fetchJson('/cluster/ab/experiment/running');
+    const panel = document.getElementById('ab-experiment-panel');
+    if (!exp || !exp.experiment_id) {
+      panel.style.display = 'none';
+      return;
+    }
+    panel.style.display = '';
+    document.getElementById('ab-experiment-meta').innerText =
+      '实验 ID ' + (exp.experiment_id || '').substring(0, 8) + '… · 自 ' + fmtDateTime(exp.started_at);
+    // 同时拉 winner 状态
+    let winnerInfo = null;
+    try { winnerInfo = await fetchJson('/cluster/customers/ab/winner?days=30'); } catch (e) {}
+    const variants = exp.variants || ['v1','v2'];
+    const winner = winnerInfo && winnerInfo.winner;
+    const samples = (winnerInfo && winnerInfo.samples) || {};
+    const graduated = winnerInfo && winnerInfo.graduated;
+    const role = (localStorage.getItem('oc_role') || '').toLowerCase();
+    let html = '<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center">'
+      + '<div><b>名称:</b> ' + safeText(exp.name || '—') + '</div>'
+      + '<div><b>variants:</b> ' + variants.map(v => '<span style="display:inline-block;padding:2px 8px;margin:0 3px;background:rgba(168,85,247,.15);border:1px solid rgba(168,85,247,.4);border-radius:8px;color:#c084fc">' + safeText(v) + '</span>').join('') + '</div>';
+    if (winner) {
+      html += '<div><b>当前赢家:</b> <span style="color:#22c55e;font-weight:700">' + safeText(winner) + '</span>'
+        + (graduated ? ' <span style="background:rgba(34,197,94,.2);color:#22c55e;padding:2px 8px;border-radius:8px;font-size:10px;margin-left:4px">graduated 100%</span>' : ' <span style="color:#94a3b8;font-size:11px">(80/20 流量)</span>')
+        + '</div>';
+    } else {
+      html += '<div style="color:#94a3b8">尚未判出 winner (50/50 流量)</div>';
+    }
+    if (Object.keys(samples).length > 0) {
+      html += '<div style="font-size:11px;color:#94a3b8;width:100%">'
+        + Object.entries(samples).map(([v, s]) =>
+            '<span style="margin-right:14px"><b style="color:#cbd5e1">' + safeText(v) + ':</b> '
+            + (s.handled || 0) + ' 接管 · ' + (s.converted_n || 0) + ' 成交 · '
+            + ((s.conversion_rate || 0) * 100).toFixed(1) + '%</span>'
+          ).join('') + '</div>';
+    }
+    if (exp.note) html += '<div style="width:100%;font-size:11px;color:#64748b">📝 ' + safeText(exp.note) + '</div>';
+    if (role === 'admin') {
+      html += '<div style="width:100%;margin-top:8px"><button onclick="graduateAndRestart()" style="background:rgba(168,85,247,.18);color:#c084fc;border:1px solid rgba(168,85,247,.4);padding:6px 14px;border-radius:6px;font-size:11px;cursor:pointer">🎓 graduate 当前 · 启新实验</button></div>';
+    }
+    html += '</div>';
+    document.getElementById('ab-experiment-body').innerHTML = html;
+  } catch (e) {
+    console.debug('ab exp:', e);
+  }
+}
+
+async function graduateAndRestart() {
+  const newName = prompt('新实验名 (e.g. v3_vs_v4):', '');
+  if (!newName) return;
+  const variantsStr = prompt('新 variants (逗号分隔):', 'v3,v4');
+  if (!variantsStr) return;
+  const variants = variantsStr.split(',').map(s => s.trim()).filter(Boolean);
+  if (variants.length < 2) { showToast('至少 2 个 variant', '#ef4444'); return; }
+  const note = prompt('备注 (可选):', '') || '';
+  try {
+    const r = await fetchJson('/cluster/ab/graduate-and-restart', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({new_name: newName, new_variants: variants, note: note}),
+    });
+    showToast('✅ 新实验已启动: ' + (r.new_experiment_id || '').substring(0, 8) + '… (前任赢家: ' + (r.previous_winner || '—') + ')', '#22c55e');
+    loadAbExperiment();
+  } catch (e) {
+    showToast('❌ 启新实验失败: ' + e.message, '#ef4444');
+  }
+}
+
+// ─── Phase-7: 客户视图 ──────────────────────────────────────────
+async function loadViews() {
+  try {
+    const data = await fetchJson('/cluster/customer-views');
+    const views = data.views || [];
+    const sel = document.getElementById('view-select');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">— 选已保存的视图 —</option>'
+      + views.map(v => '<option value="' + safeText(v.view_id) + '">' + safeText(v.name) + '</option>').join('');
+    if (cur) sel.value = cur;
+    window._views = views;
+  } catch (e) {
+    console.debug('views:', e);
+  }
+}
+
+function loadView() {
+  const id = document.getElementById('view-select').value;
+  if (!id || !window._views) return;
+  const v = window._views.find(x => x.view_id === id);
+  if (!v) return;
+  const p = v.params_json || v.params || {};
+  document.getElementById('search-q').value = p.q || '';
+  document.getElementById('search-priority').value = p.priority || '';
+  document.getElementById('search-status').value = p.status || '';
+  document.getElementById('search-ab').value = p.ab_variant || '';
+  doSearch();
+}
+
+async function saveCurrentView() {
+  const name = prompt('视图名 (例: 高优先级 in_messenger):', '');
+  if (!name) return;
+  const params = {
+    q: document.getElementById('search-q').value || '',
+    priority: document.getElementById('search-priority').value || '',
+    status: document.getElementById('search-status').value || '',
+    ab_variant: document.getElementById('search-ab').value || '',
+  };
+  try {
+    await fetchJson('/cluster/customer-views', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name, params: params, owner: localStorage.getItem('oc_user') || 'admin'}),
+    });
+    showToast('✅ 视图已保存', '#22c55e');
+    loadViews();
+  } catch (e) {
+    showToast('❌ 保存失败: ' + e.message, '#ef4444');
+  }
+}
+
+async function deleteSelectedView() {
+  const sel = document.getElementById('view-select');
+  const id = sel.value;
+  if (!id) { showToast('请先选一个视图', '#f59e0b'); return; }
+  if (!confirm('确认删除视图 "' + sel.options[sel.selectedIndex].text + '" ?')) return;
+  try {
+    await fetchJson('/cluster/customer-views/' + encodeURIComponent(id), {method: 'DELETE'});
+    showToast('🗑️ 已删除', '#94a3b8');
+    sel.value = '';
+    loadViews();
+  } catch (e) {
+    showToast('❌ 删除失败: ' + e.message, '#ef4444');
+  }
+}
+
+// ─── Phase-12: aggregate 看板 → 决策详情钻取 ──────────────────
+async function openReferralDecisionDrill(filterQs, label) {
+  document.getElementById('modal-title').innerText = '🔍 引流决策明细 · ' + label;
+  document.getElementById('modal-body').innerHTML = '加载中…';
+  document.getElementById('modal-overlay').classList.add('active');
+  try {
+    const url = '/cluster/referral-decisions?days=' + _selectedDays + '&limit=50&' + filterQs;
+    const data = await fetchJson(url);
+    const decisions = data.decisions || [];
+    if (decisions.length === 0) {
+      document.getElementById('modal-body').innerHTML = '<div class="empty">无匹配决策</div>';
+      return;
+    }
+    const html = '<div style="font-size:11px;color:#94a3b8;margin-bottom:8px">命中 ' + decisions.length + ' 条 (近 ' + _selectedDays + ' 天)</div>'
+      + '<div class="timeline">' + decisions.map(d => {
+        const m = d.meta || {};
+        const ref = m.refer ? '✅' : '⛔';
+        const refColor = m.refer ? '#22c55e' : '#94a3b8';
+        const lvColor = m.level === 'hard_allow' ? '#22c55e'
+          : m.level === 'hard_block' ? '#ef4444'
+          : m.level === 'soft_pass' ? '#3b82f6' : '#64748b';
+        const scores = [];
+        // Phase-13: explainability
+        if (m.readiness != null) {
+          let rTxt = 'readiness=' + Number(m.readiness).toFixed(2);
+          if (m.raw_readiness != null && Math.abs(Number(m.raw_readiness) - Number(m.readiness)) > 0.05) {
+            rTxt += '<span style="color:#f59e0b">(raw=' + Number(m.raw_readiness).toFixed(2) + ' 降级)</span>';
+          }
+          scores.push(rTxt);
+        }
+        if (m.frustration != null) scores.push('frust=' + Number(m.frustration).toFixed(2));
+        if (m.emotion_overall != null) scores.push('emo=' + Number(m.emotion_overall).toFixed(2));
+        const reasons = (m.reasons || []).slice(0, 3).join(' · ');
+        return '<div class="timeline-item" style="border-left-color:' + refColor + ';cursor:pointer" '
+          + 'onclick="closeModal();openCustomer(\'' + safeText(d.customer_id) + '\')">'
+          + '<div class="ts">' + fmtDateTime(d.ts) + '<br><b style="color:#cbd5e1">' + safeText(d.primary_name || '?') + '</b></div>'
+          + '<div class="body">'
+          + '<b style="color:' + refColor + '">' + ref + ' ' + (m.refer ? '引流' : '不引') + '</b>'
+          + ' <span style="background:rgba(' + (m.level === 'hard_allow' || m.level === 'soft_pass' ? '34,197,94' : '239,68,68') + ',.12);color:' + lvColor + ';padding:1px 7px;border-radius:8px;font-size:10px;font-weight:600">' + safeText(m.level || '—') + '</span>'
+          + (scores.length ? '<br><span style="font-size:10px;color:#94a3b8">' + scores.join(' · ') + '</span>' : '')
+          + (reasons ? '<br><span style="font-size:11px;color:#cbd5e1">' + safeText(reasons) + '</span>' : '')
+          + '</div></div>';
+      }).join('') + '</div>';
+    document.getElementById('modal-body').innerHTML = html;
+  } catch (e) {
+    document.getElementById('modal-body').innerHTML = '<div class="empty">加载失败: ' + safeText(e.message) + '</div>';
+  }
+}
+
+// ─── Phase-11: 引流决策聚合看板 ───────────────────────────────
+async function loadReferralDecisionsAggregate() {
+  try {
+    const data = await fetchJson('/cluster/referral-decisions/aggregate?days=' + _selectedDays);
+    document.getElementById('rd-meta').innerText =
+      '近 ' + data.days + ' 天 · 总 ' + data.total + ' 条决策 · refer 率 ' +
+      ((data.refer_rate || 0) * 100).toFixed(1) + '%';
+    if (!data.total) {
+      document.getElementById('rd-content').innerHTML =
+        '<div class="empty">还没有 referral_decision 事件 (开始接客户对话后会自动落库)</div>';
+      return;
+    }
+    const lv = data.by_level || {};
+    const levels = ['hard_allow', 'hard_block', 'soft_pass', 'soft_fail'];
+    const lvColors = {hard_allow: '#22c55e', hard_block: '#ef4444', soft_pass: '#3b82f6', soft_fail: '#94a3b8'};
+    const levelMax = Math.max(1, ...levels.map(k => lv[k] || 0));
+
+    // 4 块布局
+    let html = '<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:16px">';
+
+    // 1) Level 分布 (横条, 可点击钻取)
+    html += '<div><div style="font-size:11px;color:#94a3b8;margin-bottom:6px">⚖️ 决策层级分布 <span style="color:#64748b">(点击查明细)</span></div>';
+    levels.forEach(k => {
+      const cnt = lv[k] || 0;
+      const pct = (cnt / levelMax) * 100;
+      const dis = cnt === 0;
+      html += '<div style="margin:5px 0;font-size:11px;cursor:' + (dis ? 'default' : 'pointer') + ';opacity:' + (dis ? '0.5' : '1') + '" '
+        + (dis ? '' : 'onclick="openReferralDecisionDrill(\'level=' + k + '\', \'' + k + '\')"') + '>'
+        + '<div style="display:flex;justify-content:space-between;color:#cbd5e1">'
+        + '<span>' + safeText(k) + '</span><b>' + cnt + '</b></div>'
+        + '<div style="background:#0f172a;border-radius:4px;height:6px;overflow:hidden;margin-top:2px">'
+        + '<div style="background:' + lvColors[k] + ';height:100%;width:' + pct.toFixed(1) + '%"></div>'
+        + '</div></div>';
+    });
+    html += '</div>';
+
+    // 2) refer=true vs false 评分对比表
+    const avg = data.avg_scores_by_refer || {};
+    const fmt = v => v == null ? '—' : Number(v).toFixed(2);
+    html += '<div><div style="font-size:11px;color:#94a3b8;margin-bottom:6px">📐 评分对比 (refer=true vs false)</div>'
+      + '<table style="width:100%;font-size:11px">'
+      + '<thead><tr><th>维度</th><th style="color:#22c55e">引流</th><th style="color:#94a3b8">不引</th></tr></thead>'
+      + '<tbody>'
+      + '<tr><td>readiness</td><td>' + fmt(avg.true && avg.true.readiness) + '</td><td>' + fmt(avg.false && avg.false.readiness) + '</td></tr>'
+      + '<tr><td>frustration</td><td>' + fmt(avg.true && avg.true.frustration) + '</td><td>' + fmt(avg.false && avg.false.frustration) + '</td></tr>'
+      + '<tr><td>emotion</td><td>' + fmt(avg.true && avg.true.emotion_overall) + '</td><td>' + fmt(avg.false && avg.false.emotion_overall) + '</td></tr>'
+      + '</tbody></table></div>';
+
+    // 3) 30 天 refer rate 时序 + 15-25% 目标参考带
+    const ts = data.timeseries || [];
+    if (ts.length >= 2) {
+      const W = 280, H = 80, P = 6;
+      const xStep = (W - 2 * P) / Math.max(1, ts.length - 1);
+      const pts = ts.map((s, i) => {
+        const x = P + i * xStep;
+        const y = H - P - (s.refer_rate || 0) * (H - 2 * P);
+        return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+      }).join(' ');
+      // 15-25% 目标参考带 (绿色半透明矩形)
+      const yLow = H - P - 0.15 * (H - 2 * P);
+      const yHigh = H - P - 0.25 * (H - 2 * P);
+      const targetBand = '<rect x="' + P + '" y="' + yHigh.toFixed(1)
+        + '" width="' + (W - 2 * P) + '" height="' + (yLow - yHigh).toFixed(1)
+        + '" fill="rgba(34,197,94,.12)" stroke="rgba(34,197,94,.3)" stroke-width="0.5" stroke-dasharray="2 2"/>';
+      html += '<div><div style="font-size:11px;color:#94a3b8;margin-bottom:6px">📈 refer 率趋势 (' + ts.length + ' 天) <span style="color:#22c55e">绿带 = 健康区 15-25%</span></div>'
+        + '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:80px">'
+        + targetBand
+        + '<line x1="' + P + '" y1="' + (H - P) + '" x2="' + (W - P) + '" y2="' + (H - P) + '" stroke="#334155" stroke-width="0.5"/>'
+        + '<path d="' + pts + '" stroke="#a855f7" stroke-width="1.5" fill="none"/>'
+        + '<text x="' + P + '" y="' + (P + 10) + '" fill="#94a3b8" font-size="9">100%</text>'
+        + '<text x="' + P + '" y="' + (H - 2) + '" fill="#94a3b8" font-size="9">0%</text>'
+        + '</svg></div>';
+    }
+
+    // 4) Top reasons (可点击钻取)
+    const reasons = data.top_reasons || [];
+    if (reasons.length > 0) {
+      const maxR = Math.max(1, ...reasons.map(r => r.count));
+      html += '<div><div style="font-size:11px;color:#94a3b8;margin-bottom:6px">💬 Top 触发原因 <span style="color:#64748b">(点击查明细)</span></div>';
+      reasons.slice(0, 8).forEach(r => {
+        const pct = (r.count / maxR) * 100;
+        // 取关键词前 20 字 (避免 quote 转义复杂; 端点用 ILIKE 子串)
+        const key = (r.reason || '').slice(0, 20).replace(/'/g, '').replace(/"/g, '');
+        html += '<div style="margin:3px 0;font-size:11px;cursor:pointer" onclick="openReferralDecisionDrill(\'reason=' + encodeURIComponent(key) + '\', \'reason: ' + safeText(key) + '\')">'
+          + '<div style="display:flex;justify-content:space-between;color:#cbd5e1">'
+          + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:80%" title="' + safeText(r.reason) + '">' + safeText(r.reason) + '</span>'
+          + '<b>' + r.count + '</b></div>'
+          + '<div style="background:#0f172a;border-radius:4px;height:4px;overflow:hidden;margin-top:1px">'
+          + '<div style="background:#a855f7;height:100%;width:' + pct.toFixed(1) + '%"></div>'
+          + '</div></div>';
+      });
+      html += '</div>';
+    }
+
+    html += '</div>';
+    document.getElementById('rd-content').innerHTML = html;
+  } catch (e) {
+    document.getElementById('rd-content').innerHTML =
+      '<div class="empty">加载失败: ' + safeText(e.message) + '</div>';
+  }
+}
+
+// ─── Phase-10: Top 客户主动出击面板 ─────────────────────────────
+function _renderCustomerCard(c, color) {
+  const status = c.status || '—';
+  const updated = c.event_ts || c.updated_at;
+  return '<div onclick="openCustomer(\'' + safeText(c.customer_id) + '\')" '
+    + 'style="display:flex;justify-content:space-between;align-items:center;'
+    + 'padding:8px 10px;margin:4px 0;background:rgba(15,23,42,.5);'
+    + 'border-radius:6px;border-left:3px solid ' + color + ';cursor:pointer">'
+    + '<div><b style="color:#e2e8f0">' + safeText(c.primary_name || '—') + '</b>'
+    + ' <span class="name-flag">🇯🇵</span>'
+    + '<div style="font-size:10px;color:#64748b;margin-top:2px">'
+    + '<span class="pill ' + safeText(status) + '" style="font-size:9px;padding:1px 6px">' + safeText(status) + '</span>'
+    + ' · ' + (c.last_worker_id ? safeText(c.last_worker_id) : '—')
+    + ' · ' + fmtTime(updated) + '</div></div>'
+    + '<span style="color:' + color + ';font-size:11px">→</span>'
+    + '</div>';
+}
+
+async function loadTopHighPriority() {
+  try {
+    const data = await fetchJson('/cluster/customers/top/high-priority?limit=10');
+    const items = data.customers || [];
+    if (items.length === 0) {
+      document.getElementById('top-high-priority').innerHTML =
+        '<div class="empty">暂无高优先级未接管客户 ✅</div>';
+      return;
+    }
+    document.getElementById('top-high-priority').innerHTML =
+      items.map(c => _renderCustomerCard(c, '#22c55e')).join('');
+  } catch (e) {
+    document.getElementById('top-high-priority').innerHTML =
+      '<div class="empty">加载失败: ' + safeText(e.message) + '</div>';
+  }
+}
+
+async function loadTopFrustrated() {
+  try {
+    const data = await fetchJson('/cluster/customers/top/frustrated?days=7&limit=10');
+    const items = data.customers || [];
+    if (items.length === 0) {
+      document.getElementById('top-frustrated').innerHTML =
+        '<div class="empty">近 7 天无 frustration > 0.7 客户 ✅</div>';
+      return;
+    }
+    document.getElementById('top-frustrated').innerHTML =
+      items.map(c => _renderCustomerCard(c, '#ef4444')).join('');
+  } catch (e) {
+    document.getElementById('top-frustrated').innerHTML =
+      '<div class="empty">加载失败: ' + safeText(e.message) + '</div>';
+  }
+}
+
+// ─── 任务失败原因分析 (B2B 调试) ────────────────────────────────
+async function loadErrorAnalysis() {
+  try {
+    const data = await fetchJson('/tasks/error-analysis?hours=24');
+    const target = document.getElementById('ea-content');
+    document.getElementById('ea-meta').innerText =
+      '近 24h · 总 ' + (data.total_tasks || 0) + ' 任务 · 失败 ' +
+      (data.total_failed || 0) + ' 个 · 失败率 ' + (data.failure_rate || 0) + '%';
+
+    if (!data.total_failed) {
+      target.innerHTML = '<div class="empty">✅ 24h 内无失败任务</div>';
+      return;
+    }
+
+    const CAT_LABELS = {
+      vpn_failure: '🌐 VPN 故障',
+      network_timeout: '⏱️ 网络超时',
+      ui_not_found: '🎯 UI 元素未找到',
+      account_limited: '🚫 账号限流/封禁',
+      device_offline: '📵 设备离线',
+      geo_mismatch: '🗺️ IP 地理不匹配',
+      task_timeout: '⏰ 任务超时',
+      unknown: '❓ 未分类',
+    };
+    const CAT_COLORS = {
+      vpn_failure: '#a855f7',
+      network_timeout: '#f59e0b',
+      ui_not_found: '#3b82f6',
+      account_limited: '#ef4444',
+      device_offline: '#06b6d4',
+      geo_mismatch: '#fb923c',
+      task_timeout: '#ec4899',
+      unknown: '#94a3b8',
+    };
+
+    const cats = data.categories || {};
+    const sorted = Object.entries(cats)
+      .filter(([k, v]) => v > 0)
+      .sort((a, b) => b[1] - a[1]);
+    const maxV = Math.max(1, ...sorted.map(x => x[1]));
+
+    let html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px">';
+
+    // 左: 错误分类柱条
+    html += '<div><div style="font-size:11px;color:#94a3b8;margin-bottom:6px">📊 失败类型分布</div>';
+    sorted.forEach(([k, v]) => {
+      const pct = (v / maxV) * 100;
+      const label = CAT_LABELS[k] || k;
+      const color = CAT_COLORS[k] || '#94a3b8';
+      html += '<div style="margin:5px 0;font-size:11px">'
+        + '<div style="display:flex;justify-content:space-between;color:#cbd5e1">'
+        + '<span>' + safeText(label) + '</span><b>' + v + '</b></div>'
+        + '<div style="background:#0f172a;border-radius:4px;height:6px;overflow:hidden;margin-top:2px">'
+        + '<div style="background:' + color + ';height:100%;width:' + pct.toFixed(1) + '%"></div>'
+        + '</div></div>';
+    });
+    html += '</div>';
+
+    // 中: 修复建议
+    const TOP_FIX = {
+      vpn_failure: '检查 V2RayNG 是否前台运行, 节点是否过期; 跑 scripts/sim_captive_diagnose.py',
+      network_timeout: 'SIM 卡可能用尽流量或被运营商门户拦截; 跑 scripts/sim_captive_diagnose.py',
+      ui_not_found: 'FB UI 版本变化导致 selector miss; 启用 VLM fallback 或更新 selector',
+      account_limited: '账号被风控, 立即停手 24h 让账号冷却; 检查是否触发 anti-spam',
+      device_offline: 'USB 接触不良 / adb 断开; adb kill-server && adb start-server',
+      geo_mismatch: 'VPN 节点国家不匹配 persona; 切对应国家的 VPN',
+      task_timeout: '设备性能瓶颈或 LLM 调用慢; 看 /cluster/customers/push/metrics',
+      unknown: '看具体 task.result.error 字段定位',
+    };
+    const topCat = sorted[0] ? sorted[0][0] : null;
+    html += '<div><div style="font-size:11px;color:#94a3b8;margin-bottom:6px">💡 修复建议 (针对 Top 失败类型)</div>';
+    if (topCat) {
+      html += '<div style="background:rgba(96,165,250,.1);border-left:3px solid #60a5fa;padding:10px 12px;border-radius:6px;font-size:12px;line-height:1.6;margin-bottom:8px">'
+        + '<b style="color:#60a5fa">' + safeText(CAT_LABELS[topCat] || topCat) + ' ('
+        + sorted[0][1] + ' 个)</b><br><span style="color:#cbd5e1">'
+        + safeText(TOP_FIX[topCat] || '查看 logs/openclaw.log') + '</span></div>';
+    }
+    html += '</div>';
+
+    // 右: 设备失败排行 (Top 5)
+    const byDev = data.by_device || {};
+    const devSorted = Object.entries(byDev).sort((a, b) =>
+      (b[1].total_failed || 0) - (a[1].total_failed || 0)).slice(0, 5);
+    if (devSorted.length > 0) {
+      html += '<div><div style="font-size:11px;color:#94a3b8;margin-bottom:6px">📉 失败 Top 5 设备</div>';
+      devSorted.forEach(([dev, info]) => {
+        const total = info.total_failed || 0;
+        const top = info.top_category || '?';
+        const color = CAT_COLORS[top] || '#94a3b8';
+        html += '<div style="margin:4px 0;font-size:11px;display:flex;justify-content:space-between;align-items:center">'
+          + '<span class="mono" style="color:#cbd5e1">' + safeText(dev.substring(0, 14)) + '…</span>'
+          + '<div><span style="color:' + color + ';font-size:10px;margin-right:6px">'
+          + safeText(CAT_LABELS[top] || top) + '</span>'
+          + '<b style="color:#ef4444">' + total + '</b></div>'
+          + '</div>';
+      });
+      html += '</div>';
+    }
+
+    html += '</div>';
+    target.innerHTML = html;
+  } catch (e) {
+    document.getElementById('ea-content').innerHTML =
+      '<div class="empty">加载失败: ' + safeText(e.message) + '</div>';
+  }
+}
+
+// ─── refresh all ────────────────────────────────────────────────
+async function refresh() {
+  document.getElementById('last-update').innerText = '刷新中…';
+  await Promise.all([loadFunnel(), loadHandoffPending(), loadCustomers(), loadTimeseries(), loadAgentSla(), loadPushMetrics(), loadAbExperiment(), loadViews(), loadTopHighPriority(), loadTopFrustrated(), loadReferralDecisionsAggregate(), loadErrorAnalysis()]);
+  document.getElementById('last-update').innerText = '更新于 ' + new Date().toLocaleTimeString();
+}
+
+refresh();
+setInterval(refresh, TIMER_MS);
+
+// 按 Esc 关 modal
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeModal();
+});
+</script>
+</body>
+</html>

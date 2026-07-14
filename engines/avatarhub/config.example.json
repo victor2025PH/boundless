@@ -1,0 +1,30 @@
+{
+  "_comment": "可选覆盖层。复制为 config.json 后按需填写；不存在时系统全自动探测，零配置即可运行。优先级：环境变量 > config.json > 自动探测。",
+
+  "_comment_conda_root": "仅当 conda 不在标准位置时填写（否则自动探测 %USERPROFILE%\\Miniconda3 等）。",
+  "conda_root": "C:\\Users\\user\\Miniconda3",
+
+  "_comment_conda_python": "仅当某个环境的 python.exe 不在 <conda_root>\\envs\\<name>\\ 时单独指定。",
+  "conda_python": {
+    "facefusion": "C:\\Users\\user\\Miniconda3\\envs\\facefusion\\python.exe"
+  },
+
+  "_comment_dirs": "仅当想把某类数据放到别的盘（如大模型放 D 盘）时覆盖；默认都在项目根下。",
+  "dirs": {
+    "logs": "",
+    "static": "",
+    "data": "",
+    "models": ""
+  },
+
+  "_comment_activation_url": "在线激活服务器地址（厂商部署 license_server.py）。授权面板「在线激活」输兑换码即向此地址换取授权。也可用环境变量 AVATARHUB_ACTIVATION_URL 覆盖。留空则只能粘贴/导入 license.key 离线激活。",
+  "activation_url": "",
+
+  "_comment_stt_sla": "STT 实时闭环压测(interp_selfcheck.py --stt-bench)的 SLA 达标线。命令行 --sla-* 优先；其次环境变量 AVATARHUB_SLA_FIRST_P95/FINAL_P95/OK_RATE/CONCURRENCY；再次本配置；都缺省用内置默认。first_p95/final_p95 单位 ms，ok_rate 为 0~1，target_c=0 表示用阶梯最大并发档。",
+  "stt_sla": {
+    "first_p95": 700,
+    "final_p95": 1500,
+    "ok_rate": 0.95,
+    "target_c": 0
+  }
+}

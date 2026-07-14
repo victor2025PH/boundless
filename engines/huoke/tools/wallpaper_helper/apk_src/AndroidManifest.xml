@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.openclaw.wallpaperhelper"
+    android:versionCode="1"
+    android:versionName="1.0">
+
+    <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="33" />
+
+    <uses-permission android:name="android.permission.SET_WALLPAPER" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+
+    <application android:label="OpenClaw WP">
+        <receiver android:name=".WallpaperReceiver"
+                  android:exported="true">
+            <intent-filter>
+                <action android:name="com.openclaw.SET_WALLPAPER" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

@@ -1,0 +1,41 @@
+# 按 persona 区分的引流策略
+# 调用: src/ai/referral_gate.py::load_persona_config(persona_key)
+# 用途: 覆盖 referral_gate.DEFAULT_CONFIG, 不同 persona 不同 min_turns / cooldown
+
+default:
+  min_turns: 3                  # 默认 (不影响其它 persona, 兼容现有)
+  rejection_cooldown_days: 0    # 默认不启用拒绝冷却
+  refer_cooldown_hours: 1
+  ref_score_threshold: 0.5
+  score_threshold: 3
+  min_lead_score: 0
+  min_peer_replies: 2
+  channel_priority: [line, whatsapp, telegram]
+  trigger_keywords_lang: en
+  bot_persona: ""               # 默认不注入额外调性
+
+jp_female_midlife:
+  # 日本 37-60 岁女性情感陪护 — 主市场
+  # victor 拍板: 7 轮 + 7 天冷却 + 只引 LINE
+  min_turns: 7
+  rejection_cooldown_days: 7
+  rejection_max_count: 1        # 拒绝 1 次即触发冷却
+  max_referrals_per_peer: 3
+  refer_cooldown_hours: 1
+  ref_score_threshold: 0.5
+  score_threshold: 3
+  min_lead_score: 0
+  min_peer_replies: 2
+  min_emotion_score: 0.5        # L3 情感综合分门槛: 聊得有温度才引
+  channel_priority: [line]      # 只引 LINE, 不引 WA/Telegram
+  trigger_keywords_lang: ja
+  bot_persona: jp_caring_male   # AI 调性: 日本男性关爱型 (chat_brain 注入)
+  referral_tone: companion      # 温柔陪护, 非商业
+  # Phase-9: LLM 洞察驱动智能引流 (覆盖 7 轮硬阈值)
+  max_frustration: 0.5          # frustration > 0.5 暂不引 (referral_ask 除外)
+  early_refer_readiness: 0.8    # readiness ≥ 0.8 + turns ≥ 5 → 早引流 (跳过 7 轮)
+  early_refer_min_turns: 5
+  delay_refer_readiness: 0.3    # readiness ≤ 0.3 + turns ≤ 10 → 延后 (即使到 7 轮也别引)
+  delay_refer_max_turns: 10
+
+# 备用 persona 走 default (italy_lifestyle / brazil_beauty / arabic_business 等)

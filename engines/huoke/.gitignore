@@ -1,0 +1,135 @@
+# 环境变量（包含敏感信息）
+.env
+.env.local
+.env.*.local
+
+# 不要忽略模板文件
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Playwright / pytest-playwright 产物（trace、截图等）
+test-results/
+playwright-report/
+
+# 根目录散落的 debug/排查截图 (人手抓的, 不入 git; 子目录 PNG 不受影响)
+/*.png
+/*.jpg
+/*.jpeg
+/*_screenshot.*
+/tmp_*
+
+# 数据和日志
+data/
+logs/
+*.log
+*.db
+*.db-shm
+*.db-wal
+
+# TLS 证书私钥
+config/certs/*.key
+config/certs/*.pem
+
+# VPN 配置池（含代理账号密码，勿提交）
+src/config/vpn_pool.json
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# 运行时缓存 / 临时文件（2026-04-23 补）
+.pytest_cache/
+temp/
+*.tmp
+*.pid
+
+# APK 二进制仓库（32M+，写 README 说明如何获取或走 Release 单独下载）
+apk_repo/
+
+# 学习型选择器运行时产物（data/ 已忽略，兜底）
+data/selectors/*.yaml.bak
+
+# 项目内的独立子文档目录（避免与主 docs/ 混淆）
+mobile-auto-project/
+
+# FFmpeg / scrcpy 大二进制（若对方手动获取 portable 包会更新版本）
+# 如果要把当前版本入库，删除下面两行即可
+# avcodec-*.dll
+# avformat-*.dll
+
+# 备份文件
+*.bak
+*.orig
+
+# 运行时生成的 JSON 状态（每次启动都会被覆盖，不应入库）
+config/analytics_history.json
+config/routers.json
+.restart-required
+
+# 接收方账号配置(含真实运营账号, 不同部署不同, 不入库)
+# 模板见 config/referral_receivers.yaml.example
+config/referral_receivers.yaml
+
+# 启动配置 (端口 / API key 等本地化, 不入库)
+# 模板见 config/launch.env.example
+config/launch.env
+
+# 运营报告输出目录 (PR #112 daily snapshot / chat_review / weekly_report 产物)
+reports/
+
+# 本地真机调试产物 (截图 + hierarchy dump)
+debug/
+
+# VLM eval dataset — screenshots 目录含真实对话截图, 隐私不入库
+# (cases.yaml 的 metadata 入库, 截图 开发者本地按需 populate)
+scripts/vlm_eval_dataset/screenshots/*
+!scripts/vlm_eval_dataset/screenshots/.gitkeep
+
+# Claude Code session state (scheduled_tasks.lock 等), 不入库
+.claude/
+
+# Debug screenshots from interactive sessions (root-level and subdirs)
+**/real_*.png
+**/screen_*.png
+
+# 真机 hierarchy dump 残留 (顶级目录), 由调试脚本临时产生, 子目录 .xml (如
+# AndroidManifest.xml in tools/*/apk_src/) 不受影响
+/*.xml
+
+# 任务状态 / 列表临时 dump (gh / curl 抓的 API 返回, 调试用)
+/task_detail.json
+/tasks_recent.json
+
+# ── 敏感配置（2026-07-11 安全加固）──────────────────────────────
+# 以下文件此前已被 git 跟踪并推送到远端，含 shared_secret / 真实设备指纹 /
+# 内网 IP / 通知 token。仅加此规则不足以生效，必须配合：
+#   git rm --cached <file>   （取消跟踪，保留本地）
+# 并轮换已泄露的密钥值。详见 docs-business/P0实施记录.md
+config/cluster.yaml
+config/device_registry.json
+config/device_aliases.json
+config/cluster_state.json
+config/notify_config.json
+# 建议改为 config/*.example 模板入库，真实值走 launch.env / 环境变量
+
+# 一次性分析/监控 scratch 脚本（_ab_status/_campaign_analysis/_task_check… 一律不入库）
+# 2026-07-12：与 telegram 对根目录 _*.py 的处理一致；如某个脚本要转正，移出 _ 前缀或单独 add -f
+scripts/_*.py

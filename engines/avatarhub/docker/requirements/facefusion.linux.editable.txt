@@ -1,0 +1,2 @@
+# facefusion 可编辑安装（源码树在运行时挂载卷 /app 内 → entrypoint 启动时
+# `pip install --no-deps -r 本文件`；依赖已在主清单装齐）。可为空。

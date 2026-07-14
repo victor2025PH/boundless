@@ -1,0 +1,8 @@
+# Place real Messenger screenshots here for eval.
+# This dir is gitignored to keep private conversation images out of the repo.
+#
+# Examples:
+#   cp ../../real_inbox.png .          # from repo root
+#   cp ../../screen_typed.png .
+#
+# Then run: python scripts/messenger_vlm_prompt_eval.py

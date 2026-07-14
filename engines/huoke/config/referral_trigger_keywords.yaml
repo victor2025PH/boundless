@@ -1,0 +1,49 @@
+# 客户主动要 LINE 的关键词触发字典
+# 命中即 hard_allow (无视 7 轮限制)
+# 业务定位: 日本 37-60 女性情感陪护 → 引流 LINE
+# 文件语义跟 referral_reply_keywords.yaml 区分:
+#   reply 版: 客户回应了我们发的引流话术 (Phase 20 跟踪用)
+#   trigger 版 (本文件): 客户主动索要联系方式 (引流闸 hard_allow 用)
+
+ja:
+  # 直接索要 LINE
+  - LINE教えて
+  - LINEを教え
+  - ライン教え
+  - LINE交換
+  - ラインこうかん
+  - ID教え
+  - LINEのID
+  - 連絡先教え
+  - 連絡先交換
+  # 表达想私聊 / 想加好友
+  - もっと話したい
+  - 個別で話
+  - プライベートで
+  - 二人で話
+  - 直接連絡
+  - 友達になり
+  - 友だち追加
+  - 仲良く
+
+en:  # 极少日本客户用英文, 兜底
+  - line id
+  - your line
+  - line account
+  - add me on line
+  - private message
+  - message me privately
+
+# 客户明确拒绝引流的词典
+# 命中: 写到 ai_profile.referral_rejected_at, 触发 rejection_cooldown_days
+rejection_ja:
+  - LINEはやらない
+  - LINE使わない
+  - LINEやってない
+  - 教えたくない
+  - 結構です
+  - いりません
+  - やめて
+  - しつこい
+  - しつこく
+  - 興味ない

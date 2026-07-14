@@ -1,0 +1,1566 @@
+{% extends "base.html" %}
+{% block title %}{% if ui_mode == 'simple' %}{{ (i18n or {}).get('dashboard', "数据概览") }}{% else %}{{ (i18n or {}).get('db_s001', "仪表盘") }}{% endif %} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
+{% block page_title %}{% if ui_mode == 'simple' %}{{ (i18n or {}).get('dashboard', "数据概览") }}{% else %}{{ (i18n or {}).get('db_s001', "仪表盘") }}{% endif %}{% endblock %}
+{% block head %}
+<style>
+/* ── Alert Banner ────────────────────────────── */
+#alert-banner{display:none;margin-bottom:1rem;animation:fadeUp .3s ease}
+.alert-wrap{display:flex;flex-direction:column;gap:.5rem}
+.alert-bar{display:flex;align-items:flex-start;gap:.7rem;padding:.7rem 1rem;border-radius:var(--r);position:relative;font-size:.84rem;line-height:1.45}
+.alert-bar.critical{background:var(--rs);border:1px solid rgba(239,68,68,.3);border-left:4px solid var(--red)}
+.alert-bar.warn{background:var(--as);border:1px solid rgba(245,158,11,.25);border-left:4px solid var(--amber)}
+.alert-bar .alert-icon{font-size:1.1rem;flex-shrink:0;line-height:1}
+.alert-bar .alert-content{flex:1;min-width:0}
+.alert-bar .alert-title{font-weight:700;margin-bottom:.1rem}
+.alert-bar .alert-body{color:var(--t2);font-size:.8rem}
+.alert-bar .alert-action{flex-shrink:0;padding:.28rem .6rem;border-radius:6px;border:1px solid rgba(0,0,0,.15);background:rgba(0,0,0,.06);color:var(--t);font-size:.75rem;font-weight:600;text-decoration:none;cursor:pointer;white-space:nowrap;transition:.15s}
+.alert-bar .alert-action:hover{background:rgba(0,0,0,.12)}
+[data-theme="dark"] .alert-bar .alert-action{border-color:rgba(255,255,255,.15);background:rgba(255,255,255,.07)}
+.alert-banner-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:.45rem}
+.alert-banner-title{font-weight:700;font-size:.88rem;display:flex;align-items:center;gap:.4rem}
+.alert-banner-title svg{width:15px;height:15px}
+.alert-banner-title.critical{color:var(--red)}.alert-banner-title.warn{color:var(--amber)}
+.alert-collapse-btn{background:none;border:none;cursor:pointer;font-size:.75rem;color:var(--t3);padding:.15rem .35rem;border-radius:4px;transition:.15s}
+.alert-collapse-btn:hover{color:var(--t);background:var(--input)}
+/* ── 系统状态条 ──────────────────────────── */
+#sys-bar{display:none;align-items:center;gap:.6rem;padding:.5rem .85rem;background:var(--card);
+  border:1px solid var(--bd);border-radius:var(--r);margin-bottom:.9rem;flex-wrap:wrap;font-size:.78rem;
+  animation:fadeUp .3s ease}
+#sys-bar.show{display:flex}
+.sys-pills{display:flex;flex-wrap:wrap;gap:.4rem;flex:1}
+.sys-pill{display:inline-flex;align-items:center;gap:.3rem;padding:.2rem .6rem;
+  border-radius:20px;background:var(--input);color:var(--t2);font-size:.75rem;white-space:nowrap}
+.sys-pill.ok{background:var(--gs);color:var(--green)}
+.sys-pill.warn{background:var(--as,rgba(245,158,11,.1));color:var(--amber)}
+.sys-pill.err{background:var(--rs);color:var(--red)}
+.sys-pill .dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
+.sys-upd{font-size:.7rem;color:var(--t3,#9ca3af);margin-left:auto;white-space:nowrap}
+.sys-refresh{background:none;border:none;cursor:pointer;color:var(--t3);font-size:.85rem;padding:.1rem .3rem;border-radius:4px;transition:.15s}
+.sys-refresh:hover{color:var(--p);background:var(--ps)}
+/* stat icon colors */
+.ico-p{background:linear-gradient(135deg,#5b7cf6,#8b5cf6)}
+.ico-g{background:linear-gradient(135deg,#10b981,#059669)}
+.ico-a{background:linear-gradient(135deg,#f59e0b,#d97706)}
+.ico-r{background:linear-gradient(135deg,#ef4444,#dc2626)}
+.ico-b{background:linear-gradient(135deg,#06b6d4,#0891b2)}
+/* quick actions */
+.qa-row{display:flex;flex-wrap:wrap;gap:.6rem;margin-bottom:.5rem}
+/* health cards */
+.health-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:.8rem}
+@media(max-width:480px){.health-grid{grid-template-columns:1fr}}
+.h-card{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:1.1rem;display:flex;align-items:center;gap:1rem;transition:all .25s;cursor:default}
+[data-theme="dark"] .h-card{backdrop-filter:blur(8px)}
+.h-card:hover{box-shadow:var(--s1);transform:translateY(-1px)}
+a.stat-card{text-decoration:none;color:inherit;display:block}
+a.stat-card:hover{box-shadow:var(--sp);border-color:var(--p)}
+a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
+.ring-wrap{position:relative;width:58px;height:58px;flex-shrink:0}
+.ring-wrap svg{width:58px;height:58px}
+.ring-score{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:.9rem;font-weight:800;color:var(--t)}
+.h-info{flex:1;min-width:0}
+.h-name{font-weight:600;font-size:.87rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:.25rem}
+.h-meta{font-size:.76rem;color:var(--t2)}
+/* recent ops timeline */
+.tl{display:flex;flex-direction:column;gap:0}
+.tl-item{display:flex;gap:.9rem;padding:.6rem 0;border-bottom:1px solid var(--bd);align-items:flex-start}
+.tl-item:last-child{border-bottom:none}
+.tl-dot{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:.1rem}
+.tl-dot svg{width:14px;height:14px;color:#fff}
+.tl-body{flex:1;min-width:0}
+.tl-action{font-weight:600;font-size:.85rem;margin-bottom:.15rem}
+.tl-meta{font-size:.77rem;color:var(--t2);display:flex;gap:.6rem;flex-wrap:wrap}
+.tl-time{margin-left:auto;font-size:.76rem;color:var(--t3);white-space:nowrap;padding-top:.15rem}
+/* panel backdrop */
+#panel-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:199;backdrop-filter:blur(3px)}
+#panel-backdrop.open{display:block}
+/* activity chart */
+.act-chart-wrap{display:grid;grid-template-columns:1fr 200px;gap:1.2rem;align-items:center}
+@media(max-width:680px){.act-chart-wrap{grid-template-columns:1fr}}
+.act-bars{display:flex;align-items:flex-end;gap:2px;height:64px;padding:.3rem 0}
+.act-bar{flex:1;min-width:3px;border-radius:2px 2px 0 0;background:var(--p);opacity:.7;transition:height .4s ease,opacity .15s}
+.act-bar:hover{opacity:1}
+.act-bar.zero{background:var(--bd2);opacity:.4}
+.act-donut{position:relative;width:90px;height:90px;flex-shrink:0;margin:0 auto}
+.act-donut canvas{position:absolute;inset:0}
+.act-donut-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.act-total{font-weight:800;font-size:1.2rem;line-height:1;color:var(--p)}
+.act-total-lbl{font-size:.62rem;color:var(--t3)}
+.act-legend{display:flex;flex-direction:column;gap:.3rem;justify-content:center}
+.act-legend-item{display:flex;align-items:center;gap:.4rem;font-size:.73rem;color:var(--t2)}
+.act-legend-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.act-meta{display:flex;gap:.8rem;flex-wrap:wrap;margin-top:.7rem;font-size:.77rem;color:var(--t2)}
+.act-op{background:var(--input);border-radius:6px;padding:.3rem .7rem;display:flex;align-items:center;gap:.4rem}
+.act-op-name{font-weight:600;color:var(--t)}
+/* health modal */
+.hc-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9200;align-items:flex-start;justify-content:center;padding:3vh 0;overflow-y:auto;backdrop-filter:blur(4px)}
+.hc-modal.show{display:flex;animation:fadeUp .2s ease}
+.hc-box{background:var(--card);border:1px solid var(--bd);border-radius:16px;box-shadow:var(--s2);width:min(600px,94vw);margin:auto}
+.hc-hd{padding:1.1rem 1.4rem;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:.8rem}
+.hc-score-ring{width:52px;height:52px;position:relative;flex-shrink:0}
+.hc-score-ring svg{width:52px;height:52px;transform:rotate(-90deg)}
+.hc-score-num{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.88rem}
+.hc-body{padding:.7rem 1rem 1rem;max-height:60vh;overflow-y:auto}
+.hc-issue{display:flex;align-items:flex-start;gap:.7rem;padding:.65rem .8rem;border-radius:10px;margin-bottom:.45rem;border:1px solid transparent}
+.hc-issue.critical{background:var(--rs);border-color:rgba(239,68,68,.2)}
+.hc-issue.warn{background:var(--as);border-color:rgba(245,158,11,.2)}
+.hc-issue.info{background:var(--ps);border-color:rgba(91,124,246,.15)}
+.hc-issue.ok{background:var(--gs);border-color:rgba(16,185,129,.2)}
+.hc-icon{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1rem}
+.hc-content{flex:1;min-width:0}
+.hc-title{font-weight:700;font-size:.84rem;margin-bottom:.15rem}
+.hc-detail{font-size:.76rem;color:var(--t2);line-height:1.4}
+.hc-cat{font-size:.68rem;padding:.1rem .4rem;border-radius:4px;background:var(--bd);color:var(--t3);font-weight:600;margin-right:.3rem}
+</style>
+{% endblock %}
+{% block content %}
+{% set active="dash" %}
+
+<!-- 系统状态条（JS 动态填充） -->
+<div id="sys-bar" class="pro-only">
+  <div class="sys-pills" id="sys-pills">
+    <span class="sys-pill"><span class="dot"></span>{{ (i18n or {}).get('dash.loading', "加载中…") }}</span>
+  </div>
+  <span class="sys-upd" id="sys-upd-time"></span>
+  <button class="sys-refresh" onclick="loadSysBar()" title="{{ (i18n or {}).get('wa_s017', '刷新状态') }}">↻</button>
+</div>
+
+<!-- C0-1 授权状态卡（JS 动态填充） -->
+<div id="lic-card" style="display:none;margin-bottom:.9rem;border-radius:var(--r);
+  border:1px solid var(--bd);background:var(--card);padding:.85rem 1rem;
+  align-items:center;gap:.9rem;font-size:.82rem;">
+  <span id="lic-icon" style="font-size:1.3rem;flex-shrink:0;">🔑</span>
+  <div style="flex:1;min-width:0;">
+    <div id="lic-title" style="font-weight:700;color:var(--t);"></div>
+    <div id="lic-sub" style="color:var(--t2);font-size:.76rem;margin-top:.12rem;"></div>
+  </div>
+  <span id="lic-badge" style="flex-shrink:0;padding:.22rem .7rem;border-radius:20px;
+    font-size:.72rem;font-weight:700;white-space:nowrap;"></span>
+</div>
+<script>
+(function(){
+  var META={
+    active:   {bg:'var(--gs)',  fg:'var(--green)', icon:'🔑', label:window.T('db_js_001')},
+    grace:    {bg:'var(--as)',  fg:'var(--amber)', icon:'⏳', label:window.T('db_js_002')},
+    expired:  {bg:'var(--rs)',  fg:'var(--red)',   icon:'⛔', label:window.T('db_js_003')},
+    unlicensed:{bg:'var(--input)',fg:'var(--t2)',  icon:'🌱', label:window.T('db_js_004')},
+    invalid:  {bg:'var(--rs)',  fg:'var(--red)',   icon:'⚠️', label:window.T('db_js_005')},
+    unavailable:{bg:'var(--input)',fg:'var(--t2)', icon:'❓', label:window.T('db_js_006')}
+  };
+  function planName(p){return {community:window.T('db_js_007'),basic:window.T('db_js_008'),pro:window.T('db_js_009'),flagship:window.T('db_js_010')}[p]||p||'—';}
+  fetch('/api/admin/license').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.ok) return;
+    var card=document.getElementById('lic-card'); if(!card) return;
+    var m=META[d.state]||META.unlicensed;
+    card.style.display='flex';
+    card.style.borderLeft='4px solid '+m.fg;
+    document.getElementById('lic-icon').textContent=m.icon;
+    var title=planName(d.plan);
+    if(d.trial) title+=' · '+window.T('db_js_lic_trial');
+    if(d.customer) title+=' · '+d.customer;
+    if(d.days_left!=null && d.state!=='unlicensed') title+=(d.days_left>=0?'（'+window.T('db_js_011')+' '+d.days_left+' '+window.T('db_js_012'):'（'+window.T('db_js_013')+' '+(-d.days_left)+' '+window.T('db_js_012'));
+    document.getElementById('lic-title').textContent=title;
+    var sub=(d.messages&&d.messages.length)?d.messages.join('；'):'';
+    if(!sub && d.state==='active') sub=window.T('db_js_014')+(d.expires_at? '':' · '+window.T('db_js_015'));
+    if(d.seats) sub+=(sub?' · ':'')+window.T('db_js_016')+' '+d.seats;
+    if(d.channels&&d.channels.length) sub+=(sub?' · ':'')+window.T('db_js_017')+' '+d.channels.join('/');
+    if(d.quota && d.quota.included_chars>0) sub+=(sub?' · ':'')+window.T('db_js_lic_chars')+' '+((d.quota.used_chars||0).toLocaleString())+'/'+(d.quota.included_chars.toLocaleString());
+    document.getElementById('lic-sub').textContent=sub;
+    var b=document.getElementById('lic-badge');
+    b.textContent=m.label; b.style.background=m.bg; b.style.color=m.fg;
+  }).catch(function(){});
+})();
+</script>
+
+<!-- D1 运行时健康卡（JS 动态填充） -->
+<div id="health-card" style="display:none;margin-bottom:.9rem;border-radius:var(--r);
+  border:1px solid var(--bd);background:var(--card);padding:.85rem 1rem;font-size:.82rem;">
+  <div style="display:flex;align-items:center;gap:.9rem;">
+    <span id="health-icon" style="font-size:1.3rem;flex-shrink:0;">🩺</span>
+    <div style="flex:1;min-width:0;">
+      <div id="health-title" style="font-weight:700;color:var(--t);"></div>
+      <div id="health-sub" style="color:var(--t2);font-size:.76rem;margin-top:.12rem;"></div>
+    </div>
+    <span id="health-badge" style="flex-shrink:0;padding:.22rem .7rem;border-radius:20px;
+      font-size:.72rem;font-weight:700;white-space:nowrap;"></span>
+  </div>
+  <div id="health-comps" style="display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.7rem;"></div>
+</div>
+<script>
+(function(){
+  var LMETA={
+    green:{bg:'var(--gs)',fg:'var(--green)',icon:'🟢',label:window.T('db_js_018')},
+    yellow:{bg:'var(--as)',fg:'var(--amber)',icon:'🟡',label:window.T('wa_js_008')},
+    red:{bg:'var(--rs)',fg:'var(--red)',icon:'🔴',label:window.T('msg_js_1245')}
+  };
+  var SMETA={ok:'var(--green)',warn:'var(--amber)',fail:'var(--red)'};
+  function render(){
+    fetch('/api/admin/health').then(function(r){return r.json();}).then(function(d){
+      if(!d||!d.ok) return;
+      var card=document.getElementById('health-card'); if(!card) return;
+      var m=LMETA[d.light]||LMETA.yellow;
+      card.style.display='block'; card.style.borderLeft='4px solid '+m.fg;
+      document.getElementById('health-icon').textContent=m.icon;
+      document.getElementById('health-title').textContent=window.T('db_js_019');
+      var s=d.summary||{};
+      document.getElementById('health-sub').textContent=
+        window.T('db_js_020')+' '+(s.ok||0)+' · '+window.T('wa_js_008')+' '+(s.warn||0)+' · '+window.T('msg_js_1245')+' '+(s.fail||0);
+      var b=document.getElementById('health-badge');
+      b.textContent=m.label; b.style.background=m.bg; b.style.color=m.fg;
+      document.getElementById('health-comps').innerHTML=(d.components||[]).map(function(c){
+        var col=SMETA[c.status]||'var(--t2)';
+        return '<span title="'+(c.detail||'').replace(/"/g,'&quot;')+'" '
+          +'style="display:inline-flex;align-items:center;gap:.3rem;padding:.18rem .55rem;'
+          +'border:1px solid var(--bd);border-radius:14px;font-size:.72rem;color:var(--t2);">'
+          +'<i style="width:7px;height:7px;border-radius:50%;background:'+col+';display:inline-block;"></i>'
+          +(c.name||c.id)+'</span>';
+      }).join('');
+    }).catch(function(){});
+  }
+  render(); setInterval(render, 60000);
+})();
+</script>
+
+<!-- D2 运维可靠性卡（JS 动态填充） -->
+<div id="rel-card" style="display:none;margin-bottom:.9rem;border-radius:var(--r);
+  border:1px solid var(--bd);background:var(--card);padding:.85rem 1rem;font-size:.82rem;">
+  <div style="display:flex;align-items:center;gap:.9rem;">
+    <span id="rel-icon" style="font-size:1.3rem;flex-shrink:0;">📈</span>
+    <div style="flex:1;min-width:0;">
+      <div style="font-weight:700;color:var(--t);">{{ (i18n or {}).get('db_s002', "运维可靠性（近 24h）") }}</div>
+      <div id="rel-sub" style="color:var(--t2);font-size:.76rem;margin-top:.12rem;"></div>
+    </div>
+    <span id="rel-score" style="flex-shrink:0;padding:.22rem .7rem;border-radius:20px;
+      font-size:.72rem;font-weight:700;white-space:nowrap;"></span>
+  </div>
+  <div id="rel-workers" style="display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.7rem;"></div>
+  <div id="rel-spark" style="display:flex;align-items:flex-end;gap:2px;height:42px;margin-top:.7rem;"></div>
+</div>
+<script>
+(function(){
+  var LM={green:{fg:'var(--green)',icon:'📈',label:window.T('wa_js_073')},
+    yellow:{fg:'var(--amber)',icon:'📉',label:window.T('wa_js_008')},
+    red:{fg:'var(--red)',icon:'⚠️',label:window.T('msg_js_1245')}};
+  var SM={ok:'var(--green)',warn:'var(--amber)',fail:'var(--red)'};
+  function render(){
+    fetch('/api/admin/reliability?hours=24').then(function(r){return r.json();}).then(function(d){
+      if(!d||!d.ok) return;
+      var card=document.getElementById('rel-card'); if(!card) return;
+      var m=LM[d.light]||LM.yellow;
+      card.style.display='block'; card.style.borderLeft='4px solid '+m.fg;
+      document.getElementById('rel-icon').textContent=m.icon;
+      var t=d.totals||{};
+      document.getElementById('rel-sub').textContent=
+        window.T('db_js_021')+' '+(t.dispositions||0)+' · '+window.T('db_js_022')+' '+Math.round((t.block_rate||0)*100)+'%'
+        +' · '+window.T('db_js_023')+' '+Math.round((t.reject_rate||0)*100)+'% · '+window.T('db_js_024')+' '+(d.alert_count||0);
+      var b=document.getElementById('rel-score');
+      b.textContent=m.label+' '+(d.score||0); b.style.color=m.fg;
+      b.style.background='color-mix(in srgb,'+m.fg+' 14%,transparent)';
+      document.getElementById('rel-workers').innerHTML=(d.workers||[]).map(function(w){
+        var col=SM[w.status]||'var(--t2)';
+        var er=Math.round((w.error_rate||0)*100);
+        return '<span title="'+window.T('rpa_js_send')+' '+(w.total_sent||0)+' / '+window.T('ln_js_036')+' '+(w.total_errors||0)+'" '
+          +'style="display:inline-flex;align-items:center;gap:.3rem;padding:.18rem .55rem;'
+          +'border:1px solid var(--bd);border-radius:14px;font-size:.72rem;color:var(--t2);">'
+          +'<i style="width:7px;height:7px;border-radius:50%;background:'+col+';display:inline-block;"></i>'
+          +(w.name||w.id)+(w.total_sent||w.total_errors?(' '+er+'%err'):'')+'</span>';
+      }).join('');
+      var tr=d.trend||[]; var max=1; tr.forEach(function(x){max=Math.max(max,x.total||0);});
+      document.getElementById('rel-spark').innerHTML=tr.map(function(x){
+        var h=Math.round((x.total||0)/max*38);
+        var bad=(x.blocked||0)+(x.rejected||0);
+        var bg=bad>0?'var(--amber)':'#93c5fd';
+        return '<i title="'+window.T('db_js_021')+' '+(x.total||0)+'，'+window.T('db_js_025')+' '+bad+'" style="flex:1;min-width:2px;'
+          +'height:'+Math.max(2,h)+'px;background:'+bg+';border-radius:1px;display:inline-block;"></i>';
+      }).join('');
+    }).catch(function(){});
+  }
+  render(); setInterval(render, 60000);
+})();
+</script>
+
+<!-- 紧急告警横幅（JS 动态填充） -->
+<div id="alert-banner">
+  <div class="alert-banner-header">
+    <span class="alert-banner-title" id="alert-banner-title">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <span id="alert-banner-label">{{ (i18n or {}).get('db_s003', "系统告警") }}</span>
+    </span>
+    <button class="alert-collapse-btn" id="alert-collapse-btn" onclick="toggleAlertBanner()">{{ (i18n or {}).get('inbox.collapse', "收起") }}</button>
+  </div>
+  <div class="alert-wrap" id="alert-wrap"></div>
+</div>
+
+{% if ui_mode == 'simple' %}
+<div class="card" style="margin-bottom:1rem;padding:1.2rem">
+  <h2 style="font-size:1rem;font-weight:700;margin-bottom:.8rem;display:flex;align-items:center;gap:.5rem">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93A10 10 0 0015 3.05V1h-6v2.05A10 10 0 004.93 4.93L3.46 3.46 1 5.93l1.46 1.46A10 10 0 001.05 11H-1v2h2.05A10 10 0 003.46 17.07l-1.46 1.47L4.93 21l1.47-1.46A10 10 0 0011 20.95V23h2v-2.05a10 10 0 005.07-2.49L19.54 21 22 18.54l-1.47-1.47A10 10 0 0021.95 13H24v-2h-2.05A10 10 0 0019.07 4.93z"/></svg>
+    {{ (i18n or {}).get('db_s004', "快捷入口") }}
+  </h2>
+  <div style="display:flex;gap:.7rem;flex-wrap:wrap">
+    <a href="/cases" class="btn btn-p btn-sm" style="padding:.6rem 1.2rem;border-radius:10px;font-size:.9rem">📋 {{ (i18n or {}).get('cases', "待处理案例") }}</a>
+    <a href="/admin/ops" class="btn btn-s btn-sm" style="padding:.6rem 1.2rem;border-radius:10px;font-size:.9rem">📊 {{ (i18n or {}).get('db_s005', "运营总览") }}</a>
+    <a href="/knowledge" class="btn btn-s btn-sm" style="padding:.6rem 1.2rem;border-radius:10px;font-size:.9rem">📚 {{ (i18n or {}).get('knowledge', "知识库") }}</a>
+    <a href="/learner" class="btn btn-s btn-sm" style="padding:.6rem 1.2rem;border-radius:10px;font-size:.9rem">🧠 {{ (i18n or {}).get('db_s006', "学习审核") }}</a>
+    <a href="/help" class="btn btn-s btn-sm" style="padding:.6rem 1.2rem;border-radius:10px;font-size:.9rem">❓ {{ (i18n or {}).get('help', "帮助") }}</a>
+  </div>
+</div>
+{% endif %}
+
+{% if msg %}
+<div class="msg {{ 'msg-ok' if 'ok' in msg.lower() or '\u6210\u529f' in msg else 'msg-err' }}">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+  {{ msg }}
+</div>
+{% endif %}
+
+<!-- Stat cards -->
+<div class="g4 fa">
+  <a href="/logs" class="card stat-card fa fa1">
+    <div class="s-icon ico-p"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+    <div class="s-num" data-count="{{ uptime_hours|default(0) }}">0</div>
+    <div class="s-lbl">{{ (i18n or {}).get('uptime', "运行时长（小时）") }}</div>
+  </a>
+  <a href="/templates" class="card stat-card fa fa2">
+    <div class="s-icon ico-g"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+    <div class="s-num" data-count="{{ template_count|default(0) }}">0</div>
+    <div class="s-lbl">{{ (i18n or {}).get('templates', "话术模板") }}</div>
+  </a>
+  {% set _has_channels = domain_web_pages|selectattr('key','equalto','ch')|list|length > 0 %}
+  {% if _has_channels %}
+  <a href="/channels" class="card stat-card fa fa3">
+    <div class="s-icon ico-a"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg></div>
+    <div class="s-num" data-count="{{ channel_count|default(0) }}">0</div>
+    <div class="s-lbl">{{ (i18n or {}).get('channel_count', "通道数量") }}</div>
+  </a>
+  {% else %}
+  <a href="/knowledge" class="card stat-card fa fa3">
+    <div class="s-icon ico-a"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg></div>
+    <div class="s-num" id="kb-entry-count" data-count="0">0</div>
+    <div class="s-lbl">{{ (i18n or {}).get('db_s007', "知识库条目") }}</div>
+  </a>
+  {% endif %}
+  <a href="/strategy-analytics" class="card stat-card fa fa4">
+    <div class="s-icon ico-b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
+    <div class="s-num" style="font-size:1.3rem">{{ status|default((i18n or {}).get('status_running', '运行中')) }}</div>
+    <div class="s-lbl">{{ (i18n or {}).get('sys_status', "系统状态") }}</div>
+  </a>
+</div>
+
+{% if user_role in ('master', 'admin') %}
+<div class="card fa fa2 pro-only" id="dash-first-deploy-card" style="margin-bottom:1rem;border-left:3px solid var(--p)">
+  <h2 style="font-size:.95rem;margin:0 0 .4rem;display:flex;align-items:center;justify-content:space-between;gap:.4rem;flex-wrap:wrap">
+    <span style="display:flex;align-items:center;gap:.4rem">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+      {{ (i18n or {}).get('db_s008', "首次部署检查") }}
+    </span>
+    <button type="button" class="btn btn-s btn-xs" id="dash-first-deploy-dismiss" title="{{ (i18n or {}).get('db_s009', '不再显示此提示') }}">{{ (i18n or {}).get('db_s010', "已了解") }}</button>
+  </h2>
+  <ol style="font-size:.8rem;color:var(--t2);line-height:1.55;margin:.35rem 0 0 1.1rem;padding:0">
+    <li>{{ (i18n or {}).get('db_s011', "确认 AI 与") }} <a href="/settings">{{ (i18n or {}).get('msg_js_1218', "模型") }} / API</a> {{ (i18n or {}).get('msg_js_278', "可用") }}</li>
+    <li>{{ (i18n or {}).get('db_s012', "维护") }} <a href="/knowledge">{{ (i18n or {}).get('knowledge', "知识库") }}</a> {{ (i18n or {}).get('db_s013', "条目（空库时检索无命中）") }}</li>
+    <li>{{ (i18n or {}).get('msg_js_1055', "检查") }} <a href="/strategies">{{ (i18n or {}).get('wa_s077', "回复策略") }}</a> {{ (i18n or {}).get('ov_js_enabled', "已启用") }}</li>
+    <li>{{ (i18n or {}).get('db_s014', "私聊发一条测试消息，查看") }} <a href="/logs">{{ (i18n or {}).get('db_s015', "日志") }}</a></li>
+  </ol>
+  <p style="font-size:.72rem;color:var(--t3);margin:.55rem 0 0">{{ (i18n or {}).get('db_s016', "备份：在项目根执行") }} <code style="font-size:.68rem">python scripts/backup_sqlite_dbs.py</code> · {{ (i18n or {}).get('db_s017', "详见") }} <code style="font-size:.68rem">docs/PRODUCTION_BASELINE.md</code></p>
+</div>
+<script>
+(function () {
+  var k = 'dash_first_deploy_dismissed_v1';
+  var el = document.getElementById('dash-first-deploy-card');
+  if (!el) return;
+  try {
+    if (localStorage.getItem(k) === '1') {
+      el.style.display = 'none';
+      return;
+    }
+  } catch (e) {}
+  var btn = document.getElementById('dash-first-deploy-dismiss');
+  if (btn) {
+    btn.addEventListener('click', function () {
+      try {
+        localStorage.setItem(k, '1');
+      } catch (e) {}
+      el.style.display = 'none';
+    });
+  }
+})();
+</script>
+{% endif %}
+
+<!-- Bot 实时性能指标 -->
+<div class="card fa fa2 pro-only" id="bot-metrics-card">
+  <h2>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+    Bot {{ (i18n or {}).get('db_s018', "实时性能") }}
+    <div class="actions">
+      <span id="metrics-ts" style="font-size:.7rem;color:var(--t3)"></span>
+      <button class="btn btn-s btn-xs" onclick="loadBotMetrics()">{{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
+    </div>
+  </h2>
+  <div id="bm-loading" style="text-align:center;padding:1rem;color:var(--t3);font-size:.82rem">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div>
+  <div id="bm-content" style="display:none">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:.55rem;margin-bottom:.8rem">
+      <div style="background:var(--input);border-radius:var(--r-sm);padding:.5rem .6rem;text-align:center">
+        <div style="font-size:1.3rem;font-weight:700;color:var(--p)" id="bm-received">0</div>
+        <div style="font-size:.68rem;color:var(--t3)">{{ (i18n or {}).get('db_s019', "消息接收") }}</div>
+      </div>
+      <div style="background:var(--input);border-radius:var(--r-sm);padding:.5rem .6rem;text-align:center">
+        <div style="font-size:1.3rem;font-weight:700;color:var(--green)" id="bm-replied">0</div>
+        <div style="font-size:.68rem;color:var(--t3)">{{ (i18n or {}).get('db_s020', "消息回复") }}</div>
+      </div>
+      <div style="background:var(--input);border-radius:var(--r-sm);padding:.5rem .6rem;text-align:center">
+        <div style="font-size:1.3rem;font-weight:700" id="bm-avg-rt">0</div>
+        <div style="font-size:.68rem;color:var(--t3)">{{ (i18n or {}).get('db_s021', "平均响应") }}(ms)</div>
+      </div>
+      <div style="background:var(--input);border-radius:var(--r-sm);padding:.5rem .6rem;text-align:center">
+        <div style="font-size:1.3rem;font-weight:700" id="bm-p99-rt">0</div>
+        <div style="font-size:.68rem;color:var(--t3)">P99(ms)</div>
+      </div>
+      <div style="background:var(--input);border-radius:var(--r-sm);padding:.5rem .6rem;text-align:center">
+        <div style="font-size:1.3rem;font-weight:700" id="bm-concurrency">0</div>
+        <div style="font-size:.68rem;color:var(--t3)">{{ (i18n or {}).get('db_s022', "并发/上限") }}</div>
+      </div>
+      <div style="background:var(--input);border-radius:var(--r-sm);padding:.5rem .6rem;text-align:center">
+        <div style="font-size:1.3rem;font-weight:700" id="bm-queue">0</div>
+        <div style="font-size:.68rem;color:var(--t3)">{{ (i18n or {}).get('db_s023', "队列/丢弃") }}</div>
+      </div>
+      <div style="background:var(--input);border-radius:var(--r-sm);padding:.5rem .6rem;text-align:center">
+        <div style="font-size:1.3rem;font-weight:700" id="bm-errors">0</div>
+        <div style="font-size:.68rem;color:var(--t3)">{{ (i18n or {}).get('db_s024', "错误总数") }}</div>
+      </div>
+      <div style="background:var(--input);border-radius:var(--r-sm);padding:.5rem .6rem;text-align:center">
+        <div style="font-size:1.3rem;font-weight:700" id="bm-ai-status">—</div>
+        <div style="font-size:.68rem;color:var(--t3)">AI {{ (i18n or {}).get('ov_js_th_status', "状态") }}</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;font-size:.75rem" id="bm-trigger-layers"></div>
+    <div style="display:flex;gap:.7rem;flex-wrap:wrap;font-size:.73rem;color:var(--t2);margin-top:.4rem" id="bm-quality"></div>
+    <div id="bm-memory" style="font-size:.73rem;color:var(--t2);margin-top:.35rem;line-height:1.45"></div>
+    <!-- ★ 防复读观测：字符/语义触发分层 + 重生采纳率 + 嵌入缓存命中率 -->
+    <div id="bm-anti-repeat" style="display:none;font-size:.73rem;color:var(--t2);margin-top:.35rem;line-height:1.5"></div>
+    <!-- ★ W2-D5.6：陪护模式三层 metrics 卡片 -->
+    <div id="bm-companion" style="display:none;margin-top:.6rem;padding:.55rem .65rem;background:var(--input);border-radius:8px;border-left:3px solid var(--p);font-size:.73rem;line-height:1.55"></div>
+    <!-- ★ W3-D1.3：reactivation dry_run 样本审核面板 -->
+    <details id="bm-dry-samples" style="margin-top:.5rem;font-size:.73rem">
+      <summary style="cursor:pointer;color:var(--t2);user-select:none">
+        {{ (i18n or {}).get('db_s025', "待审核话术") }} <span id="bm-dry-count" style="color:var(--t3)">(–)</span>
+        <button class="btn btn-s btn-xs" style="margin-left:.6rem;padding:.1rem .5rem;font-size:.65rem" onclick="event.preventDefault();loadDrySamples(true)">{{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
+      </summary>
+      <div id="bm-dry-list" style="margin-top:.5rem;display:flex;flex-direction:column;gap:.4rem">
+        <div style="color:var(--t3)">{{ (i18n or {}).get('db_s026', "点开后按") }}"{{ (i18n or {}).get('dash.refresh', "刷新") }}"{{ (i18n or {}).get('db_s027', "加载") }}</div>
+      </div>
+    </details>
+    <!-- ★ Phase O 质量闭环：care dry_run 关怀话术审核面板 -->
+    <details id="bm-care-dry-samples" style="margin-top:.5rem;font-size:.73rem">
+      <summary style="cursor:pointer;color:var(--t2);user-select:none">
+        {{ (i18n or {}).get('db_s028', "待审核关怀话术") }} <span id="bm-care-dry-count" style="color:var(--t3)">(–)</span>
+        <button class="btn btn-s btn-xs" style="margin-left:.6rem;padding:.1rem .5rem;font-size:.65rem" onclick="event.preventDefault();loadCareDry(true)">{{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
+      </summary>
+      <div id="bm-care-dry-list" style="margin-top:.5rem;display:flex;flex-direction:column;gap:.4rem">
+        <div style="color:var(--t3)">{{ (i18n or {}).get('db_s026', "点开后按") }}"{{ (i18n or {}).get('dash.refresh', "刷新") }}"{{ (i18n or {}).get('db_s027', "加载") }}</div>
+      </div>
+    </details>
+    <!-- ★ O·P 联动质量看板 -->
+    <!-- 此 details 原用了与上方防复读观测那个 div 相同的元素 id（碰撞，JS getElementById 只命中前者）→ 已改名 -->
+    <details id="bm-proactive-quality" style="margin-top:.5rem;font-size:.73rem">
+      <summary style="cursor:pointer;color:var(--t2);user-select:none">
+        {{ (i18n or {}).get('db_s029', "主动消息质量") }}（care + {{ (i18n or {}).get('db_s030', "唤醒）") }} <span id="bm-q-rate" style="color:var(--t3)">(–)</span>
+        <button class="btn btn-s btn-xs" style="margin-left:.6rem;padding:.1rem .5rem;font-size:.65rem" onclick="event.preventDefault();loadQualityOverview()">{{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
+      </summary>
+      <div id="bm-q-body" style="margin-top:.5rem">
+        <div style="color:var(--t3)">{{ (i18n or {}).get('db_s026', "点开后按") }}"{{ (i18n or {}).get('dash.refresh', "刷新") }}"{{ (i18n or {}).get('db_s027', "加载") }}</div>
+      </div>
+    </details>
+    <!-- ★ 多平台 deferred 队列 · 运营可观测 -->
+    <details id="bm-deferred-outbox" style="margin-top:.5rem;font-size:.73rem">
+      <summary style="cursor:pointer;color:var(--t2);user-select:none">
+        {{ (i18n or {}).get('db_s031', "多平台 deferred 队列") }} <span id="bm-dob-count" style="color:var(--t3)">(–)</span>
+        <button class="btn btn-s btn-xs" style="margin-left:.6rem;padding:.1rem .5rem;font-size:.65rem" onclick="event.preventDefault();loadDeferredOutbox()">{{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
+      </summary>
+      <div id="bm-dob-body" style="margin-top:.5rem">
+        <div style="color:var(--t3)">{{ (i18n or {}).get('db_s026', "点开后按") }}"{{ (i18n or {}).get('dash.refresh', "刷新") }}"{{ (i18n or {}).get('db_s027', "加载") }}</div>
+      </div>
+    </details>
+  </div>
+</div>
+
+<!-- 触发器决策日志 -->
+<div class="card fa fa2 pro-only" id="trigger-decisions-card">
+  <h2>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+    {{ (i18n or {}).get('db_s032', "触发器决策（最近）") }}
+    <div class="actions">
+      <button class="btn btn-s btn-xs" onclick="loadTriggerDecisions()">{{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
+    </div>
+  </h2>
+  <div id="td-loading" style="text-align:center;padding:.8rem;color:var(--t3);font-size:.82rem">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div>
+  <div id="td-content" style="display:none;max-height:280px;overflow-y:auto">
+    <div id="td-list" class="tl"></div>
+  </div>
+  <div id="td-empty" style="display:none;text-align:center;padding:1rem;color:var(--t3);font-size:.82rem">{{ (i18n or {}).get('db_s033', "暂无决策记录") }}</div>
+</div>
+
+<!-- Quick actions -->
+<div class="card fa fa2 pro-only">
+  <h2>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93A10 10 0 0015 3.05V1h-6v2.05A10 10 0 004.93 4.93L3.46 3.46 1 5.93l1.46 1.46A10 10 0 001.05 11H-1v2h2.05A10 10 0 003.46 17.07l-1.46 1.47L4.93 21l1.47-1.46A10 10 0 0011 20.95V23h2v-2.05a10 10 0 005.07-2.49L19.54 21 22 18.54l-1.47-1.47A10 10 0 0021.95 13H24v-2h-2.05A10 10 0 0019.07 4.93z"/></svg>
+    {{ (i18n or {}).get('quick_actions', "快速操作") }}
+  </h2>
+  <div class="qa-row">
+    <form method="post" action="/export" style="display:inline">
+      <button type="submit" class="btn btn-p btn-sm">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        {{ (i18n or {}).get('export_config', "导出配置") }}
+      </button>
+    </form>
+    <a href="/import" class="btn btn-s btn-sm" data-help="nav_import">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      {{ (i18n or {}).get('import_page', "导入配置") }}
+    </a>
+    <a href="/audit" class="btn btn-s btn-sm" data-help="nav_audit">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+      {{ (i18n or {}).get('audit', "操作记录") }}
+    </a>
+    <a href="/diff" class="btn btn-s btn-sm" data-help="nav_diff">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+      {{ (i18n or {}).get('diff', "版本对比") }}
+    </a>
+    <a href="/analytics" class="btn btn-s btn-sm" data-help="nav_analytics">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      {{ (i18n or {}).get('section_data', "数据分析") }}
+    </a>
+    <button class="btn btn-sm" style="background:var(--gs);color:var(--green);border:1px solid var(--green)"
+            onclick="openHealthCheck()" id="hc-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+      {{ (i18n or {}).get('db_s034', "系统诊断") }}
+    </button>
+  </div>
+</div>
+
+<!-- 今日活动看板 -->
+<div class="card fa fa3 pro-only" id="activity-card">
+  <h2>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+    {{ (i18n or {}).get('db_s035', "今日活动") }}
+    <div class="actions" style="display:flex;gap:.4rem;align-items:center">
+      <span id="act-total-badge" style="font-size:.75rem;color:var(--t3)"></span>
+      <a href="/audit" class="btn btn-s btn-xs">{{ (i18n or {}).get('db_s036', "查看记录") }}</a>
+    </div>
+  </h2>
+  <div id="act-loading" style="text-align:center;padding:1rem;color:var(--t3);font-size:.82rem">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div>
+  <div id="act-content" style="display:none">
+    <div class="act-chart-wrap">
+      <div>
+        <div style="font-size:.72rem;color:var(--t3);margin-bottom:.4rem">{{ (i18n or {}).get('db_s037', "过去 24 小时操作趋势") }}</div>
+        <div class="act-bars" id="act-bars"></div>
+        <div style="display:flex;justify-content:space-between;font-size:.65rem;color:var(--t3);margin-top:.2rem">
+          <span id="act-h-start"></span>
+          <span id="act-h-end"></span>
+        </div>
+      </div>
+      <div style="display:flex;gap:.8rem;align-items:center">
+        <div class="act-donut" id="act-donut-wrap">
+          <canvas id="act-donut" width="90" height="90"></canvas>
+          <div class="act-donut-center">
+            <span class="act-total" id="act-total-num">0</span>
+            <span class="act-total-lbl">{{ (i18n or {}).get('ov_js_th_action', "操作") }}</span>
+          </div>
+        </div>
+        <div class="act-legend" id="act-legend"></div>
+      </div>
+    </div>
+    <div class="act-meta" id="act-top-ops"></div>
+  </div>
+</div>
+
+{# Domain dashboard widgets — loaded from manifest.web.dashboard_widgets[].template #}
+{% for _dw in domain_dashboard_widgets %}
+  {% if _dw.get('template') %}
+    {% include _dw.template ignore missing %}
+  {% endif %}
+{% endfor %}
+
+<!-- 知识库健康卡片 -->
+<div class="card fa fa3" id="kb-health-card">
+  <h2>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
+    {{ (i18n or {}).get('db_s038', "知识库状态") }}
+    <div class="actions"><a href="/knowledge" class="btn btn-s btn-xs">{{ (i18n or {}).get('inbox.xl.manage', "管理") }}</a></div>
+  </h2>
+  <div id="kb-loading" style="text-align:center;padding:1rem;color:var(--t3);font-size:.82rem">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div>
+  <div id="kb-content" style="display:none">
+    <!-- 核心指标：4宫格 -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-bottom:.8rem">
+      <div style="background:var(--input);border-radius:var(--r-sm);padding:.55rem .7rem;text-align:center">
+        <div style="font-size:1.4rem;font-weight:700;color:var(--p)" id="kb-d-entries">0</div>
+        <div style="font-size:.7rem;color:var(--t3)">{{ (i18n or {}).get('inbox.kb.entry_default', "知识条目") }}</div>
+      </div>
+      <div style="background:var(--input);border-radius:var(--r-sm);padding:.55rem .7rem;text-align:center">
+        <div style="font-size:1.4rem;font-weight:700;color:var(--green)" id="kb-d-sat">—</div>
+        <div style="font-size:.7rem;color:var(--t3)">7{{ (i18n or {}).get('db_s039', "日满意率") }}</div>
+      </div>
+      <div style="background:var(--input);border-radius:var(--r-sm);padding:.55rem .7rem;text-align:center">
+        <div style="font-size:1.4rem;font-weight:700" id="kb-d-hitrate">—</div>
+        <div style="font-size:.7rem;color:var(--t3)">{{ (i18n or {}).get('db_s040', "今日命中率") }}</div>
+      </div>
+      <div style="background:var(--input);border-radius:var(--r-sm);padding:.55rem .7rem;text-align:center">
+        <div style="font-size:1.4rem;font-weight:700;color:var(--t2)" id="kb-d-queries">—</div>
+        <div style="font-size:.7rem;color:var(--t3)">{{ (i18n or {}).get('db_s041', "今日查询次数") }}</div>
+      </div>
+    </div>
+    <!-- 今日命中率迷你趋势图 -->
+    <div style="font-size:.75rem;color:var(--t3);margin-bottom:.3rem;font-weight:600">{{ (i18n or {}).get('db_s042', "今日命中率趋势（每小时）") }}</div>
+    <div id="kb-sparkline" style="height:44px;display:flex;align-items:flex-end;gap:2px;background:var(--input);border-radius:var(--r-sm);padding:.4rem .5rem;margin-bottom:.7rem"></div>
+    <!-- 检索模式 -->
+    <div id="kb-search-mode-badge" style="margin-bottom:.6rem"></div>
+    <!-- 向量化进度 -->
+    <div style="font-size:.75rem;color:var(--t3);margin-bottom:.3rem;font-weight:600">{{ (i18n or {}).get('db_s043', "向量化覆盖率") }}</div>
+    <div style="height:7px;background:var(--bd2);border-radius:10px;overflow:hidden;margin-bottom:.2rem">
+      <div id="kb-vec-bar" style="height:100%;width:0%;background:var(--p);border-radius:10px;transition:width .6s"></div>
+    </div>
+    <div style="font-size:.72rem;color:var(--t3);margin-bottom:.75rem" id="kb-vec-detail">—</div>
+    <!-- 翻译覆盖进度 -->
+    <div style="font-size:.75rem;color:var(--t3);margin-bottom:.3rem;font-weight:600">{{ (i18n or {}).get('db_s044', "多语言翻译覆盖") }}</div>
+    <div id="kb-trans-bars" style="display:flex;flex-direction:column;gap:.3rem;margin-bottom:.8rem"></div>
+    <!-- 高频未命中 -->
+    <div style="font-size:.75rem;color:var(--t3);margin-bottom:.3rem;font-weight:600">{{ (i18n or {}).get('db_s045', "知识盲区（高频未命中）") }}</div>
+    <div id="kb-miss-list" style="font-size:.78rem"></div>
+    <!-- 回复质量追踪 -->
+    <div style="margin-top:.8rem">
+      <div style="font-size:.75rem;color:var(--t3);margin-bottom:.3rem;font-weight:600">{{ (i18n or {}).get('db_s046', "回复质量追踪（7日）") }}</div>
+      <div id="kb-quality-stats" style="font-size:.78rem">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div>
+    </div>
+  </div>
+</div>
+
+<!-- Recent operations -->
+<div class="card fa fa4 pro-only">
+  <h2>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    {{ (i18n or {}).get('recent_ops', "最近操作") }}
+    <div class="actions"><a href="/audit" class="btn btn-s btn-xs">{{ (i18n or {}).get('view_all', "查看全部") }}</a></div>
+  </h2>
+  {% if recent_ops %}
+  <div class="tl">
+    {% for op in recent_ops %}
+    {% set dc = 'ico-p' if 'update' in op.action else ('ico-g' if 'add' in op.action or 'create' in op.action else ('ico-r' if 'del' in op.action or 'remove' in op.action else 'ico-a')) %}
+    <div class="tl-item">
+      <div class="tl-dot {{ dc }}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          {% if 'update' in op.action %}<path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          {% elif 'del' in op.action or 'remove' in op.action %}<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+          {% else %}<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>{% endif %}
+        </svg>
+      </div>
+      <div class="tl-body">
+        <div class="tl-action">{{ op.action }}</div>
+        <div class="tl-meta">
+          {% if op.operator %}<span>{{ op.operator }}</span>{% endif %}
+          {% if op.channel %}<span>{{ (i18n or {}).get('db_s047', "通道") }}: {{ op.channel }}</span>{% endif %}
+        </div>
+      </div>
+      <div class="tl-time">{{ op.ts if op.ts else '' }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+    <p>{{ (i18n or {}).get('db_s048', "暂无操作记录") }}</p>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Health Check Modal -->
+<div class="hc-modal" id="hc-modal" onclick="if(event.target===this)closeHealthCheck()">
+  <div class="hc-box">
+    <div class="hc-hd">
+      <div class="hc-score-ring" id="hc-ring">
+        <svg viewBox="0 0 36 36">
+          <circle cx="18" cy="18" r="15.9" fill="none" stroke="var(--bd2)" stroke-width="3.2"/>
+          <circle id="hc-ring-fg" cx="18" cy="18" r="15.9" fill="none" stroke="var(--green)"
+                  stroke-width="3.2" stroke-dasharray="0 100" stroke-linecap="round"/>
+        </svg>
+        <div class="hc-score-num" id="hc-score-num">…</div>
+      </div>
+      <div style="flex:1">
+        <div style="font-weight:700;font-size:1rem" id="hc-title">{{ (i18n or {}).get('db_s034', "系统诊断") }}</div>
+        <div style="font-size:.78rem;color:var(--t3)" id="hc-subtitle">{{ (i18n or {}).get('db_s049', "正在检查…") }}</div>
+      </div>
+      <button class="btn btn-s btn-sm" onclick="runHealthCheck()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="13" height="13"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+        {{ (i18n or {}).get('db_s050', "重新检测") }}
+      </button>
+      <button class="btn btn-s btn-sm" onclick="closeHealthCheck()">✕</button>
+    </div>
+    <div class="hc-body" id="hc-body">
+      <div style="text-align:center;padding:2rem;color:var(--t3)">{{ (i18n or {}).get('db_s051', "正在检查系统状态…") }}</div>
+    </div>
+  </div>
+</div>
+
+<div id="panel-backdrop" onclick="closePanel('tpl-panel')"></div>
+
+<script>
+/* Dashboard alert banner */
+var _alertCollapsed=localStorage.getItem('dash_alert_collapsed')==='1';
+async function loadAlerts(){
+  try{
+    var r=await fetch('/api/alert-status');
+    if(!r.ok)return;
+    var d=await r.json();
+    if(!d.alert_count)return;
+    var banner=document.getElementById('alert-banner');
+    var wrap=document.getElementById('alert-wrap');
+    var titleEl=document.getElementById('alert-banner-title');
+    var label=document.getElementById('alert-banner-label');
+    label.textContent=d.alert_count+' '+window.T('db_js_026');
+    titleEl.className='alert-banner-title '+d.highest_level;
+    wrap.innerHTML=d.alerts.map(function(a){
+      return '<div class="alert-bar '+a.level+'">'+
+        '<span class="alert-icon">'+(a.level==='critical'?'🚨':'⚠️')+'</span>'+
+        '<div class="alert-content"><div class="alert-title">'+a.title+'</div><div class="alert-body">'+a.body+'</div></div>'+
+        (a.action_url?'<a class="alert-action" href="'+a.action_url+'">'+a.action_label+'</a>':'')+
+        '</div>';
+    }).join('');
+    banner.style.display='block';
+    if(_alertCollapsed){wrap.style.display='none';document.getElementById('alert-collapse-btn').textContent=window.T('wa_js_016');}
+  }catch(e){}
+}
+function toggleAlertBanner(){
+  var wrap=document.getElementById('alert-wrap');
+  var btn=document.getElementById('alert-collapse-btn');
+  var collapsed=wrap.style.display==='none';
+  wrap.style.display=collapsed?'':'none';
+  btn.textContent=collapsed?window.T('inbox.collapse'):window.T('wa_js_016');
+  _alertCollapsed=!collapsed;
+  localStorage.setItem('dash_alert_collapsed',_alertCollapsed?'1':'0');
+}
+loadAlerts();
+setInterval(loadAlerts,60000);
+
+/* ── G2: Activity Stats ──────────────────────────── */
+const ACT_COLORS=['#5b7cf6','#10b981','#ef4444','#f59e0b','#8b5cf6','#06b6d4','#ec4899'];
+
+async function loadActivityStats(){
+  try{
+    const r=await fetch('/api/activity-stats?hours=24');
+    if(!r.ok)return;
+    const d=await r.json();
+    document.getElementById('act-loading').style.display='none';
+    document.getElementById('act-content').style.display='';
+
+    /* Bar chart */
+    const bars=document.getElementById('act-bars');
+    const hourly=d.hourly||[];
+    const maxV=Math.max(1,...hourly.map(h=>h.count));
+    bars.innerHTML=hourly.map(h=>{
+      const h100=Math.max(4,Math.round(h.count/maxV*100));
+      return `<div class="act-bar${h.count===0?' zero':''}" style="height:${h100}%" title="${h.label}: ${h.count}${window.T('ov_js_times_unit')}"></div>`;
+    }).join('');
+    const labels=hourly.map(h=>h.label);
+    if(labels.length){
+      document.getElementById('act-h-start').textContent=labels[0];
+      document.getElementById('act-h-end').textContent=labels[labels.length-1];
+    }
+
+    /* Donut chart (pure canvas, no lib) */
+    document.getElementById('act-total-num').textContent=d.total||0;
+    document.getElementById('act-total-badge').textContent=window.Tf('db_js_p01', {n: d.total||0});
+    const byAction=d.by_action||{};
+    const entries=Object.entries(byAction).sort((a,b)=>b[1]-a[1]);
+    const canvas=document.getElementById('act-donut');
+    const ctx=canvas.getContext('2d');
+    ctx.clearRect(0,0,90,90);
+    if(entries.length){
+      const total=entries.reduce((s,[,v])=>s+v,0);
+      let angle=-Math.PI/2;
+      entries.forEach(([,v],i)=>{
+        const slice=v/total*Math.PI*2;
+        ctx.beginPath();
+        ctx.moveTo(45,45);
+        ctx.arc(45,45,38,angle,angle+slice);
+        ctx.closePath();
+        ctx.fillStyle=ACT_COLORS[i%ACT_COLORS.length];
+        ctx.fill();
+        angle+=slice;
+      });
+      /* Donut hole */
+      ctx.beginPath();ctx.arc(45,45,26,0,Math.PI*2);ctx.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--card')||'#fff';ctx.fill();
+    }
+    /* Legend */
+    const legend=document.getElementById('act-legend');
+    legend.innerHTML=entries.slice(0,5).map(([k,v],i)=>
+      `<div class="act-legend-item"><div class="act-legend-dot" style="background:${ACT_COLORS[i%ACT_COLORS.length]}"></div><span>${k}</span><strong style="margin-left:auto;color:var(--t)">${v}</strong></div>`
+    ).join('');
+
+    /* Top operators */
+    const topOps=document.getElementById('act-top-ops');
+    topOps.innerHTML=(d.top_operators||[]).map(op=>
+      `<div class="act-op"><span class="act-op-name">${op.name}</span><span>${op.count} ${window.T('ov_js_times_unit')}</span></div>`
+    ).join('');
+  }catch(e){}
+}
+
+/* ── G4: Health Check ───────────────────────────── */
+function openHealthCheck(){
+  document.getElementById('hc-modal').classList.add('show');
+  runHealthCheck();
+}
+function closeHealthCheck(){
+  document.getElementById('hc-modal').classList.remove('show');
+}
+
+async function runHealthCheck(){
+  document.getElementById('hc-body').innerHTML='<div style="text-align:center;padding:2rem;color:var(--t3)">'+window.T('db_s051')+'</div>';
+  document.getElementById('hc-score-num').textContent='…';
+  document.getElementById('hc-ring-fg').setAttribute('stroke-dasharray','0 100');
+  try{
+    const r=await fetch('/api/health-check');
+    const d=await r.json();
+    /* Score ring */
+    const score=d.score||0;
+    const scoreColor=score>=80?'var(--green)':score>=50?'var(--amber)':'var(--red)';
+    document.getElementById('hc-ring-fg').setAttribute('stroke-dasharray',`${score} 100`);
+    document.getElementById('hc-ring-fg').setAttribute('stroke',scoreColor);
+    document.getElementById('hc-score-num').textContent=score;
+    document.getElementById('hc-score-num').style.color=scoreColor;
+    const ls=d.level_summary||{};
+    const subtitle=d.status==='ok'?window.T('db_js_027'):window.Tf('db_js_p02', {c: ls.critical||0, w: ls.warn||0, i: ls.info||0});
+    document.getElementById('hc-subtitle').textContent=subtitle;
+
+    /* Issues list */
+    const issues=d.issues||[];
+    if(!issues.length){
+      document.getElementById('hc-body').innerHTML=`
+<div class="hc-issue ok">
+  <div class="hc-icon">✅</div>
+  <div class="hc-content"><div class="hc-title">${window.T('db_js_086')}</div><div class="hc-detail">${window.T('db_js_087')}</div></div>
+</div>`;
+    }else{
+      const ICONS={critical:'🚨',warn:'⚠️',info:'ℹ️'};
+      document.getElementById('hc-body').innerHTML=issues.map(iss=>`
+<div class="hc-issue ${iss.level}">
+  <div class="hc-icon">${ICONS[iss.level]||'•'}</div>
+  <div class="hc-content">
+    <div class="hc-title"><span class="hc-cat">${iss.category}</span>${iss.title}</div>
+    ${iss.detail?`<div class="hc-detail">${iss.detail}</div>`:''}
+  </div>
+  ${iss.action_url?`<a href="${iss.action_url}" class="btn btn-s btn-xs" style="flex-shrink:0;align-self:center">${iss.action_label}</a>`:''}
+</div>`).join('');
+    }
+  }catch(e){
+    document.getElementById('hc-body').innerHTML='<div style="text-align:center;padding:2rem;color:var(--red)">'+window.T('db_js_028')+'</div>';
+  }
+}
+
+/* ── Bot 实时性能指标 ─────────────────────── */
+async function loadBotMetrics(){
+  try{
+    const r=await fetch('/api/bot-metrics');
+    if(!r.ok)return;
+    const d=await r.json();
+    document.getElementById('bm-loading').style.display='none';
+    document.getElementById('bm-content').style.display='';
+    document.getElementById('bm-received').textContent=d.messages_received||0;
+    document.getElementById('bm-replied').textContent=d.messages_replied||0;
+    document.getElementById('bm-avg-rt').textContent=Math.round(d.response_time_avg||0);
+    document.getElementById('bm-p99-rt').textContent=Math.round(d.response_time_p99||0);
+    document.getElementById('bm-concurrency').textContent=(d.active_tasks||0)+'/'+(d.concurrency_limit||'—');
+    document.getElementById('bm-queue').textContent=(d.queue_size||0)+'/'+(d.queue_drops||0);
+    const errEl=document.getElementById('bm-errors');
+    errEl.textContent=d.errors_count||0;
+    errEl.style.color=(d.errors_count>0)?'var(--red)':'var(--t)';
+    const aiEl=document.getElementById('bm-ai-status');
+    if(d.ai_healthy){aiEl.textContent=window.T('db_js_020');aiEl.style.color='var(--green)';}
+    else{aiEl.textContent=window.T('msg_js_1245')+'('+d.ai_errors+')';aiEl.style.color='var(--red)';}
+    const cb=d.circuit_breaker||{};
+    if(cb.state==='open'){aiEl.textContent=window.T('db_js_029');aiEl.style.color='var(--red)';}
+    // trigger layers
+    const tl=d.trigger_layers||{};
+    const tlEl=document.getElementById('bm-trigger-layers');
+    const LAYER_NAMES={l1:'L1'+window.T('db_js_030'),l2:'L2'+window.T('db_js_031'),l3_filtered:'L3'+window.T('db_js_032'),l4_silenced:'L4'+window.T('db_js_033'),skipped:window.T('db_js_034')};
+    const LAYER_COLORS={l1:'var(--green)',l2:'var(--p)',l3_filtered:'var(--amber)',l4_silenced:'var(--t3)',skipped:'var(--red)'};
+    tlEl.innerHTML=Object.entries(tl).map(([k,v])=>
+      `<span style="background:var(--input);padding:.2rem .5rem;border-radius:12px;border-left:3px solid ${LAYER_COLORS[k]||'var(--t3)'}">${LAYER_NAMES[k]||k} <b>${v}</b></span>`
+    ).join('');
+    // quality
+    const rq=d.reply_quality||{};
+    const lf=d.local_llm_fallback||{};
+    const qEl=document.getElementById('bm-quality');
+    qEl.innerHTML=[
+      rq.avg_reply_length?`${window.T('db_js_088')} <b>${rq.avg_reply_length}</b> ${window.T('db_js_089')}`:'',
+      rq.fallback_count?`${window.T('db_js_090')} <b style="color:var(--amber)">${rq.fallback_count}</b> (${rq.fallback_rate_pct}%)`:'',
+      rq.truncated_count?`${window.T('db_js_091')} <b style="color:var(--red)">${rq.truncated_count}</b> (${rq.truncated_rate_pct}%)`:'',
+      lf.calls?`${window.T('db_js_local_llm_fb')} <b style="color:var(--amber)">${lf.ok}/${lf.calls}</b>`:'',
+    ].filter(Boolean).join(' · ');
+    const mem=d.memory;
+    const mEl=document.getElementById('bm-memory');
+    if(mEl&&mem!==undefined){
+      const st=mem&&mem.slow_think!=null?mem.slow_think:0;
+      const ej=mem&&mem.episodic_inject!=null?mem.episodic_inject:0;
+      const ef=mem&&mem.embed_fail!=null?mem.embed_fail:0;
+      const bf=mem&&mem.episodic_backfill_rows!=null?mem.episodic_backfill_rows:0;
+      const sa=d.startup_advisories||{};
+      const sat=sa.total!=null?sa.total:0;
+      const saw=sa.warnings!=null?sa.warnings:0;
+      const sal=sa.audit_logged_warnings;
+      const saStr=(sat>0||saw>0||sal!=null)?(' · '+window.T('db_js_035')+' <b>'+sat+'</b>/<b style="color:'+(saw>0?'var(--amber)':'inherit')+'">'+saw+'</b> · '+window.T('dash.ws.col_audit')+' <b>'+(sal==null?'—':sal)+'</b>'):'';
+      mEl.innerHTML=window.T('db_js_036')+' <b>'+st+'</b> · '+window.T('db_js_037')+' <b>'+ej+'</b> · '+window.T('db_js_038')+' <b style="color:'+(ef>0?'var(--amber)':'inherit')+'">'+ef+'</b> · '+window.T('db_js_039')+' <b>'+bf+'</b> · <a href="/episodic-memory" style="color:var(--p)">'+window.T('episodic')+'</a>'+saStr;
+    }
+    // ★ 防复读观测：字符/语义触发分层 + 重生采纳率 + 嵌入缓存命中率
+    try{
+      const ar=d.anti_repeat||{};
+      const arEl=document.getElementById('bm-anti-repeat');
+      if(arEl){
+        if((ar.checks||0)<=0){ arEl.style.display='none'; }
+        else{
+          arEl.style.display='';
+          const semShare=ar.semantic_share_pct||0;
+          const semColor=semShare>0?'var(--p)':'var(--t3)';
+          const ec=ar.embed_cache||{};
+          const ecTotal=(ec.hit||0)+(ec.miss||0);
+          const hitColor=(ec.hit_rate_pct||0)>=80?'var(--green)':((ec.hit_rate_pct||0)>=50?'var(--amber)':'var(--t3)');
+          const cacheStr=ecTotal>0
+            ? ' · '+window.T('db_js_ar04')+' <b style="color:'+hitColor+'">'+ec.hit_rate_pct+'%</b> ('+(ec.hit||0)+'/'+ecTotal+')'
+            : '';
+          arEl.innerHTML='<b>'+window.T('db_js_ar00')+'</b> · '+window.T('db_js_ar01')+' <b>'+(ar.checks||0)+'</b> · '+window.T('db_js_ar02')+' <b style="color:var(--amber)">'+(ar.trigger_rate_pct||0)+'%</b>（'+window.T('db_js_ar05')+' '+(ar.char_triggered||0)+' / '+window.T('db_js_ar06')+' <b style="color:'+semColor+'">'+(ar.semantic_triggered||0)+'</b>，'+window.T('db_js_ar07')+' '+semShare+'%）· '+window.T('db_js_ar03')+' <b>'+(ar.rewrite_adopt_rate_pct||0)+'%</b> ('+(ar.rewrite_adopted||0)+'/'+(ar.rewrite_attempted||0)+')'+cacheStr;
+        }
+      }
+    }catch(_e){}
+    // ★ W2-D5.6 + D6.5：companion 三层 metrics + sparkline 趋势
+    try{
+      const css=d.companion_safe_skip||{};
+      const dq=d.deferred_queue||{};
+      const re=d.reactivation||{};
+      const pa=d.pacing||{};
+      const cEl=document.getElementById('bm-companion');
+      // SVG sparkline 渲染器：12 个 5min 桶 → 60×16 px 的微型柱图
+      // 每个 rect 含 <title> 子元素，鼠标悬停显示该桶的时间区间和计数
+      function spark(arr,color){
+        if(!arr||!arr.length)return '';
+        const max=Math.max(1,...arr);
+        const w=60, h=16, n=arr.length, bw=w/n, bucketMin=5;
+        const bars=arr.map((v,i)=>{
+          const bh=Math.max(1,Math.round(v/max*h));
+          // i=0 是最早的桶（60 min 前），i=n-1 是当前
+          const minAgo=(n-1-i)*bucketMin;
+          const minAgoEnd=minAgo+bucketMin;
+          const tip=window.Tf('db_js_p03', {a: minAgoEnd, b: minAgo, v: v});
+          return `<rect x="${(i*bw).toFixed(1)}" y="${h-bh}" width="${(bw-0.6).toFixed(1)}" height="${bh}" fill="${color}"><title>${tip}</title></rect>`;
+        }).join('');
+        return `<svg width="${w}" height="${h}" style="vertical-align:middle;margin-left:.4rem">${bars}</svg>`;
+      }
+      if(cEl){
+        const hasAny=(css.total||0)>0 || (dq.total||0)>0 || (re.scheduled_24h||0)>0 || (re.last_run_ts||0)>0 || (pa.count||0)>0;
+        if(!hasAny){ cEl.style.display='none'; }
+        else{
+          cEl.style.display='';
+          const cssRate=css.rate_1h||0;
+          const cssColor=cssRate>10?'var(--red)':(cssRate>3?'var(--amber)':'var(--green)');
+          const cssTopReason=Object.entries(css.by_reason||{}).sort((a,b)=>b[1]-a[1])[0];
+          const cssReasonStr=cssTopReason?(' · '+window.T('db_js_040')+' '+cssTopReason[0]+' ×'+cssTopReason[1]):'';
+          const dqAccPairs=Object.entries(dq.by_account||{});
+          const dqByAcc=dqAccPairs.length?(' ('+dqAccPairs.map(([k,v])=>k+':'+v).join(',')+')'):'';
+          const reLast=re.last_run_ts?window.wsFmtTime(re.last_run_ts,{hour:'2-digit',minute:'2-digit'}):'—';
+          // reactivation 回复率（D6-1）+ intimacy 分桶（D7-2）
+          const rs=re.response_stats||{};
+          let rsStr='';
+          if(rs.sent>0){
+            rsStr=' · 24h '+window.T('wa_s004')+' <b>'+rs.response_rate_pct+'%</b> ('+rs.responded+'/'+rs.sent+')';
+            const byI=rs.by_intimacy||{};
+            const tiers=[];
+            for(const [k,label] of [['high',window.T('msg_js_1931')],['mid',window.T('db_js_099')],['low',window.T('msg_js_1932')]]){
+              const t=byI[k]||{};
+              if((t.sent||0)>0) tiers.push(label+' '+t.rate_pct+'% ('+t.responded+'/'+t.sent+')');
+            }
+            if(tiers.length) rsStr+=' · '+window.T('db_js_041')+' '+tiers.join(' / ');
+          }
+          // feedback (D6-2)
+          const fb=re.feedback_1h||{};
+          const fbStr=(fb.like||fb.dislike)?(' · '+window.T('db_js_042')+' 👍'+fb.like+' 👎'+fb.dislike):'';
+          cEl.innerHTML=
+            '<div><b>'+window.T('db_js_043')+' safe_skip</b> · '+window.T('msg_js_1043')+' '+(css.total||0)+' · 1h '+window.T('db_js_044')+' <b style="color:'+cssColor+'">'+cssRate+'</b>'+cssReasonStr+spark(css.sparkline_1h,'var(--amber)')+'</div>'+
+            '<div style="margin-top:.25rem"><b>'+window.T('db_js_045')+'</b> · '+window.T('msg_js_265')+' '+(dq.total||0)+' '+window.T('dash.items')+dqByAcc+' · 1h '+window.T('ov_js_dob_sent')+' <b>'+(dq.drained_1h||0)+'</b> · '+window.T('rpa_js_st_failed')+' <b style="color:'+((dq.failed_1h||0)>0?'var(--amber)':'inherit')+'">'+(dq.failed_1h||0)+'</b>'+spark(dq.drained_sparkline_1h,'var(--green)')+'</div>'+
+            '<div style="margin-top:.25rem"><b>'+window.T('db_js_046')+'</b> · 1h <b>'+(re.scheduled_1h||0)+'</b> · 24h <b>'+(re.scheduled_24h||0)+'</b> · dry_run <b style="color:var(--amber)">'+(re.dry_run_1h||0)+'</b>'+rsStr+fbStr+' · '+window.T('db_js_047')+' '+reLast+spark(re.sparkline_1h,'var(--p)')+'</div>'+
+            ((pa.count||0)>0?(()=>{
+              const b=pa.buckets||{};
+              const distStr=Object.entries(b).filter(([_k,v])=>v>0).map(([k,v])=>`${k}:${v}`).join(' / ');
+              const distHtml=distStr?(' · '+window.T('db_js_048')+' '+distStr):'';
+              return '<div style="margin-top:.25rem;color:var(--t3)"><b>pacing</b> · '+window.T('db_js_049')+' '+pa.count+' · '+window.T('analytics_avg')+' '+pa.avg_sec+'s · P50 '+pa.p50_sec+'s · P95 '+pa.p95_sec+'s'+distHtml+'</div>';
+            })():'');
+        }
+      }
+    }catch(_e){}
+    document.getElementById('metrics-ts').textContent=window.T('db_js_050')+': '+window.wsFmtTime(null,{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  }catch(e){}
+}
+// ★ W3-D1.3 + D2.3 + D3.5：dry_run 样本审核（增量加载，避免每次重拉）
+const _dryPageSize=20;
+let _dryShown=[];  // 已显示的样本数组（最新在前）
+
+function _esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+function _renderSample(s){
+  const ts=s.ts||0;
+  const tsLabel=s.ts_iso?window.wsFmtDateTime(ts,{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'-';
+  return `<div data-ts="${ts}" style="padding:.5rem .55rem;background:var(--input);border-radius:6px;border-left:3px solid var(--t3)">
+    <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.7rem;color:var(--t3)">
+      <span><b style="color:var(--t)">${_esc(s.chat_name||'?')}</b></span>
+      <span>· ${tsLabel}</span>
+      <span>· ${window.T('ov_js_th_silent')} ${(s.silent_days||0).toFixed(1)}d</span>
+      <span>· ${window.T('rpa_js_intimacy')} ${Math.round(s.intimacy||0)}</span>
+      <span>· ${_esc(s.lang||'')}</span>
+      <span style="margin-left:auto" class="dry-fb-btns">
+        <button class="btn btn-s btn-xs" data-v="like" onclick="submitDryFb(this,${ts},'like')" style="padding:.15rem .5rem">👍</button>
+        <button class="btn btn-s btn-xs" data-v="dislike" onclick="submitDryFb(this,${ts},'dislike')" style="padding:.15rem .5rem">👎</button>
+      </span>
+    </div>
+    <div style="margin-top:.4rem;font-size:.78rem;line-height:1.45;color:var(--t)">${_esc(s.reply_text||'')}</div>
+  </div>`;
+}
+
+function _renderList(){
+  const list=document.getElementById('bm-dry-list');
+  const cnt=document.getElementById('bm-dry-count');
+  if(!list)return;
+  if(cnt)cnt.textContent='('+_dryShown.length+')';
+  if(!_dryShown.length){
+    list.innerHTML='<div style="color:var(--t3)">'+window.T('db_js_051')+' dry_run '+window.T('db_js_049')+'（reactivation.enabled=true && dry_run=true '+window.T('db_js_052')+'</div>';
+    return;
+  }
+  const items=_dryShown.map(_renderSample).join('');
+  const more=`<button class="btn btn-s btn-xs" style="margin-top:.3rem;padding:.2rem .8rem" onclick="event.preventDefault();loadMoreDry()">${window.T('db_js_092')} (+${_dryPageSize})</button>`;
+  list.innerHTML=items+more;
+}
+
+async function loadDrySamples(reset){
+  const list=document.getElementById('bm-dry-list');
+  if(!list)return;
+  if(reset){
+    _dryShown=[];
+    list.innerHTML='<div style="color:var(--t3)">'+window.T('msg_js_1047')+'...</div>';
+  }
+  try{
+    const r=await fetch('/api/reactivation/dry-run-samples?limit='+_dryPageSize,{credentials:'same-origin'});
+    if(!r.ok){list.innerHTML='<div style="color:var(--red)">'+window.T('rpa_load_failed')+'</div>';return;}
+    const d=await r.json();
+    _dryShown=d.samples||[];
+    _renderList();
+  }catch(e){
+    list.innerHTML='<div style="color:var(--red)">'+_esc(String(e))+'</div>';
+  }
+}
+
+async function loadMoreDry(){
+  // ★ W3-D3.5：增量加载 — 用最早一条的 ts 作为 before_ts
+  const earliest=_dryShown.length?_dryShown[_dryShown.length-1].ts:0;
+  if(!earliest)return;
+  try{
+    const r=await fetch('/api/reactivation/dry-run-samples?limit='+_dryPageSize+'&before_ts='+earliest,{credentials:'same-origin'});
+    if(!r.ok)return;
+    const d=await r.json();
+    const more=d.samples||[];
+    if(!more.length){
+      // 没有更多了，把"加载更早"按钮替换成提示
+      const list=document.getElementById('bm-dry-list');
+      if(list){
+        const btn=list.querySelector('button.btn');
+        if(btn) btn.outerHTML='<div style="color:var(--t3);font-size:.7rem;margin-top:.3rem">'+window.T('db_js_053')+'</div>';
+      }
+      return;
+    }
+    _dryShown=_dryShown.concat(more);
+    _renderList();
+  }catch(_){}
+}
+
+async function submitDryFb(btn,ts,verdict){
+  const wrap=btn.closest('div[data-ts]');
+  const btns=btn.parentElement;
+  if(btns){btns.querySelectorAll('button').forEach(b=>{b.disabled=true;});}
+  const csrf=(document.cookie.match(/csrf_token=([^;]+)/)||[])[1]||'';
+  try{
+    const r=await fetch('/api/reactivation/dry-run-feedback',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
+      credentials:'same-origin',
+      body:JSON.stringify({sample_ts:ts,verdict:verdict}),
+    });
+    if(r.ok){
+      if(btns){
+        // ★ W3-D2.3：dislike 时显示"已加入黑名单（重启后清空）"
+        const tip=verdict==='dislike'
+          ? window.T('db_js_054')+' 👎 · '+window.T('db_js_055')
+          : window.T('db_js_054')+' 👍';
+        btns.innerHTML='<span style="color:'+(verdict==='like'?'var(--green)':'var(--amber)')+';font-size:.65rem">'+tip+'</span>';
+      }
+      if(wrap){
+        wrap.style.opacity='.55';
+        if(verdict==='dislike') wrap.style.borderLeftColor='var(--amber)';
+        else wrap.style.borderLeftColor='var(--green)';
+      }
+    }else{
+      if(btns){btns.querySelectorAll('button').forEach(b=>{b.disabled=false;});}
+    }
+  }catch(_){
+    if(btns){btns.querySelectorAll('button').forEach(b=>{b.disabled=false;});}
+  }
+}
+
+// ★ Phase O 质量闭环：care dry_run 关怀话术审核（与 reactivation 同范式，共享黑名单）
+let _careDryShown=[];
+function _renderCareSample(s){
+  const ts=s.ts||0;
+  const tsLabel=s.ts_iso?window.wsFmtDateTime(ts,{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'-';
+  return `<div data-ts="${ts}" style="padding:.5rem .55rem;background:var(--input);border-radius:6px;border-left:3px solid var(--t3)">
+    <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.7rem;color:var(--t3)">
+      <span><b style="color:var(--t)">${_esc(s.topic||'?')}</b></span>
+      <span>· ${tsLabel}</span>
+      <span>· ${_esc(s.platform||'')}</span>
+      <span>· ${_esc(s.chat_key||s.contact_key||'')}</span>
+      <span>· ${_esc(s.lang||'')}</span>
+      <span style="margin-left:auto" class="dry-fb-btns">
+        <button class="btn btn-s btn-xs" data-v="like" onclick="submitCareDryFb(this,${ts},'like')" style="padding:.15rem .5rem">👍</button>
+        <button class="btn btn-s btn-xs" data-v="dislike" onclick="submitCareDryFb(this,${ts},'dislike')" style="padding:.15rem .5rem">👎</button>
+      </span>
+    </div>
+    <div style="margin-top:.4rem;font-size:.78rem;line-height:1.45;color:var(--t)">${_esc(s.reply_text||'')}</div>
+  </div>`;
+}
+function _renderCareList(){
+  const list=document.getElementById('bm-care-dry-list');
+  const cnt=document.getElementById('bm-care-dry-count');
+  if(!list)return;
+  if(cnt)cnt.textContent='('+_careDryShown.length+')';
+  if(!_careDryShown.length){
+    list.innerHTML='<div style="color:var(--t3)">'+window.T('db_js_051')+' care dry_run '+window.T('db_js_049')+'（proactive_care.enabled=true && dry_run=true '+window.T('db_js_052')+'</div>';
+    return;
+  }
+  const items=_careDryShown.map(_renderCareSample).join('');
+  const more=`<button class="btn btn-s btn-xs" style="margin-top:.3rem;padding:.2rem .8rem" onclick="event.preventDefault();loadMoreCareDry()">${window.T('db_js_092')} (+20)</button>`;
+  list.innerHTML=items+more;
+}
+async function loadCareDry(reset){
+  const list=document.getElementById('bm-care-dry-list');
+  if(!list)return;
+  if(reset){_careDryShown=[];list.innerHTML='<div style="color:var(--t3)">'+window.T('msg_js_1047')+'...</div>';}
+  try{
+    const r=await fetch('/api/care/dry-run-samples?limit=20',{credentials:'same-origin'});
+    if(!r.ok){list.innerHTML='<div style="color:var(--red)">'+window.T('rpa_load_failed')+'</div>';return;}
+    const d=await r.json();
+    _careDryShown=d.samples||[];
+    _renderCareList();
+  }catch(e){list.innerHTML='<div style="color:var(--red)">'+_esc(String(e))+'</div>';}
+}
+async function loadMoreCareDry(){
+  const earliest=_careDryShown.length?_careDryShown[_careDryShown.length-1].ts:0;
+  if(!earliest)return;
+  try{
+    const r=await fetch('/api/care/dry-run-samples?limit=20&before_ts='+earliest,{credentials:'same-origin'});
+    if(!r.ok)return;
+    const d=await r.json();
+    const more=d.samples||[];
+    if(!more.length){
+      const list=document.getElementById('bm-care-dry-list');
+      if(list){const btn=list.querySelector('button.btn');if(btn)btn.outerHTML='<div style="color:var(--t3);font-size:.7rem;margin-top:.3rem">'+window.T('db_js_053')+'</div>';}
+      return;
+    }
+    _careDryShown=_careDryShown.concat(more);
+    _renderCareList();
+  }catch(_){}
+}
+async function submitCareDryFb(btn,ts,verdict){
+  const wrap=btn.closest('div[data-ts]');
+  const btns=btn.parentElement;
+  if(btns){btns.querySelectorAll('button').forEach(b=>{b.disabled=true;});}
+  const csrf=(document.cookie.match(/csrf_token=([^;]+)/)||[])[1]||'';
+  try{
+    const r=await fetch('/api/care/dry-run-feedback',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
+      credentials:'same-origin',
+      body:JSON.stringify({sample_ts:ts,verdict:verdict}),
+    });
+    if(r.ok){
+      if(btns){
+        const tip=verdict==='dislike'
+          ? window.T('db_js_054')+' 👎 · '+window.T('db_js_056')
+          : window.T('db_js_054')+' 👍';
+        btns.innerHTML='<span style="color:'+(verdict==='like'?'var(--green)':'var(--amber)')+';font-size:.65rem">'+tip+'</span>';
+      }
+      if(wrap){wrap.style.opacity='.55';wrap.style.borderLeftColor=verdict==='dislike'?'var(--amber)':'var(--green)';}
+    }else{
+      if(btns){btns.querySelectorAll('button').forEach(b=>{b.disabled=false;});}
+    }
+  }catch(_){
+    if(btns){btns.querySelectorAll('button').forEach(b=>{b.disabled=false;});}
+  }
+}
+
+// ★ O·P 联动质量看板
+function _qLine(name, b){
+  const fb=b.feedback||{};
+  const rate=(fb.like_rate_pct==null)?'—':(fb.like_rate_pct+'%');
+  const reasons=Object.entries(b.skip_reasons||{}).sort((a,c)=>c[1]-a[1])
+    .map(([k,v])=>_esc(k)+' <b>'+v+'</b>').join(' · ')||'—';
+  return '<div style="padding:.4rem .55rem;background:var(--input);border-radius:6px;margin-top:.3rem">'+
+    '<div><b style="color:var(--t)">'+name+'</b> · 👍 <b>'+(fb.like||0)+'</b> / 👎 <b>'+(fb.dislike||0)+'</b> · '+window.T('db_js_057')+' <b>'+rate+'</b> · dry_run <b>'+(b.dry_run||0)+'</b></div>'+
+    '<div style="margin-top:.2rem;color:var(--t3)">skip('+(b.skipped||0)+')：'+reasons+'</div>'+
+    '</div>';
+}
+async function loadQualityOverview(){
+  const body=document.getElementById('bm-q-body');
+  const rate=document.getElementById('bm-q-rate');
+  if(!body)return;
+  body.innerHTML='<div style="color:var(--t3)">'+window.T('msg_js_1047')+'...</div>';
+  try{
+    const r=await fetch('/api/companion/quality-overview?window_hours=24',{credentials:'same-origin'});
+    if(!r.ok){body.innerHTML='<div style="color:var(--red)">'+window.T('rpa_load_failed')+'</div>';return;}
+    const d=await r.json();
+    if(!d.ok){body.innerHTML='<div style="color:var(--red)">'+_esc(d.error||'error')+'</div>';return;}
+    const ca=d.care||{}, re=d.reactivation||{};
+    const totLike=((ca.feedback||{}).like||0)+((re.feedback||{}).like||0);
+    const totDis=((ca.feedback||{}).dislike||0)+((re.feedback||{}).dislike||0);
+    if(rate)rate.textContent='(👍'+totLike+'/👎'+totDis+')';
+    let html='<div style="font-size:.72rem">24h '+window.T('db_js_058')+' <b>'+(d.disliked_blacklist_size||0)+'</b> '+window.T('dash.items')+'</div>';
+    html+=_qLine(window.T('care')+' care', ca);
+    html+=_qLine(window.T('db_js_046')+' reactivation', re);
+    html+='<div id="bm-q-trend" style="margin-top:.5rem"></div>';
+    body.innerHTML=html;
+    loadQualityTrend();
+  }catch(e){body.innerHTML='<div style="color:var(--red)">'+_esc(String(e))+'</div>';}
+}
+
+// ★ 质量趋势（持久化时序）：迷你 sparkline
+function _spark(vals,color){
+  if(!vals||!vals.length)return '<span style="color:var(--t3)">—</span>';
+  const w=120,h=22,mx=Math.max(1,Math.max.apply(null,vals)),n=vals.length;
+  const pts=vals.map((v,i)=>(n<2?0:(i/(n-1)*w)).toFixed(1)+','+(h-(v/mx)*h).toFixed(1)).join(' ');
+  return '<svg width="'+w+'" height="'+h+'" style="vertical-align:middle">'+
+    '<polyline points="'+pts+'" fill="none" stroke="'+color+'" stroke-width="1.5"/></svg>';
+}
+async function loadQualityTrend(){
+  const el=document.getElementById('bm-q-trend');
+  if(!el)return;
+  try{
+    const r=await fetch('/api/companion/quality-trend?hours=24',{credentials:'same-origin'});
+    if(!r.ok)return;
+    const d=await r.json();
+    if(!d.enabled){el.innerHTML='<div style="color:var(--t3);font-size:.68rem">'+window.T('db_js_059')+'（companion.quality_trend.enabled=false）</div>';return;}
+    const pts=d.points||[];
+    if(pts.length<2){el.innerHTML='<div style="color:var(--t3);font-size:.68rem">'+window.T('db_js_060')+'（'+pts.length+' '+window.T('db_js_061')+'</div>';return;}
+    const careLike=pts.map(p=>(p.care_like||0)+(p.re_like||0));
+    const skipped=pts.map(p=>(p.care_skipped||0)+(p.re_skipped||0));
+    const dry=pts.map(p=>(p.care_dry||0)+(p.re_dry||0));
+    el.innerHTML='<div style="font-size:.68rem;color:var(--t3);line-height:1.9">'+
+      '<div>'+window.T('db_js_062')+'（'+pts.length+' '+window.T('db_js_063')+'</div>'+
+      '<div>👍 like '+_spark(careLike,'var(--green)')+'</div>'+
+      '<div>skip '+_spark(skipped,'var(--amber)')+'</div>'+
+      '<div>dry_run '+_spark(dry,'var(--p)')+'</div>'+
+      '</div>';
+  }catch(e){/* 趋势失败不影响主看板 */}
+}
+
+// ★ 多平台 deferred 队列运营可观测
+function _kvRow(label, obj){
+  const entries=Object.entries(obj||{});
+  if(!entries.length)return '<span style="color:var(--t3)">'+label+'：—</span>';
+  const parts=entries.map(([k,v])=>_esc(k)+' <b>'+v+'</b>').join(' · ');
+  return '<div style="margin-top:.25rem">'+label+'：'+parts+'</div>';
+}
+async function loadDeferredOutbox(){
+  const body=document.getElementById('bm-dob-body');
+  const cnt=document.getElementById('bm-dob-count');
+  if(!body)return;
+  body.innerHTML='<div style="color:var(--t3)">'+window.T('msg_js_1047')+'...</div>';
+  try{
+    const r=await fetch('/api/deferred-outbox/status?limit=30',{credentials:'same-origin'});
+    if(!r.ok){body.innerHTML='<div style="color:var(--red)">'+window.T('rpa_load_failed')+'</div>';return;}
+    const d=await r.json();
+    if(!d.enabled){
+      if(cnt)cnt.textContent='('+window.T('ov_js_stage_off')+')';
+      body.innerHTML='<div style="color:var(--t3)">'+_esc(d.message||window.T('ov_js_not_enabled'))+'</div>';
+      return;
+    }
+    const st=d.stats||{};
+    const by=st.by_status||{};
+    if(cnt)cnt.textContent='('+(st.total||0)+')';
+    let html='<div style="font-size:.72rem;line-height:1.6">';
+    html+=_kvRow(window.T('ov_js_th_status'), by);
+    html+=_kvRow('pending·'+window.T('inbox.info.platform'), st.pending_by_platform);
+    html+=_kvRow('pending·'+window.T('db_js_064'), st.pending_by_reason);  // 可观测性核心
+    html+='<div style="margin-top:.25rem">'+window.T('db_js_065')+
+      ((d.senders||[]).map(_esc).join(', ')||'<span style="color:var(--amber)">'+window.T('dash.none')+'</span>')+'</div>';
+    const paused=d.paused||[];
+    html+='<div style="margin-top:.25rem">'+window.T('db_js_066')+
+      (paused.length?paused.map(_esc).join(', '):'<span style="color:var(--t3)">'+window.T('dash.none')+'</span>')+'</div>';
+    html+='</div>';
+    // 运营动作：重试失败 / 清积压（卡在某护栏）/ 暂停·恢复平台
+    html+='<div style="margin-top:.5rem;display:flex;gap:.35rem;flex-wrap:wrap">'+
+      '<button class="btn btn-s btn-xs" style="padding:.12rem .5rem;font-size:.65rem" onclick="event.preventDefault();_dobRetryFailed()">'+window.T('rpa_retry')+' failed</button>'+
+      '<button class="btn btn-s btn-xs" style="padding:.12rem .5rem;font-size:.65rem" onclick="event.preventDefault();_dobCancelReason()">'+window.T('db_js_067')+'</button>'+
+      '<button class="btn btn-s btn-xs" style="padding:.12rem .5rem;font-size:.65rem" onclick="event.preventDefault();_dobPause()">'+window.T('db_js_068')+'</button>'+
+      '<button class="btn btn-s btn-xs" style="padding:.12rem .5rem;font-size:.65rem" onclick="event.preventDefault();_dobResume()">'+window.T('db_js_069')+'</button>'+
+      '</div>';
+    const recent=d.recent||[];
+    if(recent.length){
+      html+='<div style="margin-top:.5rem;max-height:220px;overflow:auto;display:flex;flex-direction:column;gap:.3rem">';
+      for(const it of recent){
+        const sc={pending:'var(--p)',sent:'var(--green)',failed:'var(--red)',expired:'var(--t3)'}[it.status]||'var(--t3)';
+        html+='<div style="padding:.35rem .5rem;background:var(--input);border-radius:5px;border-left:3px solid '+sc+';font-size:.68rem;color:var(--t3)">'+
+          '<b style="color:var(--t)">'+_esc(it.platform||'?')+'</b> · '+_esc(it.chat_key||'')+
+          ' · <span style="color:'+sc+'">'+_esc(it.status||'')+'</span>'+
+          (it.reason?' · '+_esc(it.reason):'')+
+          (it.error?' · <span style="color:var(--red)">'+_esc(it.error)+'</span>':'')+
+          '</div>';
+      }
+      html+='</div>';
+    }
+    body.innerHTML=html;
+  }catch(e){body.innerHTML='<div style="color:var(--red)">'+_esc(String(e))+'</div>';}
+}
+// ★ deferred 队列运营动作（mutate；经 api_auth）
+async function _dobPost(path,payload){
+  try{
+    const r=await fetch(path,{method:'POST',credentials:'same-origin',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(payload||{})});
+    const d=await r.json();
+    if(!d.ok){alert(window.T('ov_js_op_fail_e')+(d.error||window.T('rpa_unknown')));}
+    loadDeferredOutbox();
+    return d;
+  }catch(e){alert(window.T('db_js_070')+String(e));}
+}
+function _dobRetryFailed(){if(confirm(window.T('db_js_071')))_dobPost('/api/deferred-outbox/retry',{status:'failed'});}
+function _dobCancelReason(){const r=prompt(window.T('db_js_072')+' no_sender / quiet_hours / pacing_min_gap）：');if(r)_dobPost('/api/deferred-outbox/cancel',{reason:r.trim()});}
+function _dobPause(){const p=prompt(window.T('db_js_073'));if(p)_dobPost('/api/deferred-outbox/pause',{platform:p.trim()});}
+function _dobResume(){const p=prompt(window.T('db_js_074'));if(p)_dobPost('/api/deferred-outbox/resume',{platform:p.trim()});}
+
+const _isSimple=document.documentElement.getAttribute('data-ui-mode')==='simple';
+if(!_isSimple){loadBotMetrics();}
+let _bmTimer=_isSimple?null:setInterval(loadBotMetrics,15000);
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){clearInterval(_bmTimer);}
+  else{loadBotMetrics();_bmTimer=setInterval(loadBotMetrics,15000);}
+});
+
+/* ── 触发器决策日志 ──────────────────────── */
+async function loadTriggerDecisions(){
+  try{
+    const r=await fetch('/api/trigger-decisions?limit=20');
+    if(!r.ok)return;
+    const d=await r.json();
+    document.getElementById('td-loading').style.display='none';
+    const list=d.decisions||[];
+    if(!list.length){
+      document.getElementById('td-empty').style.display='';
+      document.getElementById('td-content').style.display='none';
+      return;
+    }
+    document.getElementById('td-content').style.display='';
+    document.getElementById('td-empty').style.display='none';
+    const LAYER_MAP={l1:{icon:'🎯',color:'var(--green)',label:'L1'+window.T('db_js_030')},l2:{icon:'🧠',color:'var(--p)',label:'L2'+window.T('db_js_031')},l3_filtered:{icon:'🔇',color:'var(--amber)',label:'L3'+window.T('db_js_032')},l4_silenced:{icon:'💤',color:'var(--t3)',label:'L4'+window.T('db_js_033')},skipped:{icon:'⏭️',color:'var(--red)',label:window.T('db_js_034')}};
+    document.getElementById('td-list').innerHTML=list.map(function(d){
+      var lyr=d.layer||d.result||'?';
+      var info=LAYER_MAP[lyr]||{icon:'❓',color:'var(--t2)',label:lyr};
+      var ts=d.ts||'';
+      var tsFmt=ts?ts.substring(11,19):'';
+      var chat=d.chat||d.chat_title||'';
+      var user=d.user||d.username||'';
+      var reason=d.reason||d.detail||'';
+      var conf=d.confidence!=null?(' '+Math.round(d.confidence*100)+'%'):'';
+      return '<div class="tl-item" style="gap:.6rem;padding:.4rem 0">'+
+        '<div style="width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:.9rem;flex-shrink:0;background:var(--input)">'+info.icon+'</div>'+
+        '<div style="flex:1;min-width:0">'+
+          '<div style="font-size:.82rem;font-weight:600;display:flex;align-items:center;gap:.4rem">'+
+            '<span style="color:'+info.color+'">'+info.label+conf+'</span>'+
+            (chat?'<span style="font-size:.72rem;color:var(--t3)">'+chat+'</span>':'')+
+          '</div>'+
+          (reason?'<div style="font-size:.73rem;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:300px" title="'+reason.replace(/"/g,'&quot;')+'">'+reason+'</div>':'')+
+        '</div>'+
+        '<div style="font-size:.7rem;color:var(--t3);white-space:nowrap">'+tsFmt+'</div>'+
+      '</div>';
+    }).join('');
+  }catch(e){}
+}
+if(!_isSimple){loadTriggerDecisions();setInterval(loadTriggerDecisions,30000);}
+
+/* Init — skip heavy loads in simple mode */
+if(!_isSimple) loadActivityStats();
+
+/* ── 系统状态条 ──────────────────────────────────── */
+let _sysBarTimer = null;
+async function loadSysBar(){
+  try{
+    const r = await fetch('/api/system-info');
+    if(!r.ok) return;
+    const d = await r.json();
+    const bar  = document.getElementById('sys-bar');
+    const pills= document.getElementById('sys-pills');
+    const upd  = document.getElementById('sys-upd-time');
+
+    const _fmt = s => {
+      if(s==null) return '—';
+      if(s<60) return s+'s';
+      if(s<3600) return Math.floor(s/60)+'m';
+      if(s<86400) return Math.floor(s/3600)+'h';
+      return Math.floor(s/86400)+'d';
+    };
+    const _mem = mb => mb!=null ? mb+'MB' : '—';
+    const _ago = ts => {
+      if(!ts) return window.T('psn_js_009');
+      const diff = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+      if(diff<60) return diff+window.T('msg_js_285');
+      if(diff<3600) return Math.floor(diff/60)+window.T('dash.ago.min');
+      if(diff<86400) return Math.floor(diff/3600)+window.T('dash.ago.hour');
+      return Math.floor(diff/86400)+window.T('ln_js_002');
+    };
+
+    const items = [
+      {cls: d.bot_online?'ok':'err', icon: d.bot_online?'●':'●', label: d.bot_online?'Bot '+window.T('dash.pr.online'):'Bot '+window.T('dash.pr.offline')},
+      {cls: 'ok', icon: '📚', label: (d.kb_entries||0)+' '+window.T('db_js_075')},
+      d.memory_mb ? {cls:'', icon:'💾', label: _mem(d.memory_mb)} : null,
+      {cls: '', icon: '⏱', label: window.T('ov_js_stage_active')+' '+_fmt(d.uptime_s)},
+      {cls: '', icon: '👥', label: (d.admin_users||0)+' '+window.T('db_js_076')},
+      d.embedding_ok ? {cls:'ok', icon:'🔮', label:window.T('db_js_077')} : {cls:'warn', icon:'🔮', label:window.T('db_js_078')},
+    ].filter(Boolean);
+
+    pills.innerHTML = items.map(it=>
+      `<span class="sys-pill ${it.cls}"><span class="dot" style="display:${it.icon==='●'?'block':'none'}"></span>${it.icon !== '●' ? it.icon+' ' : ''}${it.label}</span>`
+    ).join('');
+    upd.textContent = window.T('db_js_079')+' '+window.wsFmtTime(null,{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    bar.classList.add('show');
+  } catch(e){}
+}
+if(!_isSimple) loadSysBar();
+// 每 60 秒自动刷新，页面隐藏时暂停
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){ clearInterval(_sysBarTimer); }
+  else { loadSysBar(); _sysBarTimer = setInterval(loadSysBar, 60000); }
+});
+_sysBarTimer = setInterval(loadSysBar, 60000);
+
+/* ── 知识库健康卡片 ───────────────────────────────── */
+async function loadKbHealth(){
+  try{
+    // 并行拉取所有数据
+    const [r, r2, r3, r4] = await Promise.all([
+      fetch('/api/kb/health-stats'),
+      fetch('/api/kb/embed-coverage'),
+      fetch('/api/kb/today-hit-rate'),
+      fetch('/api/kb/query-analytics?hours=24'),
+    ]);
+    if(!r.ok)return;
+    const d=await r.json();
+    document.getElementById('kb-loading').style.display='none';
+    document.getElementById('kb-content').style.display='';
+
+    const s=d.stats||{};
+    document.getElementById('kb-d-entries').textContent=s.total_entries||0;
+    var kbCountEl=document.getElementById('kb-entry-count');
+    if(kbCountEl) kbCountEl.textContent=s.total_entries||0;
+    const sat=d.recent_feedback_7d>0 ? d.recent_satisfaction+'%' : '—';
+    const satEl=document.getElementById('kb-d-sat');
+    satEl.textContent=sat;
+    if(d.recent_satisfaction>=80) satEl.style.color='var(--green)';
+    else if(d.recent_satisfaction>=50) satEl.style.color='var(--amber)';
+    else satEl.style.color='var(--red)';
+
+    // 今日命中率
+    if(r3.ok){
+      const hr=await r3.json();
+      const hrEl=document.getElementById('kb-d-hitrate');
+      const qEl=document.getElementById('kb-d-queries');
+      hrEl.textContent=(hr.total>0 ? hr.hit_pct+'%' : '—');
+      hrEl.style.color=hr.hit_pct>=70?'var(--green)':hr.hit_pct>=40?'var(--amber)':'var(--red)';
+      qEl.textContent=hr.total||0;
+    }
+    // 命中率迷你趋势图
+    if(r4.ok){
+      const qa=await r4.json();
+      const hours=qa.hours||[];
+      const sl=document.getElementById('kb-sparkline');
+      if(sl&&hours.length){
+        const maxV=Math.max(...hours.map(h=>h.hits+h.misses),1);
+        sl.innerHTML=hours.map(h=>{
+          const total=h.hits+h.misses;
+          const hitPct=total>0?h.hits/total:0;
+          const barH=Math.max(Math.round(32*(total/maxV)),2);
+          const col=hitPct>=0.7?'var(--green)':hitPct>=0.4?'var(--amber)':'var(--red)';
+          return `<div style="flex:1;height:${barH}px;background:${total>0?col:'var(--bd2)'};border-radius:2px;transition:height .4s" title="${h.hour}${window.T('db_js_093')}: ${h.hits}${window.T('db_js_094')}/${total}${window.T('ov_js_times_unit')}"></div>`;
+        }).join('');
+      } else if(sl){
+        sl.innerHTML='<div style="color:var(--t3);font-size:.73rem;align-self:center;width:100%;text-align:center">'+window.T('db_js_080')+'</div>';
+      }
+    }
+
+    // 向量化覆盖率 + 检索模式
+    if(r2.ok){
+      const cov=await r2.json();
+      const pct=cov.pct||0;
+      document.getElementById('kb-vec-bar').style.width=pct+'%';
+      document.getElementById('kb-vec-detail').textContent=
+        window.Tf('db_js_p04', {done: cov.done||0, total: cov.total||0, pct: pct});
+      const modeEl=document.getElementById('kb-search-mode-badge');
+      if(cov.mode&&cov.mode.includes('hybrid')){
+        modeEl.innerHTML='<span style="background:#d4edda;color:#155724;padding:.15rem .6rem;border-radius:99px;font-size:.72rem">✅ '+window.T('db_js_081')+'（BM25 + '+window.T('db_js_082')+'</span>';
+      } else {
+        modeEl.innerHTML='<span style="background:#fff3cd;color:#856404;padding:.15rem .6rem;border-radius:99px;font-size:.72rem">⚠️ '+window.T('db_js_083')+'</span>';
+      }
+    }
+
+    // 翻译覆盖进度条
+    const tc=d.translation_coverage||{};
+    const LANGS={en:'EN',ur:'UR',pt:'PT',ar:'AR'};
+    document.getElementById('kb-trans-bars').innerHTML=Object.entries(LANGS).map(([l,name])=>{
+      const pct=tc[l]||0;
+      const color=pct>=90?'var(--green)':pct>=50?'var(--amber)':'var(--red)';
+      return `<div style="display:flex;align-items:center;gap:.5rem">
+        <span style="width:24px;font-size:.72rem;color:var(--t3);text-align:right">${name}</span>
+        <div style="flex:1;height:7px;background:var(--bd2);border-radius:10px;overflow:hidden">
+          <div style="width:${pct}%;height:100%;background:${color};border-radius:10px;transition:width .8s"></div>
+        </div>
+        <span style="width:36px;font-size:.7rem;color:var(--t3);text-align:right">${pct}%</span>
+      </div>`;
+    }).join('');
+
+    // 未命中查询
+    const miss=d.miss_queries||[];
+    document.getElementById('kb-miss-list').innerHTML=miss.length?
+      miss.slice(0,5).map(m=>`<div style="display:flex;justify-content:space-between;padding:.2rem 0;border-bottom:1px solid var(--bd)">
+        <span style="color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px">${m.query}</span>
+        <span style="color:var(--red);font-size:.72rem;flex-shrink:0">×${m.cnt}</span>
+      </div>`).join('')
+      :'<span style="color:var(--t3)">'+window.T('db_js_084')+'</span>';
+
+    // 回复质量统计
+    try{
+      const qr=await fetch('/api/kb/reply-quality?days=7');
+      const qd=qr.ok?await qr.json():{};
+      const qEl=document.getElementById('kb-quality-stats');
+      if(qd.total>0){
+        const satColor=qd.satisfaction>=80?'var(--green)':qd.satisfaction>=50?'var(--amber)':'var(--red)';
+        qEl.innerHTML=`
+          <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.3rem">
+            <span>${window.T('cases_satisfaction')} <b style="color:${satColor}">${qd.satisfaction}%</b></span>
+            <span>${window.T('db_js_095')} <b style="color:var(--green)">${qd.positive}</b></span>
+            <span>${window.T('db_js_096')} <b style="color:var(--red)">${qd.negative}</b></span>
+          </div>
+          <div style="font-size:.72rem;color:var(--t3)">
+            ${window.T('db_js_097')} ${qd.by_source?.auto_repeat||0} · ${window.T('db_js_098')} ${qd.by_source?.auto_detect||0} · ${window.T('msg_js_1951')} ${qd.by_source?.manual||0}
+          </div>`;
+      }else{
+        qEl.innerHTML='<span style="color:var(--t3)">'+window.T('db_js_085')+'</span>';
+      }
+    }catch(e){}
+  }catch(e){}
+}
+loadKbHealth();
+// 自动刷新 KB 健康卡片（5 分钟，页面隐藏时暂停）
+let _kbRefreshTimer = setInterval(loadKbHealth, 5 * 60 * 1000);
+document.addEventListener('visibilitychange', ()=>{
+  if(document.hidden){ clearInterval(_kbRefreshTimer); }
+  else { _kbRefreshTimer = setInterval(loadKbHealth, 5 * 60 * 1000); loadKbHealth(); }
+});
+</script>
+{% endblock %}

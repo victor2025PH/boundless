@@ -1,0 +1,79 @@
+{
+  "comment": "RVC 变声模型显示别名（不改 .pth 文件名防断链）。alias=下拉/资产列表显示名；audition_vs=频谱边界款，人工试听裁决对象",
+  "aliases": {
+    "weights/CN_男声-03号.pth": {
+      "alias": "沉香木",
+      "note": "全库最暗（质心870Hz），胸腔共鸣厚——旁白/成熟稳重人设",
+      "bucket": "暗厚",
+      "centroid_hz": 870.3,
+      "audition_vs": [
+        "01号"
+      ]
+    },
+    "weights/CN_男声-01号.pth": {
+      "alias": "青铜钟",
+      "note": "同档最暗带钟鸣泛音（质心897Hz）——低沉但不闷",
+      "bucket": "暗厚",
+      "centroid_hz": 897.1,
+      "audition_vs": [
+        "03号"
+      ]
+    },
+    "weights/CN_男声-06号.pth": {
+      "alias": "天鹅绒",
+      "note": "暗而顺滑（质心1155Hz、高频最收）——深夜电台质感",
+      "bucket": "暗厚",
+      "centroid_hz": 1155.1
+    },
+    "weights/CN_男声-09号.pth": {
+      "alias": "贴麦主播",
+      "note": "中性偏亮、2-4k存在感全场最高——人声贴耳，带货吃香",
+      "bucket": "中性",
+      "centroid_hz": 1446.7,
+      "audition_vs": [
+        "10号"
+      ]
+    },
+    "weights/CN_男声-10号.pth": {
+      "alias": "白衬衫",
+      "note": "全场最均衡（质心1530Hz居中）——干净通勤感，万金油",
+      "bucket": "中性",
+      "centroid_hz": 1530.3,
+      "audition_vs": [
+        "09号",
+        "08号"
+      ]
+    },
+    "weights/CN_男声-08号.pth": {
+      "alias": "磨砂气嗓",
+      "note": "中亮带气声颗粒（5-8k空气感全场最高）——松弛口播",
+      "bucket": "中性",
+      "centroid_hz": 1571.2,
+      "audition_vs": [
+        "10号",
+        "02号"
+      ]
+    },
+    "weights/CN_男声-02号.pth": {
+      "alias": "鎏金亮嗓",
+      "note": "亮而饱满（频谱最平、中频有劲）——热场/促销有冲劲",
+      "bucket": "明亮",
+      "centroid_hz": 1614.5,
+      "audition_vs": [
+        "08号"
+      ]
+    },
+    "weights/CN_男声-04号.pth": {
+      "alias": "钢弦亮嗓",
+      "note": "第二亮（质心1866Hz）金属弦感——清晰穿透，嘈杂场景不糊",
+      "bucket": "明亮",
+      "centroid_hz": 1865.6
+    },
+    "weights/CN_男声-07号.pth": {
+      "alias": "银哨清亮",
+      "note": "全库最亮（质心2019Hz）偏薄清冷——年轻利落人设",
+      "bucket": "明亮",
+      "centroid_hz": 2018.7
+    }
+  }
+}

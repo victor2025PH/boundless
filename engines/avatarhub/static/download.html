@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>无界科技 BOUNDLESS · 下载客户端</title>
+<link rel="stylesheet" href="/static/brand.css">
+<style>
+  body{margin:0;background:var(--bd-bg);color:var(--bd-txt);font-family:var(--bd-font);font-size:var(--bd-fs-body);line-height:var(--bd-lh-base)}
+  a{color:var(--bd-acc);text-decoration:none}
+  .wrap{max-width:960px;margin:0 auto;padding:28px 20px 64px}
+  header.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+  header.top h1{font-size:var(--bd-fs-h1);margin:0}
+  .lead{color:var(--bd-mut);font-size:var(--bd-fs-sm);margin:2px 0 22px}
+
+  .dls{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:640px){.dls{grid-template-columns:1fr}}
+  .dl{background:var(--bd-surface);border:1px solid var(--bd-border);border-radius:var(--bd-r-md);padding:20px 18px;display:flex;flex-direction:column;gap:10px}
+  .dl .os{display:flex;align-items:center;gap:10px}
+  .dl .os .ico{font-size:26px}
+  .dl .os .t{font-size:var(--bd-fs-h2);font-weight:700}
+  .dl .meta{font-size:var(--bd-fs-label);color:var(--bd-mut)}
+  .dl .btn-row{margin-top:6px;display:flex;gap:8px;flex-wrap:wrap}
+  .dl .hash{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--bd-faint);word-break:break-all}
+  .badge-soon{font-size:11px;color:var(--bd-warn);border:1px solid rgba(251,191,36,.4);background:rgba(251,191,36,.12);border-radius:var(--bd-r-pill);padding:2px 9px}
+
+  h2.sec{font-size:var(--bd-fs-h2);margin:34px 0 12px;color:var(--bd-acc);border-left:3px solid var(--bd-acc);padding-left:9px}
+  table{width:100%;border-collapse:collapse;font-size:var(--bd-fs-sm)}
+  th,td{border:1px solid var(--bd-border);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--bd-surface2);color:var(--bd-txt2);font-weight:600}
+  ol{padding-left:20px} li{margin:5px 0;font-size:var(--bd-fs-sm)}
+  .foot{margin-top:28px;color:var(--bd-faint);font-size:var(--bd-fs-label);line-height:1.6}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1><span class="bd-grad-text">无界科技 BOUNDLESS</span> · 下载客户端</h1>
+    <span class="bd-trust">🖥️ Windows / 🍎 macOS</span>
+    <span class="bd-trust">薄核心安装 · 首启按显卡下载所需组件</span>
+  </header>
+  <p class="lead">下载后首次启动会弹出「首启向导」：自动识别显卡 → 自动推荐版本 → 一键下载运行环境与模型（无需手动装 conda）。<b>免费试用，无需授权码</b>，装完即可用。</p>
+
+  <div class="dls" id="dls"></div>
+
+  <h2 class="sec">安装说明</h2>
+  <ol>
+    <li><b>Windows</b>：下载 <code>.exe</code> 安装包，双击安装（免管理员，按用户安装到可写目录）。首启向导会按显卡下载组件，请预留磁盘空间与可用网络。<br>
+      <b>首次运行若弹「Windows 已保护你的电脑 / 未知发布者」</b>：这是新软件的正常提示（不影响安全）——点<b>「更多信息」→「仍要运行」</b>即可。想更放心可先按下方 SHA-256 自行校验文件完整性；本产品的<b>后续更新走内置增量通道并带数字签名校验</b>，不再触发该提示。</li>
+    <li><b>macOS</b>：下载 <code>.dmg</code>，拖入「应用程序」。首次打开若提示"未验证开发者"，右键 → 打开，或在「系统设置 → 隐私与安全性」中允许。<b>Mac 版为轻量控制台 / 远程接入</b>：换脸、数字人等重推理仍需 Windows/服务器 N 卡，Mac 端连接远程引擎使用。</li>
+    <li>安装完成后<b>无需授权码即可免费使用全部功能</b>；首启向导会自动按显卡下载对应模型，出现控制台即可开始。</li>
+    <li>开播前建议先跑一次「设备体检」（麦克风 / 摄像头 / 虚拟声卡），红灯先修再播。</li>
+    <li>装完看图文教程更省心：<a href="/help?doc=install" target="_blank">安装教程</a> · <a href="/help?doc=use" target="_blank">使用教程</a> · <a href="/help?doc=interp" target="_blank">手机同传扫码授权</a>。</li>
+  </ol>
+
+  <h2 class="sec">硬件档位建议</h2>
+  <table>
+    <thead><tr><th>用途</th><th>最低</th><th>推荐</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>图片 / 视频换脸（幻颜 FaceX）</td><td>RTX 4060Ti 16G / 4070</td><td>RTX 4090</td><td>离线成片，低配可跑</td></tr>
+      <tr><td>实时换脸直播（幻影 LiveX）</td><td>RTX 4070 / 4080 16G</td><td>RTX 4090 / 5080</td><td>720p 高清默认，1080p 超清档随选</td></tr>
+      <tr><td>高清活体数字人 + 克隆音</td><td>RTX 4090 24G</td><td>RTX 5090 32G</td><td>25fps 高清在 5090 调优达成</td></tr>
+      <tr><td>克隆同传（通译 LingoX）</td><td>RTX 5090 单机</td><td>5090 + 分机</td><td>STT/NMT 可分机部署</td></tr>
+    </tbody>
+  </table>
+  <p class="lead" style="margin-top:8px">安装后运行时接口 <code>/api/hardware/guide</code> 会按你的实际显卡给出「每功能推荐 / 降档 / 不建议」结论。</p>
+
+  <p class="foot" id="foot">
+    仅限本人合法授权用途；产出默认带 C2PA 可验真水印。下载校验：比对页面 SHA-256 与文件实际哈希一致再安装。
+    官网 <a href="https://ai26.sbs" target="_blank">ai26.sbs</a> ·
+    官方频道 <a href="https://t.me/hykj7" target="_blank">t.me/hykj7</a> ·
+    遇到问题联系 <a id="tgLink" href="https://t.me/hykjz" target="_blank">Telegram 客服群</a>（官方客服头像带「客服」徽标，谨防假冒）。
+  </p>
+</div>
+
+<script>
+// 下载清单单一真相：优先读服务器 /api/release/manifest（发布脚本生成），无则用下方占位。
+var DEFAULT = {
+  telegram: "https://t.me/hykjz",
+  builds: [
+    {os:"Windows 10/11 (x64)", ico:"🖥️", ver:"1.0.1", size:"约 60 MB（薄核心）",
+     url:"", sha256:"", filename:"AvatarHub-Setup-1.0.1.exe", ready:true},
+    {os:"macOS 12+ (Apple Silicon / Intel)", ico:"🍎", ver:"1.0.1", size:"约 55 MB（轻量控制台）",
+     url:"", sha256:"", filename:"AvatarHub-1.0.1.dmg", ready:false}
+  ]
+};
+
+function render(m){
+  var tg = m.telegram || DEFAULT.telegram;
+  document.getElementById("tgLink").href = tg;
+  document.getElementById("dls").innerHTML = (m.builds||DEFAULT.builds).map(function(b){
+    var hasUrl = b.url && b.url.length>0;
+    var btn = b.ready && hasUrl
+      ? '<a class="bd-btn bd-btn-primary" href="'+b.url+'" download>下载 '+b.filename+'</a>'
+      : (b.ready
+          ? '<button class="bd-btn bd-btn-ghost" disabled>下载链接待发布</button>'
+          : '<span class="badge-soon">即将上线</span>');
+    var hash = b.sha256 ? '<div class="hash">SHA-256: '+b.sha256+'</div>' : '';
+    return '<div class="dl">'+
+      '<div class="os"><span class="ico">'+b.ico+'</span><span class="t">'+b.os+'</span></div>'+
+      '<div class="meta">版本 v'+b.ver+' · '+b.size+'</div>'+
+      '<div class="btn-row">'+btn+'</div>'+ hash +'</div>';
+  }).join("");
+}
+
+// 引擎端走 /api/release/manifest；挂在官网（Nginx 静态）时回退 /releases/release_manifest.json。
+function tryFetch(url){ return fetch(url).then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; }); }
+tryFetch("/api/release/manifest")
+  .then(function(j){ return j && j.builds ? j : tryFetch("/releases/release_manifest.json"); })
+  .then(function(j){ render(j && j.builds ? j : DEFAULT); });
+</script>
+</body>
+</html>

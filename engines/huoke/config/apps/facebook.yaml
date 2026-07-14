@@ -1,0 +1,125 @@
+package: com.facebook.katana
+name: Facebook
+main_activity: com.facebook.katana.LoginActivity
+behavior_profile: facebook
+
+# ── UI Selector 热重载覆盖 ─────────────────────────────────────────────
+# 修改此节后无需重启服务（自动检测文件 mtime 热重载）
+# 格式：每项是一个 uiautomator2 selector 字典，支持任意组合的 u2 属性：
+#   text, textContains, description, descriptionContains, resourceId, className, clickable
+# YAML 中定义的选择器会 prepend 到代码默认列表前面（最高优先级）
+# 当 Facebook 更新 UI 时，先在此处添加新选择器，验证后再更新代码
+ui_selectors:
+  # 示例（已注释）：如某新版本 FB 搜索按钮 description 变为 "查找"
+  # home_search_button:
+  #   - {description: "查找", clickable: true}
+  # people_tab:
+  #   - {text: "人物"}
+  home_search_button: []
+  fallback_search_tap: []
+  search_query_editor: []
+  people_tab: []
+
+compliance:
+  # 风控档位:conservative / balanced / aggressive
+  # 对应 docs/抖音/操作日志.md 中"激进档"配置(用户已选)
+  # 注意:激进档接受 5-10% 封号率,需配合"账号被锁自动降级到 warmup"机制
+  preset: aggressive
+  hourly_total: 80
+  daily_total: 400
+  actions:
+    send_message: {hourly: 15, daily: 60}
+    add_friend: {hourly: 6, daily: 30}
+    add_friend_with_note: {hourly: 6, daily: 30}
+    search: {hourly: 20, daily: 100}
+    like_post: {hourly: 30, daily: 150}
+    comment: {hourly: 10, daily: 50}
+    join_group: {hourly: 4, daily: 12}
+    # Sprint 1 新增动作配额
+    browse_groups: {hourly: 6, daily: 20}
+    group_engage: {hourly: 8, daily: 30}
+    extract_members: {hourly: 6, daily: 20}
+    view_profile: {hourly: 30, daily: 150}
+
+actions:
+  search_people:
+    description: "Search for people on Facebook"
+    params: [query]
+    steps:
+      - find: "Search bar or search icon at top"
+        action: tap
+      - find: "Search text input field"
+        action: type
+        param: query
+      - find: "People tab or filter"
+        action: tap
+        optional: true
+
+  send_message:
+    description: "Send a message via Messenger"
+    params: [recipient, message]
+    steps:
+      - find: "Messenger or chat icon"
+        action: tap
+      - find: "Search in Messenger"
+        action: tap
+      - find: "Search contacts text input"
+        action: type
+        param: recipient
+      - find: "First matching contact in search results"
+        action: tap
+        wait_after: 1.0
+      - find: "Message text input box"
+        action: type
+        param: message
+      - find: "Send message button"
+        action: tap
+
+  add_friend:
+    description: "Send a friend request"
+    params: [profile_name]
+    steps:
+      - find: "Search bar or search icon"
+        action: tap
+      - find: "Search text input"
+        action: type
+        param: profile_name
+      - find: "First matching person in results"
+        action: tap
+        wait_after: 1.5
+      - find: "Add Friend button"
+        action: tap
+
+  like_post:
+    description: "Like a post in the feed"
+    steps:
+      - find: "Like button on a post"
+        action: tap
+
+  browse_feed:
+    description: "Scroll through the news feed"
+    steps:
+      - find: "Home tab or news feed"
+        action: tap
+        optional: true
+      - find: "Feed content area"
+        action: swipe
+        wait_after: 2.0
+
+  join_group:
+    description: "Join a Facebook group"
+    params: [group_name]
+    steps:
+      - find: "Search bar or search icon"
+        action: tap
+      - find: "Search text input"
+        action: type
+        param: group_name
+      - find: "Groups tab or filter"
+        action: tap
+        optional: true
+      - find: "First matching group"
+        action: tap
+        wait_after: 1.5
+      - find: "Join Group button"
+        action: tap

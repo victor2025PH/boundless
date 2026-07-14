@@ -1,0 +1,61 @@
+# 示例：OpenClaw launch 相关 Prometheus 规则（复制到 prometheus.yml rule_files 后按需调阈值）
+# 指标来自 GET /observability/prometheus 追加段（gauge，进程内单调累加，重启归零）
+
+groups:
+  - name: openclaw_facebook_launch
+    rules:
+      - alert: OpenclawFacebookWorkerCapWarningIncreased
+        expr: delta(openclaw_facebook_device_launch_worker_cap_warning_total[15m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Facebook launch 出现 Worker 能力告警计数增长"
+          description: "检查远程 Worker 版本与 /health capabilities.facebook_task_precreate_gate。"
+
+      - alert: OpenclawFacebookLaunchStepsFailed
+        expr: delta(openclaw_facebook_device_launch_steps_failed_total[15m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Facebook launch 有步骤入队失败"
+          description: "查看主控日志 [fb_device_launch] 与 flow_tasks 400 详情。"
+
+  - name: openclaw_tiktok_launch
+    rules:
+      - alert: OpenclawTiktokFlowStepsSkippedLocalOffline
+        expr: delta(openclaw_tiktok_flow_steps_skipped_local_offline_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "TikTok flow_steps 因本地离线且环境变量短路"
+          description: "与 campaign 分桶；检查设备在线或关闭 OPENCLAW_TT_CAMPAIGN_SKIP_WORKER_WHEN_OFFLINE。"
+
+      - alert: OpenclawTiktokCampaignSkippedNoLocalDevice
+        expr: delta(openclaw_tiktok_campaign_launch_skipped_no_local_device_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "TikTok campaign 模式出现「本地 devices.yaml 无此 device_id」"
+          description: "多为错误 device_id 或未同步设备列表；仍会尝试 Worker。"
+
+      - alert: OpenclawTiktokCampaignSkippedLocalOffline
+        expr: delta(openclaw_tiktok_campaign_launch_skipped_local_offline_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "TikTok campaign 因本地离线且 OPENCLAW_TT_CAMPAIGN_SKIP_WORKER_WHEN_OFFLINE 短路"
+          description: "确认是否为预期；关闭环境变量可恢复转发 Worker。"
+
+      - alert: OpenclawTiktokCampaignLaunchFailed
+        expr: delta(openclaw_tiktok_campaign_launch_failed_total[15m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "TikTok launch-campaign 失败计数增长"
+          description: "检查设备在线、Worker-03 与 launch-campaign 接口返回。"

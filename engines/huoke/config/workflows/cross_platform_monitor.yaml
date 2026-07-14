@@ -1,0 +1,36 @@
+# Cross-Platform Message Monitor
+# Telegram: monitor chat → auto-reply → forward summary to WhatsApp
+
+name: cross_platform_monitor
+description: >
+  Monitor a Telegram chat for incoming messages, auto-reply using AI,
+  and send a summary to WhatsApp at the end.
+
+variables:
+  telegram_user: "@target_user"
+  whatsapp_contact: "My Assistant"
+  device_id: ""
+  duration_sec: 600
+  persona: casual
+
+steps:
+  - id: monitor
+    action: telegram.auto_reply_monitor
+    params:
+      username: "{variables.telegram_user}"
+      persona: "{variables.persona}"
+      duration_sec: "{variables.duration_sec}"
+    timeout_sec: 700
+
+  - id: summarize
+    action: util.log
+    params:
+      message: "Monitor complete. Replies sent: {steps.monitor.result}"
+    depends_on: [monitor]
+
+  - id: notify_whatsapp
+    action: whatsapp.send_text_message
+    params:
+      message: "Telegram monitor ended. Check logs for details."
+    depends_on: [summarize]
+    on_error: continue

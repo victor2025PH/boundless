@@ -1,0 +1,48 @@
+# ══════════════════════════════════════════════════════════════════════
+#  AvatarHub GPU 推理服务通用镜像（参数化：一份 Dockerfile 构建四个服务）
+#
+#  设计：镜像 = Python 依赖环境；代码与模型不进镜像，运行时把项目根挂到 /app。
+#  这与 Windows 侧「conda 环境 + 项目目录」的形态完全对齐——同一套代码、
+#  同一份 requirements 单一真相（docker/requirements/*.linux.txt 由
+#  gen_linux_requirements.py 从 Windows 基线自动生成），升级代码零重建。
+#
+#  构建（项目根执行）：
+#    docker build -f docker/Dockerfile.service --build-arg ENV_NAME=fishspeech \
+#                 --build-arg PYVER=3.10 -t avatarhub/fishspeech .
+#  （通常不手敲——用 docker compose build，见 docker-compose.yml）
+# ══════════════════════════════════════════════════════════════════════
+ARG CUDA_IMAGE=nvidia/cuda:12.8.0-runtime-ubuntu22.04
+FROM ${CUDA_IMAGE}
+
+ARG ENV_NAME=fishspeech
+ARG PYVER=3.10
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    AVATARHUB_BASE=/app
+
+# 系统依赖：ffmpeg(音视频)、libsndfile(soundfile)、libgl/glib(OpenCV headless 之外的 cv2)、
+# git(部分包从 git 装)、build-essential(个别包无 manylinux 轮子需本地编译)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common curl ca-certificates git \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        python${PYVER} python${PYVER}-venv python${PYVER}-dev \
+        build-essential ffmpeg libsndfile1 libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# 独立 venv（不污染系统 python；镜像内等价于 Windows 的 conda env）
+RUN python${PYVER} -m venv /opt/venv
+ENV PATH=/opt/venv/bin:$PATH
+
+# 先只拷 requirements → 改代码不触发依赖层重建（Docker 层缓存）
+COPY docker/requirements/${ENV_NAME}.linux.txt /tmp/req.txt
+COPY docker/requirements/${ENV_NAME}.linux.editable.txt /tmp/req.editable.txt
+RUN pip install --upgrade pip wheel setuptools && pip install -r /tmp/req.txt
+
+# 入口：启动时装伴生可编辑包(源码在挂载卷里,构建期不可得) → 起服务
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+WORKDIR /app
+ENTRYPOINT ["/entrypoint.sh"]

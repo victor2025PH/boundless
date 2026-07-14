@@ -1,0 +1,37 @@
+# 人群/定向预设 — 创建任务时在 params 中传 audience_preset: <id>，与显式字段合并（显式优先）。
+# 按任务类型 longest-prefix 匹配 apply 下的键（如 tiktok_follow、tiktok_）。
+version: 1
+presets:
+  - id: italy_male_30p
+    label: 意大利 30+ 男性
+    description: 与 TargetProfile 一致；适合项目默认获客
+    tags: [italy, male, age30]
+    apply:
+      tiktok_follow:
+        target_country: italy
+        language: italian
+        gender: male
+        min_age: 30
+        max_age: 0
+      tiktok_warmup:
+        target_country: italy
+      tiktok_:
+        target_country: italy
+
+  - id: usa_broad
+    label: 美国 宽筛选
+    apply:
+      tiktok_follow:
+        target_country: usa
+        language: english
+        gender: ""
+        min_age: 0
+      tiktok_warmup:
+        target_country: usa
+
+  - id: italy_light_inbox
+    label: 意大利 轻量收件箱（少会话）
+    apply:
+      tiktok_check_inbox:
+        auto_reply: true
+        max_conversations: 25

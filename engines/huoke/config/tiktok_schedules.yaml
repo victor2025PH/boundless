@@ -1,0 +1,221 @@
+# TikTok 定时调度预设 (智能调度版)
+#
+# 使用方法: python -m src.host.setup_schedules tiktok
+# 或通过 Host API: POST /schedules 手动创建
+#
+# cron 格式: 分 时 日 月 周
+#
+# smart_schedule 字段启用时区感知调度:
+#   timezone     — 目标用户时区 (意大利 Europe/Rome)
+#   activity_window — 仅在目标用户活跃时段执行
+#   jitter_minutes  — 随机偏移, 避免行为模式被检测
+#   weekend      — 周末行为调整
+
+schedules:
+  # 每天三次养号 — 对齐意大利活跃时间 (UTC+1/+2)
+  # 意大利早上 10:00 → UTC 09:00/08:00
+  - name: tiktok_warmup_morning
+    cron: "0 8 * * *"
+    task_type: tiktok_warmup
+    params:
+      phase: auto
+      target_country: italy
+      duration_minutes: 30
+      smart_schedule:
+        timezone: "Europe/Rome"
+        activity_window: {start_hour: 9, end_hour: 22}
+        jitter_minutes: 10
+        weekend:
+          enabled: true
+          window: {start_hour: 10, end_hour: 21}
+          rate_multiplier: 0.6
+
+  # 意大利午间 14:00 → UTC 13:00/12:00
+  - name: tiktok_warmup_afternoon
+    cron: "0 12 * * *"
+    task_type: tiktok_warmup
+    params:
+      phase: auto
+      target_country: italy
+      duration_minutes: 35
+      smart_schedule:
+        timezone: "Europe/Rome"
+        activity_window: {start_hour: 9, end_hour: 22}
+        jitter_minutes: 8
+
+  # 意大利晚间 20:00 → UTC 19:00/18:00 (TikTok 黄金时段)
+  - name: tiktok_warmup_evening
+    cron: "0 18 * * *"
+    task_type: tiktok_warmup
+    params:
+      phase: auto
+      target_country: italy
+      duration_minutes: 40
+      smart_schedule:
+        timezone: "Europe/Rome"
+        activity_window: {start_hour: 9, end_hour: 23}
+        jitter_minutes: 12
+        weekend:
+          enabled: true
+          window: {start_hour: 10, end_hour: 23}
+          rate_multiplier: 0.7
+
+  # 智能关注 — 意大利下午 15:30 (活跃时段)
+  - name: tiktok_smart_follow
+    cron: "30 13 * * *"
+    task_type: tiktok_follow
+    params:
+      country: italy
+      language: italian
+      gender: male
+      min_age: 30
+      max_follows: 15
+      smart_schedule:
+        timezone: "Europe/Rome"
+        activity_window: {start_hour: 11, end_hour: 21}
+        jitter_minutes: 15
+        weekend:
+          enabled: false
+
+  # 回关聊天 — 意大利 12:00 (午间在线高峰)
+  - name: tiktok_chat_midday
+    cron: "0 10 * * *"
+    task_type: tiktok_chat
+    params:
+      max_chats: 10
+      smart_schedule:
+        timezone: "Europe/Rome"
+        activity_window: {start_hour: 11, end_hour: 14}
+        jitter_minutes: 8
+
+  # 回关聊天 — 意大利 21:00 (晚间在线高峰)
+  - name: tiktok_chat_evening
+    cron: "0 19 * * *"
+    task_type: tiktok_chat
+    params:
+      max_chats: 10
+      smart_schedule:
+        timezone: "Europe/Rome"
+        activity_window: {start_hour: 19, end_hour: 22}
+        jitter_minutes: 10
+
+  # 收件箱检查 + AI 自动回复 (每天三次)
+  - name: tiktok_inbox_check_morning
+    cron: "30 9 * * *"
+    task_type: tiktok_check_inbox
+    params:
+      auto_reply: true
+      smart_schedule:
+        timezone: "Europe/Rome"
+        activity_window: {start_hour: 10, end_hour: 22}
+        jitter_minutes: 5
+
+  - name: tiktok_inbox_check_afternoon
+    cron: "30 14 * * *"
+    task_type: tiktok_check_inbox
+    params:
+      auto_reply: true
+      smart_schedule:
+        timezone: "Europe/Rome"
+        activity_window: {start_hour: 10, end_hour: 22}
+        jitter_minutes: 5
+
+  - name: tiktok_inbox_check_evening
+    cron: "0 20 * * *"
+    task_type: tiktok_check_inbox
+    params:
+      auto_reply: true
+      smart_schedule:
+        timezone: "Europe/Rome"
+        activity_window: {start_hour: 10, end_hour: 23}
+        jitter_minutes: 8
+
+  # 自动跟进 — 检查需要follow-up的对话并发送 (每天两次)
+  - name: tiktok_follow_up_midday
+    cron: "0 11 * * 1-5"
+    task_type: tiktok_follow_up
+    params:
+      max_leads: 20
+      smart_schedule:
+        timezone: "Europe/Rome"
+        activity_window: {start_hour: 11, end_hour: 14}
+        jitter_minutes: 10
+        weekend:
+          enabled: false
+
+  - name: tiktok_follow_up_evening
+    cron: "30 19 * * 1-5"
+    task_type: tiktok_follow_up
+    params:
+      max_leads: 20
+      smart_schedule:
+        timezone: "Europe/Rome"
+        activity_window: {start_hour: 19, end_hour: 22}
+        jitter_minutes: 10
+        weekend:
+          enabled: false
+
+  # ★ P0 新增: 通讯录好友发现 — 每天一次 (意大利时间早上11点)
+  # 策略: 通讯录联系人回关率≈80%，远高于陌生人(20-25%)，优先处理
+  - name: tiktok_contact_discovery
+    cron: "0 9 * * *"
+    task_type: tiktok_contact_discovery
+    params:
+      max_friends: 15
+      auto_follow: true
+      auto_message: false    # 先关注，回关后走正常聊天流程
+      target_language: italian
+      smart_schedule:
+        timezone: "Europe/Rome"
+        activity_window: {start_hour: 10, end_hour: 20}
+        jitter_minutes: 15
+        weekend:
+          enabled: true
+          window: {start_hour: 10, end_hour: 19}
+
+  # ★ P1 新增: 通讯录同步到 LeadsStore — 每6小时同步一次（确保发现结果不丢失）
+  - name: contacts_sync_to_leads
+    cron: "0 */6 * * *"
+    task_type: contacts_sync_leads
+    params:
+      smart_schedule:
+        timezone: "Europe/Rome"
+        activity_window: {start_hour: 8, end_hour: 23}
+        jitter_minutes: 5
+
+  # ★ P3-2: 高分Lead优先触达 — 每4小时扫描一次高分lead并发DM
+  - name: tiktok_priority_outreach_morning
+    cron: "0 9 * * 1-5"        # 工作日 09:00 UTC (10:00 Italy)
+    task_type: tiktok_priority_outreach
+    params:
+      max_leads: 8
+      min_score: 50.0
+      smart_schedule:
+        timezone: "Europe/Rome"
+        activity_window: {start_hour: 9, end_hour: 22}
+        jitter_minutes: 10
+
+  - name: tiktok_priority_outreach_afternoon
+    cron: "0 14 * * *"          # 每天 14:00 UTC (15:00 Italy，峰值互动期)
+    task_type: tiktok_priority_outreach
+    params:
+      max_leads: 10
+      min_score: 45.0
+      smart_schedule:
+        timezone: "Europe/Rome"
+        activity_window: {start_hour: 9, end_hour: 22}
+        jitter_minutes: 15
+
+  - name: tiktok_priority_outreach_evening
+    cron: "0 18 * * *"          # 每天 18:00 UTC (19:00 Italy，晚间活跃期)
+    task_type: tiktok_priority_outreach
+    params:
+      max_leads: 8
+      min_score: 55.0           # 晚间门槛稍高，只打高价值lead
+      smart_schedule:
+        timezone: "Europe/Rome"
+        activity_window: {start_hour: 17, end_hour: 22}
+        jitter_minutes: 12
+        weekend:
+          enabled: true
+          window: {start_hour: 17, end_hour: 21}

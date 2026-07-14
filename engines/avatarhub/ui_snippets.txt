@@ -1,0 +1,107 @@
+=== cameras ===
+
+----
+@change="setCamera(selectedCamera)"
+                class="flex-1 text-xs py-1">
+          <option value="-1">-- 自动 --</option>
+          <template x-for="c in cameras" :key="c.index">
+            <option :value="c.index" x-text="c.label+' ('+c.resolution+')'"></option>
+          </template>
+        </select>
+        <button @click="loadCameras()" class="text-hub-muted text-xs hover:text-hub-blue px-1">⟳</button>
+      </di
+
+----
+除 ${ids.length} 条`,'success');
+      this.loadHistoryStats();
+    },
+
+    // 开播
+    streaming:false, streamSteps:[], mjpegOn:false, streamNonce:Date.now(),
+    cameras:[], selectedCamera:-1,
+    videoModal:false,  // 视频放大modal
+    toasts:[],           // 通知队列
+
+    // 导入/导出
+    importShow:false, importFile:null, importData:null,
+    importPreview:null, importMode:'skip', importLoading:false,
+    exportSelected:[], exportSele
+
+----
+tail}];
+      this.mjpegOn=false; this.streamNonce=Date.now();
+    },
+
+    // ── 摄像头 ──
+    async loadCameras() {
+      try {
+        const d=await fetch(HUB+'/cameras').then(r=>r.json());
+        this.cameras=d.cameras||[];
+      } catch(e){}
+    },
+
+    async setCamera(idx) {
+      try {
+        await fetch(HUB+'/realtime/set_camera',{method:'POST',
+          headers:{'Content-Type':'application/json'},body:JSON.stringify
+
+----
+eamNonce=Date.now();
+    },
+
+    // ── 摄像头 ──
+    async loadCameras() {
+      try {
+        const d=await fetch(HUB+'/cameras').then(r=>r.json());
+        this.cameras=d.cameras||[];
+      } catch(e){}
+    },
+
+    async setCamera(idx) {
+      try {
+        await fetch(HUB+'/realtime/set_camera',{method:'POST',
+          headers:{'Content-Type':'application/json'},body:JSON.stringify({index:idx})});
+        this.showToast(`摄
+
+----
+ate.now();
+    },
+
+    // ── 摄像头 ──
+    async loadCameras() {
+      try {
+        const d=await fetch(HUB+'/cameras').then(r=>r.json());
+        this.cameras=d.cameras||[];
+      } catch(e){}
+    },
+
+    async setCamera(idx) {
+      try {
+        await fetch(HUB+'/realtime/set_camera',{method:'POST',
+          headers:{'Content-Type':'application/json'},body:JSON.stringify({index:idx})});
+        this.showToast(`摄像头已切换至 #${
+
+----
+=== audio_inputs ===
+
+----
+=== audio_outputs ===
+
+----
+=== one_click_start ===
+
+----
+alse; }
+    },
+
+    // ── 一键开播 ──
+    async oneClickStart() {
+      this.streaming=true; this.streamSteps=[];
+      try {
+        const d=await fetch(HUB+'/api/one_click_start',{method:'POST',
+          headers:{'Content-Type':'application/json'},body:JSON.stringify({profile:this.active})}).then(r=>r.json());
+        this.streamSteps=d.steps||[];
+        if(d.ok){ this.streamNonce=Date.now(); this.mjpegOn=true; await this.rvcRefres
+
+----
+=== scrcpy ===

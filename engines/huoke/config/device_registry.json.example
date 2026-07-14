@@ -1,0 +1,16 @@
+{
+  "__doc__": "设备注册表模板。真实 device_registry.json 含设备硬件序列号/android_id 等指纹(PII)，已被 .gitignore 忽略、不入库。首次运行由系统按接入设备自动生成。下面为单条示例结构。",
+  "REPLACE_WITH_DEVICE_HW_SERIAL": {
+    "current_serial": "192.168.0.100:5555",
+    "previous_serials": [
+      "REPLACE_WITH_DEVICE_HW_SERIAL"
+    ],
+    "imei": "",
+    "hw_serial": "REPLACE_WITH_DEVICE_HW_SERIAL",
+    "android_id": "REPLACE_WITH_ANDROID_ID",
+    "model": "REPLACE_WITH_MODEL",
+    "number": 1,
+    "alias": "01号",
+    "created_at": "2026-01-01T00:00:00.000000"
+  }
+}

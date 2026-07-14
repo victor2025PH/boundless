@@ -1,0 +1,17 @@
+﻿notifications:
+  enabled: true
+  min_level: warning
+  # 设备掉线时推 Telegram（需配置下方 bot_token / chat_id）
+  device_disconnect_telegram: true
+  # 仅主控：某 Worker「adb 在线台数」较上一轮心跳减少时推送（汇总一条，非逐台）
+  worker_online_drop_telegram: true
+  telegram:
+    bot_token: '${BOT_TOKEN}'
+    chat_id: '5433982810'
+    # 额外投递目标（用户数字ID、@用户名、群 -100…）；每行一条亦可由前端写入数组
+    recipients: []
+    # 群邀请链接仅作备忘（t.me/+ 无法作为 chat_id 直接发）；请拉机器人入群后填群 ID
+    invite_link_notes: ''
+  webhook:
+    method: POST
+    url: ''

@@ -1,0 +1,351 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+shtools/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# pdm
+.pdm.toml
+__pypackages__/
+
+# PEP 582; used by PDM
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.env.local
+config/secrets.local.json
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# PyCharm
+.idea/
+*.iws
+out/
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# Telegram会话文件
+sessions/*.session
+sessions/*.session-journal
+!sessions/.gitkeep
+# 登录临时密钥文件（脚本用完即删；此处兜底防中断残留入库）
+code.txt
+2fa_password.txt
+# 账号注册表（含加密会话；运行时落地）
+config/account_registry.db
+config/account_registry.db-*
+
+# 协议账号下载的入站媒体（运行时落地，含用户内容，勿入库）
+src/web/static/protocol_media/
+
+# 日志 — 全目录 ignore（drafts.json / trigger_decisions.log / KB trace 可能含 PII）
+# 用 **/logs/ 覆盖根目录和任何子目录（如 config/logs/kb_direct_trace.jsonl）
+**/logs/*
+!**/logs/.gitkeep
+
+# 配置文件（不包含实际凭证）
+config/config.yaml
+# P1-1 接入向导写入的凭证 overlay（含密钥，绝不入库）
+config/config.local.yaml
+# 陪伴能力分阶段开启的开关审计 + 回滚快照（运行时产物）
+config/companion_capability_audit.jsonl
+config/companion_capability_last_snapshot.json
+
+# C0-1 授权：客户授权码 + 厂商私钥（切勿入库）
+config/license.key
+config/.vendor_license_private.pem
+*.vendor_license_private.pem
+
+# SQLite 数据库（所有变体，含 WAL/SHM/备份）
+*.db
+*.db-shm
+*.db-wal
+*.db.bak*
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+
+# Config 运行时产物 — 含设备 IP/序列号校准、配置历史快照、备份
+config/data/
+config/backups/
+config/snapshots/
+
+# Messenger RPA 截图 + replays（含他人对话）
+tmp_messenger_rpa/
+tmp_e2e_screens/
+tmp_screenshots/
+tmp_voice_notes/
+tmp_voice_replies/
+
+# 用户语音样本（PII：用户本人 .wav + consent 文件，不入库）
+voice_samples/
+tools/voice_samples/
+
+# 声纹克隆参考音频（PII/版权：真人声样本，如 lin_xiaoyu.wav / liu_dehua.wav / 刘德华声音台词.wma）
+config/voice_refs/*.wav
+config/voice_refs/*.wma
+config/voice_refs/*.mp3
+config/voice_refs/*.m4a
+!config/voice_refs/.gitkeep
+*.wma
+
+# 账号自身/联系人头像（运行时下载的真实头像 = PII，勿入库）
+src/web/static/persona_avatars/
+
+# Messenger web 登录调试转储（截图/DOM/请求 dump 可能含 session token/PII）
+services/messenger-web/_*.png
+services/messenger-web/_*.json
+services/*/_*.png
+services/*/_dom_dump.json
+services/*/_requests_dump.json
+
+# scripts 下临时脚本（一次性，非入库）
+scripts/_tmp_*.py
+
+# ML 模型完整目录（whisper 等大权重，216M 级别）
+models/
+
+# 一次性调试脚本（不应入库）
+check_deferred.py
+check_deferred2.py
+check_tables.py
+check_vz.py
+tmp_check_db.py
+
+# 不规则后缀备份（不命中 *.bak 通配）
+*.bak.*
+
+# Temp 缓存
+temp/
+
+# ML 模型权重
+models/**/*.pt
+models/**/*.bin
+models/**/*.onnx
+models/**/*.pth
+models/**/*.safetensors
+
+# APK 二进制
+*.apk
+
+# Claude Code 运行时状态
+.claude/
+.claude/scheduled_tasks.lock
+.claude/**/*.log
+
+# 数据文件
+data/
+
+# 临时文件
+*.tmp
+*.temp
+_package_out/
+
+# 根目录一次性 RPA/ADB 调试残留（截图、UI dump、临时探针脚本）
+/tmp_*
+/_*.py
+# 根目录临时分析/转储产物（i18n 扫描 _html_*.json/_js_*.json、探针 dump、临时消息文件等）
+/_*.json
+/_*.txt
+/dbg_*.py
+/investigate_*.py
+/probe_*.py
+/monitor_open_thread_test.ps1
+/test_*.png
+/ij8_live.png
+/wa_*.png
+/*.xml
+/*.wav
+/*.mp3
+tools/tmp_*.py
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 备份文件
+*.bak
+*.bak_*
+*.backup
+*.old
+*_recovered.py
+# 不规则后缀的配置/DB 备份（含密钥或运行时数据，绝不入库）——
+# 如 config/config.yaml.bak_preBeatrice、config/inbox.db-shm.bak_dedup2_20260629
+config/*.yaml.bak*
+config/*.yml.bak*
+*.db.bak*
+*.db-shm.bak*
+*.db-wal.bak*
+*.sqlite.bak*
+# 一次性登录/会话 HTML 转储（可能含敏感会话数据）
+login_dump*.html
+
+# 密钥文件
+*.pem
+*.key
+*.crt
+*.csr
+
+# 压缩文件
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+
+# 文档
+*.pdf
+*.doc
+*.docx
+*.xls
+*.xlsx
+
+# Next.js 站点源文件（website/lib）— 覆盖上方通用 Python `lib/` 忽略，整目录纳入版本管理。
+# website 内的构建产物 / 依赖（.next、node_modules、out）由 website/.gitignore 负责忽略。
+!website/lib/
+!website/lib/**
+
+# 桌面后端 sidecar 构建脚本入库（覆盖上方通用 `build/` 忽略；构建产物仍忽略——
+# PyInstaller workpath `desktop/build/build/` 命中通用 `build/`，产出目录单列如下）
+!desktop/build/
+desktop/build/backend-dist/
+config/notify_webhooks.json
+
+# ── 语音运行产物 / 参考素材（2026-07-12 补：防预渲染音频与名人声样本误入库）──
+# 预渲染 TTS 音频产物：assets/voices/<persona>/prerendered/*.ogg+txt（运行时生成，非源码）
+assets/voices/*/prerendered/
+
+# 人设相册媒体（运行时运营数据：face_ref/定妆照/上传图，元数据在 persona_media.db；
+# 可经 tools/persona_photoshoot.py + Studio 重建，且常超 pre-commit 2MB 限）
+assets/persona_media/
+
+# 出图临时产物（SelfieProvider out_dir / 验证图 / 一次性调试脚本与图）
+tmp_selfies/
+tmp/
+# 角色 LoRA 管线机器产物：训练数据集（生成图，大/含人脸）+ 选优/临时评测图；
+# 部署写回的机器注册表（引用本机训练文件，机器本地，勿入库——同 config.local.yaml 层）。
+datasets/
+tmp_lora_eval/
+config/persona_lora.json
+# 声纹克隆参考台词文本：配套已忽略的 *.wav/*.wma，含名人/版权敏感（如 liu_dehua_ref.txt）
+config/voice_refs/*.txt
+# 注：config/prerender_lines/ 是预渲染「台词配置」（输入），属源码/配置，保留入库，勿忽略。

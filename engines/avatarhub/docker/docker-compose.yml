@@ -1,0 +1,121 @@
+# ══════════════════════════════════════════════════════════════════════
+#  AvatarHub · Linux GPU 推理面 docker-compose
+#
+#  对应《云服务与远程代部署方案.md》第三节的云 GPU 工作池：把四个纯 HTTP GPU
+#  微服务（克隆音 TTS / 语音转文字 / 口型合成 / 换脸）搬上任意 Linux+NVIDIA 机器
+#  （AutoDL / RunPod / 客户机房），Windows 中枢(Hub)通过 SVC_* 环境变量指到这里。
+#  Windows 桌面交付不受影响——这是给「无 N 卡客户 / 云端扩容」的第二条腿。
+#
+#  前置：NVIDIA 驱动 + nvidia-container-toolkit（nvidia-smi 在宿主可用）。
+#  用法（项目根同步到 Linux 机器后，在项目根执行）：
+#    docker compose -f docker/docker-compose.yml build          # 构建（首次 ~20min）
+#    AVATARHUB_SERVICE_TOKEN=你的令牌 docker compose -f docker/docker-compose.yml up -d
+#    docker compose -f docker/docker-compose.yml ps             # 健康态
+#  只起子集（如云变声+云翻译只需 TTS+STT）：
+#    docker compose -f docker/docker-compose.yml up -d fish_tts stt
+#
+#  Windows 中枢侧接入（secrets.bat 或 config.json）：
+#    set SVC_FISH_TTS=http://<linux机IP>:7855
+#    set SVC_STT=http://<linux机IP>:7854
+#    set SVC_LIPSYNC=http://<linux机IP>:8090
+#    set SVC_FACESWAP=http://<linux机IP>:8000
+# ══════════════════════════════════════════════════════════════════════
+
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: 1
+            capabilities: [gpu]
+
+x-common: &common
+  restart: unless-stopped
+  # 项目根挂进容器（代码+模型+refs 同一目录形态，与 Windows 侧一致）。
+  # 模型/源码树按 README 放在项目根下（fish-speech/、models/、checkpoints/ …）。
+  volumes:
+    - ..:/app
+    - hf_cache:/root/.cache/huggingface
+  environment:
+    # GPU 服务面鉴权（与 Windows 侧 service_auth 同一开关；空=局域网免鉴权）
+    - AVATARHUB_SERVICE_TOKEN=${AVATARHUB_SERVICE_TOKEN:-}
+    - HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}
+  # 宿主口径的健康检查与 app_config.SERVICES 的 health 路径一致
+  networks: [avatarhub]
+
+services:
+  fish_tts:
+    <<: [*common, *gpu]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.service
+      args: { ENV_NAME: fishspeech, PYVER: "3.10" }
+    image: avatarhub/fishspeech
+    command: [fish_speech_server.py]
+    ports: ["7855:7855"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7855/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 120s
+
+  stt:
+    <<: [*common, *gpu]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.service
+      args: { ENV_NAME: cosytts, PYVER: "3.10" }
+    image: avatarhub/cosytts
+    command: [stt_server.py]
+    ports: ["7854:7854"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7854/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 90s
+
+  lipsync:
+    <<: [*common, *gpu]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.service
+      args: { ENV_NAME: musethepeak, PYVER: "3.10" }
+    image: avatarhub/musethepeak
+    command: [lipsync_server.py]
+    ports: ["8090:8090"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 30
+      start_period: 180s
+
+  faceswap:
+    <<: [*common, *gpu]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.service
+      args: { ENV_NAME: facefusion, PYVER: "3.10" }
+    image: avatarhub/facefusion
+    command: [faceswap_api.py]
+    ports: ["8000:8000"]
+    environment:
+      - AVATARHUB_SERVICE_TOKEN=${AVATARHUB_SERVICE_TOKEN:-}
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}
+      # 云端离线换脸通常无需人脸增强大模型常驻，按需打开：
+      - FACESWAP_LOAD_ENHANCE=${FACESWAP_LOAD_ENHANCE:-1}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 90s
+
+networks:
+  avatarhub: {}
+
+volumes:
+  hf_cache: {}

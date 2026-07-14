@@ -1,0 +1,8 @@
+{
+  "worker-03": {
+    "host_name": "Worker-03",
+    "host_ip": "192.168.0.103",
+    "port": 8000,
+    "last_heartbeat": 1775392727.945441
+  }
+}

@@ -1,0 +1,281 @@
+# ───────────────────────────────────────────────────────────────────────
+# Facebook 养号 Playbook（2026-04-21 P1-1 新建）
+#
+# 作用：把 browse_feed / add_friend / group_engage / check_inbox 等作业的
+# 节奏、停留分布、点赞率、文案、阈值集中到一份 YAML，**热加载**。
+#
+# 改完保存 → 下一次任务直接生效，不需要重启 server（走 _yaml_cache.YamlCache）。
+#
+# 设计原则：
+#   * phase 维度 (cold_start/growth/mature/cooldown) 是一等公民，
+#     每档都可以覆盖 defaults；未覆盖的字段继承 defaults。
+#   * 所有时间单位统一 ms（毫秒），概率统一用小数 0~1。
+#   * _cap 类型字段（hard_cap / max_*）禁用时设 0 即可。
+#
+# 运行时读取：src.host.fb_playbook.load_playbook()
+# ───────────────────────────────────────────────────────────────────────
+
+version: 1
+updated_at: "2026-04-21"
+
+# ── 默认参数（等同旧 FB_BROWSE_DEFAULTS，略加业务语义）─────────────────
+defaults:
+  browse_feed:
+    # 每分钟滑多少屏（真人 feed ≈ 3-6）
+    scroll_per_min: 4
+    # 每屏正常停留 [ms]（下限, 上限）
+    short_wait_ms: [2000, 8000]
+    # 长停留（模拟看视频/长图文）的概率 + 时长区间
+    video_dwell_prob: 0.15
+    video_dwell_ms: [8000, 20000]
+    # 点赞概率（真人 feed ≈ 1-3%；P0 统一到 0.05，这里按 phase 再细调）
+    like_probability: 0.05
+    # 下拉刷新概率（只在前 1/4 阶段尝试）
+    pull_refresh_prob: 0.08
+    # 安全上限：一次任务最多滑多少屏，防配置失手
+    max_scrolls_hard_cap: 400
+
+  # ── 加好友 / 好友请求（P2-UI Sprint 新增）────────────────────────────
+  # 默认值面向"日本 37-60 女性"客群：被举报阈值低 → 更保守。
+  # 其他客群想激进，可在对应 persona-tier 里覆盖 phase=mature。
+  add_friend:
+    # 单次任务最多发送好友请求数
+    max_friends_per_run: 5
+    # 每号每日好友请求上限（硬上限，超过直接拒）
+    daily_cap_per_account: 15
+    # 两次请求之间的间隔（秒）[下限, 上限]
+    inter_request_sec: [180, 420]
+    # 是否强制附验证语（日本礼节：没验证语 = 秒拒 / 可能被举报）
+    require_verification_note: true
+    # 命中风控后的退避时间（分钟）
+    backoff_after_risk_min: 120
+
+  # ── 群组浏览 + 评论互动 ──────────────────────────────────────────────
+  group_engage:
+    # 一次进入的帖子数
+    max_posts: 5
+    # 评论概率（日本中年女性场景很低，避免被投诉）
+    comment_probability: 0.15
+    # 点赞概率（日本点赞文化活跃）
+    like_probability: 0.40
+    # 每帖停留 [ms]
+    post_dwell_ms: [6000, 18000]
+    # 安全上限
+    max_comments_per_run: 3
+
+  # ── 群成员打招呼 ──────────────────────────────────────────────────────
+  extract_members:
+    max_members: 20
+    # 每条成员间的间隔（秒），模拟真人滑动
+    inter_member_sec: [8, 18]
+    # L1 预筛门槛（低于该分直接丢弃，省后续 L2 VLM 成本）
+    l1_min_score: 30
+
+  # ── 加好友后打招呼（方案 A2: 在 profile 页直接点 Message）──────────
+  # 新设计动机：刚加的好友在 Messenger 里搜不到，必须在 profile 页点 "Message"
+  # 直接开对话；且 profile 按钮 = 真人操作路径（先看资料再打招呼），
+  # 风控模型比"切到 Messenger App → 搜名字"更安全。
+  # **默认值面向日本女性保守档**（开场 DM 很敏感，易被举报）。
+  send_greeting:
+    # 单次任务最多发送打招呼数
+    max_greetings_per_run: 3
+    # 每号每日打招呼上限（硬上限，与 friend_request daily_cap 解耦独立计）
+    daily_cap_per_account: 8
+    # 两条打招呼之间的间隔 [sec_lo, sec_hi]
+    inter_greeting_sec: [240, 600]
+    # 加好友成功后先等待多久再点 Message（模拟"看了下资料再想起打个招呼"）
+    # 2026-04-24 v2: 砍 [8,18] → [3,6], L2 VLM 阶段已占 50-90s 足够模拟真人阅读
+    post_add_friend_wait_sec: [3, 6]
+    # 进入对话页后停留多久再输入（像真人打字前的停顿）
+    # 2026-04-24 v2: 砍 [3,7] → [1,3]
+    think_before_type_sec: [1, 3]
+    # 触发概率（1.0 = 必发；降低可做 A/B 实验，如 0.7 只对 70% 样本发）
+    enabled_probability: 1.0
+    # 文案为空时是否强制走 persona 本地化模板（关闭则跳过发送，防发错语言）
+    require_persona_template: true
+    # 2026-04-24 v3: AI 动态生成个性化 greeting (ChatBrain + qwen)
+    #   true: 每次调 ChatBrain 按 peer_name + persona 生成不重复的日文 greeting
+    #         (降重复率, 避 FB content_blocked 撞 text_hash)
+    #   false: 从 chat_messages.yaml.jp.greeting_messages 8 条模板随机选
+    #          (速度快, 无 LLM 成本, 但多次发会撞同 text_hash)
+    #   默认 false 先稳定. 真机环境确认 ChatBrain 稳定后再 opt-in.
+    ai_dynamic_greeting: false
+
+    # 2026-04-23: profile 页无 Message 按钮时,是否降级 Messenger App 路径
+    #   - false: 直接放弃,记录 reason=no_message_button
+    #   - true(Phase 7 起默认): 调 send_message() 切 Messenger + 搜名字 + 发消息
+    # 2026-04-24 启用: 真机验证 AdbFallbackDevice unicode 修复后链路已通,
+    # 剩下风险 (Messenger 搜不到 / XSpace 弹窗) 会被生产代码的 §7.6 MessengerError
+    # 分流矩阵 + device_section_lock("messenger_active") 容错
+    allow_messenger_fallback: true
+
+  # ── 收件箱 / Messenger 回复 ─────────────────────────────────────────
+  check_inbox:
+    # 一次最多处理多少条对话（Messenger 主 inbox）
+    max_conversations: 15
+    # 一次最多扫多少条陌生人请求（Message Requests / Friend Requests）
+    # 与 max_conversations 语义不同：前者是已知对话，后者是陌生人入口
+    max_requests: 15
+    # 自动回复开关
+    auto_reply: true
+    # 两条回复间的思考时间（秒），防"秒回"看起来像机器人
+    reply_think_sec: [12, 40]
+    # 单对话最大来回轮数（避免无限拉锯）
+    max_turns_per_conv: 3
+
+  # 风控冷却阈值（独立于 task_execution_policy.yaml 的 Gate 阈值，
+  # 这里是"自动迁 phase→cooldown"的门槛；Gate 那边决定要不要拒任务）
+  risk:
+    cooldown_trigger_24h: 3
+    cooldown_min_hours: 24
+    cooldown_clear_clean_hours: 48
+
+# ── 按账号阶段覆盖：cold_start / growth / mature / cooldown ──────────
+# 未在此列出的字段回退到 defaults.browse_feed 里对应值。
+phases:
+  cold_start:
+    # 新号：慢节奏、基本不点赞、多停留
+    # 所有"主动动作类"（加好友/评论/提取）全部拒绝或降到最低，
+    # 只做纯消费型（浏览）。
+    browse_feed:
+      scroll_per_min: 2
+      short_wait_ms: [3000, 10000]
+      video_dwell_prob: 0.22
+      video_dwell_ms: [10000, 25000]
+      like_probability: 0.01
+      pull_refresh_prob: 0.02
+    add_friend:
+      max_friends_per_run: 0        # 新号禁止加好友
+      daily_cap_per_account: 0
+    send_greeting:
+      max_greetings_per_run: 0      # 新号禁止打招呼（add_friend 已禁 → 这里也必 0）
+      daily_cap_per_account: 0
+      enabled_probability: 0.0
+    group_engage:
+      max_posts: 3
+      comment_probability: 0.0      # 新号禁止评论
+      like_probability: 0.15
+      max_comments_per_run: 0
+    extract_members:
+      max_members: 0                # 新号禁止提取
+    check_inbox:
+      max_conversations: 5          # 只被动收消息
+      max_requests: 5               # 陌生人请求也限制
+      auto_reply: false             # 新号不自动回复（人工审）
+
+  growth:
+    # 养号 3-7 天，可以接近真人
+    browse_feed:
+      scroll_per_min: 4
+      short_wait_ms: [2000, 8000]
+      video_dwell_prob: 0.15
+      video_dwell_ms: [8000, 20000]
+      like_probability: 0.04
+      pull_refresh_prob: 0.06
+    add_friend:
+      max_friends_per_run: 3
+      daily_cap_per_account: 8
+      inter_request_sec: [300, 600]
+    send_greeting:
+      max_greetings_per_run: 2      # growth 号每次任务最多 2 个打招呼
+      daily_cap_per_account: 4      # 每日硬上限 4
+      inter_greeting_sec: [360, 720]
+      enabled_probability: 0.8      # 20% 不发保持多样性
+      # 2026-04-24 v4: growth AI 动态 greeting 默认启用
+      # F2 由紀子 2026-04-24 真机 PASS: ChatBrain→kana→Messenger 发送成功,
+      # 每条 greeting LLM 独生, 100% 唯一, 大幅降 FB content_blocked 风险.
+      # LLM 失败自动 fallback 到静态 8 模板, 主流程不阻断.
+      ai_dynamic_greeting: true
+    group_engage:
+      max_posts: 4
+      comment_probability: 0.08
+      like_probability: 0.30
+      max_comments_per_run: 2
+    extract_members:
+      max_members: 12
+    check_inbox:
+      max_conversations: 10
+      max_requests: 10
+      auto_reply: true
+
+  mature:
+    # 成熟号，可稍激进（但日本女性档仍低于通用激进档）
+    browse_feed:
+      scroll_per_min: 5
+      short_wait_ms: [1500, 6000]
+      video_dwell_prob: 0.12
+      video_dwell_ms: [6000, 15000]
+      like_probability: 0.06
+      pull_refresh_prob: 0.08
+    add_friend:
+      max_friends_per_run: 5
+      daily_cap_per_account: 15
+      inter_request_sec: [180, 420]
+    send_greeting:
+      max_greetings_per_run: 3      # 成熟号单次最多 3 个
+      daily_cap_per_account: 8      # 日硬上限 8（仍低于 add_friend 的 15，保留余量）
+      inter_greeting_sec: [240, 600]
+      enabled_probability: 1.0
+      ai_dynamic_greeting: true     # 2026-04-24 v4: 成熟号也 AI 动态 greeting
+    group_engage:
+      max_posts: 6
+      comment_probability: 0.18
+      like_probability: 0.45
+      max_comments_per_run: 4
+    extract_members:
+      max_members: 25
+    check_inbox:
+      max_conversations: 20
+      max_requests: 20
+      auto_reply: true
+
+  cooldown:
+    # 冷却中：仍允许极轻量浏览（手动触发可过），其他所有动作全部归零
+    browse_feed:
+      scroll_per_min: 1
+      short_wait_ms: [5000, 15000]
+      video_dwell_prob: 0.30
+      video_dwell_ms: [15000, 40000]
+      like_probability: 0.0
+      pull_refresh_prob: 0.0
+      # 冷却期一次任务最多滑多少屏（防用户误触发长任务）
+      max_scrolls_hard_cap: 30
+    add_friend:
+      max_friends_per_run: 0
+      daily_cap_per_account: 0
+    send_greeting:
+      max_greetings_per_run: 0      # 冷却期禁止任何主动打招呼
+      daily_cap_per_account: 0
+      enabled_probability: 0.0
+    group_engage:
+      max_posts: 0
+      comment_probability: 0.0
+      like_probability: 0.0
+      max_comments_per_run: 0
+    extract_members:
+      max_members: 0
+    check_inbox:
+      max_conversations: 5          # 冷却期仍允许最小量收件防 DM 错过
+      max_requests: 3               # 冷却期几乎不看陌生人请求
+      auto_reply: false
+
+# ── 阶段迁移规则（供 src.host.fb_account_phase 使用）────────────────
+# 规则顺序：优先级从上到下，首条匹配即触发（cooldown 除外，总是优先检查）。
+phase_transitions:
+  # 任意 phase → cooldown：24h 风控计数达到阈值
+  to_cooldown:
+    min_risk_count_24h: 3
+
+  # cooldown → cold_start：距最后一次风控事件超过 X 小时 且 count_24h=0
+  cooldown_to_cold_start:
+    min_clean_hours: 48
+
+  # cold_start → growth：累计滑动 ≥ N 屏 且 账号年龄 ≥ M 小时 且 0 风控
+  cold_start_to_growth:
+    min_total_scrolls: 200
+    min_age_hours: 24
+
+  # growth → mature：累计 ≥ N 屏 + 账号年龄 ≥ M 天
+  growth_to_mature:
+    min_total_scrolls: 2000
+    min_age_days: 7

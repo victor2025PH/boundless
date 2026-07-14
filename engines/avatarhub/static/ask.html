@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>向数字人提问 · 无界科技 BOUNDLESS</title>
+<link rel="icon" type="image/svg+xml" href="/static/icon.svg"/>
+<link rel="stylesheet" href="/static/brand.css"/>
+<script src="/static/brand.js"></script>
+<style>
+  /* 收敛到全站品牌令牌（brand.css 单一真相）：主色/语义色随白标联动，不再各页一套色。 */
+  :root{ --bg:var(--bd-bg); --card:#141b2d; --bord:#26324a; --txt:#eaf1fb; --mut:#8595ad;
+         --acc:var(--bd-acc); --ok:var(--bd-ok); --warn:var(--bd-warn); --err:var(--bd-danger); }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bd-bg);background-image:var(--bd-glow);color:var(--txt);
+       font-family:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+       min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:24px 16px;}
+  .wrap{width:100%;max-width:460px;}
+  h1{font-size:20px;margin:8px 0 2px;font-weight:700;}
+  .sub{color:var(--mut);font-size:13px;margin-bottom:18px;}
+  .card{background:var(--card);border:1px solid var(--bord);border-radius:16px;padding:18px;}
+  label{display:block;font-size:12px;color:var(--mut);margin:0 0 6px;}
+  input,textarea{width:100%;background:#0c1322;border:1px solid var(--bord);color:var(--txt);
+      border-radius:10px;padding:12px;font-size:15px;font-family:inherit;outline:none;}
+  input:focus,textarea:focus{border-color:var(--acc);}
+  textarea{resize:none;height:110px;margin-bottom:4px;}
+  .count{text-align:right;font-size:12px;color:var(--mut);margin:2px 2px 12px;}
+  button{width:100%;background:var(--acc);color:#fff;border:0;border-radius:12px;padding:14px;
+      font-size:16px;font-weight:600;cursor:pointer;transition:.15s;}
+  button:active{transform:scale(.98);}
+  button:disabled{opacity:.5;cursor:not-allowed;}
+  .msg{margin-top:14px;padding:12px 14px;border-radius:10px;font-size:14px;display:none;}
+  .msg.ok{display:block;background:#22c55e1a;border:1px solid #22c55e55;color:#9ff0bf;}
+  .msg.err{display:block;background:#f055601a;border:1px solid #f0556055;color:#ffb3bd;}
+  .field{margin-bottom:14px;}
+  .mine{margin-top:20px;}
+  .mine h2{font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;margin:0 0 8px;}
+  .q{background:#0c1322;border:1px solid var(--bord);border-radius:10px;padding:10px 12px;
+     font-size:13px;margin-bottom:8px;color:#cdd9ee;}
+  .q .st{font-size:12px;color:var(--mut);margin-top:4px;}
+  .q .st.answered{color:var(--ok);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎙 向数字人提问</h1>
+  <div class="sub">你的问题会进入主播的提问队列，被采纳后数字人会回答你。</div>
+  <div class="card">
+    <div class="field">
+      <label for="name">昵称（可选）</label>
+      <input id="name" maxlength="24" placeholder="观众">
+    </div>
+    <div class="field" style="margin-bottom:0">
+      <label for="text">你的问题</label>
+      <textarea id="text" maxlength="200" placeholder="想问点什么？"></textarea>
+      <div class="count"><span id="cnt">0</span>/200</div>
+    </div>
+    <button id="send">提交问题</button>
+    <div class="msg" id="msg" role="status" aria-live="polite"></div>
+  </div>
+  <div class="mine" id="mineBox" style="display:none">
+    <h2>我提交的</h2>
+    <div id="mine"></div>
+  </div>
+  <div class="mine" id="hotBox" style="display:none">
+    <h2>大家在问 · 点 ♥ 帮 TA 顶上去</h2>
+    <div id="hot"></div>
+  </div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const KEY='ah_my_questions';
+let myQ=JSON.parse(localStorage.getItem(KEY)||'[]');
+
+$('text').addEventListener('input',()=>{ $('cnt').textContent=$('text').value.length; });
+
+function setMsg(t,cls){ const m=$('msg'); m.textContent=t; m.className='msg '+cls; }
+
+async function send(){
+  const text=$('text').value.trim();
+  const name=$('name').value.trim();
+  if(!text){ setMsg('请输入问题','err'); return; }
+  $('send').disabled=true; setMsg('提交中…','');
+  try{
+    const r=await fetch('/api/audience/ask',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text,name})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){ setMsg(d.detail||d.reason||('提交失败 '+r.status),'err'); $('send').disabled=false; return; }
+    setMsg('✅ 已提交！当前排在第 '+(d.position||1)+' 位，请留意数字人回答。','ok');
+    myQ.unshift({id:d.id,text,ts:Date.now(),status:'pending'});
+    myQ=myQ.slice(0,10); localStorage.setItem(KEY,JSON.stringify(myQ));
+    $('text').value=''; $('cnt').textContent='0';
+    renderMine(); refreshStatus();
+  }catch(e){ setMsg('网络错误，请重试','err'); }
+  $('send').disabled=false;
+}
+$('send').addEventListener('click',send);
+
+function renderMine(){
+  if(!myQ.length){ $('mineBox').style.display='none'; return; }
+  $('mineBox').style.display='block';
+  $('mine').innerHTML=myQ.map(q=>{
+    const st=q.status==='answered'?'<span class="st answered">✓ 已回答</span>'
+            :q.status==='dismissed'?'<span class="st">已跳过</span>'
+            :'<span class="st">⏳ 排队中</span>';
+    return '<div class="q">'+q.text.replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))+st+'</div>';
+  }).join('');
+}
+
+async function refreshStatus(){
+  if(!myQ.some(q=>q.status==='pending')) return;
+  try{
+    const d=await (await fetch('/api/audience/questions?status=answered&limit=100')).json();
+    const ansIds=new Set((d.questions||[]).map(q=>q.id));
+    let changed=false;
+    myQ.forEach(q=>{ if(q.status==='pending' && ansIds.has(q.id)){ q.status='answered'; changed=true; } });
+    if(changed){ localStorage.setItem(KEY,JSON.stringify(myQ)); renderMine(); }
+  }catch(e){}
+}
+
+renderMine();
+setInterval(refreshStatus,5000);
+
+// ── 热门提问 + 点赞帮顶 ──────────────────────────────
+const LK='ah_my_likes';
+let liked=new Set(JSON.parse(localStorage.getItem(LK)||'[]'));
+const esc=s=>(s||'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+async function like(id){
+  if(liked.has(id)) return;
+  liked.add(id); localStorage.setItem(LK,JSON.stringify([...liked])); renderHot(_hot);
+  try{ await fetch('/api/audience/like',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); }catch(e){}
+  refreshHot();
+}
+let _hot=[];
+function renderHot(list){
+  _hot=list||[];
+  if(!_hot.length){ $('hotBox').style.display='none'; return; }
+  $('hotBox').style.display='block';
+  $('hot').innerHTML=_hot.map(q=>{
+    const on=liked.has(q.id);
+    return '<div class="q" style="display:flex;align-items:center;gap:10px">'+
+      '<div style="flex:1">'+esc(q.text)+'<div class="st">— '+esc(q.name||'观众')+'</div></div>'+
+      '<button data-like="'+q.id+'" '+(on?'disabled':'')+' style="width:auto;padding:8px 12px;font-size:14px;'+
+        'background:'+(on?'#26324a':'#ff6b8b')+';border-radius:10px">♥ '+(q.likes||0)+'</button></div>';
+  }).join('');
+  $('hot').querySelectorAll('[data-like]').forEach(b=>b.addEventListener('click',()=>like(parseInt(b.dataset.like,10))));
+}
+async function refreshHot(){
+  try{ const d=await (await fetch('/api/audience/questions?status=pending&order=likes&limit=12')).json();
+    if(d.enabled===false){ $('hotBox').style.display='none'; return; }
+    renderHot(d.questions||[]);
+  }catch(e){}
+}
+refreshHot(); setInterval(refreshHot,4000);
+</script>
+</body>
+</html>

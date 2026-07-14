@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<!-- 单一前端 App 壳(三层架构 §6)。唯一一份业务 UI,网页与桌面壳 iframe 共用。
+     入口参数:?theme=light|dark · ?cid=<conversation_id> · #token=<bearer>
+     驱动:postMessage({type:'cp-context', conversationId, chatKey, platform, accountId, caps?, customer?, autopilotOn?}) 由宿主壳喂入会话。
+     宿主指令:postMessage({type:'cp-cmd', cmd:'focus-draft'|'focus-voice'|'set-tab', tab?}) 供壳浮钮深链。
+     回吐宿主:cp-ready / cp-fill / cp-send / cp-autopilot。
+     单一来源 shared/copilot/,网页挂 /copilot/app.html。 -->
+<html lang="zh" data-cp-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Copilot</title>
+  <link rel="stylesheet" href="/copilot/tokens.css" />
+  <link rel="stylesheet" href="/copilot/theme-dark.css" />
+  <link rel="stylesheet" href="/copilot/theme-light.css" />
+  <style>
+    html, body { margin: 0; height: 100%; background: var(--cp-bg, #f8fafc); }
+    body { font-family: 'Inter','PingFang SC','Microsoft YaHei',system-ui,sans-serif;
+           color: var(--cp-text, #1e293b); display: flex; flex-direction: column; }
+    .cp-app { flex: 1; min-height: 0; overflow-y: auto; padding: var(--cp-gap, 10px);
+              display: flex; flex-direction: column; gap: var(--cp-gap, 10px); }
+    .cp-app > h4, .cp-sec > h4 { font-size: var(--cp-fs-sm, 12px); color: var(--cp-text-dim, #64748b);
+                   margin: 2px 0; text-transform: uppercase; letter-spacing: .04em; }
+    .cp-app-empty { color: var(--cp-text-tiny, #94a3b8); font-size: var(--cp-fs-sm, 12px);
+                    text-align: center; padding: 24px 8px; }
+    /* 三 tab(回复/洞察/客户),与网页/桌面同款 */
+    .cp-tabs { display: flex; gap: 4px; flex-shrink: 0; border-bottom: 1px solid var(--cp-border, #e2e8f0);
+               padding: 0 0 0 0; position: sticky; top: 0; background: var(--cp-bg, #f8fafc); z-index: 2; }
+    .cp-tab { flex: 1; font: inherit; font-size: 12px; cursor: pointer; padding: 8px 0; border: none;
+              background: transparent; color: var(--cp-text-dim, #64748b); border-bottom: 2px solid transparent;
+              transition: color .15s, border-color .15s; white-space: nowrap; }
+    .cp-tab.active { color: var(--cp-accent, #6366f1); border-bottom-color: var(--cp-accent, #6366f1); font-weight: 600; }
+    .cp-sec { display: none; flex-direction: column; gap: var(--cp-gap, 10px); }
+    .cp-sec.active { display: flex; }
+    /* 全自动托管开关(仅宿主声明 caps.autopilot 时显示) */
+    .cp-auto-bar { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px;
+                   background: var(--cp-bg-soft, #f1f5f9); border: 1px solid var(--cp-border, #e2e8f0); font-size: 12px; }
+    .cp-auto-bar label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    .cp-auto-status { margin-left: auto; font-size: 11px; color: var(--cp-text-tiny, #94a3b8); }
+    .cp-auto-status.on { color: var(--cp-accent, #6366f1); font-weight: 600; }
+    /* AI 对话分析 */
+    .cp-analyze-btn { font: inherit; font-size: 12px; cursor: pointer; padding: 6px 10px; border-radius: 8px;
+                      border: 1px solid var(--cp-accent, #6366f1); background: var(--cp-accent, #6366f1); color: #fff; }
+    .cp-analyze-btn[disabled] { opacity: .6; cursor: default; }
+    .cp-analyze-box { font-size: 12px; line-height: 1.5; }
+    .cp-summary { background: var(--cp-bg-soft, #f1f5f9); border-left: 3px solid var(--cp-accent, #6366f1);
+                  padding: 6px 8px; border-radius: 4px; margin-bottom: 6px; color: var(--cp-text, #1e293b); }
+    .cp-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+    .cp-chip { font-size: 11px; padding: 2px 7px; border-radius: 10px; background: var(--cp-bg-soft, #f1f5f9);
+               color: var(--cp-text-dim, #64748b); }
+    .cp-chip.danger { background: rgba(239,68,68,.14); color: #dc2626; }
+    .cp-rep { border: 1px solid var(--cp-border, #e2e8f0); border-radius: 8px; padding: 7px 9px; margin-bottom: 5px; }
+    .cp-rep .it-meta { font-size: 10px; color: var(--cp-text-tiny, #94a3b8); margin-bottom: 3px; }
+    .cp-rep-acts { display: flex; gap: 6px; margin-top: 5px; }
+    .cp-rep-acts button { font: inherit; font-size: 11px; cursor: pointer; padding: 3px 8px; border-radius: 6px;
+                          border: 1px solid var(--cp-border, #e2e8f0); background: var(--cp-bg-soft, #f1f5f9);
+                          color: var(--cp-text, #1e293b); }
+    .cp-cust-row { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0;
+                   border-bottom: 1px solid var(--cp-border, #e2e8f0); font-size: 12px; }
+    .cp-cust-row .k { color: var(--cp-text-dim, #64748b); }
+    .cp-cust-row .v { color: var(--cp-text, #1e293b); text-align: right; word-break: break-all; }
+    /* 可折叠卡片（与网页 unified_inbox 同款；核心逻辑复用 sidebar-chrome.createCardController） */
+    .cp-card { border: 1px solid var(--cp-border, #e2e8f0); border-radius: 10px; background: var(--cp-surface, #fff); overflow: hidden; }
+    .cp-card-hd { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px;
+                  background: var(--cp-bg-soft, #f1f5f9); border: 0; cursor: pointer; font: inherit; text-align: left;
+                  color: var(--cp-text, #1e293b); transition: background .12s; }
+    .cp-card-hd:hover { filter: brightness(0.98); }
+    .cp-card-ttl { flex: 1; min-width: 0; font-size: 12px; font-weight: 700; color: var(--cp-text, #1e293b);
+                   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: inline-flex; align-items: center; }
+    .cp-card-ic { display: inline-flex; align-items: center; vertical-align: middle; margin-right: 5px; color: var(--cp-text-dim, #64748b); opacity: .88; flex-shrink: 0; }
+    .cp-card-pill { flex-shrink: 0; font-size: 10px; font-weight: 600; color: var(--cp-accent, #6366f1);
+                    background: rgba(99,102,241,.12); border-radius: 999px; padding: 1px 8px; line-height: 1.6; }
+    .cp-card-pill:empty { display: none; }
+    .cp-card-pill.pill-ok { color: #16a34a; background: rgba(22,163,74,.14); }
+    .cp-card-pill.pill-warn { color: #d97706; background: rgba(217,119,6,.16); }
+    .cp-card-pill.pill-danger { color: #dc2626; background: rgba(220,38,38,.14); }
+    .cp-card-chev { flex-shrink: 0; width: 7px; height: 7px; border-right: 2px solid var(--cp-text-tiny, #94a3b8);
+                    border-bottom: 2px solid var(--cp-text-tiny, #94a3b8); transform: rotate(45deg); transition: transform .18s; margin-right: 1px; }
+    .cp-card.collapsed .cp-card-chev { transform: rotate(-45deg); }
+    .cp-card-bd { padding: 10px 12px; }
+    .cp-card.collapsed .cp-card-bd { display: none; }
+  </style>
+  <script src="/copilot/i18n/cp-i18n.js"></script>
+  <script src="/copilot/client/copilot-client.js"></script>
+  <script src="/copilot/sidebar-chrome.js"></script>
+  <script src="/copilot/components/cp-panel-base.js"></script>
+  <script src="/copilot/components/cp-rel-stage.js"></script>
+  <script src="/copilot/components/cp-next-actions.js"></script>
+  <script src="/copilot/components/cp-script.js"></script>
+  <script src="/copilot/components/cp-persona.js"></script>
+  <script src="/copilot/components/cp-collab.js"></script>
+  <script src="/copilot/components/cp-chain-exec.js"></script>
+  <script src="/copilot/components/cp-draft.js"></script>
+  <script src="/copilot/components/cp-accounts.js"></script>
+  <script src="/copilot/components/cp-voice.js"></script>
+</head>
+<body>
+  <div class="cp-tabs" id="cp-tabs" hidden>
+    <button type="button" class="cp-tab active" data-tab="reply" data-cp-i18n="cp.app.tab_reply">回复台</button>
+    <button type="button" class="cp-tab" data-tab="customer" data-cp-i18n="cp.app.tab_customer">客户&关系</button>
+    <button type="button" class="cp-tab" data-tab="tools" data-cp-i18n="cp.app.tab_tools">工具箱</button>
+  </div>
+  <div class="cp-app" id="cp-app">
+    <h4 data-cp-i18n="cp.app.h_accounts">👥 账号管理</h4>
+    <cp-accounts id="accounts"></cp-accounts>
+    <div class="cp-app-empty" id="cp-app-empty" data-cp-i18n="cp.app.empty">等待会话上下文…</div>
+
+    <!-- 💬 回复 -->
+    <div class="cp-sec" data-tab="reply" id="sec-reply">
+      <div class="cp-auto-bar" id="autopilot-bar" hidden>
+        <label data-cp-i18n-title="cp.app.auto_title" title="开启后：当前会话收到客户消息会自动生成并发送回复（低风险才自动发，命中风控转人工）">
+          <input type="checkbox" id="autopilot-toggle" />
+          <span data-cp-i18n="cp.app.auto_label">全自动托管</span>
+        </label>
+        <span class="cp-auto-status" id="autopilot-status" data-cp-i18n="cp.app.auto_off">已关闭</span>
+      </div>
+      <section class="cp-card" data-cp-card="draft">
+        <button type="button" class="cp-card-hd" data-cp-toggle="draft">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="spark"></span><span data-cp-i18n="cp.app.h_draft">回复草稿</span></span>
+          <span class="cp-card-pill" id="cpp-draft"></span><span class="cp-card-chev" aria-hidden="true"></span>
+        </button>
+        <div class="cp-card-bd"><cp-draft id="draft" persona contrast pin></cp-draft></div>
+      </section>
+      <section class="cp-card collapsed" data-cp-card="voice">
+        <button type="button" class="cp-card-hd" data-cp-toggle="voice">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="mic"></span><span data-cp-i18n="cp.app.h_voice">语音克隆</span></span>
+          <span class="cp-card-chev" aria-hidden="true"></span>
+        </button>
+        <div class="cp-card-bd"><cp-voice id="voice"></cp-voice></div>
+      </section>
+      <section class="cp-card collapsed" data-cp-card="persona">
+        <button type="button" class="cp-card-hd" data-cp-toggle="persona">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="user"></span><span data-cp-i18n="cp.app.h_persona">人设绑定</span></span>
+          <span class="cp-card-pill" id="cpp-persona"></span><span class="cp-card-chev" aria-hidden="true"></span>
+        </button>
+        <div class="cp-card-bd"><cp-persona id="persona"></cp-persona></div>
+      </section>
+      <section class="cp-card collapsed" data-cp-card="script">
+        <button type="button" class="cp-card-hd" data-cp-toggle="script">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="film"></span><span data-cp-i18n="cp.app.h_script">剧本话题</span></span>
+          <span class="cp-card-pill" id="cpp-script"></span><span class="cp-card-chev" aria-hidden="true"></span>
+        </button>
+        <div class="cp-card-bd"><cp-script id="script"></cp-script></div>
+      </section>
+    </div>
+
+    <!-- 客户&关系 -->
+    <div class="cp-sec" data-tab="customer" id="sec-customer">
+      <section class="cp-card" data-cp-card="customer">
+        <button type="button" class="cp-card-hd" data-cp-toggle="customer">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="user"></span><span data-cp-i18n="cp.app.h_customer">客户档案</span></span>
+          <span class="cp-card-chev" aria-hidden="true"></span>
+        </button>
+        <div class="cp-card-bd"><div id="customer-box" class="cp-analyze-box"></div></div>
+      </section>
+      <section class="cp-card collapsed" data-cp-card="relstage">
+        <button type="button" class="cp-card-hd" data-cp-toggle="relstage">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="heart"></span><span data-cp-i18n="cp.app.h_rel">关系阶段</span></span>
+          <span class="cp-card-pill" id="cpp-relstage"></span><span class="cp-card-chev" aria-hidden="true"></span>
+        </button>
+        <div class="cp-card-bd"><cp-rel-stage id="relstage"></cp-rel-stage></div>
+      </section>
+      <section class="cp-card collapsed" data-cp-card="collab">
+        <button type="button" class="cp-card-hd" data-cp-toggle="collab">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="users"></span><span data-cp-i18n="cp.app.h_collab">协作上下文</span></span>
+          <span class="cp-card-pill" id="cpp-collab"></span><span class="cp-card-chev" aria-hidden="true"></span>
+        </button>
+        <div class="cp-card-bd"><cp-collab id="collab"></cp-collab></div>
+      </section>
+    </div>
+
+    <!-- 工具箱 -->
+    <div class="cp-sec" data-tab="tools" id="sec-tools">
+      <section class="cp-card" data-cp-card="nba">
+        <button type="button" class="cp-card-hd" data-cp-toggle="nba">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="zap"></span><span data-cp-i18n="cp.app.h_nba">下一步建议</span></span>
+          <span class="cp-card-pill" id="cpp-nba"></span><span class="cp-card-chev" aria-hidden="true"></span>
+        </button>
+        <div class="cp-card-bd"><cp-next-actions id="nba"></cp-next-actions></div>
+      </section>
+      <section class="cp-card collapsed" data-cp-card="chain">
+        <button type="button" class="cp-card-hd" data-cp-toggle="chain">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="link"></span><span data-cp-i18n="cp.app.h_chain">工作链执行</span></span>
+          <span class="cp-card-pill" id="cpp-chain"></span><span class="cp-card-chev" aria-hidden="true"></span>
+        </button>
+        <div class="cp-card-bd"><cp-chain-exec id="chain"></cp-chain-exec></div>
+      </section>
+      <section class="cp-card" data-cp-card="analysis">
+        <button type="button" class="cp-card-hd" data-cp-toggle="analysis">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="brain"></span><span data-cp-i18n="cp.app.h_analyze">AI 对话分析</span></span>
+          <span class="cp-card-chev" aria-hidden="true"></span>
+        </button>
+        <div class="cp-card-bd">
+          <button type="button" class="cp-analyze-btn" id="analyze-btn" data-cp-i18n="cp.app.analyze_btn">分析当前对话</button>
+          <div class="cp-analyze-box" id="analyze-box" style="margin-top:6px;"></div>
+        </div>
+      </section>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var qs = new URLSearchParams(location.search);
+      // i18n：cp-i18n.js 已按 ?lang= / <html lang> / cookie 解析语言；同步 <html lang> 并替换静态文案
+      var CPS = window.CopilotShared || {};
+      var LANG = CPS.lang || "zh";
+      function T(k, vars) { return CPS.t ? CPS.t(k, vars) : k; }
+      try { document.documentElement.setAttribute("lang", LANG === "en" ? "en" : "zh-CN"); } catch (_) {}
+      if (CPS.applyI18n) CPS.applyI18n(document);
+      // 主题
+      var theme = qs.get("theme") === "dark" ? "dark" : "light";
+      document.documentElement.setAttribute("data-cp-theme", theme);
+      // 鉴权 token(桌面 iframe 由壳放 #token=;浏览器靠同源 cookie 不需要)
+      var hash = new URLSearchParams((location.hash || "").replace(/^#/, ""));
+      var token = hash.get("token") || qs.get("token") || "";
+      if (token && window.CopilotShared) window.CopilotShared.setAuthToken(token);
+
+      var client = window.CopilotShared ? window.CopilotShared.createCopilotClient() : null;
+      var emptyEl = document.getElementById("cp-app-empty");
+      var tabsEl = document.getElementById("cp-tabs");
+      // 账号管理:全局面板,不依赖会话,直接挂 client 触发加载
+      var accEl = document.getElementById("accounts");
+      if (accEl && client) accEl.client = client;
+      // 业务面板登记
+      var panels = ["draft", "persona", "collab", "relstage", "nba", "script", "chain", "voice"]
+        .map(function (id) {
+          var el = document.getElementById(id);
+          if (el) el.client = client;
+          return el;
+        });
+
+      var CURRENT = null; // 当前会话上下文
+      var sc = (window.CopilotShared && window.CopilotShared.sidebarChrome) || {};
+      var tabCtrl = sc.createTabController ? sc.createTabController({
+        tabSelector: ".cp-tab",
+        sectionSelector: ".cp-sec",
+        onChange: function (tab) {
+          if (tab === "tools" && CURRENT) runAnalyze();
+          if (tab === "customer" && CURRENT) renderCustomer();
+        },
+      }) : null;
+      function setTab(tab) {
+        if (tabCtrl) return tabCtrl.setTab(tab);
+        var active = sc.normalizeTab ? sc.normalizeTab(tab) : tab || "reply";
+        Array.prototype.forEach.call(document.querySelectorAll(".cp-tab"), function (b) {
+          b.classList.toggle("active", b.dataset.tab === active);
+        });
+        Array.prototype.forEach.call(document.querySelectorAll(".cp-sec"), function (s) {
+          s.classList.toggle("active", s.dataset.tab === active);
+        });
+        if (active === "tools" && CURRENT) runAnalyze();
+        if (active === "customer" && CURRENT) renderCustomer();
+        return active;
+      }
+      if (tabCtrl) tabCtrl.bindClick();
+
+      // ── 可折叠卡片：折叠态记忆 + 卡头图标/pill（与网页 unified_inbox 同源 sidebar-chrome.createCardController）──
+      var cardCtrl = sc.createCardController ? sc.createCardController({
+        storageKey: "cp_app_cards_v1",
+        defaultCollapsed: { voice: 1, persona: 1, script: 1, relstage: 1, collab: 1, chain: 1 },
+      }) : null;
+      if (cardCtrl) { cardCtrl.bindClicks(document.getElementById("cp-app")); cardCtrl.apply(); }
+      if (sc.decorateCardIcons) sc.decorateCardIcons(document, 14);
+      var PILL_BY_PANEL = { draft: "cpp-draft", relstage: "cpp-relstage", collab: "cpp-collab", nba: "cpp-nba", chain: "cpp-chain", script: "cpp-script", persona: "cpp-persona" };
+      var PILL_TONES = ["pill-accent", "pill-ok", "pill-warn", "pill-danger"];
+      function pillT(key, vars) {
+        var zh = { guard_high: "高风险", guard_medium: "中风险", draft_ready: "已生成", chain_failed: "{n} 失败", chain_running: "{n} 运行中", topics: "{n} 话题" };
+        var en = { guard_high: "High risk", guard_medium: "Med risk", draft_ready: "Ready", chain_failed: "{n} failed", chain_running: "{n} running", topics: "{n} topics" };
+        var k = String(key).replace("inbox.pill.", "");
+        var s = (LANG === "en" ? en : zh)[k] || key;
+        if (vars) Object.keys(vars).forEach(function (p) { s = s.split("{" + p + "}").join(String(vars[p])); });
+        return s;
+      }
+      document.addEventListener("cp-data-loaded", function (e) {
+        var det = (e && e.detail) || {};
+        var pid = PILL_BY_PANEL[det.panelId];
+        if (!pid || !sc.pillMetaFromCpLoaded) return;
+        var m = sc.pillMetaFromCpLoaded(det, { t: pillT, tf: pillT });
+        var pel = document.getElementById(pid);
+        if (!pel) return;
+        pel.textContent = m.text || "";
+        PILL_TONES.forEach(function (c) { pel.classList.remove(c); });
+        if (m.text && m.tone) pel.classList.add("pill-" + m.tone);
+      });
+
+      // chat_key 回退:conversation_id = platform:account:chat_key,取第 2 个冒号后整体
+      function chatKeyFrom(cid) {
+        var parts = String(cid || "").split(":");
+        return parts.length >= 3 ? parts.slice(2).join(":") : "";
+      }
+      function esc(s) {
+        return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+          return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+        });
+      }
+      function post(type, extra) {
+        try {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage(Object.assign({ type: type }, extra || {}), "*");
+          }
+        } catch (_) {}
+      }
+
+      // ── cp-fill / cp-send:本壳无 composer → 桥给宿主父窗口 ──
+      document.addEventListener("cp-fill", function (e) {
+        var text = e && e.detail && e.detail.text;
+        if (text) post("cp-fill", { text: text });
+      });
+      document.addEventListener("cp-send", function (e) {
+        var det = (e && e.detail) || {};
+        if (det.text) post("cp-send", { text: det.text, which: det.which, risk: det.risk });
+      });
+      // 跨面板联动刷新(沿用原协议)
+      document.addEventListener("cp-action-done", function () {
+        var rel = document.getElementById("relstage"); if (rel && rel.context) rel.refresh && rel.refresh();
+        var chain = document.getElementById("chain"); if (chain && chain.context) chain.refresh && chain.refresh();
+      });
+      document.addEventListener("cp-rel-changed", function () {
+        var nba = document.getElementById("nba"), sc = document.getElementById("script");
+        if (nba && nba.context) nba.refresh && nba.refresh();
+        if (sc && sc.context) sc.refresh && sc.refresh();
+      });
+      document.addEventListener("cp-persona-changed", function () {
+        var rel = document.getElementById("relstage"); if (rel && rel.context) rel.refresh && rel.refresh();
+      });
+
+      // ── 全自动托管(仅宿主声明能力时显示;行为由宿主 HostBridge 落地)──
+      var autoBar = document.getElementById("autopilot-bar");
+      var autoToggle = document.getElementById("autopilot-toggle");
+      var autoStatus = document.getElementById("autopilot-status");
+      function setAutoUi(on) {
+        if (autoToggle) autoToggle.checked = !!on;
+        if (autoStatus) {
+          autoStatus.textContent = on ? T("cp.app.auto_on") : T("cp.app.auto_off");
+          autoStatus.classList.toggle("on", !!on);
+        }
+      }
+      if (autoToggle) autoToggle.addEventListener("change", function () {
+        setAutoUi(autoToggle.checked);
+        post("cp-autopilot", { on: autoToggle.checked });
+      });
+
+      // ── AI 对话分析:同源取历史 → 调 analyze(与网页同一后端端点)──
+      var analyzeBtn = document.getElementById("analyze-btn");
+      var analyzeBox = document.getElementById("analyze-box");
+      var _analyzing = false;
+      if (analyzeBtn) analyzeBtn.addEventListener("click", function () { runAnalyze(true); });
+      async function runAnalyze(force) {
+        if (!CURRENT || !client || _analyzing) return;
+        _analyzing = true;
+        if (analyzeBtn) analyzeBtn.disabled = true;
+        analyzeBox.innerHTML = '<div style="color:var(--cp-text-tiny,#94a3b8);">' + esc(T("cp.app.analyzing")) + '</div>';
+        try {
+          var hist = await client.getHistory({ conversationId: CURRENT.conversationId, limit: 30 });
+          var msgs = (hist && hist.messages) || [];
+          var lastIn = null;
+          for (var i = msgs.length - 1; i >= 0; i--) {
+            var d = msgs[i] && (msgs[i].direction || msgs[i].dir);
+            if ((d === "in" || d === "inbound") && msgs[i].text) { lastIn = msgs[i]; break; }
+          }
+          if (!lastIn) { analyzeBox.innerHTML = '<div style="color:var(--cp-text-tiny,#94a3b8);">' + esc(T("cp.app.no_inbound")) + '</div>'; return; }
+          var res = await client.analyze({
+            text: lastIn.text,
+            messages: msgs.slice(-10),
+            chat: { platform: CURRENT.platform, chat_key: CURRENT.chatKey, account_id: CURRENT.accountId },
+          });
+          if (!res || !res.ok) { analyzeBox.innerHTML = '<div style="color:var(--cp-text-tiny,#94a3b8);">' + esc(T("cp.app.analyze_fail")) + '</div>'; return; }
+          renderAnalysis(res.analysis || {});
+        } catch (e) {
+          analyzeBox.innerHTML = '<div style="color:var(--cp-text-tiny,#94a3b8);">' + esc(T("cp.app.analyze_fail")) + '</div>';
+        } finally {
+          _analyzing = false;
+          if (analyzeBtn) analyzeBtn.disabled = false;
+        }
+      }
+      function renderAnalysis(a) {
+        var chips = [];
+        if (a.intent) chips.push('<span class="cp-chip">' + esc(T("cp.app.intent")) + esc(a.intent) + '</span>');
+        if (a.sentiment) chips.push('<span class="cp-chip">' + esc(T("cp.app.sentiment")) + esc(a.sentiment) + '</span>');
+        if (a.detected_lang) chips.push('<span class="cp-chip">' + esc(T("cp.app.lang")) + esc(a.detected_lang) + '</span>');
+        (a.risk_signals || []).forEach(function (r) {
+          var label = typeof r === "string" ? r : (r.type || r.label || "");
+          if (label) chips.push('<span class="cp-chip danger">⚠ ' + esc(label) + '</span>');
+        });
+        var html = "";
+        if (a.context_summary) html += '<div class="cp-summary">' + esc(a.context_summary) + "</div>";
+        if (chips.length) html += '<div class="cp-chips">' + chips.join("") + "</div>";
+        var replies = (a.suggested_replies && a.suggested_replies.length)
+          ? a.suggested_replies
+          : (a.suggested_reply ? [{ text: a.suggested_reply }] : []);
+        analyzeBox.innerHTML = html;
+        replies.forEach(function (r) {
+          var txt = typeof r === "string" ? r : (r.text || "");
+          if (!txt) return;
+          var meta = (typeof r === "object" && (r.risk_level || r.rationale)) ? (r.risk_level || r.rationale) : "";
+          var item = document.createElement("div");
+          item.className = "cp-rep";
+          item.innerHTML = (meta ? '<div class="it-meta">' + esc(meta) + "</div>" : "") + "<div>" + esc(txt) + "</div>";
+          var acts = document.createElement("div");
+          acts.className = "cp-rep-acts";
+          var fill = document.createElement("button"); fill.textContent = T("cp.app.fill");
+          fill.addEventListener("click", function () { post("cp-fill", { text: txt }); });
+          var send = document.createElement("button"); send.textContent = T("cp.app.fill_send");
+          send.addEventListener("click", function () { post("cp-send", { text: txt, which: "analyze" }); });
+          acts.appendChild(fill); acts.appendChild(send);
+          item.appendChild(acts);
+          analyzeBox.appendChild(item);
+        });
+      }
+
+      // 电话脱敏（与工作台侧栏同口径:保留前段与末 2 位,中间打码）
+      function _cpMaskPhone(p) {
+        var s = String(p || "").trim(); if (!s) return "";
+        var plus = s.charAt(0) === "+" ? "+" : ""; var d = s.replace(/[^0-9]/g, "");
+        if (d.length <= 4) return plus + d;
+        return plus + d.slice(0, Math.min(3, d.length - 2)) + "****" + d.slice(-2);
+      }
+
+      // ── 客户档案:宿主可在 cp-context.customer 里带字段,否则用 cid 基础信息 ──
+      // 身份画像(真实昵称/@username/电话)置顶,替代「一排数字 id」,一眼识别客户。
+      function renderCustomer() {
+        var box = document.getElementById("customer-box");
+        if (!box || !CURRENT) return;
+        var cu = CURRENT.customer || {};
+        var rows = [];
+        if (cu.name) rows.push([T("cp.app.c_nickname"), cu.name]);
+        if (cu.username) rows.push([T("cp.app.c_username"), "@" + cu.username]);
+        if (cu.phone) rows.push([T("cp.app.c_phone"), _cpMaskPhone(cu.phone)]);
+        rows.push([T("cp.app.c_platform"), cu.platform || CURRENT.platform || "-"]);
+        rows.push([T("cp.app.c_account"), cu.account_label || cu.account_id || CURRENT.accountId || "-"]);
+        rows.push([T("cp.app.c_id"), cu.chat_key || CURRENT.chatKey || "-"]);
+        if (cu.funnel_stage) rows.push([T("cp.app.c_funnel"), cu.funnel_stage]);
+        if (cu.contact_id) rows.push(["CRM", cu.contact_id]);
+        var html = rows.map(function (r) {
+          return '<div class="cp-cust-row"><span class="k">' + esc(r[0]) + '</span><span class="v">' + esc(r[1]) + "</span></div>";
+        }).join("");
+        if (cu.summary) html += '<div class="cp-summary" style="margin-top:8px;">' + esc(cu.summary) + "</div>";
+        box.innerHTML = html;
+      }
+
+      // ── 设定会话:展示面板并刷新 ──
+      function setContext(ctx) {
+        var cid = ctx && ctx.conversationId;
+        if (!cid) return;
+        var ck = (ctx && ctx.chatKey) || chatKeyFrom(cid);
+        CURRENT = {
+          conversationId: cid, chatKey: ck,
+          platform: (ctx && ctx.platform) || "",
+          accountId: (ctx && ctx.accountId) || "",
+          customer: (ctx && ctx.customer) || null,
+        };
+        if (emptyEl) emptyEl.hidden = true;
+        if (tabsEl) tabsEl.hidden = false;
+        // 能力:宿主声明 autopilot 才显示托管开关
+        var caps = (ctx && ctx.caps) || {};
+        if (autoBar) autoBar.hidden = !caps.autopilot;
+        if (caps.autopilot) setAutoUi(!!ctx.autopilotOn);
+        var panelCtx = { conversationId: cid, chatKey: ck, platform: CURRENT.platform, accountId: CURRENT.accountId };
+        panels.forEach(function (el) { if (el) el.context = panelCtx; });
+        if (tabCtrl && tabCtrl.getTab() === "tools") runAnalyze();
+        if (tabCtrl && tabCtrl.getTab() === "customer") renderCustomer();
+        if (!document.querySelector(".cp-sec.active")) setTab("reply");
+      }
+
+      // ── 宿主指令(壳浮钮深链)──
+      function handleCmd(m) {
+        var cmd = m && m.cmd;
+        if (cmd === "set-tab") { setTab(m.tab || "reply"); return; }
+        if (cmd === "focus-draft") {
+          setTab("reply");
+          var el = document.getElementById("draft");
+          try { el.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch (_) {}
+          var btn = el && el.shadowRoot ? el.shadowRoot.querySelector('button[data-act="gen"]') : null;
+          if (btn) btn.click();
+          return;
+        }
+        if (cmd === "focus-voice") {
+          setTab("reply");
+          var v = document.getElementById("voice");
+          try { v.scrollIntoView({ behavior: "smooth", block: "center" }); } catch (_) {}
+          return;
+        }
+      }
+
+      // 入口 1:URL ?cid= (&ck= 可选)
+      var cid0 = qs.get("cid");
+      if (cid0) setContext({ conversationId: cid0, chatKey: qs.get("ck") || "" });
+
+      // 入口 2:宿主壳 postMessage
+      window.addEventListener("message", function (e) {
+        var msg = e && e.data;
+        if (!msg || !msg.type) return;
+        if (msg.type === "cp-context" && msg.conversationId) setContext(msg);
+        else if (msg.type === "cp-cmd") handleCmd(msg);
+      });
+
+      // 告知宿主壳:App 就绪,可以开始喂 context
+      if (tabCtrl) tabCtrl.restore();
+      else setTab("reply");
+      post("cp-ready");
+    })();
+  </script>
+</body>
+</html>

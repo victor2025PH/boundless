@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>无界科技 BOUNDLESS · 购买与下单</title>
+<link rel="stylesheet" href="/static/brand.css">
+<style>
+  body{margin:0;background:var(--bd-bg);color:var(--bd-txt);font-family:var(--bd-font);font-size:var(--bd-fs-body);line-height:var(--bd-lh-base)}
+  a{color:var(--bd-acc);text-decoration:none}
+  .wrap{max-width:1180px;margin:0 auto;padding:28px 20px 64px}
+  header.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+  header.top h1{font-size:var(--bd-fs-h1);margin:0}
+  .lead{color:var(--bd-mut);font-size:var(--bd-fs-sm);margin:2px 0 20px}
+
+  .segbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0 20px}
+  .promo{margin-left:auto;font-size:var(--bd-fs-sm);color:var(--bd-ok)}
+
+  /* 会员卡 */
+  .tiers{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}
+  @media(max-width:1080px){.tiers{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:560px){.tiers{grid-template-columns:1fr}}
+  .tier{position:relative;background:var(--bd-surface);border:1px solid var(--bd-border);border-radius:var(--bd-r-md);
+        padding:16px 15px;display:flex;flex-direction:column;gap:10px;cursor:pointer;
+        transition:border-color var(--bd-dur-fast) var(--bd-ease),background var(--bd-dur-fast) var(--bd-ease)}
+  .tier:hover{border-color:var(--bd-border-strong)}
+  .tier.sel{border-color:var(--bd-acc);background:var(--bd-acc-weak)}
+  .tier.hot{border-color:rgba(168,85,247,.5)}
+  .tier .rec{position:absolute;top:-10px;left:14px;font-size:11px;font-weight:700;color:#fff;
+             background:var(--bd-acc2);border-radius:var(--bd-r-pill);padding:2px 10px}
+  .tier .name{font-size:var(--bd-fs-h2);font-weight:700}
+  .tier .tl{font-size:var(--bd-fs-label);color:var(--bd-mut)}
+  .tier .price{display:flex;align-items:flex-end;gap:5px;margin-top:2px}
+  .tier .price b{font-size:26px;line-height:1}
+  .tier .price span{font-size:var(--bd-fs-label);color:var(--bd-mut);padding-bottom:3px}
+  .tier .old{font-size:var(--bd-fs-label);color:var(--bd-faint);text-decoration:line-through}
+  .tier .promo8{font-size:var(--bd-fs-label);color:var(--bd-acc2);font-weight:600}
+  .tier ul{margin:6px 0 0;padding-left:16px;display:flex;flex-direction:column;gap:4px}
+  .tier li{font-size:var(--bd-fs-label);color:var(--bd-txt2)}
+  .tier .pick{margin-top:auto}
+
+  h2.sec{font-size:var(--bd-fs-h2);margin:32px 0 12px;color:var(--bd-acc);border-left:3px solid var(--bd-acc);padding-left:9px}
+  table{width:100%;border-collapse:collapse;font-size:var(--bd-fs-sm)}
+  th,td{border:1px solid var(--bd-border);padding:7px 10px;text-align:left}
+  th{background:var(--bd-surface2);color:var(--bd-txt2);font-weight:600}
+  td .old{color:var(--bd-faint);text-decoration:line-through;font-size:var(--bd-fs-label)}
+
+  /* 结算抽屉 */
+  .cart{position:sticky;bottom:0;margin-top:26px;background:var(--bd-surface2);border:1px solid var(--bd-border-strong);
+        border-radius:var(--bd-r-md);padding:16px 18px;display:flex;align-items:center;gap:18px;flex-wrap:wrap;
+        box-shadow:var(--bd-shadow-sm)}
+  .cart .sum{display:flex;flex-direction:column;gap:2px}
+  .cart .sum .k{font-size:var(--bd-fs-label);color:var(--bd-mut)}
+  .cart .sum .v{font-size:var(--bd-fs-h1);font-weight:800}
+  .cart .sum .v small{font-size:var(--bd-fs-label);color:var(--bd-mut);font-weight:400}
+
+  /* 弹窗 */
+  .mask{position:fixed;inset:0;background:rgba(3,6,12,.72);display:none;align-items:center;justify-content:center;z-index:80;padding:16px}
+  .mask.on{display:flex}
+  .dlg{width:min(520px,100%);max-height:92vh;overflow:auto}
+  .dlg .bd-modal-body{padding:16px}
+  .kv{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px dashed var(--bd-border);font-size:var(--bd-fs-sm)}
+  .kv:last-of-type{border-bottom:0}
+  .addr{display:flex;gap:8px;align-items:center;background:var(--bd-bg);border:1px solid var(--bd-border);
+        border-radius:var(--bd-r-sm);padding:9px 11px;font-family:ui-monospace,Consolas,monospace;
+        font-size:12px;word-break:break-all}
+  .field{display:flex;flex-direction:column;gap:5px;margin:10px 0}
+  .field label{font-size:var(--bd-fs-label);color:var(--bd-txt2)}
+  .field input{background:var(--bd-bg);border:1px solid var(--bd-border);border-radius:var(--bd-r-sm);
+               color:var(--bd-txt);padding:9px 11px;font-size:var(--bd-fs-sm)}
+  .field input:focus{outline:2px solid var(--bd-acc);outline-offset:1px}
+  .note{font-size:var(--bd-fs-label);color:var(--bd-mut);line-height:1.5}
+  .foot{margin-top:28px;color:var(--bd-faint);font-size:var(--bd-fs-label);line-height:1.6}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1><span class="bd-grad-text">无界科技 BOUNDLESS</span> · 购买与下单</h1>
+    <span class="bd-trust">💳 全程 <b>USDT</b> 结算（推荐 TRC20）</span>
+    <span class="bd-trust">🔒 本地部署 · 数据不出机房</span>
+  </header>
+  <p class="lead">选择会员套餐，月付 / 年付一键切换；下单后按机器指纹自动签发授权。需要下载客户端？<a href="/download">前往下载页 →</a></p>
+
+  <div class="segbar">
+    <div class="bd-seg" role="tablist">
+      <button id="segM" class="on" onclick="setPeriod('monthly')">月付</button>
+      <button id="segY" onclick="setPeriod('annual')">年付 · 送 2 个月</button>
+    </div>
+    <span class="promo" id="promoTag">🎁 限时首年 8 折 · 年付赠加购额度</span>
+  </div>
+
+  <div class="tiers" id="tiers"></div>
+
+  <h2 class="sec">按量加购（会员额度用尽后 / 一次性 · USDT）</h2>
+  <table>
+    <thead><tr><th>功能</th><th>产品线</th><th>单位</th><th>价格 (USDT)</th><th>旧价</th></tr></thead>
+    <tbody id="meters"></tbody>
+  </table>
+
+  <h2 class="sec">本地私有部署授权（一次性 / 年费 · USDT）</h2>
+  <table>
+    <thead><tr><th>方案</th><th>授权档</th><th>年费</th><th>买断</th><th>说明</th></tr></thead>
+    <tbody id="lics"></tbody>
+  </table>
+
+  <div class="cart">
+    <div class="sum">
+      <span class="k">已选套餐</span>
+      <span class="v" id="cartName">专业版 Pro</span>
+    </div>
+    <div class="sum">
+      <span class="k">应付金额</span>
+      <span class="v" id="cartPrice">249 <small>USDT / 月</small></span>
+    </div>
+    <button class="bd-btn bd-btn-primary" style="margin-left:auto" onclick="openCheckout()">立即下单 · USDT 结算</button>
+  </div>
+
+  <p class="foot">
+    会员等级对应引擎授权档（trial / standard / pro / enterprise），下单确认到账后由激活服务器按<b>机器指纹</b>签发 Ed25519 签名 license，客户端一键激活即解锁对应能力。<br>
+    产出默认带 C2PA 内容凭证 + 不可见水印可对外验真；克隆需本人合法授权，禁止用于冒充 / 诈骗。下单前请向客服核对最新收款地址，谨防诈骗。
+  </p>
+</div>
+
+<!-- 结算弹窗 -->
+<div class="mask" id="mask">
+  <div class="bd-modal dlg">
+    <div class="bd-modal-head">
+      <div>
+        <div class="bd-modal-title">确认订单 · USDT 结算</div>
+        <div class="bd-modal-sub">核对信息后按地址付款，客服 ≈5 分钟内为你开通</div>
+      </div>
+      <button class="bd-modal-x" onclick="closeCheckout()">✕</button>
+    </div>
+    <div class="bd-modal-body">
+      <div class="kv"><span>套餐</span><b id="ckName">—</b></div>
+      <div class="kv"><span>计费周期</span><b id="ckPeriod">—</b></div>
+      <div class="kv"><span>应付金额</span><b id="ckPrice" style="color:var(--bd-acc)">—</b></div>
+
+      <div class="field">
+        <label>联系方式（Telegram / 邮箱，用于开通通知）*</label>
+        <input id="ckContact" placeholder="@yourname 或 you@email.com">
+      </div>
+      <div class="field">
+        <label>本机器指纹（选填，私有部署需绑机签发）</label>
+        <input id="ckFp" placeholder="客户端「设置 → 授权」中复制，或留空">
+      </div>
+
+      <div class="note" style="margin:12px 0 6px">USDT 收款地址（TRC20，手续费低）：</div>
+      <div class="addr">
+        <span id="usdtAddr">TXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>
+        <button class="bd-act sm ghost" style="margin-left:auto" onclick="copyAddr()">复制</button>
+      </div>
+
+      <div id="okBox" class="bd-strip ok" style="display:none;margin-top:14px;padding:10px 12px;font-size:var(--bd-fs-sm)"></div>
+      <div id="errBox" class="bd-strip err" style="display:none;margin-top:14px;padding:10px 12px;font-size:var(--bd-fs-sm)"></div>
+
+      <div class="bd-act-row" style="margin-top:16px;justify-content:flex-end">
+        <button class="bd-act ghost" onclick="closeCheckout()">取消</button>
+        <button class="bd-act primary" id="ckSubmit" onclick="submitOrder()">我已付款 · 提交订单</button>
+      </div>
+      <p class="note" style="margin-top:12px">
+        大额合作、私有部署与投资分红请直接联系 <a id="tgLink" href="https://t.me/ai_zkw" target="_blank">Telegram 客服 @ai_zkw</a> 定制报价。
+      </p>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── 定价单一真相（与 canvas / 引擎授权档一致；后端 /api/order/plans 存在时以后端为准）──
+var ANNUAL_MONTHS = 10, PROMO = 0.8;
+var USDT_ADDR = "TXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"; // TODO: 替换为真实 TRC20 收款地址
+var TG = "https://t.me/ai_zkw";
+
+var TIERS = [
+  {key:"trial", name:"体验版 Trial", edition:"trial", monthly:0, old:18, tl:"14 天免费试用",
+   feats:["1 个克隆音色","5 千字符 TTS","图片换脸 10 张","720p · 带合规水印"]},
+  {key:"starter", name:"入门版 Starter", edition:"standard", monthly:39, old:null, tl:"个人 / 起步",
+   feats:["3 个音色","5 万字符 TTS","图片换脸 100 张/月","视频换脸 20 分钟","720p 高清"]},
+  {key:"standard", name:"标准版 Standard", edition:"standard", monthly:99, old:78, tl:"内容创作者",
+   feats:["10 个音色","20 万字符 TTS","视频换脸 60 分钟","同传 10 小时/月","10 语种 · 情感 TTS"]},
+  {key:"pro", name:"专业版 Pro", edition:"pro", monthly:249, old:198, tl:"工作室 / MCN", hot:true,
+   feats:["无限音色","100 万字符 TTS","去水印 · 双人换脸","1080p 超清 · 口播极致","同传 40 小时 · 变声 API"]},
+  {key:"flagship", name:"旗舰版 Flagship", edition:"enterprise", monthly:699, old:598, tl:"企业 / 规模化",
+   feats:["Pro 全部能力","分机拓扑 · 多路直播","8 并发会话","专属对接 + 优先支持","数据看板 · 站点授权"]}
+];
+var METERS = [
+  ["TTS 语音合成","幻声 VoiceX","万字符","12","10"],
+  ["实时变声","幻声 VoiceX","分钟","0.05","0.04"],
+  ["图片换脸","幻颜 FaceX","张","1.2","1"],
+  ["视频换脸","幻颜 FaceX","分钟","5","4"],
+  ["数字人口播视频","幻影 LiveX","分钟","12","新增"],
+  ["视频翻译配音","幻影 LiveX","分钟","8","6"],
+  ["克隆音同传","通译 LingoX","小时","4","新增"],
+  ["AI 翻唱 / 成曲","幻声 VoiceX","首","6","新增"],
+  ["换发型 / 定妆 / 试衣","幻颜 FaceX","次","2","新增"]
+];
+var LICS = [
+  ["标准授权 Standard","standard","1,280 / 年","2,980 买断","单机 · HD · 2 并发 · 超清档"],
+  ["专业授权 Pro","pro","2,980 / 年","6,980 买断","去水印 · 多副本 · 8 并发 · 口播极致"],
+  ["企业授权 Enterprise","enterprise","12,800 起 / 年","按规模报价","分机集群 · 站点授权 · S2S"],
+  ["数字人形象买断","—","—","998 / 个","永久角色形象 · 克隆声绑定"],
+  ["私有部署实施服务","—","—","1,280 起","远程选型 + 部署 + 调试 + 培训"]
+];
+
+var period = "monthly";
+var selected = "pro";
+
+function fmt(n){return n.toLocaleString("en-US");}
+function priceOf(t){ return period==="monthly" ? t.monthly : t.monthly*ANNUAL_MONTHS; }
+function unitOf(t){ return t.monthly===0 ? "" : (period==="monthly" ? "USDT / 月" : "USDT / 年"); }
+
+function renderTiers(){
+  var host = document.getElementById("tiers"); host.innerHTML="";
+  TIERS.forEach(function(t){
+    var p = priceOf(t);
+    var el = document.createElement("div");
+    el.className = "tier" + (t.key===selected?" sel":"") + (t.hot?" hot":"");
+    el.onclick = function(){ selected=t.key; renderTiers(); renderCart(); };
+    var priceHtml = t.monthly===0 ? "<b>免费</b><span>14 天</span>"
+      : "<b>"+fmt(p)+"</b><span>"+unitOf(t)+"</span>";
+    var promoHtml = (period==="annual" && t.monthly>0)
+      ? '<div class="promo8">首年 8 折 ≈ '+fmt(Math.round(p*PROMO))+' USDT</div>' : "";
+    var oldHtml = t.old ? '<div class="old">旧价 '+t.old+'/月</div>'
+      : (t.monthly>0 ? '<div class="tl">新增档位</div>' : "");
+    el.innerHTML =
+      (t.hot?'<span class="rec">最受欢迎</span>':"") +
+      '<div class="name">'+t.name+'</div>'+
+      '<div class="tl">'+t.tl+' · <span style="opacity:.8">'+t.edition+'</span></div>'+
+      '<div class="price">'+priceHtml+'</div>'+
+      promoHtml + oldHtml +
+      '<ul>'+t.feats.map(function(f){return "<li>"+f+"</li>";}).join("")+'</ul>'+
+      '<div class="pick"><button class="bd-btn '+(t.key===selected?'bd-btn-primary':'bd-btn-ghost')+'" style="width:100%">'+(t.key===selected?'已选择':'选择')+'</button></div>';
+    host.appendChild(el);
+  });
+}
+function renderMeters(){
+  document.getElementById("meters").innerHTML = METERS.map(function(m){
+    var oldTxt = m[4]==="新增" ? '<span class="tl">新增</span>' : '<span class="old">'+m[4]+'</span>';
+    return "<tr><td>"+m[0]+"</td><td>"+m[1]+"</td><td>"+m[2]+"</td><td><b>"+m[3]+"</b></td><td>"+oldTxt+"</td></tr>";
+  }).join("");
+}
+function renderLics(){
+  document.getElementById("lics").innerHTML = LICS.map(function(l){
+    return "<tr><td><b>"+l[0]+"</b></td><td>"+l[1]+"</td><td>"+l[2]+"</td><td>"+l[3]+"</td><td>"+l[4]+"</td></tr>";
+  }).join("");
+}
+function renderCart(){
+  var t = TIERS.find(function(x){return x.key===selected;});
+  document.getElementById("cartName").textContent = t.name;
+  document.getElementById("cartPrice").innerHTML = t.monthly===0
+    ? '免费 <small>14 天试用</small>'
+    : fmt(priceOf(t))+' <small>'+unitOf(t)+'</small>';
+}
+function setPeriod(p){
+  period = p;
+  document.getElementById("segM").classList.toggle("on", p==="monthly");
+  document.getElementById("segY").classList.toggle("on", p==="annual");
+  document.getElementById("promoTag").style.visibility = (p==="annual")?"visible":"hidden";
+  renderTiers(); renderCart();
+}
+
+function openCheckout(){
+  var t = TIERS.find(function(x){return x.key===selected;});
+  document.getElementById("ckName").textContent = t.name + " (" + t.edition + ")";
+  document.getElementById("ckPeriod").textContent = t.monthly===0 ? "免费试用 14 天"
+    : (period==="monthly"?"按月订阅":"按年订阅（送 2 个月）");
+  document.getElementById("ckPrice").textContent = t.monthly===0 ? "0 USDT"
+    : fmt(priceOf(t))+" "+unitOf(t);
+  document.getElementById("okBox").style.display="none";
+  document.getElementById("errBox").style.display="none";
+  document.getElementById("mask").classList.add("on");
+}
+function closeCheckout(){ document.getElementById("mask").classList.remove("on"); }
+function copyAddr(){
+  navigator.clipboard && navigator.clipboard.writeText(USDT_ADDR);
+  var b=event.target; var o=b.textContent; b.textContent="已复制"; setTimeout(function(){b.textContent=o;},1200);
+}
+
+async function submitOrder(){
+  var t = TIERS.find(function(x){return x.key===selected;});
+  var contact = document.getElementById("ckContact").value.trim();
+  var fp = document.getElementById("ckFp").value.trim();
+  var err = document.getElementById("errBox"), ok = document.getElementById("okBox");
+  err.style.display="none"; ok.style.display="none";
+  if(!contact){ err.textContent="请填写联系方式，方便开通后通知你。"; err.style.display="block"; return; }
+  var btn=document.getElementById("ckSubmit"); btn.disabled=true; var ot=btn.textContent; btn.textContent="提交中…";
+  var payload = {plan:t.key, edition:t.edition, period:period,
+                 amount:priceOf(t), currency:"USDT", contact:contact, fingerprint:fp};
+  try{
+    var r = await fetch("/api/order/create", {method:"POST",
+      headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+    if(r.ok){
+      var j = await r.json();
+      ok.innerHTML = "✅ 订单已创建（单号 <b>"+(j.order_id||"—")+"</b>）。请按上方地址付款，客服核对到账后为你开通。";
+      ok.style.display="block";
+    } else { throw new Error("http "+r.status); }
+  }catch(e){
+    // 后端订单接口不可用 → 优雅降级：给出可直接发给客服的订单摘要
+    var summary = "【下单】"+t.name+" / "+t.edition+" / "+(period==="monthly"?"月付":"年付")+
+                  " / "+fmt(priceOf(t))+" USDT / 联系:"+contact+(fp?(" / 指纹:"+fp):"");
+    ok.innerHTML = "已生成订单摘要，请把下面这行发给 <a href='"+TG+"' target='_blank'>Telegram 客服</a> 并完成付款：<br><br>"+
+                   "<code style='word-break:break-all'>"+summary+"</code>";
+    ok.style.display="block";
+  }
+  btn.disabled=false; btn.textContent=ot;
+}
+
+// 后端若提供 /api/order/plans，用后端定价覆盖（单一真相）
+async function loadPlans(){
+  try{
+    var r = await fetch("/api/order/plans");
+    if(r.ok){
+      var j = await r.json();
+      if(j.tiers) TIERS = j.tiers;
+      if(j.meters) METERS = j.meters;
+      if(j.licenses) LICS = j.licenses;
+      if(j.usdt_address){ USDT_ADDR=j.usdt_address; }
+      if(j.telegram){ TG=j.telegram; }
+    }
+  }catch(e){}
+  document.getElementById("usdtAddr").textContent = USDT_ADDR;
+  document.getElementById("tgLink").href = TG;
+  document.getElementById("tgLink").textContent = "Telegram 客服 " + (TG.split("/").pop().indexOf("@")===0?TG.split("/").pop():"@"+TG.split("/").pop());
+  renderTiers(); renderMeters(); renderLics(); renderCart(); setPeriod("monthly");
+}
+loadPlans();
+</script>
+</body>
+</html>

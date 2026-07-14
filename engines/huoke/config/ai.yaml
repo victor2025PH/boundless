@@ -1,0 +1,84 @@
+# AI Module Configuration
+# All AI modules (LLMClient, MessageRewriter, AutoReply, VisionFallback) read from here.
+
+llm:
+  provider: zhipu
+  api_key: ""  # 从环境变量 ZHIPU_API_KEY 读取
+  base_url: "https://open.bigmodel.cn/api/paas/v4"
+  model: glm-4-flash
+  vision_model: glm-4v-flash
+  temperature: 0.7
+  max_tokens: 512
+  timeout_sec: 30.0
+  max_retries: 3
+  cache_enabled: true
+  # 响应质量门控: 小于此字符数的响应视为低质量并触发 fallback (0=关闭)
+  # 消息改写、个人资料分析等任务的最短有效响应通常 >= 15 chars
+  min_response_len: 15
+  # 缓存自动维护: TTL 天数 (0=关闭) + 最大行数 (0=不限制)
+  cache_ttl_days: 7
+  cache_max_rows: 50000
+  # 断路器: 连续 N 次瞬态失败(timeout/5xx)后开路，300s 后探针恢复 (false=关闭)
+  cb_enabled: true
+  cb_failure_threshold: 5
+  cb_reset_timeout_sec: 300
+  # 备选: DeepSeek
+  fallback_provider: deepseek
+  fallback_api_key: ""  # 从环境变量 DEEPSEEK_API_KEY 读取
+  fallback_base_url: "https://api.deepseek.com/v1"
+  fallback_model: deepseek-chat
+
+rewriter:
+  default_variants: 5
+  max_cached_variants: 50
+  offline_mode: false
+  platform_tone:
+    telegram: "casual and friendly"
+    linkedin: "professional but warm"
+    whatsapp: "informal and conversational"
+
+auto_reply:
+  enabled: true
+  default_persona: casual
+  personas:
+    professional:
+      name: Professional
+      description: a business professional
+      tone: professional but approachable
+      response_style: clear and concise
+    casual:
+      name: Casual
+      description: a friendly acquaintance
+      tone: casual and warm
+      response_style: brief and natural
+    assistant:
+      name: Assistant
+      description: a helpful AI assistant
+      tone: polite and efficient
+      response_style: detailed when needed, brief otherwise
+
+vision:
+  hourly_budget: 20
+  cache_ttl_sec: 300.0
+  max_retries: 2
+
+# AI 精筛 — 资料页截图分析 (性别/年龄)
+# 优先级: gemini (免费) > ollama (本地免费) > 默认 LLM (可能收费)
+vision_screening:
+  # Google Gemini: 完全免费, 1500次/天, 15次/分钟
+  # 申请 API Key: https://aistudio.google.com/apikey
+  # 设置环境变量: GEMINI_API_KEY=your_key
+  preferred_provider: gemini
+  gemini_model: gemini-2.5-flash
+  # Ollama 本地: 完全免费, 无限次, 需要 GPU
+  # 安装: https://ollama.com → ollama pull llava:7b
+  ollama_model: llava:7b
+  # 每小时最多调用次数 (防止超限)
+  hourly_budget: 50
+  # 只对不确定的用户触发 AI (needs_ai=True)
+  only_uncertain: true
+
+# 线索/成单配置
+leads:
+  default_lead_value: 50.0    # 默认单客价值 (自动转化时填充 conversion_value)
+  currency: EUR               # 结算货币 (意大利市场用 EUR)

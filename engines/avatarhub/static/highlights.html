@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>本场精彩问答</title>
+<link rel="stylesheet" href="/static/brand.css"/>
+<script src="/static/brand.js"></script>
+<style>
+  :root{--accent:var(--bd-acc,#5b8cff);--accent-rgb:var(--bd-acc-rgb,91 140 255);--accent2:#7af0c8;--ink:#eaf1fb;--mut:#9fb0cc;--card:#141b2d;--line:#26324a;--bg:#0b1120}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;color:var(--ink);min-height:100vh;
+    background:radial-gradient(900px 500px at 80% -10%,rgb(var(--accent-rgb) / .12),transparent 60%),var(--bg);padding:28px 18px}
+  .wrap{max-width:1100px;margin:0 auto}
+  .top{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:20px}
+  h1{font-size:25px;font-weight:800}
+  h1 .who{color:var(--accent2)}
+  .cnt{color:var(--mut);font-size:14px;background:var(--card);border:1px solid var(--line);padding:5px 12px;border-radius:999px}
+  .sp{margin-left:auto}
+  button{background:var(--card);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:9px 16px;
+    font-size:14px;font-family:inherit;cursor:pointer;transition:.15s}
+  button:hover{border-color:var(--accent)}
+  button.warn{color:#ff8ba0}
+  a.btn{text-decoration:none}
+  select{background:var(--card);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:9px 12px;font-size:13px;font-family:inherit;cursor:pointer}
+  .menu{position:relative;display:inline-block}
+  .menu .pop{display:none;position:absolute;right:0;top:110%;background:#0c1322;border:1px solid var(--line);border-radius:10px;padding:6px;z-index:5;min-width:128px;box-shadow:0 8px 24px #0009}
+  .menu.open .pop{display:block}
+  .menu .pop a{display:block;color:var(--ink);text-decoration:none;font-size:12.5px;padding:7px 10px;border-radius:7px}
+  .menu .pop a:hover{background:#16203a}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:18px}
+  .qa{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:20px;position:relative;overflow:hidden}
+  .qa::before{content:"";position:absolute;inset:0;background:radial-gradient(400px 200px at 110% -30%,rgb(var(--accent-rgb) / .14),transparent 70%);pointer-events:none}
+  .qa .meta{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--mut);margin-bottom:12px}
+  .qa .meta .who2{color:var(--accent);font-weight:700}
+  .qa .meta .like{margin-left:auto;color:#ff6b8b;font-weight:800}
+  .qa .q{font-size:18px;font-weight:800;line-height:1.4;margin-bottom:12px;display:flex;gap:8px}
+  .qa .q .tag{flex:0 0 auto;color:var(--accent)}
+  .qa .a{font-size:15.5px;line-height:1.6;color:#cdd9ee;border-top:1px dashed var(--line);padding-top:12px;display:flex;gap:8px}
+  .qa .a .tag{flex:0 0 auto;color:var(--accent2);font-weight:800}
+  .qa .tools{margin-top:14px;display:flex;gap:8px}
+  .qa .tools button{padding:6px 12px;font-size:12.5px}
+  .empty{text-align:center;color:var(--mut);font-size:18px;padding:80px 0}
+  .brand{position:absolute;right:14px;bottom:10px;font-size:12px;color:var(--mut);opacity:.5}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1>✨ 精彩问答 · <span class="who" id="who">数字人</span></h1>
+    <span class="cnt" id="cnt">0 条</span>
+    <select id="sess" title="切换场次"></select>
+    <span class="sp"></span>
+    <a class="btn" id="exp" href="/api/highlights/export"><button>⬇ 导出 .txt</button></a>
+    <button id="refresh">刷新</button>
+    <button class="warn" id="clear">清空本场</button>
+  </div>
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty" style="display:none">本场还没有问答记录<br><span style="font-size:14px">观众在 /ask 提问，被回答后会出现在这里</span></div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>(s||'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+const fmt=ts=>{const d=new Date(ts*1000);return d.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'});};
+let DATA=[];
+function render(){
+  if(!DATA.length){ $('grid').innerHTML=''; $('empty').style.display='block'; return; }
+  $('empty').style.display='none';
+  $('grid').innerHTML=DATA.map(h=>(
+    '<div class="qa" data-id="'+h.id+'">'+
+      '<div class="meta"><span class="who2">'+esc(h.name||'观众')+'</span><span>· '+fmt(h.ts)+'</span>'+
+        (h.likes?'<span class="like">♥ '+h.likes+'</span>':'')+'</div>'+
+      '<div class="q"><span class="tag">问</span><span>'+esc(h.question)+'</span></div>'+
+      '<div class="a"><span class="tag">答</span><span>'+esc(h.answer)+'</span></div>'+
+      '<div class="tools"><button data-copy="'+h.id+'">复制问答</button>'+
+        '<div class="menu"><button data-card="'+h.id+'">🖼 图片卡 ▾</button>'+
+          '<div class="pop">'+
+            '<a href="/api/highlights/'+h.id+'/card.png?ratio=4x5" download>竖图 4:5</a>'+
+            '<a href="/api/highlights/'+h.id+'/card.png?ratio=9x16" download>短视频 9:16</a>'+
+            '<a href="/api/highlights/'+h.id+'/card.png?ratio=1x1" download>方图 1:1</a>'+
+          '</div></div>'+
+      '</div>'+
+      '<div class="brand">'+esc($('who').textContent)+'</div>'+
+    '</div>'
+  )).join('');
+  $('grid').querySelectorAll('[data-copy]').forEach(b=>b.addEventListener('click',()=>{
+    const h=DATA.find(x=>x.id==b.dataset.copy); if(!h) return;
+    const t='问：'+h.question+'\n答：'+h.answer;
+    navigator.clipboard?.writeText(t).then(()=>{b.textContent='已复制';setTimeout(()=>b.textContent='复制问答',1200);});
+  }));
+  $('grid').querySelectorAll('[data-card]').forEach(b=>b.addEventListener('click',e=>{
+    e.stopPropagation(); const m=b.parentElement;
+    document.querySelectorAll('.menu.open').forEach(x=>{if(x!==m)x.classList.remove('open');});
+    m.classList.toggle('open');
+  }));
+}
+let CUR='';        // 当前场次（''=本场实时）
+async function loadSessions(){
+  try{
+    const d=await (await fetch('/api/highlights/sessions',{cache:'no-store'})).json();
+    const opts=['<option value="">本场（实时）</option>'].concat(
+      (d.sessions||[]).map(s=>{
+        const lbl=s.session+(s.session===d.current?' · 本场':'')+' ('+s.count+')';
+        return '<option value="'+s.session+'">'+lbl+'</option>';
+      }));
+    $('sess').innerHTML=opts.join('');
+    $('sess').value=CUR;
+  }catch(e){}
+}
+async function load(){
+  try{
+    const live=(CUR==='');
+    const url=live?'/api/highlights?limit=100':('/api/highlights/archive?session='+encodeURIComponent(CUR));
+    const d=await (await fetch(url,{cache:'no-store'})).json();
+    $('who').textContent=d.profile||'数字人';
+    $('cnt').textContent=(d.count||0)+' 条';
+    // 导出/清空按钮跟随当前场次
+    $('exp').href='/api/highlights/export'+(live?'':('?session='+encodeURIComponent(CUR)));
+    $('clear').style.display=live?'':'none';   // 历史场次只读，避免误删
+    DATA=d.highlights||[]; render();
+  }catch(e){}
+}
+$('sess').addEventListener('change',()=>{ CUR=$('sess').value; load(); });
+$('refresh').addEventListener('click',()=>{ loadSessions(); load(); });
+$('clear').addEventListener('click',async()=>{
+  if(!confirm('清空本场所有问答记录？（历史场次保留，不影响正在进行的直播）')) return;
+  try{ await fetch('/api/highlights',{method:'DELETE'}); loadSessions(); load(); }catch(e){}
+});
+document.addEventListener('click',()=>document.querySelectorAll('.menu.open').forEach(m=>m.classList.remove('open')));
+loadSessions(); load();
+setInterval(()=>{ if(CUR==='') load(); },8000);   // 仅本场实时轮询，历史场次静态
+</script>
+</body>
+</html>

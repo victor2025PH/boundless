@@ -1,0 +1,88 @@
+{
+  "backend": {
+    "base_url": "http://127.0.0.1:18799",
+    "token": "admin",
+    "user": "",
+    "pass": "",
+    "spawn": {
+      "enabled": true,
+      "_note": "桌面自动拉起后端（免手动起 Python）。拉起前先探活：后端已在跑则复用、不重复拉起（零回归）。enabled=false 则完全由用户自管。发布态优先用 resources/backend/backend(.exe) 自包含二进制；开发态回退系统 Python 跑仓库根 main.py。",
+      "command": "",
+      "args": [],
+      "cwd": "",
+      "python": ""
+    }
+  },
+  "translate": {
+    "target_lang": "zh",
+    "auto": false
+  },
+  "unified_inbox": {
+    "enabled": true,
+    "label": "统一收件箱",
+    "path": "/workspace",
+    "lang": ""
+  },
+  "sync": {
+    "enabled": true
+  },
+  "embedded_official_pages": {
+    "enabled": false,
+    "_note": "桌面默认仅显示统一收件箱（与网页同源同款）。置 true 可恢复左侧账号栏 + 内嵌官方 Telegram/WhatsApp 网页 Tab（免安卓真机扫码 + 注入翻译/智能回复）。"
+  },
+  "debug": false,
+  "platforms": [
+    {
+      "id": "telegram",
+      "name": "Telegram",
+      "url": "https://web.telegram.org/k/",
+      "inject": "tg-inject.js"
+    },
+    {
+      "id": "whatsapp",
+      "name": "WhatsApp",
+      "url": "https://web.whatsapp.com/",
+      "inject": "tg-inject.js"
+    },
+    {
+      "id": "messenger",
+      "name": "Messenger",
+      "url": "https://www.messenger.com/",
+      "inject": "tg-inject.js"
+    },
+    {
+      "id": "instagram",
+      "name": "Instagram",
+      "url": "https://www.instagram.com/direct/inbox/",
+      "inject": "tg-inject.js"
+    },
+    {
+      "id": "x",
+      "name": "X (Twitter)",
+      "url": "https://x.com/messages",
+      "inject": "tg-inject.js"
+    },
+    {
+      "id": "zalo",
+      "name": "Zalo",
+      "url": "https://chat.zalo.me/",
+      "inject": "tg-inject.js"
+    },
+    {
+      "id": "line",
+      "name": "LINE",
+      "url": "https://line.me/",
+      "inject": "tg-inject.js"
+    }
+  ],
+  "accounts": [
+    {
+      "id": "tg-desktop",
+      "platform": "telegram",
+      "label": "Telegram 账号1",
+      "persona_id": "",
+      "proxy": "",
+      "enabled": true
+    }
+  ]
+}

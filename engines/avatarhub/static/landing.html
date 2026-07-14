@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
+<meta name="theme-color" content="#080b10"/>
+<title>听我说一句 · 无界科技 BOUNDLESS</title>
+<!--OG_META-->
+<link rel="stylesheet" href="/static/brand.css"/>
+<script src="/static/brand.js"></script>
+<style>
+:root{
+  --bg:#080b10; --txt:#e5e9f5; --mut:#8b96b0;
+  /* 白标：主色继承 brand.js 注入的 --bd-acc / --bd-acc-rgb（未注入则回退默认蓝紫）*/
+  --acc:var(--bd-acc,#4f7aff); --acc-rgb:var(--bd-acc-rgb,79 122 255); --acc2:var(--bd-acc2,#a855f7);
+  --grad:linear-gradient(135deg,var(--acc),var(--acc2));
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+html,body{height:100%;}
+body{
+  background:
+    radial-gradient(120% 60% at 50% 0%, rgb(var(--acc-rgb) / .18), transparent 55%),
+    radial-gradient(120% 60% at 50% 100%, color-mix(in srgb, var(--acc2) 14%, transparent), transparent 50%),
+    var(--bg);
+  color:var(--txt); font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+  min-height:100dvh; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  padding:28px 22px calc(28px + env(safe-area-inset-bottom)); text-align:center; overflow-x:hidden;
+}
+.wrap{ width:100%; max-width:420px; display:flex; flex-direction:column; align-items:center; gap:0; }
+.brand{ font-size:12px; color:var(--mut); letter-spacing:1.5px; text-transform:uppercase; margin-bottom:22px; }
+.brand b{ background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent; font-weight:800; }
+
+/* 头像 */
+.ava-box{ position:relative; width:200px; height:200px; margin-bottom:18px; }
+.ava-box .halo{ position:absolute; inset:-12px; border-radius:36px; z-index:0;
+  background:radial-gradient(circle,rgb(var(--acc-rgb) / .27) 0%, transparent 70%);
+  animation:halo 4.5s ease-in-out infinite; }
+.ava-box img, .ava-box .ph{ position:relative; z-index:1; width:200px; height:200px;
+  border-radius:30px; object-fit:cover; border:2px solid rgb(var(--acc-rgb) / .5);
+  box-shadow:0 16px 48px rgba(0,0,0,.55); animation:breath 4.5s ease-in-out infinite; }
+.ava-box .ph{ display:flex; align-items:center; justify-content:center; font-size:72px;
+  background:#161d2c; color:#5b6b8c; }
+.ava-box.playing img, .ava-box.playing .ph{ animation:breathFast 1.1s ease-in-out infinite;
+  border-color:var(--acc); }
+@keyframes breath{ 0%,100%{transform:translateY(0) scale(1);} 50%{transform:translateY(-6px) scale(1.02);} }
+@keyframes breathFast{ 0%,100%{transform:scale(1);} 50%{transform:scale(1.035);} }
+@keyframes halo{ 0%,100%{opacity:.4; transform:scale(1);} 50%{opacity:.8; transform:scale(1.3);} }
+
+.gold{ display:none; align-items:center; gap:5px; font-size:12px; font-weight:800; color:#3a2400;
+  background:linear-gradient(135deg,#f59e0b,#fbbf24); border-radius:14px; padding:4px 14px;
+  box-shadow:0 4px 16px #f59e0b66; margin-bottom:10px; }
+.gold.on{ display:inline-flex; }
+.name{ font-size:30px; font-weight:800; letter-spacing:.5px; }
+.badge{ font-size:13px; font-weight:700; padding:4px 14px; border-radius:16px; margin-top:10px;
+  background:rgba(34,197,94,.16); color:#4ade80; }
+.badge.gold{ display:inline-block; background:linear-gradient(135deg,#f59e0b,#fbbf24); color:#3a2400; }
+.slogan{ font-size:14px; color:#aab4cc; line-height:1.6; margin-top:14px; max-width:90%; }
+
+/* 主播放按钮 */
+.play{ margin-top:28px; display:inline-flex; align-items:center; gap:9px;
+  background:var(--grad); color:#fff; border:none; border-radius:30px;
+  padding:16px 38px; font-size:17px; font-weight:800; cursor:pointer;
+  box-shadow:0 10px 32px rgb(var(--acc-rgb) / .33); transition:transform .12s, filter .2s;
+  animation:cta 2.4s ease-in-out infinite; }
+.play:hover{ filter:brightness(1.08); }
+.play:active{ transform:scale(.96); }
+.play.playing{ animation:none; background:#16203a; box-shadow:none; border:1px solid var(--acc); }
+@keyframes cta{ 0%,100%{box-shadow:0 10px 32px rgb(var(--acc-rgb) / .33);} 50%{box-shadow:0 10px 40px rgb(var(--acc-rgb) / .67), 0 0 0 8px rgb(var(--acc-rgb) / .13);} }
+.bars{ display:inline-flex; gap:3px; align-items:flex-end; height:16px; }
+.bars span{ width:3px; background:#fff; border-radius:3px; animation:bar .9s ease-in-out infinite; }
+.bars span:nth-child(2){animation-delay:.15s;} .bars span:nth-child(3){animation-delay:.3s;}
+.bars span:nth-child(4){animation-delay:.45s;}
+@keyframes bar{ 0%,100%{height:5px;} 50%{height:15px;} }
+
+.cta-row{ margin-top:16px; display:flex; flex-direction:column; gap:10px; width:100%; align-items:center; }
+.make{ width:min(280px,100%); background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.16);
+  color:#fff; border-radius:16px; padding:14px; font-size:15px; font-weight:700; cursor:pointer;
+  transition:all .2s; }
+.make:hover{ background:rgb(var(--acc-rgb) / .18); border-color:var(--acc); }
+.make:active{ transform:scale(.98); }
+.foot{ margin-top:26px; font-size:12px; color:#5b6b8c; line-height:1.6; }
+.foot b{ color:#7c8db0; }
+.err{ margin-top:14px; font-size:12px; color:#f87171; min-height:16px; }
+
+/* AB 盲听挑战（猜哪个是真人原声） */
+.ab{ display:none; margin-top:24px; width:min(340px,100%); }
+.ab-title{ font-size:13px; color:#aab4cc; margin-bottom:10px; }
+.ab-row{ display:flex; gap:10px; }
+.ab-btn{ flex:1; display:flex; flex-direction:column; align-items:center; gap:3px;
+  background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.16); color:#fff;
+  border-radius:14px; padding:12px 8px; font-size:15px; font-weight:700; cursor:pointer;
+  transition:all .18s; }
+.ab-btn small{ font-size:12px; color:var(--mut); font-weight:400; }
+.ab-btn:hover{ border-color:var(--acc); background:rgb(var(--acc-rgb) / .14); }
+.ab-btn:active{ transform:scale(.97); }
+.ab-btn.playing{ border-color:var(--acc); background:rgb(var(--acc-rgb) / .22); }
+.ab-btn.real{ border-color:#34d399; background:rgba(52,211,153,.16); }
+.ab-btn.fake{ border-color:#64748b; opacity:.6; }
+.ab-guess{ display:flex; gap:10px; margin-top:10px; }
+.ab-gbtn{ flex:1; background:rgb(var(--acc-rgb) / .12); border:1px solid rgb(var(--acc-rgb) / .4);
+  color:color-mix(in srgb, rgb(var(--acc-rgb)) 40%, #fff); border-radius:12px; padding:10px 8px; font-size:13px; font-weight:700;
+  cursor:pointer; transition:all .18s; }
+.ab-gbtn:hover{ background:rgb(var(--acc-rgb) / .24); }
+.ab-gbtn:active{ transform:scale(.97); }
+.ab-result{ margin-top:12px; font-size:13px; line-height:1.5; min-height:18px; }
+.ab-result .ok{ color:#34d399; font-weight:700; }
+.ab-result .no{ color:#fbbf24; font-weight:700; }
+.ab-cta{ display:none; margin-top:12px; width:100%; padding:13px;
+  background:linear-gradient(135deg,var(--acc),var(--acc2)); border:none; color:#fff;
+  border-radius:14px; font-size:15px; font-weight:800; cursor:pointer;
+  box-shadow:0 6px 20px rgb(var(--acc-rgb) / .4); animation:cta 1.6s ease-in-out infinite; }
+.ab-cta:active{ transform:scale(.97); }
+
+/* ⑧ 多角色橱窗（无 profile 时的产品门面） */
+.gal{ display:none; width:100%; max-width:680px; }
+.gal h1{ font-size:22px; font-weight:800; margin-bottom:4px; }
+.gal h1 b{ background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent; }
+.gal .sub{ font-size:13px; color:var(--mut); margin-bottom:22px; }
+.gal-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:14px; }
+.gcard{ background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.1);
+  border-radius:18px; padding:16px 12px; cursor:pointer; transition:all .2s; position:relative; }
+.gcard:hover{ border-color:var(--acc); transform:translateY(-3px); box-shadow:0 10px 28px rgba(0,0,0,.4); }
+.gcard:active{ transform:scale(.98); }
+.gcard img,.gcard .gph{ width:88px; height:88px; border-radius:20px; object-fit:cover;
+  border:2px solid rgb(var(--acc-rgb) / .4); margin-bottom:10px; }
+.gcard .gph{ display:flex; align-items:center; justify-content:center; font-size:40px;
+  background:#161d2c; color:#5b6b8c; margin:0 auto 10px; }
+.gcard .gn{ font-size:15px; font-weight:700; }
+.gcard .gb{ font-size:12px; color:#34d399; margin-top:4px; font-weight:600; }
+.gcard .gb.norm{ color:color-mix(in srgb, rgb(var(--acc-rgb)) 55%, #fff); }
+.gcard .crown{ position:absolute; top:10px; right:12px; font-size:16px; }
+.gcard .gplay{ position:absolute; top:8px; left:8px; width:30px; height:30px; border-radius:50%;
+  background:rgba(8,11,16,.7); border:1px solid rgba(255,255,255,.25); color:#fff; font-size:12px;
+  cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all .18s;
+  backdrop-filter:blur(4px); }
+.gcard .gplay:hover{ background:var(--acc); border-color:var(--acc); }
+.gcard .gplay.playing{ background:var(--acc); border-color:var(--acc); animation:breathFast 1.1s ease-in-out infinite; }
+.gal-sort{ display:flex; gap:8px; justify-content:center; margin-bottom:16px; }
+.gsort{ font-size:12px; color:#8b96b0; padding:5px 14px; border-radius:20px; cursor:pointer;
+  border:1px solid rgba(255,255,255,.12); transition:all .18s; }
+.gsort:hover{ border-color:var(--acc); color:color-mix(in srgb, rgb(var(--acc-rgb)) 40%, #fff); }
+.gsort.on{ background:rgb(var(--acc-rgb) / .18); border-color:var(--acc); color:#fff; font-weight:700; }
+.gal-foot{ margin-top:28px; }
+.gal-make{ background:var(--grad); border:none; color:#fff; padding:13px 30px; border-radius:14px;
+  font-size:15px; font-weight:800; cursor:pointer; box-shadow:0 6px 20px rgb(var(--acc-rgb) / .4); }
+.gal-make:active{ transform:scale(.97); }
+/* 无障碍：焦点环(:focus-visible) 与「减少动态效果」降级由 brand.css 全局统一提供，此处不再重复 */
+</style>
+</head>
+<body>
+<div class="wrap" id="single">
+  <div class="brand"><b><span data-bd-name>无界</span> · <span data-bd-product>幻声 VoiceX</span></b> · 真人音色克隆</div>
+  <div class="ava-box" id="avaBox" onclick="playVoice()">
+    <div class="halo"></div>
+    <div class="ph" id="avaPh">👤</div>
+    <img id="ava" alt="" style="display:none"/>
+  </div>
+  <span class="gold" id="gold">🏆 金标音色</span>
+  <div class="name" id="name">…</div>
+  <div class="badge" id="badge" style="display:none"></div>
+  <div class="slogan" id="slogan">我的声音由真人音色克隆，点下面听我说一句</div>
+
+  <button class="play" id="play" onclick="playVoice()">▶ 听我说一句</button>
+  <div class="err" id="err"></div>
+
+  <div class="ab" id="ab">
+    <div class="ab-title">🎧 盲听挑战：哪个才是真人原声？</div>
+    <div class="ab-row">
+      <button class="ab-btn" id="abA" onclick="playSlot('A')">▶ A<small>点击试听</small></button>
+      <button class="ab-btn" id="abB" onclick="playSlot('B')">▶ B<small>点击试听</small></button>
+    </div>
+    <div class="ab-guess" id="abGuess">
+      <button class="ab-gbtn" onclick="guess('A')">A 是真人</button>
+      <button class="ab-gbtn" onclick="guess('B')">B 是真人</button>
+    </div>
+    <div class="ab-result" id="abResult"></div>
+    <button class="ab-cta" id="abCta" onclick="goMakeFromAB()">✨ 几乎分不出？我也做一个同款</button>
+  </div>
+
+  <div class="cta-row">
+    <button class="make" id="make" onclick="goMake()">🎙 我也做一个</button>
+  </div>
+
+  <div class="foot">由 <b><span data-bd-name>无界科技 BOUNDLESS</span> · <span data-bd-product>幻声 VoiceX</span></b> 实时语音克隆生成 · 打开即可与 TA 对话</div>
+</div>
+
+<div class="gal" id="gallery">
+  <div class="brand"><b><span data-bd-name>无界</span> · <span data-bd-product>幻声 VoiceX</span></b> · 真人音色克隆</div>
+  <h1>挑一个声音，<b>点开听 TA 说一句</b></h1>
+  <div class="sub">真人音色克隆 · 实时语音对话</div>
+  <div class="gal-sort" id="galSort">
+    <span class="gsort on" id="sortSim" role="button" tabindex="0" aria-pressed="true" onclick="sortGallery('sim')" onkeydown="_kbActivate(event)">🏆 最像</span>
+    <span class="gsort" id="sortHot" role="button" tabindex="0" aria-pressed="false" onclick="sortGallery('hot')" onkeydown="_kbActivate(event)">🔥 最热</span>
+    <span class="gsort" id="sortNew" role="button" tabindex="0" aria-pressed="false" onclick="sortGallery('new')" onkeydown="_kbActivate(event)">✨ 最新</span>
+  </div>
+  <div class="gal-grid" id="galGrid"><div class="sub">加载中…</div></div>
+  <div class="gal-foot"><button class="gal-make" onclick="goMake()">🎙 我也做一个</button></div>
+</div>
+
+<audio id="audio" playsinline></audio>
+
+<script>
+const $=id=>document.getElementById(id);
+const profile=new URLSearchParams(location.search).get('profile')||'';
+let audioB64=null, refB64=null, loading=false;
+
+function track(action){
+  try{ fetch('/api/share/track?action='+action+'&profile='+encodeURIComponent(profile),
+             {method:'POST',keepalive:true}); }catch(e){}
+}
+
+async function loadProfile(){
+  try{
+    const d=await (await fetch('/profiles')).json();
+    const list=d.profiles||d||[];
+    const p=list.find(x=>x.name===profile);
+    if(!p){                       // [P9] 分享的角色已不存在：有其它角色就转橱窗让访客挑选，别让分享链接扑空
+      if(list.length){ showGallery(); return; }
+      $('name').textContent='这个声音暂时找不到了'; return;
+    }
+    $('name').textContent=p.name;
+    document.title=p.name+' · 听我说一句';
+    if(p.thumbnail){ const im=$('ava'); im.src='data:image/jpeg;base64,'+p.thumbnail;
+      im.style.display='block'; $('avaPh').style.display='none'; }
+    const cos=(p.quality_axes||{}).cosine||0;
+    if(cos>0){ const pct=Math.round(cos*100); const gold=cos>=0.75;
+      const b=$('badge'); b.textContent=(gold?'🏆 ':'')+'音色相似度 '+pct+'%';
+      b.style.display='inline-block'; b.classList.toggle('gold',gold);
+      $('gold').classList.toggle('on',gold); }
+    if(p.description) $('slogan').textContent=p.description;
+    // 预拉试听音频（缓存命中即秒回）
+    prefetchVoice(p.name);
+    // AB 对比：拉真人原声（受门控；可用才显示对比组件）
+    fetch('/profiles/'+encodeURIComponent(p.name)+'/reference_audio')
+      .then(r=>r.ok?r.json():null).then(d=>{ if(d&&d.ok&&d.audio_base64){
+        refB64=d.audio_base64; $('ab').style.display='block'; } }).catch(()=>{});
+    // 尝试自动播放（多数移动端会被拦截→保留按钮引导点击）
+    setTimeout(()=>{ tryAutoplay(); }, 600);
+  }catch(e){ $('name').textContent='加载遇到点问题，刷新重试一下'; }
+}
+
+async function prefetchVoice(name){
+  try{
+    const d=await (await fetch('/profiles/'+encodeURIComponent(name)+'/voice_preview')).json();
+    if(d&&d.ok&&d.audio_base64) audioB64=d.audio_base64;
+  }catch(e){}
+}
+
+function tryAutoplay(){
+  if(!audioB64) return;
+  const a=$('audio'); a.src='data:audio/wav;base64,'+audioB64;
+  a.play().then(()=>setPlaying(true)).catch(()=>{ /* 被策略拦截，等用户点击 */ });
+}
+
+async function playVoice(){
+  $('err').textContent='';
+  const a=$('audio');
+  if(!a.paused){ a.pause(); a.currentTime=0; setPlaying(false); return; }
+  if(!audioB64){
+    if(loading) return; loading=true; $('play').innerHTML='⏳ 准备中…';
+    try{
+      const d=await (await fetch('/profiles/'+encodeURIComponent(profile)+'/voice_preview')).json();
+      if(d&&d.ok&&d.audio_base64) audioB64=d.audio_base64;
+    }catch(e){}
+    loading=false;
+    if(!audioB64){ $('err').textContent='试听暂不可用，点「我也做一个」开始体验'; setPlaying(false); return; }
+  }
+  a.src='data:audio/wav;base64,'+audioB64;
+  try{ await a.play(); setPlaying(true); }
+  catch(e){ $('err').textContent='再点一次「听我说一句」就能播放'; setPlaying(false); }
+}
+
+function setPlaying(on){
+  $('avaBox').classList.toggle('playing',on);
+  const btn=$('play');
+  btn.classList.toggle('playing',on);
+  btn.innerHTML = on
+    ? '<span class="bars"><span></span><span></span><span></span><span></span></span> 播放中…'
+    : '▶ 听我说一句';
+}
+function clearAB(){ $('abA').classList.remove('playing'); $('abB').classList.remove('playing'); }
+$('audio').addEventListener('ended',()=>{ setPlaying(false); clearAB();
+  if(_galPlaying>=0){ _galSetPlay(_galPlaying,false); _galPlaying=-1; } });
+
+// AB 盲听挑战：随机把"真人原声"分到 A 或 B，用户先听后猜，揭晓真相
+// 防偏置：分槽按 session 固定（刷新不重随机），猜测每 session 只计一次
+const _abKey='ah_ab_'+profile;
+let realSlot = sessionStorage.getItem(_abKey+'_slot');
+if(realSlot!=='A'&&realSlot!=='B'){ realSlot=Math.random()<0.5?'A':'B';
+  try{ sessionStorage.setItem(_abKey+'_slot',realSlot); }catch(e){} }
+let guessed = sessionStorage.getItem(_abKey+'_guessed')==='1';
+function slotB64(slot){ return slot===realSlot ? refB64 : audioB64; }
+
+async function playSlot(slot){
+  const a=$('audio');
+  const wasPlaying=!a.paused;
+  a.pause(); a.currentTime=0; setPlaying(false); clearAB();
+  const btn = $('ab'+slot);
+  if(wasPlaying && btn.dataset.was==='1'){ btn.dataset.was=''; return; }
+  let b64 = slotB64(slot);
+  if(!b64 && slot!==realSlot){   // 克隆音兜底拉取
+    try{ const d=await (await fetch('/profiles/'+encodeURIComponent(profile)+'/voice_preview')).json();
+      if(d&&d.ok&&d.audio_base64){ audioB64=d.audio_base64; b64=audioB64; } }catch(e){}
+  }
+  if(!b64){ $('err').textContent='这段暂时听不了，试试另一个'; return; }
+  track(slot===realSlot ? 'ab_ref' : 'ab_clone');
+  a.src='data:audio/wav;base64,'+b64;
+  $('abA').dataset.was=''; $('abB').dataset.was='';
+  try{ await a.play(); btn.classList.add('playing'); btn.dataset.was='1'; }catch(e){}
+}
+
+function guess(slot){
+  if(guessed) return;
+  guessed = true;
+  try{ sessionStorage.setItem(_abKey+'_guessed','1'); }catch(e){}  // 防偏置：每 session 只计首猜
+  const right = slot===realSlot;
+  track(right ? 'ab_guess_right' : 'ab_guess_wrong');
+  $('ab'+realSlot).classList.add('real');
+  $('ab'+(realSlot==='A'?'B':'A')).classList.add('fake');
+  $('ab'+realSlot).querySelector('small').textContent='真人原声';
+  $('ab'+(realSlot==='A'?'B':'A')).querySelector('small').textContent='AI 克隆';
+  $('abGuess').style.display='none';
+  $('abResult').innerHTML = right
+    ? '<span class="ok">✓ 猜对了！</span> '+realSlot+' 是真人——但你也犹豫了吧？AI 克隆已经很接近了。'
+    : '<span class="no">✗ 没猜中</span>，其实 '+realSlot+' 才是真人——AI 克隆几乎以假乱真。';
+  $('abCta').style.display='block';   // ⑦：惊讶情绪即时导流拉新
+}
+
+function goMakeFromAB(){
+  track('cta_from_ab');
+  goMake();
+}
+
+function goMake(){
+  track('cta');
+  location.href='/phone?profile='+encodeURIComponent(profile);
+}
+
+// ⑧ 多角色橱窗（无 profile 时的产品门面）
+function esc(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+// 键盘激活：Enter/Space 触发点击（仅作用于元素自身；子按钮如内联试听自行处理，避免冒泡误触导航）
+function _kbActivate(e){ if(e.target!==e.currentTarget) return; if(e.key==='Enter'||e.key===' '){ e.preventDefault(); e.currentTarget.click(); } }
+let _galList=[], _galCache={}, _galPlaying=-1, _galPlays={}, _galSort='sim';
+async function showGallery(){
+  $('single').style.display='none';
+  $('gallery').style.display='block';
+  document.title=(function(){ try{ var c=window.__brandConfig&&window.__brandConfig.get(); if(c&&c.name) return c.name+' · 挑个声音听一句'; }catch(_){} return '无界科技 BOUNDLESS · 挑个声音听一句'; })();
+  try{
+    const [pd,sd]=await Promise.all([
+      fetch('/profiles').then(r=>r.json()),
+      fetch('/api/share/plays').then(r=>r.ok?r.json():null).catch(()=>null)
+    ]);
+    _galPlays=(sd&&sd.plays)||{};
+    _galList=(pd.profiles||[]).filter(p=>p.has_voice!==false);
+    if(!_galList.length){ $('galGrid').innerHTML='<div class="sub">暂无可展示的角色</div>'; return; }
+    sortGallery(_galSort);
+  }catch(e){ $('galGrid').innerHTML='<div class="sub">加载遇到点问题，刷新重试一下</div>'; }
+}
+function sortGallery(mode){
+  _galSort=mode;
+  [['sortSim','sim'],['sortHot','hot'],['sortNew','new']].forEach(([id,m])=>{
+    const on=mode===m; $(id).classList.toggle('on',on); $(id).setAttribute('aria-pressed',on?'true':'false');
+  });
+  const heat=n=>{ const s=_galPlays[n]||{}; return (s.gallery_play||0)*2+(s.land||0); };
+  const now=Date.now()/1000;
+  _galList.sort(
+    mode==='hot' ? (a,b)=>heat(b.name)-heat(a.name)||((b.quality_axes||{}).cosine||0)-((a.quality_axes||{}).cosine||0)
+    : mode==='new' ? (a,b)=>(b.created_at||0)-(a.created_at||0)
+    : (a,b)=>((b.quality_axes||{}).cosine||0)-((a.quality_axes||{}).cosine||0));
+  renderGallery();
+}
+function renderGallery(){
+  if(_galPlaying>=0){ _galPlaying=-1; }   // 重排后旧索引失效，停掉播放态
+  const nowSec=Date.now()/1000, week7=7*86400;
+  $('galGrid').innerHTML=_galList.map((p,i)=>{
+    const cos=(p.quality_axes||{}).cosine||0, pct=Math.round(cos*100), gold=cos>=0.75;
+    const isNew=p.created_at&&(nowSec-p.created_at<week7);
+    const img=p.thumbnail?`<img src="data:image/jpeg;base64,${p.thumbnail}" alt=""/>`:`<div class="gph">👤</div>`;
+    let badge=cos>0?`<div class="gb ${gold?'':'norm'}">${gold?'🏆 ':''}相似度 ${pct}%</div>`:'';
+    if(_galSort==='hot'){ const s=_galPlays[p.name]||{}; const pl=s.gallery_play||0;
+      if(pl) badge=`<div class="gb norm">🔥 试听 ${pl} 次</div>`; }
+    if(_galSort==='new'&&isNew) badge=`<div class="gb" style="color:#fbbf24">✨ 7天新晋</div>`;
+    const crown=gold?'<div class="crown">🏆</div>':'';
+    const newBadge=isNew&&_galSort!=='new'?'<div style="position:absolute;top:8px;left:8px;font-size:12px;background:#fbbf24;color:#1a1000;border-radius:6px;padding:1px 5px;font-weight:700">NEW</div>':'';
+    return `<div class="gcard" role="button" tabindex="0" aria-label="打开 ${esc(p.name)} 的语音页" onclick="location.href='/s?profile=${encodeURIComponent(p.name)}'" onkeydown="_kbActivate(event)">${crown}${newBadge}${img}
+      <button class="gplay" id="gplay${i}" aria-label="试听 ${esc(p.name)} 的声音" onclick="event.stopPropagation();playCard(${i})">▶</button>
+      <div class="gn">${esc(p.name)}</div>${badge}</div>`;
+  }).join('');
+}
+
+// ⑩ 橱窗卡片内联试听（不跳转，直接播一句）
+function _galSetPlay(i,on){ const b=$('gplay'+i); if(b){ b.classList.toggle('playing',on); b.textContent=on?'❚❚':'▶'; } }
+async function playCard(i){
+  const a=$('audio'), p=_galList[i]; if(!p) return;
+  a.pause(); a.currentTime=0;
+  if(_galPlaying>=0) _galSetPlay(_galPlaying,false);
+  if(_galPlaying===i){ _galPlaying=-1; return; }   // 再点同一个=停止
+  _galPlaying=i;
+  let b64=_galCache[p.name];
+  if(!b64){
+    _galSetPlay(i,true); const btn=$('gplay'+i); if(btn) btn.textContent='⏳';
+    try{ const d=await (await fetch('/profiles/'+encodeURIComponent(p.name)+'/voice_preview')).json();
+      if(d&&d.ok&&d.audio_base64){ b64=d.audio_base64; _galCache[p.name]=b64; } }catch(e){}
+  }
+  if(!b64){ _galSetPlay(i,false); _galPlaying=-1; return; }
+  try{ fetch('/api/share/track?action=gallery_play&profile='+encodeURIComponent(p.name),{method:'POST',keepalive:true}); }catch(e){}
+  a.src='data:audio/wav;base64,'+b64;
+  _galSetPlay(i,true);
+  try{ await a.play(); }catch(e){ _galSetPlay(i,false); _galPlaying=-1; }
+}
+
+track('land');
+// P10 来源细分：扫码进站单记一笔（recap=开播战报 QR / poster=手机海报 QR），
+// 白名单映射防任意 from 值刷出未知 action；扫码转化在 /api/share/stats 可量化
+var _src={recap:'land_recap', poster:'land_poster'}[new URLSearchParams(location.search).get('from')];
+if(_src) track(_src);
+if(profile){ loadProfile(); } else { showGallery(); }
+</script>
+</body>
+</html>

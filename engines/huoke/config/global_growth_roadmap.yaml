@@ -1,0 +1,41 @@
+# 全球化增长分阶段路线（配置级，供 /growth/roadmap 读取）
+# 说明：所有渠道均需遵守各平台服务条款与当地法律；本文件仅描述产品与工程优先级。
+
+version: 1
+phases:
+  - id: P0
+    title: "已落地（手机自动化任务）"
+    platforms:
+      - { id: tiktok, note: "养号/关注/DM/全流程，与 device_state + Leads 联动" }
+      - { id: telegram, note: "消息、群、自动回复" }
+      - { id: whatsapp, note: "消息、媒体、列表" }
+      - { id: facebook, note: "动态、加好友、群组、潜客搜索" }
+      - { id: linkedin, note: "连接、消息、动态互动（B2B 高意向）" }
+    engineering:
+      - "漏斗需绑定「成交金额」才可回答是否真转化"
+      - "统一 POST /tasks 的 TaskType，与 executor 一致"
+
+  - id: P1
+    title: "扩展高需求社交层（工程已接任务类型）"
+    platforms:
+      - { id: instagram, note: "视觉品类、红人合作、DM 转化" }
+      - { id: twitter, aliases: [x], note: "话题/搜索参与、公域声量" }
+    engineering:
+      - "browse / 搜潜客 / DM 任务进 Worker"
+      - "Leads source_platform 与 funnel 对齐"
+
+  - id: P2
+    title: "社区与搜索意图（需单独选型与合规评估）"
+    platforms:
+      - { id: reddit, note: "子版块长尾需求强，适合内容+软转化" }
+      - { id: discord, note: "社群运营、付费群、SaaS 支持" }
+      - { id: youtube, note: "长视频信任链，适合高客单" }
+    engineering:
+      - "新增 Automation 模块 + TaskType + 速率限制"
+
+  - id: P3
+    title: "归因与变现闭环"
+    checkpoints:
+      - "CRM：成交金额、币种、外部订单号"
+      - "每渠道 CAC / LTV（至少手工录入成交）"
+      - "与合规 guard 联动，避免单账号动作过载"

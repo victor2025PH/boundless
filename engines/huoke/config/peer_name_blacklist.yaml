@@ -1,0 +1,15 @@
+# Phase 17.1 (2026-04-25): 运营可热加载的 peer_name UI 文本黑名单.
+#
+# 这里加的词会和模块内置 _MESSENGER_UI_TEXT_BLACKLIST 合并 (大小写不敏感).
+# 改完保存即可, server 不需要重启 — 5 分钟 TTL 缓存自动 reload.
+#
+# 使用场景: 真机生产跑出新 UI 文本被抓 (来自新 FB 版本 / 新功能 / 新语言),
+# 临时加进来 ban, 比改 facebook.py 快.
+#
+# 后续若稳定且高频, 可移到 facebook.py 模块常量, 让 yaml 保持精简.
+
+extra_blacklist:
+  # 例:
+  # - "新功能按钮文本"
+  # - "新语言 reply 词"
+  # - "FB 在 2026 Q3 改的某个 label"

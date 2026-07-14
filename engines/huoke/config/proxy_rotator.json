@@ -1,0 +1,17 @@
+{
+  "r-rl": {
+    "last_rotation": 1775879228.8038056,
+    "rotation_count": 0,
+    "blacklist": [],
+    "history": []
+  },
+  "r-ex": {
+    "last_rotation": 0.0,
+    "rotation_count": 0,
+    "blacklist": [
+      "px-a",
+      "px-b"
+    ],
+    "history": []
+  }
+}

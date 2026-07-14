@@ -1,0 +1,3 @@
+# 占位符，让 config/apks/ 目录在仓库中存在
+# 用途：runtime 投放预构建 MockLocation APK (openclaw_mock_location.apk 等)
+# 由 src/host/routers/router_mgmt.py 的 upload endpoint 写入；tests/test_phase7.py 校验目录存在

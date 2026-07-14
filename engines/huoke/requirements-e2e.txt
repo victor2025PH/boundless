@@ -1,0 +1,9 @@
+# E2E：pytest + Playwright（与 requirements.txt 分开，按需安装）
+# pip install -r requirements-e2e.txt
+# python -m playwright install chromium
+# 默认 pytest.ini 已排除 e2e；显式运行：pytest tests/e2e -m e2e -v
+# 失败保留 trace：pytest tests/e2e -m e2e --tracing=retain-on-failure（见 test-results/）
+
+pytest>=7.0.0
+pytest-playwright>=0.4.0
+playwright>=1.40.0

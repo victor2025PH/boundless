@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="{{ 'zh-CN' if (ui_lang|default('zh')) == 'zh' else 'en' }}"><head><meta charset="utf-8">
+<title>Contacts · Ops</title>
+{% include "_i18n_bootstrap.html" %}
+<style>
+body{font-family:-apple-system,Segoe UI,sans-serif;max-width:1100px;margin:20px auto;padding:0 20px;background:#fafafa;color:#222}
+h1{font-size:20px;margin-bottom:4px}
+.stats{display:flex;gap:12px;margin:10px 0 20px;flex-wrap:wrap}
+.pill{padding:6px 12px;background:#fff;border:1px solid #ddd;border-radius:6px;font-size:13px}
+.pill strong{color:#2563eb}
+table{width:100%;border-collapse:collapse;background:#fff;font-size:13px}
+th,td{padding:8px 10px;text-align:left;border-bottom:1px solid #eee}
+th{background:#f3f4f6;font-weight:600;color:#444}
+tr:hover{background:#f9fafb}
+.stage{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
+.s-INITIAL{background:#e5e7eb;color:#374151}
+.s-ENGAGED{background:#dbeafe;color:#1e40af}
+.s-WARMING,.s-HANDOFF_READY{background:#fef9c3;color:#854d0e}
+.s-HANDOFF_SENT{background:#fef3c7;color:#92400e}
+.s-LINE_ADDED,.s-LINE_ACCEPTED{background:#e0f2fe;color:#075985}
+.s-LINE_ENGAGED{background:#d1fae5;color:#065f46}
+.s-BONDED,.s-CONVERTED{background:#fce7f3;color:#9f1239}
+.s-LOST_HANDOFF,.s-LOST_LINE_SILENT{background:#fee2e2;color:#991b1b}
+.empty{padding:40px;text-align:center;color:#888}
+a{color:#2563eb;text-decoration:none}
+a:hover{text-decoration:underline}
+.nav{margin-bottom:20px}
+.nav a{margin-right:14px;font-size:13px}
+/* ── Funnel chart (W4-Ops) ── */
+.funnel-wrap{background:#fff;border:1px solid #ddd;border-radius:6px;padding:14px 16px;margin:12px 0 20px}
+.funnel-wrap h3{font-size:13px;margin:0 0 10px;color:#555;font-weight:600}
+.funnel-row{display:flex;align-items:center;height:24px;margin-bottom:4px;font-size:12px}
+.funnel-label{flex:0 0 140px;color:#555;text-align:right;padding-right:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.funnel-bar{flex:1;height:22px;background:#f1f5f9;border-radius:3px;position:relative;overflow:hidden}
+.funnel-fill{height:100%;border-radius:3px;display:flex;align-items:center;padding:0 8px;color:#fff;font-weight:600;font-size:11px;transition:width .3s}
+.funnel-count{flex:0 0 44px;text-align:right;color:#111;font-weight:600;padding-left:10px}
+.funnel-conv{flex:0 0 56px;text-align:right;color:#888;font-size:11px;padding-left:8px}
+.funnel-lost .funnel-fill{background:#dc2626!important}
+/* ── 时间线 Drawer ── */
+#drawer-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:100}
+#drawer{position:fixed;right:0;top:0;height:100%;width:420px;max-width:95vw;background:#fff;box-shadow:-4px 0 24px rgba(0,0,0,.15);z-index:101;display:flex;flex-direction:column;transform:translateX(100%);transition:transform .22s ease}
+#drawer.open{transform:translateX(0)}
+.drawer-head{padding:16px 18px 12px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px}
+.drawer-head h2{font-size:15px;margin:0;flex:1}
+.drawer-close{background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;padding:0 4px}
+.drawer-body{flex:1;overflow-y:auto;padding:14px 18px}
+.tl-item{display:flex;gap:10px;margin-bottom:14px}
+.tl-dot{width:10px;height:10px;border-radius:50%;background:#d1d5db;flex-shrink:0;margin-top:4px}
+.tl-dot.mobile{background:#7c3aed}
+.tl-dot.regular{background:#2563eb}
+.tl-content{flex:1;min-width:0}
+.tl-type{font-size:12px;font-weight:700;color:#374151}
+.tl-type.mobile-event{color:#7c3aed}
+.tl-ts{font-size:11px;color:#9ca3af;margin-left:6px}
+.tl-payload{font-size:11px;color:#555;margin-top:3px;background:#f8fafc;border-radius:4px;padding:5px 8px;word-break:break-all}
+.tl-snip{font-style:italic;color:#374151;margin-top:2px;font-size:11px}
+.tl-empty{color:#9ca3af;font-size:13px;text-align:center;margin-top:30px}
+tr.clickable:hover td{background:#eff6ff;cursor:pointer}
+/* ── 搜索框 ── */
+.search-bar{display:flex;gap:8px;margin-bottom:14px;align-items:center}
+.search-bar input{flex:1;padding:7px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;outline:none}
+.search-bar input:focus{border-color:#2563eb;box-shadow:0 0 0 2px rgba(37,99,235,.12)}
+.search-hint{font-size:12px;color:#94a3b8}
+.result-badge{display:inline-block;padding:2px 8px;background:#e0f2fe;color:#0369a1;border-radius:4px;font-size:12px;font-weight:600;margin-left:8px}
+.nav a.active{font-weight:700;color:#1e3a8a;border-bottom:2px solid #2563eb;padding-bottom:2px}
+</style></head>
+<body>
+{% include "ops/_ops_nav.html" %}
+<h1>Contacts <span id="result-badge" class="result-badge" style="display:none"></span></h1>
+<div class="search-bar">
+  <input id="search-input" type="search" placeholder="{{ (i18n or {}).get('ops.ct.search_ph', '搜索联系人名称 / Canonical ID / Contact ID…') }}" oninput="onSearchInput(this.value)" onkeydown="if(event.key==='Enter')doSearch()">
+  <span class="search-hint" id="search-hint"></span>
+</div>
+<div class="stats" id="stats"></div>
+<div class="funnel-wrap" id="funnel-wrap" style="display:none">
+  <h3>{{ (i18n or {}).get('ops.ct.funnel_title', '漏斗阶段分布（快照）') }}</h3>
+  <div id="funnel-forward"></div>
+  <div id="funnel-lost-sep" style="margin:10px 0 6px;font-size:11px;color:#888;display:none">{{ (i18n or {}).get('dash.stage.LOST', '流失') }}</div>
+  <div id="funnel-lost"></div>
+</div>
+<!-- 时间线 Drawer -->
+<div id="drawer-overlay" onclick="closeDrawer()"></div>
+<div id="drawer">
+  <div class="drawer-head">
+    <h2 id="drawer-title">{{ (i18n or {}).get('ops.ct.drawer_title', '联系人时间线') }}</h2>
+    <button class="drawer-close" onclick="closeDrawer()">✕</button>
+  </div>
+  <div class="drawer-body" id="drawer-body"><p class="tl-empty">{{ (i18n or {}).get('dash.loading', '加载中…') }}</p></div>
+</div>
+
+<table id="tbl"><thead>
+  <tr><th>ID</th><th>{{ (i18n or {}).get('dash.ws.col_name', '名称') }}</th><th>{{ (i18n or {}).get('ops.ct.col_lang', '语言') }}</th><th>{{ (i18n or {}).get('ops.ct.col_stage', '阶段') }}</th><th>Intimacy</th><th>{{ (i18n or {}).get('ops.ct.col_last', '最后活跃') }}</th></tr>
+</thead><tbody></tbody></table>
+<div id="empty" class="empty" style="display:none">{{ (i18n or {}).get('ops.ct.empty', '暂无联系人') }}</div>
+<script>
+function escapeHtml(s){return (s+'').replace(/[&<>"']/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+/* ── Funnel 漏斗图：inline SVG 风格，零外部依赖 ── */
+// 漏斗正向顺序（来自 src/contacts/models.py 的 STAGE_* 常量）
+const FUNNEL_FORWARD = [
+  'INITIAL','ENGAGED','HANDOFF_READY','HANDOFF_SENT',
+  'LINE_ADDED','LINE_ACCEPTED','LINE_ENGAGED','BONDED','CONVERTED',
+];
+const FUNNEL_LOST = ['LOST_HANDOFF','LOST_LINE_SILENT'];
+// 每个阶段的色带（与页面顶部 .s-* 徽章同色，保证视觉一致）
+const FUNNEL_COLOR = {
+  INITIAL:'#9ca3af', ENGAGED:'#3b82f6',
+  HANDOFF_READY:'#eab308', HANDOFF_SENT:'#f59e0b',
+  LINE_ADDED:'#0ea5e9', LINE_ACCEPTED:'#0284c7', LINE_ENGAGED:'#10b981',
+  BONDED:'#db2777', CONVERTED:'#be185d',
+  LOST_HANDOFF:'#dc2626', LOST_LINE_SILENT:'#b91c1c',
+};
+function renderFunnel(byStage){
+  byStage = byStage || {};
+  const fwd = FUNNEL_FORWARD.map(k => [k, byStage[k]||0]);
+  const lost = FUNNEL_LOST.map(k => [k, byStage[k]||0]);
+  const maxVal = Math.max(1, ...fwd.map(p=>p[1]), ...lost.map(p=>p[1]));
+  const total = fwd.reduce((a,p)=>a+p[1],0) + lost.reduce((a,p)=>a+p[1],0);
+  if(total===0){
+    document.getElementById('funnel-wrap').style.display='none';
+    return;
+  }
+  document.getElementById('funnel-wrap').style.display='block';
+  // 漏斗逐级转化率：当前阶段 / 上一阶段（仅 forward 段且都 >0 时显示）
+  const rowHtml = (k, v, prev, isLost) => {
+    const pct = Math.max(4, Math.round(v / maxVal * 100));
+    const color = FUNNEL_COLOR[k] || '#6b7280';
+    let conv = '';
+    if(!isLost && prev !== null && prev > 0 && v > 0){
+      conv = `${Math.round(v/prev*100)}%`;
+    }
+    return `<div class="funnel-row${isLost?' funnel-lost':''}">
+      <div class="funnel-label">${escapeHtml(k)}</div>
+      <div class="funnel-bar">
+        <div class="funnel-fill" style="width:${pct}%;background:${color}">${v>0?v:''}</div>
+      </div>
+      <div class="funnel-count">${v}</div>
+      <div class="funnel-conv">${conv}</div>
+    </div>`;
+  };
+  let html = '', prev = null;
+  for(const [k,v] of fwd){
+    html += rowHtml(k, v, prev, false);
+    prev = v;    // 下一行参考上一行
+  }
+  document.getElementById('funnel-forward').innerHTML = html;
+
+  const lostHasData = lost.some(p=>p[1]>0);
+  document.getElementById('funnel-lost-sep').style.display = lostHasData ? 'block' : 'none';
+  document.getElementById('funnel-lost').innerHTML =
+    lostHasData ? lost.map(([k,v]) => rowHtml(k, v, null, true)).join('') : '';
+}
+
+/* ── 搜索逻辑 ── */
+let _searchTimer = null;
+let _currentQ = '';
+
+function onSearchInput(val){
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(()=>{ doSearch(val); }, 300);
+}
+
+function doSearch(q){
+  if(q===undefined) q = document.getElementById('search-input').value;
+  _currentQ = q.trim();
+  const url = new URL(location.href);
+  if(_currentQ) url.searchParams.set('q',_currentQ);
+  else url.searchParams.delete('q');
+  history.replaceState(null,'',url.toString());
+  renderContacts(_currentQ);
+}
+
+async function renderContacts(q){
+  const qs = q ? `&q=${encodeURIComponent(q)}` : '';
+  const list = await fetch(`/api/contacts?limit=100&expand=journey${qs}`).then(r=>r.json());
+  const badge = document.getElementById('result-badge');
+  const hint = document.getElementById('search-hint');
+  if(q){
+    badge.textContent=window.Tf('ops.ct.n_results',{n:list.total});
+    badge.style.display='';
+    hint.textContent=window.Tf('ops.ct.search_for',{q:q});
+  } else {
+    badge.style.display='none';
+    hint.textContent='';
+  }
+  const tbody=document.querySelector('#tbl tbody');
+  if(!list.items||list.items.length===0){
+    document.getElementById('tbl').style.display='none';
+    document.getElementById('empty').style.display='block';
+    document.getElementById('empty').textContent = q ? window.Tf('ops.ct.no_match',{q:q}) : window.T('ops.ct.empty');
+    return;
+  }
+  document.getElementById('tbl').style.display='';
+  document.getElementById('empty').style.display='none';
+  tbody.innerHTML = list.items.map(c=>{
+    const stage = c.funnel_stage||'INITIAL';
+    const intim = (c.intimacy_score||0).toFixed(1);
+    const last = c.last_active_at ? window.wsFmtDateTime(c.last_active_at) : '-';
+    return `<tr class="clickable" onclick="openDrawer('${c.contact_id}','${escapeHtml(c.primary_name||c.contact_id.slice(0,8))}')">
+      <td><code style="font-size:11px">${c.contact_id.slice(0,8)}</code></td>
+      <td>${escapeHtml(c.primary_name||'-')}</td>
+      <td>${escapeHtml(c.language_hint||'-')}</td>
+      <td><span class="stage s-${stage}">${stage}</span></td>
+      <td>${intim}</td>
+      <td>${last}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function load(){
+  // 一次调用 /api/contacts?expand=journey 拿完所有需要的字段，避免 N+1
+  const initQ = new URLSearchParams(location.search).get('q')||'';
+  if(initQ){ document.getElementById('search-input').value = initQ; _currentQ = initQ; }
+  const [stats] = await Promise.all([
+    fetch('/api/funnel/stats').then(r=>r.json()),
+  ]);
+  const s=document.getElementById('stats');
+  s.innerHTML = `<div class="pill">${window.T('ops.ct.total')} <strong>${stats.total_contacts}</strong></div>`
+    + Object.entries(stats.by_stage||{}).map(([k,v])=>
+        `<div class="pill">${escapeHtml(k)} <strong>${v}</strong></div>`).join('')
+    + Object.entries(stats.by_channel||{}).map(([k,v])=>
+        `<div class="pill">${escapeHtml(k)} ch <strong>${v}</strong></div>`).join('');
+  renderFunnel(stats.by_stage);
+  await renderContacts(initQ);
+}
+load().catch(e=>{document.body.innerHTML+='<p style="color:red">'+window.T('dash.load_fail')+': '+e+'</p>';});
+
+/* ── 时间线 Drawer ── */
+const MOBILE_HANDOFF_STATES = {
+  pending:window.T('ops.ct.st_pending'),acknowledged:window.T('ops.ct.st_acked'),completed:window.T('ops.ct.st_completed'),
+  rejected:window.T('ops.ct.st_rejected'),expired:window.T('ops.ct.st_expired'),duplicate_blocked:window.T('ops.ct.st_dedup'),
+};
+
+function fmtTs(ts){
+  if(!ts)return '';
+  try{return window.wsFmtDateTime(typeof ts==='number'?ts*1000:ts,{hour12:false});}
+  catch{return String(ts);}
+}
+
+function renderEvent(ev){
+  const isMobile = (ev.event_type||'').startsWith('mobile_handoff_');
+  const dotCls = isMobile ? 'mobile' : 'regular';
+  const typeCls = isMobile ? 'mobile-event' : '';
+  const ts = fmtTs(ev.ts||ev.created_at);
+
+  let detail = '';
+  if(isMobile){
+    const p = ev.payload||{};
+    const stateLabel = MOBILE_HANDOFF_STATES[p.state||''] || p.state || '';
+    const parts = [];
+    if(p.source_agent) parts.push(`${window.T('ops.ct.tl_source')}: ${escapeHtml(p.source_agent)}`);
+    if(p.channel)      parts.push(`${window.T('ops.ct.tl_channel')}: ${escapeHtml(p.channel)}`);
+    if(stateLabel)     parts.push(`${window.T('ops.ct.tl_state')}: <strong>${escapeHtml(stateLabel)}</strong>`);
+    if(p.snippet_sent) detail += `<div class="tl-snip">"${escapeHtml(p.snippet_sent.slice(0,80))}${p.snippet_sent.length>80?'…':''}"</div>`;
+    if(parts.length)   detail += `<div class="tl-payload">${parts.join(' · ')}</div>`;
+  } else {
+    const p = ev.payload||{};
+    const keys = Object.keys(p).filter(k=>p[k]!==null&&p[k]!==''&&p[k]!==undefined);
+    if(keys.length){
+      const txt = keys.slice(0,4).map(k=>`${k}: ${escapeHtml(String(p[k]).slice(0,60))}`).join(' · ');
+      detail = `<div class="tl-payload">${txt}</div>`;
+    }
+  }
+
+  const typeLabel = isMobile
+    ? `📱 ${escapeHtml((ev.event_type||'').replace('mobile_handoff_',window.T('ops.ct.handoff_prefix')))}`
+    : escapeHtml(ev.event_type||'event');
+
+  return `<div class="tl-item">
+    <div class="tl-dot ${dotCls}"></div>
+    <div class="tl-content">
+      <span class="tl-type ${typeCls}">${typeLabel}</span>
+      <span class="tl-ts">${ts}</span>
+      ${detail}
+    </div>
+  </div>`;
+}
+
+async function openDrawer(contactId, name){
+  document.getElementById('drawer-title').textContent = name + ' ' + window.T('ops.ct.timeline');
+  document.getElementById('drawer-body').innerHTML = '<p class="tl-empty">'+window.T('dash.loading')+'</p>';
+  document.getElementById('drawer-overlay').style.display='block';
+  document.getElementById('drawer').classList.add('open');
+  try{
+    const d = await fetch(`/api/contacts/${contactId}/timeline?limit=80`).then(r=>r.json());
+    const events = d.events||[];
+    if(!events.length){
+      document.getElementById('drawer-body').innerHTML='<p class="tl-empty">'+window.T('ops.ct.no_events')+'</p>';
+      return;
+    }
+    document.getElementById('drawer-body').innerHTML =
+      `<p style="font-size:11px;color:#9ca3af;margin:0 0 12px">${window.Tf('ops.ct.tl_summary',{n:events.length})}<strong>${d.funnel_stage||'-'}</strong></p>`
+      + events.map(renderEvent).join('');
+  }catch(e){
+    document.getElementById('drawer-body').innerHTML=`<p class="tl-empty" style="color:#dc2626">${window.T('dash.load_fail')}: ${e}</p>`;
+  }
+}
+
+function closeDrawer(){
+  document.getElementById('drawer').classList.remove('open');
+  document.getElementById('drawer-overlay').style.display='none';
+}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer();});
+</script>
+</body></html>

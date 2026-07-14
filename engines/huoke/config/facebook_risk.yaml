@@ -1,0 +1,25 @@
+# Facebook 风控自愈配置(Sprint 2 P0)
+# 修改后调用 GET /facebook/risk/reload 即可生效,无需重启
+
+enabled: true
+
+# 策略:
+#   A = 检测 1 次风控就取消该设备所有 pending FB 任务,不降级(保守)
+#   B = 检测 1 次风控取消 + 自动排入 warmup 预设(中等,默认)
+#   C = 检测 N 次才动作(激进,N 由 max_risk_before_action 控制)
+strategy: B
+
+# 同一设备 cooldown 秒数,期内多次触发不重复处理(默认 10 分钟)
+cooldown_seconds: 600
+
+# 降级到的预设 key(必须存在于 FB_FLOW_PRESETS)
+downgrade_to_preset: warmup
+
+# 0 表示不自动恢复,需人工把设备的 risk_status 重置;>0 表示 N 分钟后自动清除标记
+auto_resume_after_minutes: 0
+
+# 是否推送 dashboard 事件 facebook.risk_auto_heal
+notify_dashboard: true
+
+# 每台设备保留的历史记录条数
+max_history_per_device: 50

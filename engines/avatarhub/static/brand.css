@@ -1,0 +1,452 @@
+/* ==========================================================================
+   无界科技 BOUNDLESS · 全站品牌设计令牌（单一真相）
+   --------------------------------------------------------------------------
+   所有前端页面（landing / phone / converse / ui / setup / dashboard ...）统一
+   引用本文件，确保配色 / 圆角 / 阴影 / 字体一致。改这里 = 全站生效。
+   配色取自既有深色主题（已上线、观感成熟）。若官网线上品牌色不同，以官网为准
+   回填此处，让「官网」与「引擎」两端同源（见 官网对齐方案_BOUNDLESS.md §5）。
+
+   产品线命名（与官网一致）：
+     幻颜 FaceX · 幻声 VoiceX · 幻影 LiveX · 通译 LingoX · 智聊 ChatX · 无界底座
+   页面归属：声音试听=幻声 VoiceX；数字人对话=幻影 LiveX；控制台=BOUNDLESS 控制台
+   ========================================================================== */
+
+:root{
+  /* —— 品牌主色 —— */
+  --bd-acc:      #4f7aff;   /* 无界蓝（主） */
+  --bd-acc-rgb:  79 122 255; /* 主色三元组（R G B）；供 rgb(var(--bd-acc-rgb) / α) 自定义透明度用；brand.js 取色时同步，三端跨设备白标统一真相 */
+  --bd-acc2:     #a855f7;   /* 幻紫（辅） */
+  --bd-grad:     linear-gradient(135deg, var(--bd-acc), var(--bd-acc2));
+  --bd-acc-weak: rgba(79,122,255,.16);
+
+  /* —— 背景 / 表面 —— */
+  --bd-bg:       #080b10;   /* 页面底色 */
+  --bd-surface:  rgba(255,255,255,.04);
+  --bd-surface2: rgba(255,255,255,.06);
+  --bd-border:   rgba(255,255,255,.12);
+  --bd-border-strong: rgba(255,255,255,.16);
+  --bd-glow:     radial-gradient(120% 60% at 50% 0%, rgba(79,122,255,.18), transparent 55%),
+                 radial-gradient(120% 60% at 50% 100%, rgba(168,85,247,.14), transparent 50%);
+
+  /* —— 文字 —— */
+  --bd-txt:      #e5e9f5;   /* 主文本 */
+  --bd-txt2:     #aab4cc;   /* 次文本 */
+  --bd-mut:      #8b96b0;   /* 弱化/说明 */
+  --bd-faint:    #5b6b8c;   /* 最弱/页脚 */
+
+  /* —— 语义色 —— */
+  --bd-ok:       #34d399;   /* 成功/在线/就绪 */
+  --bd-ok-soft:  rgba(52,211,153,.16);
+  --bd-warn:     #fbbf24;   /* 提示/加载中 */
+  --bd-danger:   #f87171;   /* 错误/离线 */
+  --bd-gold:     linear-gradient(135deg,#f59e0b,#fbbf24);  /* 金标音色 */
+
+  /* —— 圆角 / 阴影 —— */
+  --bd-r-sm:  12px;  --bd-r-md: 16px;  --bd-r-lg: 20px;  --bd-r-pill: 30px;
+  --bd-shadow:    0 16px 48px rgba(0,0,0,.55);
+  --bd-shadow-sm: 0 10px 28px rgba(0,0,0,.4);
+  --bd-cta-glow:  0 10px 32px rgba(79,122,255,.34);
+
+  /* —— 字体 / 字阶 ——
+     统一阶梯，最小 12px（label 下限）；旧的 --bd-fs-xs 因历史引用保留，但新代码请勿低于 --bd-fs-label。*/
+  --bd-font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  --bd-fs-hero: 30px; --bd-fs-h1: 22px; --bd-fs-h2: 18px;
+  --bd-fs-body: 15px; --bd-fs-sm: 13px; --bd-fs-label: 12px;
+  --bd-fs-xs: 12px;   /* 兼容旧引用：原 11px → 提升到 12px 下限 */
+  --bd-lh-tight: 1.35; --bd-lh-base: 1.5; --bd-lh-loose: 1.6;
+
+  /* —— 间距阶梯（4 基准）—— */
+  --bd-sp-1: 4px; --bd-sp-2: 8px; --bd-sp-3: 12px; --bd-sp-4: 16px; --bd-sp-6: 24px; --bd-sp-8: 32px;
+
+  /* —— 控件尺寸 —— */
+  --bd-ctrl-h: 36px; --bd-ctrl-h-lg: 40px;
+  --bd-act-h: 32px;  /* v3 面板密度：动作按钮(.bd-act)与面板表单控件共用行高，同排零错位 */
+
+  /* —— 动效 —— */
+  --bd-dur-fast: 150ms; --bd-dur-mid: 250ms; --bd-ease: cubic-bezier(.4,0,.2,1);
+
+  /* —— 品牌字符串（CSS content 用，HTML 文案仍以页面为准） —— */
+  --bd-name:    "无界科技 BOUNDLESS";
+}
+
+/* 渐变文字（品牌名/重点词） */
+.bd-grad-text{ background:var(--bd-grad); -webkit-background-clip:text; background-clip:text; color:transparent; }
+
+/* 通用可信徽章（本地运行 / AI 生成 可验真）——各页可直接复用 */
+.bd-trust{ display:inline-flex; align-items:center; gap:6px; font-size:var(--bd-fs-xs);
+  color:var(--bd-mut); border:1px solid var(--bd-border); border-radius:var(--bd-r-pill);
+  padding:4px 12px; background:var(--bd-surface); }
+.bd-trust b{ color:var(--bd-txt2); font-weight:600; }
+
+/* ==========================================================================
+   P0 通用工具层（全站复用，三端同源）
+   字阶助手 / 进度条 / Toast / 徽标 —— 后续阶段在此基础上接入。
+   ========================================================================== */
+/* —— 字阶助手（最小 12px）—— */
+.bd-fs-hero{font-size:var(--bd-fs-hero);line-height:var(--bd-lh-tight)}
+.bd-fs-h1{font-size:var(--bd-fs-h1);line-height:var(--bd-lh-tight)}
+.bd-fs-h2{font-size:var(--bd-fs-h2);line-height:var(--bd-lh-tight)}
+.bd-fs-body{font-size:var(--bd-fs-body);line-height:var(--bd-lh-base)}
+.bd-fs-sm{font-size:var(--bd-fs-sm);line-height:var(--bd-lh-base)}
+.bd-fs-label{font-size:var(--bd-fs-label);line-height:var(--bd-lh-base)}
+
+/* —— 进度条（替代无限脉冲：有确定百分比时用）—— */
+.bd-progress{height:6px;width:100%;background:var(--bd-surface2);border-radius:var(--bd-r-pill);overflow:hidden}
+.bd-progress>i{display:block;height:100%;width:0;border-radius:inherit;background:var(--bd-grad);
+  transition:width .4s var(--bd-ease)}
+/* 不确定进度（无百分比）：跑马灯条，比纯透明度脉冲更明确"正在处理" */
+.bd-progress.indeterminate>i{width:40%;animation:bd-indet 1.1s var(--bd-ease) infinite}
+@keyframes bd-indet{0%{margin-left:-40%}100%{margin-left:100%}}
+
+/* —— 骨架屏（加载占位，替代生硬的"加载中…"文字；全站统一）—— */
+.bd-skeleton{position:relative;overflow:hidden;background:var(--bd-surface2);
+  border-radius:var(--bd-r-sm);min-height:14px}
+.bd-skeleton::after{content:"";position:absolute;inset:0;transform:translateX(-100%);
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.07),transparent);
+  animation:bd-shimmer 1.3s var(--bd-ease) infinite}
+.bd-skeleton.line{height:12px;margin:6px 0}
+.bd-skeleton.line.short{width:48%}
+.bd-skeleton.block{height:96px}
+@keyframes bd-shimmer{100%{transform:translateX(100%)}}
+@media (prefers-reduced-motion:reduce){
+  .bd-skeleton::after{animation:none}
+}
+
+/* —— 视觉隐藏但保留给读屏（无障碍状态播报/离屏标签，全站统一）—— */
+.bd-sr-only{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;
+  overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+
+/* —— 空态（无数据时的友好占位，替代空白/裸文字）—— */
+.bd-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+  padding:28px 18px;color:var(--bd-mut);text-align:center}
+.bd-empty .bd-empty-ico{font-size:30px;opacity:.7;line-height:1}
+.bd-empty .bd-empty-title{font-size:var(--bd-fs-sm);color:var(--bd-txt2);font-weight:600}
+.bd-empty .bd-empty-sub{font-size:var(--bd-fs-label);color:var(--bd-mut)}
+
+/* —— Toast 容器与卡片（全站统一反馈）—— */
+.bd-toast-wrap{position:fixed;top:14px;right:14px;z-index:9999;display:flex;flex-direction:column;gap:8px;
+  pointer-events:none}
+.bd-toast{pointer-events:auto;min-width:200px;max-width:340px;padding:10px 14px;border-radius:var(--bd-r-sm);
+  font-size:var(--bd-fs-sm);color:var(--bd-txt);background:var(--bd-surface2);
+  border:1px solid var(--bd-border);box-shadow:var(--bd-shadow-sm);
+  display:flex;align-items:center;gap:8px;animation:bd-toast-in .25s var(--bd-ease)}
+.bd-toast.ok{border-color:rgba(52,211,153,.5)}
+.bd-toast.warn{border-color:rgba(251,191,36,.5)}
+.bd-toast.err{border-color:rgba(248,113,113,.5)}
+@keyframes bd-toast-in{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
+
+/* —— 徽标三态（离线/未启用 = 中性灰，不用红）—— */
+.bd-badge{display:inline-flex;align-items:center;gap:5px;font-size:var(--bd-fs-label);font-weight:600;
+  padding:2px 9px;border-radius:var(--bd-r-pill);border:1px solid var(--bd-border)}
+.bd-badge.ok{color:var(--bd-ok);background:var(--bd-ok-soft);border-color:rgba(52,211,153,.4)}
+.bd-badge.warn{color:var(--bd-warn);background:rgba(251,191,36,.14);border-color:rgba(251,191,36,.4)}
+.bd-badge.muted{color:var(--bd-mut);background:var(--bd-surface)}
+.bd-badge.info{color:rgb(var(--bd-acc-rgb,79 122 255));background:rgb(var(--bd-acc-rgb,79 122 255)/.14);border-color:rgb(var(--bd-acc-rgb,79 122 255)/.38)}
+.bd-badge.accent{color:#c4b5fd;background:rgba(168,85,247,.14);border-color:rgba(168,85,247,.38)}
+
+/* —— Pass E 实心状态 chip（角色卡过程态/就绪态）：高对比填充家族，与 bd-badge(软描边) 语义互补 ——
+   solid=进行中/当前态要抢眼（亮底深字）；dim=常驻安静态（暗底亮字）。
+   尺寸对齐原散拼组合 text-[12px] font-semibold px-2 py-0.5 rounded-full，像素级零位移；
+   字号走 --bd-fs-label 令牌，需要 13px 的场合叠 .bd-fs-sm（勿写死 px）。
+   info 底色接 --hub-blue（后台品牌取色器实时联动，回退无界蓝），与 .bd-card-title 同法。*/
+.bd-chip{display:inline-block;font-size:var(--bd-fs-label);font-weight:600;
+  padding:2px 8px;border-radius:var(--bd-r-pill)}
+.bd-chip.info{background:rgb(var(--hub-blue,var(--bd-acc-rgb,79 122 255)));color:#fff}
+.bd-chip.ok{background:var(--bd-ok);color:#04150c}
+.bd-chip.ok.dim{background:rgba(20,83,45,.5);color:#4ade80}
+.bd-chip.warn{background:#f59e0b;color:#160e02}
+.bd-chip.warn.strong{background:#d97706;color:#fff}
+.bd-chip.warn.dim{background:rgba(120,53,15,.55);color:#fcd34d}
+.bd-chip.err{background:rgba(220,38,38,.9);color:#fff}
+.bd-chip.muted{background:var(--bd-border,#262f42);color:var(--bd-mut)}
+.bd-chip.accent{background:rgba(168,85,247,.38);color:#e9d5ff}
+/* P8 顶栏紧凑章：📹直播中/🎙变声中/⚠️高负载 等 px-1.5 场合 */
+.bd-chip.sm{font-size:11px;padding:1px 7px;font-weight:600;line-height:1.35}
+/* 字号叠加：.bd-chip 定义晚于字阶助手，同特异性会盖掉 13px 场合（英雄区/抽屉），双类提权 */
+.bd-chip.bd-fs-sm{font-size:var(--bd-fs-sm)}
+
+.bd-btn-sm{font-size:12px;padding:5px 12px;border-radius:8px;line-height:1.3}
+
+/* 开播页 P1-6：状态条内标题色继承（减少内联 tone 三元） */
+.bd-strip.ok .strip-em{color:var(--bd-ok)}
+.bd-strip.info .strip-em{color:rgb(var(--bd-acc-rgb,79 122 255))}
+.bd-strip.warn .strip-em{color:var(--bd-warn)}
+.bd-strip.err .strip-em{color:var(--bd-danger)}
+
+.lat-spark{display:inline-block;vertical-align:middle;opacity:.85}
+.lat-spark path{fill:none;stroke:rgb(var(--bd-acc-rgb,79 122 255)/.75);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+
+/* —— 按钮（统一基座，逐步替换散落工具类）——
+   用法：class="bd-btn bd-btn-primary" / "bd-btn bd-btn-ghost" / "bd-btn bd-btn-danger" */
+.bd-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;font-weight:600;
+  font-size:var(--bd-fs-sm);line-height:1;border-radius:var(--bd-r-pill);padding:9px 16px;
+  border:1px solid transparent;cursor:pointer;white-space:nowrap;
+  transition:filter var(--bd-dur-fast) var(--bd-ease),background var(--bd-dur-fast) var(--bd-ease),
+             color var(--bd-dur-fast) var(--bd-ease),border-color var(--bd-dur-fast) var(--bd-ease)}
+.bd-btn:disabled{opacity:.5;cursor:not-allowed}
+.bd-btn:active:not(:disabled){transform:scale(.97)}
+.bd-btn-primary{background:var(--bd-acc);color:#fff;box-shadow:var(--bd-cta-glow);font-weight:700}
+.bd-btn-primary:hover:not(:disabled){filter:brightness(1.08)}
+.bd-btn-ghost{border-color:var(--bd-border);color:var(--bd-txt2);background:transparent}
+.bd-btn-ghost:hover:not(:disabled){color:var(--bd-txt);background:var(--bd-surface)}
+.bd-btn-danger{background:var(--bd-danger);color:#fff}
+.bd-btn-danger:hover:not(:disabled){filter:brightness(1.06)}
+/* success：保留“创建/成功”绿色语义，仅统一基座（焦点/禁用/动效）。用于新建标准 CTA。*/
+.bd-btn-success{background:var(--bd-ok);color:#fff}
+.bd-btn-success:hover:not(:disabled){filter:brightness(1.08)}
+/* amber：中断续传/需留意的次主动作（浅底描边，色系与 .bd-act.amber 对齐，避免实底黄刺眼） */
+.bd-btn-amber{background:rgba(245,158,11,.15);border-color:rgba(251,191,36,.55);color:#fcd34d}
+.bd-btn-amber:hover:not(:disabled){background:rgba(245,158,11,.26)}
+
+/* —— 卡片基座（收敛散落的 bg-hub-card border rounded-xl 组合）——
+   像素级复刻后台原卡面：底 #141a24 / 边 #262f42 / 圆角 12px(rounded-xl) / 主区微投影。
+   说明：padding 仍由调用处的 p-3/p-4/p-5 控制，故 .bd-card 不含内边距。*/
+.bd-card{background:#141a24;border:1px solid #262f42;border-radius:12px;
+  box-shadow:0 1px 3px rgba(0,0,0,.28);
+  transition:border-color .2s ease,box-shadow .2s ease}
+
+/* —— 卡片标题（收敛 text-hub-blue font-bold text-sm）——
+   刻意绑定 --hub-blue 以保留后台品牌取色器的实时联动与出厂重置行为；
+   非后台页（无 --hub-blue）回退无界蓝。font-size 14px = 原 text-sm，像素级一致。*/
+.bd-card-title{color:rgb(var(--hub-blue, 79 122 255));font-weight:700;font-size:14px}
+
+/* —— 状态条带五态（S4 开播页视觉收敛 → v3.7 补中性档）——
+   替代散落的 bg-*-900/xx + border-hub-*/xx 一次性组合：色相一处定义、语义对齐 --bd-ok/--bd-warn/--bd-danger，
+   info 走品牌三元组（白标取色实时联动）。圆角 12px 与 .bd-card 同阶。
+   mute = 中性静默档：空态（列表为空/搜索无匹配）与低调操作提示共用——凹陷暗底不抢焦点。
+   字号不烘进组件（text-[12px] 等工具类是大字模式的换算钩子，必须留在标记）；文字色烘进（定义性特征）。*/
+.bd-strip{border:1px solid var(--bd-border);border-radius:12px}
+.bd-strip.ok{background:rgba(52,211,153,.10);border-color:rgba(52,211,153,.40)}
+.bd-strip.info{background:rgb(var(--bd-acc-rgb,79 122 255) / .10);border-color:rgb(var(--bd-acc-rgb,79 122 255) / .40)}
+.bd-strip.warn{background:rgba(245,158,11,.10);border-color:rgba(245,158,11,.45)}
+.bd-strip.err{background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.45)}
+.bd-strip.mute{background:var(--bd-bg,#080b10);color:var(--bd-mut,#8b96b0)}
+
+/* P2-5 大字模式：root +2px，与 ui.html 内联字号护栏叠加 */
+html.bd-large-text{font-size:18px}
+html.bd-large-text .text-\[12px\]{font-size:14px!important}
+html.bd-large-text .text-\[13px\]{font-size:15px!important}
+html.bd-large-text .text-\[14px\]{font-size:16px!important}
+html.bd-large-text .bd-chip{font-size:14px!important}
+html.bd-large-text .bd-chip.bd-fs-sm{font-size:15px!important}
+html.bd-large-text .text-xs{font-size:15px!important}
+html.bd-large-text main h2.text-sm{font-size:17px!important}
+@media (min-width:1280px){
+  html.bd-large-text .text-xs{font-size:15.5px!important}
+  html.bd-large-text main h2.text-sm{font-size:18px!important}
+}
+
+/* —— 主舞台卡强调（S4 卡片层级）：英雄卡带品牌描边 + 更深投影，视觉权重高于工具卡 —— */
+.bd-hero{border-color:rgb(var(--bd-acc-rgb,79 122 255) / .28)!important;
+  box-shadow:0 8px 28px -10px rgba(0,0,0,.55),0 0 0 1px rgb(var(--bd-acc-rgb,79 122 255) / .05)!important}
+
+/* —— 成绩瓷砖（S5 场次成绩单）：停播即时结算的数值格 —— */
+.bd-stat{background:var(--bd-surface2);border:1px solid var(--bd-border);border-radius:10px;padding:8px 10px;text-align:center;min-width:0}
+.bd-stat .v{font-size:16px;font-weight:800;line-height:1.2}
+.bd-stat .k{font-size:12px;color:var(--bd-mut);margin-top:2px}
+
+/* —— 可访问性 A11y：键盘焦点环 ——
+   仅 :focus-visible（键盘）显示，鼠标点击不出现；与命令面板键盘流闭环。
+   选择器含元素名，特异性高于散落的 .outline-none，确保输入框键盘聚焦也有环。*/
+a:focus-visible,button:focus-visible,select:focus-visible,textarea:focus-visible,
+input:focus-visible,summary:focus-visible,[role="button"]:focus-visible,
+[role="tab"]:focus-visible,[tabindex]:focus-visible{
+  outline:2px solid var(--bd-acc, #4f7aff); outline-offset:2px}
+
+/* —— 可访问性 A11y：尊重系统"减少动态效果"偏好 —— */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{
+    animation-duration:.001ms !important; animation-iteration-count:1 !important;
+    transition-duration:.001ms !important; scroll-behavior:auto !important}
+}
+
+/* ==========================================================================
+   v2 组件层（2026-07 全站深度美化）：面板 / 表单字段 / 分段选择 / 开关 / 数值徽章
+   目标：板块面板化（可折叠 + 头部状态摘要）、控件宽度有上限不再横贯整屏、
+   2~4 个枚举项用分段选择器一次点击直选（替代长下拉）。
+   兼容：纯新增类，不改旧类语义；任何页面可单独回退。
+   ========================================================================== */
+
+/* —— 可折叠面板：.bd-panel > button.bd-panel-head(图标+标题+摘要+折叠钮) + .bd-panel-body ——
+   v3 美化：顶部 1px 品牌渐变高光 + 微纵向渐变底 + hover 提亮加深投影（与 .bd-card 同族但更"成组"） */
+.bd-panel{position:relative;background:linear-gradient(180deg,#161d2a 0%,#131924 100%);
+  border:1px solid #262f42;border-radius:12px;
+  box-shadow:0 1px 3px rgba(0,0,0,.28);overflow:hidden;
+  transition:border-color var(--bd-dur-mid) var(--bd-ease),box-shadow var(--bd-dur-mid) var(--bd-ease)}
+.bd-panel::before{content:"";position:absolute;top:0;left:0;right:0;height:1px;pointer-events:none;
+  background:linear-gradient(90deg,transparent,rgb(var(--bd-acc-rgb,79 122 255)/.35),rgba(168,85,247,.25),transparent)}
+.bd-panel:hover{border-color:#33405c;box-shadow:0 4px 16px rgba(0,0,0,.35)}
+.bd-panel-head{display:flex;align-items:center;gap:10px;width:100%;padding:12px 16px;
+  background:transparent;border:0;cursor:pointer;text-align:left;color:var(--bd-txt);font:inherit}
+.bd-panel-head:hover{background:var(--bd-surface)}
+.bd-panel-head:active{transform:none!important}
+.bd-panel-sum{flex:1 1 auto;min-width:0;margin-left:auto;text-align:right;
+  font-size:12px;color:var(--bd-mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bd-panel-chev{flex:none;color:var(--bd-mut);font-size:12px;line-height:1;
+  transition:transform var(--bd-dur-fast) var(--bd-ease)}
+.bd-panel-head[aria-expanded="true"] .bd-panel-chev{transform:rotate(180deg)}
+.bd-panel-body{padding:12px 16px 16px;border-top:1px solid rgba(255,255,255,.05)}
+
+/* —— 表单网格与字段：列宽 200px 起自动排布，控件跟随列宽，不再一条下拉横贯整屏 —— */
+.bd-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px 16px}
+.bd-field{display:flex;flex-direction:column;gap:5px;min-width:0}
+.bd-field>label{font-size:13px;color:var(--bd-txt2);line-height:1.35;
+  display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.bd-hint{font-size:12px;color:var(--bd-mut);line-height:1.45}
+/* 控件宽度档（上限）：短数字/短枚举/常规下拉 */
+.w-ctl-sm{width:100%;max-width:120px}
+.w-ctl-md{width:100%;max-width:220px}
+.w-ctl-lg{width:100%;max-width:320px}
+
+/* —— 分段选择器：一次点击直选，替代 2~4 项的长下拉 —— */
+.bd-seg{display:inline-flex;flex-wrap:wrap;gap:2px;padding:3px;max-width:100%;align-self:flex-start;
+  background:rgba(0,0,0,.28);border:1px solid #262f42;border-radius:10px}
+.bd-seg>button{flex:none;border:0;background:transparent;color:var(--bd-mut);
+  font-size:13px;font-weight:600;line-height:1.2;padding:5px 12px;border-radius:7px;
+  cursor:pointer;white-space:nowrap;
+  transition:background var(--bd-dur-fast) var(--bd-ease),color var(--bd-dur-fast) var(--bd-ease)}
+.bd-seg>button:hover:not(:disabled){color:var(--bd-txt)}
+.bd-seg>button.on{background:rgb(var(--bd-acc-rgb,79 122 255)/.28);color:#fff;
+  box-shadow:inset 0 0 0 1px rgb(var(--bd-acc-rgb,79 122 255)/.45)}
+.bd-seg>button:disabled{opacity:.4;cursor:not-allowed}
+.bd-seg>button:active:not(:disabled){transform:none!important}
+
+/* —— 开关（视觉化 checkbox）：<label class="bd-switch"><input type="checkbox"><i></i></label> —— */
+.bd-switch{position:relative;display:inline-block;width:34px;height:20px;flex:none;vertical-align:middle}
+.bd-switch input{position:absolute;inset:0;width:100%;height:100%;opacity:0;margin:0;padding:0;border:0;cursor:pointer}
+.bd-switch i{display:block;height:100%;border-radius:20px;background:#232c3d;border:1px solid #2e3950;
+  transition:background var(--bd-dur-fast) var(--bd-ease),border-color var(--bd-dur-fast) var(--bd-ease)}
+.bd-switch i::after{content:"";position:absolute;top:3px;left:3px;width:13px;height:13px;border-radius:50%;
+  background:#94a0ba;transition:transform var(--bd-dur-fast) var(--bd-ease),background var(--bd-dur-fast) var(--bd-ease)}
+.bd-switch input:checked+i{background:rgb(var(--bd-acc-rgb,79 122 255)/.55);border-color:rgb(var(--bd-acc-rgb,79 122 255)/.75)}
+.bd-switch input:checked+i::after{transform:translateX(14px);background:#fff}
+.bd-switch input:focus-visible+i{outline:2px solid var(--bd-acc,#4f7aff);outline-offset:2px}
+
+/* —— 数值徽章：滑杆/分段控件的当前值回显（等宽数字，不跳动）—— */
+.bd-val{display:inline-block;font-size:12px;font-weight:700;color:var(--bd-txt);
+  background:var(--bd-surface2);border:1px solid var(--bd-border);border-radius:6px;
+  padding:0 7px;line-height:1.6;font-variant-numeric:tabular-nums}
+
+/* ==========================================================================
+   v3 动作按钮统一层（2026-07-08 按钮/面板美化）
+   痛点：面板内动作按钮散拼 px-* py-* 大小不一，窄列里中文换行成两行、在 grid 格里被拉成竖排。
+   方案：统一基座 .bd-act（高 32px / 字 13px / 圆角 10px / 不换行 / flex:none 不被拉伸），
+        重点动作 .primary=品牌渐变+辉光；次级 .soft=品牌蓝浅底；工具 .ghost=描边；
+        amber/pink/purple/green/red 保留业务语义色相、只统一尺寸与交互。
+   兼容：纯新增类；与 .bd-btn（胶囊 CTA 基座）互补——bd-btn 用于独立大 CTA，bd-act 用于面板动作行。
+   ========================================================================== */
+.bd-act{display:inline-flex;align-items:center;justify-content:center;gap:6px;flex:none;
+  height:var(--bd-act-h,32px);padding:0 14px;border-radius:10px;
+  font-size:13px;font-weight:600;line-height:1;white-space:nowrap;
+  border:1px solid transparent;cursor:pointer;user-select:none;
+  transition:filter var(--bd-dur-fast) var(--bd-ease),background var(--bd-dur-fast) var(--bd-ease),
+             color var(--bd-dur-fast) var(--bd-ease),border-color var(--bd-dur-fast) var(--bd-ease),
+             box-shadow var(--bd-dur-fast) var(--bd-ease),transform var(--bd-dur-fast) var(--bd-ease)}
+.bd-act:hover:not(:disabled){transform:translateY(-1px)}
+.bd-act:disabled{opacity:.45;cursor:not-allowed}
+.bd-act:active:not(:disabled){transform:scale(.97)}
+.bd-act.sm{height:26px;padding:0 10px;font-size:12px;border-radius:8px}
+/* label 型（上传 input[file] 外壳）没有 :disabled，用 .off 表达禁用 */
+.bd-act.off{opacity:.45;pointer-events:none}
+/* 重点动作：品牌渐变 + 辉光（每个子块最想让人点的那一枚） */
+.bd-act.primary{background:var(--bd-grad);color:#fff;font-weight:700;
+  box-shadow:0 3px 14px rgb(var(--bd-acc-rgb,79 122 255)/.32)}
+.bd-act.primary:hover:not(:disabled){filter:brightness(1.09);
+  box-shadow:0 5px 20px rgb(var(--bd-acc-rgb,79 122 255)/.48)}
+/* 次级确认：品牌蓝浅底描边 */
+.bd-act.soft{background:rgb(var(--bd-acc-rgb,79 122 255)/.13);
+  border-color:rgb(var(--bd-acc-rgb,79 122 255)/.5);color:rgb(var(--bd-acc-rgb,79 122 255))}
+.bd-act.soft:hover:not(:disabled){background:rgb(var(--bd-acc-rgb,79 122 255)/.25)}
+/* 工具/中性 */
+.bd-act.ghost{border-color:#2e3950;color:var(--bd-mut);background:transparent}
+.bd-act.ghost:hover:not(:disabled){color:var(--bd-txt);border-color:rgb(var(--bd-acc-rgb,79 122 255)/.5)}
+/* 语义色变体：保留原有业务色相（实验=琥珀 / 妆容=粉 / 变声=紫 / 成功=绿 / 危险=红） */
+.bd-act.amber{background:rgba(245,158,11,.13);border-color:rgba(251,191,36,.5);color:#fcd34d}
+.bd-act.amber:hover:not(:disabled){background:rgba(245,158,11,.24)}
+.bd-act.pink{background:rgba(236,72,153,.13);border-color:rgba(244,114,182,.5);color:#f9a8d4}
+.bd-act.pink:hover:not(:disabled){background:rgba(236,72,153,.24)}
+.bd-act.purple{background:rgba(168,85,247,.15);border-color:rgba(192,132,252,.5);color:#d8b4fe}
+.bd-act.purple:hover:not(:disabled){background:rgba(168,85,247,.28)}
+.bd-act.green{background:rgba(52,211,153,.13);border-color:rgba(52,211,153,.5);color:var(--bd-ok)}
+.bd-act.green:hover:not(:disabled){background:rgba(52,211,153,.24)}
+.bd-act.red{background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.5);color:var(--bd-danger)}
+.bd-act.red:hover:not(:disabled){background:rgba(248,113,113,.22)}
+/* 动作行：子块尾部按钮统一横排、自动换行，不再塞进窄 grid 格竖排 */
+.bd-act-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
+/* 面板表单控件与 .bd-act 同高（--bd-act-h 令牌）：select/文本输入与按钮同排零错位。
+   只作用于 .bd-panel 内（开播/语音页），不碰像素门禁在管的 clone/sing/settings 卡片 */
+.bd-panel .bd-field select,.bd-panel .bd-field input[type=text],.bd-panel .bd-field input[type=number],
+.bd-panel .bd-act-row select{height:var(--bd-act-h,32px);padding-top:0;padding-bottom:0}
+/* 小号控件对齐（v3.7）：列表行内 select/input 与 .bd-act.sm(26px) 同排零错位。
+   逐个挂类而非按容器猜——列表行结构多变，显式声明比选择器魔法可靠 */
+.bd-ctl-sm{height:26px;padding-top:0;padding-bottom:0;font-size:12px}
+/* 子块标题行：面板内小节头（图标+名称+说明），替代散落的 label 兼职标题 */
+.bd-sub-title{display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+  font-size:13px;font-weight:700;color:var(--bd-txt2);line-height:1.35}
+.bd-sub-title .bd-hint{font-weight:400}
+/* 主 CTA 呼吸辉光：重点按钮的"活"效果（reduced-motion 全局降级已覆盖） */
+.bd-glow-pulse{animation:bd-glow-pulse 2.8s var(--bd-ease) infinite}
+@keyframes bd-glow-pulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.09)}}
+
+/* ==========================================================================
+   v3.6 弹窗骨架（bd-modal）——收敛散拼的弹窗卡面/头部/关闭钮
+   卡面色与 .bd-card/.bd-panel 同源（#141a24/#262f42），圆角 16px 阴影更深（浮层层级感）；
+   遮罩透明度/z-index/居中布局留在标记里（各弹窗层叠语义不同，不硬编进组件）。
+   关闭钮统一为「静默灰圆、hover 转红」：常驻红圆会一直抢视觉焦点，改为悬停才示警。
+   ========================================================================== */
+.bd-modal{background:#141a24;border:1px solid #262f42;
+  border-radius:var(--bd-r-md,16px);box-shadow:var(--bd-shadow,0 16px 48px rgba(0,0,0,.55));
+  animation:bd-modal-in .2s var(--bd-ease)}
+/* v3.8 弹层进场节奏（单一真相）：遮罩由标记里的 x-transition.opacity 淡入（~150ms），
+   卡面统一「上浮 10px + 98% 微缩 → 落定」200ms——display:none→可见时 CSS 动画自动重放，
+   所有挂 .bd-modal 的卡面零标记成本获得同一节奏；退场随遮罩淡出即可（关闭要快，不做出场戏）。
+   reduced-motion 全局降级规则已覆盖本动画。*/
+@keyframes bd-modal-in{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
+.bd-modal-head{display:flex;align-items:center;gap:10px;padding:14px 16px;
+  border-bottom:1px solid #262f42}
+.bd-modal-title{font-size:15px;font-weight:700;color:var(--bd-txt,#e5e9f5);line-height:1.35}
+.bd-modal-sub{font-size:12px;color:var(--bd-mut,#8b96b0);margin-top:2px;line-height:1.4}
+.bd-modal-x{flex:none;width:28px;height:28px;border-radius:999px;
+  display:inline-flex;align-items:center;justify-content:center;
+  font-size:13px;line-height:1;color:var(--bd-mut,#8b96b0);
+  background:rgba(148,163,184,.08);border:1px solid #262f42;cursor:pointer;
+  transition:background var(--bd-dur-fast) var(--bd-ease),color var(--bd-dur-fast) var(--bd-ease),
+             border-color var(--bd-dur-fast) var(--bd-ease)}
+.bd-modal-x:hover{background:var(--bd-danger,#f87171);border-color:transparent;color:#fff}
+
+/* ==========================================================================
+   v3.11 触控目标层（2026-07-09）——只按输入设备判定，不按视口宽度：
+   窄桌面窗口≠触屏（鼠标点 26px 没问题），真触屏才需要大目标；headless 截图
+   是 fine 指针，本层天然不进像素基线，桌面形态零扰动。
+   尺寸三档（实测 /ui 390px 基线：组件族全在 24~35px 档、字形钮低至 11px）：
+     主动作 40px（--bd-act-h 令牌改写→ .bd-act 与 .bd-panel 表单控件自动同吃）
+     小动作 34px（.bd-act.sm / .bd-ctl-sm 同排对齐）
+     关闭钮 36px（.bd-modal-x）
+   .bd-tap：字形钮/文字链的命中区扩容（min 34×34 真实占位，不用负 inset 光环——
+   光环在密排工具栏会重叠抢点，真实占位由 flex 布局自然消化）。仅触屏生效，
+   桌面完全无感，故可放心挂在任何小目标上。
+   ========================================================================== */
+@media (pointer:coarse){
+  :root{--bd-act-h:40px}
+  .bd-act.sm{height:34px}
+  .bd-ctl-sm{height:34px}
+  .bd-modal-x{width:36px;height:36px}
+  .bd-btn{padding:12px 18px}
+  .bd-btn-sm{padding:9px 14px}
+  .bd-tap{min-width:34px;min-height:34px;display:inline-flex;align-items:center;justify-content:center}
+  /* 原生控件触控地板（min-height 只加不减，密排桌面布局不受影响——本层触屏才生效）：
+     勾选项的命中区在 label 整体，checkbox 本体 12px 放大到 18px 即可；range 轨道 6px 高、
+     指头根本压不准，撑高命中盒不改轨道视觉。 */
+  select,input[type=text],input[type=number],input[type=date],input[type=search]{min-height:34px}
+  input[type=checkbox],input[type=radio]{min-width:18px;min-height:18px}
+  input[type=range]{min-height:28px}
+  label:has(>input[type=checkbox]),label:has(>input[type=radio]){min-height:30px}
+  /* hover 才显的操作入口（角色卡 ⋯ 菜单等）触屏无 hover 可及 → 常显。
+     !important 压过标记里 Alpine :class 的 opacity-0 工具类（同特异度、顺序不可赌） */
+  [data-touch-show]{opacity:1!important}
+  /* 文字链工具钮地板：卡头工具链（🔄 刷新/📦 导出/📋 命令…）按口径保留文字链形态，
+     触屏只垫高命中区不改视觉重量。按钮/flex 化锚点吃 min-height；正文行内链接（inline box
+     忽略 min-height）自然豁免——与 WCAG 2.5.8 的 inline 例外一致。 */
+  button.text-xs,a.text-xs,button.text-\[12px\],a.text-\[12px\],button.text-\[13px\],a.text-\[13px\],
+  label.cursor-pointer{min-height:30px}
+}

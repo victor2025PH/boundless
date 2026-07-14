@@ -1,0 +1,97 @@
+# Preset: 多平台巡航
+# 一键执行: POST /workflows/run {"workflow": "preset_multi_platform_cruise"}
+# 适用: 在多个平台轮流刷存在感，保持账号活跃度
+
+name: preset_multi_platform_cruise
+description: |
+  多平台巡航模式。在 TikTok、Telegram、WhatsApp 三个平台
+  轮流执行轻量活动（浏览/点赞/回复），保持所有账号活跃。
+  适合日常维护，防止账号因不活跃被降权。
+
+variables:
+  tiktok_browse_count: 8
+  tiktok_like_prob: 0.2
+  telegram_check_count: 5
+  whatsapp_check_count: 5
+  rest_between_platforms: 15
+
+steps:
+  # ── TikTok 巡航 ──
+  - id: compliance_tk
+    action: compliance.check_remaining
+    params:
+      platform: tiktok
+      action: browse_feed
+    on_error: continue
+
+  - id: tk_browse
+    action: tiktok.browse_feed
+    params:
+      video_count: "{variables.tiktok_browse_count}"
+      like_probability: "{variables.tiktok_like_prob}"
+    depends_on: [compliance_tk]
+    on_error: continue
+
+  - id: rest_1
+    action: util.wait
+    params:
+      seconds: "{variables.rest_between_platforms}"
+    depends_on: [tk_browse]
+
+  # ── Telegram 巡航 ──
+  - id: compliance_tg
+    action: compliance.check_remaining
+    params:
+      platform: telegram
+      action: send_message
+    depends_on: [rest_1]
+    on_error: continue
+
+  - id: tg_check
+    action: telegram.check_new_messages
+    params:
+      max_conversations: "{variables.telegram_check_count}"
+    depends_on: [compliance_tg]
+    on_error: continue
+
+  - id: tg_reply
+    action: telegram.auto_reply_pending
+    params:
+      max_replies: 3
+    depends_on: [tg_check]
+    on_error: continue
+
+  - id: rest_2
+    action: util.wait
+    params:
+      seconds: "{variables.rest_between_platforms}"
+    depends_on: [tg_reply]
+
+  # ── WhatsApp 巡航 ──
+  - id: compliance_wa
+    action: compliance.check_remaining
+    params:
+      platform: whatsapp
+      action: send_message
+    depends_on: [rest_2]
+    on_error: continue
+
+  - id: wa_check
+    action: whatsapp.check_new_messages
+    params:
+      max_conversations: "{variables.whatsapp_check_count}"
+    depends_on: [compliance_wa]
+    on_error: continue
+
+  - id: wa_reply
+    action: whatsapp.auto_reply_pending
+    params:
+      max_replies: 3
+    depends_on: [wa_check]
+    on_error: continue
+
+  - id: done
+    action: util.log
+    params:
+      message: "Multi-platform cruise complete: TikTok + Telegram + WhatsApp"
+    depends_on: [wa_reply]

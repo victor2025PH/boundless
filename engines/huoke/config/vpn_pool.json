@@ -1,0 +1,63 @@
+{
+  "configs": [
+    {
+      "id": "proxy_ip2up_slot13",
+      "uri": "socks5://Ymd0bmlxNTMyZ2pnOjd3d3FoaHM0ZDc5ZQ==@eu-relay.ip2up.com:1337#%E4%B8%BB%E6%8E%A7-13-ip2up",
+      "protocol": "socks5",
+      "server": "eu-relay.ip2up.com",
+      "port": "1337",
+      "username": "bgtniq532gjg",
+      "remark": "主控-13-ip2up",
+      "country": "eu",
+      "city": "",
+      "label": "主控-13-ip2up",
+      "added_at": "2026-04-13 12:00:00",
+      "proxy_mode": "router"
+    },
+    {
+      "id": "proxy_ip2up_slot14",
+      "uri": "socks5://dWpnODVnYXNjcjRsOmpwa2I1dHhibm93bw==@eu-relay.ip2up.com:1337#%E4%B8%BB%E6%8E%A7-14-ip2up",
+      "protocol": "socks5",
+      "server": "eu-relay.ip2up.com",
+      "port": "1337",
+      "username": "ujg85gascr4l",
+      "remark": "主控-14-ip2up",
+      "country": "eu",
+      "city": "",
+      "label": "主控-14-ip2up",
+      "added_at": "2026-04-13 12:00:00",
+      "proxy_mode": "router"
+    },
+    {
+      "id": "proxy_1776301002612",
+      "uri": "socks5://Ymd0bmlxNTMyZ2pnOjd3d3FoaHM0ZDc5ZQ==@eu-relay.ip2up.com:1337#EU%20ip2up%20relay%20%231%20%28001%29",
+      "protocol": "socks5",
+      "server": "eu-relay.ip2up.com",
+      "port": "1337",
+      "username": "bgtniq532gjg",
+      "remark": "EU ip2up relay #1 (001)",
+      "country": "eu",
+      "city": "",
+      "label": "EU ip2up relay #1 (001)",
+      "added_at": "2026-04-16 08:56:42",
+      "proxy_mode": "router"
+    },
+    {
+      "id": "proxy_1776301002726",
+      "uri": "socks5://dWpnODVnYXNjcjRsOmpwa2I1dHhibm93bw==@eu-relay.ip2up.com:1337#EU%20ip2up%20relay%20%232%20%28002%29",
+      "protocol": "socks5",
+      "server": "eu-relay.ip2up.com",
+      "port": "1337",
+      "username": "ujg85gascr4l",
+      "remark": "EU ip2up relay #2 (002)",
+      "country": "eu",
+      "city": "",
+      "label": "EU ip2up relay #2 (002)",
+      "added_at": "2026-04-16 08:56:42",
+      "proxy_mode": "router"
+    }
+  ],
+  "assignments": {
+    "8D7DWWUKQGJRNN79": "proxy_1776301002726"
+  }
+}

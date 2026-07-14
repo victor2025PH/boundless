@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>首次运行向导 · 无界科技 BOUNDLESS</title>
+<link rel="stylesheet" href="/static/brand.css"/>
+<script src="/static/brand.js"></script>
+<style>
+  /* 收敛到全站品牌令牌（brand.css 单一真相）：主色随白标联动，不再各页一套蓝。 */
+  :root{--accent:var(--bd-acc);--accent2:var(--bd-acc2);--ink:#eaf1fb;--mut:#9fb0cc;--card:#141b2d;--line:#26324a;--bg:var(--bd-bg)}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;background:
+    radial-gradient(900px 500px at 80% -10%,rgba(91,140,255,.12),transparent 60%),var(--bg);color:var(--ink);min-height:100vh;padding:32px 18px}
+  .wrap{max-width:880px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+  h1{font-size:27px;font-weight:800;display:flex;align-items:center;gap:12px}
+  h1 .v{font-size:13px;color:var(--mut);font-weight:600;background:var(--card);padding:4px 10px;border-radius:999px;border:1px solid var(--line)}
+  .sub{color:var(--mut);font-size:15px;line-height:1.6}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px 24px}
+  .card h2{font-size:19px;font-weight:800;margin-bottom:6px;display:flex;align-items:center;gap:9px}
+  .card h2 .step{width:26px;height:26px;border-radius:50%;background:var(--accent);color:#0a1120;font-size:14px;display:flex;align-items:center;justify-content:center;font-weight:800}
+  .card .hint{color:var(--mut);font-size:13.5px;line-height:1.6;margin-bottom:16px}
+  .hw{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px}
+  .chip{background:#0c1322;border:1px solid var(--line);border-radius:12px;padding:10px 14px;font-size:13.5px}
+  .chip b{color:var(--accent2)}
+  .row{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-bottom:13px}
+  .row>label{min-width:148px;font-size:14.5px;color:var(--ink)}
+  input[type=text],input[type=number],select{background:#0c1322;border:1px solid var(--line);color:var(--ink);
+    border-radius:10px;padding:9px 12px;font-size:14px;font-family:inherit;flex:1;min-width:200px}
+  input:focus,select:focus{outline:0;border-color:var(--accent)}
+  .seg{display:inline-flex;background:#0c1322;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .seg button{background:transparent;color:var(--mut);border:0;padding:9px 16px;font-size:14px;cursor:pointer;font-family:inherit}
+  .seg button.on{background:var(--accent);color:#0a1120;font-weight:700}
+  .toggle{display:flex;align-items:center;gap:10px;cursor:pointer;font-size:14.5px}
+  .toggle input{width:18px;height:18px;accent-color:var(--accent)}
+  .tip{font-size:12.5px;color:var(--mut);flex-basis:100%;margin:-4px 0 4px 162px}
+  .svc-suggest{font-size:12px;color:var(--accent2);flex-basis:100%;margin:-6px 0 6px 162px;cursor:pointer}
+  .actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+  button.act{background:var(--accent);color:#0a1120;border:0;border-radius:11px;padding:12px 22px;font-size:15px;font-weight:700;cursor:pointer}
+  button.ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
+  button:disabled{opacity:.5;cursor:default}
+  pre{background:#080d18;border:1px solid var(--line);border-radius:12px;padding:14px;font-size:12.5px;color:#bcd;overflow:auto;white-space:pre-wrap;word-break:break-all}
+  .res{display:flex;flex-direction:column;gap:7px;margin-top:8px}
+  .ri{display:flex;gap:8px;align-items:flex-start;font-size:13.5px;line-height:1.45}
+  .ri .ic{flex:0 0 auto;width:18px;font-weight:800}
+  .ok .ic{color:var(--accent2)}.warn .ic{color:#ffcf5b}.crit .ic{color:#ff6b7e}
+  .ri .area{color:var(--mut);flex:0 0 88px}
+  .banner{border-radius:12px;padding:13px 16px;font-size:14px;line-height:1.55}
+  .banner.good{background:rgba(122,240,200,.12);border:1px solid rgba(122,240,200,.4);color:#d6f7ea}
+  .banner.warn{background:rgba(255,207,91,.12);border:1px solid rgba(255,207,91,.4)}
+  .hide{display:none}
+  code{background:#0c1322;padding:2px 7px;border-radius:6px;color:var(--accent2);font-size:13px}
+  /* 开箱就绪 · 三步自检 */
+  .ready{display:grid;gap:10px;margin-top:6px}
+  .rd{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;border-radius:12px;border:1px solid var(--line);background:#0c1322}
+  .rd .dot{width:12px;height:12px;border-radius:50%;flex:0 0 auto;margin-top:5px;background:var(--mut)}
+  .rd.ok .dot{background:#7af0c8}.rd.bad .dot{background:#ff6b7e}.rd.warn .dot{background:#ffcf5b}
+  .rd .body{flex:1;min-width:0}
+  .rd .t{font-weight:700;font-size:15px}
+  .rd .d{color:var(--mut);font-size:13px;margin-top:2px;line-height:1.5}
+  .rd .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .rd .acts a{font-size:12.5px;padding:6px 12px;border-radius:999px;border:1px solid var(--line);
+    background:transparent;color:var(--ink);text-decoration:none}
+  .rd .acts a.p{background:var(--accent);color:#0a1120;border-color:transparent;font-weight:700}
+  .rd .acts a:hover{border-color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🚀 <span class="bd-grad-text" data-bd-name>无界 BOUNDLESS</span> · 首次运行向导 <span class="v" id="exists"></span></h1>
+  <div class="sub">把这台机器的<b>拓扑 / 并发 / 观众互动</b>配好，向导只写入 <code>deploy.env.bat</code>（不动 env_config.bat）。
+    保存后<b>重启 hub</b> 生效。可随时回到本页重新配置。</div>
+
+  <!-- 开箱就绪：三步自检（红灯配一键修复 + 直达教程） -->
+  <div class="card">
+    <h2><span class="step">0</span> 开箱就绪自检</h2>
+    <div class="hint">这三盏灯全绿=可以用了。红/黄灯点右侧按钮去修，修完点「重新检查」（也会每几秒自动刷新）。</div>
+    <div class="ready" id="ready">
+      <div class="rd" id="rdSvc"><span class="dot"></span><div class="body">
+        <div class="t">① 服务就绪</div><div class="d">检测中…</div><div class="acts"></div></div></div>
+      <div class="rd" id="rdRole"><span class="dot"></span><div class="body">
+        <div class="t">② 角色就绪（有克隆音）</div><div class="d">检测中…</div><div class="acts"></div></div></div>
+      <div class="rd" id="rdPhone"><span class="dot"></span><div class="body">
+        <div class="t">③ 手机同传就绪（可选）</div><div class="d">检测中…</div><div class="acts"></div></div></div>
+    </div>
+    <div class="actions" style="margin-top:12px">
+      <button class="act ghost" id="btnRecheck">重新检查</button>
+      <label class="toggle" style="font-size:13px"><input type="checkbox" id="autoCheck" checked> 每 6 秒自动刷新</label>
+      <span id="readyStatus" style="color:var(--mut);font-size:13px"></span>
+    </div>
+  </div>
+
+  <!-- 硬件 -->
+  <div class="card">
+    <h2><span class="step">1</span> 检测到的硬件</h2>
+    <div class="hw" id="hw"><span class="chip">检测中…</span></div>
+  </div>
+
+  <!-- 并发 -->
+  <div class="card">
+    <h2><span class="step">2</span> 实时并发</h2>
+    <div class="hint">同时能接几路对话。单人单卡选「关闭」即可；多卡或多路直播选「自动」(随健康卡数伸缩) 最省心。</div>
+    <div class="row">
+      <label>准入模式</label>
+      <div class="seg" id="convMode">
+        <button data-v="off">关闭(单路)</button>
+        <button data-v="auto">自动·随卡数</button>
+        <button data-v="fixed">固定路数</button>
+      </div>
+    </div>
+    <div class="row hide" id="rowFixed">
+      <label>固定并发 K</label>
+      <input type="number" id="convMax" min="1" max="64" value="2" style="max-width:120px">
+    </div>
+    <div class="row hide" id="rowQueue">
+      <label>队列上限</label>
+      <input type="number" id="convQueue" min="0" max="1000" value="20" style="max-width:120px">
+      <label style="min-width:auto">等待超时(s)</label>
+      <input type="number" id="convWait" min="1" max="600" value="30" style="max-width:120px">
+      <div class="tip">超过队列上限 → 优雅 busy 拒绝；非流式请求等待超时 → 429。</div>
+    </div>
+    <div class="row">
+      <label>对话 TTS 引擎</label>
+      <select id="ttsEngine">
+        <option value="">默认（各角色自定）</option>
+        <option value="fish_speech">Fish-Speech（克隆质量最佳）</option>
+        <option value="cosyvoice">CosyVoice（情感/快速）</option>
+      </select>
+    </div>
+    <div class="row">
+      <label class="toggle"><input type="checkbox" id="ttsStream"> 单句内流式 TTS <span id="streamRec" class="hide" style="font-size:12px;color:var(--accent2);font-weight:700">· 推荐</span></label>
+      <div class="tip" id="streamTip">边合成边喂口型，首音更快（单卡 TTS 收益最大）。仅 Fish-Speech 克隆音生效，其它引擎自动回落整句。</div>
+    </div>
+    <div class="row hide" id="rowStreamAdv">
+      <label style="min-width:auto;font-size:13px;color:var(--mut)">首块/后续/上限(ms)</label>
+      <input type="number" id="streamFirst" min="0" max="3000" value="300" style="max-width:96px">
+      <input type="number" id="streamChunk" min="0" max="5000" value="550" style="max-width:96px">
+      <input type="number" id="streamMax" min="0" max="10000" value="1500" style="max-width:96px">
+      <div class="tip">首块越小起播越快但开头偏碎；后续越大口型越顺。先用默认，GPU 上看 /ops 再微调。</div>
+    </div>
+  </div>
+
+  <!-- 多卡拓扑 -->
+  <div class="card">
+    <h2><span class="step">3</span> 多机/多卡分担（可选）</h2>
+    <div class="hint">把重服务分到别的机器/显卡：填 <code>http://IP:端口</code>，多副本用英文逗号隔开即自动负载均衡+故障摘除。
+      留空=本机默认端口。</div>
+    <div id="svcRows"></div>
+    <div class="row hide" id="rowProbe">
+      <label>探活间隔(s)</label>
+      <input type="number" id="probeSec" min="0" max="300" value="10" style="max-width:120px">
+      <div class="tip">多副本时后台周期探活，挂掉的卡自动摘除、K 自适应；0=关闭主动探活。</div>
+    </div>
+  </div>
+
+  <!-- 观众 -->
+  <div class="card">
+    <h2><span class="step">4</span> 观众互动（可选）</h2>
+    <div class="hint">开启后观众扫码到 <code>/ask</code> 提问，主播在控制台采纳或开「无人值守自动应答」；公屏在 <code>/wall</code>。</div>
+    <div class="row"><label class="toggle"><input type="checkbox" id="audOn"> 开启观众提问</label></div>
+    <div id="audMore" class="hide">
+      <div class="row"><label class="toggle"><input type="checkbox" id="audAuto"> 默认开启无人值守自动应答</label></div>
+      <div class="row">
+        <label>队列上限</label>
+        <input type="number" id="audMaxQ" min="1" max="5000" value="200" style="max-width:120px">
+        <label style="min-width:auto">同 IP 限流(s)</label>
+        <input type="number" id="audRate" min="0" max="60" value="3" style="max-width:120px">
+      </div>
+    </div>
+  </div>
+
+  <!-- 操作 -->
+  <div class="card">
+    <h2><span class="step">5</span> 校验拓扑 → 保存</h2>
+    <div class="hint">先用<b>将要应用的拓扑</b>跑一次离线预检（重启前就发现 IP 打错/某机没起/防火墙没放），再保存。</div>
+    <div class="actions">
+      <button class="act ghost" id="btnPreflight">校验拓扑(预检)</button>
+      <button class="act" id="btnApply">保存配置</button>
+      <button class="act ghost" id="btnReset">恢复默认</button>
+      <span id="status" style="color:var(--mut);font-size:14px"></span>
+    </div>
+    <div id="preflightBox" class="res hide"></div>
+    <div id="applyBox" class="hide" style="margin-top:14px">
+      <div class="banner good" id="applyBanner"></div>
+      <pre id="applyPre" style="margin-top:10px"></pre>
+    </div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>(s||'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+let LAN=[], state={mode:'off'};
+const SVC=[
+  ['svc_fish_tts','克隆音 TTS (fish)',7855],
+  ['svc_emotion_tts','情感 TTS (cosy)',7852],
+  ['svc_lipsync','口型 (musetalk)',8090],
+  ['svc_stt','语音转文字 (stt)',7854],
+  ['svc_faceswap','换脸 (faceswap)',8000],
+];
+
+function setMode(m){
+  state.mode=m;
+  [...$('convMode').children].forEach(b=>b.classList.toggle('on',b.dataset.v===m));
+  $('rowFixed').classList.toggle('hide',m!=='fixed');
+  $('rowQueue').classList.toggle('hide',m==='off');
+}
+$('convMode').addEventListener('click',e=>{ if(e.target.dataset.v) setMode(e.target.dataset.v); });
+$('audOn').addEventListener('change',()=>$('audMore').classList.toggle('hide',!$('audOn').checked));
+$('ttsStream').addEventListener('change',()=>$('rowStreamAdv').classList.toggle('hide',!$('ttsStream').checked));
+
+function buildSvcRows(cur){
+  $('svcRows').innerHTML=SVC.map(([f,label,port])=>(
+    '<div class="row"><label>'+label+'</label>'+
+    '<input type="text" id="'+f+'" placeholder="本机默认 :'+port+'" value="'+esc(cur[f]||'')+'">'+
+    (LAN.length?'<div class="svc-suggest" data-f="'+f+'" data-p="'+port+'">本机网卡：'+
+        LAN.map(ip=>'http://'+ip+':'+port).join(' · ')+'（点此填入）</div>':'')+
+    '</div>'
+  )).join('');
+  $('svcRows').querySelectorAll('.svc-suggest').forEach(el=>el.addEventListener('click',()=>{
+    const f=el.dataset.f,p=el.dataset.p; $(f).value=LAN.map(ip=>'http://'+ip+':'+p).join(',');
+    refreshProbe();
+  }));
+  $('svcRows').querySelectorAll('input').forEach(i=>i.addEventListener('input',refreshProbe));
+}
+function refreshProbe(){
+  const multi=SVC.some(([f])=>($(f).value||'').includes(','));
+  $('rowProbe').classList.toggle('hide',!multi);
+}
+
+function collect(){
+  const cfg={conv_mode:state.mode, conv_tts_engine:$('ttsEngine').value};
+  if(state.mode==='fixed') cfg.conv_max=parseInt($('convMax').value,10);
+  if(state.mode!=='off'){ cfg.conv_max_queue=parseInt($('convQueue').value,10); cfg.conv_wait_timeout=parseInt($('convWait').value,10); }
+  cfg.conv_tts_streaming=$('ttsStream').checked;
+  if(cfg.conv_tts_streaming){
+    cfg.conv_tts_stream_first_ms=parseInt($('streamFirst').value,10);
+    cfg.conv_tts_stream_chunk_ms=parseInt($('streamChunk').value,10);
+    cfg.conv_tts_stream_max_ms=parseInt($('streamMax').value,10);
+  }
+  SVC.forEach(([f])=>{ const v=$(f).value.trim(); if(v) cfg[f]=v; });
+  if(!$('rowProbe').classList.contains('hide')) cfg.svc_probe_sec=parseInt($('probeSec').value,10);
+  cfg.audience_on=$('audOn').checked;
+  if(cfg.audience_on){ cfg.audience_auto=$('audAuto').checked;
+    cfg.audience_max_q=parseInt($('audMaxQ').value,10); cfg.audience_rate_sec=parseInt($('audRate').value,10); }
+  return cfg;
+}
+async function postJSON(url,body,method){
+  const r=await fetch(url,{method:method||'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
+  return r.json();
+}
+function setStatus(t){ $('status').textContent=t||''; }
+
+// ── 第 0 步：开箱就绪三步自检（服务/角色/手机）──
+function paintRd(id, level, title, detail, acts){
+  const el=$(id); if(!el) return;
+  el.className='rd '+(level||'');
+  el.querySelector('.t').textContent=title;
+  el.querySelector('.d').innerHTML=detail||'';
+  el.querySelector('.acts').innerHTML=(acts||[]).map(a=>
+    '<a href="'+a.href+'"'+(a.blank?' target="_blank"':'')+(a.p?' class="p"':'')+
+    (a.click?' data-click="'+a.click+'"':'')+'>'+esc(a.label)+'</a>').join('');
+  el.querySelectorAll('a[data-click]').forEach(a=>a.addEventListener('click',ev=>{
+    ev.preventDefault(); readyAction(a.dataset.click);
+  }));
+}
+async function readyAction(kind){
+  if(kind==='ensure'){
+    setReadyStatus('正在尝试拉起服务…');
+    try{
+      const r=await postJSON('/api/supervisor/ensure',{});
+      if(r && r.ok===false) setReadyStatus('自动拉起不可用（'+esc(r.reason||'')+'）— 请运行 start_all_services.bat 或用启动器');
+      else setReadyStatus('已尝试拉起，数秒后自动复检…（未起来就运行 start_all_services.bat）');
+    }catch(e){ setReadyStatus('自动拉起失败 — 请运行 start_all_services.bat 或用启动器'); }
+    setTimeout(renderReady, 2200);
+  }
+}
+function setReadyStatus(t){ const el=$('readyStatus'); if(el) el.textContent=t||''; }
+
+let _readyTimer=null;
+async function renderReady(){
+  setReadyStatus('检查中…');
+  // 服务 + 角色：一次 /api/setup/status 拿齐（含可执行修复判断）
+  let st=null; try{ st=await (await fetch('/api/setup/status',{cache:'no-store'})).json(); }catch(e){}
+  const steps=(st&&st.steps)||[];
+  const svc=steps.find(s=>s.id==='services');
+  const role=steps.find(s=>s.id==='profile');
+  if(svc){
+    paintRd('rdSvc', svc.ok?'ok':'bad', '① 服务就绪',
+      svc.ok?('核心服务全部在线'):('掉线：'+esc(svc.detail||'部分核心服务未启动')),
+      svc.ok?[]:[
+        {label:'尝试拉起服务',click:'ensure',p:true},
+        {label:'打开控制台',href:'/ui',blank:true},
+        {label:'看安装教程',href:'/help?doc=install',blank:true},
+      ]);
+  } else {
+    paintRd('rdSvc','warn','① 服务就绪','无法读取服务状态（hub 是否在运行？）',
+      [{label:'打开控制台',href:'/ui',blank:true}]);
+  }
+  if(role){
+    paintRd('rdRole', role.ok?'ok':'bad', '② 角色就绪（有克隆音）',
+      role.ok?('已就绪 · '+esc(role.detail||'')):('还没有可对话角色：'+esc(role.detail||'')),
+      role.ok?[]:[
+        {label:'去创建/克隆角色',href:'/ui',blank:true,p:true},
+        {label:'看使用教程',href:'/help?doc=use',blank:true},
+      ]);
+  } else {
+    paintRd('rdRole','warn','② 角色就绪（有克隆音）','无法读取角色状态',
+      [{label:'打开控制台',href:'/ui',blank:true}]);
+  }
+  // 手机同传：可选，中继在线才算绿；离线=黄灯给启动指引
+  let ph=null; try{ ph=await (await fetch('/api/monitor/status',{cache:'no-store'})).json(); }catch(e){}
+  if(ph&&ph.reachable){
+    const show=ph.show_url||'';
+    paintRd('rdPhone','ok','③ 手机同传就绪（可选）','手机中继在线，可扫码让手机当麦克风/摄像头做同传。',
+      [ show?{label:'打开扫码页',href:show,blank:true,p:true}:null,
+        {label:'看同传教程',href:'/help?doc=interp',blank:true} ].filter(Boolean));
+  } else {
+    paintRd('rdPhone','warn','③ 手机同传就绪（可选）',
+      '手机中继未启动（只用电脑对话可忽略）。要做手机同传：运行 <code>start_monitor_relay.bat</code> 后重新检查。',
+      [{label:'看同传教程',href:'/help?doc=interp',blank:true}]);
+  }
+  const allGreen = svc&&svc.ok&&role&&role.ok;
+  setReadyStatus(allGreen?'✅ 核心已就绪，可以开始使用':'按上面红灯逐项修复');
+}
+function startReadyPoll(){
+  if(_readyTimer){ clearInterval(_readyTimer); _readyTimer=null; }
+  if($('autoCheck').checked) _readyTimer=setInterval(renderReady, 6000);
+}
+$('btnRecheck').addEventListener('click',renderReady);
+$('autoCheck').addEventListener('change',startReadyPoll);
+
+$('btnPreflight').addEventListener('click',async()=>{
+  setStatus('预检中…'); $('btnPreflight').disabled=true;
+  try{
+    const d=await postJSON('/api/setup/preflight',collect());
+    const box=$('preflightBox'); box.classList.remove('hide');
+    if(!d.ok){ box.innerHTML='<div class="ri crit"><span class="ic">✗</span>预检失败：'+esc(d.error||'')+'</div>'; }
+    else{
+      const items=(d.result&&d.result.items)||[];
+      const ic={ok:'✓',warn:'⚠',crit:'✗'};
+      box.innerHTML=items.map(it=>'<div class="ri '+it.level+'"><span class="ic">'+ic[it.level]+'</span>'+
+        '<span class="area">'+esc(it.area)+'</span><span>'+esc(it.msg)+'</span></div>').join('')||'<div class="ri ok"><span class="ic">✓</span>无项目</div>';
+    }
+    setStatus('预检完成');
+  }catch(e){ setStatus('预检出错'); }
+  $('btnPreflight').disabled=false;
+});
+
+$('btnApply').addEventListener('click',async()=>{
+  setStatus('保存中…'); $('btnApply').disabled=true;
+  try{
+    const d=await postJSON('/api/setup/apply',collect());
+    $('applyBox').classList.remove('hide');
+    const warn=(d.warnings||[]);
+    const b=$('applyBanner');
+    b.className='banner '+(warn.length?'warn':'good');
+    b.innerHTML='已写入 <b>'+d.count+'</b> 项到 deploy.env.bat。'+(warn.length?'<br>注意：'+warn.map(esc).join('；'):'')+
+      '<br><b>重启 hub / 运行 start_all_services.bat 后生效。</b>';
+    $('applyPre').textContent=d.content||'';
+    $('exists').textContent='已配置';
+    setStatus('已保存');
+  }catch(e){ setStatus('保存失败'); }
+  $('btnApply').disabled=false;
+});
+
+$('btnReset').addEventListener('click',async()=>{
+  if(!confirm('删除 deploy.env.bat，重启后回到默认配置？')) return;
+  try{ const d=await postJSON('/api/setup/reset',{},'DELETE');
+    $('exists').textContent=''; $('applyBox').classList.add('hide'); setStatus(d.removed?'已恢复默认（重启生效）':'本无自定义配置');
+  }catch(e){ setStatus('恢复失败'); }
+});
+
+(async function init(){
+  try{
+    const d=await (await fetch('/api/setup/state')).json();
+    LAN=d.lan_ips||[];
+    $('exists').textContent=d.deploy_exists?'已配置':'';
+    const g=d.gpus||[];
+    $('hw').innerHTML=(g.length?g.map(x=>'<span class="chip">GPU #'+x.index+' <b>'+esc(x.name)+'</b> · 空闲 '+
+        (x.free_mb/1024).toFixed(1)+'/'+(x.total_mb/1024).toFixed(1)+'GB</span>').join('')
+      :'<span class="chip">未检测到 NVIDIA GPU（或无 nvidia-smi）</span>')
+      +'<span class="chip">角色 <b>'+((d.profiles||[]).length)+'</b> · 当前 '+esc(d.active_profile||'-')+'</span>'
+      +(LAN.length?'<span class="chip">本机 IP <b>'+LAN.join(' / ')+'</b></span>':'');
+    const cur=d.current||{};
+    // 回显当前并发模式
+    const cc=(cur.conv_max_concurrent||'0');
+    setMode(cc==='auto'?'auto':(cc==='0'||cc==='-0'?'off':(parseInt(cc,10)>0?'fixed':'off')));
+    if(state.mode==='fixed') $('convMax').value=parseInt(cc,10)||2;
+    if(parseInt(cur.conv_max_queue,10)>0) $('convQueue').value=cur.conv_max_queue;
+    if(parseInt(cur.conv_wait_timeout,10)>0) $('convWait').value=cur.conv_wait_timeout;
+    $('ttsEngine').value=cur.conv_tts_engine||'';
+    // 流式 TTS：回显当前值；首次(无 deploy.env)且角色满足 fish 克隆音→默认勾选并打"推荐"
+    const streamOn = cur.conv_tts_streaming || (!d.deploy_exists && d.streaming_recommended);
+    $('ttsStream').checked=!!streamOn;
+    $('rowStreamAdv').classList.toggle('hide',!streamOn);
+    if(parseInt(cur.conv_tts_stream_first_ms,10)>=0) $('streamFirst').value=cur.conv_tts_stream_first_ms;
+    if(parseInt(cur.conv_tts_stream_chunk_ms,10)>=0) $('streamChunk').value=cur.conv_tts_stream_chunk_ms;
+    if(parseInt(cur.conv_tts_stream_max_ms,10)>=0) $('streamMax').value=cur.conv_tts_stream_max_ms;
+    $('streamRec').classList.toggle('hide',!d.streaming_recommended);
+    if(!d.streaming_recommended)
+      $('streamTip').textContent='边合成边喂口型，首音更快。当前角色未就绪（需 Fish-Speech 引擎 + 克隆音色），开了也会自动回落整句。';
+    $('probeSec').value=parseInt(cur.svc_probe_sec,10)||10;
+    $('audOn').checked=!!cur.audience_on; $('audMore').classList.toggle('hide',!cur.audience_on);
+    $('audAuto').checked=!!cur.audience_auto;
+    $('audMaxQ').value=cur.audience_max_q||200; $('audRate').value=cur.audience_rate_sec||3;
+    buildSvcRows(cur); refreshProbe();
+  }catch(e){ $('hw').innerHTML='<span class="chip">加载失败：'+esc(e.message)+'</span>'; }
+  renderReady(); startReadyPoll();
+})();
+</script>
+</body>
+</html>

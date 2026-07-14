@@ -1,0 +1,183 @@
+# OpenClaw 任务执行策略 — 人工门禁优先（VPN / 账号国家 / 合规）
+#
+# manual_execution_only: true 时，会默认关闭所有「无人确认即派发任务」的路径：
+#   - 数据库 schedules 表驱动的定时任务（SchedulerThread）
+#   - config/scheduled_jobs.json 的 Cron 任务（收件箱、跟进、同步等）
+#   - 设备掉线重连后的任务自动恢复（HealthMonitor）
+#   - 启动时后台「自动壁纸编号」线程（可选）
+#
+# 仍保留：健康监控、ADB 保活、控制台/API 显式创建的任务、手动触发的预检通过后执行。
+
+manual_execution_only: true
+
+# ── 任务类型调度速率限制 ─────────────────────────────────────────────────
+# 基于滑动窗口计数器（比令牌桶更准确反映"过去N小时内真实操作次数"）。
+# per_device_per_hour: 每台设备过去1小时内同类型任务的最大派发次数。
+# window_hours: 滑动窗口长度（默认1小时）。
+# 超限时任务停留 pending 状态，rescue_loop 会在下个轮次重试。
+# 设为 0 或删除条目 = 不限制
+rate_limits:
+  facebook_add_friend:
+    per_device_per_hour: 3      # 每台设备每小时最多加3次好友
+  facebook_send_message:
+    per_device_per_hour: 10
+  facebook_join_group:
+    per_device_per_hour: 5
+  facebook_profile_hunt:
+    per_device_per_hour: 4
+  facebook_group_member_greet:
+    per_device_per_hour: 2
+
+# ── 智能调度器参数 ────────────────────────────────────────────────────────
+# cooling_hard_sec: 任务结束后的强冷却窗口，期间 load_score -30（100→70）
+# cooling_soft_sec: 软冷却窗口，期间 load_score -15（100→85）
+# 两值均支持运行时热重载（无需重启）
+scheduler:
+  cooling_hard_sec: 60
+  cooling_soft_sec: 180
+
+# ── 调度器熔断阈值（支持热重载）────────────────────────────────────────────
+# fail_pattern_threshold: 同设备同任务类型连续失败 N 次触发告警，2N 次触发暂停
+# device_fail_threshold:  跨任务类型总连续失败 N 次触发设备级告警，2N 次触发设备熔断
+# task_suspend_minutes:   任务级自动暂停时长（分钟），最大 480
+# device_suspend_minutes: 设备级熔断时长（分钟），最大 480
+scheduler_circuit_breaker:
+  fail_pattern_threshold: 5
+  device_fail_threshold: 15
+  task_suspend_minutes: 30
+  device_suspend_minutes: 60
+
+# ── 任务类型成功率告警阈值 ──────────────────────────────────────────────
+# 当某任务类型的成功率低于 min_success_rate 且完成次数达到 min_samples 时触发告警
+# 告警通过 AlertNotifier + event_stream.push_event("task.type_low_success_rate") 发出
+# check_interval_sec: 扫描周期（秒），每隔此时间在 _rescue_loop 内执行一次
+task_type_alert:
+  enabled: true
+  check_interval_sec: 300   # 每 5 分钟检查一次
+  min_samples: 10           # 至少有这么多次完成后才开始评估
+  default_min_success_rate: 0.55   # 全局默认：低于 55% 触发告警
+  overrides:
+    facebook_add_friend:      0.50   # 加好友成功率容忍度更低
+    facebook_send_message:    0.60
+    facebook_join_group:      0.55
+    facebook_extract_members: 0.60
+    facebook_profile_hunt:    0.50
+
+# ── SLA 超时阈值配置（秒）───────────────────────────────────────────────
+# 各任务类型的业务进展超时阈值，超过此时间且无业务事件则SLA终止
+sla_progress_timeout_sec:
+  facebook_extract_members: 1800  # 30 min — writes mark_group_visit
+  facebook_group_member_greet: 3600  # 60 min — writes group visit / friend request
+  facebook_add_friend: 1200  # 20 min — writes add_friend_sent/risk
+  facebook_send_greeting: 900  # 15 min — writes greeting_sent
+  facebook_send_message: 600  # 10 min — writes contact_event
+  facebook_check_inbox: 1200  # 20 min — writes message_received if any
+  facebook_check_message_requests: 600  # 10 min — 同 check_inbox
+  facebook_join_group: 600  # 10 min — writes mark_group_visit
+  facebook_profile_hunt: 1800  # 30 min — writes contact_event on match
+  # 默认值（未匹配的任务类型使用）
+  default: 1800  # 30 min
+
+# 以下为细项；未写时由 manual_execution_only=true 推导为 true
+disable_db_scheduler: true
+disable_json_scheduled_jobs: true
+disable_reconnect_task_recovery: true
+disable_auto_wallpaper_thread_on_startup: true
+
+# 为 true 时：禁止一切「无人值守」自动派发 tiktok_check_inbox（JSON 定时、DB 调度、对话页自动监控）。
+# 仍可在控制台/API 手动点「批量收件箱」等显式操作（不走本开关）。
+disable_auto_tiktok_check_inbox: true
+
+# 查收件箱任务「成功且发现新消息」后，是否再自动排一条 3 分钟后的跟进收件箱（executor 内联派生）
+disable_executor_inbox_followup: true
+
+# 是否启动后台「策略优化器」线程（A/B 与参数自动调节，不写任务但属自动逻辑）
+disable_strategy_optimizer: true
+
+# 是否允许 TikTok 事件链路自动建任务：高意向紧急收件箱、回关快速 DM、跨平台转化、drip 跟进等
+disable_event_driven_auto_tasks: true
+
+# 创建任务时按 config/task_param_schemas.yaml 合并默认值、类型与边界（推荐开启）
+normalize_task_params: true
+
+# 为 true 时：归一化阶段移除 schema 未声明的键（_ 开头元数据保留，如 _audience_preset）
+strict_task_params: false
+
+# ── 门禁模式（P0：与 tier 矩阵联动，适配多种 VPN/出口）────────────────
+# strict   — 与历史行为接近：L1 仍要求手机 VPN+外网（全量预检）
+# balanced — 推荐：L1 仅要求外网可达（network_only），L2/L3 仍全量预检+GEO
+# dev      — L2 默认不跑 GEO（便于联调）；生产请用 balanced/strict
+#
+# 2026-04-20 18:00-20:30 临时切到 dev 模式做 FB 真机功能验证(出口菲律宾)。
+# 2026-04-20 20:30 验证完毕恢复 balanced — FB 7 类核心任务(feed/groups/
+# search/inbox/extract/add_friend/send_message) 已确认脚本层跑通,XSpace 双
+# 开 dialog 自愈,_AdbUiObject 改走 dump_hierarchy XML 匹配(通用跨 app)。
+gate_mode: balanced
+
+# 任务类型 → 风险等级（最长前缀优先）。未匹配的用 default_tier。
+# L0 预检 none | L1 network_only（balanced 下不要求手机 VPN）| L2/L3 全量
+tier_by_prefix:
+  "tiktok_status": L1
+  "tiktok_scan_username": L1
+  "tiktok_test_follow": L1
+default_tier: L2
+
+# 可选：覆盖内置矩阵（一般不必写满，只改一两格即可）
+# gate_matrix:
+#   balanced:
+#     L1: { preflight: network_only, geo: false }
+#
+# 2026-04-20：dev 模式下把 L2 也降到 network_only，本地 PH IP 也能跑通业务任务。
+gate_matrix:
+  dev:
+    L2: { preflight: network_only, geo: false }
+
+# ── 统一任务门禁（run_task 入口，高风险类型）────────────────────────────
+# 对所有匹配 risky_task_prefixes 的 type：先 run_preflight，再可选 GEO。
+#
+# 2026-04-21 临时停用 VPN / GEO 预检
+#   背景：实战任务批量报 [gate] VPN未连接 / [gate] 出口国家与任务不一致 (期望=italy 实际=)，
+#         用户已要求先放行，不做硬拦截，业务层需要「跑得起来」优先于「跑得合规」。
+#   停用项：enforce_preflight=false(跳过 VPN/网络/账号预检) + enforce_geo_for_risky=false
+#           (跳过出口国家匹配)。geo_fail_open 保持 false（关不关都等同，因为不再进入 GEO 分支）。
+#   后续恢复：改回 enforce_preflight=true + enforce_geo_for_risky=true 即可，
+#             不需改代码。若要只恢复 VPN 预检、不强制国家匹配，把 enforce_preflight 改回 true 即可。
+#
+# 2026-04-27 复原 enforce_preflight=true:
+#   原因：社群客服拓展 5h 死循环事故复盘 — VPN preflight 关闭叠加 VPN 中途掉线
+#         (任务跑期间所有截图都是 "No Internet Connection"), 任务在断网状态下
+#         继续操作 → AutoSelector 学错入口 → 误进 Messenger → 5h 反复无进展。
+#   保持 enforce_geo_for_risky=false (不强制出口国匹配, 仍允许测试出口).
+manual_gate:
+  enforce_preflight: true
+  enforce_geo_for_risky: false
+  # 默认与任务 params.target_country / country 对齐；未设置时用:
+  default_expected_country: italy
+  # GEO API 失败时是否放行。Sprint 4 P2 双源/三源交叉上线后,
+  # 稳定性从"1 源 fail 即全拒"提升到"多源任一成功即可匹配",
+  # 因此可安全恢复 geo_fail_open=false(合规优先)。
+  # 同时 gate 对 source_conflict=True 也会拒绝(保守)。
+  geo_fail_open: false
+  # 2026-04-20 Sprint 4 s4_5 真机回归完成后复原为 false(严格合规模式)。
+  allow_param_bypass: false
+  # 高风险前缀（可增删）；匹配任一前缀则走完整门禁
+  risky_task_prefixes:
+    - "tiktok_"
+    - "telegram_"
+    - "whatsapp_"
+    - "linkedin_"
+    - "facebook_"
+    - "instagram_"
+    - "studio_"
+    - "content_"
+    - "batch_"
+    - "auto_"
+
+  # ── 2026-04-21 P0-3: FB 风控事件 → 自动冷却红旗 ────────────────────
+  # 只要 24h 内该设备累计风控事件数 ≥ threshold，Gate 就拒绝派发 facebook_*
+  # 任务，直到滚动窗口内事件数掉到阈值以下。独立于 enforce_preflight 生效,
+  # 即使放行模式下也会执行（保护账号优先）。数据源: fb_risk_events 表。
+  fb_risk_cooldown:
+    enabled: true
+    window_hours: 24
+    threshold: 3

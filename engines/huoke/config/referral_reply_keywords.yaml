@@ -1,0 +1,65 @@
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 20.1 (2026-04-25): Messenger 入站消息 → wa_referral_replied 关键词字典
+# ═══════════════════════════════════════════════════════════════════════
+# 触发逻辑 (B 侧实施):
+#   * A 派发 LINE referral (event=wa_referral_sent) 后,
+#     如果对方在 messenger 里回复包含 keywords[*] 任一词的消息,
+#     B 写 event=wa_referral_replied (peer_name + meta.keyword_matched + raw_excerpt)
+#   * 全部小写匹配, 关键词命中即可 (不要求完整词匹配, 容忍 emoji/标点)
+#   * 多关键词命中只记录首个 (按 yaml 顺序优先级)
+#
+# 维护原则:
+#   * 关键词应是"对方主动确认要 LINE/已联系"的强信号词
+#   * 避免日常问候词 (你好/thanks/ok), 否则误判率高
+#   * 多语言按 persona.country_code 分组, 引擎按 lead 的 region 选词组
+# ═══════════════════════════════════════════════════════════════════════
+
+# 默认关键词 (跨语言通用 — 直接 LINE ID / 加我 类)
+default:
+  - line
+  - line id
+  - lineid
+  - line@
+  - "@line"
+  - 加好友
+  - 加我
+  - 加 line
+  - 加你 line
+
+# 日本 (jp_*) — 主市场
+jp:
+  - ライン
+  - らいん
+  - ＬＩＮＥ        # 全角 LINE
+  - 友だち
+  - 友達
+  - 追加
+  - id 教え
+  - id おしえ
+  - 連絡先
+  - 連絡してい
+
+# 意大利 (it_*) — 备用市场
+it:
+  - aggiungi
+  - amico
+  - amica
+  - linea
+  - cerca line
+  - linea ufficiale
+
+# 英语兜底
+en:
+  - add me
+  - add friend
+  - add you on line
+  - friend request
+  - my line is
+
+# 中文 (cn_/tw_) — 兜底
+cn:
+  - 加好友
+  - 加微信
+  - 加我吧
+  - 微信号
+  - 联系方式

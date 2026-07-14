@@ -1,0 +1,23 @@
+# voxcpm conda 环境（VoxCPM2 TTS · voxcpm_server.py · 端口 7856）—— 种子依赖清单
+# 说明：本文件为「最小种子」，非完整 pip freeze。在目标机用 conda 建环境并 pip 安装后，
+#       应执行  pip freeze > requirements/voxcpm.txt  覆盖为可复现实测基线（与其它 env 一致）。
+#
+# 建环境（参考，与现有 6 个隔离环境同套路）：
+#   conda create -n voxcpm python=3.11 -y
+#   conda activate voxcpm
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+#   pip install -r requirements/voxcpm.txt
+#   # 模型：放到  models/VoxCPM2/  ，或留空由 from_pretrained("openbmb/VoxCPM2") 自动下载
+#
+# —— 进程内后端（默认 VOXCPM_BACKEND=inproc，能力最全 + 原生流式）——
+voxcpm                 # OpenBMB VoxCPM2（Apache-2.0 可商用）
+soundfile              # 参考音读写 / 调试落盘
+numpy
+fastapi
+uvicorn
+requests
+pydantic
+
+# —— 可选：高并发生产后端（二选一；用 VOXCPM_BACKEND=vllm 切换）——
+# nano-vllm-voxcpm     # 单机高吞吐（RTF≈0.13）
+# vllm-omni            # 官方多租户 omni 服务，OpenAI 兼容 /v1/audio/speech（按官方源码安装）

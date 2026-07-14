@@ -1,0 +1,146 @@
+# 任务链配置 — 2026-05-08 P2-2
+# 每条链定义了一组按顺序执行的任务步骤。
+# 前一步完成后，自动为同一设备创建下一步任务。
+# 每步可以定义 params（覆盖默认参数）和 on_fail（失败策略: skip/abort）。
+#
+# 使用方法:
+#   POST /tasks/chain  {"chain_id": "fb_full_funnel", "device_id": "xxx"}
+#   或批量: POST /tasks/chain  {"chain_id": "fb_full_funnel", "device_ids": ["a","b","c"]}
+
+chains:
+
+  # ── Facebook 全链路客服拓展 (Phase C1 升级) ──────────────────────
+  # 对应 full_funnel preset: 养号 → 进群互动 → 群成员打招呼加好友 → 收件箱
+  # 拆为 4 步链, 每步可独立重跑; extract_members + add_friends 合并为
+  # facebook_group_member_greet (数据上下文需保持)
+  fb_full_funnel:
+    name: "全链路客服拓展"
+    description: "养号 → 进群互动 → 群成员打招呼+加好友 → Messenger+消息请求+好友请求"
+    platform: facebook
+    steps:
+      - task_type: facebook_browse_feed
+        params:
+          scroll_count: 20
+          like_probability: 0.35
+          duration: 15
+        on_fail: skip     # 浏览失败不阻塞后续
+
+      - task_type: facebook_campaign_run
+        params:
+          steps: ["warmup", "group_engage"]
+          warmup_scrolls: 15
+          group_max_posts: 4
+          like_probability: 0.4
+        on_fail: skip     # 进群互动失败不阻塞加好友
+
+      - task_type: facebook_group_member_greet
+        params:
+          steps: ["extract_members", "add_friends"]
+          max_members: 50
+          extract_max_members: 50
+          max_friends_per_run: 5
+          send_greeting_inline: true
+          require_verification_note: true
+          require_outreach_goal: true
+          outreach_goal: 5
+          broad_keyword: true
+          discover_groups: true
+          auto_join_groups: true
+          join_if_needed: true
+          skip_visited: true
+          member_sources: ["feed_authors"]
+          feed_max_scrolls: 25
+          min_l1_score: 0
+          max_groups: 4
+          max_groups_to_extract: 4
+          max_members_per_group: 50
+          do_l2_gate: true
+          strict_persona_gate: true
+          l2_gate_shots: 1
+          walk_candidates: true
+          max_l2_calls: 8
+        on_fail: skip     # extract/greet 失败不阻塞收件箱检查
+
+      - task_type: facebook_check_inbox
+        params:
+          auto_reply: true
+          max_conversations: 15
+        on_fail: skip
+
+      - task_type: facebook_check_message_requests
+        params:
+          max_requests: 10
+        on_fail: skip
+
+      - task_type: facebook_check_friend_requests
+        params:
+          accept_all: false
+          max_requests: 15
+        on_fail: skip
+
+  # ── Facebook 养号链（仅浏览+互动）─────────────────────────────
+  fb_warmup_only:
+    name: "Facebook 纯养号"
+    description: "浏览动态 → 兴趣浏览 → 浏览群组"
+    platform: facebook
+    steps:
+      - task_type: facebook_browse_feed
+        params:
+          duration: 15
+        on_fail: skip
+
+      - task_type: facebook_browse_feed_by_interest
+        params:
+          duration: 10
+          max_topics: 3
+        on_fail: skip
+
+      - task_type: facebook_browse_groups
+        params: {}
+        on_fail: skip
+
+  # ── TikTok 获客链 ──────────────────────────────────────────────
+  tt_acquisition:
+    name: "TikTok 获客链"
+    description: "刷视频养号 → 关注目标 → 检查收件箱 → 自动回复"
+    platform: tiktok
+    steps:
+      - task_type: tiktok_warmup
+        params:
+          video_count: 15
+        on_fail: skip
+
+      - task_type: tiktok_follow
+        params: {}
+        on_fail: abort
+
+      - task_type: tiktok_check_inbox
+        params: {}
+        on_fail: skip
+
+      - task_type: tiktok_check_and_chat_followbacks
+        params: {}
+        on_fail: skip
+
+  # ── Instagram 种草获客链 ───────────────────────────────────────
+  ig_seed_funnel:
+    name: "Instagram 种草获客"
+    description: "浏览首页 → 搜索潜客 → DM私信"
+    platform: instagram
+    steps:
+      - task_type: instagram_browse_feed
+        params:
+          scroll_count: 30
+          like_probability: 0.15
+        on_fail: skip
+
+      - task_type: instagram_search_leads
+        params:
+          keyword: ""
+          max_leads: 10
+        on_fail: abort
+
+      - task_type: instagram_send_dm
+        params:
+          message: ""
+        on_fail: skip

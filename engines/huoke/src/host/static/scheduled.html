@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Scheduled Jobs 管理 · Phase 13</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0f1419; --panel: #1a222c; --border: #2a3644;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --success: #3fb950; --warn: #d29922; --danger: #f85149;
+    --hover: #22303d;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system; }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  .badge { font-size: 12px; background: var(--accent); color: #fff;
+           padding: 2px 8px; border-radius: 10px; margin-left: 8px; }
+  .panel { background: var(--panel); border: 1px solid var(--border);
+           border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; }
+  button { cursor: pointer; padding: 6px 12px; border-radius: 4px;
+           border: 1px solid var(--border); background: var(--accent);
+           color: #fff; font: inherit; }
+  button.sec { background: #30363d; }
+  button.success { background: var(--success); }
+  button.warn { background: var(--warn); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { padding: 8px 10px; border-bottom: 1px solid var(--border);
+           text-align: left; vertical-align: middle; }
+  th { font-size: 12px; color: var(--muted); text-transform: uppercase;
+       letter-spacing: 0.04em; }
+  tr:hover td { background: var(--hover); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px;
+          font-size: 11px; }
+  .pill.on { background: #0d4429; color: var(--success); }
+  .pill.off { background: #4a1d1d; color: var(--danger); }
+  code { background: #0d1117; padding: 1px 6px; border-radius: 3px;
+         font-size: 12px; font-family: ui-monospace, monospace; }
+  .muted { color: var(--muted); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+         margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Scheduled Jobs 管理 <span class="badge">Phase 13</span></h1>
+
+  <div class="panel">
+    <div class="row">
+      <button class="sec" onclick="reload()">↻ 刷新</button>
+      <span class="muted" id="count_label">—</span>
+      <span class="muted" style="flex:1; text-align:right">
+        <a href="/static/line-pool.html" style="color:var(--accent)">→ LINE Pool 管理</a>
+      </span>
+    </div>
+    <table>
+      <thead><tr>
+        <th>id</th><th>name</th><th>cron</th><th>action</th>
+        <th>enabled</th><th>last_run</th><th></th>
+      </tr></thead>
+      <tbody id="tbl"></tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2 style="font-size:14px;color:var(--muted);margin:0 0 8px;text-transform:uppercase">
+      最近手动触发结果
+    </h2>
+    <pre id="last_result" class="muted" style="background:#0d1117;padding:10px;border-radius:4px;max-height:300px;overflow:auto;font-size:12px;white-space:pre-wrap">—</pre>
+  </div>
+</div>
+
+<script>
+const API_KEY = new URLSearchParams(location.search).get("api_key") ||
+                localStorage.getItem("OPENCLAW_API_KEY") || "";
+if (API_KEY) localStorage.setItem("OPENCLAW_API_KEY", API_KEY);
+function $(id) { return document.getElementById(id); }
+function headers() {
+  const h = {"Content-Type": "application/json"};
+  if (API_KEY) h["X-API-Key"] = API_KEY;
+  return h;
+}
+async function api(path, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({}, opts.headers || {}, headers());
+  const r = await fetch(path, opts);
+  if (!r.ok) { throw new Error(`${r.status}: ${await r.text()}`); }
+  return r.json();
+}
+function escapeHtml(s) {
+  return String(s || "").replace(/[&<>"']/g,
+    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+let _jobs = [];
+
+async function reload() {
+  try {
+    const data = await api("/scheduled-jobs");
+    _jobs = data.jobs || data.results || data || [];
+    render();
+  } catch (e) { alert("加载失败: " + e.message); }
+}
+
+function render() {
+  const body = $("tbl"); body.innerHTML = "";
+  $("count_label").textContent = `共 ${_jobs.length} 条任务`;
+  for (const j of _jobs) {
+    const tr = document.createElement("tr");
+    const en = j.enabled ? "on" : "off";
+    const enLbl = j.enabled ? "启用" : "停用";
+    // 高亮 Phase 11/12 的关键 3 个
+    const isPhase12 = ["line_dispatch_30min",
+                       "send_referral_replies_30min",
+                       "recycle_dead_peers_daily"].includes(j.id);
+    tr.innerHTML = `
+      <td>${isPhase12 ? '⭐ ' : ''}<code>${escapeHtml(j.id)}</code></td>
+      <td>${escapeHtml(j.name || '')}</td>
+      <td><code>${escapeHtml(j.cron || '')}</code></td>
+      <td class="muted" style="font-size:12px">${escapeHtml(j.action || '')}</td>
+      <td><span class="pill ${en}">${enLbl}</span></td>
+      <td class="muted" style="font-size:11px">${escapeHtml(j.last_run || '—')}</td>
+      <td>
+        <button class="${j.enabled ? 'warn' : 'success'}"
+                onclick="onToggle('${j.id}', ${!j.enabled})">
+          ${j.enabled ? '停用' : '启用'}
+        </button>
+        <button class="sec" onclick="onRunNow('${j.id}')">▶ 立即跑</button>
+      </td>
+    `;
+    body.appendChild(tr);
+  }
+}
+
+async function onToggle(id, next) {
+  try {
+    const r = await api(`/scheduled-jobs/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify({enabled: next})
+    });
+    await reload();
+  } catch (e) { alert(e.message); }
+}
+
+async function onRunNow(id) {
+  if (!confirm("确认立即触发 " + id + " 跑一次? (不改 enabled 状态)")) return;
+  try {
+    const r = await api(`/scheduled-jobs/${encodeURIComponent(id)}/run-now`,
+                         {method: "POST"});
+    $("last_result").textContent =
+      `[${new Date().toISOString()}] ${id}:\n` +
+      JSON.stringify(r, null, 2);
+    await reload();
+  } catch (e) { alert(e.message); }
+}
+
+reload();
+</script>
+</body>
+</html>

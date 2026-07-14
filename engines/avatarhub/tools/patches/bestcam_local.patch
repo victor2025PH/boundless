@@ -1,0 +1,53 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 8a5f79a..78619b6 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -4,11 +4,9 @@ project(BestCam LANGUAGES CXX)
+ set(CMAKE_CXX_STANDARD 17)
+ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+ 
+-# Windows SDK path (adjust if needed to match your SDK version)
+-# The MFCreateVirtualCamera API requires Windows 11 22H2 (SDK 10.0.22621.0 or later).
+-set(WIN_SDK_LIB "C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64")
+-set(WIN_SDK_INC "C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/um")
+-set(WIN_SDK_SHARED "C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/shared")
++# NOTE: Windows SDK 头文件/库由 MSVC 工具链(VS 2022 生成器)自动发现,
++# 不再写死具体 SDK 版本路径, 避免因 SDK 版本号不一致而找不到目录。
++# MFCreateVirtualCamera 需要 Windows 11 22H2 (SDK 10.0.22621+)。
+ 
+ # Shared compiler definitions
+ add_compile_definitions(
+@@ -19,13 +17,6 @@ add_compile_definitions(
+     WIN32_LEAN_AND_MEAN
+ )
+ 
+-# Common include directories
+-set(COMMON_INCLUDES
+-    ${CMAKE_CURRENT_SOURCE_DIR}
+-    "${WIN_SDK_INC}"
+-    "${WIN_SDK_SHARED}"
+-)
+-
+ # 1. Build the Virtual Camera COM DLL (BestCamSource.dll)
+ add_library(BestCamSource SHARED
+     DllMain.cpp
+@@ -34,8 +25,7 @@ add_library(BestCamSource SHARED
+     FrameServer.cpp
+     BestCamSource.def
+ )
+-target_include_directories(BestCamSource PRIVATE ${COMMON_INCLUDES})
+-target_link_directories(BestCamSource PRIVATE "${WIN_SDK_LIB}")
++target_include_directories(BestCamSource PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+ target_link_libraries(BestCamSource PRIVATE
+     mf.lib
+     mfplat.lib
+@@ -47,8 +37,7 @@ target_link_libraries(BestCamSource PRIVATE
+ 
+ # 2. Build the Host Executable (BestCamHost.exe)
+ add_executable(BestCamHost BestCamHost.cpp)
+-target_include_directories(BestCamHost PRIVATE ${COMMON_INCLUDES})
+-target_link_directories(BestCamHost PRIVATE "${WIN_SDK_LIB}")
++target_include_directories(BestCamHost PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+ target_link_libraries(BestCamHost PRIVATE
+     mf.lib
+     mfplat.lib

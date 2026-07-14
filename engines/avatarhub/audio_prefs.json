@@ -1,0 +1,27 @@
+{
+ "input": "麦克风 (PD100X Podcast Microphone) (MME)",
+ "history": [
+  {
+   "ts": 1783374146.23,
+   "side": "input",
+   "from": null,
+   "to": "麦克风 (PD100X Podcast Microphone) (MME)",
+   "src": "ui-pick"
+  },
+  {
+   "ts": 1783374613.19,
+   "side": "input",
+   "from": "麦克风 (PD100X Podcast Microphone) (MME)",
+   "to": "麦克风 (Logitech BRIO) (MME)",
+   "src": "ui-pick"
+  },
+  {
+   "ts": 1783378552.56,
+   "side": "input",
+   "from": "麦克风 (Logitech BRIO) (MME)",
+   "to": "麦克风 (PD100X Podcast Microphone) (MME)",
+   "src": "ui-pick"
+  }
+ ],
+ "ts": 1783570321.95
+}

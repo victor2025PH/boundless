@@ -1,0 +1,97 @@
+package: com.twitter.android
+name: Twitter
+behavior_profile: twitter
+
+compliance:
+  hourly_total: 50
+  daily_total: 250
+  actions:
+    follow: {hourly: 10, daily: 50}
+    like: {hourly: 20, daily: 100}
+    retweet: {hourly: 8, daily: 40}
+    send_dm: {hourly: 8, daily: 40}
+    search: {hourly: 15, daily: 80}
+    reply: {hourly: 10, daily: 50}
+
+actions:
+  search_users:
+    description: "Search for users on X/Twitter"
+    params: [query]
+    steps:
+      - find: "Search tab or Explore icon"
+        action: tap
+      - find: "Search input field at top"
+        action: tap
+      - find: "Search text box"
+        action: type
+        param: query
+      - find: "People tab"
+        action: tap
+        optional: true
+
+  follow_user:
+    description: "Follow a user"
+    steps:
+      - find: "Follow button"
+        action: tap
+
+  like_tweet:
+    description: "Like a tweet"
+    steps:
+      - find: "Like or heart icon on tweet"
+        action: tap
+
+  retweet:
+    description: "Retweet/repost a tweet"
+    steps:
+      - find: "Retweet or repost icon"
+        action: tap
+      - find: "Repost confirmation or Repost button"
+        action: tap
+        optional: true
+
+  reply_tweet:
+    description: "Reply to a tweet"
+    params: [reply_text]
+    steps:
+      - find: "Reply icon (speech bubble)"
+        action: tap
+        wait_after: 1.0
+      - find: "Reply text input"
+        action: type
+        param: reply_text
+      - find: "Post or Reply button"
+        action: tap
+
+  send_dm:
+    description: "Send a direct message"
+    params: [recipient, message]
+    steps:
+      - find: "Messages or DM icon"
+        action: tap
+      - find: "New message or compose icon"
+        action: tap
+      - find: "Search people field"
+        action: type
+        param: recipient
+      - find: "First matching user"
+        action: tap
+      - find: "Next button"
+        action: tap
+        optional: true
+        wait_after: 1.0
+      - find: "Message text input"
+        action: type
+        param: message
+      - find: "Send message button"
+        action: tap
+
+  browse_feed:
+    description: "Scroll through the home timeline"
+    steps:
+      - find: "Home tab"
+        action: tap
+        optional: true
+      - find: "Timeline feed area"
+        action: swipe
+        wait_after: 2.0

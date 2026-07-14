@@ -1,0 +1,48 @@
+function hub() {
+  const HUB = window.location.origin;
+  return {
+    tab: 'profiles',
+    tabs: [
+      {id:'profiles', icon:'🎭', label:'角色库'},
+      {id:'stream',   icon:'📡', label:'开播'},
+      {id:'voice',    icon:'🎙️', label:'语音'},
+      {id:'sing',     icon:'🎵', label:'唱歌'},
+      {id:'history',  icon:'📜', label:'历史'},
+      {id:'batch',    icon:'📦', label:'批量'},
+      {id:'clone',    icon:'🧬', label:'克隆'},
+      {id:'logs',     icon:'📋', label:'日志'},
+      {id:'settings', icon:'⚙️', label:'设置'},
+    ],
+    profiles: [], active: '', services: {}, voices: [],
+    svcLabel: {faceswap:'换脸', tts:'TTS', hair:'发型', tryon:'试衣', rvc:'RVC', emotion_tts:'情感TTS', lipsync:'口型', singing:'唱歌'},
+    svcPort:  {faceswap:8000, tts:7851, hair:8001, tryon:8002, rvc:6242, emotion_tts:7852, lipsync:8090, singing:7853},
+    stepLabels: {check_services:'检查服务', activate_profile:'激活角色', start_video:'启动视频', start_rvc:'启动变声', stop:'已停止'},
+    sysLabels: {gpu:'显卡', gpu_mem:'显存', ram:'内存', disk:'磁盘', profiles:'角色数', voices:'音色数'},
+    sysInfo: {},
+
+    // 性能
+    perf: {gpu_util:-1, gpu_mem_used:-1, gpu_mem_total:0, ram_percent:-1, streaming:false, rvc_running:false},
+    perfLive: false,
+    profilesVersion: 0,   // WS 推送的版本号，变化时自动重载
+    healthPressure: 'green', // green/yellow/red，来自 /health 轮询
+
+    // 角色创建
+    newP: {name:'', desc:'', voice:'', hair:'', faceB64:'', facePreview:''},
+    createMsg:'', createOk:false,
+
+    // 角色编辑
+    editShow:false, editP:{}, editMsg:'', editOk:false,
+
+    // 预览
+    previewShow:false, previewName:'', previewImg:'', previewLoading:false, previewInfo:'',
+
+    // 语音
+    speakText:'', speakLang:'zh-cn',
+    speakEmotion:'neutral', speakInstruct:'', speakLipsync:false,
+    speakLoading:false, streamLoading:false,
+    speakMsg:'', speakOk:false, audioSrc:'',
+    streamInfo:'', streamPct:0,
+    speakDetectedEmotion:'', lipsyncVideoSrc:'',
+    streamAbortCtrl: null, streamQueueCtrl: null,  // P14-1: 流式停止控制
+    speakSentences:[],   // P21-4: 分句列表
+    speakCurrentId

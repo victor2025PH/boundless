@@ -1,0 +1,74 @@
+def one_click_start(body: dict = {}):
+    """一键开播：检查服务 → 激活角色 → 启动换脸 → 启动变声"""
+    global _active_profile
+    steps = []
+    profile_name = body.get("profile", _active_profile)
+    video_source = body.get("source", "scrcpy")
+
+    # Step 1: 检查核心服务（P5-1: 使用缓存版，避免重复阻塞）
+    svc = check_services_cached()
+    steps.append({"step": "check_services", "ok": True, "detail": svc})
+
+    # Step 2: 确认角色已激活
+    if profile_name and profile_name in _profiles:
+        _active_profile = profile_name
+        steps.append({"step": "activate_profile", "ok": True, "detail": profile_name})
+    else:
+        steps.append({"step": "activate_profile", "ok": True, "detail": "未选择角色，跳过激活"})
+
+    # Step 3: 启动视频换脸
+    try:
+        if _realtime_proc and _realtime_proc.poll() is None:
+            steps.append({"step": "start_video", "ok": True, "detail": "已在运行"})
+        else:
+            result = realtime_start({"source": video_source})
+            steps.append({"step": "start_video", "ok": result.get("ok", False),
+                          "detail": result.get("detail", ""), "camera": result.get("camera", "")})
+    except Exception as e:
+        steps.append({"step": "start_video", "ok": False, "detail": str(e)})
+
+    # Step 4: 启动 RVC (如果 rvc 服务未运行则启动 API 模式)
+    if not svc.get("rvc"):
+        try:
+            result = realtime_start_rvc_api()
+            steps.append({"step": "start_rvc", "ok": result.get("ok", False),
+                          "detail": result.get("detail", "")})
+        except Exception as e:
+            steps.append({"step": "start_rvc", "ok": False, "detail": str(e)})
+    else:
+        steps.append({"step": "start_rvc", "ok": True, "detail": "已在运行"})
+
+    all_ok = all(s["ok"] for s in steps)
+    return {"ok": all_ok, "steps": steps}
+
+@app.post("/api/one_click_stop")
+def one_click_stop():
+    """一键停播"""
+    results = []
+    # 停视频
+    if _realtime_proc and _realtime_proc.poll() is None:
+        _realtime_proc.terminate()
+        results.append("video stopped")
+    try:
+        ps = _subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*realtime_stream.py*' -or $_.CommandLine -like '*scrcpy.exe*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"],
+            capture_output=True, text=True, timeout=10)
+        if ps.returncode == 0:
+            results.append("stale video processes cleaned")
+    except Exception:
+        pass
+    # 停 RVC
+    if _rvc_proc and _rvc_proc.poll() is None:
+        _rvc_proc.terminate()
+        results.append("rvc stopped")
+    return {"ok": True, "detail": ", ".join(results) if results else "nothing to stop"}
+
+# ── 系统信息 ──────────────────────────────────────────────────────
+@app.get("/api/system_info")
+def system_info():
+    """返回系统信息：GPU、内存、磁盘"""
+    info = {"gpu": "unknown", "gpu_mem": "unknown", "ram": "unknown", "disk": "unknown"}
+    try:
+        import subprocess
+        r = subprocess.run(["nvidia-smi", "--query-gpu=

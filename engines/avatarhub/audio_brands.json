@@ -1,0 +1,20 @@
+{
+  "_readme": [
+    "音频设备品牌/关键词扩充词典（device_enum.py 读取，改完重启 hub 生效）。",
+    "用途：新买的麦克风/摄像头/手机App 没被正确归类时，在对应列表加一个小写关键词即可，不用改代码。",
+    "合并规则：这里的条目排在内置词典前面（先匹配），同名关键词自动去重；文件缺失或写坏时自动回退内置词典，不影响运行。",
+    "phone_keywords: 手机麦克风 App 关键词 → 归入「手机麦克风」组",
+    "phone_pretty:   [关键词, 显示名] 对 → 手机 App 的人话名（如 [\"droid\", \"DroidCam\"]）",
+    "phone_pick_priority: 多个手机麦同时在线时的推荐优先级（靠前优先）",
+    "usbmic_keywords: USB 独立麦克风；cam_keywords: 摄像头（自带麦）；bt_keywords: 蓝牙耳机",
+    "board_keywords: 主板/板载声卡；hdmi_keywords: 显示器/HDMI 音频"
+  ],
+  "phone_keywords": [],
+  "phone_pretty": [],
+  "phone_pick_priority": [],
+  "bt_keywords": ["freebuds", "soundcore", "wf-1000", "wh-1000", "buds"],
+  "cam_keywords": ["obsbot", "insta360 link", "emeet", "nexigo"],
+  "usbmic_keywords": ["elgato wave", "blue snowball", "snowball", "blue yeti", "tonor", "godox", "boya", "takstar", "at2035"],
+  "board_keywords": [],
+  "hdmi_keywords": []
+}

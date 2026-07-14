@@ -1,0 +1,53 @@
+tts:7851, hair:8001, tryon:8002, rvc:6242, emotion_tts:7852, lipsync:8090, singing:7853},
+    stepLabels: {check_services:'检查服务', activate_profile:'激活角色', start_video:'启动视频', start_rvc:'启动变声', stop:'已停止'},
+    sysLabels: {gpu:'显卡', gpu_mem:'显存', ram:'内存', disk:'磁盘', profiles:'角色数', voices:'音色数'},
+    sysInfo: {},
+
+    // 性能
+    perf: {gpu_util:-1, gpu_mem_used:-1, gpu_mem_total:0, ram_percent:-1, streaming:false, rvc_running:false},
+    perfLive: false,
+    profilesVersion: 0,   // WS 推送的版本号，变化时自动重载
+    healthPressure: 'green', // green/yellow/red，来自 /health 轮询
+
+    // 角色创建
+    newP: {name:'', desc:'', voice:'', hair:'', faceB64:'', facePreview:''},
+    createMsg:'', createOk:false,
+
+    // 角色编辑
+    editShow:false, editP:{}, editMsg:'', editOk:false,
+
+    // 预览
+    previewShow:false, previewName:'', previewImg:'', previewLoading:false, previewInfo:'',
+
+    // 语音
+    speakText:'', speakLang:'zh-cn',
+    speakEmotion:'neutral', speakInstruct:'', speakLipsync:false,
+    speakLoading:false, streamLoading:false,
+    speakMsg:'', speakOk:false, audioSrc:'',
+    streamInfo:'', streamPct:0,
+    speakDetectedEmotion:'', lipsyncVideoSrc:'',
+    streamAbortCtrl: null, streamQueueCtrl: null,  // P14-1: 流式停止控制
+    speakSentences:[],   // P21-4: 分句列表
+    speakCurrentIdx:-1,  // P21-4: 当前播放句子索引
+
+    // 情感选项（胶囊按钮用）
+    emotionOptions: [
+      {value:'auto',      label:'🤖 自动'},
+      {value:'neutral',   label:'😐 普通'},
+      {value:'happy',     label:'😊 开心'},
+      {value:'excited',   label:'🤩 兴奋'},
+      {value:'gentle',    label:'🌸 温柔'},
+      {value:'calm',      label:'😌 平静'},
+      {value:'sad',       label:'😢 悲伤'},
+      {value:'angry',     label:'😡 愤怒'},
+      {value:'serious',   label:'😤 严肃'},
+      {value:'fearful',   label:'😨 恐惧'},
+      {value:'surprised', label:'😲 惊讶'},
+      {value:'disgusted', label:'🤢 厌恶'},
+    ],
+
+    // 唱歌
+    singLyrics:'', singLang:'zh', singSpeed:0.85,
+    singLoading:false, singMsg:'', singOk:false, singAudioSrc:'',
+    singRefB64:'',
+    singExam

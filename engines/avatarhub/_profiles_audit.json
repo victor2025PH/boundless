@@ -1,0 +1,163 @@
+[
+ {
+  "name": "Inside",
+  "has_voice": false,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": null
+ },
+ {
+  "name": "云帆",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": 0.629
+ },
+ {
+  "name": "京味幽默",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": null
+ },
+ {
+  "name": "低音沉稳男声 0139",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": 0.8056
+ },
+ {
+  "name": "低音沉稳男声 1136",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": 0.7098
+ },
+ {
+  "name": "张一健",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": null
+ },
+ {
+  "name": "晓桐",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": 0.5916
+ },
+ {
+  "name": "林小玲",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": 0.6248
+ },
+ {
+  "name": "欧美绅士",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": null
+ },
+ {
+  "name": "沉稳港风",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": null
+ },
+ {
+  "name": "海外总裁",
+  "has_voice": false,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": null
+ },
+ {
+  "name": "清晰女声A",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": 0.7723
+ },
+ {
+  "name": "清晰男声A",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": 0.781
+ },
+ {
+  "name": "清晰男声B",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": 0.8216
+ },
+ {
+  "name": "清雅淑女",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": null
+ },
+ {
+  "name": "男声低音炮",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": 0.6374
+ },
+ {
+  "name": "男声利落",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": 0.7523
+ },
+ {
+  "name": "男声均衡",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": 0.8359
+ },
+ {
+  "name": "男声活泼",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": 0.695
+ },
+ {
+  "name": "男声磁性",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": 0.8103
+ },
+ {
+  "name": "硬汉先生",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": null
+ },
+ {
+  "name": "磁性港风",
+  "has_voice": true,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": 0.6086
+ },
+ {
+  "name": "阳光型男",
+  "has_voice": false,
+  "has_clone": null,
+  "sys_prompt": false,
+  "cos": null
+ }
+]

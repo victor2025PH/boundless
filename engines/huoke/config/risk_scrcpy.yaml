@@ -1,0 +1,9 @@
+# 风控降级时自动拉起 scrcpy 投屏的开关。
+# Sprint 5 P3-3: 当 CrossPlatformRiskHealer 触发 downgrade(B 策略 warmup 派发)
+# 时,若此开关为 true,会异步为涉事设备启动一个 scrcpy 投屏窗口,让操作员
+# 能第一时间在桌面看到验证码/拼图/账号被封页面,及时人工处理。
+#
+# 注意:
+# - 无头服务器(无桌面环境)不要开,scrcpy 需要 GUI
+# - 若同一设备已有活跃 scrcpy session,会跳过以避免冲突
+auto_start: false
