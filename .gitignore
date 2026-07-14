@@ -1,0 +1,59 @@
+# ---- secrets (never commit) ----
+secrets/
+*.key
+*.pem
+id_ed25519*
+.env
+.env.*
+prod.env.local
+**/creds.json
+**/服务器密码.txt
+llm_backends.json
+config.yaml
+
+# ---- python ----
+__pycache__/
+*.pyc
+.venv/
+.venv_*/
+
+# ---- node / next ----
+node_modules/
+.next/
+build/
+dist/
+
+# ---- runtime / logs / data ----
+logs/
+data/
+tmp/
+temp/
+*.log
+
+# ---- third-party engines & big weights (provision instead) ----
+vendor/
+models/
+checkpoints/
+_pending_models/
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.pt
+*.bin
+*.gguf
+*.tar
+*.zip
+*.rar
+*.7z
+*.exe
+
+# ---- large media ----
+*.wav
+*.mp3
+*.mp4
+*.mov
+*.mkv
+
+# keep empty structure
+!**/.gitkeep
