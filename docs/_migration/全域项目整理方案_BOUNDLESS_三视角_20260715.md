@@ -266,3 +266,25 @@ wujie/                         ← 新 git 单仓（无界科技全域）
 - **装机面提层**：`deploy/`(docker-compose+cluster_map+provision)、`packaging/`(installer/build/publish) 从 avatarhub 提到全域层。
 - **回填 + 出图**：VoxX/LingoX 价格数字（doctor 已点名 3 处 TBD）、voxx 专属图标。
 - **接 remote 前**：`tools/prepush_cleanup.ps1`（字体转 LFS + filter-repo 抹历史大对象 + gc）→ 建 remote → push；`website/` 部署前 `npm run build`。
+
+---
+
+## 13. Phase 6 实施记录 + 实施中优化（2026-07-15 · 在 117 操作）
+
+**已落地（提交 `f7d5670`；`repo_doctor` = FAIL 0 / WARN 2）**
+- **SKU 注册表（闭环基石）**：`tools/build_sku_registry.py` 从 7 个 `product.yaml` 汇总生成 `platform/licensing/sku_registry.json`（**7 产品 / 21 SKU / 5 个 TBD**），在 117 用 `cosytts` env 跑通验证。platform 首次有真实产物 → doctor 的 platform 告警消除。
+- **platform/licensing、deploy、packaging** 三层 README + `deploy/cluster_map.json`（跨机拓扑单一源）落位。
+- **compliance 方案修正**（见下 #1，重大）。
+- doctor 现仅剩 2 个 WARN：字体>10MB（留 prepush LFS）、3 个 product.yaml 价格 TBD。
+
+**实施中的 5 处再优化（本轮深挖收获最大）**
+1. **compliance 抽取被推翻重设（最重要）**：读 `provenance.py` 发现它 `import app_config` 且把 **Ed25519 私钥 / C2PA 证书 / 审计库** 全绑定 avatarhub 本机目录（都是 `.gitignore` 忽略的本机私钥）。**移 .py 根本不能让别的引擎复用**（它们没这些私钥）。→ 正确架构：合规**留在 avatarhub（私钥持有方），以 HTTP 服务契约对外**；`platform/compliance` = 契约 + 瘦客户端，**不是移代码**。原"移文件+shim"手册作废、已改写。
+2. **避开 stdlib `platform` 名冲突**：把仓根加 `sys.path` 再 `import platform.compliance` 会**遮蔽标准库 `platform`**（全线在用）。已禁用该法。
+3. **SKU builder 放 tools/、产物落 platform/**：platform 自身不 import products，守住"platform 不反向依赖"。
+4. **deploy/packaging = 索引而非搬迁**：引擎部署脚本有相对路径假设，搬走会坏；deploy/ 只做全域索引 + 收敛跨机拓扑单一源。
+5. **先验证后动手**：117 实测 3 env 均可 `import provenance/watermark`、PyYAML 6.0.3 在位、SKU builder 真跑出 7/21。
+
+**下一阶段（Phase 7）**
+- **compliance 契约固化**（env 机）：核对 avatarhub 真实合规端点 → `platform/compliance/CONTRACT.md` + stdlib 瘦 `client.py`。
+- **licensing 接线**：`website/lib/pricing.ts` + order + license 改为消费 `sku_registry.json`，真正闭合"官网↔SKU↔license↔交付"。
+- 回填 VoxX/LingoX 的 5 个 TBD 价格 + voxx 图标；`deploy/up.ps1` 一处起停全栈；接 remote 前 `prepush_cleanup.ps1`。
