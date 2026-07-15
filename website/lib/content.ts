@@ -388,13 +388,13 @@ const zh: Dict = {
     cta: "立即咨询",
   },
   hero: {
-    badge: "无界科技 · AI 自动成交聊天 · 多语种拟人翻译 · USDT 结算",
+    badge: "无界科技 · AI 自动成交聊天 · 多语种拟人翻译 · 私有可控",
     title: "对手还在手动加粉，",
     titleAccent: "你的 AI 已 24h 替你成交",
     rotating: ["AI 全自动接客成交", "多语种拟人翻译秒回", "1 个人干翻 10 人团队", "封号自动换号 0 停机", "实时换脸换声开播", "私有部署数据不出网"],
     subtitle:
-      "加人、翻译、跟单、催单——这些累死人还留不住客的活，全甩给 AI 7×24 去干：多号矩阵不知疲倦加粉引流，拟人翻译让对方看不出你是外国人，AI 主动逼单把钱谈进来，人工随时一键接管，还能直播 / 视频通话级实时换脸换声。同行 10 个人干的活，你 1 个人躺着收——私有部署、数据不出网，全程 USDT 结算。",
-    trustline: "已服务出海团队 · 全程 USDT 结算 · 私有部署数据不出网",
+      "加人、翻译、跟单、催单——这些累死人还留不住客的活，全甩给 AI 7×24 去干：多号矩阵不知疲倦加粉引流，拟人翻译让对方看不出你是外国人，AI 主动逼单把钱谈进来，人工随时一键接管，还能直播 / 视频通话级实时换脸换声。同行 10 个人干的活，你 1 个人躺着收——私有部署、数据不出网、合规可溯源。",
+    trustline: "已服务出海团队 · 私有部署数据不出网 · 合规可溯源",
     ctaPrimary: "免费咨询 · 拿成交方案",
     ctaSecondary: "查看套餐与价格",
     stats: [
@@ -448,15 +448,27 @@ const zh: Dict = {
     {
       id: "translate",
       tag: "通译 LingoX",
-      title: "克隆音实时同传 + 双语字幕",
-      desc: "用你自己的克隆声做双向同传，术语表锁定专有名词、支持抢话打断；OBS 拖一个链接直播间即出实时双语字幕，散场一键导 SRT。会议、直播、连麦全覆盖。",
-      features: ["克隆音双向同传", "术语锁定 · 抢话打断", "OBS 双语字幕", "一键通话套餐"],
+      title: "跨境实时聊天翻译 SCRM",
+      desc: "多平台文字 + 语音双向实时翻译，术语表锁定专有名词、翻译记忆省成本，统一收件箱沉淀客户资产——让不会外语的团队在 WhatsApp / Telegram / LINE 上即时跟全球客户对话。",
+      features: ["多平台双向翻译", "术语锁定 · 翻译记忆", "统一收件箱 · 客户资产", "多模态（图片/语音）翻译"],
       highlight: true,
+      // TODO 定价待老板拍板（split_you_price）：先「按需报价」占位，价格数字确定后回填
       pricing: [
-        { plan: "入门", price: "58 / 月", detail: "3 账号，双向翻译，1 平台" },
-        { plan: "团队", price: "198 / 月", detail: "10 账号，全平台，AI 自动回复" },
-        { plan: "旗舰", price: "598 / 月", detail: "50 账号，人工接管，数据看板" },
-        { plan: "私有化部署", price: "3000 起", detail: "买断 + 600 / 年维护" },
+        { plan: "字符包", price: "按需报价", detail: "一次性字符包 + 术语库" },
+        { plan: "团队", price: "按需报价", detail: "多坐席 + 客户 journey + 漏斗看板" },
+        { plan: "专业", price: "按需报价", detail: "不限字符 + 多模态 + 置信度/引擎健康" },
+      ],
+    },
+    {
+      id: "interpret",
+      tag: "通传 VoxX",
+      title: "克隆音实时同传 + 双语字幕",
+      desc: "用你自己的克隆声做双向语音同传，术语表锁定专有名词、支持抢话打断；OBS 拖一个链接直播间即出实时双语字幕，散场一键导 SRT。会议、直播、连麦全覆盖。",
+      features: ["克隆音双向同传", "术语锁定 · 抢话打断", "OBS 双语字幕", "一键通话套餐"],
+      // TODO 定价待老板拍板（split_you_price）
+      pricing: [
+        { plan: "会议同传", price: "按需报价", detail: "按场次 / 时长计费" },
+        { plan: "私有化部署", price: "按需报价", detail: "买断 + 年度维护" },
       ],
     },
     {
@@ -498,10 +510,10 @@ const zh: Dict = {
   pricingSection: {
     title: "私有定制 · 一切皆可实现",
     subtitle: "克隆声音、克隆人脸、实时视频通话与直播——只要你想要的功能，我们都能为你私有定制落地，适用于任何场景。",
-    unit: "单位：USDT · 可私有定制",
+    unit: "单位：USD · 支持 USDT 等结算 · 可私有定制",
     note: "下方为标准能力的挂牌建议价；超出清单的需求一律支持私有定制开发，按场景与规模报价。把你的想法告诉客服，我们把它变成现实。",
     planCol: "套餐",
-    priceCol: "价格 (USDT)",
+    priceCol: "价格 (USD)",
     detailCol: "说明",
     allLabel: "全部",
   },
@@ -1033,13 +1045,13 @@ const en: Dict = {
     cta: "Get Started",
   },
   hero: {
-    badge: "BOUNDLESS · AI Auto-Closing Chat · human-like multi-language · USDT",
+    badge: "BOUNDLESS · AI Auto-Closing Chat · human-like multi-language · private & controllable",
     title: "Rivals still add leads by hand.",
     titleAccent: "Your AI already closes 24/7",
     rotating: ["AI closes deals 24/7", "Human-like translation, instant", "1 person beats a 10-person team", "Auto-swap accounts, 0 downtime", "Real-time face & voice swap", "Private deploy, off the net"],
     subtitle:
-      "Adding leads, translating, following up, chasing orders — hand the grind to AI running 24/7: multi-account matrices add leads tirelessly, human-like translation hides your origin, AI actively pushes for the close, and humans take over anytime. Plus live-stream / video-call grade face & voice swap. One person does what a 10-person team does — privately deployed, off the net, settled in USDT.",
-    trustline: "Trusted by cross-border teams · settled in USDT · private, off the net",
+      "Adding leads, translating, following up, chasing orders — hand the grind to AI running 24/7: multi-account matrices add leads tirelessly, human-like translation hides your origin, AI actively pushes for the close, and humans take over anytime. Plus live-stream / video-call grade face & voice swap. One person does what a 10-person team does — privately deployed, off the net, verifiably compliant.",
+    trustline: "Trusted by cross-border teams · private, off the net · verifiably compliant",
     ctaPrimary: "Free consult · get a closing plan",
     ctaSecondary: "View plans & pricing",
     stats: [
@@ -1093,15 +1105,27 @@ const en: Dict = {
     {
       id: "translate",
       tag: "LingoX",
-      title: "Cloned-voice Interpreting + Bilingual Subtitles",
-      desc: "Two-way interpreting in your own cloned voice, a glossary that locks proper nouns, barge-in interruption; drop one URL into OBS for live bilingual subtitles, export SRT afterwards. Meetings, streams and co-calls covered.",
-      features: ["Cloned-voice interpreting", "Term lock · barge-in", "OBS bilingual subtitles", "One-tap call package"],
+      title: "Cross-border Real-time Chat Translation SCRM",
+      desc: "Two-way real-time text + voice translation across platforms, glossary-locked proper nouns, cost-saving translation memory, and a unified inbox that builds customer assets — so teams that don't speak the language can chat with global clients on WhatsApp / Telegram / LINE.",
+      features: ["Multi-platform translation", "Term lock · translation memory", "Unified inbox · customer assets", "Multimodal (image/voice)"],
       highlight: true,
+      // TODO pricing pending owner decision (split_you_price): "quote on request" placeholder
       pricing: [
-        { plan: "Entry", price: "58 / mo", detail: "3 accounts, translation, 1 platform" },
-        { plan: "Team", price: "198 / mo", detail: "10 accounts, all platforms, AI reply" },
-        { plan: "Flagship", price: "598 / mo", detail: "50 accounts, handoff, dashboard" },
-        { plan: "Self-hosted", price: "from 3000", detail: "Buyout + 600 / yr support" },
+        { plan: "Char pack", price: "Quote", detail: "One-time char pack + glossary" },
+        { plan: "Team", price: "Quote", detail: "Multi-seat + customer journey + funnel" },
+        { plan: "Pro", price: "Quote", detail: "Unlimited chars + multimodal + confidence" },
+      ],
+    },
+    {
+      id: "interpret",
+      tag: "VoxX",
+      title: "Cloned-voice Interpreting + Bilingual Subtitles",
+      desc: "Two-way voice interpreting in your own cloned voice, a glossary that locks proper nouns, barge-in interruption; drop one URL into OBS for live bilingual subtitles, export SRT afterwards. Meetings, streams and co-calls covered.",
+      features: ["Cloned-voice interpreting", "Term lock · barge-in", "OBS bilingual subtitles", "One-tap call package"],
+      // TODO pricing pending owner decision (split_you_price)
+      pricing: [
+        { plan: "Meeting interpret", price: "Quote", detail: "Per session / duration" },
+        { plan: "Self-hosted", price: "Quote", detail: "Buyout + annual support" },
       ],
     },
     {
@@ -1143,10 +1167,10 @@ const en: Dict = {
   pricingSection: {
     title: "Private & Custom · Anything is possible",
     subtitle: "Clone voices, clone faces, real-time video calls and live streams — whatever feature you imagine, we build it for you, privately, for any scenario.",
-    unit: "Unit: USDT · custom available",
+    unit: "Unit: USD · USDT & more accepted · custom available",
     note: "Below are suggested prices for standard capabilities; anything beyond the list is delivered as private custom development, quoted by scenario and scale. Tell us your idea — we make it real.",
     planCol: "Plan",
-    priceCol: "Price (USDT)",
+    priceCol: "Price (USD)",
     detailCol: "Details",
     allLabel: "All",
   },
