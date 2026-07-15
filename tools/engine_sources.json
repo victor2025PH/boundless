@@ -1,0 +1,42 @@
+{
+  "_comment": [
+    "引擎上游同步单一源 —— tools/sync_engine.ps1 读它，把各引擎『在别处持续开发的最新净码』拉进 engines/<engine>。",
+    "为什么需要它：wujie 是 monorepo『拉净码』，各引擎的真身仍在各自上游仓/别的机器上被持续开发；",
+    "  不能用 git subtree/submodule（会把上游的 运行时/机密/大权重 带进干净单仓），故用『净码再同步』：",
+    "  fetch 上游工作树 -> 过滤(排除 运行时/机密/大文件/缓存) -> 覆盖 engines/<engine> -> 人工 review 后作为普通 wujie 提交。",
+    "channel 优先级：1) git 上游(团队共享，推荐) 2) -From <本地/UNC/SSH 路径>(上游尚未 push 时的直连兜底)。",
+    "last_synced：记录上次同步到的上游标识，用于 -Check 判断『上游是否有新码可拉』与生成变更概览。"
+  ],
+  "engines": {
+    "avatarhub": {
+      "title": "换脸/换声/数字人/同传 (模仿音色 / mfys)",
+      "upstream_git": "https://github.com/victor2025PH/mfys20260618.git",
+      "branch": "main",
+      "local_mirror": "D:/faceX/mfys",
+      "last_synced": { "kind": "migration-snapshot", "ref": "20260715", "note": "迁移时取『开发机较新副本』净码；比 GitHub main(6-24) 还新" },
+      "dev_note": "换脸/换声在『另一台开发机』持续开发。要 wujie 能拉：开发机需先 git push 到 upstream_git；否则用 -From 指向开发机共享目录/SSH。",
+      "exclude_dirs": ["__pycache__", ".git", ".venv", "demo_record", "archive", "publish", "ui_snapshots", "data", "models", "checkpoints", "logs", "clothes", "bg_images", ".pwprofile"],
+      "exclude_files": ["*.pyc", "*.png", "*.jpg", "*.jpeg", "*.wav", "*.mp3", "*.mp4", "*.mov", "*.pth", "*.onnx", "*.safetensors", "*.pt", "*.bin", "*.gguf", "*.db", "*.db-shm", "*.db-wal", "config.yaml", "config.local.yaml", "*.key", "*.pem", "*.keystore", "*.jks", "llm_backends.json", "secrets.*.bat", "_devs.json"]
+    },
+    "chengjie": {
+      "title": "承接/客服/翻译栈 (telegram-mtproto-ai)",
+      "upstream_git": "https://github.com/yunkeji2026/telegram-mtproto-ai.git",
+      "branch": "main",
+      "local_mirror": "D:/workspace/_workspace_backup_20260715/telegram-mtproto-ai",
+      "last_synced": { "kind": "worktree-sync", "ref": "53658ae", "note": "2026-07-15 已把迁移后 18改+77新 源码同步入 wujie" },
+      "dev_note": "已归档到备份；今后建议直接在 wujie/engines/chengjie 开发。此项供回捞历史增量或对账。",
+      "exclude_dirs": ["__pycache__", ".git", ".venv", ".pytest_cache", "tmp", "tmp_bazi", "tmp_blind_ab", "tmp_messenger_rpa", "tmp_render_test", "tmp_rt", "tmp_selfies", "tmp_t", "tmp_test_ogg", "tmp_tts_preview", "tmp_voice_notes", "tmp_voice_replies", "temp", "logs", "data", "models", "assets", "voice_samples", "sessions", "backups", "snapshots"],
+      "exclude_files": ["*.pyc", "*.db", "*.db-shm", "*.db-wal", "*.session", "*.session-journal", "*.jpg", "*.png", "*.wav", "*.wma", "*.ogg", "*.mp4", "config.yaml", "config.local.yaml", "*.bak*", "_smoke.*", "*.keystore", "*.jks", "*.exe", "*.dll", "registry.key", "llm_backends.json"]
+    },
+    "huoke": {
+      "title": "真机 RPA 获客 (mobile-auto0423)",
+      "upstream_git": "https://github.com/victor2025PH/mobile-auto0423.git",
+      "branch": "feat-a-p2x-pipeline-2026-05-04",
+      "local_mirror": "D:/workspace/_workspace_backup_20260715/mobile-auto0423",
+      "last_synced": { "kind": "migration-snapshot", "ref": "20260715", "note": "迁移净码；与源仅 BOM 差异" },
+      "dev_note": "已归档到备份；今后建议直接在 wujie/engines/huoke 开发。",
+      "exclude_dirs": ["__pycache__", ".git", ".claude", ".pytest_cache", "data", "debug", "logs", "reports", "temp", "apk_repo"],
+      "exclude_files": ["*.pyc", "*.png", "*.jpg", "*.db", ".env", "config.yaml", "*.key"]
+    }
+  }
+}

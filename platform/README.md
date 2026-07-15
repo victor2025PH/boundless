@@ -2,7 +2,7 @@
 
 > 定位：三系七产品**共享的横切能力**的单一归属地。产品/引擎向这里"接契约"，而不是各自复制一份。
 > 依赖铁律：`website / products / engines` → **可依赖 platform**；`platform` **绝不反向依赖**任何产品或引擎。
-> 现状：本层是**契约 + 归属地图**（本文件）。物理代码尚分散在三个引擎里（见下表"当前实现"），按"先立契约、再逐引擎迁移、每步可回归"推进，不做一次性大爆改。
+> 现状：本层已从"纯契约"起步落地两块**可用实现**——`licensing`(SKU 注册表 + stdlib 读取器) 与 `compliance`(契约 + 可降级瘦客户端)；其余(identity/observability/brand)仍为契约+归属地图。按"先立契约、再逐引擎迁移、每步可回归"推进，不做一次性大爆改。
 
 ---
 
@@ -11,8 +11,8 @@
 | 子目录 | 契约（做什么） | 关键接口（建议签名） | 当前实现所在 | 迁移状态 |
 |---|---|---|---|---|
 | `identity/` | **身份 / 资产总线**：一次克隆声音+形象→跨产品复用的 Profile | `getProfile(userId)` · `bindVoice/Face(profileId, asset)` · `listAssets(profileId)` | avatarhub `avatar_hub.py`(Profile/角色库) · `profile_package.py` | 待抽取 |
-| `licensing/` | **授权 / 计量 / SKU 门控**：edition→额度→按量扣减→开通 | `checkLicense(machine)` · `meter(userId, sku, units)` · `gate(feature, edition)` | avatarhub `license*.py` · chengjie `src/licensing/` · huoke（各自 gate） | 待统一 |
-| `compliance/` | **合规出口**：C2PA 溯源 + Ed25519 验真 + 不可见水印 + 克隆伦理校验 | `sign(artifact)` · `watermark(media)` · `verify(artifact)` | avatarhub `provenance.py` · `watermark.py` | 待抽取 |
+| `licensing/` | **授权 / 计量 / SKU 门控**：edition→额度→按量扣减→开通 | `checkLicense(machine)` · `meter(userId, sku, units)` · `gate(feature, edition)` | **`sku_registry.json` + `sku_registry.py`(读取器,已落地)** · avatarhub `license*.py` · chengjie `src/licensing/`(计量/门控待统一) | SKU 单一源✓；计量/门控待统一 |
+| `compliance/` | **合规出口**：C2PA 溯源 + Ed25519 验真 + 不可见水印 + 克隆伦理校验 | `verify_audio/verify_media(b64)` · `status()` · `pubkey()`（**签名在 avatarhub 就地，不出机**） | **`CONTRACT.md` + `client.py`(瘦客户端,已落地)** → avatarhub `/api/provenance/*` | 契约+客户端✓（签名留 avatarhub 持钥方） |
 | `observability/` | **可观测**：KPI 埋点 / 端到端延迟 / 漏斗 / 遥测（打通 CAC/CPL/ROAS） | `emit(event, props)` · `latency(stage, ms)` · `funnel(step)` | avatarhub `metrics.py` `telemetry*.py` · chengjie `src/monitoring/` | 待统一 |
 | `brand/` | **品牌设计令牌**：配色/字体/圆角/产品命名（三系七产品单一真相） | 令牌 `brand.css`/`brand.ts` · 产品表同 `website/lib/brand.ts` | website `lib/brand.ts` · avatarhub `static/brand.css` · `brand-assets/` | 待收敛为一份 |
 
