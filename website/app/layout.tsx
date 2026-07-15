@@ -14,7 +14,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: "无界科技 BOUNDLESS · 让沟通无界",
   description:
-    "无界科技 BOUNDLESS：用 AI 打破容貌、声音、语言、沟通的边界。AI 换脸、声音克隆、实时直播换脸换声、实时换语言、AI 自动成交聊天，私有部署、数据不出网、全程 USDT 结算。BOUNDLESS: AI face swap, voice clone, real-time live face/voice swap, live translation, and AI auto-closing chat — privately deployed, settled in USDT.",
+    "无界科技 BOUNDLESS：用 AI 打破容貌、声音、语言、沟通的边界。AI 换脸、声音克隆、实时直播换脸换声、实时换语言、AI 自动成交聊天，私有部署、数据不出网、合规可溯源。BOUNDLESS: AI face swap, voice clone, real-time live face/voice swap, live translation, and AI auto-closing chat — privately deployed, verifiably compliant.",
   keywords: [
     "无界科技",
     "BOUNDLESS",
@@ -26,7 +26,7 @@ export const metadata: Metadata = {
     "聊天聚合",
     "数字人",
     "私有部署",
-    "USDT",
+    "合规可溯源",
     // 旧品牌词保留，承接更名期的搜索流量
     "华灵科技",
     "HuaLing Tech",
@@ -52,14 +52,14 @@ export const metadata: Metadata = {
     url: SITE_URL,
     title: "无界科技 BOUNDLESS · 让沟通无界",
     description:
-      "AI 换脸 · 声音克隆 · 实时直播换脸换声 · 实时换语言 · AI 自动成交聊天。自主可控私有部署，全程 USDT 结算。",
+      "AI 换脸 · 声音克隆 · 实时直播换脸换声 · 实时换语言 · AI 自动成交聊天。自主可控私有部署，合规可溯源。",
     siteName: "无界科技 BOUNDLESS",
   },
   twitter: {
     card: "summary_large_image",
     title: "无界科技 BOUNDLESS · 让沟通无界",
     description:
-      "AI 换脸 · 声音克隆 · 实时直播换脸换声 · 实时换语言 · AI 自动成交聊天。私有部署，USDT 结算。",
+      "AI 换脸 · 声音克隆 · 实时直播换脸换声 · 实时换语言 · AI 自动成交聊天。私有部署，合规可溯源。",
   },
 };
 
@@ -70,7 +70,7 @@ const jsonLd = {
   url: SITE_URL,
   slogan: "让沟通，无界 · Communication, Boundless.",
   description:
-    "BOUNDLESS: an AI software company breaking the barriers of face, voice, language and communication — AI face swap, voice cloning, real-time live face/voice swap, live translation, and AI auto-closing chat, on a self-controlled private-deployment base. Settled in USDT.",
+    "BOUNDLESS: an AI software company breaking the barriers of face, voice, language and communication — AI face swap, voice cloning, real-time live face/voice swap, live translation, and AI auto-closing chat, on a self-controlled private-deployment base. Verifiably compliant (C2PA-watermarked).",
   sameAs: [CONTACT_URL],
 };
 
@@ -98,7 +98,7 @@ const productServices = PRODUCT_ORDER.map((key) => {
     "@type": "Service",
     name: `${p.en} (${p.zh}) — ${p.desc.en}`,
     serviceType: p.desc.en,
-    description: `${p.en}: ${p.desc.en}. Part of BOUNDLESS — breaking ${p.break.en}. Privately deployed on your own hardware, data stays off the public net, settled in USDT.`,
+    description: `${p.en}: ${p.desc.en}. Part of BOUNDLESS — breaking ${p.break.en}. Privately deployed on your own hardware, data stays off the public net, verifiably compliant.`,
     provider: { "@type": "Organization", name: "无界科技 BOUNDLESS", url: SITE_URL },
     areaServed: "Global",
     url: `${SITE_URL}/${PRODUCT_SCHEMA_ANCHOR[key]}`,
