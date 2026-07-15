@@ -180,3 +180,38 @@ wujie/                         ← 新 git 单仓（无界科技全域）
 - 先把各源仓未提交改动落盘/stash（防丢）。
 
 > 确认第 8 节后，我从 Phase 1 落地；不可逆的历史合并与大范围搬迁在你拍板 git 策略后再执行。
+
+---
+
+## 9. 落地记录（Phase 1–2 · 2026-07-15 已执行于 117）
+
+**Phase 1 — 骨架 + 卫生**
+- 安全网：`telegram-mtproto-ai`(119 改) / `mobile-auto0423`(1 改) 未提交改动已建可恢复 ref `refs/wujie-backup/20260715`；源仓工作树未动。
+- 新仓：`D:\workspace\wujie` `git init`(main) + `.gitignore`(机密/大文件/vendor) + README + 目录骨架，首提交完成。
+
+**Phase 2 — 搬迁 + 机密清洗 + 提交（commit `708c4a3`）**
+- `engines/avatarhub` ← 本机较新 `模仿音色` 净码（git-clean，1262 文件，中文名 round-trip OK）。
+- `engines/chengjie` ← telegram-mtproto-ai 净码（2174 文件）；`engines/huoke` ← mobile-auto0423 净码（849 文件）。
+- `website` ← _server-yuntech（排除 node_modules/.next/.env*）；`brand-assets`（7 产品图标）；`docs` ← docs-business + 本方案。
+- `products/<拼音>` 7 个产品薄封装 README（zhituo/zhiliao/tongyi/tongchuan/huansheng/huanying/huanyan）。
+- 机密清洗：删除 `users.json`×2 / `debug.keystore` / `yuntech-src.tgz` / 旧子项目 `config.yaml`；正则脱敏 7 文件里的真实 GLM/OpenAI/Bot 密钥为 `${VAR}` 占位；`.gitignore` 追加 per-engine 守卫；提交前门禁扫描（有机密特征则拒绝入库）。
+- 结果：4564 文件入库，工作树干净，`.git` 146MB（含 brand-assets 93MB 图片，后续可转 LFS）。
+- index-tts(7GB) 未入库 → `vendor/`，靠 provision 部署。
+
+**⚠️ 待你处理（安全）**：`mobile-auto0423/config/chat.yaml` 里的真实智谱 GLM 密钥 `ac5f80…YznB` 在源仓（且源仓有 GitHub remote，可能已推送）——wujie 副本已脱敏，但**源仓那把 key 视为已泄露，请尽快在智谱后台吊销/轮换**。同理排查各源仓 `.env`/`config` 历史提交里的真实密钥。
+
+## 10. Phase 3 落地记录（2026-07-15 · 官网三系 + 合规清洗）
+
+> 均在 wujie 单仓 `website/`，用 `_server-yuntech` 的 node_modules 做 junction 跑 `tsc --noEmit` 真校验（全程 0 错）。
+
+- **key 脱敏提交** `mobile-auto0423@04bc413`：`config/chat.yaml` + 2 个 tiktok 源里已吊销的 GLM key → `${GLM_API_KEY}`（不含你在改的 chat_messages.yaml）。
+- **三系 taxonomy** `wujie@a9bc871`：`brand.ts` 7 产品（新增 **通传 VoxX**）+ `category` + `CATEGORIES`(智连/幻境/通达) + `productsInCategory` + `PRODUCT_ORDER` 按系重排；`productMeta/layout(schema)/routing` 的所有 `Record<ProductKey>` 补 voxx；`ProductMatrix` 改按三系分组陈列（底座横幅）；概述文案六线→三系。
+- **content 合规清洗** `wujie@f8854d9` + `27f33ea`：
+  - **通译/通传拆分**：`translate` 卡重挂 **通译 LingoX = 聊天翻译 SCRM**；新增 `interpret` 卡 = **通传 VoxX 语音同传**；定价均置「按需报价/Quote」占位（数字待你回填）。
+  - **USDT 双层（dual）**：合规主站 hero/trustline/pricingSection/SEO schema 去掉「USDT 结算」头条卖点、计价单位改 USD；USDT 作为结算方式**保留**在下单步骤/FAQ/联系页（真实收款不变）。
+  - 违禁词（无审查/无禁区/uncensored）全站复扫 = 0。
+- **状态**：`tsc --noEmit` 全绿；voxx 图标暂复用 lingox（待 `build-boundless-marks` 生成 voxx.png）。
+
+**待你回填 / 决定**：① LingoX/VoxX 的实际价格数字；② voxx 专属图标；③ 部署前在 `website/` 跑一次 `npm run build` 自验；④ **wujie 从此为唯一真源**——请从 `wujie/website` 部署，旧 `C:\web117`(5 产品)/`_server-yuntech` 归档停用。
+
+**Phase 3 剩余（待续）**：`platform/` 共享层抽取（身份·资产总线 / 授权计量 / 合规出口 / KPI）；官网 Navbar 三系下拉；官网↔SKU↔license↔交付 业务闭环打通。
