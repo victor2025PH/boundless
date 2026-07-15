@@ -213,6 +213,75 @@ export async function GET(req: NextRequest) {
     ctaByWhere[w] = (ctaByWhere[w] ?? 0) + 1;
   }
 
+  // ── 机器人 IP（EveBot）互动：会话级漏斗（浏览→互动→点开客服→留资）+ 播报效果 ──
+  // 互动 = 悬停/让它飞/点播报/点机器人；点开客服 = ai_sprite_click 或 ai_chat_open(from=sprite|hologram)。
+  // 只统计带 sid 的网站会话（miniapp 有独立漏斗），受 ?days= 时间窗约束。
+  const SPRITE_ENGAGE = new Set(["sprite_hover", "sprite_fly", "sprite_news_click", "ai_sprite_click"]);
+  const spriteBySid: Record<string, Set<string>> = {};
+  for (const e of winEvents) {
+    const ev = String(e.event ?? "");
+    if (ev.startsWith("miniapp_")) continue;
+    const sid = String(e.sid ?? "");
+    if (!sid) continue;
+    const key = ev === "ai_chat_open" ? `ai_chat_open:${propStr(e, "from") || "?"}` : ev;
+    (spriteBySid[sid] ??= new Set<string>()).add(key);
+  }
+  let spSessions = 0;
+  let spEngaged = 0;
+  let spOpened = 0;
+  let spLeads = 0;
+  let spOtherLeads = 0; // 未互动会话的留资数：给「互动是否伴随更高转化」提供对照组（相关非因果）
+  for (const set of Object.values(spriteBySid)) {
+    if (!set.has("pageview")) continue;
+    spSessions++;
+    const arr = [...set];
+    if (!arr.some((x) => SPRITE_ENGAGE.has(x))) {
+      if (set.has("lead_submit")) spOtherLeads++;
+      continue;
+    }
+    spEngaged++;
+    if (arr.some((x) => x === "ai_sprite_click" || x === "ai_chat_open:sprite" || x === "ai_chat_open:hologram")) spOpened++;
+    if (set.has("lead_submit")) spLeads++;
+  }
+  const spriteNewsAgg: Record<string, { imp: number; clk: number }> = {};
+  for (const e of winEvents) {
+    if (e.event === "sprite_news_impression") {
+      const s = propStr(e, "section") || "?";
+      (spriteNewsAgg[s] ??= { imp: 0, clk: 0 }).imp++;
+    } else if (e.event === "sprite_news_click") {
+      const s = propStr(e, "section") || "?";
+      (spriteNewsAgg[s] ??= { imp: 0, clk: 0 }).clk++;
+    }
+  }
+  const sprite = {
+    hover: winEvents.filter((e) => e.event === "sprite_hover").length,
+    fly: winEvents.filter((e) => e.event === "sprite_fly").length,
+    greet: winEvents.filter((e) => e.event === "sprite_greet").length,
+    newsImpressions: winEvents.filter((e) => e.event === "sprite_news_impression").length,
+    newsClicks: winEvents.filter((e) => e.event === "sprite_news_click").length,
+    funnel: {
+      sessions: spSessions,
+      engaged: spEngaged,
+      openedChat: spOpened,
+      leads: spLeads,
+      rates: {
+        engaged: pct(spEngaged, spSessions),
+        openedChat: pct(spOpened, spEngaged),
+        leads: pct(spLeads, spOpened),
+        overall: pct(spLeads, spSessions),
+      },
+    },
+    /* 对照组：互动会话 vs 未互动会话的留资率（相关性参考，非因果结论） */
+    compare: {
+      engagedLeadRate: pct(spLeads, spEngaged),
+      othersLeadRate: pct(spOtherLeads, Math.max(0, spSessions - spEngaged)),
+      othersLeads: spOtherLeads,
+    },
+    news: Object.entries(spriteNewsAgg)
+      .map(([key, v]) => ({ key, impressions: v.imp, clicks: v.clk, ctr: pct(v.clk, v.imp) }))
+      .sort((a, b) => b.impressions - a.impressions),
+  };
+
   // ── A/B 实验汇总：曝光/点击按 variant 分桶，CTR=点击/曝光 ──
   const abStats: Record<string, Record<string, { expose: number; click: number; ctr: number }>> = {};
   for (const e of events) {
@@ -491,6 +560,7 @@ export async function GET(req: NextRequest) {
       leads: leads.filter(recent).length,
     },
     ctaByWhere,
+    sprite,
     ab: abStats,
     attribution,
     campaigns,

@@ -2,14 +2,14 @@
 
 import { useEffect, useState, type CSSProperties } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ArrowRight, Sparkles, ShieldCheck } from "lucide-react";
+import { ArrowRight, ShieldCheck, ChevronDown } from "lucide-react";
 import { useLang } from "./LanguageContext";
 import { useInView } from "@/lib/useInView";
 import Reveal from "./fx/Reveal";
 import Magnetic from "./fx/Magnetic";
 import CountUp from "./fx/CountUp";
-import Tilt from "./fx/Tilt";
-import AutoChatDemo from "./AutoChatDemo";
+import BorderBeam from "./fx/BorderBeam";
+import MatrixRain from "./fx/MatrixRain";
 import { track } from "@/lib/track";
 import { abVariant, abExpose, HERO_CTA_COPY, type AbVariant } from "@/lib/ab";
 
@@ -17,37 +17,8 @@ function suffixOf(v: string) {
   return v.replace(/[0-9.]/g, "");
 }
 
-/** 开场→Hero 冲越交接状态:
- *  none = 无开场(回访),标题正常显示;hold = 开场展示中,标题隐藏待命;
- *  play = 用户冲越光门,标题逐字全息聚焦 + 冲击波扩散。 */
+/** 开场→Hero 冲越交接状态:none=无开场;hold=开场展示中;play=冲越光门(触发冲击波)。 */
 type Handoff = "none" | "hold" | "play";
-
-/** 把词组拆成逐字 span(保留 --i 用于级联延迟);空格转 NBSP 防塌缩。
- *  gradient: 渐变文本的 bg-clip:text 不会穿透 inline-block 子元素,
- *  逐字阶段每个字符自带 text-gradient,动画结束由父组件还原为整段文本。 */
-function HandoffChars({
-  text,
-  state,
-  base,
-  gradient,
-}: {
-  text: string;
-  state: Handoff;
-  base: number;
-  gradient?: boolean;
-}) {
-  if (state === "none") return <>{text}</>;
-  const cls = `hero-ch ${state === "hold" ? "hold" : "play"}${gradient ? " text-gradient" : ""}`;
-  return (
-    <>
-      {Array.from(text).map((ch, i) => (
-        <span key={i} className={cls} style={{ "--i": base + i } as CSSProperties}>
-          {ch === " " ? "\u00A0" : ch}
-        </span>
-      ))}
-    </>
-  );
-}
 
 /** 一次性冲击波覆盖层:双环扩散 + 中心闪光,2.2s 后自卸载。 */
 function Shockwave() {
@@ -114,113 +85,125 @@ export default function Hero() {
   }, [reduced, rotInView, t.hero.rotating.length]);
 
   return (
-    <section id="top" className="relative overflow-hidden pt-32 pb-20">
+    <section id="top" className="relative overflow-hidden">
       {/* 冲越交接的径向冲击波:与开场页退场白光衔接,播完即卸载 */}
       {handoff === "play" && <Shockwave />}
-      <div className="relative mx-auto grid max-w-7xl items-center gap-10 px-5 lg:grid-cols-2">
-        {/* Left: copy — 首屏全部走 eager(CSS 入场):SSR 首帧即可绘制,LCP 不被动画推迟 */}
-        <div className="text-center lg:text-left">
-          <Reveal eager>
-            <div className="mx-auto mb-6 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-xs text-slate-300 lg:mx-0">
-              <Sparkles className="h-3.5 w-3.5 text-neon-cyan" />
-              {t.hero.badge}
-            </div>
-          </Reveal>
 
-          <Reveal eager delay={0.05}>
-            {/* whitespace-nowrap: 词组整体换行，避免 CJK 单字孤行（如"统"字单独一行） */}
-            <h1 className="mx-auto max-w-xl text-4xl font-bold leading-tight text-white md:text-6xl lg:mx-0">
-              <span className="whitespace-nowrap">
-                <HandoffChars text={t.hero.title} state={handoff} base={0} />
-              </span>{" "}
-              <span className={`whitespace-nowrap${handoff === "none" ? " text-gradient" : ""}`}>
-                <HandoffChars
-                  text={t.hero.titleAccent}
-                  state={handoff}
-                  base={Array.from(t.hero.title).length + 1}
-                  gradient
-                />
-              </span>
-            </h1>
-          </Reveal>
-
-          <Reveal eager delay={0.1}>
-            <div
-              ref={rotRef}
-              className="mt-4 flex h-8 items-center justify-center gap-2 text-lg font-medium text-slate-300 lg:justify-start"
-            >
-              <span className="text-neon-cyan">▍</span>
-              <AnimatePresence mode="wait">
-                <motion.span
-                  key={idx}
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -8 }}
-                  transition={{ duration: 0.3 }}
-                  className="text-gradient"
-                >
-                  {t.hero.rotating[idx]}
-                </motion.span>
-              </AnimatePresence>
-            </div>
-          </Reveal>
-
-          <Reveal eager delay={0.16}>
-            <p className="mx-auto mt-5 max-w-xl text-base text-slate-400 md:text-lg lg:mx-0">
-              {t.hero.subtitle}
-            </p>
-          </Reveal>
-
-          <Reveal eager delay={0.22}>
-            <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row lg:justify-start">
-              <Magnetic>
-                <a
-                  href="#autochat"
-                  onClick={() => track("cta_click", { where: "hero_primary", ab: ctaVariant })}
-                  className="cta-fx group inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-6 py-3 font-medium text-ink-950 transition hover:opacity-90"
-                >
-                  {ctaVariant === "a" ? t.hero.ctaPrimary : HERO_CTA_COPY.b[lang]}
-                  <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
-                </a>
-              </Magnetic>
-              <a
-                href="#pricing"
-                onClick={() => track("cta_click", { where: "hero_secondary" })}
-                className="inline-flex items-center gap-2 rounded-full border border-white/15 px-6 py-3 font-medium text-slate-200 transition hover:border-neon-cyan/50 hover:text-white"
-              >
-                {t.hero.ctaSecondary}
-              </a>
-            </div>
-          </Reveal>
-
-          <Reveal eager delay={0.28}>
-            <p className="mt-5 flex items-center justify-center gap-2 text-xs text-slate-500 lg:justify-start">
-              <ShieldCheck className="h-3.5 w-3.5 text-emerald-400/80" />
-              {t.hero.trustline}
-            </p>
-          </Reveal>
+      {/* ===== 首屏：独占整屏 · 居中 · 黑客帝国风 ===== */}
+      <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden px-5 pb-16 pt-28 text-center">
+        {/* 背景特效层：数字雨 + 极光 + 网格 + 光波流动 */}
+        <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden>
+          <MatrixRain className="absolute inset-0 h-full w-full opacity-[0.28] [mask-image:radial-gradient(ellipse_75%_65%_at_50%_45%,#000_5%,transparent_78%)]" />
+          <div className="hero-aurora absolute left-1/2 top-[-6%] h-[62vmax] w-[62vmax] -translate-x-1/2 rounded-full opacity-50" />
+          <div className="absolute inset-0 bg-[linear-gradient(rgba(148,163,184,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.05)_1px,transparent_1px)] bg-[size:44px_44px] [mask-image:radial-gradient(ellipse_60%_60%_at_50%_42%,#000_28%,transparent_74%)]" />
+          <div className="hero-flow absolute inset-0" />
+          <div className="hero-scan absolute inset-x-0 top-0 h-40 opacity-30" />
         </div>
 
-        {/* Right: AI auto-closing chat demo (primary flagship), 3D tilt + hover halo */}
-        <Reveal eager delay={0.1} className="order-first flex items-center justify-center lg:order-last">
-          <Tilt className="w-full max-w-[420px]">
-            <AutoChatDemo />
-            <span className="tilt-glow" aria-hidden />
-          </Tilt>
-        </Reveal>
-      </div>
-
-      {/* Stats */}
-      <Reveal delay={0.1} className="mx-auto mt-14 grid max-w-4xl grid-cols-2 gap-4 px-5 md:grid-cols-4">
-        {t.hero.stats.map((s) => (
-          <div key={s.label} className="glass card-hover rounded-2xl px-4 py-5 text-center">
-            <div className="text-gradient text-3xl font-bold">
-              <CountUp value={s.value} suffix={suffixOf(s.value)} />
-            </div>
-            <div className="mt-1 text-xs text-slate-400">{s.label}</div>
+        <Reveal eager>
+          <div className="mx-auto mb-8 inline-flex items-center gap-2 rounded-full border border-neon-cyan/25 bg-neon-cyan/[0.06] px-4 py-1.5 text-xs text-slate-200 shadow-[0_0_20px_rgba(34,211,238,0.15)]">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-70" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+            </span>
+            {t.hero.badge}
           </div>
-        ))}
-      </Reveal>
+        </Reveal>
+
+        <Reveal eager delay={0.05}>
+          {/* 巨型居中主标题：三行逐行向上旋转入场，到中心放大闪光；流光渐变 + 电光 + 环绕闪电 */}
+          <div className="hero-title-stage relative mx-auto [perspective:900px]">
+            {/* 环绕闪电（flanking 闪电束，随机闪烁） */}
+            <svg className="hero-bolts pointer-events-none absolute left-1/2 top-1/2 h-[150%] w-[130%] -translate-x-1/2 -translate-y-1/2" viewBox="0 0 800 400" fill="none" aria-hidden>
+              <path className="bolt b1" d="M60 40 L120 150 L80 160 L150 300" stroke="#67e8f9" strokeWidth="2" />
+              <path className="bolt b2" d="M740 60 L680 170 L720 180 L640 320" stroke="#a78bfa" strokeWidth="2" />
+              <path className="bolt b3" d="M700 30 L660 120 L690 128 L620 250" stroke="#6ee7b7" strokeWidth="1.5" />
+            </svg>
+            <h1 className="hero-matrix relative mx-auto max-w-[18ch] text-[2.5rem] font-black leading-[1.14] tracking-tight sm:text-6xl md:text-7xl">
+              {t.hero.titleLines.map((line, i) => (
+                <span key={line} className="hero-line block" style={{ "--i": i } as CSSProperties}>
+                  {line}
+                </span>
+              ))}
+            </h1>
+          </div>
+        </Reveal>
+
+        <Reveal eager delay={0.12}>
+          <div ref={rotRef} className="mt-7 flex h-9 items-center justify-center">
+            <AnimatePresence mode="wait">
+              <motion.span
+                key={idx}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.35 }}
+                className="inline-flex items-center rounded-full border border-neon-cyan/25 bg-white/[0.04] px-5 py-1.5 shadow-[0_0_18px_rgba(34,211,238,0.12)] backdrop-blur-sm"
+              >
+                <span className="hero-subrotate text-lg font-semibold tracking-wide md:text-xl">{t.hero.rotating[idx]}</span>
+              </motion.span>
+            </AnimatePresence>
+          </div>
+        </Reveal>
+
+        <Reveal eager delay={0.18}>
+          <p className="mx-auto mt-6 max-w-3xl text-center text-base leading-relaxed text-slate-300 md:text-lg">
+            {t.hero.subtitle}
+          </p>
+        </Reveal>
+
+        <Reveal eager delay={0.24}>
+          <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
+            <Magnetic>
+              <a
+                href="#autochat"
+                onClick={() => track("cta_click", { where: "hero_primary", ab: ctaVariant })}
+                className="btn-3d hero-cta group relative inline-flex items-center gap-2 overflow-hidden rounded-full px-9 py-4 text-base font-bold text-ink-950"
+              >
+                <BorderBeam />
+                <span className="btn-3d-gloss pointer-events-none absolute inset-0" aria-hidden />
+                <span className="hero-cta-sheen pointer-events-none absolute inset-0" aria-hidden />
+                <span className="relative">{ctaVariant === "a" ? t.hero.ctaPrimary : HERO_CTA_COPY.b[lang]}</span>
+                <ArrowRight className="relative h-4 w-4 transition-transform group-hover:translate-x-1" />
+              </a>
+            </Magnetic>
+            <a
+              href="#pricing"
+              onClick={() => track("cta_click", { where: "hero_secondary" })}
+              className="btn-3d-ghost group relative inline-flex items-center gap-2 rounded-full px-9 py-4 text-base font-semibold text-white"
+            >
+              <span className="btn-3d-gloss pointer-events-none absolute inset-0" aria-hidden />
+              <span className="relative">{t.hero.ctaSecondary}</span>
+              <ArrowRight className="relative h-4 w-4 opacity-70 transition-transform group-hover:translate-x-1 group-hover:opacity-100" />
+            </a>
+          </div>
+        </Reveal>
+
+        <Reveal eager delay={0.3}>
+          <p className="mt-6 flex items-center justify-center gap-2 text-xs text-slate-500">
+            <ShieldCheck className="h-3.5 w-3.5 text-emerald-400/80" />
+            {t.hero.trustline}
+          </p>
+        </Reveal>
+
+        {/* Stats：居中一整行 */}
+        <Reveal delay={0.36} className="mx-auto mt-12 grid w-full max-w-3xl grid-cols-2 gap-4 md:grid-cols-4">
+          {t.hero.stats.map((s) => (
+            <div key={s.label} className="glass card-hover rounded-2xl px-4 py-5 text-center">
+              <div className="text-gradient text-3xl font-bold md:text-4xl">
+                <CountUp value={s.value} suffix={suffixOf(s.value)} />
+              </div>
+              <div className="mt-1 text-xs text-slate-400">{s.label}</div>
+            </div>
+          ))}
+        </Reveal>
+
+        {/* 向下滚动提示 */}
+        <div className="mt-12 flex flex-col items-center gap-1 text-slate-500">
+          <span className="text-[10px] font-medium uppercase tracking-[0.35em]">Scroll</span>
+          <ChevronDown className="h-4 w-4 animate-bounce" />
+        </div>
+      </div>
     </section>
   );
 }

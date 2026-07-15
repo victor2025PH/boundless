@@ -44,10 +44,9 @@ export default function BrandShowcase() {
       </div>
 
       <div className="mx-auto max-w-6xl px-5">
-        {/* ── 公司主标锁定图 ── */}
+        {/* ── 公司主标锁定块（置顶）── */}
         <Reveal className="flex flex-col items-center text-center">
           <p className="mb-6 text-xs font-medium uppercase tracking-[0.32em] text-neon-cyan">{c.kicker}</p>
-
           <div className="relative flex items-center justify-center">
             <span className="pointer-events-none absolute h-44 w-44 rounded-full bg-neon-cyan/20 blur-3xl" />
             <span className="pointer-events-none absolute h-56 w-56 rounded-full border border-white/5" />
@@ -71,23 +70,21 @@ export default function BrandShowcase() {
             {lang === "zh" ? BRAND.company.tagline.zh : BRAND.company.tagline.en}
           </p>
 
-          <h3 className="mt-10 text-2xl font-bold text-white md:text-3xl">{c.headline}</h3>
+          <h3 className="mt-9 text-2xl font-bold text-white md:text-3xl">{c.headline}</h3>
           <p className="mx-auto mt-3 max-w-2xl text-sm leading-relaxed text-slate-400 md:text-base">{c.sub}</p>
-        </Reveal>
 
-        {/* ── 无界底座 pill（核 → 产品 的纽带）── */}
-        <Reveal delay={0.08} className="mt-10 flex items-center justify-center">
-          <span className="inline-flex items-center gap-2 rounded-full border border-neon-cyan/30 bg-gradient-to-r from-neon-cyan/10 to-neon-violet/10 px-5 py-2 backdrop-blur-sm">
+          {/* 无界底座 pill */}
+          <span className="mt-8 inline-flex items-center gap-2 rounded-full border border-neon-cyan/30 bg-gradient-to-r from-neon-cyan/10 to-neon-violet/10 px-5 py-2 backdrop-blur-sm">
             <span className="grid h-5 w-5 place-items-center rounded-full bg-neon-cyan/20 text-[11px] text-neon-cyan">∞</span>
             <span className="text-sm font-semibold text-white">{c.coreLabel}</span>
             <span className="text-[10px] font-medium uppercase tracking-[0.2em] text-neon-cyan/80">{c.coreSub}</span>
           </span>
         </Reveal>
 
-        {/* 连接线：底座 pill → 产品星阵 */}
-        <div className="mx-auto mt-2 h-8 w-px bg-gradient-to-b from-neon-cyan/40 to-transparent" aria-hidden />
+        {/* 连接线：品牌块 → 产品星阵 */}
+        <div className="mx-auto mt-8 h-8 w-px bg-gradient-to-b from-neon-cyan/40 to-transparent" aria-hidden />
 
-        {/* ── 产品 LOGO 星阵 ── */}
+        {/* ── 产品 LOGO 星阵（在公司块下面）── */}
         <div className="grid grid-cols-2 gap-x-4 gap-y-10 sm:grid-cols-3 md:flex md:flex-wrap md:items-start md:justify-center md:gap-x-10 md:gap-y-12 lg:gap-x-14">
           {PRODUCT_ORDER.map((key, i) => {
             const p = BRAND.products[key];

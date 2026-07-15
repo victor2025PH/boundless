@@ -20,6 +20,8 @@ import CookieConsent from "./CookieConsent";
 export default function GlobalChrome() {
   const pathname = usePathname();
   if (pathname?.startsWith("/app")) return <Analytics />;
+  /* IP 素材舞台页：纯净画布，不挂任何全站装饰/客服/统计 */
+  if (pathname?.startsWith("/robot-stage")) return null;
   return (
     <>
       <TechBackground />

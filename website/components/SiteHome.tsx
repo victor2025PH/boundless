@@ -4,6 +4,7 @@ import Navbar from "@/components/Navbar";
 import SectionNav from "@/components/SectionNav";
 import Hero from "@/components/Hero";
 import BrandShowcase from "@/components/BrandShowcase";
+import AISprite from "@/components/AISprite";
 import TrustBar from "@/components/TrustBar";
 import ProductMatrix from "@/components/ProductMatrix";
 import Personas from "@/components/Personas";
@@ -32,10 +33,12 @@ export default function SiteHome() {
   return (
     <main className="relative min-h-screen">
       <IntroCover />
+      <AISprite />
       <Navbar />
       <SectionNav />
-      <Hero />
+      {/* 品牌块(公司+六图标) 在上，营销主文案区(大标题+按钮) 在下 */}
       <BrandShowcase />
+      <Hero />
       <TrustBar />
       {/* 光弧分隔线:只放在五个主要叙事转折处,保持稀缺感 */}
       <SectionDivider />

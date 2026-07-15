@@ -6,8 +6,63 @@
   color-scheme: dark;
 }
 
+/* ===== 打印 / 导出 PDF（手册页「打印导出」按钮走浏览器打印对话框）=====
+ * 深色站点直接打印会出白字白纸：打印时统一转白底深字，
+ * 并隐藏导航、页脚、悬浮特效、AI 客服球等非正文元素。 */
+@media print {
+  .fixed,
+  header,
+  footer,
+  .no-print {
+    display: none !important;
+  }
+  html,
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+  }
+  main {
+    padding-top: 0 !important;
+  }
+  .glass {
+    background: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    backdrop-filter: none !important;
+    box-shadow: none !important;
+  }
+  .manual-root :is(.text-white, .text-slate-100, .text-slate-200, .text-slate-300) {
+    color: #0f172a !important;
+  }
+  .manual-root :is(.text-slate-400, .text-slate-500, .text-slate-600) {
+    color: #334155 !important;
+  }
+  .manual-root :is(.text-neon-cyan, .text-neon-violet) {
+    color: #0e7490 !important;
+  }
+  .manual-root a {
+    color: #0e7490 !important;
+  }
+  .manual-root :is(table, li, blockquote) {
+    break-inside: avoid;
+  }
+  .manual-root :is(h1, h2, h3) {
+    break-after: avoid;
+  }
+  .manual-root section {
+    margin-top: 1.5rem !important;
+  }
+}
+
 html {
   scroll-behavior: smooth;
+}
+
+/* 防横向溢出：个别装饰层内容超宽会把移动端布局视口撑到 >device-width，
+   使 fixed 底部元素（客服按钮/机器人）被推出可视区并让整页缩小。
+   clip 不产生新的滚动容器，粘性/固定定位行为不受影响。 */
+html,
+body {
+  overflow-x: clip;
 }
 
 body {
@@ -968,6 +1023,208 @@ html.fx-warp .star-wrap {
 @keyframes bl-mark-float {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-9px); }
+}
+@keyframes bl-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ===== 首屏(Hero)大气科技升级 ===== */
+/* 极光/星云流光背景（缓慢漂移 + 呼吸） */
+.hero-aurora {
+  background:
+    radial-gradient(closest-side, rgba(34, 211, 238, 0.22), transparent 70%),
+    radial-gradient(closest-side, rgba(139, 92, 246, 0.18), transparent 72%);
+  background-position: 40% 40%, 60% 55%;
+  background-repeat: no-repeat;
+  filter: blur(30px);
+  animation: hero-aurora-drift 18s ease-in-out infinite alternate;
+}
+@keyframes hero-aurora-drift {
+  0% { transform: translate(-50%, 0) scale(1); opacity: 0.5; }
+  100% { transform: translate(-46%, 3%) scale(1.12); opacity: 0.72; }
+}
+/* 顶部扫描线（横向流动的能量条） */
+.hero-scan {
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.16), transparent);
+  -webkit-mask: repeating-linear-gradient(90deg, #000 0 2px, transparent 2px 7px);
+  mask: repeating-linear-gradient(90deg, #000 0 2px, transparent 2px 7px);
+  animation: hero-scan-move 6s linear infinite;
+}
+@keyframes hero-scan-move {
+  from { background-position: 0 0; }
+  to { background-position: 60px 0; }
+}
+/* 标题 accent 句：发光下划光束 */
+.hero-accent {
+  position: relative;
+}
+.hero-accent::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -0.12em;
+  height: 3px;
+  width: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, transparent, #22d3ee, #8b5cf6, transparent);
+  box-shadow: 0 0 14px rgba(34, 211, 238, 0.7);
+  transform-origin: left center;
+  animation: hero-beam 3.4s ease-in-out infinite;
+}
+@keyframes hero-beam {
+  0%, 100% { opacity: 0.5; transform: scaleX(0.85); }
+  50% { opacity: 1; transform: scaleX(1); }
+}
+/* 主 CTA 掠光扫过 */
+.hero-cta-sheen {
+  background: linear-gradient(115deg, transparent 30%, rgba(255, 255, 255, 0.55) 48%, transparent 62%);
+  transform: translateX(-120%);
+}
+.hero-cta:hover .hero-cta-sheen {
+  animation: hero-cta-sheen 0.9s ease;
+}
+@keyframes hero-cta-sheen {
+  to { transform: translateX(120%); }
+}
+
+/* ===== 黑客帝国风主标题：流光渐变 + 电光闪烁（闪电缠绕感） ===== */
+.hero-matrix {
+  background-image: linear-gradient(115deg, #e0fdfa 8%, #67e8f9 32%, #6ee7b7 52%, #a78bfa 78%, #e0fdfa 100%);
+  background-size: 220% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: hero-matrix-shimmer 6s linear infinite, hero-electric 3.6s steps(1, end) infinite;
+}
+@keyframes hero-matrix-shimmer {
+  from { background-position: 0% 50%; }
+  to { background-position: 220% 50%; }
+}
+/* 偶发亮度/光晕跳变，模拟闪电缠绕文字 */
+@keyframes hero-electric {
+  0%, 90%, 100% { filter: drop-shadow(0 0 18px rgba(34, 211, 238, 0.35)); }
+  91% { filter: drop-shadow(0 0 6px rgba(167, 139, 250, 0.6)) drop-shadow(0 0 42px rgba(103, 232, 249, 0.95)); }
+  93% { filter: drop-shadow(0 0 28px rgba(110, 231, 183, 0.85)); }
+  95% { filter: drop-shadow(0 0 8px rgba(34, 211, 238, 0.4)); }
+  97% { filter: drop-shadow(0 0 34px rgba(167, 139, 250, 0.7)); }
+}
+
+/* 环绕闪电束 */
+.hero-bolts .bolt {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 5 11;
+  opacity: 0;
+  filter: drop-shadow(0 0 6px currentColor);
+}
+.hero-bolts .b1 { animation: bolt-flicker 5.5s ease-in-out infinite; }
+.hero-bolts .b2 { animation: bolt-flicker 6.5s ease-in-out 1.3s infinite; }
+.hero-bolts .b3 { animation: bolt-flicker 7.5s ease-in-out 2.6s infinite; }
+@keyframes bolt-flicker {
+  0%, 49%, 100% { opacity: 0; }
+  2% { opacity: 0.9; }
+  4% { opacity: 0.1; }
+  6% { opacity: 0.75; }
+  9% { opacity: 0; }
+  52% { opacity: 0.7; }
+  54% { opacity: 0.1; }
+  57% { opacity: 0.55; }
+  60% { opacity: 0; }
+}
+
+/* 光波数字流动：横向流动光带 + 竖向数据栅格 */
+.hero-flow {
+  background:
+    repeating-linear-gradient(90deg, transparent 0 58px, rgba(34, 211, 238, 0.045) 58px 59px),
+    linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.08), transparent);
+  background-size: auto, 42% 100%;
+  background-repeat: repeat, no-repeat;
+  animation: hero-flow-move 7s linear infinite;
+  -webkit-mask-image: radial-gradient(ellipse 72% 62% at 50% 45%, #000 18%, transparent 76%);
+  mask-image: radial-gradient(ellipse 72% 62% at 50% 45%, #000 18%, transparent 76%);
+}
+@keyframes hero-flow-move {
+  0% { background-position: 0 0, -42% 0; }
+  100% { background-position: 0 0, 142% 0; }
+}
+
+/* 主标题三行：逐行向上旋转入场，到中心放大闪光，循环 */
+.hero-line {
+  display: block;
+  transform-origin: center bottom;
+  animation: hero-line-roll 5.4s ease-in-out infinite;
+  animation-delay: calc(var(--i) * 0.45s);
+  backface-visibility: hidden;
+}
+@keyframes hero-line-roll {
+  0% { transform: perspective(760px) rotateX(-42deg) translateY(16%) scale(0.92); opacity: 0.5; filter: brightness(0.9); }
+  9% { transform: perspective(760px) rotateX(0deg) translateY(0) scale(1.09); opacity: 1; filter: brightness(1.85) drop-shadow(0 0 30px rgba(103, 232, 249, 0.95)); }
+  20% { transform: perspective(760px) rotateX(0deg) translateY(0) scale(1); opacity: 1; filter: brightness(1); }
+  100% { transform: perspective(760px) rotateX(0deg) translateY(0) scale(1); opacity: 1; filter: brightness(1); }
+}
+
+/* 副标题(滚动卖点)：青→绿→紫渐变文字 */
+.hero-subrotate {
+  background-image: linear-gradient(90deg, #67e8f9, #6ee7b7, #a78bfa);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ===== 立体玻璃按钮（对齐 LOGO 的青/绿/紫玻璃色系）===== */
+.btn-3d {
+  background: linear-gradient(180deg, #a5f3fc 0%, #22d3ee 42%, #7c3aed 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    inset 0 -12px 22px rgba(124, 58, 237, 0.4),
+    0 10px 30px rgba(34, 211, 238, 0.45),
+    0 6px 16px rgba(0, 0, 0, 0.4);
+  transition: transform 0.2s ease, box-shadow 0.3s ease;
+}
+.btn-3d:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    inset 0 -12px 22px rgba(124, 58, 237, 0.45),
+    0 16px 42px rgba(34, 211, 238, 0.65),
+    0 8px 20px rgba(0, 0, 0, 0.45);
+}
+.btn-3d:active { transform: translateY(0); }
+/* 顶部玻璃高光 */
+.btn-3d-gloss {
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0) 48%);
+  mix-blend-mode: screen;
+}
+/* 次按钮：磨砂玻璃 + 虹彩描边 + 立体阴影 */
+.btn-3d-ghost {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 8px 24px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(8px);
+  transition: transform 0.2s ease, box-shadow 0.3s ease;
+}
+.btn-3d-ghost::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, #67e8f9, #a78bfa, #6ee7b7);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0.75;
+  pointer-events: none;
+}
+.btn-3d-ghost:hover {
+  transform: translateY(-2px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 14px 32px rgba(34, 211, 238, 0.25);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-aurora, .hero-scan, .hero-accent::after, .hero-flow, .hero-matrix, .hero-bolts .bolt, .hero-line { animation: none; }
+  .hero-bolts { display: none; }
+  .hero-line { opacity: 1; transform: none; }
 }
 
 /* ===== 产品 LOGO 从星门（进入按钮中心）粒子式、由小到大、循环不断喷涌 ===== */

@@ -17,6 +17,18 @@ type Msg = { role: "user" | "assistant"; content: string };
 
 const INTENT = /价格|多少钱|报价|购买|下单|怎么收费|套餐|合作|定制|price|cost|buy|order|quote|pricing|plan|deploy/i;
 
+/** 外部唤起 AI 客服的自定义事件名（detail.scenario 可指定进入场景，如 "install"） */
+export const OPEN_CHAT_EVENT = "boundless:open-ai-chat";
+
+/**
+ * 从任意组件打开全局 AI 客服。
+ * @param scenario 进入场景："install" = 安装协助（下载页按钮用），不传为默认售前场景
+ */
+export function openAiChat(scenario?: "install") {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(OPEN_CHAT_EVENT, { detail: { scenario } }));
+}
+
 const COPY = {
   zh: {
     title: "AI 在线客服",
@@ -34,6 +46,9 @@ const COPY = {
     teaser: "在找出海获客方案？问我 AI 自动成交怎么帮你多赚 👋",
     human: "转人工客服",
     replyIn: "AI 将用此语言实时回复",
+    installGreet:
+      "已进入安装协助模式 🛠 我可以一步步带你完成 AvatarHub 的下载与安装：从下载安装包、首次启动向导、组件下载，到激活试用。\n遇到报错把提示原文发给我就行；也可以先点下面的常见问题。",
+    installSuggestions: ["完整的安装步骤是什么？", "SmartScreen 拦截了安装包怎么办？", "我的显卡能跑哪些功能？", "组件下载中断了怎么办？"],
   },
   en: {
     title: "AI Live Support",
@@ -51,6 +66,9 @@ const COPY = {
     teaser: "Scaling cross-border sales? Ask how AI auto-closing earns you more 👋",
     human: "Talk to a human",
     replyIn: "AI replies live in this language",
+    installGreet:
+      "Install-assist mode 🛠 I'll walk you through downloading and installing AvatarHub: the installer, the first-run wizard, component downloads and activation.\nHit an error? Paste the exact message here — or start with a common question below.",
+    installSuggestions: ["What are the full install steps?", "SmartScreen blocked the installer — what now?", "What can my GPU run?", "Component download got interrupted?"],
   },
   // 小语种落地页（/ko /ja）专用界面文案；AI 回复语言由后端「语言镜像」指令保证。
   ko: {
@@ -70,6 +88,9 @@ const COPY = {
     teaser: "음성 클로닝이 궁금하세요? 요금과 도입 방법을 물어보세요 👋",
     human: "상담원 연결",
     replyIn: "AI가 이 언어로 실시간 답변합니다",
+    installGreet:
+      "설치 지원 모드입니다 🛠 AvatarHub 다운로드와 설치를 단계별로 도와드립니다. 오류 메시지를 그대로 붙여넣어 주세요.",
+    installSuggestions: ["전체 설치 단계는?", "SmartScreen이 설치를 차단했어요", "제 GPU로 어떤 기능을 쓸 수 있나요?"],
   },
   ja: {
     title: "AIライブサポート",
@@ -88,6 +109,9 @@ const COPY = {
     teaser: "音声クローンにご興味は？料金や導入方法をお尋ねください 👋",
     human: "担当者に相談",
     replyIn: "AIがこの言語でリアルタイム回答",
+    installGreet:
+      "インストール支援モードです 🛠 AvatarHubのダウンロードからインストールまでステップごとにご案内します。エラーはそのまま貼り付けてください。",
+    installSuggestions: ["インストール手順の全体は？", "SmartScreenにブロックされました", "私のGPUで使える機能は？"],
   },
 };
 
@@ -118,11 +142,63 @@ export default function AIChat() {
   const [leadContact, setLeadContact] = useState("");
   const [leadDone, setLeadDone] = useState(false);
   const [teaser, setTeaser] = useState(false);
+  const [scenario, setScenario] = useState<"default" | "install">("default");
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [msgs, busy, showLead]);
+
+  // 外部唤起（如下载页「AI 协助安装」按钮）：打开窗口并切换到对应场景
+  useEffect(() => {
+    function onOpenEvent(e: Event) {
+      const detail = (e as CustomEvent<{ scenario?: string }>).detail;
+      setOpen(true);
+      setTeaser(false);
+      setSession("yt-teaser", "1");
+      if (detail?.scenario === "install") {
+        setScenario("install");
+        track("ai_chat_open", { from: "install_assist" });
+      } else {
+        track("ai_chat_open", { from: "external" });
+      }
+    }
+    window.addEventListener(OPEN_CHAT_EVENT, onOpenEvent);
+    return () => window.removeEventListener(OPEN_CHAT_EVENT, onOpenEvent);
+  }, []);
+
+  // 飞行机器人（AISprite）/ 全息播报点击 → 打开真实 AI 客服；也可被其它入口复用。
+  // detail.seed 为入口带来的种子问题：全息播报的 CTA 是「点我 · 立即咨询」，
+  // 没有历史对话时直接代发种子问题（点击即得到答案，履行 CTA 承诺）；
+  // 已有对话或正忙时退化为预填输入框，绝不打断进行中的会话。
+  const sendRef = useRef<(text: string) => void>(() => {});
+  const chatStateRef = useRef({ msgCount: 0, busy: false });
+  chatStateRef.current = { msgCount: msgs.length, busy };
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { from?: string; seed?: string } | undefined;
+      setOpen(true);
+      setTeaser(false);
+      const seed = detail?.seed ? String(detail.seed).slice(0, 200) : "";
+      if (seed) {
+        const { msgCount, busy: chatBusy } = chatStateRef.current;
+        if (detail?.from === "hologram" && msgCount === 0 && !chatBusy) {
+          track("ai_chat_seed_autosend");
+          sendRef.current(seed);
+        } else {
+          setInput(seed);
+        }
+      }
+      track("ai_chat_open", { from: detail?.from ?? "sprite" });
+    };
+    window.addEventListener("bl:open-chat", onOpen as EventListener);
+    return () => window.removeEventListener("bl:open-chat", onOpen as EventListener);
+  }, []);
+
+  // 保持 sendRef 指向最新的 send（事件监听器只挂载一次，避免闭包过期）
+  useEffect(() => {
+    sendRef.current = send;
+  });
 
   // proactive greeting: once per session, only on web, after dwell
   useEffect(() => {
@@ -272,20 +348,40 @@ export default function AIChat() {
       </AnimatePresence>
 
       {!hideLauncher && (
-        <button
-          onClick={() => {
-            setOpen((v) => !v);
-            dismissTeaser();
-            track("ai_chat_open");
-          }}
-          aria-label="AI chat"
-          className="fixed bottom-20 right-4 z-50 grid h-14 w-14 place-items-center rounded-full bg-gradient-to-br from-neon-cyan to-neon-violet text-ink-950 shadow-lg shadow-neon-cyan/30 transition hover:scale-105 lg:bottom-5 lg:right-5"
-        >
-          {open ? <X className="h-6 w-6" /> : <MessageSquare className="h-6 w-6" />}
+        <div className="group fixed bottom-20 right-4 z-50 lg:bottom-5 lg:right-5" data-robot-avoid="true">
+          {/* 悬停「在线客服」标签 */}
           {!open && (
-            <span className="absolute -right-0.5 -top-0.5 h-3.5 w-3.5 animate-pulse rounded-full bg-emerald-400 ring-2 ring-ink-950" />
+            <span className="pointer-events-none absolute right-16 top-1/2 hidden -translate-y-1/2 whitespace-nowrap rounded-full border border-neon-cyan/30 bg-ink-900/90 px-3 py-1.5 text-xs font-medium text-neon-cyan opacity-0 shadow-lg backdrop-blur transition-all duration-300 group-hover:opacity-100 lg:block">
+              {c.title} · {lang === "zh" ? "在线" : "online"}
+            </span>
           )}
-        </button>
+          <button
+            onClick={() => {
+              setOpen((v) => !v);
+              dismissTeaser();
+              track("ai_chat_open");
+            }}
+            aria-label="AI chat"
+            className="relative grid h-14 w-14 place-items-center rounded-full bg-gradient-to-br from-neon-cyan to-neon-violet text-ink-950 shadow-lg shadow-neon-cyan/40 transition-transform duration-300 hover:scale-110 active:scale-95"
+          >
+            {/* 旋转 conic 光环 */}
+            {!open && (
+              <span
+                className="pointer-events-none absolute -inset-[3px] rounded-full opacity-70"
+                style={{
+                  background: "conic-gradient(from 0deg, transparent 0deg, #22d3ee 90deg, transparent 160deg, #8b5cf6 250deg, transparent 320deg)",
+                  animation: "bl-spin 3.2s linear infinite",
+                  WebkitMask: "radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px))",
+                  mask: "radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px))",
+                }}
+              />
+            )}
+            {/* 呼吸涟漪 */}
+            {!open && <span className="pointer-events-none absolute inset-0 animate-ping rounded-full bg-neon-cyan/25" style={{ animationDuration: "2.4s" }} />}
+            {open ? <X className="relative h-6 w-6" /> : <MessageSquare className="relative h-6 w-6" />}
+            {!open && <span className="absolute -right-0.5 -top-0.5 h-3.5 w-3.5 animate-pulse rounded-full bg-emerald-400 ring-2 ring-ink-950" />}
+          </button>
+        </div>
       )}
 
       <AnimatePresence>
@@ -316,11 +412,11 @@ export default function AIChat() {
 
             {/* messages */}
             <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-4">
-              <Bubble role="assistant">{c.greet}</Bubble>
+              <Bubble role="assistant">{scenario === "install" ? c.installGreet : c.greet}</Bubble>
 
               {msgs.length === 0 && (
                 <div className="space-y-2 pt-1">
-                  {c.suggestions.map((s) => (
+                  {(scenario === "install" ? c.installSuggestions : c.suggestions).map((s) => (
                     <button
                       key={s}
                       onClick={() => send(s)}

@@ -41,6 +41,7 @@ export interface Dict {
     badge: string;
     title: string;
     titleAccent: string;
+    titleLines: string[];
     rotating: string[];
     subtitle: string;
     trustline: string;
@@ -389,8 +390,9 @@ const zh: Dict = {
   },
   hero: {
     badge: "无界科技 · AI 自动成交聊天 · 多语种拟人翻译 · 私有可控",
-    title: "对手还在手动加粉，",
-    titleAccent: "你的 AI 已 24h 替你成交",
+    title: "对手还在手动加粉",
+    titleAccent: "你的 AI 已 24小时 替你成交",
+    titleLines: ["对手还在手动加粉", "你的 AI 已", "24小时 替你成交"],
     rotating: ["AI 全自动接客成交", "多语种拟人翻译秒回", "1 个人干翻 10 人团队", "封号自动换号 0 停机", "实时换脸换声开播", "私有部署数据不出网"],
     subtitle:
       "加人、翻译、跟单、催单——这些累死人还留不住客的活，全甩给 AI 7×24 去干：多号矩阵不知疲倦加粉引流，拟人翻译让对方看不出你是外国人，AI 主动逼单把钱谈进来，人工随时一键接管，还能直播 / 视频通话级实时换脸换声。同行 10 个人干的活，你 1 个人躺着收——私有部署、数据不出网、合规可溯源。",
@@ -1046,8 +1048,9 @@ const en: Dict = {
   },
   hero: {
     badge: "BOUNDLESS · AI Auto-Closing Chat · human-like multi-language · private & controllable",
-    title: "Rivals still add leads by hand.",
+    title: "Rivals still add leads by hand",
     titleAccent: "Your AI already closes 24/7",
+    titleLines: ["Rivals still add leads by hand", "your AI already", "closes deals 24/7"],
     rotating: ["AI closes deals 24/7", "Human-like translation, instant", "1 person beats a 10-person team", "Auto-swap accounts, 0 downtime", "Real-time face & voice swap", "Private deploy, off the net"],
     subtitle:
       "Adding leads, translating, following up, chasing orders — hand the grind to AI running 24/7: multi-account matrices add leads tirelessly, human-like translation hides your origin, AI actively pushes for the close, and humans take over anytime. Plus live-stream / video-call grade face & voice swap. One person does what a 10-person team does — privately deployed, off the net, verifiably compliant.",

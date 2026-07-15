@@ -43,6 +43,23 @@ interface Stats {
   recentQuestions: { t: string; q: string; lang: string; source: string }[];
   last7d: { pageviews: number; ctaClicks: number; leads: number };
   ctaByWhere: Record<string, number>;
+  /** 机器人 IP（EveBot）互动漏斗与播报效果 */
+  sprite?: {
+    hover: number;
+    fly: number;
+    greet: number;
+    newsImpressions: number;
+    newsClicks: number;
+    funnel: {
+      sessions: number;
+      engaged: number;
+      openedChat: number;
+      leads: number;
+      rates: { engaged: number; openedChat: number; leads: number; overall: number };
+    };
+    compare?: { engagedLeadRate: number; othersLeadRate: number; othersLeads: number };
+    news: { key: string; impressions: number; clicks: number; ctr: number }[];
+  };
   leadsBySource: Record<string, number>;
   leadsByInterest: Record<string, number>;
   leadsByDay: Record<string, number>;
@@ -123,6 +140,16 @@ const MINIAPP_VIEW_LABELS: Record<string, string> = {
   soulsync: "智聊沟通",
   pricing: "价格",
   engage: "合作",
+};
+// 机器人播报的版块 id → 中文标签。
+const SPRITE_SECTION_LABELS: Record<string, string> = {
+  top: "首屏",
+  autochat: "AI 成交演示",
+  products: "产品矩阵",
+  pricing: "价格",
+  cases: "案例",
+  proof: "真实交付",
+  contact: "联系",
 };
 // 获客归因常见键 → 人话（其余键原样展示 source/medium/campaign）。
 const ATTR_LABELS: Record<string, string> = {
@@ -1544,6 +1571,68 @@ export default function AdminPage() {
                     ]}
                   />
                 </SectionCard>
+
+                {stats.sprite && (
+                  <SectionCard title="机器人 IP 互动（EveBot 引流漏斗）" Icon={Activity} accent="text-cyan-300">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div>
+                        <div className="mb-2 flex items-center justify-between">
+                          <span className="text-[11px] text-slate-400">会话级漏斗（按 sid 串联，仅官网）</span>
+                          <span className="text-[11px] text-emerald-300">端到端 {stats.sprite.funnel.rates.overall}%</span>
+                        </div>
+                        <Funnel
+                          steps={[
+                            { label: "官网会话", value: stats.sprite.funnel.sessions, color: "from-cyan-400 to-cyan-500" },
+                            { label: "互动机器人", value: stats.sprite.funnel.engaged, color: "from-sky-400 to-sky-500" },
+                            { label: "点开客服", value: stats.sprite.funnel.openedChat, color: "from-violet-400 to-violet-500" },
+                            { label: "留资", value: stats.sprite.funnel.leads, color: "from-emerald-400 to-emerald-500" },
+                          ]}
+                        />
+                        <div className="mt-2 text-[11px] text-slate-500">
+                          悬停 {stats.sprite.hover} · 让它飞 {stats.sprite.fly} · 进场问好 {stats.sprite.greet}
+                        </div>
+                        {stats.sprite.compare && stats.sprite.funnel.engaged > 0 && (
+                          <div className="mt-2 rounded-lg border border-slate-800 bg-slate-950/40 px-2.5 py-2 text-[11px]">
+                            <span className="text-slate-400">留资率对比：</span>
+                            <span className="font-semibold text-emerald-300">互动会话 {stats.sprite.compare.engagedLeadRate}%</span>
+                            <span className="mx-1 text-slate-600">vs</span>
+                            <span className="text-slate-300">未互动 {stats.sprite.compare.othersLeadRate}%</span>
+                            <span className="ml-1.5 text-slate-600">（相关参考，高意向者也更爱互动）</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+                        <div className="mb-2 text-[11px] text-slate-400">
+                          全息播报效果（曝光 {stats.sprite.newsImpressions} / 点击 {stats.sprite.newsClicks}）
+                        </div>
+                        {stats.sprite.news.length === 0 ? (
+                          <div className="text-[11px] text-slate-600">暂无播报数据（机器人上线后自动累计）</div>
+                        ) : (
+                          <table className="w-full text-[11px]">
+                            <thead>
+                              <tr className="text-slate-500">
+                                <th className="text-left font-medium">版块</th>
+                                <th className="text-right font-medium">曝光</th>
+                                <th className="text-right font-medium">点击</th>
+                                <th className="text-right font-medium">CTR</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {stats.sprite.news.slice(0, 8).map((r) => (
+                                <tr key={r.key} className="border-t border-slate-800/60 text-slate-300">
+                                  <td className="py-1">{SPRITE_SECTION_LABELS[r.key] ?? r.key}</td>
+                                  <td className="py-1 text-right">{r.impressions}</td>
+                                  <td className="py-1 text-right">{r.clicks}</td>
+                                  <td className="py-1 text-right text-cyan-300">{r.ctr}%</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                      </div>
+                    </div>
+                  </SectionCard>
+                )}
 
                 <div className="grid gap-3 md:grid-cols-2">
                   <Bars title="留资来源（web / miniapp）" data={stats.leadsBySource} />
