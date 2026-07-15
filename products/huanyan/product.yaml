@@ -1,0 +1,31 @@
+# products/huanyan/product.yaml — 幻颜 FaceX（照 tongyi 模板）
+id: huanyan
+brand_key: facex
+name:   { zh: 幻颜, en: FaceX }
+category: studio
+tagline:
+  zh: 影视级图片/视频换脸 + 双人 face_map + 开播前 AI 定妆
+  en: Cinematic image/video face swap + dual face_map + pre-broadcast makeup
+
+engine: avatarhub
+engine_services: [faceswap_api.py, hair_api.py, makeup_api.py, enhance_server.py, dfm_lab_server.py, tryon_api.py]
+
+compliance:
+  visibility: gated          # 深度伪造监管 → 隔离/准入区，非公开货架
+  risk: high
+  guard: 授权确认 + 强制水印 + 用途承诺（不与合规主站同域名/主体）
+
+website:
+  landing: /face
+  matrix_family: studio
+
+# 计价单位 USD；结算支持 USDT 等（dual）。数字沿用 website/lib/content.ts#faceswap 现价。
+skus:
+  - { id: facex-image,      name: { zh: 图片换脸, en: Image swap },  unit: per-image, price: "1",       currency: USD, note: 包月 38 = 100 张 }
+  - { id: facex-video,      name: { zh: 视频换脸, en: Video swap },  unit: per-min,   price: "4",       currency: USD }
+  - { id: facex-live-deploy,name: { zh: 实时换脸部署, en: Live deploy }, unit: one-time, price: "from 980", currency: USD, note: 定制交付(见幻影 LiveX 旗舰) }
+  - { id: facex-avatar,     name: { zh: 形象定制, en: Custom avatar }, unit: one-time, price: "from 398", currency: USD }
+
+delivery:
+  gate: platform/licensing          # 门控 + 计量
+  compliance_out: platform/compliance  # 产出媒体走 C2PA/水印/伦理校验

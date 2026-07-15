@@ -1,0 +1,31 @@
+# products/zhiliao/product.yaml — 智聊 ChatX（照 tongyi 模板）
+id: zhiliao
+brand_key: chatx
+name:   { zh: 智聊, en: ChatX }
+category: growth
+tagline:
+  zh: 多平台统一收件箱 + AI 人设承接 + 翻译 + 转人工，全自动开发客户推进成交
+  en: Omni-channel unified inbox + AI persona + translation + human handoff
+
+engine: chengjie
+engine_services: [main.py]         # 统一收件箱/AI 承接/handoff（src/inbox·ai·integrations）
+
+compliance:
+  visibility: mixed                # 官方 API 企业版=公开主站；个人号版=隔离/准入
+  risk: mid
+  guard: 主站只放官方 API 企业版；个人号 RPA 版进准入区
+
+website:
+  landing: null                    # 首页 #autochat 段（无独立落地页）
+  anchor: "#autochat"
+  matrix_family: growth
+
+# 账号制套餐（website/lib/content.ts#plans / pricing.ts autochatOffers）；单位 USD、结算支持 USDT（dual）
+skus:
+  - { id: chatx-entry,    name: { zh: 入门, en: Entry },    unit: month, price: "58",  currency: USD, note: 3 账号/AI 翻译/1 平台 }
+  - { id: chatx-team,     name: { zh: 团队, en: Team },     unit: month, price: "198", currency: USD, note: 10 账号/全平台/AI 自动成交 }
+  - { id: chatx-flagship, name: { zh: 旗舰, en: Flagship }, unit: month, price: "598", currency: USD, note: 50 账号/人工接管/数据看板 }
+
+delivery:
+  gate: platform/licensing         # LLM token 计量（边际成本大头）+ SKU 门控
+  compliance_out: platform/compliance

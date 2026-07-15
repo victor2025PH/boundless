@@ -1,0 +1,27 @@
+# products/zhituo/product.yaml — 智拓 ReachX（照 tongyi 模板）
+id: zhituo
+brand_key: reachx
+name:   { zh: 智拓, en: ReachX }
+category: growth
+tagline:
+  zh: 真机多号自动加友/打招呼/群提取，7×24 全自动获客引流进私域
+  en: Multi-device auto add / greet / group-extract — automated lead-gen into your funnel
+
+engine: huoke
+engine_services: [server.py]       # 主控 + Worker 集群（FB/Messenger/TikTok/Instagram）
+
+compliance:
+  visibility: gated                # 批量社交动作违反平台 ToS → 隔离/准入区，独立域名+主体
+  risk: high
+  guard: 客户准入协议 + 不进公开货架/sitemap
+
+website:
+  landing: null                    # 不进公开货架；准入入口对接（非 sitemap）
+  matrix_family: growth
+
+skus:
+  - { id: reachx-deploy, name: { zh: 私有化部署, en: Private deployment }, unit: one-time, price: "按规模报价", currency: USD, note: 真机获客集群，按设备数与规模定制 }
+
+delivery:
+  gate: platform/licensing
+  note: 高风险线，走独立主体/域名/准入，勿与合规主站同页

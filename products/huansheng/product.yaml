@@ -1,0 +1,31 @@
+# products/huansheng/product.yaml — 幻声 VoiceX（照 tongyi 模板）
+id: huansheng
+brand_key: voicex
+name:   { zh: 幻声, en: VoiceX }
+category: studio
+tagline:
+  zh: 秒级零样本声音克隆 + 三引擎自动择优 + 多语种 TTS + 实时变声
+  en: Zero-shot voice cloning + tri-engine auto-pick + multilingual TTS + real-time VC
+
+engine: avatarhub
+engine_services: [fish_speech_server.py, voxcpm_server.py, qwen3_tts_server.py, sbv2_tts_server.py, emotion_tts_server.py, stt_server.py, tts_api.py, singing_server.py]
+vendor: [index-tts]                # 第三方 IndexTTS2（git 忽略，provision 部署）
+
+compliance:
+  visibility: public               # 合规主站（授权音色 + 知情同意声明）
+  risk: low
+  guard: 克隆伦理校验（默认拒绝未授权音色）
+
+website:
+  landing: /voice
+  matrix_family: studio
+
+skus:
+  - { id: voicex-starter, name: { zh: 体验, en: Starter },  unit: month,       price: "18",  currency: USD, note: 1 音色/1 万字符 }
+  - { id: voicex-std,     name: { zh: 标准, en: Standard }, unit: month,       price: "78",  currency: USD, note: 5 音色/10 万字符/多语种 }
+  - { id: voicex-pro,     name: { zh: 专业, en: Pro },      unit: month,       price: "198", currency: USD, note: 20 音色/50 万字符/变声 API }
+  - { id: voicex-usage,   name: { zh: 按量加购, en: Add-on }, unit: per-10k-chars, price: "10", currency: USD, note: 实时变声 0.04/分钟 }
+
+delivery:
+  gate: platform/licensing         # 计量=字符数；免费档带水印+试听截断
+  compliance_out: platform/compliance

@@ -1,0 +1,29 @@
+# products/tongchuan/product.yaml — 通传 VoxX（照 tongyi 模板）
+id: tongchuan
+brand_key: voxx
+name:   { zh: 通传, en: VoxX }
+category: lingo
+tagline:
+  zh: 会议/直播实时语音同传（克隆音同传 + 双语字幕 + 抢话打断）
+  en: Real-time voice interpreting (cloned-voice simul-interpret + subtitles + barge-in)
+
+engine: avatarhub
+engine_services: [live_interpreter.py, subtitle_overlay.py]
+
+compliance:
+  visibility: public
+  risk: low
+
+website:
+  landing: /interpreting
+  matrix_family: lingo
+
+# 定价占位（待老板拍板；website/lib/content.ts#interpret 已同步占位）
+skus:
+  - { id: voxx-meeting,   name: { zh: 会议同传, en: Meeting interpret }, unit: per-session, price: TBD, currency: USD, note: 按场次/时长 }
+  - { id: voxx-selfhost,  name: { zh: 私有化部署, en: Self-hosted },     unit: one-time,    price: TBD, currency: USD, note: 买断 + 年度维护 }
+
+delivery:
+  gate: platform/licensing
+  compliance_out: platform/compliance
+  note: 通话模式需 VB-Cable（引擎内置安装向导）

@@ -1,0 +1,31 @@
+# products/huanying/product.yaml — 幻影 LiveX（照 tongyi 模板）
+id: huanying
+brand_key: livex
+name:   { zh: 幻影, en: LiveX }
+category: studio
+tagline:
+  zh: 高清活体数字人/虚拟主播 + 实时直播换脸换声 + 虚拟背景（WebRTC/OBS）
+  en: HD living digital human + real-time live face/voice swap + virtual bg
+
+engine: avatarhub
+engine_services: [lipsync_server.py, vcam_server.py, faceswap_api.py, latentsync_server.py, cam_server.py, mjpeg_server.py, video_avatar.py]
+
+compliance:
+  visibility: mixed                # 数字人=公开主站；直播换脸=隔离/准入
+  risk: mid
+  guard: 数字人主站可陈列；实时换脸走准入 + 水印 + 硬件档位引导
+
+website:
+  landing: /face
+  matrix_family: studio
+
+skus:
+  - { id: livex-avatar-sub, name: { zh: 数字人订阅, en: Digital-human sub }, unit: month, price: "from 198", currency: USD, note: 口播套餐 }
+  - { id: livex-avatar-buy, name: { zh: 形象买断, en: Avatar buyout },    unit: one-time, price: "798", currency: USD }
+  - { id: livex-dub-min,    name: { zh: 视频翻译配音, en: Video dubbing }, unit: per-min, price: "6", currency: USD }
+  - { id: livex-dub-matrix, name: { zh: 短视频矩阵, en: Video matrix },    unit: month, price: "398", currency: USD, note: 30 条；100 条 998/月 }
+
+delivery:
+  gate: platform/licensing         # 多开路数按 tier（Standard 1 路 / Pro 3 路）
+  compliance_out: platform/compliance
+  hw_guide: engine /api/hardware/guide  # 按 GPU 给档位（实时高清引导 4090/5090）
