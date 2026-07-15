@@ -215,3 +215,31 @@ wujie/                         ← 新 git 单仓（无界科技全域）
 **待你回填 / 决定**：① LingoX/VoxX 的实际价格数字；② voxx 专属图标；③ 部署前在 `website/` 跑一次 `npm run build` 自验；④ **wujie 从此为唯一真源**——请从 `wujie/website` 部署，旧 `C:\web117`(5 产品)/`_server-yuntech` 归档停用。
 
 **Phase 3 剩余（待续）**：`platform/` 共享层抽取（身份·资产总线 / 授权计量 / 合规出口 / KPI）；官网 Navbar 三系下拉；官网↔SKU↔license↔交付 业务闭环打通。
+
+---
+
+## 11. Phase 4 实施记录 + 实施中优化（2026-07-15）
+
+> 按审计 §5 P0/P1 开工；实施中边做边深挖，发现更优解就改（下附）。均已提交、`tools/repo_doctor.ps1` 复验。
+
+**已落地（提交）**
+- **Navbar 三系下拉** `dfa2a5e`（桌面+移动，tsc 0 错）。
+- **platform 契约层** `c7803fe`：`platform/README.md` 定义五契约 + 当前实现所在 + 迁移顺序。
+- **P0 仓库减重** `b9a17c6`：`git rm --cached` 掉 **陈旧重复站 `engines/chengjie/website`(232)** + **Playwright 浏览器缓存 `avatarhub/demo_record/.pwprofile`(237)** = 少 **469** 跟踪文件（磁盘不删、可回退），补 `.gitignore`。
+- **tools 全域门禁** `b2233d1`：`tools/repo_doctor.ps1`（把审计 §4 变成可复跑门禁，输出 FAIL/WARN/GREEN）+ `tools/prepush_cleanup.ps1`（LFS+历史清理，push 前一次做）+ `.gitattributes`（字体/媒体 LFS 策略）。
+- **P1 products 范式** `5643ce4`：`products/tongyi/product.yaml`（SKU/承载引擎/裁剪 overlay/官网落地页/合规可见性/交付计量 单一真相），作为其余 6 产品模板。
+- **门禁结果**：`repo_doctor` = **FAIL 0 / WARN 2**（字体>10MB 待 LFS、platform 待抽实现），tracked 4566→4101，worktree 干净。
+
+**实施中的 5 处优化（在原方案上再优化）**
+1. **减重只动"无歧义垃圾"**：原审计建议连 `clothes/`、字体删除一起做；深想后**只 untrack 重复站+浏览器缓存**，`clothes` 可能是真需素材、字体应走 LFS 而非删——避免误伤。
+2. **LFS+历史清理挪到"push 前一次做"**：中途 `git lfs migrate`/`filter-repo` 会反复重写历史且磁盘收益要 push+prune 后才兑现；故封装成 `prepush_cleanup.ps1`，只在接新 remote 前跑一次。
+3. **审计清单→可执行门禁**：`repo_doctor.ps1` 把静态检查变成一条命令的红/黄/绿闸门，并把 WARN 定义为"完善度待办清单"，比一纸文档更能持续用。
+4. **products = 清单模式（引用而非复制）**：`product.yaml` 只登记"用哪个引擎+哪个 overlay+哪个落地页"，不拷贝引擎代码；实施中**发现并修正**一处坏引用（overlay 校验脚本原在 gitignore 的 scratch 未迁入，已在清单标注待提升）。
+5. **platform 坚持"契约先行、不搬代码"**：再次确认——跨 env/跨机的 Python 抽取在本地无法验证、风险高；platform 落地必须**在装有各引擎 conda env 的机器上、借该引擎自带测试**逐个迁移（compliance→brand→observability→licensing→identity）。
+
+**下一阶段（Phase 5）实施与改进**
+- **P0 platform/compliance 抽取**（须在装 avatarhub env 的机器上）：把 `provenance/watermark` 收敛为 `platform/compliance`，avatarhub 留 1 行 re-export 兼容 → 跑 `doctor.py` 回归 → 绿了再删旧。
+- **P1 products 补齐其余 6 个** `product.yaml`（照 tongyi 模板）+ 回填 LingoX/VoxX 价格数字 + 生成 voxx 图标。
+- **装机面提层**：`deploy/`(docker-compose+cluster_map+provision)、`packaging/`(installer/build/publish) 从 `avatarhub/` 提到全域层（或软链）。
+- **接新 remote 前**：跑 `tools/prepush_cleanup.ps1`（字体转 LFS + 可选 filter-repo 抹历史大对象）→ `git gc` → 建 remote → push；`website/` 部署前 `npm run build` 自验。
+- **闭环收口**：`licensing`+`identity` 抽取通了，"官网↔SKU↔license↔交付"业务闭环才真正闭合（Phase 5 末目标）。
