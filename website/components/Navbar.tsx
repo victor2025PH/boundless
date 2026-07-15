@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { Menu, X, Languages, ChevronDown } from "lucide-react";
 import { useLang } from "./LanguageContext";
@@ -19,6 +19,32 @@ export default function Navbar() {
   const [scrolled, setScrolled] = useState(false);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState("");
+  // 产品下拉：hover（鼠标）+ click（触屏/键盘）双模式。纯 :hover 在触屏上打不开，
+  // 鼠标用户点击也无反馈——两类用户都会感知为「点击没有响应」。
+  const [prodOpen, setProdOpen] = useState(false);
+  const prodRef = useRef<HTMLDivElement>(null);
+
+  // 点击面板外 / Esc 关闭
+  useEffect(() => {
+    if (!prodOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (!prodRef.current?.contains(e.target as Node)) setProdOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setProdOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [prodOpen]);
+
+  // 路由变化（跳到产品落地页）后收起
+  useEffect(() => {
+    setProdOpen(false);
+  }, [pathname]);
 
   // 锚点仅在首页有效；子页面（/order /download 等）跳回对应语言首页的锚点。
   const home = lang === "zh" ? "/" : "/en";
@@ -80,13 +106,24 @@ export default function Navbar() {
         </a>
 
         <div className="hidden items-center gap-8 md:flex">
-          {/* 产品 · 三系下拉（智连 / 幻境 / 通达） */}
-          <div className="group relative">
-            <button className="inline-flex items-center gap-1 text-sm text-slate-300 transition-colors hover:text-white">
+          {/* 产品 · 三系下拉（智连 / 幻境 / 通达）：hover 或 click 均可展开 */}
+          <div ref={prodRef} className="group relative">
+            <button
+              onClick={() => setProdOpen((v) => !v)}
+              aria-expanded={prodOpen}
+              aria-haspopup="menu"
+              className="inline-flex items-center gap-1 text-sm text-slate-300 transition-colors hover:text-white"
+            >
               {lang === "zh" ? "产品" : "Products"}
-              <ChevronDown className="h-3.5 w-3.5 opacity-70 transition-transform group-hover:rotate-180" />
+              <ChevronDown
+                className={`h-3.5 w-3.5 opacity-70 transition-transform group-hover:rotate-180 ${prodOpen ? "rotate-180" : ""}`}
+              />
             </button>
-            <div className="invisible absolute left-1/2 top-full z-50 -translate-x-1/2 pt-3 opacity-0 transition duration-150 group-hover:visible group-hover:opacity-100">
+            <div
+              className={`absolute left-1/2 top-full z-50 -translate-x-1/2 pt-3 transition duration-150 group-hover:visible group-hover:opacity-100 ${
+                prodOpen ? "visible opacity-100" : "invisible opacity-0"
+              }`}
+            >
               <div className="glass grid w-[560px] grid-cols-3 gap-4 rounded-2xl border border-white/10 p-4">
                 {CATEGORY_ORDER.map((cat) => {
                   const cc = CATEGORIES[cat];
@@ -103,7 +140,10 @@ export default function Navbar() {
                             <a
                               key={key}
                               href={productHref(key)}
-                              onClick={() => track("product_click", { key, where: "nav" })}
+                              onClick={() => {
+                                setProdOpen(false);
+                                track("product_click", { key, where: "nav" });
+                              }}
                               className="group/item rounded-lg px-2 py-1.5 transition hover:bg-white/5"
                             >
                               <span className="text-sm text-slate-200 group-hover/item:text-white">{p.zh}</span>
