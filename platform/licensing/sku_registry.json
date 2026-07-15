@@ -1,0 +1,528 @@
+{
+  "generated": "2026-07-15",
+  "source": "products/*/product.yaml",
+  "note": "Single source of SKUs for website pricing + license gating + order. Regenerate via platform/licensing/build_sku_registry.py.",
+  "summary": {
+    "product_count": 7,
+    "sku_count": 21,
+    "tbd_price_count": 5,
+    "by_category": {
+      "studio": 3,
+      "lingo": 2,
+      "growth": 2
+    },
+    "by_visibility": {
+      "public": 3,
+      "gated": 2,
+      "mixed": 2
+    }
+  },
+  "products": [
+    {
+      "id": "huansheng",
+      "brand_key": "voicex",
+      "name": "幻声",
+      "category": "studio",
+      "visibility": "public",
+      "risk": "low",
+      "engine": "avatarhub",
+      "landing": "/voice",
+      "skus": [
+        {
+          "sku_id": "voicex-starter",
+          "name": "体验",
+          "unit": "month",
+          "price": "18",
+          "currency": "USD",
+          "note": "1 音色/1 万字符"
+        },
+        {
+          "sku_id": "voicex-std",
+          "name": "标准",
+          "unit": "month",
+          "price": "78",
+          "currency": "USD",
+          "note": "5 音色/10 万字符/多语种"
+        },
+        {
+          "sku_id": "voicex-pro",
+          "name": "专业",
+          "unit": "month",
+          "price": "198",
+          "currency": "USD",
+          "note": "20 音色/50 万字符/变声 API"
+        },
+        {
+          "sku_id": "voicex-usage",
+          "name": "按量加购",
+          "unit": "per-10k-chars",
+          "price": "10",
+          "currency": "USD",
+          "note": "实时变声 0.04/分钟"
+        }
+      ]
+    },
+    {
+      "id": "huanyan",
+      "brand_key": "facex",
+      "name": "幻颜",
+      "category": "studio",
+      "visibility": "gated",
+      "risk": "high",
+      "engine": "avatarhub",
+      "landing": "/face",
+      "skus": [
+        {
+          "sku_id": "facex-image",
+          "name": "图片换脸",
+          "unit": "per-image",
+          "price": "1",
+          "currency": "USD",
+          "note": "包月 38 = 100 张"
+        },
+        {
+          "sku_id": "facex-video",
+          "name": "视频换脸",
+          "unit": "per-min",
+          "price": "4",
+          "currency": "USD",
+          "note": ""
+        },
+        {
+          "sku_id": "facex-live-deploy",
+          "name": "实时换脸部署",
+          "unit": "one-time",
+          "price": "from 980",
+          "currency": "USD",
+          "note": "定制交付(见幻影 LiveX 旗舰)"
+        },
+        {
+          "sku_id": "facex-avatar",
+          "name": "形象定制",
+          "unit": "one-time",
+          "price": "from 398",
+          "currency": "USD",
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "huanying",
+      "brand_key": "livex",
+      "name": "幻影",
+      "category": "studio",
+      "visibility": "mixed",
+      "risk": "mid",
+      "engine": "avatarhub",
+      "landing": "/face",
+      "skus": [
+        {
+          "sku_id": "livex-avatar-sub",
+          "name": "数字人订阅",
+          "unit": "month",
+          "price": "from 198",
+          "currency": "USD",
+          "note": "口播套餐"
+        },
+        {
+          "sku_id": "livex-avatar-buy",
+          "name": "形象买断",
+          "unit": "one-time",
+          "price": "798",
+          "currency": "USD",
+          "note": ""
+        },
+        {
+          "sku_id": "livex-dub-min",
+          "name": "视频翻译配音",
+          "unit": "per-min",
+          "price": "6",
+          "currency": "USD",
+          "note": ""
+        },
+        {
+          "sku_id": "livex-dub-matrix",
+          "name": "短视频矩阵",
+          "unit": "month",
+          "price": "398",
+          "currency": "USD",
+          "note": "30 条；100 条 998/月"
+        }
+      ]
+    },
+    {
+      "id": "tongchuan",
+      "brand_key": "voxx",
+      "name": "通传",
+      "category": "lingo",
+      "visibility": "public",
+      "risk": "low",
+      "engine": "avatarhub",
+      "landing": "/interpreting",
+      "skus": [
+        {
+          "sku_id": "voxx-meeting",
+          "name": "会议同传",
+          "unit": "per-session",
+          "price": "TBD",
+          "currency": "USD",
+          "note": "按场次/时长"
+        },
+        {
+          "sku_id": "voxx-selfhost",
+          "name": "私有化部署",
+          "unit": "one-time",
+          "price": "TBD",
+          "currency": "USD",
+          "note": "买断 + 年度维护"
+        }
+      ]
+    },
+    {
+      "id": "tongyi",
+      "brand_key": "lingox",
+      "name": "通译",
+      "category": "lingo",
+      "visibility": "public",
+      "risk": "low",
+      "engine": "chengjie",
+      "landing": "/interpreting",
+      "skus": [
+        {
+          "sku_id": "lingox-charpack",
+          "name": "字符包",
+          "unit": "one-time",
+          "price": "TBD",
+          "currency": "USD",
+          "note": ""
+        },
+        {
+          "sku_id": "lingox-team",
+          "name": "团队",
+          "unit": "month",
+          "price": "TBD",
+          "currency": "USD",
+          "note": ""
+        },
+        {
+          "sku_id": "lingox-pro",
+          "name": "专业",
+          "unit": "month",
+          "price": "TBD",
+          "currency": "USD",
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "zhiliao",
+      "brand_key": "chatx",
+      "name": "智聊",
+      "category": "growth",
+      "visibility": "mixed",
+      "risk": "mid",
+      "engine": "chengjie",
+      "landing": null,
+      "skus": [
+        {
+          "sku_id": "chatx-entry",
+          "name": "入门",
+          "unit": "month",
+          "price": "58",
+          "currency": "USD",
+          "note": "3 账号/AI 翻译/1 平台"
+        },
+        {
+          "sku_id": "chatx-team",
+          "name": "团队",
+          "unit": "month",
+          "price": "198",
+          "currency": "USD",
+          "note": "10 账号/全平台/AI 自动成交"
+        },
+        {
+          "sku_id": "chatx-flagship",
+          "name": "旗舰",
+          "unit": "month",
+          "price": "598",
+          "currency": "USD",
+          "note": "50 账号/人工接管/数据看板"
+        }
+      ]
+    },
+    {
+      "id": "zhituo",
+      "brand_key": "reachx",
+      "name": "智拓",
+      "category": "growth",
+      "visibility": "gated",
+      "risk": "high",
+      "engine": "huoke",
+      "landing": null,
+      "skus": [
+        {
+          "sku_id": "reachx-deploy",
+          "name": "私有化部署",
+          "unit": "one-time",
+          "price": "按规模报价",
+          "currency": "USD",
+          "note": "真机获客集群，按设备数与规模定制"
+        }
+      ]
+    }
+  ],
+  "flat_skus": [
+    {
+      "product": "huansheng",
+      "brand_key": "voicex",
+      "category": "studio",
+      "visibility": "public",
+      "sku_id": "voicex-starter",
+      "name": "体验",
+      "unit": "month",
+      "price": "18",
+      "currency": "USD",
+      "note": "1 音色/1 万字符"
+    },
+    {
+      "product": "huansheng",
+      "brand_key": "voicex",
+      "category": "studio",
+      "visibility": "public",
+      "sku_id": "voicex-std",
+      "name": "标准",
+      "unit": "month",
+      "price": "78",
+      "currency": "USD",
+      "note": "5 音色/10 万字符/多语种"
+    },
+    {
+      "product": "huansheng",
+      "brand_key": "voicex",
+      "category": "studio",
+      "visibility": "public",
+      "sku_id": "voicex-pro",
+      "name": "专业",
+      "unit": "month",
+      "price": "198",
+      "currency": "USD",
+      "note": "20 音色/50 万字符/变声 API"
+    },
+    {
+      "product": "huansheng",
+      "brand_key": "voicex",
+      "category": "studio",
+      "visibility": "public",
+      "sku_id": "voicex-usage",
+      "name": "按量加购",
+      "unit": "per-10k-chars",
+      "price": "10",
+      "currency": "USD",
+      "note": "实时变声 0.04/分钟"
+    },
+    {
+      "product": "huanyan",
+      "brand_key": "facex",
+      "category": "studio",
+      "visibility": "gated",
+      "sku_id": "facex-image",
+      "name": "图片换脸",
+      "unit": "per-image",
+      "price": "1",
+      "currency": "USD",
+      "note": "包月 38 = 100 张"
+    },
+    {
+      "product": "huanyan",
+      "brand_key": "facex",
+      "category": "studio",
+      "visibility": "gated",
+      "sku_id": "facex-video",
+      "name": "视频换脸",
+      "unit": "per-min",
+      "price": "4",
+      "currency": "USD",
+      "note": ""
+    },
+    {
+      "product": "huanyan",
+      "brand_key": "facex",
+      "category": "studio",
+      "visibility": "gated",
+      "sku_id": "facex-live-deploy",
+      "name": "实时换脸部署",
+      "unit": "one-time",
+      "price": "from 980",
+      "currency": "USD",
+      "note": "定制交付(见幻影 LiveX 旗舰)"
+    },
+    {
+      "product": "huanyan",
+      "brand_key": "facex",
+      "category": "studio",
+      "visibility": "gated",
+      "sku_id": "facex-avatar",
+      "name": "形象定制",
+      "unit": "one-time",
+      "price": "from 398",
+      "currency": "USD",
+      "note": ""
+    },
+    {
+      "product": "huanying",
+      "brand_key": "livex",
+      "category": "studio",
+      "visibility": "mixed",
+      "sku_id": "livex-avatar-sub",
+      "name": "数字人订阅",
+      "unit": "month",
+      "price": "from 198",
+      "currency": "USD",
+      "note": "口播套餐"
+    },
+    {
+      "product": "huanying",
+      "brand_key": "livex",
+      "category": "studio",
+      "visibility": "mixed",
+      "sku_id": "livex-avatar-buy",
+      "name": "形象买断",
+      "unit": "one-time",
+      "price": "798",
+      "currency": "USD",
+      "note": ""
+    },
+    {
+      "product": "huanying",
+      "brand_key": "livex",
+      "category": "studio",
+      "visibility": "mixed",
+      "sku_id": "livex-dub-min",
+      "name": "视频翻译配音",
+      "unit": "per-min",
+      "price": "6",
+      "currency": "USD",
+      "note": ""
+    },
+    {
+      "product": "huanying",
+      "brand_key": "livex",
+      "category": "studio",
+      "visibility": "mixed",
+      "sku_id": "livex-dub-matrix",
+      "name": "短视频矩阵",
+      "unit": "month",
+      "price": "398",
+      "currency": "USD",
+      "note": "30 条；100 条 998/月"
+    },
+    {
+      "product": "tongchuan",
+      "brand_key": "voxx",
+      "category": "lingo",
+      "visibility": "public",
+      "sku_id": "voxx-meeting",
+      "name": "会议同传",
+      "unit": "per-session",
+      "price": "TBD",
+      "currency": "USD",
+      "note": "按场次/时长"
+    },
+    {
+      "product": "tongchuan",
+      "brand_key": "voxx",
+      "category": "lingo",
+      "visibility": "public",
+      "sku_id": "voxx-selfhost",
+      "name": "私有化部署",
+      "unit": "one-time",
+      "price": "TBD",
+      "currency": "USD",
+      "note": "买断 + 年度维护"
+    },
+    {
+      "product": "tongyi",
+      "brand_key": "lingox",
+      "category": "lingo",
+      "visibility": "public",
+      "sku_id": "lingox-charpack",
+      "name": "字符包",
+      "unit": "one-time",
+      "price": "TBD",
+      "currency": "USD",
+      "note": ""
+    },
+    {
+      "product": "tongyi",
+      "brand_key": "lingox",
+      "category": "lingo",
+      "visibility": "public",
+      "sku_id": "lingox-team",
+      "name": "团队",
+      "unit": "month",
+      "price": "TBD",
+      "currency": "USD",
+      "note": ""
+    },
+    {
+      "product": "tongyi",
+      "brand_key": "lingox",
+      "category": "lingo",
+      "visibility": "public",
+      "sku_id": "lingox-pro",
+      "name": "专业",
+      "unit": "month",
+      "price": "TBD",
+      "currency": "USD",
+      "note": ""
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "chatx-entry",
+      "name": "入门",
+      "unit": "month",
+      "price": "58",
+      "currency": "USD",
+      "note": "3 账号/AI 翻译/1 平台"
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "chatx-team",
+      "name": "团队",
+      "unit": "month",
+      "price": "198",
+      "currency": "USD",
+      "note": "10 账号/全平台/AI 自动成交"
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "chatx-flagship",
+      "name": "旗舰",
+      "unit": "month",
+      "price": "598",
+      "currency": "USD",
+      "note": "50 账号/人工接管/数据看板"
+    },
+    {
+      "product": "zhituo",
+      "brand_key": "reachx",
+      "category": "growth",
+      "visibility": "gated",
+      "sku_id": "reachx-deploy",
+      "name": "私有化部署",
+      "unit": "one-time",
+      "price": "按规模报价",
+      "currency": "USD",
+      "note": "真机获客集群，按设备数与规模定制"
+    }
+  ]
+}

@@ -1,0 +1,68 @@
+{
+  "_comment": [
+    "集群拓扑单一数据源（2026-07-05 起）。谁在读：",
+    "  1) harden_remote.ps1  — 鉴权加固/巡检/演习的目标机与部署参数（不再内嵌 MAP）",
+    "  2) tools/topology_lint.py — 与 env_config.bat 的 SVC_* 路由做一致性巡检，漂移即告警；",
+    "     并校验 vram_budget：每机 Σ服务显存预算 ≤ 物理显存×threshold，超编即告警",
+    "改机器/搬迁只改这一个文件；env_key 是该服务在 env_config.bat 里的路由变量名。",
+    "字段: dir=项目目录  py=Python解释器  task=计划任务名  loadkey=/health 就绪正则(空=只看200)",
+    "vram_budget: 数值为实测 GB（2026-07-05, logs/optimize_20260705）。上新/迁移服务先改这里，",
+    "  lint 过了再动手——32B 翻译模型被挤出显存(31%落CPU、每句3.6s)就是没有这道闸的事故。"
+  ],
+  "hub": { "ip": "192.168.0.176", "port": 9000 },
+  "vram_budget": {
+    "threshold": 0.92,
+    "192.168.0.176": {
+      "gpu": "RTX 5090", "vram_gb": 32.6,
+      "services": { "ollama_qwen2.5_14b": 10.0, "fish_tts": 2.5,
+                    "ditto": 5.0, "musetalk_lipsync": 4.0, "desktop_misc": 1.0 }
+    },
+    "192.168.0.104": {
+      "gpu": "RTX 4070", "vram_gb": 12.0,
+      "services": { "faceswap_inswapper_hyperswap_gfpgan": 5.5 }
+    },
+    "192.168.0.117": {
+      "gpu": "RTX 3060", "vram_gb": 12.0,
+      "services": { "emotion_tts_cosyvoice3": 3.3, "qwen3_tts_0.6b_bf16": 3.2 }
+    },
+    "192.168.0.140": {
+      "gpu": "RTX 4070", "vram_gb": 12.0,
+      "services": { "stt_whisper_turbo_nllb": 5.4, "nemo_stt_bf16": 4.3, "ollama_idle": 0.3 }
+    },
+    "192.168.0.198": {
+      "gpu": "RTX 4070", "vram_gb": 12.0,
+      "services": { "lipsync_standby_musetalk_warm": 7.7 }
+    }
+  },
+  "hosts": {
+    "192.168.0.104": {
+      "dir": "C:\\模仿音色",
+      "py": "C:\\Users\\Administrator\\Miniconda3\\envs\\facefusion\\python.exe",
+      "deps_note": "2026-07-10: pip tensorrt-cu12==10.16.1.11 已装(TRT EP 依赖,重装机必备)；TRT 引擎缓存在 C:\\packs\\trt_cache\\{faceswap,auxnets}(须纯 ASCII 路径,删掉会在下次启动重建~90s)；模型 gpen_bfr_256/xseg_1/hyperswap_1a_256.onnx 在 models\\",
+      "svcs": [
+        { "server": "faceswap_api.py", "name": "faceswap", "addcors": false,
+          "task": "FaceSwap_Boot", "port": 8000, "loadkey": "", "env_key": "SVC_FACESWAP" }
+      ]
+    },
+    "192.168.0.117": {
+      "dir": "D:\\faceX\\mfys",
+      "py": "D:\\faceX\\Miniconda3\\envs\\cosytts\\python.exe",
+      "svcs": [
+        { "server": "emotion_tts_server.py", "name": "emotion_tts", "addcors": true,
+          "task": "EmotionTTS_Boot", "port": 7852, "loadkey": "\"models_loaded\":\\s*true", "env_key": "SVC_EMOTION_TTS" },
+        { "server": "qwen3_tts_server.py", "name": "qwen3_tts", "addcors": true,
+          "task": "Qwen3TTS_Boot", "port": 7858, "loadkey": "\"model_loaded\":\\s*true", "env_key": "SVC_QWEN3_TTS" }
+      ]
+    },
+    "192.168.0.140": {
+      "dir": "D:\\faceX\\mfys",
+      "py": "D:\\faceX\\Miniconda3\\envs\\cosytts\\python.exe",
+      "svcs": [
+        { "server": "stt_server.py", "name": "stt", "addcors": true,
+          "task": "STT_Boot", "port": 7854, "loadkey": "\"loaded\":\\s*true", "env_key": "SVC_STT" },
+        { "server": "nemotron_stt_server.py", "name": "nemo_stt", "addcors": true,
+          "task": "NemoSTT_Boot", "port": 7857, "loadkey": "\"loaded\":\\s*true", "env_key": "SVC_NEMO_STT" }
+      ]
+    }
+  }
+}
