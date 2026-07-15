@@ -1,12 +1,17 @@
 #!/bin/sh
-# wujie pre-push 门禁：repo_doctor 为 RED(FAIL>0) 则拒绝 push。
-# 覆盖：确需绕过时 `git push --no-verify`。安装：powershell -File tools/install_hooks.ps1
+# wujie pre-push 门禁 + git-lfs 上传。安装：powershell -File tools/install_hooks.ps1
+# 覆盖门禁：确需绕过时 `git push --no-verify`。
+# 1) repo_doctor 门禁（RED=FAIL>0 则拒推）
 echo "[pre-push] repo_doctor gate..."
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/repo_doctor.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/repo_doctor.ps1 </dev/null
 rc=$?
 if [ "$rc" -ne 0 ]; then
   echo "[pre-push] BLOCKED: repo_doctor RED (exit $rc). 修掉 FAIL 再推，或 git push --no-verify 强绕。"
   exit 1
 fi
-echo "[pre-push] repo_doctor OK -> push 放行。"
+echo "[pre-push] repo_doctor OK。"
+# 2) git-lfs 上传（保留 LFS 的 pre-push，否则大文件不会随 push 上传）
+if command -v git-lfs >/dev/null 2>&1; then
+  git lfs pre-push "$@"
+fi
 exit 0
