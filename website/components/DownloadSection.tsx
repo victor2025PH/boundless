@@ -4,12 +4,15 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  AlertTriangle,
   Apple,
   AudioLines,
   BadgeCheck,
   BookOpen,
   Bot,
   ChevronDown,
+  ClipboardCheck,
+  Clock,
   Download,
   HardDrive,
   HelpCircle,
@@ -23,8 +26,9 @@ import { openAiChat } from "./AIChat";
 import Reveal from "./fx/Reveal";
 import BeforeAfter from "./fx/BeforeAfter";
 import { AudioClip } from "./fx/MediaClips";
+import RichText from "./RichText";
 import { ENGINE } from "@/lib/engineContent";
-import { INSTALL_GUIDE } from "@/lib/manualContent";
+import { INSTALL_GUIDE, PRE_CHECK } from "@/lib/manualContent";
 import { RELEASE_NOTES, LATEST_VERSION, type ReleaseTag } from "@/lib/releaseNotes";
 import { track } from "@/lib/track";
 import { CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
@@ -292,28 +296,64 @@ export default function DownloadSection() {
             </div>
             <p className="mt-2 text-sm text-slate-500">
               {zh
-                ? "全程约 10–30 分钟（视网速），零命令行。更完整的功能上手见使用手册。"
-                : "Takes about 10–30 minutes depending on bandwidth, zero command line. See the manual for full feature guides."}
+                ? "全程约 10–30 分钟（视网速），零命令行。带虚线下划线的术语，悬停 / 点击可看解释。更完整的功能上手见使用手册。"
+                : "Takes about 10–30 minutes depending on bandwidth, zero command line. Hover / tap dotted terms for explanations. See the manual for full feature guides."}
             </p>
 
-            <ol className="mt-6 space-y-5">
+            {/* 装前 30 秒自查：先给确定性，降低「不知道自己电脑行不行」的流失 */}
+            <div className="mt-5 rounded-xl border border-white/10 bg-ink-950/40 p-4">
+              <div className="flex items-center gap-2 text-sm font-medium text-white">
+                <ClipboardCheck className="h-4 w-4 text-emerald-400" />
+                {zh ? "装前 30 秒自查" : "30-second pre-check"}
+              </div>
+              <ul className="mt-3 grid gap-2 sm:grid-cols-2">
+                {PRE_CHECK.map((c, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs leading-relaxed text-slate-400">
+                    <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400/80" />
+                    {c[lang]}
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <ol className="mt-6 space-y-6">
               {INSTALL_GUIDE.steps.map((s, i) => (
                 <li key={i} className="flex items-start gap-4">
                   <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet text-xs font-bold text-ink-950">
                     {i + 1}
                   </span>
-                  <div className="min-w-0">
-                    <div className="font-medium text-white">{s.title[lang]}</div>
-                    <p className="mt-1 text-sm leading-relaxed text-slate-400">{s.detail[lang]}</p>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <span className="font-medium text-white">{s.title[lang]}</span>
+                      {s.time && (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-white/10 px-2 py-0.5 text-[11px] text-slate-500">
+                          <Clock className="h-3 w-3" />
+                          {s.time[lang]}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-sm leading-relaxed text-slate-400">
+                      <RichText text={s.detail[lang]} />
+                    </p>
                     {s.sub && (
                       <ul className="mt-2 space-y-1.5">
                         {s.sub[lang].map((line, j) => (
                           <li key={j} className="flex items-start gap-2 text-xs leading-relaxed text-slate-500">
                             <Sparkles className="mt-0.5 h-3 w-3 shrink-0 text-neon-cyan/70" />
-                            {line}
+                            <span>
+                              <RichText text={line} />
+                            </span>
                           </li>
                         ))}
                       </ul>
+                    )}
+                    {s.warn && (
+                      <div className="mt-2.5 flex items-start gap-2 rounded-lg border border-amber-400/25 bg-amber-400/[0.06] px-3 py-2.5 text-xs leading-relaxed text-slate-300">
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+                        <span>
+                          <RichText text={s.warn[lang]} />
+                        </span>
+                      </div>
                     )}
                   </div>
                 </li>
@@ -366,7 +406,10 @@ export default function DownloadSection() {
                 return (
                   <div key={i} className="overflow-hidden rounded-xl border border-white/10 bg-ink-900/60">
                     <button
-                      onClick={() => setOpenFaq(isOpen ? null : i)}
+                      onClick={() => {
+                        setOpenFaq(isOpen ? null : i);
+                        if (!isOpen) track("install_faq_open", { q: f.q.zh });
+                      }}
                       aria-expanded={isOpen}
                       className="flex w-full items-center justify-between gap-4 px-4 py-3.5 text-left"
                     >
@@ -384,7 +427,9 @@ export default function DownloadSection() {
                           exit={{ height: 0, opacity: 0 }}
                           transition={{ duration: 0.25, ease: "easeInOut" }}
                         >
-                          <p className="px-4 pb-4 text-sm leading-relaxed text-slate-400">{f.a[lang]}</p>
+                          <p className="px-4 pb-4 text-sm leading-relaxed text-slate-400">
+                            <RichText text={f.a[lang]} />
+                          </p>
                         </motion.div>
                       )}
                     </AnimatePresence>

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { BookOpen, CheckCircle2, Download, Info, Printer } from "lucide-react";
 import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
+import RichText from "./RichText";
 import { MANUAL_SECTIONS, type ManualBlock } from "@/lib/manualContent";
 import { LATEST_VERSION } from "@/lib/releaseNotes";
 import { CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
@@ -147,18 +148,24 @@ export default function ManualSection() {
   );
 }
 
-/** 渲染单个手册内容块（段落 / 要点 / 步骤 / 表格 / 提示） */
+/** 渲染单个手册内容块（段落 / 要点 / 步骤 / 表格 / 提示），文本经 RichText 支持加粗与术语气泡 */
 function Block({ block }: { block: ManualBlock }) {
   switch (block.type) {
     case "p":
-      return <p className="text-sm leading-relaxed text-slate-300">{block.text}</p>;
+      return (
+        <p className="text-sm leading-relaxed text-slate-300">
+          <RichText text={block.text} />
+        </p>
+      );
     case "bullets":
       return (
         <ul className="space-y-2">
           {block.items.map((it, i) => (
             <li key={i} className="flex items-start gap-2.5 text-sm leading-relaxed text-slate-300">
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-neon-cyan" />
-              {it}
+              <span>
+                <RichText text={it} />
+              </span>
             </li>
           ))}
         </ul>
@@ -173,7 +180,11 @@ function Block({ block }: { block: ManualBlock }) {
               </span>
               <div className="text-sm leading-relaxed">
                 <span className="font-medium text-white">{it.title}</span>
-                {it.detail && <p className="mt-0.5 text-slate-400">{it.detail}</p>}
+                {it.detail && (
+                  <p className="mt-0.5 text-slate-400">
+                    <RichText text={it.detail} />
+                  </p>
+                )}
               </div>
             </li>
           ))}
@@ -210,7 +221,9 @@ function Block({ block }: { block: ManualBlock }) {
       return (
         <div className="flex items-start gap-2.5 rounded-xl border border-neon-cyan/25 bg-neon-cyan/[0.06] px-4 py-3 text-sm leading-relaxed text-slate-300">
           <Info className="mt-0.5 h-4 w-4 shrink-0 text-neon-cyan" />
-          {block.text}
+          <span>
+            <RichText text={block.text} />
+          </span>
         </div>
       );
   }

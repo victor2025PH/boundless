@@ -4,6 +4,7 @@ import Footer from "@/components/Footer";
 import DownloadSection from "@/components/DownloadSection";
 import { SITE_URL } from "@/lib/site";
 import { LATEST_VERSION } from "@/lib/releaseNotes";
+import { INSTALL_GUIDE, stripRich } from "@/lib/manualContent";
 
 export const metadata: Metadata = {
   title: "下载客户端 · 无界科技 BOUNDLESS",
@@ -31,10 +32,26 @@ const appLd = {
   publisher: { "@type": "Organization", name: "无界科技 BOUNDLESS", url: SITE_URL },
 };
 
+// 安装教程结构化数据：搜索结果可展示分步富摘要，步骤与页面内容同源（stripRich 剥离标记）
+const howToLd = {
+  "@context": "https://schema.org",
+  "@type": "HowTo",
+  name: "AvatarHub 客户端安装教程",
+  description: "从下载安装包到验证安装的完整流程，约 10–30 分钟，零命令行。",
+  totalTime: "PT30M",
+  step: INSTALL_GUIDE.steps.map((s, i) => ({
+    "@type": "HowToStep",
+    position: i + 1,
+    name: stripRich(s.title.zh),
+    text: stripRich(s.detail.zh),
+  })),
+};
+
 export default function DownloadPage() {
   return (
     <main className="relative min-h-screen">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(appLd) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(howToLd) }} />
       <Navbar />
       <DownloadSection />
       <Footer />
