@@ -156,6 +156,8 @@ checkpoints/
 backups/
 bench_out/
 tmp/
+# 演示录制的 Playwright 浏览器 profile（缓存/Cookie 等,绝不入库）
+demo_record/.pwprofile/
 # 独立实验室(llama.cpp 二进制等,复测引擎用,tools/_p5_mt2_lab_probe.py 的运行时依赖)
 lab/
 *.msi
@@ -182,3 +184,16 @@ downloads/
 #    全新装机 Hub 首启据此播种示例角色（消灭"无音色样本"）；随安装器/应用内更新分发。──
 !data/starter_profiles/
 !data/starter_profiles/**
+
+# ── 2026-07-16 push 前机密/大文件自检补漏 ──
+# 机密类补全（当前仓内无此类文件，防患未然）
+config.yaml
+config.local.yaml
+id_ed25519*
+*.keystore
+# 原来只忽略精确名 secrets.bat，扩到 secrets*.bat；模板 secrets.example.bat
+# 已被跟踪不受影响，并显式豁免以保留意图
+secrets*.bat
+!secrets.example.bat
+# 演示录制工作区（~314MB 截图/成片/中间产物，全部本地生成，不入库）
+demo_record/

@@ -170,18 +170,26 @@ def test_lab_ui_markers():
         ng("hub.js 未接入 clone_engine_recommend")
     else:
         ok("hub.js 克隆引擎推荐已接入")
-    if "startInterpCallPack" not in hub_js:
-        ng("hub.js 缺少 startInterpCallPack")
+    # 2026-07-16 去重复改版：Hub 侧双 CTA(直播同传/通话同传)退役，开始入口单一真相在
+    # live_interpreter 面板「开始 ▾」菜单(通话向导/直播同传/演示)。断言改盯新架构：
+    # Hub 只留跳转 startInterp + 面板内 livemode/callmode 编排项。
+    li = (ROOT / "live_interpreter.py").read_text(encoding="utf-8")
+    if "startInterpCallPack" in hub_js or "startInterpLive" in hub_js:
+        ng("hub.js 残留已退役的同传双 CTA(startInterpLive/CallPack)")
     else:
-        ok("hub.js 通话套餐 startInterpCallPack 已接入")
+        ok("hub.js 同传双 CTA 已退役(开始入口归一 iframe 面板)")
+    if "startInterp()" not in hub_js or "goTab('interp')" not in hub_js:
+        ng("hub.js 缺少 startInterp 跳转入口(命令面板/动线引用)")
+    else:
+        ok("hub.js 保留 startInterp 跳转入口")
+    if "id=livemode" not in li or "id=callmode" not in li:
+        ng("live_interpreter 开始▾菜单缺少 直播同传/通话向导 编排项")
+    else:
+        ok("live_interpreter 开始▾菜单含 直播同传/通话向导")
     if "interpOverlayUrl" not in hub_js:
         ng("hub.js 缺少 interpOverlayUrl(OBS 字幕)")
     else:
         ok("hub.js OBS 字幕 URL 已接入")
-    if "通话同传" not in ui:          # 2026-07-08 改名:「一键通话同传」→「通话同传」(副标题两行式)
-        ng("ui.html 缺少「通话同传」按钮")
-    else:
-        ok("ui.html 通话套餐按钮存在")
     if "实验室" not in faceswap and "离线" not in faceswap:
         ng("faceswap_api 控制页未标注实验室/离线")
     else:
@@ -400,11 +408,11 @@ def test_b5_asr_route():
             ng(f"live_interpreter 缺少 B-5 {label}")
         else:
             ok(f"live_interpreter B-5 {label}")
-    ui = (ROOT / "static" / "ui.html").read_text(encoding="utf-8")
-    if "asr_route" not in ui:
-        ng("ui.html 观测条缺少 ASR 引擎徽标(asr_route)")
+    # 2026-07-16 去重复改版：Hub 外层「直播观测」条退役，ASR 徽标唯一呈现面=面板底部 mbar
+    if "'ASR·'" not in li and "ASR·" not in li:
+        ng("live_interpreter mbar 缺少 ASR 引擎徽标")
     else:
-        ok("ui.html 观测条 ASR 引擎徽标存在")
+        ok("live_interpreter mbar ASR 引擎徽标存在(Hub 外层观测条已退役)")
 
 
 def test_voice_guard():
@@ -422,13 +430,15 @@ def test_voice_guard():
             ("def _profile_voice_optional", "SBV2 白名单免参考音判定"),
             ("def _voice_probe_hint", "未录音色/拉取失败分话术"),
             ("def _fallback_voice", "env 兜底音色(默认关)"),
-            ('"voice_ok": _voice_ready()', "/start 回传 voice_ok"),
+            # 2026-07-15 起 /start 的 voice_ok 升级为 _dub_ready() 联合判定(音色+引擎在线)，
+            # 向导红灯同步改名「配音就绪(音色+引擎)」——断言跟实现走,守的仍是同一条防线。
+            ('"voice_ok": _dub["voice_ok"]', "/start 回传 voice_ok(音色+引擎联合判定)"),
             ('"voice_ok": (_voice_ready() if ST.running else None)', "status/metrics 暴露 voice_ok"),
             ("参考音预热完成@", "预热按引擎分流"),
             ("/v1/tts/register_spk", "cosyvoice spk 预注册"),
             ("无音色·仅字幕", "观测条常驻徽章"),
             ("data-novoice", "角色下拉无音色标记"),
-            ('_step("配音音色"', "通话向导配音红灯"),
+            ('_step("配音就绪(音色+引擎)"', "通话向导配音红灯"),
             ('"session_running": ST.running', "向导红灯与会话真相同步")]:
         if needle not in li:
             ng(f"live_interpreter 缺少 无音色守卫 {label}")
@@ -454,14 +464,17 @@ def test_voice_guard():
             ng(f"live_interpreter 缺少 治理 {label}")
         else:
             ok(f"live_interpreter 治理 {label}")
+    # 2026-07-16 去重复改版：Hub 外层观测条退役,无音色徽章唯一呈现面=面板 mbar(上方 li 断言已覆盖)
     ui = (ROOT / "static" / "ui.html").read_text(encoding="utf-8")
-    for needle, label in [("voice_ok===false", "Hub 观测条无音色徽章条件"),
-                          ("无音色·仅字幕", "Hub 观测条无音色徽章文案"),
-                          ("没有音色样本：对话/配音不可用", "角色卡待配音色后果说明")]:
+    for needle, label in [("没有音色样本：对话/配音不可用", "角色卡待配音色后果说明")]:
         if needle not in ui:
             ng(f"ui.html 缺少 治理 {label}")
         else:
             ok(f"ui.html 治理 {label}")
+    if "voice_ok===false" in li and "无音色·仅字幕" in li:
+        ok("live_interpreter mbar 无音色徽章在位(Hub 外层已退役)")
+    else:
+        ng("live_interpreter mbar 缺少无音色徽章(voice_ok===false)")
     relay = (ROOT / "monitor_relay.py").read_text(encoding="utf-8")
     for needle, label in [('"voice_ok": s.get("voice_ok")', "手机代理透传 voice_ok"),
                           ("同传:无音色·仅字幕", "手机状态灯无音色警示")]:

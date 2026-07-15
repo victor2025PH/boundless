@@ -30,7 +30,11 @@ rem  idle-unload off by default there) as a 2nd musetalk replica -> conversation
 rem  K goes 1 -> 2 (auto admission follows healthy pool size). If .198 is off/unreachable the
 rem  hub probe ejects it and everything degrades back to single-replica (zero regression).
 rem 2026-07-09 wechat-first replan: digital-human lipsync served by .198 replica only; local 8090 parked (-8.7G VRAM on .176).
-set SVC_LIPSYNC=http://192.168.0.198:8090
+rem 2026-07-15 incident fix: .198 unreachable for days (connect timeout) while local 8090 is
+rem   actually up (models_loaded, cuda) -> every interp session wasted 3x180s on face-precompute
+rem   against a dead host. Local-first + .198 as replica: hub pool fails over automatically,
+rem   interp takes the first URL (local). When .198 comes back it rejoins as overflow replica.
+set SVC_LIPSYNC=http://127.0.0.1:8090,http://192.168.0.198:8090
 rem  Heterogeneous pool (5090 primary + 4070 replica): break inflight ties by list order
 rem  instead of round-robin, so a single session always lands on the fast 5090 and the 4070
 rem  only takes overflow when the 5090 is busy. rr (default) = homogeneous-cards behavior.

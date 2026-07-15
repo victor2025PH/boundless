@@ -180,3 +180,111 @@ wujie/                         ← 新 git 单仓（无界科技全域）
 - 先把各源仓未提交改动落盘/stash（防丢）。
 
 > 确认第 8 节后，我从 Phase 1 落地；不可逆的历史合并与大范围搬迁在你拍板 git 策略后再执行。
+
+---
+
+## 9. 落地记录（Phase 1–2 · 2026-07-15 已执行于 117）
+
+**Phase 1 — 骨架 + 卫生**
+- 安全网：`telegram-mtproto-ai`(119 改) / `mobile-auto0423`(1 改) 未提交改动已建可恢复 ref `refs/wujie-backup/20260715`；源仓工作树未动。
+- 新仓：`D:\workspace\wujie` `git init`(main) + `.gitignore`(机密/大文件/vendor) + README + 目录骨架，首提交完成。
+
+**Phase 2 — 搬迁 + 机密清洗 + 提交（commit `708c4a3`）**
+- `engines/avatarhub` ← 本机较新 `模仿音色` 净码（git-clean，1262 文件，中文名 round-trip OK）。
+- `engines/chengjie` ← telegram-mtproto-ai 净码（2174 文件）；`engines/huoke` ← mobile-auto0423 净码（849 文件）。
+- `website` ← _server-yuntech（排除 node_modules/.next/.env*）；`brand-assets`（7 产品图标）；`docs` ← docs-business + 本方案。
+- `products/<拼音>` 7 个产品薄封装 README（zhituo/zhiliao/tongyi/tongchuan/huansheng/huanying/huanyan）。
+- 机密清洗：删除 `users.json`×2 / `debug.keystore` / `yuntech-src.tgz` / 旧子项目 `config.yaml`；正则脱敏 7 文件里的真实 GLM/OpenAI/Bot 密钥为 `${VAR}` 占位；`.gitignore` 追加 per-engine 守卫；提交前门禁扫描（有机密特征则拒绝入库）。
+- 结果：4564 文件入库，工作树干净，`.git` 146MB（含 brand-assets 93MB 图片，后续可转 LFS）。
+- index-tts(7GB) 未入库 → `vendor/`，靠 provision 部署。
+
+**⚠️ 待你处理（安全）**：`mobile-auto0423/config/chat.yaml` 里的真实智谱 GLM 密钥 `ac5f80…YznB` 在源仓（且源仓有 GitHub remote，可能已推送）——wujie 副本已脱敏，但**源仓那把 key 视为已泄露，请尽快在智谱后台吊销/轮换**。同理排查各源仓 `.env`/`config` 历史提交里的真实密钥。
+
+## 10. Phase 3 落地记录（2026-07-15 · 官网三系 + 合规清洗）
+
+> 均在 wujie 单仓 `website/`，用 `_server-yuntech` 的 node_modules 做 junction 跑 `tsc --noEmit` 真校验（全程 0 错）。
+
+- **key 脱敏提交** `mobile-auto0423@04bc413`：`config/chat.yaml` + 2 个 tiktok 源里已吊销的 GLM key → `${GLM_API_KEY}`（不含你在改的 chat_messages.yaml）。
+- **三系 taxonomy** `wujie@a9bc871`：`brand.ts` 7 产品（新增 **通传 VoxX**）+ `category` + `CATEGORIES`(智连/幻境/通达) + `productsInCategory` + `PRODUCT_ORDER` 按系重排；`productMeta/layout(schema)/routing` 的所有 `Record<ProductKey>` 补 voxx；`ProductMatrix` 改按三系分组陈列（底座横幅）；概述文案六线→三系。
+- **content 合规清洗** `wujie@f8854d9` + `27f33ea`：
+  - **通译/通传拆分**：`translate` 卡重挂 **通译 LingoX = 聊天翻译 SCRM**；新增 `interpret` 卡 = **通传 VoxX 语音同传**；定价均置「按需报价/Quote」占位（数字待你回填）。
+  - **USDT 双层（dual）**：合规主站 hero/trustline/pricingSection/SEO schema 去掉「USDT 结算」头条卖点、计价单位改 USD；USDT 作为结算方式**保留**在下单步骤/FAQ/联系页（真实收款不变）。
+  - 违禁词（无审查/无禁区/uncensored）全站复扫 = 0。
+- **状态**：`tsc --noEmit` 全绿；voxx 图标暂复用 lingox（待 `build-boundless-marks` 生成 voxx.png）。
+
+**待你回填 / 决定**：① LingoX/VoxX 的实际价格数字；② voxx 专属图标；③ 部署前在 `website/` 跑一次 `npm run build` 自验；④ **wujie 从此为唯一真源**——请从 `wujie/website` 部署，旧 `C:\web117`(5 产品)/`_server-yuntech` 归档停用。
+
+**Phase 3 剩余（待续）**：`platform/` 共享层抽取（身份·资产总线 / 授权计量 / 合规出口 / KPI）；官网 Navbar 三系下拉；官网↔SKU↔license↔交付 业务闭环打通。
+
+---
+
+## 11. Phase 4 实施记录 + 实施中优化（2026-07-15）
+
+> 按审计 §5 P0/P1 开工；实施中边做边深挖，发现更优解就改（下附）。均已提交、`tools/repo_doctor.ps1` 复验。
+
+**已落地（提交）**
+- **Navbar 三系下拉** `dfa2a5e`（桌面+移动，tsc 0 错）。
+- **platform 契约层** `c7803fe`：`platform/README.md` 定义五契约 + 当前实现所在 + 迁移顺序。
+- **P0 仓库减重** `b9a17c6`：`git rm --cached` 掉 **陈旧重复站 `engines/chengjie/website`(232)** + **Playwright 浏览器缓存 `avatarhub/demo_record/.pwprofile`(237)** = 少 **469** 跟踪文件（磁盘不删、可回退），补 `.gitignore`。
+- **tools 全域门禁** `b2233d1`：`tools/repo_doctor.ps1`（把审计 §4 变成可复跑门禁，输出 FAIL/WARN/GREEN）+ `tools/prepush_cleanup.ps1`（LFS+历史清理，push 前一次做）+ `.gitattributes`（字体/媒体 LFS 策略）。
+- **P1 products 范式** `5643ce4`：`products/tongyi/product.yaml`（SKU/承载引擎/裁剪 overlay/官网落地页/合规可见性/交付计量 单一真相），作为其余 6 产品模板。
+- **门禁结果**：`repo_doctor` = **FAIL 0 / WARN 2**（字体>10MB 待 LFS、platform 待抽实现），tracked 4566→4101，worktree 干净。
+
+**实施中的 5 处优化（在原方案上再优化）**
+1. **减重只动"无歧义垃圾"**：原审计建议连 `clothes/`、字体删除一起做；深想后**只 untrack 重复站+浏览器缓存**，`clothes` 可能是真需素材、字体应走 LFS 而非删——避免误伤。
+2. **LFS+历史清理挪到"push 前一次做"**：中途 `git lfs migrate`/`filter-repo` 会反复重写历史且磁盘收益要 push+prune 后才兑现；故封装成 `prepush_cleanup.ps1`，只在接新 remote 前跑一次。
+3. **审计清单→可执行门禁**：`repo_doctor.ps1` 把静态检查变成一条命令的红/黄/绿闸门，并把 WARN 定义为"完善度待办清单"，比一纸文档更能持续用。
+4. **products = 清单模式（引用而非复制）**：`product.yaml` 只登记"用哪个引擎+哪个 overlay+哪个落地页"，不拷贝引擎代码；实施中**发现并修正**一处坏引用（overlay 校验脚本原在 gitignore 的 scratch 未迁入，已在清单标注待提升）。
+5. **platform 坚持"契约先行、不搬代码"**：再次确认——跨 env/跨机的 Python 抽取在本地无法验证、风险高；platform 落地必须**在装有各引擎 conda env 的机器上、借该引擎自带测试**逐个迁移（compliance→brand→observability→licensing→identity）。
+
+**下一阶段（Phase 5）实施与改进**
+- **P0 platform/compliance 抽取**（须在装 avatarhub env 的机器上）：把 `provenance/watermark` 收敛为 `platform/compliance`，avatarhub 留 1 行 re-export 兼容 → 跑 `doctor.py` 回归 → 绿了再删旧。
+- **P1 products 补齐其余 6 个** `product.yaml`（照 tongyi 模板）+ 回填 LingoX/VoxX 价格数字 + 生成 voxx 图标。
+- **装机面提层**：`deploy/`(docker-compose+cluster_map+provision)、`packaging/`(installer/build/publish) 从 `avatarhub/` 提到全域层（或软链）。
+- **接新 remote 前**：跑 `tools/prepush_cleanup.ps1`（字体转 LFS + 可选 filter-repo 抹历史大对象）→ `git gc` → 建 remote → push；`website/` 部署前 `npm run build` 自验。
+- **闭环收口**：`licensing`+`identity` 抽取通了，"官网↔SKU↔license↔交付"业务闭环才真正闭合（Phase 5 末目标）。
+
+---
+
+## 12. Phase 5 实施记录 + 实施中优化（2026-07-15）
+
+**已落地（提交 `271b806`；`repo_doctor` = FAIL 0 / WARN 3）**
+- **products 全部补齐**：huanyan/huansheng/huanying/tongchuan/zhituo/zhiliao 六个 `product.yaml`（+tongyi 共 7），每个含 brand_key/承载引擎/引擎服务清单/合规可见性/官网落地页/SKU；`repo_doctor` 新增 **products 清单门禁**（校验必需键 + 引擎目录存在）→ 现 **7/7 全绿**。
+- **compliance 抽取：先验后迁**：在开发机 `facefusion` env **实测 `import provenance` / `import watermark` 均 OK**，据此写 `platform/compliance/MIGRATION.md`（git mv + app_config 挂 sys.path + re-export shim + `doctor.py` 回归 + 回退），**待在装 avatarhub env 的机器上执行**。
+- doctor 现存 3 个 WARN=完善度待办：字体>10MB(留 prepush LFS)、platform 待落实现、3 个 `product.yaml` 价格 TBD（VoxX/LingoX 待老板定）。
+
+**实施中的 5 处再优化**
+1. **重排 Phase 5 次序**：原定"compliance 抽取先行"，深想后——它无 env 不可验证；改为**先做可验证、直接消灭审计告警的 products 补齐**，compliance 转为"实测导入 + 就绪迁移手册"。把不可验证的高风险动作后置，是这轮最主要的优化。
+2. **迁移手册用真实导入测试背书**：不是"假设能抽"，而是在本机 env 跑通 `import provenance/watermark` 才写"移动+shim"方案——手册可信、可直接执行。
+3. **product.yaml 预埋闭环**：清单里 `skus` 的结构就是给 `platform/licensing` 消费的——将来 licensing 直接读 `products/*/product.yaml#skus` 做计量/门控，官网也读同一份定价，**一份清单三处用（官网↔SKU↔license）**，闭环提前接线。
+4. **门禁从"检查"进化为"完善度追踪"**：`repo_doctor` 的 products 校验 + TBD 定价告警，把"哪些产品还没定价/没落实现"变成一条命令可见的 backlog，而非散落脑子里。
+5. **定价不编造**：SKU 用官网**现有真实数字**（58/198/598、18/78/198 等，按 dual 标 USD 单位），只把**确实未定**的 VoxX/LingoX 新品留 `TBD`——doctor 精确点名哪 3 个待你回填。
+
+**下一阶段（Phase 6）实施与改进**
+- **在 env 机执行 `platform/compliance/MIGRATION.md`**：platform 从"契约"变"实现"第一块；绿了按同手册推进 brand→observability→licensing→identity。
+- **licensing 消费 product.yaml**：读 `skus` 生成 SKU 注册表 → 官网定价 + license 门控 + order 三处同源，闭合"官网↔SKU↔license↔交付"。
+- **装机面提层**：`deploy/`(docker-compose+cluster_map+provision)、`packaging/`(installer/build/publish) 从 avatarhub 提到全域层。
+- **回填 + 出图**：VoxX/LingoX 价格数字（doctor 已点名 3 处 TBD）、voxx 专属图标。
+- **接 remote 前**：`tools/prepush_cleanup.ps1`（字体转 LFS + filter-repo 抹历史大对象 + gc）→ 建 remote → push；`website/` 部署前 `npm run build`。
+
+---
+
+## 13. Phase 6 实施记录 + 实施中优化（2026-07-15 · 在 117 操作）
+
+**已落地（提交 `f7d5670`；`repo_doctor` = FAIL 0 / WARN 2）**
+- **SKU 注册表（闭环基石）**：`tools/build_sku_registry.py` 从 7 个 `product.yaml` 汇总生成 `platform/licensing/sku_registry.json`（**7 产品 / 21 SKU / 5 个 TBD**），在 117 用 `cosytts` env 跑通验证。platform 首次有真实产物 → doctor 的 platform 告警消除。
+- **platform/licensing、deploy、packaging** 三层 README + `deploy/cluster_map.json`（跨机拓扑单一源）落位。
+- **compliance 方案修正**（见下 #1，重大）。
+- doctor 现仅剩 2 个 WARN：字体>10MB（留 prepush LFS）、3 个 product.yaml 价格 TBD。
+
+**实施中的 5 处再优化（本轮深挖收获最大）**
+1. **compliance 抽取被推翻重设（最重要）**：读 `provenance.py` 发现它 `import app_config` 且把 **Ed25519 私钥 / C2PA 证书 / 审计库** 全绑定 avatarhub 本机目录（都是 `.gitignore` 忽略的本机私钥）。**移 .py 根本不能让别的引擎复用**（它们没这些私钥）。→ 正确架构：合规**留在 avatarhub（私钥持有方），以 HTTP 服务契约对外**；`platform/compliance` = 契约 + 瘦客户端，**不是移代码**。原"移文件+shim"手册作废、已改写。
+2. **避开 stdlib `platform` 名冲突**：把仓根加 `sys.path` 再 `import platform.compliance` 会**遮蔽标准库 `platform`**（全线在用）。已禁用该法。
+3. **SKU builder 放 tools/、产物落 platform/**：platform 自身不 import products，守住"platform 不反向依赖"。
+4. **deploy/packaging = 索引而非搬迁**：引擎部署脚本有相对路径假设，搬走会坏；deploy/ 只做全域索引 + 收敛跨机拓扑单一源。
+5. **先验证后动手**：117 实测 3 env 均可 `import provenance/watermark`、PyYAML 6.0.3 在位、SKU builder 真跑出 7/21。
+
+**下一阶段（Phase 7）**
+- **compliance 契约固化**（env 机）：核对 avatarhub 真实合规端点 → `platform/compliance/CONTRACT.md` + stdlib 瘦 `client.py`。
+- **licensing 接线**：`website/lib/pricing.ts` + order + license 改为消费 `sku_registry.json`，真正闭合"官网↔SKU↔license↔交付"。
+- 回填 VoxX/LingoX 的 5 个 TBD 价格 + voxx 图标；`deploy/up.ps1` 一处起停全栈；接 remote 前 `prepush_cleanup.ps1`。

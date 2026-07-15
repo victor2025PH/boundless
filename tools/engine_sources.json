@@ -11,10 +11,10 @@
     "avatarhub": {
       "title": "换脸/换声/数字人/同传 (模仿音色 / mfys)",
       "upstream_git": "https://github.com/victor2025PH/mfys20260618.git",
-      "branch": "main",
+      "branch": "2026-06-20-3q30",
       "local_mirror": "D:/faceX/mfys",
-      "last_synced": { "kind": "migration-snapshot", "ref": "20260715", "note": "迁移时取『开发机较新副本』净码；比 GitHub main(6-24) 还新" },
-      "dev_note": "换脸/换声在『另一台开发机』持续开发。要 wujie 能拉：开发机需先 git push 到 upstream_git；否则用 -From 指向开发机共享目录/SSH。",
+      "last_synced": { "kind": "git-push", "ref": "bbf8ce6", "date": "20260716", "note": "开发机推送分支 2026-06-20-3q30(bbf8ce6)后，净码同步入 wujie；126 文件(7新/119改)，demo_record 按上游改为忽略" },
+      "dev_note": "换脸/换声原在『另一台开发机』开发；2026-07-16 已推送并并入 wujie。今后统一在 wujie/engines/avatarhub 开发；开发机旧 模仿音色 目录应封存。分支非 main，是 2026-06-20-3q30。",
       "exclude_dirs": ["__pycache__", ".git", ".venv", "demo_record", "archive", "publish", "ui_snapshots", "data", "models", "checkpoints", "logs", "clothes", "bg_images", ".pwprofile"],
       "exclude_files": ["*.pyc", "*.png", "*.jpg", "*.jpeg", "*.wav", "*.mp3", "*.mp4", "*.mov", "*.pth", "*.onnx", "*.safetensors", "*.pt", "*.bin", "*.gguf", "*.db", "*.db-shm", "*.db-wal", "config.yaml", "config.local.yaml", "*.key", "*.pem", "*.keystore", "*.jks", "llm_backends.json", "secrets.*.bat", "_devs.json"]
     },

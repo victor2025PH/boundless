@@ -513,6 +513,170 @@ def _probe_one(name_sub: str, dur: float = 0.4) -> dict:
     return {"ok": True, "dev": target.name, "rms": round(rms, 5), "peak": round(peak, 5)}
 
 
+# ── P-Bed 哑播保险·垫播引擎（avatar_hub 编排,本进程执行播放+探测）───────────
+# 直播馈线(CABLE)长时间无声=「哑播」事故(2026-07-15 实录 237s)。hub 检出静音后 POST /bed/start，
+# 本引擎向该输出设备循环播放柔和垫乐(观众听到"技术调整中"氛围而非死寂)。
+# duck-and-listen：每播 cycle_s 停 gap_s，在静默窗内探真实电平——垫乐是我们自己放的，
+# 非 duck 窗的探针读数全是自己的声音，只有 duck 窗里听到声才是"真声恢复"→ 自动停垫播。
+_BED_WAV = os.environ.get("MONITOR_BED_WAV", "").strip()   # 自备垫乐 wav(可选);缺省合成柔和 pad
+_bed_lock = threading.Lock()
+_bed_state = {"active": False, "gen": 0, "dev": "", "since": 0.0, "cycles": 0,
+              "real_sound": False, "last_probe": None, "stop_reason": ""}
+_bed_mat_cache: dict = {"sr": 0, "buf": None}
+
+
+def _bed_material(sr: int) -> np.ndarray:
+    """垫乐素材(float32 单声道,循环无缝)。优先 MONITOR_BED_WAV；缺省合成 12s 温暖 pad：
+    220/275/330/440Hz(A 大三和弦近似)全部整周期于 12s → 循环零接缝；呼吸包络周期=循环长
+    同样无缝。响度归一 -26dBFS(观众可闻但不刺耳,远高于静音判定阈值)。"""
+    if _bed_mat_cache["sr"] == sr and _bed_mat_cache["buf"] is not None:
+        return _bed_mat_cache["buf"]
+    buf = None
+    if _BED_WAV and os.path.exists(_BED_WAV):
+        try:
+            import wave
+            with wave.open(_BED_WAV, "rb") as w:
+                raw = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(np.float32) / 32768.0
+                ch, src_sr = w.getnchannels(), w.getframerate()
+            if ch > 1:
+                raw = raw.reshape(-1, ch).mean(axis=1)
+            if src_sr != sr:
+                x_old = np.arange(raw.size) / src_sr
+                x_new = np.arange(int(raw.size * sr / src_sr)) / sr
+                raw = np.interp(x_new, x_old, raw).astype(np.float32)
+            buf = raw
+        except Exception as e:
+            logger.warning(f"[bed] 自备垫乐读取失败({e})，回退合成 pad")
+    if buf is None or buf.size < sr:
+        t = np.arange(int(sr * 12), dtype=np.float64) / sr
+        x = np.zeros_like(t)
+        for f, a, ph in ((220.0, .45, 0.0), (275.0, .30, 1.3), (330.0, .25, 2.1), (440.0, .12, 0.7)):
+            x += a * np.sin(2 * np.pi * f * t + ph)
+        x *= 0.55 + 0.45 * (0.5 - 0.5 * np.cos(2 * np.pi * t / 12.0))   # 呼吸包络(与循环同周期=无缝)
+        buf = x.astype(np.float32)
+    rms = float(np.sqrt(np.mean(buf * buf)) + 1e-12)
+    buf = buf * (10.0 ** (-26.0 / 20.0) / rms)
+    np.clip(buf, -0.9, 0.9, out=buf)
+    _bed_mat_cache.update(sr=sr, buf=buf)
+    return buf
+
+
+def _bed_player(gen: int, dev_sub: str, on_rms: float, cycle_s: float, gap_s: float, max_min: float):
+    """垫播线程：循环 [播 cycle_s → 静默 gap_s 内探真声]。真声/超时上限/被叫停 → 退出。"""
+    import soundcard as sc
+    mat = _bed_material(SR)
+    pos = 0
+    deadline = time.time() + max_min * 60.0
+    logger.info(f"[bed] 垫播启动 → '{dev_sub}' (cycle={cycle_s:.0f}s gap={gap_s:.1f}s 上限{max_min:.0f}min)")
+    try:
+        while not _stop.is_set() and _bed_state["gen"] == gen and _bed_state["active"]:
+            if time.time() >= deadline:
+                _bed_state.update(active=False, stop_reason="max_minutes")
+                logger.warning(f"[bed] 垫播达上限 {max_min:.0f}min 仍无真声，自动停止(请人工处理)")
+                break
+            spk = None
+            nlow = (dev_sub or "").strip().lower()
+            for s in sc.all_speakers():
+                if nlow and nlow in s.name.lower():
+                    spk = s
+                    break
+            if spk is None:
+                _bed_state.update(active=False, stop_reason="device_not_found")
+                logger.warning(f"[bed] 找不到输出设备 '{dev_sub}'，垫播停止")
+                break
+            try:
+                with spk.player(samplerate=SR, channels=1, blocksize=FRAME) as pl:
+                    t_end = time.time() + cycle_s
+                    while (time.time() < t_end and not _stop.is_set()
+                           and _bed_state["gen"] == gen and _bed_state["active"]):
+                        n = FRAME * 5                                   # 100ms/块
+                        if pos + n <= mat.size:
+                            chunk = mat[pos:pos + n]
+                        else:
+                            chunk = np.concatenate([mat[pos:], mat[:(pos + n) % mat.size]])
+                        pos = (pos + n) % mat.size
+                        pl.play(chunk.reshape(-1, 1))
+            except Exception as e:
+                logger.warning(f"[bed] 播放异常({e})，2s 后重试")
+                time.sleep(2.0)
+                continue
+            if not (_bed_state["gen"] == gen and _bed_state["active"]):
+                break
+            time.sleep(1.0)                                             # 排空设备/驱动缓冲再听(尾音必须死透)
+            probe = {"ok": False}
+            if _scan_lock.acquire(timeout=1.0):                         # duck 窗:静默中探真实电平
+                try:
+                    probe = _probe_one(dev_sub, dur=max(0.4, min(1.2, gap_s - 0.8)))
+                except Exception as e:
+                    probe = {"ok": False, "detail": str(e)[:60]}
+                finally:
+                    _scan_lock.release()
+            _bed_state.update(cycles=_bed_state["cycles"] + 1,
+                              last_probe={k: probe.get(k) for k in ("ok", "rms", "peak")})
+            # 停播判定要"确认"而非"一瞬"(2026-07-15 23:17~00:01 实测缺陷)：垫乐自己的播放尾音/
+            # 偶发杂音在 duck 窗测得 rms 0.011~0.017(仅 1.4~2.2×阈值)，一瞬即判"恢复"→ 停垫
+            # → 65s 后又静音重启 → 45 分钟打摆 20 轮=告警风暴。真人配音经 CABLE 的 rms 在
+            # 0.05+ 量级。改为：单窗强信号(≥4×阈值)立停；弱信号(1~4×)需连续 2 个 duck 窗
+            # 都有声才算真恢复——尾音/瞬时杂音撑不过间隔 20s 的两窗。
+            r = float(probe.get("rms") or 0.0) if probe.get("ok") else 0.0
+            if r > on_rms * 4.0:
+                _bed_state.update(active=False, real_sound=True, stop_reason="real_sound")
+                logger.info(f"[bed] duck 窗测到强真声(rms={r:.4f}≥4×阈值)，垫播自动停止")
+                break
+            if r > on_rms:
+                _snd_streak = _bed_state.get("_snd_streak", 0) + 1
+                _bed_state["_snd_streak"] = _snd_streak
+                if _snd_streak >= 2:
+                    _bed_state.update(active=False, real_sound=True, stop_reason="real_sound")
+                    logger.info(f"[bed] 连续 {_snd_streak} 个 duck 窗有声(rms={r:.4f})，垫播自动停止")
+                    break
+                logger.info(f"[bed] duck 窗弱声(rms={r:.4f})，待下窗确认(防尾音/瞬时杂音误停)")
+            else:
+                _bed_state["_snd_streak"] = 0
+            time.sleep(max(0.0, gap_s - 2.2))
+    finally:
+        if _bed_state["gen"] == gen and _bed_state["active"]:
+            _bed_state["active"] = False
+        logger.info(f"[bed] 垫播线程退出({_bed_state.get('stop_reason') or 'stopped'}) "
+                    f"cycles={_bed_state['cycles']}")
+
+
+@app.post("/bed/start")
+async def bed_start(dev: str = "", on_rms: float = 0.008, cycle_s: float = 20.0,
+                    gap_s: float = 2.5, max_min: float = 30.0):
+    """启动哑播垫播(幂等:已在播同设备则原样返回)。dev=输出设备名子串(如 'CABLE Input')。"""
+    if not dev.strip():
+        return JSONResponse({"ok": False, "detail": "缺少 dev"}, 400)
+    with _bed_lock:
+        if _bed_state["active"] and _bed_state["dev"] == dev:
+            return {"ok": True, "already": True, **{k: _bed_state[k] for k in
+                    ("active", "dev", "since", "cycles", "real_sound")}}
+        _bed_state.update(active=True, gen=_bed_state["gen"] + 1, dev=dev, since=time.time(),
+                          cycles=0, real_sound=False, last_probe=None, stop_reason="",
+                          _snd_streak=0)
+        threading.Thread(target=_bed_player,
+                         args=(_bed_state["gen"], dev, float(on_rms),
+                               max(6.0, float(cycle_s)), max(1.8, float(gap_s)),
+                               max(1.0, float(max_min))),
+                         daemon=True).start()
+    return {"ok": True, "active": True, "dev": dev}
+
+
+@app.post("/bed/stop")
+async def bed_stop(reason: str = "manual"):
+    with _bed_lock:
+        was = _bed_state["active"]
+        _bed_state.update(active=False, gen=_bed_state["gen"] + 1,
+                          stop_reason=_bed_state["stop_reason"] or reason)
+    return {"ok": True, "was_active": was}
+
+
+@app.get("/bed/status")
+async def bed_status():
+    return {"ok": True, **{k: _bed_state[k] for k in
+            ("active", "dev", "since", "cycles", "real_sound", "last_probe", "stop_reason")}}
+
+
 def _scan_devices(dur: float = 0.35) -> list[dict]:
     """逐个输出设备做短环回，测峰值/电平 → 按响度排序(找"对方声在哪个设备")。"""
     import soundcard as sc

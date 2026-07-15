@@ -4231,11 +4231,66 @@ _CS_GRACE_SEC  = float(os.environ.get("HUB_CABLE_SILENCE_GRACE", "45") or 45)   
 _CS_SILENT_SEC = float(os.environ.get("HUB_CABLE_SILENCE_SEC", "60") or 60)       # 曾有声后中断：连续静音≥Ns → warn 告警
 _CS_CRIT_EXTRA = float(os.environ.get("HUB_CABLE_SILENCE_CRIT_EXTRA", "120") or 120)  # 静音再拖≥Ns 仍没声 → 升级 critical + @人(更可能真出事/人不在)
 _CS_RMS_ON     = float(os.environ.get("HUB_CABLE_SILENCE_RMS", "0.008") or 0.008) # 有声阈值(与前端 cableActiveTs 一致)
+# P-Bed 哑播保险：静音越过 warn 阈值 → 让 monitor_relay 向 CABLE 循环垫乐(观众听到"调整中"氛围
+# 而非死寂)，恢复自动停。垫乐是自己放的 → 恢复判定只信 relay duck 窗(垫播间隙)的探针，
+# 本 tick 在垫播期间不再用自己的探针下"有声"结论(否则被自家垫乐骗过,告警秒清→静音永不升级)。
+_CS_BED_ON      = os.environ.get("HUB_SILENCE_BED", "1") == "1"
+_CS_BED_MAX_MIN = float(os.environ.get("HUB_SILENCE_BED_MAX_MIN", "30") or 30)   # 单轮垫播上限(到限停一轮)
+# 同一次静音事件的垫播续期轮数上限(2026-07-16 00:39 实测:单轮到限后 hub 立即无限续期,
+# 30min 上限形同虚设且"已死寂"提示与事实矛盾)。默认 4 轮(2h)后不再续:此时 critical 早已
+# @过人,长时间无人处理说明值守失效,持续放"调整中"音乐反而误导观众直播还会恢复。
+_CS_BED_MAX_ROUNDS = int(os.environ.get("HUB_SILENCE_BED_MAX_ROUNDS", "4") or 4)
+_CS_BED         = {"active": False, "since": 0.0, "rounds": 0}
 _CS_SEEN_UP        = False   # 本场是否曾测到直播真声
 _CS_LAST_SOUND_TS  = 0.0     # 最近一次测到有声时刻
 _CS_STREAM_SINCE   = 0.0     # 本场开播起点(服务端视角)
 _CS_ALERTED        = False   # 本场是否已发 warn 静音告警(键 cable_silence，配 clear 恢复)
 _CS_ALERTED_CRIT   = False   # 本场是否已升级 critical 告警(键 cable_silence_long·@人，配 clear)
+
+
+def _bed_call(path: str, **params) -> dict:
+    """monitor_relay 垫播控制(同步,调用方套 to_thread)。失败返回 {}——垫播是增强,绝不拖垮守护。"""
+    base = os.environ.get("MONITOR_URL", "http://127.0.0.1:7878").rstrip("/")
+    try:
+        if path == "/bed/status":
+            return requests.get(base + path, timeout=2.5).json()
+        return requests.post(base + path, params=params, timeout=2.5).json()
+    except Exception:
+        return {}
+
+
+async def _cable_bed_start(dev: str, silent: float) -> None:
+    """启动垫播(幂等)。失败静默——告警链路照旧,只是没兜底垫乐。
+    同一次静音事件最多续 _CS_BED_MAX_ROUNDS 轮(轮计数在真声恢复/停播时清零)：
+    到轮数上限说明值守彻底失效,继续放"调整中"垫乐反而误导观众,让直播归于安静。"""
+    if _CS_BED["rounds"] >= _CS_BED_MAX_ROUNDS:
+        return
+    r = await asyncio.to_thread(_bed_call, "/bed/start", dev=dev, on_rms=_CS_RMS_ON,
+                                max_min=_CS_BED_MAX_MIN)
+    if r.get("ok"):
+        _CS_BED.update(active=True, since=time.time(), rounds=_CS_BED["rounds"] + 1)
+        _round_note = (f"·第 {_CS_BED['rounds']}/{_CS_BED_MAX_ROUNDS} 轮" if _CS_BED["rounds"] > 1 else "")
+        _logger.warning(f"[CableSilence] 哑播保险生效{_round_note}：静音 {int(silent)}s → 已向「{dev}」垫播兜底"
+                        f"(真声恢复自动停,单轮上限 {int(_CS_BED_MAX_MIN)}min)")
+        if _CS_BED["rounds"] >= _CS_BED_MAX_ROUNDS:
+            _logger.warning(f"[CableSilence] 垫播已达 {_CS_BED_MAX_ROUNDS} 轮上限,本轮结束后不再续期"
+                            "(值守长时间未处理,持续垫乐会误导观众)")
+        try:
+            _stream_health_event("streaming", "streaming", {"rms": 0.0}, silent,
+                                 kind="alert", action=f"哑播保险·垫播启动(静音{int(silent)}s)")
+        except Exception:
+            pass
+
+
+async def _cable_bed_stop(reason: str, reset_rounds: bool = True) -> None:
+    """停垫播。reset_rounds=True(真声恢复/停播/通话接管)同时清续期轮计数——
+    下一次静音是新事件,重新享有完整轮数;续期场景(relay 单轮到限)不清。"""
+    if _CS_BED["active"]:
+        await asyncio.to_thread(_bed_call, "/bed/stop", reason=reason)
+        _CS_BED.update(active=False, since=0.0)
+        _logger.info(f"[CableSilence] 垫播已停止({reason})")
+    if reset_rounds:
+        _CS_BED["rounds"] = 0
 
 
 def _cable_probe_level() -> dict:
@@ -4284,8 +4339,10 @@ def _interp_call_active() -> bool:
         return _CS_INTERP_CACHE["call"]
     call = False
     try:
+        # timeout 1.2→3.5s(2026-07-16 实测)：interp 正在配音/GER 时 /status 常超 1.2s，
+        # 超时=误判"没在通话" → 静音看门狗该压不压(垫播不被通话接管、告警在通话中误报)。
         j = requests.get(os.environ.get("INTERP_URL", "http://127.0.0.1:7900") + "/status",
-                         timeout=1.2).json()
+                         timeout=3.5).json()
         call = bool(j.get("running")) and not j.get("live_mode")
     except Exception:
         pass
@@ -4293,36 +4350,106 @@ def _interp_call_active() -> bool:
     return call
 
 
+def _interp_silence_attribution() -> str:
+    """P-Silence 升级·静音告警归因：拉同传 /status 把「哑播」翻译成人话根因。
+    2026-07-15 事故复盘：声纹锁把主播语音全拦 237s，告警却指向「查麦/查OBS」——拦截计数
+    (drops.spk)一直在系统里，只是从没人 join 到告警上。此处按证据强度给一条根因线索：
+    声纹拦截 > 无有效识别 > 无音色 > 链路正常但馈线无声(设备漂移)。拿不到数据返回 ""
+    (保持通用文案，不误导)。"""
+    try:
+        j = requests.get(os.environ.get("INTERP_URL", "http://127.0.0.1:7900") + "/status",
+                         timeout=3.5).json()
+    except Exception:
+        return ""
+    if not j.get("running"):
+        return ""
+    vl = j.get("voicelock") or {}
+    drops = j.get("drops") or {}
+    spk = int(drops.get("spk") or 0)
+    fins = int(j.get("fin_a") or 0) + int((j.get("stats") or {}).get("a") or 0)
+    if vl.get("shadow"):
+        return ("｜根因线索：同传声纹锁处于影子模式(底座疑似失真,已临时放行)。"
+                "若仍无声,请检查配音输出设备与音量,并尽快重置声纹重新注册。")
+    if spk >= 3 and spk >= max(3, fins):
+        return (f"｜根因线索：同传声纹锁正在拦截说话人(本场已拦 {spk} 句,最近相似度 "
+                f"{vl.get('last_sim', '—')}/门限 {vl.get('thr', '—')})。若被拦的是主播本人："
+                "同传页点「重置声纹」后正常说 3 句重新注册,或临时调低声纹门槛。")
+    if fins == 0 and spk == 0:
+        return (f"｜根因线索：同传运行中但整场无有效识别(前置门控拦 {int(drops.get('gate') or 0)} 句)"
+                "——请检查「我的麦」电平/设备选择是否正确。")
+    if j.get("voice_ok") is False:
+        return ("｜根因线索：当前角色无音色样本,配音整场被跳过(只出字幕不出声)。"
+                "请为角色配音色或启用兜底音色。")
+    if fins > 0:
+        return ("｜根因线索：同传识别/翻译正常但馈线无声——多为配音输出设备漂移或系统音量问题,"
+                "可在同传页跑一次「试音」端到端定位断点。")
+    return ""
+
+
+_CS_BED_ADOPTED = False
+
+
 async def _cable_silence_tick() -> None:
     """无人值守·直播静音告警(分级：warn→critical@人)。仅 _SH_ALERTS_ON 时被调；异常吞掉，绝不弄崩守护。"""
-    global _CS_SEEN_UP, _CS_LAST_SOUND_TS, _CS_STREAM_SINCE, _CS_ALERTED, _CS_ALERTED_CRIT
+    global _CS_SEEN_UP, _CS_LAST_SOUND_TS, _CS_STREAM_SINCE, _CS_ALERTED, _CS_ALERTED_CRIT, _CS_BED_ADOPTED
     now = time.time()
+    if not _CS_BED_ADOPTED:                                   # hub 重启后认领 relay 上遗留的垫播会话:
+        _CS_BED_ADOPTED = True                                # 否则探针会把自家垫乐当"声音已恢复"(一次性)
+        st0 = await asyncio.to_thread(_bed_call, "/bed/status")
+        if st0.get("active"):
+            _CS_BED.update(active=True, since=float(st0.get("since") or now))
+            _logger.info("[CableSilence] 已接管上个进程遗留的垫播会话(继续等真声恢复)")
     streaming = bool(_realtime_proc and _realtime_proc.poll() is None)
     if not streaming:                                         # 停播沿：清本场态；曾告警则清一次(恢复)
+        await _cable_bed_stop("已停播")
         await _cable_silence_clear("已停播，静音告警解除")
         _CS_SEEN_UP = False; _CS_LAST_SOUND_TS = 0.0; _CS_STREAM_SINCE = 0.0
         return
     if await asyncio.to_thread(_interp_call_active):          # 同传通话中：句间静音正常,本看门狗不适用
+        await _cable_bed_stop("同传通话接管")
         await _cable_silence_clear("同传通话进行中(句间静音属正常)，直播静音告警不适用")
         _CS_LAST_SOUND_TS = now                               # 顺延计时,通话结束后不因旧静音立刻误报
         return
     if _CS_STREAM_SINCE == 0.0:
         _CS_STREAM_SINCE = now
-    c = await asyncio.to_thread(_cable_probe_level)
-    if not c.get("ok"):
-        return                                               # 探针不可信 → 不下「没声」结论(不误报)
-    if (c.get("rms") or 0.0) > _CS_RMS_ON:                    # 有声：记时；若之前告警过 → 恢复清除(两键)
-        _CS_SEEN_UP = True; _CS_LAST_SOUND_TS = now
-        await _cable_silence_clear("直播声音已恢复")
-        return
+    if _CS_BED["active"]:
+        # 垫播期间：本探针听到的是自家垫乐,不可用于恢复判定——只信 relay duck 窗结论。
+        st = await asyncio.to_thread(_bed_call, "/bed/status")
+        if st.get("real_sound"):                              # duck 窗听到真声 → 停垫播,按恢复处理
+            await _cable_bed_stop("真声恢复")                  # reset_rounds=True:新静音=新事件
+            _CS_SEEN_UP = True; _CS_LAST_SOUND_TS = now
+            await _cable_silence_clear("直播声音已恢复(垫播兜底自动退出)")
+            return
+        if not st or not st.get("active"):                    # relay 自停(超上限/设备丢失)或不可达(垫乐必然已停)
+            _CS_BED.update(active=False, since=0.0)           # 轮计数保留 → 续期受 MAX_ROUNDS 闸控
+            if st.get("stop_reason") == "max_minutes":
+                if _CS_BED["rounds"] >= _CS_BED_MAX_ROUNDS:
+                    _logger.warning(f"[CableSilence] 垫播单轮到限且已续满 {_CS_BED_MAX_ROUNDS} 轮——"
+                                    "不再续期,直播将保持安静直到人工处理")
+                else:
+                    _logger.warning("[CableSilence] 垫播单轮到限自动停止(下轮探测仍静音将续期)")
+        # 静音计时继续走(LAST_SOUND 不更新)→ critical 升级照常评估
+    else:
+        c = await asyncio.to_thread(_cable_probe_level)
+        if not c.get("ok"):
+            return                                           # 探针不可信 → 不下「没声」结论(不误报)
+        if (c.get("rms") or 0.0) > _CS_RMS_ON:                # 有声：记时；若之前告警过 → 恢复清除(两键)
+            _CS_SEEN_UP = True; _CS_LAST_SOUND_TS = now
+            await _cable_silence_clear("直播声音已恢复")
+            return
     since = _CS_LAST_SOUND_TS or _CS_STREAM_SINCE
     silent = now - since
     warn_thr = _CS_SILENT_SEC if _CS_SEEN_UP else (_CS_SILENT_SEC + _CS_GRACE_SEC)   # 从未出声更宽容(叠加开场宽限)
-    dev = c.get("dev") or _broadcast_dev_token() or "CABLE"
-    # 一级 warn：越过 warn 阈值先报一次
+    dev = _broadcast_dev_token() or "CABLE"
+    # 哑播保险：越过 warn 阈值即垫播兜底(与告警并行;曾出过声才垫——从未出声多半是调试期,不抢戏)
+    if _CS_BED_ON and _CS_SEEN_UP and not _CS_BED["active"] and silent >= warn_thr:
+        await _cable_bed_start(dev, silent)
+    # 一级 warn：越过 warn 阈值先报一次(附归因线索:把「哑播」直接翻译成人话根因)
     if silent >= warn_thr and not _CS_ALERTED:
-        detail = (f"直播馈线（{dev}）已连续 {int(silent)}s 检测不到声音，观众可能听不到。"
-                  f"请检查麦克风是否被静音/拔线、变声输出是否指向 CABLE；若变声服务掉线且已开服务端自愈，会自动拉起。")
+        attr = await asyncio.to_thread(_interp_silence_attribution)
+        bed_note = "已自动启动垫播兜底(观众听到轻音乐而非死寂)。" if _CS_BED["active"] else ""
+        detail = (f"直播馈线（{dev}）已连续 {int(silent)}s 检测不到声音，观众可能听不到。{bed_note}"
+                  f"请检查麦克风是否被静音/拔线、变声输出是否指向 CABLE；若变声服务掉线且已开服务端自愈，会自动拉起。{attr}")
         try:
             import alerts as _al
             await asyncio.to_thread(_al.raise_alert, "cable_silence", "直播疑似无声", detail, "error", "stream")
@@ -4337,8 +4464,16 @@ async def _cable_silence_tick() -> None:
         _logger.warning(f"[CableSilence] 无人值守·直播静音≥{int(silent)}s（{dev}）→已告警(warn)")
     # 二级 critical + @人：再拖 _CS_CRIT_EXTRA 秒仍没声——更可能真出事/人不在
     if silent >= (warn_thr + _CS_CRIT_EXTRA) and not _CS_ALERTED_CRIT:
-        cdetail = (f"直播馈线（{dev}）已连续 {int(silent)}s 无声且未恢复，直播很可能一直在「哑播」。"
-                   f"请立刻检查麦克风/变声/OBS 音频源，尽快恢复直播声音。")
+        # P-Bed v2(2026-07-15 23:10 实测缺口)："从未出声不垫播"防的是调试期抢戏，但死寂拖到
+        # critical 级(3min+)已不是调试——观众端垫乐比继续死寂强，critical 也已在 @人。
+        # (短配音会漏检:探针 20s 才采 0.4s,几句 1~3s 的话可能全落在采样间隙 → SEEN_UP 恒 False)
+        if _CS_BED_ON and not _CS_BED["active"]:
+            await _cable_bed_start(dev, silent)
+        attr = await asyncio.to_thread(_interp_silence_attribution)
+        bed_note = (f"垫播兜底运行中(还剩约 {max(0, int(_CS_BED_MAX_MIN - (now - _CS_BED['since']) / 60))}min 自动停)。"
+                    if _CS_BED["active"] else "")
+        cdetail = (f"直播馈线（{dev}）已连续 {int(silent)}s 无声且未恢复，直播很可能一直在「哑播」。{bed_note}"
+                   f"请立刻检查麦克风/变声/OBS 音频源，尽快恢复直播声音。{attr}")
         try:
             import alerts as _al
             await asyncio.to_thread(_al.raise_alert, "cable_silence_long",
@@ -22496,7 +22631,10 @@ def _heal_config_snapshot() -> dict:
                 "rvc_heal": {"grace": _AH_RVC_GRACE, "cooldown": _AH_RVC_COOLDOWN,
                              "max": _AH_RVC_MAX, "count": _AH_RVC_COUNT},         # 受 autoheal 控
                 "silence": {"warn_sec": _CS_SILENT_SEC, "never_grace": _CS_GRACE_SEC,
-                            "crit_extra": _CS_CRIT_EXTRA, "rms_on": _CS_RMS_ON}},  # 受 alerts 控
+                            "crit_extra": _CS_CRIT_EXTRA, "rms_on": _CS_RMS_ON,
+                            # P-Bed 哑播保险(垫播兜底)状态
+                            "bed_on": _CS_BED_ON, "bed_active": _CS_BED["active"],
+                            "bed_max_min": _CS_BED_MAX_MIN}},  # 受 alerts 控
             "channels": ch}
 
 @app.get("/api/heal/config")
@@ -23796,6 +23934,35 @@ async def api_device_checkup(quick: int = 0, mic_secs: float = 3.0, src: str = "
                 cb_lvl = "warn"
             cb_adv = cb_adv or "开播中但 CABLE 没声：确认变声输出指向 CABLE Input(说句话再测)"
     items.append(_checkup_item("cable", "虚拟声卡(CABLE)", cb_pts, cb_max, cb_lvl, cb_det, cb_adv))
+
+    # ⑤ 声纹锁(10)：2026-07-15 哑播事故的根因(底座失真拦光主播语音)恰是体检盲区——补上。
+    #    影子模式=bad(底座已失真在降级放行)；底座过老/换麦=warn；未注册/同传未跑=不计分(新用户自动注册属正常)。
+    try:
+        # timeout 1.5→4s：interp 配音中 /status 常超 1.5s，超时会把"已注册"误报成"未注册"
+        _ij = (await http_pool.get(os.environ.get("INTERP_URL", "http://127.0.0.1:7900") + "/status",
+                                   timeout=4.0)).json()
+        _vl = _ij.get("voicelock") or {}
+        if not _vl.get("enabled") or not _vl.get("enrolled"):
+            items.append(_checkup_item("voicelock", "声纹锁", 0, 0, "unknown",
+                                       "未注册(开口说 3 句自动注册)或未启用", "", False))
+        elif _vl.get("shadow"):
+            items.append(_checkup_item("voicelock", "声纹锁", 0, 10, "bad",
+                                       f"影子模式运行中：底座疑似失真已临时放行(影子放行 {_vl.get('shadow_passes', 0)} 句)",
+                                       "同传页点「重置声纹」后正常说 3 句重新注册"))
+        else:
+            _age_h = ((time.time() - float(_vl.get("base_ts") or 0)) / 3600.0
+                      if _vl.get("base_ts") else None)
+            if _age_h is not None and _age_h >= 72:
+                items.append(_checkup_item("voicelock", "声纹锁", 5, 10, "warn",
+                                           f"底座已 {_age_h / 24:.1f} 天未更新(环境/设备可能已变)",
+                                           "若开口被拦请重置声纹重新注册"))
+            else:
+                items.append(_checkup_item("voicelock", "声纹锁", 10, 10, "good",
+                                           f"底座正常(样本 {_vl.get('n', '?')} 段 · 放行 {_vl.get('accepts', 0)} "
+                                           f"拦 {_vl.get('rejects', 0)})", ""))
+    except Exception:
+        items.append(_checkup_item("voicelock", "声纹锁", 0, 0, "unknown",
+                                   "同传服务未运行(本项跳过)", "", False))
 
     measured_max = sum(i["max"] for i in items if i["measured"])
     got = sum(i["score"] for i in items if i["measured"])

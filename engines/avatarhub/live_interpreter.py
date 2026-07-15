@@ -2298,6 +2298,9 @@ class State:
         self.mt_stats = {"llm_reject": 0}
         self.review_clips = []     # P3 复盘剪辑索引(本场,≤_REVIEW_MAX;音频在 logs/review_audio/<stamp>/)
         self.review_stamp = ""     # P3 本场剪辑目录戳(会话开始时间)
+        # P-Affirm 声纹拦截缓存(近8句)：被拦句音频留证 → 控制台灰行显示拦截原因,
+        # 一键「是我·放行并学习」把该句学进底座并补跑翻译/配音(误拦不再是黑洞)
+        self.spk_blocked = deque(maxlen=8)
         self.muted = False         # P1-4 急停：True=丢弃一切待播/正播配音(≤0.1s 内切断)
         self.bargein_count = 0     # Phase B-4：用户抢话自动打断次数
         self.monitor_on = False    # P1-4 耳返：克隆音小音量同步回放到默认输出(你能听到对方听到的)
@@ -5009,6 +5012,22 @@ VOICELOCK_AUTOENROLL = os.environ.get("INTERP_VOICELOCK_AUTOENROLL", "1") == "1"
 # 全程 sim≈0.25 被拦到天亮)，"连续 N 段全拒且零放行"在机主麦上几乎只有一种解释=底座失真。
 # 达到阈值→隔离旧底座(.bad.npz 留档)重新自动注册。最坏损失 N 句后自愈，永不"整场哑巴"。
 VOICELOCK_SUSPECT_N  = int(os.environ.get("INTERP_VOICELOCK_SUSPECT_N", "5"))
+# 影子模式(P-Silence)：底座失真时"降级可用"而非"静默不可用"。同一会话零放行且短窗内连拒≥N
+# → "底座对不上机主"(换麦/增益漂移/注册污染)的概率远大于"旁人恰好连讲 N 句"——继续硬拦
+# =整场哑播(2026-07-15 10:33 事故：机主 sim 0.12~0.40 全拦,CABLE 无声 237s,连拒自愈因
+# 历史 accepts>0 门槛升到 3N 永远差一步)。触发后：
+#   通话模式 = 放行但打标 + 用影子期自洽真话后台重建底座(一致性门同自动注册,成座即替换退出影子)；
+#   直播无人值守 = 只告警不放行(防主播离开时电视/旁人声被翻译给观众,重演底座污染事故)，
+#                  INTERP_VOICELOCK_SHADOW_LIVE=1 可显式放开。
+# 任一真实放行(sim≥门)说明底座没坏 → 立即退出影子恢复拦截。
+VOICELOCK_SHADOW       = os.environ.get("INTERP_VOICELOCK_SHADOW", "1") == "1"
+VOICELOCK_SHADOW_LIVE  = os.environ.get("INTERP_VOICELOCK_SHADOW_LIVE", "0") == "1"
+# N=5/120s 按事故真实节奏标定：用户排障时几分钟就重启一次会话,证据窗跨"同麦快速重启"保留
+# (换采集设备才清零),否则每次重启清零永远凑不满。
+VOICELOCK_SHADOW_N     = int(os.environ.get("INTERP_VOICELOCK_SHADOW_N", "5"))
+VOICELOCK_SHADOW_WIN_S = float(os.environ.get("INTERP_VOICELOCK_SHADOW_WIN", "120"))
+# 底座健康度：距上次注册/更新过久、或换了采集设备 → 开播时主动提示重注册(防患于未然)。
+VOICELOCK_BASE_AGE_H   = float(os.environ.get("INTERP_VOICELOCK_BASE_AGE_H", "72"))
 VOICELOCK_MODEL      = os.environ.get("CAMPPLUS_ONNX",
     os.path.join(os.path.dirname(os.path.abspath(__file__)),
                  "CosyVoice", "pretrained_models", "Fun-CosyVoice3-0.5B", "campplus.onnx"))
@@ -5031,6 +5050,16 @@ class _VoiceLock:
         self.rejects = 0
         self._adapt_n = 0
         self._streak_rej = 0        # 连续拒绝计数(连拒自愈用,任一放行即清零)
+        # P-Silence 影子模式态(会话级)
+        self.sess_accepts = 0       # 本会话真实放行数(影子触发前提：必须为 0)
+        self._rej_win = deque(maxlen=16)  # 连拒证据窗[{ts,emb,n}](任一真实放行清空;嵌入供自洽判别+重建种子)
+        self.shadow_on = False
+        self.shadow_since = 0.0
+        self.shadow_passes = 0      # 影子期放行(未验证)段数
+        self._shadow_pool = []      # 影子期重建底座的候选嵌入(一致性门同自动注册)
+        self._shadow_live_warned = False  # 直播模式影子被抑制时的单次提示闸
+        self.base_meta = {}         # 底座元数据 {ts, mic}(健康度体检用)
+        self.session_mic = ""       # 本会话麦名(注册时随底座持久化,供换设备检测)
         self._load_persisted()
 
     def _load_persisted(self):
@@ -5040,6 +5069,15 @@ class _VoiceLock:
                 c = np.asarray(d["emb"], dtype=np.float32)
                 self.centroid = c / (np.linalg.norm(c) + 1e-9)
                 self.n_enrolled = int(d.get("n", 1))
+                try:                     # 底座元数据(旧档无 mic 字段,ts 缺失回退文件时间)
+                    _ts = float(d["ts"]) if "ts" in d else os.path.getmtime(_VL_PERSIST)
+                except Exception:
+                    _ts = 0.0
+                try:
+                    _mic = str(d["mic"]) if "mic" in d else ""
+                except Exception:
+                    _mic = ""
+                self.base_meta = {"ts": _ts, "mic": _mic}
                 logger.info(f"声纹锁：已加载持久化底座(样本 {self.n_enrolled} 段)")
         except Exception:
             logger.exception("声纹底座加载失败，将重新注册")
@@ -5047,7 +5085,9 @@ class _VoiceLock:
     def _persist(self):
         try:
             os.makedirs(REF_DIR, exist_ok=True)
-            np.savez(_VL_PERSIST, emb=self.centroid, n=self.n_enrolled, ts=time.time())
+            mic = self.session_mic or (self.base_meta.get("mic") if self.base_meta else "") or ""
+            np.savez(_VL_PERSIST, emb=self.centroid, n=self.n_enrolled, ts=time.time(), mic=mic)
+            self.base_meta = {"ts": time.time(), "mic": mic}
         except Exception:
             logger.exception("声纹底座持久化失败")
 
@@ -5122,7 +5162,11 @@ class _VoiceLock:
         self.last_sim = round(sim, 3)
         if sim >= VOICELOCK_THR:
             self.accepts += 1
+            self.sess_accepts += 1
             self._streak_rej = 0
+            self._rej_win.clear()
+            if self.shadow_on:               # 真实命中=底座没坏,影子是误会 → 立即恢复正常拦截
+                self._shadow_exit("底座重新命中,拦截恢复")
             if sim >= VOICELOCK_THR + 0.15:      # 高置信命中→小步自适应，跟踪音色漂移
                 c = 0.97 * self.centroid + 0.03 * best_e
                 self.centroid = c / (np.linalg.norm(c) + 1e-9)
@@ -5130,8 +5174,15 @@ class _VoiceLock:
                 if self._adapt_n % 20 == 0:
                     self._persist()
             return True, sim
+        # ── 未过门 ──
+        if self.shadow_on:                   # 影子期：放行但打标(计数冻结当证据),并喂后台重建
+            self.shadow_passes += 1
+            logger.info(f"[声纹锁·影子] 放行未验证段 sim={sim:.3f} (累计 {self.shadow_passes})")
+            self._shadow_relearn(best_e, int(wav16k.shape[0]))
+            return True, sim
         self.rejects += 1
         self._streak_rej += 1
+        self._rej_win.append({"ts": time.time(), "emb": best_e, "n": int(wav16k.shape[0])})
         # 连拒自愈：机主麦上连拒 N 段且本进程从未放行过任何人 → 底座本身失真(注册被污染/
         # 换麦换人)概率远大于"N 句全是旁人"，隔离重注册。曾有放行(底座至少匹配过机主)则
         # 把门槛提到 3N——覆盖中途换麦/嗓音剧变，又不至于被旁人连说几句就顶掉好底座。
@@ -5144,7 +5195,142 @@ class _VoiceLock:
                 except Exception:
                     pass
             return True, sim
+        # P-Silence 影子触发：长寿进程里 accepts>0 让上面 3N 门槛几乎够不着(本次事故实证)，
+        # 会话级"零放行+短窗连拒"是更贴近现场的失真证据。触发时先拿证据窗里被拦的段当场
+        # 试重建(它们大概率就是机主的话)——自洽即秒愈,不自洽再进影子边放行边等。
+        if self._shadow_should_trigger():
+            # 证据窗里被拦的段(含本段)当场试重建——自洽即秒愈;不自洽(混源)带着清洗后的
+            # 池子进影子,后续真话继续凑(池子不清零,少等 2~3 句)
+            self._shadow_pool = [r["emb"] for r in self._rej_win
+                                 if r["emb"] is not None and r["n"] >= int(16000 * 1.2)][-4:]
+            if self._shadow_try_rebuild():
+                return True, sim             # 底座已当场重建,本段放行,下一句起正常拦截
+            self._shadow_enter(sim)
+            self.shadow_passes += 1
+            return True, sim
         return False, sim
+
+    # ── P-Silence 影子模式：底座失真时降级可用,绝不整场哑播 ──────────────
+    def _shadow_should_trigger(self) -> bool:
+        """会话零放行 + 短窗连拒≥N → 底座疑似失真。直播无人值守默认不放行(防旁人声出街)。"""
+        if not VOICELOCK_SHADOW or self.shadow_on or self.sess_accepts > 0:
+            return False
+        now = time.time()
+        recent = [r["ts"] for r in self._rej_win if now - r["ts"] <= VOICELOCK_SHADOW_WIN_S]
+        if len(recent) < VOICELOCK_SHADOW_N:
+            return False
+        if getattr(ST, "live_mode", False) and not VOICELOCK_SHADOW_LIVE:
+            if not self._shadow_live_warned:     # 直播模式:不自动放行,但要把话说明白(单次)
+                self._shadow_live_warned = True
+                logger.warning(f"[声纹锁] 会话零放行且 {VOICELOCK_SHADOW_WIN_S:.0f}s 内连拒 "
+                               f"{len(recent)} 段,底座疑似失真;直播模式不自动放行(防旁人声出街),请人工处理")
+                try:
+                    ST.push_event({"who": "sys", "warn":
+                                   "⚠ 声纹锁连续拦截且零放行：底座疑似失真。直播模式不自动放行，"
+                                   "请点「重置声纹」后正常说 3 句重新注册"})
+                except Exception:
+                    pass
+            return False
+        return True
+
+    def _shadow_enter(self, sim):
+        self.shadow_on = True
+        self.shadow_since = time.time()
+        # 注意:不清 _shadow_pool——触发路径已播种"清洗过的证据段",清掉会白等 2~3 句
+        logger.warning(f"[声纹锁] 进入影子模式：本会话零放行且 {VOICELOCK_SHADOW_WIN_S:.0f}s 内"
+                       f"连拒≥{VOICELOCK_SHADOW_N} 段(最近 sim={sim:.3f}<{VOICELOCK_THR})——"
+                       "底座疑似失真。改为放行+打标,用影子期自洽真话后台重建底座")
+        try:
+            ST.push_event({"who": "sys", "warn":
+                           "🟡 声纹锁已切影子模式：底座疑似失真(连续拦截且零放行)。已临时放行保出声；"
+                           "正常说几句话将自动重建声纹，或点「重置声纹」立即重录"})
+        except Exception:
+            pass
+
+    def _shadow_exit(self, why: str):
+        self.shadow_on = False
+        self._shadow_pool = []
+        logger.info(f"[声纹锁] 恢复正常拦截：{why}")
+        try:
+            ST.push_event({"who": "sys", "warn": f"🔒 声纹锁已恢复正常拦截：{why}"})
+        except Exception:
+            pass
+
+    def _shadow_relearn(self, emb, n_samples: int):
+        """影子期后台重建底座：≥1.2s 的放行段进候选池(滚动 ≤4)，凑满即试重建。"""
+        if emb is None or n_samples < int(16000 * 1.2):
+            return
+        self._shadow_pool.append(emb)
+        self._shadow_pool = self._shadow_pool[-4:]
+        self._shadow_try_rebuild()
+
+    def _shadow_try_rebuild(self) -> bool:
+        """候选池 3 段两两自洽(≥0.50,同自动注册口径)→ 归档旧座 .bad、换新座、退出影子。
+        混源(电视/旁人插话)过不了一致性门:剔最不合群的一段继续等。返回是否已重建。"""
+        try:
+            if len(self._shadow_pool) < 3:
+                return False
+            E = np.stack(self._shadow_pool)
+            sims = E @ E.T
+            np.fill_diagonal(sims, 1.0)
+            if float(sims.min()) < 0.50:         # 有段与其他段对不上→混源,剔最不合群的继续等
+                avg = (sims.sum(axis=1) - 1.0) / max(1, E.shape[0] - 1)
+                self._shadow_pool.pop(int(np.argmin(avg)))
+                return False
+            try:
+                if os.path.exists(_VL_PERSIST):
+                    os.replace(_VL_PERSIST, _VL_PERSIST + ".bad")
+            except OSError:
+                pass
+            c = E.mean(axis=0)
+            self.centroid = (c / (np.linalg.norm(c) + 1e-9)).astype(np.float32)
+            self.n_enrolled = int(E.shape[0])
+            self._persist()
+            self._streak_rej = 0
+            self._rej_win.clear()
+            self._shadow_exit(f"已用被拦的 {E.shape[0]} 段自洽真话重建底座(旧座归档 .bad)")
+            return True
+        except Exception:
+            logger.exception("影子模式重建底座失败(不影响放行)")
+            return False
+
+    def on_session_start(self, mic_name: str = ""):
+        """会话开始钩子：会话级计数/影子态清零 + 底座健康度体检(过老/换采集设备→开播即提示)。
+        连拒证据窗跨"同麦重启"保留：排障时用户几分钟就重启一次会话(2026-07-15 实录 6 分钟
+        重启 3 次)，若每次清窗则影子永远凑不满 N 句——重演连拒自愈 3N 门槛够不着的老毛病。
+        换了采集设备(证据环境变了)才清零。"""
+        new_mic = (mic_name or "").strip()
+        if new_mic and new_mic != self.session_mic:
+            self._rej_win.clear()            # 换麦=旧证据作废;同麦重启保留(时间窗自然淘汰过期证据)
+        self.session_mic = new_mic
+        self.sess_accepts = 0
+        self.shadow_passes = 0
+        self._shadow_pool = []
+        self._shadow_live_warned = False
+        if self.shadow_on:
+            self.shadow_on = False           # 新会话回正常态(证据窗还在,再失真立刻再触发)
+        if self.centroid is None:
+            return
+        tips = []
+        ts = float((self.base_meta or {}).get("ts") or 0.0)
+        if not ts:
+            try:
+                ts = os.path.getmtime(_VL_PERSIST)
+            except OSError:
+                ts = 0.0
+        if ts and (time.time() - ts) / 3600.0 >= VOICELOCK_BASE_AGE_H:
+            tips.append(f"距上次注册/更新已 {(time.time() - ts) / 86400.0:.1f} 天")
+        bm = ((self.base_meta or {}).get("mic") or "").strip()
+        if bm and self.session_mic and bm != self.session_mic:
+            tips.append(f"注册时用麦「{bm}」·本场是「{self.session_mic}」")
+        if tips:
+            logger.info(f"[声纹锁] 底座健康提示: {'；'.join(tips)}")
+            try:
+                ST.push_event({"who": "sys", "warn":
+                               "ℹ 声纹底座健康提示：" + "；".join(tips) +
+                               "。若开口被拦，请点「重置声纹」说 3 句话重新注册"})
+            except Exception:
+                pass
 
     def _quarantine(self):
         """疑似污染底座 → 移到 .bad 留档(可事后取证)，回未注册态等真话重新自动注册。"""
@@ -5202,9 +5388,33 @@ class _VoiceLock:
         self._persist()
         return True
 
+    def affirm_learn(self, wav16k: np.ndarray) -> bool:
+        """P-Affirm 用户点「是我」的强学习：人工确认可信度远高于自适应(3%)，以 20% 权重
+        并入底座并立即持久化；未注册则当自动注册素材。同时清连拒证据(用户已裁决)。"""
+        e = self.embed(wav16k)
+        if e is None:
+            return False
+        if self.centroid is None:
+            try:
+                return self.enroll_from(wav16k)
+            except Exception:
+                return False
+        c = 0.8 * self.centroid + 0.2 * e
+        self.centroid = (c / (np.linalg.norm(c) + 1e-9)).astype(np.float32)
+        self._persist()
+        self._streak_rej = 0
+        self._rej_win.clear()
+        if self.shadow_on:
+            self._shadow_exit("用户确认本人并已学习,底座已校正")
+        logger.info("[声纹锁] 用户放行学习：本句已并入底座(权重20%)并持久化")
+        return True
+
     def reset(self):
         self.centroid = None; self.n_enrolled = 0; self.pending = []
         self.last_sim = None; self.accepts = 0; self.rejects = 0; self._streak_rej = 0
+        self.sess_accepts = 0; self._rej_win.clear()
+        self.shadow_on = False; self.shadow_passes = 0; self._shadow_pool = []
+        self._shadow_live_warned = False; self.base_meta = {}
         try:
             os.remove(_VL_PERSIST)
         except OSError:
@@ -5214,7 +5424,12 @@ class _VoiceLock:
         return {"enabled": VOICELOCK_ENABLE, "model_ok": self.available,
                 "enrolled": self.centroid is not None, "n": self.n_enrolled,
                 "pending": len(self.pending), "thr": VOICELOCK_THR,
-                "last_sim": self.last_sim, "accepts": self.accepts, "rejects": self.rejects}
+                "last_sim": self.last_sim, "accepts": self.accepts, "rejects": self.rejects,
+                # P-Silence 影子/健康度观测(vlPill + hub 归因共用)
+                "sess_accepts": self.sess_accepts,
+                "shadow": self.shadow_on, "shadow_passes": self.shadow_passes,
+                "base_ts": (self.base_meta or {}).get("ts"),
+                "base_mic": (self.base_meta or {}).get("mic")}
 
 
 _voicelock = _VoiceLock()
@@ -5262,7 +5477,7 @@ def _warmup_lipsync(face_id: str):
                           files={"audio": ("warm.wav", wav, "audio/wav")},
                           data={"face_id": face_id, "fps": "25",
                                 "first_seg_frames": str(FIRST_SEG_FRAMES),
-                                "seg_frames": "25", "push_segs": "false"}, timeout=180)
+                                "seg_frames": "25", "push_segs": "false"}, timeout=(3.05, 180))
         if r.ok:
             ST.warm_ms = int((time.time() - t) * 1000)
             logger.info(f"口型热启动完成 ({ST.warm_ms}ms，首句将走热态)")
@@ -5271,6 +5486,29 @@ def _warmup_lipsync(face_id: str):
             logger.warning(f"口型热启动失败 {r.status_code}: {r.text[:120]}")
     except Exception:
         logger.exception("口型热启动异常(不影响启动)")
+
+
+def _prewarm_llm():
+    """LLM(ollama) 会话预热：把模型提前拉进显存并驻留(keep_alive)。
+    翻译(口语化语向)/GER 终稿复核/情感基调三处共用同一本地后端——冷加载若发生在第一句
+    正稿上,单工人串行管线会被逐句放大成分钟级积压(2026-07-15 22:55 实测:冷加载撞上
+    显存挤兑,e2e 5.7s→28s→59s→66s)。预热放在会话启动后台,与 NMT/参考音热身并行。"""
+    if not (_MT_BACKEND in ("auto", "llm") or _MT_LLM_LANGS or _GER_ON):
+        return
+    try:
+        t = time.time()
+        r = requests.post(f"{_LLM_URL}/api/chat",
+                          json={"model": _LLM_MODEL,
+                                "messages": [{"role": "user", "content": "hi"}],
+                                "stream": False, "keep_alive": _LLM_KEEP,
+                                "options": {"num_predict": 1, "num_ctx": _LLM_NUMCTX}},
+                          timeout=120)
+        if r.ok:
+            logger.info(f"LLM 预热完成({_LLM_MODEL} 已驻卡, {(time.time() - t) * 1000:.0f}ms)")
+        else:
+            logger.warning(f"LLM 预热失败 {r.status_code}(不影响开播;冷加载风险留给首句,或将触发熔断回退 NMT)")
+    except Exception as e:
+        logger.warning(f"LLM 预热不可达({str(e)[:80]})——本场翻译/复核将按熔断机制回退")
 
 
 def _warmup_session(voice_b64: str, ref_text: str, face_bytes: bytes = b"", face_id: str = "",
@@ -5282,6 +5520,7 @@ def _warmup_session(voice_b64: str, ref_text: str, face_bytes: bytes = b"", face
     # Fish 参考预热与口型链路预热分属不同服务(Fish vs lipsync)→ 并行不互斥,缩短整体就绪时间
     ref_th = threading.Thread(target=_prewarm_ref, args=(voice_b64, ref_text), daemon=True)
     ref_th.start()
+    threading.Thread(target=_prewarm_llm, daemon=True).start()   # LLM 驻卡预热(翻译/GER/情感共用)
     if face_bytes and face_id:               # 直播模式:先把人脸预热好(冷脸~28s,命中磁盘缓存秒回)
         if _precompute_face(face_bytes, face_id):
             _warmup_lipsync(face_id)         # 人脸就绪后预热 UNet 编译(消除首句段间隔尖峰)
@@ -5348,20 +5587,52 @@ def _b64bytes(s: str) -> bytes:
         return b""
 
 
+# lipsync 预计算熔断(P-Silence 附带修复)：远端不可达时旧代码 connect 要等满 180s 才失败，
+# 一场会话 3 次预热=9 分钟线程占用+每次 40 行堆栈刷屏(2026-07-15 实录)。connect 3s 快速失败；
+# 连续 3 次连接失败 → 熔断 300s 只跳过预计算(直播口型自身另有 heal 降级,不受影响)，恢复自动重试。
+_LS_CB = {"fails": 0, "open_until": 0.0, "lock": threading.Lock()}
+
+
+def _ls_cb_allow() -> bool:
+    with _LS_CB["lock"]:
+        return time.time() >= _LS_CB["open_until"]
+
+
+def _ls_cb_report(ok: bool):
+    with _LS_CB["lock"]:
+        if ok:
+            _LS_CB["fails"] = 0
+            return
+        _LS_CB["fails"] += 1
+        if _LS_CB["fails"] >= 3 and time.time() >= _LS_CB["open_until"]:
+            _LS_CB["open_until"] = time.time() + 300
+            logger.warning(f"[lipsync] 连续 {_LS_CB['fails']} 次连接失败 → 人脸预计算熔断 300s"
+                           f"(期间直接跳过,期满自动重试): {LIPSYNC_URL}")
+
+
 def _precompute_face_call(face_bytes: bytes, face_id: str) -> bool:
-    """仅把人脸预计算进 lipsync 缓存(不改 ST 状态)。供首启预热与运行中切角色复用。"""
+    """仅把人脸预计算进 lipsync 缓存(不改 ST 状态)。供首启预热与运行中切角色复用。
+    connect 3s 快速失败+熔断：lipsync 掉线只损失预热，不再长时间阻塞线程/刷整段堆栈。"""
     if not face_bytes or not face_id:
+        return False
+    if not _ls_cb_allow():
+        logger.info(f"人脸预计算跳过(lipsync 熔断开启中) face_id={face_id}")
         return False
     try:
         t = time.time()
         r = requests.post(f"{LIPSYNC_URL}/lipsync/precompute_face",
                           files={"face": ("f.jpg", face_bytes, "image/jpeg")},
-                          data={"face_id": face_id}, timeout=180)
+                          data={"face_id": face_id}, timeout=(3.05, 180))
+        _ls_cb_report(True)
         if r.ok:
             logger.info(f"人脸预计算完成 face_id={face_id} ({(time.time()-t)*1000:.0f}ms)")
         else:
             logger.warning(f"人脸预计算失败 {r.status_code}: {r.text[:120]}")
         return r.ok
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+        _ls_cb_report(False)
+        logger.warning(f"人脸预计算不可达({e.__class__.__name__}): {str(e)[:140]}")
+        return False
     except Exception:
         logger.exception("人脸预计算异常")
         return False
@@ -5535,8 +5806,9 @@ def _gen_stream_wav(wav: bytes, first_seg: int = FIRST_SEG_FRAMES) -> dict:
     data = {"face_id": ST.face_id, "fps": "25", "first_seg_frames": str(first_seg),
             "seg_frames": "25", "vcam_url": VCAM_URL}
     t_lip0 = time.time()
+    # connect 3s 快速失败(read 仍 180s)：lipsync 掉线时热路径秒级触发降级,不再拖满 3 分钟
     r = requests.post(f"{LIPSYNC_URL}/lipsync/generate_stream",
-                      files=files, data=data, timeout=180)
+                      files=files, data=data, timeout=(3.05, 180))
     lipsync_ms = int((time.time() - t_lip0) * 1000)
     out = {"ok": r.ok, "lipsync_ms": lipsync_ms}
     if r.ok:
@@ -5985,10 +6257,12 @@ def _heal_gpu_contention():
 
 
 # ── 两个方向的处理 ────────────────────────────────────────────────────
-def _process_a(mono16k: np.ndarray):
+def _process_a(mono16k: np.ndarray, skip_spk: bool = False):
     """我说中文 → 英文 → 克隆配音 → 播虚拟麦 → 字幕。
     local(默认): Whisper transcribe(中) 单次出中文字幕 + 本地 NMT 译英(~70ms，快·准·离线)；
-    whisper:     Whisper task=translate 一步出英文(偶有词误)，中文字幕异步补。"""
+    whisper:     Whisper task=translate 一步出英文(偶有词误)，中文字幕异步补。
+    skip_spk=True: P-Affirm 放行复跑的一次性声纹豁免——用户刚点过「是我」，学习权重(20%)
+    不保证复跑句立即过门,不豁免会出现"点了放行又被拦"的荒谬循环。"""
     _apply_pending_switch()                # 句子边界:若有待生效的角色切换则原子应用(不断流)
     t0 = time.time()
     uid = ST.next_uid(); tid = ST.turn_id("me")
@@ -6001,11 +6275,12 @@ def _process_a(mono16k: np.ndarray):
                     f"(门 rms≥{_rg:.0f}/peak≥{_pg:.0f}/dyn≥{GATE_DYN_DB_MIN:.0f} 噪底={_noise_floor_dbfs('a')})")
         return
     # P1-2 声纹锁：已注册 → 送 STT 前先验说话人(20~70ms)，旁人声/键盘噪直接拦下(还省一次 STT)
-    if _voicelock.ready():
+    if _voicelock.ready() and not skip_spk:
         ok_spk, sim = _voicelock.check(mono16k)
         if not ok_spk:
             ST.dropped += 1; ST.drops["spk"] += 1
             logger.info(f"[声纹锁] 拦截非注册说话人[a]: sim={sim:.3f} < {VOICELOCK_THR}")
+            _spk_blocked_note(uid, tid, "", mono16k, sim)   # P-Affirm 留证+灰行(可一键放行)
             return
     _emo_note_audio(mono16k)               # P1 情感:登记本句原声响度(基调佐证)
     _pros_note(mono16k)                    # P9.1 韵律跟随:音高摆幅/响度(zh 未知,语速跳过)
@@ -6070,6 +6345,21 @@ def _process_a(mono16k: np.ndarray):
         m["synth_ms"] = int((time.time() - t_syn0) * 1000)
         m["avatar_ms"] = int((time.time() - t_syn0) * 1000) if ST.live_mode else 0
     ST.add_metric(m)
+
+
+def _spk_blocked_note(uid: int, tid: int, text: str, wav16k, sim):
+    """P-Affirm 声纹拦截留证：音频进环形缓存(近8句)，推灰行事件到控制台——
+    用户看到「这句被声纹拦了」+ 一键「是我·放行并学习」。误拦从黑洞变成一次点击。"""
+    try:
+        ST.spk_blocked.append({"uid": int(uid), "tid": int(tid), "text": text or "",
+                               "sim": (round(float(sim), 3) if sim is not None else None),
+                               "ts": time.time(), "wav": np.copy(wav16k)})
+        ST.push_event({"uid": int(uid), "turn": int(tid), "who": "me", "blocked": "spk",
+                       "text": text or "", "dur": round(wav16k.size / float(SR), 1),
+                       "sim": (round(float(sim), 3) if sim is not None else None),
+                       "thr": VOICELOCK_THR})
+    except Exception:
+        logger.exception("声纹拦截留证失败(不影响拦截本身)")
 
 
 def _voicelock_autoenroll(mono16k: np.ndarray):
@@ -6472,7 +6762,9 @@ class StreamDispatcher:
                 if not ok_spk:
                     ST.dropped += 1; ST.drops["spk"] += 1
                     logger.info(f"[声纹锁] 拦截非注册说话人[流式a]: sim={sim:.3f} < {VOICELOCK_THR} {text!r}")
-                    self._retract(uid, tid); return
+                    self._retract(uid, tid)
+                    _spk_blocked_note(uid, tid, text, audio, sim)   # P-Affirm 留证+灰行(可一键放行)
+                    return
             else:
                 _voicelock_autoenroll(audio)
         elif self.direction == "b":
@@ -8179,6 +8471,45 @@ def voicelock_enroll(req: EnrollReq):
         return JSONResponse({"ok": False, "detail": str(e)[:160]}, 500)
 
 
+class AffirmReq(BaseModel):
+    uid: int
+
+
+@app.post("/voicelock/affirm")
+def voicelock_affirm(req: AffirmReq):
+    """P-Affirm 一键「是我·放行并学习」：被声纹拦截的句子经用户确认后——
+    ① 该句音频以 20% 权重学进底座(人工裁决>自适应)并持久化；
+    ② 补跑原链路：有文本(流式已识别)直接翻译+配音；无文本(分段拦在 STT 前)整段重识别。
+    音频只在近 8 句环形缓存里,过期返回 410。"""
+    itm = next((x for x in list(ST.spk_blocked) if x.get("uid") == req.uid), None)
+    if itm is None:
+        return JSONResponse({"ok": False, "detail": "该句已过期(仅保留最近8句)，请重说一遍"}, 410)
+    if itm.get("affirmed"):
+        return {"ok": True, "already": True, "voicelock": _voicelock.brief()}
+    wav = itm.get("wav")
+    learned = False
+    try:
+        learned = _voicelock.affirm_learn(wav)
+    except Exception:
+        logger.exception("放行学习失败(仍尝试补跑该句)")
+    replayed = False
+    try:
+        if ST.running and wav is not None:
+            if itm.get("text"):
+                ST.pool_a.submit(_stream_final_a, ST.next_uid(), itm["tid"], itm["text"],
+                                 time.time(), np.copy(wav))
+            else:                                  # 分段路径拦在 STT 前:整段重跑(带一次性声纹豁免)
+                threading.Thread(target=_process_a, args=(np.copy(wav), True), daemon=True).start()
+            replayed = True
+    except Exception:
+        logger.exception("放行补跑失败")
+    itm["affirmed"] = True
+    logger.info(f"[声纹锁] 用户放行 uid={req.uid} learned={learned} replayed={replayed} "
+                f"text={itm.get('text', '')[:30]!r}")
+    return {"ok": True, "learned": learned, "replayed": replayed,
+            "voicelock": _voicelock.brief()}
+
+
 @app.post("/voicelock/reset")
 def voicelock_reset():
     """清除声纹底座(下场会话重新自动注册)。"""
@@ -8316,6 +8647,7 @@ def start(req: StartReq):
         _tr_miss.clear()
         _tm_session_base["hit"] = _tr_cache_stat["hit"]; _tm_session_base["miss"] = _tr_cache_stat["miss"]
     ST.drops = {"gate": 0, "halluc": 0, "filler": 0, "lowconf": 0, "dedup": 0, "spk": 0, "echo": 0}
+    ST.spk_blocked = deque(maxlen=8)               # P-Affirm 拦截留证按场清(旧场音频不跨场复跑)
     ST.ger_stats = {"checked": 0, "fixed": 0, "rejected": 0, "revived": 0, "vetoed": 0,
                     "skipped": 0, "garbage": 0, "overfix": 0}
     ST.mt_stats = {"llm_reject": 0}
@@ -8379,6 +8711,8 @@ def start(req: StartReq):
     else:
         ST.play_q = None
     _voicelock.warmup_async()              # P1-2 后台加载声纹模型(首次数秒,不阻塞开播)
+    # P-Silence 会话钩子:影子/会话计数清零 + 底座健康度体检(过老/换麦→开播即提示重注册)
+    _voicelock.on_session_start(_dev_name_safe(ST.mic_index))
 
     _reset_noise_floor()        # 新会话:清掉上会话的自适应噪声底，按当前设备/环境重新校准
     # P0-S2S: 云端 S2S 后端可用则方向A整链路上云(识别+翻译+克隆配音一体,延迟代差)；
@@ -8551,6 +8885,11 @@ def status():
             "readback": {"on": ST.readback_on, "ref_locked": bool(ST.rb_ref_b64),
                          "ref_sec": ST.rb_ref_sec},
             "voicelock": _voicelock.brief(), "denoise": DENOISE_ENABLE,
+            # P-Silence 归因数据：hub 静音看门狗据此把「哑播」翻译成人话根因
+            # (声纹拦截/无有效识别/无音色),不再让用户瞎查麦克风/OBS
+            "drops": dict(ST.drops), "drops_total": sum(ST.drops.values()),
+            "fin_a": int(ST.stream_stats.get("fin_a") or 0),
+            "fin_b": int(ST.stream_stats.get("fin_b") or 0),
             # P0-S2S: 云同传态(后端/连接/句数/回退)
             "s2s_on": ST.s2s_on, "s2s": (ST.s2s_state or None),
             # P8: 场景方案/双工态/耦合实测/冲突巡检(供 PC+手机页状态灯同源读取)
@@ -10802,9 +11141,45 @@ header{padding:14px 20px;border-bottom:1px solid var(--bd);
 #dot.on{background:var(--ok);box-shadow:0 0 0 0 rgba(52,211,153,.6);animation:pulse 1.8s infinite}
 @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(52,211,153,.55)}70%{box-shadow:0 0 0 7px rgba(52,211,153,0)}100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}}
 /* 控件条 */
-.ctl{padding:11px 20px;border-bottom:1px solid var(--bd);display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end}
+.ctl{padding:11px 20px;border-bottom:1px solid var(--bd);display:flex;gap:10px 14px;flex-wrap:wrap;align-items:flex-end}
 .field{display:flex;flex-direction:column;gap:4px}
 .field label{font-size:11px;color:var(--mut);padding-left:2px}
+/* 语向单行组:胶囊语对+生效+常用直达,与角色音色同排(原三层堆叠悬在中央、两侧大片空腔) */
+#profile{max-width:200px}
+.langrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.langseg{display:inline-flex;align-items:stretch;background:var(--surface2);border:1px solid var(--bd);
+  border-radius:10px;overflow:hidden}
+.langseg:hover{border-color:var(--bd2)}
+.langseg select{background:transparent;border:0;border-radius:0;min-width:86px;padding:8px 9px}
+.langseg select:hover{background:rgba(255,255,255,.05)}
+.langseg button{background:transparent;border:0;border-left:1px solid var(--bd);border-right:1px solid var(--bd);
+  color:var(--txt2);padding:0 10px;font-size:13px;cursor:pointer}
+.langseg button:hover{color:var(--txt);background:rgba(255,255,255,.05)}
+#langswap.spin{animation:lgspin .3s ease}
+@keyframes lgspin{from{transform:rotate(-180deg)}to{transform:rotate(0)}}
+/* 「生效」键只在运行中且语向有未生效改动时现身:琥珀渐变+轻脉冲=「有待生效的更改」 */
+#langapply{display:none;border-radius:10px;padding:8px 14px;font-size:13px;font-weight:700;color:#fff;
+  background:linear-gradient(135deg,#f59e0b,#f97316);box-shadow:0 6px 18px rgba(245,158,11,.3)}
+#langapply.show{display:inline-block;animation:apulse 1.6s ease-in-out infinite}
+#langapply:disabled{animation:none;opacity:.75;cursor:wait}
+@keyframes apulse{0%,100%{transform:scale(1)}50%{transform:scale(1.045)}}
+#langquick{display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center}
+#langquick .qlabel{font-size:11px;color:var(--mut)}
+.qc{padding:4px 11px;border-radius:999px;background:var(--surface2);border:1px solid var(--bd);
+  color:var(--txt2);font-size:12px;cursor:pointer;transition:border-color .15s,color .15s;flex:0 0 auto}
+.qc:hover{border-color:var(--acc);color:var(--txt)}
+.qc.on{color:#0b0f14;background:var(--acc);border-color:var(--acc);font-weight:700}
+.eguide a.egact{color:var(--acc);cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+/* 线性图标(SVG sprite,继承文字色)：替代功能位 emoji——emoji 彩色/粗细/字号不受控,是首屏"乱"的微观来源 */
+.ic{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;
+  vertical-align:-2.5px;display:inline-block;flex:0 0 auto}
+.expmenu a .ic{margin-right:3px;opacity:.85}
+/* 嵌入态(Hub iframe 内)：宿主已有品牌与卡头,本页品牌块隐藏、渐变底让位纯色,不再"页中页两套皮"。
+   品牌隐去后状态胶囊靠左压阵、操作按钮居右,保持一行两端平衡 */
+body.embed{background:var(--bg)}
+body.embed .brand,body.embed .spacer{display:none}
+body.embed header{padding:10px 16px}
+body.embed .status{margin-right:auto}
 select{background:var(--surface2);color:var(--txt);border:1px solid var(--bd);border-radius:10px;
   padding:8px 11px;font-size:13px;font-family:var(--font);min-width:120px;cursor:pointer}
 select:hover{border-color:var(--bd2)}
@@ -10834,6 +11209,11 @@ main{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px;
 .me .row{border-left-color:var(--me)}.ot .row{border-left-color:var(--ot)}
 .row.latest{opacity:1;background:rgba(79,122,255,.10);box-shadow:0 0 0 1px var(--bd2) inset}
 .ot .row.latest{background:rgba(52,211,153,.10)}
+.row.vlblock{background:rgba(248,113,113,.06);box-shadow:0 0 0 1px rgba(248,113,113,.22) inset}
+.affirmbtn{background:transparent;border:1px solid rgba(248,113,113,.5);color:#fca5a5;
+  border-radius:8px;padding:2px 10px;font-size:12px;cursor:pointer;margin-left:8px}
+.affirmbtn:hover{background:rgba(248,113,113,.12)}
+.affirmbtn:disabled{cursor:default;opacity:.8}
 @keyframes f{from{opacity:0;transform:translateY(6px)}to{opacity:.6}}
 /* 主=中文(大·醒目)，次=英文(小·暗) */
 .src{font-size:21px;font-weight:700;line-height:1.42;color:var(--txt);letter-spacing:.2px;word-break:break-word}
@@ -10931,6 +11311,30 @@ main{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px;
 @media(max-width:760px){main{grid-template-columns:1fr;flex:none;height:auto;overflow:visible}
   .list{max-height:44vh}}
 </style></head><body>
+<!-- 线性图标(内联 sprite)：功能位统一单色线性图标,与暗色霓虹主题同源;emoji 只留内容位。
+     全站图标库单一真相=static/brand-icons.svg(Hub 侧)；本页跨端口自包含,内联持有所用子集拷贝,
+     新增图标先入库再同步这里(tools/_gen_brand_icons.py 生成库文件)。 -->
+<svg style="display:none" aria-hidden="true"><defs>
+<symbol id=i-sound viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.4 5.6a9 9 0 0 1 0 12.8"/></symbol>
+<symbol id=i-headphones viewBox="0 0 24 24"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M3 14h3a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M21 14h-3a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1z"/></symbol>
+<symbol id=i-waves viewBox="0 0 24 24"><path d="M2 10v4"/><path d="M6 6v12"/><path d="M10 3v18"/><path d="M14 8v8"/><path d="M18 5v14"/><path d="M22 10v4"/></symbol>
+<symbol id=i-tools viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></symbol>
+<symbol id=i-fullscreen viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></symbol>
+<symbol id=i-folder viewBox="0 0 24 24"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
+<symbol id=i-lock viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+<symbol id=i-sliders viewBox="0 0 24 24"><path d="M21 4h-7"/><path d="M10 4H3"/><path d="M21 12h-9"/><path d="M8 12H3"/><path d="M21 20h-5"/><path d="M12 20H3"/><path d="M14 2v4"/><path d="M8 10v4"/><path d="M16 18v4"/></symbol>
+<symbol id=i-monitor viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></symbol>
+<symbol id=i-phone viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M12 18h.01"/></symbol>
+<symbol id=i-qr viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="3" width="6" height="6" rx="1"/><rect x="3" y="15" width="6" height="6" rx="1"/><path d="M15 15h2v2h-2z"/><path d="M19 15h2v2h-2z"/><path d="M15 19h2v2h-2z"/><path d="M19 19h2v2h-2z"/></symbol>
+<symbol id=i-call viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></symbol>
+<symbol id=i-demo viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m10 8 6 4-6 4z"/></symbol>
+<symbol id=i-live viewBox="0 0 24 24"><path d="m22 8-6 4 6 4V8z"/><rect x="2" y="6" width="14" height="12" rx="2"/></symbol>
+<symbol id=i-scene viewBox="0 0 24 24"><path d="m12 2 10 5.5L12 13 2 7.5Z"/><path d="m2 12.5 10 5.5 10-5.5"/><path d="m2 17.5 10 5.5 10-5.5" opacity=".45"/></symbol>
+<symbol id=i-probe viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
+<symbol id=i-zap viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
+<symbol id=i-package viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></symbol>
+<symbol id=i-stopcircle viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6"/><path d="M15 9l-6 6"/></symbol>
+</defs></svg>
 <header>
   <div class=brand>
     <div class=logo>译</div>
@@ -10939,85 +11343,88 @@ main{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px;
   <div class=spacer></div>
   <div class=status><span id=dot></span><span id=st>未运行</span></div>
   <div class=expwrap>
-    <button class="go ghost" id=sndbtn data-tip="声音|耳返、对方朗读两个开关和三路音量都在这里|通话中随时调,拖动即时生效">🔊 声音<span id=sndbadge class=expn></span></button>
+    <button class="go ghost" id=sndbtn data-tip="声音|耳返、对方朗读两个开关和三路音量都在这里|通话中随时调,拖动即时生效"><svg class=ic><use href="#i-sound"/></svg> 声音<span id=sndbadge class=expn></span></button>
     <div class=expmenu id=sndmenu style="min-width:288px">
-      <a id=monitor data-tip="耳返 · 听自己发出的外语|把发给对方的克隆音小声放进你的耳机,确认对方听到了什么|不放心翻译质量时开;务必戴耳机,外放会回声">🎧 耳返</a>
-      <a id=readback data-tip="对方朗读 · 免盯字幕|对方说的外语翻成中文后,用 TA 自己的音色读进你耳机|想脱屏听译文时开;对方开口第一句自动捕获音色">🔈 对方朗读</a>
+      <a id=monitor data-tip="耳返 · 听自己发出的外语|把发给对方的克隆音小声放进你的耳机,确认对方听到了什么|不放心翻译质量时开;务必戴耳机,外放会回声"><svg class=ic><use href="#i-headphones"/></svg> 耳返</a>
+      <a id=readback data-tip="对方朗读 · 免盯字幕|对方说的外语翻成中文后,用 TA 自己的音色读进你耳机|想脱屏听译文时开;对方开口第一句自动捕获音色"><svg class=ic><use href="#i-waves"/></svg> 对方朗读</a>
       <div class=sep></div>
       <div class=mlabel>音量 · 拖动即时生效</div>
       <div id=sndvols></div>
     </div>
   </div>
   <div class=expwrap>
-    <button class="go ghost" id=toolbtn data-tip="工具|大字幕、导出转写、术语表、高级调参、页面入口|低频功能都收在这里">🧰 工具</button>
+    <button class="go ghost" id=toolbtn data-tip="工具|大字幕、导出转写、术语表、高级调参、页面入口|低频功能都收在这里"><svg class=ic><use href="#i-tools"/></svg> 工具</button>
     <div class=expmenu id=toolmenu style="min-width:252px">
-      <a id=fs data-tip="大字幕|全屏放大双语字幕,适合边通话边看|快捷键 F 开关,Esc 退出">🔳 大字幕 <small>(F)</small></a>
+      <a id=fs data-tip="大字幕|全屏放大双语字幕,适合边通话边看|快捷键 F 开关,Esc 退出"><svg class=ic><use href="#i-fullscreen"/></svg> 大字幕 <small>(F)</small></a>
       <div class=sep></div>
       <div class=mlabel>导出转写 <span id=expn></span></div>
       <a id=expScreen data-tip="本页对话 TXT|把当前屏幕上的双语对话存成文本|快速留底当前这一屏">本页对话 · TXT <small>(当前屏)</small></a>
       <a id=expTxt data-tip="完整转写 TXT|全程逐句记录,含时间戳,页面没开着的时段也在|会后复盘/交付文字稿">完整转写 · TXT <small>(含时间戳)</small></a>
       <a id=expSrt data-tip="字幕文件 SRT|标准字幕格式,时间轴对齐|配录像/剪辑软件用">字幕文件 · SRT <small>(配录像/剪辑)</small></a>
       <a id=expJson data-tip="原始数据 JSON|逐句原文/译文/耗时等全部字段|排查问题或二次处理">原始数据 · JSON</a>
-      <a id=expSessions data-tip="往期会话|选择历史场次,单独导出|找以前某一场的记录">📁 往期会话… <small>(选历史场次导出)</small></a>
+      <a id=expSessions data-tip="往期会话|选择历史场次,单独导出|找以前某一场的记录"><svg class=ic><use href="#i-folder"/></svg> 往期会话… <small>(选历史场次导出)</small></a>
       <div class=sep></div>
-      <a href="/glossary" target=_blank data-tip="术语锁定|把品牌/人名/专有名词固定成指定译法,翻错自动纠正|专有名词总被翻错时来这里加一条">🔒 术语表 <small id=gcount></small></a>
-      <a id=tuneItem data-tip="高级调参|回声闸/声纹门槛/降噪等 6 个参数,拖动立即生效并自动记住|出现漏回声、误拦人声时微调">🎛 高级调参…</a>
+      <a href="/glossary" target=_blank data-tip="术语锁定|把品牌/人名/专有名词固定成指定译法,翻错自动纠正|专有名词总被翻错时来这里加一条"><svg class=ic><use href="#i-lock"/></svg> 术语表 <small id=gcount></small></a>
+      <a id=tuneItem data-tip="高级调参|回声闸/声纹门槛/降噪等 6 个参数,拖动立即生效并自动记住|出现漏回声、误拦人声时微调"><svg class=ic><use href="#i-sliders"/></svg> 高级调参…</a>
       <div class=sep></div>
       <div class=mlabel>打开</div>
-      <a id=hubLink target=_blank style="display:none" data-tip="主控台|打开数字人主控台(9000)|管理角色/开播/换脸">🖥 主控台</a>
-      <a id=phoneLink target=_blank data-tip="手机端|手机变无线麦克风+监听耳机|人不在电脑前时用手机说和听">📱 手机端</a>
-      <a id=qrLink target=_blank data-tip="扫码页|大二维码页面,手机扫码直达手机端|给手机快速配对">🔲 扫码页</a>
+      <a id=hubLink target=_blank style="display:none" data-tip="主控台|打开数字人主控台(9000)|管理角色/开播/换脸"><svg class=ic><use href="#i-monitor"/></svg> 主控台</a>
+      <a id=phoneLink target=_blank data-tip="手机端|手机变无线麦克风+监听耳机|人不在电脑前时用手机说和听"><svg class=ic><use href="#i-phone"/></svg> 手机端</a>
+      <a id=qrLink target=_blank data-tip="扫码页|大二维码页面,手机扫码直达手机端|给手机快速配对"><svg class=ic><use href="#i-qr"/></svg> 扫码页</a>
     </div>
     <div class=expmenu id=tunemenu style="min-width:290px"></div>
   </div>
-  <button class="go ghost" id=panic data-tip="急停 · 立刻闭麦|0.1 秒切断正在播的克隆音并清空待播队列;再按一次恢复|说错话、误识别时拍它" style="display:none;border-color:rgba(248,113,113,.55);color:#fca5a5">⛔ 急停</button>
+  <button class="go ghost" id=panic data-tip="急停 · 立刻闭麦|0.1 秒切断正在播的克隆音并清空待播队列;再按一次恢复|说错话、误识别时拍它" style="display:none;border-color:rgba(248,113,113,.55);color:#fca5a5"><svg class=ic><use href="#i-stopcircle"/></svg> 急停</button>
   <div class="expwrap startgrp">
-    <button class=go id=btn data-tip="开始同传|按当前选好的角色/语言/设备直接开始翻译|设备已配好的日常使用;首次建议用右边 ▾ 里的通话向导">▶ 开始</button><button class="go caret" id=startCaret data-tip="更多开始方式|通话向导(自动配设备)和演示模式在这里|首次使用或想先看效果时点开">▾</button>
+    <button class=go id=btn data-tip="开始同传|按当前选好的角色/语言/设备直接开始翻译|设备已配好的日常使用;首次建议用右边 ▾ 里的通话向导">▶ 开始</button><button class="go caret" id=startCaret data-tip="更多开始方式|通话向导(自动配设备)、直播同传和演示模式在这里|首次使用或想先看效果时点开">▾</button>
     <div class=expmenu id=startmenu style="min-width:262px">
-      <a id=callmode data-tip="通话向导 · 自动配设备|默认麦切 CABLE→设备按名绑定→测试音自检→开始,每步红绿灯|首次通话或换了设备后推荐">📞 通话向导 <small>(自动配设备 · 首次推荐)</small></a>
-      <a id=demo data-tip="演示模式|不用麦克风,播放预设脚本看完整同传效果|第一次了解产品,或给别人展示">🎬 演示模式 <small>(无需麦克风)</small></a>
+      <a id=callmode data-tip="通话向导 · 自动配设备|默认麦切 CABLE→设备按名绑定→测试音自检→开始,每步红绿灯|首次通话或换了设备后推荐"><svg class=ic><use href="#i-call"/></svg> 通话向导 <small>(自动配设备 · 首次推荐)</small></a>
+      <a id=livemode data-tip="直播同传 · 数字人开口说外语|切输出方式为直播并立即开始(开播联动自动激活当前角色)|先在主控台「开播」出画面,再点这里配声音"><svg class=ic><use href="#i-live"/></svg> 直播同传 <small>(需先开播)</small></a>
+      <a id=demo data-tip="演示模式|不用麦克风,播放预设脚本看完整同传效果|第一次了解产品,或给别人展示"><svg class=ic><use href="#i-demo"/></svg> 演示模式 <small>(无需麦克风)</small></a>
     </div>
   </div>
 </header>
 <div class=scenebar id=scenebar>
-  <span class=tag data-tip="场景方案|一键切换你的听说设备组合(麦/耳机/虚拟麦自动按名绑定)|换了设备环境就换方案,不用逐个选设备">🎛 场景方案</span>
+  <span class=tag data-tip="场景方案|一键切换你的听说设备组合(麦/耳机/虚拟麦自动按名绑定)|换了设备环境就换方案,不用逐个选设备"><svg class=ic><use href="#i-scene"/></svg> 场景方案</span>
   <span id=scChips style="display:inline-flex;gap:6px;flex-wrap:wrap"></span>
   <span class=chip id=scMic><i></i><span id=scMicT>麦</span></span>
   <span class=chip id=scListen><i></i><span id=scListenT>监听</span></span>
   <span class=chip id=scDub><i></i><span id=scDubT>虚拟麦</span></span>
   <span class=dup id=scDup style="display:none"></span>
-  <button class=act id=scProbe data-tip="测回声 · 回声体检|播 2 声测试音,实测扬声器的声音会不会被麦收回去;互通→自动改轮流说话防回声,隔离→可同时说话|换了音响/耳机/方案后测一次(停止状态可用)">🔬 测回声</button>
-  <button class=act id=scDubTest data-tip="试音 · 端到端配音自检|真的用你的克隆音色合成一句话、推给对方的收音口(CABLE)并回录,一次验成 音色+引擎+虚拟麦通路 一盏灯|通话前点一下确认对方能听到;通话中点会把这句测试语播给对方">🔊 试音</button>
-  <button class=act id=scFixLoop style="display:none;border-color:var(--warn,#fbbf24)" data-tip="修复对方声来源 · 治自听串扰|检测到「对方声来源」和「你的麦」是同一块声卡时出现:你自己的话会被当成对方再识别一遍(串语言/乱字幕)|点它一键改用「立体声混音」抓对方声并重启采集链">🔧 修复对方声来源</button>
-  <button class=act id=scEngineFix style="display:none;border-color:var(--warn,#fbbf24)" data-tip="拉起配音引擎 · 治主引擎掉线|当前配音主引擎(如 CosyVoice)进程没在跑时出现:虽有兜底能出声,但会丢情感/延迟偏高|点它经主控台把主引擎重新拉起来">🔧 拉起配音引擎</button>
+  <button class=act id=scProbe data-tip="测回声 · 回声体检|播 2 声测试音,实测扬声器的声音会不会被麦收回去;互通→自动改轮流说话防回声,隔离→可同时说话|换了音响/耳机/方案后测一次(停止状态可用)"><svg class=ic><use href="#i-probe"/></svg> 测回声</button>
+  <button class=act id=scDubTest data-tip="试音 · 端到端配音自检|真的用你的克隆音色合成一句话、推给对方的收音口(CABLE)并回录,一次验成 音色+引擎+虚拟麦通路 一盏灯|通话前点一下确认对方能听到;通话中点会把这句测试语播给对方"><svg class=ic><use href="#i-zap"/></svg> 试音</button>
+  <button class=act id=scFixLoop style="display:none;border-color:var(--warn,#fbbf24)" data-tip="修复对方声来源 · 治自听串扰|检测到「对方声来源」和「你的麦」是同一块声卡时出现:你自己的话会被当成对方再识别一遍(串语言/乱字幕)|点它一键改用「立体声混音」抓对方声并重启采集链"><svg class=ic><use href="#i-tools"/></svg> 修复对方声来源</button>
+  <button class=act id=scEngineFix style="display:none;border-color:var(--warn,#fbbf24)" data-tip="拉起配音引擎 · 治主引擎掉线|当前配音主引擎(如 CosyVoice)进程没在跑时出现:虽有兜底能出声,但会丢情感/延迟偏高|点它经主控台把主引擎重新拉起来"><svg class=ic><use href="#i-tools"/></svg> 拉起配音引擎</button>
   <span class=chip id=scEngineChip style="display:none"><i></i><span id=scEngineT>引擎</span></span>
   <span class=chip id=scLastDub style="display:none"><i></i><span id=scLastDubT>试音</span></span>
   <span class=msg id=scMsg></span>
 </div>
 <div class=conflictbar id=conflictbar style="display:none"></div>
 <div class=ctl>
-  <div class=field data-tip="角色音色|用哪个克隆音色向对方说话;运行中也能切,下一句无缝生效|开始前选好;直播中可点「预载常用」提前准备 Top5 常用角色(省切换等待)"><label>角色音色 <span id=swtag></span> <a id=preload style="display:none;cursor:pointer;color:var(--warn);font-size:11px" title="只预载你最常用的 5 个角色(按使用次数)，不抢 GPU 给全部角色">📦 预载常用</a></label><select id=profile></select><div id=pstat style="display:none;font-size:11px;color:var(--mut);margin-top:3px;line-height:1.5"></div></div>
-  <div class=field data-tip="语言方向|左=我说的语言,右=对方的语言,中间 ⇄ 一键对调|选好语言后点「切换语向并生效」:通话中也会自动重启采集链,识别按新语言即时生效,不用手动停/开">
-    <label>语言 · 我说 ⇄ 对方</label>
-    <div style="display:flex;gap:6px;align-items:center">
-      <select id=lsrc></select>
-      <button id=langswap type=button class="go ghost" style="padding:8px 11px">⇄</button>
-      <select id=ldst></select>
+  <div class=field data-tip="角色音色|用哪个克隆音色向对方说话;运行中也能切,下一句无缝生效|开始前选好;直播中可点「预载常用」提前准备 Top5 常用角色(省切换等待)"><label>角色音色 <span id=swtag></span> <a id=preload style="display:none;cursor:pointer;color:var(--warn);font-size:11px" title="只预载你最常用的 5 个角色(按使用次数)，不抢 GPU 给全部角色">预载常用</a></label><select id=profile><option value="" disabled selected>加载中…</option></select><div id=pstat style="display:none;font-size:11px;color:var(--mut);margin-top:3px;line-height:1.5"></div></div>
+  <div class=field data-tip="语向|左=我说的语言,右=对方的语言,⇄ 一键对调;点常用胶囊一步直达|下拉/胶囊选好即记住;通话中改动会亮出琥珀「生效」键,点它自动按新语言重启识别(不点只改翻译,识别仍按旧语言→会串语言)">
+    <label>语向 · 我说 ⇄ 对方 <span id=langtag></span></label>
+    <div class=langrow>
+      <span class=langseg>
+        <select id=lsrc aria-label="我说的语言"><option value="" disabled selected>加载中…</option></select>
+        <button id=langswap type=button data-tip="对调语向|把「我说」和「对方」两种语言互换|想反向翻译时点一下">⇄</button>
+        <select id=ldst aria-label="对方的语言"><option value="" disabled selected>加载中…</option></select>
+      </span>
+      <button id=langapply type=button data-tip="生效 · 按新语向重启识别|自动停→按新语言重启采集链,流式识别即时按新语向工作|通话中改了语向就点它;不点只改翻译目标,识别语言不变→会串语言">生效</button>
+      <span id=langquick data-tip="常用语向一键直达|我说中文→对方听这个语言,点一下即切换并生效(通话中自动重启)|避开 24 项下拉框误点(实测点日语点成韩/俄)"><span class=qlabel>常用→</span></span>
     </div>
-    <button id=langapply type=button class="go" style="margin-top:6px;width:100%" data-tip="切换语向并生效|通话中换语言点这一个键:自动停→按新语言重启采集链(流式识别语言随之生效)|只改上面的下拉框而不点它,只会改翻译目标,识别语言不变→会串语言">🔄 切换语向并生效（自动重启）</button>
-    <div id=langquick style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px;align-items:center" data-tip="常用语向一键直达|我说中文→对方听这个语言,点一下即切换并生效(通话中自动重启)|避开 24 项下拉框误点(实测点日语点成韩/俄)"><span style="font-size:11px;color:var(--mut)">常用(我说中文→)</span></div>
   </div>
-  <div class=field data-tip="输出方式|通话=克隆音走虚拟麦给微信/Zoom;直播=数字人开口说外语+字幕|决定这一场是打电话还是开直播"><label>输出方式</label><select id=omode><option value=call>📞 通话(VB-Cable)</option><option value=live>🎭 直播(数字人·虚拟摄像头)</option></select></div>
-  <div class=field><button id=advbtn type=button class="go ghost" data-tip="高级设置|配音/翻译/字幕引擎与设备覆盖(我的麦/虚拟麦/对方声来源)|通常不用动:设备已按场景方案自动匹配">⚙ 高级设置</button></div>
+  <div class=field data-tip="输出方式|通话=克隆音走虚拟麦给微信/Zoom;直播=数字人开口说外语+字幕(出镜经虚拟摄像头)|决定这一场是打电话还是开直播"><label>输出方式</label><select id=omode><option value=call>📞 通话(VB-Cable)</option><option value=live>🎭 直播(数字人)</option></select></div>
+  <div class=field><button id=advbtn type=button class="go ghost" data-tip="高级设置|配音/翻译/字幕引擎与设备覆盖(我的麦/虚拟麦/对方声来源)|通常不用动:设备已按场景方案自动匹配"><svg class=ic><use href="#i-sliders"/></svg> 高级设置</button></div>
 </div>
 <div class=ctl id=advpanel>
   <div class=advhint>引擎与设备通常无需手动改——设备已按上方「场景方案」自动匹配，仅特殊情况在此覆盖(切换方案后以方案为准)。</div>
   <div class=field data-tip="配音引擎|Fish=默认最稳;Qwen3=低延迟流式;CosyVoice=情感克隆|请求失败会自动回退 Fish,平时无需改"><label>配音引擎</label><select id=ttsengine><option value=fish>Fish(默认)</option><option value=qwen3>Qwen3(低延迟)</option><option value=cosyvoice>CosyVoice(情感)</option></select></div>
   <div class=field data-tip="翻译模式|本地NMT=快·准·离线;Whisper直译=识别翻译一步出英文|默认本地NMT即可"><label>翻译模式</label><select id=mode><option value=local>本地NMT(快·准·离线)</option><option value=whisper>Whisper直译(英文一步出)</option></select></div>
   <div class=field data-tip="字幕引擎|逐词流式=边说边出字(Nemotron);整句分段=说完一句出一句(Whisper,更稳)|想要更快的字幕用逐词,识别不稳时换整句"><label>字幕引擎</label><select id=stream><option value=1>逐词流式(Nemotron)</option><option value=0>整句分段(Whisper)</option></select></div>
-  <div class=field data-tip="我的麦|收你说话的麦克风;选「手机麦」则用手机无线收音|平时跟随场景方案,声音收不到时来这里换"><label>我的麦</label><select id=mic></select></div>
-  <div class=field id=fcable data-tip="虚拟麦(给对方)|克隆音输出到的虚拟声卡,通话 App 的麦克风要选它对应的 CABLE Output|通话模式必配;直播模式不用"><label>虚拟麦(给对方)</label><select id=cable></select></div>
-  <div class=field data-tip="对方声来源|从哪里采集对方的声音(推荐立体声混音=抓扬声器)|听不到对方翻译时,第一个来这里换设备"><label>对方声来源 <span id=loophint style="font-size:11px;font-weight:400"></span></label><select id=loop></select></div>
+  <div class=field data-tip="我的麦|收你说话的麦克风;选「手机麦」则用手机无线收音|平时跟随场景方案,声音收不到时来这里换"><label>我的麦</label><select id=mic><option value="" disabled selected>加载中…</option></select></div>
+  <div class=field id=fcable data-tip="虚拟麦(给对方)|克隆音输出到的虚拟声卡,通话 App 的麦克风要选它对应的 CABLE Output|通话模式必配;直播模式不用"><label>虚拟麦(给对方)</label><select id=cable><option value="" disabled selected>加载中…</option></select></div>
+  <div class=field data-tip="对方声来源|从哪里采集对方的声音(推荐立体声混音=抓扬声器)|听不到对方翻译时,第一个来这里换设备"><label>对方声来源 <span id=loophint style="font-size:11px;font-weight:400"></span></label><select id=loop><option value="" disabled selected>加载中…</option></select></div>
 </div>
 <div class=phonebar id=phonebar style="display:none">
   <span class=tag data-tip="手机端|手机当无线麦克风和监听耳机,免走线|人离电脑说话/想用手机听翻译时">📱 手机端</span>
@@ -11048,6 +11455,12 @@ main{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px;
 <script>
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const IC=n=>'<svg class=ic><use href="#i-'+n+'"/></svg>';   // 线性图标(sprite 引用),动态改写按钮文案时用它拼
+// 嵌入态：Hub iframe 内品牌块隐藏/纯色底(宿主已有品牌与卡头)。?embed=0/1 可强制覆盖(预览/调试)。
+const EMBED=(()=>{ try{ const q=new URLSearchParams(location.search);
+  if(q.get('embed')==='1') return true; if(q.get('embed')==='0') return false;
+  return window.self!==window.top; }catch(e){ return false; } })();
+if(EMBED) document.body.classList.add('embed');
 function setupNav(){
   const host=location.hostname||'127.0.0.1';
   $('#hubLink').href='http://'+host+':9000/';
@@ -11108,12 +11521,23 @@ function syncMainBtn(){ const b=$('#btn'); if(!b) return;
   const c=$('#startCaret'); if(c) c.className='go caret'+((running||demoRunning)?' stop':''); }
 function syncCtx(){ const p=$('#panic'); if(p) p.style.display=(running||demoRunning||muted)?'':'none'; }
 function setDemoUI(on){ demoRunning=on;
-  const d=$('#demo'); if(d) d.innerHTML=on?'■ 停止演示':'🎬 演示模式 <small>(无需麦克风)</small>';
+  const d=$('#demo'); if(d) d.innerHTML=on?'■ 停止演示':IC('demo')+' 演示模式 <small>(无需麦克风)</small>';
   if(on){ $('#dot').className='on'; $('#st').textContent='演示中…'; }
   else if(!running){ $('#dot').className=''; $('#st').textContent='已停止'; }
-  syncMainBtn(); syncCtx(); syncEmptyGuide(); }
-// ── 空状态引导:字幕列表没内容时,左列显示"开始前 3 步"(实时取当前角色/方案),
+  syncMainBtn(); syncCtx(); syncEmptyGuide(); syncLangUI(); }
+// ── 空状态引导:字幕列表没内容时,左列显示"开始前 3 步"(实时取当前角色/方案)+上次会话摘要,
 //    右列一句话说明;运行后变成"请开口说话"。有真实字幕行即自动移除。──
+let lastSession=null;   // /session/last 摘要(原 Hub 卡头观测条独有信息,随观测条退役迁到这里)
+async function loadLastSession(){
+  try{ const j=await (await fetch('/session/last')).json();
+    lastSession=(j&&j.summary)||null; syncEmptyGuide(); }catch(e){}
+}
+function lastSessionLine(){
+  const s=lastSession; if(!s||running||demoRunning) return '';
+  const c=s.counts||{}, v=x=>(x==null?'—':x);
+  return '<div class=egs>上次会话：'+esc(s.profile||'—')+' · 我'+(c.a||0)+'/对方'+(c.b||0)+' 句 · 端到端 '
+    +v(s.e2e_ms)+'ms'+(s.live_mode?(' · TTFV '+v(s.ttfv_ms)+'ms'):'')+'</div>';
+}
 function syncEmptyGuide(){
   const lme=$('#lme'), lot=$('#lot'); if(!lme||!lot) return;
   const mk=(host,id)=>{ let g=host.querySelector('#'+id);
@@ -11130,8 +11554,10 @@ function syncEmptyGuide(){
       g1.innerHTML='<div class=egt>🚀 开始前 3 步</div>'
         +'<div>① 角色音色:<b>'+esc(prof)+'</b>(上方可换)</div>'
         +'<div>② 场景方案:<b>'+esc(scene)+'</b>(按你的设备环境选)</div>'
-        +'<div>③ 点右上角 <b>▶ 开始</b>;首次建议「开始 ▾ → 📞 通话向导」,想先看效果选「🎬 演示」</div>'
-        +'<div class=egs>💡 直播出镜:先在主控台「📡 开播」出画面,再回这里开直播同传(输出方式选 🎭 直播)</div>';
+        +'<div>③ 点右上角 <b>▶ 开始</b>;首次建议「开始 ▾ → 通话向导」</div>'
+        +'<div class=egs>💡 想先看效果? <a class=egact id=egdemo>播放 30 秒演示</a>(无需麦克风) &nbsp;·&nbsp; 直播出镜:先在主控台「开播」出画面,再点「开始 ▾ → 直播同传」</div>'
+        +lastSessionLine();
+      const dl=g1.querySelector('#egdemo'); if(dl) dl.onclick=()=>{ const d=$('#demo'); if(d) d.click(); };
     }
   }
   const g2=mk(lot,'eguide2');
@@ -11264,6 +11690,19 @@ function addRow(ev){
     return;
   }
   if(ev.uid==null || ev.turn==null) return;
+  // P-Affirm 声纹拦截灰行：显示被拦原因 + 一键「是我·放行并学习」(误拦不再是黑洞)
+  if(ev.blocked==='spk'){
+    const row=document.createElement('div'); row.className='row me vlblock';
+    const txt=ev.text?esc(ev.text):('🎤 '+(ev.dur!=null?ev.dur:'?')+'s 语音(拦在识别前)');
+    row.innerHTML='<div class=src style="opacity:.5">'+txt+'</div>'
+      +'<div class=dst><span style="color:#f87171;font-size:12px">🚫 声纹拦截 '
+      +(ev.sim!=null?ev.sim:'—')+' / 门限 '+(ev.thr!=null?ev.thr:'—')+'</span> '
+      +'<button class=affirmbtn data-uid="'+ev.uid+'" onclick="vlAffirm(this)">是我 · 放行并学习</button></div>'
+      +'<div class=meta></div>';
+    $('#lme').appendChild(row);
+    markLatest(row,'me'); scrollList('#lme'); if(fsOn) renderFS();
+    return;
+  }
   // 流式撤回：该句经门控判为底噪/幻听 → 删除占位行
   if(ev.retract){
     const t=rowByTurn[ev.turn];
@@ -11329,6 +11768,23 @@ function connect(){
   es.onmessage=e=>{ const ev=JSON.parse(e.data); lastId=ev.id; addRow(ev); syncEmptyGuide(); };
 }
 
+async function vlAffirm(btn){                          // P-Affirm 一键放行:学声纹+补跑翻译配音
+  btn.disabled=true; btn.textContent='处理中…';
+  try{
+    const r=await (await fetch('/voicelock/affirm',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({uid:+btn.dataset.uid})})).json();
+    if(r.ok){
+      btn.textContent=r.replayed?'✓ 已放行·声纹已学习':'✓ 声纹已学习';
+      btn.style.color='#4ade80'; btn.style.borderColor='#4ade8066';
+      const row=btn.closest('.row'); if(row) row.style.opacity='.45';
+    }else{
+      btn.textContent=(r.detail&&r.detail.indexOf('过期')>=0)?'已过期·请重说':'失败·重试';
+      btn.disabled=false;
+    }
+  }catch(e){ btn.disabled=false; btn.textContent='失败·重试'; }
+}
+
 const f=v=>v==null?'—':(v.median+'/'+v.p90+'ms');     // 中位/p90
 function ahPill(h){                                    // 音频健康指示灯(绿=正常/黄=偏吵已自适应)
   if(!h||h.level==='idle') return '';
@@ -11348,8 +11804,12 @@ function ahPill(h){                                    // 音频健康指示灯(
     (h.drops_total?` <span style="opacity:.6">(拦${h.drops_total})</span>`:'')+
     (fixes?` <span style="opacity:.6;color:#93c5fd" title="GER 终稿复核已纠错/救回句数">(纠${fixes})</span>`:'');
 }
-function vlPill(v){                                    // 声纹锁指示(锁定=只翻译注册人;注册中=自动累积)
+function vlPill(v){                                    // 声纹锁指示(锁定=只翻译注册人;注册中=自动累积;影子=底座失真降级放行)
   if(!v||!v.enabled||v.model_ok===false) return '';
+  if(v.shadow){
+    const tip=`声纹底座疑似失真(连续拦截且零放行)，已临时放行保出声\n影子放行 ${v.shadow_passes||0} 句 · 门限 ${v.thr} · 最近相似度 ${v.last_sim==null?'—':v.last_sim}\n正常说几句话会自动重建声纹；或点重置声纹立即重录`;
+    return ` · <span title="${tip}" style="color:#fbbf24;font-weight:700;cursor:help">🟡 声纹影子·放行中</span>`;
+  }
   if(v.enrolled){
     const tip=`声纹锁已激活：只翻译注册说话人\n门限 ${v.thr} · 最近相似度 ${v.last_sim==null?'—':v.last_sim}\n放行 ${v.accepts||0} 句 · 拦截 ${v.rejects||0} 句\n换人使用请点重置(voicelock/reset)`;
     return ` · <span title="${tip}" style="color:#86efac;font-weight:700;cursor:help">🔒 声纹锁定</span>`;
@@ -11360,6 +11820,8 @@ function vlPill(v){                                    // 声纹锁指示(锁定
 async function pollMetrics(){
   try{
     const m=await (await fetch('/metrics')).json();
+    // 会话在跑而本页不知道(中途刷新/别处开的)→对齐真相,运行态 UI(主按钮/生效键)才不失真
+    if(m.running===true && !running && !demoRunning){ running=true; syncMainBtn(); syncCtx(); syncEmptyGuide(); syncLangUI(); }
     const live=m.live_mode;
     const ls=$('#livestat');
     if(live){
@@ -11374,9 +11836,9 @@ async function pollMetrics(){
       $('#spark2wrap').style.display='inline';
       const pl=$('#preload'); pl.style.display=running?'inline':'none';
       const pr=(m.preset_ready||[]), pq=(m.preset_queue||[]);
-      if(m.preset_loading) pl.textContent='📦 预载中'+(pq.length?' 剩'+pq.length:'…');
-      else if(pr.length){ pl.textContent='📦 已入池 '+pr.length; }
-      else pl.textContent='📦 预载常用';
+      if(m.preset_loading) pl.textContent='预载中'+(pq.length?' 剩'+pq.length:'…');
+      else if(pr.length){ pl.textContent='已入池 '+pr.length; }
+      else pl.textContent='预载常用';
       // P5: 预载进度明细——谁已秒切就绪、谁还在排队,不用翻事件流猜
       const ps=$('#pstat'), cut=a=>a.slice(0,3).join('、')+(a.length>3?' 等'+a.length+'个':'');
       if(running&&(pr.length||pq.length)){
@@ -11452,8 +11914,9 @@ async function loadScene(){
     const r=await (await fetch('/audio_profile')).json();
     if(!r.ok) return;
     scActive=r.active;
+    // 方案 chip 不再渲染 emoji 图标(p.icon)：选中态实心胶囊已足够辨识,首屏少一排彩色噪点
     $('#scChips').innerHTML=Object.entries(r.profiles).map(([k,p])=>
-      `<span class="sc${k===scActive?' on':''}" data-k="${k}" data-tip="${esc(p.label||k)}|${esc(p.desc||'')}|点击切换;会话中切换将于下次开播生效">${p.icon||''} ${esc(p.label||k)}</span>`).join('');
+      `<span class="sc${k===scActive?' on':''}" data-k="${k}" data-tip="${esc(p.label||k)}|${esc(p.desc||'')}|点击切换;会话中切换将于下次开播生效">${esc(p.label||k)}</span>`).join('');
     document.querySelectorAll('#scChips .sc').forEach(el=>el.onclick=()=>switchScene(el.dataset.k));
     renderLegs(r.resolved&&r.resolved.legs);
     renderDup(r.half_duplex_now, r.coupling);
@@ -11478,8 +11941,8 @@ function renderDup(hd, cp){
   el.className='dup '+(hd?'half':'full');
   el.textContent=hd?'⇅ 轮流说话(半双工)':'⇄ 全双工';
   el.setAttribute('data-tip', hd
-    ? '轮流说话(半双工)|'+((cp&&cp.detail)||'实测扬声器↔麦互通:同一时间只翻一方,防回声自激')+'|想同时说话:戴上耳机后点「🔬 测回声」重测'
-    : '全双工|'+((cp&&cp.detail)||'双方可同时说话,链路声学隔离良好')+'|开播自检自动实测;点「🔬 测回声」可随时复测');
+    ? '轮流说话(半双工)|'+((cp&&cp.detail)||'实测扬声器↔麦互通:同一时间只翻一方,防回声自激')+'|想同时说话:戴上耳机后点「测回声」重测'
+    : '全双工|'+((cp&&cp.detail)||'双方可同时说话,链路声学隔离良好')+'|开播自检自动实测;点「测回声」可随时复测');
 }
 async function switchScene(k){
   if(scSwitching||k===scActive) return;
@@ -11503,7 +11966,7 @@ async function switchScene(k){
   scSwitching=false;
 }
 $('#scProbe').onclick=async()=>{
-  const b=$('#scProbe'); b.disabled=true; b.textContent='🔬 测试中…';
+  const b=$('#scProbe'); b.disabled=true; b.innerHTML=IC('probe')+' 测试中…';
   try{
     const r=await (await fetch('/coupling_probe',{method:'POST'})).json();
     // 情境指引:测出互通不只报结果,直接给"想全双工该怎么做"
@@ -11512,22 +11975,22 @@ $('#scProbe').onclick=async()=>{
       : ('探测失败: '+(r.detail||''));
     if(r.ok) renderDup(r.coupled, r);
   }catch(e){ $('#scMsg').textContent='探测异常'; }
-  b.disabled=false; b.textContent='🔬 测回声';
+  b.disabled=false; b.innerHTML=IC('probe')+' 测回声';
 };
 $('#scDubTest').onclick=async()=>{
-  const b=$('#scDubTest'); b.disabled=true; b.textContent='🔊 试音中…';
+  const b=$('#scDubTest'); b.disabled=true; b.innerHTML=IC('zap')+' 试音中…';
   $('#scMsg').textContent='正在用你的克隆音色合成一句、推给对方收音口…';
   try{
     const r=await (await fetch('/call_mode/dub_test',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({profile:$('#profile').value||''})})).json();
     $('#scMsg').textContent=(r.ok?'✅ ':'⚠ ')+(r.reason||'试音完成');
   }catch(e){ $('#scMsg').textContent='试音异常: '+e; }
-  b.disabled=false; b.textContent='🔊 试音'; setTimeout(dcEnginePoll,300);
+  b.disabled=false; b.innerHTML=IC('zap')+' 试音'; setTimeout(dcEnginePoll,300);
 };
 // 一键修复对方声来源(自听同族→强制立体声混音重跑)；仅在自检检出可修复时显示
 function showFixLoop(on){ const b=$('#scFixLoop'); if(b) b.style.display=on?'':'none'; }
 $('#scFixLoop').onclick=async()=>{
-  const b=$('#scFixLoop'); b.disabled=true; b.textContent='🔧 修复中…';
+  const b=$('#scFixLoop'); b.disabled=true; b.innerHTML=IC('tools')+' 修复中…';
   $('#scMsg').textContent='正在改用「立体声混音」抓对方声并重启采集链…';
   try{
     const r=await (await fetch('/call_mode/fix_loopback',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -11535,9 +11998,9 @@ $('#scFixLoop').onclick=async()=>{
     $('#scMsg').textContent=(r.fix_applied?'✅ ':'⚠ ')+(r.fix_note||'已尝试修复');
     showFixLoop(!!r.self_hear_fixable);
     if(r.session_running){ running=true; callModeActive=true; $('#dot').className='on';
-      $('#st').textContent='运行中 · 通话模式'; syncMainBtn&&syncMainBtn(); syncCtx&&syncCtx(); }
+      $('#st').textContent='运行中 · 通话模式'; syncMainBtn&&syncMainBtn(); syncCtx&&syncCtx(); markApplied(); }
   }catch(e){ $('#scMsg').textContent='修复异常: '+e; }
-  b.disabled=false; b.textContent='🔧 修复对方声来源';
+  b.disabled=false; b.innerHTML=IC('tools')+' 修复对方声来源';
 };
 // 配音引擎体检 + 最近试音：轮询点亮引擎状态灯/常驻最近一次试音峰值,主引擎挂了露出「拉起配音引擎」
 function fmtAge(s){ if(s==null) return ''; if(s<60) return Math.round(s)+'秒前'; if(s<3600) return Math.round(s/60)+'分前'; return Math.round(s/3600)+'时前'; }
@@ -11558,13 +12021,13 @@ async function dcEnginePoll(){
   }catch(e){ }
 }
 $('#scEngineFix').onclick=async()=>{
-  const b=$('#scEngineFix'); b.disabled=true; b.textContent='🔧 拉起中…';
+  const b=$('#scEngineFix'); b.disabled=true; b.innerHTML=IC('tools')+' 拉起中…';
   $('#scMsg').textContent='正在经主控台把配音主引擎重新拉起(模型加载可能十几秒)…';
   try{
     const r=await (await fetch('/tts/engine_restart',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
     $('#scMsg').textContent=(r.ok?'✅ ':'⚠ ')+(r.reason||'已请求拉起');
   }catch(e){ $('#scMsg').textContent='拉起异常: '+e; }
-  b.disabled=false; b.textContent='🔧 拉起配音引擎'; setTimeout(dcEnginePoll,1500);
+  b.disabled=false; b.innerHTML=IC('tools')+' 拉起配音引擎'; setTimeout(dcEnginePoll,1500);
 };
 setInterval(dcEnginePoll, 20000); setTimeout(dcEnginePoll, 1500);
 function renderConflicts(list){
@@ -11585,7 +12048,7 @@ function syncSceneFromMetrics(m){
 loadScene();
 
 const HINTS={
-  call:'通话模式：通话App「麦克风」设为 <b>CABLE Output (VB-Audio Virtual Cable)</b>；扬声器设为你在「对方声来源」(⚙ 高级设置内)选的设备（或选"立体声混音/环回"抓对方声）。',
+  call:'通话模式：通话App「麦克风」设为 <b>CABLE Output (VB-Audio Virtual Cable)</b>；扬声器设为你在「对方声来源」(高级设置内)选的设备（或选"立体声混音/环回"抓对方声）。',
   live:'直播模式：你说中文 → 数字人用克隆英文开口(底部字幕)；对方英文 → 顶部字幕。启动时自动激活所选角色并同步虚拟摄像头待机。直播软件「摄像头」选 <b>OBS Virtual Camera</b>。<span id=idlehint></span>'};
 function applyHint(){
   const live=$('#omode').value==='live';
@@ -11635,19 +12098,19 @@ $('#preload').addEventListener('click', async ()=>{
       .filter(x=>x.name && x.name!==cur && (x.use_n||0)>0)
       .slice(0,5).map(x=>x.name);
     if(!names.length){
-      $('#preload').textContent='📦 暂无常用';
-      setTimeout(()=>{ if(running) $('#preload').textContent='📦 预载常用'; }, 2500);
+      $('#preload').textContent='暂无常用';
+      setTimeout(()=>{ if(running) $('#preload').textContent='预载常用'; }, 2500);
       return;
     }
     const r=await (await fetch('/preload',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({profiles:names})})).json();
-    if(r.busy) $('#preload').textContent='📦 预载中…';
+    if(r.busy) $('#preload').textContent='预载中…';
     else{
       const tip=names.join('、');
-      $('#preload').textContent='📦 已排队 '+names.length;
+      $('#preload').textContent='已排队 '+names.length;
       $('#preload').title='预载: '+tip;
     }
-  }catch(e){ $('#preload').textContent='📦 预载常用'; }
+  }catch(e){ $('#preload').textContent='预载常用'; }
 });
 
 async function doStart(){
@@ -11668,10 +12131,11 @@ async function doStart(){
     if(r.cap_b_err){
       $('#st').textContent+='(对方声采集失败)';
       // 情境指引:直接告诉用户去哪修,而不是只报错
-      $('#warn').textContent='⚠ 对方声采集失败 → 点「⚙ 高级设置」把「对方声来源」换一个设备(推荐 立体声混音)后重新开始';
+      $('#warn').textContent='⚠ 对方声采集失败 → 点「高级设置」把「对方声来源」换一个设备(推荐 立体声混音)后重新开始';
       clearTimeout(window._wt); window._wt=setTimeout(()=>$('#warn').textContent='',20000);
     }
     if(live) refreshIdleHint();
+    markApplied();                       // 本场以当前语向开跑→快照对齐,「生效」键熄灭
     syncMainBtn(); syncCtx(); syncEmptyGuide();
   }
   return r;
@@ -11685,12 +12149,14 @@ $('#btn').onclick=async()=>{
     await fetch(callModeActive?'/call_mode/stop':'/stop',{method:'POST'});
     running=false; callModeActive=false;
     $('#dot').className=''; $('#st').textContent='已停止';
-    syncMainBtn(); syncCtx(); syncEmptyGuide();
+    syncMainBtn(); syncCtx(); syncEmptyGuide(); syncLangUI();
+    loadLastSession();                 // 刚结束的场次摘要落进空态(原 Hub 观测条独有信息就近迁入)
   }
 };
 bindMenu('#startCaret','#startmenu',()=>{
   // 运行中"再开始"无意义→置灰;演示中"演示"项变为可点的「停止演示」
   $('#callmode').classList.toggle('dis',running||demoRunning);
+  $('#livemode').classList.toggle('dis',running||demoRunning);
   $('#demo').classList.toggle('dis',running&&!demoRunning);
 });
 
@@ -11712,10 +12178,10 @@ function updateSndBadge(){ const n=(monitorOn?1:0)+(readbackOn?1:0);
   const e=$('#sndbadge'); if(e) e.textContent=n?(' · '+n):'';
   const sb=$('#sndbtn'); if(sb){ sb.style.color=n?'#86efac':''; sb.style.borderColor=n?'rgba(52,211,153,.5)':''; } }
 function renderMonitor(){ const b=$('#monitor'); if(!b) return;
-  b.innerHTML='🎧 耳返 <small>'+(monitorOn?'· 开':'· 关')+'</small>';
+  b.innerHTML=IC('headphones')+' 耳返 <small>'+(monitorOn?'· 开':'· 关')+'</small>';
   b.style.color=monitorOn?'#86efac':''; updateSndBadge(); }
 function renderReadback(){ const b=$('#readback'); if(!b) return;
-  b.innerHTML='🔈 对方朗读 <small>'+(readbackOn?(readbackRef?'· 开':'· 等对方开口'):'· 关')+'</small>';
+  b.innerHTML=IC('waves')+' 对方朗读 <small>'+(readbackOn?(readbackRef?'· 开':'· 等对方开口'):'· 关')+'</small>';
   b.style.color=readbackOn?'#86efac':''; updateSndBadge(); }
 $('#panic').onclick=async()=>{
   muted=!muted; renderPanic();
@@ -11787,13 +12253,13 @@ $('#callmode').onclick=async()=>{
     const lines=(r.steps||[]).map(s=>(s.ok?'✅ ':(s.soft?'⚠️ ':'❌ '))+s.name+(s.detail?('：'+s.detail):'')).join('\n');
     showFixLoop(!!r.self_hear_fixable);   // 检出"对方声=我的麦同族"→亮出一键修复
     if(r.ready){
-      running=true; callModeActive=true;
+      running=true; callModeActive=true; markApplied();
       $('#dot').className='on'; $('#st').textContent='运行中 · 通话模式';
       $('#warn').textContent='✅ 通话模式就绪！微信重新拨打即生效';
       clearTimeout(window._wt); window._wt=setTimeout(()=>$('#warn').textContent='',9000);
     } else {
       // 有红灯但会话其实已启动(典型:缺配音音色,字幕仍可用)→按钮态跟真相走,不再显示"已停止"却在录
-      if(r.session_running){ running=true; callModeActive=true; $('#dot').className='on';
+      if(r.session_running){ running=true; callModeActive=true; markApplied(); $('#dot').className='on';
         $('#st').textContent='运行中 · 通话模式(有未通过项)'; }
       else $('#st').textContent=running?'运行中':'已停止';
       alert('通话模式自检未全部通过：\n\n'+lines);
@@ -11814,9 +12280,19 @@ $('#demo').onclick=async()=>{
     // 演示约 30s 后自动复位按钮态(后端结束会推 sys 事件,这里兜底)
     setTimeout(()=>{ if(demoRunning) setDemoUI(false); }, 60000); }
 };
+// 直播同传(原 Hub 卡头 CTA 的编排,移入唯一开始入口)：切直播输出并立即开始;
+// 角色激活由 /start 的直播联动完成(服务端向 Hub 激活当前角色并同步虚拟摄像头)。
+$('#livemode').onclick=async()=>{
+  closeMenus();
+  if(running||demoRunning){ alert('请先停止当前会话再切直播同传。'); return; }
+  $('#omode').value='live'; applyHint();
+  const r=await doStart();
+  if(!(r&&r.ok)){ const w=$('#warn'); if(w){ w.textContent='⚠ 直播同传启动失败：'+((r&&(r.detail||r.error))||'请查设备/服务后重试');
+    clearTimeout(window._wt); window._wt=setTimeout(()=>w.textContent='',9000); } }
+};
 
 // 大字幕全屏:工具菜单项切换 + 快捷键 F + Esc 退出
-function renderFsItem(){ const b=$('#fs'); if(b) b.innerHTML=(fsOn?'🗗 退出大字幕':'🔳 大字幕')+' <small>(F)</small>'; }
+function renderFsItem(){ const b=$('#fs'); if(b) b.innerHTML=IC('fullscreen')+(fsOn?' 退出大字幕':' 大字幕')+' <small>(F)</small>'; }
 $('#fs').onclick=()=>{ closeMenus(); fsOn=!fsOn; $('#fsov').classList.toggle('on',fsOn); renderFsItem(); if(fsOn) renderFS(); };
 $('#fsclose').onclick=()=>{ fsOn=false; $('#fsov').classList.remove('on'); renderFsItem(); };
 document.addEventListener('keydown',e=>{
@@ -11855,7 +12331,7 @@ function screenDumpTxt(){
 (function(){
   const p=$('#advpanel'), b=$('#advbtn'); if(!p||!b) return;
   const set=on=>{ p.classList.toggle('on',on); b.classList.toggle('on',on);
-    b.textContent=on?'⚙ 收起高级':'⚙ 高级设置';
+    b.innerHTML=IC('sliders')+(on?' 收起高级':' 高级设置');
     try{ localStorage.setItem('lx_adv',on?'1':'0'); }catch(e){} };
   let saved='0'; try{ saved=localStorage.getItem('lx_adv')||'0'; }catch(e){}
   set(saved==='1');
@@ -11898,14 +12374,31 @@ async function pollPhone(){
   }catch(e){ const bar=$('#phonebar'); if(bar) bar.style.display='none'; }
   setTimeout(pollPhone, 3000);
 }
+// ── 语向控件状态(P0/P1)：appliedSrc/Dst=会话已生效语向快照。
+//    运行中"当前选择≠已生效"→亮出琥珀「生效」键(有未生效的改动)；未运行时选好即记住,键不出现。──
+let appliedSrc='zh', appliedDst='en';
+function markApplied(){ const s=$('#lsrc'), d=$('#ldst');
+  if(s&&s.value) appliedSrc=s.value; if(d&&d.value) appliedDst=d.value; syncLangUI(); }
+function syncLangUI(){
+  const ap=$('#langapply'), s=$('#lsrc'), d=$('#ldst'); if(!ap||!s||!d) return;
+  const pend=running && !demoRunning && (s.value!==appliedSrc||d.value!==appliedDst);
+  ap.classList.toggle('show',pend);
+  if(!pend){ ap.disabled=false; ap.textContent='生效'; }
+  if(window._renderQuick) window._renderQuick();
+}
+// 语向就地反馈(标签右侧小字,与角色字段 swtag 同模式):操作结果不再只藏在页脚观测条
+function langTag(html,ms){ const t=$('#langtag'); if(!t) return; t.innerHTML=html||'';
+  clearTimeout(window._lgt); if(html&&ms) window._lgt=setTimeout(()=>{ t.innerHTML=''; },ms); }
 async function loadLangs(){
   try{
-    const d=await (await fetch('/config/langs')).json();
+    // 取数失败也要让语向下拉长出中英兜底(否则骨架"加载中…"永久驻留)
+    let d={}; try{ d=await (await fetch('/config/langs')).json(); }catch(e){}
     const langs=(d.langs&&d.langs.length)?d.langs:[{code:'zh',name:'中文'},{code:'en',name:'英语'}];
     const opt=(cur)=>langs.map(l=>'<option value="'+l.code+'"'+(l.code===cur?' selected':'')+'>'+l.name+'</option>').join('');
     const ls=$('#lsrc'), ld=$('#ldst');
     if(ls) ls.innerHTML=opt(d.src||'zh');
     if(ld) ld.innerHTML=opt(d.dst||'en');
+    appliedSrc=d.src||'zh'; appliedDst=d.dst||'en';
     const gc=$('#gcount');
     if(gc){ const n=d.glossary_count||0; gc.textContent=(d.glossary_on===false)?'（已关闭）':(n>0?('· '+n+' 条'):'· 未设'); }
     const exn=$('#expn');
@@ -11919,17 +12412,22 @@ async function loadLangs(){
       if(h2) h2.textContent='对方 · '+dn+' → '+sn+'字幕';
     };
     updHeads();
+    // 下拉/⇄改动：立即记住翻译方向;运行中转入"待生效"(亮琥珀键),不再静默留串语言隐患
     const post=async()=>{ try{ await fetch('/config/langs',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({src:$('#lsrc').value,dst:$('#ldst').value})}); }catch(e){} updHeads();
-      if(running){ const w=$('#warn'); if(w){ w.textContent='ℹ 已改翻译方向；点「🔄 切换语向并生效」让识别按新语言重启，否则会串语言';
-        clearTimeout(window._wt); window._wt=setTimeout(()=>{w.textContent='';},7000);} } };
+      body:JSON.stringify({src:$('#lsrc').value,dst:$('#ldst').value})}); }catch(e){} updHeads(); syncLangUI();
+      if(running && $('#langapply').classList.contains('show')){
+        langTag('<span style="color:var(--warn)">待生效</span>');
+        const w=$('#warn'); if(w){ w.textContent='ℹ 已改翻译方向；点琥珀「生效」让识别按新语言重启，否则会串语言';
+        clearTimeout(window._wt); window._wt=setTimeout(()=>{w.textContent='';},7000);} }
+      else langTag(''); };
     if(ls) ls.onchange=post; if(ld) ld.onchange=post;
-    // 一键切语向并生效：通话中自动停→按新语言重启采集链，无需手动停/开
+    // 生效：自动停→按新语言重启采集链，无需手动停/开(未运行=仅记住,开始后生效)
     const applyLangs=async(restart)=>{
       const s=$('#lsrc').value, d=$('#ldst').value;
       const sn=($('#lsrc').selectedOptions[0]||{}).text||s, dn=($('#ldst').selectedOptions[0]||{}).text||d;
-      const w=$('#warn'), ap=$('#langapply'); const old=ap?ap.textContent:'';
-      if(ap && restart){ ap.disabled=true; ap.textContent='切换重启中…'; }
+      const w=$('#warn'), ap=$('#langapply');
+      if(ap && restart){ ap.disabled=true; ap.textContent='生效中…';
+        langTag('<span style="color:var(--warn)">切换重启中…</span>'); }
       try{
         const r=await (await fetch('/config/langs',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({src:s,dst:d,restart:!!restart})})).json();
@@ -11938,11 +12436,16 @@ async function loadLangs(){
           if(r.restarted && !r.restart_err) w.textContent='✅ 已切换并重启：我说「'+sn+'」→ 对方「'+dn+'」'+(r.asr_route?('（'+r.asr_route+'）'):'');
           else if(r.restarted && r.restart_err) w.textContent='⚠ 已重启但采集有告警：'+r.restart_err;
           else if(r.restart_err) w.textContent='⚠ 重启失败：'+r.restart_err+'（可手动停止再开始）';
-          else w.textContent='已设置语向：我说「'+sn+'」→ 对方「'+dn+'」'+(running?'（点「🔄 切换语向并生效」重启识别）':'（未在通话，开始后生效）');
+          else w.textContent='已设置语向：我说「'+sn+'」→ 对方「'+dn+'」'+(running?'（点「生效」重启识别）':'（未在通话，开始后生效）');
           clearTimeout(window._wt); window._wt=setTimeout(()=>{w.textContent='';},9000);
         }
-      }catch(e){ if(w) w.textContent='切换失败：'+e; }
-      if(ap && restart){ ap.disabled=false; ap.textContent=old; }
+        if(r.restarted && !r.restart_err) langTag('<span style="color:var(--ok)">✓ 已生效</span>',3000);
+        else if(r.restart_err) langTag('<span style="color:var(--danger)">✗ 未生效,可重试</span>',6000);
+        else if(restart) langTag('<span style="color:var(--ok)">✓ 已记住</span>',3000);
+        if(!r.restart_err) markApplied();          // 成功(或未运行仅记住)→快照对齐,生效键熄灭
+      }catch(e){ if(w) w.textContent='切换失败：'+e; langTag('<span style="color:var(--danger)">✗ 切换失败</span>',6000); }
+      if(ap && restart){ ap.disabled=false; ap.textContent='生效'; }
+      syncLangUI();
     };
     const ap=$('#langapply'); if(ap) ap.onclick=()=>applyLangs(true);
     // 常用语向一键直达(我说中文→X)：避开 24 项下拉框误点(实测点日语点成韩/俄)。一点即切+重启生效。
@@ -11956,25 +12459,28 @@ async function loadLangs(){
           const b=document.createElement('button'); b.type='button';
           b.textContent=name; b.dataset.code=code;
           const on=($('#ldst').value===code && $('#lsrc').value==='zh');
-          b.className='go '+(on?'':'ghost'); b.style.cssText='padding:5px 10px;font-size:12px;flex:0 0 auto';
+          b.className='qc'+(on?' on':'');
           b.onclick=async()=>{
-            if($('#lsrc').value==='zh' && $('#ldst').value===code){        // 已是该语向:别白白重启会话
+            if($('#lsrc').value==='zh' && $('#ldst').value===code && !$('#langapply').classList.contains('show')){
               const w=$('#warn'); if(w){ w.textContent='已经是「中文 → '+name+'」了'; clearTimeout(window._wt); window._wt=setTimeout(()=>{w.textContent='';},4000);} return;
             }
-            $('#lsrc').value='zh'; $('#ldst').value=code; await applyLangs(true); renderQuick();
+            $('#lsrc').value='zh'; $('#ldst').value=code; await applyLangs(true);
           };
           qbox.appendChild(b);
         });
       };
+      window._renderQuick=renderQuick;   // 语向任何来源的变化(下拉/⇄/生效/开始)统一经 syncLangUI 刷新高亮
       renderQuick();
     }
     const sw=$('#langswap');
     if(sw) sw.onclick=async()=>{
       const a=$('#lsrc').value, b=$('#ldst').value;
       if(a===b) return;                                  // 同语言无需互换
+      sw.classList.remove('spin'); void sw.offsetWidth; sw.classList.add('spin');
       $('#lsrc').value=b; $('#ldst').value=a;
-      await applyLangs(running);                         // 运行中直接重启生效；未运行仅设置
+      await post();                                      // 与下拉同一模型:记住方向;运行中亮「生效」键待确认
     };
+    syncLangUI();
   }catch(e){}
   try{
     const te=await (await fetch('/config/tts')).json();
@@ -11991,15 +12497,18 @@ async function boot(){
     catch(e){ if(i===2) console.warn('loadDevices 三连败(设备/角色下拉可能为空):',e);
               else await new Promise(r=>setTimeout(r,1500)); }
   }
-  loadLangs();
+  loadLangs(); loadLastSession();
   connect(); pollMetrics(); pollPhone();
   syncEmptyGuide();
   const q=new URLSearchParams(location.search);
   if(q.get('live')==='1'){ $('#omode').value='live'; applyHint(); }
   if(q.get('go')==='1' && !running){ setTimeout(()=>doStart(), 300); }
-  // 改版一次性搬家提示(仅首次):告知老按钮的新位置
-  try{ if(!localStorage.getItem('lx_ui2_tip')){ localStorage.setItem('lx_ui2_tip','1');
-    $('#warn').textContent='✨ 界面已精简：耳返/朗读 → 「🔊 声音」 · 大字幕/导出/调参/术语表 → 「🧰 工具」 · 通话向导/演示 → 「开始 ▾」';
+  // 改版一次性搬家提示(仅首次):告知老控件的新位置/新行为
+  try{ if(!localStorage.getItem('lx_ui3_tip')){ localStorage.setItem('lx_ui3_tip','1');
+    $('#warn').textContent= localStorage.getItem('lx_ui2_tip')
+      ? '✨ 语向已并入角色一排：下拉/⇄/常用胶囊选好即记住；通话中改动会亮出琥珀「生效」键,点它按新语言重启识别'
+      : '✨ 界面导览：耳返/朗读 → 「声音」 · 大字幕/导出/调参/术语表 → 「工具」 · 通话向导/直播同传/演示 → 「开始 ▾」 · 语向与角色同排,通话中改语向后点琥珀「生效」键';
+    localStorage.setItem('lx_ui2_tip','1');
     clearTimeout(window._wt); window._wt=setTimeout(()=>$('#warn').textContent='',20000); } }catch(e){}
 }
 boot();

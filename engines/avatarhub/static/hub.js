@@ -5,33 +5,34 @@ function hub() {
     visitedTabs: ['profiles'],   // 已访问过的 Tab（为内容懒加载预留）
     sidebarCollapsed: (function(){ try{ return localStorage.getItem('hub_sidebar_collapsed')==='1'; }catch(_){ return false; } })(),  // 侧栏折叠态
     cmdShow:false, cmdQuery:'', cmdIndex:0,   // 命令面板（Ctrl+K）
+    // [统一图标·2026-07-16] ic=brand-icons.svg 线性图标(侧栏/横向导航用,经 icx() 渲染);
+    // icon=emoji 仅供命令面板等纯文本消费面沿用,逐步退役。
     tabs: [
       // ── 角色组 ──────────────────────────────────────────
-      {id:'profiles', icon:'🎭', label:'角色库', group:'角色'},
-      {id:'clone',    icon:'🧬', label:'克隆',   group:'角色'},
+      {id:'profiles', ic:'users',  icon:'🎭', label:'角色库', group:'角色'},
+      {id:'clone',    ic:'copy',   icon:'🧬', label:'克隆',   group:'角色'},
       // ── 创作组 ──────────────────────────────────────────
-      {id:'voice',    icon:'🎙️', label:'语音',   group:'创作'},
-      {id:'sing',     icon:'🎵', label:'唱歌',   group:'创作'},
-      {id:'batch',    icon:'📦', label:'批量',   group:'创作'},
+      {id:'voice',    ic:'mic',    icon:'🎙️', label:'语音',   group:'创作'},
+      {id:'sing',     ic:'music',  icon:'🎵', label:'唱歌',   group:'创作'},
+      {id:'batch',    ic:'package',icon:'📦', label:'批量',   group:'创作'},
       // ── 运营组 ──────────────────────────────────────────
-      {id:'dashboard',icon:'📊', label:'看板',   group:'运营'},
-      {id:'stream',   icon:'📡', label:'开播',   group:'运营'},
-      {id:'interp',   icon:'🌐', label:'同传',   group:'运营'},
-      {id:'history',  icon:'📜', label:'历史',   group:'运营'},
-      {id:'selfcheck',icon:'✅', label:'交付体检', group:'运营'},
-      {id:'logs',     icon:'📋', label:'日志',   group:'运营'},
-      {id:'settings', icon:'⚙️', label:'设置',   group:'运营'},
+      {id:'dashboard',ic:'chart',  icon:'📊', label:'看板',   group:'运营'},
+      {id:'stream',   ic:'signal', icon:'📡', label:'开播',   group:'运营'},
+      {id:'interp',   ic:'globe',  icon:'🌐', label:'同传',   group:'运营'},
+      {id:'history',  ic:'clock',  icon:'📜', label:'历史',   group:'运营'},
+      {id:'selfcheck',ic:'check',  icon:'✅', label:'交付体检', group:'运营'},
+      {id:'logs',     ic:'file',   icon:'📋', label:'日志',   group:'运营'},
+      {id:'settings', ic:'gear',   icon:'⚙️', label:'设置',   group:'运营'},
     ],
+    // 线性图标渲染(单一真相=static/brand-icons.svg)：功能位统一单色线性图标,emoji 只留内容位
+    icx(name, cls){ return '<svg class="bd-ic'+(cls?(' '+cls):'')+'"><use href="/static/brand-icons.svg#i-'+name+'"/></svg>'; },
+    demoAlertsOpen: false,   // 演示模式下告警横幅收敛为顶栏小胶囊,点开临时展开
     tabGroups: ['角色','创作','运营'],
     features: [],   // P1: 功能注册表(/api/features)的跨页入口，喂命令面板(Ctrl+K) + 全局可达
     interpUp: null,                                    // 同传服务(7900)在线状态:null未知/true在线/false离线
     interpUrl: 'http://'+location.hostname+':7900/',   // 同传页地址(独立端口)
-    interpFrameKey: 0,                                 // iframe 强制刷新(一键直播)
-    interpLiveBusy: false,
-    interpCallBusy: false,
-    interpStopBusy: false,
-    interpMetrics: null,                               // 同传 /metrics(iframe 外观测条)
-    interpSession: null,                               // 同传最近会话摘要(/session/last)
+    // [去重·2026-07-16] 同传外层观测态与双 CTA busy 态退役：外层观测条与开始入口
+    // 让位给 iframe 内面板(嵌入态自动瘦身)，观测/开始/停止单一真相在 live_interpreter 页内。
     profiles: [], active: '', services: {}, voices: [],
     svcAlerts: [],   // 全部活动告警（含 audience 字段，来自 /ws/status 心跳）
     dismissedAlerts: [],  // 用户已关闭的告警 key（仅本会话内隐藏）
@@ -1113,7 +1114,7 @@ function hub() {
         if(val==='settings'){ this.loadMetrics(); this.kbRefresh(); this.loadHwGuide(); }
         if(val==='selfcheck'){ this.loadSvcCatalog(); this.refreshServices(); if(!this.selfcheck.doctor) this.runSelfcheck(); }
         else this.selfcheckFocus='';   // UK1: 离开体检页清聚焦，下次非 goFix 进入不残留「你要找的就是它」
-        if(val==='interp'){ this.checkInterp(); this.pollInterpMetrics(); }
+        if(val==='interp'){ this.checkInterp(); }
         if(val==='sing'){ if(!this.songCapsLoaded) this.songHealthCheck(); this.songBoardStartPoll(); }   // Song-P1/P5
       });
       if(this.tab==='sing'){ this.songHealthCheck(); this.songBoardStartPoll(); }   // F5 直达唱歌页时 $watch 不触发
@@ -8396,101 +8397,10 @@ function hub() {
       } catch(e){ this.interpUp = false; }
     },
 
-    async pollInterpMetrics() {                        // iframe 外轮询同传观测(2s)
-      if (this.tab !== 'interp') return;
-      try {
-        if (this.interpUp !== false) {
-          const c = new AbortController(); const t = setTimeout(()=>c.abort(), 2500);
-          const r = await fetch(`http://${location.hostname}:7900/metrics`, {signal: c.signal});
-          clearTimeout(t);
-          if (r.ok) this.interpMetrics = await r.json();
-          if (!this.interpMetrics?.running) {           // 未运行时拉最近会话摘要
-            try {
-              const sr = await fetch(`http://${location.hostname}:7900/session/last`);
-              if (sr.ok) this.interpSession = (await sr.json()).summary;
-            } catch(e) {}
-          }
-        }
-      } catch(e) { /* 静默 */ }
-      setTimeout(() => this.pollInterpMetrics(), 2000);
-    },
-
-    async stopInterp() {                               // Hub 控制台:停止同传会话
-      if (this.interpStopBusy) return;
-      this.interpStopBusy = true;
-      try {
-        await fetch(`http://${location.hostname}:7900/stop`, {method:'POST'});
-        await new Promise(r=>setTimeout(r, 500));
-        const sr = await fetch(`http://${location.hostname}:7900/session/last`);
-        if (sr.ok) this.interpSession = (await sr.json()).summary;
-      } catch(e) {
-        alert('停止同传失败，请在同传页内手动停止。');
-      } finally {
-        this.interpStopBusy = false;
-      }
-    },
-
-    async preloadInterp() {                            // Hub 控制台:预载常用角色入预案池
-      try {
-        const names = (this.profiles||[]).map(p=>p.name).filter(n=>n && n!==this.interpMetrics?.profile);
-        if (!names.length) return;
-        await fetch(`http://${location.hostname}:7900/preload`,
-          {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({profiles:names})});
-      } catch(e) { /* 静默:预载失败不影响直播 */ }
-    },
-
-    async startInterpLive() {                         // Hub 一键开直播同传
-      if (this.interpLiveBusy) return;
-      this.interpLiveBusy = true;
-      this.goTab('interp');   // R1-2
-      try {
-        const prof = this.active || (this.profiles.find(p=>p.active)||{}).name || '';
-        if (prof) await this.activateProfile(prof);
-        await this.checkInterp();
-        if (this.interpUp === false) {
-          alert('同传服务(7900)未运行。请先在启动器点「直播同传」拉起服务，再点此按钮。');
-          return;
-        }
-        this.interpUrl = `http://${location.hostname}:7900/?live=1&go=1&t=${Date.now()}`;
-        this.interpFrameKey++;
-      } finally {
-        this.interpLiveBusy = false;
-      }
-    },
-
-    async startInterpCallPack() {                     // Phase B-1：一键通话同传(麦+CABLE+环回)
-      if (this.interpCallBusy) return;
-      this.interpCallBusy = true;
-      this.goTab('interp');   // R1-2
-      try {
-        const prof = this.active || (this.profiles.find(p=>p.active)||{}).name || '';
-        if (prof) await this.activateProfile(prof);
-        await this.checkInterp();
-        if (this.interpUp === false) {
-          alert('同传服务(7900)未运行。请先在启动器点「打开同传」拉起服务，再点此按钮。');
-          return;
-        }
-        const r = await fetch(HUB + '/interp/call_pack/start', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({profile: prof}),
-        });
-        const j = await r.json();
-        const steps = (j.steps || []).map(s => `${s.ok ? '✓' : '✗'} ${s.name}${s.detail ? ' · ' + s.detail : ''}`).join('\n');
-        if (j.ready) {
-          this.showToast('通话同传已就绪', 'success');
-          this.interpUrl = `http://${location.hostname}:7900/?t=${Date.now()}`;
-          this.interpFrameKey++;
-        } else {
-          alert('通话套餐未全部通过：\n' + (steps || j.detail || '未知错误'));
-        }
-        await this.pollInterpMetrics();
-      } catch (e) {
-        alert('启动通话同传失败：' + e);
-      } finally {
-        this.interpCallBusy = false;
-      }
-    },
+    // [去重·2026-07-16] 同传双 CTA(直播/通话)、外层观测轮询、停止/预载按钮全部退役：
+    // 观测(mbar)/停止(主按钮)/预载(角色标签旁)/直播同传/通话向导 全在 iframe 面板内且就地反馈更好；
+    // Hub 侧仅保留在线探测 checkInterp + 面板跳转 goTab('interp')（供命令面板/其他页动线引用）。
+    startInterp() { this.goTab('interp'); this.checkInterp(); },
 
     interpOverlayUrl(panel) {                         // Phase B-2：OBS Browser Source URL
       const q = 'panel=' + (panel === 0 ? '0' : '1') + '&pos=bottom&max2=2';

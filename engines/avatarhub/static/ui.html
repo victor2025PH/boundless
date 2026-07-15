@@ -188,12 +188,12 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
             class="hidden sm:inline-block text-[13px] px-2 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition">⌨</button>
     <!-- 官网 / 客服直达：默认无界官方，白标时自动跟随 brand.website / contact 里的 t.me 链接（见页尾接线脚本） -->
     <a id="bdSiteLink" href="https://ai26.sbs" target="_blank" rel="noopener" title="官网 · 无界科技 BOUNDLESS"
-       class="hidden sm:inline-block text-[13px] px-2 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition" style="text-decoration:none">🌐 官网</a>
+       class="hidden sm:inline-flex items-center gap-1 text-[13px] px-2 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition" style="text-decoration:none"><svg class="bd-ic"><use href="/static/brand-icons.svg#i-globe"/></svg> 官网</a>
     <a id="bdSupportLink" href="https://t.me/hykjz" target="_blank" rel="noopener" title="联系客服（Telegram 交流群）· 官方客服头像带「客服」徽标，谨防假冒"
-       class="hidden sm:inline-block text-[13px] px-2 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition" style="text-decoration:none">💬 客服</a>
+       class="hidden sm:inline-flex items-center gap-1 text-[13px] px-2 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition" style="text-decoration:none"><svg class="bd-ic"><use href="/static/brand-icons.svg#i-headphones"/></svg> 客服</a>
     <!-- 品牌定制 / 白标（定制交付：主色 + 产品名 + 图标，全站同源，可导出导入）-->
     <div class="relative group">
-      <button class="text-[13px] px-2 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition focus-visible:ring-2 focus-visible:ring-hub-blue/50" title="品牌定制 / 白标">🎨</button>
+      <button class="text-[13px] px-2 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition focus-visible:ring-2 focus-visible:ring-hub-blue/50 inline-flex items-center" title="品牌定制 / 白标"><svg class="bd-ic"><use href="/static/brand-icons.svg#i-palette"/></svg></button>
       <div class="absolute right-0 top-full mt-1 z-50 hidden group-hover:block group-focus-within:block w-64 p-3 rounded-lg bg-hub-card border border-hub-border shadow-xl text-left">
         <div class="text-[13px] font-semibold text-hub-text mb-1.5">品牌主色</div>
         <div class="flex flex-wrap gap-1.5 mb-2">
@@ -239,22 +239,22 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
     <span class="hidden sm:block w-px h-5 bg-hub-border/60 mx-1 self-center"></span>
     <!-- 产品闭环：后台 ↔ 对话 ↔ 看板 -->
     <a href="/phone" target="_blank"
-       class="text-[13px] font-semibold px-2.5 py-1 rounded-full bg-hub-blue/20 text-hub-blue hover:bg-hub-blue hover:text-white transition border border-hub-blue/40">
-      💬 对话
+       class="text-[13px] font-semibold px-2.5 py-1 rounded-full bg-hub-blue/20 text-hub-blue hover:bg-hub-blue hover:text-white transition border border-hub-blue/40 inline-flex items-center gap-1">
+      <svg class="bd-ic"><use href="/static/brand-icons.svg#i-chat"/></svg> 对话
     </a>
     <a href="/dashboard" target="_blank"
-       class="text-[13px] px-2.5 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition">
-      📊 看板
+       class="text-[13px] px-2.5 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition inline-flex items-center gap-1">
+      <svg class="bd-ic"><use href="/static/brand-icons.svg#i-chart"/></svg> 看板
     </a>
     <a href="/delivery" target="_blank"
-       class="text-[13px] px-2.5 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition hidden sm:inline"
+       class="text-[13px] px-2.5 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition hidden sm:inline-flex items-center gap-1"
        title="交付自检：授权/合规/页面/服务/白标 一键验收">
-      🧪 自检
+      <svg class="bd-ic"><use href="/static/brand-icons.svg#i-flask"/></svg> 自检
     </a>
     <a href="/help" target="_blank"
-       class="text-[13px] px-2.5 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition"
+       class="text-[13px] px-2.5 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition inline-flex items-center gap-1"
        title="图文教程：安装 / 使用 / 手机同传扫码授权">
-      📖 教程
+      <svg class="bd-ic"><use href="/static/brand-icons.svg#i-book"/></svg> 教程
     </a>
     <!-- 系统状态：单个汇总徽标，悬停看核心/可选服务明细（取代一长排服务徽标）-->
     <div class="relative group ml-0.5">
@@ -333,14 +333,25 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
     <button @click="toggleDemo()" :title="demoMode?'退出演示模式':'开启演示模式（隐藏运维噪音）'"
             class="text-[13px] font-semibold px-2.5 py-1 rounded-full border transition ml-0.5 flex items-center gap-1"
             :class="demoMode ? 'border-hub-green/60 text-hub-green bg-green-900/20' : 'border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40'">
-      <span x-text="demoMode?'🟢':'🎬'"></span>
+      <span x-show="demoMode" class="w-1.5 h-1.5 rounded-full bg-hub-green"></span>
+      <svg x-show="!demoMode" class="bd-ic"><use href="/static/brand-icons.svg#i-demo"/></svg>
       <span class="hidden sm:inline" x-text="demoMode?'演示中':'演示'"></span>
+    </button>
+    <!-- [降噪·2026-07-16] 演示模式下用户面告警横幅收敛为此小胶囊：客户看不到满幅橙条,
+         操作者仍有一眼可见的入口;点开临时展开横幅,再点收回。 -->
+    <button x-show="demoMode && (hubAlerts().primary || hubAlerts().extra.length)" x-cloak
+            @click="demoAlertsOpen=!demoAlertsOpen"
+            :title="demoAlertsOpen?'收起告警':'展开告警（演示模式下已收敛）'"
+            class="text-[13px] font-semibold px-2 py-1 rounded-full border transition ml-0.5 flex items-center gap-1"
+            :class="hubAlerts().primary ? 'border-orange-500/50 text-orange-400 bg-orange-900/20' : 'border-hub-border text-hub-muted'">
+      <span class="w-1.5 h-1.5 rounded-full" :class="hubAlerts().primary?'bg-orange-400 animate-pulse':'bg-hub-muted'"></span>
+      <span x-text="(hubAlerts().primary?1:0)+hubAlerts().extra.length"></span>
     </button>
     <!-- 运维/安全告警入口：仅运维可见，含完整修复指引（不进用户首屏横幅）；演示模式下隐藏 -->
     <div x-show="opsAlerts.length && !demoMode" class="relative group ml-0.5">
       <span tabindex="0" role="button" aria-label="运维与安全告警"
             class="text-[13px] font-semibold px-2 py-1 rounded-full border border-orange-500/50 text-orange-400 bg-orange-900/20 cursor-default flex items-center gap-1 focus-visible:ring-2 focus-visible:ring-orange-400/50 outline-none">
-        🔧 <span x-text="'运维 '+opsAlerts.length"></span>
+        <svg class="bd-ic"><use href="/static/brand-icons.svg#i-tools"/></svg> <span x-text="'运维 '+opsAlerts.length"></span>
       </span>
       <div class="absolute right-0 top-full mt-1 z-50 hidden group-hover:block group-focus-within:block w-72 p-2.5 rounded-lg bg-hub-card border border-orange-700/40 text-[13px] leading-relaxed shadow-xl">
         <div class="font-semibold text-orange-400 mb-1">🔧 运维 / 安全告警</div>
@@ -367,7 +378,7 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
         + 「还有 N 条」可展开。数据源仍是 userAlerts（后端 /ws/status），仅改呈现/排序：开播页正实时
         呈现的健康类告警(stream_health/cable_silence*)收进「更多」，避免与页内主裁决矛盾/重复。
         回退：删除 BEGIN→END 本块，改回 <template x-for="a in userAlerts"> 逐条渲染（逻辑见 hub.js hubAlerts()）。 ══ -->
-<template x-if="hubAlerts().primary || hubAlerts().extra.length">
+<template x-if="(hubAlerts().primary || hubAlerts().extra.length) && (!demoMode || demoAlertsOpen)">
   <div>
     <!-- 主告警条（最高优先级）-->
     <template x-if="hubAlerts().primary">
@@ -433,7 +444,7 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
                   :class="[tab===t.id?'bg-hub-blue/15 text-hub-blue border-hub-blue':'text-hub-muted border-transparent hover:text-hub-text hover:bg-hub-border/30',
                            sidebarCollapsed?'justify-center px-0':'px-2.5']"
                   class="sb-tab w-full flex items-center gap-2.5 py-2 rounded-lg border-l-2 text-[14px] font-semibold transition mb-0.5">
-            <span class="text-base leading-none" x-text="t.icon"></span>
+            <span class="leading-none flex items-center" x-html="icx(t.ic)"></span>
             <span x-show="!sidebarCollapsed" x-text="t.label"></span>
           </button>
         </template>
@@ -452,7 +463,7 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
                   :class="tab===t.id?'text-hub-blue border-hub-blue':'text-hub-muted border-transparent hover:text-hub-text'"
                   class="px-3 py-2 text-[14px] font-semibold border-b-2 transition whitespace-nowrap flex items-center gap-1"
                   :title="t.label">
-            <span x-text="t.icon"></span>
+            <span class="flex items-center" x-html="icx(t.ic)"></span>
             <span class="hidden sm:inline" x-text="t.label"></span>
           </button>
         </template>
@@ -5445,100 +5456,19 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
 
 <div x-show="tab==='interp'" class="fade space-y-3">
   <div class="bd-card p-4">
+    <!-- [去重·2026-07-16] 卡头收敛为单行：品牌/开始入口/观测让位给 iframe 内同传面板（宿主只管：
+         是什么、活没活、怎么单开、OBS 字幕）。原双 CTA(直播同传/通话同传)的编排能力移入面板
+         「开始 ▾」菜单(通话向导已在,直播同传新增)；原「直播观测」条与面板底部观测重复,整块退役。 -->
     <div class="flex items-center justify-between gap-2 flex-wrap mb-3">
-      <div class="min-w-0 flex-1 basis-60">
-        <h2 class="bd-card-title">🌐 通译 LingoX · 实时同传</h2>
-        <p class="text-xs text-hub-muted mt-1">我说中文→对方听我的克隆外语。<b class="text-hub-text">直播出镜</b>:先「📡 开播」出画面 → 再点「🎭 直播同传」配声音；<b class="text-hub-text">纯通话</b>只需「📞 通话同传」。共用当前角色音色。</p>
-      </div>
+      <h2 class="bd-card-title whitespace-nowrap"
+          data-tip="通译 LingoX · 实时同传|我说中文→对方听我的克隆外语,共用当前角色音色|直播出镜:先「📡 开播」出画面,再在下方「开始 ▾」选直播同传;纯通话:下方「开始 ▾ → 通话向导」">🌐 通译 LingoX · 实时同传</h2>
       <div class="flex items-center gap-x-3 gap-y-1.5 flex-wrap">
-        <!-- 双行富 CTA：副标题承担「直播 vs 通话」抉择引导，保留双行不压 bd-act 单行；仅统一视觉基座（浅底+描边+10px 圆角，蓝/绿语义） -->
-        <button @click="startInterpLive()" :disabled="interpLiveBusy"
-                class="shrink-0 whitespace-nowrap text-xs px-3 py-1.5 rounded-[10px] bg-hub-blue/15 border border-hub-blue/50 text-hub-blue hover:bg-hub-blue/25 font-semibold disabled:opacity-50 transition text-left"
-                data-tip="直播同传 · 数字人开口说外语|激活当前角色→打开同传页并自动以直播模式开始翻译配音|先点「开播」出画面,再点这里配声音">
-          <span x-show="!interpLiveBusy" class="block leading-tight">🎭 直播同传<span class="block text-[12px] opacity-60 font-normal">数字人开口说外语 · 需先开播</span></span>
-          <span x-show="interpLiveBusy">⏳ 准备中…</span>
-        </button>
-        <button @click="startInterpCallPack()" :disabled="interpCallBusy"
-                class="shrink-0 whitespace-nowrap text-xs px-3 py-1.5 rounded-[10px] bg-green-500/10 border border-green-500/50 text-green-300 hover:bg-green-500/20 font-semibold disabled:opacity-50 transition text-left"
-                data-tip="通话同传 · 微信/Zoom 克隆变声|自动完成:默认麦切 CABLE→设备绑定→测试音自检→开始,每步红绿灯|打微信/Zoom/Telegram 语音前点它,不用开播">
-          <span x-show="!interpCallBusy" class="block leading-tight">📞 通话同传<span class="block text-[12px] opacity-60 font-normal">微信/Zoom 克隆变声 · 自动配设备</span></span>
-          <span x-show="interpCallBusy">⏳ 配置中…</span>
-        </button>
         <span x-show="interpUp===true" class="text-xs text-green-400 whitespace-nowrap" data-tip="同传服务在线|翻译引擎(端口 7900)已就绪|">● 服务在线</span>
         <span x-show="interpUp===false" class="text-xs text-red-400 whitespace-nowrap" data-tip="同传服务未启动|翻译引擎(端口 7900)没有运行|用启动器拉起服务后再开同传">● 未启动(端口 7900)</span>
         <a :href="interpUrl" target="_blank" class="text-xs text-hub-blue hover:underline whitespace-nowrap" data-tip="新窗口打开|把下方同传页面单独开一个浏览器窗口|想全屏看字幕或多屏摆放时">↗ 新窗口打开</a>
         <button type="button" @click="navigator.clipboard.writeText(interpOverlayUrl(0)); showToast('OBS 字幕 URL 已复制','info')"
-                class="text-xs text-hub-muted hover:text-hub-blue whitespace-nowrap" data-tip="字幕挂件|复制 OBS Browser Source 地址(透明底实时双语字幕)|直播画面想叠字幕时,粘贴到 OBS 浏览器源">📋 字幕挂件</button>
+                class="text-xs text-hub-muted hover:text-hub-blue whitespace-nowrap" data-tip="字幕挂件|复制 OBS Browser Source 地址(透明底实时双语字幕)|直播画面想叠字幕时,粘贴到 OBS 浏览器源">字幕挂件</button>
       </div>
-    </div>
-    <div x-show="interpUp===true" class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] mb-3 px-3 py-2 rounded-lg bg-hub-bg border border-hub-border font-mono">
-      <span class="text-hub-muted font-sans">直播观测</span>
-      <span :class="interpMetrics?.running?'text-green-400':'text-hub-muted'"
-            x-text="interpMetrics?.running?'● 同传运行中':'○ 同传未开始'"></span>
-      <template x-if="interpMetrics?.translate">
-        <span class="text-hub-muted">|</span>
-        <span :class="interpMetrics.translate.layer==='llm' && interpMetrics.translate.llm_circuit_open ? 'text-green-400' : (interpMetrics.translate.llm_circuit_open ? 'text-hub-blue' : 'text-amber-300')"
-              :title="interpMetrics.translate.layer_detail || ''"
-              x-text="'译·' + (interpMetrics.translate.layer==='llm' ? 'LLM' : 'NMT') + (interpMetrics.translate.glossary_on ? ' · 术语' : '') + (interpMetrics.translate.tm_hit_rate_pct!=null ? ' · TM '+interpMetrics.translate.tm_hit_rate_pct+'%' : '')"></span>
-      </template>
-      <!-- B-5 当前 ASR 引擎徽标：流式(Nemotron)=蓝 / 分段(Whisper,常因弱语种自动回退)=琥珀，悬停看路由原因 -->
-      <template x-if="interpMetrics?.running && interpMetrics?.asr_route">
-        <span :class="interpMetrics.asr_route.engine==='nemotron' ? 'text-hub-blue' : 'text-amber-300'"
-              class="cursor-help" :title="interpMetrics.asr_route.why||''"
-              x-text="'ASR·'+(interpMetrics.asr_route.label||'')"></span>
-      </template>
-      <!-- P0g 无音色徽章：角色缺音色样本→克隆配音全程跳过(对方只见字幕)，红色常驻+悬停见已跳过句数 -->
-      <template x-if="interpMetrics?.running && interpMetrics?.voice_ok===false">
-        <span class="text-red-300 font-semibold cursor-help"
-              :title="'当前角色「'+(interpMetrics?.profile||'')+'」无音色样本：克隆配音已全程跳过(本场已跳过 '+(interpMetrics?.novoice_skips||0)+' 句)，对方只能看字幕。请切换有音色的角色，或到角色库为它配声音'">🔇 无音色·仅字幕</span>
-      </template>
-      <span x-show="interpMetrics?.bargein_count" class="text-yellow-300" title="用户抢话自动打断次数">抢话 <span x-text="interpMetrics?.bargein_count"></span></span>
-      <!-- S8-3: STT 单点容灾——主转写节点失联、备用接管时亮红（主恢复自动切回，徽标自灭） -->
-      <span x-show="interpMetrics?.stt_failover?.on_fallback" x-cloak class="text-red-300 animate-pulse"
-            :title="'转写主节点('+(interpMetrics?.stt_failover?.primary||'')+')失联，已切备用端点('+(interpMetrics?.stt_failover?.active||'')+')接管 '+(interpMetrics?.stt_failover?.engaged_s||0)+'s；主恢复后自动切回'">🛟 STT备用接管中</span>
-      <template x-if="interpMetrics?.live_mode">
-        <span class="flex flex-wrap items-center gap-x-3">
-          <span :class="interpMetrics?.face_ready?'text-green-400':'text-yellow-300'"
-                x-text="interpMetrics?.face_ready?'人脸✓':'人脸预热…'"></span>
-          <span x-show="interpMetrics?.warm_ms" class="text-green-400" title="口型引擎已热启动(首句即时出画)">引擎热✓</span>
-          <span :class="interpMetrics?.vcam_playing?'text-green-400':'text-hub-muted'"
-                x-text="interpMetrics?.vcam_playing?'vcam 出画中':'vcam 待机'"></span>
-          <span x-show="interpMetrics?.idle_video" class="text-cyan-300">🎬 真人待机</span>
-          <span class="text-hub-muted">TTFV <span class="text-hub-blue" x-text="interpMetrics?.ttfv_ms?.median??'—'"></span>ms</span>
-          <span class="text-hub-muted">段间隔 <span :class="(interpMetrics?.seg_gap_ms?.median>1250)?'text-red-400':'text-hub-blue'" x-text="interpMetrics?.seg_gap_ms?.median??'—'"></span>ms</span>
-          <span class="text-hub-muted">口型 <span class="text-hub-blue" x-text="interpMetrics?.avatar_ms?.median??'—'"></span>ms</span>
-          <span x-show="interpMetrics?.gpu_contended" class="text-red-300" :title="'显卡疑似被占用(计算进程 '+(interpMetrics?.gpu?.compute_apps??'?')+' 个/利用率 '+(interpMetrics?.gpu?.util_pct??'?')+'%)，口型可能滞后；建议独占显卡'">🔥 GPU争用</span>
-          <span x-show="interpMetrics?.degraded" class="text-red-300" title="口型/广播异常,临时降级为配音/字幕">⚠ 降级·配音/字幕</span>
-          <span x-show="interpMetrics?.switching" class="text-yellow-300">🔄 切换准备中</span>
-          <span x-show="interpMetrics?.switch_count" class="text-hub-muted">切换 <span class="text-hub-blue" x-text="interpMetrics?.switch_count"></span></span>
-          <span x-show="interpMetrics?.degrade_count" :class="interpMetrics?.degraded?'text-red-300':'text-yellow-300'">降级 <span x-text="interpMetrics?.degrade_count"></span>次/<span x-text="((interpMetrics?.degrade_ms||0)/1000).toFixed(1)"></span>s</span>
-          <span x-show="interpMetrics?.preset_ready?.length" class="text-cyan-300" :title="(interpMetrics?.preset_ready||[]).join('、')">📦 预案 <span x-text="interpMetrics?.preset_ready?.length"></span></span>
-          <button x-show="interpMetrics?.running" @click="preloadInterp()" :disabled="interpMetrics?.preset_loading"
-                  class="bd-act sm ghost font-sans"
-                  data-tip="预载常用|后台预计算其余角色的音色,运行中切角色近乎即时|会中可能换角色时提前点一下">
-            <span x-show="!interpMetrics?.preset_loading">📦 预载常用</span><span x-show="interpMetrics?.preset_loading">预载中…</span>
-          </button>
-        </span>
-      </template>
-      <span x-show="interpMetrics && !interpMetrics.live_mode && interpMetrics.running" class="text-hub-muted">通话模式</span>
-      <span x-show="interpMetrics?.cam_error" class="basis-full text-[13px] text-red-300 font-sans" x-text="'⚠ '+(interpMetrics?.cam_error||'')"></span>
-      <button x-show="interpMetrics?.running" @click="stopInterp()" :disabled="interpStopBusy"
-              class="ml-auto bd-act sm red font-sans"
-              data-tip="停止同传|结束本场翻译会话并写观测日志|只停声音翻译;直播画面(开播)不受影响">
-        <span x-show="!interpStopBusy">■ 停止同传</span><span x-show="interpStopBusy">停止中…</span>
-      </button>
-      <template x-if="interpSession && !interpMetrics?.running">
-        <span class="basis-full text-[13px] text-hub-muted font-sans border-t border-hub-border pt-1 mt-1">
-          上次会话 · <span x-text="interpSession.profile||'—'"></span>
-          · 我<span x-text="interpSession.counts?.a??0"></span>/对方<span x-text="interpSession.counts?.b??0"></span> 句
-          · 端到端 <span class="text-hub-blue" x-text="interpSession.e2e_ms??'—'"></span>ms
-          <template x-if="interpSession.live_mode">
-            <span> · TTFV <span class="text-hub-blue" x-text="interpSession.ttfv_ms??'—'"></span>ms
-              · 段间隔 <span class="text-hub-blue" x-text="interpSession.seg_gap_ms??'—'"></span>ms</span>
-          </template>
-          · 丢弃 <span x-text="interpSession.dropped??0"></span>
-        </span>
-      </template>
     </div>
     <template x-if="interpUp===false">
       <div class="text-xs bd-strip mute p-3 mb-3">

@@ -72,6 +72,22 @@
 /* 渐变文字（品牌名/重点词） */
 .bd-grad-text{ background:var(--bd-grad); -webkit-background-clip:text; background-clip:text; color:transparent; }
 
+/* ==========================================================================
+   全站线性图标（2026-07-16 图标体系统一）
+   --------------------------------------------------------------------------
+   · 图标库单一真相：static/brand-icons.svg（tools/_gen_brand_icons.py 生成）
+   · 用法：<svg class="bd-ic"><use href="/static/brand-icons.svg#i-mic"/></svg>
+   · 约定：功能位（按钮/导航/标签/徽标）一律用线性图标——emoji 彩色/粗细/跨端
+     渲染不受控，是界面"乱"的微观来源；emoji 只保留在内容位（角色名/字幕/
+     空态引导/用户输入）。状态表达用彩色圆点(--bd-ok/warn/danger) + 文字。
+   · 例外：live_interpreter(7900) 自包含单页内联持有子集拷贝（跨端口不共享
+     静态目录），新增图标先入库，再按需同步内联副本。
+   ========================================================================== */
+.bd-ic{ width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.9;
+  stroke-linecap:round; stroke-linejoin:round; vertical-align:-2.5px;
+  display:inline-block; flex:0 0 auto; }
+.bd-ic.lg{ width:18px; height:18px; vertical-align:-3.5px; }
+
 /* 通用可信徽章（本地运行 / AI 生成 可验真）——各页可直接复用 */
 .bd-trust{ display:inline-flex; align-items:center; gap:6px; font-size:var(--bd-fs-xs);
   color:var(--bd-mut); border:1px solid var(--bd-border); border-radius:var(--bd-r-pill);
