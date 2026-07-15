@@ -68,3 +68,9 @@ _pending_models/
 **/config/config.yaml
 **/config/config.local.yaml
 **/config/cluster.yaml
+
+# ---- wujie slimming 20260715 ----
+# stale duplicate of canonical top-level website/ (same hualing-website pkg, older brand.ts)
+engines/chengjie/website/
+# Playwright browser profile cache (runtime artifact, not source)
+engines/avatarhub/demo_record/.pwprofile/
