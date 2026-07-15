@@ -243,3 +243,26 @@ wujie/                         ← 新 git 单仓（无界科技全域）
 - **装机面提层**：`deploy/`(docker-compose+cluster_map+provision)、`packaging/`(installer/build/publish) 从 `avatarhub/` 提到全域层（或软链）。
 - **接新 remote 前**：跑 `tools/prepush_cleanup.ps1`（字体转 LFS + 可选 filter-repo 抹历史大对象）→ `git gc` → 建 remote → push；`website/` 部署前 `npm run build` 自验。
 - **闭环收口**：`licensing`+`identity` 抽取通了，"官网↔SKU↔license↔交付"业务闭环才真正闭合（Phase 5 末目标）。
+
+---
+
+## 12. Phase 5 实施记录 + 实施中优化（2026-07-15）
+
+**已落地（提交 `271b806`；`repo_doctor` = FAIL 0 / WARN 3）**
+- **products 全部补齐**：huanyan/huansheng/huanying/tongchuan/zhituo/zhiliao 六个 `product.yaml`（+tongyi 共 7），每个含 brand_key/承载引擎/引擎服务清单/合规可见性/官网落地页/SKU；`repo_doctor` 新增 **products 清单门禁**（校验必需键 + 引擎目录存在）→ 现 **7/7 全绿**。
+- **compliance 抽取：先验后迁**：在开发机 `facefusion` env **实测 `import provenance` / `import watermark` 均 OK**，据此写 `platform/compliance/MIGRATION.md`（git mv + app_config 挂 sys.path + re-export shim + `doctor.py` 回归 + 回退），**待在装 avatarhub env 的机器上执行**。
+- doctor 现存 3 个 WARN=完善度待办：字体>10MB(留 prepush LFS)、platform 待落实现、3 个 `product.yaml` 价格 TBD（VoxX/LingoX 待老板定）。
+
+**实施中的 5 处再优化**
+1. **重排 Phase 5 次序**：原定"compliance 抽取先行"，深想后——它无 env 不可验证；改为**先做可验证、直接消灭审计告警的 products 补齐**，compliance 转为"实测导入 + 就绪迁移手册"。把不可验证的高风险动作后置，是这轮最主要的优化。
+2. **迁移手册用真实导入测试背书**：不是"假设能抽"，而是在本机 env 跑通 `import provenance/watermark` 才写"移动+shim"方案——手册可信、可直接执行。
+3. **product.yaml 预埋闭环**：清单里 `skus` 的结构就是给 `platform/licensing` 消费的——将来 licensing 直接读 `products/*/product.yaml#skus` 做计量/门控，官网也读同一份定价，**一份清单三处用（官网↔SKU↔license）**，闭环提前接线。
+4. **门禁从"检查"进化为"完善度追踪"**：`repo_doctor` 的 products 校验 + TBD 定价告警，把"哪些产品还没定价/没落实现"变成一条命令可见的 backlog，而非散落脑子里。
+5. **定价不编造**：SKU 用官网**现有真实数字**（58/198/598、18/78/198 等，按 dual 标 USD 单位），只把**确实未定**的 VoxX/LingoX 新品留 `TBD`——doctor 精确点名哪 3 个待你回填。
+
+**下一阶段（Phase 6）实施与改进**
+- **在 env 机执行 `platform/compliance/MIGRATION.md`**：platform 从"契约"变"实现"第一块；绿了按同手册推进 brand→observability→licensing→identity。
+- **licensing 消费 product.yaml**：读 `skus` 生成 SKU 注册表 → 官网定价 + license 门控 + order 三处同源，闭合"官网↔SKU↔license↔交付"。
+- **装机面提层**：`deploy/`(docker-compose+cluster_map+provision)、`packaging/`(installer/build/publish) 从 avatarhub 提到全域层。
+- **回填 + 出图**：VoxX/LingoX 价格数字（doctor 已点名 3 处 TBD）、voxx 专属图标。
+- **接 remote 前**：`tools/prepush_cleanup.ps1`（字体转 LFS + filter-repo 抹历史大对象 + gc）→ 建 remote → push；`website/` 部署前 `npm run build`。
