@@ -1,0 +1,47 @@
+# products/tongyi/product.yaml — 通译 LingoX 产品清单（productization manifest · 范式模板）
+# 说明：products/<拼音> 是「产品化薄封装」——不放引擎实现，只放 SKU/裁剪overlay/落地页映射/交付定义，
+#       复用 engines/ 的共享实现。其它 6 个产品照本模板填。
+id: tongyi
+brand_key: lingox                 # 对应 website/lib/brand.ts 的 ProductKey
+name:   { zh: 通译, en: LingoX }
+category: lingo                   # 三系：通达 Lingo
+tagline:
+  zh: 跨境实时聊天翻译 SCRM（多平台文字+语音双向 · 术语锁定 · 客户资产沉淀）
+  en: Cross-border real-time chat translation SCRM
+
+engine: chengjie                                              # 承载引擎 engines/chengjie
+engine_overlay: engines/chengjie/config/lingox.overlay.example.yaml  # 裁剪为「纯翻译工作台」(已入库)
+# 注：overlay 校验脚本原在源仓 scripts/scratch/（被 .gitignore 排除，未迁入）。
+# 待办：把 verify_lingox_overlay.py 从 scratch 提升为正式工具入 engines/chengjie/tools/ 再在此登记。
+engine_verify: null
+
+compliance:
+  visibility: public               # 合规主站可公开陈列
+  risk: low                        # 纯沟通效率工具
+
+website:
+  landing: /interpreting           # productMeta.PRODUCT_LANDING.lingox
+  matrix_family: lingo
+
+# 定价占位（数字待老板拍板；建议见 docs 实施01；website/lib/content.ts#translate 已同步占位）
+skus:
+  - id: lingox-charpack
+    name: { zh: 字符包, en: Char pack }
+    unit: one-time
+    price: TBD                     # 建议 39 USD / 150万字符
+    includes: [多平台双向翻译, 术语库]
+  - id: lingox-team
+    name: { zh: 团队, en: Team }
+    unit: month
+    price: TBD                     # 建议 59 USD/月
+    includes: [多坐席, 客户 journey, 漏斗看板]
+  - id: lingox-pro
+    name: { zh: 专业, en: Pro }
+    unit: month
+    price: TBD                     # 建议 99 USD/月
+    includes: [不限字符, 多模态翻译, 置信度/引擎健康]
+
+delivery:
+  pack: 轻量交付包 = chengjie 翻译子集 + lingox.overlay + 首跑向导（setup_wizard）
+  metering: platform/licensing        # 计量=字符数；门控=SKU 功能位（翻译/坐席开，RPA/换脸关）
+  compliance_out: platform/compliance # 如产出媒体则走 C2PA/水印
