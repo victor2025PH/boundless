@@ -3,6 +3,7 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import DownloadSection from "@/components/DownloadSection";
 import { SITE_URL } from "@/lib/site";
+import { LATEST_VERSION } from "@/lib/releaseNotes";
 
 export const metadata: Metadata = {
   title: "下载客户端 · 无界科技 BOUNDLESS",
@@ -25,6 +26,7 @@ const appLd = {
   name: "AvatarHub",
   applicationCategory: "MultimediaApplication",
   operatingSystem: "Windows 10/11, macOS 12+",
+  softwareVersion: LATEST_VERSION,
   offers: { "@type": "Offer", price: "0", priceCurrency: "USDT", description: "14 天免费试用" },
   publisher: { "@type": "Organization", name: "无界科技 BOUNDLESS", url: SITE_URL },
 };

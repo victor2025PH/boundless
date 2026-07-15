@@ -122,8 +122,38 @@ export function buildFaqAnswer(lang: BotLang, index: number) {
   return `❓ <b>${item.q}</b>\n\n${item.a}`;
 }
 
+/** 客户端下载/安装的兜底回答（AI 不可用时 KB 路径直接返回） */
+function buildInstallHelp(lang: BotLang) {
+  return lang === "zh"
+    ? `🖥 <b>AvatarHub 客户端安装指引</b>
+
+1️⃣ 官网 /download 下载安装包（约 45 MB，免管理员，按用户安装）
+2️⃣ 双击安装 → 首次启动向导自动检测显卡、按档位下载 AI 组件（支持断点续传）
+3️⃣ 「设置 → 授权」输订单号在线激活，或直接用 14 天免费试用
+
+常见问题：
+· SmartScreen 拦截 → 点「更多信息 → 仍要运行」（SHA-256 可在下载页核验）
+· 组件下载中断 → 重新打开会自动续传，不会重下
+· 显卡建议：仅声音克隆 4GB 起；实时换脸/数字人 8GB+；同传全家桶 24GB
+
+详细图文教程与完整手册见官网 /download 与 /manual。搞不定？99 USDT 远程代部署，装好即用。`
+    : `🖥 <b>AvatarHub install guide</b>
+
+1️⃣ Download the installer from /download (~45 MB, per-user, no admin rights)
+2️⃣ Run it → the first-launch wizard detects your GPU and downloads AI components by tier (resumable)
+3️⃣ Activate with your order number in Settings → License, or start the 14-day free trial
+
+Common issues:
+· SmartScreen warning → More info → Run anyway (verify SHA-256 on the download page)
+· Interrupted component download → reopen and it resumes automatically
+· GPU guidance: 4 GB for voice-only; 8 GB+ for live swap / digital human; 24 GB for the interpreting suite
+
+Full tutorial and manual: /download and /manual. Stuck? 99 USDT remote install service.`;
+}
+
 function keywordRules(lang: BotLang) {
   const zh = [
+    { keys: ["安装", "下载", "装不上", "装机", "smartscreen", "杀毒", "报毒", "激活", "试用", "显卡", "显存", "配置要求", "客户端"], fn: () => buildInstallHelp(lang) },
     { keys: ["换脸", "换声", "直播", "连麦", "视频通话"], fn: () => t(lang).realtime.subtitle.slice(0, 400) + "…" },
     { keys: ["成交", "翻译", "聊天", "聚合", "客服", "谷歌"], fn: () => buildAutochat(lang) },
     { keys: ["价格", "多少钱", "费用", "usdt", "套餐", "月付"], fn: () => buildPricing(lang) },
@@ -136,6 +166,7 @@ function keywordRules(lang: BotLang) {
     { keys: ["业务", "服务", "能力"], fn: () => buildServices(lang) },
   ];
   const en = [
+    { keys: ["install", "download", "setup", "smartscreen", "antivirus", "activate", "trial", "gpu", "vram", "requirement", "client"], fn: () => buildInstallHelp(lang) },
     { keys: ["face", "swap", "live", "stream", "voice"], fn: () => t(lang).realtime.subtitle.slice(0, 400) + "…" },
     { keys: ["chat", "translat", "clos", "aggregat", "google"], fn: () => buildAutochat(lang) },
     { keys: ["price", "cost", "usdt", "plan", "monthly"], fn: () => buildPricing(lang) },
@@ -216,6 +247,27 @@ export function buildKnowledgeContext(lang: BotLang): string {
 
   parts.push(lang === "zh" ? "【三种合作方式】" : "[Three engagement models]");
   c.engage.models.forEach((m) => parts.push(`- ${m.name}（${m.badge}）: ${m.tagline} | ${m.you} / ${m.we} | ${m.price}`));
+
+  parts.push(lang === "zh" ? "【AvatarHub 客户端下载与安装】" : "[AvatarHub client download & install]");
+  parts.push(
+    lang === "zh"
+      ? [
+          "下载：官网 /download 页，Windows 10/11 (x64) 安装包约 45 MB（薄核心，AI 组件按需下载），SHA-256 可校验；macOS 12+ 轻量控制台即将上线（重推理需 Windows/服务器 N 卡）。",
+          "安装 6 步：① 下载安装包 → ② 双击安装（按用户安装、免管理员，可选目录）→ ③ 首启向导自动检测显卡并推荐档位 → ④ 自动下载 AI 组件（SHA-256 校验 + 断点续传，按档位约 10–60 GB，建议预留 80 GB SSD）→ ⑤ 「设置 → 授权」输订单号在线激活或用 14 天免费试用 → ⑥ 启动器「启动全部」+「一键体检」全绿即成功。",
+          "配置要求：仅声音克隆 NVIDIA 4 GB 显存起；实时换脸/数字人直播 8 GB+（RTX 3060 起）；同传全家桶推荐 24 GB（RTX 4090/5090）。内存推荐 32 GB。",
+          "常见问题：SmartScreen 拦截 → 「更多信息 → 仍要运行」；组件下载中断 → 重开自动断点续传；服务未就绪 → 启动器「一键体检」，多为显存不足或模型加载中；打不开 → 「一键诊断包」生成 6 位诊断码报给客服即可远程定位。",
+          "软件更新：产品内一键升级（下载→自动安装→自动重启约 1–3 分钟），组件与角色数据全保留，清单 Ed25519 签名校验，支持一键回滚，直播中自动避让。每版更新内容见 /download 页「版本更新」。",
+          "在线手册：/manual（可打印导出 PDF）。装不动可购 99 USDT 远程代部署服务，装好即用。",
+        ].join("\n")
+      : [
+          "Download: /download page. Windows 10/11 (x64) installer is ~45 MB (thin core, AI components download on demand), SHA-256 verifiable. macOS 12+ lightweight console coming soon (heavy inference needs a Windows/server NVIDIA GPU).",
+          "Install in 6 steps: ① download → ② run installer (per-user, no admin) → ③ first-run wizard detects GPU and recommends a tier → ④ components auto-download (SHA-256 verified, resumable; ~10–60 GB by tier, 80 GB SSD recommended) → ⑤ activate with order number in Settings → License or start the 14-day trial → ⑥ Start All + health check all green = done.",
+          "Requirements: voice-only from NVIDIA 4 GB VRAM; live face swap / digital human 8 GB+ (RTX 3060+); interpreting suite 24 GB (RTX 4090/5090). 32 GB RAM recommended.",
+          "Common issues: SmartScreen → More info → Run anyway; interrupted downloads resume automatically; service not ready → run the health check (usually low VRAM or models loading); still stuck → one-click diagnostic pack gives a 6-digit code for remote support.",
+          "Updates: one-click in-app update (download → install → restart, ~1–3 min), components and character data preserved, Ed25519-signed manifests, one-click rollback, never applies mid-stream. Per-version notes on /download.",
+          "Online manual: /manual (printable to PDF). Hands-off option: 99 USDT remote installation service.",
+        ].join("\n")
+  );
 
   parts.push(lang === "zh" ? "【常见问题】" : "[FAQ]");
   c.faq.items.forEach((it) => parts.push(`Q: ${it.q}\nA: ${it.a}`));

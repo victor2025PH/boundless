@@ -18,6 +18,7 @@ export default function Footer() {
     { href: zh ? "/face" : "/en/face", label: zh ? "幻颜 · 实时换脸" : "FaceX · Live face swap" },
     { href: zh ? "/interpreting" : "/en/interpreting", label: zh ? "通译 · 克隆音同传" : "LingoX · Interpreting" },
     { href: zh ? "/download" : "/en/download", label: zh ? "下载客户端" : "Download client" },
+    { href: zh ? "/manual" : "/en/manual", label: zh ? "使用手册" : "User manual" },
     { href: zh ? "/order" : "/en/order", label: zh ? "购买与下单" : "Plans & ordering" },
     { href: zh ? "/videos" : "/en/videos", label: zh ? "视频动态" : "Video feed" },
   ];

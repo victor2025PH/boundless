@@ -3,6 +3,7 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import DownloadSection from "@/components/DownloadSection";
 import { SITE_URL } from "@/lib/site";
+import { LATEST_VERSION } from "@/lib/releaseNotes";
 
 const LANGUAGES = { "zh-CN": "/download", en: "/en/download", "x-default": "/download" };
 
@@ -24,6 +25,7 @@ const appLd = {
   name: "AvatarHub",
   applicationCategory: "MultimediaApplication",
   operatingSystem: "Windows 10/11, macOS 12+",
+  softwareVersion: LATEST_VERSION,
   offers: { "@type": "Offer", price: "0", priceCurrency: "USDT", description: "14-day free trial" },
   publisher: { "@type": "Organization", name: "BOUNDLESS", url: SITE_URL },
 };
