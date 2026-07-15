@@ -5,14 +5,15 @@ import type { ProductKey } from "@/lib/brand";
 // 改键名会断裂历史数据。对客可见层（tab 标签 / 标题 / 卡片）已全部无界化，键名仅作稳定标识。
 export type View = "home" | "liveavatar" | "soulsync" | "pricing" | "engage";
 
-/** 六产品 → 所属 view 分组：幻颜/幻声/幻影=视觉系(liveavatar)，智拓/通译/智聊=沟通系(soulsync)。 */
+/** 七产品 → 所属 view 分组：幻颜/幻声/幻影=视觉系(liveavatar)，智拓/智聊/通译/通传=沟通系(soulsync)。 */
 export const PRODUCT_VIEW: Record<ProductKey, View> = {
   reachx: "soulsync",
+  chatx: "soulsync",
   facex: "liveavatar",
   voicex: "liveavatar",
   livex: "liveavatar",
   lingox: "soulsync",
-  chatx: "soulsync",
+  voxx: "soulsync",
 };
 
 /** 入口别名 → 视图（兼容 ?view= 与 startapp start_param 的历史别名；含无界 5 产品 key）。 */
@@ -39,6 +40,9 @@ export const VIEW_ALIASES: Record<string, View> = {
   reach: "soulsync",
   lingox: "soulsync",
   chatx: "soulsync",
+  voxx: "soulsync",
+  vox: "soulsync",
+  interpret: "soulsync",
   pricing: "pricing",
   plans: "pricing",
   engage: "engage",

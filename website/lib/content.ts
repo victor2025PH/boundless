@@ -405,8 +405,8 @@ const zh: Dict = {
     ],
   },
   solutionsSection: {
-    title: "六条产品线 · 一个无界底座",
-    subtitle: "智拓真机获客、幻颜换脸、幻声克隆、幻影直播分身、通译实时互译、智聊自动成交——六条产品线共享无界底座，私有部署、数据不出网，按需单独选用或组合。",
+    title: "三大产品系 · 一个无界底座",
+    subtitle: "智连获客成交（智拓·智聊）、幻境数字分身（幻颜·幻声·幻影）、通达跨语沟通（通译·通传）——三系七产品共享无界底座，私有部署、数据不出网，按需单独选用或组合。",
   },
   solutions: [
     {
@@ -1050,8 +1050,8 @@ const en: Dict = {
     ],
   },
   solutionsSection: {
-    title: "Six Product Lines · One Boundless Core",
-    subtitle: "ReachX acquires leads on real devices, FaceX swaps faces, VoiceX clones voices, LiveX powers live digital twins, LingoX translates in real time, ChatX closes deals — six lines on one BOUNDLESS core, privately deployed and composable on demand.",
+    title: "Three Families · Seven Product Lines",
+    subtitle: "Growth (ReachX lead-gen · ChatX closing), Studio (FaceX · VoiceX · LiveX digital twins), Lingo (LingoX chat translation · VoxX voice interpreting) — seven lines across three families on one BOUNDLESS core, privately deployed and composable on demand.",
   },
   solutions: [
     {

@@ -83,11 +83,12 @@ const PRODUCT_OFFERS: Partial<Record<ProductKey, Parameters<typeof toSchemaOffer
 };
 const PRODUCT_SCHEMA_ANCHOR: Record<ProductKey, string> = {
   reachx: "#autochat",
+  chatx: "#autochat",
   facex: "#showcase",
   voicex: "#realtime",
   livex: "#realtime",
   lingox: "#autochat",
-  chatx: "#autochat",
+  voxx: "#showcase",
 };
 const productServices = PRODUCT_ORDER.map((key) => {
   const p = BRAND.products[key];

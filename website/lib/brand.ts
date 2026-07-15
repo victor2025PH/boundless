@@ -1,6 +1,16 @@
 // Single source of truth for brand identity (无界科技 BOUNDLESS).
 // Change names / taglines / products here — the rest of the app imports from this file.
 
+// 三系（category）：母品牌无界统领，每系破一「界」。产品归系见各产品 category 字段。
+export const CATEGORIES = {
+  growth: { zh: "智连", en: "Growth", breakZh: "沟通与成交之界", breakEn: "the reach & sales barrier" },
+  studio: { zh: "幻境", en: "Studio", breakZh: "容貌 / 声音 / 身份之界", breakEn: "the face / voice / identity barrier" },
+  lingo: { zh: "通达", en: "Lingo", breakZh: "语言之界", breakEn: "the language barrier" },
+} as const;
+
+export type CategoryKey = keyof typeof CATEGORIES;
+export const CATEGORY_ORDER: CategoryKey[] = ["growth", "studio", "lingo"];
+
 export const BRAND = {
   company: {
     zh: "无界科技",
@@ -12,10 +22,11 @@ export const BRAND = {
       en: "Communication, Boundless.",
     },
   },
-  // 六大子产品（无界品牌族）：每个打破一种「界」。
+  // 三系七产品（无界品牌族）：每个打破一种「界」，每个产品用 category 归系。
   // 英文主名走统一 `…X` 系列（X = 突破边界 / 无限变换）；alt 为更自解释的渠道备选名。
   products: {
     reachx: {
+      category: "growth",
       zh: "智拓",
       en: "ReachX",
       alt: "GrowthReach",
@@ -28,7 +39,22 @@ export const BRAND = {
       // 获客能力对应 mobile-auto0423（OpenClaw 真机 RPA 集群）；非 solutions SKU。
       skuIds: [],
     },
+    chatx: {
+      category: "growth",
+      zh: "智聊",
+      en: "ChatX",
+      alt: "ChatHub",
+      emoji: "💬",
+      break: { zh: "沟通与成交之界", en: "the sales barrier" },
+      desc: {
+        zh: "聚合 AI 聊天：全程自动开发客户、推进成交",
+        en: "Omni-channel AI chat that closes deals",
+      },
+      // 智聊能力在 content.ts::autochat / plans，不在 solutions SKU 列表中。
+      skuIds: [],
+    },
     facex: {
+      category: "studio",
       zh: "幻颜",
       en: "FaceX",
       alt: "FaceSwap",
@@ -42,6 +68,7 @@ export const BRAND = {
       skuIds: ["faceswap"],
     },
     voicex: {
+      category: "studio",
       zh: "幻声",
       en: "VoiceX",
       alt: "VoiceClone",
@@ -54,6 +81,7 @@ export const BRAND = {
       skuIds: ["voice"],
     },
     livex: {
+      category: "studio",
       zh: "幻影",
       en: "LiveX",
       alt: "LiveMorph",
@@ -66,28 +94,29 @@ export const BRAND = {
       skuIds: ["digital-human", "video-dubbing"],
     },
     lingox: {
+      category: "lingo",
       zh: "通译",
       en: "LingoX",
       alt: "LiveLingo",
       emoji: "🌐",
-      break: { zh: "语言之界", en: "the language barrier" },
+      break: { zh: "语言之界（聊天）", en: "the language barrier" },
       desc: {
-        zh: "实时换语言：语音 + 文字同声互译",
-        en: "Real-time translation across languages",
+        zh: "实时聊天翻译：多平台文字 + 语音双向互译",
+        en: "Real-time chat translation across platforms",
       },
       skuIds: ["translate"],
     },
-    chatx: {
-      zh: "智聊",
-      en: "ChatX",
-      alt: "ChatHub",
-      emoji: "💬",
-      break: { zh: "沟通与成交之界", en: "the sales barrier" },
+    voxx: {
+      category: "lingo",
+      zh: "通传",
+      en: "VoxX",
+      alt: "LiveInterpret",
+      emoji: "🎧",
+      break: { zh: "语言之界（口译）", en: "the interpreting barrier" },
       desc: {
-        zh: "聚合 AI 聊天：全程自动开发客户、推进成交",
-        en: "Omni-channel AI chat that closes deals",
+        zh: "会议 / 直播实时语音同传：克隆音同传 + 双语字幕 + 抢话打断",
+        en: "Real-time voice interpreting: cloned-voice simul-interpret + subtitles",
       },
-      // 智聊能力在 content.ts::autochat / plans，不在 solutions SKU 列表中。
       skuIds: [],
     },
   },
@@ -104,8 +133,13 @@ export const BRAND = {
 export type BrandLang = "zh" | "en";
 export type ProductKey = keyof typeof BRAND.products;
 
-/** 六产品的固定展示顺序（打破触达→容貌→声音→身份→语言→成交 六界；获客在漏斗最前端）。 */
-export const PRODUCT_ORDER: ProductKey[] = ["reachx", "facex", "voicex", "livex", "lingox", "chatx"];
+/** 七产品的固定展示顺序，按三系分组：智连(智拓·智聊) → 幻境(幻颜·幻声·幻影) → 通达(通译·通传)。 */
+export const PRODUCT_ORDER: ProductKey[] = ["reachx", "chatx", "facex", "voicex", "livex", "lingox", "voxx"];
+
+/** 某系下的产品（按 PRODUCT_ORDER 顺序）。ProductMatrix / 导航按系陈列时消费。 */
+export function productsInCategory(cat: CategoryKey): ProductKey[] {
+  return PRODUCT_ORDER.filter((k) => BRAND.products[k].category === cat);
+}
 
 /** "无界科技 BOUNDLESS" 这类中英组合写法。 */
 export function brandFull(): string {
@@ -118,7 +152,7 @@ export function productLabel(key: ProductKey, lang: BrandLang = "zh"): string {
   return lang === "zh" ? `${p.zh} ${p.en}` : `${p.en} (${p.zh})`;
 }
 
-/** 六产品的结构化清单（emoji + 名称 + 一句话能力），按固定展示顺序。
+/** 七产品的结构化清单（emoji + 名称 + 一句话能力），按固定展示顺序。
  *  欢迎语 / bot 知识库 / system prompt / 营销帖等"产品线概述"统一消费这一份，
  *  避免同一段产品介绍散落多个文件、改一处漏五处。 */
 export function productLineItems(lang: BrandLang) {
@@ -133,7 +167,7 @@ export function productLineItems(lang: BrandLang) {
   });
 }
 
-/** 五产品概述的纯文本块（每行 "· 🎭 幻颜 FaceX：AI 换脸…"），用于 bot 文案拼接。
+/** 产品概述的纯文本块（每行 "· 🎭 幻颜 FaceX：AI 换脸…"），用于 bot 文案拼接。
  *  bullet 默认 "· "，html=true 时名称用 <b> 包裹（Telegram HTML parse_mode）。 */
 export function productLinesText(lang: BrandLang, opts?: { bullet?: string; html?: boolean }): string {
   const bullet = opts?.bullet ?? "· ";

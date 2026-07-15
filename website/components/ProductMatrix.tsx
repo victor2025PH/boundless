@@ -3,7 +3,7 @@
 import { motion, useReducedMotion, type MotionProps } from "framer-motion";
 import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
-import { BRAND, PRODUCT_ORDER } from "@/lib/brand";
+import { BRAND, PRODUCT_ORDER, CATEGORIES, CATEGORY_ORDER, productsInCategory } from "@/lib/brand";
 import { PRODUCT_IMG, PRODUCT_ANCHOR, PRODUCT_LANDING } from "./productMeta";
 import { track } from "@/lib/track";
 import { ArrowRight, ShieldCheck } from "lucide-react";
@@ -11,21 +11,21 @@ import { ArrowRight, ShieldCheck } from "lucide-react";
 const COPY = {
   zh: {
     kicker: "产品矩阵",
-    head: "一个无界底座，六条产品线",
-    sub: "打破触达、容貌、声音、身份、语言、成交六道边界——从获客到成交，每条产品线都可单独选用，也能组合成完整的「获客 + 数字分身 + 自动成交」闭环。",
+    head: "三大产品系，七条产品线",
+    sub: "智连获客成交、幻境数字分身、通达跨语沟通——三系共享一个无界底座；每条产品线可单独选用，也能组合成「获客 + 数字分身 + 自动成交」的完整闭环。",
     breakLabel: "打破",
     engineName: "无界底座 BOUNDLESS Engine",
-    engineDesc: "六条产品线共享同一私有化底座：数据不出网、自主可控、全程 USDT 结算。",
+    engineDesc: "三系七产品共享同一私有化底座：数据不出网、自主可控、合规可溯源。",
     ctaPrimary: "查看套餐与价格",
     ctaSecondary: "了解品牌故事",
   },
   en: {
     kicker: "Product Matrix",
-    head: "One boundless core, six product lines",
-    sub: "Break the barriers of face, voice, identity, language and sales — pick any line on its own, or combine them into a full \"digital twin + auto-closing\" loop.",
+    head: "Three families, seven product lines",
+    sub: "Growth for reach & closing, Studio for digital twins, Lingo for cross-language — three families on one BOUNDLESS core. Pick any line on its own, or combine them into a full \"lead-gen + digital twin + auto-closing\" loop.",
     breakLabel: "Breaks",
     engineName: "BOUNDLESS Engine",
-    engineDesc: "All six lines share one private-deployment core: data stays off-net, fully self-controlled, settled in USDT.",
+    engineDesc: "Seven lines across three families share one private-deployment core: data stays off-net, self-controlled and verifiably compliant.",
     ctaPrimary: "View plans & pricing",
     ctaSecondary: "Read the brand story",
   },
@@ -68,57 +68,81 @@ export default function ProductMatrix() {
           </p>
         </Reveal>
 
-        <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {PRODUCT_ORDER.map((key, idx) => {
-            const p = BRAND.products[key];
-            // 有独立落地页的产品线跳落地页（更完整的卖点+真实样片），其余回退首页锚点
-            const landing = PRODUCT_LANDING[key];
-            const href = landing ? (lang === "zh" ? landing : `/en${landing}`) : PRODUCT_ANCHOR[key];
+        <div className="mt-12 space-y-12">
+          {CATEGORY_ORDER.map((cat) => {
+            const cc = CATEGORIES[cat];
+            const items = productsInCategory(cat);
             return (
-              <Reveal key={key} delay={idx * 0.05}>
-                <a
-                  href={href}
-                  onClick={() => track("product_click", { key, where: "matrix" })}
-                  className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] p-5 transition hover:border-neon-cyan/40 hover:bg-white/[0.05]"
-                >
-                  <div className="mb-4 flex items-center justify-between">
-                    <motion.span className="inline-grid place-items-center rounded-xl" {...iconGlow(idx)}>
-                      <img
-                        src={PRODUCT_IMG[key]}
-                        alt={`${p.zh} ${p.en}`}
-                        width={48}
-                        height={48}
-                        className="h-12 w-12 object-contain transition-transform group-hover:scale-110"
-                        draggable={false}
-                      />
-                    </motion.span>
-                    <span className="font-mono text-xs text-slate-600">0{idx + 1}</span>
+              <div key={cat}>
+                <Reveal>
+                  <div className="mb-5 flex flex-wrap items-baseline gap-x-3 gap-y-1 border-l-2 border-neon-cyan/50 pl-3">
+                    <h3 className="text-lg font-bold text-white">
+                      {lang === "zh" ? cc.zh : cc.en}
+                      <span className="ml-2 text-sm font-medium text-neon-cyan">{lang === "zh" ? cc.en : cc.zh}</span>
+                    </h3>
+                    <span className="text-xs text-slate-500">
+                      {c.breakLabel} · {lang === "zh" ? cc.breakZh : cc.breakEn}
+                    </span>
                   </div>
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-xl font-bold text-white">{p.zh}</span>
-                    <span className="text-sm font-semibold text-neon-cyan">{p.en}</span>
-                  </div>
-                  <p className="mt-0.5 text-xs text-slate-500">{p.alt}</p>
-                  <p className="mt-3 flex-1 text-sm leading-relaxed text-slate-300">{p.desc[lang]}</p>
-                  <p className="mt-3 inline-flex w-fit items-center gap-1 rounded-full bg-neon-violet/10 px-2.5 py-1 text-xs font-medium text-neon-violet">
-                    {c.breakLabel} · {p.break[lang]}
-                  </p>
-                </a>
-              </Reveal>
+                </Reveal>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {items.map((key) => {
+                    const idx = PRODUCT_ORDER.indexOf(key);
+                    const p = BRAND.products[key];
+                    // 有独立落地页的产品线跳落地页（更完整的卖点+真实样片），其余回退首页锚点
+                    const landing = PRODUCT_LANDING[key];
+                    const href = landing ? (lang === "zh" ? landing : `/en${landing}`) : PRODUCT_ANCHOR[key];
+                    return (
+                      <Reveal key={key} delay={(idx % 3) * 0.05}>
+                        <a
+                          href={href}
+                          onClick={() => track("product_click", { key, where: "matrix" })}
+                          className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] p-5 transition hover:border-neon-cyan/40 hover:bg-white/[0.05]"
+                        >
+                          <div className="mb-4 flex items-center justify-between">
+                            <motion.span className="inline-grid place-items-center rounded-xl" {...iconGlow(idx)}>
+                              <img
+                                src={PRODUCT_IMG[key]}
+                                alt={`${p.zh} ${p.en}`}
+                                width={48}
+                                height={48}
+                                className="h-12 w-12 object-contain transition-transform group-hover:scale-110"
+                                draggable={false}
+                              />
+                            </motion.span>
+                            <span className="font-mono text-xs text-slate-600">0{idx + 1}</span>
+                          </div>
+                          <div className="flex items-baseline gap-2">
+                            <span className="text-xl font-bold text-white">{p.zh}</span>
+                            <span className="text-sm font-semibold text-neon-cyan">{p.en}</span>
+                          </div>
+                          <p className="mt-0.5 text-xs text-slate-500">{p.alt}</p>
+                          <p className="mt-3 flex-1 text-sm leading-relaxed text-slate-300">{p.desc[lang]}</p>
+                          <p className="mt-3 inline-flex w-fit items-center gap-1 rounded-full bg-neon-violet/10 px-2.5 py-1 text-xs font-medium text-neon-violet">
+                            {c.breakLabel} · {p.break[lang]}
+                          </p>
+                        </a>
+                      </Reveal>
+                    );
+                  })}
+                </div>
+              </div>
             );
           })}
 
-          {/* 无界底座卡片 */}
-          <Reveal delay={PRODUCT_ORDER.length * 0.05}>
-            <div className="relative flex h-full flex-col overflow-hidden rounded-2xl border border-neon-cyan/30 bg-gradient-to-br from-neon-cyan/[0.08] to-neon-violet/[0.08] p-5">
+          {/* 无界底座横幅（托起三系七产品） */}
+          <Reveal>
+            <div className="relative flex flex-col overflow-hidden rounded-2xl border border-neon-cyan/30 bg-gradient-to-br from-neon-cyan/[0.08] to-neon-violet/[0.08] p-5 sm:flex-row sm:items-center sm:gap-4">
               <motion.span
-                className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-neon-cyan/20 text-neon-cyan"
+                className="mb-4 flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-neon-cyan/20 text-neon-cyan sm:mb-0"
                 {...iconGlow(PRODUCT_ORDER.length)}
               >
                 <ShieldCheck className="h-5 w-5" />
               </motion.span>
-              <div className="text-xl font-bold text-white">{c.engineName}</div>
-              <p className="mt-3 flex-1 text-sm leading-relaxed text-slate-300">{c.engineDesc}</p>
+              <div>
+                <div className="text-xl font-bold text-white">{c.engineName}</div>
+                <p className="mt-2 text-sm leading-relaxed text-slate-300">{c.engineDesc}</p>
+              </div>
             </div>
           </Reveal>
         </div>
