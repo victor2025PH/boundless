@@ -1,0 +1,21 @@
+# 无界 wujie · 区域归属（GitHub 依此在 PR 自动请对应负责人评审）
+# 用法：把下面的 @用户名 换成真实 GitHub 账号；一个区域可写多个负责人（空格分隔）。
+# 规则：跨区域改动请拆分 PR；动 platform/ 会影响所有人，需全员知会。
+
+# 默认兜底
+*                        @victor2025PH
+
+# 三引擎（各由主机/主负责人认领）
+/engines/avatarhub/      @victor2025PH   # 换脸/换声/数字人/同传 —— 5090 机开发+调试
+/engines/chengjie/       @victor2025PH   # 承接/客服/翻译栈
+/engines/huoke/          @victor2025PH   # 真机 RPA 获客
+
+# 官网 / 产品薄封装 / 共享底座 / 部署 / 工具
+/website/                @victor2025PH
+/products/               @victor2025PH
+/platform/               @victor2025PH   # ★动这里影响全线，需知会
+/deploy/                 @victor2025PH
+/tools/                  @victor2025PH
+
+# 文档
+/docs/                   @victor2025PH

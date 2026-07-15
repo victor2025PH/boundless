@@ -1,0 +1,12 @@
+#!/bin/sh
+# wujie pre-push 门禁：repo_doctor 为 RED(FAIL>0) 则拒绝 push。
+# 覆盖：确需绕过时 `git push --no-verify`。安装：powershell -File tools/install_hooks.ps1
+echo "[pre-push] repo_doctor gate..."
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/repo_doctor.ps1
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  echo "[pre-push] BLOCKED: repo_doctor RED (exit $rc). 修掉 FAIL 再推，或 git push --no-verify 强绕。"
+  exit 1
+fi
+echo "[pre-push] repo_doctor OK -> push 放行。"
+exit 0
