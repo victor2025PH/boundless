@@ -2,14 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
-import { Menu, X, Languages } from "lucide-react";
+import { Menu, X, Languages, ChevronDown } from "lucide-react";
 import { useLang } from "./LanguageContext";
 import { useTelegram } from "./TelegramProvider";
 import { CONTACT_URL } from "@/lib/site";
 import { track } from "@/lib/track";
 import BrandMark from "./BrandMark";
 import ModeToggle from "./ModeToggle";
-import { BRAND } from "@/lib/brand";
+import { BRAND, CATEGORIES, CATEGORY_ORDER, productsInCategory, type ProductKey } from "@/lib/brand";
+import { PRODUCT_LANDING, PRODUCT_ANCHOR } from "./productMeta";
 
 export default function Navbar() {
   const { t, lang, toggle } = useLang();
@@ -23,6 +24,13 @@ export default function Navbar() {
   const home = lang === "zh" ? "/" : "/en";
   const onHome = pathname === "/" || pathname === "/en";
   const anchor = (hash: string) => (onHome ? hash : `${home}${hash}`);
+
+  // 产品跳转：有独立落地页跳落地页（按语言前缀），否则回退首页锚点。
+  const productHref = (key: ProductKey) => {
+    const landing = PRODUCT_LANDING[key];
+    if (landing) return lang === "zh" ? landing : `/en${landing}`;
+    return anchor(PRODUCT_ANCHOR[key]);
+  };
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 20);
@@ -51,7 +59,6 @@ export default function Navbar() {
   const links = [
     { href: anchor("#autochat"), label: t.nav.autochat },
     { href: anchor("#realtime"), label: t.nav.demo },
-    { href: anchor("#showcase"), label: t.nav.solutions },
     { href: anchor("#engage"), label: t.nav.engage },
     { href: lang === "zh" ? "/order" : "/en/order", label: lang === "zh" ? "购买" : "Buy" },
     { href: lang === "zh" ? "/download" : "/en/download", label: lang === "zh" ? "下载" : "Download" },
@@ -73,6 +80,45 @@ export default function Navbar() {
         </a>
 
         <div className="hidden items-center gap-8 md:flex">
+          {/* 产品 · 三系下拉（智连 / 幻境 / 通达） */}
+          <div className="group relative">
+            <button className="inline-flex items-center gap-1 text-sm text-slate-300 transition-colors hover:text-white">
+              {lang === "zh" ? "产品" : "Products"}
+              <ChevronDown className="h-3.5 w-3.5 opacity-70 transition-transform group-hover:rotate-180" />
+            </button>
+            <div className="invisible absolute left-1/2 top-full z-50 -translate-x-1/2 pt-3 opacity-0 transition duration-150 group-hover:visible group-hover:opacity-100">
+              <div className="glass grid w-[560px] grid-cols-3 gap-4 rounded-2xl border border-white/10 p-4">
+                {CATEGORY_ORDER.map((cat) => {
+                  const cc = CATEGORIES[cat];
+                  return (
+                    <div key={cat}>
+                      <div className="mb-2 border-b border-white/5 pb-1.5 text-xs font-semibold text-neon-cyan">
+                        {lang === "zh" ? cc.zh : cc.en}
+                        <span className="ml-1 font-normal text-slate-500">{lang === "zh" ? cc.en : cc.zh}</span>
+                      </div>
+                      <div className="flex flex-col gap-0.5">
+                        {productsInCategory(cat).map((key) => {
+                          const p = BRAND.products[key];
+                          return (
+                            <a
+                              key={key}
+                              href={productHref(key)}
+                              onClick={() => track("product_click", { key, where: "nav" })}
+                              className="group/item rounded-lg px-2 py-1.5 transition hover:bg-white/5"
+                            >
+                              <span className="text-sm text-slate-200 group-hover/item:text-white">{p.zh}</span>
+                              <span className="ml-1.5 text-xs text-slate-500">{p.en}</span>
+                            </a>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
           {links.map((l) => {
             const isOn = l.href.includes("#")
               ? active === l.href.split("#")[1]
@@ -139,6 +185,28 @@ export default function Navbar() {
       {open && (
         <div className="glass border-t border-white/5 md:hidden">
           <div className="flex flex-col gap-1 px-5 py-3">
+            {/* 产品 · 按三系分组 */}
+            <div className="mb-1 rounded-lg bg-white/[0.02] p-2">
+              {CATEGORY_ORDER.map((cat) => (
+                <div key={cat} className="mb-1.5 last:mb-0">
+                  <div className="px-1 py-1 text-xs font-semibold text-neon-cyan">
+                    {lang === "zh" ? CATEGORIES[cat].zh : CATEGORIES[cat].en}
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {productsInCategory(cat).map((key) => (
+                      <a
+                        key={key}
+                        href={productHref(key)}
+                        onClick={() => setOpen(false)}
+                        className="rounded-md px-2.5 py-1 text-sm text-slate-300 hover:bg-white/5 hover:text-white"
+                      >
+                        {BRAND.products[key].zh}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
             {links.map((l) => (
               <a
                 key={l.href}
