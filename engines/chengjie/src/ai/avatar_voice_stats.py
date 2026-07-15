@@ -29,6 +29,7 @@ class AvatarVoiceStats:
         "_queue_peak", "_queue_wait_ms_sum", "_queue_wait_n",
         "_stt_total", "_stt_ok", "_started_at", "_last_ts",
         "_synth_fail_streak", "_last_synth_ok_ts", "_last_synth_fail_ts",
+        "_truncation_rejects",
     )
 
     def __init__(self) -> None:
@@ -62,6 +63,8 @@ class AvatarVoiceStats:
         self._queue_wait_n = 0
         self._stt_total = 0
         self._stt_ok = 0
+        # 质量闸门拒发数（2026-07-15「乱码语音」防线：截断/坏音被拦下的次数）
+        self._truncation_rejects = 0
         self._started_at = time.time()
         self._last_ts = 0.0
 
@@ -168,6 +171,12 @@ class AvatarVoiceStats:
             self._queue_wait_ms_sum += max(0, int(wait_ms))
             self._queue_wait_n += 1
 
+    def record_truncation_reject(self) -> None:
+        """质量闸门拦下一条截断/坏音（未发出）。持续 >0 增长 = TTS 后端在出坏音。"""
+        with self._lock:
+            self._truncation_rejects += 1
+            self._last_ts = time.time()
+
     # ── STT ──────────────────────────────────────────────────────────────────
     def record_stt(self, *, ok: bool) -> None:
         with self._lock:
@@ -221,6 +230,7 @@ class AvatarVoiceStats:
                     if self._queue_wait_n else 0),
                 "stt_total": int(self._stt_total),
                 "stt_ok": int(self._stt_ok),
+                "truncation_rejects": int(self._truncation_rejects),
             }
 
     def dump_prom(self) -> str:
@@ -237,6 +247,8 @@ class AvatarVoiceStats:
             "# TYPE avatar_voice_queue_peak gauge",
             "# HELP avatar_voice_stt_total AvatarHub STT attempts",
             "# TYPE avatar_voice_stt_total counter",
+            "# HELP avatar_voice_truncation_rejects_total truncated/garbage audio blocked by quality gate",
+            "# TYPE avatar_voice_truncation_rejects_total counter",
             "# HELP avatar_voice_by_channel_total successful synth by channel",
             "# TYPE avatar_voice_by_channel_total counter",
             "# HELP avatar_voice_colloquial_total synth with colloquial rewrite (liveliness, text layer)",
@@ -259,6 +271,8 @@ class AvatarVoiceStats:
             lines.append(f"avatar_voice_prerender_miss_total {self._prerender_miss}")
             lines.append(f"avatar_voice_queue_peak {self._queue_peak}")
             lines.append(f"avatar_voice_stt_total {self._stt_total}")
+            lines.append(
+                f"avatar_voice_truncation_rejects_total {self._truncation_rejects}")
             for ch, n in sorted(self._by_channel.items()):
                 lines.append(
                     f'avatar_voice_by_channel_total{{channel="{_esc(ch)}"}} {int(n)}')
@@ -289,6 +303,7 @@ class AvatarVoiceStats:
             self._queue_wait_n = 0
             self._stt_total = 0
             self._stt_ok = 0
+            self._truncation_rejects = 0
             self._last_ts = 0.0
 
 

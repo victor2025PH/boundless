@@ -163,21 +163,28 @@ def split_text_for_clone(text: str, max_chars: int = 60) -> List[str]:
 
 def pack_voice_parts(
     text: str, *, part_max_chars: int = 40, max_parts: int = 3,
+    min_tail_chars: int = 8,
 ) -> List[str]:
     """把长回复打包成 ≤``max_parts`` 条「语音条文本」（分条发送用，活人感设计）。
 
     真人发语音的行为模式是**连发几条短语音**而非一条长语音。本函数按句切分
     （复用 ``split_text_for_clone`` 的切句器）后贪心打包到 ``part_max_chars``；
     超出 ``max_parts`` 时把余量并进最后一条（长一点也比条数爆炸自然）。
+    末条 < ``min_tail_chars`` 时并入前一条——孤零零的超短尾条（"哦～"）合成
+    易出怪音、听感也做作（2026-07-15 乱码语音事故的放大器），0 关闭。
     短文本（切不出第二条）→ 单元素列表（调用方走原单条路径）。纯函数。
     """
     chunks = split_text_for_clone(text, part_max_chars)
-    if len(chunks) <= max(1, int(max_parts)):
-        return chunks
     keep = max(1, int(max_parts))
-    head = chunks[: keep - 1]
-    tail = "".join(chunks[keep - 1:])
-    return head + [tail]
+    if len(chunks) > keep:
+        head = chunks[: keep - 1]
+        tail = "".join(chunks[keep - 1:])
+        chunks = head + [tail]
+    if (len(chunks) >= 2 and min_tail_chars > 0
+            and len(chunks[-1]) < int(min_tail_chars)):
+        tail = chunks.pop()
+        chunks[-1] = chunks[-1] + tail
+    return chunks
 
 
 def concat_wav_bytes(parts: List[bytes], gap_ms: int = 120) -> bytes:

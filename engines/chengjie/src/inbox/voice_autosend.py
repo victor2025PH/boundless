@@ -555,6 +555,39 @@ async def _synth_ogg(config: Dict[str, Any], persona_id: str, text: str,
     except Exception:
         logger.debug("[voice_autosend] 截断重试异常", exc_info=True)
 
+    # 最终质量闸门（2026-07-15 乱码语音防线，与原生 voice_reply 同口径）：
+    # 换行启发式 + 压平重试都救不回来的截断坏音（时长低于文本物理最快语速）
+    # → 宁缺毋滥，放弃语音（调用方回落文字草稿）。配置同形：
+    # ``inbox.l2_autosend.voice.quality_gate.{enabled,min_sec_per_unit,min_units}``。
+    _qg_bad = False
+    _qg_why = ""
+    try:
+        from src.ai.tts_quality import looks_truncated, resolve_quality_gate
+        _qg = resolve_quality_gate(_vb)
+        if _qg["enabled"]:
+            _qg_bad, _qg_why = looks_truncated(
+                synth_src, float(result.duration_sec or 0),
+                min_sec_per_unit=_qg["min_sec_per_unit"],
+                min_units=_qg["min_units"])
+    except Exception:
+        _qg_bad = False
+    if _qg_bad:
+        meta["truncation_rejected"] = True
+        _set_synth_failure("truncation_rejected")
+        logger.warning(
+            "[voice_autosend] 疑似截断坏音(%s) → 拒发回落文字 pid=%s",
+            _qg_why, persona_id)
+        try:
+            from src.ai.avatar_voice_stats import get_avatar_voice_stats
+            get_avatar_voice_stats().record_truncation_reject()
+        except Exception:
+            pass
+        try:
+            os.unlink(result.audio_path)
+        except Exception:
+            pass
+        return None, meta
+
     audio_path = result.audio_path
     try:
         from src.client.voice_sender import convert_to_ogg_opus

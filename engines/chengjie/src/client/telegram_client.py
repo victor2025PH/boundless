@@ -11,7 +11,6 @@ import re
 import time
 from html import escape as _html_escape
 from pathlib import Path
-from collections import OrderedDict
 from typing import Dict, Any, Optional, List, Tuple
 # 语音识别导入
 try:
@@ -166,9 +165,12 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
         self._session_reply_ts: Dict[str, float] = {}  # (chat_id:user_id) -> 我们最后回复该用户的时间戳
         self._last_send_wallclock: float = 0.0  # 全局上次 send_message 时间，用于 min_interval
         self._boot_timestamp: float = time.time()  # 启动时间戳，用于跳过启动前的旧消息
-        self._processed_msg_ids: OrderedDict = OrderedDict()  # message_id -> timestamp, LRU 去重
-        self._dedup_max_size: int = 2000
-        self._dedup_ttl: float = 600.0
+        # (chat_id, message_id) 去重 + per-chat 串行锁（2026-07-15 三连发语音事故修复：
+        # 私聊实时路径原先不登记去重 → 轮询兜底把处理中的消息再跑一遍，双流水线并行
+        # 生成两个矛盾回复。claim 收口在 _process_message 入口，三条入站路径共用）。
+        from src.client.message_dedup import MessageDedup, PerChatLocks
+        self._msg_dedup = MessageDedup(max_size=2000, ttl_sec=600.0)
+        self._chat_locks = PerChatLocks(max_size=512)
         self._gxp_pending: Dict[int, list] = {}  # chat_id -> [{cmd, ts, user_id, user_msg_id}, ...]
 
         from src.utils.i18n import I18n
@@ -661,6 +663,17 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 process_private = tg_cfg.get("process_private", True)
 
                 if process_private:
+                    # P-0.5: 私聊消息去重登记（2026-07-15 三连发事故根因修复）——
+                    # 此前私聊实时路径从不登记 mid，语音回复链路耗时 > 轮询间隔时，
+                    # 轮询兜底把处理中的同一条消息再跑一遍 → 双流水线并行、矛盾回复。
+                    _mid = getattr(message, 'id', 0) or getattr(message, 'message_id', 0)
+                    if not self._msg_dedup.claim(message.chat.id, _mid):
+                        self.logger.debug(
+                            "[私聊] 跳过: 去重 chat=%s mid=%s", message.chat.id, _mid)
+                        _m = _metrics()
+                        if _m:
+                            _m.record_dedup_blocked()
+                        return
                     if _has_ingestable_media(message):
                         await self._process_message(message)
                     else:
@@ -710,20 +723,15 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                         return
 
                 # P-0.5: 消息去重 — 防止网络重传导致同一条消息被处理两次
+                # （复合键 chat_id:mid——supergroup 消息 id 是 per-channel 的，裸 mid
+                # 会跨群相撞导致误判重复、静默丢消息）
                 mid = getattr(message, 'id', 0) or getattr(message, 'message_id', 0)
-                if mid:
-                    if mid in self._processed_msg_ids:
-                        self.logger.debug("[群消息] 跳过: 去重 mid=%s", mid)
-                        return
-                    now = time.time()
-                    self._processed_msg_ids[mid] = now
-                    self._processed_msg_ids.move_to_end(mid)
-                    while self._processed_msg_ids:
-                        oldest_k, oldest_v = next(iter(self._processed_msg_ids.items()))
-                        if now - oldest_v > self._dedup_ttl or len(self._processed_msg_ids) > self._dedup_max_size:
-                            self._processed_msg_ids.popitem(last=False)
-                        else:
-                            break
+                if not self._msg_dedup.claim(chat_id, mid):
+                    self.logger.debug("[群消息] 跳过: 去重 chat=%s mid=%s", chat_id, mid)
+                    _m = _metrics()
+                    if _m:
+                        _m.record_dedup_blocked()
+                    return
 
                 # 多 Bot 路由
                 if hasattr(self, '_bot_router') and self._bot_router.enabled:
@@ -1266,27 +1274,23 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     if not (after_boot or within_catchup):  # 远古历史，防重启回灌
                         continue
                 mid = getattr(msg, "id", 0) or getattr(msg, "message_id", 0)
-                if mid and mid in self._processed_msg_ids:  # 与实时 handler 共用去重
+                _cid = getattr(chat, "id", 0)
+                if mid and self._msg_dedup.seen(_cid, mid):  # 与实时 handler 共用去重
                     continue
                 uid = str(getattr(from_user, "id", 0))
                 if self._rate_limiter.enabled:
                     if self._rate_limiter.is_banned(uid):
                         continue
-                    allowed, _reason = self._rate_limiter.allow(uid, getattr(chat, "id", 0))
+                    allowed, _reason = self._rate_limiter.allow(uid, _cid)
                     if not allowed:
                         continue
-                # 处理前先登记去重（防并发/下一轮在回复落地前重入造成重复回复）
-                if mid:
-                    now = time.time()
-                    self._processed_msg_ids[mid] = now
-                    self._processed_msg_ids.move_to_end(mid)
-                    while self._processed_msg_ids:
-                        _ok, _ov = next(iter(self._processed_msg_ids.items()))
-                        if now - _ov > self._dedup_ttl or \
-                                len(self._processed_msg_ids) > self._dedup_max_size:
-                            self._processed_msg_ids.popitem(last=False)
-                        else:
-                            break
+                # 处理前先 claim 去重（防并发/下一轮在回复落地前重入造成重复回复；
+                # 与私聊实时 handler 抢同一把 claim——谁先到谁处理，另一路静默跳过）
+                if not self._msg_dedup.claim(_cid, mid):
+                    _m = _metrics()
+                    if _m:
+                        _m.record_dedup_blocked()
+                    continue
                 self.logger.info(
                     "[轮询兜底] 发现新进站私聊 chat=%s mid=%s text=%r",
                     getattr(chat, "id", ""), mid,
@@ -1571,18 +1575,24 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     m.record_error()
 
     async def _guarded_process(self, message_data: Dict[str, Any]):
-        """使用 Semaphore 控制并发的消息处理包装器"""
-        async with self._process_semaphore:
-            self._active_tasks += 1
-            m = _metrics()
-            if m:
-                m.set_active_tasks(self._active_tasks, self._max_concurrent)
-            try:
-                await self._process_message_async(message_data)
-            finally:
-                self._active_tasks -= 1
+        """使用 per-chat 锁 + Semaphore 控制并发的消息处理包装器。
+
+        per-chat 锁在信号量**之外**获取：同一会话的消息串行生成（后一条能看到
+        前一条的回复上下文，根治并行生成互不可见 → 前后事实矛盾），排队等待时
+        不占并发槽；不同会话仍由信号量并行。
+        """
+        async with self._chat_locks.lock(message_data.get('chat_id')):
+            async with self._process_semaphore:
+                self._active_tasks += 1
+                m = _metrics()
                 if m:
                     m.set_active_tasks(self._active_tasks, self._max_concurrent)
+                try:
+                    await self._process_message_async(message_data)
+                finally:
+                    self._active_tasks -= 1
+                    if m:
+                        m.set_active_tasks(self._active_tasks, self._max_concurrent)
 
     def _emit_inbox(self, *, chat_id: Any, text: str, direction: str,
                     name: str = "", msg_id: str = "",

@@ -136,6 +136,8 @@ _FAIL_THRESHOLD = 3
 _COOLDOWN_SEC = 60.0
 _fail_streak = 0
 _cooldown_until = 0.0
+_last_ok_ts = 0.0     # 最近一次成功改写（wall clock，健康信号用）
+_last_fail_ts = 0.0   # 最近一次失败（wall clock，健康信号用）
 _CB_LOCK = threading.Lock()
 
 
@@ -145,20 +147,38 @@ def _in_cooldown() -> bool:
 
 
 def _record_success() -> None:
-    global _fail_streak, _cooldown_until
+    global _fail_streak, _cooldown_until, _last_ok_ts
     with _CB_LOCK:
         _fail_streak = 0
         _cooldown_until = 0.0
+        _last_ok_ts = time.time()
 
 
 def _record_failure() -> None:
-    global _fail_streak, _cooldown_until
+    global _fail_streak, _cooldown_until, _last_fail_ts
     with _CB_LOCK:
         _fail_streak += 1
+        _last_fail_ts = time.time()
         if _fail_streak >= _FAIL_THRESHOLD:
             _cooldown_until = time.monotonic() + _COOLDOWN_SEC
             logger.info("[voice_colloquial_llm] 连续 %d 次失败 → 冷却 %ds（回落规则档）",
                         _fail_streak, int(_COOLDOWN_SEC))
+
+
+def health_signal() -> dict:
+    """健康信号快照（HealthWatchdog 巡检消费，2026-07-15 九连败静默事故修复）。
+
+    此前端点长期挂掉只会「每 60s 熔断-重试」无限循环，日志有记录但无人被通知，
+    语音口语化静默降级规则档。信号口径与 avatar_voice_stats.hang_signal 对齐：
+    连败数 + 最近成/败时刻，阈值判断留在 watchdog（可配置、可测试）。
+    """
+    with _CB_LOCK:
+        return {
+            "fail_streak": int(_fail_streak),
+            "in_cooldown": time.monotonic() < _cooldown_until,
+            "last_ok_ts": float(_last_ok_ts),
+            "last_fail_ts": float(_last_fail_ts),
+        }
 
 
 # ── 本地 AIClient 懒加载（默认关，开了才构造一次；测试可注入）──────────────────
@@ -240,17 +260,19 @@ async def llm_colloquialize(
 
 def reset_state() -> None:
     """清空缓存 + 熔断 + 懒加载客户端（测试用）。"""
-    global _AI_CLIENT, _fail_streak, _cooldown_until
+    global _AI_CLIENT, _fail_streak, _cooldown_until, _last_ok_ts, _last_fail_ts
     with _CACHE_LOCK:
         _CACHE.clear()
     with _CB_LOCK:
         _fail_streak = 0
         _cooldown_until = 0.0
+        _last_ok_ts = 0.0
+        _last_fail_ts = 0.0
     with _AI_LOCK:
         _AI_CLIENT = None
 
 
 __all__ = [
     "llm_colloquialize", "build_colloquial_prompt", "sanitize_llm_output",
-    "reset_state",
+    "health_signal", "reset_state",
 ]

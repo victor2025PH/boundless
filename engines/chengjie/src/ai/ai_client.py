@@ -29,6 +29,45 @@ except ImportError:
 from src.utils.logger import LoggerMixin
 from src.utils.domain_policy import effective_domain_name
 
+# 事实锁（2026-07-15 事故修复）：防重复/角度系统只约束「表达要不一样」，
+# 没约束「事实要一致」——高温重生时 LLM 把"还没吃饭"改写成"刚吃了面包"。
+# 所有多样性压力提示（角度轮换/复读重试/重复消息话术）注入时统一追加本行。
+FACT_LOCK_LINE = (
+    "【事实锁——优先级高于换角度】只能换措辞、开头、语气、角度；"
+    "绝不能改变你已说过的事实与状态（吃没吃饭、在哪里、正在做什么、"
+    "身体状况、答应过什么）。上一条说过的事实本条必须保持一致，"
+    "宁可不提也不要说反。"
+)
+
+
+def build_time_context_line(now: Any = None) -> str:
+    """陪伴域「当前真实时间」prompt 行（纯函数，Phase19 + 2026-07-15 作息白名单）。
+
+    LLM 训练数据里没有"现在几点"，不注入就会深夜说"下午好"；清晨/深夜两个高危
+    时段额外加作息合理性硬约束——清晨 7:44 说「刚下课回来」这类穿帮（LLM 对
+    "这个点什么事还没发生"没有常识保证）。
+    """
+    import datetime as _dt
+    _t = now if isinstance(now, _dt.datetime) else _dt.datetime.now()
+    _h = _t.hour
+    _tod = ("清晨" if 5 <= _h < 8 else "上午" if 8 <= _h < 12 else
+            "中午" if 12 <= _h < 14 else "下午" if 14 <= _h < 18 else
+            "傍晚" if 18 <= _h < 20 else "晚上" if 20 <= _h < 23 else "深夜")
+    line = (
+        "【当前真实时间】" + _t.strftime("%Y-%m-%d %H:%M")
+        + f"（{_tod}）。问候语、作息话题、以及照片场景标记里的光线时段"
+          "都必须符合这个时间（深夜就是室内暖光/夜景，不要白天场景）。")
+    if _tod == "清晨":
+        line += (
+            "\n【作息合理性】现在是清晨：合理状态只有刚睡醒/洗漱/准备出门/"
+            "还没吃早饭这类；绝不能说「刚下课/刚下班/刚逛街回来」——"
+            "这个点这些事根本还没发生。")
+    elif _tod == "深夜":
+        line += (
+            "\n【作息合理性】现在是深夜：合理状态是宅在室内/准备睡/失眠刷手机；"
+            "不要说刚从学校、公司、商场这类白天场合回来。")
+    return line
+
 
 def order_pool_entries(entries: List[Dict[str, Any]],
                        ping_state: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -2326,16 +2365,7 @@ class AIClient(LoggerMixin):
         # 不注入就会深夜说"下午好"、凌晨发正午场景标记。仅陪伴人设注入
         # （客服域时间敏感话术由业务模板负责，不吃这块 token）。
         if _is_companion:
-            import datetime as _dt
-            _t = _dt.datetime.now()
-            _h = _t.hour
-            _tod = ("清晨" if 5 <= _h < 8 else "上午" if 8 <= _h < 12 else
-                    "中午" if 12 <= _h < 14 else "下午" if 14 <= _h < 18 else
-                    "傍晚" if 18 <= _h < 20 else "晚上" if 20 <= _h < 23 else "深夜")
-            prompt_parts.append(
-                "【当前真实时间】" + _t.strftime("%Y-%m-%d %H:%M")
-                + f"（{_tod}）。问候语、作息话题、以及照片场景标记里的光线时段"
-                  "都必须符合这个时间（深夜就是室内暖光/夜景，不要白天场景）。")
+            prompt_parts.append(build_time_context_line())
 
         # 场景状态（Phase18 图文同源）：聊天文本与生图共用的「AI 此刻在哪」——
         # 文本围绕它说话、自拍在它里面拍，从源头消灭"说上班发海边图"打脸。
@@ -2376,6 +2406,8 @@ class AIClient(LoggerMixin):
                 "- 禁止复制粘贴上次的回复内容\n"
                 "- 禁止使用和上次相同的开头\n"
                 "- 回复要体现你注意到了「又问了一遍」这件事\n"
+                "- 事实必须与上次一致：上次说「还没吃」这次绝不能变成「吃过了」，"
+                "拿不准的状态就不要提\n"
                 "- 保持你的人设和语气自然"
             )
 
@@ -2389,7 +2421,8 @@ class AIClient(LoggerMixin):
                     f"你上一条回复是：「{last_reply[:200]}」\n"
                     f"用户又问了类似问题。{_who}\n"
                     f"具体要求：{anti_repeat}\n"
-                    f"禁止与上条回复使用相同的开头词和句式。"
+                    f"禁止与上条回复使用相同的开头词和句式。\n"
+                    f"{FACT_LOCK_LINE}"
                 )
             elif not _is_repeated_msg:
                 prompt_parts.append(f"上次回复: {last_reply}")

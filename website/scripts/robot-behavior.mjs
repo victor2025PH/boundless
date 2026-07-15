@@ -114,6 +114,64 @@ for (const pose of ["falling", "flying"]) {
   await page.close();
 }
 
+/* ============ 隐藏彩蛋：7 连击变身 / 一键净化 / 单击仍开客服 ============ */
+{
+  const page = await browser.newPage({ viewport: { width: VW, height: VH }, colorScheme: "dark" });
+  await page.addInitScript(() => {
+    sessionStorage.setItem("bl-intro-seen", "1");
+    sessionStorage.setItem("bl-sprite-greeted", "1");
+    sessionStorage.setItem("yt-teaser", "1");
+  });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 90000 });
+  const bot = page.locator(".ai-sprite-container [role='button']");
+  await bot.waitFor({ state: "visible", timeout: 60000 });
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector(".ai-sprite-container [role='button']");
+      return el && parseFloat(getComputedStyle(el).opacity) > 0.95;
+    },
+    { timeout: 60000 }
+  );
+
+  const skinNow = () => page.evaluate(() => sessionStorage.getItem("bl-sprite-skin") || "normal");
+
+  // 连点 7 次触发变身。用 page.mouse.click 在固定坐标快速点击（跳过 Playwright 的
+  // 可操作性/稳定性等待——那些等待被 hover 缩放动画拖慢，会让 300ms 去抖误开客服）
+  const box = await bot.boundingBox();
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  await page.mouse.move(cx, cy);
+  for (let i = 0; i < 7; i++) {
+    await page.mouse.click(cx, cy);
+    await page.waitForTimeout(70);
+  }
+  await page.waitForTimeout(900);
+  check("7 连击解锁恶魔皮肤", (await skinNow()) === "demon", `skin=${await skinNow()}`);
+  // 变身后不应把客服面板一起打开（连击期间去抖抑制）
+  const chatOpenAfterCombo = await page.locator("input[maxlength='1000']").isVisible().catch(() => false);
+  check("连击变身未误开客服", chatOpenAfterCombo === false);
+  await page.screenshot({ path: `${OUT}/d1-demon.png`, clip: { x: VW - 460, y: VH - 560, width: 460, height: 560 } });
+
+  // 一键净化：悬停后点右上角😇按钮
+  await bot.hover();
+  await page.waitForTimeout(300);
+  const restore = page.locator(".ai-sprite-container button[aria-label]");
+  await restore.first().click();
+  await page.waitForTimeout(800);
+  check("一键净化回正常形态", (await skinNow()) === "normal", `skin=${await skinNow()}`);
+
+  // 单击（非连击）仍应正常开客服
+  await page.mouse.move(400, 300);
+  await page.waitForTimeout(400);
+  await bot.click({ position: { x: 20, y: 30 } });
+  await page.waitForTimeout(700);
+  check("单击仍打开 AI 客服", await page.locator("input[maxlength='1000']").isVisible());
+  check("彩蛋流程无页面错误", errors.length === 0, errors.join(" | "));
+  await page.close();
+}
+
 /* ================= 移动端轻量版 ================= */
 {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, colorScheme: "dark", isMobile: true, hasTouch: true });

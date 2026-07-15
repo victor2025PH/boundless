@@ -444,15 +444,25 @@ _SCENE_NIGHT_WORDS = ("night", "midnight", "late night")
 def scene_conflicts_with_hour(scene: str, hour: int) -> bool:
     """场景短语的时间词与当前小时是否**硬冲突**（纯函数）。
 
-    白天(6-17)剔夜景；傍晚(17-22)剔清晨/正午；深夜(22-6)剔全部白天+黄昏词。
+    上午(6-11)剔正午/下午/黄昏/夜景；午后(11-17)剔清晨/夜景；
+    傍晚(17-22)剔清晨/正午；深夜(22-6)剔全部白天+黄昏词。
     无时间词恒 False（中性场景任何时段可用）。
+
+    2026-07-15 收紧：原白天段(6-17)只剔夜景 → 清晨 7:44 照样取到
+    "campus walkway, afternoon light" 注入聊天，LLM 顺着场景说出
+    「刚下课回来」——上午 vs 下午/黄昏同样是硬冲突，一并剔除。
     """
     s = str(scene or "").lower()
     if not s:
         return False
     h = int(hour)
-    if 6 <= h < 17:
-        return any(w in s for w in _SCENE_NIGHT_WORDS)
+    if 6 <= h < 11:
+        return any(w in s for w in
+                   ("noon", "midday", "afternoon")
+                   + _SCENE_EVENING_WORDS + _SCENE_NIGHT_WORDS)
+    if 11 <= h < 17:
+        return any(w in s for w in
+                   ("morning", "sunrise", "dawn") + _SCENE_NIGHT_WORDS)
     if 17 <= h < 22:
         return any(w in s for w in ("morning", "sunrise", "dawn", "noon", "midday"))
     return any(w in s for w in _SCENE_DAY_WORDS + _SCENE_EVENING_WORDS)
@@ -667,6 +677,70 @@ def scene_chat_note(
     return "\n".join(lines)
 
 
+# ── 饮食状态事实源（2026-07-15「还没吃→刚吃了面包」矛盾事故修复）───────────────
+# 背景：「吃没吃饭」这类临时自身状态此前没有事实源，全靠 LLM 每次现编——两次生成
+# 自然打架。这里按 persona+日期确定性生成今天三餐的「进餐时刻」，任何时刻查询结论
+# 恒定（同一天内多次生成读到同一份事实），与场景状态（resolve_current_scene）同哲学：
+# 零 LLM、零存储、明天自动换。时刻在合理窗口内按 hash 抖动，不同人设/不同日期各异。
+_MEAL_SPECS = (
+    # (餐名, 窗口起, 窗口止)——进餐时刻在窗口内确定性抖动
+    ("早饭", 7.0, 9.0),
+    ("午饭", 11.5, 13.5),
+    ("晚饭", 17.5, 19.5),
+)
+_MEAL_RECENT_HOURS = 1.5   # 进餐后 1.5h 内算「刚吃过」
+
+
+def resolve_meal_state(persona_id: str, now: Any = None) -> str:
+    """「此刻吃没吃饭」的单一事实源（纯函数）：返回一句中文事实描述，空串=不注入。
+
+    规则：按 persona+日期 hash 出今天三餐时刻 → 与当前时间比对：
+      - 落在某餐时刻后 1.5h 内 → 「刚吃过X饭」
+      - 落在某餐窗口内但还没到该餐时刻 → 「还没吃X饭（快到饭点了）」
+      - 其他时段 → 「上一顿是X饭，已经吃过了」/ 清晨 → 「今天还没吃东西」
+    同一天内任意两次调用结论一致——防重复系统换角度重写时事实不再漂移。
+    """
+    import datetime as _dt
+    import zlib as _zlib
+
+    t = now if isinstance(now, _dt.datetime) else _dt.datetime.now()
+    day = t.strftime("%Y%m%d")
+    cur = t.hour + t.minute / 60.0
+    meals = []   # [(餐名, 进餐时刻小时数), ...]
+    for name, lo, hi in _MEAL_SPECS:
+        seed = _zlib.crc32(f"{persona_id}:{day}:{name}".encode("utf-8"))
+        at = lo + (seed % 1000) / 1000.0 * (hi - lo)
+        meals.append((name, at))
+
+    # 刚吃过某餐（1.5h 内）
+    for name, at in meals:
+        if at <= cur < at + _MEAL_RECENT_HOURS:
+            return f"你刚吃过{name}不久。"
+    # 处于某餐窗口、但确定性进餐时刻还没到 → 还没吃这顿
+    for (name, lo, hi), (_n, at) in zip(_MEAL_SPECS, meals):
+        if lo - 0.5 <= cur < at:
+            return f"你还没吃{name}（快到饭点了，有点饿）。"
+    # 不在任何饭点附近：报最近一顿已吃
+    eaten = [(name, at) for name, at in meals if cur >= at + _MEAL_RECENT_HOURS]
+    if eaten:
+        return f"你今天的{eaten[-1][0]}已经吃过了，现在不在饭点。"
+    if cur < 6.0:
+        return "现在是深夜，不在饭点（要吃也只是夜宵）。"
+    return "你今天还什么都没吃（刚起床不久）。"
+
+
+def meal_state_note(persona_id: str, now: Any = None) -> str:
+    """把饮食状态渲染成 prompt 事实块（纯函数）。空 persona_id 也可用（按空串 hash）。"""
+    fact = resolve_meal_state(persona_id, now=now)
+    if not fact:
+        return ""
+    return (
+        "【你的饮食状态（内部事实）】" + fact
+        + "被问到吃了没/聊到吃饭话题时必须与此一致，不要主动汇报；"
+          "换措辞可以，事实不能变。"
+    )
+
+
 # 用户显式点名的拍摄场景（"发张你在海边的照片"）→ 生图 directive.scene 覆盖轮换。
 # 保守词表（宁缺勿滥）：只收高置信、名词性、可安全出图的场景；衣着/姿态类不收（易滑向 NSFW 请求，
 # 交由 SFW 硬约束与正常轮换处理）。value 为英文生图短语（与 scene_rotation 池同格式）。
@@ -733,21 +807,42 @@ def wants_same_scene(text: str) -> bool:
 _STAGE_TEXTS: dict = {
     # Stage 短路直发文案（绕过 LLM 与出站翻译）——硬编码单语会对外语客户穿帮
     # （英文会话突然蹦中文）。zh/en 双语按会话语言取；其余语种暂用 en（比 zh 更
-    # 通用），后续可接翻译引擎。{name} = 人设名。
+    # 通用），后续可接翻译引擎。
+    # 2026-07-15 复盘两条硬规则：
+    #   ① 全部**第一人称**——旧模板用 {name} 自称（"林小雨现在不太方便拍照"），
+    #     正常人聊天不会用第三人称叫自己的名字，直接穿帮；
+    #   ② 高频兜底键（no_photo/capped）为**变体池**——发图连续失败时同一句台词
+    #     原样复读（11:24 与 12:07 两次一字不差）比婉拒本身更机器人。
     "too_soon": {
-        "zh": "哎呀，我们才刚开始熟悉呢，等再多聊聊、更亲近一点，{name}就给你看我的样子好不好～",
+        "zh": "哎呀，我们才刚开始熟悉呢，等再多聊聊、更亲近一点，就给你看我的样子好不好～",
         "en": "hehe, we just started getting to know each other~ chat with me a bit more and I'll show you what I look like 😊",
     },
     "capped": {
-        "zh": "{name}今天已经拍了好多照片啦，有点累咯～明天再给你拍新的好不好？😊",
-        "en": "I've taken so many photos today, a little tired now~ I'll take a new one for you tomorrow, okay? 😊",
+        "zh": [
+            "今天已经拍了好多照片啦，有点累咯～明天再给你拍新的好不好？😊",
+            "呜，今天拍太多啦，脸都笑僵了…明天第一张就拍给你嘛～",
+            "今天的拍照额度被我用完啦哈哈，明天补你一张新鲜的～",
+        ],
+        "en": [
+            "I've taken so many photos today, a little tired now~ I'll take a new one for you tomorrow, okay? 😊",
+            "haha my face is sore from posing all day~ first pic tomorrow goes to you, promise 😊",
+        ],
     },
     "no_photo": {
-        "zh": "{name}现在不太方便拍照呢，不过我一直在这儿陪你～想我了的话，多跟我说说话好不好？",
-        "en": "I can't really take a photo right now~ but I'm right here with you. Talk to me a bit more, okay? 😊",
+        "zh": [
+            "这会儿不太方便拍照呢…回头拍了马上发你！先多陪我聊会儿嘛～",
+            "唔，现在拍不了呢，等下补给你好不好？先跟我说说你那边怎么样啦",
+            "手机这会儿不太给力，拍不出来…晚点偷偷拍一张发你😝",
+            "现在不方便拍呀，回头一定补上！你刚说的那个我还想听呢～",
+        ],
+        "en": [
+            "I can't really take a photo right now~ but I'm right here with you. Talk to me a bit more, okay? 😊",
+            "can't take one right this second~ I'll sneak one for you later, promise 😝",
+            "my phone's being weird right now... I'll make it up to you with a photo later, okay?",
+        ],
     },
     "caption": {
-        "zh": "这是刚拍的，给你看～ 喜欢{name}吗？😊",
+        "zh": "这是刚拍的，给你看～喜欢吗？😊",
         "en": "just took this for you~ do you like it? 😊",
     },
     "caption_object": {
@@ -765,17 +860,25 @@ _STAGE_TEXTS: dict = {
         "en": "my photos are a little secret I only share with someone really close~ ",
     },
     "upsell_fallback": {
-        "zh": "解锁「专属相册」就能看到{name}啦～",
+        "zh": "解锁「专属相册」就能看到我的照片啦～",
         "en": "unlock my private album and you'll get to see me~ 😊",
     },
 }
 
+# 变体池轮换游标（进程级）：连续两次触发同一 key 必换措辞——防复读的最强保证。
+# 有意用计数器而非随机：行为可预期、可测试（显式 variant_salt 时完全确定性）。
+_STAGE_VARIANT_SEQ: dict = {}
 
-def selfie_stage_text(key: str, lang: str = "", *, persona_name: str = "") -> str:
-    """Stage 短路搪塞/兜底/配文文案（纯函数）：按会话语言取 zh/en 模板。
+
+def selfie_stage_text(key: str, lang: str = "", *, persona_name: str = "",
+                      variant_salt: Any = None) -> str:
+    """Stage 短路搪塞/兜底/配文文案：按会话语言取 zh/en 模板。
 
     ``lang`` 为空或 zh* → 中文（产品主语言）；其余一律英文。运营在 config 里
     配置的 ``caption``/``scene_hint`` 等自定义值优先于本函数（调用方先查 config）。
+    值为列表 = 变体池：``variant_salt`` 显式传入时确定性取（纯函数口径，测试用），
+    缺省用进程级轮换游标——同一 key 连续两次触发必换措辞（防复读穿帮）。
+    ``persona_name`` 仅保留参数兼容：模板已全部第一人称，不再用名字自称。
     """
     entry = _STAGE_TEXTS.get(str(key or ""), {})
     if not entry:
@@ -783,6 +886,16 @@ def selfie_stage_text(key: str, lang: str = "", *, persona_name: str = "") -> st
     lg = str(lang or "").strip().lower()
     use_zh = (not lg) or lg.startswith("zh")
     tpl = entry["zh"] if use_zh else entry["en"]
+    if isinstance(tpl, (list, tuple)):
+        if not tpl:
+            return ""
+        if variant_salt is None:
+            _k = f"{key}:{'zh' if use_zh else 'en'}"
+            idx = _STAGE_VARIANT_SEQ.get(_k, -1) + 1
+            _STAGE_VARIANT_SEQ[_k] = idx
+        else:
+            idx = int(variant_salt)
+        tpl = tpl[idx % len(tpl)]
     name = str(persona_name or "").strip()
     if use_zh:
         name = name or "我"

@@ -60,11 +60,35 @@ AVATAR_EMOTIONS = (
 DEFAULT_EMOTION = "neutral"
 
 # ── 进程级共享状态 ────────────────────────────────────────────────────────────
-# GPU 串行锁：7852 与 7858 同在一张 3060 上，任意时刻只允许一个合成请求在途。
-_GPU_LOCK = threading.Lock()
+# GPU 串行锁：**按主机分锁**（B1 多端点，2026-07-15）。同一主机上的 7852/7858
+# 共享一张卡 → 共用一把锁；远端主机（如 176 的 5090）各自一把——本地串行纪律
+# 保留，远端合成不被本地队列拖累。
+_GPU_LOCKS: Dict[str, threading.Lock] = {}
+_GPU_LOCKS_GUARD = threading.Lock()
 # 健康缓存：base_url -> (expires_monotonic, ok)
 _HEALTH_CACHE: Dict[str, Tuple[float, bool]] = {}
 _HEALTH_LOCK = threading.Lock()
+# B1 多端点路由（2026-07-15）：合成失败的端点进冷却，期间路由自动落到下一优先级。
+# base_url -> monotonic 解禁时刻
+_ENDPOINT_BAD_UNTIL: Dict[str, float] = {}
+_ENDPOINT_LOCK = threading.Lock()
+
+
+def _gpu_lock_for(url: str) -> threading.Lock:
+    """按 URL 主机取 GPU 串行锁（127.0.0.1/localhost 归并为同一把「本机」锁）。"""
+    host = ""
+    try:
+        host = str(url or "").split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0]
+    except Exception:
+        host = ""
+    if host in ("", "127.0.0.1", "localhost", "0.0.0.0"):
+        host = "local"
+    with _GPU_LOCKS_GUARD:
+        lk = _GPU_LOCKS.get(host)
+        if lk is None:
+            lk = threading.Lock()
+            _GPU_LOCKS[host] = lk
+        return lk
 # 参考音 b64 缓存：path -> (size, mtime, b64)（参考音几百 KB~几 MB，避免每次读盘+编码）
 _REF_B64_CACHE: Dict[str, Tuple[int, int, str]] = {}
 _REF_LOCK = threading.Lock()
@@ -290,6 +314,20 @@ class AvatarVoiceClient:
         # A：CosyVoice3 情感克隆（在线主力）
         self.base_url: str = str(
             cfg.get("base_url") or "http://127.0.0.1:7852").rstrip("/")
+        # B1 多端点（2026-07-15）：``base_urls`` 按优先级排列（如 5090 主、3060 备）。
+        # 合成失败的端点进冷却（endpoint_cooldown_sec），路由自动落到下一优先级；
+        # 未配置 → 单端点=旧行为。``base_url``（单数）与列表并存时并入尾部兼容。
+        _raw_bases = cfg.get("base_urls")
+        _bases = ([str(b).rstrip("/") for b in _raw_bases if str(b).strip()]
+                  if isinstance(_raw_bases, (list, tuple)) else [])
+        if not _bases:
+            _bases = [self.base_url]
+        elif cfg.get("base_url") and self.base_url not in _bases:
+            _bases.append(self.base_url)
+        self.base_urls: List[str] = _bases
+        self.base_url = _bases[0]   # 主端点=首个（watchdog/看板探测口径不变）
+        self.endpoint_cooldown_sec: float = float(
+            cfg.get("endpoint_cooldown_sec") or 120.0)
         # B：Qwen3-TTS（离线/批量预渲染专用）
         self.qwen_base_url: str = str(
             cfg.get("qwen_base_url") or "http://127.0.0.1:7858").rstrip("/")
@@ -362,7 +400,7 @@ class AvatarVoiceClient:
                 try:
                     if serialize_gpu:
                         wait_t0 = time.monotonic()
-                        with _GPU_LOCK:
+                        with _gpu_lock_for(url):
                             # 排队等待分段观测（容量规划：等待 vs 合成各占多少）
                             if stats is not None:
                                 try:
@@ -418,19 +456,70 @@ class AvatarVoiceClient:
             logger.debug("[avatar_voice] health probe failed %s: %s", url, exc)
         return detail
 
-    def health_ok(self, *, use_cache: bool = True) -> bool:
-        """7852 是否就绪（进程级 30s 缓存，避免每条消息都探）。"""
+    def _health_ok_base(self, base: str, *, use_cache: bool = True) -> bool:
+        """单端点就绪判定（进程级 30s 缓存，避免每条消息都探）。"""
         now = time.monotonic()
         if use_cache:
             with _HEALTH_LOCK:
-                hit = _HEALTH_CACHE.get(self.base_url)
+                hit = _HEALTH_CACHE.get(base)
             if hit and hit[0] > now:
                 return hit[1]
-        d = self.health()
+        d = self._probe(f"{base}/health", ok_keys=("ok", "models_loaded"))
         ok = bool(d["reachable"] and d["models_loaded"])
         with _HEALTH_LOCK:
-            _HEALTH_CACHE[self.base_url] = (now + self.health_cache_sec, ok)
+            _HEALTH_CACHE[base] = (now + self.health_cache_sec, ok)
         return ok
+
+    def health_ok(self, *, use_cache: bool = True) -> bool:
+        """克隆链是否可用＝**任一**端点就绪（B1 多端点；单端点=旧语义）。"""
+        return any(self._health_ok_base(b, use_cache=use_cache)
+                   for b in self.base_urls)
+
+    # ── B1 端点路由：失败冷却 + 优先级挑选 ───────────────────────────────────
+    def _endpoint_cooling(self, base: str) -> bool:
+        with _ENDPOINT_LOCK:
+            return time.monotonic() < _ENDPOINT_BAD_UNTIL.get(base, 0.0)
+
+    def _note_endpoint_bad(self, base: str) -> None:
+        with _ENDPOINT_LOCK:
+            _ENDPOINT_BAD_UNTIL[base] = (
+                time.monotonic() + max(10.0, self.endpoint_cooldown_sec))
+
+    def _note_endpoint_ok(self, base: str) -> None:
+        with _ENDPOINT_LOCK:
+            _ENDPOINT_BAD_UNTIL.pop(base, None)
+
+    def _endpoint_candidates(self) -> List[str]:
+        """按优先级出可用端点：未冷却且健康 → 未冷却 → 全冷却时回退主端点。
+
+        健康预检带 30s 缓存（跨主机死端点最多每 30s 花一次 3s 探测，绝不让
+        90s 合成超时去当探针——那是今天 218s 响应的元凶之一）。
+        """
+        alive = [b for b in self.base_urls if not self._endpoint_cooling(b)]
+        healthy = [b for b in alive if self._health_ok_base(b)]
+        return healthy or alive or [self.base_urls[0]]
+
+    def _post_any(self, path: str, payload: bytes, *, timeout: float) -> bytes:
+        """按优先级在候选端点执行合成 POST：失败标记冷却并顺移下一端点。"""
+        cands = self._endpoint_candidates()
+        last_exc: Optional[Exception] = None
+        for base in cands:
+            try:
+                body = self._post_with_retry(
+                    f"{base}{path}", payload, timeout=timeout)
+                self._note_endpoint_ok(base)
+                if base != self.base_urls[0]:
+                    logger.info("[avatar_voice] 经备用端点合成成功 %s", base)
+                return body
+            except Exception as exc:
+                last_exc = exc
+                self._note_endpoint_bad(base)
+                if len(cands) > 1:
+                    logger.warning(
+                        "[avatar_voice] 端点 %s 合成失败(%s) → 冷却 %.0fs 切下一端点",
+                        base, exc, self.endpoint_cooldown_sec)
+        assert last_exc is not None
+        raise last_exc
 
     def mark_health_ok(self) -> None:
         with _HEALTH_LOCK:
@@ -510,9 +599,8 @@ class AvatarVoiceClient:
                 text=ch, reference_audio_b64=reference_audio_b64,
                 reference_text=reference_text, emotion=emo, speed=spd,
                 flow_temperature=ft, llm_top_k=tk, prosody_variation=pv)
-            body = self._post_with_retry(
-                f"{self.base_url}/v1/tts/clone", payload,
-                timeout=self.synth_timeout_sec)
+            body = self._post_any(
+                "/v1/tts/clone", payload, timeout=self.synth_timeout_sec)
             audio = parse_audio_response(body)
             if not audio:
                 raise RuntimeError("avatar_voice: decoded empty audio")
@@ -531,9 +619,8 @@ class AvatarVoiceClient:
         for ch in chunks:
             payload = build_instruct_payload(
                 text=ch, instruct=instruct, reference_audio_b64=reference_audio_b64)
-            body = self._post_with_retry(
-                f"{self.base_url}/v1/tts/instruct", payload,
-                timeout=self.synth_timeout_sec)
+            body = self._post_any(
+                "/v1/tts/instruct", payload, timeout=self.synth_timeout_sec)
             audio = parse_audio_response(body)
             if not audio:
                 raise RuntimeError("avatar_voice: decoded empty audio")
@@ -817,6 +904,8 @@ def reset_caches() -> None:
         _REF_B64_CACHE.clear()
     with _TOKEN_LOCK:
         _TOKEN_CACHE.clear()
+    with _ENDPOINT_LOCK:
+        _ENDPOINT_BAD_UNTIL.clear()
     _REGISTERED_SPK.clear()
     _BOOT_TRIGGER.clear()
 

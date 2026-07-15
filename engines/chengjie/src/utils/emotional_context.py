@@ -594,11 +594,20 @@ def build_emotional_context_block(
                 # 音频声学困扰联动（保守）：上条语音高置信 sad/fearful → 至少抬到 elevated
                 # （更共情、可带资源），但**绝不伪造 severe**（自伤/轻生须文字明确命中）；
                 # 只升不降，文字已 elevated/severe 时不动。
+                # 2026-07-15 校准：SER 对随口语音也会打 sad score=1.00 满分（模型过自信，
+                # 事故里"吃饭了吗"被判 sad@1.00 触发危机联动）→ 单条声学信号不再升级，
+                # 需**连续 2 条语音**都高置信困扰才联动（文字危机路径不受影响）。
                 try:
                     from src.ai.speech_emotion import audio_distress_level
                     if audio_distress_level(
-                        user_context.get("_peer_audio_emotion")
-                    ) == "elevated" and user_context["_wellbeing_crisis_level"] == "none":
+                            user_context.get("_peer_audio_emotion")) == "elevated":
+                        _adl_streak = int(
+                            user_context.get("_audio_distress_streak") or 0) + 1
+                    else:
+                        _adl_streak = 0
+                    user_context["_audio_distress_streak"] = _adl_streak
+                    if (_adl_streak >= 2
+                            and user_context["_wellbeing_crisis_level"] == "none"):
                         user_context["_wellbeing_crisis_level"] = "elevated"
                         user_context["_wellbeing_crisis_category"] = "audio_distress"
                 except Exception:

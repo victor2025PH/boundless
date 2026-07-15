@@ -411,6 +411,24 @@ class TelegramSenderMixin:
         except Exception:
             pass
 
+    def _persona_display_name(self) -> str:
+        """本账号人设显示名（B2 自称改写用）；拿不到 → 空串=过检自动跳过。"""
+        cached = getattr(self, "_persona_name_cache", None)
+        if cached is not None:
+            return cached
+        name = ""
+        try:
+            pids = getattr(self, "account_persona_ids", None) or []
+            if pids:
+                from src.utils.persona_manager import PersonaManager
+                p = PersonaManager.get_instance().get_persona_by_id(str(pids[0]))
+                if isinstance(p, dict):
+                    name = str(p.get("name") or "").strip()
+        except Exception:
+            name = ""
+        self._persona_name_cache = name
+        return name
+
     async def _send_reply(self, original_message, reply_text: str, parse_mode=None):
         try:
             # 统一发送前护栏（与 send_photo 共用）：G1 Kill-Switch + N 线反封号闸门。
@@ -425,6 +443,17 @@ class TelegramSenderMixin:
                 self.logger.error("客户端未初始化，无法发送回复")
                 return
             _out_text = self._sanitize_parenthetical_stage_directions(reply_text)
+            # B2 出站统一质量管道（2026-07-15）：无论文本来自 LLM/模板/占位/兜底，
+            # 发送口统一过检——第三人称自称改写为「我」+ 同会话复读检测（指标）。
+            try:
+                from src.ai.outbound_quality import outbound_quality_pass
+                _out_text = outbound_quality_pass(
+                    _out_text,
+                    chat_id=getattr(getattr(original_message, "chat", None),
+                                    "id", None),
+                    persona_name=self._persona_display_name())
+            except Exception:
+                pass
             _rt = self._reply_to_message_id_for_send(original_message)
             send_kw: Dict[str, Any] = dict(
                 chat_id=original_message.chat.id,
@@ -791,108 +820,222 @@ class TelegramSenderMixin:
             tts = TTSPipeline(voice_cfg)
             timeout_sec = float(vr_cfg.get("timeout_sec", 30) or 30)
 
-            # ── 分条发送（活人感）：长回复像真人一样连发 2-3 条短语音，条间按
-            # 「按住录音的时长」留拟人间隔 + 挂"录音中"状态。全部合成成功才发
-            # （节奏是表演出来的，不被 GPU 进度驱动）；任何失败回落单条整段路径。
-            split_cfg = (vr_cfg.get("split_send")
-                         if isinstance(vr_cfg.get("split_send"), dict) else {})
-            if (split_cfg.get("enabled", False)
-                    and len(synth_source) >= int(split_cfg.get("min_total_chars", 24) or 24)):
-                from src.ai.voice_clone_client import pack_voice_parts
-                parts = pack_voice_parts(
-                    synth_source,
-                    part_max_chars=int(split_cfg.get("part_max_chars", 40) or 40),
-                    max_parts=int(split_cfg.get("max_parts", 3) or 3))
-                if len(parts) >= 2:
-                    split_sent = await self._send_voice_reply_parts(
-                        original_message, parts, tts, voice_ctx, vr_cfg, split_cfg,
-                        timeout_sec=timeout_sec, opus_application=_opus_app,
-                        pre_colloquialized=bool(_spoken))
-                    if split_sent:
-                        if vr_cfg.get("send_text_summary", False):
-                            await self._send_reply(original_message, reply_text)
-                        return True
-                    self.logger.info("[voice_reply] 分条路径未完成 → 回落整段单条")
+            async def _voice_flow() -> bool:
+                """合成→质检→发送全流程（A1 抽为内协程：可被 text-first 预算编排）。"""
+                # ── 分条发送（活人感）：长回复像真人一样连发 2-3 条短语音，条间按
+                # 「按住录音的时长」留拟人间隔 + 挂"录音中"状态。全部合成成功才发
+                # （节奏是表演出来的，不被 GPU 进度驱动）；任何失败回落单条整段路径。
+                split_cfg = (vr_cfg.get("split_send")
+                             if isinstance(vr_cfg.get("split_send"), dict) else {})
+                if (split_cfg.get("enabled", False)
+                        and len(synth_source) >= int(split_cfg.get("min_total_chars", 24) or 24)):
+                    from src.ai.voice_clone_client import pack_voice_parts
+                    parts = pack_voice_parts(
+                        synth_source,
+                        part_max_chars=int(split_cfg.get("part_max_chars", 40) or 40),
+                        max_parts=int(split_cfg.get("max_parts", 3) or 3),
+                        min_tail_chars=int(split_cfg.get("min_tail_chars", 8) or 0))
+                    if len(parts) >= 2:
+                        split_sent = await self._send_voice_reply_parts(
+                            original_message, parts, tts, voice_ctx, vr_cfg, split_cfg,
+                            timeout_sec=timeout_sec, opus_application=_opus_app,
+                            pre_colloquialized=bool(_spoken))
+                        if split_sent:
+                            if vr_cfg.get("send_text_summary", False):
+                                await self._send_reply(original_message, reply_text)
+                            return True
+                        self.logger.info("[voice_reply] 分条路径未完成 → 回落整段单条")
 
-            result = await tts.synthesize(
-                synth_source, timeout_sec=timeout_sec,
-                emotion=voice_ctx.get("emotion"),
-                pre_colloquialized=bool(_spoken))
-            if not result.ok:
-                self.logger.warning("[voice_reply] TTS failed: %s", result.error)
-                return False
-            try:
-                from src.inbox.voice_autosend import should_reject_voice_tts_result
-                if should_reject_voice_tts_result(result, no_edge=_no_edge):
+                result = await tts.synthesize(
+                    synth_source, timeout_sec=timeout_sec,
+                    emotion=voice_ctx.get("emotion"),
+                    pre_colloquialized=bool(_spoken))
+                if not result.ok:
+                    self.logger.warning("[voice_reply] TTS failed: %s", result.error)
+                    return False
+                try:
+                    from src.inbox.voice_autosend import should_reject_voice_tts_result
+                    if should_reject_voice_tts_result(result, no_edge=_no_edge):
+                        self.logger.warning(
+                            "[voice_reply] no_edge_fallback 拒发 edge provider=%s "
+                            "fallback_from=%s → 回落文字",
+                            result.provider,
+                            (result.extra or {}).get("fallback_from"))
+                        try:
+                            os.unlink(result.audio_path)
+                        except Exception:
+                            pass
+                        return False
+                except Exception:
+                    pass
+
+                # ── Duration gate ──
+                max_sec = float(vr_cfg.get("max_seconds", 60) or 60)
+                if result.duration_sec > 0 and result.duration_sec > max_sec:
                     self.logger.warning(
-                        "[voice_reply] no_edge_fallback 拒发 edge provider=%s "
-                        "fallback_from=%s → 回落文字",
-                        result.provider,
-                        (result.extra or {}).get("fallback_from"))
+                        "[voice_reply] audio %.1fs exceeds max %.1fs, fallback text",
+                        result.duration_sec, max_sec,
+                    )
                     try:
                         os.unlink(result.audio_path)
                     except Exception:
                         pass
                     return False
-            except Exception:
-                pass
 
-            # ── Duration gate ──
-            max_sec = float(vr_cfg.get("max_seconds", 60) or 60)
-            if result.duration_sec > 0 and result.duration_sec > max_sec:
-                self.logger.warning(
-                    "[voice_reply] audio %.1fs exceeds max %.1fs, fallback text",
-                    result.duration_sec, max_sec,
+                # ── 质量闸门：截断/坏音（过短）→ 回落文字（宁缺毋滥）──
+                from src.ai.tts_quality import looks_truncated, resolve_quality_gate
+                _qg = resolve_quality_gate(vr_cfg)
+                if _qg["enabled"]:
+                    _bad, _why = looks_truncated(
+                        synth_source, result.duration_sec,
+                        min_sec_per_unit=_qg["min_sec_per_unit"],
+                        min_units=_qg["min_units"])
+                    if _bad:
+                        self.logger.warning(
+                            "[voice_reply] 整段疑似截断(%s) → 回落文字", _why)
+                        try:
+                            from src.ai.avatar_voice_stats import get_avatar_voice_stats
+                            get_avatar_voice_stats().record_truncation_reject()
+                        except Exception:
+                            pass
+                        try:
+                            os.unlink(result.audio_path)
+                        except Exception:
+                            pass
+                        return False
+
+                dur_int = int(result.duration_sec) if result.duration_sec > 0 else None
+                _rt = self._reply_to_message_id_for_send(original_message)
+
+                # ── Send voice ──
+                from src.client.voice_sender import send_telegram_voice
+
+                # 统一节流：与文本/照片共用墙钟，语音不与前一条外发瞬时双发。
+                await self._presend_pace()
+                sent = await send_telegram_voice(
+                    self.client,
+                    original_message.chat.id,
+                    result.audio_path,
+                    duration=dur_int,
+                    reply_to_message_id=_rt,
+                    opus_application=_opus_app,
                 )
                 try:
                     os.unlink(result.audio_path)
                 except Exception:
                     pass
+
+                if sent:
+                    self.logger.info(
+                        "[voice_reply] voice sent chat=%s persona=%s dur=%s",
+                        original_message.chat.id,
+                        voice_ctx.get("persona_id") or "",
+                        dur_int,
+                    )
+                    # 连发监测（2026-07-15 三连发事故指纹回归防线）
+                    from src.client.voice_burst_guard import note_voice_send
+                    note_voice_send(original_message.chat.id, vr_cfg)
+                    # 统一记账：语音也刷墙钟 + 计入今日外发量（反封号/健康灯不漏算语音条）。
+                    self._postsend_record_count()
+                    if vr_cfg.get("send_text_summary", False):
+                        # 文本摘要走 _send_reply→自带护栏/节流/计数/镜像/记账
+                        # （语音+文本=确有 2 条外发，各记一次属正确口径）。
+                        await self._send_reply(original_message, reply_text)
+                    else:
+                        # 仅发语音时也要镜像/记账，否则坐席台/亲密度看不到这次外发。
+                        self._postsend_mirror_and_record(
+                            original_message.chat.id, "[语音]")
+                    return True
                 return False
 
-            dur_int = int(result.duration_sec) if result.duration_sec > 0 else None
-            _rt = self._reply_to_message_id_for_send(original_message)
+            # ── A1 text-first 编排（2026-07-15 阶段A）：合成超预算先发文字占位，
+            # 语音后台补发；失败补发完整文字——彻底消灭「发语音后 3 分钟静默」。
+            _tf = (vr_cfg.get("text_first")
+                   if isinstance(vr_cfg.get("text_first"), dict) else {})
+            _tf_budget = float(_tf.get("budget_sec", 25) or 25)
+            if not bool(_tf.get("enabled", True)) or _tf_budget <= 0:
+                return await _voice_flow()   # 旧行为：直等全流程
 
-            # ── Send voice ──
-            from src.client.voice_sender import send_telegram_voice
+            async def _send_filler():
+                if not bool(_tf.get("filler", True)):
+                    return
+                # 占位句复用 reply.ai_fallback_replies（现成的"在场感"话术池，
+                # 措辞不硬承诺语音——语音失败改发文字也不算食言）
+                _pool = [str(x).strip() for x in
+                         ((raw_cfg.get("reply") or {}).get("ai_fallback_replies")
+                          or []) if str(x).strip()]
+                await self._send_reply(
+                    original_message,
+                    random.choice(_pool) if _pool else "稍等我一下哈～")
 
-            # 统一节流：与文本/照片共用墙钟，语音不与前一条外发瞬时双发。
-            await self._presend_pace()
-            sent = await send_telegram_voice(
-                self.client,
-                original_message.chat.id,
-                result.audio_path,
-                duration=dur_int,
-                reply_to_message_id=_rt,
-                opus_application=_opus_app,
-            )
-            try:
-                os.unlink(result.audio_path)
-            except Exception:
-                pass
+            async def _send_fallback_text():
+                await self._send_reply(original_message, reply_text)
 
-            if sent:
-                self.logger.info(
-                    "[voice_reply] voice sent chat=%s persona=%s dur=%s",
-                    original_message.chat.id,
-                    voice_ctx.get("persona_id") or "",
-                    dur_int,
-                )
-                # 统一记账：语音也刷墙钟 + 计入今日外发量（反封号/健康灯不漏算语音条）。
-                self._postsend_record_count()
-                if vr_cfg.get("send_text_summary", False):
-                    # 文本摘要走 _send_reply→自带护栏/节流/计数/镜像/记账
-                    # （语音+文本=确有 2 条外发，各记一次属正确口径）。
-                    await self._send_reply(original_message, reply_text)
-                else:
-                    # 仅发语音时也要镜像/记账，否则坐席台/亲密度看不到这次外发。
-                    self._postsend_mirror_and_record(
-                        original_message.chat.id, "[语音]")
-                return True
-            return False
+            import asyncio as _aio
+            _vt = _aio.create_task(_voice_flow())
+            return await self.race_voice_with_text_first(
+                _vt, budget_sec=_tf_budget, send_filler=_send_filler,
+                send_fallback_text=_send_fallback_text, logger=self.logger)
         except Exception as ex:
             self.logger.error("[voice_reply] unexpected error: %s", ex)
             return False
+
+    # A1 text-first 后台看护任务引用（防 GC 取消；类级共享等价于进程级）
+    _tf_bg_tasks: set = set()
+
+    @staticmethod
+    async def race_voice_with_text_first(
+        voice_task, *, budget_sec: float, send_filler, send_fallback_text,
+        logger,
+    ) -> bool:
+        """A1「先文字后语音」编排（2026-07-15 阶段A）：3 分钟静默的解药。
+
+        克隆合成在 3060 上要 30-110s，用户视角是「发了语音石沉大海」。本编排：
+          - 预算内（budget_sec）语音完成 → 行为与旧链完全一致（含失败回落文字）；
+          - 超预算 → 立刻发一条占位短文字稳住对话（"稍等哈~"，真人也这么干），
+            语音继续后台合成：成了 → 补发语音（迟到的语音仍是惊喜）；
+            败了 → 补发完整文字回复——对话在任何分支都绝不悬空。
+        返回语义与 _maybe_send_voice_reply 对外一致：True=调用方不要再发文字
+        （语音已发/本编排已接管文字兜底）；False=语音失败且未接管（调用方发文字）。
+        """
+        import asyncio as _aio
+        try:
+            done, _ = await _aio.wait({voice_task}, timeout=max(0.0, budget_sec))
+        except Exception:
+            done = {voice_task} if voice_task.done() else set()
+        if done:
+            try:
+                return bool(voice_task.result())
+            except Exception:
+                logger.debug("[voice_reply] text-first 流程异常", exc_info=True)
+                return False
+        logger.info(
+            "[voice_reply] text-first：合成超 %.0fs 预算 → 先发文字占位，语音后台继续",
+            budget_sec)
+        if send_filler is not None:
+            try:
+                await send_filler()
+            except Exception:
+                logger.debug("[voice_reply] 占位文字发送失败（忽略）", exc_info=True)
+
+        async def _watch():
+            ok = False
+            try:
+                ok = bool(await voice_task)
+            except Exception:
+                ok = False
+            if not ok:
+                logger.info("[voice_reply] text-first：语音最终失败 → 补发完整文字")
+                try:
+                    await send_fallback_text()
+                except Exception:
+                    logger.warning(
+                        "[voice_reply] text-first 文字兜底发送失败", exc_info=True)
+
+        _t = _aio.create_task(_watch())
+        TelegramSenderMixin._tf_bg_tasks.add(_t)
+        _t.add_done_callback(TelegramSenderMixin._tf_bg_tasks.discard)
+        return True
 
     async def _voice_recording_action(self, chat_id) -> None:
         """挂 Telegram「正在录制语音」状态（best-effort，约 5s 自动过期）。"""
@@ -935,9 +1078,12 @@ class TelegramSenderMixin:
         """
         import random as _rnd
 
+        from src.ai.tts_quality import looks_truncated, resolve_quality_gate
+
         chat_id = original_message.chat.id
         max_sec = float(vr_cfg.get("max_seconds", 60) or 60)
         emotion = voice_ctx.get("emotion")
+        _qg = resolve_quality_gate(vr_cfg)
 
         # 合成期间挂「录音中」（fire-and-forget 一次即可，5s 会过期；
         # 合成耗时由 GPU 决定，对方看到断续的录音状态反而真实）
@@ -985,6 +1131,32 @@ class TelegramSenderMixin:
                     return False
             except Exception:
                 pass
+            # 质量闸门（2026-07-15「乱码语音」防线）：单条时长低于该文本的
+            # 物理最快语速 → 判截断/坏音，整批放弃回落（绝不把半截杂音发出去）。
+            if _qg["enabled"]:
+                _bad, _why = looks_truncated(
+                    p, rv.duration_sec,
+                    min_sec_per_unit=_qg["min_sec_per_unit"],
+                    min_units=_qg["min_units"])
+                if _bad:
+                    self.logger.warning(
+                        "[voice_reply] 分条第 %d/%d 条疑似截断(%s) → 回落整段",
+                        len(results) + 1, len(parts), _why)
+                    try:
+                        from src.ai.avatar_voice_stats import get_avatar_voice_stats
+                        get_avatar_voice_stats().record_truncation_reject()
+                    except Exception:
+                        pass
+                    for r in results:
+                        try:
+                            os.unlink(r.audio_path)
+                        except Exception:
+                            pass
+                    try:
+                        os.unlink(rv.audio_path)
+                    except Exception:
+                        pass
+                    return False
             results.append(rv)
 
         total_dur = sum(r.duration_sec for r in results if r.duration_sec > 0)
@@ -1039,6 +1211,9 @@ class TelegramSenderMixin:
                         pass
                 break
             sent_n += 1
+            # 连发监测（2026-07-15 三连发事故指纹回归防线）：分条每条都记账
+            from src.client.voice_burst_guard import note_voice_send
+            note_voice_send(chat_id, vr_cfg)
             self._postsend_record_count()
 
         if sent_n:

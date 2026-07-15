@@ -105,6 +105,10 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     "host_alert": {"types": {"host_alert"}, "levels": None},
     # 出站媒体承诺未兑现告警（Phase21a：AI 说发图/语音却频繁撤回 → 信任受损）
     "media_promise": {"types": {"media_promise_alert"}, "levels": None},
+    # 口语化 LLM 持续连败（2026-07-15：九连败静默降级规则档，拟人化卖点静默流失）
+    "colloquial_llm": {"types": {"colloquial_llm_alert"}, "levels": None},
+    # 出站语音连发异常（2026-07-15 三连发事故指纹：同会话短窗多条语音=重复处理回归）
+    "voice_burst": {"types": {"voice_burst_alert"}, "levels": None},
 }
 
 # ─── 速率限制 ────────────────────────────────────────────────────────────────
@@ -552,6 +556,40 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 "**排查**: 发图后端(ComfyUI/相册)是否可用、7852 是否掉线、GPU 显存是否被挤\n"
                 "[📊 查看运营总览](/admin/ops)"
             )
+
+    elif event_type == "colloquial_llm_alert":
+        if data.get("recovered"):
+            title = "✅ 口语化 LLM 已恢复"
+            text = (
+                "**状态**: 本地口语化改写重新成功，语音活人感 A 档恢复\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+        else:
+            down_min = int(data.get("down_minutes") or 0)
+            down_txt = (f"{down_min // 60} 小时 {down_min % 60} 分钟"
+                        if down_min >= 60 else f"{down_min} 分钟")
+            prefix = "⏰" if data.get("reminder") else "🗣️"
+            title = f"{prefix} 口语化 LLM 持续连败（已 {down_txt}）"
+            text = (
+                f"**状态**: 连续失败 {int(data.get('fail_streak') or 0)} 次，"
+                "熔断-重试循环中\n"
+                "**影响**: 语音口语化静默降级规则档——聊天不中断，"
+                "但语音「活人感」明显下降\n"
+                "**排查**: 本地 LLM 端点（ai.fallback / qwen3）是否存活、"
+                "端口是否可达、显存是否被挤\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+
+    elif event_type == "voice_burst_alert":
+        title = (f"🔁 出站语音连发异常 chat={str(data.get('chat_id') or '?')}"
+                 f"（{int(data.get('count') or 0)} 条/"
+                 f"{int(data.get('window_sec') or 0)}s）")
+        text = (
+            "**现象**: 同一会话短时间连发多条语音——2026-07-15 三连发事故的指纹\n"
+            "**可能原因**: 消息去重/会话串行回归、或回复被异常拆成多条\n"
+            "**排查**: 检查 app.log 中该 chat 的「执行 direct_chat」是否同 mid 出现多次\n"
+            "[📊 查看运营总览](/admin/ops)"
+        )
 
     elif event_type == "orchestrator_worker_alert":
         if data.get("recovered"):

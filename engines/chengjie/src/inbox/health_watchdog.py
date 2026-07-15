@@ -326,6 +326,10 @@ class HealthWatchdog:
         # 告警种类：down=不可达/未载入（health 探测红）；hang=半死（health 绿但合成连败，
         # 2026-07-14 事故形态）。恢复语义不同：hang 需要「失败后真的又成过一次」的正面证据。
         self._avatar_alert_kind: str = ""
+        # 口语化 LLM 持续连败升级提醒（2026-07-15 九连败静默事故）：状态镜像 avatar hang
+        self._colloquial_down_since: float = 0.0
+        self._colloquial_alerted: bool = False
+        self._colloquial_last_remind: float = 0.0
         # 缺口自动入库：稀疏节流（默认 1h 一轮）+ 每日预算
         self._last_auto_stock_ts: float = 0.0
         self._auto_stock_day: str = ""
@@ -352,6 +356,7 @@ class HealthWatchdog:
         self.total_media_promise_alerts: int = 0
         self.total_auto_stocked: int = 0
         self.total_tg_call_reminders: int = 0
+        self.total_colloquial_llm_reminders: int = 0
         # 原生通话主机升级式提醒状态（镜像 avatar_voice 那套）
         self._tgcall_down_since: float = 0.0
         self._tgcall_alerted: bool = False
@@ -473,6 +478,13 @@ class HealthWatchdog:
             self._check_native_call()
         except Exception:
             logger.debug("原生通话主机巡检异常（已忽略）", exc_info=True)
+
+        # 口语化 LLM 持续连败升级提醒（2026-07-15 事故）：端点挂掉只会 60s 熔断-重试
+        # 无限循环，语音口语化静默降级规则档，无人知晓——超阈值主动外发。
+        try:
+            self._check_colloquial_llm()
+        except Exception:
+            logger.debug("口语化 LLM 巡检异常（已忽略）", exc_info=True)
 
         # 备货缺口自动入库（Phase5）：高频短句缺口达标自动进台词库（守卫+每日预算），
         # 夜间计划任务渲染兜底——「看缺口→补台词」不再需要人。
@@ -1208,6 +1220,92 @@ class HealthWatchdog:
         self._tgcall_last_remind = ts
         self.total_tg_call_reminders += 1
 
+    def _check_colloquial_llm(self, *, now: Optional[float] = None) -> None:
+        """口语化 LLM 持续连败的升级式提醒（2026-07-15 九连败静默事故修复）。
+
+        事故形态：本地口语化 LLM 端点长期不可用 → ``voice_colloquial_llm`` 每 60s
+        「熔断-重试」无限循环，日志有记录但无人被通知；语音口语化静默降级规则档
+        （活人感 A 档失效），拟人化卖点在静默流失。判定口径镜像 avatar hang：
+          - ``fail_streak`` ≥ 阈值（默认 6）且最近失败在 ``fresh_min``（默认 60min）内
+            → 视为持续挂死，计 down_since；
+          - 持续 ≥ ``after_min``（默认 30min）→ 首提（EventBus ``colloquial_llm_alert``），
+            之后每 ``interval_min``（默认 240min）重提；
+          - 恢复需要**正面证据**（失败之后真的又成功改写过一次）→ 补发恢复通知。
+        配置 ``health_watchdog.colloquial_llm_remind.{enabled,fail_streak,fresh_min,
+        after_min,interval_min}``（默认开）；模块从未被调用（无语音流量/功能关）时
+        信号全零 → 天然静默零误报。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        cr = (((cfg.get("health_watchdog") or {}).get("colloquial_llm_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not cr.get("enabled", True):
+            return
+        try:
+            from src.ai.voice_colloquial_llm import health_signal
+            sig = health_signal()
+        except Exception:
+            return
+        ts = float(now if now is not None else time.time())
+        streak_need = max(1, int(cr.get("fail_streak", 6) or 6))
+        fresh_sec = max(300.0, float(cr.get("fresh_min", 60) or 60) * 60.0)
+        streak = int(sig.get("fail_streak") or 0)
+        last_fail = float(sig.get("last_fail_ts") or 0.0)
+        last_ok = float(sig.get("last_ok_ts") or 0.0)
+
+        bad = (streak >= streak_need and last_fail > 0.0
+               and ts - last_fail <= fresh_sec)
+        # 正面恢复证据 = 最近一次失败之后又真的成功过；从未失败过也算干净
+        cleared = (last_fail <= 0.0) or (last_ok >= last_fail)
+
+        if not bad:
+            if self._colloquial_alerted:
+                if not cleared:
+                    # 无流量导致信号陈旧：既不误报恢复也不重提，下一条真实语音见分晓
+                    return
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("colloquial_llm_alert", {
+                        "recovered": True,
+                        "rate_key": "colloquial_llm:recovered",
+                    })
+                    logger.info("HealthWatchdog 发出口语化 LLM 恢复通知")
+                except Exception:
+                    logger.debug("colloquial_llm recovery 发布失败（已忽略）",
+                                 exc_info=True)
+            self._colloquial_down_since = 0.0
+            self._colloquial_alerted = False
+            self._colloquial_last_remind = 0.0
+            return
+
+        if not self._colloquial_down_since:
+            self._colloquial_down_since = ts
+            return
+        down_sec = ts - self._colloquial_down_since
+        after_sec = max(60.0, float(cr.get("after_min", 30) or 30) * 60.0)
+        interval_sec = max(600.0, float(cr.get("interval_min", 240) or 240) * 60.0)
+        due = (
+            (not self._colloquial_alerted and down_sec >= after_sec)
+            or (self._colloquial_alerted
+                and ts - self._colloquial_last_remind >= interval_sec)
+        )
+        if not due:
+            return
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("colloquial_llm_alert", {
+                "fail_streak": streak,
+                "in_cooldown": bool(sig.get("in_cooldown")),
+                "down_minutes": int(down_sec // 60),
+                "reminder": bool(self._colloquial_alerted),
+                "rate_key": "colloquial_llm:remind",
+            })
+        except Exception:
+            logger.debug("colloquial_llm alert 发布失败（已忽略）", exc_info=True)
+            return
+        self._colloquial_alerted = True
+        self._colloquial_last_remind = ts
+        self.total_colloquial_llm_reminders += 1
+
     def _check_avatar_auto_stock(self, *, now: Optional[float] = None) -> None:
         """备货缺口自动入库（Phase5）：达标短句自动进台词库，运营零操作。
 
@@ -1843,6 +1941,7 @@ class HealthWatchdog:
             "total_fallback_duty_reminders": self.total_fallback_duty_reminders,
             "total_avatar_voice_reminders": self.total_avatar_voice_reminders,
             "total_media_promise_alerts": self.total_media_promise_alerts,
+            "total_colloquial_llm_reminders": self.total_colloquial_llm_reminders,
             "last_check_ts": self.last_check_ts,
             "last_light": self.last_light,
         }

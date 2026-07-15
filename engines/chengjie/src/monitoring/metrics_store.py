@@ -47,6 +47,13 @@ class MetricsStore:
         self._queue_drops: int = 0
         self._active_tasks: int = 0
         self._concurrency_limit: int = 0
+        # ★ 2026-07-15 三连发事故观测：同消息重复投递被去重拦截数（=省下的重复
+        # Whisper/LLM/TTS 成本），与同会话语音连发异常数（事故指纹回归监测）
+        self._dedup_blocked: int = 0
+        self._voice_bursts: int = 0
+        # ★ B2 出站质量管道：自称改写数 + 出站复读检出数
+        self._outbound_self_ref_fixes: int = 0
+        self._outbound_repeats: int = 0
         self._lang_mismatch_count: int = 0
         # 情景记忆 / 慢思考（可选观测）
         self._slow_think_count: int = 0
@@ -723,6 +730,27 @@ class MetricsStore:
         with self._lock:
             self._queue_drops += 1
 
+    def record_dedup_blocked(self):
+        """同一消息重复投递被去重拦截（实时/轮询竞态、网络重传）。持续为 0 才健康
+        ——这个数就是修复前会变成「重复回复」的次数（重复处理率的分子）。"""
+        with self._lock:
+            self._dedup_blocked += 1
+
+    def record_voice_burst(self):
+        """同会话短窗语音连发异常（2026-07-15 事故指纹）。>0 应触发排查。"""
+        with self._lock:
+            self._voice_bursts += 1
+
+    def record_outbound_self_ref_fix(self):
+        """B2 出站质量管道：第三人称自称被改写（旁路文案穿帮的回归监测）。"""
+        with self._lock:
+            self._outbound_self_ref_fixes += 1
+
+    def record_outbound_repeat(self):
+        """B2 出站质量管道：同会话近史内一字不差复读（观测不拦截）。"""
+        with self._lock:
+            self._outbound_repeats += 1
+
     def set_active_tasks(self, count: int, limit: int):
         self._active_tasks = count
         self._concurrency_limit = limit
@@ -902,6 +930,12 @@ class MetricsStore:
             "peer_typing_prefetch": self._peer_typing_prefetch_stats(),
             "queue_size": self._queue_size,
             "queue_drops": self._queue_drops,
+            # ★ 三连发事故观测：去重拦截（重复处理率分子）+ 语音连发异常
+            "dedup_blocked": self._dedup_blocked,
+            "voice_bursts": self._voice_bursts,
+            # ★ B2 出站质量管道
+            "outbound_self_ref_fixes": self._outbound_self_ref_fixes,
+            "outbound_repeats": self._outbound_repeats,
             "active_tasks": self._active_tasks,
             "concurrency_limit": self._concurrency_limit,
             "last_message_at": (

@@ -44,6 +44,7 @@ class _SM:
     _promise_guard_cfg = _SMcls._promise_guard_cfg
     _apply_media_promise_guard = _SMcls._apply_media_promise_guard
     _selfie_offer_accept_bridge = _SMcls._selfie_offer_accept_bridge
+    _set_cant_send_photo_hint = _SMcls._set_cant_send_photo_hint
 
     def __init__(self, *, selfie_cfg=None, gate=False):
         comp = {}
@@ -107,8 +108,10 @@ async def test_allow_free_quota_provider_disabled_fallback_and_count():
     sm = _SM(selfie_cfg=_ON, gate=True)
     ctx = {"intimacy_score": 60, "entitlement": {"grants": [], "unlocked": []}}
     out = await sm._handle_selfie_request("发张照片", "u1", ctx, "c1")
-    assert out is not None
-    assert "不太方便" in out or "陪你" in out  # provider 关 → 文字兜底
+    # A2（2026-07-15）：provider 关 → 不再模板顶掉回复；设「发不出图」协同提示
+    # 后交 LLM 自然回应（回答原话题 + 婉转带过）。
+    assert out is None
+    assert "发不出任何照片" in ctx.get("_media_coherence_hint", "")
     # P0 语义修正：客户没收到图 → 不消耗免费额度（额度只在真送达时扣，
     # 否则"要图失败还扣次数"→ 下次直接被推付费引导，既不公平又伤转化）
     assert ctx.get("_selfie_used", 0) == 0
@@ -121,7 +124,8 @@ async def test_allow_owns_album_unlimited_no_count():
     ctx = {"intimacy_score": 60,
            "entitlement": {"grants": [], "unlocked": [SELFIE_FEATURE]}}
     out = await sm._handle_selfie_request("show me your face", "u1", ctx, "c1")
-    assert out is not None
+    assert out is None                       # A2：交 LLM 带提示回应
+    assert ctx.get("_media_coherence_hint")
     assert ctx.get("_selfie_used", 0) == 0  # 拥有相册 → 不消耗免费额度
 
 
@@ -131,8 +135,9 @@ async def test_gate_off_allows_without_album():
     sm = _SM(selfie_cfg=_ON, gate=False)  # 变现 gate 关 → 不计费、不引导
     ctx = {"intimacy_score": 60, "entitlement": None}
     out = await sm._handle_selfie_request("来张照片", "u1", ctx, "c1")
-    assert out is not None
-    assert "专属相册" not in out  # gate 关不应出现付费引导
+    assert out is None                       # A2：交 LLM 带提示回应
+    hint = ctx.get("_media_coherence_hint", "")
+    assert hint and "专属相册" not in hint   # gate 关不应出现付费引导
 
 
 # ── Stage B：埋点接线（准入态 → 自拍漏斗） ────────────────────────────────
@@ -178,7 +183,8 @@ async def test_funnel_noop_when_store_not_initialized():
     sm = _SM(selfie_cfg=_ON, gate=True)
     ctx = {"intimacy_score": 60, "entitlement": {"grants": [], "unlocked": []}}
     out = await sm._handle_selfie_request("想看你的照片", "u1", ctx, "c1")
-    assert out is not None  # 主流程不受埋点缺失影响
+    # 主流程不受埋点缺失影响：A2 后 allow+provider 关 → None + 协同提示已设
+    assert out is None and ctx.get("_media_coherence_hint")
 
 
 # ── Stage D：A 线主客户端 send_photo 直发兜底 ───────────────────────────────
@@ -406,11 +412,15 @@ async def test_global_cap_blocks_second_and_preserves_quota(monkeypatch):
                  gate=True)
         ctx = {"intimacy_score": 60, "entitlement": {"grants": [], "unlocked": []}}
         out1 = await sm._handle_selfie_request("发张照片", "u1", ctx, 1)
-        assert out1 is not None and out1 != ""        # 第1次出图成功但无通道→自洽搪塞
+        # A2：第1次出图成功但无通道 → 设协同提示交 LLM（不再模板搪塞）
+        assert out1 is None
+        assert "发不出任何照片" in ctx.get("_media_coherence_hint", "")
         # P0 语义修正：没真送达 → 不扣免费额度（全局 cap 已在生成时消耗，用户额度不动）
         assert ctx.get("_selfie_used", 0) == 0
+        ctx.pop("_media_coherence_hint", None)
         out2 = await sm._handle_selfie_request("再发张照片", "u1", ctx, 1)
-        assert "明天" in out2                          # 第2次全局额度用尽→capped 兜底
+        assert out2 is None                            # 第2次全局额度用尽→capped 也走提示
+        assert ctx.get("_media_coherence_hint")
         assert ctx.get("_selfie_used", 0) == 0         # 未再消耗用户免费额度
         kinds = [r["kind"] for r in funnel.selfie_recent(limit=10)]
         assert "capped" in kinds and kinds.count("delivered") == 1
@@ -435,9 +445,11 @@ async def test_global_cap_zero_means_unlimited(monkeypatch):
                                  provider={"enabled": True, "backend": "openai"}),
                  gate=False)
         for _ in range(3):
-            out = await sm._handle_selfie_request(
-                "发张照片", "u1", {"intimacy_score": 60, "entitlement": None}, 1)
-            assert "明天" not in out  # cap=0 → 永不拦
+            ctx = {"intimacy_score": 60, "entitlement": None}
+            out = await sm._handle_selfie_request("发张照片", "u1", ctx, 1)
+            # cap=0 → 永不走 capped 拦截；无通道发送失败 → A2 提示 + None
+            assert out is None
+            assert "发不出任何照片" in ctx.get("_media_coherence_hint", "")
     finally:
         cs.reset_selfie_provider()
 
@@ -449,9 +461,10 @@ async def test_global_cap_ignored_when_provider_disabled():
     try:
         sm = _SM(selfie_cfg=dict(_ON, daily_global_cap=1), gate=False)
         for _ in range(3):
-            out = await sm._handle_selfie_request(
-                "发张照片", "u1", {"intimacy_score": 60, "entitlement": None}, 1)
-            assert "明天" not in out  # 恒文字兜底，cap 不介入
+            ctx = {"intimacy_score": 60, "entitlement": None}
+            out = await sm._handle_selfie_request("发张照片", "u1", ctx, 1)
+            assert out is None       # A2：恒交 LLM 带提示，cap 不介入
+            assert ctx.get("_media_coherence_hint")
     finally:
         cs.reset_selfie_provider()
 
@@ -655,7 +668,7 @@ async def test_ctx_image_generates_from_context_and_sends(monkeypatch):
 @pytest.mark.asyncio
 async def test_selfie_send_failure_never_claims_photo_sent(monkeypatch):
     """实锤修复：出图成功但发送失败 → 绝不能把「这是刚拍的，给你看～」当文字发出
-    （图根本没到客户手里）。改发自洽的"这轮拍不了"搪塞。"""
+    （图根本没到客户手里）。A2 后：设「发不出图+别承诺」提示交 LLM 自然回应。"""
     from src.ai import companion_selfie as cs
     cs.reset_selfie_provider()
     prov = cs.get_selfie_provider({"enabled": True, "backend": "openai"})
@@ -670,9 +683,9 @@ async def test_selfie_send_failure_never_claims_photo_sent(monkeypatch):
         # 无任何发送通道（无编排器 platform/account、无 _send_photo_to_chat 回调）
         ctx = {"intimacy_score": 60, "entitlement": None}
         out = await sm._handle_selfie_request("发张照片", "u1", ctx, 1)
-        assert out is not None and out != ""
-        assert "刚拍的" not in out and "给你看" not in out  # 不再谎称图已发出
-        assert "不太方便" in out or "陪你" in out           # 自洽搪塞
+        assert out is None                       # 不再直接出模板文字
+        hint = ctx.get("_media_coherence_hint", "")
+        assert "不要答应" in hint and "已经发了" in hint  # 防谎称的约束进 prompt
         assert ctx.get("_selfie_used", 0) == 0  # 没送达不消耗免费额度
     finally:
         cs.reset_selfie_provider()
@@ -687,8 +700,8 @@ async def test_selfie_provider_fail_does_not_consume_quota():
         sm = _SM(selfie_cfg=_ON, gate=True)
         ctx = {"intimacy_score": 60, "entitlement": {"grants": [], "unlocked": []}}
         out = await sm._handle_selfie_request("发张照片", "u1", ctx, "c1")
-        assert out is not None
-        assert ctx.get("_selfie_used", 0) == 0  # provider 关 → 文字兜底不扣额度
+        assert out is None and ctx.get("_media_coherence_hint")
+        assert ctx.get("_selfie_used", 0) == 0  # provider 关 → 不扣额度
     finally:
         cs.reset_selfie_provider()
 
@@ -738,7 +751,7 @@ async def test_record_stage_turn_with_deflection_text():
 @pytest.mark.asyncio
 async def test_selfie_offer_accept_bridge_triggers_stage(monkeypatch):
     """offer-接受桥（A 线）：上一轮 AI 提议「要不要我拍一张给你看」、本条只回
-    「好呀」→ 视同自拍请求进入 Stage A（此处 provider 关 → 走文字兜底证明已进入）。"""
+    「好呀」→ 视同自拍请求进入 Stage A（A2 后 provider 关 → 设协同提示证明已进入）。"""
     from src.ai import companion_selfie as cs
     cs.reset_selfie_provider()
     try:
@@ -746,12 +759,13 @@ async def test_selfie_offer_accept_bridge_triggers_stage(monkeypatch):
         ctx = {"intimacy_score": 60, "entitlement": None,
                "last_reply": "嘿嘿～要不要我拍一张给你看呀？"}
         out = await sm._handle_selfie_request("好呀", "u1", ctx, 1)
-        assert out is not None  # 桥命中 → 进入 Stage A（非 None）
-        # 无 offer 前文 → 「好呀」不触发（防误伤）
+        # 桥命中 → 进入 Stage A：走到 allow 分支（provider 关 → None+提示）
+        assert out is None and ctx.get("_media_coherence_hint")
+        # 无 offer 前文 → 「好呀」不触发（防误伤）：不设提示
         ctx2 = {"intimacy_score": 60, "entitlement": None,
                 "last_reply": "今天好热呀"}
         out2 = await sm._handle_selfie_request("好呀", "u1", ctx2, 1)
-        assert out2 is None
+        assert out2 is None and not ctx2.get("_media_coherence_hint")
     finally:
         cs.reset_selfie_provider()
 

@@ -226,6 +226,15 @@ def _tts_cache_put(key: str, value: Tuple[bytes, str, str, str], *, max_entries:
             _TTS_CACHE_TS.pop(_old, None)
 
 
+def _tts_cache_evict(key: str) -> None:
+    """移除单条缓存（发现缓存的是截断坏音时驱逐，防坏音被反复复用）。"""
+    if not key:
+        return
+    with _TTS_CACHE_LOCK:
+        _TTS_CACHE.pop(key, None)
+        _TTS_CACHE_TS.pop(key, None)
+
+
 def reset_tts_cache() -> None:
     """清空 TTS 输出缓存（测试用 / 音色变更后强制重合成）。"""
     with _TTS_CACHE_LOCK:
@@ -467,8 +476,18 @@ class TTSPipeline:
         from src.ai.voice_emotion import NEUTRAL, coerce_emotion, derive_emotion
 
         # 合成前清洗：剔除 emoji + 换行折成停顿，防克隆 TTS 在换行/emoji 处截断音频
-        # （「语音念一半就断」的根因）。清洗后为空则回落原文，绝不把空文本送合成。
+        # （「语音念一半就断」的根因）。
+        # 2026-07-15 收紧：清洗后为空 = 全 emoji/符号（如尾条只剩"💭 ✨"）——旧行为
+        # 回落原文会把 emoji 硬送克隆 TTS 合成出 ~1s 杂音（当日 4 连发事故中两条
+        # "无意义语音"的本体）。emoji 本就不该被朗读 → 直接判失败，调用方回落文字。
         _cleaned = clean_text_for_tts(text)
+        if not _cleaned and str(text or "").strip():
+            return TTSResult(
+                ok=False, text=str(text or ""),
+                provider=self._effective_backend(),
+                voice=voice or self._effective_voice(),
+                format=self.format, error="no_speakable_text",
+            )
         text_s = _cleaned if _cleaned else str(text or "")
         if emotion is not None:
             spec = coerce_emotion(emotion)
@@ -493,8 +512,21 @@ class TTSPipeline:
             if hit is not None:
                 cached = self._result_from_cache(hit, text_s)
                 if cached is not None:
-                    self._record_stats(cached, text_s, cache_hit=True, spec=spec)
-                    return cached
+                    # 缓存卫生：修复前入缓存的截断坏音（时长低于文本物理最快
+                    # 语速）→ 驱逐并当未命中重合成，防坏音被无限复用。
+                    if self._looks_truncated(text_s, cached.duration_sec):
+                        _tts_cache_evict(cache_key)
+                        try:
+                            Path(cached.audio_path).unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                        logger.warning(
+                            "[tts] 缓存命中疑似截断音（%.1fs / %d字）→ 驱逐重合成",
+                            max(cached.duration_sec, 0.0), len(text_s))
+                    else:
+                        self._record_stats(
+                            cached, text_s, cache_hit=True, spec=spec)
+                        return cached
         else:
             cache_key = ""
 
@@ -529,9 +561,14 @@ class TTSPipeline:
         # ── 环境底噪（可选，⑤ 活人感）：极低增益房间底噪，去「录音棚干净感」──
         rv = await self._maybe_apply_ambience(rv)
 
-        # ── 成功且非缓存命中 → 写入缓存 ──
+        # 截断嫌疑标记（不改 ok——判定保守但不武断；发送层闸门按配置决定拦不拦）
+        if rv.ok and self._looks_truncated(text_s, rv.duration_sec):
+            rv.extra["suspect_truncated"] = True
+
+        # ── 成功且非缓存命中 → 写入缓存（截断嫌疑音不入缓存，防坏音被复用）──
         if (self.cache_enabled and cache_key and rv.ok and rv.audio_path
-                and not rv.extra.get("cache_hit")):
+                and not rv.extra.get("cache_hit")
+                and not rv.extra.get("suspect_truncated")):
             try:
                 data = Path(rv.audio_path).read_bytes()
                 if data:
@@ -550,6 +587,16 @@ class TTSPipeline:
                 pass
         self._record_stats(rv, text_s, cache_hit=False, spec=spec)
         return rv
+
+    @staticmethod
+    def _looks_truncated(text: str, duration_sec: float) -> bool:
+        """截断坏音判定（缓存卫生用，保守阈值零误杀；判定失败视为正常）。"""
+        try:
+            from src.ai.tts_quality import looks_truncated
+            bad, _ = looks_truncated(text, duration_sec)
+            return bad
+        except Exception:
+            return False
 
     def _try_prerendered(self, text: str) -> Optional["TTSResult"]:
         """预渲染语音命中层：命中返回 TTSResult（provider=prerendered），未命中 None。

@@ -1428,6 +1428,9 @@ companion:
     #   （上午/下午/傍晚/深夜各一场景，同一确定性函数，各桶过时段冲突过滤）随场景注入，
     #   LLM 可自然引用"早上去过哪（过去时）/晚点打算干嘛（将来时）"，跨时段叙事连贯。
     #   零 LLM 零存储，明天动线自动换。随 scene_in_chat 总闸。
+    meal_state_in_chat: true             # 饮食状态事实源（2026-07-15「还没吃→刚吃了面包」矛盾修复）：
+    #   按 persona+日期确定性生成今天三餐时刻 → 「刚吃过/还没吃」注入 prompt 作内部事实，
+    #   同一天内任意两次生成结论一致（防重复系统换角度重写时事实漂移）。随 scene_in_chat 总闸。
     # 【出图多样性 / 真人感】治「每张头位置、表情都一样」（PuLID 从正面定妆照锁脸 +
     #   固定种子 + prompt 恒『看镜头』三重叠加把构图钉死，像证件照连拍）。开启后每次出图
     #   随机取一组「取景/头部姿态/视线/表情/写实质感」修饰词注入 prompt，并给种子掺 salt →
@@ -2421,3 +2424,13 @@ health_watchdog:
     enabled: true
     min_retracted: 3                  # 累计净撤回（撤回−兑现）达此数才首提
     interval_min: 240                 # 之后的重提间隔（4h）
+  # 口语化 LLM 持续连败升级提醒（2026-07-15 九连败静默事故，默认开）：本地口语化端点
+  # 挂掉只会「60s 熔断-重试」无限循环，语音口语化静默降级规则档（活人感 A 档失效）。
+  # fail_streak 连败且最近失败在 fresh_min 内、持续 after_min → 首提（colloquial_llm_alert），
+  # interval_min 重提；恢复需正面证据（失败后真的又成功改写过一次）。订阅别名 colloquial_llm。
+  colloquial_llm_remind:
+    enabled: true
+    fail_streak: 6                    # 连续失败次数阈值（事故样本为 9 连败）
+    fresh_min: 60                     # 最近一次失败须在此窗口内（防陈旧信号误报）
+    after_min: 30                     # 持续挂死多久后首提
+    interval_min: 240                 # 重提间隔（4h）
