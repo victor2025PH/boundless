@@ -1,0 +1,183 @@
+{
+  "_comment": [
+    "wujie 全域进程注册表（单一源）——deploy.ps1 / up|down|status|provision 读它。",
+    "职责边界：本文件登记『本机可起停的逻辑服务』（进程/端口/健康/委派脚本/运行时依赖）；",
+    "  cluster_map.json 仍是『跨机 × 显存预算』的拓扑单一源，二者互补不重复：",
+    "  - 换机器/显存预算 -> 改 cluster_map.json",
+    "  - 改某服务怎么起停/健康怎么探 -> 改本文件的该服务条目。",
+    "字段：dir=代码目录(仓库相对) runtime_dir=实际启动目录(缺省=dir，可为绝对路径)",
+    "  runtime=python|uv|npm|batch  entry=入口  ports=探活端口(任一 LISTENING 即视为在跑)",
+    "  health.url=无鉴权健康端点(有则 HTTP 探)  health.auth=true 表示端点需鉴权(只按端口/进程判活)",
+    "  up.via=script|inline  down.via=port|script  profiles=该服务归属剖面  enabled=是否纳入默认操作",
+    "设计取舍：up 委派各引擎『既有脚本』(不重造轮子)，仅在端口空闲时才拉起(幂等)；",
+    "  status 复用 huoke 成熟的 GO/DEGRADED/DOWN 三态与退出码；provision 只读报缺口，-Apply 才动手。"
+  ],
+  "version": 1,
+  "hub_ref": "deploy/cluster_map.json",
+  "profiles": {
+    "core": "常驻业务应用：承接(chengjie) + 获客主控(huoke)。任意机器可起，不需 GPU。",
+    "web":  "官网 Next.js(website)。开发用 dev，上线用 build+start。",
+    "gpu":  "重算力/多机服务：avatarhub 全栈 + TTS/STT + index-tts。按 cluster_map 分机部署。"
+  },
+  "services": [
+    {
+      "id": "chengjie",
+      "title": "智聊 · 承接引擎 (telegram-mtproto-ai)",
+      "group": "engine",
+      "profiles": ["core"],
+      "dir": "engines/chengjie",
+      "runtime": "python",
+      "entry": "main.py",
+      "ports": [18799, 18787],
+      "health": { "url": "http://127.0.0.1:18799/api/admin/health", "regex": "", "auth": true },
+      "gpu": false,
+      "up":   { "via": "script", "script": "start_main.ps1" },
+      "down": { "via": "port" },
+      "provision": {
+        "needs": [
+          "config/config.yaml（机密，git 忽略：从备份 telegram-mtproto-ai/config/config.yaml 取，或 `python main.py --init <preset>` 生成）",
+          "Python 依赖：requirements.txt（建议独立 venv）",
+          "sessions/（Telethon 登录态，从备份取；缺失需重新登录）"
+        ]
+      },
+      "enabled": true,
+      "notes": "主服务绑定 0.0.0.0:18799（见 _smoke.out）；health 需鉴权，故按端口+进程判活。协议侧车(whatsapp-baileys/messenger-web) 单独在 services/ 下。"
+    },
+    {
+      "id": "huoke",
+      "title": "获客 · 真机 RPA 主控 (mobile-auto0423)",
+      "group": "engine",
+      "profiles": ["core"],
+      "dir": "engines/huoke",
+      "runtime": "python",
+      "entry": "service_wrapper.py",
+      "ports": [18080, 8000],
+      "health": { "url": "http://127.0.0.1:18080/health", "regex": "", "auth": false },
+      "gpu": false,
+      "up":     { "via": "script", "script": "start.bat", "args": "-NoBranchCheck" },
+      "down":   { "via": "script", "script": "stop.bat" },
+      "status": { "via": "script", "script": "scripts/ops/status.ps1", "args": "-Json" },
+      "provision": {
+        "needs": [
+          "config/launch.env（可选；缺省 port=18080 host=0.0.0.0）",
+          "Python 依赖：requirements.txt",
+          "config/*.yaml 运行态（devices/chat 等，从备份取）"
+        ]
+      },
+      "enabled": true,
+      "notes": "自带成熟 ops：start/stop/status(-Json，退出码 0/1/2)。本编排 status 直接委派它。"
+    },
+    {
+      "id": "website",
+      "title": "官网 usdt2026 (Next.js)",
+      "group": "web",
+      "profiles": ["web"],
+      "dir": "website",
+      "runtime": "npm",
+      "entry": "dev",
+      "ports": [3000],
+      "health": { "url": "http://127.0.0.1:3000/", "regex": "", "auth": false },
+      "gpu": false,
+      "up":   { "via": "inline", "inline": "npm run dev" },
+      "down": { "via": "port" },
+      "provision": {
+        "needs": [
+          "node_modules（已实体化到 website/node_modules）",
+          ".env.local（可选，站点密钥）",
+          "上线：npm run build 后 npm run start（dev 仅本地预览）"
+        ]
+      },
+      "enabled": true,
+      "notes": "并行会话可能也在跑 dev；up 幂等：3000 在听则跳过。上线部署走 scripts/deploy.ps1。"
+    },
+    {
+      "id": "indextts",
+      "title": "IndexTTS2 情感克隆 (第三方 vendor)",
+      "group": "vendor",
+      "profiles": ["gpu"],
+      "dir": "vendor/index-tts",
+      "runtime": "uv",
+      "entry": "aitr_indextts2_server.py",
+      "env": { "INDEXTTS2_PORT": "7899", "USE_MODELSCOPE": "true", "INDEXTTS2_EAGER": "1", "INDEXTTS2_FP16": "1" },
+      "ports": [7899],
+      "health": { "url": "http://127.0.0.1:7899/health", "regex": "", "auth": false },
+      "gpu": true,
+      "up":   { "via": "inline", "inline": "uv run --with fastapi --with uvicorn python aitr_indextts2_server.py" },
+      "down": { "via": "port" },
+      "provision": {
+        "needs": [
+          "uv sync（本目录）",
+          "checkpoints/ 权重 + checkpoints/hf_cache/ 辅助模型（git 忽略，provision 下载）"
+        ]
+      },
+      "enabled": true,
+      "notes": "chengjie 的 minicpm_clone backend 调它(127.0.0.1:7899)。原 start_indextts2.bat 里 cd 路径已随迁移过期，本编排以正确 cwd 直起 uv，不依赖该 bat。"
+    },
+    {
+      "id": "avatarhub",
+      "title": "幻境 · 换脸/克隆/数字人/同传全栈 (mfys)",
+      "group": "engine",
+      "profiles": ["gpu"],
+      "dir": "engines/avatarhub",
+      "runtime_dir": "D:/faceX/mfys",
+      "runtime": "batch",
+      "entry": "boot_stack.bat",
+      "ports": [9000],
+      "health": { "url": "", "regex": "", "auth": false },
+      "gpu": true,
+      "machine": "192.168.0.176",
+      "up":   { "via": "script", "script": "boot_stack.bat" },
+      "down": { "via": "port" },
+      "provision": {
+        "needs": [
+          "conda envs：facefusion / cosytts / qwen3tts（见 cluster_map.hosts.*.py）",
+          "models/ 权重（git 忽略）",
+          "env_config.bat + deploy.env.bat（本机路由/显存策略）",
+          "多机：faceswap→.104, stt/nemo→.140, emotion/qwen3 tts→.117（见 cluster_map）"
+        ]
+      },
+      "enabled": false,
+      "notes": "全栈主起在 GPU 主机(.176)。runtime_dir 现指向在跑的 D:/faceX/mfys（代码已在 engines/avatarhub，运行时后续可 provision 切到 wujie）。默认 enabled=false：GPU/多机，勿在非 GPU 机误起。"
+    },
+    {
+      "id": "emotion_tts",
+      "title": "情感 TTS (CosyVoice3) — 本机 .117",
+      "group": "engine-svc",
+      "profiles": ["gpu"],
+      "dir": "engines/avatarhub",
+      "runtime_dir": "D:/faceX/mfys",
+      "runtime": "conda",
+      "conda_python": "D:/faceX/Miniconda3/envs/cosytts/python.exe",
+      "entry": "emotion_tts_server.py",
+      "ports": [7852],
+      "health": { "url": "http://127.0.0.1:7852/health", "regex": "\"models_loaded\":\\s*true", "auth": false },
+      "gpu": true,
+      "machine": "192.168.0.117",
+      "up":   { "via": "inline", "inline": "D:/faceX/Miniconda3/envs/cosytts/python.exe emotion_tts_server.py" },
+      "down": { "via": "port" },
+      "provision": { "needs": ["conda env cosytts", "CosyVoice3 权重"] },
+      "enabled": false,
+      "notes": "由 EmotionTTS_Boot 计划任务/看门狗托管；当前在跑。列此仅供 status 探活，勿被本编排重复拉起。"
+    },
+    {
+      "id": "qwen3_tts",
+      "title": "Qwen3 TTS 0.6B — 本机 .117",
+      "group": "engine-svc",
+      "profiles": ["gpu"],
+      "dir": "engines/avatarhub",
+      "runtime_dir": "D:/faceX/mfys",
+      "runtime": "conda",
+      "conda_python": "D:/faceX/Miniconda3/envs/qwen3tts/python.exe",
+      "entry": "qwen3_tts_server.py",
+      "ports": [7858],
+      "health": { "url": "http://127.0.0.1:7858/health", "regex": "\"model_loaded\":\\s*true", "auth": false },
+      "gpu": true,
+      "machine": "192.168.0.117",
+      "up":   { "via": "inline", "inline": "D:/faceX/Miniconda3/envs/qwen3tts/python.exe qwen3_tts_server.py" },
+      "down": { "via": "port" },
+      "provision": { "needs": ["conda env qwen3tts", "Qwen3-TTS 权重"] },
+      "enabled": false,
+      "notes": "由 Qwen3TTS_Boot 托管；当前在跑。列此仅供 status 探活。"
+    }
+  ]
+}
