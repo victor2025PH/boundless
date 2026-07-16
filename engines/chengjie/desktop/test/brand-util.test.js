@@ -64,11 +64,11 @@ t(isDefaultMark(null) === false, "null mark not default");
   // 无 config.brand → brand.json
   const b = pickBrandLocal({}, {
     product: { zh: "智聊" }, company: { zh: "无界科技" },
-    links: { website: "https://usdt2026.cc" }, assets: { mark: "/static/brand/boundless-mark-256.png" },
+    links: { website: "https://bd2026.cc" }, assets: { mark: "/static/brand/boundless-mark-256.png" },
   });
   t(b.product === "智聊", "json product");
   t(b.company === "无界科技", "json company");
-  t(b.website === "https://usdt2026.cc", "json website");
+  t(b.website === "https://bd2026.cc", "json website");
   t(b.mark === "/static/brand/boundless-mark-256.png", "json mark");
 }
 {

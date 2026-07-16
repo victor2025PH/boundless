@@ -93,7 +93,7 @@ def build_catalog(*, from_ts: bool = False) -> Dict[str, Any]:
             {"key": "chatx", "zh": "智聊", "en": "ChatX", "emoji": "💬"},
         ]
     base.setdefault("links", {})
-    base["links"].setdefault("website", "https://usdt2026.cc")
+    base["links"].setdefault("website", "https://bd2026.cc")
     base["links"].setdefault("brand_path", "/brand")
     return base
 

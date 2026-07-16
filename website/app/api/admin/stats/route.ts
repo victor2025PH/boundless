@@ -312,9 +312,9 @@ export async function GET(req: NextRequest) {
   // 只统计带 sid 的网站事件（miniapp_* 有独立漏斗，不混入）；站内互跳的自站 referrer 不算来源。
   const siteHost = (() => {
     try {
-      return new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://usdt2026.cc").hostname;
+      return new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://bd2026.cc").hostname;
     } catch {
-      return "usdt2026.cc";
+      return "bd2026.cc";
     }
   })();
   const classifyRef = (ref: string): string => {

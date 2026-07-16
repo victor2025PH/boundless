@@ -623,7 +623,7 @@ def activate_from_file(path) -> tuple[bool, "LicenseState | str"]:
 # 默认在线激活服务器（官网订单后端）：1.0.9 起客户端开箱即可「输订单号在线激活」，
 # 无需配置。白标/私有部署可用 AVATARHUB_ACTIVATION_URL 或 config.json.activation_url 覆盖，
 # 置 "off"/"none" 可显式关闭（退回纯离线粘贴授权码）。
-_DEFAULT_ACTIVATION_URL = "https://usdt2026.cc"
+_DEFAULT_ACTIVATION_URL = "https://bd2026.cc"
 
 
 def _activation_url(explicit: str = "") -> str:

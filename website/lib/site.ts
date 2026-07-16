@@ -1,4 +1,4 @@
-export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://usdt2026.cc";
+export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://bd2026.cc";
 
 // 人工客服。注意：@handle 是 Telegram 平台实体，更名需在 Telegram 客户端/BotFather 同步操作，
 // 这里仅做引用集中化，可用环境变量覆盖。

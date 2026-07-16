@@ -63,7 +63,7 @@ cat > /etc/nginx/sites-available/yuntech <<'NGINX'
 server {
     listen 80;
     listen [::]:80;
-    server_name usdt2026.cc www.usdt2026.cc _;
+    server_name bd2026.cc www.bd2026.cc _;
 
     location / {
         proxy_pass http://127.0.0.1:3000;
@@ -89,5 +89,5 @@ else
   log "WARN: app health check failed - inspect pm2 logs"
   sudo -u $APP_USER pm2 logs $PM2_NAME --lines 20 --nostream || true
 fi
-curl -s -o /dev/null -w "nginx:80 -> %{http_code}\n" -H "Host: usdt2026.cc" http://127.0.0.1/
+curl -s -o /dev/null -w "nginx:80 -> %{http_code}\n" -H "Host: bd2026.cc" http://127.0.0.1/
 log "PROVISION DONE"

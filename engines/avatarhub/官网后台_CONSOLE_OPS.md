@@ -1,7 +1,7 @@
 # 官网运营后台运维一页纸（CONSOLE OPS）
 
 > 对象：接手「客户 / 机器名单 / 授权发放 / 兑换码 / 订单 / 销售 / 到期 / 客服账号」统一管理的运维与销售。
-> 位置：**官网 usdt2026.cc**（Next.js 仓库 `C:\web117`，服务器 `/home/ubuntu/yuntech`，PM2 名 `yuntech`）。
+> 位置：**官网 bd2026.cc**（Next.js 仓库 `C:\web117`，服务器 `/home/ubuntu/yuntech`，PM2 名 `yuntech`）。
 > 底座：**签发私钥永不上服务器**——官网做控制面 + 客户登记 + 客户激活；本机签发机 `sign_worker.py`
 > 轮询官网签发队列、就地用私钥签发再回填。服务器被攻破也伪造不了授权。
 
@@ -23,20 +23,20 @@
 |---|---|
 | `sign_worker.py` | 签发机：轮询官网签发队列 → 本地私钥签 → 回填（路线A/B/CRL 都靠它） |
 | `register_sign_worker_task.ps1` / `sign_worker_watch.bat` | 把签发机注册成自愈常驻计划任务（install/status/stop/remove） |
-| `admin_client.py` | 产品端联网注册模块（心跳式；已接入 `avatar_hub.py` + `faceswap_api.py`，默认上报 usdt2026.cc） |
+| `admin_client.py` | 产品端联网注册模块（心跳式；已接入 `avatar_hub.py` + `faceswap_api.py`，默认上报 bd2026.cc） |
 | `register_machine_task.ps1` / `machine_register.bat` | 给不跑 Hub/换脸的机器（STT/口型分机等）一键自登记（每 3h 上报） |
 | `license.py` / `license_admin.py` | 客户端验签 / 私钥与签发原语（worker 复用） |
 
 ## 1. 首次开通（一次性）
 
-**官网服务器**（`C:\web117` 部署到 usdt2026.cc）：设环境变量（`prod.env.local`）
+**官网服务器**（`C:\web117` 部署到 bd2026.cc）：设环境变量（`prod.env.local`）
 ```
 CONSOLE_ADMIN_USER=admin          # 首个管理员用户名（首启无账号时自动建）
 CONSOLE_ADMIN_PASS=<强密码>        # 首个管理员密码（建完后可删此两行）
 CONSOLE_SECRET=<随机长串>          # 会话签名密钥（不设则复用 ADMIN_KEY）
 # ADMIN_KEY 已有（客服/签发机/脚本共用的运维密钥）
 ```
-部署：`cd C:\web117; ./scripts/deploy.ps1`（Posh-SSH，密钥自动）。浏览器开 **https://usdt2026.cc/console** 登录。
+部署：`cd C:\web117; ./scripts/deploy.ps1`（Posh-SSH，密钥自动）。浏览器开 **https://bd2026.cc/console** 登录。
 
 **本机签发机（一键常驻，推荐）**：
 ```powershell
@@ -101,7 +101,7 @@ powershell -ExecutionPolicy Bypass -File register_sign_worker_task.ps1 -Action r
 
 ## 4. 让产品连到官网后台
 
-客户端默认激活地址就是 `https://usdt2026.cc`（`license.py._DEFAULT_ACTIVATION_URL`），开箱即用：
+客户端默认激活地址就是 `https://bd2026.cc`（`license.py._DEFAULT_ACTIVATION_URL`），开箱即用：
 - 在线激活（路线B）/一键试用 → `POST /api/activate`、`/api/trial`；
 - 联网注册（机器名单）→ `POST /api/register`（`admin_client.py` 已接入 Hub 启动，默认走激活地址）；
 - 在线拉吊销名单 → `GET /api/revocations`。

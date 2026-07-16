@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """admin_client.py — 产品端「联网注册」上报（官网后台机器名单的数据源）。
 
-定位：产品启动/联网时，向官网后台（usdt2026.cc 的 POST /api/register）上报一份【机器管理信息】，
+定位：产品启动/联网时，向官网后台（bd2026.cc 的 POST /api/register）上报一份【机器管理信息】，
       让后台 /console 的「机器名单」自动建档并保持 last_seen 新鲜。这是【授权/资产管理通道】，
       与匿名遥测(telemetry_client)是两回事：这里如实带机器指纹（本就是授权身份），便于客服按机管理。
 

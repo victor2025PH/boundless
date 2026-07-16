@@ -23,7 +23,7 @@
 | **telegram-mtproto-ai** | 117 `D:\workspace` | 承接引擎：客服/统一收件箱/AI回复/翻译栈/陪伴 | py=1530, ts/tsx=3528；remote yunkeji2026；**119 未提交** | 自研核心 |
 | **mobile-auto0423** | 117 `D:\workspace` | 获客引擎：真机 RPA（FB/Messenger/TikTok） | py=629；remote victor2025PH；branch feat-a-p2x | 自研核心 |
 | **index-tts** | 117 `D:\workspace` | 第三方 TTS（IndexTTS2），VoiceX 后端依赖 | 7GB；remote index-tts/index-tts | 第三方（vendor） |
-| **_server-yuntech / web117** | 117 `D:\workspace` · 本机 `C:\web117` | 官网 usdt2026.cc（Next.js 统一销售门面） | ts/tsx=1985；deploy.ps1(Posh-SSH) | 自研·官网 |
+| **_server-yuntech / web117** | 117 `D:\workspace` · 本机 `C:\web117` | 官网 bd2026.cc（Next.js 统一销售门面） | ts/tsx=1985；deploy.ps1(Posh-SSH) | 自研·官网 |
 | **brand-assets** | 117 `D:\workspace` | 品牌资产库（logo/图标/排版/头像/背景/字体） | 78MB；**7 产品图标齐全** | 共享资产 |
 | **docs-business** | 117 `D:\workspace` | 商业/战略/实施文档（含《实施01–08》三视角报告） | 0.1MB | 文档 |
 

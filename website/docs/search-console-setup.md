@@ -5,33 +5,33 @@
 > 是后续 SEO 迭代的核心数据来源。
 >
 > 网站代码已内置验证支持：把令牌写进 VPS 的 `.env.local` 即可输出验证元标签，无需改代码。
-> 生产域名为 `https://usdt2026.cc`（www 子域已在 nginx 层 301 到裸域，提交时一律用裸域）。
+> 生产域名为 `https://bd2026.cc`（www 子域已在 nginx 层 301 到裸域，提交时一律用裸域）。
 
 ## 一、Google Search Console（约 5 分钟）
 
 1. 打开 <https://search.google.com/search-console>，用 Google 账号登录
-2. 「添加资源」→ 选 **网址前缀**，填 `https://usdt2026.cc`（不要带 www）
+2. 「添加资源」→ 选 **网址前缀**，填 `https://bd2026.cc`（不要带 www）
 3. 验证方式选 **HTML 标记**，会得到一段：
    `<meta name="google-site-verification" content="XXXXXXXX" />`
    把 `content` 里的 `XXXXXXXX` 发给 AI 助手（或自己按下方"令牌配置"操作）
 4. 令牌部署生效后，回 GSC 点「验证」
 5. 验证通过后：左侧「站点地图」→ 填 `sitemap.xml` → 提交
 6. （可选加速）左侧顶部网址检查框逐个输入以下 URL →「请求编入索引」：
-   - `https://usdt2026.cc/`
-   - `https://usdt2026.cc/en`
-   - `https://usdt2026.cc/voice`
-   - `https://usdt2026.cc/ko/voice`
-   - `https://usdt2026.cc/ja/voice`
+   - `https://bd2026.cc/`
+   - `https://bd2026.cc/en`
+   - `https://bd2026.cc/voice`
+   - `https://bd2026.cc/ko/voice`
+   - `https://bd2026.cc/ja/voice`
 
 ## 二、Naver Search Advisor（韩语市场，约 5 分钟）
 
 1. 打开 <https://searchadvisor.naver.com>，需要 Naver 账号（手机号可注册）
-2. 「웹마스터 도구」→ 사이트 등록 → 填 `https://usdt2026.cc`
+2. 「웹마스터 도구」→ 사이트 등록 → 填 `https://bd2026.cc`
 3. 验证方式选 **HTML 태그**（HTML 标签），得到：
    `<meta name="naver-site-verification" content="YYYYYYYY" />`
    同样把 `YYYYYYYY` 交给 AI 助手配置
-4. 验证通过后：요청（请求）→ 사이트맵 제출（提交站点地图）→ 填 `https://usdt2026.cc/sitemap.xml`
-5. 웹 페이지 수집（网页收集）里可单独请求收录 `https://usdt2026.cc/ko/voice`
+4. 验证通过后：요청（请求）→ 사이트맵 제출（提交站点地图）→ 填 `https://bd2026.cc/sitemap.xml`
+5. 웹 페이지 수집（网页收集）里可单独请求收录 `https://bd2026.cc/ko/voice`
 
 ## 三、Bing Webmaster Tools（顺手，约 1 分钟）
 

@@ -9,7 +9,7 @@
 
 用法（凭证由你提供，本脚本不保存密码，推荐密钥登录）：
   python upload_release.py --host 1.2.3.4 --user root --dest /var/www/dl/releases
-  python upload_release.py --host dl.usdt2026.cc --user deploy --key C:\\Users\\user\\.ssh\\id_ed25519 --dest /var/www/dl/releases
+  python upload_release.py --host bd2026.cc --user deploy --key C:\\Users\\user\\.ssh\\id_ed25519 --dest /var/www/dl/releases
 
 上传后自动用 HTTPS HEAD 验证可达性（提供 --base-url 时）。
 """
@@ -37,7 +37,7 @@ def main() -> int:
     ap.add_argument("--dest", required=True, help="服务器目标目录，如 /var/www/dl/releases")
     ap.add_argument("--key", default="", help="SSH 私钥路径（可选，推荐；不填则走默认密钥/交互密码）")
     ap.add_argument("--port", default="22", help="SSH 端口（默认 22）")
-    ap.add_argument("--base-url", default="", help="上传后验证用的公网 URL，如 https://dl.usdt2026.cc/releases")
+    ap.add_argument("--base-url", default="", help="上传后验证用的公网 URL，如 https://bd2026.cc/releases")
     args = ap.parse_args()
 
     files = sorted(DIST.glob("AvatarHub-Setup-*.exe")) + sorted(DIST.glob("AvatarHub-*.dmg"))

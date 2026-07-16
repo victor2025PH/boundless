@@ -439,8 +439,8 @@ def build():
     add_heading(doc, "联系我们", 1)
     add_para(doc, "无界科技 BOUNDLESS —— 让沟通，无界。")
     add_para(doc, "Telegram 增长顾问：@ai_zkw")
-    add_para(doc, "官网：https://usdt2026.cc")
-    add_para(doc, "在线交互方案页：https://usdt2026.cc/proposal/")
+    add_para(doc, "官网：https://bd2026.cc")
+    add_para(doc, "在线交互方案页：https://bd2026.cc/proposal/")
 
     # ── 页脚 ──
     for section in doc.sections:

@@ -24,7 +24,7 @@ DEFAULT_SITE_NAME_SHORT = "无界科技"
 DEFAULT_SIDEBAR_NAME = "无界 · 智聊"
 DEFAULT_LOGIN_SUBTITLE = "管理控制台"
 POWERED_BY_TEXT = "Powered by 无界科技"
-DEFAULT_WEBSITE_URL = "https://ai26.sbs"  # 实施05：主域名迁移，usdt2026.cc 弃用
+DEFAULT_WEBSITE_URL = "https://ai26.sbs"  # 实施05：主域名迁移，bd2026.cc 弃用
 DEFAULT_BRAND_PATH = "/brand"
 
 # 静态资源路径（相对 /static）

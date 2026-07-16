@@ -6,7 +6,7 @@
 const BRAND_FALLBACK = Object.freeze({
   product: "智聊",
   company: "无界科技",
-  website: "https://usdt2026.cc",
+  website: "https://bd2026.cc",
   mark: null,
 });
 

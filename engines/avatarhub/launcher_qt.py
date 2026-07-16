@@ -90,7 +90,7 @@ APP_VERSION = "1.1.0"
 # 只在打包版(frozen)默认启用——源码树开发机不该被提示「升级」把仓库盖掉；
 # AVATARHUB_UPDATE_DEV=1 可在源码树强开（联调用）。
 RELEASE_MANIFEST_URL = os.environ.get(
-    "AVATARHUB_RELEASE_URL", "https://usdt2026.cc/releases/release_manifest.json")
+    "AVATARHUB_RELEASE_URL", "https://bd2026.cc/releases/release_manifest.json")
 
 
 def _ver_tuple(s: str) -> tuple:
@@ -4825,7 +4825,7 @@ class LicenseDialog(QDialog):
 
     def _open_store(self):
         """打开官网购买页并带上本机指纹：下单即绑机，付款开通后状态页自取授权码。"""
-        base = os.environ.get("AVATARHUB_STORE_URL", "https://usdt2026.cc/order").rstrip("/")
+        base = os.environ.get("AVATARHUB_STORE_URL", "https://bd2026.cc/order").rstrip("/")
         fp = (self.fp_edit.text() or "").strip()
         url = f"{base}?fp={fp}" if fp else base
         try:
@@ -5137,7 +5137,7 @@ def main():
             try:
                 import ssl as _ssl
                 from urllib.request import urlopen as _uo
-                with _uo("https://usdt2026.cc/releases/release_manifest.json",
+                with _uo("https://bd2026.cc/releases/release_manifest.json",
                          timeout=8) as _r:
                     deps.append(f"https={_r.status}")
             except Exception as e:

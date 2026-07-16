@@ -13,7 +13,7 @@
   * --emit-tasks 追加机器可读 tasks.jsonl（供自动化 agent 逐条消费 → 产 patch → 人审）。
 
 用法：
-  python tools/ai_triage.py --stats-url https://usdt2026.cc/t/stats --token <T>
+  python tools/ai_triage.py --stats-url https://bd2026.cc/t/stats --token <T>
   python tools/ai_triage.py --sqlite ~/avatarhub-telemetry/agg.sqlite   # 服务端本地直读
   python tools/ai_triage.py ... --emit-tasks
 """

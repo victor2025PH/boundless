@@ -18,7 +18,7 @@
 ```powershell
 git lfs install
 cd D:\workspace
-git clone https://github.com/victor2025PH/wujie.git
+git clone https://github.com/victor2025PH/boundless.git
 cd wujie
 powershell -File tools\install_hooks.ps1                                          # 装 pre-push 门禁钩子
 powershell -File deploy\deploy.ps1 -Action provision                              # 只读看运行时缺口
