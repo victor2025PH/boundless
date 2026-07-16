@@ -12,7 +12,7 @@
 - `products/` 7 条产品线（拼音文件夹，产品化薄封装，复用 engines）
   - `zhituo` 智拓 ReachX · `zhiliao` 智聊 ChatX · `tongyi` 通译 LingoX · `tongchuan` 通传 VoxX
   - `huansheng` 幻声 VoiceX · `huanying` 幻影 LiveX · `huanyan` 幻颜 FaceX
-- `website/` 官网 usdt2026（Next.js 统一门面）
+- `website/` 官网 bd2026（Next.js 统一门面；主域 bd2026.cc）
 - `brand-assets/` 品牌资产库
 - `docs/` 商业 / 战略 / 实施 / 运维文档
 - `vendor/` 第三方引擎（index-tts 等，不入库，按需部署）

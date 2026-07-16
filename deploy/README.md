@@ -8,7 +8,7 @@
 | avatarhub | `engines/avatarhub/docker/`（compose + Dockerfile.service）· `provision.*` · `requirements/`（各 conda env 基线）· `installer/` | 微服务多机；GPU 池见 docker-compose |
 | chengjie | `engines/chengjie/docker/`（含 `docker-compose.ha.yml`）· `requirements.txt`/`-ci.txt` | 单进程 + SQLite（文档注明不可多进程写） |
 | huoke | `engines/huoke/`（`server.py` + `migrations/` + `requirements.txt`） | 主控 + Worker 集群 |
-| website | `website/`（Next.js；`_server-yuntech` deploy.ps1 Posh-SSH 到 usdt2026） | 部署前 `npm run build` |
+| website | `website/`（Next.js；`_server-yuntech` deploy.ps1 Posh-SSH 到 bd2026） | 部署前 `npm run build` |
 
 ## 跨机拓扑（单一源）
 `deploy/cluster_map.json`（从 avatarhub 复制的拓扑单一源）：机器 IP × 服务 × 显存预算。
