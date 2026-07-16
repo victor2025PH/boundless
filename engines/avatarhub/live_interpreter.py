@@ -7251,6 +7251,22 @@ except Exception as _e:
     logger.warning(f"service_auth 未启用: {_e}")
 
 
+# [2026-07-16 窗口图标] /favicon.ico：Edge/Chrome --app 应用窗口的任务栏/标题栏图标取自
+# 页面 favicon 的位图；此前本服务无任何 favicon → 同传窗口退化成 Edge 图标。
+# 与 Hub 同一母版（static/app-icon-256.png 随仓库分发），页面 head 均已挂 /favicon.ico。
+_FAVICON_PNG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "app-icon-256.png")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon_ico():
+    try:
+        with open(_FAVICON_PNG, "rb") as f:
+            return Response(f.read(), media_type="image/png",
+                            headers={"Cache-Control": "no-cache"})
+    except Exception:
+        return Response(status_code=404)
+
+
 # ── 设备表防漂移：MME waveIn/waveOut ID 是位置序号,虚拟声卡(DroidCam/SplitCam/iVCam)动态
 # 注册/注销后整表移位;本进程 PortAudio 快照冻结在启动时刻 → 按旧索引开的是"漂移后的别的设备"
 # (实测联测复现:自检"麦克风正常 -96.7dBFS"实际开的是 CABLE Output 静音口)。绑定前重建快照。
@@ -10064,7 +10080,8 @@ def review_page():
 
 
 _REVIEW_PAGE = r"""<!doctype html><html lang=zh><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width,initial-scale=1"><title>转写复盘 · 真实CER标注</title>
+<meta name=viewport content="width=device-width,initial-scale=1"><link rel=icon href=/favicon.ico>
+<title>转写复盘 · 真实CER标注</title>
 <style>
 :root{color-scheme:dark;--acc:#4f7aff;--acc2:#a855f7;--bg:#0b0e14;--card:#12172290;--bord:#232a3a;--mut:#8b94a7}
 body{margin:0;background:var(--bg);color:#e8ecf4;font:14px/1.6 system-ui,"Microsoft YaHei",sans-serif}
@@ -10535,6 +10552,7 @@ def events(since: int = 0):
 # 消费既有 SSE /events；前向兼容未来多语种字段(src/dst)，当前回退 legacy zh/en。
 _OVERLAY_HTML = r"""<!doctype html><html lang=zh><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
+<link rel=icon href=/favicon.ico>
 <title>字幕图层 · LingoX Overlay</title>
 <style>
 :root{
@@ -10770,6 +10788,7 @@ def subtitle_overlay():
 
 _GLOSSARY_PAGE = r"""<!doctype html><html lang=zh><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
+<link rel=icon href=/favicon.ico>
 <title>术语锁定表 · 编辑</title>
 <style>
   :root{color-scheme:dark;}
@@ -10926,6 +10945,7 @@ def glossary_page():
 
 _SESSIONS_PAGE = r"""<!doctype html><html lang=zh><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
+<link rel=icon href=/favicon.ico>
 <title>会话转写 · 导出</title>
 <style>
   :root{color-scheme:dark;}
@@ -11061,6 +11081,7 @@ def hub_profiles():
 # 交互提示统一用 data-tip="标题|作用|何时用"(富提示组件渲染);动态元素用 setAttribute。
 _PAGE = r"""<!doctype html><html lang=zh><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
+<link rel=icon href=/favicon.ico>
 <title>通译 LingoX · 实时同传</title>
 <style>
 /* 无界科技 BOUNDLESS 品牌令牌(与 brand.css 同源,内联以保持本页自包含) */

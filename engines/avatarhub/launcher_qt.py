@@ -2859,7 +2859,9 @@ class Launcher(QMainWindow):
 
         threading.Thread(target=work, daemon=True).start()
 
-    # 每类页面的应用窗口初始尺寸（w, h）：控制台宽、对话/手机比例窄、看板/同传适中。
+    # 每类页面的应用窗口尺寸（w, h）：控制台宽、对话/手机比例窄、看板/同传适中。
+    # [2026-07-16] 应用窗口默认最大化打开（用户明确诉求），本表退化为
+    # AVATARHUB_APP_MAXIMIZED=0（关闭最大化）时的预设尺寸。
     _WIN_SIZES = (("/ui", (1440, 900)), ("/phone", (1100, 800)), ("/dashboard", (1280, 820)),
                   ("/ops", (1280, 820)), ("/help", (1100, 860)), ("/delivery", (1180, 820)))
 
@@ -2870,9 +2872,26 @@ class Launcher(QMainWindow):
                 return size
         return (1280, 850)
 
+    @staticmethod
+    def _work_area() -> tuple:
+        """主屏工作区尺寸（去掉任务栏）。查询失败回退 1600×900（保守不越界值）。"""
+        try:
+            import ctypes
+            from ctypes import wintypes
+            rect = wintypes.RECT()
+            if ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0):  # SPI_GETWORKAREA
+                w, h = rect.right - rect.left, rect.bottom - rect.top
+                if w >= 640 and h >= 480:
+                    return w, h
+        except Exception:
+            pass
+        return 1600, 900
+
     def _open_app_window(self, url: str, size: tuple = None):
-        """以无边框「应用窗口」模式打开（Edge/Chrome --app）——无地址栏/标签页、独立任务栏图标，
-        像独立软件窗口而非网页。找不到 Edge/Chrome 时回退系统默认浏览器，保证一定能打开。
+        """以无边框「应用窗口」模式打开（Edge/Chrome --app)——无地址栏/标签页、独立任务栏图标，
+        像独立软件窗口而非网页。默认最大化铺满工作区打开（2026-07-16 用户诉求）；
+        设 AVATARHUB_APP_MAXIMIZED=0 可退回 size 预设尺寸。
+        找不到 Edge/Chrome 时回退系统默认浏览器，保证一定能打开。
         可用环境变量 AVATARHUB_APP_BROWSER 指定浏览器可执行文件。"""
         import shutil
         candidates = [
@@ -2887,7 +2906,12 @@ class Launcher(QMainWindow):
         if exe:
             try:
                 args = [exe, f"--app={url}", "--new-window"]
-                if size:
+                if os.environ.get("AVATARHUB_APP_MAXIMIZED", "1") != "0":
+                    # 部分 Edge/Chrome 版本对 --app 窗口会忽略 --start-maximized，
+                    # 故同时把窗口尺寸/位置钉到主屏工作区：两者必有一个生效，观感都是满屏打开。
+                    w, h = self._work_area()
+                    args += ["--start-maximized", f"--window-size={w},{h}", "--window-position=0,0"]
+                elif size:
                     args.append(f"--window-size={int(size[0])},{int(size[1])}")
                 subprocess.Popen(args)
                 return

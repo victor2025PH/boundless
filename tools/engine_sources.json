@@ -13,7 +13,7 @@
       "upstream_git": "https://github.com/victor2025PH/mfys20260618.git",
       "branch": "2026-06-20-3q30",
       "local_mirror": "D:/faceX/mfys",
-      "last_synced": { "kind": "git-push", "ref": "d30dd0a", "date": "20260716", "note": "5090 收尾成果(d30dd0a)同步入 wujie(22 文件:7新/15改,设计令牌/品牌图标/UI/avatar_hub)。前次 bbf8ce6(126 文件)。交接完成后 5090 应切 wujie 克隆开发、封存旧仓" },
+      "last_synced": { "kind": "git-push", "ref": "c069b5fa", "date": "20260716", "note": "换脸开发完成推送(c069b5fa)，净码同步入 wujie；19 文件(1新/18改)：faceswap_api/avatar_hub/live_interpreter + static/*.html 四视角改版。上一次 bbf8ce6(126文件)" },
       "dev_note": "换脸/换声原在『另一台开发机』开发；2026-07-16 已推送并并入 wujie。今后统一在 wujie/engines/avatarhub 开发；开发机旧 模仿音色 目录应封存。分支非 main，是 2026-06-20-3q30。",
       "exclude_dirs": ["__pycache__", ".git", ".venv", "demo_record", "archive", "publish", "ui_snapshots", "data", "models", "checkpoints", "logs", "clothes", "bg_images", ".pwprofile"],
       "exclude_files": ["*.pyc", "*.png", "*.jpg", "*.jpeg", "*.wav", "*.mp3", "*.mp4", "*.mov", "*.pth", "*.onnx", "*.safetensors", "*.pt", "*.bin", "*.gguf", "*.db", "*.db-shm", "*.db-wal", "config.yaml", "config.local.yaml", "*.key", "*.pem", "*.keystore", "*.jks", "llm_backends.json", "secrets.*.bat", "_devs.json"]

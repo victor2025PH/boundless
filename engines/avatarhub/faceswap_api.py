@@ -1022,6 +1022,22 @@ def _enh_slot(kind):
 app = FastAPI(title="FaceSwap API v2")
 import service_auth                                  # GPU 服务面加固：鉴权 + CORS 收敛
 service_auth.secure(app, name="faceswap")            # 替代原 CORS:* 无鉴权
+
+
+# [2026-07-16 窗口图标] /favicon.ico：Edge/Chrome --app 应用窗口的任务栏/标题栏图标取自
+# 页面 favicon 的位图；此前本服务无任何 favicon → 换脸面板窗口退化成 Edge 图标。
+# 与 Hub/启动台同一母版（static/app-icon-256.png 随仓库分发），/ui 页 head 挂 /favicon.ico。
+_FAVICON_PNG = str(app_config.BASE / "static" / "app-icon-256.png")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon_ico():
+    try:
+        with open(_FAVICON_PNG, "rb") as f:
+            return Response(f.read(), media_type="image/png",
+                            headers={"Cache-Control": "no-cache"})
+    except Exception:
+        return Response(status_code=404)
 # 崩溃匿名上报（P0 遥测，2026-07-13）：未捕获异常→栈签名级脱敏事件（默认开可关，
 # 24h 去重+日限频+离线排队）；模块缺失（老部署机）=完全无感。
 try:
@@ -2373,6 +2389,7 @@ def control_ui():
 <html lang="zh">
 <head>
 <meta charset="UTF-8">
+<link rel="icon" href="/favicon.ico"/>
 <title>FaceSwap 控制面板</title>
 <style>
   *{box-sizing:border-box}

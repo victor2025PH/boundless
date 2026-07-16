@@ -1792,6 +1792,23 @@ STATIC_DIR = Path(rf"{_BASE}\static")
 if STATIC_DIR.exists():
     app.mount("/static", _NoCacheStatic(directory=str(STATIC_DIR)), name="static")
 
+
+# [2026-07-16 窗口图标] /favicon.ico 兜底：Edge/Chrome --app 应用窗口的任务栏/标题栏图标
+# 取自页面 favicon 的位图版本；此前只有 SVG favicon 且 /favicon.ico 404，Chromium 光栅化
+# 不到位图 → 全部窗口退化成 Edge 图标。优先 assets/app.ico（多尺寸，与桌面启动台同一母版），
+# 缺失回退 static/app-icon-256.png；都没有才 404。/favicon 前缀已在鉴权白名单。
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon_ico():
+    ico = Path(rf"{_BASE}\assets\app.ico")
+    if ico.exists():
+        return FileResponse(str(ico), media_type="image/x-icon",
+                            headers={"Cache-Control": "no-cache"})
+    png = STATIC_DIR / "app-icon-256.png"
+    if png.exists():
+        return FileResponse(str(png), media_type="image/png",
+                            headers={"Cache-Control": "no-cache"})
+    return Response(status_code=404)
+
 # ── WebSocket 连接池 (P3-C: set+gather 并发安全) ───────────────────
 ws_clients: set[WebSocket] = set()
 
@@ -30486,6 +30503,8 @@ _HELP_DOCS = {
 }
 _HELP_TMPL = """<!doctype html><html lang=zh><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1"><title>__TITLE__ · 使用教程</title>
+<link rel="icon" type="image/svg+xml" href="/static/icon.svg">
+<link rel="icon" type="image/png" sizes="256x256" href="/static/app-icon-256.png">
 <link rel="stylesheet" href="/static/brand.css">
 <style>
 *{box-sizing:border-box}
