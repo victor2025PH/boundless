@@ -93,10 +93,12 @@ def build_temp_pages(state):
     js_tmp.write_text(src, encoding="utf-8")
 
     html = (STATIC / "ui.html").read_text(encoding="utf-8", errors="ignore")
-    tag = '<script src="/static/hub.js"></script>'
-    if tag not in html:
+    # hub.js 引用带缓存版本参数(?v=...)，用正则匹配任意版本
+    import re as _re
+    m = _re.search(r'<script src="/static/hub\.js[^"]*"></script>', html)
+    if not m:
         raise SystemExit("ui.html 中未找到 hub.js 引用标签，请更新本工具")
-    html = html.replace(tag, f'<script src="/static/_ss_hub_{state}.js"></script>', 1)
+    html = html.replace(m.group(0), f'<script src="/static/_ss_hub_{state}.js"></script>', 1)
     html_tmp = STATIC / f"_ss_ui_{state}.html"
     html_tmp.write_text(html, encoding="utf-8")
     return f"/static/_ss_ui_{state}.html?uivr=1#stream", [js_tmp, html_tmp]

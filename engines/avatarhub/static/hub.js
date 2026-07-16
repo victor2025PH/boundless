@@ -5,27 +5,31 @@ function hub() {
     visitedTabs: ['profiles'],   // 已访问过的 Tab（为内容懒加载预留）
     sidebarCollapsed: (function(){ try{ return localStorage.getItem('hub_sidebar_collapsed')==='1'; }catch(_){ return false; } })(),  // 侧栏折叠态
     cmdShow:false, cmdQuery:'', cmdIndex:0,   // 命令面板（Ctrl+K）
-    // [统一图标·2026-07-16] ic=brand-icons.svg 线性图标(侧栏/横向导航用,经 icx() 渲染);
-    // icon=emoji 仅供命令面板等纯文本消费面沿用,逐步退役。
+    // [统一图标·2026-07-16] ic=brand-icons.svg 线性图标(侧栏/横向导航/命令面板经 icx() 渲染)。
+    // emoji 过渡字段已退役(消费面归零核实于同日)；功能注册表(/api/features)的 icon 仍保留作旧缓存回退。
     tabs: [
       // ── 角色组 ──────────────────────────────────────────
-      {id:'profiles', ic:'users',  icon:'🎭', label:'角色库', group:'角色'},
-      {id:'clone',    ic:'copy',   icon:'🧬', label:'克隆',   group:'角色'},
+      {id:'profiles', ic:'users',  label:'角色库', group:'角色'},
+      {id:'clone',    ic:'copy',   label:'克隆',   group:'角色'},
       // ── 创作组 ──────────────────────────────────────────
-      {id:'voice',    ic:'mic',    icon:'🎙️', label:'语音',   group:'创作'},
-      {id:'sing',     ic:'music',  icon:'🎵', label:'唱歌',   group:'创作'},
-      {id:'batch',    ic:'package',icon:'📦', label:'批量',   group:'创作'},
+      {id:'voice',    ic:'mic',    label:'语音',   group:'创作'},
+      {id:'sing',     ic:'music',  label:'唱歌',   group:'创作'},
+      {id:'batch',    ic:'package',label:'批量',   group:'创作'},
       // ── 运营组 ──────────────────────────────────────────
-      {id:'dashboard',ic:'chart',  icon:'📊', label:'看板',   group:'运营'},
-      {id:'stream',   ic:'signal', icon:'📡', label:'开播',   group:'运营'},
-      {id:'interp',   ic:'globe',  icon:'🌐', label:'同传',   group:'运营'},
-      {id:'history',  ic:'clock',  icon:'📜', label:'历史',   group:'运营'},
-      {id:'selfcheck',ic:'check',  icon:'✅', label:'交付体检', group:'运营'},
-      {id:'logs',     ic:'file',   icon:'📋', label:'日志',   group:'运营'},
-      {id:'settings', ic:'gear',   icon:'⚙️', label:'设置',   group:'运营'},
+      {id:'dashboard',ic:'chart',  label:'看板',   group:'运营'},
+      {id:'stream',   ic:'signal', label:'开播',   group:'运营'},
+      {id:'interp',   ic:'globe',  label:'同传',   group:'运营'},
+      {id:'history',  ic:'clock',  label:'历史',   group:'运营'},
+      {id:'selfcheck',ic:'check',  label:'交付体检', group:'运营'},
+      {id:'logs',     ic:'file',   label:'日志',   group:'运营'},
+      {id:'settings', ic:'gear',   label:'设置',   group:'运营'},
     ],
-    // 线性图标渲染(单一真相=static/brand-icons.svg)：功能位统一单色线性图标,emoji 只留内容位
-    icx(name, cls){ return '<svg class="bd-ic'+(cls?(' '+cls):'')+'"><use href="/static/brand-icons.svg#i-'+name+'"/></svg>'; },
+    // 线性图标渲染(单一真相=static/brand-icons.svg)：功能位统一单色线性图标,emoji 只留内容位。
+    // 尺寸/描边写成 SVG 呈现属性(不只靠 .bd-ic 类)：即使 brand.css 被旧缓存粘住,图标也只是 15px 小图,
+    // 绝不再出现"无样式 SVG 默认 300×150 黑块爆版"(2026-07-16 实锤事故)。
+    icx(name, cls){ return '<svg class="bd-ic'+(cls?(' '+cls):'')+'" width="15" height="15" fill="none" stroke="currentColor"'
+      +' stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'
+      +'<use href="/static/brand-icons.svg?v=20260716b#i-'+name+'"/></svg>'; },
     demoAlertsOpen: false,   // 演示模式下告警横幅收敛为顶栏小胶囊,点开临时展开
     tabGroups: ['角色','创作','运营'],
     features: [],   // P1: 功能注册表(/api/features)的跨页入口，喂命令面板(Ctrl+K) + 全局可达
@@ -6787,13 +6791,15 @@ function hub() {
       } catch (_) { /* 注册表拉取失败不影响面板其余项 */ }
     },
     get cmdItems() {
+      // [图标统一·2026-07-16] 面板项图标改线性图标(icx)，与侧栏/首页/桌面启动台同一图标库；
+      // 注册表旧缓存无 ic 字段时回退 emoji（x-html 渲染两者皆可）。
       const items = [];
-      (this.tabs||[]).forEach(t => items.push({icon:t.icon, label:t.label, hint:'切换 · '+t.group, type:'tab', payload:t.id}));
-      items.push({icon:'🚀', label:'三步上手向导', hint:'动作', type:'act', payload:'onboard'});
-      items.push({icon:'🎬', label:(this.demoMode?'退出演示模式':'开启演示模式'), hint:'动作', type:'act', payload:'demo'});
-      items.push({icon:'🏠', label:'首页 · 全部功能', hint:'前往', type:'link', payload:'/'});
-      (this.features||[]).forEach(f => items.push({icon:f.icon||'🔗', label:f.name, hint:'前往 · '+(f.line||''), type:'link', payload:f.href}));
-      (this.profiles||[]).forEach(p => items.push({icon:'🎭', label:p.name, hint:'角色 · 打开对话', type:'profile', payload:p.name}));
+      (this.tabs||[]).forEach(t => items.push({icon:this.icx(t.ic), label:t.label, hint:'切换 · '+t.group, type:'tab', payload:t.id}));
+      items.push({icon:this.icx('zap'), label:'三步上手向导', hint:'动作', type:'act', payload:'onboard'});
+      items.push({icon:this.icx('demo'), label:(this.demoMode?'退出演示模式':'开启演示模式'), hint:'动作', type:'act', payload:'demo'});
+      items.push({icon:this.icx('home'), label:'首页 · 全部功能', hint:'前往', type:'link', payload:'/'});
+      (this.features||[]).forEach(f => items.push({icon:(f.ic?this.icx(f.ic):(f.icon||'🔗')), label:f.name, hint:'前往 · '+(f.line||''), type:'link', payload:f.href}));
+      (this.profiles||[]).forEach(p => items.push({icon:this.icx('users'), label:p.name, hint:'角色 · 打开对话', type:'profile', payload:p.name}));
       return items;
     },
     get cmdResults() {

@@ -5,7 +5,11 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>BOUNDLESS 控制台 · 无界科技</title>
 <link rel="icon" type="image/svg+xml" href="/static/icon.svg"/>
-<link rel="stylesheet" href="/static/brand.css"/>
+<link rel="manifest" href="/static/manifest_console.json"/>
+<link rel="apple-touch-icon" href="/static/app-icon-256.png"/>
+<!-- 关键皮肤/脚本带版本参数：改版当天立刻击穿浏览器旧缓存(长期由 /static 的 no-cache 头保鲜,
+     每次视觉大改 bump 一次 v 即可) -->
+<link rel="stylesheet" href="/static/brand.css?v=20260716a"/>
 <script src="/static/brand.js"></script>
 <script src="/static/_clientlog.js"></script>
 <script src="/static/_authtoken.js"></script>
@@ -188,12 +192,12 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
             class="hidden sm:inline-block text-[13px] px-2 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition">⌨</button>
     <!-- 官网 / 客服直达：默认无界官方，白标时自动跟随 brand.website / contact 里的 t.me 链接（见页尾接线脚本） -->
     <a id="bdSiteLink" href="https://ai26.sbs" target="_blank" rel="noopener" title="官网 · 无界科技 BOUNDLESS"
-       class="hidden sm:inline-flex items-center gap-1 text-[13px] px-2 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition" style="text-decoration:none"><svg class="bd-ic"><use href="/static/brand-icons.svg#i-globe"/></svg> 官网</a>
+       class="hidden sm:inline-flex items-center gap-1 text-[13px] px-2 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition" style="text-decoration:none"><svg class="bd-ic" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-globe"/></svg> 官网</a>
     <a id="bdSupportLink" href="https://t.me/hykjz" target="_blank" rel="noopener" title="联系客服（Telegram 交流群）· 官方客服头像带「客服」徽标，谨防假冒"
-       class="hidden sm:inline-flex items-center gap-1 text-[13px] px-2 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition" style="text-decoration:none"><svg class="bd-ic"><use href="/static/brand-icons.svg#i-headphones"/></svg> 客服</a>
+       class="hidden sm:inline-flex items-center gap-1 text-[13px] px-2 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition" style="text-decoration:none"><svg class="bd-ic" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-headphones"/></svg> 客服</a>
     <!-- 品牌定制 / 白标（定制交付：主色 + 产品名 + 图标，全站同源，可导出导入）-->
     <div class="relative group">
-      <button class="text-[13px] px-2 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition focus-visible:ring-2 focus-visible:ring-hub-blue/50 inline-flex items-center" title="品牌定制 / 白标"><svg class="bd-ic"><use href="/static/brand-icons.svg#i-palette"/></svg></button>
+      <button class="text-[13px] px-2 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition focus-visible:ring-2 focus-visible:ring-hub-blue/50 inline-flex items-center" title="品牌定制 / 白标"><svg class="bd-ic" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-palette"/></svg></button>
       <div class="absolute right-0 top-full mt-1 z-50 hidden group-hover:block group-focus-within:block w-64 p-3 rounded-lg bg-hub-card border border-hub-border shadow-xl text-left">
         <div class="text-[13px] font-semibold text-hub-text mb-1.5">品牌主色</div>
         <div class="flex flex-wrap gap-1.5 mb-2">
@@ -240,21 +244,21 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
     <!-- 产品闭环：后台 ↔ 对话 ↔ 看板 -->
     <a href="/phone" target="_blank"
        class="text-[13px] font-semibold px-2.5 py-1 rounded-full bg-hub-blue/20 text-hub-blue hover:bg-hub-blue hover:text-white transition border border-hub-blue/40 inline-flex items-center gap-1">
-      <svg class="bd-ic"><use href="/static/brand-icons.svg#i-chat"/></svg> 对话
+      <svg class="bd-ic" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-chat"/></svg> 对话
     </a>
     <a href="/dashboard" target="_blank"
        class="text-[13px] px-2.5 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition inline-flex items-center gap-1">
-      <svg class="bd-ic"><use href="/static/brand-icons.svg#i-chart"/></svg> 看板
+      <svg class="bd-ic" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-chart"/></svg> 看板
     </a>
     <a href="/delivery" target="_blank"
        class="text-[13px] px-2.5 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition hidden sm:inline-flex items-center gap-1"
        title="交付自检：授权/合规/页面/服务/白标 一键验收">
-      <svg class="bd-ic"><use href="/static/brand-icons.svg#i-flask"/></svg> 自检
+      <svg class="bd-ic" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-flask"/></svg> 自检
     </a>
     <a href="/help" target="_blank"
        class="text-[13px] px-2.5 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition inline-flex items-center gap-1"
        title="图文教程：安装 / 使用 / 手机同传扫码授权">
-      <svg class="bd-ic"><use href="/static/brand-icons.svg#i-book"/></svg> 教程
+      <svg class="bd-ic" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-book"/></svg> 教程
     </a>
     <!-- 系统状态：单个汇总徽标，悬停看核心/可选服务明细（取代一长排服务徽标）-->
     <div class="relative group ml-0.5">
@@ -334,7 +338,7 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
             class="text-[13px] font-semibold px-2.5 py-1 rounded-full border transition ml-0.5 flex items-center gap-1"
             :class="demoMode ? 'border-hub-green/60 text-hub-green bg-green-900/20' : 'border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40'">
       <span x-show="demoMode" class="w-1.5 h-1.5 rounded-full bg-hub-green"></span>
-      <svg x-show="!demoMode" class="bd-ic"><use href="/static/brand-icons.svg#i-demo"/></svg>
+      <svg x-show="!demoMode" class="bd-ic"><use href="/static/brand-icons.svg?v=20260716b#i-demo"/></svg>
       <span class="hidden sm:inline" x-text="demoMode?'演示中':'演示'"></span>
     </button>
     <!-- [降噪·2026-07-16] 演示模式下用户面告警横幅收敛为此小胶囊：客户看不到满幅橙条,
@@ -351,7 +355,7 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
     <div x-show="opsAlerts.length && !demoMode" class="relative group ml-0.5">
       <span tabindex="0" role="button" aria-label="运维与安全告警"
             class="text-[13px] font-semibold px-2 py-1 rounded-full border border-orange-500/50 text-orange-400 bg-orange-900/20 cursor-default flex items-center gap-1 focus-visible:ring-2 focus-visible:ring-orange-400/50 outline-none">
-        <svg class="bd-ic"><use href="/static/brand-icons.svg#i-tools"/></svg> <span x-text="'运维 '+opsAlerts.length"></span>
+        <svg class="bd-ic" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-tools"/></svg> <span x-text="'运维 '+opsAlerts.length"></span>
       </span>
       <div class="absolute right-0 top-full mt-1 z-50 hidden group-hover:block group-focus-within:block w-72 p-2.5 rounded-lg bg-hub-card border border-orange-700/40 text-[13px] leading-relaxed shadow-xl">
         <div class="font-semibold text-orange-400 mb-1">🔧 运维 / 安全告警</div>
@@ -7957,7 +7961,7 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
         <button @click="cmdRun(it)" @mouseenter="cmdIndex=i"
                 :class="cmdIndex===i ? 'bg-hub-blue/15 text-hub-text' : 'text-hub-muted hover:bg-hub-border/30'"
                 class="w-full flex items-center gap-3 px-4 py-2.5 text-left transition">
-          <span class="text-base leading-none" x-text="it.icon"></span>
+          <span class="text-base leading-none flex items-center" x-html="it.icon"></span>
           <span class="font-semibold text-sm" x-text="it.label"></span>
           <span class="ml-auto text-[13px] text-hub-muted/70" x-text="it.hint"></span>
         </button>
@@ -8030,7 +8034,7 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
 
 <!-- ═══ Alpine.js ═══ -->
 <script src="/static/canvas_brand.js"></script>
-<script src="/static/hub.js"></script>
+<script src="/static/hub.js?v=20260716a"></script>
 <script>
 /* 授权徽章 + 续费卡片：独立于 Alpine，拉 /api/license/status（公开只读），每 60s 刷新。
    档位/状态中文标签由后端给（edition_label/status_label，单一真相）；点击徽章展开卡片，

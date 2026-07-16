@@ -9,7 +9,7 @@ launcher_qt.py — 桌面启动器（PySide6 品牌化界面）
 import os, sys, threading, json, time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QObject, Signal, QTimer, QLockFile, QStandardPaths
+from PySide6.QtCore import Qt, QObject, Signal, QTimer, QLockFile, QStandardPaths, QSize, QByteArray
 from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QPainter
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -82,7 +82,7 @@ def _init_ui_scale(app):
 # 应用版本（发版时与 installer/AvatarHub.iss 的 AppVersion、assets/version_info.txt 三处同步）。
 # footer「版本」显示此值；manifest.json 的 version 是【组件包清单】版本（首启向导/组件升级用），
 # 两者是不同流水线——1.0.6 前 footer 误显组件版本(v1.0.1)，客户以为装的是旧程序。
-APP_VERSION = "1.0.12"
+APP_VERSION = "1.1.0"
 
 # ── 产品内自更新（1.0.8 起）─────────────────────────────────────────────
 # 数据源 = 下载站 release_manifest.json（与官网下载页同一真相）。安全三闸：
@@ -364,6 +364,73 @@ CAP_ACTIONS = {
     "听懂客户提问": ("▶ 体验对话", "/phone"),
     "直播/客服接入": ("📡 去开播", "/ui#stream"),
 }
+
+# ── 工作台（全功能入口门户）────────────────────────────────────────────────
+# 单一真相 = Hub GET /api/features（与网页首页/命令面板同源，Hub 加功能桌面自动长出入口）；
+# Hub 离线时用下面的内置兜底（点击仍会先拉起核心链路再开窗，不会点了没反应）。
+_WB_FALLBACK = [
+    {"id": "phone", "line": "ChatX 对话", "name": "实时对话", "desc": "免提语音对话数字人", "href": "/phone"},
+    {"id": "dashboard", "line": "运营", "name": "数据看板", "desc": "业务与产出数据总览", "href": "/dashboard"},
+    {"id": "help", "line": "运营", "name": "使用教程", "desc": "安装 / 使用图文教程", "href": "/help"},
+    {"id": "settings", "line": "运营", "name": "设置·白标", "desc": "品牌主色 / 参数配置", "href": "/ui#settings"},
+]
+# 旧版 Hub 注册表无 ic 字段时按 id 兜底映射（图标名 = static/brand-icons.svg 的 symbol）
+_WB_IC_BY_ID = {
+    "profiles": "users", "clone": "copy", "voice": "mic", "sing": "music", "batch": "package",
+    "phone": "chat", "converse": "flask", "stream": "signal", "interp": "globe",
+    "dashboard": "chart", "ops": "probe", "history": "clock", "delivery": "check",
+    "logs": "file", "settings": "gear", "help": "book", "verify": "shield", "ask": "help", "setup": "zap",
+}
+# 行排布：产品线分组压缩为 5 行（短线合并同行），未知新产品线自动补行
+_WB_ROW_PLAN = [["常用"], ["VoiceX 音色"], ["ChatX 对话", "LiveX 直播"], ["LingoX 同传", "合规·可信"], ["运营"]]
+
+_SPRITE_SYMBOLS = None
+
+
+def _sprite_symbol(name: str):
+    """解析 static/brand-icons.svg（全站图标单一真相），取 symbol 的 viewBox+路径体。一次解析进程内缓存。"""
+    global _SPRITE_SYMBOLS
+    if _SPRITE_SYMBOLS is None:
+        _SPRITE_SYMBOLS = {}
+        try:
+            import re as _re
+            raw = (app_config.BASE / "static" / "brand-icons.svg").read_text(encoding="utf-8")
+            for m in _re.finditer(r'<symbol id="i-([a-z0-9-]+)" viewBox="([^"]+)">(.*?)</symbol>', raw, _re.S):
+                _SPRITE_SYMBOLS[m.group(1)] = (m.group(2), m.group(3))
+        except Exception:
+            _SPRITE_SYMBOLS = {}
+    return _SPRITE_SYMBOLS.get(name)
+
+
+def _sprite_icon(name: str, color: str, px: int = 16, dot: str = None) -> QIcon:
+    """把图标库 symbol 渲染成 QIcon（单色线性，颜色可指定）——桌面端与网页端图标像素级同源。
+    dot: 可选状态点色（右下角小圆，工作台入口的服务就绪指示：绿=在线 / 灰=未启动）。"""
+    got = _sprite_symbol(name)
+    if not got:
+        return QIcon()
+    vb, body = got
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{vb}" fill="none" stroke="{color}" '
+           f'stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">{body}</svg>')
+    try:
+        from PySide6.QtSvg import QSvgRenderer
+        r = QSvgRenderer(QByteArray(svg.encode("utf-8")))
+        pm = QPixmap(px, px)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        r.render(p)
+        if dot:
+            rad_ = max(2.4, px * 0.19)
+            cx, cy = px - rad_ - 0.5, px - rad_ - 0.5
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(theme_tokens()["SURF1"]))          # 底环：与卡片同色,把点从线条里"抠"出来
+            p.drawEllipse(int(cx - rad_ - 1.2), int(cy - rad_ - 1.2), int((rad_ + 1.2) * 2), int((rad_ + 1.2) * 2))
+            p.setBrush(QColor(dot))
+            p.drawEllipse(int(cx - rad_), int(cy - rad_), int(rad_ * 2), int(rad_ * 2))
+        p.end()
+        return QIcon(pm)
+    except Exception:
+        return QIcon()
 
 
 class ClickCard(QFrame):
@@ -856,6 +923,7 @@ class Bridge(QObject):
     profiles_ready = Signal(int)   # Hub 可达时回报角色数量（用于「无角色」空态引导）
     device_ready = Signal(object)  # D-5 设备状态（麦/摄像头/CABLE 红绿，来自 /api/device/checkup?quick=1）
     update_ready = Signal(object)  # 产品内自更新：检查到新版本（{}=已最新，仅手动检查时提示）
+    features_ready = Signal(object)  # 工作台功能注册表（/api/features；None=拉取失败稍后重试）
 
 
 class Launcher(QMainWindow):
@@ -957,12 +1025,13 @@ class Launcher(QMainWindow):
         # ── 商用 Hero：品牌主张 + 信任标签 + 全局状态 ──
         hero = QFrame()
         hero.setObjectName("Hero")
-        hero.setMinimumHeight(S(160))   # 顶住高度，避免被下方卡片挤压导致标题/标签裁切
+        # [门户改版] 薄化：品牌区让位给下方「工作台」，高度 160→128、留白收紧（信息不减，只更紧凑）
+        hero.setMinimumHeight(S(128))
         hero.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self._shadow(hero, blur=34, accent=True)
         hero_l = QVBoxLayout(hero)
-        hero_l.setContentsMargins(22, 18, 22, 16)
-        hero_l.setSpacing(10)
+        hero_l.setContentsMargins(20, 12, 20, 10)
+        hero_l.setSpacing(6)
         head = QHBoxLayout()
         head.setSpacing(14)
         # 真实品牌 logo 图片优先（data/brand_logo.* 或 brand.logo_image），缺失时回退 emoji 文案
@@ -976,7 +1045,7 @@ class Launcher(QMainWindow):
         else:
             name_text = f"{self.brand['logo']}  {self.brand['name']}"
         titles = QVBoxLayout()
-        titles.setSpacing(5)
+        titles.setSpacing(3)
         t = QLabel(name_text)
         t.setObjectName("Brand")
         t.setFont(tfont("display", QFont.Bold))
@@ -1030,39 +1099,50 @@ class Launcher(QMainWindow):
         self._sync_theme_btn()
         root.addWidget(hero)
 
-        # ── 能力卡片（4 张，把裸服务聚合成能力；点击看引擎明细）──
-        # 标题与卡片包成一个区块（间距 sm，与上方更大的 root 间距 md 形成「分组」节奏）
+        # ── 驾驶舱状态灯（2026-07-16 门户改版）：四张能力大卡收敛为一行状态 chips。
+        # 「动作」职责已整体归工作台（角色库/克隆/对话/开播都在下方网格），能力区只剩
+        # 「状态」职责——点 chip 看引擎明细（在线/延迟/重启）。首屏省出约 100px 给工作台。
+        # cap_refs 契约 [(dot, hint, present)] 原样保留：_apply_status 聚合刷新 / _pulse 黄点脉冲零改动。
         cap_section = QWidget()
         csl = QVBoxLayout(cap_section)
         csl.setContentsMargins(0, 0, 0, 0)
-        csl.setSpacing(sp("sm"))
-        csl.addWidget(self._section_label("核心能力"))
-        # 用网格承载能力卡：宽屏 4 列，窄屏自动回流为 2×2 / 1 列，避免文字挤压或裁切
-        self.caps_grid = QGridLayout()
-        self.caps_grid.setSpacing(sp("md"))
+        csl.setSpacing(sp("xs"))
+        csl.addWidget(self._section_label("核心能力 · 点状态灯看引擎明细"))
+        caprow = QHBoxLayout()
+        caprow.setSpacing(sp("sm"))
         self.cap_refs = []   # [(dot_label, hint_label, members)]
-        self.cap_cards = []
-        self.cap_eng_btns = []   # 右上 ⚙ 进阶入口（仅开发者模式可见）
+        self.cap_chips = []
+        self.cap_eng_btns = []   # 兼容位：⚙ 已并入 chip 点击（保留空列表，_apply_mode 零改动）
         for idx, (icon, name, members) in enumerate(PILLARS):
             present = [m for m in members if m in app_config.SERVICES]
-            card, dot, hint, eng_btn = self._cap_card(icon, name, DOMAIN_COLORS.get(name))
-            label, target = CAP_ACTIONS.get(name, ("打开", "/ui"))
-            # 单一主操作：整卡点击 = 底部主按钮 = 同一直达；右上 ⚙ 仅作进阶（引擎明细/重启），开发者模式才显。
-            # 一句话卖点从卡面移到 tooltip，卡面更清爽，说明仍可 hover 查看。
+            dcolor = DOMAIN_COLORS.get(name) or self.brand["color"]
+            chip = ClickCard(dcolor)
+            chip.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+            hl = QHBoxLayout(chip)
+            hl.setContentsMargins(sp("md"), sp("sm"), sp("md"), sp("sm"))
+            hl.setSpacing(7)
+            dot = QLabel("●")
+            dot.setStyleSheet(f"color: {C_DOWN.name()};")
+            dot.setFont(uifont(10))
+            nm = QLabel(name)
+            nm.setObjectName("CapName")
+            nm.setFont(uifont(11, QFont.Bold))
+            hint = QLabel("检测中…")
+            hint.setObjectName("CapHint")
+            hint.setFont(uifont(10))
+            hl.addWidget(dot)
+            hl.addWidget(nm)
+            hl.addWidget(hint)
             _tag = CAP_TAGLINES.get(name, "")
-            card.setToolTip((f"{name}：{_tag}\n" if _tag else f"{name}\n")
-                            + f"点击直达「{label.lstrip('➕▶🎭📡 ')}」　·　"
-                            f"状态点：绿=就绪 / 黄=加载中 / 灰=未启动（⚙ 看引擎明细）")
-            card.setAccessibleName(f"{name}（能力卡，回车直达使用页）")
-            card.clicked.connect(lambda t=target: self._open_hub_page(t))
-            eng_btn.clicked.connect(lambda i=idx: self._open_capability(i))
-            self._shadow(card)
+            chip.setToolTip((f"{name}：{_tag}\n" if _tag else f"{name}\n")
+                            + "状态点：绿=就绪 / 黄=加载中 / 灰=未启动　·　点击查看引擎明细（在线/延迟/重启）")
+            chip.setAccessibleName(f"{name} 状态灯（回车看引擎明细）")
+            chip.clicked.connect(lambda i=idx: self._open_capability(i))
+            caprow.addWidget(chip)
             self.cap_refs.append((dot, hint, present))
-            self.cap_cards.append(card)
-            self.cap_eng_btns.append(eng_btn)
-        self._cap_cols = 0
-        self._reflow_caps(4)
-        csl.addLayout(self.caps_grid)
+            self.cap_chips.append(chip)
+        caprow.addStretch(1)
+        csl.addLayout(caprow)
         root.addWidget(cap_section)
 
         # ── 资源卡 + 主 CTA ──
@@ -1126,6 +1206,24 @@ class Launcher(QMainWindow):
         midrow.addWidget(cta, 1)
         root.addLayout(midrow)
 
+        # ── 工作台（全功能入口门户）：与网页首页共用 /api/features 单一真相，全部以
+        #    独立应用窗口打开（无地址栏，像桌面软件）。Hub 离线时先渲染内置兜底，上线后自动补全。
+        #    位置紧跟驾驶舱（Hero/能力/CTA）之下——入口是高频区，排在告警与页脚之前。──
+        self.work_section = QWidget()
+        wsl = QVBoxLayout(self.work_section)
+        wsl.setContentsMargins(0, 0, 0, 0)
+        wsl.setSpacing(sp("sm"))
+        wsl.addWidget(self._section_label("工作台 · 全部功能（独立窗口打开，与网页首页同一张功能地图）"))
+        self.work_rows = QVBoxLayout()
+        self.work_rows.setSpacing(sp("xs"))
+        wsl.addLayout(self.work_rows)
+        self._features_loaded = False
+        self._wb_btns = []           # [(btn, ic_name)]，主题切换时重染图标
+        self._render_workbench(list(_WB_FALLBACK))
+        root.addWidget(self.work_section)
+        self.bridge.features_ready.connect(self._apply_features)
+        QTimer.singleShot(900, self._load_features_async)
+
         # ── 友好错误卡（默认隐藏；核心服务失败时出现，给出重试 / 看日志，免去翻日志）──
         self.error_card = self._error_card()
         self._shadow(self.error_card)
@@ -1135,29 +1233,6 @@ class Launcher(QMainWindow):
         self.val_card = self._value_panel()
         self._shadow(self.val_card)
         root.addWidget(self.val_card)
-
-        # ── 常用功能快捷栏：把高频入口图标按钮化，客户/开发者模式都可见，免去翻菜单 ──
-        quick = QHBoxLayout()
-        quick.setSpacing(sp("md"))
-        ql = QLabel("常用功能")
-        ql.setObjectName("Sub")
-        ql.setFont(uifont(11, QFont.Bold))
-        quick.addWidget(ql)
-        quick.addSpacing(4)
-        # 按钮分级：控制台=品牌蓝（主入口）、实时同传=青、直播同传=琥珀，
-        # 用左侧色条 + 文字着色区分用途，背景仍统一中性，不喧宾夺主。
-        self.btn_console = self._btn("🖥  打开控制台", "toolBrand", self.on_open_ui,
-                                     "打开网页控制台 /ui（完整管理与创作）")
-        self.btn_faceswap = self._btn("👤  换脸", "toolBrand", self.on_open_faceswap,
-                                      "打开换脸面板（扩展能力，未启动会自动拉起 faceswap 服务）")
-        self.btn_interp = self._btn("🌐  实时同传", "toolAsr", self.on_open_interp,
-                                    "打开实时同传(通译 LingoX)，未启动会自动拉起")
-        self.btn_interp_live = self._btn("📡  直播同传", "toolStream", self.on_open_interp_live,
-                                         "一键拉起直播同传链路并打开")
-        for b in (self.btn_console, self.btn_faceswap, self.btn_interp, self.btn_interp_live):
-            quick.addWidget(b)
-        quick.addStretch(1)
-        root.addLayout(quick)
 
         # ── 高级（可折叠）：服务明细 + 进阶操作 ──
         self.btn_adv = self._btn("▸  高级运维：服务明细 / 启动全部 / 重启", "link", self._toggle_advanced,
@@ -1240,9 +1315,7 @@ class Launcher(QMainWindow):
         self.dev_widgets = [self.res_card, self.btn_adv, self.adv, self.logbar_widget, self.logbox,
                             self.btn_more, self.btn_stop]
         self.customer_widgets = [self.customer_card]
-        self._quick_btns = [self.btn_console, self.btn_interp, self.btn_interp_live]
-        self._action_btns = [self.btn_boot, self.btn_demo, self.btn_all, self.btn_restart,
-                             self.btn_stop] + self._quick_btns
+        self._refresh_action_btns()
         self._apply_mode()
         self._log(f"欢迎使用 {self.brand['name']}。默认首页只显示商用状态；详细启动日志可按需展开。")
         QTimer.singleShot(150, self._load_meta_async)
@@ -1257,6 +1330,148 @@ class Launcher(QMainWindow):
         lb.setFont(tfont("caption", QFont.Bold))
         lb.setContentsMargins(4, 2, 0, 0)
         return lb
+
+    # ── 工作台（全功能入口门户）───────────────────────────────────────────
+    def _load_features_async(self):
+        """后台拉 Hub 功能注册表（与网页首页同源）。失败回 None，主线程按需重试。"""
+        def work():
+            data = None
+            try:
+                from urllib.request import urlopen
+                import json as _json
+                base = app_config.svc_url("hub")
+                with urlopen(base + "/api/features", timeout=2.5) as r:
+                    j = _json.loads(r.read().decode("utf-8"))
+                if j.get("ok") and isinstance(j.get("features"), list):
+                    data = j["features"]
+            except Exception:
+                data = None
+            self.bridge.features_ready.emit(data)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_features(self, feats):
+        """功能注册表到达：重建工作台网格；拉取失败且尚未成功过 → 15s 后静默重试（Hub 可能还没起）。"""
+        if feats:
+            self._features_loaded = True
+            self._render_workbench(list(feats))
+        elif not self._features_loaded:
+            QTimer.singleShot(15000, self._load_features_async)
+
+    @staticmethod
+    def _clear_layout(lay):
+        while lay.count():
+            it = lay.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.deleteLater()
+            elif it.layout() is not None:
+                Launcher._clear_layout(it.layout())
+
+    def _wb_button(self, name, tip, ic, slot, kind="ghost", svc=""):
+        b = self._btn(f" {name}", kind, slot, tip)
+        b.setFont(uifont(11))
+        ico = _sprite_icon(ic or "monitor", theme_tokens()["TXT2"], S(15))
+        if not ico.isNull():
+            b.setIcon(ico)
+            b.setIconSize(QSize(S(15), S(15)))
+        b.setProperty("_wb_dot", "")          # 就绪点状态缓存（避免每 2s 轮询重复重绘图标）
+        self._wb_btns.append((b, ic or "monitor", svc or ""))
+        return b
+
+    def _render_workbench(self, feats: list):
+        """按产品线分组渲染工作台入口（压缩为 ~5 行）。所有内部页面 → 独立应用窗口 +
+        就绪保障（未起先拉核心链路）；换脸面板/直播同传等本地编排入口固定注入。"""
+        self._wb_btns = []
+        self._clear_layout(self.work_rows)
+        by_line = {}
+        order = []
+        for f in feats:
+            ln = f.get("line") or "其他"
+            if ln not in by_line:
+                by_line[ln] = []
+                order.append(ln)
+            by_line[ln].append(f)
+        # 「常用」合成行：主入口 控制台 + 本地编排入口（不在注册表里的桌面专属能力）
+        self.btn_console = self._wb_button("打开控制台", "打开网页控制台 /ui（完整管理与创作），独立窗口",
+                                           "monitor", self.on_open_ui, kind="toolBrand")
+        self.btn_faceswap = self._wb_button("换脸面板", "打开换脸面板（扩展能力，未启动会自动拉起 faceswap 服务）",
+                                            "users", self.on_open_faceswap)
+        self.btn_interp_live = self._wb_button("直播同传", "一键拉起直播同传链路并打开（数字人开口说外语）",
+                                               "live", self.on_open_interp_live)
+        common = [self.btn_console, self.btn_faceswap, self.btn_interp_live]
+        self.btn_interp = None
+        rows = [ln for grp in _WB_ROW_PLAN for ln in grp]
+        plan = list(_WB_ROW_PLAN) + [[ln] for ln in order if ln not in rows]   # 未知产品线自动补行
+        for grp in plan:
+            row = QHBoxLayout()
+            row.setSpacing(sp("sm"))
+            has = False
+            for ln in grp:
+                items = ([{"_common": True}] if ln == "常用" else by_line.get(ln, []))
+                if not items:
+                    continue
+                lab = QLabel(ln)
+                lab.setObjectName("CapEng")
+                lab.setFont(uifont(10, QFont.Bold))
+                lab.setMinimumWidth(S(88))
+                row.addWidget(lab)
+                if ln == "常用":
+                    for b in common:
+                        row.addWidget(b)
+                    has = True
+                    continue
+                for f in items:
+                    name = f.get("name") or f.get("id") or "?"
+                    tip = (f.get("desc") or "") + ("（专业版）" if f.get("edition") == "pro" else "")
+                    ic = f.get("ic") or _WB_IC_BY_ID.get(f.get("id") or "", "")
+                    fid, href = f.get("id"), f.get("href") or "/ui"
+                    svc = f.get("service") or ""
+                    if fid == "interp":   # 同传开独立页(7900)更符合"一个功能一扇窗"
+                        b = self._wb_button(name, "打开实时同传(通译 LingoX) 独立窗口，未启动会自动拉起",
+                                            ic, self.on_open_interp, svc="interpreter")
+                        self.btn_interp = b
+                    else:
+                        b = self._wb_button(name, tip or name, ic,
+                                            lambda _=False, p=href: self._open_hub_page(p), svc=svc)
+                    row.addWidget(b)
+                row.addSpacing(sp("md"))
+                has = True
+            if has:
+                row.addStretch(1)
+                self.work_rows.addLayout(row)
+        if self.btn_interp is None:   # 注册表没有同传条目（旧版 Hub）→ 兜底放进常用行
+            self.btn_interp = self._wb_button("实时同传", "打开实时同传(通译 LingoX)，未启动会自动拉起",
+                                              "globe", self.on_open_interp)
+            common_row = self.work_rows.itemAt(0)
+            if common_row is not None and common_row.layout() is not None:
+                common_row.layout().insertWidget(common_row.layout().count() - 1, self.btn_interp)
+        self._refresh_action_btns()
+
+    def _update_wb_dots(self, status: dict):
+        """工作台就绪点：注册表带 service 字段的入口，按服务健康态在图标右下角点亮
+        绿(在线)/灰(未启动)小点。带状态缓存——没变化不重绘（每 2s 轮询零开销）。"""
+        for b, ic, svc in getattr(self, "_wb_btns", []):
+            if not svc or svc not in status:
+                continue
+            state = "ok" if status[svc].get("healthy") else "down"
+            try:
+                if str(b.property("_wb_dot") or "") == state:
+                    continue
+                b.setProperty("_wb_dot", state)
+                ico = _sprite_icon(ic, theme_tokens()["TXT2"], S(15),
+                                   dot=(STATE_HEX["ok"] if state == "ok" else STATE_HEX["down"]))
+                if not ico.isNull():
+                    b.setIcon(ico)
+            except RuntimeError:
+                pass
+
+    def _refresh_action_btns(self):
+        """工作台重建后刷新「忙碌期需禁用」的按钮清单（旧引用已随重建销毁）。"""
+        self._quick_btns = [b for b in (getattr(self, "btn_console", None),
+                                        getattr(self, "btn_interp", None),
+                                        getattr(self, "btn_interp_live", None)) if b is not None]
+        base = [getattr(self, n, None) for n in ("btn_boot", "btn_demo", "btn_all", "btn_restart", "btn_stop")]
+        self._action_btns = [b for b in base if b is not None] + self._quick_btns
 
     def _style_trust_chip(self, chip: QLabel):
         """Hero 信任标签的主题化样式（白天/夜间底色与文字不同）。"""
@@ -1279,11 +1494,21 @@ class Launcher(QMainWindow):
         self._log("已切换为%s主题。" % ("夜间" if ui._CURRENT_THEME == "dark" else "白天"))
 
     def _apply_theme(self):
-        """重新应用主题：刷新全局 QSS + 所有「内联样式」控件（信任条/头像/状态色）。"""
+        """重新应用主题：刷新全局 QSS + 所有「内联样式」控件（信任条/头像/状态色/工作台图标）。"""
         self.setStyleSheet(build_style(self.brand["color"]))
         for chip in getattr(self, "trust_chips", []):
             try:
                 self._style_trust_chip(chip)
+            except RuntimeError:
+                pass
+        # 工作台线性图标随主题重染（暗色浅灰/亮色深灰），与网页 currentColor 行为一致
+        for b, ic, _svc in getattr(self, "_wb_btns", []):
+            try:
+                dot = str(b.property("_wb_dot") or "") or None
+                ico = _sprite_icon(ic, theme_tokens()["TXT2"], S(15),
+                                   dot=(STATE_HEX["ok"] if dot == "ok" else STATE_HEX["down"] if dot == "down" else None))
+                if not ico.isNull():
+                    b.setIcon(ico)
             except RuntimeError:
                 pass
         if not getattr(self, "_avatar_loaded", False):
@@ -1353,98 +1578,8 @@ class Launcher(QMainWindow):
         eff.setColor(c)
         w.setGraphicsEffect(eff)
 
-    def _cap_card(self, icon: str, name: str, dcolor: str = None):
-        dcolor = dcolor or self.brand["color"]
-        label, _target = CAP_ACTIONS.get(name, ("打开", "/ui"))
-        # 悬停/焦点边按功能域色，强化「这张卡属于哪类能力」的寻路感
-        card = ClickCard(dcolor)
-        # 两行紧凑卡：① 图标 + 能力名　② 状态点 + 提示 + 主操作。
-        # 竖向 Fixed = 高度贴合内容（sizeHint），既不被上限截断（旧版「图标压字」根因），
-        # 也不会被网格拉伸出中间大片留白；四卡结构相同 → 高度天然一致。
-        card.setMinimumHeight(S(88))
-        card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        # 外层横向：左侧 4px 域色条（常驻区分） + 内容
-        outer = QHBoxLayout(card)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-        bar = QFrame()
-        bar.setFixedWidth(4)
-        bar.setStyleSheet(
-            f"background:{dcolor}; border-top-left-radius:18px; border-bottom-left-radius:18px;"
-        )
-        outer.addWidget(bar)
-        body = QWidget()
-        body.setStyleSheet("background:transparent;")
-        v = QVBoxLayout(body)
-        v.setContentsMargins(14, 12, 14, 12)
-        v.setSpacing(10)
-        # 顶行：图标 + 能力名 + 右上 ⚙ 进阶入口（引擎明细/重启，仅开发者模式可见，不抢主操作）
-        toprow = QHBoxLayout()
-        toprow.setSpacing(10)
-        tile = self._icon_tile(icon, 32, dcolor, image=CAP_ICON_FILES.get(name))
-        top = QLabel(name)
-        top.setObjectName("CapName")
-        top.setFont(tfont("title", QFont.Bold))
-        # 名称用 Expanding + 右侧 stretch 吸收余量；窄列时也不会把图标挤到文字上
-        top.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        top.setMinimumWidth(S(48))
-        eng_btn = QPushButton("⚙")
-        eng_btn.setObjectName("capGhost")
-        eng_btn.setCursor(Qt.PointingHandCursor)
-        eng_btn.setFont(uifont(11))
-        eng_btn.setFixedSize(S(24), S(22))
-        eng_btn.setAccessibleName(f"{name} 引擎明细与重启（进阶）")
-        eng_btn.setToolTip("查看该能力的引擎明细与重启（进阶运维）")
-        toprow.addWidget(tile, alignment=Qt.AlignVCenter)
-        toprow.addWidget(top, alignment=Qt.AlignVCenter)
-        toprow.addStretch(1)
-        toprow.addWidget(eng_btn, alignment=Qt.AlignTop)
-        # 底行：状态点 + 提示（左） · 主操作按钮（右，域色填充，点了直达可用页面）
-        row = QHBoxLayout()
-        row.setSpacing(6)
-        dot = QLabel("●")
-        dot.setStyleSheet(f"color: {C_DOWN.name()};")
-        hint = QLabel("检测中…")
-        hint.setObjectName("CapHint")
-        hint.setFont(uifont(11))
-        act = QPushButton(label)
-        act.setObjectName("capAction")
-        act.setCursor(Qt.PointingHandCursor)
-        act.setFont(uifont(11, QFont.Bold))
-        act.setStyleSheet(
-            f"QPushButton#capAction{{background:{dcolor};color:#ffffff;border:none;"
-            f"border-radius:9px;padding:6px 14px;}}"
-            f"QPushButton#capAction:hover{{background:{_shade(dcolor, 1.12)};}}"
-            f"QPushButton#capAction:pressed{{background:{_shade(dcolor, 0.88)};}}"
-        )
-        act.setToolTip(f"直达：{name}")
-        act.clicked.connect(lambda _=False, t=_target: self._open_hub_page(t))
-        row.addWidget(dot)
-        row.addWidget(hint)
-        row.addStretch(1)
-        row.addWidget(act)
-        v.addLayout(toprow)
-        v.addStretch(1)
-        v.addLayout(row)
-        outer.addWidget(body, 1)
-        return card, dot, hint, eng_btn
-
-    def _reflow_caps(self, cols: int):
-        """把能力卡按 cols 列重新排进网格（4→宽屏一行 / 2→中屏 2×2 / 1→窄屏竖排）。
-        仅在列数变化时重排，避免频繁拖拽时反复布局。"""
-        cols = max(1, min(4, int(cols)))
-        if cols == getattr(self, "_cap_cols", 0):
-            return
-        self._cap_cols = cols
-        grid = self.caps_grid
-        for c in self.cap_cards:
-            grid.removeWidget(c)
-        for i in range(grid.columnCount()):
-            grid.setColumnStretch(i, 0)
-        for idx, card in enumerate(self.cap_cards):
-            grid.addWidget(card, idx // cols, idx % cols)
-        for c in range(cols):
-            grid.setColumnStretch(c, 1)
+    # [门户改版·2026-07-16] _cap_card（88px 大卡）与 _reflow_caps（列回流）随能力区
+    # 收敛为单行状态灯而退役：动作职责归工作台网格，状态职责归 chips（构建于 _build_ui）。
 
     def _mini_bar(self) -> QProgressBar:
         b = QProgressBar()
@@ -1964,33 +2099,22 @@ class Launcher(QMainWindow):
 
             decide(getattr(self, "val_card", None), vp_th)
 
-            # 宽度自适应：能力卡按可用宽度回流列数（带 60px 滞回，避免临界抖动）
-            if getattr(self, "caps_grid", None) is not None:
-                w = self.width()
-                cur = getattr(self, "_cap_cols", 4)
+            # [门户改版] 能力大卡已收敛为单行状态灯（无需列回流）；窄屏只收次要信息：
+            # ① 状态灯的 hint 小字（点/名仍在，语义不丢） ② Hero 卖点 chip ③ 客户卡 chip。
+            w = self.width()
 
-                def pick():
-                    # 升列要更宽，降列更早，形成滞回；阈值随 UI_SCALE 缩放
-                    if cur >= 4:
-                        return 4 if w >= S(980) else (2 if w >= S(660) else 1)
-                    if cur == 2:
-                        return 4 if w >= S(1040) else (2 if w >= S(600) else 1)
-                    return 4 if w >= S(1040) else (2 if w >= S(660) else 1)
-                self._reflow_caps(pick())
+            def vis_for(refs, hide_below):
+                if not refs:
+                    return
+                shown = refs[0].isVisible()
+                want = (w >= hide_below - 20) if shown else (w >= hide_below + 20)
+                if want != shown:
+                    for r in refs:
+                        r.setVisible(want)
 
-                # 窄屏时收起「卖点 chip」（次要信息），保证功能按钮与状态不被挤裁；
-                # 核心状态仍由总状态徽标 / 启动时间线承载。带 40px 滞回避免抖动。
-                def vis_for(refs, hide_below):
-                    if not refs:
-                        return
-                    shown = refs[0].isVisible()
-                    want = (w >= hide_below - 20) if shown else (w >= hide_below + 20)
-                    if want != shown:
-                        for r in refs:
-                            r.setVisible(want)
-
-                vis_for(getattr(self, "trust_chips", []), S(980))
-                vis_for(list(getattr(self, "customer_chips", {}).values()), S(900))
+            vis_for([h for _, h, _ in getattr(self, "cap_refs", [])], S(860))
+            vis_for(getattr(self, "trust_chips", []), S(980))
+            vis_for(list(getattr(self, "customer_chips", {}).values()), S(900))
         finally:
             self._resp_busy = False
 
@@ -2212,7 +2336,10 @@ class Launcher(QMainWindow):
     def _set_busy(self, busy: bool, note: str = ""):
         self.busy = busy
         for b in self._action_btns:
-            b.setEnabled(not busy)
+            try:
+                b.setEnabled(not busy)
+            except RuntimeError:
+                pass   # 工作台重建瞬间旧按钮已销毁（清单随 _refresh_action_btns 刷新）
         if note:
             self._log(note)
 
@@ -2273,6 +2400,7 @@ class Launcher(QMainWindow):
 
     def _apply_status(self, status: dict):
         self._last_status = status
+        self._update_wb_dots(status)   # 工作台入口就绪点（绿=服务在线/灰=未启动）
         customer = bool(getattr(self, "customer_mode", True))
         core_total = core_ready = 0
         for n, info in status.items():
@@ -2351,12 +2479,15 @@ class Launcher(QMainWindow):
         self._watch_hub(hub_ok, status)
         # 快捷按钮就绪反馈：按 Hub 状态更新提示语 + 文字前缀（非忙碌时才改 enable，避免与忙碌态打架）
         if getattr(self, "btn_console", None) is not None:
-            if hub_ok:
-                self.btn_console.setText("🖥  打开控制台")
-                self.btn_console.setToolTip("在浏览器打开网页控制台 /ui（完整管理与创作）")
-            else:
-                self.btn_console.setText("🖥  打开控制台（未就绪）")
-                self.btn_console.setToolTip("Hub 未就绪：点击将自动启动核心服务，就绪后自动打开")
+            try:
+                if hub_ok:
+                    self.btn_console.setText(" 打开控制台")
+                    self.btn_console.setToolTip("独立应用窗口打开网页控制台 /ui（完整管理与创作）")
+                else:
+                    self.btn_console.setText(" 打开控制台（未就绪）")
+                    self.btn_console.setToolTip("Hub 未就绪：点击将自动启动核心服务，就绪后自动打开")
+            except RuntimeError:
+                pass   # 工作台重建瞬间旧按钮已销毁，下一轮轮询自然恢复
         # Hub 就绪后角色列表才可用：头像未加载时按 ~10s 限流重试拉取当前角色头像
         if hub_ok and not getattr(self, "_avatar_loaded", False):
             now = time.time()
@@ -2728,10 +2859,21 @@ class Launcher(QMainWindow):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _open_app_window(self, url: str):
-        """以无边框「应用窗口」模式打开（Edge/Chrome --app）——无地址栏/标签页，像独立软件窗口而非网页。
-        找不到 Edge/Chrome 时回退系统默认浏览器，保证一定能打开。可用环境变量
-        AVATARHUB_APP_BROWSER 指定浏览器可执行文件。"""
+    # 每类页面的应用窗口初始尺寸（w, h）：控制台宽、对话/手机比例窄、看板/同传适中。
+    _WIN_SIZES = (("/ui", (1440, 900)), ("/phone", (1100, 800)), ("/dashboard", (1280, 820)),
+                  ("/ops", (1280, 820)), ("/help", (1100, 860)), ("/delivery", (1180, 820)))
+
+    @classmethod
+    def _page_win_size(cls, path: str):
+        for prefix, size in cls._WIN_SIZES:
+            if path.startswith(prefix):
+                return size
+        return (1280, 850)
+
+    def _open_app_window(self, url: str, size: tuple = None):
+        """以无边框「应用窗口」模式打开（Edge/Chrome --app）——无地址栏/标签页、独立任务栏图标，
+        像独立软件窗口而非网页。找不到 Edge/Chrome 时回退系统默认浏览器，保证一定能打开。
+        可用环境变量 AVATARHUB_APP_BROWSER 指定浏览器可执行文件。"""
         import shutil
         candidates = [
             os.environ.get("AVATARHUB_APP_BROWSER"),
@@ -2744,18 +2886,22 @@ class Launcher(QMainWindow):
         exe = next((c for c in candidates if c and os.path.exists(c)), None)
         if exe:
             try:
-                subprocess.Popen([exe, f"--app={url}", "--new-window"])
+                args = [exe, f"--app={url}", "--new-window"]
+                if size:
+                    args.append(f"--window-size={int(size[0])},{int(size[1])}")
+                subprocess.Popen(args)
                 return
             except Exception:
                 pass
         webbrowser.open(url)
 
     def _open_hub_page(self, path: str):
-        """能力卡主操作通用入口：确保 Hub 就绪后，在独立应用窗口打开 Hub 的某个页面
-        （/ui#clone 克隆 · /phone 体验 · /ui#profiles 形象 · /ui#stream 开播）。Hub 未起则先拉核心链路。"""
+        """工作台/能力卡通用入口：确保 Hub 就绪后，在独立应用窗口按预设尺寸打开 Hub 的某个页面
+        （/ui#clone 克隆 · /phone 对话 · /dashboard 看板 …）。Hub 未起则先拉核心链路，就绪后自动打开。"""
         url = app_config.svc_url("hub") + path
+        size = self._page_win_size(path)
         if sm.health_check(app_config.health_url("hub")):
-            self._open_app_window(url)
+            self._open_app_window(url, size)
             self._log(f"已打开 {url}")
             return
 
@@ -2764,7 +2910,7 @@ class Launcher(QMainWindow):
             hub_health = app_config.health_url("hub")
             for _ in range(90):
                 if sm.health_check(hub_health):
-                    self._open_app_window(url)
+                    self._open_app_window(url, size)
                     self.bridge.log.emit(f"已就绪，打开 {url}")
                     return
                 time.sleep(1)
@@ -2811,7 +2957,7 @@ class Launcher(QMainWindow):
             for _ in range(90):  # 最多等 ~90s（首次加载模型更久时仍可手动「打开控制台」）
                 if sm.health_check(hub_health):
                     url = app_config.svc_url("hub") + "/ui#stream"
-                    self._open_app_window(url)
+                    self._open_app_window(url, (1440, 900))
                     self.bridge.log.emit(f"直播换脸开播页已就绪，已打开 {url}")
                     opened = True
                     break
@@ -2911,7 +3057,7 @@ class Launcher(QMainWindow):
                     pack_installer.confirm_app_ok(log=self._log)
             except Exception:
                 pass
-            self._open_app_window(url)
+            self._open_app_window(url, (1440, 900))
             self._log(f"已打开 {url}")
             return
 
@@ -2926,7 +3072,7 @@ class Launcher(QMainWindow):
                             pack_installer.confirm_app_ok(log=lambda m: self.bridge.log.emit(m))
                     except Exception:
                         pass
-                    self._open_app_window(url)
+                    self._open_app_window(url, (1440, 900))
                     self.bridge.log.emit(f"控制台已就绪，已打开 {url}")
                     return
                 time.sleep(1)
@@ -2960,7 +3106,7 @@ class Launcher(QMainWindow):
         换脸是扩展能力（非核心链路），首次加载较慢或缺权重时给出明确提示而非死等。"""
         url = app_config.svc_url("faceswap") + "/ui"
         if sm.health_check(app_config.health_url("faceswap")):
-            self._open_app_window(url)
+            self._open_app_window(url, (1280, 850))
             self._log(f"已打开换脸面板 {url}")
             return
         svc = next((s for s in sm.SERVICES if s["name"] == "faceswap"), None)
@@ -2975,7 +3121,7 @@ class Launcher(QMainWindow):
             fh = app_config.health_url("faceswap")
             for _ in range(60):
                 if sm.health_check(fh):
-                    self._open_app_window(url)
+                    self._open_app_window(url, (1280, 850))
                     self.bridge.log.emit(f"换脸面板已就绪，已打开 {url}")
                     return
                 time.sleep(1)
@@ -2987,14 +3133,14 @@ class Launcher(QMainWindow):
         """打开实时同传(通译 LingoX)：已在线直接开；否则后台启动就绪后自动打开。"""
         url = app_config.svc_url("interpreter") + "/"
         if sm.health_check(app_config.health_url("interpreter")):
-            self._open_app_window(url)
+            self._open_app_window(url, (1280, 820))
             self._log(f"已打开同传 {url}")
             return
         svc = next((s for s in sm.SERVICES if s["name"] == "interpreter"), None)
         if not svc:
             self._log("未找到 interpreter 服务定义")
             return
-        self._run_bg(lambda: (sm.start_service(svc), self._open_app_window(url)),
+        self._run_bg(lambda: (sm.start_service(svc), self._open_app_window(url, (1280, 820))),
                      "正在启动同传服务，就绪后自动打开 …")
 
     def on_open_interp_live(self):
@@ -3008,7 +3154,7 @@ class Launcher(QMainWindow):
                 self._log(f"⚠ 部分服务未就绪: {', '.join(bad)}")
             else:
                 self._log("直播同传链路已就绪")
-            self._open_app_window(url)
+            self._open_app_window(url, (1280, 820))
             self._log(f"已打开直播同传 {url}")
 
         self._run_bg(work, "正在启动直播同传链路(中枢/识别/TTS/口型/广播/同传)…")

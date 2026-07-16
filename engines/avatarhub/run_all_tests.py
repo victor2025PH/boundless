@@ -17,6 +17,11 @@ SUITE = [
     "test_phase8.py", "test_phase9.py", "test_phase11.py", "test_phase12.py",
     # P13 无声事故防线(2026-07-15)：声纹影子模式/告警归因/垫播素材——离线纯逻辑,exit code 判定
     "tools/_p13_vl_shadow_test.py", "tools/_p13_attr_test.py", "tools/_p13_bed_test.py",
+    # 设计令牌单源门禁(2026-07-16)：design-tokens.json ↔ brand.css ↔ launcher_theme 三方一致
+    "tools/_tokens_lint.py",
+    # 冻结态资源定位仿真(2026-07-16)：安装版(PyInstaller)下令牌/图标库必须从 exe 旁 static/ 读到
+    # （缺 PySide6 时自动换 .venv_launcher 解释器重跑,两者皆无则 SKIP）
+    "tools/_frozen_assets_test.py",
 ]
 files = [f for f in SUITE if os.path.exists(f)]
 

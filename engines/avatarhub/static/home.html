@@ -8,6 +8,8 @@
 <meta name="apple-mobile-web-app-title" content="无界 BOUNDLESS"/>
 <link rel="manifest" href="/static/manifest.json"/>
 <link rel="icon" type="image/svg+xml" href="/static/icon.svg"/>
+<link rel="manifest" href="/static/manifest_home.json"/>
+<link rel="apple-touch-icon" href="/static/app-icon-256.png"/>
 <link rel="apple-touch-icon" href="/static/icon.svg"/>
 <script src="/static/_clientlog.js"></script>
 <script src="/static/_authtoken.js"></script>
@@ -199,6 +201,7 @@
   /* 图标 chip：线色半透明底，让 emoji 从"裸字符"变成有设计感的入口标识 */
   .card .ic{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;
     width:40px;height:40px;border-radius:12px;font-size:20px;line-height:1;
+    color:rgb(var(--line-rgb, 79 122 255));  /* 线性图标经 currentColor 吃产品线色 */
     background:rgb(var(--line-rgb, 79 122 255) / .14);border:1px solid rgb(var(--line-rgb, 79 122 255) / .22)}
   .card .name{font-weight:700;font-size:var(--bd-fs-body);display:flex;align-items:center;gap:7px}
   /* 两行截断保证卡片等高（替代 min-height:38px 魔法数）*/
@@ -313,6 +316,13 @@
 <script>
 (function(){
   "use strict";
+  // 线性图标(全站图标库 brand-icons.svg 单一真相)：尺寸/描边写成呈现属性,CSS 缺位也不爆版
+  function icSvg(name, px){
+    px = px || 16;
+    return '<svg width="'+px+'" height="'+px+'" fill="none" stroke="currentColor" stroke-width="1.9"'
+      +' stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px">'
+      +'<use href="/static/brand-icons.svg?v=20260716b#i-'+name+'"/></svg>';
+  }
   var FALLBACK = {lines:["VoiceX 音色","ChatX 对话","LiveX 直播","LingoX 同传","运营","合规·可信"], features:[]};
   var lastSetup = null, gpuReleased = false;   // GPU 释放态：由 /health.gpu_released 驱动，影响引导卡/状态条
   var licState = null, lastFeats = [], lastHealth = null;   // 版位状态 + 当前功能清单（供 PRO 弹窗取真）+ 最近一次 /health（供"最近使用"pin/清除就地重渲）
@@ -447,7 +457,10 @@
       ((feat.name||"")+" "+(feat.desc||"")+" "+(feat.line||"")+" "+(feat.id||"")).toLowerCase() + _py);
     a.style.setProperty("--line-rgb", LINE_RGB[feat.line] || "79 122 255");   // 卡片自持线色："最近使用"混合分区里各卡仍正确
     var head = el("div","head");
-    var ic = el("span","ic", esc(feat.icon||"•")); ic.setAttribute("aria-hidden","true");
+    // [图标统一·2026-07-16] 优先注册表 ic（线性图标，与控制台/桌面启动台同一图标库）；
+    // 旧缓存/离线注册表无 ic 时回退 emoji。图标经 currentColor 吃产品线色。
+    var ic = el("span","ic"); ic.setAttribute("aria-hidden","true");
+    if(feat.ic){ ic.innerHTML = icSvg(feat.ic, 20); } else { ic.textContent = feat.icon||"•"; }
     head.appendChild(ic);
     head.appendChild(el("span","name", esc(feat.name||feat.id)));
     a.appendChild(head);
@@ -622,7 +635,7 @@
       else if(st.status_label){ tail=" · "+st.status_label; }
     }
     var items = pros.length ? pros.map(function(f){
-      return '<li><span class="pd-ic" aria-hidden="true">'+esc(f.icon||"•")+'</span>'
+      return '<li><span class="pd-ic" aria-hidden="true">'+(f.ic?icSvg(f.ic,16):esc(f.icon||"•"))+'</span>'
         +'<span class="pd-nm">'+esc(f.name||f.id)+'</span>'
         +'<span class="pd-ln">'+esc(f.line||"")+'</span></li>';
     }).join("") : '<li class="pd-empty">当前版本未标注 PRO 功能。</li>';

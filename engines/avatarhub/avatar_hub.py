@@ -1779,9 +1779,18 @@ def _ws_auth_ok(ws: WebSocket) -> bool:
     return bool(tok and _h.compare_digest(str(tok), _API_TOKEN))
 
 # 托管 static 目录（前后端分离）
+# [2026-07-16 缓存治理] StaticFiles 原样挂载不带 Cache-Control → 浏览器启发式缓存把旧
+# hub.js/brand.css 粘住,与 no-store 的 /ui 新页面混载(实锤:侧栏渲染出字面 undefined、
+# 顶栏 SVG 无样式变 300×150 黑块)。改为 no-cache：仍带 ETag,未变时 304 零流量,变了立即生效。
+class _NoCacheStatic(StaticFiles):
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
 STATIC_DIR = Path(rf"{_BASE}\static")
 if STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    app.mount("/static", _NoCacheStatic(directory=str(STATIC_DIR)), name="static")
 
 # ── WebSocket 连接池 (P3-C: set+gather 并发安全) ───────────────────
 ws_clients: set[WebSocket] = set()
@@ -30233,32 +30242,34 @@ async def ws_status(ws: WebSocket):
 # 避免清单在多处重复维护而漂移。每条字段：
 #   id / line(产品线分组) / name / desc / icon / href(站内深链 /ui#<tab> 或漂亮路由)
 #   service?(关联 SERVICES 键，首页据 /health 显示就绪点；不在线→灰显"离线"不报错) / edition(free|pro，仅展示标注)
+# ic = static/brand-icons.svg 线性图标名（2026-07-16 图标统一）：桌面启动台工作台/网页首页/
+# 命令面板共用同一图标库；icon(emoji) 保留给尚未接线性图标的消费面，逐步退役。
 FEATURE_REGISTRY = [
     # —— VoiceX 音色 ——
-    {"id": "profiles", "line": "VoiceX 音色", "name": "角色库",   "desc": "管理数字人角色与音色档案",   "icon": "🎭", "href": "/ui#profiles", "edition": "free"},
-    {"id": "clone",    "line": "VoiceX 音色", "name": "声音克隆", "desc": "一段样本即可克隆专属音色",   "icon": "🧬", "href": "/ui#clone", "service": "fish_tts", "edition": "free"},
-    {"id": "voice",    "line": "VoiceX 音色", "name": "语音合成", "desc": "文本→自然语音，多引擎可选", "icon": "🎙️", "href": "/ui#voice", "service": "fish_tts", "edition": "free"},
-    {"id": "sing",     "line": "VoiceX 音色", "name": "AI 唱歌",  "desc": "用克隆音色演唱歌曲",         "icon": "🎵", "href": "/ui#sing", "service": "singing", "edition": "pro"},
-    {"id": "batch",    "line": "VoiceX 音色", "name": "批量配音", "desc": "批量文本一键合成",           "icon": "📦", "href": "/ui#batch", "service": "fish_tts", "edition": "pro"},
+    {"id": "profiles", "line": "VoiceX 音色", "name": "角色库",   "desc": "管理数字人角色与音色档案",   "icon": "🎭", "ic": "users", "href": "/ui#profiles", "edition": "free"},
+    {"id": "clone",    "line": "VoiceX 音色", "name": "声音克隆", "desc": "一段样本即可克隆专属音色",   "icon": "🧬", "ic": "copy", "href": "/ui#clone", "service": "fish_tts", "edition": "free"},
+    {"id": "voice",    "line": "VoiceX 音色", "name": "语音合成", "desc": "文本→自然语音，多引擎可选", "icon": "🎙️", "ic": "mic", "href": "/ui#voice", "service": "fish_tts", "edition": "free"},
+    {"id": "sing",     "line": "VoiceX 音色", "name": "AI 唱歌",  "desc": "用克隆音色演唱歌曲",         "icon": "🎵", "ic": "music", "href": "/ui#sing", "service": "singing", "edition": "pro"},
+    {"id": "batch",    "line": "VoiceX 音色", "name": "批量配音", "desc": "批量文本一键合成",           "icon": "📦", "ic": "package", "href": "/ui#batch", "service": "fish_tts", "edition": "pro"},
     # —— ChatX 对话 ——
-    {"id": "phone",    "line": "ChatX 对话",  "name": "实时对话", "desc": "手机/桌面，免提语音对话数字人", "icon": "💬", "href": "/phone", "service": "stt", "edition": "free"},
-    {"id": "converse", "line": "ChatX 对话",  "name": "对话测试台", "desc": "浏览器内调试对话链路",     "icon": "🧪", "href": "/converse", "service": "stt", "edition": "free"},
+    {"id": "phone",    "line": "ChatX 对话",  "name": "实时对话", "desc": "手机/桌面，免提语音对话数字人", "icon": "💬", "ic": "chat", "href": "/phone", "service": "stt", "edition": "free"},
+    {"id": "converse", "line": "ChatX 对话",  "name": "对话测试台", "desc": "浏览器内调试对话链路",     "icon": "🧪", "ic": "flask", "href": "/converse", "service": "stt", "edition": "free"},
     # —— LiveX 直播（换脸/口型/虚拟摄像头统一在开播中枢配置，避免指向无独立页面的服务端口）——
-    {"id": "stream",   "line": "LiveX 直播",  "name": "开播中枢", "desc": "换脸·口型·虚拟摄像头一体直播", "icon": "📡", "href": "/ui#stream", "service": "vcam", "edition": "pro"},
+    {"id": "stream",   "line": "LiveX 直播",  "name": "开播中枢", "desc": "换脸·口型·虚拟摄像头一体直播", "icon": "📡", "ic": "signal", "href": "/ui#stream", "service": "vcam", "edition": "pro"},
     # —— LingoX 同传 ——
-    {"id": "interp",   "line": "LingoX 同传", "name": "实时同传", "desc": "多语种语音实时互译",         "icon": "🌐", "href": "/ui#interp", "edition": "pro"},
+    {"id": "interp",   "line": "LingoX 同传", "name": "实时同传", "desc": "多语种语音实时互译",         "icon": "🌐", "ic": "globe", "href": "/ui#interp", "edition": "pro"},
     # —— 运营 ——
-    {"id": "dashboard","line": "运营",        "name": "数据看板", "desc": "业务与产出数据总览",         "icon": "📊", "href": "/dashboard", "edition": "free"},
-    {"id": "ops",      "line": "运营",        "name": "运维监控", "desc": "服务健康与自愈监控",         "icon": "🩺", "href": "/ops", "edition": "free"},
-    {"id": "history",  "line": "运营",        "name": "历史记录", "desc": "会话与合成历史",             "icon": "📜", "href": "/ui#history", "edition": "free"},
-    {"id": "delivery", "line": "运营",        "name": "交付体检", "desc": "授权/合规/服务一键自检",     "icon": "🩻", "href": "/delivery", "edition": "free"},
-    {"id": "logs",     "line": "运营",        "name": "日志",     "desc": "运行日志查看",               "icon": "📋", "href": "/ui#logs", "edition": "free"},
-    {"id": "settings", "line": "运营",        "name": "设置·白标", "desc": "品牌主色/参数配置",         "icon": "⚙️", "href": "/ui#settings", "edition": "free"},
-    {"id": "help",     "line": "运营",        "name": "使用教程", "desc": "安装/使用/手机同传 图文教程", "icon": "📖", "href": "/help", "edition": "free"},
+    {"id": "dashboard","line": "运营",        "name": "数据看板", "desc": "业务与产出数据总览",         "icon": "📊", "ic": "chart", "href": "/dashboard", "edition": "free"},
+    {"id": "ops",      "line": "运营",        "name": "运维监控", "desc": "服务健康与自愈监控",         "icon": "🩺", "ic": "probe", "href": "/ops", "edition": "free"},
+    {"id": "history",  "line": "运营",        "name": "历史记录", "desc": "会话与合成历史",             "icon": "📜", "ic": "clock", "href": "/ui#history", "edition": "free"},
+    {"id": "delivery", "line": "运营",        "name": "交付体检", "desc": "授权/合规/服务一键自检",     "icon": "🩻", "ic": "check", "href": "/delivery", "edition": "free"},
+    {"id": "logs",     "line": "运营",        "name": "日志",     "desc": "运行日志查看",               "icon": "📋", "ic": "file", "href": "/ui#logs", "edition": "free"},
+    {"id": "settings", "line": "运营",        "name": "设置·白标", "desc": "品牌主色/参数配置",         "icon": "⚙️", "ic": "gear", "href": "/ui#settings", "edition": "free"},
+    {"id": "help",     "line": "运营",        "name": "使用教程", "desc": "安装/使用/手机同传 图文教程", "icon": "📖", "ic": "book", "href": "/help", "edition": "free"},
     # —— 合规·可信 ——
-    {"id": "verify",   "line": "合规·可信",   "name": "内容验真", "desc": "C2PA/水印离线验真",          "icon": "🛡️", "href": "/verify", "edition": "free"},
-    {"id": "ask",      "line": "合规·可信",   "name": "知识问答", "desc": "基于知识库的问答",           "icon": "❓", "href": "/ask", "edition": "free"},
-    {"id": "setup",    "line": "合规·可信",   "name": "首启向导", "desc": "开箱即用就绪检查",           "icon": "🚀", "href": "/setup", "edition": "free"},
+    {"id": "verify",   "line": "合规·可信",   "name": "内容验真", "desc": "C2PA/水印离线验真",          "icon": "🛡️", "ic": "shield", "href": "/verify", "edition": "free"},
+    {"id": "ask",      "line": "合规·可信",   "name": "知识问答", "desc": "基于知识库的问答",           "icon": "❓", "ic": "help", "href": "/ask", "edition": "free"},
+    {"id": "setup",    "line": "合规·可信",   "name": "首启向导", "desc": "开箱即用就绪检查",           "icon": "🚀", "ic": "zap", "href": "/setup", "edition": "free"},
 ]
 # 产品线展示顺序（首页分区顺序的单一真相）
 _FEATURE_LINES = ["VoiceX 音色", "ChatX 对话", "LiveX 直播", "LingoX 同传", "运营", "合规·可信"]

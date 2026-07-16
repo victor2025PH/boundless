@@ -16,8 +16,43 @@ launcher_theme.py — 桌面启动器「设计系统」单一真相层
 """
 from PySide6.QtGui import QColor, QFont
 
-# 品牌默认强调色（_norm_color 的回退；与 launcher_qt.BRAND_DEFAULTS 保持一致）
-DEFAULT_ACCENT = "#4F7AFF"
+# ── 设计令牌单源（2026-07-16 桌面×网页对齐 P0）────────────────────────────────
+# static/design-tokens.json 是「桌面 QSS」与「网页 brand.css」共同的取值真相：状态色 /
+# 品牌色 / 暗色背景层级 / 圆角。随包分发、离线可读（本模块保持零 app_config 依赖）；
+# 文件缺失/损坏时回退下方内置值（＝旧版观感，绝不因缺文件起不来）。
+def _load_design_tokens() -> dict:
+    import json as _json
+    import sys as _sys
+    from pathlib import Path as _Path
+    # 冻结态（PyInstaller）__file__ 指向临时解包目录 → 令牌在 exe 旁的 static/；
+    # 源码态在本文件旁的 static/。两处按序探测（与 app_config._detect_base 同思路，但本模块保持零依赖）。
+    bases = []
+    if getattr(_sys, "frozen", False):
+        bases.append(_Path(_sys.executable).resolve().parent)
+    bases.append(_Path(__file__).resolve().parent)
+    for b in bases:
+        try:
+            p = b / "static" / "design-tokens.json"
+            if p.exists():
+                d = _json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(d, dict):
+                    return d
+        except Exception:
+            continue
+    return {}
+
+
+_DT = _load_design_tokens()
+_DT_STATE = _DT.get("state") or {}
+_DT_DARK = _DT.get("dark") or {}
+_DT_LIGHT = _DT.get("light") or {}
+_DT_HERO = (_DT_DARK.get("hero") or [])[:3] + ["#1a2745", "#141d33", "#0f1626"][len(_DT_DARK.get("hero") or []):]
+_DT_HERO_L = (_DT_LIGHT.get("hero") or [])[:3] + ["#dbe6ff", "#e9f0ff", "#f4f7ff"][len(_DT_LIGHT.get("hero") or []):]
+
+# 品牌默认强调色（_norm_color 的回退；与 launcher_qt.BRAND_DEFAULTS / brand.css --bd-acc 同源）
+DEFAULT_ACCENT = _DT.get("accent", "#4F7AFF")
+# 品牌辅助色（蓝→紫渐变的第二停靠点；主 CTA 与 Hero 用，对齐网页 --bd-acc2/--bd-grad）
+ACCENT2 = _DT.get("accent2", "#a855f7")
 
 
 def _rgba(hex_color: str, alpha) -> str:
@@ -30,13 +65,14 @@ def _rgba(hex_color: str, alpha) -> str:
         return f"rgba(124,134,148,{alpha})"
 
 
-# ── 状态色：单一真相（商务稳重·克制不刺眼）。绿=就绪 / 黄=加载 / 灰=未启动 / 红=异常 ──
-# 全 UI（徽章 / 能力点 / chip / 状态条 / 资源条 / 时间线）统一引用，改色只此一处。
+# ── 状态色：单一真相＝design-tokens.json（与网页 brand.css --bd-ok/warn/danger 同值）。
+# 绿=就绪 / 黄=加载 / 灰=未启动 / 红=异常。全 UI（徽章 / 能力点 / chip / 状态条 / 资源条）
+# 统一引用；2026-07-16 起弃用桌面独立色（#2BB673 系），双端同一套状态语义色。
 STATE_HEX = {
-    "ok":    "#2BB673",   # 就绪 · 精炼祖母绿（较原 #27d17a 更沉稳、降霓虹感）
-    "warn":  "#E0A33A",   # 加载 · 琥珀（较原 #f0b429 更暖、更克制）
-    "down":  "#7C8694",   # 未启动 · 中性石板灰
-    "error": "#E2574A",   # 异常 · 沉稳砖红（较原 #ff6b5b 更克制）
+    "ok":    _DT_STATE.get("ok", "#2BB673"),
+    "warn":  _DT_STATE.get("warn", "#E0A33A"),
+    "down":  _DT_STATE.get("down", "#7C8694"),
+    "error": _DT_STATE.get("danger", "#E2574A"),
 }
 C_OK = QColor(STATE_HEX["ok"])
 C_PARTIAL = QColor(STATE_HEX["warn"])
@@ -65,7 +101,9 @@ def S(px: float) -> int:
 # ── 设计令牌：间距 / 圆角 / 字号刻度（单一真相，全 UI 引用，营造统一节奏与呼吸感）──
 # 间距用 4/8pt 基准刻度；布局间距/边距统一从 sp() 取值，使各区块对齐、留白一致。
 SPACE = {"xs": 4, "sm": 8, "md": 12, "lg": 16, "xl": 24, "xxl": 32}
-RADIUS = {"sm": 10, "md": 14, "lg": 20, "pill": 999}   # 圆角刻度（QSS 用 px，不随缩放）
+_DT_R = _DT.get("radius") or {}
+RADIUS = {"sm": int(_DT_R.get("sm", 10)), "md": int(_DT_R.get("md", 14)),
+          "lg": int(_DT_R.get("lg", 20)), "pill": 999}   # 圆角刻度（对齐网页 --bd-r-*；QSS 用 px 不随缩放）
 # 字号语义刻度（pt，单一真相）：覆盖现用的全部字号，按"语义角色"命名，全 UI 引用。
 # display=品牌主名 · h1/h2=大标题 · title=区块/能力名 · subtitle=徽章/指标值 ·
 # body=正文副标题 · label=小标题/描述 · caption=提示/chip · micro=角标 · tiny=最小注释。
@@ -129,30 +167,35 @@ def _auto_ui_scale(app) -> float:
 # ── 主题令牌：白天 / 黑夜两套「单一真相」，全部样式引用，便于换肤与 OEM ──────────────
 THEMES = {
     "dark": {
-        # 商务稳重：深石墨海军底 + 去紫调中性。明确的高度层级（canvas < 卡片 < 抬起面），
-        # 让卡片清晰浮于画布之上、输入框微内凹，营造沉稳而有呼吸感的专业暗色。
-        "BG": "#090c14",        # canvas（最暗，最低层）
-        "SURF1": "#161d2b",     # 卡片（清晰抬升于画布）
-        "SURF2": "#1f2939",     # 抬起面：表头 / hover 基底 / 头像位
-        "BORDER": "#2c3647",    # 描边（更明确，仍柔和）
-        "TXT": "#eef2f9", "TXT2": "#aab4c6",
-        "HERO_G0": "#1a2745", "HERO_G1": "#141d33", "HERO_G2": "#0f1626", "HERO_BORDER": "#31436a",
-        "INPUT_BG": "#131925",  # 输入域：比卡片更暗一档，呈现内凹质感
-        "PROGRESS_BG": "#10151f", "LOG_BG": "#0a0e16", "LOG_TXT": "#c4cee0",
-        "GHOST_BG": "#1d2740", "GHOST_TXT": "#d4dcec", "GHOST_HOVER": "#27324a",
-        "TOOL_BG": "#18223a", "TOOL_TXT": "#e3e9f5", "TOOL_BORDER": "#2c3a55", "TOOL_HOVER": "#20304e",
-        "DEMO_TXT": "#cbd6ee", "DEMO_BORDER": "#33446a",
+        # 2026-07-16 起：底色/表面/描边/文字对齐网页 brand.css（design-tokens.json 单源），
+        # 桌面与网页同一暗色世界；Hero 引入品牌蓝紫渐变（网页 --bd-grad 的克制版）。
+        # 层级仍是 canvas < 卡片 < 抬起面；输入域比卡片再暗一档呈内凹。
+        "BG": _DT_DARK.get("bg", "#090c14"),          # canvas（网页 --bd-bg）
+        "SURF1": _DT_DARK.get("surf1", "#161d2b"),    # 卡片（网页 --bd-surface 预混实色）
+        "SURF2": _DT_DARK.get("surf2", "#1f2939"),    # 抬起面（网页 --bd-surface2 预混实色）
+        "BORDER": _DT_DARK.get("border", "#2c3647"),  # 描边（网页 --bd-border 预混实色）
+        "TXT": _DT_DARK.get("txt", "#eef2f9"), "TXT2": _DT_DARK.get("txt2", "#aab4c6"),
+        "HERO_G0": _DT_HERO[0], "HERO_G1": _DT_HERO[1], "HERO_G2": _DT_HERO[2],
+        "HERO_BORDER": _DT_DARK.get("hero_border", "#31436a"),
+        "INPUT_BG": "#0e1116",  # 输入域：比卡片更暗一档，呈现内凹质感
+        "PROGRESS_BG": "#0d1015", "LOG_BG": "#0a0d12", "LOG_TXT": "#c4cee0",
+        "GHOST_BG": "#171b23", "GHOST_TXT": "#d4dcec", "GHOST_HOVER": "#20252e",
+        "TOOL_BG": "#151a24", "TOOL_TXT": "#e3e9f5", "TOOL_BORDER": "#262c38", "TOOL_HOVER": "#1d232e",
+        "DEMO_TXT": "#cbd6ee", "DEMO_BORDER": "#2e3850",
         "DISABLED_BG": "#222732", "DISABLED_TXT": "#6a7079",
-        "GUIDE_BG": "rgba(255,255,255,0.035)", "WARN_TXT": "#E0A33A",
-        "CHIP_BG": "rgba(255,255,255,0.045)", "CHIP_BORDER": "#2c3647",
+        "GUIDE_BG": "rgba(255,255,255,0.035)", "WARN_TXT": _DT_STATE.get("warn", "#E0A33A"),
+        "CHIP_BG": "rgba(255,255,255,0.045)", "CHIP_BORDER": _DT_DARK.get("border", "#2c3647"),
         "TRUST_BG": "rgba(255,255,255,0.06)", "TRUST_BORDER": "rgba(255,255,255,0.11)", "TRUST_TXT": "#d6e0f2",
-        "AVATAR_BG": "#1f2939",
+        "AVATAR_BG": _DT_DARK.get("surf2", "#1f2939"),
         "SHADOW": (0, 0, 0, 165),
     },
     "light": {
-        "BG": "#eef1f8", "SURF1": "#ffffff", "SURF2": "#e8edf7", "BORDER": "#d3dcec",
-        "TXT": "#1b2333", "TXT2": "#5b6678",
-        "HERO_G0": "#dbe6ff", "HERO_G1": "#e9f0ff", "HERO_G2": "#f4f7ff", "HERO_BORDER": "#c3d2f3",
+        # 亮色同样走 design-tokens.json 单源（2026-07-16）；Hero 用品牌蓝→淡紫浅色渐变
+        "BG": _DT_LIGHT.get("bg", "#eef1f8"), "SURF1": _DT_LIGHT.get("surf1", "#ffffff"),
+        "SURF2": _DT_LIGHT.get("surf2", "#e8edf7"), "BORDER": _DT_LIGHT.get("border", "#d3dcec"),
+        "TXT": _DT_LIGHT.get("txt", "#1b2333"), "TXT2": _DT_LIGHT.get("txt2", "#5b6678"),
+        "HERO_G0": _DT_HERO_L[0], "HERO_G1": _DT_HERO_L[1], "HERO_G2": _DT_HERO_L[2],
+        "HERO_BORDER": _DT_LIGHT.get("hero_border", "#c3d2f3"),
         "INPUT_BG": "#ffffff", "PROGRESS_BG": "#e3e9f4", "LOG_BG": "#f3f5fb", "LOG_TXT": "#2a3445",
         "GHOST_BG": "#e7ecf6", "GHOST_TXT": "#2a3445", "GHOST_HOVER": "#d8e0f0",
         "TOOL_BG": "#eef2fb", "TOOL_TXT": "#1f3a6b", "TOOL_BORDER": "#cdd9f0", "TOOL_HOVER": "#e0e8fa",
@@ -329,10 +372,11 @@ QPushButton {{
 }}
 QPushButton:disabled {{ background: {t["DISABLED_BG"]}; color: {t["DISABLED_TXT"]}; }}
 QPushButton#boot {{
-    background: {accent}; font-size: {px(19)}px; font-weight: 900; padding: 20px 28px; border-radius: 14px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {accent}, stop:1 {ACCENT2});
+    font-size: {px(19)}px; font-weight: 900; padding: 20px 28px; border-radius: 14px;
 }}
-QPushButton#boot:hover {{ background: {a_hi}; }}
-QPushButton#boot:pressed {{ background: {a_lo}; }}
+QPushButton#boot:hover {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {a_hi}, stop:1 {_shade(ACCENT2, 1.12)}); }}
+QPushButton#boot:pressed {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {a_lo}, stop:1 {_shade(ACCENT2, 0.88)}); }}
 QPushButton#primary {{ background: {accent}; }}
 QPushButton#primary:hover {{ background: {a_hi}; }}
 QPushButton#demo {{

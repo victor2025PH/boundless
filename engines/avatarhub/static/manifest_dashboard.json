@@ -1,0 +1,12 @@
+{
+  "name": "BOUNDLESS 数据看板",
+  "short_name": "看板",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#080b10",
+  "theme_color": "#080b10",
+  "icons": [
+    {"src": "/static/app-icon-256.png", "sizes": "256x256", "type": "image/png"},
+    {"src": "/static/app-icon-512.png", "sizes": "512x512", "type": "image/png"}
+  ]
+}

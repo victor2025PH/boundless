@@ -16,7 +16,7 @@
 ;   中文桌面/开始菜单 = 「无界幻境」，英文 = 「BOUNDLESS Studio」——
 ; 长名「无界幻境 BOUNDLESS Studio」只留给卸载列表全称（AppNameFull）。
 
-#define AppVersion "1.0.12"
+#define AppVersion "1.1.0"
 #define AppURL "https://ai26.sbs"
 #define SupportChannel "https://t.me/hykj7"
 #define SupportGroup "https://t.me/hykjz"

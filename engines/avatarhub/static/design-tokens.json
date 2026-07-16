@@ -1,0 +1,42 @@
+{
+  "_readme": [
+    "全站设计令牌单一真相（2026-07-16 桌面×网页对齐 P0）。",
+    "取值以网页 brand.css 为准（品牌记忆点在官网/网页侧）；改这里 = 桌面启动台跟随，",
+    "brand.css 对应变量需同步修改——tools/_tokens_lint.py 会核对两边一致（进 run_all_tests 门禁）。",
+    "surf/border 是把网页的白色半透明表面(rgba)在 #080b10 底上预混合成的实色（Qt QSS 用实色更稳）。"
+  ],
+  "accent": "#4f7aff",
+  "accent2": "#a855f7",
+  "state": {
+    "ok": "#34d399",
+    "warn": "#fbbf24",
+    "danger": "#f87171",
+    "down": "#7c8694"
+  },
+  "dark": {
+    "bg": "#080b10",
+    "surf1": "#12151a",
+    "surf2": "#171a1e",
+    "border": "#26282d",
+    "txt": "#e5e9f5",
+    "txt2": "#aab4cc",
+    "mut": "#8b96b0",
+    "hero": ["#20294d", "#1a1f3d", "#131629"],
+    "hero_border": "#33406b"
+  },
+  "light": {
+    "bg": "#eef1f8",
+    "surf1": "#ffffff",
+    "surf2": "#e8edf7",
+    "border": "#d3dcec",
+    "txt": "#1b2333",
+    "txt2": "#5b6678",
+    "hero": ["#d9e3ff", "#e8ecff", "#f4f0ff"],
+    "hero_border": "#c3d2f3"
+  },
+  "radius": {
+    "sm": 12,
+    "md": 16,
+    "lg": 20
+  }
+}
