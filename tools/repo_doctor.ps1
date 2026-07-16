@@ -2,8 +2,8 @@
 # 只读、可重复跑。用法： powershell -File tools\repo_doctor.ps1
 $ErrorActionPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
-$root = Split-Path -Parent $PSScriptRoot   # tools/ 的上一级 = 仓库根
-if (-not (Test-Path (Join-Path $root '.git'))) { $root = 'D:\workspace\wujie' }
+$root = Split-Path -Parent $PSScriptRoot   # tools/ 的上一级 = 仓库根（与文件夹名无关）
+if (-not (Test-Path (Join-Path $root '.git'))) { $root = (Get-Location).Path }
 Set-Location $root
 $fail = 0; $warn = 0
 function Line($lvl, $msg) {

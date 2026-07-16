@@ -5,7 +5,7 @@
 # 危险级：★重写历史★。执行前确认无人已 clone 本仓；执行后需强制 push 到全新空 remote。
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
-Set-Location 'D:\workspace\wujie'
+Set-Location (Split-Path -Parent $PSScriptRoot)   # 仓库根（与文件夹名无关）
 
 Write-Output '== 1) LFS 接管字体/媒体（.gitattributes 已入库），迁移历史 =='
 git lfs install --local
