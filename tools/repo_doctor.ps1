@@ -1,4 +1,4 @@
-# wujie/tools/repo_doctor.ps1 — 全域仓库体检（落地审计《架构检测说明》§4）。
+# boundless/tools/repo_doctor.ps1 — 全域仓库体检（落地审计《架构检测说明》§4）。
 # 只读、可重复跑。用法： powershell -File tools\repo_doctor.ps1
 $ErrorActionPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -11,7 +11,7 @@ function Line($lvl, $msg) {
   Write-Output ('[{0}] {1}' -f $lvl, $msg)
 }
 
-Write-Output '==================== wujie repo_doctor ===================='
+Write-Output '==================== boundless repo_doctor ===================='
 
 # A 工作树
 $dirty = (git status --porcelain | Measure-Object).Count

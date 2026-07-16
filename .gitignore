@@ -58,7 +58,7 @@ _pending_models/
 # keep empty structure
 !**/.gitkeep
 
-# ---- per-engine tracked-secret guards (wujie migration 20260715) ----
+# ---- per-engine tracked-secret guards (boundless migration 20260715) ----
 **/users.json
 **/routers.json
 **/device_registry.json
@@ -69,7 +69,7 @@ _pending_models/
 **/config/config.local.yaml
 **/config/cluster.yaml
 
-# ---- wujie slimming 20260715 ----
+# ---- boundless slimming 20260715 ----
 # stale duplicate of canonical top-level website/ (same hualing-website pkg, older brand.ts)
 engines/chengjie/website/
 # Playwright browser profile cache (runtime artifact, not source)

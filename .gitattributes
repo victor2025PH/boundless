@@ -1,4 +1,4 @@
-# wujie 全域 .gitattributes
+# boundless 全域 .gitattributes
 # 大二进制走 git-LFS（对未来新增文件生效；已在库的字体由 tools/prepush_cleanup.ps1 一次性迁移）。
 brand-assets/fonts/*.otf  filter=lfs diff=lfs merge=lfs -text
 brand-assets/fonts/*.ttf  filter=lfs diff=lfs merge=lfs -text

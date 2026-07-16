@@ -1,5 +1,5 @@
 #!/bin/sh
-# wujie pre-push 门禁 + git-lfs 上传。安装：powershell -File tools/install_hooks.ps1
+# boundless pre-push 门禁 + git-lfs 上传。安装：powershell -File tools/install_hooks.ps1
 # 覆盖门禁：确需绕过时 `git push --no-verify`。
 # 1) repo_doctor 门禁（RED=FAIL>0 则拒推）
 echo "[pre-push] repo_doctor gate..."

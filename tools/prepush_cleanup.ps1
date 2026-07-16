@@ -1,4 +1,4 @@
-# wujie/tools/prepush_cleanup.ps1 — 首次 push 到新 remote 前，一次性历史瘦身。
+# boundless/tools/prepush_cleanup.ps1 — 首次 push 到新 remote 前，一次性历史瘦身。
 # 为什么放到 push 前：本仓当前只在本地、未 push；LFS/历史清理的磁盘收益只有在
 # 「offload 到 remote + 本地 prune」后才真正兑现，故不在开发中途重写历史，改为 push 前一次做净。
 # 前置：git-lfs 已装（117 = 3.7.1）。可选：git-filter-repo（用于彻底抹除已 untrack 的历史大对象）。

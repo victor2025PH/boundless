@@ -1,7 +1,7 @@
-# 无界 wujie · 单人多机开发标准（一个人 · 五台电脑）
+# 无界 boundless · 单人多机开发标准（一个人 · 五台电脑）
 
 > 场景：**所有开发都是你一个人**，只是分布在 5 台电脑上（同一个 GitHub 账号，你全权掌控）。
-> 唯一真源 = GitHub 上的 `wujie`。每台电脑都从它 clone、往它 push。
+> 唯一真源 = GitHub 上的 `boundless`。每台电脑都从它 clone、往它 push。
 > 最大风险不再是"多人冲突"，而是**你在一台机器改了没同步，就去另一台又改** → 两台分叉。
 > 历史教训：telegram 曾 3 份副本、avatarhub 曾两台机器各改。本标准就是为杜绝它。
 
@@ -10,8 +10,8 @@
 > **离开一台电脑前，不要留任何"没推上去"的改动**（哪怕是半成品，也先 WIP 提交推上去）。
 
 ## 0. 三原则
-1. **代码进仓，运行时不进仓**：源码统一在 wujie；模型权重 / `config.yaml` 机密 / `sessions/` / `node_modules` 永不提交，各机 `deploy/provision` 就地补。
-2. **改在仓里，跑在对的机器**：换脸/TTS 要 GPU —— 代码在 wujie 改，部署到对应 GPU 机跑。
+1. **代码进仓，运行时不进仓**：源码统一在 boundless；模型权重 / `config.yaml` 机密 / `sessions/` / `node_modules` 永不提交，各机 `deploy/provision` 就地补。
+2. **改在仓里，跑在对的机器**：换脸/TTS 要 GPU —— 代码在 boundless 改，部署到对应 GPU 机跑。
 3. **main 直推但受保护**：单人无需 PR，直接 `push` 到 `main`；但 GitHub 已禁 force-push/删除，防手滑覆盖另一台推上来的成果。
 
 ## 1. 每台电脑接入（各做一次）
@@ -19,7 +19,7 @@
 git lfs install
 cd D:\workspace
 git clone https://github.com/victor2025PH/boundless.git
-cd wujie
+cd boundless
 powershell -File tools\install_hooks.ps1                                          # 装 pre-push 门禁钩子
 powershell -File deploy\deploy.ps1 -Action provision                              # 只读看运行时缺口
 powershell -File deploy\deploy.ps1 -Action provision -Apply -From <备份路径>       # 补 config 机密
@@ -42,7 +42,7 @@ powershell -File deploy\status.ps1 -Profile all                                 
 # ① 到任意一台机器，开工第一件事：拉最新
 git pull --rebase origin main
 
-#   ……在 wujie 里改代码……
+#   ……在 boundless 里改代码……
 
 # ② 收工/切换机器前：自检 → 提交 → 推
 powershell -File tools\repo_doctor.ps1        # 门禁 FAIL=0（pre-push 也会自动跑）
@@ -62,9 +62,9 @@ git push origin main
 5. 绝不 `git push --force`（已被 GitHub 挡）；绝不提交机密/权重。
 
 ## 5. avatarhub（换脸/换声）专项 · 5090 机
-- **唯一真源 = wujie**；5090 上的旧 `模仿音色` 交接后封存。
-- 换脸 **dev + debug 都在 5090**（它有 GPU/facefusion/模型）：在 5090 的 wujie 副本里改 `engines/avatarhub/`，本机 `deploy` 起服务调试。
-- **交接一次性动作**：5090 老仓最后一次 commit+push → 中枢 `tools\sync_engine.ps1 -Engine avatarhub -Apply` 并入 wujie → 5090 改用 `git clone wujie` 开发。此后不再用 sync_engine（除非回捞历史）。
+- **唯一真源 = boundless**；5090 上的旧 `模仿音色` 交接后封存。
+- 换脸 **dev + debug 都在 5090**（它有 GPU/facefusion/模型）：在 5090 的 boundless 副本里改 `engines/avatarhub/`，本机 `deploy` 起服务调试。
+- **交接一次性动作**：5090 老仓最后一次 commit+push → 中枢 `tools\sync_engine.ps1 -Engine avatarhub -Apply` 并入 boundless → 5090 改用 `git clone boundless` 开发。此后不再用 sync_engine（除非回捞历史）。
 
 ## 6. 门禁与卫生
 - 推前门禁：`tools\repo_doctor.ps1` 必须 FAIL=0（`pre-push` 钩子已自动跑；确需绕过 `git push --no-verify`）。

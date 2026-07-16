@@ -1,5 +1,5 @@
 ﻿<#
-  deploy.ps1 — wujie 全域起停/健康/provision 编排（Phase 7）
+  deploy.ps1 — boundless 全域起停/健康/provision 编排（Phase 7）
   单一源：deploy/stack.json（逻辑服务）+ deploy/cluster_map.json（跨机显存拓扑）
   设计：委派各引擎既有脚本（不重造），端口幂等，status 三态(GO/DEGRADED/DOWN)+退出码。
 
@@ -128,7 +128,7 @@ function Do-Status {
     $obj | ConvertTo-Json -Depth 6
     return $worst
   }
-  Write-Host "==================== wujie deploy status ($Profile) ===================="
+  Write-Host "==================== boundless deploy status ($Profile) ===================="
   foreach ($s in $states) {
     $color = switch ($s.verdict) { 'GO' {'Green'} 'DEGRADED' {'Yellow'} 'DOWN' {'Red'} default {'Gray'} }
     $portTxt = if ($s.port) { ":$($s.port)" } else { '(no port)' }
@@ -221,7 +221,7 @@ function Test-RuntimeExe($svc) {
 
 function Do-Provision {
   $svcs = Select-Services
-  Write-Host "==================== wujie provision 缺口体检 ($Profile) ===================="
+  Write-Host "==================== boundless provision 缺口体检 ($Profile) ===================="
   Write-Host "(只读；-Apply 才会动手，且仅做安全填补)"
   foreach ($svc in $svcs) {
     $dir = Resolve-Dir $svc

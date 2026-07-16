@@ -33,7 +33,7 @@
 - **与 cluster_map 分工**：`stack.json`=本机『逻辑服务怎么起停/探活』；`cluster_map.json`=跨机『IP×服务×显存预算』。换机改 cluster_map，改起停改 stack.json。
 - **委派而非重造**：huoke 直接用其成熟 `start/stop/status(-Json)`；chengjie 用 `start_main.ps1`；avatarhub 用 `boot_stack.bat`；index-tts 以正确 cwd 直起 uv（绕开已过期路径的 bat）。
 
-### 运行时迁移（让引擎真从 wujie 起）
+### 运行时迁移（让引擎真从 boundless 起）
 引擎是"拉净码"迁入，**运行时不在 git**（机密/模型/登录态）。先体检缺口，补齐后再起：
 ```powershell
 powershell -File deploy\deploy.ps1 -Action provision -Profile core          # 看缺什么

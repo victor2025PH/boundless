@@ -1,7 +1,7 @@
 ﻿<#
-  sync_engine.ps1 — 把各引擎『在别处持续开发的最新净码』拉进 wujie/engines/<engine>。
+  sync_engine.ps1 — 把各引擎『在别处持续开发的最新净码』拉进 boundless/engines/<engine>。
   为什么不是 git subtree/submodule：见 tools/engine_sources.json 头注（会把上游运行时/机密/大权重带进干净单仓）。
-  本工具做『净码再同步』：过滤复制上游源码 -> 人工 review -> 作为普通 wujie 提交。
+  本工具做『净码再同步』：过滤复制上游源码 -> 人工 review -> 作为普通 boundless 提交。
 
   用法：
     powershell -File tools\sync_engine.ps1 -Engine avatarhub -Check     # 只读：上游有没有新码可拉？
@@ -50,7 +50,7 @@ function Probe-Upstream($name, $cfg) {
     $baseKind = $cfg.last_synced.kind
     if ($baseKind -eq 'migration-snapshot') {
       Write-Host "  [判断] 上次是『迁移快照』(取自开发机较新副本)。若上游 GitHub HEAD 不比它新，" -ForegroundColor Yellow
-      Write-Host "         说明开发机的新代码还没 push 到 GitHub —— 要 wujie 能拉，请先让开发机 push，" -ForegroundColor Yellow
+      Write-Host "         说明开发机的新代码还没 push 到 GitHub —— 要 boundless 能拉，请先让开发机 push，" -ForegroundColor Yellow
       Write-Host "         或用 -From 直连开发机共享目录/SSH 同步。" -ForegroundColor Yellow
     }
     if ($name -eq 'avatarhub') {

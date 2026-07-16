@@ -1,6 +1,6 @@
 {
   "_comment": [
-    "wujie 全域进程注册表（单一源）——deploy.ps1 / up|down|status|provision 读它。",
+    "boundless 全域进程注册表（单一源）——deploy.ps1 / up|down|status|provision 读它。",
     "职责边界：本文件登记『本机可起停的逻辑服务』（进程/端口/健康/委派脚本/运行时依赖）；",
     "  cluster_map.json 仍是『跨机 × 显存预算』的拓扑单一源，二者互补不重复：",
     "  - 换机器/显存预算 -> 改 cluster_map.json",
@@ -137,7 +137,7 @@
         ]
       },
       "enabled": false,
-      "notes": "全栈主起在 GPU 主机(.176)。runtime_dir 现指向在跑的 D:/faceX/mfys（代码已在 engines/avatarhub，运行时后续可 provision 切到 wujie）。默认 enabled=false：GPU/多机，勿在非 GPU 机误起。"
+      "notes": "全栈主起在 GPU 主机(.176)。runtime_dir 现指向在跑的 D:/faceX/mfys（代码已在 engines/avatarhub，运行时后续可 provision 切到 boundless）。默认 enabled=false：GPU/多机，勿在非 GPU 机误起。"
     },
     {
       "id": "emotion_tts",

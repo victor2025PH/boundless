@@ -1,4 +1,4 @@
-# 无界科技 BOUNDLESS · 全域单仓 wujie
+# 无界科技 BOUNDLESS · 全域单仓 boundless
 
 母品牌无界 BOUNDLESS 旗下「三系七产品 + 官网 + 品牌库 + 文档」的统一单仓。
 
