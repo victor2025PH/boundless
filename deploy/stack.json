@@ -17,7 +17,8 @@
   "profiles": {
     "core": "常驻业务应用：承接(chengjie) + 获客主控(huoke)。任意机器可起，不需 GPU。",
     "web":  "官网 Next.js(website)。开发用 dev，上线用 build+start。",
-    "gpu":  "重算力/多机服务：avatarhub 全栈 + TTS/STT + index-tts。按 cluster_map 分机部署。"
+    "gpu":  "重算力/多机服务：avatarhub 全栈 + TTS/STT + index-tts。按 cluster_map 分机部署。",
+    "chengjie-dual": "智聊/通译双实例试点（P3）：同一份 engines/chengjie 代码 × 两套 config/端口/数据目录。默认 enabled=false 手动启用；运行手册 deploy/instances/README.md。"
   },
   "services": [
     {
@@ -42,6 +43,53 @@
       },
       "enabled": true,
       "notes": "主服务绑定 0.0.0.0:18799（见 _smoke.out）；health 需鉴权，故按端口+进程判活。协议侧车(whatsapp-baileys/messenger-web) 单独在 services/ 下。"
+    },
+    {
+      "id": "chengjie_zhiliao",
+      "title": "智聊 ChatX · chengjie 双实例（承接现网数据）",
+      "group": "engine",
+      "profiles": ["chengjie-dual"],
+      "dir": "deploy/instances",
+      "runtime": "python",
+      "entry": "main.py",
+      "ports": [18799, 18787],
+      "health": { "url": "http://127.0.0.1:18799/api/admin/health", "regex": "", "auth": true },
+      "gpu": false,
+      "up":   { "via": "script", "script": "start_zhiliao.ps1" },
+      "down": { "via": "port" },
+      "provision": {
+        "needs": [
+          "deploy/instances/zhiliao/data/ 初始化（instances/README §3.2：现网 config/ 整目录 + sessions/ 迁入 + domains junction；本条启用前先停旧 chengjie 单实例）",
+          "Python 依赖：engines/chengjie/requirements.txt（两实例共用同一 python 环境）",
+          "实例授权（可选）：data/config/license.key（instances/README §5，启动脚本注入 LICENSE_KEY）"
+        ]
+      },
+      "enabled": false,
+      "notes": "双实例试点，手动启用（up 需 -Only chengjie_zhiliao 或改 enabled）。与旧 chengjie 条目同端口 18799：启用本条 = 已按 instances/README §8 停旧单实例并把旧条目 enabled 改 false，双开会互踩。数据/环境隔离由 start_zhiliao.ps1 负责（AITR_DATA_DIR/EVENT_SPOOL_DIR/CHENGJIE_LEDGER_OUTBOX/LICENSE_KEY）。"
+    },
+    {
+      "id": "chengjie_tongyi",
+      "title": "通译 LingoX · chengjie 双实例（全新翻译实例）",
+      "group": "engine",
+      "profiles": ["chengjie-dual"],
+      "dir": "deploy/instances",
+      "runtime": "python",
+      "entry": "main.py",
+      "ports": [18899, 18887],
+      "health": { "url": "http://127.0.0.1:18899/api/admin/health", "regex": "", "auth": true },
+      "gpu": false,
+      "up":   { "via": "script", "script": "start_tongyi.ps1" },
+      "down": { "via": "port" },
+      "provision": {
+        "needs": [
+          "deploy/instances/tongyi/data/ 初始化（instances/README §3.1：config.example.yaml 起底 + tongyi/config.local.yaml 模板 + domains junction）",
+          "实例 overlay 必填：ai.api_key / web_admin.auth_token / secret_key（写实例的 config.local.yaml，勿回写模板）",
+          "Python 依赖：engines/chengjie/requirements.txt（两实例共用同一 python 环境）",
+          "实例授权（可选）：data/config/license.key（instances/README §5）"
+        ]
+      },
+      "enabled": false,
+      "notes": "双实例试点，手动启用。全新翻译实例：lingox 裁剪（companion/RPA/voice/monetization/contacts 全关，web_chat manual），不配 Telegram 协议号即走纯收件箱/网页翻译启动路径。端口 18899/18887 为新分配，cluster_map/stack 均无占用。"
     },
     {
       "id": "huoke",

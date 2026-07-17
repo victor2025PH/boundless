@@ -1,0 +1,40 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# 智聊 ChatX 实例 · config.local.yaml 模板（品牌 + 端口断言 overlay）
+#
+# 【本文件由部署时拷贝到该实例的 config 目录】
+#   目标位置：deploy\instances\zhiliao\data\config\config.local.yaml
+#   机制：与 config.yaml 同目录的 overlay，深合并覆盖（config_manager._merge_overlay），
+#         30 秒双文件热重载；改运营开关只改实例目录里的这份，模板本体不动。
+#
+# ⚠ 迁移自现网时【手工并入，绝不整文件覆盖】：现网 config.local.yaml 里有在用的
+#   运营开关（翻译引擎双活 / 发送闸门 / backfill…），整份替换会把它们全部清掉。
+#   只把下面 web_admin / brand（及需要的段）合并进现网 overlay 即可。
+#
+# 智聊 = 现网全功能形态：companion / RPA / 语音 / contacts / monetization 等能力
+# 以现网 config.yaml + overlay 为准，本模板刻意【不触碰】任何功能开关（只做品牌
+# 与端口断言），避免与现网调优互相打架。键路径均对照 config.example.yaml 核实。
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Web 后台：智聊沿用现网端口 18799（18787 为 example 默认，作备用位）──
+web_admin:
+  enabled: true
+  port: 18799
+  site_name: 无界科技 · 智聊
+  # host 不在此断言（沿用现网 config.yaml 的绑定；现网为 0.0.0.0，收敛面时再改）
+  # auth_token / secret_key 属机密，保留在实例的 config.yaml / 现网 overlay，模板不携带
+
+# ── 品牌（C1-1 白标；字段=save_branding 白名单，设置页保存写的就是这一段）──
+brand:
+  company_name: 无界科技
+  product_name: 智聊 ChatX
+  site_name: 无界科技 · 智聊
+  site_name_short: 智聊 ChatX
+  sidebar_name: 无界 · 智聊
+  login_subtitle: 智聊 ChatX · 管理控制台
+  # website_url / primary_color / logo_url / hide_powered_by 按需补
+
+# ── 全功能断言（智聊身份开关；其余能力细节沿用现网配置，不在模板重复）──
+companion:
+  enabled: true
+inbox:
+  enabled: true
