@@ -137,6 +137,11 @@ for (const pose of ["falling", "flying"]) {
 
   const skinNow = () => page.evaluate(() => sessionStorage.getItem("bl-sprite-skin") || "normal");
 
+  // 等龙珠悬浮簇完成首渲染（挂载延迟 1.8s）：避免其状态拉取/入场动画与连击撞车，
+  // 主线程卡顿会让 300ms 去抖在第 7 击前触发、误开客服
+  await page.waitForSelector(".dragon-pearl-offer, .dragon-tray", { timeout: 8000 }).catch(() => {});
+  await page.waitForTimeout(400);
+
   // 连点 7 次触发变身。用 page.mouse.click 在固定坐标快速点击（跳过 Playwright 的
   // 可操作性/稳定性等待——那些等待被 hover 缩放动画拖慢，会让 300ms 去抖误开客服）
   const box = await bot.boundingBox();
@@ -147,6 +152,25 @@ for (const pose of ["falling", "flying"]) {
     await page.mouse.click(cx, cy);
     await page.waitForTimeout(70);
   }
+  // 变身瞬间应有蝙蝠群 canvas（z-60）绘制像素（原地爆散→聚合）
+  await page.mouse.move(300, 300);
+  let batPixels = 0;
+  for (let s = 0; s < 6 && batPixels === 0; s++) {
+    await page.waitForTimeout(120);
+    batPixels = await page.evaluate(() => {
+      const c = Array.from(document.querySelectorAll("canvas")).find((x) => getComputedStyle(x).zIndex === "60");
+      if (!c) return -1;
+      try {
+        const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+        let n = 0;
+        for (let i = 3; i < d.length; i += 4) if (d[i] > 8) n++;
+        return n;
+      } catch {
+        return -2;
+      }
+    });
+  }
+  check("变身触发蝙蝠群渲染", batPixels > 200, `batPixels=${batPixels}`);
   await page.waitForTimeout(900);
   check("7 连击解锁恶魔皮肤", (await skinNow()) === "demon", `skin=${await skinNow()}`);
   // 变身后不应把客服面板一起打开（连击期间去抖抑制）

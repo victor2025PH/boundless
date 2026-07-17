@@ -28,6 +28,7 @@ export interface Plan {
 export interface Dict {
   nav: {
     solutions: string;
+    translate: string;
     demo: string;
     autochat: string;
     cases: string;
@@ -379,6 +380,7 @@ export interface Dict {
 const zh: Dict = {
   nav: {
     solutions: "业务能力",
+    translate: "实时翻译",
     demo: "实时换脸",
     autochat: "AI 成交聊天",
     cases: "案例",
@@ -454,11 +456,11 @@ const zh: Dict = {
       desc: "多平台文字 + 语音双向实时翻译，术语表锁定专有名词、翻译记忆省成本，统一收件箱沉淀客户资产——让不会外语的团队在 WhatsApp / Telegram / LINE 上即时跟全球客户对话。",
       features: ["多平台双向翻译", "术语锁定 · 翻译记忆", "统一收件箱 · 客户资产", "多模态（图片/语音）翻译"],
       highlight: true,
-      // TODO 定价待老板拍板（split_you_price）：先「按需报价」占位，价格数字确定后回填
+      // 定价与 lib/pricing.ts::translateOffers 同步（USD）；改价两处一起改。
       pricing: [
-        { plan: "字符包", price: "按需报价", detail: "一次性字符包 + 术语库" },
-        { plan: "团队", price: "按需报价", detail: "多坐席 + 客户 journey + 漏斗看板" },
-        { plan: "专业", price: "按需报价", detail: "不限字符 + 多模态 + 置信度/引擎健康" },
+        { plan: "字符包", price: "39", detail: "一次性 · 150 万字符 + 术语库 + 翻译记忆" },
+        { plan: "团队", price: "59 / 月", detail: "多坐席收件箱 + 客户 journey + 漏斗计数" },
+        { plan: "专业", price: "99 / 月", detail: "不限字符 + 多模态翻译 + 置信度/引擎健康" },
       ],
     },
     {
@@ -585,18 +587,18 @@ const zh: Dict = {
   },
   orderSteps: {
     title: "三步即可开通",
-    subtitle: "流程透明，全程 USDT 结算，开通即用。",
+    subtitle: "流程透明，确认即开通，开通即用。",
     steps: [
       { title: "选择服务", desc: "在业务与价格中挑选适合的套餐或组合。" },
       { title: "Telegram 沟通确认", desc: "添加客服，确认需求、用量与最终报价。" },
-      { title: "USDT 付款开通", desc: "核对收款地址后付款，快速开通账号与权限。" },
+      { title: "确认付款开通", desc: "核对收款信息后付款，快速开通账号与权限。" },
     ],
   },
   faq: {
     title: "常见问题",
     subtitle: "还有疑问？直接联系 Telegram 客服。",
     items: [
-      { q: "为什么只支持 USDT 结算？", a: "面向出海与跨境客户，USDT 无需绑卡、到账快、跨境无障碍。大额合作可联系客服商定其它方式。" },
+      { q: "支持哪些付款方式？", a: "下单前通过官方 Telegram 客服确认需求与报价；跨境客户支持 USDT 等结算，大额或企业合作可商定其它方式。" },
       { q: "支持私有化部署吗？", a: "支持。聊天聚合与自主可控 AI 均可部署到你的服务器，数据本地化、无云端上报。" },
       { q: "你们的 AI 翻译和谷歌翻译有什么不同？", a: "我们用 AI 翻译 + 对话技术，输出地道口语、地方俚语与文化语气，对方看不出你是外国人；不同于市面软件直接套谷歌等 API 的生硬直译。" },
       { q: "AI 能自动跟客户成交吗？人工能接管吗？", a: "可以。AI 以你的人设 7×24 自动接洽、答疑、跟进、促单转化，遇到关键节点人工可随时一键接管。" },
@@ -707,7 +709,7 @@ const zh: Dict = {
     points: [
       { title: "技术自研", desc: "声音 / 形象 / 对话 / 同传四大引擎自研可控，非简单套壳，实测指标可当场复现。" },
       { title: "私有可控", desc: "本地全栈部署，数据不出机房；产出物默认带 C2PA 可验真水印，政企合规首选。" },
-      { title: "出海友好", desc: "全程 USDT 结算，无需绑卡，跨境团队即买即用。" },
+      { title: "出海友好", desc: "多种结算方式、跨境无障碍，跨境团队即买即用。" },
       { title: "快速交付", desc: "标准业务即开即用，定制需求专属对接，交付含培训与运维。" },
     ],
   },
@@ -874,7 +876,7 @@ const zh: Dict = {
   engage: {
     badge: "合作方式 · 灵活共赢",
     title: "三种合作方式，总有一种适合你",
-    subtitle: "无论你已有硬件、想省心全包，还是想投资共赢——我们都能落地。硬件归你所有，数据私有不出网，全程 USDT 结算。",
+    subtitle: "无论你已有硬件、想省心全包，还是想投资共赢——我们都能落地。硬件归你所有，数据私有可控，结算方式灵活。",
     selectorTitle: "你的情况是？",
     youLabel: "你负责",
     weLabel: "我们负责",
@@ -1013,7 +1015,7 @@ const zh: Dict = {
   },
   contact: {
     title: "联系我们 · 下单",
-    subtitle: "添加 Telegram 客服，确认需求后以 USDT 结算。",
+    subtitle: "添加 Telegram 客服，确认需求后即可开通。",
     telegram: "Telegram 客服",
     telegramHandle: "@WJKJ2026",
     scanHint: "手机扫码直达客服",
@@ -1037,6 +1039,7 @@ const zh: Dict = {
 const en: Dict = {
   nav: {
     solutions: "Solutions",
+    translate: "Translate",
     demo: "Live Swap",
     autochat: "AI Closing",
     cases: "Cases",
@@ -1065,7 +1068,7 @@ const en: Dict = {
     ],
   },
   solutionsSection: {
-    title: "Three Families · Seven Product Lines",
+    title: "Three Families · Full Product Matrix",
     subtitle: "Growth (ReachX lead-gen · ChatX closing), Studio (FaceX · VoiceX · LiveX digital twins), Lingo (LingoX chat translation · VoxX voice interpreting) — seven lines across three families on one BOUNDLESS core, privately deployed and composable on demand.",
   },
   solutions: [
@@ -1112,11 +1115,11 @@ const en: Dict = {
       desc: "Two-way real-time text + voice translation across platforms, glossary-locked proper nouns, cost-saving translation memory, and a unified inbox that builds customer assets — so teams that don't speak the language can chat with global clients on WhatsApp / Telegram / LINE.",
       features: ["Multi-platform translation", "Term lock · translation memory", "Unified inbox · customer assets", "Multimodal (image/voice)"],
       highlight: true,
-      // TODO pricing pending owner decision (split_you_price): "quote on request" placeholder
+      // Prices mirror lib/pricing.ts::translateOffers (USD); change both together.
       pricing: [
-        { plan: "Char pack", price: "Quote", detail: "One-time char pack + glossary" },
-        { plan: "Team", price: "Quote", detail: "Multi-seat + customer journey + funnel" },
-        { plan: "Pro", price: "Quote", detail: "Unlimited chars + multimodal + confidence" },
+        { plan: "Char pack", price: "39", detail: "One-time · 1.5M chars + glossary + translation memory" },
+        { plan: "Team", price: "59 / mo", detail: "Multi-seat inbox + customer journey + funnel counter" },
+        { plan: "Pro", price: "99 / mo", detail: "Unlimited chars + multimodal translate + confidence/engine health" },
       ],
     },
     {
@@ -1243,18 +1246,18 @@ const en: Dict = {
   },
   orderSteps: {
     title: "Get started in 3 steps",
-    subtitle: "Transparent process, settled in USDT, ready to use instantly.",
+    subtitle: "Transparent process, confirm and go live instantly.",
     steps: [
       { title: "Pick a service", desc: "Choose the plan or combination that fits in solutions & pricing." },
       { title: "Confirm on Telegram", desc: "Add support to confirm needs, usage and the final quote." },
-      { title: "Pay in USDT & go live", desc: "Verify the address, pay, and get your account provisioned fast." },
+      { title: "Pay & go live", desc: "Verify payment details, pay, and get your account provisioned fast." },
     ],
   },
   faq: {
     title: "FAQ",
     subtitle: "Still have questions? Reach our Telegram support directly.",
     items: [
-      { q: "Why USDT only?", a: "Built for global and cross-border clients — USDT needs no cards, settles fast and works across borders. Large deals can arrange other methods with support." },
+      { q: "What payment methods do you accept?", a: "Confirm your needs and quote with our official Telegram support before ordering; cross-border clients can settle in USDT and others, and large or enterprise deals can arrange alternative methods." },
       { q: "Do you support private deployment?", a: "Yes. Chat aggregation and self-controlled AI can both deploy to your own servers — data stays local with no cloud reporting." },
       { q: "How is your AI translation different from Google Translate?", a: "We use AI translation + chat tech that outputs native slang, local idioms and cultural tone — they can't tell you're foreign — unlike tools that wire up Google-style APIs and read stiff and literal." },
       { q: "Can AI close deals automatically? Can humans take over?", a: "Yes. AI works your persona 24/7 to engage, answer, follow up and convert; at key moments a human can take over in one click." },
@@ -1365,7 +1368,7 @@ const en: Dict = {
     points: [
       { title: "Self-built tech", desc: "Voice / face / conversation / interpreting engines built in-house — not thin wrappers, with numbers you can reproduce live." },
       { title: "Private control", desc: "Full local stack, data stays in your racks; outputs carry a C2PA verifiable watermark by default — built for regulated buyers." },
-      { title: "Global-friendly", desc: "Settle fully in USDT — no cards, instant onboarding for cross-border teams." },
+      { title: "Global-friendly", desc: "Flexible settlement, frictionless cross-border onboarding for global teams." },
       { title: "Fast delivery", desc: "Standard services run out of the box; custom needs get dedicated support, with training and ops included." },
     ],
   },
@@ -1532,7 +1535,7 @@ const en: Dict = {
   engage: {
     badge: "Engagement · flexible & win-win",
     title: "Three ways to work with us",
-    subtitle: "Whether you already own hardware, want a fully managed setup, or want to invest and share returns — we deliver. You own the hardware, data stays private off the net, settled in USDT.",
+    subtitle: "Whether you already own hardware, want a fully managed setup, or want to invest and share returns — we deliver. You own the hardware, data stays private and controlled, with flexible settlement.",
     selectorTitle: "Which fits you?",
     youLabel: "You handle",
     weLabel: "We handle",
@@ -1671,7 +1674,7 @@ const en: Dict = {
   },
   contact: {
     title: "Contact & Order",
-    subtitle: "Add our Telegram support, confirm your needs, settle in USDT.",
+    subtitle: "Add our Telegram support, confirm your needs, and get started.",
     telegram: "Telegram Support",
     telegramHandle: "@WJKJ2026",
     scanHint: "Scan to chat on mobile",

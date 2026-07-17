@@ -15,14 +15,15 @@ mkdirSync(OUT, { recursive: true });
 
 const STILL_MODES = ["idle_base", "idle_wave", "idle_dance", "idle_scan", "idle_news", "idle_spin", "flying", "falling"];
 const VIDEO_MODES = ["idle_base", "idle_wave", "idle_dance", "idle_news"];
-// 皮肤：normal 全套 + demon 精选（彩蛋营销素材）
+// 皮肤：normal 全套 + demon/loong 精选（彩蛋营销素材）
 const SKINS = [
   { skin: "normal", stills: STILL_MODES, videos: VIDEO_MODES },
   { skin: "demon", stills: ["idle_base", "idle_wave", "idle_dance"], videos: ["idle_base", "idle_wave"] },
+  { skin: "loong", stills: ["idle_base", "idle_wave", "idle_dance", "flying"], videos: ["idle_base", "idle_wave", "flying"] },
 ];
 
 const browser = await chromium.launch();
-const suffix = (skin) => (skin === "demon" ? "-demon" : "");
+const suffix = (skin) => (skin === "normal" ? "" : `-${skin}`);
 
 /* ---------- 透明 PNG 静帧 ---------- */
 {

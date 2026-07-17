@@ -9,7 +9,10 @@
     "lint": "next lint",
     "verify:robot": "node scripts/robot-shot.mjs .robot-shots && node scripts/robot-behavior.mjs .robot-shots",
     "perf:robot": "node scripts/robot-perf.mjs",
-    "assets:robot": "node scripts/robot-capture.mjs"
+    "assets:robot": "node scripts/robot-capture.mjs",
+    "assets:teaser": "node scripts/robot-teaser.mjs",
+    "verify:dragon": "node scripts/robot-dragon.mjs",
+    "smoke:prod": "node scripts/robot-prodsmoke.mjs"
   },
   "dependencies": {
     "framer-motion": "^11.3.0",

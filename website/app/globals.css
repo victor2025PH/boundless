@@ -2156,3 +2156,38 @@ html.mode-switching * {
     fill 0.45s ease,
     stroke 0.45s ease !important;
 }
+
+/* ── 祥龙 LoongForm：小屏 LOD + lowFx 慢摆降级 ── */
+@media (max-width: 520px) {
+  /* 只藏鳞点/甲纹等碎细节；脸（腮红/眉）保留，避免「脸塌」 */
+  .loong-fine {
+    display: none;
+  }
+  .loong-whisker {
+    stroke-width: 2.2;
+  }
+  .loong-pearl-dust {
+    display: none;
+  }
+}
+
+@keyframes loong-lowfx-sway {
+  0%,
+  100% {
+    transform: rotate(-1.4deg);
+  }
+  50% {
+    transform: rotate(1.4deg);
+  }
+}
+
+.loong-lowfx-sway {
+  transform-origin: 64px 90px;
+  animation: loong-lowfx-sway 4.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loong-lowfx-sway {
+    animation: none;
+  }
+}
