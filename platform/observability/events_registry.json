@@ -1,0 +1,425 @@
+{
+  "note": "无界全域运营事件字典（单一真相）。新事件先在此注册、过隐私红线评审后才可发射；未注册事件不拒收，落盘信封会带 _unregistered=true 供治理。契约全文见 EVENT_CONTRACT.md。每个事件的 description 末尾即触发时机（……时发射）。",
+  "version": 1,
+  "updated": "2026-07-18",
+  "name_pattern": "^[a-z0-9_]+\\.[a-z0-9_]+\\.[a-z0-9_]+$",
+  "event_id_pattern": "^evt_[0-9A-HJKMNP-TV-Z]{26}$",
+  "product_ids": [
+    "zhituo",
+    "zhiliao",
+    "tongyi",
+    "tongchuan",
+    "huansheng",
+    "huanying",
+    "huanyan",
+    "website",
+    "platform"
+  ],
+  "tiers": {
+    "core": "集团统一后台必看的漏斗/收入/用量指标，接入产品必须发射",
+    "optional": "产品深度运营自选埋点，集团端可选消费"
+  },
+  "spool": {
+    "env": "EVENT_SPOOL_DIR",
+    "default_dir": "data/events/spool/",
+    "file_pattern": "events-YYYYMMDD.jsonl（按事件 ts 的 UTC 日期分文件）"
+  },
+  "events": [
+    {
+      "name": "website.lead.submitted",
+      "tier": "core",
+      "product": "website",
+      "description": "官网线索表单校验通过、入库成功时发射；联系方式原文留在官网本地库，事件只带线索 ID 引用。",
+      "props": [
+        { "name": "lead_id", "type": "string", "required": true, "description": "线索记录 ID 引用（不含姓名/联系方式原文）" },
+        { "name": "product_interest", "type": "string", "required": false, "description": "意向产品 product_id（如 tongyi）" },
+        { "name": "channel", "type": "string", "required": false, "description": "归一化来源渠道（organic/ads/referral/social 等）" },
+        { "name": "region", "type": "string", "required": false, "description": "粗粒度地区（国家或省级，不到城市街道）" }
+      ]
+    },
+    {
+      "name": "website.order.created",
+      "tier": "core",
+      "product": "website",
+      "description": "客户选定 SKU 提交订单、订单落库进入待支付态时发射。",
+      "props": [
+        { "name": "order_id", "type": "string", "required": true, "description": "订单 ID（ord_*）" },
+        { "name": "sku_id", "type": "string", "required": true, "description": "SKU 标识（platform/licensing/sku_registry.json）" },
+        { "name": "product", "type": "string", "required": true, "description": "所购产品 product_id" },
+        { "name": "amount", "type": "float", "required": true, "description": "应付金额" },
+        { "name": "currency", "type": "string", "required": true, "description": "币种（ISO 4217，如 USD）" },
+        { "name": "channel", "type": "string", "required": false, "description": "下单入口渠道（pricing/landing/console）" }
+      ]
+    },
+    {
+      "name": "website.order.paid",
+      "tier": "core",
+      "product": "website",
+      "description": "支付网关回调确认到账（含链上确认）时发射。",
+      "props": [
+        { "name": "order_id", "type": "string", "required": true, "description": "订单 ID（ord_*）" },
+        { "name": "sku_id", "type": "string", "required": false, "description": "SKU 标识" },
+        { "name": "amount", "type": "float", "required": false, "description": "实付金额" },
+        { "name": "currency", "type": "string", "required": false, "description": "币种" },
+        { "name": "payment_method", "type": "string", "required": false, "description": "支付通道（stripe/alipay/wechat/usdt 等）" }
+      ]
+    },
+    {
+      "name": "website.order.activated",
+      "tier": "core",
+      "product": "website",
+      "description": "订单交付开通完成（授权签发/服务开通、客户可用）时发射。",
+      "props": [
+        { "name": "order_id", "type": "string", "required": true, "description": "订单 ID（ord_*）" },
+        { "name": "sku_id", "type": "string", "required": false, "description": "SKU 标识" },
+        { "name": "license_id", "type": "string", "required": false, "description": "关联签发的授权 ID（lic_*）" },
+        { "name": "paid_to_activated_s", "type": "int", "required": false, "description": "从支付到开通的秒数（交付时效指标）" }
+      ]
+    },
+    {
+      "name": "website.order.cancelled",
+      "tier": "core",
+      "product": "website",
+      "description": "订单取消（用户主动/超时未付/风控拒绝/退款）时发射。",
+      "props": [
+        { "name": "order_id", "type": "string", "required": true, "description": "订单 ID（ord_*）" },
+        { "name": "reason", "type": "string", "required": false, "description": "取消原因枚举（user/timeout/risk/refund）" },
+        { "name": "stage", "type": "string", "required": false, "description": "取消时订单所处状态（created/paid）" },
+        { "name": "refunded", "type": "bool", "required": false, "description": "是否发生退款" }
+      ]
+    },
+    {
+      "name": "platform.license.issued",
+      "tier": "core",
+      "product": "platform",
+      "description": "授权中心签发新授权成功时发射。",
+      "props": [
+        { "name": "license_id", "type": "string", "required": true, "description": "授权 ID（lic_*）" },
+        { "name": "sku_id", "type": "string", "required": true, "description": "SKU 标识" },
+        { "name": "product", "type": "string", "required": true, "description": "授权生效产品 product_id" },
+        { "name": "edition", "type": "string", "required": false, "description": "档位（trial/standard/pro）" },
+        { "name": "valid_days", "type": "int", "required": false, "description": "有效期天数" },
+        { "name": "order_id", "type": "string", "required": false, "description": "关联订单 ID（ord_*，与 website.order.activated 串联）" }
+      ]
+    },
+    {
+      "name": "platform.license.renewed",
+      "tier": "core",
+      "product": "platform",
+      "description": "已有授权续期成功时发射。",
+      "props": [
+        { "name": "license_id", "type": "string", "required": true, "description": "授权 ID（lic_*）" },
+        { "name": "sku_id", "type": "string", "required": false, "description": "SKU 标识" },
+        { "name": "extend_days", "type": "int", "required": false, "description": "本次续期天数" },
+        { "name": "order_id", "type": "string", "required": false, "description": "关联续费订单 ID" }
+      ]
+    },
+    {
+      "name": "platform.license.revoked",
+      "tier": "core",
+      "product": "platform",
+      "description": "授权被主动吊销（退款/违规/换绑重签）时发射。",
+      "props": [
+        { "name": "license_id", "type": "string", "required": true, "description": "授权 ID（lic_*）" },
+        { "name": "reason", "type": "string", "required": false, "description": "吊销原因枚举（refund/abuse/rebind）" }
+      ]
+    },
+    {
+      "name": "platform.license.expired",
+      "tier": "core",
+      "product": "platform",
+      "description": "授权到期失效（到期扫描判定）时发射。",
+      "props": [
+        { "name": "license_id", "type": "string", "required": true, "description": "授权 ID（lic_*）" },
+        { "name": "sku_id", "type": "string", "required": false, "description": "SKU 标识" },
+        { "name": "days_active", "type": "int", "required": false, "description": "授权实际存续天数" }
+      ]
+    },
+    {
+      "name": "zhituo.task.started",
+      "tier": "core",
+      "product": "zhituo",
+      "description": "获客任务（批量加友/打招呼/私信）开始在真机集群执行时发射。",
+      "props": [
+        { "name": "task_id", "type": "string", "required": true, "description": "任务 ID" },
+        { "name": "platform", "type": "string", "required": true, "description": "目标社交平台（facebook/messenger/tiktok/whatsapp 等）" },
+        { "name": "task_type", "type": "string", "required": false, "description": "任务类型（add_friend/greeting/dm）" },
+        { "name": "device_count", "type": "int", "required": false, "description": "参与执行的真机数量" },
+        { "name": "target_count", "type": "int", "required": false, "description": "计划触达人数" }
+      ]
+    },
+    {
+      "name": "zhituo.friend.added",
+      "tier": "core",
+      "product": "zhituo",
+      "description": "加友请求被对方通过、好友关系建立时发射。",
+      "props": [
+        { "name": "platform", "type": "string", "required": true, "description": "社交平台" },
+        { "name": "task_id", "type": "string", "required": false, "description": "归属任务 ID" },
+        { "name": "account_id", "type": "string", "required": false, "description": "执行账号内部 ID（脱敏引用，非平台账号原文）" },
+        { "name": "contact_id", "type": "string", "required": false, "description": "新建联系人 ID 引用" }
+      ]
+    },
+    {
+      "name": "zhituo.prospect.replied",
+      "tier": "core",
+      "product": "zhituo",
+      "description": "新加好友首次开口回复（开口率分子）时发射；只记事实，不带回复内容。",
+      "props": [
+        { "name": "platform", "type": "string", "required": true, "description": "社交平台" },
+        { "name": "contact_id", "type": "string", "required": false, "description": "联系人 ID 引用" },
+        { "name": "task_id", "type": "string", "required": false, "description": "归属任务 ID" },
+        { "name": "first_reply_latency_s", "type": "int", "required": false, "description": "加友成功到首次开口的秒数" }
+      ]
+    },
+    {
+      "name": "zhituo.task.completed",
+      "tier": "optional",
+      "product": "zhituo",
+      "description": "获客任务执行结束、汇总统计产出时发射。",
+      "props": [
+        { "name": "task_id", "type": "string", "required": true, "description": "任务 ID" },
+        { "name": "sent_count", "type": "int", "required": false, "description": "已发出动作数" },
+        { "name": "success_count", "type": "int", "required": false, "description": "成功数" },
+        { "name": "fail_count", "type": "int", "required": false, "description": "失败数" },
+        { "name": "duration_s", "type": "int", "required": false, "description": "任务总耗时秒" }
+      ]
+    },
+    {
+      "name": "zhiliao.session.started",
+      "tier": "core",
+      "product": "zhiliao",
+      "description": "统一收件箱建立新客户会话时发射。",
+      "props": [
+        { "name": "session_id", "type": "string", "required": true, "description": "会话 ID" },
+        { "name": "platform", "type": "string", "required": true, "description": "来源平台（telegram/line/messenger 等）" },
+        { "name": "persona_id", "type": "string", "required": false, "description": "承接 AI 人设 ID（prs_*）" },
+        { "name": "is_new_contact", "type": "bool", "required": false, "description": "是否首次进线新客户" }
+      ]
+    },
+    {
+      "name": "zhiliao.session.ai_engaged",
+      "tier": "core",
+      "product": "zhiliao",
+      "description": "AI 人设发出该会话首条自动回复、完成承接时发射；不带回复文本。",
+      "props": [
+        { "name": "session_id", "type": "string", "required": true, "description": "会话 ID" },
+        { "name": "persona_id", "type": "string", "required": false, "description": "承接 AI 人设 ID" },
+        { "name": "first_response_ms", "type": "int", "required": false, "description": "客户消息到 AI 首响的毫秒数" }
+      ]
+    },
+    {
+      "name": "zhiliao.session.handed_off",
+      "tier": "core",
+      "product": "zhiliao",
+      "description": "会话从 AI 移交人工坐席时发射。",
+      "props": [
+        { "name": "session_id", "type": "string", "required": true, "description": "会话 ID" },
+        { "name": "reason", "type": "string", "required": false, "description": "移交原因枚举（keyword/low_confidence/customer_request/manual）" },
+        { "name": "ai_turns", "type": "int", "required": false, "description": "移交前 AI 已应答轮数" }
+      ]
+    },
+    {
+      "name": "zhiliao.translation.chars_metered",
+      "tier": "core",
+      "product": "zhiliao",
+      "description": "会话内翻译字符量按批次聚合上报时发射；只带计数，绝不带原文/译文。",
+      "props": [
+        { "name": "chars", "type": "int", "required": true, "description": "本批翻译字符数" },
+        { "name": "src_lang", "type": "string", "required": false, "description": "源语言（BCP-47）" },
+        { "name": "dst_lang", "type": "string", "required": false, "description": "目标语言（BCP-47）" },
+        { "name": "session_id", "type": "string", "required": false, "description": "归属会话 ID" },
+        { "name": "provider", "type": "string", "required": false, "description": "翻译引擎标识" }
+      ]
+    },
+    {
+      "name": "zhiliao.session.closed",
+      "tier": "optional",
+      "product": "zhiliao",
+      "description": "会话关闭/归档时发射。",
+      "props": [
+        { "name": "session_id", "type": "string", "required": true, "description": "会话 ID" },
+        { "name": "duration_s", "type": "int", "required": false, "description": "会话时长秒" },
+        { "name": "msg_count", "type": "int", "required": false, "description": "双方消息条数（仅计数，非内容）" },
+        { "name": "outcome", "type": "string", "required": false, "description": "会话结果枚举（converted/lost/pending）" }
+      ]
+    },
+    {
+      "name": "tongyi.session.started",
+      "tier": "core",
+      "product": "tongyi",
+      "description": "翻译工作台开启新的双语会话时发射。",
+      "props": [
+        { "name": "session_id", "type": "string", "required": true, "description": "会话 ID" },
+        { "name": "platform", "type": "string", "required": false, "description": "客户来源平台" },
+        { "name": "src_lang", "type": "string", "required": false, "description": "源语言（BCP-47）" },
+        { "name": "dst_lang", "type": "string", "required": false, "description": "目标语言（BCP-47）" }
+      ]
+    },
+    {
+      "name": "tongyi.session.ai_engaged",
+      "tier": "core",
+      "product": "tongyi",
+      "description": "AI 自动应答承接该会话首条回复时发射；不带回复文本。",
+      "props": [
+        { "name": "session_id", "type": "string", "required": true, "description": "会话 ID" },
+        { "name": "persona_id", "type": "string", "required": false, "description": "承接 AI 人设 ID" },
+        { "name": "first_response_ms", "type": "int", "required": false, "description": "客户消息到 AI 首响的毫秒数" }
+      ]
+    },
+    {
+      "name": "tongyi.session.handed_off",
+      "tier": "core",
+      "product": "tongyi",
+      "description": "会话由 AI 转交人工坐席接管时发射。",
+      "props": [
+        { "name": "session_id", "type": "string", "required": true, "description": "会话 ID" },
+        { "name": "reason", "type": "string", "required": false, "description": "移交原因枚举（keyword/low_confidence/customer_request/manual）" },
+        { "name": "ai_turns", "type": "int", "required": false, "description": "移交前 AI 已应答轮数" }
+      ]
+    },
+    {
+      "name": "tongyi.translation.chars_metered",
+      "tier": "core",
+      "product": "tongyi",
+      "description": "翻译字符量按批次聚合上报时发射，对齐按量计费口径；只带计数，绝不带原文/译文。",
+      "props": [
+        { "name": "chars", "type": "int", "required": true, "description": "本批翻译字符数" },
+        { "name": "src_lang", "type": "string", "required": false, "description": "源语言（BCP-47）" },
+        { "name": "dst_lang", "type": "string", "required": false, "description": "目标语言（BCP-47）" },
+        { "name": "session_id", "type": "string", "required": false, "description": "归属会话 ID" },
+        { "name": "billable", "type": "bool", "required": false, "description": "是否计入计费口径" }
+      ]
+    },
+    {
+      "name": "tongchuan.session.started",
+      "tier": "core",
+      "product": "tongchuan",
+      "description": "同传会话（会议/直播接入）建立并开始收音时发射。",
+      "props": [
+        { "name": "session_id", "type": "string", "required": true, "description": "同传会话 ID" },
+        { "name": "mode", "type": "string", "required": false, "description": "场景枚举（meeting/live）" },
+        { "name": "src_lang", "type": "string", "required": false, "description": "源语言（BCP-47）" },
+        { "name": "dst_lang", "type": "string", "required": false, "description": "目标语言（BCP-47）" },
+        { "name": "voice_clone", "type": "bool", "required": false, "description": "是否使用克隆音同传" }
+      ]
+    },
+    {
+      "name": "tongchuan.session.ended",
+      "tier": "core",
+      "product": "tongchuan",
+      "description": "同传会话结束时发射，时长即通话套餐分钟计量口径；不带任何转写文本。",
+      "props": [
+        { "name": "session_id", "type": "string", "required": true, "description": "同传会话 ID" },
+        { "name": "duration_s", "type": "int", "required": true, "description": "会话总时长秒" },
+        { "name": "audio_minutes", "type": "float", "required": false, "description": "计费口径分钟数" },
+        { "name": "segments", "type": "int", "required": false, "description": "产出字幕段数（仅计数）" }
+      ]
+    },
+    {
+      "name": "huansheng.voice.clone_completed",
+      "tier": "core",
+      "product": "huansheng",
+      "description": "零样本声音克隆完成、音色资产可用时发射；只带资产 ID 引用，绝不带声纹/音频数据。",
+      "props": [
+        { "name": "voice_id", "type": "string", "required": true, "description": "音色资产 ID 引用（非声纹本体）" },
+        { "name": "engine", "type": "string", "required": false, "description": "克隆引擎（fish/voxcpm/qwen3 等）" },
+        { "name": "sample_seconds", "type": "float", "required": false, "description": "参考音频时长秒（仅时长，不含音频）" },
+        { "name": "elapsed_ms", "type": "int", "required": false, "description": "克隆耗时毫秒" }
+      ]
+    },
+    {
+      "name": "huansheng.tts.chars_metered",
+      "tier": "core",
+      "product": "huansheng",
+      "description": "TTS 合成字符量按批次计量上报时发射（对应按量 SKU voicex-usage）；只带计数不带文本。",
+      "props": [
+        { "name": "chars", "type": "int", "required": true, "description": "本批合成字符数" },
+        { "name": "voice_id", "type": "string", "required": false, "description": "使用音色资产 ID" },
+        { "name": "lang", "type": "string", "required": false, "description": "合成语种（BCP-47）" },
+        { "name": "engine", "type": "string", "required": false, "description": "TTS 引擎标识" },
+        { "name": "billable", "type": "bool", "required": false, "description": "是否计入计费口径" }
+      ]
+    },
+    {
+      "name": "huansheng.persona.created",
+      "tier": "core",
+      "product": "huansheng",
+      "description": "在幻声内创建/装配完成新人设（音色绑定人设档案）时发射。",
+      "props": [
+        { "name": "persona_id", "type": "string", "required": true, "description": "人设 ID（prs_*）" },
+        { "name": "has_voice", "type": "bool", "required": false, "description": "是否已绑定音色资产" },
+        { "name": "has_face", "type": "bool", "required": false, "description": "是否已绑定形象资产" }
+      ]
+    },
+    {
+      "name": "huanying.live.started",
+      "tier": "core",
+      "product": "huanying",
+      "description": "数字人直播/虚拟摄像头推流开播时发射。",
+      "props": [
+        { "name": "session_id", "type": "string", "required": true, "description": "开播场次 ID" },
+        { "name": "persona_id", "type": "string", "required": false, "description": "使用人设 ID（prs_*）" },
+        { "name": "mode", "type": "string", "required": false, "description": "推流方式枚举（webrtc/obs_vcam）" },
+        { "name": "faceswap_on", "type": "bool", "required": false, "description": "是否开启直播实时换脸" }
+      ]
+    },
+    {
+      "name": "huanying.live.ended",
+      "tier": "optional",
+      "product": "huanying",
+      "description": "关播、推流会话结束时发射。",
+      "props": [
+        { "name": "session_id", "type": "string", "required": true, "description": "开播场次 ID" },
+        { "name": "duration_s", "type": "int", "required": false, "description": "开播时长秒" },
+        { "name": "avg_fps", "type": "float", "required": false, "description": "平均输出帧率（质量指标）" }
+      ]
+    },
+    {
+      "name": "huanying.persona.created",
+      "tier": "core",
+      "product": "huanying",
+      "description": "在幻影内创建/装配完成数字人人设（形象+音色就绪、可开播）时发射。",
+      "props": [
+        { "name": "persona_id", "type": "string", "required": true, "description": "人设 ID（prs_*）" },
+        { "name": "has_voice", "type": "bool", "required": false, "description": "是否已绑定音色资产" },
+        { "name": "has_face", "type": "bool", "required": false, "description": "是否已绑定形象资产" }
+      ]
+    },
+    {
+      "name": "huanyan.faceswap.submitted",
+      "tier": "optional",
+      "product": "huanyan",
+      "description": "换脸任务提交进渲染队列时发射。",
+      "props": [
+        { "name": "job_id", "type": "string", "required": true, "description": "任务 ID" },
+        { "name": "media_type", "type": "string", "required": false, "description": "素材类型枚举（image/video）" },
+        { "name": "consent_confirmed", "type": "bool", "required": false, "description": "授权确认勾选留痕（合规指标）" }
+      ]
+    },
+    {
+      "name": "huanyan.faceswap.completed",
+      "tier": "core",
+      "product": "huanyan",
+      "description": "图/视频换脸任务渲染成功完成时发射；只带任务指标，绝不带人脸图像数据。",
+      "props": [
+        { "name": "job_id", "type": "string", "required": true, "description": "任务 ID" },
+        { "name": "media_type", "type": "string", "required": false, "description": "素材类型枚举（image/video）" },
+        { "name": "frames", "type": "int", "required": false, "description": "渲染帧数" },
+        { "name": "elapsed_ms", "type": "int", "required": false, "description": "渲染耗时毫秒" },
+        { "name": "watermarked", "type": "bool", "required": false, "description": "产物是否嵌入合规水印" }
+      ]
+    },
+    {
+      "name": "huanyan.persona.created",
+      "tier": "core",
+      "product": "huanyan",
+      "description": "在幻颜内创建/装配完成人设（脸模+定妆档案）时发射。",
+      "props": [
+        { "name": "persona_id", "type": "string", "required": true, "description": "人设 ID（prs_*）" },
+        { "name": "has_voice", "type": "bool", "required": false, "description": "是否已绑定音色资产" },
+        { "name": "has_face", "type": "bool", "required": false, "description": "是否已绑定形象资产" }
+      ]
+    }
+  ]
+}
