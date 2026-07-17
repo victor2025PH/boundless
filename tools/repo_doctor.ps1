@@ -71,6 +71,56 @@ else { Line 'WARN' ('products invalid/missing manifest: ' + ($bad -join ',')) }
 $tbd = (git grep -c "price: TBD" -- products 2>$null | Measure-Object).Count
 if ($tbd -gt 0) { Line 'WARN' ("products with TBD pricing (owner to fill): $tbd file(s)") }
 
+# H 官网产品口径门禁：禁止硬编码「五/六/七 大|条 产品」类数字（白名单 brand.ts）
+$copyHits = git grep -nIE "([五六七八]|[5678])\s*(大|条)\s*产品|([Ff]ive|[Ss]ix|[Ss]even)\s+(AI\s+)?[Pp]roduct|[Ff]ive\s+walls" -- website 2>$null |
+  Where-Object { $_ -notmatch 'website/lib/brand\.ts' -and $_ -notmatch 'node_modules|\.next|package-lock' }
+$copyN = ($copyHits | Measure-Object).Count
+if ($copyN -eq 0) { Line 'OK' 'website product-count copy uses PRODUCT_COUNT (no hard-coded 5/6/7)' }
+else {
+  # 全站已清零后升级为 FAIL：新硬编码数字会在 pre-push 被拦下（白名单 brand.ts）
+  Line 'FAIL' ("hard-coded product-count copy: $copyN (use PRODUCT_COUNT / FAMILY_PITCH from lib/brand.ts)")
+  $copyHits | Select-Object -First 8 | ForEach-Object { Write-Output ('      ' + $_) }
+}
+
+# I 产品图标完整性：7 张必须存在且为正方形（防再混入非方/缺 voxx）
+$iconKeys = @('reachx','chatx','facex','voicex','livex','lingox','voxx')
+$iconBad = @()
+Add-Type -AssemblyName System.Drawing -EA SilentlyContinue
+foreach ($k in $iconKeys) {
+  $fp = Join-Path $root ("website/public/brand/products/$k.png")
+  if (-not (Test-Path $fp)) { $iconBad += "$k missing"; continue }
+  try {
+    $img = [System.Drawing.Image]::FromFile((Resolve-Path $fp))
+    if ($img.Width -ne $img.Height) { $iconBad += ("{0} {1}x{2} not square" -f $k, $img.Width, $img.Height) }
+    $img.Dispose()
+  } catch { $iconBad += "$k unreadable" }
+}
+if ($iconBad.Count -eq 0) { Line 'OK' 'product icons: 7 square PNGs present' }
+else { Line 'FAIL' ('product icons bad: ' + ($iconBad -join '; ')) }
+
+# J 产品落地页路由存在性（PRODUCT_LANDING 路径对应 app 路由，缺页则导航 404）
+$landingRoutes = @('voice','face','interpreting','growth','brand')
+$missLand = @()
+foreach ($r in $landingRoutes) {
+  $zh = Join-Path $root ("website/app/$r/page.tsx")
+  $en = Join-Path $root ("website/app/en/$r/page.tsx")
+  if (-not (Test-Path $zh)) { $missLand += "/$r" }
+  if (-not (Test-Path $en)) { $missLand += "/en/$r" }
+}
+if ($missLand.Count -eq 0) { Line 'OK' 'product landing routes present (zh+en): voice/face/interpreting/growth/brand' }
+else { Line 'FAIL' ('missing landing routes: ' + ($missLand -join ', ')) }
+
+# K brand-assets sync 目标：boundless/website 必须在 sync_brand_targets.py 的 SITES 里
+$syncPy = Join-Path $root 'brand-assets/sync_brand_targets.py'
+if (Test-Path $syncPy) {
+  $syncTxt = Get-Content -LiteralPath $syncPy -Raw
+  if ($syncTxt -match 'boundless.*website|boundless\\\\website|boundless/website') {
+    Line 'OK' 'sync_brand_targets.py targets boundless/website'
+  } else {
+    Line 'WARN' 'sync_brand_targets.py may not list boundless/website as a sync site'
+  }
+}
+
 Write-Output '----------------------------------------------------------'
 Write-Output ("SUMMARY: FAIL=$fail  WARN=$warn   tracked=" + ((git ls-files | Measure-Object).Count))
 if ($fail -gt 0) { Write-Output 'DOCTOR: RED (fix FAILs before release)'; exit 1 }
