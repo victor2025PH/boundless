@@ -7,23 +7,56 @@ function hub() {
     cmdShow:false, cmdQuery:'', cmdIndex:0,   // 命令面板（Ctrl+K）
     // [统一图标·2026-07-16] ic=brand-icons.svg 线性图标(侧栏/横向导航/命令面板经 icx() 渲染)。
     // emoji 过渡字段已退役(消费面归零核实于同日)；功能注册表(/api/features)的 icon 仍保留作旧缓存回退。
+    // [四视角 P0-2·2026-07-16] 分组按「任务流」而非「东西是什么」：建分身 → 做内容 → 推上线 → 看数据。
+    //   同传从「运营」还位为上线能力；「对话」以跳出型页签入列（href= 新窗口打开 /phone，不离开控制台）；
+    //   opsOnly=1 的页签在演示模式隐藏（对客户演示时藏起运维噪音）。
+    //   tooltip 的产品线副标题运行时取自 /api/features 注册表（tabTitle()），不在此重复维护。
     tabs: [
-      // ── 角色组 ──────────────────────────────────────────
-      {id:'profiles', ic:'users',  label:'角色库', group:'角色'},
-      {id:'clone',    ic:'copy',   label:'克隆',   group:'角色'},
-      // ── 创作组 ──────────────────────────────────────────
-      {id:'voice',    ic:'mic',    label:'语音',   group:'创作'},
-      {id:'sing',     ic:'music',  label:'唱歌',   group:'创作'},
-      {id:'batch',    ic:'package',label:'批量',   group:'创作'},
-      // ── 运营组 ──────────────────────────────────────────
-      {id:'dashboard',ic:'chart',  label:'看板',   group:'运营'},
-      {id:'stream',   ic:'signal', label:'开播',   group:'运营'},
-      {id:'interp',   ic:'globe',  label:'同传',   group:'运营'},
-      {id:'history',  ic:'clock',  label:'历史',   group:'运营'},
-      {id:'selfcheck',ic:'check',  label:'交付体检', group:'运营'},
-      {id:'logs',     ic:'file',   label:'日志',   group:'运营'},
-      {id:'settings', ic:'gear',   label:'设置',   group:'运营'},
+      // ── 我的分身：角色与声音是一切的起点 ─────────────────
+      {id:'profiles', ic:'users',  label:'角色库', group:'我的分身'},
+      {id:'clone',    ic:'copy',   label:'克隆',   group:'我的分身'},
+      // ── 内容创作 ──────────────────────────────────────────
+      {id:'voice',    ic:'mic',    label:'语音',   group:'内容创作'},
+      {id:'sing',     ic:'music',  label:'唱歌',   group:'内容创作'},
+      {id:'batch',    ic:'package',label:'批量',   group:'内容创作'},
+      // ── 上线：把分身推向观众 / 客户 ───────────────────────
+      {id:'stream',   ic:'signal', label:'开播',   group:'上线'},
+      {id:'phone',    ic:'chat',   label:'对话',   group:'上线', href:'/phone'},
+      {id:'interp',   ic:'globe',  label:'同传',   group:'上线'},
+      // ── 数据与运维 ────────────────────────────────────────
+      {id:'dashboard',ic:'chart',  label:'看板',   group:'数据与运维'},
+      {id:'history',  ic:'clock',  label:'历史',   group:'数据与运维'},
+      {id:'selfcheck',ic:'check',  label:'交付体检', group:'数据与运维', opsOnly:1},
+      {id:'logs',     ic:'file',   label:'日志',   group:'数据与运维', opsOnly:1},
+      {id:'settings', ic:'gear',   label:'设置',   group:'数据与运维'},
     ],
+    // 演示模式下的侧栏/导航过滤（隐藏运维专用页签）；正常模式全量
+    navTabs(g){ return this.tabs.filter(t => t.group===g && (!this.demoMode || !t.opsOnly)); },
+    // 页签 tooltip：功能注册表有产品线（幻声 VoiceX 等）时挂副标题——单一真相在 /api/features
+    tabTitle(t){
+      const f = (this.features||[]).find(x => x.id===t.id);
+      return (f && f.line && /X/.test(f.line)) ? (t.label+' · '+f.line) : t.label;
+    },
+    // [P2-2 版位引导·2026-07-16] PRO 角标：注册表 edition==='pro' 的页签（唱歌/批量/开播/同传），
+    // 对「非正式旗舰」客户显示金色 PRO 徽（与首页卡片同款语义），点击直达 /order。
+    // 保护规则：旗舰/企业正式授权、试签旗舰中、演示模式、授权态未知（lic 未加载）都不显示——
+    // 绝不对付费客户/客户演示露出付费墙暗示；uivr 回归模式因 licChip 停拉授权而天然隐藏（基线确定性）。
+    tabProBadge(t){
+      if(this.demoMode || t.href) return false;
+      const f=(this.features||[]).find(x=>x.id===t.id);
+      if(!f || f.edition!=='pro') return false;
+      const s=this.lic; if(!s) return false;
+      if(s.status==='valid' && (s.edition==='pro'||s.edition==='enterprise')) return false;
+      if(s.trial_up && s.trial_up.active) return false;
+      return true;
+    },
+    goPro(id){
+      // 埋点带 sid/page（与 home.html track() 同口径）：/ops 聚合才有会话去重与来源页维度
+      let sid=''; try{ sid=sessionStorage.getItem('bd_sid')||''; if(!sid){ sid=Math.random().toString(36).slice(2,16); sessionStorage.setItem('bd_sid', sid); } }catch(_){}
+      try{ fetch(HUB+'/api/ui/event',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ev:'pro_upsell', id:id, page:'/ui', sid:sid})}); }catch(_){}
+      window.open('/order','_blank');
+    },
     // 线性图标渲染(单一真相=static/brand-icons.svg)：功能位统一单色线性图标,emoji 只留内容位。
     // 尺寸/描边写成 SVG 呈现属性(不只靠 .bd-ic 类)：即使 brand.css 被旧缓存粘住,图标也只是 15px 小图,
     // 绝不再出现"无样式 SVG 默认 300×150 黑块爆版"(2026-07-16 实锤事故)。
@@ -31,10 +64,12 @@ function hub() {
       +' stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'
       +'<use href="/static/brand-icons.svg?v=20260716b#i-'+name+'"/></svg>'; },
     demoAlertsOpen: false,   // 演示模式下告警横幅收敛为顶栏小胶囊,点开临时展开
-    tabGroups: ['角色','创作','运营'],
+    tabGroups: ['我的分身','内容创作','上线','数据与运维'],
     features: [],   // P1: 功能注册表(/api/features)的跨页入口，喂命令面板(Ctrl+K) + 全局可达
     interpUp: null,                                    // 同传服务(7900)在线状态:null未知/true在线/false离线
-    interpUrl: 'http://'+location.hostname+':7900/',   // 同传页地址(独立端口)
+    interpUrl: 'http://'+location.hostname+':7900/',   // 同传页地址(独立端口;init 时经 /api/ports 按本套安装校准)
+    svcPorts: {},                                      // 本套安装的生效端口表(/api/ports;两套并存时防串门)
+    portsInfo: null,                                   // /api/ports 全量(base=安装目录/offset=端口偏移;体检页示身份)
     // [去重·2026-07-16] 同传外层观测态与双 CTA busy 态退役：外层观测条与开始入口
     // 让位给 iframe 内面板(嵌入态自动瘦身)，观测/开始/停止单一真相在 live_interpreter 页内。
     profiles: [], active: '', services: {}, voices: [],
@@ -55,6 +90,8 @@ function hub() {
     streamGuideDone: (function(){ try{ return localStorage.getItem('hub_stream_guide_done')==='1'; }catch(_){ return true; } })(),
     startingRestart: false, // [S5 启动仪式] 本次是否为「重新开播」（文案区分）
     demoMode: (function(){ try{ return localStorage.getItem('hub_demo')==='1'; }catch(_){ return false; } })(),  // 演示模式：隐藏运维噪音
+    // P2-4 质量分档阈值单源（canvas_brand.js，与 /phone 同一份真相）；兜底值仅护加载失败
+    QA: (window.BD_CANVAS && window.BD_CANVAS.QA) || {GOLD:0.75, COS_OK:0.6, COS_MID:0.45, NAT_OK:0.85, NAT_MID:0.7},
     brand:'79 122 255',   // 当前品牌主色（R G B）= 无界蓝，与 brand.css --bd-acc 同源
     brandPresets:[
       {name:'无界蓝',rgb:'79 122 255'}, {name:'经典蓝',rgb:'88 166 255'},
@@ -903,6 +940,10 @@ function hub() {
     rvcMsg:'', rvcOk:false,
     rvcPhoneAudioMsg:'',  // P23-1: 手机音频配置提示
     rvc: {model:'', pitch:0, inputDevice:'', outputDevice:'', indexRate:0.5, protect:0.33},
+    rvcStatus:null,       // RVC-P1: 引擎 /status 真相（/realtime/status 顺风车；null=引擎离线/旧版）
+    _rvcZeroSince:0,      // RVC-P1: 输出电平持续为 0 的起点（说话间隙也是 0，须持续才告警）
+    rvcIndexActive:null,  // RVC-P1: 最近一次应用配置后 index 检索是否生效（false=无 .index，贴合度滑块无效）
+    rvcAb:{state:'idle', sec:0, busy:false, rawUrl:'', outB64:'', playing:''},  // RVC-P1: 录 5 秒 AB 试听
 
     // 一键开播前置配置
     videoSource:'auto',        // auto / scrcpy / camera（auto=优先 WiFi 手机 cam.mjpeg）
@@ -991,6 +1032,7 @@ function hub() {
     liveMakeup:{enabled:false, lip:'#a51c30', lipS:40, blush:'#f08296', blushS:22, eye:'#6e5550', eyeS:18},
     liveMakeupBusy:false, liveMakeupLoaded:'',
     labSvc:{},                 // /api/lab/services 快照(发型/试衣在线态,C-4 专家入口按真实就绪显隐)
+    svcStartBusy:'',           // P1: 正在一键启动的离线服务 key（按钮防连点/显示进行中）
     // C-4 试衣间（FitDiT 后端）：选装→传全身照→预览→写入角色底片
     fitting:{up:false, backend:'', clothes:[], cloth:'', personB64:'', personName:'',
              result:'', busy:false, applyBusy:false, resolution:'768x1024', elapsed:0,
@@ -1047,6 +1089,12 @@ function hub() {
     // ── 初始化 ──
     async init() {
       try{ sessionStorage.removeItem('hub_boot_healed'); }catch(_){}   // 启动成功→复位自愈守卫，使日后异常仍可自愈
+      // 端口单一真相(2026-07-17)：跨端口链接(同传等)以本套安装的 /api/ports 为准——
+      // 两套安装并存(端口偏移)时不再硬编码 7900 指到别家服务。失败保持内置默认(零回归)。
+      fetch('/api/ports').then(r=>r.json()).then(p=>{
+        if(p&&p.ports){ this.svcPorts=p.ports; this.portsInfo=p;
+          if(p.ports.interpreter) this.interpUrl='http://'+location.hostname+':'+p.ports.interpreter+'/'; }
+      }).catch(()=>{});
       try { const b=localStorage.getItem('avatarhub_brand'); if(b) this.setBrand(b); } catch(_){}  // P4: 应用已保存品牌主色
       try{ if(this.largeText) document.documentElement.classList.add('bd-large-text'); }catch(_){}
       // P4 授权单源：licChip 脚本每 60s 拉 /api/license/status 并广播，这里只订阅（含 Alpine 启动晚于首播的补读）
@@ -1060,12 +1108,22 @@ function hub() {
       try { this.smhDismissed = localStorage.getItem('hub_seen_staticmouth_hint')==='1'; } catch(_){}  // P3: 恢复「静态口型正常」引导关闭态
       // [S6 老操作者免打扰] 本浏览器点过开播方式(hub_broadcast_mode 仅在用户点选时写入)=不是第一次开播 → 三步引导直接退场
       try { if(!this.streamGuideDone && localStorage.getItem('hub_broadcast_mode')) this.guideDismiss(); } catch(_){}
+      // [P7 走查修复·2026-07-16] hashchange 跟随：已打开的控制台里改 URL 锚点（外部深链/手改地址栏）
+      // 此前不会切页签（重启走查实锤：location.hash 变更被静默忽略，仅首载读取一次）。
+      // goTab 内部写回相同 hash 不再触发本监听（值相同浏览器不发事件），无循环。
+      try {
+        window.addEventListener('hashchange', () => {
+          const _hid = (location.hash || '').replace('#', '');
+          const _ht = (this.tabs || []).find(x => x.id === _hid && !x.href);
+          if (_ht && this.tab !== _hid) this.goTab(_hid);
+        });
+      } catch(_){}
       // [同步定 Tab] 开屏即定初始 Tab（hash → 上次持久化 → 默认），置于任何 await 之前：
       //   ① 消除刷新时"先闪 角色库 再回上次 Tab"的抖动；② 让 /ui#clone 等深链首帧即命中（懒挂载按 visitedTabs 渲染，故同步入列）。
       //   仅依赖 this.tabs/visitedTabs 静态数据属性，与下方数据加载无耦合。
       try {
         const _hash0 = (location.hash || '').replace('#', '');
-        const _tabIds0 = (this.tabs || []).map(t => t.id);
+        const _tabIds0 = (this.tabs || []).filter(t => !t.href).map(t => t.id);   // 跳出型页签（对话）无面板，不参与初始定 Tab
         if (_hash0 === 'streamout') { this.tab = 'voice'; this.soShow = true; }
         else if (_tabIds0.includes(_hash0)) this.tab = _hash0;
         else { const _saved = localStorage.getItem('hub_tab'); if (_saved && _tabIds0.includes(_saved)) this.tab = _saved; }
@@ -4653,7 +4711,7 @@ function hub() {
       window.open(url, '_blank');
     },
     openInterpreter(){
-      window.open('http://'+location.hostname+':7900/', '_blank');
+      window.open(this.interpUrl, '_blank');
     },
     // 手机开播向导：二维码指向 HTTPS 终端(7879)——浏览器要求 HTTPS 才放行摄像头/麦克风(此前的踩坑点)
     get phoneRelayQrTarget(){
@@ -5101,6 +5159,12 @@ function hub() {
       }catch(_){ return ''; }
     },
     rvcSummary(){
+      // RVC-P1: 引擎在跑时显示引擎真相（真实模型/变调），不再复述滑块值
+      const s=this.rvcStatus;
+      if(s && s.running){
+        const m=(s.model||'').replace(/\.pth$/i,'');
+        return '变声中'+(m?(' · '+m):'')+' · 变调'+(s.pitch>0?'+':'')+(s.pitch||0);
+      }
       const m=this.rvc&&this.rvc.model?'模型✓':'未选模型';
       const p=this.rvc?(' · 变调'+(this.rvc.pitch>0?'+':'')+this.rvc.pitch):'';
       return m+p+(this.rvcActive?' · 变声中':'');
@@ -5143,6 +5207,15 @@ function hub() {
         this.orphanAdopted = d.orphan_adopted||null;   // [06t] 无闪断收养中→chip 如实展示(点停播/重新开播都照常管用)
         this.perf.streaming = !!d.video_running;
         this.perf.rvc_running = !!d.rvc_running;   // 注：rvc_running 追的是 gui_v1.py 手动实时路径(标准开播不用)，仅作展示；音频自愈改用 services.rvc(见 runHealAutoAudio)
+        // RVC-P1: 引擎真实状态（null=引擎离线/旧版引擎无 /status → 徽章回退旧启发式）
+        this.rvcStatus = ('rvc_status' in d) ? (d.rvc_status||null) : this.rvcStatus;
+        if(this.rvcStatus){
+          this.rvcActive = !!this.rvcStatus.running;   // 按钮态对齐引擎真相（页面刷新/别处起停都追平）
+          // 输出静音观察：说话间隙 out_rms 也是 0，须「运行中持续 ≥20s 为 0」才亮告警
+          if(this.rvcStatus.running && (this.rvcStatus.out_rms||0) < 0.0001){
+            if(!this._rvcZeroSince) this._rvcZeroSince = Date.now();
+          } else this._rvcZeroSince = 0;
+        } else this._rvcZeroSince = 0;
         // 近窗增量（识别"中途丢脸"）：优先用后端在源头算的 swap_recent(更准更稳、不受前端 poll 抖动)，
         // 缺失时回退到"本轮相对上轮新增"的前端窗口。累计 swap_ok 很大但近窗 0 成功且失败在涨 ⇒ 中途丢脸。
         const _ok=this.perf.swap_ok||0, _fail=this.perf.swap_fail||0;
@@ -5493,9 +5566,28 @@ function hub() {
         }
       }
     },
-    // 「变声中」判定（徽章用）：兼容两条路径——手动实时(gui_v1.py=rvc_running) 或 标准开播(推流中且变声服务6242在线)。
-    //   修正旧版只看 rvc_running 的漏判：标准一键开播 rvc_running 恒 false，明明在变声却不显示徽章、误导用户。
-    rvcLive(){ return this.perf.rvc_running || (this.perf.streaming && !!(this.services&&this.services.rvc)); },
+    // 「变声中」判定（徽章用）：RVC-P1 起以引擎 /status 为单一真相（拾音流真在跑才算），
+    //   引擎离线/旧版无 /status 时回退旧启发式——手动实时(gui_v1.py=rvc_running) 或 推流中且 6242 在线。
+    rvcLive(){
+      if(this.rvcStatus) return !!this.rvcStatus.running;
+      return this.perf.rvc_running || (this.perf.streaming && !!(this.services&&this.services.rvc));
+    },
+    // RVC-P1: 输出静音告警——变声在跑但输出电平持续 ≥20s 为 0（说话间隙不误报）。
+    //   典型原因：听/推的不是 CABLE、输出设备路由错、推理出声但被系统静音。
+    rvcSilenceWarn(){
+      return !!(this.rvcStatus && this.rvcStatus.running && this._rvcZeroSince
+                && (Date.now()-this._rvcZeroSince) > 20000);
+    },
+    // RVC-P1: 面板状态行（引擎真相）：模型 / 变调 / 推理耗时 / 输出电平
+    rvcStatusLine(){
+      const s=this.rvcStatus; if(!s || !s.running) return '';
+      const m=(s.model||'').replace(/\.pth$/i,'') || '未知模型';
+      const parts=['正在用 '+m, '变调 '+(s.pitch>0?'+':'')+(s.pitch||0)];
+      if(s.avg_infer_ms) parts.push('推理 '+Math.round(s.avg_infer_ms)+'ms/块');
+      parts.push('输出电平 '+((s.out_rms||0)>=0.0001?((s.out_rms).toFixed(3)):'0'));
+      if(s.stalled) parts.push('⚠ 推理疑似卡住');
+      return parts.join(' · ');
+    },
     // P3/P4 音频自愈评估（每轮轮询调一次）：仅直播中·stream 页 + 「本场变声服务(6242)曾在线、现在掉了且持续」→ 拉起变声 api。
     //   信号取 services.rvc（准确反映 6242 是否活着，比 rvc_running 靠谱）；主播停顿不会让端口掉线 ⇒ 无"没说话"误触。
     //   服务端守护开(HUB_AUTOHEAL)时本端让渡——由服务端去重拉起(它有 _LAST_RVC_API_START_TS)，避免双重启。护栏与视频侧同源(总开关/冷却/限次)。
@@ -6729,6 +6821,39 @@ function hub() {
       return m[e]||'😐';
     },
 
+    // P0-3 结构化服务错误 → 人话：后端离线功能入口现在返回 detail={code:'SVC_DOWN', label, message,…}
+    // （代启动失败/冷启动未就绪）。旧路径 detail 仍可能是字符串——两者都兜住，别再弹英文异常原文。
+    svcErrText(d, fallback = '未知错误') {
+      const det = d && d.detail;
+      if (det && typeof det === 'object') {
+        if (det.code === 'SVC_DOWN') {
+          return (det.message || `「${det.label || det.service || '服务'}」未就绪`)
+                 + (det.can_start ? '——已尝试自动启动，稍等 20-60 秒再点一次即可' : '');
+        }
+        return String(det.message || JSON.stringify(det)).slice(0, 140);
+      }
+      return String(det || (d ? JSON.stringify(d) : '') || fallback).slice(0, 140);
+    },
+    // 离线功能服务冷启动提示：点击时服务未在线 → 先告知用户后端会自动拉起（免得盯着按钮以为卡死）
+    labSvcColdHint(key, label) {
+      const s = this.labSvc && this.labSvc[key];
+      if (s && !s.up) this.showToast(`${label}服务未启动，正在自动启动并继续（首次约 20-60 秒）…`, 'info');
+    },
+    // P1 一键启动离线服务（试衣等重服务：面板需服务在线才能列服装/样式，故给显式启动入口；
+    // 定妆脸/妆容走后端全自动代启，无需此按钮）。/api/services/ensure 会阻塞到健康就绪。
+    async startLabSvc(key, label) {
+      if (this.svcStartBusy) return;
+      this.svcStartBusy = key;
+      this.showToast(`正在启动${label}服务（冷启动约 20 秒-2 分钟）…`, 'info');
+      try {
+        const d = await fetch(HUB + `/api/services/ensure?name=${encodeURIComponent(key)}&wait_s=150`,
+                              {method: 'POST'}).then(r => r.json());
+        if (d.ok) this.showToast(`${label}服务已就绪`, 'success');
+        else this.showToast(`${label}服务未就绪：` + (d.detail || '未知原因'), 'warn');
+      } catch (e) { this.showToast(`${label}服务启动失败：` + e, 'error'); }
+      finally { this.svcStartBusy = ''; this.loadLabServices(); }
+    },
+
     showToast(msg, type='info') {
       if (this.demoMode && type === 'info') return;                        // 演示模式：静音最低优先级信息提示
       const ttl = type === 'error' ? 5000 : 3500;
@@ -6766,6 +6891,8 @@ function hub() {
 
     // 统一切换 Tab：更新状态 + URL hash + 持久化 + 记录已访问（为内容懒加载预留）
     goTab(id) {
+      const _t = (this.tabs||[]).find(x => x.id===id);
+      if (_t && _t.href) { window.open(_t.href, '_blank'); return; }   // 跳出型页签（对话 /phone）：新窗口打开，不离开控制台
       if(id!=='batch') this._batchAudioStop?.();   // UI-P7-2: 离开批量页掐断行内试听/连播（避免背景放 20 行）
       this.tab = id;
       if (!this.visitedTabs.includes(id)) this.visitedTabs.push(id);
@@ -6785,8 +6912,9 @@ function hub() {
       try {
         const d = await fetch(HUB + '/api/features').then(r => r.json());
         if (d && d.ok && Array.isArray(d.features)) {
-          // 仅取跨页入口（/ui#xxx 的 Tab 已在面板中），避免与上面的 tab 项重复
-          this.features = d.features.filter(f => f.href && !f.href.startsWith('/ui#'));
+          // [P2-2 修正] 存全量注册表：页签 tooltip 产品线（tabTitle）与 PRO 角标（tabProBadge）
+          // 需要站内 /ui# 项的 line/edition；「跨页入口去重」下沉到命令面板 cmdItems 消费处。
+          this.features = d.features;
         }
       } catch (_) { /* 注册表拉取失败不影响面板其余项 */ }
     },
@@ -6798,7 +6926,9 @@ function hub() {
       items.push({icon:this.icx('zap'), label:'三步上手向导', hint:'动作', type:'act', payload:'onboard'});
       items.push({icon:this.icx('demo'), label:(this.demoMode?'退出演示模式':'开启演示模式'), hint:'动作', type:'act', payload:'demo'});
       items.push({icon:this.icx('home'), label:'首页 · 全部功能', hint:'前往', type:'link', payload:'/'});
-      (this.features||[]).forEach(f => items.push({icon:(f.ic?this.icx(f.ic):(f.icon||'🔗')), label:f.name, hint:'前往 · '+(f.line||''), type:'link', payload:f.href}));
+      // 跨页入口去重：/ui#xxx 的站内 Tab 已在上面的 tab 项里（features 现存全量注册表，见 loadFeatures）
+      (this.features||[]).filter(f => f.href && !f.href.startsWith('/ui#'))
+        .forEach(f => items.push({icon:(f.ic?this.icx(f.ic):(f.icon||'🔗')), label:f.name, hint:'前往 · '+(f.line||''), type:'link', payload:f.href}));
       (this.profiles||[]).forEach(p => items.push({icon:this.icx('users'), label:p.name, hint:'角色 · 打开对话', type:'profile', payload:p.name}));
       return items;
     },
@@ -8267,13 +8397,24 @@ function hub() {
           body:JSON.stringify(cfg)}).then(r=>r.json());
         // RVC 成功={message:...}；hub 侧预检失败={ok:false,detail:...}；RVC 校验失败={detail:...}
         const ok=!!(d&&(d.success||d.ok||d.message));
-        this.rvcMsg=ok?'✅ 配置已应用':'⚠️ '+((d&&d.detail)||JSON.stringify(d));
+        // restarted=true：引擎检测到转换在跑，已自动 停→配→起，新模型/变调即时生效
+        this.rvcMsg=ok?(d&&d.restarted?'✅ 配置已应用，变声已重启生效':'✅ 配置已应用'):'⚠️ '+((d&&d.detail)||JSON.stringify(d));
         this.rvcOk=ok;
+        // RVC-P1 诚实滑块：hub 回传 index_active=false ⇒ 该模型无 .index，「音色贴合度」实际不生效
+        if(ok && d && ('index_active' in d)) this.rvcIndexActive = (d.index_active!==false);
       } catch(e){ this.rvcMsg='❌ '+e; this.rvcOk=false; }
       setTimeout(()=>this.rvcMsg='',this.rvcOk?3000:8000);
+      return this.rvcOk;
     },
 
     async rvcStartConversion() {
+      // 先把当前滑块值应用下去再起转换——历史坑：只打 /rvc/start，引擎用的是
+      // 上次落盘的旧配置，用户「换了模型/调了变调但声音没变」即源于此。
+      // 面板没选模型（刷新页面后的自救卡重启等场景）则跳过应用，走引擎落盘配置。
+      if(this.rvc.model && !await this.rvcApplyConfig()){
+        this.rvcActive=false;
+        return;   // 应用失败：rvcApplyConfig 已展示具体原因，不再盲目起转换
+      }
       try {
         const d=await fetch(HUB+'/rvc/start',{method:'POST'}).then(r=>r.json());
         // RVC 起转成功={message:"Audio conversion started"}；失败时 hub 会原样转发 {detail:...}
@@ -8291,6 +8432,74 @@ function hub() {
         }
       } catch(e){ this.rvcMsg='❌ '+e; this.rvcOk=false; }
       setTimeout(()=>this.rvcMsg='',this.rvcOk?3000:8000);
+    },
+
+    // ── RVC-P1: 录 5 秒 AB 试听（原声 vs 变声）────────────────────────────
+    //   不碰实时拾音流：走离线 /api/rvc_assets/preview（复用引擎 /convert 分层缓存，
+    //   且离线链路 protect 真实生效）。录音复用 vpRec 同款「解码→WAV」管线，独立实例变量互不干扰。
+    async rvcAbRecord(){
+      if(this.rvcAb.state==='rec') return;
+      if(!this.rvc.model){ this.showToast('先在上方选择变声模型','error'); return; }
+      if(!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia&&window.MediaRecorder)){
+        this.showToast('浏览器拿不到麦克风：需 HTTPS 或本机 127.0.0.1 访问','error'); return;
+      }
+      let stream;
+      try{
+        // 关浏览器三件套：变声要原始人声，回声消除/降噪会染色
+        stream=await navigator.mediaDevices.getUserMedia({audio:{
+          echoCancellation:false, noiseSuppression:false, autoGainControl:false, channelCount:1}});
+      }catch(e){ this.showToast(this.micErrText?this.micErrText(e):('麦克风打开失败: '+e),'error'); return; }
+      this._abStream=stream;
+      const mr=new MediaRecorder(stream);
+      this._abChunks=[]; this._abMr=mr;
+      mr.ondataavailable=e=>{ if(e.data&&e.data.size) this._abChunks.push(e.data); };
+      mr.onstop=()=>this._rvcAbFinish();
+      mr.start();
+      this.rvcAb.state='rec'; this.rvcAb.sec=0;
+      this._abTimer=setInterval(()=>{ this.rvcAb.sec++; if(this.rvcAb.sec>=5) this.rvcAbStop(); },1000);
+    },
+    rvcAbStop(){
+      clearInterval(this._abTimer);
+      try{ if(this._abMr&&this._abMr.state!=='inactive') this._abMr.stop(); }catch(_){}
+    },
+    async _rvcAbFinish(){
+      clearInterval(this._abTimer);
+      try{ (this._abStream?this._abStream.getTracks():[]).forEach(t=>t.stop()); }catch(_){}
+      this._abStream=null;
+      this.rvcAb.state='idle'; this.rvcAb.busy=true; this.rvcAb.outB64='';
+      try{
+        const blob=new Blob(this._abChunks,{type:(this._abMr&&this._abMr.mimeType)||'audio/webm'});
+        const ctx=new (window.AudioContext||window.webkitAudioContext)();
+        const au=await ctx.decodeAudioData(await blob.arrayBuffer());
+        try{ ctx.close(); }catch(_){}
+        const wav=this._wavEncode(au);
+        if(this.rvcAb.rawUrl) URL.revokeObjectURL(this.rvcAb.rawUrl);
+        this.rvcAb.rawUrl=URL.createObjectURL(wav);
+        const b64=await new Promise((res,rej)=>{ const fr=new FileReader();
+          fr.onload=()=>res(String(fr.result).split(',')[1]); fr.onerror=rej; fr.readAsDataURL(wav); });
+        // 首次冷加载模型可能 10-30s（引擎离线缓存），busy 态撑住
+        const d=await fetch(HUB+'/api/rvc_assets/preview',{method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({id:this.rvc.model, sample_b64:b64, settings:{
+            pitch:Math.round(+this.rvc.pitch||0), index_rate:+this.rvc.indexRate,
+            protect:+this.rvc.protect, f0method:'rmvpe'}})}).then(r=>r.json());
+        if(!d.ok) throw new Error(d.detail||'转换失败');
+        this.rvcAb.outB64=d.audio_base64;
+        this.showToast('✅ 试听就绪：点「原声/变声」对比','success');
+      }catch(e){ this.showToast('AB 试听失败: '+((e&&e.message)||e),'error'); }
+      finally{ this.rvcAb.busy=false; this._abMr=null; this._abChunks=[]; }
+    },
+    rvcAbPlay(which){
+      if(this._abAudio){ try{ this._abAudio.pause(); }catch(_){} this._abAudio=null; }
+      if(this.rvcAb.playing===which){ this.rvcAb.playing=''; return; }   // 再点=停
+      const src = which==='raw' ? this.rvcAb.rawUrl
+                                : (this.rvcAb.outB64?('data:audio/wav;base64,'+this.rvcAb.outB64):'');
+      if(!src) return;
+      const a=new Audio(src);
+      this._abAudio=a; this.rvcAb.playing=which;
+      a.onended=()=>{ if(this.rvcAb.playing===which) this.rvcAb.playing=''; };
+      a.onerror=()=>{ if(this.rvcAb.playing===which) this.rvcAb.playing=''; };
+      a.play().catch(()=>{});
     },
 
     async rvcStopConversion() {
@@ -9072,6 +9281,7 @@ function hub() {
       if (!prof) { this.showToast('先激活或选择一个角色', 'warn'); return; }
       this.hairPresetBusy = true;
       this.hairPresetPreview = '';
+      this.labSvcColdHint('hair', '发型');            // P0: 服务未起=后端自动拉起，先告知别干等
       try {
         const body = {apply: true};
         if (this.hairStyleSel) body.hair_style = this.hairStyleSel;   // 阶段8：开播页直选样式
@@ -9083,10 +9293,10 @@ function hub() {
           this.showToast(`「${prof}」定妆脸已生成并启用（${d.elapsed_ms || '?'}ms）`, 'success');
           this.refreshLookHistIfOpen();
         } else {
-          this.showToast('定妆失败：' + (d.detail || JSON.stringify(d)).slice(0, 120), 'warn');
+          this.showToast('定妆失败：' + this.svcErrText(d), 'warn');
         }
       } catch (e) { this.showToast('定妆失败：' + e, 'error'); }
-      finally { this.hairPresetBusy = false; }
+      finally { this.hairPresetBusy = false; this.loadLabServices(); }
     },
 
     // ── 换脸 + 发型跟随源照片（离线出片）──────────────────────
@@ -9370,6 +9580,7 @@ function hub() {
       if (!this.makeupStyle) { this.showToast('先选择妆容样式', 'warn'); return; }
       this.lookPackBusy = true;
       this.lookPackPreview = '';
+      this.labSvcColdHint('makeup', '妆容');
       try {
         const r = await fetch(HUB + `/api/profiles/${encodeURIComponent(prof)}/makeup_preset`, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -9380,10 +9591,10 @@ function hub() {
           this.showToast(`「${prof}」妆容「${d.makeup_style}」已烘进定妆脸（${d.elapsed_ms || '?'}ms）`, 'success');
           this.refreshLookHistIfOpen();
         } else {
-          this.showToast('妆容定妆失败：' + (d.detail || JSON.stringify(d)).slice(0, 120), 'warn');
+          this.showToast('妆容定妆失败：' + this.svcErrText(d), 'warn');
         }
       } catch (e) { this.showToast('妆容定妆失败：' + e, 'error'); }
-      finally { this.lookPackBusy = false; }
+      finally { this.lookPackBusy = false; this.loadLabServices(); }
     },
 
     async runFullLook() {                              // 阶段9 一键出片：发型→妆容→试衣→微动 全链编排
@@ -9478,8 +9689,8 @@ function hub() {
       try {
         const body = {apply: true};
         if (this.makeupStyle) body.makeup_style = this.makeupStyle;
-        // 发型服务在线才带发型步；阶段8：直选样式优先，留空用 8001 当前激活发型
-        if (this.hairStyleSel) body.hair_style = this.hairStyleSel;
+        // 直选样式优先（服务未起时后端会自动拉起）；未直选则仅在 8001 在线时带「当前激活发型」步
+        if (this.hairStyleSel) { body.hair_style = this.hairStyleSel; this.labSvcColdHint('hair', '发型'); }
         else if (this.labSvc.hair && this.labSvc.hair.up) body.use_hair = true;
         const r = await fetch(HUB + `/api/profiles/${encodeURIComponent(prof)}/look_pack`, {
           method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
@@ -9492,10 +9703,10 @@ function hub() {
           this.refreshLookHistIfOpen();
         } else {
           const err = Object.values(d.steps || {}).map(s => s.error).filter(Boolean).join('；');
-          this.showToast('定妆包失败：' + (err || d.detail || '').slice(0, 140), 'warn');
+          this.showToast('定妆包失败：' + (err ? err.slice(0, 140) : this.svcErrText(d)), 'warn');
         }
       } catch (e) { this.showToast('定妆包失败：' + e, 'error'); }
-      finally { this.lookPackBusy = false; }
+      finally { this.lookPackBusy = false; this.loadLabServices(); }
     },
 
     async pollCameraStatus() {

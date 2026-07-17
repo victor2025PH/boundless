@@ -1661,6 +1661,69 @@ def test_port_guard():
             ok(f"{f} {label}接入")
 
 
+def test_port_override():
+    """2026-07-17 两套安装并存：端口覆盖层(config.json ports/port_offset)三场景回归。
+    子进程隔离跑(app_config 端口在 import 时定格，不能污染本进程)：
+    ① 零配置=出厂端口(零回归)；② 偏移整段平移(含 SERVICES/env 注入/faceswap2 联动)；
+    ③ config.json 精确覆盖+偏移并用优先级；④ 冲突自检要能抓到 +100 这类会撞回出厂集的偏移。"""
+    import subprocess
+    code = r'''
+import sys, os, json, tempfile, pathlib
+os.environ.pop("AVATARHUB_PORT_OFFSET", None)
+tmp0 = tempfile.mkdtemp()                      # 空目录当 BASE:保证无 config.json 干扰
+os.environ["AVATARHUB_BASE"] = tmp0
+sys.path.insert(0, sys.argv[1])
+import app_config as ac
+assert ac.PORT_OFFSET == 0 and ac.port("hub") == 9000 and ac.port("interpreter") == 7900
+assert ac.port("faceswap2") == 8003 and ac.port_env_extra("fish_tts") == {}
+assert ac.SERVICES["faceswap2"]["env_extra"]["FACESWAP_PORT"] == "8003"
+os.environ["AVATARHUB_PORT_OFFSET"] = "2000"   # ② 偏移(推荐值:与出厂集无交集)
+del sys.modules["app_config"]
+import app_config as ac2
+assert ac2.port("hub") == 11000 and ac2.SERVICES["interpreter"]["port"] == 9900
+assert ac2.port_env_extra("fish_tts") == {"FISH_PORT": "9855"}
+assert ac2.SERVICES["faceswap2"]["env_extra"]["FACESWAP_PORT"] == "10003"
+assert not ac2.PORT_COLLISIONS, ac2.PORT_COLLISIONS   # +2000 必须零冲突
+os.environ["AVATARHUB_PORT_OFFSET"] = "100"    # ④ 坏偏移:同传 7900+100 撞出厂换脸 8000
+del sys.modules["app_config"]
+import app_config as acx
+assert any("interpreter" in c for c in acx.PORT_COLLISIONS), acx.PORT_COLLISIONS
+os.environ["AVATARHUB_PORT_OFFSET"] = "1000"   # ④b 坏偏移:换脸 8000+1000 撞出厂 hub 9000
+del sys.modules["app_config"]
+import app_config as acy
+assert any("faceswap" in c for c in acy.PORT_COLLISIONS), acy.PORT_COLLISIONS
+del os.environ["AVATARHUB_PORT_OFFSET"]        # ③ 精确覆盖+偏移并用(真 config.json)
+tmp = tempfile.mkdtemp()
+pathlib.Path(tmp, "config.json").write_text(
+    json.dumps({"port_offset": 2000, "ports": {"interpreter": 7999}}), encoding="utf-8")
+os.environ["AVATARHUB_BASE"] = tmp
+del sys.modules["app_config"]
+import app_config as ac3
+assert ac3.port("interpreter") == 7999 and ac3.port("hub") == 11000
+print("PORT-OVERRIDE-OK")
+'''
+    try:
+        r = subprocess.run([sys.executable, "-c", code, str(ROOT)],
+                           capture_output=True, text=True, timeout=90)
+        if "PORT-OVERRIDE-OK" in (r.stdout or ""):
+            ok("端口覆盖层三场景(零配置/偏移/精确覆盖)+冲突自检")
+        else:
+            ng(f"端口覆盖层回归失败: {(r.stderr or r.stdout or '')[-400:]}")
+    except Exception as e:
+        ng(f"端口覆盖层测试异常: {e}")
+    # 静态门禁:消费方不许再绕过覆盖层硬编码默认端口
+    for f, needle, label in [
+            ("avatar_hub.py", 'app_config.port("hub")', "hub 端口经覆盖层"),
+            ("launcher_qt.py", "_auto_port_avoid", "启动器端口自动避让"),
+            ("service_supervisor.py", "port_env_extra", "守护注入子进程端口"),
+            ("service_manager.py", "port_env_extra", "启动器注入子进程端口"),
+            ("static/hub.js", "/api/ports", "前端端口注入")]:
+        if needle not in (ROOT / f).read_text(encoding="utf-8"):
+            ng(f"{f} 缺 {label}")
+        else:
+            ok(f"{f} {label}")
+
+
 def test_p8s_mainface_hyst():
     """06s 锁主脸双人档联动: 主脸滞回纯函数真跑(AST 抽函数,免模型加载) + hint 链路 + UI 让位语义。"""
     src = (ROOT / "faceswap_api.py").read_text(encoding="utf-8")
@@ -3288,6 +3351,7 @@ def main():
     test_p9dev_interact_dedupe()
     test_p11dev_fe_patrol()
     test_port_guard()
+    test_port_override()
     test_human_rating()
     test_p8s_mainface_hyst()
     test_p8t_orphan_adopt()

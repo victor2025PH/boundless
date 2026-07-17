@@ -1,0 +1,129 @@
+<div x-show="tab==='selfcheck'" class="fade space-y-3">
+  <!-- UK1 承接闭环：全站警示条「去启动」跳到这——必须让人一眼找到离线服务并启得动。
+       在线状态取 /health（services），元数据取 /api/services/catalog（label/port/env/script 单一真相）；
+       一键启动走既有 POST /api/engine/start（supervisor.launch_any），启不了给可复制的 conda 命令兜底 -->
+  <div class="bd-card p-4">
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+      <h2 class="bd-card-title">🩺 服务就绪</h2>
+      <div class="flex items-center gap-2">
+        <span class="text-[12px] text-hub-muted"
+              x-text="'在线 '+svcCatalog.filter(s=>services[s.name]).length+'/'+svcCatalog.length"></span>
+        <button @click="refreshServices()" class="bd-act sm ghost">↻ 重新探测</button>
+      </div>
+    </div>
+    <!-- [并存·2026-07-17] 安装身份自证：同机装了「安装版+源码版」时,一眼看清此界面连的是哪套/哪个端口段,
+         不用再 netstat 反查"服务是谁的"。数据取 /api/ports(base=安装根目录,offset=端口偏移)。 -->
+    <div x-show="portsInfo && portsInfo.base" class="text-[12px] text-hub-muted/80 mb-2 flex items-center gap-2 flex-wrap"
+         data-tip="本套安装身份|这个界面与下方服务属于哪个安装目录、用哪个端口段|同机装了两套(安装版+开发版)分不清连的是谁时看这里">
+      <span>📌 本套安装:</span>
+      <code class="text-hub-blue" x-text="portsInfo?.base"></code>
+      <span x-show="portsInfo?.offset" class="text-amber-400" x-text="'端口偏移 +'+portsInfo?.offset+'（并存模式）'"></span>
+      <span class="text-hub-muted/50" x-text="'控制台 :'+(portsInfo?.hub_port||'')"></span>
+    </div>
+    <div x-show="!svcCatalog.length" class="text-[13px] text-hub-muted">服务目录加载中…（若一直空白，说明 Hub 版本较旧，重启 Hub 后生效）</div>
+    <template x-for="grp in [{k:true,t:'核心链路（离线会影响对话/开播）'},{k:false,t:'可选增强（离线只影响对应功能）'}]" :key="grp.t">
+      <div class="mb-2">
+        <div class="text-[12px] text-hub-muted/80 mb-1" x-text="grp.t"></div>
+        <div class="space-y-1">
+          <!-- 离线置顶：来这的人就是为了找"哪个没起" -->
+          <template x-for="s in svcCatalog.filter(x=>x.core===grp.k).sort((a,b)=>(!!services[a.name])-(!!services[b.name]))" :key="s.name">
+            <div :id="'svc-row-'+s.name"
+                 class="rounded-lg px-2.5 py-1.5 transition-all"
+                 :class="selfcheckFocus===s.name ? 'ring-2 ring-hub-blue/70 bg-hub-blue/10'
+                        : (services[s.name] ? 'bg-hub-bg/40' : 'bg-hub-bg border border-hub-border')">
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="w-1.5 h-1.5 rounded-full shrink-0"
+                      :class="services[s.name]?'bg-hub-green':(s.core?'bg-hub-red':'bg-hub-muted/40')"></span>
+                <span class="text-[13px]" :class="services[s.name]?'text-hub-text':'text-hub-muted'" x-text="s.label"></span>
+                <span class="text-[12px] text-hub-muted/50" x-text="':'+s.port"></span>
+                <span x-show="selfcheckFocus===s.name" class="text-[12px] text-hub-blue">← 你要找的就是它</span>
+                <span class="ml-auto flex items-center gap-2">
+                  <span x-show="services[s.name]" class="text-[12px] text-hub-green">在线</span>
+                  <template x-if="!services[s.name]">
+                    <span class="flex items-center gap-2">
+                      <button @click="svcStart(s.name)" :disabled="!!svcStartBusy"
+                              class="bd-act sm soft"
+                              x-text="svcStartBusy===s.name?'⏳ 启动中…':'▶ 一键启动'"></button>
+                      <button @click="navigator.clipboard?.writeText(svcCmd(s)).then(()=>showToast('启动命令已复制','success')).catch(()=>{})"
+                              class="text-[12px] text-hub-muted hover:text-hub-text hover:underline"
+                              :title="svcCmd(s)">📋 命令</button>
+                    </span>
+                  </template>
+                </span>
+              </div>
+              <!-- 聚焦行或启动中：把手动命令直接摆出来（一键启动失败时的兜底动线） -->
+              <div x-show="!services[s.name] && (selfcheckFocus===s.name || svcStartBusy===s.name)"
+                   class="mt-1 text-[12px] text-hub-muted font-mono break-all" x-text="svcCmd(s)"></div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </template>
+    <div class="text-[12px] text-hub-muted mt-2">一键启动=Hub 代为拉起（GPU 服务加载模型需 15~30 秒）；失败或多机部署时用「📋 命令」在对应机器手动启动。</div>
+  </div>
+
+  <div class="bd-card p-4">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="bd-card-title">✅ 交付体检</h2>
+      <div class="flex items-center gap-2">
+        <a href="/delivery" target="_blank"
+           class="bd-act sm ghost"
+           title="即时交付验收页：授权/合规/页面/服务/白标，可导出交付单">🧪 交付验收页 ↗</a>
+        <button @click="runSelfcheck()" :disabled="selfcheckLoading"
+                class="bd-act sm soft">
+          <span x-show="!selfcheckLoading">▶ 运行体检</span><span x-show="selfcheckLoading">⏳ 体检中…</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 交付结论横幅 -->
+    <template x-if="selfcheck.delivery">
+      <div class="rounded-lg p-3 mb-3 text-sm font-bold"
+           :class="{'bg-green-900/40 text-green-300 border border-green-700': selfcheck.delivery.overall==='ok',
+                    'bg-amber-900/40 text-amber-200 border border-amber-700': selfcheck.delivery.overall==='warn',
+                    'bg-red-900/40 text-red-200 border border-red-700': ['crit','fail'].includes(selfcheck.delivery.overall)}">
+        <span x-text="selfcheck.delivery.overall==='ok' ? '✅ 交付结论：全部通过 · 可交付上线'
+                     : selfcheck.delivery.overall==='warn' ? '⚠ 交付结论：有警告 · 可上线但建议先处理'
+                     : '✗ 交付结论：存在问题 · 暂不可交付'"></span>
+        <div class="text-[13px] font-normal opacity-80 mt-1">
+          最近一键交付自检 · <span x-text="new Date((selfcheck.delivery.ts||0)*1000).toLocaleString()"></span>
+        </div>
+        <div class="mt-2 space-y-1">
+          <template x-for="s in (selfcheck.delivery.stages||[])" :key="s.stage">
+            <div class="text-[13px] font-normal flex items-center gap-2">
+              <span x-text="s.level==='ok'?'✓':s.level==='warn'?'⚠':s.level==='skip'?'·':'✗'"></span>
+              <span x-text="s.title"></span><span class="opacity-70" x-text="'— '+s.summary"></span>
+            </div>
+          </template>
+        </div>
+      </div>
+    </template>
+    <div x-show="!selfcheck.delivery" class="text-[13px] text-hub-muted mb-3">
+      还没有交付结论。点右上角「运行体检」即可联机检查；如需完整交付报告，也可在命令行运行 <code class="text-hub-blue">python deliver_check.py</code> 生成。
+    </div>
+
+    <!-- 联机体检（doctor）逐项 -->
+    <template x-if="selfcheck.doctor && !selfcheck.doctor.error">
+      <div>
+        <div class="text-xs text-hub-muted mb-2 flex gap-3">
+          <span class="text-green-400">通过 <span x-text="dcCount('ok')"></span></span>
+          <span class="text-yellow-400">警告 <span x-text="dcCount('warn')"></span></span>
+          <span class="text-red-400">严重 <span x-text="dcCount('crit')"></span></span>
+          <span class="text-hub-muted">可选信息 <span x-text="dcCount('info')"></span></span>
+        </div>
+        <div class="space-y-1 max-h-96 overflow-y-auto">
+          <template x-for="(it,i) in (selfcheck.doctor.items||[])" :key="i">
+            <div class="text-[13px] flex items-start gap-2 px-2 py-1 rounded"
+                 :class="{'text-green-400':it.level==='ok','text-yellow-300 bg-yellow-900/20':it.level==='warn',
+                          'text-red-300 bg-red-900/20':it.level==='crit','text-hub-muted':it.level==='info'}">
+              <span x-text="it.level==='ok'?'✓':it.level==='warn'?'⚠':it.level==='crit'?'✗':'·'"></span>
+              <span class="font-bold" x-text="'['+it.area+']'"></span><span x-text="it.msg"></span>
+            </div>
+          </template>
+        </div>
+      </div>
+    </template>
+    <div x-show="selfcheck.doctor && selfcheck.doctor.error" class="text-xs text-red-400" x-text="selfcheck.doctor && selfcheck.doctor.error"></div>
+    <div class="text-[12px] text-hub-muted mt-3">体检=联机自检(doctor)；交付结论=最近一次 deliver_check 留痕。可选扩展服务未启用属正常，不计入结论。</div>
+  </div>
+</div>

@@ -892,6 +892,82 @@ def run():
     check("P2 底视频对账清单", (ROOT / "tools" / "avatar_video_labels.py").is_file()
                              and (ROOT / "avatar_videos" / "_labels.json").is_file())
 
+    # 四视角 P2（2026-07-16）：版位引导 / 线色注册表单源 / 任务流分组
+    home = read("static/home.html")
+    hub_py = read("avatar_hub.py")
+    check("四P2 线色进注册表(后端)", "_FEATURE_LINE_COLORS" in hub_py and '"line_colors": _FEATURE_LINE_COLORS' in hub_py)
+    check("四P2 首页消费注册表线色", "lineColor(" in home and "REG_COLORS" in home
+                                   and "line_colors:reg.line_colors" in home)
+    # 旧线名只允许出现在 LINE_ALIAS 归一化映射里（色值兜底表 LINE_RGB 必须已是新线名）
+    check("四P2 线色兜底表无旧线名键", '"VoiceX 音色": "79' not in home and '"LiveX 直播": "168' not in home)
+    check("四P2 旧线名归一化映射在位", 'LINE_ALIAS' in home and '"VoiceX 音色":"幻声 VoiceX"' in home)
+    check("四P2 PRO角标接线", "tabProBadge" in hub and "goPro(" in hub and "tabProBadge(t)" in ui)
+    check("四P2 PRO角标保护规则", "s.trial_up && s.trial_up.active" in hub and "this.demoMode || t.href" in hub)
+    check("四P2 任务流分组", "tabGroups: ['我的分身','内容创作','上线','数据与运维']" in hub)
+    check("四P2 控制台拼装门禁", (ROOT / "tools" / "_build_ui.py").is_file()
+                               and (ROOT / "static" / "ui_src" / "ui_shell.html").is_file()
+                               and "生成产物勿手改" in ui)
+
+    # 对话端 P0（2026-07-16《对话端四视角功能与版块优化方案》）：观众净化 / 角色排序搜索 / 转化出口
+    _land = read("static/landing.html")
+    check("对P0 观众模式双档", "_GUEST_URL" in phone and "bd-guest-url" in phone
+                             and "localStorage.getItem('hub_demo')" in phone)
+    check("对P0 诊断样式门控", "body.bd-guest .ops-entry{ display:none !important; }" in phone
+                             and "body.bd-guest #setupWizard" in phone)
+    check("对P0 后台入口标记齐", phone.count('class="hbtn ops-entry"') == 1
+                               and phone.count("hmenu-item ops-entry") == 3)
+    check("对P0 诊断JS门控", "_UIVR||_GUEST" in phone            # 质量告警短路
+                           and "if(_GUEST){ el.style.display='none'; return; }" in phone)  # readyTip/向导
+    check("对P0 观众过滤分层兜底", "_guestFilter" in phone and "t2.length?t2:list" in phone
+                                 and "p.name===urlP" in phone)   # 指名角色必须幸存
+    check("对P0 落地页带观众身份", "&guest=1" in _land)
+    check("对P0 角色排序单源", "_profScore" in phone and "sort((a,b)=>_profScore(b)-_profScore(a))" in phone)
+    check("对P0 角色搜索在位", "profSearchInput" in phone and "_initProfSearch" in phone
+                             and "count>8" in phone)             # ≤8 不出框
+    check("对P0 转化出口接线", 'id="heroCta"' in phone and 'href="/order"' in phone
+                             and "trackPhoneCta" in phone and "body.bd-guest .hero-cta{ display:inline-flex; }" in phone)
+    check("对P0 转化埋点口径", "ev:'phone_cta'" in phone and "page:'/phone'" in phone
+                             and "bd_sid" in phone)              # 与 pro_upsell 同表同会话口径
+    # 实施中根修的存量问题：/profiles 被同批诊断请求挤出连接池，首屏角色区空转数秒
+    check("对P0 角色列表抢跑", "const rp=fetch('/profiles')" in phone)
+    check("对P0 uivr不占连接池", phone.count("uivr：") >= 8      # 诊断轮询在回归模式全部短路
+                               and "if(_UIVR) return;   // uivr：直播角标" in phone)
+
+    # 对话端 P1（2026-07-16 同方案批次）：记忆统一 / 图标化 / 降层+停止钮 / 释义 / 降噪 / 主数字
+    icons_svg = read("static/brand-icons.svg")
+    check("对P1 角色记忆统一", "localStorage.getItem('ah_profile')" in conv
+                             and "localStorage.setItem('ah_profile'" in conv
+                             and "converse_profile" in conv)     # 旧 key 仅作首读迁移兼容
+    check("对P1 图标库新增符号", 'id="i-hand"' in icons_svg and 'id="i-sparkles"' in icons_svg)
+    check("对P1 图标助手在位", "function _ic(name,s)" in phone and "i-hand" in phone)
+    check("对P1 功能位无 emoji 前缀", "🎤 按住说话" not in phone and "🖐" not in phone
+                                     and "📺" not in phone and "⏹ 停止" not in phone
+                                     and "🔊 对方能听到吗" not in phone and "💬 观众提问" not in phone)
+    check("对P1 录音红点替代🔴", 'class="rec-dot"' in phone and "🔴 松开发送" not in phone)
+    check("对P1 控制行合并降层", "对话模式 + 更多设置入口" not in phone   # 独立模式行退役
+                               and "P1-2 合并" in phone)
+    check("对P1 舞台停止钮", 'id="stageStop"' in phone and phone.count("_stopVis(") >= 7)
+    check("对P1 触屏释义气泡", "_qaPopShow" in phone and ".qa-pop" in phone)
+    check("对P1 徽章三档降噪", "P1-5 徽章降噪" in phone and "isGold(_cos)?'#f59e0b'" in phone)
+    check("对P1 主数字达标门控", "cos>=60" in phone and "nat>=85" in phone)
+    check("对P1 无硬编码人名", "刘德华" not in phone and "阿习讲话" not in phone)   # UC1 禁令补铺到 phone
+    check("对P1 试试问去重", "_syncExamplesRow" in phone)
+
+    # 对话端 §9 模式系统显性化（2026-07-17）：一页三面从隐形开关变成看得见的模式
+    check("对M1 视图模式单源", "function _viewCompute" in phone
+                             and "let VIEW='work', _GUEST=false;" in phone
+                             and "'present'" in phone)          # work/present/guest 三态
+    check("对M2 演示胶囊在位", 'id="demoPill"' in phone and "toggleDemoView" in phone
+                             and ".demo-pill.on" in phone)      # 绿点范式与 /ui 一致
+    check("对M2 访客不挂牌", "if(VIEW==='guest'){ b.style.display='none'; return; }" in phone)
+    check("对M3 热切换接线", "addEventListener('storage'" in phone and "e.key==='hub_demo'" in phone
+                           and "_viewRefresh" in phone)
+    check("对M4 帮助卡在位", 'id="howtoMask"' in phone and "这页怎么用" in phone
+                           and "ah_howto_seen" in phone and "copyGuestLink" in phone)
+    check("对M4 访客不见帮助", "body.bd-guest-url .owner-entry" in phone)
+    check("对M4 回归模式不弹卡", "!_UIVR && !localStorage.getItem('ah_howto_seen')" in phone)
+    check("对M6 分享净化明示", "share-guest-note" in phone and "自动隐藏运维信息" in phone)
+
     # HTTP 200（页面可达）
     for pg in ["/static/ui.html", "/static/phone.html", "/static/converse.html", "/static/landing.html", "/static/home.html"]:
         check("HTTP 200 " + pg, http_ok(pg))

@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta name="theme-color" content="#080b10"/>
 <title>运维总览 · 无界科技 BOUNDLESS</title>
 <link rel="icon" type="image/svg+xml" href="/static/icon.svg"/>
 <link rel="icon" type="image/png" sizes="256x256" href="/static/app-icon-256.png"/>
@@ -367,6 +368,15 @@
       <div><div class="muted" style="margin-bottom:6px;">产品线热度</div><div id="fnLine"></div></div>
     </div>
     <div class="muted" style="margin-top:10px;font-size:11px;">数据源：首页 <code>data-ev</code> 点击埋点（logs/ui_events.jsonl，仅入口 id 无 PII，跨重启留痕、自动截断）。用于看「哪些入口被真正点」，指导首页排序与市场投放。</div>
+  </div>
+
+  <div class="card" id="lookFunnelCard" style="grid-column:1/-1;">
+    <h2>出片成功率 · 定妆/试衣结果漏斗（P2-3 埋点）</h2>
+    <div class="muted" id="lfMeta">加载中…</div>
+    <div id="lfBars" style="margin-top:10px;max-width:640px;"></div>
+    <div class="muted" id="lfStarts" style="margin-top:8px;font-size:11px;"></div>
+    <div id="lfFails" style="margin-top:8px;"></div>
+    <div class="muted" style="margin-top:6px;font-size:11px;">数据源：定妆脸/妆容/定妆包/试衣/动态试衣端点结果埋点（logs/look_funnel.jsonl，近 7 天）。市场侧核心质量指标=「点了 → 一次成功」比率；失败原因已聚合，无需翻日志。</div>
   </div>
 
   <div class="card" id="devflowCard" style="grid-column:1/-1;">
@@ -1669,6 +1679,42 @@ async function funnelTick(){
   fnBars($('fnLine'), d.top_lines, 'line');
 }
 
+// ── P2-3 出片成功率：/api/look/funnel → 功能维度成功率条 + 自动拉起统计 + 最近失败原因 ──
+async function lookFunnelTick(){
+  const card=$('lookFunnelCard'); if(!card) return;
+  let resp,d;
+  try{ resp=await fetch('/api/look/funnel?days=7',{cache:'no-store'}); d=await resp.json(); }
+  catch(e){ $('lfMeta').textContent='出片漏斗接口暂不可达。'; return; }
+  if(resp && resp.status===404){ $('lfMeta').textContent='出片漏斗接口未就绪（重载 Hub 后激活 /api/look/funnel）。'; return; }
+  if(!d || !d.ok){ $('lfMeta').textContent='出片漏斗数据不可用。'; return; }
+  if(!d.available){
+    $('lfMeta').innerHTML='<span style="color:#bbf7d0">埋点已就绪，尚无出片数据（任一次定妆/试衣后即累计）。</span>';
+    $('lfBars').innerHTML=''; $('lfStarts').textContent=''; $('lfFails').innerHTML=''; return;
+  }
+  const total=(d.kinds||[]).reduce((s,k)=>s+(k.n||0),0);
+  const okN=(d.kinds||[]).reduce((s,k)=>s+(k.ok||0),0);
+  $('lfMeta').innerHTML='近 '+(d.days||7)+' 天共 <b>'+total+'</b> 次出片 · 成功 <b>'+okN+'</b>'
+    +(total?(' · 总成功率 <b style="color:'+((okN/total>=0.9)?'#4ade80':'#fbbf24')+'">'+Math.round(okN/total*100)+'%</b>'):'');
+  const bars=$('lfBars'); bars.innerHTML='';
+  (d.kinds||[]).forEach(k=>{
+    const rate=k.rate==null?0:k.rate;
+    const row=document.createElement('div'); row.className='kv'; row.style.alignItems='center';
+    row.innerHTML='<span class="k" style="min-width:96px">'+k.label+'</span>'
+      +'<span style="flex:1;margin:0 10px;height:8px;background:#0c111c;border-radius:5px;overflow:hidden;border:1px solid var(--bord)">'
+      +'<i style="display:block;height:100%;width:'+Math.round(rate*100)+'%;background:'+(rate>=0.9?'#4ade80':(rate>=0.6?'#fbbf24':'#f87171'))+';border-radius:5px"></i></span>'
+      +'<span class="v">'+k.ok+'/'+k.n+(k.avg_ms?(' · 均 '+(k.avg_ms/1000).toFixed(1)+'s'):'')+'</span>';
+    bars.appendChild(row);
+  });
+  const st=d.svc_starts||{};
+  $('lfStarts').textContent=st.n?('离线服务自动拉起 '+st.n+' 次，其中就绪 '+st.ok+' 次（点击时服务未启动 → Hub 代启动）':'期间无自动拉起（服务一直在线）。');
+  const lf=$('lfFails'); lf.innerHTML='';
+  (d.recent_fails||[]).forEach(f=>{
+    const row=document.createElement('div'); row.className='muted'; row.style.fontSize='11px';
+    row.textContent='✗ '+new Date((f.ts||0)*1000).toLocaleString()+' ['+f.kind+'] '+(f.reason||'');
+    lf.appendChild(row);
+  });
+}
+
 // ── P5-1 设备自愈漏斗：/api/metrics/devflow（P4 埋点）→ 曝光→点击→成功 转化条 + 来源细分 ──
 async function devflowTick(){
   const card=$('devflowCard'); if(!card) return;
@@ -1772,6 +1818,7 @@ vquality(); setInterval(vquality, 30000);
 vrambudget(); setInterval(vrambudget, 60000);
 clienterrs(); setInterval(clienterrs, 30000);
 funnelTick(); setInterval(funnelTick, 30000);
+lookFunnelTick(); setInterval(lookFunnelTick, 30000);
 devflowTick(); setInterval(devflowTick, 30000);
 devflowWeeklyNote();
 scHistoryLoad(); setInterval(scHistoryLoad, 30000);

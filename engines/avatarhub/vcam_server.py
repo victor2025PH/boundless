@@ -1347,9 +1347,9 @@ if __name__ == "__main__":
     # 双开预检(06o)：vcam 双实例除了 7870 串线,还会互抢 OBS 虚拟摄像头(必崩)。守在 _startup()
     # 之前——相机线程一旦起来就开始摸 OBS,必须先验明正身再放行。工具 import 本模块不受影响。
     import port_guard
-    port_guard.ensure_port_free(int(os.environ.get("VCAM_PORT", "7870")), "vcam_server")
+    port_guard.ensure_port_free(int(os.environ.get("VCAM_PORT") or app_config.port("vcam") or 7870), "vcam_server")
 
 _startup()
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("VCAM_PORT", "7870")), log_level="warning")
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("VCAM_PORT") or app_config.port("vcam") or 7870), log_level="warning")

@@ -28,12 +28,23 @@ if exist "%BASEPREFIX%\Library\bin" (
     echo [WARN] conda Library\bin not found - frozen exe may lack OpenSSL DLLs!
 )
 
+rem [2026-07-16 P8 release] pywebview native window shell shipped in the frozen exe:
+rem   AvatarHub.exe --webview-shell <url> subprocess gives app-owned windows (taskbar icon =
+rem   app.ico, guaranteed maximize) instead of Edge --app (ignores geometry flags when Edge
+rem   already runs). collect-all pulls WebView2/pythonnet runtime DLLs; measured size delta ~+6MB.
+rem   webview_shell imports pywebview via importlib on purpose - hidden-imports below are the
+rem   single explicit decision point for shipping it.
 "%VPY%" -m PyInstaller --noconfirm --clean --onefile --windowed ^
   --name AvatarHub ^
   --icon "%ROOT%assets\app.ico" ^
   --version-file "%ROOT%assets\version_info.txt" ^
   --collect-submodules app_config ^
   --collect-all zstandard ^
+  --collect-all webview ^
+  --collect-all clr_loader ^
+  --collect-all pythonnet ^
+  --collect-all proxy_tools ^
+  --collect-all bottle ^
   --hidden-import launcher_theme ^
   --hidden-import service_manager ^
   --hidden-import app_config ^
@@ -45,6 +56,10 @@ if exist "%BASEPREFIX%\Library\bin" (
   --hidden-import release_sign ^
   --hidden-import diag_pack ^
   --hidden-import cryptography ^
+  --hidden-import webview_shell ^
+  --hidden-import webview.platforms.winforms ^
+  --hidden-import webview.platforms.edgechromium ^
+  --hidden-import clr ^
   "%ROOT%launcher_qt.py"
 if errorlevel 1 (
     rem Fail LOUDLY. 2026-07-13: a running dist\AvatarHub.exe made the final os.remove fail,

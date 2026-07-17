@@ -13,6 +13,19 @@
   var OK_BG = 'rgba(34,197,94,.18)';         // 非金标的绿底
   var OK_TEXT = '#4ade80';
 
+  /* P2-4（对话端四视角方案 §8 · 2026-07-17）：质量分档阈值单源。
+     此前 0.6/0.45/0.85/0.7 散落在 phone 角色卡/质量环/观众过滤/主数字/调音评分 与
+     /ui 角色列表/抽屉/导入预览 共 10+ 处内联数字——改口径要全仓 grep。收敛到这里：
+     COS=音色相似度(cosine)分档下限，NAT=语音自然度分档下限；金标继续走 GOLD_MIN。 */
+  var QA = {
+    GOLD: GOLD_MIN,
+    COS_OK: 0.6,  COS_MID: 0.45,   // 相似度：≥OK 达标 / ≥MID 及格 / 低于为差
+    NAT_OK: 0.85, NAT_MID: 0.7,    // 自然度：同上
+  };
+  /* 分档判定（'gold'|'ok'|'mid'|'bad'）——消费方拿档位名映射各自的样式 */
+  function cosTier(c) { c = c || 0; return c >= GOLD_MIN ? 'gold' : (c >= QA.COS_OK ? 'ok' : (c >= QA.COS_MID ? 'mid' : 'bad')); }
+  function natTier(n) { n = n || 0; return n >= QA.NAT_OK ? 'ok' : (n >= QA.NAT_MID ? 'mid' : 'bad'); }
+
   /* 品牌点缀色 "R,G,B"（白标跟随 --acc-rgb；取不到回退无界蓝） */
   function accRgb() {
     try {
@@ -73,6 +86,7 @@
 
   window.BD_CANVAS = {
     GOLD_MIN: GOLD_MIN, GOLD_TEXT: GOLD_TEXT, OK_BG: OK_BG, OK_TEXT: OK_TEXT,
+    QA: QA, cosTier: cosTier, natTier: natTier,
     accRgb: accRgb, roundRect: roundRect, loadImg: loadImg,
     isGold: isGold, goldFill: goldFill,
     wrapText: wrapText, ellipsize: ellipsize,

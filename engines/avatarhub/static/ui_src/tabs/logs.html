@@ -1,0 +1,29 @@
+<div x-show="tab==='logs'" class="fade space-y-3">
+  <div class="bd-card p-4">
+    <div class="flex items-center justify-between gap-2 flex-wrap mb-3">
+      <h2 class="bd-card-title whitespace-nowrap">📋 系统日志</h2>
+      <div class="flex items-center gap-2 flex-wrap">
+        <select x-model="logsFilter" @change="loadLogs()" class="text-xs py-1">
+          <option value="">全部级别</option>
+          <option value="INFO">INFO</option>
+          <option value="WARNING">WARNING</option>
+          <option value="ERROR">ERROR</option>
+        </select>
+        <button @click="loadLogs()" class="bd-act sm soft">⟳ 刷新</button>
+        <label class="flex items-center gap-1 text-xs text-hub-muted cursor-pointer whitespace-nowrap">
+          <input type="checkbox" x-model="logAutoRefresh"> 自动刷新
+        </label>
+      </div>
+    </div>
+    <div x-show="logsLoading" class="text-xs text-hub-muted mb-2">⏳ 加载中...</div>
+    <div class="bg-black rounded-lg p-2 font-mono text-[13px] leading-4 h-96 overflow-y-auto">
+      <template x-for="line in logs" :key="line">
+        <div :class="line.includes('[ERROR]')?'text-red-400':line.includes('[WARNING]')?'text-yellow-400':'text-green-400'"
+             class="whitespace-pre-wrap break-all" x-text="line"></div>
+      </template>
+      <div x-show="logsLoading && logs.length===0" class="text-hub-muted text-center py-8 pulse">加载日志中…</div>
+      <div x-show="logs.length===0 && !logsLoading" class="text-hub-muted text-center py-8">暂无日志 · 服务运行后这里会显示最近的运行记录</div>
+    </div>
+    <div class="text-[12px] text-hub-muted mt-2">显示最近100行，日志文件: logs/avatar_hub.log (1MB×5备份)</div>
+  </div>
+</div>

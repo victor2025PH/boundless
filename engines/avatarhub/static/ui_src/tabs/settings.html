@@ -1,0 +1,366 @@
+<!-- ══════════════════════════════════════════
+     Tab 5: 设置
+═══════════════════════════════════════════ -->
+<div x-show="tab==='settings'" class="fade space-y-3">
+  <div class="grid sm:grid-cols-2 gap-3">
+
+    <!-- 对话知识库 RAG -->
+    <div class="bd-card p-4 sm:col-span-2">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="bd-card-title">📚 对话知识库 <span class="text-[12px] text-hub-muted font-normal">RAG · BM25</span></h2>
+        <span class="text-[12px] text-hub-muted" x-text="kbCount+' 条文档'"></span>
+      </div>
+      <p class="text-[13px] text-hub-muted mb-3">对话时自动检索相关段落注入 LLM，回答更贴近演讲稿/台词。按角色 profile 过滤命中。</p>
+      <div class="bd-act-row">
+        <button @click="kbImportXi()" :disabled="kbLoading"
+                class="bd-act green">
+          <span x-show="!kbLoading">📥 导入「阿习讲话」演讲稿</span>
+          <span x-show="kbLoading" class="pulse">⏳</span>
+        </button>
+        <label class="bd-act ghost">
+          📄 上传 .txt
+          <input type="file" accept=".txt,text/plain" class="hidden" @change="kbUploadFile($event)">
+        </label>
+        <select x-model="kbUploadProfile" class="bg-hub-bg border border-hub-border rounded-lg text-xs px-2 text-hub-text h-8">
+          <option value="">全局（不限角色）</option>
+          <template x-for="p in profiles" :key="p.name">
+            <option :value="p.name" x-text="p.name"></option>
+          </template>
+        </select>
+        <button @click="kbRefresh()" class="bd-act ghost">↻ 刷新</button>
+        <button @click="if(confirm('清空全部知识库？'))kbClear()" class="bd-act red">🗑 清空</button>
+      </div>
+      <div class="mt-3 flex gap-2">
+        <input x-model="kbSearchQ" @keydown.enter.prevent="kbSearch()"
+               placeholder="检索预览，如：深圳、改革开放…"
+               class="flex-1 bg-hub-bg border border-hub-border rounded-lg text-xs px-3 text-hub-text h-8">
+        <button @click="kbSearch()" :disabled="kbSearchLoading||!kbSearchQ.trim()"
+                class="bd-act soft shrink-0">🔍 检索</button>
+      </div>
+      <div x-show="kbSearchHits.length" class="mt-2 space-y-1.5 max-h-40 overflow-y-auto">
+        <template x-for="(h,i) in kbSearchHits" :key="i">
+          <div class="bg-hub-bg border border-hub-border rounded-lg p-2 text-[13px]">
+            <span class="text-hub-green font-mono" x-text="'#'+h.score"></span>
+            <span class="text-hub-muted ml-2" x-text="h.text"></span>
+          </div>
+        </template>
+      </div>
+      <div x-show="kbMsg" class="text-[13px] mt-2" :class="kbOk?'text-hub-green':'text-hub-red'" x-text="kbMsg"></div>
+    </div>
+
+    <!-- E-2 硬件档位与能力预期（与销售一页纸/使用说明同口径，售前防过度承诺） -->
+    <div class="bd-card p-4 sm:col-span-2" x-show="hwGuide">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="bd-card-title">🧮 硬件档位与能力预期</h2>
+        <span class="text-[12px] text-hub-muted" x-text="hwGuide ? (hwGuide.gpus||[]).map(g=>g.name+' '+g.vram_gb+'G').join(' · ') : ''"></span>
+      </div>
+      <p class="text-[13px] mb-2" :class="hwGuide && hwGuide.tier==='unknown' ? 'text-hub-orange' : 'text-hub-green'"
+         x-text="hwGuide ? hwGuide.hint : ''"></p>
+      <div class="space-y-1">
+        <template x-for="f in (hwGuide ? hwGuide.features : [])" :key="f.key">
+          <!-- 窄屏（<sm）：说明降为整行第二行，能力名弹性收缩——w-64 定宽列在 390px 视口会把整页撑出横滚 -->
+          <div class="flex flex-wrap items-start gap-x-2 gap-y-0.5 py-1 border-t border-white/5 text-[13px]">
+            <span class="shrink-0 w-4 text-center"
+                  x-text="f.verdict==='ok' ? '🟢' : f.verdict==='degraded' ? '🟡' : f.verdict==='not_recommended' ? '🔴' : '⚪'"></span>
+            <span class="min-w-0 flex-1 sm:flex-none sm:w-64 text-hub-text" x-text="f.label"></span>
+            <span class="shrink-0 w-20 text-[12px] font-mono text-hub-muted"
+                  x-text="f.rec_gb>0 ? ('建议 '+f.rec_gb+'G') : '不吃显存'"></span>
+            <span class="basis-full sm:basis-0 sm:grow min-w-0 text-hub-muted" x-text="f.note"></span>
+          </div>
+        </template>
+      </div>
+      <p class="text-[12px] text-hub-muted/70 mt-2">🟢 推荐配置 · 🟡 可跑（降档/借分机） · 🔴 不建议本机跑 —— 口径与《销售一页纸》《使用说明》同源（capability_matrix 门禁核验）。</p>
+    </div>
+
+    <!-- 移动端遥控 -->
+    <div class="bd-card p-4 sm:col-span-2">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="bd-card-title">📱 手机遥控</h2>
+        <span class="text-[12px] text-hub-muted">局域网内手机扫码直接遥控</span>
+      </div>
+      <div class="flex gap-4 items-start flex-wrap">
+        <button @click="genMobileQr()" :disabled="mobileQrLoading"
+                class="bd-act soft">
+          <span x-show="!mobileQrLoading">📱 生成遥控码</span>
+          <span x-show="mobileQrLoading" class="pulse">⏳ 生成中...</span>
+        </button>
+        <div x-show="mobileQr" class="flex items-start gap-4 flex-wrap">
+          <div x-show="mobileQr?.qr_base64" class="shrink-0">
+            <img :src="mobileQr?.qr_base64?'data:image/png;base64,'+mobileQr.qr_base64:''"
+                 class="w-28 h-28 rounded-lg border border-hub-border" alt="QR Code">
+          </div>
+          <div class="space-y-1 text-xs">
+            <div class="font-semibold text-hub-green">✅ 遥控码已生成（6小时有效）</div>
+            <div class="text-hub-muted">本机 IP：<span class="text-hub-text font-mono" x-text="mobileQr?.local_ip"></span></div>
+            <div class="text-hub-muted">访问地址：</div>
+            <a :href="mobileQr?.ctrl_url" target="_blank"
+               class="text-hub-blue hover:underline font-mono text-[12px] break-all"
+               x-text="mobileQr?.ctrl_url"></a>
+            <div x-show="!mobileQr?.qr_base64"
+                 class="text-[12px] text-hub-muted">提示：安装 qrcode 库可显示二维码</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bd-card p-4">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="bd-card-title">📊 服务状态</h2>
+        <button @click="refreshServices()" class="bd-tap text-xs text-hub-blue hover:underline">🔄</button>
+      </div>
+      <div class="space-y-1.5">
+        <template x-for="(ok, name) in services" :key="name">
+          <div class="flex items-center justify-between bg-hub-bg rounded-lg px-3 py-1.5">
+            <div class="flex items-center gap-2">
+              <span :class="ok?'bg-hub-green':'bg-hub-red'" class="w-2 h-2 rounded-full"></span>
+              <span class="text-xs font-medium" x-text="svcName(name)"></span>
+              <span class="text-[12px] text-hub-muted" x-text="svcPort[name]?(':'+svcPort[name]):''"></span>
+            </div>
+            <span :class="ok?'text-hub-green':'text-hub-red/70'" class="text-[12px] font-semibold"
+                  x-text="ok?'运行中':'未启动'"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- P14-2: 运行指标面板 -->
+    <div class="bd-card p-4">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="bd-card-title">📊 运行指标</h2>
+        <div class="flex gap-2">
+          <label class="flex items-center gap-1 text-xs cursor-pointer">
+            <input type="checkbox" x-model="metricsAutoRefresh" @change="startMetricsRefresh()" class="accent-hub-blue w-3 h-3">
+            <span class="text-hub-muted">30s</span>
+          </label>
+          <button @click="loadMetrics()" :disabled="metricsLoading" class="text-xs text-hub-blue hover:underline">
+            <span x-show="!metricsLoading">🔄 刷新</span>
+            <span x-show="metricsLoading" class="pulse">⏳</span>
+          </button>
+          <!-- P14-3: 一键重置指标 -->
+          <button @click="if(confirm('重置所有运行指标？')){ fetch(HUB+'/metrics/reset',{method:'POST'}).then(()=>{showToast('已重置指标','success');loadMetrics();}); }"
+                  class="text-xs text-hub-red/60 hover:text-hub-red">🗑 重置</button>
+        </div>
+      </div>
+      <div x-show="Object.keys(metricsData).length===0" class="text-hub-muted text-xs">点击刷新加载指标...</div>
+      <div x-show="Object.keys(metricsData).length>0" class="space-y-3">
+        <!-- 吸偀量数字行 -->
+        <div class="grid grid-cols-3 gap-2 text-center">
+          <div class="bg-hub-bg rounded-lg py-2">
+            <div class="text-lg font-bold text-hub-blue" x-text="metricsData.speak_total||0"></div>
+            <div class="text-[12px] text-hub-muted">单句合成</div>
+          </div>
+          <div class="bg-hub-bg rounded-lg py-2">
+            <div class="text-lg font-bold text-hub-blue" x-text="metricsData.stream_sse_total||0"></div>
+            <div class="text-[12px] text-hub-muted">流式调用</div>
+          </div>
+          <div class="bg-hub-bg rounded-lg py-2">
+            <div class="text-lg font-bold text-hub-green" x-text="metricsData.uptime_hours||0"></div>
+            <div class="text-[12px] text-hub-muted">运行小时</div>
+          </div>
+        </div>
+        <!-- UI-P5-1 → UD1: 决策①面板——数字一律用 decision1（基线以来增量）口径；
+             终身口径分母含 auto 上线前历史，结构性低估，只给看板用，禁止回绑到这里 -->
+        <div x-show="metricsData.decision1 || (metricsData.speak_emotion_auto||0)>0 || (metricsData.stream_sse_emotion||0)>0"
+             class="bg-hub-purple/10 border border-hub-purple/30 rounded-lg px-3 py-2 space-y-1">
+          <div class="flex items-center justify-between gap-2">
+            <div class="text-[12px] font-semibold text-hub-purple">🤖 情感 auto 使用（决策①）</div>
+            <div class="flex items-center gap-2" x-show="metricsData.decision1">
+              <span class="text-[12px] text-hub-muted"
+                    x-text="'自 '+(metricsData.decision1?.baseline_date||'—')+' 起算 · 第 '+Math.max(1,Math.ceil(metricsData.decision1?.days||0))+'/7 天'"></span>
+              <button @click="d1Rebaseline()" class="text-[12px] text-hub-muted hover:text-hub-purple hover:underline"
+                      title="扩情感词表或改检测规则后，旧窗口读数失真——从现在重计 7 天观察窗口（终身累计不受影响）">↺ 重新起算</button>
+            </div>
+          </div>
+          <template x-if="metricsData.decision1">
+            <div class="grid grid-cols-4 gap-2 text-center text-xs">
+              <div><span class="font-bold text-hub-purple" x-text="metricsData.decision1.auto_since"></span><div class="text-[12px] text-hub-muted">auto 次数</div></div>
+              <div><span class="font-bold text-hub-purple" x-text="metricsData.decision1.stream_emo_since"></span><div class="text-[12px] text-hub-muted">流式情感</div></div>
+              <div><span class="font-bold" :class="(metricsData.decision1.auto_rate||0)>=0.3?'text-hub-green':''"
+                         x-text="Math.round((metricsData.decision1.auto_rate||0)*100)+'%'"></span><div class="text-[12px] text-hub-muted">auto 占比</div></div>
+              <div><span class="font-bold" :class="(metricsData.decision1.miss_rate||0)>0.2?'text-hub-orange':''"
+                         x-text="metricsData.decision1.miss_since"></span><div class="text-[12px] text-hub-muted">误判反馈</div></div>
+            </div>
+          </template>
+          <!-- 旧后端（未重启）没有 decision1：不给失真数字，只提示口径未生效 -->
+          <div class="text-[12px]" :class="metricsData.decision1?.verdict==='pass'?'text-hub-green font-semibold':'text-hub-muted'"
+               x-text="decision1Hint()"></div>
+        </div>
+        <!-- 延迟百分位数 -->
+        <div>
+          <div class="text-[12px] text-hub-muted mb-1">单句延迟（P50 / P95 / P99）</div>
+          <div class="flex gap-2 text-xs">
+            <span class="bg-hub-bg rounded px-2 py-0.5 text-hub-green" x-text="(metricsData.speak_latency_p50ms||0)+'ms'"></span>
+            <span class="bg-hub-bg rounded px-2 py-0.5 text-hub-orange" x-text="(metricsData.speak_latency_p95ms||0)+'ms'"></span>
+            <span class="bg-hub-bg rounded px-2 py-0.5 text-hub-red" x-text="(metricsData.speak_latency_p99ms||0)+'ms'"></span>
+            <span class="text-[12px] text-hub-muted self-center" x-text="'n='+(metricsData.speak_latency_samples||0)"></span>
+          </div>
+        </div>
+        <!-- 延迟直方图 -->
+        <div x-show="metricsData.latency_histogram">
+          <div class="text-[12px] text-hub-muted mb-1">延迟分布</div>
+          <template x-for="[lbl, val] in Object.entries(metricsData.latency_histogram||{})" :key="lbl">
+            <div class="flex items-center gap-2 mb-1">
+              <div class="w-20 text-[12px] text-hub-muted shrink-0" x-text="lbl"></div>
+              <div class="flex-1 bg-hub-border rounded-full h-2">
+                <div class="h-2 rounded-full transition-all"
+                     :class="lbl==='<500ms'?'bg-hub-green':lbl==='500-1000ms'?'bg-hub-blue':lbl==='1000-3000ms'?'bg-hub-orange':'bg-hub-red'"
+                     :style="'width:'+(()=>{const tot=Object.values(metricsData.latency_histogram||{}).reduce((a,b)=>a+b,0);return tot>0?Math.round(val/tot*100):0})()+' %'"></div>
+              </div>
+              <div class="w-8 text-[12px] text-right text-hub-muted" x-text="val"></div>
+            </div>
+          </template>
+        </div>
+        <!-- RVC 命中率 + 错误计数 -->
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div class="bg-hub-bg rounded-lg px-3 py-2">
+            <div class="text-hub-muted text-[12px]">RVC 命中率</div>
+            <div class="font-semibold text-hub-purple" x-text="Math.round((metricsData.speak_rvc_rate||0)*100)+'%'"></div>
+          </div>
+          <div class="bg-hub-bg rounded-lg px-3 py-2">
+            <div class="text-hub-muted text-[12px]">TTS 错误</div>
+            <div :class="(metricsData.tts_error||0)>0?'text-hub-red':'text-hub-green'" class="font-semibold"
+                 x-text="(metricsData.tts_error||0)+' 次'"></div>
+          </div>
+          <div class="bg-hub-bg rounded-lg px-3 py-2">
+            <div class="text-hub-muted text-[12px]">流式 RVC 率</div>
+            <div class="font-semibold text-hub-purple" x-text="Math.round((metricsData.stream_sse_rvc_rate||0)*100)+'%'"></div>
+          </div>
+          <div class="bg-hub-bg rounded-lg px-3 py-2">
+            <div class="text-hub-muted text-[12px]">慢请求(>5s)</div>
+            <div :class="(metricsData.speak_slow_total||0)>0?'text-hub-orange':'text-hub-green'" class="font-semibold"
+                 x-text="(metricsData.speak_slow_total||0)+' 次'"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 性能仪表盘 -->
+    <div class="bd-card p-4">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="bd-card-title">⚡ 性能监控</h2>
+        <span class="text-[12px] text-hub-muted pulse" x-show="perfLive">实时</span>
+      </div>
+      <div class="space-y-2.5">
+        <!-- GPU 占用 -->
+        <div x-show="perf.gpu_util>=0">
+          <div class="flex justify-between text-xs mb-1">
+            <span class="text-hub-muted">GPU 占用</span>
+            <span :class="perf.gpu_util>80?'text-hub-red':perf.gpu_util>50?'text-hub-orange':'text-hub-green'"
+                  x-text="perf.gpu_util+'%'"></span>
+          </div>
+          <div class="bg-hub-border rounded h-1.5">
+            <div class="bar h-full rounded"
+                 :class="perf.gpu_util>80?'bg-hub-red':perf.gpu_util>50?'bg-hub-orange':'bg-hub-green'"
+                 :style="'width:'+perf.gpu_util+'%'"></div>
+          </div>
+        </div>
+        <!-- 显存 -->
+        <div x-show="perf.gpu_mem_total>0">
+          <div class="flex justify-between items-center text-xs mb-1">
+            <span class="text-hub-muted">显存</span>
+            <span class="flex items-center gap-2">
+              <button x-show="vramTight && canFreeVram()" x-cloak @click="freeVram()" :disabled="freeVramBusy"
+                      class="bd-act sm amber"
+                      x-text="freeVramBusy?'腾显存中…':'🧹 腾显存'"></button>
+              <span class="text-hub-text" x-text="perf.gpu_mem_used+' / '+perf.gpu_mem_total+' MB'"></span>
+            </span>
+          </div>
+          <div class="bg-hub-border rounded h-1.5">
+            <div class="bar h-full rounded bg-hub-blue"
+                 :style="'width:'+Math.round(perf.gpu_mem_used/perf.gpu_mem_total*100)+'%'"></div>
+          </div>
+        </div>
+        <!-- 内存 -->
+        <div x-show="perf.ram_percent>=0">
+          <div class="flex justify-between text-xs mb-1">
+            <span class="text-hub-muted">内存</span>
+            <span class="text-hub-text" x-text="perf.ram_percent+'%'"></span>
+          </div>
+          <div class="bg-hub-border rounded h-1.5">
+            <div class="bar h-full rounded bg-hub-purple"
+                 :style="'width:'+perf.ram_percent+'%'"></div>
+          </div>
+        </div>
+        <!-- FPS -->
+        <div x-show="perf.fps>0">
+          <div class="flex justify-between text-xs mb-1">
+            <span class="text-hub-muted">虚拟摄像头</span>
+            <span class="text-hub-green font-semibold" x-text="perf.fps+'fps'"></span>
+          </div>
+          <div class="bg-hub-border rounded h-1.5">
+            <div class="bar h-full rounded bg-hub-green"
+                 :style="'width:'+Math.min(100,perf.fps/30*100)+'%'"></div>
+          </div>
+        </div>
+        <div x-show="perf.gpu_util<0" class="text-hub-muted text-xs">等待数据...</div>
+      </div>
+      <!-- 系统信息卡片 -->
+      <div class="grid grid-cols-2 gap-1.5 mt-3">
+        <template x-for="(v, k) in sysInfo" :key="k">
+          <div class="bg-hub-bg rounded px-2 py-1.5 text-[12px]">
+            <div class="text-hub-muted" x-text="sysLabels[k]||k"></div>
+            <div class="text-hub-text font-semibold truncate" x-text="v"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- 快捷链接 + 角色操作 -->
+  <div class="bd-card p-4">
+    <h2 class="bd-card-title mb-3">⚡ 快捷操作</h2>
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      <a href="http://127.0.0.1:8000/ui" target="_blank"
+         class="bg-hub-bg border border-hub-border rounded-lg px-2 py-2 text-xs text-hub-blue text-center hover:border-hub-blue transition">👤 换脸面板</a>
+      <a href="http://127.0.0.1:8001/ui" target="_blank" title="🧪 实验室·离线约5~10秒，未接入实时直播"
+         class="bg-hub-bg border border-amber-500/40 rounded-lg px-2 py-2 text-xs text-amber-200/90 text-center hover:border-amber-400 transition">🧪 发型定妆</a>
+      <button @click="importShow=true; importFile=null; importPreview=null; importMode='skip'"
+              class="bg-hub-bg border border-hub-border rounded-lg px-2 py-2 text-xs text-hub-blue text-center hover:border-hub-blue transition">📥 导入角色</button>
+      <button @click="exportProfiles()"
+              class="bg-hub-bg border border-hub-border rounded-lg px-2 py-2 text-xs text-hub-blue text-center hover:border-hub-blue transition"
+              x-text="exportSelected.length>0?`📦 导出(${exportSelected.length})`:'📦 导出角色'"></button>
+      <button @click="loadSysInfo()"
+              class="bg-hub-bg border border-hub-border rounded-lg px-2 py-2 text-xs text-hub-blue text-center hover:border-hub-blue transition">🔄 刷新信息</button>
+    </div>
+    <button @click="if(confirm('确认清空所有角色？'))clearProfiles()"
+            class="mt-2 w-full bd-act red">
+      🗑️ 清空角色库
+    </button>
+  </div>
+
+  <!-- P20-5: 服务 URL 热重载配置面板（技术项，默认折叠，避免误改；归位「设置」页，仅此页显示）-->
+  <div class="bd-card p-4">
+  <button @click="showSvcCfg=!showSvcCfg" class="bd-tap w-full flex items-center justify-between" :class="showSvcCfg?'mb-3':''">
+    <h2 class="bd-card-title">🔧 服务地址配置 <span class="text-[12px] text-hub-muted font-normal">高级</span></h2>
+    <span class="text-hub-muted text-xs" x-text="showSvcCfg?'收起 ▲':'展开 ▾'"></span>
+  </button>
+  <div x-show="showSvcCfg" x-transition.opacity.duration.150ms class="space-y-3">
+    <div class="flex items-start justify-between gap-2">
+      <div class="flex items-start gap-2 text-[13px] text-hub-orange/90">
+        <span class="mt-0.5 shrink-0">⚠️</span>
+        <span>技术项：地址为草稿态，点「保存」才落库并热重载生效，可能中断正在进行的服务。非必要请勿改动。</span>
+      </div>
+      <button @click="loadConfig()" class="shrink-0 text-[12px] text-hub-muted hover:text-hub-text">🔄 刷新</button>
+    </div>
+    <div x-show="!configData" class="text-xs text-hub-muted pulse">加载中...</div>
+    <div x-show="configData" class="grid sm:grid-cols-2 gap-2">
+      <template x-for="[key, url] in Object.entries(configData?.services||{})" :key="key">
+        <div class="bg-hub-bg border border-hub-border rounded-xl p-2.5">
+          <div class="flex items-center justify-between mb-1 gap-2">
+            <span class="text-[13px] font-semibold text-hub-text truncate" x-text="key"></span>
+            <span class="shrink-0 text-[12px] px-1.5 py-0.5 rounded-full"
+                  :class="(svcEdits[key]!==undefined && svcEdits[key]!==url)?'bg-hub-orange/20 text-hub-orange':'bg-hub-green/15 text-hub-green'"
+                  x-text="(svcEdits[key]!==undefined && svcEdits[key]!==url)?'未保存':'已生效'"></span>
+          </div>
+          <input x-model="svcEdits[key]" class="w-full text-[13px] py-1 px-1.5 font-mono">
+          <div x-show="svcEdits[key]!==undefined && svcEdits[key]!==url" class="flex gap-1.5 mt-1.5">
+            <button @click="saveSvc(key)" class="bd-act sm soft">保存</button>
+            <button @click="svcReset(key)" class="bd-act sm ghost">还原</button>
+          </div>
+        </div>
+      </template>
+    </div>
+    <div class="text-[12px] text-hub-muted">保存后立即生效，无需重启。数据持久化到 hub_config.json</div>
+  </div>
+  </div>
+</div>

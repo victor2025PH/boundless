@@ -1,0 +1,382 @@
+<!-- ══════════════════════════════════════════
+     Tab 1: 角色库
+═══════════════════════════════════════════ -->
+<div x-show="tab==='profiles'" class="fade space-y-4">
+
+  <!-- 顶部 Hero：有出镜角色→当前角色+主CTA(对话/开播)；无→价值主张+单一主CTA(向导) -->
+  <div class="relative overflow-hidden rounded-2xl px-5 py-4 border border-hub-border bg-gradient-to-r from-hub-blue/15 via-hub-blue/5 to-transparent">
+    <!-- 装饰性品牌光晕（纯观感，不拦截点击）-->
+    <div class="pointer-events-none absolute -top-20 -right-10 w-64 h-64 rounded-full bg-hub-blue/10 blur-3xl"></div>
+    <!-- 有出镜角色 -->
+    <template x-if="activeProfileObj">
+      <div class="relative flex items-center gap-4 flex-wrap">
+        <div class="w-16 h-16 rounded-full overflow-hidden bg-hub-border flex items-center justify-center shrink-0 shadow-lg"
+             :class="cardStatus(activeProfileObj).ring || 'ring-2 ring-hub-green/50'">
+          <img x-show="activeProfileObj.thumbnail" :src="'data:image/jpeg;base64,'+activeProfileObj.thumbnail" class="w-full h-full object-cover">
+          <div x-show="!activeProfileObj.thumbnail" class="w-full h-full flex items-center justify-center text-white font-bold text-xl"
+               :style="'background:'+avatarSeed(activeProfileObj.name).bg" x-text="avatarSeed(activeProfileObj.name).initial"></div>
+        </div>
+        <div class="min-w-0">
+          <div class="text-[13px] text-hub-muted flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-hub-green animate-pulse"></span>当前出镜角色
+          </div>
+          <div class="bd-fs-h1 font-bold text-hub-text truncate" x-text="activeProfileObj.name"></div>
+          <span class="bd-chip bd-fs-sm mt-1"
+                :class="cardStatus(activeProfileObj).cls" x-text="cardStatus(activeProfileObj).label"></span>
+          <!-- P2: 准备中→确定性进度条（复用 facePct 单一事实源）-->
+          <div x-show="stageOf(activeProfileObj.name)==='preparing'" class="mt-1.5 h-1 w-44 max-w-full bg-hub-border rounded-full overflow-hidden">
+            <div class="h-full bg-amber-400 transition-all duration-500" :style="'width:'+facePct()+'%'"></div>
+          </div>
+        </div>
+        <div class="ml-auto flex items-center gap-2 flex-wrap">
+          <span x-show="profiles.filter(p=>needsProbe(p)).length"
+                class="text-[13px] text-hub-orange bg-orange-900/20 px-2 py-1 rounded-full"
+                x-text="profiles.filter(p=>needsProbe(p)).length+' 个待体检'"></span>
+          <button @click="openEdit(activeProfileObj)" class="bd-btn bd-btn-ghost" title="管理 / 编辑 / 深入设置">⚙ 管理</button>
+          <button @click="goTab('stream')" class="bd-btn bd-btn-ghost"
+                  data-tip="开播 · 出画面|启动换脸/数字人画面,推到虚拟摄像头(OBS)|想让观众/对方看到你的数字形象时;翻译传声请用「同传」">📡 开播 · 出画面</button>
+          <a :href="'/phone?profile='+encodeURIComponent(activeProfileObj.name)" target="_blank"
+             class="bd-btn bd-btn-primary">💬 开始对话</a>
+        </div>
+      </div>
+    </template>
+    <!-- 无出镜角色：价值主张 + 单一主 CTA -->
+    <template x-if="!activeProfileObj">
+      <div class="relative flex items-center gap-4 flex-wrap">
+        <div class="min-w-0 flex-1">
+          <div class="bd-fs-h1 font-bold text-hub-text">克隆你的声音与形象，几分钟上线数字人</div>
+          <div class="text-hub-muted text-sm mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span class="text-hub-blue font-semibold">① 创建 / 选角色</span>
+            <span class="text-hub-muted/60">→</span>
+            <span class="text-hub-orange font-semibold">② 🩺 音质体检</span>
+            <span class="text-hub-muted/60">→</span>
+            <span class="text-hub-green font-semibold">③ ▶ 启用 💬 对话</span>
+          </div>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <span x-show="profiles.filter(p=>needsProbe(p)).length"
+                class="text-[13px] text-hub-orange bg-orange-900/20 px-2 py-1 rounded-full"
+                x-text="profiles.filter(p=>needsProbe(p)).length+' 个待体检'"></span>
+          <button @click="openOnboard()" class="bd-btn bd-btn-primary">🚀 三步上手向导</button>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- 资产巡检轻横幅：只在孤儿克隆音≥3 或 回收站≥500MB 时出现，可当场一键清理或直达面板；✕ 本会话不再提示 -->
+  <div x-show="assetNudge" x-transition.opacity
+       class="flex items-center gap-2.5 rounded-xl border border-hub-yellow/40 bg-yellow-900/15 px-4 py-2.5 text-[13px] flex-wrap">
+    <span class="shrink-0">🧹</span>
+    <span class="min-w-0 flex-1 text-hub-text">磁盘可以清一清了：<span class="text-hub-yellow" x-text="assetNudge"></span></span>
+    <button x-show="assetHealth && (assetHealth.orphans||0)>=3" @click="vaPurgeOrphans()" :disabled="vaBusy==='purge:orphans'"
+            class="shrink-0 bd-act sm amber"
+            x-text="vaBusy==='purge:orphans'?'⏳ 清理中…':'🧹 一键清理孤儿'"></button>
+    <button x-show="assetHealth && (assetHealth.trash_bytes||0)>=500*1024*1024 && (assetHealth.trash_old_n||0)>0"
+            @click="vaPurgeTrashOld()" :disabled="vaBusy==='trash:old'"
+            :title="'彻底删除 30 天前删的 '+(assetHealth?assetHealth.trash_old_n:0)+' 项，近期删除保留'"
+            class="shrink-0 bd-act sm amber"
+            x-text="vaBusy==='trash:old'?'⏳ 清理中…':('♻️ 清 30 天前（'+vaFmtSize(assetHealth?assetHealth.trash_old_bytes:0)+'）')"></button>
+    <button @click="vaOpen(assetNudgeTab)" class="shrink-0 bd-act sm amber">🗂️ 去资产面板</button>
+    <button @click="nudgeDismiss()" aria-label="本次会话不再提示" title="本次会话不再提示"
+            class="shrink-0 w-6 h-6 rounded-full text-hub-muted hover:text-hub-text hover:bg-hub-border/60 transition">✕</button>
+  </div>
+
+  <!-- 搜索 + 角色网格 -->
+  <div class="bd-card p-4">
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+      <h2 class="bd-card-title">🎭 角色库</h2>
+      <div class="flex items-center gap-1.5 flex-wrap justify-end">
+        <!-- 批量控件：仅「批量模式」显示（去杂乱）-->
+        <template x-if="batchMode">
+          <span class="flex items-center gap-1.5">
+            <button @click="toggleSelectAll()" class="text-[12px] text-hub-blue hover:underline"
+                    x-text="exportSelectAll?'取消全选':'全选'"></button>
+            <button x-show="exportSelected.length>0" @click="deleteSelectedProfiles()"
+                    class="text-[12px] text-hub-red hover:underline"
+                    x-text="'🗑 删除('+exportSelected.length+')'" title="删除所选角色"></button>
+            <span x-show="exportSelected.length>0" class="text-[12px] text-hub-green"
+                  x-text="exportSelected.length+' 已选'"></span>
+          </span>
+        </template>
+        <!-- 排序 -->
+        <select x-model="profileSort" @change="if(profileSort==='usage')loadProfileStats()"
+                class="text-[12px] bg-hub-bg border border-hub-border rounded px-1 py-0.5">
+          <option value="name">按名称</option>
+          <option value="usage">按使用频率</option>
+          <option value="recent">按最近克隆</option>
+          <option value="cosine">按音色↓</option>
+          <option value="naturalness">按自然度↓</option>
+        </select>
+        <!-- 质量筛选 -->
+        <select x-model="qualityFilter" title="双轴筛选"
+                class="text-[12px] bg-hub-bg border border-hub-border rounded px-1 py-0.5">
+          <option value="all">全部</option>
+          <option value="cos">音色达标</option>
+          <option value="nat">自然度达标</option>
+          <option value="both">双轴达标</option>
+        </select>
+        <button @click="probeAllQuality()" :disabled="probeAllRunning"
+                class="bd-act sm amber"
+                title="对所有绑定声音的角色逐个体检（音色+自然度）">
+          <span x-show="!probeAllRunning">🩺 全员体检</span>
+          <span x-show="probeAllRunning" x-text="'⏳ '+probeAllProgress"></span>
+        </button>
+        <!-- 资产管理入口（声音 / 变声模型 / 回收站）-->
+        <button @click="vaOpen()"
+                class="bd-act sm ghost"
+                title="声音与变声模型统一管理：试听、看被谁引用、找回孤儿、回收站还原">🗂️ 资产</button>
+        <!-- 批量模式开关 -->
+        <button @click="toggleBatch()"
+                class="bd-act sm"
+                :class="batchMode?'soft':'ghost'"
+                x-text="batchMode?'✕ 退出批量':'☑ 批量'" title="批量选择：删除 / 导出多个角色"></button>
+        <!-- 新建（与创建中心闭环）-->
+        <button @click="openCreateHub()"
+                class="bd-act sm primary" title="新建数字人">＋ 新建</button>
+        <span class="text-hub-muted text-xs" x-text="filteredProfiles.length+'/'+profiles.length+' 个角色'"></span>
+      </div>
+    </div>
+    <!-- S5: DFM 绑定对账横幅——有角色绑定了直播机库里没有的模型(missing)或仅离线档(offline_only)时亮出 -->
+    <div x-show="dfmAudit.issues.length" x-cloak role="alert"
+         class="mb-3 rounded-xl border border-yellow-600/50 bg-yellow-900/20 px-3.5 py-2.5 flex items-start gap-2.5">
+      <span class="text-base leading-5 mt-0.5 shrink-0">🎭⚠️</span>
+      <div class="flex-1 text-[13px] leading-relaxed">
+        <div class="font-semibold text-yellow-300 mb-0.5" x-text="dfmAudit.issues.length+' 个角色的换脸绑定需要处理'"></div>
+        <template x-for="i in dfmAudit.issues" :key="'dfmi_'+i.profile">
+          <div class="text-hub-muted">
+            <b class="text-hub-text" x-text="i.profile"></b>：<span x-text="i.cn ? i.cn+'（'+i.model+'）' : i.model"></span>
+            —— <span x-text="i.status==='missing' ? '直播机库里没有此模型，激活会自动回退通用换脸' : (i.hint||'仅离线档，直播会卡帧')"></span>
+            <button @click="openEditByName(i.profile)" class="text-hub-blue hover:underline ml-1">去重绑</button>
+          </div>
+        </template>
+      </div>
+      <button @click="refreshDfmAudit()" title="重新对账" class="text-hub-muted hover:text-hub-text text-sm shrink-0">⟳</button>
+    </div>
+    <!-- P3: 「静态口型属正常」一次性认知引导——实时换脸模式下把"静态口型"从源头讲成正常且更自然，消除困惑；可关闭(持久化)，能力面板「说明」可再唤出 -->
+    <div x-show="showStaticMouthHint()" x-transition.opacity.duration.150ms role="note"
+         class="mb-3 rounded-xl border border-hub-blue/40 bg-hub-blue/10 px-3.5 py-2.5 flex items-start gap-2.5">
+      <span class="text-base leading-5 mt-0.5 shrink-0">🎭</span>
+      <div class="flex-1 text-[13px] leading-relaxed">
+        <div class="font-semibold text-hub-blue mb-0.5">当前为「实时换脸」模式 · 口型跟随真实摄像头</div>
+        <div class="text-hub-muted">
+          数字人的口型直接来自你本人的真实画面（实时换脸），无需 AI 合成，因此<span class="text-hub-text font-medium">更自然、零额外延迟</span>——这是<span class="text-hub-green font-medium">正常且推荐</span>的工作方式，卡片上的「静态口型」并非故障。若想改用「静态形象 + AI 合成口型」，在部署配置开启 lipsync 服务即可。
+        </div>
+      </div>
+      <button @click="dismissStaticMouthHint()" aria-label="知道了，不再提示"
+              class="bd-act sm soft shrink-0">知道了</button>
+    </div>
+    <!-- VL1 三库分区页签：数字人(脸+声可出镜) / 照片(有脸待配声) / 声音(纯声资产)；
+         计数=全量库存（不随搜索/质量筛选跳变），选择跨会话记忆（hub_prof_lib） -->
+    <div class="mb-3 flex items-center gap-2 flex-wrap text-[12px]">
+      <div class="flex rounded-lg border border-hub-border overflow-hidden">
+        <template x-for="lb in [['all','全部'],['human','🧑 数字人'],['photo','🖼 照片'],['voice','🎙 声音']]" :key="'lib'+lb[0]">
+          <button @click="setLib(lb[0])" class="px-2.5 py-1 transition"
+                  :class="profileLib===lb[0]?'bg-hub-blue text-white':'text-hub-muted hover:text-hub-text'"
+                  x-text="lb[1]+' '+(libCounts[lb[0]]||0)"></button>
+        </template>
+      </div>
+      <span x-show="profileLib==='voice'" class="text-hub-muted">纯声资产 · 点卡片补形象即可升级成数字人</span>
+      <span x-show="profileLib==='photo'" class="text-hub-muted">已有形象 · 配上声音就能开口</span>
+      <span x-show="profileLib==='all' && libCounts.draft>0" class="text-hub-muted" x-text="'含草稿 '+libCounts.draft+' 个（缺脸也缺声）'"></span>
+    </div>
+    <!-- 搜索框 -->
+    <div class="mb-3">
+      <input x-model="profileSearch" @input="profShowN=30" placeholder="🔍 搜索角色..." class="w-full text-xs py-1.5 px-2">
+    </div>
+    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2.5">
+      <!-- P2: 首次加载骨架屏（避免空白闪屏）-->
+      <template x-if="!profilesLoaded">
+        <template x-for="i in 5" :key="'skel'+i">
+          <div class="bg-hub-bg border-2 border-hub-border rounded-xl p-2.5 flex flex-col items-center gap-2">
+            <div class="skel w-14 h-14 rounded-full mt-1"></div>
+            <div class="skel h-3 w-3/4 rounded"></div>
+            <div class="skel h-2.5 w-1/2 rounded"></div>
+            <div class="skel h-4 w-16 rounded-full mt-1"></div>
+          </div>
+        </template>
+      </template>
+      <!-- P1(UI改版): 网格首位「＋ 新建数字人」入口卡（有角色时常驻，点击打开创建中心）-->
+      <div x-show="profilesLoaded && !profilesLoadError && profiles.length>0"
+           @click="openCreateHub()" role="button" tabindex="0" aria-label="新建数字人"
+           @keydown.enter="openCreateHub()" @keydown.space.prevent="openCreateHub()"
+           class="card-lift cursor-pointer bg-hub-bg border-2 border-dashed border-hub-border hover:border-hub-blue rounded-xl p-2.5 flex flex-col items-center justify-center text-center min-h-[168px] group transition-colors">
+        <div class="w-14 h-14 rounded-full border-2 border-dashed border-hub-blue/50 group-hover:border-hub-blue flex items-center justify-center text-3xl text-hub-blue mb-2 transition-colors">＋</div>
+        <div class="text-xs font-semibold text-hub-blue">新建数字人</div>
+        <div class="text-[12px] text-hub-muted mt-0.5 leading-tight">照片 · 视频 · 声音 · 导入</div>
+      </div>
+      <template x-for="p in visibleProfiles" :key="p.name">
+        <div @click="batchMode ? toggleSelect(p.name) : openEdit(p)"
+             :class="[
+               p.active?'border-hub-green bg-green-900/10 shadow-[0_0_0_1px_rgba(63,185,80,.25)]':'border-hub-border hover:border-hub-blue/60',
+               qualityAlerts[p.name]?'ring-1 ring-red-500/60':'',
+               (batchMode && exportSelected.includes(p.name))?'ring-2 ring-hub-blue':''
+             ]"
+             class="card-lift relative bg-hub-bg border-2 rounded-xl p-2.5 text-center cursor-pointer group"
+             :title="batchMode?'点击选择 / 取消':'点击卡片：查看 / 编辑 / 深入设置'">
+          <!-- 出镜中角标（当前激活角色的仪式感）-->
+          <div x-show="p.active"
+               class="absolute top-1.5 left-1.5 z-10 text-[12px] font-bold px-1.5 py-0.5 rounded-full bg-hub-green/20 text-hub-green flex items-center gap-1">
+            <span class="w-1.5 h-1.5 rounded-full bg-hub-green animate-pulse"></span>出镜中
+          </div>
+          <!-- 批量选择：仅「批量模式」或已选时显示（平时零杂乱）-->
+          <input x-show="batchMode || exportSelected.includes(p.name)" type="checkbox" :value="p.name" x-model="exportSelected" @click.stop
+                 class="absolute top-1 left-1 w-4 h-4 accent-hub-blue z-20">
+          <!-- 操作菜单 ⋯：hover/展开才显；触屏无 hover，由 data-touch-show 常显（见触控层样式） -->
+          <div class="absolute top-1 right-1 z-20 transition-opacity" data-touch-show
+               :class="menuCard===p.name?'opacity-100':'opacity-0 group-hover:opacity-100 focus-within:opacity-100'">
+            <button @click.stop="menuCard = (menuCard===p.name?'':p.name)"
+                    class="bd-tap w-5 h-5 rounded-full bg-hub-border/70 text-hub-muted hover:text-hub-text text-[13px] leading-5"
+                    title="更多操作">⋯</button>
+            <div x-show="menuCard===p.name" @click.outside="menuCard=''" x-transition
+                 class="absolute right-0 mt-1 w-24 bg-hub-card border border-hub-border rounded-lg shadow-xl py-1 text-left z-30">
+              <button @click.stop="openEdit(p,'edit');menuCard=''"
+                      class="w-full px-2.5 py-1 text-[13px] text-hub-text hover:bg-hub-bg">✎ 编辑</button>
+              <button @click.stop="cloneProfile(p.name);menuCard=''"
+                      class="w-full px-2.5 py-1 text-[13px] text-hub-text hover:bg-hub-bg">⎘ 复制</button>
+              <button @click.stop="deleteProfile(p.name);menuCard=''"
+                      class="w-full px-2.5 py-1 text-[13px] text-hub-red hover:bg-hub-bg">✕ 删除</button>
+            </div>
+          </div>
+          <!-- 头像（无真人缩略图→品牌色渐变首字母；启用/准备阶段套色环脉动）-->
+          <div class="w-16 h-16 mx-auto rounded-full overflow-hidden bg-hub-border flex items-center justify-center mb-1.5 mt-1 transition-all duration-300"
+               :class="[cardStatus(p).ring||'', cardStatus(p).spin?'animate-pulse':'']">
+            <img x-show="p.thumbnail" :src="'data:image/jpeg;base64,'+p.thumbnail" class="w-full h-full object-cover">
+            <!-- VL1 纯声角色封面用 🎙 而非首字母：假头像会让"声音资产"看着像"没配好的人"（诚实原则） -->
+            <div x-show="!p.thumbnail" class="w-full h-full flex items-center justify-center text-white font-bold text-xl"
+                 :style="'background:'+avatarSeed(p.name).bg"
+                 :title="libOf(p)==='voice'?'纯声音角色（无形象）· 编辑里传照片即可升级数字人':''"
+                 x-text="libOf(p)==='voice' ? '🎙' : avatarSeed(p.name).initial"></div>
+          </div>
+          <!-- 名称 + 简介 -->
+          <div class="text-sm font-semibold truncate" x-text="p.name"></div>
+          <div class="text-[12px] text-hub-muted truncate mt-0.5" x-text="p.description||'—'"></div>
+          <!-- 单一综合状态徽标（互斥、按严重度优先）-->
+          <div class="mt-1">
+            <span class="bd-chip transition-all"
+                  :class="[cardStatus(p).cls, cardStatus(p).spin?'animate-pulse':'']" x-text="cardStatus(p).label"
+                  :title="cardStatus(p).title || (qualityAlerts[p.name]?(qualityAlerts[p.name]?.reasons||[]).join('；'):'')"></span>
+          </div>
+          <!-- 常显克隆质量 + 能力（把最该秀的"克隆质量"从 hover 提到台面）-->
+          <div class="flex items-center justify-center gap-1 mt-1.5 flex-wrap min-h-[18px]">
+            <span x-show="p.quality_axes?.cosine>0"
+                  class="text-[12px] font-semibold px-1.5 py-0.5 rounded-full"
+                  :class="p.quality_axes?.cosine>=QA.COS_OK?'bg-green-900/50 text-green-300':p.quality_axes?.cosine>=QA.COS_MID?'bg-yellow-900/50 text-yellow-300':'bg-red-900/40 text-red-300'"
+                  :title="'音色相似度 '+p.quality_axes?.cosine"
+                  x-text="'🎯 音色 '+Math.round((p.quality_axes?.cosine||0)*100)+'%'"></span>
+            <span x-show="!p.has_voice" class="text-[12px] text-hub-muted/70 px-1.5 py-0.5 rounded-full bg-hub-border/50 cursor-help"
+                  title="没有音色样本：对话/配音不可用，同传只出字幕没有声音。点下方「🎤 配声音」绑定即可">待配音色</span>
+            <span x-show="p.has_face" class="text-[12px] opacity-70" title="已绑定形象">👤</span>
+            <span x-show="p.rvc_model" class="text-[12px] opacity-70" title="已绑定变声">🎛️</span>
+            <!-- 素材链路体检（AS10/AS11）：仅真断链（声音/模型/形象视频文件被删）上卡片徽标；
+                 「无备份」属正常态只进抽屉建议，与资产横幅同口径防狼来了；_uivr 抑制=体检数据异步到达，截图回归要确定性。
+                 AS12: 徽标可点，直达抽屉素材链路卡（不再只是悬停看提示） -->
+            <button x-show="!_uivr && vh(p.name).level==='bad'" @click.stop="vhOpenCard(p)"
+                    class="text-[12px] px-1.5 py-0.5 rounded-full bg-red-900/40 text-red-300 hover:bg-red-900/70 transition"
+                    :title="vh(p.name).issues.map(i=>i.text).join('；')+'——点击直达修复'">🩹 素材断链</button>
+          </div>
+          <!-- 主操作：启用 / 对话（始终可见，明确按钮避免误触）-->
+          <div class="flex flex-wrap justify-center gap-1.5 mt-2">
+            <button @click.stop="activateProfile(p.name)" :disabled="p.active || stageOf(p.name)==='activating'"
+                    class="text-[13px] font-semibold px-2.5 py-1 rounded-full whitespace-nowrap"
+                    :class="p.active ? 'bg-hub-green/20 text-hub-green cursor-default' : (stageOf(p.name)==='activating' ? 'bg-hub-blue/60 text-white cursor-wait' : 'bg-hub-blue text-white hover:bg-blue-400')"
+                    x-text="p.active?'✓ 已启用':(stageOf(p.name)==='activating'?'⏳ 启用中…':'▶ 启用')"></button>
+            <!-- VL1 CTA 分型：声音卡=试听（听了才知道要不要用）；照片卡=配声音（没声的对话是死路，
+                 不给对话入口是诚实）；数字人/草稿保持 对话 -->
+            <button x-show="libOf(p)==='human'||libOf(p)==='draft'"
+                    @click.stop="window.open('/phone?profile='+encodeURIComponent(p.name),'_blank')"
+                    class="text-[13px] px-2.5 py-1 rounded-full border border-hub-blue/40 text-hub-blue hover:bg-hub-blue hover:text-white whitespace-nowrap"
+                    title="打开对话">💬 对话</button>
+            <button x-show="libOf(p)==='voice'" @click.stop="playVoicePreview(p.name)"
+                    class="text-[13px] px-2.5 py-1 rounded-full border border-hub-purple/40 text-hub-purple hover:bg-hub-purple hover:text-white whitespace-nowrap"
+                    title="试听该声音（合成一句演示词）">🎧 试听</button>
+            <button x-show="libOf(p)==='photo'" @click.stop="openEdit(p,'edit')"
+                    class="text-[13px] px-2.5 py-1 rounded-full border border-hub-orange/40 text-hub-orange hover:bg-hub-orange hover:text-white whitespace-nowrap"
+                    title="补上声音就能开口（进编辑绑定声音）">🎤 配声音</button>
+            <button x-show="cardStatus(p).retry" @click.stop="retryFace()"
+                    class="text-[13px] font-semibold px-2.5 py-1 rounded-full bg-amber-600 text-white hover:bg-amber-500 whitespace-nowrap"
+                    title="重试口型预计算（仅在真异常时出现）">↻ 重试</button>
+          </div>
+          <!-- hover 提示：批量模式=选择态；否则=进入详情抽屉 -->
+          <div class="mt-1.5 pt-1.5 border-t border-hub-border/40 text-[12px] opacity-0 group-hover:opacity-100 transition-opacity"
+               :class="batchMode?'text-hub-green':'text-hub-blue/80'"
+               x-text="batchMode?(exportSelected.includes(p.name)?'✓ 已选 · 点击取消':'☐ 点击选择'):'⚙ 管理 · 编辑 · 深设 →'"></div>
+        </div>
+      </template>
+      <!-- 后端不可达/服务未启动：明确区分"连不上"与"真的没角色"，避免误以为数据丢失 -->
+      <div x-show="profilesLoaded && profiles.length===0 && profilesLoadError" class="col-span-full py-8 px-4 text-center">
+        <div class="text-4xl mb-2">🔌</div>
+        <div class="text-hub-text font-bold text-base mb-1">无法连接后端服务</div>
+        <div class="text-hub-muted text-xs mb-4">Hub 服务(端口 9000)可能未启动。你的角色数据仍安全保存在本地，启动服务后即会显示。</div>
+        <button @click="loadProfiles()"
+                class="bd-btn bd-btn-primary text-sm">↻ 重试</button>
+      </div>
+      <!-- 空状态：新手引导「3 步创建数字人」（仅加载完成、确实无角色且后端可达时显示）-->
+      <div x-show="profilesLoaded && profiles.length===0 && !profilesLoadError" class="col-span-full py-8 px-4 text-center">
+        <div class="text-4xl mb-2">🎭</div>
+        <div class="text-hub-text font-bold text-base mb-1">还没有数字人，3 步即可创建</div>
+        <div class="text-hub-muted text-xs mb-4">上传一张照片 + 一段录音，几分钟拥有会说话的克隆形象</div>
+        <div class="flex justify-center gap-3 flex-wrap mb-4 text-xs">
+          <div class="bg-hub-bg border border-hub-border rounded-lg px-3 py-2 w-40">
+            <div class="text-hub-blue font-bold">① 传形象 / 录音</div>
+            <div class="text-hub-muted mt-0.5">点「✨ 新建数字人」上传形象并绑定声音</div>
+          </div>
+          <div class="bg-hub-bg border border-hub-border rounded-lg px-3 py-2 w-40">
+            <div class="text-hub-orange font-bold">② 音质体检</div>
+            <div class="text-hub-muted mt-0.5">一键检测音色相似度与自然度</div>
+          </div>
+          <div class="bg-hub-bg border border-hub-border rounded-lg px-3 py-2 w-40">
+            <div class="text-hub-green font-bold">③ 启用 → 对话</div>
+            <div class="text-hub-muted mt-0.5">启用角色后即可实时对话 / 开播</div>
+          </div>
+        </div>
+        <button @click="openCreateHub()"
+                class="bd-btn bd-btn-primary text-sm bd-glow-pulse">✨ 新建数字人</button>
+      </div>
+    </div>
+    <!-- P2: 增量渲染——超过 profShowN 的角色点一下再上，避免上百张卡一次性压垮首屏 -->
+    <div x-show="filteredProfiles.length>profShowN" class="mt-3 text-center">
+      <button @click="profShowN+=30"
+              class="bd-btn bd-btn-ghost text-[13px]"
+              x-text="'⌄ 显示更多（还有 '+(filteredProfiles.length-profShowN)+' 个）'"></button>
+    </div>
+  </div>
+
+  <!-- 新建 & 工具：方式卡片（替代原全宽手风琴；点击在弹窗内完成，页面更短更聚焦）-->
+  <div class="bd-card p-4">
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+      <h2 class="bd-card-title">✨ 新建数字人</h2>
+      <span class="text-[13px] text-hub-muted">选一种方式，几步搞定 · 表单在弹窗内完成</span>
+    </div>
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+      <!-- 照片 + 录音（推荐）-->
+      <button @click="pickCreate('photo')"
+              class="card-lift text-left rounded-xl border border-hub-border hover:border-hub-blue/60 bg-hub-bg p-3 relative">
+        <span class="absolute top-2 right-2 text-[12px] font-bold px-1.5 py-0.5 rounded-full bg-hub-blue/20 text-hub-blue">推荐</span>
+        <div class="w-9 h-9 rounded-lg bg-hub-blue/15 text-hub-blue flex items-center justify-center text-lg mb-2">📸</div>
+        <div class="font-semibold text-[14px] text-hub-text">照片 + 录音</div>
+        <div class="text-[12px] text-hub-muted mt-0.5 leading-snug">正脸照 + 现录 / 上传声音，最通用</div>
+      </button>
+      <!-- 视频即建 -->
+      <button @click="pickCreate('video')"
+              class="card-lift text-left rounded-xl border border-hub-border hover:border-indigo-400/60 bg-hub-bg p-3">
+        <div class="w-9 h-9 rounded-lg bg-indigo-500/15 text-indigo-300 flex items-center justify-center text-lg mb-2">🎬</div>
+        <div class="font-semibold text-[14px] text-hub-text">上传视频即建</div>
+        <div class="text-[12px] text-hub-muted mt-0.5 leading-snug">半身视频，真人级</div>
+      </button>
+      <!-- 仅克隆声音 -->
+      <button @click="pickCreate('voice')"
+              class="card-lift text-left rounded-xl border border-hub-border hover:border-hub-purple/60 bg-hub-bg p-3">
+        <div class="w-9 h-9 rounded-lg bg-hub-purple/15 text-hub-purple flex items-center justify-center text-lg mb-2">🎙️</div>
+        <div class="font-semibold text-[14px] text-hub-text">仅克隆声音</div>
+        <div class="text-[12px] text-hub-muted mt-0.5 leading-snug">录音三步向导</div>
+      </button>
+      <!-- 导入配置包 -->
+      <button @click="pickCreate('pkg')"
+              class="card-lift text-left rounded-xl border border-hub-border hover:border-hub-orange/60 bg-hub-bg p-3">
+        <div class="w-9 h-9 rounded-lg bg-hub-orange/15 text-hub-orange flex items-center justify-center text-lg mb-2">📦</div>
+        <div class="font-semibold text-[14px] text-hub-text">导入配置包</div>
+        <div class="text-[12px] text-hub-muted mt-0.5 leading-snug">ZIP 一包搬家</div>
+      </button>
+    </div>
+  </div>
+</div>

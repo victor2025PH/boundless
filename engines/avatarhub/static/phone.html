@@ -991,6 +991,85 @@ button:focus-visible, a:focus-visible, [role="button"]:focus-visible,
 .ms-group-label, .lang-row label, .lang-hint,
 .vad-sense-row .noise,
 #streamBadge { font-size:12px !important; }
+
+/* ════ P0（对话端四视角方案 2026-07-16）：观众模式净化 + 转化出口 ════
+   .bd-guest     = ?guest=1（分享/扫码访客）或 主播演示模式（hub_demo 同源联动）
+   .bd-guest-url = 仅 ?guest=1（真访客）——演示中主播仍需要「对方能听到吗」等随身工具，
+   两档分开：诊断/后台入口两档都藏，主播随身工具只对真访客藏。
+   !important 是必须的：这些元素的显隐由 JS 写 inline style，CSS 需压过 inline。*/
+body.bd-guest .ops-entry{ display:none !important; }
+body.bd-guest #setupWizard, body.bd-guest #tuneBanner{ display:none !important; }
+body.bd-guest-url #dcWidget, body.bd-guest-url #audWidget{ display:none !important; }
+
+/* ── P1（同方案批次）：录音红点 / 控制行合并 / 舞台停止钮 / 释义气泡 / 徽章降噪 ── */
+/* 录音中红点（替代 🔴 emoji：字形跨平台大小不一，CSS 点尺寸可控且吃 reduced-motion 降级） */
+.rec-dot{ display:inline-block; width:10px; height:10px; border-radius:50%; background:#ef4444;
+  vertical-align:-1px; margin-right:2px; animation:recPulse 1.2s ease-in-out infinite; }
+@keyframes recPulse{ 0%,100%{opacity:1;} 50%{opacity:.45;} }
+/* P1-2 控制行合并后的宽度分配：模式选择占大头、更多按内容收缩、其余均分 */
+.btn-row select{ flex:1.3; min-width:96px; }
+.btn-row .more-toggle{ flex:0 0 auto; }
+/* P1-2 说话/思考中舞台大停止钮：barge-in 从底部小按钮升格为主视野控件（肌肉记忆位） */
+.stage-stop{ position:absolute; left:50%; bottom:16px; transform:translateX(-50%); z-index:12;
+  display:none; align-items:center; gap:7px; background:rgba(15,19,30,.86); color:#fca5a5;
+  border:1px solid rgba(239,68,68,.55); border-radius:24px; padding:10px 22px;
+  font-size:14px; font-weight:700; cursor:pointer; backdrop-filter:blur(4px);
+  box-shadow:0 8px 26px #000a; }
+.stage-stop:hover{ background:rgba(239,68,68,.18); color:#fecaca; }
+.stage-stop.show{ display:inline-flex; }
+/* P1-3 触屏释义气泡：hover 才可见的 title 在触屏失效，点按补一个可读出口 */
+.qa-pop{ position:fixed; z-index:120; max-width:250px; background:#141b2d; color:#dbe4f8;
+  border:1px solid #2c3a56; border-radius:10px; padding:8px 11px; font-size:12px; line-height:1.55;
+  box-shadow:0 10px 30px #000b; pointer-events:none; }
+/* P1-5 徽章降噪：五色谱收敛三档——金标金 / 达标中性 / 异常红（绿/黄退场，红只留给真问题） */
+.pcard .pq.ok  { background:rgba(148,163,184,.14); color:#b6c2dc; }
+.pcard .pq.mid { background:rgba(148,163,184,.14); color:#b6c2dc; }
+.pcard .pq.miss{ background:rgba(148,163,184,.10); color:#8b98b4; }
+
+/* M-2 演示胶囊（复用 /ui 顶栏演示按钮的视觉语言：绿点+绿字=演示中） */
+.demo-pill.on{ background:rgba(34,197,94,.12); border-color:rgba(74,222,128,.55); color:#4ade80; }
+.demo-pill.on:hover{ background:rgba(34,197,94,.22); border-color:#4ade80; color:#4ade80; transform:none; }
+.demo-pill .dp-dot{ width:7px; height:7px; border-radius:50%; background:#4ade80; display:inline-block; }
+/* M-4 「这页怎么用」三场景卡 */
+.howto-mask{ display:none; position:fixed; inset:0; z-index:130; background:rgba(4,6,12,.72);
+  align-items:center; justify-content:center; padding:18px; }
+.howto-mask.show{ display:flex; }
+.howto-box{ width:min(460px,100%); background:#101626; border:1px solid #2c3a56; border-radius:16px;
+  padding:18px 20px; box-shadow:0 18px 60px #000c; }
+.howto-box h3{ display:flex; justify-content:space-between; align-items:center; margin:0 0 12px;
+  font-size:15px; color:#eaf1fb; }
+.howto-box .sx{ background:none; border:none; color:var(--mut); font-size:16px; cursor:pointer;
+  padding:4px 8px; border-radius:8px; }
+.howto-box .sx:hover{ background:var(--bord); color:var(--txt); }
+.howto-row{ display:flex; gap:10px; align-items:flex-start; padding:9px 0; }
+.howto-row+.howto-row{ border-top:1px solid rgba(255,255,255,.06); }
+.howto-row .hr-ico{ flex:0 0 30px; height:30px; border-radius:9px; background:rgb(var(--acc-rgb) / .14);
+  color:var(--acc); display:flex; align-items:center; justify-content:center; }
+.howto-row b{ font-size:13px; color:#eaf1fb; display:block; margin-bottom:2px; }
+.howto-row p{ margin:0; font-size:12px; color:#9fb0d8; line-height:1.55; }
+.howto-copy{ width:100%; margin-top:12px; display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.16); color:#c4cde6;
+  border-radius:12px; padding:10px; font-size:12.5px; font-weight:600; cursor:pointer; transition:border-color .2s; }
+.howto-copy:hover{ border-color:var(--acc); color:#fff; }
+/* M-4 帮助入口对访客隐藏（内容讲的是"怎么当主人"，店面顾客不需要） */
+body.bd-guest-url .owner-entry{ display:none !important; }
+
+/* 转化出口（仅观众/演示态显示；样式与 hero-ab 同族但更醒目一档） */
+.hero-cta{ display:none; align-items:center; gap:6px; cursor:pointer; text-decoration:none;
+  background:rgba(245,158,11,.12); border:1px solid rgba(245,158,11,.45); color:#fbbf24;
+  border-radius:22px; padding:8px 16px; font-size:12.5px; font-weight:700;
+  transition:border-color .2s, background .2s; }
+.hero-cta:hover{ border-color:#fbbf24; background:rgba(245,158,11,.2); }
+body.bd-guest .hero-cta{ display:inline-flex; }
+
+/* 角色搜索框（角色多时出现；复用历史搜索的视觉语言，但在角色栏内更轻） */
+.prof-search{ display:none; align-items:center; gap:6px; margin-bottom:7px; }
+.prof-search input{ flex:1; background:var(--card); border:1px solid var(--bord);
+  color:var(--txt); border-radius:8px; padding:5px 9px; font-size:12px; outline:none; }
+.prof-search input:focus{ border-color:var(--acc); box-shadow:var(--ring); }
+.prof-search .ps-clear{ background:none; border:none; color:var(--mut); cursor:pointer;
+  font-size:12px; padding:2px 6px; border-radius:6px; }
+.prof-search .ps-clear:hover{ background:var(--bord); color:var(--txt); }
 </style>
 </head>
 <body>
@@ -1004,16 +1083,19 @@ button:focus-visible, a:focus-visible, [role="button"]:focus-visible,
   <span class="hstatus" id="hstatus">就绪</span>
   <span id="streamBadge" title="正在对外直播 / 录制（可在工作室配置）" style="display:none;font-size:10px;color:#4ade80;margin-left:6px">📡 直播中</span>
   <div class="hright">
+    <!-- M-2 演示胶囊：work=入口 / present=「● 演示中」/ guest=JS 不渲染（内容由 _viewBadgeRender 填充） -->
+    <button class="hbtn demo-pill" id="demoPill" onclick="toggleDemoView()" aria-label="演示模式开关"></button>
     <button class="hbtn hbtn-primary" onclick="openShare()" title="生成分享海报 + 体验链接" aria-label="分享"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-share"/></svg> <span class="hbtn-lbl">分享</span></button>
-    <button class="hbtn" onclick="window.open('/ui','_blank')" title="角色管理、调音、体检" aria-label="打开工作室"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-monitor"/></svg> <span class="hbtn-lbl">工作室</span></button>
+    <button class="hbtn ops-entry" onclick="window.open('/ui','_blank')" title="角色管理、调音、体检" aria-label="打开工作室"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-monitor"/></svg> <span class="hbtn-lbl">工作室</span></button>
     <div class="hmenu-wrap">
       <button class="hbtn hmenu-btn" id="hmenuBtn" onclick="toggleHMenu(event)"
               title="更多操作" aria-haspopup="menu" aria-expanded="false" aria-label="更多操作">⋯</button>
       <div class="hmenu" id="hmenu" role="menu" aria-label="更多操作">
-        <button class="hmenu-item" role="menuitem" onclick="window.open('/','_blank');closeHMenu()"><span class="hmi-ico"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-home"/></svg></span><span>平台首页</span></button>
-        <button class="hmenu-item" role="menuitem" onclick="window.open('/ui#streamout','_blank');closeHMenu()"><span class="hmi-ico"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-signal"/></svg></span><span>对外直播 / 录制</span></button>
-        <button class="hmenu-item" role="menuitem" onclick="window.open('/dashboard','_blank');closeHMenu()"><span class="hmi-ico"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-chart"/></svg></span><span>音质看板</span></button>
+        <button class="hmenu-item ops-entry" role="menuitem" onclick="window.open('/','_blank');closeHMenu()"><span class="hmi-ico"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-home"/></svg></span><span>平台首页</span></button>
+        <button class="hmenu-item ops-entry" role="menuitem" onclick="window.open('/ui#streamout','_blank');closeHMenu()"><span class="hmi-ico"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-signal"/></svg></span><span>对外直播 / 录制</span></button>
+        <button class="hmenu-item ops-entry" role="menuitem" onclick="window.open('/dashboard','_blank');closeHMenu()"><span class="hmi-ico"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-chart"/></svg></span><span>音质看板</span></button>
         <button class="hmenu-item" role="menuitem" onclick="exportSession();closeHMenu()"><span class="hmi-ico"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-file"/></svg></span><span>导出会话</span></button>
+        <button class="hmenu-item owner-entry" role="menuitem" onclick="openHowto();closeHMenu()"><span class="hmi-ico"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716c#i-help"/></svg></span><span>这页怎么用？</span></button>
         <button class="hmenu-item hmi-danger" role="menuitem" id="clearBtn"><span class="hmi-ico"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-trash"/></svg></span><span>清空对话</span></button>
       </div>
     </div>
@@ -1083,6 +1165,10 @@ document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeHMen
         <button class="hero-ab" id="heroAb" onclick="heroBlindAb()" title="盲听对比：原声 vs 克隆，猜猜哪个是真人"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-headphones"/></svg> 听听像不像</button>
       </div>
       <div class="hero-chips" id="heroChips"></div>
+      <!-- P0-3 转化出口（仅观众/演示态显示，CSS 门控）：体验→"我也要一个"的缺失一环。
+           落地页 /s 的 CTA 把人带来体验，这里是体验完的下一步——直达订购前门。 -->
+      <a class="hero-cta" id="heroCta" href="/order" target="_blank" rel="noopener" onclick="trackPhoneCta()"
+         title="用你自己的声音，做一个这样的数字人"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-mic"/></svg> 我也要克隆自己的声音 →</a>
     </div>
   </div>
 
@@ -1103,6 +1189,9 @@ document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeHMen
     <div class="phase-label" id="phaseLabel">识别中</div>
     <div class="phase-sub"  id="phaseSub"></div>
   </div>
+
+  <!-- P1-2 舞台停止钮：识别/思考/合成/播报全程可一键打断（与底部停止钮同源 doBargeIn） -->
+  <button class="stage-stop" id="stageStop" onclick="doBargeIn()" title="停止当前回复"><svg class="bd-ic" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px"><use href="/static/brand-icons.svg?v=20260716c#i-stopcircle"/></svg> 停止回复</button>
 
   <!-- 直播「思考态」轻量角标（不遮挡数字人；仅 liveMode 使用） -->
   <div class="live-think" id="liveThink">
@@ -1137,6 +1226,12 @@ document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeHMen
   <div class="tune-banner" id="tuneBanner"></div>
   <!-- 角色卡 -->
   <div class="profile-bar" id="profileBar">
+    <!-- P0-2：角色搜索（角色 >8 时显示；对话历史早有搜索，角色区反而没有——补齐） -->
+    <div class="prof-search" id="profSearch">
+      <span class="hs-ico"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-search"/></svg></span>
+      <input id="profSearchInput" placeholder="找角色…" autocomplete="off"/>
+      <button class="ps-clear" id="profSearchClear" title="清除" style="display:none">✕</button>
+    </div>
     <div class="profile-row" id="profileRow">
       <span style="font-size:11px;color:var(--mut)">加载中…</span>
     </div>
@@ -1168,18 +1263,8 @@ document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeHMen
   <!-- 底部控制 -->
   <div class="ctrl-bottom">
 
-    <!-- 对话模式 + 更多设置入口 -->
-    <div class="mode-row">
-      <select id="chatMode" title="对话模式">
-        <option value="ai" selected>🤖 AI 对话</option>
-        <option value="translate">🌐 翻译朗读</option>
-      </select>
-      <button class="more-toggle" id="moreToggle" onclick="toggleMore()"
-              title="语种 / 口型 / 引擎 / 情感" aria-haspopup="dialog" aria-expanded="false"
-              aria-controls="moreSettings"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-gear"/></svg> 更多</button>
-    </div>
-
     <!-- P0：高级设置收纳抽屉（默认折叠，降低首屏认知负担） -->
+    <!-- P1-2 降层：原「模式+更多」独立行并入底部控制行（见 btn-row），底栏 6 层收到 4 层 -->
     <!-- 更多设置：底部抽屉（fixed 覆盖层，不占据/撑高底栏，输入框+麦克风永不被裁） -->
     <div class="more-mask" id="moreMask" onclick="toggleMore()"></div>
     <div class="more-settings" id="moreSettings" role="dialog" aria-modal="true" aria-label="更多设置">
@@ -1248,7 +1333,7 @@ document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeHMen
 
     <!-- P0：语种状态条（常驻可见；异常态高亮+一键复位） -->
     <div class="lang-bar" id="langBar" onclick="onLangBarClick(event)" title="点击调整语种">
-      <span class="lb-ico" id="lbIco">🌐</span>
+      <span class="lb-ico" id="lbIco"><svg class="bd-ic" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px"><use href="/static/brand-icons.svg?v=20260716c#i-globe"/></svg></span>
       <span class="lb-text" id="lbText">自动：说什么 答什么</span>
       <span class="lb-act" id="lbAct">调整</span>
     </div>
@@ -1261,14 +1346,21 @@ document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeHMen
 
     <!-- 麦克风 -->
     <div class="mic-wrap">
-      <button class="mic" id="mic">🎤 按住说话</button>
+      <button class="mic" id="mic"><svg class="bd-ic" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px"><use href="/static/brand-icons.svg?v=20260716c#i-mic"/></svg> 按住说话</button>
     </div>
 
-    <!-- VAD + 直播 -->
+    <!-- 控制行（P1-2 合并：模式 + 更多 + 免按键 + 直播 + 停止） -->
     <div class="btn-row">
-      <button class="ibtn" id="vadBtn" title="自动断句，无需按键">🖐 免按键</button>
-      <button class="ibtn" id="liveBtn" title="打开实时数字人画面">📺 直播</button>
-      <button class="ibtn" id="stopBtn" title="停止回复" onclick="doBargeIn()" style="display:none">⏹ 停止</button>
+      <select id="chatMode" title="对话模式">
+        <option value="ai" selected>🤖 AI 对话</option>
+        <option value="translate">🌐 翻译朗读</option>
+      </select>
+      <button class="more-toggle" id="moreToggle" onclick="toggleMore()"
+              title="语种 / 口型 / 引擎 / 情感" aria-haspopup="dialog" aria-expanded="false"
+              aria-controls="moreSettings"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716c#i-gear"/></svg> 更多</button>
+      <button class="ibtn" id="vadBtn" title="自动断句，无需按键"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px"><use href="/static/brand-icons.svg?v=20260716c#i-hand"/></svg> 免按键</button>
+      <button class="ibtn" id="liveBtn" title="打开实时数字人画面"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px"><use href="/static/brand-icons.svg?v=20260716c#i-live"/></svg> 直播</button>
+      <button class="ibtn" id="stopBtn" title="停止回复" onclick="doBargeIn()" style="display:none"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px"><use href="/static/brand-icons.svg?v=20260716c#i-stopcircle"/></svg> 停止</button>
     </div>
 
   </div>
@@ -1285,7 +1377,29 @@ document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeHMen
       <button class="share-link" onclick="copyShareLink()"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-link"/></svg> 复制链接</button>
       <button class="share-voice" id="shareVoiceBtn" onclick="shareVoice()" disabled><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-download"/></svg> 试听音频</button>
     </div>
+    <!-- M-6 把 P0 的观众净化从暗保护说成可感知的卖点 -->
+    <div class="share-guest-note" style="display:flex;align-items:center;gap:6px;justify-content:center;margin-top:8px;font-size:11.5px;color:#8b98b4;"><svg class="bd-ic" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><use href="/static/brand-icons.svg?v=20260716c#i-shield"/></svg> 客户打开的页面会自动隐藏运维信息，并附「我也要做一个」入口</div>
     <div class="share-tip" id="shareTip">下载海报发朋友圈，或复制链接邀请好友体验</div>
+  </div>
+</div>
+
+<!-- ── M-4：「这页怎么用」三场景卡（一页三面的说明书；首访自动展示一次，⋯菜单可随时再看） ── -->
+<div class="howto-mask" id="howtoMask" onclick="if(event.target===this)closeHowto()">
+  <div class="howto-box" role="dialog" aria-modal="true" aria-label="这页怎么用">
+    <h3><span>这页怎么用？</span><button class="sx" onclick="closeHowto()" aria-label="关闭">✕</button></h3>
+    <div class="howto-row">
+      <span class="hr-ico"><svg class="bd-ic" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716c#i-monitor"/></svg></span>
+      <div><b>自己用 · 工作台（默认）</b><p>直接对话、开播、体检调试——诊断信息全量可见，这是你日常的作业界面。</p></div>
+    </div>
+    <div class="howto-row">
+      <span class="hr-ico"><svg class="bd-ic" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716c#i-demo"/></svg></span>
+      <div><b>当面演示 · 给客户看</b><p>点顶栏「演示」一键隐藏运维告警/低分/后台入口，界面只剩卖点；再点一次恢复。与控制台的演示开关联动。</p></div>
+    </div>
+    <div class="howto-row">
+      <span class="hr-ico"><svg class="bd-ic" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716c#i-share"/></svg></span>
+      <div><b>发给客户 · 自动店面</b><p>顶栏「分享」生成海报/链接；客户打开的页面自动净化，还带「我也要克隆自己的声音」下单入口。</p></div>
+    </div>
+    <button class="howto-copy" onclick="copyGuestLink()"><svg class="bd-ic" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716c#i-link"/></svg> 复制当前角色的访客链接</button>
   </div>
 </div>
 
@@ -1440,15 +1554,78 @@ let sessionId='studio_'+Math.random().toString(36).slice(2,7);
 // 真人头像位图(preview/idle_loop 会被验收测试重渲)、自动实时视频(vcam 忙闲)、
 // 就绪提示(体检新鲜度翻转)、质量角标(metrics 漂移)。基线只对 UI 结构/样式敏感。
 const _UIVR = new URLSearchParams(location.search).get('uivr')==='1';
+// P0-1 观众模式（对话端四视角方案 2026-07-16）：分享/扫码访客（?guest=1，由落地页 /s 自动携带）
+// 或主播开着控制台演示模式（hub_demo 同源联动）时，隐藏一切运维诊断与后台入口——
+// 这是客户见面页，⚠告警/待检/工作室按钮对观众等于当面自曝短板。uivr 回归模式不受影响。
+// ═══ M-1 显式视图模式（§9 方案 2026-07-17）：一页三面收敛为单一状态 ═══
+// VIEW = 'work'（工作台：自己人全量）| 'present'（演示：现场给客户看，藏诊断留主播工具）
+//      | 'guest'（访客/店面：分享链接进来的人，最干净 + 转化出口）
+// 优先级：URL 定死 guest > hub_demo（与控制台演示开关同一存储，双端联动）> 默认 work。
+// _GUEST（=净化态，present/guest 共享）保留为可变布尔供各消费点运行时读取——
+// 热切换（M-3）只需重算 VIEW + 重绘，消费点零改动。_GUEST_URL 由 URL 决定，生命周期内不变。
+const _GUEST_URL = new URLSearchParams(location.search).get('guest')==='1';
+let VIEW='work', _GUEST=false;
+function _viewCompute(){
+  if(_GUEST_URL) return 'guest';
+  try{ if(localStorage.getItem('hub_demo')==='1') return 'present'; }catch(e){}
+  return 'work';
+}
+function _viewApply(){
+  VIEW=_viewCompute();
+  _GUEST=(VIEW!=='work');
+  document.body.classList.toggle('bd-guest', _GUEST);
+  document.body.classList.toggle('bd-guest-url', VIEW==='guest');
+  _viewBadgeRender();
+}
+// M-2 顶栏演示胶囊：work=入口 / present=「● 演示中」提醒退出 / guest=不渲染（店面不挂牌子）
+function _viewBadgeRender(){
+  const b=document.getElementById('demoPill'); if(!b) return;
+  if(VIEW==='guest'){ b.style.display='none'; return; }
+  b.style.display='';
+  if(VIEW==='present'){
+    b.classList.add('on');
+    b.innerHTML='<span class="dp-dot"></span><span class="hbtn-lbl">演示中</span>';
+    b.title='演示模式：运维诊断与后台入口已隐藏，适合给客户看。点击退出，恢复完整工作台';
+  } else {
+    b.classList.remove('on');
+    b.innerHTML=_ic('demo')+' <span class="hbtn-lbl">演示</span>';
+    b.title='开启演示模式：一键隐藏诊断信息/后台入口（与控制台「演示」开关联动）';
+  }
+}
+// 现场开关（M-2）：写 hub_demo 同一存储——控制台顶栏的演示按钮读的也是它，天然双端一致
+function toggleDemoView(){
+  const on=(VIEW!=='present');
+  try{ localStorage.setItem('hub_demo', on?'1':'0'); }catch(e){}
+  _viewApply(); _viewRefresh();
+  try{ showToast(on?'已开启演示模式：运维信息已隐藏，适合给客户看':'已退出演示模式：完整工作台已恢复', on?'ok':''); }catch(e){}
+}
+// M-3 热切换重绘：模式影响的区域集中重建（角色卡徽章/过滤、装机向导、降级横幅链接、就绪提示）
+function _viewRefresh(){
+  try{ loadProfiles(); }catch(e){}
+  try{ loadSetupWizard(); }catch(e){}
+  try{ if(!_UIVR) pollHealthDegrade(); }catch(e){}
+}
+// M-3 控制台切演示 → 已开着的对话端即时跟随（storage 事件只在"别的窗口改了值"时触发，恰好是要的语义）
+window.addEventListener('storage', e=>{
+  if(e.key==='hub_demo'){ _viewApply(); _viewRefresh(); }
+});
+_viewApply();
+// P1-1 线性图标渲染（单一真相=brand-icons.svg；与 hub.js icx() 同思路，本页无 Alpine 用字符串版）。
+// 尺寸/描边写成 SVG 呈现属性：即使样式表被旧缓存粘住，图标也只是小图不爆版（P4-B 事故公约）。
+function _ic(name,s){ s=s||14;
+  return '<svg class="bd-ic" width="'+s+'" height="'+s+'" fill="none" stroke="currentColor" stroke-width="1.9" '+
+    'stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px">'+
+    '<use href="/static/brand-icons.svg?v=20260716c#i-'+name+'"/></svg>';
+}
 // 主播控场优先级：本机/手机端即主播本人，其请求优先于(未来)观众弹幕；打断后这一轮再加权插队。
 const HOST_PRIORITY=10;
 let currentProfile={name:'', thumbnail:'', description:''};
 let historyMsgs=[];    // {role,text,audioB64,ts}
 
-// ── 示例问题（按角色） ────────────────────────────────
+// ── 示例问题 ────────────────────────────────────────
+// P1 清理：原按角色名硬编码的示例组违反 UC1「禁硬编码人名」门禁精神（converse 页
+// 2026-07-07 已立此禁令，本页漏网）——白标交付时是漏改点。统一走通用组；角色个性由欢迎语/简介承担。
 const EXAMPLE_QUESTIONS = {
-  '刘德华': ['你最喜欢哪首歌？', '拍过哪些电影？', '你有什么建议给年轻人？'],
-  '阿习讲话': ['介绍一下深圳举办APEC会议的意义', '如何看待改革开放的成果？', '对亚太合作有什么期待？'],
   'default': ['你好，介绍一下自己', '你能做什么？', '给我讲个故事'],
 };
 function getExamples(name){ return EXAMPLE_QUESTIONS[name] || EXAMPLE_QUESTIONS.default; }
@@ -1512,6 +1689,7 @@ function hidePhase(){
 
 // 后台轻量轮询自动驾驶让出状态，供冷启动预热提示使用
 async function pollLlmWarm(){
+  if(_UIVR) return;   // uivr：纯后台状态，回归模式不占连接池
   try{ const d=await (await fetch('/api/vram/autopilot')).json(); _llmCold=!!(d&&d.llm_yielded); }catch(e){}
 }
 
@@ -1543,6 +1721,7 @@ function updateReadyTip(p){
     el.style.display='block';
     return;
   }
+  if(_GUEST){ el.style.display='none'; return; }   // 观众模式：未体检/未绑定是主播的待办，不示观众
   el.className='ready-tip warn';
   el.innerHTML=`⚠ ${issues.join(' · ')} · <a onclick="window.open('/ui','_blank')">去工作室完善</a>`;
   el.style.display='block';
@@ -1553,9 +1732,17 @@ function setStageSpeaking(on){
   if(on){ if(iv){ iv.pause(); iv.style.display='none'; } }
   else { showAvatarIdle(); }
 }
+// P1-2 「试试问」双份去重：hero 区（舞台中央）与底部 examples 行内容相同——
+// hero 可见时底部行退场（首屏少一层）；hero 随舞台让位给视频/直播时底部行回归（对话中仍够得着）。
+function _syncExamplesRow(){
+  const ex=$('examples'); if(!ex||!ex.innerHTML) return;
+  const heroVisible=($('avatarIdle').style.display!=='none') && ($('heroActions')||{}).style.display!=='none';
+  ex.style.display=heroVisible?'none':'flex';
+}
 function showAvatarIdle(){
   if(liveMode) return;   // 实时视频模式：舞台保持 WebRTC 画面（vcam 说完会自动回到角色静帧），不回退海报
   $('avatarIdle').style.display='flex';
+  _syncExamplesRow();
   $('vid').style.display='none';
   const iv=$('idleVid');
   const initEl=$('avatarInitial');
@@ -1581,6 +1768,7 @@ function showAvatarIdle(){
 function hideAvatarIdle(){
   $('avatarIdle').style.display='none';
   const iv=$('idleVid'); if(iv){ iv.pause(); iv.style.display='none'; }
+  _syncExamplesRow();   // hero 让位（视频/直播）→ 底部「试试问」回归
 }
 let _idleLoopCache={};
 async function loadIdleLoop(name){
@@ -1610,7 +1798,7 @@ async function loadIdleLoop(name){
 let qualityAlertsMap={};
 
 async function loadQualityAlerts(){
-  if(_UIVR){ qualityAlertsMap={}; return; }   // uivr：质量角标随 metrics 漂移，回归模式不渲染
+  if(_UIVR||_GUEST){ qualityAlertsMap={}; return; }   // uivr：随 metrics 漂移不渲染；观众模式：诊断不示人
   try{
     const d=await (await fetch('/api/metrics?recent=30')).json();
     qualityAlertsMap={};
@@ -1619,6 +1807,7 @@ async function loadQualityAlerts(){
 }
 
 async function pollStreamOut(){
+  if(_UIVR) return;   // uivr：直播角标随运行态翻转，回归模式不渲染（也不占连接池）
   try{
     const d=await (await fetch('/api/stream_out/status')).json();
     const summ=d.summary||{};
@@ -1631,16 +1820,18 @@ async function pollStreamOut(){
       else if(on) b.textContent='📡 直播中';
       else b.textContent='📡 直播中';
       const up=summ.uptime_sec>0?` · ${Math.floor(summ.uptime_sec/60)}m`:'';
-      b.title=(summ.recording?'本地录制进行中':'正在对外直播')+up
-        +' · 点击查看看板';
-      b.style.cursor='pointer';
-      b.onclick=()=>window.open('/dashboard','_blank');
+      // 观众模式：角标只报状态，不做看板跳板
+      b.title=(summ.recording?'本地录制进行中':'正在对外直播')+up+(_GUEST?'':' · 点击查看看板');
+      b.style.cursor=_GUEST?'default':'pointer';
+      b.onclick=_GUEST?null:()=>window.open('/dashboard','_blank');
     }
   }catch(e){}
   setTimeout(pollStreamOut,5000);
 }
 async function loadSetupWizard(){
   const el=$('setupWizard'); if(!el) return;
+  if(_UIVR){ el.style.display='none'; return; }    // uivr：向导随服务就绪态翻转，回归模式不渲染
+  if(_GUEST){ el.style.display='none'; return; }   // 观众模式：装机引导是主播的事，不打观众
   let d; try{ d=await (await fetch('/api/setup/status')).json(); }catch(e){ return; }
   if(!d||!d.ok||d.ready){ el.style.display='none'; return; }
   const bad=(d.steps||[]).filter(s=>!s.ok);
@@ -1670,6 +1861,7 @@ async function wizardFixServices(btn){
 let _degraded=false;
 async function pollHealthDegrade(){
   const el=$('degradeBar'); if(!el) return;
+  if(_UIVR) return;   // uivr：降级横幅随服务健康态翻转，回归模式不渲染
   let d; try{ d=await (await fetch('/api/ops/snapshot',{cache:'no-store'})).json(); }catch(e){ return; }
   const svc=d.services||{}, sup=d.supervisor||{};
   // 熔断（多次重启未恢复，需人工）——最高优先级
@@ -1695,8 +1887,9 @@ async function pollHealthDegrade(){
   }
   if(msg){
     el.className='degrade-bar '+cls;
+    // 观众模式：降级横幅保留（诚实告知"为什么没声音"），但不给 /ops 后台门
     el.innerHTML='<span class="db-dot"></span>'+msg+
-      ' <a href="/ops" target="_blank" style="color:color-mix(in srgb,rgb(var(--acc-rgb)) 60%,#fff)">查看系统状态</a>';
+      (_GUEST?'':' <a href="/ops" target="_blank" style="color:color-mix(in srgb,rgb(var(--acc-rgb)) 60%,#fff)">查看系统状态</a>');
     el.style.display='block';
     _degraded=true;
   } else {
@@ -1773,11 +1966,79 @@ async function loadServerUiPrefs(){
 }
 
 // ── 角色加载 ──────────────────────────────────────────
+// P0-2 排序权重：有声音优先，同档按相似度降序，自然度做严格次键——"最像的排最前"，
+// 也让无本地记忆时的 profiles[0] 兜底从"随机首个"变成"最好的那个"。
+// 权重取字典序（次键上限 100 < 主键步长 100）：自然度只在相似度同分时起作用，
+// 否则会出现"77% 排在 79% 前面"的视觉乱序（实测踩过）。
+function _profScore(p){
+  const q=p.quality_axes||{};
+  return (p.has_voice?1e7:0) + Math.round((q.cosine||0)*100)*1000 + Math.round((q.naturalness||0)*100);
+}
+// P2-4 质量分档单源（canvas_brand.js，与 /ui 同一份真相）；兜底值仅护 canvas_brand 加载失败
+const QA=(window.BD_CANVAS&&window.BD_CANVAS.QA)||{GOLD:0.75,COS_OK:0.6,COS_MID:0.45,NAT_OK:0.85,NAT_MID:0.7};
+// P0-1 观众过滤（分层兜底防空列表）：达标克隆音 → 全部有声音 → 全量。
+// 阈值 QA.COS_OK 与徽章 ok 档同一口径（低于它的卡在观众面前会挂黄/红分）。
+// 防呆：分享链接指名的角色（?profile=）必须幸存——访客就是冲 TA 来的，
+// 哪怕分数低也得能对话（低分徽章另有观众位隐藏，不冲突）。
+function _guestFilter(list){
+  if(!_GUEST) return list;
+  const urlP=new URLSearchParams(location.search).get('profile')||'';
+  const keep=p=>p.name===urlP;
+  const t1=list.filter(p=>keep(p) || (p.has_voice && ((p.quality_axes||{}).cosine||0)>=QA.COS_OK));
+  if(t1.length) return t1;
+  const t2=list.filter(p=>keep(p)||p.has_voice);
+  return t2.length?t2:list;
+}
+// P0-2 角色搜索：卡片就地过滤（不重建 DOM，保持 active 高亮与事件）；≤8 个角色不出框不占行
+let _profSearchWired=false;
+function _initProfSearch(count){
+  const box=$('profSearch'), inp=$('profSearchInput'), clr=$('profSearchClear');
+  if(!box||!inp) return;
+  box.style.display=count>8?'flex':'none';
+  if(_profSearchWired||count<=8) return;
+  _profSearchWired=true;
+  const apply=()=>{
+    const q=(inp.value||'').trim().toLowerCase();
+    if(clr) clr.style.display=q?'inline':'none';
+    document.querySelectorAll('#profileRow .pcard').forEach(c=>{
+      const hit=!q || (c.dataset.name||'').toLowerCase().includes(q) || (c.title||'').toLowerCase().includes(q);
+      c.style.display=hit?'flex':'none';
+    });
+  };
+  inp.addEventListener('input', apply);
+  if(clr) clr.onclick=()=>{ inp.value=''; apply(); inp.focus(); };
+}
+// P1-3 触屏释义气泡：徽章/角标/质量环的解释全挂在 title 上，触屏无 hover 读不到——
+// 点按弹只读气泡（事件委托一次绑定；不拦截冒泡：点徽章仍会选中该角色，两件事都发生）。
+let _qaPopEl=null, _qaPopTimer=null;
+function _qaPopShow(target){
+  const tip=target.getAttribute('title'); if(!tip) return;
+  if(!_qaPopEl){ _qaPopEl=document.createElement('div'); _qaPopEl.className='qa-pop'; document.body.appendChild(_qaPopEl); }
+  _qaPopEl.textContent=tip;
+  _qaPopEl.style.display='block';
+  const r=target.getBoundingClientRect();
+  const w=_qaPopEl.offsetWidth;                       // 先渲染取宽再钉位，防溢出屏幕右缘
+  _qaPopEl.style.left=Math.min(Math.max(8, r.left), window.innerWidth-w-8)+'px';
+  _qaPopEl.style.top=(r.bottom+6)+'px';
+  clearTimeout(_qaPopTimer); _qaPopTimer=setTimeout(_qaPopHide, 3200);
+}
+function _qaPopHide(){ if(_qaPopEl) _qaPopEl.style.display='none'; }
+document.addEventListener('click', e=>{
+  const t=e.target.closest ? e.target.closest('#profileRow .pq, #profileRow .preg, #profileRow .pava') : null;
+  if(t) _qaPopShow(t); else _qaPopHide();
+});
+
 async function loadProfiles(){
+  // 角色列表是本页第一要素：先占浏览器连接位再做别的——否则 /profiles 会排在
+  // 同批装机/运维/同传代理等诊断请求之后（HTTP/1.1 同源 6 连接），慢端点一堵，
+  // 首屏角色区能空转数秒（无头截图实测 0.1s~6.4s 漂移的根源）。
+  const rp=fetch('/profiles');
   await loadQualityAlerts();
   try{
-    const r=await fetch('/profiles'); const d=await r.json();
-    const profiles=(d.profiles||d||[]);
+    const r=await rp; const d=await r.json();
+    let profiles=(d.profiles||d||[]);
+    profiles=_guestFilter(profiles).slice().sort((a,b)=>_profScore(b)-_profScore(a));
+    _initProfSearch(profiles.length);
     const row=$('profileRow');
     row.innerHTML='';
     profiles.forEach(p=>{
@@ -1786,32 +2047,37 @@ async function loadProfiles(){
       card.title=p.description||p.name;
       const qa=p.quality_axes||{};
       const _cos=qa.cosine||0, _pct=Math.round(_cos*100);
-      const _ringCol=_cos>=0.75?'var(--ok)':(_cos>=0.6?'var(--acc)':(_cos>=0.45?'#fbbf24':'#ef4444'));
+      // P1-5 质量环同步降噪三档：金标金 / 达标品牌色 / 异常红（绿/黄环退场）
+      const _ringCol=window.BD_CANVAS.isGold(_cos)?'#f59e0b':(_cos>=QA.COS_OK?'var(--acc)':'#ef4444');
       const _seed=avatarSeed(p.name);
       const _inner=p.thumbnail?`<img src="data:image/jpeg;base64,${p.thumbnail}" alt="${p.name}"/>`
         :`<span class="pava-fb" style="background:${_seed.bg};color:#fff;font-weight:800">${_seed.initial}</span>`;
-      const _ringAttr=_cos>0?` has-ring" style="--pct:${_pct};--ringcol:${_ringCol}`:'';
+      // 观众模式：达标才画质量环（黄/红环与低分同属内部诊断，不示人）
+      const _ringAttr=(_cos>0 && (!_GUEST||_cos>=QA.COS_OK))?` has-ring" style="--pct:${_pct};--ringcol:${_ringCol}`:'';
       let imgHtml=`<span class="pava${_ringAttr}" title="音色相似度 ${_pct}%">${_inner}</span>`;
       let qualHtml='';
       if((qa.cosine||0)>0||(qa.naturalness||0)>0){
         qualHtml='<div class="pqaxes">';
         if((qa.cosine||0)>0){
           const gold=window.BD_CANVAS.isGold(qa.cosine);   // P10-3 金标阈值单源
-          const cc=gold?'gold':(qa.cosine>=0.6?'ok':(qa.cosine>=0.45?'mid':'bad'));
-          qualHtml+=`<span class="pq pct ${cc}" title="音色相似度（与真人参考音对比）">${gold?'🏆':''}相似度${Math.round(qa.cosine*100)}%</span>`;
+          const cc=window.BD_CANVAS.cosTier(qa.cosine);    // P2-4 分档单源
+          // P0-1 观众模式：分数只在"拿得出手"（ok/gold）时示人，黄/红分是内部诊断
+          if(!_GUEST||cc==='ok'||cc==='gold')
+            qualHtml+=`<span class="pq pct ${cc}" title="音色相似度（与真人参考音对比）">${gold?'🏆':''}相似度${Math.round(qa.cosine*100)}%</span>`;
         }
         if((qa.naturalness||0)>0){
-          const nc=qa.naturalness>=0.85?'ok':(qa.naturalness>=0.7?'mid':'bad');
-          qualHtml+=`<span class="pq pct ${nc}" title="语音自然度">自然${Math.round(qa.naturalness*100)}%</span>`;
+          const nc=window.BD_CANVAS.natTier(qa.naturalness);   // P2-4 分档单源
+          if(!_GUEST||nc==='ok')
+            qualHtml+=`<span class="pq pct ${nc}" title="语音自然度">自然${Math.round(qa.naturalness*100)}%</span>`;
         }
         qualHtml+='</div>';
-      } else if(p.has_voice){
+      } else if(p.has_voice && !_GUEST){
         qualHtml='<div class="pqaxes"><span class="pq miss" title="待体检">🩺待检</span></div>';
       }
-      if((p.probe_sentences_count||0)>0){
+      if((p.probe_sentences_count||0)>0 && !_GUEST){
         qualHtml+=`<span class="pq ok" title="演讲域体检 ${p.probe_sentences_count} 句">📋${p.probe_sentences_count}</span>`;
       }
-      const alert=qualityAlertsMap[p.name];
+      const alert=qualityAlertsMap[p.name];   // 观众模式下 map 恒空（loadQualityAlerts 已短路）
       const alertHtml=alert?`<span class="preg" title="${(alert.reasons||[]).join('；')}">⚠</span>`:'';
       card.innerHTML=`${alertHtml}${imgHtml}<div><div class="pname">${p.name}</div><div class="pbadge">${p.has_voice?'🎙':''}${p.has_face?'👤':''}</div>${qualHtml}</div>`;
       card.onclick=()=>selectProfile(p);
@@ -1873,13 +2139,14 @@ function selectProfile(p){
   const qs=getExamples(p.name);
   exDiv.innerHTML='<span class="ex-label">试试问：</span>'+
     qs.map(q=>`<span class="exq" onclick="sendExample('${q}')">${q}</span>`).join('');
-  exDiv.style.display='flex';
+  _syncExamplesRow();   // P1-2 去重：hero 气泡在场时不再底部重复一份「试试问」
   // P1：hero 区（slogan + 一键试听 + 示例气泡）
   const slogan=$('heroSlogan');
   if(slogan) slogan.textContent=_bioShow||'我的声音由真人音色克隆，点下面听一句';
   const chips=$('heroChips');
   if(chips) chips.innerHTML=qs.slice(0,3).map(q=>`<span class="exq" onclick="sendExample('${q}')">${q}</span>`).join('');
   const hero=$('heroActions'); if(hero) hero.style.display='flex';
+  _syncExamplesRow();   // hero 刚上场：底部行按最终态复核一次（首次选中时序防呆）
   // M2-B：金标徽章（阈值单源 canvas_brand.js，≥GOLD_MIN=金标）
   const gold=$('heroGold');
   if(gold) gold.classList.toggle('on', window.BD_CANVAS.isGold((p.quality_axes||{}).cosine||0));
@@ -1951,6 +2218,30 @@ function sendExample(q){
   $('sendBtn').click();
 }
 
+// ── M-4 「这页怎么用」三场景卡 ──────────────────────────
+function openHowto(){
+  const m=$('howtoMask'); if(!m) return;
+  m.classList.add('show');
+  try{ localStorage.setItem('ah_howto_seen','1'); }catch(e){}
+}
+function closeHowto(){ const m=$('howtoMask'); if(m) m.classList.remove('show'); }
+async function copyGuestLink(){
+  const link=location.origin+'/phone?profile='+encodeURIComponent(currentProfile.name||'')+'&guest=1';
+  try{ await navigator.clipboard.writeText(link); showToast('访客链接已复制：客户打开即是净化后的体验页','ok'); }
+  catch(e){ prompt('复制此链接发给客户：',link); }
+}
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeHowto(); });
+// 首访自动展示一次：只对主人（访客不看——内容讲的是"怎么当主人"）；uivr 回归模式不弹（确定性）
+try{
+  if(VIEW!=='guest' && !_UIVR && !localStorage.getItem('ah_howto_seen')) setTimeout(openHowto, 900);
+}catch(e){}
+
+// P1-2 停止钮双位同步：底部小按钮 + 舞台大按钮（同源 doBargeIn，谁顺手点谁）
+function _stopVis(on){
+  const b=$('stopBtn'); if(b) b.style.display=on?'block':'none';
+  const s=$('stageStop'); if(s) s.classList.toggle('show', !!on);
+}
+
 // P0：更多设置抽屉折叠
 function toggleMore(){
   const m=$('moreSettings'), b=$('moreToggle'), mask=$('moreMask');
@@ -1969,11 +2260,18 @@ function toggleMore(){
 let _lastTtfa=0;   // 秒
 function renderHeroBadges(p){
   const el=$('heroBadges'); if(!el) return;
-  const cos=Math.round(((p&&p.quality_axes||{}).cosine||0)*100);
+  const qa=(p&&p.quality_axes)||{};
+  const cos=Math.round((qa.cosine||0)*100), nat=Math.round((qa.naturalness||0)*100);
   const rt = _lastTtfa>0 ? ('<b>'+_lastTtfa.toFixed(1)+'s</b> 应答') : '<b>1秒级</b> 应答';
   const litRt = _lastTtfa>0 && _lastTtfa<=2.5 ? ' lit' : '';
-  const voice = cos>0 ? ('🎙 克隆音色 <b>'+cos+'%</b>') : '🎙 克隆音色';
-  const litV = cos>=75 ? ' lit' : '';
+  // P1-6 舞台主数字达标门控：相似度是成交话术的核心论据，但只有"拿得出手"（≥COS_OK，与角色卡
+  // ok 档同一口径）才复述；低分不在主视觉自曝（此前 45% 也照挂——对观众等于负广告）。
+  // 自然度 ≥NAT_OK（角色卡 ok 档）时并列展示，主数字信息量翻倍。阈值单源 QA（P2-4）。
+  let voice='🎙 克隆音色', litV='';
+  if(cos>=QA.COS_OK*100){
+    voice='🎙 克隆音色 <b>'+cos+'%</b>'+(nat>=QA.NAT_OK*100?' · 自然 <b>'+nat+'%</b>':'');
+    litV=cos>=QA.GOLD*100?' lit':'';
+  }
   el.innerHTML =
     '<span class="hb'+litRt+'">⚡ '+rt+'</span>'+
     '<span class="hb">🌍 中英日韩</span>'+
@@ -2002,6 +2300,14 @@ function shareLink(){ return location.origin+'/s?profile='+encodeURIComponent(cu
 function _shareTrack(action){
   try{ fetch('/api/share/track?action='+action+'&profile='+encodeURIComponent(currentProfile.name||''),
              {method:'POST',keepalive:true}); }catch(e){}
+}
+// P0-3 转化埋点：走 /api/ui/event（免重启、/ops 入口热度直接聚合，与 pro_upsell 同表同口径）。
+// 不选 share/track：其 action 白名单在后端写死（改了要重启 Hub），且 cta 语义已被落地页占用。
+// id 记 guest/demo 区分"真访客点的"还是"演示现场点的"；不记角色名（该日志公约=不含 PII）。
+function trackPhoneCta(){
+  let sid=''; try{ sid=sessionStorage.getItem('bd_sid')||''; if(!sid){ sid=Math.random().toString(36).slice(2,16); sessionStorage.setItem('bd_sid', sid); } }catch(e){}
+  try{ fetch('/api/ui/event',{method:'POST',keepalive:true,headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ev:'phone_cta', id:(_GUEST_URL?'guest':'demo'), page:'/phone', sid:sid})}); }catch(e){}
 }
 async function openShare(){
   if(!currentProfile||!currentProfile.name){ setStatus('请先选择角色'); return; }
@@ -2258,15 +2564,15 @@ function updateLangBar(){
   if(isTranslateMode()){
     const s=inV==='auto'?'自动识别':_langName('inputLang');
     const d=repV==='auto'?'同输入':_langName('replyLang');
-    ico.textContent='🌐'; txt.textContent='翻译朗读：'+s+' → '+d; act.textContent='调整';
+    ico.innerHTML=_ic('globe',13); txt.textContent='翻译朗读：'+s+' → '+d; act.textContent='调整';
     bar.classList.add('info'); return;
   }
   if(repV==='auto'){
-    if(inV==='auto'){ ico.textContent='🌐'; txt.textContent='自动：你说什么语言，AI 就回什么语言'; }
-    else { ico.textContent='🎙'; txt.textContent='听'+_langName('inputLang')+' · 回复跟随输入'; bar.classList.add('info'); }
+    if(inV==='auto'){ ico.innerHTML=_ic('globe',13); txt.textContent='自动：你说什么语言，AI 就回什么语言'; }
+    else { ico.innerHTML=_ic('mic',13); txt.textContent='听'+_langName('inputLang')+' · 回复跟随输入'; bar.classList.add('info'); }
     act.textContent='调整';
   } else {
-    ico.textContent='⚠';
+    ico.textContent='⚠';   // 异常态保留字形（状态位公约）
     txt.textContent='已固定用「'+_langName('replyLang')+'」回复（无论你说什么）';
     act.textContent='点此恢复自动';
     bar.classList.add('warn');
@@ -2325,7 +2631,7 @@ function routeInput(input){
 
 async function translateSpeak(input){
   if(busy) return; busy=true;
-  $('mic').disabled=true; $('stopBtn').style.display='none';
+  $('mic').disabled=true; _stopVis(false);
   setStatus('翻译合成中…', true);
   showPhase('synth');
   const body={
@@ -2726,18 +3032,18 @@ async function startRec(){
   chunks=[];
   procNode.onaudioprocess=e=>{ chunks.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
   analyserNode.connect(procNode); procNode.connect(audioCtx.destination);
-  recording=true; $('mic').classList.add('rec'); $('mic').textContent='🔴 松开发送';
-  setStatus('录音中…',true); $('stopBtn').style.display='block';
+  recording=true; $('mic').classList.add('rec'); $('mic').innerHTML='<span class="rec-dot"></span> 松开发送';
+  setStatus('录音中…',true); _stopVis(true);
   startWaveAnim();
 }
 async function stopRec(){
   if(!recording) return; recording=false;
-  $('mic').classList.remove('rec'); $('mic').textContent='🎤 按住说话';
+  $('mic').classList.remove('rec'); $('mic').innerHTML=_ic('mic',16)+' 按住说话';
   stopWaveAnim(); analyserNode=null;
   try{ procNode.disconnect(); analyserNode; srcNode.disconnect(); micStream.getTracks().forEach(t=>t.stop()); }catch(e){}
   const sr=audioCtx.sampleRate; const wav=encodeWav(mergeChunks(chunks),sr,16000);
   await audioCtx.close();
-  if(wav.byteLength<3000){ setStatus('没听清，再试一次'); $('stopBtn').style.display='none'; return; }
+  if(wav.byteLength<3000){ setStatus('没听清，再试一次'); _stopVis(false); return; }
   routeInput({audio_base64:bufToB64(wav)});
 }
 function mergeChunks(arr){ let l=arr.reduce((a,c)=>a+c.length,0); const out=new Float32Array(l); let o=0;
@@ -2790,7 +3096,7 @@ async function converse(input){
   await maybeResetSessionOnLangChange();
   busy=true; $('mic').disabled=true;
   pollLlmWarm();   // M2-A：开聊即刷新冷启动状态（语音轮在 STT 阶段即可就绪）
-  $('stopBtn').style.display='block';
+  _stopVis(true);
   $('cap').style.display='block';
   $('youText').textContent=input.text?'你：'+input.text:'你：（语音）';
   typeClear(); hideMood();
@@ -2816,7 +3122,8 @@ async function converse(input){
   const inLang=($('inputLang')||{}).value||'zh-CN';
   const repLang=($('replyLang')||{}).value||'zh-CN';
   const body={
-    profile:currentProfile.name||'刘德华',
+    // 空串=让服务端用激活角色兜底（与 converse 页"默认角色"同语义）；原硬编码人名是白标漏点
+    profile:currentProfile.name||'',
     session_id:sessionId,
     input_lang:inLang, reply_lang:repLang,
     language:inLang.toLowerCase().replace('_','-'),
@@ -2847,7 +3154,7 @@ async function converse(input){
   }catch(e){ if(e.name!=='AbortError'){ const _m=friendlyErr(e); setStatus(_m); showToast(_m,'err'); } hidePhase(); }
   finally{
     busy=false; if(!vadMode) $('mic').disabled=false;
-    $('stopBtn').style.display='none';
+    _stopVis(false);
     hideSpin(); hidePhase(); typeFlush();
     $('avatarIdle').classList.remove('busy');
     setStageSpeaking(false);
@@ -3153,7 +3460,7 @@ async function doBargeIn(){
   stopWaveAnim();                 // 停止波形
   $('avatarIdle').classList.remove('busy');
   lipReset(); hideSpin(); hidePhase();
-  $('stopBtn').style.display='none';
+  _stopVis(false);
   vadCooldownUntil=Date.now()+150;
   _afterBargeIn=true;             // 下一轮开口先来句应答词
   if(!liveMode){ $('avatarIdle').style.display='flex'; $('vid').style.display='none'; }
@@ -3183,11 +3490,11 @@ async function toggleVad(){
   vadMode=!vadMode;
   if(vadMode){
     try{ await startVad();
-      $('vadBtn').classList.add('active'); $('vadBtn').textContent='🖐 聆听中';
+      $('vadBtn').classList.add('active'); $('vadBtn').innerHTML=_ic('hand')+' 聆听中';
       $('mic').disabled=true; setStatus('免按键聆听中…',true);
       maybeShowLipPrompt();
     }catch(e){ vadMode=false; const m=friendlyErr(e); setStatus(m,false); if(typeof showToast==='function') showToast(m,'err'); }
-  } else { await stopVad(); $('vadBtn').classList.remove('active'); $('vadBtn').textContent='🖐 免按键';
+  } else { await stopVad(); $('vadBtn').classList.remove('active'); $('vadBtn').innerHTML=_ic('hand')+' 免按键';
     $('mic').disabled=false; setStatus('就绪'); }
 }
 
@@ -3221,7 +3528,7 @@ async function startLive(auto){
     await pc.setRemoteDescription(await r.json());
     $('vid').addEventListener('loadeddata',()=>{ reportMetric('webrtc_ttfv_ms',performance.now()-t0); },{once:true});
     $('vid').srcObject=ms; $('vid').loop=false;
-    liveMode=true; fbWanted=false; $('liveBtn').classList.add('active'); $('liveBtn').textContent='📺 实时视频';
+    liveMode=true; fbWanted=false; $('liveBtn').classList.add('active'); $('liveBtn').innerHTML=_ic('live')+' 实时视频';
     if(auto){ $('vid').muted=true; }   // 预连接静音挂机，首屏继续展示 hero
     else { revealLive(); }
   }catch(e){
@@ -3243,7 +3550,7 @@ function stopLive(){
   liveMode=false; try{ if(livePC) livePC.close(); }catch(e){} livePC=null;
   try{ $('vid').srcObject=null; $('vid').style.display='none'; }catch(e){}
   $('avatarIdle').style.display='flex'; showAvatarIdle();
-  $('liveBtn').classList.remove('active'); $('liveBtn').textContent='📺 实时视频';
+  $('liveBtn').classList.remove('active'); $('liveBtn').innerHTML=_ic('live')+' 实时视频';
   setStatus('就绪');
 }
 // ── D-2 MJPEG 兜底：同源拉 /api/vcam/preview.mjpeg；挂着定时重试 WebRTC 自动升级回主路径 ──
@@ -3257,7 +3564,7 @@ function startMjpegFallback(reason){
   im.onerror=()=>{ if(liveFallback){ stopMjpegFallback(true); setStatus('实时画面不可用，已回到普通模式'); } };
   im.src='/api/vcam/preview.mjpeg?fps=10&_='+Date.now();
   hideAvatarIdle(); hideSpin(); im.style.display='block';
-  $('liveBtn').classList.add('active'); $('liveBtn').textContent='🧩 兼容画面';
+  $('liveBtn').classList.add('active'); $('liveBtn').innerHTML=_ic('live')+' 兼容画面';
   if(fbTimer) clearInterval(fbTimer);
   fbTimer=setInterval(async()=>{                      // 每 45s 试 4 次升回 WebRTC，成功即无缝切换
     if(!liveFallback){ clearInterval(fbTimer); fbTimer=null; return; }
@@ -3273,7 +3580,7 @@ function stopMjpegFallback(showIdle){
   const im=$('liveImg'); im.onload=null; im.onerror=null;
   try{ im.src=''; }catch(e){} im.style.display='none';
   if(showIdle!==false){ liveMode=false; $('avatarIdle').style.display='flex'; showAvatarIdle();
-    $('liveBtn').classList.remove('active'); $('liveBtn').textContent='📺 实时视频'; }
+    $('liveBtn').classList.remove('active'); $('liveBtn').innerHTML=_ic('live')+' 实时视频'; }
 }
 // 选定有人脸的角色后，若 vcam 可达则后台预连接实时视频（用户手动关过则不再自动）
 async function maybeAutoLive(){
@@ -3446,8 +3753,8 @@ async function scoreClone(audioB64, ms){
     const d=await r.json();
     if(d.ok){
       const pct=Math.round(d.similarity*100);
-      const star = d.cosine>=0.6?'🟢':d.cosine>=0.45?'🟡':'🔴';
-      setTuneStatus(`${star} 相似度 ${pct}% · ${d.label} · ${ms||'?'}ms`, d.cosine>=0.45?'ok':'err');
+      const star = d.cosine>=QA.COS_OK?'🟢':d.cosine>=QA.COS_MID?'🟡':'🔴';   // P2-4 分档单源
+      setTuneStatus(`${star} 相似度 ${pct}% · ${d.label} · ${ms||'?'}ms`, d.cosine>=QA.COS_MID?'ok':'err');
     } else {
       setTuneStatus(`试听就绪 · ${ms||'?'}ms（评分不可用）`,'ok');
     }
@@ -3691,6 +3998,8 @@ function _audInit(){
   const W=$('audWidget'), P=$('audPanel'), L=$('audList'), B=$('audBadge'), F=$('audFab');
   const AC=$('audAuto'), AS=$('audAutoStat');
   if(!W) return;   // 面板 DOM 在脚本块之后，须 DOM ready 后再初始化
+  if(_UIVR) return;   // uivr：徽标计数随运行态漂移，且轮询与 /profiles 抢连接位
+  if(document.body.classList.contains('bd-guest-url')) return;   // 真访客：主播侧面板不初始化（省轮询）
   const esc=s=>(s||'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
   async function poll(){
     try{
@@ -3784,13 +4093,13 @@ if('serviceWorker' in navigator){
       <span id="audAutoStat" style="margin-left:auto;font-size:11px;color:#8595ad"></span>
     </label>
     <div style="display:flex;gap:8px;margin-bottom:8px">
-      <a href="/wall" target="_blank" style="flex:1;text-align:center;font-size:11.5px;color:#9fb0cc;text-decoration:none;background:#0c1322;border:1px solid #26324a;border-radius:10px;padding:6px">🖥 公屏大屏</a>
-      <a href="/highlights" target="_blank" style="flex:1;text-align:center;font-size:11.5px;color:#9fb0cc;text-decoration:none;background:#0c1322;border:1px solid #26324a;border-radius:10px;padding:6px">✨ 精彩问答</a>
+      <a href="/wall" target="_blank" style="flex:1;text-align:center;font-size:11.5px;color:#9fb0cc;text-decoration:none;background:#0c1322;border:1px solid #26324a;border-radius:10px;padding:6px"><svg class="bd-ic" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px"><use href="/static/brand-icons.svg?v=20260716c#i-monitor"/></svg> 公屏大屏</a>
+      <a href="/highlights" target="_blank" style="flex:1;text-align:center;font-size:11.5px;color:#9fb0cc;text-decoration:none;background:#0c1322;border:1px solid #26324a;border-radius:10px;padding:6px"><svg class="bd-ic" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px"><use href="/static/brand-icons.svg?v=20260716c#i-sparkles"/></svg> 精彩问答</a>
     </div>
     <div id="audList"></div>
   </div>
   <button id="audFab" style="background:var(--acc);color:#fff;border:0;border-radius:24px;padding:10px 16px;font-size:13px;font-weight:600;box-shadow:0 4px 16px rgb(var(--acc-rgb) / .4);cursor:pointer">
-    💬 观众提问 <span id="audBadge" style="background:#fff;color:var(--acc);border-radius:10px;padding:0 6px;margin-left:4px;font-size:12px">0</span>
+    <svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px"><use href="/static/brand-icons.svg?v=20260716c#i-chat"/></svg> 观众提问 <span id="audBadge" style="background:#fff;color:var(--acc);border-radius:10px;padding:0 6px;margin-left:4px;font-size:12px">0</span>
   </button>
 </div>
 
@@ -3808,17 +4117,21 @@ if('serviceWorker' in navigator){
     <div id="dcLast" style="font-size:11px;color:#7b86a0;margin:2px 0 0">最近试音：—</div>
     <div id="dcMsg" style="font-size:11.5px;color:#9fb0cc;line-height:1.5;margin:6px 0 10px;min-height:18px">点「试音」用你的音色合成一句、推到对方收音口并回录，验证对方能听到（通话中默认静默、不打扰对方）。</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button id="dcTest" style="flex:1;min-width:96px;background:var(--acc);color:#fff;border:0;border-radius:10px;padding:9px;font-size:12.5px;font-weight:600;cursor:pointer">🔊 试音</button>
-      <button id="dcFix" style="display:none;flex:1;min-width:96px;background:#3a2a12;color:#fbbf24;border:1px solid #fbbf24;border-radius:10px;padding:9px;font-size:12.5px;font-weight:600;cursor:pointer">🔧 修复对方声</button>
-      <button id="dcEngineFix" style="display:none;flex:1;min-width:96px;background:#12321f;color:#34d399;border:1px solid #34d399;border-radius:10px;padding:9px;font-size:12.5px;font-weight:600;cursor:pointer">🔧 拉起引擎</button>
+      <button id="dcTest" style="flex:1;min-width:96px;background:var(--acc);color:#fff;border:0;border-radius:10px;padding:9px;font-size:12.5px;font-weight:600;cursor:pointer"><svg class="bd-ic" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px"><use href="/static/brand-icons.svg?v=20260716c#i-sound"/></svg> 试音</button>
+      <button id="dcFix" style="display:none;flex:1;min-width:96px;background:#3a2a12;color:#fbbf24;border:1px solid #fbbf24;border-radius:10px;padding:9px;font-size:12.5px;font-weight:600;cursor:pointer"><svg class="bd-ic" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px"><use href="/static/brand-icons.svg?v=20260716c#i-tools"/></svg> 修复对方声</button>
+      <button id="dcEngineFix" style="display:none;flex:1;min-width:96px;background:#12321f;color:#34d399;border:1px solid #34d399;border-radius:10px;padding:9px;font-size:12.5px;font-weight:600;cursor:pointer"><svg class="bd-ic" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px"><use href="/static/brand-icons.svg?v=20260716c#i-tools"/></svg> 拉起引擎</button>
     </div>
   </div>
   <button id="dcFab" style="background:#141b2d;color:#eaf1fb;border:1px solid #26324a;border-radius:24px;padding:10px 15px;font-size:13px;font-weight:600;box-shadow:0 4px 16px #0007;cursor:pointer">
-    🔊 对方能听到吗 <i id="dcFabDot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#5b6580;margin-left:3px;vertical-align:middle"></i>
+    <svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px"><use href="/static/brand-icons.svg?v=20260716c#i-sound"/></svg> 对方能听到吗 <i id="dcFabDot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#5b6580;margin-left:3px;vertical-align:middle"></i>
   </button>
 </div>
 <script>
 (function(){
+  if(document.body.classList.contains('bd-guest-url')) return;   // 真访客：随身自检是主播工具，不初始化（省轮询）
+  // uivr：FAB 圆点颜色随引擎健康态翻转（灰/绿/黄/红），且同传代理端点慢时长时间占连接位
+  // ——回归模式保持静态灰点，不轮询
+  if(new URLSearchParams(location.search).get('uivr')==='1') return;
   var COL={ok:'#22c55e',warn:'#fbbf24',bad:'#ef4444',idle:'#5b6580'};
   function $d(id){return document.getElementById(id);}
   function setLamp(id,color,txt){var el=$d(id);if(!el)return;el.querySelector('i').style.background=color;el.querySelector('.dct').textContent=txt||'';}
@@ -3866,31 +4179,31 @@ if('serviceWorker' in navigator){
   $d('dcFab').onclick=function(){ var p=$d('dcPanel'); var on=p.style.display==='none'; p.style.display=on?'':'none'; if(on) dcPoll(); };
   $d('dcRefresh').onclick=dcPoll;
   $d('dcTest').onclick=async function(){
-    var b=$d('dcTest'); b.disabled=true; var t=b.textContent; b.textContent='🔊 试音中…';
+    var b=$d('dcTest'); b.disabled=true; var t=b.innerHTML; b.textContent='⏳ 试音中…';   // innerHTML 存取：busy 态不吞图标
     $d('dcMsg').textContent='正在用你的音色合成一句、推给对方收音口…';
     try{
       var r=await (await fetch('/interp/call_pack/dub_test',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
       $d('dcMsg').textContent=(r.ok?'✅ ':'⚠ ')+(r.reason||'试音完成');
     }catch(e){ $d('dcMsg').textContent='试音失败：'+e; }
-    b.disabled=false; b.textContent=t; dcPoll();
+    b.disabled=false; b.innerHTML=t; dcPoll();
   };
   $d('dcFix').onclick=async function(){
-    var b=$d('dcFix'); b.disabled=true; var t=b.textContent; b.textContent='🔧 修复中…';
+    var b=$d('dcFix'); b.disabled=true; var t=b.innerHTML; b.textContent='⏳ 修复中…';
     $d('dcMsg').textContent='正在改用「立体声混音」抓对方声并重启采集链…';
     try{
       var r=await (await fetch('/interp/call_pack/fix_loopback',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
       $d('dcMsg').textContent=(r.fix_applied?'✅ ':'⚠ ')+(r.fix_note||'已尝试修复');
     }catch(e){ $d('dcMsg').textContent='修复失败：'+e; }
-    b.disabled=false; b.textContent=t; dcPoll();
+    b.disabled=false; b.innerHTML=t; dcPoll();
   };
   $d('dcEngineFix').onclick=async function(){
-    var b=$d('dcEngineFix'); b.disabled=true; var t=b.textContent; b.textContent='🔧 拉起中…';
+    var b=$d('dcEngineFix'); b.disabled=true; var t=b.innerHTML; b.textContent='⏳ 拉起中…';
     $d('dcMsg').textContent='正在经主控台把配音主引擎重新拉起(模型加载可能十几秒)…';
     try{
       var r=await (await fetch('/interp/tts/engine_restart',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
       $d('dcMsg').textContent=(r.ok?'✅ ':'⚠ ')+(r.reason||'已请求拉起');
     }catch(e){ $d('dcMsg').textContent='拉起失败：'+e; }
-    b.disabled=false; b.textContent=t; setTimeout(dcPoll,1500);
+    b.disabled=false; b.innerHTML=t; setTimeout(dcPoll,1500);
   };
   setInterval(function(){ if($d('dcPanel').style.display!=='none') dcPoll(); }, 15000);
   setTimeout(dcPoll, 2500);

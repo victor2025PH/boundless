@@ -1,6 +1,6 @@
-# 无界科技 BOUNDLESS · 全域项目整理方案（三视角 · 单仓 boundless）
+# 无界科技 BOUNDLESS · 全域项目整理方案（三视角 · 单仓 wujie）
 
-> 用途：把分散在多台机器/多个仓库的自研资产 + 官网 + 品牌 + 文档，统一整理进 **117 电脑**上的**一个新 git 单仓 `boundless`**。
+> 用途：把分散在多台机器/多个仓库的自研资产 + 官网 + 品牌 + 文档，统一整理进 **117 电脑**上的**一个新 git 单仓 `wujie`**。
 > 目标：每个产品有独立拼音文件夹、功能清晰独立，又通过共享底座互相关联，形成 **获客 → 承接 → 分身 → 交付 → 复购** 的工作闭环。
 > 依据：本机（DESKTOP-SH6IM7V）的引擎源码 + 经 SSH 实勘 117（`D:\workspace`、`D:\faceX\mfys`）真实目录/git/代码量 + 117 上团队已有的《工作区分析》《实施01–08》等规划文档。
 > 版本：V2（V1 基于不完整假设，已按 117 实况全面修订）。
@@ -9,7 +9,7 @@
 
 ## 0. 一句话结论
 
-**在 117 建单仓 `boundless`：`engines/` 放 3 套自研核心引擎（一次维护、多产品共享）+ `products/` 放 7 条产品线（各用拼音独立文件夹，做产品化封装）+ `platform/` 共享底座 + `website/` 官网 + `brand-assets/` + `docs/`。** 用"产品拼音文件夹"实现独立，用"共享引擎/底座"实现关联与闭环。
+**在 117 建单仓 `wujie`：`engines/` 放 3 套自研核心引擎（一次维护、多产品共享）+ `products/` 放 7 条产品线（各用拼音独立文件夹，做产品化封装）+ `platform/` 共享底座 + `website/` 官网 + `brand-assets/` + `docs/`。** 用"产品拼音文件夹"实现独立，用"共享引擎/底座"实现关联与闭环。
 
 > 关键澄清：现有 3 套自研代码库**每套横跨多个产品**（1 个引擎 = 4 个产品），所以不能"一个产品塞一个独立代码库"。正确做法是**引擎共享一份、产品文件夹做薄封装**（这正是团队已在做的：LingoX = telegram 引擎 + `lingox.overlay.yaml` 裁剪）。
 
@@ -23,7 +23,7 @@
 | **telegram-mtproto-ai** | 117 `D:\workspace` | 承接引擎：客服/统一收件箱/AI回复/翻译栈/陪伴 | py=1530, ts/tsx=3528；remote yunkeji2026；**119 未提交** | 自研核心 |
 | **mobile-auto0423** | 117 `D:\workspace` | 获客引擎：真机 RPA（FB/Messenger/TikTok） | py=629；remote victor2025PH；branch feat-a-p2x | 自研核心 |
 | **index-tts** | 117 `D:\workspace` | 第三方 TTS（IndexTTS2），VoiceX 后端依赖 | 7GB；remote index-tts/index-tts | 第三方（vendor） |
-| **_server-yuntech / web117** | 117 `D:\workspace` · 本机 `C:\web117` | 官网 bd2026.cc（Next.js 统一销售门面） | ts/tsx=1985；deploy.ps1(Posh-SSH) | 自研·官网 |
+| **_server-yuntech / web117** | 117 `D:\workspace` · 本机 `C:\web117` | 官网 usdt2026.cc（Next.js 统一销售门面） | ts/tsx=1985；deploy.ps1(Posh-SSH) | 自研·官网 |
 | **brand-assets** | 117 `D:\workspace` | 品牌资产库（logo/图标/排版/头像/背景/字体） | 78MB；**7 产品图标齐全** | 共享资产 |
 | **docs-business** | 117 `D:\workspace` | 商业/战略/实施文档（含《实施01–08》三视角报告） | 0.1MB | 文档 |
 
@@ -51,10 +51,10 @@
 
 ---
 
-## 3. 目标目录结构（117 · 新单仓 `boundless`）
+## 3. 目标目录结构（117 · 新单仓 `wujie`）
 
 ```
-boundless/                         ← 新 git 单仓（无界科技全域）
+wujie/                         ← 新 git 单仓（无界科技全域）
 ├─ README.md                   全域总览 + 产品导航 + 一键起停
 ├─ platform/                   ★共享底座（闭环中枢，产品/引擎都依赖，绝不反向依赖）
 │  ├─ brand/                   设计令牌(brand.ts/brand.css) + 指向 brand-assets
@@ -133,7 +133,7 @@ boundless/                         ← 新 git 单仓（无界科技全域）
 - **安全前置**：117 上 telegram 119 处、mfys 10 处、index-tts 8 处**未提交改动先提交或 stash**（否则迁移会丢代码）；先做一次密钥普查（`服务器密码.txt`/`config.yaml`/`creds.json` 等移出并轮换）。
 
 ### Phase 1 — 新仓骨架 + 仓库卫生（低风险，先做）
-- 117 `D:\workspace\boundless`（或独立盘）`git init`，建 `platform/ engines/ products/ website/ brand-assets/ docs/ vendor/ deploy/ tools/`。
+- 117 `D:\workspace\wujie`（或独立盘）`git init`，建 `platform/ engines/ products/ website/ brand-assets/ docs/ vendor/ deploy/ tools/`。
 - `.gitignore` = 只入源码：排除 `vendor/ models/ data/ logs/ dist/`、`*.pth/*.onnx/*.exe/*.zip`、`node_modules/`、本机根 `_*.*`、机密。
 - index-tts 归 `vendor/`（git 忽略，按需 provision）；**不拷** 本机 132G/64G 大文件。
 
@@ -175,7 +175,7 @@ boundless/                         ← 新 git 单仓（无界科技全域）
 4. **引擎权威副本**：确认 avatarhub 以**本机新副本**为准覆盖 117 旧 `mfys`。
 
 **我可立刻做（安全/可回退，无需等决策）**：
-- 在 117 建 `boundless` 骨架 + `.gitignore` + README + 把本方案与 117《实施01–08》归入 `docs/`。
+- 在 117 建 `wujie` 骨架 + `.gitignore` + README + 把本方案与 117《实施01–08》归入 `docs/`。
 - 跑一遍 117 全量资产清单 + 机密普查报告（只读，不动源）。
 - 先把各源仓未提交改动落盘/stash（防丢）。
 
@@ -187,7 +187,7 @@ boundless/                         ← 新 git 单仓（无界科技全域）
 
 **Phase 1 — 骨架 + 卫生**
 - 安全网：`telegram-mtproto-ai`(119 改) / `mobile-auto0423`(1 改) 未提交改动已建可恢复 ref `refs/wujie-backup/20260715`；源仓工作树未动。
-- 新仓：`D:\workspace\boundless` `git init`(main) + `.gitignore`(机密/大文件/vendor) + README + 目录骨架，首提交完成。
+- 新仓：`D:\workspace\wujie` `git init`(main) + `.gitignore`(机密/大文件/vendor) + README + 目录骨架，首提交完成。
 
 **Phase 2 — 搬迁 + 机密清洗 + 提交（commit `708c4a3`）**
 - `engines/avatarhub` ← 本机较新 `模仿音色` 净码（git-clean，1262 文件，中文名 round-trip OK）。
@@ -198,21 +198,21 @@ boundless/                         ← 新 git 单仓（无界科技全域）
 - 结果：4564 文件入库，工作树干净，`.git` 146MB（含 brand-assets 93MB 图片，后续可转 LFS）。
 - index-tts(7GB) 未入库 → `vendor/`，靠 provision 部署。
 
-**⚠️ 待你处理（安全）**：`mobile-auto0423/config/chat.yaml` 里的真实智谱 GLM 密钥 `ac5f80…YznB` 在源仓（且源仓有 GitHub remote，可能已推送）——boundless 副本已脱敏，但**源仓那把 key 视为已泄露，请尽快在智谱后台吊销/轮换**。同理排查各源仓 `.env`/`config` 历史提交里的真实密钥。
+**⚠️ 待你处理（安全）**：`mobile-auto0423/config/chat.yaml` 里的真实智谱 GLM 密钥 `ac5f80…YznB` 在源仓（且源仓有 GitHub remote，可能已推送）——wujie 副本已脱敏，但**源仓那把 key 视为已泄露，请尽快在智谱后台吊销/轮换**。同理排查各源仓 `.env`/`config` 历史提交里的真实密钥。
 
 ## 10. Phase 3 落地记录（2026-07-15 · 官网三系 + 合规清洗）
 
-> 均在 boundless 单仓 `website/`，用 `_server-yuntech` 的 node_modules 做 junction 跑 `tsc --noEmit` 真校验（全程 0 错）。
+> 均在 wujie 单仓 `website/`，用 `_server-yuntech` 的 node_modules 做 junction 跑 `tsc --noEmit` 真校验（全程 0 错）。
 
 - **key 脱敏提交** `mobile-auto0423@04bc413`：`config/chat.yaml` + 2 个 tiktok 源里已吊销的 GLM key → `${GLM_API_KEY}`（不含你在改的 chat_messages.yaml）。
-- **三系 taxonomy** `boundless@a9bc871`：`brand.ts` 7 产品（新增 **通传 VoxX**）+ `category` + `CATEGORIES`(智连/幻境/通达) + `productsInCategory` + `PRODUCT_ORDER` 按系重排；`productMeta/layout(schema)/routing` 的所有 `Record<ProductKey>` 补 voxx；`ProductMatrix` 改按三系分组陈列（底座横幅）；概述文案六线→三系。
-- **content 合规清洗** `boundless@f8854d9` + `27f33ea`：
+- **三系 taxonomy** `wujie@a9bc871`：`brand.ts` 7 产品（新增 **通传 VoxX**）+ `category` + `CATEGORIES`(智连/幻境/通达) + `productsInCategory` + `PRODUCT_ORDER` 按系重排；`productMeta/layout(schema)/routing` 的所有 `Record<ProductKey>` 补 voxx；`ProductMatrix` 改按三系分组陈列（底座横幅）；概述文案六线→三系。
+- **content 合规清洗** `wujie@f8854d9` + `27f33ea`：
   - **通译/通传拆分**：`translate` 卡重挂 **通译 LingoX = 聊天翻译 SCRM**；新增 `interpret` 卡 = **通传 VoxX 语音同传**；定价均置「按需报价/Quote」占位（数字待你回填）。
   - **USDT 双层（dual）**：合规主站 hero/trustline/pricingSection/SEO schema 去掉「USDT 结算」头条卖点、计价单位改 USD；USDT 作为结算方式**保留**在下单步骤/FAQ/联系页（真实收款不变）。
   - 违禁词（无审查/无禁区/uncensored）全站复扫 = 0。
 - **状态**：`tsc --noEmit` 全绿；voxx 图标暂复用 lingox（待 `build-boundless-marks` 生成 voxx.png）。
 
-**待你回填 / 决定**：① LingoX/VoxX 的实际价格数字；② voxx 专属图标；③ 部署前在 `website/` 跑一次 `npm run build` 自验；④ **boundless 从此为唯一真源**——请从 `boundless/website` 部署，旧 `C:\web117`(5 产品)/`_server-yuntech` 归档停用。
+**待你回填 / 决定**：① LingoX/VoxX 的实际价格数字；② voxx 专属图标；③ 部署前在 `website/` 跑一次 `npm run build` 自验；④ **wujie 从此为唯一真源**——请从 `wujie/website` 部署，旧 `C:\web117`(5 产品)/`_server-yuntech` 归档停用。
 
 **Phase 3 剩余（待续）**：`platform/` 共享层抽取（身份·资产总线 / 授权计量 / 合规出口 / KPI）；官网 Navbar 三系下拉；官网↔SKU↔license↔交付 业务闭环打通。
 

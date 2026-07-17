@@ -119,6 +119,11 @@ _jsonl_handler.addFilter(_RidFilter())
 
 logging.basicConfig(level=logging.INFO, handlers=[_log_handler, _stream_handler, _jsonl_handler])
 _logger = logging.getLogger("avatar_hub")
+# 日志减噪（P0-4）：httpx 对每次子服务调用都打一行 INFO "HTTP Request:"，健康轮询把它刷成
+# 每秒数条，真错误被淹没（2026-07-17 定妆 503 复盘实锤：日志翻不到根因，最后靠 netstat 定位）。
+# 降为 WARNING——业务成败在各调用点已有自己的日志，不损失信息。
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 import httpx
 import requests
@@ -208,8 +213,10 @@ def _faceswap_resolve(engine: str = "", profile: dict | None = None) -> tuple[st
         svc = "faceswap"          # 未部署独立高清副本 → 回退默认换脸服务（绝不指向不可达端口）
     return eng, svc, spec.get("smooth_mode", "")
 
-RVC_API = "http://127.0.0.1:6242"   # RVC 离线转换 API（api_240604.py）
-PORT = int(os.environ.get("AVATARHUB_PORT", "9000"))  # 可用环境变量覆盖监听端口
+RVC_API = f"http://127.0.0.1:{app_config.port('rvc') or 6242}"   # RVC 离线转换 API（api_240604.py）
+# 监听端口：环境变量 AVATARHUB_PORT > config.json ports/port_offset(app_config) > 9000。
+# 覆盖层用于「安装版+源码版」两套并存(2026-07-17)，零配置时与历史一致。
+PORT = int(os.environ.get("AVATARHUB_PORT") or app_config.port("hub") or 9000)
 
 # ── P-Conc5: 多卡 worker 池（每卡一副本，最少在途分发，故障副本短暂摘除）────────
 # 重型逐句 GPU 阶段(fish_tts/emotion_tts/lipsync/latentsync)若配置了多个副本地址
@@ -2509,6 +2516,8 @@ _metrics: dict = {
     "clone_rejected": 0,
     "uptime_start": time.time(),
     "latency_buckets": [0, 0, 0, 0],  # P5-5: <500ms / 500-1000ms / 1000-3000ms / >3000ms
+    "rvc_conv_start_total": 0,      # RVC-P1: 实时变声「开始转换」用户动作计数（漏斗分母）
+    "rvc_conv_quick_stop_total": 0, # RVC-P1: 开始后 60s 内主动停止（疑似「没效果」放弃，漏斗分子）
     "speak_emotion_auto": 0,  # UI-P0: 语音页「🤖 自动」情感使用次数（决策①：默认情感是否切 auto 的数据依据）
     "emotion_auto_miss":  0,  # UI-P7: 「情感不对？」一键反馈次数（决策①的误判率维度）
     "stream_sse_emotion":     0,  # UI-P2-1: 流式携带手动情感/指令的调用次数（评估情感流式使用率）
@@ -2532,6 +2541,7 @@ _PERSIST_KEYS = [
     "stream_sse_first_ms_sum","stream_sse_first_count",
     "latency_buckets","batch_dub_total","batch_dub_lines_total",
     "video_submitted","clone_total","clone_rejected",
+    "rvc_conv_start_total","rvc_conv_quick_stop_total",
 ]
 
 # ── Phase7: 延迟 SLO 预算（可经环境变量调优）──────────────────────
@@ -4586,6 +4596,7 @@ async def _health_refresh(force: bool = False):
             _rt_vram = _vram_pressure()   # 负载门控用显存快照(复用进 rt_effective/loadgate；_get_perf_metrics 自带 TTL)
             result = {
                 "status":           "ok",
+                "base":             str(app_config.BASE),   # 本套安装的根目录(两套并存时自证身份)
                 "active_profile":   _active_profile,
                 "active_lipsync_engine": (dict(_profiles.get(_active_profile, {})).get("lipsync_engine", "")
                                           or _default_engine("lipsync")),
@@ -4639,6 +4650,16 @@ async def health():
     _HEALTH_REFRESH["running"] = True
     await _health_refresh()
     return _HEALTH_CACHE["data"] or {"status": "ok", "services": {}}
+
+
+@app.get("/api/ports")
+async def api_ports():
+    """本套安装的服务生效端口表(含 config.json ports/port_offset 覆盖层，2026-07-17)。
+    前端跨端口链接(如同传 7900)一律以此为准——两套安装并存时不再硬编码指到别家服务；
+    base 供「界面与服务是否同一套安装」自证。"""
+    return {"ok": True, "base": str(app_config.BASE), "offset": app_config.PORT_OFFSET,
+            "hub_port": PORT,
+            "ports": {k: app_config.port(k) for k in app_config.SERVICES}}
 
 
 async def _health_fresh() -> dict:
@@ -6215,20 +6236,45 @@ async def activate_profile(name: str, auto: bool = False):
     # 自动切换 RVC 模型（fire-and-forget，不阻塞）——使用角色自身的 rvc_settings
     if p.get("rvc_model"):
         _rvc_cfg = p.get("rvc_settings", {})
-        def _push_rvc(cfg=_rvc_cfg, model=_rvc_resolve_pth(p["rvc_model"])):
+        def _push_rvc(cfg=_rvc_cfg, model=_rvc_resolve_pth(p["rvc_model"]), pname=name):
+            # 历史坑：此处曾发 f0up_key(引擎字段是 pitch)且缺必填的 index_path/设备字段，
+            # Pydantic 422 后又被 except: pass 吞掉 → 角色激活推送从未生效过。
+            # 现改走 hub 自己的 /rvc/config 预检逻辑(pth 校验/.index 匹配/引擎热重启)，
+            # 设备沿用引擎最近一次落盘配置(configs/config.json = 引擎单一真相)。
             try:
-                requests.post(f"{SERVICES['rvc']}/config",
-                    json={"pth_path": model,
-                          "f0method":    cfg.get("f0method",    "rmvpe"),
-                          "f0up_key":    cfg.get("pitch",       0),
-                          "threhold":    cfg.get("threhold",    -60),
-                          "index_rate":  cfg.get("index_rate",  0.5),
-                          "protect":     cfg.get("protect",     0.33),
-                          "rms_mix_rate":cfg.get("rms_mix_rate",0.25),
-                          "is_half":     True},
-                    headers=_svc_req_headers(), timeout=5)
-            except Exception:
-                pass
+                dev_in = dev_out = ""
+                try:
+                    _last = json.loads((Path(rf"{_BASE}\Retrieval-based-Voice-Conversion-WebUI")
+                                        / "configs" / "config.json").read_text(encoding="utf-8"))
+                    dev_in  = _last.get("sg_input_device", "")
+                    dev_out = _last.get("sg_output_device", "")
+                except Exception:
+                    pass
+                if not dev_in or not dev_out:
+                    _logger.warning(f"[rvc] 角色「{pname}」激活推送跳过：引擎无已知输入/输出设备"
+                                    "（请先在变声面板应用一次配置）")
+                    return
+                r = rvc_config({
+                    "pth_path":        model,
+                    "index_path":      cfg.get("index_path", ""),
+                    "sg_input_device": dev_in,
+                    "sg_output_device": dev_out,
+                    "f0method":        cfg.get("f0method",     "rmvpe"),
+                    "pitch":           cfg.get("pitch",        0),
+                    "threhold":        cfg.get("threhold",     -60),
+                    "index_rate":      cfg.get("index_rate",   0.5),
+                    "protect":         cfg.get("protect",      0.33),
+                    "rms_mix_rate":    cfg.get("rms_mix_rate", 0.25),
+                    "is_half":         True,
+                })
+                if isinstance(r, dict) and r.get("ok") is False:
+                    _logger.warning(f"[rvc] 角色「{pname}」激活推送失败: {r.get('detail')}")
+                else:
+                    _logger.info(f"[rvc] 角色「{pname}」激活已推送变声配置: "
+                                 f"{Path(model).stem} pitch={cfg.get('pitch', 0)}"
+                                 f" restarted={isinstance(r, dict) and r.get('restarted')}")
+            except Exception as e:
+                _logger.warning(f"[rvc] 角色「{pname}」激活推送异常: {e}")
         threading.Thread(target=_push_rvc, daemon=True).start()
         _t = asyncio.create_task(_preload_rvc_bg(p["rvc_model"]))  # P4-E: 后台异步预热
         _t.add_done_callback(  # P9-2: 静默吞掉CancelledError，防泄漏告警
@@ -8610,7 +8656,17 @@ async def api_rvc_asset_preview(body: dict):
     if pairs.get(rel_id) is None:
         raise HTTPException(404, "模型文件不存在")
     sample_profile = str(body.get("sample_profile") or "").strip()
-    if sample_profile:
+    sample_b64 = str(body.get("sample_b64") or "").strip()
+    if sample_b64:
+        # RVC-P1 AB 试听：前端麦克风现录 WAV 当输入（浏览器已转 16bit PCM WAV）——
+        # 用户听自己的声音过当前滑块参数，是「变声到底有没有效果」最直接的自证途径
+        try:
+            wav = _wav_head_bytes(base64.b64decode(sample_b64), 10.0)
+        except Exception:
+            raise HTTPException(400, "录音不是标准 wav，无法试听")
+        import hashlib as _hl
+        sample_key = "mic:" + _hl.md5(sample_b64.encode()).hexdigest()[:16]
+    elif sample_profile:
         prof = _profiles.get(sample_profile)
         if prof is None:
             raise HTTPException(404, f"角色不存在：{sample_profile}")
@@ -16942,6 +16998,15 @@ async def api_clientlog(request: Request):
             "ua":     _clip(request.headers.get("user-agent"), 300),
             "client": (request.client.host if request.client else "") or "",
         }
+        # 日志减噪（P0-4）：Alpine 三态渲染期 <img src=""/data: 空占位> 触发的 resource load failed
+        # 是纯噪声（src=空 data URI 或落回页面自身 URL），曾把 client_errors.jsonl 灌满、真错误被顶掉。
+        # 丢弃不落盘也不 WARNING；带真实外链 src 的资源失败仍照常记录。
+        if rec["kind"] == "resource":
+            _src = rec["src"].rstrip()
+            if (not _src or _src.startswith("data:")
+                    or _src.split("#")[0] == rec["page"]
+                    or _src.split("?")[0].endswith(("/ui", "/ui.html"))):
+                return {"ok": True, "dropped": "resource-noise"}
         _clientlog_append(rec)
         try:
             _logger.warning(f"[ClientLog] {rec['kind']} @{rec['page']}: {rec['msg'][:160]}")
@@ -22623,6 +22688,9 @@ def realtime_status():
                                     else None),
             # P8-1 变声转换是否在跑（hub 代理起停时打的旗标）：自救卡看到它恢复 True 即自动退场
             "rvc_conv": bool(_RVC_CONV.get("active")),
+            # RVC-P1: 引擎 /status 单一真相（3s 缓存；离线/旧引擎=None，前端回退旧启发式）——
+            # 真实徽章(模型/变调/推理耗时) + 输出静音告警(out_rms 持续 0)的数据源
+            "rvc_status": _rvc_engine_status(),
             "health": _compute_stream_health(metrics, _fs_up, video_ok)}   # 开播健康单一真相（下沉后端，多端共享）
 
 @app.get("/realtime/health_timeline")
@@ -24175,6 +24243,216 @@ def _svc_health_quick(key: str, timeout: float = 2.0) -> dict:
         return {"key": key, "up": False, "detail": str(e)[:120]}
 
 
+# ── P0-1 离线功能服务「按需自动拉起」──────────────────────────────────────────
+# 根因复盘（2026-07-17 定妆 503）：hair(8001)/makeup(8004)/tryon(8002) 属 START_EXTRAS 扩展服务，
+# 常规启动（start_avatar_hub.bat / START_EXTRAS=0）根本不启动它们，supervisor 也不守护——
+# 用户点「生成定妆脸」只能收到一句 "All connection attempts failed"。
+# 方案：调用点先 _ensure_lab_service()——在线秒回；离线则复用 supervisor.launch_any 本机代启
+# 并等健康（冷启动这一次多等几十秒，之后与常驻无异）。这些服务空闲时不占实时链显存预算，
+# 与 _ENGINE_ONDEMAND（echomimic/latentsync）的「按需」哲学同源，只是把预热做成了全自动。
+class _SvcDown(Exception):
+    """离线功能服务不可用且无法代启动（对用户可见的人话在 .detail）。"""
+    def __init__(self, key: str, detail: str = ""):
+        self.key = key
+        self.detail = detail
+        super().__init__(detail)
+
+
+def _svc_down_http(e: "_SvcDown") -> HTTPException:
+    """_SvcDown → 结构化 503（P0-3）：detail 为 dict，前端据 code=SVC_DOWN 渲染
+    「XX服务未就绪 → 重试会自动启动」而不是英文异常原文。"""
+    meta = app_config.SERVICES.get(e.key, {})
+    label = meta.get("label", e.key)
+    return HTTPException(503, {
+        "code": "SVC_DOWN", "service": e.key, "label": label,
+        "port": meta.get("port", 0),
+        "message": f"「{label}」未就绪：{e.detail or '服务离线'}",
+        "can_start": _supervisor is not None and not _GPU_RELEASED,
+    })
+
+
+#   健康等待预算（秒）：按各服务实测冷启动时长给足余量；makeup 无 GPU 起得快
+_LAB_START_WAIT = {"hair": 60, "makeup": 25, "tryon": 120, "videotryon": 90, "dfm_lab": 25}
+_lab_start_locks: dict = {}     # key -> asyncio.Lock：并发点击只代启一次
+
+
+async def _ensure_lab_service(key: str, wait_s: float = 0) -> dict:
+    """确保离线功能服务在线：在线→秒回；离线→本机代启并轮询健康到就绪/超预算。
+    返回 {"up", "started", "detail", "elapsed_ms"}；不抛异常，调用方按 up 决定放行或 _SvcDown。"""
+    h = await asyncio.to_thread(_svc_health_quick, key)
+    if h.get("up"):
+        return {"up": True, "started": False, "detail": "已在线"}
+    if _GPU_RELEASED:
+        return {"up": False, "started": False,
+                "detail": "GPU 已释放（显存让给了另一台机器），请先在运维页「启用」"}
+    if _supervisor is None or not _engine_launchable(key):
+        return {"up": False, "started": False, "detail": h.get("detail") or "服务离线（supervisor 不可用，无法代启动）"}
+    _env = (app_config.SERVICES.get(key) or {}).get("env", "")
+    if _env and not app_config.env_installed(_env):
+        # 档位感知（同 supervisor.ensure_up）：环境没装就别 spawn——必失败还占满等待预算
+        return {"up": False, "started": False, "detail": f"运行环境 {_env} 未安装（当前档位不含此功能）"}
+    lock = _lab_start_locks.setdefault(key, asyncio.Lock())
+    t0 = time.time()
+    async with lock:
+        h = await asyncio.to_thread(_svc_health_quick, key)   # 等锁期间可能已被并发请求拉起
+        if h.get("up"):
+            return {"up": True, "started": False, "detail": "已在线"}
+        _PARK_SUSPEND.discard(key)          # 用户主动要用=解除挂起（与 engine/start 语义一致）
+        r = await asyncio.to_thread(_supervisor.launch_any, key)
+        if not r.get("ok"):
+            return {"up": False, "started": False,
+                    "detail": f"代启动失败：{(r.get('reason') or r.get('error') or '未知原因')}"[:160]}
+        _logger.info(f"[LabSvc] {key} 离线 → 已按需代启动(pid={r.get('pid')})，等健康就绪…")
+        budget = float(wait_s) if wait_s else float(_LAB_START_WAIT.get(key, 45))
+        while time.time() - t0 < budget:
+            await asyncio.sleep(2)
+            h = await asyncio.to_thread(_svc_health_quick, key)
+            if h.get("up"):
+                _warm_health_for([key])     # 就绪即刷健康缓存，labSvc/门控立刻翻正
+                ms = int((time.time() - t0) * 1000)
+                _logger.info(f"[LabSvc] {key} 代启动就绪，用时 {ms}ms")
+                _look_funnel_record(f"svc_start:{key}", True, ms)     # P2-3 自动拉起频次/成功率
+                return {"up": True, "started": True, "elapsed_ms": ms, "detail": "已自动启动"}
+        _look_funnel_record(f"svc_start:{key}", False, int((time.time() - t0) * 1000),
+                            reason=f"{int(budget)}s 内未就绪")
+        return {"up": False, "started": True, "elapsed_ms": int((time.time() - t0) * 1000),
+                "detail": f"已代启动但 {int(budget)}s 内未就绪（大概率还在冷启动加载模型，稍后重试即可）"}
+
+
+@app.post("/api/services/ensure")
+async def api_services_ensure(name: str, wait_s: float = 0):
+    """统一「按需拉起并等就绪」入口（P0-1）：前端三态按钮/预热调用。与 /api/engine/start 的区别：
+    本端点会阻塞等健康就绪（引擎口只负责 spawn），返回 ok=最终是否在线。wait_s 上限 150s 防挂死。"""
+    if not _engine_launchable(name):
+        raise HTTPException(404, f"未知服务: {name}")
+    r = await _ensure_lab_service(name, wait_s=min(float(wait_s), 150.0) if wait_s else 0)
+    return {"ok": bool(r.get("up")), "service": name, **r}
+
+
+# ── P2-3 离线出片成功率漏斗 ──────────────────────────────────────────────
+# 市场侧核心质量指标是「点了定妆/试衣 → 一次成功」的比率，不是功能数量。此前只有入口点击埋点
+# （ui_events.jsonl，看"哪被点"），没有结果埋点（成功/失败/为何失败）——失败原因全散在日志里
+# 没法聚合。本通道按次记录 kind/ok/ms/reason/autostart，/api/look/funnel 聚合给 /ops 看板。
+_LOOK_FUNNEL_PATH = Path(rf"{_BASE}\logs\look_funnel.jsonl")
+_LOOK_FUNNEL_MAX_LINES = 4000
+_look_funnel_n = {"writes": 0}
+_look_funnel_lock = threading.Lock()
+
+_LOOK_FUNNEL_LABEL = {"hair": "发型定妆", "makeup": "妆容定妆", "lookpack": "一键定妆包",
+                      "tryon": "试衣定妆", "tryon_preview": "试穿预览",
+                      "videotryon": "动态试衣提交"}
+
+
+def _look_funnel_record(kind: str, ok: bool, ms: int = 0, reason: str = "",
+                        autostart: bool = False):
+    """一次离线出片尝试的结果埋点（只写、防滥用截断；绝不抛异常反噬业务）。"""
+    try:
+        rec = {"ts": round(time.time(), 3), "kind": kind, "ok": bool(ok), "ms": int(ms)}
+        if reason:
+            rec["reason"] = str(reason)[:200]
+        if autostart:
+            rec["autostart"] = True
+        _LOOK_FUNNEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with _look_funnel_lock:
+            with open(_LOOK_FUNNEL_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            _look_funnel_n["writes"] += 1
+            if _look_funnel_n["writes"] % 200 == 0:
+                try:
+                    lines = _LOOK_FUNNEL_PATH.read_text(encoding="utf-8").splitlines()
+                    if len(lines) > _LOOK_FUNNEL_MAX_LINES:
+                        _LOOK_FUNNEL_PATH.write_text(
+                            "\n".join(lines[-(_LOOK_FUNNEL_MAX_LINES // 2):]) + "\n",
+                            encoding="utf-8")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def _http_detail_text(detail) -> str:
+    """HTTPException.detail 可能是 str 或结构化 dict(SVC_DOWN)——统一成埋点可读文案。"""
+    if isinstance(detail, dict):
+        return str(detail.get("message") or detail.get("code") or detail)[:200]
+    return str(detail)[:200]
+
+
+def _look_funnel_wrap(kind: str):
+    """离线出片端点的结果埋点装饰器：成败/耗时/失败原因一次接住（放在 @app.post 之下）。
+    functools.wraps 保 __wrapped__ → FastAPI 仍按原函数签名做依赖注入，路由行为零变化。"""
+    import functools
+
+    def deco(fn):
+        @functools.wraps(fn)
+        async def wrapper(*a, **kw):
+            t0 = time.time()
+            try:
+                out = await fn(*a, **kw)
+            except HTTPException as e:
+                _look_funnel_record(kind, False, int((time.time() - t0) * 1000),
+                                    reason=_http_detail_text(e.detail))
+                raise
+            except Exception as e:
+                _look_funnel_record(kind, False, int((time.time() - t0) * 1000),
+                                    reason=str(e)[:200])
+                raise
+            ok, reason = True, ""
+            if isinstance(out, dict) and "ok" in out:
+                ok = bool(out.get("ok"))
+                if not ok:
+                    reason = str(out.get("detail") or out.get("steps") or "")[:200]
+            _look_funnel_record(kind, ok, int((time.time() - t0) * 1000), reason=reason)
+            return out
+        return wrapper
+    return deco
+
+
+@app.get("/api/look/funnel")
+def api_look_funnel(days: float = 7.0):
+    """离线出片成功率聚合（近 N 天）：按功能维度 n/ok/成功率/均耗时 + 最近失败原因清单。
+    供 /ops「出片成功率」卡渲染；文件缺失 → available=False 优雅降级。"""
+    try:
+        if not _LOOK_FUNNEL_PATH.exists():
+            return {"ok": True, "available": False}
+        cutoff = time.time() - max(days, 0.1) * 86400.0
+        by_kind: dict = {}
+        recent_fails: list = []
+        starts = {"n": 0, "ok": 0}
+        for ln in _LOOK_FUNNEL_PATH.read_text(encoding="utf-8").splitlines()[-_LOOK_FUNNEL_MAX_LINES:]:
+            try:
+                r = json.loads(ln)
+            except Exception:
+                continue
+            if r.get("ts", 0) < cutoff:
+                continue
+            k = r.get("kind", "")
+            if k.startswith("svc_start:"):
+                starts["n"] += 1
+                starts["ok"] += 1 if r.get("ok") else 0
+                continue
+            d = by_kind.setdefault(k, {"n": 0, "ok": 0, "ms_sum": 0, "ms_n": 0})
+            d["n"] += 1
+            if r.get("ok"):
+                d["ok"] += 1
+                d["ms_sum"] += r.get("ms", 0)
+                d["ms_n"] += 1
+            else:
+                recent_fails.append({"ts": r.get("ts"), "kind": k,
+                                     "reason": r.get("reason", "")})
+        out = []
+        for k, d in by_kind.items():
+            out.append({"kind": k, "label": _LOOK_FUNNEL_LABEL.get(k, k),
+                        "n": d["n"], "ok": d["ok"],
+                        "rate": round(d["ok"] / d["n"], 3) if d["n"] else None,
+                        "avg_ms": int(d["ms_sum"] / d["ms_n"]) if d["ms_n"] else None})
+        out.sort(key=lambda x: -x["n"])
+        return {"ok": True, "available": bool(out or starts["n"]), "days": days,
+                "kinds": out, "svc_starts": starts,
+                "recent_fails": recent_fails[-8:][::-1]}
+    except Exception as e:
+        return {"ok": False, "detail": str(e)[:200]}
+
+
 @app.get("/api/lab/services")
 def api_lab_services():
     """实验室/离线功能服务就绪态（发型/试衣），供 UI 决定是否展示可点击入口。"""
@@ -24326,8 +24604,15 @@ def rvc_config(body: dict):
                 body["index_path"] = ""
                 body["index_rate"] = 0.0
                 _logger.info(f"[rvc] {pth_stem} 无匹配 .index，关闭 index 检索后放行")
-        r = requests.post(f"{SERVICES['rvc']}/config", json=body, headers=_svc_req_headers(), timeout=10)
-        return r.json()
+        # 引擎侧 /config 现在会热重启转换(停→配→起)，重启含模型加载可达数秒~数十秒，
+        # 沿用旧 10s 会在正常热切时超时报「服务不可达」假故障
+        r = requests.post(f"{SERVICES['rvc']}/config", json=body, headers=_svc_req_headers(), timeout=60)
+        res = r.json()
+        # RVC-P1 诚实滑块：把「index 检索是否真的生效」回传前端——无 .index 时引擎强制
+        # index_rate=0，「音色贴合度」滑块实际无效，前端据此置灰并说明，不再假装有效
+        if r.status_code == 200 and isinstance(res, dict):
+            res["index_active"] = bool(body.get("index_path"))
+        return res
     except Exception as e:
         raise HTTPException(502, f"RVC 服务不可达: {e}")
 
@@ -24335,8 +24620,10 @@ def rvc_config(body: dict):
 def rvc_start():
     """开始 RVC 实时变声"""
     try:
-        r = requests.post(f"{SERVICES['rvc']}/start", headers=_svc_req_headers(), timeout=10)
+        # 首次 /start 需加载 hubert(181MB)+模型，10s 不够
+        r = requests.post(f"{SERVICES['rvc']}/start", headers=_svc_req_headers(), timeout=60)
         if r.status_code == 200 or (r.status_code == 400 and "already" in r.text.lower()):
+            _rvc_funnel_start()        # RVC-P1 漏斗：须在 mark 前调（靠旧旗标识别重复点击）
             _rvc_conv_mark(True)       # P4-3 转换在跑：设备表进入冻结期
         return r.json()
     except Exception as e:
@@ -24347,6 +24634,7 @@ def rvc_stop():
     """停止 RVC 实时变声"""
     try:
         r = requests.post(f"{SERVICES['rvc']}/stop", headers=_svc_req_headers(), timeout=10)
+        _rvc_funnel_stop()             # RVC-P1 漏斗：须在 mark 前调（60s 内主动停=快速放弃）
         _rvc_conv_mark(False)          # 200=刚停 / 400=本来没跑，此刻都不在跑
         return r.json()
     except Exception as e:
@@ -24364,6 +24652,53 @@ _RVC_CONV = {"active": False, "ts": 0.0}
 def _rvc_conv_mark(active: bool):
     _RVC_CONV["active"] = bool(active)
     _RVC_CONV["ts"] = time.time()
+
+
+# ── RVC-P1: 引擎真实状态缓存（/realtime/status 顺风车 → 前端真实徽章/静音告警）────
+#   此前前端「变声中」徽章 = 猜测(6242 端口活着 or hub 旗标)；引擎 /status 是单一真相：
+#   running=拾音流真在跑、out_rms=最近 2s 输出电平(持续 0=观众听不到)、stalled=推理疑似卡死。
+_RVC_ENG_STATUS_CACHE = {"ts": 0.0, "data": None}
+
+
+def _rvc_engine_status(ttl: float = 3.0):
+    """拉引擎 /status（TTL 缓存；离线/旧版引擎无该端点 → None，前端回退旧启发式）。
+    顺带把 hub 侧 _RVC_CONV 旗标与引擎真相对齐（hub 重启丢旗标后自愈）。"""
+    now = time.time()
+    if now - _RVC_ENG_STATUS_CACHE["ts"] < ttl:
+        return _RVC_ENG_STATUS_CACHE["data"]
+    data = None
+    try:
+        r = requests.get(f"{SERVICES['rvc']}/status", headers=_svc_req_headers(), timeout=1.5)
+        if r.status_code == 200:
+            data = r.json()
+    except Exception:
+        data = None
+    _RVC_ENG_STATUS_CACHE.update(ts=now, data=data)
+    if isinstance(data, dict) and bool(data.get("running")) != _RVC_CONV["active"]:
+        _rvc_conv_mark(bool(data.get("running")))
+    return data
+
+
+# ── RVC-P1 漏斗埋点：开始变声 → 60s 内主动停止（疑似「没效果」放弃）──────────
+#   只在用户动作路径(/rvc/start /rvc/stop 代理)计数，不掺引擎状态同步/热切的机器动作，
+#   语义干净：quick_stop 高 ⇒ 用户听不到效果就放弃 ⇒ 变声体验有问题的直接量化证据。
+_RVC_FUNNEL = {"start_ts": 0.0}
+
+
+def _rvc_funnel_start():
+    if not _RVC_CONV["active"]:          # already-running 的重复点击不重记
+        _RVC_FUNNEL["start_ts"] = time.time()
+        _metrics["rvc_conv_start_total"] = _metrics.get("rvc_conv_start_total", 0) + 1
+
+
+def _rvc_funnel_stop():
+    t0 = _RVC_FUNNEL.get("start_ts") or 0.0
+    if t0 and _RVC_CONV["active"]:
+        dur = time.time() - t0
+        if dur <= 60.0:
+            _metrics["rvc_conv_quick_stop_total"] = _metrics.get("rvc_conv_quick_stop_total", 0) + 1
+            _logger.info(f"[rvc-funnel] 快速停止：转换仅跑了 {dur:.0f}s（疑似效果不符预期）")
+    _RVC_FUNNEL["start_ts"] = 0.0
 
 
 def _hot_switch_ledger(res: dict, src: str = ""):
@@ -24473,7 +24808,25 @@ def _rvc_hot_switch_inner(body: dict) -> dict:
     #    (api_240604 修复：转换中 sd._terminate 重枚举会炸死拾音流)，拔插后新出现的设备在冻结表里
     #    没有 → 400 not available。这正是热切的主场景，所以回退链：停转换(设备表解冻)→重配→再启。
     was_running = None            # None=还没 stop 过；True/False=stop 的裁决
-    r = _post("/config", 15)
+    r = _post("/config", 30)
+    if r.status_code == 200:
+        # 引擎侧 /config 已支持热重启(停→配→起)：restarted=true 表示新设备已接进拾音流，
+        # 再走下面的 stop→start 只会多一次 ~2s 断声，直接短路成功。
+        try:
+            if bool(r.json().get("restarted")):
+                _rvc_conv_mark(True)
+                in_label = out_label = ""
+                try:
+                    import device_enum as _de
+                    in_label = _de.label_for(inp, "in")
+                    out_label = _de.label_for(out, "out")
+                except Exception:
+                    pass
+                return {**base, "ok": True, "step": "done", "was_running": True, "started": True,
+                        "input": inp, "input_label": in_label,
+                        "output": out, "output_label": out_label, "detail": ""}
+        except Exception:
+            pass
     if r.status_code != 200:
         first_err = r.text[:300]
         r_stop = _post("/stop", 10)
@@ -25315,6 +25668,7 @@ async def api_look_history_delete(name: str, hid: str):
 
 
 @app.post("/api/profiles/{name}/hair_preset")
+@_look_funnel_wrap("hair")
 async def api_profile_hair_preset(name: str, body: dict = Body(default={})):
     """离线跑发型迁移(8001)得到「定妆脸」存入角色。body:{hair_style?, hair_image_b64?, apply?=true}。
     hair_style=已上传样式名(服务端激活后用)；hair_image_b64=直接给参考图；都空=用 8001 当前激活样式。"""
@@ -25324,6 +25678,11 @@ async def api_profile_hair_preset(name: str, body: dict = Body(default={})):
         raise HTTPException(404, "角色不存在")
     if not p.get("face_b64"):
         raise HTTPException(400, "角色未绑定人脸图，先在角色库绑脸")
+    # P0-1: 发型服务离线不再直接 503——先按需代启动（START_EXTRAS=0 启动的机器上 8001 默认没起，
+    # 这曾是「定妆失败: All connection attempts failed」的根因），起不来才给结构化人话错误。
+    ens = await _ensure_lab_service("hair")
+    if not ens.get("up"):
+        raise _svc_down_http(_SvcDown("hair", ens.get("detail", "")))
     style = (body.get("hair_style") or "").strip()
     hair_b64 = (body.get("hair_image_b64") or "").strip()
     if style and not hair_b64:
@@ -25331,13 +25690,15 @@ async def api_profile_hair_preset(name: str, body: dict = Body(default={})):
             await http_pool.post(f"{SERVICES['hair']}/hair_styles/activate",
                                  json={"name": style}, timeout=5)
         except Exception as e:
-            raise HTTPException(503, f"发型服务(8001)不可达：{str(e)[:120]}")
+            raise _svc_down_http(_SvcDown("hair", f"样式激活失败：{str(e)[:100]}"))
     try:                        # HairFastGAN 5-10s + 冷启动余量（闸抖动自带退避重试）
+        # 刚代启动的进程模型还没加载（懒加载首载 ~90s），90s 超时会擦边失败 → 放宽到 180s
         r = await _hair_transfer_call({"source_image": p["face_b64"],
-                                       "hair_image": hair_b64}, timeout=90)
+                                       "hair_image": hair_b64},
+                                      timeout=180 if ens.get("started") else 90)
         j = r.json()
     except Exception as e:
-        raise HTTPException(503, f"发型迁移超时/不可达：{str(e)[:120]}")
+        raise _svc_down_http(_SvcDown("hair", f"迁移超时/不可达：{str(e)[:100]}"))
     if r.status_code != 200 or not j.get("result_image"):
         raise HTTPException(502, f"发型迁移失败：{str(j.get('detail') or r.status_code)[:160]}")
     async with _PROFILES_LOCK:
@@ -25439,6 +25800,7 @@ def _vtryon_is_vram_reject(status: int, j) -> bool:
 
 
 @app.post("/api/videotryon/submit")
+@_look_funnel_wrap("videotryon")
 async def api_videotryon_submit(body: dict = Body(default={})):
     """动态试衣提交：角色的待机微动/底视频 + 服装 → CatV2TON 视频换装作业。
     body:{profile(必填), cloth_name?|cloth_b64?, cloth_type?=upper,
@@ -25472,18 +25834,11 @@ async def api_videotryon_submit(body: dict = Body(default={})):
     else:
         raise HTTPException(400, "请指定服装（cloth_name 或上传 cloth_b64）")
 
-    # 服务未起 → supervisor 代拉（懒加载服务启动秒级，不用等模型）
-    try:
-        h = await http_pool.get(f"{SERVICES['videotryon']}/health",
-                                headers=_svc_req_headers(), timeout=3)
-        _ = h.json()
-    except Exception:
-        if _supervisor is not None:
-            try:
-                await asyncio.to_thread(_supervisor.ensure_up, "videotryon")
-                await asyncio.sleep(6)
-            except Exception:
-                pass
+    # 服务未起 → 按需代启动并等健康（P1：统一走 _ensure_lab_service——带并发锁/档位感知/
+    # 就绪轮询，替代旧的「ensure_up + 盲睡 6s」：懒加载服务通常秒级就绪，慢机也不会白提交失败）
+    ens = await _ensure_lab_service("videotryon")
+    if not ens.get("up"):
+        raise _svc_down_http(_SvcDown("videotryon", ens.get("detail", "")))
 
     # 主动腾挪（E2E 实锤的设计课）：只在 503 被拒后才腾挪的话，「闸门擦边放行」
     # 的单子会带着 lipsync/ditto 同卡开跑——去噪勉强撑过，解码期配额被物理空闲
@@ -25671,6 +26026,9 @@ def _live_makeup_suggest(p: dict, applied: dict) -> None:
 async def _makeup_call(source_b64: str, style: str = "", ref_b64: str = "",
                        params: dict | None = None) -> dict:
     """调用妆容服务(8004)。失败抛 HTTPException（调用方决定软降级或透传）。"""
+    ens = await _ensure_lab_service("makeup")     # P0-1: 离线先代启动（CPU 服务，冷启 <10s）
+    if not ens.get("up"):
+        raise _svc_down_http(_SvcDown("makeup", ens.get("detail", "")))
     body = {"source_image": source_b64}
     if ref_b64:
         body["ref_image"] = ref_b64
@@ -25683,13 +26041,14 @@ async def _makeup_call(source_b64: str, style: str = "", ref_b64: str = "",
                                  json=body, headers=_svc_req_headers(), timeout=60)
         j = r.json()
     except Exception as e:
-        raise HTTPException(503, f"妆容服务(8004)不可达：{str(e)[:120]}")
+        raise _svc_down_http(_SvcDown("makeup", f"调用失败：{str(e)[:100]}"))
     if r.status_code != 200 or not j.get("result_image"):
         raise HTTPException(502, f"妆容迁移失败：{str(j.get('detail') or r.status_code)[:160]}")
     return j
 
 
 @app.post("/api/profiles/{name}/makeup_preset")
+@_look_funnel_wrap("makeup")
 async def api_profile_makeup_preset(name: str, body: dict = Body(default={})):
     """离线上妆得到「定妆脸」存入角色。body:{style?, ref_image_b64?, params?, apply?=true}。
     基底自动选 face_hair_b64(发型定妆结果) > face_b64——妆容重跑不丢发型。"""
@@ -25725,6 +26084,7 @@ async def api_profile_makeup_preset(name: str, body: dict = Body(default={})):
 
 
 @app.post("/api/profiles/{name}/look_pack")
+@_look_funnel_wrap("lookpack")
 async def api_profile_look_pack(name: str, body: dict = Body(default={})):
     """一键定妆包：原脸 → 发型(可选) → 妆容(可选) 链式烘焙进 face_styled_b64。
     body:{hair_style?, hair_image_b64?, makeup_style?, makeup_ref_b64?, makeup_params?, apply?=true}
@@ -25745,13 +26105,17 @@ async def api_profile_look_pack(name: str, body: dict = Body(default={})):
     if want_hair:
         _t = time.time()
         try:
+            ens = await _ensure_lab_service("hair")     # P0-1: 离线先代启动，起不来才软降级跳过
+            if not ens.get("up"):
+                raise RuntimeError(f"发型服务未就绪（{ens.get('detail', '离线')[:100]}）")
             style = (body.get("hair_style") or "").strip()
             hair_b64 = (body.get("hair_image_b64") or "").strip()
             if style and not hair_b64:
                 await http_pool.post(f"{SERVICES['hair']}/hair_styles/activate",
                                      json={"name": style}, headers=_svc_req_headers(), timeout=5)
             r = await _hair_transfer_call({"source_image": base,
-                                           "hair_image": hair_b64}, timeout=90)
+                                           "hair_image": hair_b64},
+                                          timeout=180 if ens.get("started") else 90)
             j = r.json()
             if r.status_code != 200 or not j.get("result_image"):
                 raise RuntimeError(str(j.get("detail") or r.status_code)[:160])
@@ -26223,6 +26587,7 @@ async def api_tryon_extract_cloth(body: dict = Body(default={})):
 
 
 @app.post("/api/tryon/preview")
+@_look_funnel_wrap("tryon_preview")
 async def api_tryon_preview(body: dict = Body(default={})):
     """试穿预览：只出图不落库（落库用 /api/profiles/{name}/tryon_preset）。
     body:{person_image_b64?, profile?, cloth_name?, cloth_b64?, resolution?, cloth_type?}
@@ -26239,6 +26604,9 @@ async def api_tryon_preview(body: dict = Body(default={})):
         raise HTTPException(400, "需要 person_image_b64（全身/半身照）——该角色暂无存照，先传一次")
     if body.get("person_image_b64") and prof:     # 预览传新照也顺手存档（与定妆端一致）
         _save_body_photo(prof, person_b64)
+    ens = await _ensure_lab_service("tryon")      # P1: 离线先代启动（FitDiT 进程秒起、模型懒加载）
+    if not ens.get("up"):
+        raise _svc_down_http(_SvcDown("tryon", ens.get("detail", "")))
     req_body: dict = {"person_image": person_b64}
     if body.get("cloth_b64"):
         req_body["cloth_image"] = body["cloth_b64"]
@@ -26435,6 +26803,7 @@ async def _tryon_animate_ditto(img_bytes: bytes, secs: float, out_path: Path) ->
 
 
 @app.post("/api/profiles/{name}/tryon_preset")
+@_look_funnel_wrap("tryon")
 async def api_profile_tryon_preset(name: str, body: dict = Body(default={})):
     """试衣定妆：全身照 + 服装 → tryon(8002) → 结果图存 data/tryon/<name>/ →
     Ditto 静默驱动待机微动(在线时) 或 ffmpeg 静帧循环 mp4 → 写入角色 body_video/idle_video。
@@ -26459,6 +26828,9 @@ async def api_profile_tryon_preset(name: str, body: dict = Body(default={})):
     if field not in ("body_video", "idle_video"):
         raise HTTPException(400, "field 只能是 body_video 或 idle_video")
 
+    ens = await _ensure_lab_service("tryon")      # P1: 离线先代启动，起不来才给结构化人话错误
+    if not ens.get("up"):
+        raise _svc_down_http(_SvcDown("tryon", ens.get("detail", "")))
     req_body = {"person_image": person_b64}
     cloth_b64 = (body.get("cloth_b64") or "").strip()
     cloth_name = (body.get("cloth_name") or "").strip()
@@ -27888,19 +28260,26 @@ async def api_delivery_selfcheck():
         add("pages", "前端页面", "fail", "缺失页面：%s" % "、".join(missing),
             "确认 static/ 目录完整部署")
 
-    # 4) 核心服务在线
+    # 4) 核心服务在线（P6-B·2026-07-16 对齐 broadcast.core 单一真相：交付体检曾用
+    #    静态清单恒列 lipsync/vcam 为核心 → 真人换脸模式(HUB_SUP_VCAM=0)恒报"广播中枢未就绪"
+    #    假警告——与 /health 首页状态条/首启卡/自愈同一批根治口径，见 _compute_broadcast 注释）
     try:
         h = await health()
     except Exception as e:
         h = {"services": {}, "pressure": "unknown", "detail": str(e)}
     svc = h.get("services", {}) or {}
-    core = [("fish_tts", "克隆音TTS"), ("stt", "语音识别"),
-            ("lipsync", "活体口型"), ("vcam", "广播中枢")]
-    down = [lbl for k, lbl in core if not svc.get(k)]
+    _lbl = {"fish_tts": "克隆音TTS", "stt": "语音识别", "lipsync": "活体口型",
+            "vcam": "广播中枢", "faceswap": "实时换脸"}
+    bc = h.get("broadcast") or {}
+    core_keys = list(bc.get("core") or ["fish_tts", "stt", "lipsync", "vcam"])
+    down = [_lbl.get(k, k) for k in core_keys if not svc.get(k)]
+    _mode_note = "（真人换脸模式）" if bc.get("mode") == "real_faceswap" else \
+                 "（数字人模式）" if bc.get("mode") == "avatar_lipsync" else ""
     if not down:
-        add("services", "核心服务", "ok", "克隆音 / 识别 / 口型 / 广播 全部在线")
+        add("services", "核心服务", "ok",
+            "开播核心链路全部在线%s：%s" % (_mode_note, " / ".join(_lbl.get(k, k) for k in core_keys)))
     else:
-        add("services", "核心服务", "warn", "未就绪：%s" % "、".join(down),
+        add("services", "核心服务", "warn", "未就绪%s：%s" % (_mode_note, "、".join(down)),
             "在控制台/向导确认对应服务已启动")
     pressure = h.get("pressure", "unknown")
     if pressure in ("red",):
@@ -30261,20 +30640,23 @@ async def ws_status(ws: WebSocket):
 #   service?(关联 SERVICES 键，首页据 /health 显示就绪点；不在线→灰显"离线"不报错) / edition(free|pro，仅展示标注)
 # ic = static/brand-icons.svg 线性图标名（2026-07-16 图标统一）：桌面启动台工作台/网页首页/
 # 命令面板共用同一图标库；icon(emoji) 保留给尚未接线性图标的消费面，逐步退役。
+# [四视角 M2·2026-07-16] 产品线命名统一到官方「三系七品」口径（幻声 VoiceX / 智聊 ChatX /
+# 幻影 LiveX / 通译 LingoX）——官网、安装器、首页、启动台工作台、命令面板从此一套叫法。
+# line 是展示分组标签（本注册表为单一真相，改这里三端自动跟随）；id/href 保持不变（深链兼容）。
 FEATURE_REGISTRY = [
-    # —— VoiceX 音色 ——
-    {"id": "profiles", "line": "VoiceX 音色", "name": "角色库",   "desc": "管理数字人角色与音色档案",   "icon": "🎭", "ic": "users", "href": "/ui#profiles", "edition": "free"},
-    {"id": "clone",    "line": "VoiceX 音色", "name": "声音克隆", "desc": "一段样本即可克隆专属音色",   "icon": "🧬", "ic": "copy", "href": "/ui#clone", "service": "fish_tts", "edition": "free"},
-    {"id": "voice",    "line": "VoiceX 音色", "name": "语音合成", "desc": "文本→自然语音，多引擎可选", "icon": "🎙️", "ic": "mic", "href": "/ui#voice", "service": "fish_tts", "edition": "free"},
-    {"id": "sing",     "line": "VoiceX 音色", "name": "AI 唱歌",  "desc": "用克隆音色演唱歌曲",         "icon": "🎵", "ic": "music", "href": "/ui#sing", "service": "singing", "edition": "pro"},
-    {"id": "batch",    "line": "VoiceX 音色", "name": "批量配音", "desc": "批量文本一键合成",           "icon": "📦", "ic": "package", "href": "/ui#batch", "service": "fish_tts", "edition": "pro"},
-    # —— ChatX 对话 ——
-    {"id": "phone",    "line": "ChatX 对话",  "name": "实时对话", "desc": "手机/桌面，免提语音对话数字人", "icon": "💬", "ic": "chat", "href": "/phone", "service": "stt", "edition": "free"},
-    {"id": "converse", "line": "ChatX 对话",  "name": "对话测试台", "desc": "浏览器内调试对话链路",     "icon": "🧪", "ic": "flask", "href": "/converse", "service": "stt", "edition": "free"},
-    # —— LiveX 直播（换脸/口型/虚拟摄像头统一在开播中枢配置，避免指向无独立页面的服务端口）——
-    {"id": "stream",   "line": "LiveX 直播",  "name": "开播中枢", "desc": "换脸·口型·虚拟摄像头一体直播", "icon": "📡", "ic": "signal", "href": "/ui#stream", "service": "vcam", "edition": "pro"},
-    # —— LingoX 同传 ——
-    {"id": "interp",   "line": "LingoX 同传", "name": "实时同传", "desc": "多语种语音实时互译",         "icon": "🌐", "ic": "globe", "href": "/ui#interp", "edition": "pro"},
+    # —— 幻声 VoiceX（克隆声/合成/唱歌）——
+    {"id": "profiles", "line": "幻声 VoiceX", "name": "角色库",   "desc": "管理数字人角色与音色档案",   "icon": "🎭", "ic": "users", "href": "/ui#profiles", "edition": "free"},
+    {"id": "clone",    "line": "幻声 VoiceX", "name": "声音克隆", "desc": "一段样本即可克隆专属音色",   "icon": "🧬", "ic": "copy", "href": "/ui#clone", "service": "fish_tts", "edition": "free"},
+    {"id": "voice",    "line": "幻声 VoiceX", "name": "语音合成", "desc": "文本→自然语音，多引擎可选", "icon": "🎙️", "ic": "mic", "href": "/ui#voice", "service": "fish_tts", "edition": "free"},
+    {"id": "sing",     "line": "幻声 VoiceX", "name": "AI 唱歌",  "desc": "用克隆音色演唱歌曲",         "icon": "🎵", "ic": "music", "href": "/ui#sing", "service": "singing", "edition": "pro"},
+    {"id": "batch",    "line": "幻声 VoiceX", "name": "批量配音", "desc": "批量文本一键合成",           "icon": "📦", "ic": "package", "href": "/ui#batch", "service": "fish_tts", "edition": "pro"},
+    # —— 智聊 ChatX（实时对话）——
+    {"id": "phone",    "line": "智聊 ChatX",  "name": "实时对话", "desc": "手机/桌面，免提语音对话数字人", "icon": "💬", "ic": "chat", "href": "/phone", "service": "stt", "edition": "free"},
+    {"id": "converse", "line": "智聊 ChatX",  "name": "对话测试台", "desc": "浏览器内调试对话链路",     "icon": "🧪", "ic": "flask", "href": "/converse", "service": "stt", "edition": "free"},
+    # —— 幻影 LiveX（换脸/口型/虚拟摄像头统一在开播中枢配置，避免指向无独立页面的服务端口）——
+    {"id": "stream",   "line": "幻影 LiveX",  "name": "开播中枢", "desc": "换脸·口型·虚拟摄像头一体直播", "icon": "📡", "ic": "signal", "href": "/ui#stream", "service": "vcam", "edition": "pro"},
+    # —— 通译 LingoX（实时同传）——
+    {"id": "interp",   "line": "通译 LingoX", "name": "实时同传", "desc": "多语种语音实时互译",         "icon": "🌐", "ic": "globe", "href": "/ui#interp", "edition": "pro"},
     # —— 运营 ——
     {"id": "dashboard","line": "运营",        "name": "数据看板", "desc": "业务与产出数据总览",         "icon": "📊", "ic": "chart", "href": "/dashboard", "edition": "free"},
     {"id": "ops",      "line": "运营",        "name": "运维监控", "desc": "服务健康与自愈监控",         "icon": "🩺", "ic": "probe", "href": "/ops", "edition": "free"},
@@ -30289,7 +30671,17 @@ FEATURE_REGISTRY = [
     {"id": "setup",    "line": "合规·可信",   "name": "首启向导", "desc": "开箱即用就绪检查",           "icon": "🚀", "ic": "zap", "href": "/setup", "edition": "free"},
 ]
 # 产品线展示顺序（首页分区顺序的单一真相）
-_FEATURE_LINES = ["VoiceX 音色", "ChatX 对话", "LiveX 直播", "LingoX 同传", "运营", "合规·可信"]
+_FEATURE_LINES = ["幻声 VoiceX", "智聊 ChatX", "幻影 LiveX", "通译 LingoX", "运营", "合规·可信"]
+# [P2-4·2026-07-16] 产品线视觉身份（"R G B" 三元组，CSS rgb(var()/α) 派生描边/底色/微光）：
+# 原为 home.html 前端私有表，迁入注册表随 /api/features 下发——首页/未来消费端同源取色，前端仅留离线兜底。
+_FEATURE_LINE_COLORS = {
+    "幻声 VoiceX": "79 122 255",    # 无界蓝（品牌主）
+    "智聊 ChatX":  "45 212 191",    # 青（对话气泡）
+    "幻影 LiveX":  "168 85 247",    # 幻紫
+    "通译 LingoX": "56 189 248",    # 天蓝
+    "运营":        "245 158 11",    # 琥珀（仪表/监控）
+    "合规·可信":   "52 211 153",    # 翠绿（信任/安全）
+}
 
 
 # ── 拼音检索索引（后端单一真源；供 home / ui 侧栏 / 命令面板 / 移动端复用）──────────────
@@ -30310,6 +30702,8 @@ except Exception:
         "日": "ri", "志": "zhi", "设": "she", "置": "zhi", "白": "bai", "标": "biao", "内": "nei", "容": "rong",
         "验": "yan", "真": "zhen", "知": "zhi", "识": "shi", "问": "wen", "答": "da", "首": "shou", "启": "qi",
         "向": "xiang", "导": "dao", "直": "zhi", "营": "ying", "规": "gui", "可": "ke", "信": "xin",
+        # 2026-07-16 产品线更名「三系七品」（幻声/智聊/幻影/通译）新增字
+        "幻": "huan", "智": "zhi", "聊": "liao", "影": "ying", "通": "tong", "译": "yi",
     }
     def _han_syllables(s):
         return [_PY_MAP[c] for c in (s or "") if c in _PY_MAP]
@@ -30348,8 +30742,10 @@ _augment_registry_pinyin()
 @app.get("/api/features")
 async def api_features():
     """功能注册表（单一真相）：驱动首页 home.html，后续可共用于 /ui 侧栏 / 命令面板 / 移动端。
-    GET 非敏感路径，默认放行（与 /api/license/status 同级开放）。"""
-    return {"ok": True, "lines": _FEATURE_LINES, "features": FEATURE_REGISTRY}
+    GET 非敏感路径，默认放行（与 /api/license/status 同级开放）。
+    line_colors: 产品线视觉身份（P2-4 起随注册表下发，前端仅留离线兜底表）。"""
+    return {"ok": True, "lines": _FEATURE_LINES, "line_colors": _FEATURE_LINE_COLORS,
+            "features": FEATURE_REGISTRY}
 
 
 # 统一首页（前门）：从 static/home.html 加载（镜像 /ui 的 no-store 写法）
@@ -30503,6 +30899,7 @@ _HELP_DOCS = {
 }
 _HELP_TMPL = """<!doctype html><html lang=zh><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1"><title>__TITLE__ · 使用教程</title>
+<meta name="theme-color" content="#080b10">
 <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
 <link rel="icon" type="image/png" sizes="256x256" href="/static/app-icon-256.png">
 <link rel="stylesheet" href="/static/brand.css">

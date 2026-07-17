@@ -233,7 +233,47 @@ DEFAULT_PORTS = {
     "vcam":        7870,
     "hub":         9000,
     "interpreter": 7900,
+    "monitor":     7878,   # 手机无线终端中继(monitor_relay，https=port+1)
+    "faceswap2":   8003,   # 换脸容灾副本(同脚本第二实例)
 }
+
+
+# ── 端口覆盖层（两套安装并存，2026-07-17） ──────────────────────────
+#   目的：同一台机器上「安装版 + 源码开发版」不打架——给其中一套整体挪端口段。
+#   覆盖优先级：环境变量 AVATARHUB_PORT_OFFSET > config.json["port_offset"]；
+#   精确覆盖：config.json["ports"] = {"hub": 9100, "interpreter": 8000, ...}（单个服务指定，
+#   优先于 offset）。默认零配置=零偏移，所有端口与历史完全一致（零回归）。
+#   示例（开发副本的 config.json）：{"port_offset": 2000}
+#   → hub 11000 / 同传 9900... 整段平移；port_guard 仍兜底防真撞。
+#   ⚠ 偏移值有坑：+100 让同传 7900→8000 撞出厂换脸口，+1000 让换脸 8000→9000 撞出厂 hub。
+#   2000 已验证与出厂端口集无交集；换别的值时 _port_collision_check 会当场警告(回归测试盯防)。
+def _port_layer() -> tuple[int, dict]:
+    off = 0
+    try:
+        off = int(os.environ.get("AVATARHUB_PORT_OFFSET") or CONFIG.get("port_offset") or 0)
+    except Exception:
+        off = 0
+    exact: dict = {}
+    for k, v in (CONFIG.get("ports") or {}).items():
+        try:
+            exact[str(k)] = int(v)
+        except Exception:
+            continue
+    return off, exact
+
+
+PORT_OFFSET, _PORTS_EXACT = _port_layer()
+
+
+def _eff_port(key: str, default: int) -> int:
+    """服务 key 的生效端口：精确覆盖 > 整体偏移 > 默认。"""
+    if key in _PORTS_EXACT:
+        return _PORTS_EXACT[key]
+    return int(default) + PORT_OFFSET
+
+
+if PORT_OFFSET or _PORTS_EXACT:
+    DEFAULT_PORTS = {k: _eff_port(k, v) for k, v in DEFAULT_PORTS.items()}
 
 
 # ── 启动器静态默认(SVC_*)兜底 ────────────────────────────────────────
@@ -325,6 +365,80 @@ SERVICES = {
     "interpreter": {"env": "facefusion",  "script": "live_interpreter.py",   "port": 7900, "health": "/health", "core": False, "gpu": False, "delay": 6,  "label": "实时同传 (通译 LingoX)"},
 }
 
+# 端口覆盖层落到 SERVICES（单一真相：launcher/doctor/supervisor 全部经此消费端口）。
+# faceswap2 的 env_extra["FACESWAP_PORT"] 是子进程实际监听依据，须与生效端口保持一致。
+_BASE_SERVICE_PORTS = {k: int(s["port"]) for k, s in SERVICES.items()}   # 出厂端口快照(冲突自检基准)
+if PORT_OFFSET or _PORTS_EXACT:
+    for _k, _s in SERVICES.items():
+        _s["port"] = _eff_port(_k, _s["port"])
+        _ee = _s.get("env_extra")
+        if _ee and "FACESWAP_PORT" in _ee:
+            _ee["FACESWAP_PORT"] = str(_s["port"])
+
+
+def _port_collision_check() -> list:
+    """覆盖层激活时的端口冲突自检（返回冲突描述，同时打印警告，不阻断——port_guard 兜底）。
+    查两类：① 生效端口集内互撞（两个服务同端口）；② 偏移后落回出厂端口集
+    （偏移选得不巧，如 +100 让同传 7900→8000 正撞另一套安装的换脸口 → 静默串门）。"""
+    bad: list = []
+    seen: dict = {}
+    for k, s in SERVICES.items():
+        p = int(s["port"])
+        if p in seen:
+            bad.append(f"{k}={p} 与 {seen[p]} 同端口(集内互撞)")
+        seen[p] = k
+    if PORT_OFFSET:
+        base_vals = {v: k for k, v in _BASE_SERVICE_PORTS.items()}
+        for k, s in SERVICES.items():
+            p = int(s["port"])
+            if p in base_vals and _BASE_SERVICE_PORTS.get(k) != p:
+                bad.append(f"{k} 偏移后={p} 落回出厂端口集(另一套安装的 {base_vals[p]} 可能正用)")
+    for _m in bad:
+        # 编码安全：app_config 被所有服务 import，Windows 子进程 stdout 常是 GBK——
+        # 警告绝不能反把导入炸了(测试实锤 ⚠ 字符在 GBK 下 UnicodeEncodeError)。
+        _line = f"[app_config] !! 端口覆盖层冲突: {_m}——请换 port_offset(推荐 2000)或用 ports 精确错开"
+        try:
+            print(_line, flush=True)
+        except UnicodeEncodeError:
+            print(_line.encode("ascii", "replace").decode("ascii"), flush=True)
+    return bad
+
+
+PORT_COLLISIONS: list = _port_collision_check() if (PORT_OFFSET or _PORTS_EXACT) else []
+
+
+def port(key: str) -> int:
+    """服务 key 的生效监听端口（含 config.json ports/port_offset 覆盖层）。
+    未登记的 key 返回 0（调用方自行兜底）。"""
+    if key in SERVICES:
+        return int(SERVICES[key]["port"])
+    return int(DEFAULT_PORTS.get(key, 0))
+
+
+# 服务 key → 子进程识别的端口环境变量名（launch 注入的单一真相）。
+# 子服务脚本各自认这些 env(历史约定)；覆盖层激活时由 supervisor/service_manager
+# 在拉起子进程时注入生效端口，子脚本无需感知覆盖层即可整段平移。
+PORT_ENV = {
+    "hub": "AVATARHUB_PORT", "interpreter": "INTERP_PORT", "monitor": "MONITOR_PORT",
+    "vcam": "VCAM_PORT", "faceswap": "FACESWAP_PORT", "faceswap2": "FACESWAP_PORT",
+    "fish_tts": "FISH_PORT", "stt": "STT_PORT", "lipsync": "LIPSYNC_PORT",
+    "nemo_stt": "NEMO_STT_PORT", "qwen3_tts": "QWEN3_TTS_PORT", "sbv2_tts": "SBV2_TTS_PORT",
+    "voxcpm": "VOXCPM_PORT", "emotion_tts": "EMOTION_TTS_PORT", "singing": "SONG_STUDIO_PORT",
+    "ace_studio": "ACE_STUDIO_PORT", "dfm_lab": "DFM_LAB_PORT",
+    "tts": "TTS_PORT", "hair": "HAIR_PORT", "makeup": "MAKEUP_PORT",
+    "enhance": "ENHANCE_PORT", "latentsync": "LATENTSYNC_PORT",
+    "tryon": "TRYON_PORT", "videotryon": "VIDEOTRYON_PORT",
+}
+
+
+def port_env_extra(key: str) -> dict:
+    """拉起子服务时应注入的端口环境变量({}=无需注入)。
+    仅覆盖层激活时才注入——零配置时不碰子进程环境(零回归)。"""
+    if not (PORT_OFFSET or _PORTS_EXACT):
+        return {}
+    ev = PORT_ENV.get(key)
+    return {ev: str(port(key))} if ev else {}
+
 
 # 外部仓服务目录（自带 repo + 独立 conda env，脚本不在项目根下）：
 #   Ditto 实时全脸口型在 C:\ditto，刻意**不**放进上面的 SERVICES —— SERVICES 被
@@ -388,7 +502,8 @@ def service_cors_origins() -> list:
     if env:
         return [o.strip() for o in env.split(",") if o.strip()]
     hub = svc_url("hub")          # 含 SVC_HUB 远程覆盖
-    base = {hub, "http://127.0.0.1:9000", "http://localhost:9000"}
+    _hp = DEFAULT_PORTS.get("hub", 9000)
+    base = {hub, f"http://127.0.0.1:{_hp}", f"http://localhost:{_hp}"}
     return sorted(o for o in base if o)
 
 

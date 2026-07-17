@@ -1,0 +1,809 @@
+<!-- ======================================================
+     Tab: 唱歌（Sing-P0 诚实化 + Song-P1 AI 翻唱：模式切换 / 音色来源 / 进度流水线 / 作品卡）
+====================================================== -->
+<div x-show="tab==='sing'" class="fade space-y-3">
+  <div class="bd-card p-4">
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+      <h2 class="bd-card-title">🎵 唱歌</h2>
+      <!-- 模式徽章：念白模式沿用 Sing-P0 三态；翻唱/点歌台按引擎能力如实显示 -->
+      <span x-show="singMode==='lyrics'"
+            :title="services.singing ? '完整唱歌引擎在线，将以歌唱模型演绎' : '当前以角色音色深情朗读歌词；想要真唱请切到 AI 翻唱模式'"
+            role="status"
+            class="text-[12px] px-2.5 py-1 rounded-full border cursor-default select-none"
+            :class="services.singing ? 'border-hub-green/40 text-hub-green bg-hub-green/10' : 'border-hub-blue/40 text-hub-blue bg-hub-blue/10'"
+            x-text="services.singing ? '🎶 完整唱歌引擎' : '🎙 深情念白模式'"></span>
+      <span x-show="singMode==='cover'"
+            :title="songCoverReady() ? '零样本歌声转换引擎在线：整曲翻唱可用' : '翻唱引擎未部署或未启动，下方有部署指引'"
+            role="status"
+            class="text-[12px] px-2.5 py-1 rounded-full border cursor-default select-none"
+            :class="songCoverReady() ? 'border-hub-green/40 text-hub-green bg-hub-green/10' : 'border-hub-orange/40 text-hub-orange bg-hub-orange/10'"
+            x-text="songCoverReady() ? '🎤 AI 翻唱引擎在线' : '🎤 翻唱引擎未就绪'"></span>
+      <span x-show="singMode==='station'"
+            :title="station.enabled ? '点歌台开启中：观众弹幕「点歌 歌名」即可入队' : '点歌台已关闭，打开开关开始接歌'"
+            role="status"
+            class="text-[12px] px-2.5 py-1 rounded-full border cursor-default select-none"
+            :class="station.enabled ? 'border-hub-green/40 text-hub-green bg-hub-green/10' : 'border-hub-border text-hub-muted'"
+            x-text="station.enabled ? '🎧 点歌台营业中' : '🎧 点歌台已打烊'"></span>
+      <span x-show="singMode==='create'"
+            :title="songCreateReady() ? 'ACE-Step 整曲生成引擎在线：从零创作全新歌曲' : '原创歌引擎未部署或未启动，下方有部署指引'"
+            role="status"
+            class="text-[12px] px-2.5 py-1 rounded-full border cursor-default select-none"
+            :class="songCreateReady() ? 'border-hub-green/40 text-hub-green bg-hub-green/10' : 'border-hub-orange/40 text-hub-orange bg-hub-orange/10'"
+            x-text="songCreateReady() ? '🎼 原创歌引擎在线' : '🎼 原创歌引擎未就绪'"></span>
+    </div>
+
+    <!-- Song-P1/P2/P4: 模式切换 —— AI 翻唱（真唱）/ 原创歌（成曲）/ 点歌台（直播）/ 歌词念白（朗读） -->
+    <div class="flex rounded-lg overflow-hidden border border-hub-border text-[13px] mb-3 w-fit" role="group" aria-label="唱歌模式">
+      <button @click="setSingMode('cover')"
+              :class="singMode==='cover' ? 'bg-hub-green/20 text-hub-green' : 'bg-hub-bg text-hub-muted hover:text-hub-text'"
+              class="px-3 py-1.5 transition font-semibold">🎤 AI 翻唱</button>
+      <button @click="setSingMode('create')"
+              :class="singMode==='create' ? 'bg-hub-green/20 text-hub-green' : 'bg-hub-bg text-hub-muted hover:text-hub-text'"
+              class="px-3 py-1.5 transition font-semibold">🎼 原创歌</button>
+      <button @click="setSingMode('station')"
+              :class="singMode==='station' ? 'bg-hub-green/20 text-hub-green' : 'bg-hub-bg text-hub-muted hover:text-hub-text'"
+              class="px-3 py-1.5 transition font-semibold">🎧 直播点歌台</button>
+      <button @click="setSingMode('lyrics')"
+              :class="singMode==='lyrics' ? 'bg-hub-blue/20 text-hub-blue' : 'bg-hub-bg text-hub-muted hover:text-hub-text'"
+              class="px-3 py-1.5 transition font-semibold">🎙 歌词念白</button>
+    </div>
+    <div class="text-[12px] text-hub-muted -mt-2 mb-3"
+         x-text="singMode==='cover' ? '上传一首歌，用你的音色重新唱一遍：自动拆人声、换音色、混回伴奏'
+               : singMode==='create' ? '写词定风格，AI 从零作曲编曲并演唱一首全新的歌（可换成角色声音）——真正的原创'
+               : singMode==='station' ? '观众弹幕点歌 → 自动备歌 → 一键上麦：数字人直播间里现场唱（成品与翻唱同权，含水印与历史）'
+               : '把歌词以角色音色深情朗读（不是唱歌，适合台词/诗朗诵）'"></div>
+
+    <!-- Song-P5: 我的任务看板 —— 翻唱/原创/魔改/MV 一屏可见；Hub 持久化+后台对账，关掉页面照跑 -->
+    <div class="border border-hub-border rounded-xl mb-3">
+      <button @click="songBoardShow=!songBoardShow; if(songBoardShow) songBoardRefresh()"
+              class="w-full flex items-center gap-2 px-3 py-2 text-[13px] hover:bg-hub-bg/50 transition rounded-xl"
+              :aria-expanded="songBoardShow" aria-controls="songBoardBody">
+        <span>📋 我的任务</span>
+        <span x-show="songBoardOpen>0" class="text-[12px] px-1.5 py-0.5 rounded-full border border-hub-green/40 text-hub-green bg-hub-green/10"
+              x-text="songBoardOpen+' 进行中'"></span>
+        <span x-show="songBoardLoaded && !songBoardOpen" class="text-[12px] text-hub-muted">暂无进行中任务</span>
+        <span class="ml-auto text-[12px] text-hub-muted" x-text="songBoardShow?'收起 ▲':'展开 ▼'"></span>
+      </button>
+      <div x-show="songBoardShow" id="songBoardBody" class="px-3 pb-2.5 space-y-1.5">
+        <template x-for="row in songBoard" :key="row.tid">
+          <div class="flex items-center gap-2 text-[12px] border-t border-hub-border/60 pt-1.5">
+            <span class="shrink-0" :title="songBoardKindLabel(row)" x-text="songBoardKindIcon(row)"></span>
+            <span class="truncate flex-1 min-w-0" :title="row.song_name" x-text="row.song_name||row.tid"></span>
+            <span x-show="row.lora" class="shrink-0 text-[12px] px-1.5 rounded-full border border-purple-400/40 text-purple-300" title="唱腔 LoRA">🎙RAP</span>
+            <template x-if="!['done','error','cancelled'].includes(row.status)">
+              <span class="flex items-center gap-1.5 shrink-0">
+                <span class="w-16 bg-hub-border rounded-full h-1 overflow-hidden inline-block">
+                  <span class="block h-full bg-hub-green transition-all duration-700" :style="'width:'+(row.progress||0)+'%'"></span>
+                </span>
+                <span class="text-hub-muted max-w-[220px] truncate" :title="row.detail"
+                      x-text="row.detail||songBoardStatusLabel(row.status)"></span>
+                <button @click="songBoardCancel(row)" class="text-hub-muted hover:text-hub-red underline">取消</button>
+              </span>
+            </template>
+            <template x-if="row.status==='done'">
+              <span class="flex items-center gap-1.5 shrink-0">
+                <span class="text-hub-green">✓ 完成</span>
+                <a x-show="row.audio_url" :href="row.audio_url?(HUB+row.audio_url):'#'" target="_blank"
+                   class="underline text-hub-muted hover:text-hub-blue">试听</a>
+                <a x-show="row.url" :href="row.url?(HUB+row.url):'#'" target="_blank"
+                   class="underline text-hub-muted hover:text-hub-blue">看片</a>
+              </span>
+            </template>
+            <template x-if="row.status==='error'">
+              <span class="text-hub-red shrink-0 cursor-help" :title="row.detail">✕ 失败</span>
+            </template>
+            <template x-if="row.status==='cancelled'">
+              <span class="text-hub-muted shrink-0">已取消</span>
+            </template>
+          </div>
+        </template>
+        <div x-show="songBoardLoaded && !songBoard.length" class="text-hub-muted text-[12px] py-1 border-t border-hub-border/60">
+          还没有任务——翻唱 / 原创歌 / 整曲 MV 的进度都会出现在这里；任务已持久化，关掉页面甚至重启 Hub 都照跑
+        </div>
+      </div>
+    </div>
+
+    <!-- Sing-P0: 音色来源 —— 回答「谁在唱」（点歌台固定用当前角色克隆音；原创歌在面板内有「用角色声唱」开关，不显示） -->
+    <div x-show="singMode!=='station' && singMode!=='create'" class="border border-hub-border rounded-xl p-3 mb-3">
+      <div class="flex items-center gap-2 flex-wrap">
+        <span class="text-[12px] text-hub-muted shrink-0">谁来唱：</span>
+        <div class="flex rounded-lg overflow-hidden border border-hub-border text-[12px] shrink-0" role="group" aria-label="音色来源">
+          <button @click="singVoiceMode='profile'"
+                  :class="singVoiceMode==='profile' ? 'bg-hub-blue/20 text-hub-blue' : 'bg-hub-bg text-hub-muted hover:text-hub-text'"
+                  class="px-2.5 py-1 transition">用当前角色</button>
+          <button @click="singVoiceMode='upload'"
+                  :class="singVoiceMode==='upload' ? 'bg-hub-blue/20 text-hub-blue' : 'bg-hub-bg text-hub-muted hover:text-hub-text'"
+                  class="px-2.5 py-1 transition">换个声音</button>
+        </div>
+        <template x-if="singVoiceMode==='profile'">
+          <span class="text-[13px] flex items-center gap-1.5 min-w-0">
+            <span class="w-6 h-6 rounded-full overflow-hidden border border-hub-border shrink-0 bg-hub-bg" x-show="activeProfileObj && activeProfileObj.thumbnail">
+              <img :src="activeProfileObj ? 'data:image/jpeg;base64,'+activeProfileObj.thumbnail : ''" class="w-full h-full object-cover" alt="">
+            </span>
+            <span class="truncate" x-text="active || '未选择角色'"></span>
+            <span x-show="singVoiceReady()" class="text-hub-green text-[12px] shrink-0">· 音色就绪 ✓</span>
+            <a x-show="active && !singVoiceReady()" href="#" @click.prevent="goTab('clone')" class="text-hub-orange text-[12px] hover:underline shrink-0">还没有克隆音色，将用系统默认声音 · 去克隆 →</a>
+            <a x-show="!active" href="#" @click.prevent="goTab('profiles')" class="text-hub-orange text-[12px] hover:underline shrink-0">去角色库选一个声音 →</a>
+          </span>
+        </template>
+      </div>
+      <!-- 换个声音：拖拽/选择参考音频，可试听（Sing-P0: 隐藏原生控件 + 大小/时长校验） -->
+      <div x-show="singVoiceMode==='upload'" class="mt-2 space-y-2">
+        <div @dragover.prevent="singDrag=true" @dragleave.prevent="singDrag=false" @drop.prevent="singDrop($event)"
+             role="group" aria-label="上传参考音频"
+             :class="singDrag?'border-hub-green bg-hub-green/10':'border-hub-border'"
+             class="border border-dashed rounded-lg px-3 py-2.5 transition flex items-center gap-2.5">
+          <span class="text-base shrink-0" aria-hidden="true" x-text="singDrag?'📥':(singRefB64?'🎵':'🎤')"></span>
+          <input type="file" accept="audio/*" x-ref="singFileInput" @change="onSingRefAudio($event)"
+                 aria-label="选择参考音频文件（WAV / MP3）" class="hidden">
+          <template x-if="!singRefB64">
+            <div class="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
+              <span class="text-[13px] text-hub-muted" x-text="singDrag?'松手即可上传':'把一段清唱或说话拖到这里（3~30 秒最佳）'"></span>
+              <button @click="$refs.singFileInput.click()"
+                      class="bd-act sm ghost shrink-0">选择文件</button>
+            </div>
+          </template>
+          <template x-if="singRefB64">
+            <div class="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
+              <span class="text-[13px] text-hub-green truncate" x-text="'✅ '+(singRefName||'已选参考音频')"></span>
+              <span x-show="singRefDur" class="text-[12px] shrink-0"
+                    :class="(singRefDur<3||singRefDur>30)?'text-hub-orange':'text-hub-muted'"
+                    x-text="singRefDur+'s · '+singRefDurHint()"></span>
+              <button @click="clearSingRef()" class="ml-auto shrink-0 text-[12px] text-hub-muted hover:text-hub-red transition" aria-label="移除参考音频">✕ 移除</button>
+            </div>
+          </template>
+        </div>
+        <audio x-show="singRefUrl" :src="singRefUrl" controls preload="metadata" class="w-full" style="height:32px" aria-label="试听参考音频"></audio>
+      </div>
+    </div>
+
+    <!-- ══════════ Song-P1: AI 翻唱面板 ══════════ -->
+    <div x-show="singMode==='cover'" class="space-y-3">
+
+      <!-- 引擎未就绪：诚实的部署指引卡（绝不假在线） -->
+      <div x-show="songCapsLoaded && !songCoverReady()"
+           class="border border-hub-orange/40 bg-orange-900/10 rounded-xl p-3 space-y-2">
+        <div class="text-[13px] font-semibold text-hub-orange">🎤 翻唱引擎未就绪</div>
+        <div class="text-[12px] text-hub-muted leading-relaxed">
+          AI 翻唱需要先在本机部署 YingMusic-SVC 引擎（约 3.5GB 权重，一次性）。管理员在项目目录执行：
+        </div>
+        <div class="flex items-center gap-2">
+          <code class="text-[12px] bg-hub-bg border border-hub-border rounded px-2 py-1 flex-1 overflow-x-auto whitespace-nowrap">python tools\setup_song_studio.py --all && 启动 song_studio_server</code>
+          <button @click="navigator.clipboard && navigator.clipboard.writeText('python tools\\setup_song_studio.py --all'); showToast('部署命令已复制','success')"
+                  class="bd-act sm ghost shrink-0">复制命令</button>
+          <button @click="songHealthCheck()"
+                  class="bd-act sm green shrink-0">重新检测</button>
+        </div>
+        <div class="text-[12px] text-hub-muted">部署完成前可先用「歌词念白」模式。</div>
+      </div>
+      <div x-show="!songCapsLoaded" class="text-[12px] text-hub-muted px-1 pulse">正在检测翻唱引擎…</div>
+
+      <!-- 歌曲上传（就绪后可用） -->
+      <template x-if="songCoverReady()">
+        <div class="space-y-3">
+          <div @dragover.prevent="songDrag=true" @dragleave.prevent="songDrag=false" @drop.prevent="songFileDrop($event)"
+               role="group" aria-label="上传整首歌曲"
+               :class="songDrag?'border-hub-green bg-hub-green/10':'border-hub-border'"
+               class="border border-dashed rounded-xl px-3 py-3 transition flex items-center gap-3">
+            <span class="text-xl shrink-0" aria-hidden="true" x-text="songDrag?'📥':(songFileName?'💿':'🎼')"></span>
+            <input type="file" accept="audio/*" x-ref="songFileInput" @change="onSongFile($event)"
+                   aria-label="选择歌曲文件（MP3 / WAV / M4A / FLAC）" class="hidden">
+            <template x-if="!songFileName">
+              <div class="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
+                <span class="text-[13px] text-hub-muted" x-text="songDrag?'松手即可上传':'把整首歌拖到这里（MP3 / WAV / M4A，8 分钟内）'"></span>
+                <button @click="$refs.songFileInput.click()"
+                        class="bd-act sm green shrink-0">选择歌曲</button>
+              </div>
+            </template>
+            <template x-if="songFileName">
+              <div class="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
+                <span class="text-[13px] text-hub-green truncate" x-text="'✅ '+songFileName"></span>
+                <span x-show="songFileDur" class="text-[12px] shrink-0"
+                      :class="songFileDur>480?'text-hub-orange':'text-hub-muted'"
+                      x-text="songDurHint()"></span>
+                <button @click="clearSongFile()" class="ml-auto shrink-0 text-[12px] text-hub-muted hover:text-hub-red transition" aria-label="移除歌曲">✕ 移除</button>
+              </div>
+            </template>
+          </div>
+          <audio x-show="songFileUrl" :src="songFileUrl" controls preload="metadata" class="w-full" style="height:32px" aria-label="试听原曲"></audio>
+
+          <!-- 翻唱选项：升降调 / 品质 / 干声 -->
+          <div class="flex gap-x-3 gap-y-1.5 items-center flex-wrap text-[12px]">
+            <label class="flex items-center gap-1.5 text-hub-muted">调门
+              <select x-model="songPitch" aria-label="升降调" class="text-xs bg-hub-bg border border-hub-border rounded-lg px-2 py-1">
+                <option value="auto">自动匹配（推荐）</option>
+                <option value="2">升 2 半音</option>
+                <option value="4">升 4 半音</option>
+                <option value="6">升 6 半音</option>
+                <option value="-2">降 2 半音</option>
+                <option value="-4">降 4 半音</option>
+                <option value="-6">降 6 半音</option>
+              </select>
+            </label>
+            <label class="flex items-center gap-1.5 text-hub-muted">品质
+              <select x-model="songQuality" aria-label="生成品质" class="text-xs bg-hub-bg border border-hub-border rounded-lg px-2 py-1">
+                <option value="standard">标准（更快）</option>
+                <option value="fine">精细（更慢更稳）</option>
+              </select>
+            </label>
+            <label class="flex items-center gap-1.5 text-hub-muted cursor-pointer" title="上传的已经是清唱/干声（没有伴奏）时勾选，跳过人声分离">
+              <input type="checkbox" x-model="songDryVocal" class="accent-current">我传的是清唱干声
+            </label>
+          </div>
+
+          <!-- 开始 / 进度流水线 / 取消 -->
+          <button @click="doCover()" :disabled="songTaskRunning()||!songFileObj"
+                  :title="!songFileObj?'请先选择歌曲':''"
+                  class="w-full bd-btn bd-btn-success text-sm"
+                  :class="(songTaskRunning()||!songFileObj)?'':'bd-glow-pulse'">
+            <span x-show="!songTaskRunning()">🎤 开始翻唱</span>
+            <span x-show="songTaskRunning()" class="pulse">⏳ 翻唱中…</span>
+          </button>
+          <div x-show="songTaskRunning()" role="status" aria-live="polite" class="space-y-1.5">
+            <div class="flex items-center justify-between text-[12px] text-hub-muted">
+              <span class="font-semibold" :class="'text-hub-green'"
+                    x-text="songPhaseLabel(songStatus)+(songDetail?' · '+songDetail:'')"></span>
+              <span>已用 <span x-text="Math.round(songElapsedMs/1000)"></span>s
+                <span x-show="songEtaText()" x-text="'· '+songEtaText()"></span></span>
+            </div>
+            <div class="flex-1 bg-hub-border rounded-full h-1.5 overflow-hidden">
+              <div class="h-full rounded-full bg-hub-green transition-all duration-700"
+                   :style="'width:'+songProgress+'%'"></div>
+            </div>
+            <div class="flex items-center justify-between text-[12px]">
+              <span class="text-hub-muted">整曲翻唱是分钟级任务，可切到其它页面，完成后回来看结果</span>
+              <button @click="cancelCover()" class="text-hub-muted hover:text-hub-red underline">取消</button>
+            </div>
+          </div>
+          <div x-show="songMsg" x-text="songMsg" role="status" aria-live="polite"
+               :class="songOk?'text-hub-green bg-green-900/20':'text-hub-red bg-red-900/20'"
+               class="text-xs text-center py-1.5 rounded-lg"></div>
+
+          <!-- 翻唱作品卡 -->
+          <div x-show="songResult && songResult.audio_url" class="border border-hub-border rounded-xl p-3 space-y-2">
+            <div class="flex items-center gap-1.5 flex-wrap text-[12px]">
+              <span class="px-2 py-0.5 rounded-full border border-hub-green/40 text-hub-green bg-hub-green/10 cursor-default"
+                    title="由 YingMusic-SVC 零样本歌声转换引擎完成整曲翻唱">🎤 AI 翻唱</span>
+              <span class="text-hub-muted truncate" x-text="'演唱者：'+((songResult&&songResult.singer)||active||'角色音色')"></span>
+              <span x-show="songSimilarityText()" class="text-hub-muted shrink-0" x-text="'· '+songSimilarityText()"></span>
+              <span x-show="songResult && songResult.pitch_shift!=null" class="text-hub-muted shrink-0"
+                    x-text="'· 调门 '+(songResult.pitch_shift>0?'+':'')+songResult.pitch_shift+' 半音'"></span>
+              <a x-show="songResult && songResult.history_id" href="#" @click.prevent="goTab('history')"
+                 class="text-hub-muted hover:text-hub-blue underline ml-auto shrink-0">已存入历史 →</a>
+            </div>
+            <audio :src="songResult && songResult.audio_url ? (HUB+songResult.audio_url) : ''" controls class="w-full"></audio>
+            <div class="bd-act-row">
+              <button @click="downloadCover()"
+                      class="bd-act sm green">⬇ 下载成品</button>
+              <button x-show="songTaskId" @click="new Audio(HUB+'/api/song/task/'+songTaskId+'/stem/vocals').play()"
+                      title="只听转换后的人声（不带伴奏），便于判断音色像不像"
+                      class="bd-act sm ghost">🎧 只听人声</button>
+              <button @click="doCover()" :disabled="songTaskRunning()||!songFileObj"
+                      class="bd-act sm ghost">🔁 再翻一次</button>
+              <button @click="doSongMv(songResult && songResult.history_id)"
+                      :disabled="mvBusy || !(songResult&&songResult.history_id)"
+                      title="自动挑出副歌 15 秒，让角色口型演唱，直接发短视频"
+                      class="bd-act sm soft">
+                <span x-show="!mvBusy">🎬 15秒高光MV</span><span x-show="mvBusy" class="pulse">⏳ 制作中…</span>
+              </button>
+              <button @click="doSongMvFull(songResult && songResult.history_id)"
+                      :disabled="mvTaskRunning() || !(songResult&&songResult.history_id)"
+                      title="P5: 整首歌的口型演唱视频——后台异步渲染（几分钟），直播中自动等档期，进度看「我的任务」"
+                      class="bd-act sm soft">
+                <span x-show="!mvTaskRunning()">🎬 整曲MV</span><span x-show="mvTaskRunning()" class="pulse">⏳ 排队渲染中…</span>
+              </button>
+              <button @click="startRemix(songResult && songResult.history_id, songFileName || '这首翻唱')"
+                      :disabled="!(songResult&&songResult.history_id)"
+                      title="P5: 同一首歌换种编曲曲风再演绎（ACE-Step 参考重生成），可再叠加角色声"
+                      class="bd-act sm purple">🎛 风格魔改</button>
+            </div>
+            <!-- P5: 整曲 MV 任务进度（异步；详情在「我的任务」看板） -->
+            <div x-show="mvTaskRunning()" class="text-[12px] text-hub-muted flex items-center gap-2">
+              <span class="w-16 bg-hub-border rounded-full h-1 overflow-hidden inline-block">
+                <span class="block h-full bg-hub-green transition-all duration-700" :style="'width:'+((mvTask&&mvTask.progress)||0)+'%'"></span>
+              </span>
+              <span x-text="'🎬 整曲MV：'+((mvTask&&mvTask.detail)||songBoardStatusLabel(mvTask&&mvTask.status))"></span>
+            </div>
+            <!-- Song-P2: MV 成片卡 -->
+            <div x-show="mvUrl" class="space-y-1.5 pt-1 border-t border-hub-border">
+              <div class="text-[12px] text-hub-muted"
+                   x-text="mvInfo?('🎬 高光片段：第 '+Math.round(mvInfo.start_s)+' 秒起 · '+Math.round(mvInfo.seconds)+' 秒 · 竖屏短视频可直接发'):''"></div>
+              <video :src="mvUrl" controls playsinline class="w-full rounded-lg" style="max-height:360px"></video>
+              <button @click="downloadMv()"
+                      class="bd-act sm green w-full">⬇ 下载 MV</button>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- ══════════ Song-P4/F3: 原创歌面板（ACE-Step 整曲文本成曲） ══════════ -->
+    <div x-show="singMode==='create'" class="space-y-3">
+
+      <!-- 引擎未就绪：诚实部署指引（绝不假在线） -->
+      <div x-show="songCapsLoaded && !songCreateReady()"
+           class="border border-hub-orange/40 bg-orange-900/10 rounded-xl p-3 space-y-2">
+        <div class="text-[13px] font-semibold text-hub-orange">🎼 原创歌引擎未就绪</div>
+        <div class="text-[12px] text-hub-muted leading-relaxed">
+          原创歌需要先部署 ACE-Step 引擎（约 8.3GB 权重，一次性）。管理员在项目目录执行：
+        </div>
+        <div class="flex items-center gap-2">
+          <code class="text-[12px] bg-hub-bg border border-hub-border rounded px-2 py-1 flex-1 overflow-x-auto whitespace-nowrap">python tools\setup_ace_step.py && 启动 ace_studio_server</code>
+          <button @click="navigator.clipboard && navigator.clipboard.writeText('python tools\\setup_ace_step.py'); showToast('部署命令已复制','success')"
+                  class="bd-act sm ghost shrink-0">复制命令</button>
+          <button @click="songHealthCheck()"
+                  class="bd-act sm green shrink-0">重新检测</button>
+        </div>
+      </div>
+      <div x-show="!songCapsLoaded" class="text-[12px] text-hub-muted px-1 pulse">正在检测原创歌引擎…</div>
+
+      <template x-if="songCreateReady()">
+        <div class="space-y-3">
+          <!-- P5/F5: 风格魔改模式条（从翻唱/原创成品的「风格魔改」进入） -->
+          <div x-show="createRemixOf" class="border border-purple-500/40 bg-purple-900/10 rounded-xl p-3 space-y-2">
+            <div class="flex items-center gap-2 text-[13px] flex-wrap">
+              <span class="font-semibold text-purple-300">🎛 风格魔改模式</span>
+              <span class="text-hub-muted truncate min-w-0">参考：<b class="text-hub-text" x-text="createRemixName"></b></span>
+              <button @click="clearRemix()" class="ml-auto text-[12px] text-hub-muted hover:text-hub-red underline shrink-0">退出魔改</button>
+            </div>
+            <label class="flex items-center gap-2 text-[12px] text-hub-muted">
+              贴原曲程度
+              <input type="range" min="0.15" max="0.9" step="0.05" x-model="createRemixStrength"
+                     aria-label="贴原曲程度" class="flex-1 accent-purple-400">
+              <span class="w-9 text-right" x-text="Math.round(createRemixStrength*100)+'%'"></span>
+            </label>
+            <div class="text-[12px] text-hub-muted leading-relaxed">
+              同一首歌换种编曲再演绎：越靠右越贴原曲的旋律结构，越靠左越放飞。
+              选好下面的<b class="text-hub-text">新曲风</b>点「开始创作」；歌词可留空（跟随参考氛围）或写新词；
+              还可勾「用角色声唱」——新编曲 × 角色声音双重定制
+            </div>
+            <!-- P6: 批量魔改（专辑化）——勾几个风格一键排产，短视频矩阵素材流水线 -->
+            <div class="border-t border-purple-500/20 pt-2 space-y-1.5">
+              <div class="text-[12px] text-purple-300 font-semibold">📀 批量出版本（勾风格，一键各出一版）</div>
+              <div class="flex gap-1.5 flex-wrap">
+                <template x-for="p in createStylePresets" :key="'rb'+p.label">
+                  <button @click="toggleRemixBatch(p.label)"
+                          :class="remixBatchSel.includes(p.label) ? 'border-purple-400 text-purple-300 bg-purple-500/15' : 'border-hub-border text-hub-muted hover:text-hub-text'"
+                          class="text-[12px] border rounded-full px-2.5 py-1 transition" x-text="p.label"></button>
+                </template>
+              </div>
+              <button @click="doRemixBatch()" :disabled="remixBatchBusy || !remixBatchSel.length"
+                      class="bd-act purple">
+                <span x-show="!remixBatchBusy" x-text="'🎛 批量魔改'+(remixBatchSel.length?('（'+remixBatchSel.length+' 版）'):'')"></span>
+                <span x-show="remixBatchBusy" class="pulse">⏳ 排产中…</span>
+              </button>
+              <div x-show="remixBatchMsg" class="text-[12px] text-hub-green" x-text="remixBatchMsg"></div>
+            </div>
+          </div>
+
+          <!-- 风格：预设 + 自由标签 -->
+          <div class="border border-hub-border rounded-xl p-3 space-y-2">
+            <div class="text-[12px] text-hub-muted">曲风（点预设或自己写英文标签，逗号分隔）</div>
+            <div class="flex gap-1.5 flex-wrap">
+              <template x-for="p in createStylePresets" :key="p.label">
+                <button @click="createStyle=p.v"
+                        :class="createStyle===p.v ? 'border-hub-green text-hub-green bg-hub-green/10' : 'border-hub-border text-hub-muted hover:text-hub-text'"
+                        class="text-[12px] border rounded-full px-2.5 py-1 transition" x-text="p.label"></button>
+              </template>
+            </div>
+            <input type="text" x-model="createStyle" aria-label="风格标签"
+                   placeholder="pop, mandarin, female vocal, 90 bpm"
+                   class="w-full text-[13px] bg-hub-bg border border-hub-border rounded-lg px-2.5 py-1.5 focus:border-hub-green outline-none transition">
+          </div>
+
+          <!-- 歌词：AI 辅写 + 手写（[verse]/[chorus] 结构） -->
+          <div class="border border-hub-border rounded-xl p-3 space-y-2">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="text-[12px] text-hub-muted shrink-0">歌词（可空=纯音乐）</span>
+              <input type="text" x-model="createTopic" aria-label="歌词主题"
+                     placeholder="主题：写给加班后的自己…"
+                     class="flex-1 min-w-[160px] text-[12px] bg-hub-bg border border-hub-border rounded-lg px-2 py-1 focus:border-hub-blue outline-none transition">
+              <button @click="doLyricsAssist()" :disabled="createLyricsBusy"
+                      title="用对话大模型按主题写一版 [verse]/[chorus] 结构歌词，写完可改"
+                      class="bd-act sm soft shrink-0">
+                <span x-show="!createLyricsBusy">✍️ AI 帮我写词</span><span x-show="createLyricsBusy" class="pulse">⏳ 写词中…</span>
+              </button>
+            </div>
+            <textarea x-model="createLyrics" rows="7" aria-label="歌词"
+                      placeholder="[verse]&#10;晚风吹过屋顶&#10;星星刚刚点亮&#10;&#10;[chorus]&#10;就唱吧 不用管唱得像不像&#10;心跳就是节拍 快乐就是原创"
+                      class="w-full text-[13px] bg-hub-bg border border-hub-border rounded-lg px-2.5 py-1.5 focus:border-hub-green outline-none transition font-mono leading-relaxed"></textarea>
+            <div class="text-[12px] text-hub-muted">段落用 [verse]（主歌）/ [chorus]（副歌）/ [bridge]（桥段）标记，引擎按结构谱曲</div>
+          </div>
+
+          <!-- 选项：时长 / 品质 / 用角色声唱 -->
+          <div class="flex gap-x-3 gap-y-1.5 items-center flex-wrap text-[12px]">
+            <label class="flex items-center gap-1.5 text-hub-muted">时长
+              <select x-model="createDur" aria-label="歌曲时长" class="text-xs bg-hub-bg border border-hub-border rounded-lg px-2 py-1">
+                <option value="30">30 秒（试听）</option>
+                <option value="60">1 分钟</option>
+                <option value="120">2 分钟</option>
+                <option value="180">3 分钟</option>
+                <option value="240">4 分钟</option>
+              </select>
+            </label>
+            <label class="flex items-center gap-1.5 text-hub-muted">品质
+              <select x-model="createQuality" aria-label="生成品质" class="text-xs bg-hub-bg border border-hub-border rounded-lg px-2 py-1">
+                <option value="turbo">快速（27 步，秒级）</option>
+                <option value="fine">精细（60 步，更细腻）</option>
+              </select>
+            </label>
+            <label class="flex items-center gap-1.5 text-hub-muted cursor-pointer"
+                   title="生成后再用翻唱管线把演唱换成当前角色的克隆声音（多一步，约多 1~2 分钟）">
+              <input type="checkbox" x-model="createSwap" class="accent-current">
+              用角色声唱（<span x-text="active||'未选角色'"></span>）
+            </label>
+            <!-- P6: 唱腔 LoRA（引擎上报就绪名单才显示，绝不假在线） -->
+            <label x-show="songLoras().length" class="flex items-center gap-1.5 text-hub-muted"
+                   title="唱腔特化模型：中文咬字更准、风格更贴（说唱/嘻哈类效果最佳）">🎙 唱腔
+              <select x-model="createLora" aria-label="唱腔 LoRA" class="text-xs bg-hub-bg border border-hub-border rounded-lg px-2 py-1">
+                <option value="">基座原声</option>
+                <template x-for="l in songLoras()" :key="l">
+                  <option :value="l" x-text="loraLabel(l)"></option>
+                </template>
+              </select>
+            </label>
+          </div>
+
+          <!-- 开始 / 进度 / 取消 -->
+          <button @click="doCreate()" :disabled="createTaskRunning()"
+                  class="w-full bd-btn bd-btn-success text-sm"
+                  :class="createTaskRunning()?'':'bd-glow-pulse'">
+            <span x-show="!createTaskRunning()" x-text="createRemixOf?'🎛 开始魔改':'🎼 开始创作'"></span>
+            <span x-show="createTaskRunning()" class="pulse" x-text="createRemixOf?'⏳ 魔改中…':'⏳ 创作中…'"></span>
+          </button>
+          <div x-show="createTaskRunning()" role="status" aria-live="polite" class="space-y-1.5">
+            <div class="flex items-center justify-between text-[12px] text-hub-muted">
+              <span class="font-semibold text-hub-green"
+                    x-text="createPhaseLabel(createStatus)+(createDetail?' · '+createDetail:'')"></span>
+              <span>已用 <span x-text="Math.round(createElapsedMs/1000)"></span>s</span>
+            </div>
+            <div class="flex-1 bg-hub-border rounded-full h-1.5 overflow-hidden">
+              <div class="h-full rounded-full bg-hub-green transition-all duration-700"
+                   :style="'width:'+createProgress+'%'"></div>
+            </div>
+            <div class="flex items-center justify-between text-[12px]">
+              <span class="text-hub-muted" x-text="createSwap?'生成 + 换声两阶段，几分钟内完成，可切到其它页面':'快速档几十秒内完成，直播中会自动让路排队'"></span>
+              <button @click="cancelCreate()" class="text-hub-muted hover:text-hub-red underline">取消</button>
+            </div>
+          </div>
+          <div x-show="createMsg" x-text="createMsg" role="status" aria-live="polite"
+               :class="createOk?'text-hub-green bg-green-900/20':'text-hub-red bg-red-900/20'"
+               class="text-xs text-center py-1.5 rounded-lg"></div>
+
+          <!-- 原创歌作品卡 -->
+          <div x-show="createResult && createResult.audio_url" class="border border-hub-border rounded-xl p-3 space-y-2">
+            <div class="flex items-center gap-1.5 flex-wrap text-[12px]">
+              <span class="px-2 py-0.5 rounded-full border border-hub-green/40 text-hub-green bg-hub-green/10 cursor-default"
+                    title="由 ACE-Step 3.5B 整曲生成引擎从零创作">🎼 AI 原创</span>
+              <span class="text-hub-muted truncate" x-text="'演唱：'+((createResult&&createResult.singer)||'ACE-Step 原声')"></span>
+              <span x-show="createResult && createResult.similarity" class="text-hub-muted shrink-0"
+                    x-text="createResult&&createResult.similarity?('· 人声贴合度 '+createResult.similarity.cosine+'（'+createResult.similarity.label+'）'):''"></span>
+              <span x-show="createResult && createResult.seed!=null" class="text-hub-muted shrink-0"
+                    :title="'种子 '+(createResult&&createResult.seed)+'：同参数同种子可复现同一首'" x-text="'· 种子 '+(createResult&&createResult.seed)"></span>
+              <a x-show="createResult && createResult.history_id" href="#" @click.prevent="goTab('history')"
+                 class="text-hub-muted hover:text-hub-blue underline ml-auto shrink-0">已存入历史 →</a>
+            </div>
+            <audio :src="createResult && createResult.audio_url ? (HUB+createResult.audio_url) : ''" controls class="w-full"></audio>
+            <div class="bd-act-row">
+              <button @click="downloadCreate()"
+                      class="bd-act sm green">⬇ 下载成品</button>
+              <button @click="doCreate()" :disabled="createTaskRunning()"
+                      title="同样的词和风格再来一首（种子随机，旋律会不同）"
+                      class="bd-act sm ghost">🔁 再来一版</button>
+              <button @click="doSongMv(createResult && createResult.history_id)"
+                      :disabled="mvBusy || !(createResult&&createResult.history_id)"
+                      title="自动挑出副歌高光段，让角色口型演唱，直接发短视频"
+                      class="bd-act sm soft">
+                <span x-show="!mvBusy">🎬 高光MV</span><span x-show="mvBusy" class="pulse">⏳ 制作中…</span>
+              </button>
+              <button @click="doSongMvFull(createResult && createResult.history_id)"
+                      :disabled="mvTaskRunning() || !(createResult&&createResult.history_id)"
+                      title="P5: 整首歌的口型演唱视频——后台异步渲染（几分钟），直播中自动等档期，进度看「我的任务」"
+                      class="bd-act sm soft">
+                <span x-show="!mvTaskRunning()">🎬 整曲MV</span><span x-show="mvTaskRunning()" class="pulse">⏳ 排队渲染中…</span>
+              </button>
+              <button @click="startRemix(createResult && createResult.history_id, '这首原创')"
+                      :disabled="!(createResult&&createResult.history_id)"
+                      title="P5: 这首歌换种编曲曲风再演绎（参考重生成）"
+                      class="bd-act sm purple">🎛 风格魔改</button>
+            </div>
+            <div x-show="mvTaskRunning()" class="text-[12px] text-hub-muted flex items-center gap-2">
+              <span class="w-16 bg-hub-border rounded-full h-1 overflow-hidden inline-block">
+                <span class="block h-full bg-hub-green transition-all duration-700" :style="'width:'+((mvTask&&mvTask.progress)||0)+'%'"></span>
+              </span>
+              <span x-text="'🎬 整曲MV：'+((mvTask&&mvTask.detail)||songBoardStatusLabel(mvTask&&mvTask.status))"></span>
+            </div>
+            <!-- MV 成片卡（与翻唱共用 mvUrl 状态） -->
+            <div x-show="mvUrl" class="space-y-1.5 pt-1 border-t border-hub-border">
+              <div class="text-[12px] text-hub-muted"
+                   x-text="mvInfo?('🎬 高光片段：第 '+Math.round(mvInfo.start_s)+' 秒起 · '+Math.round(mvInfo.seconds)+' 秒 · 竖屏短视频可直接发'):''"></div>
+              <video :src="mvUrl" controls playsinline class="w-full rounded-lg" style="max-height:360px"></video>
+              <button @click="downloadMv()"
+                      class="bd-act sm green w-full">⬇ 下载 MV</button>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- ══════════ Song-P2/F1: 直播点歌台面板 ══════════ -->
+    <div x-show="singMode==='station'" class="space-y-3">
+
+      <!-- 开关行 -->
+      <div class="border border-hub-border rounded-xl p-3 space-y-2">
+        <div class="flex items-center gap-3 flex-wrap text-[13px]">
+          <label class="flex items-center gap-1.5 cursor-pointer font-semibold"
+                 :class="station.enabled?'text-hub-green':'text-hub-muted'">
+            <input type="checkbox" :checked="station.enabled" @change="stationConfig({enabled:!station.enabled})" class="accent-current">
+            开启点歌台
+          </label>
+          <label class="flex items-center gap-1.5 cursor-pointer text-[12px] text-hub-muted"
+                 title="观众在互动墙/弹幕桥发「点歌 歌名」自动入队（按曲库匹配，不匹配不入队）">
+            <input type="checkbox" :checked="station.chat_enabled" @change="stationConfig({chat_enabled:!station.chat_enabled})" class="accent-current">
+            弹幕点歌
+          </label>
+          <label class="flex items-center gap-1.5 cursor-pointer text-[12px] text-hub-muted"
+                 title="队列里的歌自动逐首备好（分离+换音色+混音），就绪后随时上麦">
+            <input type="checkbox" :checked="station.auto_prepare" @change="stationConfig({auto_prepare:!station.auto_prepare})" class="accent-current">
+            自动备歌
+          </label>
+          <label class="flex items-center gap-1.5 cursor-pointer text-[12px] text-hub-muted"
+                 title="一首播完自动接播下一首就绪曲目">
+            <input type="checkbox" :checked="station.auto_play" @change="stationConfig({auto_play:!station.auto_play})" class="accent-current">
+            自动连播
+          </label>
+          <label class="flex items-center gap-1.5 cursor-pointer text-[12px] text-hub-muted"
+                 title="上麦前角色先开口：「感谢 xx 点的《歌名》，马上为你唱」——观众看到角色真开口，互动感拉满">
+            <input type="checkbox" :checked="station.announce" @change="stationConfig({announce:!station.announce})" class="accent-current">
+            播报点歌人
+          </label>
+          <label class="flex items-center gap-1.5 text-[12px] text-hub-muted ml-auto">备歌品质
+            <select :value="station.quality" @change="stationConfig({quality:$event.target.value})"
+                    class="text-xs bg-hub-bg border border-hub-border rounded-lg px-2 py-1">
+              <option value="standard">标准（更快）</option>
+              <option value="fine">精细（更慢更稳）</option>
+            </select>
+          </label>
+          <label class="flex items-center gap-1.5 text-[12px] text-hub-muted"
+                 title="P5: 礼物价值达到该数值才插队到队首（0=不设门槛；低于门槛的礼物照样致谢入队，只是不插队）">插队门槛
+            <input type="number" min="0" step="1" :value="station.gift_min_value||0" aria-label="礼物插队价值门槛"
+                   @change="stationConfig({gift_min_value:+$event.target.value||0})"
+                   class="w-14 text-xs bg-hub-bg border border-hub-border rounded-lg px-1.5 py-1">
+          </label>
+          <button @click="stationBoardShow=!stationBoardShow; if(stationBoardShow) stationLoadBoard()"
+                  title="P5: 近 24 小时点歌人排行（点歌数+礼物价值），主播口播/贴片用"
+                  class="bd-act sm ghost"
+                  x-text="stationBoardShow?'🏆 收起点歌榜':'🏆 今日点歌榜'"></button>
+        </div>
+        <!-- P5: 今日点歌榜 -->
+        <div x-show="stationBoardShow" class="bg-hub-bg border border-hub-border rounded-lg px-2.5 py-2 space-y-1">
+          <template x-for="(b,i) in stationBoard" :key="b.name">
+            <div class="flex items-center gap-2 text-[12px]">
+              <span class="shrink-0" x-text="['🥇','🥈','🥉'][i]||('#'+(i+1))"></span>
+              <b class="text-hub-text truncate" x-text="b.name"></b>
+              <span class="text-hub-muted shrink-0" x-text="b.count+' 首'"></span>
+              <span x-show="b.gift_value>0" class="text-hub-orange shrink-0" x-text="'🎁 '+b.gift_value"></span>
+              <span class="text-hub-muted truncate ml-auto" x-text="(b.songs||[]).join('、')"></span>
+            </div>
+          </template>
+          <div x-show="!stationBoard.length" class="text-[12px] text-hub-muted">近 24 小时还没有点歌记录</div>
+        </div>
+        <div class="text-[12px] text-hub-muted flex items-center gap-2 flex-wrap">
+          <span>唱歌的人：<b class="text-hub-text" x-text="active||'未选角色'"></b>（用其克隆音色）</span>
+          <span x-show="!songCoverReady()" class="text-hub-orange">⚠ 翻唱引擎未就绪，备歌会失败——先去「AI 翻唱」页看部署指引</span>
+        </div>
+        <div x-show="station.enabled && station.chat_enabled"
+             class="text-[12px] bd-strip mute px-2.5 py-1.5 leading-relaxed">
+          💬 观众这样点：弹幕发 <code class="text-hub-green">点歌 歌名</code>（互动墙提问框同样有效）。
+          外部弹幕桥可 POST <code>/api/song/station/chat</code>；礼物插队 POST <code>/api/song/station/gift</code>
+        </div>
+        <!-- P3/O6: 直播让路提示——备歌为什么暂停，说人话 -->
+        <div x-show="station.yield && station.yield.yield"
+             class="text-[12px] text-hub-orange bg-hub-orange/10 border border-hub-orange/40 rounded-lg px-2.5 py-1.5">
+          ⏸ 直播让路中（<span x-text="station.yield && station.yield.reason"></span>）：备歌自动暂停、不抢直播算力，结束后自动继续
+        </div>
+      </div>
+
+      <!-- 正在播放横幅 -->
+      <div x-show="stationPlayingReq()" class="border border-hub-green/40 bg-hub-green/10 rounded-xl p-3 flex items-center gap-3">
+        <span class="text-xl shrink-0 pulse">🎶</span>
+        <div class="flex-1 min-w-0">
+          <div class="text-[13px] font-semibold text-hub-green truncate"
+               x-text="'直播间正在唱：《'+((stationPlayingReq()||{}).song_name||'')+'》'"></div>
+          <div class="text-[12px] text-hub-muted" x-text="'点歌人：'+((stationPlayingReq()||{}).requester||'')"></div>
+        </div>
+        <button @click="stationStop()"
+                class="bd-act sm red shrink-0">⏹ 停止</button>
+      </div>
+
+      <!-- 点歌队列 -->
+      <div class="border border-hub-border rounded-xl p-3 space-y-2">
+        <div class="flex items-center justify-between">
+          <div class="text-[13px] font-semibold">🎼 点歌队列</div>
+          <button @click="stationRefresh()" class="text-[12px] text-hub-muted hover:text-hub-blue underline">刷新</button>
+        </div>
+        <div x-show="!stationQueueView().length" class="text-[12px] text-hub-muted text-center py-3">
+          还没有人点歌——从下方曲库点一首，或让观众发「点歌 歌名」
+        </div>
+        <template x-for="r in stationQueueView()" :key="r.id">
+          <div class="border border-hub-border rounded-lg px-2.5 py-2 space-y-1.5"
+               :class="r.status==='playing'?'border-hub-green/50 bg-hub-green/5':''">
+            <div class="flex items-center gap-2 flex-wrap text-[13px]">
+              <span class="text-[12px] px-1.5 py-0.5 rounded-full border shrink-0 cursor-default"
+                    :class="stationStatusClass(r.status)" x-text="stationStatusLabel(r.status)"></span>
+              <span class="font-semibold truncate" x-text="'《'+r.song_name+'》'"></span>
+              <span class="text-[12px] text-hub-muted shrink-0"
+                    x-text="(r.source==='chat'?'💬 ':'')+(r.requester||'')"></span>
+              <span x-show="r.similarity" class="text-[12px] text-hub-muted shrink-0"
+                    x-text="r.similarity?('贴合度 '+r.similarity.cosine):''"></span>
+              <span class="ml-auto flex items-center gap-1.5 shrink-0">
+                <button x-show="r.status==='queued'" @click="stationAct(r.id,'top')"
+                        class="bd-act sm ghost">⬆ 置顶</button>
+                <button x-show="['ready','done'].includes(r.status)" @click="stationAct(r.id,'play')"
+                        class="bd-act sm green"
+                        x-text="r.status==='done'?'▶ 重播':'▶ 上麦'"></button>
+                <button x-show="r.status==='playing'" @click="stationStop()"
+                        class="bd-act sm red">⏹ 停止</button>
+                <button x-show="['ready','done'].includes(r.status) && r.hist_id" @click="doSongMv(r.hist_id)"
+                        :disabled="mvBusy" title="副歌 15 秒 + 口型演唱，短视频素材一键出"
+                        class="bd-act sm soft">🎬 MV</button>
+                <button x-show="['ready','done'].includes(r.status) && r.hist_id" @click="doSongMvFull(r.hist_id)"
+                        :disabled="mvTaskRunning()" title="P5: 整首歌口型演唱视频，后台异步渲染，进度看「我的任务」"
+                        class="bd-act sm soft">🎬 整曲</button>
+                <button x-show="['failed','cancelled'].includes(r.status)" @click="stationAct(r.id,'retry')"
+                        class="bd-act sm ghost">🔁 重试</button>
+                <button x-show="['queued','preparing'].includes(r.status)" @click="stationAct(r.id,'cancel')"
+                        class="text-[12px] text-hub-muted hover:text-hub-red underline">取消</button>
+                <button x-show="['done','failed','cancelled'].includes(r.status)" @click="stationDelete(r.id)"
+                        class="text-[12px] text-hub-muted hover:text-hub-red transition" aria-label="删除">✕</button>
+              </span>
+            </div>
+            <div x-show="r.status==='preparing'" class="flex items-center gap-2">
+              <div class="flex-1 bg-hub-border rounded-full h-1 overflow-hidden">
+                <div class="h-full rounded-full bg-hub-blue transition-all duration-700" :style="'width:'+(r.progress||0)+'%'"></div>
+              </div>
+              <span class="text-[12px] text-hub-muted shrink-0" x-text="(r.progress||0)+'%'+(r.detail?' · '+r.detail:'')"></span>
+            </div>
+            <div x-show="r.status==='failed' && r.error" class="text-[12px] text-hub-red" x-text="'没备成：'+r.error"></div>
+            <audio x-show="['ready','done'].includes(r.status) && r.audio_url" :src="r.audio_url?(HUB+r.audio_url):''"
+                   controls preload="none" class="w-full" style="height:28px" aria-label="试听备好的歌"></audio>
+          </div>
+        </template>
+        <!-- Song-P2: MV 成片（点歌台侧同样可看/下载） -->
+        <div x-show="mvUrl" class="space-y-1.5 pt-1 border-t border-hub-border">
+          <div class="text-[12px] text-hub-muted"
+               x-text="mvInfo?('🎬 高光片段：第 '+Math.round(mvInfo.start_s)+' 秒起 · '+Math.round(mvInfo.seconds)+' 秒'):''"></div>
+          <video :src="mvUrl" controls playsinline class="w-full rounded-lg" style="max-height:360px"></video>
+          <button @click="downloadMv()"
+                  class="bd-act sm green w-full">⬇ 下载 MV</button>
+        </div>
+      </div>
+
+      <!-- 曲库 -->
+      <div class="border border-hub-border rounded-xl p-3 space-y-2">
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <button @click="stationLibOpen=!stationLibOpen" class="text-[13px] font-semibold flex items-center gap-1">
+            <span x-text="stationLibOpen?'▾':'▸'"></span> 💿 曲库
+            <span class="text-[12px] text-hub-muted font-normal" x-text="'（'+(station.library||[]).length+' 首）'"></span>
+          </button>
+          <input x-model="stationReqName" placeholder="点歌人（默认：主播）"
+                 class="text-xs bg-hub-bg border border-hub-border rounded-lg px-2 py-1 w-36">
+        </div>
+        <div x-show="stationLibOpen" class="space-y-1.5">
+          <div x-show="!(station.library||[]).length" class="text-[12px] text-hub-muted leading-relaxed">
+            曲库还是空的——把歌曲文件（MP3 / WAV / M4A / FLAC）放进项目的 <code class="text-hub-green">songs\</code> 文件夹即可出现在这里，观众点歌也按这里匹配。
+          </div>
+          <div class="grid gap-1.5" style="grid-template-columns:repeat(auto-fill,minmax(230px,1fr))">
+            <template x-for="it in (station.library||[])" :key="it.file">
+              <div class="border border-hub-border rounded-lg px-2.5 py-1.5 flex items-center gap-2">
+                <span class="text-[13px] truncate flex-1" :title="it.file" x-text="it.name"></span>
+                <span class="text-[12px] text-hub-muted shrink-0" x-text="it.size_mb+'MB'"></span>
+                <button @click="stationRequest(it.file)" :disabled="stationBusy||!station.enabled"
+                        :title="station.enabled?'':'先开启点歌台'"
+                        class="bd-act sm green shrink-0">＋ 点歌</button>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </div><!-- /点歌台面板 -->
+
+    <!-- ══════════ 歌词念白面板（Sing-P0 原样保留） ══════════ -->
+    <div x-show="singMode==='lyrics'">
+    <!-- 歌词 -->
+    <textarea x-model="singLyrics" rows="4"
+              placeholder="输入歌词...&#10;例：长亭外，古道边，芳草碧连天。晚风拂柳笛声残，夕阳山外山。"
+              class="w-full text-sm"></textarea>
+    <div class="flex justify-between items-center mt-1">
+      <span class="text-[12px] text-hub-muted">一行一句，标点影响停顿</span>
+      <span class="text-[12px]" :class="singCharCount()>300 ? 'text-hub-orange' : 'text-hub-muted'">
+        <span x-text="singCharCount()"></span>/300<span x-show="singCharCount()>300" class="ml-1">· 超出建议长度，生成更久</span>
+      </span>
+    </div>
+    <!-- 示例歌词快填（全部公有领域曲目/古诗，版权安全） -->
+    <div class="flex gap-1 flex-wrap mt-1.5 mb-1">
+      <span class="text-[12px] text-hub-muted self-center">示例：</span>
+      <template x-for="ex in singExamples" :key="ex.label">
+        <button @click="singLyrics=ex.lyrics; singLang=ex.lang"
+                class="text-[12px] bg-hub-bg border border-hub-border hover:border-hub-green hover:text-hub-green px-2 py-0.5 rounded-full transition"
+                x-text="ex.label"></button>
+      </template>
+    </div>
+
+    <!-- 演绎风格 + 语言 + 节奏 -->
+    <div class="flex gap-x-3 gap-y-1.5 mt-2 items-center flex-wrap">
+      <div class="flex gap-1 flex-wrap items-center" role="group" aria-label="演绎风格">
+        <span class="text-[12px] text-hub-muted">风格：</span>
+        <template x-for="st in singStyles" :key="st.value">
+          <button @click="singEmotion=st.value"
+                  :class="singEmotion===st.value ? 'border-hub-blue text-hub-blue bg-hub-blue/10' : 'border-hub-border text-hub-muted hover:text-hub-text'"
+                  class="text-[12px] border px-2 py-0.5 rounded-full transition" x-text="st.label"></button>
+        </template>
+      </div>
+      <select x-model="singLang" aria-label="演绎语言" class="text-sm w-20">
+        <option value="zh">中文</option>
+        <option value="en">英语</option>
+        <option value="ja">日语</option>
+      </select>
+    </div>
+    <div class="mt-2">
+      <div class="flex justify-between text-[12px] text-hub-muted mb-0.5">
+        <span>🐢 舒缓</span>
+        <span>节奏</span>
+        <span>🐇 明快</span>
+      </div>
+      <input type="range" min="0.5" max="1.2" step="0.05" x-model.number="singSpeed" aria-label="演绎节奏（0.5~1.2 倍）" class="w-full">
+      <div class="text-center text-[12px] text-hub-blue font-semibold mt-0.5">
+        <span x-text="singSpeed"></span>x
+        <span class="text-hub-muted" x-text="singSpeed<=0.65?'（很舒缓）':singSpeed>=1.05?'（明快）':'（适中）'"></span>
+        <button x-show="singSpeed!==0.85" @click="singSpeed=0.85"
+                class="ml-1 text-hub-muted hover:text-hub-blue underline">回默认</button>
+      </div>
+    </div>
+
+    <!-- 合成前就绪体检（音色 / 歌词 / 引擎），悬停看指引 -->
+    <div class="flex flex-wrap gap-1.5 mt-3">
+      <template x-for="p in singPreflight()" :key="p.key">
+        <span :title="p.hint"
+              class="text-[13px] px-2 py-1 rounded-full border flex items-center gap-1 cursor-default select-none"
+              :class="p.ok?'border-hub-green/40 text-hub-green bg-hub-green/10':'border-hub-orange/40 text-hub-orange bg-hub-orange/10'">
+          <span x-text="p.ok?'✓':'!'"></span><span x-text="p.label"></span>
+        </span>
+      </template>
+    </div>
+    <button @click="doSing()" :disabled="singLoading||!singLyrics.trim()"
+            :title="!singLyrics.trim()?'请先输入歌词':''"
+            class="w-full mt-2.5 bd-btn bd-btn-success text-sm"
+            :class="(singLoading||!singLyrics.trim())?'':'bd-glow-pulse'">
+      <span x-show="!singLoading">🎵 开始演绎</span>
+      <span x-show="singLoading" class="pulse">⏳ 正在演绎…</span>
+    </button>
+    <!-- Sing-P0: 等待态 —— 已用/预计（按歌词长度估算）+ 随时可取消 -->
+    <div x-show="singLoading" role="status" aria-live="polite" class="flex items-center justify-center gap-3 text-[13px] text-hub-muted mt-2">
+      <span class="pulse">🎙 逐句生成中 · 已用 <span x-text="Math.round(singElapsedMs/1000)"></span>s / 预计 ~<span x-text="singEta"></span>s</span>
+      <button @click="cancelSing()" class="text-[12px] text-hub-muted hover:text-hub-red underline">取消</button>
+    </div>
+    <div x-show="singMsg" x-text="singMsg" role="status" aria-live="polite"
+         :class="singOk?'text-hub-green bg-green-900/20':'text-hub-red bg-red-900/20'"
+         class="text-xs text-center py-1.5 rounded-lg mt-2"></div>
+    <!-- Sing-P0: 作品卡 —— 引擎徽章（降级不再伪装成功）+ 演唱者署名 + 历史链接 -->
+    <div x-show="singAudioSrc" class="mt-3 border border-hub-border rounded-xl p-3 space-y-2">
+      <div class="flex items-center gap-1.5 flex-wrap text-[12px]">
+        <span class="px-2 py-0.5 rounded-full border cursor-default"
+              :title="singEngine==='singing' ? '由完整唱歌引擎演绎' : '完整唱歌引擎未部署，本次为念白演绎（以角色音色朗读歌词）'"
+              :class="singEngine==='singing' ? 'border-hub-green/40 text-hub-green bg-hub-green/10' : 'border-hub-blue/40 text-hub-blue bg-hub-blue/10'"
+              x-text="singEngine==='singing' ? '🎶 完整唱歌引擎' : '🎙 念白演绎'"></span>
+        <span class="text-hub-muted truncate" x-text="'演唱者：'+(singVoiceMode==='upload'&&singRefName ? '参考音色·'+singRefName : (active||'系统默认声音'))"></span>
+        <a x-show="singHistId" href="#" @click.prevent="goTab('history')" class="text-hub-muted hover:text-hub-blue underline ml-auto shrink-0">已存入历史 →</a>
+      </div>
+      <audio :src="singAudioSrc" controls class="w-full"></audio>
+      <div class="bd-act-row">
+        <button @click="downloadSing()"
+                class="bd-act sm green">⬇ 下载</button>
+        <button @click="doSing()" :disabled="singLoading||!singLyrics.trim()"
+                class="bd-act sm ghost">🔁 重新演绎</button>
+      </div>
+    </div>
+    </div><!-- /歌词念白面板 -->
+  </div>
+</div>
