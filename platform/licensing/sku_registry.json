@@ -1,11 +1,11 @@
 {
-  "generated": "2026-07-15",
+  "generated": "2026-07-18",
   "source": "products/*/product.yaml",
   "note": "Single source of SKUs for website pricing + license gating + order. Regenerate via platform/licensing/build_sku_registry.py.",
   "summary": {
     "product_count": 7,
-    "sku_count": 21,
-    "tbd_price_count": 5,
+    "sku_count": 22,
+    "tbd_price_count": 2,
     "by_category": {
       "studio": 3,
       "lingo": 2,
@@ -147,6 +147,14 @@
           "price": "398",
           "currency": "USD",
           "note": "30 条；100 条 998/月"
+        },
+        {
+          "sku_id": "livex-creator-deploy",
+          "name": "创作者全能部署",
+          "unit": "one-time",
+          "price": "5580",
+          "currency": "USD",
+          "note": "创作者全能包：实时换脸+声音克隆+数字人 私有化部署"
         }
       ]
     },
@@ -192,7 +200,7 @@
           "sku_id": "lingox-charpack",
           "name": "字符包",
           "unit": "one-time",
-          "price": "TBD",
+          "price": "59",
           "currency": "USD",
           "note": ""
         },
@@ -200,7 +208,7 @@
           "sku_id": "lingox-team",
           "name": "团队",
           "unit": "month",
-          "price": "TBD",
+          "price": "99",
           "currency": "USD",
           "note": ""
         },
@@ -208,7 +216,7 @@
           "sku_id": "lingox-pro",
           "name": "专业",
           "unit": "month",
-          "price": "TBD",
+          "price": "198",
           "currency": "USD",
           "note": ""
         }
@@ -417,6 +425,18 @@
       "note": "30 条；100 条 998/月"
     },
     {
+      "product": "huanying",
+      "brand_key": "livex",
+      "category": "studio",
+      "visibility": "mixed",
+      "sku_id": "livex-creator-deploy",
+      "name": "创作者全能部署",
+      "unit": "one-time",
+      "price": "5580",
+      "currency": "USD",
+      "note": "创作者全能包：实时换脸+声音克隆+数字人 私有化部署"
+    },
+    {
       "product": "tongchuan",
       "brand_key": "voxx",
       "category": "lingo",
@@ -448,7 +468,7 @@
       "sku_id": "lingox-charpack",
       "name": "字符包",
       "unit": "one-time",
-      "price": "TBD",
+      "price": "59",
       "currency": "USD",
       "note": ""
     },
@@ -460,7 +480,7 @@
       "sku_id": "lingox-team",
       "name": "团队",
       "unit": "month",
-      "price": "TBD",
+      "price": "99",
       "currency": "USD",
       "note": ""
     },
@@ -472,7 +492,7 @@
       "sku_id": "lingox-pro",
       "name": "专业",
       "unit": "month",
-      "price": "TBD",
+      "price": "198",
       "currency": "USD",
       "note": ""
     },

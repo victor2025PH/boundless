@@ -456,11 +456,11 @@ const zh: Dict = {
       desc: "多平台文字 + 语音双向实时翻译，术语表锁定专有名词、翻译记忆省成本，统一收件箱沉淀客户资产——让不会外语的团队在 WhatsApp / Telegram / LINE 上即时跟全球客户对话。",
       features: ["多平台双向翻译", "术语锁定 · 翻译记忆", "统一收件箱 · 客户资产", "多模态（图片/语音）翻译"],
       highlight: true,
-      // 定价与 lib/pricing.ts::translateOffers 同步（USD）；改价两处一起改。
+      // 定价与 lib/pricing.ts::translateOffers 同步（USD，2026-07-18 定价决议：竞品×2）；改价两处一起改。
       pricing: [
-        { plan: "字符包", price: "39", detail: "一次性 · 150 万字符 + 术语库 + 翻译记忆" },
-        { plan: "团队", price: "59 / 月", detail: "多坐席收件箱 + 客户 journey + 漏斗计数" },
-        { plan: "专业", price: "99 / 月", detail: "不限字符 + 多模态翻译 + 置信度/引擎健康" },
+        { plan: "字符包", price: "59", detail: "一次性 · 150 万字符 + 术语库 + 翻译记忆" },
+        { plan: "团队", price: "99 / 月", detail: "多坐席收件箱 + 客户 journey + 漏斗计数" },
+        { plan: "专业", price: "198 / 月", detail: "不限字符 + 多模态翻译 + 置信度/引擎健康" },
       ],
     },
     {
@@ -640,7 +640,7 @@ const zh: Dict = {
       {
         name: "基础部署",
         tag: "单能力",
-        price: "980 USDT 起",
+        price: "980 USD 起",
         unit: "一次性 · 含部署调试",
         specs: ["实时换脸 或 换声 任选其一", "远程部署 + 基础调试", "上手培训", "7 天技术支持"],
         cta: "Telegram 咨询",
@@ -648,7 +648,7 @@ const zh: Dict = {
       {
         name: "创作者全能",
         tag: "推荐",
-        price: "2580 USDT",
+        price: "5580 USD",
         unit: "一次性 · 含部署调试",
         specs: ["实时换脸 + 换声 + 数字人", "多场景深度调试", "上手培训 + 文档", "30 天技术支持"],
         cta: "Telegram 咨询",
@@ -893,7 +893,7 @@ const zh: Dict = {
         tagline: "你的设备，我们负责落地",
         you: "自购硬件 · 提供场地",
         we: "选型建议 + 部署 + 定制 + 培训 + 支持",
-        price: "一次性 980 USDT 起",
+        price: "一次性 980 USD 起",
         priceNote: "含三档部署套餐 · 可加运维 198 / 月",
         points: ["数据 100% 私有、不出网", "按你的场景深度定制", "交付文档 + 上手培训", "7~30 天技术支持"],
         cta: "Telegram 咨询",
@@ -1115,11 +1115,11 @@ const en: Dict = {
       desc: "Two-way real-time text + voice translation across platforms, glossary-locked proper nouns, cost-saving translation memory, and a unified inbox that builds customer assets — so teams that don't speak the language can chat with global clients on WhatsApp / Telegram / LINE.",
       features: ["Multi-platform translation", "Term lock · translation memory", "Unified inbox · customer assets", "Multimodal (image/voice)"],
       highlight: true,
-      // Prices mirror lib/pricing.ts::translateOffers (USD); change both together.
+      // Prices mirror lib/pricing.ts::translateOffers (USD; repriced 2026-07-18, competitor ×2); change both together.
       pricing: [
-        { plan: "Char pack", price: "39", detail: "One-time · 1.5M chars + glossary + translation memory" },
-        { plan: "Team", price: "59 / mo", detail: "Multi-seat inbox + customer journey + funnel counter" },
-        { plan: "Pro", price: "99 / mo", detail: "Unlimited chars + multimodal translate + confidence/engine health" },
+        { plan: "Char pack", price: "59", detail: "One-time · 1.5M chars + glossary + translation memory" },
+        { plan: "Team", price: "99 / mo", detail: "Multi-seat inbox + customer journey + funnel counter" },
+        { plan: "Pro", price: "198 / mo", detail: "Unlimited chars + multimodal translate + confidence/engine health" },
       ],
     },
     {
@@ -1299,7 +1299,7 @@ const en: Dict = {
       {
         name: "Basic deploy",
         tag: "Single",
-        price: "from 980 USDT",
+        price: "from 980 USD",
         unit: "one-time · incl. setup",
         specs: ["Face swap OR voice, your pick", "Remote deploy + basic tuning", "Hands-on training", "7-day support"],
         cta: "Ask on Telegram",
@@ -1307,7 +1307,7 @@ const en: Dict = {
       {
         name: "Creator all-in",
         tag: "Popular",
-        price: "2580 USDT",
+        price: "5580 USD",
         unit: "one-time · incl. setup",
         specs: ["Face swap + voice + digital human", "Multi-scenario deep tuning", "Training + docs", "30-day support"],
         cta: "Ask on Telegram",
@@ -1552,7 +1552,7 @@ const en: Dict = {
         tagline: "Your hardware, we make it work",
         you: "Buy hardware · provide space",
         we: "Spec advice + deploy + customize + train + support",
-        price: "one-time from 980 USDT",
+        price: "one-time from 980 USD",
         priceNote: "incl. 3 deploy tiers · ops add-on 198 / mo",
         points: ["100% private, off the net", "Deeply tailored to your scenario", "Docs + hands-on training", "7–30 days tech support"],
         cta: "Ask on Telegram",

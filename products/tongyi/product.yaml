@@ -23,22 +23,22 @@ website:
   landing: /interpreting           # productMeta.PRODUCT_LANDING.lingox
   matrix_family: lingo
 
-# 定价占位（数字待老板拍板；建议见 docs 实施01；website/lib/content.ts#translate 已同步占位）
+# 定价已拍板（2026-07-18 定价决议：按竞品 NexScrm ×2 + 品牌尾数惯例；website/lib/pricing.ts + content.ts 已同步）
 skus:
   - id: lingox-charpack
     name: { zh: 字符包, en: Char pack }
     unit: one-time
-    price: TBD                     # 建议 39 USD / 150万字符
+    price: "59"                    # USD / 150万字符（NexScrm Character Pack $30/1.5M ×2=60 → 尾数 9 惯例 59）
     includes: [多平台双向翻译, 术语库]
   - id: lingox-team
     name: { zh: 团队, en: Team }
     unit: month
-    price: TBD                     # 建议 59 USD/月
+    price: "99"                    # USD/月（NexScrm Standard $48/mo ×2=96 → 99）
     includes: [多坐席, 客户 journey, 漏斗看板]
   - id: lingox-pro
     name: { zh: 专业, en: Pro }
     unit: month
-    price: TBD                     # 建议 99 USD/月
+    price: "198"                   # USD/月（NexScrm Pro $90/mo ×2=180 → 尾数 8 惯例 198）
     includes: [不限字符, 多模态翻译, 置信度/引擎健康]
 
 delivery:
