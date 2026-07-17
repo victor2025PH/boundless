@@ -1,31 +1,36 @@
 "use client";
 
+import Image from "next/image";
 import { motion, useReducedMotion, type MotionProps } from "framer-motion";
 import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
-import { BRAND, PRODUCT_ORDER, CATEGORIES, CATEGORY_ORDER, productsInCategory } from "@/lib/brand";
-import { PRODUCT_IMG, PRODUCT_ANCHOR, PRODUCT_LANDING } from "./productMeta";
+import { BRAND, PRODUCT_ORDER, PRODUCT_COUNT, CATEGORIES, CATEGORY_ORDER, productsInCategory } from "@/lib/brand";
+import { CATEGORY_UI } from "@/lib/categoryUi";
+import { PRODUCT_IMG, PRODUCT_ANCHOR, PRODUCT_LANDING, PRODUCT_OPTICAL_SCALE } from "./productMeta";
 import { track } from "@/lib/track";
 import { ArrowRight, ShieldCheck } from "lucide-react";
+import { localePath } from "@/lib/site";
 
 const COPY = {
   zh: {
     kicker: "产品矩阵",
-    head: "三大产品系，七条产品线",
+    headPrefix: "三大产品系，",
+    headSuffix: "条产品线",
     sub: "智连获客成交、幻境数字分身、通达跨语沟通——三系共享一个无界底座；每条产品线可单独选用，也能组合成「获客 + 数字分身 + 自动成交」的完整闭环。",
     breakLabel: "打破",
     engineName: "无界底座 BOUNDLESS Engine",
-    engineDesc: "三系七产品共享同一私有化底座：数据不出网、自主可控、合规可溯源。",
+    engineDesc: "三系产品共享同一私有化底座：数据不出网、自主可控、合规可溯源。",
     ctaPrimary: "查看套餐与价格",
     ctaSecondary: "了解品牌故事",
   },
   en: {
     kicker: "Product Matrix",
-    head: "Three families, seven product lines",
+    headPrefix: "Three families, ",
+    headSuffix: " product lines",
     sub: "Growth for reach & closing, Studio for digital twins, Lingo for cross-language — three families on one BOUNDLESS core. Pick any line on its own, or combine them into a full \"lead-gen + digital twin + auto-closing\" loop.",
     breakLabel: "Breaks",
     engineName: "BOUNDLESS Engine",
-    engineDesc: "Seven lines across three families share one private-deployment core: data stays off-net, self-controlled and verifiably compliant.",
+    engineDesc: "Three families share one private-deployment core: data stays off-net, self-controlled and verifiably compliant.",
     ctaPrimary: "View plans & pricing",
     ctaSecondary: "Read the brand story",
   },
@@ -36,7 +41,7 @@ export default function ProductMatrix() {
   const reduced = useReducedMotion();
   const c = COPY[lang];
 
-  /* 图标入场描边:滚入视口时青色辉光闪现一次后收敛为微光,级联点亮五条产品线 */
+  /* 图标入场描边:滚入视口时青色辉光闪现一次后收敛为微光,级联点亮产品线 */
   const iconGlow = (idx: number): MotionProps =>
     reduced
       ? {}
@@ -61,7 +66,9 @@ export default function ProductMatrix() {
             {c.kicker}
           </p>
           <h2 className="mx-auto mt-3 max-w-3xl text-center text-3xl font-bold text-white md:text-4xl">
-            {c.head}
+            {c.headPrefix}
+            {PRODUCT_COUNT}
+            {c.headSuffix}
           </h2>
           <p className="mx-auto mt-4 max-w-2xl text-center text-base text-slate-400">
             {c.sub}
@@ -71,14 +78,23 @@ export default function ProductMatrix() {
         <div className="mt-12 space-y-12">
           {CATEGORY_ORDER.map((cat) => {
             const cc = CATEGORIES[cat];
+            const ui = CATEGORY_UI[cat];
             const items = productsInCategory(cat);
+            const borderL =
+              cat === "growth"
+                ? "border-neon-cyan/50"
+                : cat === "studio"
+                  ? "border-neon-violet/50"
+                  : "border-amber-400/50";
             return (
               <div key={cat}>
                 <Reveal>
-                  <div className="mb-5 flex flex-wrap items-baseline gap-x-3 gap-y-1 border-l-2 border-neon-cyan/50 pl-3">
+                  <div className={`mb-5 flex flex-wrap items-baseline gap-x-3 gap-y-1 border-l-2 pl-3 ${borderL}`}>
                     <h3 className="text-lg font-bold text-white">
                       {lang === "zh" ? cc.zh : cc.en}
-                      <span className="ml-2 text-sm font-medium text-neon-cyan">{lang === "zh" ? cc.en : cc.zh}</span>
+                      <span className={`ml-2 text-sm font-medium ${ui.label}`}>
+                        {lang === "zh" ? cc.en : cc.zh}
+                      </span>
                     </h3>
                     <span className="text-xs text-slate-500">
                       {c.breakLabel} · {lang === "zh" ? cc.breakZh : cc.breakEn}
@@ -89,26 +105,28 @@ export default function ProductMatrix() {
                   {items.map((key) => {
                     const idx = PRODUCT_ORDER.indexOf(key);
                     const p = BRAND.products[key];
-                    // 有独立落地页的产品线跳落地页（更完整的卖点+真实样片），其余回退首页锚点
                     const landing = PRODUCT_LANDING[key];
-                    const href = landing ? (lang === "zh" ? landing : `/en${landing}`) : PRODUCT_ANCHOR[key];
+                    const href = landing ? localePath(lang, landing) : PRODUCT_ANCHOR[key];
+                    const optical = PRODUCT_OPTICAL_SCALE[key] ?? 1;
                     return (
                       <Reveal key={key} delay={(idx % 3) * 0.05}>
                         <a
                           href={href}
                           onClick={() => track("product_click", { key, where: "matrix" })}
-                          className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] p-5 transition hover:border-neon-cyan/40 hover:bg-white/[0.05]"
+                          className={`group relative flex h-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] p-5 transition hover:bg-white/[0.05] ${ui.border}`}
                         >
                           <div className="mb-4 flex items-center justify-between">
                             <motion.span className="inline-grid place-items-center rounded-xl" {...iconGlow(idx)}>
-                              <img
-                                src={PRODUCT_IMG[key]}
-                                alt={`${p.zh} ${p.en}`}
-                                width={48}
-                                height={48}
-                                className="h-12 w-12 object-contain transition-transform group-hover:scale-110"
-                                draggable={false}
-                              />
+                              <span style={optical !== 1 ? { transform: `scale(${optical})` } : undefined} className="inline-grid">
+                                <Image
+                                  src={PRODUCT_IMG[key]}
+                                  alt={`${p.zh} ${p.en}`}
+                                  width={48}
+                                  height={48}
+                                  className="h-12 w-12 object-contain transition-transform group-hover:scale-110"
+                                  draggable={false}
+                                />
+                              </span>
                             </motion.span>
                             <span className="font-mono text-xs text-slate-600">0{idx + 1}</span>
                           </div>
@@ -116,9 +134,9 @@ export default function ProductMatrix() {
                             <span className="text-xl font-bold text-white">{p.zh}</span>
                             <span className="text-sm font-semibold text-neon-cyan">{p.en}</span>
                           </div>
-                          <p className="mt-0.5 text-xs text-slate-500">{p.alt}</p>
+                          <p className="mt-0.5 text-xs text-slate-500">{p.scene[lang]} · {p.alt}</p>
                           <p className="mt-3 flex-1 text-sm leading-relaxed text-slate-300">{p.desc[lang]}</p>
-                          <p className="mt-3 inline-flex w-fit items-center gap-1 rounded-full bg-neon-violet/10 px-2.5 py-1 text-xs font-medium text-neon-violet">
+                          <p className={`mt-3 inline-flex w-fit items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium ${ui.chip}`}>
                             {c.breakLabel} · {p.break[lang]}
                           </p>
                         </a>

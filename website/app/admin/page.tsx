@@ -60,6 +60,35 @@ interface Stats {
     compare?: { engagedLeadRate: number; othersLeadRate: number; othersLeads: number };
     news: { key: string; impressions: number; clicks: number; ctr: number }[];
   };
+  /** 龙珠彩蛋：事件漏斗 + 存储层权威计数 */
+  dragon?: {
+    events: {
+      offers: number;
+      pearls: number[];
+      summons: number;
+      wishes: number;
+      tgClicks: number;
+      assists?: number;
+      wow?: { pearls: { cur: number; prev: number }; summons: { cur: number; prev: number } };
+    };
+    /** 见过星珠的会话：互动组 vs 仅曝光组留资率（相关参考） */
+    compare?: { engaged: number; seenOnly: number; engagedLeadRate: number; seenOnlyLeadRate: number };
+    store: {
+      visitors: number;
+      activeCycles: number;
+      summons: number;
+      wishes: { trial: number; skin: number; gift: number };
+      codesIssued: number;
+      codesRedeemed: number;
+      skinOwners: number;
+      trialLeftThisMonth: number;
+      scalesHeld?: number;
+      grandIssued?: number;
+      grandRedeemed?: number;
+      tgBound?: number;
+      reminders?: number;
+    } | null;
+  };
   leadsBySource: Record<string, number>;
   leadsByInterest: Record<string, number>;
   leadsByDay: Record<string, number>;
@@ -1184,7 +1213,7 @@ export default function AdminPage() {
 
   async function publishCatalog() {
     const where = catTarget === "channel" ? "频道" : catTarget === "group" ? "群" : "频道+群";
-    if (!confirm(`把官网六大产品（${catLang === "zh" ? "中文" : "英文"}）图文帖发布到${where}？会自动替换上次发布的目录。`)) return;
+    if (!confirm(`把官网七款产品（${catLang === "zh" ? "中文" : "英文"}）图文帖发布到${where}？会自动替换上次发布的目录。`)) return;
     setGenning(true);
     setBcMsg("正在发布产品目录…");
     try {
@@ -1629,6 +1658,81 @@ export default function AdminPage() {
                             </tbody>
                           </table>
                         )}
+                      </div>
+                    </div>
+                  </SectionCard>
+                )}
+
+                {stats.dragon && (
+                  <SectionCard title="龙珠彩蛋（七星聚 · 龙行无界）" Icon={Activity} accent="text-amber-300">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div>
+                        <div className="mb-2 text-[11px] text-slate-400">
+                          事件漏斗：曝光 {stats.dragon.events.offers} → 召唤 {stats.dragon.events.summons} → 祈愿 {stats.dragon.events.wishes} → TG 跳转 {stats.dragon.events.tgClicks}
+                        </div>
+                        <div className="flex items-end gap-1.5">
+                          {stats.dragon.events.pearls.map((v, i) => {
+                            const max = Math.max(1, ...stats.dragon!.events.pearls);
+                            return (
+                              <div key={i} className="flex flex-1 flex-col items-center gap-1">
+                                <div className="flex h-16 w-full items-end rounded bg-slate-900/70">
+                                  <div
+                                    className="w-full rounded bg-gradient-to-t from-amber-500 to-yellow-300"
+                                    style={{ height: `${Math.max(v > 0 ? 8 : 0, (v / max) * 100)}%` }}
+                                  />
+                                </div>
+                                <span className="text-[10px] text-slate-500">第{i + 1}珠</span>
+                                <span className="text-[10px] font-semibold text-slate-300">{v}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="mt-1 text-[11px] text-slate-600">第 1→7 珠人次衰减 = 七日留存曲线（窗口内事件计数）</div>
+                        {stats.dragon.events.wow && (
+                          <div className="mt-1.5 text-[11px] text-slate-500">
+                            周环比：收珠 <span className="text-slate-300">{stats.dragon.events.wow.pearls.cur}</span>
+                            <span className="text-slate-600">（上周 {stats.dragon.events.wow.pearls.prev}）</span>
+                            · 召唤 <span className="text-amber-300">{stats.dragon.events.wow.summons.cur}</span>
+                            <span className="text-slate-600">（上周 {stats.dragon.events.wow.summons.prev}）</span>
+                            {typeof stats.dragon.events.assists === "number" && <> · 助力 {stats.dragon.events.assists}</>}
+                          </div>
+                        )}
+                        {stats.dragon.compare && stats.dragon.compare.engaged > 0 && (
+                          <div className="mt-2 rounded-lg border border-slate-800 bg-slate-950/40 px-2.5 py-2 text-[11px]">
+                            <span className="text-slate-400">参与留资率：</span>
+                            <span className="font-semibold text-amber-300">互动 {stats.dragon.compare.engagedLeadRate}%</span>
+                            <span className="mx-1 text-slate-600">vs</span>
+                            <span className="text-slate-300">仅曝光 {stats.dragon.compare.seenOnlyLeadRate}%</span>
+                            <span className="ml-1.5 text-slate-600">
+                              （互动 {stats.dragon.compare.engaged} / 仅曝光 {stats.dragon.compare.seenOnly} 会话；相关参考）
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 text-[11px]">
+                        {stats.dragon.store ? (
+                          <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-slate-300">
+                            <span className="text-slate-500">参与访客</span><span>{stats.dragon.store.visitors}</span>
+                            <span className="text-slate-500">进行中周期</span><span>{stats.dragon.store.activeCycles}</span>
+                            <span className="text-slate-500">累计召唤</span><span className="text-amber-300">{stats.dragon.store.summons}</span>
+                            <span className="text-slate-500">祈愿分布</span>
+                            <span>体验 {stats.dragon.store.wishes.trial} · 龙鳞 {stats.dragon.store.wishes.skin} · 机缘 {stats.dragon.store.wishes.gift}</span>
+                            <span className="text-slate-500">兑换码</span>
+                            <span>发 {stats.dragon.store.codesIssued} / 核销 {stats.dragon.store.codesRedeemed}</span>
+                            <span className="text-slate-500">祥龙皮肤持有</span><span>{stats.dragon.store.skinOwners}</span>
+                            <span className="text-slate-500">本月体验名额</span>
+                            <span className={stats.dragon.store.trialLeftThisMonth <= 5 ? "text-rose-300" : "text-emerald-300"}>剩 {stats.dragon.store.trialLeftThisMonth}</span>
+                            <span className="text-slate-500">月鳞/界龙之约</span>
+                            <span>持鳞 {stats.dragon.store.scalesHeld ?? 0} · 大奖 {stats.dragon.store.grandIssued ?? 0}/{stats.dragon.store.grandRedeemed ?? 0} 核销</span>
+                            <span className="text-slate-500">TG 绑定/提醒</span>
+                            <span>{stats.dragon.store.tgBound ?? 0} 绑定 · {stats.dragon.store.reminders ?? 0} 订阅提醒</span>
+                          </div>
+                        ) : (
+                          <div className="text-slate-600">存储层暂无数据</div>
+                        )}
+                        <div className="mt-2 border-t border-slate-800/60 pt-2 text-slate-600">
+                          核销动线：官网集齐 → 祈愿 → TG 机器人 /start 深链核销（自动通知管理员跟进）
+                        </div>
                       </div>
                     </div>
                   </SectionCard>

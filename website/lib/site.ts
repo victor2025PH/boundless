@@ -37,3 +37,25 @@ export function miniappUtmLink(campaign = "", entry = "autochat"): string {
   const sp = cmp ? `${entry}__${cmp}` : entry;
   return `https://t.me/${BOT_HANDLE}?startapp=${sp.slice(0, 64)}`;
 }
+
+/** 中英双路由路径：zh → `/brand`，en → `/en/brand`；hash 原样保留。 */
+export function localePath(lang: "zh" | "en", path: string): string {
+  if (!path || path.startsWith("http")) return path;
+  if (path.startsWith("#")) return path;
+  const hashIdx = path.indexOf("#");
+  const hash = hashIdx >= 0 ? path.slice(hashIdx) : "";
+  let bare = hashIdx >= 0 ? path.slice(0, hashIdx) : path;
+  if (!bare) bare = "/";
+
+  let out: string;
+  if (lang === "zh") {
+    out = bare.startsWith("/en/") ? bare.slice(3) || "/" : bare === "/en" ? "/" : bare;
+  } else if (bare === "/" || bare === "") {
+    out = "/en";
+  } else if (bare.startsWith("/en/") || bare === "/en") {
+    out = bare;
+  } else {
+    out = `/en${bare.startsWith("/") ? bare : `/${bare}`}`;
+  }
+  return out + hash;
+}

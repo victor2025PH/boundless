@@ -1,6 +1,7 @@
 import path from "path";
 import { generateText } from "./deepseek";
 import { buildKnowledgeContext } from "./bot-knowledge";
+import { PRODUCT_COUNT, productLineItems } from "./brand";
 
 // Map each theme to a relevant product image (reuse the catalog assets).
 const THEME_IMAGE = [
@@ -89,8 +90,11 @@ export async function generateDailyPost(themeIdx?: number): Promise<DailyPost | 
       : themeForToday();
 
   const knowledge = buildKnowledgeContext("zh");
+  const lineNames = productLineItems("zh")
+    .map((it) => it.name)
+    .join("、");
   const system =
-    `你是无界科技 BOUNDLESS 的资深社媒文案，负责官方 Telegram 频道（五条产品线：幻颜 FaceX、幻声 VoiceX、幻影 LiveX、通译 LingoX、智聊 ChatX）。基于以下产品事实创作营销帖：\n${knowledge}\n\n` +
+    `你是无界科技 BOUNDLESS 的资深社媒文案，负责官方 Telegram 频道（${PRODUCT_COUNT} 条产品线：${lineNames}）。基于以下产品事实创作营销帖：\n${knowledge}\n\n` +
     `写作要求：\n` +
     `- 简体中文，口吻专业又有感染力，像顶尖出海营销号。\n` +
     `- 开头一行：emoji + 抓人标题。\n` +

@@ -1,6 +1,6 @@
 import { content } from "./content";
 import { SITE_URL } from "./site";
-import { BRAND, productLineItems, productLinesText } from "./brand";
+import { BRAND, PRODUCT_COUNT, productLineItems, productLinesText } from "./brand";
 
 export type BotLang = "zh" | "en";
 
@@ -26,7 +26,7 @@ export function buildWelcome(lang: BotLang) {
 🤖 <b>AI 智能客服</b>：直接发消息问我，7×24 秒回（价格 / 方案 / 对接都能答）
 👤 <b>人工客服</b>：需要真人就点下方「人工客服」
 
-  六条产品线：
+  ${PRODUCT_COUNT} 条产品线：
 ${lines}
 · 🔐 <b>无界底座</b>：自主可控私有部署，数据不出网
 
@@ -36,7 +36,7 @@ ${lines}
 🤖 <b>AI assistant</b>: just message me, 24/7 instant replies (pricing / solutions / onboarding)
 👤 <b>Human support</b>: tap "Human support" below anytime
 
-  Six product lines:
+  ${PRODUCT_COUNT} product lines:
 ${lines}
 · 🔐 <b>BOUNDLESS Engine</b>: self-controlled private deployment, data stays off-net
 
@@ -47,8 +47,8 @@ export function buildServices(lang: BotLang) {
   const sols = t(lang).solutions;
   const lines = sols.map((s) => `· <b>${s.title}</b>\n  ${s.desc}`).join("\n\n");
   return lang === "zh"
-    ? `📦 <b>六大业务能力</b>\n\n${lines}\n\n💡 详情见官网各板块演示`
-    : `📦 <b>Six core solutions</b>\n\n${lines}\n\n💡 See live demos on the site`;
+    ? `📦 <b>业务能力</b>\n\n${lines}\n\n💡 详情见官网各板块演示`
+    : `📦 <b>Core solutions</b>\n\n${lines}\n\n💡 See live demos on the site`;
 }
 
 export function buildPricing(lang: BotLang) {
@@ -216,8 +216,8 @@ export function buildKnowledgeContext(lang: BotLang): string {
     .join(lang === "zh" ? "、" : "; ");
   parts.push(
     lang === "zh"
-    ? `公司：${BRAND.company.full}（${BRAND.company.tagline.zh}）。六条产品线：${lineSummary}。主推产品：智聊 ChatX 驱动的 AI 自动成交聊天系统。结算：全程 USDT。`
-    : `Company: ${BRAND.company.full} (${BRAND.company.tagline.en}). Six product lines: ${lineSummary}. Flagship: AI Auto-Closing Chat System powered by ChatX. Settlement: USDT only.`
+    ? `公司：${BRAND.company.full}（${BRAND.company.tagline.zh}）。${PRODUCT_COUNT} 条产品线：${lineSummary}。主推产品：智聊 ChatX 驱动的 AI 自动成交聊天系统。结算：全程 USDT。`
+    : `Company: ${BRAND.company.full} (${BRAND.company.tagline.en}). ${PRODUCT_COUNT} product lines: ${lineSummary}. Flagship: AI Auto-Closing Chat System powered by ChatX. Settlement: USDT only.`
   );
 
   parts.push(
@@ -240,7 +240,7 @@ export function buildKnowledgeContext(lang: BotLang): string {
   );
   parts.push((lang === "zh" ? "更多服务：" : "Extras: ") + c.realtime.extras.join("; "));
 
-  parts.push(lang === "zh" ? "【六大能力】" : "[Six solutions]");
+  parts.push(lang === "zh" ? "【业务能力】" : "[Solutions]");
   c.solutions.forEach((s) =>
     parts.push(`- ${s.title}: ${s.desc} | ${s.pricing.map((p) => `${p.plan} ${p.price}`).join(", ")}`)
   );
@@ -283,7 +283,7 @@ export function systemPrompt(lang: BotLang): string {
     .map((it) => it.name)
     .join(lang === "zh" ? "、" : ", ");
   return lang === "zh"
-    ? `你是「${BRAND.company.full}」的专业 AI 售前客服（六条产品线：${names}）。只能根据下面提供的资料回答，不要编造价格、参数或承诺收益。
+    ? `你是「${BRAND.company.full}」的专业 AI 售前客服（${PRODUCT_COUNT} 条产品线：${names}）。只能根据下面提供的资料回答，不要编造价格、参数或承诺收益。
 
 要求：
 - 【语言镜像】务必用「用户最新一条消息所用的语言」作答：用户用西班牙语/葡萄牙语/阿拉伯语/泰语/英语等，就用同种语言地道、口语化地回复（像本地母语销售，不要翻译腔）。用户用中文则用简体中文。
@@ -297,7 +297,7 @@ export function systemPrompt(lang: BotLang): string {
 
 资料：
 ${kb}`
-    : `You are the professional AI pre-sales agent for "${BRAND.company.full}" (six product lines: ${names}). Answer ONLY from the material below. Never invent prices, specs or guarantee returns.
+    : `You are the professional AI pre-sales agent for "${BRAND.company.full}" (${PRODUCT_COUNT} product lines: ${names}). Answer ONLY from the material below. Never invent prices, specs or guarantee returns.
 
 Rules:
 - [Language mirroring] ALWAYS reply in the SAME language as the user's latest message: if they write Spanish/Portuguese/Arabic/Thai/etc., reply fluently and idiomatically in that exact language (like a native salesperson, no translationese). If Chinese, reply in Simplified Chinese.

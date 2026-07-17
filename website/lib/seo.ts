@@ -17,11 +17,12 @@ export const SITE_PAGES: SitePage[] = [
   { slug: "/voice", bilingual: true, locales: ["ko", "ja"], changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
   { slug: "/face", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
   { slug: "/interpreting", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
+  { slug: "/growth", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
   { slug: "/order", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
   { slug: "/download", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
   { slug: "/manual", bilingual: true, changeFrequency: "monthly", priority: 0.6, enPriority: 0.5 },
   { slug: "/videos", bilingual: true, changeFrequency: "weekly", priority: 0.6, enPriority: 0.5 },
-  { slug: "/brand", bilingual: false, changeFrequency: "monthly", priority: 0.5 },
+  { slug: "/brand", bilingual: true, changeFrequency: "monthly", priority: 0.5, enPriority: 0.45 },
   { slug: "/privacy", bilingual: true, changeFrequency: "yearly", priority: 0.3 },
   { slug: "/terms", bilingual: true, changeFrequency: "yearly", priority: 0.3 },
 ];
