@@ -80,6 +80,12 @@ def run_once(conf: dict, sk, dry: bool) -> int:
             if resp.get("ok"):
                 handled += 1
                 print(f"  ✓ 已回填 {lic_id}")
+                try:   # 签发即导出：队列签发成功追加台账 outbox（ledger_outbox 静默钩子，绝不影响回填）
+                    import ledger_outbox as _lo
+                    _lo.record_issue(_lo.normalize_from_issue(payload, kind="console_sign",
+                                                              extra_raw={"request_id": rid}))
+                except Exception:
+                    pass
             else:
                 print(f"  ✗ 回填失败：{resp}")
         except Exception as e:

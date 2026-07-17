@@ -148,6 +148,12 @@ def run_once(conf: dict, dry: bool) -> int:
                 save_state(st)
                 handled += 1
                 print(f"[开通] {oid} ✓ 客户可在 {conf['site']}/order?check={oid} 自取授权码")
+                try:   # 签发即导出：履约成功追加台账 outbox（ledger_outbox 静默钩子，绝不影响履约）
+                    import ledger_outbox as _lo
+                    _pl = json.loads(base64.b64decode(code_b64)).get("payload") or {}
+                    _lo.record_issue(_lo.normalize_from_fulfillment(oid, _pl, st["done"][oid]))
+                except Exception:
+                    pass
             else:
                 print(f"[错误] {oid} 回填失败：{r}")
         except Exception as e:

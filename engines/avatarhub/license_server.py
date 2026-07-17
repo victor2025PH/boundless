@@ -560,6 +560,12 @@ def activate(code: str, fingerprint: str) -> tuple[int, dict]:
                          args=({"fp": fp, "code": code, "via": rec.get("via", ""),
                                 "edition": rec.get("edition", ""), "days": rec.get("days", ""),
                                 "issued": existing["issued"]},)).start()
+    try:   # 签发即导出：激活成功追加台账 outbox（ledger_outbox 静默钩子，绝不影响激活）
+        import ledger_outbox as _lo
+        _lo.record_issue(_lo.normalize_from_activation(code, rec, existing),
+                         outbox_path=Path(_STATE["orders_path"]).parent / "ledger_outbox.jsonl")
+    except Exception:
+        pass
     return 200, {"ok": True, "license": doc}
 
 
@@ -661,6 +667,12 @@ def trial_upgrade(fingerprint: str) -> tuple[int, dict]:
             _STATE["sk"], machine=fp, edition="pro", licensee="试用升级（自动签发）",
             issued=rec["issued"], expires=rec["expires"], features=None,
             lic_id=rec.get("lic_id", ""))
+    try:   # 签发即导出：试用签发追加台账 outbox（ledger_outbox 静默钩子，绝不影响签发）
+        import ledger_outbox as _lo
+        _lo.record_issue(_lo.normalize_from_trial(fp, rec),
+                         outbox_path=Path(_STATE["trials_path"]).parent / "ledger_outbox.jsonl")
+    except Exception:
+        pass
     left = max(0, int((rec["expires"] - now) / 86400))
     return 200, {"ok": True, "license": doc, "trial": True, "days_left": left}
 

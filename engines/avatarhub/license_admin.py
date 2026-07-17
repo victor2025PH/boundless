@@ -128,6 +128,11 @@ def cmd_issue(args):
     print(f"  序列号: {payload['lic_id']}   机器: {args.machine}   档位: {args.edition}   到期: {exp_s}   被授权方: {args.licensee or '-'}")
     if feats:
         print(f"  覆盖能力: {feats}")
+    try:   # 签发即导出：追加台账 outbox（ledger_outbox 静默钩子，绝不影响签发）
+        import ledger_outbox as _lo
+        _lo.record_issue(_lo.normalize_from_issue(payload, extra_raw={"out": str(out)}))
+    except Exception:
+        pass
 
 
 def cmd_status(args):
@@ -181,6 +186,11 @@ def cmd_revoke(args):
     revoked = [r for r in _crl_entries() if not _same_target(r, entry)]   # 幂等：同目标覆盖
     revoked.append(entry)
     _sign_and_write_crl(revoked)
+    try:   # 签发即导出：吊销事件追加台账 outbox（ledger_outbox 静默钩子，绝不影响吊销）
+        import ledger_outbox as _lo
+        _lo.record_issue(_lo.normalize_from_revoke(entry))
+    except Exception:
+        pass
     print(f"[完成] 已吊销并签名 → {REVOKE_FILE}")
     print(f"  目标 { {k: v for k, v in entry.items() if k != 'ts'} } · 当前 {len(revoked)} 条")
     print("  交付：把该文件放到产品同目录（或经激活服务 /api/revocations 分发），产品重启/≤15s 内生效。")
