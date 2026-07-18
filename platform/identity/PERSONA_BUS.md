@@ -1,10 +1,10 @@
 # 无界全域人设总线契约（PERSONA_BUS）
 
-> 版本：v1.2（P5 契约层） · 2026-07-18
-> 版本记录：v1.2 2026-07-18 运行时软门控（本地 grant 缓存 + 审计告警，默认 warn 放行）；v1.1 2026-07-18 据实修订（ack 端点对齐实现、软删回收期、缓存失效、多实例数据根）；v1 2026-07-18 初版
+> 版本：v1.3（P5 契约层） · 2026-07-18
+> 版本记录：v1.3 2026-07-18 enforce 切换流程（§4.2：前置证据清单 + enforce_readiness 检查器 + 灰度顺序与回滚）；v1.2 2026-07-18 运行时软门控（本地 grant 缓存 + 审计告警，默认 warn 放行）；v1.1 2026-07-18 据实修订（ack 端点对齐实现、软删回收期、缓存失效、多实例数据根）；v1 2026-07-18 初版
 > 归属：`platform/identity/`（人设 = 跨产品数字身份，本目录即"跨产品 Profile 总线"的家）
 > 配套：`platform/identity/ID_SPEC.md`（`prs` 前缀已注册）、`platform/identity/grant_gate.py`（运行时软门控）、
-> `tools/persona_bus/`（引擎侧导出器 + 校验器 + fetch_grants）、
+> `tools/persona_bus/`（引擎侧导出器 + 校验器 + fetch_grants + enforce_readiness）、
 > `website/scripts/ledger-import-personas.mjs`（注册表导入，已交付）
 > 适用范围：三引擎（avatarhub / chengjie / huoke）、七产品、集团控制台，凡涉及数字人设的登记、授权与清除，一律走本契约。
 
@@ -115,7 +115,7 @@
 
 - **管理面**：grants 只在**集团控制台**创建/吊销（引擎与产品无权自行授权），控制台操作留审计事件（`platform.persona.grant_created` / `platform.persona.grant_revoked`，进 EVENT_CONTRACT 事件流）；
 - **product 枚举**：`zhituo` / `zhiliao` / `tongyi` / `tongchuan` / `huansheng` / `huanying` / `huanyan`（与 EVENT_CONTRACT `product_id` 同源，`website`/`platform` 不作为被授权方）；
-- **执行面（v1 现实口径）**：grants 在 v1 是**登记与对账层**——回答"这个客户的数字人授权给了哪几款产品"，供交付清单、合同对账、清除范围计算使用。产品侧**硬拒绝**加载仍是后续阶段；自 v1.2 起提供**运行时软门控**（§4.1：本地缓存 + 默认 warn 放行 + 可选 enforce），不阻塞业务、可回滚；
+- **执行面（v1 现实口径）**：grants 在 v1 是**登记与对账层**——回答"这个客户的数字人授权给了哪几款产品"，供交付清单、合同对账、清除范围计算使用。产品侧**硬拒绝**加载仍是后续阶段；自 v1.2 起提供**运行时软门控**（§4.1：本地缓存 + 默认 warn 放行 + 可选 enforce），不阻塞业务、可回滚；warn → enforce 的证据化切换流程见 §4.2（v1.3）；
 - **与授权台账的关系**：license（`tools/license_ledger`，产品使用权）和 grant（人设使用权）是两条正交的授权轴——客户可以有产品授权但把某个 persona 只授权给其中两款产品用；
 - 生命周期：`granted → revoked`；persona 进入 `purge_pending/purged` 时其全部 grants 自动失效（清除优先于授权）。
 
@@ -165,6 +165,7 @@ Authorization: Bearer <EVENT_INGEST_KEY>
 |---|---|---|
 | 门控核心 | `platform/identity/grant_gate.py` | `load_cache` / `check`；`--selftest` |
 | 拉取器 | `tools/persona_bus/fetch_grants.py` | HTTP 拉清单写缓存；失败非 0，可重试 |
+| 就绪检查器 | `tools/persona_bus/enforce_readiness.py` | enforce 切换前证据检查（§4.2）；`--selftest` |
 | avatarhub 薄适配 | `engines/avatarhub/grant_check.py` | 包装门控 + 文档接线指南（**不改热路径**） |
 | chengjie 薄适配 | `engines/chengjie/scripts/grant_check.py` | 同上 |
 | huoke 薄适配 | `engines/huoke/src/grant_check.py` | 同上 |
@@ -188,7 +189,37 @@ python tools/persona_bus/fetch_grants.py --system avatarhub `
   --out engines/avatarhub/data/persona_grants_cache.json
 ```
 
-拉取失败勿阻断业务进程：旧缓存继续离线使用；门控默认 warn。正式打开 `PERSONA_GRANT_ENFORCE=1` 前，先观察一段时间 AUDIT 日志里的 `no_grant` 告警量。
+拉取失败勿阻断业务进程：旧缓存继续离线使用；门控默认 warn。正式打开 `PERSONA_GRANT_ENFORCE=1` 前，先观察一段时间 AUDIT 日志里的 `no_grant` 告警量（完整切换流程与前置证据清单见 §4.2）。
+
+### 4.2 enforce 切换流程（v1.3）
+
+warn → enforce 不是拍脑袋的开关，是一次**基于证据的运维变更**：证据 = 缓存持续新鲜、结构合法、非空、同步通道可用。证据由 `tools/persona_bus/enforce_readiness.py` 机器化收集——逐项 PASS/WARN/FAIL 清单，退出码 **0 = ready / 1 = not ready**，`--json` 供 cron 日志归档留痕。
+
+#### 前置条件（三条全部满足才允许切换，按引擎逐个评估）
+
+| # | 条件 | 如何验证 |
+|---|---|---|
+| 1 | grants_sync 定时任务稳定运行 **≥ 7 天** | `deploy/cron` 中 fetch_grants 任务观察期内连续成功（退出码 0、无跳档），缓存 `fetched_at` 逐日推进 |
+| 2 | `enforce_readiness` 连续通过 | 观察期内每日 `python tools/persona_bus/enforce_readiness.py --engine <engine>` 退出码 0（建议同样挂 cron 并 `--json` 归档；WARN 项须逐条确认为预期，如空清单确因控制台未授权） |
+| 3 | 审计日志无非预期 warn | 观察期内 `[PERSONA_GRANT_AUDIT]` 的 `no_grant` 告警只出现在已知未授权组合上；发现漏授权先去控制台补 grant 再继续观察，**不带病切换** |
+
+#### 切换动作
+
+设 `PERSONA_GRANT_ENFORCE=1` 并**重启引擎进程**（门控每次 check 都读 env，但重启才保证长驻进程/全部代码路径统一生效，也顺带完成 §5.3-8 的运行时缓存重载）：
+
+```powershell
+# 引擎宿主机（机器级持久化，重启进程后生效）
+[Environment]::SetEnvironmentVariable("PERSONA_GRANT_ENFORCE", "1", "Machine")
+# 然后重启该引擎进程/服务
+```
+
+#### 回滚
+
+删除该 env（或置 `0`/空）后重启引擎，即回到默认 warn 放行——门控无状态，回滚不丢数据、不改代码、不动缓存。
+
+#### 按引擎灰度顺序建议
+
+**先 avatarhub，后 chengjie / huoke**：avatarhub 是软门控链路最先交付、人设资产最集中的引擎，AUDIT 观察样本最充分，先在它身上以最小风险验证 enforce 的真实拒绝行为；稳定运行 ≥ 7 天再依次推 chengjie、huoke（每个引擎独立走一遍上表前置条件）。
 
 ## 5. 全域清除协议（purge，删除权的工程落地）
 

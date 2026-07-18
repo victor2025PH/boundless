@@ -79,6 +79,9 @@ python tools/persona_bus/fetch_grants.py --base https://bd2026.cc --key $env:EVE
 
 # 门控自检
 python platform/identity/grant_gate.py --selftest
+
+# 切 enforce 前的证据化就绪检查（PASS/WARN/FAIL 清单；0=ready 1=not ready；详见 PERSONA_BUS.md §4.2）
+python tools/persona_bus/enforce_readiness.py --engine avatarhub
 ```
 
 - 失败退出非 0，stderr 含可重试说明；**旧缓存可继续离线用**（默认 warn 放行，不挡业务）。
