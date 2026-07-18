@@ -76,6 +76,8 @@ if ($own.Count) {
 # （set "K=V" && …），保证子进程一定拿到：
 #   AITR_DATA_DIR          实例数据根（config 定位机制，README §0 优先级 2）
 #   EVENT_SPOOL_DIR        事件 spool（platform/observability 契约；本实例产品号=zhiliao）
+#   CHENGJIE_PRODUCT_ID    事件 product_id=zhiliao（telemetry.py 缺省即 zhiliao，仍显式
+#                          设置防外部环境残留串产品号，与通译脚本对称）
 #   CHENGJIE_LEDGER_OUTBOX 授权台账钩子落盘目录（实施09 §五.3，同事正在引擎侧接线，
 #                          环境变量名以他为准；引擎未接线前设置无副作用）
 #   LICENSE_KEY            实例自己的授权（README §5：env 优先于共享的引擎根 license.key；
@@ -94,6 +96,7 @@ $lic    = Join-Path $DataRoot 'config\license.key'
 $chain = @(
     "set `"AITR_DATA_DIR=$DataRoot`"",
     "set `"EVENT_SPOOL_DIR=$spool`"",
+    "set `"CHENGJIE_PRODUCT_ID=$InstanceId`"",
     "set `"CHENGJIE_LEDGER_OUTBOX=$ledger`"",
     "set `"AITR_DESKTOP_MODE=`"",
     "set `"AITR_CONFIG_PATH=`"",

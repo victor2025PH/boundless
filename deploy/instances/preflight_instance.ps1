@@ -11,12 +11,24 @@
 [CmdletBinding()]
 param(
     [string]$DataDir   = '',                 # 空 = 默认 tongyi\data；试点传临时目录
-    [int[]] $Ports     = @(18899, 18887),
+    # 声明为 string[] 再自行拆分：powershell -File 传 "-Ports 18799,18787" 时整串按
+    # 千分位数字解析（[int[]] 会得到单元素 1879918787），string[] + 手工 split 两种
+    # 调用形态（-File 逗号串 / -Command 真数组）都正确。
+    [string[]]$Ports   = @('18899', '18887'),
     [string]$PythonExe = 'python'
 )
 
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
+
+# 端口参数归一化（兼容 "18899,18887" 单串与 18899,18887 数组两种传法）
+$PortList = @()
+foreach ($p in $Ports) {
+    foreach ($tok in ("$p" -split '[,\s]+')) {
+        if ($tok) { $PortList += [int]$tok }
+    }
+}
+$Ports = $PortList
 
 $RepoRoot  = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $EngineDir = Join-Path $RepoRoot 'engines\chengjie'

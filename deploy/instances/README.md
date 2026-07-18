@@ -74,6 +74,9 @@ deploy/instances/
 ├─ start_tongyi.ps1           ← 通译实例启动（同上）
 ├─ stop_instance.ps1          ← 按实例停止（防呆：验明端口持有者是引擎 main.py 才杀进程树）
 ├─ status_instances.ps1       ← 双实例健康探测（端口 + HTTP + 数据目录体检）
+├─ verify_instance.ps1        ← 生产验收一键校验（只读；HTTP/品牌/health/数据根/授权；-Json/-WhatIf）
+├─ migrate_117.ps1            ← .117 生产迁移编排骨架（缺省 -DryRun；破坏性动作不入脚本，见 §11）
+├─ migrate_117_runbook.md     ← .117 生产迁移作战手册（分阶段时序 + 回滚点 + 应急速查，见 §11）
 ├─ zhiliao/
 │  ├─ config.local.yaml       ← 模板（git 跟踪，无密钥）：部署时拷贝/并入实例 config 目录
 │  └─ data/                   ← 实例运行根（git 忽略：data/ 规则），初始化时手动创建
@@ -200,6 +203,9 @@ DB（`inbox.db`、`web_users.db`、`knowledge_base.db`、`bot.db`、`runtime_fla
   `<数据根>\events\spool\` → `events-YYYYMMDD.jsonl`（UTC 按天，append-only）。
 - 产品号（`product_id` / 事件名 namespace）：**智聊实例=`zhiliao`，通译实例=`tongyi`**
   （EVENT_CONTRACT.md §产品枚举；发射器 fail-silent，未注册事件打 `_unregistered` 不丢弃）。
+  引擎适配器 `src/utils/telemetry.py` 按 **`CHENGJIE_PRODUCT_ID`** 环境变量分流（缺省
+  zhiliao），两个 start 脚本已按实例注入——绕过脚本手跑 `python main.py` 会把通译事件
+  记到智聊头上。
 - spool 只写不删；收割/上传是下期收集器（P4 `/api/collect` + shipper）的职责。
 - **`CHENGJIE_LEDGER_OUTBOX`**：授权台账钩子的落盘目录（实施09 §五.3「签发即导出」，
   另一位同事正在引擎侧接线；环境变量名以他为准）。启动脚本已按实例设为
@@ -233,7 +239,8 @@ DB（`inbox.db`、`web_users.db`、`knowledge_base.db`、`bot.db`、`runtime_fla
 1. 建议引擎支持 `CHENGJIE_CONFIG_DIR`（或让 `licensing.key_path`/quota `db_path` 真正生效）：
    把 §0 例外①②的 `license.key` / `license_quota.db` 从「引擎根」改为跟随活动 config 目录，
    消掉最后两个共享残留；`LICENSE_KEY` 环境变量方案在此之前完全够用。
-2. 引擎侧接入事件发射器时（P4），按 §7 的 product_id 约定分实例埋点，无需新增配置。
+2. ~~引擎侧接入事件发射器时（P4），按 §7 的 product_id 约定分实例埋点~~ 已落地（实施11）：
+   适配器读 `CHENGJIE_PRODUCT_ID`，start 脚本按实例注入（见 §7）。
 3. 若未来要把数据根挪出仓库/挪盘，启动/探测脚本传 `-DataDir`（`-ZhiliaoData`/`-TongyiData`）+ stack.json 备注。
 
 ---
@@ -310,6 +317,28 @@ DB（`inbox.db`、`web_users.db`、`knowledge_base.db`、`bot.db`、`runtime_fla
   回滚点=老目录数据原地保留；
 - [ ] 观察期后更新 `deploy/stack.json`：旧 `chengjie` 条目 `enabled=false`、
   两个 `chengjie_*` 条目 `enabled=true`。
+
+---
+
+## 11. 生产迁移执行包（.117）
+
+**本机试点（§10）验证的是「能跑」，本节的执行包把它变成「可迁移」**：同一套脚手架 +
+面向 .117 的作战手册与编排/验收脚本，运维照单执行即可，无需重读全部侦察结论。
+
+| 产出 | 用途 |
+|---|---|
+| [`migrate_117_runbook.md`](./migrate_117_runbook.md) | 作战手册：前置核对（§10 核对表具体化到 .117）、阶段0–5 时序（备份→拉起→灰度→观察→登记/暴露→自启处置，每阶段带**通过判据与回滚动作**）、双实例下 license/telemetry/outbox/purge 的归属澄清、应急速查 |
+| `migrate_117.ps1` | 阶段1 编排骨架：preflight→初始化闸（人工）→start→等就绪→verify。**缺省 -DryRun** 只打印命令；`-Execute` 才实跑；停现网/翻 enabled 等破坏性动作刻意不入脚本，只在 runbook 人工步骤 |
+| `verify_instance.ps1` | 生产验收一键校验（**只读**）：HTTP 活性/品牌断言（manifest+登录页）/health 鉴权/端口持有者/数据根体检/授权文件/spool 增长（可选）；`-Json` 供存档与监控，退出码 0/1 |
+
+```powershell
+# 干跑看步骤（任何机器都可跑，零副作用）：
+powershell -ExecutionPolicy Bypass -File deploy\instances\migrate_117.ps1 -DryRun
+# .117 实跑（初始化仍是人工步骤，脚本会在缺初始化时停下并打印命令样板）：
+powershell -ExecutionPolicy Bypass -File deploy\instances\migrate_117.ps1 -Execute -DataDir <数据根>
+# 随时只读验收：
+powershell -ExecutionPolicy Bypass -File deploy\instances\verify_instance.ps1 -Base http://127.0.0.1:18899 -Instance tongyi -DataDir <数据根>
+```
 
 ---
 
