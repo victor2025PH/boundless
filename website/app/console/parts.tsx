@@ -219,6 +219,28 @@ export function ExpiryCell({ expiresAt }: { expiresAt: string | null }) {
   return <span className="text-slate-300">{fmtDate(expiresAt)}</span>;
 }
 
+// ── 跨售商机（lib/opportunities.ts 三类规则）────────────────────────
+const OPPORTUNITY_KIND_STYLE: Record<string, string> = {
+  persona_cross_sell: "bg-violet-500/15 text-violet-300 border-violet-500/30",
+  product_gap_cross_sell: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+  expiring_renewal: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+};
+const OPPORTUNITY_KIND_LABEL: Record<string, string> = {
+  persona_cross_sell: "人设跨售",
+  product_gap_cross_sell: "互补缺口",
+  expiring_renewal: "续费在即",
+};
+
+/** 商机类型徽章（总览商机卡 / 客户 360 商机分区共用）。 */
+export function OpportunityKindBadge({ kind }: { kind: string }) {
+  const cls = OPPORTUNITY_KIND_STYLE[kind] ?? "bg-slate-500/15 text-slate-400 border-slate-500/30";
+  return (
+    <span className={`inline-block shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}>
+      {OPPORTUNITY_KIND_LABEL[kind] ?? kind}
+    </span>
+  );
+}
+
 // ── 布局件 ──────────────────────────────────────────────────────────
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (

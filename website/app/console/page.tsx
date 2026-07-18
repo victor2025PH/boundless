@@ -1,9 +1,20 @@
-// /console 总览：账本统计卡 + 订单状态分布 + 到期预警 + 快捷入口 + 阶段路线。
+// /console 总览：账本统计卡 + 跨售商机 + 订单状态分布 + 到期预警 + 快捷入口 + 阶段路线。
 import Link from "next/link";
-import { AlertTriangle, ArrowRight, Inbox, KeyRound, ReceiptText, Users } from "lucide-react";
+import { AlertTriangle, ArrowRight, Inbox, KeyRound, ReceiptText, Sparkles, Users } from "lucide-react";
 import { getStats } from "@/lib/ledger";
+import { getOpportunityStats, listOpportunities, productLabel } from "@/lib/opportunities";
 import { hasConsoleSession } from "@/lib/console-auth";
-import { Card, Code, OrderStatusBadge, PageHeader, SectionTitle } from "./parts";
+import {
+  Card,
+  Code,
+  CustomerLink,
+  DataTable,
+  OpportunityKindBadge,
+  OrderStatusBadge,
+  PageHeader,
+  SectionTitle,
+  Td,
+} from "./parts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,6 +37,8 @@ const QUICK_LINKS = [
 export default function ConsoleOverviewPage() {
   if (!hasConsoleSession()) return null;
   const stats = getStats();
+  const oppStats = getOpportunityStats();
+  const topOpportunities = listOpportunities({ limit: 5 });
   const empty = stats.orders === 0 && stats.leads === 0 && stats.licenses === 0 && stats.customers === 0;
 
   const totals = [
@@ -68,6 +81,59 @@ export default function ConsoleOverviewPage() {
           </Link>
         ))}
       </div>
+
+      <Card className={oppStats.total > 0 ? "border-violet-500/40 bg-gradient-to-br from-violet-500/10 to-slate-900/60" : ""}>
+        <SectionTitle count={oppStats.total}>跨售商机（人设总线 P5 · 只读试运行）</SectionTitle>
+        <div className="mb-4 grid grid-cols-3 gap-3">
+          {(
+            [
+              { kind: "persona_cross_sell", desc: "人设槽位能支撑、未授权未购的产品" },
+              { kind: "product_gap_cross_sell", desc: "买了 A 未买同系互补品 B" },
+              { kind: "expiring_renewal", desc: "30 天内到期授权 → 续费" },
+            ] as const
+          ).map((k) => (
+            <div key={k.kind} className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+              <OpportunityKindBadge kind={k.kind} />
+              <p className="mt-2 text-2xl font-bold tabular-nums text-white">{oppStats.byKind[k.kind]}</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">{k.desc}</p>
+            </div>
+          ))}
+        </div>
+        {topOpportunities.length === 0 ? (
+          <p className="flex items-center gap-1.5 text-xs text-slate-500">
+            <Sparkles className="h-3.5 w-3.5" />
+            暂无商机信号 —— 人设归属客户、订单/授权入账后自动出现。
+          </p>
+        ) : (
+          <>
+            <p className="mb-2 text-[11px] text-slate-500">Top {topOpportunities.length} 商机（按信号值排序，点客户进 360 跟进）：</p>
+            <DataTable head={["类型", "客户", "从 → 到", "理由", "信号值"]}>
+              {topOpportunities.map((o, i) => (
+                <tr key={`${o.kind}-${o.customerId}-${o.toProduct}-${i}`} className="hover:bg-slate-800/40">
+                  <Td>
+                    <OpportunityKindBadge kind={o.kind} />
+                  </Td>
+                  <Td>
+                    <CustomerLink customerId={o.customerId} label={o.customerName} />
+                  </Td>
+                  <Td className="text-xs text-slate-300">
+                    <span className="font-mono">{productLabel(o.fromProduct)}</span>
+                    <span className="mx-1.5 text-slate-600">→</span>
+                    <span className="font-mono text-amber-300">{productLabel(o.toProduct)}</span>
+                  </Td>
+                  <Td className="max-w-[320px] text-xs text-slate-400">
+                    <span className="block truncate" title={o.reason}>{o.reason}</span>
+                  </Td>
+                  <Td className="text-xs font-semibold tabular-nums text-slate-200">{o.signalValue}</Td>
+                </tr>
+              ))}
+            </DataTable>
+          </>
+        )}
+        <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
+          口径：商机由账本（personas / orders / licenses）只读推导，不落库；「标记已跟进」待 opportunities_log 表（下阶段）。
+        </p>
+      </Card>
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-1">

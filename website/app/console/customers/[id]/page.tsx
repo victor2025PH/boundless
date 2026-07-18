@@ -1,9 +1,10 @@
 // /console/customers/[id]：客户 360 —— 本后台的灵魂页面。
-// 基本信息 + 身份标识（admin+ 可添加）+ 名下订单/授权/留资三分区 + 审计流水。
+// 基本信息 + 身份标识（admin+ 可添加）+ 名下订单/授权/人设/留资分区 + 跨售商机 + 审计流水。
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, ScrollText } from "lucide-react";
+import { ArrowLeft, ScrollText, Sparkles } from "lucide-react";
 import { listLeads, listLicenses, listOrders } from "@/lib/ledger";
+import { listOpportunities, productLabel } from "@/lib/opportunities";
 import { listPersonas } from "@/lib/personas";
 import { getConsoleSessionUser } from "@/lib/console-auth";
 import { roleAtLeast } from "@/lib/console-users";
@@ -15,6 +16,7 @@ import {
   EmptyState,
   ExpiryCell,
   LeadStatusBadge,
+  OpportunityKindBadge,
   OrderStatusBadge,
   PersonaSlotCells,
   PersonaStatusBadge,
@@ -48,6 +50,7 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
   const licenses = listLicenses({ customerId: customer.id, limit: 200 }).rows;
   const leads = listLeads({ customerId: customer.id, limit: 200 }).rows;
   const personas = listPersonas({ customerId: customer.id, limit: 200 }).rows;
+  const opportunities = listOpportunities({ customerId: customer.id, limit: 50 });
   const audit = listAuditForCustomer(customer.id);
 
   const paidTotal = orders
@@ -243,6 +246,40 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
               </tr>
             ))}
           </DataTable>
+        )}
+      </Card>
+
+      <Card className={opportunities.length > 0 ? "border-violet-500/40" : ""}>
+        <SectionTitle count={opportunities.length}>该客户的跨售商机</SectionTitle>
+        {opportunities.length === 0 ? (
+          <p className="flex items-center gap-1.5 text-xs text-slate-500">
+            <Sparkles className="h-3.5 w-3.5" />
+            暂无商机信号 —— 名下人设点亮槽位、订单/授权入账后由规则引擎自动推导。
+          </p>
+        ) : (
+          <>
+            <DataTable head={["类型", "从 → 到", "理由", "信号值"]}>
+              {opportunities.map((o, i) => (
+                <tr key={`${o.kind}-${o.toProduct}-${i}`} className="hover:bg-slate-800/40">
+                  <Td>
+                    <OpportunityKindBadge kind={o.kind} />
+                  </Td>
+                  <Td className="text-xs text-slate-300">
+                    <span className="font-mono">{productLabel(o.fromProduct)}</span>
+                    <span className="mx-1.5 text-slate-600">→</span>
+                    <span className="font-mono text-amber-300">{productLabel(o.toProduct)}</span>
+                  </Td>
+                  <Td className="max-w-[360px] text-xs text-slate-400">
+                    <span className="block truncate" title={o.reason}>{o.reason}</span>
+                  </Td>
+                  <Td className="text-xs font-semibold tabular-nums text-slate-200">{o.signalValue}</Td>
+                </tr>
+              ))}
+            </DataTable>
+            <p className="mt-2.5 text-[11px] leading-relaxed text-slate-500">
+              只读推导（lib/opportunities.ts 三类规则），不落库；「标记已跟进」待 opportunities_log 表上线。
+            </p>
+          </>
         )}
       </Card>
 
