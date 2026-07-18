@@ -74,7 +74,8 @@ if ($own.Count) {
 # ── 组装子进程环境并启动 ────────────────────────────────────────────────
 # Win32_Process.Create 不继承本 shell 的 $env: 改动，故环境变量全部写进 cmd 链
 # （set "K=V" && …），保证子进程一定拿到：
-#   AITR_DATA_DIR          实例数据根（config 定位机制，README §0 优先级 2）
+#   AITR_DATA_DIR          实例数据根（config 定位机制，README §0 优先级 2；该路径同时是
+#                          人设 purge 执行器 --data-roots 清单的一项，README §4 / runbook §4.4）
 #   EVENT_SPOOL_DIR        事件 spool（platform/observability 契约；本实例产品号=zhiliao）
 #   CHENGJIE_PRODUCT_ID    事件 product_id=zhiliao（telemetry.py 缺省即 zhiliao，仍显式
 #                          设置防外部环境残留串产品号，与通译脚本对称）

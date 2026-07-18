@@ -177,6 +177,8 @@ powershell -ExecutionPolicy Bypass -File D:\workspace\boundless\deploy\instances
 - 实例端口已被监听：持有者是 `python …main.py` → 视为已在跑，幂等退出 0；持有者是别的进程 → 报错退出，**不杀任何进程**（与老 `start_main.ps1` 的"清幽灵"不同——双实例下贸然清端口可能误杀另一实例）；
 - 显式清空 `AITR_DESKTOP_MODE` / `AITR_CONFIG_PATH` / `AITR_WEB_*`，防外部环境串味；
 - 日志：`<数据根>\logs\boot_时间戳.{out,err}.log`（引擎自身 `logs/app.log` 同目录）。
+- 人设 purge 执行器按**引擎一份**跑（勿按实例各起）：`python engines\chengjie\scripts\persona_purge_agent.py --commit --data-roots "<智聊数据根>;<通译数据根>"`
+  （或 env `CHENGJIE_DATA_ROOTS` 同格式；每根＝实例 `AITR_DATA_DIR`，全部根删净才回执，runbook §4.4）。
 
 ## 5. 授权（两实例各自 license.key，可同档不同 sub）
 
