@@ -1,20 +1,26 @@
 // 跨售商机引擎（Cross-sell Opportunities）—— 人设总线的第一个变现动作（P5 落点）。
 //
 // 核心洞察：客户在某产品创建了人设（如幻声克隆了声音），但未授权其他能用该人设
-// 的产品（幻影开播/通传开会）——这是最便宜的跨售信号。本文件是**纯只读**规则
-// 引擎：只 SELECT group-ledger.db（复用 getLedgerDb 连接），不写任何表；空库或
-// 查询失败一律返回空数组（fail-soft），绝不影响 console 渲染与 API 主链路。
+// 的产品（幻影开播/通传开会）——这是最便宜的跨售信号。商机**本体**始终是只读
+// 规则引擎推导：只 SELECT group-ledger.db（复用 getLedgerDb 连接），空库或查询
+// 失败一律返回空数组（fail-soft），绝不影响 console 渲染与 API 主链路。
 //
 // 三类规则（可扩展：每类一个纯函数，统一产出 Opportunity 行，collect 汇总）：
 //   1. persona_cross_sell     人设槽位能支撑、但该 persona 未授权且客户未购的产品（信号最强）；
 //   2. product_gap_cross_sell 买了 A 未买同系互补品 B（智连系/通达系/幻境系）；
 //   3. expiring_renewal       30 天内到期的授权 → 续费（复用 ledger listLicenses 到期口径）。
 //
-// 隐私约束：evidence 只放 id / 计数 / 产品名 / 槽位名，不放联系方式与聊天内容。
-// 「标记已跟进」需要 opportunities_log 落库表（下阶段），本轮只读展示。
+// schema v4 起商机可跟进：markOpportunity 是本文件唯一写路径，把销售动作 UPSERT 进
+// opportunities_log（自然键 = oppKey 指纹）+ audit；listOpportunities 输出侧按指纹
+// LEFT JOIN 回跟进状态 —— won/dismissed 默认隐藏（includeClosed 才带出且沉底），
+// contacted 保留在列但信号值降权 −20。
+//
+// 隐私约束：evidence 只放 id / 计数 / 产品名 / 槽位名，不放联系方式与聊天内容；
+// opportunities_log.note 同纪律 —— 只存运营跟进备注，绝不存客户聊天原文。
 
 import type Database from "better-sqlite3";
-import { getLedgerDb, listLicenses } from "./ledger";
+import { getLedgerDb, listLicenses, writeAudit } from "./ledger";
+import { newId } from "./ids";
 import {
   PERSONA_PRODUCT_IDS,
   PERSONA_SLOTS,
@@ -48,6 +54,42 @@ export interface Opportunity {
   signalValue: number;
   /** 只放 id / 计数 / 产品名 / 槽位名 —— 不放联系方式、聊天内容。 */
   evidence: Record<string, string | number | string[]>;
+}
+
+// ── 跟进落库（schema v4：opportunities_log）─────────────────────────
+export const OPPORTUNITY_LOG_STATUSES = ["open", "contacted", "won", "dismissed"] as const;
+export type OpportunityLogStatus = (typeof OPPORTUNITY_LOG_STATUSES)[number];
+
+export function isOpportunityLogStatus(v: string): v is OpportunityLogStatus {
+  return (OPPORTUNITY_LOG_STATUSES as readonly string[]).includes(v);
+}
+
+/** 清单行附带的跟进摘要（无任何标记时为 null）。 */
+export interface OpportunityLog {
+  status: OpportunityLogStatus;
+  note: string | null;
+  acted_by: string | null;
+  acted_at: string | null;
+}
+
+/** listOpportunities 输出行：商机 + 指纹 + 跟进状态（LEFT JOIN opportunities_log）。 */
+export interface OpportunityWithLog extends Opportunity {
+  oppKey: string;
+  log: OpportunityLog | null;
+}
+
+/** 商机指纹（标记跟进的自然键）：`kind|customerId|toProduct`；expiring_renewal 再拼
+ *  evidence.licenseId —— 同客户多张到期授权可分别跟进。规则引擎每次全量重算，
+ *  指纹保证同一商机重算前后落在 opportunities_log 的同一行上。 */
+export function oppKey(
+  o: Pick<Opportunity, "kind" | "customerId" | "toProduct"> & { evidence?: Opportunity["evidence"] }
+): string {
+  const base = `${o.kind}|${o.customerId}|${o.toProduct}`;
+  if (o.kind === "expiring_renewal") {
+    const lic = o.evidence?.licenseId;
+    if (typeof lic === "string" && lic) return `${base}|${lic}`;
+  }
+  return base;
 }
 
 // ── 规则映射（可扩展的静态知识）────────────────────────────────────
@@ -352,29 +394,75 @@ export interface OpportunityFilter {
   customerId?: string;
   /** 默认 100，上限 500。 */
   limit?: number;
+  /** true 时带出已关闭（won/dismissed）的商机（排序沉底）；默认不出现在清单。 */
+  includeClosed?: boolean;
 }
 
-/** 商机清单：signalValue 降序（同分按类型/客户稳定排序）。只读，任何失败返回 []。 */
+interface OppLogRow {
+  opp_key: string;
+  status: OpportunityLogStatus;
+  note: string | null;
+  acted_by: string | null;
+  acted_at: string | null;
+}
+
+/** opp_key → 跟进行。商机本体在内存推导（无表可 JOIN），故「LEFT JOIN」在输出侧
+ *  用 Map 完成；表异常（如未迁移的旧库快照）按无跟进记录处理，不影响清单。 */
+function logByKey(db: Database.Database): Map<string, OppLogRow> {
+  const m = new Map<string, OppLogRow>();
+  try {
+    for (const r of db
+      .prepare("SELECT opp_key, status, note, acted_by, acted_at FROM opportunities_log")
+      .all() as OppLogRow[]) {
+      m.set(r.opp_key, r);
+    }
+  } catch {
+    // fail-soft：跟进表不可用只影响状态标注，不影响商机推导
+  }
+  return m;
+}
+
+const isClosed = (o: OpportunityWithLog) => o.log?.status === "won" || o.log?.status === "dismissed";
+
+/** 商机清单：signalValue 降序（同分按类型/客户稳定排序），每行附 oppKey 指纹与
+ *  跟进状态 log（无标记为 null）。won/dismissed 默认隐藏（includeClosed=true 带出
+ *  且沉底）；contacted 保留在列但信号值降权 −20。只读，任何失败返回 []。 */
 export function listOpportunities(
   filter: OpportunityFilter = {},
   db?: Database.Database
-): Opportunity[] {
-  let rows: Opportunity[];
+): OpportunityWithLog[] {
+  let rows: OpportunityWithLog[];
   try {
+    const conn = db ?? getLedgerDb();
     const kind = filter.kind?.trim();
     let kinds: readonly OpportunityKind[] = OPPORTUNITY_KINDS;
     if (kind) {
       if (!isOpportunityKind(kind)) return [];
       kinds = [kind];
     }
-    rows = collect(db ?? getLedgerDb(), kinds);
+    const logs = logByKey(conn);
+    rows = collect(conn, kinds).map((o) => {
+      const key = oppKey(o);
+      const l = logs.get(key);
+      const log: OpportunityLog | null = l
+        ? { status: l.status, note: l.note, acted_by: l.acted_by, acted_at: l.acted_at }
+        : null;
+      return {
+        ...o,
+        signalValue: log?.status === "contacted" ? Math.max(0, o.signalValue - 20) : o.signalValue,
+        oppKey: key,
+        log,
+      };
+    });
   } catch {
     return [];
   }
   const customerId = filter.customerId?.trim();
   if (customerId) rows = rows.filter((o) => o.customerId === customerId);
+  if (!filter.includeClosed) rows = rows.filter((o) => !isClosed(o));
   rows.sort(
     (a, b) =>
+      Number(isClosed(a)) - Number(isClosed(b)) ||
       b.signalValue - a.signalValue ||
       KIND_ORDER[a.kind] - KIND_ORDER[b.kind] ||
       a.customerId.localeCompare(b.customerId) ||
@@ -384,25 +472,135 @@ export function listOpportunities(
   return rows.slice(0, limit);
 }
 
+// ── 标记跟进（本文件唯一写路径）────────────────────────────────────
+export interface MarkOpportunityInput {
+  oppKey: string;
+  kind: OpportunityKind;
+  customerId: string;
+  toProduct?: string | null;
+  status: OpportunityLogStatus;
+  /** 运营跟进备注（隐私纪律：只存运营自己的话术/结果，不存客户聊天原文）。
+   *  undefined = 保留已有备注；空串/null = 清空。 */
+  note?: string | null;
+}
+
+export interface MarkOpportunityResult {
+  id: string;
+  oppKey: string;
+  status: OpportunityLogStatus;
+  note: string | null;
+  acted_by: string;
+  acted_at: string;
+  /** true = 首次标记（INSERT 新 opl_ 行）；false = 已有行仅更新状态/备注。 */
+  inserted: boolean;
+}
+
+/** 标记商机跟进：UPSERT opportunities_log（自然键 opp_key —— 首标记 INSERT 带
+ *  opl_ 新 ID，再标记 UPDATE 状态/备注，不新增行）+ audit（opportunity.mark）。
+ *  校验 kind/status 枚举与客户存在性，非法入参 throw（API 层转 400）。 */
+export function markOpportunity(
+  input: MarkOpportunityInput,
+  actor: string,
+  db: Database.Database = getLedgerDb()
+): MarkOpportunityResult {
+  const key = (input.oppKey ?? "").trim();
+  if (!key) throw new TypeError("markOpportunity: oppKey required");
+  if (!isOpportunityKind(input.kind)) throw new TypeError(`markOpportunity: bad kind: ${input.kind}`);
+  if (!isOpportunityLogStatus(input.status)) throw new TypeError(`markOpportunity: bad status: ${input.status}`);
+  const customerId = (input.customerId ?? "").trim();
+  if (!customerId) throw new TypeError("markOpportunity: customerId required");
+  const toProduct = (input.toProduct ?? "").trim() || null;
+  const note = input.note === undefined ? undefined : String(input.note ?? "").trim() || null;
+  const actedBy = actor.trim() || "system";
+  const now = new Date().toISOString();
+
+  const tx = db.transaction((): MarkOpportunityResult => {
+    const cust = db.prepare("SELECT id FROM customers WHERE id = ?").get(customerId) as { id: string } | undefined;
+    if (!cust) throw new Error(`markOpportunity: customer not found: ${customerId}`);
+    const existing = db.prepare("SELECT id, note FROM opportunities_log WHERE opp_key = ?").get(key) as
+      | { id: string; note: string | null }
+      | undefined;
+    let result: MarkOpportunityResult;
+    if (!existing) {
+      const id = newId("opl");
+      db.prepare(
+        `INSERT INTO opportunities_log (id, opp_key, kind, customer_id, to_product, status, note, acted_by, acted_at, created_at)
+         VALUES (@id, @opp_key, @kind, @customer_id, @to_product, @status, @note, @acted_by, @acted_at, @created_at)`
+      ).run({
+        id,
+        opp_key: key,
+        kind: input.kind,
+        customer_id: customerId,
+        to_product: toProduct,
+        status: input.status,
+        note: note ?? null,
+        acted_by: actedBy,
+        acted_at: now,
+        created_at: now,
+      });
+      result = { id, oppKey: key, status: input.status, note: note ?? null, acted_by: actedBy, acted_at: now, inserted: true };
+    } else {
+      const finalNote = note === undefined ? existing.note : note;
+      db.prepare(
+        "UPDATE opportunities_log SET status = @status, note = @note, acted_by = @acted_by, acted_at = @acted_at WHERE opp_key = @opp_key"
+      ).run({ opp_key: key, status: input.status, note: finalNote, acted_by: actedBy, acted_at: now });
+      result = { id: existing.id, oppKey: key, status: input.status, note: finalNote, acted_by: actedBy, acted_at: now, inserted: false };
+    }
+    writeAudit(
+      {
+        actor: actedBy,
+        action: "opportunity.mark",
+        entity: "opportunity",
+        entity_id: key,
+        detail: {
+          kind: input.kind,
+          customer_id: customerId,
+          to_product: toProduct,
+          status: input.status,
+          note: result.note,
+          inserted: result.inserted,
+        },
+      },
+      db
+    );
+    return result;
+  });
+  return tx();
+}
+
 export interface OpportunityStats {
   total: number;
   byKind: Record<OpportunityKind, number>;
+  /** 全量商机按跟进状态分布（未标记 = open）；total === 四态之和。 */
+  byLogStatus: Record<OpportunityLogStatus, number>;
   generatedAt: string;
 }
 
-/** 各类商机计数（不设上限，全量重算）。 */
+/** 各类商机计数（不设上限，全量重算，含已关闭的 —— 队列健康度看 byLogStatus）。 */
 export function getOpportunityStats(db?: Database.Database): OpportunityStats {
   const byKind: Record<OpportunityKind, number> = {
     persona_cross_sell: 0,
     product_gap_cross_sell: 0,
     expiring_renewal: 0,
   };
+  const byLogStatus: Record<OpportunityLogStatus, number> = {
+    open: 0,
+    contacted: 0,
+    won: 0,
+    dismissed: 0,
+  };
   let rows: Opportunity[] = [];
+  let logs = new Map<string, OppLogRow>();
   try {
-    rows = collect(db ?? getLedgerDb(), OPPORTUNITY_KINDS);
+    const conn = db ?? getLedgerDb();
+    rows = collect(conn, OPPORTUNITY_KINDS);
+    logs = logByKey(conn);
   } catch {
     // 账本不可用 → 全零
   }
-  for (const o of rows) byKind[o.kind]++;
-  return { total: rows.length, byKind, generatedAt: new Date().toISOString() };
+  for (const o of rows) {
+    byKind[o.kind]++;
+    byLogStatus[logs.get(oppKey(o))?.status ?? "open"]++;
+  }
+  return { total: rows.length, byKind, byLogStatus, generatedAt: new Date().toISOString() };
 }

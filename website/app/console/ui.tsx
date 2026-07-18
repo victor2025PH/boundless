@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  Activity,
   BarChart3,
   Crown,
   Inbox,
@@ -18,7 +19,9 @@ import {
   LogOut,
   Plus,
   ReceiptText,
+  ScrollText,
   ShieldAlert,
+  Sparkles,
   UserCog,
   UserRound,
   Users,
@@ -271,10 +274,13 @@ const NAV = [
   { href: "/console", label: "总览", Icon: LayoutDashboard },
   { href: "/console/customers", label: "客户", Icon: Users },
   { href: "/console/personas", label: "人设", Icon: VenetianMask },
+  { href: "/console/opportunities", label: "商机", Icon: Sparkles },
   { href: "/console/orders", label: "订单", Icon: ReceiptText },
   { href: "/console/licenses", label: "授权", Icon: KeyRound },
   { href: "/console/leads", label: "留资", Icon: Inbox },
   { href: "/console/kpi", label: "KPI", Icon: BarChart3 },
+  { href: "/console/audit", label: "审计", Icon: ScrollText },
+  { href: "/console/health", label: "健康", Icon: Activity },
 ] as const;
 
 const NAV_USERS = { href: "/console/users", label: "用户", Icon: UserCog } as const;

@@ -1,9 +1,10 @@
 // /console 总览：账本统计卡 + 跨售商机 + 订单状态分布 + 到期预警 + 快捷入口 + 阶段路线。
 import Link from "next/link";
-import { AlertTriangle, ArrowRight, Inbox, KeyRound, ReceiptText, Sparkles, Users } from "lucide-react";
+import { AlertTriangle, ArrowRight, Inbox, KeyRound, ReceiptText, ScrollText, Sparkles, Users } from "lucide-react";
 import { getStats } from "@/lib/ledger";
 import { getOpportunityStats, listOpportunities, productLabel } from "@/lib/opportunities";
-import { hasConsoleSession } from "@/lib/console-auth";
+import { getConsoleSessionUser } from "@/lib/console-auth";
+import { roleAtLeast } from "@/lib/console-users";
 import {
   Card,
   Code,
@@ -15,27 +16,33 @@ import {
   SectionTitle,
   Td,
 } from "./parts";
+import { OpportunityActions, OpportunityLogBadge } from "./opportunities-ui";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const ROADMAP = [
-  { phase: "P0/P1", label: "集团账本 + 授权台账（本台）", state: "live" },
-  { phase: "P2", label: "SSO 统一登录 / RBAC 权限", state: "next" },
-  { phase: "P3", label: "产品双后台（AvatarHub / 成杰）接入", state: "plan" },
-  { phase: "P4", label: "集团 KPI 看板", state: "plan" },
-  { phase: "P5", label: "人设总线（跨产品客户画像）", state: "plan" },
+  { phase: "P0/P1", label: "集团账本 + 授权台账（本台）", state: "done" },
+  { phase: "P2", label: "控制台登录 / RBAC", state: "done" },
+  { phase: "P3", label: "全域事件收集", state: "done" },
+  { phase: "P4", label: "集团 KPI 看板", state: "done" },
+  { phase: "P5", label: "人设总线 + 跨售商机", state: "done" },
+  { phase: "下一阶段", label: ".117 真迁 / grant enforce 切强制 / 四视图接线试点", state: "next" },
 ] as const;
 
 const QUICK_LINKS = [
   { href: "/console/customers", label: "客户", desc: "客户主档 · 身份归并", Icon: Users },
+  { href: "/console/opportunities", label: "商机", desc: "跨售信号 · 跟进", Icon: Sparkles },
   { href: "/console/orders", label: "订单", desc: "订单台账 · 归属客户", Icon: ReceiptText },
   { href: "/console/licenses", label: "授权", desc: "授权台账 · 到期预警", Icon: KeyRound },
   { href: "/console/leads", label: "留资", desc: "留资镜像 · 客户归并", Icon: Inbox },
+  { href: "/console/audit", label: "审计", desc: "写操作流水 · 只读", Icon: ScrollText },
 ] as const;
 
 export default function ConsoleOverviewPage() {
-  if (!hasConsoleSession()) return null;
+  const me = getConsoleSessionUser();
+  if (!me) return null;
+  const canWrite = roleAtLeast(me.role, "admin");
   const stats = getStats();
   const oppStats = getOpportunityStats();
   const topOpportunities = listOpportunities({ limit: 5 });
@@ -83,7 +90,15 @@ export default function ConsoleOverviewPage() {
       </div>
 
       <Card className={oppStats.total > 0 ? "border-violet-500/40 bg-gradient-to-br from-violet-500/10 to-slate-900/60" : ""}>
-        <SectionTitle count={oppStats.total}>跨售商机（人设总线 P5 · 只读试运行）</SectionTitle>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <SectionTitle count={oppStats.total}>跨售商机（人设总线 P5）</SectionTitle>
+          <Link
+            href="/console/opportunities"
+            className="inline-flex items-center gap-1 text-xs font-medium text-amber-300 underline-offset-2 hover:underline"
+          >
+            全部商机 <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+        </div>
         <div className="mb-4 grid grid-cols-3 gap-3">
           {(
             [
@@ -107,9 +122,9 @@ export default function ConsoleOverviewPage() {
         ) : (
           <>
             <p className="mb-2 text-[11px] text-slate-500">Top {topOpportunities.length} 商机（按信号值排序，点客户进 360 跟进）：</p>
-            <DataTable head={["类型", "客户", "从 → 到", "理由", "信号值"]}>
-              {topOpportunities.map((o, i) => (
-                <tr key={`${o.kind}-${o.customerId}-${o.toProduct}-${i}`} className="hover:bg-slate-800/40">
+            <DataTable head={["类型", "客户", "从 → 到", "理由", "信号值", "跟进"]}>
+              {topOpportunities.map((o) => (
+                <tr key={o.oppKey} className="hover:bg-slate-800/40">
                   <Td>
                     <OpportunityKindBadge kind={o.kind} />
                   </Td>
@@ -125,13 +140,28 @@ export default function ConsoleOverviewPage() {
                     <span className="block truncate" title={o.reason}>{o.reason}</span>
                   </Td>
                   <Td className="text-xs font-semibold tabular-nums text-slate-200">{o.signalValue}</Td>
+                  <Td>
+                    <span className="inline-flex items-center gap-1.5">
+                      <OpportunityLogBadge log={o.log} />
+                      {canWrite && (
+                        <OpportunityActions
+                          oppKey={o.oppKey}
+                          kind={o.kind}
+                          customerId={o.customerId}
+                          toProduct={o.toProduct}
+                          log={o.log}
+                        />
+                      )}
+                    </span>
+                  </Td>
                 </tr>
               ))}
             </DataTable>
           </>
         )}
         <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
-          口径：商机由账本（personas / orders / licenses）只读推导，不落库；「标记已跟进」待 opportunities_log 表（下阶段）。
+          口径：商机由账本（personas / orders / licenses）只读推导；跟进动作落 opportunities_log（schema v4）——
+          「跟进」保留在列并降权 −20，「赢单/忽略」默认从清单隐藏（API ?include_closed=1 可带出）。
         </p>
       </Card>
 
@@ -191,14 +221,19 @@ export default function ConsoleOverviewPage() {
               <li key={r.phase} className="flex items-center gap-2.5 text-xs">
                 <span
                   className={`h-2 w-2 shrink-0 rounded-full ${
-                    r.state === "live" ? "bg-emerald-400" : r.state === "next" ? "bg-amber-400" : "bg-slate-600"
+                    r.state === "done" ? "bg-emerald-400" : r.state === "next" ? "bg-amber-400" : "bg-slate-600"
                   }`}
                 />
-                <span className="w-12 shrink-0 font-mono font-semibold text-slate-400">{r.phase}</span>
-                <span className={r.state === "live" ? "text-slate-200" : "text-slate-400"}>{r.label}</span>
-                {r.state === "live" && (
+                <span className="w-14 shrink-0 font-mono font-semibold text-slate-400">{r.phase}</span>
+                <span className={r.state === "done" ? "text-slate-200" : "text-slate-400"}>{r.label}</span>
+                {r.state === "done" && (
                   <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">
-                    已上线
+                    已交付
+                  </span>
+                )}
+                {r.state === "next" && (
+                  <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
+                    进行中
                   </span>
                 )}
               </li>
@@ -209,7 +244,7 @@ export default function ConsoleOverviewPage() {
 
       <div>
         <SectionTitle>快捷入口</SectionTitle>
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
           {QUICK_LINKS.map(({ href, label, desc, Icon }) => (
             <Link key={href} href={href}>
               <Card className="flex items-center gap-3 transition hover:border-amber-500/40">
