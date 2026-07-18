@@ -141,24 +141,35 @@ export function LoginCard({ configured, usersEmpty }: { configured: boolean; use
   const onEnter = (e: React.KeyboardEvent) => e.key === "Enter" && doLogin();
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-sm flex-col justify-center px-6">
-      <div className="rounded-2xl border border-amber-500/25 bg-slate-900/70 p-7 shadow-[0_0_60px_rgba(245,158,11,0.06)]">
-        <div className="mb-1 flex items-center gap-2">
-          <Crown className="h-6 w-6 text-amber-400" />
-          <span className="text-lg font-bold text-white">无界 · 集团控制台</span>
+    // 登录页与官网同品牌：ink 深底 + 霓虹青主色 + ∞ 主标（老板要求与 bd2026.cc 一致）；
+    // 登录后的内页仍保留琥珀色系（与营销 /admin 青色区分的皇冠资产视觉）。
+    <div className="relative mx-auto flex min-h-screen max-w-sm flex-col justify-center bg-[#05060f] bg-grid-glow px-6">
+      <div className="rounded-2xl border border-cyan-400/25 bg-[#0a0c1b]/80 p-7 shadow-[0_0_70px_rgba(34,211,238,0.10)] backdrop-blur">
+        <div className="mb-3 flex items-center gap-3">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/brand/logos/boundless-mark-256.png"
+            alt="BOUNDLESS"
+            className="h-11 w-11 shrink-0 object-contain drop-shadow-[0_0_14px_rgba(34,211,238,0.45)]"
+            draggable={false}
+          />
+          <div className="leading-tight">
+            <span className="block text-lg font-bold text-white">无界 · 集团控制台</span>
+            <span className="block text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-400/90">
+              Boundless Console
+            </span>
+          </div>
         </div>
-        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-500/80">
-          Boundless Console
-        </p>
-        <div className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-300">
+        <div className="inline-flex items-center gap-1.5 rounded-full border border-cyan-400/30 bg-cyan-400/10 px-2.5 py-1 text-[11px] font-medium text-cyan-300">
           <ShieldAlert className="h-3.5 w-3.5" />
           皇冠资产 · 最小暴露
         </div>
         {usersEmpty ? (
           <>
-            <p className="mb-4 mt-4 text-xs leading-relaxed text-slate-500">
-              <span className="font-semibold text-amber-300">初始化主账号</span>
-              ：控制台尚无任何账号。请用服务端 CONSOLE_KEY 验证身份，创建首个 master 账号并直接登录。
+            <p className="mb-4 mt-4 text-xs leading-relaxed text-slate-400">
+              <span className="font-semibold text-cyan-300">初始化主账号</span>
+              ：控制台尚无任何账号。下面 <span className="font-semibold text-white">三项均为必填</span>
+              （口令验证身份 + 你自己设定的用户名和密码），填齐后按钮才会亮起。
             </p>
             {configured ? (
               <div className="space-y-2.5">
@@ -192,7 +203,7 @@ export function LoginCard({ configured, usersEmpty }: { configured: boolean; use
                   autoComplete="new-password"
                 />
                 <button onClick={doLogin} disabled={busy || !canSubmit} className={`${btnPrimary} w-full py-2.5`}>
-                  {busy ? "创建中…" : "创建主账号并进入"}
+                  {busy ? "创建中…" : canSubmit ? "创建主账号并进入" : "填齐三项后可创建"}
                 </button>
               </div>
             ) : (
