@@ -82,6 +82,40 @@
 
 **审计动作**：`user.bootstrap` / `user.create` / `user.login` / `user.set_role` / `user.set_enabled` / `user.reset_password` / `session.revoke`，actor 统一 `console:<username>`。
 
+### 人设总线（schema v3）
+
+同一个数字身份贯穿获客→承接→变现的集团注册表。一个 persona = 四个可选槽位：`face`（形象/脸模）、`voice`（声纹克隆）、`prompt`（语言人格/话术）、`knowledge`（术语库/知识库）。**注册表只存元数据与指纹，资产本体永不进集团库**（脸模/声纹/话术文件留在各引擎侧）。数据层：`lib/personas.ts`（TS）；导入 CLI `scripts/ledger-import-personas.mjs`（纯 JS，DDL 复用 `scripts/ledger-lib.mjs`，upsert 语义与 TS 侧一致，修改两处同步）。
+
+**表结构**（迁移 v2 → v3，`meta.schema_version` 驱动，两侧 DDL 逐字同步）：
+
+- `personas(id PK /*prs_ULID*/, customer_id NULL → customers, source_system NOT NULL, source_key NOT NULL, display_name, slot_face/slot_voice/slot_prompt/slot_knowledge INTEGER DEFAULT 0, slots_detail /*JSON：各槽位 fingerprint/ref/version（+ 可选 _meta.customer_name 归属线索）*/, tags /*JSON数组*/, status CHECK in active/archived/purge_pending/purged DEFAULT active, created_at, updated_at, synced_at, UNIQUE(source_system, source_key))` — 人设注册表，自然键 = 来源引擎 + 引擎内键。
+- `persona_grants(id AUTOINCREMENT PK, persona_id → personas, product_id NOT NULL, scope, granted_by, granted_at, revoked_at NULL, UNIQUE(persona_id, product_id))` — 授权矩阵（人设可被哪些产品使用；撤销置 `revoked_at`，再授权清空之）。
+- `persona_purges(id AUTOINCREMENT PK, persona_id NOT NULL, requested_by, requested_at, target_system NOT NULL, acked_at NULL, ack_detail NULL)` — 全域清除指令，一行 = 对一个引擎的一条删除指令。
+- 索引：`personas(customer_id)`、`personas(status)`、`persona_grants(persona_id)`、`persona_purges(target_system, acked_at)`。
+
+**upsert 语义**（`upsertPersonaRow`，自然键 `(source_system, source_key)`）：`customer_id` 只 COALESCE 填充（console 归属不被覆盖）；`status` 不随来件变化；**`purge_pending` / `purged` 的行整行跳过并计数 `skippedPurged`** —— 已清除/清除中的人设不会被同步或导入复活。
+
+**产品 → 引擎映射**（purge 指令下发目标）：`huansheng/huanying/huanyan/tongchuan → avatarhub`；`zhiliao/tongyi → chengjie`；`zhituo → huoke`（`website` 不承载人设资产，不在授权矩阵内）。
+
+**purge 协议时序**（合规删除 / 客户要求抹除数字分身）：
+
+1. console（admin+）在人设详情页发起「全域清除」→ `requestPurge`：status → `purge_pending`，并为**每个已知承载系统**（persona 的 `source_system` + 全部 grants——含已撤销，撤销 ≠ 引擎已删——推导出的引擎）各插一条 `persona_purges` 指令行，audit `persona.purge_request`；
+2. 各引擎轮询 `GET /api/sync/personas/purges?system=<自己>`（Bearer `EVENT_INGEST_KEY`，与 `/api/collect` 同一把机器密钥）拉未 ack 指令（`purge_id / persona_id / source_key / 槽位布尔`，**不含客户数据**）；
+3. 引擎本地删除资产后 `POST { purge_id, detail? }` 回执（幂等，重复 ack 返回 `already=true`），audit `persona.purge_ack`；
+4. 该 persona 全部指令 ack 后集团侧自动置 status → `purged`，audit `persona.purged`。授权在 `purge_pending`/`purged` 状态下冻结。
+
+**导入用法**：
+
+```bash
+# 人设导出文件（幂等，可重复执行；--system 给 jsonl 提供缺省 source_system）
+node scripts/ledger-import-personas.mjs /path/personas-export.json [--db /path/group-ledger.db]
+node scripts/ledger-import-personas.mjs <outbox.jsonl> --system avatarhub
+```
+
+导出文件格式：`{"version":1,"source_system":"avatarhub","exported_at":"...","personas":[{source_key, display_name, customer_name?, slots:{face:{present,fingerprint?,ref?,version?},voice:{...},prompt:{...},knowledge:{...}}, tags?:[], created_at?, raw?:{}},...]}`。`slots.*.present` 映射到 `slot_*` 整型列，槽位细节进 `slots_detail`；`customer_name` 不建客户，只留在 `slots_detail._meta` 供 console 人工归属；`raw` 资产本体**不入库**。`.jsonl` 逐行同格式（BOM 容错，坏行计数）。统计输出含 `skippedPurged`。
+
+**审计动作**：`persona.grant` / `persona.revoke` / `persona.assign_customer` / `persona.purge_request` / `persona.purge_ack` / `persona.purged`，console 侧 actor = `console:<username>`，机器通道 ack 的 actor = `sync:engine`。
+
 ## 4. 双写点清单
 
 | 文件 | 函数 | 时机 |

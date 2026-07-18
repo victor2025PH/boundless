@@ -22,6 +22,7 @@ import {
   UserCog,
   UserRound,
   Users,
+  VenetianMask,
   X,
 } from "lucide-react";
 
@@ -269,6 +270,7 @@ export function LogoutButton() {
 const NAV = [
   { href: "/console", label: "总览", Icon: LayoutDashboard },
   { href: "/console/customers", label: "客户", Icon: Users },
+  { href: "/console/personas", label: "人设", Icon: VenetianMask },
   { href: "/console/orders", label: "订单", Icon: ReceiptText },
   { href: "/console/licenses", label: "授权", Icon: KeyRound },
   { href: "/console/leads", label: "留资", Icon: Inbox },

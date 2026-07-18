@@ -4,6 +4,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, ScrollText } from "lucide-react";
 import { listLeads, listLicenses, listOrders } from "@/lib/ledger";
+import { listPersonas } from "@/lib/personas";
 import { getConsoleSessionUser } from "@/lib/console-auth";
 import { roleAtLeast } from "@/lib/console-users";
 import { getCustomerById, listAuditForCustomer, listIdentitiesByCustomer } from "../../data";
@@ -15,6 +16,8 @@ import {
   ExpiryCell,
   LeadStatusBadge,
   OrderStatusBadge,
+  PersonaSlotCells,
+  PersonaStatusBadge,
   SectionTitle,
   SystemBadge,
   Td,
@@ -44,6 +47,7 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
   const orders = listOrders({ customerId: customer.id, limit: 200 }).rows;
   const licenses = listLicenses({ customerId: customer.id, limit: 200 }).rows;
   const leads = listLeads({ customerId: customer.id, limit: 200 }).rows;
+  const personas = listPersonas({ customerId: customer.id, limit: 200 }).rows;
   const audit = listAuditForCustomer(customer.id);
 
   const paidTotal = orders
@@ -83,6 +87,9 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
             </span>
             <span>
               授权 <b className="text-slate-200">{licenses.length}</b>
+            </span>
+            <span>
+              人设 <b className="text-slate-200">{personas.length}</b>
             </span>
             <span>
               留资 <b className="text-slate-200">{leads.length}</b>
@@ -187,6 +194,52 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
                   <ExpiryCell expiresAt={l.expires_at} />
                 </Td>
                 <Td className="text-xs text-slate-400">{l.status || "—"}</Td>
+              </tr>
+            ))}
+          </DataTable>
+        )}
+      </Card>
+
+      <Card>
+        <SectionTitle count={personas.length}>名下人设</SectionTitle>
+        {personas.length === 0 ? (
+          <p className="text-xs text-slate-500">
+            暂无归属人设 —— 到 <Link href="/console/personas" className="text-amber-300 hover:underline">人设注册表</Link>
+            的详情页做「归属客户」。
+          </p>
+        ) : (
+          <DataTable head={["人设", "来源", "槽位", "状态", "创建时间", ""]}>
+            {personas.map((p) => (
+              <tr key={p.id} className="hover:bg-slate-800/40">
+                <Td>
+                  <Link href={`/console/personas/${p.id}`} className="text-xs font-medium text-amber-300 hover:underline">
+                    {p.display_name || "（未命名）"}
+                  </Link>
+                </Td>
+                <Td>
+                  <SystemBadge system={p.source_system} />
+                  <span className="ml-2 font-mono text-[11px] text-slate-500">{p.source_key}</span>
+                </Td>
+                <Td>
+                  <PersonaSlotCells
+                    face={!!p.slot_face}
+                    voice={!!p.slot_voice}
+                    prompt={!!p.slot_prompt}
+                    knowledge={!!p.slot_knowledge}
+                  />
+                </Td>
+                <Td>
+                  <PersonaStatusBadge status={p.status} />
+                </Td>
+                <Td className="text-xs text-slate-500">{fmtDateTime(p.created_at)}</Td>
+                <Td>
+                  <Link
+                    href={`/console/personas/${p.id}`}
+                    className="rounded-lg border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:border-amber-500/60 hover:text-amber-300"
+                  >
+                    详情 →
+                  </Link>
+                </Td>
               </tr>
             ))}
           </DataTable>

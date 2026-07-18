@@ -18,7 +18,7 @@ import Database from "better-sqlite3";
 import { DATA_DIR } from "./data-dir";
 import { isValidId, newId } from "./ids";
 
-export const LEDGER_SCHEMA_VERSION = 2;
+export const LEDGER_SCHEMA_VERSION = 3;
 
 // ── 表结构（schema v1）──────────────────────────────────────────────
 // ⚠️ 与 scripts/ledger-lib.mjs 中的 DDL_V1 逐字一致，修改必须同步！
@@ -150,6 +150,55 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+`;
+
+// ── 表结构（schema v3：人设总线 Persona Bus）────────────────────────
+// 人设注册表只存元数据与指纹（slots_detail JSON），资产本体（脸模/声纹/话术/知识库
+// 文件）永不进集团库。purge 协议：console 发起 → persona_purges 逐引擎下发 →
+// /api/sync/personas/purges 机器通道轮询+ack → 全部 ack 后 status=purged。
+// ⚠️ 与 scripts/ledger-lib.mjs 中的 DDL_V3 逐字一致，修改必须同步！
+const DDL_V3 = `
+CREATE TABLE IF NOT EXISTS personas (
+  id TEXT PRIMARY KEY,
+  customer_id TEXT NULL REFERENCES customers(id),
+  source_system TEXT NOT NULL,
+  source_key TEXT NOT NULL,
+  display_name TEXT,
+  slot_face INTEGER NOT NULL DEFAULT 0,
+  slot_voice INTEGER NOT NULL DEFAULT 0,
+  slot_prompt INTEGER NOT NULL DEFAULT 0,
+  slot_knowledge INTEGER NOT NULL DEFAULT 0,
+  slots_detail TEXT,
+  tags TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','archived','purge_pending','purged')),
+  created_at TEXT,
+  updated_at TEXT,
+  synced_at TEXT,
+  UNIQUE(source_system, source_key)
+);
+CREATE TABLE IF NOT EXISTS persona_grants (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  persona_id TEXT NOT NULL REFERENCES personas(id),
+  product_id TEXT NOT NULL,
+  scope TEXT,
+  granted_by TEXT,
+  granted_at TEXT,
+  revoked_at TEXT NULL,
+  UNIQUE(persona_id, product_id)
+);
+CREATE TABLE IF NOT EXISTS persona_purges (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  persona_id TEXT NOT NULL,
+  requested_by TEXT,
+  requested_at TEXT,
+  target_system TEXT NOT NULL,
+  acked_at TEXT NULL,
+  ack_detail TEXT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_personas_customer ON personas(customer_id);
+CREATE INDEX IF NOT EXISTS idx_personas_status ON personas(status);
+CREATE INDEX IF NOT EXISTS idx_persona_grants_persona ON persona_grants(persona_id);
+CREATE INDEX IF NOT EXISTS idx_persona_purges_target ON persona_purges(target_system, acked_at);
 `;
 
 // ── 行类型（console 直接消费）───────────────────────────────────────
@@ -334,6 +383,7 @@ function migrate(db: Database.Database) {
   const migrations: ((db: Database.Database) => void)[] = [
     (d) => d.exec(DDL_V1), // v0 → v1：全量建表（IF NOT EXISTS，幂等）
     (d) => d.exec(DDL_V2), // v1 → v2：控制台实名账号 users + 会话 sessions
+    (d) => d.exec(DDL_V3), // v2 → v3：人设总线 personas / persona_grants / persona_purges
   ];
   if (current >= migrations.length) return;
   const run = db.transaction(() => {

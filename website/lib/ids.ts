@@ -2,13 +2,13 @@
 // ULID = 26 字符 Crockford Base32 大写（字母表 0123456789ABCDEFGHJKMNPQRSTVWXYZ，
 // 排除 I/L/O/U），48bit 毫秒时间戳 + 80bit 随机（node:crypto randomBytes，无第三方依赖）。
 // 时间戳在前 → ID 字典序 ≈ 创建时间序（同毫秒内不保证单调）。
-// 前缀约定：cust=客户 ord=订单 lic=授权 evt=事件 aud=审计 usr=控制台用户。
+// 前缀约定：cust=客户 ord=订单 lic=授权 evt=事件 aud=审计 usr=控制台用户 prs=人设。
 // 旧订单号（AH-YYYYMMDD-XXXXXX）与留资 key（tg:xxx / c:xxx）不走此规范，保留为 source_key 自然键。
 import { randomBytes } from "node:crypto";
 
 const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
-export const ID_PREFIXES = ["cust", "ord", "lic", "evt", "aud", "usr"] as const;
+export const ID_PREFIXES = ["cust", "ord", "lic", "evt", "aud", "usr", "prs"] as const;
 export type IdPrefix = (typeof ID_PREFIXES)[number];
 
 /** 完整 ID 校验：2–5 位小写前缀 + "_" + 26 位 Crockford Base32。 */

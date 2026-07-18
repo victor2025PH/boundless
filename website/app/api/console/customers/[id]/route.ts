@@ -1,5 +1,5 @@
 // /api/console/customers/[id] —— 客户 360（GET）与客户动作（POST）。
-// GET：客户行 + identities + 名下 orders/licenses/leads（ledger list 函数按 customer_id 过滤）+ 审计流水。
+// GET：客户行 + identities + 名下 orders/licenses/leads/personas（按 customer_id 过滤）+ 审计流水。
 // POST：{ action: "attach_identity", kind, value } —— 幂等挂身份；冲突（已属他人）返回 409。
 // RBAC：GET viewer+；POST admin+（audit actor="console:<username>"）。
 import { NextRequest, NextResponse } from "next/server";
@@ -14,6 +14,7 @@ import {
   listOrders,
   type IdentityKind,
 } from "@/lib/ledger";
+import { listPersonas } from "@/lib/personas";
 import { getCustomerById, listAuditForCustomer, listIdentitiesByCustomer } from "@/app/console/data";
 
 export const runtime = "nodejs";
@@ -35,6 +36,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       orders: listOrders({ customerId: customer.id, limit: 200 }).rows,
       licenses: listLicenses({ customerId: customer.id, limit: 200 }).rows,
       leads: listLeads({ customerId: customer.id, limit: 200 }).rows,
+      personas: listPersonas({ customerId: customer.id, limit: 200 }).rows,
       audit: listAuditForCustomer(customer.id),
     });
   } catch (e) {

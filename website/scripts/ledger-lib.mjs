@@ -10,7 +10,7 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import Database from "better-sqlite3";
 
-export const LEDGER_SCHEMA_VERSION = 2;
+export const LEDGER_SCHEMA_VERSION = 3;
 
 // ── ID 规范（与 lib/ids.ts 一致）───────────────────────────────────
 const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -207,6 +207,52 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 `;
 
+// ── 表结构（schema v3：人设总线 Persona Bus）────────────────────────
+// ⚠️ 与 website/lib/ledger.ts 中的 DDL_V3 逐字一致，修改必须同步！
+const DDL_V3 = `
+CREATE TABLE IF NOT EXISTS personas (
+  id TEXT PRIMARY KEY,
+  customer_id TEXT NULL REFERENCES customers(id),
+  source_system TEXT NOT NULL,
+  source_key TEXT NOT NULL,
+  display_name TEXT,
+  slot_face INTEGER NOT NULL DEFAULT 0,
+  slot_voice INTEGER NOT NULL DEFAULT 0,
+  slot_prompt INTEGER NOT NULL DEFAULT 0,
+  slot_knowledge INTEGER NOT NULL DEFAULT 0,
+  slots_detail TEXT,
+  tags TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','archived','purge_pending','purged')),
+  created_at TEXT,
+  updated_at TEXT,
+  synced_at TEXT,
+  UNIQUE(source_system, source_key)
+);
+CREATE TABLE IF NOT EXISTS persona_grants (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  persona_id TEXT NOT NULL REFERENCES personas(id),
+  product_id TEXT NOT NULL,
+  scope TEXT,
+  granted_by TEXT,
+  granted_at TEXT,
+  revoked_at TEXT NULL,
+  UNIQUE(persona_id, product_id)
+);
+CREATE TABLE IF NOT EXISTS persona_purges (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  persona_id TEXT NOT NULL,
+  requested_by TEXT,
+  requested_at TEXT,
+  target_system TEXT NOT NULL,
+  acked_at TEXT NULL,
+  ack_detail TEXT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_personas_customer ON personas(customer_id);
+CREATE INDEX IF NOT EXISTS idx_personas_status ON personas(status);
+CREATE INDEX IF NOT EXISTS idx_persona_grants_persona ON persona_grants(persona_id);
+CREATE INDEX IF NOT EXISTS idx_persona_purges_target ON persona_purges(target_system, acked_at);
+`;
+
 /** 打开账本 DB（WAL / busy_timeout 5000 / 自动建表迁移），与 lib/ledger.ts::getLedgerDb 等价。 */
 export function openLedgerDb(dbPath) {
   const file = path.resolve(dbPath || resolveLedgerDbPath());
@@ -224,7 +270,7 @@ function migrate(db) {
   db.exec("CREATE TABLE IF NOT EXISTS meta (\n  key TEXT PRIMARY KEY,\n  value TEXT\n);");
   const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
   const current = row ? Number(row.value) || 0 : 0;
-  const migrations = [(d) => d.exec(DDL_V1), (d) => d.exec(DDL_V2)];
+  const migrations = [(d) => d.exec(DDL_V1), (d) => d.exec(DDL_V2), (d) => d.exec(DDL_V3)];
   if (current >= migrations.length) return;
   const run = db.transaction(() => {
     for (let i = current; i < migrations.length; i++) migrations[i](db);

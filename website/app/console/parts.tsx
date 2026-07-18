@@ -3,6 +3,7 @@
 
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { BookOpen, MessageSquareText, Mic, ScanFace } from "lucide-react";
 
 // ── 格式化 ──────────────────────────────────────────────────────────
 const TZ_OFFSET_H = Number(process.env.TZ_OFFSET ?? 8); // 与 /admin 同源约定：站点时区默认 UTC+8
@@ -123,6 +124,7 @@ export function RoleBadge({ role, compact = false }: { role: string; compact?: b
 const SYSTEM_STYLE: Record<string, string> = {
   avatarhub: "bg-violet-500/15 text-violet-300 border-violet-500/30",
   chengjie: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+  huoke: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
 };
 
 export function SystemBadge({ system }: { system: string }) {
@@ -130,6 +132,67 @@ export function SystemBadge({ system }: { system: string }) {
   return (
     <span className={`inline-block rounded-full border px-2 py-0.5 font-mono text-[11px] font-medium ${cls}`}>
       {system}
+    </span>
+  );
+}
+
+// ── 人设总线（schema v3）───────────────────────────────────────────
+const PERSONA_STATUS_STYLE: Record<string, string> = {
+  active: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+  archived: "bg-slate-500/15 text-slate-400 border-slate-500/30",
+  purge_pending: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+  purged: "bg-rose-500/15 text-rose-300 border-rose-500/30",
+};
+const PERSONA_STATUS_LABEL: Record<string, string> = {
+  active: "在用",
+  archived: "已归档",
+  purge_pending: "清除中",
+  purged: "已清除",
+};
+
+export function PersonaStatusBadge({ status }: { status: string | null }) {
+  const s = status ?? "(空)";
+  const cls = PERSONA_STATUS_STYLE[s] ?? "bg-slate-500/15 text-slate-400 border-slate-500/30";
+  return (
+    <span className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}>
+      {PERSONA_STATUS_LABEL[s] ?? s}
+    </span>
+  );
+}
+
+export const PERSONA_SLOT_META = [
+  { key: "face", label: "face 形象/脸模", Icon: ScanFace, lit: "border-violet-500/40 bg-violet-500/15 text-violet-300" },
+  { key: "voice", label: "voice 声纹克隆", Icon: Mic, lit: "border-sky-500/40 bg-sky-500/15 text-sky-300" },
+  { key: "prompt", label: "prompt 语言人格/话术", Icon: MessageSquareText, lit: "border-amber-500/40 bg-amber-500/15 text-amber-300" },
+  { key: "knowledge", label: "knowledge 术语库/知识库", Icon: BookOpen, lit: "border-emerald-500/40 bg-emerald-500/15 text-emerald-300" },
+] as const;
+
+/** 人设四槽位图示：face/voice/prompt/knowledge 点亮态（列表/详情共用）。 */
+export function PersonaSlotCells({
+  face,
+  voice,
+  prompt,
+  knowledge,
+}: {
+  face: boolean;
+  voice: boolean;
+  prompt: boolean;
+  knowledge: boolean;
+}) {
+  const lit: Record<string, boolean> = { face, voice, prompt, knowledge };
+  return (
+    <span className="inline-flex gap-1">
+      {PERSONA_SLOT_META.map(({ key, label, Icon, lit: litCls }) => (
+        <span
+          key={key}
+          title={`${label}：${lit[key] ? "已配置" : "未配置"}`}
+          className={`inline-flex h-6 w-6 items-center justify-center rounded-md border ${
+            lit[key] ? litCls : "border-slate-800 bg-slate-900/60 text-slate-700"
+          }`}
+        >
+          <Icon className="h-3.5 w-3.5" />
+        </span>
+      ))}
     </span>
   );
 }
