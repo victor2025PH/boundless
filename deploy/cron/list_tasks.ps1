@@ -19,7 +19,7 @@ function Decode-Result([int64]$code) {
     switch ($code) {
         0          { return '成功' }
         1          { return '失败（退出码 1：本轮有失败，看日志）' }
-        2          { return '失败（退出码 2：配置错误——缺密钥/python/数据根，看日志首行）' }
+        2          { return '失败（退出码 2：配置错误——缺密钥/python/node/数据根，看日志首行）' }
         3          { return '失败（退出码 3：chengjie 双实例守门，README §3）' }
         267009     { return '正在运行' }                     # 0x41301
         267011     { return '尚未运行过' }                   # 0x41303
@@ -35,7 +35,7 @@ function Decode-Result([int64]$code) {
 $tasks = @(Get-ScheduledTask -TaskPath $TaskPath -ErrorAction SilentlyContinue | Sort-Object TaskName)
 if (-not $tasks.Count) {
     Write-Host "未安装：计划任务文件夹 $TaskPath 下没有任何任务。"
-    Write-Host '安装（先演练后 -Execute）：powershell -ExecutionPolicy Bypass -File deploy\cron\install_tasks.ps1 -Engine <avatarhub|chengjie|huoke>'
+    Write-Host '安装（先演练后 -Execute）：powershell -ExecutionPolicy Bypass -File deploy\cron\install_tasks.ps1 -Engine <avatarhub|chengjie|huoke> [-WithKpiWeekly]'
     exit 0
 }
 

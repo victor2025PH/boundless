@@ -7,14 +7,15 @@
 #   powershell -ExecutionPolicy Bypass -File deploy\cron\uninstall_tasks.ps1                       # 演练：全部 Boundless-*
 #   powershell -ExecutionPolicy Bypass -File deploy\cron\uninstall_tasks.ps1 -Engine chengjie      # 演练：只看 chengjie 的
 #   powershell -ExecutionPolicy Bypass -File deploy\cron\uninstall_tasks.ps1 -Engine chengjie -Tasks uploader -Execute
+#   powershell -ExecutionPolicy Bypass -File deploy\cron\uninstall_tasks.ps1 -Engine website       # 演练：只看 kpi_weekly（Boundless-website-*）
 #
 # 退出码：0 = 演练完成 / 全部卸载成功（含「无匹配任务」）   1 = 有卸载失败
 
 [CmdletBinding()]
 param(
-    [ValidateSet('', 'avatarhub', 'chengjie', 'huoke')]
-    [string]$Engine = '',           # 空 = 全部引擎
-    [string[]]$Tasks = @(),         # 空 = 全部任务类型；可选 uploader/purge/export（逗号分隔亦可）
+    [ValidateSet('', 'avatarhub', 'chengjie', 'huoke', 'website')]
+    [string]$Engine = '',           # 空 = 全部；website = kpi_weekly 所属段（Boundless-website-*）
+    [string[]]$Tasks = @(),         # 空 = 全部任务类型；可选 uploader/purge/export/grants_sync/kpi_weekly（逗号分隔亦可）
     [switch]$Execute                # 缺省 WhatIf 演练；-Execute 才 Unregister-ScheduledTask
 )
 
@@ -26,8 +27,8 @@ $TaskPath = '\Boundless\'
 function Say([string]$msg) { Write-Host "[uninstall_tasks] $msg" }
 
 $Tasks = @($Tasks | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ })
-$bad = @($Tasks | Where-Object { $_ -notin @('uploader', 'purge', 'export') })
-if ($bad.Count) { Say "错误: 未知任务类型 $($bad -join ', ')（可选 uploader/purge/export）"; exit 1 }
+$bad = @($Tasks | Where-Object { $_ -notin @('uploader', 'purge', 'export', 'grants_sync', 'kpi_weekly') })
+if ($bad.Count) { Say "错误: 未知任务类型 $($bad -join ', ')（可选 uploader/purge/export/grants_sync/kpi_weekly）"; exit 1 }
 
 $prefix = if ($Engine) { "Boundless-$Engine-" } else { 'Boundless-' }
 

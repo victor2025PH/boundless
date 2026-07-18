@@ -1,7 +1,8 @@
-# deploy/cron/ · 引擎机定时任务接线包（P4/P5 运营手册）
+# deploy/cron/ · 引擎机定时任务接线包 v2（P4/P5 运营手册）
 
-> 让三个周期性动作——**事件补传 uploader**（P4）、**人设清除 purge agent**（P5）、
-> **人设/授权台账导出 export**（P4/P5）——在五台 Windows 引擎机上以计划任务方式标准化落地。
+> 让五个周期性动作——**事件补传 uploader**（P4）、**人设清除 purge agent**（P5）、
+> **人设/授权台账导出 export**（P4/P5）、**grant 缓存同步 grants_sync**（P5 软门控）、
+> **KPI 周报 kpi_weekly**（P4 报表，website 机可选装）——在五台 Windows 机上以计划任务方式标准化落地。
 > 机器台账单一源：`deploy/machines.json`；双实例契约：`deploy/instances/README.md` §4/§7 与
 > `deploy/instances/migrate_117_runbook.md` §4。
 >
@@ -14,26 +15,31 @@
 
 | 变量 | 级别 | 谁来设 | 说明 |
 |---|---|---|---|
-| `EVENT_INGEST_KEY` | **机器级**（一台厂商机一把 M2M 密钥） | 运维：`setx /M EVENT_INGEST_KEY <密钥>`（管理员），或壳脚本临时 `-IngestKey` | uploader `--key` 与 purge `--key` 同一把（与 `/api/collect` 共用）。**绝不入 git、缺省不进任务定义**（任务 XML 本机管理员可读）；未配置时任务以退出码 2 失败并写明原因 |
-| `PERSONA_SYNC_BASE` | 机器级（可选） | 可不设 | purge 执行器基址回退链：`--base` > env > `https://bd2026.cc`；安装器 `-BaseUrl` 显式覆盖 |
+| `EVENT_INGEST_KEY` | **机器级**（一台厂商机一把 M2M 密钥） | 运维：`setx /M EVENT_INGEST_KEY <密钥>`（管理员），或壳脚本临时 `-IngestKey` | uploader `--key`、purge `--key`、**grants_sync `--key`** 同一把（与 `/api/collect`、`/api/sync/personas/grants` 共用）。**绝不入 git、缺省不进任务定义**（任务 XML 本机管理员可读）；未配置时任务以退出码 2 失败并写明原因。⚠ 没有叫 `EVENT_INGEST_URL` 的变量——同步/上报 URL 走下行 `PERSONA_SYNC_BASE` 或 CLI 参数 |
+| `PERSONA_SYNC_BASE` | 机器级（可选） | 可不设 | purge 执行器与 **grants_sync fetch 器**的基址回退链：`--base` > env > `https://bd2026.cc`（uploader 的 endpoint 同源拼 `<base>/api/collect`）；安装器 `-BaseUrl` 显式覆盖 |
 | `EVENT_SPOOL_DIR` | 实例/引擎进程（**发射侧**） | chengjie 由 `start_zhiliao/tongyi.ps1` 注入；avatarhub/huoke 引擎缺省自带 | cron 侧**不依赖它**：uploader 一律显式 `--spool-dir`，防机器级残留串目录 |
+| `PERSONA_GRANT_CACHE` / `PERSONA_GRANT_ENFORCE` | 引擎进程（**消费侧**） | 引擎启动脚本按需注入 | 与 cron 无关：grants_sync 只负责把缓存写到 `data\persona_bus_out\<engine>_grants.json`，引擎侧 `grant_gate.py` 经 `PERSONA_GRANT_CACHE` 指向它（缺省 warn 不挡业务）；列在此说明产物去向 |
+| `EVENTS_DB` / `LEDGER_DB` | 机器级（kpi_weekly 装机才需要） | 运维 `setx /M` | KPI 周报生成器只读打开的双库路径；未设时缺省 `LEADS_DIR`（再缺省 `~\hualing-leads`）下的 `group-events.db` / `group-ledger.db`。库缺失不报错——出「暂无数据」骨架报告退出 0 |
 | `CHENGJIE_PRODUCT_ID` / `AITR_DATA_DIR` / `CHENGJIE_LEDGER_OUTBOX` / `LICENSE_KEY` | 实例进程 | 双实例 start 脚本每次启动注入 | 与 cron 无关，**不要设成机器级**（双实例串味源，runbook §1.6）；列在此仅防误配 |
 | chengjie 实例数据根清单 | CLI 参数（非环境变量） | 安装器/壳脚本 `-DataRoots`（`-File` 语义下多值用逗号串） | 缺省 `deploy\instances\zhiliao\data` + `deploy\instances\tongyi\data`；迁移前单实例期传 `"engines\chengjie"` |
 
-日志落 `logs\cron\<任务名>.log`（根 `.gitignore` 已忽略 `logs/`，本包不动它）；导出产物落
-`data\persona_bus_out\`（`data/` 同样已忽略；含显示名/指纹/客户名，属经营数据，勿外传）。
+日志落 `logs\cron\<任务名>.log`（根 `.gitignore` 已忽略 `logs/`，本包不动它）；导出产物与 grant 缓存落
+`data\persona_bus_out\`（`data/` 同样已忽略；含显示名/指纹/客户名，属经营数据，勿外传）；
+KPI 周报落 `deploy\cron\logs\reports\kpi_weekly_<yyyyMMdd_HHmm>.md`（`logs/` 全局忽略规则同样罩住它）。
 
 ## 2. 任务矩阵（机器 × 任务）
 
-三类任务统一口径：
+五类任务统一口径：
 
 | 任务 | 节律 | 底层脚本与参数 | 包装壳 |
 |---|---|---|---|
 | **uploader** | 每 5 分钟 | `platform/observability/uploader.py --spool-dir <spool> --endpoint <base>/api/collect --batch 200`（`--key` 经环境变量；断点续传、幂等重发） | `run_uploader.ps1` |
 | **purge** | 每 10 分钟 | `engines/<engine>/…/persona_purge_agent.py --once --commit --input <根>`（`--base`/`--key` 同上；**软删进 trash**，见 §4） | `run_purge.ps1` |
 | **export** | 每日 03:30 | 三段式：`tools/persona_bus/export_*.py` 导出 → `validate_personas.py` / `validate_export.py` 校验 → scp/ssh 传输导入（§5）；license：avatarhub=`tools/license_ledger/export_avatarhub.py`，chengjie=`engines/chengjie/scripts/ledger_outbox.py --export`，huoke=无（自动跳过） | `run_export.ps1` |
+| **grants_sync** | 每 30 分钟 | `tools/persona_bus/fetch_grants.py --system <engine> --out data\persona_bus_out\<engine>_grants.json`（`--key` 经环境变量 `EVENT_INGEST_KEY`、`--base` 回退 `PERSONA_SYNC_BASE`；原子写缓存供 `grant_gate.py` 软门控，§5.4） | `run_grants_sync.ps1` |
+| **kpi_weekly** | 每周一 09:00 | `node website/scripts/kpi-weekly-report.mjs --week last --format md --out deploy\cron\logs\reports\kpi_weekly_<时间戳>.md`（只读聚合 `EVENTS_DB`/`LEDGER_DB` 双库；库缺失出骨架报告退出 0） | `run_kpi_weekly.ps1` |
 
-分机矩阵（任务名统一 `\Boundless\Boundless-<engine>-<task>[-<实例>]`）：
+分机矩阵（任务名统一 `\Boundless\Boundless-<engine>-<task>[-<实例>]`；kpi_weekly 例外=`Boundless-website-kpi_weekly`）：
 
 | 机器 | 引擎 | uploader（每 5 分钟） | purge（每 10 分钟，--once --commit） | export（每日三段式） | 所需环境变量 |
 |---|---|---|---|---|---|
@@ -42,6 +48,31 @@
 | **.198 智拓** zhituo | huoke | 1 个：spool 缺省 `engines\huoke\data\events\spool` | `engines/huoke/src/persona_purge_agent.py`；trash=`engines\huoke\data\purged_trash\` | persona=`export_huoke_personas.py`；license 无数据源自动跳过 | `EVENT_INGEST_KEY` |
 | **.104 幻颜节点 / .140 通传节点** | avatarhub（算力节点） | **默认不装**：算力节点只跑推理服务，不产事件 spool；日后本机落 spool 再单装 uploader | 不装（人设资产在 .176 主机） | 不装 | — |
 | **VPS 官网机** | website | —（服务端收集器） | —（注册表在服务端） | 导入侧 `ledger-import-personas.mjs` / `ledger-import-licenses.mjs`；KPI 周报/账本备份/订单 SLA 走 Linux crontab（§5.3） | 服务端 `.env`（`EVENT_INGEST_KEY` 等，非本包职责） |
+
+### 2.1 五机安装矩阵（v2 速查：每台装什么、要配什么、装前核对什么）
+
+grants_sync 已纳入引擎机缺省任务集（`install_tasks.ps1` 缺省 `-Tasks uploader,purge,export,grants_sync`）；
+kpi_weekly 是独立开关 `-WithKpiWeekly`，只在 **website 所在 Windows 机**（现状=.117 通译，`machines.json` 的
+`dev_paths` 含 `website`）可选装——**website 生产在 VPS（165.154.233.121, ubuntu），Windows 计划任务不适用，
+VPS 用 §5.3 ① 的 crontab 等价命令**。
+
+| 机器 | 安装命令（先演练，核对后加 `-Execute`） | 装的任务 | 机器级 env（`setx /M`） |
+|---|---|---|---|
+| **.176 幻声**（avatarhub 引擎机） | `install_tasks.ps1 -Engine avatarhub` | uploader / purge / export / grants_sync | `EVENT_INGEST_KEY` 必填；`PERSONA_SYNC_BASE` 可选（缺省 `https://bd2026.cc`） |
+| **.117 通译**（chengjie 引擎机 + website 开发机） | `install_tasks.ps1 -Engine chengjie -WithKpiWeekly` | uploader×2（双实例）/ purge / export / grants_sync + kpi_weekly（可选装，本机是 website 开发机） | `EVENT_INGEST_KEY` 必填；`PERSONA_SYNC_BASE` 可选；装 kpi_weekly 再加 `EVENTS_DB` / `LEDGER_DB`（不设则报告只有骨架，指向缺省 `~\hualing-leads` 下双库） |
+| **.198 智拓**（huoke 引擎机） | `install_tasks.ps1 -Engine huoke` | uploader / purge / export / grants_sync | `EVENT_INGEST_KEY` 必填；`PERSONA_SYNC_BASE` 可选 |
+| **.104 幻颜节点**（算力节点，无引擎任务） | 不跑安装器 | **全部不装**（只跑推理服务；无 spool、无人设资产、无 grant 消费点） | — |
+| **.140 通传节点**（算力节点，无引擎任务） | 不跑安装器 | **全部不装**（同上） | — |
+| **VPS 官网机**（165.154.233.121, ubuntu） | 不适用本安装器（Windows 计划任务） | KPI 周报 / 账本备份 / 订单 SLA / 台账导入走 **Linux crontab**（§5.3；KPI 样例=§5.3 ①） | 服务端 `.env`（`EVENT_INGEST_KEY` 等，非本包职责） |
+
+**每台机 `-Execute` 前核对清单**（详版见 §7）：
+
+- [ ] 演练输出的任务清单与本表一致，逐条 `[检查]` 行无意外黄字；
+- [ ] `[Environment]::GetEnvironmentVariable('EVENT_INGEST_KEY','Machine')` 非空（uploader/purge/grants_sync 共用）；
+- [ ] python 可用（SYSTEM 账户看机器级 PATH；不在则 `-PythonExe` 全路径）；装 kpi_weekly 的机器再核 node 可用
+      （不在则 `-NodeExe` 全路径）且 `website\node_modules` 已 `npm install`（缺 better-sqlite3 任务必败）；
+- [ ] .117 专属：spool/数据根形态与迁移进度一致（§3）；装 kpi_weekly 前确认 `EVENTS_DB`/`LEDGER_DB` 指向本机
+      真实库位，否则周报只有「暂无数据」骨架。
 
 ## 3. 双实例注意（.117 chengjie 专属）
 
@@ -116,6 +147,8 @@ node scripts/ledger-import-licenses.mjs /home/ubuntu/persona_inbox/avatarhub_lic
 
 ```cron
 # ① KPI 周报：每周一 08:10 生成上一完整 ISO 周（库缺失时输出骨架报告退出 0，可常开）
+#    ——即 Windows 侧 kpi_weekly 任务（run_kpi_weekly.ps1）的 VPS 等价命令；生产报表以本条为准，
+#      Windows 侧 -WithKpiWeekly 仅供 website 开发机（现状 .117）自查（§2.1）
 10 8 * * 1 cd /home/ubuntu/yuntech && mkdir -p /home/ubuntu/reports/kpi && /usr/bin/node scripts/kpi-weekly-report.mjs --week last --format md --out /home/ubuntu/reports/kpi/last-week.md >> /home/ubuntu/kpi-weekly.log 2>&1
 
 # ② 账本备份：每日 03:50（website/scripts/ledger-backup.mjs，同事本轮交付：SQLite Online Backup
@@ -129,17 +162,21 @@ node scripts/ledger-import-licenses.mjs /home/ubuntu/persona_inbox/avatarhub_lic
 # 25 4 * * * cd /home/ubuntu/yuntech && for f in /home/ubuntu/persona_inbox/*_licenses*.json; do [ -e "$f" ] && node scripts/ledger-import-licenses.mjs "$f"; done >> /home/ubuntu/ledger-import.log 2>&1
 ```
 
-### 5.4 可选：grant 缓存刷新
+### 5.4 grant 缓存同步（v2 已接线：grants_sync 任务）
 
-export 三段式（§5.1）成功后，可另挂一条本机定时任务，把集团侧授权/grant 缓存拉到引擎机本地（供运行时只读命中，与 uploader/purge/export **矩阵无关**，本包 `install_tasks.ps1` **不自动注册**）：
+C4 已交付 `tools/persona_bus/fetch_grants.py`（`GET <base>/api/sync/personas/grants?system=<engine>`，
+Bearer=`EVENT_INGEST_KEY`），v2 起 **grants_sync 纳入引擎机缺省任务集**（每 30 分钟，
+`Boundless-<engine>-grants_sync`，壳=`run_grants_sync.ps1`）：把集团侧授权清单原子写到
+`data\persona_bus_out\<engine>_grants.json`，供 `platform\identity\grant_gate.py` 运行时软门控只读命中
+（缺省 warn 不挡业务；引擎进程经 `PERSONA_GRANT_CACHE` 指向缓存文件，`PERSONA_GRANT_ENFORCE=1` 才强制）。
 
 ```powershell
-# 示例（参数以 C4 交付脚本的 --help 为准；建议日志同样落 logs\cron\）
-python tools/persona_bus/fetch_grants.py --out data\persona_bus_out\grants_cache.json
-# 或：在 export 成功钩子/独立日计划里跑，失败不影响已校验的 export 产物
+# 人工排障（缺 EVENT_INGEST_KEY 时明确报错退出码 2，绝不静默空跑）：
+powershell -ExecutionPolicy Bypass -File deploy\cron\run_grants_sync.ps1 -Engine avatarhub
 ```
 
-**当前仓库尚无 `tools/persona_bus/fetch_grants.py`——待 C4 交付后启用。** 交付后把上述命令（或同事文档里的正式参数）写进各机独立计划任务即可；勿把 fetch 塞进 `run_export.ps1`（导出失败不应挡住缓存刷新节奏，反之亦然）。
+纪律不变：fetch **独立于** `run_export.ps1`（导出失败不应挡住缓存刷新节奏，反之亦然）；
+拉取失败（网络/5xx）退出码 1 可重试，**旧缓存继续供门控离线使用**——门控缺省 warn 放行，断更不挡业务。
 
 ## 6. 安装 / 卸载 / 巡检（Windows 侧用法）
 
@@ -150,7 +187,7 @@ cd D:\workspace\boundless
 
 # ① 演练（缺省 WhatIf）：打印任务定义（文件夹/触发器/账户/工作目录/日志/完整动作命令行 + 环境体检），不注册
 powershell -ExecutionPolicy Bypass -File deploy\cron\install_tasks.ps1 -Engine avatarhub                 # .176
-powershell -ExecutionPolicy Bypass -File deploy\cron\install_tasks.ps1 -Engine chengjie                  # .117（缺省双实例）
+powershell -ExecutionPolicy Bypass -File deploy\cron\install_tasks.ps1 -Engine chengjie -WithKpiWeekly   # .117（缺省双实例；website 开发机加装 KPI 周报）
 powershell -ExecutionPolicy Bypass -File deploy\cron\install_tasks.ps1 -Engine huoke -Tasks uploader,export
 
 # ② 演练输出核对无误后，管理员 PowerShell 真注册（-Execute 由各机运维执行）
@@ -160,19 +197,21 @@ powershell -ExecutionPolicy Bypass -File deploy\cron\install_tasks.ps1 -Engine h
 | 参数 | 说明 |
 |---|---|
 | `-Engine avatarhub\|chengjie\|huoke` | 必填，按机器选（.176=avatarhub .117=chengjie .198=huoke） |
-| `-Tasks uploader,purge,export` | 多选，缺省全装三类 |
+| `-Tasks uploader,purge,export,grants_sync` | 多选，缺省全装四类（kpi_weekly 不在缺省，可显式列入或用 `-WithKpiWeekly`） |
+| `-WithKpiWeekly` | 追加 KPI 周报任务 `Boundless-website-kpi_weekly`（website 所在 Windows 机可选装，§2.1；VPS 用 §5.3 ① crontab） |
 | `-BaseUrl` | 集团基址覆盖（缺省壳脚本走 env `PERSONA_SYNC_BASE` / `https://bd2026.cc`） |
 | `-IngestKey` | 显式嵌密钥进任务定义（不推荐，见 §4；缺省运行时读机器级 `EVENT_INGEST_KEY`） |
 | `-SpoolDirs` / `-DataRoots` | 覆盖缺省 spool / 数据根清单（`-File` 语义下多值用逗号串成一个字符串） |
 | `-RunAs SYSTEM\|CurrentUser` | 运行账户，缺省 SYSTEM（ServiceAccount/Highest）；CurrentUser 走 S4U 不存密码。所选账户必须能找到 python（SYSTEM 看机器级 PATH；python 装在用户目录就用 `-RunAs CurrentUser` 或 `-PythonExe` 全路径） |
-| `-PythonExe` | 传给壳脚本的 python 全路径 |
-| `-UploaderEveryMinutes` / `-PurgeEveryMinutes` / `-ExportDailyAt` | 节律覆盖，缺省 5 / 10 / 03:30 |
+| `-PythonExe` / `-NodeExe` | 传给壳脚本的 python / node 全路径（node 仅 kpi_weekly 壳用） |
+| `-UploaderEveryMinutes` / `-PurgeEveryMinutes` / `-GrantsSyncEveryMinutes` / `-ExportDailyAt` / `-KpiWeeklyAt` | 节律覆盖，缺省 5 / 10 / 30 / 03:30 / 09:00（kpi 固定周一，只调时刻） |
 | `-ExportTransfer` | export 任务带第 3 段（`-Transfer -Import`；先打通 §5.1 的 SSH） |
 | `-Execute` | 真注册。缺省=演练只打印 |
 
 统一规格：任务夹 `\Boundless\`；动作 = `cmd.exe /d /c <mkdir 日志目录> & powershell -File <壳> … >> logs\cron\<任务名>.log 2>&1`；
 工作目录=仓库根；`MultipleInstances=IgnoreNew` + `StartWhenAvailable` + 时限 1h；
-触发器 uploader/purge 用 `-Once` 起点 + Repetition（持续 3650 天），export 用 `-Daily`。
+触发器 uploader/purge/grants_sync 用 `-Once` 起点 + Repetition（持续 3650 天），export 用 `-Daily`，
+kpi_weekly 用 `-Weekly Monday`。
 
 ### 6.2 卸载与巡检
 
@@ -191,16 +230,22 @@ powershell -ExecutionPolicy Bypass -File deploy\cron\list_tasks.ps1
 powershell -ExecutionPolicy Bypass -File deploy\cron\run_uploader.ps1 -SpoolDir engines\avatarhub\data\events\spool -DryRun
 powershell -ExecutionPolicy Bypass -File deploy\cron\run_purge.ps1 -Engine huoke                      # dry-run 演练
 powershell -ExecutionPolicy Bypass -File deploy\cron\run_export.ps1 -Engine avatarhub -Kinds persona  # 导出+校验
+powershell -ExecutionPolicy Bypass -File deploy\cron\run_grants_sync.ps1 -Engine chengjie             # 拉 grant 缓存（缺密钥退出码 2）
+powershell -ExecutionPolicy Bypass -File deploy\cron\run_kpi_weekly.ps1 -Week this                    # 本周至今的 KPI 报告
 ```
 
 ## 7. 上线核对单（每台机装完过一遍）
 
-- [ ] `install_tasks.ps1 -Engine <engine>`（不带 `-Execute`）演练输出与 §2 矩阵一致，[检查] 行无意外；
+- [ ] `install_tasks.ps1 -Engine <engine>`（不带 `-Execute`）演练输出与 §2/§2.1 矩阵一致，[检查] 行无意外；
 - [ ] 机器级密钥已配：`[Environment]::GetEnvironmentVariable('EVENT_INGEST_KEY','Machine')` 非空；
 - [ ] 管理员 `-Execute` 实装 → `list_tasks.ps1` 任务齐全、状态 Ready；
 - [ ] 手动触发一次 uploader（`Start-ScheduledTask -TaskPath '\Boundless\' -TaskName 'Boundless-<engine>-uploader'`），
       `logs\cron\` 出日志且 `list_tasks.ps1` 显示上次运行=成功；
 - [ ] purge 先手工 dry-run（`run_purge.ps1 -Engine <engine>`）看将删清单，再放行 `-Commit` 任务；
+- [ ] grants_sync 手动跑一次（`run_grants_sync.ps1 -Engine <engine>`）：`data\persona_bus_out\<engine>_grants.json`
+      出现且 `fetched_at` 是刚刚——缺密钥时应见退出码 2 + 明确报错，配好再装；
+- [ ] 装 kpi_weekly 的机器（§2.1，现状 .117 可选）：`run_kpi_weekly.ps1 -Week this` 手动跑一次，
+      `deploy\cron\logs\reports\` 出 `kpi_weekly_*.md`；报告若是「暂无数据」骨架，先核 `EVENTS_DB`/`LEDGER_DB`；
 - [ ] .117：两个 uploader 的 spool 指向不同实例；purge 多根守门行为已知（§3.2）；
 - [ ] export 产物在 `data\persona_bus_out\` 且校验 OK；确认不入 git（`data/` 已忽略）；
       开 `-ExportTransfer` 前先验 `ssh -F deploy\ssh_config.boundless vps-bd2026 true`。
@@ -211,20 +256,26 @@ powershell -ExecutionPolicy Bypass -File deploy\cron\run_export.ps1 -Engine avat
 
 | 退出码 | 含义 | 处置 |
 |---|---|---|
-| 0 | 成功（含「spool 尚不存在/无新数据」「无待办指令」等正常空转） | — |
-| 1 | 业务失败：上传中断（偏移已保留自动续传）/ purge 有指令未回执（下轮幂等重试）/ 导出某步失败 | 看 `logs\cron\<任务名>.log` 尾部；连续失败再人工介入 |
-| 2 | 配置错误：缺 `EVENT_INGEST_KEY` / 缺 `-SpoolDir` / 数据根不存在 / python 不可用 | 按日志首行提示修配置；不修不会自愈 |
+| 0 | 成功（含「spool 尚不存在/无新数据」「无待办指令」「KPI 库缺失出骨架报告」等正常空转） | — |
+| 1 | 业务失败：上传中断（偏移已保留自动续传）/ purge 有指令未回执（下轮幂等重试）/ 导出某步失败 / grants 拉取失败（旧缓存仍供门控离线用）/ KPI 生成失败 | 看 `logs\cron\<任务名>.log` 尾部；连续失败再人工介入 |
+| 2 | 配置错误：缺 `EVENT_INGEST_KEY` / 缺 `-SpoolDir` / 数据根不存在 / python 或 node 不可用 / 底层脚本缺失 | 按日志首行提示修配置；不修不会自愈 |
 | 3 | 多根 + `-Commit` 守门拒绝：执行器不含 `--data-roots`（旧版检出未 pull，或给 avatarhub/huoke 误传多根） | `git pull` 取到多根版执行器，或改单根（§3.2） |
 | 0x41303 / 0x41301 | 尚未运行过 / 正在运行（系统状态码，非失败） | — |
 | 0x800710E0 | 上一轮还在跑，本轮被 IgnoreNew 跳过 | 常见于首轮大积压，观察即可 |
 
 常见故障：`HTTP 401` = 密钥错（换对 `EVENT_INGEST_KEY`）；`HTTP 503` = 服务端未配置收集器；
-SYSTEM 账户找不到 python = 用 `-PythonExe` 全路径或 `-RunAs CurrentUser` 重装任务。
+SYSTEM 账户找不到 python = 用 `-PythonExe` 全路径或 `-RunAs CurrentUser` 重装任务；
+kpi_weekly 报 `ERR_MODULE_NOT_FOUND` = website 依赖未装（`cd website && npm install`，需 better-sqlite3）。
 
 ---
 
 ## 附录 · 接线包自检记（可提交前）
 
 - WhatIf 缺省、`-Execute` 才注册；矩阵与 `deploy/machines.json` 五机角色一致（.176 avatarhub / .117 chengjie 双实例 / .198 huoke；.104/.140 算力节点默认不装）。
-- `logs\cron\`、`data\persona_bus_out\` 分别落在根 `.gitignore` 的 `logs/`、`data/` 下，不入 git。
+- `logs\cron\`、`data\persona_bus_out\`、`deploy\cron\logs\reports\` 分别落在根 `.gitignore` 的 `logs/`、`data/` 下，不入 git。
 - 修复：`install_tasks.ps1` 多根 WhatIf 体检在执行器文件缺失时不再因 `ReadAllText` 抛错中断演练（先 `Test-Path`）。
+- v2 自检：grants_sync 入引擎机缺省任务集（每 30 分钟）、kpi_weekly 走 `-WithKpiWeekly` 独立开关（每周一 09:00，
+  任务名 `Boundless-website-kpi_weekly`）；两壳缺 env/工具时明确报错退非 0（grants 缺密钥=2、拉取失败=1，
+  kpi 缺 node/脚本=2），绝不静默；`fetch_grants.py` / `kpi-weekly-report.mjs` 本包只读不改。
+  已知口径差：kpi 生成器文件头写「缺省 DATA_DIR 下同名库」，代码实际读 env `LEADS_DIR`
+  （`website/scripts/ledger-lib.mjs` 的 `resolveDataDir`，缺省 `~\hualing-leads`）——以代码为准，本包 README 按实际 env 名写。
