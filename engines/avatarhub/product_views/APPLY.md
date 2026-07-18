@@ -1,4 +1,37 @@
-# 接线说明（APPLY）— 故意未改 avatar_hub.py
+# 接线说明（APPLY）
+
+## 状态：已接线（v2，2026-07-18）
+
+按下方附录的方案 **A1 + B** 已合入，两处改动均 fail-open（任何异常 → UI 保持全菜单，零行为变化）：
+
+| 位置 | 内容 |
+|---|---|
+| `avatar_hub.py` ≈ L30398（紧挨 `@app.get("/api/features")` 之后） | 新增只读 `GET /api/product_view`：sys.path 兜底 → `product_views.loader.load_product_view()`；返回 `{"ok": True, "enabled": mode=="filtered", **view}`；任何异常返回 `{"ok": False, "enabled": False}` |
+| `static/hub.js` init() ≈ L1074（「同步定 Tab」块之后、`await Promise.all` 之前） | fire-and-forget `fetch('/api/product_view')`：仅当 `ok && enabled && allowed_tabs 非空` 时按白名单过滤 `this.tabs`；当前 Tab 被隐藏则 `goTab(default_tab ∥ 首个可见)`；整段双层 try/catch |
+
+loader **未改动**：未设 / 未知 `AVATARHUB_PRODUCT_ID` 本就返回 `mode=full`，端点映射为 `enabled=False`，前端不进过滤分支。
+
+注：采用 fetch（A1）而非 hub_ui 注入（A2），未启用时零首帧等待；启用时首帧可能短暂闪现全菜单后收敛（试点可接受，介意再升级 A2）。
+
+### 现网启用（幻声机 .176 试点）
+
+1. 在幻声机 avatarhub 实例的启动环境加 `AVATARHUB_PRODUCT_ID=huanying`（PowerShell：`$env:AVATARHUB_PRODUCT_ID = "huanying"`；或写进该实例的启动脚本 env 段），重启 hub。
+2. 验证：`GET /api/product_view` 应回 `enabled=true, product_id=huanying`；浏览器开 `/ui` → 侧栏应无「唱歌 / 批量 / 同传」，默认落「开播」；深链 `/ui#sing` 应落回「开播」。
+3. 回滚：删掉该 env 重启即回全菜单。另有双保险：端点 / yaml / loader 任一异常时接口回 `enabled=false`，UI 自动保持全菜单。
+
+### 本机（无重依赖）验证记录（2026-07-18）
+
+```powershell
+python -m py_compile engines/avatarhub/avatar_hub.py      # exit 0
+python product_views/loader.py --selftest                 # SELFTEST OK（cwd=engines/avatarhub）
+node --check engines/avatarhub/static/hub.js              # exit 0
+# 端点函数体直调（不 import avatar_hub）：unset→enabled=false/mode=full；
+# huanying→enabled=true hide=[sing,batch,interp] default=stream；未知 id→enabled=false
+```
+
+---
+
+# 附录：接线分析原文（v1，当时故意未改 avatar_hub.py）
 
 ## 为何 v1 不直接改引擎
 

@@ -30395,6 +30395,22 @@ async def api_features():
     return {"ok": True, "lines": _FEATURE_LINES, "features": FEATURE_REGISTRY}
 
 
+@app.get("/api/product_view")
+async def api_product_view():
+    """产品视图（四产品配置驱动侧栏裁剪 v2，只读）：AVATARHUB_PRODUCT_ID → product_views/<id>.yaml。
+    未设/未知 env → loader 返 mode=full → enabled=False（前端零行为变化）；任何异常同样 fail-open。
+    GET 非敏感路径，默认放行（与 /api/features 同级开放）。接线契约见 product_views/APPLY.md。"""
+    try:
+        _pv_root = str(Path(__file__).resolve().parent)
+        if _pv_root not in sys.path:
+            sys.path.insert(0, _pv_root)   # 启动 cwd 惯例=engines/avatarhub；此为非惯例启动的兜底（APPLY.md）
+        from product_views.loader import load_product_view
+        view = load_product_view()
+        return {"ok": True, "enabled": view.get("mode") == "filtered", **view}
+    except Exception:
+        return {"ok": False, "enabled": False}
+
+
 # 统一首页（前门）：从 static/home.html 加载（镜像 /ui 的 no-store 写法）
 _HOME_FILE = Path(rf"{_BASE}\static\home.html")
 
