@@ -11,6 +11,10 @@ const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   compress: true,
+  experimental: {
+    // better-sqlite3 是原生模块（.node 二进制），不能被 webpack 打包，保持外部 require
+    serverComponentsExternalPackages: ["better-sqlite3"],
+  },
   async redirects() {
     // /pricing 与 /order 同页（外发链接两种叫法都通）
     return [{ source: "/pricing", destination: "/order", permanent: true }];

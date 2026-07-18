@@ -28,6 +28,7 @@ export interface Plan {
 export interface Dict {
   nav: {
     solutions: string;
+    translate: string;
     demo: string;
     autochat: string;
     cases: string;
@@ -379,6 +380,7 @@ export interface Dict {
 const zh: Dict = {
   nav: {
     solutions: "业务能力",
+    translate: "实时翻译",
     demo: "实时换脸",
     autochat: "AI 成交聊天",
     cases: "案例",
@@ -454,11 +456,11 @@ const zh: Dict = {
       desc: "多平台文字 + 语音双向实时翻译，术语表锁定专有名词、翻译记忆省成本，统一收件箱沉淀客户资产——让不会外语的团队在 WhatsApp / Telegram / LINE 上即时跟全球客户对话。",
       features: ["多平台双向翻译", "术语锁定 · 翻译记忆", "统一收件箱 · 客户资产", "多模态（图片/语音）翻译"],
       highlight: true,
-      // TODO 定价待老板拍板（split_you_price）：先「按需报价」占位，价格数字确定后回填
+      // 定价与 lib/pricing.ts::translateOffers 同步（USD，2026-07-18 定价决议：竞品×2）；改价两处一起改。
       pricing: [
-        { plan: "字符包", price: "按需报价", detail: "一次性字符包 + 术语库" },
-        { plan: "团队", price: "按需报价", detail: "多坐席 + 客户 journey + 漏斗看板" },
-        { plan: "专业", price: "按需报价", detail: "不限字符 + 多模态 + 置信度/引擎健康" },
+        { plan: "字符包", price: "59", detail: "一次性 · 150 万字符 + 术语库 + 翻译记忆" },
+        { plan: "团队", price: "99 / 月", detail: "多坐席收件箱 + 客户 journey + 漏斗计数" },
+        { plan: "专业", price: "198 / 月", detail: "不限字符 + 多模态翻译 + 置信度/引擎健康" },
       ],
     },
     {
@@ -585,18 +587,18 @@ const zh: Dict = {
   },
   orderSteps: {
     title: "三步即可开通",
-    subtitle: "流程透明，全程 USDT 结算，开通即用。",
+    subtitle: "流程透明，确认即开通，开通即用。",
     steps: [
       { title: "选择服务", desc: "在业务与价格中挑选适合的套餐或组合。" },
       { title: "Telegram 沟通确认", desc: "添加客服，确认需求、用量与最终报价。" },
-      { title: "USDT 付款开通", desc: "核对收款地址后付款，快速开通账号与权限。" },
+      { title: "确认付款开通", desc: "核对收款信息后付款，快速开通账号与权限。" },
     ],
   },
   faq: {
     title: "常见问题",
     subtitle: "还有疑问？直接联系 Telegram 客服。",
     items: [
-      { q: "为什么只支持 USDT 结算？", a: "面向出海与跨境客户，USDT 无需绑卡、到账快、跨境无障碍。大额合作可联系客服商定其它方式。" },
+      { q: "支持哪些付款方式？", a: "下单前通过官方 Telegram 客服确认需求与报价；跨境客户支持 USDT 等结算，大额或企业合作可商定其它方式。" },
       { q: "支持私有化部署吗？", a: "支持。聊天聚合与自主可控 AI 均可部署到你的服务器，数据本地化、无云端上报。" },
       { q: "你们的 AI 翻译和谷歌翻译有什么不同？", a: "我们用 AI 翻译 + 对话技术，输出地道口语、地方俚语与文化语气，对方看不出你是外国人；不同于市面软件直接套谷歌等 API 的生硬直译。" },
       { q: "AI 能自动跟客户成交吗？人工能接管吗？", a: "可以。AI 以你的人设 7×24 自动接洽、答疑、跟进、促单转化，遇到关键节点人工可随时一键接管。" },
@@ -638,7 +640,7 @@ const zh: Dict = {
       {
         name: "基础部署",
         tag: "单能力",
-        price: "980 USDT 起",
+        price: "980 USD 起",
         unit: "一次性 · 含部署调试",
         specs: ["实时换脸 或 换声 任选其一", "远程部署 + 基础调试", "上手培训", "7 天技术支持"],
         cta: "Telegram 咨询",
@@ -646,7 +648,7 @@ const zh: Dict = {
       {
         name: "创作者全能",
         tag: "推荐",
-        price: "2580 USDT",
+        price: "5580 USD",
         unit: "一次性 · 含部署调试",
         specs: ["实时换脸 + 换声 + 数字人", "多场景深度调试", "上手培训 + 文档", "30 天技术支持"],
         cta: "Telegram 咨询",
@@ -655,7 +657,8 @@ const zh: Dict = {
       {
         name: "全家桶",
         tag: "全能力",
-        price: "3980 USDT",
+        // 2026-07-18 竞品×2 决议延伸：3980→7980，修复与 creator 5580 的倒挂
+        price: "7980 USD",
         unit: "一次性 · 含部署调试",
         specs: ["换脸 + 换声 + 数字人", "自主可控私有大模型", "全场景定制调试", "30 天支持 + 1 月运维"],
         cta: "Telegram 咨询",
@@ -707,7 +710,7 @@ const zh: Dict = {
     points: [
       { title: "技术自研", desc: "声音 / 形象 / 对话 / 同传四大引擎自研可控，非简单套壳，实测指标可当场复现。" },
       { title: "私有可控", desc: "本地全栈部署，数据不出机房；产出物默认带 C2PA 可验真水印，政企合规首选。" },
-      { title: "出海友好", desc: "全程 USDT 结算，无需绑卡，跨境团队即买即用。" },
+      { title: "出海友好", desc: "多种结算方式、跨境无障碍，跨境团队即买即用。" },
       { title: "快速交付", desc: "标准业务即开即用，定制需求专属对接，交付含培训与运维。" },
     ],
   },
@@ -874,7 +877,7 @@ const zh: Dict = {
   engage: {
     badge: "合作方式 · 灵活共赢",
     title: "三种合作方式，总有一种适合你",
-    subtitle: "无论你已有硬件、想省心全包，还是想投资共赢——我们都能落地。硬件归你所有，数据私有不出网，全程 USDT 结算。",
+    subtitle: "无论你已有硬件、想省心全包，还是想投资共赢——我们都能落地。硬件归你所有，数据私有可控，结算方式灵活。",
     selectorTitle: "你的情况是？",
     youLabel: "你负责",
     weLabel: "我们负责",
@@ -891,7 +894,7 @@ const zh: Dict = {
         tagline: "你的设备，我们负责落地",
         you: "自购硬件 · 提供场地",
         we: "选型建议 + 部署 + 定制 + 培训 + 支持",
-        price: "一次性 980 USDT 起",
+        price: "一次性 980 USD 起",
         priceNote: "含三档部署套餐 · 可加运维 198 / 月",
         points: ["数据 100% 私有、不出网", "按你的场景深度定制", "交付文档 + 上手培训", "7~30 天技术支持"],
         cta: "Telegram 咨询",
@@ -903,7 +906,7 @@ const zh: Dict = {
         tagline: "硬件 + 机房 + 运维我们包，你只管用",
         you: "出需求 · 按月付费",
         we: "硬件代采 + 机房托管 + 部署 + 7×24 运维 + 升级",
-        price: "from 1980 USDT / 月",
+        price: "from 1980 USD / 月",
         priceNote: "含机房 + 运维 · 硬件代采按成本另计",
         points: ["免运维、稳定在线", "7×24 监控与升级", "按需弹性扩容", "一价全包、省心无忧"],
         cta: "Telegram 咨询",
@@ -916,7 +919,7 @@ const zh: Dict = {
         tagline: "你出资，我们专业运营，按月分红",
         you: "出资建节点 / 买卡",
         we: "技术落地 + 运营 + 获客 + 7×24 运维",
-        price: "分红合作 · 起投 from 20,000 USDT",
+        price: "分红合作 · 起投 from 20,000 USD",
         priceNote: "净利分成 70 / 30（投资方占多数）",
         points: ["我们全程专业运营", "净利分成、你占多数", "风险共担、透明月结对账", "签约合作、权责清晰"],
         cta: "Telegram 洽谈合作",
@@ -925,11 +928,11 @@ const zh: Dict = {
     serviceTiersLabel: "三档部署套餐（一次性）",
     extrasLabel: "更多可选服务",
     invest: {
-      roiTitle: "示例测算 · 标准档 50,000 USDT（满载估算）",
+      roiTitle: "示例测算 · 标准档 50,000 USD（满载估算）",
       roiRows: [
-        { label: "预估月营收", value: "8,000 – 12,000 USDT" },
-        { label: "扣成本预估净利", value: "6,000 – 9,000 USDT" },
-        { label: "投资方月分红（70%）", value: "4,200 – 6,300 USDT" },
+        { label: "预估月营收", value: "8,000 – 12,000 USD" },
+        { label: "扣成本预估净利", value: "6,000 – 9,000 USD" },
+        { label: "投资方月分红（70%）", value: "4,200 – 6,300 USD" },
         { label: "预估回本周期", value: "约 9 – 13 个月" },
       ],
       roiNote: "以上为满载理想估算，实际受利用率、市场与汇率波动影响，不构成任何收益承诺。",
@@ -954,7 +957,7 @@ const zh: Dict = {
     title: "AI 成交收益试算",
     subtitle: "拖动几个数字，估算 AI 自动成交每月能帮你省下的人力、多赚的营收。",
     inputs: { agents: "当前客服人数", salary: "单客服月薪", leads: "日均新咨询", aov: "客单价", conv: "当前转化率" },
-    units: { agents: "人", salary: "USDT", leads: "条/天", aov: "USDT", conv: "%" },
+    units: { agents: "人", salary: "USD", leads: "条/天", aov: "USD", conv: "%" },
     resultSaveLabel: "人力成本优化 / 月",
     resultRevenueLabel: "转化提升增收 / 月",
     resultNetLabel: "净增收益 / 月",
@@ -1013,7 +1016,7 @@ const zh: Dict = {
   },
   contact: {
     title: "联系我们 · 下单",
-    subtitle: "添加 Telegram 客服，确认需求后以 USDT 结算。",
+    subtitle: "添加 Telegram 客服，确认需求后即可开通。",
     telegram: "Telegram 客服",
     telegramHandle: "@WJKJ2026",
     scanHint: "手机扫码直达客服",
@@ -1037,6 +1040,7 @@ const zh: Dict = {
 const en: Dict = {
   nav: {
     solutions: "Solutions",
+    translate: "Translate",
     demo: "Live Swap",
     autochat: "AI Closing",
     cases: "Cases",
@@ -1065,7 +1069,7 @@ const en: Dict = {
     ],
   },
   solutionsSection: {
-    title: "Three Families · Seven Product Lines",
+    title: "Three Families · Full Product Matrix",
     subtitle: "Growth (ReachX lead-gen · ChatX closing), Studio (FaceX · VoiceX · LiveX digital twins), Lingo (LingoX chat translation · VoxX voice interpreting) — seven lines across three families on one BOUNDLESS core, privately deployed and composable on demand.",
   },
   solutions: [
@@ -1112,11 +1116,11 @@ const en: Dict = {
       desc: "Two-way real-time text + voice translation across platforms, glossary-locked proper nouns, cost-saving translation memory, and a unified inbox that builds customer assets — so teams that don't speak the language can chat with global clients on WhatsApp / Telegram / LINE.",
       features: ["Multi-platform translation", "Term lock · translation memory", "Unified inbox · customer assets", "Multimodal (image/voice)"],
       highlight: true,
-      // TODO pricing pending owner decision (split_you_price): "quote on request" placeholder
+      // Prices mirror lib/pricing.ts::translateOffers (USD; repriced 2026-07-18, competitor ×2); change both together.
       pricing: [
-        { plan: "Char pack", price: "Quote", detail: "One-time char pack + glossary" },
-        { plan: "Team", price: "Quote", detail: "Multi-seat + customer journey + funnel" },
-        { plan: "Pro", price: "Quote", detail: "Unlimited chars + multimodal + confidence" },
+        { plan: "Char pack", price: "59", detail: "One-time · 1.5M chars + glossary + translation memory" },
+        { plan: "Team", price: "99 / mo", detail: "Multi-seat inbox + customer journey + funnel counter" },
+        { plan: "Pro", price: "198 / mo", detail: "Unlimited chars + multimodal translate + confidence/engine health" },
       ],
     },
     {
@@ -1243,18 +1247,18 @@ const en: Dict = {
   },
   orderSteps: {
     title: "Get started in 3 steps",
-    subtitle: "Transparent process, settled in USDT, ready to use instantly.",
+    subtitle: "Transparent process, confirm and go live instantly.",
     steps: [
       { title: "Pick a service", desc: "Choose the plan or combination that fits in solutions & pricing." },
       { title: "Confirm on Telegram", desc: "Add support to confirm needs, usage and the final quote." },
-      { title: "Pay in USDT & go live", desc: "Verify the address, pay, and get your account provisioned fast." },
+      { title: "Pay & go live", desc: "Verify payment details, pay, and get your account provisioned fast." },
     ],
   },
   faq: {
     title: "FAQ",
     subtitle: "Still have questions? Reach our Telegram support directly.",
     items: [
-      { q: "Why USDT only?", a: "Built for global and cross-border clients — USDT needs no cards, settles fast and works across borders. Large deals can arrange other methods with support." },
+      { q: "What payment methods do you accept?", a: "Confirm your needs and quote with our official Telegram support before ordering; cross-border clients can settle in USDT and others, and large or enterprise deals can arrange alternative methods." },
       { q: "Do you support private deployment?", a: "Yes. Chat aggregation and self-controlled AI can both deploy to your own servers — data stays local with no cloud reporting." },
       { q: "How is your AI translation different from Google Translate?", a: "We use AI translation + chat tech that outputs native slang, local idioms and cultural tone — they can't tell you're foreign — unlike tools that wire up Google-style APIs and read stiff and literal." },
       { q: "Can AI close deals automatically? Can humans take over?", a: "Yes. AI works your persona 24/7 to engage, answer, follow up and convert; at key moments a human can take over in one click." },
@@ -1296,7 +1300,7 @@ const en: Dict = {
       {
         name: "Basic deploy",
         tag: "Single",
-        price: "from 980 USDT",
+        price: "from 980 USD",
         unit: "one-time · incl. setup",
         specs: ["Face swap OR voice, your pick", "Remote deploy + basic tuning", "Hands-on training", "7-day support"],
         cta: "Ask on Telegram",
@@ -1304,7 +1308,7 @@ const en: Dict = {
       {
         name: "Creator all-in",
         tag: "Popular",
-        price: "2580 USDT",
+        price: "5580 USD",
         unit: "one-time · incl. setup",
         specs: ["Face swap + voice + digital human", "Multi-scenario deep tuning", "Training + docs", "30-day support"],
         cta: "Ask on Telegram",
@@ -1313,7 +1317,8 @@ const en: Dict = {
       {
         name: "Everything",
         tag: "Full",
-        price: "3980 USDT",
+        // 2026-07-18 竞品×2 决议延伸：3980→7980，修复与 creator 5580 的倒挂
+        price: "7980 USD",
         unit: "one-time · incl. setup",
         specs: ["Face + voice + digital human", "Self-controlled private LLM", "Full scenario tuning", "30-day support + 1mo ops"],
         cta: "Ask on Telegram",
@@ -1365,7 +1370,7 @@ const en: Dict = {
     points: [
       { title: "Self-built tech", desc: "Voice / face / conversation / interpreting engines built in-house — not thin wrappers, with numbers you can reproduce live." },
       { title: "Private control", desc: "Full local stack, data stays in your racks; outputs carry a C2PA verifiable watermark by default — built for regulated buyers." },
-      { title: "Global-friendly", desc: "Settle fully in USDT — no cards, instant onboarding for cross-border teams." },
+      { title: "Global-friendly", desc: "Flexible settlement, frictionless cross-border onboarding for global teams." },
       { title: "Fast delivery", desc: "Standard services run out of the box; custom needs get dedicated support, with training and ops included." },
     ],
   },
@@ -1532,7 +1537,7 @@ const en: Dict = {
   engage: {
     badge: "Engagement · flexible & win-win",
     title: "Three ways to work with us",
-    subtitle: "Whether you already own hardware, want a fully managed setup, or want to invest and share returns — we deliver. You own the hardware, data stays private off the net, settled in USDT.",
+    subtitle: "Whether you already own hardware, want a fully managed setup, or want to invest and share returns — we deliver. You own the hardware, data stays private and controlled, with flexible settlement.",
     selectorTitle: "Which fits you?",
     youLabel: "You handle",
     weLabel: "We handle",
@@ -1549,7 +1554,7 @@ const en: Dict = {
         tagline: "Your hardware, we make it work",
         you: "Buy hardware · provide space",
         we: "Spec advice + deploy + customize + train + support",
-        price: "one-time from 980 USDT",
+        price: "one-time from 980 USD",
         priceNote: "incl. 3 deploy tiers · ops add-on 198 / mo",
         points: ["100% private, off the net", "Deeply tailored to your scenario", "Docs + hands-on training", "7–30 days tech support"],
         cta: "Ask on Telegram",
@@ -1561,7 +1566,7 @@ const en: Dict = {
         tagline: "Hardware + datacenter + ops on us, you just use it",
         you: "Bring needs · pay monthly",
         we: "Hardware procurement + hosting + deploy + 24/7 ops + upgrades",
-        price: "from 1980 USDT / mo",
+        price: "from 1980 USD / mo",
         priceNote: "incl. hosting + ops · hardware at cost",
         points: ["Zero ops, always online", "24/7 monitoring & upgrades", "Elastic scaling on demand", "All-in price, worry-free"],
         cta: "Ask on Telegram",
@@ -1574,7 +1579,7 @@ const en: Dict = {
         tagline: "You invest, we operate, monthly dividends",
         you: "Fund nodes / buy GPUs",
         we: "Delivery + operations + client acquisition + 24/7 ops",
-        price: "revenue share · from 20,000 USDT",
+        price: "revenue share · from 20,000 USD",
         priceNote: "net profit split 70 / 30 (investor majority)",
         points: ["We operate it end-to-end", "Net profit split in your favor", "Shared risk, transparent monthly settlement", "Contract-based, clear responsibilities"],
         cta: "Discuss on Telegram",
@@ -1583,11 +1588,11 @@ const en: Dict = {
     serviceTiersLabel: "Three deploy packages (one-time)",
     extrasLabel: "More optional services",
     invest: {
-      roiTitle: "Example · standard 50,000 USDT (full-load estimate)",
+      roiTitle: "Example · standard 50,000 USD (full-load estimate)",
       roiRows: [
-        { label: "Est. monthly revenue", value: "8,000 – 12,000 USDT" },
-        { label: "Est. net profit after cost", value: "6,000 – 9,000 USDT" },
-        { label: "Investor monthly share (70%)", value: "4,200 – 6,300 USDT" },
+        { label: "Est. monthly revenue", value: "8,000 – 12,000 USD" },
+        { label: "Est. net profit after cost", value: "6,000 – 9,000 USD" },
+        { label: "Investor monthly share (70%)", value: "4,200 – 6,300 USD" },
         { label: "Est. payback period", value: "~9 – 13 months" },
       ],
       roiNote: "Ideal full-load estimate; actual results depend on utilization, market and FX — not a guarantee of returns.",
@@ -1612,7 +1617,7 @@ const en: Dict = {
     title: "AI Closing ROI Calculator",
     subtitle: "Drag a few numbers to estimate the labor you save and revenue you gain each month with AI auto-closing.",
     inputs: { agents: "Current support agents", salary: "Salary per agent", leads: "Daily new inquiries", aov: "Avg order value", conv: "Current conversion" },
-    units: { agents: "ppl", salary: "USDT", leads: "/day", aov: "USDT", conv: "%" },
+    units: { agents: "ppl", salary: "USD", leads: "/day", aov: "USD", conv: "%" },
     resultSaveLabel: "Labor cost saved / mo",
     resultRevenueLabel: "Conversion uplift / mo",
     resultNetLabel: "Net gain / mo",
@@ -1671,7 +1676,7 @@ const en: Dict = {
   },
   contact: {
     title: "Contact & Order",
-    subtitle: "Add our Telegram support, confirm your needs, settle in USDT.",
+    subtitle: "Add our Telegram support, confirm your needs, and get started.",
     telegram: "Telegram Support",
     telegramHandle: "@WJKJ2026",
     scanHint: "Scan to chat on mobile",

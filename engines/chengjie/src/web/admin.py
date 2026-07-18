@@ -170,6 +170,13 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
             st = get_license_manager().status()
             if is_write_blocked(request.url.path, request.method, st):
+                try:   # P4 埋点：只读写保护触发（进程内一次；fail-silent）
+                    from src.utils.telemetry import track_once
+                    track_once("write_blocked", "license.write_blocked", {
+                        "state": str(getattr(st, "state", "") or ""),
+                        "path": str(request.url.path)[:80]})
+                except Exception:
+                    pass
                 from fastapi.responses import JSONResponse
 
                 return JSONResponse(

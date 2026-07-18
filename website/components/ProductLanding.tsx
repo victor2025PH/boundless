@@ -18,9 +18,12 @@ import BeforeAfter from "./fx/BeforeAfter";
 import { AudioClip, VideoClip } from "./fx/MediaClips";
 import BrandMark from "./BrandMark";
 import Footer from "./Footer";
+import LingoDualPath, { LingoChatTrack } from "./LingoDualPath";
+import StudioDualPath from "./StudioDualPath";
+import LandingFamilyNav from "./LandingFamilyNav";
 import { LANDINGS, LANDING_MEDIA, type LandingKey, type LandingDict } from "@/lib/landingContent";
 import { BRAND } from "@/lib/brand";
-import { CONTACT_URL } from "@/lib/site";
+import { CONTACT_URL, localePath } from "@/lib/site";
 import { track } from "@/lib/track";
 
 /** 产品线落地页骨架：一页一卖点，真实媒体证据前置，CTA 直达 Telegram。
@@ -58,7 +61,7 @@ interface LandingProps {
 
 function LandingNav({ product, L, ui }: { product: LandingKey; L: LandingDict; ui?: LandingUi }) {
   const { lang, toggle } = useLang();
-  const home = ui ? ui.homeHref : lang === "zh" ? "/" : "/en";
+  const home = ui ? ui.homeHref : localePath(lang, "/");
   return (
     <header className="fixed inset-x-0 top-0 z-50 glass">
       <nav className="mx-auto flex max-w-6xl items-center justify-between px-5 py-3.5">
@@ -112,6 +115,7 @@ function LandingNav({ product, L, ui }: { product: LandingKey; L: LandingDict; u
           </a>
         </div>
       </nav>
+      {!ui && <LandingFamilyNav product={product} />}
     </header>
   );
 }
@@ -149,7 +153,10 @@ function DemoBlock({ product, L, clipLabels }: { product: LandingKey; L: Landing
 
         {product === "face" && (
           <div className="grid items-start gap-5 md:grid-cols-[1.25fr_auto]">
-            <div>
+            <div id="swap" className="scroll-mt-28">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-neon-violet">
+                {lang === "zh" ? "幻颜 FaceX · 换脸样片" : "FaceX · swap sample"}
+              </p>
               <BeforeAfter
                 before={LANDING_MEDIA.faceSwap.before}
                 after={LANDING_MEDIA.faceSwap.after}
@@ -162,11 +169,16 @@ function DemoBlock({ product, L, clipLabels }: { product: LandingKey; L: Landing
                 {d.realNote[lang]}
               </div>
             </div>
-            <VideoClip
-              src={LANDING_MEDIA.dhVideoZh.src}
-              poster={LANDING_MEDIA.dhVideoZh.poster}
-              pending={d.realNote[lang]}
-            />
+            <div id="live" className="scroll-mt-28">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-neon-violet">
+                {lang === "zh" ? "幻影 LiveX · 活体数字人" : "LiveX · living digital human"}
+              </p>
+              <VideoClip
+                src={LANDING_MEDIA.dhVideoZh.src}
+                poster={LANDING_MEDIA.dhVideoZh.poster}
+                pending={d.realNote[lang]}
+              />
+            </div>
           </div>
         )}
 
@@ -204,7 +216,7 @@ export default function ProductLanding({ product, content, ui }: LandingProps) {
       <LandingNav product={product} L={L} ui={ui} />
 
       {/* Hero */}
-      <section className="relative overflow-hidden px-5 pb-16 pt-28 md:pt-32">
+      <section className={`relative overflow-hidden px-5 pb-16 ${product && !ui ? "pt-36 md:pt-40" : "pt-28 md:pt-32"}`}>
         <div className="mx-auto max-w-3xl text-center">
           <Reveal>
             <span className="inline-flex items-center gap-1.5 rounded-full border border-neon-cyan/30 bg-neon-cyan/10 px-3.5 py-1 text-xs font-medium text-neon-cyan">
@@ -245,10 +257,18 @@ export default function ProductLanding({ product, content, ui }: LandingProps) {
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
               </a>
               <a
-                href="#demo"
+                href={product === "interpreting" || (product === "face" && !ui) ? "#paths" : "#demo"}
                 className="inline-flex items-center gap-2 rounded-full border border-white/15 px-7 py-3 font-medium text-slate-200 transition hover:border-neon-cyan/50 hover:text-white"
               >
-                {ui ? ui.seeSamples : lang === "zh" ? "先看真实样片" : "See real samples"}
+                {ui
+                  ? ui.seeSamples
+                  : product === "interpreting" || product === "face"
+                  ? lang === "zh"
+                    ? "先选场景再往下看"
+                    : "Pick a scene first"
+                  : lang === "zh"
+                  ? "先看真实样片"
+                  : "See real samples"}
                 <ArrowDown className="h-4 w-4" />
               </a>
             </div>
@@ -265,18 +285,48 @@ export default function ProductLanding({ product, content, ui }: LandingProps) {
           </Reveal>
         </div>
 
-        {/* Demo（真实媒体证据） */}
-        <div id="demo" className="scroll-mt-24">
-          <DemoBlock product={product} L={L} clipLabels={ui?.clipLabels} />
-        </div>
+        {product === "interpreting" && <LingoDualPath />}
+        {product === "face" && !ui && <StudioDualPath />}
+
+        {/* 非通达页：demo 紧跟 hero；通达页 demo 挪到聊天轨之后，避免选「通译」时先撞上同传样片 */}
+        {product !== "interpreting" && (
+          <div id="demo" className="scroll-mt-24">
+            <DemoBlock product={product} L={L} clipLabels={ui?.clipLabels} />
+          </div>
+        )}
       </section>
 
-      {/* Capabilities */}
+      {product === "interpreting" && (
+        <>
+          <LingoChatTrack />
+          <section className="px-5 pb-8 pt-4">
+            <div id="demo" className="scroll-mt-24">
+              <p
+                id="interpret"
+                className="mx-auto max-w-3xl scroll-mt-24 text-center text-xs font-semibold uppercase tracking-[0.28em] text-amber-300"
+              >
+                {lang === "zh" ? "通传 VoxX · 同声传译样片" : "VoxX · interpreting samples"}
+              </p>
+              <DemoBlock product={product} L={L} clipLabels={ui?.clipLabels} />
+            </div>
+          </section>
+        </>
+      )}
+
+      {/* Capabilities — 通达页以同传硬能力为主，聊天能力见 LingoChatTrack */}
       <section className="border-y border-white/5 bg-white/[0.015] px-5 py-16">
         <div className="mx-auto max-w-5xl">
           <Reveal className="text-center">
             <h2 className="text-2xl font-bold text-white md:text-3xl">
-              {ui ? ui.capsTitle : lang === "zh" ? "硬核能力 · 每条都能当场验证" : "Hard capabilities, verifiable live"}
+              {ui
+                ? ui.capsTitle
+                : product === "interpreting"
+                ? lang === "zh"
+                  ? "通传硬核能力 · 每条都能当场验证"
+                  : "VoxX hard capabilities, verifiable live"
+                : lang === "zh"
+                ? "硬核能力 · 每条都能当场验证"
+                : "Hard capabilities, verifiable live"}
             </h2>
           </Reveal>
           <div className="mt-9 grid gap-4 sm:grid-cols-2">
@@ -341,10 +391,10 @@ export default function ProductLanding({ product, content, ui }: LandingProps) {
             ))}
           </div>
           <Reveal delay={0.1} className="mt-6 text-center">
-            <Link
-              href={ui ? ui.moreFaqHref : lang === "zh" ? "/#faq" : "/en#faq"}
-              className="text-sm text-slate-400 underline-offset-4 transition hover:text-neon-cyan hover:underline"
-            >
+              <Link
+                href={ui ? ui.moreFaqHref : localePath(lang, "/#faq")}
+                className="text-sm text-slate-400 underline-offset-4 transition hover:text-neon-cyan hover:underline"
+              >
               {ui ? ui.moreFaqLabel : lang === "zh" ? "更多问题 → 首页完整 FAQ" : "More questions → full FAQ on the homepage"}
             </Link>
           </Reveal>
@@ -370,7 +420,7 @@ export default function ProductLanding({ product, content, ui }: LandingProps) {
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
               </a>
               <Link
-                href={ui ? ui.pricingHref : lang === "zh" ? "/#pricing" : "/en#pricing"}
+                href={ui ? ui.pricingHref : localePath(lang, "/#pricing")}
                 className="inline-flex items-center gap-2 rounded-full border border-white/15 px-7 py-3 font-medium text-slate-200 transition hover:border-neon-cyan/50 hover:text-white"
               >
                 {ui ? ui.pricingLabel : lang === "zh" ? "查看套餐与价格" : "Plans & pricing"}

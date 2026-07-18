@@ -268,8 +268,8 @@ export const INSTALL_GUIDE: { steps: InstallStep[]; faqs: InstallFaq[] } = {
     {
       q: { zh: "完全不想自己动手怎么办？", en: "Don't want to set anything up yourself?" },
       a: {
-        zh: "提供 **99 USDT 远程代部署**服务：约好时间远程上机，装好即用。联系 Telegram 客服预约即可；也可以先点 **AI 协助安装** 让 AI 一步步带你装。",
-        en: "We offer a **99 USDT remote installation** service — book a session and we set everything up for you. Contact us on Telegram, or click **AI install assistant** first and let the AI walk you through it.",
+        zh: "提供 **99 USD 远程代部署**服务：约好时间远程上机，装好即用。联系 Telegram 客服预约即可；也可以先点 **AI 协助安装** 让 AI 一步步带你装。",
+        en: "We offer a **99 USD remote installation** service — book a session and we set everything up for you. Contact us on Telegram, or click **AI install assistant** first and let the AI walk you through it.",
       },
     },
   ],
@@ -482,7 +482,7 @@ const MANUAL_ZH: ManualSectionData[] = [
         items: [
           "AI 客服：官网右下角对话气泡，**7×24 秒回**，安装 / 使用 / 报价都能答。",
           "Telegram 人工客服：**@WJKJ2026**（工作时间内 5 分钟响应）。",
-          "远程代部署：**99 USDT** 预约远程上机，装好即用。",
+          "远程代部署：**99 USD** 预约远程上机，装好即用。",
           "诊断码：客户端[[一键诊断包]]生成 **6 位码**，报码即可远程定位问题。",
         ],
       },
@@ -660,7 +660,7 @@ const MANUAL_EN: ManualSectionData[] = [
         items: [
           "AI assistant: the chat bubble in the corner, **24/7 instant answers** on installing, usage and pricing.",
           "Human support on Telegram: **@WJKJ2026** (about 5-minute response during working hours).",
-          "Remote installation: **99 USDT** — book a session and we set everything up.",
+          "Remote installation: **99 USD** — book a session and we set everything up.",
           "Diagnostic code: generate a **6-digit code** with the in-app [[diagnostic pack]] and share it with support.",
         ],
       },

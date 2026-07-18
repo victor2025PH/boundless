@@ -137,7 +137,7 @@ export default function OrderPanel() {
                   ? zh
                     ? "免费 · 14 天"
                     : "Free · 14 days"
-                  : `${fmt(tierPrice(tier, period))} USDT / ${period === "monthly" ? (zh ? "月" : "mo") : zh ? "年" : "yr"}`}
+                  : `${fmt(tierPrice(tier, period))} USD / ${period === "monthly" ? (zh ? "月" : "mo") : zh ? "年" : "yr"}`}
               </div>
             </div>
             <button
@@ -176,7 +176,7 @@ export default function OrderPanel() {
         {/* ── 私有授权 ── */}
         <PricingTable
           title={zh ? "本地私有部署授权" : "Private deployment licenses"}
-          subtitle={zh ? "一次性 / 年费 · USDT" : "One-off / yearly · USDT"}
+          subtitle={zh ? "一次性 / 年费 · USD" : "One-off / yearly · USD"}
           head={zh ? ["方案", "授权档", "年费", "买断", "说明"] : ["Plan", "Edition", "Yearly", "Buyout", "Details"]}
           rows={LICENSES.map((l) => [
             zh ? l.name.zh : l.name.en,
@@ -195,7 +195,7 @@ export default function OrderPanel() {
             <div className="min-w-0 flex-1">
               <div className="font-semibold text-white">
                 {zh ? REMOTE_INSTALL.name.zh : REMOTE_INSTALL.name.en}
-                <span className="ml-2 text-neon-cyan">{REMOTE_INSTALL.price} USDT</span>
+                <span className="ml-2 text-neon-cyan">{REMOTE_INSTALL.price} USD</span>
               </div>
               <p className="mt-1 text-sm text-slate-400">{zh ? REMOTE_INSTALL.desc.zh : REMOTE_INSTALL.desc.en}</p>
             </div>
@@ -291,7 +291,7 @@ function TierCard({
   onSelect: () => void;
 }) {
   const price = tierPrice(t, period);
-  const unit = period === "monthly" ? (zh ? "USDT / 月" : "USDT / mo") : zh ? "USDT / 年" : "USDT / yr";
+  const unit = period === "monthly" ? (zh ? "USD / 月" : "USD / mo") : zh ? "USD / 年" : "USD / yr";
   return (
     <Reveal delay={delay} className="h-full">
       <button
@@ -327,7 +327,7 @@ function TierCard({
         {period === "annual" && t.monthly > 0 && (
           <div className="mt-1 text-xs text-neon-pink">
             {zh ? "首年 8 折 ≈ " : "1st year ≈ "}
-            {fmt(Math.round(price * FIRST_YEAR_PROMO))} USDT
+            {fmt(Math.round(price * FIRST_YEAR_PROMO))} USD
           </div>
         )}
         <ul className="mt-4 flex-1 space-y-2">

@@ -4,7 +4,8 @@ import path from "path";
 import { requireAdmin } from "@/lib/admin-auth";
 import { getAdminChats } from "@/lib/admin-store";
 import { listLeads } from "@/lib/lead-store";
-import { listDrafts } from "@/lib/schedule-store";
+import { addDraft, listDrafts } from "@/lib/schedule-store";
+import { dragonWeekly } from "@/lib/dragon-store";
 import { ANALYTICS_DIR } from "@/lib/data-dir";
 import { SITE_URL } from "@/lib/site";
 import { indexableUrls } from "@/lib/seo";
@@ -236,6 +237,85 @@ export async function POST(req: NextRequest) {
   if (topCamps.length > 0) {
     lines.push(``, `📣 本周最强入口（会话 / 转化）`);
     topCamps.forEach(([k, v], i) => lines.push(`${i + 1}. ${k}：${v.sessions} / ${v.convert}`));
+  }
+
+  // ── 龙珠彩蛋周况 + 频道战报草稿（人审后一键发布，走既有草稿→定时贴流程）──
+  const dg = await dragonWeekly().catch(() => null);
+  if (dg) {
+    const dgPearls = count("dragon_pearl", inWeek);
+    const dgPearlsPrev = count("dragon_pearl", inPrev);
+    /* 龙珠参与会话留资对比：见过星珠曝光 vs 有深层互动（收珠/分享/召唤等）— 相关参考非因果 */
+    const DRAGON_ENGAGE = new Set([
+      "dragon_pearl",
+      "dragon_summon_open",
+      "dragon_wish",
+      "dragon_assist",
+      "dragon_share_copy",
+      "dragon_codex_open",
+      "dragon_codex_view",
+      "dragon_tg_click",
+      "dragon_tg_sync_click",
+      "dragon_tray_skin_switch",
+    ]);
+    const dgBySid: Record<string, Set<string>> = {};
+    for (const e of events) {
+      if (!inWeek(e)) continue;
+      const ev = String(e.event ?? "");
+      if (ev.startsWith("miniapp_")) continue;
+      const sid = String(e.sid ?? "");
+      if (!sid) continue;
+      if (
+        ev !== "pageview" &&
+        ev !== "lead_submit" &&
+        ev !== "dragon_offer_impression" &&
+        !DRAGON_ENGAGE.has(ev)
+      ) {
+        continue;
+      }
+      (dgBySid[sid] ??= new Set()).add(ev);
+    }
+    let dgSeen = 0;
+    let dgEngaged = 0;
+    let dgEngagedLeads = 0;
+    let dgSeenOnlyLeads = 0;
+    for (const set of Object.values(dgBySid)) {
+      if (!set.has("pageview") || !set.has("dragon_offer_impression")) continue;
+      dgSeen++;
+      const engaged = [...set].some((x) => DRAGON_ENGAGE.has(x));
+      if (engaged) {
+        dgEngaged++;
+        if (set.has("lead_submit")) dgEngagedLeads++;
+      } else if (set.has("lead_submit")) {
+        dgSeenOnlyLeads++;
+      }
+    }
+    const pct = (n: number, d: number) => (d > 0 ? Number(((n / d) * 100).toFixed(1)) : 0);
+    const engRate = pct(dgEngagedLeads, dgEngaged);
+    const seenOnlyRate = pct(dgSeenOnlyLeads, Math.max(0, dgSeen - dgEngaged));
+    lines.push(
+      ``,
+      `🐉 龙珠彩蛋`,
+      `· 收珠：${dgPearls}（上周 ${dgPearlsPrev}，${fmtDelta(dgPearls, dgPearlsPrev)}）· 新玩家 ${dg.weekNewCollectors}`,
+      `· 召唤：本周 ${dg.weekSummons} 次 · 祥龙持有 ${dg.skinOwners} 人 · 本月体验名额剩 ${dg.trialLeft}`,
+      `· 参与留资率：互动 ${engRate}% vs 仅曝光 ${seenOnlyRate}%（互动 ${dgEngaged} / 仅曝光 ${Math.max(0, dgSeen - dgEngaged)} 会话；相关参考）`
+    );
+    if (!dryRun && (dg.weekSummons > 0 || dg.weekNewCollectors > 0)) {
+      const helperLine =
+        dg.topHelpers.length > 0
+          ? `\n🌟 本周点星人榜：${dg.topHelpers.map((h, i) => `${["🥇", "🥈", "🥉"][i]}${h.name} ×${h.n}`).join("  ")}`
+          : "";
+      const warText = [
+        `🐉 界龙战报 · 七星聚集中`,
+        ``,
+        `本周已有 ${dg.weekSummons} 位旅人集齐北斗七星、召唤界龙成功${dg.weekNewCollectors > 0 ? `，${dg.weekNewCollectors} 位新旅人开始点星` : ""}。${helperLine}`,
+        `本月「愿·体验」名额还剩 ${dg.trialLeft} 份——每天来官网点亮一颗星珠，七天召唤神龙许愿：体验月卡 / 祥龙形态 / 机缘礼包。`,
+        ``,
+        `我的图鉴 → ${SITE_URL}/loong`,
+        `七星既聚，龙行无界 → ${SITE_URL}`,
+      ].join("\n");
+      await addDraft({ text: warText, theme: "dragon-weekly", source: "dragon-weekly" }).catch(() => null);
+      lines.push(`· 频道战报草稿已生成（后台「草稿」审核后发布）`);
+    }
   }
   if (abLines.length > 0) {
     lines.push(``, `🧪 A/B 实验（会话去重口径）`, ...abLines);

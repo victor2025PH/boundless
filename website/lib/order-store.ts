@@ -2,6 +2,7 @@ import { appendFile, mkdir, readFile, rename, writeFile } from "fs/promises";
 import path from "path";
 import { getAdminChats } from "./admin-store";
 import { DATA_DIR } from "./data-dir";
+import { resolveOrderSku } from "./offer-map";
 
 // 客户端订阅/授权订单存储：orders-db.json（键控 + 状态机）+ orders.jsonl（追加审计流水）。
 // 与 lead-store 同款的原子写 + 单进程串行化模式。
@@ -20,6 +21,11 @@ export interface OrderEntry {
   plan: string;
   edition: string;
   period: string;
+  /** 全域 SKU 关联键，见 platform/licensing/sku_registry.json（下单时经 lib/offer-map.ts
+   *  的 resolveOrderSku 推断填充；映射不到则不写，宁缺毋错）。 */
+  sku_id?: string;
+  /** 全域产品 id（zhituo/zhiliao/tongyi/…），随 sku_id 一起推断填充。 */
+  product_id?: string;
   /** 挂牌金额（整数 USDT）。 */
   amount: number;
   /** 实际应付金额 = amount + 唯一小数尾数：到账金额可反查订单，自动核销的关键。 */
@@ -106,9 +112,15 @@ export async function createOrder(
       pay_amount: allocPayAmount(db, input.amount),
       currency: "USDT",
     };
+    // 出生即带全域 SKU 关联（sku_registry.json）；映射为 null 时不写字段，宁缺毋错。
+    const sku = resolveOrderSku(input.plan, input.edition, input.period);
+    if (sku.skuId) entry.sku_id = sku.skuId;
+    if (sku.productId) entry.product_id = sku.productId;
     db.orders[entry.id] = entry;
     await writeDb(db);
     await appendFile(LOG, JSON.stringify(entry) + "\n", "utf-8").catch(() => {});
+    // 影子账本双写（best-effort，不 await、失败静默，绝不影响下单主链路）
+    void import("./ledger-sync").then((m) => m.syncOrderEntry(entry)).catch(() => {});
     return entry;
   });
 }
@@ -126,6 +138,8 @@ export async function bindOrderNotify(id: string, chatId: string | number): Prom
     if (!o) return null;
     o.notify_chat = String(chatId);
     await writeDb(db);
+    // 影子账本双写（best-effort，失败静默）
+    void import("./ledger-sync").then((m) => m.syncOrderEntry(o)).catch(() => {});
     return o;
   });
 }
@@ -141,6 +155,8 @@ export async function setOrderStatus(id: string, status: OrderStatus, code?: str
     if (code) o.code = code.slice(0, 4000); // 兑换码（短）或整份签名授权的 base64（长）
     await writeDb(db);
     await appendFile(LOG, JSON.stringify({ t: new Date().toISOString(), id: o.id, event: `status:${status}` }) + "\n", "utf-8").catch(() => {});
+    // 影子账本双写（best-effort，失败静默）
+    void import("./ledger-sync").then((m) => m.syncOrderEntry(o)).catch(() => {});
     return o;
   });
 }

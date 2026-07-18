@@ -1,0 +1,108 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# 通译 LingoX 实例 · config.local.yaml 模板（品牌 + 端口 + lingox 裁剪 overlay）
+#
+# 【本文件由部署时拷贝到该实例的 config 目录】
+#   目标位置：deploy\instances\tongyi\data\config\config.local.yaml
+#   前置：先把 engines\chengjie\config\config.example.yaml 拷为该实例的 config.yaml
+#        （通译是全新实例，不继承现网任何数据），再拷本文件与之同目录。
+#   机制：与 config.yaml 同目录的 overlay，深合并覆盖，30 秒双文件热重载。
+#
+# 裁剪依据：engines\chengjie\config\lingox.overlay.example.yaml（官方通译裁剪示例）——
+#   只留「翻译 + 统一收件箱 + 坐席工作台」，关 companion / RPA / voice / monetization /
+#   contacts；web_chat 开 manual 人工模式。键路径均对照 config.example.yaml 核实。
+#
+# Telegram 协议号：刻意不配置（保持 config.yaml 里的 example 占位）——引擎检测到
+#   占位值即走「跳过协议客户端、纯收件箱/网页翻译」启动路径，这就是通译 MVP 形态。
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── 域：中性 general 域（不加载 payment/conversion 的 KB/人设/话术）──
+domain: general
+
+# ── Web 后台：通译新端口 18899（备用位 18887；分配依据见 instances/README 端口表）──
+web_admin:
+  enabled: true
+  host: 127.0.0.1          # 新实例先只绑本机；对外前置反代/放行后再改 0.0.0.0
+  port: 18899
+  site_name: 无界科技 · 通译
+  # ★ 部署时必填（强随机，勿用默认值；填在实例目录的这份文件里，不要回写模板）：
+  # auth_token: "CHANGE_ME_STRONG_TOKEN"
+  # secret_key: "CHANGE_ME_FLASK_SECRET"
+
+# ── 品牌（C1-1 白标；字段=save_branding 白名单）──
+brand:
+  company_name: 无界科技
+  product_name: 通译 LingoX
+  site_name: 无界科技 · 通译
+  site_name_short: 通译 LingoX
+  sidebar_name: 无界 · 通译
+  login_subtitle: 通译 LingoX · 翻译工作台
+
+# ── AI 兜底引擎（翻译链路的最后一级，必配；★ 部署时在实例文件里填真值）──
+# ai:
+#   provider: openai_compatible
+#   api_key: "CHANGE_ME"
+#   base_url: "https://api.deepseek.com"
+#   model: "deepseek-chat"
+
+# ── 翻译核心（通译的灵魂，全开）──
+translation:
+  memory:
+    enabled: true            # 翻译记忆：命中直接回填，省 token + 术语一致
+  glossary:
+    enabled: true            # 术语库 + 品牌词不译保护
+    extra_terms: {}          # 部署时按客户行业填，如 {"size": "尺码", "refund": "退款"}
+    protect: []              # 品牌/产品名逐字保留，如 ["LINE", "WhatsApp", "Shopify"]
+  engines:
+    order: ["ollama_mt", "ai"]   # 本地 MT 优先、AI 兜底；暂无本地 MT 就改 ["ai"]
+    timeout_sec: 8
+    ollama_mt:
+      base_url: ""           # 如 http://192.168.0.176:11434（缺则自动跳过，回落 ai）
+      model: ""              # 如 hy-mt2-7b-official:latest
+
+# ── 坐席工作台入站自动翻译（打开会话即见译文，通译招牌功能）──
+workspace:
+  auto_translate_inbound:
+    enabled: true
+    target_lang: zh          # 坐席母语（按团队改，如 en）
+    source_langs: []         # 空=所有非目标语；也可限定 [en, ja, ko]
+    max_per_thread: 8
+
+# ── 统一收件箱 + 坐席工作台（保留；关 AI 自动拟稿/自动发送——通译是人工翻译辅助）──
+inbox:
+  enabled: true              # 收件箱持久层 + 完整翻译服务挂载点（必须开）
+  read_from_store: true      # 从统一 store 读会话（历史/SLA/多坐席）
+  auto_draft:
+    enabled: false           # ★ 关：不做 AI 自动拟稿
+  l2_autosend:
+    enabled: false           # ★ 关：不做全自动 AI 发送
+
+# ── 网页客服 widget：零依赖入站通道，manual 直转人工坐席 ──
+web_chat:
+  enabled: true
+  default_mode: manual       # manual=直接转人工（不 auto_ai 自动回）——翻译辅助定位
+  greeting: "Hi! How can we help you?"
+  title: "Live Support"
+
+# ── 关掉所有重模块（companion / RPA / 设备 / 语音 / 编排 / 变现 / 获客旅程）──
+companion:
+  enabled: false
+
+line_rpa:      { enabled: false }
+messenger_rpa: { enabled: false }
+whatsapp_rpa:  { enabled: false }
+device_coordinator: { enabled: false }
+hotplug_watcher:    { enabled: false }   # 默认 true，必须显式关（否则无 RPA 也扫 ADB）
+contacts:      { enabled: false }        # 获客旅程/handoff（智聊 SKU 才用）
+
+realtime_voice:    { enabled: false }    # 实时语音通话
+voice_clone_lan:   { enabled: false }    # 语音克隆后端
+voice_recognition: { enabled: false }    # 语音转文字（要做语音翻译再单独开）
+
+platform_login:
+  orchestrator_enabled: false            # 账号编排器（协议号多开，翻译 MVP 不需要）
+
+monetization: { enabled: false }         # 陪伴向变现，与翻译无关
+
+# ── 翻译 MVP 期关掉的后台巡检（降噪省资源；且避免与智聊实例抢 metrics 端口）──
+health_watchdog: { enabled: false }
+monitoring:      { enabled: false }

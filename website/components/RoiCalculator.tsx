@@ -135,7 +135,7 @@ export default function RoiCalculator() {
                   className="mt-1 text-4xl font-black text-white md:text-5xl"
                 >
                   +{fmt(calc.net)}
-                  <span className="ml-1 text-base font-medium text-slate-400">USDT{r.perMonth}</span>
+                  <span className="ml-1 text-base font-medium text-slate-400">USD{r.perMonth}</span>
                 </motion.p>
 
                 {/* in vs out bars */}
@@ -182,7 +182,7 @@ export default function RoiCalculator() {
 
               <div className="mt-3 flex items-center justify-between rounded-xl border border-white/10 bg-ink-900/40 px-4 py-3">
                 <span className="text-xs text-slate-400">{r.resultYearLabel}</span>
-                <span className="text-lg font-bold text-gradient">+{fmt(calc.yearNet)} USDT</span>
+                <span className="text-lg font-bold text-gradient">+{fmt(calc.yearNet)} USD</span>
               </div>
 
               <div className="mt-3 flex items-center justify-between rounded-xl border border-neon-cyan/20 bg-neon-cyan/[0.05] px-4 py-3">
@@ -191,7 +191,7 @@ export default function RoiCalculator() {
                   {r.planLabel}
                 </span>
                 <span className="text-sm font-semibold text-white">
-                  {calc.plan.name} · {calc.plan.priceMonthly} USDT{r.perMonth}
+                  {calc.plan.name} · {calc.plan.priceMonthly} USD{r.perMonth}
                 </span>
               </div>
 

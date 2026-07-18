@@ -104,6 +104,7 @@ celerybeat.pid
 .env.local
 config/secrets.local.json
 .venv
+.venv*/
 env/
 venv/
 ENV/
@@ -174,6 +175,8 @@ config/companion_capability_last_snapshot.json
 config/license.key
 config/.vendor_license_private.pem
 *.vendor_license_private.pem
+# P1 签发台账 outbox（签发即导出钩子落盘；含客户名等经营数据，切勿入库）
+config/ledger_outbox.jsonl
 
 # SQLite 数据库（所有变体，含 WAL/SHM/备份）
 *.db
@@ -349,3 +352,9 @@ config/persona_lora.json
 # 声纹克隆参考台词文本：配套已忽略的 *.wav/*.wma，含名人/版权敏感（如 liu_dehua_ref.txt）
 config/voice_refs/*.txt
 # 注：config/prerender_lines/ 是预渲染「台词配置」（输入），属源码/配置，保留入库，勿忽略。
+
+# ── P5 人设全域清除执行器（scripts/persona_purge_agent.py）运行时产物 ──
+# 执行记录（含人设 source_key/删除清单等经营数据）+ 软删除回收站（装被清除的
+# 声纹音频/人设卡 dump/媒体 = PII，保留回收期后人工清空，绝不入库）
+config/purge_agent_state.json
+config/purged_trash/

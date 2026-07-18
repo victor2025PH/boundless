@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useMotionValue } from "framer-motion";
-import { EveBot, type BotMode, type Skin } from "./AISprite";
+import { EveBot, DemonForm, LoongForm, type BotMode, type Skin } from "./AISprite";
 
 /**
  * IP 素材舞台：把 EveBot 单独摆上纯净舞台，供截图/录屏导出品牌素材
@@ -30,7 +30,8 @@ export default function RobotStage() {
     const scale = Math.min(6, Math.max(0.5, Number(q.get("scale") ?? 2) || 2));
     const bg = q.get("bg") === "ink" ? "ink" : "transparent";
     const pool = q.get("pool") !== "0";
-    const skin: Skin = q.get("skin") === "demon" ? "demon" : "normal";
+    const s = q.get("skin");
+    const skin: Skin = s === "demon" ? "demon" : s === "loong" ? "loong" : "normal";
     setParams({ mode, scale, bg, pool, skin });
     /* 透明导出：全链路清掉底色（globals 给 body 铺了品牌深色） */
     if (bg === "transparent") {
@@ -52,21 +53,53 @@ export default function RobotStage() {
       style={{ background: params.bg === "ink" ? "#05060f" : "transparent" }}
     >
       <div style={{ transform: `scale(${params.scale})` }}>
-        <EveBot
-          mode={params.mode}
-          isHovered={false}
-          newsText="AI 拟人翻译已就绪…"
-          newsCta="BOUNDLESS · AI"
-          scrollTilt={zero}
-          flightRotate={zero}
-          gazeX={zero}
-          gazeY={zero}
-          squashY={one}
-          shadowOpacity={poolOpacity}
-          onNewsCta={() => {}}
-          reduced={false}
-          skin={params.skin}
-        />
+        {params.skin === "demon" ? (
+          <DemonForm
+            mode={params.mode}
+            isHovered={false}
+            newsText="AI 拟人翻译已就绪…"
+            newsCta="BOUNDLESS · AI"
+            scrollTilt={zero}
+            flightRotate={zero}
+            gazeX={zero}
+            gazeY={zero}
+            squashY={one}
+            shadowOpacity={poolOpacity}
+            onNewsCta={() => {}}
+            reduced={false}
+          />
+        ) : params.skin === "loong" ? (
+          <LoongForm
+            mode={params.mode}
+            isHovered={false}
+            newsText="AI 拟人翻译已就绪…"
+            newsCta="BOUNDLESS · AI"
+            scrollTilt={zero}
+            flightRotate={zero}
+            gazeX={zero}
+            gazeY={zero}
+            squashY={one}
+            shadowOpacity={poolOpacity}
+            onNewsCta={() => {}}
+            reduced={false}
+          />
+        ) : (
+          <EveBot
+            mode={params.mode}
+            isHovered={false}
+            newsText="AI 拟人翻译已就绪…"
+            newsCta="BOUNDLESS · AI"
+            scrollTilt={zero}
+            flightRotate={zero}
+            gazeX={zero}
+            gazeY={zero}
+            squashY={one}
+            shadowOpacity={poolOpacity}
+            onNewsCta={() => {}}
+            reduced={false}
+            skin={params.skin}
+          />
+        )}
       </div>
     </main>
   );

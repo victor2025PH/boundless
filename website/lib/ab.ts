@@ -31,3 +31,12 @@ export const HERO_CTA_COPY: Record<AbVariant, { zh: string; en: string }> = {
   a: { zh: "咨询 AI 成交方案", en: "Get an AI closing plan" },
   b: { zh: "看 AI 当场成交演示", en: "Watch AI close a deal live" },
 };
+
+/** 导航「购买」入口实验：A=订单页，B=价格锚点（首页定价区）。 */
+export const NAV_BUY: Record<
+  AbVariant,
+  { zhLabel: string; enLabel: string; zhPath: string; enPath: string }
+> = {
+  a: { zhLabel: "购买", enLabel: "Buy", zhPath: "/order", enPath: "/en/order" },
+  b: { zhLabel: "看价格", enLabel: "Pricing", zhPath: "/#pricing", enPath: "/en#pricing" },
+};

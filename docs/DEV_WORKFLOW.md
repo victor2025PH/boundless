@@ -27,15 +27,21 @@ powershell -File deploy\status.ps1 -Profile all                                 
 ```
 > 装好后**不要再保留** `模仿音色`/`telegram-mtproto-ai` 等独立老仓（已归档封存）。
 
-## 2. 五台电脑的分工（按"机器擅长什么"分，不是分给不同人）
-| 机器 | 主要用途 | 常改区域 |
-|---|---|---|
-| 中枢(117) | 集成 + TTS 运行 | platform/ deploy/ 集成 |
-| **5090 机** | **换脸/换声开发 + 调试**（有 GPU/facefusion/模型） | **engines/avatarhub/** |
-| 官网机 | 官网 | website/ |
-| 获客机 | 真机 RPA | engines/huoke/ |
-| GPU 算力机(176/104/140/198) | 纯运行时 | 一般不改码，pull 后跑 |
-> 建议：**一台机器主攻一个区域**。这样即使你忘了同步，两台机器改的也是不同文件，几乎不会真冲突。
+## 2. 五台电脑的分工（中文产品命名）
+
+> **台账**：[`MACHINE_SSH.md`](./MACHINE_SSH.md) · `deploy/machines.json`  
+> **互连**：`ssh huansheng|tongyi|zhituo|huanyan-node|tongchuan-node` · 探活 `tools/cluster_ping.ps1`
+
+| 中文名 | IP / 别名 | 主产品 | 工作仓 / 入口 |
+|---|---|---|---|
+| **幻声** | `.176` `huansheng` | 幻声/幻影/幻颜/通传（avatarhub 全家） | `D:\boundless` · `D:\开发\幻声` |
+| **通译** | `.117` `tongyi`（本机） | **通译 + 智聊**（chengjie） | `D:\boundless` · `D:\开发\通译` · `D:\开发\智聊` |
+| **智拓** | `.198` `zhituo` | 智拓（huoke） | `D:\boundless` · `D:\开发\智拓` |
+| **幻颜节点** | `.104` `huanyan-node` | 换脸算力（少改码） | `C:\boundless` · `C:\开发\幻颜节点` |
+| **通传节点** | `.140` `tongchuan-node` | STT 算力（少改码） | `D:\boundless` · `D:\开发\通传节点` |
+
+> 影音四件套只在 **幻声** 机改码；节点机只 `pull` + 跑服务。通译/智聊同机分入口、分时段。  
+> GPU 互调：经幻声 Hub `http://192.168.0.176:9000` + `cluster_map` / `SVC_*`。
 
 ## 3. 日常流程（单人直推版）
 ```powershell

@@ -1548,6 +1548,68 @@ def get_alert_history(*, hours_window: int = 168,
                 "samples": [], "error": str(e)[:120]}
 
 
+def _emit_group_telemetry(event_type: str, device_id: str, peer_name: str,
+                          canonical_id: str, row_id: int) -> None:
+    """P4 全域埋点：接触事件 → 集团 zhituo 漏斗事件（fail-silent）。
+
+    - ``add_friend_accepted`` → zhituo.friend.added（加友通过，KPI 分子）；
+    - ``greeting_replied`` / ``message_received`` 且是该 peer **首条**回复类
+      事件 → zhituo.prospect.replied（开口率分子，每个 peer 只发一次）。
+
+    隐私红线：props 只带平台/内部 ID 引用/延迟秒数，不带 peer_name、
+    不带消息内容。异常一律吞掉，绝不影响接触事件主流程。
+    """
+    try:
+        if event_type == CONTACT_EVT_ADD_FRIEND_ACCEPTED:
+            from src.telemetry import track
+            props = {"platform": "facebook"}
+            if device_id:
+                props["account_id"] = device_id
+            if canonical_id or row_id:
+                props["contact_id"] = canonical_id or f"fbevt_{row_id}"
+            track("zhituo.friend.added", props)
+            return
+        if event_type not in (CONTACT_EVT_GREETING_REPLIED,
+                              CONTACT_EVT_MESSAGE_RECEIVED):
+            return
+        # 首次开口判定：本条已入库，若该 peer 回复类事件恰好只有这 1 条即首次
+        with _connect() as conn:
+            n = conn.execute(
+                "SELECT COUNT(*) FROM fb_contact_events"
+                " WHERE peer_name=? AND event_type IN (?,?)",
+                (peer_name, CONTACT_EVT_GREETING_REPLIED,
+                 CONTACT_EVT_MESSAGE_RECEIVED),
+            ).fetchone()
+            if not n or int(n[0]) != 1:
+                return
+            first_touch = conn.execute(
+                "SELECT MIN(at) FROM fb_contact_events"
+                " WHERE peer_name=? AND event_type IN (?,?,?)",
+                (peer_name, CONTACT_EVT_ADD_FRIEND_ACCEPTED,
+                 CONTACT_EVT_ADD_FRIEND_SENT, CONTACT_EVT_GREETING_SENT),
+            ).fetchone()
+        from src.telemetry import track
+        props = {"platform": "facebook"}
+        if device_id:
+            props["account_id"] = device_id
+        if canonical_id or row_id:
+            props["contact_id"] = canonical_id or f"fbevt_{row_id}"
+        if first_touch and first_touch[0]:
+            try:
+                import datetime as _dt
+                t0 = _dt.datetime.strptime(str(first_touch[0]),
+                                           "%Y-%m-%d %H:%M:%S")
+                now_utc = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None)
+                latency = int((now_utc - t0).total_seconds())
+                if latency >= 0:
+                    props["first_reply_latency_s"] = latency
+            except Exception:
+                pass
+        track("zhituo.prospect.replied", props)
+    except Exception:
+        pass
+
+
 def record_contact_event(device_id: str, peer_name: str, event_type: str, *,
                          template_id: str = "",
                          preset_key: str = "",
@@ -1629,6 +1691,9 @@ def record_contact_event(device_id: str, peer_name: str, event_type: str, *,
                 logger.debug("[fb_contact_events] revive_stale hook 失败: %s", e)
         # M1: 推进生命周期
         _try_advance_fb_lifecycle(canonical_id, f"evt:{event_type}")
+        # P4 全域埋点：加友通过/首次开口 → 集团 zhituo 漏斗（fail-silent）
+        _emit_group_telemetry(event_type, device_id, peer_name,
+                              canonical_id or "", new_id)
         return new_id
     except Exception as e:
         logger.debug("[fb_contact_events] 写入失败: %s", e)

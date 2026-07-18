@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { detectLang } from "@/lib/bot-knowledge";
 import {
+  answerCallback,
   handleCallback,
   handleCommand,
   handleFreeText,
@@ -9,9 +10,10 @@ import {
   sendText,
 } from "@/lib/telegram-bot";
 import { bindAdminChat, getAdminChats, unbindAdminChat } from "@/lib/admin-store";
-import { bindOrderNotify } from "@/lib/order-store";
+import { bindOrderNotify, notifyAdmins } from "@/lib/order-store";
+import { bindTelegram, collectPearlByTg, parseStartToken, redeemDragonCode, setRemindByTg, type DragonState } from "@/lib/dragon-store";
 import { isDuplicateUpdate } from "@/lib/tg-dedup";
-import { BOT_HANDLE, TELEGRAM_GROUP } from "@/lib/site";
+import { BOT_HANDLE, TELEGRAM_GROUP, TELEGRAM_DISPLAY, SITE_URL } from "@/lib/site";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,7 +24,7 @@ type TgUpdate = {
     message_id?: number;
     chat: { id: number; type?: string; username?: string };
     text?: string;
-    from?: { language_code?: string };
+    from?: { language_code?: string; username?: string; first_name?: string };
     reply_to_message?: { from?: { username?: string; is_bot?: boolean } };
     entities?: { type: string; offset: number; length: number }[];
   };
@@ -35,6 +37,139 @@ type TgUpdate = {
 };
 
 const BOT_AT = `@${BOT_HANDLE}`.toLowerCase();
+
+/** 「七星聚 · 龙行无界」兑换码：/start loong_LOONG-XXXXXX 深链，或私聊直接发码 */
+function extractDragonCode(text: string): string | null {
+  const m =
+    text.match(/^\/start\s+loong_(LOONG-[A-Z0-9]{6})$/i) ??
+    text.match(/^(LOONG-[A-Z0-9]{6})$/i);
+  return m ? m[1].toUpperCase() : null;
+}
+
+async function handleDragonRedeem(
+  chatId: number,
+  code: string,
+  lang: "zh" | "en",
+  from?: { username?: string; first_name?: string }
+) {
+  const zh = lang === "zh";
+  const name = from?.username ? `@${from.username}` : from?.first_name ?? "";
+  const r = await redeemDragonCode(code, chatId, name);
+
+  if (!r.ok) {
+    await sendText(
+      chatId,
+      r.reason === "expired"
+        ? zh
+          ? `⌛ 这枚龙珠兑换码已过期（有效期 14 天）。别灰心——星珠还在官网等你，新一轮集齐即可再召唤界龙。`
+          : `⌛ This LOONG code has expired (14-day validity). Collect 7 pearls again on the site to summon another wish.`
+        : zh
+          ? `未找到这枚兑换码，请核对（形如 <code>LOONG-ABC123</code>）。`
+          : `Code not found — please double-check (format: <code>LOONG-ABC123</code>).`
+    );
+    return;
+  }
+
+  const kind = r.rec.kind;
+  const perfect = r.rec.perfect;
+  if (r.already) {
+    await sendText(
+      chatId,
+      zh
+        ? `ℹ️ 这枚兑换码已核销过（${r.rec.redeemedAt?.slice(0, 10) ?? ""}）。如有疑问请联系 ${TELEGRAM_DISPLAY}。`
+        : `ℹ️ This code was already redeemed (${r.rec.redeemedAt?.slice(0, 10) ?? ""}). Questions? ${TELEGRAM_DISPLAY}.`
+    );
+    return;
+  }
+
+  if (kind === "grand") {
+    await sendText(
+      chatId,
+      zh
+        ? `🐲 <b>界龙之约 · 三鳞大成</b>\n\n三枚月令龙鳞已兑现，这是坚持三个月的约定：\n· 任一产品<b>年付 8 折</b>专属协议价（报码 <code>${code}</code>）\n· <b>定制方案绿色通道</b>：需求直达工程师排期\n· 专属 1v1 对接：${TELEGRAM_DISPLAY}\n\n工作人员将在 24 小时内与你确认权益。`
+        : `🐲 <b>The Loong's Covenant</b>\n\nThree monthly scales redeemed — three months of dedication:\n· <b>20% off yearly</b> on any product (quote <code>${code}</code>)\n· <b>Fast-track custom solutions</b> straight to engineering\n· Dedicated 1-on-1: ${TELEGRAM_DISPLAY}\n\nOur team will confirm within 24h.`
+    );
+  } else if (kind === "trial") {
+    await sendText(
+      chatId,
+      zh
+        ? `🐉 <b>界龙的赐福 · 愿望成真</b>\n\n你的「愿·体验」已核销：<b>任选一款产品 30 天全功能体验</b>${perfect ? "\n✨ 北斗正位加成：体验期 +7 天！" : ""}\n\n工作人员将在 24 小时内私信为你开通；想加速可直接联系 ${TELEGRAM_DISPLAY} 并出示码 <code>${code}</code>。`
+        : `🐉 <b>The Boundless Loong grants your wish</b>\n\nYour trial wish is confirmed: <b>30-day full access to any one product</b>${perfect ? "\n✨ Big Dipper Perfect bonus: +7 extra days!" : ""}\n\nOur team will DM you within 24h — or contact ${TELEGRAM_DISPLAY} with code <code>${code}</code> to fast-track.`
+    );
+  } else {
+    await sendText(
+      chatId,
+      zh
+        ? `🎁 <b>界龙的机缘礼包</b>\n\n· 专属协议价：任一产品首月 <b>9 折</b>（报码 <code>${code}</code>）\n· <b>1v1 方案优先通道</b>：直接联系 ${TELEGRAM_DISPLAY}\n· 彩蛋线索：官网右下角的小家伙，<i>连点 7 次</i>会发生什么呢…${perfect ? "\n✨ 北斗正位加成：折扣升级为 85 折！" : ""}`
+        : `🎁 <b>The Loong's Fortune Pack</b>\n\n· Exclusive deal: <b>10% off</b> first month on any product (quote <code>${code}</code>)\n· <b>Priority 1-on-1 consult</b>: ${TELEGRAM_DISPLAY}\n· Easter-egg hint: try clicking the little bot on our site <i>7 times in a row</i>…${perfect ? "\n✨ Perfect-Dipper bonus: discount upgraded to 15% off!" : ""}`
+    );
+  }
+
+  await notifyAdmins(
+    `🐉 龙珠核销 <code>${code}</code>\n类型：${kind === "grand" ? "界龙之约（三鳞大奖）" : kind === "trial" ? "体验月卡" : "机缘礼包"}${perfect ? "（北斗正位）" : ""}\n用户：${name || "-"} (chat_id: <code>${chatId}</code>)\n${kind === "grand" ? "⚠️ 高价值客户：请 24h 内 1v1 对接年付权益" : kind === "trial" ? "⚠️ 请 24h 内开通体验授权" : "折扣码已生效，跟进即可"}`
+  );
+}
+
+/** 星珠进度一行文案：●●●○○○○（3/7） */
+function pearlBar(state: DragonState): string {
+  const n = state.collected;
+  return `${"●".repeat(n)}${"○".repeat(Math.max(0, 7 - n))}（${n}/7）`;
+}
+
+const REMIND_HOUR = Number(process.env.DRAGON_REMIND_HOUR ?? 19);
+
+/** 提醒开关内联键盘（点按走 xz_remind_* callback） */
+function remindKeyboard(zh: boolean) {
+  return [
+    [
+      { text: zh ? `🔔 每日 ${REMIND_HOUR}:00 提醒我` : `🔔 Remind me daily ${REMIND_HOUR}:00`, callback_data: "xz_remind_on" },
+      { text: zh ? "🔕 关闭提醒" : "🔕 Mute", callback_data: "xz_remind_off" },
+    ],
+  ];
+}
+
+/** bot 端 /xingzhu 每日收珠（已绑定=网页进度同步，未绑定=独立进度、日后绑定合并） */
+async function handleXingzhu(chatId: number, lang: "zh" | "en") {
+  const zh = lang === "zh";
+  const r = await collectPearlByTg(chatId);
+  const st = r.state;
+  if (r.already) {
+    await sendText(
+      chatId,
+      zh
+        ? `今日星珠已收过啦 ${pearlBar(st)}\n明天再来点亮下一颗。`
+        : `Today's pearl is already lit ${pearlBar(st)}\nCome back tomorrow for the next one.`,
+      remindKeyboard(zh)
+    );
+    return;
+  }
+  if (!r.ok) {
+    await sendText(
+      chatId,
+      zh
+        ? `七星已聚齐！先回官网召唤界龙、许下愿望，新一轮才会开始：\n${SITE_URL}`
+        : `All seven stars are aligned! Summon the Loong on our site first:\n${SITE_URL}`
+    );
+    return;
+  }
+  const done = st.collected >= 7;
+  const tail = r.bound
+    ? ""
+    : zh
+      ? `\n\n💡 网页端也在集珠？打开官网右下角龙珠面板点「在 Telegram 同步」即可合并进度。`
+      : `\n\n💡 Also collecting on the web? Use "Sync on Telegram" in the site's pearl panel to merge progress.`;
+  await sendText(
+    chatId,
+    done
+      ? zh
+        ? `🐉 <b>七星聚齐！</b> ${pearlBar(st)}\n回官网召唤界龙、领取你的愿望：\n${SITE_URL}${tail}`
+        : `🐉 <b>Seven stars aligned!</b> ${pearlBar(st)}\nSummon the Loong on our site to claim your wish:\n${SITE_URL}${tail}`
+      : zh
+        ? `✨ 第 ${st.collected} 颗星珠归位 ${pearlBar(st)}${st.collected === 6 ? "\n只差一颗，明日界龙将至！" : ""}${tail}`
+        : `✨ Pearl #${st.collected} aligned ${pearlBar(st)}${st.collected === 6 ? "\nOne more — the Loong arrives tomorrow!" : ""}${tail}`,
+    remindKeyboard(zh)
+  );
+}
 
 /** Groups we will answer in: the configured public group + optional id allowlist. */
 function isAllowedGroup(chat: { username?: string; id: number }): boolean {
@@ -77,6 +212,19 @@ export async function POST(req: NextRequest) {
       const data = cq.data ?? "";
       if (chatId && data) {
         const lang = detectLang(cq.from?.language_code);
+        /* 龙珠提醒开关：xz_remind_on/off（answerCallback 的 text 会以 toast 弹给用户） */
+        if (data === "xz_remind_on" || data === "xz_remind_off") {
+          const on = data.endsWith("_on");
+          await setRemindByTg(cq.from?.id ?? chatId, on);
+          const zh = String(lang) === "zh";
+          await answerCallback(
+            cq.id,
+            on
+              ? zh ? `🔔 已开启：每天 ${process.env.DRAGON_REMIND_HOUR ?? 19}:00 没收珠就提醒你` : `🔔 Daily reminder on (${process.env.DRAGON_REMIND_HOUR ?? 19}:00)`
+              : zh ? "🔕 已关闭提醒" : "🔕 Reminder muted"
+          );
+          return NextResponse.json({ ok: true });
+        }
         const from = cq.from
           ? { id: cq.from.id, username: cq.from.username, first_name: cq.from.first_name }
           : undefined;
@@ -121,6 +269,38 @@ export async function POST(req: NextRequest) {
 
       // NOTE: web_app buttons are invalid in groups; handleGroupMessage uses url-only.
       await handleGroupMessage(chatId, question, lang, msg.message_id);
+      return NextResponse.json({ ok: true });
+    }
+
+    // ── 龙珠彩蛋核销：/start loong_<code> 深链 或 私聊直接发 LOONG-XXXXXX ──
+    const dragonCode = extractDragonCode(text);
+    if (dragonCode) {
+      await handleDragonRedeem(chatId, dragonCode, lang === "zh" ? "zh" : "en", msg.from);
+      return NextResponse.json({ ok: true });
+    }
+
+    // ── 龙珠进度绑定：/start xz_<签名令牌>（官网龙珠面板「在 Telegram 同步」深链） ──
+    const bindMatch = text.match(/^\/start\s+(xz_[A-Za-z0-9-]{40,64})$/i);
+    if (bindMatch) {
+      const vid = parseStartToken(bindMatch[1]);
+      const zh = lang === "zh";
+      if (!vid) {
+        await sendText(chatId, zh ? "绑定链接已失效，请回官网重新点「在 Telegram 同步」。" : "This link has expired — tap “Sync on Telegram” on the site again.");
+        return NextResponse.json({ ok: true });
+      }
+      const r = await bindTelegram(vid, chatId, msg.from?.username ? `@${msg.from.username}` : msg.from?.first_name);
+      await sendText(
+        chatId,
+        zh
+          ? `🔗 <b>星珠进度已同步</b> ${pearlBar(r.state)}${r.merged ? "\n（已合并你在 bot 里的旧进度）" : ""}\n\n以后每天在这里发 /xingzhu 也能收珠，与官网同一份进度。`
+          : `🔗 <b>Pearl progress synced</b> ${pearlBar(r.state)}${r.merged ? "\n(merged your previous bot progress)" : ""}\n\nSend /xingzhu here daily to collect — same progress as the website.`
+      );
+      return NextResponse.json({ ok: true });
+    }
+
+    // ── 龙珠每日签到：/xingzhu 或 频道按钮深链 /start xingzhu ──
+    if (/^\/xingzhu\b/i.test(text) || /^\/start\s+xingzhu$/i.test(text)) {
+      await handleXingzhu(chatId, lang === "zh" ? "zh" : "en");
       return NextResponse.json({ ok: true });
     }
 

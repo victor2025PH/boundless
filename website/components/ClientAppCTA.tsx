@@ -27,8 +27,8 @@ export default function ClientAppCTA() {
             </h2>
             <p className="mx-auto mt-3 max-w-2xl text-sm text-slate-400">
               {zh
-                ? `声音克隆 · 实时换脸 · 数字人直播 · 克隆音同传，全部本地部署数据不出机房。会员 ${from} USDT/月起，年付送 2 个月 + 首年 8 折。`
-                : `Voice cloning, live face swap, digital-human streaming and interpreting — all local, data on-prem. Plans from ${from} USDT/mo; annual gets 2 months free + 20% off year one.`}
+                ? `声音克隆 · 实时换脸 · 数字人直播 · 克隆音同传，全部本地部署数据不出机房。会员 ${from} USD/月起，年付送 2 个月 + 首年 8 折。`
+                : `Voice cloning, live face swap, digital-human streaming and interpreting — all local, data on-prem. Plans from ${from} USD/mo; annual gets 2 months free + 20% off year one.`}
             </p>
             <div className="mt-7 flex flex-wrap items-center justify-center gap-4">
               <a

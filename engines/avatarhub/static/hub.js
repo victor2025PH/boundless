@@ -1129,6 +1129,22 @@ function hub() {
         else { const _saved = localStorage.getItem('hub_tab'); if (_saved && _tabIds0.includes(_saved)) this.tab = _saved; }
         if (!this.visitedTabs.includes(this.tab)) this.visitedTabs.push(this.tab);
       } catch(_){}
+      // [产品视图 v2] 配置驱动侧栏裁剪（product_views/*.yaml → GET /api/product_view，契约见 product_views/APPLY.md）。
+      //   fire-and-forget 置于「同步定 Tab」之后：未启用（未设 AVATARHUB_PRODUCT_ID）/接口缺失/异常 → 不进过滤分支，
+      //   零行为变化零首帧等待（fail-open）；启用时到货即裁剪，当前 Tab 被隐藏则落视图默认页（走 goTab 补 visitedTabs/hash）。
+      try {
+        fetch(HUB+'/api/product_view').then(r=>r.json()).then(pv=>{
+          try {
+            if (!pv || !pv.ok || !pv.enabled || !Array.isArray(pv.allowed_tabs) || !pv.allowed_tabs.length) return;
+            const _allow = new Set(pv.allowed_tabs);
+            const _trimmed = (this.tabs || []).filter(t => _allow.has(t.id));
+            if (!_trimmed.length) return;   // 白名单与侧栏 id 零交集 → 视为配置错，保持全菜单
+            this.tabs = _trimmed;
+            const _ids = _trimmed.map(t => t.id);
+            if (!_ids.includes(this.tab)) this.goTab(_ids.includes(pv.default_tab) ? pv.default_tab : _ids[0]);
+          } catch(_){}
+        }).catch(_=>{});
+      } catch(_){}
       await Promise.all([this.loadProfiles(), this.loadVoices(), this.refreshServices(),
                          this.loadSysInfo(), this.rvcRefreshModels(), this.checkEnv(),
                          this.loadCameras(), this.loadConfig(), this.soRefresh(), this.loadPhoneRelayStatus()]);

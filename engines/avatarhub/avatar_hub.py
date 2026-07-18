@@ -218,6 +218,19 @@ RVC_API = f"http://127.0.0.1:{app_config.port('rvc') or 6242}"   # RVC 离线转
 # 覆盖层用于「安装版+源码版」两套并存(2026-07-17)，零配置时与历史一致。
 PORT = int(os.environ.get("AVATARHUB_PORT") or app_config.port("hub") or 9000)
 
+
+# ── P4 全域运营事件埋点（契约 platform/observability/EVENT_CONTRACT.md）────────
+#   经同目录 telemetry.track 落本地 spool；fail-silent，绝不影响业务主路径。
+#   avatarhub 一个引擎撑四产品，product_id 由各调用点按业务归属显式传
+#   （声音克隆→huansheng、直播/口型/vcam→huanying、离线换脸→huanyan、同传→tongchuan）。
+#   只在任务/场次级成功点调用；GPU 热路径（逐帧/逐句）严禁使用。
+def _track_event(product_id: str, name: str, props: dict | None = None) -> None:
+    try:
+        import telemetry as _telemetry
+        _telemetry.track(product_id, name, props)
+    except Exception:
+        pass
+
 # ── P-Conc5: 多卡 worker 池（每卡一副本，最少在途分发，故障副本短暂摘除）────────
 # 重型逐句 GPU 阶段(fish_tts/emotion_tts/lipsync/latentsync)若配置了多个副本地址
 # (SVC_<KEY>=url1,url2)，则 Hub 把并发请求散到不同副本=不同 GPU，实现真并行而非排队等同一张卡。
@@ -3413,6 +3426,10 @@ def _swap_sess_reconcile() -> None:
         rep = _swap_sess_report(agg, end)
         rep["recovered"] = True
         _swap_sess_write(rep)
+        _track_event("huanying", "huanying.live.ended", {   # P4：宿主猝死半场转正，关播事件补齐配对
+            "session_id": f"live_{int(agg.get('start', end))}",
+            "duration_s": int(rep.get("dur_s") or 0),
+            "avg_fps": (rep.get("fps") or {}).get("med")})
         _logger.info(f"[SwapSess] 断点转正入账: {rep['dur_s']}s 样本={rep['samples']} (上个宿主在播中退出)")
     except Exception as e:
         _logger.warning(f"[SwapSess] 启动对账失败: {e}")
@@ -3642,6 +3659,9 @@ async def _swap_sess_tick(state: str, now: float) -> None:
     streaming = state is not None and state != "idle"
     if streaming and not _swap_sess.get("active"):
         _swap_sess = _swap_sess_begin(now)
+        _track_event("huanying", "huanying.live.started", {   # P4：开播场次起点（自愈重启不重复计场）
+            "session_id": f"live_{int(now)}", "persona_id": _active_profile or "",
+            "mode": "obs_vcam", "faceswap_on": True})
     if not _swap_sess.get("active"):
         return
     if streaming:
@@ -3658,6 +3678,10 @@ async def _swap_sess_tick(state: str, now: float) -> None:
     if agg.get("samples", 0) >= 2:        # <2 样本=1-tick 瞬态(点错就停)，不值得留档
         rep = _swap_sess_report(agg, now)
         _swap_sess_write(rep)
+        _track_event("huanying", "huanying.live.ended", {   # P4：关播收场（与场次报告同源）
+            "session_id": f"live_{int(agg.get('start', now))}",
+            "duration_s": int(rep.get("dur_s") or 0),
+            "avg_fps": (rep.get("fps") or {}).get("med")})
         _logger.info(f"[SwapSess] 场次报告: {rep['dur_s']}s 裁剪命中率={rep['crop']['hit_pct']}% "
                      f"时延中位={rep['latency_ms']['med']}ms 降档占比={rep['degraded_pct']}% "
                      f"增强={rep['enhance']}")
@@ -5537,6 +5561,10 @@ async def create_profile(p: Profile):
     # 有参考音的新角色：后台自动建声纹基线首点，让它当天就上趋势看板
     if p.voice_b64:
         asyncio.create_task(_async_seed_voice_quality(p.name))
+    _track_event("huanying", "huanying.persona.created", {   # P4：数字人人设装配完成
+        "persona_id": p.name,
+        "has_voice": bool(p.voice_b64 or p.voice_name),
+        "has_face": bool(p.face_b64)})
     return {"ok": True, "name": p.name}
 
 
@@ -5608,6 +5636,8 @@ async def api_avatar_from_video(
                 except Exception: pass
         except Exception:
             pass
+    _track_event("huanying", "huanying.persona.created", {   # P4：路线A 真人视频建人设完成
+        "persona_id": name, "has_voice": False, "has_face": True})
     return {"ok": True, "name": name, "slug": slug, "meta": res["meta"],
             "thumbnail": thumb, "activated": bool(activate)}
 
@@ -12118,6 +12148,10 @@ async def avatar_speak(req: SpeakRequest, request: Request):
     _metrics["speak_latency_ms"].append(elapsed)  # P4-B: deque 自动滚动
     _b = _metrics["latency_buckets"]              # P5-5: 分桶计数
     _b[0 if elapsed < 500 else 1 if elapsed < 1000 else 2 if elapsed < 3000 else 3] += 1
+    _track_event("huansheng", "huansheng.tts.chars_metered", {   # P4：任务级用量（单次合成请求聚合，非逐句）
+        "chars": len(req.text), "voice_id": profile_name, "lang": req.language,
+        "engine": (_sel_tts_eng if _use_fish_tts else
+                   "cosyvoice" if _use_emotion_tts else sel_tts_engine)})
 
     # 异步写历史（非隐身模式）+ 完成后广播 history_updated
     _used_emotion = _detected_emotion or req.emotion
@@ -12640,6 +12674,10 @@ async def avatar_batch_dub(
                 *[_do_line(i, l, client) for i, l in enumerate(lines, 1)])
 
     results = sorted(results, key=lambda x: x[0])
+    _bd_chars = sum(len(l) for (_i, _f, _wb, _e), l in zip(results, lines) if _wb and not _e)
+    if _bd_chars:
+        _track_event("huansheng", "huansheng.tts.chars_metered", {   # P4：批级用量（整批一条，只计成功行）
+            "chars": _bd_chars, "voice_id": profile_name, "lang": language, "engine": "xtts"})
     zip_buf = _io.BytesIO()
     with _zf.ZipFile(zip_buf, 'w', _zf.ZIP_DEFLATED) as zf:
         for _idx, fname, wav_bytes, err in results:
@@ -26358,6 +26396,8 @@ async def _faceswap_with_hair_core(prof_name: str, body: dict) -> dict:
         hid = _look_hist_record(prof_name, "facehair", image_b64=out_img,
                                 meta={"engine": _fs_eng, "hair_ok": False, "pasted_back": False}) \
             if out_img and prof_name in _profiles else ""
+        _track_event("huanyan", "huanyan.faceswap.completed", {   # P4：离线图片出片成功（仅换脸）
+            "job_id": hid or f"fh_{int(t0)}", "media_type": "image", "elapsed_ms": fs_ms})
         return {"ok": True, "result_image": out_img, "hair_ok": False, "pasted_back": False,
                 "faceswap_ms": fs_ms, "hair_ms": 0, "engine": _fs_eng, "profile": prof_name,
                 "hist_id": hid, "stage": "faceswap_only"}
@@ -26383,6 +26423,9 @@ async def _faceswap_with_hair_core(prof_name: str, body: dict) -> dict:
         hid = _look_hist_record(prof_name, "facehair", image_b64=out_img,
                                 meta={"engine": _fs_eng, "hair_ok": hair_ok,
                                       "pasted_back": bool(hj.get("pasted_back"))})
+    _track_event("huanyan", "huanyan.faceswap.completed", {   # P4：离线图片出片成功（换脸+发型）
+        "job_id": hid or f"fh_{int(t0)}", "media_type": "image",
+        "elapsed_ms": fs_ms + int(hj.get("elapsed_ms") or 0)})
     return {"ok": True, "result_image": out_img, "hair_ok": hair_ok,
             "pasted_back": bool(hj.get("pasted_back")),
             "faceswap_ms": fs_ms, "hair_ms": hj.get("elapsed_ms"), "engine": _fs_eng,
@@ -30748,6 +30791,22 @@ async def api_features():
             "features": FEATURE_REGISTRY}
 
 
+@app.get("/api/product_view")
+async def api_product_view():
+    """产品视图（四产品配置驱动侧栏裁剪 v2，只读）：AVATARHUB_PRODUCT_ID → product_views/<id>.yaml。
+    未设/未知 env → loader 返 mode=full → enabled=False（前端零行为变化）；任何异常同样 fail-open。
+    GET 非敏感路径，默认放行（与 /api/features 同级开放）。接线契约见 product_views/APPLY.md。"""
+    try:
+        _pv_root = str(Path(__file__).resolve().parent)
+        if _pv_root not in sys.path:
+            sys.path.insert(0, _pv_root)   # 启动 cwd 惯例=engines/avatarhub；此为非惯例启动的兜底（APPLY.md）
+        from product_views.loader import load_product_view
+        view = load_product_view()
+        return {"ok": True, "enabled": view.get("mode") == "filtered", **view}
+    except Exception:
+        return {"ok": False, "enabled": False}
+
+
 # 统一首页（前门）：从 static/home.html 加载（镜像 /ui 的 no-store 写法）
 _HOME_FILE = Path(rf"{_BASE}\static\home.html")
 
@@ -31940,6 +31999,9 @@ def api_voice_clone(req: VoiceCloneRequest):
         if not result["ok"]:
             _metrics["clone_rejected"] += 1
             raise HTTPException(400, result["reason"])
+        _track_event("huansheng", "huansheng.voice.clone_completed", {   # P4：音色资产可用
+            "voice_id": Path(result.get("voice_file", "")).stem or req.name,
+            "sample_seconds": round(float(result.get("quality", {}).get("duration_sec") or 0), 2)})
         return result
     except HTTPException:
         raise

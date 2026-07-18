@@ -282,6 +282,78 @@ export async function GET(req: NextRequest) {
       .sort((a, b) => b.impressions - a.impressions),
   };
 
+  // ── 龙珠彩蛋漏斗：曝光→收珠(1..7)→召唤→祈愿→TG 跳转（事件），加存储层权威计数 ──
+  const dgPearlByIdx = new Array(7).fill(0);
+  for (const e of winEvents) {
+    if (e.event !== "dragon_pearl") continue;
+    const i = Number((e.props as Record<string, unknown> | null)?.index ?? 0);
+    if (i >= 1 && i <= 7) dgPearlByIdx[i - 1] += 1;
+  }
+  const dgWowOf = (name: string) => {
+    const nowMs = Date.now();
+    let cur = 0;
+    let prev = 0;
+    for (const e of events) {
+      if (e.event !== name) continue;
+      const tt = Date.parse(String(e.t ?? ""));
+      if (isNaN(tt)) continue;
+      if (tt >= nowMs - 7 * 86400000) cur += 1;
+      else if (tt >= nowMs - 14 * 86400000) prev += 1;
+    }
+    return { cur, prev };
+  };
+  const dragonEvents = {
+    offers: winEvents.filter((e) => e.event === "dragon_offer_impression").length,
+    pearls: dgPearlByIdx,
+    summons: winEvents.filter((e) => e.event === "dragon_summon_open").length,
+    wishes: winEvents.filter((e) => e.event === "dragon_wish").length,
+    tgClicks: winEvents.filter((e) => e.event === "dragon_tg_click").length,
+    assists: winEvents.filter((e) => e.event === "dragon_assist").length,
+    wow: { pearls: dgWowOf("dragon_pearl"), summons: dgWowOf("dragon_summon_open") },
+  };
+  /* 龙珠会话对比：见过星珠曝光的会话里，深度互动组 vs 仅曝光组的留资率（相关参考，与周报同口径） */
+  const DRAGON_ENGAGE = new Set([
+    "dragon_pearl",
+    "dragon_summon_open",
+    "dragon_wish",
+    "dragon_assist",
+    "dragon_share_copy",
+    "dragon_codex_open",
+    "dragon_codex_view",
+    "dragon_tg_click",
+    "dragon_tg_sync_click",
+    "dragon_tray_skin_switch",
+  ]);
+  const dgBySid: Record<string, Set<string>> = {};
+  for (const e of winEvents) {
+    const ev = String(e.event ?? "");
+    if (ev.startsWith("miniapp_")) continue;
+    const sid = String(e.sid ?? "");
+    if (!sid) continue;
+    if (ev !== "pageview" && ev !== "lead_submit" && ev !== "dragon_offer_impression" && !DRAGON_ENGAGE.has(ev)) continue;
+    (dgBySid[sid] ??= new Set<string>()).add(ev);
+  }
+  let dgSeen = 0;
+  let dgEngaged = 0;
+  let dgEngagedLeads = 0;
+  let dgSeenOnlyLeads = 0;
+  for (const set of Object.values(dgBySid)) {
+    if (!set.has("pageview") || !set.has("dragon_offer_impression")) continue;
+    dgSeen++;
+    if ([...set].some((x) => DRAGON_ENGAGE.has(x))) {
+      dgEngaged++;
+      if (set.has("lead_submit")) dgEngagedLeads++;
+    } else if (set.has("lead_submit")) {
+      dgSeenOnlyLeads++;
+    }
+  }
+  const dragonCompare = {
+    engaged: dgEngaged,
+    seenOnly: Math.max(0, dgSeen - dgEngaged),
+    engagedLeadRate: pct(dgEngagedLeads, dgEngaged),
+    seenOnlyLeadRate: pct(dgSeenOnlyLeads, Math.max(0, dgSeen - dgEngaged)),
+  };
+
   // ── A/B 实验汇总：曝光/点击按 variant 分桶，CTR=点击/曝光 ──
   const abStats: Record<string, Record<string, { expose: number; click: number; ctr: number }>> = {};
   for (const e of events) {
@@ -474,6 +546,8 @@ export async function GET(req: NextRequest) {
 
   const cluster = clusterChats(chats as ChatRec[]);
   const unlocks = await unlockCounts();
+  const { dragonCounts } = await import("@/lib/dragon-store");
+  const dragonStore = await dragonCounts().catch(() => null);
 
   // ---- 14-day daily series + week-over-week (real, derived from events/leads) ----
   const DAY = 24 * 3600 * 1000;
@@ -561,6 +635,7 @@ export async function GET(req: NextRequest) {
     },
     ctaByWhere,
     sprite,
+    dragon: { events: dragonEvents, store: dragonStore, compare: dragonCompare },
     ab: abStats,
     attribution,
     campaigns,

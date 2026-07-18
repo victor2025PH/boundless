@@ -97,6 +97,19 @@ try:
 except Exception:
     _MON_DEFAULT = "http://127.0.0.1:7878"
 MONITOR_URL = os.environ.get("MONITOR_URL", _MON_DEFAULT)   # 手机无线终端中继
+
+
+# ── P4 全域运营事件埋点（契约 platform/observability/EVENT_CONTRACT.md）────────
+#   同传归属产品 tongchuan；经本目录 telemetry.track 落 spool，fail-silent，
+#   只在会话级起止点调用（逐句链路严禁），绝不影响同传主链路。
+def _track_event(product_id: str, name: str, props: dict | None = None) -> None:
+    try:
+        import telemetry as _telemetry
+        _telemetry.track(product_id, name, props)
+    except Exception:
+        pass
+
+
 _MON_PORT = (MONITOR_URL.rsplit(":", 1)[-1].split("/")[0] or "7878")   # 页面 JS 注入用(__MON_PORT__)
 try:
     _MON_PORT_S = str(int(_MON_PORT) + 1)      # 中继 https 口恒为 http+1(monitor_relay 约定)
@@ -9758,6 +9771,11 @@ def start(req: StartReq):
     # 基本可确定麦静音/选错/被独占——主动弹一条可执行提示，不让用户对着静默自己猜。
     threading.Thread(target=_nosignal_watchdog, args=(ST.session_start,), daemon=True).start()
     _dub = _dub_ready()
+    _track_event("tongchuan", "tongchuan.session.started", {   # P4：同传会话建立并开始收音
+        "session_id": f"interp_{int(ST.session_start)}",
+        "mode": "live" if ST.live_mode else "meeting",
+        "src_lang": _SRC_LANG, "dst_lang": _DST_LANG,
+        "voice_clone": bool(ST.voice_b64)})
     return {"ok": True, "cap_a_err": ST.cap_a.error, "cap_b_err": ST.cap_b.error,
             "voice_ok": _dub["voice_ok"], "dub_ok": _dub["ok"], "dub_reason": _dub["reason"]}
 
@@ -9804,6 +9822,7 @@ def _pfeat_report_push():
 
 @app.post("/stop")
 def stop():
+    _tc_was_running = bool(ST.running)   # P4 埋点用：重复 /stop 幂等，不重复计一场
     if ST.cap_a: ST.cap_a.stop()
     if ST.cap_b: ST.cap_b.stop()
     ST.stream_on = False; ST.disp_a = None; ST.disp_b = None
@@ -9854,6 +9873,12 @@ def stop():
         _set_vcam_notice("")
     ST.running = False
     log_path = _write_session_log()
+    if _tc_was_running:
+        _tc_dur = int(time.time() - ST.session_start) if ST.session_start else 0
+        _track_event("tongchuan", "tongchuan.session.ended", {   # P4：会话结束=通话分钟计量口径
+            "session_id": f"interp_{int(ST.session_start)}" if ST.session_start else "",
+            "duration_s": _tc_dur, "audio_minutes": round(_tc_dur / 60.0, 2),
+            "segments": int(ST.transcript_seq)})
     ST.push_event({"who": "sys", "clear": True})   # 停止即清空 web 字幕,旧幻听不残留
     ST.push_event({"who": "sys", "src": "同传已停止", "dst": "Interpreter stopped", "stage": "sys"})
     _pfeat_report_push()   # P2 停播即出实时性特性报告(首音/流译/语义块/垫场+调参建议)

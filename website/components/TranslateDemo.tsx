@@ -12,7 +12,7 @@ const COPY = {
   zh: {
     kicker: "通译 LingoX",
     head: "实时翻译，亲手试一下",
-    sub: "输入任意一句话，AI 实时翻成多国语言——这正是「智聊」全程帮你和全球客户对话时的底层能力。",
+    sub: "输入任意一句话，AI 实时翻成多国语言——这正是跨境聊天互译时的底层能力。",
     placeholder: "输入中文或任意语言，例如：这个产品多少钱？",
     btn: "实时翻译",
     btnLoading: "翻译中…",
@@ -24,7 +24,7 @@ const COPY = {
   en: {
     kicker: "LingoX Translate",
     head: "Real-time translation — try it yourself",
-    sub: "Type any sentence and watch AI translate it into multiple languages live — the same engine that powers ChatX while it talks to your global customers.",
+    sub: "Type any sentence and watch AI translate it into multiple languages live — the same engine behind cross-border chat translation.",
     placeholder: "Type in any language, e.g. How much is this product?",
     btn: "Translate live",
     btnLoading: "Translating…",
@@ -35,7 +35,14 @@ const COPY = {
   },
 } as const;
 
-export default function TranslateDemo() {
+/** 可嵌入落地页的翻译面板（首页 section / 通译轨 embed 共用）。 */
+export function TranslateDemoPanel({
+  where = "home",
+  className = "",
+}: {
+  where?: string;
+  className?: string;
+}) {
   const { lang } = useLang();
   const c = COPY[lang];
   const [text, setText] = useState("");
@@ -43,7 +50,6 @@ export default function TranslateDemo() {
   const [res, setRes] = useState<Tr[]>([]);
   const [err, setErr] = useState(false);
 
-  // 单次调用：成功返回译文数组，任何失败（含 nginx 502 HTML 体导致的 json 解析异常）返回 null。
   async function callOnce(v: string): Promise<Tr[] | null> {
     try {
       const r = await fetch("/api/translate", {
@@ -65,8 +71,7 @@ export default function TranslateDemo() {
     setBusy(true);
     setErr(false);
     setRes([]);
-    track("translate_demo", { len: v.length });
-    // 自动重试一次：消除 pm2 重启后冷启动 / 上游超时导致的首玩 502 毛刺。
+    track("translate_demo", { len: v.length, where });
     let out = await callOnce(v);
     if (!out) {
       await new Promise((r) => setTimeout(r, 700));
@@ -78,101 +83,103 @@ export default function TranslateDemo() {
   }
 
   return (
+    <div className={`rounded-3xl border border-white/10 bg-white/[0.03] p-5 ${className}`}>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void run(text);
+        }}
+        className="flex flex-col gap-3 sm:flex-row"
+      >
+        <div className="relative flex-1">
+          <Languages className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neon-cyan" />
+          <input
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder={c.placeholder}
+            maxLength={300}
+            className="w-full rounded-full border border-white/10 bg-ink-950/60 py-3 pl-9 pr-4 text-sm text-white placeholder:text-slate-500 outline-none focus:border-neon-cyan/50"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={busy || !text.trim()}
+          className="inline-flex items-center justify-center gap-2 rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-6 py-3 text-sm font-semibold text-ink-950 transition hover:opacity-90 disabled:opacity-50"
+        >
+          {busy ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              {c.btnLoading}
+            </>
+          ) : (
+            <>
+              {c.btn}
+              <ArrowRight className="h-4 w-4" />
+            </>
+          )}
+        </button>
+      </form>
+
+      {res.length === 0 && !busy && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {c.examples.map((ex) => (
+            <button
+              key={ex}
+              type="button"
+              onClick={() => {
+                setText(ex);
+                void run(ex);
+              }}
+              className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-slate-300 transition hover:border-neon-cyan/40 hover:text-white"
+            >
+              <Sparkles className="h-3 w-3 text-neon-cyan" />
+              {ex}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {busy && <p className="mt-4 text-center text-xs text-slate-400">{c.waiting}</p>}
+      {err && !busy && <p className="mt-4 text-center text-xs text-amber-300">{c.error}</p>}
+
+      {res.length > 0 && (
+        <div className="mt-5 grid gap-2.5 sm:grid-cols-2">
+          {res.map((t) => (
+            <div
+              key={t.code}
+              dir={t.code === "ar" ? "rtl" : "ltr"}
+              className="rounded-2xl border border-white/10 bg-ink-950/50 p-3.5"
+            >
+              <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-neon-cyan">
+                <span className="text-sm">{t.flag}</span>
+                {t.native}
+              </div>
+              <p className="text-sm leading-relaxed text-slate-100">{t.text}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="mt-4 text-center text-[11px] text-slate-500">{c.hint}</p>
+    </div>
+  );
+}
+
+export default function TranslateDemo() {
+  const { lang } = useLang();
+  const c = COPY[lang];
+
+  return (
     <section id="translate" className="relative py-24">
       <div className="mx-auto max-w-5xl px-5">
         <Reveal>
-          <p className="text-center text-xs font-medium uppercase tracking-[0.28em] text-neon-cyan">
-            {c.kicker}
-          </p>
-          <h2 className="mx-auto mt-3 max-w-3xl text-center text-3xl font-bold text-white md:text-4xl">
-            {c.head}
-          </h2>
+          <p className="text-center text-xs font-medium uppercase tracking-[0.28em] text-neon-cyan">{c.kicker}</p>
+          <h2 className="mx-auto mt-3 max-w-3xl text-center text-3xl font-bold text-white md:text-4xl">{c.head}</h2>
           <p className="mx-auto mt-4 max-w-2xl text-center text-base text-slate-400">{c.sub}</p>
         </Reveal>
-
         <Reveal delay={0.05}>
-          <div className="mx-auto mt-10 max-w-2xl rounded-3xl border border-white/10 bg-white/[0.03] p-5">
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void run(text);
-              }}
-              className="flex flex-col gap-3 sm:flex-row"
-            >
-              <div className="relative flex-1">
-                <Languages className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neon-cyan" />
-                <input
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  placeholder={c.placeholder}
-                  maxLength={300}
-                  className="w-full rounded-full border border-white/10 bg-ink-950/60 py-3 pl-9 pr-4 text-sm text-white placeholder:text-slate-500 outline-none focus:border-neon-cyan/50"
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={busy || !text.trim()}
-                className="inline-flex items-center justify-center gap-2 rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-6 py-3 text-sm font-semibold text-ink-950 transition hover:opacity-90 disabled:opacity-50"
-              >
-                {busy ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    {c.btnLoading}
-                  </>
-                ) : (
-                  <>
-                    {c.btn}
-                    <ArrowRight className="h-4 w-4" />
-                  </>
-                )}
-              </button>
-            </form>
-
-            {/* 示例 chips */}
-            {res.length === 0 && !busy && (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {c.examples.map((ex) => (
-                  <button
-                    key={ex}
-                    onClick={() => {
-                      setText(ex);
-                      void run(ex);
-                    }}
-                    className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-slate-300 transition hover:border-neon-cyan/40 hover:text-white"
-                  >
-                    <Sparkles className="h-3 w-3 text-neon-cyan" />
-                    {ex}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {busy && (
-              <p className="mt-4 text-center text-xs text-slate-400">{c.waiting}</p>
-            )}
-            {err && !busy && (
-              <p className="mt-4 text-center text-xs text-amber-300">{c.error}</p>
-            )}
-
-            {res.length > 0 && (
-              <div className="mt-5 grid gap-2.5 sm:grid-cols-2">
-                {res.map((t) => (
-                  <div
-                    key={t.code}
-                    dir={t.code === "ar" ? "rtl" : "ltr"}
-                    className="rounded-2xl border border-white/10 bg-ink-950/50 p-3.5"
-                  >
-                    <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-neon-cyan">
-                      <span className="text-sm">{t.flag}</span>
-                      {t.native}
-                    </div>
-                    <p className="text-sm leading-relaxed text-slate-100">{t.text}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <p className="mt-4 text-center text-[11px] text-slate-500">{c.hint}</p>
+          <div className="mx-auto mt-10 max-w-2xl">
+            <TranslateDemoPanel where="home" />
           </div>
         </Reveal>
       </div>

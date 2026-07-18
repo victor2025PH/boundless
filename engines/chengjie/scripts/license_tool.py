@@ -69,6 +69,11 @@ def _cmd_issue(args: argparse.Namespace) -> int:
     else:
         print(token)
     print("payload:", json.dumps(payload, ensure_ascii=False))
+    try:  # P1 签发即台账：追加归一化记录到本地 outbox（fail-silent，不改变本工具输出）
+        from ledger_outbox import normalize_issue, record_issue
+        record_issue(normalize_issue(payload, token))
+    except Exception:
+        pass
     return 0
 
 

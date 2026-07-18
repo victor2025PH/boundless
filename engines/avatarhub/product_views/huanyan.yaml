@@ -1,0 +1,43 @@
+# 幻颜 FaceX — 离线/影视级换脸 + 定妆实验室能力
+# 注意：hub 侧栏无独立 offline_faceswap tab；离线换脸入口嵌在角色/开播相关面板。
+product_id: huanyan
+product_yaml: products/huanyan/product.yaml
+brand:
+  zh: 幻颜 FaceX
+  en: FaceX
+default_tab: stream
+allowed_tabs:
+  - profiles
+  - dashboard
+  - stream
+  - history
+  - selfcheck
+  - logs
+  - settings
+  # 逻辑能力组（非 hub.js 原生 id）——接线方可用 feature_flags 显隐面板，勿当侧栏 id
+  - lab_offline_faceswap
+  - lab_hair_preset
+  - lab_tryon
+hide_tabs:
+  - clone
+  - voice
+  - sing
+  - batch
+  - interp
+capability_claims:
+  - offline_faceswap
+  - hair_preset
+  - tryon
+feature_flags:
+  voice_clone: false
+  digital_human: false
+  live_faceswap: true        # stream 内实时换脸模式可保留作交付入口
+  offline_faceswap: true
+  hair_preset: true
+  tryon: true
+  interp: false
+  singing: false
+  batch_tts: false
+routes_note: >
+  v1 仅裁剪侧栏：隐藏声音/同传相关 Tab。离线换脸/发型/试衣无独立 tab id，
+  需在 hub 读 feature_flags（offline_faceswap/hair_preset/tryon）显隐对应面板（见 README）。

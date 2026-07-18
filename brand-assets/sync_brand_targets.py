@@ -30,15 +30,28 @@ from build_brand_assets import (  # noqa: E402
 )
 
 WS = r"D:\workspace"
+# 单仓 boundless 为唯一部署源；旧双仓路径保留为可选兼容（目录存在才同步）。
 SITES = [
+    os.path.join(WS, "boundless", "website"),
+]
+for _legacy in (
     os.path.join(WS, "ai-p0-integration", "website"),
     os.path.join(WS, "telegram-mtproto-ai", "website"),
-]
+):
+    if os.path.isdir(_legacy) and _legacy not in SITES:
+        SITES.append(_legacy)
+
 BRAND_STATIC = [
-    os.path.join(WS, "telegram-mtproto-ai", "src", "web", "static", "brand"),
-    os.path.join(WS, "ai-p0-integration", "src", "web", "static", "brand"),
-    os.path.join(WS, "telegram-mtproto-ai", "desktop", "renderer", "brand"),
-    os.path.join(WS, "ai-p0-integration", "desktop", "renderer", "brand"),
+    p
+    for p in (
+        os.path.join(WS, "boundless", "engines", "chengjie", "src", "web", "static", "brand"),
+        os.path.join(WS, "boundless", "engines", "chengjie", "desktop", "renderer", "brand"),
+        os.path.join(WS, "telegram-mtproto-ai", "src", "web", "static", "brand"),
+        os.path.join(WS, "ai-p0-integration", "src", "web", "static", "brand"),
+        os.path.join(WS, "telegram-mtproto-ai", "desktop", "renderer", "brand"),
+        os.path.join(WS, "ai-p0-integration", "desktop", "renderer", "brand"),
+    )
+    if os.path.isdir(os.path.dirname(p)) or os.path.isdir(p)
 ]
 
 LOG = []
@@ -123,17 +136,20 @@ def main():
         LOG.append(overview)
         print("[ok] " + os.path.relpath(overview, WS))
 
-    # proposal 独立副本（仅 ai-p0）
-    prop = os.path.join(SITES[0], "public", "proposal", "assets", "boundless-mark-256.png")
-    save(mark_256, prop)
+    # proposal 独立副本（目录存在才写）
+    for site in SITES:
+        prop_dir = os.path.join(site, "public", "proposal", "assets")
+        if os.path.isdir(prop_dir) or os.path.isdir(os.path.join(site, "public", "proposal")):
+            save(mark_256, os.path.join(prop_dir, "boundless-mark-256.png"))
 
     # 坐席工作台 / 桌面端
     chatx_256 = boxed(icons["chatx"], 256, 0.08)
     for d in BRAND_STATIC:
+        os.makedirs(d, exist_ok=True)
         save(mark_256, os.path.join(d, "boundless-mark-256.png"))
         save(chatx_256, os.path.join(d, "chatx.png"))
 
-    print("DONE. %d files" % len(LOG))
+    print("DONE. %d files → sites=%d static=%d" % (len(LOG), len(SITES), len(BRAND_STATIC)))
 
 if __name__ == "__main__":
     main()

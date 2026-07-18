@@ -1,0 +1,37 @@
+# 通传 VoxX — 会议/直播实时语音同传（产品 yaml id=tongchuan；矩阵行名多为 LingoX）
+product_id: tongchuan
+product_yaml: products/tongchuan/product.yaml
+brand:
+  zh: 通传 VoxX
+  en: VoxX
+default_tab: interp
+allowed_tabs:
+  - profiles
+  - clone
+  - voice
+  - dashboard
+  - interp
+  - history
+  - selfcheck
+  - logs
+  - settings
+hide_tabs:
+  - sing
+  - batch
+  - stream
+capability_claims:
+  - interp
+  - obs_subtitle
+  - voice_clone
+feature_flags:
+  voice_clone: true          # 克隆音同传依赖音色
+  digital_human: false
+  live_faceswap: false
+  offline_faceswap: false
+  interp: true
+  obs_subtitle: true
+  singing: false
+  batch_tts: false
+routes_note: >
+  同传主入口 = hub.js tab id「interp」（iframe/跳转 live_interpreter :7900）。
+  隐藏开播 stream 与唱歌/批量；保留 clone/voice 以配合同传音色。

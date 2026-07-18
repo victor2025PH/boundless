@@ -138,6 +138,8 @@ export async function upsertLead(rec: LeadRecord): Promise<{ entry: LeadEntry; i
     const db = await readDb();
     const res = upsertInto(db, rec);
     await writeDb(db);
+    // 影子账本双写（best-effort，不 await、失败静默，绝不影响留资主链路）
+    void import("./ledger-sync").then((m) => m.syncLeadEntry(res.entry)).catch(() => {});
     return res;
   });
 }
@@ -154,6 +156,8 @@ export async function setLeadStatus(id: string, status: LeadStatus): Promise<Lea
     if (!e) return null;
     e.status = status;
     await writeDb(db);
+    // 影子账本双写（best-effort，失败静默）
+    void import("./ledger-sync").then((m) => m.syncLeadEntry(e)).catch(() => {});
     return e;
   });
 }
@@ -209,7 +213,7 @@ export async function notifyAdminsOfLead(entry: LeadEntry) {
   if (!token) return;
   const chats = await getAdminChats();
   if (!chats.length) return;
-  const text = leadCard(entry);
+  const text = `🔒 管理员 · 仅你可见\n` + leadCard(entry);
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 6000);
   try {

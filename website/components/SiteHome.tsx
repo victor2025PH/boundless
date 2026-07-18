@@ -5,6 +5,7 @@ import SectionNav from "@/components/SectionNav";
 import Hero from "@/components/Hero";
 import BrandShowcase from "@/components/BrandShowcase";
 import AISprite from "@/components/AISprite";
+import DragonQuest from "@/components/DragonQuest";
 import TrustBar from "@/components/TrustBar";
 import ProductMatrix from "@/components/ProductMatrix";
 import Personas from "@/components/Personas";
@@ -34,9 +35,11 @@ export default function SiteHome() {
     <main className="relative min-h-screen">
       <IntroCover />
       <AISprite />
+      {/* 龙珠彩蛋：每日到访集星珠，七星聚召唤界龙（与 AISprite 通过 bl:apply-skin 事件解耦） */}
+      <DragonQuest />
       <Navbar />
       <SectionNav />
-      {/* 品牌块(公司+六图标) 在上，营销主文案区(大标题+按钮) 在下 */}
+      {/* 品牌块(公司+三系七图标) 在上，营销主文案区(大标题+按钮) 在下 */}
       <BrandShowcase />
       <Hero />
       <TrustBar />

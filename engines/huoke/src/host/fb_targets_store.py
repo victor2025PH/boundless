@@ -361,6 +361,20 @@ def release_claim(target_id: int, device_id: str) -> bool:
     return True
 
 
+def _emit_lead_qualified_telemetry(target_id: int, device_id: str) -> None:
+    """P4 全域埋点：目标通过 L1+L2 画像分类、qualified 入库
+    → zhituo.lead.qualified（fail-silent，只带内部 ID 引用，不带姓名/画像）。"""
+    try:
+        from src.telemetry import track
+        props = {"platform": "facebook",
+                 "contact_id": f"fbtgt_{int(target_id)}"}
+        if device_id:
+            props["account_id"] = device_id
+        track("zhituo.lead.qualified", props)
+    except Exception:
+        pass
+
+
 def mark_status(
     target_id: int,
     status: str,
@@ -401,6 +415,9 @@ def mark_status(
         )
         conn.commit()
     logger.debug("[mark_status] id=%d → %s", target_id, status)
+    if status == "qualified":
+        # P4 全域埋点：L2 画像合格入库（获客漏斗"合格线索"节点）
+        _emit_lead_qualified_telemetry(target_id, device_id)
     return True
 
 

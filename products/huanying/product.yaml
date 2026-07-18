@@ -24,6 +24,8 @@ skus:
   - { id: livex-avatar-buy, name: { zh: 形象买断, en: Avatar buyout },    unit: one-time, price: "798", currency: USD }
   - { id: livex-dub-min,    name: { zh: 视频翻译配音, en: Video dubbing }, unit: per-min, price: "6", currency: USD }
   - { id: livex-dub-matrix, name: { zh: 短视频矩阵, en: Video matrix },    unit: month, price: "398", currency: USD, note: 30 条；100 条 998/月 }
+  # 2026-07-18 定价决议：承接官网 realtime-creator 打包（基准栈 Synthesia Studio Avatar $1000/年 + ElevenLabs Pro ≈$1188/年 + HeyGen LiveAvatar ≈$588/年 ≈ $2776/年 ×2=5552 → 尾数 8 惯例 5580）
+  - { id: livex-creator-deploy, name: { zh: 创作者全能部署, en: Creator all-in deploy }, unit: one-time, price: "5580", currency: USD, note: 创作者全能包：实时换脸+声音克隆+数字人 私有化部署 }
 
 delivery:
   gate: platform/licensing         # 多开路数按 tier（Standard 1 路 / Pro 3 路）

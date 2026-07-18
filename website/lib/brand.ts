@@ -2,14 +2,35 @@
 // Change names / taglines / products here — the rest of the app imports from this file.
 
 // 三系（category）：母品牌无界统领，每系破一「界」。产品归系见各产品 category 字段。
+// accent 与 brand-assets 头像光环色同源：智连蓝 / 幻境紫 / 通达橙。
 export const CATEGORIES = {
-  growth: { zh: "智连", en: "Growth", breakZh: "沟通与成交之界", breakEn: "the reach & sales barrier" },
-  studio: { zh: "幻境", en: "Studio", breakZh: "容貌 / 声音 / 身份之界", breakEn: "the face / voice / identity barrier" },
-  lingo: { zh: "通达", en: "Lingo", breakZh: "语言之界", breakEn: "the language barrier" },
+  growth: {
+    zh: "智连",
+    en: "Growth",
+    breakZh: "沟通与成交之界",
+    breakEn: "the reach & sales barrier",
+    accent: "cyan" as const,
+  },
+  studio: {
+    zh: "幻境",
+    en: "Studio",
+    breakZh: "容貌 / 声音 / 身份之界",
+    breakEn: "the face / voice / identity barrier",
+    accent: "violet" as const,
+  },
+  lingo: {
+    zh: "通达",
+    en: "Lingo",
+    breakZh: "语言之界",
+    breakEn: "the language barrier",
+    accent: "amber" as const,
+  },
 } as const;
 
 export type CategoryKey = keyof typeof CATEGORIES;
-export const CATEGORY_ORDER: CategoryKey[] = ["growth", "studio", "lingo"];
+// 陈列顺序 = 商业主线：通达(通译 SCRM·低风险现金流) → 智连(获客护城河) → 幻境(换脸/直播降为定制，殿后)。
+// 驱动导航下拉 / 产品矩阵 / 品牌页 / 展示墙的统一顺序（各处仅按此 map，不假设某系在首位）。
+export const CATEGORY_ORDER: CategoryKey[] = ["lingo", "growth", "studio"];
 
 export const BRAND = {
   company: {
@@ -31,6 +52,7 @@ export const BRAND = {
       en: "ReachX",
       alt: "GrowthReach",
       emoji: "🎯",
+      scene: { zh: "真机获客", en: "Lead gen" },
       break: { zh: "触达与获客之界", en: "the reach barrier" },
       desc: {
         zh: "真机多号自动加友、打招呼、群提取，7×24 全自动获客引流进私域",
@@ -45,6 +67,7 @@ export const BRAND = {
       en: "ChatX",
       alt: "ChatHub",
       emoji: "💬",
+      scene: { zh: "AI 成交", en: "AI closing" },
       break: { zh: "沟通与成交之界", en: "the sales barrier" },
       desc: {
         zh: "聚合 AI 聊天：全程自动开发客户、推进成交",
@@ -59,6 +82,7 @@ export const BRAND = {
       en: "FaceX",
       alt: "FaceSwap",
       emoji: "🎭",
+      scene: { zh: "AI 换脸", en: "Face swap" },
       break: { zh: "容貌之界", en: "the face barrier" },
       desc: {
         zh: "AI 换脸：图片 / 视频里随心变幻容貌",
@@ -73,6 +97,7 @@ export const BRAND = {
       en: "VoiceX",
       alt: "VoiceClone",
       emoji: "🎙",
+      scene: { zh: "声音克隆", en: "Voice clone" },
       break: { zh: "声音之界", en: "the voice barrier" },
       desc: {
         zh: "AI 声音克隆：惟妙惟肖的配音与语音合成",
@@ -86,6 +111,7 @@ export const BRAND = {
       en: "LiveX",
       alt: "LiveMorph",
       emoji: "🎬",
+      scene: { zh: "直播分身", en: "Live twin" },
       break: { zh: "身份之界", en: "the identity barrier" },
       desc: {
         zh: "实时直播换脸换声：低延迟的百变分身",
@@ -99,6 +125,7 @@ export const BRAND = {
       en: "LingoX",
       alt: "LiveLingo",
       emoji: "🌐",
+      scene: { zh: "聊天翻译", en: "Chat translate" },
       break: { zh: "语言之界（聊天）", en: "the language barrier" },
       desc: {
         zh: "实时聊天翻译：多平台文字 + 语音双向互译",
@@ -112,6 +139,7 @@ export const BRAND = {
       en: "VoxX",
       alt: "LiveInterpret",
       emoji: "🎧",
+      scene: { zh: "同声传译", en: "Interpreting" },
       break: { zh: "语言之界（口译）", en: "the interpreting barrier" },
       desc: {
         zh: "会议 / 直播实时语音同传：克隆音同传 + 双语字幕 + 抢话打断",
@@ -133,8 +161,29 @@ export const BRAND = {
 export type BrandLang = "zh" | "en";
 export type ProductKey = keyof typeof BRAND.products;
 
-/** 七产品的固定展示顺序，按三系分组：智连(智拓·智聊) → 幻境(幻颜·幻声·幻影) → 通达(通译·通传)。 */
-export const PRODUCT_ORDER: ProductKey[] = ["reachx", "chatx", "facex", "voicex", "livex", "lingox", "voxx"];
+/** 七产品的固定展示顺序，与 CATEGORY_ORDER 对齐（商业主线）：
+ *  通达(通译·通传) → 智连(智拓·智聊) → 幻境(幻声·幻颜·幻影)。
+ *  通译领跑现金流、幻声(低风险第二现金流)在幻境系居首、换脸/直播殿后。
+ *  驱动矩阵卡编号 / bot 与 SEO 的产品概述顺序，故与 CATEGORY_ORDER 保持一致。 */
+export const PRODUCT_ORDER: ProductKey[] = ["lingox", "voxx", "reachx", "chatx", "voicex", "facex", "livex"];
+
+/** 产品数量唯一真相——UI / bot / SEO 禁止手写「六大/七条」数字，统一拼此常量。 */
+export const PRODUCT_COUNT = PRODUCT_ORDER.length;
+
+/**
+ * 品牌家族口径（七款产品 · 破六道边界）。
+ * 通译与通传同破「语言之界」，所以产品数 7、边界数 6——这是刻意的记忆点，不是笔误。
+ */
+export const FAMILY_PITCH = {
+  zh: {
+    headline: "一个无界底座 · 七款产品 · 破六道边界",
+    sub: "同一套私有化底座，打破触达、成交、容貌、声音、身份、语言六道边界——七款产品按需单选，或组合成从获客到成交的完整闭环。",
+  },
+  en: {
+    headline: "One core · Seven products · Six barriers broken",
+    sub: "One private-deployment core breaks the barriers of reach, closing, face, voice, identity and language — pick any line, or combine them into a full loop from lead-gen to close.",
+  },
+} as const;
 
 /** 某系下的产品（按 PRODUCT_ORDER 顺序）。ProductMatrix / 导航按系陈列时消费。 */
 export function productsInCategory(cat: CategoryKey): ProductKey[] {

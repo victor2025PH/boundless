@@ -1,0 +1,164 @@
+# boundless cluster 鈥?generated from deploy/machines.json
+# DO NOT hand-edit; re-run tools/render_ssh_config.ps1
+
+Host huansheng
+    HostName 192.168.0.176
+    User user
+    IdentityFile ~/.ssh/id_ed25519
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host hub176
+    HostName 192.168.0.176
+    User user
+    IdentityFile ~/.ssh/id_ed25519
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host pc5090
+    HostName 192.168.0.176
+    User user
+    IdentityFile ~/.ssh/id_ed25519
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host tongyi
+    HostName 192.168.0.117
+    User Administrator
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host hub117
+    HostName 192.168.0.117
+    User Administrator
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host pc117
+    HostName 192.168.0.117
+    User Administrator
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host zhituo
+    HostName 192.168.0.198
+    User Administrator
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host lipsync198
+    HostName 192.168.0.198
+    User Administrator
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host gpu198
+    HostName 192.168.0.198
+    User Administrator
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host huanyan-node
+    HostName 192.168.0.104
+    User Administrator
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host face104
+    HostName 192.168.0.104
+    User Administrator
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host gpu104
+    HostName 192.168.0.104
+    User Administrator
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host huanyan
+    HostName 192.168.0.104
+    User Administrator
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host tongchuan-node
+    HostName 192.168.0.140
+    User Administrator
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host stt140
+    HostName 192.168.0.140
+    User Administrator
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host gpu140
+    HostName 192.168.0.140
+    User Administrator
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host tongchuan
+    HostName 192.168.0.140
+    User Administrator
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host vps-bd2026 bd2026
+    HostName 165.154.233.121
+    User ubuntu
+    IdentityFile ~/.ssh/hualing_deploy
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+

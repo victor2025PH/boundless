@@ -21,6 +21,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -184,6 +185,7 @@ def main():
     ap.add_argument("--rvc", default="", help="RVC .pth 路径;给了则把原声变声")
     ap.add_argument("--rvc-pitch", type=int, default=0)
     args = ap.parse_args()
+    _t0 = time.time()   # P4 埋点：任务总耗时
 
     ff = find_ffmpeg()
     try:
@@ -307,6 +309,13 @@ def main():
                         "-shortest", out], check=True)
     os.remove(noaudio)
     print(f"[换脸] 完成：{n} 帧,换 {swapped} → {out}")
+    try:   # P4 全域运营事件：离线视频换脸任务完成（任务级一条，fail-silent 不碰主流程）
+        import telemetry as _telemetry
+        _telemetry.track("huanyan", "huanyan.faceswap.completed", {
+            "job_id": Path(out).stem, "media_type": "video",
+            "frames": int(n), "elapsed_ms": int((time.time() - _t0) * 1000)})
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

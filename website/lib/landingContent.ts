@@ -161,8 +161,8 @@ export const LANDINGS: Record<LandingKey, LandingDict> = {
     productLine: { zh: "幻颜 FaceX × 幻影 LiveX · AI 换脸", en: "FaceX × LiveX · AI face swap" },
     seo: {
       title: {
-        zh: "AI 实时换脸直播 · 高清活体数字人 | 幻颜 FaceX — 无界科技",
-        en: "Real-time AI Face Swap for Live · HD Digital Human | FaceX — BOUNDLESS",
+        zh: "AI 换脸出片 + 实时直播换脸 · 活体数字人 | 幻颜 FaceX · 幻影 LiveX — 无界科技",
+        en: "AI Face Swap + Real-time Live Swap · Digital Human | FaceX · LiveX — BOUNDLESS",
       },
       description: {
         zh: "直播实时换脸：脸区原生通道清晰度 4.5×，25fps 高清，双人同框各换各脸；高清活体数字人会眨眼摆头；图片视频成片级精修。本地部署，平台无感。",
@@ -276,29 +276,40 @@ export const LANDINGS: Record<LandingKey, LandingDict> = {
 
   interpreting: {
     slug: "/interpreting",
-    productLine: { zh: "通译 LingoX · 克隆音实时同传", en: "LingoX · cloned-voice interpreting" },
+    productLine: { zh: "通达系 · 通译 LingoX + 通传 VoxX", en: "Lingo · LingoX chat + VoxX interpret" },
     seo: {
       title: {
-        zh: "AI 实时同传 · 用你自己的声音说外语 | 通译 LingoX — 无界科技",
-        en: "Real-time AI Interpreting in Your Own Voice | LingoX — BOUNDLESS",
+        zh: "跨境聊天翻译 + AI 实时同传 | 通译 LingoX · 通传 VoxX — 无界科技",
+        en: "Chat Translation + Real-time Interpreting | LingoX · VoxX — BOUNDLESS",
       },
       description: {
-        zh: "克隆音双向同传：对方听到的还是你的音色。术语表锁定专有名词零翻车，支持抢话打断，OBS 直播双语字幕一条链接接入，SRT 一键导出。10 语种互译，本地部署。",
-        en: "Two-way interpreting in your own cloned voice. Glossary-locked terms, barge-in interruption, OBS bilingual subtitles via one URL with SRT export. Ten languages, fully private.",
+        zh: "通达系双产品：通译做多平台聊天文字/语音互译与客户资产沉淀；通传做克隆音双向同传、OBS 双语字幕与会议直播口译。术语锁定、本地部署、数据不出网。",
+        en: "Lingo family: LingoX for omni-channel chat translation and customer assets; VoxX for cloned-voice interpreting, OBS bilingual subtitles and meeting/live coverage. Glossary-locked, privately deployed.",
       },
-      keywords: ["AI同传", "实时翻译", "同声传译", "AI interpreting", "直播翻译", "双语字幕", "克隆音翻译", "会议同传"],
+      keywords: [
+        "AI同传",
+        "实时翻译",
+        "聊天翻译",
+        "同声传译",
+        "AI interpreting",
+        "直播翻译",
+        "双语字幕",
+        "通译",
+        "通传",
+        "会议同传",
+      ],
     },
     hero: {
-      title: { zh: "用你自己的声音，", en: "Speak languages you don't know —" },
-      accent: { zh: "说你不会的语言", en: "in your own voice" },
+      title: { zh: "打破语言之界，", en: "Break the language barrier —" },
+      accent: { zh: "聊天翻译 + 同声传译", en: "chat translate + live interpret" },
       subtitle: {
-        zh: "克隆音双向同传：你说中文，对方听到你的音色在说英语。术语表锁定专有名词（美团永远是 Meituan），支持抢话打断像真人对话；OBS 拖一条链接，直播间即出实时双语字幕。",
-        en: "Two-way interpreting in your cloned voice: you speak Chinese, they hear you speaking English. A glossary locks proper nouns, barge-in keeps it conversational, and one URL adds live bilingual subtitles to OBS.",
+        zh: "通译 LingoX 承接跨境聊天互译与统一收件箱；通传 VoxX 用你的克隆音做会议/直播双向同传与 OBS 双语字幕。两条产品，两种场景，一套通达底座。",
+        en: "LingoX covers cross-border chat translation and a unified inbox; VoxX does two-way cloned-voice interpreting for meetings and streams with OBS bilingual subtitles. Two products, two scenes, one Lingo core.",
       },
       points: [
-        { zh: "克隆音同传 · 对方听到的还是你", en: "Cloned-voice output · it's still you they hear" },
-        { zh: "术语表锁定 · 专有名词零翻车", en: "Glossary lock · zero term errors" },
-        { zh: "OBS 双语字幕 · SRT 一键导出", en: "OBS bilingual subtitles · SRT export" },
+        { zh: "通译 · 多平台聊天文字/语音互译", en: "LingoX · omni-channel chat translation" },
+        { zh: "通传 · 克隆音同传 + 双语字幕", en: "VoxX · cloned-voice interpret + subtitles" },
+        { zh: "术语锁定 · 私有部署不出网", en: "Glossary lock · private, off-net" },
       ],
     },
     demo: {

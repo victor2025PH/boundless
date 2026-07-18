@@ -6460,6 +6460,95 @@ def _lock_portrait(manager, device_id: str) -> None:
         logger.warning("[portrait-lock] %s 设置失败: %s", device_id[:12], e)
 
 
+# ── P4 全域埋点（智拓 zhituo → platform/observability spool，fail-silent） ──
+# 任务结果里可折算为"对外触达发送量"的计数键。各任务类型的 stats 形状不同、
+# 键不重叠：campaign 出 friend_requests_sent/messages_replied，收件箱任务出
+# replied/replies_sent，打招呼出 greeted 等。逐键求和即该批次总触达量。
+_TELE_OUTREACH_KEYS = (
+    "friend_requests_sent",   # facebook campaign: 好友请求
+    "greeted",                # 打招呼批次 / add_friend_and_greet
+    "greetings_sent",
+    "replied",                # facebook_check_inbox 自动回复
+    "replies_sent",           # facebook_check_message_requests
+    "messages_replied",       # facebook campaign 的 check_inbox 步骤
+    "dms_sent",               # tiktok 私信
+)
+
+
+def _tele_platform_of(task_type: str) -> str:
+    """task_type 前缀 → 平台名（facebook_add_friend → facebook）。"""
+    if not task_type:
+        return "unknown"
+    if task_type == "batch_send":       # 历史遗留：telegram 批量发送无前缀
+        return "telegram"
+    return task_type.split("_", 1)[0] or "unknown"
+
+
+def _telemetry_task_started(task: dict) -> None:
+    """获客任务开始真机执行 → zhituo.task.started（重试不重复计数）。
+
+    fail-silent：埋点异常绝不影响任务执行。
+    """
+    try:
+        if int(task.get("retry_count") or 0) > 0:
+            return   # 重试是同一业务事实，只在首次尝试发一次
+        from src.telemetry import track
+        task_type = task.get("type", "") or ""
+        track("zhituo.task.started", {
+            "task_id": str(task.get("task_id") or ""),
+            "platform": _tele_platform_of(task_type),
+            "task_type": task_type,
+            "device_count": 1,
+        })
+    except Exception:
+        pass
+
+
+def _telemetry_task_finished(task_id: str, task_type: str,
+                             started_ts: float) -> None:
+    """任务到达终态 → zhituo.task.completed + 聚合触达量 sent_metered。
+
+    只在 status 落定 completed/failed 时发（重试排队/取消不发）；触达量
+    从任务结果的批次统计里折算增量，绝不逐条消息发事件。fail-silent。
+    """
+    try:
+        from src.telemetry import track
+        task = get_task(task_id) or {}
+        status = task.get("status", "")
+        if status not in ("completed", "failed"):
+            return
+        result = task.get("result")
+        if not isinstance(result, dict):
+            result = {}
+        platform = _tele_platform_of(task_type)
+        track("zhituo.task.completed", {
+            "task_id": str(task_id),
+            "platform": platform,
+            "task_type": task_type,
+            "success": status == "completed",
+            "duration_s": max(int(time.time() - started_ts), 0),
+        })
+        sent = 0
+        for key in _TELE_OUTREACH_KEYS:
+            val = result.get(key)
+            if isinstance(val, bool):
+                sent += 1 if val else 0
+            elif isinstance(val, (int, float)):
+                sent += max(int(val), 0)
+        if not sent and isinstance(result.get("batch_results"), list):
+            sent = sum(1 for r in result["batch_results"]
+                       if isinstance(r, dict) and r.get("success"))
+        if sent > 0:
+            track("zhituo.outreach.sent_metered", {
+                "platform": platform,
+                "task_id": str(task_id),
+                "task_type": task_type,
+                "sent": sent,
+            })
+    except Exception:
+        pass
+
+
 def run_task(task_id: str, config_path: Optional[str] = None) -> None:
     config_path = config_path or DEFAULT_DEVICES_YAML
     task = get_task(task_id)
@@ -6470,6 +6559,7 @@ def run_task(task_id: str, config_path: Optional[str] = None) -> None:
     params = task.get("params") or {}
     task_type = task.get("type", "")
     resolved = None
+    _tele_started_at = None   # P4 埋点：真正开始执行后才记，gate 拦截不算
 
     try:
         manager = get_device_manager(config_path)
@@ -6527,6 +6617,8 @@ def run_task(task_id: str, config_path: Optional[str] = None) -> None:
 
         set_task_running(task_id)
         set_task_context(task_id=task_id, device_id=task.get("device_id", ""))
+        _tele_started_at = time.time()
+        _telemetry_task_started(task)
 
         # 2026-05-12: 强制竖屏 — 防止运行期间横屏导致 UI 元素找不到
         _lock_portrait(manager, resolved)
@@ -6599,6 +6691,8 @@ def run_task(task_id: str, config_path: Optional[str] = None) -> None:
                     get_account_scheduler().end_session(resolved, acct)
             except Exception:
                 pass
+        if _tele_started_at is not None:
+            _telemetry_task_finished(task_id, task_type, _tele_started_at)
         clear_task_context()
 
 

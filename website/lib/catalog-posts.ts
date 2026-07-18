@@ -46,7 +46,7 @@ export function buildCatalogPosts(lang: "zh" | "en" = "zh"): CatalogPost[] {
       .map((p) => `· ${esc(p.plan)} — ${esc(p.price)}${p.detail ? `（${esc(p.detail)}）` : ""}`)
       .join("\n");
     const capLabel = lang === "zh" ? "✨ 核心能力" : "✨ Capabilities";
-    const priceLabel = lang === "zh" ? "💰 价格（USDT）" : "💰 Pricing (USDT)";
+    const priceLabel = lang === "zh" ? "💰 价格（USD）" : "💰 Pricing (USD)";
     const cta =
       lang === "zh"
         ? "👇 立即咨询，或点下方打开小程序查看完整方案"

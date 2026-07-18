@@ -1,0 +1,39 @@
+# 幻影 LiveX — 数字人 / 实时换脸开播 / 虚拟背景
+product_id: huanying
+product_yaml: products/huanying/product.yaml
+brand:
+  zh: 幻影 LiveX
+  en: LiveX
+default_tab: stream
+allowed_tabs:
+  - profiles
+  - clone
+  - voice
+  - dashboard
+  - stream
+  - history
+  - selfcheck
+  - logs
+  - settings
+hide_tabs:
+  - sing
+  - batch
+  - interp
+capability_claims:
+  - digital_human
+  - live_faceswap
+  - virtual_bg
+  - face_map
+  - phone_preview
+feature_flags:
+  voice_clone: true          # 开播链路常需克隆音，保留 clone/voice
+  digital_human: true
+  live_faceswap: true
+  offline_faceswap: false    # 离线精修归幻颜；本视图不强调
+  interp: false
+  obs_subtitle: false
+  singing: false
+  batch_tts: false
+routes_note: >
+  开播中枢即 stream Tab（真人换脸 / 数字人口型）。无独立「换脸」侧栏 id。
+  保留 clone/voice 供直播配音；隐藏 sing/batch/interp。

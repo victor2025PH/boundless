@@ -9,9 +9,13 @@
     "lint": "next lint",
     "verify:robot": "node scripts/robot-shot.mjs .robot-shots && node scripts/robot-behavior.mjs .robot-shots",
     "perf:robot": "node scripts/robot-perf.mjs",
-    "assets:robot": "node scripts/robot-capture.mjs"
+    "assets:robot": "node scripts/robot-capture.mjs",
+    "assets:teaser": "node scripts/robot-teaser.mjs",
+    "verify:dragon": "node scripts/robot-dragon.mjs",
+    "smoke:prod": "node scripts/robot-prodsmoke.mjs"
   },
   "dependencies": {
+    "better-sqlite3": "^12.11.1",
     "framer-motion": "^11.3.0",
     "lucide-react": "^0.427.0",
     "next": "14.2.35",
@@ -21,10 +25,12 @@
     "sharp": "^0.35.1"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.14.0",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "autoprefixer": "^10.4.19",
+    "playwright": "^1.61.1",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.7",
     "typescript": "^5.5.0"

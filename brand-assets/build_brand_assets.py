@@ -120,6 +120,15 @@ def fit(img, w, h=None):
     s = min(w / img.width, h / img.height)
     return img.resize((max(1, int(img.width * s)), max(1, int(img.height * s))), Image.LANCZOS)
 
+def boxed_square(img, size, pad_ratio=0.08):
+    """等比放入正方形透明画布（统一光学边距）。官网 / 头像 / 导航共用此规格，
+    避免「裁切非方图 → object-contain 下宽扁图标视觉偏小」。"""
+    cv = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    box = int(size * (1 - 2 * pad_ratio))
+    m = fit(img, box, box)
+    cv.paste(m, ((size - m.width) // 2, (size - m.height) // 2), m)
+    return cv
+
 def scale_alpha(img, k):
     img = img.copy()
     a = img.getchannel("A").point(lambda v: int(v * k))
@@ -274,8 +283,11 @@ def build_product_icons():
     for k in PRODUCTS:
         icon = MASTERS[k]
         for s in [512, 256, 128]:
-            save_png(fit(icon, s, s), os.path.join(DIR_PICONS, k, "%s-%d.png" % (k, s)),
-                     "%s %s 图标 透明底 %dpx" % (PRODUCTS[k]["zh"], PRODUCTS[k]["en"], s))
+            save_png(
+                boxed_square(icon, s, 0.08),
+                os.path.join(DIR_PICONS, k, "%s-%d.png" % (k, s)),
+                "%s %s 图标 透明底正方形 %dpx（pad 8%%）" % (PRODUCTS[k]["zh"], PRODUCTS[k]["en"], s),
+            )
 
 # ---------------------------------------------------------------- 03 组合标
 
