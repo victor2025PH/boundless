@@ -240,6 +240,28 @@ def post_ack(base: str, key: str, purge_id: int, detail: dict):
                       timeout=30)
 
 
+def _emit_persona_purged(persona_id, source_key: str, detail: dict) -> None:
+    """经现有 telemetry 发 platform.persona.purged；fail-silent，绝不挡 ack。"""
+    try:
+        import telemetry as _telemetry  # noqa: WPS433
+        summ = detail.get("summary") if isinstance(detail.get("summary"), dict) else {}
+        deleted_n = int(summ.get("files") or 0) + int(summ.get("dirs") or 0) \
+            + int(summ.get("db_rows") or 0) + int(summ.get("json_keys") or 0)
+        if not deleted_n and isinstance(detail.get("deleted"), list):
+            deleted_n = len(detail["deleted"])
+        missing_n = int(summ.get("missing") or 0)
+        if not missing_n and isinstance(detail.get("missing"), list):
+            missing_n = len(detail["missing"])
+        _telemetry.track("platform", "platform.persona.purged", {
+            "persona_id": str(persona_id or ""),
+            "source_key": str(source_key or ""),
+            "deleted_count": deleted_n,
+            "missing_count": missing_n,
+        })
+    except Exception:
+        pass
+
+
 # ── 只读数据源（资产清单解析阶段绝不写引擎）─────────────────────────
 
 
@@ -819,6 +841,7 @@ def run_round(args) -> dict:
              f"{fmt_bytes(res['bytes'])}，库行 {res['db_rows']}，记录键 {res['json_keys']}，"
              f"missing {len(res['missing'])}，skipped {len(res['skipped'])}"
              + (f"；已软删入 {trash_rel}" if trash_rel else ""))
+        _emit_persona_purged(d.get("persona_id"), skey, detail)
         code, resp = post_ack(args.base, args.key, pid, detail)
         if code == 200 and isinstance(resp, dict) and resp.get("ok"):
             _record_ack(state, args.state_path, pid_s, resp, detail)

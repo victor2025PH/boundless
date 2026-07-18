@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""persona_purge_agent.py — chengjie 人设全域清除执行器（P5，仅标准库）。
+r"""persona_purge_agent.py — chengjie 人设全域清除执行器（P5，仅标准库）。
 
 消费集团人设总线的机器通道（platform/identity/PERSONA_BUS.md §5，与 avatarhub 版同协议；
 ack 端点按 website 上线版走同 URL POST——契约 §5.1 的 /ack 子路径在实现中被简化）：
@@ -32,8 +32,8 @@ ack 端点按 website 上线版走同 URL POST——契约 §5.1 的 /ack 子路
     已删的不回滚，下轮重试剩余项，PERSONA_BUS.md §5.3-4）；找不到的项记 missing，
     幂等视同已删，照常 ack；
   - ack detail 只放引擎根相对路径 / `库#表?键` 形式的资产引用，绝不放文件内容；
-  - source_key 白名单校验（防路径穿越），全部文件操作钉死在引擎根内；回收站与 state
-    文件已加 .gitignore（含显示名/路径的经营数据，不入库）。
+  - source_key 白名单校验（防路径穿越），全部文件操作钉死在引擎根/各数据根内；回收站
+    与 state 文件已加 .gitignore（含显示名/路径的经营数据，不入库）。
 
 用法（cron/计划任务每 5–15 分钟一次，与 uploader 同 cadence）::
 
@@ -41,6 +41,22 @@ ack 端点按 website 上线版走同 URL POST——契约 §5.1 的 /ack 子路
     python scripts/persona_purge_agent.py --commit --once       # 真删 + ack，单轮
     python scripts/persona_purge_agent.py --commit --loop 600   # 每 600s 轮询一轮
     python scripts/persona_purge_agent.py --selftest            # 本地 mock 自测（不连外网）
+
+多实例数据根（deploy/instances/migrate_117_runbook.md §4.4 的强约束）::
+
+    python scripts/persona_purge_agent.py --commit --data-roots "D:\data\zhiliao;D:\data\tongyi"
+    # 或 set CHENGJIE_DATA_ROOTS=D:\data\zhiliao;D:\data\tongyi（同格式，--data-roots 优先）
+
+  chengjie 双实例（智聊/通译）共享引擎代码，集团清除队列按引擎只有一份（system=chengjie），
+  但人设资产落在各实例自己的 AITR_DATA_DIR 下（start_zhiliao/start_tongyi.ps1 注入，其下
+  config/ 即该实例资产）。提供 --data-roots / env CHENGJIE_DATA_ROOTS（分号分隔，每项 =
+  一个实例的 AITR_DATA_DIR）后，执行器对**每条指令**遍历全部数据根：dry-run 分根打印将删
+  清单；--commit 逐根软删进各自根下 config/purged_trash/（不跨根搬运），**全部根成功**
+  （删除或确认缺失）才 ack，detail.roots 带分根摘要 [{root, files, rows, missing}…]；
+  任一根失败 → 不 ack、退出码 1，下轮幂等重试——只删一个实例就回执 = 另一实例漏删，违反
+  runbook §4.4 / PERSONA_BUS §5.3。state 文件仍一份（跟执行器跑一处）。
+  未提供 --data-roots/CHENGJIE_DATA_ROOTS 时回退单根逻辑（--input/缺省引擎根），
+  与旧版行为完全一致（向后兼容）。
 
 --base 缺省 env PERSONA_SYNC_BASE 或 https://bd2026.cc；--key 缺省 env EVENT_INGEST_KEY；
 --input 引擎根覆盖（默认本文件上级目录）；--state-file 缺省 config/purge_agent_state.json。
@@ -70,6 +86,7 @@ except Exception:
 SYSTEM = "chengjie"
 BASE_ENV = "PERSONA_SYNC_BASE"
 KEY_ENV = "EVENT_INGEST_KEY"
+DATA_ROOTS_ENV = "CHENGJIE_DATA_ROOTS"
 DEFAULT_BASE = "https://bd2026.cc"
 DEFAULT_ENGINE_ROOT = Path(__file__).resolve().parents[1]
 STATE_REL = Path("config") / "purge_agent_state.json"
@@ -137,6 +154,23 @@ def post_ack(base: str, key: str, purge_id, detail: dict,
     body = {"purge_id": purge_id, "system": SYSTEM, "ok": True,
             "completed_at": now_iso(), "detail": detail}
     return _http_json(url, key, method="POST", body=body, timeout=timeout)
+
+
+def _emit_persona_purged(persona_id, source_key: str, detail: dict) -> None:
+    """经现有 telemetry 发 *.persona.purged；fail-silent，绝不挡 ack。"""
+    try:
+        root = Path(__file__).resolve().parents[1]
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from src.utils.telemetry import track  # noqa: WPS433
+        track("persona.purged", {
+            "persona_id": str(persona_id or ""),
+            "source_key": str(source_key or ""),
+            "deleted_count": len(detail.get("deleted") or []),
+            "missing_count": len(detail.get("missing") or []),
+        })
+    except Exception:
+        pass
 
 
 # ── YAML 原文块手术（无损切分，仅标准库；与导出器块扫描同构）───────────
@@ -613,6 +647,59 @@ class PurgeRun:
         return detail
 
 
+# ── 多实例数据根（runbook §4.4：全部根删净才算净）─────────────────────
+
+_ROWS_REF_RE = re.compile(r" \((\d+) rows\)$")
+
+
+def parse_data_roots(spec: str) -> list:
+    """``--data-roots``/env 的分号分隔清单 → [Path]（空段忽略；空串 → []＝单根回退）。"""
+    return [Path(s.strip()) for s in (spec or "").split(";") if s.strip()]
+
+
+def _root_summary(label: str, det: dict) -> dict:
+    """单根 detail → 分根摘要 {root, files, rows, missing}（rows＝DB 行、files＝其余资产）。"""
+    files = rows = 0
+    for ref in det.get("deleted", []):
+        m = _ROWS_REF_RE.search(ref)
+        if m:
+            rows += int(m.group(1))
+        else:
+            files += 1
+    return {"root": label, "files": files, "rows": rows,
+            "missing": len(det.get("missing", []))}
+
+
+def run_multi_root(data_roots: list, source_key: str, *, commit: bool) -> dict:
+    """同一 source_key 在全部实例数据根上逐根执行，合并 detail（引擎级回执语义）。
+
+    每根＝一个实例的 AITR_DATA_DIR（其下 config/ 为该实例资产），软删进各自根下
+    purged_trash/，不跨根搬运；根不可用（缺 config/）记 errors ——调用方按既有规则
+    「errors 非空不 ack」兜底，保证不会只删一处就回执（runbook §4.4）。
+    detail 各清单项带 ``[<根>] `` 前缀，另附 detail["roots"] 分根摘要。
+    """
+    agg: dict = {"deleted": [], "missing": [], "errors": [], "roots": []}
+    skipped: list = []
+    for spec in data_roots:
+        root = Path(spec)
+        label = str(root)
+        if not (root / "config").is_dir():
+            agg["errors"].append(
+                f"[{label}] 数据根不可用（缺 config/），无法确认该实例资产已删净")
+            agg["roots"].append({"root": label, "files": 0, "rows": 0,
+                                 "missing": 0, "error": "root_unavailable"})
+            continue
+        det = PurgeRun(root, source_key, commit=commit).run()
+        agg["deleted"].extend(f"[{label}] {r}" for r in det["deleted"])
+        agg["missing"].extend(f"[{label}] {r}" for r in det["missing"])
+        agg["errors"].extend(f"[{label}] {r}" for r in det["errors"])
+        skipped.extend(f"[{label}] {r}" for r in det.get("skipped", []))
+        agg["roots"].append(_root_summary(label, det))
+    if skipped:
+        agg["skipped"] = skipped
+    return agg
+
+
 # ── state 文件（观测用；幂等不依赖它）─────────────────────────────────
 
 
@@ -646,11 +733,19 @@ def save_state(path: Path, state: dict) -> None:
 
 def run_pass(*, base: str, key: str, engine_root: Path, commit: bool,
              state_file: Path, timeout: float = TIMEOUT_S,
-             trash_root: "Path | None" = None) -> dict:
-    """拉取 → 逐条执行 →（commit 且零失败时）ack。→ 摘要 dict（ok=本轮无失败）。"""
+             trash_root: "Path | None" = None,
+             data_roots: "list | None" = None) -> dict:
+    """拉取 → 逐条执行 →（commit 且零失败时）ack。→ 摘要 dict（ok=本轮无失败）。
+
+    data_roots 提供时进入多实例模式：每条指令遍历全部数据根（runbook §4.4），
+    根的可用性在 run_multi_root 内逐根核查；未提供时保持原单根行为。
+    """
     summary = {"ok": True, "mode": "commit" if commit else "dry-run",
                "pending": 0, "acked": 0, "failed": 0, "error": None}
-    if not (engine_root / "config").is_dir():
+    if data_roots:
+        log(f"多实例数据根 x{len(data_roots)}: "
+            + "; ".join(str(r) for r in data_roots))
+    elif not (engine_root / "config").is_dir():
         summary["ok"] = False
         summary["error"] = f"引擎根目录不像 chengjie（缺 config/）：{engine_root}"
         warn(summary["error"])
@@ -681,9 +776,12 @@ def run_pass(*, base: str, key: str, engine_root: Path, commit: bool,
             continue
         log(f"指令 purge_id={purge_id} source_key={source_key}"
             f"（{summary['mode']}）")
-        run = PurgeRun(engine_root, source_key, commit=commit,
-                       trash_root=trash_root)
-        detail = run.run()
+        if data_roots:
+            detail = run_multi_root(data_roots, source_key, commit=commit)
+        else:
+            run = PurgeRun(engine_root, source_key, commit=commit,
+                           trash_root=trash_root)
+            detail = run.run()
         verb = "已删" if commit else "将删"
         for ref in detail["deleted"]:
             log(f"  {verb}: {ref}")
@@ -702,6 +800,7 @@ def run_pass(*, base: str, key: str, engine_root: Path, commit: bool,
         if not commit:
             log(f"  dry-run：不删除、不 ack（--commit 才执行）")
             continue
+        _emit_persona_purged(p.get("persona_id"), source_key, detail)
         try:
             resp = post_ack(base, key, purge_id, detail, timeout=timeout)
         except SyncError as e:
@@ -893,7 +992,7 @@ def _selftest() -> int:
             wav = root / "config" / "voice_refs" / "purge_me.wav"
             yaml_path = root / "config" / "profiles_runtime.yaml"
 
-            print("[1/6] dry-run：只打印将删清单，不删不 ack、不写 state")
+            print("[1/7] dry-run：只打印将删清单，不删不 ack、不写 state")
             s = run_pass(base=base, key=KEY, engine_root=root, commit=False,
                          state_file=state_file, trash_root=trash_root)
             check("dry-run ok 且 1 条待办", s["ok"] and s["pending"] == 1)
@@ -907,7 +1006,7 @@ def _selftest() -> int:
             check("state 未写、回收站未建",
                   not state_file.exists() and not trash_root.exists())
 
-            print("[2/6] commit：软删除进回收站 + ack")
+            print("[2/7] commit：软删除进回收站 + ack")
             s = run_pass(base=base, key=KEY, engine_root=root, commit=True,
                          state_file=state_file, trash_root=trash_root)
             check("commit ok 且 ack 1 条", s["ok"] and s["acked"] == 1)
@@ -961,7 +1060,7 @@ def _selftest() -> int:
             st = load_state(state_file)
             check("state 已记录该 ack", "101" in (st.get("acked") or {}))
 
-            print("[3/6] 幂等：重复同指令再 commit → 全 missing 照常 ack")
+            print("[3/7] 幂等：重复同指令再 commit → 全 missing 照常 ack")
             server.pending = [dict(directive, purge_id=102)]
             s = run_pass(base=base, key=KEY, engine_root=root, commit=True,
                          state_file=state_file, trash_root=trash_root)
@@ -970,7 +1069,7 @@ def _selftest() -> int:
             check("重复执行 detail：deleted 空、missing 非空、errors 空",
                   not d["deleted"] and d["missing"] and not d["errors"])
 
-            print("[4/6] 删除失败 → 报错不 ack、指令保留")
+            print("[4/7] 删除失败 → 报错不 ack、指令保留")
             server.pending = [{"purge_id": 103, "source_system": SYSTEM,
                                "source_key": "keep_me", "requested_at": now_iso(),
                                "slots": {"voice": True, "prompt": True}}]
@@ -992,7 +1091,7 @@ def _selftest() -> int:
             check("排障后重试成功 ack", s["ok"] and s["acked"] == 1
                   and not server.pending)
 
-            print("[5/6] source_key 白名单：路径穿越指令拒绝执行、不 ack")
+            print("[5/7] source_key 白名单：路径穿越指令拒绝执行、不 ack")
             server.pending = [{"purge_id": 104, "source_system": SYSTEM,
                                "source_key": "../evil", "requested_at": now_iso(),
                                "slots": {}}]
@@ -1003,10 +1102,65 @@ def _selftest() -> int:
                   not s["ok"] and s["failed"] == 1 and len(server.acks) == n_acks)
             server.pending = []
 
-            print("[6/6] 错误密钥：401 → 本轮终止不崩溃")
+            print("[6/7] 错误密钥：401 → 本轮终止不崩溃")
             s = run_pass(base=base, key="wrong-key", engine_root=root, commit=True,
                          state_file=state_file, trash_root=trash_root)
             check("ok=False 且错误含 401", not s["ok"] and "401" in (s["error"] or ""))
+
+            print("[7/7] 多实例数据根：A 根有资产、B 根空 → 分根清单/回执；坏根不 ack")
+            root_a = Path(tmp) / "instances" / "zhiliao_data"
+            root_b = Path(tmp) / "instances" / "tongyi_data"
+            build_engine(root_a)
+            (root_b / "config").mkdir(parents=True)
+            wav_a = root_a / "config" / "voice_refs" / "purge_me.wav"
+            directive_m = dict(directive, purge_id=201)
+            server.pending = [dict(directive_m)]
+
+            det = run_multi_root([root_a, root_b], "purge_me", commit=False)
+            check("dry-run 分根清单：A 根将删非空且带根前缀、B 根记 missing、无失败",
+                  det["deleted"]
+                  and all(x.startswith(f"[{root_a}] ") for x in det["deleted"])
+                  and any(x.startswith(f"[{root_b}] ") for x in det["missing"])
+                  and not det["errors"])
+            check("dry-run 两根摘要：A files/rows>0，B files=rows=0 且 missing>0",
+                  [d["root"] for d in det["roots"]] == [str(root_a), str(root_b)]
+                  and det["roots"][0]["files"] > 0 and det["roots"][0]["rows"] > 0
+                  and det["roots"][1]["files"] == 0 and det["roots"][1]["rows"] == 0
+                  and det["roots"][1]["missing"] > 0)
+            n_acks = len(server.acks)
+            s = run_pass(base=base, key=KEY, engine_root=root, commit=False,
+                         state_file=state_file, data_roots=[root_a, root_b])
+            check("多根 dry-run：不删不 ack、两根都不建回收站",
+                  s["ok"] and wav_a.is_file() and len(server.acks) == n_acks
+                  and not (root_a / TRASH_REL).exists()
+                  and not (root_b / TRASH_REL).exists())
+
+            s = run_pass(base=base, key=KEY, engine_root=root, commit=True,
+                         state_file=state_file, data_roots=[root_a, root_b])
+            check("多根 commit ok 且 ack 1 条", s["ok"] and s["acked"] == 1)
+            check("A 根资产进 A 根回收站（不跨根），B 根未建回收站",
+                  not wav_a.exists()
+                  and any(p.name == "purge_me.wav"
+                          for p in (root_a / TRASH_REL).rglob("*"))
+                  and not (root_b / TRASH_REL).exists())
+            d = server.acks[-1]["detail"]
+            check("回执 detail 含两根摘要，B 根记 missing、清单项带根前缀",
+                  len(d.get("roots", [])) == 2
+                  and d["roots"][0]["root"] == str(root_a)
+                  and d["roots"][0]["files"] > 0 and d["roots"][0]["rows"] > 0
+                  and d["roots"][1]["root"] == str(root_b)
+                  and d["roots"][1]["missing"] > 0
+                  and any(x.startswith(f"[{root_b}] ") for x in d["missing"]))
+
+            bad_root = Path(tmp) / "instances" / "no_such_instance"
+            server.pending = [dict(directive_m, purge_id=202)]
+            n_acks = len(server.acks)
+            s = run_pass(base=base, key=KEY, engine_root=root, commit=True,
+                         state_file=state_file, data_roots=[root_a, bad_root])
+            check("坏根（不存在/删除失败模拟）→ failed 不 ack、指令保留",
+                  not s["ok"] and s["failed"] == 1
+                  and len(server.acks) == n_acks and len(server.pending) == 1)
+            server.pending = []
     finally:
         server.shutdown()
         server.server_close()
@@ -1030,6 +1184,10 @@ def main() -> int:
                     help=f"机器密钥（默认 env {KEY_ENV}）")
     ap.add_argument("--input", default="",
                     help=f"引擎根目录覆盖（默认 {DEFAULT_ENGINE_ROOT}）")
+    ap.add_argument("--data-roots", default="", metavar="R1;R2",
+                    help="多实例数据根清单（分号分隔，每项=一个实例的 AITR_DATA_DIR；"
+                         f"默认 env {DATA_ROOTS_ENV}，都缺省则回退 --input 单根，"
+                         "见 deploy/instances/migrate_117_runbook.md §4.4）")
     ap.add_argument("--commit", action="store_true",
                     help="真删（软删除进回收站）+ ack；缺省为 dry-run 只打印将删清单")
     g = ap.add_mutually_exclusive_group()
@@ -1054,6 +1212,8 @@ def main() -> int:
     engine_root = Path(args.input).resolve() if args.input else DEFAULT_ENGINE_ROOT
     state_file = (Path(args.state_file).resolve() if args.state_file
                   else engine_root / STATE_REL)
+    data_roots = (parse_data_roots(
+        args.data_roots or os.environ.get(DATA_ROOTS_ENV, "")) or None)
 
     if args.loop:
         interval = max(30, min(int(args.loop), 3600))
@@ -1062,13 +1222,15 @@ def main() -> int:
         try:
             while True:
                 run_pass(base=base, key=key, engine_root=engine_root,
-                         commit=args.commit, state_file=state_file)
+                         commit=args.commit, state_file=state_file,
+                         data_roots=data_roots)
                 time.sleep(interval)
         except KeyboardInterrupt:
             log("收到中断，退出")
             return 0
     summary = run_pass(base=base, key=key, engine_root=engine_root,
-                       commit=args.commit, state_file=state_file)
+                       commit=args.commit, state_file=state_file,
+                       data_roots=data_roots)
     return 0 if summary["ok"] else 1
 
 

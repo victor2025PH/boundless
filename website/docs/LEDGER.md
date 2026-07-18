@@ -104,6 +104,8 @@
 3. 引擎本地删除资产后 `POST { purge_id, detail? }` 回执（幂等，重复 ack 返回 `already=true`），audit `persona.purge_ack`；
 4. 该 persona 全部指令 ack 后集团侧自动置 status → `purged`，audit `persona.purged`。授权在 `purge_pending`/`purged` 状态下冻结。
 
+**清除队列监控（P5 运营收尾）**：`/console/personas/purges` 全域指令一览（只读，viewer+；读 API `GET /api/console/personas/purges?target=&state=(pending|acked)&q=&limit=&offset=` → `{stats, rows, total}`，与机器通道 `/api/sync/personas/purges` 分离，本视图无任何写操作）。统计卡：待回执 / 滞留告警（>24h 琥珀、>72h 玫红，提示检查该引擎清除执行器与 EVENT_INGEST_KEY）/ 已回执累计+近 7 天 / 平均回执时延；逐引擎积压表（待回执 / 已回执 / 最早滞留）+ 指令队列表（引擎、回执状态、人设模糊搜索三过滤；待回执且等得最久的置顶，已回执按回执时间倒序垫底）。数据层 `lib/personas.ts::listPurgeQueue / getPurgeQueueStats`（纯只读查询，无 DDL / upsert 变更，`ledger-lib.mjs` 侧无需同步）。指令行回执后保留作审计证据。入口：人设列表页头「清除队列」按钮（带待回执计数）与人设详情清除进度分区。
+
 **导入用法**：
 
 ```bash
@@ -115,6 +117,21 @@ node scripts/ledger-import-personas.mjs <outbox.jsonl> --system avatarhub
 导出文件格式：`{"version":1,"source_system":"avatarhub","exported_at":"...","personas":[{source_key, display_name, customer_name?, slots:{face:{present,fingerprint?,ref?,version?},voice:{...},prompt:{...},knowledge:{...}}, tags?:[], created_at?, raw?:{}},...]}`。`slots.*.present` 映射到 `slot_*` 整型列，槽位细节进 `slots_detail`；`customer_name` 不建客户，只留在 `slots_detail._meta` 供 console 人工归属；`raw` 资产本体**不入库**。`.jsonl` 逐行同格式（BOM 容错，坏行计数）。统计输出含 `skippedPurged`。
 
 **审计动作**：`persona.grant` / `persona.revoke` / `persona.assign_customer` / `persona.purge_request` / `persona.purge_ack` / `persona.purged`，console 侧 actor = `console:<username>`，机器通道 ack 的 actor = `sync:engine`。
+
+### 商机跟进（schema v4）
+
+跨售商机（`lib/opportunities.ts` 三类规则：`persona_cross_sell` / `product_gap_cross_sell` / `expiring_renewal`）**本体始终是只读推导、不落库**——每次从 personas / orders / licenses 全量重算。schema v4 只落**销售跟进动作**，把商机看板升级为可管理的销售队列（迁移 v3 → v4，`meta.schema_version` 驱动，两侧 DDL 逐字同步）：
+
+- `opportunities_log(id PK /*opl_ULID*/, opp_key UNIQUE NOT NULL, kind CHECK in persona_cross_sell/product_gap_cross_sell/expiring_renewal, customer_id NOT NULL → customers, to_product, status CHECK in open/contacted/won/dismissed DEFAULT open, note, acted_by, acted_at, created_at)` — 跟进流水，一行 = 一条商机指纹的最新跟进态。
+- 索引：`opportunities_log(customer_id)`、`opportunities_log(status)`。
+
+**商机指纹 `opp_key`**（推导商机 ↔ 落库跟进的关联键，`oppKey(o)` 纯函数）：`kind|customerId|toProduct`；`expiring_renewal` 再拼 `|<evidence.licenseId>` —— 同客户多张到期授权可分别跟进。指纹可再生：规则引擎每次重算，同一商机总能对回 `opportunities_log` 里同一行。
+
+**标记（`markOpportunity(input, actor)`，本模块唯一写路径）**：按 `opp_key` UPSERT —— 首标记 INSERT（新 `opl_` ID），再标记 UPDATE 状态/备注（不新增行，幂等）；每次写 audit `opportunity.mark`（entity=opportunity，entity_id=opp_key）。`note` 走隐私纪律：只存运营跟进备注，不存客户聊天原文；请求缺省 `note` 时保留已有备注。
+
+**清单口径（`listOpportunities`）**：输出侧按指纹 LEFT JOIN 跟进表，每行附 `oppKey` 与 `log: {status, note, acted_by, acted_at} | null`；`won` / `dismissed` 默认**不出现在清单**（`includeClosed=true` / API `?include_closed=1` 才带出，且排序沉底）；`contacted` 保留在列但信号值降权 −20。`getOpportunityStats` 补 `byLogStatus`（open/contacted/won/dismissed，未标记 = open，四态之和 = total）。
+
+**API**：`GET /api/console/opportunities?kind=&customerId=&limit=&include_closed=1`（viewer+）；`POST` 同路由 body `{opp_key, kind, customer_id, to_product?, status, note?}`（admin+，actor = `console:<username>`）。UI：/console 总览商机卡与客户 360 商机分区的行尾「跟进/赢单/忽略」操作 + 状态徽章（`app/console/opportunities-ui.tsx`，admin+ 才渲染操作件）。
 
 ## 4. 双写点清单
 

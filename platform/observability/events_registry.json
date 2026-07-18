@@ -420,6 +420,54 @@
         { "name": "has_voice", "type": "bool", "required": false, "description": "是否已绑定音色资产" },
         { "name": "has_face", "type": "bool", "required": false, "description": "是否已绑定形象资产" }
       ]
+    },
+    {
+      "name": "platform.persona.purged",
+      "tier": "core",
+      "product": "platform",
+      "description": "引擎人设全域清除执行器在本机资产删除成功、准备向注册表 ack 前发射（avatarhub 等跨产品引擎用 platform 命名空间）。",
+      "props": [
+        { "name": "persona_id", "type": "string", "required": true, "description": "人设 ID（prs_*）" },
+        { "name": "source_key", "type": "string", "required": true, "description": "引擎内自然键（非生物特征）" },
+        { "name": "deleted_count", "type": "int", "required": false, "description": "本轮删除/软删资产条数" },
+        { "name": "missing_count", "type": "int", "required": false, "description": "幂等缺席条数" }
+      ]
+    },
+    {
+      "name": "zhituo.persona.purged",
+      "tier": "core",
+      "product": "zhituo",
+      "description": "智拓(huoke) purge agent --commit 成功删除养号人设资产、ack 前发射。",
+      "props": [
+        { "name": "persona_id", "type": "string", "required": true, "description": "人设 ID（prs_*）" },
+        { "name": "source_key", "type": "string", "required": true, "description": "引擎内自然键（非生物特征）" },
+        { "name": "deleted_count", "type": "int", "required": false, "description": "本轮删除/软删资产条数" },
+        { "name": "missing_count", "type": "int", "required": false, "description": "幂等缺席条数" }
+      ]
+    },
+    {
+      "name": "zhiliao.persona.purged",
+      "tier": "core",
+      "product": "zhiliao",
+      "description": "智聊(chengjie) purge agent --commit 成功删除人设资产、ack 前发射（product_id=zhiliao 实例）。",
+      "props": [
+        { "name": "persona_id", "type": "string", "required": true, "description": "人设 ID（prs_*）" },
+        { "name": "source_key", "type": "string", "required": true, "description": "引擎内自然键（非生物特征）" },
+        { "name": "deleted_count", "type": "int", "required": false, "description": "本轮删除/软删资产条数" },
+        { "name": "missing_count", "type": "int", "required": false, "description": "幂等缺席条数" }
+      ]
+    },
+    {
+      "name": "tongyi.persona.purged",
+      "tier": "core",
+      "product": "tongyi",
+      "description": "通译(chengjie) purge agent --commit 成功删除人设资产、ack 前发射（CHENGJIE_PRODUCT_ID=tongyi 实例）。",
+      "props": [
+        { "name": "persona_id", "type": "string", "required": true, "description": "人设 ID（prs_*）" },
+        { "name": "source_key", "type": "string", "required": true, "description": "引擎内自然键（非生物特征）" },
+        { "name": "deleted_count", "type": "int", "required": false, "description": "本轮删除/软删资产条数" },
+        { "name": "missing_count", "type": "int", "required": false, "description": "幂等缺席条数" }
+      ]
     }
   ]
 }

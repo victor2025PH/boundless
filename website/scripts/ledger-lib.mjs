@@ -10,7 +10,7 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import Database from "better-sqlite3";
 
-export const LEDGER_SCHEMA_VERSION = 3;
+export const LEDGER_SCHEMA_VERSION = 4;
 
 // ── ID 规范（与 lib/ids.ts 一致）───────────────────────────────────
 const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -253,6 +253,23 @@ CREATE INDEX IF NOT EXISTS idx_persona_grants_persona ON persona_grants(persona_
 CREATE INDEX IF NOT EXISTS idx_persona_purges_target ON persona_purges(target_system, acked_at);
 `;
 
+// ── 表结构（schema v4：跨售商机跟进 opportunities_log）──────────────
+// ⚠️ 与 website/lib/ledger.ts 中的 DDL_V4 逐字一致，修改必须同步！
+const DDL_V4 = `
+CREATE TABLE IF NOT EXISTS opportunities_log (
+  id TEXT PRIMARY KEY,
+  opp_key TEXT UNIQUE NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('persona_cross_sell','product_gap_cross_sell','expiring_renewal')),
+  customer_id TEXT NOT NULL REFERENCES customers(id),
+  to_product TEXT,
+  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','contacted','won','dismissed')),
+  note TEXT,
+  acted_by TEXT, acted_at TEXT, created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_opplog_customer ON opportunities_log(customer_id);
+CREATE INDEX IF NOT EXISTS idx_opplog_status ON opportunities_log(status);
+`;
+
 /** 打开账本 DB（WAL / busy_timeout 5000 / 自动建表迁移），与 lib/ledger.ts::getLedgerDb 等价。 */
 export function openLedgerDb(dbPath) {
   const file = path.resolve(dbPath || resolveLedgerDbPath());
@@ -270,7 +287,7 @@ function migrate(db) {
   db.exec("CREATE TABLE IF NOT EXISTS meta (\n  key TEXT PRIMARY KEY,\n  value TEXT\n);");
   const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
   const current = row ? Number(row.value) || 0 : 0;
-  const migrations = [(d) => d.exec(DDL_V1), (d) => d.exec(DDL_V2), (d) => d.exec(DDL_V3)];
+  const migrations = [(d) => d.exec(DDL_V1), (d) => d.exec(DDL_V2), (d) => d.exec(DDL_V3), (d) => d.exec(DDL_V4)];
   if (current >= migrations.length) return;
   const run = db.transaction(() => {
     for (let i = current; i < migrations.length; i++) migrations[i](db);

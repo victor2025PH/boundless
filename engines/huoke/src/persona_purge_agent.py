@@ -446,6 +446,20 @@ def ack_purge(base: str, key: str, purge_id, detail: dict) -> dict:
     return http_json(base.rstrip("/") + ACK_PATH, key, method="POST", body=body)
 
 
+def _emit_persona_purged(persona_id, source_key: str, detail: dict) -> None:
+    """经现有 telemetry 发 zhituo.persona.purged；fail-silent，绝不挡 ack。"""
+    try:
+        from telemetry import track  # noqa: WPS433
+        track("zhituo.persona.purged", {
+            "persona_id": str(persona_id or ""),
+            "source_key": str(source_key or ""),
+            "deleted_count": len(detail.get("deleted") or []),
+            "missing_count": len(detail.get("missing") or []),
+        })
+    except Exception:
+        pass
+
+
 # ── state 文件（回执审计线；原子写，dry-run 不落盘）───────────────────
 
 
@@ -520,6 +534,7 @@ def run_round(*, base: str, key: str, engine_dir: Path, state_file: Path,
             continue
         if not commit:
             continue
+        _emit_persona_purged(p.get("persona_id"), source_key, detail)
         try:
             resp = ack_purge(base, key, purge_id, detail)
         except (urllib.error.URLError, OSError, ValueError) as e:

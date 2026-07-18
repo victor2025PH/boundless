@@ -207,3 +207,4 @@ node scripts/kpi-weekly-report.mjs --format json --out ../reports/kpi/latest.jso
   （`%G-W%V` 即 ISO 年-周号，与报告窗口标签一致；Windows 机器用任务计划程序跑同命令。）
 - **产物归档建议**：`<仓库根>/reports/kpi/kpi-YYYY-Www.md`（人读）+ 同名 `.json`（机器消费/回归比对），按 ISO 周号一周一档、append-only 不改历史；口径升版后如需重跑历史周，另存新文件并标注口径版本，不覆盖原件；
 - **口径纪律**：周报只是口径的执行器。改任何指标算法 = 先改 `KPI_DEFINITIONS.md`（升版 + 通告）再同步脚本；两处不一致以口径文件为准（见该文件 §8）。
+- **人设清除遥测**：三引擎 `persona_purge_agent --commit` 删成本地资产后、ack 前发射 `platform.persona.purged` / `zhituo|zhiliao|tongyi.persona.purged`（见 `events_registry.json`）；props 仅 `persona_id`/`source_key`/计数，禁止生物特征；fail-silent 不影响 ack。

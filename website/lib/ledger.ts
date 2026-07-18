@@ -18,7 +18,7 @@ import Database from "better-sqlite3";
 import { DATA_DIR } from "./data-dir";
 import { isValidId, newId } from "./ids";
 
-export const LEDGER_SCHEMA_VERSION = 3;
+export const LEDGER_SCHEMA_VERSION = 4;
 
 // ── 表结构（schema v1）──────────────────────────────────────────────
 // ⚠️ 与 scripts/ledger-lib.mjs 中的 DDL_V1 逐字一致，修改必须同步！
@@ -199,6 +199,26 @@ CREATE INDEX IF NOT EXISTS idx_personas_customer ON personas(customer_id);
 CREATE INDEX IF NOT EXISTS idx_personas_status ON personas(status);
 CREATE INDEX IF NOT EXISTS idx_persona_grants_persona ON persona_grants(persona_id);
 CREATE INDEX IF NOT EXISTS idx_persona_purges_target ON persona_purges(target_system, acked_at);
+`;
+
+// ── 表结构（schema v4：跨售商机跟进 opportunities_log）──────────────
+// 商机本体仍由 lib/opportunities.ts 规则引擎从账本只读推导（不落库）；本表只落
+// 销售跟进动作：opp_key 为可再生的商机指纹（kind|customerId|toProduct，续费类
+// 再拼 license id，见 lib/opportunities.ts::oppKey），note 只存运营备注。
+// ⚠️ 与 scripts/ledger-lib.mjs 中的 DDL_V4 逐字一致，修改必须同步！
+const DDL_V4 = `
+CREATE TABLE IF NOT EXISTS opportunities_log (
+  id TEXT PRIMARY KEY,
+  opp_key TEXT UNIQUE NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('persona_cross_sell','product_gap_cross_sell','expiring_renewal')),
+  customer_id TEXT NOT NULL REFERENCES customers(id),
+  to_product TEXT,
+  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','contacted','won','dismissed')),
+  note TEXT,
+  acted_by TEXT, acted_at TEXT, created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_opplog_customer ON opportunities_log(customer_id);
+CREATE INDEX IF NOT EXISTS idx_opplog_status ON opportunities_log(status);
 `;
 
 // ── 行类型（console 直接消费）───────────────────────────────────────
@@ -384,6 +404,7 @@ function migrate(db: Database.Database) {
     (d) => d.exec(DDL_V1), // v0 → v1：全量建表（IF NOT EXISTS，幂等）
     (d) => d.exec(DDL_V2), // v1 → v2：控制台实名账号 users + 会话 sessions
     (d) => d.exec(DDL_V3), // v2 → v3：人设总线 personas / persona_grants / persona_purges
+    (d) => d.exec(DDL_V4), // v3 → v4：跨售商机跟进 opportunities_log
   ];
   if (current >= migrations.length) return;
   const run = db.transaction(() => {

@@ -109,6 +109,31 @@ function slotInt(v: unknown): number {
 }
 const nowIso = () => new Date().toISOString();
 
+/**
+ * purged 墓碑：从 slots_detail 去掉 fingerprint/ref（生物特征哈希/资产路径仍可能构成个人数据）。
+ * 保留槽位壳与 version 等非敏感字段；解析失败则整段置 null（宁丢勿留指纹）。
+ * 见 PERSONA_BUS.md §清除后墓碑字段。
+ */
+export function scrubSlotsDetailFingerprints(slotsDetail: string | null): string | null {
+  if (slotsDetail == null || slotsDetail === "") return slotsDetail;
+  try {
+    const obj = JSON.parse(slotsDetail) as unknown;
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
+    const rec = obj as Record<string, unknown>;
+    for (const key of PERSONA_SLOTS) {
+      const slot = rec[key];
+      if (slot && typeof slot === "object" && !Array.isArray(slot)) {
+        const s = slot as Record<string, unknown>;
+        delete s.fingerprint;
+        delete s.ref;
+      }
+    }
+    return JSON.stringify(rec);
+  } catch {
+    return null;
+  }
+}
+
 // ── 幂等 upsert（自然键 (source_system, source_key)）────────────────
 export interface PersonaUpsertResult {
   id: string;
@@ -506,9 +531,17 @@ export function ackPurge(
     );
     const allAcked = unackedCount() === 0;
     if (allAcked) {
+      const prevDetail = (
+        db.prepare("SELECT slots_detail FROM personas WHERE id = ?").get(row.persona_id) as
+          | { slots_detail: string | null }
+          | undefined
+      )?.slots_detail;
+      const scrubbed = scrubSlotsDetailFingerprints(prevDetail ?? null);
       const changes = db
-        .prepare("UPDATE personas SET status = 'purged', updated_at = ? WHERE id = ? AND status = 'purge_pending'")
-        .run(t, row.persona_id).changes;
+        .prepare(
+          "UPDATE personas SET status = 'purged', updated_at = ?, slots_detail = ? WHERE id = ? AND status = 'purge_pending'"
+        )
+        .run(t, scrubbed, row.persona_id).changes;
       if (changes > 0) {
         writeAudit(
           { actor, action: "persona.purged", entity: "persona", entity_id: row.persona_id },
@@ -578,6 +611,220 @@ export function listPendingPurges(
       knowledge: !!r.slot_knowledge,
     },
   }));
+}
+
+// ── 授权清单导出（机器通道 GET，运行时软门控缓存）──────────────────
+/** 人设来源引擎枚举（与 PERSONA_BUS §3.1 / validate_personas SOURCE_SYSTEMS 同源）。 */
+export const PERSONA_SOURCE_SYSTEMS = ["avatarhub", "chengjie", "huoke"] as const;
+export type PersonaSourceSystem = (typeof PERSONA_SOURCE_SYSTEMS)[number];
+
+/** 引擎侧 grant 缓存一行：只带 source_key × product_id × status，不含客户数据。 */
+export interface PersonaGrantExportRow {
+  source_key: string;
+  product_id: string;
+  /** granted = 未撤销；revoked = 已吊销（仍导出供对账，门控只认 granted）。 */
+  status: "granted" | "revoked";
+}
+
+/**
+ * 某 source_system 下 active persona 的全部 grants（含已撤销行）。
+ * 供 GET /api/sync/personas/grants 只读导出；响应不含客户/显示名。
+ */
+export function listActiveGrantsForSystem(
+  sourceSystem: string,
+  db: Database.Database = getLedgerDb()
+): PersonaGrantExportRow[] {
+  const system = s(sourceSystem);
+  if (!system) return [];
+  const rows = db
+    .prepare(
+      `SELECT p.source_key, g.product_id, g.revoked_at
+       FROM persona_grants g
+       JOIN personas p ON p.id = g.persona_id
+       WHERE p.source_system = ? AND p.status = 'active'
+       ORDER BY p.source_key ASC, g.product_id ASC`
+    )
+    .all(system) as { source_key: string; product_id: string; revoked_at: string | null }[];
+  return rows.map((r) => ({
+    source_key: r.source_key,
+    product_id: r.product_id,
+    status: r.revoked_at == null ? ("granted" as const) : ("revoked" as const),
+  }));
+}
+
+// ── 清除队列监控（console 只读，P5 运营收尾）────────────────────────
+// 全局视角盯 purge 协议执行：persona_purges ⋈ personas，跨人设/跨引擎看指令
+// 积压、滞留与回执时延。只读查询，无 DDL / upsert 变更（.mjs 侧无需同步）。
+
+/** 队列行 = purge 指令 + 所属人设元数据（供 console 列表直出，不含客户联系方式）。 */
+export interface PurgeQueueRow {
+  purge_id: number;
+  persona_id: string;
+  requested_by: string | null;
+  requested_at: string | null;
+  target_system: string;
+  acked_at: string | null;
+  ack_detail: string | null;
+  display_name: string | null;
+  source_system: string;
+  source_key: string;
+  persona_status: PersonaStatus;
+  customer_id: string | null;
+  slot_face: number;
+  slot_voice: number;
+  slot_prompt: number;
+  slot_knowledge: number;
+}
+
+export interface PurgeQueueFilter {
+  /** 目标引擎（target_system）。 */
+  target?: string;
+  /** "pending" 待回执 / "acked" 已回执；其余值 = 全部。 */
+  state?: string;
+  /** 模糊匹配人设 source_key / display_name / persona_id。 */
+  q?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface PurgeQueueResult {
+  rows: PurgeQueueRow[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** 清除指令队列：待回执在前（等得最久的最靠上），已回执按回执时间倒序在后。 */
+export function listPurgeQueue(
+  filter: PurgeQueueFilter = {},
+  db: Database.Database = getLedgerDb()
+): PurgeQueueResult {
+  const where: string[] = [];
+  const params: Record<string, unknown> = {};
+  if (s(filter.target)) {
+    where.push("pp.target_system = @target");
+    params.target = s(filter.target);
+  }
+  const state = s(filter.state);
+  if (state === "pending") where.push("pp.acked_at IS NULL");
+  else if (state === "acked") where.push("pp.acked_at IS NOT NULL");
+  if (s(filter.q)) {
+    where.push("(p.source_key LIKE @q OR p.display_name LIKE @q OR pp.persona_id LIKE @q)");
+    params.q = `%${s(filter.q)}%`;
+  }
+  const cond = where.length ? ` WHERE ${where.join(" AND ")}` : "";
+  const from = "FROM persona_purges pp JOIN personas p ON p.id = pp.persona_id";
+  const limit = Math.min(Math.max(1, Math.trunc(filter.limit ?? 100)), 500);
+  const offset = Math.max(0, Math.trunc(filter.offset ?? 0));
+  const total = (db.prepare(`SELECT COUNT(*) AS c ${from}${cond}`).get(params) as { c: number }).c;
+  const rows = db
+    .prepare(
+      `SELECT pp.id AS purge_id, pp.persona_id, pp.requested_by, pp.requested_at,
+              pp.target_system, pp.acked_at, pp.ack_detail,
+              p.display_name, p.source_system, p.source_key, p.status AS persona_status,
+              p.customer_id, p.slot_face, p.slot_voice, p.slot_prompt, p.slot_knowledge
+       ${from}${cond}
+       ORDER BY (pp.acked_at IS NULL) DESC,
+                CASE WHEN pp.acked_at IS NULL THEN COALESCE(pp.requested_at, '') END ASC,
+                COALESCE(pp.acked_at, '') DESC,
+                pp.id ASC
+       LIMIT @limit OFFSET @offset`
+    )
+    .all({ ...params, limit, offset }) as PurgeQueueRow[];
+  return { rows, total, limit, offset };
+}
+
+/** 单引擎积压统计。 */
+export interface PurgeTargetStat {
+  target_system: string;
+  pending: number;
+  acked: number;
+  oldest_pending_at: string | null;
+}
+
+export interface PurgeQueueStats {
+  /** 未回执指令总数。 */
+  pendingDirectives: number;
+  /** 已回执指令总数（累计）。 */
+  ackedDirectives: number;
+  /** 近 7 天回执数。 */
+  ackedLast7d: number;
+  /** 下发超 24h / 72h 仍未回执的指令数（滞留告警口径）。 */
+  pendingOver24h: number;
+  pendingOver72h: number;
+  /** 最早一条未回执指令的下发时间。 */
+  oldestPendingAt: string | null;
+  /** 已回执指令的平均回执时延（小时，1 位小数）；尚无回执为 null。 */
+  avgAckHours: number | null;
+  /** personas 表 purge_pending / purged 状态计数。 */
+  personasPurgePending: number;
+  personasPurged: number;
+  byTarget: PurgeTargetStat[];
+  generatedAt: string;
+}
+
+export function getPurgeQueueStats(db: Database.Database = getLedgerDb()): PurgeQueueStats {
+  const now = Date.now();
+  const agg = db
+    .prepare(
+      `SELECT
+         SUM(CASE WHEN acked_at IS NULL THEN 1 ELSE 0 END) AS pending,
+         SUM(CASE WHEN acked_at IS NOT NULL THEN 1 ELSE 0 END) AS acked,
+         SUM(CASE WHEN acked_at IS NOT NULL AND acked_at >= @since7d THEN 1 ELSE 0 END) AS acked7d,
+         SUM(CASE WHEN acked_at IS NULL AND requested_at < @cut24h THEN 1 ELSE 0 END) AS over24h,
+         SUM(CASE WHEN acked_at IS NULL AND requested_at < @cut72h THEN 1 ELSE 0 END) AS over72h,
+         MIN(CASE WHEN acked_at IS NULL THEN requested_at END) AS oldest_pending_at,
+         ROUND(AVG(CASE WHEN acked_at IS NOT NULL AND requested_at IS NOT NULL
+                        THEN (julianday(acked_at) - julianday(requested_at)) * 24.0 END), 1) AS avg_ack_hours
+       FROM persona_purges`
+    )
+    .get({
+      since7d: new Date(now - 7 * 86400_000).toISOString(),
+      cut24h: new Date(now - 24 * 3600_000).toISOString(),
+      cut72h: new Date(now - 72 * 3600_000).toISOString(),
+    }) as {
+    pending: number | null;
+    acked: number | null;
+    acked7d: number | null;
+    over24h: number | null;
+    over72h: number | null;
+    oldest_pending_at: string | null;
+    avg_ack_hours: number | null;
+  };
+  const byTarget = db
+    .prepare(
+      `SELECT target_system,
+              SUM(CASE WHEN acked_at IS NULL THEN 1 ELSE 0 END) AS pending,
+              SUM(CASE WHEN acked_at IS NOT NULL THEN 1 ELSE 0 END) AS acked,
+              MIN(CASE WHEN acked_at IS NULL THEN requested_at END) AS oldest_pending_at
+       FROM persona_purges
+       GROUP BY target_system
+       ORDER BY target_system ASC`
+    )
+    .all() as PurgeTargetStat[];
+  let personasPurgePending = 0;
+  let personasPurged = 0;
+  for (const r of db
+    .prepare(
+      "SELECT status, COUNT(*) AS c FROM personas WHERE status IN ('purge_pending','purged') GROUP BY status"
+    )
+    .all() as { status: string; c: number }[]) {
+    if (r.status === "purge_pending") personasPurgePending = r.c;
+    else if (r.status === "purged") personasPurged = r.c;
+  }
+  return {
+    pendingDirectives: agg.pending ?? 0,
+    ackedDirectives: agg.acked ?? 0,
+    ackedLast7d: agg.acked7d ?? 0,
+    pendingOver24h: agg.over24h ?? 0,
+    pendingOver72h: agg.over72h ?? 0,
+    oldestPendingAt: agg.oldest_pending_at ?? null,
+    avgAckHours: agg.avg_ack_hours ?? null,
+    personasPurgePending,
+    personasPurged,
+    byTarget,
+    generatedAt: nowIso(),
+  };
 }
 
 // ── 统计 ────────────────────────────────────────────────────────────
