@@ -1,0 +1,36 @@
+# 幻声 VoiceX — 声音克隆 / TTS / 唱歌 / 批量配音
+# tab id 对齐 static/hub.js tabs[].id；capability_claims 对齐 capability_matrix.json
+product_id: huansheng
+product_yaml: products/huansheng/product.yaml
+brand:
+  zh: 幻声 VoiceX
+  en: VoiceX
+default_tab: voice
+allowed_tabs:
+  - profiles
+  - clone
+  - voice
+  - sing
+  - batch
+  - dashboard
+  - history
+  - selfcheck
+  - logs
+  - settings
+hide_tabs:
+  - stream
+  - interp
+capability_claims:
+  - voice_clone
+feature_flags:
+  voice_clone: true
+  digital_human: false
+  live_faceswap: false
+  offline_faceswap: false
+  interp: false
+  obs_subtitle: false
+  singing: true
+  batch_tts: true
+routes_note: >
+  侧栏裁剪 stream/interp。深链 /ui#stream、/ui#interp 接线后应回落 default_tab。
+  首页 FEATURE_REGISTRY 的 LiveX/LingoX 条目建议一并按 feature_flags 过滤（见 APPLY.md）。
