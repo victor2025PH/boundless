@@ -180,3 +180,30 @@ python platform/observability/uploader.py \
 ```
 
 - spool 权责不变（§4）：uploader 只读 spool 与自己的 state 文件，不删不改事件行；日文件归档/清理策略另行制定——轮转删除旧文件前，确认 state 中该文件偏移已到文件末尾（即已全量上传）。
+
+---
+
+## 11. 运营节律：全矩阵 KPI 周报（kpi-weekly-report）
+
+> P4 收口 · 2026-07-18。指标口径的单一真相在本目录 `KPI_DEFINITIONS.md`（events_registry 的语义附录）；本节只管"何时跑、怎么跑、放哪里"。
+
+- **生成器**：`website/scripts/kpi-weekly-report.mjs`（纯 JS + better-sqlite3）。只读聚合 `group-events.db`（行为）+ `group-ledger.db`（钱/授权），不建表、不迁移、不写任何库；库不存在/为空时输出"暂无数据"骨架报告（含回填指引）并退出 0，cron 可常开；
+- **手动跑**：
+
+```
+cd website
+node scripts/kpi-weekly-report.mjs --week last --format md         # 上一完整 ISO 周，md → stdout
+node scripts/kpi-weekly-report.mjs --format json --out ../reports/kpi/latest.json
+```
+
+  窗口参数三组互斥，缺省近 7 天（UTC 日含今天）：`--week this|last|YYYY-Www`（ISO 周，周一 00:00Z 起 7 天）/ `--days N` / `--since YYYY-MM-DD --until YYYY-MM-DD`（半开区间 `[since, until)`）；`--format md|json` 缺省 md；`--out` 缺省 stdout。库路径 env `EVENTS_DB` / `LEDGER_DB` 可覆盖，缺省 `DATA_DIR` 下同名库；
+- **节律（cron 每周一）**：UTC 周一 01:00 生成**上一完整 ISO 周**（此时上周事件已由 uploader 补传收敛，§10.5 的 5 分钟节律），md + json 各归档一份：
+
+```
+0 1 * * 1 cd /path/to/boundless/website && node scripts/kpi-weekly-report.mjs --week last --format md   --out ../reports/kpi/kpi-$(date -u +\%G-W\%V).md   >> ../logs/kpi-weekly.log 2>&1
+5 1 * * 1 cd /path/to/boundless/website && node scripts/kpi-weekly-report.mjs --week last --format json --out ../reports/kpi/kpi-$(date -u +\%G-W\%V).json >> ../logs/kpi-weekly.log 2>&1
+```
+
+  （`%G-W%V` 即 ISO 年-周号，与报告窗口标签一致；Windows 机器用任务计划程序跑同命令。）
+- **产物归档建议**：`<仓库根>/reports/kpi/kpi-YYYY-Www.md`（人读）+ 同名 `.json`（机器消费/回归比对），按 ISO 周号一周一档、append-only 不改历史；口径升版后如需重跑历史周，另存新文件并标注口径版本，不覆盖原件；
+- **口径纪律**：周报只是口径的执行器。改任何指标算法 = 先改 `KPI_DEFINITIONS.md`（升版 + 通告）再同步脚本；两处不一致以口径文件为准（见该文件 §8）。
