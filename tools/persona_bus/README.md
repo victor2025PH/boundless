@@ -4,6 +4,9 @@
 **绝对只读**：不写入/修改 engines/ 下任何文件（SQLite 一律 `mode=ro` 打开）。仅 Python 标准库。
 格式与授权/清除协议的完整契约见 `platform/identity/PERSONA_BUS.md`。
 
+另含 **grant 缓存拉取**（v1.2 运行时软门控）：`fetch_grants.py` 从集团
+`GET /api/sync/personas/grants` 拉清单写本地 JSON，供 `platform/identity/grant_gate.py` 离线检查。
+
 > ⚠️ 铁律：资产本体（脸模/声纹文件/权重）与任何生物特征数据**绝不进导出文件**；
 > `fingerprint` 只能是对资产字节的 sha256 摘要；`raw` 走白名单，不含文件内容。
 > 导出文件含显示名/指纹，按内部经营数据处理，勿入 git。
@@ -66,6 +69,21 @@ node website/scripts/ledger-import-personas.mjs avatarhub_personas.json
 - 已 `purge_pending` / `purged` 的键再次出现 → 导入侧**不复活**，标异常人工核查
   （全域清除协议与引擎义务见 PERSONA_BUS.md §5）。
 - 同键指纹变化＝人设换了脸/声，正常更新。
+
+## 授权缓存拉取（运行时软门控 v1.2）
+
+```powershell
+# 从集团拉本引擎 active persona 的 grants，写入本地缓存（Bearer = EVENT_INGEST_KEY）
+python tools/persona_bus/fetch_grants.py --base https://bd2026.cc --key $env:EVENT_INGEST_KEY `
+  --system avatarhub --out engines/avatarhub/data/persona_grants_cache.json
+
+# 门控自检
+python platform/identity/grant_gate.py --selftest
+```
+
+- 失败退出非 0，stderr 含可重试说明；**旧缓存可继续离线用**（默认 warn 放行，不挡业务）。
+- 建议挂在 `deploy/cron` export 成功之后；接线指南见各引擎 `grant_check.py` 文件头与 PERSONA_BUS.md §4.1。
+- 默认不强制：仅 `PERSONA_GRANT_ENFORCE=1` 时无 grant 才拒绝。
 
 ## 后续引擎接入
 
