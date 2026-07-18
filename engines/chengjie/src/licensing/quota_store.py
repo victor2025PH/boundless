@@ -255,6 +255,13 @@ def check_license_quota(*, lic_status: Any = None) -> Dict[str, Any]:
 
         out["exceeded"] = quota_exceeded(getattr(st, "state", ""), used, included)
         if out["exceeded"]:
+            try:   # P4 埋点：字符额度触顶（进程内每授权一次；fail-silent）
+                from src.utils.telemetry import track_once
+                track_once(f"quota_exceeded:{out['lic_id']}", "license.quota_exceeded", {
+                    "lic_id": out["lic_id"], "used": used, "included": included,
+                    "enforce": out["enforce"]})
+            except Exception:
+                pass
             if out["enforce"]:
                 out["allowed"] = False
             elif out["lic_id"] not in _WARNED_LIC_IDS:

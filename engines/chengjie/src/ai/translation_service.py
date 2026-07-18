@@ -430,6 +430,11 @@ class TranslationService:
             self._memory_put(key, result, style, engine=res.engine)
             self._record_cost(src_text, out, source, target)
             self._record_license_quota(src_text)
+            try:   # P4 埋点：翻译字符量按语向聚合计量（窗口 flush，绝不逐条发事件）
+                from src.utils.telemetry import add_translated_chars
+                add_translated_chars(len(src_text), source, target)
+            except Exception:
+                pass
         return result
 
     def _memory_get(self, key: str) -> Optional[TranslationResult]:

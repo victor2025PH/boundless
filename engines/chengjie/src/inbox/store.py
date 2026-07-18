@@ -832,6 +832,10 @@ class InboxStore:
         now = self._now()
         inserted = 0
         with self._lock:
+            # P4 埋点：upsert 前按主键探测是否「新会话首次入库」（PK 查询微秒级）
+            _tele_new_conv = self._conn.execute(
+                "SELECT 1 FROM conversations WHERE conversation_id=? LIMIT 1",
+                (conv.conversation_id,)).fetchone() is None
             self._conn.execute(
                 """
                 INSERT INTO conversations
@@ -941,6 +945,14 @@ class InboxStore:
                 )
                 inserted += 1 if cur.rowcount > 0 else 0
             self._conn.commit()
+        if _tele_new_conv:
+            try:   # P4 埋点：新会话首次入库（fail-silent，绝不影响 ingest）
+                from src.utils.telemetry import track
+                track("session.started", {
+                    "session_id": conv.conversation_id, "platform": conv.platform,
+                    "chat_type": conv.chat_type or "private"})
+            except Exception:
+                pass
         return inserted
 
     # ── P0：协议通讯录（好友名单）+ 会话列表占位 ──────────────────────────
@@ -3786,6 +3798,12 @@ class InboxStore:
                 (cid, str(reason or ""), str(agent_id or ""),
                  str(agent_name or ""), int(wait_sec or 0), now))
             self._conn.commit()
+        try:   # P4 埋点：转人工升级（仅新记录边沿；fail-silent）
+            from src.utils.telemetry import track
+            track("session.handed_off",
+                  {"session_id": cid, "reason": str(reason or "")})
+        except Exception:
+            pass
         return True
 
     def escalation_takeovers(
@@ -5259,6 +5277,12 @@ class InboxStore:
                 (cid, val, now),
             )
             self._conn.commit()
+        if archived:
+            try:   # P4 埋点：会话归档视作关闭（fail-silent）
+                from src.utils.telemetry import track
+                track("session.closed", {"session_id": cid})
+            except Exception:
+                pass
         return True
 
     def tag_stats(self, *, since: float = 0.0) -> List[Dict[str, Any]]:

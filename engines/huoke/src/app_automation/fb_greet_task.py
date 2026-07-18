@@ -46,6 +46,28 @@ def _has_forbidden_word(text: str) -> bool:
     return False
 
 
+def _emit_greet_batch_telemetry(stats: Dict[str, Any], device_id: str,
+                                dry_run: bool) -> None:
+    """P4 全域埋点：打招呼批次结束 → zhituo.outreach.sent_metered（聚合增量）。
+
+    dry_run 不计（未真实触达）；只带计数/平台/设备引用，不带话术与姓名。
+    fail-silent，绝不影响批次主流程。
+    """
+    try:
+        sent = int(stats.get("greeted") or 0)
+        if dry_run or sent <= 0:
+            return
+        from src.telemetry import track
+        track("zhituo.outreach.sent_metered", {
+            "platform": "facebook",
+            "channel": "greeting",
+            "sent": sent,
+            "account_id": device_id or "",
+        })
+    except Exception:
+        pass
+
+
 def generate_greeting(
     display_name: str,
     insights: Dict[str, Any],
@@ -301,6 +323,7 @@ class GreetTask:
 
         stats["ended_at"] = datetime.now().isoformat()
         logger.info("[greet] 完成: %s", stats)
+        _emit_greet_batch_telemetry(stats, self.device_id, self.dry_run)
         return stats
 
     def _log_outbound(

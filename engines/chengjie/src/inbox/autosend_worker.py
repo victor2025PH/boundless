@@ -390,6 +390,14 @@ class AutosendWorker:
                         raise RuntimeError(str(
                             res.get("error") or res.get("blocked") or "send not ok"))
                     self.total_delivered += 1
+                    try:   # P4 埋点：AI 承接（该会话首条自动回复投递成功，进程内每会话一次）
+                        from src.utils.telemetry import track_once
+                        _tele_cid = str(item.get("conversation_id") or "")
+                        track_once(f"ai_engaged:{_tele_cid}", "session.ai_engaged", {
+                            "session_id": _tele_cid,
+                            "first_response_ms": int(_elapsed * 1000)})
+                    except Exception:
+                        pass
                 except Exception as exc:  # noqa: BLE001
                     self.total_deliver_errors += 1
                     self.last_error = f"deliver: {exc}"

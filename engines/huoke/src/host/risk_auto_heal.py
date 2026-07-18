@@ -147,6 +147,25 @@ def _try_start_scrcpy_for_risk(device_id: str) -> bool:
         return False
 
 
+def _emit_risk_telemetry(platform: str, device_id: str, record: Dict) -> None:
+    """P4 全域埋点：风控触发（已过 cooldown 去重）→ zhituo.account.risk_detected。
+
+    只带平台/设备引用/处置计数，**不带风控 message 原文**（可能含屏幕文本，
+    隐私红线）。fail-silent，绝不影响自愈主流程。
+    """
+    try:
+        from src.telemetry import track
+        track("zhituo.account.risk_detected", {
+            "platform": platform,
+            "account_id": device_id,
+            "cancelled_tasks": int(record.get("cancelled_total") or 0),
+            "downgraded": bool(record.get("downgraded")),
+            "strategy": str(record.get("strategy") or ""),
+        })
+    except Exception:
+        pass
+
+
 def _load_platform_config(platform: str) -> PlatformRiskConfig:
     """从 config/{platform}_risk.yaml 加载,缺失用默认。"""
     yaml_path = _CFG_DIR / f"{platform}_risk.yaml"
@@ -275,6 +294,8 @@ class CrossPlatformRiskHealer:
         self._append_history(device_id, record, cfg)
         self._mark_device_state(platform, device_id, message, record)
         self._push_event(platform, device_id, record)
+        # P4 全域埋点：封禁/风控 KPI（cooldown 已保证同设备同平台不重复刷）
+        _emit_risk_telemetry(platform, device_id, record)
 
     # ─────────────────────────────────────────────────────────────
 
