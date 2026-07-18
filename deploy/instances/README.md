@@ -69,8 +69,10 @@
 ```
 deploy/instances/
 ├─ README.md                  ← 本手册
+├─ preflight_instance.ps1     ← 拉起前预检（python/依赖/全链导入/端口/数据根可写；退出码 0/1）
 ├─ start_zhiliao.ps1          ← 智聊实例启动（防呆：config 缺失即报错，绝不自动建/覆盖）
 ├─ start_tongyi.ps1           ← 通译实例启动（同上）
+├─ stop_instance.ps1          ← 按实例停止（防呆：验明端口持有者是引擎 main.py 才杀进程树）
 ├─ status_instances.ps1       ← 双实例健康探测（端口 + HTTP + 数据目录体检）
 ├─ zhiliao/
 │  ├─ config.local.yaml       ← 模板（git 跟踪，无密钥）：部署时拷贝/并入实例 config 目录
@@ -87,10 +89,16 @@ deploy/instances/
    └─ data/…
 ```
 
-> 数据根也可以放仓库外（如 `D:\chengjie-instances\zhiliao`）：改启动脚本顶部的
-> `$DataRoot` 一个变量即可，其余逻辑不变。
+> 数据根也可以放仓库外（如 `D:\chengjie-instances\zhiliao`）：启动脚本传
+> `-DataDir <数据根>` 即可（缺省仍是本目录 `<实例>\data`，向后兼容）；
+> `status_instances.ps1` 相应传 `-ZhiliaoData` / `-TongyiData`。初始化步骤不变，
+> 只是把 §3 里的 `$data` 换成目标目录。
 
 ## 3. 初始化
+
+> 初始化前先跑预检（python/依赖可导入/端口空闲/数据根可写，退出码 0 才继续）：
+> `powershell -ExecutionPolicy Bypass -File deploy\instances\preflight_instance.ps1`
+> （数据根不在缺省位置时加 `-DataDir <数据根>`；智聊实例加 `-Ports 18799,18787`）
 
 ### 3.1 通译 LingoX（全新实例，先做——不碰现网）
 
@@ -110,7 +118,8 @@ Copy-Item "D:\workspace\boundless\deploy\instances\tongyi\config.local.yaml" "$d
 # 4) 域包 junction（域包/人设/KB 种子随代码走，两实例共用一份，只读）
 New-Item -ItemType Junction -Path "$data\domains" -Target "$eng\domains" | Out-Null
 
-# 5) 必填项（编辑 $data\config\config.local.yaml）：
+# 5) 必填项（编辑 $data\config\config.local.yaml——把模板里注释的两行替换成真值，
+#    绝不能在文件尾追加第二个 web_admin: 块：YAML 重复顶层键会整段覆盖，端口会回落 18787）：
 #    ai.api_key / ai.base_url / ai.model     ← 翻译兜底引擎，必填
 #    web_admin.auth_token / secret_key       ← 后台登录令牌，必填强随机
 #    translation.engines.ollama_mt.*         ← 有本地 MT 就填，没有留空自动回落 ai
@@ -153,10 +162,11 @@ powershell -ExecutionPolicy Bypass -File D:\workspace\boundless\deploy\instances
 
 | 操作 | 命令 |
 |---|---|
-| 启动智聊 | `powershell -ExecutionPolicy Bypass -File deploy\instances\start_zhiliao.ps1` |
-| 启动通译 | `powershell -ExecutionPolicy Bypass -File deploy\instances\start_tongyi.ps1` |
-| 健康检查 | `powershell -ExecutionPolicy Bypass -File deploy\instances\status_instances.ps1`（`-Json` 供监控；退出码 0=全 GO 1=部分 2=全 DOWN） |
-| 停止 | 查端口持有者后停进程：`Get-NetTCPConnection -LocalPort 18799 -State Listen \| % OwningProcess \| % { Stop-Process -Id $_ }`（通译换 18899）。也可走 `deploy\deploy.ps1 -Action down -Only chengjie_zhiliao -Force`（stack.json 已登记，条目默认 enabled=false，需 `-Only` 显式点名） |
+| 预检 | `powershell -ExecutionPolicy Bypass -File deploy\instances\preflight_instance.ps1 [-DataDir <数据根>] [-Ports 18899,18887]`（退出码 0=可拉起 1=有 FAIL） |
+| 启动智聊 | `powershell -ExecutionPolicy Bypass -File deploy\instances\start_zhiliao.ps1 [-DataDir <数据根>]` |
+| 启动通译 | `powershell -ExecutionPolicy Bypass -File deploy\instances\start_tongyi.ps1 [-DataDir <数据根>]` |
+| 健康检查 | `powershell -ExecutionPolicy Bypass -File deploy\instances\status_instances.ps1`（`-Json` 供监控；退出码 0=全 GO 1=部分 2=全 DOWN；数据根不在缺省位置加 `-ZhiliaoData`/`-TongyiData`） |
+| 停止 | `powershell -ExecutionPolicy Bypass -File deploy\instances\stop_instance.ps1 -Instance tongyi`（或 `zhiliao`；防呆=只停「持有实例端口且命令行含 main.py」的进程树，幂等）。也可走 `deploy\deploy.ps1 -Action down -Only chengjie_zhiliao -Force`（stack.json 已登记，条目默认 enabled=false，需 `-Only` 显式点名） |
 
 启动脚本防呆行为（两个 start 脚本一致）：
 
@@ -224,7 +234,82 @@ DB（`inbox.db`、`web_users.db`、`knowledge_base.db`、`bot.db`、`runtime_fla
    把 §0 例外①②的 `license.key` / `license_quota.db` 从「引擎根」改为跟随活动 config 目录，
    消掉最后两个共享残留；`LICENSE_KEY` 环境变量方案在此之前完全够用。
 2. 引擎侧接入事件发射器时（P4），按 §7 的 product_id 约定分实例埋点，无需新增配置。
-3. 若未来要把数据根挪出仓库/挪盘，只改启动脚本 `$DataRoot` 一处 + stack.json 备注。
+3. 若未来要把数据根挪出仓库/挪盘，启动/探测脚本传 `-DataDir`（`-ZhiliaoData`/`-TongyiData`）+ stack.json 备注。
+
+---
+
+## 10. 本机试点记录 2026-07-18（生产机 .117 迁移前最后一道实证）
+
+**结论：成功拉起。** 在本开发机用临时数据根 `%TEMP%\tongyi_pilot` 全程照 §3.1 手册
+真实拉起通译 LingoX 并通过全部验证，结束后无残留（端口/进程/临时目录全清）。
+
+**试点过程与验证结果（时序）：**
+
+1. `preflight_instance.ps1`：PASS（python 3.13.9；requirements 26 包中 25 可导入，
+   仅缺 `google-genai`；`import main` 全链烟测 PASS；18899/18887 空闲；数据根可写）。
+2. 照 §3.1 初始化临时数据根（example→config.yaml、拷通译 overlay、填强随机
+   auth_token/secret_key、建 domains junction）——手册步骤按序可执行，无缺漏。
+3. `start_tongyi.ps1 -DataDir %TEMP%\tongyi_pilot`：一次拉起成功，约 25s 就绪；
+   仅监听 `127.0.0.1:18899`（备用位 18887、metrics 19199 均未绑定=overlay 裁剪生效）。
+4. `status_instances.ps1 -TongyiData …`：通译 **GO**（HTTP 401=health 需鉴权，活）；
+   智聊 DOWN（本机未初始化，预期）。
+5. HTTP 实测：`/login` **200**，HTML `<title>登录 · 通译 LingoX</title>`，全页无「智聊」
+   字样；`/manifest.webmanifest`（免鉴权）品牌=`通译 LingoX · 坐席工作台`——品牌 overlay 生效。
+6. 数据隔离实证：全套 DB（inbox/web_users/knowledge_base/bot/translation_memory/
+   account_registry/audit/persona_media…）全部落临时根 `config\` 下；域包 general 加载
+   （KB categories 就位）；telegram 占位→按预期走「跳过协议客户端」路径；
+   **引擎根 `config\` 逐文件比对（含大小/mtime）与试点前完全一致=零污染**。
+7. 幂等复跑 `start_tongyi.ps1`：检出已在跑，幂等退出 0，未重复拉进程。
+8. `stop_instance.ps1 -Instance tongyi`：验明持有者后停进程树，端口即时释放；
+   重复 stop 幂等退出 0；netstat 终检 18899/18887 无监听、无 main.py 残留进程。
+
+**本轮发现并修复的脚手架问题（before→after）：**
+
+| # | 问题 | before | after |
+|---|---|---|---|
+| 1 | 缺预检工具，依赖/端口/可写性只能拉起后才暴露 | 无 | 新增 `preflight_instance.ps1`（PASS/WARN/FAIL 清单，退出码 0/1） |
+| 2 | 数据根写死在脚本里，README「放仓库外改 $DataRoot」实际要改脚本源码 | `$DataRoot` 硬编码 | `start_*.ps1` 加 `-DataDir`、`status_instances.ps1` 加 `-ZhiliaoData/-TongyiData`（缺省不变，向后兼容） |
+| 3 | 缺停止脚本，README 只给了手工 Stop-Process 一行 | 手工查端口杀进程 | 新增 `stop_instance.ps1`（防呆：持有者命令行必须含 main.py 才杀树；幂等；停后确认端口释放） |
+| 4 | §3.1 未警示 overlay 必填项的 YAML 陷阱 | 只说「编辑必填项」 | 注明「替换模板注释行，勿在文件尾追加第二个 `web_admin:` 块」（YAML 重复顶层键整段覆盖，端口会回落 18787） |
+
+**试点中记录的引擎侧已知问题（本期不修，只记录）：**
+
+- `ops.kill_switch.db_path: config/runtime_flags.db`（example 默认值）是相对路径，
+  `web_app.py` 对相对值再拼一次活动 config 目录 → 实例目录出现 `config\config\runtime_flags.db`
+  嵌套目录。功能正常（kill-switch 可用），仅目录不雅；现网单实例同样受影响。
+- `intent_tags_watcher` 监视的是**引擎根** `config\intent_tags.yaml`（非实例目录）——
+  与 §0 例外②同级的共享残留（只读监视，无写冲突），双实例共用一份 intent_tags。
+- 域包 hook 注册告警：`GeneralDomainHook() takes no arguments`（general 域包 hook
+  构造签名与注册器不符，hook 未注册但域包 KB/人设正常加载；通译 MVP 不依赖 hook）。
+- `requirements.txt` 的 `google-genai` 在本机系统 Python 缺失，但它是软依赖
+  （`ai_client.py` try/except 防护，`GENAI_AVAILABLE=False` 降级）；通译走
+  `openai_compatible` provider 不用 gemini，**不装不影响**。预检对此类缺包只报 WARN，
+  以 `import main` 全链烟测为硬闸。补齐方案（本机已实证，不污染系统 Python）：
+  `python -m venv --system-site-packages engines\chengjie\.venv-pilot` 后在其中
+  `pip install google-genai`，预检加 `-PythonExe …\.venv-pilot\Scripts\python.exe`
+  复跑=全绿 0 警告（`.venv*/` 已入引擎 .gitignore，不入库）。
+
+**生产机（.117）迁移前置条件核对表：**
+
+- [ ] `preflight_instance.ps1` 在生产机跑通（通译 `-Ports 18899,18887`；若给智聊做
+  预检换 `-Ports 18799,18787`）：python 在 PATH、依赖齐（google-genai 缺失可接受，
+  其余 MISS 需对照 requirements.txt 补齐；要全绿可按 §10 引擎侧已知问题第 4 条
+  建 `.venv-pilot`）、端口空闲、数据根可写；
+- [ ] 生产机端口现状核对：`netstat -ano | findstr "18899 18887 18799"` 无占用，
+  且 `deploy/cluster_map.json`/`stack.json` 端口表仍与本手册附录一致；
+- [ ] 数据根选址定稿（仓库内 `deploy\instances\tongyi\data` 或仓库外均可；仓库外
+  记得启动/探测/停止都带数据根参数），并确认该盘余量（全套 SQLite + logs 增长）；
+- [ ] 照 §3.1 初始化：config.yaml（example 起底）→ 通译 overlay → **替换式**填入
+  ai.api_key/base_url/model + 强随机 auth_token/secret_key → domains junction；
+- [ ] 通译授权码（与智聊不同 sub/lic_id）存 `<数据根>\config\license.key`（§5）；
+  社区模式试运行可跳过；
+- [ ] `start_tongyi.ps1` 拉起 → `status_instances.ps1` 通译 GO → 浏览器登录
+  `http://127.0.0.1:18899/login` 验证品牌为「通译 LingoX」且令牌可登录；
+- [ ] 对外暴露前再改 overlay 的 `web_admin.host: 0.0.0.0`（或上反代）并过防火墙放行；
+- [ ] 验收后按 §8 择窗迁智聊（先停现网+禁用老计划任务，再照 §3.2 搬数据）；
+  回滚点=老目录数据原地保留；
+- [ ] 观察期后更新 `deploy/stack.json`：旧 `chengjie` 条目 `enabled=false`、
+  两个 `chengjie_*` 条目 `enabled=true`。
 
 ---
 

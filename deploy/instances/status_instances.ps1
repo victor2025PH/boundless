@@ -1,5 +1,6 @@
 ﻿# status_instances.ps1 — 智聊/通译双实例健康探测（只读，绝不改任何状态）
 # 用法: powershell -ExecutionPolicy Bypass -File .\status_instances.ps1 [-Json]
+#       [-ZhiliaoData <数据根>] [-TongyiData <数据根>]   ← 数据根不在缺省位置时指定
 # 判定（对齐 deploy.ps1 三态语义）：
 #   GO       主端口在听，且持有者是引擎进程（python main.py）；HTTP 有响应更佳
 #   DEGRADED 端口在听但持有者不像本引擎 / 数据目录体检有缺
@@ -9,14 +10,21 @@
 #       「有无 HTTP 响应」（401/403 也算活着），不解析 body。
 
 [CmdletBinding()]
-param([switch]$Json)
+param(
+    [switch]$Json,
+    [string]$ZhiliaoData = '',   # 与 start_zhiliao.ps1 -DataDir 同义（缺省 zhiliao\data）
+    [string]$TongyiData  = ''    # 与 start_tongyi.ps1  -DataDir 同义（缺省 tongyi\data）
+)
 
 $ErrorActionPreference = 'SilentlyContinue'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
 
+if (-not $ZhiliaoData) { $ZhiliaoData = Join-Path $PSScriptRoot 'zhiliao\data' }
+if (-not $TongyiData)  { $TongyiData  = Join-Path $PSScriptRoot 'tongyi\data' }
+
 $Instances = @(
-    [pscustomobject]@{ id='zhiliao'; name='智聊 ChatX';  port=18799; alt_port=18787; data=(Join-Path $PSScriptRoot 'zhiliao\data') },
-    [pscustomobject]@{ id='tongyi';  name='通译 LingoX'; port=18899; alt_port=18887; data=(Join-Path $PSScriptRoot 'tongyi\data') }
+    [pscustomobject]@{ id='zhiliao'; name='智聊 ChatX';  port=18799; alt_port=18787; data=$ZhiliaoData },
+    [pscustomobject]@{ id='tongyi';  name='通译 LingoX'; port=18899; alt_port=18887; data=$TongyiData }
 )
 
 function Get-PortHolders([int]$port) {

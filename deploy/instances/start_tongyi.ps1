@@ -1,5 +1,5 @@
 ﻿# start_tongyi.ps1 — 通译 LingoX 实例启动（chengjie 双实例，同目录 README.md 是运行手册）
-# 用法: powershell -ExecutionPolicy Bypass -File .\start_tongyi.ps1
+# 用法: powershell -ExecutionPolicy Bypass -File .\start_tongyi.ps1 [-DataDir <数据根>]
 #
 # 委派引擎既有入口 `python main.py`（同 stack.json: runtime=python entry=main.py），
 # 差异仅两点（引擎零改动的双实例机制，侦察结论见 README §0）：
@@ -7,6 +7,13 @@
 #   2) AITR_DATA_DIR = 实例数据根（config 与全套 SQLite 落 <数据根>\config\）。
 # 防呆：数据根/config 缺失一律报错退出，绝不自动创建/播种/覆盖任何现有数据；
 #       端口被非本引擎进程占用时报错而不清杀（双实例下清幽灵可能误杀另一实例）。
+
+[CmdletBinding()]
+param(
+    # 自定义数据根（缺省 = 同目录 tongyi\data）。仓库外部署 / 本机试点用，
+    # 初始化步骤同 README §3.1，只是把 $data 换成该目录。
+    [string]$DataDir = ''
+)
 
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
@@ -17,7 +24,10 @@ $InstanceName = '通译 LingoX'
 $Port         = 18899                                   # = 实例 config.local.yaml 的 web_admin.port
 $RepoRoot     = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $EngineDir    = Join-Path $RepoRoot 'engines\chengjie'
-$DataRoot     = Join-Path $PSScriptRoot 'tongyi\data'
+# -DataDir 相对路径按调用方当前目录归一为绝对路径（cmd 链的 set/CurrentDirectory 需要绝对路径）
+$DataRoot     = if ($DataDir) {
+    [IO.Path]::GetFullPath([IO.Path]::Combine((Get-Location).ProviderPath, $DataDir))
+} else { Join-Path $PSScriptRoot 'tongyi\data' }
 
 function Fail([string]$msg) {
     Write-Host "[start-$InstanceId] 错误: $msg" -ForegroundColor Red

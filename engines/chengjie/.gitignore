@@ -104,6 +104,7 @@ celerybeat.pid
 .env.local
 config/secrets.local.json
 .venv
+.venv*/
 env/
 venv/
 ENV/
