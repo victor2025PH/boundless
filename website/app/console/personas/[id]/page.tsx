@@ -280,6 +280,10 @@ export default function PersonaDetailPage({ params }: { params: { id: string } }
           <SectionTitle count={purges.length}>清除进度</SectionTitle>
           <p className="mb-3 text-[11px] leading-relaxed text-slate-500">
             各引擎经 /api/sync/personas/purges 轮询指令、删除本地资产后回执；全部回执后人设自动置「已清除」。
+            全部人设的指令积压见{" "}
+            <Link href="/console/personas/purges" className="text-amber-300/90 underline-offset-2 hover:underline">
+              清除队列监控 →
+            </Link>
           </p>
           <div className="overflow-x-auto rounded-xl border border-slate-800">
             <table className="w-full min-w-max text-left text-sm">

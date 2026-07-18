@@ -2,7 +2,7 @@
 // 贯穿获客→承接→变现。列表：槽位点亮态、状态徽章、归属客户、授权产品数、搜索+状态筛选。
 import Link from "next/link";
 import { getConsoleSessionUser } from "@/lib/console-auth";
-import { getPersonaStats, listPersonas } from "@/lib/personas";
+import { getPersonaStats, getPurgeQueueStats, listPersonas } from "@/lib/personas";
 import { getCustomerById } from "../data";
 import {
   Card,
@@ -47,6 +47,7 @@ export default function PersonasPage({
 
   const { rows, total } = listPersonas({ q, status, limit: LIMIT, offset });
   const stats = getPersonaStats();
+  const purgePendingDirectives = getPurgeQueueStats().pendingDirectives;
 
   const nameById = new Map<string, string | null>();
   for (const p of rows) {
@@ -69,7 +70,7 @@ export default function PersonasPage({
           </>
         }
         actions={
-          <div className="flex gap-4 text-xs text-slate-400">
+          <div className="flex flex-wrap items-center gap-4 text-xs text-slate-400">
             <span>
               共 <b className="text-slate-200">{stats.total}</b> 个
             </span>
@@ -81,6 +82,16 @@ export default function PersonasPage({
                 脸{stats.slots.face}·声{stats.slots.voice}·话{stats.slots.prompt}·知{stats.slots.knowledge}
               </b>
             </span>
+            <Link
+              href="/console/personas/purges"
+              className={`rounded-lg border px-2.5 py-1 font-medium ${
+                purgePendingDirectives > 0
+                  ? "border-amber-500/40 text-amber-300 hover:bg-amber-500/10"
+                  : "border-slate-700 text-slate-300 hover:border-amber-500/60 hover:text-amber-300"
+              }`}
+            >
+              清除队列{purgePendingDirectives > 0 ? ` · ${purgePendingDirectives} 待回执` : ""} →
+            </Link>
           </div>
         }
       />

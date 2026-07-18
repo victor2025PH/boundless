@@ -10,6 +10,7 @@ import { getConsoleSessionUser } from "@/lib/console-auth";
 import { roleAtLeast } from "@/lib/console-users";
 import { getCustomerById, listAuditForCustomer, listIdentitiesByCustomer } from "../../data";
 import { AttachIdentityForm } from "../../ui";
+import { OpportunityActions, OpportunityLogBadge } from "../../opportunities-ui";
 import {
   Card,
   DataTable,
@@ -258,9 +259,9 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
           </p>
         ) : (
           <>
-            <DataTable head={["类型", "从 → 到", "理由", "信号值"]}>
-              {opportunities.map((o, i) => (
-                <tr key={`${o.kind}-${o.toProduct}-${i}`} className="hover:bg-slate-800/40">
+            <DataTable head={["类型", "从 → 到", "理由", "信号值", "跟进"]}>
+              {opportunities.map((o) => (
+                <tr key={o.oppKey} className="hover:bg-slate-800/40">
                   <Td>
                     <OpportunityKindBadge kind={o.kind} />
                   </Td>
@@ -273,11 +274,26 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
                     <span className="block truncate" title={o.reason}>{o.reason}</span>
                   </Td>
                   <Td className="text-xs font-semibold tabular-nums text-slate-200">{o.signalValue}</Td>
+                  <Td>
+                    <span className="inline-flex items-center gap-1.5">
+                      <OpportunityLogBadge log={o.log} />
+                      {canWrite && (
+                        <OpportunityActions
+                          oppKey={o.oppKey}
+                          kind={o.kind}
+                          customerId={o.customerId}
+                          toProduct={o.toProduct}
+                          log={o.log}
+                        />
+                      )}
+                    </span>
+                  </Td>
                 </tr>
               ))}
             </DataTable>
             <p className="mt-2.5 text-[11px] leading-relaxed text-slate-500">
-              只读推导（lib/opportunities.ts 三类规则），不落库；「标记已跟进」待 opportunities_log 表上线。
+              商机由三类规则只读推导（lib/opportunities.ts）；跟进动作落 opportunities_log（schema v4）——
+              「跟进」保留并降权 −20，「赢单/忽略」默认隐藏。{!canWrite && "viewer 只读：标记操作需 admin 及以上角色。"}
             </p>
           </>
         )}

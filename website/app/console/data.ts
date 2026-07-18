@@ -5,7 +5,8 @@
 // 当前缺口（ledger.ts 无对应导出，故在此薄封装）：
 //   1. 按 id 取单个客户（ledger 只有 listCustomers 模糊搜索）；
 //   2. 按客户列出身份标识 identities；
-//   3. 按客户聚合审计流水（客户 360 的"审计提示"分区）。
+//   3. 按客户聚合审计流水（客户 360 的"审计提示"分区）；
+//   4. 全局审计列表 listAudit（?q=&action=，独立审计页）。
 
 import { getLedgerDb, type AuditRow, type CustomerRow, type IdentityRow } from "@/lib/ledger";
 
@@ -34,4 +35,37 @@ export function listAuditForCustomer(customerId: string, limit = 30): AuditRow[]
        ORDER BY ts DESC LIMIT @limit`
     )
     .all({ id: customerId, like: `%${customerId}%`, limit }) as AuditRow[];
+}
+
+/** 全局审计列表（只读）：最近流水，支持 action 精确过滤 + q 模糊（actor/action/entity/entity_id/detail）。
+ *  不含聊天内容——audit 表只记写操作元数据。 */
+export function listAudit(opts: { limit?: number; q?: string; action?: string } = {}): {
+  rows: AuditRow[];
+  total: number;
+} {
+  const limit = Math.min(Math.max(1, Math.trunc(opts.limit ?? 100)), 500);
+  const action = opts.action?.trim() || undefined;
+  const q = opts.q?.trim() || undefined;
+  const db = getLedgerDb();
+
+  const where: string[] = [];
+  const params: Record<string, string | number> = { limit };
+  if (action) {
+    where.push("action = @action");
+    params.action = action;
+  }
+  if (q) {
+    where.push(
+      "(actor LIKE @like OR action LIKE @like OR entity LIKE @like OR entity_id LIKE @like OR IFNULL(detail,'') LIKE @like)"
+    );
+    params.like = `%${q}%`;
+  }
+  const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const total = (
+    db.prepare(`SELECT COUNT(*) AS n FROM audit ${clause}`).get(params) as { n: number }
+  ).n;
+  const rows = db
+    .prepare(`SELECT * FROM audit ${clause} ORDER BY ts DESC LIMIT @limit`)
+    .all(params) as AuditRow[];
+  return { rows, total };
 }
