@@ -41,8 +41,8 @@
           "sessions/（Telethon 登录态，从备份取；缺失需重新登录）"
         ]
       },
-      "enabled": true,
-      "notes": "主服务绑定 0.0.0.0:18799（见 _smoke.out）；health 需鉴权，故按端口+进程判活。协议侧车(whatsapp-baileys/messenger-web) 单独在 services/ 下。"
+      "enabled": false,
+      "notes": "【已退役 2026-07-19，实施15】老单实例形态：现网核查 .117 无此进程（老路径已不存在、自启任务 Disabled），智聊已按双实例形态全新上线（chengjie_zhiliao 条目）。本条保留仅作历史登记；enabled 必须保持 false——start_main.ps1 的『清幽灵端口』逻辑会强杀 18799 持有者，误启会杀掉智聊新实例。协议侧车(whatsapp-baileys/messenger-web) 单独在 services/ 下。"
     },
     {
       "id": "chengjie_zhiliao",
@@ -64,8 +64,8 @@
           "实例授权（可选）：data/config/license.key（instances/README §5，启动脚本注入 LICENSE_KEY）"
         ]
       },
-      "enabled": false,
-      "notes": "双实例试点，手动启用（up 需 -Only chengjie_zhiliao 或改 enabled）。与旧 chengjie 条目同端口 18799：启用本条 = 已按 instances/README §8 停旧单实例并把旧条目 enabled 改 false，双开会互踩。数据/环境隔离由 start_zhiliao.ps1 负责（AITR_DATA_DIR/EVENT_SPOOL_DIR/CHENGJIE_LEDGER_OUTBOX/LICENSE_KEY）。"
+      "enabled": true,
+      "notes": "【生产 .117 · 2026-07-19 上线，实施15】老板确认现网无智聊在跑，本实例全新起（无数据迁入）：数据根 D:\\chengjie-instances\\zhiliao\\data，AI=内网 Ollama(.176) qwen3:30b-a3b，Telegram 协议号未配（纯收件箱/网页路径，后续人工填）。旧 chengjie 条目已退役（enabled=false 防 start_main.ps1 清杀 18799）。数据/环境隔离由 start_zhiliao.ps1 负责（AITR_DATA_DIR/EVENT_SPOOL_DIR/CHENGJIE_LEDGER_OUTBOX/LICENSE_KEY）。"
     },
     {
       "id": "chengjie_tongyi",
@@ -88,8 +88,8 @@
           "实例授权（可选）：data/config/license.key（instances/README §5）"
         ]
       },
-      "enabled": false,
-      "notes": "双实例试点，手动启用。全新翻译实例：lingox 裁剪（companion/RPA/voice/monetization/contacts 全关，web_chat manual），不配 Telegram 协议号即走纯收件箱/网页翻译启动路径。端口 18899/18887 为新分配，cluster_map/stack 均无占用。"
+      "enabled": true,
+      "notes": "【生产 .117 · 2026-07-18 上线（实施14 阶段1-2 通过，观察期中）】数据根 D:\\chengjie-instances\\tongyi\\data；lingox 裁剪（companion/RPA/voice/monetization/contacts 全关，web_chat manual），未配协议号走纯收件箱/网页翻译路径；翻译=ollama_mt(.176 hy-mt2)→ai 兜底。对外暴露（0.0.0.0/子域反代）留观察期后人工做。端口 18899/18887。"
     },
     {
       "id": "huoke",
