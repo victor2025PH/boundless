@@ -29,6 +29,7 @@ export function buildWelcome(lang: BotLang) {
   ${PRODUCT_COUNT} 条产品线：
 ${lines}
 · 🔐 <b>无界底座</b>：自主可控私有部署，数据不出网
+· 🐉 <b>隐藏玩法</b>：发 /xingzhu 收今日星珠，七星聚齐召唤界龙许愿
 
 👇 点下方功能菜单，或直接发消息开聊`
     : `👋 Welcome to <b>${BRAND.company.full}</b> — ${BRAND.company.tagline.en}
@@ -39,8 +40,24 @@ ${lines}
   ${PRODUCT_COUNT} product lines:
 ${lines}
 · 🔐 <b>BOUNDLESS Engine</b>: self-controlled private deployment, data stays off-net
+· 🐉 <b>Hidden quest</b>: send /xingzhu to collect today's pearl — seven summon the Loong
 
 👇 Tap the menu below, or just send me a message`;
+}
+
+/** 客服场景欢迎（频道「👤 客服」按钮深链 /start cs_*）：bot 秒回 = 客服先开口 */
+export function buildCsWelcome(lang: BotLang) {
+  return lang === "zh"
+    ? `👋 你好，我是 <b>${BRAND.company.full}</b> 的客服助手。
+
+换脸 / 克隆声音 / 实时翻译 / AI 自动成交 / 私有部署 / 价格——都能直接问我，7×24 秒回。
+
+也可以点下面按钮：`
+    : `👋 Hi, I'm the <b>${BRAND.company.full}</b> support assistant.
+
+Face swap / voice cloning / real-time translation / AI auto-closing / private deployment / pricing — ask me anything, 24/7.
+
+Or tap below:`;
 }
 
 export function buildServices(lang: BotLang) {
@@ -54,7 +71,7 @@ export function buildServices(lang: BotLang) {
 export function buildPricing(lang: BotLang) {
   const c = t(lang);
   const plans = c.plans.items
-    .map((p) => `· <b>${p.name}</b> — ${p.priceMonthly} USDT/月`)
+    .map((p) => `· <b>${p.name}</b> — ${p.priceMonthly} USD/${lang === "zh" ? "月" : "mo"}`)
     .join("\n");
   const rt = c.realtime.plans
     .map((p) => `· <b>${p.name}</b> — ${p.price}`)
@@ -62,7 +79,7 @@ export function buildPricing(lang: BotLang) {
   const engage = c.engage.models.map((m) => `· <b>${m.name}</b> — ${m.price}`).join("\n");
 
   return lang === "zh"
-    ? `💰 <b>价格速览</b>（USDT 结算）
+    ? `💰 <b>价格速览</b>（挂牌 USD · 可 USDT 结算）
 
 <b>AI 成交聊天 · 月付</b>
 ${plans}
@@ -74,7 +91,7 @@ ${rt}
 ${engage}
 
 📱 打开 Mini App 可查看完整价格表与 ROI 试算`
-    : `💰 <b>Pricing overview</b> (USDT)
+    : `💰 <b>Pricing overview</b> (listed USD · USDT settlement OK)
 
 <b>AI auto-closing chat · monthly</b>
 ${plans}
@@ -100,8 +117,8 @@ export function buildDeploy(lang: BotLang) {
     .map((m) => `<b>${m.badge} · ${m.name}</b>\n${m.tagline}\n${m.price}`)
     .join("\n\n");
   return lang === "zh"
-    ? `🤝 <b>三种合作方式</b>\n\n${models}\n\n硬件归你、数据私有不出网，全程 USDT。`
-    : `🤝 <b>Three engagement models</b>\n\n${models}\n\nYou own hardware, data stays private, USDT only.`;
+    ? `🤝 <b>三种合作方式</b>\n\n${models}\n\n硬件归你、数据私有不出网，挂牌 USD，支持 USDT 结算。`
+    : `🤝 <b>Three engagement models</b>\n\n${models}\n\nYou own hardware, data stays private; listed in USD, USDT settlement supported.`;
 }
 
 export function buildContact(lang: BotLang) {
@@ -136,7 +153,7 @@ function buildInstallHelp(lang: BotLang) {
 · 组件下载中断 → 重新打开会自动续传，不会重下
 · 显卡建议：仅声音克隆 4GB 起；实时换脸/数字人 8GB+；同传全家桶 24GB
 
-详细图文教程与完整手册见官网 /download 与 /manual。搞不定？99 USDT 远程代部署，装好即用。`
+详细图文教程与完整手册见官网 /download 与 /manual。搞不定？99 USD 远程代部署（可 USDT 结算），装好即用。`
     : `🖥 <b>AvatarHub install guide</b>
 
 1️⃣ Download the installer from /download (~45 MB, per-user, no admin rights)
@@ -148,7 +165,7 @@ Common issues:
 · Interrupted component download → reopen and it resumes automatically
 · GPU guidance: 4 GB for voice-only; 8 GB+ for live swap / digital human; 24 GB for the interpreting suite
 
-Full tutorial and manual: /download and /manual. Stuck? 99 USDT remote install service.`;
+Full tutorial and manual: /download and /manual. Stuck? 99 USD remote install (USDT settlement OK).`;
 }
 
 function keywordRules(lang: BotLang) {
@@ -216,8 +233,8 @@ export function buildKnowledgeContext(lang: BotLang): string {
     .join(lang === "zh" ? "、" : "; ");
   parts.push(
     lang === "zh"
-    ? `公司：${BRAND.company.full}（${BRAND.company.tagline.zh}）。${PRODUCT_COUNT} 条产品线：${lineSummary}。主推产品：智聊 ChatX 驱动的 AI 自动成交聊天系统。结算：全程 USDT。`
-    : `Company: ${BRAND.company.full} (${BRAND.company.tagline.en}). ${PRODUCT_COUNT} product lines: ${lineSummary}. Flagship: AI Auto-Closing Chat System powered by ChatX. Settlement: USDT only.`
+    ? `公司：${BRAND.company.full}（${BRAND.company.tagline.zh}）。${PRODUCT_COUNT} 条产品线：${lineSummary}。主推产品：智聊 ChatX 驱动的 AI 自动成交聊天系统。挂牌 USD，支持 USDT 结算。`
+    : `Company: ${BRAND.company.full} (${BRAND.company.tagline.en}). ${PRODUCT_COUNT} product lines: ${lineSummary}. Flagship: AI Auto-Closing Chat System powered by ChatX. Listed in USD; USDT settlement supported.`
   );
 
   parts.push(
@@ -228,7 +245,7 @@ export function buildKnowledgeContext(lang: BotLang): string {
   parts.push(
     (lang === "zh" ? "套餐：" : "Plans: ") +
       c.plans.items
-        .map((p) => `${p.name} ${p.priceMonthly} USDT/${lang === "zh" ? "月" : "mo"}（${p.features.join("、")}）`)
+        .map((p) => `${p.name} ${p.priceMonthly} USD/${lang === "zh" ? "月" : "mo"}（${p.features.join("、")}）`)
         .join("; ")
   );
 
@@ -257,7 +274,7 @@ export function buildKnowledgeContext(lang: BotLang): string {
           "配置要求：仅声音克隆 NVIDIA 4 GB 显存起；实时换脸/数字人直播 8 GB+（RTX 3060 起）；同传全家桶推荐 24 GB（RTX 4090/5090）。内存推荐 32 GB。",
           "常见问题：SmartScreen 拦截 → 「更多信息 → 仍要运行」；组件下载中断 → 重开自动断点续传；服务未就绪 → 启动器「一键体检」，多为显存不足或模型加载中；打不开 → 「一键诊断包」生成 6 位诊断码报给客服即可远程定位。",
           "软件更新：产品内一键升级（下载→自动安装→自动重启约 1–3 分钟），组件与角色数据全保留，清单 Ed25519 签名校验，支持一键回滚，直播中自动避让。每版更新内容见 /download 页「版本更新」。",
-          "在线手册：/manual（可打印导出 PDF）。装不动可购 99 USDT 远程代部署服务，装好即用。",
+          "在线手册：/manual（可打印导出 PDF）。装不动可购 99 USD 远程代部署服务（可 USDT 结算），装好即用。",
         ].join("\n")
       : [
           "Download: /download page. Windows 10/11 (x64) installer is ~45 MB (thin core, AI components download on demand), SHA-256 verifiable. macOS 12+ lightweight console coming soon (heavy inference needs a Windows/server NVIDIA GPU).",
@@ -265,7 +282,7 @@ export function buildKnowledgeContext(lang: BotLang): string {
           "Requirements: voice-only from NVIDIA 4 GB VRAM; live face swap / digital human 8 GB+ (RTX 3060+); interpreting suite 24 GB (RTX 4090/5090). 32 GB RAM recommended.",
           "Common issues: SmartScreen → More info → Run anyway; interrupted downloads resume automatically; service not ready → run the health check (usually low VRAM or models loading); still stuck → one-click diagnostic pack gives a 6-digit code for remote support.",
           "Updates: one-click in-app update (download → install → restart, ~1–3 min), components and character data preserved, Ed25519-signed manifests, one-click rollback, never applies mid-stream. Per-version notes on /download.",
-          "Online manual: /manual (printable to PDF). Hands-off option: 99 USDT remote installation service.",
+          "Online manual: /manual (printable to PDF). Hands-off option: 99 USD remote installation (USDT settlement OK).",
         ].join("\n")
   );
 
