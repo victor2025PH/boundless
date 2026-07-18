@@ -16,7 +16,7 @@ export const USDT_ADDR = process.env.NEXT_PUBLIC_USDT_ADDR || "";
 export interface Tier {
   key: string;
   edition: "trial" | "standard" | "pro" | "enterprise";
-  monthly: number; // 0 = 免费试用
+  monthly: number; // 0 = 免费试用；挂牌币种 USD（2026-07-18 全站报价币种统一，链上结算仍走 USDT）
   hot?: boolean;
   name: { zh: string; en: string };
   audience: { zh: string; en: string };

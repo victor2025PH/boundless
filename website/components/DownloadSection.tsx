@@ -385,9 +385,9 @@ export default function DownloadSection() {
 
             <p className="mt-4 text-xs text-slate-500">
               {zh ? (
-                <>推荐配置：NVIDIA 8GB+ 显存（实时换脸 / 数字人）；仅语音克隆 4GB 起。不想动手？<a className="text-neon-cyan hover:underline" href={CONTACT_URL} target="_blank" rel="noreferrer">联系 {TELEGRAM_DISPLAY}</a> 预约 99 USDT 远程代部署，装好即用。</>
+                <>推荐配置：NVIDIA 8GB+ 显存（实时换脸 / 数字人）；仅语音克隆 4GB 起。不想动手？<a className="text-neon-cyan hover:underline" href={CONTACT_URL} target="_blank" rel="noreferrer">联系 {TELEGRAM_DISPLAY}</a> 预约 99 USD 远程代部署，装好即用。</>
               ) : (
-                <>Recommended: NVIDIA GPU with 8 GB+ VRAM (live swap / digital human); 4 GB for voice-only. Hands-off? <a className="text-neon-cyan hover:underline" href={CONTACT_URL} target="_blank" rel="noreferrer">Contact {TELEGRAM_DISPLAY}</a> for the 99 USDT remote install service.</>
+                <>Recommended: NVIDIA GPU with 8 GB+ VRAM (live swap / digital human); 4 GB for voice-only. Hands-off? <a className="text-neon-cyan hover:underline" href={CONTACT_URL} target="_blank" rel="noreferrer">Contact {TELEGRAM_DISPLAY}</a> for the 99 USD remote install service.</>
               )}
             </p>
           </div>

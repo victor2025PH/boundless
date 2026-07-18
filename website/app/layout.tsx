@@ -7,7 +7,14 @@ import GlobalChrome from "@/components/GlobalChrome";
 import TgRedirect from "@/components/TgRedirect";
 import { SITE_URL, CONTACT_URL } from "@/lib/site";
 import { content } from "@/lib/content";
-import { realtimeOffers, autochatOffers, translateOffers, toSchemaOffer } from "@/lib/pricing";
+import {
+  realtimeOffers,
+  voiceOffers,
+  livexOffers,
+  autochatOffers,
+  translateOffers,
+  toSchemaOffer,
+} from "@/lib/pricing";
 import { BRAND, PRODUCT_ORDER, type ProductKey } from "@/lib/brand";
 
 export const metadata: Metadata = {
@@ -76,13 +83,15 @@ const jsonLd = {
 };
 
 // 产品结构化数据（Service）：名称/描述取自 lib/brand.ts 单一数据源。
-// 已落地定价的产品挂 offers：LingoX（通译·主推现金流，USD）/ ChatX（自动成交）/
-// LiveX（实时换脸换声·定制部署，USDT 遗留轨道）。其余定价上线再补。
+// 已落地定价的产品挂 offers（2026-07-18 起报价币种全线 USD）：LingoX（通译·主推现金流）/
+// ChatX（自动成交三档）/ VoiceX（幻声会员三档）/ LiveX（定制部署 + 形象买断/矩阵）。
+// gated 线（facex-image/video、reachx-deploy）与 per-usage 计量 SKU 不进公开 JSON-LD。
 // 锚点均指向已存在的首页 section，避免坏链。
 const PRODUCT_OFFERS: Partial<Record<ProductKey, Parameters<typeof toSchemaOffer>[0][]>> = {
   lingox: translateOffers,
   chatx: autochatOffers,
-  livex: realtimeOffers,
+  voicex: voiceOffers,
+  livex: [...realtimeOffers, ...livexOffers],
 };
 const PRODUCT_SCHEMA_ANCHOR: Record<ProductKey, string> = {
   reachx: "#autochat",

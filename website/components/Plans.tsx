@@ -65,7 +65,7 @@ export default function Plans() {
               <p className="mt-1 text-xs text-slate-400">{p.desc}</p>
 
               <div className="mt-5 flex items-end gap-1">
-                <span className="text-xs text-slate-500">USDT</span>
+                <span className="text-xs text-slate-500">USD</span>
                 <span className="text-4xl font-bold tabular-nums text-white">
                   {yearly ? p.priceYearly : p.priceMonthly}
                 </span>

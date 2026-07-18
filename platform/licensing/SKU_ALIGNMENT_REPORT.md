@@ -182,3 +182,91 @@
   范围外，见前言）；catalog-posts.ts"价格（USDT）"标签、components/**（OrderPanel/Plans/
   RoiCalculator/ProductLanding 等）的 USDT 表述——组件区与 bot 侧为同事施工区，未触碰；
   app/layout.tsx 注释"LiveX（…USDT 遗留轨道）"已过时但该文件不在本次许可清单，留待 owner 顺手更正。
+  （→ 上述"未动并记录"项已在 §8 治理收尾中处理，禁区文件除外，见 §8.5。）
+
+---
+
+## 8. 2026-07-18 治理收尾
+
+> 同日第二轮：把 §7 决议延伸到全站——修复全家桶倒挂、其余报价币种 USDT→USD 收尾、
+> §4.2 挂牌建议落地。改动文件：`website/lib/content.ts`、`lib/avatarhub-pricing.ts`（仅注释）、
+> `lib/catalog-posts.ts`、`lib/manualContent.ts`、`lib/pricing.ts`、`app/layout.tsx`、
+> `components/`（仅 git 干净文件：DownloadSection / OrderPanel / ClientAppCTA / Plans /
+> RoiCalculator）。**数值除全家桶外一律不变，只换报价币种标注。**
+
+### 8.1 全家桶倒挂修复（唯一改数值项）
+
+`content.ts` 定制部署段"全家桶 / Everything"（face+voice+数字人全套，内容 ≥ 创作者包）
+**3980 USDT → 7980 USD**（zh/en 两处，grep 全站确认无其余"3980"）。依据：§7 创作者包
+2580→5580 后全家桶出现"内容更多反而更便宜"的商业倒挂，按同一"竞品 ×2"决议延伸
+（3980×2=7960 → 品牌尾数 8 惯例 7980），改动处已加注释。
+
+### 8.2 报价币种 USDT→USD 收尾清单（数值全部不变）
+
+| 文件 | 位置 | before → after |
+|---|---|---|
+| `lib/content.ts` | 托管月费（zh/en） | "from 1980 USDT / 月(mo)" → "from 1980 USD / 月(mo)" |
+| `lib/content.ts` | 分红合作起投（zh/en） | "from 20,000 USDT" → "from 20,000 USD" |
+| `lib/content.ts` | 投资 ROI 试算标题+3 行（zh/en 共 8 处） | "50,000 / 8,000–12,000 / 6,000–9,000 / 4,200–6,300 USDT" → 同数值 USD |
+| `lib/content.ts` | ROI 计算器输入单位 salary/aov（zh/en） | "USDT" → "USD" |
+| `lib/catalog-posts.ts` | 商品帖价格标签（zh/en） | "价格（USDT）/ Pricing (USDT)" → "价格（USD）/ Pricing (USD)" |
+| `lib/manualContent.ts` | 远程代部署 ×3（FAQ zh/en + 支持章 zh/en） | "99 USDT" → "99 USD" |
+| `lib/avatarhub-pricing.ts` | `Tier.monthly` 注释 | 标注挂牌币种 USD、链上结算走 USDT（会员档 39–699 本身是纯数字字段，无币种串可改） |
+| `components/DownloadSection.tsx` | 远程代部署（zh/en） | "99 USDT" → "99 USD" |
+| `components/OrderPanel.tsx` | 结算条选中价、档位卡单位、首年 8 折约数、授权表副标题、远程代部署价 | "… USDT（/月/年）" → "… USD（/月/年）" |
+| `components/ClientAppCTA.tsx` | 会员起价（zh/en） | "${from} USDT/月起(mo)" → "USD" |
+| `components/Plans.tsx` | ChatX 套餐卡币种角标 | "USDT" → "USD" |
+| `components/RoiCalculator.tsx` | 净增/年化/推荐套餐价 3 处 | "USDT" → "USD" |
+
+### 8.3 有意保留（支付轨道语境，非报价币种）
+
+- content.ts："单位：USD · 支持 USDT 等结算"、"全程 USDT 结算"、"USDT 收款"、FAQ 付款方式；
+- legal-content.ts："服务以 USDT 结算（TRC20/ERC20）"；catalog-posts.ts："全程 USDT 结算 / USDT only"；
+- ProductLanding / TranslateDemo："USDT 结算"表述与示例问句；
+- OrderPanel / OrderStatusLookup 的**付款流金额**（"应付金额 X USDT""请精确转账 X USDT""应付 X USDT"）：
+  这是链上实付金额（`lib/order-store.ts` 台账 `currency:"USDT"`、小数尾数对账机制），属结算轨道
+  而非挂牌报价，且 order-store 不在本次许可清单——挂牌价（USD）→ 实付（USDT）正是"报价 USD、
+  结算 USDT"的双轨口径；
+- koVoice / jaVoice / ogTemplate / telegram-bot / tg-broadcast / app 各页 metadata 的"USDT 结算(決済/결제)"。
+
+### 8.4 新挂牌清单（§4.2 建议落地，价格均已与 registry 核对）
+
+`lib/pricing.ts` 新增 2 个导出数组 + autochatOffers 补 1 档，均带 skuId（挂牌总数 7→13）：
+
+| offer id | skuId | 价格 | 周期 |
+|---|---|---|---|
+| `voice-starter` | `voicex-starter` | 18 USD | month |
+| `voice-std` | `voicex-std` | 78 USD | month |
+| `voice-pro` | `voicex-pro` | 198 USD | month |
+| `livex-avatar-buy` | `livex-avatar-buy` | 798 USD | one-time |
+| `livex-dub-matrix` | `livex-dub-matrix` | 398 USD | month |
+| `autochat-entry` | `chatx-entry` | 58 USD | month |
+
+`app/layout.tsx` 接入：跟随既有 `PRODUCT_OFFERS` 模式——`voicex: voiceOffers`（VoiceX Service
+节点新挂 offers，锚点 #realtime 已存在）；`livex: [...realtimeOffers, ...livexOffers]`（LiveX
+Service 节点在原定制部署 2 档之上加挂买断/矩阵）；新数组同步登记进 pricing.ts 的
+`ALL_OFFER_ARRAYS` 供 findOfferBySkuId 反查；顺手更正了 layout.tsx 过时的"USDT 遗留轨道"注释
+（§7.3 遗留项）。**不挂牌**（维持 §4.2 结论）：`facex-image/video`、`facex-avatar`、
+`reachx-deploy`（gated 合规准入线，不进公开 JSON-LD）；`voicex-usage`、`livex-dub-min`、
+`voxx-meeting`（per-usage 单位超出 `PriceUnit = "one-time" | "month"`，扩类型需单独评审）；
+`livex-avatar-sub`（"from 198" 起价非定值，schema.org Offer.price 需数值）。
+
+### 8.5 待老板侧收尾清单（禁区文件里的报价币种 USDT，本次未动）
+
+1. `lib/bot-knowledge.ts`（在途施工）：L74/L248 ChatX 档位模板串 "`p.priceMonthly` USDT/月(mo)"、
+   L94 英文价格速览标题 "(USDT)"、L156/168/277/285 "99 USDT 远程代部署" ——报价币种应改 USD；
+   L82"（USDT 结算）"及 L120/127/236 等结算表述可保留。
+2. `app/order/page.tsx` + `app/en/order/page.tsx`（app/** 禁区）：openGraph 描述
+   "会员套餐 39–699 USDT/月 / Plans from 39 to 699 USDT/mo" → USD；会员档 JSON-LD
+   `priceCurrency: "USDT"`（39–699）→ "USD"（同步修复非 ISO 4217 问题）。
+3. `app/download/page.tsx` + `app/en/download/page.tsx`（禁区）：SoftwareApplication JSON-LD
+   `offers.priceCurrency: "USDT"`（price "0" 免费试用档）→ "USD"。
+4. 无需处理（结算轨道，记录备查）：`lib/order-store.ts` `currency:"USDT"` 与通知文案的
+   "应付 X USDT"（链上台账）、`app/api/order` / `app/api/admin/order-status` 的应付金额、
+   `lib/ops-summary.ts` "入账 X USDT"、telegram-bot / tg-broadcast 的"USDT 结算"简介。
+
+### 8.6 验证
+
+- `website/` 目录 `npx tsc --noEmit`：**退出码 0，零类型错误**。
+- grep 复核：本次许可文件中剩余 "USDT" 全部为 §8.3 所列支付轨道语义；"3980" 全站已清零。
+- 未运行 `npm run build`（按分工统一执行）。

@@ -13,8 +13,9 @@ export interface PriceOffer {
   /** 对应 platform/licensing/sku_registry.json（全域 SKU 唯一注册表，由 products/<产品>/product.yaml
    *  汇总生成，消费入口 platform/licensing/sku_registry.py）中的 sku_id ——
    *  官网报价与集团统一授权台账的关联键。2026-07-18 定价决议（按竞品 ×2）生效后，
-   *  7 个 offer 已全部回填 skuId 且两侧价格/币种一致，
-   *  见 platform/licensing/SKU_ALIGNMENT_REPORT.md"定价决议落地"小节。
+   *  7 个 offer 已全部回填 skuId 且两侧价格/币种一致（同日治理收尾补挂
+   *  voiceOffers / livexOffers / chatx-entry 后共 13 个，全部带 skuId），
+   *  见 platform/licensing/SKU_ALIGNMENT_REPORT.md"定价决议落地"与"治理收尾"小节。
    *  本字段不进 schema.org 输出（toSchemaOffer 未映射）。 */
   skuId?: string;
   name: string;
@@ -60,11 +61,80 @@ export const realtimeOffers: PriceOffer[] = [
   },
 ];
 
+/** Voice cloning & TTS (幻声 VoiceX) — 会员月付三档，public 直售。
+ *  2026-07-18 治理收尾（SKU_ALIGNMENT_REPORT.md §4.2 建议落地）：价格/币种/周期
+ *  取自 registry（voicex-starter 18 / voicex-std 78 / voicex-pro 198，USD/month）。
+ *  registry 的 voicex-usage（10 USD / per-10k-chars）不挂牌：per-usage 单位超出
+ *  PriceUnit 类型，扩类型需单独评审。 */
+export const voiceOffers: PriceOffer[] = [
+  {
+    id: "voice-starter",
+    skuId: "voicex-starter",
+    name: "Starter",
+    price: "18",
+    currency: "USD",
+    unit: "month",
+    description: "Per month; 1 cloned voice, 10k TTS chars.",
+  },
+  {
+    id: "voice-std",
+    skuId: "voicex-std",
+    name: "Standard",
+    price: "78",
+    currency: "USD",
+    unit: "month",
+    description: "Per month; 5 cloned voices, 100k TTS chars, multilingual.",
+  },
+  {
+    id: "voice-pro",
+    skuId: "voicex-pro",
+    name: "Pro",
+    price: "198",
+    currency: "USD",
+    unit: "month",
+    description: "Per month; 20 cloned voices, 500k TTS chars, voice-changer API.",
+  },
+];
+
+/** Digital human (幻影 LiveX) — mixed 线中可公开挂牌的两个 SKU。
+ *  2026-07-18 治理收尾（§4.2 落地）：livex-avatar-buy 798 one-time、
+ *  livex-dub-matrix 398/month，价格取自 registry。同产品的 livex-avatar-sub
+ *  （"from 198" 起价，非定值）与 livex-dub-min（per-min 计量单位）不挂牌。 */
+export const livexOffers: PriceOffer[] = [
+  {
+    id: "livex-avatar-buy",
+    skuId: "livex-avatar-buy",
+    name: "Avatar buyout",
+    price: "798",
+    currency: "USD",
+    unit: "one-time",
+    description: "One-time; permanent digital-human avatar with bound cloned voice.",
+  },
+  {
+    id: "livex-dub-matrix",
+    skuId: "livex-dub-matrix",
+    name: "Short-video matrix",
+    price: "398",
+    currency: "USD",
+    unit: "month",
+    description: "Per month; 30 dubbed short videos (100-video tier available).",
+  },
+];
+
 /** AI auto-closing chat system — subscription.
  *  skuId 对齐 registry 智聊 ChatX：价格数值/周期一致；2026-07-18 定价决议起报价币种
  *  统一 USD（与 product.yaml"单位 USD、结算支持 USDT"口径一致），币种差异已消除。
- *  registry 的 chatx-entry（入门 58/月）未在本文件挂牌，见 SKU_ALIGNMENT_REPORT.md。 */
+ *  2026-07-18 治理收尾：补挂 chatx-entry（入门 58/月，registry 确认），三档齐进 JSON-LD。 */
 export const autochatOffers: PriceOffer[] = [
+  {
+    id: "autochat-entry",
+    skuId: "chatx-entry",
+    name: "Entry",
+    price: "58",
+    currency: "USD",
+    unit: "month",
+    description: "Per month; 3 chat accounts, AI translation, 1 platform.",
+  },
   {
     id: "autochat-team",
     skuId: "chatx-team",
@@ -138,6 +208,8 @@ export function toSchemaOffer(o: PriceOffer) {
 // 全部对外挂牌的 offer 数组（新增数组时同步登记，findOfferBySkuId 才能反查到）。
 const ALL_OFFER_ARRAYS: readonly (readonly PriceOffer[])[] = [
   realtimeOffers,
+  voiceOffers,
+  livexOffers,
   autochatOffers,
   translateOffers,
 ];
