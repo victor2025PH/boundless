@@ -273,6 +273,135 @@ check("祥龙飞行游动跨帧变化", swimDiff.changed >= 2, JSON.stringify(sw
 await pSwim.screenshot({ path: `${OUT}/b4-loong-swim.png` });
 await ctxSwim.close();
 
+/* ────────── B5. 互动坞：聊天互斥 / 龙珠收纳 / 迷你星珠条收珠 / 恢复 ────────── */
+const ctxDock = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: "dark" });
+const pD = await ctxDock.newPage();
+pD.on("pageerror", (e) => errors.push("Dock: " + e));
+await pD.addInitScript(() => {
+  sessionStorage.setItem("bl-intro-seen", "1");
+  sessionStorage.setItem("bl-sprite-greeted", "1");
+  sessionStorage.setItem("yt-teaser", "1");
+  sessionStorage.setItem("bl-dragon-guide", "1");
+});
+await pD.goto(BASE, { waitUntil: "domcontentloaded", timeout: 90000 });
+await pD.waitForSelector(".dragon-pearl-offer", { timeout: 45000 });
+
+/* 静止态零重叠：FAB vs 星珠气泡 */
+const boxOf = async (sel) => pD.locator(sel).boundingBox().catch(() => null);
+const intersects = (a, b) =>
+  !!a && !!b && a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+const fabBox = await boxOf("button[aria-label='AI chat']");
+const offerBox = await boxOf(".dragon-pearl-offer");
+check("静止态 FAB 与星珠零重叠", !!fabBox && !!offerBox && !intersects(fabBox, offerBox));
+
+/* 聊天打开 → 龙珠簇收纳 + 精灵让位 + 迷你星珠条接管
+   （收纳=父簇 opacity 过渡到 0，Playwright isVisible 不识别 opacity——用 computed style 轮询） */
+const opacityOf = (sel) =>
+  pD
+    .evaluate((s) => {
+      const el = document.querySelector(s);
+      return el ? Number(getComputedStyle(el).opacity) : -1;
+    }, sel)
+    .catch(() => -1);
+const pollUntil = async (fn, ok, tries = 20, gap = 200) => {
+  let v;
+  for (let i = 0; i < tries; i++) {
+    v = await fn();
+    if (ok(v)) return { ok: true, v };
+    await pD.waitForTimeout(gap);
+  }
+  return { ok: false, v };
+};
+const CLUSTER = ".dragon-pearl-offer, .dragon-tray";
+
+await pD.locator("button[aria-label='AI chat']").click();
+await pD.waitForSelector(".chat-pearl-bar", { timeout: 8000 }).catch(() => {});
+/* 收纳形态有二：叫号机卸载（元素消失）或父簇 opacity→0，两者都算达标 */
+const clusterFade = await pollUntil(
+  () => pD.evaluate(() => {
+    const offer = document.querySelector(".dragon-pearl-offer");
+    if (!offer) return 0;
+    const el = offer.closest("div[class*='fixed']");
+    return el ? Number(getComputedStyle(el).opacity) : -1;
+  }).catch(() => -1),
+  (v) => v >= 0 && v < 0.05
+);
+check("聊天打开后星珠气泡收纳", clusterFade.ok, `opacity=${clusterFade.v}`);
+const spriteFade = await pollUntil(() => opacityOf(".ai-sprite-container"), (v) => v >= 0 && v < 0.05);
+check("聊天打开后精灵让位", spriteFade.ok, `opacity=${spriteFade.v}`);
+const barVisible = await pD.locator(".chat-pearl-bar").isVisible().catch(() => false);
+check("聊天头部迷你星珠条出现", barVisible);
+
+/* 迷你条收珠：不离开聊天完成收珠，toast 底部居中可见 */
+await pD.locator(".chat-pearl-collect").click().catch(() => {});
+const toastSeen = await pD
+  .locator(".dragon-toast")
+  .waitFor({ state: "visible", timeout: 6000 })
+  .then(() => true)
+  .catch(() => false);
+check("迷你条收珠 toast 底部居中", toastSeen);
+await pD.waitForTimeout(400);
+const barAfter = await pD.locator(".chat-pearl-bar").textContent().catch(() => "");
+check("迷你条进度已更新", /1\s*\/\s*7/.test(barAfter ?? ""), (barAfter ?? "").trim().slice(0, 40));
+await pD.screenshot({ path: `${OUT}/b5-dock-chat.png`, clip: { x: 1440 - 520, y: 900 - 640, width: 520, height: 640 } });
+
+/* 关闭聊天 → 龙珠簇恢复（今日已收 → 气泡不回，托盘回） */
+await pD.locator("button[aria-label='close']").click();
+const spriteBack = await pollUntil(() => opacityOf(".ai-sprite-container"), (v) => v > 0.9);
+const trayBack = await pollUntil(
+  () => pD.locator(".dragon-tray").isVisible().catch(() => false),
+  (v) => v === true
+);
+check("关闭聊天后托盘与精灵恢复", trayBack.ok && spriteBack.ok, `tray=${trayBack.v} sprite=${spriteBack.v}`);
+await ctxDock.close();
+
+/* ────────── B6. 叫号机：星珠 ↔ AI 招呼错峰（不预置 yt-teaser，走真实时序） ──────────
+   时间线：t=0 星珠上台 → t=15s 星珠持有到期 → t=18s 招呼入队即轮转上台（星珠回队尾）
+   → 关掉招呼 → 星珠回归。全程同屏自动气泡 ≤1。 */
+const ctxAttn = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: "dark" });
+const pA = await ctxAttn.newPage();
+pA.on("pageerror", (e) => errors.push("Attn: " + e));
+await pA.addInitScript(() => {
+  sessionStorage.setItem("bl-intro-seen", "1");
+  sessionStorage.setItem("bl-sprite-greeted", "1");
+  sessionStorage.setItem("bl-dragon-guide", "1");
+  /* 故意不设 yt-teaser：让 AI 招呼在 18s 后真实弹出 */
+});
+await pA.goto(BASE, { waitUntil: "domcontentloaded", timeout: 90000 });
+await pA.waitForSelector(".dragon-pearl-offer", { timeout: 45000 });
+const teaserEarly = await pA.locator(".ai-teaser-bubble").isVisible().catch(() => false);
+check("t<15s 星珠上台且招呼未弹", !teaserEarly);
+
+/* 等招呼弹出（18s dwell + 轮转），轮询至 26s */
+let teaserOn = false;
+for (let i = 0; i < 60 && !teaserOn; i++) {
+  teaserOn = await pA.locator(".ai-teaser-bubble").isVisible().catch(() => false);
+  if (!teaserOn) await pA.waitForTimeout(400);
+}
+/* 星珠让位有 350ms exit 动画——轮询等它退场 */
+let pearlHidden = false;
+for (let i = 0; i < 12 && !pearlHidden; i++) {
+  pearlHidden = !(await pA.locator(".dragon-pearl-offer").isVisible().catch(() => false));
+  if (!pearlHidden) await pA.waitForTimeout(250);
+}
+check("招呼上台时星珠已让位（同屏≤1）", teaserOn && pearlHidden, `teaser=${teaserOn} pearlHidden=${pearlHidden}`);
+await pA.screenshot({ path: `${OUT}/b6-attn-teaser.png`, clip: { x: 1440 - 520, y: 900 - 620, width: 520, height: 620 } });
+
+/* 关闭招呼 → 星珠轮转回归（两侧动画都轮询等） */
+await pA.locator(".ai-teaser-bubble button[aria-label='dismiss']").click().catch(() => {});
+let pearlBack = false;
+for (let i = 0; i < 20 && !pearlBack; i++) {
+  pearlBack = await pA.locator(".dragon-pearl-offer").isVisible().catch(() => false);
+  if (!pearlBack) await pA.waitForTimeout(300);
+}
+let teaserGone = false;
+for (let i = 0; i < 12 && !teaserGone; i++) {
+  teaserGone = !(await pA.locator(".ai-teaser-bubble").isVisible().catch(() => false));
+  if (!teaserGone) await pA.waitForTimeout(250);
+}
+check("关招呼后星珠回归", pearlBack && teaserGone, `pearlBack=${pearlBack} teaserGone=${teaserGone}`);
+await ctxAttn.close();
+
 /* ────────── C. 伪造 cookie 防线 + 移动端可见性 ────────── */
 const ctx3 = await browser.newContext();
 await ctx3.addCookies([{ name: "bl_vid", value: "12345678-aaaa-bbbb-cccc-123456789012.deadbeefdeadbeef", url: BASE }]);
