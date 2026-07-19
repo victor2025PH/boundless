@@ -29,11 +29,15 @@ node scripts/ledger-backup.mjs --dir <备份目录> --keep-days 30 --keep-min 10
 
 | 机器 | 动作 | 节律 |
 |---|---|---|
-| VPS bd2026 | `ledger-backup.mjs --dir ~/ledger-backups --keep-days 30 --keep-min 10`（crontab） | 每日 03:15 |
+| VPS bd2026 | `scripts/ledger-backup-cron.sh`（包装 ledger-backup.mjs，失败即 Telegram 告警） | 每日 03:15 |
 | .117（本地） | `D:\ledger-backups\pull_from_vps.ps1` scp 拉 VPS 备份到 `D:\ledger-backups\from-vps`（计划任务） | 每日 04:30 |
 
 - **两机地理冗余**：VPS 本机备份 + .117 异地副本，单盘/单机损毁不致数据全失。
 - 日志：VPS `~/ledger-backup.log`；.117 `D:\ledger-backups\pull.log`。
+- **失败告警（实施25）**：`ledger-backup-cron.sh` 备份失败（退出码非 0）即经
+  `scripts/notify-telegram.sh` 发 Telegram 给绑定管理员（复用 health-watchdog 同款
+  token/收件人：`.env.local` 的 `TELEGRAM_BOT_TOKEN`/`ALERT_CHAT_ID` ∪ `admin_chats.json`）；
+  落 `~/.ledger-backup.down` 幂等标志，下次成功补发「已恢复」并清标志。成功静默不刷屏。
 - **最后一层交人工**：季度把 `D:\ledger-backups\from-vps` 复制到离线介质（U 盘/加密云盘）。
 
 ## 4. 恢复步骤（真出事时照做）
