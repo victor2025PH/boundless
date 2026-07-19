@@ -118,3 +118,117 @@ export async function readIntroFunnel(days: number, opts?: { includeBots?: boole
     rates: { gestureRate: rate(gesture.size), soundRate: rate(soundOn.size), enterRate: rate(enter.size) },
   };
 }
+
+/* ================= A/B 实验读数（intro_* 实验专用） =================
+ * 决策要看的是「同一会话」的曝光桶 × 进入行为：按 sid 把 ab_expose 与
+ * intro_shown/intro_enter 连起来，每个变体给出 曝光会话/展示/进入/进入率/停留分布。
+ * 与漏斗同一份事件源、同一套 bot 过滤——两张卡的数字天然对得上。 */
+
+export interface IntroExperimentVariant {
+  exposed: number; // 曝光会话数（该 sid 被分进此桶）
+  shown: number; // 其中真正看到开场页的会话
+  enter: number; // 其中进入正文的会话
+  enterRate: number; // enter / shown（3 位小数；shown=0 时为 0）
+  dwellMs: { median: number; p90: number };
+}
+
+export interface IntroExperimentReadout {
+  experiment: string;
+  variants: Record<string, IntroExperimentVariant>;
+}
+
+export async function readIntroExperiments(
+  days: number,
+  opts?: { includeBots?: boolean }
+): Promise<{ days: number; experiments: IntroExperimentReadout[] }> {
+  const d = Math.min(90, Math.max(1, Math.floor(days) || 7));
+  const since = Date.now() - d * 86_400_000;
+
+  // sid → 该会话的实验分桶（同实验取首次曝光）/ 是否展示 / 进入停留
+  const buckets = new Map<string, Map<string, string>>();
+  const shownSids = new Set<string>();
+  const enterBySid = new Map<string, number | null>();
+
+  let raw = "";
+  try {
+    raw = await readFile(LOG, "utf8");
+  } catch {
+    /* 尚无事件文件 → 空读数 */
+  }
+
+  const lines = raw.split("\n");
+  for (const line of lines.length > MAX_LINES ? lines.slice(-MAX_LINES) : lines) {
+    // intro_* 实验的 ab_expose 行 props 里含 "intro_，与 intro_ 事件共用同一预筛
+    if (!line || !line.includes('"intro_')) continue;
+    try {
+      const r = JSON.parse(line) as {
+        t?: string;
+        event?: string;
+        sid?: string;
+        ua?: string;
+        props?: { experiment?: string; variant?: string; dwellMs?: number | null } | null;
+      };
+      const sid = r.sid || "";
+      if (!sid || !r.t || Date.parse(r.t) < since) continue;
+      if (!opts?.includeBots && r.ua && BOT_UA.test(r.ua)) continue;
+      if (r.event === "ab_expose" && r.props?.experiment?.startsWith("intro_") && r.props.variant) {
+        let m = buckets.get(sid);
+        if (!m) {
+          m = new Map();
+          buckets.set(sid, m);
+        }
+        if (!m.has(r.props.experiment)) m.set(r.props.experiment, r.props.variant);
+      } else if (r.event === "intro_shown") {
+        shownSids.add(sid);
+      } else if (r.event === "intro_enter" && !enterBySid.has(sid)) {
+        const dw = r.props?.dwellMs;
+        enterBySid.set(sid, typeof dw === "number" && dw >= 0 ? dw : null);
+      }
+    } catch {
+      /* 跳过坏行 */
+    }
+  }
+
+  // 聚合：experiment → variant → 指标
+  const agg = new Map<string, Map<string, { exposed: number; shown: number; enter: number; dwells: number[] }>>();
+  for (const [sid, m] of buckets) {
+    for (const [exp, variant] of m) {
+      let vm = agg.get(exp);
+      if (!vm) {
+        vm = new Map();
+        agg.set(exp, vm);
+      }
+      let v = vm.get(variant);
+      if (!v) {
+        v = { exposed: 0, shown: 0, enter: 0, dwells: [] };
+        vm.set(variant, v);
+      }
+      v.exposed += 1;
+      if (shownSids.has(sid)) v.shown += 1;
+      if (enterBySid.has(sid)) {
+        v.enter += 1;
+        const dw = enterBySid.get(sid);
+        if (dw != null) v.dwells.push(dw);
+      }
+    }
+  }
+
+  const experiments: IntroExperimentReadout[] = [...agg.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([experiment, vm]) => {
+      const variants: Record<string, IntroExperimentVariant> = {};
+      for (const [variant, v] of [...vm.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+        v.dwells.sort((a, b) => a - b);
+        variants[variant] = {
+          exposed: v.exposed,
+          shown: v.shown,
+          enter: v.enter,
+          enterRate: v.shown ? Math.round((v.enter / v.shown) * 1000) / 1000 : 0,
+          dwellMs: { median: quantile(v.dwells, 0.5), p90: quantile(v.dwells, 0.9) },
+        };
+      }
+      return { experiment, variants };
+    });
+
+  return { days: d, experiments };
+}
