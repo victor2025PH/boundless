@@ -136,6 +136,56 @@ export function SystemBadge({ system }: { system: string }) {
   );
 }
 
+// ── 渠道账号台账（schema v5）────────────────────────────────────────
+const CHANNEL_PLATFORM_STYLE: Record<string, string> = {
+  telegram: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+  whatsapp: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+  messenger: "bg-violet-500/15 text-violet-300 border-violet-500/30",
+  line: "bg-lime-500/15 text-lime-300 border-lime-500/30",
+  web: "bg-cyan-500/15 text-cyan-300 border-cyan-500/30",
+  other: "bg-slate-500/15 text-slate-400 border-slate-500/30",
+};
+const CHANNEL_PLATFORM_LABEL: Record<string, string> = {
+  telegram: "Telegram",
+  whatsapp: "WhatsApp",
+  messenger: "Messenger",
+  line: "LINE",
+  web: "web 客服",
+  other: "其他",
+};
+
+export function ChannelPlatformBadge({ platform }: { platform: string }) {
+  const cls = CHANNEL_PLATFORM_STYLE[platform] ?? CHANNEL_PLATFORM_STYLE.other;
+  return (
+    <span className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}>
+      {CHANNEL_PLATFORM_LABEL[platform] ?? platform}
+    </span>
+  );
+}
+
+const CHANNEL_STATUS_STYLE: Record<string, string> = {
+  active: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+  pending: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+  paused: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+  revoked: "bg-rose-500/15 text-rose-300 border-rose-500/30",
+};
+const CHANNEL_STATUS_LABEL: Record<string, string> = {
+  active: "在用",
+  pending: "待启用",
+  paused: "已暂停",
+  revoked: "已弃用",
+};
+
+export function ChannelStatusBadge({ status }: { status: string | null }) {
+  const s = status ?? "(空)";
+  const cls = CHANNEL_STATUS_STYLE[s] ?? "bg-slate-500/15 text-slate-400 border-slate-500/30";
+  return (
+    <span className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}>
+      {CHANNEL_STATUS_LABEL[s] ?? s}
+    </span>
+  );
+}
+
 // ── 人设总线（schema v3）───────────────────────────────────────────
 const PERSONA_STATUS_STYLE: Record<string, string> = {
   active: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
