@@ -19,14 +19,20 @@ function cleanUrl(v: unknown) {
   return /^https?:\/\//i.test(s) ? s : "";
 }
 
-/** 支付渠道设置（管理员）。GET 读全量 + Stripe Secret 配置状态；POST 保存补丁。
- *  Secret Key 永远只在服务器环境变量 STRIPE_SECRET_KEY —— 这里既不收也不回。 */
+/** 支付渠道设置（管理员）。GET 读全量 + Stripe Secret/Webhook 配置状态；POST 保存补丁。
+ *  Secret Key 与 Webhook Secret 永远只在服务器环境变量 —— 这里既不收也不回。 */
 export async function GET(req: NextRequest) {
   if (!requireAdmin(req)) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
   const settings = await getPaymentSettings();
-  return NextResponse.json({ ok: true, settings, cardSecretConfigured: !!process.env.STRIPE_SECRET_KEY });
+  return NextResponse.json({
+    ok: true,
+    settings,
+    cardSecretConfigured: !!process.env.STRIPE_SECRET_KEY,
+    // webhook 未配置时对账只剩「回跳」弱通道：后台设置页据此显示黄色提醒
+    webhookConfigured: !!process.env.STRIPE_WEBHOOK_SECRET,
+  });
 }
 
 export async function POST(req: NextRequest) {
