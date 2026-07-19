@@ -11,7 +11,7 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import Database from "better-sqlite3";
 
-export const LEDGER_SCHEMA_VERSION = 5;
+export const LEDGER_SCHEMA_VERSION = 6;
 
 // ── ID 规范（与 lib/ids.ts 一致）───────────────────────────────────
 const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -305,11 +305,20 @@ export function openLedgerDb(dbPath) {
   return db;
 }
 
+// ⚠️ 与 website/lib/ledger.ts 的 migrateV6 逐字一致（is_test 标记列，条件式 ALTER 幂等）。
+function migrateV6(d) {
+  const hasCol = (t, c) => d.prepare(`PRAGMA table_info(${t})`).all().some((x) => x.name === c);
+  for (const t of ["customers", "orders", "leads", "licenses"]) {
+    if (!hasCol(t, "is_test")) d.exec(`ALTER TABLE ${t} ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0`);
+  }
+  d.exec("CREATE INDEX IF NOT EXISTS idx_orders_is_test ON orders(is_test)");
+}
+
 function migrate(db) {
   db.exec("CREATE TABLE IF NOT EXISTS meta (\n  key TEXT PRIMARY KEY,\n  value TEXT\n);");
   const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
   const current = row ? Number(row.value) || 0 : 0;
-  const migrations = [(d) => d.exec(DDL_V1), (d) => d.exec(DDL_V2), (d) => d.exec(DDL_V3), (d) => d.exec(DDL_V4), (d) => d.exec(DDL_V5)];
+  const migrations = [(d) => d.exec(DDL_V1), (d) => d.exec(DDL_V2), (d) => d.exec(DDL_V3), (d) => d.exec(DDL_V4), (d) => d.exec(DDL_V5), migrateV6];
   if (current >= migrations.length) return;
   const run = db.transaction(() => {
     for (let i = current; i < migrations.length; i++) migrations[i](db);

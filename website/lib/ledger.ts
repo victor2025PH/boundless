@@ -18,7 +18,7 @@ import Database from "better-sqlite3";
 import { DATA_DIR } from "./data-dir";
 import { isValidId, newId } from "./ids";
 
-export const LEDGER_SCHEMA_VERSION = 5;
+export const LEDGER_SCHEMA_VERSION = 6;
 
 // ── 表结构（schema v1）──────────────────────────────────────────────
 // ⚠️ 与 scripts/ledger-lib.mjs 中的 DDL_V1 逐字一致，修改必须同步！
@@ -419,6 +419,19 @@ export function getLedgerDb(dbPath?: string): Database.Database {
   return db;
 }
 
+// v5 → v6：为 customers/orders/leads/licenses 补 is_test 列（测试/演练数据标记）。
+// 用函数式迁移而非裸 ALTER：生产库可能已被 scripts/ledger-mark-testdata.mjs 抢先加过该列，
+// 故先探 PRAGMA 存在性再 ALTER，重复运行幂等（裸 ALTER 会因 duplicate column 报错）。
+// ⚠️ 与 scripts/ledger-lib.mjs 的 migrateV6 逐字一致，修改必须同步！
+function migrateV6(d: Database.Database) {
+  const hasCol = (t: string, c: string) =>
+    (d.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).some((x) => x.name === c);
+  for (const t of ["customers", "orders", "leads", "licenses"]) {
+    if (!hasCol(t, "is_test")) d.exec(`ALTER TABLE ${t} ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0`);
+  }
+  d.exec("CREATE INDEX IF NOT EXISTS idx_orders_is_test ON orders(is_test)");
+}
+
 function migrate(db: Database.Database) {
   db.exec("CREATE TABLE IF NOT EXISTS meta (\n  key TEXT PRIMARY KEY,\n  value TEXT\n);");
   const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as
@@ -431,6 +444,7 @@ function migrate(db: Database.Database) {
     (d) => d.exec(DDL_V3), // v2 → v3：人设总线 personas / persona_grants / persona_purges
     (d) => d.exec(DDL_V4), // v3 → v4：跨售商机跟进 opportunities_log
     (d) => d.exec(DDL_V5), // v4 → v5：渠道账号台账 channel_accounts
+    migrateV6, // v5 → v6：is_test 标记列（测试/演练数据，KPI/商机默认排除）
   ];
   if (current >= migrations.length) return;
   const run = db.transaction(() => {
@@ -465,6 +479,24 @@ export function normIdentityValue(kind: IdentityKind, value: string): string {
   if (kind === "contact" || kind === "email") return v.toLowerCase().replace(/\s+/g, "");
   if (kind === "phone") return v.replace(/[\s\-()]/g, "");
   return v;
+}
+
+/** 联系方式强信号分类（与 scripts/ledger-link-customers.mjs 的 classifyContact 同规则）：
+ *  仅 @handle / t.me/handle / email / phone 判为可自动建档的强信号；自由文本不建档。
+ *  返回 { kind, value（已归一）, display }，用于 ensureCustomerFor* 的 create-on-miss。 */
+function classifyStrongContact(
+  text: string | null | undefined
+): { kind: IdentityKind; value: string; display: string } | null {
+  const t = String(text ?? "").trim();
+  if (!t) return null;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t)) return { kind: "email", value: t.toLowerCase(), display: t.toLowerCase() };
+  const h =
+    t.match(/^@([A-Za-z0-9_]{3,32})$/) ||
+    t.match(/^(?:https?:\/\/)?(?:www\.)?t(?:elegram)?\.me\/@?([A-Za-z0-9_]{3,32})\/?$/i);
+  if (h) return { kind: "contact", value: h[1].toLowerCase(), display: `@${h[1].toLowerCase()}` };
+  const d = t.replace(/[\s\-()]/g, "");
+  if (/^\+?\d{7,15}$/.test(d)) return { kind: "phone", value: d, display: t };
+  return null;
 }
 
 // ── 幂等 upsert（自然键；已有 customer_id 关联绝不被覆盖）───────────
@@ -752,12 +784,18 @@ export function assignCustomer(
  *  订单尚未归属且命中时写回 customer_id 并记 audit（actor=system）。返回 customer_id 或 null。 */
 export function ensureCustomerForOrder(orderKey: string, db: Database.Database = getLedgerDb()): string | null {
   const o = db
-    .prepare("SELECT id, source_key, customer_id, contact, fingerprint FROM orders WHERE id = ? OR source_key = ?")
-    .get(orderKey, orderKey) as Pick<OrderRow, "id" | "source_key" | "customer_id" | "contact" | "fingerprint"> | undefined;
+    .prepare("SELECT id, source_key, customer_id, contact, fingerprint, notify_chat FROM orders WHERE id = ? OR source_key = ?")
+    .get(orderKey, orderKey) as
+    | Pick<OrderRow, "id" | "source_key" | "customer_id" | "contact" | "fingerprint" | "notify_chat">
+    | undefined;
   if (!o) return null;
   if (o.customer_id) return o.customer_id;
+  const chat = String(o.notify_chat ?? "").trim();
+  const tgId = /^\d+$/.test(chat) ? chat : null; // 客户本人深链绑定的私聊 chat_id = 其 user id
+  // 先按身份精确匹配已有客户（含 fingerprint / tg id / 联系方式）
   const candidates: [IdentityKind, string | null][] = [
     ["fingerprint", o.fingerprint],
+    ["tg", tgId],
     ["contact", o.contact],
     ["email", o.contact],
     ["phone", o.contact],
@@ -774,20 +812,49 @@ export function ensureCustomerForOrder(orderKey: string, db: Database.Database =
       return cid;
     }
   }
-  return null;
+  // 未命中：强信号（@handle / email / phone / tg id）自动建档（实时归档，实施22）。
+  // 弱信号/自由文本/仅 fingerprint 不建档，避免热路径产生垃圾客户。
+  const strong = classifyStrongContact(o.contact);
+  if (!strong && !tgId) return null;
+  const cid = createCustomerForContact(
+    { display: strong?.display ?? `tg:${tgId}`, primaryContact: o.contact, tgUserId: tgId },
+    db
+  );
+  if (strong) attachIdentity(cid, strong.kind, strong.value, db);
+  if (o.contact && (!strong || normIdentityValue("contact", o.contact) !== strong.value))
+    attachIdentity(cid, "contact", o.contact, db);
+  if (tgId) attachIdentity(cid, "tg", tgId, db);
+  db.prepare("UPDATE orders SET customer_id = ? WHERE id = ? AND customer_id IS NULL").run(cid, o.id);
+  writeAudit(
+    { actor: "system", action: "auto_create", entity: "order", entity_id: o.source_key, detail: { customer_id: cid, via: strong?.kind ?? "tg" } },
+    db
+  );
+  return cid;
 }
 
-/** 留资自动归属：按 tg / contact 身份精确匹配已有客户（不自动建客户）。语义同订单。 */
+/** 留资自动归属：按 tg / contact 身份精确匹配已有客户；未命中且有强信号则自动建档。语义同订单。 */
 export function ensureCustomerForLead(sourceKey: string, db: Database.Database = getLedgerDb()): string | null {
   const l = db
-    .prepare("SELECT source_key, customer_id, contact, raw FROM leads WHERE source_key = ?")
-    .get(sourceKey) as Pick<LeadRow, "source_key" | "customer_id" | "contact" | "raw"> | undefined;
+    .prepare("SELECT source_key, customer_id, name, contact, raw FROM leads WHERE source_key = ?")
+    .get(sourceKey) as Pick<LeadRow, "source_key" | "customer_id" | "name" | "contact" | "raw"> | undefined;
   if (!l) return null;
   if (l.customer_id) return l.customer_id;
   let tgUserId: string | null = null;
   if (l.source_key.startsWith("tg:")) tgUserId = l.source_key.slice(3);
+  else if (l.source_key.startsWith("c:")) {
+    const c = classifyStrongContact(l.source_key.slice(2));
+    if (c?.kind === "contact") tgUserId = null; // c: 前缀是联系方式，非 tg id
+  }
+  let rawTgId: string | null = null;
+  try {
+    const raw = l.raw ? (JSON.parse(l.raw) as { tg_user_id?: unknown }) : null;
+    if (raw?.tg_user_id != null && /^\d+$/.test(String(raw.tg_user_id))) rawTgId = String(raw.tg_user_id);
+  } catch {
+    /* raw 非 JSON → 忽略 */
+  }
+  const tgId = tgUserId ?? rawTgId;
   const candidates: [IdentityKind, string | null][] = [
-    ["tg", tgUserId],
+    ["tg", tgId],
     ["contact", l.contact],
     ["email", l.contact],
     ["phone", l.contact],
@@ -804,7 +871,42 @@ export function ensureCustomerForLead(sourceKey: string, db: Database.Database =
       return cid;
     }
   }
-  return null;
+  // 未命中：强信号或 tg id 自动建档（实时归档，实施22）
+  const strong = classifyStrongContact(l.contact);
+  if (!strong && !tgId) return null;
+  const cid = createCustomerForContact(
+    { display: s(l.name) ?? strong?.display ?? (tgId ? `tg:${tgId}` : null), primaryContact: l.contact, tgUserId: tgId },
+    db
+  );
+  if (tgId) attachIdentity(cid, "tg", tgId, db);
+  if (strong) attachIdentity(cid, strong.kind, strong.value, db);
+  if (l.contact && (!strong || normIdentityValue("contact", l.contact) !== strong.value))
+    attachIdentity(cid, "contact", l.contact, db);
+  db.prepare("UPDATE leads SET customer_id = ? WHERE source_key = ? AND customer_id IS NULL").run(cid, l.source_key);
+  writeAudit(
+    { actor: "system", action: "auto_create", entity: "lead", entity_id: l.source_key, detail: { customer_id: cid, via: strong?.kind ?? "tg" } },
+    db
+  );
+  return cid;
+}
+
+/** create-on-miss 小工具：建客户主档（实时归档钩子用）。identities 由调用方随后挂。 */
+function createCustomerForContact(
+  input: { display: string | null; primaryContact: string | null; tgUserId: string | null },
+  db: Database.Database
+): string {
+  const cust = createCustomer(
+    {
+      display_name: input.display,
+      primary_contact: input.primaryContact,
+      tg_user_id: input.tgUserId,
+      source: "auto:order-lead",
+      notes: "下单/留资实时自动建档（强信号）",
+    },
+    db,
+    "system"
+  );
+  return cust.id;
 }
 
 // ── 审计 ────────────────────────────────────────────────────────────
