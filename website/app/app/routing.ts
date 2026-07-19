@@ -16,7 +16,7 @@ export const PRODUCT_VIEW: Record<ProductKey, View> = {
   voxx: "soulsync",
 };
 
-/** 入口别名 → 视图（兼容 ?view= 与 startapp start_param 的历史别名；含无界 5 产品 key）。 */
+/** 入口别名 → 视图（兼容 ?view= 与 startapp start_param 的历史别名；含无界 7 产品 key）。 */
 export const VIEW_ALIASES: Record<string, View> = {
   home: "home",
   overview: "home",
@@ -58,7 +58,7 @@ export function resolveView(param?: string | null): View {
 export const TABS: { id: View; icon: string; zh: string; en: string }[] = [
   { id: "home", icon: "🏠", zh: "概览", en: "Home" },
   { id: "liveavatar", icon: "🎭", zh: "视觉", en: "Visual" },
-  { id: "soulsync", icon: "💬", zh: "智聊", en: "Chat" },
+  { id: "soulsync", icon: "💬", zh: "沟通", en: "Comms" },
   { id: "pricing", icon: "💰", zh: "价格", en: "Pricing" },
   { id: "engage", icon: "🤝", zh: "合作", en: "Engage" },
 ];
