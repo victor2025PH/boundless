@@ -13,6 +13,8 @@ import {
   Pager,
   ShortId,
   Td,
+  TestBadge,
+  TestFilterToggle,
   filterInputCls,
   fmtDateTime,
 } from "../parts";
@@ -22,13 +24,18 @@ export const dynamic = "force-dynamic";
 
 const LIMIT = 50;
 
-export default function CustomersPage({ searchParams }: { searchParams: { q?: string; offset?: string } }) {
+export default function CustomersPage({ searchParams }: { searchParams: { q?: string; offset?: string; test?: string } }) {
   const me = getConsoleSessionUser();
   if (!me) return null;
   const canWrite = roleAtLeast(me.role, "admin");
   const q = searchParams.q?.trim() || undefined;
+  const showTest = searchParams.test === "1";
   const offset = Math.max(0, Number(searchParams.offset) || 0);
-  const { rows, total } = listCustomers({ q, limit: LIMIT, offset });
+  const { rows, total } = listCustomers({ q, limit: LIMIT, offset, includeTest: showTest });
+  // 当前筛选条件下的测试数据条数 = 含测试 total − 不含测试 total（limit:1 仅取计数）
+  const testCount = showTest
+    ? total - listCustomers({ q, limit: 1 }).total
+    : listCustomers({ q, limit: 1, includeTest: true }).total - total;
 
   return (
     <div>
@@ -46,12 +53,20 @@ export default function CustomersPage({ searchParams }: { searchParams: { q?: st
           placeholder="搜索显示名 / 联系方式 / TG ID"
           className={`${filterInputCls} w-64`}
         />
+        {showTest && <input type="hidden" name="test" value="1" />}
         <FilterSubmit />
         {q && (
           <Link href="/console/customers" className="text-xs text-slate-500 hover:text-slate-300">
             清除
           </Link>
         )}
+        <TestFilterToggle
+          basePath="/console/customers"
+          params={{ q }}
+          showTest={showTest}
+          testCount={testCount}
+          className="ml-auto"
+        />
       </form>
 
       {rows.length === 0 ? (
@@ -76,6 +91,7 @@ export default function CustomersPage({ searchParams }: { searchParams: { q?: st
                   <Link href={`/console/customers/${c.id}`} className="font-medium text-amber-300 hover:underline">
                     {c.display_name || "（未命名）"}
                   </Link>
+                  {c.is_test === 1 && <TestBadge className="ml-2 align-middle" />}
                   <div className="mt-0.5">
                     <ShortId id={c.id} />
                   </div>
@@ -101,7 +117,13 @@ export default function CustomersPage({ searchParams }: { searchParams: { q?: st
         </Card>
       )}
 
-      <Pager basePath="/console/customers" params={{ q }} total={total} limit={LIMIT} offset={offset} />
+      <Pager
+        basePath="/console/customers"
+        params={{ q, test: showTest ? "1" : undefined }}
+        total={total}
+        limit={LIMIT}
+        offset={offset}
+      />
     </div>
   );
 }

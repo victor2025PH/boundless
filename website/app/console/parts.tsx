@@ -3,7 +3,7 @@
 
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { BookOpen, MessageSquareText, Mic, ScanFace } from "lucide-react";
+import { BookOpen, FlaskConical, MessageSquareText, Mic, ScanFace } from "lucide-react";
 
 // ── 格式化 ──────────────────────────────────────────────────────────
 const TZ_OFFSET_H = Number(process.env.TZ_OFFSET ?? 8); // 与 /admin 同源约定：站点时区默认 UTC+8
@@ -288,6 +288,54 @@ export function OpportunityKindBadge({ kind }: { kind: string }) {
     <span className={`inline-block shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}>
       {OPPORTUNITY_KIND_LABEL[kind] ?? kind}
     </span>
+  );
+}
+
+// ── 测试/演练数据（schema v6 is_test）───────────────────────────────
+/** 测试数据徽章：标记 is_test=1 的行。灰/石板低调配色，不与业务状态徽章抢视觉。 */
+export function TestBadge({ className = "" }: { className?: string }) {
+  return (
+    <span
+      title="测试/演练数据，不计入 KPI 与商机"
+      className={`inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-500/30 bg-slate-500/15 px-2 py-0.5 text-[11px] font-medium text-slate-400 ${className}`}
+    >
+      <FlaskConical className="h-3 w-3" />
+      测试
+    </span>
+  );
+}
+
+/** 「显示测试数据」开关：链接在 ?test=1 与去掉之间切换（保留其余筛选参数，切换即回第一页）。
+ *  testCount 为当前筛选条件下的测试数据条数；没有测试数据且未开启时不渲染。 */
+export function TestFilterToggle({
+  basePath,
+  params,
+  showTest,
+  testCount,
+  className = "",
+}: {
+  basePath: string;
+  params: Record<string, string | undefined>;
+  showTest: boolean;
+  testCount: number;
+  className?: string;
+}) {
+  if (!showTest && testCount <= 0) return null;
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v) sp.set(k, v);
+  if (!showTest) sp.set("test", "1");
+  const qs = sp.toString();
+  return (
+    <Link
+      href={qs ? `${basePath}?${qs}` : basePath}
+      title="测试/演练数据（e2e / smoke 等）不计入 KPI 与商机；此开关只影响本列表的展示"
+      className={`inline-flex items-center gap-1 text-xs underline-offset-2 hover:underline ${
+        showTest ? "text-amber-300" : "text-slate-500 hover:text-slate-300"
+      } ${className}`}
+    >
+      <FlaskConical className="h-3.5 w-3.5" />
+      {showTest ? `隐藏测试数据（${testCount} 条）` : `显示测试数据（${testCount} 条）`}
+    </Link>
   );
 }
 
