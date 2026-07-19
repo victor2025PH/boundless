@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { getOrder, markOrderCardPaid, notifyAdmins, notifyCustomerOfStatus } from "@/lib/order-store";
+import { notifyAdmins } from "@/lib/order-store";
+import { settleCardPaidSession } from "@/lib/stripe-settle";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -101,35 +102,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, noted: "async_payment_failed" });
   }
 
-  // 先取单、先核金额，全对得上才落账（宁漏勿错：漏了有管理员告警兜底，错了要退款）
-  const order = await getOrder(orderId);
-  if (!order) {
-    // 签名合法但单号找不到：可能是测试模式事件或数据被清，告警人工核
-    await notifyAdmins(
-      `⚠️ <b>Stripe 到账事件找不到订单</b>\n<code>${orderId}</code> · session <code>${String(session.id ?? "").slice(0, 66)}</code>\n请人工核对 Stripe 后台。`
-    ).catch(() => {});
-    return NextResponse.json({ ok: true, noted: "order_not_found" });
+  // 结算策略（金额先核后落账/幂等/通知）统一走 lib/stripe-settle —— 与每日对账巡检同源
+  const outcome = await settleCardPaidSession({
+    orderId,
+    sessionId: String(session.id ?? ""),
+    amountTotal: typeof session.amount_total === "number" ? session.amount_total : null,
+    via: "webhook",
+  });
+  if (outcome.result === "settled" || outcome.result === "already") {
+    return NextResponse.json({ ok: true, order: outcome.order.id, changed: outcome.result === "settled" });
   }
-  const expectedCents = Math.round(order.amount * 100);
-  const gotCents = typeof session.amount_total === "number" ? session.amount_total : null;
-  if (gotCents != null && gotCents !== expectedCents) {
-    await notifyAdmins(
-      `🚨 <b>Stripe 到账金额与订单不符，未自动落账，请人工复核</b>\n订单 <code>${order.id}</code> 挂牌 ${expectedCents} 分，session 实收 ${gotCents} 分（<code>${String(session.id ?? "").slice(0, 66)}</code>）。`
-    ).catch(() => {});
-    return NextResponse.json({ ok: true, noted: "amount_mismatch" });
-  }
-
-  const res = await markOrderCardPaid(orderId, String(session.id ?? ""));
-  if (!res) {
-    return NextResponse.json({ ok: true, noted: "order_not_found" });
-  }
-
-  if (res.changed) {
-    // 与 USDT 链路同一套到账动作：私信客户 + 通知管理员（失败静默，不影响 200 应答）
-    await notifyCustomerOfStatus(res.order, "paid").catch(() => {});
-    await notifyAdmins(
-      `💳 <b>卡支付到账（Stripe webhook）</b>\n<code>${res.order.id}</code> · ${res.order.plan} · $${res.order.amount}\n联系：${res.order.contact}\n等待履约机自动开通。`
-    ).catch(() => {});
-  }
-  return NextResponse.json({ ok: true, order: res.order.id, changed: res.changed });
+  return NextResponse.json({ ok: true, noted: outcome.result });
 }

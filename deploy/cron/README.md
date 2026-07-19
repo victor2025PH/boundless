@@ -191,9 +191,19 @@ node scripts/ledger-import-licenses.mjs /home/ubuntu/persona_inbox/avatarhub_lic
 
 # ③ 订单 SLA 扫描：已有 cron（website/scripts/setup_order_sla_cron.sh 装的每 10 分钟 curl），保持不动。
 
+# ③b 卡支付双重对账兜底：每日 04:10 拉 Stripe 最近 25h 已付 session 与订单库比对，
+#     webhook 停摆窗口漏单自动补账（幂等；未配 STRIPE_SECRET_KEY 时返回 not_configured 无害）。
+#     <ADMIN_KEY> 用 ~/yuntech/.env.local 的 ADMIN_KEY（website/_setup_cron.sh 会自动注册本条）
+10 4 * * * curl -fsS -m 120 "http://127.0.0.1:3000/api/admin/stripe-reconcile?key=<ADMIN_KEY>&hours=25" >> /home/ubuntu/stripe-reconcile.log 2>&1
+
 # ④ 台账导入（按需/每日，推荐先手工导人眼过校验；要自动化再放开下两行——导入幂等）：
 # 20 4 * * * cd /home/ubuntu/yuntech && for f in /home/ubuntu/persona_inbox/*_personas*.json; do [ -e "$f" ] && node scripts/ledger-import-personas.mjs "$f"; done >> /home/ubuntu/ledger-import.log 2>&1
 # 25 4 * * * cd /home/ubuntu/yuntech && for f in /home/ubuntu/persona_inbox/*_licenses*.json; do [ -e "$f" ] && node scripts/ledger-import-licenses.mjs "$f"; done >> /home/ubuntu/ledger-import.log 2>&1
+
+# ⑤ Stripe 对账巡检：每日 04:10 拉最近 25h 已支付 Checkout Session 比对订单库——双重对账兜底：
+#    webhook 停摆窗口漏单自动补账（幂等；未配 STRIPE_SECRET_KEY 返回 not_configured 无害，可常开；
+#    本条由 website/_setup_cron.sh 自动注册，key 取 .env.local 的 ADMIN_KEY、回退 TELEGRAM_SETUP_KEY）
+10 4 * * * curl -fsS -m 120 "http://127.0.0.1:3000/api/admin/stripe-reconcile?key=<ADMIN_KEY>&hours=25" >> /home/ubuntu/stripe-reconcile.log 2>&1
 ```
 
 ### 5.4 grant 缓存同步（v2 已接线：grants_sync 任务）
