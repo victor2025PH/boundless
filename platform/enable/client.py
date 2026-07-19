@@ -57,28 +57,37 @@ _DEFAULT_CHENGJIE = os.environ.get("CHENGJIE_BASE_URL", "http://127.0.0.1:8080")
 class EnableClient:
     def __init__(self, avatarhub_url: Optional[str] = None,
                  chengjie_url: Optional[str] = None, timeout: float = 8.0,
-                 chengjie_token: Optional[str] = None):
+                 chengjie_token: Optional[str] = None,
+                 avatarhub_token: Optional[str] = None):
         self.avatarhub_url = (avatarhub_url or _DEFAULT_AVATARHUB).rstrip("/")
         self.chengjie_url = (chengjie_url or _DEFAULT_CHENGJIE).rstrip("/")
         self.timeout = timeout
         # 2026-07-19 追加：chengjie /api/translate·/api/enable/status 走同一套
         # _api_auth（支持 Bearer）；配了 web_admin.auth_token 时无头会一律 401。
-        # avatarhub 侧 /api/tts_only 等走 X-AH-Token（不同头名），暂不在此统一处理，
-        # 需要时另加 avatarhub_token 参数——本次只补 chengjie 这一段已知缺口。
         self.chengjie_token = (chengjie_token if chengjie_token is not None
                                else os.environ.get("CHENGJIE_AUTH_TOKEN", "").strip() or None)
+        # 2026-07-20 第五阶段追加：avatarhub 的 /api/tts_only、/avatar/speak 等写操作
+        # 走**不同的鉴权头**——`X-AH-Token`（裸令牌，非 `Authorization: Bearer`），
+        # 见 avatar_hub.py `_auth_middleware`：`request.headers.get("X-AH-Token") or
+        # request.cookies.get("ah_token") or request.query_params.get("ah_token")`。
+        # 本客户端只用头（不用 cookie/query，避免令牌出现在日志/URL 里）。
+        # `_API_TOKEN` 未配置时 avatarhub 中间件直接放行，此时不传该头也无影响
+        # （向后兼容：不配置 avatarhub_token 时行为与之前完全一致）。
+        self.avatarhub_token = (avatarhub_token if avatarhub_token is not None
+                                else os.environ.get("AVATARHUB_AUTH_TOKEN", "").strip() or None)
 
     # ---- 内部 HTTP（可降级：任何失败都收敛为 dict，不抛给调用方）----
-    def _get(self, base: str, path: str, *, bearer: Optional[str] = None) -> Dict[str, Any]:
-        return self._request(base, "GET", path, None, bearer=bearer)
+    def _get(self, base: str, path: str, *, bearer: Optional[str] = None,
+             ah_token: Optional[str] = None) -> Dict[str, Any]:
+        return self._request(base, "GET", path, None, bearer=bearer, ah_token=ah_token)
 
     def _post(self, base: str, path: str, payload: Dict[str, Any], *,
-              bearer: Optional[str] = None) -> Dict[str, Any]:
-        return self._request(base, "POST", path, payload, bearer=bearer)
+              bearer: Optional[str] = None, ah_token: Optional[str] = None) -> Dict[str, Any]:
+        return self._request(base, "POST", path, payload, bearer=bearer, ah_token=ah_token)
 
     def _request(self, base: str, method: str, path: str,
                  payload: Optional[Dict[str, Any]], *,
-                 bearer: Optional[str] = None) -> Dict[str, Any]:
+                 bearer: Optional[str] = None, ah_token: Optional[str] = None) -> Dict[str, Any]:
         url = base + path
         data = None
         headers = {"Accept": "application/json"}
@@ -87,6 +96,8 @@ class EnableClient:
             headers["Content-Type"] = "application/json"
         if bearer:
             headers["Authorization"] = f"Bearer {bearer}"
+        if ah_token:
+            headers["X-AH-Token"] = ah_token
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
@@ -121,7 +132,8 @@ class EnableClient:
         调用方统一按"不可用"退化为发纯文本回复。
         """
         return self._post(self.avatarhub_url, "/api/tts_only",
-                          {"profile": profile_id, "text": text})
+                          {"profile": profile_id, "text": text},
+                          ah_token=self.avatarhub_token)
 
     def translate(self, text: str, to_lang: str,
                   from_lang: Optional[str] = None) -> Dict[str, Any]:
@@ -193,11 +205,17 @@ class EnableClient:
         payload: Dict[str, Any] = {"text": text, "generate_lipsync": bool(generate_lipsync)}
         if profile_id:
             payload["profile"] = profile_id
-        return self._post(self.avatarhub_url, "/avatar/speak", payload)
+        return self._post(self.avatarhub_url, "/avatar/speak", payload,
+                          ah_token=self.avatarhub_token)
 
     def status(self) -> Dict[str, Any]:
-        """/api/enable/status(avatarhub) —— 赋能面可达性探针(能力开关/负载)。"""
-        return self._get(self.avatarhub_url, "/api/enable/status")
+        """/api/enable/status(avatarhub) —— 赋能面可达性探针(能力开关/负载)。
+
+        当前该 GET 端点不在 avatarhub `_AUTH_SENSITIVE_GET` 白名单内，本不需要令牌；
+        仍顺带带上 `avatarhub_token`（若配置），对不需要鉴权的场景无副作用，同时
+        对"以后被加进敏感 GET 名单"这种情况提前兜底。
+        """
+        return self._get(self.avatarhub_url, "/api/enable/status", ah_token=self.avatarhub_token)
 
     def available(self) -> bool:
         """avatarhub 赋能面是否就绪(HTTP 可达)。translate 走 chengjie，以其返回的 available 单独判断。"""

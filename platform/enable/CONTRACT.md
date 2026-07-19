@@ -60,6 +60,17 @@ platform 不 import 引擎代码，仅通过 HTTP 契约交互；能力实现与
 隐私红线：`translate` 的原文只作为请求载荷发往翻译栈，**不落任何日志/事件**；
 计量只用字符计数（`chars` 字段，见 schema）。
 
+## 4b. 鉴权头（2026-07-20 第五阶段补齐）
+
+两个引擎鉴权机制不同，`EnableClient` 按目标区分发送：
+
+| 目标 | 头名 | 客户端参数 | 环境变量 |
+|---|---|---|---|
+| chengjie（`/api/translate`、`/api/enable/status`） | `Authorization: Bearer <token>` | `chengjie_token` | `CHENGJIE_AUTH_TOKEN` |
+| avatarhub（`/api/tts_only`、`/avatar/speak`、`/api/enable/status`） | `X-AH-Token: <token>`（裸令牌，非 Bearer） | `avatarhub_token` | `AVATARHUB_AUTH_TOKEN` |
+
+两者均缺省 `None`（不发对应头），向后兼容——未配置鉴权的部署行为不变。已用真实 mock 服务器验证三个 avatarhub 方法（`tts_clone_speak`/`avatar_render`/`status`）确实发出 `X-AH-Token`。
+
 ## 5. 落地状态与下一步
 
 **2026-07-19 第三阶段更新（真实接线 + 契约纠偏）：**
