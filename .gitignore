@@ -75,6 +75,9 @@ _pending_models/
 **/config/config.local.yaml
 **/config/cluster.yaml
 
+# 周报战报图：cron 每周覆盖生成的运行时产物，不入库（生成逻辑见 website/lib/war-card.ts）
+website/public/brand/campaign/teaser-war-latest.png
+
 # ---- boundless slimming 20260715 ----
 # stale duplicate of canonical top-level website/ (same hualing-website pkg, older brand.ts)
 engines/chengjie/website/

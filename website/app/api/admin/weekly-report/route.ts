@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { readFile } from "fs/promises";
+import { readFile, writeFile } from "fs/promises";
 import path from "path";
 import { requireAdmin } from "@/lib/admin-auth";
 import { getAdminChats } from "@/lib/admin-store";
@@ -227,6 +227,7 @@ export async function POST(req: NextRequest) {
   }
 
   const lines: string[] = [
+    `🔒 管理员 · 仅你可见`,
     `📊 无界科技 · 运营周报（${fmtDay(wkStart)} ~ ${fmtDay(now)}）`,
     ``,
     `🌐 官网`,
@@ -304,17 +305,37 @@ export async function POST(req: NextRequest) {
         dg.topHelpers.length > 0
           ? `\n🌟 本周点星人榜：${dg.topHelpers.map((h, i) => `${["🥇", "🥈", "🥉"][i]}${h.name} ×${h.n}`).join("  ")}`
           : "";
+      /* 零召唤周换叙事主体（新旅人），避免「0 位召唤成功」进频道 */
+      const warLead =
+        dg.weekSummons > 0
+          ? `本周已有 ${dg.weekSummons} 位旅人集齐北斗七星、召唤界龙成功${dg.weekNewCollectors > 0 ? `，${dg.weekNewCollectors} 位新旅人开始点星` : ""}。`
+          : `本周 ${dg.weekNewCollectors} 位新旅人开始点亮北斗星珠——七星聚齐，界龙现世。`;
       const warText = [
         `🐉 界龙战报 · 七星聚集中`,
         ``,
-        `本周已有 ${dg.weekSummons} 位旅人集齐北斗七星、召唤界龙成功${dg.weekNewCollectors > 0 ? `，${dg.weekNewCollectors} 位新旅人开始点星` : ""}。${helperLine}`,
+        `${warLead}${helperLine}`,
         `本月「愿·体验」名额还剩 ${dg.trialLeft} 份——每天来官网点亮一颗星珠，七天召唤神龙许愿：体验月卡 / 祥龙形态 / 机缘礼包。`,
         ``,
         `我的图鉴 → ${SITE_URL}/loong`,
         `七星既聚，龙行无界 → ${SITE_URL}`,
       ].join("\n");
-      await addDraft({ text: warText, theme: "dragon-weekly", source: "dragon-weekly" }).catch(() => null);
-      lines.push(`· 频道战报草稿已生成（后台「草稿」审核后发布）`);
+      /* 战报配图：sharp 服务端合成（祥云底 + 当前祥龙立绘 + 数字层），固定路径覆盖式产出；
+         失败不阻断草稿（纯文字照发） */
+      let warPhoto: string | undefined;
+      try {
+        const { renderWarCard } = await import("@/lib/war-card");
+        const buf = await renderWarCard(
+          { summons: dg.weekSummons, newCollectors: dg.weekNewCollectors, pearls: dgPearls, skinOwners: dg.skinOwners },
+          SITE_URL.replace(/^https?:\/\//, "")
+        );
+        const rel = "/brand/campaign/teaser-war-latest.png";
+        await writeFile(path.join(process.cwd(), "public", rel), buf);
+        warPhoto = rel;
+      } catch {
+        /* 字体/资产缺失时降级为纯文字草稿 */
+      }
+      await addDraft({ text: warText, theme: "dragon-weekly", source: "dragon-weekly", photo: warPhoto }).catch(() => null);
+      lines.push(`· 频道战报草稿已生成${warPhoto ? "（含战报图）" : ""}（后台「草稿」审核后发布）`);
     }
   }
   if (abLines.length > 0) {
@@ -329,6 +350,11 @@ export async function POST(req: NextRequest) {
   }
   lines.push(``, `🔍 SEO 巡检`, ...seoLines);
   lines.push(``, `🤖 运营状态`);
+  {
+    const csStart = count("tg_cs_start", inWeek);
+    const csHuman = count("tg_cs_human", inWeek);
+    if (csStart > 0 || csHuman > 0) lines.push(`· 客服承接：bot 接待 ${csStart} 人 · 转人工 ${csHuman} 人`);
+  }
   lines.push(`· 待审草稿：${drafts.length} 条${riskyDrafts > 0 ? `（其中风险拦截 ${riskyDrafts} 条，请尽快人审）` : ""}`);
   lines.push(`· 网站自愈重启：${restarts} 次${restarts > 0 ? "（有异常，建议看看后台健康页）" : ""}`);
   lines.push(``, `👉 后台看板：${SITE_URL}/admin`);
