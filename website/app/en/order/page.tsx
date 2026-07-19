@@ -14,7 +14,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "/en/order", languages: LANGUAGES },
   openGraph: {
     title: "Plans & Ordering · BOUNDLESS",
-    description: "Plans from 39 to 699 USDT/mo, unlimited usage on your own hardware. Annual gets 2 months free + 20% off year one. Data stays on-prem.",
+    description: "Plans from 39 to 699 USD/mo, unlimited usage on your own hardware. Annual gets 2 months free + 20% off year one. Data stays on-prem.",
     url: `${SITE_URL}/en/order`,
   },
 };
@@ -29,7 +29,7 @@ const offersLd = {
     "@type": "Offer",
     name: t.name.en,
     price: String(t.monthly),
-    priceCurrency: "USDT",
+    priceCurrency: "USD",
     description: `${t.audience.en} · ${t.feats.en.join(" · ")}`,
   })),
 };

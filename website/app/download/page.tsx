@@ -28,7 +28,7 @@ const appLd = {
   applicationCategory: "MultimediaApplication",
   operatingSystem: "Windows 10/11, macOS 12+",
   softwareVersion: LATEST_VERSION,
-  offers: { "@type": "Offer", price: "0", priceCurrency: "USDT", description: "14 天免费试用" },
+  offers: { "@type": "Offer", price: "0", priceCurrency: "USD", description: "14 天免费试用" },
   publisher: { "@type": "Organization", name: "无界科技 BOUNDLESS", url: SITE_URL },
 };
 

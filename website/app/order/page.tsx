@@ -15,7 +15,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     title: "购买与下单 · 无界科技 BOUNDLESS",
-    description: "会员套餐 39–699 USDT/月，本机算力用量不限，年付送 2 个月 + 首年 8 折。USDT 结算，数据不出机房。",
+    description: "会员套餐 39–699 USD/月，本机算力用量不限，年付送 2 个月 + 首年 8 折。支持 USDT 结算，数据不出机房。",
     url: `${SITE_URL}/order`,
   },
 };
@@ -30,7 +30,7 @@ const offersLd = {
     "@type": "Offer",
     name: t.name.zh,
     price: String(t.monthly),
-    priceCurrency: "USDT",
+    priceCurrency: "USD",
     description: `${t.audience.zh} · ${t.feats.zh.join(" · ")}`,
   })),
 };
