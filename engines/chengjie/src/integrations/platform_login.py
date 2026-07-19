@@ -91,8 +91,13 @@ class LoginSession:
     provider_state: Any = None
     poll_fn: Optional[Callable[..., Any]] = None
     cancel_fn: Optional[Callable[..., Any]] = None
+    submit_fn: Optional[Callable[..., Any]] = None   # 两步验证云密码提交（Telegram protocol）
 
     def is_expired(self) -> bool:
+        # 两步验证等待态不受 TTL 过期影响：扫码已确认、连接持有中，等用户输入云密码，
+        # 此时若判过期会误清会话导致前功尽弃。
+        if self.status == "password_needed":
+            return False
         return (time.time() - self.created_at) > TTL_SEC
 
 
@@ -107,7 +112,7 @@ class LoginManager:
         now = time.time()
         dead = [
             k for k, s in self._sessions.items()
-            if (now - s.created_at) > TTL_SEC * 2
+            if (now - s.created_at) > TTL_SEC * 2 and s.status != "password_needed"
         ]
         for k in dead:
             self._sessions.pop(k, None)
@@ -129,6 +134,7 @@ class LoginManager:
         provider_state: Any = None,
         poll_fn: Optional[Callable[..., Any]] = None,
         cancel_fn: Optional[Callable[..., Any]] = None,
+        submit_fn: Optional[Callable[..., Any]] = None,
     ) -> LoginSession:
         with self._lock:
             self._gc_locked()
@@ -150,6 +156,7 @@ class LoginManager:
                 provider_state=provider_state,
                 poll_fn=poll_fn,
                 cancel_fn=cancel_fn,
+                submit_fn=submit_fn,
             )
             self._sessions[sid] = sess
             return sess

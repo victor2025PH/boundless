@@ -1,0 +1,292 @@
+/**
+ * 无界科技 BOUNDLESS · 品牌 CSS 自定义属性
+ * ============================================================
+ * 本文件由 tokens.json 派生（单一真相在 tokens.json，本文件不得出现
+ * tokens.json 之外的数值）。改令牌流程见 BRAND_TOKENS.md。
+ * 本层零反向依赖：不 import 任何产品/引擎代码。
+ *
+ * 消费方式（三端通用）：
+ *   Angular/Electron:  styles.scss 里 @import 或 angular.json styles[] 引入
+ *   Vue 后台:          main.ts 里 import 本文件
+ *   Next.js 官网:      通常走 tailwind-preset.cjs；需要裸变量时亦可引入本文件
+ *
+ * 命名规则：统一前缀 --bl-；spacing 键中的小数点写作 -（0.5 → --bl-space-0-5）。
+ * 深色主题：<html data-theme="dark"> 时表层语义变量（--bl-bg/--bl-text/--bl-border-*）自动翻转。
+ */
+
+:root {
+  /* ---------------- 品牌色 · ∞ 主标渐变 7 色标 ---------------- */
+  --bl-brand-cyan: #00b0f0;
+  --bl-brand-blue: #1e6bf0;
+  --bl-brand-violet: #7a3bf5;
+  --bl-brand-magenta: #d030f0;
+  --bl-brand-pink: #f0509a;
+  --bl-brand-orange: #f07800;
+  --bl-brand-amber: #f0a010;
+
+  /* ∞ 主标渐变（横向）与深空底渐变 */
+  --bl-gradient-brand: linear-gradient(90deg, #00b0f0 0%, #1e6bf0 16.667%, #7a3bf5 33.333%, #d030f0 50%, #f0509a 66.667%, #f07800 83.333%, #f0a010 100%);
+  --bl-gradient-dark-space: linear-gradient(180deg, #1a1d3a 0%, #05060f 100%);
+
+  /* 墨色与深空中性阶（深色界面唯一合法底色，替代 slate 暗底） */
+  --bl-ink-text: #0b1020;
+  --bl-ink-700: #1a1d3a;
+  --bl-ink-800: #11132a;
+  --bl-ink-900: #0a0c1b;
+  --bl-ink-950: #05060f;
+
+  /* ---------------- 三系光环色（categoryAccents） ---------------- */
+  /* growth 智连蓝（cyan 语义）—— TG智控王属本系，primary 对齐此色 */
+  --bl-growth: #1e8cf2;
+  --bl-growth-ring: linear-gradient(135deg, #0070f0 0%, #00c2ff 100%);
+  --bl-growth-50: #eef6fe;
+  --bl-growth-100: #ddeefd;
+  --bl-growth-200: #bcdcfb;
+  --bl-growth-300: #8bc4f8;
+  --bl-growth-400: #54a7f5;
+  --bl-growth-500: #1e8cf2;
+  --bl-growth-600: #0d76d9;
+  --bl-growth-700: #0b64b7;
+  --bl-growth-800: #095295;
+  --bl-growth-900: #074278;
+
+  /* studio 幻境紫（violet 语义） */
+  --bl-studio: #c43bf0;
+  --bl-studio-ring: linear-gradient(135deg, #b62bf5 0%, #f050c8 100%);
+  --bl-studio-50: #faeefe;
+  --bl-studio-100: #f5defc;
+  --bl-studio-200: #ebbdfa;
+  --bl-studio-300: #dd8df6;
+  --bl-studio-400: #cc57f2;
+  --bl-studio-500: #c43bf0;
+  --bl-studio-600: #a510d5;
+  --bl-studio-700: #8c0eb4;
+  --bl-studio-800: #720b93;
+  --bl-studio-900: #5c0976;
+
+  /* lingo 通达橙（amber 语义） */
+  --bl-lingo: #f07800;
+  --bl-lingo-ring: linear-gradient(135deg, #f06a00 0%, #ffb020 100%);
+  --bl-lingo-50: #fff6ed;
+  --bl-lingo-100: #ffeddb;
+  --bl-lingo-200: #ffdbb8;
+  --bl-lingo-300: #ffc285;
+  --bl-lingo-400: #ffa44a;
+  --bl-lingo-500: #f07800;
+  --bl-lingo-600: #e67300;
+  --bl-lingo-700: #c26100;
+  --bl-lingo-800: #9e4f00;
+  --bl-lingo-900: #804000;
+
+  /* ---------------- 语义色 ---------------- */
+  --bl-success-50: #f0fdf4;
+  --bl-success-100: #dcfce7;
+  --bl-success-200: #bbf7d0;
+  --bl-success-300: #86efac;
+  --bl-success-400: #4ade80;
+  --bl-success-500: #22c55e;
+  --bl-success-600: #16a34a;
+  --bl-success-700: #15803d;
+  --bl-success-800: #166534;
+  --bl-success-900: #14532d;
+
+  --bl-warning-50: #fffbeb;
+  --bl-warning-100: #fef3c7;
+  --bl-warning-200: #fde68a;
+  --bl-warning-300: #fcd34d;
+  --bl-warning-400: #fbbf24;
+  --bl-warning-500: #f59e0b;
+  --bl-warning-600: #d97706;
+  --bl-warning-700: #b45309;
+  --bl-warning-800: #92400e;
+  --bl-warning-900: #78350f;
+
+  --bl-error-50: #fef2f2;
+  --bl-error-100: #fee2e2;
+  --bl-error-200: #fecaca;
+  --bl-error-300: #fca5a5;
+  --bl-error-400: #f87171;
+  --bl-error-500: #ef4444;
+  --bl-error-600: #dc2626;
+  --bl-error-700: #b91c1c;
+  --bl-error-800: #991b1b;
+  --bl-error-900: #7f1d1d;
+
+  --bl-info-50: #f0f9ff;
+  --bl-info-100: #e0f2fe;
+  --bl-info-200: #bae6fd;
+  --bl-info-300: #7dd3fc;
+  --bl-info-400: #38bdf8;
+  --bl-info-500: #0ea5e9;
+  --bl-info-600: #0284c7;
+  --bl-info-700: #0369a1;
+  --bl-info-800: #075985;
+  --bl-info-900: #0c4a6e;
+
+  /* ---------------- 灰阶 ---------------- */
+  --bl-gray-50: #f9fafb;
+  --bl-gray-100: #f3f4f6;
+  --bl-gray-200: #e5e7eb;
+  --bl-gray-300: #d1d5db;
+  --bl-gray-400: #9ca3af;
+  --bl-gray-500: #6b7280;
+  --bl-gray-600: #4b5563;
+  --bl-gray-700: #374151;
+  --bl-gray-800: #1f2937;
+  --bl-gray-900: #111827;
+  --bl-gray-950: #030712;
+
+  /* slate 冷灰备用阶（不再作为暗底，暗底一律走 --bl-ink-*） */
+  --bl-slate-50: #f8fafc;
+  --bl-slate-100: #f1f5f9;
+  --bl-slate-200: #e2e8f0;
+  --bl-slate-300: #cbd5e1;
+  --bl-slate-400: #94a3b8;
+  --bl-slate-500: #64748b;
+  --bl-slate-600: #475569;
+  --bl-slate-700: #334155;
+  --bl-slate-800: #1e293b;
+  --bl-slate-900: #0f172a;
+  --bl-slate-950: #020617;
+
+  /* ---------------- 间距（4px 基数） ---------------- */
+  --bl-space-0: 0;
+  --bl-space-px: 1px;
+  --bl-space-0-5: 0.125rem;
+  --bl-space-1: 0.25rem;
+  --bl-space-1-5: 0.375rem;
+  --bl-space-2: 0.5rem;
+  --bl-space-2-5: 0.625rem;
+  --bl-space-3: 0.75rem;
+  --bl-space-3-5: 0.875rem;
+  --bl-space-4: 1rem;
+  --bl-space-5: 1.25rem;
+  --bl-space-6: 1.5rem;
+  --bl-space-7: 1.75rem;
+  --bl-space-8: 2rem;
+  --bl-space-9: 2.25rem;
+  --bl-space-10: 2.5rem;
+  --bl-space-11: 2.75rem;
+  --bl-space-12: 3rem;
+  --bl-space-14: 3.5rem;
+  --bl-space-16: 4rem;
+  --bl-space-20: 5rem;
+  --bl-space-24: 6rem;
+  --bl-space-28: 7rem;
+  --bl-space-32: 8rem;
+
+  /* ---------------- 圆角 ---------------- */
+  --bl-radius-none: 0;
+  --bl-radius-sm: 0.125rem;
+  --bl-radius: 0.25rem;
+  --bl-radius-md: 0.375rem;
+  --bl-radius-lg: 0.5rem;
+  --bl-radius-xl: 0.75rem;
+  --bl-radius-2xl: 1rem;
+  --bl-radius-3xl: 1.5rem;
+  --bl-radius-full: 9999px;
+
+  /* ---------------- 阴影（primary 投影随主色改为智连蓝） ---------------- */
+  --bl-shadow-none: none;
+  --bl-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --bl-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --bl-shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --bl-shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --bl-shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+  --bl-shadow-2xl: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+  --bl-shadow-inner: inset 0 2px 4px 0 rgb(0 0 0 / 0.05);
+  --bl-shadow-primary: 0 4px 14px 0 rgba(30, 140, 242, 0.25);
+  --bl-shadow-success: 0 4px 14px 0 rgba(34, 197, 94, 0.25);
+  --bl-shadow-error: 0 4px 14px 0 rgba(239, 68, 68, 0.25);
+
+  /* ---------------- 排版（英文 Montserrat / 中文 Noto Sans CJK SC） ---------------- */
+  --bl-font-sans: Montserrat, "Noto Sans CJK SC", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  --bl-font-mono: "JetBrains Mono", "Fira Code", Consolas, monospace;
+
+  --bl-text-xs: 0.75rem;
+  --bl-text-sm: 0.875rem;
+  --bl-text-base: 1rem;
+  --bl-text-lg: 1.125rem;
+  --bl-text-xl: 1.25rem;
+  --bl-text-2xl: 1.5rem;
+  --bl-text-3xl: 1.875rem;
+  --bl-text-4xl: 2.25rem;
+  --bl-text-5xl: 3rem;
+
+  --bl-weight-normal: 400;
+  --bl-weight-medium: 500;
+  --bl-weight-semibold: 600;
+  --bl-weight-bold: 700;
+  --bl-weight-black: 900;
+
+  --bl-leading-none: 1;
+  --bl-leading-tight: 1.25;
+  --bl-leading-snug: 1.375;
+  --bl-leading-normal: 1.5;
+  --bl-leading-relaxed: 1.625;
+  --bl-leading-loose: 2;
+
+  --bl-tracking-tighter: -0.05em;
+  --bl-tracking-tight: -0.025em;
+  --bl-tracking-normal: 0em;
+  --bl-tracking-wide: 0.025em;
+  --bl-tracking-wider: 0.05em;
+
+  /* ---------------- 动效 ---------------- */
+  --bl-duration-fast: 150ms;
+  --bl-duration-normal: 200ms;
+  --bl-duration-slow: 300ms;
+  --bl-duration-slower: 500ms;
+
+  --bl-ease-linear: linear;
+  --bl-ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --bl-ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --bl-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --bl-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --bl-ease-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+
+  /* ---------------- 层级 ---------------- */
+  --bl-z-hide: -1;
+  --bl-z-base: 0;
+  --bl-z-docked: 10;
+  --bl-z-dropdown: 1000;
+  --bl-z-sticky: 1100;
+  --bl-z-banner: 1200;
+  --bl-z-overlay: 1300;
+  --bl-z-modal: 1400;
+  --bl-z-popover: 1500;
+  --bl-z-skip-link: 1600;
+  --bl-z-toast: 1700;
+  --bl-z-tooltip: 1800;
+
+  /* ---------------- 断点（CSS 变量不能进媒体查询，仅供 JS 读取/文档对照） ---------------- */
+  --bl-screen-sm: 640px;
+  --bl-screen-md: 768px;
+  --bl-screen-lg: 1024px;
+  --bl-screen-xl: 1280px;
+  --bl-screen-2xl: 1536px;
+
+  /* ---------------- 表层语义（light 默认，dark 见下方翻转块） ---------------- */
+  --bl-bg: #ffffff;
+  --bl-bg-secondary: #f9fafb;
+  --bl-bg-tertiary: #f3f4f6;
+  --bl-text: #0b1020;
+  --bl-text-secondary: #4b5563;
+  --bl-text-tertiary: #9ca3af;
+  --bl-text-inverse: #ffffff;
+  --bl-border: #e5e7eb;
+  --bl-border-focus: #1e8cf2;
+}
+
+/* 深色主题：背景走无界深空阶（ink），不再使用 slate 暗底 */
+[data-theme="dark"] {
+  --bl-bg: #05060f;
+  --bl-bg-secondary: #0a0c1b;
+  --bl-bg-tertiary: #11132a;
+  --bl-text: #f9fafb;
+  --bl-text-secondary: #d1d5db;
+  --bl-text-tertiary: #6b7280;
+  --bl-text-inverse: #0b1020;
+  --bl-border: #1a1d3a;
+  --bl-border-focus: #54a7f5;
+}

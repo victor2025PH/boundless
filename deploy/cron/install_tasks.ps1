@@ -21,7 +21,10 @@
 #     EVENT_INGEST_KEY；-IngestKey 显式传入才嵌进参数（打印时掩码，README §4）；
 #   - 触发器：uploader 每 5 分钟 / purge 每 10 分钟 / grants_sync 每 30 分钟 /
 #     config_snapshot 每 10 分钟（仅 chengjie，未显式 -Tasks 时自动进 chengjie 任务集；
-#     avatarhub/huoke 无实例 config 目录形态，显式传入也跳过）
+#     avatarhub/huoke 无实例 config 目录形态，显式传入也跳过）/
+#     watchdog 每 5 分钟（仅 chengjie，双实例探活自愈，实施29；同 config_snapshot 自动进
+#     chengjie 任务集；账户固定装机用户 S4U+Highest——引擎继承 watchdog 的账户，SYSTEM 会让
+#     引擎改以 SYSTEM 身份跑（用户身份漂移），故不吃 -RunAs）
 #     （以上均 -Once + Repetition，持续 3650 天）；export 每日 03:30（-Daily）；
 #     kpi_weekly 每周一 09:00（-Weekly）。
 #
@@ -32,7 +35,7 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('avatarhub', 'chengjie', 'huoke')]
     [string]$Engine,
-    [string[]]$Tasks = @('uploader', 'purge', 'export', 'grants_sync'),   # 多选：uploader/purge/export/grants_sync/config_snapshot/kpi_weekly（逗号分隔亦可；config_snapshot 未显式 -Tasks 时自动进 chengjie 任务集，kpi_weekly 用 -WithKpiWeekly 追加）
+    [string[]]$Tasks = @('uploader', 'purge', 'export', 'grants_sync'),   # 多选：uploader/purge/export/grants_sync/config_snapshot/watchdog/kpi_weekly（逗号分隔亦可；config_snapshot 与 watchdog 未显式 -Tasks 时自动进 chengjie 任务集，kpi_weekly 用 -WithKpiWeekly 追加）
     [string]$BaseUrl   = '',        # 集团基址覆盖（缺省壳脚本走 env PERSONA_SYNC_BASE / https://bd2026.cc）
     [string]$IngestKey = '',        # 显式嵌密钥进任务定义（不推荐；缺省运行时读机器级 EVENT_INGEST_KEY）
     [string[]]$SpoolDirs = @(),     # uploader spool 目录（每目录一个任务实例）；缺省按引擎（见 $Defaults）
@@ -47,6 +50,7 @@ param(
     [int]$PurgeEveryMinutes          = 10,
     [int]$GrantsSyncEveryMinutes     = 30,
     [int]$ConfigSnapshotEveryMinutes = 10,
+    [int]$WatchdogEveryMinutes       = 5,
     [string]$ExportDailyAt       = '03:30',
     [string]$KpiWeeklyAt         = '09:00', # 每周一（-Weekly Monday）
     [switch]$WithKpiWeekly,         # 追加 KPI 周报任务（website 所在 Windows 机可选装；VPS 用 crontab，README §5.3）
@@ -83,19 +87,23 @@ function Root-Tag([string]$p) {
 
 # ── 参数归一 ─────────────────────────────────────────────────────────
 $Tasks = @($Tasks | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ })
-# config_snapshot 属 chengjie 缺省任务集（未显式 -Tasks 时自动带上；显式 -Tasks 尊重调用者清单）
-if ($Engine -eq 'chengjie' -and -not $PSBoundParameters.ContainsKey('Tasks') -and 'config_snapshot' -notin $Tasks) {
-    $Tasks += 'config_snapshot'
+# config_snapshot / watchdog 属 chengjie 缺省任务集（未显式 -Tasks 时自动带上；显式 -Tasks 尊重调用者清单）
+if ($Engine -eq 'chengjie' -and -not $PSBoundParameters.ContainsKey('Tasks')) {
+    foreach ($extra in @('config_snapshot', 'watchdog')) {
+        if ($extra -notin $Tasks) { $Tasks += $extra }
+    }
 }
 if ($WithKpiWeekly -and 'kpi_weekly' -notin $Tasks) { $Tasks += 'kpi_weekly' }
-$bad = @($Tasks | Where-Object { $_ -notin @('uploader', 'purge', 'export', 'grants_sync', 'config_snapshot', 'kpi_weekly') })
-if ($bad.Count)    { Die "未知任务类型: $($bad -join ', ')（可选 uploader/purge/export/grants_sync/config_snapshot/kpi_weekly）" 2 }
+$bad = @($Tasks | Where-Object { $_ -notin @('uploader', 'purge', 'export', 'grants_sync', 'config_snapshot', 'watchdog', 'kpi_weekly') })
+if ($bad.Count)    { Die "未知任务类型: $($bad -join ', ')（可选 uploader/purge/export/grants_sync/config_snapshot/watchdog/kpi_weekly）" 2 }
 if (-not $Tasks.Count) { Die '-Tasks 至少给一个任务类型' 2 }
-# 配置快照仅 chengjie 有实例 config 目录形态：其他引擎显式传入也跳过（不算参数错误，装其余任务照常）
-if ('config_snapshot' -in $Tasks -and $Engine -ne 'chengjie') {
-    Warn "config_snapshot 仅适用 chengjie（实例 config 目录形态）；$Engine 无此形态，已跳过该任务类型"
-    $Tasks = @($Tasks | Where-Object { $_ -ne 'config_snapshot' })
-    if (-not $Tasks.Count) { Die '剔除 config_snapshot 后无任务可装' 2 }
+# 配置快照/探活自愈仅 chengjie 有双实例形态：其他引擎显式传入也跳过（不算参数错误，装其余任务照常）
+foreach ($cjOnly in @('config_snapshot', 'watchdog')) {
+    if ($cjOnly -in $Tasks -and $Engine -ne 'chengjie') {
+        Warn "$cjOnly 仅适用 chengjie（双实例形态）；$Engine 无此形态，已跳过该任务类型"
+        $Tasks = @($Tasks | Where-Object { $_ -ne $cjOnly })
+        if (-not $Tasks.Count) { Die "剔除 $cjOnly 后无任务可装" 2 }
+    }
 }
 
 $Defaults = @{
@@ -223,6 +231,37 @@ if ('config_snapshot' -in $Tasks) {
                              note = '不存在时壳脚本以退出码 2 失败（.117 迁移后形态 = D:\chengjie-instances\<实例>\data\config）' } })
     }
 }
+if ('watchdog' -in $Tasks) {
+    # 双实例探活自愈（实施29）：壳=deploy\instances\watchdog_instances.ps1（探测复用 status_instances.ps1）。
+    # 账户固定装机用户 S4U+Highest（ForceS4U，不吃 -RunAs）：watchdog 拉起的引擎继承其账户，
+    # SYSTEM 会让引擎改以 SYSTEM 身份跑（用户身份漂移：user-home 缓存/文件属主全变）；
+    # S4U=session 0 不依赖交互登录、不存密码，开机/注销后照常触发——正是原 Boot 任务
+    # （InteractiveToken，开机时无交互会话永不触发）的病根修法。
+    $instDir  = Join-Path (Split-Path -Parent $PSScriptRoot) 'instances'
+    $wdScript = Join-Path $instDir 'watchdog_instances.ps1'
+    $prodRoots = @('D:\chengjie-instances\zhiliao\data', 'D:\chengjie-instances\tongyi\data')
+    $plans += [pscustomobject]@{
+        Name        = "Boundless-$Engine-watchdog"
+        Kind        = 'repeat'
+        Minutes     = $WatchdogEveryMinutes
+        TriggerDesc = "每 $WatchdogEveryMinutes 分钟（-Once 起点 + Repetition，持续 3650 天）"
+        Wrapper     = $wdScript
+        WrapperArgs = $commonArgs.Trim()
+        ForceS4U    = $true
+        Checks      = @(@{ desc = "成套脚本 deploy\instances\{status,start_zhiliao,start_tongyi,stop_instance}.ps1"
+                           ok   = ((Test-Path (Join-Path $instDir 'status_instances.ps1')) -and
+                                   (Test-Path (Join-Path $instDir 'start_zhiliao.ps1')) -and
+                                   (Test-Path (Join-Path $instDir 'start_tongyi.ps1')) -and
+                                   (Test-Path (Join-Path $instDir 'stop_instance.ps1')))
+                           note = '仓库不完整？git pull / sync_ops_scripts.ps1 后重试' },
+                        @{ desc = "生产数据根 $($prodRoots -join ' + ')"
+                           ok   = ((Test-Path -LiteralPath $prodRoots[0]) -and (Test-Path -LiteralPath $prodRoots[1]))
+                           note = '不存在时按 status_instances.ps1 探测序回落仓库缺省（.117 迁移后形态应存在）' },
+                        @{ desc = 'python 全路径已传（-PythonExe；S4U 账户无用户级 PATH，拉起引擎必需）'
+                           ok   = [bool]$PythonExe
+                           note = '未传时 watchdog 沿用进程 PATH，DOWN 自愈拉起可能失败——建议 -PythonExe 全路径' })
+    }
+}
 if ('kpi_weekly' -in $Tasks) {
     # 全矩阵报表不属任何引擎：名固定 Boundless-website-kpi_weekly（website 所在 Windows 机可选装）；
     # 壳只吃 -Week/-OutDir/-NodeExe，不透传 $commonArgs（无密钥、无 python）
@@ -291,11 +330,16 @@ foreach ($plan in $plans) {
     $i++
     $cmdArgs = Build-CmdArgs $plan
     $log = Join-Path $LogDir ($plan.Name + '.log')
+    $forceS4U = ($plan.PSObject.Properties['ForceS4U'] -and $plan.ForceS4U)
+    $acctDesc = if ($forceS4U) {
+        "$env:USERDOMAIN\$env:USERNAME（S4U 不存密码, Highest；watchdog 固定本账户——引擎继承其身份，不吃 -RunAs）"
+    } elseif ($RunAs -eq 'SYSTEM') { 'NT AUTHORITY\SYSTEM（ServiceAccount, Highest）' }
+    else { "$env:USERDOMAIN\$env:USERNAME（S4U 不存密码, Limited）" }
     Write-Host ''
     Write-Host ("── 任务 {0}/{1} ─ {2} ──────────────────────────────" -f $i, $plans.Count, $plan.Name)
     Write-Host ("  文件夹   {0}" -f $TaskPath)
     Write-Host ("  触发器   {0}" -f $plan.TriggerDesc)
-    Write-Host ("  账户     {0}" -f $(if ($RunAs -eq 'SYSTEM') { 'NT AUTHORITY\SYSTEM（ServiceAccount, Highest）' } else { "$env:USERDOMAIN\$env:USERNAME（S4U 不存密码, Limited）" }))
+    Write-Host ("  账户     {0}" -f $acctDesc)
     Write-Host ("  并发     IgnoreNew（上一轮未结束则跳过本轮）+ StartWhenAvailable + 时限 1h")
     Write-Host ("  工作目录 {0}" -f $RepoRoot)
     Write-Host ("  日志     {0}" -f $log)
@@ -320,7 +364,10 @@ foreach ($plan in $plans) {
         }
         $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable `
             -ExecutionTimeLimit (New-TimeSpan -Hours 1)
-        $principal = if ($RunAs -eq 'SYSTEM') {
+        $principal = if ($forceS4U) {
+            # watchdog 专用：装机用户 S4U + Highest（引擎继承其账户；Highest 才能 taskkill 提权进程）
+            New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Highest
+        } elseif ($RunAs -eq 'SYSTEM') {
             New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
         } else {
             New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Limited

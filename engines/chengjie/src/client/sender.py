@@ -230,11 +230,15 @@ class TelegramSenderMixin:
 
     # ── 统一发送护栏/节流/记账（A 线文本回复 + 形象照直发共用一套，防图文混发绕过风控） ──
 
-    def _presend_blocked(self) -> bool:
-        """发送前统一护栏：G1 全局 Kill-Switch + N 线反封号闸门。
+    def _presend_blocked(self, *, is_autoreply: bool = False) -> bool:
+        """发送前统一护栏：G1 全局 Kill-Switch + N 线反封号闸门 + 账号限速/熔断 + 营业时段。
 
         返回 True=应跳过本次外发（冻结/被闸门拦）；任何异常一律静默放行（绝不因护栏自身报错阻断发送）。
         文本回复与形象照直发共用本判断——避免「文字被拦但图照发」的风控绕过。
+
+        ``is_autoreply``：True=本次是「入站自动回复」（受营业时段 hours 约束——非营业时段
+        转人工不自动发）；False=主动发/坐席接管/编排器/测试（只受限速与急停，不被时段拦，
+        坐席深夜也能联系客户）。限速（时/日上限+熔断）对两类外发一律生效（账号级安全）。
         """
         try:
             from src.ops.kill_switch import is_blocked as _ks_blocked
@@ -246,13 +250,49 @@ class TelegramSenderMixin:
                 return True
         except Exception:
             pass
+        _gcfg = self.config.config if hasattr(self.config, "config") else {}
+        _acct = getattr(self, "account_id", "default")
+        # ── 营业时段（仅约束自动回复）：非营业时段不自动发，转人工由坐席上班处理 ──
+        if is_autoreply:
+            try:
+                from src.integrations.protocol_autoreply import within_business_hours
+                if not within_business_hours(_gcfg):
+                    self.logger.info("[hours] 账号 %s 非营业时段，自动回复转人工（不自动发）", _acct)
+                    return True
+            except Exception:
+                pass
+        # ── 账号级限速 + 熔断（时/日上限；A/B 两线共用同一 limiter 计数，防封号）──
+        try:
+            from src.integrations.protocol_autoreply_limits import get_autoreply_limiter
+            _pa = (_gcfg.get("protocol_autoreply") or {})
+            _rate = (_pa.get("rate") or {})
+            # 仅当显式配了 rate（hourly/daily 任一 >0）才启用限速，未配=零破坏不拦
+            if int(_rate.get("hourly", 0) or 0) > 0 or int(_rate.get("daily", 0) or 0) > 0:
+                _lim = get_autoreply_limiter(_gcfg)
+                if _lim is not None:
+                    _ok, _why = _lim.allow(f"telegram:{_acct}")
+                    if not _ok:
+                        self.logger.warning("[rate] 账号 %s 限速/熔断拦截自动外发: %s", _acct, _why)
+                        return True
+        except Exception:
+            pass
+        # ── 反封号健康闸门（预热 cap + 红黄绿灯）──
         try:
             from src.skills.companion_send_gate import evaluate, gate_enabled
             from src.skills.account_signals import build_account_signals
-            _gcfg = self.config.config if hasattr(self.config, "config") else {}
             if gate_enabled(_gcfg):
+                # N3 修：A 线此前只传 limiter，缺 registry → age_days/banned/status 恒缺省，
+                # 使「号被封禁/移除」无法自动停发（反封号闸门形同虚设）。补传 registry，
+                # 让 banned=meta.banned or status==removed 真正生效（best-effort，取不到不阻断）。
+                _reg = None
+                try:
+                    from src.integrations.account_registry import get_account_registry
+                    _reg = get_account_registry()
+                except Exception:
+                    _reg = None
                 _sig = build_account_signals(
-                    "telegram", getattr(self, "account_id", "default"),
+                    "telegram", _acct,
+                    registry=_reg,
                     limiter=self._shared_send_limiter(_gcfg),
                     extra={"proxy_bound": bool(getattr(self, "proxy_id", ""))},
                 )
@@ -359,6 +399,27 @@ class TelegramSenderMixin:
         except Exception:
             self.logger.debug("[prereply_humanize] 失败（忽略）", exc_info=True)
 
+    def _handle_send_exc(self, exc: Any) -> None:
+        """A 线发送异常统一处置（三处发送路径共用）：G2 封号信号分级急停 + 实施31 TG 告警。
+
+        风控错误 → ban_signal 分级（退避/暂停/封禁）：pause/ban 写账号级 Kill-Switch，
+        ban 另标注册表 meta.banned（喂健康闸门→后续自动停发），并经 ops_alert 推 TG 告警。
+        全程 best-effort，绝不抛（处置/告警失败不得掩盖原始发送错误）。
+        """
+        try:
+            from src.ops.ban_signal import handle_send_exception as _g2
+            from src.ops.ops_alert import make_ban_signal_alert
+            _reg = None
+            try:
+                from src.integrations.account_registry import get_account_registry
+                _reg = get_account_registry()
+            except Exception:
+                _reg = None
+            _g2("telegram", getattr(self, "account_id", "default"), exc,
+                registry=_reg, alert=make_ban_signal_alert())
+        except Exception:
+            pass
+
     def _postsend_record_count(self) -> None:
         """发送成功后统一记账：刷新墙钟 + 记入与 B 线共用的发送计数器。
 
@@ -431,8 +492,9 @@ class TelegramSenderMixin:
 
     async def _send_reply(self, original_message, reply_text: str, parse_mode=None):
         try:
-            # 统一发送前护栏（与 send_photo 共用）：G1 Kill-Switch + N 线反封号闸门。
-            if self._presend_blocked():
+            # 统一发送前护栏（与 send_photo 共用）：G1 Kill-Switch + 反封号闸门 + 限速 + 营业时段。
+            # 这是「入站自动回复」路径 → is_autoreply=True（受营业时段约束；主动发/编排器不受时段拦）。
+            if self._presend_blocked(is_autoreply=True):
                 return
             # 拟人已读回执：回复前先「看」消息（对端由未读变已读），再节流/发送。
             await self._mark_peer_read(
@@ -482,12 +544,7 @@ class TelegramSenderMixin:
             self.logger.info("已回复消息: %s", self._log_safe_text(reply_text))
         except Exception as e:
             self.logger.error("发送回复失败: %s", e)
-            # G2 封号信号自动急停：风控错误 → 分级处置（退避/暂停/封禁），best-effort
-            try:
-                from src.ops.ban_signal import handle_send_exception as _g2
-                _g2("telegram", getattr(self, "account_id", "default"), e)
-            except Exception:
-                pass
+            self._handle_send_exc(e)   # G2 分级急停 + 实施31 TG 告警（best-effort）
 
     async def _send_text_guarded(self, chat_id: int, text: str):
         """A 线外发文本核心：过发送前护栏 + 节流 + 记账，返回 ``(ok, sent_message)``。
@@ -512,12 +569,7 @@ class TelegramSenderMixin:
             return True, _sent
         except Exception as e:
             self.logger.error("发送消息失败: %s", e)
-            # G2 封号信号自动急停：风控错误 → 分级处置（退避/暂停/封禁），best-effort
-            try:
-                from src.ops.ban_signal import handle_send_exception as _g2
-                _g2("telegram", getattr(self, "account_id", "default"), e)
-            except Exception:
-                pass
+            self._handle_send_exc(e)   # G2 分级急停 + 实施31 TG 告警（best-effort）
             return False, None
 
     async def send_message(self, chat_id: int, text: str) -> bool:
@@ -571,11 +623,7 @@ class TelegramSenderMixin:
             return True
         except Exception as e:
             self.logger.error("发送照片失败: %s", e)
-            try:
-                from src.ops.ban_signal import handle_send_exception as _g2
-                _g2("telegram", getattr(self, "account_id", "default"), e)
-            except Exception:
-                pass
+            self._handle_send_exc(e)   # G2 分级急停 + 实施31 TG 告警（best-effort）
             return False
 
     async def _send_escalation_private_jump_hint(

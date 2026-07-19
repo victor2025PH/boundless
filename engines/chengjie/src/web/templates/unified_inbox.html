@@ -1920,6 +1920,18 @@
       </div>
       <div class="connect-state pending" id="connect-state" data-i18n="inbox.connect.state_pending">等待扫码</div>
       <div class="connect-hint" id="connect-hint" data-i18n="inbox.connect.hint">请用手机 App 扫描上方二维码完成登录。</div>
+      <!-- 两步验证（云密码）：扫码确认后账号若开启 2FA，后端返回 password_needed，前端在此收集密码 -->
+      <div id="connect-password-view" style="display:none;margin-top:12px;">
+        <input id="connect-cloud-password" class="cfg-input" type="password"
+               placeholder="Telegram 两步验证密码" autocomplete="off"
+               onkeydown="if(event.key==='Enter'){submitConnectPassword();}">
+        <div class="connect-hint" id="connect-password-hint" style="margin-top:6px;">
+          该账号开启了两步验证，请输入云密码完成登录。
+        </div>
+        <div class="connect-actions" style="margin-top:8px;">
+          <button class="primary" id="connect-password-btn" onclick="submitConnectPassword()">提交云密码</button>
+        </div>
+      </div>
       <div class="connect-actions">
         <button onclick="backToConfig()" data-i18n="inbox.connect.back_prev">← 上一步</button>
         <button class="primary" id="connect-refresh-btn" onclick="restartConnect()" data-i18n="inbox.connect.refresh_qr">刷新二维码</button>
@@ -8676,6 +8688,7 @@ function backToConfig(){
 function closeConnect(){
   if(_connectPollTimer){ clearInterval(_connectPollTimer); _connectPollTimer=null; }
   _cancelPendingLogin();
+  _showConnectPassword(false);
   document.getElementById('connect-modal').classList.remove('show');
 }
 function restartConnect(){ startConnect(); }
@@ -8690,10 +8703,23 @@ function _setConnectQr(dataOrUrl){
   if(dataOrUrl){ img.src=dataOrUrl; img.style.display='block'; mask.style.display='none'; }
   else { img.style.display='none'; mask.style.display='flex'; }
 }
+// 两步验证密码区显隐 + 重置（扫码开始/返回/关闭时清空，避免残留上次输入）
+function _showConnectPassword(show, hint){
+  const box=document.getElementById('connect-password-view');
+  if(box) box.style.display=show?'block':'none';
+  const qrw=document.querySelector('#connect-qr-view .connect-qr-wrap');
+  if(qrw) qrw.style.display=show?'none':'block';   // 需密码阶段隐藏二维码，聚焦密码输入
+  if(show){
+    const inp=document.getElementById('connect-cloud-password');
+    if(inp){ inp.value=''; setTimeout(()=>{ try{ inp.focus(); }catch(_){}} ,50); }
+    if(hint){ const h=document.getElementById('connect-password-hint'); if(h) h.textContent=hint; }
+  }
+}
 async function startConnect(){
   if(_connectPollTimer){ clearInterval(_connectPollTimer); _connectPollTimer=null; }
   _connectLoginId=null;
   _connectAuthorized=false;
+  _showConnectPassword(false);
   _setConnectQr(null);
   document.getElementById('connect-qr-mask').innerHTML='<span class="spin"></span><span>'+window.T('inbox.connect.qr_gen')+'</span>';
   _setConnectState('pending',window.T('inbox.connect.st_prep'),window.T('inbox.connect.hint_prep'));
@@ -8732,8 +8758,15 @@ async function pollConnect(){
     const st=d.status;
     if(d.qr_image && (st==='pending'||st==='scanned')){ _setConnectQr(d.qr_image); }
     if(st==='scanned'){ _setConnectState('scanned',window.T('inbox.connect.st_scanned'),window.T('inbox.connect.hint_scanned')); }
+    else if(st==='password_needed'){
+      // 扫码已确认，账号开启两步验证：停轮询、展示云密码输入（提交成功后再走 authorized）
+      _setConnectState('scanned','已扫码 · 待验证',(d.detail||'该账号开启了两步验证，请输入云密码完成登录。'));
+      if(_connectPollTimer){ clearInterval(_connectPollTimer); _connectPollTimer=null; }
+      _showConnectPassword(true, d.detail||'');
+    }
     else if(st==='authorized'){
       _connectAuthorized=true; // 标记已授权：关闭弹窗时绝不 cancel/logout 这个已上线的号
+      _showConnectPassword(false);
       _setConnectState('ok',window.T('inbox.connect.st_ok'),window.T('inbox.connect.hint_ok'));
       if(_connectPollTimer){ clearInterval(_connectPollTimer); _connectPollTimer=null; }
       await loadChats(); renderDrawerAccounts();
@@ -8742,6 +8775,34 @@ async function pollConnect(){
     else if(st==='expired'){ _setConnectState('err',window.T('inbox.connect.st_expired'),window.T('inbox.connect.hint_expired')); if(_connectPollTimer){clearInterval(_connectPollTimer);_connectPollTimer=null;} }
     else if(st==='failed'){ _setConnectState('err',window.T('inbox.connect.st_failed'), d.detail||window.T('inbox.connect.hint_failed')); if(_connectPollTimer){clearInterval(_connectPollTimer);_connectPollTimer=null;} }
   }catch(_){}
+}
+// 提交两步验证云密码 → 后端 check_password；成功走 authorized 收尾，错误可重试
+async function submitConnectPassword(){
+  if(!_connectLoginId) return;
+  const inp=document.getElementById('connect-cloud-password');
+  const btn=document.getElementById('connect-password-btn');
+  const pw=(inp&&inp.value)||'';
+  if(!pw){ _setConnectState('err','请输入云密码',''); return; }
+  if(btn){ btn.disabled=true; }
+  _setConnectState('scanned','正在校验云密码…','');
+  try{
+    const r=await fetch(`/api/platforms/${enc(_connectPlat)}/login/${enc(_connectLoginId)}/password`,{
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:pw})
+    });
+    const d=await r.json();
+    if(d.status==='authorized'){
+      _connectAuthorized=true;
+      _showConnectPassword(false);
+      _setConnectState('ok',window.T('inbox.connect.st_ok'),window.T('inbox.connect.hint_ok'));
+      await loadChats(); renderDrawerAccounts();
+      setTimeout(closeConnect, 1200);
+    } else {
+      // 密码错误等：保持密码区可重试
+      _setConnectState('err','验证未通过',(d.detail||'云密码错误，请重新输入。'));
+      if(inp){ inp.value=''; try{ inp.focus(); }catch(_){} }
+    }
+  }catch(_){ _setConnectState('err','提交失败',(window.T('inbox.toast.net_err')||'网络错误，请重试。')); }
+  finally{ if(btn){ btn.disabled=false; } }
 }
 
 /* ===== 工具 ===== */
@@ -9102,7 +9163,7 @@ Object.assign(window, {
   openConnect, closeConnect, restartConnect,
   chooseMode, backToModeSelect, backToConfig,
   onProxyToggle, onFpToggle, toggleAddProxy, submitAddProxy, previewFingerprint,
-  confirmConfigAndScan, orchSync,
+  confirmConfigAndScan, orchSync, submitConnectPassword,
   // 筛选空态 / 会话记录 / 业务助手切换 / 文档·多线路翻译
   resetAllFilters, _openAutoLog, wsToggleApp,
   _onXlateCompare, _openDocXlate, _onDocXlateRun, _docxlDownload,

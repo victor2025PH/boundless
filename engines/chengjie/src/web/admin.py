@@ -891,6 +891,42 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_dob.getLogger("admin").warning("deferred-outbox 路由注册失败", exc_info=True)
 
+    # ── platform/leadbus 线索接收承接端 API（/api/leadbus/ingest、/status）──
+    # 无界融合期新增（2026-07 S1）：上游获客(智控王/huoke)经 platform/leadbus 契约
+    # 把线索交给本引擎承接；见 D:\boundless\platform\leadbus\CONTRACT.md。
+    try:
+        from src.web.routes.leadbus_routes import register_leadbus_routes
+
+        register_leadbus_routes(app, api_auth=_api_auth, config_manager=config_manager)
+    except Exception:
+        import logging as _log_lb
+
+        _log_lb.getLogger("admin").warning("leadbus 路由注册失败", exc_info=True)
+
+    # ── platform/replybus 承接决策回执 API（/api/replybus/decide、/status）──
+    # 无界融合期新增（2026-07 S3）：智控王入站私信先问本引擎「这条怎么回」，
+    # 本引擎只返回决策，绝不代发（防双发红线，见 platform/replybus/CONTRACT.md §5）。
+    try:
+        from src.web.routes.replybus_routes import register_replybus_routes
+
+        register_replybus_routes(app, api_auth=_api_auth, config_manager=config_manager)
+    except Exception:
+        import logging as _log_rb
+
+        _log_rb.getLogger("admin").warning("replybus 路由注册失败", exc_info=True)
+
+    # ── platform/enable 契约 · translate 部分（/api/translate、/api/enable/status）──
+    # 无界融合期新增（2026-07 S2）：承接侧/智控王经 platform/enable 契约调用本引擎
+    # 翻译栈；见 D:\boundless\platform\enable\CONTRACT.md。
+    try:
+        from src.web.routes.enable_routes import register_enable_routes
+
+        register_enable_routes(app, api_auth=_api_auth, config_manager=config_manager)
+    except Exception:
+        import logging as _log_enable
+
+        _log_enable.getLogger("admin").warning("enable(translate) 路由注册失败", exc_info=True)
+
     # ── Phase K2 C 端变现 API（/api/monetize/*）──────────────────────────
     try:
         from src.web.routes.monetization_routes import register_monetization_routes
@@ -2536,6 +2572,16 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_cn
 
         _log_cn.getLogger("admin").warning("Canary 路由注册失败", exc_info=True)
+
+    # ── 实施31：反封号健康统一只读出口（/api/ops/account-health） ──
+    try:
+        from src.web.routes.ops_health_routes import register_ops_health_routes
+
+        register_ops_health_routes(app, _admin_ctx)
+    except Exception:
+        import logging as _log_oh
+
+        _log_oh.getLogger("admin").warning("account-health 路由注册失败", exc_info=True)
 
     try:
         from src.integrations.line_webhook import register_line_routes

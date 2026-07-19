@@ -27855,6 +27855,26 @@ def provenance_pubkey():
     return {"alg": "Ed25519", "format": "PEM/SubjectPublicKeyInfo", "public_key": pem}
 
 
+# ── platform/enable 契约探针（无界融合期新增，2026-07）───────────────────
+# 纯只读探针，不触发任何合成/克隆/渲染动作；与 /api/provenance/status 同一开放
+# 级别（GET 不在 _AUTH_SENSITIVE_GET 白名单，无需运维令牌）。真正的赋能动作走
+# 既有端点 /api/tts_only（人设克隆音）与 /avatar/speak（数字人开口），见
+# platform/enable/CONTRACT.md「落地状态与下一步」——本探针只答"能不能用"。
+@app.get("/api/enable/status")
+def enable_status():
+    """赋能面可达性 + 能力开关一览，供 platform/enable/client.py 的 available() 探测。"""
+    try:
+        _profile_count = len(_profiles) if isinstance(_profiles, dict) else 0
+    except Exception:
+        _profile_count = 0
+    return {
+        "available": True,
+        "tts_ready": _profile_count > 0,
+        "profile_count": _profile_count,
+        "note": "capability probe only; real actions are /api/tts_only and /avatar/speak",
+    }
+
+
 @app.get("/api/delivery_selfcheck")
 async def api_delivery_selfcheck():
     """交付自检：一次聚合「授权 / 溯源合规 / 前端页面 / 核心服务 / 白标持久化」就绪项，

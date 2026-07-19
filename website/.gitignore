@@ -8,3 +8,6 @@ next-env.d.ts
 .DS_Store
 /.robot-shots
 /.deploy-stage
+/scripts/_ios_wave
+/scripts/_wave_*.png
+/scripts/_shot_*.mjs

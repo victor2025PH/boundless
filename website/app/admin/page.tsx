@@ -224,8 +224,8 @@ const AB_LABELS: Record<string, { name: string; variants: Record<string, string>
     variants: { a: "A · 不自动（对照）", b: "B · 无操作 12s 自动进入" },
   },
   intro_btn_shape: {
-    name: "进入按钮形状",
-    variants: { a: "A · 有机波浪（现行）", b: "B · 标准胶囊（对照）" },
+    name: "进入按钮形状（已定稿胶囊）",
+    variants: { a: "A · 有机波浪（已下线）", b: "B · 标准胶囊（现行）" },
   },
 };
 

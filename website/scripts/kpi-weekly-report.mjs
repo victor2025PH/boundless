@@ -304,6 +304,13 @@ function collectLedger(db, win) {
   const PS = iso(win.prevSince);
   const PU = iso(win.prevUntil);
 
+  // 被排除的测试数据量（全库累计，供数据健康区展示口径；无 is_test 列时为 0）
+  const testExcluded = {
+    orders: XO ? db.prepare("SELECT COUNT(*) AS c FROM orders WHERE is_test = 1").get().c : 0,
+    leads: XL ? db.prepare("SELECT COUNT(*) AS c FROM leads WHERE is_test = 1").get().c : 0,
+    licenses: XC ? db.prepare("SELECT COUNT(*) AS c FROM licenses WHERE is_test = 1").get().c : 0,
+  };
+
   // 线索：first_seen 归属窗口，interest → inferProductId（口径 §1/§2.2）
   function leadsAgg(s, u) {
     const rows = db
@@ -445,6 +452,7 @@ function collectLedger(db, win) {
     licensesNew: { cur: licensesNew(S, U), prev: licensesNew(PS, PU) },
     expiring,
     gaps,
+    testExcluded,
     licenseProductOf: (id) => {
       if (!id) return null;
       const row = licProductStmt.get(id);
@@ -653,6 +661,8 @@ function buildReport(win, args, sides) {
     anonymous_active_events: ev ? ev.cur.anonymousActive : null,
     metering_anomalies: ev ? ev.cur.meteringAnomalies : null,
     ledger_gaps: lg ? { ...lg.gaps, leads_unmapped_interest: lg.leads.cur.unmapped } : null,
+    // 测试数据排除口径（is_test=1，全库累计）：0/0/0 且库未迁移时表示还没打标
+    test_excluded: lg ? lg.testExcluded : null,
     zero_event_products: zeroEventProducts,
   };
 
@@ -860,6 +870,12 @@ function renderMd(r) {
     );
   } else {
     L.push(`- 账本侧：${NA}（账本库不可用）`);
+  }
+  if (h.test_excluded) {
+    L.push(
+      `- 测试数据排除（is_test=1，全库累计，账本各指标均不计）：订单 ${h.test_excluded.orders}、` +
+        `留资 ${h.test_excluded.leads}、授权 ${h.test_excluded.licenses}`
+    );
   }
   if (h.zero_event_products.length) {
     for (const z of h.zero_event_products) {

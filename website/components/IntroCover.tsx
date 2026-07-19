@@ -658,10 +658,9 @@ export default function IntroCover() {
   const [soundOn, setSoundOn] = useState(false);
   // A/B intro_auto_enter B 桶：无操作 12s 自动进入；≤3s 时把剩余秒数显示在 hint 行
   const [autoLeft, setAutoLeft] = useState<number | null>(null);
-  // A/B intro_btn_shape：a=波浪（现行）/ b=胶囊（对照）。SSR 恒渲染波浪、挂载后按桶切换，
-  // 用点击率与进入率验证「有机形变」这类激进视觉实验是否真的更好，而不是自嗨
-  const [btnShape, setBtnShape] = useState<"wave" | "pill">("wave");
-  const btnShapeRef = useRef<"wave" | "pill">("wave");
+  // 进入按钮形状：产品裁定回退标准胶囊（波浪湍流轮廓反馈丑），不再做形状 A/B
+  const [btnShape] = useState<"wave" | "pill">("pill");
+  const btnShapeRef = useRef<"wave" | "pill">("pill");
 
   const overlayRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -689,8 +688,6 @@ export default function IntroCover() {
   const btnFxRafRef = useRef(0);
   // 声音可视化：主输出响度的指数平滑值 → 按钮 --amp
   const ampRef = useRef(0);
-  // 波浪形变滤镜的位移强度节点：rAF 每帧写 scale（基础蠕动 + 音乐响度 + 按压充能）
-  const waveDispRef = useRef<SVGFEDisplacementMapElement>(null);
 
   const startSound = useCallback(() => {
     userMutedRef.current = false;
@@ -833,15 +830,17 @@ export default function IntroCover() {
     };
   }, [enter, startSound]);
 
-  /* A/B 实验 intro_btn_shape：按钮形状分桶（a=波浪现行 / b=胶囊对照）。
-   * 曝光即记录；进入事件带 btnShape 属性，后台可直接按形状桶对比进入率与停留。 */
+  /* 进入按钮：全员标准胶囊（Siri 流光/呼吸/光斑保留）。
+   * 波浪湍流形变已下线——产品反馈扭动轮廓不如旧胶囊；落盘写回 b 以免旧桶干扰读数。 */
   useEffect(() => {
     if (!show) return;
-    const v = abVariant("intro_btn_shape");
-    abExpose("intro_btn_shape", v);
-    const shape = v === "b" ? "pill" : "wave";
-    btnShapeRef.current = shape;
-    setBtnShape(shape);
+    try {
+      localStorage.setItem("ab_intro_btn_shape", "b");
+    } catch {
+      /* private mode */
+    }
+    abExpose("intro_btn_shape", "b");
+    btnShapeRef.current = "pill";
   }, [show]);
 
   /* A/B 实验 intro_auto_enter：B 桶在完全无操作 12s 后自动进入正文（最后 3s 在 hint 行倒计时，
@@ -955,12 +954,6 @@ export default function IntroCover() {
       ampRef.current += (ampTarget - ampRef.current) * 0.18;
       const btnEl = enterBtnRef.current;
       if (btnEl) btnEl.style.setProperty("--amp", ampRef.current < 0.005 ? "0" : ampRef.current.toFixed(3));
-      // 波浪边缘随声而动：位移强度 = 基础蠕动 + 音乐响度 + 按压充能（只改 scale，
-      // 湍流噪声场本身有 SMIL 缓摆，浏览器只重算置换、不重算噪声，逐帧成本可忽略）
-      const disp = waveDispRef.current;
-      if (disp) {
-        disp.scale.baseVal = 6 + ampRef.current * 8 + (btnEl?.dataset.charging === "1" ? 3 : 0);
-      }
       raf = requestAnimationFrame(tick);
     };
 
@@ -1189,9 +1182,8 @@ export default function IntroCover() {
           )}
         </div>
         <div className="bl-stage bl-enter-wrap">
-          {/* Siri 风格按钮：苹果式有机波浪轮廓（湍流置换滤镜 + blob 圆角形变，双尺度叠加）
-              + 多彩流光描边 + 呼吸光晕 + 指针跟随光斑/3D 倾斜 + 按压充能 + 能量扩散环；
-              形状层（.siri-shape）被滤镜扭曲成波浪，文字层独立在外保持锐利可读 */}
+          {/* Siri 风格按钮：标准胶囊轮廓 + 多彩流光描边 + 呼吸光晕 + 指针跟随光斑/3D 倾斜 + 按压充能
+              （有机波浪湍流已下线，形状层仅承载光效，文字层独立保持锐利） */}
           <button
             ref={enterBtnRef}
             type="button"
@@ -1210,22 +1202,6 @@ export default function IntroCover() {
               delete e.currentTarget.dataset.charging;
             }}
           >
-            {/* 湍流置换滤镜：横向低频/纵向高频适配宽扁轮廓；噪声场 SMIL 缓摆产生「蠕动」，
-                位移强度由 rAF 写入（基础 6 + 音乐响度×8 + 充能 +3），reduced-motion 下 CSS 侧不引用本滤镜 */}
-            <svg className="bl-wave-defs" aria-hidden focusable="false">
-              <filter id="bl-btn-wave" x="-25%" y="-60%" width="150%" height="220%">
-                <feTurbulence type="fractalNoise" baseFrequency="0.009 0.032" numOctaves="2" seed="7" result="n">
-                  <animate
-                    attributeName="baseFrequency"
-                    dur="9s"
-                    values="0.009 0.032;0.012 0.026;0.009 0.032"
-                    repeatCount="indefinite"
-                  />
-                </feTurbulence>
-                <feDisplacementMap ref={waveDispRef} in="SourceGraphic" in2="n" scale="6" xChannelSelector="R" yChannelSelector="G" />
-              </filter>
-            </svg>
-            {/* 光晕本身是重模糊，不进滤镜（省一大圈滤镜栅格区域）；波浪只作用于清晰轮廓层 */}
             <span className="siri-halo" aria-hidden />
             <span className="siri-shape" aria-hidden>
               <span className="siri-blob" />

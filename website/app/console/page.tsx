@@ -4,7 +4,7 @@ import { AlertTriangle, ArrowRight, Inbox, KeyRound, ReceiptText, ScrollText, Sp
 import { getStats } from "@/lib/ledger";
 import { getOpportunityStats, listOpportunities, productLabel } from "@/lib/opportunities";
 import { readIntroFunnel, readIntroExperiments } from "@/lib/intro-funnel";
-import { readReconcileHealth } from "@/lib/payment-health";
+import { getStripeSetupStatus, readReconcileHealth } from "@/lib/payment-health";
 import { getPaymentSettings } from "@/lib/payment-settings";
 import { getConsoleSessionUser } from "@/lib/console-auth";
 import { roleAtLeast } from "@/lib/console-users";
@@ -36,7 +36,7 @@ const ROADMAP = [
 // 开场页 A/B 实验 → 人话（与 IntroCover 的 abVariant 实验 id 一一对应）
 const INTRO_EXPERIMENT_LABELS: Record<string, { name: string; variants: Record<string, string> }> = {
   intro_auto_enter: { name: "自动进入（无操作 12s）", variants: { a: "对照·不自动", b: "自动进入" } },
-  intro_btn_shape: { name: "进入按钮形状", variants: { a: "有机波浪（现行）", b: "标准胶囊（对照）" } },
+  intro_btn_shape: { name: "进入按钮形状（已定稿胶囊）", variants: { a: "有机波浪（已下线）", b: "标准胶囊（现行）" } },
 };
 
 const QUICK_LINKS = [
@@ -59,6 +59,7 @@ export default async function ConsoleOverviewPage() {
   const introExperiments = await readIntroExperiments(7);
   const reconcile = await readReconcileHealth(7);
   const paySettings = await getPaymentSettings();
+  const stripeSetup = await getStripeSetupStatus({ lastAgoMin: reconcile.lastAgoMin });
   const payLights = [
     { label: "银行卡通道", on: paySettings.card.enabled, note: paySettings.card.enabled ? "已启用" : "未启用" },
     { label: "Stripe Secret", on: !!process.env.STRIPE_SECRET_KEY, note: "STRIPE_SECRET_KEY" },
@@ -354,6 +355,13 @@ export default async function ConsoleOverviewPage() {
             <div className="grid gap-2 text-xs lg:grid-cols-2">
               {introExperiments.experiments.map((exp) => {
                 const meta = INTRO_EXPERIMENT_LABELS[exp.experiment];
+                const d = exp.decision;
+                const verdictCls =
+                  d.verdict === "favor_a" || d.verdict === "favor_b"
+                    ? "text-emerald-300"
+                    : d.verdict === "tie"
+                      ? "text-slate-300"
+                      : "text-amber-200/90";
                 return (
                   <div key={exp.experiment} className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
                     <p className="mb-1.5 font-medium text-slate-300">{meta?.name ?? exp.experiment}</p>
@@ -372,6 +380,13 @@ export default async function ConsoleOverviewPage() {
                         </li>
                       ))}
                     </ul>
+                    <p className={`mt-2 leading-relaxed ${verdictCls}`}>
+                      {d.verdict === "favor_a" || d.verdict === "favor_b"
+                        ? `✓ ${d.reason}`
+                        : d.verdict === "tie"
+                          ? `· ${d.reason}`
+                          : `⏳ ${d.reason}`}
+                    </p>
                   </div>
                 );
               })}
@@ -400,7 +415,21 @@ export default async function ConsoleOverviewPage() {
             ))}
             <p className="pt-1 text-[11px] leading-relaxed text-slate-500">
               三灯全绿 = 卡支付双重对账在岗；配置指引见 /admin/payment。
+              {stripeSetup.ready
+                ? ` 就绪 ${stripeSetup.done}/${stripeSetup.total}。`
+                : ` 就绪 ${stripeSetup.done}/${stripeSetup.total}（差 ${stripeSetup.total - stripeSetup.done} 步）。`}
             </p>
+            {!stripeSetup.ready && (
+              <ol className="mt-2 list-decimal space-y-1.5 pl-4 text-[11px] leading-relaxed text-amber-200/85">
+                {stripeSetup.steps
+                  .filter((s) => !s.ok && s.id !== "cron_fresh")
+                  .map((s) => (
+                    <li key={s.id}>
+                      <span className="font-medium text-amber-100">{s.label}</span> — {s.hint}
+                    </li>
+                  ))}
+              </ol>
+            )}
           </div>
           <div className="lg:col-span-2">
             {reconcile.runs === 0 ? (
