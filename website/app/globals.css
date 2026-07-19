@@ -1420,7 +1420,8 @@ html.fx-warp .star-wrap {
 .bl-enter-btn .siri-blob {
   position: absolute;
   inset: 0;
-  background: rgba(7, 10, 24, 0.64);
+  /* 0.74：WebKit 对滤镜层的合成比 Chromium 淡一档（实测截图），提高底色保双引擎文字对比度 */
+  background: rgba(7, 10, 24, 0.74);
   border: 1px solid rgba(148, 210, 255, 0.32);
   border-radius: 52% 48% 44% 56% / 58% 44% 56% 42%;
   box-shadow: 0 0 24px rgba(34, 211, 238, 0.15), inset 0 0 18px rgba(34, 211, 238, 0.06);

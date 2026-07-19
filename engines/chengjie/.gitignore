@@ -358,3 +358,7 @@ config/voice_refs/*.txt
 # 声纹音频/人设卡 dump/媒体 = PII，保留回收期后人工清空，绝不入库）
 config/purge_agent_state.json
 config/purged_trash/
+
+# 运行时事件 spool（telemetry 落盘，非版本资产）
+config/events/
+

@@ -28,6 +28,11 @@ export interface IntroFunnel {
 const ENTER_METHODS = ["click", "scroll", "touch", "key", "auto"] as const;
 type EnterMethod = (typeof ENTER_METHODS)[number];
 
+/* 自动化流量识别：QA 验收脚本（HeadlessChrome/Playwright）与爬虫会大量触发 intro 事件——
+ * 实测上线首日 25 条事件里 22 条来自验收脚本，不滤会把 A/B 实验读数彻底污染。
+ * 默认排除，include_bots=1 可带回（排障/对账用）。 */
+const BOT_UA = /HeadlessChrome|bot|spider|crawl|playwright|puppeteer|lighthouse|phantomjs|selenium/i;
+
 function quantile(sorted: number[], p: number): number {
   if (!sorted.length) return 0;
   const pos = (sorted.length - 1) * p;
@@ -36,8 +41,9 @@ function quantile(sorted: number[], p: number): number {
   return Math.round(sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo));
 }
 
-/** 读取近 N 天的开场页漏斗。事件文件不存在/为空 → 全 0 结构（不抛错，页面照常渲染）。 */
-export async function readIntroFunnel(days: number): Promise<IntroFunnel> {
+/** 读取近 N 天的开场页漏斗。事件文件不存在/为空 → 全 0 结构（不抛错，页面照常渲染）。
+ *  默认排除自动化流量（UA 命中 BOT_UA），includeBots=true 时不过滤。 */
+export async function readIntroFunnel(days: number, opts?: { includeBots?: boolean }): Promise<IntroFunnel> {
   const d = Math.min(90, Math.max(1, Math.floor(days) || 7));
   const since = Date.now() - d * 86_400_000;
 
@@ -63,10 +69,12 @@ export async function readIntroFunnel(days: number): Promise<IntroFunnel> {
         t?: string;
         event?: string;
         sid?: string;
+        ua?: string;
         props?: { method?: string; dwellMs?: number | null } | null;
       };
       const sid = r.sid || "";
       if (!sid || !r.t || Date.parse(r.t) < since) continue;
+      if (!opts?.includeBots && r.ua && BOT_UA.test(r.ua)) continue;
       switch (r.event) {
         case "intro_shown":
           shown.add(sid);

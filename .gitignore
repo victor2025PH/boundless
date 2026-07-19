@@ -55,6 +55,12 @@ _pending_models/
 *.mov
 *.mkv
 
+# 官网 public 里被代码引用的展示资产（声音克隆 demo、六路视频 showcase、数字人）例外放行：
+# 干净 clone/CI 缺了它们会成建制 404（theme.mp3 事故的同类隐患，资产体检 20260719 确认 21 个）。
+# 上面的 *.mp3/*.mp4 继续拦引擎目录与临时产物，官网展示资产以库为准。
+!website/public/**/*.mp3
+!website/public/**/*.mp4
+
 # keep empty structure
 !**/.gitkeep
 

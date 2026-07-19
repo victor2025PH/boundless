@@ -1,4 +1,5 @@
-// 集团账本 CLI 共享库（纯 JS，供 scripts/ledger-backfill.mjs、ledger-import-licenses.mjs 直接 node 运行）。
+// 集团账本 CLI 共享库（纯 JS，供 scripts/ledger-backfill.mjs、ledger-import-licenses.mjs、
+// ledger-link-customers.mjs 直接 node 运行）。
 //
 // ⚠️ 本文件是 website/lib/ledger.ts 的纯 JS 等价实现（DDL / upsert 语义 / ID 规范 /
 // inferProductId 与 TS 版一一对应）。修改任何一侧的表结构、upsert 语义或映射逻辑时，
@@ -537,6 +538,8 @@ export function upsertLicenseRow(row, db) {
 }
 
 // ── 身份匹配 / 自动归属 / 审计（与 ledger.ts 语义一致）──────────────
+export const IDENTITY_KINDS = ["contact", "tg", "email", "phone", "fingerprint"];
+
 export function normIdentityValue(kind, value) {
   const v = String(value ?? "").trim();
   if (kind === "contact" || kind === "email") return v.toLowerCase().replace(/\s+/g, "");
@@ -565,6 +568,59 @@ export function writeAudit(a, db) {
     "INSERT INTO audit (id, ts, actor, action, entity, entity_id, detail) VALUES (@id, @ts, @actor, @action, @entity, @entity_id, @detail)"
   ).run(row);
   return row;
+}
+
+/** 建客户主档（cust_ ULID + audit customer.create）。与 lib/ledger.ts::createCustomer
+ *  语义一致（修改必须同步）；mjs 侧无连接单例，db 必须显式传入。 */
+export function createCustomer(input = {}, db, actor = "system") {
+  const id = newId("cust");
+  const t = nowIso();
+  const rowValues = {
+    id,
+    display_name: s(input.display_name),
+    primary_contact: s(input.primary_contact),
+    tg_user_id: s(input.tg_user_id),
+    source: s(input.source),
+    notes: s(input.notes),
+    created_at: t,
+    updated_at: t,
+  };
+  const tx = db.transaction(() => {
+    db.prepare(
+      `INSERT INTO customers (id, display_name, primary_contact, tg_user_id, source, notes, created_at, updated_at)
+       VALUES (@id, @display_name, @primary_contact, @tg_user_id, @source, @notes, @created_at, @updated_at)`
+    ).run(rowValues);
+    writeAudit({ actor, action: "customer.create", entity: "customer", entity_id: id, detail: rowValues }, db);
+  });
+  tx();
+  return rowValues;
+}
+
+/** 给客户挂身份标识（幂等）。同 (kind,value) 已属于其他客户时不抢占，返回冲突信息。
+ *  与 lib/ledger.ts::attachIdentity 语义一致（修改必须同步）。 */
+export function attachIdentity(customerId, kind, value, db, actor = "system") {
+  if (!IDENTITY_KINDS.includes(kind)) throw new TypeError(`attachIdentity: bad kind ${kind}`);
+  const v = normIdentityValue(kind, value);
+  if (!v) throw new TypeError("attachIdentity: empty value");
+  const tx = db.transaction(() => {
+    const existing = db.prepare("SELECT customer_id FROM identities WHERE kind = ? AND value = ?").get(kind, v);
+    if (existing) {
+      if (existing.customer_id === customerId) return { ok: true, existed: true };
+      return { ok: false, existed: true, conflictCustomerId: existing.customer_id };
+    }
+    db.prepare("INSERT INTO identities (customer_id, kind, value, created_at) VALUES (?, ?, ?, ?)").run(
+      customerId,
+      kind,
+      v,
+      nowIso()
+    );
+    writeAudit(
+      { actor, action: "identity.attach", entity: "customer", entity_id: customerId, detail: { kind, value: v } },
+      db
+    );
+    return { ok: true, existed: false };
+  });
+  return tx();
 }
 
 export function ensureCustomerForOrder(orderKey, db) {
