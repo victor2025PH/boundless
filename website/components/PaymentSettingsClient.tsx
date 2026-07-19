@@ -24,6 +24,7 @@ interface ApiResp {
   ok?: boolean;
   settings?: PaymentSettingsShape;
   cardSecretConfigured?: boolean;
+  webhookConfigured?: boolean;
 }
 
 const inputCls =
@@ -36,6 +37,7 @@ export default function PaymentSettingsClient() {
   const [gate, setGate] = useState<"checking" | "locked" | "open">("checking");
   const [s, setS] = useState<PaymentSettingsShape | null>(null);
   const [secretConfigured, setSecretConfigured] = useState(false);
+  const [webhookConfigured, setWebhookConfigured] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -48,6 +50,7 @@ export default function PaymentSettingsClient() {
       if (r.ok && j?.ok && j.settings) {
         setS(j.settings);
         setSecretConfigured(!!j.cardSecretConfigured);
+        setWebhookConfigured(!!j.webhookConfigured);
         setGate("open");
       } else {
         setGate("locked");
@@ -81,6 +84,7 @@ export default function PaymentSettingsClient() {
       if (r.ok && j?.ok && j.settings) {
         setS(j.settings);
         setSecretConfigured(!!j.cardSecretConfigured);
+        setWebhookConfigured(!!j.webhookConfigured);
         setMsg({ ok: true, text: "已保存，前台结算弹窗即时生效" });
       } else if (r.status === 401) {
         setGate("locked");
@@ -190,6 +194,25 @@ export default function PaymentSettingsClient() {
                     ⚠ Stripe Secret Key 未配置：请在服务器 .env.local 设置 STRIPE_SECRET_KEY=sk_… 并重启服务。
                     密钥只放服务器环境变量——绝不在浏览器输入、存储或传输；未配置时前台银行卡入口不可用，自动回落
                     USDT。
+                  </>
+                )}
+              </div>
+
+              <div
+                className={`mt-2 rounded-xl border px-3 py-2.5 text-xs leading-relaxed ${
+                  webhookConfigured
+                    ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
+                    : "border-amber-400/30 bg-amber-400/10 text-amber-200"
+                }`}
+              >
+                {webhookConfigured ? (
+                  <>✓ Webhook 对账已启用（STRIPE_WEBHOOK_SECRET）：客户付款即自动到账，无需回跳官网。</>
+                ) : (
+                  <>
+                    ⚠ Webhook 未配置：当前只能靠付款后回跳对账，客户关掉页面会漏单。配置方法：Stripe 后台
+                    Developers → Webhooks → Add endpoint，URL 填 <b>https://bd2026.cc/api/payment/webhook</b>，事件勾选
+                    checkout.session.completed / async_payment_succeeded / async_payment_failed，把生成的签名密钥
+                    （whsec_…）写入服务器 .env.local 的 STRIPE_WEBHOOK_SECRET 并重启。
                   </>
                 )}
               </div>

@@ -256,6 +256,8 @@ export interface CustomerRow {
   notes: string | null;
   created_at: string | null;
   updated_at: string | null;
+  /** 1 = 测试/演练数据（e2e/smoke 等，schema v6）：KPI/商机默认排除，console 显示徽章。 */
+  is_test: number;
 }
 
 export const IDENTITY_KINDS = ["contact", "tg", "email", "phone", "fingerprint"] as const;
@@ -285,6 +287,7 @@ export interface LeadRow {
   count: number | null;
   raw: string | null;
   synced_at: string | null;
+  is_test?: number | null;
 }
 
 export interface OrderRow {
@@ -310,6 +313,7 @@ export interface OrderRow {
   code: string | null;
   raw: string | null;
   synced_at: string | null;
+  is_test?: number | null;
 }
 
 export interface LicenseRow {
@@ -328,6 +332,7 @@ export interface LicenseRow {
   status: string | null;
   raw: string | null;
   synced_at: string | null;
+  is_test?: number | null;
 }
 
 export interface AuditRow {
@@ -481,10 +486,22 @@ export function normIdentityValue(kind: IdentityKind, value: string): string {
   return v;
 }
 
-/** 联系方式强信号分类（与 scripts/ledger-link-customers.mjs 的 classifyContact 同规则）：
+// ── 测试/演练数据判定（schema v6 is_test 的唯一口径）────────────────
+// 保守词边界匹配：e2e / test / drill / smoke 必须前后都是非字母数字（"contest"、
+// "latest"、"testuser" 不命中，宁可漏标不误标——误标会把真实数据从 KPI 滤掉）；
+// @internal 只认结尾（e2e 脚本约定 contact 形如 e2e-notify@internal）。
+// ⚠️ 与 scripts/ledger-lib.mjs 的 isTestSignal 逐字一致，修改必须同步！
+const TEST_SIGNAL_RE = /(^|[^a-z0-9])(e2e|test|drill|smoke)([^a-z0-9]|$)|@internal\s*$/i;
+
+/** 任一入参命中测试信号即 true（null/undefined 跳过）。 */
+export function isTestSignal(...vals: (string | null | undefined)[]): boolean {
+  return vals.some((v) => v !== null && v !== undefined && TEST_SIGNAL_RE.test(String(v)));
+}
+
+/** 联系方式强信号分类（与 scripts/ledger-lib.mjs 的 classifyStrongContact 同规则，修改必须同步）：
  *  仅 @handle / t.me/handle / email / phone 判为可自动建档的强信号；自由文本不建档。
- *  返回 { kind, value（已归一）, display }，用于 ensureCustomerFor* 的 create-on-miss。 */
-function classifyStrongContact(
+ *  返回 { kind, value（已归一）, display }，用于实时归并的 create-on-miss。 */
+export function classifyStrongContact(
   text: string | null | undefined
 ): { kind: IdentityKind; value: string; display: string } | null {
   const t = String(text ?? "").trim();
@@ -938,6 +955,25 @@ export function writeAudit(a: WriteAuditInput, db: Database.Database = getLedger
 export interface ListOptions {
   limit?: number;
   offset?: number;
+  /** 默认 false：列表排除测试/演练数据（is_test=1）。true 时一并带出（配合 UI「显示测试」开关）。 */
+  includeTest?: boolean;
+}
+
+// 表是否有 is_test 列（按连接缓存；迁移前旧库/无该表时安全返回 false）。
+const _isTestColCache = new WeakMap<Database.Database, Map<string, boolean>>();
+function tableHasIsTest(db: Database.Database, table: string): boolean {
+  let m = _isTestColCache.get(db);
+  if (!m) _isTestColCache.set(db, (m = new Map()));
+  const hit = m.get(table);
+  if (hit !== undefined) return hit;
+  let has = false;
+  try {
+    has = (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === "is_test");
+  } catch {
+    has = false;
+  }
+  m.set(table, has);
+  return has;
 }
 export interface ListResult<T> {
   rows: T[];
@@ -960,6 +996,8 @@ function runList<T>(
   orderBy: string,
   opts: ListOptions
 ): ListResult<T> {
+  // 默认排除测试数据（实施23）：表有 is_test 列且未显式 includeTest 时加过滤。
+  if (!opts.includeTest && tableHasIsTest(db, table)) where = [...where, "COALESCE(is_test,0) = 0"];
   const cond = where.length ? ` WHERE ${where.join(" AND ")}` : "";
   const { limit, offset } = page(opts);
   const total = (db.prepare(`SELECT COUNT(*) AS c FROM ${table}${cond}`).get(params) as { c: number }).c;
@@ -1066,25 +1104,36 @@ export interface LedgerStats {
   ordersByStatus: Record<string, number>;
   /** 30 天内到期（未 revoked/expired）的授权数。 */
   licensesExpiringIn30d: number;
+  /** 被标记为测试/演练的数据量（headline 计数已排除这些；供 UI 显示「+N 测试」）。 */
+  test: { customers: number; leads: number; orders: number; licenses: number };
   generatedAt: string;
 }
 
 export function getStats(db: Database.Database = getLedgerDb()): LedgerStats {
-  const count = (table: string) => (db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get() as { c: number }).c;
+  // headline 计数默认排除测试数据（is_test=1）；无该列的旧库退化为全量（excl 为空串）。
+  const excl = (table: string) => (tableHasIsTest(db, table) ? " WHERE COALESCE(is_test,0) = 0" : "");
+  const count = (table: string) =>
+    (db.prepare(`SELECT COUNT(*) AS c FROM ${table}${excl(table)}`).get() as { c: number }).c;
+  const testCount = (table: string) =>
+    tableHasIsTest(db, table)
+      ? (db.prepare(`SELECT COUNT(*) AS c FROM ${table} WHERE is_test = 1`).get() as { c: number }).c
+      : 0;
   const byStatus: Record<string, number> = {};
+  const ordExcl = tableHasIsTest(db, "orders") ? " WHERE COALESCE(is_test,0) = 0" : "";
   for (const r of db
-    .prepare("SELECT COALESCE(status, '(null)') AS status, COUNT(*) AS c FROM orders GROUP BY status")
+    .prepare(`SELECT COALESCE(status, '(null)') AS status, COUNT(*) AS c FROM orders${ordExcl} GROUP BY status`)
     .all() as { status: string; c: number }[]) {
     byStatus[r.status] = r.c;
   }
   const now = nowIso();
   const until = new Date(Date.now() + 30 * 86400000).toISOString();
+  const licExcl = tableHasIsTest(db, "licenses") ? " AND COALESCE(is_test,0) = 0" : "";
   const expiring = (
     db
       .prepare(
         `SELECT COUNT(*) AS c FROM licenses
          WHERE expires_at IS NOT NULL AND expires_at > ? AND expires_at <= ?
-           AND (status IS NULL OR status NOT IN ('revoked','expired'))`
+           AND (status IS NULL OR status NOT IN ('revoked','expired'))${licExcl}`
       )
       .get(now, until) as { c: number }
   ).c;
@@ -1097,6 +1146,12 @@ export function getStats(db: Database.Database = getLedgerDb()): LedgerStats {
     audit: count("audit"),
     ordersByStatus: byStatus,
     licensesExpiringIn30d: expiring,
+    test: {
+      customers: testCount("customers"),
+      leads: testCount("leads"),
+      orders: testCount("orders"),
+      licenses: testCount("licenses"),
+    },
     generatedAt: now,
   };
 }

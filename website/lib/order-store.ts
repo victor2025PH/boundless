@@ -169,6 +169,40 @@ export async function setOrderStatus(id: string, status: OrderStatus, code?: str
   });
 }
 
+/** Stripe webhook 对账落地：标记到账 + 回填 session id，一次串行写完成（幂等）。
+ *  返回 changed=false 表示订单已是 paid/activated（Stripe 会重试投递、同事件可能多次到达，
+ *  调用方据此跳过重复通知）。 */
+export async function markOrderCardPaid(
+  id: string,
+  sessionId: string
+): Promise<{ order: OrderEntry; changed: boolean } | null> {
+  return serialize(async () => {
+    const db = await readDb();
+    const o = db.orders[id.trim().toUpperCase()];
+    if (!o) return null;
+    if (o.status === "paid" || o.status === "activated") {
+      // 已到账/已开通：只补 session id（若缺），不动状态、不重复记流水
+      if (!o.stripe_session_id && sessionId) {
+        o.stripe_session_id = sessionId.slice(0, 120);
+        await writeDb(db);
+      }
+      return { order: o, changed: false };
+    }
+    o.status = "paid";
+    o.paid_at = o.paid_at || new Date().toISOString();
+    if (sessionId) o.stripe_session_id = sessionId.slice(0, 120);
+    await writeDb(db);
+    await appendFile(
+      LOG,
+      JSON.stringify({ t: new Date().toISOString(), id: o.id, event: "status:paid", via: "stripe_webhook" }) + "\n",
+      "utf-8"
+    ).catch(() => {});
+    // 影子账本双写（best-effort，失败静默）
+    void import("./ledger-sync").then((m) => m.syncOrderEntry(o)).catch(() => {});
+    return { order: o, changed: true };
+  });
+}
+
 export async function listPendingOrders(): Promise<OrderEntry[]> {
   const db = await readDb();
   return Object.values(db.orders).filter((o) => o.status === "pending");
