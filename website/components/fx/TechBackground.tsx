@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, useScroll, useTransform, useReducedMotion } from "framer-motion";
 
 /** 全站固定科技背景:星层视差 + 光晕漂移 + 透视网格 + 流星/扫描/上升光点。
@@ -11,7 +11,14 @@ import { motion, useScroll, useTransform, useReducedMotion } from "framer-motion
  *  - .fx-transient(流星+天幕光带)        → fx-calm/fx-video 时整组隐去
  *  - html[data-fx="low"]                → 低配设备裁剪(见 globals.css) */
 export default function TechBackground() {
-  const reduced = useReducedMotion();
+  /* useReducedMotion 在 SSR 恒为 false、客户端 reduce 模式下首帧即 true，
+   * 直接用它切 style 会造成两端首帧标记不一致（hydration 报错）。
+   * 挂载后才采纳其值：SSR 与客户端首帧都按「非 reduce」渲染，水合一致；
+   * 挂载后 reduce 用户再摘掉视差 style（视觉上首帧 y=0，无跳变）。 */
+  const prefersReduced = useReducedMotion();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const reduced = mounted && !!prefersReduced;
   const { scrollYProgress } = useScroll();
   // 滚动视差:星层慢、光晕快,拉开纵深(reduced-motion 时不启用)
   const starY = useTransform(scrollYProgress, [0, 1], [0, -60]);

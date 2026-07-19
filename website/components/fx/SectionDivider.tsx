@@ -1,11 +1,12 @@
 "use client";
 
-import { motion, useReducedMotion } from "framer-motion";
+import { motion } from "framer-motion";
+import { useReducedMotionSafe } from "./useReducedMotionSafe";
 
 /** 区块光弧分隔线:进入视口时从中心"画出"一条发光线,中央菱形节点随后点亮。
  *  一次性触发,纯 transform/opacity;reduced-motion 时静态显示。 */
 export default function SectionDivider() {
-  const reduced = useReducedMotion();
+  const reduced = useReducedMotionSafe();
 
   if (reduced) {
     return (

@@ -1,0 +1,87 @@
+# ---------------------------------------------------------------------------
+# 网站开场页动效 CI 质量门禁（Intro QA）
+#
+# 用途：对首页全屏开场页（components/IntroCover.tsx）的两套动效做量化验收，
+# 作为合入门禁——任一判定 FAIL 即 step 非零退出、workflow 标红：
+#   - LOGO 粒子动效：scripts/qa-intro-motion.mjs（10 项判定）
+#   - Siri 流光按钮：scripts/qa-intro-button.mjs（6 项检查）
+#
+# 说明：QA 脚本对无 GPU 的 headless Runner 已做解析式判定兼容——速度/时长
+# 判定基于引擎上报的闭式运动学参数（v0/ve/planMs）计算，帧率无关；
+# fpsInfo 仅作参考不参与判定，故无需任何额外 flag。
+#
+# 本地等效命令（在 website/ 目录下执行）：
+#   npm ci
+#   npx playwright install --with-deps chromium
+#   npm run build
+#   npx next start -p 3470 &        # 与 QA 脚本默认 URL 对齐
+#   npm run qa:intro                # 先粒子后按钮，串行两条
+#
+# 详细文档：website/docs/qa-intro.md（检查项、阈值与 __blIntroStats 契约）
+# ---------------------------------------------------------------------------
+
+name: Website Intro QA
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+  pull_request:
+    paths:
+      - "website/**"
+
+jobs:
+  intro-qa:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 安装 Playwright 浏览器
+        run: npx playwright install --with-deps chromium
+
+      - name: 构建
+        run: npm run build
+
+      - name: 后台启动服务（端口 3470）
+        run: npx next start -p 3470 &
+
+      - name: 等待端口就绪
+        shell: bash
+        run: |
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3470/ || true)
+            if [ "$code" = "200" ]; then
+              echo "服务已就绪（第 ${i} 次探测，HTTP 200）"
+              exit 0
+            fi
+            echo "等待中（第 ${i}/60 次，HTTP ${code}）..."
+            sleep 2
+          done
+          echo "::error::3470 端口 120 秒内未返回 200，服务启动失败"
+          exit 1
+
+      - name: 开场页动效验收
+        run: npm run qa:intro
+
+      - name: 失败时上传诊断截图
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: intro-qa-screenshots
+          path: website/scripts/*.png
+          if-no-files-found: ignore

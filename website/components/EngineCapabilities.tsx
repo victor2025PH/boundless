@@ -41,7 +41,8 @@ export default function EngineCapabilities() {
   const c = ENGINE.caps;
 
   return (
-    <section id="engine" className="relative py-24">
+    <section id="engine" className="relative overflow-hidden py-24">
+      {/* overflow-hidden 在 section 上：裁掉这枚 820px 光晕（移动端曾把 body.scrollWidth 撑到 598px） */}
       <div className="pointer-events-none absolute left-1/2 top-0 -z-10 h-72 w-[820px] -translate-x-1/2 rounded-full bg-neon-violet/10 blur-[130px]" />
       <div className="mx-auto max-w-7xl px-5">
         <Reveal className="mx-auto max-w-3xl text-center">

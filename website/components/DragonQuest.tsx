@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
+import { useReducedMotionSafe } from "@/components/fx/useReducedMotionSafe";
 import { useLang } from "./LanguageContext";
 import { track } from "@/lib/track";
 import { BOT_HANDLE } from "@/lib/site";
@@ -9,6 +10,14 @@ import LoongCeremony from "./LoongCeremony";
 import LoongGhost from "./LoongGhost";
 import { LoongHero } from "./forms/LoongForm";
 import { dispatchApplySkin, dispatchLoongCeremony, dispatchLoongTeaser } from "@/lib/loong-events";
+import {
+  DOCK_EVENT,
+  DRAGON_COLLECT_EVENT,
+  dispatchDock,
+  dispatchDragonState,
+  useAttention,
+  type DockDetail,
+} from "@/lib/dock";
 import type { DragonState, WishKind } from "@/lib/dragon-store";
 
 /**
@@ -172,7 +181,7 @@ function daysLeft(endsAt: number): number {
 
 export default function DragonQuest() {
   const { lang } = useLang();
-  const reduced = useReducedMotion() ?? false;
+  const reduced = useReducedMotionSafe();
   const t = T[lang === "zh" ? "zh" : "en"];
   const stars = STARS[lang === "zh" ? "zh" : "en"];
 
@@ -194,7 +203,10 @@ export default function DragonQuest() {
   const [rulesOpen, setRulesOpen] = useState(false);
   const [ghostOn, setGhostOn] = useState(false);
   const [flightGhost, setFlightGhost] = useState(false);
+  /* 互动坞：聊天面板打开时整簇收纳（星珠改由聊天头部迷你条承接，不丢失） */
+  const [docked, setDocked] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const guideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const offerTracked = useRef(false);
   const comebackShown = useRef(false);
   const teaser3Shown = useRef(false);
@@ -238,6 +250,38 @@ export default function DragonQuest() {
       clearTimeout(timer);
     };
   }, [loadState]);
+
+  /* 引导条 8s 自动淡出（不再等点击——避免与其他浮层长期共存） */
+  useEffect(() => {
+    if (!showGuide) return;
+    guideTimer.current = setTimeout(() => {
+      setShowGuide(false);
+      try {
+        sessionStorage.setItem("bl-dragon-guide", "1");
+      } catch {}
+    }, 8000);
+    return () => {
+      if (guideTimer.current) clearTimeout(guideTimer.current);
+    };
+  }, [showGuide]);
+
+  /* 互动坞：聊天面板占用时收纳整簇 + 关闭自己的托盘面板（同屏最多一个浮层） */
+  useEffect(() => {
+    const onDock = (e: Event) => {
+      const d = (e as CustomEvent<DockDetail>).detail;
+      if (d?.source !== "chat") return;
+      setDocked(d.active);
+      if (d.active) setOpen(false);
+    };
+    window.addEventListener(DOCK_EVENT, onDock);
+    return () => window.removeEventListener(DOCK_EVENT, onDock);
+  }, []);
+
+  /* 状态外发：聊天迷你星珠条渲染用（st 每次变化都同步） */
+  useEffect(() => {
+    if (!st) return;
+    dispatchDragonState({ collected: st.collected, todayCollected: st.todayCollected, canSummon: st.canSummon });
+  }, [st]);
 
   /* 好友助力落地：?xz=<令牌> → 为分享人点亮今日星珠
      - 令牌先落 session，再清 URL（Strict Mode 双挂载仍能读到）
@@ -341,6 +385,11 @@ export default function DragonQuest() {
   const showToastRef = useRef(showToast);
   showToastRef.current = showToast;
 
+  /* 托盘面板开/关也广播占用：精灵播报让位（反向互斥） */
+  useEffect(() => {
+    dispatchDock("dragon-panel", open);
+  }, [open]);
+
   /* 打开召唤：真召唤时刻（可许愿）且非降级环境 → 先放 canvas 界龙演出，收尾再出祈愿卡 */
   const openCeremony = (target: Phase) => {
     setPhase(target);
@@ -411,6 +460,15 @@ export default function DragonQuest() {
     }
   }, [busy, stars, t, lang]);
 
+  /* 迷你星珠条（聊天面板内）请求收珠：同一套 collect，服务端记账口径不变 */
+  const collectRef = useRef(collect);
+  collectRef.current = collect;
+  useEffect(() => {
+    const onCollect = () => collectRef.current();
+    window.addEventListener(DRAGON_COLLECT_EVENT, onCollect);
+    return () => window.removeEventListener(DRAGON_COLLECT_EVENT, onCollect);
+  }, []);
+
   const claimGrandReward = useCallback(async () => {
     if (busy) return;
     setBusy(true);
@@ -459,6 +517,11 @@ export default function DragonQuest() {
     [busy]
   );
 
+  /* 星珠气泡领号（叫号机）：15s 无人理会自动让位给下一个自动浮层，之后轮转回归。
+     hook 必须先于任何提前 return 调用。 */
+  const offerWant = !!st && !st.todayCollected && !st.canSummon && !docked;
+  const offerGranted = useAttention("pearl-offer", offerWant);
+
   if (!st) {
     if (!loadError) return null;
     return (
@@ -480,7 +543,7 @@ export default function DragonQuest() {
     );
   }
 
-  const offerVisible = !st.todayCollected && !st.canSummon;
+  const offerVisible = offerGranted;
   const nextStar = stars[Math.min(st.collected, 6)];
   const tgLink = st.code ? `https://t.me/${BOT_HANDLE}?start=loong_${st.code}` : "";
   const leftDays = daysLeft(st.cycleEndsAt);
@@ -754,9 +817,14 @@ export default function DragonQuest() {
 
   return (
     <>
-      {/* ── 悬浮簇：今日星珠 + 北斗托盘。放机器人左侧下方——头顶区留给全息播报面板
-          （bottom≈345..435 是播报区，放那会互相遮挡且拦截播报点击） ── */}
-      <div className="pointer-events-none fixed bottom-[172px] right-[106px] z-[60] flex flex-col items-end gap-2 md:bottom-[128px] md:right-[172px]">
+      {/* ── 悬浮簇：今日星珠 + 北斗托盘。放机器人左侧下方——头顶区留给全息播报面板。
+          聊天面板占用互动坞时整簇右移收纳（星珠由聊天头部迷你条承接） ── */}
+      <div
+        className={`pointer-events-none fixed bottom-[172px] right-[106px] z-[60] flex flex-col items-end gap-2 transition-all duration-300 md:bottom-[128px] md:right-[172px] ${
+          docked ? "pointer-events-none translate-x-8 opacity-0" : ""
+        }`}
+        aria-hidden={docked}
+      >
         <AnimatePresence>
           {showGuide && offerVisible && (
             <motion.div
@@ -865,43 +933,47 @@ export default function DragonQuest() {
           </div>
         )}
 
-        {/* 收珠 toast */}
-        <AnimatePresence>
-          {toast && (
-            <motion.div
-              className="pointer-events-none rounded-lg border border-amber-300/30 bg-[#120e08]/92 px-3 py-1.5 text-xs font-medium text-amber-100 backdrop-blur"
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-            >
-              {toast}
-            </motion.div>
-          )}
-        </AnimatePresence>
       </div>
 
-      {/* 第 3 珠真剪影：叠在精灵附近，兑现「剪影初现」文案 */}
+      {/* 收珠/预告 toast：底部居中独立层——与右下角操作区彻底解耦，聊天打开时也可见 */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            className="dragon-toast pointer-events-none fixed inset-x-0 bottom-24 z-[95] flex justify-center md:bottom-8"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+          >
+            <div className="rounded-full border border-amber-300/30 bg-[#120e08]/94 px-4 py-2 text-xs font-medium text-amber-100 shadow-[0_8px_28px_rgba(0,0,0,0.5)] backdrop-blur">
+              {toast}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* 第 3 珠真剪影：悬在精灵左上空域（与白色机身错位，深底上金影可读），缓缓上浮 */}
       <AnimatePresence>
         {ghostOn && (
           <motion.div
-            className="pointer-events-none fixed bottom-[200px] right-[8px] z-[55] w-28 md:bottom-[160px] md:right-[48px] md:w-36"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
+            className="pointer-events-none fixed bottom-[300px] right-[120px] z-[55] w-32 md:bottom-[320px] md:right-[190px] md:w-40"
+            initial={{ opacity: 0, y: 18 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -14 }}
+            transition={{ duration: 0.7, ease: "easeOut" }}
           >
             <LoongGhost className="h-full w-full" />
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* ── 进度面板（未集齐时点托盘展开） ── */}
+      {/* ── 进度面板：桌面为机器人左侧悬浮卡，移动端为底部抽屉（全宽上滑，不再挤右缘小窗） ── */}
       <AnimatePresence>
         {open && !ceremony && (
           <motion.div
-            className="dragon-tray-panel fixed bottom-[224px] right-2 z-[70] w-64 rounded-2xl border border-amber-300/20 bg-gradient-to-b from-[#16110a]/96 to-[#0a0b14]/96 p-4 shadow-[0_12px_40px_rgba(0,0,0,0.55),0_0_28px_rgba(245,197,66,0.08)] backdrop-blur-xl md:bottom-[186px] md:right-[172px]"
-            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+            className="dragon-tray-panel fixed inset-x-0 bottom-0 z-[70] max-h-[72vh] overflow-y-auto rounded-t-2xl border border-amber-300/20 bg-gradient-to-b from-[#16110a]/97 to-[#0a0b14]/97 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-[0_-8px_40px_rgba(0,0,0,0.55)] backdrop-blur-xl md:inset-x-auto md:bottom-[186px] md:right-[172px] md:max-h-none md:w-64 md:overflow-visible md:rounded-2xl md:pb-4 md:shadow-[0_12px_40px_rgba(0,0,0,0.55),0_0_28px_rgba(245,197,66,0.08)]"
+            initial={{ opacity: 0, y: 24, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 8, scale: 0.95 }}
+            exit={{ opacity: 0, y: 20, scale: 0.98 }}
           >
             <div className="mb-1 flex items-center justify-between">
               <div className="text-xs font-bold tracking-wide text-amber-200">{t.trayTitle}</div>

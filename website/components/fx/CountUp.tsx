@@ -17,7 +17,9 @@ export default function CountUp({ value, suffix = "", duration = 1.6, className 
   const ref = useRef<HTMLSpanElement>(null);
   const inView = useInView(ref, { once: true, margin: "-40px" });
   const reduced = useReducedMotion();
-  const [display, setDisplay] = useState(reduced ? target : 0);
+  // 初始值不读 reduced：useReducedMotion 在 SSR 恒为 false、reduce 客户端首帧为 true，
+  // 以它初始化 state 会造成两端首帧文本不一致（hydration 报错）；reduce 的终值由下方 effect 落定。
+  const [display, setDisplay] = useState(0);
   const [done, setDone] = useState(false);
 
   useEffect(() => {

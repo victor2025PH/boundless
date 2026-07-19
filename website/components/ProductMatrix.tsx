@@ -1,7 +1,8 @@
 "use client";
 
 import Image from "next/image";
-import { motion, useReducedMotion, type MotionProps } from "framer-motion";
+import { motion, type MotionProps } from "framer-motion";
+import { useReducedMotionSafe } from "@/components/fx/useReducedMotionSafe";
 import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
 import { BRAND, PRODUCT_ORDER, PRODUCT_COUNT, CATEGORIES, CATEGORY_ORDER, productsInCategory } from "@/lib/brand";
@@ -38,7 +39,8 @@ const COPY = {
 
 export default function ProductMatrix() {
   const { lang } = useLang();
-  const reduced = useReducedMotion();
+  // 水合安全版：iconGlow 按 reduced 切换 initial 样式，SSR/首帧必须一致
+  const reduced = useReducedMotionSafe();
   const c = COPY[lang];
 
   /* 图标入场描边:滚入视口时青色辉光闪现一次后收敛为微光,级联点亮产品线 */
