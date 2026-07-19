@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { broadcastMessage, type BroadcastTarget } from "@/lib/tg-broadcast";
+import path from "path";
+import { access } from "fs/promises";
+import { broadcastMessage, broadcastPhoto, type BroadcastTarget } from "@/lib/tg-broadcast";
 import { requireAdmin } from "@/lib/admin-auth";
 import { recordPublish } from "@/lib/publish-log";
 
@@ -36,7 +38,22 @@ export async function POST(req: NextRequest) {
   const sitePath = rawPath.startsWith("/") ? rawPath.slice(0, 100) : undefined;
   const siteLabel = body?.siteLabel ? String(body.siteLabel).slice(0, 32) : undefined;
 
-  const { ok, results } = await broadcastMessage({ text, target, withButton, campaign, sitePath, siteLabel });
+  /* 图文帖：photo 仅接受站内 public 相对路径（/brand/...），本地 multipart 上传（比 URL 拉取稳） */
+  const rawPhoto = String(body?.photo ?? "");
+  let photoFile: string | null = null;
+  if (rawPhoto.startsWith("/") && !rawPhoto.includes("..")) {
+    const abs = path.join(process.cwd(), "public", rawPhoto);
+    try {
+      await access(abs);
+      photoFile = abs;
+    } catch {
+      return NextResponse.json({ ok: false, error: "photo_not_found" }, { status: 400 });
+    }
+  }
+
+  const { ok, results } = photoFile
+    ? await broadcastPhoto({ photo: photoFile, caption: text, target, withButton, campaign })
+    : await broadcastMessage({ text, target, withButton, campaign, sitePath, siteLabel });
   if (ok) await recordPublish({ kind: "broadcast", target, summary: text, campaign });
   return NextResponse.json({ ok, results });
 }

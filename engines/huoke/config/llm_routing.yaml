@@ -36,7 +36,7 @@ llm:
 
   per_task_override:
     # 主控 ollama 已加载: qwen2.5vl:7b / qwen2.5:latest / gemma4:latest /
-    # gemma4-uncensored:latest / nomic-embed-text:latest
+    # nomic-embed-text:latest (另有一个 uncensored 模型, 仅限门禁启用, 见下方合规说明)
     ai_greeting:
       primary_model: qwen2.5:latest             # 中文/日文 fast text
       fallback_model: claude-haiku-4-5-20251001
@@ -46,6 +46,15 @@ llm:
     persona_classify:
       primary_model: qwen2.5vl:7b               # vision-language (现 L2 VLM)
       fallback_model: claude-sonnet-4-6
-    handoff_uncensored:                          # 引流话术防过滤
-      primary_model: gemma4-uncensored:latest
+    # ── 合规门禁 (COMPLIANCE GATE) ────────────────────────────────────
+    # uncensored 模型 (gemma4-uncensored —— 仅门禁 gated-only, 默认 DISABLED):
+    # 本默认配置一律路由合规模型。即使有 override 把 task 指向名称含
+    # "uncensored" 的模型, llm_router 也会拒绝并回落 llm.primary.model
+    # (记 warning)。仅对已尽调/隔离交付 (vetted/gated) 客户可重新启用,
+    # 且必须同时满足:
+    #   (a) 环境变量 HUOKE_ALLOW_UNCENSORED=1
+    #   (b) 单独的 gated overlay 配置 —— 示例见 llm_routing.gated.example.yaml
+    #       (该示例默认不加载, 也绝不允许提交为激活配置)
+    handoff_uncensored:                          # 合规默认 (compliant default)
+      primary_model: qwen2.5:latest
       fallback_model: claude-sonnet-4-6

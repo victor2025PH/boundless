@@ -3,7 +3,7 @@ import Link from "next/link";
 import { AlertTriangle, ArrowRight, Inbox, KeyRound, ReceiptText, ScrollText, Sparkles, Users } from "lucide-react";
 import { getStats } from "@/lib/ledger";
 import { getOpportunityStats, listOpportunities, productLabel } from "@/lib/opportunities";
-import { readIntroFunnel } from "@/lib/intro-funnel";
+import { readIntroFunnel, readIntroExperiments } from "@/lib/intro-funnel";
 import { getConsoleSessionUser } from "@/lib/console-auth";
 import { roleAtLeast } from "@/lib/console-users";
 import {
@@ -31,6 +31,12 @@ const ROADMAP = [
   { phase: "下一阶段", label: ".117 真迁 / grant enforce 切强制 / 四视图接线试点", state: "next" },
 ] as const;
 
+// 开场页 A/B 实验 → 人话（与 IntroCover 的 abVariant 实验 id 一一对应）
+const INTRO_EXPERIMENT_LABELS: Record<string, { name: string; variants: Record<string, string> }> = {
+  intro_auto_enter: { name: "自动进入（无操作 12s）", variants: { a: "对照·不自动", b: "自动进入" } },
+  intro_btn_shape: { name: "进入按钮形状", variants: { a: "有机波浪（现行）", b: "标准胶囊（对照）" } },
+};
+
 const QUICK_LINKS = [
   { href: "/console/customers", label: "客户", desc: "客户主档 · 身份归并", Icon: Users },
   { href: "/console/opportunities", label: "商机", desc: "跨售信号 · 跟进", Icon: Sparkles },
@@ -48,6 +54,7 @@ export default async function ConsoleOverviewPage() {
   const oppStats = getOpportunityStats();
   const topOpportunities = listOpportunities({ limit: 5 });
   const introFunnel = await readIntroFunnel(7);
+  const introExperiments = await readIntroExperiments(7);
   const empty = stats.orders === 0 && stats.leads === 0 && stats.licenses === 0 && stats.customers === 0;
 
   const totals = [
@@ -314,6 +321,40 @@ export default async function ConsoleOverviewPage() {
                 进入率长期低于 60% 或 p90 停留超 20s 时，考虑缩短开场或加自动进入。API：
                 <Code>/api/console/intro-funnel?days=7</Code>
               </p>
+            </div>
+          </div>
+        )}
+
+        {/* A/B 实验读数：按会话把曝光桶与进入行为连起来，决策直接看每桶进入率与停留 */}
+        {introExperiments.experiments.length > 0 && (
+          <div className="mt-4 border-t border-slate-800 pt-3">
+            <p className="mb-2 text-[11px] text-slate-500">
+              A/B 实验读数（近 {introExperiments.days} 天 · 会话级连接）：进入率差 ≥5 个百分点且各桶展示 ≥50 才有决策意义
+            </p>
+            <div className="grid gap-2 text-xs lg:grid-cols-2">
+              {introExperiments.experiments.map((exp) => {
+                const meta = INTRO_EXPERIMENT_LABELS[exp.experiment];
+                return (
+                  <div key={exp.experiment} className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+                    <p className="mb-1.5 font-medium text-slate-300">{meta?.name ?? exp.experiment}</p>
+                    <ul className="space-y-1">
+                      {Object.entries(exp.variants).map(([variant, v]) => (
+                        <li key={variant} className="flex items-center justify-between gap-2">
+                          <span className="text-slate-400">
+                            {variant.toUpperCase()} · {meta?.variants[variant] ?? variant}
+                          </span>
+                          <span className="shrink-0 tabular-nums text-slate-200">
+                            {v.shown} 展示 · 进入 {Math.round(v.enterRate * 100)}%
+                            <span className="ml-1.5 text-[11px] text-slate-500">
+                              停留中位 {(v.dwellMs.median / 1000).toFixed(1)}s
+                            </span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

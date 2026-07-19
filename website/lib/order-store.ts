@@ -28,9 +28,14 @@ export interface OrderEntry {
   product_id?: string;
   /** 挂牌金额（整数 USDT）。 */
   amount: number;
-  /** 实际应付金额 = amount + 唯一小数尾数：到账金额可反查订单，自动核销的关键。 */
+  /** 实际应付金额 = amount + 唯一小数尾数：到账金额可反查订单，自动核销的关键。
+   *  卡支付（Stripe）按 session 对账不需要尾数，pay_amount === amount。 */
   pay_amount: number;
-  currency: "USDT";
+  currency: "USDT" | "USD";
+  /** 支付方式：usdt 链上转账（默认；历史订单无此字段视同 usdt）/ card 银行卡（Stripe Checkout）。 */
+  method?: "usdt" | "card";
+  /** Stripe Checkout Session id（卡支付审计/对账用，webhook 落地后回填）。 */
+  stripe_session_id?: string;
   contact: string;
   fingerprint: string;
   lang: string;
@@ -104,13 +109,16 @@ export async function createOrder(
 ): Promise<OrderEntry> {
   return serialize(async () => {
     const db = await readDb();
+    // usdt：分配唯一小数尾数供链上自动核销；card：Stripe 按 session 对账，金额原样不加尾数。
+    const method: "usdt" | "card" = input.method === "card" ? "card" : "usdt";
     const entry: OrderEntry = {
       ...input,
       id: newOrderId(),
       t: new Date().toISOString(),
       status: "pending",
-      pay_amount: allocPayAmount(db, input.amount),
-      currency: "USDT",
+      method,
+      pay_amount: method === "card" ? input.amount : allocPayAmount(db, input.amount),
+      currency: method === "card" ? "USD" : "USDT",
     };
     // 出生即带全域 SKU 关联（sku_registry.json）；映射为 null 时不写字段，宁缺毋错。
     const sku = resolveOrderSku(input.plan, input.edition, input.period);

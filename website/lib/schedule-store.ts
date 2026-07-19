@@ -35,6 +35,8 @@ export interface DraftPost {
   theme?: string;
   source: string;
   createdAt: string;
+  /** 站内相对路径配图（/brand/campaign/...）：发布时走 sendPhoto 图文帖 */
+  photo?: string;
 }
 
 interface Db {
@@ -162,7 +164,7 @@ export async function listDrafts(): Promise<DraftPost[]> {
   return db.drafts.slice().sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
-export async function addDraft(input: { text: string; theme?: string; source?: string }): Promise<DraftPost> {
+export async function addDraft(input: { text: string; theme?: string; source?: string; photo?: string }): Promise<DraftPost> {
   return serialize(async () => {
     const db = await readDb();
     const d: DraftPost = {
@@ -171,6 +173,7 @@ export async function addDraft(input: { text: string; theme?: string; source?: s
       theme: input.theme,
       source: input.source ?? "ai",
       createdAt: new Date().toISOString(),
+      ...(input.photo && input.photo.startsWith("/") ? { photo: input.photo } : {}),
     };
     db.drafts.push(d);
     // keep last 30 drafts

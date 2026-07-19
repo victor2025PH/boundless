@@ -4,17 +4,17 @@ import { useRef, useState } from "react";
 import type { Dict, Solution } from "@/lib/content";
 import { CHANNEL_URL, GROUP_URL, CONTACT_URL } from "@/lib/site";
 import { track } from "@/lib/track";
-import { BRAND, PRODUCT_ORDER, productLineItems } from "@/lib/brand";
+import { BRAND, FAMILY_PITCH, PRODUCT_ORDER, productLineItems } from "@/lib/brand";
 import { PRODUCT_IMG } from "@/components/productMeta";
 import { PRODUCT_VIEW, type View } from "./routing";
 
-// 视觉系（liveavatar view）= 幻颜/幻声/幻影；沟通系（soulsync view）= 通译/智聊。
+// 视觉系（liveavatar view）= 幻颜/幻声/幻影；沟通系（soulsync view）= 智拓/智聊/通译/通传。
 // 各产品对应的 content.solutions SKU id 收口在 brand.ts::products[].skuIds，这里按 view 派生，
 // 不再散落硬编码 id 列表（改产品↔SKU 映射只动 brand.ts 一处）。
 const skuByView = (v: View): string[] =>
   PRODUCT_ORDER.filter((k) => PRODUCT_VIEW[k] === v).flatMap((k) => [...BRAND.products[k].skuIds]);
 const VISUAL_IDS = skuByView("liveavatar");
-const CHAT_IDS = [...skuByView("soulsync"), "private-ai"]; // 通译/智聊 + 无界底座(private-ai)
+const CHAT_IDS = [...skuByView("soulsync"), "private-ai"]; // 四款沟通产品 + 无界底座(private-ai)
 
 /* ───────────────────────── shared bits ───────────────────────── */
 
@@ -54,7 +54,9 @@ function CtaButton({ label, onClick, href }: { label: string; onClick?: () => vo
 const EMOJI: Record<string, string> = {
   voice: "🎙",
   faceswap: "🎭",
-  translate: "💬",
+  translate: "🌐",
+  reach: "🎯",
+  interpret: "🎧",
   "private-ai": "🔐",
   "digital-human": "👤",
   "video-dubbing": "🎬",
@@ -161,15 +163,9 @@ export function HomeView({ t, zh, onGo }: { t: Dict; zh: boolean; onGo: (v: View
     <div>
       {/* hero */}
       <div className="rounded-2xl border border-cyan-700/30 bg-gradient-to-br from-cyan-500/10 via-slate-900 to-violet-500/10 p-4">
-        <div className="text-[11px] font-medium text-cyan-300">{zh ? "让沟通，无界" : "Communication, Boundless"}</div>
-        <h1 className="mt-1 text-xl font-extrabold leading-snug text-white">
-          {zh ? "换脸换声 · 实时换语言 · AI 自动成交" : "Face/voice swap · live translation · AI closing"}
-        </h1>
-        <p className="mt-1.5 text-xs leading-relaxed text-slate-300">
-          {zh
-            ? "无界科技 BOUNDLESS —— 用 AI 打破容貌、声音、语言、成交的边界。私有部署、数据不出网、USDT 结算。"
-            : "BOUNDLESS — break the barriers of face, voice, language and sales with AI. Private, off-net, USDT."}
-        </p>
+        <div className="text-[11px] font-medium text-cyan-300">{BRAND.company.tagline[zh ? "zh" : "en"]}</div>
+        <h1 className="mt-1 text-xl font-extrabold leading-snug text-white">{FAMILY_PITCH[zh ? "zh" : "en"].headline}</h1>
+        <p className="mt-1.5 text-xs leading-relaxed text-slate-300">{FAMILY_PITCH[zh ? "zh" : "en"].sub}</p>
         <div className="mt-3 grid grid-cols-4 gap-1.5">
           {t.hero.stats.map((s) => (
             <div key={s.label} className="rounded-lg bg-slate-950/50 px-1 py-2 text-center">
@@ -180,8 +176,8 @@ export function HomeView({ t, zh, onGo }: { t: Dict; zh: boolean; onGo: (v: View
         </div>
       </div>
 
-      {/* 全线产品（含无界底座入口卡） */}
-      <SectionTitle icon="🧭" title={zh ? "全线产品" : "All products"} sub={zh ? "点产品进入对应演示" : "Tap a product for its demo"} />
+      {/* 全线产品（含无界底座入口卡）：标题用主站同源「三系七产品」口径 */}
+      <SectionTitle icon="🧭" title={t.solutionsSection.title} sub={zh ? "点产品进入对应演示" : "Tap a product for its demo"} />
       <div className="grid grid-cols-2 gap-2">
         {productLineItems(zh ? "zh" : "en").map((p) => (
           <button
@@ -269,7 +265,11 @@ export function SoulSyncView({ t, zh, onContact }: { t: Dict; zh: boolean; onCon
   const sols = t.solutions.filter((s) => CHAT_IDS.includes(s.id));
   return (
     <div>
-      <SectionTitle icon="💬" title={zh ? "智能沟通 · 通译 / 智聊" : "Chat · LingoX / ChatX"} sub={t.autochat.subtitle} />
+      <SectionTitle
+        icon="💬"
+        title={zh ? "智能沟通 · 智拓 / 智聊 / 通译 / 通传" : "Comms · ReachX / ChatX / LingoX / VoxX"}
+        sub={t.autochat.subtitle}
+      />
       <ChatTheater t={t} />
 
       <SectionTitle icon="✨" title={zh ? "四大能力" : "Four capabilities"} />

@@ -66,7 +66,7 @@
      "claim": "IM 聚合/统一收件箱/自动成交——不属于本引擎，营销面禁止用引擎能力背书",
      "evidence": []},
     {"id": "uncensored_llm", "line": "无界底座（独立产品线）", "status": "external",
-     "claim": "无审查私有大模型——与本引擎「合规可溯源」叙事冲突，必须物理分页",
+     "claim": "无审查私有大模型——与本引擎「合规可溯源」叙事冲突，必须物理分页；gated-only：默认禁用（需 HUOKE_ALLOW_UNCENSORED 门禁 + 单独 overlay），物理隔离交付",
      "evidence": []}
   ],
   "banned_phrases": ["无痕", "看不出是", "无审查", "无禁区", "百分百还原", "100%还原",

@@ -1,10 +1,10 @@
 /**
  * 生产只读冒烟：不点击、不写入（不收珠/不许愿），只验证关键 UI 可见与零页面错误。
- * 用法：ROBOT_BASE_URL=https://usdt2026.cc node scripts/robot-prodsmoke.mjs
+ * 用法：ROBOT_BASE_URL=https://bd2026.cc node scripts/robot-prodsmoke.mjs（缺省即生产域名）
  */
 import { chromium } from "playwright";
 
-const BASE = process.env.ROBOT_BASE_URL || "https://usdt2026.cc";
+const BASE = process.env.ROBOT_BASE_URL || "https://bd2026.cc";
 const OUT = ".robot-shots/prod-smoke";
 let fail = 0;
 const check = (n, ok, x = "") => {

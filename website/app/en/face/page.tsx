@@ -1,7 +1,12 @@
+import type { Metadata } from "next";
 import ProductLanding from "@/components/ProductLanding";
 import { landingMetadata, landingJsonLd, landingFaqJsonLd } from "@/lib/landingMeta";
 
-export const metadata = landingMetadata("face", "en");
+// Compliance isolation (lib/isolation.ts): /en/face is gated, noindex on the main property.
+export const metadata: Metadata = {
+  ...landingMetadata("face", "en"),
+  robots: { index: false, follow: false },
+};
 
 export default function FaceLandingEn() {
   return (
