@@ -1,0 +1,23 @@
+# -*- coding: utf-8 -*-
+# GATED OVERLAY EXAMPLE —— 默认不加载 (NOT loaded by default)
+#
+# 本文件仅演示: 已尽调/隔离交付 (vetted & isolated) 的 gated 客户如何重新启用
+# uncensored 模型。它不是激活配置, 默认部署绝不读取本文件。
+#
+# 启用前提 (二者缺一, llm_router 都会拒绝并回落合规默认模型):
+#   (a) 环境变量 HUOKE_ALLOW_UNCENSORED=1
+#   (b) 由交付工程师在客户的隔离环境里, 把下方 per_task_override 手工合并进
+#       该环境的 llm_routing.yaml (不要改动仓库默认配置)
+#
+# 红线:
+#   - 本文件 (或其拷贝) 绝不允许作为激活配置提交进仓库 ——
+#     config/llm_routing.yaml 必须始终保持合规默认 (qwen2.5:latest)。
+#   - 仅限已尽调 (vetted) / 物理隔离的 gated 客户环境使用。
+#   - 启用即承担相应合规责任 (compliance responsibility rests with the
+#     admitting party); 未经准入流程不得开启。
+
+llm:
+  per_task_override:
+    handoff_uncensored:
+      primary_model: gemma4-uncensored:latest   # 门禁模型, 需 HUOKE_ALLOW_UNCENSORED=1
+      fallback_model: claude-sonnet-4-6

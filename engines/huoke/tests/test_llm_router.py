@@ -192,6 +192,54 @@ class TestPerTaskOverride:
 
 
 # ════════════════════════════════════════════════════════════════════
+# 2b) uncensored 模型合规门禁 (HUOKE_ALLOW_UNCENSORED)
+# ════════════════════════════════════════════════════════════════════
+class TestUncensoredGate:
+    """名称含 "uncensored" 的 primary model 默认被拒 → 回落合规默认;
+    仅 HUOKE_ALLOW_UNCENSORED=1 (gated 客户 overlay) 才放行。"""
+
+    PER_TASK = {
+        "handoff_uncensored": {"primary_model": "gemma4-uncensored:latest",
+                               "fallback_model": "claude-sonnet-4-6"},
+    }
+
+    def test_blocked_by_default_falls_back_to_compliant(self, monkeypatch):
+        monkeypatch.delenv("HUOKE_ALLOW_UNCENSORED", raising=False)
+        router, primary, _ = _mk_router(per_task=dict(self.PER_TASK))
+        res = router.complete("hi", task="handoff_uncensored")
+        assert res["ok"] is True
+        # 未开门禁: 回落合规 primary (llm.primary.model), 不碰 uncensored 模型
+        assert res["model"] == "qwen2.5:7b"
+        assert primary.last_kwargs["model"] == "qwen2.5:7b"
+
+    def test_env_flag_allows_uncensored(self, monkeypatch):
+        monkeypatch.setenv("HUOKE_ALLOW_UNCENSORED", "1")
+        router, primary, _ = _mk_router(per_task=dict(self.PER_TASK))
+        res = router.complete("hi", task="handoff_uncensored")
+        assert res["ok"] is True
+        assert res["model"] == "gemma4-uncensored:latest"
+        assert primary.last_kwargs["model"] == "gemma4-uncensored:latest"
+
+    def test_gate_is_case_insensitive(self, monkeypatch):
+        monkeypatch.delenv("HUOKE_ALLOW_UNCENSORED", raising=False)
+        router, primary, _ = _mk_router(per_task={
+            "t": {"primary_model": "Gemma4-UNCENSORED:latest"},
+        })
+        res = router.complete("hi", task="t")
+        assert res["model"] == "qwen2.5:7b"
+        assert primary.last_kwargs["model"] == "qwen2.5:7b"
+
+    def test_non_uncensored_models_unaffected(self, monkeypatch):
+        monkeypatch.delenv("HUOKE_ALLOW_UNCENSORED", raising=False)
+        router, primary, _ = _mk_router(per_task={
+            "handoff_summary": {"primary_model": "qwen2.5:14b"},
+        })
+        res = router.complete("hi", task="handoff_summary")
+        assert res["model"] == "qwen2.5:14b"
+        assert primary.last_kwargs["model"] == "qwen2.5:14b"
+
+
+# ════════════════════════════════════════════════════════════════════
 # 3) Circuit Breaker 状态机
 # ════════════════════════════════════════════════════════════════════
 class TestCircuitBreaker:
