@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/admin-auth";
 import { stripeSecret } from "@/lib/payment-settings";
+import { appendServerEvent } from "@/lib/server-events";
 import { settleCardPaidSession } from "@/lib/stripe-settle";
 
 export const runtime = "nodejs";
@@ -92,13 +93,16 @@ export async function GET(req: NextRequest) {
     if (!startingAfter) break;
   }
 
-  return NextResponse.json({
-    ok: true,
+  const summary = {
     windowHours: hours,
     sessionsChecked,
     paidSessions,
     // settled = 巡检补上的漏单（webhook 没接住的），already = webhook 已处理过的正常单
     ...counts,
     recovered,
-  });
+  };
+  // 系统事件入流水：/console「支付对账健康」卡据此聚合趋势（失败静默）
+  await appendServerEvent("stripe_reconcile_run", summary);
+
+  return NextResponse.json({ ok: true, ...summary });
 }
