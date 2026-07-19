@@ -1435,6 +1435,24 @@ html.fx-warp .star-wrap {
   33% { border-radius: 45% 55% 58% 42% / 44% 58% 42% 56%; }
   66% { border-radius: 56% 44% 49% 51% / 50% 54% 46% 52%; }
 }
+/* A/B intro_btn_shape 对照桶（data-shape="pill"）：关滤镜、圆角归位成标准胶囊，
+ * 保留呼吸辉光与流光环——只对照「形状」这一个变量，其余光效不变 */
+.bl-enter-btn[data-shape="pill"] .siri-shape {
+  filter: none;
+}
+.bl-enter-btn[data-shape="pill"] .siri-blob {
+  border-radius: 9999px;
+  animation: bl-breathe 3.2s ease-in-out 4.6s infinite;
+}
+.bl-enter-btn[data-shape="pill"] .siri-ring,
+.bl-enter-btn[data-shape="pill"] .siri-glass {
+  border-radius: 9999px;
+  animation: none;
+}
+/* 低端机（deviceMemory/核数 ≤4，JS 写 data-lite）：只关最贵的湍流滤镜，保留 blob 蠕变 */
+.bl-enter-btn[data-lite="1"] .siri-shape {
+  filter: none;
+}
 .bl-enter-btn:hover .siri-blob {
   background: rgba(18, 22, 44, 0.56);
   border-color: rgba(165, 243, 252, 0.55);

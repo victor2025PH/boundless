@@ -5,6 +5,7 @@
 #   powershell -ExecutionPolicy Bypass -File deploy\cron\install_tasks.ps1 -Engine chengjie           # .117 演练（缺省双实例）
 #   powershell -ExecutionPolicy Bypass -File deploy\cron\install_tasks.ps1 -Engine huoke -Execute     # .198 真注册（管理员）
 #   … -Tasks uploader,purge            只装部分任务
+#   … -Tasks config_snapshot           只装配置快照守护（仅 chengjie；缺省任务集已自动含，见下）
 #   … -WithKpiWeekly                   追加 KPI 周报任务（website 所在 Windows 机可选装；等价 -Tasks …,kpi_weekly）
 #   … -SpoolDirs "a,b" -DataRoots "c"  覆盖缺省（-File 语义下多值用逗号串）
 #   … -RunAs CurrentUser               S4U 运行（不存密码），缺省 SYSTEM
@@ -18,8 +19,10 @@
 #   - 工作目录 = 仓库根；MultipleInstances=IgnoreNew（上一轮没跑完就跳过本轮，防叠跑）；
 #   - 密钥缺省不进任务定义（任务 XML 本机管理员可读）：运行时由壳脚本读机器级
 #     EVENT_INGEST_KEY；-IngestKey 显式传入才嵌进参数（打印时掩码，README §4）；
-#   - 触发器：uploader 每 5 分钟 / purge 每 10 分钟 / grants_sync 每 30 分钟
-#     （-Once + Repetition，持续 3650 天）；export 每日 03:30（-Daily）；
+#   - 触发器：uploader 每 5 分钟 / purge 每 10 分钟 / grants_sync 每 30 分钟 /
+#     config_snapshot 每 10 分钟（仅 chengjie，未显式 -Tasks 时自动进 chengjie 任务集；
+#     avatarhub/huoke 无实例 config 目录形态，显式传入也跳过）
+#     （以上均 -Once + Repetition，持续 3650 天）；export 每日 03:30（-Daily）；
 #     kpi_weekly 每周一 09:00（-Weekly）。
 #
 # 退出码：0 = 演练完成 / 全部注册成功   1 = 注册失败（需管理员 PowerShell）   2 = 参数错误
@@ -29,18 +32,21 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('avatarhub', 'chengjie', 'huoke')]
     [string]$Engine,
-    [string[]]$Tasks = @('uploader', 'purge', 'export', 'grants_sync'),   # 多选：uploader/purge/export/grants_sync/kpi_weekly（逗号分隔亦可；kpi_weekly 不在缺省，用 -WithKpiWeekly 追加）
+    [string[]]$Tasks = @('uploader', 'purge', 'export', 'grants_sync'),   # 多选：uploader/purge/export/grants_sync/config_snapshot/kpi_weekly（逗号分隔亦可；config_snapshot 未显式 -Tasks 时自动进 chengjie 任务集，kpi_weekly 用 -WithKpiWeekly 追加）
     [string]$BaseUrl   = '',        # 集团基址覆盖（缺省壳脚本走 env PERSONA_SYNC_BASE / https://bd2026.cc）
     [string]$IngestKey = '',        # 显式嵌密钥进任务定义（不推荐；缺省运行时读机器级 EVENT_INGEST_KEY）
     [string[]]$SpoolDirs = @(),     # uploader spool 目录（每目录一个任务实例）；缺省按引擎（见 $Defaults）
     [string[]]$DataRoots = @(),     # purge/export 数据根；缺省按引擎（chengjie=双实例数据根）
+    [string[]]$ConfigDirs = @(),    # config_snapshot 配置目录清单；缺省按引擎（chengjie=双实例生产 config 目录，其余引擎无此形态）
     [ValidateSet('SYSTEM', 'CurrentUser')]
     [string]$RunAs = 'SYSTEM',      # 运行账户：SYSTEM（缺省）或当前用户（S4U，不存密码）
     [string]$PythonExe = '',        # 传给壳脚本的 python 全路径（SYSTEM 账户 PATH 缺 python 时用）
     [string]$NodeExe   = '',        # 传给 kpi_weekly 壳的 node 全路径（SYSTEM 账户 PATH 缺 node 时用）
-    [int]$UploaderEveryMinutes   = 5,
-    [int]$PurgeEveryMinutes      = 10,
-    [int]$GrantsSyncEveryMinutes = 30,
+    [string]$GitExe    = '',        # 传给 config_snapshot 壳的 git 全路径（SYSTEM 账户 PATH 缺 git 时用）
+    [int]$UploaderEveryMinutes       = 5,
+    [int]$PurgeEveryMinutes          = 10,
+    [int]$GrantsSyncEveryMinutes     = 30,
+    [int]$ConfigSnapshotEveryMinutes = 10,
     [string]$ExportDailyAt       = '03:30',
     [string]$KpiWeeklyAt         = '09:00', # 每周一（-Weekly Monday）
     [switch]$WithKpiWeekly,         # 追加 KPI 周报任务（website 所在 Windows 机可选装；VPS 用 crontab，README §5.3）
@@ -77,20 +83,35 @@ function Root-Tag([string]$p) {
 
 # ── 参数归一 ─────────────────────────────────────────────────────────
 $Tasks = @($Tasks | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ })
+# config_snapshot 属 chengjie 缺省任务集（未显式 -Tasks 时自动带上；显式 -Tasks 尊重调用者清单）
+if ($Engine -eq 'chengjie' -and -not $PSBoundParameters.ContainsKey('Tasks') -and 'config_snapshot' -notin $Tasks) {
+    $Tasks += 'config_snapshot'
+}
 if ($WithKpiWeekly -and 'kpi_weekly' -notin $Tasks) { $Tasks += 'kpi_weekly' }
-$bad = @($Tasks | Where-Object { $_ -notin @('uploader', 'purge', 'export', 'grants_sync', 'kpi_weekly') })
-if ($bad.Count)    { Die "未知任务类型: $($bad -join ', ')（可选 uploader/purge/export/grants_sync/kpi_weekly）" 2 }
+$bad = @($Tasks | Where-Object { $_ -notin @('uploader', 'purge', 'export', 'grants_sync', 'config_snapshot', 'kpi_weekly') })
+if ($bad.Count)    { Die "未知任务类型: $($bad -join ', ')（可选 uploader/purge/export/grants_sync/config_snapshot/kpi_weekly）" 2 }
 if (-not $Tasks.Count) { Die '-Tasks 至少给一个任务类型' 2 }
+# 配置快照仅 chengjie 有实例 config 目录形态：其他引擎显式传入也跳过（不算参数错误，装其余任务照常）
+if ('config_snapshot' -in $Tasks -and $Engine -ne 'chengjie') {
+    Warn "config_snapshot 仅适用 chengjie（实例 config 目录形态）；$Engine 无此形态，已跳过该任务类型"
+    $Tasks = @($Tasks | Where-Object { $_ -ne 'config_snapshot' })
+    if (-not $Tasks.Count) { Die '剔除 config_snapshot 后无任务可装' 2 }
+}
 
 $Defaults = @{
     avatarhub = @{ spool = @('engines\avatarhub\data\events\spool')
-                   roots = @('engines\avatarhub') }
+                   roots = @('engines\avatarhub')
+                   cfg   = @() }
     chengjie  = @{ spool = @('deploy\instances\zhiliao\data\events\spool',
                              'deploy\instances\tongyi\data\events\spool')
                    roots = @('deploy\instances\zhiliao\data',
-                             'deploy\instances\tongyi\data') }
+                             'deploy\instances\tongyi\data')
+                   # 快照目标 = 生产 config 目录（.117 迁移后住仓库外数据根；与 run_config_snapshot.ps1 缺省一致）
+                   cfg   = @('D:\chengjie-instances\zhiliao\data\config',
+                             'D:\chengjie-instances\tongyi\data\config') }
     huoke     = @{ spool = @('engines\huoke\data\events\spool')
-                   roots = @('engines\huoke') }
+                   roots = @('engines\huoke')
+                   cfg   = @() }
 }[$Engine]
 
 $spools = @($SpoolDirs | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -101,6 +122,11 @@ $roots = @($DataRoots | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.T
 if (-not $roots.Count) { $roots = $Defaults.roots }
 $roots = @($roots | ForEach-Object { Resolve-RepoPath $_ })
 $rootsArg = ($roots -join ',')   # 壳脚本按逗号拆分（-File 语义下数组只能靠逗号串）
+
+$cfgDirs = @($ConfigDirs | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if (-not $cfgDirs.Count) { $cfgDirs = $Defaults.cfg }
+$cfgDirs = @($cfgDirs | ForEach-Object { Resolve-RepoPath $_ })
+$cfgDirsArg = ($cfgDirs -join ',')
 
 # ── 组装任务计划（先全部算出来，WhatIf 与 Execute 用同一份定义）───────
 # common: 附加到每个壳命令的透传参数
@@ -181,6 +207,22 @@ if ('grants_sync' -in $Tasks) {
                            note = '缺失时壳脚本以退出码 2 失败（仓库不完整？git pull 后重试）' })
     }
 }
+if ('config_snapshot' -in $Tasks) {
+    # 壳只吃 -ConfigDirs/-GitExe（本地 git 快照，无密钥、无 python，不透传 $commonArgs）
+    $snapArgs = "-ConfigDirs `"$cfgDirsArg`""
+    if ($GitExe) { $snapArgs += " -GitExe `"$GitExe`"" }
+    $plans += [pscustomobject]@{
+        Name        = "Boundless-$Engine-config_snapshot"
+        Kind        = 'repeat'
+        Minutes     = $ConfigSnapshotEveryMinutes
+        TriggerDesc = "每 $ConfigSnapshotEveryMinutes 分钟（-Once 起点 + Repetition，持续 3650 天）"
+        Wrapper     = Join-Path $PSScriptRoot 'run_config_snapshot.ps1'
+        WrapperArgs = $snapArgs
+        Checks      = @($cfgDirs | ForEach-Object {
+                          @{ desc = "配置目录 $_"; ok = (Test-Path -LiteralPath $_ -PathType Container)
+                             note = '不存在时壳脚本以退出码 2 失败（.117 迁移后形态 = D:\chengjie-instances\<实例>\data\config）' } })
+    }
+}
 if ('kpi_weekly' -in $Tasks) {
     # 全矩阵报表不属任何引擎：名固定 Boundless-website-kpi_weekly（website 所在 Windows 机可选装）；
     # 壳只吃 -Week/-OutDir/-NodeExe，不透传 $commonArgs（无密钥、无 python）
@@ -221,7 +263,7 @@ Say "机器: $env:COMPUTERNAME  引擎: $Engine  仓库根: $RepoRoot"
 Say "任务: $($Tasks -join ', ')  账户: $RunAs  日志目录: $LogDir"
 
 $needsKey    = @($Tasks | Where-Object { $_ -in @('uploader', 'purge', 'grants_sync') }).Count -gt 0
-$needsPython = @($Tasks | Where-Object { $_ -ne 'kpi_weekly' }).Count -gt 0
+$needsPython = @($Tasks | Where-Object { $_ -notin @('kpi_weekly', 'config_snapshot') }).Count -gt 0
 $machineKey = [Environment]::GetEnvironmentVariable('EVENT_INGEST_KEY', 'Machine')
 if ($needsKey -and -not $machineKey -and -not $IngestKey) {
     Warn '机器级 EVENT_INGEST_KEY 未设置且未传 -IngestKey：uploader/purge/grants_sync 任务运行时将以退出码 2 失败（README §1）'
@@ -234,6 +276,9 @@ if ($needsPython -and -not (Get-Command ($(if ($PythonExe) { $PythonExe } else {
 }
 if ('kpi_weekly' -in $Tasks -and -not (Get-Command ($(if ($NodeExe) { $NodeExe } else { 'node' })) -ErrorAction SilentlyContinue)) {
     Warn 'node 不在当前 PATH：SYSTEM 账户 kpi_weekly 任务需机器级 PATH 含 node，或传 -NodeExe 全路径'
+}
+if ('config_snapshot' -in $Tasks -and -not (Get-Command ($(if ($GitExe) { $GitExe } else { 'git' })) -ErrorAction SilentlyContinue)) {
+    Warn 'git 不在当前 PATH：SYSTEM 账户 config_snapshot 任务需机器级 PATH 含 git，或传 -GitExe 全路径'
 }
 foreach ($p in $plans) {
     if (-not (Test-Path -LiteralPath $p.Wrapper)) { Die "壳脚本缺失: $($p.Wrapper)" 2 }
