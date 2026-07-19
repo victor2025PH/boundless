@@ -14,7 +14,8 @@ export default function Cases() {
   const c = t.cases;
 
   return (
-    <section id="cases" className="relative py-24">
+    <section id="cases" className="relative overflow-hidden py-24">
+      {/* overflow-hidden 在 section 上：裁掉这枚 760px 光晕的移动端隐性超宽 */}
       <div className="pointer-events-none absolute left-1/2 top-10 -z-10 h-80 w-[760px] -translate-x-1/2 rounded-full bg-neon-cyan/8 blur-[130px]" />
       <div className="mx-auto max-w-6xl px-5">
         <Reveal className="mb-12 text-center">

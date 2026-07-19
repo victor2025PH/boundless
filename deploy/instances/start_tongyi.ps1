@@ -120,8 +120,11 @@ Write-Host "[start-$InstanceId]   代码: $EngineDir （共享，只读；改代
 Write-Host "[start-$InstanceId]   数据: $DataRoot"
 # Win32_Process.Create（不继承句柄）：Start-Process 会让 python 继承本 shell 的
 # stdout 管道句柄，凡捕获本脚本输出的调用方（deploy.ps1/自动化）会挂死等 EOF。
+# ShowWindow=0（SW_HIDE）：Create 默认会弹出可见 cmd 窗口（本身又因输出重定向到日志
+# 而永远是空黑窗），这里用 Win32_ProcessStartup 隐藏之，不改变上面的无句柄继承特性。
+$startupInfo = New-CimInstance -CimClass (Get-CimClass -ClassName Win32_ProcessStartup) -ClientOnly -Property @{ ShowWindow = [uint16]0 }
 $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-    CommandLine = $cmdline; CurrentDirectory = $DataRoot }
+    CommandLine = $cmdline; CurrentDirectory = $DataRoot; ProcessStartupInformation = $startupInfo }
 if ($r.ReturnValue -ne 0) { Fail "进程创建失败 ReturnValue=$($r.ReturnValue)" }
 
 Start-Sleep -Seconds 4

@@ -1227,7 +1227,9 @@ html.fx-warp .star-wrap {
   .hero-line { opacity: 1; transform: none; }
 }
 
-/* ===== 产品 LOGO 从星门（进入按钮中心）粒子式、由小到大、循环不断喷涌 ===== */
+/* ===== 产品 LOGO 星门喷涌（rAF 物理引擎驱动，见 IntroCover.tsx 的 tickGateEngine） =====
+ * 位置/缩放/透明度全部由 JS 内联样式逐帧设置（transform/opacity 合成器友好）；
+ * CSS 只负责基础盒模型、三层景深的辉光差异、以及冲越光门时的 launch 冲刺动画。 */
 .bl-gate-logos {
   position: absolute;
   left: 50%;
@@ -1238,21 +1240,11 @@ html.fx-warp .star-wrap {
   pointer-events: none;
 }
 .bl-gate-logo {
-  --sz: 56px; /* 由 JS 每粒子随机覆盖 */
-  --r: 44vmin; /* 由 JS 每粒子随机覆盖：飞行距离 */
-  --d: 0s; /* 随机延迟 */
-  --dur: 6.5s; /* 随机时长 */
   position: absolute;
   left: 0;
   top: 0;
-  width: var(--sz);
-  height: var(--sz);
-  margin-left: calc(var(--sz) * -0.5);
-  margin-top: calc(var(--sz) * -0.5);
   opacity: 0;
-  /* 粒子式：随机时长/延迟 → 连绵不断的喷涌流；缓入缓出、不突兀 */
-  animation: bl-logo-fly var(--dur) cubic-bezier(0.16, 0.7, 0.32, 1) var(--d) infinite;
-  will-change: transform, opacity, filter;
+  will-change: transform, opacity;
 }
 .bl-gate-logo img {
   width: 100%;
@@ -1260,17 +1252,16 @@ html.fx-warp .star-wrap {
   object-fit: contain;
   filter: drop-shadow(0 0 12px rgba(103, 232, 249, 0.55));
 }
-/* 最近处（按钮中心）完全透明 + 强粒子化模糊 → 飞出途中凝聚清晰 → 远端再粒子化消散，无限循环 */
-@keyframes bl-logo-fly {
-  0% { opacity: 0; filter: blur(10px); transform: translate(0, 0) scale(0.06); }
-  8% { opacity: 0; filter: blur(9px); }
-  30% { opacity: 0.9; filter: blur(0.5px); }
-  68% { opacity: 0.85; filter: blur(0); }
-  100% { opacity: 0; filter: blur(6px); transform: translate(calc(var(--tx) * var(--r)), calc(var(--ty) * var(--r))) scale(1.15); }
+/* 三层景深：远层弱光、近层强光 + 紫晕（尺寸/速度/透明度由引擎分层控制） */
+.bl-gl-far img {
+  filter: drop-shadow(0 0 6px rgba(103, 232, 249, 0.3));
 }
-/* 冲越光门：整体加速炸出（一次性放大冲刺） */
+.bl-gl-near img {
+  filter: drop-shadow(0 0 16px rgba(103, 232, 249, 0.7)) drop-shadow(0 0 34px rgba(167, 139, 250, 0.35));
+}
+/* 冲越光门：整体加速炸出（一次性放大冲刺；覆盖引擎的内联 transform/opacity） */
 .bl-gate-logos.launch .bl-gate-logo {
-  animation: bl-logo-launch 0.95s cubic-bezier(0.5, 0, 0.75, 0) calc(var(--d) * 0.12) forwards;
+  animation: bl-logo-launch 0.95s cubic-bezier(0.5, 0, 0.75, 0) forwards;
 }
 @keyframes bl-logo-launch {
   0% { opacity: 0.9; filter: blur(0); transform: translate(calc(var(--tx) * 20vmin), calc(var(--ty) * 20vmin)) scale(1.1); }
@@ -1278,13 +1269,40 @@ html.fx-warp .star-wrap {
 }
 @media (prefers-reduced-motion: reduce) {
   .bl-brandmark img { animation: none; }
-  .bl-gate-logo {
-    opacity: 0.7;
-    filter: none;
-    transform: translate(calc(var(--tx) * var(--r) * 0.6), calc(var(--ty) * var(--r) * 0.6));
+  /* 减少运动偏好：引擎不启动，JS 静态散布 5 颗（见 IntroCover）；launch 时直接淡隐 */
+  .bl-gate-logos.launch .bl-gate-logo {
     animation: none;
+    opacity: 0 !important;
+    transition: opacity 0.3s ease;
   }
-  .bl-gate-logos.launch .bl-gate-logo { opacity: 0; transition: opacity 0.3s ease; }
+}
+
+/* ===== 冲越交接「落位」：开场喷涌的七款 LOGO 依次弹入品牌全家福（BrandShowcase） =====
+ * bl-intro-entered 事件触发；每图标按 PRODUCT_ORDER 序号错峰（--land-delay），
+ * 辉光用各自产品主色（--land-glow: "r,g,b"）。backwards 填充：延迟期间隐藏、
+ * 播完回归元素原本样式（不覆盖 optical scale 内联变换）。 */
+.bl-land {
+  animation: bl-land-pop 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) var(--land-delay, 0ms) backwards;
+}
+@keyframes bl-land-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.4);
+    filter: drop-shadow(0 0 0 rgba(var(--land-glow, 103, 232, 249), 0));
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.14);
+    filter: drop-shadow(0 0 24px rgba(var(--land-glow, 103, 232, 249), 0.85));
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    filter: drop-shadow(0 0 0 rgba(var(--land-glow, 103, 232, 249), 0));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bl-land { animation: none; }
 }
 
 .bl-title-zh {
@@ -1351,81 +1369,188 @@ html.fx-warp .star-wrap {
   animation-delay: 3.8s;
   margin-top: clamp(30px, 5.5vh, 56px);
 }
+/* ===== 进入按钮：Siri / Apple Intelligence 风格 =====
+ * 视觉语言：全彩 conic 流光描边（柔化模糊后在 2px 环带内环流）+ 呼吸多彩光晕 +
+ * 指针跟随光斑与轻量 3D 倾斜（JS 写 --mx/--my/--rx/--ry）+ 按压充能（data-charging 加速全部光效）。
+ * 变换统一走 perspective/rotate/translate/scale 的 CSS 变量合成，hover/charging 只改变量不打架。 */
 .bl-enter-btn {
+  --mx: 50%;
+  --my: 50%;
+  --rx: 0deg;
+  --ry: 0deg;
+  --lift: 0px;
+  --sc: 1;
+  --amp: 0; /* 音乐响度 0..1（JS 每帧写入）：光晕/流光亮度与波浪深度随音乐呼吸 */
   position: relative;
+  isolation: isolate; /* 让 -1 层（光晕/波浪形状层）垫在文字之下、不漏到页面其他元素后面 */
   display: inline-flex;
   align-items: center;
   gap: 14px;
-  padding: clamp(14px, 2vh, 18px) clamp(38px, 5vw, 58px);
+  /* 垂直 padding 比胶囊版多 3px：波浪内凹最深约 5px，保证文字不贴波谷 */
+  padding: clamp(17px, 2.4vh, 21px) clamp(40px, 5vw, 60px);
   font-size: clamp(15px, 1.9vw, 19px);
   letter-spacing: 0.34em;
   text-indent: 0.2em;
   color: #ecfeff;
-  background: rgba(8, 12, 28, 0.42);
-  border: 1px solid rgba(34, 211, 238, 0.4);
-  border-radius: 9999px;
+  /* 按钮自身无皮：底色/描边/流光全在 .siri-shape（被湍流滤镜扭成波浪），文字层保持锐利 */
+  background: transparent;
+  border: 0;
+  border-radius: 9999px; /* 焦点轮廓与命中区仍按胶囊；波浪只是视觉层 */
   cursor: pointer;
   outline: none;
-  backdrop-filter: blur(6px);
-  transition: background 0.35s ease, box-shadow 0.35s ease, border-color 0.35s ease, transform 0.35s ease;
+  transform: perspective(680px) rotateX(var(--rx)) rotateY(var(--ry)) translateY(var(--lift)) scale(var(--sc));
+  transition: transform 0.16s ease-out;
+}
+/* 内联 SVG 滤镜定义容器：零尺寸，仅提供 #bl-btn-wave */
+.bl-enter-btn .bl-wave-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+/* 波浪形状层：底色 + 描边 + 流光 + 玻璃光都在这里，一起被湍流置换成有机波浪；
+ * 双尺度形变 = feTurbulence 细波纹（随音乐加深）× blob 圆角低频大形变（纯 CSS 缓慢蠕变） */
+.bl-enter-btn .siri-shape {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  filter: url(#bl-btn-wave);
+}
+.bl-enter-btn .siri-blob {
+  position: absolute;
+  inset: 0;
+  background: rgba(7, 10, 24, 0.64);
+  border: 1px solid rgba(148, 210, 255, 0.32);
+  border-radius: 52% 48% 44% 56% / 58% 44% 56% 42%;
   box-shadow: 0 0 24px rgba(34, 211, 238, 0.15), inset 0 0 18px rgba(34, 211, 238, 0.06);
-  animation: bl-breathe 3.2s ease-in-out 4.6s infinite;
+  transition: background 0.35s ease, box-shadow 0.35s ease, border-color 0.35s ease;
+  animation:
+    bl-blob-morph 11s ease-in-out infinite,
+    bl-breathe 3.2s ease-in-out 4.6s infinite;
+}
+/* blob 低频形变：四角圆角在三组有机比例间缓慢游走（blob/ring/glass 同参同相 → 轮廓同步） */
+@keyframes bl-blob-morph {
+  0%, 100% { border-radius: 52% 48% 44% 56% / 58% 44% 56% 42%; }
+  33% { border-radius: 45% 55% 58% 42% / 44% 58% 42% 56%; }
+  66% { border-radius: 56% 44% 49% 51% / 50% 54% 46% 52%; }
+}
+.bl-enter-btn:hover .siri-blob {
+  background: rgba(18, 22, 44, 0.56);
+  border-color: rgba(165, 243, 252, 0.55);
+  box-shadow: 0 0 60px rgba(34, 211, 238, 0.4), inset 0 0 26px rgba(34, 211, 238, 0.1);
 }
 .bl-enter-btn:hover {
-  background: rgba(34, 211, 238, 0.16);
-  border-color: rgba(165, 243, 252, 0.9);
-  box-shadow: 0 0 60px rgba(34, 211, 238, 0.5), inset 0 0 26px rgba(34, 211, 238, 0.12);
-  transform: translateY(-2px) scale(1.03);
+  --lift: -2px;
+  --sc: 1.03;
 }
 .bl-enter-btn:active {
-  transform: translateY(0) scale(0.97);
+  --lift: 0px;
+  --sc: 0.97;
+}
+.bl-enter-btn:focus-visible {
+  outline: 2px solid rgba(165, 243, 252, 0.85);
+  outline-offset: 4px;
 }
 @keyframes bl-breathe {
   0%, 100% { box-shadow: 0 0 24px rgba(34, 211, 238, 0.15), inset 0 0 18px rgba(34, 211, 238, 0.06); }
   50% { box-shadow: 0 0 48px rgba(34, 211, 238, 0.4), inset 0 0 24px rgba(34, 211, 238, 0.1); }
 }
 
-/* 旋转描边光束:一段青→紫光沿按钮边框环绕(复用全局 --beam-angle) */
-.bl-enter-btn .beam {
+/* 呼吸光晕：三团青/品红/靛蓝柔光在按钮外圈缓慢呼吸，hover 提亮、按压全开；
+ * brightness 随 --amp（音乐响度）实时提亮 = Siri「聆听态」 */
+.bl-enter-btn .siri-halo {
   position: absolute;
-  inset: -1px;
+  inset: -24px;
   border-radius: 9999px;
-  padding: 1.5px;
-  background: conic-gradient(
-    from var(--beam-angle, 0deg),
-    transparent 0%,
-    rgba(103, 232, 249, 0.95) 10%,
-    rgba(167, 139, 250, 0.9) 20%,
-    transparent 32%
-  );
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(55% 90% at 28% 50%, rgba(34, 211, 238, 0.5), transparent 70%),
+    radial-gradient(55% 90% at 72% 50%, rgba(232, 121, 249, 0.44), transparent 70%),
+    radial-gradient(80% 120% at 50% 66%, rgba(129, 140, 248, 0.38), transparent 75%);
+  filter: blur(18px) brightness(calc(1 + var(--amp, 0) * 0.9));
+  opacity: 0.55;
+  animation: siri-breathe 4.4s ease-in-out infinite;
+}
+@keyframes siri-breathe {
+  0%, 100% { opacity: 0.45; transform: scale(0.96); }
+  50% { opacity: 0.85; transform: scale(1.05); }
+}
+
+/* 全彩流光描边：oversize 方形 conic 渐变旋转，父层遮罩只留 2.5px 环带；模糊让色彩衔接如液态；
+ * 圆角跟随 blob 同一形变动画，环带与底面轮廓始终贴合 */
+.bl-enter-btn .siri-ring {
+  position: absolute;
+  inset: -2px;
+  border-radius: 52% 48% 44% 56% / 58% 44% 56% 42%;
+  padding: 2.5px;
   -webkit-mask:
     linear-gradient(#fff 0 0) content-box,
     linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  animation: beam-spin 3.6s linear infinite;
+  overflow: hidden;
+  pointer-events: none;
+  animation: bl-blob-morph 11s ease-in-out infinite;
 }
-/* 掠光:斜向高光每 4.2s 扫过按钮内部一次 */
-.bl-enter-btn .sheen {
+.bl-enter-btn .siri-ring .flow {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 165%;
+  aspect-ratio: 1;
+  background: conic-gradient(
+    from 0deg,
+    #22d3ee,
+    #60a5fa,
+    #a78bfa,
+    #e879f9,
+    #fb7185,
+    #f59e0b,
+    #34d399,
+    #22d3ee
+  );
+  filter: blur(6px) saturate(1.35) brightness(calc(1 + var(--amp, 0) * 0.5));
+  opacity: 0.95;
+  animation: siri-flow 5.5s linear infinite;
+}
+@keyframes siri-flow {
+  from { transform: translate(-50%, -50%) rotate(0turn); }
+  to { transform: translate(-50%, -50%) rotate(1turn); }
+}
+
+/* 玻璃内层：顶部高光 + 指针跟随光斑（--mx/--my 由 JS 写入）；圆角与 blob 同步形变 */
+.bl-enter-btn .siri-glass {
   position: absolute;
   inset: 0;
-  border-radius: 9999px;
+  border-radius: 52% 48% 44% 56% / 58% 44% 56% 42%;
   overflow: hidden;
+  pointer-events: none;
+  background:
+    radial-gradient(130px 90px at var(--mx) var(--my), rgba(186, 230, 253, 0.24), transparent 62%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02) 42%, transparent 60%);
+  animation: bl-blob-morph 11s ease-in-out infinite;
 }
-.bl-enter-btn .sheen::before {
-  content: "";
-  position: absolute;
-  top: -40%;
-  bottom: -40%;
-  left: -70%;
-  width: 46%;
-  background: linear-gradient(105deg, transparent, rgba(224, 254, 255, 0.16) 45%, rgba(224, 254, 255, 0.32) 50%, rgba(224, 254, 255, 0.16) 55%, transparent);
-  transform: skewX(-18deg);
-  animation: bl-sheen-sweep 4.2s ease-in-out 5s infinite;
+
+/* 交互升档：hover 光效提速，按压（充能）全部光效冲到最亮最快 */
+.bl-enter-btn:hover .siri-halo {
+  opacity: 0.9;
+  animation-duration: 2.6s;
 }
-@keyframes bl-sheen-sweep {
-  0%, 55% { transform: skewX(-18deg) translateX(0); }
-  85%, 100% { transform: skewX(-18deg) translateX(520%); }
+.bl-enter-btn:hover .siri-ring .flow {
+  animation-duration: 3s;
+}
+.bl-enter-btn[data-charging="1"] {
+  --sc: 0.965;
+}
+.bl-enter-btn[data-charging="1"] .siri-halo {
+  opacity: 1;
+  filter: blur(22px) brightness(calc(1 + var(--amp, 0) * 0.9));
+  animation-duration: 1.4s;
+}
+.bl-enter-btn[data-charging="1"] .siri-ring .flow {
+  animation-duration: 1.4s;
 }
 /* 能量扩散环:两圈从按钮轮廓向外荡开 */
 .bl-enter-btn .ring {
@@ -1581,11 +1706,21 @@ html.fx-warp .star-wrap {
     animation-delay: 0s !important;
   }
   .bl-enter-btn,
-  .bl-enter-btn .beam,
-  .bl-enter-btn .sheen::before,
+  .bl-enter-btn .siri-halo,
+  .bl-enter-btn .siri-ring .flow,
   .bl-enter-btn .arrow,
   .bl-enter-btn .ch {
     animation: none !important;
+  }
+  /* 减少运动偏好：退回静态胶囊——不引用湍流滤镜、blob 形变归零 */
+  .bl-enter-btn .siri-shape {
+    filter: none;
+  }
+  .bl-enter-btn .siri-blob,
+  .bl-enter-btn .siri-ring,
+  .bl-enter-btn .siri-glass {
+    animation: none !important;
+    border-radius: 9999px;
   }
   .bl-enter-btn .ch {
     opacity: 1;

@@ -1,7 +1,8 @@
 "use client";
 
-import { motion, useReducedMotion } from "framer-motion";
+import { motion } from "framer-motion";
 import { ReactNode } from "react";
+import { useReducedMotionSafe } from "./useReducedMotionSafe";
 
 interface RevealProps {
   children: ReactNode;
@@ -15,7 +16,8 @@ interface RevealProps {
 }
 
 export default function Reveal({ children, delay = 0, y = 28, className, once = true, eager }: RevealProps) {
-  const reduced = useReducedMotion();
+  // 水合安全版：SSR/客户端首帧一致，挂载后 reduce 用户切静态结构
+  const reduced = useReducedMotionSafe();
 
   if (reduced) {
     return <div className={className}>{children}</div>;

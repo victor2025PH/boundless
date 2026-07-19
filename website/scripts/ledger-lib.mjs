@@ -10,7 +10,7 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import Database from "better-sqlite3";
 
-export const LEDGER_SCHEMA_VERSION = 4;
+export const LEDGER_SCHEMA_VERSION = 5;
 
 // ── ID 规范（与 lib/ids.ts 一致）───────────────────────────────────
 const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -270,6 +270,27 @@ CREATE INDEX IF NOT EXISTS idx_opplog_customer ON opportunities_log(customer_id)
 CREATE INDEX IF NOT EXISTS idx_opplog_status ON opportunities_log(status);
 `;
 
+// ── 表结构（schema v5：渠道账号台账 channel_accounts）───────────────
+// ⚠️ 与 website/lib/ledger.ts 中的 DDL_V5 逐字一致，修改必须同步！
+const DDL_V5 = `
+CREATE TABLE IF NOT EXISTS channel_accounts (
+  id TEXT PRIMARY KEY,
+  platform TEXT NOT NULL CHECK(platform IN ('telegram','whatsapp','messenger','line','web','other')),
+  label TEXT NOT NULL,
+  handle TEXT,
+  instance TEXT NOT NULL DEFAULT 'none' CHECK(instance IN ('zhiliao','tongyi','avatarhub','huoke','website','none')),
+  purpose TEXT NOT NULL DEFAULT '其他' CHECK(purpose IN ('总机接待','交付服务','测试','投放专号','其他')),
+  holder TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','paused','revoked','pending')),
+  session_ref TEXT,
+  notes TEXT,
+  created_at TEXT,
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_channel_accounts_platform ON channel_accounts(platform);
+CREATE INDEX IF NOT EXISTS idx_channel_accounts_status ON channel_accounts(status);
+`;
+
 /** 打开账本 DB（WAL / busy_timeout 5000 / 自动建表迁移），与 lib/ledger.ts::getLedgerDb 等价。 */
 export function openLedgerDb(dbPath) {
   const file = path.resolve(dbPath || resolveLedgerDbPath());
@@ -287,7 +308,7 @@ function migrate(db) {
   db.exec("CREATE TABLE IF NOT EXISTS meta (\n  key TEXT PRIMARY KEY,\n  value TEXT\n);");
   const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
   const current = row ? Number(row.value) || 0 : 0;
-  const migrations = [(d) => d.exec(DDL_V1), (d) => d.exec(DDL_V2), (d) => d.exec(DDL_V3), (d) => d.exec(DDL_V4)];
+  const migrations = [(d) => d.exec(DDL_V1), (d) => d.exec(DDL_V2), (d) => d.exec(DDL_V3), (d) => d.exec(DDL_V4), (d) => d.exec(DDL_V5)];
   if (current >= migrations.length) return;
   const run = db.transaction(() => {
     for (let i = current; i < migrations.length; i++) migrations[i](db);

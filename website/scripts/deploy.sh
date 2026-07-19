@@ -7,6 +7,13 @@
 # 覆盖项: APP_DIR(默认 /home/ubuntu/yuntech) PM2_NAME(默认 yuntech) PORT(默认 3000)
 set -euo pipefail
 
+# 并发锁：此前两次失败部署触发回滚，回滚里的重装/重建长尾（npm ci + next build 可达数分钟）
+# 与随后发起的新一轮部署产生过竞态，多个 build 同时跑会互相踩 .next 产物、损坏线上站点。
+# 用 fd 9 + flock 独占非阻塞锁把部署串行化：拿不到锁说明另一个部署（或其回滚）仍在进行，
+# 直接报错退出（exit 1），由调用方稍后重试，绝不并行往下走。
+exec 9>/tmp/yuntech-deploy.lock
+flock -xn 9 || { echo "[deploy ERROR] another deploy holds /tmp/yuntech-deploy.lock — aborting" >&2; exit 1; }
+
 APP_DIR="${APP_DIR:-/home/ubuntu/yuntech}"
 PM2_NAME="${PM2_NAME:-yuntech}"
 PORT="${PORT:-3000}"
@@ -33,6 +40,9 @@ rollback() {
   fail "deploy failed — rolling back from $(basename "$BAK")"
   rm -rf "$STAGE"
   tar -xzf "$BAK" -C "$APP_DIR" || { fail "restore extract failed"; exit 1; }
+  # 备份 tar 不含 node_modules；若本次部署改过依赖（package/lock）再回滚，旧代码必须配旧 lock
+  # 对应的依赖树，否则 build 会因依赖错配失败。LIBC=glibc 已在主流程全局 export，对 rollback 同样生效。
+  npm ci --no-audit --no-fund >/dev/null 2>&1 || true
   ( cd "$APP_DIR" && npm run build >/dev/null 2>&1 && pm2 restart "$PM2_NAME" --update-env >/dev/null 2>&1 ) \
     || fail "rollback rebuild/restart had issues — inspect manually"
   fail "rollback attempted; site restored to pre-deploy state"
@@ -50,6 +60,9 @@ rsync -a --delete \
 
 cd "$APP_DIR"
 log "4/7 npm ci"
+# LIBC=glibc：本机 prebuild-install 探测不到 libc（日志见 libc= 空），会放弃预编译二进制
+# 转而源码编译 better-sqlite3，在 1C 小鸡上必失败；显式声明后直接下载官方 glibc 预编译包。
+export LIBC=glibc
 npm ci --no-audit --no-fund || rollback
 log "5/7 next build"
 npm run build || rollback

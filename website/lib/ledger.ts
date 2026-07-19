@@ -18,7 +18,7 @@ import Database from "better-sqlite3";
 import { DATA_DIR } from "./data-dir";
 import { isValidId, newId } from "./ids";
 
-export const LEDGER_SCHEMA_VERSION = 4;
+export const LEDGER_SCHEMA_VERSION = 5;
 
 // ── 表结构（schema v1）──────────────────────────────────────────────
 // ⚠️ 与 scripts/ledger-lib.mjs 中的 DDL_V1 逐字一致，修改必须同步！
@@ -221,6 +221,31 @@ CREATE INDEX IF NOT EXISTS idx_opplog_customer ON opportunities_log(customer_id)
 CREATE INDEX IF NOT EXISTS idx_opplog_status ON opportunities_log(status);
 `;
 
+// ── 表结构（schema v5：渠道账号台账 channel_accounts）───────────────
+// 多平台对外账号登记：哪个号（label/handle）- 哪个平台 - 挂哪个实例 - 什么用途 -
+// 谁保管（渠道账号架构 2026-07 纪律三条之 3）。session_ref 只存登录态文件/凭据
+// 位置的纯文本备注（如 sessions/639952947442.session），绝不存任何密钥或凭据本体。
+// CRUD 在 lib/channels.ts（同 v3 personas / v4 opportunities 的分层惯例）。
+// ⚠️ 与 scripts/ledger-lib.mjs 中的 DDL_V5 逐字一致，修改必须同步！
+const DDL_V5 = `
+CREATE TABLE IF NOT EXISTS channel_accounts (
+  id TEXT PRIMARY KEY,
+  platform TEXT NOT NULL CHECK(platform IN ('telegram','whatsapp','messenger','line','web','other')),
+  label TEXT NOT NULL,
+  handle TEXT,
+  instance TEXT NOT NULL DEFAULT 'none' CHECK(instance IN ('zhiliao','tongyi','avatarhub','huoke','website','none')),
+  purpose TEXT NOT NULL DEFAULT '其他' CHECK(purpose IN ('总机接待','交付服务','测试','投放专号','其他')),
+  holder TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','paused','revoked','pending')),
+  session_ref TEXT,
+  notes TEXT,
+  created_at TEXT,
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_channel_accounts_platform ON channel_accounts(platform);
+CREATE INDEX IF NOT EXISTS idx_channel_accounts_status ON channel_accounts(status);
+`;
+
 // ── 行类型（console 直接消费）───────────────────────────────────────
 export interface CustomerRow {
   id: string;
@@ -405,6 +430,7 @@ function migrate(db: Database.Database) {
     (d) => d.exec(DDL_V2), // v1 → v2：控制台实名账号 users + 会话 sessions
     (d) => d.exec(DDL_V3), // v2 → v3：人设总线 personas / persona_grants / persona_purges
     (d) => d.exec(DDL_V4), // v3 → v4：跨售商机跟进 opportunities_log
+    (d) => d.exec(DDL_V5), // v4 → v5：渠道账号台账 channel_accounts
   ];
   if (current >= migrations.length) return;
   const run = db.transaction(() => {

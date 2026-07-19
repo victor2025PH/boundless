@@ -3,6 +3,7 @@ import Link from "next/link";
 import { AlertTriangle, ArrowRight, Inbox, KeyRound, ReceiptText, ScrollText, Sparkles, Users } from "lucide-react";
 import { getStats } from "@/lib/ledger";
 import { getOpportunityStats, listOpportunities, productLabel } from "@/lib/opportunities";
+import { readIntroFunnel } from "@/lib/intro-funnel";
 import { getConsoleSessionUser } from "@/lib/console-auth";
 import { roleAtLeast } from "@/lib/console-users";
 import {
@@ -39,13 +40,14 @@ const QUICK_LINKS = [
   { href: "/console/audit", label: "审计", desc: "写操作流水 · 只读", Icon: ScrollText },
 ] as const;
 
-export default function ConsoleOverviewPage() {
+export default async function ConsoleOverviewPage() {
   const me = getConsoleSessionUser();
   if (!me) return null;
   const canWrite = roleAtLeast(me.role, "admin");
   const stats = getStats();
   const oppStats = getOpportunityStats();
   const topOpportunities = listOpportunities({ limit: 5 });
+  const introFunnel = await readIntroFunnel(7);
   const empty = stats.orders === 0 && stats.leads === 0 && stats.licenses === 0 && stats.customers === 0;
 
   const totals = [
@@ -241,6 +243,81 @@ export default function ConsoleOverviewPage() {
           </ul>
         </Card>
       </div>
+
+      <Card>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <SectionTitle>开场页漏斗（近 {introFunnel.days} 天）</SectionTitle>
+          <span className="text-[11px] text-slate-500">口径：按会话（sid）去重 · 来源 events.jsonl</span>
+        </div>
+        {introFunnel.sessions.shown === 0 ? (
+          <p className="text-xs text-slate-500">
+            暂无开场页事件 —— 首页开场（IntroCover）被访问后自动上报 intro_shown / intro_first_gesture /
+            intro_sound_on / intro_enter 四事件。
+          </p>
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-3">
+            <div className="lg:col-span-2">
+              {(
+                [
+                  { label: "开场展示", value: introFunnel.sessions.shown, rate: 1 },
+                  { label: "首次交互", value: introFunnel.sessions.gesture, rate: introFunnel.rates.gestureRate },
+                  { label: "开启音效", value: introFunnel.sessions.soundOn, rate: introFunnel.rates.soundRate },
+                  { label: "进入正文", value: introFunnel.sessions.enter, rate: introFunnel.rates.enterRate },
+                ] as const
+              ).map((s) => (
+                <div key={s.label} className="mb-2.5 last:mb-0">
+                  <div className="mb-1 flex items-center justify-between text-xs">
+                    <span className="text-slate-400">{s.label}</span>
+                    <span className="tabular-nums text-slate-200">
+                      {s.value}
+                      <span className="ml-1.5 text-[11px] text-slate-500">{Math.round(s.rate * 100)}%</span>
+                    </span>
+                  </div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-slate-800">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-cyan-400/80 to-violet-400/80"
+                      style={{ width: `${Math.max(2, Math.round(s.rate * 100))}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="space-y-3 text-xs">
+              <div>
+                <p className="mb-1.5 text-slate-500">进入方式</p>
+                <ul className="space-y-1">
+                  {(
+                    [
+                      ["点击按钮", introFunnel.enterByMethod.click],
+                      ["滚动", introFunnel.enterByMethod.scroll],
+                      ["触屏上滑", introFunnel.enterByMethod.touch],
+                      ["键盘", introFunnel.enterByMethod.key],
+                      ["自动进入（AB·B桶）", introFunnel.enterByMethod.auto],
+                    ] as const
+                  ).map(([label, n]) => (
+                    <li key={label} className="flex items-center justify-between">
+                      <span className="text-slate-400">{label}</span>
+                      <span className="tabular-nums text-slate-200">{n}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <p className="mb-1 text-slate-500">展示 → 进入停留</p>
+                <p className="text-slate-200">
+                  中位 <span className="font-semibold tabular-nums">{(introFunnel.dwellMs.median / 1000).toFixed(1)}s</span>
+                  <span className="mx-1.5 text-slate-600">·</span>
+                  p90 <span className="font-semibold tabular-nums">{(introFunnel.dwellMs.p90 / 1000).toFixed(1)}s</span>
+                </p>
+              </div>
+              <p className="leading-relaxed text-slate-500">
+                进入率长期低于 60% 或 p90 停留超 20s 时，考虑缩短开场或加自动进入。API：
+                <Code>/api/console/intro-funnel?days=7</Code>
+              </p>
+            </div>
+          </div>
+        )}
+      </Card>
 
       <div>
         <SectionTitle>快捷入口</SectionTitle>

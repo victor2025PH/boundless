@@ -1,11 +1,12 @@
 "use client";
 
 import Image from "next/image";
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { Mic, Video, PhoneOff } from "lucide-react";
 import { useLang } from "./LanguageContext";
 import { useInView } from "@/lib/useInView";
+import { useReducedMotionSafe } from "./fx/useReducedMotionSafe";
 
 function fmt(s: number) {
   const m = Math.floor(s / 60);
@@ -15,7 +16,8 @@ function fmt(s: number) {
 
 export default function LiveSwapStage() {
   const { t } = useLang();
-  const reduced = useReducedMotion();
+  // 水合安全版：本组件用 reduced 条件挂载扫描条（结构分叉），SSR/首帧必须一致
+  const reduced = useReducedMotionSafe();
   const { ref, inView } = useInView<HTMLDivElement>();
   const [swapped, setSwapped] = useState(true);
   const [scanKey, setScanKey] = useState(0);

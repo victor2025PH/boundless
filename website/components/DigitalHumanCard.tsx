@@ -1,13 +1,14 @@
 "use client";
 
 import Image from "next/image";
-import { motion, useReducedMotion } from "framer-motion";
+import { motion } from "framer-motion";
+import { useReducedMotionSafe } from "@/components/fx/useReducedMotionSafe";
 import { useLang } from "./LanguageContext";
 
 export default function DigitalHumanCard() {
   const { t } = useLang();
   const d = t.digitalDemo;
-  const reduced = useReducedMotion();
+  const reduced = useReducedMotionSafe();
 
   return (
     <div className="keep-dark relative mx-auto w-full max-w-[420px]">

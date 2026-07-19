@@ -162,6 +162,15 @@ interface Stats {
   };
 }
 
+// 开场页漏斗（/api/admin/intro-funnel）返回结构；rates 为 0~1 的三位小数，展示时换算百分比。
+interface IntroFunnelData {
+  days: number;
+  sessions: { shown: number; gesture: number; soundOn: number; enter: number };
+  enterByMethod: { click: number; scroll: number; touch: number; key: number; auto: number };
+  dwellMs: { median: number; p90: number };
+  rates: { gestureRate: number; soundRate: number; enterRate: number };
+}
+
 // Mini App 视图 id → 中文标签（用于把埋点里的 view 键名展示成人话）。
 const MINIAPP_VIEW_LABELS: Record<string, string> = {
   home: "概览",
@@ -210,6 +219,10 @@ const AB_LABELS: Record<string, { name: string; variants: Record<string, string>
     name: "首页主 CTA 文案",
     variants: { a: "A · 咨询 AI 成交方案（现行）", b: "B · 看 AI 当场成交演示" },
   },
+  intro_auto_enter: {
+    name: "开场页自动进入",
+    variants: { a: "A · 不自动（对照）", b: "B · 无操作 12s 自动进入" },
+  },
 };
 
 // 解锁三步埋点键名 → 人话（定位解锁流失在哪一步）。
@@ -219,6 +232,21 @@ const GATE_LABELS: Record<string, string> = {
   verify_ok: "校验通过",
   verify_fail: "校验未过",
 };
+
+// 开场页进入方式 → 人话（对应 IntroCover 上报的 intro_enter.props.method 枚举）。
+const INTRO_METHOD_LABELS: Record<string, string> = {
+  click: "点击按钮",
+  scroll: "滚轮下滑",
+  touch: "触屏上滑",
+  key: "键盘按键",
+  auto: "自动进入（AB·B桶）",
+};
+
+// 停留毫秒 → 人话（≥1s 换算成秒更好读；0 意味着窗口内无 dwell 样本，显示「—」）。
+function fmtDwell(ms: number): string {
+  if (!ms) return "—";
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+}
 function relabel(data: Record<string, number>, map: Record<string, string>): Record<string, number> {
   const out: Record<string, number> = {};
   for (const [k, v] of Object.entries(data)) out[map[k] ?? k] = v;
@@ -325,6 +353,7 @@ interface DraftPost {
   theme?: string;
   source: string;
   createdAt: string;
+  photo?: string;
 }
 
 interface HealthSnapshot {
@@ -709,6 +738,7 @@ export default function AdminPage() {
   const [bcText, setBcText] = useState("");
   const [bcTarget, setBcTarget] = useState<BroadcastTarget>("channel");
   const [bcButton, setBcButton] = useState(true);
+  const [bcPhoto, setBcPhoto] = useState("");
   const [bcMsg, setBcMsg] = useState("");
   const [bcSending, setBcSending] = useState(false);
   const [bcRunAt, setBcRunAt] = useState("");
@@ -745,6 +775,11 @@ export default function AdminPage() {
   // Mini App 漏斗时间窗：0=全部，7/30/90 天。用 ref 让 30s 自动刷新定时器也能读到最新窗口。
   const [miWindow, setMiWindow] = useState(0);
   const miWindowRef = useRef(0);
+  // 开场页漏斗：独立接口独立时间窗（API 默认 7、上限 90，无「全部」档）。
+  // 同样用 ref 兜住自动刷新定时器闭包，切窗后定时器也能拉到新窗口的数据。
+  const [introData, setIntroData] = useState<IntroFunnelData | null>(null);
+  const [introDays, setIntroDays] = useState(7);
+  const introDaysRef = useRef(7);
 
   // ── server-paged CRM (dedicated /api/admin/leads endpoint) ──
   const [crmSort, setCrmSort] = useState<"lastSeen" | "firstSeen" | "count" | "name" | "status">("lastSeen");
@@ -921,6 +956,7 @@ export default function AdminPage() {
       void loadDrafts("");
       void loadHealth("");
       void loadCodes("");
+      void loadIntroFunnel();
     } catch {
       if (!silent) setErr("网络错误");
     } finally {
@@ -933,6 +969,24 @@ export default function AdminPage() {
     miWindowRef.current = v;
     setMiWindow(v);
     void load(true);
+  }
+
+  // 开场页漏斗独立拉取：走 admin_session cookie 鉴权（与 stats 同通道），失败静默——
+  // 该卡片是增值分析，不应因单接口异常把整个后台标红。
+  async function loadIntroFunnel() {
+    try {
+      const res = await fetch(`/api/admin/intro-funnel?days=${introDaysRef.current}`);
+      if (res.ok) setIntroData(await res.json());
+    } catch {
+      /* 静默失败，保留上一次数据 */
+    }
+  }
+
+  // 切换开场页漏斗时间窗：只重拉本卡片接口，不打扰整页 stats。
+  function applyIntroDays(v: number) {
+    introDaysRef.current = v;
+    setIntroDays(v);
+    void loadIntroFunnel();
   }
 
   // 把漏斗/维度/卡点数字翻译成「一句话结论」，帮运营直接看懂下一步做什么。
@@ -1254,6 +1308,7 @@ export default function AdminPage() {
     const d = aiDrafts.find((x) => x.id === id);
     if (!d) return;
     setBcText(d.text);
+    setBcPhoto(d.photo ?? "");
     setBcTarget("channel");
     setBcButton(true);
   }
@@ -1408,12 +1463,13 @@ export default function AdminPage() {
       const res = await fetch(`/api/admin/broadcast`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, target: bcTarget, withButton: bcButton }),
+        body: JSON.stringify({ text, target: bcTarget, withButton: bcButton, photo: bcPhoto || undefined }),
       });
       const data = await res.json();
       if (data.ok) {
-        setBcMsg("✅ 已发送");
+        setBcMsg(bcPhoto ? "✅ 已带图发送" : "✅ 已发送");
         setBcText("");
+        setBcPhoto("");
       } else {
         const errs = (data.results ?? []).filter((r: { ok: boolean }) => !r.ok)
           .map((r: { chat: string; error?: string }) => `${r.chat}: ${r.error ?? "失败"}`).join("；");
@@ -2045,6 +2101,80 @@ export default function AdminPage() {
                     )}
                   </SectionCard>
                 )}
+
+                <SectionCard title="开场页漏斗（IntroCover · 展示 → 进入）" Icon={TrendingUp} accent="text-emerald-300">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-slate-500">按 sid 会话去重，同会话重复事件只计一次；转化率均相对「展示」</span>
+                    <div className="flex gap-1">
+                      {[
+                        { v: 7, label: "近7天" },
+                        { v: 30, label: "近30天" },
+                        { v: 90, label: "近90天" },
+                      ].map((o) => (
+                        <button
+                          key={o.v}
+                          onClick={() => applyIntroDays(o.v)}
+                          className={`rounded-md px-2 py-0.5 text-[11px] transition-colors ${
+                            introDays === o.v ? "bg-emerald-500 text-slate-950" : "bg-slate-800 text-slate-400 hover:text-slate-200"
+                          }`}
+                        >
+                          {o.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {!introData ? (
+                    <div className="py-3 text-center text-[11px] text-slate-600">加载中…</div>
+                  ) : introData.sessions.shown === 0 ? (
+                    <div className="py-3 text-center text-[11px] text-slate-600">
+                      近 {introData.days} 天暂无开场页数据。访客打开首页开场动画后即会累计。
+                    </div>
+                  ) : (
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div>
+                        <div className="mb-2 flex items-center justify-between">
+                          <span className="text-[11px] text-slate-400">会话级漏斗（展示 → 首次交互 → 开声 → 进入）</span>
+                          <span className="text-[11px] text-emerald-300">进入率 {(introData.rates.enterRate * 100).toFixed(1)}%</span>
+                        </div>
+                        <Funnel
+                          steps={[
+                            { label: "开场展示", value: introData.sessions.shown, color: "from-cyan-400 to-cyan-500" },
+                            { label: "首次交互", value: introData.sessions.gesture, color: "from-sky-400 to-sky-500" },
+                            { label: "开启音效", value: introData.sessions.soundOn, color: "from-violet-400 to-violet-500" },
+                            { label: "进入正文", value: introData.sessions.enter, color: "from-emerald-400 to-emerald-500" },
+                          ]}
+                        />
+                        {/* 三个率同以「展示」为分母：漏斗右侧的逐级百分比看相邻流失，这行看整体到达 */}
+                        <div className="mt-2 text-[11px] text-slate-500">
+                          相对展示：首次交互 {(introData.rates.gestureRate * 100).toFixed(1)}% · 开声 {(introData.rates.soundRate * 100).toFixed(1)}% · 进入 {(introData.rates.enterRate * 100).toFixed(1)}%
+                        </div>
+                      </div>
+                      <div className="space-y-3">
+                        <Bars
+                          title="进入方式分布"
+                          data={relabel(
+                            Object.fromEntries(Object.entries(introData.enterByMethod).filter(([, v]) => v > 0)),
+                            INTRO_METHOD_LABELS
+                          )}
+                        />
+                        <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+                          <div className="mb-2 text-[11px] text-slate-400">进入前停留时长（仅统计有时长样本的进入会话）</div>
+                          <div className="flex items-end gap-6">
+                            <div>
+                              <div className="text-lg font-semibold text-slate-200">{fmtDwell(introData.dwellMs.median)}</div>
+                              <div className="text-[10px] text-slate-500">中位数</div>
+                            </div>
+                            <div>
+                              <div className="text-lg font-semibold text-amber-300">{fmtDwell(introData.dwellMs.p90)}</div>
+                              <div className="text-[10px] text-slate-500">p90</div>
+                            </div>
+                          </div>
+                          <div className="mt-2 text-[10px] text-slate-600">中位数看典型访客的耐心，p90 看长尾；两者都偏长说明开场留人过久，偏短说明多数人快速跳过</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </SectionCard>
               </div>
             )}
 
@@ -2445,6 +2575,23 @@ export default function AdminPage() {
                 rows={4}
                 className="w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 outline-none focus:border-cyan-500"
               />
+              {bcPhoto && (
+                <div className="mt-2 flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-900/60 p-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={bcPhoto} alt="配图" className="h-16 w-28 rounded object-cover" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[11px] font-medium text-slate-300">图文帖：发布时以图片为主体、正文作说明</div>
+                    <div className="truncate text-[10px] text-slate-500">{bcPhoto}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setBcPhoto("")}
+                    className="shrink-0 rounded bg-slate-800 px-2 py-1 text-[10px] text-rose-300"
+                  >
+                    移除配图
+                  </button>
+                </div>
+              )}
               <div className="mt-2 flex flex-wrap items-center gap-3">
                 <select
                   value={bcTarget}
@@ -2508,7 +2655,10 @@ export default function AdminPage() {
                     {aiDrafts.slice(0, 6).map((d) => (
                       <div key={d.id} className="flex items-start justify-between gap-2 rounded bg-slate-900/60 p-1.5 text-[11px]">
                         <button onClick={() => applyDraft(d.id)} className="min-w-0 text-left hover:text-cyan-300" title="点击载入">
-                          <span className="text-slate-500">{String(d.createdAt).slice(5, 16).replace("T", " ")} · {d.theme ?? "AI"}</span>
+                          <span className="text-slate-500">
+                            {String(d.createdAt).slice(5, 16).replace("T", " ")} · {d.theme ?? "AI"}
+                            {d.photo && <span className="ml-1 text-amber-300">🖼 带图</span>}
+                          </span>
                           <div className="truncate text-slate-300">{d.text.replace(/<[^>]+>/g, "")}</div>
                         </button>
                         <button onClick={() => delDraft(d.id)} className="shrink-0 rounded bg-slate-800 px-1.5 text-[10px] text-rose-300">删</button>
