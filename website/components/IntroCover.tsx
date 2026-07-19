@@ -658,6 +658,10 @@ export default function IntroCover() {
   const [soundOn, setSoundOn] = useState(false);
   // A/B intro_auto_enter B 桶：无操作 12s 自动进入；≤3s 时把剩余秒数显示在 hint 行
   const [autoLeft, setAutoLeft] = useState<number | null>(null);
+  // A/B intro_btn_shape：a=波浪（现行）/ b=胶囊（对照）。SSR 恒渲染波浪、挂载后按桶切换，
+  // 用点击率与进入率验证「有机形变」这类激进视觉实验是否真的更好，而不是自嗨
+  const [btnShape, setBtnShape] = useState<"wave" | "pill">("wave");
+  const btnShapeRef = useRef<"wave" | "pill">("wave");
 
   const overlayRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -755,11 +759,12 @@ export default function IntroCover() {
     if (enteredRef.current) return;
     enteredRef.current = true;
     dismissedInRuntime = true;
-    // 进入方式 + 停留时长 + 是否开声，一个事件看全进入行为（比拆多个事件更好做漏斗）
+    // 进入方式 + 停留时长 + 是否开声 + 按钮形状桶，一个事件看全进入行为（后台免跨事件拼接）
     track("intro_enter", {
       method,
       dwellMs: shownAtRef.current ? Math.round(performance.now() - shownAtRef.current) : null,
       sound: !userMutedRef.current && soundTrackedRef.current,
+      btnShape: btnShapeRef.current,
     });
     try {
       sessionStorage.setItem(SEEN_KEY, "1");
@@ -827,6 +832,17 @@ export default function IntroCover() {
       document.body.style.overflow = "";
     };
   }, [enter, startSound]);
+
+  /* A/B 实验 intro_btn_shape：按钮形状分桶（a=波浪现行 / b=胶囊对照）。
+   * 曝光即记录；进入事件带 btnShape 属性，后台可直接按形状桶对比进入率与停留。 */
+  useEffect(() => {
+    if (!show) return;
+    const v = abVariant("intro_btn_shape");
+    abExpose("intro_btn_shape", v);
+    const shape = v === "b" ? "pill" : "wave";
+    btnShapeRef.current = shape;
+    setBtnShape(shape);
+  }, [show]);
 
   /* A/B 实验 intro_auto_enter：B 桶在完全无操作 12s 后自动进入正文（最后 3s 在 hint 行倒计时，
    * 任意操作立即取消且本次会话不再武装）；A 桶仅曝光作对照。要回答的问题：自动进入能否
@@ -990,6 +1006,8 @@ export default function IntroCover() {
       stats,
     };
     (window as unknown as { __blIntroStats?: BlIntroStats }).__blIntroStats = stats;
+    // 低端机降级也作用于按钮：关湍流滤镜（CSS 按 data-lite 消费），保留便宜的 blob 蠕变
+    enterBtnRef.current?.setAttribute("data-lite", lite ? "1" : "0");
     PRODUCT_ORDER.forEach((k) => {
       const im = new Image();
       im.src = PRODUCT_IMG[k];
@@ -1178,6 +1196,7 @@ export default function IntroCover() {
             ref={enterBtnRef}
             type="button"
             className="bl-enter-btn"
+            data-shape={btnShape}
             onClick={() => enter("click")}
             onPointerMove={onBtnPointerMove}
             onPointerLeave={onBtnPointerLeave}

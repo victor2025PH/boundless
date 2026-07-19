@@ -223,6 +223,10 @@ const AB_LABELS: Record<string, { name: string; variants: Record<string, string>
     name: "开场页自动进入",
     variants: { a: "A · 不自动（对照）", b: "B · 无操作 12s 自动进入" },
   },
+  intro_btn_shape: {
+    name: "进入按钮形状",
+    variants: { a: "A · 有机波浪（现行）", b: "B · 标准胶囊（对照）" },
+  },
 };
 
 // 解锁三步埋点键名 → 人话（定位解锁流失在哪一步）。

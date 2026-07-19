@@ -77,10 +77,11 @@ try {
     if (!ignored(text)) consoleErrors.push(`pageerror: ${text}`);
   });
 
-  // 钉死 intro_auto_enter 实验为对照桶，避免 B 桶自动进入干扰交互检查的时序
+  // 钉死实验桶保证确定性：auto_enter=a 防自动进入抢时序；btn_shape=a 保证波浪层可见（DOM 结构检查基准）
   await page.addInitScript(() => {
     try {
       localStorage.setItem('ab_intro_auto_enter', 'a');
+      localStorage.setItem('ab_intro_btn_shape', 'a');
     } catch {}
   });
 

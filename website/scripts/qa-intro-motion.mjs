@@ -75,11 +75,12 @@ let exitCode = 0;
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 
-  // 钉死 intro_auto_enter 实验为对照桶：B 桶会在无操作 12s 后自动进入正文，
-  // 而本脚本恰要无交互观察 12s——不钉桶会与自动进入产生竞态，导致验收偶发失败。
+  // 钉死实验桶保证确定性：auto_enter=a（本脚本要无交互观察 12s，B 桶自动进入会抢时序）、
+  // btn_shape=a（统一视觉基准）。
   await page.addInitScript(() => {
     try {
       localStorage.setItem('ab_intro_auto_enter', 'a');
+      localStorage.setItem('ab_intro_btn_shape', 'a');
     } catch {}
   });
 
