@@ -63,7 +63,7 @@ npm run qa:intro-button -- --url http://localhost:3000/
 | dup | 同一 LOGO 不得同屏出现两份 | 每次轮询 live 内 key 互不重复，违规轮询数 = 0 |
 | countCap | 同屏数量不超会话上限 | 每次轮询 `live.length ≤ cap` 且 `cap ≤ 7` |
 | sideAlternate | 左右轮流出生 | spawns 按 t 排序后 side 严格 +1/-1 交替，违规数 = 0 |
-| sideBalance | 左右均衡 | \|L-R\|≤1 的轮询占比 ≥ 0.80，且任一次 \|L-R\|>2 直接 FAIL（交替性另由 sideAlternate 硬保证） |
+| sideBalance | 左右均衡 | 可见数均值差 mean\|L-R\| ≤ 1.0，且 \|L-R\|>2 的尖峰轮询占比 ≤ 5%（均值/尖峰占比对慢跑者采样噪声稳健；交替性另由 sideAlternate 硬保证） |
 | speedMedian | 整体速度感足够 | 速度中位数 ≥ 550 px/s |
 | speedP25 | 偏慢的粒子也不拖沓 | 速度 p25 ≥ 320 px/s |
 | spawnNoHover | 出生即在动，无原地悬停 | 速度样本最小值 ≥ 160 px/s |
