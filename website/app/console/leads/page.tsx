@@ -16,6 +16,8 @@ import {
   PageHeader,
   Pager,
   Td,
+  TestBadge,
+  TestFilterToggle,
   filterInputCls,
   fmtDateTime,
 } from "../parts";
@@ -34,15 +36,20 @@ const STATUSES = [
 export default function LeadsPage({
   searchParams,
 }: {
-  searchParams: { status?: string; q?: string; offset?: string };
+  searchParams: { status?: string; q?: string; offset?: string; test?: string };
 }) {
   const me = getConsoleSessionUser();
   if (!me) return null;
   const canWrite = roleAtLeast(me.role, "admin");
   const status = searchParams.status?.trim() || undefined;
   const q = searchParams.q?.trim() || undefined;
+  const showTest = searchParams.test === "1";
   const offset = Math.max(0, Number(searchParams.offset) || 0);
-  const { rows, total } = listLeads({ status, q, limit: LIMIT, offset });
+  const { rows, total } = listLeads({ status, q, limit: LIMIT, offset, includeTest: showTest });
+  // 当前筛选条件下的测试数据条数 = 含测试 total − 不含测试 total（limit:1 仅取计数）
+  const testCount = showTest
+    ? total - listLeads({ status, q, limit: 1 }).total
+    : listLeads({ status, q, limit: 1, includeTest: true }).total - total;
 
   const customerOptions: CustomerOption[] = listCustomers({ limit: 500 }).rows.map((c) => ({
     id: c.id,
@@ -56,7 +63,7 @@ export default function LeadsPage({
     }
   }
 
-  const filters = { status, q };
+  const filters = { status, q, test: showTest ? "1" : undefined };
 
   return (
     <div>
@@ -89,12 +96,20 @@ export default function LeadsPage({
           placeholder="搜索来源键 / 称呼 / 联系方式"
           className={`${filterInputCls} w-64`}
         />
+        {showTest && <input type="hidden" name="test" value="1" />}
         <FilterSubmit />
         {(status || q) && (
           <Link href="/console/leads" className="text-xs text-slate-500 hover:text-slate-300">
             清除
           </Link>
         )}
+        <TestFilterToggle
+          basePath="/console/leads"
+          params={{ status, q }}
+          showTest={showTest}
+          testCount={testCount}
+          className="ml-auto"
+        />
       </form>
 
       {rows.length === 0 ? (
@@ -118,6 +133,7 @@ export default function LeadsPage({
               <tr key={l.source_key} className="hover:bg-slate-800/40">
                 <Td>
                   <span className="font-mono text-xs text-slate-200">{l.source_key}</span>
+                  {l.is_test === 1 && <TestBadge className="ml-2 align-middle" />}
                 </Td>
                 <Td className="text-xs text-slate-300">{l.name || "—"}</Td>
                 <Td className="max-w-[150px] truncate text-xs text-slate-300">

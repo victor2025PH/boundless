@@ -57,11 +57,12 @@ export default async function ConsoleOverviewPage() {
   const introExperiments = await readIntroExperiments(7);
   const empty = stats.orders === 0 && stats.leads === 0 && stats.licenses === 0 && stats.customers === 0;
 
+  // headline 数字已由 getStats 排除测试数据；testCount>0 时副文案追加「+N 测试」提示存在感。
   const totals = [
-    { label: "客户", value: stats.customers, sub: `${stats.identities} 条身份标识`, href: "/console/customers" },
-    { label: "订单", value: stats.orders, sub: statusSub(stats.ordersByStatus), href: "/console/orders" },
-    { label: "授权", value: stats.licenses, sub: `${stats.licensesExpiringIn30d} 条 30 天内到期`, href: "/console/licenses" },
-    { label: "留资", value: stats.leads, sub: `${stats.audit} 条审计流水`, href: "/console/leads" },
+    { label: "客户", value: stats.customers, sub: `${stats.identities} 条身份标识`, testCount: stats.test.customers, href: "/console/customers" },
+    { label: "订单", value: stats.orders, sub: statusSub(stats.ordersByStatus), testCount: stats.test.orders, href: "/console/orders" },
+    { label: "授权", value: stats.licenses, sub: `${stats.licensesExpiringIn30d} 条 30 天内到期`, testCount: stats.test.licenses, href: "/console/licenses" },
+    { label: "留资", value: stats.leads, sub: `${stats.audit} 条审计流水`, testCount: stats.test.leads, href: "/console/leads" },
   ];
 
   return (
@@ -92,7 +93,17 @@ export default async function ConsoleOverviewPage() {
             <Card className="transition hover:border-amber-500/40">
               <p className="text-xs text-slate-500">{t.label}</p>
               <p className="mt-1 text-3xl font-bold tabular-nums text-white group-hover:text-amber-300">{t.value}</p>
-              <p className="mt-1.5 text-[11px] text-slate-500">{t.sub}</p>
+              <p className="mt-1.5 text-[11px] text-slate-500">
+                {t.sub}
+                {t.testCount > 0 && (
+                  <span
+                    className="ml-1 text-slate-600"
+                    title={`另有 ${t.testCount} 条测试/演练数据，未计入主数（列表页 ?test=1 可见）`}
+                  >
+                    （+{t.testCount} 测试）
+                  </span>
+                )}
+              </p>
             </Card>
           </Link>
         ))}

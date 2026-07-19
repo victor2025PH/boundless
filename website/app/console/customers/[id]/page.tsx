@@ -24,6 +24,7 @@ import {
   SectionTitle,
   SystemBadge,
   Td,
+  TestBadge,
   fmtAmount,
   fmtDateTime,
 } from "../../parts";
@@ -47,9 +48,10 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
   if (!customer) notFound();
 
   const identities = listIdentitiesByCustomer(customer.id);
-  const orders = listOrders({ customerId: customer.id, limit: 200 }).rows;
-  const licenses = listLicenses({ customerId: customer.id, limit: 200 }).rows;
-  const leads = listLeads({ customerId: customer.id, limit: 200 }).rows;
+  // 客户 360 不隐藏测试行（includeTest）：运营看该客户的全部足迹，测试行由徽章标注
+  const orders = listOrders({ customerId: customer.id, limit: 200, includeTest: true }).rows;
+  const licenses = listLicenses({ customerId: customer.id, limit: 200, includeTest: true }).rows;
+  const leads = listLeads({ customerId: customer.id, limit: 200, includeTest: true }).rows;
   const personas = listPersonas({ customerId: customer.id, limit: 200 }).rows;
   const opportunities = listOpportunities({ customerId: customer.id, limit: 50 });
   const audit = listAuditForCustomer(customer.id);
@@ -80,6 +82,7 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
         <div className="flex flex-wrap items-end justify-between gap-3">
           <h1 className="text-xl font-bold text-white">
             {customer.display_name || "（未命名客户）"}
+            {customer.is_test === 1 && <TestBadge className="ml-2 align-middle" />}
             <span className="ml-3 align-middle text-xs font-normal text-slate-500">客户 360</span>
           </h1>
           <div className="flex gap-4 text-xs text-slate-400">
@@ -159,7 +162,10 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
           <DataTable head={["来源单号", "产品 / 方案", "金额", "状态", "联系方式", "创建时间"]}>
             {orders.map((o) => (
               <tr key={o.id} className="hover:bg-slate-800/40">
-                <Td className="font-mono text-xs text-slate-300">{o.source_key}</Td>
+                <Td className="font-mono text-xs text-slate-300">
+                  {o.source_key}
+                  {o.is_test === 1 && <TestBadge className="ml-1.5" />}
+                </Td>
                 <Td className="text-xs text-slate-300">
                   {[o.product_id, o.plan, o.edition, o.period].filter(Boolean).join(" / ") || "—"}
                 </Td>
@@ -189,7 +195,10 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
                 <Td>
                   <SystemBadge system={l.source_system} />
                 </Td>
-                <Td className="font-mono text-xs text-slate-300">{l.source_key}</Td>
+                <Td className="font-mono text-xs text-slate-300">
+                  {l.source_key}
+                  {l.is_test === 1 && <TestBadge className="ml-1.5" />}
+                </Td>
                 <Td className="text-xs text-slate-300">
                   {[l.product_id, l.plan, l.edition].filter(Boolean).join(" / ") || "—"}
                 </Td>
@@ -310,7 +319,10 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
           <DataTable head={["来源键", "称呼", "联系方式", "意向", "状态", "最近活跃"]}>
             {leads.map((l) => (
               <tr key={l.source_key} className="hover:bg-slate-800/40">
-                <Td className="font-mono text-xs text-slate-300">{l.source_key}</Td>
+                <Td className="font-mono text-xs text-slate-300">
+                  {l.source_key}
+                  {l.is_test === 1 && <TestBadge className="ml-1.5" />}
+                </Td>
                 <Td className="text-xs text-slate-300">{l.name || "—"}</Td>
                 <Td className="text-xs text-slate-300">{l.contact || "—"}</Td>
                 <Td className="max-w-[200px] truncate text-xs text-slate-400">
