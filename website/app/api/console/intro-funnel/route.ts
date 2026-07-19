@@ -13,7 +13,9 @@ export async function GET(req: NextRequest) {
   }
   try {
     const days = Number(req.nextUrl.searchParams.get("days") ?? "7");
-    return NextResponse.json({ ok: true, funnel: await readIntroFunnel(days) });
+    // include_bots=1：带回自动化流量（默认排除 HeadlessChrome/爬虫，防污染实验读数）
+    const includeBots = req.nextUrl.searchParams.get("include_bots") === "1";
+    return NextResponse.json({ ok: true, funnel: await readIntroFunnel(days, { includeBots }) });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }

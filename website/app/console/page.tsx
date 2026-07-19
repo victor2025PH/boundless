@@ -247,7 +247,7 @@ export default async function ConsoleOverviewPage() {
       <Card>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <SectionTitle>开场页漏斗（近 {introFunnel.days} 天）</SectionTitle>
-          <span className="text-[11px] text-slate-500">口径：按会话（sid）去重 · 来源 events.jsonl</span>
+          <span className="text-[11px] text-slate-500">口径：按会话（sid）去重 · 已滤自动化 UA · 来源 events.jsonl</span>
         </div>
         {introFunnel.sessions.shown === 0 ? (
           <p className="text-xs text-slate-500">
