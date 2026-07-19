@@ -311,6 +311,25 @@ kpi_weekly 报 `ERR_MODULE_NOT_FOUND` = website 依赖未装（`cd website && np
 
 ---
 
+## 6. cron 哨兵与引擎机代码同步（实施26–28）
+
+| 脚本 | 用途 |
+|---|---|
+| `cron_sentinel.ps1` | 每 30 分钟巡检 `\Boundless\` 任务；失败经 `/api/ops/alert` 告警；可选每日心跳 |
+| `sync_ops_scripts.ps1` | **引擎机推荐**：`git fetch` + 只 checkout `deploy/cron`，并永久跳过 LFS smudge |
+
+**引擎机不要整仓 `git pull` 当常规动作**：脏工作区 + LFS 媒体 smudge 易失败。运维脚本更新用：
+
+```powershell
+# 管理员 PowerShell，在仓库根
+powershell -ExecutionPolicy Bypass -File deploy\cron\sync_ops_scripts.ps1
+```
+
+**哨兵每日心跳**（防哨兵自身静默死亡）：机器级 `setx /M SENTINEL_HEARTBEAT 1`，或任务参数加 `-Heartbeat`。
+全绿日首次经中继发一条 💚；失败告警路径不变；无密钥时只落本地日志。
+
+---
+
 ## 附录 · 接线包自检记（可提交前）
 
 - WhatIf 缺省、`-Execute` 才注册；矩阵与 `deploy/machines.json` 五机角色一致（.176 avatarhub / .117 chengjie 双实例 / .198 huoke；.104/.140 算力节点默认不装）。

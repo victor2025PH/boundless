@@ -1,16 +1,18 @@
-﻿# cron_sentinel.ps1 — Windows 引擎机 cron 哨兵（实施26）：巡检 \Boundless\ 计划任务上次结果，
+﻿# cron_sentinel.ps1 — Windows 引擎机 cron 哨兵（实施26/28）：巡检 \Boundless\ 计划任务上次结果，
 # 有失败/超期未跑即经 VPS 中继端点 /api/ops/alert 告警（用 EVENT_INGEST_KEY，不在本机存 TG token）。
 #
 # 设计：与 VPS ledger-backup-cron 同款——失败边沿告警 + down-flag 幂等 + 恢复补发；成功静默。
 # 判定：任务 LastTaskResult 非 0 且非良性码（267009=正在运行,267011=从未运行）即视为失败。
-# 用法（计划任务每 30 分钟）：powershell -ExecutionPolicy Bypass -File deploy\cron\cron_sentinel.ps1 [-Prefix Boundless] [-BaseUrl https://bd2026.cc]
+# 心跳（实施28）：-Heartbeat 或 env SENTINEL_HEARTBEAT=1 时，全绿日首次补发一条存活确认（防哨兵静默死亡）。
+# 用法（计划任务每 30 分钟）：powershell -ExecutionPolicy Bypass -File deploy\cron\cron_sentinel.ps1 [-Prefix Boundless] [-BaseUrl https://bd2026.cc] [-Heartbeat]
 
 [CmdletBinding()]
 param(
     [string]$Prefix    = 'Boundless',   # 只巡检名字含此前缀的计划任务
     [string]$BaseUrl   = '',            # 告警中继基址（缺省 env PERSONA_SYNC_BASE / https://bd2026.cc）
     [string]$IngestKey = '',            # 中继密钥（缺省 env EVENT_INGEST_KEY）
-    [int]$StaleHours   = 26             # 上次运行超过此小时数（且应已跑过）视为超期；0=不查超期
+    [int]$StaleHours   = 26,            # 上次运行超过此小时数（且应已跑过）视为超期；0=不查超期
+    [switch]$Heartbeat                  # 全绿时每日心跳一次；也可设机器级 SENTINEL_HEARTBEAT=1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -74,4 +76,22 @@ if (Test-Path $DownFlag) {
     Remove-Item $DownFlag -Force
 }
 Say "巡检通过：$($tasks.Count) 个 $Prefix 任务全绿"
+
+# 每日心跳（可选）：证明哨兵自身还在跑；与失败告警互斥路径，仅全绿日发一次
+$wantHb = $Heartbeat -or ([string]$env:SENTINEL_HEARTBEAT -eq '1')
+if ($wantHb) {
+    $day = Get-Date -Format 'yyyy-MM-dd'
+    $hbFlag = Join-Path $FlagDir "heartbeat.$day"
+    if (-not (Test-Path $hbFlag)) {
+        Send-Alert "💚 cron 哨兵心跳 · $env:COMPUTERNAME · $($tasks.Count) 个 $Prefix 任务全绿 · $day"
+        New-Item -ItemType File -Force -Path $hbFlag | Out-Null
+        # 清理 14 天前的心跳 flag，避免 LOCALAPPDATA 堆积
+        Get-ChildItem $FlagDir -Filter 'heartbeat.*' -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-14) } |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+        Say "已发每日心跳 flag=$hbFlag"
+    } else {
+        Say "今日心跳已发过，跳过"
+    }
+}
 exit 0
