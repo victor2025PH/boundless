@@ -42,7 +42,7 @@ export async function settleCardPaidSession(args: {
     return { result: "amount_mismatch" };
   }
 
-  const res = await markOrderCardPaid(orderId, sessionId);
+  const res = await markOrderCardPaid(orderId, sessionId, via === "webhook" ? "stripe_webhook" : "stripe_reconcile");
   if (!res) return { result: "order_not_found" };
   if (!res.changed) return { result: "already", order: res.order };
 

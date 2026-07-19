@@ -169,12 +169,13 @@ export async function setOrderStatus(id: string, status: OrderStatus, code?: str
   });
 }
 
-/** Stripe webhook 对账落地：标记到账 + 回填 session id，一次串行写完成（幂等）。
- *  返回 changed=false 表示订单已是 paid/activated（Stripe 会重试投递、同事件可能多次到达，
- *  调用方据此跳过重复通知）。 */
+/** Stripe 对账落地（webhook 实时 / reconcile 巡检共用）：标记到账 + 回填 session id，
+ *  一次串行写完成（幂等）。返回 changed=false 表示订单已是 paid/activated（Stripe 会重试投递、
+ *  同事件可能多次到达，调用方据此跳过重复通知）。via 记入订单流水，审计可区分来源通道。 */
 export async function markOrderCardPaid(
   id: string,
-  sessionId: string
+  sessionId: string,
+  via: "stripe_webhook" | "stripe_reconcile" = "stripe_webhook"
 ): Promise<{ order: OrderEntry; changed: boolean } | null> {
   return serialize(async () => {
     const db = await readDb();
@@ -194,7 +195,7 @@ export async function markOrderCardPaid(
     await writeDb(db);
     await appendFile(
       LOG,
-      JSON.stringify({ t: new Date().toISOString(), id: o.id, event: "status:paid", via: "stripe_webhook" }) + "\n",
+      JSON.stringify({ t: new Date().toISOString(), id: o.id, event: "status:paid", via }) + "\n",
       "utf-8"
     ).catch(() => {});
     // 影子账本双写（best-effort，失败静默）
