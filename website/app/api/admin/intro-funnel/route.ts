@@ -16,7 +16,10 @@ export async function GET(req: NextRequest) {
   if (!requireAdmin(req)) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
-  const days = Number(new URL(req.url).searchParams.get("days") ?? "7");
+  const url = new URL(req.url);
+  const days = Number(url.searchParams.get("days") ?? "7");
+  // include_bots=1：带回自动化流量（默认排除 HeadlessChrome/爬虫，防污染实验读数）
+  const includeBots = url.searchParams.get("include_bots") === "1";
   // /admin 前端期望裸对象（无 ok 包装），保持既有消费契约
-  return NextResponse.json(await readIntroFunnel(days));
+  return NextResponse.json(await readIntroFunnel(days, { includeBots }));
 }

@@ -2137,7 +2137,7 @@ export default function AdminPage() {
                     <div className="grid gap-4 md:grid-cols-2">
                       <div>
                         <div className="mb-2 flex items-center justify-between">
-                          <span className="text-[11px] text-slate-400">会话级漏斗（展示 → 首次交互 → 开声 → 进入）</span>
+                          <span className="text-[11px] text-slate-400">会话级漏斗（展示 → 首次交互 → 开声 → 进入）· 已滤自动化流量</span>
                           <span className="text-[11px] text-emerald-300">进入率 {(introData.rates.enterRate * 100).toFixed(1)}%</span>
                         </div>
                         <Funnel
