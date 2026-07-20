@@ -16,6 +16,11 @@ class TelegramSenderMixin:
     def _reply_to_message_id_for_send(self, original_message) -> Optional[int]:
         """Telegram reply / quote bar: off for natural chat when configured or conversion domain."""
         tg = (self.config.get("telegram") or {}) if getattr(self, "config", None) else {}
+        # UI「回复逻辑」页写的是 telegram.reply_logic.reply_to_user_message → 优先；
+        # 顶层同名键仅作旧配置回退。
+        rl = tg.get("reply_logic") or {}
+        if isinstance(rl, dict) and "reply_to_user_message" in rl:
+            return int(original_message.id) if rl.get("reply_to_user_message") else None
         if "reply_to_user_message" in tg:
             return int(original_message.id) if tg.get("reply_to_user_message") else None
         try:
@@ -490,6 +495,34 @@ class TelegramSenderMixin:
         self._persona_name_cache = name
         return name
 
+    def _record_auto_reply(self, chat_id, user_id) -> None:
+        """回复逻辑记账：一次自动回复成功送出 → 刷新该用户的冷却时钟 + 连续计数。
+
+        连续计数的过期复位语义与 ``reply_logic_gates`` 闸门共用 ``effective_streak``
+        （距上次自动回复超 30 分钟 → 从 1 重新计，否则 +1），两处永远一致。
+        best-effort：记账失败绝不影响发送主流程。
+        """
+        try:
+            from src.client.reply_logic_gates import effective_streak
+            ts_map = getattr(self, '_auto_reply_ts', None)
+            streak_map = getattr(self, '_auto_reply_streak', None)
+            if ts_map is None or streak_map is None:
+                return
+            key = f"{chat_id}:{user_id}"
+            now = time.time()
+            streak_map[key] = effective_streak(
+                streak_map.get(key, 0), ts_map.get(key), now) + 1
+            ts_map[key] = now
+            # 防膨胀：超 5000 条时清理超过一天未互动的项（一天远超冷却/复位窗口，
+            # 清掉语义安全；风格参照 _record_session_reply / _reject_cooldowns）
+            if len(ts_map) > 5000:
+                cutoff = now - 86400.0
+                for k in [k for k, v in ts_map.items() if v < cutoff]:
+                    ts_map.pop(k, None)
+                    streak_map.pop(k, None)
+        except Exception:
+            self.logger.debug("[回复逻辑] 记账失败（忽略）", exc_info=True)
+
     async def _send_reply(self, original_message, reply_text: str, parse_mode=None):
         try:
             # 统一发送前护栏（与 send_photo 共用）：G1 Kill-Switch + 反封号闸门 + 限速 + 营业时段。
@@ -536,6 +569,7 @@ class TelegramSenderMixin:
                 msg_id=getattr(_sent, "id", "") or "")
             if getattr(original_message, 'from_user', None) and getattr(original_message.from_user, 'id', None):
                 self._record_session_reply(original_message.chat.id, original_message.from_user.id)
+                self._record_auto_reply(original_message.chat.id, original_message.from_user.id)
                 if getattr(self, 'four_layer_trigger', None):
                     self.four_layer_trigger.update_cooldown(
                         f"group_{original_message.chat.id}",
