@@ -12,16 +12,19 @@
 param(
     # 自定义数据根（缺省 = 同目录 zhiliao\data）。仓库外部署 / 本机试点用，
     # 初始化步骤同 README §3.2，只是把 $data 换成该目录。
-    [string]$DataDir = ''
+    [string]$DataDir = '',
+    # 多实例参数化（Sprint5）：缺省 = 智聊主实例，无参调用行为完全不变（向后兼容）。
+    # 客户实例由 provision_instance.py 规划并传入 -InstanceId/-Port/-ProductId/-DataDir。
+    [string]$InstanceId   = 'zhiliao',
+    [string]$InstanceName = '智聊 ChatX',
+    [int]$Port            = 18799,          # = 实例 config.local.yaml 的 web_admin.port
+    [string]$ProductId    = 'zhiliao'       # CHENGJIE_PRODUCT_ID 遥测产品线（客户实例仍归属产品线）
 )
 
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
 
-# ── 实例常量（挪数据根/换端口只改这里，并同步 stack.json 条目与实例 overlay）──
-$InstanceId   = 'zhiliao'
-$InstanceName = '智聊 ChatX'
-$Port         = 18799                                   # = 实例 config.local.yaml 的 web_admin.port
+# ── 实例参数（见上方 param()；缺省 = 智聊主实例，客户实例由 provision_instance 传入）──
 $RepoRoot     = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $EngineDir    = Join-Path $RepoRoot 'engines\chengjie'
 # -DataDir 相对路径按调用方当前目录归一为绝对路径（cmd 链的 set/CurrentDirectory 需要绝对路径）
@@ -97,7 +100,7 @@ $lic    = Join-Path $DataRoot 'config\license.key'
 $chain = @(
     "set `"AITR_DATA_DIR=$DataRoot`"",
     "set `"EVENT_SPOOL_DIR=$spool`"",
-    "set `"CHENGJIE_PRODUCT_ID=$InstanceId`"",
+    "set `"CHENGJIE_PRODUCT_ID=$ProductId`"",
     "set `"CHENGJIE_LEDGER_OUTBOX=$ledger`"",
     "set `"AITR_DESKTOP_MODE=`"",
     "set `"AITR_CONFIG_PATH=`"",
