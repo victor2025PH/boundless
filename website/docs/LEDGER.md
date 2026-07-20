@@ -65,8 +65,16 @@
 ### 客户归属
 
 - `linkCustomer(kind, value)`：按 identities 精确匹配（值先归一化），命中返回 `customer_id`，否则 null。
-- `ensureCustomerForOrder / ensureCustomerForLead`：**不自动建客户**，只匹配已有身份（订单按 fingerprint → contact，留资按 tg → contact），命中且未归属时写回并记 `auto_link` 审计。
+- `ensureCustomerForOrder / ensureCustomerForLead`（双写钩子实时归并，实施22 起）：先匹配已有身份（订单按 fingerprint → tg(notify_chat 纯数字) → contact/email/phone，留资按 tg(source_key/raw.tg_user_id) → contact/email/phone），命中且未归属时写回并记 `auto_link` 审计；**未命中且有强信号**（显式 `@handle` / `t.me/xxx` / email / phone 形态，或 tg 数字 id——`classifyStrongContact` 判定）**则自动建档**（source=`auto:order-lead`，挂 identities，记 `auto_create` 审计）。自由文本联系方式 / 仅 fingerprint 不建档，避免热路径垃圾档。**绝不合并两个已存在客户**（同 `ledger-link-customers.mjs` 纪律）；归并失败只 warn 不阻断入账（`ledger-sync.ts` fail-safe）。
 - `createCustomer` + `attachIdentity` + `assignCustomer`：console 人工建档 / 挂身份 / 归属（写审计）。`attachIdentity` 遇到身份已属他人时不抢占，返回冲突信息。
+
+### 测试数据标记（schema v6，实施22）
+
+- 四表 `customers / orders / leads / licenses` 加 `is_test INTEGER NOT NULL DEFAULT 0`（条件式 ALTER，生产库可能已被 mark 脚本抢先加列，先探 PRAGMA 再 ALTER，幂等）。
+- 判定唯一口径 `isTestSignal(...vals)`（`lib/ledger.ts` 与 `scripts/ledger-lib.mjs` 逐字一致）：词边界匹配 `e2e/test/drill/smoke` + 邮箱 `@internal` 结尾；`latest/contest` 等不误伤，宁漏别错。
+- 入口打标：双写钩子（`orderEntryToRow`/`leadEntryToRow`）按 contact/fingerprint/name/source_key 出生即标；实时建档与 `ledger-link-customers.mjs` 建档时客户随行打标；upsert 更新走 `MAX(is_test, @新值)` **只升不降**（回扫标记不被镜像抹掉）。
+- 回扫存量：`scripts/ledger-mark-testdata.mjs`（幂等，`--dry-run` 只读预览）——四表直接信号 + 客户联动（名下有测试行则客户补标）。
+- 消费口径：KPI 周报（`kpi-weekly-report.mjs`）与商机引擎（`lib/opportunities.ts`）默认排除 `is_test=1`；console 列表默认排除、`?test=1` 带出，客户 360 不隐藏只标徽章；`getStats` headline 排除并单独回报 `test` 计数。
 
 ### 账号与会话（schema v2）
 

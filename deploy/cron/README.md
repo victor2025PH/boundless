@@ -39,6 +39,7 @@ KPI 周报落 `deploy\cron\logs\reports\kpi_weekly_<yyyyMMdd_HHmm>.md`（`logs/`
 | **export** | 每日 03:30 | 三段式：`tools/persona_bus/export_*.py` 导出 → `validate_personas.py` / `validate_export.py` 校验 → scp/ssh 传输导入（§5）；license：avatarhub=`tools/license_ledger/export_avatarhub.py`，chengjie=`engines/chengjie/scripts/ledger_outbox.py --export`，huoke=无（自动跳过） | `run_export.ps1` |
 | **grants_sync** | 每 30 分钟 | `tools/persona_bus/fetch_grants.py --system <engine> --out data\persona_bus_out\<engine>_grants.json`（`--key` 经环境变量 `EVENT_INGEST_KEY`、`--base` 回退 `PERSONA_SYNC_BASE`；原子写缓存供 `grant_gate.py` 软门控，§5.4） | `run_grants_sync.ps1` |
 | **config_snapshot** | 每 10 分钟 | 对每个实例 config 目录维护纯本地 git 快照仓：`git add -A` → 有变更才 `commit -m "snapshot <ISO时间戳>"`（无变更零空提交；`.gitignore` 排除 db/wal/shm/日志/purged_trash，只快照配置文本；无 remote 永不 push，§3.4） | `run_config_snapshot.ps1` |
+| **watchdog** | 每 5 分钟 | `deploy/instances/watchdog_instances.ps1`（仅 chengjie，实施29；chengjie 缺省任务集自动含）：探测复用 `status_instances.ps1 -Json`，DOWN 即 `start_*.ps1` 幂等拉起、假活连续 3 轮才 stop+start、端口被外占只告警；动作/失败经 `/api/ops/alert` 告警。**账户固定装机用户 S4U+Highest（不吃 `-RunAs`）**——引擎继承 watchdog 账户，SYSTEM 会让引擎身份漂移；S4U=session 0 不依赖交互登录，开机/注销后照常触发 | `watchdog_instances.ps1`（自带壳职责） |
 | **kpi_weekly** | 每周一 09:00 | `node website/scripts/kpi-weekly-report.mjs --week last --format md --out deploy\cron\logs\reports\kpi_weekly_<时间戳>.md`（只读聚合 `EVENTS_DB`/`LEDGER_DB` 双库；库缺失出骨架报告退出 0） | `run_kpi_weekly.ps1` |
 
 分机矩阵（任务名统一 `\Boundless\Boundless-<engine>-<task>[-<实例>]`；kpi_weekly 例外=`Boundless-website-kpi_weekly`）：
@@ -61,7 +62,7 @@ VPS 用 §5.3 ① 的 crontab 等价命令**。
 | 机器 | 安装命令（先演练，核对后加 `-Execute`） | 装的任务 | 机器级 env（`setx /M`） |
 |---|---|---|---|
 | **.176 幻声**（avatarhub 引擎机） | `install_tasks.ps1 -Engine avatarhub` | uploader / purge / export / grants_sync | `EVENT_INGEST_KEY` 必填；`PERSONA_SYNC_BASE` 可选（缺省 `https://bd2026.cc`） |
-| **.117 通译**（chengjie 引擎机 + website 开发机） | `install_tasks.ps1 -Engine chengjie -WithKpiWeekly` | uploader×2（双实例）/ purge / export / grants_sync / config_snapshot（§3.4，chengjie 缺省任务集自动含） + kpi_weekly（可选装，本机是 website 开发机） | `EVENT_INGEST_KEY` 必填；`PERSONA_SYNC_BASE` 可选；装 kpi_weekly 再加 `EVENTS_DB` / `LEDGER_DB`（不设则报告只有骨架，指向缺省 `~\hualing-leads` 下双库） |
+| **.117 通译**（chengjie 引擎机 + website 开发机） | `install_tasks.ps1 -Engine chengjie -WithKpiWeekly` | uploader×2（双实例）/ purge / export / grants_sync / config_snapshot（§3.4）/ watchdog（探活自愈，实施29；两者 chengjie 缺省任务集自动含） + kpi_weekly（可选装，本机是 website 开发机） | `EVENT_INGEST_KEY` 必填；`PERSONA_SYNC_BASE` 可选；装 kpi_weekly 再加 `EVENTS_DB` / `LEDGER_DB`（不设则报告只有骨架，指向缺省 `~\hualing-leads` 下双库） |
 | **.198 智拓**（huoke 引擎机） | `install_tasks.ps1 -Engine huoke` | uploader / purge / export / grants_sync | `EVENT_INGEST_KEY` 必填；`PERSONA_SYNC_BASE` 可选 |
 | **.104 幻颜节点**（算力节点，无引擎任务） | 不跑安装器 | **全部不装**（只跑推理服务；无 spool、无人设资产、无 grant 消费点） | — |
 | **.140 通传节点**（算力节点，无引擎任务） | 不跑安装器 | **全部不装**（同上） | — |

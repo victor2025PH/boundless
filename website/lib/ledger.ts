@@ -487,11 +487,14 @@ export function normIdentityValue(kind: IdentityKind, value: string): string {
 }
 
 // ── 测试/演练数据判定（schema v6 is_test 的唯一口径）────────────────
-// 保守词边界匹配：e2e / test / drill / smoke 必须前后都是非字母数字（"contest"、
-// "latest"、"testuser" 不命中，宁可漏标不误标——误标会把真实数据从 KPI 滤掉）；
-// @internal 只认结尾（e2e 脚本约定 contact 形如 e2e-notify@internal）。
+// 保守词边界匹配（宁可漏标不误标——误标会把真实数据从 KPI 滤掉）：
+//   - test / drill / smoke 前后都必须是非字母数字（"contest"/"latest"/"drilling"/
+//     "smoked" 不命中；"my-test" / "drill-run" 命中）；
+//   - e2e 只要求前边界（"E2ENOTIFYFP01" 这类 e2e 前缀指纹命中；正常英文词不会
+//     以 e2e 开头，误伤面为零）；
+//   - @internal 只认结尾（e2e 脚本约定 contact 形如 e2e-notify@internal）。
 // ⚠️ 与 scripts/ledger-lib.mjs 的 isTestSignal 逐字一致，修改必须同步！
-const TEST_SIGNAL_RE = /(^|[^a-z0-9])(e2e|test|drill|smoke)([^a-z0-9]|$)|@internal\s*$/i;
+const TEST_SIGNAL_RE = /(^|[^a-z0-9])e2e|(^|[^a-z0-9])(test|drill|smoke)([^a-z0-9]|$)|@internal\s*$/i;
 
 /** 任一入参命中测试信号即 true（null/undefined 跳过）。 */
 export function isTestSignal(...vals: (string | null | undefined)[]): boolean {
@@ -549,6 +552,7 @@ export function upsertOrderRow(row: OrderRowInput, db: Database.Database = getLe
     notify_chat: s(row.notify_chat),
     code: s(row.code),
     raw: s(row.raw),
+    is_test: row.is_test ? 1 : 0,
     synced_at: nowIso(),
   };
   const tx = db.transaction((): UpsertResult => {
@@ -558,11 +562,12 @@ export function upsertOrderRow(row: OrderRowInput, db: Database.Database = getLe
     if (!existing) {
       const id = row.id && isValidId(row.id, "ord") ? row.id : newId("ord");
       db.prepare(
-        `INSERT INTO orders (id, source_key, customer_id, product_id, sku_id, plan, edition, period, amount, pay_amount, currency, status, contact, fingerprint, lang, created_at, paid_at, activated_at, notify_chat, code, raw, synced_at)
-         VALUES (@id, @source_key, @customer_id, @product_id, @sku_id, @plan, @edition, @period, @amount, @pay_amount, @currency, @status, @contact, @fingerprint, @lang, @created_at, @paid_at, @activated_at, @notify_chat, @code, @raw, @synced_at)`
+        `INSERT INTO orders (id, source_key, customer_id, product_id, sku_id, plan, edition, period, amount, pay_amount, currency, status, contact, fingerprint, lang, created_at, paid_at, activated_at, notify_chat, code, raw, is_test, synced_at)
+         VALUES (@id, @source_key, @customer_id, @product_id, @sku_id, @plan, @edition, @period, @amount, @pay_amount, @currency, @status, @contact, @fingerprint, @lang, @created_at, @paid_at, @activated_at, @notify_chat, @code, @raw, @is_test, @synced_at)`
       ).run({ ...p, id });
       return { id, inserted: true };
     }
+    // is_test 只升不降（MAX）：回扫打过的测试标不被后续 JSON 镜像双写抹掉
     db.prepare(
       `UPDATE orders SET
          customer_id = COALESCE(customer_id, @customer_id),
@@ -572,7 +577,8 @@ export function upsertOrderRow(row: OrderRowInput, db: Database.Database = getLe
          amount = @amount, pay_amount = @pay_amount, currency = @currency,
          status = @status, contact = @contact, fingerprint = @fingerprint, lang = @lang,
          created_at = @created_at, paid_at = @paid_at, activated_at = @activated_at,
-         notify_chat = @notify_chat, code = @code, raw = @raw, synced_at = @synced_at
+         notify_chat = @notify_chat, code = @code, raw = @raw,
+         is_test = MAX(is_test, @is_test), synced_at = @synced_at
        WHERE source_key = @source_key`
     ).run(p);
     return { id: existing.id, inserted: false };
@@ -599,6 +605,7 @@ export function upsertLeadRow(row: LeadRowInput, db: Database.Database = getLedg
     last_seen: s(row.last_seen),
     count: int(row.count),
     raw: s(row.raw),
+    is_test: row.is_test ? 1 : 0,
     synced_at: nowIso(),
   };
   const tx = db.transaction((): UpsertResult => {
@@ -607,18 +614,19 @@ export function upsertLeadRow(row: LeadRowInput, db: Database.Database = getLedg
       | undefined;
     if (!existing) {
       db.prepare(
-        `INSERT INTO leads (source_key, customer_id, name, contact, interest, message, lang, source, utm, status, first_seen, last_seen, count, raw, synced_at)
-         VALUES (@source_key, @customer_id, @name, @contact, @interest, @message, @lang, @source, @utm, @status, @first_seen, @last_seen, @count, @raw, @synced_at)`
+        `INSERT INTO leads (source_key, customer_id, name, contact, interest, message, lang, source, utm, status, first_seen, last_seen, count, raw, is_test, synced_at)
+         VALUES (@source_key, @customer_id, @name, @contact, @interest, @message, @lang, @source, @utm, @status, @first_seen, @last_seen, @count, @raw, @is_test, @synced_at)`
       ).run(p);
       return { id: sourceKey, inserted: true };
     }
+    // is_test 只升不降（MAX）：语义同订单
     db.prepare(
       `UPDATE leads SET
          customer_id = COALESCE(customer_id, @customer_id),
          name = @name, contact = @contact, interest = @interest, message = @message,
          lang = @lang, source = @source, utm = @utm, status = @status,
          first_seen = @first_seen, last_seen = @last_seen, count = @count,
-         raw = @raw, synced_at = @synced_at
+         raw = @raw, is_test = MAX(is_test, @is_test), synced_at = @synced_at
        WHERE source_key = @source_key`
     ).run(p);
     return { id: sourceKey, inserted: false };
@@ -645,6 +653,7 @@ export function upsertLicenseRow(row: LicenseRowInput, db: Database.Database = g
     expires_at: s(row.expires_at),
     status: s(row.status),
     raw: s(row.raw),
+    is_test: row.is_test ? 1 : 0,
     synced_at: nowIso(),
   };
   const tx = db.transaction((): UpsertResult => {
@@ -654,11 +663,12 @@ export function upsertLicenseRow(row: LicenseRowInput, db: Database.Database = g
     if (!existing) {
       const id = row.id && isValidId(row.id, "lic") ? row.id : newId("lic");
       db.prepare(
-        `INSERT INTO licenses (id, source_system, source_key, customer_id, product_id, sku_id, plan, edition, seats, machine_fingerprint, issued_at, expires_at, status, raw, synced_at)
-         VALUES (@id, @source_system, @source_key, @customer_id, @product_id, @sku_id, @plan, @edition, @seats, @machine_fingerprint, @issued_at, @expires_at, @status, @raw, @synced_at)`
+        `INSERT INTO licenses (id, source_system, source_key, customer_id, product_id, sku_id, plan, edition, seats, machine_fingerprint, issued_at, expires_at, status, raw, is_test, synced_at)
+         VALUES (@id, @source_system, @source_key, @customer_id, @product_id, @sku_id, @plan, @edition, @seats, @machine_fingerprint, @issued_at, @expires_at, @status, @raw, @is_test, @synced_at)`
       ).run({ ...p, id });
       return { id, inserted: true };
     }
+    // is_test 只升不降（MAX）：语义同订单
     db.prepare(
       `UPDATE licenses SET
          customer_id = COALESCE(customer_id, @customer_id),
@@ -667,7 +677,7 @@ export function upsertLicenseRow(row: LicenseRowInput, db: Database.Database = g
          plan = @plan, edition = @edition, seats = @seats,
          machine_fingerprint = @machine_fingerprint,
          issued_at = @issued_at, expires_at = @expires_at, status = @status,
-         raw = @raw, synced_at = @synced_at
+         raw = @raw, is_test = MAX(is_test, @is_test), synced_at = @synced_at
        WHERE source_system = @source_system AND source_key = @source_key`
     ).run(p);
     return { id: existing.id, inserted: false };
@@ -682,6 +692,8 @@ export interface CreateCustomerInput {
   tg_user_id?: string | null;
   source?: string | null;
   notes?: string | null;
+  /** 1 = 测试/演练客户（schema v6）；缺省 0。建档时已知测试信号（isTestSignal）直接带上。 */
+  is_test?: number | null;
 }
 
 export function createCustomer(
@@ -700,11 +712,12 @@ export function createCustomer(
     notes: s(input.notes),
     created_at: t,
     updated_at: t,
+    is_test: input.is_test ? 1 : 0,
   };
   const tx = db.transaction(() => {
     db.prepare(
-      `INSERT INTO customers (id, display_name, primary_contact, tg_user_id, source, notes, created_at, updated_at)
-       VALUES (@id, @display_name, @primary_contact, @tg_user_id, @source, @notes, @created_at, @updated_at)`
+      `INSERT INTO customers (id, display_name, primary_contact, tg_user_id, source, notes, created_at, updated_at, is_test)
+       VALUES (@id, @display_name, @primary_contact, @tg_user_id, @source, @notes, @created_at, @updated_at, @is_test)`
     ).run(rowValues);
     writeAudit({ actor, action: "customer.create", entity: "customer", entity_id: id, detail: rowValues }, db);
   });
@@ -801,9 +814,9 @@ export function assignCustomer(
  *  订单尚未归属且命中时写回 customer_id 并记 audit（actor=system）。返回 customer_id 或 null。 */
 export function ensureCustomerForOrder(orderKey: string, db: Database.Database = getLedgerDb()): string | null {
   const o = db
-    .prepare("SELECT id, source_key, customer_id, contact, fingerprint, notify_chat FROM orders WHERE id = ? OR source_key = ?")
+    .prepare("SELECT id, source_key, customer_id, contact, fingerprint, notify_chat, is_test FROM orders WHERE id = ? OR source_key = ?")
     .get(orderKey, orderKey) as
-    | Pick<OrderRow, "id" | "source_key" | "customer_id" | "contact" | "fingerprint" | "notify_chat">
+    | Pick<OrderRow, "id" | "source_key" | "customer_id" | "contact" | "fingerprint" | "notify_chat" | "is_test">
     | undefined;
   if (!o) return null;
   if (o.customer_id) return o.customer_id;
@@ -834,7 +847,12 @@ export function ensureCustomerForOrder(orderKey: string, db: Database.Database =
   const strong = classifyStrongContact(o.contact);
   if (!strong && !tgId) return null;
   const cid = createCustomerForContact(
-    { display: strong?.display ?? `tg:${tgId}`, primaryContact: o.contact, tgUserId: tgId },
+    {
+      display: strong?.display ?? `tg:${tgId}`,
+      primaryContact: o.contact,
+      tgUserId: tgId,
+      isTest: !!o.is_test || isTestSignal(o.contact),
+    },
     db
   );
   if (strong) attachIdentity(cid, strong.kind, strong.value, db);
@@ -852,16 +870,12 @@ export function ensureCustomerForOrder(orderKey: string, db: Database.Database =
 /** 留资自动归属：按 tg / contact 身份精确匹配已有客户；未命中且有强信号则自动建档。语义同订单。 */
 export function ensureCustomerForLead(sourceKey: string, db: Database.Database = getLedgerDb()): string | null {
   const l = db
-    .prepare("SELECT source_key, customer_id, name, contact, raw FROM leads WHERE source_key = ?")
-    .get(sourceKey) as Pick<LeadRow, "source_key" | "customer_id" | "name" | "contact" | "raw"> | undefined;
+    .prepare("SELECT source_key, customer_id, name, contact, raw, is_test FROM leads WHERE source_key = ?")
+    .get(sourceKey) as Pick<LeadRow, "source_key" | "customer_id" | "name" | "contact" | "raw" | "is_test"> | undefined;
   if (!l) return null;
   if (l.customer_id) return l.customer_id;
   let tgUserId: string | null = null;
-  if (l.source_key.startsWith("tg:")) tgUserId = l.source_key.slice(3);
-  else if (l.source_key.startsWith("c:")) {
-    const c = classifyStrongContact(l.source_key.slice(2));
-    if (c?.kind === "contact") tgUserId = null; // c: 前缀是联系方式，非 tg id
-  }
+  if (l.source_key.startsWith("tg:") && /^\d+$/.test(l.source_key.slice(3))) tgUserId = l.source_key.slice(3);
   let rawTgId: string | null = null;
   try {
     const raw = l.raw ? (JSON.parse(l.raw) as { tg_user_id?: unknown }) : null;
@@ -892,7 +906,12 @@ export function ensureCustomerForLead(sourceKey: string, db: Database.Database =
   const strong = classifyStrongContact(l.contact);
   if (!strong && !tgId) return null;
   const cid = createCustomerForContact(
-    { display: s(l.name) ?? strong?.display ?? (tgId ? `tg:${tgId}` : null), primaryContact: l.contact, tgUserId: tgId },
+    {
+      display: s(l.name) ?? strong?.display ?? (tgId ? `tg:${tgId}` : null),
+      primaryContact: l.contact,
+      tgUserId: tgId,
+      isTest: !!l.is_test || isTestSignal(l.contact, l.name),
+    },
     db
   );
   if (tgId) attachIdentity(cid, "tg", tgId, db);
@@ -909,7 +928,7 @@ export function ensureCustomerForLead(sourceKey: string, db: Database.Database =
 
 /** create-on-miss 小工具：建客户主档（实时归档钩子用）。identities 由调用方随后挂。 */
 function createCustomerForContact(
-  input: { display: string | null; primaryContact: string | null; tgUserId: string | null },
+  input: { display: string | null; primaryContact: string | null; tgUserId: string | null; isTest?: boolean },
   db: Database.Database
 ): string {
   const cust = createCustomer(
@@ -919,6 +938,7 @@ function createCustomerForContact(
       tg_user_id: input.tgUserId,
       source: "auto:order-lead",
       notes: "下单/留资实时自动建档（强信号）",
+      is_test: input.isTest ? 1 : 0,
     },
     db,
     "system"

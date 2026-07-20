@@ -13,6 +13,7 @@ import {
   ensureCustomerForOrder,
   getLedgerDb,
   inferProductId,
+  isTestSignal,
   upsertLeadRow,
   upsertOrderRow,
   type LeadRowInput,
@@ -48,6 +49,8 @@ export function orderEntryToRow(o: OrderEntry): OrderRowInput {
     notify_chat: o.notify_chat != null ? String(o.notify_chat) : null,
     code: o.code ?? null,
     raw: JSON.stringify(o),
+    // e2e/演练单出生即标（contact 如 e2e-notify@internal、指纹如 E2ENOTIFYFP01）
+    is_test: isTestSignal(o.contact, o.fingerprint) ? 1 : 0,
   };
 }
 
@@ -66,29 +69,41 @@ export function leadEntryToRow(e: LeadEntry): LeadRowInput {
     last_seen: e.lastSeen ?? null,
     count: e.count ?? null,
     raw: JSON.stringify(e),
+    // e2e/演练留资出生即标（contact/name/来源键任一命中测试信号）
+    is_test: isTestSignal(e.contact, e.name, e.id) ? 1 : 0,
   };
 }
 
 // ── best-effort 双写（钩子调用；失败静默）──────────────────────────
-/** 订单镜像进账本 + 尝试按身份自动归属已有客户。任何异常吞掉，绝不 throw。 */
+/** 订单镜像进账本 + 实时归并（命中已有客户即归属，无主强信号自动建档）。
+ *  归并失败只 warn 不阻断入账；整体任何异常吞掉，绝不 throw。 */
 export function syncOrderEntry(o: OrderEntry): void {
   try {
     if (!o?.id) return;
     const db = getLedgerDb();
     upsertOrderRow(orderEntryToRow(o), db);
-    ensureCustomerForOrder(o.id, db);
+    try {
+      ensureCustomerForOrder(o.id, db);
+    } catch (err) {
+      // fail-safe：归并挂了订单仍已入账，留 warn 便于巡检（回扫脚本可补）
+      console.warn(`[ledger-sync] link customer for order ${o.id} failed:`, err);
+    }
   } catch {
     /* shadow ledger is best-effort — never break the main flow */
   }
 }
 
-/** 留资镜像进账本 + 尝试按身份自动归属已有客户。任何异常吞掉，绝不 throw。 */
+/** 留资镜像进账本 + 实时归并（语义同订单）。任何异常吞掉，绝不 throw。 */
 export function syncLeadEntry(e: LeadEntry): void {
   try {
     if (!e?.id) return;
     const db = getLedgerDb();
     upsertLeadRow(leadEntryToRow(e), db);
-    ensureCustomerForLead(e.id, db);
+    try {
+      ensureCustomerForLead(e.id, db);
+    } catch (err) {
+      console.warn(`[ledger-sync] link customer for lead ${e.id} failed:`, err);
+    }
   } catch {
     /* shadow ledger is best-effort — never break the main flow */
   }

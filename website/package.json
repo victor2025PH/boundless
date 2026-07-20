@@ -15,6 +15,7 @@
     "smoke:prod": "node scripts/robot-prodsmoke.mjs",
     "qa:intro-motion": "node scripts/qa-intro-motion.mjs",
     "qa:intro-button": "node scripts/qa-intro-button.mjs",
+    "qa:intro-button-ios": "node scripts/qa-intro-button-ios.mjs",
     "qa:intro": "node scripts/qa-intro-motion.mjs && node scripts/qa-intro-button.mjs"
   },
   "dependencies": {

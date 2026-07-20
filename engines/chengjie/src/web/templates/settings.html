@@ -1493,6 +1493,17 @@ document.addEventListener('DOMContentLoaded', function(){
       });
     }
   })();
+  /* ── #escalation 深链：自动展开人工转接卡片并定位 ── */
+  (function(){
+    if(location.hash !== '#escalation') return;
+    const body = document.getElementById('body-he');
+    if(!body) return;
+    const hd = body.previousElementSibling;
+    if(!body.classList.contains('open') && hd && typeof toggleAcc === 'function'){
+      toggleAcc(hd);
+    }
+    (body.closest('.acc') || body).scrollIntoView({behavior:'smooth', block:'start'});
+  })();
 });
 
 function heApplyWorkHoursPreset(mode){

@@ -132,9 +132,58 @@ export interface IntroExperimentVariant {
   dwellMs: { median: number; p90: number };
 }
 
+/** A/B 决策门槛：各桶展示 ≥50 且进入率差 ≥5 个百分点才有意义（与 console 文案一致）。 */
+export const INTRO_AB_MIN_SHOWN = 50;
+export const INTRO_AB_MIN_GAP_PP = 5;
+
+export type IntroExperimentVerdict = "insufficient" | "favor_a" | "favor_b" | "tie";
+
+export interface IntroExperimentDecision {
+  verdict: IntroExperimentVerdict;
+  /** 进入率差（B−A）百分点；样本不足时为 null */
+  gapPp: number | null;
+  /** 给人看的一句建议 */
+  reason: string;
+}
+
 export interface IntroExperimentReadout {
   experiment: string;
   variants: Record<string, IntroExperimentVariant>;
+  decision: IntroExperimentDecision;
+}
+
+/** 对 a/b 双桶给出可执行建议；缺桶或样本不足 → insufficient。 */
+export function decideIntroExperiment(
+  variants: Record<string, IntroExperimentVariant>
+): IntroExperimentDecision {
+  const a = variants.a;
+  const b = variants.b;
+  if (!a || !b) {
+    return { verdict: "insufficient", gapPp: null, reason: "缺少 A/B 双桶数据" };
+  }
+  if (a.shown < INTRO_AB_MIN_SHOWN || b.shown < INTRO_AB_MIN_SHOWN) {
+    return {
+      verdict: "insufficient",
+      gapPp: null,
+      reason: `样本不足（需各桶展示 ≥${INTRO_AB_MIN_SHOWN}，当前 A=${a.shown} B=${b.shown}）`,
+    };
+  }
+  const gapPp = Math.round((b.enterRate - a.enterRate) * 1000) / 10;
+  if (Math.abs(gapPp) < INTRO_AB_MIN_GAP_PP) {
+    return {
+      verdict: "tie",
+      gapPp,
+      reason: `进入率差 ${gapPp}pp < ${INTRO_AB_MIN_GAP_PP}pp，暂保持现状`,
+    };
+  }
+  if (gapPp > 0) {
+    return { verdict: "favor_b", gapPp, reason: `B 进入率高 ${gapPp}pp，建议切到 B 桶并关实验` };
+  }
+  return {
+    verdict: "favor_a",
+    gapPp,
+    reason: `A 进入率高 ${Math.abs(gapPp)}pp，建议切到 A 桶并关实验`,
+  };
 }
 
 export async function readIntroExperiments(
@@ -227,7 +276,7 @@ export async function readIntroExperiments(
           dwellMs: { median: quantile(v.dwells, 0.5), p90: quantile(v.dwells, 0.9) },
         };
       }
-      return { experiment, variants };
+      return { experiment, variants, decision: decideIntroExperiment(variants) };
     });
 
   return { days: d, experiments };

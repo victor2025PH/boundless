@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 _OPS_TPL_DIR = Path(__file__).resolve().parent.parent / "templates" / "ops"
 
@@ -166,6 +166,60 @@ def _journey_to_dict(journey) -> Dict[str, Any]:
         "created_at": journey.created_at,
         "updated_at": journey.updated_at,
     }
+
+
+def _build_funnel_export_csv(
+    *,
+    scope: str,
+    days: int,
+    exported_at: str,
+    by_stage: Dict[str, int],
+    by_channel: Dict[str, int],
+    series: list,
+) -> str:
+    """P5：把 funnel stats + timeseries 拼成一份 CSV 文本（不含 BOM）。
+
+    结构与旧前端 JS 拼装保持一致（运营既有表格模板无需改动）：
+      ``# funnel stats (scope=..., exported_at=ISO8601)`` 注释行
+      → ``stage,count`` 段 → 空行 → ``channel,count`` 段 → 空行
+      → ``# daily timeseries (days=N)``
+      → 表头 ``day,<全部 stage 名排序>,engaged_rate,handoff_rate,line_add_rate,bonded_rate``
+      → 每日一行（stage 缺省补 0，rate 为 None 写空串）。
+
+    数据行走标准库 csv.writer（字段含逗号/引号/换行自动加引号转义）；
+    ``#`` 注释行是整行文本不是字段，绕过 writer 原样写入。
+    独立成模块级纯函数，方便测试直接喂数据验证输出。
+    """
+    import csv as _csv
+    import io as _io
+
+    buf = _io.StringIO()
+    w = _csv.writer(buf, lineterminator="\n")
+
+    buf.write(f"# funnel stats (scope={scope}, exported_at={exported_at})\n")
+    w.writerow(["stage", "count"])
+    for k in by_stage:  # 保持 store 返回顺序（与旧前端 Object.keys 遍历一致）
+        w.writerow([k, int(by_stage.get(k) or 0)])
+    buf.write("\n")
+    w.writerow(["channel", "count"])
+    for k in by_channel:
+        w.writerow([k, int(by_channel.get(k) or 0)])
+    buf.write("\n")
+
+    buf.write(f"# daily timeseries (days={days})\n")
+    stages = sorted({s for row in series for s in (row.get("by_stage") or {})})
+    rate_keys = ["engaged_rate", "handoff_rate", "line_add_rate", "bonded_rate"]
+    w.writerow(["day"] + stages + rate_keys)
+    for row in series:
+        by = row.get("by_stage") or {}
+        rates = row.get("rates") or {}
+        cells: list = [row.get("day", "")]
+        cells.extend(int(by.get(s) or 0) for s in stages)
+        cells.extend(
+            "" if rates.get(rk) is None else rates.get(rk) for rk in rate_keys
+        )
+        w.writerow(cells)
+    return buf.getvalue()
 
 
 def register_contacts_routes(
@@ -664,6 +718,93 @@ def register_contacts_routes(
             "scope": ch or "all",
             "series": series,
         }
+
+    @app.get("/api/funnel/export.csv")
+    async def funnel_export_csv(
+        request: Request, days: int = 30, channel: str = "", _=Depends(api_auth),
+    ):
+        """漏斗数据 CSV 导出（P5）：stats 两段 + 逐日 timeseries，服务端拼装，带 UTF-8 BOM 供 Excel。
+
+        Query params:
+            days: 1~365，默认 30。与 ``/api/funnel/timeseries`` 同校验。
+            channel: 与 ``/api/funnel/stats`` 同白名单校验；'' 或缺省 = all，
+                未知 channel → 400（行为与既有两个端点一致）。
+
+        取代旧前端 JS 拼 CSV（fetch stats+timeseries 再 Blob 下载）——大时间
+        跨度时服务端一次拼装更经济。CSV 结构与旧前端输出保持一致，见
+        ``_build_funnel_export_csv``。
+        """
+        import time as _t
+        from datetime import datetime as _dt, timezone as _tzu
+
+        # channel 白名单 + days 钳制：照抄 stats / timeseries 的校验行为
+        from src.contacts.models import VALID_CHANNELS  # 延迟 import 避循环
+        ch = (channel or "").strip().lower() or None
+        if ch is not None and ch not in VALID_CHANNELS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"invalid channel '{channel}', must be one of "
+                    f"{sorted(VALID_CHANNELS)}"
+                ),
+            )
+        try:
+            d = int(days)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="days must be int")
+        if d < 1 or d > 365:
+            raise HTTPException(
+                status_code=400, detail="days must be 1..365",
+            )
+        scope = ch or "all"
+
+        # ── stats 段：与 funnel_stats 相同的 store 调用 ────────────
+        by_stage = contacts_store.count_journeys_by_stage(channel=ch)
+        by_channel = contacts_store.count_channel_identities_by_channel()
+
+        # ── timeseries 段：与 funnel_timeseries 相同的重放 + 转化率 ──
+        raw = contacts_store.count_stage_transitions_by_day(days=d, channel=ch)
+
+        def _pct(num: int, den: int) -> Optional[float]:
+            if den <= 0:
+                return None
+            return round(num / den * 100, 1)
+
+        series = []
+        for item in raw:
+            by = item.get("by_stage") or {}
+            engaged = int(by.get("ENGAGED", 0))
+            handoff = int(by.get("HANDOFF_SENT", 0))
+            line_added = int(by.get("LINE_ADDED", 0))
+            bonded = int(by.get("BONDED", 0))
+            series.append({
+                "day": item["day"],
+                "by_stage": by,
+                "rates": {
+                    "engaged_rate": _pct(engaged, int(by.get("INITIAL", 0))),
+                    "handoff_rate": _pct(handoff, engaged),
+                    "line_add_rate": _pct(line_added, handoff),
+                    "bonded_rate": _pct(bonded, line_added),
+                },
+            })
+
+        csv_text = _build_funnel_export_csv(
+            scope=scope,
+            days=d,
+            exported_at=_dt.now(_tzu.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            by_stage=by_stage,
+            by_channel=by_channel,
+            series=series,
+        )
+        ymd = _t.strftime("%Y%m%d", _t.localtime())
+        return Response(
+            content="\ufeff" + csv_text,
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition":
+                    f'attachment; filename="funnel_{scope}_{d}d_{ymd}.csv"',
+            },
+        )
 
     # ── B2: KPI 漏斗告警 ──────────────────────────────────
     @app.get("/api/funnel/alerts")

@@ -4,7 +4,9 @@
 #       主进程需开 config.platform_login.whatsapp.protocol_enabled=true 并指向 baileys_url。
 
 $ErrorActionPreference = "Stop"
-$root = "D:\workspace\telegram-mtproto-ai"
+# chengjie 引擎根目录：从脚本位置派生（services/whatsapp-baileys → 上两级），
+# 迁仓/换机后无需再改（原先硬编码 D:\workspace\telegram-mtproto-ai 已随单仓迁移失效）。
+$root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
 # 服务监听端口（须与主进程 platform_login.whatsapp.baileys_url 一致）
 $env:PORT = "8790"
@@ -12,10 +14,34 @@ $env:PORT = "8790"
 $env:PY_INGEST_URL = "http://127.0.0.1:18799/api/internal/protocol/ingest"
 # 会话健康桥：连上/被登出/重连放弃等状态转移主动 push（不配则由 PY_INGEST_URL 自动推导）
 $env:PY_STATUS_URL = "http://127.0.0.1:18799/api/internal/protocol/session-status"
-# ingest endpoint requires Bearer auth (web_admin.auth_token). Must match config.yaml::web_admin.auth_token
-# or inbound pushes are rejected (401) and messages are silently dropped.
-# 运行时从主配置解析（勿在本文件硬编码 token——本文件进 git）。
-$env:PY_API_TOKEN = ((Select-String -Path (Join-Path $root "config\config.yaml") -Pattern '^\s*auth_token:\s*(\S+)' | Select-Object -First 1).Matches[0].Groups[1].Value)
+# ingest endpoint requires Bearer auth (web_admin.auth_token). Must match the RUNNING
+# instance's web_admin.auth_token or inbound pushes are 401-rejected and silently dropped.
+# 多实例部署：真正在跑的实例把 config 放在 AITR_DATA_DIR\config（见 main 进程环境变量），
+# 其 auth_token 在 overlay(config.local.yaml) 里且与仓库内 config.yaml 不同——所以优先按
+# AITR_DATA_DIR 解析，overlay 优先于主配置；没有 AITR_DATA_DIR 才回落仓库 config。
+# （勿在本文件硬编码 token——本文件进 git。）
+if ($env:AITR_DATA_DIR) {
+  $cfgMain = Join-Path $env:AITR_DATA_DIR "config\config.yaml"
+  $cfgOverlay = Join-Path $env:AITR_DATA_DIR "config\config.local.yaml"
+} else {
+  $cfgMain = Join-Path $root "config\config.yaml"
+  $cfgOverlay = Join-Path $root "config\config.local.yaml"
+}
+function Get-CfgToken([string[]]$files) {
+  foreach ($f in $files) {
+    if (Test-Path $f) {
+      $m = Select-String -Path $f -Pattern '^\s*auth_token:\s*(\S+)' | Select-Object -Last 1
+      if ($m) { return $m.Matches[0].Groups[1].Value }
+    }
+  }
+  return ""
+}
+$env:PY_API_TOKEN = Get-CfgToken @($cfgOverlay, $cfgMain)
+if ($env:PY_API_TOKEN) {
+  Write-Host ("[wa-baileys] auth_token resolved from " + $cfgOverlay + " / " + $cfgMain)
+} else {
+  Write-Host "[wa-baileys] WARN: auth_token not found — inbound pushes may be 401-rejected"
+}
 # 首连历史回填条数（0 关闭）
 $env:WA_BACKFILL = "20"
 # P0 同步开关：好友名单(通讯录) + 全量会话列表；会话占位上限防洪泛（默认开）

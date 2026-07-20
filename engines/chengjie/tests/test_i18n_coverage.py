@@ -679,6 +679,48 @@ def test_translation_dict_no_duplicate_keys_within_lang():
     )
 
 
+def test_i18n_packs_bilingual_and_no_collision():
+    """P4：i18n packs 机制门禁。
+
+    词条治理机制化后新增词条进 `src/web/i18n_packs/<域>.py`（并行工作流各改各的
+    文件，消除单体字典的丢失更新）。本门禁保证：
+    1. 每个 pack 的 ZH/EN 键集合一一对应（缺翻译立刻点名）；
+    2. pack 之间无同 key（collect_packs 自带 fail-fast，这里兜底断言可导入）；
+    3. pack 与单体 `_TRANSLATIONS` 字面量无同 key——同一 key 双源定义时运行时
+       pack 静默覆盖单体，属于「双源真相」，必须在源头禁止。
+    """
+    import ast
+    from pathlib import Path
+
+    from src.web.i18n_packs import collect_packs
+
+    pzh, pen = collect_packs()
+    assert pzh and pen, "i18n packs 为空（机制未接通？）"
+    diff = set(pzh) ^ set(pen)
+    assert not diff, f"pack 的 zh/en 键不齐平: {sorted(diff)[:20]}"
+
+    src = Path(__file__).resolve().parents[1] / "src" / "web" / "web_i18n.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"), filename=str(src))
+    mono_keys = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "_TRANSLATIONS" for t in node.targets
+        ) and isinstance(node.value, ast.Dict):
+            for lang_val in node.value.values:
+                if isinstance(lang_val, ast.Dict):
+                    mono_keys |= {
+                        k.value for k in lang_val.keys
+                        if isinstance(k, ast.Constant) and isinstance(k.value, str)
+                    }
+            break
+    assert mono_keys, "未能从 web_i18n.py 提取单体键集（正则/AST 失效？）"
+    overlap = mono_keys & set(pzh)
+    assert not overlap, (
+        f"key 同时定义于单体与 pack（双源真相，pack 会静默覆盖单体）: {sorted(overlap)[:20]}\n"
+        "修法：从 web_i18n.py 删除该 key（pack 为准），或从 pack 移除。"
+    )
+
+
 # ③-S3：base.html 共享侧栏导航原硬编码 span 收口的 key（中英都要在，且大多需真翻译非照抄）。
 _ADMIN_CHROME_NAV_KEYS = [
     "personas", "workspace_inbox", "rpa_overview", "telegram_settings",
@@ -723,9 +765,8 @@ def test_base_chrome_i18n_keys_all_defined(name):
 
 def test_base_tour_and_help_bilingual():
     """③-S4：引导(tour) + 全局 tooltip 引擎 + nav_* 帮助词条已双语。
-    这些是 JS 内联数据（中英并存、显示按 WS_LANG 客户端切换、缺英文回落中文），
-    故此处做「数据层完整性 + 引擎确实按语言取 en 字段」的断言。"""
-    import re as _re
+    tour 仍是 JS 内联数据（中英并存、显示按 WS_LANG 客户端切换、缺英文回落中文），
+    悬浮词条已迁至 help_terms.py；此处做「数据层完整性 + 引擎确实按语言取 en 字段」的断言。"""
     from pathlib import Path
 
     base = Path(__file__).resolve().parents[1] / "src" / "web" / "templates" / "base.html"
@@ -736,12 +777,15 @@ def test_base_tour_and_help_bilingual():
     # 引导英文文案在位（证明 tour 已双语）
     for needle in ("Command Palette (Ctrl+K)", "This is your control center"):
         assert needle in text, f"tour 英文缺失: {needle!r}"
-    # ③-S4b：全部 TERM_DICT 词条（不止 nav_*）须含 en + desc_en（术语表整表收口）。
-    # 词条形如 "key":{"zh":...}，内部无嵌套花括号，故 [^{}]* 可精确截取条目体。
-    entries = _re.findall(r'"([A-Za-z0-9_]+)":\{"zh":([^{}]*)\}', text)
-    assert len(entries) >= 80, f"TERM_DICT 词条数异常（仅 {len(entries)}，正则可能失效）"
-    bad = [k for k, body in entries if '"en":' not in body or '"desc_en":' not in body]
-    assert not bad, f"TERM_DICT 词条缺英文字段（en/desc_en）: {bad}"
+    # ③-S4b：全部悬浮词条（不止 nav_*）须含 en + desc_en（术语表整表收口）。
+    # 词典已迁出 base.html 内联 → src/web/help_terms.py 单源(模板经 help_terms|tojson 消费),
+    # 断言从"正则扫模板源码"升级为"直接校验数据结构"(更强:不受格式化影响)。
+    assert "const TERM_DICT={{ help_terms|tojson }};" in text, \
+        "base.html 未消费 help_terms 单源(tooltip 引擎断线)"
+    from src.web.help_terms import HELP_TERMS
+    assert len(HELP_TERMS) >= 80, f"HELP_TERMS 词条数异常（仅 {len(HELP_TERMS)}）"
+    bad = [k for k, v in HELP_TERMS.items() if "en" not in v or "desc_en" not in v]
+    assert not bad, f"HELP_TERMS 词条缺英文字段（en/desc_en）: {bad}"
 
 
 def test_base_static_html_no_untagged_cjk():
@@ -768,6 +812,13 @@ _SEAL_BASE_CTX = dict(
     username="admin", display_name="Admin",
     user_role="master", domain_web_pages=[], active="cases", embedded=False,
 )
+# 侧栏导航改为 nav_schema 单源驱动(线上由 admin.py _enrich_context 注入);
+# 冷渲染门禁同步注入,保证 EN 渲染覆盖到完整导航(fallback 中文不得泄漏)。
+from src.web.nav_schema import get_nav_context as _get_nav_context
+_SEAL_BASE_CTX.update(_get_nav_context())
+# 悬浮提示词典同为单源数据(help_terms),冷渲染同步注入。
+from src.web.help_terms import get_help_terms as _get_help_terms
+_SEAL_BASE_CTX["help_terms"] = _get_help_terms()
 # settings.html 的路由级上下文（config 段 + 派生 JSON 串），此处以「空配置」镜像 /settings 契约，
 # 使 _render_en 直渲不缺变量；空 dict 下模板自带默认走空串 → 若有中文数据默认仍会被泄漏检出。
 _SETTINGS_SEAL_CTX = dict(
@@ -1337,6 +1388,7 @@ _ROUTE_CJK_CEILINGS = {
     "kb_routes.py": 0,                    # P36
     "unified_inbox_send_routes.py": 0,    # P37
     "unified_inbox_login_routes.py": 0,   # P37
+    "enable_routes.py": 0,                # P5（err.enable.* 走 tr(); 台账防回潮）
     "drafts_routes.py": 0,                # P38（shared err.perm/svc/req 词表 + err.draft.*）
     "auth_user_routes.py": 0,             # P39（复用 token_error/su_js_003/base.shell.pwd_min_len + err.auth.*）
     "settings_routes.py": 0,              # P39（f-string 参数化收敛 err.set.*）

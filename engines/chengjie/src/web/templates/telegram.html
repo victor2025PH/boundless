@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% block title %}Telegram {{ (i18n or {}).get('ln_s015', "设置") }}{% endblock %}
+{% block title %}{{ (i18n or {}).get('telegram_settings', 'Telegram 自动化') }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('telegram_settings', 'Telegram 自动化') }}{% endblock %}
 {% block content %}
 {# ══════════════════════════════════════════════════════════════════ #}
 {# 统一 RPA 组件库（4 平台共用）—— Telegram 是视觉基线                  #}
@@ -222,11 +223,12 @@ select.f-inp{cursor:pointer}
     <div class="tg-stat"><span class="tg-stat-n" id="st-msg">—</span><span class="tg-stat-l">{{ (i18n or {}).get('tg_s002', "今日消息") }}</span></div>
     <div class="tg-stat"><span class="tg-stat-n" id="st-vin">—</span><span class="tg-stat-l">{{ (i18n or {}).get('tg_s003', "语音接收") }}</span></div>
     <div class="tg-stat"><span class="tg-stat-n" id="st-tts">—</span><span class="tg-stat-l">TTS {{ (i18n or {}).get('rpa_js_send', "发送") }}</span></div>
+    <div class="tg-stat"><span class="tg-stat-n" id="st-gate">—</span><span class="tg-stat-l">{{ (i18n or {}).get('tg_gate_blocked', "今日拦截") }}</span></div>
   </div>
   <button class="tg-hero-refresh" onclick="loadAccountInfo()" title="{{ (i18n or {}).get('wa_s017', '刷新状态') }}">↻</button>
   <div class="preset-wrap">
     <button class="btn-sec" id="preset-toggle" onclick="togglePresets(event)" style="font-size:.78rem;padding:.38rem .7rem">
-      📋 {{ (i18n or {}).get('wa_s007', "预设") }}
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:.25rem"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>{{ (i18n or {}).get('wa_s007', "预设") }}
     </button>
     <div class="preset-pop" id="preset-pop">
       <div class="preset-lbl">{{ (i18n or {}).get('tg_s004', "应用场景预设（不保存，需手动点保存）") }}</div>
@@ -262,16 +264,16 @@ select.f-inp{cursor:pointer}
 <!-- ══ TABS ═══════════════════════════════════════════════════════════════ -->
 <div class="st-bar">
   <button class="st-tab active" id="tab-reply" onclick="switchTab('reply')">
-    💬 {{ (i18n or {}).get('tg_s013', "消息处理") }}<span class="tab-dot"></span>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:.25rem"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>{{ (i18n or {}).get('tg_s013', "消息处理") }}<span class="tab-dot"></span>
   </button>
   <button class="st-tab" id="tab-voice" onclick="switchTab('voice')">
-    🎙️ {{ (i18n or {}).get('wa_s098', "语音功能") }}<span class="tab-dot"></span>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:.25rem"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>{{ (i18n or {}).get('wa_s098', "语音功能") }}<span class="tab-dot"></span>
   </button>
   <button class="st-tab" id="tab-account" onclick="switchTab('account')">
-    👤 {{ (i18n or {}).get('ov_js_th_account', "账号") }}<span class="tab-dot"></span>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:.25rem"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>{{ (i18n or {}).get('ov_js_th_account', "账号") }}<span class="tab-dot"></span>
   </button>
   <button class="st-tab" id="tab-funnel" onclick="switchTab('funnel')">
-    📈 {{ (i18n or {}).get('rpa_fn_title', "运营漏斗") }}
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:.25rem"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>{{ (i18n or {}).get('rpa_fn_title', "运营漏斗") }}
   </button>
 </div>
 
@@ -722,6 +724,11 @@ select.f-inp{cursor:pointer}
       <div class="tg-stat" style="flex:1"><span class="tg-stat-n" id="acc-st-msg">—</span><span class="tg-stat-l">{{ (i18n or {}).get('tg_s124', "文字消息") }}</span></div>
       <div class="tg-stat" style="flex:1"><span class="tg-stat-n" id="acc-st-vin">—</span><span class="tg-stat-l">{{ (i18n or {}).get('tg_s125', "收到语音") }}</span></div>
       <div class="tg-stat" style="flex:1"><span class="tg-stat-n" id="acc-st-tts">—</span><span class="tg-stat-l">TTS {{ (i18n or {}).get('rpa_js_send', "发送") }}</span></div>
+      <div class="tg-stat" style="flex:1"><span class="tg-stat-n" id="acc-st-gate">—</span><span class="tg-stat-l">{{ (i18n or {}).get('tg_gate_blocked', "今日拦截") }}</span></div>
+    </div>
+    <div style="margin-top:.6rem">
+      <div style="font-size:.72rem;color:var(--t3);margin-bottom:.25rem">{{ (i18n or {}).get('tg_gate_trend', "近 7 日拦截") }}</div>
+      <div id="acc-gate-trend" style="display:flex;align-items:flex-end;gap:3px;height:34px"></div>
     </div>
   </div>
 
@@ -1303,6 +1310,10 @@ async function loadAccountInfo(){
     document.getElementById('st-msg').textContent=(d.stats?.messages??'—');
     document.getElementById('st-vin').textContent=(d.stats?.voice_in??'—');
     document.getElementById('st-tts').textContent=(d.stats?.tts_sent??'—');
+    const gateCd=(d.stats?.gate_cooldown||0), gateSk=(d.stats?.gate_streak||0);
+    const gateTitle=window.T('tg_gate_cooldown')+' '+gateCd+' · '+window.T('tg_gate_streak')+' '+gateSk;
+    const stGate=document.getElementById('st-gate');
+    if(stGate){ stGate.textContent=gateCd+gateSk; stGate.title=gateTitle; }
 
     // account tab
     document.getElementById('acc-display-name').textContent=d.display_name||d.username||'—';
@@ -1317,10 +1328,37 @@ async function loadAccountInfo(){
     document.getElementById('acc-st-msg').textContent=d.stats?.messages??0;
     document.getElementById('acc-st-vin').textContent=d.stats?.voice_in??0;
     document.getElementById('acc-st-tts').textContent=d.stats?.tts_sent??0;
+    const accGate=document.getElementById('acc-st-gate');
+    if(accGate){ accGate.textContent=gateCd+gateSk; accGate.title=gateTitle; }
 
     // config badges + table
     _renderAccountSummary();
+
+    // gate trend mini-chart (fire and forget, has own error handling)
+    loadGateTrend();
   } catch(e){ console.error('loadAccountInfo failed',e); }
+}
+
+async function loadGateTrend(){
+  const wrap=document.getElementById('acc-gate-trend');
+  if(!wrap) return;
+  try{
+    const d=await apiFetch('/api/telegram/gate-stats');
+    const rows=(d&&d.rows)||[];
+    if(!rows.length) return;
+    const max=Math.max(1,...rows.map(r=>(r.cooldown||0)+(r.streak||0)));
+    wrap.innerHTML='';
+    rows.forEach(r=>{
+      const cd=r.cooldown||0, sk=r.streak||0;
+      const bar=document.createElement('div');
+      bar.style.flex='1';
+      bar.style.borderRadius='2px 2px 0 0';
+      bar.style.background='var(--p)';
+      bar.style.height=Math.max(2,Math.round((cd+sk)/max*32))+'px';
+      bar.title=r.date+' · '+window.T('tg_gate_cooldown')+' '+cd+' · '+window.T('tg_gate_streak')+' '+sk;
+      wrap.appendChild(bar);
+    });
+  } catch(e){ console.error('loadGateTrend failed',e); }
 }
 
 function _renderAccountSummary(){

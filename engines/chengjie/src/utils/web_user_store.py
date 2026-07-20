@@ -30,9 +30,12 @@ UI_MODE_LABELS = {
     UI_MODE_FULL:   "完整模式",
 }
 
-SIMPLE_MODE_CORE_PAGES = {"cases", "knowledge", "ch", "learner"}
+SIMPLE_MODE_CORE_PAGES = {"cases", "care", "knowledge", "ch", "learner", "personas",
+                          "rpa_overview", "telegram", "line_rpa", "messenger_rpa",
+                          "whatsapp_rpa"}
 
-SIMPLE_MODE_MORE_PAGES = {"dash", "analytics", "audit", "episodic", "crisis_audit", "help", "line_rpa"}
+SIMPLE_MODE_MORE_PAGES = {"dash", "analytics", "audit", "episodic", "crisis_audit",
+                          "relations_health", "monetization", "help"}
 
 ROLE_DEFAULT_UI_MODE = {
     ROLE_MASTER: UI_MODE_SIMPLE,

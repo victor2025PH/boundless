@@ -398,6 +398,11 @@ def register_rpa_overview_routes(
     async def rpa_overview_page(request: Request, _=Depends(page_auth)):
         return templates.TemplateResponse(request, "rpa_overview.html", {})
 
+    @app.get("/funnel", response_class=HTMLResponse)
+    async def funnel_page(request: Request, _=Depends(page_auth)):
+        """跨平台运营漏斗独立页(复用 _rpa_shared_funnel 组件,scope=all)。"""
+        return templates.TemplateResponse(request, "funnel.html", {})
+
     @app.get("/api/rpa-overview/status")
     async def api_rpa_overview_status(request: Request):
         api_auth(request)

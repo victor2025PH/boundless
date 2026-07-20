@@ -64,6 +64,18 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
             _e, exc_info=True,
         )
 
+    # ── 人设使用计数账本（近7日活跃统计）───────────────────────────────────
+    # DB 与 config.yaml 同目录（persona_usage.db）；init 失败只 debug——
+    # 统计属旁路能力，绝不影响路由注册与回复链路（未 init 时模块内部会惰性回落默认路径）。
+    try:
+        _cp_usage = getattr(config_manager, "config_path", None) if config_manager else None
+        if _cp_usage:
+            from pathlib import Path as _UsagePath
+            from src.utils import persona_usage as _persona_usage
+            _persona_usage.init(_UsagePath(_cp_usage).parent / "persona_usage.db")
+    except Exception:
+        _plog.debug("persona_usage init 失败（忽略）", exc_info=True)
+
     @app.get("/api/persona")
     async def api_persona_get(request: Request, chat_id: str = "",
                                _=Depends(auth_dep)):
@@ -189,12 +201,22 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         else:
             ids = pm.list_profile_ids()
             profiles = {pid: pm.get_persona_by_id(pid) for pid in ids}
+        summary = pm.list_profiles_summary() if not tag else [
+            s for s in pm.list_profiles_summary() if s["id"] in set(ids)
+        ]
+        # 近7日使用量注入（usage_7d）：Studio 列表据此看出「哪些人设真的在产出回复」。
+        # 统计属旁路能力，异常一律吞掉——列表本体不能因它挂。
+        try:
+            from src.utils.persona_usage import counts as _usage_counts
+            _uc = _usage_counts(7)
+            for _s in summary:
+                _s["usage_7d"] = int(_uc.get(_s["id"], 0))
+        except Exception:
+            pass
         return {
             "profiles": profiles,
             "ids": ids,
-            "summary": pm.list_profiles_summary() if not tag else [
-                s for s in pm.list_profiles_summary() if s["id"] in set(ids)
-            ],
+            "summary": summary,
         }
 
     @app.get("/api/personas/profiles/{profile_id}")

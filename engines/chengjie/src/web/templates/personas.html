@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ (i18n or {}).get('psn_studio_title','人设工作室') }}{% endblock %}
 {% block content %}
+{% set active="personas" %}
 <style>
 .ps-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.2rem;align-items:start}
 @media(max-width:900px){.ps-grid{grid-template-columns:1fr}}
@@ -50,11 +51,12 @@
 .bulk-panel{background:rgba(91,124,246,.05);border:1px solid rgba(91,124,246,.15);border-radius:10px;padding:.85rem 1rem;margin-top:.9rem}
 .bulk-panel h4{font-size:.82rem;font-weight:700;color:var(--t2);margin:0 0 .55rem}
 .src-badge{display:inline-flex;align-items:center;gap:.2rem;padding:.1rem .4rem;border-radius:4px;font-size:.63rem;font-weight:700;letter-spacing:.03em}
+/* P0 改版：语义四色收敛 — 灰=出厂 / 蓝=已定制(studio+runtime) / 绿=已发布 / 琥珀=外部导入 */
 .src-mrpa{background:rgba(245,158,11,.12);color:#d97706;border:1px solid rgba(245,158,11,.3)}
 .src-config{background:rgba(100,116,139,.1);color:var(--t2);border:1px solid rgba(100,116,139,.2)}
-.src-canonical{background:rgba(59,130,246,.1);color:#3b82f6;border:1px solid rgba(59,130,246,.25)}
-.src-runtime{background:rgba(139,92,246,.1);color:#7c3aed;border:1px solid rgba(139,92,246,.2)}
-.src-studio{background:rgba(16,185,129,.1);color:var(--green);border:1px solid rgba(16,185,129,.2)}
+.src-canonical{background:rgba(16,185,129,.1);color:var(--green);border:1px solid rgba(16,185,129,.25)}
+.src-runtime{background:rgba(59,130,246,.1);color:#3b82f6;border:1px solid rgba(59,130,246,.25)}
+.src-studio{background:rgba(59,130,246,.1);color:#3b82f6;border:1px solid rgba(59,130,246,.25)}
 .diff-banner{display:none;border-radius:8px;padding:.45rem .75rem;margin-bottom:.55rem;font-size:.78rem}
 .diff-banner.has-diff{background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.25)}
 .diff-banner.no-diff{background:rgba(16,185,129,.07);border:1px solid rgba(16,185,129,.22);color:var(--green)}
@@ -95,15 +97,48 @@
 .acc-id{font-size:.67rem;color:var(--t2);font-family:monospace;margin-top:.03rem}
 .acc-bottom{display:flex;align-items:center;justify-content:space-between;gap:.38rem;flex-wrap:wrap}
 .acc-p-name{font-size:.75rem;font-weight:600}.acc-no-p{font-size:.75rem;color:var(--t2);font-style:italic}
-/* ── Profile card grid ───────────────────────────────────────────────────── */
-.profile-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:.82rem;margin-top:.5rem}
-.pcard{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:.95rem 1rem;cursor:pointer;transition:border-color .18s,box-shadow .18s;position:relative;overflow:hidden}
-.pcard:hover{border-color:rgba(91,124,246,.5);box-shadow:0 4px 14px rgba(0,0,0,.12)}
-.pcard-av{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1.05rem;font-weight:800;color:#fff;margin-bottom:.58rem}
-.pcard-name{font-weight:700;font-size:.84rem;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:.1rem}
-.pcard-role{font-size:.7rem;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:.48rem}
+/* ── Profile card grid（P0 改版：左图右文人物卡 + 头像就绪环）───────────────── */
+.profile-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(218px,1fr));gap:.82rem;margin-top:.5rem}
+.pcard{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:.85rem .95rem;cursor:pointer;transition:border-color .18s,box-shadow .18s,transform .18s;position:relative;overflow:hidden}
+.pcard:hover{border-color:rgba(91,124,246,.5);box-shadow:0 4px 14px rgba(0,0,0,.14);transform:translateY(-1px)}
+.pcard-top{display:flex;align-items:center;gap:.62rem;margin-bottom:.5rem;min-width:0}
+.pcard-av-wrap{position:relative;flex-shrink:0;width:48px;height:48px}
+.pcard-av{width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:1.15rem;font-weight:800;color:#fff;overflow:hidden}
+.pcard-av img{width:100%;height:100%;object-fit:cover;display:block}
+/* 头像右下角就绪环：SVG 圆环按资料完善度着色/填充，点击弹出就绪清单 */
+.pcard-ring{position:absolute;right:-4px;bottom:-4px;width:20px;height:20px;border-radius:50%;background:var(--card);display:flex;align-items:center;justify-content:center;box-shadow:0 1px 3px rgba(0,0,0,.25);cursor:pointer;z-index:4}
+.pcard-ring:hover{transform:scale(1.15)}
+.pcard-ring svg{display:block}
+.pcard-hd{flex:1;min-width:0}
+.pcard-name{font-weight:700;font-size:.86rem;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:.28rem}
+.pcard-role{font-size:.7rem;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:.12rem}
 .pcard-foot{display:flex;align-items:center;gap:.26rem;flex-wrap:wrap}
-.pcard-add{border:2px dashed var(--bd);background:transparent;border-radius:12px;padding:.95rem 1rem;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.36rem;color:var(--t2);min-height:128px;cursor:pointer;transition:all .18s;width:100%;font-size:.79rem;font-family:inherit}
+/* 重名警示角标 */
+.dup-badge{display:inline-flex;align-items:center;font-size:.6rem;font-weight:700;color:#d97706;background:rgba(245,158,11,.14);border:1px solid rgba(245,158,11,.35);border-radius:4px;padding:.04rem .3rem;flex-shrink:0}
+/* 服务状态胶囊：绿=服务中 N，灰=未启用 */
+.live-pill{display:inline-flex;align-items:center;gap:.18rem;font-size:.62rem;font-weight:700;border-radius:10px;padding:.08rem .42rem}
+.live-pill.on{background:rgba(16,185,129,.12);color:var(--green);border:1px solid rgba(16,185,129,.3)}
+.live-pill.off{background:rgba(100,116,139,.08);color:var(--t2);border:1px solid rgba(100,116,139,.18)}
+/* P2 近7日活跃火苗 */
+.usage-pill{display:inline-flex;align-items:center;gap:.14rem;font-size:.62rem;font-weight:700;border-radius:10px;padding:.08rem .4rem;background:rgba(245,158,11,.12);color:#d97706;border:1px solid rgba(245,158,11,.3)}
+/* 卡片试听按钮（有声音配置时可点） */
+.voice-play{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;border:1px solid var(--bd);background:var(--bg2);cursor:pointer;font-size:.62rem;color:var(--t2);transition:all .15s;padding:0;line-height:1}
+.voice-play:hover{border-color:var(--p);color:var(--p);background:rgba(91,124,246,.08)}
+.voice-play.playing{border-color:var(--green);color:var(--green);background:rgba(16,185,129,.1)}
+.voice-play.loading{opacity:.55;pointer-events:none}
+/* 就绪清单弹层 */
+.ready-pop{position:fixed;z-index:1200;background:var(--card);border:1px solid var(--bd);border-radius:11px;box-shadow:0 10px 34px rgba(0,0,0,.3);padding:.7rem .85rem;min-width:230px;max-width:280px}
+.ready-pop-hd{font-size:.74rem;font-weight:700;color:var(--t1);display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.42rem}
+.ready-pop-pct{font-size:.7rem;font-weight:800}
+.ready-item{display:flex;align-items:center;gap:.42rem;font-size:.76rem;padding:.17rem 0;color:var(--t1)}
+.ready-item .ri-ic{width:15px;height:15px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:.6rem;font-weight:800;flex-shrink:0}
+.ready-item.done .ri-ic{background:rgba(16,185,129,.15);color:var(--green)}
+.ready-item.miss .ri-ic{background:rgba(239,68,68,.12);color:#ef4444}
+.ready-item.miss{color:var(--t2)}
+.ready-item .ri-fix{margin-left:auto;font-size:.66rem;color:var(--p);cursor:pointer;border:1px solid rgba(91,124,246,.35);border-radius:5px;padding:.05rem .34rem;background:rgba(91,124,246,.06);flex-shrink:0}
+.ready-item .ri-fix:hover{background:rgba(91,124,246,.14)}
+.ready-all-done{font-size:.74rem;color:var(--green);padding:.2rem 0}
+.pcard-add{border:2px dashed var(--bd);background:transparent;border-radius:12px;padding:.85rem 1rem;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.36rem;color:var(--t2);min-height:96px;cursor:pointer;transition:all .18s;width:100%;font-size:.79rem;font-family:inherit}
 .pcard-add:hover{border-color:var(--p);color:var(--p);background:rgba(91,124,246,.04)}
 .pcard-menu{display:none;position:absolute;top:.42rem;right:.42rem;gap:.2rem;z-index:5}
 .pcard:hover .pcard-menu{display:flex}
@@ -135,7 +170,7 @@
 .pp-search:focus{outline:none;border-color:var(--p)}
 .pp-count{font-size:.75rem;color:var(--t2);white-space:nowrap;background:var(--bg2);border:1px solid var(--bd);border-radius:12px;padding:.12rem .5rem}
 /* ── Skeleton cards ─────────────────────────────────────────────────────── */
-.pcard-skel{background:var(--bg2);border-radius:14px;height:165px;border:1px solid var(--bd);animation:skel-pulse 1.6s ease-in-out infinite}
+.pcard-skel{background:var(--bg2);border-radius:14px;height:104px;border:1px solid var(--bd);animation:skel-pulse 1.6s ease-in-out infinite}
 @keyframes skel-pulse{0%,100%{opacity:.45}50%{opacity:.9}}
 /* ── Export/import summary ──────────────────────────────────────────────── */
 .export-summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:.5rem;font-size:.88rem;font-weight:700;user-select:none;padding:.1rem 0}
@@ -218,9 +253,7 @@
 .pcard.dragging{opacity:.35;pointer-events:none}
 .pcard.drag-over-top{box-shadow:0 -2px 0 0 var(--accent)}
 .pcard.drag-over-bottom{box-shadow:0 2px 0 0 var(--accent)}
-/* ── P12-3 Profile completeness bar ─────────────────────────────────────── */
-.pcard-progress{height:3px;background:rgba(128,128,128,.1);overflow:hidden;border-radius:0 0 10px 10px;margin-top:.5rem;flex-shrink:0}
-.pcard-progress-fill{height:100%;transition:width .5s ease}
+/* ── P12-3 完善度进度条已被头像就绪环替代（见 .pcard-ring）────────────────── */
 /* ── P12-4 Keyboard focused card ──────────────────────────────────────────── */
 .pcard-focused{outline:2px solid var(--accent);outline-offset:1px}
 /* ── P12-2 Batch switch toolbar ───────────────────────────────────────────── */
@@ -483,7 +516,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
   </div>
   <div class="topbar-r">
     <span id="save-status" class="tts-status" style="margin-right:.45rem"></span>
-    <button class="btn btn-sm btn-primary" onclick="openNewProfile()">＋ {{ (i18n or {}).get('psn_new_profile','新建人设') }}</button>
+    <button class="btn btn-sm btn-primary" onclick="openCreateFlow()">＋ {{ (i18n or {}).get('psn_new_profile','新建人设') }}</button>
       <button class="btn btn-sm" id="kbd-help-btn" onclick="_toggleKbdHelp()" title="{{ (i18n or {}).get('psn_kbd_help_t','快捷键速查') }}" style="font-size:.8rem;font-weight:700;width:1.75rem;padding:0;text-align:center">?</button>
   </div>
 </div>
@@ -531,6 +564,9 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
   <!-- ── P13-2 Persona health overview ── -->
   <div id="persona-health-grid" class="health-grid" style="display:none"></div>
 
+  <!-- ── P2 人设体检台账(persona_health_panel.js 渲染) ── -->
+  <div id="persona-health-panel"></div>
+
   <!-- ── P10-2 Binding usage rank chart ── -->
   <div id="usage-chart" class="usage-chart" style="display:none">
     <div class="usage-chart-hd">
@@ -552,7 +588,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       </span>
       {{ (i18n or {}).get('psn_refresh','刷新') }}<span id="dash-freshness" class="fresh-badge" title="{{ (i18n or {}).get('psn_last_refresh_t','上次刷新时间') }}"></span>
     </button>
-    <button class="btn btn-sm btn-primary" onclick="switchTab('profiles');setTimeout(openNewProfile,120)" title="{{ (i18n or {}).get('psn_new_profile','新建人设') }}">
+    <button class="btn btn-sm btn-primary" onclick="switchTab('profiles');setTimeout(openCreateFlow,120)" title="{{ (i18n or {}).get('psn_new_profile','新建人设') }}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       {{ (i18n or {}).get('psn_new_profile','新建人设') }}
     </button>
@@ -570,7 +606,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
           <div class="ob-step-num">1</div>
           <div class="ob-step-title">{{ (i18n or {}).get('psn_ob_s1_title','创建第一个人设') }}</div>
           <div class="ob-step-desc">{{ (i18n or {}).get('psn_ob_s1_desc','定义 AI 的名字、角色定位和性格风格，让每个对话都有独特个性。') }}</div>
-          <button class="btn btn-sm ob-step-btn btn-primary" onclick="switchTab('profiles');setTimeout(openNewProfile,120)">＋ {{ (i18n or {}).get('psn_new_profile','新建人设') }}</button>
+          <button class="btn btn-sm ob-step-btn btn-primary" onclick="switchTab('profiles');setTimeout(openCreateFlow,120)">＋ {{ (i18n or {}).get('psn_new_profile','新建人设') }}</button>
         </div>
         <div class="ob-step">
           <div class="ob-step-num">2</div>
@@ -625,7 +661,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
         {{ (i18n or {}).get('psn_export','导出') }}
       </button>
       <button class="btn btn-sm" id="bulk-toggle-btn" onclick="_toggleBulkMode()" title="{{ (i18n or {}).get('psn_multiselect_t','批量选择人设进行操作') }}">☐ {{ (i18n or {}).get('psn_multiselect','多选') }}</button>
-      <button class="btn btn-sm btn-primary" onclick="openNewProfile()">
+      <button class="btn btn-sm btn-primary" onclick="openCreateFlow()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         {{ (i18n or {}).get('psn_new_profile','新建人设') }}
       </button>
@@ -1105,6 +1141,8 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
     <div class="drawer-dirty" id="drawer-dirty">● {{ (i18n or {}).get('psn_unsaved_changes','有未保存的修改') }}</div>
     <button class="btn btn-sm btn-danger" id="pe-delete-btn" onclick="deleteCurrentProfile()" style="display:none">{{ (i18n or {}).get('psn_delete','删除') }}</button>
     <button class="btn btn-sm" id="pe-undo-btn" onclick="undoProfile()" style="display:none" title="{{ (i18n or {}).get('psn_undo_t','恢复上一版本') }}">{{ (i18n or {}).get('psn_undo','撤销') }}</button>
+    <button class="btn btn-sm" id="pe-chattest-btn" style="display:none" onclick="if(_editingProfileId&&window.PSChatTest)PSChatTest.open(_editingProfileId)" title="{{ (i18n or {}).get('psn_ct_sub','对话仅用于预览人设效果，不影响生产数据') }}">💬 {{ (i18n or {}).get('psn_ct_title','试聊') }}</button>
+    <button class="btn btn-sm" id="pe-apply-btn" style="display:none" onclick="if(_editingProfileId&&window.PSApply)PSApply.open(_editingProfileId)">🔗 {{ (i18n or {}).get('psn_apply_title','应用到…') }}</button>
     <button class="btn btn-sm" onclick="closeProfileEditor()">{{ (i18n or {}).get('psn_cancel','取消') }}</button>
     <button class="btn btn-primary btn-sm" id="pe-save-btn" onclick="saveProfile()">{{ (i18n or {}).get('psn_save','保存') }}<span class="kbd-hint" title="Ctrl+S">^S</span></button>
   </div>
@@ -1283,14 +1321,25 @@ function _profileColor(id) {
 }
 function _profileInitial(name) { return (name || '?')[0].toUpperCase(); }
 
-// ── Source badge map ──────────────────────────────────────────────────────────
+// ── Source badge map（P0 改版：人话化文案 + 悬停解释，技术分层收进 tooltip）────
 const _SRC = {
-  mrpa:      ['src-mrpa',      window.T('psn_js_003')],
-  config:    ['src-config',    window.T('psn_js_004')],
-  canonical: ['src-canonical', window.T('psn_js_005')],
-  runtime:   ['src-runtime',   window.T('psn_js_006')],
-  studio:    ['src-studio',    window.T('psn_js_007')],
+  mrpa:      ['src-mrpa',      window.T('psn_src_imported'),
+              window.T('psn_src_imported_t')],
+  config:    ['src-config',    window.T('psn_src_factory'),
+              window.T('psn_src_factory_t')],
+  canonical: ['src-canonical', window.T('psn_src_published'),
+              window.T('psn_src_published_t')],
+  runtime:   ['src-runtime',   window.T('psn_src_customized'),
+              window.T('psn_src_customized_t')],
+  studio:    ['src-studio',    window.T('psn_src_customized'),
+              window.T('psn_src_customized_t')],
 };
+// 简易插值：_fmt('有 {n} 个', {n:2}) → '有 2 个'（新键可能未随后端重启加载，用本地兜底文案）
+function _fmt(s, vars) {
+  s = String(s == null ? '' : s);
+  if (vars) for (var k in vars) if (Object.prototype.hasOwnProperty.call(vars, k)) s = s.split('{' + k + '}').join(String(vars[k]));
+  return s;
+}
 
 // ── Toast system ──────────────────────────────────────────────────────────────
 function _toast(msg, type, dur) {
@@ -1345,14 +1394,20 @@ function _renderDashboard(d) {
   });
 
   _checkOnboarding(pf.count || 0);
+  // P0 改版：未同步草稿是内部分层概念，只对 master 展示（横幅 + 概览格）
   const unsyncEl = document.getElementById('unsync-banner');
   const utextEl  = document.getElementById('unsync-text');
   const u = pf.unsynced || 0;
   const lastSync = d.last_sync_at ? window.wsFmtDateTime(d.last_sync_at) : window.T('psn_js_009');
-  if (u > 0 && unsyncEl) {
+  if (u > 0 && unsyncEl && __USER_ROLE === 'master') {
     unsyncEl.classList.add('show');
     if (utextEl) utextEl.textContent = u + window.T('psn_js_010') + lastSync + '）';
   } else if (unsyncEl) { unsyncEl.classList.remove('show'); }
+  if (__USER_ROLE !== 'master') {
+    var _uhs = document.getElementById('hs-unsynced');
+    var _uhsCard = _uhs && _uhs.closest('.hero-stat');
+    if (_uhsCard) _uhsCard.style.display = 'none';
+  }
 
   // P20-1: Build platform binding index
   _platBindMap = {TG: new Set(), FB: new Set(), WA: new Set(), LINE: new Set()};
@@ -1549,6 +1604,7 @@ async function _cloneProfile(pid) {
     document.getElementById('pe-vp-voice').value = vp.voice || '';
     document.getElementById('pe-delete-btn').style.display = 'none';
     document.getElementById('pe-undo-btn').style.display = 'none';
+    _toggleP1DrawerBtns(false);
     document.getElementById('pe-status').textContent = '';
     _openDrawer(window.T('psn_js_042'));
     _markDrawerDirty({target: document.getElementById('pe-name')});
@@ -2321,6 +2377,16 @@ let _allProfiles = [];
 let _currentQ = '';
 let _activeTag = '';
 let _lastStatusTs = 0;
+// P0 改版：pid → {url, mtime} 锁脸头像索引（一次批量拉取；接口缺失时保持空=优雅回落首字母）
+var _faceRefs = {};
+// P0 改版：会话角色（master 才看到"未同步草稿"等内部指标）
+var __USER_ROLE = {{ (user_role or '')|tojson }};
+// P1：抽屉"试聊/应用到…"按钮随编辑态显隐（与删除按钮同步）
+function _toggleP1DrawerBtns(show) {
+  var d = show ? 'inline-flex' : 'none';
+  var a = document.getElementById('pe-apply-btn'); if (a) a.style.display = d;
+  var c = document.getElementById('pe-chattest-btn'); if (c) c.style.display = d;
+}
 
 // ── Search highlight helper ───────────────────────────────────────────────────
 function _hl(text, q) {
@@ -2336,176 +2402,21 @@ function _applyViewerMode(vm) {
 }
 
 // ── Tag cloud renderer ────────────────────────────────────────────────────────
-function renderTagCloud(profiles) {
-  const cloud = document.getElementById('tag-cloud');
-  if (!cloud) return;
-  const tmap = {};
-  profiles.forEach(function(p) { (p.tags || []).forEach(function(t) { tmap[t] = (tmap[t] || 0) + 1; }); });
-  cloud.innerHTML = Object.entries(tmap).sort(function(a,b){ return b[1]-a[1]; }).map(function(e) {
-    var t = e[0], c = e[1];
-    var tSafe = t.replace(/'/g, "\\'");
-    return '<span class="tc-chip' + (_activeTag === t ? ' active' : '') + '" data-tag="' + t + '" onclick="_clickTagText(\'' + tSafe + '\')">' + t + ' <span style="opacity:.65">' + c + '</span></span>';
-  }).join('');
-}
-
-function _clickTagText(tag) {
-  var inp = document.getElementById('profile-search');
-  _activeTag = (_activeTag === tag) ? '' : tag;
-  if (inp) inp.value = '';
-  _applyFilter();
-}
-
-// ── Profile list renderer ─────────────────────────────────────────────────────
-function renderProfileList(profiles) {
-  var list = document.getElementById('profile-list');
-  if (!list) return;
-  var cnt = document.getElementById('profile-count');
-  if (cnt) cnt.textContent = profiles.length + window.T('psn_js_102');
-  var _tpc = document.getElementById('tb-profiles-cnt');
-  if (_tpc) _tpc.textContent = _allProfiles.length || '';
-  var hs = document.getElementById('hs-profiles');
-  if (hs) hs.textContent = _allProfiles.length;
-  var _q = _currentQ;
-  list.innerHTML = profiles.map(function(p) {
-    var color = _profileColor(p.id);
-    var initial = _profileInitial(p.name);
-    var srcInfo = _SRC[p.source] || ['src-config', p.source || '?'];
-    var srcBadge = '<span class="src-badge ' + srcInfo[0] + '">' + srcInfo[1] + '</span>';
-    var bindBadge = p.binding_count > 0
-      ? '<span class="tag tag-green" style="font-size:.62rem" title="' + p.binding_count + window.T('psn_js_103') + p.binding_count + '</span>' : '';
-    var voiceBadge = p.has_voice ? '<span class="tag" style="font-size:.61rem">🔊</span>' : '';
-    var promoteBtn = p.is_mrpa_source
-      ? '<button class="btn btn-sm" data-pid="' + p.id + window.T('psn_js_104') : '';
-    var dName = _q ? _hl(p.name || p.id, _q) : (p.name || p.id);
-    var dRole = _q ? _hl(p.role || '', _q) : (p.role || '');
-    var pidSafe = p.id.replace(/'/g, "\\'");
-    var tagHtml = '';
-    if (_q && p.tags && p.tags.length) {
-      var matchedTags = p.tags.filter(function(t){ return t.toLowerCase().includes(_q); });
-      if (matchedTags.length) {
-        tagHtml = matchedTags.map(function(t){ return '<span class="tag" style="font-size:.61rem">' + _hl(t, _q) + '</span>'; }).join('');
-      }
-    }
-    var tipText = '';
-    if (p.personality) {
-      var rawP = typeof p.personality === 'object' ? (p.personality.style || JSON.stringify(p.personality)) : String(p.personality);
-      tipText = rawP.replace(/['"{}]/g,'').trim().slice(0, 80) + (rawP.length > 80 ? '…' : '');
-    }
-    var tipAttr = tipText ? ' data-tip="' + tipText.replace(/"/g,'&quot;').replace(/\n/g,' ') + '"' : '';
-    var compScore = _profileCompleteness(p);
-    var progBar = window.T('psn_js_105') + compScore + '%"><div class="pcard-progress-fill" style="width:' + compScore + '%;background:' + _completenessColor(compScore) + '"></div></div>';
-    return '<div class="pcard' + (_q ? ' search-match' : '') + (_selectedProfiles && _selectedProfiles.has(p.id) ? ' selected' : '') + '"' + tipAttr
-      + ' draggable="true" data-pid="' + pidSafe + '"'
-      + ' ondragstart="_onCardDragStart(event,\'' + pidSafe + '\')"'
-      + ' ondragover="_onCardDragOver(event)" ondragleave="_onCardDragLeave(event)"'
-      + ' ondrop="_onCardDrop(event,\'' + pidSafe + '\')"'
-      + ' oncontextmenu="_onPcardCtx(event,\'' + pidSafe + '\')" onmousedown="if(!_bulkMode)_setFocusCard(\'' + pidSafe + '\')"'
-      + ' onmouseenter="_bulkMode ? undefined : _showPCardTip(event,this)"'
-      + ' onmouseleave="_hidePCardTip()"'
-      + ' onclick="_bulkMode ? _toggleCardSelect(\'' + pidSafe + '\', this) : editProfile(\'' + pidSafe + '\')">'
-      + '<div class="pcard-check" onclick="event.stopPropagation();_toggleCardSelect(\'' + pidSafe + '\', this.closest(\'.pcard\'))"></div>'
-      + '<div class="pcard-menu">'
-      + '<button onclick="event.stopPropagation();editProfile(\'' + pidSafe + '\')">' + window.T('psn_js_355') + '</button>'
-      + '<button class="btn-copy" onclick="event.stopPropagation();_copyProfileId(\'' + pidSafe + '\')" title="' + window.T('psn_js_356') + '">ID</button>'
-      + '<button class="btn-clone" onclick="event.stopPropagation();_cloneProfile(\'' + pidSafe + '\')" title="' + window.T('psn_js_357') + '">' + window.T('psn_js_358') + '</button>'
-      + promoteBtn + '</div>'
-      + '<div class="pcard-av" style="background:' + color + '">' + initial + '</div>'
-      + '<div class="pcard-name">' + dName + '</div>'
-      + '<div class="pcard-role">' + (dRole || '&nbsp;') + '</div>'
-      + '<div class="pcard-foot">' + srcBadge + bindBadge + voiceBadge + tagHtml
-      + '<button class="pcard-tag-btn" onclick="event.stopPropagation();_openInlineTagEdit(\'' + pidSafe + '\',this)" title="\u5feb\u901f\u7f16\u8f91\u6807\u7b7e">\u270e</button></div>'
-      + progBar
-      + '</div>';
-  }).join('') + '<button class="pcard-add" onclick="openNewProfile()">'
-    + window.T('psn_js_106');
-}
-
-// ── Search & filter ───────────────────────────────────────────────────────────
-function _onSearchInput() {
-  _activeTag = '';
-  _healthTierFilter = null;
-  _renderHealthOverview();
-  _applyFilter();
-}
-
-function _applyFilter() {
-  var q = (document.getElementById('profile-search') || {}).value || '';
-  q = q.toLowerCase().trim();
-  _currentQ = q;
-  var cloud = document.getElementById('tag-cloud');
-  if (cloud) cloud.querySelectorAll('.tc-chip').forEach(function(c) {
-    c.classList.toggle('active', c.dataset.tag === _activeTag);
-  });
-  var filtered = _allProfiles.slice();
-  if (q) {
-    filtered = filtered.filter(function(p) {
-      return (p.name || '').toLowerCase().includes(q) ||
-             (p.role || '').toLowerCase().includes(q) ||
-             (p.id || '').toLowerCase().includes(q) ||
-             (p.tags || []).some(function(t){ return t.toLowerCase().includes(q); });
-    });
-  }
-  if (_activeTag) filtered = filtered.filter(function(p){ return (p.tags || []).includes(_activeTag); });
-  if (_healthTierFilter !== null) {
-    var _tBounds = [[0,49],[50,74],[75,89],[90,100]][_healthTierFilter];
-    filtered = filtered.filter(function(p){ var s=_profileCompleteness(p); return s>=_tBounds[0]&&s<=_tBounds[1]; });
-  }
-  // P19-4: source/platform filter
-  if (_sfFilter) {
-    if (_sfFilter === 'bound')   filtered = filtered.filter(function(p){ return (p.binding_count||0) > 0; });
-    else if (_sfFilter === 'unbound') filtered = filtered.filter(function(p){ return (p.binding_count||0) === 0; });
-    else if (_sfFilter === 'TG')    filtered = filtered.filter(function(p){ return _platBindMap.TG.has(p.id); });
-    else if (_sfFilter === 'FB')    filtered = filtered.filter(function(p){ return _platBindMap.FB.has(p.id); });
-    else if (_sfFilter === 'WA')    filtered = filtered.filter(function(p){ return _platBindMap.WA.has(p.id); });
-    else if (_sfFilter === 'LINE')  filtered = filtered.filter(function(p){ return _platBindMap.LINE.has(p.id); });
-    else if (_sfFilter === 'studio') filtered = filtered.filter(function(p){ return p.source === 'studio'; });
-    else if (_sfFilter === 'voice')  filtered = filtered.filter(function(p){ return !!p.has_voice; });
-  }
-  var sortEl = document.getElementById('profile-sort');
-  var sort = sortEl ? sortEl.value : 'default';
-  var _srcOrd = {canonical:0, studio:1, config:2, runtime:3, mrpa:4};
-  if (sort === 'name') filtered.sort(function(a,b){ return (a.name||a.id).localeCompare(b.name||b.id); });
-  else if (sort === 'bindings') filtered.sort(function(a,b){ return (b.binding_count||0)-(a.binding_count||0); });
-  else if (sort === 'source') filtered.sort(function(a,b){ return ((_srcOrd[a.source]??5)-(_srcOrd[b.source]??5)); });
-  else if ((sort === 'default' || sort === 'custom') && _customOrder.length) {
-    // Sync order: remove stale, append new
-    var knownSet = new Set(filtered.map(function(p){ return p.id; }));
-    _customOrder = _customOrder.filter(function(id){ return knownSet.has(id); });
-    filtered.forEach(function(p){ if (_customOrder.indexOf(p.id) === -1) _customOrder.push(p.id); });
-    var _ordMap = {};
-    _customOrder.forEach(function(id, i){ _ordMap[id] = i; });
-    filtered.sort(function(a,b){ return (_ordMap[a.id]??99999) - (_ordMap[b.id]??99999); });
-  }
-  // Show/hide custom sort option
-  var _custOpt = document.getElementById('sort-custom-opt');
-  if (_custOpt) _custOpt.style.display = _customOrder.length ? '' : 'none';
-  var _resetBtn = document.getElementById('sort-reset-btn');
-  if (_resetBtn) _resetBtn.style.display = _customOrder.length ? '' : 'none';
-  // P14-1: Health tier filter badge
-  var _hfBadge = document.getElementById('health-filter-badge');
-  if (_hfBadge) {
-    if (_healthTierFilter !== null) {
-      var _hfMeta = [{c:'#ef4444',l:window.T('psn_js_107')},{c:'#f59e0b',l:window.T('psn_js_108')},{c:'#84cc16',l:window.T('psn_js_109')},{c:'#10b981',l:window.T('psn_js_110')}][_healthTierFilter];
-      _hfBadge.style.cssText = 'display:inline-flex;align-items:center;gap:.22rem;font-size:.7rem;padding:.14rem .42rem;border-radius:20px;background:'+_hfMeta.c+'1a;color:'+_hfMeta.c+';border:1px solid '+_hfMeta.c+'55;cursor:pointer;font-weight:600';
-      _hfBadge.innerHTML = '&#9679;&nbsp;' + _hfMeta.l + '&nbsp;<b style="font-size:.85em">&#xD7;</b>';
-      _hfBadge.onclick = function(){ _healthTierFilter=null; _renderHealthOverview(); _applyFilter(); };
-    } else { _hfBadge.style.display='none'; }
-  }
-  _filteredProfiles = filtered.slice();
-  renderProfileList(filtered);
-}
-
-function _clearSearch() {
-  var inp = document.getElementById('profile-search');
-  if (inp) inp.value = '';
-  _activeTag = '';
-  _applyFilter();
-}
+// ── 标签云/卡片渲染器/搜索筛选排序 —— 已迁至 /static/js/persona_studio_core.js
+//    (第五批瘦身:renderTagCloud/_clickTagText/renderProfileList/_onSearchInput/_applyFilter/_clearSearch)
 
 // ── Load profile list ─────────────────────────────────────────────────────────
 async function loadProfileList() {
   try {
-    const r = await fetch('/api/personas/profiles');
+    // P0 改版：头像索引与列表并行拉取（单请求批量，无 N+1；接口不存在时静默回落）
+    const [r, fr] = await Promise.all([
+      fetch('/api/personas/profiles'),
+      fetch('/api/personas/face-refs').catch(function(){ return null; }),
+    ]);
+    _faceRefs = {};
+    if (fr && fr.ok) {
+      try { const fd = await fr.json(); _faceRefs = (fd && fd.refs) || {}; } catch(e) {}
+    }
     if (!r.ok) {
       var list = document.getElementById('profile-list');
       if (list) list.innerHTML = window.T('psn_js_111') + r.status + window.T('psn_js_112');
@@ -2522,6 +2433,7 @@ async function loadProfileList() {
     _processHashProfile();
     _renderUsageChart();
     _renderHealthOverview();
+    if (window.PSHealth && PSHealth.render) PSHealth.render('persona-health-panel');
   } catch(e) {
     var list = document.getElementById('profile-list');
     if (list) list.innerHTML = window.T('psn_js_113') + e + window.T('psn_js_114');
@@ -2663,6 +2575,7 @@ function openNewProfile() {
   _loadedProfile = null;
   document.getElementById('pe-delete-btn').style.display = 'none';
   document.getElementById('pe-undo-btn').style.display = 'none';
+  _toggleP1DrawerBtns(false);
   _drawerHistory = []; _drawerHistNaving = false;
   var _bkBtnN = document.getElementById('drawer-back-btn'); if (_bkBtnN) _bkBtnN.style.display = 'none';
   var _tplRow = document.getElementById('pe-template-row'); if (_tplRow) _tplRow.style.display = '';
@@ -2698,6 +2611,7 @@ async function editProfile(pid) {
     var _tplRowE = document.getElementById('pe-template-row'); if (_tplRowE) _tplRowE.style.display = 'none';
     document.getElementById('pe-delete-btn').style.display = 'inline-flex';
     document.getElementById('pe-undo-btn').style.display = 'none';
+    _toggleP1DrawerBtns(true);
     document.getElementById('pe-status').textContent = '';
     _resetEditorExtras();
     _openDrawer(p.name || pid);
@@ -2790,6 +2704,7 @@ async function saveProfile() {
       var idEl = document.getElementById('pe-id');
       if (idEl) idEl.readOnly = true;
       document.getElementById('pe-delete-btn').style.display = 'inline-flex';
+      _toggleP1DrawerBtns(true);
       document.getElementById('drawer-title').textContent = payload.persona.name || pid;
       loadProfileList();
       _checkUndoAvailable(pid);
@@ -2804,20 +2719,60 @@ async function saveProfile() {
   }
 }
 
-// ── Delete & undo ─────────────────────────────────────────────────────────────
+// ── Delete & undo（P0 改版：删除后 8 秒可一键撤销，走 /revert 恢复删除前快照）──
 async function deleteCurrentProfile() {
   var pid = _editingProfileId;
   if (!pid) return;
   if (!confirm(window.T('psn_js_142') + pid + window.T('psn_js_143'))) return;
+  var prof = _allProfiles.find(function(x){ return x.id === pid; });
+  var name = (prof && prof.name) || pid;
   try {
     const r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid), { method: 'DELETE' });
     const d = await r.json();
     if (d.ok) {
-      _toast(window.T('psn_js_144') + pid, 'ok');
       if (_closeDrawer()) _editingProfileId = null;
       loadProfileList(); refreshStatus();
+      _toastDeletedUndo(pid, name);
     } else { _toast(window.T('psn_js_145') + (d.detail || ''), 'err'); }
   } catch(e) { _toast(window.T('psn_js_031') + e, 'err'); }
+}
+
+// 删除成功后的撤销 toast：8 秒窗口，点撤销 = POST /revert 恢复删除前快照
+function _toastDeletedUndo(pid, name) {
+  const wrap = document.getElementById('toast-wrap');
+  if (!wrap) return;
+  const el = document.createElement('div');
+  el.className = 'toast ok';
+  const span = document.createElement('span');
+  span.textContent = _fmt(window.T('psn_deleted_undo'), {name: name});
+  const btn = document.createElement('button');
+  btn.className = 'btn btn-sm';
+  btn.style.cssText = 'margin-left:.5rem;font-size:.72rem;padding:.1rem .5rem;border-color:rgba(16,185,129,.45);color:var(--green)';
+  btn.textContent = window.T('psn_undo_action');
+  btn.onclick = async function() {
+    btn.disabled = true;
+    try {
+      const r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/revert', { method: 'POST' });
+      const d = await r.json().catch(function(){ return {}; });
+      if (r.ok && d.ok !== false) {
+        _toast(_fmt(window.T('psn_undo_restored'), {name: name}), 'ok');
+        loadProfileList(); refreshStatus();
+      } else {
+        _toast(_fmt(window.T('psn_undo_failed'), {err: d.detail || r.status}), 'err');
+      }
+    } catch(e) {
+      _toast(_fmt(window.T('psn_undo_failed'), {err: e}), 'err');
+    }
+    el.remove();
+  };
+  el.innerHTML = '<span style="font-size:.88rem">🗑</span>';
+  el.appendChild(span);
+  el.appendChild(btn);
+  wrap.appendChild(el);
+  setTimeout(function() {
+    el.style.opacity = '0'; el.style.transform = 'translateY(10px)'; el.style.transition = 'all .2s ease';
+    setTimeout(function() { el.remove(); }, 220);
+  }, 8000);
 }
 
 async function undoProfile() {
@@ -2825,20 +2780,22 @@ async function undoProfile() {
   if (!pid) return;
   if (!confirm(window.T('psn_js_146'))) return;
   try {
-    const r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/undo', { method: 'POST' });
+    // 修复：原先调用不存在的 /undo（404 死按钮），改走真实的 /revert 端点
+    const r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/revert', { method: 'POST' });
     const d = await r.json();
-    if (d.ok) { _toast(window.T('psn_js_147'), 'ok'); editProfile(pid); }
+    if (d.ok) { _toast(window.T('psn_js_147'), 'ok'); editProfile(pid); loadProfileList(); }
     else { _toast(window.T('psn_js_148') + (d.detail || ''), 'err'); }
   } catch(e) { _toast(window.T('psn_js_031') + e, 'err'); }
 }
 
 async function _checkUndoAvailable(pid) {
   try {
-    const r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/undo-available');
+    // 修复：原先调用不存在的 /undo-available，改用 /history 的条数判断
+    const r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/history');
     if (!r.ok) return;
     const d = await r.json();
     var btn = document.getElementById('pe-undo-btn');
-    if (btn) btn.style.display = d.available ? 'inline-flex' : 'none';
+    if (btn) btn.style.display = (d.count > 0) ? 'inline-flex' : 'none';
   } catch(e) {}
 }
 
@@ -2847,19 +2804,34 @@ async function _loadCanonicalBanner(pid) {
   if (!banner) return;
   banner.style.display = 'none'; banner.className = 'diff-banner'; banner.innerHTML = '';
   try {
-    const r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/diff');
+    // 修复：原先调用不存在的 /diff（每次开抽屉都 404 的死横幅），
+    // 改走真实的 /diff-canonical 并适配其返回结构 {has_canonical, is_identical, diff:{added,removed,changed}}
+    const r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/diff-canonical');
     if (!r.ok) return;
     const d = await r.json();
     if (!d.has_canonical) return;
-    if (!d.has_diff) {
+    if (d.is_identical) {
       banner.className = 'diff-banner no-diff';
       banner.innerHTML = window.T('psn_js_149');
       banner.style.display = 'block'; return;
     }
     banner.className = 'diff-banner has-diff';
-    var rows = (d.diffs || []).map(function(df) {
-      return '<tr class="diff-' + df.type + '"><td>' + df.field + '</td><td>' + (df.canonical ?? '—') + '</td><td>' + (df.studio ?? '—') + '</td></tr>';
-    }).join('');
+    var _cell = function(v) {
+      var s = v == null ? '—' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+      if (s.length > 60) s = s.slice(0, 60) + '…';
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    };
+    var df = d.diff || {};
+    var rows = '';
+    (df.changed || []).forEach(function(c) {
+      rows += '<tr class="diff-changed"><td>' + _cell(c.field) + '</td><td>' + _cell(c.from) + '</td><td>' + _cell(c.to) + '</td></tr>';
+    });
+    Object.keys(df.added || {}).forEach(function(k) {
+      rows += '<tr class="diff-added"><td>' + _cell(k) + '</td><td>—</td><td>' + _cell(df.added[k]) + '</td></tr>';
+    });
+    Object.keys(df.removed || {}).forEach(function(k) {
+      rows += '<tr class="diff-removed"><td>' + _cell(k) + '</td><td>' + _cell(df.removed[k]) + '</td><td>—</td></tr>';
+    });
     banner.innerHTML = window.T('psn_js_150') + rows + '</table>';
     banner.style.display = 'block';
   } catch(e) {}
@@ -3465,21 +3437,43 @@ function _renderUsageChart() {
   var sub = document.getElementById('usage-chart-sub');
   if (!section || !wrap) return;
   var profWithBindings = (_allProfiles || []).filter(function(p){ return (p.binding_count || 0) > 0; });
-  if (!profWithBindings.length) { section.style.display = 'none'; return; }
+  // P2：近7日 AI 回复条数排行(usage_7d 由后端 summary 注入;无数据不展示该段)
+  var profWithUsage = (_allProfiles || []).filter(function(p){ return (p.usage_7d || 0) > 0; });
+  if (!profWithBindings.length && !profWithUsage.length) { section.style.display = 'none'; return; }
   section.style.display = 'block';
-  var sorted = profWithBindings.slice().sort(function(a, b){ return (b.binding_count||0) - (a.binding_count||0); }).slice(0, 8);
-  var maxCount = sorted[0].binding_count || 1;
+  var html = '';
+  if (profWithBindings.length) {
+    var sorted = profWithBindings.slice().sort(function(a, b){ return (b.binding_count||0) - (a.binding_count||0); }).slice(0, 8);
+    var maxCount = sorted[0].binding_count || 1;
+    html += sorted.map(function(p) {
+      var pct = Math.max(4, Math.round((p.binding_count / maxCount) * 100));
+      var color = _profileColor(p.id);
+      var nameSafe = (p.name || p.id).replace(/</g, '&lt;');
+      return '<div class="usage-row">'
+        + '<div class="usage-name" title="' + p.id + '">' + nameSafe + '</div>'
+        + '<div class="usage-bar-wrap"><div class="usage-bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>'
+        + '<div class="usage-cnt">' + p.binding_count + '</div>'
+        + '</div>';
+    }).join('');
+  }
+  if (profWithUsage.length) {
+    var usorted = profWithUsage.slice().sort(function(a, b){ return (b.usage_7d||0) - (a.usage_7d||0); }).slice(0, 8);
+    var umax = usorted[0].usage_7d || 1;
+    html += '<div style="font-size:.76rem;font-weight:700;color:var(--t1);margin:.7rem 0 .4rem">'
+      + window.T('psn_usage_rank_title')
+      + ' <span style="font-size:.68rem;font-weight:400;color:var(--t2)">' + window.T('psn_usage_rank_sub') + '</span></div>';
+    html += usorted.map(function(p) {
+      var pct = Math.max(4, Math.round((p.usage_7d / umax) * 100));
+      var nameSafe = (p.name || p.id).replace(/</g, '&lt;');
+      return '<div class="usage-row">'
+        + '<div class="usage-name" title="' + p.id + '">' + nameSafe + '</div>'
+        + '<div class="usage-bar-wrap"><div class="usage-bar-fill" style="width:' + pct + '%;background:#f59e0b"></div></div>'
+        + '<div class="usage-cnt">' + p.usage_7d + '</div>'
+        + '</div>';
+    }).join('');
+  }
   if (sub) sub.textContent = window.T('psn_js_210') + profWithBindings.length + window.T('psn_js_211');
-  wrap.innerHTML = sorted.map(function(p) {
-    var pct = Math.max(4, Math.round((p.binding_count / maxCount) * 100));
-    var color = _profileColor(p.id);
-    var nameSafe = (p.name || p.id).replace(/</g, '&lt;');
-    return '<div class="usage-row">'
-      + '<div class="usage-name" title="' + p.id + '">' + nameSafe + '</div>'
-      + '<div class="usage-bar-wrap"><div class="usage-bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>'
-      + '<div class="usage-cnt">' + p.binding_count + '</div>'
-      + '</div>';
-  }).join('');
+  wrap.innerHTML = html;
 }
 // ── P10-3: Bulk JSON import ───────────────────────────────────────────────────
 var _importData = [];  // parsed profile array
@@ -3726,24 +3720,8 @@ async function _bulkSwitchPlatform() {
   } catch(e) { _toast(window.T('psn_js_236') + e, 'err'); }
   finally { if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = window.T('psn_js_237'); } }
 }
-// ── P12-3: Profile completeness score ────────────────────────────────────────
-function _profileCompleteness(p) {
-  var s = 0;
-  if (p.name && String(p.name).trim()) s += 25;
-  if (p.role && String(p.role).trim()) s += 20;
-  var pers = p.personality;
-  if (pers && (typeof pers === 'string' ? pers.trim() : Object.keys(pers||{}).length > 0)) s += 20;
-  if (p.tags && p.tags.length > 0) s += 15;
-  if (p.has_voice) s += 10;
-  if ((p.binding_count || 0) > 0) s += 10;
-  return Math.min(100, s);
-}
-function _completenessColor(score) {
-  if (score >= 90) return '#10b981';
-  if (score >= 70) return '#84cc16';
-  if (score >= 50) return '#f59e0b';
-  return '#ef4444';
-}
+// ── P12-3/P0: 完善度打分、就绪清单弹层、卡片试听 —— 已迁至
+//    /static/js/persona_studio_core.js(P2 工程底座:模板止涨,拆分第一步)
 // ── P12-4: Focused card state ─────────────────────────────────────────────
 var _focusedProfileId = null;
 function _setFocusCard(pid) {
@@ -3834,7 +3812,7 @@ function _updateSfChipCounts() {
     'FB':    _platBindMap.FB.size,
     'WA':    _platBindMap.WA.size,
     'LINE':  _platBindMap.LINE.size,
-    'studio':_allProfiles.filter(function(p){ return p.source==='studio'; }).length,
+    'studio':_allProfiles.filter(function(p){ return p.source==='studio' || p.source==='runtime'; }).length,
     'voice': _allProfiles.filter(function(p){ return !!p.has_voice; }).length,
   };
   document.querySelectorAll('.sf-chip').forEach(function(c) {
@@ -4084,6 +4062,8 @@ function _onPcardCtx(event, pid) {
   if (!menu) return;
   menu.innerHTML = [
     '<div class="ctx-item" data-act="edit" data-pid="' + pid + window.T('psn_js_251'),
+    '<div class="ctx-item" data-act="chattest" data-pid="' + pid + '">💬 ' + window.T('psn_ct_title') + '</div>',
+    '<div class="ctx-item" data-act="apply" data-pid="' + pid + '">🔗 ' + window.T('psn_apply_title') + '</div>',
     '<div class="ctx-item" data-act="clone" data-pid="' + pid + window.T('psn_js_252'),
     '<div class="ctx-item" data-act="copyid" data-pid="' + pid + window.T('psn_js_253'),
     '<div class="ctx-sep"></div>',
@@ -4104,13 +4084,17 @@ function _pctxAct(action, pid) {
   _closePcardCtx();
   if (!pid) return;
   if (action === 'edit')   { editProfile(pid); return; }
+  if (action === 'chattest') { if (window.PSChatTest) PSChatTest.open(pid); return; }
+  if (action === 'apply')  { if (window.PSApply) PSApply.open(pid); return; }
   if (action === 'clone')  { _cloneProfile(pid); return; }
   if (action === 'copyid') { _copyProfileId(pid); return; }
   if (action === 'delete') {
     if (!confirm(window.T('psn_js_142') + pid + '」？')) return;
+    var _prof = _allProfiles.find(function(x){ return x.id === pid; });
+    var _nm = (_prof && _prof.name) || pid;
     fetch('/api/personas/profiles/' + encodeURIComponent(pid), {method:'DELETE'})
       .then(function(r){ return r.json(); })
-      .then(function(d){ if (d.ok) { _toast(window.T('psn_js_144') + pid, 'ok'); if (_focusedProfileId === pid) _focusedProfileId = null; loadProfileList(); } })
+      .then(function(d){ if (d.ok) { if (_focusedProfileId === pid) _focusedProfileId = null; loadProfileList(); refreshStatus(); _toastDeletedUndo(pid, _nm); } })
       .catch(function(e){ _toast(window.T('psn_js_145') + e, 'err'); });
   }
 }
@@ -4217,10 +4201,11 @@ function _updateCompletionWizard(p) {
     items.push({label: window.T('psn_js_289'), field: 'pe-personality', score: 20});
   if (!p.tags || !p.tags.length)
     items.push({label: window.T('psn_js_290'), field: 'pe-tags', score: 15});
-  if (!p.has_voice)
+  if (!_pHasVoice(p))
     items.push({label: window.T('psn_js_291'), field: null, tab: 'voice', score: 10});
-  if (!(p.binding_count > 0))
-    items.push({label: window.T('psn_js_292'), field: null, tab: 'preview', score: 10});
+  // P0 改版：绑定不再计入完善度，改为头像（锁脸照）+10%
+  if (!_pHasFaceRef(p))
+    items.push({label: window.T('psn_ready_avatar'), field: null, tab: 'album', score: 10});
   if (!items.length) { wiz.style.display = 'none'; return; }
   wiz.style.display = '';
   wiz.innerHTML = window.T('psn_js_293') + score + window.T('psn_js_294')
@@ -4898,5 +4883,22 @@ if (location.hash === '#rules') { setTimeout(function() { _grLoaded = true; grLo
 window.addEventListener('beforeunload', function(e) {
   if (_grDirty) { e.preventDefault(); e.returnValue = ''; }
 });
+
+// ── P1 静态模块桥 ─────────────────────────────────────────────────────────────
+// let 声明的顶层变量不上 window;用 getter 显式导出给 /static/js/persona_*.js 模块读取
+try {
+  Object.defineProperty(window, '_allProfiles', { get: function() { return _allProfiles; } });
+  Object.defineProperty(window, '_editingProfileId', { get: function() { return _editingProfileId; } });
+} catch (e) {}
+// 新建人设统一走向导(模板库);模块未加载时回落原空白抽屉
+function openCreateFlow() {
+  if (window.PSWizard && PSWizard.open) { PSWizard.open(); } else { openNewProfile(); }
+}
 </script>
+{# ── P1/P2 功能模块(独立静态文件,personas.html 拆分的起点)─────────────────── #}
+<script src="/static/js/persona_studio_core.js?v=p2"></script>
+<script src="/static/js/persona_apply_modal.js?v=p1"></script>
+<script src="/static/js/persona_create_wizard.js?v=p1"></script>
+<script src="/static/js/persona_chat_test.js?v=p1"></script>
+<script src="/static/js/persona_health_panel.js?v=p2"></script>
 {% endblock %}

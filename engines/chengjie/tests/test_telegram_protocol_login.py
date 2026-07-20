@@ -82,3 +82,101 @@ def test_state_machine_pending_branch(tmp_path):
     assert login.status == "pending"
     assert login.qr_url.startswith("tg://login?token=")
     assert login.result()["status"] == "pending"
+
+
+# ── 两步验证（2FA）：纯判定 + submit_password 状态机（实施29+，无需联网/真号）──
+
+# 类名刻意与 pyrogram.errors 真类同名（检测逻辑按 type(ex).__name__ 判定，故此处不加下划线）
+class SessionPasswordNeeded(Exception):
+    """模拟 pyrogram.errors.SessionPasswordNeeded（按类名判定，不依赖真类路径）。"""
+
+
+class PasswordHashInvalid(Exception):
+    """模拟 pyrogram.errors.PasswordHashInvalid（密码错误可重试）。"""
+
+
+def test_is_password_needed_by_name_and_text():
+    assert tpl._is_password_needed(SessionPasswordNeeded()) is True
+    assert tpl._is_password_needed(Exception("SESSION_PASSWORD_NEEDED")) is True
+    assert tpl._is_password_needed(Exception("something else")) is False
+
+
+def test_is_bad_password_detection():
+    assert tpl._is_bad_password(PasswordHashInvalid()) is True
+    assert tpl._is_bad_password(Exception("PASSWORD_HASH_INVALID")) is True
+    assert tpl._is_bad_password(Exception("network")) is False
+
+
+class _FakeStorage:
+    async def user_id(self, *_a):
+        return None
+
+    async def is_bot(self, *_a):
+        return None
+
+
+class _FakeUser:
+    id = 8127518232
+    phone_number = "60111471"
+    first_name = "Boss"
+    last_name = ""
+    username = "bossacct"
+
+
+class _FakeClient:
+    """最小可跑的 pyrogram Client 替身：只实现 submit_password 收尾用到的方法。"""
+
+    def __init__(self, *, password_ok=True):
+        self._password_ok = password_ok
+        self.storage = _FakeStorage()
+        self.disconnected = False
+
+    async def check_password(self, password):
+        if not self._password_ok:
+            raise PasswordHashInvalid("PASSWORD_HASH_INVALID")
+        return _FakeUser()
+
+    async def export_session_string(self):
+        return "FAKE_SESSION_STRING"
+
+    async def disconnect(self):
+        self.disconnected = True
+
+
+def _mk_login(tmp_path, *, client):
+    login = tpl.TelegramQrLogin(1, "h", str(tmp_path))
+    login.status = "password_needed"
+    login.client = client
+    return login
+
+
+def test_submit_password_success(tmp_path):
+    login = _mk_login(tmp_path, client=_FakeClient(password_ok=True))
+    res = asyncio.run(login.submit_password("cloud-pw"))
+    assert res["status"] == "authorized"
+    assert login.account_id == "8127518232"
+    assert login.session_string == "FAKE_SESSION_STRING"
+    assert login.client.disconnected is True
+
+
+def test_submit_password_wrong_keeps_retryable(tmp_path):
+    login = _mk_login(tmp_path, client=_FakeClient(password_ok=False))
+    res = asyncio.run(login.submit_password("wrong"))
+    # 密码错误：停在 password_needed 可重试，不落 authorized/failed
+    assert res["status"] == "password_needed"
+    assert "错误" in login.detail
+
+
+def test_submit_password_ignored_when_not_waiting(tmp_path):
+    login = tpl.TelegramQrLogin(1, "h", str(tmp_path))
+    login.status = "pending"
+    res = asyncio.run(login.submit_password("x"))
+    assert res["status"] == "pending"  # 非 password_needed 态直接返回，不动作
+
+
+def test_poll_short_circuits_on_password_needed(tmp_path):
+    login = tpl.TelegramQrLogin(1, "h", str(tmp_path))
+    login.status = "password_needed"
+    login.client = object()  # 若真去 invoke 会 AttributeError → 证明没走网络分支
+    res = asyncio.run(login.poll())
+    assert res["status"] == "password_needed"

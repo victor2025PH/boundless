@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}{{ (i18n or {}).get('rpa_fn_title','运营漏斗') }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('rpa_fn_title','运营漏斗') }}{% endblock %}
+{% block content %}
+{# 跨平台客户旅程漏斗独立页:全量复用 RPA 共享漏斗组件,默认全渠道聚合,
+   页内渠道筛选片(all/messenger/line/telegram/mobile)由组件自带。 #}
+{% include "_rpa_shared_styles.html" %}
+{% include "_rpa_shared_scripts.html" %}
+<div class="funnel-page" style="max-width:1080px">
+  <div style="display:flex;justify-content:flex-end;margin-bottom:.6rem">
+    <button class="btn-sec" id="fn-export-btn" style="font-size:.8rem">⬇ {{ (i18n or {}).get('fn_export_csv', "导出 CSV") }}</button>
+  </div>
+  {# 变现 KPI 条 — 默认隐藏;/api/monetize/kpi 返回 enabled 且非 403 时才展示(viewer 拿 403 保持隐藏) #}
+  <div id="fn-kpi-strip" style="display:none;align-items:center;gap:1.4rem;background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:.7rem 1.1rem;margin-bottom:.8rem;flex-wrap:wrap">
+    <span style="font-size:.78rem;font-weight:700;color:var(--t2)">{{ (i18n or {}).get('fn_kpi_title','变现概览') }}</span>
+    <span style="font-size:.82rem">{{ (i18n or {}).get('fn_kpi_revenue_30d','近30日营收') }} <b id="fn-kpi-rev">—</b></span>
+    <span style="font-size:.82rem">{{ (i18n or {}).get('fn_kpi_tx','成交笔数') }} <b id="fn-kpi-tx">—</b></span>
+    <span style="font-size:.82rem">{{ (i18n or {}).get('fn_kpi_subs','活跃订阅') }} <b id="fn-kpi-subs">—</b></span>
+    <a href="/monetization" style="margin-left:auto;font-size:.76rem">{{ (i18n or {}).get('fn_kpi_more','查看变现营收 →') }}</a>
+  </div>
+  {% include "_rpa_shared_funnel.html" %}
+</div>
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+  if(window.rpa && window.rpa.funnel){
+    window.rpa.funnel.init({intervalSec:60, defaultScope:'all'});
+  }
+
+  // 变现 KPI 条:403(viewer)/未启用/网络失败 一律保持隐藏
+  fetch('/api/monetize/kpi?days=30', {credentials:'same-origin'}).then(function(r){
+    if(!r.ok) return null;
+    return r.json();
+  }).then(function(d){
+    if(!d || !d.enabled) return;
+    var strip = document.getElementById('fn-kpi-strip');
+    if(!strip) return;
+    document.getElementById('fn-kpi-rev').textContent = d.currency + ' ' + (d.revenue_total || 0);
+    document.getElementById('fn-kpi-tx').textContent = d.tx_count || 0;
+    document.getElementById('fn-kpi-subs').textContent = d.active_subscriptions || 0;
+    strip.style.display = 'flex';
+  }).catch(function(){});
+
+  // 导出走服务端流式端点（P5）：拼装/转义/BOM 全在后端,前端只负责带参跳转
+  document.getElementById('fn-export-btn').addEventListener('click', function(){
+    var scope=(window.rpa&&window.rpa.funnel&&window.rpa.funnel._scope)||'all';
+    var days=(window.rpa&&window.rpa.funnel&&window.rpa.funnel._tsDays)||30;
+    var q='days='+encodeURIComponent(days)+(scope&&scope!=='all'?'&channel='+encodeURIComponent(scope):'');
+    window.location.href='/api/funnel/export.csv?'+q;
+  });
+});
+</script>
+{% endblock %}

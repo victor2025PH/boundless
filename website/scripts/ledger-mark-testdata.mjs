@@ -1,134 +1,189 @@
-// ledger-mark-testdata.mjs — 标记集团账本里的测试/演练数据（e2e/smoke/@internal…），
-// 让真实经营口径（KPI/商机/客户 360）能把它们排除或标注。幂等、保守、只读判定不删数据。
+#!/usr/bin/env node
+// ledger-mark-testdata.mjs — 回扫集团账本存量，把测试/演练数据（e2e/smoke/drill/@internal…）
+// 打上 is_test=1（schema v6），让 KPI/商机只算真实数据。幂等可重复跑；绝不删数据、
+// 绝不把已标行降回 0（只升不降）。
 //
-// 自包含设计：不依赖 ledger-lib.mjs 的 schema——直接 PRAGMA 探列、按需 ALTER 补 is_test 列，
-// 与未来 ledger.ts 的 DDL 用同名列（is_test INTEGER DEFAULT 0）保持兼容（加列前先探测存在）。
+// 判定口径唯一真相：ledger-lib.mjs::isTestSignal（与 lib/ledger.ts 逐字一致）——
+// 词边界保守匹配 e2e/test/drill/smoke + 邮箱 @internal 结尾；"latest"/"contest"
+// 这类误伤词不命中（宁可漏标不误标，漏标可再跑，误标会把真实数据从 KPI 滤掉）。
 //
-// 用法：
-//   node scripts/ledger-mark-testdata.mjs [--db <路径>] [--dry-run]
-//   缺省 db：env LEDGER_DB / DATA_DIR/group-ledger.db（与 ledger.ts 同源），VPS 上通常
-//   /home/ubuntu/hualing-leads/group-ledger.db（DATA_DIR 指向该目录）。
-import Database from "better-sqlite3";
+// 各表判定字段（只看内容列，不看自然键里的日期/随机段）：
+//   customers: display_name / primary_contact / 名下 identities.value
+//   orders:    contact / fingerprint
+//   leads:     source_key / contact / name
+//   licenses:  source_key / raw 里的 customer_name & customer_contact
+// 客户联动：名下 orders/leads/licenses 有任一测试行 → 客户补标（e2e 联系方式都是
+// 假值，正常归并不会挂到真实客户名下；联动名单全部打印供人工复核）。
+//
+// 用法：node scripts/ledger-mark-testdata.mjs [--db group-ledger.db] [--dry-run]
+//   --dry-run  只读打开（不迁 schema、不写库），打印将标记的行与计数。
+//   实跑用 openLedgerDb：库自动迁到 schema v6（is_test 列条件式 ALTER，幂等）。
+import fs from "node:fs";
 import path from "node:path";
-import process from "node:process";
+import Database from "better-sqlite3";
+import { isTestSignal, openLedgerDb, resolveLedgerDbPath, writeAudit } from "./ledger-lib.mjs";
 
-const args = process.argv.slice(2);
-const DRY = args.includes("--dry-run");
-const dbFlag = args.indexOf("--db");
-const DB_PATH =
-  dbFlag >= 0
-    ? args[dbFlag + 1]
-    : process.env.LEDGER_DB ||
-      path.join(process.env.DATA_DIR || process.cwd(), "group-ledger.db");
+const ACTOR = "mark-testdata";
 
-// 测试信号（保守）：@internal 邮箱 / 含 e2e|test|smoke|drill|demo|dummy 的标识或名字。
-const TEST_RE = /(^|[^a-z])(e2e|smoke|drill|dummy)([^a-z]|$)|test|@internal/i;
-function isTestSignal(...vals) {
-  return vals.some((v) => v && TEST_RE.test(String(v)));
-}
-
-const db = new Database(DB_PATH);
-db.pragma("journal_mode = WAL");
-
-function hasColumn(table, col) {
-  return db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col);
-}
-function ensureIsTest(table) {
-  if (!hasColumn(table, "is_test")) {
-    if (DRY) {
-      console.log(`[dry-run] 将为 ${table} 添加列 is_test INTEGER NOT NULL DEFAULT 0`);
+function parseArgs(argv) {
+  const args = { db: null, dryRun: false };
+  for (let i = 2; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--db") args.db = argv[++i];
+    else if (a === "--dry-run") args.dryRun = true;
+    else if (a === "--help" || a === "-h") {
+      console.log("用法: node scripts/ledger-mark-testdata.mjs [--db group-ledger.db] [--dry-run]");
+      process.exit(0);
     } else {
-      db.exec(`ALTER TABLE ${table} ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0`);
-      console.log(`已添加列 ${table}.is_test`);
+      console.error(`未知参数: ${a}（--help 查看用法）`);
+      process.exit(1);
     }
   }
+  return args;
 }
 
-console.log(`账本 DB: ${DB_PATH}`);
-console.log(`模式: ${DRY ? "DRY-RUN（只看不写）" : "实跑"}`);
-
-for (const t of ["customers", "orders", "leads", "licenses"]) {
+function parseJson(text) {
+  if (!text) return null;
   try {
-    ensureIsTest(t);
-  } catch (e) {
-    console.warn(`[warn] ${t} 加列失败（可能已存在）: ${e.message}`);
+    const v = JSON.parse(text);
+    return v && typeof v === "object" ? v : null;
+  } catch {
+    return null;
   }
 }
 
-// dry-run 且列还不存在时，用内存标记模拟统计
-const canRead = (t) => DRY || hasColumn(t, "is_test");
+function main() {
+  const args = parseArgs(process.argv);
+  const dry = args.dryRun;
+  const file = path.resolve(args.db || resolveLedgerDbPath());
 
-let marked = { customers: 0, orders: 0, leads: 0, licenses: 0 };
-
-function markTable(table, pickCols, updateWhereCol = null) {
-  if (!DRY && !hasColumn(table, "is_test")) return;
-  const rows = db.prepare(`SELECT * FROM ${table}`).all();
-  const hits = [];
-  for (const r of rows) {
-    const vals = pickCols.map((c) => r[c]);
-    if (isTestSignal(...vals) && Number(r.is_test || 0) !== 1) hits.push(r);
+  let db;
+  if (dry) {
+    if (!fs.existsSync(file)) {
+      console.error(`库文件不存在: ${file}`);
+      process.exit(1);
+    }
+    db = new Database(file, { readonly: true, fileMustExist: true });
+  } else {
+    db = openLedgerDb(file); // 自动迁 schema v6（is_test 列就位）
   }
-  marked[table] = hits.length;
-  if (!DRY && hits.length) {
-    const pk = updateWhereCol || "id";
-    const upd = db.prepare(`UPDATE ${table} SET is_test = 1 WHERE ${pk} = ?`);
-    const tx = db.transaction((list) => {
-      for (const r of list) upd.run(r[pk]);
+  console.log(`账本 DB: ${file}`);
+  console.log(`模式: ${dry ? "DRY-RUN（只读，不迁 schema 不写库）" : "实跑（写库）"}`);
+
+  const hasCol = (t, c) => db.prepare(`PRAGMA table_info(${t})`).all().some((x) => x.name === c);
+  if (dry && !hasCol("orders", "is_test")) {
+    console.log("[提示] 库尚无 is_test 列（schema < v6）：实跑会自动迁移加列；下方按全量未标估算。");
+  }
+  // 兼容 dry-run 打在未迁移旧库上：无列时当作全 0
+  const val = (r, col) => (col in r ? Number(r[col] ?? 0) : 0);
+
+  const plan = { customers: [], orders: [], leads: [], licenses: [] };
+
+  // ── orders：contact / fingerprint ──
+  for (const r of db.prepare("SELECT * FROM orders").all()) {
+    if (val(r, "is_test") === 1) continue;
+    if (isTestSignal(r.contact, r.fingerprint)) plan.orders.push({ key: r.source_key, label: `${r.source_key} · ${r.contact ?? ""}` });
+  }
+
+  // ── leads：source_key / contact / name ──
+  for (const r of db.prepare("SELECT * FROM leads").all()) {
+    if (val(r, "is_test") === 1) continue;
+    if (isTestSignal(r.source_key, r.contact, r.name)) plan.leads.push({ key: r.source_key, label: `${r.source_key} · ${r.contact ?? ""}` });
+  }
+
+  // ── licenses：source_key / raw.customer_name / raw.customer_contact（导入器把原始
+  //    记录留在 raw：顶层或再嵌一层 raw.raw 都探，与 ledger-link-customers.mjs 同款）──
+  for (const r of db.prepare("SELECT * FROM licenses").all()) {
+    if (val(r, "is_test") === 1) continue;
+    const raw = parseJson(r.raw);
+    const name = raw?.customer_name ?? raw?.raw?.customer_name ?? null;
+    const contact = raw?.customer_contact ?? raw?.raw?.customer_contact ?? null;
+    if (isTestSignal(r.source_key, name, contact)) plan.licenses.push({ key: r.id, label: `${r.source_system}:${r.source_key}` });
+  }
+
+  // ── customers：display_name / primary_contact / 名下 identities.value ──
+  const identsByCust = new Map();
+  for (const r of db.prepare("SELECT customer_id, value FROM identities").all()) {
+    let arr = identsByCust.get(r.customer_id);
+    if (!arr) identsByCust.set(r.customer_id, (arr = []));
+    arr.push(r.value);
+  }
+  const custDirect = new Set();
+  for (const r of db.prepare("SELECT * FROM customers").all()) {
+    if (val(r, "is_test") === 1) continue;
+    if (isTestSignal(r.display_name, r.primary_contact, ...(identsByCust.get(r.id) ?? []))) {
+      custDirect.add(r.id);
+      plan.customers.push({ key: r.id, label: `${r.id} 「${r.display_name ?? "（未命名）"}」`, via: "self" });
+    }
+  }
+
+  // ── 客户联动：名下有本轮或既往标测试的 orders/leads/licenses → 客户补标 ──
+  const linkedIds = new Set();
+  const planKeys = {
+    orders: new Set(plan.orders.map((x) => x.key)),
+    leads: new Set(plan.leads.map((x) => x.key)),
+    licenses: new Set(plan.licenses.map((x) => x.key)),
+  };
+  const linkedFrom = (table, keyCol) => {
+    for (const r of db.prepare(`SELECT * FROM ${table} WHERE customer_id IS NOT NULL`).all()) {
+      if (val(r, "is_test") === 1 || planKeys[table].has(r[keyCol])) linkedIds.add(r.customer_id);
+    }
+  };
+  linkedFrom("orders", "source_key");
+  linkedFrom("leads", "source_key");
+  linkedFrom("licenses", "id");
+  const custRow = db.prepare("SELECT * FROM customers WHERE id = ?");
+  for (const cid of linkedIds) {
+    if (custDirect.has(cid)) continue;
+    const c = custRow.get(cid);
+    if (!c || val(c, "is_test") === 1) continue;
+    plan.customers.push({ key: cid, label: `${cid} 「${c.display_name ?? "（未命名）"}」`, via: "linked" });
+  }
+
+  // ── 输出计划 ──
+  for (const [table, rows] of Object.entries(plan)) {
+    for (const x of rows) {
+      console.log(`[${dry ? "计划" : "标记"}] ${table}: ${x.label}${x.via === "linked" ? "（名下测试行联动，请复核）" : ""}`);
+    }
+  }
+
+  // ── 写库（只升不降；每表一条 audit 汇总，不逐行刷审计量）──
+  if (!dry) {
+    const tx = db.transaction(() => {
+      for (const x of plan.orders) db.prepare("UPDATE orders SET is_test = 1 WHERE source_key = ? AND is_test = 0").run(x.key);
+      for (const x of plan.leads) db.prepare("UPDATE leads SET is_test = 1 WHERE source_key = ? AND is_test = 0").run(x.key);
+      for (const x of plan.licenses) db.prepare("UPDATE licenses SET is_test = 1 WHERE id = ? AND is_test = 0").run(x.key);
+      for (const x of plan.customers) db.prepare("UPDATE customers SET is_test = 1 WHERE id = ? AND is_test = 0").run(x.key);
+      for (const [table, rows] of Object.entries(plan)) {
+        if (!rows.length) continue;
+        writeAudit(
+          {
+            actor: ACTOR,
+            action: "mark_testdata",
+            entity: table,
+            entity_id: `${rows.length} rows`,
+            detail: { keys: rows.map((x) => x.key).slice(0, 50), total: rows.length },
+          },
+          db
+        );
+      }
     });
-    tx(hits);
+    tx();
   }
-  // 打印命中样本（最多 6 条）
-  for (const r of hits.slice(0, 6)) {
-    const label = r.display_name || r.source_key || r.value || r.id;
-    console.log(`  [test] ${table}: ${label}`);
-  }
-}
 
-// 各表用于判定的字段（按 ledger schema 常见列，缺列自动忽略）+ 各表主键列（orders/leads/
-// licenses 自然键是 source_key，customers 是 id）
-markTable("customers", ["display_name", "id"], "id");
-markTable("orders", ["source_key", "customer_id", "contact", "email"], "source_key");
-markTable("leads", ["source_key", "contact", "email", "name"], "source_key");
-markTable("licenses", ["source_key", "customer_name"], "source_key");
-
-// 客户联动：某客户名下有测试订单/留资，或其身份含测试信号 → 客户也标测试
-if (!DRY && hasColumn("customers", "is_test")) {
-  const ids = new Set();
-  for (const t of ["orders", "leads", "licenses"]) {
-    if (!hasColumn(t, "customer_id") || !hasColumn(t, "is_test")) continue;
-    for (const r of db
-      .prepare(`SELECT DISTINCT customer_id FROM ${t} WHERE is_test = 1 AND customer_id IS NOT NULL`)
-      .all())
-      ids.add(r.customer_id);
-  }
-  if (hasColumn("identities", "value")) {
-    for (const r of db.prepare("SELECT customer_id, value FROM identities").all()) {
-      if (isTestSignal(r.value)) ids.add(r.customer_id);
+  // ── 摘要 ──
+  console.log("── 摘要 ──────────────────────────────────");
+  console.log(
+    `${dry ? "（DRY-RUN 计划值，未写库）" : ""}新标测试: customers ${plan.customers.length} · orders ${plan.orders.length} · leads ${plan.leads.length} · licenses ${plan.licenses.length}`
+  );
+  if (!dry) {
+    for (const t of ["customers", "orders", "leads", "licenses"]) {
+      const c = db.prepare(`SELECT COUNT(*) AS n FROM ${t} WHERE is_test = 1`).get().n;
+      const tot = db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n;
+      console.log(`  ${t}: ${c}/${tot} 已标测试`);
     }
   }
-  const upd = db.prepare("UPDATE customers SET is_test = 1 WHERE id = ? AND is_test != 1");
-  let n = 0;
-  const tx = db.transaction((list) => {
-    for (const id of list) n += upd.run(id).changes;
-  });
-  tx([...ids]);
-  if (n) {
-    marked.customers += n;
-    console.log(`  [test] customers 经关联补标 ${n} 条`);
-  }
+  db.close();
 }
 
-console.log("── 摘要 ──────────────────────────────────");
-console.log(
-  `标测试：customers ${marked.customers} · orders ${marked.orders} · leads ${marked.leads} · licenses ${marked.licenses}`
-);
-if (!DRY) {
-  for (const t of ["customers", "orders", "leads", "licenses"]) {
-    if (hasColumn(t, "is_test")) {
-      const c = db.prepare(`SELECT COUNT(*) n FROM ${t} WHERE is_test = 1`).get().n;
-      const tot = db.prepare(`SELECT COUNT(*) n FROM ${t}`).get().n;
-      console.log(`  ${t}: ${c}/${tot} 标为测试`);
-    }
-  }
-}
-db.close();
+main();

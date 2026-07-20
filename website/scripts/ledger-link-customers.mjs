@@ -31,7 +31,9 @@
 
 import {
   attachIdentity,
+  classifyContact,
   createCustomer,
+  isTestSignal,
   linkCustomer,
   normIdentityValue,
   openLedgerDb,
@@ -61,19 +63,7 @@ function parseArgs(argv) {
   return args;
 }
 
-// ── 联系方式分类（分组键只认 handle / email / phone / tgid 四种精确形态）──
-function classifyContact(text) {
-  const t = String(text ?? "").trim();
-  if (!t) return null;
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t)) return { type: "email", norm: t.toLowerCase() };
-  const handle =
-    t.match(/^@([A-Za-z0-9_]{3,32})$/) ||
-    t.match(/^(?:https?:\/\/)?(?:www\.)?t(?:elegram)?\.me\/@?([A-Za-z0-9_]{3,32})\/?$/i);
-  if (handle) return { type: "handle", norm: handle[1].toLowerCase() };
-  const digits = t.replace(/[\s\-()]/g, "");
-  if (/^\+?\d{7,15}$/.test(digits)) return { type: "phone", norm: digits };
-  return { type: "text", norm: t.toLowerCase().replace(/\s+/g, "") };
-}
+// 联系方式分类：抽到 ledger-lib.mjs::classifyContact（与实时归并钩子共用同一规则）。
 
 // ── 行信号容器 ──────────────────────────────────────────────────────
 function emptySig() {
@@ -367,6 +357,7 @@ function main() {
             tg_user_id: tgUserId,
             source: SOURCE_STRONG,
             notes: `自动归并（${via}）：覆盖 ${g.rows.length} 行（${g.rows.map((r) => r.table).join("/")}）`,
+            is_test: isTestSignal(displayName, primaryContact, ...[...g.idents.values()].map(([, v]) => v)) ? 1 : 0,
           },
           db,
           ACTOR
@@ -425,6 +416,7 @@ function main() {
             display_name: name,
             source: SOURCE_NAME,
             notes: `纯名字弱信号建档（license/persona 的 customer_name 完全相同）：覆盖 ${groupRows.length} 行；无联系方式标识，待人工核实`,
+            is_test: isTestSignal(name) ? 1 : 0,
           },
           db,
           ACTOR

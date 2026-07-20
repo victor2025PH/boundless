@@ -180,7 +180,7 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                 logger.debug("生成指纹失败", exc_info=True)
 
         qr_url = qr_image = instruction = ""
-        poll_fn = cancel_fn = provider_state = None
+        poll_fn = cancel_fn = submit_fn = provider_state = None
         provider = get_login_provider(platform, mode)
         if provider is not None:
             try:
@@ -197,6 +197,7 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                 account_id = str(info.get("account_id") or account_id)
                 poll_fn = info.get("poll")
                 cancel_fn = info.get("cancel")
+                submit_fn = info.get("submit_password")
                 provider_state = info.get("state")
             except Exception:
                 logger.debug("登录 provider[%s:%s] 失败（回落设备端指引）",
@@ -208,6 +209,7 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
             label=cfg_label, group=cfg_group,
             proxy_id=cfg_proxy_id, fingerprint_id=fingerprint_id,
             provider_state=provider_state, poll_fn=poll_fn, cancel_fn=cancel_fn,
+            submit_fn=submit_fn,
         )
         # 落库：重连/已知账号即记录（mode + 代理 + 指纹持久化，供编排器重启后正确拉起）
         if account_id:
@@ -277,6 +279,47 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
         except Exception:
             logger.debug("登录状态轮询失败", exc_info=True)
         return {"ok": True, "status": sess.status, "instruction": sess.instruction}
+
+    @app.post("/api/platforms/{platform}/login/{login_id}/password")
+    async def api_platform_login_password(platform: str, login_id: str, request: Request):
+        """两步验证：提交云密码完成登录（仅 status==password_needed 的会话有效）。
+
+        body：``{"password": "..."}``。密码错误返回 status=password_needed + detail（可重试）；
+        成功返回 authorized 并落库（provider 内已 upsert 全 meta，此处再补 status/代理绑定）。
+        """
+        api_auth(request)
+        platform = str(platform or "").lower()
+        sess = get_login_manager().get(login_id)
+        if sess is None:
+            return {"ok": False, "status": "expired",
+                    "detail": tr(request, "err.login.session_expired")}
+        if sess.submit_fn is None:
+            return {"ok": False, "status": sess.status,
+                    "detail": tr(request, "err.login.password_unsupported")}
+        body: Dict[str, Any] = {}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        password = str((body or {}).get("password") or "")
+        if not password:
+            return {"ok": False, "status": sess.status,
+                    "detail": tr(request, "err.login.password_empty")}
+        try:
+            res = sess.submit_fn(sess, password)
+            if inspect.isawaitable(res):
+                res = await res
+            res = res or {}
+            st = str(res.get("status") or sess.status)
+            sess.status = st
+            if st == "authorized" and res.get("account_id"):
+                _persist_login_account(platform, str(res["account_id"]), sess)
+            return {"ok": st == "authorized", "status": st,
+                    "detail": str(res.get("detail") or "")}
+        except Exception:
+            logger.debug("provider submit_password 失败", exc_info=True)
+            return {"ok": False, "status": sess.status,
+                    "detail": tr(request, "err.login.password_submit_failed")}
 
     @app.post("/api/platforms/{platform}/login/{login_id}/cancel")
     async def api_platform_login_cancel(platform: str, login_id: str, request: Request):
