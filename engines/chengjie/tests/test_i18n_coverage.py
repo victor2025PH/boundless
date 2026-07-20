@@ -694,7 +694,7 @@ def test_i18n_packs_bilingual_and_no_collision():
 
     from src.web.i18n_packs import collect_packs
 
-    pzh, pen = collect_packs()
+    pzh, pen, _pvi = collect_packs()
     assert pzh and pen, "i18n packs 为空（机制未接通？）"
     diff = set(pzh) ^ set(pen)
     assert not diff, f"pack 的 zh/en 键不齐平: {sorted(diff)[:20]}"

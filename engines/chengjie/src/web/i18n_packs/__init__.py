@@ -6,7 +6,8 @@
 
 - **新增词条一律进本包**(按域建小文件),不再直接改 `web_i18n.py` 的
   `_TRANSLATIONS` 字面量;存量词条在无并行编辑窗口时逐域迁移。
-- 每个 pack 模块暴露两个 dict:``ZH`` 与 ``EN``,key 一一对应。
+- 每个 pack 模块暴露 ``ZH`` 与 ``EN``(key 一一对应);可选 ``VI``(越南语子集,
+  可仅含 override 键,不要求与 ZH/EN 同键)。
 - `web_i18n.get_translations()` 返回 **单体 + 全部 pack 合并**后的字典,
   对所有消费方(模板/JS 词表/tr())透明。
 - 冲突规则:pack 之间、pack 与单体之间 **禁止同 key**(collect_packs 对
@@ -15,7 +16,7 @@
 - 热更新:web_i18n 的 `_maybe_reload` 同时监视本包目录 mtime,改 pack 文件
   与改单体一样即时生效(fail-safe:异常保留旧字典)。
 
-新建 pack:在本目录加 ``<domain>.py``,定义 ``ZH``/``EN``,无需注册。
+新建 pack:在本目录加 ``<domain>.py``,定义 ``ZH``/``EN``(及可选 ``VI``),无需注册。
 """
 from __future__ import annotations
 
@@ -39,26 +40,36 @@ def pack_files() -> list:
     return sorted(_PKG_DIR.glob("[!_]*.py"))
 
 
-def collect_packs(force_reload: bool = False) -> Tuple[Dict[str, str], Dict[str, str]]:
-    """合并全部 pack,返回 (zh, en)。
+def collect_packs(force_reload: bool = False) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, str]]:
+    """合并全部 pack,返回 (zh, en, vi)。
 
-    pack 之间同 key 冲突 → 直接 ValueError(fail fast,宁可启动失败也不静默
-    覆盖);force_reload=True 时逐模块 importlib.reload(热更新路径用)。
+    ZH/EN:pack 之间同 key 冲突 → 直接 ValueError(fail fast)。
+    VI:独立收集,pack 可仅定义 VI(override 键);VI 之间同 key 冲突同样 fail fast。
+    force_reload=True 时逐模块 importlib.reload(热更新路径用)。
     """
     zh: Dict[str, str] = {}
     en: Dict[str, str] = {}
+    vi: Dict[str, str] = {}
     owner: Dict[str, str] = {}
+    vi_owner: Dict[str, str] = {}
     for name in iter_pack_names():
         mod = importlib.import_module(f"{__name__}.{name}")
         if force_reload:
             mod = importlib.reload(mod)
         mzh = getattr(mod, "ZH", {}) or {}
         men = getattr(mod, "EN", {}) or {}
+        mvi = getattr(mod, "VI", {}) or {}
         for k in set(mzh) | set(men):
             if k in owner:
                 raise ValueError(
                     f"i18n pack 冲突: key {k!r} 同时定义于 {owner[k]} 与 {name}")
             owner[k] = name
+        for k in mvi:
+            if k in vi_owner:
+                raise ValueError(
+                    f"i18n pack VI 冲突: key {k!r} 同时定义于 {vi_owner[k]} 与 {name}")
+            vi_owner[k] = name
         zh.update(mzh)
         en.update(men)
-    return zh, en
+        vi.update(mvi)
+    return zh, en, vi

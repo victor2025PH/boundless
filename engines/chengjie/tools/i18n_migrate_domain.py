@@ -114,7 +114,7 @@ def main() -> int:
     # pack 冲突检查
     sys.path.insert(0, str(ROOT))
     from src.web.i18n_packs import collect_packs
-    pzh, _pen = collect_packs()
+    pzh, _pen, _pvi = collect_packs()
     clash = sorted(set(both) & set(pzh))
     if clash:
         raise SystemExit(f"与现有 pack 冲突,中止: {clash[:10]}")

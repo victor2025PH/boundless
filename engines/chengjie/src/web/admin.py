@@ -481,6 +481,8 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     @app.middleware("http")
     async def inject_i18n(request: Request, call_next):
         lang = request.query_params.get("lang") or request.cookies.get("ui_lang", "zh")
+        if lang not in ("zh", "en", "vi"):
+            lang = "zh"
         request.state.ui_lang = lang
         request.state.i18n = get_translations(lang)
         # 配置热重载检查点：check_and_hot_reload 原本只挂在 Telegram 消息循环——
@@ -640,7 +642,7 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         resp = RedirectResponse(request.headers.get("referer", "/"), status_code=303)
         resp.set_cookie("ui_lang", lang, max_age=365 * 86400)
         # 语言跟人走：登录用户切换语言时落库个人偏好，下次任意设备登录自动套用。
-        if lang in ("zh", "en"):
+        if lang in ("zh", "en", "vi"):
             try:
                 _uname = request.session.get("username", "")
                 if _uname:

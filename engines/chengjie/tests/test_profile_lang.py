@@ -2,7 +2,7 @@
 
 覆盖：
 - 新用户默认 lang='' （无偏好→登录不强制语言，沿用 cookie/默认）
-- set_lang 仅接受 zh/en，非法值拒绝且不污染已存值
+- set_lang 仅接受 zh/en/vi，非法值拒绝且不污染已存值
 - 既有库二次打开（模拟重启）走 ALTER 迁移幂等、且保留已写入的 lang
 """
 import sqlite3
@@ -33,6 +33,10 @@ def test_set_lang_roundtrip_and_validation(tmp_path):
     # 可切回 zh
     assert store.set_lang("amy", "zh") is True
     assert store.get_user("amy")["lang"] == "zh"
+
+    # vi 也接受
+    assert store.set_lang("amy", "vi") is True
+    assert store.get_user("amy")["lang"] == "vi"
 
 
 def test_migration_idempotent_on_reopen(tmp_path):

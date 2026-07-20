@@ -324,8 +324,8 @@ class WebUserStore:
         return True
 
     def set_lang(self, username: str, lang: str) -> bool:
-        """持久化坐席 UI 语言偏好（语言跟人走）。仅接受 zh/en，其它一律拒绝。"""
-        if lang not in ("zh", "en"):
+        """持久化坐席 UI 语言偏好（语言跟人走）。仅接受 zh/en/vi，其它一律拒绝。"""
+        if lang not in ("zh", "en", "vi"):
             return False
         with self._lock:
             self._conn.execute(

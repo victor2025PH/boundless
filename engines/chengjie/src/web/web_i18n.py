@@ -7844,14 +7844,17 @@ DEFAULT_LANG = "zh"
 # 新增词条一律进按域拆分的 pack 文件;本单体字典只承载存量。消费方(get_translations
 # /t/tr)一律读合并视图 _MERGED,对模板/JS 词表/路由文案完全透明。
 def _build_merged(base: dict) -> dict:
-    """单体 + packs → 合并字典。packs 收集失败时 fail-safe 回落单体。"""
+    """单体 + packs → 合并字典。vi = en 底 + VI 覆盖；packs 失败时 fail-safe。"""
     try:
         from src.web.i18n_packs import collect_packs
-        pzh, pen = collect_packs()
-        return {"zh": {**base["zh"], **pzh}, "en": {**base["en"], **pen}}
+        pzh, pen, pvi = collect_packs()
+        zh = {**base["zh"], **pzh}
+        en = {**base["en"], **pen}
+        return {"zh": zh, "en": en, "vi": {**en, **pvi}}
     except Exception as exc:
         _logger.warning("i18n packs 合并失败（仅用单体字典）: %s", exc)
-        return base
+        en = base.get("en") or {}
+        return {**base, "vi": dict(en)}
 
 
 _MERGED = _build_merged(_TRANSLATIONS)
@@ -7901,11 +7904,13 @@ def _maybe_reload() -> None:
             if pm != _packs_loaded_mtime:
                 try:
                     from src.web.i18n_packs import collect_packs
-                    pzh, pen = collect_packs(force_reload=True)
-                    _MERGED = {"zh": {**_TRANSLATIONS["zh"], **pzh},
-                               "en": {**_TRANSLATIONS["en"], **pen}}
+                    pzh, pen, pvi = collect_packs(force_reload=True)
+                    zh = {**_TRANSLATIONS["zh"], **pzh}
+                    en = {**_TRANSLATIONS["en"], **pen}
+                    _MERGED = {"zh": zh, "en": en, "vi": {**en, **pvi}}
                     _packs_loaded_mtime = pm
-                    _logger.info("i18n packs 热重载完成（+%d/+%d 键）", len(pzh), len(pen))
+                    _logger.info("i18n packs 热重载完成（+%d/+%d/+%d 键）",
+                                 len(pzh), len(pen), len(pvi))
                 except Exception as exc:
                     _logger.warning("i18n packs 热重载失败（保留旧字典）: %s", exc)
 

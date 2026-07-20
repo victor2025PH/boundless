@@ -6,8 +6,8 @@
    提供：window.T / Tf（文案）、wsFmtDate/Time/DateTime + wsDateLocale（日期本地化）、wsApplyI18n（data-i18n 静态替换）。 */
 window.WS_I18N = {{ i18n|default({})|tojson }};
 window.WS_LANG = "{{ ui_lang|default('zh') }}";
-window.WS_LOCALE = "{{ 'zh-CN' if (ui_lang|default('zh')) == 'zh' else 'en-US' }}";
-window.wsDateLocale = function(){ return window.WS_LOCALE || (window.WS_LANG==='en'?'en-US':'zh-CN'); };
+window.WS_LOCALE = "{{ 'zh-CN' if (ui_lang|default('zh')) == 'zh' else ('vi-VN' if (ui_lang|default('zh')) == 'vi' else 'en-US') }}";
+window.wsDateLocale = function(){ return window.WS_LOCALE || (window.WS_LANG==='en'?'en-US':(window.WS_LANG==='vi'?'vi-VN':'zh-CN')); };
 window.wsFmtDate = function(ts, opts){
   if(ts==null||ts==='') return '';
   var d=new Date(ts<1e12?ts*1000:ts);
@@ -26,7 +26,7 @@ window.T = function(k, fb){ var v = window.WS_I18N && window.WS_I18N[k]; return 
 /* Tf：带占位符插值的 T —— Tf(key,{tag}) 把译文里的 {tag} 全替为值。
    用 split/join 全局替换（免正则转义），各语言只存一句含 {x} 的完整文案，杜绝字符串拼接。 */
 window.Tf = function(k, vars){ var s = window.T(k); if(vars){ for(var p in vars){ if(Object.prototype.hasOwnProperty.call(vars,p)){ s = s.split('{'+p+'}').join(String(vars[p])); } } } return s; };
-window.wsToggleLang = function(){ var n=(window.WS_LANG==='en')?'zh':'en'; location.href='/set_lang?lang='+n; };
+window.wsToggleLang = function(){ var c=window.WS_LANG||'zh'; var n=(c==='zh')?'en':(c==='en')?'vi':'zh'; location.href='/set_lang?lang='+n; };
 (function(){
   function apply(root){
     root=root||document;
