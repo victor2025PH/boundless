@@ -226,6 +226,11 @@
   .ws-notif-hdr{display:flex;justify-content:space-between;align-items:center;padding:12px 16px 8px;border-bottom:1px solid #e5e7eb;}
   .ws-notif-hdr strong{font-size:14px;color:#111827;}
   .ws-notif-read{font-size:12px;color:#2563eb;cursor:pointer;padding:2px 6px;}
+  /* 十六期：类型筛选 chips */
+  .ws-notif-filter{display:flex;gap:6px;padding:8px 14px;border-bottom:1px solid #f1f5f9;flex-wrap:wrap;}
+  .ws-nf-chip{font-size:12px;padding:2px 10px;border-radius:999px;border:1px solid #e5e7eb;color:#4b5563;cursor:pointer;user-select:none;}
+  .ws-nf-chip:hover{background:#f3f4f6;}
+  .ws-nf-chip.active{background:rgba(37,99,235,.1);border-color:rgba(37,99,235,.45);color:#2563eb;font-weight:600;}
   .ws-notif-list{overflow-y:auto;flex:1;}
   .ws-notif-item{display:flex;gap:10px;padding:10px 14px;border-bottom:1px solid #f3f4f6;cursor:pointer;transition:background .12s;}
   .ws-notif-item:hover{background:#f8fafc;}
@@ -1351,6 +1356,14 @@ document.addEventListener('click',function(e){
       <span class="ws-notif-read" id="ws-notif-read" data-i18n="base.notif.read_all">全部已读</span>
     </span>
   </div>
+  <!-- 十六期：按类型筛选（只影响面板展示；角标未读恒为全量口径） -->
+  <div class="ws-notif-filter" id="ws-notif-filter">
+    <span class="ws-nf-chip active" data-nf="all" data-i18n="base.notif.f_all">全部</span>
+    <span class="ws-nf-chip" data-nf="msg" data-i18n="base.notif.f_msg">消息</span>
+    <span class="ws-nf-chip" data-nf="alert" data-i18n="base.notif.f_alert">告警</span>
+    <span class="ws-nf-chip" data-nf="assign" data-i18n="base.notif.f_assign">转派</span>
+    <span class="ws-nf-chip" data-nf="other" data-i18n="base.notif.f_other">其它</span>
+  </div>
   <div class="ws-notif-list" id="ws-notif-list"></div>
 </div>
 <!-- P6: 严重超时下钻面板 -->
@@ -1450,9 +1463,23 @@ document.addEventListener('click',function(e){
       +'</div>';
   }
 
+  // 十六期：类型筛选（仅面板展示口径；角标未读不受筛选影响）
+  var _nfMode = 'all';
+  var _NF_BUCKET = {
+    inbox_message:'msg',
+    conversation_assigned:'assign', draft_reassigned:'assign',
+    sla_alert:'alert', draft_sla_breach:'alert', escalation:'alert',
+    anomaly_alert:'alert', queue_alert:'alert',
+  };
+  function _nfMatch(n){
+    if(_nfMode==='all') return true;
+    var b=_NF_BUCKET[n&&n.type]||'other';
+    return b===_nfMode;
+  }
+
   function _renderNotif(){
     if(!list) return;
-    var all = _notifications.slice().reverse();
+    var all = _notifications.slice().reverse().filter(_nfMatch);
     var main = all.filter(function(n){ return !_isGroup(n); }).slice(0,50);
     var groups = all.filter(_isGroup).slice(0,50);
     var html = '';
@@ -1524,6 +1551,16 @@ document.addEventListener('click',function(e){
 
   if(btn) btn.addEventListener('click', _toggle);
   if(readBtn) readBtn.addEventListener('click', function(e){ e.stopPropagation(); _markRead(); });
+  // 十六期：筛选 chips 事件（面板内点击不冒泡关面板）
+  var nfBar=document.getElementById('ws-notif-filter');
+  if(nfBar) nfBar.addEventListener('click', function(e){
+    var chip=e.target.closest ? e.target.closest('.ws-nf-chip') : null;
+    if(!chip) return;
+    e.stopPropagation();
+    _nfMode=chip.dataset.nf||'all';
+    nfBar.querySelectorAll('.ws-nf-chip').forEach(function(c){ c.classList.toggle('active', c===chip); });
+    _renderNotif();
+  });
   // 铃铛面板内的「提示设置」→ 打开消息通知/告警设置弹窗
   if(prefsLink) prefsLink.addEventListener('click', function(e){
     e.stopPropagation();
