@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # AIClient 的 key 失效路径，都不许在开发机弹真·系统弹窗（-n auto 多 worker
 # 各自独立去抖，一旦触发就是弹窗风暴）。test_host_alert 自有 fixture 再细控。
 os.environ.setdefault("HOST_ALERT_SILENT", "1")
+
 # 测试进程密封：import 期即剥离 AITR_*（桌面/实例部署注入用）环境变量。
 # ConfigManager._apply_env_overrides 会用 AITR_WEB_TOKEN 覆盖 web_admin.auth_token、
 # AITR_DATA_DIR/AITR_CONFIG_PATH 改写配置定位——开发机 shell 起过 dev 实例后残留这些
@@ -169,6 +170,21 @@ def client(app):
 # ─────────────────────────────────────────────────────────
 # 账号注册表隔离（防测试污染生产库）
 # ─────────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def _isolated_web_env(monkeypatch):
+    """隔离部署用 AITR_* 环境变量，防本地 shell 泄漏进测试进程。
+
+    背景（2026-07 实测踩中）：开发机常为起隔离 dev 实例而在 shell 里持久化
+    ``AITR_WEB_TOKEN=dev-ui-check`` 等变量；``config_manager`` 会用它覆盖
+    ``web_admin.auth_token`` → ``create_app`` 的 ``_ensure_master`` 以该 token
+    建 admin → conftest ``auth_client`` 用 test-token-123 登录必败 →
+    **所有需登录的 HTML 渲染断言集体假失败**（曾误判为 40 个存量回归）。
+    需要这些变量的用例（test_config_manager 等）自行 setenv，晚于本清理生效。
+    """
+    for k in ("AITR_WEB_TOKEN", "AITR_WEB_HOST", "AITR_WEB_PORT", "AITR_DESKTOP_MODE"):
+        monkeypatch.delenv(k, raising=False)
+
 
 @pytest.fixture(autouse=True)
 def _isolated_account_registry(tmp_path):
