@@ -143,15 +143,20 @@ def register_routing_search_routes(app, *, api_auth) -> None:
                 try:
                     msg_results = store.search_messages(q, limit=limit)
                     for m in msg_results:
+                        _cid = str(m.get("conversation_id") or "")
+                        _mid = str(m.get("message_id") or "")
+                        _q = f"conv={_cid}" + (f"&mid={_mid}" if _mid else "")
                         results.append({
                             "type": "message",
                             "icon": "💬",
                             "title": str(m.get("display_name") or m.get("conversation_id") or ""),
                             "preview": str(m.get("text") or "")[:100],
                             "ts": m.get("ts"),
-                            "conversation_id": m.get("conversation_id"),
+                            "conversation_id": _cid,
+                            "message_id": _mid,
                             "platform": m.get("platform", ""),
-                            "url": f"/workspace?focus={m.get('conversation_id', '')}",
+                            # 收件箱深链读 ?conv=（兼兼容旧 ?focus=）；带 mid 可滚动定位气泡
+                            "url": f"/workspace?{_q}",
                         })
                 except Exception:
                     logger.debug("global search 消息搜索失败", exc_info=True)
@@ -170,15 +175,16 @@ def register_routing_search_routes(app, *, api_auth) -> None:
                             (f"%{q}%", limit),
                         ).fetchall()
                     for r in note_rows:
+                        _ncid = str(r["conversation_id"] or "")
                         results.append({
                             "type": "note",
                             "icon": "📝",
                             "title": f"注解 · {r['display_name'] or r['conversation_id']}",
                             "preview": str(r["body"] or "")[:100],
                             "ts": r["ts"],
-                            "conversation_id": r["conversation_id"],
+                            "conversation_id": _ncid,
                             "platform": r.get("platform", ""),
-                            "url": f"/workspace?focus={r['conversation_id']}",
+                            "url": f"/workspace?conv={_ncid}",
                         })
                 except Exception:
                     logger.debug("global search 注解搜索失败", exc_info=True)

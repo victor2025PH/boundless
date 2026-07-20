@@ -157,12 +157,14 @@ def _collect_chats_from_store(
     request: Request,
     limit: int = 30,
     label_map: Optional[Dict[tuple, str]] = None,
+    before_ts: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """A1 读路径：直接从 InboxStore（持久事实源）读会话列表，映射回 chat dict 形状。
 
     ``label_map``：实时聚合派生的 {(platform, account_id): account_label} 友好名映射
     （store 不持久 account_label，借 live 同源回填，消除「列表显示账号 id」可视回归；
     store-only 历史账号 live 无对应项则回落 account_id——live 本也无其 label）。
+    ``before_ts``：十期游标分页——只取 last_ts 更旧的会话（「加载更多」）。
     返回 None 表示 store 不可用（调用方回落实时聚合）。
     """
     store = _inbox_store(request)
@@ -170,7 +172,8 @@ def _collect_chats_from_store(
         return None  # type: ignore[return-value]
     lmap = label_map or {}
     removed = _removed_account_keys(request)  # 与实时聚合一致：removed 账号会话只读展示
-    convs = store.list_conversations(limit=min(200, max(1, limit * 4)))
+    convs = store.list_conversations(
+        limit=min(200, max(1, limit * 4)), before_ts=before_ts)
     out: List[Dict[str, Any]] = []
     for c in convs:
         cid = str(c.get("conversation_id") or "")

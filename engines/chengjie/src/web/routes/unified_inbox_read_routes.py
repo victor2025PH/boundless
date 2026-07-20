@@ -34,6 +34,7 @@ from src.web.routes.unified_inbox_aggregate import (
     _INBOX_ADAPTERS,
     _chats_for_listing,
     _collect_all_chats,
+    _collect_chats_from_store,
     _enrich_outbound_originals,
     _ingest_thread_best_effort,
     _is_protocol_account,
@@ -264,18 +265,53 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
     """挂载主读路径端点（chats GET / thread GET）。"""
 
     @app.get("/api/unified-inbox/chats")
-    async def api_unified_inbox_chats(request: Request, limit: int = 30):
+    async def api_unified_inbox_chats(
+        request: Request, limit: int = 30, before_ts: float = 0,
+    ):
         api_auth(request)
         limit = max(5, min(100, int(limit or 30)))
+
+        # ── 十期：游标分页页（before_ts>0）——仅 store 有历史分页语义 ──
+        # live 聚合是各平台「最近 N 条」快照，翻不出更旧的；分页页直接 store 读，
+        # 首页已完成 ingest 旁路，这里无需再跑实时聚合。
+        if before_ts and float(before_ts) > 0:
+            older = _collect_chats_from_store(
+                request, limit=limit, before_ts=float(before_ts))
+            older = older or []
+            _enrich_chat_list(request, older, config_manager=config_manager)
+            oldest = min((float(c.get("last_ts") or 0) for c in older), default=0.0)
+            has_more = False
+            store = _inbox_store(request)
+            if store is not None and oldest > 0:
+                try:
+                    has_more = store.count_conversations_older_than(oldest) > 0
+                except Exception:
+                    has_more = False
+            return {
+                "ok": True, "ts": time.time(), "chats": older,
+                "has_more": has_more, "oldest_ts": oldest or None,
+            }
+
         chats = _chats_for_listing(request, limit=limit)
         platform_status: Dict[str, Any] = status_via_adapters(request, _INBOX_ADAPTERS)
         _merge_orchestrator_status(platform_status, config_manager)
         _enrich_chat_list(request, chats, config_manager=config_manager)
+        # 首页也回 has_more/oldest_ts（store 可用时），前端据此挂「加载更多」
+        oldest = min((float(c.get("last_ts") or 0) for c in chats), default=0.0)
+        has_more = False
+        store = _inbox_store(request)
+        if store is not None and oldest > 0:
+            try:
+                has_more = store.count_conversations_older_than(oldest) > 0
+            except Exception:
+                has_more = False
         return {
             "ok": True,
             "ts": time.time(),
             "chats": chats,
             "platform_status": platform_status,
+            "has_more": has_more,
+            "oldest_ts": oldest or None,
         }
 
     @app.get("/api/unified-inbox/thread")

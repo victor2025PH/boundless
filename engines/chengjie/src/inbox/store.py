@@ -1153,19 +1153,38 @@ class InboxStore:
         return [dict(r) for r in rows]
 
     def list_conversations(
-        self, *, limit: int = 50, platform: str = ""
+        self, *, limit: int = 50, platform: str = "",
+        before_ts: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
+        """会话列表（last_ts 降序）。``before_ts``：游标分页，只取更旧的会话。"""
         limit = max(1, min(500, int(limit or 50)))
         sql = "SELECT * FROM conversations"
+        wheres: List[str] = []
         params: List[Any] = []
         if platform:
-            sql += " WHERE platform = ?"
+            wheres.append("platform = ?")
             params.append(platform)
+        if before_ts is not None and float(before_ts) > 0:
+            wheres.append("last_ts < ?")
+            params.append(float(before_ts))
+        if wheres:
+            sql += " WHERE " + " AND ".join(wheres)
         sql += " ORDER BY last_ts DESC LIMIT ?"
         params.append(limit)
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
+
+    def count_conversations_older_than(self, ts: float, *, platform: str = "") -> int:
+        """last_ts 早于 ts 的会话数（列表分页 has_more 判定）。"""
+        sql = "SELECT COUNT(*) FROM conversations WHERE last_ts < ?"
+        params: List[Any] = [float(ts or 0)]
+        if platform:
+            sql += " AND platform = ?"
+            params.append(platform)
+        with self._lock:
+            row = self._conn.execute(sql, params).fetchone()
+        return int(row[0] if row else 0)
 
     def get_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
