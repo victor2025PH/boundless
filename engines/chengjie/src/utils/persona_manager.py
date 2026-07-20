@@ -906,17 +906,19 @@ class PersonaManager:
             预览/管理类调用（web 预览、routes 下的试装配）应传 False 免刷虚计数。
         """
         p = self.get_persona(chat_id, account_persona_id)
-        # 近7日活跃统计埋点：本方法是所有生产回复链路拼人设块的收口点。
-        # 仅统计解析出具名 profile（带 id）的生产调用；预览类调用传 record_usage=False。
+        # 近7日活跃统计埋点：本方法是所有生产回复链路（ai_client._build_system_instruction）
+        # 拼人设块的收口点。预览/管理类调用传 record_usage=False 免刷虚计数。
         # 埋点绝不允许影响回复链路——persona_usage 内部已吞异常，这里再兜一层。
+        # 2026-07-20 复盘修：id 为空 = 落到域默认/兜底人设（未绑定具名 profile 的会话，
+        # 生产占绝大多数）。旧逻辑 `if _upid:` 会把这部分回复静默漏计，导致活跃账本
+        # 长期只反映少数绑定人设。改用稳定键 __default__ 记账，让账本覆盖 100% AI 回复。
         if record_usage:
-            _upid = str((p or {}).get("id") or "").strip()
-            if _upid:
-                try:
-                    from src.utils.persona_usage import record as _usage_record
-                    _usage_record(_upid)
-                except Exception:
-                    pass
+            _upid = str((p or {}).get("id") or "").strip() or "__default__"
+            try:
+                from src.utils.persona_usage import record as _usage_record
+                _usage_record(_upid)
+            except Exception:
+                pass
         if detail == "compact":
             return self._format_persona_compact(
                 p, name_override=name_override, fallback_name=fallback_name

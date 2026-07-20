@@ -206,17 +206,26 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         ]
         # 近7日使用量注入（usage_7d）：Studio 列表据此看出「哪些人设真的在产出回复」。
         # 统计属旁路能力，异常一律吞掉——列表本体不能因它挂。
+        # usage_7d_default = 未绑定具名 profile、走域默认/兜底人设的回复条数（__default__ 键）；
+        # usage_7d_total = 全部 AI 回复条数。二者让前端能呈现「兜底人设也在干活」，
+        # 避免活跃排行只反映少数绑定人设（2026-07-20 复盘缺口修复的呈现侧）。
+        usage_default = 0
+        usage_total = 0
         try:
             from src.utils.persona_usage import counts as _usage_counts
             _uc = _usage_counts(7)
             for _s in summary:
                 _s["usage_7d"] = int(_uc.get(_s["id"], 0))
+            usage_default = int(_uc.get("__default__", 0))
+            usage_total = int(sum(_uc.values()))
         except Exception:
             pass
         return {
             "profiles": profiles,
             "ids": ids,
             "summary": summary,
+            "usage_7d_default": usage_default,
+            "usage_7d_total": usage_total,
         }
 
     @app.get("/api/personas/profiles/{profile_id}")

@@ -2240,6 +2240,8 @@ async function syncToConfig() {
 // ── Core globals ─────────────────────────────────────────────────────────────
 let _editingProfileId = null;
 let _allProfiles = [];
+let _usage7dDefault = 0;   // P11：近7日走默认兜底人设的回复数（无对应 profile 卡）
+let _usage7dTotal = 0;     // P11：近7日全部 AI 回复数（含默认兜底）
 let _currentQ = '';
 let _activeTag = '';
 let _lastStatusTs = 0;
@@ -2291,6 +2293,9 @@ async function loadProfileList() {
     }
     const d = await r.json();
     _allProfiles = d.summary || [];
+    // P11：默认兜底人设近7日回复数（不属任何 profile 卡；供活跃排行呈现「兜底也在干活」）
+    _usage7dDefault = d.usage_7d_default || 0;
+    _usage7dTotal = d.usage_7d_total || 0;
     renderTagCloud(_allProfiles);
     _updateSfChipCounts();
     _applyFilter();
@@ -3305,7 +3310,7 @@ function _renderUsageChart() {
   var profWithBindings = (_allProfiles || []).filter(function(p){ return (p.binding_count || 0) > 0; });
   // P2：近7日 AI 回复条数排行(usage_7d 由后端 summary 注入;无数据不展示该段)
   var profWithUsage = (_allProfiles || []).filter(function(p){ return (p.usage_7d || 0) > 0; });
-  if (!profWithBindings.length && !profWithUsage.length) { section.style.display = 'none'; return; }
+  if (!profWithBindings.length && !profWithUsage.length && (_usage7dDefault || 0) === 0) { section.style.display = 'none'; return; }
   section.style.display = 'block';
   var html = '';
   if (profWithBindings.length) {
@@ -3322,19 +3327,31 @@ function _renderUsageChart() {
         + '</div>';
     }).join('');
   }
-  if (profWithUsage.length) {
-    var usorted = profWithUsage.slice().sort(function(a, b){ return (b.usage_7d||0) - (a.usage_7d||0); }).slice(0, 8);
-    var umax = usorted[0].usage_7d || 1;
+  if (profWithUsage.length || (_usage7dDefault || 0) > 0) {
+    // P11：把「默认兜底人设」作为一行并入排行(它没有 profile 卡,但真的在产出回复)
+    var rankRows = profWithUsage.map(function(p){ return {name: (p.name || p.id), id: p.id, n: p.usage_7d || 0, def: false}; });
+    if ((_usage7dDefault || 0) > 0) {
+      rankRows.push({name: window.T('psn_usage_default_name'), id: '__default__', n: _usage7dDefault, def: true});
+    }
+    rankRows.sort(function(a, b){ return b.n - a.n; });
+    rankRows = rankRows.slice(0, 8);
+    var umax = rankRows.length ? rankRows[0].n : 1;
+    var _totalTip = (_usage7dTotal || 0) > 0 ? ' ' + window.T('psn_usage_total_pre') + ' ' + _usage7dTotal + ' ' + window.T('psn_usage_total_suf') : '';
     html += '<div style="font-size:.76rem;font-weight:700;color:var(--t1);margin:.7rem 0 .4rem">'
       + window.T('psn_usage_rank_title')
-      + ' <span style="font-size:.68rem;font-weight:400;color:var(--t2)">' + window.T('psn_usage_rank_sub') + '</span></div>';
-    html += usorted.map(function(p) {
-      var pct = Math.max(4, Math.round((p.usage_7d / umax) * 100));
-      var nameSafe = (p.name || p.id).replace(/</g, '&lt;');
+      + ' <span style="font-size:.68rem;font-weight:400;color:var(--t2)">' + window.T('psn_usage_rank_sub') + _totalTip + '</span></div>';
+    html += rankRows.map(function(row) {
+      var pct = Math.max(4, Math.round((row.n / umax) * 100));
+      var nameSafe = String(row.name).replace(/</g, '&lt;');
+      // 默认兜底行用中性灰 + 提示,与具名人设(琥珀)区分——引导运营去绑定/建人设收敛兜底占比
+      var barClr = row.def ? '#94a3b8' : '#f59e0b';
+      var nameHtml = row.def
+        ? '<span title="' + window.T('psn_usage_default_t') + '">○ ' + nameSafe + '</span>'
+        : nameSafe;
       return '<div class="usage-row">'
-        + '<div class="usage-name" title="' + p.id + '">' + nameSafe + '</div>'
-        + '<div class="usage-bar-wrap"><div class="usage-bar-fill" style="width:' + pct + '%;background:#f59e0b"></div></div>'
-        + '<div class="usage-cnt">' + p.usage_7d + '</div>'
+        + '<div class="usage-name" title="' + row.id + '">' + nameHtml + '</div>'
+        + '<div class="usage-bar-wrap"><div class="usage-bar-fill" style="width:' + pct + '%;background:' + barClr + '"></div></div>'
+        + '<div class="usage-cnt">' + row.n + '</div>'
         + '</div>';
     }).join('');
   }
