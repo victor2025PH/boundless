@@ -2679,6 +2679,8 @@ function selectChat(key){
   _syncSelectedClass();   // 即时高亮（含群组动态区项）
   // 通知引擎据此跳过「正在查看的会话」的提示音/弹窗
   try{ window.__wsActiveConvId = c.conversation_id || convKey(c); }catch(_){}
+  // 十四期：打开即消——铃铛里该会话的通知（新消息/转派/SLA）本地清除，角标即时回落
+  try{ if(window.__wsNotif&&window.__wsNotif.dismissConv) window.__wsNotif.dismissConv(c.conversation_id||convKey(c)); }catch(_){}
   threadMsgs=[];
   _threadHasMore=false; _threadOldestTs=null; _threadLoadingOlder=false;
   document.getElementById('chat-empty').style.display='none';

@@ -1437,6 +1437,8 @@ document.addEventListener('click',function(e){
       sub = window.Tf('base.notif.backlog_sub',{n:(d.count!=null?d.count:'?'),l3:(d.l3!=null?d.l3:'?'),l4:(d.l4!=null?d.l4:'?')});
     } else if(n.type==='draft_reassigned'){
       sub = window.Tf('base.notif.reassigned_sub',{name:(d.to_agent_name||d.to_agent||'?')});
+    } else if(n.type==='conversation_assigned'){
+      sub = window.Tf('base.notif.assigned_sub',{by:(d.by_name||d.by||'?'),n:(d.count||1)});
     }
     return '<div class="ws-notif-item'+(unread?' unread':'')+'" style="border-left-color:'+(meta.accent||'transparent')+';" onclick="window.__wsNotif.click(\''+esc(JSON.stringify(n).replace(/'/g,'\\'+"'"))+'\')">'
       +'<div class="ws-notif-icon" style="background:'+meta.bg+'">'+(typeof uiIcon==='function'?uiIcon(meta.iconName||'pin',14):'')+'</div>'
@@ -1550,18 +1552,35 @@ document.addEventListener('click',function(e){
   }
   _loadNotifications();
 
+  // 十四期：打开会话即消除其关联通知（新消息/转派/升级/SLA）——本地内存移除，
+  // 角标当场回落。有意不持久化：刷新后由「全部已读」水位线接管，避免为
+  // 逐条已读引入第二套服务端状态（水位线制是既定设计）。
+  function _dismissConv(cid){
+    if(!cid) return;
+    var before=_notifications.length;
+    for(var i=_notifications.length-1;i>=0;i--){
+      var n=_notifications[i], d=(n&&n.data)||{};
+      if(String(d.conversation_id||'')===String(cid) && !_isGroup(n)) _notifications.splice(i,1);
+    }
+    if(_notifications.length!==before){ _updateBadge(); if(_open) _renderNotif(); }
+  }
+
   // 导出：供 SSE handler 调用 addNotif
   window.__wsNotif = {
     add: _addNotif,
+    dismissConv: _dismissConv,
     click: function(jsonStr){
       try{
         var n = JSON.parse(jsonStr);
         var d = n.data || {};
-        // 新消息/升级/SLA → 定位会话：已在收件箱直接选中，否则跳回工作台
-        if((n.type==='inbox_message'||n.type==='escalation'||n.type==='sla_alert') && d.conversation_id){
+        // 新消息/升级/SLA/转派 → 定位会话：已在收件箱直接选中，否则跳回工作台
+        if((n.type==='inbox_message'||n.type==='escalation'||n.type==='sla_alert'||n.type==='conversation_assigned') && d.conversation_id){
           if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(d.conversation_id); _toggle(); return; }
           try{ sessionStorage.setItem('ws_focus_conv', d.conversation_id); }catch(_){}
           location.href='/workspace';
+        } else if(n.type==='conversation_assigned'){
+          // 批量转派（无单一会话）→ 回工作台看「我的」
+          if(location.pathname!=='/workspace') location.href='/workspace';
         } else if(n.type==='draft_sla_breach'||n.type==='draft_backlog_summary'||n.type==='draft_reassigned'){
           location.href='/workspace/drafts';
         } else if(n.type==='sla_alert'){

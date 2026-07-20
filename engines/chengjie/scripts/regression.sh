@@ -42,7 +42,7 @@ if [ "$#" -eq 0 ]; then
             printf '\033[31m[ui-regress] 视觉回归失败（exit=%s），diff 图见 tools/ui_regress/shots/diff/\033[0m\n' "$ui_rc"
             exit "$ui_rc"
         fi
-        # 十期：功能验收冒烟（CmdK/移动端/vi/深链等 18 项，详见 tools/smoke_acceptance.py）
+        # 十期：功能验收冒烟（CmdK/移动端/vi/深链等 21 项，详见 tools/smoke_acceptance.py）
         echo "[acceptance] 跑功能验收冒烟（$ui_base）"
         acc_rc=0
         python tools/smoke_acceptance.py --base "$ui_base" \
@@ -51,6 +51,16 @@ if [ "$#" -eq 0 ]; then
         if [ "$acc_rc" -ne 0 ]; then
             printf '\033[31m[acceptance] 功能验收失败（exit=%s），明细见 tools/smoke_acceptance.json\033[0m\n' "$acc_rc"
             exit "$acc_rc"
+        fi
+        # 十四期：会话列表性能阈值回归（500 条 mock，抓量级劣化，详见 tools/perf_conv_list.py）
+        echo "[perf] 跑会话列表性能回归（$ui_base）"
+        perf_rc=0
+        python tools/perf_conv_list.py --base "$ui_base" \
+            --token "${SMOKE_ACCEPT_TOKEN:-dev-ui-check}" \
+            --out tools/perf_conv_list.json || perf_rc=$?
+        if [ "$perf_rc" -ne 0 ]; then
+            printf '\033[31m[perf] 性能回归超阈值（exit=%s），明细见 tools/perf_conv_list.json\033[0m\n' "$perf_rc"
+            exit "$perf_rc"
         fi
     else
         printf '\033[33m[ui-regress] dev 实例不可达（%s），跳过视觉回归\033[0m\n' "$ui_base"

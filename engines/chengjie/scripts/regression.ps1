@@ -58,7 +58,7 @@ try {
                 Write-Host $msg -ForegroundColor Red
                 exit $LASTEXITCODE
             }
-            # 十期：功能验收冒烟（CmdK/移动端/vi/深链等 18 项，详见 tools\smoke_acceptance.py）
+            # 十期：功能验收冒烟（CmdK/移动端/vi/深链等 21 项，详见 tools\smoke_acceptance.py）
             $accToken = $env:SMOKE_ACCEPT_TOKEN
             if (-not $accToken) { $accToken = "dev-ui-check" }
             Write-Host "[acceptance] 跑功能验收冒烟（$uiBase）"
@@ -66,6 +66,15 @@ try {
                 --out tools\smoke_acceptance.json
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "[acceptance] 功能验收失败（exit=$LASTEXITCODE），明细见 tools\smoke_acceptance.json" `
+                    -ForegroundColor Red
+                exit $LASTEXITCODE
+            }
+            # 十四期：会话列表性能阈值回归（500 条 mock，抓量级劣化，详见 tools\perf_conv_list.py）
+            Write-Host "[perf] 跑会话列表性能回归（$uiBase）"
+            python tools\perf_conv_list.py --base $uiBase --token $accToken `
+                --out tools\perf_conv_list.json
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "[perf] 性能回归超阈值（exit=$LASTEXITCODE），明细见 tools\perf_conv_list.json" `
                     -ForegroundColor Red
                 exit $LASTEXITCODE
             }
