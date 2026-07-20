@@ -1388,6 +1388,7 @@ _ROUTE_CJK_CEILINGS = {
     "kb_routes.py": 0,                    # P36
     "unified_inbox_send_routes.py": 0,    # P37
     "unified_inbox_login_routes.py": 0,   # P37
+    "enable_routes.py": 0,                # P5（err.enable.* 走 tr(); 台账防回潮）
     "drafts_routes.py": 0,                # P38（shared err.perm/svc/req 词表 + err.draft.*）
     "auth_user_routes.py": 0,             # P39（复用 token_error/su_js_003/base.shell.pwd_min_len + err.auth.*）
     "settings_routes.py": 0,              # P39（f-string 参数化收敛 err.set.*）
