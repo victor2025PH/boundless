@@ -122,7 +122,14 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
             raise HTTPException(400, "chat_id and persona required")
         from src.utils.persona_manager import PersonaManager
         pm = PersonaManager.get_instance()
-        pm.bind_chat_persona(str(chat_id), persona_data)
+        # 优先"引用式"绑定（只存 profile_id，实时解析当前 profile 内容）：这样之后在页面编辑
+        # 该人设，所有绑定会话立即跟随，不再出现"改了人设但会话还用旧快照"的冲突。
+        # 仅当 persona 带合法 profile id 且该 profile 存在时走引用；否则回落旧内联快照（自定义/无 id）。
+        _pid = str((persona_data or {}).get("id") or "").strip()
+        if _pid and _pid in getattr(pm, "_profile_personas", {}):
+            pm.bind_chat_persona_by_profile_id(str(chat_id), _pid)
+        else:
+            pm.bind_chat_persona(str(chat_id), persona_data)
         try:
             cm = getattr(request.app.state, "config_manager", None) or config_manager
             pm.persist_chat_bindings(cm)

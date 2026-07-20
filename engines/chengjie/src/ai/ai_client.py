@@ -1707,6 +1707,21 @@ class AIClient(LoggerMixin):
         parts = []
         context = context or {}
         _suppress_global_identity = bool(context.get("suppress_global_ai_identity"))
+        # 单一身份源（2026-07-20）：会话/账号被显式绑定了人设时（chat_binding / account_profile
+        # 两个 tier），只用该人设身份，压制全局 ai.system_prompt（否则如 顾嘉(system_prompt) 与
+        # 林佳欣(会话人设) 双身份塞进提示词会互相打架、名字说岔）。未显式绑定的会话（域/默认 tier，
+        # 如 Telegram 主线）保持原样用全局 system_prompt → 零影响。tier 解析是纯内存字典查，很轻；
+        # 任何异常回落 False = 旧行为。此 flag 同时门控下方 _primary 与 _name_ov（名字覆盖）。
+        try:
+            from src.utils.persona_manager import PersonaManager as _PM_early
+            _pm_early = _PM_early.get_instance()
+            _cid_early = str((context or {}).get("chat_id", "") or "")
+            _acc_early = str((context or {}).get("account_persona_id", "") or "")
+            _, _tier_early = _pm_early.get_persona_with_tier(_cid_early, _acc_early)
+            if _tier_early in ("chat_binding", "account_profile"):
+                _suppress_global_identity = True
+        except Exception:
+            pass
         _primary = "" if _suppress_global_identity else self._primary_system_prompt_text()
         if _primary:
             parts.append(_primary)
