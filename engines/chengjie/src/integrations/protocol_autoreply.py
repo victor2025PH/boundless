@@ -431,6 +431,27 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
             _ks_on, _ks_scope = False, ""
         if _ks_on:
             raise RuntimeError(f"kill_switch_blocked:{_ks_scope}")
+        # 语音自动回复（方案B · 2026-07-20）：复用 Path B 的跨平台 autosend_voice
+        #   （经 orch.send_media → WhatsApp 边车 /send-media 发 ogg/opus 语音条）。受
+        #   inbox.l2_autosend.voice 配置门控（enabled / trigger / 长度 / 人设白名单 / 克隆音优先），
+        #   人设声音取会话绑定人设的 voice_profile。判定该发语音 → 发语音并早退（跳过文本）；
+        #   否则回落文本。全程 try/except：语音任何异常都绝不影响文本回复这条主路径；
+        #   orch.send_media 内部自带 Kill-Switch + 反封号闸门，与文本同守。
+        try:
+            _vb = (((cfg or {}).get("inbox") or {}).get("l2_autosend") or {}).get("voice") or {}
+            if _vb.get("enabled"):
+                from types import SimpleNamespace as _SNS
+                from src.inbox.autosend_helpers import autosend_voice as _av
+                _shim = _SNS(
+                    config=getattr(app.state, "config_manager", None),
+                    logger=logger,
+                    inbox_store=getattr(app.state, "inbox_store", None),
+                    _web_loop=None,
+                )
+                if await _av(_shim, platform, account_id, chat_key, text):
+                    return {"delivered": True, "delivered_as": "voice"}
+        except Exception:
+            logger.debug("[protocol-autoreply] 语音尝试失败，回落文本", exc_info=True)
         # N 线 核心3：发送前反封号闸门（A/B 两线共用 companion_send_gate；默认关→零破坏）。
         # 拦截 → 抛错，交由 run_autoreply 既有熔断/转人工处理。
         from src.skills.companion_send_gate import evaluate, gate_enabled

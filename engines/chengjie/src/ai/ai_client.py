@@ -2376,6 +2376,23 @@ class AIClient(LoggerMixin):
                     "「我发条语音」这类承诺；对方要照片时自然回应即可（系统会处理），"
                     "也不要否认你能拍照。")
 
+        # 语音能力（2026-07-20）：开了自动语音（inbox.l2_autosend.voice.enabled）时，明确告诉
+        # AI 它能发语音——系统会把回复转成人设声音发出。否则拟人人设会自作主张编「我发不了语音/
+        # 嗓子哑/不方便」的借口，与「系统实际发出了语音条」自相矛盾（本轮实测碰到）。
+        # 仅陪伴人设 + 语音开关开时注入；发不发语音仍由 decide_voice 决定，这里只消除「否认能力」。
+        try:
+            _vcfg2 = (
+                (((self.config.config or {}).get("inbox") or {}).get("l2_autosend") or {}).get("voice") or {}
+            ) if (self.config and getattr(self.config, "config", None)) else {}
+        except Exception:
+            _vcfg2 = {}
+        if _is_companion and _vcfg2.get("enabled"):
+            prompt_parts.append(
+                "【语音能力·须遵守】你能发语音消息：系统会自动把你要说的话用你的声音发出。"
+                "对方要你发语音时，你就自然地正常回答（内容照说就行），系统会转成语音——"
+                "绝不要说「我发不了语音」「嗓子哑」「不方便发语音」「语音功能坏了」这类借口，"
+                "也不要主动写「我发条语音给你」这种承诺（系统会自动处理）。")
+
         # 当前真实时间（Phase19 时间一致性）：LLM 训练数据里没有"现在几点"，
         # 不注入就会深夜说"下午好"、凌晨发正午场景标记。仅陪伴人设注入
         # （客服域时间敏感话术由业务模板负责，不吃这块 token）。
