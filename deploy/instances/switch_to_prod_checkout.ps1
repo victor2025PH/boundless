@@ -125,19 +125,30 @@ foreach ($i in $Instances) {
     Say "$id 切换完成并验收通过" 'Green'
 }
 
-# ── watchdog 计划任务改指 prod ───────────────────────────────────────────
+# ── 计划任务批量改指 prod(watchdog/uploader/snapshot/sentinel/Baileys 等)──
+# 2026-07-20 盘点:引用开发树的任务共 10 个(含 WhatsApp-Baileys-Service)。逐个替换
+# 动作参数里的树路径;watchdog 优先(它会从脚本所在树拉起实例,指错树=从错误代码自愈)。
 if (-not $SkipWatchdog) {
-    $task = Get-ScheduledTask -TaskName 'Boundless-chengjie-watchdog' -ErrorAction SilentlyContinue
-    if ($task) {
-        $a = $task.Actions[0]
-        if ($a.Arguments -like "*$ProdRoot*") { Say "watchdog 已指向 prod,跳过" }
-        else {
-            $newArgs = $a.Arguments -replace [regex]::Escape($DevRoot), $ProdRoot
-            Set-ScheduledTask -TaskName 'Boundless-chengjie-watchdog' `
-                -Action (New-ScheduledTaskAction -Execute $a.Execute -Argument $newArgs) | Out-Null
-            Say "watchdog 计划任务已改指 prod checkout" 'Green'
+    $swept = 0
+    foreach ($task in @(Get-ScheduledTask -ErrorAction SilentlyContinue |
+            Where-Object { $_.TaskName -like '*Boundless*' -or $_.TaskName -like '*Baileys*' })) {
+        $acts = @($task.Actions)
+        $touched = $false
+        $newActs = foreach ($a in $acts) {
+            if ($a.Arguments -like "*$DevRoot*" -or $a.Execute -like "*$DevRoot*") {
+                $touched = $true
+                New-ScheduledTaskAction `
+                    -Execute ($a.Execute -replace [regex]::Escape($DevRoot), $ProdRoot) `
+                    -Argument ($a.Arguments -replace [regex]::Escape($DevRoot), $ProdRoot)
+            } else { $a }
         }
-    } else { Say "未找到 watchdog 计划任务(跳过)" 'Yellow' }
+        if ($touched) {
+            Set-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -Action $newActs | Out-Null
+            Say "计划任务改指 prod: $($task.TaskName)" 'Green'
+            $swept++
+        }
+    }
+    Say ($(if ($swept) { "共改指 $swept 个计划任务" } else { "计划任务均未引用开发树,无需改动" })) 'Green'
 }
 
 # ── 旧树残留进程提示 ─────────────────────────────────────────────────────
