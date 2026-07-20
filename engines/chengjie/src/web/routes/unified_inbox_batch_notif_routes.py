@@ -17,13 +17,23 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request
 
 from src.web.routes.unified_inbox_auth import _session_agent
 from src.web.routes.unified_inbox_services import _inbox_store
 from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
+
+
+def _deny_viewer_write(request: Request) -> None:
+    """十二期：viewer（只读账号）禁止批量写操作——归档/打标/转派均改数据。
+
+    与坐席工作台角色约定一致（web_user_store：viewer 只读不接管）；此前三个
+    batch 端点仅 api_auth 放行，viewer 也能改写会话归属，属权限缺口。
+    """
+    if _session_agent(request).get("role", "") == "viewer":
+        raise HTTPException(403, tr(request, "err.perm.viewer_readonly"))
 
 
 def register_batch_notif_routes(app, *, api_auth) -> None:
@@ -38,6 +48,7 @@ def register_batch_notif_routes(app, *, api_auth) -> None:
         Body: {conversation_ids: [str, ...], archived: bool}
         返回: {ok: true, updated: int}
         """
+        _deny_viewer_write(request)
         body = await request.json()
         cids = [str(x) for x in (body.get("conversation_ids") or []) if x]
         archived = bool(body.get("archived", True))
@@ -67,6 +78,7 @@ def register_batch_notif_routes(app, *, api_auth) -> None:
           mode=remove → 删除指定标签
         返回: {ok: true, updated: int}
         """
+        _deny_viewer_write(request)
         body = await request.json()
         cids = [str(x) for x in (body.get("conversation_ids") or []) if x]
         tags = [str(t) for t in (body.get("tags") or []) if str(t).strip()]
@@ -104,6 +116,7 @@ def register_batch_notif_routes(app, *, api_auth) -> None:
         Body: {conversation_ids: [str, ...], agent_id: str}
         返回: {ok: true, updated: int}
         """
+        _deny_viewer_write(request)
         body = await request.json()
         cids = [str(x) for x in (body.get("conversation_ids") or []) if x]
         agent_id = str(body.get("agent_id") or "").strip()
@@ -112,13 +125,39 @@ def register_batch_notif_routes(app, *, api_auth) -> None:
         store = _inbox_store(request)
         if store is None:
             return {"ok": False, "error": tr(request, "err.svc.inbox_not_ready")}
+        # 十二期修复：原实现 update_conv_meta(cid, {dict}) 与方法签名（keyword-only）
+        # 不符，每次 TypeError 被吞 → 接口自 P23 起静默空转（恒 updated=0）。
+        # 改走 AgentCoordinator.claim(force=True)：与单会话认领同一事实源（claims 表），
+        # 「谁在处理」徽章 /「我的」筛选立即生效；TTL 语义沿用认领（转派≠永久占有）。
+        from src.workspace.agent_coordinator import AgentCoordinator
+        coord = AgentCoordinator.from_request(request)
+        target_name = agent_id
+        try:
+            for p in coord.list_presence():
+                if str(p.get("agent_id") or "") == agent_id and p.get("display_name"):
+                    target_name = str(p["display_name"])
+                    break
+        except Exception:
+            pass
+        operator = _session_agent(request)
         updated = 0
         for cid in cids[:200]:
             try:
-                store.update_conv_meta(cid, {"claimed_by": agent_id})
-                updated += 1
+                result = coord.claim(cid, agent_id, agent_name=target_name, force=True)
+                if result.get("ok"):
+                    updated += 1
             except Exception:
-                pass
+                logger.debug("batch assign claim 失败（已忽略）: %s", cid, exc_info=True)
+        # 转派留痕（复用草稿审计事件流，主管在审计/时间线可回溯「谁把谁转给了谁」）
+        if updated:
+            try:
+                store.record_draft_audit(
+                    "", action="assign", agent_id=operator.get("agent_id", ""),
+                    reason=f"→ {agent_id}（{updated} 会话）",
+                    conversation_id=cids[0] if len(cids) == 1 else "",
+                )
+            except Exception:
+                logger.debug("assign 审计写入失败（已忽略）", exc_info=True)
         return {"ok": True, "updated": updated, "agent_id": agent_id}
 
     # ─── Phase 24: 通知中心（SSE 事件广播） ───────────────────────────────
