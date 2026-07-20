@@ -500,8 +500,17 @@ class AvatarVoiceClient:
         return healthy or alive or [self.base_urls[0]]
 
     def _post_any(self, path: str, payload: bytes, *, timeout: float) -> bytes:
-        """按优先级在候选端点执行合成 POST：失败标记冷却并顺移下一端点。"""
+        """按优先级在候选端点执行合成 POST：失败标记冷却并顺移下一端点。
+
+        忙碌感知（2026-07-21 三端点扩容）：本进程内 GPU 锁被占的主机往后排——
+        并发请求派给空闲主机真正并行合成。原实现恒按优先级 → 多端点只当备份，
+        并发全部在主端点排队（吞吐不随机器数增长）。空闲组内仍保持配置优先级
+        （主力机优先），全忙时回落原优先级顺序排队。"""
         cands = self._endpoint_candidates()
+        if len(cands) > 1:
+            free = [b for b in cands if not _gpu_lock_for(b).locked()]
+            if free and len(free) < len(cands):
+                cands = free + [b for b in cands if b not in free]
         last_exc: Optional[Exception] = None
         for base in cands:
             try:
