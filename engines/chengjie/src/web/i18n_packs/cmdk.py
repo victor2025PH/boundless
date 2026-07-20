@@ -38,6 +38,12 @@ ZH = {
     "ws.cmdk.need_inbox": "此命令仅在收件箱页可用",
     # 十期：> 页面直达
     "ws.cmdk.act_pages": "页面直达…（输入 >）",
+    # 十五期：搁置带参
+    "ws.cmdk.snooze_mode": "搁置当前会话",
+    "ws.cmdk.snooze_do_m": "搁置 {n} 分钟",
+    "ws.cmdk.snooze_do_h": "搁置 {n} 小时",
+    "ws.cmdk.snooze_ok": "已{label}",
+    "ws.cmdk.snooze_fail": "搁置失败，请稍后重试",
 }
 
 EN = {
@@ -78,4 +84,10 @@ EN = {
     "ws.cmdk.need_inbox": "This command works on the inbox page only",
     # Phase 10: > page jump
     "ws.cmdk.act_pages": "Jump to page… (type >)",
+    # Phase 15: parameterized snooze
+    "ws.cmdk.snooze_mode": "Snooze current conversation",
+    "ws.cmdk.snooze_do_m": "Snooze {n} min",
+    "ws.cmdk.snooze_do_h": "Snooze {n} h",
+    "ws.cmdk.snooze_ok": "Done: {label}",
+    "ws.cmdk.snooze_fail": "Snooze failed, please retry",
 }

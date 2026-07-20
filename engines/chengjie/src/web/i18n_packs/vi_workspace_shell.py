@@ -129,6 +129,11 @@ VI = {
     "ws.cmdk.need_conv": "Vui lòng chọn hội thoại trước",
     "ws.cmdk.need_inbox": "Lệnh này chỉ dùng được ở trang hộp thư",
     "ws.cmdk.act_pages": "Đi tới trang… (gõ >)",
+    "ws.cmdk.snooze_mode": "Hoãn hội thoại hiện tại",
+    "ws.cmdk.snooze_do_m": "Hoãn {n} phút",
+    "ws.cmdk.snooze_do_h": "Hoãn {n} giờ",
+    "ws.cmdk.snooze_ok": "Xong: {label}",
+    "ws.cmdk.snooze_fail": "Hoãn thất bại, vui lòng thử lại",
     # ── 收件箱：页面 / 导航 / 筛选 ──
     "inbox.page_title": "Bàn làm việc trò chuyện",
     "inbox.nav.all": "Tất cả hội thoại",

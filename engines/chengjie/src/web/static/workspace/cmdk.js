@@ -241,6 +241,41 @@
     return out.slice(0, 10);
   }
 
+  /* 十五期：搁置带参——直连 snooze API（仅需 conversation_id，无需宿主桥） */
+  function harvestSnooze(m) {
+    var cid = window.WS_STATE && window.WS_STATE.getSelectedCid && window.WS_STATE.getSelectedCid();
+    if (!cid) return [{ kind: 'hint', label: T('ws.cmdk.need_conv'), ic: '\u26a0', disabled: true }];
+    var n = parseInt(m[1], 10);
+    var unit = (m[2] || 'm').toLowerCase();
+    var isH = unit === 'h' || unit === '\u5c0f\u65f6' || unit === 'gi\u1edd';
+    var minutes = isH ? n * 60 : n;
+    if (minutes <= 0 || minutes > 7 * 24 * 60) {
+      return [{ kind: 'hint', label: T('ws.cmdk.no_match'), ic: '\u2014', disabled: true }];
+    }
+    var lbl = isH ? T('ws.cmdk.snooze_do_h').split('{n}').join(String(n))
+                  : T('ws.cmdk.snooze_do_m').split('{n}').join(String(n));
+    return [{ kind: 'snooze', label: lbl, ic: '\ud83c\udf19', cid: cid, minutes: minutes }];
+  }
+
+  function runSnooze(it) {
+    fetch('/api/workspace/conversation/' + encodeURIComponent(it.cid) + '/snooze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ minutes: it.minutes })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.ok) {
+          toast(T('ws.cmdk.snooze_ok').split('{label}').join(it.label), 'ok');
+          try { if (typeof window.loadChats === 'function') window.loadChats(); } catch (_) {}
+        } else {
+          toast(T('ws.cmdk.snooze_fail'), 'err');
+        }
+      })
+      .catch(function () { toast(T('ws.cmdk.snooze_fail'), 'err'); });
+  }
+
   function runAssign(it) {
     fetch('/api/workspace/batch/assign', {
       method: 'POST',
@@ -294,6 +329,11 @@
         }] }];
       }
       return [{ title: T('ws.cmdk.tag_mode'), items: harvestTags(raw.slice(1).trim()) }];
+    }
+    // 十五期：搁置带参（"s 30"/"s 2h"/"搁置 45m"/"hoãn 1h"——须带数字，单独 s 不触发）
+    var sn = raw.match(/^(?:s|snooze|搁置|hoãn)\s*(\d{1,4})\s*(m|h|分|分钟|小时|phút|giờ)?$/i);
+    if (sn) {
+      return [{ title: T('ws.cmdk.snooze_mode'), items: harvestSnooze(sn) }];
     }
     var ql = raw.toLowerCase();
     var pages = harvestPages(), actions = harvestActions();
@@ -374,8 +414,9 @@
   function scheduleRemoteSearch(q) {
     var ql = q.trim().toLowerCase();
     if (state.searchTimer) { clearTimeout(state.searchTimer); state.searchTimer = null; }
-    // 带参命令模式（@/#/>）不打全局搜索
-    if (ql.charAt(0) === '@' || ql.charAt(0) === '#' || ql.charAt(0) === '>') {
+    // 带参命令模式（@/#/>/snooze）不打全局搜索
+    if (ql.charAt(0) === '@' || ql.charAt(0) === '#' || ql.charAt(0) === '>'
+        || /^(?:s|snooze|搁置|hoãn)\s*\d/i.test(ql)) {
       state.remote = []; state.remoteQ = ''; state.remoteLoading = false; state.searchGen += 1;
       return;
     }
@@ -465,6 +506,7 @@
     }
     close();
     if (it.kind === 'assign') { runAssign(it); return; }
+    if (it.kind === 'snooze') { runSnooze(it); return; }
     if (it.kind === 'tagf') {
       try { window.setTagFilter(it.tag); } catch (_) {}
       return;

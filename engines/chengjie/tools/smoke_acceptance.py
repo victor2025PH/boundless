@@ -79,6 +79,13 @@ def main() -> int:
         page.wait_for_timeout(400)
         h4 = page.locator("#cmdk-list").inner_html()
         r["cmdk_page_mode"] = any(x in h4 for x in ("页面", "Pages", "Trang"))
+
+        page.locator("#cmdk-input").fill("s 30")
+        page.wait_for_timeout(400)
+        h5 = page.locator("#cmdk-list").inner_html()
+        r["cmdk_snooze_mode"] = any(
+            x in h5 for x in ("搁置", "Snooze", "Hoãn", "请先选择", "Select a conversation")
+        )
         page.keyboard.press("Escape")
 
         # ── i18n ──
@@ -140,7 +147,7 @@ def main() -> int:
     required = [
         "meta_interactive_widget", "kb_shim", "ws_state_bridge", "inbox_messages_mod",
         "cmdk_open", "cmdk_recent", "cmdk_search_grp", "cmdk_assign_mode", "cmdk_tag_mode",
-        "cmdk_page_mode",
+        "cmdk_page_mode", "cmdk_snooze_mode",
         "locate_fail_key", "api_search_ok", "api_msg_has_mid",
         "api_paging_ok", "load_more_bar_present",
         "mob_bar", "gs_hidden_mobile", "pills_trimmed",
