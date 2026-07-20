@@ -1890,6 +1890,11 @@ workspace:
 inbox:
   enabled: true                      # 安全默认开；如需保守可设 false（全程走实时聚合）
   # db_path: config/inbox.db         # 可选：自定义 db 位置（相对路径基于 config_path）
+  # 后台 ingest 轮询（RPA/兜底路径的坐席可见延迟由它决定；协议号 TG/Baileys 走事件直写不受影响）：
+  #   realtime_poll_sec      空闲档间隔，默认 10（<=0 = 禁用后台轮询）
+  #   realtime_busy_poll_sec 忙碌档间隔，默认 2.5——最近 60s 内有新入站时用快档，安静自动退回空闲档
+  # realtime_poll_sec: 10
+  # realtime_busy_poll_sec: 2.5
   # A1 读路径：收件箱列表 /api/unified-inbox/chats 与会话 /api/unified-inbox/thread 的数据源。
   #   true（默认，A1 已灰度转默认）= 从统一 store 读（跨平台/跨重启持久；
   #     每次请求仍先跑实时聚合做旁路 ingest 再读 store，故对当前数据「行为等价」于实时聚合，

@@ -2,7 +2,8 @@
 <html lang="{{ 'zh-CN' if (ui_lang|default('zh')) == 'zh' else 'en' }}" data-theme="light">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- interactive-widget：软键盘弹出时收缩布局视口（Chromium 108+），fixed 底栏/输入条不被键盘盖住；其它浏览器安全忽略 -->
+<meta name="viewport" content="width=device-width,initial-scale=1,interactive-widget=resizes-content">
 <title>{% block title %}{{ i18n.get('base.page_title', '坐席工作台') }}{% endblock %} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}</title>
 {% include "_brand_head.html" %}
 <link rel="stylesheet" href="/static/brand/brand-lockup.css">
@@ -30,10 +31,10 @@
      说明：聊天页(unified_inbox)另有成熟的 --accent/--bg-* 体系，二者并存不冲突。
      ============================================================ */
   :root{
-    --tk-bg:#eef2f9;            /* 页面底 */
+    --tk-bg:#f4f5f7;            /* 页面底 */
     --tk-surface:#ffffff;       /* 卡片/面板 */
-    --tk-surface-2:#f4f7fc;     /* 次级面/hover */
-    --tk-border:#e3e9f2;
+    --tk-surface-2:#f4f5f8;     /* 次级面/hover */
+    --tk-border:#e5e6ea;
     --tk-text:#0f1b2d;
     --tk-text-muted:#5b6b85;
     --tk-brand:#2563eb;         /* 主品牌蓝 */
@@ -61,12 +62,12 @@
     --tk-gap:12px;
   }
   [data-cp-theme="dark"]{
-    --tk-bg:#0b1120;            /* 深蓝海军底（偏蓝、不发乌的黑）*/
-    --tk-surface:#141d31;
-    --tk-surface-2:#1b2740;
-    --tk-border:#27344e;
-    --tk-text:#e7eefb;
-    --tk-text-muted:#94a6c4;
+    --tk-bg:#0f1014;            /* 近中性深灰底（去蓝，品牌蓝为唯一强调）*/
+    --tk-surface:#17181d;
+    --tk-surface-2:#1e2026;
+    --tk-border:#26272e;
+    --tk-text:#ececf0;
+    --tk-text-muted:#a0a3ab;
     --tk-brand:#3b82f6;
     --tk-brand-2:#22d3ee;
     --tk-cyan:#22d3ee;
@@ -82,11 +83,13 @@
     --tk-grad:linear-gradient(135deg,#22d3ee,#3b82f6);
     --tk-grad-violet:linear-gradient(135deg,#c084fc,#818cf8);
     --tk-num-grad:linear-gradient(135deg,#60a5fa,#c084fc);   /* 暗底更亮 */
-    --tk-shadow:0 2px 12px rgba(0,0,0,.4);
-    --tk-shadow-md:0 10px 32px rgba(0,0,0,.55);
-    --tk-ring:rgba(56,189,248,.4);
+    --tk-shadow:0 2px 12px rgba(0,0,0,.5);
+    --tk-shadow-md:0 10px 32px rgba(0,0,0,.6);
+    --tk-ring:rgba(59,130,246,.45);
   }
   *{box-sizing:border-box;}
+  .ws-top a:focus-visible,.ws-top button:focus-visible,button:focus-visible,[role="button"]:focus-visible,a.ws-nav-item:focus-visible{outline:2px solid var(--tk-brand);outline-offset:2px;border-radius:6px;}
+  input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--tk-ring);outline-offset:1px;}
   html,body{margin:0;padding:0;height:100%;font-family:'Inter','PingFang SC','Microsoft YaHei',system-ui,sans-serif;color:var(--tk-text);background:var(--tk-bg);}
   /* 全站细节：科技感滚动条 + 选区色（一处生效，所有继承页统一观感）*/
   *::-webkit-scrollbar{width:10px;height:10px;}
@@ -135,8 +138,8 @@
   .tk-toast.warn{background:rgba(245,158,11,.93);}.tk-toast.info{background:rgba(37,99,235,.93);}
   .tk-toast.muted{background:rgba(91,107,133,.92);}.tk-toast.vio{background:rgba(139,92,246,.93);}
   .ws-top{height:52px;display:flex;align-items:center;gap:10px;padding:0 16px;color:#fff;flex-wrap:nowrap;overflow:visible;
-    background:linear-gradient(100deg,#141a30 0%,#1b2748 55%,#1e3a5f 100%);
-    box-shadow:inset 0 -1px 0 rgba(34,211,238,.28),0 1px 12px rgba(0,0,0,.25);}
+    background:linear-gradient(100deg,#131418 0%,#191b21 60%,#1c1f26 100%);
+    box-shadow:inset 0 -1px 0 rgba(255,255,255,.08),0 1px 12px rgba(0,0,0,.25);}
   .ws-brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;min-width:0}
   .ws-brand .brand-lockup{gap:8px}
   .ws-brand .brand-mark--product{width:22px;height:22px;filter:drop-shadow(0 1px 4px rgba(0,0,0,.25))}
@@ -168,7 +171,7 @@
   .ws-user-caret{color:#94a3b8;font-size:11px;}
   .ws-user-menu{display:none;position:absolute;top:44px;right:0;min-width:224px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.18);z-index:9999;padding:8px;}
   .ws-user-menu.show{display:block;}
-  .ws-um-sec{font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:.04em;padding:7px 8px 3px;}
+  .ws-um-sec{font-size:11px;font-weight:700;color:#94a3b8;letter-spacing:.04em;padding:7px 8px 3px;}
   .ws-user-menu .ws-presence{width:100%;margin:2px 0 4px;color:#111827;background:#fff;border:1px solid #d1d5db;}
   .ws-um-info{display:block;max-width:none;white-space:normal;color:#475569;font-size:12px;padding:3px 8px;}
   .ws-um-div{height:1px;background:#eef2f7;margin:6px 2px;}
@@ -189,7 +192,7 @@
   .ws-pill .ws-pill-ic{font-size:12px;line-height:1;}
   .ws-pill .ws-pill-lb{font-size:12px;font-weight:600;letter-spacing:.01em;}
   .ws-pill .ws-pill-n{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:17px;
-    padding:0 6px;border-radius:999px;font-size:12px;font-weight:800;color:#0b1020;}
+    padding:0 6px;border-radius:999px;font-size:12px;font-weight:800;color:#0b1020;font-variant-numeric:tabular-nums;}
   /* 紧急度单轴 · 第1档「急需处理」（严重超时）：红 = 最高，与下钻面板「🔴 还没人接」同族 */
   .ws-pill.sev{background:rgba(225,29,72,.18);color:#fda4af;border-color:rgba(225,29,72,.55);box-shadow:0 0 0 1px rgba(225,29,72,.14);}
   .ws-pill.sev .ws-pill-ic{color:#fb7185;}
@@ -218,7 +221,7 @@
   .ws-modal-close{float:right;cursor:pointer;color:#6b7280;font-size:18px;}
   /* P24: 通知中心 */
   .ws-notif-btn{position:relative;cursor:pointer;padding:0 6px;font-size:18px;line-height:52px;color:#fff;user-select:none;}
-  .ws-notif-badge{position:absolute;top:8px;right:0;background:#ef4444;color:#fff;font-size:10px;font-weight:700;border-radius:8px;min-width:16px;height:16px;line-height:16px;text-align:center;padding:0 3px;display:none;}
+  .ws-notif-badge{position:absolute;top:8px;right:0;background:#ef4444;color:#fff;font-size:10px;font-weight:700;border-radius:8px;min-width:16px;height:16px;line-height:16px;text-align:center;padding:0 3px;display:none;font-variant-numeric:tabular-nums;}
   .ws-notif-panel{position:fixed;top:52px;right:0;width:360px;max-width:95vw;background:#fff;border-radius:0 0 12px 12px;box-shadow:0 8px 32px rgba(0,0,0,.18);z-index:8900;display:none;flex-direction:column;max-height:480px;}
   .ws-notif-hdr{display:flex;justify-content:space-between;align-items:center;padding:12px 16px 8px;border-bottom:1px solid #e5e7eb;}
   .ws-notif-hdr strong{font-size:14px;color:#111827;}
@@ -231,7 +234,7 @@
   .ws-notif-body{flex:1;min-width:0;}
   .ws-notif-title{font-size:12px;font-weight:600;color:#111827;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .ws-notif-sub{font-size:11px;color:#6b7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .ws-notif-ts{font-size:10px;color:#94a3b8;white-space:nowrap;}
+  .ws-notif-ts{font-size:11px;color:#94a3b8;white-space:nowrap;}
   .ws-notif-empty{padding:32px 16px;text-align:center;color:#9ca3af;font-size:13px;}
   .ws-notif-item{border-left:3px solid transparent;}
   .ws-notif-grp-hdr{display:flex;justify-content:space-between;align-items:center;padding:9px 14px;font-size:12px;font-weight:600;color:#475569;background:#f8fafc;border-top:1px solid #e5e7eb;cursor:pointer;user-select:none;}
@@ -239,7 +242,7 @@
   .ws-notif-grp-cv{color:#2563eb;font-weight:500;}
   .ws-notif-grp-list{background:#fcfdff;}
   .ws-notif-grp-list .ws-notif-item{padding-left:18px;}
-  .ws-notif-sec-tag{font-size:10px;color:#94a3b8;padding:6px 14px 2px;font-weight:600;letter-spacing:.04em;}
+  .ws-notif-sec-tag{font-size:11px;color:#94a3b8;padding:6px 14px 2px;font-weight:600;letter-spacing:.04em;}
   /* P6：告警药丸下钻面板（就地接管/打开） */
   .ws-drill-panel{position:fixed;top:52px;right:0;width:380px;max-width:96vw;background:#fff;border-radius:0 0 12px 12px;box-shadow:0 8px 32px rgba(0,0,0,.18);z-index:8900;display:none;flex-direction:column;max-height:70vh;}
   .ws-drill-hdr{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #e5e7eb;font-size:14px;font-weight:600;color:#111827;}
@@ -270,7 +273,7 @@
   .ws-drill-sec.sec-wait{color:var(--tk-danger-ink);box-shadow:inset 3px 0 0 var(--tk-danger);}
   .ws-drill-sec.sec-handled{color:var(--tk-warn-ink);box-shadow:inset 3px 0 0 var(--tk-amber);}
   /* 夜间 */
-  [data-cp-theme="dark"] .ws-drill-panel{background:#1e293b;box-shadow:0 8px 32px rgba(0,0,0,.6);}
+  [data-cp-theme="dark"] .ws-drill-panel{background:#1d1e24;box-shadow:0 8px 32px rgba(0,0,0,.6);}
   [data-cp-theme="dark"] .ws-drill-hdr{color:#f1f5f9;border-bottom-color:#334155;}
   [data-cp-theme="dark"] .ws-drill-x:hover{color:#f1f5f9;}
   [data-cp-theme="dark"] .ws-drill-item{border-bottom-color:#334155;}
@@ -285,6 +288,25 @@
   [data-cp-theme="dark"] .ws-drill-allbtn:hover{background:#7c2d12;color:#fed7aa;border-color:#9a3412;}
   /* P7：窄屏药丸只留 图标+数字（标签隐藏，防溢出/换行） */
   @media (max-width:1180px){ .ws-pill-lb{display:none;} .ws-user-name{display:none;} }
+  /* 六期：窄屏顶栏收敛 —— 藏全局搜（CmdK 仍可用）、主导航图标化、药丸收成圆点 */
+  @media (max-width:768px){
+    .ws-top{gap:6px;padding:0 8px;}
+    #gs-wrap{display:none !important;}
+    .ws-nav{gap:2px;}
+    .ws-nav a{padding:6px 8px;}
+    .ws-nav a .ws-nav-lbl,
+    .ws-more-btn .ws-nav-lbl{display:none;}
+    .ws-nav a.ws-nav-ic{display:inline-flex;align-items:center;justify-content:center;min-width:34px;}
+    .ws-more-btn{padding:6px 8px;min-width:34px;text-align:center;border-color:rgba(255,255,255,.2);}
+    .ws-pill{padding:0 7px;gap:0;}
+    .ws-lang-pill span:not([data-ui-icon]){display:none;}
+    .ws-brand .brand-lockup__name{max-width:4.5em;overflow:hidden;text-overflow:ellipsis;}
+  }
+  /* 七期：手机宽度只保留最高优先级 SLA 药丸；L4/待跟进入口仍在概览与待办页
+     （JS 以内联 display 控显隐，需 !important 覆盖） */
+  @media (max-width:560px){
+    #ws-l4-badge,#ws-followup{display:none !important;}
+  }
   /* 自定义确认弹框（替代原生 confirm，明快科技风 + 日夜两版） */
   .ws-cfm-ov{position:fixed;inset:0;background:rgba(8,12,24,.55);backdrop-filter:blur(3px);z-index:10001;display:flex;align-items:center;justify-content:center;animation:wsCfmIn .12s ease;}
   @keyframes wsCfmIn{from{opacity:0;transform:scale(.98)}to{opacity:1;transform:none}}
@@ -362,6 +384,8 @@
 })();
 </script>
 <script src="/static/workspace/crm-widgets.js?v=20260702a"></script>
+<!-- 三期：⌘K 命令面板（页面导航/会话跳转/动作；自包含模块，样式自注入） -->
+<script src="/static/workspace/cmdk.js?v=20260720i"></script>
 <!-- PWA（Phase 1）：把工作台做成可安装的原生官网（独立窗口 + 离线壳）。-->
 <link rel="manifest" href="/manifest.webmanifest">
 <script>
@@ -416,11 +440,11 @@
     {% with variant='workspace' %}{% include "_brand_lockup.html" %}{% endwith %}
   </span>
   <nav class="ws-nav">
-    <a href="/workspace" id="nav-inbox" style="display:inline-flex;align-items:center;gap:5px;"><span data-ui-icon="chat" data-size="13"></span><span data-i18n="base.nav.chat">聊天</span></a>
-    <a href="/workspace/contacts" data-i18n="base.nav.contacts">客户</a>
-    <a href="/workspace/dash" data-i18n="base.nav.overview">概览</a>
+    <a href="/workspace" id="nav-inbox" class="ws-nav-ic" style="display:inline-flex;align-items:center;gap:5px;" data-i18n-title="base.nav.chat" title="聊天"><span data-ui-icon="chat" data-size="13"></span><span class="ws-nav-lbl" data-i18n="base.nav.chat">聊天</span></a>
+    <a href="/workspace/contacts" class="ws-nav-ic" data-i18n-title="base.nav.contacts" title="客户" style="display:inline-flex;align-items:center;gap:5px;"><span data-ui-icon="users" data-size="13"></span><span class="ws-nav-lbl" data-i18n="base.nav.contacts">客户</span></a>
+    <a href="/workspace/dash" class="ws-nav-ic" data-i18n-title="base.nav.overview" title="概览" style="display:inline-flex;align-items:center;gap:5px;"><span data-ui-icon="chart" data-size="13"></span><span class="ws-nav-lbl" data-i18n="base.nav.overview">概览</span></a>
     <div class="ws-more-wrap">
-      <span class="ws-more-btn" id="ws-more-btn" onclick="_wsToggleMore(event)" data-i18n="base.nav.more">更多 ▾</span>
+      <span class="ws-more-btn" id="ws-more-btn" onclick="_wsToggleMore(event)" data-i18n-title="base.nav.more" title="更多"><span data-ui-icon="more" data-size="13"></span><span class="ws-nav-lbl" data-i18n="base.nav.more">更多 ▾</span></span>
       <div class="ws-more-menu" id="ws-more-menu">
         <a href="/workspace/tasks" data-i18n="base.nav.tasks">待办</a>
         <a href="/workspace/drafts" id="ws-drafts-link" data-i18n="base.nav.drafts" data-i18n-title="base.nav.drafts_t" title="待你审核的 AI 回复草稿">草稿审批</a>
@@ -1680,8 +1704,8 @@ window.__wsNotify = (function(){
               +'<div style="font-size:12px;font-weight:600;color:#1e293b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(r.title||'')+'</div>'
               +'<div style="font-size:11px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(r.preview||'')+'</div>'
             +'</div>'
-            +'<div style="font-size:10px;color:#94a3b8;flex:0 0 auto;margin-top:3px;">'+fmtTs(r.ts)+'</div>'
-            +'<div style="font-size:9px;background:'+color+'22;color:'+color+';border-radius:4px;padding:1px 5px;flex:0 0 auto;">'+esc(r.type)+'</div>'
+            +'<div style="font-size:11px;color:#94a3b8;flex:0 0 auto;margin-top:3px;">'+fmtTs(r.ts)+'</div>'
+            +'<div style="font-size:10px;background:'+color+'22;color:'+color+';border-radius:4px;padding:1px 5px;flex:0 0 auto;">'+esc(r.type)+'</div>'
             +'</a>';
         }).join('')
         +'<div style="padding:6px;text-align:center;font-size:11px;color:#94a3b8;">'+window.Tf('base.gs.total',{n:d.total})+'</div>';

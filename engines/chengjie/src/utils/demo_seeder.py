@@ -126,8 +126,15 @@ def seed_demo(inbox, *, days: int = 14, kb_store=None, config_manager=None) -> D
         except Exception:
             logger.debug("demo KB 冷启动失败（已忽略）", exc_info=True)
 
-    return {"ok": True, "conversations": n_conv, "messages": n_msg,
-            "draft_audits": n_audit, "kb_seeded": kb_seeded}
+    return {
+        "ok": True,
+        "conversations": n_conv,
+        "messages": n_msg,
+        "draft_audits": n_audit,
+        "kb_seeded": kb_seeded,
+        # 六期：售前可演示 CmdK 全局搜索的提示词（与 _QA 英文例句对齐）
+        "search_hints": ["shipping", "WELCOME10", "discount"],
+    }
 
 
 def clear_demo(inbox) -> Dict[str, Any]:

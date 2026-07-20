@@ -10,6 +10,7 @@ import sys
 import signal
 import logging
 import threading
+import time
 import os
 from pathlib import Path
 
@@ -295,16 +296,27 @@ class AIChatAssistant:
             _inbox_cfg = (self.config.config or {}).get("inbox", {}) or {}
             interval = float(_inbox_cfg.get("realtime_poll_sec", 10))
         except Exception:
+            _inbox_cfg = {}
             interval = 10.0
         if interval <= 0:
             self.logger.info("收件箱实时 ingest 轮询已禁用（realtime_poll_sec<=0）")
             return
+        # 二期：忙/闲自适应——有新入站的窗口内用快档（默认 2.5s，压坐席看到 RPA 消息的
+        # 延迟），持续安静则退回慢档（realtime_poll_sec，默认 10s，控制空转成本）。
+        # 协议号（TG/Baileys）走事件直写不吃这口轮询；此处主要惠及 RPA/兜底路径。
+        try:
+            busy = float(_inbox_cfg.get("realtime_busy_poll_sec", 2.5))
+        except Exception:
+            busy = 2.5
+        busy = max(0.5, min(busy, interval))
         self._inbox_ingest_task = asyncio.create_task(
-            self._inbox_ingest_loop(interval), name="inbox_ingest_loop",
+            self._inbox_ingest_loop(interval, busy), name="inbox_ingest_loop",
         )
-        self.logger.info("✅ 收件箱实时 ingest 轮询已启动（interval=%ss）", interval)
+        self.logger.info(
+            "✅ 收件箱实时 ingest 轮询已启动（idle=%ss busy=%ss 自适应）", interval, busy,
+        )
 
-    async def _inbox_ingest_loop(self, interval: float) -> None:
+    async def _inbox_ingest_loop(self, interval: float, busy_interval: float | None = None) -> None:
         from types import SimpleNamespace
         from src.inbox.channel_adapters import (
             default_inbox_adapters, collect_chats_via_adapters,
@@ -314,19 +326,25 @@ class AIChatAssistant:
         adapters = default_inbox_adapters()
         shim = SimpleNamespace(app=self._web_app)
         warmup = True  # 首轮只 ingest 不发事件，避免冷启动事件洪泛
+        busy = float(busy_interval) if busy_interval else interval
+        busy_until = 0.0   # 最近有新入站 → 60s 内保持快档（对话通常成串到来）
         while self.running:
+            inserted = 0
             try:
                 chats = await asyncio.to_thread(
                     collect_chats_via_adapters, shim, 50, adapters,
                 )
                 # ingest（含发事件）放主循环线程执行：SSE 用的 asyncio.Queue 非线程安全
-                ingest_collected_chats(
+                inserted = ingest_collected_chats(
                     self.inbox_store, chats, publish_events=not warmup,
                 )
                 warmup = False
             except Exception:
                 self.logger.debug("收件箱 ingest 轮询异常", exc_info=True)
-            await asyncio.sleep(interval)
+            now = time.time()
+            if inserted:
+                busy_until = now + 60.0
+            await asyncio.sleep(busy if now < busy_until else interval)
 
     def _build_contact_resolver(self):
         """Q 延伸：构造 (platform, account_id, chat_key) → contact_id 解析器。

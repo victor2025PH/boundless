@@ -12,6 +12,10 @@
   .db-lbl{font-size:12px;color:var(--tk-text-muted);margin-top:4px;}
   /* P5-6：进展中主数字后缀的狭义成交(won) 小数字——覆盖 .db-num 的渐变裁剪填充，避免透明不可见 */
   .db-won-sfx{font-size:13px;font-weight:700;background:none;-webkit-text-fill-color:var(--tk-text-muted);color:var(--tk-text-muted);opacity:.85;}
+  /* 经营摘要条（executive strip）：大数字等宽数字位；critical 红字需覆盖 .db-num 的渐变裁剪填充 */
+  #db-exec .db-num{font-variant-numeric:tabular-nums;}
+  #db-exec .db-num.crit{background:linear-gradient(135deg,#f87171,#dc2626);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:var(--tk-danger);}
+  .db-exec-sub{font-size:11px;color:var(--tk-text-muted);margin-top:3px;}
   .db-sec{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:var(--tk-shadow);}
   .db-sec h3{margin:0 0 10px;font-size:14px;color:var(--tk-text);}
   .db-wrap h2{color:var(--tk-text);}
@@ -64,6 +68,11 @@
     <button class="db-toptab" data-tab="quality" data-i18n="dash.tab.quality" onclick="window.dbSwitchTab('quality')">质量</button>
     <button class="db-toptab" data-tab="biz" data-i18n="dash.tab.biz" onclick="window.dbSwitchTab('biz')">经营</button>
     <button class="db-toptab" data-tab="system" data-i18n="dash.tab.system" onclick="window.dbSwitchTab('system')">系统</button>
+  </div>
+  <!-- 经营摘要（executive strip，主管专属）：跨 Tab 常驻的大数字条，无 data-pane 故任意分页均显示 -->
+  <div class="db-sec" id="db-exec" style="display:none;">
+    <h3 data-i18n="dash.exec.title">经营摘要</h3>
+    <div class="db-grid" id="db-exec-grid" style="margin-bottom:0;"></div>
   </div>
   <div class="db-grid" id="db-cards" data-pane="today"></div>
   <div class="db-sec" data-pane="biz">
@@ -1105,6 +1114,81 @@
       if(el) el.innerHTML='<span class="tk-fail">'+T('dash.load_fail')+'</span>';
     });
   }
+  // ── 经营摘要条（executive strip，主管专属）──────────────────────────
+  // 卡1/2 来自 /api/workspace/roi（主管专属，403 → 整条隐藏）；卡3/4 复用 load() 缓存的
+  // dashboard 响应（_dashData，不重复请求）；卡5 变现 KPI（enabled 才渲染）；卡6 风险灯
+  // （kill-switch + fleet-health 合成，任一失败 → 灰点未知）。
+  var _dashData=null, _execRoi=null, _execMon=null, _execRisk=null, _execDenied=false;
+  function _execCard(num,lbl,sub,opts){
+    opts=opts||{};
+    return '<div class="db-card"'+(opts.title?' title="'+esc(opts.title)+'"':'')+'>'
+      +'<div class="db-num'+(opts.crit?' crit':'')+'">'+num+'</div>'
+      +'<div class="db-lbl">'+esc(lbl)+'</div>'
+      +(sub?'<div class="db-exec-sub">'+sub+'</div>':'')
+      +'</div>';
+  }
+  function renderExec(){
+    var sec=document.getElementById('db-exec');
+    var grid=document.getElementById('db-exec-grid');
+    if(!sec||!grid) return;
+    if(!IS_SUP||_execDenied||!_execRoi){ sec.style.display='none'; return; }
+    var a=_execRoi.automation||{};
+    var savedNote=Tf('dash.exec.saved_note',{sec:(a.sec_per_reply||0)});
+    var html=_execCard(
+      (a.ai_share_pct!=null?a.ai_share_pct+'%':'—'), T('dash.exec.ai_share'),
+      esc(Tf('dash.exec.ai_split',{ai:(a.ai_sent||0),human:(a.human_sent||0)})));
+    html+=_execCard(
+      (a.saved_hours!=null?a.saved_hours:'—'), T('dash.exec.saved'),
+      esc(savedNote), {title:savedNote});
+    var fr=(_dashData&&_dashData.first_response)||{};
+    html+=_execCard(fr.today_responded?(fr.today_attain_rate+'%'):'—', T('dash.exec.attain'));
+    var sla=(_dashData&&_dashData.sla)||{};
+    var critN=sla.critical||0;
+    html+=_execCard((sla.breaching||0), T('dash.exec.overdue'),
+      (critN>0?('<span style="color:var(--tk-danger-ink);font-weight:600;">'+esc(T('dash.card.critical'))+critN+'</span>'):''),
+      {crit:critN>0});
+    if(_execMon&&_execMon.ok&&_execMon.enabled===true){
+      var rv=Math.round((Number(_execMon.revenue_total)||0)*100)/100;
+      html+=_execCard(esc(String(_execMon.currency||''))+' '+rv, T('dash.exec.revenue'),
+        esc(Tf('dash.exec.rev_sub',{n:(_execMon.tx_count||0),m:(_execMon.active_subscriptions||0)})));
+    }
+    var rk=_execRisk||{};
+    var dotC='#94a3b8', rkTxt=T('dash.exec.risk_unknown'), rkCol='var(--tk-text-muted)';
+    if(rk.ok){
+      if(rk.frozen){ dotC='#dc2626'; rkTxt=T('dash.exec.risk_frozen'); rkCol='var(--tk-danger-ink)'; }
+      else if(rk.light==='red'){ dotC='#dc2626'; rkTxt=T('dash.exec.risk_warn'); rkCol='var(--tk-danger-ink)'; }
+      else if(rk.light==='amber'||rk.light==='yellow'){ dotC='#f59e0b'; rkTxt=T('dash.exec.risk_warn'); rkCol='var(--tk-warn-ink)'; }
+      else if(rk.light==='green'){ dotC='#22c55e'; rkTxt=T('dash.exec.risk_ok'); rkCol='var(--tk-ok-ink)'; }
+    }
+    html+='<div class="db-card"><div style="font-size:18px;font-weight:800;display:flex;align-items:center;gap:8px;min-height:34px;">'
+      +_dbDot(dotC)+'<span style="color:'+rkCol+';">'+esc(rkTxt)+'</span></div>'
+      +'<div class="db-lbl">'+esc(T('dash.exec.risk'))+'</div></div>';
+    grid.innerHTML=html;
+    sec.style.display='';
+  }
+  function loadExec(){
+    if(!IS_SUP||_execDenied) return;
+    fetch('/api/workspace/roi?days='+curDays()).then(function(r){
+      if(r.status===403){ _execDenied=true; renderExec(); return null; }
+      return r.json();
+    }).then(function(d){
+      if(d&&d.ok){ _execRoi=d; renderExec(); }
+    }).catch(function(){});
+    fetch('/api/monetize/kpi?days='+curDays())
+      .then(function(r){ return r.ok?r.json():null; })
+      .then(function(d){ _execMon=d; renderExec(); })
+      .catch(function(){ _execMon=null; });
+    Promise.all([
+      fetch('/api/ops/kill-switch').then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; }),
+      fetch('/api/accounts/fleet-health').then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; })
+    ]).then(function(res){
+      var ks=res[0], fh=res[1];
+      if(ks&&ks.ok&&fh&&fh.ok){
+        _execRisk={ok:true, frozen:!!(ks.frozen||(ks.count||0)>0), light:String((fh.fleet||{}).fleet_light||'')};
+      } else { _execRisk={ok:false}; }
+      renderExec();
+    });
+  }
   window.__dbDetail=openDetail; window.__dbGoConv=goConv; window.__dbCloseDetail=closeDetail; window.__dbAgentDetail=openAgentDetail; window.__dbAgentReport=agentReport; window.__dbEscTask=escTask; window.__dbEscReassign=escReassign;
   // P5-2：跳回收件箱并带上「已成交」深链（可选具体阶段）——与 ts-done / done 筛选同口径
   window.__dbGoDone=function(stage){
@@ -1118,6 +1202,7 @@
   function load(){
     fetch('/api/workspace/dashboard?days='+curDays()).then(function(r){return r.json();}).then(function(d){
       var t=d.today||{}, f=d.funnel||{}, sla=d.sla||{}, fr=d.first_response||{}, rs=d.resolution||{};
+      _dashData=d; renderExec();  // 经营摘要卡3/4 复用本响应，不重复请求
       // P1.2 核心卡精选：坐席只看「与我当下相关」4 张；经营/团队卡仅主管（IS_SUP）。
       document.getElementById('db-cards').innerHTML=
         card(d.due_tasks_mine||0,T('dash.card.due_mine'),true)
@@ -1272,7 +1357,7 @@
       }, 450);
     }
   })();
-  var _sel=document.getElementById('db-days'); if(_sel){ _sel.addEventListener('change', load); }
+  var _sel=document.getElementById('db-days'); if(_sel){ _sel.addEventListener('change', function(){ load(); loadExec(); }); }
   var _exp=document.getElementById('db-export');
   if(_exp){ _exp.addEventListener('click', function(e){ e.preventDefault();
     window.location='/api/workspace/daily-report.csv?days='+curDays(); }); }
@@ -1289,7 +1374,7 @@
     load(); setInterval(load, 60000);
     loadEsc(); setInterval(loadEsc, 60000);
     loadMyPerf(); setInterval(loadMyPerf, 120000);
-    if(IS_SUP){ loadRisk(); setInterval(loadRisk, 60000); loadPresence(); setInterval(loadPresence, 30000); loadMetrics(); setInterval(loadMetrics, 60000); loadReport(); loadLeaderboard(); setInterval(loadLeaderboard, 120000); loadTrend(); setInterval(loadTrend, 300000); loadWorkspaces(); loadQuality(); setInterval(loadQuality, 300000); loadWorkload(); setInterval(loadWorkload, 60000); }
+    if(IS_SUP){ loadExec(); setInterval(loadExec, 300000); loadRisk(); setInterval(loadRisk, 60000); loadPresence(); setInterval(loadPresence, 30000); loadMetrics(); setInterval(loadMetrics, 60000); loadReport(); loadLeaderboard(); setInterval(loadLeaderboard, 120000); loadTrend(); setInterval(loadTrend, 300000); loadWorkspaces(); loadQuality(); setInterval(loadQuality, 300000); loadWorkload(); setInterval(loadWorkload, 60000); }
     loadHealth(); setInterval(loadHealth, 60000);
 
     // L3：一键 L2 自动发（主管快速操作）

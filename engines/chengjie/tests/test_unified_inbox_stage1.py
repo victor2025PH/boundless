@@ -2234,8 +2234,14 @@ def test_unified_inbox_translation_tokens_no_theme_drift():
     任何回退（重新引入 style="color:#xxxxxx" 或删掉暗色块）都会在 CI 被点名。
     """
     path = Path(__file__).resolve().parent.parent / "src" / "web" / "templates" / "unified_inbox.html"
-    html = path.read_text(encoding="utf-8")
-    # 亮 + 暗双块都必须定义这些语义 token（出现 >=2 次＝至少各一次）
+    tpl = path.read_text(encoding="utf-8")
+    # 三期拆分：token 变量双块留在模板（首屏无闪 + 本哨兵锚点），组件规则外移静态 CSS。
+    css_path = (Path(__file__).resolve().parent.parent
+                / "src" / "web" / "static" / "workspace" / "unified-inbox.css")
+    assert css_path.is_file(), "组件样式已外移：static/workspace/unified-inbox.css 必须存在"
+    assert '/static/workspace/unified-inbox.css' in tpl, "模板必须链接外移的组件样式"
+    html = tpl + "\n" + css_path.read_text(encoding="utf-8")
+    # 亮 + 暗双块都必须定义这些语义 token（出现 >=2 次＝至少各一次；且必须在模板内联块）
     for tok in (
         "--xl-accent:",
         "--xl-trans-text:",
@@ -2244,9 +2250,9 @@ def test_unified_inbox_translation_tokens_no_theme_drift():
         "--xl-badge-bg:",
         "--btn-border:",
     ):
-        assert html.count(tok) >= 2, f"翻译 token {tok} 缺少亮或暗定义（防漂移）"
+        assert tpl.count(tok) >= 2, f"翻译 token {tok} 缺少亮或暗定义（防漂移）"
     # 暗色主题块本身存在
-    assert '[data-cp-theme="dark"]' in html
+    assert '[data-cp-theme="dark"]' in tpl
     # 翻译报错文字不得再用写死深红内联（暗色下不可读）——必须走 .xl-err token 类
     assert 'style="color:#b91c1c;"' not in html
     assert ".xl-err{color:var(--xl-err-text)" in html

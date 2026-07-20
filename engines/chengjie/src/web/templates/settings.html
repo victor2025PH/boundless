@@ -345,7 +345,11 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
       fetch('/api/admin/demo/seed',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
         .then(function(r){return r.json();}).then(function(d){
           g('demo-seed-btn').disabled=false;
-          if(d&&d.ok){ res.textContent='✓ '+window.T('set_js_011')+' '+d.conversations+' · '+window.T('set_js_005')+' '+d.messages+' · '+window.T('db_js_021')+' '+d.draft_audits+'）'; res.style.color='#16a34a'; refresh(); }
+          if(d&&d.ok){
+            var tip=(d.search_hints&&d.search_hints.length)?(' · CmdK: '+d.search_hints.join(' / ')):'';
+            res.textContent='✓ '+window.T('set_js_011')+' '+d.conversations+' · '+window.T('set_js_005')+' '+d.messages+' · '+window.T('db_js_021')+' '+d.draft_audits+'）'+tip;
+            res.style.color='#16a34a'; refresh();
+          }
           else { res.textContent=window.T('set_js_012')+((d&&d.detail)||window.T('rpa_unknown')); res.style.color='#dc2626'; }
         }).catch(function(){ g('demo-seed-btn').disabled=false; res.textContent=window.T('set_js_013'); res.style.color='#dc2626'; });
     };
