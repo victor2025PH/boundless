@@ -3155,10 +3155,18 @@ class SkillManager(LoggerMixin):
             )
             cleaned, violations = sanitize(reply, persona or {})
             if violations:
-                self.logger.warning(
-                    "%s[persona_guard] 拦截人设违规片段 %r（已剥离，保护沉浸感）",
-                    log_prefix, violations[:5],
-                )
+                # 日志说实话（2026-07-20）：sanitize 删光会回退原文（绝不返回空），
+                # 此时并没有剥离任何内容——旧日志一律喊「已剥离」造成排查误导。
+                if cleaned.strip() == reply.strip():
+                    self.logger.warning(
+                        "%s[persona_guard] 命中人设违规片段 %r 但无法安全剥离"
+                        "（整段违规→保留原文出站）", log_prefix, violations[:5],
+                    )
+                else:
+                    self.logger.warning(
+                        "%s[persona_guard] 拦截人设违规片段 %r（已剥离，保护沉浸感）",
+                        log_prefix, violations[:5],
+                    )
                 return cleaned or reply
             return reply
         except Exception:

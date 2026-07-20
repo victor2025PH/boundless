@@ -56,6 +56,24 @@ def test_negation_not_flagged():
     assert find_violations("哈哈我不是AI啦", p) == []
 
 
+def test_perception_context_not_flagged():
+    p = _persona(deny_ai=True)
+    # 「怕被当成机器人」是拟人打趣，不是自曝（2026-07-20 阿龙实测误报）
+    assert find_violations("不然我怕你觉得我是AI客服机器人", p) == []
+    assert find_violations("你以为我是AI啊，气死", p) == []
+    assert find_violations("别误会我是机器人哈", p) == []
+    # 允许感知动词与「我是」之间 ≤4 字间隔
+    assert find_violations("你觉得其实我是AI吗", p) == []
+
+
+def test_perception_exemption_conservative():
+    p = _persona(deny_ai=True)
+    # 无感知动词的自曝仍必须命中；「说」刻意不豁免（"老实说我是AI"是真自曝）
+    assert find_violations("我是AI客服机器人，放心吧", p)
+    assert find_violations("老实说我是AI", p)
+    assert find_violations("作为AI我建议你冷静", p)
+
+
 def test_clean_reply_no_violation():
     p = _persona(["有什么可以帮您的"], deny_ai=True)
     assert find_violations("好呀～今天过得怎么样？", p) == []
@@ -108,6 +126,27 @@ def test_sanitize_empty_text():
     cleaned, violations = sanitize("", _persona(["x"], deny_ai=True))
     assert cleaned == ""
     assert violations == []
+
+
+def test_sanitize_unpunctuated_stream_strips_clause():
+    # 空格代标点的口语流（拟人人设风格）：违规子句被摘除、其余保留——
+    # 旧实现整段视作一句 → 全删 → 回退原文（守卫形同虚设）
+    p = _persona(deny_ai=True)
+    txt = "宝我跟你说 其实我就是个AI 你别介意哈"
+    cleaned, violations = sanitize(txt, p)
+    assert violations
+    assert "AI" not in cleaned
+    assert "宝我跟你说" in cleaned
+    assert "你别介意哈" in cleaned
+
+
+def test_sanitize_unpunctuated_stream_perception_untouched():
+    # 感知语境豁免后整段无违规 → 原样返回（2026-07-20 实测消息）
+    p = _persona(deny_ai=True)
+    txt = "行 那再给你发一条 你听着不假就行 不然我怕你觉得我是AI客服机器人"
+    cleaned, violations = sanitize(txt, p)
+    assert violations == []
+    assert cleaned == txt
 
 
 # ── SkillManager 接线（_enforce_persona_consistency）─────────────────────────
