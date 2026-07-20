@@ -20,6 +20,16 @@
 | 实例 overlay 无指向旧树的绝对路径 | 已核实(仅注释里出现历史路径) | `Select-String config.local.yaml -Pattern "D:\\\\workspace"` |
 | 新 checkout i18n 合并视图健康 | zh/en 各 8190 键 | 见 §4 验证脚本 |
 
+## 0.5 切换前置(2026-07-20 补充,实测发现)
+
+1. **Baileys 依赖**:`D:\boundless-prod\engines\chengjie\services\whatsapp-baileys` 需先
+   `npm install --no-audit --no-fund`(node_modules 被 gitignore,克隆不带;已于 2026-07-20 预装)。
+2. **并行分支收敛**:切换会把生产代码源固定到 main——若 `feat/*` 分支上有**已提交未合并**的
+   生产相关修复(实测案例:e5e3336 修 /api/drafts* 422),必须先合并进 main 再切,否则切换
+   即回退该修复。核对命令:`git log origin/main..feat/<分支> --oneline`(应为空或全部非生产项)。
+3. **独立进程一并迁移**:`tg_scan_portal.py`(扫码门户)与 Baileys sidecar(若在跑)也从旧树
+   加载代码,切换窗口内一并从新树重启;计划任务清单逐个 `Get-ScheduledTask | % Actions` 核对。
+
 ## 1. 切换步骤(维护窗口 ~2 分钟/实例,金丝雀顺序:先 tongyi 后 zhiliao)
 
 以 tongyi 为例(zhiliao 同理替换实例名):
