@@ -660,14 +660,67 @@ class InboxStore:
             self._conn.execute("PRAGMA busy_timeout=5000")
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.executescript(_DDL)
-            for _sql in _MIGRATIONS:
-                try:
-                    self._conn.execute(_sql)
-                except Exception:
-                    pass  # 列已存在则忽略
+            self._run_migrations()
             self._conn.commit()
             # U1: FTS5 冷启动重建（首次建表后一次性填充存量消息，后续由触发器维护）
             self._fts5_available = self._rebuild_fts5_if_empty()
+
+    def _record_migration(self, mig_id: int) -> None:
+        """记录一条已应用 migration（幂等）。调用方已持锁。"""
+        try:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations(mig_id, applied_at) VALUES (?, ?)",
+                (int(mig_id), self._now()),
+            )
+        except Exception:
+            logger.debug("[InboxStore] 记录 migration #%d 失败", mig_id, exc_info=True)
+
+    def _run_migrations(self) -> None:
+        """执行 ``_MIGRATIONS``——可观测替代原「for sql: try/except: pass」静默吞错。
+
+        Sprint1 迁移可观测：
+        - ``schema_migrations(mig_id)`` 记录已应用条目 → 二次启动直接跳过（不再对 46 条
+          ALTER 反复撞 ``duplicate column name``）；
+        - 「duplicate column name」是新库(列已由 _DDL 建)/旧库(已迁)的良性重复 → debug + 记为已应用；
+        - 其余 ``OperationalError``/异常 → ``logger.error`` + ``self.migration_errors`` 计数
+          （不 crash，保可用性，但不再静默——升级后缺列/半迁移可被发现）。
+        调用方已持有 ``self._lock``。
+        """
+        self.migration_errors = 0
+        conn = self._conn
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS schema_migrations ("
+                "mig_id INTEGER PRIMARY KEY, applied_at REAL NOT NULL)"
+            )
+            applied = {
+                int(r[0])
+                for r in conn.execute("SELECT mig_id FROM schema_migrations").fetchall()
+            }
+        except Exception:
+            logger.error("[InboxStore] schema_migrations 版本表初始化失败", exc_info=True)
+            applied = set()
+        for _idx, _sql in enumerate(_MIGRATIONS):
+            if _idx in applied:
+                continue
+            try:
+                conn.execute(_sql)
+                self._record_migration(_idx)
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" in str(exc).lower():
+                    # 新库(列已由 _DDL 建)或旧库(已迁过)——良性，记为已应用不再重试。
+                    self._record_migration(_idx)
+                    logger.debug("[InboxStore] migration #%d 列已存在（良性跳过）", _idx)
+                else:
+                    self.migration_errors += 1
+                    logger.error(
+                        "[InboxStore] migration #%d 执行失败（已跳过，未记录）: %s",
+                        _idx, exc, exc_info=True)
+            except Exception as exc:
+                self.migration_errors += 1
+                logger.error(
+                    "[InboxStore] migration #%d 非预期失败（已跳过）: %s",
+                    _idx, exc, exc_info=True)
 
     def _rebuild_fts5_if_empty(self) -> bool:
         """U1：检查 FTS5 表是否可用且已填充；若空则从存量 messages 批量导入。
@@ -4153,33 +4206,64 @@ class InboxStore:
         aid = str(agent_id or "").strip()
         if not cid or not aid:
             raise ValueError("conversation_id and agent_id required")
-        self.purge_expired_claims()
-        existing = self.get_conversation_claim(cid)
-        if existing and existing.get("agent_id") != aid and not force:
-            return {
-                "ok": False,
-                "reason": "already_claimed",
-                "claim": existing,
-            }
         now = self._now()
         exp = now + max(60.0, float(ttl_sec or 900))
+        # 原子抢占（消除 TOCTOU）：检查与写入在同一 self._lock 临界区内完成。
+        # 注意：threading.Lock 不可重入——锁内绝不能调 purge_expired_claims /
+        # get_conversation_claim（二者各自 with self._lock，会自死锁），故在此内联
+        # 过期清理与回读。语义与旧实现等价：无主/过期/同人/force 才写入成功。
         with self._lock:
+            # 1) 内联清理过期租约（替代锁外 purge_expired_claims）
             self._conn.execute(
-                """
-                INSERT INTO conversation_claims
-                    (conversation_id, agent_id, agent_name, claimed_at, expires_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(conversation_id) DO UPDATE SET
-                    agent_id = excluded.agent_id,
-                    agent_name = excluded.agent_name,
-                    claimed_at = excluded.claimed_at,
-                    expires_at = excluded.expires_at
-                """,
-                (cid, aid, str(agent_name or ""), now, exp),
+                "DELETE FROM conversation_claims WHERE expires_at > 0 AND expires_at < ?",
+                (now,),
             )
+            if force:
+                self._conn.execute(
+                    """
+                    INSERT INTO conversation_claims
+                        (conversation_id, agent_id, agent_name, claimed_at, expires_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(conversation_id) DO UPDATE SET
+                        agent_id = excluded.agent_id,
+                        agent_name = excluded.agent_name,
+                        claimed_at = excluded.claimed_at,
+                        expires_at = excluded.expires_at
+                    """,
+                    (cid, aid, str(agent_name or ""), now, exp),
+                )
+                won = True
+            else:
+                # 2) 无主才插入（原子）；rowcount>0 表示本次抢占成功
+                cur = self._conn.execute(
+                    """
+                    INSERT OR IGNORE INTO conversation_claims
+                        (conversation_id, agent_id, agent_name, claimed_at, expires_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (cid, aid, str(agent_name or ""), now, exp),
+                )
+                won = bool(cur.rowcount and cur.rowcount > 0)
+                if not won:
+                    # 3) 已有主：仅当为同一坐席时续租（不同坐席 → 抢占失败）
+                    cur2 = self._conn.execute(
+                        """
+                        UPDATE conversation_claims
+                            SET agent_name = ?, claimed_at = ?, expires_at = ?
+                        WHERE conversation_id = ? AND agent_id = ?
+                        """,
+                        (str(agent_name or ""), now, exp, cid, aid),
+                    )
+                    won = bool(cur2.rowcount and cur2.rowcount > 0)
             self._conn.commit()
-        claim = self.get_conversation_claim(cid) or {}
-        return {"ok": True, "claim": claim}
+            row = self._conn.execute(
+                "SELECT * FROM conversation_claims WHERE conversation_id = ?",
+                (cid,),
+            ).fetchone()
+        claim = dict(row) if row else {}
+        if won:
+            return {"ok": True, "claim": claim}
+        return {"ok": False, "reason": "already_claimed", "claim": claim}
 
     def renew_conversation_claim(
         self,
