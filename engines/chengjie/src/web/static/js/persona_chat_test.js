@@ -11,6 +11,12 @@
  *   - session_id 多轮会话：同 pid 重开抽屉保留会话，切换 pid 重建；「清空会话」重置
  *   - 响应缺 persona_used 字段时，消息区顶部显示一次性黄条降级提示（后端未重启、
  *     persona_id 注入未生效），不阻塞聊天
+ *   - 每条成功的 AI 回复气泡可「存为草稿」：弹层选统一收件箱会话（GET
+ *     /api/unified-inbox/chats）→ POST /api/drafts/persona-test 入草稿队列，
+ *     不直接发送，经工作台人工审核后才发出
+ *   - 每条成功的 AI 回复气泡可「🔊 试听」：POST /api/voice/tts-test 以当前人设
+ *     音色朗读该条回复；全抽屉同一时刻只播一段，音频 URL 缓存在气泡 dataset，
+ *     重复试听不再重新合成；抽屉关闭 / 清空会话 / 切换人设时停止播放
  *
  * 安全 / 约定：
  *   - 文本一律 textContent 注入；对 innerHTML 型外部出口（页面 _toast）先 _esc 转义
@@ -135,7 +141,29 @@
       '.psc-ft-tools{display:flex;justify-content:flex-end;margin-top:.35rem}',
       '.psc-clear{border:none;background:transparent;color:var(--t2);font-size:.7rem;cursor:pointer;padding:.1rem .2rem;transition:color .15s}',
       '.psc-clear:hover{color:var(--red)}',
-      '.psc-clear:disabled{opacity:.5;cursor:default}'
+      '.psc-clear:disabled{opacity:.5;cursor:default}',
+      /* 气泡元信息行内小按钮（存为草稿 / 试听共用）+ 已存态旁的「去工作台审核」小链接 */
+      '.psc-draft-btn{border:1px solid var(--bd);background:transparent;color:var(--t2);font-size:.64rem;line-height:1;padding:.16rem .42rem;border-radius:6px;cursor:pointer;font-family:inherit;transition:all .15s}',
+      '.psc-draft-btn:hover{color:var(--p);border-color:var(--p)}',
+      '.psc-draft-btn:disabled{opacity:.6;cursor:default;color:var(--t2);border-color:var(--bd)}',
+      '.psc-draft-link{border:none;background:transparent;color:var(--p);font-size:.64rem;line-height:1;padding:.16rem .1rem;cursor:pointer;font-family:inherit;text-decoration:underline}',
+      /* 会话选择弹层（z-index 高于抽屉 1100/遮罩 1099） */
+      '.psc-pk-mask{position:fixed;inset:0;background:var(--nav,var(--t));opacity:.45;z-index:1200}',
+      '.psc-pk{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(360px,92vw);max-height:min(480px,84vh);background:var(--card);border:1px solid var(--bd);border-radius:14px;box-shadow:var(--s2,none);z-index:1201;display:flex;flex-direction:column;overflow:hidden}',
+      '.psc-pk-hd{padding:.7rem .85rem .5rem;border-bottom:1px solid var(--bd);flex-shrink:0}',
+      '.psc-pk-title{display:flex;align-items:center;gap:.5rem;font-size:.86rem;font-weight:700;color:var(--t1,var(--t))}',
+      '.psc-pk-hint{font-size:.66rem;color:var(--t2);line-height:1.55;margin-top:.25rem}',
+      '.psc-pk-search{margin:.55rem .85rem 0;flex-shrink:0;border:1px solid var(--bd);border-radius:8px;background:var(--bg2,var(--bg));color:var(--t1,var(--t));font-size:.78rem;font-family:inherit;padding:.4rem .6rem;outline:none;box-sizing:border-box;transition:border-color .15s}',
+      '.psc-pk-search:focus{border-color:var(--p)}',
+      '.psc-pk-search:disabled{opacity:.55}',
+      '.psc-pk-list{flex:1;overflow-y:auto;padding:.45rem .5rem .6rem;min-height:110px}',
+      '.psc-pk-row{display:flex;align-items:center;gap:.5rem;width:100%;border:none;background:transparent;text-align:left;padding:.45rem;border-radius:8px;cursor:pointer;font-family:inherit;transition:background .15s}',
+      '.psc-pk-row:hover{background:var(--bg2,var(--bg))}',
+      '.psc-pk-row:disabled{opacity:.55;cursor:default}',
+      '.psc-pk-plat{flex-shrink:0;font-size:.6rem;font-weight:600;padding:.1rem .35rem;border-radius:5px;background:var(--ps,var(--bg2,var(--bg)));color:var(--p)}',
+      '.psc-pk-name{flex:1;min-width:0;font-size:.8rem;color:var(--t1,var(--t));overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.psc-pk-acc{flex-shrink:0;max-width:96px;font-size:.64rem;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.psc-pk-empty{padding:1.1rem .6rem;text-align:center;color:var(--t2);font-size:.74rem;line-height:1.7;word-break:break-word}'
     ].join('\n');
     var style = document.createElement('style');
     style.id = STYLE_ID;
@@ -241,7 +269,9 @@
     document.body.appendChild(drawer);
 
     document.addEventListener('keydown', function (e) {
-      if (_state.visible && (e.key === 'Escape' || e.key === 'Esc')) _close();
+      if (e.key !== 'Escape' && e.key !== 'Esc') return;
+      if (_pkState.visible) { _closePicker(); return; } // 弹层开着时 Esc 只关弹层
+      if (_state.visible) _close();
     });
 
     _els = {
@@ -321,9 +351,10 @@
     return { wrap: wrap, bubble: b };
   }
 
-  function _fillAiMsg(ph, data) {
+  function _fillAiMsg(ph, data, userText) {
     ph.bubble.classList.remove('psc-pending');
-    ph.bubble.textContent = String(data.reply == null ? '' : data.reply);
+    var replyText = String(data.reply == null ? '' : data.reply);
+    ph.bubble.textContent = replyText;
 
     // 元信息行：意图 / 知识库命中 / 耗时 / 实际使用人设（persona_used 有才显示）
     var meta = document.createElement('div');
@@ -338,6 +369,8 @@
     if (data.total_ms != null) part(t('psn_ct_meta_ms', '耗时'), data.total_ms + 'ms');
     var pu = data.persona_used;
     if (pu && pu.name) part(t('psn_ct_meta_persona', '人设'), pu.name);
+    meta.appendChild(_draftBtn(replyText, userText));
+    meta.appendChild(_listenBtn(ph.bubble, replyText));
     ph.wrap.appendChild(meta);
 
     // 可折叠链路 trace：step 名 + detail JSON 摘要（截断 300 字符）
@@ -383,6 +416,353 @@
     bn.textContent = t('psn_ct_persona_missing',
       '当前后端尚未加载人设注入（需重启生效），回复将使用全局默认人设');
     _els.body.insertBefore(bn, _els.body.firstChild);
+  }
+
+  // ── 存为草稿（AI 气泡 → 统一收件箱会话的草稿队列，人工审核后才发出）───────
+
+  var _pk = null;   // 会话选择弹层 DOM（懒建一次）
+  var _pkState = {
+    visible: false,
+    saving: false,  // POST /api/drafts/persona-test 在途 → 防重复提交
+    ctx: null,      // 当前待存气泡 { reply, peer, pid, btn }
+    chats: [],
+    loadGen: 0      // 加载代号：重开弹层自增，丢弃在途的过期 chats 响应
+  };
+
+  // AI 气泡元信息行内的「存为草稿」小按钮；回复文本 + 触发它的用户消息存在闭包
+  function _draftBtn(replyText, userText) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'psc-draft-btn';
+    btn.textContent = t('psn_ct_savedraft', '存为草稿');
+    var ctx = { reply: replyText, peer: userText, pid: _state.pid, btn: btn };
+    btn.addEventListener('click', function () {
+      if (btn.disabled) return;
+      _openPicker(ctx);
+    });
+    return btn;
+  }
+
+  // 存草稿成功 → 气泡按钮置「已存」终态；响应带 review_url 时旁挂审核入口
+  function _markDraftSaved(ctx, reviewUrl) {
+    var btn = ctx.btn;
+    btn.disabled = true;
+    btn.textContent = t('psn_ct_draft_done', '已存草稿');
+    if (reviewUrl && btn.parentNode) {
+      var link = document.createElement('button');
+      link.type = 'button';
+      link.className = 'psc-draft-link';
+      link.textContent = t('psn_ct_go_review', '去工作台审核');
+      link.addEventListener('click', function () {
+        window.open(reviewUrl, '_blank');
+      });
+      if (btn.nextSibling) btn.parentNode.insertBefore(link, btn.nextSibling);
+      else btn.parentNode.appendChild(link);
+    }
+  }
+
+  function _buildPicker() {
+    if (_pk) return;
+    var mask = document.createElement('div');
+    mask.className = 'psc-pk-mask psc-off';
+    mask.addEventListener('click', _closePicker);
+
+    var box = document.createElement('div');
+    box.className = 'psc-pk psc-off';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-label', t('psn_ct_pick_conv', '选择要发送到的会话'));
+
+    var hd = document.createElement('div');
+    hd.className = 'psc-pk-hd';
+    var title = document.createElement('div');
+    title.className = 'psc-pk-title';
+    title.textContent = t('psn_ct_pick_conv', '选择要发送到的会话');
+    var hint = document.createElement('div');
+    hint.className = 'psc-pk-hint';
+    hint.textContent = t('psn_ct_draft_hint', '不会直接发送；经工作台人工审核后才会发出。');
+    hd.appendChild(title);
+    hd.appendChild(hint);
+
+    var search = document.createElement('input');
+    search.type = 'text';
+    search.className = 'psc-pk-search';
+    search.placeholder = t('psn_ct_conv_search', '搜索会话…');
+    search.addEventListener('input', function () { _renderPkList(); });
+
+    var list = document.createElement('div');
+    list.className = 'psc-pk-list';
+
+    box.appendChild(hd);
+    box.appendChild(search);
+    box.appendChild(list);
+    document.body.appendChild(mask);
+    document.body.appendChild(box);
+    _pk = { mask: mask, box: box, search: search, list: list };
+  }
+
+  function _pkEmpty(msg) {
+    var list = _pk.list;
+    while (list.firstChild) list.removeChild(list.firstChild);
+    var d = document.createElement('div');
+    d.className = 'psc-pk-empty';
+    d.textContent = msg;
+    list.appendChild(d);
+  }
+
+  // 行内缺 conversation_id 时按 normalizer.conv_id 规范拼（三段都非空才拼）
+  function _convIdOf(c) {
+    var cid = String(c.conversation_id == null ? '' : c.conversation_id);
+    if (cid) return cid;
+    var plat = String(c.platform == null ? '' : c.platform);
+    var acc = String(c.account_id == null ? '' : c.account_id);
+    var key = String(c.chat_key == null ? '' : c.chat_key);
+    if (!plat || !acc || !key) return '';
+    return plat + ':' + acc + ':' + key;
+  }
+
+  function _pkRow(c) {
+    var row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'psc-pk-row';
+    row.disabled = _pkState.saving;
+    var plat = document.createElement('span');
+    plat.className = 'psc-pk-plat';
+    plat.textContent = String(c.platform_name || c.platform || '?');
+    var name = document.createElement('span');
+    name.className = 'psc-pk-name';
+    name.textContent = String(c.name || c.chat_key || '');
+    var acc = document.createElement('span');
+    acc.className = 'psc-pk-acc';
+    acc.textContent = String(c.account_label || c.account_id || '');
+    row.appendChild(plat);
+    row.appendChild(name);
+    row.appendChild(acc);
+    row.addEventListener('click', function () { _saveDraft(c); });
+    return row;
+  }
+
+  // 按搜索词（会话名 / chat_key，大小写不敏感）过滤重绘列表
+  function _renderPkList() {
+    var list = _pk.list;
+    var q = String(_pk.search.value == null ? '' : _pk.search.value).trim().toLowerCase();
+    var rows = [];
+    for (var i = 0; i < _pkState.chats.length; i++) {
+      var c = _pkState.chats[i] || {};
+      if (!_convIdOf(c)) continue;
+      if (q) {
+        var nm = String(c.name == null ? '' : c.name).toLowerCase();
+        var ck = String(c.chat_key == null ? '' : c.chat_key).toLowerCase();
+        if (nm.indexOf(q) < 0 && ck.indexOf(q) < 0) continue;
+      }
+      rows.push(c);
+    }
+    while (list.firstChild) list.removeChild(list.firstChild);
+    if (!rows.length) {
+      _pkEmpty(t('psn_ct_no_convs', '暂无会话（先在统一收件箱接入账号）'));
+      return;
+    }
+    for (var j = 0; j < rows.length; j++) {
+      list.appendChild(_pkRow(rows[j]));
+    }
+  }
+
+  function _loadPkChats() {
+    var gen = ++_pkState.loadGen;
+    _pkState.chats = [];
+    _pkEmpty('…');
+    fetch('/api/unified-inbox/chats?limit=50').then(function (res) {
+      return res.json().then(
+        function (body) { return { httpOk: res.ok, status: res.status, body: body }; },
+        function () { return { httpOk: res.ok, status: res.status, body: null }; }
+      );
+    }).then(function (r) {
+      if (gen !== _pkState.loadGen || !_pkState.visible) return;
+      var body = r.body;
+      if (!r.httpOk || !body || body.ok === false) {
+        var err = '';
+        if (body && body.error) err = String(body.error);
+        else if (body && body.detail) {
+          err = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+        }
+        if (!err) err = 'HTTP ' + r.status;
+        _pkEmpty(err);
+        return;
+      }
+      _pkState.chats = body.chats || [];
+      _renderPkList();
+    }).catch(function (e) {
+      if (gen !== _pkState.loadGen || !_pkState.visible) return;
+      _pkEmpty(e && e.message ? e.message : String(e));
+    });
+  }
+
+  function _setPickerBusy(on) {
+    if (!_pk) return;
+    _pk.search.disabled = on;
+    var rows = _pk.list.querySelectorAll('.psc-pk-row');
+    for (var i = 0; i < rows.length; i++) rows[i].disabled = on;
+  }
+
+  function _saveDraft(c) {
+    if (_pkState.saving) return;
+    var ctx = _pkState.ctx;
+    if (!ctx) return;
+    var cid = _convIdOf(c);
+    if (!cid) return;
+    _pkState.saving = true;
+    _setPickerBusy(true);
+    fetch('/api/drafts/persona-test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversation_id: cid,
+        text: ctx.reply,
+        persona_id: ctx.pid,
+        peer_text: ctx.peer
+      })
+    }).then(function (res) {
+      return res.json().then(
+        function (body) { return { httpOk: res.ok, status: res.status, body: body }; },
+        function () { return { httpOk: res.ok, status: res.status, body: null }; }
+      );
+    }).then(function (r) {
+      _pkState.saving = false;
+      _setPickerBusy(false);
+      var body = r.body;
+      if (r.httpOk && body && body.ok) {
+        _closePicker();
+        _markDraftSaved(ctx, body.review_url ? String(body.review_url) : '');
+        _notify(t('psn_ct_draft_saved', '已存入草稿队列，待坐席在工作台审核发送'), 'ok');
+        return;
+      }
+      // 失败：error → detail（404 的 detail 文案原样透传）→ HTTP 状态兜底
+      var err = '';
+      if (body && body.error) err = String(body.error);
+      else if (body && body.detail) {
+        err = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+      }
+      if (!err) err = 'HTTP ' + r.status;
+      _notify(_fmt(t('psn_ct_draft_fail', '存草稿失败：{err}'), { err: err }), 'err');
+    }).catch(function (e) {
+      _pkState.saving = false;
+      _setPickerBusy(false);
+      _notify(_fmt(t('psn_ct_draft_fail', '存草稿失败：{err}'),
+        { err: e && e.message ? e.message : String(e) }), 'err');
+    });
+  }
+
+  function _openPicker(ctx) {
+    _buildPicker();
+    _pkState.ctx = ctx;
+    _pkState.visible = true;
+    _pk.search.value = '';
+    _pk.mask.classList.remove('psc-off');
+    _pk.box.classList.remove('psc-off');
+    _loadPkChats();
+    try { _pk.search.focus(); } catch (e) { /* 忽略不可聚焦场景 */ }
+  }
+
+  function _closePicker() {
+    if (!_pk || !_pkState.visible) return;
+    _pkState.visible = false;
+    _pkState.ctx = null;
+    _pkState.loadGen++;
+    _pk.mask.classList.add('psc-off');
+    _pk.box.classList.add('psc-off');
+  }
+
+  // ── 试听（AI 气泡 → /api/voice/tts-test 用当前人设音色朗读）────────────────
+  // 播放态管理同 persona_studio_core.js 的 _playVoicePreview：模块级 _lsAudio/_lsBtn，
+  // 全抽屉同一时刻只播一段；再点同一按钮=停止，点别的按钮=切换。
+
+  var TTS_MAX_LEN = 380; // 端点上限 400 字符，留余量截断
+  var _lsAudio = null;    // 当前播放中的 Audio 实例
+  var _lsBtn = null;      // 当前占用播放/合成态的按钮
+
+  // 停止播放（或放弃在途合成），按钮恢复初始文案
+  function _stopListen() {
+    if (_lsAudio) {
+      try { _lsAudio.pause(); } catch (e) { /* 忽略 */ }
+      _lsAudio = null;
+    }
+    if (_lsBtn) {
+      _lsBtn.disabled = false;
+      _lsBtn.textContent = '🔊 ' + t('psn_ct_listen', '试听');
+      _lsBtn = null;
+    }
+  }
+
+  function _playListenUrl(btn, bubble, url) {
+    btn.disabled = false;
+    btn.textContent = '⏹ ' + t('psn_ct_stop', '停止');
+    _lsAudio = new Audio(url);
+    _lsAudio.onended = function () {
+      if (_lsBtn === btn) _stopListen();
+    };
+    _lsAudio.onerror = function () {
+      delete bubble.dataset.pscTtsUrl; // 缓存 URL 可能已失效，清掉以便下次重新合成
+      if (_lsBtn === btn) _stopListen();
+    };
+    _lsAudio.play().catch(function () {
+      if (_lsBtn === btn) _stopListen();
+    });
+  }
+
+  function _listenFail(err) {
+    _notify(_fmt(t('psn_ct_listen_fail', '试听失败：{err}'), { err: err }), 'err');
+  }
+
+  // AI 气泡元信息行内的「试听」小按钮；合成出的音频 URL 缓存在气泡 dataset，
+  // 同一条重复试听不再重新合成，直接播缓存 URL
+  function _listenBtn(bubble, replyText) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'psc-draft-btn';
+    btn.textContent = '🔊 ' + t('psn_ct_listen', '试听');
+    var pid = _state.pid;
+    btn.addEventListener('click', function () {
+      if (_lsBtn === btn) { _stopListen(); return; } // 再点同一按钮=停止
+      _stopListen();                                 // 点别的按钮=先停旧的再切换
+      _lsBtn = btn;
+      var cached = bubble.dataset.pscTtsUrl || '';
+      if (cached) { _playListenUrl(btn, bubble, cached); return; }
+      btn.disabled = true;
+      btn.textContent = '…';
+      var text = String(replyText == null ? '' : replyText);
+      if (text.length > TTS_MAX_LEN) text = text.slice(0, TTS_MAX_LEN);
+      fetch('/api/voice/tts-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text, persona_id: pid })
+      }).then(function (res) {
+        return res.json().then(
+          function (body) { return { httpOk: res.ok, status: res.status, body: body }; },
+          function () { return { httpOk: res.ok, status: res.status, body: null }; }
+        );
+      }).then(function (r) {
+        if (_lsBtn !== btn) return; // 期间已停止/切到别的气泡，丢弃过期响应
+        var body = r.body || {};
+        var url = body.url || body.audio_url;
+        if (!r.httpOk || body.ok === false || !url) {
+          var err = '';
+          if (body.error) err = String(body.error);
+          else if (body.detail) {
+            err = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+          }
+          if (!err) err = 'HTTP ' + r.status;
+          _stopListen();
+          _listenFail(err);
+          return;
+        }
+        bubble.dataset.pscTtsUrl = String(url);
+        _playListenUrl(btn, bubble, String(url));
+      }).catch(function (e) {
+        if (_lsBtn !== btn) return;
+        _stopListen();
+        _listenFail(e && e.message ? e.message : String(e));
+      });
+    });
+    return btn;
   }
 
   // ── 输入区 ────────────────────────────────────────────────────────────────
@@ -458,7 +838,7 @@
         return;
       }
       if (body.session_id) _state.sessionId = body.session_id;
-      _fillAiMsg(ph, body);
+      _fillAiMsg(ph, body, msg);
       if (!body.persona_used) _showPersonaBanner();
       _scrollBottom();
       _focusInput();
@@ -472,6 +852,7 @@
 
   function _clearSession() {
     if (!_els || _state.sending) return;
+    _stopListen(); // 气泡即将销毁，停掉正在播/合成中的试听
     _state.sessionId = '';
     _state.personaWarned = false;
     _state.gen++;
@@ -485,6 +866,7 @@
 
   // 切换到新 pid：清空消息与会话状态，刷新头部
   function _resetConversation(pid) {
+    _stopListen(); // 气泡即将销毁，停掉正在播/合成中的试听
     _state.pid = pid;
     _state.sessionId = '';
     _state.personaWarned = false;
@@ -521,6 +903,8 @@
 
   function _close() {
     if (!_els || !_state.visible) return;
+    _closePicker(); // 抽屉关闭连带收起会话选择弹层
+    _stopListen();  // 抽屉关闭停止试听播放，防背景残响
     _state.visible = false;
     _els.mask.classList.remove('psc-open');
     _els.drawer.classList.remove('psc-open');

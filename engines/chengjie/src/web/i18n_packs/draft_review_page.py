@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""draft_review_page 域词条(由 tools/i18n_migrate_domain.py 从单体迁移)。结构见包 docstring。"""
+"""draft_review_page 域词条(wave3 迁移 + feat 分支 P8 增量合并)。结构见包 docstring。"""
 
 ZH = {
     "draft.acn.approved": "✅批准",
@@ -123,6 +123,8 @@ ZH = {
     "draft.sel.reject": "批量拒绝",
     "draft.sending": "发送中…",
     "draft.sla_overdue": "⏰ SLA 超时",
+    "draft.src.ptest": "人设试聊",
+    "draft.src.ptest_t": "来自人设工作室试聊，坐席批准后才会经既有链路发送",
     "draft.sse.draft_word": "草稿",
     "draft.sse.offline_agent": "离线坐席",
     "draft.sse.reassigned": "草稿已自动转派给 {to}",
@@ -273,6 +275,8 @@ EN = {
     "draft.sel.reject": "Bulk reject",
     "draft.sending": "Sending…",
     "draft.sla_overdue": "⏰ SLA overdue",
+    "draft.src.ptest": "Persona test",
+    "draft.src.ptest_t": "Saved from a Persona Studio test chat; sent only after an agent approves it",
     "draft.sse.draft_word": "draft",
     "draft.sse.offline_agent": "offline agent",
     "draft.sse.reassigned": "Draft auto-reassigned to {to}",
