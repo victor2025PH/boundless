@@ -4,6 +4,9 @@
 #       主进程需开 config.platform_login.whatsapp.protocol_enabled=true 并指向 baileys_url。
 
 $ErrorActionPreference = "Stop"
+# 定位到脚本自身目录：node server.js 用绝对路径启动，不再依赖调用方 CWD
+# （计划任务/从别处调用时 CWD 不是本目录 → 原相对 `node server.js` 会 MODULE_NOT_FOUND）。
+Set-Location -LiteralPath $PSScriptRoot
 # chengjie 引擎根目录：从脚本位置派生（services/whatsapp-baileys → 上两级），
 # 迁仓/换机后无需再改（原先硬编码 D:\workspace\telegram-mtproto-ai 已随单仓迁移失效）。
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -65,4 +68,17 @@ Write-Host "[wa-baileys] starting on :$($env:PORT) (ingest=$($env:PY_INGEST_URL)
 $logDir = Join-Path $root "services\whatsapp-baileys\logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $log = Join-Path $logDir ("wa-baileys-" + (Get-Date -Format "yyyyMMdd") + ".log")
-node server.js *>> $log
+# 绝对路径起服务：CWD 不确定时（计划任务/-Command）也能找到 server.js（防 MODULE_NOT_FOUND）。
+$serverJs = Join-Path $PSScriptRoot "server.js"
+# node 绝对路径：计划任务/服务上下文的 PATH 可能不含 C:\Program Files\nodejs → 裸 `node` 会
+# CommandNotFound、脚本 Stop 退出（正是本次计划任务失败 0xFFFFFFFF 的根因）。用 Get-Command
+# 解析，取不到再回落常见安装位，仍无则落一条清晰错误到日志。
+$nodeExe = (Get-Command node -ErrorAction SilentlyContinue).Source
+if (-not $nodeExe) {
+  foreach ($cand in @("$env:ProgramFiles\nodejs\node.exe", "${env:ProgramFiles(x86)}\nodejs\node.exe", "$env:LOCALAPPDATA\Programs\nodejs\node.exe")) {
+    if ($cand -and (Test-Path $cand)) { $nodeExe = $cand; break }
+  }
+}
+Add-Content -LiteralPath $log -Value ("[wa-baileys] " + (Get-Date -Format o) + " launching node=" + ($(if ($nodeExe) { $nodeExe } else { "<NOT FOUND>" })) + " server=" + $serverJs)
+if (-not $nodeExe) { Add-Content -LiteralPath $log -Value "[wa-baileys] FATAL: node.exe not found on PATH nor common install dirs"; exit 1 }
+& $nodeExe $serverJs *>> $log
