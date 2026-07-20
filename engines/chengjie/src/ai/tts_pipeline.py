@@ -1466,8 +1466,16 @@ class TTSPipeline:
                 pass
 
         try:
-            # 总预算 = 单请求超时 ×(1+重试) + 切块余量；wait_for 只兜底极端卡死
-            budget = client.synth_timeout_sec * (1 + max(0, client.retries)) + 30
+            # 总预算 = 单请求超时 ×(1+重试) × 预估块数 + 余量；wait_for 只兜底极端卡死。
+            # tts() 内部按 chunk_max_chars 切块**逐块** POST——旧公式没乘块数，长文在慢
+            # GPU（3060 实测 RTF≈2.2）上必被误杀：2026-07-21 00:41 实测 169 字 3 块，
+            # 服务端 85s 合成成功，程序 75s 预算先放弃 → 白合成 + 回落。
+            try:
+                _n_chunks = max(1, len(client._split(synth_text)))
+            except Exception:
+                _n_chunks = 1
+            budget = (client.synth_timeout_sec
+                      * (1 + max(0, client.retries)) * _n_chunks + 30)
             await asyncio.wait_for(asyncio.to_thread(_do_synth), timeout=budget)
         except Exception as ex:
             try:
@@ -1475,10 +1483,12 @@ class TTSPipeline:
             except Exception:
                 pass
             _record_avatar(False)
+            # TimeoutError 的 str() 为空 → 旧日志打出 "failed ()" 无从排查；带上异常类型名
+            _exs = f"{type(ex).__name__}: {ex}".rstrip(": ")
             if cloud_fallback:
-                logger.warning("[tts] avatar_clone failed (%s) → 回落兜底", ex)
+                logger.warning("[tts] avatar_clone failed (%s) → 回落兜底", _exs)
                 return None
-            return _finalize_err(f"avatar_clone_failed:{str(ex)[:200]}")
+            return _finalize_err(f"avatar_clone_failed:{_exs[:200]}")
 
         if av_out.exists() and av_out.stat().st_size > 0:
             rv.ok = True
