@@ -14,6 +14,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # AIClient 的 key 失效路径，都不许在开发机弹真·系统弹窗（-n auto 多 worker
 # 各自独立去抖，一旦触发就是弹窗风暴）。test_host_alert 自有 fixture 再细控。
 os.environ.setdefault("HOST_ALERT_SILENT", "1")
+# 测试进程密封：import 期即剥离 AITR_*（桌面/实例部署注入用）环境变量。
+# ConfigManager._apply_env_overrides 会用 AITR_WEB_TOKEN 覆盖 web_admin.auth_token、
+# AITR_DATA_DIR/AITR_CONFIG_PATH 改写配置定位——开发机 shell 起过 dev 实例后残留这些
+# 变量，fixture 里的 test-token 会被静默替换 → 整片鉴权用例 401 的"幽灵失败"
+# （2026-07-20 实测踩中，曾被误判为 12 个存量回归）。测试必须只信 fixture 配置；
+# 需要这些变量的用例（test_config_manager / test_host_alert）自行 monkeypatch.setenv。
+for _k in [k for k in os.environ if k.startswith("AITR_")]:
+    os.environ.pop(_k, None)
 
 from starlette.testclient import TestClient
 
