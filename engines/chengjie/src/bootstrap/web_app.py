@@ -10,6 +10,13 @@ from pathlib import Path
 import threading
 from typing import Any
 
+# ★ 必须在模块级导入：本文件启用了 PEP 563（from __future__ import annotations），
+# 所有注解都是字符串 ForwardRef，FastAPI 按「函数 __globals__ = 本模块全局」解析。
+# make_api_auth 里的 `request: Request` 若只靠函数内局部导入，'Request' 解析失败会被
+# 静默当成 query 参数——所有经 make_api_auth 挂载的端点（/api/drafts*、contacts API）
+# 一律 422 {"loc":["query","request"]}。2026-07-20 生产实测踩中，故固定在模块级。
+from starlette.requests import Request
+
 from src.utils.net_helpers import is_bind_address_in_use_error
 
 
@@ -57,9 +64,9 @@ def make_api_auth(web_app: Any):
     回退 require_role('line_rpa')。参数带 Request 注解，避免 FastAPI 误判为 query 参数。
 
     从 initialize() 抽出并去重：原 _drafts_api_auth / _contacts_api_auth 逻辑一致。
+    ⚠ Request 注解依赖模块级 import（见文件头）：PEP 563 下字符串注解按模块全局解析，
+    函数内局部 import 对 FastAPI 不可见，会让 request 退化成必填 query 参数（422）。
     """
-    from starlette.requests import Request
-
     def _api_auth(request: Request):
         _fn = getattr(web_app.state, "api_auth", None)
         if _fn is not None:
