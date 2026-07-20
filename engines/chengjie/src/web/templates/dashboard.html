@@ -344,6 +344,17 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
     <div class="s-num" style="font-size:1.3rem">{{ status|default((i18n or {}).get('status_running', '运行中')) }}</div>
     <div class="s-lbl">{{ (i18n or {}).get('sys_status', "系统状态") }}</div>
   </a>
+  {# 变现概览卡 — 默认隐藏;/api/monetize/kpi 返回 enabled 且非 403 时才展示(viewer 拿 403 保持隐藏) #}
+  <div class="card stat-card fa" id="dash-kpi-monetize" style="display:none">
+    <div class="s-icon ico-g"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg></div>
+    <div class="s-num" id="dash-kpi-rev" style="font-size:1.3rem">—</div>
+    <div class="s-lbl">{{ (i18n or {}).get('fn_kpi_title', "变现概览") }}</div>
+    <div class="s-lbl">
+      <span>{{ (i18n or {}).get('fn_kpi_tx', "成交笔数") }} <b id="dash-kpi-tx">—</b></span>
+      <span style="margin-left:.7rem">{{ (i18n or {}).get('fn_kpi_subs', "活跃订阅") }} <b id="dash-kpi-subs">—</b></span>
+    </div>
+    <a href="/monetization" class="s-lbl" style="display:inline-block;color:var(--p)">{{ (i18n or {}).get('fn_kpi_more', "查看变现营收 →") }}</a>
+  </div>
 </div>
 
 {% if user_role in ('master', 'admin') %}
@@ -1562,5 +1573,19 @@ document.addEventListener('visibilitychange', ()=>{
   if(document.hidden){ clearInterval(_kbRefreshTimer); }
   else { _kbRefreshTimer = setInterval(loadKbHealth, 5 * 60 * 1000); loadKbHealth(); }
 });
+
+/* Monetize KPI card: hidden unless /api/monetize/kpi is ok + enabled (viewer 403 / disabled / fetch error keep it hidden) */
+fetch('/api/monetize/kpi?days=30',{credentials:'same-origin'}).then(function(r){
+  if(!r.ok) return null;
+  return r.json();
+}).then(function(d){
+  if(!d || !d.enabled) return;
+  var card=document.getElementById('dash-kpi-monetize');
+  if(!card) return;
+  document.getElementById('dash-kpi-rev').textContent=(d.currency||'')+' '+(d.revenue_total||0);
+  document.getElementById('dash-kpi-tx').textContent=d.tx_count||0;
+  document.getElementById('dash-kpi-subs').textContent=d.active_subscriptions||0;
+  card.style.display='';
+}).catch(function(){});
 </script>
 {% endblock %}

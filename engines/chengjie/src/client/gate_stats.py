@@ -55,6 +55,45 @@ def bump(kind: str, path=None) -> None:
         pass
 
 
+def recent_counts(days: int = 7, path=None) -> list:
+    """返回按日期升序的最近 days 天计数，最后一天为今天。
+
+    每项 {"date": "YYYY-MM-DD", "cooldown": n, "streak": n}；无数据日补 0。
+    文件缺失/解析失败 → 全 0 列表（趋势展示属旁路观测，绝不抛异常）。
+    """
+    today = datetime.date.today()
+    dates = [
+        (today - datetime.timedelta(days=i)).isoformat()
+        for i in range(int(days) - 1, -1, -1)
+    ]
+    data: dict = {}
+    try:
+        p = Path(path) if path is not None else DEFAULT_PATH
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            data = raw
+    except Exception:
+        data = {}
+
+    def _n(v) -> int:
+        try:
+            return int(v or 0)
+        except Exception:
+            return 0
+
+    rows = []
+    for d in dates:
+        day = data.get(d)
+        if not isinstance(day, dict):
+            day = {}
+        rows.append({
+            "date": d,
+            "cooldown": _n(day.get("cooldown")),
+            "streak": _n(day.get("streak")),
+        })
+    return rows
+
+
 def today_counts(path=None):
     """返回当日 {"cooldown": n, "streak": n}；文件缺失/无当日条目/解析失败 → None。
 

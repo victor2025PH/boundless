@@ -40,76 +40,12 @@ document.addEventListener('DOMContentLoaded', function(){
     strip.style.display = 'flex';
   }).catch(function(){});
 
-  var exportBtn = document.getElementById('fn-export-btn');
-  if(exportBtn) exportBtn.addEventListener('click', function(){
-    var scope = (window.rpa && window.rpa.funnel && window.rpa.funnel._scope) || 'all';
-    var days  = (window.rpa && window.rpa.funnel && window.rpa.funnel._tsDays) || 30;
-    var chQ   = (scope !== 'all') ? 'channel=' + encodeURIComponent(scope) : '';
-    var statsUrl = '/api/funnel/stats' + (chQ ? '?' + chQ : '');
-    var tsUrl    = '/api/funnel/timeseries?days=' + days + (chQ ? '&' + chQ : '');
-    var getJson = function(url){
-      return fetch(url, {credentials:'same-origin'}).then(function(r){
-        if(!r.ok) throw new Error('http_' + r.status + ' ' + url);
-        return r.json();
-      });
-    };
-    // CSV 单元格转义：含逗号/引号/换行时加引号（stage/channel 名理论上无,防御性处理）
-    var esc = function(v){
-      v = String(v == null ? '' : v);
-      return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
-    };
-    exportBtn.disabled = true;
-    Promise.all([getJson(statsUrl), getJson(tsUrl)]).then(function(res){
-      var stats = res[0] || {}, ts = res[1] || {};
-      var lines = [];
-
-      lines.push('# funnel stats (scope=' + scope + ', exported_at=' + new Date().toISOString() + ')');
-      lines.push('stage,count');
-      var byStage = stats.by_stage || {};
-      Object.keys(byStage).forEach(function(k){ lines.push(esc(k) + ',' + (byStage[k] || 0)); });
-      lines.push('');
-      lines.push('channel,count');
-      var byChannel = stats.by_channel || {};
-      Object.keys(byChannel).forEach(function(k){ lines.push(esc(k) + ',' + (byChannel[k] || 0)); });
-      lines.push('');
-
-      lines.push('# daily timeseries (days=' + days + ')');
-      var series = Array.isArray(ts.series) ? ts.series : [];
-      var stageSet = {};
-      series.forEach(function(row){
-        Object.keys(row.by_stage || {}).forEach(function(k){ stageSet[k] = 1; });
-      });
-      var stages = Object.keys(stageSet).sort();
-      var rateKeys = ['engaged_rate', 'handoff_rate', 'line_add_rate', 'bonded_rate'];
-      lines.push(['day'].concat(stages).concat(rateKeys).map(esc).join(','));
-      series.forEach(function(row){
-        var cells = [esc(row.day)];
-        stages.forEach(function(s){ cells.push((row.by_stage && row.by_stage[s]) || 0); });
-        rateKeys.forEach(function(rk){
-          var v = row.rates ? row.rates[rk] : null;
-          cells.push(v == null ? '' : v);
-        });
-        lines.push(cells.join(','));
-      });
-
-      var now = new Date();
-      var ymd = String(now.getFullYear())
-        + String(now.getMonth() + 1).padStart(2, '0')
-        + String(now.getDate()).padStart(2, '0');
-      var blob = new Blob(['\ufeff' + lines.join('\n')], {type: 'text/csv;charset=utf-8'});
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement('a');
-      a.href = url;
-      a.download = 'funnel_' + scope + '_' + days + 'd_' + ymd + '.csv';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
-    }).catch(function(e){
-      console.error('funnel csv export failed', e);
-    }).finally(function(){
-      exportBtn.disabled = false;
-    });
+  // 导出走服务端流式端点（P5）：拼装/转义/BOM 全在后端,前端只负责带参跳转
+  document.getElementById('fn-export-btn').addEventListener('click', function(){
+    var scope=(window.rpa&&window.rpa.funnel&&window.rpa.funnel._scope)||'all';
+    var days=(window.rpa&&window.rpa.funnel&&window.rpa.funnel._tsDays)||30;
+    var q='days='+encodeURIComponent(days)+(scope&&scope!=='all'?'&channel='+encodeURIComponent(scope):'');
+    window.location.href='/api/funnel/export.csv?'+q;
   });
 });
 </script>

@@ -9,7 +9,7 @@ from __future__ import annotations
 import datetime
 import json
 
-from src.client.gate_stats import bump, today_counts
+from src.client.gate_stats import bump, recent_counts, today_counts
 
 
 def test_bump_and_today_counts(tmp_path):
@@ -58,3 +58,30 @@ def test_bump_creates_missing_parent_dir(tmp_path):
     p = tmp_path / "logs" / "sub" / "gate_stats.json"
     bump("cooldown", path=p)
     assert today_counts(path=p) == {"cooldown": 1, "streak": 0}
+
+
+def test_recent_counts_fills_missing_days_ascending(tmp_path):
+    p = tmp_path / "gate_stats.json"
+    today = datetime.date.today()
+    d3 = (today - datetime.timedelta(days=3)).isoformat()
+    p.write_text(json.dumps({
+        today.isoformat(): {"cooldown": 2, "streak": 1},
+        d3: {"cooldown": 5},                       # streak 缺失 → 补 0
+    }), encoding="utf-8")
+    rows = recent_counts(days=7, path=p)
+    assert len(rows) == 7
+    dates = [r["date"] for r in rows]
+    assert dates == sorted(dates)                  # 升序
+    assert rows[-1] == {"date": today.isoformat(), "cooldown": 2, "streak": 1}
+    assert rows[3] == {"date": d3, "cooldown": 5, "streak": 0}
+    assert rows[0] == {                            # 无数据日全 0
+        "date": (today - datetime.timedelta(days=6)).isoformat(),
+        "cooldown": 0, "streak": 0,
+    }
+
+
+def test_recent_counts_missing_file_all_zero(tmp_path):
+    rows = recent_counts(days=7, path=tmp_path / "nope.json")
+    assert len(rows) == 7
+    assert rows[-1]["date"] == datetime.date.today().isoformat()
+    assert all(r["cooldown"] == 0 and r["streak"] == 0 for r in rows)

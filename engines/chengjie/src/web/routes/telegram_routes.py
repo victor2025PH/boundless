@@ -549,6 +549,15 @@ def register_telegram_routes(
 
         return {"ok": True, **info}
 
+    # ── 近 N 日拦截趋势（结构化计数文件，缺失日补 0） ─────────
+    @app.get("/api/telegram/gate-stats")
+    async def api_tg_gate_stats(request: Request, days: int = 7, _=Depends(api_auth)):
+        import asyncio as _aio
+        from src.client.gate_stats import recent_counts
+        days = max(1, min(int(days or 7), 30))
+        rows = await _aio.to_thread(recent_counts, days)
+        return {"ok": True, "days": days, "rows": rows}
+
     # ── 配置健康检查 ─────────────────────────────────────────────
     @app.get("/api/telegram/health")
     async def api_tg_health(request: Request, _=Depends(api_auth)):
