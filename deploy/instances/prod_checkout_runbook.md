@@ -1,5 +1,13 @@
 # 生产独立 checkout 切换手册(prod_checkout_runbook)
 
+> **推荐入口**:`switch_to_prod_checkout.ps1`(本手册的可执行封装)——五项前置检查机器强制
+> (P1 prod=main / P2 提交差集空 / P3 开发树无 WIP / P4 依赖不早于清单 / P5 双实例 GO),
+> 全过才金丝雀切换,任一实例验收失败即停并给出回滚命令。先 `-Preflight` 干跑看裁决。
+> 下方手工步骤保留作排障与原理参考。
+>
+> **前置产物有时效**:凡"已完成"的前置在其输入变化后需重做(实测:Baileys 依赖预装后
+> package.json 又升 7.0,须重装——脚本 P4 用 mtime 对比强制此规则)。
+
 > 目标:把智聊/通译双实例的**代码加载源**从开发工作树 `D:\workspace\boundless`
 > 切到生产专用 checkout `D:\boundless-prod`(只随 main 前进、只经 `git pull` 更新),
 > 让开发树上的任何编辑(模板 Jinja 热重载、i18n pack 热重载、并行工作流保存)不再直接触达生产。
