@@ -44,6 +44,9 @@ CHATX_SKU_SPECS: Dict[str, Dict[str, Any]] = {
 # 月付默认有效期：30 天权益 + 2 天缓冲（宽限另由 grace_days 管，签发时补默认）
 DEFAULT_PERIOD_DAYS = 32
 
+# 订阅周期 → 授权天数（对齐 avatarhub/fulfill_orders.py 的 PERIOD_DAYS 口径，留缓冲）
+PERIOD_DAYS = {"monthly": 32, "annual": 366}
+
 
 def sku_spec(sku_id: str) -> Dict[str, Any]:
     """返回某 chatx SKU 的权威 spec；非 chatx / 未知 → ValueError。"""
@@ -89,3 +92,53 @@ def build_issue_payload(
     if order_id:
         payload["lic_id"] = f"{sku_id}-{order_id}"
     return payload
+
+
+# ── 履约守护纯逻辑（Sprint4；HTTP/签名/state 由 scripts/fulfill_chatx_watch.py 薄壳注入）──
+# 与 avatarhub/fulfill_orders.py 同构，但把「订单→是否可履约→签发 payload」抽成纯函数以便单测。
+
+def is_chatx_order(order: Dict[str, Any]) -> bool:
+    """该 website 订单是否属于 chatx（zhiliao）。sku_id 前缀优先，product_id 兜底。"""
+    sku = str((order or {}).get("sku_id") or "")
+    if sku.startswith("chatx"):
+        return True
+    return str((order or {}).get("product_id") or "") == "zhiliao"
+
+
+def fulfillment_payload_for_order(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """把一笔 paid chatx 订单映射为可签发 payload；无法自动映射 → None（转人工跟进）。
+
+    无法映射的常见情形：非 chatx 订单、老单 sku_id 缺失/未知（Sprint3 前的历史单）。
+    """
+    if not is_chatx_order(order):
+        return None
+    sku = str((order or {}).get("sku_id") or "").strip()
+    if sku not in CHATX_SKU_SPECS:
+        return None
+    days = PERIOD_DAYS.get(str((order or {}).get("period") or "").lower(), DEFAULT_PERIOD_DAYS)
+    return build_issue_payload(
+        sku,
+        customer=str((order or {}).get("contact") or ""),
+        order_id=str((order or {}).get("id") or ""),
+        days=days,
+    )
+
+
+def select_fulfillable(
+    orders: List[Dict[str, Any]],
+    done_ids: Optional[set] = None,
+) -> List[tuple]:
+    """从 paid 订单列表挑出可自动履约的 chatx 单，返回 [(order, issue_payload), ...]。
+
+    跳过：无 id / 已处理(done) / 已回填 code / 非 chatx / 无法映射（转人工）。幂等安全。
+    """
+    done = done_ids or set()
+    out: List[tuple] = []
+    for o in orders or []:
+        oid = str((o or {}).get("id") or "")
+        if not oid or oid in done or (o or {}).get("code"):
+            continue
+        payload = fulfillment_payload_for_order(o)
+        if payload is not None:
+            out.append((o, payload))
+    return out

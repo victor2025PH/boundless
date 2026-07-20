@@ -5,6 +5,9 @@ from src.licensing.chatx_fulfillment import (
     ALL_CHANNELS,
     CHATX_SKU_SPECS,
     build_issue_payload,
+    fulfillment_payload_for_order,
+    is_chatx_order,
+    select_fulfillable,
     sku_spec,
 )
 from src.licensing.license_manager import (
@@ -76,3 +79,45 @@ def test_end_to_end_expired_when_days_negative_window():
     st = LicenseManager(license_token=token, public_key_hex=kp["public_hex"]).status()
     assert st.state == "expired"
     assert st.licensed is False
+
+
+# ── Sprint4 履约守护纯逻辑 ───────────────────────────────────────────────
+
+def test_is_chatx_order():
+    assert is_chatx_order({"sku_id": "chatx-team"}) is True
+    assert is_chatx_order({"product_id": "zhiliao"}) is True  # 老单兜底
+    assert is_chatx_order({"sku_id": "lingox-pro", "product_id": "tongyi"}) is False
+    assert is_chatx_order({}) is False
+
+
+def test_fulfillment_payload_maps_period_to_days():
+    monthly = fulfillment_payload_for_order(
+        {"id": "O1", "sku_id": "chatx-team", "contact": "a@b.c", "period": "monthly"})
+    assert monthly["plan"] == "pro" and monthly["seats"] == 10
+    assert monthly["lic_id"] == "chatx-team-O1"
+    # annual → 366 天窗口（exp 明显更远）
+    annual = fulfillment_payload_for_order(
+        {"id": "O2", "sku_id": "chatx-team", "period": "annual"})
+    assert annual["exp"] > monthly["exp"]
+
+
+def test_fulfillment_payload_none_for_unmappable():
+    # 非 chatx
+    assert fulfillment_payload_for_order({"id": "X", "sku_id": "lingox-pro"}) is None
+    # chatx 但 sku_id 缺失/未知（老单）→ 转人工
+    assert fulfillment_payload_for_order({"id": "Y", "product_id": "zhiliao"}) is None
+
+
+def test_select_fulfillable_skips_done_coded_and_nonchatx():
+    orders = [
+        {"id": "O1", "sku_id": "chatx-entry", "contact": "a", "period": "monthly"},
+        {"id": "O2", "sku_id": "chatx-team", "code": "已回填"},          # 已回填 → 跳
+        {"id": "O3", "sku_id": "chatx-flagship"},                        # 待履约
+        {"id": "O4", "sku_id": "lingox-pro", "product_id": "tongyi"},    # 非 chatx → 跳
+        {"id": "O5", "product_id": "zhiliao"},                           # 无 sku_id → 跳(转人工)
+        {"id": "", "sku_id": "chatx-team"},                              # 无 id → 跳
+    ]
+    picked = select_fulfillable(orders, done_ids={"O1"})  # O1 已 done → 跳
+    ids = [o["id"] for o, _ in picked]
+    assert ids == ["O3"]
+    assert picked[0][1]["sku_id"] == "chatx-flagship"
