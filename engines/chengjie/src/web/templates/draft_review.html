@@ -313,6 +313,11 @@ function load(){
         +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
         +slaHtml
         +'<span class="dr-badge '+badgeCls+'">'+esc(lbl)+'</span>'
+        // P6 source badge: draft saved from Persona Studio test chat (trace_id=ptest:<persona_id>)
+        +(dr.trace_id&&String(dr.trace_id).indexOf('ptest:')===0
+          ?'<span class="dr-badge" style="background:#ede9fe;color:#7c3aed;" title="'
+            +esc(window.T('draft.src.ptest_t')+' · '+String(dr.trace_id).slice(6))
+            +'">🎭 '+window.T('draft.src.ptest')+'</span>':'')
         +(dr.status&&dr.status!=='pending'?'<span class="dr-badge" style="background:#f1f5f9;color:#64748b;">'+esc(dr.status)+'</span>':'')
         +'<span style="font-size:11px;color:#94a3b8;">'+fmtTs(dr.created_ts)+'</span>'
         +'</div></div>'

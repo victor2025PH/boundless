@@ -863,4 +863,5 @@ def _row_to_unified(row: Dict[str, Any]) -> UnifiedDraft:
         risk_reasons=row.get("risk_reasons") or [],
         autopilot_level=str(row.get("autopilot_level") or ""),
         translated_preview=str(row.get("translated_preview") or ""),
+        trace_id=str(row.get("trace_id") or ""),
     )
