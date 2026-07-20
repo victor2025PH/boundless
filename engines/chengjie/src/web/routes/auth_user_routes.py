@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import hmac
+
 from fastapi import Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
@@ -73,8 +75,8 @@ def register_auth_user_routes(
             return templates.TemplateResponse(request, "login.html", {
                 "error": tr(request, "err.auth.bad_credentials"), "has_users": True
             })
-        # legacy token login
-        if auth_token and auth_token == token:
+        # legacy token login（S6：恒定时间比较，防时序侧信道）
+        if auth_token and token and hmac.compare_digest(str(auth_token), str(token)):
             jti = user_store.create_session("admin", ROLE_MASTER, ip, ua)
             request.session["auth"] = token
             request.session["role"] = ROLE_MASTER
@@ -157,7 +159,13 @@ def register_auth_user_routes(
 
     @app.post("/api/setup/test-ai")
     async def setup_test_ai(request: Request):
-        """测试 AI API Key 有效性（无需登录，供向导页使用）"""
+        """测试 AI API Key 有效性（仅首次安装向导期或已登录可用）。
+
+        S6：原实现「无需登录」→ 任何人可让服务器代发外部 LLM 请求（探测/刷量）。
+        收敛为：已存在用户时必须已登录；全新安装（尚无用户）阶段供向导使用。
+        """
+        if user_store.user_count() > 0 and not request.session.get("user_id"):
+            raise HTTPException(status_code=401, detail="Unauthorized")
         body = await request.json()
         api_key  = (body.get("api_key") or "").strip()
         # 从当前配置读取默认值，不再硬编码 DeepSeek

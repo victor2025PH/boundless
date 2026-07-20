@@ -3,9 +3,11 @@
 import asyncio
 import csv
 import hashlib
+import hmac
 import io
 import json
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -244,20 +246,44 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     secret = web_cfg.get("secret_key", "change-me-in-production")
     token = web_cfg.get("auth_token", "")
 
-    session_max_age = int(web_cfg.get("session_max_age", 7200))
-    app.add_middleware(SessionMiddleware, secret_key=secret, max_age=session_max_age)
+    # S2：默认 secret_key 是公开常量（签名 session 可被伪造）。此处仅告警不阻断
+    # （本地/测试仍可跑）；真正的「非本地暴露」防护做成 fail-safe，在 bootstrap 启动处
+    # 检测到「默认 secret + 绑定非本地地址」时降级绑回 127.0.0.1（见 bootstrap/web_app.py）。
+    if secret == "change-me-in-production":
+        logger.warning(
+            "[SECURITY] 正在使用默认 secret_key，仅适用于本地/测试；生产请在 "
+            "config.yaml::web_admin.secret_key 配置随机值，否则 session 可被伪造。"
+        )
 
-    # ── CORS ──────────────────────────────────────────────────
-    cors_origins = web_cfg.get("cors_origins", ["*"])
+    session_max_age = int(web_cfg.get("session_max_age", 7200))
+    # S4：session cookie 加 SameSite=Strict；经 TLS 反代时置 cookie_secure:true 开启 Secure。
+    _cookie_secure = bool(web_cfg.get("cookie_secure", False))
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=secret,
+        max_age=session_max_age,
+        same_site="strict",
+        https_only=_cookie_secure,
+    )
+
+    # ── CORS（S5：默认同源；关闭 '*' + allow_credentials 的危险组合）────────
+    cors_origins = web_cfg.get("cors_origins", [])
     if isinstance(cors_origins, str):
         cors_origins = [o.strip() for o in cors_origins.split(",") if o.strip()]
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["*"],
-    )
+    if cors_origins:
+        _allow_star = "*" in cors_origins
+        if _allow_star:
+            logger.warning(
+                "[SECURITY] web_admin.cors_origins 含 '*'，已禁用 allow_credentials 以避免危险组合；"
+                "如需带凭据跨域，请配置精确来源白名单。"
+            )
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=(not _allow_star),
+            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            allow_headers=["*"],
+        )
 
     # ── CSRF 防护 ─────────────────────────────────────────────
     import secrets as _secrets
@@ -277,12 +303,16 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         # 公网网页聊天 Widget：访客用 HMAC token 鉴权（非 session cookie），CSRF 不适用
         if request.url.path.startswith("/chat/"):
             return await call_next(request)
+        # S3：未认证引导入口（登录/登出/首次设置）无 ambient 会话权限可被 CSRF 滥用，
+        # 且真实浏览器从对应页面提交本就同源；豁免以免误伤登录流程与首装向导。
+        if request.url.path in ("/login", "/logout", "/setup"):
+            return await call_next(request)
         _line_exempt = getattr(request.app.state, "line_webhook_path", None)
         if _line_exempt and request.url.path == _line_exempt:
             return await call_next(request)
         cookie_tok = request.cookies.get("csrf_token", "")
         header_tok = request.headers.get("X-CSRF-Token", "")
-        if cookie_tok and header_tok and cookie_tok == header_tok:
+        if cookie_tok and header_tok and hmac.compare_digest(cookie_tok, header_tok):
             return await call_next(request)
         origin = request.headers.get("origin", "")
         referer = request.headers.get("referer", "")
@@ -295,10 +325,9 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                 for exp in expected:
                     if referer.startswith(exp + "/") or referer == exp:
                         return await call_next(request)
-        ct = request.headers.get("content-type", "")
-        if "application/json" in ct:
-            return JSONResponse(status_code=403, content={"detail": "CSRF token missing or invalid"})
-        return await call_next(request)
+        # S3：CSRF token / 同源校验均失败 → 一律拒绝（含表单/multipart），
+        # 关闭原「非 JSON 写请求直接放行」的旁路（登录等引导入口已在上方豁免）。
+        return JSONResponse(status_code=403, content={"detail": "CSRF token missing or invalid"})
 
     # ── HTML 页面禁缓存（防止浏览器缓存旧版模板） ──────────────
     @app.middleware("http")
@@ -458,7 +487,29 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     cfg_dir = config_manager.config_path.parent
     user_store = WebUserStore(cfg_dir / "web_users.db")
     if user_store.user_count() == 0:
-        user_store._ensure_master("admin", token or "admin123")
+        if token:
+            user_store._ensure_master("admin", token)
+        else:
+            # S2：不再使用可爆破的默认口令 admin123。随机生成一次性 master 口令，
+            # 落盘到数据根（仅本机可读）；运维首次登录后应立即改密（/api/change-password）。
+            _seed_pw = _secrets.token_urlsafe(12)
+            user_store._ensure_master("admin", _seed_pw)
+            try:
+                _seed_path = cfg_dir / "first_run_credential.txt"
+                _seed_path.write_text(
+                    "username: admin\npassword: " + _seed_pw + "\n"
+                    "# 首次登录后请立即修改密码，随后可删除本文件。\n",
+                    encoding="utf-8",
+                )
+                logger.warning(
+                    "[SECURITY] 首次启动已生成随机 master 口令，见 %s（登录后请立即改密）",
+                    _seed_path,
+                )
+            except Exception:
+                logger.warning(
+                    "[SECURITY] 首次启动已生成随机 master 口令（落盘失败）；"
+                    "如无法登录请用 scripts 重置口令。"
+                )
 
     # SSE 配置热更新推送（端点注册在 _api_auth 之后，见下方）
     import asyncio as _asyncio
@@ -719,13 +770,18 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                 raise HTTPException(status_code=401, detail="Session 已失效，请重新登录")
             _agent_guard()
             return
+        # S1：空 auth_token 不再 fail-open。仅「全新安装（尚无任何用户）+ 本机请求」
+        # 放行，供 /setup 向导创建首个 master；其余一律 401（消除 API 裸奔）。
         if not token:
-            return
+            _ch = request.client.host if request.client else ""
+            if user_store.user_count() == 0 and _ch in ("127.0.0.1", "::1", "localhost"):
+                return
+            raise HTTPException(status_code=401, detail="Unauthorized")
         auth_header = request.headers.get("Authorization", "")
-        if auth_header == f"Bearer {token}":
+        if hmac.compare_digest(auth_header, f"Bearer {token}"):
             return
         sess = request.session.get("auth")
-        if sess == token:
+        if sess and hmac.compare_digest(str(sess), str(token)):
             if not _check_session_valid(request):
                 request.session.clear()
                 raise HTTPException(status_code=401, detail="Session 已失效，请重新登录")
