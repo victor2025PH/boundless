@@ -191,6 +191,12 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 clear_needs_human(ibx, cid)
             except Exception:
                 logger.debug("清除 needs-human 标签失败（已忽略）", exc_info=True)
+            # Sprint1 接管即静音：坐席出站即把会话切 manual，停 AI（后续入站不再产 L2/autosend，
+            # protocol 直发亦让位），与 web_chat 适配器(channel_adapters.send)一致；重复调用幂等。
+            try:
+                ibx.set_automation_mode(cid, "manual")
+            except Exception:
+                logger.debug("接管置 manual 失败（已忽略）", exc_info=True)
 
         # A2 写路径收尾：发送收敛到各渠道适配器（与 collect/status 对称）。
         # 跨切面（坐席首响归属打点）统一留在路由，按 result.conversation_id 归属。
@@ -316,6 +322,8 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 ibx.record_agent_send(
                     cid, _send_agent["agent_id"],
                     agent_name=_send_agent.get("display_name", ""))
+                # Sprint1 接管即静音：媒体发送同属坐席接管，切 manual 停 AI。
+                ibx.set_automation_mode(cid, "manual")
         except Exception:
             logger.debug("record_agent_send(media) 失败", exc_info=True)
         return {"ok": True, "result": res, "media_ref": url, "media_type": mtype}
@@ -425,6 +433,8 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 ibx.record_agent_send(
                     cid, _send_agent["agent_id"],
                     agent_name=_send_agent.get("display_name", ""))
+                # Sprint1 接管即静音：语音发送同属坐席接管，切 manual 停 AI。
+                ibx.set_automation_mode(cid, "manual")
         except Exception:
             logger.debug("record_agent_send(voice) 失败", exc_info=True)
         _emotion = voice_ctx.get("emotion")

@@ -169,10 +169,15 @@ async def run_autoreply(
 
     # Phase 3 防双发：会话已由收件箱「全自动」(auto_ai) 托管 → 交给 inbox 草稿/autosend
     # 链路（带人设+二次风控+L3/L4 审批），本直发链路早退，杜绝同一条消息双生成、双发。
+    # Sprint1 接管即静音：manual = 坐席已接管，本直发链路同样让位（否则接管置 manual 反而
+    # 解除 auto_ai 让位、恢复 protocol 直发，与「停 AI」相悖）。review/multi_choice 不受影响。
     if inbox_mode_fn is not None:
         try:
-            if inbox_mode_fn(platform, account_id, chat_key) == "auto_ai":
+            _im = inbox_mode_fn(platform, account_id, chat_key)
+            if _im == "auto_ai":
                 return _result("inbox_autopilot", inbound=text)
+            if _im == "manual":
+                return _result("inbox_manual", inbound=text)
         except Exception:
             logger.debug("[protocol-autoreply] inbox_mode_fn 检查失败（忽略）", exc_info=True)
 

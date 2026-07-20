@@ -173,6 +173,7 @@ class AutosendWorker:
         self.total_deliver_errors: int = 0  # 投递失败条数（已 resolve 但平台发送失败）
         self.total_translated: int = 0      # 投递前出站翻译生效（译文≠原文）的条数
         self.total_skipped_blocked: int = 0  # 因会话发送封禁而跳过取消的草稿数
+        self.total_skipped_mode: int = 0     # 因会话被显式降级(接管→manual 等)而取消的 L2 数
         self.total_marked_read: int = 0      # 投递前成功补发平台已读回执的条数
 
     # ── 生命周期 ──────────────────────────────────────────────
@@ -497,6 +498,29 @@ class AutosendWorker:
         for d in l2:
             draft_id = d.get("draft_id", "")
             _conv = str(d.get("conversation_id") or "")
+            # Sprint1 统一出站闸门：会话被**显式**降级（坐席接管→manual / 改 review 等）后，
+            # 接管前已入队的 L2 不该再自动发（防「接管前排队的草稿仍被投递」竞态）。
+            # 仅对显式设过档位者生效；未显式设置(None)不干预 → 不改既有默认行为/perf 测试。
+            _store_rt = getattr(self._svc, "_store", None)
+            if _store_rt is not None and _conv and hasattr(_store_rt, "get_automation_mode_if_set"):
+                try:
+                    _explicit_mode = _store_rt.get_automation_mode_if_set(_conv)
+                except Exception:
+                    _explicit_mode = None
+                # 仅对「真实字符串且属显式降级档位」生效——auto_ai/未设(None)/mock 对象均不跳过，
+                # 避免误伤（尤其单测用 MagicMock store 时 getattr 返回 Mock）。
+                if isinstance(_explicit_mode, str) and _explicit_mode in (
+                        "manual", "review", "multi_choice"):
+                    try:
+                        if hasattr(_store_rt, "update_draft_status"):
+                            _store_rt.update_draft_status(
+                                draft_id, status="cancelled", decided_by="mode_downgraded")
+                    except Exception:
+                        logger.debug(
+                            "[AutosendWorker] 取消降级会话 L2 失败 draft_id=%s", draft_id,
+                            exc_info=True)
+                    self.total_skipped_mode += 1
+                    continue
             # 会话处于发送封禁冷却 → 不 resolve/投递，直接取消该 pending 草稿（防堆积）。
             # 冷却到期后新草稿会重新尝试（权限恢复即自动回正常）。
             if self._send_callback is not None and self._conv_send_blocked(_conv):
@@ -605,6 +629,7 @@ class AutosendWorker:
             "total_marked_read": self.total_marked_read,
             "typing_enabled": self._typing_callback is not None,  # 是否投递延迟期挂打字状态
             "total_skipped_blocked": self.total_skipped_blocked,  # 因会话发送封禁跳过取消数
+            "total_skipped_mode": self.total_skipped_mode,  # 因会话被降级(接管)取消的 L2 数
             "blocked_conversations": sum(
                 1 for c in list(self._blocked_conv_until) if self._conv_send_blocked(c)
             ),  # 当前处于发送封禁冷却的会话数
