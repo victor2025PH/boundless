@@ -245,6 +245,16 @@ class TelegramSenderMixin:
         转人工不自动发）；False=主动发/坐席接管/编排器/测试（只受限速与急停，不被时段拦，
         坐席深夜也能联系客户）。限速（时/日上限+熔断）对两类外发一律生效（账号级安全）。
         """
+        # License 到期硬阻断（Sprint2）：enforce 开且授权失效(只读) → 跳过 A 线外发。
+        # 默认 enforce=false → 恒放行，零破坏；fail-open。
+        try:
+            from src.licensing.gate import is_outbound_blocked
+            from src.licensing.license_manager import get_license_manager
+            if is_outbound_blocked(get_license_manager().status()):
+                self.logger.warning("[license] 授权失效只读，跳过 A 线外发")
+                return True
+        except Exception:
+            pass
         try:
             from src.ops.kill_switch import is_blocked as _ks_blocked
             _ks_on, _ks_scope, _ = _ks_blocked(

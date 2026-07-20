@@ -181,6 +181,16 @@ async def run_autoreply(
         except Exception:
             logger.debug("[protocol-autoreply] inbox_mode_fn 检查失败（忽略）", exc_info=True)
 
+    # License 到期硬阻断（Sprint2）：enforce 开且授权失效(只读) → 决策期早退，不生成不发。
+    # 默认 enforce=false → 恒放行，零破坏；fail-open。
+    try:
+        from src.licensing.gate import is_outbound_blocked
+        from src.licensing.license_manager import get_license_manager
+        if is_outbound_blocked(get_license_manager().status()):
+            return _result("license_readonly", inbound=text)
+    except Exception:
+        logger.debug("[protocol-autoreply] license 检查失败（忽略）", exc_info=True)
+
     # G1 全局 Kill-Switch：紧急冻结时在决策期就早退（不生成、不发、不浪费 token）；
     # 与预热闸门正交（无视 companion_send_gate.enabled）。入站仍由收件箱 ingest 收录，
     # 故不另打人工标签（避免全局停发时人工队列被瞬时灌爆），等同 disabled 抑制。

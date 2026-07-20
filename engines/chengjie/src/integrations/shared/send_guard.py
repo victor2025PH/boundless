@@ -41,6 +41,15 @@ def send_blocked(
     """
     p = str(platform or "")
     a = str(account_id or "default")
+    # 0) License 到期硬阻断（Sprint2）：enforce 开且授权失效(只读) → 阻断一切外发。
+    #    默认 licensing.enforce=false → read_only 恒 False → 零破坏。与 Kill-Switch 同层、fail-open。
+    try:
+        from src.licensing.gate import is_outbound_blocked
+        from src.licensing.license_manager import get_license_manager
+        if is_outbound_blocked(get_license_manager().status()):
+            return True, "license_readonly"
+    except Exception:
+        pass
     # 1) Kill-Switch（恒查，紧急急停）
     try:
         from src.ops.kill_switch import is_blocked as _ks_blocked
