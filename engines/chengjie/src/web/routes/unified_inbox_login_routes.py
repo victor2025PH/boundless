@@ -295,7 +295,7 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                     "detail": tr(request, "err.login.session_expired")}
         if sess.submit_fn is None:
             return {"ok": False, "status": sess.status,
-                    "detail": "该登录会话不支持两步验证密码提交"}
+                    "detail": tr(request, "err.login.password_unsupported")}
         body: Dict[str, Any] = {}
         try:
             body = await request.json()
@@ -303,7 +303,8 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
             body = {}
         password = str((body or {}).get("password") or "")
         if not password:
-            return {"ok": False, "status": sess.status, "detail": "云密码不能为空"}
+            return {"ok": False, "status": sess.status,
+                    "detail": tr(request, "err.login.password_empty")}
         try:
             res = sess.submit_fn(sess, password)
             if inspect.isawaitable(res):
@@ -317,7 +318,8 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                     "detail": str(res.get("detail") or "")}
         except Exception:
             logger.debug("provider submit_password 失败", exc_info=True)
-            return {"ok": False, "status": sess.status, "detail": "两步验证提交异常"}
+            return {"ok": False, "status": sess.status,
+                    "detail": tr(request, "err.login.password_submit_failed")}
 
     @app.post("/api/platforms/{platform}/login/{login_id}/cancel")
     async def api_platform_login_cancel(platform: str, login_id: str, request: Request):

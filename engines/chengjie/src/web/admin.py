@@ -513,6 +513,7 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         "/messenger-rpa": "messenger_rpa",
         "/whatsapp-rpa": "whatsapp_rpa",
         "/rpa-overview": "rpa_overview",
+        "/funnel": "funnel",
         "/personas": "personas",
         "/ai-studio": "ai_studio",
     }
@@ -571,6 +572,15 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         context.setdefault("domain_name", domain_name)
         context.setdefault("domain_web_pages", domain_web_pages)
         context.setdefault("domain_dashboard_widgets", domain_dashboard_widgets)
+
+        # ── 侧栏导航单源数据(nav_schema)──────────────────────
+        from src.web.nav_schema import get_nav_context
+        for _k, _v in get_nav_context().items():
+            context.setdefault(_k, _v)
+
+        # ── 悬浮提示词典单源数据(help_terms,原 base.html 内联 TERM_DICT)──
+        from src.web.help_terms import get_help_terms
+        context.setdefault("help_terms", get_help_terms())
 
         # ── Embedded mode（用于 AI 工作室 iframe 嵌入，去掉外层 chrome）──
         try:

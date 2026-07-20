@@ -24,6 +24,7 @@ import logging
 from fastapi import Depends, HTTPException, Request
 
 from src.web.routes.unified_inbox_services import _get_translation_service
+from src.web.web_i18n import tr
 from src.workspace.inbound_translate import _engines_available
 
 logger = logging.getLogger(__name__)
@@ -63,9 +64,9 @@ def register_enable_routes(app, *, api_auth, config_manager=None) -> None:
         to_lang = str(body.get("to_lang") or "").strip()
         from_lang = str(body.get("from_lang") or "").strip()
         if not text.strip():
-            raise HTTPException(status_code=400, detail="text 必填")
+            raise HTTPException(status_code=400, detail=tr(request, "err.enable.text_required"))
         if not to_lang:
-            raise HTTPException(status_code=400, detail="to_lang 必填")
+            raise HTTPException(status_code=400, detail=tr(request, "err.enable.to_lang_required"))
 
         svc = _get_translation_service(request)
         try:

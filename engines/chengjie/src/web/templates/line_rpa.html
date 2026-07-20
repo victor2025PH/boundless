@@ -1,6 +1,6 @@
 {% extends "base.html" %}
-{% block title %}LINE {{ (i18n or {}).get('ln_s001', "自动聊天 ·") }} {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
-{% block page_title %}LINE {{ (i18n or {}).get('wa_s001', "自动聊天") }}{% endblock %}
+{% block title %}{{ (i18n or {}).get('line_rpa', 'LINE 自动化') }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('line_rpa', 'LINE 自动化') }}{% endblock %}
 {% block head %}
 <style>
 /* ── LINE RPA 卡片式布局 ─────────────────────────────── */
@@ -134,7 +134,7 @@
   <div class="rpa-hero-info">
     <div class="rpa-hero-name">
       <span class="rpa-status-dot neutral" id="lr-status-dot"></span>
-      <span id="lr-status-title">LINE {{ (i18n or {}).get('wa_s001', "自动聊天") }}</span>
+      <span id="lr-status-title">{{ (i18n or {}).get('line_rpa', "LINE 自动化") }}</span>
     </div>
     <div class="rpa-hero-sub" id="lr-status-sub">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div>
     <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.4rem">

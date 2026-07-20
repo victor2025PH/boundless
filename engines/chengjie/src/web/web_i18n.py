@@ -29,12 +29,12 @@ _TRANSLATIONS = {
         "templates": "话术模板",
         "channels": "通道管理",
         "channels_status": "通道状态",
-        "strategies": "策略配置",
+        "strategies": "回复策略",
         "strategy_analytics": "策略效果",
         "audit": "操作记录",
         "diff": "版本对比",
         "analytics": "运营分析",
-        "cases": "待处理案例",
+        "cases": "案例跟进",
         "logs": "实时日志",
         "help": "帮助",
         "help_center": "帮助中心",
@@ -45,12 +45,12 @@ _TRANSLATIONS = {
         # ── 侧栏导航补全（③-S3：原硬编码 span 收口为 key）──
         "personas": "人设工作室",
         "workspace_inbox": "坐席工作台",
-        "rpa_overview": "RPA 跨平台总览",
-        "telegram_settings": "Telegram 设置",
-        "line_rpa": "LINE 自动聊天",
-        "messenger_rpa": "Messenger RPA",
-        "whatsapp_rpa": "WhatsApp 自动聊天",
-        "episodic": "情景记忆",
+        "rpa_overview": "渠道总览",
+        "telegram_settings": "Telegram 自动化",
+        "line_rpa": "LINE 自动化",
+        "messenger_rpa": "Messenger 自动化",
+        "whatsapp_rpa": "WhatsApp 自动化",
+        "episodic": "AI 记忆",
         "crisis_audit": "危机审计",
         "care": "主动关怀",
         "relations_health": "流失预警",
@@ -157,7 +157,7 @@ _TRANSLATIONS = {
         "click_switch_full": "点击切换到完整模式",
         "click_switch_simple": "点击切换到简洁模式",
         "knowledge": "知识库",
-        "learner": "AI 学习审核",
+        "learner": "学习队列",
         "system_settings": "系统设置",
         "lang_switch_label": "切换语言",
         # ── 命令面板（③-S3：Ctrl+K 面板 JS 文案）──────
@@ -1083,6 +1083,20 @@ _TRANSLATIONS = {
         "inbox.bab.cancel": "取消",
         "inbox.empty.title": "选择一个对话",
         "inbox.empty.sub": "从左侧选择对话，开始聊天",
+        "inbox.empty.cta_waiting": "打开最旧待回复",
+        "inbox.empty.cta_waiting_t": "跳到等待最久的会话（快捷键 J）",
+        "inbox.empty.kbd_hint": "快捷键：J 跳到最旧待回复 · / 聚焦搜索 · Ctrl+K 知识库",
+        "inbox.empty.today": "今日概览",
+        # ── 扫码接入 · Telegram 两步验证（云密码）──
+        "inbox.connect.pwd_ph": "Telegram 两步验证密码",
+        "inbox.connect.hint_pwd_needed": "该账号开启了两步验证，请输入云密码完成登录。",
+        "inbox.connect.pwd_submit": "提交云密码",
+        "inbox.connect.st_pwd_pending": "已扫码 · 等待云密码",
+        "inbox.connect.pwd_required": "请输入密码",
+        "inbox.connect.pwd_checking": "正在校验密码…",
+        "inbox.connect.pwd_rejected": "验证未通过",
+        "inbox.connect.pwd_wrong": "密码不正确，请重新输入。",
+        "inbox.connect.pwd_submit_fail": "提交失败",
         "inbox.back_mobile": "← 返回会话列表",
         "inbox.mode.select_t": "AI 自动化档位（唯一入口）：手动 / AI出草稿我审 / AI出多选我挑 / 全自动（AI自动发，命中风控转人工）",
         "inbox.mode.manual": "🙋 手动",
@@ -1811,7 +1825,7 @@ _TRANSLATIONS = {
         "base.demo.banner": "🎬 演示模式：当前含示例数据，可在「设置 → 试用/演示」一键清空",
         "lang_toggle": "English",
         # ── Case 面板正文（③-S5：cases.html 静态 + JS 动态串）──
-        "cases_title": "Case 管理",
+        "cases_title": "案例跟进",
         "cases_guide_title": "操作说明",
         "cases_guide_body": "每个案例卡片显示用户消息和 AI 回复。你可以添加<strong>备注</strong>标记重要信息，处理完毕后点击<strong style=\"color:var(--green)\">结案</strong>。列表每 30 秒自动刷新。",
         "cases_guide_dismiss": "知道了，不再显示",
@@ -1837,11 +1851,11 @@ _TRANSLATIONS = {
         # ── 简洁模式·新手引导弹窗（③-S5：base.html simple onboard-modal，原仅 full 态密封）──
         "onb_welcome_title": "欢迎使用简洁模式",
         "onb_welcome_desc": "系统已为你精简了操作界面，专注于最常用的功能：",
-        "onb_cases_label": "待处理案例",
+        "onb_cases_label": "案例跟进",
         "onb_cases_desc": "查看和处理客户案例",
         "onb_kb_label": "知识库",
         "onb_kb_desc": "浏览和搜索知识条目",
-        "onb_review_label": "AI 学习审核",
+        "onb_review_label": "学习队列",
         "onb_review_desc": "审核 AI 生成的草稿",
         "onb_footer": "你随时可以在侧边栏底部切换到完整模式",
         "onb_start": "开始使用",
@@ -2115,6 +2129,133 @@ _TRANSLATIONS = {
         "psn_clear_binding": "清除绑定（回默认人设）",
         "psn_ite_ph": "输入标签，Enter 确认…",
         "psn_ite_hint": "Enter 添加 · Esc 关闭 · × 删除",
+        # ── 人设工作室 P0 改版（卡片头像/就绪清单/试听/撤销）──
+        "psn_src_factory": "出厂预设",
+        "psn_src_factory_t": "随产品内置的种子人设（来自 config.yaml，可在工作室补全后自动升级为已定制）",
+        "psn_src_customized": "已定制",
+        "psn_src_customized_t": "运营在工作室编辑过的版本，已自动持久化，重启不丢",
+        "psn_src_published": "已发布",
+        "psn_src_published_t": "已固化到 personas.yaml（可 git 追踪的规范定义）",
+        "psn_src_imported": "外部导入",
+        "psn_src_imported_t": "由 Messenger RPA 配置自动导入；在工作室保存后转为已定制",
+        "psn_dup_name": "重名",
+        "psn_dup_name_t": "有 {n} 个人设都叫「{name}」，容易混淆，建议改名或合并",
+        "psn_ready_title": "上线就绪清单",
+        "psn_ready_name": "名字",
+        "psn_ready_role": "角色定位",
+        "psn_ready_personality": "性格设定",
+        "psn_ready_tags": "标签",
+        "psn_ready_avatar": "头像（锁脸照）",
+        "psn_ready_voice": "声音",
+        "psn_ready_binding": "应用到会话 / 账号",
+        "psn_ready_fix": "去补全",
+        "psn_ready_all_done": "资料齐全，可以上线 🎉",
+        "psn_ready_pct": "资料完善度",
+        "psn_serving": "服务中",
+        "psn_not_live": "未启用",
+        "psn_not_live_t": "尚未绑定任何会话或账号；不影响资料完善度",
+        "psn_voice_preview_t": "试听这个人设的声音",
+        "psn_voice_preview_text": "你好呀，我是{name}，很高兴认识你！",
+        "psn_voice_synthing": "合成中…",
+        "psn_voice_preview_fail": "试听失败：{err}",
+        "psn_deleted_undo": "已删除「{name}」",
+        "psn_undo_action": "撤销",
+        "psn_undo_restored": "已恢复「{name}」",
+        "psn_undo_failed": "恢复失败：{err}",
+        "psn_avatar_alt": "人设头像",
+        # ── 人设工作室 P1（应用到/新建向导/试聊）──
+        "psn_apply_title": "应用到…",
+        "psn_apply_sub": "把这个人设用到账号 / 会话 / 全局兜底",
+        "psn_apply_tab_account": "账号默认",
+        "psn_apply_tab_chat": "绑定会话",
+        "psn_apply_tab_default": "全局默认",
+        "psn_apply_serving": "当前服务：{a} 个账号 · {c} 个会话",
+        "psn_apply_no_accounts": "暂无已接入账号",
+        "psn_apply_assign": "指定",
+        "psn_apply_current": "✓ 当前人设",
+        "psn_apply_clear": "清除",
+        "psn_apply_chat_ph": "输入会话 ID（chat_id）",
+        "psn_apply_bind": "绑定",
+        "psn_apply_unbind": "解绑",
+        "psn_apply_bound_list": "已绑定会话",
+        "psn_apply_no_bindings": "还没有绑定任何会话",
+        "psn_apply_set_default": "设为全局默认",
+        "psn_apply_default_desc": "所有未绑定人设、未命中路由规则的会话，将统一用该人设兜底回复。",
+        "psn_apply_default_confirm": "确认把「{name}」设为全局默认人设？",
+        "psn_apply_ok_assign": "已指定到账号",
+        "psn_apply_ok_clear": "已清除账号指定",
+        "psn_apply_ok_bind": "已绑定会话",
+        "psn_apply_ok_unbind": "已解绑",
+        "psn_apply_ok_default": "已设为全局默认",
+        "psn_apply_fail": "操作失败：{err}",
+        "psn_apply_loading": "加载中…",
+        "psn_wiz_title": "新建人设",
+        "psn_wiz_step1": "第 1 步 · 选择模板",
+        "psn_wiz_step2": "第 2 步 · 基本信息",
+        "psn_wiz_blank": "从空白开始",
+        "psn_wiz_blank_desc": "不用模板，直接打开完整编辑抽屉",
+        "psn_wiz_tpl_companion": "陪聊闺蜜",
+        "psn_wiz_tpl_companion_d": "温柔治愈系私聊，会倾听会接住情绪",
+        "psn_wiz_tpl_business": "商务顾问",
+        "psn_wiz_tpl_business_d": "先结论后步骤，订单/付款/商务对接",
+        "psn_wiz_tpl_support": "专业客服",
+        "psn_wiz_tpl_support_d": "售后排查，先共情再解决，不争执",
+        "psn_wiz_tpl_mentor": "知性导师",
+        "psn_wiz_tpl_mentor_d": "循循善诱的学习陪伴，启发式提问",
+        "psn_wiz_tpl_sales": "电商导购",
+        "psn_wiz_tpl_sales_d": "懂产品会推荐，热情但不油腻",
+        "psn_wiz_name": "名字",
+        "psn_wiz_name_ph": "给 TA 起个名字（必填）",
+        "psn_wiz_id": "Profile ID",
+        "psn_wiz_id_ph": "留空自动生成；小写字母/数字/下划线",
+        "psn_wiz_id_invalid": "ID 只能是 2-40 位小写字母、数字或下划线",
+        "psn_wiz_id_exists": "该 ID 已存在，请换一个",
+        "psn_wiz_role": "角色定位",
+        "psn_wiz_persona_style": "性格速览（创建后可在抽屉里细调）",
+        "psn_wiz_back": "上一步",
+        "psn_wiz_create": "创建人设",
+        "psn_wiz_creating": "创建中…",
+        "psn_wiz_created": "已创建「{name}」，接下来补上头像和声音吧",
+        "psn_wiz_name_required": "名字不能为空",
+        "psn_ct_title": "试聊",
+        "psn_ct_sub": "对话仅用于预览人设效果，不影响生产数据",
+        "psn_ct_input_ph": "输入消息，Enter 发送，Shift+Enter 换行",
+        "psn_ct_send": "发送",
+        "psn_ct_thinking": "正在输入…",
+        "psn_ct_trace": "链路 trace",
+        "psn_ct_clear": "清空会话",
+        "psn_ct_cleared": "已清空，下一条消息将开启新会话",
+        "psn_ct_empty": "发条消息，感受一下 TA 的语气吧",
+        "psn_ct_persona_missing": "当前后端尚未加载人设注入（需重启生效），回复将使用全局默认人设",
+        "psn_ct_fail": "发送失败：{err}",
+        "psn_ct_meta_intent": "意图",
+        "psn_ct_meta_kb": "知识库",
+        "psn_ct_meta_ms": "耗时",
+        "psn_ct_meta_persona": "人设",
+        # ── 人设工作室 P2（活跃统计/体检台账）──
+        "psn_usage_7d": "近7日",
+        "psn_usage_pill_t": "近 7 日由该人设生成的 AI 回复条数（跨全部渠道）",
+        "psn_usage_rank_title": "🔥 近7日活跃人设",
+        "psn_usage_rank_sub": "按 AI 回复条数排序",
+        "psn_usage_none": "暂无使用数据，有真实回复后自动累计",
+        "psn_hp_title": "人设体检",
+        "psn_hp_sub": "需要处理的人设清单，按问题分组",
+        "psn_hp_incomplete": "资料不全",
+        "psn_hp_unbound": "未启用（零绑定）",
+        "psn_hp_idle": "已绑定但近 7 日零回复",
+        "psn_hp_dup": "重名冲突",
+        "psn_hp_all_good": "全部健康，无需处理 🎉",
+        "psn_hp_fix": "处理",
+        "psn_hp_apply": "去应用",
+        "psn_hp_miss_role": "缺角色",
+        "psn_hp_miss_personality": "缺性格",
+        "psn_hp_miss_tags": "缺标签",
+        "psn_hp_miss_voice": "缺声音",
+        "psn_hp_miss_avatar": "缺头像",
+        "err.chat_test.rate_limited": "试聊太频繁，请稍后再试（每分钟上限 {n} 次）",
+        "psn_hp_stale": "超过 30 天未更新",
+        "psn_hp_last_edit": "最后编辑",
+        "psn_hp_never_edited": "从未定制",
         # ── personas.html JS 层（③-S8b 自动迁移）──
         "psn_js_001": "编辑人设",
         "psn_js_002": "有未保存的修改，确认丢弃？",
@@ -2579,7 +2720,7 @@ _TRANSLATIONS = {
         "rpa_js_no_data": "暂无数据",
         "rpa_js_total_msgs_n": "共 {n} 条消息",
         "rpa_js_queue_word": "队列",
-        "ov_title": "RPA 跨平台总览",
+        "ov_title": "渠道总览",
         "ov_search_title": "跨平台聊天检索",
         "ov_search_sub": "同时检索 LINE / Messenger / WhatsApp 历史",
         "ov_search_ph": "🔍 在所有平台历史聊天中检索关键词…",
@@ -3048,7 +3189,7 @@ _TRANSLATIONS = {
         "ov_js_rate_fix": "👎 改",
         "ov_js_persona_keep": "人设不变",
         "ov_js_default_persona": "— 默认人设 —",
-        "msg_s001": "Messenger RPA 运营台",
+        "msg_s001": "Messenger 自动化运营台",
         "msg_s002": "正在读取运行状态…",
         "msg_s003": "⚠️ 待审批",
         "msg_s004": "📤 24h 已发",
@@ -3067,13 +3208,13 @@ _TRANSLATIONS = {
         "msg_s017": "(必填)",
         "msg_s018": "你好，这是一条手动发送的消息",
         "msg_s019": "入队发送",
-        "msg_s020": "🏠 总览",
-        "msg_s021": "💬 客户线索",
-        "msg_s022": "🎭 人设策略",
-        "msg_s023": "📱 账号设备",
-        "msg_s024": "✅ 审批质检",
-        "msg_s025": "📊 数据中心",
-        "msg_s026": "⚙️ 策略配置",
+        "msg_s020": "总览",
+        "msg_s021": "客户线索",
+        "msg_s022": "人设策略",
+        "msg_s023": "账号设备",
+        "msg_s024": "审批质检",
+        "msg_s025": "数据中心",
+        "msg_s026": "策略配置",
         "msg_s027": "等待数据",
         "msg_s028": "今日动作",
         "msg_s029": "用于判断系统是否在正确推进",
@@ -3209,10 +3350,11 @@ _TRANSLATIONS = {
         "msg_s159": "上次扫描 --",
         "msg_s160": "间隔 --",
         "msg_s161": "空跑 --",
-        "msg_s162": "⚡ 自动化",
-        "msg_s163": "💬 对话风格",
-        "msg_s164": "🎯 客户转化",
-        "msg_s165": "🛡️ 运维诊断",
+        "msg_s162": "自动化",
+        "msg_s163": "对话风格",
+        "msg_s164": "客户转化",
+        "msg_s165": "运维诊断",
+        # msg_tab_voice → i18n_packs/messenger.py(P4 拆分)
         "msg_s166": "快速搜索配置项 (Ctrl+F)",
         "msg_s167": "🎛 预设",
         "msg_s168": "一键加载场景预设",
@@ -4444,6 +4586,7 @@ _TRANSLATIONS = {
         "ln_js_p06": "已取消 {n} 条",
         "tg_s001": "正在连接…",
         "tg_s002": "今日消息",
+        # tg_gate_* → i18n_packs/telegram_gate.py;fn_export_csv 等 → i18n_packs/funnel.py(P4 拆分)
         "tg_s003": "语音接收",
         "tg_s004": "应用场景预设（不保存，需手动点保存）",
         "tg_s005": "陈伴型对话",
@@ -4620,7 +4763,7 @@ _TRANSLATIONS = {
         "db_s003": "系统告警",
         "db_s004": "快捷入口",
         "db_s005": "运营总览",
-        "db_s006": "学习审核",
+        "db_s006": "学习队列",
         "db_s007": "知识库条目",
         "db_s008": "首次部署检查",
         "db_s009": "不再显示此提示",
@@ -5935,8 +6078,8 @@ _TRANSLATIONS = {
         "as_req_fail": "✗ 请求失败: {msg}",
         "as_linked_ok": "✓ 已连接 → {c}",
         "as_confirm_unlink": "解除 {p}:{uid} 的跨平台绑定?",
-        "em_s001": "情景记忆 ·",
-        "lr_s001": "智能学习 ·",
+        "em_s001": "AI 记忆 ·",
+        "lr_s001": "学习队列 ·",
         "em_s002": "记忆校正质量",
         "em_s003": "坐席把 AI 推断确认为事实的采纳情况（近",
         "em_s004": "已采纳（确认数）",
@@ -5971,7 +6114,7 @@ _TRANSLATIONS = {
         "em_js013": "近",
         "em_js014": "天暂无确认记录",
         "em_js015": "每日确认量",
-        "lr_s002": "智能学习",
+        "lr_s002": "学习队列",
         "lr_s003": "自动收集未命中问题",
         "lr_s004": "生成知识草稿",
         "lr_s005": "人工审核入库",
@@ -7837,6 +7980,7 @@ _TRANSLATIONS = {
         "err.login.web_native": "网页客服为服务端原生渠道，无需扫码登录。",
         "err.login.mode_unavailable": "{platform} 的「{mode}」登录方式暂未启用",
         "err.login.session_expired": "登录会话不存在或已过期",
+        # err.login.password_* / err.enable.* → src/web/i18n_packs/errors.py(P4 拆分)
         # ── 跨路由共享错误词表（P38：权限/服务就绪/请求体，全站复用）──
         "err.perm.supervisor_required": "需要主管权限",
         "err.perm.supervisor_force_l4": "需要主管权限才能强制放行 L4 草稿",
@@ -8158,12 +8302,12 @@ _TRANSLATIONS = {
         "templates": "Templates",
         "channels": "Channels",
         "channels_status": "Channel Status",
-        "strategies": "Strategy Config",
+        "strategies": "Reply Strategies",
         "strategy_analytics": "Strategy Performance",
         "audit": "Activity Log",
         "diff": "Version Diff",
         "analytics": "Analytics",
-        "cases": "Pending Cases",
+        "cases": "Case Follow-ups",
         "logs": "Live Logs",
         "help": "Help",
         "help_center": "Help Center",
@@ -8174,12 +8318,12 @@ _TRANSLATIONS = {
         # ── Sidebar nav fill-in (③-S3: ex-hardcoded spans → keys) ──
         "personas": "Persona Studio",
         "workspace_inbox": "Agent Workspace",
-        "rpa_overview": "RPA Overview",
-        "telegram_settings": "Telegram Settings",
-        "line_rpa": "LINE Auto-Chat",
-        "messenger_rpa": "Messenger RPA",
-        "whatsapp_rpa": "WhatsApp Auto-Chat",
-        "episodic": "Episodic Memory",
+        "rpa_overview": "Channel Overview",
+        "telegram_settings": "Telegram Automation",
+        "line_rpa": "LINE Automation",
+        "messenger_rpa": "Messenger Automation",
+        "whatsapp_rpa": "WhatsApp Automation",
+        "episodic": "AI Memory",
         "crisis_audit": "Crisis Audit",
         "care": "Proactive Care",
         "relations_health": "Churn Alerts",
@@ -8286,7 +8430,7 @@ _TRANSLATIONS = {
         "click_switch_full": "Click to switch to Full Mode",
         "click_switch_simple": "Click to switch to Simple Mode",
         "knowledge": "Knowledge Base",
-        "learner": "AI Learning Review",
+        "learner": "Learning Queue",
         "system_settings": "System Settings",
         "lang_switch_label": "Language",
         # ── Command palette (③-S3: Ctrl+K palette JS strings) ──
@@ -9180,6 +9324,20 @@ _TRANSLATIONS = {
         "inbox.bab.cancel": "Cancel",
         "inbox.empty.title": "Select a conversation",
         "inbox.empty.sub": "Pick a conversation on the left to start chatting",
+        "inbox.empty.cta_waiting": "Open oldest awaiting",
+        "inbox.empty.cta_waiting_t": "Jump to the longest-waiting conversation (shortcut J)",
+        "inbox.empty.kbd_hint": "Shortcuts: J oldest awaiting · / focus search · Ctrl+K knowledge base",
+        "inbox.empty.today": "Today at a glance",
+        # ── Connect · Telegram two-step verification (cloud password) ──
+        "inbox.connect.pwd_ph": "Telegram two-step verification password",
+        "inbox.connect.hint_pwd_needed": "This account has two-step verification enabled. Enter the cloud password to finish signing in.",
+        "inbox.connect.pwd_submit": "Submit password",
+        "inbox.connect.st_pwd_pending": "Scanned · awaiting password",
+        "inbox.connect.pwd_required": "Password required",
+        "inbox.connect.pwd_checking": "Verifying password…",
+        "inbox.connect.pwd_rejected": "Verification failed",
+        "inbox.connect.pwd_wrong": "Incorrect password, please try again.",
+        "inbox.connect.pwd_submit_fail": "Submit failed",
         "inbox.back_mobile": "← Back to conversations",
         "inbox.mode.select_t": "AI automation level (single entry): Manual / AI drafts I review / AI options I pick / Full auto (AI sends; escalates to human on risk hit)",
         "inbox.mode.manual": "🙋 Manual",
@@ -9907,7 +10065,7 @@ _TRANSLATIONS = {
         "base.demo.banner": "🎬 Demo mode: sample data is shown. Clear it anytime in Settings → Trial/Demo.",
         "lang_toggle": "中文",
         # ── Case panel body (③-S5: cases.html static + dynamic JS) ──
-        "cases_title": "Case Management",
+        "cases_title": "Case Follow-ups",
         "cases_guide_title": "How it works",
         "cases_guide_body": "Each case card shows the user message and the AI reply. Add a <strong>note</strong> to flag key info, then click <strong style=\"color:var(--green)\">Close</strong> when done. The list auto-refreshes every 30s.",
         "cases_guide_dismiss": "Got it, don't show again",
@@ -9933,11 +10091,11 @@ _TRANSLATIONS = {
         # ── Simple-mode onboarding modal (③-S5: base.html simple onboard-modal; was full-only sealed) ──
         "onb_welcome_title": "Welcome to Simple Mode",
         "onb_welcome_desc": "We've streamlined the interface to focus on the features you use most:",
-        "onb_cases_label": "Pending Cases",
+        "onb_cases_label": "Case Follow-ups",
         "onb_cases_desc": "View and handle customer cases",
         "onb_kb_label": "Knowledge Base",
         "onb_kb_desc": "Browse and search knowledge entries",
-        "onb_review_label": "AI Learning Review",
+        "onb_review_label": "Learning Queue",
         "onb_review_desc": "Review AI-generated drafts",
         "onb_footer": "You can switch to Full Mode anytime from the bottom of the sidebar",
         "onb_start": "Get started",
@@ -10211,6 +10369,133 @@ _TRANSLATIONS = {
         "psn_clear_binding": "Clear binding (revert to default)",
         "psn_ite_ph": "Enter a tag, press Enter…",
         "psn_ite_hint": "Enter to add · Esc to close · × to remove",
+        # ── Persona Studio P0 revamp (card avatar/readiness/preview/undo) ──
+        "psn_src_factory": "Factory preset",
+        "psn_src_factory_t": "Seed persona shipped with the product (from config.yaml); editing it in Studio upgrades it to Customized",
+        "psn_src_customized": "Customized",
+        "psn_src_customized_t": "Edited in Studio; auto-persisted and restart-safe",
+        "psn_src_published": "Published",
+        "psn_src_published_t": "Synced to personas.yaml (git-trackable canonical definition)",
+        "psn_src_imported": "Imported",
+        "psn_src_imported_t": "Auto-imported from Messenger RPA config; saving in Studio converts it to Customized",
+        "psn_dup_name": "Dup name",
+        "psn_dup_name_t": "{n} personas share the name “{name}”. Rename or merge to avoid confusion",
+        "psn_ready_title": "Launch readiness",
+        "psn_ready_name": "Name",
+        "psn_ready_role": "Role",
+        "psn_ready_personality": "Personality",
+        "psn_ready_tags": "Tags",
+        "psn_ready_avatar": "Avatar (face reference)",
+        "psn_ready_voice": "Voice",
+        "psn_ready_binding": "Applied to chats / accounts",
+        "psn_ready_fix": "Fix",
+        "psn_ready_all_done": "Profile complete — ready to go live 🎉",
+        "psn_ready_pct": "Profile completeness",
+        "psn_serving": "Serving",
+        "psn_not_live": "Not live",
+        "psn_not_live_t": "Not bound to any chat or account yet; does not affect completeness",
+        "psn_voice_preview_t": "Preview this persona's voice",
+        "psn_voice_preview_text": "Hi, I'm {name}. Nice to meet you!",
+        "psn_voice_synthing": "Synthesizing…",
+        "psn_voice_preview_fail": "Voice preview failed: {err}",
+        "psn_deleted_undo": "Deleted “{name}”",
+        "psn_undo_action": "Undo",
+        "psn_undo_restored": "Restored “{name}”",
+        "psn_undo_failed": "Restore failed: {err}",
+        "psn_avatar_alt": "Persona avatar",
+        # ── Persona Studio P1 (apply-to/create-wizard/chat-test) ──
+        "psn_apply_title": "Apply to…",
+        "psn_apply_sub": "Use this persona for accounts, chats, or as the global fallback",
+        "psn_apply_tab_account": "Account default",
+        "psn_apply_tab_chat": "Bind chats",
+        "psn_apply_tab_default": "Global default",
+        "psn_apply_serving": "Serving: {a} accounts · {c} chats",
+        "psn_apply_no_accounts": "No connected accounts yet",
+        "psn_apply_assign": "Assign",
+        "psn_apply_current": "✓ Current persona",
+        "psn_apply_clear": "Clear",
+        "psn_apply_chat_ph": "Enter chat ID",
+        "psn_apply_bind": "Bind",
+        "psn_apply_unbind": "Unbind",
+        "psn_apply_bound_list": "Bound chats",
+        "psn_apply_no_bindings": "No chats bound yet",
+        "psn_apply_set_default": "Set as global default",
+        "psn_apply_default_desc": "All chats without an explicit persona or routing match will fall back to this persona.",
+        "psn_apply_default_confirm": "Set “{name}” as the global default persona?",
+        "psn_apply_ok_assign": "Assigned to account",
+        "psn_apply_ok_clear": "Account assignment cleared",
+        "psn_apply_ok_bind": "Chat bound",
+        "psn_apply_ok_unbind": "Unbound",
+        "psn_apply_ok_default": "Set as global default",
+        "psn_apply_fail": "Operation failed: {err}",
+        "psn_apply_loading": "Loading…",
+        "psn_wiz_title": "New persona",
+        "psn_wiz_step1": "Step 1 · Choose a template",
+        "psn_wiz_step2": "Step 2 · Basics",
+        "psn_wiz_blank": "Start from scratch",
+        "psn_wiz_blank_desc": "Skip templates and open the full editor",
+        "psn_wiz_tpl_companion": "Companion bestie",
+        "psn_wiz_tpl_companion_d": "Gentle, healing DMs; listens and holds space",
+        "psn_wiz_tpl_business": "Business consultant",
+        "psn_wiz_tpl_business_d": "Conclusion first, then steps; orders/payments/business",
+        "psn_wiz_tpl_support": "Support agent",
+        "psn_wiz_tpl_support_d": "After-sales triage; empathize first, never argue",
+        "psn_wiz_tpl_mentor": "Insightful mentor",
+        "psn_wiz_tpl_mentor_d": "Patient study companion with Socratic questions",
+        "psn_wiz_tpl_sales": "E-commerce guide",
+        "psn_wiz_tpl_sales_d": "Knows the products; warm but never pushy",
+        "psn_wiz_name": "Name",
+        "psn_wiz_name_ph": "Give them a name (required)",
+        "psn_wiz_id": "Profile ID",
+        "psn_wiz_id_ph": "Leave blank to auto-generate; a-z, 0-9, _",
+        "psn_wiz_id_invalid": "ID must be 2-40 chars: lowercase letters, digits, underscore",
+        "psn_wiz_id_exists": "This ID already exists; pick another",
+        "psn_wiz_role": "Role",
+        "psn_wiz_persona_style": "Personality sketch (fine-tune in the editor later)",
+        "psn_wiz_back": "Back",
+        "psn_wiz_create": "Create persona",
+        "psn_wiz_creating": "Creating…",
+        "psn_wiz_created": "Created “{name}” — now add an avatar and a voice",
+        "psn_wiz_name_required": "Name is required",
+        "psn_ct_title": "Test chat",
+        "psn_ct_sub": "Preview-only conversation; production data is untouched",
+        "psn_ct_input_ph": "Type a message. Enter to send, Shift+Enter for newline",
+        "psn_ct_send": "Send",
+        "psn_ct_thinking": "Typing…",
+        "psn_ct_trace": "Pipeline trace",
+        "psn_ct_clear": "Clear session",
+        "psn_ct_cleared": "Cleared — next message starts a new session",
+        "psn_ct_empty": "Send a message to feel their tone",
+        "psn_ct_persona_missing": "Backend persona injection not loaded yet (restart required); replies use the global default persona",
+        "psn_ct_fail": "Send failed: {err}",
+        "psn_ct_meta_intent": "Intent",
+        "psn_ct_meta_kb": "KB",
+        "psn_ct_meta_ms": "Time",
+        "psn_ct_meta_persona": "Persona",
+        # ── Persona Studio P2 (usage stats/health ledger) ──
+        "psn_usage_7d": "7-day",
+        "psn_usage_pill_t": "AI replies generated with this persona in the last 7 days (all channels)",
+        "psn_usage_rank_title": "🔥 Active personas (7 days)",
+        "psn_usage_rank_sub": "Ranked by AI reply count",
+        "psn_usage_none": "No usage data yet; accumulates automatically with real replies",
+        "psn_hp_title": "Persona health check",
+        "psn_hp_sub": "Personas needing attention, grouped by issue",
+        "psn_hp_incomplete": "Incomplete profile",
+        "psn_hp_unbound": "Not live (zero bindings)",
+        "psn_hp_idle": "Bound but no replies in 7 days",
+        "psn_hp_dup": "Duplicate names",
+        "psn_hp_all_good": "All healthy — nothing to fix 🎉",
+        "psn_hp_fix": "Fix",
+        "psn_hp_apply": "Apply",
+        "psn_hp_miss_role": "no role",
+        "psn_hp_miss_personality": "no personality",
+        "psn_hp_miss_tags": "no tags",
+        "psn_hp_miss_voice": "no voice",
+        "psn_hp_miss_avatar": "no avatar",
+        "err.chat_test.rate_limited": "Test chat rate limit reached — try again soon (max {n}/min)",
+        "psn_hp_stale": "Not updated in 30+ days",
+        "psn_hp_last_edit": "Last edited",
+        "psn_hp_never_edited": "Never customized",
         # ── personas.html JS layer (③-S8b auto-migrated) ──
         "psn_js_001": "Edit persona",
         "psn_js_002": "You have unsaved changes. Discard them?",
@@ -10675,7 +10960,7 @@ _TRANSLATIONS = {
         "rpa_js_no_data": "No data",
         "rpa_js_total_msgs_n": "{n} messages",
         "rpa_js_queue_word": "queue",
-        "ov_title": "RPA Cross-Platform Overview",
+        "ov_title": "Channel Overview",
         "ov_search_title": "Cross-platform chat search",
         "ov_search_sub": "Search LINE / Messenger / WhatsApp history together",
         "ov_search_ph": "🔍 Search keywords across all platforms' chat history…",
@@ -11144,7 +11429,7 @@ _TRANSLATIONS = {
         "ov_js_rate_fix": "👎 Fix",
         "ov_js_persona_keep": "Keep persona",
         "ov_js_default_persona": "— Default persona —",
-        "msg_s001": "Messenger RPA Console",
+        "msg_s001": "Messenger Automation Console",
         "msg_s002": "Reading run status…",
         "msg_s003": "⚠️ Pending approval",
         "msg_s004": "📤 Sent (24h)",
@@ -11163,13 +11448,13 @@ _TRANSLATIONS = {
         "msg_s017": "(required)",
         "msg_s018": "Hi, this is a manually sent message",
         "msg_s019": "Queue & send",
-        "msg_s020": "🏠 Overview",
-        "msg_s021": "💬 Leads",
-        "msg_s022": "🎭 Persona strategy",
-        "msg_s023": "📱 Accounts & devices",
-        "msg_s024": "✅ Approvals & QA",
-        "msg_s025": "📊 Data center",
-        "msg_s026": "⚙️ Strategy config",
+        "msg_s020": "Overview",
+        "msg_s021": "Leads",
+        "msg_s022": "Persona strategy",
+        "msg_s023": "Accounts & devices",
+        "msg_s024": "Approvals & QA",
+        "msg_s025": "Data center",
+        "msg_s026": "Strategy config",
         "msg_s027": "Waiting for data",
         "msg_s028": "Today's actions",
         "msg_s029": "Used to judge whether the system is progressing correctly",
@@ -11305,10 +11590,11 @@ _TRANSLATIONS = {
         "msg_s159": "Last scan --",
         "msg_s160": "Interval --",
         "msg_s161": "Idle runs --",
-        "msg_s162": "⚡ Automation",
-        "msg_s163": "💬 Conversation style",
-        "msg_s164": "🎯 Conversion",
-        "msg_s165": "🛡️ Ops & diagnostics",
+        "msg_s162": "Automation",
+        "msg_s163": "Conversation style",
+        "msg_s164": "Conversion",
+        "msg_s165": "Ops & diagnostics",
+        # msg_tab_voice → i18n_packs/messenger.py (P4 split)
         "msg_s166": "Quick-search settings (Ctrl+F)",
         "msg_s167": "🎛 Presets",
         "msg_s168": "Load a scenario preset in one click",
@@ -12540,6 +12826,7 @@ _TRANSLATIONS = {
         "ln_js_p06": "Cancelled {n}",
         "tg_s001": "Connecting…",
         "tg_s002": "Messages today",
+        # tg_gate_* → i18n_packs/telegram_gate.py; fn_export_csv etc. → i18n_packs/funnel.py (P4 split)
         "tg_s003": "Voice received",
         "tg_s004": "Scenario presets (not saved; click Save manually)",
         "tg_s005": "Companion-style chat",
@@ -12716,7 +13003,7 @@ _TRANSLATIONS = {
         "db_s003": "System alerts",
         "db_s004": "Quick links",
         "db_s005": "Ops overview",
-        "db_s006": "Learning review",
+        "db_s006": "Learning Queue",
         "db_s007": "KB entries",
         "db_s008": "First-deployment check",
         "db_s009": "Don't show this again",
@@ -14031,8 +14318,8 @@ _TRANSLATIONS = {
         "as_req_fail": "✗ Request failed: {msg}",
         "as_linked_ok": "✓ Linked → {c}",
         "as_confirm_unlink": "Unlink cross-platform binding for {p}:{uid}?",
-        "em_s001": "Episodic Memory ·",
-        "lr_s001": "Smart Learning ·",
+        "em_s001": "AI Memory ·",
+        "lr_s001": "Learning Queue ·",
         "em_s002": "Memory Correction Quality",
         "em_s003": "Adoption of AI inferences confirmed as facts by agents (last",
         "em_s004": "Adopted (confirmed)",
@@ -14067,7 +14354,7 @@ _TRANSLATIONS = {
         "em_js013": "last",
         "em_js014": "days: no confirmation records",
         "em_js015": "Daily confirmations",
-        "lr_s002": "Smart Learning",
+        "lr_s002": "Learning Queue",
         "lr_s003": "Auto-collect missed questions",
         "lr_s004": "Generate knowledge drafts",
         "lr_s005": "Human review & ingest",
@@ -15933,6 +16220,7 @@ _TRANSLATIONS = {
         "err.login.web_native": "Web chat is a server-side native channel; no QR login needed.",
         "err.login.mode_unavailable": "The \"{mode}\" login method for {platform} is not enabled yet",
         "err.login.session_expired": "Login session not found or expired",
+        # err.login.password_* / err.enable.* → src/web/i18n_packs/errors.py (P4 split)
         # ── Cross-route shared error vocabulary (P38) ──
         "err.perm.supervisor_required": "Supervisor permission required",
         "err.perm.supervisor_force_l4": "Supervisor permission required to force-release an L4 draft",
@@ -16245,6 +16533,23 @@ _TRANSLATIONS = {
 
 DEFAULT_LANG = "zh"
 
+
+# ── i18n packs 合并（P4 词条治理机制化,见 src/web/i18n_packs/__init__.py）────
+# 新增词条一律进按域拆分的 pack 文件;本单体字典只承载存量。消费方(get_translations
+# /t/tr)一律读合并视图 _MERGED,对模板/JS 词表/路由文案完全透明。
+def _build_merged(base: dict) -> dict:
+    """单体 + packs → 合并字典。packs 收集失败时 fail-safe 回落单体。"""
+    try:
+        from src.web.i18n_packs import collect_packs
+        pzh, pen = collect_packs()
+        return {"zh": {**base["zh"], **pzh}, "en": {**base["en"], **pen}}
+    except Exception as exc:
+        _logger.warning("i18n packs 合并失败（仅用单体字典）: %s", exc)
+        return base
+
+
+_MERGED = _build_merged(_TRANSLATIONS)
+
 # ── 热加载状态（见模块 docstring）────────────────────────────────────────────
 _SRC_PATH = _Path(__file__).resolve()
 _RELOAD_LOCK = _threading.Lock()
@@ -16258,17 +16563,46 @@ _next_check_ts: float = 0.0         # 节流：最多每 2s stat 一次
 _last_err_mtime: float = -1.0       # 坏保存态告警去重（同一 mtime 只报一次）
 
 
+def _packs_mtime() -> float:
+    """pack 目录聚合 mtime（任一 pack 文件变化即变化;失败回 0 不触发重载）。"""
+    try:
+        from src.web.i18n_packs import pack_files
+        return max((p.stat().st_mtime for p in pack_files()), default=0.0)
+    except Exception:
+        return 0.0
+
+
+_packs_loaded_mtime: float = _packs_mtime()
+
+
 def _maybe_reload() -> None:
-    """mtime 变化时热重载翻译字典（fail-safe：任何异常保留旧字典）。
+    """单体或 pack 目录 mtime 变化时热重载翻译字典（fail-safe：任何异常保留旧字典）。
 
     快路径（节流窗口内 / mtime 未变）零锁零 IO 开销；仅真变化时锁内 exec 一次
     （15k 行 ~100ms，替换为原子引用赋值，并发读方要么旧字典要么新字典，无撕裂）。
     """
     global _next_check_ts, _loaded_mtime, _last_err_mtime, _TRANSLATIONS
+    global _MERGED, _packs_loaded_mtime
     now = _time.monotonic()
     if now < _next_check_ts:
         return
     _next_check_ts = now + 2.0
+
+    # ── pack 目录变化 → 仅重收集 packs 并重建合并视图（不 exec 单体）──
+    pm = _packs_mtime()
+    if pm != _packs_loaded_mtime:
+        with _RELOAD_LOCK:
+            if pm != _packs_loaded_mtime:
+                try:
+                    from src.web.i18n_packs import collect_packs
+                    pzh, pen = collect_packs(force_reload=True)
+                    _MERGED = {"zh": {**_TRANSLATIONS["zh"], **pzh},
+                               "en": {**_TRANSLATIONS["en"], **pen}}
+                    _packs_loaded_mtime = pm
+                    _logger.info("i18n packs 热重载完成（+%d/+%d 键）", len(pzh), len(pen))
+                except Exception as exc:
+                    _logger.warning("i18n packs 热重载失败（保留旧字典）: %s", exc)
+
     try:
         mtime = _SRC_PATH.stat().st_mtime
     except OSError:
@@ -16287,6 +16621,7 @@ def _maybe_reload() -> None:
             new = ns.get("_TRANSLATIONS")
             if isinstance(new, dict) and new.get("zh") and new.get("en"):
                 _TRANSLATIONS = new
+                _MERGED = _build_merged(new)
                 _loaded_mtime = mtime
                 _logger.info("web_i18n 热重载完成（zh=%d 键, en=%d 键）",
                              len(new["zh"]), len(new["en"]))
@@ -16303,12 +16638,12 @@ def _maybe_reload() -> None:
 
 def get_translations(lang: str = "zh") -> dict:
     _maybe_reload()
-    return _TRANSLATIONS.get(lang, _TRANSLATIONS[DEFAULT_LANG])
+    return _MERGED.get(lang, _MERGED[DEFAULT_LANG])
 
 
 def t(key: str, lang: str = "zh") -> str:
     _maybe_reload()
-    d = _TRANSLATIONS.get(lang, _TRANSLATIONS[DEFAULT_LANG])
+    d = _MERGED.get(lang, _MERGED[DEFAULT_LANG])
     return d.get(key, key)
 
 
@@ -16331,7 +16666,7 @@ def tr(request, key: str, default: str = None, /, **fmt) -> str:
         lang = getattr(getattr(request, "state", None), "ui_lang", DEFAULT_LANG) or DEFAULT_LANG
     except Exception:
         lang = DEFAULT_LANG
-    d = _TRANSLATIONS.get(lang, _TRANSLATIONS[DEFAULT_LANG])
+    d = _MERGED.get(lang, _MERGED[DEFAULT_LANG])
     s = d.get(key)
     if s is None:
         s = default if default is not None else key
