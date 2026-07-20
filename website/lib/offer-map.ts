@@ -24,6 +24,7 @@ const ORDER_SKU_MAP: Record<string, { skuId: string; productId: string }> = {
   "translate-team": { skuId: "lingox-team", productId: "tongyi" },
   "translate-pro": { skuId: "lingox-pro", productId: "tongyi" },
   // 智聊 ChatX（pricing.ts autochatOffers → registry zhiliao/chatx-*）
+  "autochat-entry": { skuId: "chatx-entry", productId: "zhiliao" },
   "autochat-team": { skuId: "chatx-team", productId: "zhiliao" },
   "autochat-flagship": { skuId: "chatx-flagship", productId: "zhiliao" },
   // 实时部署（pricing.ts realtimeOffers）：basic → 幻颜实时换脸部署；
