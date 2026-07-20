@@ -255,7 +255,16 @@ class TelegramSenderMixin:
                 return True
         except Exception:
             pass
-        _gcfg = self.config.config if hasattr(self.config, "config") else {}
+        # 防御式取配置：mixin 消费方可能没有 config 属性（如轻量测试替身/局部装配的
+        # sender）——曾因此处裸访问 self.config 抛 AttributeError，让"护栏自身报错
+        # 不阻断发送"的承诺失效（send_photo 全量失败）。
+        _cfgobj = getattr(self, "config", None)
+        if hasattr(_cfgobj, "config"):
+            _gcfg = _cfgobj.config or {}
+        elif isinstance(_cfgobj, dict):
+            _gcfg = _cfgobj
+        else:
+            _gcfg = {}
         _acct = getattr(self, "account_id", "default")
         # ── 营业时段（仅约束自动回复）：非营业时段不自动发，转人工由坐席上班处理 ──
         if is_autoreply:

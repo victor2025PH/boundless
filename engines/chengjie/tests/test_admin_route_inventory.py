@@ -882,6 +882,27 @@ _BASELINE = """
 /api/voice/persona-voice	DELETE
 """
 
+# 2026-07-20 基线增量（拆分完成后的**有意新增**端点，非搬迁；随功能提交入册）：
+# - enable/leadbus/replybus：平台化总线（platform/* 合同对接：授权/线索/回复决策）
+# - monetize/kpi：概览页经营摘要条（三期）  - ops/account-health：机群健康灯
+# - personas/face-refs：人设形象照参照   - platforms/login/password：协议号密码登录补全
+# - telegram/gate-stats：反封号闸门观测   - translate：通用翻译端点
+_ADDITIONS_2026_07 = """
+/api/enable/status	GET
+/api/leadbus/ingest	POST
+/api/leadbus/status	GET
+/api/monetize/kpi	GET
+/api/ops/account-health	GET
+/api/personas/face-refs	GET
+/api/platforms/{platform}/login/{login_id}/password	POST
+/api/replybus/decide	POST
+/api/replybus/status	GET
+/api/telegram/gate-stats	GET
+/api/translate	POST
+/funnel	GET
+"""
+_BASELINE += _ADDITIONS_2026_07
+
 
 def _parse_baseline():
     expected = set()

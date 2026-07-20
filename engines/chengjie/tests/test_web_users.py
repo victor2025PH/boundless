@@ -123,23 +123,32 @@ class TestUserCRUD:
         assert resp.json().get("ok") is True
 
     def test_deleted_user_cannot_login(self, client, auth_client):
-        """已删除的用户不应能登录"""
+        """已删除的用户不应能登录。
+
+        十七期修：原测试打错删除路径（/users/{id}/delete，真实路由是
+        /users/delete/{id}，见路由基线）→ 404 静默、用户根本没删掉，
+        随后登录"成功"落到 /cases，被误判为安全回归。修正路径并收紧断言：
+        删除必须 ok，登录必须失败（留在登录页，绝不 303 进站内）。
+        """
         create_resp = auth_client.post(
             "/users/create",
             data={"username": "todelete", "password": "todelete123", "role": "viewer"},
             headers={"Accept": "application/json"},
         )
         user_id = create_resp.json().get("id")
-        auth_client.post(f"/users/{user_id}/delete", headers={"Accept": "application/json"})
+        assert user_id, create_resp.text[:200]
+        del_resp = auth_client.post(
+            f"/users/delete/{user_id}", headers={"Accept": "application/json"})
+        assert del_resp.status_code == 200 and del_resp.json().get("ok") is True, \
+            del_resp.text[:200]
 
         resp = client.post(
             "/login",
             data={"username": "todelete", "password": "todelete123"},
             follow_redirects=True,
         )
-        # 应停留在登录页（失败）
-        body = resp.content.decode("utf-8", errors="replace")
-        assert "错误" in body or "login" in str(resp.url).lower() or "/login" in str(resp.url)
+        # 登录必须失败：留在登录页，绝不重定向进任何站内页面
+        assert "/login" in str(resp.url), f"被删用户登录后落到 {resp.url}"
 
 
 class TestPasswordChange:

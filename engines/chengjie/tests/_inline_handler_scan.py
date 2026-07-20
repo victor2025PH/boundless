@@ -27,8 +27,10 @@ BUILTINS = {
     "isNaN", "RegExp", "Set", "Map", "requestAnimationFrame", "URLSearchParams",
     "location", "navigator", "localStorage", "sessionStorage",
 }
-# 共享脚本提供的全局：rpa（_rpa_shared_scripts.html）、T（_i18n_bootstrap.html）。
-SHARED_GLOBALS = {"rpa", "T"}
+# 共享脚本提供的全局：rpa（_rpa_shared_scripts.html）、T（_i18n_bootstrap.html）；
+# _applyFilter/_onSearchInput（/static/js/persona_studio_core.js 顶层函数，第五批瘦身
+# 自 personas.html 迁出——扫描器不解析外部 <script src>，按惯例在此登记）。
+SHARED_GLOBALS = {"rpa", "T", "_applyFilter", "_onSearchInput"}
 # 模板字符串里生成 HTML 的插值/拼接辅助（生成期即时求值，非内联 handler，无需暴露）。
 HELPERS = {"esc", "escAttr", "fn"}
 
