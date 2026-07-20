@@ -141,6 +141,16 @@ class AutosendWorker:
             self._send_block_cooldown_sec = 21600.0
         self._blocked_conv_until: Dict[str, float] = {}
 
+        # Sprint2 可恢复投递（默认关 → 保持「宁丢不重发」，零行为变更）。
+        # 瞬时投递失败 → 进程内重试队列（指数退避），重发同文本、不 re-resolve（幂等）；
+        # 永久失败/重试耗尽 → record_autosend_failure + event 提醒坐席补发。
+        _rc = dict(cfg.get("recoverable") or {})
+        self._recoverable: bool = bool(_rc.get("enabled", False))
+        self._retry_max_attempts: int = int(_rc.get("max_attempts", 5))
+        self._retry_backoff_base: float = float(_rc.get("backoff_base_sec", 30))
+        self._retry_backoff_max: float = float(_rc.get("backoff_max_sec", 1800))
+        self._retry_queue: List[Dict[str, Any]] = []  # [{item, next_ts}]
+
         # 运行时状态
         self._running = False
         self._current_interval = self._min_interval
@@ -175,6 +185,9 @@ class AutosendWorker:
         self.total_skipped_blocked: int = 0  # 因会话发送封禁而跳过取消的草稿数
         self.total_skipped_mode: int = 0     # 因会话被显式降级(接管→manual 等)而取消的 L2 数
         self.total_marked_read: int = 0      # 投递前成功补发平台已读回执的条数
+        self.total_retry_scheduled: int = 0  # 瞬时投递失败重排重试次数（recoverable）
+        self.total_retry_recovered: int = 0  # 重试后成功投递条数
+        self.total_retry_exhausted: int = 0  # 重试耗尽最终放弃条数
 
     # ── 生命周期 ──────────────────────────────────────────────
 
@@ -332,10 +345,22 @@ class AutosendWorker:
             logger.error("[AutosendWorker] 批次执行异常: %s", exc, exc_info=True)
 
         # 真实投递：草稿已 resolve（DB 标记 approved + autosend 审计），现把文本发到平台。
-        # resolve-先于-deliver：投递失败宁可丢一条也不重发（draft 已非 pending，下轮不再选中），
-        # 杜绝向客户刷屏。失败计入 deliver_errors 但不触发熔断（熔断只看 resolve 错误）。
-        if self._send_callback is not None and to_deliver:
-            for item in to_deliver:
+        # resolve-先于-deliver：默认「投递失败宁可丢一条也不重发」；开启 recoverable 后瞬时失败
+        # 进重试队列（见下）。失败计入 deliver_errors 但不触发熔断（熔断只看 resolve 错误）。
+        # Sprint2：把到期重试项并入本轮投递（重发同文本，不 re-resolve）。recoverable 关时
+        # _retry_queue 恒空 → deliver_now == to_deliver，行为与旧实现字节级一致。
+        deliver_now = list(to_deliver)
+        if self._recoverable and self._retry_queue:
+            _rt_now = time.time()
+            _due = [r for r in self._retry_queue if r.get("next_ts", 0) <= _rt_now]
+            for r in _due:
+                try:
+                    self._retry_queue.remove(r)
+                except ValueError:
+                    continue
+                deliver_now.append(r["item"])
+        if self._send_callback is not None and deliver_now:
+            for item in deliver_now:
                 try:
                     # 出站翻译：投递前把 AI 中文回复译成客户语言（补「全自动聊天翻译」闭环）。
                     # 绝不阻塞投递——回调内部已保证异常/不可译时回落原文。
@@ -391,6 +416,8 @@ class AutosendWorker:
                         raise RuntimeError(str(
                             res.get("error") or res.get("blocked") or "send not ok"))
                     self.total_delivered += 1
+                    if int(item.get("_attempt", 0)) > 0:
+                        self.total_retry_recovered += 1
                     try:   # P4 埋点：AI 承接（该会话首条自动回复投递成功，进程内每会话一次）
                         from src.utils.telemetry import track_once
                         _tele_cid = str(item.get("conversation_id") or "")
@@ -404,11 +431,12 @@ class AutosendWorker:
                     self.last_error = f"deliver: {exc}"
                     _conv = str(item.get("conversation_id", "") or "?")
                     _plat = item.get("platform", "?")
+                    _permanent = _is_permanent_send_error(str(exc))
                     # 永久性错误（无发言权/被拉黑/会话失效）→ 会话进封禁冷却；仅「首次进入
                     # 封禁」打一条 WARNING，冷却窗口内的后续同类失败降级 debug（防刷屏）。
                     if (self._send_block_cooldown_sec > 0
                             and _conv != "?"
-                            and _is_permanent_send_error(str(exc))):
+                            and _permanent):
                         _already = self._conv_send_blocked(_conv)
                         self._blocked_conv_until[_conv] = (
                             time.time() + self._send_block_cooldown_sec)
@@ -425,6 +453,25 @@ class AutosendWorker:
                             "[AutosendWorker] 投递失败 conv=%s platform=%s: %s",
                             _conv, _plat, exc,
                         )
+                    # Sprint2 可恢复：瞬时失败且未耗尽 → 排入重试队列（指数退避），不记 failed、
+                    # 不 re-resolve（幂等重发同文本）。永久错误不重试（会话已进封禁冷却）。
+                    _attempt = int(item.get("_attempt", 0))
+                    if (self._recoverable and not _permanent
+                            and _attempt + 1 < self._retry_max_attempts):
+                        _delay = min(
+                            self._retry_backoff_base * (2 ** _attempt),
+                            self._retry_backoff_max)
+                        _ritem = dict(item)
+                        _ritem["_attempt"] = _attempt + 1
+                        self._retry_queue.append(
+                            {"item": _ritem, "next_ts": time.time() + _delay})
+                        self.total_retry_scheduled += 1
+                        logger.info(
+                            "[AutosendWorker] 投递瞬时失败，%.0fs 后第%d次重试 conv=%s",
+                            _delay, _attempt + 1, _conv)
+                        continue  # 重试中：本条暂不记 autosend_failed
+                    if self._recoverable and not _permanent:
+                        self.total_retry_exhausted += 1
                     # 写 autosend_failed 审计，让安全条/记录弹窗看见「自动发了但没送达」
                     try:
                         rec = getattr(self._svc, "record_autosend_failure", None)
@@ -436,6 +483,9 @@ class AutosendWorker:
                             )
                     except Exception:
                         logger.debug("[AutosendWorker] autosend_failed 审计写入失败", exc_info=True)
+                    # Sprint2：开启 recoverable 时，永久/耗尽失败发实时提醒事件，坐席可补发。
+                    if self._recoverable:
+                        self._publish_deliver_failed(item, str(exc), permanent=_permanent)
 
         self.last_sent = sent
         self.total_sent += sent
@@ -484,6 +534,26 @@ class AutosendWorker:
                     self._last_cleanup_ts = time.time()
             except Exception:
                 logger.debug("[AutosendWorker] cleanup_old_drafts 失败", exc_info=True)
+
+    def _publish_deliver_failed(self, item: Dict[str, Any], reason: str,
+                                *, permanent: bool) -> None:
+        """Sprint2：发「autosend 投递失败」实时事件，供工作台铃铛/webhook 提醒坐席补发。
+
+        best-effort，绝不抛。仿 sla_watcher 的 event_bus 提醒范式（recon 建议通道）。
+        """
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("autosend_deliver_failed", {
+                "draft_id": str(item.get("draft_id") or ""),
+                "conversation_id": str(item.get("conversation_id") or ""),
+                "platform": str(item.get("platform") or ""),
+                "permanent": bool(permanent),
+                "reason": str(reason)[:200],
+                "text_preview": str(item.get("text") or "")[:80],
+                "ts": time.time(),
+            })
+        except Exception:
+            logger.debug("[AutosendWorker] 投递失败事件发布失败（忽略）", exc_info=True)
 
     def _process_batch(self) -> "tuple[int, int, List[Dict[str, Any]]]":
         """同步：列出 L2 pending 草稿并逐条 resolve（DB 标记 + 审计）。每条隔离 try/except。
@@ -630,6 +700,11 @@ class AutosendWorker:
             "typing_enabled": self._typing_callback is not None,  # 是否投递延迟期挂打字状态
             "total_skipped_blocked": self.total_skipped_blocked,  # 因会话发送封禁跳过取消数
             "total_skipped_mode": self.total_skipped_mode,  # 因会话被降级(接管)取消的 L2 数
+            "recoverable": self._recoverable,
+            "retry_pending": len(self._retry_queue),
+            "total_retry_scheduled": self.total_retry_scheduled,
+            "total_retry_recovered": self.total_retry_recovered,
+            "total_retry_exhausted": self.total_retry_exhausted,
             "blocked_conversations": sum(
                 1 for c in list(self._blocked_conv_until) if self._conv_send_blocked(c)
             ),  # 当前处于发送封禁冷却的会话数
