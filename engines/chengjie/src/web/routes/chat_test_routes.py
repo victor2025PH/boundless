@@ -9,12 +9,22 @@
 
 from __future__ import annotations
 
+import threading
 import time
 import uuid
+from collections import deque
 from typing import Dict
 
 from fastapi import HTTPException, Request
 from src.web.web_i18n import tr
+
+# ── 试聊限流（防试聊刷 AI 配额）────────────────────────────────────────────
+# 进程内 60 秒滑动窗口：窗口内全局最多 N 次（chat_test.rate_limit_per_min，默认 20）。
+# 每次试聊都真打一次 LLM，无限流等于给任何拿到后台会话的人一个刷配额的口子。
+# 模块级 deque 存时间戳 + Lock：register 仅调用一次，生命周期同 app。
+_RATE_WINDOW_SEC = 60.0
+_rate_lock = threading.Lock()
+_rate_hits: deque = deque()
 
 
 def register_chat_test_routes(app, ctx) -> None:
@@ -22,6 +32,7 @@ def register_chat_test_routes(app, ctx) -> None:
     _api_auth = ctx.api_auth
     _kb_store = ctx.kb_store
     domain_web_pages = ctx.domain_web_pages
+    _config_manager = ctx.config_manager  # AdminRouteContext 必有此字段（限流上限热读 config）
 
     # F3: 测试会话缓存（内存级，不污染生产 ctx_store）
     _test_sessions: Dict[str, Dict] = {}
@@ -49,14 +60,33 @@ def register_chat_test_routes(app, ctx) -> None:
         - H1: 意图识别 → 策略选择 → KB 搜索 → AI 回复 → 画像
         - G1: channel_overrides 模拟通道状态 + SOP 合规检查
         - F3: session_id 支持多轮对话（30分钟TTL，不影响生产数据）
+        - persona_id（可选）: 按指定人设试聊，注入机制与生产一致
         """
         _api_auth(request)
         data = await request.json()
+        # 防试聊刷 AI 配额：60s 滑动窗口限流。上限每次热读 config（chat_test.
+        # rate_limit_per_min，默认 20），后台改配置无需重启即生效。
+        limit = 20
+        try:
+            limit = int(
+                ((getattr(_config_manager, "config", None) or {})
+                 .get("chat_test", {}) or {}).get("rate_limit_per_min") or 20
+            )
+        except Exception:
+            limit = 20
+        _now = time.time()
+        with _rate_lock:
+            while _rate_hits and _now - _rate_hits[0] > _RATE_WINDOW_SEC:
+                _rate_hits.popleft()
+            if len(_rate_hits) >= limit:
+                raise HTTPException(429, tr(request, "err.chat_test.rate_limited", n=limit))
+            _rate_hits.append(_now)
         message = (data.get("message") or "").strip()
         user_id = data.get("user_id", "__test_user__")
         channel_overrides = data.get("channel_overrides")
         user_emotion = data.get("user_emotion", "")
         session_id = data.get("session_id", "")
+        persona_id = str(data.get("persona_id") or "").strip()
         if not message:
             raise HTTPException(400, tr(request, "err.ws.field_required", field="message"))
 
@@ -79,6 +109,11 @@ def register_chat_test_routes(app, ctx) -> None:
         sm = None
         if telegram_client:
             sm = getattr(telegram_client, "skill_manager", None)
+        if not sm:
+            # 多账号/QR 登录部署下主协议号未配置 → ctx.telegram_client 为 None，
+            # 但 bootstrap 已把 SkillManager 挂到 app.state（P1-2 Suggest More 同款依赖）。
+            # 此前这里直接报"Bot 未运行"，导致试聊在生产（智聊）形态下永远不可用。
+            sm = getattr(request.app.state, "skill_manager", None)
         if not sm:
             return {"ok": False, "error": tr(request, "err.svc.skill_manager_not_ready")}
 
@@ -122,6 +157,23 @@ def register_chat_test_routes(app, ctx) -> None:
                 if channel_status_text:
                     _step("channel_live", channel_status_text)
 
+        # 2.5 人设解析（可选 persona_id）：仅查存在性并记录；注入走生产同一机制——
+        # 只设 mock_ctx["account_persona_id"]，由 ai_client._build_system_instruction
+        # 内部经 PersonaManager 解析并拼「后台人设定位」块（与 skill_manager autodraft 路径同款）
+        persona_used = None
+        if persona_id:
+            from src.utils.persona_manager import PersonaManager
+            pm = PersonaManager.get_instance()
+            persona = pm.get_persona_by_id(persona_id)
+            if persona:
+                persona_used = {"id": persona_id, "name": persona.get("name", "")}
+                _step("persona", {
+                    "id": persona_id, "name": persona.get("name", ""),
+                    "mode": "ctx.account_persona_id → ai_client._build_system_instruction 内 PersonaManager 解析",
+                })
+            else:
+                _step("persona", {"id": persona_id, "error": "not_found"})
+
         # 3. AI 回复
         ai_reply = None
         try:
@@ -143,6 +195,8 @@ def register_chat_test_routes(app, ctx) -> None:
             if user_emotion:
                 mock_ctx["user_emotion_hint"] = user_emotion
                 mock_ctx["_user_profile"] = {"tone": user_emotion}
+            if persona_used:
+                mock_ctx["account_persona_id"] = persona_id
             so = {}
             for _sk in ("temperature", "max_tokens", "context_rounds", "model", "thinking_budget"):
                 if _sk in (strategy or {}):
@@ -213,4 +267,6 @@ def register_chat_test_routes(app, ctx) -> None:
         }
         if sop_check is not None:
             resp["sop_check"] = sop_check
+        if persona_used:
+            resp["persona_used"] = persona_used
         return resp
