@@ -110,6 +110,18 @@ class DraftService:
         self._merge_overlays(drafts)
         # 无 overlay 风险的草稿：用同步规则函数现算（零成本，不调 LLM）
         self._apply_quick_risk(drafts)
+        # 收件箱自发草稿无 chat_name 列 → 批量从 conversations 主表回填 display_name
+        # （一次 IN 查询，不逐条打库；查不到/异常保持原样，工作台回落 chat_key）
+        try:
+            _need = [d for d in drafts if not d.chat_name and d.conversation_id]
+            if _need and self._store is not None:
+                _convs = self._store.get_conversations_for_ids(
+                    [d.conversation_id for d in _need])
+                for d in _need:
+                    _c = _convs.get(d.conversation_id) or {}
+                    d.chat_name = str(_c.get("display_name") or "")
+        except Exception:
+            logger.debug("chat_name 回填失败（忽略）", exc_info=True)
         drafts.sort(key=lambda d: d.created_ts or 0, reverse=True)
         return [d.to_dict() for d in drafts[:limit]]
 
@@ -152,7 +164,16 @@ class DraftService:
     def get_draft(self, draft_id: str) -> Optional[Dict[str, Any]]:
         kind, _, sid = str(draft_id or "").partition(":")
         if kind == "inbox" and self._store is not None:
-            return self._store.get_draft(draft_id)
+            row = self._store.get_draft(draft_id)
+            # reply_drafts 无 chat_name 列 → 单条从 conversations 主表回填 display_name
+            # （查不到/异常保持原样，工作台回落 chat_key）
+            try:
+                if row and not row.get("chat_name") and row.get("conversation_id"):
+                    _c = self._store.get_conversation(row["conversation_id"]) or {}
+                    row["chat_name"] = str(_c.get("display_name") or "")
+            except Exception:
+                logger.debug("chat_name 回填失败（忽略）", exc_info=True)
+            return row
         adapter = self._by_kind.get(kind)
         if adapter is None:
             return None

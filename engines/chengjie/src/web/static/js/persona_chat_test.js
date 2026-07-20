@@ -14,6 +14,9 @@
  *   - 每条成功的 AI 回复气泡可「存为草稿」：弹层选统一收件箱会话（GET
  *     /api/unified-inbox/chats）→ POST /api/drafts/persona-test 入草稿队列，
  *     不直接发送，经工作台人工审核后才发出
+ *   - 每条成功的 AI 回复气泡可「🔊 试听」：POST /api/voice/tts-test 以当前人设
+ *     音色朗读该条回复；全抽屉同一时刻只播一段，音频 URL 缓存在气泡 dataset，
+ *     重复试听不再重新合成；抽屉关闭 / 清空会话 / 切换人设时停止播放
  *
  * 安全 / 约定：
  *   - 文本一律 textContent 注入；对 innerHTML 型外部出口（页面 _toast）先 _esc 转义
@@ -139,7 +142,7 @@
       '.psc-clear{border:none;background:transparent;color:var(--t2);font-size:.7rem;cursor:pointer;padding:.1rem .2rem;transition:color .15s}',
       '.psc-clear:hover{color:var(--red)}',
       '.psc-clear:disabled{opacity:.5;cursor:default}',
-      /* 存为草稿：气泡元信息行内按钮 + 已存态旁的「去工作台审核」小链接 */
+      /* 气泡元信息行内小按钮（存为草稿 / 试听共用）+ 已存态旁的「去工作台审核」小链接 */
       '.psc-draft-btn{border:1px solid var(--bd);background:transparent;color:var(--t2);font-size:.64rem;line-height:1;padding:.16rem .42rem;border-radius:6px;cursor:pointer;font-family:inherit;transition:all .15s}',
       '.psc-draft-btn:hover{color:var(--p);border-color:var(--p)}',
       '.psc-draft-btn:disabled{opacity:.6;cursor:default;color:var(--t2);border-color:var(--bd)}',
@@ -367,6 +370,7 @@
     var pu = data.persona_used;
     if (pu && pu.name) part(t('psn_ct_meta_persona', '人设'), pu.name);
     meta.appendChild(_draftBtn(replyText, userText));
+    meta.appendChild(_listenBtn(ph.bubble, replyText));
     ph.wrap.appendChild(meta);
 
     // 可折叠链路 trace：step 名 + detail JSON 摘要（截断 300 字符）
@@ -667,6 +671,100 @@
     _pk.box.classList.add('psc-off');
   }
 
+  // ── 试听（AI 气泡 → /api/voice/tts-test 用当前人设音色朗读）────────────────
+  // 播放态管理同 persona_studio_core.js 的 _playVoicePreview：模块级 _lsAudio/_lsBtn，
+  // 全抽屉同一时刻只播一段；再点同一按钮=停止，点别的按钮=切换。
+
+  var TTS_MAX_LEN = 380; // 端点上限 400 字符，留余量截断
+  var _lsAudio = null;    // 当前播放中的 Audio 实例
+  var _lsBtn = null;      // 当前占用播放/合成态的按钮
+
+  // 停止播放（或放弃在途合成），按钮恢复初始文案
+  function _stopListen() {
+    if (_lsAudio) {
+      try { _lsAudio.pause(); } catch (e) { /* 忽略 */ }
+      _lsAudio = null;
+    }
+    if (_lsBtn) {
+      _lsBtn.disabled = false;
+      _lsBtn.textContent = '🔊 ' + t('psn_ct_listen', '试听');
+      _lsBtn = null;
+    }
+  }
+
+  function _playListenUrl(btn, bubble, url) {
+    btn.disabled = false;
+    btn.textContent = '⏹ ' + t('psn_ct_stop', '停止');
+    _lsAudio = new Audio(url);
+    _lsAudio.onended = function () {
+      if (_lsBtn === btn) _stopListen();
+    };
+    _lsAudio.onerror = function () {
+      delete bubble.dataset.pscTtsUrl; // 缓存 URL 可能已失效，清掉以便下次重新合成
+      if (_lsBtn === btn) _stopListen();
+    };
+    _lsAudio.play().catch(function () {
+      if (_lsBtn === btn) _stopListen();
+    });
+  }
+
+  function _listenFail(err) {
+    _notify(_fmt(t('psn_ct_listen_fail', '试听失败：{err}'), { err: err }), 'err');
+  }
+
+  // AI 气泡元信息行内的「试听」小按钮；合成出的音频 URL 缓存在气泡 dataset，
+  // 同一条重复试听不再重新合成，直接播缓存 URL
+  function _listenBtn(bubble, replyText) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'psc-draft-btn';
+    btn.textContent = '🔊 ' + t('psn_ct_listen', '试听');
+    var pid = _state.pid;
+    btn.addEventListener('click', function () {
+      if (_lsBtn === btn) { _stopListen(); return; } // 再点同一按钮=停止
+      _stopListen();                                 // 点别的按钮=先停旧的再切换
+      _lsBtn = btn;
+      var cached = bubble.dataset.pscTtsUrl || '';
+      if (cached) { _playListenUrl(btn, bubble, cached); return; }
+      btn.disabled = true;
+      btn.textContent = '…';
+      var text = String(replyText == null ? '' : replyText);
+      if (text.length > TTS_MAX_LEN) text = text.slice(0, TTS_MAX_LEN);
+      fetch('/api/voice/tts-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text, persona_id: pid })
+      }).then(function (res) {
+        return res.json().then(
+          function (body) { return { httpOk: res.ok, status: res.status, body: body }; },
+          function () { return { httpOk: res.ok, status: res.status, body: null }; }
+        );
+      }).then(function (r) {
+        if (_lsBtn !== btn) return; // 期间已停止/切到别的气泡，丢弃过期响应
+        var body = r.body || {};
+        var url = body.url || body.audio_url;
+        if (!r.httpOk || body.ok === false || !url) {
+          var err = '';
+          if (body.error) err = String(body.error);
+          else if (body.detail) {
+            err = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+          }
+          if (!err) err = 'HTTP ' + r.status;
+          _stopListen();
+          _listenFail(err);
+          return;
+        }
+        bubble.dataset.pscTtsUrl = String(url);
+        _playListenUrl(btn, bubble, String(url));
+      }).catch(function (e) {
+        if (_lsBtn !== btn) return;
+        _stopListen();
+        _listenFail(e && e.message ? e.message : String(e));
+      });
+    });
+    return btn;
+  }
+
   // ── 输入区 ────────────────────────────────────────────────────────────────
 
   function _autoResize() {
@@ -754,6 +852,7 @@
 
   function _clearSession() {
     if (!_els || _state.sending) return;
+    _stopListen(); // 气泡即将销毁，停掉正在播/合成中的试听
     _state.sessionId = '';
     _state.personaWarned = false;
     _state.gen++;
@@ -767,6 +866,7 @@
 
   // 切换到新 pid：清空消息与会话状态，刷新头部
   function _resetConversation(pid) {
+    _stopListen(); // 气泡即将销毁，停掉正在播/合成中的试听
     _state.pid = pid;
     _state.sessionId = '';
     _state.personaWarned = false;
@@ -804,6 +904,7 @@
   function _close() {
     if (!_els || !_state.visible) return;
     _closePicker(); // 抽屉关闭连带收起会话选择弹层
+    _stopListen();  // 抽屉关闭停止试听播放，防背景残响
     _state.visible = false;
     _els.mask.classList.remove('psc-open');
     _els.drawer.classList.remove('psc-open');
