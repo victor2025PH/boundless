@@ -1192,6 +1192,24 @@ document.addEventListener('click',function(e){
           CRMW.toast(window.Tf('base.sse.draft_reassigned_wrap',{label:_raLabel,from:(_ra.from_agent||'?')}),'#0f766e','refresh');
           try{ document.dispatchEvent(new CustomEvent('draft_reassigned',{detail:_ra})); }catch(_){}
         }
+      } else if(msg && msg.type==='conversation_assigned' && msg.data){
+        // 十三期：会话转派 → 仅被转派坐席收提醒（响铃尊重偏好 + toast 可点跳）
+        var _asg=msg.data;
+        if(_asg.to_agent && _asg.to_agent===MY_AGENT_ID && !_sseSettling()){
+          try{ if(window.__wsNotify && window.__wsNotify.beep) window.__wsNotify.beep(false); }catch(_){}
+          var _asgEl=CRMW.toast(
+            window.Tf('base.sse.assigned_you',{by:(_asg.by_name||_asg.by||'?'),n:(_asg.count||1)}),
+            '#0f766e','users');
+          if(_asgEl){
+            _asgEl.style.cursor='pointer';
+            _asgEl.onclick=function(){
+              var _cid=_asg.conversation_id||'';
+              if(_cid && typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(_cid); return; }
+              if(_cid){ try{ sessionStorage.setItem('ws_focus_conv',_cid); }catch(_){} }
+              if(location.pathname.indexOf('/workspace')!==0 || location.pathname!=='/workspace') location.href='/workspace';
+            };
+          }
+        }
       } else if(msg && msg.type==='draft_backlog_summary' && msg.data){
         // 积压聚合汇总：主管 toast（点击进审批页）+ 转发 CustomEvent；铃铛按 type 单键合并成一条
         if(MY_IS_SUP){
@@ -1206,7 +1224,7 @@ document.addEventListener('click',function(e){
         }
       }
       // P24：通知中心 — 所有重要事件写入铃铛
-      if(msg && ['inbox_message','draft_sla_breach','draft_backlog_summary','draft_reassigned','anomaly_alert','sla_alert','escalation','queue_alert','stage_advance','stage_advance_pending','stage_downgrade','stage_reunion','stage_sync','workflow_step','workflow_execution_completed','workflow_execution_failed','workflow_execution_cancelled'].indexOf(msg.type)>=0){
+      if(msg && ['inbox_message','draft_sla_breach','draft_backlog_summary','draft_reassigned','conversation_assigned','anomaly_alert','sla_alert','escalation','queue_alert','stage_advance','stage_advance_pending','stage_downgrade','stage_reunion','stage_sync','workflow_step','workflow_execution_completed','workflow_execution_failed','workflow_execution_cancelled'].indexOf(msg.type)>=0){
         if(window.__wsNotif) window.__wsNotif.add(msg);
       }
       // 私聊新消息：提示音 + 弹窗（群组改走「群组动态」，由引擎按本地偏好决定）
@@ -1375,6 +1393,7 @@ document.addEventListener('click',function(e){
     draft_sla_breach:{ iconName:'clock', bg:'#fee2e2', label:window.T('base.notif.type_draft_sla_breach'), accent:'#dc2626' },
     draft_backlog_summary:{ iconName:'inbox', bg:'#fef3c7', label:window.T('base.notif.type_draft_backlog_summary'), accent:'#b45309' },
     draft_reassigned:{ iconName:'refresh', bg:'#d1fae5', label:window.T('base.notif.type_draft_reassigned'), accent:'#0f766e' },
+    conversation_assigned:{ iconName:'users', bg:'#d1fae5', label:window.T('base.notif.type_conversation_assigned'), accent:'#0f766e' },
     anomaly_alert:  { iconName:'chart', bg:'#fef3c7', label:window.T('base.notif.type_anomaly_alert'), accent:'#d97706' },
     sla_alert:      { iconName:'alert', bg:'#fee2e2', label:window.T('base.notif.type_sla_alert'), accent:'#dc2626' },
     escalation:     { iconName:'bell', bg:'#ede9fe', label:window.T('base.notif.type_escalation'), accent:'#7c3aed' },
@@ -1649,6 +1668,7 @@ window.__wsNotify = (function(){
   return {
     get:function(){ return Object.assign({},prefs); },
     set:function(np){ prefs=Object.assign({},prefs,np||{}); save(prefs); return Object.assign({},prefs); },
+    beep:function(urgent){ _beep(!!urgent); },  // 十三期：事件方提示音（尊重静音/音量偏好）
     test:function(urgent){ _unlock(); _beep(!!urgent, true); },  // 试听强制出声（忽略静音开关）
     ensureDesktopPerm:function(cb){
       try{

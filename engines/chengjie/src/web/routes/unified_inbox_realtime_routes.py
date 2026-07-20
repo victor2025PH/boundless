@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # SSE replay / live 订阅事件类型（与 monolith 原集合一致）
 _SSE_EVENT_TYPES = frozenset({
     "inbox_message", "agent_presence",
-    "conversation_claim", "follow_up",
+    "conversation_claim", "conversation_assigned", "follow_up",
     "draft_created",
     "draft_sla_breach",
     "draft_reassigned",
@@ -72,6 +72,7 @@ _SSE_EVENT_TYPES = frozenset({
 # 写入 app.state.notif_queue 的重要事件类型
 _NOTIF_EVENT_TYPES = frozenset({
     "inbox_message", "draft_sla_breach", "draft_reassigned",
+    "conversation_assigned",
     "anomaly_alert", "sla_alert", "escalation", "queue_alert",
     "stage_advance", "stage_advance_pending", "stage_downgrade",
     "stage_reunion", "stage_sync", "workflow_step",

@@ -158,6 +158,22 @@ def register_batch_notif_routes(app, *, api_auth) -> None:
                 )
             except Exception:
                 logger.debug("assign 审计写入失败（已忽略）", exc_info=True)
+            # 十三期：被转派坐席实时收提醒（SSE→铃铛+提示音）。批量只发一条汇总，
+            # 免得转 200 个会话轰 200 条 toast；coord.claim 逐会话的
+            # conversation_claim(action=claimed) 事件另行驱动列表徽章热更新。
+            try:
+                from src.integrations.shared.event_bus import get_event_bus
+                get_event_bus().publish("conversation_assigned", {
+                    "to_agent": agent_id,
+                    "to_name": target_name,
+                    "by": operator.get("agent_id", ""),
+                    "by_name": operator.get("display_name", ""),
+                    "count": updated,
+                    "conversation_ids": cids[:20],
+                    "conversation_id": cids[0] if len(cids) == 1 else "",
+                })
+            except Exception:
+                logger.debug("assign 事件发布失败（已忽略）", exc_info=True)
         return {"ok": True, "updated": updated, "agent_id": agent_id}
 
     # ─── Phase 24: 通知中心（SSE 事件广播） ───────────────────────────────

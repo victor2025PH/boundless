@@ -8224,6 +8224,15 @@ function initSSE(){
         if(aiDraftOn && selectedChat) loadDrafts(selectedChat);
         if(selectedChat) _refreshComposerDraft(selectedChat);   // 二期：草稿就绪即在输入区渐进呈现
         _refreshChatsBadges();
+      } else if(t==='conversation_claim'){
+        // 十三期：认领/转派/释放事件 → claimMap 即时更新，「谁在处理」徽章与
+        // 「我的」筛选免等 8s 节流轮询（全员生效，不止操作者本人）
+        const _clCid=data.conversation_id||'';
+        if(_clCid){
+          if(data.action==='released'){ delete claimMap[_clCid]; }
+          else if(data.claim){ claimMap[_clCid]={...data.claim, _local_ts:Date.now()}; }
+          applyFilters();
+        }
       } else if(t==='follow_up'){
         _refreshChatsBadges();
       } else if(t==='typing'){
