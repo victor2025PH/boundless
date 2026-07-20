@@ -1,0 +1,274 @@
+<!-- ======================================================
+     Tab: 历史记录
+====================================================== -->
+<div x-show="tab==='history'" class="fade space-y-3">
+  <div class="bd-card p-4">
+    <div class="flex items-center justify-between gap-2 flex-wrap mb-3">
+      <h2 class="bd-card-title whitespace-nowrap">📜 语音历史</h2>
+      <div class="flex items-center gap-2 flex-wrap">
+        <button @click="loadHistory()" class="text-xs text-hub-blue hover:underline">🔄 刷新</button>
+        <button x-show="historyFiltered.length>0"
+                @click="exportHistory()"
+                class="text-xs text-hub-green/80 hover:text-hub-green">📦 导出</button>
+        <!-- P16-5: CSV 导出日期过滤切换器 -->
+        <button x-show="historyFiltered.length>0"
+                @click="csvFilterShow=!csvFilterShow"
+                :class="csvFilterShow?'text-hub-blue bg-hub-blue/10 rounded px-1':'text-hub-muted hover:text-hub-text'"
+                class="text-xs">📄 CSV▾</button>
+        <button x-show="historyList.length>0"
+                @click="if(confirm('清除所有历史记录（收藏除外）？'))deleteAllHistory()"
+                class="text-xs text-hub-red/60 hover:text-hub-red">🗑 清除</button>
+      </div>
+    </div>
+    <!-- P16-5: 日期范围面板 -->
+    <div x-show="csvFilterShow" class="flex items-center gap-2 mt-2 mb-1 px-1">
+      <span class="text-[12px] text-hub-muted whitespace-nowrap">导出日期</span>
+      <input type="date" x-model="csvStartDate" class="text-xs py-0.5 flex-1" style="min-width:0">
+      <span class="text-[12px] text-hub-muted">~</span>
+      <input type="date" x-model="csvEndDate" class="text-xs py-0.5 flex-1" style="min-width:0">
+      <button @click="exportHistoryCsv()"
+              class="bd-act sm soft shrink-0">
+        导出 CSV
+      </button>
+      <button @click="csvStartDate=''; csvEndDate=''"
+              x-show="csvStartDate||csvEndDate"
+              class="text-[12px] text-hub-muted hover:text-hub-text">清除</button>
+    </div>
+
+    <!-- ── 统计摘要卡（数据来自 /api/history/stats 全量聊计） ── -->
+    <div x-show="historyStats.total>0"
+         class="bg-hub-bg border border-hub-border rounded-xl p-3 mb-3 space-y-2">
+      <div class="flex items-center gap-3 text-xs flex-wrap">
+        <div class="text-center min-w-[40px]">
+          <div class="text-lg font-bold text-hub-blue" x-text="historyStats.today"></div>
+          <div class="text-[12px] text-hub-muted">今日</div>
+        </div>
+        <div class="text-center min-w-[40px]">
+          <div class="text-lg font-bold text-hub-green" x-text="historyStats.week"></div>
+          <div class="text-[12px] text-hub-muted">本周</div>
+        </div>
+        <div class="text-center min-w-[40px]">
+          <div class="text-lg font-bold text-hub-text" x-text="historyStats.total"></div>
+          <div class="text-[12px] text-hub-muted">全部</div>
+        </div>
+        <div x-show="historyStats.avg_elapsed_ms>0" class="text-center min-w-[48px]">
+          <div class="text-sm font-bold text-hub-purple" x-text="historyStats.avg_elapsed_ms+'ms'"></div>
+          <div class="text-[12px] text-hub-muted">平均耗时</div>
+        </div>
+        <div x-show="historyStats.most_used" class="text-center flex-1">
+          <div class="text-sm font-bold text-hub-orange"
+               x-text="emotionEmoji(historyStats.most_used)+' '+emotionCN(historyStats.most_used)">
+          </div>
+          <div class="text-[12px] text-hub-muted">最常用</div>
+        </div>
+      </div>
+      <!-- P20-2: 情感分布彩色条形图 -->
+      <div x-show="historyStats.distribution.length>0" class="space-y-1 pt-1 border-t border-hub-border">
+        <div class="text-[12px] text-hub-muted mb-1">全量情感分布</div>
+        <template x-for="item in historyStats.distribution" :key="item[0]">
+          <div class="flex items-center gap-2">
+            <div class="text-[12px] text-hub-muted w-10 text-right" x-text="emotionCN(item[0])"></div>
+            <div class="flex-1 bg-hub-border rounded-full h-1.5 overflow-hidden">
+              <div class="h-full rounded-full transition-all duration-700"
+                   :style="'width:'+Math.round(item[1]/historyStats.max_count*100)+'%;background:'+emotionColor(item[0])"></div>
+            </div>
+            <div class="text-[12px] text-hub-muted w-6 text-right" x-text="item[1]"></div>
+          </div>
+        </template>
+      </div>
+      <!-- P20-2: 7天趋势 SVG 折线图 -->
+      <div x-show="(historyStats?.daily_7||[]).some(d=>d[1]>0)"
+           class="pt-2 border-t border-hub-border">
+        <div class="text-[12px] text-hub-muted mb-1">最近7天</div>
+        <svg width="100%" height="32" viewBox="0 0 140 32" preserveAspectRatio="none"
+             class="overflow-visible">
+          <template x-if="(historyStats?.daily_7||[]).length">
+            <g>
+              <polyline
+                :points="(historyStats?.daily_7||[]).map((d,i)=>{
+                  const max=Math.max(...(historyStats?.daily_7||[]).map(x=>x[1]),1);
+                  return (i*23.3)+','+(28-Math.round(d[1]/max*24));
+                }).join(' ')"
+                fill="none" stroke="#60a5fa" stroke-width="1.5" stroke-linejoin="round"/>
+              <circle :cx="((historyStats?.daily_7||[]).length-1)*23.3"
+                      :cy="(()=>{const a=historyStats?.daily_7||[];if(!a.length)return 28;const m=Math.max(...a.map(x=>x[1]),1);return 28-Math.round(a[a.length-1][1]/m*24);})()"
+                      r="2.2" fill="#60a5fa"/>
+            </g>
+          </template>
+        </svg>
+      </div>
+    </div>
+
+    <!-- ── 搜索与筛选栏 ── -->
+    <div x-show="historyList.length>0" class="flex gap-2 mb-2 items-center">
+      <input x-model="historySearch" @input="onHistorySearchChange()"
+             placeholder="🔍 搜索文本或角色（服务端搜索）..."
+             class="flex-1 text-xs py-1.5">
+      <label class="flex items-center gap-1 text-[12px] text-hub-muted cursor-pointer whitespace-nowrap">
+        <input type="checkbox" x-model="historyStarredOnly" @change="loadHistory()" class="accent-yellow-400 w-3 h-3">
+        ⭐ 仅收藏
+      </label>
+    </div>
+    <!-- P11-4: 情感过滤胶囊 + P12-3: 命中条数 badge -->
+    <div x-show="historyList.length>0||historyEmotion" class="flex flex-wrap gap-1 mb-2 items-center">
+      <button @click="historyEmotion=''; loadHistory()"
+              :class="historyEmotion===''?'bg-hub-blue/20 text-hub-blue border-hub-blue/40':'text-hub-muted border-hub-border'"
+              class="text-[12px] px-2 py-0.5 rounded-full border transition">全部</button>
+      <template x-for="e in emotionOptions.filter(o=>o.value!=='auto')" :key="e.value">
+        <button @click="historyEmotion=e.value; loadHistory()"
+                :class="historyEmotion===e.value?'bg-hub-blue/20 text-hub-blue border-hub-blue/40':'text-hub-muted border-hub-border'"
+                class="text-[12px] px-2 py-0.5 rounded-full border transition"
+                x-text="e.label"></button>
+      </template>
+      <!-- P12-3: 选中情感时显示命中条数 / 总量 -->
+      <span x-show="historyEmotion"
+            class="ml-1 text-[12px] text-hub-muted"
+            x-text="historyTotalCount+'条 / 共'+historyStats.total+'条 ('+(historyStats.total?Math.round(historyTotalCount/historyStats.total*100):0)+'%)'"></span>
+      <!-- Song-P6: 歌曲成品快捷筛选（借道字面化 FTS：按 [翻唱]/[原创]/[魔改] 前缀过滤） -->
+      <span class="mx-1 text-hub-border">|</span>
+      <template x-for="sf in [['🎵 翻唱','[翻唱]'],['🎼 原创','[原创]'],['🎛 魔改','[魔改]']]" :key="sf[1]">
+        <button @click="historySearch=(historySearch===sf[1]?'':sf[1]); loadHistory()"
+                :class="historySearch===sf[1]?'bg-purple-500/20 text-purple-300 border-purple-400/40':'text-hub-muted border-hub-border'"
+                class="text-[12px] px-2 py-0.5 rounded-full border transition" x-text="sf[0]"></button>
+      </template>
+    </div>
+    <!-- 筛选 + 多选工具栏 -->
+    <div class="flex items-center gap-2 mb-1.5">
+      <button @click="historyMultiSelect=!historyMultiSelect; historySelected=[]; bulkVrfSummary=null"
+              :class="historyMultiSelect?'soft':'ghost'"
+              class="bd-act sm">
+        <span x-text="historyMultiSelect?'退出多选':'☑ 多选'"></span>
+      </button>
+      <template x-if="historyMultiSelect">
+        <div class="flex items-center gap-1.5">
+          <button @click="historySelected=historyFiltered.map(i=>i.id)"
+                  class="text-[12px] text-hub-blue hover:underline">全选</button>
+          <span class="text-hub-muted text-[12px]">|</span>
+          <button @click="historySelected=[]"
+                  class="text-[12px] text-hub-muted hover:text-hub-text">清空</button>
+        </div>
+      </template>
+      <span x-show="historySearch||historyStarredOnly" class="text-[12px] text-hub-muted"
+            x-text="historyFiltered.length+' / '+historyTotalCount+' 条'"></span>
+    </div>
+    <!-- 多选批量操作工具栏 -->
+    <div x-show="historyMultiSelect && historySelected.length>0"
+         class="flex items-center gap-2 mb-2 bg-hub-blue/10 border border-hub-blue/30 rounded-lg px-3 py-1.5">
+      <span class="text-[12px] text-hub-blue flex-1">已选 <span x-text="historySelected.length"></span> 条</span>
+      <button @click="bulkStar(true)" class="text-[12px] text-yellow-400 hover:underline">★ 收藏</button>
+      <button @click="exportHistory(historySelected)" class="text-[12px] text-hub-green hover:underline">📦 导出</button>
+      <!-- UH3: 整批验真——交付前一键自证所选音频的 AI 凭证，结论落每行角标 -->
+      <button @click="bulkVerify()" :disabled="bulkVrfBusy"
+              class="text-[12px] text-hub-purple hover:underline disabled:opacity-50"
+              x-text="bulkVrfBusy?('🏷 验真中 '+bulkVrfProg):'🏷 批量验真'"></button>
+      <button @click="bulkDelete()" class="text-[12px] text-hub-red hover:underline">🗑 删除</button>
+    </div>
+    <!-- UH3: 批量验真摘要——⚠ 是重点（疑似被改/无凭证的要在交付前挑出来） -->
+    <div x-show="bulkVrfSummary" class="mb-2 rounded-lg px-3 py-1.5 text-[12px] border"
+         :class="bulkVrfSummary&&bulkVrfSummary.warn>0?'bg-yellow-950/30 border-yellow-700/40 text-hub-yellow':'bg-green-950/20 border-green-700/40 text-hub-green'">
+      <span>验真结果：✅ 凭证有效 <b x-text="bulkVrfSummary?.ok"></b> 条</span>
+      <span x-show="bulkVrfSummary?.warn"> · ⚠ 存疑 <b x-text="bulkVrfSummary?.warn"></b> 条（先别交付，点开该条看原因）</span>
+      <span x-show="bulkVrfSummary?.none" class="text-hub-muted"> · — 无凭证 <b x-text="bulkVrfSummary?.none"></b> 条（早期记录属正常）</span>
+      <span x-show="bulkVrfSummary?.skipped" class="text-hub-muted"> · 跳过无音频 <b x-text="bulkVrfSummary?.skipped"></b> 条</span>
+    </div>
+
+    <div x-show="historyLoading" class="text-xs text-hub-muted py-8 text-center pulse">⏳ 加载中...</div>
+    <div x-show="historyFiltered.length===0 && !historyLoading"
+         class="text-xs text-hub-muted py-8 text-center">
+      <span x-text="historySearch||historyStarredOnly?'没有匹配的记录':'暂无历史记录'"></span>
+    </div>
+    <!-- 按日期分组 -->
+    <div class="space-y-3 max-h-[55vh] overflow-y-auto pr-1">
+      <template x-for="group in historyGrouped" :key="group.date">
+        <div>
+          <!-- 日期分组头 -->
+          <div class="text-[12px] text-hub-muted font-semibold mb-1 flex items-center gap-2">
+            <span x-text="group.label"></span>
+            <span class="flex-1 h-px bg-hub-border"></span>
+            <span x-text="group.items.length+' 条'"></span>
+          </div>
+          <div class="space-y-2">
+            <template x-for="item in group.items" :key="item.id">
+              <div class="bg-hub-bg border border-hub-border rounded-lg p-2.5 transition-colors hover:border-hub-blue/30"
+                   :class="[item._open?'border-hub-blue/40':'', historySelected.includes(item.id)?'border-hub-green/60 bg-green-950/20':'']">
+                <div class="flex items-start gap-2">
+                  <!-- 多选 checkbox -->
+                  <input x-show="historyMultiSelect" type="checkbox" :value="item.id" x-model="historySelected"
+                         class="mt-0.5 accent-hub-blue w-3.5 h-3.5 shrink-0">
+                  <div class="flex-1 min-w-0" @click="historyMultiSelect?null:item._open=!item._open"
+                       :style="historyMultiSelect?'':'cursor:pointer'">
+                    <div class="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                      <span class="text-[12px] font-semibold text-hub-blue" x-text="item.profile||'默认'"></span>
+                      <span class="text-[12px] text-hub-muted" x-text="item.created_at.slice(6)||''"></span>
+                      <span x-show="item.emotion" class="text-[12px] bg-hub-blue/20 text-hub-blue px-1.5 rounded-full"
+                            x-text="emotionEmoji(item.emotion)+' '+emotionCN(item.emotion)"></span>
+                      <span x-show="item.rvc_applied" class="text-[12px] bg-purple-900/40 text-hub-purple px-1.5 rounded-full">RVC</span>
+                      <span x-show="item.elapsed_ms" class="text-[12px] text-hub-muted" x-text="item.elapsed_ms+'ms'"></span>
+                      <!-- UH3: 验真角标——批量验真后不展开也能看到结论，⚠ 醒目挑出存疑条 -->
+                      <span x-show="item._vrf" :title="item._vrf"
+                            :class="(item._vrf||'').startsWith('⚠')?'bg-yellow-900/40 text-hub-yellow':((item._vrf||'').startsWith('✅')?'bg-green-900/30 text-hub-green':'bg-hub-border/40 text-hub-muted')"
+                            class="text-[12px] px-1.5 rounded-full"
+                            x-text="(item._vrf||'').startsWith('⚠')?'⚠ 存疑':((item._vrf||'').startsWith('✅')?'✅ 已验':'— 无凭证')"></span>
+                    </div>
+                    <div class="text-xs text-hub-text line-clamp-2" x-text="item.text"></div>
+                  </div>
+                  <div x-show="!historyMultiSelect" class="flex items-center gap-1 shrink-0">
+                    <button @click="starHistory(item)"
+                            :class="item.starred?'text-yellow-400':'text-hub-muted hover:text-yellow-400'"
+                            class="bd-tap text-base transition" title="收藏">★</button>
+                    <button @click="deleteHistoryItem(item.id)"
+                            class="bd-tap text-hub-red/50 hover:text-hub-red text-sm transition" title="删除">✕</button>
+                  </div>
+                </div>
+                <!-- 展开播放器 + 单条动线（重合成/下载/验真） -->
+                <!-- UH1-1: x-if 挂载才加载音频。原 x-show 常驻 + /audio(JSON) 端点双重问题：
+                     ①浏览器解不了 JSON 根本播不出声 ②整列表隐形预取全部音频 base64 -->
+                <template x-if="item._open && !historyMultiSelect">
+                  <div class="mt-2 pt-2 border-t border-hub-border space-y-2">
+                    <audio :src="HUB+'/api/history/'+item.id+'/audio.wav'" controls preload="metadata"
+                           class="w-full" x-show="item.has_audio"></audio>
+                    <div x-show="!item.has_audio" class="text-[12px] text-hub-muted">无音频文件</div>
+                    <div class="flex items-center gap-3 flex-wrap">
+                      <!-- 唱歌记录的 text 是歌名/文件名，回填语音页重合成没有意义 → 不给入口 -->
+                      <button x-show="item.emotion!=='sing'" @click="reSynthesize(item)"
+                              class="text-xs text-hub-blue hover:underline flex items-center gap-1">
+                        🔁 重新合成（情感: <span x-text="emotionCN(item.emotion)"></span>）
+                      </button>
+                      <!-- UH1-2: 单条拿走（.wav 端点带 UTF-8 文件名，下载名=文本前 40 字） -->
+                      <a x-show="item.has_audio" :href="HUB+'/api/history/'+item.id+'/audio.wav'" download
+                         class="text-xs text-hub-green/90 hover:text-hub-green hover:underline">⬇ 下载 wav</a>
+                      <!-- UH1-3: C2PA 验真串进资产库（与对话页/验真工具同口径） -->
+                      <button x-show="item.has_audio" @click="verifyHistory(item)" :disabled="item._vrfBusy"
+                              class="text-xs text-hub-muted hover:text-hub-blue hover:underline"
+                              x-text="item._vrfBusy?'验真中…':'🏷 验真'"
+                              title="离线验证这条音频是否本系统生成、有没有被篡改（C2PA 凭证）"></button>
+                    </div>
+                    <div x-show="item._vrf" class="text-[12px]"
+                         :class="(item._vrf||'').startsWith('✅')?'text-hub-green':((item._vrf||'').startsWith('⚠')?'text-hub-orange':'text-hub-muted')"
+                         x-text="item._vrf"></div>
+                  </div>
+                </template>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+    <!-- P15-3: IntersectionObserver 哨兵（300px 预触发） -->
+    <div x-ref="historySentinel" class="h-px"></div>
+    <div class="flex items-center justify-between mt-2">
+      <!-- 降级兜底：IO 不触发时仍可手动点击 -->
+      <button x-show="historyHasMore && !historyLoading" @click="loadMoreHistory()"
+              class="text-xs text-hub-blue hover:underline">
+        ⬇ 加载更多
+      </button>
+      <span x-show="historyLoading && historyList.length>0" class="text-xs text-hub-muted pulse">⏳ 加载中...</span>
+      <span x-show="historyList.length>0"
+            class="text-[12px] text-hub-muted ml-auto">
+        显示 <span x-text="historyList.length"></span>
+        <span x-show="historyTotalCount>historyList.length">/共 <span x-text="historyTotalCount"></span></span>
+        条
+      </span>
+    </div>
+  </div>
+</div>

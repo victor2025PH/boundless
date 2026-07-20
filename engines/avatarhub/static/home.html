@@ -261,10 +261,10 @@
     <span class="qs-d">按目标直达常用入口 · 或在下方按产品线浏览全部功能</span>
   </div>
   <nav class="roles" aria-label="快速分流">
-    <a class="role" data-ev="role" data-id="voice"  data-line="VoiceX 音色" style="--line-rgb:79 122 255" href="/ui#voice"><span class="ic" aria-hidden="true">🎙️</span><span class="t">我要创作</span><span class="d">克隆音色·合成语音</span></a>
-    <a class="role" data-ev="role" data-id="stream" data-line="LiveX 直播"  style="--line-rgb:168 85 247" href="/ui#stream"><span class="ic" aria-hidden="true">📡</span><span class="t">我要直播</span><span class="d">换脸·口型·开播</span></a>
-    <a class="role" data-ev="role" data-id="phone"  data-line="ChatX 对话"  style="--line-rgb:45 212 191" href="/phone"><span class="ic" aria-hidden="true">💬</span><span class="t">我要对话</span><span class="d">免提语音数字人</span></a>
-    <a class="role" data-ev="role" data-id="interp" data-line="LingoX 同传" style="--line-rgb:56 189 248" href="/ui#interp"><span class="ic" aria-hidden="true">🌐</span><span class="t">我要同传</span><span class="d">多语种实时互译</span></a>
+    <a class="role" data-ev="role" data-id="voice"  data-line="幻声 VoiceX" style="--line-rgb:79 122 255" href="/ui#voice"><span class="ic" aria-hidden="true">🎙️</span><span class="t">我要创作</span><span class="d">克隆音色·合成语音</span></a>
+    <a class="role" data-ev="role" data-id="stream" data-line="幻影 LiveX"  style="--line-rgb:168 85 247" href="/ui#stream"><span class="ic" aria-hidden="true">📡</span><span class="t">我要直播</span><span class="d">换脸·口型·开播</span></a>
+    <a class="role" data-ev="role" data-id="phone"  data-line="智聊 ChatX"  style="--line-rgb:45 212 191" href="/phone"><span class="ic" aria-hidden="true">💬</span><span class="t">我要对话</span><span class="d">免提语音数字人</span></a>
+    <a class="role" data-ev="role" data-id="interp" data-line="通译 LingoX" style="--line-rgb:56 189 248" href="/ui#interp"><span class="ic" aria-hidden="true">🌐</span><span class="t">我要同传</span><span class="d">多语种实时互译</span></a>
     <a class="role" data-ev="role" data-id="ops"    data-line="运营"        style="--line-rgb:245 158 11" href="/ops"><span class="ic" aria-hidden="true">🩺</span><span class="t">我要运维</span><span class="d">健康·监控·自愈</span></a>
   </nav>
 
@@ -324,20 +324,29 @@
       +' stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px">'
       +'<use href="/static/brand-icons.svg?v=20260716b#i-'+name+'"/></svg>';
   }
-  var FALLBACK = {lines:["VoiceX 音色","ChatX 对话","LiveX 直播","LingoX 同传","运营","合规·可信"], features:[]};
+  var FALLBACK = {lines:["幻声 VoiceX","智聊 ChatX","幻影 LiveX","通译 LingoX","运营","合规·可信"], features:[]};
   var lastSetup = null, gpuReleased = false;   // GPU 释放态：由 /health.gpu_released 驱动，影响引导卡/状态条
   var licState = null, lastFeats = [], lastHealth = null;   // 版位状态 + 当前功能清单（供 PRO 弹窗取真）+ 最近一次 /health（供"最近使用"pin/清除就地重渲）
 
-  // 产品线视觉身份（P0 美化·纯前端单一真相；后续可迁移到 /api/features 注册表字段）。
-  // 值为 "R G B" 三元组，供 CSS rgb(var(--line-rgb) / α) 派生描边/底色/微光，与 brand.css 取色方式一致。
+  // 产品线视觉身份：单一真相已迁 /api/features.line_colors（P2-4·2026-07-16），本表退化为
+  // 「离线/旧后端」兜底。值为 "R G B" 三元组，供 CSS rgb(var(--line-rgb) / α) 派生描边/底色/微光。
   var LINE_RGB = {
-    "VoiceX 音色": "79 122 255",   // 无界蓝（品牌主）
-    "ChatX 对话":  "45 212 191",   // 青（对话气泡）
-    "LiveX 直播":  "168 85 247",   // 幻紫
-    "LingoX 同传": "56 189 248",   // 天蓝
+    "幻声 VoiceX": "79 122 255",   // 无界蓝（品牌主）
+    "智聊 ChatX":  "45 212 191",   // 青（对话气泡）
+    "幻影 LiveX":  "168 85 247",   // 幻紫
+    "通译 LingoX": "56 189 248",   // 天蓝
     "运营":        "245 158 11",   // 琥珀（仪表/监控）
     "合规·可信":   "52 211 153"    // 翠绿（信任/安全）
   };
+  var REG_COLORS = null;   // 注册表下发的线色（readFeatCache/render 时更新；命中优先于 LINE_RGB）
+  // 旧→新线名归一化（2026-07-16 更名「三系七品」）：旧 Hub 进程/localStorage 旧缓存下发旧线名时
+  // 仍能吃到正确线色（实测过渡窗口真实存在：static 即改即生效而 Hub 要等重启）。旧后端绝迹后可删。
+  var LINE_ALIAS = {"VoiceX 音色":"幻声 VoiceX", "ChatX 对话":"智聊 ChatX",
+                    "LiveX 直播":"幻影 LiveX", "LingoX 同传":"通译 LingoX"};
+  function lineColor(line){
+    line = LINE_ALIAS[line] || line;
+    return (REG_COLORS && REG_COLORS[line]) || LINE_RGB[line] || "79 122 255";
+  }
   // 旗舰功能：加线色描边微光建立层级（同尺寸、不改结构、不做强拦截）
   var FEATURED = {clone:1, stream:1, phone:1, interp:1};
 
@@ -352,7 +361,8 @@
     "历":"li","史":"shi","记":"ji","录":"lu","交":"jiao","付":"fu","体":"ti","检":"jian",
     "日":"ri","志":"zhi","设":"she","置":"zhi","白":"bai","标":"biao","内":"nei","容":"rong",
     "验":"yan","真":"zhen","知":"zhi","识":"shi","问":"wen","答":"da","首":"shou","启":"qi",
-    "向":"xiang","导":"dao","直":"zhi","营":"ying","规":"gui","可":"ke","信":"xin"
+    "向":"xiang","导":"dao","直":"zhi","营":"ying","规":"gui","可":"ke","信":"xin",
+    "幻":"huan","智":"zhi","聊":"liao","影":"ying","通":"tong","译":"yi"
   };
   function pyIndex(str){                        // → " 全拼 首字母"（供既有 indexOf 匹配 zhibo / zb 两种输入）
     if(!str) return "";
@@ -436,7 +446,7 @@
   function readFeatCache(){ try{ var j=JSON.parse(localStorage.getItem(FEAT_CACHE_KEY)||"null");
     return (j && j.features && j.features.length) ? j : null; }catch(_){ return null; } }
   function writeFeatCache(reg){ try{ if(reg && reg.features && reg.features.length)
-    localStorage.setItem(FEAT_CACHE_KEY, JSON.stringify({lines:reg.lines||null, features:reg.features})); }catch(_){} }
+    localStorage.setItem(FEAT_CACHE_KEY, JSON.stringify({lines:reg.lines||null, line_colors:reg.line_colors||null, features:reg.features})); }catch(_){} }
 
   // 就绪点：站内页面恒"就绪"；外部服务依 /health 显示在线/离线。带 data-svc 便于定时就地刷新（不重渲染）。
   function applyReady(span, health){
@@ -456,7 +466,7 @@
                             : (pyIndex(feat.name) + pyIndex(feat.line));     // 兜底：旧缓存/离线/端点未升级时用前端字表
     a.setAttribute("data-search",
       ((feat.name||"")+" "+(feat.desc||"")+" "+(feat.line||"")+" "+(feat.id||"")).toLowerCase() + _py);
-    a.style.setProperty("--line-rgb", LINE_RGB[feat.line] || "79 122 255");   // 卡片自持线色："最近使用"混合分区里各卡仍正确
+    a.style.setProperty("--line-rgb", lineColor(feat.line));   // 卡片自持线色："最近使用"混合分区里各卡仍正确
     var head = el("div","head");
     // [图标统一·2026-07-16] 优先注册表 ic（线性图标，与控制台/桌面启动台同一图标库）；
     // 旧缓存/离线注册表无 ic 时回退 emoji。图标经 currentColor 吃产品线色。
@@ -483,6 +493,7 @@
   function render(reg, health){
     var root = document.getElementById("sections");
     root.innerHTML = "";
+    if(reg && reg.line_colors) REG_COLORS = reg.line_colors;   // P2-4: 注册表线色（单一真相）优先
     var lines = (reg && reg.lines && reg.lines.length) ? reg.lines : FALLBACK.lines;
     var feats = (reg && reg.features) ? reg.features : [];
     renderRecentSection(root, feats, health);   // 置顶"最近使用"（回访快速路径）
@@ -490,7 +501,7 @@
       var items = feats.filter(function(f){ return f.line===line; });
       if(!items.length) return;
       var sec = el("section","section");
-      sec.style.setProperty("--line-rgb", LINE_RGB[line] || "79 122 255");   // 产品线色：卡片/色点经继承共用
+      sec.style.setProperty("--line-rgb", lineColor(line));   // 产品线色：卡片/色点经继承共用
       var h = el("div","section-h");
       h.appendChild(el("span","dot"));
       h.appendChild(el("span","line", esc(line)));

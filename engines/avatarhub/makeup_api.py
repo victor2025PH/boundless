@@ -510,6 +510,8 @@ async function run(){
 
 
 if __name__ == "__main__":
-    _log("[MakeupAPI] 启动 妆容定妆服务 :8004 ...")
+    import os as _os
+    _port = int(_os.environ.get("MAKEUP_PORT") or app_config.port("makeup") or 8004)
+    _log(f"[MakeupAPI] 启动 妆容定妆服务 :{_port} ...")
     _get_landmarker()                      # 预热（3.7MB 模型，秒级）
-    uvicorn.run(app, host="0.0.0.0", port=8004, log_level="warning")
+    uvicorn.run(app, host="0.0.0.0", port=_port, log_level="warning")

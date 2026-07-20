@@ -45,9 +45,15 @@ from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [MONITOR] %(message)s")
 logger = logging.getLogger("monitor_relay")
 
-PORT = int(os.environ.get("MONITOR_PORT", "7878"))
-HTTPS_PORT = int(os.environ.get("MONITOR_HTTPS_PORT", "7879"))   # 对讲(手机麦)需安全上下文→https
-INTERP_URL = os.environ.get("INTERP_URL", "http://127.0.0.1:7900")
+# 端口经 app_config 覆盖层解析(config.json ports/port_offset，两套安装并存)；env 显式指定仍最优先。
+try:
+    import app_config as _ac
+    _MON_P, _INTERP_P = (_ac.port("monitor") or 7878), (_ac.port("interpreter") or 7900)
+except Exception:
+    _MON_P, _INTERP_P = 7878, 7900
+PORT = int(os.environ.get("MONITOR_PORT") or _MON_P)
+HTTPS_PORT = int(os.environ.get("MONITOR_HTTPS_PORT") or (PORT + 1))   # 对讲(手机麦)需安全上下文→https(恒http+1)
+INTERP_URL = os.environ.get("INTERP_URL", f"http://127.0.0.1:{_INTERP_P}")
 SR = int(os.environ.get("MONITOR_SR", "48000"))     # 环回采样率(Realtek 板载 48k 最稳)
 FRAME = int(os.environ.get("MONITOR_FRAME", str(int(SR * 0.02))))  # 20ms 一帧
 QCAP = 25                                            # 每客户端队列上限(~0.5s)，满则丢旧保低延迟

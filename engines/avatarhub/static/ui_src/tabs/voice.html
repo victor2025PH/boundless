@@ -1,0 +1,763 @@
+<!-- ══════════════════════════════════════════
+     Tab 3: 语音
+═══════════════════════════════════════════ -->
+<div x-show="tab==='voice'" class="fade space-y-3">
+  <!-- ── 无角色引导卡 ── -->
+  <div x-show="!active" class="bg-hub-card border border-hub-yellow/40 rounded-xl p-4 text-center space-y-2">
+    <div class="text-2xl">🎭</div>
+    <div class="text-sm font-semibold text-hub-yellow">请先激活一个角色</div>
+    <div class="text-xs text-hub-muted">语音合成需要绑定角色的音色与形象</div>
+    <div class="flex justify-center gap-2 mt-2">
+      <div class="flex items-center gap-1 text-xs text-hub-muted bg-hub-bg rounded-lg px-3 py-1.5">
+        <span class="text-hub-blue font-bold">① 角色库</span> → 新建数字人
+      </div>
+      <div class="flex items-center gap-1 text-xs text-hub-muted bg-hub-bg rounded-lg px-3 py-1.5">
+        <span class="text-hub-green font-bold">② 点击激活</span> → 回来合成
+      </div>
+    </div>
+    <button @click="goTab('profiles')" class="mt-1 text-xs text-hub-blue hover:underline">前往角色库 →</button>
+  </div>
+
+  <!-- ── 主合成面板（UI-P2 视觉：bd-hero 品牌光晕 + 副标题，与开播页英雄卡同语言）── -->
+  <div class="bd-card bd-hero p-4" :class="!active?'opacity-50 pointer-events-none':''">
+    <div class="flex items-center justify-between gap-2 flex-wrap mb-3">
+      <div>
+        <h2 class="bd-card-title">🎙️ 文字驱动数字人</h2>
+        <div class="text-[12px] text-hub-muted mt-0.5">打字，让你的数字人开口说话</div>
+      </div>
+      <div class="flex items-center gap-2">
+        <select x-model="speakLang" class="text-xs py-1 w-20">
+          <option value="zh-cn">中文</option>
+          <option value="en">英语</option>
+          <option value="ja">日语</option>
+        </select>
+        <!-- UI-P2-2: 口型可用性由 /health 探测驱动（任一口型引擎在线即可用），不再只看模式。
+             UI-P3-3: 流式口型定论固化——句级视频拼接必跳帧不做；实时口型需求引导去开播中枢 -->
+        <label class="flex items-center gap-1 text-xs text-hub-muted cursor-pointer whitespace-nowrap"
+               :class="(speakMode==='stream' || !lipsyncSvcUp())?'opacity-40':''"
+               :title="speakMode==='stream'?'「边说边播」暂不生成口型视频：要出片切「标准」；要实时口型直播 → 开播中枢'
+                       :(!lipsyncSvcUp()?'口型服务未启动：到「交付体检」或「设置→服务」启动后可用':'')">
+          <input type="checkbox" x-model="speakLipsync" class="accent-hub-blue w-3 h-3"> 🎬口型
+        </label>
+      </div>
+    </div>
+    <textarea x-model="speakText" rows="3" x-ref="speakTa"
+              placeholder="输入想说的话...&#10;例：大家好！今天我们来聊一个超级有趣的话题！"
+              @keydown.ctrl.enter.prevent="speakGo()" @keydown.meta.enter.prevent="speakGo()"
+              class="w-full text-sm"></textarea>
+    <!-- P0-6: 场景示例快填（对齐唱歌页「示例歌词」；带推荐情感/语言，顺带演示情感能力；有输入后自动隐藏防误覆盖）-->
+    <div x-show="!speakText.trim()" class="flex gap-1 flex-wrap mt-2 items-center">
+      <span class="text-[12px] text-hub-muted">试试：</span>
+      <template x-for="ex in speakExamples" :key="ex.label">
+        <button @click="useSpeakExample(ex)"
+                class="text-[12px] bg-hub-bg border border-hub-border hover:border-hub-blue hover:text-hub-blue px-2 py-0.5 rounded-full transition"
+                x-text="ex.label"></button>
+      </template>
+    </div>
+    <!-- UI-P2 视觉：字数/句数实时统计（读文本才显示，与示例 chips 互斥占位；字号走 12px 门禁下限）。
+         UI-P3-1: 「预计首句 <1s」只在真走克隆快路径时承诺——auto 检出非中性会路由情感引擎，不再吹这个牛 -->
+    <div x-show="speakText.trim()" class="flex justify-end mt-1">
+      <span class="text-[12px] text-hub-muted"
+            x-text="speakText.length+' 字 · 约 '+_smartSplitClient(speakText).length+' 句'+(speakMode==='stream' && !speakInstruct.trim() && (speakEmotion==='neutral' || (speakEmotion==='auto' && (!speakDetectedEmotion || speakDetectedEmotion==='neutral')))?' · 预计首句 <1s':'')"></span>
+    </div>
+    <!-- P21-4: 流式高亮句子列表 -->
+    <div x-show="streamLoading && speakSentences.length>0" class="mt-2 space-y-1">
+      <div class="flex flex-wrap gap-1">
+        <template x-for="(sent,i) in speakSentences" :key="i">
+          <span :class="i===speakCurrentIdx?'bg-hub-blue text-white px-1.5 py-0.5 rounded text-xs':'text-[12px] text-hub-muted px-1'"
+                x-text="(i+1)+'.'+sent.slice(0,12)+(sent.length>12?'...':'')"></span>
+        </template>
+      </div>
+    </div>
+
+    <!-- ── 情感胶囊按钮组 ── -->
+    <div class="mt-2.5">
+      <div class="text-[12px] text-hub-muted mb-1.5 flex items-center gap-1">
+        情感
+        <span x-show="speakEmotion==='auto'" class="text-hub-purple text-[12px] bg-hub-purple/20 px-1.5 py-0.5 rounded-full">AI 自动分析</span>
+      </div>
+      <div class="flex flex-wrap gap-1 items-center">
+        <!-- UI-P1-5: 两级化——收起只见高频 6 个（已选冷门项自动钉住），「更多」展开其余。
+             UI-P2-2: 情感引擎离线 → 非"普通"胶囊禁用+说明（能力由 /health 驱动，不再人肉同步） -->
+        <template x-for="e in emotionOptionsVisible()" :key="e.value">
+          <button @click="speakEmotion=e.value" :aria-pressed="speakEmotion===e.value?'true':'false'"
+                  :disabled="!emotionSvcUp() && e.value!=='neutral'"
+                  :title="(!emotionSvcUp() && e.value!=='neutral')?'情感引擎未启动，暂只能用「😐 普通」':''"
+                  :class="[speakEmotion===e.value
+                    ? (e.value==='auto' ? 'bg-hub-purple text-white border-hub-purple shadow-lg shadow-purple-900/40'
+                                       : 'bg-hub-blue text-white border-hub-blue')
+                    : (e.value==='auto' ? 'bg-hub-bg text-hub-purple border-hub-purple/50 hover:border-hub-purple'
+                                       : 'bg-hub-bg text-hub-muted border-hub-border hover:border-hub-blue hover:text-hub-text'),
+                    (!emotionSvcUp() && e.value!=='neutral')?'opacity-40 cursor-not-allowed':'']"
+                  class="px-2.5 py-1 rounded-full text-xs border transition-all whitespace-nowrap"
+                  x-text="e.label">
+          </button>
+        </template>
+        <button @click="emotionsExpanded=!emotionsExpanded" :aria-expanded="emotionsExpanded?'true':'false'"
+                class="px-2 py-1 text-[12px] text-hub-muted hover:text-hub-text transition"
+                x-text="emotionsExpanded?'收起 ▴':'更多 ▾'"></button>
+        <span x-show="!emotionSvcUp()" class="text-[12px] text-hub-muted">
+          情感引擎离线 · <button @click="goFix('emotion_tts')" class="text-hub-blue underline hover:text-hub-text">去启动</button>
+        </span>
+      </div>
+    </div>
+
+    <!-- ── 实时情感预测 Banner（auto 模式 + 有文字时显示）──
+         UI-P3-1: 流式恢复显示——stream_sse 已整文检测同口径路由，banner 不再撒谎；
+         流式+检出非中性时附注首句代价（走情感引擎则放弃亚秒缓存加速） -->
+    <div x-show="speakEmotion==='auto' && speakText.trim().length>=2"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0 translate-y-1"
+         x-transition:enter-end="opacity-100 translate-y-0"
+         class="mt-2.5 flex items-center gap-2.5 bg-gradient-to-r from-purple-900/30 to-hub-bg border border-hub-purple/30 rounded-xl px-3 py-2">
+      <span class="text-base" x-text="emotionEmoji(speakDetectedEmotion)"></span>
+      <div class="flex-1">
+        <div class="text-[12px] text-hub-purple font-semibold">🤖 AI 实时分析</div>
+        <div class="text-sm font-bold text-hub-text" x-text="speakDetectedEmotion ? emotionCN(speakDetectedEmotion) : '分析中...'"></div>
+      </div>
+      <div x-show="speakDetectedEmotion" class="text-right">
+        <div class="text-[12px] text-hub-muted">将使用情感</div>
+        <div class="text-xs font-mono text-hub-purple" x-text="speakDetectedEmotion"></div>
+        <div x-show="speakDetectedEmotion && speakDetectedEmotion!=='neutral'" class="text-[12px] text-hub-muted"
+             x-text="speakMode==='stream' ? '情感引擎 · 首句稍慢' : '情感引擎朗读'"></div>
+      </div>
+    </div>
+
+    <!-- P0-5: 情感→引擎路由透明化。选非"普通"情感或填指令时实际走情感引擎（emotion_tts），
+         音色与克隆链路存在差异；此前静默切换，是"换了情感就不像本人"体感的来源 -->
+    <div x-show="speakMode!=='stream' && ((speakEmotion!=='auto' && speakEmotion!=='neutral') || speakInstruct.trim())"
+         class="bd-strip info mt-2.5 px-3 py-1.5 text-[12px] text-hub-muted flex items-start gap-1.5">
+      <span class="shrink-0">🎭</span>
+      <span>带情感的朗读走「情感引擎」：表现力更强，但音色贴合度可能与「😐 普通」略有差异。拿不准可先在下方「情感试音间」试听。</span>
+    </div>
+    <!-- UI-P2-1: 流式已吃手动情感/指令（stream_sse 逐句路由情感引擎）——P1 的"不生效"橙条退役，
+         改为说清代价：无子块流式与开场白缓存，首句从亚秒回到整句耗时。
+         UI-P3-1: auto 检出非中性的代价提示由上方 AI banner 附注（"首句稍慢"），此条只管手动/指令 -->
+    <div x-show="speakMode==='stream' && ((speakEmotion!=='neutral' && speakEmotion!=='auto') || speakInstruct.trim())"
+         class="bd-strip info mt-2.5 px-3 py-1.5 text-[12px] text-hub-muted flex items-center gap-1.5 flex-wrap">
+      <span class="shrink-0">🎭</span>
+      <span>带情感的边说边播走「情感引擎」逐句合成：<b class="text-hub-blue">首句会稍慢</b>（放弃了亚秒首声的缓存加速），后续句照常边说边播。</span>
+    </div>
+
+    <!-- ── 指令情感（UI-P1-5: 收进「高级」入口，有内容时保持展开）── -->
+    <button x-show="!instructOpen && !speakInstruct.trim()"
+            @click="instructOpen=true; $nextTick(()=>$refs.speakInstructInput?.focus())"
+            class="mt-2 text-[12px] text-hub-muted hover:text-hub-purple transition">
+      ＋ 高级：用一句话描述语气（如"激动紧张，稍微快一点"）
+    </button>
+    <div x-show="instructOpen || speakInstruct.trim()" x-transition.opacity.duration.150ms>
+      <input x-model="speakInstruct" x-ref="speakInstructInput"
+             placeholder="可选：情感描述，如"用激动紧张的语气，稍微快一点""
+             class="w-full text-xs mt-2"
+             maxlength="200"
+             :class="speakInstruct?'border-hub-purple/60 bg-purple-900/10':''">
+      <div class="flex justify-between mt-0.5">
+        <button @click="speakInstruct=''; instructOpen=false"
+                class="text-[12px] text-hub-muted/70 hover:text-hub-muted"
+                x-text="speakInstruct.trim()?'✕ 清空指令':'收起'"></button>
+        <span class="text-[12px]"
+              :class="speakInstruct.length>180?'text-hub-red':'text-hub-muted/50'"
+              x-text="speakInstruct.length+'/200'"></span>
+      </div>
+    </div>
+
+    <!-- UI-P1-4: 就绪度摘要行——3 颗 chips + 橙色告警条收敛为一行；缺什么直接给可点的修复入口。
+         只差文本（正常起点）走中性文案，不当故障吓人；缺角色/服务才亮橙色警示 -->
+    <div class="mt-2.5 flex items-center gap-2 flex-wrap text-[13px]"
+         :class="voiceReady().hard?'bd-strip warn px-3 py-1.5':''" role="status">
+      <template x-if="voiceReady().ok">
+        <span class="text-hub-muted"><span class="text-hub-green">✓</span> 角色 · 语音服务 · 文本就绪，可以开口</span>
+      </template>
+      <template x-if="!voiceReady().ok && !voiceReady().hard">
+        <span class="text-hub-muted">✍️ 输入文字（或点上方示例）即可开口</span>
+      </template>
+      <template x-if="voiceReady().hard">
+        <span class="text-hub-orange font-semibold" x-text="'差 '+voiceReady().missing.length+' 项：'"></span>
+      </template>
+      <template x-if="voiceReady().hard">
+        <span class="flex items-center gap-2 flex-wrap">
+          <template x-for="m in voiceReady().missing" :key="m.key">
+            <button @click="voiceFix(m.key)" :title="m.hint"
+                    class="text-hub-orange underline underline-offset-2 hover:text-hub-text transition"
+                    x-text="m.label+'（'+voiceFixLabel(m.key)+'）'"></button>
+          </template>
+        </span>
+      </template>
+    </div>
+
+    <!-- ── 合成模式 + 主按钮（P0-1/P0-2）──
+         主 CTA 唯一化并接入 bd-btn 设计系统；模式提示写"真话"并随情感状态自适应：
+         流式自 P13 起逐句自动变声；UI-P2-1 起手动情感/指令走情感引擎；auto 在流式暂不启用 -->
+    <div class="flex items-center justify-between gap-2 mt-2.5 flex-wrap">
+      <div class="bd-seg" role="group" aria-label="合成模式">
+        <button type="button" :class="speakMode==='standard'?'on':''" @click="setSpeakMode('standard')"
+                title="整段合成：支持变声与口型视频，适合短文案与出片">▶ 标准</button>
+        <button type="button" :class="speakMode==='stream'?'on':''" @click="setSpeakMode('stream')"
+                title="逐句边合成边播：首句最快；带情感（手动选择或自动检出）时走情感引擎；暂不生成口型视频">⚡ 边说边播</button>
+      </div>
+      <span class="text-[12px] text-hub-muted"
+            x-text="speakMode!=='stream' ? '整段合成 · 支持变声与口型视频'
+                    : ((speakEmotion!=='neutral' && speakEmotion!=='auto') || speakInstruct.trim()) ? '逐句串流 · 情感引擎 · 保留变声 · 暂无口型视频'
+                    : speakEmotion==='auto' ? '逐句串流 · 情感随文本自动 · 保留变声 · 暂无口型'
+                    : '逐句串流 · 首句最快 · 保留变声 · 暂无口型视频'"></span>
+    </div>
+    <div class="flex gap-2 mt-2">
+      <button @click="speakGo()" :disabled="speakLoading||streamLoading||!speakText.trim()"
+              :title="!speakText.trim()?'请先输入要合成的文字':''"
+              class="flex-1 bd-btn bd-btn-primary text-sm"
+              :class="(speakLoading||streamLoading||!speakText.trim())?'':'bd-glow-pulse'">
+        <span x-show="!speakLoading&&!streamLoading" x-text="speakMode==='stream'?'⚡ 开口说话（边说边播）':'▶ 开口说话'"></span>
+        <span x-show="speakLoading&&speakPhase==='queued'" class="pulse">⏳ 排队...</span>
+        <span x-show="speakLoading&&speakPhase==='tts'" class="pulse">🗣 合成声音中...</span>
+        <span x-show="speakLoading&&speakPhase==='rvc'" class="pulse">🎤 贴合音色中...</span>
+        <span x-show="speakLoading&&speakPhase==='lipsync'" class="pulse">🎬 生成口型...</span>
+        <span x-show="streamLoading" class="pulse">⚡ 边说边播中...</span>
+      </button>
+      <!-- P14-1: 流式停止按鈕（与主 CTA 同排同基座，红色语义） -->
+      <button x-show="streamLoading" @click="stopStream()"
+              class="bd-btn bd-btn-danger text-sm shrink-0">
+        ⏹ 停止
+      </button>
+    </div>
+
+    <!-- 合成阶段进度条（合成中或 done 持绣 2s）-->
+    <div x-show="speakLoading || speakDoneVisible" class="mt-2 space-y-1" x-transition:leave="transition-opacity duration-500" x-transition:leave-end="opacity-0">
+      <div class="flex items-center gap-1 text-[12px]">
+        <span :class="['queued','tts','rvc','lipsync','done'].includes(speakPhase)?'text-hub-green font-semibold':'text-hub-muted'">① 接收</span>
+        <span class="text-hub-muted">›</span>
+        <span :class="speakPhase==='tts'?'text-hub-blue pulse font-semibold':(['rvc','lipsync','done'].includes(speakPhase)?'text-hub-green font-semibold':'text-hub-muted')">② 合成声音</span>
+        <span class="text-hub-muted">›</span>
+        <span :class="speakPhase==='rvc'?'text-hub-purple pulse font-semibold':(speakPhase==='done'&&speakRvcApplied?'text-hub-green font-semibold':'text-hub-muted')">③ 贴合音色</span>
+        <span x-show="speakLipsync" class="text-hub-muted">›</span>
+        <span x-show="speakLipsync"
+              :class="speakPhase==='lipsync'?'text-hub-orange pulse font-semibold':(speakPhase==='done'?'text-hub-green font-semibold':'text-hub-muted')">④ 口型</span>
+        <span class="flex-1 text-right">
+          <span x-show="speakPhase==='done'&&speakDoneVisible" class="text-hub-green text-[12px] font-semibold">✅ 完成</span>
+          <span x-show="speakElapsedTts && speakPhase!=='done'" class="text-hub-muted text-[12px]"
+                x-text="'声音 '+speakElapsedTts+'ms'+(speakElapsedRvc?' · 音色 '+speakElapsedRvc+'ms':'')"></span>
+        </span>
+      </div>
+      <div class="bg-hub-border rounded-full h-1">
+        <div class="h-full rounded-full transition-all duration-700"
+             :class="speakPhase==='done'?'bg-hub-green':'bg-hub-blue'"
+             :style="'width:'+(speakPhase==='queued'?'8':speakPhase==='tts'?'35':speakPhase==='rvc'?'65':speakPhase==='lipsync'?'85':'100')+'%'"></div>
+      </div>
+    </div>
+
+    <div x-show="streamInfo" class="mt-2 text-xs text-hub-muted">
+      <span x-text="streamInfo"></span>
+      <div class="bg-hub-border rounded h-1 mt-1">
+        <div class="bar bg-purple-500 h-full rounded" :style="'width:'+streamPct+'%'"></div>
+      </div>
+    </div>
+    <!-- P0-4: 错误常驻（不再 4s 自清）+ 一键重试；成功消息仍自动淡出 -->
+    <div x-show="speakMsg"
+         :class="speakOk?'text-hub-green bg-green-900/20':'text-hub-red bg-red-900/20'"
+         class="text-xs text-center py-1.5 px-3 rounded-lg mt-2 flex items-center justify-center gap-2 flex-wrap">
+      <span x-text="speakMsg"></span>
+      <button x-show="!speakOk && !speakLoading && !streamLoading" @click="speakGo()"
+              class="underline font-semibold hover:text-hub-text">↻ 重试</button>
+    </div>
+    <!-- UI-P4-3: 容器改挂 audioSrc||有结果卡——刷新找回的卡没有 audioSrc 也要能看见；播放器单独 gate -->
+    <div x-show="audioSrc || speakResults.length" class="space-y-1">
+      <audio x-show="audioSrc" :src="audioSrc" controls x-ref="player" class="w-full"></audio>
+      <!-- P20-1: 频率波形可视化 -->
+      <canvas x-ref="waveCanvas" width="300" height="24"
+              x-show="streamLoading"
+              class="w-full rounded bg-hub-bg/60 block"></canvas>
+      <!-- P0-3/P1-2: 结果闭环——下载 / 收藏 / 历史。流式完播后整段音频自动回填（saved→历史接口），
+           下载/收藏对两种模式一视同仁；流式播放途中不显示下载，防误下载"最后一句" -->
+      <div x-show="!speakLoading && !streamLoading" class="flex items-center gap-3 flex-wrap">
+        <button x-show="audioSrc && (speakResultMode==='standard' || speakStreamFull)" @click="downloadSpeak()"
+                class="text-[13px] text-hub-blue hover:underline">⬇ 下载音频</button>
+        <button x-show="audioSrc && speakHistId && (speakResultMode==='standard' || speakStreamFull)" @click="toggleStarSpeak()"
+                :class="speakStarred?'text-hub-yellow':'text-hub-muted hover:text-hub-yellow'"
+                class="text-[13px] hover:underline" x-text="speakStarred?'⭐ 已收藏':'☆ 收藏'"></button>
+        <!-- UH2 巡检：验真动线补进语音页（与历史页/对话页同口径），产出源头也能就地自证 -->
+        <button x-show="audioSrc && speakHistId && _lastSpeakItem && (speakResultMode==='standard' || speakStreamFull)"
+                @click="verifyHistory(_lastSpeakItem, speakHistId)" :disabled="_lastSpeakItem?._vrfBusy"
+                class="text-[13px] text-hub-muted hover:text-hub-blue hover:underline"
+                x-text="_lastSpeakItem?._vrfBusy?'验真中…':'🏷 验真'"
+                title="离线验证这条音频的 AI 生成凭证（C2PA），交付前自证来源"></button>
+        <!-- UI-P7: auto 检出的情感不合适 → 一键切手选 + 计误判（决策①的误判率维度） -->
+        <button x-show="audioSrc && speakEmotion==='auto' && (speakDetectedEmotion||streamEmo)"
+                @click="emotionAutoMiss()"
+                class="text-[13px] text-hub-muted hover:text-hub-orange hover:underline"
+                title="AI 选的情感不合适？切到手选换一种（会计入误判统计，帮助改进）">😕 情感不对？</button>
+        <!-- 刷新找回态（无 audioSrc）只剩 1 条也要给入口，否则卡在列表里永远打不开 -->
+        <button x-show="speakResults.length>1 || (!audioSrc && speakResults.length)" @click="speakResultsShow=!speakResultsShow"
+                class="text-[13px] text-hub-muted hover:text-hub-text hover:underline"
+                x-text="(speakResultsShow?'▾':'▸')+' 本次已合成 '+speakResults.length+' 条'"></button>
+        <button @click="goTab('history')"
+                class="ml-auto text-[13px] text-hub-muted hover:text-hub-text hover:underline">📜 全部历史</button>
+      </div>
+      <!-- UH2 巡检：验真结论行（措辞与历史页/对话页同五档口径） -->
+      <div x-show="_lastSpeakItem?._vrf" class="text-[12px]"
+           :class="(_lastSpeakItem?._vrf||'').startsWith('✅')?'text-hub-green':((_lastSpeakItem?._vrf||'').startsWith('⚠')?'text-hub-orange':'text-hub-muted')"
+           x-text="_lastSpeakItem?._vrf"></div>
+      <!-- UI-P1-1: 会话结果卡（最近 5 条）——点「回放」载入上方播放器，横向对比不同情感/模式 -->
+      <div x-show="speakResultsShow && (speakResults.length>1 || (!audioSrc && speakResults.length))" x-transition.opacity.duration.150ms class="space-y-1 pt-1">
+        <template x-for="it in speakResults" :key="it.id">
+          <!-- P5-3: dead=历史已被清理（服务器 404 确认）→ 整卡标灰、按钮撤下、不再复活 -->
+          <div class="flex items-center gap-2 bg-hub-bg border rounded-lg px-2.5 py-1.5 text-[12px]"
+               :class="it.dead?'border-hub-border opacity-45':(audioSrc===it.url?'border-hub-blue/60':'border-hub-border')">
+            <span :title="it.mode==='stream'?'边说边播':'标准合成'" x-text="it.mode==='stream'?'⚡':'▶'"></span>
+            <span class="flex-1 truncate text-hub-text" x-text="it.text||'（无文本）'"></span>
+            <span class="text-hub-muted shrink-0"
+                  x-text="(it.emotion&&it.emotion!=='neutral'?emotionCN(it.emotion)+' · ':'')+(it.ms?(it.ms/1000).toFixed(1)+'s':'')"></span>
+            <span x-show="it.starred && !it.dead" class="text-hub-yellow shrink-0">⭐</span>
+            <span x-show="it.dead" class="text-hub-muted shrink-0">已从历史清理</span>
+            <!-- UI-P4-3: 回放/下载统一走按需取回；P5-3: 取回中给瞬时态，取回期间防连点 -->
+            <span x-show="it.fetching" class="text-hub-muted shrink-0 pulse">取回中…</span>
+            <button x-show="!it.dead && !it.fetching" @click="replaySpeakResult(it)"
+                    class="text-hub-blue hover:underline shrink-0">回放</button>
+            <button x-show="!it.dead && !it.fetching" @click="downloadSpeakResult(it)"
+                    class="text-hub-muted hover:text-hub-blue shrink-0"
+                    title="下载 wav（刷新后首次点击会从历史取回）">⬇</button>
+          </div>
+        </template>
+      </div>
+    </div>
+    <div x-show="lipsyncVideoSrc" class="mt-2">
+      <div class="text-[12px] text-hub-muted mb-1">🎬 口型同步视频</div>
+      <video :src="lipsyncVideoSrc" controls class="w-full rounded-lg max-h-52"></video>
+    </div>
+    <!-- UI-P2-4: 会话还没合成过 → 给"接着上次干"入口（最近 3 条历史一键回填），打通历史页→语音页反向动线 -->
+    <div x-show="active && !speakResults.length && !audioSrc && voiceRecent.length"
+         class="mt-3 pt-2 border-t border-hub-border/60">
+      <div class="text-[12px] text-hub-muted mb-1.5">🕘 最近合成过
+        <button @click="goTab('history')" class="text-hub-muted hover:text-hub-text hover:underline ml-1">全部历史 →</button>
+      </div>
+      <div class="space-y-1">
+        <template x-for="r in voiceRecent" :key="r.id">
+          <div class="flex items-center gap-2 text-[12px]">
+            <span class="flex-1 truncate text-hub-muted" x-text="r.text"></span>
+            <span class="text-hub-muted/70 shrink-0"
+                  x-text="(r.emotion&&r.emotion!=='neutral'?emotionCN(r.emotion)+' · ':'')+agoText(r.ts)"></span>
+            <button @click="reSynthesize(r)" class="text-hub-blue hover:underline shrink-0">回填</button>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 情感试音间（UI-P1-6: bd-panel 化 + 动态摘要）── -->
+  <section class="bd-panel"
+       :class="!active?'opacity-40 pointer-events-none':''">
+    <button type="button" @click="compareShow=!compareShow" :aria-expanded="compareShow?'true':'false'"
+            class="bd-panel-head">
+      <span class="text-sm font-semibold text-hub-text">⚖️ 情感试音间</span>
+      <span class="bd-panel-sum" x-text="vcompareSum()"></span>
+      <span class="bd-panel-chev">▾</span>
+    </button>
+    <div x-show="compareShow" x-transition.opacity.duration.150ms class="bd-panel-body space-y-3">
+      <!-- 选择对比情感（多选，2~4个）-->
+      <div class="text-[12px] text-hub-muted mb-1">选择要对比的情感（2~4个）</div>
+      <div class="flex flex-wrap gap-1">
+        <template x-for="e in emotionOptions.filter(e=>e.value!=='auto')" :key="e.value">
+          <button @click="toggleCompare(e.value)"
+                  :class="compareSelected.includes(e.value)
+                    ? 'bg-hub-blue text-white border-hub-blue'
+                    : 'bg-hub-bg text-hub-muted border-hub-border hover:border-hub-blue'"
+                  class="px-2.5 py-1 rounded-full text-xs border transition-all"
+                  x-text="e.label">
+          </button>
+        </template>
+      </div>
+      <div x-show="compareSelected.length<2" class="text-[12px] text-hub-orange">请至少选2个情感</div>
+      <div class="bd-act-row">
+        <button @click="doCompare()" :disabled="compareLoading||compareSelected.length<2||!speakText.trim()"
+                class="bd-act primary">
+          <span x-show="!compareLoading">⚖️ 开始对比（<span x-text="compareSelected.length"></span>种情感）</span>
+          <span x-show="compareLoading" class="pulse">⏳ 生成中...</span>
+        </button>
+        <span class="bd-hint">同一句话 · 并排听不同情感</span>
+      </div>
+      <!-- 对比结果并排 -->
+      <div x-show="Object.keys(compareResultMap).length>0" class="grid grid-cols-1 gap-2">
+        <template x-for="e in compareSelected" :key="e">
+          <div x-show="compareResultMap[e]!==undefined"
+               class="bg-hub-bg border border-hub-border rounded-lg p-2.5">
+            <div class="flex items-center gap-2 mb-1.5">
+              <span class="text-base" x-text="emotionEmoji(e)"></span>
+              <span class="text-xs font-semibold" x-text="emotionCN(e)"></span>
+              <span x-show="compareResultMap[e]?.loading" class="text-[12px] text-hub-muted pulse">生成中...</span>
+              <!-- UI-P1-3: 听完有下文——一键把胜出情感回填主面板 -->
+              <button x-show="compareResultMap[e]?.audioSrc" @click="useCompareEmotion(e)"
+                      class="text-[12px] text-hub-green hover:underline">✓ 就用这个情感</button>
+              <span x-show="compareResultMap[e]?.elapsed" class="text-[12px] text-hub-muted ml-auto"
+                    x-text="compareResultMap[e]?.elapsed+'ms'"></span>
+            </div>
+            <div x-show="compareResultMap[e]?.audioSrc">
+              <audio :src="compareResultMap[e]?.audioSrc" controls class="w-full h-8"></audio>
+            </div>
+            <div x-show="compareResultMap[e]?.error"
+                 class="text-[12px] text-hub-red bg-red-900/20 rounded px-2 py-1"
+                 x-text="'❌ 生成失败: '+(compareResultMap[e]?.errorMsg||'未知错误')">
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 角色对比（P22-4；UI-P1-6: bd-panel 化 + 结果卡可一键激活）── -->
+  <section class="bd-panel mt-3"
+       :class="!active?'opacity-40 pointer-events-none':''">
+    <button type="button" @click="abCompareShow=!abCompareShow" :aria-expanded="abCompareShow?'true':'false'"
+            class="bd-panel-head">
+      <span class="text-sm font-semibold text-hub-text">🆚 角色对比</span>
+      <span class="bd-panel-sum" x-text="vabSum()"></span>
+      <span class="bd-panel-chev">▾</span>
+    </button>
+    <div x-show="abCompareShow" x-transition.opacity.duration.150ms class="bd-panel-body space-y-3">
+      <!-- 选择对比角色（多选，2~5个）-->
+      <div class="text-[12px] text-hub-muted mb-1">选择要对比的角色（2~5个）</div>
+      <div class="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
+        <template x-for="p in profiles" :key="p.name">
+          <button @click="toggleAbCompare(p.name)"
+                  :class="abCompareSelected.includes(p.name)
+                    ? 'bg-hub-green text-white border-hub-green'
+                    : 'bg-hub-bg text-hub-muted border-hub-border hover:border-hub-green'"
+                  class="px-2 py-1 rounded text-xs border transition-all"
+                  x-text="p.name">
+          </button>
+        </template>
+      </div>
+      <div x-show="abCompareSelected.length<2" class="text-[12px] text-hub-orange">请至少选2个角色</div>
+      <div x-show="abCompareSelected.length>5" class="text-[12px] text-hub-red">最多选5个角色</div>
+      <div class="bd-act-row">
+        <button @click="doAbCompare()" :disabled="abCompareLoading||abCompareSelected.length<2||!speakText.trim()"
+                class="bd-act primary">
+          <span x-show="!abCompareLoading">🆚 开始对比（<span x-text="abCompareSelected.length"></span>个角色）</span>
+          <span x-show="abCompareLoading" class="pulse">⏳ 合成中...</span>
+        </button>
+        <span class="bd-hint">同一句话 · 并排听不同角色</span>
+      </div>
+      <!-- 对比结果并排 -->
+      <div x-show="abCompareResults.length>0" class="grid grid-cols-1 gap-2">
+        <template x-for="(r,i) in abCompareResults" :key="i">
+          <div class="bg-hub-bg border border-hub-border rounded-lg p-2.5">
+            <div class="flex items-center gap-2 mb-1.5">
+              <span class="text-xs font-semibold text-hub-blue" x-text="r.profile"></span>
+              <span x-show="!r.ok" class="text-[12px] text-hub-red">❌ 失败</span>
+              <!-- UI-P1-3: 听中意了→一键激活该角色，不再手动跑去角色库找 -->
+              <button x-show="r.ok && r.profile!==active" @click="activateProfile(r.profile)"
+                      class="text-[12px] text-hub-green hover:underline">✓ 用 TA（激活）</button>
+              <span x-show="r.ok && r.profile===active" class="text-[12px] text-hub-muted">当前角色</span>
+              <span x-show="r.elapsed_ms" class="text-[12px] text-hub-muted ml-auto" x-text="r.elapsed_ms+'ms'"></span>
+            </div>
+            <div x-show="r.audio_base64">
+              <audio :src="'data:audio/wav;base64,'+r.audio_base64" controls class="w-full h-8"></audio>
+            </div>
+            <div x-show="r.detail" class="text-[12px] text-hub-red" x-text="r.detail"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 引擎对比（UI-P1-6: bd-panel 化；赢家可一键固定到角色）── -->
+  <section class="bd-panel mt-3"
+       :class="!active?'opacity-40 pointer-events-none':''">
+    <button type="button" @click="engAbShow=!engAbShow" :aria-expanded="engAbShow?'true':'false'"
+            class="bd-panel-head">
+      <span class="text-sm font-semibold text-hub-text">⚡ 引擎对比</span>
+      <span class="bd-panel-sum" x-text="vengSum()"></span>
+      <span class="bd-panel-chev">▾</span>
+    </button>
+    <div x-show="engAbShow" x-transition.opacity.duration.150ms class="bd-panel-body space-y-3">
+      <div class="bd-act-row">
+        <button @click="doEngineAb()" :disabled="engAbLoading||!active||!speakText.trim()"
+                class="bd-act primary">
+          <span x-show="!engAbLoading">⚡ Fish vs Cosy 对比</span>
+          <span x-show="engAbLoading" class="pulse">⏳ 双引擎合成中…</span>
+        </button>
+        <span class="bd-hint">用上方「试听文本」对比两种 TTS 引擎的音色与自然度</span>
+      </div>
+      <div x-show="engAbResults.length" class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <template x-for="r in engAbResults" :key="r.engine">
+          <div class="bg-hub-bg border rounded-lg p-2.5"
+               :class="engAbWinner===r.engine?'border-hub-green':'border-hub-border'">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="text-xs font-bold" x-text="r.engine==='fish_speech'?'🐟 Fish-Speech':'🎵 CosyVoice'"></span>
+              <span x-show="engAbWinner===r.engine" class="text-[12px] text-hub-green">★ 音色更贴合</span>
+              <span class="text-[12px] text-hub-muted ml-auto" x-text="r.elapsed_ms+'ms'"></span>
+            </div>
+            <div x-show="r.cosine!=null" class="text-[12px] text-hub-muted mb-1"
+                 x-text="'贴合 '+r.cosine+' · 自然 '+r.naturalness"></div>
+            <audio x-show="r.audio_base64" :src="'data:audio/wav;base64,'+r.audio_base64" controls class="w-full h-8"></audio>
+            <div x-show="!r.ok" class="text-[12px] text-hub-red" x-text="r.detail||'失败'"></div>
+          </div>
+        </template>
+      </div>
+      <!-- UI-P1-3: 引擎 A/B 动作闭环——赢家一键固定为该角色默认引擎（PATCH tts_engine），
+           影响后续所有合成（含流式与对话），不再"听完就散" -->
+      <button x-show="engAbWinner" @click="applyEngAbWinner()"
+              class="w-full bd-btn bd-btn-success text-xs">
+        🏆 为「<span x-text="active"></span>」固定 <span x-text="engAbWinner==='fish_speech'?'Fish-Speech':'CosyVoice'"></span>（之后默认用它合成）
+      </button>
+    </div>
+  </section>
+
+  <!-- ── StreamOut 输出层（Phase E；UI-P1-6: bd-panel 化 + 运行中路数入摘要）── -->
+  <section class="bd-panel mt-3"
+       :class="!active?'opacity-40 pointer-events-none':''">
+    <button type="button" @click="soShow=!soShow" :aria-expanded="soShow?'true':'false'"
+            class="bd-panel-head">
+      <span class="text-sm font-semibold text-hub-text">📡 输出到直播 · 录制</span>
+      <span class="bd-panel-sum" :class="(soStatus?.plugins||[]).some(p=>p.running)?'text-hub-green':''" x-text="voutSum()"></span>
+      <span class="bd-panel-chev">▾</span>
+    </button>
+    <div x-show="soShow" x-transition.opacity.duration.150ms class="bd-panel-body space-y-3">
+      <div class="flex flex-wrap gap-2">
+        <template x-for="p in soPlugins" :key="p.name">
+          <label class="flex items-center gap-1.5 text-xs bg-hub-bg border border-hub-border rounded-lg px-2 py-1 cursor-pointer">
+            <input type="checkbox" :value="p.name" x-model="soSelected" class="accent-blue-500"/>
+            <span x-text="p.label"></span>
+          </label>
+        </template>
+      </div>
+      <div class="space-y-1">
+        <input x-model="soRtmpUrl" placeholder="RTMP 推流地址 rtmp://...（勾选 rtmp 时必填）"
+               class="w-full bg-hub-bg border border-hub-border rounded-lg text-xs px-2 py-1.5 text-hub-text"/>
+        <label class="flex items-center gap-2 text-xs text-hub-muted cursor-pointer">
+          <input type="checkbox" x-model="soRecord" class="accent-blue-500"/> 同时本地录制 MP4
+        </label>
+      </div>
+      <div class="bd-act-row">
+        <button @click="soQuickStart()" :disabled="soLoading||!active"
+                class="bd-act primary">🚀 一键开播</button>
+        <button @click="soStart()" :disabled="soLoading||!soSelected.length"
+                class="bd-act green">
+          <span x-show="!soLoading">▶ 自定义输出</span>
+          <span x-show="soLoading" class="pulse">⏳ 启动中…</span>
+        </button>
+        <button @click="soStop()" :disabled="soLoading" title="停止全部输出" class="bd-act ghost">⏹ 停止</button>
+        <button @click="soRefresh()" title="刷新输出状态" class="bd-act ghost">↻</button>
+      </div>
+      <div x-show="soStatus" class="bg-hub-bg border border-hub-border rounded-lg p-2.5 text-[12px] space-y-1 max-h-40 overflow-y-auto">
+        <template x-for="p in (soStatus?.plugins||[])" :key="p.plugin">
+          <div class="flex justify-between gap-2">
+            <span x-text="p.plugin"></span>
+            <span :class="p.available?'text-hub-green':'text-hub-muted'"
+                  x-text="(p.available?'可用':'不可用')+(p.running?' · 运行中':'')"></span>
+          </div>
+        </template>
+        <div x-show="soStatus?.hub_vcam_enabled" class="text-hub-green">Hub vcam 推流已开启</div>
+      </div>
+      <div class="text-[12px] text-hub-muted">
+        WebRTC 预览：<a :href="soPreviewUrl" target="_blank" class="text-hub-blue underline" x-text="soPreviewUrl||'需先启动 vcam_server:7870'"></a>
+        · phone 页 <b>📺 直播</b> 可连同一流 · <a href="/dashboard" target="_blank" class="text-hub-blue underline">看板录制列表</a>
+      </div>
+      <div x-show="soRecordings.length" class="bg-hub-bg border border-hub-border rounded-lg p-2 text-[12px] space-y-1 max-h-32 overflow-y-auto">
+        <div class="text-hub-muted font-semibold">最近录制</div>
+        <template x-for="r in soRecordings" :key="r.name">
+          <div class="flex justify-between gap-2">
+            <span x-text="(r.profile||'')+' · '+(r.size_kb||0)+'KB'"></span>
+            <a :href="'/api/stream_out/recordings/'+encodeURIComponent(r.name)" class="text-hub-blue underline">下载</a>
+          </div>
+        </template>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 让声音更像本人（UI-P1-6/7: bd-panel 化 + 漏斗化——分数条+推荐动作常驻，⓪~⑤ 收进高级）── -->
+  <section class="bd-panel mt-3"
+       :class="!active?'opacity-40 pointer-events-none':''">
+    <button type="button" @click="vqShow=!vqShow" :aria-expanded="vqShow?'true':'false'"
+            class="bd-panel-head">
+      <span class="text-sm font-semibold text-hub-text">🎯 让声音更像本人</span>
+      <span class="bd-panel-sum" x-text="vqSum()"></span>
+      <span class="bd-panel-chev">▾</span>
+    </button>
+    <div x-show="vqShow" x-transition.opacity.duration.150ms class="bd-panel-body space-y-4">
+
+      <!-- UI-P1-7: 漏斗顶——音色贴合度分数条 + 按现状推荐的下一步（未体检→体检；偏低→换参考；已不错→固定 seed）-->
+      <div class="flex items-end gap-3 flex-wrap">
+        <div class="flex-1 min-w-[180px]">
+          <div class="flex justify-between text-[12px] mb-1">
+            <span class="text-hub-muted">音色贴合度（越高越像本人）</span>
+            <span class="font-semibold"
+                  :class="vqScore()==null?'text-hub-muted':vqScore()>=0.8?'text-hub-green':vqScore()>=0.6?'text-hub-yellow':'text-hub-orange'"
+                  x-text="vqScore()==null?'未体检':vqScore().toFixed(2)"></span>
+          </div>
+          <div class="bd-progress"><i :style="'width:'+Math.round((vqScore()||0)*100)+'%'"></i></div>
+        </div>
+        <button @click="vqRunNext()" :disabled="vqBusy()||!active"
+                class="bd-btn bd-btn-primary text-xs shrink-0">
+          <span x-show="!vqBusy()" x-text="vqNext().label"></span>
+          <span x-show="vqBusy()" class="pulse">⏳ 处理中…</span>
+        </button>
+      </div>
+      <div class="text-[12px] text-hub-muted" x-text="vqNext().why"></div>
+
+      <!-- 高级手段折叠：全部原有工具原样保留，找得到但不糊脸 -->
+      <button @click="vqAdvanced=!vqAdvanced" :aria-expanded="vqAdvanced?'true':'false'"
+              class="text-[12px] text-hub-muted hover:text-hub-text transition"
+              x-text="(vqAdvanced?'▾':'▸')+' 高级手段（体检语料 / seed 校准 / 择优 / 盲听 / 参考管理）'"></button>
+      <div x-show="vqAdvanced" x-transition.opacity.duration.150ms class="space-y-4">
+
+      <!-- ⓪ 演讲域体检语料（可选） -->
+      <div class="space-y-2">
+        <div class="text-[13px] font-semibold text-hub-text">⓪ 体检语料 <span class="text-[12px] text-hub-muted font-normal">每行一句；演讲角色建议用演讲句，留空则用通用句</span></div>
+        <textarea x-model="probeSentencesText" rows="3" placeholder="各位同志，深圳是一座充满活力的现代化城市。&#10;他的演讲赢得了全场热烈的掌声。"
+                  class="w-full bg-hub-bg border border-hub-border rounded-lg text-xs px-2 py-1.5 text-hub-text resize-y"></textarea>
+        <button @click="saveProbeSentences()" :disabled="!active"
+                class="bd-act sm soft">💾 保存为角色专属体检语料</button>
+      </div>
+
+      <!-- ① 一键校准 -->
+      <div class="space-y-2">
+        <div class="text-[13px] font-semibold text-hub-text">① 一键音质校准 <span class="text-[12px] text-hub-muted font-normal">多 seed 合成校准句，挑相似度最高者固定（零延迟永久提升）</span></div>
+        <button @click="vqCalibrate()" :disabled="vqCalibLoading||!active"
+                class="bd-act soft">
+          <span x-show="!vqCalibLoading">🎯 校准并固定最佳 seed</span>
+          <span x-show="vqCalibLoading" class="pulse">⏳ 校准中（约 1~3 分钟）...</span>
+        </button>
+        <div x-show="vqCalibResult" class="bg-hub-bg border border-hub-border rounded-lg p-2.5 text-[13px] space-y-1">
+          <div class="text-hub-green font-semibold" x-text="'✅ 最佳 seed = '+(vqCalibResult?.best?.seed)+' · 相似度 '+(vqCalibResult?.best?.mean_cosine)"></div>
+          <template x-for="r in (vqCalibResult?.results||[])" :key="r.seed">
+            <div class="flex justify-between text-hub-muted">
+              <span x-text="'seed '+r.seed"></span>
+              <span x-text="r.mean_cosine"></span>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- ② 择优合成 best-of-N -->
+      <div class="space-y-2">
+        <div class="text-[13px] font-semibold text-hub-text">② 择优合成 <span class="text-[12px] text-hub-muted font-normal">用上方文本，多 seed 合成挑最像参考音的一条</span></div>
+        <div class="bd-act-row">
+          <select x-model.number="vqBestOf" class="bg-hub-bg border border-hub-border rounded-lg text-xs px-2 text-hub-text">
+            <option :value="2">合成 2 条挑最好</option>
+            <option :value="3">合成 3 条挑最好</option>
+            <option :value="4">合成 4 条挑最好</option>
+          </select>
+          <button @click="vqBestOfRun()" :disabled="vqBestLoading||!active||!speakText.trim()"
+                  class="bd-act purple">
+            <span x-show="!vqBestLoading">✨ 择优合成</span>
+            <span x-show="vqBestLoading" class="pulse">⏳ 合成中...</span>
+          </button>
+        </div>
+        <div x-show="vqBestResult?.audio_base64" class="bg-hub-bg border border-hub-border rounded-lg p-2.5 space-y-1">
+          <div class="text-[12px] text-hub-muted" x-text="'选中 seed '+(vqBestResult?.picked_seed)+' · 音色 '+(vqBestResult?.picked_cosine)+(vqBestResult?.picked_naturalness!=null?' · 自然度 '+vqBestResult.picked_naturalness:'')+' · '+(vqBestResult?.elapsed_ms)+'ms'"></div>
+          <audio :src="vqBestResult?.audio_base64?'data:audio/wav;base64,'+vqBestResult.audio_base64:''" controls class="w-full h-8"></audio>
+        </div>
+      </div>
+
+      <!-- ③ 盲听 A/B -->
+      <div class="space-y-2">
+        <div class="text-[13px] font-semibold text-hub-text">③ 盲听 A/B <span class="text-[12px] text-hub-muted font-normal">两个 seed 合成同句，盲听挑更像真人的并固定</span></div>
+        <button @click="vqBlindGen()" :disabled="vqBlindLoading||!active||!speakText.trim()"
+                class="bd-act ghost">
+          <span x-show="!vqBlindLoading">🎧 生成 A / B 两条</span>
+          <span x-show="vqBlindLoading" class="pulse">⏳ 生成中...</span>
+        </button>
+        <div x-show="vqBlind.length>0" class="grid grid-cols-2 gap-2">
+          <template x-for="(b,i) in vqBlind" :key="i">
+            <div class="bg-hub-bg border rounded-lg p-2.5 space-y-1.5"
+                 :class="vqBlindPicked===i?'border-hub-green':'border-hub-border'">
+              <div class="text-xs font-bold text-hub-text" x-text="b.label"></div>
+              <audio :src="'data:audio/wav;base64,'+b.audio" controls class="w-full h-8"></audio>
+              <button @click="vqBlindPick(i)"
+                      class="bd-act sm green w-full">选它 · 固定</button>
+              <div x-show="vqBlindPicked===i && vqBlindReveal" class="text-[12px] text-hub-muted" x-text="'seed '+b.seed"></div>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- ④ 自动优化参考 -->
+      <div class="space-y-2">
+        <div class="text-[13px] font-semibold text-hub-text">④ 自动优化参考 <span class="text-[12px] text-hub-muted font-normal">切段+转写+优选，holdout 验证，仅泛化更优才生效</span></div>
+        <div class="bd-act-row">
+          <select x-model.number="vqOptMaxRefs" class="bg-hub-bg border border-hub-border rounded-lg text-xs px-2">
+            <option :value="1">单参考·推荐</option>
+            <option :value="2">最多 2 段</option>
+            <option :value="4">最多 4 段</option>
+          </select>
+          <button @click="vqOptimizeSegments()" :disabled="vqOptLoading||!active"
+                  class="bd-act green">
+            <span x-show="!vqOptLoading">⚡ 预切参考优选</span>
+            <span x-show="vqOptLoading" class="pulse">⏳ 优选中…</span>
+          </button>
+          <button @click="vqOptimizeVoicePack()" :disabled="vqOptLoading||!active"
+                  class="bd-act ghost"
+                  title="整段长录音切段，耗时更长">
+            <span x-show="!vqOptLoading">📦 长录音切段</span>
+          </button>
+        </div>
+        <div class="text-[12px] text-hub-muted">推荐顺序：<b>⚡预切参考优选</b>（快）→ ①seed校准 → 📦长录音切段（慢）。holdout 未提升则维持现状，防过拟合。</div>
+        <input type="file" accept="audio/*" @change="vqOptPickFile($event)"
+               class="block w-full text-[12px] text-hub-muted file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-hub-bg file:text-hub-text">
+        <div class="text-[12px] text-hub-muted" x-show="vqOptFileName" x-text="'新音频: '+vqOptFileName"></div>
+        <div class="text-[12px] text-hub-muted" x-show="!vqOptFileName">或上传自定义录音纳入候选（留空则仅用现有参考）</div>
+        <button @click="vqOptimize()" :disabled="vqOptLoading||!active"
+                class="bd-act amber">
+          <span x-show="!vqOptLoading">🔧 自动优化参考</span>
+          <span x-show="vqOptLoading" class="pulse" x-text="'⏳ '+(vqOptProgress||'优化中…')"></span>
+        </button>
+        <div x-show="vqOptResult" class="bg-hub-bg border border-hub-border rounded-lg p-2.5 text-[13px] space-y-1">
+          <div :class="vqOptResult?.applied?'text-hub-green font-semibold':'text-hub-muted'"
+               x-text="vqOptResult?.applied?'✅ 已应用更优参考集':(vqOptResult?.improved?'✔ 找到更优集（未自动应用）':'➖ 维持现状：'+(vqOptResult?.reject_reason||'现有参考已最优'))"></div>
+          <div x-show="vqOptResult?.probe?.quality_axes?.cosine>0" class="text-hub-muted"
+               x-text="'体检 贴合度 '+(vqOptResult?.probe?.quality_axes?.cosine||0).toFixed(3)+' · 自然度 '+(vqOptResult?.probe?.quality_axes?.naturalness||0).toFixed(3)"></div>
+          <div class="text-hub-muted" x-show="vqOptResult?.baseline"
+               x-text="'基线 holdout='+(vqOptResult?.baseline?.holdout_composite)+' / 推荐='+(vqOptResult?.recommended?.holdout_composite)+' (Δ'+(vqOptResult?.holdout_delta)+')'"></div>
+          <div class="text-hub-muted" x-show="vqOptResult?.new_segments?.length"
+               x-text="'新音频切出 '+(vqOptResult?.new_segments?.length)+' 段并转写'"></div>
+        </div>
+      </div>
+
+      <!-- ⑤ 听感 A/B（当前参考 vs 预切段） -->
+      <div class="space-y-2">
+        <div class="text-[13px] font-semibold text-hub-text">⑤ 听感 A/B <span class="text-[12px] text-hub-muted font-normal">当前参考 vs 候选预切段，主观盲听比机器打分更准</span></div>
+        <div class="bd-act-row">
+          <select x-model="vqListenAlt" @focus="vqLoadSegments()" class="flex-1 min-w-[140px] bg-hub-bg border border-hub-border rounded-lg text-xs px-2 text-hub-text">
+            <option value="">选择候选预切参考…</option>
+            <template x-for="s in vqSegments" :key="s.name">
+              <option :value="s.name" x-text="s.name+(s.active?' · 当前':'')"></option>
+            </template>
+          </select>
+          <button @click="vqListenAb()" :disabled="vqListenLoading||!active||!speakText.trim()||!vqListenAlt"
+                  class="bd-act ghost">
+            <span x-show="!vqListenLoading">🎧 生成听感 A/B</span>
+            <span x-show="vqListenLoading" class="pulse">⏳ 合成中…</span>
+          </button>
+        </div>
+        <div x-show="vqListen.length>0" class="grid grid-cols-2 gap-2">
+          <template x-for="(b,i) in vqListen" :key="i">
+            <div class="bg-hub-bg border rounded-lg p-2.5 space-y-1.5"
+                 :class="vqListenPicked===i?'border-hub-green':'border-hub-border'">
+              <div class="text-xs font-bold text-hub-text" x-text="b.label"></div>
+              <div class="text-[12px] text-hub-muted" x-show="b.cosine!=null"
+                   x-text="'贴合度 '+b.cosine+(b.naturalness!=null?' · 自然度 '+b.naturalness:'')"></div>
+              <audio :src="b.audio?'data:audio/wav;base64,'+b.audio:''" controls class="w-full h-8"></audio>
+              <button @click="vqListenPick(i)"
+                      class="bd-act sm green w-full">更像真人</button>
+              <div x-show="vqListenPicked===i && vqListenReveal" class="text-[12px] text-hub-muted" x-text="b.origLabel||b.label"></div>
+            </div>
+          </template>
+        </div>
+        <div x-show="vqListenPicked>=0 && vqListen[vqListenPicked]?.segment && !vqListen[vqListenPicked]?.is_current"
+             class="bd-act-row">
+          <button @click="vqListenApply(false)" :disabled="vqListenApplying"
+                  class="bd-act green">
+            <span x-show="!vqListenApplying">✅ 应用此参考（holdout 闸门）</span>
+            <span x-show="vqListenApplying" class="pulse">⏳ 落库中…</span>
+          </button>
+          <button @click="vqListenApply(true)" :disabled="vqListenApplying"
+                  class="text-[12px] text-hub-muted hover:text-hub-orange underline">强制应用</button>
+        </div>
+        <div class="flex gap-2" x-show="vqListen.length>0">
+          <button @click="vqListenFeedback(1)" class="text-[13px] text-hub-green hover:underline">👍 当前组合满意</button>
+          <button @click="vqListenFeedback(-1)" class="text-[13px] text-hub-red/80 hover:underline">👎 仍不满意</button>
+        </div>
+      </div>
+
+      </div><!-- /高级手段折叠（vqAdvanced）-->
+    </div>
+  </section>
+</div>

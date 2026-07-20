@@ -42,7 +42,7 @@ import uvicorn
 # ── 配置 ────────────────────────────────────────────────────────
 import app_config
 VOICES_DIR = app_config.BASE / "alltalk_tts" / "voices"
-PORT       = 7851
+PORT       = int(os.environ.get("TTS_PORT") or app_config.port("tts") or 7851)
 
 app = FastAPI(title="TTS API (XTTS-v2 Local)", version="3.0")
 import service_auth                                  # GPU 服务面加固：鉴权 + CORS 收敛

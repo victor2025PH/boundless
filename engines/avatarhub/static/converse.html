@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#080b10">
 <title>无界 BOUNDLESS · 幻影 LiveX</title>
 <link rel="icon" type="image/svg+xml" href="/static/icon.svg"/>
 <link rel="icon" type="image/png" sizes="256x256" href="/static/app-icon-256.png"/>
@@ -262,7 +263,16 @@ async function loadProfiles(){
     def.value = ''; def.textContent = '默认角色';
     sel.appendChild(def);
     // 选中优先级：上次选择（getItem null=从没选过，区别于选过"默认角色"的空串）> 服务端 active > 列表第一个
-    let saved = null; try{ saved = localStorage.getItem('converse_profile'); }catch(_){}
+    // P1-4（对话端四视角方案 2026-07-16）：角色记忆统一到 ah_profile（与 /phone 同 key，
+    // 切页不再"各记各的"）；首读兼容旧 key converse_profile（老用户记忆不丢，读到即迁移）。
+    let saved = null;
+    try{
+      saved = localStorage.getItem('ah_profile');
+      if(saved === null){
+        saved = localStorage.getItem('converse_profile');
+        if(saved !== null) localStorage.setItem('ah_profile', saved);
+      }
+    }catch(_){}
     if(saved !== null && (saved === '' || ps.some(p => p.name === saved))) sel.value = saved;
     else if(activeProfile && ps.some(p => p.name === activeProfile)) sel.value = activeProfile;
   }catch(_){
@@ -270,7 +280,8 @@ async function loadProfiles(){
   }
 }
 document.getElementById('profile-sel').addEventListener('change', function(){
-  try{ localStorage.setItem('converse_profile', this.value); }catch(_){}
+  try{ localStorage.setItem('ah_profile', this.value);
+       localStorage.removeItem('converse_profile'); }catch(_){}   // 单一真相：写新 key、清旧 key
   addBot('已切换到「' + (this.value || '默认角色') + '」，接下来的回复用这个角色的声音和人设。');
 });
 

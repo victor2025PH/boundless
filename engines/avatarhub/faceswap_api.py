@@ -231,7 +231,9 @@ reload_faces()
 # 2026-07-10 TRT 默认策略：主引擎(8000)默认试开 TRT(装了库才真启，_TRT_AVAILABLE 兜底)；
 #   容灾副本(8003)默认关——失联回切时若副本首帧现建 TRT 引擎(冷 ~86s)会把接管拖成灾难。
 #   FACESWAP_TRT 显式给值(0/1)一律优先。
-_IS_REPLICA = os.environ.get("FACESWAP_PORT", "8000").strip() == "8003"
+# 副本判定按 app_config 生效端口比对（端口覆盖层下 8003 会整体平移，字面比较会失判）
+_IS_REPLICA = (os.environ.get("FACESWAP_PORT", "").strip()
+               == str(app_config.port("faceswap2") or 8003))
 _use_trt_env = os.environ.get("FACESWAP_TRT", "").strip()
 USE_TRT  = (_use_trt_env == "1") if _use_trt_env else (not _IS_REPLICA)
 TRT_FP16 = os.environ.get("FACESWAP_TRT_FP16", "1") != "0"
@@ -2382,6 +2384,35 @@ async def upload_face(data: dict):
 from fastapi.responses import HTMLResponse as _HTMLResp
 
 
+# [P2-3·2026-07-16] 面板线性图标：拷贝自 static/brand-icons.svg（全站单一真相）。
+# 本服务(:8000)与 Hub(:9000) 跨端口，<use href> 引不到外域 sprite → 按同传页公约"内联持有子集拷贝"；
+# 这里进一步做成"渲染时现从库文件取"，库更新面板自动跟随，不存在手抄漂移。
+from functools import lru_cache as _lru
+
+
+@_lru(maxsize=64)
+def _panel_icon(name: str, px: int = 15) -> str:
+    try:
+        import re as _re
+        raw = (app_config.BASE / "static" / "brand-icons.svg").read_text(encoding="utf-8")
+        m = _re.search(rf'<symbol id="i-{name}" viewBox="([^"]+)">(.*?)</symbol>', raw, _re.S)
+        if m:
+            # 铁律：尺寸/描边写成 SVG 呈现属性（不依赖 CSS 类），CSS 缺位也不会爆版
+            return (f'<svg width="{px}" height="{px}" viewBox="{m.group(1)}" fill="none" stroke="currentColor" '
+                    f'stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" '
+                    f'style="vertical-align:-2px;margin-right:6px">{m.group(2)}</svg>')
+    except Exception:
+        pass
+    return ""
+
+
+# 面板占位符 → 图标名（control_ui 渲染时替换；库里缺该符号→优雅退成纯文字）
+_PANEL_ICONS = {"__IC_FLASK__": "flask", "__IC_SCISSORS__": "scissors", "__IC_SHIRT__": "shirt",
+                "__IC_COPY__": "copy", "__IC_USERS__": "users", "__IC_PLUS__": "plus",
+                "__IC_PALETTE__": "palette", "__IC_ZAP__": "zap", "__IC_SLIDERS__": "sliders",
+                "__IC_FOLDER__": "folder", "__IC_CHECK__": "check"}
+
+
 @app.get("/ui", response_class=_HTMLResp)
 def control_ui():
     from fastapi.responses import HTMLResponse
@@ -2389,63 +2420,83 @@ def control_ui():
 <html lang="zh">
 <head>
 <meta charset="UTF-8">
+<meta name="theme-color" content="#080b10">
 <link rel="icon" href="/favicon.ico"/>
-<title>FaceSwap 控制面板</title>
+<title>幻颜 FaceX · 换脸面板 — 无界 BOUNDLESS</title>
 <style>
+  /* [四视角 P1-2·2026-07-16] 收敛到无界品牌令牌（值与 design-tokens.json 同源；本页跨端口(:8000)
+     不能依赖 Hub 的 brand.css，按同传页模式内联自包含）。旧洋红 #e94560 皮肤退役。 */
+  :root{
+    color-scheme:dark;
+    --acc:#4f7aff;--acc2:#a855f7;--grad:linear-gradient(135deg,#4f7aff,#a855f7);
+    --bg:#080b10;--card:#12151a;--lift:#171a1e;--bd:#26282d;
+    --txt:#e5e9f5;--mut:#8b96b0;--ok:#34d399;--warn:#fbbf24;--bad:#f87171;
+    --font:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;
+  }
   *{box-sizing:border-box}
-  body{font-family:Arial,sans-serif;background:#1a1a2e;color:#eee;padding:20px;max-width:750px;margin:auto}
-  h1{color:#e94560;text-align:center;margin-bottom:5px}
-  .subtitle{text-align:center;color:#aaa;font-size:13px;margin-bottom:20px}
-  .card{background:#16213e;border-radius:12px;padding:18px;margin:12px 0;box-shadow:0 4px 15px rgba(0,0,0,.3)}
-  h3{color:#fff;background:#e94560;padding:7px 14px;border-radius:6px;margin:0 0 14px 0;font-size:14px}
+  body{font-family:var(--font);background:var(--bg);color:var(--txt);padding:20px;max-width:750px;margin:auto}
+  h1{text-align:center;margin-bottom:5px;font-size:22px;
+     background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .subtitle{text-align:center;color:var(--mut);font-size:13px;margin-bottom:20px}
+  .card{background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:18px;margin:12px 0}
+  h3{color:var(--txt);background:var(--lift);border:1px solid var(--bd);border-left:3px solid var(--acc);
+     padding:7px 14px;border-radius:8px;margin:0 0 14px 0;font-size:14px}
   label{display:flex;justify-content:space-between;align-items:center;margin:10px 0;font-size:14px}
-  span.val{color:#e94560;font-weight:bold;min-width:40px;text-align:right}
-  input[type=range]{flex:1;margin:0 12px;accent-color:#e94560}
-  input[type=checkbox]{width:18px;height:18px;accent-color:#e94560;cursor:pointer}
-  .btn{background:#e94560;color:#fff;border:none;padding:11px 20px;border-radius:8px;
+  span.val{color:var(--acc);font-weight:bold;min-width:40px;text-align:right}
+  input[type=range]{flex:1;margin:0 12px;accent-color:var(--acc)}
+  input[type=checkbox]{width:18px;height:18px;accent-color:var(--acc);cursor:pointer}
+  .btn{background:var(--lift);color:var(--txt);border:1px solid var(--bd);padding:11px 20px;border-radius:8px;
        cursor:pointer;font-size:14px;transition:.2s;font-weight:bold}
-  .btn:hover{background:#c73652}
+  .btn:hover{border-color:var(--acc);color:#fff}
   .btn-full{width:100%;margin-top:8px}
-  .btn-green{background:#2d7a2d}.btn-green:hover{background:#1e5c1e}
+  /* 全页唯一主 CTA（应用画质参数）：按规范用品牌渐变；其余按钮一律中性底 */
+  .btn-primary{background:var(--grad);border:none;color:#fff}
+  .btn-primary:hover{filter:brightness(1.1)}
+  .btn-green{background:rgba(52,211,153,.14);border-color:rgba(52,211,153,.4);color:var(--ok)}
+  .btn-green:hover{border-color:var(--ok)}
   .status{text-align:center;padding:8px;border-radius:6px;margin-top:10px;font-size:13px;display:none}
-  .ok{background:#0d3b0d;color:#4caf50}.err{background:#3b0d0d;color:#f44336}
+  .ok{background:rgba(52,211,153,.1);color:var(--ok)}.err{background:rgba(248,113,113,.1);color:var(--bad)}
   /* 明星脸网格 */
   .face-grid{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}
-  .face-card{background:#0f3460;border-radius:8px;padding:8px;text-align:center;
+  .face-card{background:var(--lift);border-radius:8px;padding:8px;text-align:center;
              cursor:pointer;border:2px solid transparent;transition:.2s;width:100px}
-  .face-card:hover{border-color:#e94560}
-  .face-card.active{border-color:#4caf50;background:#0d3b0d}
+  .face-card:hover{border-color:var(--acc)}
+  .face-card.active{border-color:var(--ok);background:rgba(52,211,153,.08)}
   .face-card img{width:80px;height:80px;object-fit:cover;border-radius:6px;display:block;margin:0 auto 5px}
-  .face-card .fname{font-size:12px;word-break:break-all;color:#eee}
-  .face-card .active-badge{color:#4caf50;font-size:11px;font-weight:bold}
-  .upload-area{border:2px dashed #e94560;border-radius:8px;padding:20px;text-align:center;
+  .face-card .fname{font-size:12px;word-break:break-all;color:var(--txt)}
+  .face-card .active-badge{color:var(--ok);font-size:11px;font-weight:bold}
+  .upload-area{border:2px dashed var(--acc);border-radius:8px;padding:20px;text-align:center;
                cursor:pointer;margin-top:10px;transition:.2s}
-  .upload-area:hover{background:#0f3460}
-  input[type=text]{background:#0f3460;color:#eee;border:1px solid #e94560;border-radius:6px;
+  .upload-area:hover{background:var(--lift)}
+  input[type=text]{background:var(--lift);color:var(--txt);border:1px solid var(--bd);border-radius:6px;
                    padding:7px 10px;width:100%;font-size:14px;margin-top:6px}
+  input[type=text]:focus{border-color:var(--acc);outline:none}
+  select{background:var(--lift);color:var(--txt);border:1px solid var(--bd);border-radius:6px;padding:8px}
+  a{color:var(--acc)}
+  hr{border:0;border-top:1px solid var(--bd)}
 </style>
 </head>
 <body>
-<h1>🎭 FaceSwap 控制面板</h1>
-<div class="subtitle">参数实时生效，无需重启</div>
+<h1>🎭 幻颜 FaceX · 换脸面板</h1>
+<div class="subtitle">无界 BOUNDLESS · 参数实时生效，无需重启</div>
 
 <!-- 快速入口（实验室：离线 API，未接入实时直播链） -->
 <div class="card" style="padding:12px">
-  <h3>🔗 实验室功能 <span style="font-size:11px;background:#3d2e00;color:#fbbf24;padding:2px 8px;border-radius:999px;margin-left:6px">🧪 离线 · 非实时</span></h3>
-  <p style="font-size:12px;color:#aaa;margin:0 0 10px 0">单次处理 5~30 秒，不会自动进入 OBS 直播画面。需先启动对应服务（发型 8001 / 试衣 8002）。</p>
+  <h3>__IC_FLASK__实验室功能 <span style="font-size:11px;background:rgba(251,191,36,.12);color:var(--warn);padding:2px 8px;border-radius:999px;margin-left:6px">🧪 离线 · 非实时</span></h3>
+  <p style="font-size:12px;color:var(--mut);margin:0 0 10px 0">单次处理 5~30 秒，不会自动进入 OBS 直播画面。需先启动对应服务（发型 8001 / 试衣 8002）。</p>
   <div style="display:flex;gap:10px;flex-wrap:wrap">
     <a href="http://127.0.0.1:8001/ui" target="_blank" id="linkHair"
-       style="flex:1;background:#0f3460;color:#eee;text-decoration:none;padding:12px;border-radius:8px;
-              text-align:center;border:2px solid #e94560;font-size:14px;font-weight:bold;opacity:.85">
-      💇 发型定妆<br><span style="font-size:11px;color:#aaa">HairFastGAN · 约 5~10s/次</span>
+       style="flex:1;background:var(--lift);color:var(--txt);text-decoration:none;padding:12px;border-radius:8px;
+              text-align:center;border:2px solid var(--acc);font-size:14px;font-weight:bold;opacity:.85">
+      __IC_SCISSORS__发型定妆<br><span style="font-size:11px;color:var(--mut)">HairFastGAN · 约 5~10s/次</span>
     </a>
     <a href="http://127.0.0.1:8002/ui" target="_blank" id="linkTryon"
-       style="flex:1;background:#0f3460;color:#eee;text-decoration:none;padding:12px;border-radius:8px;
-              text-align:center;border:2px solid #4caf50;font-size:14px;font-weight:bold;opacity:.85">
-      👗 虚拟试衣<br><span style="font-size:11px;color:#aaa">IDM-VTON · 约 20~30s/次</span>
+       style="flex:1;background:var(--lift);color:var(--txt);text-decoration:none;padding:12px;border-radius:8px;
+              text-align:center;border:2px solid var(--ok);font-size:14px;font-weight:bold;opacity:.85">
+      __IC_SHIRT__虚拟试衣<br><span style="font-size:11px;color:var(--mut)">IDM-VTON · 约 20~30s/次</span>
     </a>
   </div>
-  <div id="labSvcHint" style="display:none;margin-top:8px;font-size:11px;color:#fbbf24"></div>
+  <div id="labSvcHint" style="display:none;margin-top:8px;font-size:11px;color:var(--warn)"></div>
 </div>
 <script>
 (async function(){
@@ -2466,40 +2517,40 @@ def control_ui():
 
 <!-- 换脸引擎/角色模型热切换（S2：DFM 每角色模型直播落地） -->
 <div class="card">
-  <h3>🎭 换脸引擎 / 角色模型 <span style="font-size:11px;background:#0d3b0d;color:#4caf50;padding:2px 8px;border-radius:999px;margin-left:6px">运行时热切换</span></h3>
-  <p style="font-size:12px;color:#aaa;margin:0 0 10px 0">切「通用换脸」= inswapper 基线（配下方明星脸）；切某角色 = 该角色专属 DFM 整脸换（含骨相/轮廓，辨识度最强，自动忽略源脸）。切换即时生效于本实例，直播链路同步生效。</p>
+  <h3>__IC_COPY__换脸引擎 / 角色模型 <span style="font-size:11px;background:rgba(52,211,153,.12);color:var(--ok);padding:2px 8px;border-radius:999px;margin-left:6px">运行时热切换</span></h3>
+  <p style="font-size:12px;color:var(--mut);margin:0 0 10px 0">切「通用换脸」= inswapper 基线（配下方明星脸）；切某角色 = 该角色专属 DFM 整脸换（含骨相/轮廓，辨识度最强，自动忽略源脸）。切换即时生效于本实例，直播链路同步生效。</p>
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-    <select id="modelSel" style="flex:1;min-width:220px;background:#0f3460;color:#eee;border:1px solid #e94560;border-radius:6px;padding:8px">
+    <select id="modelSel" style="flex:1;min-width:220px">
       <option>加载中…</option>
     </select>
     <button class="btn" onclick="reloadModel()">切换</button>
   </div>
-  <div id="modelNow" style="font-size:12px;color:#4caf50;margin-top:8px"></div>
+  <div id="modelNow" style="font-size:12px;color:var(--ok);margin-top:8px"></div>
   <div id="modelStatus" class="status"></div>
 </div>
 
 <!-- 明星脸切换 -->
 <div class="card">
-  <h3>👤 明星脸切换 <span style="font-size:11px;color:#aaa">（仅通用换脸档生效）</span></h3>
+  <h3>__IC_USERS__明星脸切换 <span style="font-size:11px;color:var(--mut)">（仅通用换脸档生效）</span></h3>
   <div class="face-grid" id="faceGrid">加载中...</div>
-  <hr style="border-color:#0f3460;margin:14px 0">
-  <h3 style="background:#0f3460">➕ 上传新明星脸</h3>
+  <hr style="margin:14px 0">
+  <h3>__IC_PLUS__上传新明星脸</h3>
   <input type="text" id="newName" placeholder="输入名字（如：张曼玉）">
   <div class="upload-area" onclick="document.getElementById('fileInput').click()">
-    📁 点击选择照片（JPG/PNG，需包含正脸）
+    __IC_FOLDER__点击选择照片（JPG/PNG，需包含正脸）
     <input type="file" id="fileInput" accept="image/*" style="display:none" onchange="previewUpload(this)">
   </div>
   <div id="previewBox" style="display:none;margin-top:8px;text-align:center">
-    <img id="previewImg" style="height:100px;border-radius:8px;border:2px solid #e94560">
+    <img id="previewImg" style="height:100px;border-radius:8px;border:2px solid var(--acc)">
   </div>
-  <button class="btn btn-green btn-full" onclick="uploadFace()" style="margin-top:10px">✅ 上传并添加</button>
+  <button class="btn btn-green btn-full" onclick="uploadFace()" style="margin-top:10px">__IC_CHECK__上传并添加</button>
   <div id="uploadStatus" class="status"></div>
 </div>
 
 <!-- 画质参数 -->
 <div class="card">
-  <h3>🎨 画质增强</h3>
-  <label>CodeFormer 保真度 (w) <span style="color:#aaa;font-size:12px">0=强增强 1=保留原貌</span>
+  <h3>__IC_PALETTE__画质增强</h3>
+  <label>CodeFormer 保真度 (w) <span style="color:var(--mut);font-size:12px">0=强增强 1=保留原貌</span>
     <input type="range" id="cf_w" min="0" max="1" step="0.05" value="0.7"
            oninput="document.getElementById('cf_w_v').textContent=this.value">
     <span class="val" id="cf_w_v">0.7</span>
@@ -2511,8 +2562,8 @@ def control_ui():
 </div>
 
 <div class="card">
-  <h3>⚡ 稳定性 &amp; 质量</h3>
-  <label>时序平滑 (α) <span style="color:#aaa;font-size:12px">越小越平滑，但动态幻影↑</span>
+  <h3>__IC_ZAP__稳定性 &amp; 质量</h3>
+  <label>时序平滑 (α) <span style="color:var(--mut);font-size:12px">越小越平滑，但动态幻影↑</span>
     <input type="range" id="sm_a" min="0" max="1" step="0.05" value="0.6"
            oninput="document.getElementById('sm_a_v').textContent=this.value">
     <span class="val" id="sm_a_v">0.6</span>
@@ -2525,8 +2576,8 @@ def control_ui():
 </div>
 
 <div class="card">
-  <h3>🦲 光头/发际修缮（掩码内缩）</h3>
-  <p style="font-size:12px;color:#aaa;margin:0 0 10px 0">本人光头/短发而源脸有头发时，头两侧会糊上源脸的深色头发边。加大「两侧内缩」直到黑边消失（一般 8~14）；额头出现源发际线就加「顶部内缩」。0=关闭。</p>
+  <h3>__IC_SLIDERS__光头/发际修缮（掩码内缩）</h3>
+  <p style="font-size:12px;color:var(--mut);margin:0 0 10px 0">本人光头/短发而源脸有头发时，头两侧会糊上源脸的深色头发边。加大「两侧内缩」直到黑边消失（一般 8~14）；额头出现源发际线就加「顶部内缩」。0=关闭。</p>
   <label>两侧内缩 %
     <input type="range" id="mp_side" min="0" max="20" step="1" value="0"
            oninput="document.getElementById('mp_side_v').textContent=this.value">
@@ -2539,7 +2590,7 @@ def control_ui():
   </label>
 </div>
 
-<button class="btn btn-full" onclick="applyParams()">✅ 应用画质参数</button>
+<button class="btn btn-primary btn-full" onclick="applyParams()">__IC_CHECK__应用画质参数</button>
 <div id="status" class="status"></div>
 
 <script>
@@ -2592,10 +2643,10 @@ async function reloadModel() {
 async function loadFaces() {
   const r = await fetch('/faces'); const d = await r.json();
   const grid = document.getElementById('faceGrid');
-  if(!d.faces.length){grid.innerHTML='<span style="color:#aaa">faces 文件夹为空，请上传照片</span>';return;}
+  if(!d.faces.length){grid.innerHTML='<span style="color:var(--mut)">faces 文件夹为空，请上传照片</span>';return;}
   grid.innerHTML = d.faces.map(name=>`
     <div class="face-card ${name===d.active?'active':''}" onclick="switchFace('${name}')" id="fc_${name.replace(/[^a-zA-Z0-9]/g,'_')}">
-      <img src="/face_thumb?name=${encodeURIComponent(name)}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2280%22 height=%2280%22><rect fill=%22%230f3460%22 width=%2280%22 height=%2280%22/><text x=%2240%22 y=%2248%22 font-size=%2230%22 text-anchor=%22middle%22 fill=%22%23e94560%22>👤</text></svg>'">
+      <img src="/face_thumb?name=${encodeURIComponent(name)}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2280%22 height=%2280%22><rect fill=%22%23171a1e%22 width=%2280%22 height=%2280%22/><text x=%2240%22 y=%2248%22 font-size=%2230%22 text-anchor=%22middle%22 fill=%22%234f7aff%22>👤</text></svg>'">
       <div class="fname">${name}</div>
       ${name===d.active?'<div class="active-badge">✅ 当前</div>':''}
     </div>`).join('');
@@ -2681,6 +2732,8 @@ loadFaces();
 loadModels();
 </script>
 </body></html>"""
+    for ph, ic in _PANEL_ICONS.items():   # P2-3: 占位符 → 图标库内联线性图标（缺符号优雅退纯文字）
+        html = html.replace(ph, _panel_icon(ic))
     return HTMLResponse(content=html)
 
 @app.get("/face_thumb")
@@ -2694,6 +2747,11 @@ def face_thumb(name: str):
     if not path.exists():
         raise HTTPException(status_code=404)
     img = cv2.imread(str(path))
+    if img is None:
+        # [P7 走查·2026-07-16] 空文件/损坏图：imread 返回 None，直接 resize 会 cv2 断言崩 500
+        # 且每次列表刷新都刷一条栈（重启走查实锤：faces/默认.jpg 为 0 字节）。
+        # 404 即可——面板 <img onerror> 自带占位人形，体验无损。
+        raise HTTPException(status_code=404)
     img = cv2.resize(img, (80, 80))
     _, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 80])
     return Response(content=buf.tobytes(), media_type="image/jpeg")
@@ -3313,7 +3371,8 @@ if __name__ == "__main__":
     _warmup()
     # 端口可配(默认 8000)：修复历史文档承诺的「多实例/双引擎(FACESWAP_PORT=…)」——此前硬编码 8000，
     # 起第二实例必然撞端口起不来(2026-07-06 256 探针即因此没绑上)。默认值不变=零回归。
-    _port = int(os.environ.get("FACESWAP_PORT", "8000"))
+    # 2026-07-17: 默认经 app_config.port 走端口覆盖层(两套安装并存)，env 显式指定仍最优先。
+    _port = int(os.environ.get("FACESWAP_PORT") or app_config.port("faceswap") or 8000)
     # S6: 端口独占预检——Windows REUSE 语义下双实例会**静默双绑**（请求乱跳比崩溃难查）；
     #   supervisor 启动宽限窗内的重复拉起在此 fail-fast 退出，绝不带病上线。
     try:

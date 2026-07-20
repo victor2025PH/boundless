@@ -53,6 +53,15 @@ class _WarnFold(logging.Filter):
 logging.captureWarnings(True)
 logging.getLogger("py.warnings").addFilter(_WarnFold())
 
+# ── P1-P 热路径 HTTP 连接池 ─────────────────────────────────────────────────
+# LLM 翻译/克隆 TTS/STT 每句都是独立 requests.post → 每次都重建 TCP 连接。本机 1~3ms,
+# 跨机部署(SVC_* 指向 .140/.176 等节点)握手 5~15ms——对逐句逐块的热路径是纯浪费。
+# Session keep-alive 复用连接;urllib3 连接池线程安全,与线程池并发调用兼容。
+# 仅热路径函数改走此池,其余低频调用(健康探测/管理接口)保持原样以降低改造面。
+_HTTP_POOL = requests.Session()
+_HTTP_POOL.mount("http://", requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=32))
+_HTTP_POOL.mount("https://", requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=8))
+
 try:
     import alerts                       # 统一告警(webhook/钉钉/本地toast/state)；缺失则降级为仅日志 + /ops 卡内提示
 except Exception:
@@ -83,7 +92,11 @@ except Exception:
     FISH_URL  = _first_url(os.environ.get("FISH_URL", "http://127.0.0.1:7855"))   # 克隆音色 TTS
     LIPSYNC_URL = _first_url(os.environ.get("LIPSYNC_URL", "http://127.0.0.1:8090"))
     VCAM_URL    = _first_url(os.environ.get("VCAM_URL", "http://127.0.0.1:7870"))
-MONITOR_URL = os.environ.get("MONITOR_URL", "http://127.0.0.1:7878")   # 手机无线终端中继
+try:
+    _MON_DEFAULT = f"http://127.0.0.1:{_ac.port('monitor') or 7878}"   # 端口覆盖层(两套并存)对齐
+except Exception:
+    _MON_DEFAULT = "http://127.0.0.1:7878"
+MONITOR_URL = os.environ.get("MONITOR_URL", _MON_DEFAULT)   # 手机无线终端中继
 
 
 # ── P4 全域运营事件埋点（契约 platform/observability/EVENT_CONTRACT.md）────────
@@ -97,6 +110,15 @@ def _track_event(product_id: str, name: str, props: dict | None = None) -> None:
         pass
 
 
+_MON_PORT = (MONITOR_URL.rsplit(":", 1)[-1].split("/")[0] or "7878")   # 页面 JS 注入用(__MON_PORT__)
+try:
+    _MON_PORT_S = str(int(_MON_PORT) + 1)      # 中继 https 口恒为 http+1(monitor_relay 约定)
+except Exception:
+    _MON_PORT_S = "7879"
+try:
+    _HUB_PORT = HUB_URL.rsplit(":", 1)[-1].split("/")[0] or "9000"   # 页面 JS 注入(__HUB_PORT__)
+except Exception:
+    _HUB_PORT = "9000"
 SR        = 16000                      # 送 ASR 的统一采样率
 # 克隆声输出增益(线性)。默认 0.5≈-6dB，给虚拟麦留安全余量防爆音(实测原始峰值可达-0.3dBFS)。
 TTS_OUT_GAIN = float(os.environ.get("INTERP_TTS_GAIN", "0.5"))
@@ -181,7 +203,7 @@ def _stt_post(path: str, payload: dict, timeout):
     for off in range(len(eps)):
         base = eps[(start + off) % len(eps)]
         try:
-            r = requests.post(f"{base}{path}", json=payload, timeout=timeout)
+            r = _HTTP_POOL.post(f"{base}{path}", json=payload, timeout=timeout)
         except Exception as e:              # 连接/超时=节点故障 → 试下一个
             last_exc = e
             with _STT_FO_LOCK:
@@ -926,7 +948,13 @@ def _emo_for_sentence(zh: str, en: str) -> str:
     _emo_llm_kick()                       # 每次定稿都尝试刷新基调(带节流,异步不阻塞)
     sbv2 = _ja_use_sbv2()
     if not sbv2 and len((en or "").split()) > 24:
+        _llm_emo_take(_DST_LANG)          # 超长句不改道:清掉本句标签,防串染下一句
         return ""
+    # P0-R2b：翻译 LLM 同调产出的语义级情绪标签优先(比关键词规则准,且零额外调用)。
+    llm_emo = _llm_emo_take(_DST_LANG)
+    if llm_emo and (llm_emo in _EMO_STRONG or (sbv2 and llm_emo in _EMO_SBV2_OK)):
+        _emo_set_mood(llm_emo, "llm-tag")
+        return llm_emo
     rule = ""
     try:
         rule = _emo_detect_text((zh or "").strip() or (en or "").strip())
@@ -1001,7 +1029,7 @@ def _synth_emotional_stream(en: str, emotion: str, q, dev_sr: int, dev_ch: int,
                "speed": max(0.6, min(1.6, EMO_SPEED))}
     t0 = time.time()
     try:
-        r = requests.post(f"{_tts_url_for('cosyvoice')}/v1/tts/clone/stream",
+        r = _HTTP_POOL.post(f"{_tts_url_for('cosyvoice')}/v1/tts/clone/stream",
                           json=payload, stream=True, timeout=(3, EMO_TTS_TIMEOUT))
         r.raise_for_status()
     except Exception as e:
@@ -1139,6 +1167,70 @@ STREAM_MAX_SEC = float(os.environ.get("INTERP_STREAM_MAX_SEC", "12"))
 # 只刷已稳定的前缀→显著降低逐词字幕"回跳/闪烁"；末尾 k 个 token 在 final 一次性补齐(整句永远完整)。
 # CJK 按“字”、含空格语言按“词”计。默认 1(仅压最不稳的末 1 token，肉眼几乎无延迟)；0=关闭(旧逐词行为)。
 STREAM_WAITK = int(os.environ.get("INTERP_WAITK", "1"))
+
+# ══════════ P0-R 实时性/真人感四件套(2026-07-16) ══════════
+# R1 语义块流式配音：partial 的稳定前缀到达子句边界(标点/超长)即提前翻译+配音，
+#   不再等整句 final——长句首音可提前 1.5s+。仅通话/配音模式(play_q)生效：
+#   直播口型模式有"口型生成期暂停 ASR 上行"的 GPU 让位机制，分块会与其互锁,保持整句。
+#   安全闸与 final 同源：文本回声闸 + 缓冲音频门控 + 声纹锁,全过才提交。0=关(旧行为)。
+CHUNK_DUB_ON      = os.environ.get("INTERP_CHUNK_DUB", "1") == "1"
+CHUNK_MIN_LEN     = int(os.environ.get("INTERP_CHUNK_MIN_LEN", "10"))    # 块最短(CJK字/西文词)——太短不值一次 MT+TTS
+CHUNK_FORCE_LEN   = int(os.environ.get("INTERP_CHUNK_FORCE_LEN", "24"))  # 无标点连续说话时,稳定前缀达此长度强制提交
+# R2 翻译滚动上下文：最近 N 句源文注入 LLM 翻译 prompt——跨句指代(它=刚才说的商品)、
+#   术语一致、以及 R1 分块翻译的语境连贯都靠它。仅 LLM 译路消费(NMT/Google 兜底不变)。
+#   注意:开启后翻译缓存键含上下文哈希(同句不同语境不共享缓存,正确性优先)。0=关(旧缓存行为)。
+MT_CTX_ON         = os.environ.get("INTERP_MT_CONTEXT", "1") == "1"
+MT_CTX_N          = max(1, int(os.environ.get("INTERP_MT_CONTEXT_N", "2")))
+MT_CTX_WINDOW_S   = float(os.environ.get("INTERP_MT_CONTEXT_WINDOW_S", "90"))
+# R2b 单次调用附带情绪：翻译 LLM 在译文尾追加 [emo:xxx] 轻量标签(强情绪句才加)，
+#   解析成功=情感配音路由零额外 LLM 调用；解析失败/未加=自动回退现有关键词规则,零风险。
+LLM_EMO_TAG       = os.environ.get("INTERP_LLM_EMO_TAG", "1") == "1"
+# R4 音画字一致(方向A=有配音的方向)：软终判/GER 的"润色译文"不再替换屏幕与 OBS 字幕
+#   (观众耳听的是已播配音版本,字幕跟着改=可感知穿帮)；润色稿仍进转写留存(导出质量不降)。
+#   源文(中文)字幕纠错不受限——克隆音念的是译文,改源文不产生音画不一致。0=旧行为(润色替换字幕)。
+SUBS_MATCH_AUDIO  = os.environ.get("INTERP_SUBS_MATCH_AUDIO", "1") == "1"
+
+# ══════════ P1-R 实时性/真人感第二批(2026-07-16) ══════════
+# S 流式 LLM 翻译(边译边配)：ollama stream=True,译文 token 到达子句边界即送 TTS——
+#   非分块句(短中句/分块被预检退回的句)的"整段译文生成等待"从关键路径消失。
+#   适用面收窄换安全：仅通话配音链路 + LLM 可用 + 翻译缓存未命中 + 无术语命中 +
+#   非强情绪句(保留情感引擎改道)。首段过目标语健全闸后才出声,闸拒=整句退回旧非流式路径(零重播)。
+LLM_STREAM_ON  = os.environ.get("INTERP_LLM_STREAM", "1") == "1"
+LLM_STREAM_MIN = max(2, int(os.environ.get("INTERP_LLM_STREAM_MIN", "6")))   # 首段最短(CJK字/西文词)
+# F 填充音垫场：定稿后超过 FILLER_AFTER_MS 仍无音频可播(翻译/TTS 慢)→ 用克隆音色的
+#   气口("嗯…"/"Okay, so...")垫住空白,对方不觉得"断线了"。素材开播时后台自动用当前
+#   音色生成一次(data/fillers/<角色>/<语>/),之后离线复用。仅通话模式(直播口型垫场会音画错位)。
+FILLER_ON        = os.environ.get("INTERP_FILLER", "1") == "1"
+FILLER_AFTER_MS  = max(300, int(os.environ.get("INTERP_FILLER_AFTER_MS", "900")))
+FILLER_MIN_GAP_S = float(os.environ.get("INTERP_FILLER_MIN_GAP_S", "6"))     # 两次垫场最小间隔(防口头禅刷屏感)
+# L Language Pack：data/langpacks/<语>.json 热加载(mtime 变更即生效),把「地域口语风格/
+#   常用语气词/禁忌词」注入 LLM 翻译 system prompt——文化适配不训模型、按国家热插拔。
+#   无文件=零行为变化；日语关东口语化保持内置(langpack 是其泛化,可覆盖追加)。
+LANGPACK_ON = os.environ.get("INTERP_LANGPACK", "1") == "1"
+
+# ══════════ P2-R 韵律规划 v0(Dialogue Planner 雏形, 2026-07-16) ══════════
+# D1 句间呼吸间隙：播放积压时(上句音频还没播完就来了下句)在新句音频前垫一小段静音——
+#   句句无缝相撞的"机关枪感"变成真人换气节奏。队列为空=对方正在等声音,不加任何延迟。
+SENT_GAP_MS = max(0, int(os.environ.get("INTERP_SENT_GAP_MS", "160")))
+# D2 口语韵律标点：LLM 翻译按"朗读节奏"打标点(换气逗号/犹豫省略号/长句拆两短句)。
+#   TTS 韵律天然跟随标点 → 零解析零延迟的停顿规划;不靠中途插标记(7b 解析不可靠)。
+PROSODY_PUNCT = os.environ.get("INTERP_PROSODY_PUNCT", "1") == "1"
+
+# ══════════ P3-R 直播翻译预取 + 接话规划(2026-07-16) ══════════
+# L 直播翻译预取：直播口型链路复用 P0 语义块机制但"只译不配"——说话期间子句就位即翻译
+#   (走同一 pool_a 串行,不与口型生成抢档期),定稿时译文已基本就绪(NMT 等待≈0)。
+#   口型仍整句一次触发(最敏感链路不动);无提前音频=无音画风险,预取错了只是白付几次块翻译。
+LIVE_PREFETCH_ON = os.environ.get("INTERP_LIVE_PREFETCH", "1") == "1"
+# T 接话礼让(Dialogue Planner v1a)：对方"刚开口"(<1.5s)时我方新句正要出声 → 句首礼让
+#   最多 TURN_HOLD_MS,对方一停顿立即开播——消掉"双方同时开口"的抢话感。只挡句首不断句中;
+#   对方长篇讲话中不礼让(同传本来就该压话说)。0=关。仅通话模式。
+TURN_HOLD_MS = max(0, int(os.environ.get("INTERP_TURN_HOLD_MS", "600")))
+# B 倾听附和(Dialogue Planner v1b)：对方说了长句、之后 3s 我方没接话 → 克隆音轻附和一声
+#   ("Mm-hm."/"はい。")——对方知道你在听没掉线。素材与垫场气口同库(bc 前缀),开播自动生成;
+#   30s 防抖防"应声虫"。仅通话模式。
+BACKCHANNEL_ON   = os.environ.get("INTERP_BACKCHANNEL", "1") == "1"
+BC_MIN_GAP_S     = float(os.environ.get("INTERP_BC_MIN_GAP_S", "30"))
+BC_MIN_SRC_CHARS = int(os.environ.get("INTERP_BC_MIN_SRC_CHARS", "12"))   # 对方句短于此不附和(寒暄不用嗯嗯)
 
 # ══════════ P0-S2S 云端语音到语音同传后端(可插拔，默认关闭) ══════════
 #   竞争力动机：端到端 S2S(字节 Seed LiveInterpret 2.0 一类)延迟 ~2.2s，对本地级联
@@ -2047,6 +2139,10 @@ def _put_block(q, d: np.ndarray, dev_ch: int, fin_ms: int, fout_ms: int, dev_sr:
         return False
     if ST.muted:                           # 急停中:新块直接丢弃(含正在合成的后续块)
         return False
+    # P0-R3 首音埋点：本句第一块进主播放队列的时刻(≈对方开始听到的时刻,误差=队列前积压)。
+    # 句首由 _stream_final_a/_process_a/块配音任务清零；pool_a 串行 → 无竞态。
+    if q is ST.play_q and getattr(ST, "_tts_first_ts", 0.0) == 0.0:
+        ST._tts_first_ts = time.time()
     d = _edge_fade(d.copy(), dev_sr, fin_ms=fin_ms, fout_ms=fout_ms)
     if TTS_OUT_GAIN != 1.0:
         d = (d * TTS_OUT_GAIN).astype(np.float32)
@@ -2101,7 +2197,7 @@ def _enqueue_synth_stream(en: str, q, dev_sr: int, dev_ch: int, base_url: str = 
     elif ST.voice_b64:
         payload["reference_audio_b64"] = ST.voice_b64
         payload["reference_text"] = ST.ref_text
-    r = requests.post(f"{bu}/v1/tts/clone/stream", json=payload, stream=True, timeout=120)
+    r = _HTTP_POOL.post(f"{bu}/v1/tts/clone/stream", json=payload, stream=True, timeout=120)
     r.raise_for_status()
     sr = int(r.headers.get("X-Sample-Rate", "44100"))
     # 首段立即入队(淡入、无尾淡)→ 尽快出声；其后段用单段前瞻，只给真末段淡出。
@@ -2190,6 +2286,22 @@ def _laugh_clip(profile: str) -> bytes:
         return b""
 
 
+def _sent_gap():
+    """P2-D1 句间呼吸间隙：仅当播放队列有积压时,在新句音频前垫 SENT_GAP_MS 静音。
+    队列空=对方在等声,零延迟原则不垫；静音块不算首音(埋点时戳垫后还原)。pool_a 串行无竞态。"""
+    q = ST.play_q
+    if not SENT_GAP_MS or q is None or q.qsize() == 0 or ST.muted:
+        return
+    try:
+        prev = getattr(ST, "_tts_first_ts", 0.0)
+        d = np.zeros(int(ST.play_sr * SENT_GAP_MS / 1000.0), dtype=np.float32)
+        _put_block(q, d, ST.play_ch, dev_sr=ST.play_sr)
+        if prev == 0.0:
+            ST._tts_first_ts = 0.0             # 呼吸静音不是"出声":首音时戳留给真语音块
+    except Exception:
+        pass
+
+
 def _enqueue_synth(en: str, emotion: str = "", laugh: bool = False, style_weight: float = 0.0):
     """整句流式合成 → 适配设备格式 → 按序推入全局播放队列(满则阻塞=背压，控制超前量)。
     不阻塞等播完：推完即返回 → 上层可立刻处理下一段(其合成与本段播放重叠)。
@@ -2253,6 +2365,216 @@ def _enqueue_synth(en: str, emotion: str = "", laugh: bool = False, style_weight
             logger.exception("分块配音合成/入队失败")
 
 
+# ── P1-F 填充音垫场：克隆音色的"气口"盖住翻译/TTS 空窗 ─────────────────────
+# 真人同传在组织语言时会发"嗯…/Okay, so..."的气口,对方由此知道"线路没断、马上有话"。
+# 定稿后超 FILLER_AFTER_MS 仍无本句音频且播放队列已空 → 播一段预生成的克隆音气口。
+# 素材:data/fillers/<角色>/<语>/fNN.wav。开播时若缺,后台用当前音色自动生成一次(离线复用);
+# 生成失败=静默无垫场(功能可缺,不可碍事)。仅通话模式(直播垫场音与口型必然错位)。
+_FILLER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "fillers")
+_FILLER_PHRASES = {
+    "en": ["Um...", "Okay, so...", "Well...", "Right..."],
+    "ja": ["えっと…", "そうですね…", "うーん…"],
+    "zh": ["嗯……", "那个……", "好……"],
+    "ko": ["음…", "그러니까…", "네…"],
+    "ru": ["Ну…", "Так…", "Хм…"],
+    "es": ["Eh...", "Bueno...", "A ver..."],
+}
+# P3-B 附和语(对方长句后的"我在听"信号)：短、轻、不含实义,防跟正片抢语义。
+_BC_PHRASES = {
+    "en": ["Mm-hm.", "Right.", "Okay."],
+    "ja": ["うんうん。", "はい。", "なるほど。"],
+    "zh": ["嗯嗯。", "好的。", "对。"],
+    "ko": ["네.", "그렇군요."],
+    "ru": ["Ага.", "Да-да."],
+    "es": ["Ajá.", "Claro."],
+}
+_filler_state = {"last": 0.0, "bc_last": 0.0, "cache": {}, "gen_key": "", "rr": 0}
+_filler_lock = threading.Lock()
+
+
+def _filler_phrases(lang: str, cat: str = "f") -> list:
+    tbl = _BC_PHRASES if cat == "bc" else _FILLER_PHRASES
+    dflt = ["Mm-hm."] if cat == "bc" else ["Mm...", "Okay..."]
+    return tbl.get((lang or "").split("-")[0].lower(), dflt)
+
+
+def _filler_clips(cat: str = "f") -> list:
+    """当前(角色,目标语,类别)的素材 wav 字节列表(内存缓存)。cat: f=垫场气口 bc=附和。
+    文件名 bc* 归附和,其余(含用户手放的任意名)归气口。无素材返回 []。"""
+    key = f"{getattr(ST, 'profile', '')}|{(_DST_LANG or '').lower()}|{cat}"
+    with _filler_lock:
+        if key in _filler_state["cache"]:
+            return _filler_state["cache"][key]
+    clips = []
+    try:
+        d = os.path.join(_FILLER_DIR, getattr(ST, "profile", "") or "_default",
+                         (_DST_LANG or "en").split("-")[0].lower())
+        if os.path.isdir(d):
+            for f in sorted(os.listdir(d)):
+                if not f.lower().endswith(".wav"):
+                    continue
+                if (cat == "bc") != f.lower().startswith("bc"):
+                    continue
+                with open(os.path.join(d, f), "rb") as fh:
+                    clips.append(fh.read())
+    except Exception:
+        clips = []
+    with _filler_lock:
+        _filler_state["cache"][key] = clips
+    return clips
+
+
+def _filler_prepare_kick():
+    """开播后台补齐气口素材：该(角色,语)目录为空且当前音色可合成 → 逐条 TTS 生成落盘。
+    与 LLM/参考音预热错峰(延迟 6s),best-effort,失败静默(垫场自动缺席)。"""
+    if not (FILLER_ON and not ST.live_mode and _voice_ready()):
+        return
+    prof = getattr(ST, "profile", "") or "_default"
+    lang = (_DST_LANG or "en").split("-")[0].lower()
+    gen_key = f"{prof}|{lang}"
+    with _filler_lock:
+        if _filler_state["gen_key"] == gen_key:      # 本进程已试过(成败皆不重试,防每次开播都打 TTS)
+            return
+        _filler_state["gen_key"] = gen_key
+
+    def _job():
+        try:
+            time.sleep(6.0)
+            d = os.path.join(_FILLER_DIR, prof, lang)
+            wavs = ([f.lower() for f in os.listdir(d) if f.lower().endswith(".wav")]
+                    if os.path.isdir(d) else [])
+            batches = []                             # 分类补缺:老目录只有气口时也能补上附和素材
+            if not any(not f.startswith("bc") for f in wavs):
+                batches.append(("f", _filler_phrases(lang)))
+            if BACKCHANNEL_ON and not any(f.startswith("bc") for f in wavs):
+                batches.append(("bc", _filler_phrases(lang, "bc")))
+            if not batches or not (ST.running and _voice_ready()):
+                return
+            os.makedirs(d, exist_ok=True)
+            n = 0
+            for pre, phrases in batches:
+                for i, p in enumerate(phrases):
+                    try:
+                        b64 = _synth_en(p)
+                        raw = base64.b64decode(b64) if b64 else b""
+                        if len(raw) > 44:
+                            with open(os.path.join(d, f"{pre}{i:02d}.wav"), "wb") as fh:
+                                fh.write(raw)
+                            n += 1
+                    except Exception:
+                        continue
+            if n:
+                with _filler_lock:                   # 使缓存失效,下次取即加载新素材
+                    _filler_state["cache"] = {}
+                logger.info(f"[垫场] 气口/附和素材已生成 {n} 条({prof}/{lang})")
+        except Exception:
+            pass
+    threading.Thread(target=_job, name="filler-prep", daemon=True).start()
+
+
+def _filler_arm():
+    """定稿进翻译前武装一次垫场检查：FILLER_AFTER_MS 后若本句仍未出声且无积压在播 → 播气口。
+    竞态窗口仅"查后入队"数毫秒,最坏也只是气口紧贴正片,听感自然。"""
+    if not (FILLER_ON and ST.running and not ST.live_mode and ST.play_q is not None):
+        return
+
+    def _job():
+        try:
+            time.sleep(FILLER_AFTER_MS / 1000.0)
+            q = ST.play_q
+            if q is None or not ST.running or getattr(ST, "muted", False):
+                return
+            if getattr(ST, "_tts_first_ts", 0.0):    # 本句已出声
+                return
+            if q.qsize() > 0:                        # 上句音频还在排队,对方耳中不缺声
+                return
+            now = time.time()
+            if now - getattr(ST, "_b_voice_ts", 0.0) < 0.6:
+                return                               # P3-T 对方正在说话:此刻垫"嗯…"像打断,不垫
+            with _filler_lock:
+                if now - _filler_state["last"] < FILLER_MIN_GAP_S:
+                    return
+                _filler_state["last"] = now
+                _filler_state["rr"] += 1
+                rr = _filler_state["rr"]
+            clips = _filler_clips()
+            if not clips:
+                return
+            _enqueue_wav(clips[rr % len(clips)])
+            ST.llms_stats["filler"] += 1
+            logger.info(f"[垫场] 本句 {FILLER_AFTER_MS}ms 未出声,已播气口垫场")
+        except Exception:
+            pass
+    threading.Thread(target=_job, name="filler", daemon=True).start()
+
+
+# ── P3-T/B 接话规划(Dialogue Planner v1)：说话时戳/句首礼让/倾听附和 ─────────
+def _note_voice(direction: str):
+    """登记双方语音活跃时戳(流式 partial/分段有效语音都算)。b 侧另记"开口时刻"
+    (静默 >1s 后再活跃=新一轮开口),供礼让判断"刚开口"还是"长篇讲话中"。"""
+    now = time.time()
+    if direction == "b":
+        if now - getattr(ST, "_b_voice_ts", 0.0) > 1.0:
+            ST._b_voice_start = now
+        ST._b_voice_ts = now
+    else:
+        ST._a_voice_ts = now
+
+
+def _turn_hold():
+    """P3-T 句首礼让：对方刚开口(<1.5s)时我方新句最多等 TURN_HOLD_MS,对方一停顿
+    (0.35s 无新活跃)立即开播。对方长篇讲话中不等(同传本来就压话说);仅通话、仅句首。"""
+    if not TURN_HOLD_MS or ST.live_mode:
+        return
+    deadline = time.time() + TURN_HOLD_MS / 1000.0
+    held = False
+    while time.time() < deadline:
+        now = time.time()
+        if now - getattr(ST, "_b_voice_ts", 0.0) > 0.35:
+            break                                    # 对方停了(或本来就没说话)
+        if now - getattr(ST, "_b_voice_start", 0.0) > 1.5:
+            break                                    # 对方长篇讲话中:不无限礼让
+        held = True
+        time.sleep(0.06)
+    if held:
+        ST.llms_stats["hold"] = ST.llms_stats.get("hold", 0) + 1
+
+
+def _backchannel_kick(other_text: str):
+    """P3-B 倾听附和：对方长句定稿 3s 后我方仍无动静(没说话/没音频在播) → 克隆音轻附和。
+    30s 防抖;素材缺失/直播模式=空操作。"""
+    if not (BACKCHANNEL_ON and FILLER_ON and ST.running
+            and not ST.live_mode and ST.play_q is not None):
+        return
+    if len(_flat_text(other_text or "")) < BC_MIN_SRC_CHARS:
+        return
+
+    def _job():
+        try:
+            time.sleep(3.0)
+            q = ST.play_q
+            if q is None or not ST.running or getattr(ST, "muted", False):
+                return
+            now = time.time()
+            if now - getattr(ST, "_a_voice_ts", 0.0) < 3.0:
+                return                               # 我已在接话(译文马上到,不用嗯嗯)
+            if q.qsize() > 0:
+                return                               # 有音频在排队=我方声音已在路上
+            with _filler_lock:
+                if now - _filler_state["bc_last"] < BC_MIN_GAP_S:
+                    return
+                _filler_state["bc_last"] = now
+            clips = _filler_clips("bc")
+            if not clips:
+                return
+            _enqueue_wav(clips[int(now) % len(clips)])
+            ST.llms_stats["bc"] = ST.llms_stats.get("bc", 0) + 1
+            logger.info("[附和] 对方长句后我方静默,已轻附和(我在听)")
+        except Exception:
+            pass
+    threading.Thread(target=_job, name="backchannel", daemon=True).start()
+
+
 # ── 引擎状态 ──────────────────────────────────────────────────────────
 class State:
     def __init__(self):
@@ -2265,6 +2587,18 @@ class State:
         # 流式观测:逐词数/定稿数/GPU让位次数(方向A口型独占)/partial 时戳(算实时速率)
         self.stream_stats = {"part_a": 0, "part_b": 0, "fin_a": 0, "fin_b": 0,
                              "yields": 0, "part_ts": deque(maxlen=80)}
+        # P0-R3 首音埋点:本句首块音频进播放队列的时刻(0=未出声)。pool_a 串行保证无竞态。
+        self._tts_first_ts = 0.0
+        # P0-R1 语义块流式配音观测:committed=提前配音块数 tail=定稿尾段补配数
+        # blocked=预检未过退回整句数 mismatch=定稿与已配前缀对不上数(只丢尾段,不重播)
+        self.chunk_stats = {"committed": 0, "tail": 0, "blocked": 0, "mismatch": 0, "prefetch": 0}
+        # P1 观测:used=走流式翻译句数 segs=流式出声段数 bail=段健全闸拒绝数 filler=垫场次数
+        # P3 追加:hold=句首礼让次数 bc=倾听附和次数(键按需增,报告用 get 兜底)
+        self.llms_stats = {"used": 0, "segs": 0, "bail": 0, "filler": 0}
+        # P3-T/B 双方语音活跃时戳(礼让/附和/垫场判据):a=我 b=对方 b_start=对方本轮开口时刻
+        self._a_voice_ts = 0.0
+        self._b_voice_ts = 0.0
+        self._b_voice_start = 0.0
         self.asr_unloaded = False  # 流式下 Whisper 是否已卸载(显存优化生效标志)
         # B-5 当前 ASR 引擎路由真相 {engine,label,why}：/start 时定格,经 /metrics 常驻显示在
         # 本页顶栏+Hub 观测条——弱语种自动回退不再只是开播瞬间闪过的一条事件,整场可见用的是哪个引擎、为什么。
@@ -2366,6 +2700,7 @@ class State:
         self.s2s_on = False
         self.s2s_sink = None       # 云同传汇(供 /config/s2s 中途刷新术语表)
         self.s2s_state = {}
+        self.stream_sink_a = None  # P0-R1 方向A流式采集汇(块提交前 peek 当前句音频做门控/声纹预检)
 
     def set_degraded(self, flag: bool) -> bool:
         """切换降级态并累计统计;返回是否发生状态变化(供调用方决定是否告警)。"""
@@ -2664,7 +2999,7 @@ def _ger_llm_fix(text: str, hyp2: str, lang: str, context: str = "") -> str:
     user = ((f"previous sentence (context only, do NOT output it): {context}\n" if context else "")
             + f"hypothesis 1: {text}" + (f"\nhypothesis 2: {hyp2}" if hyp2 else ""))
     try:
-        r = requests.post(f"{_LLM_URL}/api/chat", json={
+        r = _HTTP_POOL.post(f"{_LLM_URL}/api/chat", json={
             "model": _GER_MODEL or _LLM_MODEL,
             "messages": [{"role": "system", "content": sys_prompt},
                          {"role": "user", "content": user}],
@@ -3096,7 +3431,10 @@ def _ger_review(direction, uid, tid, text, audio, suspect, reason, t0):
                     f"({time.time()-t0:.1f}s): {text!r} -> {cand!r}")
         if direction == "a":
             ST.push_event({"uid": uid, "turn": tid, "who": who, "src": cand, "zh": cand, "ger": True})
-            ST.push_event({"uid": uid, "turn": tid, "who": who, "dst": trans, "en": trans, "ger": True})
+            if not SUBS_MATCH_AUDIO:
+                # P0-R4 音画字一致：配音已按旧译文播出,译文字幕不再事后替换(源文纠错照常上屏);
+                # 纠错译文仍进转写留存(导出质量不降)。
+                ST.push_event({"uid": uid, "turn": tid, "who": who, "dst": trans, "en": trans, "ger": True})
         else:
             ST.push_event({"uid": uid, "turn": tid, "who": who, "src": cand, "en": cand, "ger": True})
             ST.push_event({"uid": uid, "turn": tid, "who": who, "dst": trans, "zh": trans, "ger": True})
@@ -3470,8 +3808,68 @@ def _is_mt_model(model: str) -> bool:
     return "hy-mt" in m or "hunyuan-mt" in m
 
 
-def _llm_req_body(model: str, text: str, src: str, dest: str) -> dict:
-    """按模型族拼 /api/chat 请求体。"""
+# ── P1-L Language Pack：按目标语热插拔的文化/风格包 ──────────────────────────
+# data/langpacks/<语>.json，字段全部可选：
+#   style      : str  地域口语风格描述(英文写,直接进 system prompt,如美式直播腔/英式克制)
+#   tone_words : list 常用语气词/口头表达(提示模型自然使用,不强塞)
+#   taboo      : list 禁忌词(要求译文绝不出现)
+#   terms      : dict 领域说法偏好 {"性价比":"bang for the buck"}(轻量版术语,重型仍走 glossary)
+# mtime 变更即热加载(与术语表同机制),无文件=零注入零行为变化。区域码回退主语言(en-US→en)。
+_LANGPACK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "langpacks")
+_langpack_cache = {}    # lang -> {"mtime": float, "prompt": str}
+_langpack_lock = threading.Lock()
+
+
+def _langpack_prompt(dest: str) -> str:
+    """目标语的 Language Pack → system prompt 追加段；无包/关闭返回空串。"""
+    if not LANGPACK_ON:
+        return ""
+    d = (dest or "").lower()
+    for lang in (d, d.split("-")[0]):
+        path = os.path.join(_LANGPACK_DIR, f"{lang}.json")
+        try:
+            mtime = os.stat(path).st_mtime
+        except OSError:
+            continue
+        with _langpack_lock:
+            ent = _langpack_cache.get(lang)
+            if ent and ent["mtime"] == mtime:
+                return ent["prompt"]
+        try:
+            with open(path, encoding="utf-8") as f:
+                pk = json.load(f)
+            parts = []
+            style = str(pk.get("style", "")).strip()
+            if style:
+                parts.append(f" Regional style guide: {style}")
+            tw = [str(w).strip() for w in (pk.get("tone_words") or []) if str(w).strip()]
+            if tw:
+                parts.append(" Where it sounds natural, you may use local expressions such as: "
+                             + ", ".join(tw[:12]) + ". Never force them into every sentence.")
+            tb = [str(w).strip() for w in (pk.get("taboo") or []) if str(w).strip()]
+            if tb:
+                parts.append(" NEVER use these words or phrases: " + ", ".join(tb[:20]) + ".")
+            terms = pk.get("terms") or {}
+            if isinstance(terms, dict) and terms:
+                kv = "; ".join(f"{k} -> {v}" for k, v in list(terms.items())[:15])
+                parts.append(f" Preferred renderings: {kv}.")
+            prompt = "".join(parts)[:900]      # 封顶:再长挤占 num_ctx 且拖慢首 token
+        except Exception as e:
+            logger.warning(f"LanguagePack 读取失败({path})：{e}；本次忽略")
+            prompt = ""
+        with _langpack_lock:
+            _langpack_cache[lang] = {"mtime": mtime, "prompt": prompt}
+        if prompt:
+            logger.info(f"LanguagePack 已加载：{lang} ({len(prompt)} 字符)")
+        return prompt
+    return ""
+
+
+def _llm_req_body(model: str, text: str, src: str, dest: str, ctx: list = None) -> dict:
+    """按模型族拼 /api/chat 请求体。ctx=[(源文,译文),...] 滚动语境(P0-R2)——
+    以 few-shot user/assistant 消息对注入(比塞进 system 文本更贴 chat 模型的注意力习惯,
+    且模型天然只输出"最后一句"的译文,不会把语境句复述出来)。MT 特化模型(Hy-MT)吃固定
+    指令模板,不注语境(官方模板外的内容会劣化其输出)。"""
     if _is_mt_model(model):
         if src.startswith("zh") or dest.startswith("zh") or src == "yue" or dest == "yue":
             tgt = _LANG_NAMES_ZH.get(dest, _LANG_NAMES.get(dest, dest))
@@ -3493,6 +3891,28 @@ def _llm_req_body(model: str, text: str, src: str, dest: str) -> dict:
         f"Preserve the meaning, tone and named entities, and produce natural spoken-style {dl}. "
         f"Keep any placeholder tokens shaped like Z1Q or Z2Q exactly unchanged."
     )
+    if ctx:
+        # P0-R2 语境指令：告知前文仅供指代/术语一致,只译最后一句(few-shot 对在下方注入)
+        sys_prompt += (
+            " Earlier sentences from this conversation are provided as context; use them to resolve "
+            "pronouns and keep terminology consistent, but translate ONLY the latest user message."
+        )
+    if LLM_EMO_TAG:
+        # P0-R2b 情绪标签：同一次调用顺带产出语义级情绪(平叙句不加,解析失败自动回退关键词规则)
+        sys_prompt += (
+            " If (and only if) the sentence carries a strong emotion, append exactly one tag at the very "
+            "end of the line from this set: [emo:excited] [emo:angry] [emo:sad] [emo:surprised] "
+            "[emo:happy]. Neutral sentences get no tag."
+        )
+    if PROSODY_PUNCT:
+        # P2-D2 韵律标点：TTS 停顿/节奏天然跟随标点——让 LLM 按"朗读节奏"断句,
+        # 零解析零延迟实现停顿规划(不用句中控制标记,7b 解析不可靠)。
+        sys_prompt += (
+            " Punctuate for natural SPEECH rhythm, since the translation will be read aloud: put a comma "
+            "where a speaker would take a quick breath, and prefer splitting one long sentence into two "
+            "short spoken sentences. If the source clearly hesitates, one ellipsis (…) may mark the pause. "
+            "Do not overuse commas or ellipses."
+        )
     if (dest or "").lower().startswith("ja"):
         # P5c 关东口语化：贴情绪、适度语气词。禁止罗马字/中文残留(7b 偶发混稿,配 _llm_out_sane 双保险)。
         # P7 加强：随意语境偏关东日常口语(じゃん/だよね/かも/マジで)；情绪句要"演出来"不许平。
@@ -3505,9 +3925,14 @@ def _llm_req_body(model: str, text: str, src: str, dest: str) -> dict:
             "sparingly in neutral sentences. Never output romaji, Chinese characters-only sentences, or "
             "English words unless they are proper nouns."
         )
+    sys_prompt += _langpack_prompt(dest)       # P1-L 文化包(无文件=空串,零开销)
+    msgs = [{"role": "system", "content": sys_prompt}]
+    for (c_src, c_dst) in (ctx or []):
+        msgs.append({"role": "user", "content": c_src})
+        msgs.append({"role": "assistant", "content": c_dst})
+    msgs.append({"role": "user", "content": text})
     return {"model": model,
-            "messages": [{"role": "system", "content": sys_prompt},
-                         {"role": "user", "content": text}],
+            "messages": msgs,
             "stream": False,
             "think": False,                        # 关掉 Qwen3 思考链(否则污染译文+爆时延)；旧版 ollama 会忽略此字段
             "keep_alive": _LLM_KEEP,
@@ -3549,24 +3974,95 @@ def _llm_out_sane(out: str, dest: str, src_text: str = None) -> bool:
     return True
 
 
-def _translate_llm(text: str, src: str, dest: str) -> str:
+# ── P0-R2 翻译滚动语境：最近 N 句(源文,译文)按语向留存,注入 LLM 翻译的 few-shot 消息对 ──
+#   收益：跨句指代消解(「它支持快充」的「它」=上句的商品)、术语/称谓跨句一致、
+#   语义块分块翻译(P0-R1)的块间连贯。只喂 LLM 译路(NMT/Google 无上下文接口,行为不变)。
+#   上下文按 (src,dest) 语向分桶——方向A/B、chunk/final 各自命中自己的语境,互不污染。
+_mt_ctx_lock = threading.Lock()
+_mt_ctx = {}                     # (src,dest) -> deque[(src_text, dst_text, ts)]
+# 指代词粗判(zh/en/ja/ko)：句含指代 → 翻译缓存键附语境签名(同句不同语境不共享缓存)。
+_CTX_ANAPHORA_RE = _re.compile(
+    r"它|他们|她们|它们|这个|那个|这款|那款|这些|那些|这东西|那东西|其中|该产品"
+    r"|それ|これ|あれ|こちら|そちら|彼女|彼ら"
+    r"|그것|이것|저것"
+    r"|\b(?:it|its|they|them|their|this|that|these|those|he|she|him|her|one)\b", _re.I)
+
+
+def _mt_ctx_note(src: str, dest: str, src_text: str, dst_text: str):
+    """登记一对已完成的(源文,译文)供后续句子当语境。best-effort,关闭时空操作。"""
+    if not MT_CTX_ON or not (src_text or "").strip() or not (dst_text or "").strip():
+        return
+    with _mt_ctx_lock:
+        dq = _mt_ctx.get((src, dest))
+        if dq is None:
+            dq = _mt_ctx[(src, dest)] = deque(maxlen=MT_CTX_N)
+        dq.append(((src_text or "").strip(), (dst_text or "").strip(), time.time()))
+
+
+def _mt_ctx_get(src: str, dest: str) -> list:
+    """取该语向的有效语境对 [(src_text,dst_text),...](过期不取)。"""
+    if not MT_CTX_ON:
+        return []
+    now = time.time()
+    with _mt_ctx_lock:
+        dq = _mt_ctx.get((src, dest)) or ()
+        return [(s, d) for (s, d, ts) in dq if now - ts <= MT_CTX_WINDOW_S]
+
+
+def _mt_ctx_clear():
+    with _mt_ctx_lock:
+        _mt_ctx.clear()
+
+
+# ── P0-R2b LLM 情绪标签直通：翻译 prompt 请求在译文尾追加 [emo:xxx](强情绪句才加)。
+#   _translate_llm 解析后剥离并寄存于"最近情绪槽"(按目标语校验+8s TTL)；
+#   _emo_for_sentence 优先消费——语义级情绪判断,替代纯关键词规则,且零额外 LLM 调用。
+_llm_emo_slot = {"emo": "", "dst": "", "ts": 0.0}
+_llm_emo_lock = threading.Lock()
+_LLM_EMO_RE = _re.compile(r"[\[\(【（]\s*emo\s*[:：]\s*([A-Za-z]+)\s*[\]\)】）]\s*$", _re.I)
+
+
+def _llm_emo_note(emo: str, dst_lang: str):
+    with _llm_emo_lock:
+        _llm_emo_slot.update({"emo": emo, "dst": (dst_lang or "").lower(), "ts": time.time()})
+
+
+def _llm_emo_take(dst_lang: str) -> str:
+    """取走最近 LLM 情绪标签(仅目标语匹配且 8s 内有效;取走即清,防跨句串染)。"""
+    if not LLM_EMO_TAG:
+        return ""
+    with _llm_emo_lock:
+        emo, dst, ts = _llm_emo_slot["emo"], _llm_emo_slot["dst"], _llm_emo_slot["ts"]
+        _llm_emo_slot.update({"emo": "", "dst": "", "ts": 0.0})
+    if emo and dst == (dst_lang or "").lower() and time.time() - ts <= 8.0:
+        return emo if emo in _EMO_LABELS else ""
+    return ""
+
+
+def _translate_llm(text: str, src: str, dest: str, ctx: list = None) -> str:
     """本机 ollama 大模型翻译(同传口吻，只出译文)。不可达/失败→返回 "" 交上层兜底并触发冷却。
     P5c：backend=local(NMT 提速)时，_MT_LLM_LANGS 内的目标语(默认 ja)仍先走 LLM——
-    NMT 书面语在通话里生硬，7b 热态实测 160~190ms 且自带自然语气词。"""
+    NMT 书面语在通话里生硬，7b 热态实测 160~190ms 且自带自然语气词。
+    ctx=[(src_text,dst_text),...] 滚动语境(P0-R2)：注入 few-shot 消息对,指代/术语跨句一致。"""
     global _llm_fail_until
     dest_l = (dest or "").lower()
     allow = _llm_ready() or (dest_l.split("-")[0] in _MT_LLM_LANGS and time.time() >= _llm_fail_until)
     if not allow:
         return ""
     try:
-        r = requests.post(f"{_LLM_URL}/api/chat",
-                          json=_llm_req_body(_LLM_MODEL, text, src, dest),
-                          timeout=_LLM_TIMEOUT)
+        body = _llm_req_body(_LLM_MODEL, text, src, dest, ctx=ctx)
+        r = _HTTP_POOL.post(f"{_LLM_URL}/api/chat", json=body, timeout=_LLM_TIMEOUT)
         r.raise_for_status()
         out = ((r.json().get("message") or {}).get("content") or "")
         out = _THINK_RE.sub("", out)               # 防御式清除 <think>…</think>
         out = " ".join(ln.strip() for ln in out.splitlines() if ln.strip())  # 多行折成一行
         out = out.strip().strip('"').strip("“”").strip()
+        # P0-R2b 先剥情绪尾标签(必须在健全闸之前——CJK 目标语里 '[emo:excited]' 的 ASCII
+        # 词会被 _llm_out_sane 判成凭空英文而误拒整句译文)。
+        m = _LLM_EMO_RE.search(out)
+        if m:
+            out = out[:m.start()].rstrip()
+            _llm_emo_note(m.group(1).lower(), dest)
         if out and not _llm_out_sane(out, dest, src_text=text):
             ST.mt_stats["llm_reject"] = ST.mt_stats.get("llm_reject", 0) + 1
             logger.info(f"[LLM译] 目标语健全闸拒绝({src}->{dest})，回退 NMT: {out[:50]!r}")
@@ -3579,13 +4075,167 @@ def _translate_llm(text: str, src: str, dest: str) -> str:
     return ""
 
 
-def _translate_raw(text: str, src: str, dest: str) -> str:
-    """翻译原语：本机大模型(最优) → STT服务NMT(opus-mt/NLLB) → Google，逐级兜底(永远有译文)。"""
+# ── P1-S 流式 LLM 翻译(边译边配) ────────────────────────────────────────────
+# 非分块句的最后一段串行等待是"整段译文生成"(7b 热态 0.2~0.8s,长句更久)。ollama
+# stream=True 把它拆掉：译文 token 到达子句边界(LLM_STREAM_MIN)立即送 TTS,首段音频
+# 在整句译完前就开播。安全设计(宁可退回也不出错声):
+#   ① 只在「未出声」时允许放弃(返回 None→调用方走旧非流式路径,零重播风险);
+#   ② 每段出声前过 _llm_out_sane 目标语健全闸——首段被拒=整句放弃流式;
+#      后段被拒=丢弃余下,已出声部分作为终稿(音字一致优先);
+#   ③ 强情绪句/术语命中句/缓存命中句不走流式(保情感改道·术语锁定·TM 命中收益);
+#   ④ 段间由 pool_a 串行线程直接顺序 _enqueue_synth → 天然保序。
+
+
+def _llm_stream_disp(parts: list) -> str:
+    """已出声段 → 展示译文(字幕/语境/缓存用)。"""
+    return _join_dst([p for p in parts if p]) if parts else ""
+
+
+def _translate_dub_stream(text: str, src: str, dest: str):
+    """流式 LLM 翻译+边译边配(仅通话配音链路调用)。成功返回完整展示译文(音频已入队/
+    _note_self_output 已逐段登记)；返回 None=本句不适用或未出声即失败(调用方走旧路径)。"""
+    global _llm_fail_until
+    # LLM 可用性与 _translate_llm 同判:auto/llm 后端,或 local 后端但目标语在口语化集合(P5c ja 等)
+    allow = _llm_ready() or ((dest or "").split("-")[0].lower() in _MT_LLM_LANGS
+                             and time.time() >= _llm_fail_until)
+    if not (LLM_STREAM_ON and allow and ST.play_q is not None):
+        return None
+    text = (text or "").strip()
+    if not text or src == dest:
+        return None
+    # 强情绪句不走流式：情感引擎按整句改道(CosyVoice/SBV2 上色),流式逐段出声会失去情感音。
+    try:
+        if EMO_TTS_ON and _emo_detect_text:
+            if _ja_use_sbv2():
+                return None                        # SBV2 语向逐句都上 style,整句保留表现力
+            rule = _emo_detect_text(text)
+            if rule in _EMO_STRONG or _emo_mood() in _EMO_STRONG:
+                return None
+    except Exception:
+        pass
+    global _last_xlate_mono
+    _last_xlate_mono = time.monotonic()
+    ctx = _mt_ctx_get(src, dest)
+    # 缓存命中→不走流式(调用方 _translate_nmt 会秒回);术语命中→不走(占位符还原需整段校验)
+    key = None
+    if _TR_CACHE_ON:
+        _glossary_load()
+        ctx_sig = hash(tuple(ctx)) if (ctx and _CTX_ANAPHORA_RE.search(text)) else 0
+        key = (src, dest, _GLOSSARY_ON, _glossary_cache["ver"], ctx_sig, text)
+        with _tr_cache_lock:
+            if _tr_cache.get(key) is not None:
+                return None
+    try:
+        if _glossary_pre(text, src, dest)[1]:
+            return None
+    except Exception:
+        return None
+    body = _llm_req_body(_LLM_MODEL, text, src, dest, ctx=ctx)
+    body["stream"] = True
+    spoken, buf, done_ok, clean = [], "", False, True
+    r = None
+    try:
+        r = _HTTP_POOL.post(f"{_LLM_URL}/api/chat", json=body, stream=True, timeout=_LLM_TIMEOUT)
+        r.raise_for_status()
+        for line in r.iter_lines():
+            if not line:
+                continue
+            try:
+                j = json.loads(line)
+            except Exception:
+                continue
+            delta = ((j.get("message") or {}).get("content") or "")
+            if delta:
+                buf += delta.replace("\n", " ")
+            if "<think" in buf:                    # 思考链混入(旧版 ollama 忽略 think:False)→ 放弃流式
+                if not spoken:
+                    return None
+                break
+            if j.get("done"):
+                done_ok = True
+                break
+            while True:
+                cut = _chunk_cut(buf, min_len=LLM_STREAM_MIN, force_len=0)
+                if not cut:
+                    break
+                seg, buf = buf[:cut], buf[cut:]
+                if not _llm_stream_speak(spoken, seg, dest, text):
+                    if not spoken:
+                        return None                # 首段即不健全:未出声,整句安全退回
+                    buf, done_ok, clean = "", True, False   # 已出声:丢余下,已播部分为终稿
+                    break
+            if done_ok and not buf:
+                break
+        # 尾段:剥情绪标签(在健全闸前,防 ASCII 标签误伤 CJK 校验)后出声
+        if clean and (done_ok or buf):
+            m = _LLM_EMO_RE.search(buf.rstrip())
+            if m:
+                tag = m.group(1).lower()
+                buf = buf.rstrip()[:m.start()].rstrip()
+                if tag in _EMO_STRONG:
+                    _emo_set_mood(tag, "llm-tag")  # 只刷基调不入本句(本句已按平叙出声)
+            if buf.strip():
+                _llm_stream_speak(spoken, buf, dest, text)
+        if not spoken:
+            return None
+        ST.llms_stats["used"] += 1
+        ST.llms_stats["segs"] += len(spoken)
+        out = _llm_stream_disp(spoken)
+        if key is not None and done_ok and clean and out and out != text:
+            with _tr_cache_lock:                   # 完整+健全才进 TM(半句稿固化会污染缓存)
+                _tr_cache[key] = out
+                _tr_cache.move_to_end(key)
+                while len(_tr_cache) > _TR_CACHE_MAX:
+                    _tr_cache.popitem(last=False)
+        return out
+    except Exception as e:
+        if not spoken:                             # 未出声:交回旧路径(其 LLM 重试自带熔断)
+            logger.info(f"[流译] 失败未出声,退回非流式({src}->{dest}): {e}")
+            return None
+        _llm_fail_until = time.time() + _LLM_COOLDOWN
+        logger.warning(f"[流译] 中途失败,已播 {len(spoken)} 段为终稿({src}->{dest}): {e}")
+        return _llm_stream_disp(spoken)
+    finally:
+        try:
+            if r is not None:
+                r.close()
+        except Exception:
+            pass
+
+
+def _llm_stream_speak(spoken: list, seg: str, dest: str, src_text: str) -> bool:
+    """流式段出声：清洗→健全闸→登记→配音入队。通过返回 True 并记入 spoken。"""
+    s = _THINK_RE.sub("", seg).strip().strip('"').strip("“”").strip()
+    if not spoken:
+        s = s.lstrip('"“” ').strip()
+    if not s or not _flat_text(s):
+        return True                                # 纯标点/空段:跳过不出声,不视为失败
+    if not _llm_out_sane(s, dest, src_text=src_text):
+        ST.mt_stats["llm_reject"] = ST.mt_stats.get("llm_reject", 0) + 1
+        ST.llms_stats["bail"] += 1
+        logger.info(f"[流译] 段健全闸拒绝({dest}): {s[:40]!r}")
+        return False
+    try:
+        if not spoken:
+            _turn_hold()                       # P3-T 对方刚开口→句首礼让
+            _sent_gap()                        # P2-D1 本句首段:积压时垫呼吸间隙
+        _note_self_output(s)
+        _enqueue_synth(s)
+        spoken.append(s)
+        return True
+    except Exception:
+        logger.exception("[流译] 段配音失败,余下退回")
+        return False
+
+
+def _translate_raw(text: str, src: str, dest: str, ctx: list = None) -> str:
+    """翻译原语：本机大模型(最优) → STT服务NMT(opus-mt/NLLB) → Google，逐级兜底(永远有译文)。
+    ctx=滚动语境(P0-R2)只喂 LLM 层；NMT/Google 无上下文接口,兜底行为不变。"""
     text = (text or "").strip()
     if not text:
         return text
     # 1) 本机大模型(方案B 主力；后端=local 或熔断期内则内部直接返回 "" 跳过)
-    out = _translate_llm(text, src, dest)
+    out = _translate_llm(text, src, dest, ctx=ctx)
     if out:
         return out
     # 2) STT 服务内置 NMT(MarianMT/opus-mt、NLLB；~70ms，离线)
@@ -3853,10 +4503,15 @@ def _translate_nmt(text: str, src: str, dest: str) -> str:
         return text
     global _last_xlate_mono
     _last_xlate_mono = time.monotonic()              # 标记翻译活跃,供定时探针避让直播(探针走 _translate_raw,不触此)
+    # P0-R2 滚动语境：取该语向近句对喂 LLM。缓存键仅对「含指代词」的句子附语境签名——
+    # 指代句("它支持快充")在不同语境下译文必须不同,不签名会错误复用旧语境译文；
+    # 非指代句语境只影响风格,复用缓存与旧(无语境)行为等价 → TM 命中率不塌方。
+    ctx = _mt_ctx_get(src, dest)
+    ctx_sig = hash(tuple(ctx)) if (ctx and _CTX_ANAPHORA_RE.search(text)) else 0
     key = None
     if _TR_CACHE_ON and src != dest:                 # 同语向无需缓存(直译才有意义)
         _glossary_load()                             # 刷新 ver(热加载)，保证键含最新词表签名
-        key = (src, dest, _GLOSSARY_ON, _glossary_cache["ver"], text)
+        key = (src, dest, _GLOSSARY_ON, _glossary_cache["ver"], ctx_sig, text)
         with _tr_cache_lock:
             hit = _tr_cache.get(key)
             if hit is not None:
@@ -3871,14 +4526,14 @@ def _translate_nmt(text: str, src: str, dest: str) -> str:
     # 未命中/不缓存 → 正常翻译(术语锁定 + MT + 还原 + 失败回退)
     protected, mapping = _glossary_pre(text, src, dest)
     if not mapping:
-        out = _translate_raw(text, src, dest)
+        out = _translate_raw(text, src, dest, ctx=ctx)
     else:
-        raw = _translate_raw(protected, src, dest)
+        raw = _translate_raw(protected, src, dest, ctx=ctx)
         restored, miss = _glossary_post(raw, mapping)
         _gloss_surv_record(src, dest, len(mapping), miss)   # 在线自检：累计该语向占位真·存活率
         if miss:  # 占位符未 survive MT(被吞/打散)→退回无保护译文，宁可术语未锁也不吐残迹，永不劣于无词表
             logger.warning(f"术语占位 {miss}/{len(mapping)} 处未 survive MT，回退无保护译文({src}->{dest})")
-            out = _translate_raw(text, src, dest)
+            out = _translate_raw(text, src, dest, ctx=ctx)
         else:
             out = restored
     if key is not None and out and out != text:       # 仅缓存"确实翻译了"的结果(防固化失败回显)
@@ -5580,7 +6235,7 @@ def _synth_en(text_en: str, base_url: str = None) -> str:
     last_err = None
     for i, bu in enumerate(urls):
         try:
-            r = requests.post(f"{bu}/v1/tts/clone", json=payload, timeout=120)
+            r = _HTTP_POOL.post(f"{bu}/v1/tts/clone", json=payload, timeout=120)
             r.raise_for_status()
             return r.json().get("audio_base64", "")
         except Exception as e:
@@ -5976,6 +6631,8 @@ def _emit_output_a(en: str, zh: str, uid=None, tid=None) -> dict:
             _live_fallback(en, zh)
     elif ST.play_q is not None:
         try:
+            _turn_hold()                       # P3-T 对方刚开口→句首礼让(最多 TURN_HOLD_MS)
+            _sent_gap()                        # P2-D1 积压时句前垫呼吸间隙(真人换气节奏)
             _enqueue_synth(spoken, emotion=emo, laugh=laugh,   # 合成与播放并行，本段推完即返回
                            style_weight=emo_w)
         except Exception:
@@ -6295,6 +6952,7 @@ def _process_a(mono16k: np.ndarray, skip_spk: bool = False):
             logger.info(f"[声纹锁] 拦截非注册说话人[a]: sim={sim:.3f} < {VOICELOCK_THR}")
             _spk_blocked_note(uid, tid, "", mono16k, sim)   # P-Affirm 留证+灰行(可一键放行)
             return
+    _note_voice("a")                       # P3 我方语音活跃时戳(附和判据:我在说就别嗯嗯)
     _emo_note_audio(mono16k)               # P1 情感:登记本句原声响度(基调佐证)
     _pros_note(mono16k)                    # P9.1 韵律跟随:音高摆幅/响度(zh 未知,语速跳过)
     mono16k = _denoise16k(mono16k, "a")    # P1-3 送 STT 前洗掉稳态噪声(识别更准)
@@ -6340,18 +6998,35 @@ def _process_a(mono16k: np.ndarray, skip_spk: bool = False):
         _voicelock_autoenroll(mono16k)       # 过全部门控的真话 → 累积自动注册(已注册则空操作)
         zh = _collapse_repeats(zh)           # 复读折叠:同一句话绝不配音两遍
         ST.push_event({"uid": uid, "turn": tid, "who": "me", "zh": zh})   # 原文先到(确认)
-        en = _collapse_repeats(_translate_nmt(zh, _SRC_LANG, _DST_LANG)); t_nmt = time.time()
+        ST._tts_first_ts = 0.0               # P0-R3 本句首音时戳起点(译前置零:流式路径译中即出声)
+        _filler_arm()                        # P1-F 超时未出声→垫场气口
+        en = None
+        if not ST.live_mode:                 # P1-S 流式 LLM 边译边配(仅通话;不适用返回 None)
+            en = _translate_dub_stream(zh, _SRC_LANG, _DST_LANG)
+        _streamed = en is not None
+        if en is None:
+            en = _collapse_repeats(_translate_nmt(zh, _SRC_LANG, _DST_LANG))
+        t_nmt = time.time()
         ST.push_event({"uid": uid, "turn": tid, "who": "me", "en": en,
                        "ms": int((time.time() - t0) * 1000)})
+        _mt_ctx_note(_SRC_LANG, _DST_LANG, zh, en)   # P0-R2 滚动语境(分段模式同样受益)
         ST.record_turn_src(tid, "me", _SRC_LANG, zh)
         ST.record_transcript("me", zh, en, tid)
     ST.stats["a"] += 1
     # 输出分支(共用):直播→数字人口型(OBS虚拟摄像头);通话→克隆配音推VB-Cable。
     t_syn0 = time.time()
-    av = _emit_output_a(en, zh if ST.mode != "whisper" else "", uid=uid, tid=tid)
+    if ST.mode == "whisper":
+        _streamed = False
+        ST._tts_first_ts = 0.0             # P0-R3 本句首音时戳起点(whisper 分支在此置零)
+    av = {} if _streamed else _emit_output_a(en, zh if ST.mode != "whisper" else "", uid=uid, tid=tid)
     m = {"dir": "a", "asr_ms": int((t_asr - t0) * 1000),
          "nmt_ms": int((t_nmt - t_asr) * 1000),
          "backlog": (ST.play_q.qsize() if ST.play_q else 0), "ts": time.time()}
+    _ft = getattr(ST, "_tts_first_ts", 0.0)
+    if _ft:                                # 首音延迟:段起点→首块入播放队列
+        m["tts_first_ms"] = int((_ft - t0) * 1000)
+    if _streamed:
+        m["llm_stream"] = 1
     if av:
         m.update(av)
     else:
@@ -6412,6 +7087,7 @@ def _process_b(mono16k: np.ndarray):
         ST.dropped += 1; ST.drops["echo"] += 1
         logger.info("[回声闸] 丢弃与耳返/朗读外放重叠的对方段(防自激)")
         return
+    _note_voice("b")                       # P3 对方语音活跃时戳(礼让/附和/垫场判据)
     mono16k = _denoise16k(mono16k, "b")    # P1-3 对方通道同样先洗噪(通话压缩伪影多,收益更大)
     # en/zh 变量名沿用历史；语义为 en=对方原文(DST 语言)、zh=译文(SRC 语言)，字段位置不变
     en, meta = _stt(mono16k, _DST_LANG, task="transcribe", return_meta=True,
@@ -6431,10 +7107,12 @@ def _process_b(mono16k: np.ndarray):
     zh = _collapse_repeats(_translate_nmt(en, _DST_LANG, _SRC_LANG)); t_nmt = time.time()
     ST.push_event({"uid": uid, "turn": tid, "who": "other", "zh": zh,
                    "ms": int((time.time() - t0) * 1000)})
+    _mt_ctx_note(_DST_LANG, _SRC_LANG, en, zh)   # P0-R2 滚动语境(对方向独立分桶)
     ST.record_turn_src(tid, "other", _DST_LANG, en)
     ST.record_transcript("other", en, zh, tid)
     ST.stats["b"] += 1
     _readback_say(zh)                      # P2-2 对方音色读中文译文(开关关闭时是空操作)
+    _backchannel_kick(en)                  # P3-B 对方长句后我方久无动静→轻附和"我在听"
     if ST.live_mode:
         _sub_debouncer.push("top", en, zh, _sub_ttl_en(en))   # 顶部=对方(防抖)
     ST.add_metric({"dir": "b", "asr_ms": int((t_asr - t0) * 1000),
@@ -6460,11 +7138,18 @@ def _finalizer_worker(stop_evt):
                 if who == "me":                      # 方向A：我方原文(SRC) → 译文(DST)
                     full = _collapse_repeats(_ger_text_polish(full, _SRC_LANG))  # P0-① 修同音字+折叠复读
                     en = _translate_nmt(full, _SRC_LANG, _DST_LANG)
-                    ST.push_event({"finalize": True, "turn": tid, "who": who,
-                                   "src": full, "zh": full, "en": en})
+                    if SUBS_MATCH_AUDIO:
+                        # P0-R4 音画字一致：译文配音已按逐子句版本播出,屏幕/OBS 译文字幕不再
+                        # 被整轮润色稿替换(耳听≠屏读=直播可感知穿帮)。源文润色照常上屏
+                        # (配音念的是译文,改源文无音字冲突)；润色译文仍进转写留存(导出质量不降)。
+                        ST.push_event({"finalize": True, "turn": tid, "who": who,
+                                       "src": full, "zh": full})
+                    else:
+                        ST.push_event({"finalize": True, "turn": tid, "who": who,
+                                       "src": full, "zh": full, "en": en})
+                        if ST.live_mode:
+                            _sub_debouncer.push("bottom", en, full, _sub_ttl_en(en), immediate=True)
                     ST.finalize_transcript(who, tid, full, en)   # 润色终稿回填转写(导出=屏幕稿)
-                    if ST.live_mode:
-                        _sub_debouncer.push("bottom", en, full, _sub_ttl_en(en), immediate=True)
                 else:                                # 方向B：对方原文(DST) → 译文(SRC)
                     full = _collapse_repeats(_ger_text_polish(full, _DST_LANG))
                     zh = _translate_nmt(full, _DST_LANG, _SRC_LANG)
@@ -6504,8 +7189,15 @@ class StreamSink:
         self._gate_lock = threading.Lock()
         self._flush_pending = False            # 已请求强制定稿(避免重复发 eou)
         self._stop = threading.Event()
+        if direction == "a":                   # P0-R1: 语义块提前配音要在 final 前预检当前句音频
+            ST.stream_sink_a = self
         self._th = threading.Thread(target=self._run, daemon=True)
         self._th.start()
+
+    def peek_gate(self):
+        """不清空地取当前句已累积的 16k 音频副本(P0-R1 块提交前的门控/声纹预检用)。"""
+        with self._gate_lock:
+            return np.concatenate(self._gate) if self._gate else np.zeros(0, np.float32)
 
     def feed(self, block: np.ndarray):
         if self._stop.is_set():
@@ -6664,7 +7356,9 @@ class StreamSink:
 
 
 class StreamDispatcher:
-    """每方向一个：维护"当前句"的 uid/turn，partial 逐词刷同一行，final 过门控后分派处理。"""
+    """每方向一个：维护"当前句"的 uid/turn，partial 逐词刷同一行，final 过门控后分派处理。
+    P0-R1(方向A·通话配音)：partial 稳定前缀到达子句边界即提前提交"语义块"翻译+配音,
+    final 只补尾段——长句首音不再等整句说完。直播口型/云S2S/无配音设备时自动关闭。"""
     def __init__(self, direction):
         self.direction = direction
         self.who = "me" if direction == "a" else "other"
@@ -6672,6 +7366,7 @@ class StreamDispatcher:
         self.tid = None
         self._lock = threading.Lock()
         self._last_shown = ""                  # 本句已显示的稳定前缀(wait-k 去重/防回跳用)
+        self._sent = None                      # P0-R1 当前句语义块状态(仅方向A使用)
 
     @staticmethod
     def _waitk_stable(text: str) -> str:
@@ -6694,6 +7389,7 @@ class StreamDispatcher:
         try:                                   # 观测:逐词计数 + 时戳(算实时 partial 速率)
             ST.stream_stats[f"part_{self.direction}"] += 1
             ST.stream_stats["part_ts"].append(time.time())
+            _note_voice(self.direction)       # P3-T 语音活跃时戳(礼让/附和/垫场判据)
         except Exception:
             pass
         shown = self._waitk_stable(text)
@@ -6701,6 +7397,50 @@ class StreamDispatcher:
             return
         self._last_shown = shown
         ST.push_event({"uid": uid, "turn": tid, "who": self.who, "live": shown, "partial": True})
+        if self.direction == "a":
+            try:
+                self._maybe_commit_chunk(uid, tid, shown)   # P0-R1 语义块提前配音(异常绝不影响字幕)
+            except Exception:
+                logger.exception("[语义块] 提交判定异常")
+
+    def _maybe_commit_chunk(self, uid, tid, shown):
+        """P0-R1：稳定前缀出现子句边界且长度达标 → 该块立即送 pool_a 处理。
+        通话配音链路(play_q)：翻译+提前配音；直播口型链路(P3-L)：只译不配(翻译预取,
+        定稿时译文已就绪,口型仍整句触发)。云S2S/开关关闭 → 空操作(整句旧行为)。"""
+        if not CHUNK_DUB_ON or ST.s2s_on:
+            return
+        if ST.live_mode:
+            if not LIVE_PREFETCH_ON:
+                return                          # 直播不预取(旧行为)
+        elif ST.play_q is None:
+            return
+        st = self._sent
+        if st is None or st.get("uid") != uid:
+            st = self._sent = {"uid": uid, "tid": tid, "src_done": "", "src_ok": "",
+                               "dst": [], "blocked": False, "checked": False,
+                               "dub": not ST.live_mode, "t0": time.time()}
+        if st["blocked"]:
+            return
+        if st["src_done"] and not shown.startswith(st["src_done"]):
+            st["blocked"] = True          # partial 回改了已提交区 → 本句停止分块(final 兜底)
+            return
+        rest = shown[len(st["src_done"]):]
+        cut = _chunk_cut(rest)
+        if not cut:
+            return
+        chunk = rest[:cut]
+        st["src_done"] += chunk
+        audio = None
+        try:                              # 当前句已积累音频快照(块预检:门控/声纹,不清缓冲)
+            sink = ST.stream_sink_a
+            if sink is not None:
+                audio = sink.peek_gate()
+        except Exception:
+            audio = None
+        try:
+            ST.pool_a.submit(_stream_chunk_a, st, uid, tid, chunk, audio)
+        except Exception:
+            st["blocked"] = True
 
     def _retract(self, uid, tid):
         ST.push_event({"uid": uid, "turn": tid, "who": self.who, "retract": True})
@@ -6726,10 +7466,19 @@ class StreamDispatcher:
         with self._lock:
             uid, tid = self.uid, self.tid
             self.uid = None; self.tid = None; self._last_shown = ""
+        # P0-R1: 取走本句语义块状态(final 据此只补尾段;已配过音的句子不走存疑改道防重播)
+        # P3-L: 预取句(dub=False)没出过声,存疑改道/重译都安全 → dubbed_ahead 只认真出声的
+        st = self._sent if (self._sent and self._sent.get("uid") == uid) else None
+        self._sent = None
+        dubbed_ahead = bool(st and st.get("dst") and st.get("dub", True))
+        if st:
+            st["blocked"] = True   # 定稿已到:pool 里未执行的块任务不再单独出声,统一并入尾段补配
         if uid is None:
             uid = ST.next_uid(); tid = ST.next_uid()
         text = (text or "").strip()
         if not text:
+            if dubbed_ahead:
+                ST.chunk_stats["mismatch"] += 1
             self._retract(uid, tid); return
         # ── 硬拦截(不进标记制)：回声/连刷——"放行即事故"(自激循环)的类别 ──
         if (self.direction == "b" or _self_echo_risk_a()) and _is_self_echo(text):
@@ -6752,8 +7501,11 @@ class StreamDispatcher:
         if feats is not None and not _segment_is_speech(feats, self.direction):
             msg = (f"rms={feats['rms_dbfs']:.1f} peak={feats['peak_dbfs']:.1f} "
                    f"dyn={feats['dyn_db']:.1f}")
-            if self._mark_suspect(uid, tid, text, audio, "gate", msg):
+            # P0-R1: 已提前配音的句子不走存疑改道——存疑晋升会重新整句配音(同一句话说两遍)
+            if not dubbed_ahead and self._mark_suspect(uid, tid, text, audio, "gate", msg):
                 return
+            if dubbed_ahead:
+                ST.chunk_stats["mismatch"] += 1
             ST.dropped += 1; ST.drops["gate"] += 1
             logger.info(f"[流式门控] 丢弃底噪定稿[{self.direction}]: {text!r} ({msg})")
             self._retract(uid, tid); return
@@ -6763,8 +7515,10 @@ class StreamDispatcher:
             logger.info(f"丢弃{dmsg}")
             self._retract(uid, tid); return
         if dkey:
-            if self._mark_suspect(uid, tid, text, audio, dkey, dmsg):
+            if not dubbed_ahead and self._mark_suspect(uid, tid, text, audio, dkey, dmsg):
                 return
+            if dubbed_ahead:
+                ST.chunk_stats["mismatch"] += 1
             ST.drops["halluc" if dkey == "lang" else dkey] += 1
             logger.info(f"丢弃{dmsg}")
             self._retract(uid, tid); return
@@ -6786,17 +7540,184 @@ class StreamDispatcher:
             ST.stream_stats[f"fin_{self.direction}"] += 1     # 观测:有效定稿计数
         except Exception:
             pass
-        pool = ST.pool_a if self.direction == "a" else ST.pool_b
-        fn = _stream_final_a if self.direction == "a" else _stream_final_b
         try:
-            pool.submit(fn, uid, tid, text, time.time(), audio)
+            if self.direction == "a":
+                # chunk_st 随定稿传入:已配块拼终稿+只补尾段(音字一致,免整句重译/重播)
+                ST.pool_a.submit(_stream_final_a, uid, tid, text, time.time(), audio, False, st)
+            else:
+                ST.pool_b.submit(_stream_final_b, uid, tid, text, time.time(), audio)
         except Exception:
             logger.exception(f"[{self.direction}] 流式分派失败")
 
 
-def _stream_final_a(uid: int, tid: int, zh: str, t0: float, audio=None, ger_reviewed: bool = False):
+# ── P0-R1 语义块流式配音：块切分/预检/提前配音/定稿收尾 ─────────────────────
+def _chunk_cut(rest: str, min_len: int = None, force_len: int = None) -> int:
+    """返回 rest 里可提交为语义块的结尾索引(含标点)；不足返回 0。
+    CJK 标点即边界；西文 ,;:.!? 须后随空格/串尾(防拆小数 3.14)。长度 CJK 按字、西文按词。
+    无标点连续说话时,达 force_len 在最近空格(CJK 直接全量)强制断；force_len=0 禁用强制断。
+    缺省参数=P0-R1 源文分块阈值；P1-S 流式译文切段以更小 min_len 复用同一逻辑。"""
+    t = rest or ""
+    if not t:
+        return 0
+    if min_len is None:
+        min_len = CHUNK_MIN_LEN
+    if force_len is None:
+        force_len = CHUNK_FORCE_LEN
+    cjk = any("\u4e00" <= c <= "\u9fff" for c in t)
+
+    def _tlen(s: str) -> int:
+        return len(_flat_text(s)) if cjk else len(s.split())
+
+    best = 0
+    for i, ch in enumerate(t):
+        if ch in "，、；：。！？…":
+            ok = True
+        elif ch in ",;:.!?":
+            ok = (i + 1 >= len(t)) or t[i + 1] == " "
+        else:
+            continue
+        if ok and _tlen(t[:i]) >= min_len:
+            best = i + 1
+    if best:
+        return best
+    if force_len and _tlen(t) >= force_len:
+        if cjk:
+            return len(t)
+        sp = t.rstrip().rfind(" ")
+        return sp if sp > 0 else 0
+    return 0
+
+
+def _stream_chunk_a(st: dict, uid: int, tid: int, chunk: str, audio):
+    """P0-R1 语义块提前配音(pool_a 串行,与 final 天然保序)：
+    首块预检(能量门控+回声闸+声纹锁,与 final 同源标准) → 翻译(带滚动语境) → 克隆配音。
+    只出声音不动字幕(字幕仍由 partial/final 驱动;final 用已配块拼终稿保音字一致)。
+    任何失败 → blocked(本句余下退回整句路径),已出声块由 src_ok 记账,final 只补真尾段。
+    P3-L st["dub"]=False(直播翻译预取)：只译不配——跳过音频级预检(无提前音频=无风险),
+    译文暂存 dst,final 拼终稿后仍整句驱动口型。"""
+    try:
+        dub = st.get("dub", True)
+        if not ST.running or st.get("blocked") or (dub and ST.play_q is None):
+            return
+        text = (chunk or "").strip()
+        if not _flat_text(text):
+            return
+        if not st.get("checked"):
+            if _self_echo_risk_a() and _is_self_echo(text):
+                st["blocked"] = True; ST.chunk_stats["blocked"] += 1
+                return
+            if dub and audio is not None and getattr(audio, "size", 0) >= int(SR * 0.4):
+                feats = _audio_features(audio)
+                if not _segment_is_speech(feats, "a"):
+                    st["blocked"] = True; ST.chunk_stats["blocked"] += 1
+                    return
+                if _voicelock.ready():
+                    ok_spk, sim = _voicelock.check(audio)
+                    if not ok_spk:
+                        st["blocked"] = True; ST.chunk_stats["blocked"] += 1
+                        logger.info(f"[语义块] 声纹预检未过,本句退回整句(final 再裁): sim={sim:.3f}")
+                        return
+                elif VOICELOCK_ENABLE and VOICELOCK_AUTOENROLL:
+                    st["blocked"] = True   # 声纹底座未建成期不冒险提前出声(建成后自动恢复分块)
+                    return
+            st["checked"] = True
+        zh = _collapse_repeats(text)
+        en = _collapse_repeats(_translate_nmt(zh, _SRC_LANG, _DST_LANG))
+        _llm_emo_take(_DST_LANG)             # 分块句不改道情感引擎:丢弃本块情绪标签(防串染下一句)
+        if not en:
+            st["blocked"] = True
+            return
+        if not dub:                          # P3-L 预取:译文暂存,不出声不登记自播
+            st["dst"].append(en)
+            st["src_ok"] += chunk
+            _mt_ctx_note(_SRC_LANG, _DST_LANG, zh, en)
+            ST.chunk_stats["prefetch"] = ST.chunk_stats.get("prefetch", 0) + 1
+            logger.info(f"[语义块] 直播预取翻译#{len(st['dst'])}: {zh[:24]!r} -> {en[:40]!r}")
+            return
+        if not st["dst"]:
+            ST._tts_first_ts = 0.0           # 本句首块:清首音时戳(P0-R3 埋点起点)
+            _turn_hold()                     # P3-T 对方刚开口→句首礼让
+            _sent_gap()                      # P2-D1 本句首块:积压时垫呼吸间隙
+        st["dst"].append(en)
+        st["src_ok"] += chunk                # 记账用原始块(含边界标点/空格,供 final 前缀对齐)
+        _mt_ctx_note(_SRC_LANG, _DST_LANG, zh, en)   # 块间语境:下一块指代/术语连贯
+        _note_self_output(en)                # 自播文本登记(回声闸按实际播出稿比对)
+        _enqueue_synth(en)                   # 平情绪克隆流式(分块句不改道情感引擎,句内音色一致)
+        ST.chunk_stats["committed"] += 1
+        logger.info(f"[语义块] 提前配音#{len(st['dst'])}: {zh[:24]!r} -> {en[:40]!r}")
+    except Exception:
+        st["blocked"] = True
+        logger.exception("[语义块] 提前配音异常(本句退回整句)")
+
+
+def _tail_after_flat_prefix(full: str, flat_prefix_len: int):
+    """在 full 中找出「规范化后前 flat_prefix_len 个字符」之后的原文尾段。
+    覆盖不足返回 None(说明 full 与已配前缀对不上)。"""
+    cnt = 0
+    for i, ch in enumerate(full):
+        if cnt >= flat_prefix_len:
+            return full[i:]
+        if _flat_text(ch):
+            cnt += 1
+    return "" if cnt >= flat_prefix_len else None
+
+
+def _join_dst(parts: list) -> str:
+    """按目标语拼接块译文：CJK 无空格,其余以空格连。"""
+    d = (_DST_LANG or "").split("-")[0].lower()
+    sep = "" if d in ("zh", "ja", "yue") else " "
+    return sep.join(p.strip() for p in parts if p and p.strip())
+
+
+def _finish_chunked_a(zh: str, dubbed_src: str, parts: list) -> str:
+    """P0-R1 定稿收尾：已配块之外的真尾段补译+补配,终稿译文=已播块拼接(音字一致)。
+    定稿与已配前缀对不上(ASR 回改) → 不再出声(宁少勿重),字幕以已播配音为准。"""
+    nd = _flat_text(dubbed_src)
+    nz = _flat_text(zh)
+    tail = _tail_after_flat_prefix(zh, len(nd)) if (nd and nz.startswith(nd)) else None
+    if tail is None:
+        ST.chunk_stats["mismatch"] += 1
+        logger.warning(f"[语义块] 定稿与已配前缀不一致,尾段不补配(字幕以已播配音为准): "
+                       f"dubbed={dubbed_src[:24]!r} final={zh[:24]!r}")
+    else:
+        tail = tail.strip()
+        if _flat_text(tail):
+            en_tail = _collapse_repeats(_translate_nmt(tail, _SRC_LANG, _DST_LANG))
+            _llm_emo_take(_DST_LANG)         # 尾段同为平情绪路线:丢弃标签防串染
+            if en_tail:
+                parts.append(en_tail)
+                _mt_ctx_note(_SRC_LANG, _DST_LANG, tail, en_tail)
+                _note_self_output(en_tail)
+                _enqueue_synth(en_tail)
+                ST.chunk_stats["tail"] += 1
+    return _join_dst(parts)
+
+
+def _finish_prefetch_a(zh: str, dubbed_src: str, parts: list) -> str:
+    """P3-L 直播预取收尾：预取块只译未配 → 终稿译文=预取译文拼接+真尾段补译(NMT 等待≈0)。
+    与已播音频零耦合:定稿与预取前缀不一致就整句重译(无风险,只是白付了几次块翻译)。"""
+    nd = _flat_text(dubbed_src)
+    nz = _flat_text(zh)
+    tail = _tail_after_flat_prefix(zh, len(nd)) if (nd and nz.startswith(nd)) else None
+    if tail is None:
+        ST.chunk_stats["mismatch"] += 1
+        return _collapse_repeats(_translate_nmt(zh, _SRC_LANG, _DST_LANG))
+    tail = tail.strip()
+    if _flat_text(tail):
+        en_tail = _collapse_repeats(_translate_nmt(tail, _SRC_LANG, _DST_LANG))
+        _llm_emo_take(_DST_LANG)             # 与分块句同策:预取路线不改道情感引擎
+        if en_tail:
+            parts.append(en_tail)
+            _mt_ctx_note(_SRC_LANG, _DST_LANG, tail, en_tail)
+            ST.chunk_stats["tail"] += 1
+    return _join_dst(parts)
+
+
+def _stream_final_a(uid: int, tid: int, zh: str, t0: float, audio=None, ger_reviewed: bool = False,
+                    chunk_st: dict = None):
     """方向A(我)流式定稿：我方原文已得 → 出原文字幕 → NMT 译对方语言 → 输出(直播=数字人口型/通话=克隆配音)。
-    逐词 partial 只刷字幕不输出音视频；口型/配音仍按整句一次触发(最敏感链路不变)。
+    逐词 partial 只刷字幕；直播口型按整句一次触发(最敏感链路不变)。
+    P0-R1 通话配音：chunk_st 非空=本句已有语义块提前配音,此处只补尾段并以已播块拼终稿(音字一致)。
     zh/en 变量名沿用历史；语义为 zh=我方原文(SRC 语言)、en=译文(DST 语言)，字段位置不变。
     audio=该句 16k 音频(P0-① GER 异步复核用)；ger_reviewed=True 表示本稿出自复核晋升,不再回送。"""
     try:
@@ -6808,18 +7729,49 @@ def _stream_final_a(uid: int, tid: int, zh: str, t0: float, audio=None, ger_revi
         zh = _collapse_repeats(zh)           # 复读折叠:同一句话绝不配音两遍
         # 事件同带语义键(src/dst，语言无关，overlay 优先用)与兼容键(zh/en，旧主控台消费)。
         ST.push_event({"uid": uid, "turn": tid, "who": "me", "src": zh, "zh": zh})   # 原文先到(定稿)
-        en = _collapse_repeats(_translate_nmt(zh, _SRC_LANG, _DST_LANG)); t_nmt = time.time()
+        dubbed_src = (chunk_st or {}).get("src_ok") or ""
+        parts = list((chunk_st or {}).get("dst") or [])
+        got_chunks = bool(dubbed_src and parts)
+        prefetched = got_chunks and (chunk_st or {}).get("dub", True) is False
+        chunked = got_chunks and not prefetched
+        streamed = False
+        if chunked:                          # 已提前配音:补尾段,终稿=已播块拼接
+            en = _finish_chunked_a(zh, dubbed_src, parts)
+        elif prefetched:                     # P3-L 直播预取:拼译文+补尾段,口型仍整句触发
+            ST._tts_first_ts = 0.0
+            en = _finish_prefetch_a(zh, dubbed_src, parts)
+        else:
+            ST._tts_first_ts = 0.0           # P0-R3 本句首音时戳起点(整句路径)
+            _filler_arm()                    # P1-F 翻译/TTS 超时未出声→克隆音气口垫场
+            en = None
+            if not ST.live_mode:             # P1-S 流式 LLM 边译边配(仅通话;不适用返回 None)
+                en = _translate_dub_stream(zh, _SRC_LANG, _DST_LANG)
+                streamed = en is not None
+            if en is None:
+                en = _collapse_repeats(_translate_nmt(zh, _SRC_LANG, _DST_LANG))
+        t_nmt = time.time()
         ST.push_event({"uid": uid, "turn": tid, "who": "me", "dst": en, "en": en,
                        "ms": int((time.time() - t0) * 1000)})
+        _mt_ctx_note(_SRC_LANG, _DST_LANG, zh, en)   # P0-R2 滚动语境:整句对(跨句指代/术语一致)
         ST.record_turn_src(tid, "me", _SRC_LANG, zh)
         ST.record_transcript("me", zh, en, tid)
         ST.stats["a"] += 1
         t_syn0 = time.time()
-        av = _emit_output_a(en, zh, uid=uid, tid=tid) if en else {}   # 直播→口型;通话→配音(只此 final 输出)
+        # 已分块/流式配音的句子不再整句输出(声音已经/正在播),仅整句路径走 _emit_output_a
+        av = {} if (chunked or streamed) else (_emit_output_a(en, zh, uid=uid, tid=tid) if en else {})
         if not ger_reviewed:
             _ger_submit("a", uid, tid, zh, audio)   # P0-① 异步纠错复核(配音已出,不加实时延迟)
         m = {"dir": "a", "asr_ms": 0, "nmt_ms": int((t_nmt - t0) * 1000),
              "backlog": (ST.play_q.qsize() if ST.play_q else 0), "ts": time.time()}
+        ft = getattr(ST, "_tts_first_ts", 0.0)
+        if ft:                               # P0-R3 首音延迟:定稿→首块入播放队列(分块句可为负=提前出声)
+            m["tts_first_ms"] = int((ft - t0) * 1000)
+        if chunked:
+            m["chunks"] = len(parts)
+        if prefetched:
+            m["prefetch"] = len(parts)       # P3-L 该句预取块数(nmt_ms 应显著缩短)
+        if streamed:
+            m["llm_stream"] = 1
         if av:
             m.update(av)
         else:
@@ -6841,10 +7793,12 @@ def _stream_final_b(uid: int, tid: int, en: str, t0: float, audio=None, ger_revi
         zh = _collapse_repeats(_translate_nmt(en, _DST_LANG, _SRC_LANG)); t_nmt = time.time()
         ST.push_event({"uid": uid, "turn": tid, "who": "other", "dst": zh, "zh": zh,
                        "ms": int((time.time() - t0) * 1000)})
+        _mt_ctx_note(_DST_LANG, _SRC_LANG, en, zh)   # P0-R2 滚动语境(对方向独立分桶)
         ST.record_turn_src(tid, "other", _DST_LANG, en)
         ST.record_transcript("other", en, zh, tid)
         ST.stats["b"] += 1
         _readback_say(zh)                  # P2-2 对方音色读中文译文(开关关闭时是空操作)
+        _backchannel_kick(en)              # P3-B 对方长句后我方久无动静→轻附和"我在听"
         if not ger_reviewed:
             _ger_submit("b", uid, tid, en, audio)   # P0-① 异步纠错复核(字幕稿替换)
         if ST.live_mode:
@@ -7726,11 +8680,11 @@ def _ap_resolve_inner(name: str = None) -> dict:
     if p.get("mic") == "phone":
         relay_ok = False
         try:
-            relay_ok = requests.get("http://127.0.0.1:7878/health", timeout=2).status_code == 200
+            relay_ok = requests.get(f"{MONITOR_URL}/health", timeout=2).status_code == 200
         except Exception:
             pass
         legs["mic"] = {"ok": relay_ok, "kind": "net", "name": "手机麦(无线直连)",
-                       "note": "" if relay_ok else "手机中继(7878)不在线"}
+                       "note": "" if relay_ok else f"手机中继({_MON_PORT})不在线"}
     else:
         idx = _find_device(str(p.get("mic") or CALL_MIC_NAME), False) or _find_device("麦克风", False)
         legs["mic"] = {"ok": idx is not None, "kind": "device", "index": idx,
@@ -7916,7 +8870,7 @@ def coupling_probe_api():
     r = _ap_resolve()
     mic_leg, listen_leg = r["legs"]["mic"], r["legs"]["listen"]
     if mic_leg.get("kind") == "net":
-        return _coupling_probe(mic_net_url="http://127.0.0.1:7878/mic/pcm",
+        return _coupling_probe(mic_net_url=f"{MONITOR_URL}/mic/pcm",
                                out_idx=listen_leg.get("index"))
     if not mic_leg.get("ok"):
         return {"ok": False, "detail": mic_leg.get("note") or "麦克风不可用"}
@@ -8105,14 +9059,14 @@ def call_mode_start(req: CallModeReq):
     #      (实测:BRIO 名字命中的索引实际是静音的虚拟口→"全绿但说话没反应")。
     _pa_refresh(force=True)
     # 2) 按名绑定设备(索引每次重启会漂,名字不会)。麦按方案:手机麦=中继网络流,免声卡。
-    mic_net = "http://127.0.0.1:7878/mic/pcm" if phone_mic else ""
+    mic_net = f"{MONITOR_URL}/mic/pcm" if phone_mic else ""
     if phone_mic:
         mic = -1
         try:
-            relay_ok = requests.get("http://127.0.0.1:7878/health", timeout=2).status_code == 200
+            relay_ok = requests.get(f"{MONITOR_URL}/health", timeout=2).status_code == 200
         except Exception:
             relay_ok = False
-        _step("手机麦中继", relay_ok, "手机页开着即通" if relay_ok else "手机中继(7878)不在线,请先启动 monitor_relay")
+        _step("手机麦中继", relay_ok, "手机页开着即通" if relay_ok else f"手机中继({_MON_PORT})不在线,请先启动 monitor_relay")
     else:
         mic = _find_device(str(ap.get("mic") or CALL_MIC_NAME), False) or _find_device("麦克风", False)
     cable = _find_device("CABLE Input", True)
@@ -8685,6 +9639,15 @@ def start(req: StartReq):
     _discont["base"] = _discont["n"]               # P4-4 环回断点计数按会话差分
     ST.stream_stats = {"part_a": 0, "part_b": 0, "fin_a": 0, "fin_b": 0,
                        "yields": 0, "part_ts": deque(maxlen=80)}   # 清流式观测计数
+    # P0-R 新会话清态：语义块观测/首音时戳/翻译滚动语境/LLM情绪槽(跨场不串染)
+    ST.chunk_stats = {"committed": 0, "tail": 0, "blocked": 0, "mismatch": 0, "prefetch": 0}
+    ST.llms_stats = {"used": 0, "segs": 0, "bail": 0, "filler": 0}   # P1 流译/垫场观测清零
+    ST._a_voice_ts = 0.0; ST._b_voice_ts = 0.0; ST._b_voice_start = 0.0   # P3 礼让/附和时戳清零
+    ST._tts_first_ts = 0.0
+    ST.stream_sink_a = None
+    _mt_ctx_clear()
+    with _llm_emo_lock:
+        _llm_emo_slot.update({"emo": "", "dst": "", "ts": 0.0})
     ST.warm_ms = 0; ST._avatar_calls = 0; ST._last_lag_warn = 0.0
     ST.s2s_on = False; ST.s2s_state = {}; ST.s2s_sink = None  # P0-S2S 新会话清云同传态
     ST.pending_switch = None; ST.switching = False            # 清角色切换/自愈态
@@ -8794,6 +9757,7 @@ def start(req: StartReq):
         raise HTTPException(500, f"采集启动失败: {err}")
     ST.running = True
     _emo_prewarm_kick()    # P0 情感配音:后台预加载 CosyVoice3(防冷态首个情感句超时回退)
+    _filler_prepare_kick()  # P1-F 垫场气口素材缺则后台用当前音色生成(错峰 6s,失败静默)
     if not ST.live_mode:   # P3: 通话开播记一次使用；直播模式经 Hub /activate 已自计,不重复
         _usage_report(req.profile, "interp_start")
     if ST.live_mode:   # P4: 直播开播后静默预载常用 Top3（通话模式无脸预案池，跳过）
@@ -8814,6 +9778,46 @@ def start(req: StartReq):
         "voice_clone": bool(ST.voice_b64)})
     return {"ok": True, "cap_a_err": ST.cap_a.error, "cap_b_err": ST.cap_b.error,
             "voice_ok": _dub["voice_ok"], "dub_ok": _dub["ok"], "dub_reason": _dub["reason"]}
+
+
+def _pfeat_report_push():
+    """P2 实战验证配套：停播即推一份实时性特性引擎报告(控制台事件+日志)。
+    首音中位/流译占比/语义块/垫场一屏读完,并按阈值给一句调参建议——验证不用翻 /metrics。"""
+    try:
+        with ST.lock:
+            ms = [m for m in ST.metrics if m.get("dir") == "a"]
+        if not ms:
+            return
+        tf = sorted(m["tts_first_ms"] for m in ms if m.get("tts_first_ms") is not None)
+        med = tf[len(tf) // 2] if tf else None
+        streamed = sum(1 for m in ms if m.get("llm_stream"))
+        cs = getattr(ST, "chunk_stats", None) or {}
+        ls = getattr(ST, "llms_stats", None) or {}
+        txt = (f"📊 实时性报告：我方 {len(ms)} 句"
+               + (f" · 首音中位 {med}ms" if med is not None else "")
+               + f" · 流译 {streamed} 句/{ls.get('segs', 0)} 段(闸拒 {ls.get('bail', 0)})"
+               + f" · 语义块 {cs.get('committed', 0)} 块(尾补 {cs.get('tail', 0)}"
+                 f"/退回 {cs.get('blocked', 0)}/不一致 {cs.get('mismatch', 0)})"
+               + (f" · 直播预取 {cs.get('prefetch', 0)} 块" if cs.get("prefetch") else "")
+               + f" · 垫场 {ls.get('filler', 0)} 次"
+               + (f" · 礼让 {ls.get('hold', 0)} 次" if ls.get("hold") else "")
+               + (f" · 附和 {ls.get('bc', 0)} 次" if ls.get("bc") else ""))
+        hints = []
+        if med is not None and med > 1500:
+            hints.append("首音仍偏慢:确认 LLM 已预热常驻,或调低 INTERP_LLM_STREAM_MIN(现"
+                         f"{LLM_STREAM_MIN})/INTERP_CHUNK_MIN_LEN 提早出声")
+        if ls.get("bail", 0) >= 3:
+            hints.append("流译段闸拒偏多:换更稳的翻译模型,或 INTERP_LLM_STREAM=0 暂关流译")
+        if cs.get("mismatch", 0) >= 3:
+            hints.append("语义块定稿不一致偏多:INTERP_CHUNK_MIN_LEN 调大(块更稳)")
+        if ls.get("filler", 0) >= max(3, len(ms) // 4):
+            hints.append("垫场频繁=翻译/TTS 常超 900ms:先看 GPU 争用,再考虑调大 INTERP_FILLER_AFTER_MS")
+        if hints:
+            txt += "。建议：" + "；".join(hints)
+        ST.push_event({"who": "sys", "warn": txt})
+        logger.info(txt)
+    except Exception:
+        pass
 
 
 @app.post("/stop")
@@ -8877,13 +9881,19 @@ def stop():
             "segments": int(ST.transcript_seq)})
     ST.push_event({"who": "sys", "clear": True})   # 停止即清空 web 字幕,旧幻听不残留
     ST.push_event({"who": "sys", "src": "同传已停止", "dst": "Interpreter stopped", "stage": "sys"})
+    _pfeat_report_push()   # P2 停播即出实时性特性报告(首音/流译/语义块/垫场+调参建议)
     return {"ok": True, "session_log": log_path}
 
 
 @app.get("/health")
 def health():
-    """轻量健康检查(供启动器/守护/健康聚合探测)。"""
-    return {"ok": True, "service": "interpreter", "running": ST.running}
+    """轻量健康检查(供启动器/守护/健康聚合探测)。base=本套安装根目录(两套并存时自证身份)。"""
+    try:
+        import app_config as _hc
+        _base = str(_hc.BASE)
+    except Exception:
+        _base = ""
+    return {"ok": True, "service": "interpreter", "running": ST.running, "base": _base, "port": PORT}
 
 
 def _dev_name_safe(idx):
@@ -9078,6 +10088,10 @@ def _metrics_snapshot():
     stream_m = {"on": ST.stream_on, "part": _part, "fin": _fin,
                 "part_rate": _rate, "part_per_fin": (round(_part / _fin, 1) if _fin else 0.0),
                 "yields": ss["yields"], "asr_unloaded": ST.asr_unloaded}
+    # P0-R 实时性观测:语义块提前配音计数 + 首音延迟分布(定稿→首块入播放队列;分块句可为负=提前出声)
+    chunk_m = {"on": CHUNK_DUB_ON, **(getattr(ST, "chunk_stats", None) or {})}
+    # P1 观测:流式 LLM 翻译(边译边配) + 垫场气口
+    llms_m = {"on": LLM_STREAM_ON, "filler_on": FILLER_ON, **(getattr(ST, "llms_stats", None) or {})}
     return {"running": ST.running, "live_mode": ST.live_mode, "stream_on": ST.stream_on,
             "stream": stream_m, "asr_route": (ST.asr_route or None),
             "s2s": {"on": ST.s2s_on, **(ST.s2s_state or {})},   # P0-S2S 云同传观测
@@ -9102,6 +10116,9 @@ def _metrics_snapshot():
             "novoice_skips": _novoice["n"],
             "backlog_now": (ST.play_q.qsize() if ST.play_q else 0),
             "dropped": ST.dropped,
+            "chunk_dub": chunk_m,
+            "llm_stream": llms_m,
+            "tts_first_ms": stat("tts_first_ms", "a"),
             "asr_ms": stat("asr_ms"), "nmt_ms": stat("nmt_ms"),
             "synth_ms": stat("synth_ms", "a"), "avatar_ms": stat("avatar_ms", "a"),
             "ttfv_ms": stat("ttfv_ms", "a"), "seg_gap_ms": stat("seg_gap_ms", "a"),
@@ -9155,6 +10172,9 @@ def _session_summary(snap: dict) -> dict:
             "dropped": snap.get("dropped"), "warm_ms": snap.get("warm_ms"),
             "asr_ms": med(snap.get("asr_ms")), "nmt_ms": med(snap.get("nmt_ms")),
             "e2e_ms": med(snap.get("e2e_ms")), "ttfv_ms": med(snap.get("ttfv_ms")),
+            "tts_first_ms": med(snap.get("tts_first_ms")),          # P0-R3 首音中位(负=提前出声)
+            "chunk_dub": snap.get("chunk_dub"),                      # P0-R1 语义块观测
+            "llm_stream": snap.get("llm_stream"),                    # P1 流译/垫场观测
             "seg_gap_ms": med(snap.get("seg_gap_ms")), "avatar_ms": med(snap.get("avatar_ms")),
             "switch_count": snap.get("switch_count"), "degrade_count": snap.get("degrade_count"),
             "degrade_ms": snap.get("degrade_ms"), "stream": stream_sum,
@@ -10106,6 +11126,7 @@ def review_page():
 
 _REVIEW_PAGE = r"""<!doctype html><html lang=zh><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1"><link rel=icon href=/favicon.ico>
+<meta name=theme-color content="#080b10">
 <title>转写复盘 · 真实CER标注</title>
 <style>
 :root{color-scheme:dark;--acc:#4f7aff;--acc2:#a855f7;--bg:#0b0e14;--card:#12172290;--bord:#232a3a;--mut:#8b94a7}
@@ -10813,6 +11834,7 @@ def subtitle_overlay():
 
 _GLOSSARY_PAGE = r"""<!doctype html><html lang=zh><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
+<meta name=theme-color content="#080b10">
 <link rel=icon href=/favicon.ico>
 <title>术语锁定表 · 编辑</title>
 <style>
@@ -10970,6 +11992,7 @@ def glossary_page():
 
 _SESSIONS_PAGE = r"""<!doctype html><html lang=zh><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
+<meta name=theme-color content="#080b10">
 <link rel=icon href=/favicon.ico>
 <title>会话转写 · 导出</title>
 <style>
@@ -11077,7 +12100,10 @@ def sessions_page():
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return _PAGE.replace("__HUB_BASE__", HUB_URL)
+    return (_PAGE.replace("__HUB_BASE__", HUB_URL)
+                 .replace("__HUB_PORT__", _HUB_PORT)
+                 .replace("__MON_PORT_S__", _MON_PORT_S)
+                 .replace("__MON_PORT__", _MON_PORT))
 
 
 @app.get("/hub_profiles")
@@ -11106,6 +12132,7 @@ def hub_profiles():
 # 交互提示统一用 data-tip="标题|作用|何时用"(富提示组件渲染);动态元素用 setAttribute。
 _PAGE = r"""<!doctype html><html lang=zh><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
+<meta name=theme-color content="#080b10">
 <link rel=icon href=/favicon.ico>
 <title>通译 LingoX · 实时同传</title>
 <style>
@@ -11509,11 +12536,12 @@ const EMBED=(()=>{ try{ const q=new URLSearchParams(location.search);
 if(EMBED) document.body.classList.add('embed');
 function setupNav(){
   const host=location.hostname||'127.0.0.1';
-  $('#hubLink').href='http://'+host+':9000/';
-  $('#phoneLink').href='https://'+host+':7879/';
-  $('#qrLink').href='http://'+host+':7878/show';
-  const op=$('#pbOpen'); if(op) op.href='https://'+host+':7879/';
-  const sh=$('#pbShow'); if(sh) sh.href='http://'+host+':7878/show';
+  // 端口由服务端注入(__HUB_PORT__/__MON_PORT__)：两套安装并存(端口偏移)时链接不再指到别家
+  $('#hubLink').href='http://'+host+':__HUB_PORT__/';
+  $('#phoneLink').href='https://'+host+':__MON_PORT_S__/';
+  $('#qrLink').href='http://'+host+':__MON_PORT__/show';
+  const op=$('#pbOpen'); if(op) op.href='https://'+host+':__MON_PORT_S__/';
+  const sh=$('#pbShow'); if(sh) sh.href='http://'+host+':__MON_PORT__/show';
   // 「主控台」仅独立窗口打开时才显示——嵌在主控台 iframe 里时它指向的就是外层页面,纯冗余
   try{ if(window.self===window.top) $('#hubLink').style.display=''; }catch(e){}
 }
@@ -11913,9 +12941,18 @@ async function pollMetrics(){
       );
       // 无音色常驻徽章(与 GPU 争用同级醒目)：事件会滚走,这枚整场钉在观测条上
       const novoicePill=(m.voice_ok===false)?`<span class="tag" style="border-color:#ef4444;background:rgba(239,68,68,.18);color:#fecaca;font-weight:700;cursor:help" title="当前角色没有音色样本：克隆配音已全程跳过(本场已跳过 ${m.novoice_skips||0} 句)，对方只能看字幕、听不到声音。&#10;请切换有音色的角色，或在角色库为它录制/导入音色后重新开始">🔇 无音色·仅字幕</span> `:'';
+      // P0-R 语义块提前配音徽章:committed=提前出声块数(负首音=定稿前已开口)
+      const cd=m.chunk_dub||{};
+      const chunkPill=(cd.on&&(cd.committed||cd.tail||cd.prefetch))?
+        `<span class="tag on" style="cursor:help" title="语义块流式:子句边界提前翻译(通话另提前出声),不等整句定稿&#10;提前块 ${cd.committed||0} · 直播预取 ${cd.prefetch||0} · 尾段补 ${cd.tail||0} · 预检退回 ${cd.blocked||0} · 定稿不一致 ${cd.mismatch||0}">⚡块 ${(cd.committed||0)+(cd.prefetch||0)}</span> `:'';
+      // P1 流式 LLM 翻译(边译边配)+垫场气口徽章
+      const lm=m.llm_stream||{};
+      const llmsPill=(lm.on&&(lm.used||lm.filler))?
+        `<span class="tag on" style="cursor:help" title="流式LLM翻译:译文token到子句边界即送TTS,不等整句译完&#10;流译句 ${lm.used||0}(共 ${lm.segs||0} 段) · 段闸拒 ${lm.bail||0} · 垫场气口 ${lm.filler||0} 次">🌊流译 ${lm.used||0}</span> `:'';
       $('#mtxt').innerHTML=
-        novoicePill+streamPill+
+        novoicePill+streamPill+chunkPill+llmsPill+
         `<b>ASR</b> ${f(m.asr_ms)} · <b>NMT</b> ${f(m.nmt_ms)} · `+
+        (!live&&m.tts_first_ms?`<b>首音</b> <span style="cursor:help" title="定稿→首块配音入播放队列(中位);负值=靠语义块在定稿前已出声">${f(m.tts_first_ms)}</span> · `:'')+
         (live?`<b>TTFV</b> ${f(m.ttfv_ms)} · <b>段间隔</b> ${f(m.seg_gap_ms)} · `:'')+
         (live?`<b>口型</b> ${f(m.avatar_ms||m.synth_ms)} · `:'')+
         `<b>端到端</b> ${f(m.e2e_ms)} · `+
@@ -12166,10 +13203,31 @@ async function doStart(){
     loopback_index:+lv[1], loopback_is_output: lv[0]==='o', profile:$('#profile').value||'',
     mode:$('#mode').value, live_mode: $('#omode').value==='live',
     stream: $('#stream').value==='1',
-    mic_net_url: micPhone? ('http://'+(location.hostname||'127.0.0.1')+':7878/mic/pcm') : ''};
+    mic_net_url: micPhone? ('http://'+(location.hostname||'127.0.0.1')+':__MON_PORT__/mic/pcm') : ''};
   for(const k in spanByUid) delete spanByUid[k];
   for(const k in rowByTurn) delete rowByTurn[k];
-  const r=await (await fetch('/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+  // 启动要数秒(拉音色参考/开两路采集流):立即给「启动中」反馈;失败当面报错——不再静默无反应
+  const b=$('#btn'); b.disabled=true; b.textContent='⏳ 启动中…'; $('#st').textContent='启动中…';
+  let r;
+  try{
+    const resp=await fetch('/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    r=await resp.json().catch(()=>({}));
+    if(!resp.ok||!r.ok){
+      const d=r.detail!==undefined?r.detail:(r.error!==undefined?r.error:('HTTP '+resp.status));
+      const why=(typeof d==='string')?d:JSON.stringify(d);
+      $('#st').textContent='启动失败';
+      $('#warn').textContent='⚠ 启动失败：'+why+'（检查麦克风/设备下拉是否有效，或用「开始 ▾ → 通话向导」自动配设备）';
+      clearTimeout(window._wt); window._wt=setTimeout(()=>$('#warn').textContent='',20000);
+      return r;
+    }
+  }catch(e){
+    $('#st').textContent='启动失败';
+    $('#warn').textContent='⚠ 启动请求异常：'+((e&&e.message)||e)+'（同传服务可能未响应，稍后重试或重启服务）';
+    clearTimeout(window._wt); window._wt=setTimeout(()=>$('#warn').textContent='',20000);
+    return {};
+  }finally{
+    b.disabled=false; syncMainBtn();   // 成功路径随后由 r.ok 分支置运行态(同一轮事件内,无可见闪烁)
+  }
   if(r.ok){
     running=true; $('#dot').className='on';
     const live=$('#omode').value==='live';

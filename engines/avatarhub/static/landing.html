@@ -335,7 +335,8 @@ function goMakeFromAB(){
 
 function goMake(){
   track('cta');
-  location.href='/phone?profile='+encodeURIComponent(profile);
+  // guest=1：访客身份带进对话端（观众模式净化——藏运维诊断/后台入口，露转化出口）
+  location.href='/phone?profile='+encodeURIComponent(profile)+'&guest=1';
 }
 
 // ⑧ 多角色橱窗（无 profile 时的产品门面）

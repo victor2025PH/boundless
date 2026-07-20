@@ -36,11 +36,11 @@ def _py(env_name: str) -> str:
 #   HUB_SUP_LIPSYNC=0  关闭 lipsync 守护
 #   HUB_SUP_VCAM=0     关闭 vcam 守护（本地换脸模式建议设 0）
 SUPERVISED: dict[str, dict] = {
-    "fish_tts": {"script": "fish_speech_server.py", "env": "fishspeech",  "port": 7855},
-    "stt":      {"script": "stt_server.py",         "env": "cosytts",     "port": 7854},
+    "fish_tts": {"script": "fish_speech_server.py", "env": "fishspeech",  "port": app_config.port("fish_tts") or 7855},
+    "stt":      {"script": "stt_server.py",         "env": "cosytts",     "port": app_config.port("stt") or 7854},
 }
 if os.environ.get("HUB_SUP_LIPSYNC", "1") == "1":
-    SUPERVISED["lipsync"] = {"script": "lipsync_server.py", "env": "musethepeak", "port": 8090}
+    SUPERVISED["lipsync"] = {"script": "lipsync_server.py", "env": "musethepeak", "port": app_config.port("lipsync") or 8090}
 # 换脸引擎守护按拓扑二选一：
 #   生产拓扑（SVC_FACESWAP 指向远端 .104）：本机 8003 常驻瘦身容灾副本
 #     (无 GFPGAN/CodeFormer、LRU=2，~2.2GB)。主引擎失联时 Hub /faceswap 熔断改道至此——
@@ -51,20 +51,24 @@ if os.environ.get("HUB_SUP_LIPSYNC", "1") == "1":
 #     主+副本双份换脸模型纯属浪费，单机也无 failover 意义。
 if os.environ.get("SVC_FACESWAP"):
     if os.environ.get("HUB_SUP_FACESWAP2", "1") == "1":
-        SUPERVISED["faceswap2"] = {"script": "faceswap_api.py", "env": "facefusion", "port": 8003,
+        _fs2_port = app_config.port("faceswap2") or 8003
+        SUPERVISED["faceswap2"] = {"script": "faceswap_api.py", "env": "facefusion", "port": _fs2_port,
                                    "no_stale_kill": True,   # 与主实例同脚本：按脚本名清僵尸会误杀，禁用
-                                   "env_extra": {"FACESWAP_PORT": "8003", "FACESWAP_LOAD_ENHANCE": "0",
+                                   "env_extra": {"FACESWAP_PORT": str(_fs2_port), "FACESWAP_LOAD_ENHANCE": "0",
                                                  "FACESWAP_MODEL_LRU": "2", "FACESWAP_ENH_CONCURRENCY": "1",
                                                  # 副本恒 inswapper 轻量核：不因继承 SWAP_PRESET=hd 而载 HyperSwap(省显存/秒接管)
                                                  "FACESWAP_HD_CORE": "0"}}
 elif os.environ.get("HUB_SUP_FACESWAP", "1") == "1":
-    SUPERVISED["faceswap"] = {"script": "faceswap_api.py", "env": "facefusion", "port": 8000,
+    SUPERVISED["faceswap"] = {"script": "faceswap_api.py", "env": "facefusion",
+                              "port": app_config.port("faceswap") or 8000,
                               "no_stale_kill": True}   # 防误杀其它同脚本实例（如手动起的副本）
 if os.environ.get("HUB_SUP_VCAM", "1") == "1":
-    SUPERVISED["vcam"] = {"script": "vcam_server.py", "env": "facefusion", "port": 7870}
+    SUPERVISED["vcam"] = {"script": "vcam_server.py", "env": "facefusion",
+                          "port": app_config.port("vcam") or 7870}
 # 手机监听中继(PC音频+字幕→手机)：轻量、无 GPU，崩了自动拉起。HUB_SUP_MONITOR=0 可关。
 if os.environ.get("HUB_SUP_MONITOR", "1") == "1":
-    SUPERVISED["monitor"] = {"script": "monitor_relay.py", "env": "facefusion", "port": 7878}
+    SUPERVISED["monitor"] = {"script": "monitor_relay.py", "env": "facefusion",
+                             "port": app_config.port("monitor") or 7878}
 
 # ── 外部仓服务（自带 repo + 独立 conda env，不在 app_config.SERVICES，理由见 app_config.DITTO_DIR）──
 #   由本守护统一编排：launch_any/stop_any 复用、_launch 认 dir、GPU 总开关纳管。
@@ -210,6 +214,10 @@ def _launch(name: str, cfg: dict, st: dict) -> bool:
     env["PYTHONIOENCODING"] = "utf-8"
     for _k, _v in (cfg.get("env_extra") or {}).items():   # S6: 按服务注入实例参数(端口/LRU/瘦身开关)
         env[str(_k)] = str(_v)
+    # 端口覆盖层(两套安装并存)：把生效端口注入子进程认的 <SVC>_PORT env——子脚本零改动整段平移。
+    # setdefault：env_extra/外部显式指定仍最优先；零配置时 port_env_extra 恒空(零回归)。
+    for _k, _v in app_config.port_env_extra(name).items():
+        env.setdefault(_k, _v)
     # 抑制 PyTorch/OpenMP 空闲自旋：重模型常驻服务即使没有请求，OpenMP/MKL 线程默认
     # 会忙等(spin-wait)空转，单机多服务叠加可烧掉数个 CPU 核 → 桌面/打字全局卡顿。
     # PASSIVE + KMP_BLOCKTIME=0 让线程做完即休眠，空闲 CPU 从 ~250% 降到接近 0，不影响推理吞吐。

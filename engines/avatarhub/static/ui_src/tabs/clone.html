@@ -1,0 +1,252 @@
+<!-- ======================================================
+     Tab: 声音克隆
+====================================================== -->
+<div x-show="tab==='clone'" class="fade space-y-3">
+  <div class="bd-card p-4">
+    <div class="flex items-start justify-between gap-2">
+      <div>
+        <h2 class="bd-card-title mb-1">🧬 声音克隆</h2>
+        <p class="text-[12px] text-hub-muted mb-4">上传 5~30 秒清晰录音，AI 自动检测音质并克隆音色。</p>
+      </div>
+      <!-- UH3: 克隆历史豁免记录——「以前克隆过哪些声音」由资产面板承接（试听/引用/找回/回收站），此处只架桥不重造 -->
+      <button @click="vaOpen('voice')"
+              class="bd-act sm ghost shrink-0"
+              title="试听、看被哪个角色引用、找回未绑定的克隆音">🗂️ 看我克隆过的声音</button>
+    </div>
+
+    <!-- 步骤进度条 -->
+    <div class="flex items-center gap-1 mb-4">
+      <template x-for="(s, i) in [{n:1,t:'上传质检'},{n:2,t:'协议确认'},{n:3,t:'执行克隆'}]" :key="s.n">
+        <div class="flex items-center gap-1 flex-1">
+          <div class="flex flex-col items-center">
+            <div :class="cloneStep>s.n?'bg-hub-green text-white':cloneStep===s.n?'bg-hub-blue text-white':'bg-hub-bg text-hub-muted border border-hub-border'"
+                 class="w-6 h-6 rounded-full flex items-center justify-center text-[12px] font-bold transition-all">
+              <span x-text="cloneStep>s.n?'✓':s.n"></span>
+            </div>
+            <div class="text-[12px] text-hub-muted mt-0.5" x-text="s.t"></div>
+          </div>
+          <div x-show="i<2" class="flex-1 h-0.5 mb-3"
+               :class="cloneStep>s.n?'bg-hub-green':'bg-hub-border'"></div>
+        </div>
+      </template>
+    </div>
+
+    <!-- Step 1: 上传 + 质检 -->
+    <div x-show="cloneStep===1" class="space-y-3">
+      <!-- P0：录制要点前置——录好素材=更高相似度（「金标音色」的源头）-->
+      <div>
+        <div class="text-[13px] font-semibold text-hub-text mb-1.5">📌 录出高相似度的 3 个要点</div>
+        <div class="grid grid-cols-3 gap-2 text-center">
+          <div class="rounded-lg bg-hub-bg border border-hub-border px-1.5 py-2">
+            <div class="text-lg leading-none" aria-hidden="true">🔇</div>
+            <div class="text-[13px] font-semibold text-hub-text mt-1">安静环境</div>
+            <div class="text-[12px] text-hub-muted leading-tight">无回声 · 低底噪</div>
+          </div>
+          <div class="rounded-lg bg-hub-bg border border-hub-border px-1.5 py-2">
+            <div class="text-lg leading-none" aria-hidden="true">🗣️</div>
+            <div class="text-[13px] font-semibold text-hub-text mt-1">自然朗读</div>
+            <div class="text-[12px] text-hub-muted leading-tight">正常语速 · 咬字清晰</div>
+          </div>
+          <div class="rounded-lg bg-hub-bg border border-hub-border px-1.5 py-2">
+            <div class="text-lg leading-none" aria-hidden="true">⏱️</div>
+            <div class="text-[13px] font-semibold text-hub-text mt-1">15–30 秒</div>
+            <div class="text-[12px] text-hub-muted leading-tight">单人 · 无背景乐</div>
+          </div>
+        </div>
+      </div>
+      <!-- P0：拖拽上传卡（复用 onCloneFile 链路；拖入即高亮，录音中禁拖）-->
+      <div @dragover.prevent="cloneDrag=true" @dragleave.prevent="cloneDrag=false" @drop.prevent="cloneDrop($event)"
+           role="group" aria-label="上传音频进行声音克隆，支持拖拽或选择文件"
+           :class="cloneDrag?'border-hub-blue bg-hub-blue/10':'border-hub-border'"
+           class="border-2 border-dashed rounded-xl p-6 text-center transition">
+        <div class="text-3xl mb-2" aria-hidden="true" x-text="cloneDrag?'📥':'🎤'"></div>
+        <div class="text-sm text-hub-muted mb-3" x-text="cloneDrag?'松手即可上传音频':'把音频拖到这里，或选择文件（WAV / MP3，建议 15~30 秒）'"></div>
+        <input type="file" accept="audio/*" @change="onCloneAudio($event)" aria-label="选择音频文件（WAV / MP3）"
+               :disabled="recording" class="mx-auto text-xs">
+        <div class="flex items-center gap-2 my-3">
+          <div class="flex-1 h-px bg-hub-border"></div><span class="text-[12px] text-hub-muted">或</span><div class="flex-1 h-px bg-hub-border"></div>
+        </div>
+        <button x-show="!recording" @click="startRec()" type="button"
+                class="bd-act ghost">
+          <span class="text-hub-red">●</span> 现场录音
+        </button>
+        <button x-show="recording" @click="stopRec()" type="button"
+                class="bd-act red pulse">
+          <span>■</span> 停止录音 <span x-text="recSecs+'s / 30s'"></span>
+        </button>
+        <!-- 录音电平：实时证明「正在收到声音」；静音≥3s 给出可行动提醒 -->
+        <div x-show="recording && _recTarget==='clone'" class="max-w-[300px] mx-auto mt-2.5 space-y-1">
+          <div class="h-1.5 rounded-full bg-hub-border/60 overflow-hidden" role="meter" aria-label="麦克风输入电平" :aria-valuenow="recLevel">
+            <div class="h-full rounded-full transition-all duration-100"
+                 :class="recLevel<12?'bg-hub-yellow':'bg-hub-green'"
+                 :style="'width:'+Math.max(recLevel,2)+'%'"></div>
+          </div>
+          <div x-show="recSilentSecs>=3" role="alert" class="text-[12px] text-hub-yellow">🔇 似乎没收到声音——检查系统麦克风权限 / 输入设备，或靠近话筒</div>
+        </div>
+        <div x-show="cloneAudioName" class="text-xs text-hub-green mt-2" x-text="'✅ '+cloneAudioName"></div>
+      </div>
+      <!-- 质检结果 -->
+      <div x-show="cloneQualityLoading" role="status" aria-live="polite" class="text-xs text-hub-muted text-center pulse">⏳ 音频质检中...</div>
+      <!-- P1：音质体检报告——门槛质检 + 录音深度自检「合一」，指标去重、一句结论 + 关键建议 -->
+      <!-- P3：role=status + aria-live 让读屏在结果出现时自动播报「达标/不达标」结论 -->
+      <div x-show="cloneQuality && !cloneQualityLoading" role="status" aria-live="polite" class="p-3 text-xs space-y-2.5"
+           :class="!cloneQuality?.ok ? 'bd-strip err'
+                   : ((recCheck?.clipping_pct||0)>0.5 || recCheck?.grade==='一般' || recCheck?.grade==='差') ? 'bd-strip warn'
+                   : 'bd-strip ok'">
+        <!-- 结论行：一句话结论 + 录音评级徽标 -->
+        <div class="flex items-center justify-between gap-2">
+          <span class="font-semibold"
+                :class="!cloneQuality?.ok?'text-hub-red':((recCheck?.clipping_pct||0)>0.5||recCheck?.grade==='一般'||recCheck?.grade==='差')?'text-hub-yellow':'text-hub-green'"
+                x-text="!cloneQuality?.ok ? '❌ 音质不达标，需重录'
+                        : ((recCheck?.clipping_pct||0)>0.5 || recCheck?.grade==='一般' || recCheck?.grade==='差') ? '⚠️ 可以克隆，建议重录更佳'
+                        : '✅ 音质达标，可以克隆'"></span>
+          <span x-show="recCheck && recCheck.ok" class="px-2 py-0.5 rounded-full font-bold shrink-0"
+                :class="recCheck?.grade==='优'?'bg-green-900/40 text-hub-green':recCheck?.grade==='良'?'bg-green-900/30 text-green-300':recCheck?.grade==='一般'?'bg-yellow-900/30 text-hub-yellow':'bg-red-900/30 text-hub-red'"
+                x-text="'录音评级 '+(recCheck?.grade||'—')"></span>
+        </div>
+        <!-- 核心指标（单一来源：recCheck 优先，缺失回退 cloneQuality；信噪比与时长不再重复） -->
+        <div class="grid grid-cols-3 gap-1.5 text-center text-hub-muted">
+          <div><div class="text-hub-text font-semibold" x-text="((recCheck?.duration_s ?? cloneQuality?.duration_s)||0).toFixed(1)+'s'"></div><div>时长</div></div>
+          <div><div class="font-semibold" :class="((recCheck?.snr_db ?? cloneQuality?.snr_db)||0)>=15?'text-hub-text':'text-hub-red'" x-text="((recCheck?.snr_db ?? cloneQuality?.snr_db)||0).toFixed(0)+' dB'"></div><div>信噪比·≥15</div></div>
+          <div><div class="font-semibold" :class="(recCheck?.clipping_pct||0)>0.1?'text-hub-red':'text-hub-text'" x-text="(recCheck?.clipping_pct||0).toFixed(2)+'%'"></div><div>削幅</div></div>
+        </div>
+        <!-- 次要指标（仅在有录音深度自检时展开） -->
+        <div x-show="recCheck && recCheck.ok" class="grid grid-cols-3 gap-1.5 text-center text-hub-muted">
+          <div><div class="text-hub-text font-semibold" x-text="(recCheck?.peak_dbfs||0).toFixed(0)+' dBFS'"></div><div>峰值</div></div>
+          <div><div class="text-hub-text font-semibold" x-text="Math.round((recCheck?.voiced_ratio||0)*100)+'%'"></div><div>有话比</div></div>
+          <div><div class="text-hub-text font-semibold" x-text="(recCheck?.sample_rate||0)/1000+'k'"></div><div>采样率</div></div>
+        </div>
+        <!-- 关键建议：门槛失败原因置顶，其后为录音优化建议 -->
+        <ul x-show="cloneQuality?.reason || (recCheck?.advice||[]).length" class="space-y-1 pt-0.5">
+          <li x-show="cloneQuality?.reason" class="flex gap-1.5 text-hub-red"><span class="font-bold">!</span><span x-text="cloneQuality?.reason"></span></li>
+          <template x-for="(a,i) in (recCheck?.advice||[])" :key="i">
+            <li class="flex gap-1.5 text-hub-muted"><span>•</span><span x-text="a"></span></li>
+          </template>
+        </ul>
+        <!-- 明显削幅：显式放行（逻辑与 下一步 禁用条件一致，未改动） -->
+        <label x-show="(recCheck?.clipping_pct||0)>0.5" class="flex items-center gap-2 cursor-pointer text-hub-yellow pt-0.5">
+          <input type="checkbox" x-model="recOverride" class="accent-hub-yellow w-4 h-4">
+          <span>检测到明显削幅，我已了解风险仍要继续</span>
+        </label>
+      </div>
+      <button @click="cloneStep=2"
+              :disabled="!cloneQuality?.ok || ((recCheck?.clipping_pct||0)>0.5 && !recOverride)"
+              class="w-full bd-btn bd-btn-primary text-sm">
+        下一步 →
+      </button>
+    </div>
+
+    <!-- Step 2: 协议确认 + 命名 -->
+    <div x-show="cloneStep===2" class="space-y-3">
+      <input x-model="cloneName" @input="cloneOverwriteOk=false" placeholder="为克隆音色起名（如：张三_克隆）"
+             class="w-full text-sm">
+      <!-- R1-1: 同名保护——自动建角色会整体覆盖旧角色（形象/引擎/RVC 全没），必须显式确认；
+           与「新建角色」表单的重名 confirm 同级，这里用内联条+勾选（向导里弹窗打断感更差） -->
+      <div x-show="cloneCreateProfile && cloneNameTaken" class="bd-strip warn p-3 text-xs space-y-1.5">
+        <div class="font-semibold text-hub-yellow">⚠️ 已有同名角色「<span x-text="cloneName.trim()"></span>」</div>
+        <div class="text-hub-muted">继续会用这段新声音<b class="text-hub-text">整体覆盖</b>它——形象、引擎选择、变声设置都会被清掉且不可撤销。建议改个名字（如加 _2）。</div>
+        <label class="flex items-center gap-2 cursor-pointer text-hub-yellow pt-0.5">
+          <input type="checkbox" x-model="cloneOverwriteOk" class="accent-hub-yellow w-4 h-4">
+          <span class="font-semibold">我确认要覆盖这个角色</span>
+        </label>
+      </div>
+      <div class="bg-hub-bg border border-hub-border rounded-xl p-3 text-xs space-y-2">
+        <div class="font-semibold text-hub-yellow">⚠️ 合规声明（必读）</div>
+        <div class="text-hub-muted leading-relaxed">
+          本功能仅用于合法目的。使用前请确认：<br>
+          1. 您拥有该音频中声音的合法使用权<br>
+          2. 克隆结果不会用于欺诈、诽谤或侵权<br>
+          3. 违规使用产生的法律责任由用户自行承担
+        </div>
+        <label class="flex items-center gap-2 cursor-pointer pt-1">
+          <input type="checkbox" x-model="cloneAgreed" class="accent-hub-green w-4 h-4">
+          <span class="font-semibold text-hub-text">我已阅读并同意以上声明</span>
+        </label>
+      </div>
+      <label class="flex items-center gap-2 text-xs cursor-pointer bg-hub-bg border border-hub-border rounded-lg px-3 py-2">
+        <input type="checkbox" x-model="cloneCreateProfile" class="accent-hub-blue w-3.5 h-3.5">
+        <span>克隆完成后自动创建角色 Profile（可立即使用）</span>
+      </label>
+      <div class="flex gap-2">
+        <button @click="cloneStep=1"
+                class="bd-btn bd-btn-ghost text-sm shrink-0">
+          ← 返回
+        </button>
+        <button @click="doClone()" :disabled="!cloneAgreed||!cloneName.trim()||cloneLoading||(cloneCreateProfile&&cloneNameTaken&&!cloneOverwriteOk)"
+                class="flex-1 bd-btn bd-btn-success text-sm"
+                :class="(!cloneAgreed||!cloneName.trim()||cloneLoading||(cloneCreateProfile&&cloneNameTaken&&!cloneOverwriteOk))?'':'bd-glow-pulse'">
+          <span x-show="!cloneLoading">🧬 开始克隆</span>
+          <span x-show="cloneLoading" class="pulse">⏳ 克隆中...</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Step 3: 结果（P2：进行中说明态 / 成功庆祝 + 明确下一步 / 失败去恐慌化） -->
+    <div x-show="cloneStep===3" class="space-y-3">
+      <!-- 进行中：带说明的等待态 -->
+      <div x-show="cloneLoading" role="status" aria-live="polite" class="text-center py-8 space-y-3">
+        <div class="text-5xl pulse" aria-hidden="true">🧬</div>
+        <div class="text-sm font-semibold text-hub-text">正在训练音色…</div>
+        <div class="text-xs text-hub-muted">提取声纹特征并生成试听样例，通常 10~30 秒，请勿关闭页面</div>
+      </div>
+
+      <!-- 成功：庆祝卡 + 明确 CTA -->
+      <div x-show="cloneResult && !cloneLoading" class="space-y-3">
+        <div role="status" aria-live="polite" class="bg-green-900/20 border border-hub-green rounded-xl p-4 text-center space-y-2 clone-pop">
+          <div class="text-4xl clone-cheer" aria-hidden="true">🎉</div>
+          <div class="text-base font-bold text-hub-green">克隆成功！</div>
+          <div class="text-xs text-hub-muted">音色 <b class="text-hub-text" x-text="cloneName"></b><span x-show="cloneCreateProfile" class="text-hub-green"> · 已自动加入角色库</span></div>
+          <!-- R1-3: 接口返回键是 voice_b64（嵌好水印的参考音），原绑定 audio_b64 不存在→试听区从未出现过。
+               如实标注这是「参考音」而非合成效果；真正的克隆效果试听走下方「用它合成一句」/引擎对比 -->
+          <div x-show="cloneResult?.voice_b64" class="pt-1">
+            <div class="text-[12px] text-hub-muted mb-1">🎧 回放参考音（已嵌 AI 水印的原录音）</div>
+            <audio :src="cloneResult?.voice_b64?'data:audio/wav;base64,'+cloneResult.voice_b64:''"
+                   controls preload="none" class="w-full"></audio>
+          </div>
+          <!-- Phase A-4：引擎推荐 -->
+          <div x-show="cloneEngineRec" class="mt-2 text-left bg-hub-bg/60 border border-hub-border rounded-lg p-2.5 space-y-1">
+            <div class="text-[13px] font-semibold text-hub-text">🎯 引擎推荐</div>
+            <div class="text-[13px] text-hub-muted" x-text="cloneEngineRec?.reason||''"></div>
+            <div class="text-[13px] text-hub-green" x-show="cloneEngineRec?.recommend">
+              建议：<span class="font-mono" x-text="cloneEngineRec?.recommend==='qwen3_tts'?'Qwen3（高保真/出片）':'Fish（实时对话/直播）'"></span>
+            </div>
+            <button x-show="cloneEngineRec?.recommend && cloneCreateProfile && cloneName"
+                    @click="applyCloneEngineRec()"
+                    class="mt-1 bd-act sm soft w-full">
+              应用到角色「<span x-text="cloneName"></span>」
+            </button>
+          </div>
+          <div x-show="cloneEngineRecLoading" class="text-[13px] text-hub-muted pulse mt-1">正在对比 Fish / Qwen3 音色…</div>
+          <!-- R1-3: 对比失败不再静默消失——说清原因与替代动线 -->
+          <div x-show="cloneEngineRecErr && !cloneEngineRecLoading" class="text-[12px] text-hub-muted mt-1" x-text="cloneEngineRecErr"></div>
+        </div>
+        <!-- 下一步去哪：两个明确行动 -->
+        <div class="grid grid-cols-2 gap-2">
+          <button @click="cloneUseInVoice()"
+                  class="bd-btn bd-btn-primary text-sm">🎙 用它合成一句</button>
+          <button @click="window.open('/phone','_blank')"
+                  class="bd-btn bd-btn-ghost text-sm">💬 进对话页体验</button>
+        </div>
+        <div class="text-[12px] text-hub-muted text-center">水印已嵌入，可通过"验证水印"功能确认溯源</div>
+      </div>
+
+      <!-- 失败：去恐慌化 + 可操作 -->
+      <div x-show="cloneError && !cloneLoading" role="alert" class="bg-red-900/20 border border-hub-red/50 rounded-xl p-4 space-y-1.5">
+        <div class="text-sm font-semibold text-hub-red" x-text="cloneError"></div>
+        <div class="text-xs text-hub-muted">可返回上一步检查素材与命名后重试；若反复失败，建议换一段更清晰、无削幅的录音。</div>
+      </div>
+
+      <!-- 通用动作行（按状态显示不同组合） -->
+      <div class="flex gap-2">
+        <button x-show="cloneError && !cloneLoading" @click="cloneStep=2; cloneError='';"
+                class="flex-1 bd-btn bd-btn-primary text-sm">← 返回重试</button>
+        <button x-show="!cloneLoading"
+                @click="cloneStep=1; cloneResult=null; cloneError=''; cloneQuality=null; cloneAgreed=false; cloneAudioB64=''; cloneAudioName=''; cloneName=''; recCheck=null; recOverride=false; cloneOverwriteOk=false; cloneEngineRecErr='';"
+                class="flex-1 bd-btn bd-btn-ghost text-sm"
+                x-text="cloneResult?'再克隆一个':'重新开始'"></button>
+        <button x-show="cloneResult && !cloneLoading" @click="goTab('profiles')"
+                class="flex-1 bd-btn bd-btn-ghost text-sm">查看角色库</button>
+      </div>
+    </div>
+  </div>
+</div>

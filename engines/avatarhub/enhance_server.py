@@ -26,7 +26,7 @@ logger = logging.getLogger("enhance")
 
 import app_config
 GFPGAN_MODEL = str(app_config.BASE / "GFPGANv1.4.pth")
-PORT = 8092
+PORT = int(os.environ.get("ENHANCE_PORT") or app_config.port("enhance") or 8092)
 _device = "cuda" if torch.cuda.is_available() else "cpu"
 # 注意：GFPGAN 的 StyleGAN2 解码器在 fp16 下数值溢出→输出恒定色块，必须用 fp32。
 _dtype = torch.float32

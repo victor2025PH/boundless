@@ -1,0 +1,178 @@
+<!-- ======================================================
+     Tab: 批量配音
+====================================================== -->
+<div x-show="tab==='batch'" class="fade space-y-3">
+  <div class="bd-card p-4">
+    <div class="flex items-center justify-between gap-2 flex-wrap mb-3">
+      <h2 class="bd-card-title whitespace-nowrap">📦 批量配音</h2>
+      <div class="flex items-center gap-2 flex-wrap">
+        <select x-model="batchLang" class="text-xs py-1">
+          <option value="zh-cn">中文</option>
+          <option value="en">英语</option>
+          <option value="ja">日语</option>
+        </select>
+        <!-- UH2 巡检：能力诚实与语音页对齐——情感引擎离线时非 neutral 选项灰化（口径同语音页胶囊） -->
+        <select x-model="batchEmotion" class="text-xs py-1"
+                :title="!emotionSvcUp()?'情感引擎未启动，暂只能用「😐 neutral」':''">
+          <option value="neutral">😐 neutral（平稳）</option>
+          <option value="auto" :disabled="!emotionSvcUp()">🤖 auto（逐行智能检测）</option>
+          <template x-for="e in emotionOptions.filter(e=>e.value!='neutral'&&e.value!='auto')" :key="e.value">
+            <option :value="e.value" :disabled="!emotionSvcUp()" x-text="e.label"></option>
+          </template>
+        </select>
+        <span class="text-[12px] text-hub-muted"
+              x-text="batchText.split('\n').filter(l=>l.trim()).length+' 行'"></span>
+      </div>
+    </div>
+    <!-- 无角色提示 -->
+    <div x-show="!active" class="text-xs text-hub-orange bg-orange-900/20 px-3 py-2 rounded-lg mb-3">
+      ⚠️ 请先激活角色再进行批量配音
+    </div>
+    <!-- 语音服务离线提示：批量配音同样依赖 TTS，离线则会整批失败 -->
+    <div x-show="active && !(services.fish_tts||services.tts||services.emotion_tts)"
+         class="text-xs text-hub-orange bg-orange-900/20 px-3 py-2 rounded-lg mb-3">
+      ⚠️ 语音服务（TTS）当前离线，批量配音会失败 ·
+      <button @click="goFix('fish_tts')" class="text-hub-blue underline hover:text-hub-text">去启动</button>
+    </div>
+    <!-- UH2 巡检：情感引擎离线且已选非 neutral（含恢复的旧选择）→ 逐行会失败，提前说清并给去处 -->
+    <div x-show="active && !emotionSvcUp() && batchEmotion!=='neutral' && (services.fish_tts||services.tts)"
+         class="text-xs text-hub-orange bg-orange-900/20 px-3 py-2 rounded-lg mb-3">
+      ⚠️ 情感引擎离线：带情感的行会失败（含「🤖 auto」检出非普通情感的行）。
+      改选「😐 neutral」或 <button @click="goFix('emotion_tts')" class="text-hub-blue underline hover:text-hub-text">去启动</button>
+    </div>
+    <textarea x-model="batchText" rows="8"
+              placeholder="每行一句话，最多500行&#10;支持多角色语法：[角色名] 文本内容&#10;例：&#10;[小明] 大家好，我是小明。&#10;[小红] 我是小红，很高兴认识你。&#10;普通行使用当前激活角色。"
+              class="w-full text-sm font-mono"></textarea>
+    <!-- UI-P4-2: 示例互通——复用语音页场景示例生成 3 行起步脚本（空态才显示，防误覆盖；与语音页同款交互）-->
+    <div x-show="!batchText.trim()" class="flex gap-1 flex-wrap mt-2 items-center">
+      <span class="text-[12px] text-hub-muted">试试：</span>
+      <template x-for="ex in speakExamples" :key="'b'+ex.label">
+        <button @click="batchExampleFill(ex)"
+                class="text-[12px] bg-hub-bg border border-hub-border hover:border-hub-blue hover:text-hub-blue px-2 py-0.5 rounded-full transition"
+                x-text="ex.label"></button>
+      </template>
+      <span class="text-[12px] text-hub-muted/60">每个示例填 3 行，情感自动逐行检测</span>
+    </div>
+    <!-- P16-3: 折叠控制头 -->
+    <div x-show="batchLines.length>0" class="flex items-center justify-between mt-3 mb-0.5">
+      <span class="text-[12px] text-hub-muted">
+        ✅<span x-text="batchLines.filter(l=>l.status==='ok').length"></span>
+        <span x-show="batchLines.some(l=>l.status==='error')" class="text-hub-red">
+          &nbsp;❌<span x-text="batchLines.filter(l=>l.status==='error').length"></span>
+        </span>
+        /<span x-text="batchLines.length"></span> 句
+      </span>
+      <span class="flex items-center gap-3">
+        <!-- UI-P7-2: 连播验收——顺序试听整批成功行 -->
+        <button x-show="batchLines.some(l=>l.status==='ok') && !batchLoading" @click="batchPlayAll()"
+                :class="batchPlayAllOn?'text-hub-green':'text-hub-muted hover:text-hub-green'"
+                class="text-[12px]"
+                x-text="batchPlayAllOn?'⏹ 停止连播':'▶ 连播试听'"></button>
+        <button x-show="batchLines.some(l=>l.status==='ok')" @click="batchFoldOk=!batchFoldOk"
+                class="text-[12px] text-hub-muted hover:text-hub-blue">
+          <span x-show="!batchFoldOk">📁 折叠已完成</span>
+          <span x-show="batchFoldOk">📂 展开全部（<span x-text="batchLines.filter(l=>l.status==='ok').length"></span>折叠）</span>
+        </button>
+      </span>
+    </div>
+    <!-- 进度列表 -->
+    <div x-show="batchLines.length>0" class="mt-0 max-h-48 overflow-y-auto space-y-1">
+      <template x-for="line in batchLines" :key="line.index">
+        <!-- P16-3: 已完成行可折叠 -->
+        <div x-show="!batchFoldOk || line.status !== 'ok'" class="flex items-center gap-2 text-xs">
+          <span :class="line.status==='ok'?'text-hub-green':line.status==='error'?'text-hub-red':'text-hub-muted pulse'"
+                x-text="line.status==='ok'?'✅':line.status==='error'?'❌':'⏳'"></span>
+          <span class="text-hub-muted w-8 text-right" x-text="'#'+line.index"></span>
+          <span x-show="line.emotion" class="text-[13px]" x-text="emotionEmoji(line.emotion)"></span>
+          <!-- P20-4: 多角色徽章 -->
+          <span x-show="line.profile && line.profile !== active"
+                class="text-[12px] bg-hub-blue/20 text-hub-blue px-1 rounded shrink-0"
+                x-text="line.profile"></span>
+          <span class="flex-1 truncate text-hub-text" x-text="line.text"></span>
+          <span x-show="line.elapsed" class="text-hub-muted text-[12px]" x-text="line.elapsed+'ms'"></span>
+          <!-- UI-P6-2: 行内试听（不解压 ZIP）+ 送语音页微调，构成"听-改"闭环 -->
+          <button x-show="line.status==='ok' && !batchLoading"
+                  @click="batchPlayLine(line)"
+                  :class="batchPlayingIdx===line.index?'text-hub-green':'text-hub-muted hover:text-hub-green'"
+                  class="text-[12px] leading-none"
+                  :title="batchPlayingIdx===line.index?'停止':'试听这一行'"
+                  x-text="batchPlayingIdx===line.index?'⏹':'▶'"></button>
+          <button x-show="line.status==='ok' && !batchLoading"
+                  @click="batchLineToVoice(line)"
+                  class="text-[12px] text-hub-muted hover:text-hub-blue leading-none"
+                  title="这行不满意？送到语音页改情感/语气重合成">✎</button>
+          <!-- P17-5: 单行手动重试按钮 -->
+          <button x-show="line.status==='error' && !batchLoading"
+                  @click="retrySingleLine(line)"
+                  class="text-[12px] text-hub-orange hover:text-hub-text leading-none"
+                  title="重试这一行">🔄</button>
+        </div>
+      </template>
+    </div>
+    <!-- 按钮行（v3.2: bd-btn 家族——与语音页「开口说话」同为表单页尾大 CTA 场景） -->
+    <div class="flex gap-2 mt-3 flex-wrap">
+      <button @click="doBatch()" :disabled="batchLoading||!active||!batchText.trim()"
+              class="flex-1 bd-btn bd-btn-primary text-sm"
+              :class="(batchLoading||!active||!batchText.trim())?'':'bd-glow-pulse'">
+        <span x-show="!batchLoading">📦 开始批量配音<span x-show="batchSaveHistory&&batchText.split('\n').filter(l=>l.trim()).length<=20" class="text-[12px] opacity-70"> +存历史</span></span>
+        <!-- P15-4: 精确进度 ✅ok ❌error / total -->
+        <span x-show="batchLoading" class="pulse">
+          <span x-show="!batchRetrying">⏳ 配音中</span>
+          <span x-show="batchRetrying">🔄 重试</span>
+          ✅<span x-text="batchLines.filter(l=>l.status==='ok').length"></span>
+          <!-- P19-2: ETA -->
+          <span x-show="batchETA>0" class="text-[12px] opacity-80 ml-1">≈<span x-text="batchETA"></span>s</span>
+          <span x-show="batchLines.some(l=>l.status==='error'||l.status==='retrying')"
+                class="text-hub-red">❌<span x-text="batchLines.filter(l=>l.status==='error'||l.status==='retrying').length"></span></span>
+          / <span x-text="batchLines.length"></span>
+        </span>
+      </button>
+      <!-- P11-3: Stop 按钮 -->
+      <button x-show="batchLoading" @click="stopBatch()"
+              class="bd-btn bd-btn-danger text-sm shrink-0">
+        ⏹ 停止
+      </button>
+      <!-- P11-3: 续传剩余行按钮 -->
+      <button x-show="!batchLoading && batchStopped && batchLines.some(l=>l.status==='pending'||l.status==='error')"
+              @click="resumeBatch()"
+              class="bd-btn bd-btn-amber text-sm shrink-0">
+        ▶ 续传剩余
+      </button>
+      <a x-show="batchZipUrl" :href="batchZipUrl" download="batch_dub.zip"
+         class="bd-btn bd-btn-success text-sm shrink-0">
+        ⬇ 下载
+      </a>
+    </div>
+    <label class="flex items-center gap-2 text-xs mt-2 cursor-pointer">
+      <input type="checkbox" x-model="batchSaveHistory" class="accent-hub-green w-3.5 h-3.5">
+      <span class="text-hub-muted">写入历史记录（仅≤20句有效）</span>
+      <span x-show="batchSaveHistory && batchText.split('\n').filter(l=>l.trim()).length>20"
+            class="text-[12px] text-hub-orange">当前行数超20，已自动关闭</span>
+    </label>
+    <div x-show="batchError" x-text="batchError"
+         class="mt-2 text-xs text-hub-red bg-red-900/20 px-3 py-1.5 rounded-lg"></div>
+    <!-- UI-P5-4: 完成提示升级成绩单卡——成功率/用时/情感分布/历史入口一处看全，与语音页"合成→结果卡"心智对齐 -->
+    <div x-show="batchDone && !batchError"
+         class="mt-2 text-xs bg-green-900/15 border border-hub-green/30 px-3 py-2.5 rounded-xl space-y-1.5">
+      <div class="text-[13px] font-semibold text-hub-green">
+        ✅ 批量完成！成功 <span x-text="batchLines.filter(l=>l.status==='ok').length"></span>/<span x-text="batchLines.length"></span> 句
+        <!-- P15-4: 有失败行时显示 ❌ 数 -->
+        <span x-show="batchLines.some(l=>l.status==='error')" class="text-hub-red font-normal">
+          · ❌ <span x-text="batchLines.filter(l=>l.status==='error').length"></span> 句失败，列表里可单行重试
+        </span>
+      </div>
+      <div class="text-[12px] text-hub-muted flex items-center gap-3 flex-wrap">
+        <span x-show="batchRunMs" x-text="'⏱ 用时 '+(batchRunMs/1000).toFixed(0)+' 秒'"></span>
+        <span x-show="batchEmoDist()" :title="'逐行智能检测的情感构成（top3）'"
+              x-text="'🎭 '+batchEmoDist()"></span>
+        <span x-show="batchSavedHist">📜 已存历史
+          <button @click="goTab('history')" class="underline hover:text-hub-text">去看看</button>
+        </span>
+        <span x-show="!batchSavedHist && batchSaveHistory" title="勾了存历史但本批超 20 句上限，为防历史刷屏未存">📜 未存历史（超 20 句上限）</span>
+        <span x-show="batchZipUrl" class="text-hub-muted/70">ZIP 内含音频 + manifest + report.csv</span>
+      </div>
+      <!-- UI-P6-2: 听-改闭环入口提示（按钮在上方逐行列表里） -->
+      <div class="text-[12px] text-hub-muted/70">💡 列表里 ▶ 可试听单行；✎ 把不满意的行送到语音页改情感重合成</div>
+    </div>
+  </div>
+</div>

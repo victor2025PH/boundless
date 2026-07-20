@@ -27,6 +27,54 @@ try:
 except Exception:
     winreg = None
 import app_config
+
+
+def _auto_port_avoid():
+    """两套安装并存的开箱自动化(2026-07-17)：启动早期发现本套 hub 端口被「别家安装」占用
+    (对方 /health 的 base ≠ 本套 BASE，或占用者根本不是本产品) → 自动写入 config.json
+    {"port_offset": 2000} 并当场重载 app_config 生效，本套整段平移、互不打架。
+    (偏移取 2000：+100/+1000 都被冲突自检证明会撞回出厂端口集，2000 与出厂集无交集。)
+    同套自己的 hub 占着(上次会话残留)不动——service_manager 会幂等收养。
+    已显式配置过覆盖层(offset/ports)则完全尊重用户配置，不自作主张。
+    必须在 import service_manager 之前调用：sm.SERVICES 在 import 时按 app_config 快照构建。"""
+    try:
+        if os.environ.get("AVATARHUB_SELFTEST") == "1":
+            return                                    # 自检模式不落配置(CI/门禁机器上防误写)
+        if app_config.PORT_OFFSET or getattr(app_config, "_PORTS_EXACT", {}):
+            return                                    # 用户已配置覆盖层→尊重
+        hub_port = app_config.port("hub") or 9000
+        import socket, json as _json
+        from urllib.request import urlopen
+        _s = socket.socket(); _s.settimeout(0.5)
+        occupied = _s.connect_ex(("127.0.0.1", hub_port)) == 0
+        _s.close()
+        if not occupied:
+            return
+        # 判定占用者身份(保守原则:只有**确证是别家**才自动挪,拿不准宁可维持现状):
+        #   /health 通 + base=本套      → 自己的 hub 残留,正常收养,不挪;
+        #   /health 通 + base=别的目录  → 确证别家安装,挪;
+        #   /health 通 + 无 base 字段   → 老版本 hub 分不清谁的,**不挪**(挪错会破坏收养流程);
+        #   /health 不通               → 占用者不是本产品,挪(反正 9000 用不了)。
+        try:
+            with urlopen(f"http://127.0.0.1:{hub_port}/health", timeout=2.5) as r:
+                d = _json.loads(r.read().decode("utf-8", "replace"))
+            b = str(d.get("base") or "")
+            foreign = bool(b) and Path(b).resolve() != Path(str(app_config.BASE)).resolve()
+        except Exception:
+            foreign = True
+        if not foreign:
+            return
+        app_config.update_config({"port_offset": 2000})
+        os.environ["AVATARHUB_PORT_OFFSET"] = "2000"  # 子服务经 env 继承,当场生效
+        import importlib
+        importlib.reload(app_config)   # 本模块 HUB_LOCAL 在其后定义,自然取到平移后端口
+        print(f"[Launcher] 端口 {hub_port} 被另一套安装占用 → 已自动启用端口偏移 +2000 "
+              f"(本套控制台改为 :{app_config.port('hub')}，已写入 config.json，可手动改)", flush=True)
+    except Exception:
+        pass
+
+
+_auto_port_avoid()
 import service_manager as sm
 
 try:
@@ -40,6 +88,10 @@ except Exception:
     telemetry = None
 
 POLL_MS = 2000
+
+# 本套安装的 hub 本机基址(端口经 app_config 覆盖层解析)：两套安装并存(端口偏移)时
+# 启动器探测/打开的恒是"自己这套"的 hub，不再硬编码 9000 串到别家。
+HUB_LOCAL = f"http://127.0.0.1:{app_config.port('hub') or 9000}"
 
 
 # ── 设计系统（设计令牌 / 主题 / QSS / 缩放 / 动效）已拆分至 launcher_theme.py ──────
@@ -90,7 +142,7 @@ APP_VERSION = "1.1.0"
 # 只在打包版(frozen)默认启用——源码树开发机不该被提示「升级」把仓库盖掉；
 # AVATARHUB_UPDATE_DEV=1 可在源码树强开（联调用）。
 RELEASE_MANIFEST_URL = os.environ.get(
-    "AVATARHUB_RELEASE_URL", "https://bd2026.cc/releases/release_manifest.json")
+    "AVATARHUB_RELEASE_URL", "https://usdt2026.cc/releases/release_manifest.json")
 
 
 def _ver_tuple(s: str) -> tuple:
@@ -202,7 +254,7 @@ def resolve_brand(force: bool = False) -> dict:
     try:
         from urllib.request import urlopen
         import json as _json
-        with urlopen("http://127.0.0.1:9000/api/brand", timeout=1.2) as r:
+        with urlopen(HUB_LOCAL+"/api/brand", timeout=1.2) as r:
             cfg = (_json.loads(r.read().decode("utf-8")) or {}).get("config") or {}
     except Exception:
         try:
@@ -355,21 +407,14 @@ CAP_TAGLINES = {
     "直播/客服接入": "可接入虚拟摄像头、OBS、直播间或线下屏幕",
 }
 
-# 每个能力的「主操作」=(按钮文案, 直达目标)。点卡片或按钮直接到达「能用」的页面：
-#   /ui#clone 声音克隆 · /phone 体验对话 · /ui#profiles 角色形象 · /ui#stream 开播。
-# 引擎明细/重启降级为卡片角落的小入口（多数用户不需要看裸服务）。
-CAP_ACTIONS = {
-    "直播换脸": ("🎭 直播换脸", "/ui#stream"),
-    "克隆你的声音": ("➕ 克隆声音", "/ui#clone"),
-    "听懂客户提问": ("▶ 体验对话", "/phone"),
-    "直播/客服接入": ("📡 去开播", "/ui#stream"),
-}
+# [P3-3·2026-07-16] CAP_ACTIONS（能力卡主操作按钮映射）已删除：grep 全仓确认零消费死配置
+# （能力卡点击走 _open_capability 弹引擎明细，入口动线由工作台 /api/features 承载）。
 
 # ── 工作台（全功能入口门户）────────────────────────────────────────────────
 # 单一真相 = Hub GET /api/features（与网页首页/命令面板同源，Hub 加功能桌面自动长出入口）；
 # Hub 离线时用下面的内置兜底（点击仍会先拉起核心链路再开窗，不会点了没反应）。
 _WB_FALLBACK = [
-    {"id": "phone", "line": "ChatX 对话", "name": "实时对话", "desc": "免提语音对话数字人", "href": "/phone"},
+    {"id": "phone", "line": "智聊 ChatX", "name": "实时对话", "desc": "免提语音对话数字人", "href": "/phone"},
     {"id": "dashboard", "line": "运营", "name": "数据看板", "desc": "业务与产出数据总览", "href": "/dashboard"},
     {"id": "help", "line": "运营", "name": "使用教程", "desc": "安装 / 使用图文教程", "href": "/help"},
     {"id": "settings", "line": "运营", "name": "设置·白标", "desc": "品牌主色 / 参数配置", "href": "/ui#settings"},
@@ -381,8 +426,10 @@ _WB_IC_BY_ID = {
     "dashboard": "chart", "ops": "probe", "history": "clock", "delivery": "check",
     "logs": "file", "settings": "gear", "help": "book", "verify": "shield", "ask": "help", "setup": "zap",
 }
-# 行排布：产品线分组压缩为 5 行（短线合并同行），未知新产品线自动补行
-_WB_ROW_PLAN = [["常用"], ["VoiceX 音色"], ["ChatX 对话", "LiveX 直播"], ["LingoX 同传", "合规·可信"], ["运营"]]
+# 行排布：产品线分组压缩为 5 行（短线合并同行），未知新产品线自动补行。
+# [2026-07-16 更名] 线名与注册表同步为「三系七品」口径；保留旧线名兼容旧版 Hub 注册表（未知线自动补行仍兜底）。
+_WB_ROW_PLAN = [["常用"], ["幻声 VoiceX", "VoiceX 音色"], ["智聊 ChatX", "幻影 LiveX", "ChatX 对话", "LiveX 直播"],
+                ["通译 LingoX", "合规·可信", "LingoX 同传"], ["运营"]]
 
 _SPRITE_SYMBOLS = None
 
@@ -556,7 +603,7 @@ class CapabilityDialog(QDialog):
         try:
             from urllib.request import urlopen
             import json as _json
-            with urlopen("http://127.0.0.1:9000/api/engines", timeout=1.5) as r:
+            with urlopen(HUB_LOCAL+"/api/engines", timeout=1.5) as r:
                 data = _json.loads(r.read().decode("utf-8"))
             out = {e.get("backend", ""): e for e in data.get("engines", []) if e.get("backend")}
             out["__defaults__"] = data.get("defaults", {})
@@ -1196,8 +1243,8 @@ class Launcher(QMainWindow):
         cta_l.addWidget(self.cta_hint)
         # 次级入口：观看一键演示——描边轻量样式 + 不占满整行，弱化于主按钮之下
         demo_row = QHBoxLayout()
-        self.btn_demo = self._btn("✨ 观看一键演示 ›", "demo", self.on_demo,
-                                  "自动启动核心服务，选择可用角色并打开数字人体验页")
+        self.btn_demo = self._btn("观看一键演示 ›", "demo", self.on_demo,
+                                  "自动启动核心服务，选择可用角色并打开数字人体验页", icon="demo")
         self.btn_demo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         demo_row.addWidget(self.btn_demo)
         demo_row.addStretch(1)
@@ -1245,10 +1292,10 @@ class Launcher(QMainWindow):
         self.table = self._build_table()
         adv_l.addWidget(self.table)
         adv_bar = QHBoxLayout()
-        self.btn_all = self._btn("🚀  启动全部（含扩展）", "ghost", self.on_start_all,
-                                 "启动包含扩展引擎的全部服务（显存占用较高）")
-        self.btn_restart = self._btn("🔄  重启选中", "accent", self.on_restart_sel,
-                                     "重启服务明细中选中的单个服务")
+        self.btn_all = self._btn("启动全部（含扩展）", "ghost", self.on_start_all,
+                                 "启动包含扩展引擎的全部服务（显存占用较高）", icon="zap")
+        self.btn_restart = self._btn("重启选中", "accent", self.on_restart_sel,
+                                     "重启服务明细中选中的单个服务", icon="refresh")
         adv_bar.addWidget(self.btn_all)
         adv_bar.addWidget(self.btn_restart)
         adv_bar.addStretch(1)
@@ -1266,11 +1313,11 @@ class Launcher(QMainWindow):
         lg.setFont(uifont(12, QFont.Bold))
         logbar.addWidget(lg)
         logbar.addStretch(1)
-        self.btn_log_toggle = self._btn("📄  查看详细日志", "link", self._toggle_logs, "展开/收起原始启动日志")
+        self.btn_log_toggle = self._btn("查看详细日志", "link", self._toggle_logs, "展开/收起原始启动日志", icon="file")
         logbar.addWidget(self.btn_log_toggle)
-        logbar.addWidget(self._btn("📂  打开日志目录", "link", self._open_logs_dir, "在文件管理器中打开 logs 目录"))
-        logbar.addWidget(self._btn("📑  复制", "link", self._copy_log, "复制全部日志到剪贴板"))
-        logbar.addWidget(self._btn("🧹  清空", "link", self._clear_log, "清空当前日志显示"))
+        logbar.addWidget(self._btn("打开日志目录", "link", self._open_logs_dir, "在文件管理器中打开 logs 目录", icon="folder"))
+        logbar.addWidget(self._btn("复制", "link", self._copy_log, "复制全部日志到剪贴板", icon="copy"))
+        logbar.addWidget(self._btn("清空", "link", self._clear_log, "清空当前日志显示", icon="trash"))
         root.addWidget(self.logbar_widget)
         # 运行状态改由四张能力卡的状态点 + 顶部总状态徽标承载，删掉原来重复的「运行状态」时间线。
         self.logbox = QPlainTextEdit()
@@ -1282,30 +1329,32 @@ class Launcher(QMainWindow):
         # ── 底栏：常用管理直接露出（设置/授权）；进阶运维收进「更多」菜单，减少拥挤；危险操作右侧隔离 ──
         foot = QHBoxLayout()
         foot.setSpacing(sp("sm"))
-        self.btn_settings = self._btn("⚙  设置", "ghost", self.on_settings, "开机自启 / 启动即最小化到托盘等运维设置")
-        self.btn_license = self._btn("🔑  授权", "ghost", self.on_license, "查看机器指纹 / 输兑换码在线激活 / 导入授权")
+        self.btn_settings = self._btn("设置", "ghost", self.on_settings, "开机自启 / 启动即最小化到托盘等运维设置", icon="gear")
+        self.btn_license = self._btn("授权", "ghost", self.on_license, "查看机器指纹 / 输兑换码在线激活 / 导入授权", icon="lock")
         # 进阶 / 集成商工具统一收进「更多运维」下拉，底栏由 8 个并排按钮收敛为 3 个（仅开发者模式可见）
         self.btn_more = QPushButton("⋯  更多运维  ▾")
         self.btn_more.setObjectName("ghost")
         self.btn_more.setCursor(Qt.PointingHandCursor)
         self.btn_more.setToolTip("组件 / 维护 / 验收 / 验收清单 / 环境体检 / 一键体检 等进阶运维")
         more_menu = QMenu(self.btn_more)
-        more_menu.addAction("🧩  组件 — 加装 / 修复运行环境与模型", self.on_components)
-        more_menu.addAction("🔧  维护 — 发布通道 / 回滚 / STT SLA", self.on_maintenance)
+        # [P3-3] 菜单前缀 emoji → 图标库线性图标（与托盘菜单/网页同源）
+        _mmi = lambda n: _sprite_icon(n, theme_tokens()["TXT2"], 16)
+        more_menu.addAction(_mmi("package"), "组件 — 加装 / 修复运行环境与模型", self.on_components)
+        more_menu.addAction(_mmi("tools"), "维护 — 发布通道 / 回滚 / STT SLA", self.on_maintenance)
         more_menu.addSeparator()
-        more_menu.addAction("✅  一键验收 — 按清单核验并出报告", self.on_acceptance)
-        more_menu.addAction("📋  验收清单 — 打开交付文档", self.on_open_checklist)
+        more_menu.addAction(_mmi("check"), "一键验收 — 按清单核验并出报告", self.on_acceptance)
+        more_menu.addAction(_mmi("file"), "验收清单 — 打开交付文档", self.on_open_checklist)
         more_menu.addSeparator()
-        more_menu.addAction("🧪  环境体检 — 检查 / 创建 conda 环境", self.on_provision)
-        more_menu.addAction("🩺  一键体检 — 整机健康诊断", self.on_doctor)
-        more_menu.addAction("🧰  生成诊断包 — 脱敏日志打包发客服", self.on_diag_pack)
+        more_menu.addAction(_mmi("flask"), "环境体检 — 检查 / 创建 conda 环境", self.on_provision)
+        more_menu.addAction(_mmi("probe"), "一键体检 — 整机健康诊断", self.on_doctor)
+        more_menu.addAction(_mmi("share"), "生成诊断包 — 脱敏日志打包发客服", self.on_diag_pack)
         if _update_enabled():
-            more_menu.addAction("⏪  回滚控制台版本 — 新版异常时降回上一版", self.on_rollback)
+            more_menu.addAction(_mmi("clock"), "回滚控制台版本 — 新版异常时降回上一版", self.on_rollback)
         self.btn_more.setMenu(more_menu)
         for b in (self.btn_settings, self.btn_license, self.btn_more):
             foot.addWidget(b)
         foot.addStretch(1)
-        self.btn_stop = self._btn("⏹ 停止全部", "danger", self.on_stop_all, "停止所有正在运行的服务（释放显存）")
+        self.btn_stop = self._btn("停止全部", "danger", self.on_stop_all, "停止所有正在运行的服务（释放显存）", icon="stopcircle")
         foot.addWidget(self.btn_stop)
         root.addLayout(foot)
         # 兜底伸缩：窗口比内容高时（如最大化），多余竖向空间统一沉到底部，
@@ -1507,6 +1556,15 @@ class Launcher(QMainWindow):
                 dot = str(b.property("_wb_dot") or "") or None
                 ico = _sprite_icon(ic, theme_tokens()["TXT2"], S(15),
                                    dot=(STATE_HEX["ok"] if dot == "ok" else STATE_HEX["down"] if dot == "down" else None))
+                if not ico.isNull():
+                    b.setIcon(ico)
+            except RuntimeError:
+                pass
+        # [P3-3] 普通按钮的前缀图标同机制重染（实底类恒白描不动，幽灵/链接类跟随次级文字色）
+        for b, ic, kind in getattr(self, "_icon_btns", []):
+            try:
+                col = "#ffffff" if kind in self._SOLID_BTN_KINDS else theme_tokens()["TXT2"]
+                ico = _sprite_icon(ic, col, 15)
                 if not ico.isNull():
                     b.setIcon(ico)
             except RuntimeError:
@@ -1927,18 +1985,18 @@ class Launcher(QMainWindow):
         v.addWidget(self.err_detail)
         btns = QHBoxLayout()
         btns.setSpacing(sp("sm"))
-        self.btn_err_retry = self._btn("🔄  重试启动", "primary", self.on_error_retry,
-                                       "重新启动核心链路（会自动补起未就绪的服务）")
-        self.btn_err_log = self._btn("📄  查看详细日志", "ghost", self._show_logs_expand,
-                                     "展开原始启动日志，定位失败原因")
+        self.btn_err_retry = self._btn("重试启动", "primary", self.on_error_retry,
+                                       "重新启动核心链路（会自动补起未就绪的服务）", icon="refresh")
+        self.btn_err_log = self._btn("查看详细日志", "ghost", self._show_logs_expand,
+                                     "展开原始启动日志，定位失败原因", icon="file")
         # 出错处给人（不只给日志）：一键把问题交给客服，降低卡死在错误上的流失
         self.btn_err_support = self._btn(
-            "💬  联系客服", "ghost",
+            "联系客服", "ghost",
             lambda: webbrowser.open(_support_url(self.brand)),
-            "打开官方客服（Telegram），把界面截图发给客服可最快解决")
+            "打开官方客服（Telegram），把界面截图发给客服可最快解决", icon="headphones")
         self.btn_err_diag = self._btn(
-            "🧰  生成诊断包", "ghost", self.on_diag_pack,
-            "把脱敏日志与环境信息打包到桌面，发给客服可最快定位（不含任何账号/授权私料）")
+            "生成诊断包", "ghost", self.on_diag_pack,
+            "把脱敏日志与环境信息打包到桌面，发给客服可最快定位（不含任何账号/授权私料）", icon="share")
         btns.addWidget(self.btn_err_retry)
         btns.addWidget(self.btn_err_log)
         btns.addWidget(self.btn_err_support)
@@ -2308,13 +2366,22 @@ class Launcher(QMainWindow):
     def _clear_log(self):
         self.logbox.clear()
 
-    def _btn(self, text, kind, slot, tip=""):
+    _SOLID_BTN_KINDS = ("boot", "primary", "accent", "danger")   # 实底按钮：图标恒白描
+
+    def _btn(self, text, kind, slot, tip="", icon=None):
         b = QPushButton(text)
         b.setObjectName(kind)
         b.setCursor(Qt.PointingHandCursor)
         b.clicked.connect(slot)
         if tip:
             b.setToolTip(tip)
+        if icon:
+            # [P3-3] 按钮前缀 emoji → 图标库线性图标；实底类白描、幽灵/链接类跟随次级文字色，
+            # 登记进 _icon_btns 由 _apply_theme 随主题重染（与工作台图标同一机制）
+            col = "#ffffff" if kind in self._SOLID_BTN_KINDS else theme_tokens()["TXT2"]
+            b.setIcon(_sprite_icon(icon, col, 15))
+            self._icon_btns = getattr(self, "_icon_btns", [])
+            self._icon_btns.append((b, icon, kind))
         return b
 
     def _set_cell_t(self, table, row, col, text, color=None, align=Qt.AlignVCenter | Qt.AlignLeft):
@@ -2367,12 +2434,12 @@ class Launcher(QMainWindow):
             try:
                 from urllib.request import urlopen
                 import json as _json
-                with urlopen("http://127.0.0.1:9000/health", timeout=1.5) as r:
+                with urlopen(HUB_LOCAL+"/health", timeout=1.5) as r:
                     h = _json.loads(r.read().decode("utf-8"))
                 # 旧版 hub 的 /health 无显存绝对值 → 回退 /api/backpressure（即时可用，无需重启 hub）
                 if not (isinstance(h.get("gpu_mem_total"), (int, float)) and h["gpu_mem_total"] > 0):
                     try:
-                        with urlopen("http://127.0.0.1:9000/api/backpressure", timeout=1.5) as r2:
+                        with urlopen(HUB_LOCAL+"/api/backpressure", timeout=1.5) as r2:
                             h["vram"] = (_json.loads(r2.read().decode("utf-8")) or {}).get("vram", {})
                     except Exception:
                         pass
@@ -2388,7 +2455,7 @@ class Launcher(QMainWindow):
                 try:
                     from urllib.request import urlopen
                     import json as _json
-                    with urlopen("http://127.0.0.1:9000/api/device/checkup?quick=1", timeout=3.0) as r:
+                    with urlopen(HUB_LOCAL+"/api/device/checkup?quick=1", timeout=3.0) as r:
                         self.bridge.device_ready.emit(_json.loads(r.read().decode("utf-8")))
                 except Exception:
                     try:
@@ -2748,18 +2815,20 @@ class Launcher(QMainWindow):
         self._tray_status_action = menu.addAction("●  检测中…")
         self._tray_status_action.setEnabled(False)   # 只读状态行
         menu.addSeparator()
-        menu.addAction("显示主窗口", self._show_normal)
-        menu.addAction("打开控制台", self.on_open_ui)
+        # [P2-3/P3-3·2026-07-16] emoji 功能位清理：菜单一律图标库线性图标（与网页/工作台同源）
+        _mico = lambda n: _sprite_icon(n, theme_tokens()["TXT2"], 16)
+        menu.addAction(_mico("home"), "显示主窗口", self._show_normal)
+        menu.addAction(_mico("monitor"), "打开控制台", self.on_open_ui)
         menu.addSeparator()
-        menu.addAction("开始直播换脸", self.on_boot)
-        menu.addAction("停止全部", self.on_stop_all)
+        menu.addAction(_mico("signal"), "开始直播换脸", self.on_boot)
+        menu.addAction(_mico("stopcircle"), "停止全部", self.on_stop_all)
         menu.addSeparator()
-        menu.addAction("🌐 官网", lambda: webbrowser.open(
+        menu.addAction(_mico("globe"), "官网", lambda: webbrowser.open(
             self.brand.get("website") or BRAND_DEFAULTS["website"]))
-        menu.addAction("💬 联系客服", lambda: webbrowser.open(_support_url(self.brand)))
-        menu.addAction("🧰 生成诊断包", self.on_diag_pack)
+        menu.addAction(_mico("headphones"), "联系客服", lambda: webbrowser.open(_support_url(self.brand)))
+        menu.addAction(_mico("tools"), "生成诊断包", self.on_diag_pack)
         if _update_enabled():
-            menu.addAction("⬆ 检查更新", lambda: self._check_update_async(manual=True))
+            menu.addAction(_mico("download"), "检查更新", lambda: self._check_update_async(manual=True))
         menu.addSeparator()
         menu.addAction("退出", self._quit_app)
         self.tray.setContextMenu(menu)
@@ -2887,12 +2956,52 @@ class Launcher(QMainWindow):
             pass
         return 1600, 900
 
+    @staticmethod
+    def _webview_shell_cmd(url: str):
+        """原生壳（WebView2 子进程）启动命令；不可用返回 None。
+        冻结态=自派发 `exe --webview-shell <url>`（需 pywebview 进打包清单，available() 探测）；
+        开发态=AVATARHUB_APP_SHELL_PY 指定解释器（默认 .venv_launcher 的 pythonw）跑根目录脚本，
+        并核验该解释器 site-packages 里 pywebview 真实在位（避免空转子进程）。"""
+        try:
+            if getattr(sys, "frozen", False):
+                import webview_shell as _ws
+                if not _ws.available():
+                    return None
+                cmd = [sys.executable, "--webview-shell", url]
+            else:
+                shell_py = (os.environ.get("AVATARHUB_APP_SHELL_PY")
+                            or str(app_config.BASE / ".venv_launcher" / "Scripts" / "pythonw.exe"))
+                shell_script = app_config.BASE / "webview_shell.py"
+                if not (os.path.exists(shell_py) and shell_script.exists()):
+                    return None
+                if not os.environ.get("AVATARHUB_APP_SHELL_PY"):   # 默认 venv：直查包目录（快、免起进程）
+                    pkg = Path(shell_py).parent.parent / "Lib" / "site-packages" / "webview"
+                    if not pkg.is_dir():
+                        return None
+                cmd = [shell_py, str(shell_script), url]
+            if os.environ.get("AVATARHUB_APP_MAXIMIZED", "1") == "0":
+                cmd.append("--windowed")
+            return cmd
+        except Exception:
+            return None
+
     def _open_app_window(self, url: str, size: tuple = None):
-        """以无边框「应用窗口」模式打开（Edge/Chrome --app)——无地址栏/标签页、独立任务栏图标，
-        像独立软件窗口而非网页。默认最大化铺满工作区打开（2026-07-16 用户诉求）；
-        设 AVATARHUB_APP_MAXIMIZED=0 可退回 size 预设尺寸。
-        找不到 Edge/Chrome 时回退系统默认浏览器，保证一定能打开。
-        可用环境变量 AVATARHUB_APP_BROWSER 指定浏览器可执行文件。"""
+        """站内页面开独立应用窗口。通道优先级（2026-07-16 P7-B 定版）：
+        ① 原生壳 WebView2（webview_shell 子进程）——任务栏图标=程序 LOGO、最大化 100% 保证。
+           [为什么不再首选 Edge --app] 用户实锤：Edge 已在运行时，新开 --app 窗口只是转发给
+           既有进程，--start-maximized/--window-size 被忽略、任务栏仍归组 Edge 图标——
+           上午的参数修法只在"Edge 未运行"时生效，真实桌面几乎不成立。
+        ② Edge/Chrome --app（原生壳不可用，或 AVATARHUB_APP_SHELL=edge 强制走旧通道）。
+        ③ 系统默认浏览器（保底一定能打开）。
+        AVATARHUB_APP_MAXIMIZED=0 两通道均退回预设尺寸；AVATARHUB_APP_BROWSER 指定浏览器。"""
+        if os.environ.get("AVATARHUB_APP_SHELL", "").lower() != "edge":
+            try:
+                cmd = self._webview_shell_cmd(url)
+                if cmd:
+                    subprocess.Popen(cmd)
+                    return
+            except Exception:
+                pass   # 原生壳失败 → 落回 Edge --app
         import shutil
         candidates = [
             os.environ.get("AVATARHUB_APP_BROWSER"),
@@ -2959,7 +3068,7 @@ class Launcher(QMainWindow):
         box.setWindowTitle("试用已到期")
         box.setText(msg + "\n\n你仍可以启动服务、查看并导出全部角色与数据；"
                           "数字人开口/克隆等生成功能将在激活后立即恢复。")
-        b_act = box.addButton("🔑 去激活 / 升级", QMessageBox.AcceptRole)
+        b_act = box.addButton("去激活 / 升级", QMessageBox.AcceptRole)
         box.addButton("先启动看看", QMessageBox.RejectRole)
         box.exec()
         if box.clickedButton() is b_act:
@@ -3467,7 +3576,7 @@ def _hub_alive() -> bool:
     """Hub 已在 :9000 健康响应 → 系统肯定已就位（无论 conda 还是便携包模式）。"""
     try:
         from urllib.request import urlopen
-        with urlopen("http://127.0.0.1:9000/health", timeout=1.5) as r:
+        with urlopen(HUB_LOCAL+"/health", timeout=1.5) as r:
             return getattr(r, "status", r.getcode()) == 200
     except Exception:
         return False
@@ -4544,7 +4653,7 @@ class AcceptanceDialog(QDialog):
 
         # 5) 中枢 Hub
         emit("hub", "中枢 Hub", "ok" if hub else "warn",
-             "在线 :9000" if hub else "未启动（点「一键开机」后再验收）")
+             f"在线 :{app_config.port('hub') or 9000}" if hub else "未启动（点「一键开机」后再验收）")
 
         # 6) 核心服务
         try:
@@ -4567,7 +4676,7 @@ class AcceptanceDialog(QDialog):
         try:
             from urllib.request import urlopen
             import json as _json
-            with urlopen("http://127.0.0.1:9000/api/engines", timeout=2.5) as r:
+            with urlopen(HUB_LOCAL+"/api/engines", timeout=2.5) as r:
                 data = _json.loads(r.read().decode("utf-8"))
             engs = data.get("engines", [])
             avail = [e for e in engs if e.get("available")]
@@ -4582,9 +4691,9 @@ class AcceptanceDialog(QDialog):
         # 8) 控制台可达
         try:
             from urllib.request import urlopen
-            with urlopen("http://127.0.0.1:9000/ui", timeout=2.5) as r:
+            with urlopen(HUB_LOCAL+"/ui", timeout=2.5) as r:
                 ok = getattr(r, "status", r.getcode()) == 200
-            emit("ui", "控制台可达", "ok" if ok else "warn", "http://127.0.0.1:9000/ui")
+            emit("ui", "控制台可达", "ok" if ok else "warn", HUB_LOCAL + "/ui")
         except Exception:
             emit("ui", "控制台可达", "warn", "未响应（先点「一键开机」）")
 
@@ -4825,7 +4934,7 @@ class LicenseDialog(QDialog):
 
     def _open_store(self):
         """打开官网购买页并带上本机指纹：下单即绑机，付款开通后状态页自取授权码。"""
-        base = os.environ.get("AVATARHUB_STORE_URL", "https://bd2026.cc/order").rstrip("/")
+        base = os.environ.get("AVATARHUB_STORE_URL", "https://usdt2026.cc/order").rstrip("/")
         fp = (self.fp_edit.text() or "").strip()
         url = f"{base}?fp={fp}" if fp else base
         try:
@@ -4954,8 +5063,15 @@ class _SingleInstance(QObject):
     避免叠开多个启动器窗口（此前重复点击启动脚本会出现多窗口）。"""
     activate_requested = Signal()
 
-    def __init__(self, key: str = "AvatarHubLauncher.singleton"):
+    def __init__(self, key: str = ""):
         super().__init__()
+        if not key:
+            # 锁按安装目录隔离(2026-07-17)：同一套安装仍严格单实例，但「安装版 + 源码开发版」
+            # 两套可各自开窗(端口层由 config.json port_offset 分流,port_guard 兜底防真撞)。
+            # 旧全局锁会让第二套永远只是激活第一套的窗口——两套并存时用户以为"打不开"。
+            import hashlib
+            _h = hashlib.sha1(str(app_config.BASE).lower().encode("utf-8")).hexdigest()[:10]
+            key = f"AvatarHubLauncher.{_h}"
         self._key = key
         self._lock = None
         self._server = None
@@ -5001,6 +5117,27 @@ class _SingleInstance(QObject):
 
 
 def main():
+    # [P4-A·2026-07-16] 冻结态原生壳子进程入口：AvatarHub.exe --webview-shell <url>。
+    # 必须在 QApplication/单实例锁之前派发——壳进程不进 Qt 主循环、不抢单实例。
+    if "--webview-shell" in sys.argv:
+        try:
+            import webview_shell as _ws
+            i = sys.argv.index("--webview-shell")
+            sys.exit(_ws.run_cli(sys.argv[i + 1:]))
+        except SystemExit:
+            raise
+        except BaseException:
+            # GUI 子系统无 stderr——异常落盘 logs\webview_shell.err（客户机壳崩排障的唯一线索）
+            try:
+                import traceback
+                _d = app_config.BASE / "logs"
+                _d.mkdir(parents=True, exist_ok=True)
+                (_d / "webview_shell.err").write_text(
+                    time.strftime("%Y-%m-%d %H:%M:%S\n") + traceback.format_exc(), encoding="utf-8")
+            except Exception:
+                pass
+            sys.exit(1)
+
     app = QApplication(sys.argv)
     app.setApplicationName("无界幻境 BOUNDLESS Studio")
     # 品牌应用图标：窗口/任务栏统一用 assets\app.ico（∞ 主标深色头像版）。
@@ -5137,7 +5274,7 @@ def main():
             try:
                 import ssl as _ssl
                 from urllib.request import urlopen as _uo
-                with _uo("https://bd2026.cc/releases/release_manifest.json",
+                with _uo("https://usdt2026.cc/releases/release_manifest.json",
                          timeout=8) as _r:
                     deps.append(f"https={_r.status}")
             except Exception as e:
