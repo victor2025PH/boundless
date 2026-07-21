@@ -1599,9 +1599,14 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         """登出账号：停 worker + 通知平台解除关联 + 清空会话凭据。
 
         保留注册表记录（可重新扫码登录），仅使其下线并断开自动重连。
+        仅对注册表在册账号有意义；config/适配器来源的条目（如 A 线 telegram
+        default、web）没有可清的会话凭据 → 明确 404，而不是静默空操作。
         """
         api_auth(request)
         cfg = (config_manager.config if config_manager is not None else {}) or {}
+        if get_account_registry().get(platform, account_id) is None:
+            raise HTTPException(
+                404, tr(request, "err.ws.account_not_in_registry"))
         try:
             await _orch().stop_account(_acct_key(platform, account_id))
         except Exception:
@@ -1612,9 +1617,17 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
 
     @app.post("/api/accounts/{platform}/{account_id}/remove")
     async def api_account_remove(platform: str, account_id: str, request: Request):
-        """删除账号：登出 + 从注册表移除（软删 status=removed，回收自身头像）。"""
+        """删除账号：登出 + 从注册表移除（软删 status=removed，回收自身头像）。
+
+        注册表里没有的账号（config/适配器来源，如 A 线 telegram default、web）
+        软删是空操作——旧版仍回 ok:true，前端刷新后账号原样回来，表现为
+        「点删除没反应」（2026-07-21 生产实测）→ 现在明确 404 告知不可删。
+        """
         api_auth(request)
         cfg = (config_manager.config if config_manager is not None else {}) or {}
+        if get_account_registry().get(platform, account_id) is None:
+            raise HTTPException(
+                404, tr(request, "err.ws.account_not_in_registry"))
         try:
             await _orch().stop_account(_acct_key(platform, account_id))
         except Exception:

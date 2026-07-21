@@ -163,8 +163,16 @@ def test_status_via_adapters_merges_keys():
     st = status_via_adapters(req, default_inbox_adapters())
     assert st["line_line1"]["running"] is True
     assert st["line_line1"]["label"] == "LINE One"
-    # telegram 始终上报（无 client 时 running=False）
+    # 有 A 线 client 时 telegram 上报 default 行
     assert "telegram" in st and st["telegram"]["platform"] == "telegram"
+
+
+def test_telegram_status_absent_without_client():
+    """telegram 未配置（无 client）时不得上报幽灵 default 行——
+    该行不在注册表里，删除/登出全是空操作，会在连接中心显示成
+    「永远断线且删不掉的主账号」（2026-07-21 生产实测）。"""
+    st = status_via_adapters(_req(), default_inbox_adapters())
+    assert "telegram" not in st
 
 
 def test_status_isolates_failing_adapter():
