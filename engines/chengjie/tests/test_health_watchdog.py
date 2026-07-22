@@ -775,3 +775,95 @@ def test_realtime_voice_reconciles_stale_incident_on_startup(monkeypatch):
     wd._check_realtime_voice()
     assert inbox.resolved == ["realtime_voice"]
     assert all(t != "realtime_voice_alert" for t, _ in published)
+
+
+# ── 日志巡检（triage）看门狗接入门禁（2026-07-23） ─────────────────────
+
+def _triage_cm(log_file, *, enabled=True, **extra):
+    lt = {"enabled": enabled, "log_file": str(log_file), "window_hours": 24}
+    lt.update(extra)
+    return _CM({"ai": {"provider": "openai", "api_key": "x"},
+                "health_watchdog": {"log_triage": lt}})
+
+
+def _write_triage_log(tmp_path, content):
+    d = tmp_path / "logs"; d.mkdir(parents=True, exist_ok=True)
+    p = d / "app.log"; p.write_text(content, encoding="utf-8")
+    return p
+
+
+_TLOG = ("[2026-07-23 05:00:00] [WARNING] net: timeout id=aaa\n"
+         "[2026-07-23 05:01:00] [WARNING] net: timeout id=bbb\n"
+         "[2026-07-23 05:02:00] [INFO] app: started ok\n")
+_TLOG2 = _TLOG + "[2026-07-23 05:30:00] [ERROR] db: no such column: xyz\n"
+
+
+def _patch_since(monkeypatch):
+    import scripts.triage_watch as tw
+    monkeypatch.setattr(tw, "window_since", lambda h, now=None: "2026-07-23 00:00:00")
+
+
+def test_triage_disabled_by_default(tmp_path, monkeypatch):
+    fired = []
+    import src.utils.host_alert as ha
+    monkeypatch.setattr(ha, "notify_host", lambda *a, **k: fired.append(a) or True)
+    log = _write_triage_log(tmp_path, _TLOG)
+    app = _fake_app()
+    wd = HealthWatchdog(app=app, config_manager=_triage_cm(log, enabled=False), interval_sec=60)
+    wd._check_log_triage(now=1000.0)
+    assert fired == []
+    assert not (log.parent / "triage" / "baseline.json").exists()
+
+
+def test_triage_first_run_seeds_no_alert(tmp_path, monkeypatch):
+    _patch_since(monkeypatch)
+    fired = []
+    import src.utils.host_alert as ha
+    monkeypatch.setattr(ha, "notify_host", lambda *a, **k: fired.append(a) or True)
+    log = _write_triage_log(tmp_path, _TLOG)
+    wd = HealthWatchdog(app=_fake_app(), config_manager=_triage_cm(log), interval_sec=60)
+    wd._check_log_triage(now=1000.0)
+    assert fired == []                                    # 首跑不告警
+    assert (log.parent / "triage" / "baseline.json").exists()  # 但建立了基线
+    assert wd.total_log_triage_alerts == 0
+
+
+def test_triage_second_run_alerts_new_error(tmp_path, monkeypatch):
+    _patch_since(monkeypatch)
+    fired = []
+    import src.utils.host_alert as ha
+    monkeypatch.setattr(ha, "notify_host",
+                        lambda title, msg, **k: fired.append((title, msg, k)) or True)
+    log = _write_triage_log(tmp_path, _TLOG)
+    wd = HealthWatchdog(app=_fake_app(), config_manager=_triage_cm(log), interval_sec=60)
+    wd._check_log_triage(now=1000.0)                      # 首跑建基线
+    log.write_text(_TLOG2, encoding="utf-8")               # 新增 ERROR
+    wd._check_log_triage(now=1000.0 + 6 * 3600 + 1)        # 越过节流窗
+    assert len(fired) == 1
+    title, msg, k = fired[0]
+    assert "错误" in title and k.get("key", "").startswith("triage:")
+    assert wd.total_log_triage_alerts == 1
+
+
+def test_triage_throttled_within_interval(tmp_path, monkeypatch):
+    _patch_since(monkeypatch)
+    calls = {"n": 0}
+    import scripts.triage_watch as tw
+    orig = tw.scan_once
+    monkeypatch.setattr(tw, "scan_once",
+                        lambda *a, **k: calls.__setitem__("n", calls["n"] + 1) or orig(*a, **k))
+    log = _write_triage_log(tmp_path, _TLOG)
+    wd = HealthWatchdog(app=_fake_app(), config_manager=_triage_cm(log), interval_sec=60)
+    wd._check_log_triage(now=1000.0)
+    wd._check_log_triage(now=1000.0 + 60)                  # 6h 内 → 跳过
+    assert calls["n"] == 1
+
+
+def test_triage_missing_log_no_crash(tmp_path, monkeypatch):
+    fired = []
+    import src.utils.host_alert as ha
+    monkeypatch.setattr(ha, "notify_host", lambda *a, **k: fired.append(a) or True)
+    wd = HealthWatchdog(app=_fake_app(),
+                        config_manager=_triage_cm(tmp_path / "nope.log"), interval_sec=60)
+    wd._check_log_triage(now=1000.0)                       # 不应抛异常
+    assert fired == []

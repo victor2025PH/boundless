@@ -20,6 +20,13 @@ def setup_logging(assistant, log_config: dict) -> None:
         level = getattr(logging, log_level.upper(), logging.INFO)
         assistant.logger.setLevel(level)
 
+        # 第三方噪声折叠过滤器（pyrogram 掉线刷屏等；只折叠配置前缀，src.* 不受影响）
+        try:
+            from src.utils.log_throttle import build_throttle_filter
+            throttle_filter = build_throttle_filter(log_config)
+        except Exception:
+            throttle_filter = None
+
         # 重新配置日志记录器
         assistant.logger.handlers.clear()
 
@@ -35,6 +42,8 @@ def setup_logging(assistant, log_config: dict) -> None:
                 datefmt='%Y-%m-%d %H:%M:%S'
             )
             console_handler.setFormatter(console_formatter)
+            if throttle_filter is not None:
+                console_handler.addFilter(throttle_filter)
             assistant.logger.addHandler(console_handler)
 
         # 文件处理器（RotatingFileHandler 自动轮转）
@@ -53,6 +62,8 @@ def setup_logging(assistant, log_config: dict) -> None:
                 datefmt='%Y-%m-%d %H:%M:%S'
             )
             file_handler.setFormatter(file_formatter)
+            if throttle_filter is not None:
+                file_handler.addFilter(throttle_filter)
             assistant.logger.addHandler(file_handler)
             # 防止 ai_chat_assistant 消息被 root handler 再写一次（duplicate）
             assistant.logger.propagate = False
