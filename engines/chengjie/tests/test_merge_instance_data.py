@@ -54,7 +54,10 @@ CREATE TABLE translation_memory (
 
 _KB_DDL = """
 CREATE TABLE kb_entries (id TEXT PRIMARY KEY, category TEXT, title TEXT,
-  example_reply_zh TEXT, enabled INTEGER DEFAULT 1);
+  example_reply_zh TEXT, enabled INTEGER DEFAULT 1,
+  template_key TEXT DEFAULT '');
+CREATE UNIQUE INDEX idx_kb_template_key ON kb_entries(template_key)
+  WHERE template_key != '';
 CREATE TABLE kb_error_codes (id TEXT PRIMARY KEY, code TEXT);
 CREATE TABLE kb_rules (id TEXT PRIMARY KEY, description TEXT);
 """
@@ -123,13 +126,29 @@ def _mk_instance(root: Path, *, target: bool, src_key_bytes: bytes = None):
           if not target else
           ("ck-dst-1", "bye", "再见", "en", "zh", "ollama_mt"))),
     ])
+    # kb_entries 复刻 2026-07-24 首切事故拓扑：id=内容哈希（两侧天然不同），
+    # 模板身份在 template_key（部分唯一索引 WHERE != ''）——
+    # 两侧各自播种同一模板包 → 同 template_key 不同 id，必须由守卫跳过。
     _mk_db(cfg / "knowledge_base.db", _KB_DDL, rows=[
-        ("INSERT INTO kb_entries (id, category, title) VALUES (?,?,?)",
-         (("kb-src-1", "翻译", "运费说明") if not target
-          else ("kb-dst-1", "陪伴", "问候"))),
+        ("INSERT INTO kb_entries (id, category, title, template_key) VALUES (?,?,?,?)",
+         (("kb-src-1", "翻译", "运费说明（通译版）", "tpl_shipping")
+          if not target
+          else ("kb-dst-1", "陪伴", "运费说明", "tpl_shipping"))),
+        ("INSERT INTO kb_entries (id, category, title, template_key) VALUES (?,?,?,?)",
+         (("kb-src-2", "翻译", "报价流程", "tpl_quote") if not target
+          else ("kb-dst-2", "陪伴", "自由问答", ""))),  # 目标自由条目（空 tk）
         ("INSERT INTO kb_error_codes VALUES (?,?)",
          ("ec-shared", "X004")),  # 两侧同 id → 应跳过
     ])
+    if not target:
+        conn = sqlite3.connect(str(cfg / "knowledge_base.db"))
+        # 源侧自由条目（空 tk）——与目标空 tk 行合法共存，守卫不得误拦
+        conn.execute(
+            "INSERT INTO kb_entries (id, category, title, template_key) "
+            "VALUES (?,?,?,?)",
+            ("kb-src-3", "翻译", "客户口头禅备注", ""))
+        conn.commit()
+        conn.close()
     _mk_db(cfg / "web_users.db", _USERS_DDL, rows=[
         ("INSERT INTO web_users (username, role, display_name) VALUES (?,?,?)",
          ("admin", "master", "管理员")),  # 两侧同名 → 冲突跳过
@@ -182,6 +201,11 @@ def test_dry_run_writes_nothing(instances):
     assert conv["inserted"] == 1
     assert _counts(dst / "config/inbox.db", "conversations") == before["conversations"]
     assert _counts(dst / "config/inbox.db", "messages") == before["messages"]
+    # 唯一索引守卫在干跑同判（干跑预测 ≡ 实写行为，收敛校验才可信）：
+    # 同 template_key 模板 → skipped_guard，不进 inserted
+    kb = next(t for t in report["tables"] if t["table"] == "kb_entries")
+    assert kb["inserted"] == 2, kb          # tpl_quote + 空 tk 自由条目
+    assert kb["skipped_guard"] == 1, kb     # tpl_shipping 两侧同模板
 
 
 def test_apply_merges_and_is_idempotent(instances):
@@ -193,7 +217,16 @@ def test_apply_merges_and_is_idempotent(instances):
     assert _counts(inbox, "messages") == 3
     assert _counts(inbox, "conversation_settings") == 1
     assert _counts(dst / "config/translation_memory.db", "translation_memory") == 2
-    assert _counts(dst / "config/knowledge_base.db", "kb_entries") == 2
+    # kb：目标 2 + 源新模板 1 + 源自由条目 1 = 4；同模板 tpl_shipping 守卫跳过
+    kb_db = dst / "config/knowledge_base.db"
+    assert _counts(kb_db, "kb_entries") == 4
+    conn = sqlite3.connect(str(kb_db))
+    tks = [r[0] for r in conn.execute(
+        "SELECT template_key FROM kb_entries WHERE template_key != ''")]
+    conn.close()
+    assert sorted(tks) == ["tpl_quote", "tpl_shipping"]  # 无重复模板
+    kb_rep = next(t for t in report["tables"] if t["table"] == "kb_entries")
+    assert kb_rep["skipped_guard"] == 1 and kb_rep["skipped_conflict"] == 0
     # 同 id 错误码不重复
     assert _counts(dst / "config/knowledge_base.db", "kb_error_codes") == 1
     # 用户：admin 冲突跳过，agent_ty 并入
@@ -211,11 +244,30 @@ def test_apply_merges_and_is_idempotent(instances):
     # 备份产物存在
     assert report["backups"] and all(Path(b).exists() for b in report["backups"])
 
-    # 幂等重跑：inserted 全 0，行数不变
+    # 幂等重跑：inserted 全 0，行数不变（守卫行稳定停在 skipped_guard）
     report2 = run_merge(src, dst, apply=True, backup=False)
     assert report2["ok"] is True
     assert sum(int(t.get("inserted") or 0) for t in report2["tables"]) == 0
     assert _counts(inbox, "messages") == 3
+
+
+def test_integrity_conflict_net_never_crashes(instances, monkeypatch):
+    """守卫盲区兜底：约束自省被遮蔽（模拟看不见的复杂约束）时，
+    IntegrityError 必须行级跳过点名，绝不炸穿整个实写（首切事故语义）。"""
+    import scripts.merge_instance_data as mid
+
+    src, dst, *_ = instances
+    monkeypatch.setattr(mid, "_unique_guards", lambda *a, **k: [])
+    report = mid.run_merge(src, dst, apply=True)
+    kb = next(t for t in report["tables"] if t["table"] == "kb_entries")
+    # tpl_shipping 撞唯一索引 → skipped_conflict 而非异常；其余行照常插入
+    assert kb["skipped_conflict"] == 1, kb
+    assert kb["inserted"] == 2, kb
+    assert any("integrity skip" in n for n in kb["notes"])
+    assert kb["ok"] is True  # 兜底跳过不判死（收敛校验会让它持续可见）
+    # 后续表未被炸穿：账号照常并入
+    acc = next(t for t in report["tables"] if t["table"] == "platform_accounts")
+    assert acc["inserted"] == 1
 
 
 def test_account_recrypted_and_tagged(instances):

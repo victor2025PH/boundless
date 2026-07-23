@@ -20,6 +20,11 @@
   username / platform+account_id）「不存在才插入」；重跑 inserted=0。
 - **列交集**：INSERT 只写源目标两侧都有的列（两侧 schema 版本略有出入也不炸；
   目标独有列吃默认值，如 platform_accounts.business_line）。
+- **唯一索引守卫**（2026-07-24 首切事故补）：自然键之外，目标表全部唯一索引
+  插入前自省预查（干跑/实写同判）——两实例各自播种同一模板包时
+  kb_entries.template_key 撞 UNIQUE 的场景降级为 skipped_guard 而非炸穿；
+  残余不可见约束再有行级 IntegrityError 兜底（skipped_conflict + 点名，
+  语句级回滚不伤事务）。
 - **凭证换密**：platform_accounts.meta_json 敏感字段（session_string 等）用
   源实例 config/registry.key 解密 → 目标实例 key 重加密（enc:v1 约定同
   src/integrations/registry_crypto）。两侧 key 相同则原样透传。密文解不开 →
@@ -53,6 +58,8 @@ MERGE_SPEC: List[Tuple[str, str, Tuple[str, ...]]] = [
     ("config/inbox.db", "messages", ("message_id",)),
     ("config/inbox.db", "conversation_settings", ("conversation_id",)),
     ("config/translation_memory.db", "translation_memory", ("cache_key",)),
+    # kb_entries.id 是内容哈希（两库天然不同），模板身份在 template_key
+    # （UNIQUE WHERE != ''）——同包重播由唯一索引守卫兜住（skipped_guard）
     ("config/knowledge_base.db", "kb_entries", ("id",)),
     ("config/knowledge_base.db", "kb_error_codes", ("id",)),
     ("config/knowledge_base.db", "kb_rules", ("id",)),
@@ -81,6 +88,37 @@ def _table_cols(conn: sqlite3.Connection, table: str) -> List[str]:
         return [r[1] for r in conn.execute(f"PRAGMA table_info([{table}])")]
     except sqlite3.Error:
         return []
+
+
+def _unique_guards(
+    dst: sqlite3.Connection, table: str, common: List[str],
+) -> List[Tuple[str, List[str], bool]]:
+    """目标表唯一索引自省 → [(索引名, 列, 是否部分索引)]，主键除外。
+
+    自然键漏判时（2026-07-24 首切事故：kb_entries 按 id(内容哈希) 判重，
+    模板身份实际在 UNIQUE(template_key)）插入会 IntegrityError 炸穿实写。
+    guard = 插入前按目标库全部唯一索引再查一遍存在性，命中记 skipped_guard；
+    干跑与实写同判 → 干跑预测数与实写行为一致，收敛校验才可信。
+
+    partial 索引（如 WHERE template_key != ''）近似语义：任一 guard 列为
+    NULL/空串 → 该行不在索引担保范围，不查（多空串行合法共存）。
+    非 partial 索引 NULL 不参与唯一性（SQLite 语义），同样跳过。
+    """
+    guards: List[Tuple[str, List[str], bool]] = []
+    try:
+        for ix in dst.execute(f"PRAGMA index_list([{table}])").fetchall():
+            keys = ix.keys()
+            if not ix["unique"] or ("origin" in keys and ix["origin"] == "pk"):
+                continue
+            cols = [r["name"] for r in
+                    dst.execute(f"PRAGMA index_info([{ix['name']}])")]
+            if not cols or any(c not in common for c in cols):
+                continue
+            partial = bool(ix["partial"]) if "partial" in keys else False
+            guards.append((str(ix["name"]), cols, partial))
+    except sqlite3.Error:
+        pass
+    return guards
 
 
 def _load_fernet(key_path: Path):
@@ -157,6 +195,7 @@ def merge_table(
     rep: Dict[str, Any] = {
         "table": table, "source_rows": 0, "target_before": 0,
         "inserted": 0, "skipped_existing": 0, "skipped_transform": 0,
+        "skipped_guard": 0, "skipped_conflict": 0,
         "target_after": None, "ok": True, "notes": [],
     }
     src_cols = _table_cols(src, table)
@@ -184,6 +223,7 @@ def merge_table(
         f"INSERT INTO [{table}] ({', '.join('['+c+']' for c in common)}) "
         f"VALUES ({', '.join('?' for _ in common)})"
     )
+    guards = _unique_guards(dst, table, common)
     for r in rows:
         d = {c: r[c] for c in common}
         exists = dst.execute(
@@ -192,6 +232,25 @@ def merge_table(
         ).fetchone()
         if exists:
             rep["skipped_existing"] += 1
+            continue
+        # 唯一索引守卫：自然键没抓住、但目标唯一索引会拒收的行 → 视为已存在
+        # （同一模板/同一身份在两实例各自播种的场景），干跑/实写同判。
+        g_hit = None
+        for g_name, g_cols, g_partial in guards:
+            vals = [d.get(c) for c in g_cols]
+            if any(v is None for v in vals):
+                continue
+            if g_partial and any(isinstance(v, str) and v == "" for v in vals):
+                continue
+            if dst.execute(
+                f"SELECT 1 FROM [{table}] WHERE "
+                + " AND ".join(f"[{c}]=?" for c in g_cols),
+                vals,
+            ).fetchone():
+                g_hit = g_name
+                break
+        if g_hit:
+            rep["skipped_guard"] += 1
             continue
         if transform is not None:
             d2 = transform(dict(d))
@@ -205,17 +264,27 @@ def merge_table(
         else:
             extra = {}
         if apply:
-            if extra:
-                cols_all = list(d.keys()) + list(extra.keys())
-                vals = list(d.values()) + list(extra.values())
-                dst.execute(
-                    f"INSERT INTO [{table}] "
-                    f"({', '.join('['+c+']' for c in cols_all)}) "
-                    f"VALUES ({', '.join('?' for _ in cols_all)})",
-                    vals,
-                )
-            else:
-                dst.execute(ins_sql, [d[c] for c in common])
+            try:
+                if extra:
+                    cols_all = list(d.keys()) + list(extra.keys())
+                    vals = list(d.values()) + list(extra.values())
+                    dst.execute(
+                        f"INSERT INTO [{table}] "
+                        f"({', '.join('['+c+']' for c in cols_all)}) "
+                        f"VALUES ({', '.join('?' for _ in cols_all)})",
+                        vals,
+                    )
+                else:
+                    dst.execute(ins_sql, [d[c] for c in common])
+            except sqlite3.IntegrityError as ex:
+                # 兜底安全网：guard 覆盖不到的约束（如带 WHERE 的复杂部分索引）
+                # 绝不炸穿整个切换——跳过该行、如实点名；SQLite 语句级回滚，
+                # 事务内其余行不受影响。收敛校验会因该行持续 pending 而变红，
+                # 逼人工审视，不会静默丢失。
+                rep["skipped_conflict"] += 1
+                rep["notes"].append(
+                    f"integrity skip key={tuple(d.get(k) for k in key_cols)}: {ex}")
+                continue
             if after_insert is not None:
                 try:
                     after_insert(dst, d)
