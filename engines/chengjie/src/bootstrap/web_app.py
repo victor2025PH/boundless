@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 import threading
 from typing import Any
@@ -654,6 +655,17 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                 web_app.state.skill_manager = assistant.skill_manager
             web_port = int(web_cfg.get("port", 8080))
             web_host = web_cfg.get("host", "127.0.0.1")
+            # S2/S4 fail-safe：默认 secret_key + 绑定非本地地址 = 危险暴露（session 可伪造）。
+            # 除非显式 ALLOW_INSECURE=1，否则降级绑回 127.0.0.1 并告警（不 crash 整进程）。
+            _secret = str(web_cfg.get("secret_key", "change-me-in-production"))
+            _exposed = str(web_host) not in ("127.0.0.1", "::1", "localhost", "")
+            if _secret == "change-me-in-production" and _exposed and os.getenv("ALLOW_INSECURE") != "1":
+                assistant.logger.error(
+                    "[SECURITY] 检测到默认 secret_key 且绑定非本地地址 %s；为防不安全暴露，"
+                    "Web 后台改绑 127.0.0.1。请配置随机 web_admin.secret_key，或设 ALLOW_INSECURE=1。",
+                    web_host,
+                )
+                web_host = "127.0.0.1"
             uvi_config = uvicorn.Config(web_app, host=web_host, port=web_port, log_level="warning")
             server = uvicorn.Server(uvi_config)
             assistant._web_server = server

@@ -191,6 +191,12 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 clear_needs_human(ibx, cid)
             except Exception:
                 logger.debug("清除 needs-human 标签失败（已忽略）", exc_info=True)
+            # Sprint1 接管即静音：坐席出站即把会话切 manual，停 AI（后续入站不再产 L2/autosend，
+            # protocol 直发亦让位），与 web_chat 适配器(channel_adapters.send)一致；重复调用幂等。
+            try:
+                ibx.set_automation_mode(cid, "manual")
+            except Exception:
+                logger.debug("接管置 manual 失败（已忽略）", exc_info=True)
 
         # A2 写路径收尾：发送收敛到各渠道适配器（与 collect/status 对称）。
         # 跨切面（坐席首响归属打点）统一留在路由，按 result.conversation_id 归属。
@@ -316,6 +322,8 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 ibx.record_agent_send(
                     cid, _send_agent["agent_id"],
                     agent_name=_send_agent.get("display_name", ""))
+                # Sprint1 接管即静音：媒体发送同属坐席接管，切 manual 停 AI。
+                ibx.set_automation_mode(cid, "manual")
         except Exception:
             logger.debug("record_agent_send(media) 失败", exc_info=True)
         return {"ok": True, "result": res, "media_ref": url, "media_type": mtype}
@@ -364,8 +372,25 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             contact_key=chat_key or None, platform=platform,
             account_id=account_id, text=text)
         voice_cfg = voice_ctx.get("voice_cfg") or {}
+        _explicit_voice_override = isinstance(cfg_override, dict) and any(
+            cfg_override.get(k) for k in ("voice", "backend", "voice_profile"))
         if isinstance(cfg_override, dict):
             voice_cfg.update({k: v for k, v in cfg_override.items() if v not in (None, "")})
+        # 语言路由（与自动语音同口径）：edge 音色对齐文本语种，防止手动语音也踩
+        # 「ja 音色念中文」类错配；坐席显式覆写 voice/backend 时尊重人工选择不路由。
+        # 语种明确但无音色映射 → 明确报错回落（发错语言的语音比不发更糟）。
+        if not _explicit_voice_override:
+            try:
+                from src.ai.lang_voice_route import (
+                    is_reject_tag, route_voice_cfg_for_text)
+                voice_cfg, _lang_route = route_voice_cfg_for_text(
+                    voice_cfg, text, raw_cfg)
+                if is_reject_tag(_lang_route):
+                    return {"ok": False, "reason": "lang_mismatch",
+                            "message": tr(request, "err.inbox.voice_lang_mismatch",
+                                          lang=_lang_route.split(":", 1)[-1])}
+            except Exception:
+                logger.debug("[inbox/voice-send] 语言路由异常（忽略）", exc_info=True)
         voice_cfg["enabled"] = True
 
         # 合成到临时目录
@@ -425,6 +450,8 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 ibx.record_agent_send(
                     cid, _send_agent["agent_id"],
                     agent_name=_send_agent.get("display_name", ""))
+                # Sprint1 接管即静音：语音发送同属坐席接管，切 manual 停 AI。
+                ibx.set_automation_mode(cid, "manual")
         except Exception:
             logger.debug("record_agent_send(voice) 失败", exc_info=True)
         _emotion = voice_ctx.get("emotion")

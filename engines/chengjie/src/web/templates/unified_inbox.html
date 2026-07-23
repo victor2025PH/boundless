@@ -7808,8 +7808,8 @@ function renderDrawerAccounts(){
             }
             <button class="acct-btn" onclick="renameAcct('${esc(pl)}','${esc(a.account_id||'')}')">${window.T('inbox.acct.rename')}</button>
             <button class="acct-btn" onclick="viewAcctChats('${esc(pl)}')">${window.T('inbox.acct.view_chats')}</button>
-            ${on?`<button class="acct-btn icon danger" title="${esc(window.T('inbox.acct.logout'))}" onclick="logoutAcct('${esc(pl)}','${esc(aid)}')">🚪</button>`:''}
-            <button class="acct-btn icon danger" title="${esc(window.T('inbox.acct.remove'))}" onclick="removeAcct('${esc(pl)}','${esc(aid)}')">🗑️</button>
+            ${on&&a.removable!==false?`<button class="acct-btn icon danger" title="${esc(window.T('inbox.acct.logout'))}" onclick="logoutAcct('${esc(pl)}','${esc(aid)}',this)">🚪</button>`:''}
+            ${a.removable!==false?`<button class="acct-btn icon danger" title="${esc(window.T('inbox.acct.remove'))}" onclick="removeAcct('${esc(pl)}','${esc(aid)}',this)">🗑️</button>`:''}
           </div>
         </div>`;
       });
@@ -7871,33 +7871,62 @@ function viewAcctChats(pl){
   closeDrawer();
   setPlatFilter(pl);
 }
+/* 账号管理操作专用 fetch：10s 超时兜底 + 解析 JSON。
+   背景（2026-07-21 生产实测）：服务重启窗口/编排器锁竞争时 POST 会长挂，
+   而旧版 fetch 无超时无反馈 → 点删除/登出像「没反应」。返回 {status, okHttp, data}。 */
+async function _acctFetch(url,opts,timeoutMs){
+  const ctrl=(typeof AbortController!=='undefined')?new AbortController():null;
+  const to=setTimeout(()=>{ try{ ctrl&&ctrl.abort(); }catch(_e){} }, timeoutMs||10000);
+  try{
+    const r=await fetch(url, Object.assign({},opts||{},ctrl?{signal:ctrl.signal}:{}));
+    const d=await r.json().catch(()=>({ok:false}));
+    return {status:r.status, okHttp:r.ok, data:d||{}};
+  }finally{ clearTimeout(to); }
+}
+// 操作反馈统一口径：AbortError=超时提示；后端 detail/message（已本地化）verbatim 直显；否则回落通用失败文案。
+function _acctOpFail(e,res,fallbackKey){
+  if(e&&e.name==='AbortError'){ _toast(window.T('inbox.acct.req_timeout'),'#dc2626'); return; }
+  const d=(res&&res.data)||{};
+  _toast(d.detail||d.message||window.T(fallbackKey),'#dc2626');
+}
+// 点击的按钮置 busy（防连点 + 有感反馈）；列表随后整体重绘，无需精确恢复
+function _acctBtnBusy(btn,busy){
+  if(!btn) return;
+  btn.disabled=!!busy;
+  btn.style.opacity=busy?'.45':'';
+  btn.style.pointerEvents=busy?'none':'';
+}
 // 登出账号：断开连接 + 通知平台解除关联 + 清会话凭据（保留账号记录，可重新扫码登录）
-async function logoutAcct(pl,aid){
+async function logoutAcct(pl,aid,btn){
   const nm=(accountMeta[`${pl}:${aid}`]||{}).label||_acctShort(pl,aid);
   const ok=await _appConfirm(window.Tf('inbox.acct.logout_confirm',{name:nm}),
     {title:window.T('inbox.acct.logout_title'),icon:'🚪',tone:'danger',okText:window.T('inbox.acct.logout')});
   if(!ok) return;
+  _acctBtnBusy(btn,true);
+  let res=null;
   try{
-    const r=await fetch(`/api/accounts/${enc(pl)}/${enc(aid)}/logout`,{method:'POST'});
-    const d=await r.json();
-    if(!d.ok) throw new Error('logout failed');
+    res=await _acctFetch(`/api/accounts/${enc(pl)}/${enc(aid)}/logout`,{method:'POST'});
+    if(!res.okHttp||!res.data.ok){ _acctOpFail(null,res,'inbox.acct.logout_fail'); return; }
     _toast(window.T('inbox.acct.logout_ok'),'#16a34a');
     await loadChats(); renderDrawerAccounts();
-  }catch(_){ _toast(window.T('inbox.acct.logout_fail'),'#dc2626'); }
+  }catch(e){ _acctOpFail(e,res,'inbox.acct.logout_fail'); }
+  finally{ _acctBtnBusy(btn,false); }
 }
 // 删除账号：登出 + 从账号池移除（软删，回收自身头像）。二次确认防误删。
-async function removeAcct(pl,aid){
+async function removeAcct(pl,aid,btn){
   const nm=(accountMeta[`${pl}:${aid}`]||{}).label||_acctShort(pl,aid);
   const ok=await _appConfirm(window.Tf('inbox.acct.remove_confirm',{name:nm}),
     {title:window.T('inbox.acct.remove_title'),icon:'🗑️',tone:'danger',okText:window.T('inbox.acct.remove')});
   if(!ok) return;
+  _acctBtnBusy(btn,true);
+  let res=null;
   try{
-    const r=await fetch(`/api/accounts/${enc(pl)}/${enc(aid)}/remove`,{method:'POST'});
-    const d=await r.json();
-    if(!d.ok) throw new Error('remove failed');
+    res=await _acctFetch(`/api/accounts/${enc(pl)}/${enc(aid)}/remove`,{method:'POST'});
+    if(!res.okHttp||!res.data.ok){ _acctOpFail(null,res,'inbox.acct.remove_fail'); return; }
     _toast(window.T('inbox.acct.remove_ok'),'#16a34a');
     await loadChats(); renderDrawerAccounts();
-  }catch(_){ _toast(window.T('inbox.acct.remove_fail'),'#dc2626'); }
+  }catch(e){ _acctOpFail(e,res,'inbox.acct.remove_fail'); }
+  finally{ _acctBtnBusy(btn,false); }
 }
 
 /* ===== 扫码连接（多方式并存 · 无限扫码：每平台可重复打开新增账号） ===== */

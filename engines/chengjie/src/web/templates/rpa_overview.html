@@ -600,6 +600,30 @@
       <div class="rpa-empty">{{ (i18n or {}).get('ov_lang_click_load','点击「🌍 语言分布」标签加载…') }}</div>
     </div>
   </div>
+  <!-- 会话语言质量卡片：语言契约观测（错配率/守卫纠正/明确请求/可疑转写/偏好会话），
+       数据来自 lang-dist 响应的 lang_quality 块，缺失时保持 0，绝不报错 -->
+  <div class="rpa-card">
+    <div class="rpa-card-head">
+      <div class="rpa-card-icon" style="background:linear-gradient(135deg,#6366f1,#4f46e5)"></div>
+      <div class="rpa-card-title">{{ (i18n or {}).get('ov_lq_title','会话语言质量') }}</div>
+      <span class="rpa-card-desc">{{ (i18n or {}).get('ov_lq_desc','语言契约事件与守卫触发（进程内累计）') }}</span>
+    </div>
+    <div class="rpa-kpi-row" style="margin-top:.4rem">
+      <div class="rpa-kpi"><div class="rpa-kpi-n amber" id="ov-lq-mismatch">0</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_lq_mismatch_1k','语言错配率/千条') }}</div></div>
+      <div class="rpa-kpi"><div class="rpa-kpi-n" id="ov-lq-guard">0</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_lq_guard','守卫纠正') }}</div></div>
+      <div class="rpa-kpi"><div class="rpa-kpi-n" id="ov-lq-explicit">0</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_lq_explicit','明确语言请求') }}</div></div>
+      <div class="rpa-kpi"><div class="rpa-kpi-n" id="ov-lq-voice">0</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_lq_voice','可疑语音转写') }}</div></div>
+      <div class="rpa-kpi"><div class="rpa-kpi-n" id="ov-lq-route" title="">0</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_lq_route','语音音色路由') }}</div></div>
+      <div class="rpa-kpi"><div class="rpa-kpi-n amber" id="ov-lq-route-rej" title="">0</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_lq_route_reject','语音拒发(缺音色)') }}</div></div>
+      <div class="rpa-kpi"><div class="rpa-kpi-n" id="ov-lq-prior">0</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_lq_prior','首句语言先验') }}</div></div>
+    </div>
+    <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--bd);display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+      <span style="font-size:.74rem;color:var(--t3)">{{ (i18n or {}).get('ov_lq_pref','明确偏好会话') }}</span>
+      <span style="font-size:.75rem;background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.3);border-radius:5px;padding:.1rem .38rem;color:#a5b4fc">WhatsApp <b id="ov-lq-pref-whatsapp">0</b></span>
+      <span style="font-size:.75rem;background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.3);border-radius:5px;padding:.1rem .38rem;color:#a5b4fc">LINE <b id="ov-lq-pref-line">0</b></span>
+      <span style="font-size:.75rem;background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.3);border-radius:5px;padding:.1rem .38rem;color:#a5b4fc">Messenger <b id="ov-lq-pref-messenger">0</b></span>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -909,7 +933,36 @@ async function ovLangLoad(force){
       <div>${plHtml}</div>
       <div>${mergedHtml}</div>
     </div>${sparkHtml}${lockedHtml}`;
+    _ovLangQualityFill(d.lang_quality);
   }catch(e){ body.innerHTML=`<div class="rpa-empty">${window.Tf('ov_js_error',{e:e})}</div>`; }
+}
+
+// 会话语言质量卡片回填：任何字段缺失一律回落 0，绝不抛错
+function _ovLangQualityFill(lq){
+  try{
+    lq = lq || {};
+    const ev = lq.events || {};
+    const pc = lq.pref_chats || {};
+    const num = v => { const n = +v; return isFinite(n) ? n : 0; };
+    const set = (id, v) => { const el = document.getElementById(id); if(el) el.textContent = String(v); };
+    set('ov-lq-mismatch', num(lq.mismatch_per_1k));
+    set('ov-lq-guard', num(ev.guard_corrected));
+    set('ov-lq-explicit', num(ev.explicit_request));
+    set('ov-lq-voice', num(ev.voice_suspect));
+    set('ov-lq-pref-whatsapp', num(pc.whatsapp));
+    set('ov-lq-pref-line', num(pc.line));
+    set('ov-lq-pref-messenger', num(pc.messenger));
+    // 语音语言路由（routed/rejected 总数；tooltip 带语种分桶明细）
+    const vr = lq.voice_route || {};
+    const dictStr = o => Object.entries(o||{}).map(([k,v])=>`${k}:${v}`).join(' ');
+    set('ov-lq-route', num(vr.routed_total));
+    set('ov-lq-route-rej', num(vr.rejected_total));
+    const elR = document.getElementById('ov-lq-route');
+    if(elR) elR.title = dictStr(vr.routed);
+    const elJ = document.getElementById('ov-lq-route-rej');
+    if(elJ) elJ.title = dictStr(vr.rejected);
+    set('ov-lq-prior', num(ev.initial_prior));
+  }catch(e){ /* 静默：观测卡片绝不影响主面板 */ }
 }
 
 // P12-C: 5s 版本轮询取代 30s 盲刷新 — 版本号不变则不触发重绘

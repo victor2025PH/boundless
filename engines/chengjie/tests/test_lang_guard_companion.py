@@ -88,6 +88,64 @@ async def test_skip_flag_bypasses_guard():
     assert calls["n"] == 0
 
 
+# ── 安全网：现场语言请求覆盖陈旧 reply_lang（2026-07-23 二道防线） ──────────
+
+@pytest.mark.asyncio
+async def test_live_zh_request_overrides_stale_en_reply_lang():
+    """真实事故形态：reply_lang 陈旧=en，客户本条粤语明确要中文、AI 已回中文
+    → 守卫必须放行原中文回复，绝不翻成英文。"""
+    client, calls = _bare_client(translate_to="SHOULD-NOT-TRANSLATE")
+    zh_reply = "哈哈好嘅好嘅，大佬讲普通话我就讲普通话，冇问题啦"
+    out = await client._guard_reply_language(
+        zh_reply,
+        {"reply_lang": "en",
+         "_current_user_message_for_lang": "我唔系讲英文噶，讲中文啊，大佬普通话国语啊"},
+    )
+    assert out == zh_reply
+    assert calls["n"] == 0, "现场请求=zh、回复已是中文 → 不触发翻译"
+
+
+@pytest.mark.asyncio
+async def test_no_live_request_still_corrects():
+    """无现场语言请求时安全网不介入，明显不符仍照常纠正（不回归）。"""
+    corrected_en = "Sure, I can switch to English for you."
+    client, calls = _bare_client(translate_to=corrected_en)
+    zh_reply = "哈哈你也太可爱了吧，下次记得拍给我看看，让我也解解馋啦啦啦啦啦啦"
+    out = await client._guard_reply_language(
+        zh_reply,
+        {"reply_lang": "en", "_current_user_message_for_lang": "hey what's up"},
+    )
+    assert out == corrected_en
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_live_request_matching_expected_no_skip():
+    """现场请求与 expected 一致（都=en）→ 安全网不短路（_req==_rl），走常规兜底。"""
+    corrected_en = "Sure, switching to English now."
+    client, calls = _bare_client(translate_to=corrected_en)
+    zh_reply = "哈哈你也太可爱了吧，下次记得拍给我看看，让我也解解馋啦啦啦啦啦啦"
+    out = await client._guard_reply_language(
+        zh_reply,
+        {"reply_lang": "en", "_current_user_message_for_lang": "please speak english"},
+    )
+    assert out == corrected_en
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_live_request_but_reply_wrong_lang_does_not_skip():
+    """现场请求=zh 但回复竟是英文（reply 不符 _req）→ 安全网不短路（防误放行）。"""
+    client, calls = _bare_client(translate_to="纠正后的中文")
+    en_reply = "I was just cooking some instant noodles, what about you today"
+    out = await client._guard_reply_language(
+        en_reply,
+        {"reply_lang": "en", "_current_user_message_for_lang": "讲中文"},
+    )
+    # reply 是英文、_rl=en → 常规判定不符=False → 放行（但不是被安全网短路）
+    assert calls["n"] == 0
+
+
 # ── 生成端 prompt：companion 也要硬禁中文 + 反历史动量 ─────────────────────
 
 class _ConvCfg:

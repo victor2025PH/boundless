@@ -118,11 +118,10 @@ def apply_action(
                     now=now)
     if registry is not None:
         try:
-            row = registry.get(platform, account_id) or {}
-            meta = dict(row.get("meta") or {})
-            meta["banned"] = True
-            meta["ban_reason"] = reason
-            registry.upsert(platform, account_id, meta=meta)
+            # merge_meta：锁内原子合并，防「读出→写回」窗口与其它写者互踩
+            registry.upsert(
+                platform, account_id,
+                meta={"banned": True, "ban_reason": reason}, merge_meta=True)
         except Exception:
             pass
     if alert:

@@ -718,6 +718,8 @@ class SkillManager(LoggerMixin):
             _line_merge_keys = (
                 "channel", "request_id", "reply_lang",
                 "reply_lang_locked",
+                # 会话语言契约（lang_policy）：runner 侧持久偏好回灌
+                "user_lang_pref", "user_lang_pref_input",
                 "line_rpa_style_hint", "line_rpa_chat_key",
                 "messenger_rpa_style_hint", "messenger_rpa_chat_key",
                 "messenger_rpa_peer_kind",
@@ -741,6 +743,8 @@ class SkillManager(LoggerMixin):
                 "_is_repeated_message", "_prev_reply_for_repeat",
                 # 语音消息标记（对方发的是语音，AI 回复应更口语化）
                 "_peer_message_is_voice", "_voice_duration",
+                # 可疑语音转写（ASR 语种与会话语言冲突）→ 澄清话术提示
+                "_voice_lang_suspect",
                 # 生成层口语分叉（Phase G）：本条回复可能发语音 → prompt 多要
                 # 一个 [口语版] 段（ai_client 消费+剥离，spoken_variant 暂存）
                 "_spoken_variant_request",
@@ -1060,32 +1064,132 @@ class SkillManager(LoggerMixin):
             from src.hooks.registry import HookRegistry as _HR
             _hooks = _HR.get_instance()
 
-            # 3b. 检测用户消息语言，传入 reply_lang 供 KB 搜索和程序化回复
-            # 若调用方提供了 _current_user_message_for_lang（单条主消息），优先以此判断
-            # 避免 [对方连发] 合并文本中的英文干扰中/日文消息的语言判断
-            if (
-                self.ai_client
-                and hasattr(self.ai_client, '_detect_message_language')
-                and not user_context.get("reply_lang_locked")
-            ):
+            # 3b. 会话级语言决策（lang_policy 单一事实源）——治三类语言事故：
+            # ① 用户明确说「用日语聊」被无视（请求内容从不参与决策）
+            # ② 中文会话发一个「whatsapp」整条回复翻成英文（中性词被当英语强证据）
+            # ③ 单条误判直接改写 reply_lang 并粘住后续轮次
+            # 决策优先级：明确请求(持久偏好) > 强证据立即跟随 > 弱证据粘住上一轮。
+            # 若调用方提供了 _current_user_message_for_lang（单条主消息），优先以此判断，
+            # 避免 [对方连发] 合并文本中的英文干扰中/日文消息的语言判断。
+            # ★ 锁是「单次请求级」语义——只认本次调用 context 里的锁；user_context 里
+            # 可能残留旧调用（收件箱 draft）写入的 True，若采信会永久跳过语言决策。
+            if context.get("reply_lang_locked"):
+                user_context["reply_lang_locked"] = True  # 本次调用生效（merge 已写，双保险）
+            else:
+                user_context.pop("reply_lang_locked", None)  # 清残留锁，恢复自动决策
+                from src.ai.lang_policy import (
+                    classify_evidence as _lang_classify,
+                    resolve_conversation_language as _lang_resolve,
+                )
                 _lang_detect_src = (
                     (context.get("_current_user_message_for_lang") or "").strip() or text
                 )
-                _detected_lang = self.ai_client._detect_message_language(_lang_detect_src)
-                _prev_lang = user_context.get('reply_lang', 'zh')
+                _prev_lang = str(user_context.get('reply_lang') or '').strip()
                 _stripped = (text or "").strip()
-                if _detected_lang == "zh" and _prev_lang != "zh":
-                    _has_cjk = bool(re.search(r"[\u4e00-\u9fff]", _stripped))
-                    if not _has_cjk and len(_stripped) <= 20:
-                        _detected_lang = _prev_lang
-                # Domain-specific ambiguous tokens (e.g. EP/JC): may confuse lang detection
+                # Domain-specific ambiguous tokens (e.g. EP/JC)：无语言证据 →
+                # 传空文本，策略自动粘住上一轮语言（旧逻辑的回看 last_message 不再需要，
+                # 上一轮 reply_lang 本就由 last_message 决策而来）。
                 if _hooks.is_ambiguous_token_message(_stripped):
-                    _lm = (user_context.get("last_message") or "").strip()
-                    if _lm and not _hooks.is_ambiguous_token_message(_lm):
-                        _detected_lang = self.ai_client._detect_message_language(_lm)
-                    else:
-                        _detected_lang = _prev_lang
-                user_context['reply_lang'] = _detected_lang
+                    _lang_detect_src = ""
+                # ★ 时序补齐（E2E 验收实测发现）：_conversation_history 滞后一轮——
+                # 上一轮的用户消息要到本轮 3b **之后**的 K1 块才补录进历史。偏好漂移
+                # 释放需要「最近一条用户消息」参与连续段判断，否则释放比收件箱产线
+                # （传入含当前消息的完整历史）晚一轮。把 last_message（= 上一轮用户
+                # 消息）临时并入扫描窗口——只影响本次决策，不写回历史。
+                _lang_hist = list(user_context.get("_conversation_history") or [])
+                _lm_prev = str(user_context.get("last_message") or "").strip()
+                if _lm_prev and _lm_prev != _stripped:
+                    _lang_hist.append({"role": "user", "content": _lm_prev})
+                # 初始语言先验（lang_prior，默认关）：新会话首条 "Hi"/emoji 类
+                # 中性消息全链落空时，按账号配置/WA 国码给 default 供个先验语言
+                # （治「给菲律宾新好友第一句回中文」）。仅无 prev_lang 时计算——
+                # 会话一旦有语言状态，先验彻底让位。
+                _default_lang = _prev_lang
+                if not _default_lang:
+                    try:
+                        from src.ai.lang_prior import initial_lang_hint
+                        _default_lang = initial_lang_hint(
+                            platform=str(user_context.get("platform")
+                                         or context.get("platform") or ""),
+                            account_id=str(user_context.get("account_id")
+                                           or context.get("account_id") or ""),
+                            chat_key=str(_chat_id or ""),
+                            config=(self.config.config
+                                    if hasattr(self.config, "config") else {}),
+                        )
+                    except Exception:
+                        _default_lang = ""
+                _decision = _lang_resolve(
+                    _lang_detect_src,
+                    _lang_hist,
+                    prev_lang=_prev_lang,
+                    lang_pref=str(user_context.get("user_lang_pref") or ""),
+                    lang_pref_input=str(user_context.get("user_lang_pref_input") or ""),
+                    default=_default_lang or "zh",
+                )
+                # 先验实际生效（决策落到 default 且 default 来自 lang_prior）→ 埋点
+                if _decision.source == "default" and _default_lang and not _prev_lang:
+                    try:
+                        from src.monitoring.metrics_store import get_metrics_store
+                        get_metrics_store().record_lang_event("initial_prior")
+                    except Exception:
+                        pass
+                # 间接表达 LLM 短判兜底（正则未命中 && 提及语言名 && 短消息）：
+                # 覆盖 "my chinese is bad, can we not use it" 这类隐晦请求。
+                # 廉价门控保证极低触发率；结果码经 valid_lang_code 校验防幻觉。
+                if (
+                    not _decision.request
+                    and _lang_detect_src
+                    and len(_stripped) <= 80
+                    and self.ai_client is not None
+                ):
+                    try:
+                        from src.ai.lang_policy import contains_language_alias
+                        if contains_language_alias(_stripped):
+                            _llm_req = await self._llm_judge_language_request(_stripped)
+                            if _llm_req:
+                                from src.ai.lang_policy import PolicyDecision as _PD
+                                _decision = _PD(
+                                    lang=_llm_req, source="explicit_request",
+                                    request=_llm_req, stable=True,
+                                )
+                                try:
+                                    from src.monitoring.metrics_store import get_metrics_store
+                                    get_metrics_store().record_lang_event("llm_request_fallback")
+                                except Exception:
+                                    pass
+                    except Exception:
+                        self.logger.debug("%sLLM 语言请求短判跳过", log_prefix, exc_info=True)
+                user_context['reply_lang'] = _decision.lang
+                if _decision.request:
+                    # 明确语言请求 → 持久偏好（随 ContextStore 落库），并记录
+                    # 请求时的书写语言（漂移释放的豁免基准，防「中文求日语后
+                    # 继续打中文」被误释放）。
+                    user_context['user_lang_pref'] = _decision.request
+                    user_context['user_lang_pref_input'] = (
+                        _lang_classify(_stripped)[0] or ""
+                    )
+                    self.logger.info(
+                        "%s语言请求命中: %r → %s（已持久为会话偏好）",
+                        log_prefix, _stripped[:40], _decision.request,
+                    )
+                    try:
+                        from src.monitoring.metrics_store import get_metrics_store
+                        get_metrics_store().record_lang_event("explicit_request")
+                    except Exception:
+                        pass
+                elif _decision.source == "stable_switch":
+                    # 用户稳定漂移到新语言 → 释放旧偏好，回到跟随模式
+                    user_context.pop('user_lang_pref', None)
+                    user_context.pop('user_lang_pref_input', None)
+                    self.logger.info(
+                        "%s语言偏好释放: 稳定漂移 → %s", log_prefix, _decision.lang,
+                    )
+                    try:
+                        from src.monitoring.metrics_store import get_metrics_store
+                        get_metrics_store().record_lang_event("stable_switch")
+                    except Exception:
+                        pass
 
             # 携带上条语音的声学情绪（SER）→ 供情感上下文/危机联动/出站语气共用。
             _pae = context.get("_peer_audio_emotion") if context else None
@@ -2906,6 +3010,49 @@ class SkillManager(LoggerMixin):
         raw = f"{chat_id}:{text_simple}" if chat_id else text_simple
         return hashlib.md5(raw.encode()).hexdigest()[:8]
 
+    async def _llm_judge_language_request(self, text: str) -> str:
+        """间接语言请求 LLM 短判（lang_policy 正则漏网的隐晦表达兜底）。
+
+        触发前提由调用方门控（提及语言名 + 短消息 + 正则未命中），这里只负责
+        一次 yes/no 短答与结果校验。带进程级 LRU 缓存（同句只判一次）。
+        返回目标语言码或 ""。
+        """
+        t = str(text or "").strip()
+        if not t or self.ai_client is None:
+            return ""
+        cache = getattr(self, "_llm_lang_req_cache", None)
+        if cache is None:
+            cache = {}
+            self._llm_lang_req_cache = cache  # type: ignore[attr-defined]
+        key = t[:120]
+        if key in cache:
+            return cache[key]
+        try:
+            raw = await self.ai_client.chat(
+                "You are a strict intent classifier. Question: in the following chat "
+                "message, is the user explicitly or implicitly ASKING the assistant to "
+                "switch the conversation to a different language? Reply with EXACTLY "
+                "one token: `no`, or `yes:<iso-639-1 code>` (e.g. yes:ja, yes:en, "
+                "yes:zh). Statements about语言 that are not requests (e.g. \"Japanese "
+                "is hard\", \"he speaks English\") are `no`.\n\n"
+                f"Message: {t!r}",
+                strategy_overrides={"max_tokens": 8, "temperature": 0.0},
+            )
+        except Exception:
+            self.logger.debug("LLM 语言请求短判调用失败", exc_info=True)
+            return ""
+        out = ""
+        m = re.search(r"yes\s*[:：]\s*([a-zA-Z\-_]{2,6})", str(raw or ""), re.IGNORECASE)
+        if m:
+            from src.ai.lang_policy import valid_lang_code
+            out = valid_lang_code(m.group(1))
+        if len(cache) > 512:
+            cache.clear()
+        cache[key] = out
+        if out:
+            self.logger.info("LLM 语言请求短判命中: %r → %s", t[:40], out)
+        return out
+
     def _get_user_context(self, user_id: str) -> Dict[str, Any]:
         """获取或创建用户上下文（持久化�?SQLite�?"""
         return self._context_store.get(user_id)
@@ -3155,10 +3302,18 @@ class SkillManager(LoggerMixin):
             )
             cleaned, violations = sanitize(reply, persona or {})
             if violations:
-                self.logger.warning(
-                    "%s[persona_guard] 拦截人设违规片段 %r（已剥离，保护沉浸感）",
-                    log_prefix, violations[:5],
-                )
+                # 日志说实话（2026-07-20）：sanitize 删光会回退原文（绝不返回空），
+                # 此时并没有剥离任何内容——旧日志一律喊「已剥离」造成排查误导。
+                if cleaned.strip() == reply.strip():
+                    self.logger.warning(
+                        "%s[persona_guard] 命中人设违规片段 %r 但无法安全剥离"
+                        "（整段违规→保留原文出站）", log_prefix, violations[:5],
+                    )
+                else:
+                    self.logger.warning(
+                        "%s[persona_guard] 拦截人设违规片段 %r（已剥离，保护沉浸感）",
+                        log_prefix, violations[:5],
+                    )
                 return cleaned or reply
             return reply
         except Exception:

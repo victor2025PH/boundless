@@ -12,23 +12,15 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from src.ai.lang_voice_route import EDGE_VOICE_BY_LANG as _SHARED_EDGE_VOICES
+
 logger = logging.getLogger(__name__)
 
-# BCP47 前缀 → edge 默认神经声（可配置覆写）
+# BCP47 前缀 → edge 默认神经声：单一事实源在 lang_voice_route.EDGE_VOICE_BY_LANG
+# （follow_text 出站路由与主动外语开场共用一张表；此处剔除 zh——本模块语义是
+# 「非中文会话才用 edge 外语声」，zh 由克隆链负责）。
 _DEFAULT_EDGE_VOICE: Dict[str, str] = {
-    "en": "en-US-JennyNeural",
-    "ja": "ja-JP-NanamiNeural",
-    "ko": "ko-KR-SunHiNeural",
-    "th": "th-TH-PremwadeeNeural",
-    "vi": "vi-VN-HoaiMyNeural",
-    "id": "id-ID-GadisNeural",
-    "es": "es-ES-ElviraNeural",
-    "fr": "fr-FR-DeniseNeural",
-    "de": "de-DE-KatjaNeural",
-    "pt": "pt-BR-FranciscaNeural",
-    "hi": "hi-IN-SwaraNeural",
-    "tl": "fil-PH-BlessicaNeural",
-    "fil": "fil-PH-BlessicaNeural",
+    k: v for k, v in _SHARED_EDGE_VOICES.items() if k != "zh"
 }
 
 _ZH_PREFIXES = frozenset(

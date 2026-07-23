@@ -1669,8 +1669,13 @@ def register_rpa_overview_routes(
         Returns:
           platforms.whatsapp  — {lang: chat_count}，来自 wa_rpa_chat_state.detected_lang
           platforms.messenger — {lang: chat_count}，来自 messenger_rpa_runs.reply_lang (7 天)
-          merged              — 两平台合并后的 {lang: count}
+                                + messenger_rpa_chat_state 语言契约聚合
+          platforms.line      — {lang: chat_count}，来自 line_rpa_runs.reply_lang (7 天)
+                                + line_rpa_chat_state 语言契约聚合
+          merged              — 各平台合并后的 {lang: count}
           total_chats         — 所有平台有语言记录的对话总数
+          lang_quality        — 会话语言质量观测（metrics_store 快照 + 各平台
+                                user_lang_pref 非空会话数），见下方组装处注释
 
         Query: ?refresh=true 强制跳过缓存
         """
@@ -1727,6 +1732,26 @@ def register_rpa_overview_routes(
                     ms_dist[r["lang"]] = ms_dist.get(r["lang"], 0) + r["cnt"]
             except Exception:
                 pass
+            # 会话语言契约（lang_policy）：messenger_rpa_chat_state 按
+            # COALESCE(forced_lang, user_lang_pref) 聚合（messenger 无 detected_lang 列；
+            # NULLIF 归一空串，防止 '' 挡住后备列）。查询失败静默降级，绝不抛异常。
+            try:
+                ss = msvc.state_store
+                with ss._lock, ss._conn() as c:
+                    rows = c.execute(
+                        """
+                        SELECT COALESCE(NULLIF(forced_lang, ''), NULLIF(user_lang_pref, '')) AS lang,
+                               COUNT(*) AS cnt
+                        FROM messenger_rpa_chat_state
+                        WHERE COALESCE(NULLIF(forced_lang, ''), NULLIF(user_lang_pref, '')) IS NOT NULL
+                        GROUP BY 1
+                        """
+                    ).fetchall()
+                ms_dist = dist.setdefault("messenger", {})
+                for r in rows:
+                    ms_dist[r["lang"]] = ms_dist.get(r["lang"], 0) + r["cnt"]
+            except Exception:
+                pass
 
         # ── LINE ──────────────────────────────────────────────────────
         line_svc = getattr(request.app.state, "line_rpa_service", None)
@@ -1746,6 +1771,31 @@ def register_rpa_overview_routes(
                             GROUP BY reply_lang
                             """,
                             (since_line,),
+                        ).fetchall()
+                    ln_dist = dist.setdefault("line", {})
+                    for r in rows:
+                        ln_dist[r["lang"]] = ln_dist.get(r["lang"], 0) + r["cnt"]
+            except Exception:
+                pass
+            # 会话语言契约（lang_policy）：line_rpa_chat_state 按
+            # COALESCE(forced_lang, user_lang_pref, detected_lang) 聚合
+            # （line 各语言列默认空串，需 NULLIF 归一）。查询失败静默降级，绝不抛异常。
+            try:
+                ls = getattr(line_svc, "_state_store", None) or getattr(
+                    getattr(line_svc, "_runner", None), "_state_store", None
+                )
+                if ls is not None:
+                    with ls._lock:
+                        rows = ls._conn.execute(
+                            """
+                            SELECT COALESCE(NULLIF(forced_lang, ''), NULLIF(user_lang_pref, ''),
+                                            NULLIF(detected_lang, '')) AS lang,
+                                   COUNT(*) AS cnt
+                            FROM line_rpa_chat_state
+                            WHERE COALESCE(NULLIF(forced_lang, ''), NULLIF(user_lang_pref, ''),
+                                           NULLIF(detected_lang, '')) IS NOT NULL
+                            GROUP BY 1
+                            """
                         ).fetchall()
                     ln_dist = dist.setdefault("line", {})
                     for r in rows:
@@ -1804,6 +1854,74 @@ def register_rpa_overview_routes(
         except Exception:
             pass
 
+        # 会话语言质量（lang_policy 观测）：
+        #   mismatch_count / mismatch_per_1k / events / events_1h 读 metrics_store
+        #   快照的 reply_quality 区块；pref_chats 为各平台 user_lang_pref 非空的
+        #   会话数（用户明确请求过语言的对话）。全部 try/except 静默降级为 0/空，
+        #   绝不因观测查询失败影响主响应。
+        lang_quality: Dict[str, Any] = {
+            "mismatch_count": 0,
+            "mismatch_per_1k": 0.0,
+            "events": {},
+            "events_1h": {},
+            "pref_chats": {"whatsapp": 0, "line": 0, "messenger": 0},
+        }
+        try:
+            from src.monitoring.metrics_store import get_metrics_store
+            _rq = (get_metrics_store().snapshot() or {}).get("reply_quality") or {}
+            lang_quality["mismatch_count"] = int(_rq.get("lang_mismatch_count") or 0)
+            lang_quality["mismatch_per_1k"] = float(_rq.get("lang_mismatch_per_1k") or 0.0)
+            lang_quality["events"] = dict(_rq.get("lang_events") or {})
+            lang_quality["events_1h"] = dict(_rq.get("lang_events_1h") or {})
+        except Exception:
+            pass
+        # 出站语音语言路由（follow_text/粤语/拒发守卫计数；拒发涨=该语种缺音色映射）
+        try:
+            from src.ai.lang_route_stats import get_lang_route_stats
+            lang_quality["voice_route"] = get_lang_route_stats().dump()
+        except Exception:
+            pass
+        try:
+            for wa_svc in _get_whatsapp_services(request):
+                st = getattr(wa_svc, "_state_store", None) or getattr(
+                    getattr(wa_svc, "_runner", None), "_state_store", None
+                )
+                if st is None:
+                    continue
+                with st._lock:
+                    n = st._conn.execute(
+                        "SELECT COUNT(*) AS n FROM wa_rpa_chat_state "
+                        "WHERE user_lang_pref IS NOT NULL AND user_lang_pref != ''"
+                    ).fetchone()["n"]
+                lang_quality["pref_chats"]["whatsapp"] += (n or 0)
+        except Exception:
+            pass
+        try:
+            _lsp = getattr(line_svc, "_state_store", None) or getattr(
+                getattr(line_svc, "_runner", None) if line_svc else None, "_state_store", None
+            ) if line_svc else None
+            if _lsp is not None:
+                with _lsp._lock:
+                    n = _lsp._conn.execute(
+                        "SELECT COUNT(*) AS n FROM line_rpa_chat_state "
+                        "WHERE user_lang_pref IS NOT NULL AND user_lang_pref != ''"
+                    ).fetchone()["n"]
+                lang_quality["pref_chats"]["line"] = n or 0
+        except Exception:
+            pass
+        try:
+            _msvcp = getattr(request.app.state, "messenger_rpa_service", None)
+            if _msvcp is not None:
+                _mssp = _msvcp.state_store
+                with _mssp._lock, _mssp._conn() as _mcp:
+                    n = _mcp.execute(
+                        "SELECT COUNT(*) AS n FROM messenger_rpa_chat_state "
+                        "WHERE user_lang_pref IS NOT NULL AND user_lang_pref != ''"
+                    ).fetchone()["n"]
+                lang_quality["pref_chats"]["messenger"] = n or 0
+        except Exception:
+            pass
+
         payload = {
             "ok": True,
             "ts": time.time(),
@@ -1811,6 +1929,7 @@ def register_rpa_overview_routes(
             "merged": merged_sorted,
             "total_chats": total_chats,
             "locked_chats": locked,
+            "lang_quality": lang_quality,
         }
         _LANG_DIST_CACHE = (time.time(), payload)
         return payload

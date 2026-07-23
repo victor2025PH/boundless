@@ -104,12 +104,19 @@ def _merge_orchestrator_status(
         label_map: Dict[str, str] = {}
         # P1 身份化：同一趟 registry.list() 里顺手收集自身资料（self_*），末尾注入 platform_status
         profile_map: Dict[str, Dict[str, str]] = {}
+        # 可删性标记：只有注册表在册账号才能被 /api/accounts/*/remove 软删；
+        # 适配器/config 来源的条目（telegram default、web 等）删除是空操作 →
+        # 给前端 removable=False 隐藏删除/登出按钮。注册表读取失败时保持 None 不标注
+        # （前端按可删处理，行为回落旧版）。
+        registry_keys: Optional[set] = None
         try:
             from src.integrations.account_self_profile import (
                 read_self_profile_from_meta,
             )
+            registry_keys = set()
             for row in get_account_registry().list():
                 key = f"{row.get('platform')}:{row.get('account_id')}"
+                registry_keys.add(key)
                 lbl = str(row.get("label") or "")
                 if lbl:
                     label_map[key] = lbl
@@ -117,6 +124,7 @@ def _merge_orchestrator_status(
                 if prof:
                     profile_map[key] = prof
         except Exception:
+            registry_keys = None
             logger.debug("[chats] 读取注册表 label/self_profile 失败", exc_info=True)
 
         cfg = (config_manager.config if config_manager is not None else {}) or {}
@@ -163,6 +171,8 @@ def _merge_orchestrator_status(
             if profile_map.get(pk):
                 for _sk, _sv in profile_map[pk].items():
                     v[_sk] = _sv
+            if registry_keys is not None:
+                v["removable"] = pkey in registry_keys or k in registry_keys
     except Exception:
         logger.debug("[chats] 并入编排器账号状态失败", exc_info=True)
 

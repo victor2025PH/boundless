@@ -29,8 +29,23 @@ _AI_SELF_ID_PATTERNS = [
     re.compile(r"\blanguage model\b", re.I),
 ]
 
+# 感知语境豁免（2026-07-20 阿龙实测误报）：「我怕你觉得我是AI客服机器人」是
+# 「怕被当成机器人」的拟人打趣（强化真人感），不是身份自曝——与既有「否定句不算
+# 露馅」同一类。命中片段若紧跟在感知动词后（觉得/以为/当成…，允许 ≤4 个非标点
+# 字符间隔，如「觉得其实我是AI」）→ 不算违规。刻意不收「说」（"老实说我是AI"
+# 是真自曝），宁可漏豁免不可漏拦截。
+_PERCEPTION_PREFIX_RE = re.compile(
+    r"(觉得|以为|当成|当作|误会|怀疑)[^。！？!?\n]{0,4}$"
+)
+
 # 按中英文句末标点切句（保留标点，便于无缝重组剩余句子）
 _SENTENCE_SPLIT_RE = re.compile(r"[^。！？!?\n]*[。！？!?\n]|[^。！？!?\n]+")
+
+# 无句末标点的中文口语流用空格当子句边界（拟人人设常用风格：「行 那再给你发一条
+# 你听听」）。子句 = 非空白串 + 其尾随空白（保留空白，剔除违规子句后无缝重组）。
+_WS_CLAUSE_RE = re.compile(r"\S+\s*")
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_SENT_PUNCT_RE = re.compile(r"[。！？!?\n]")
 
 
 def collect_forbidden(persona: Dict[str, Any]) -> Dict[str, Any]:
@@ -62,10 +77,22 @@ def _matches_phrase(haystack_norm: str, phrases: List[str]) -> List[str]:
 def _matches_ai_self_id(text: str) -> List[str]:
     out: List[str] = []
     for pat in _AI_SELF_ID_PATTERNS:
-        m = pat.search(text)
-        if m:
+        for m in pat.finditer(text):
+            # 感知语境豁免：「(你)觉得/以为/当成…我是AI」不是自曝（见常量注释）
+            if _PERCEPTION_PREFIX_RE.search(text[:m.start()]):
+                continue
             out.append(m.group(0))
+            break  # 每个模式至多记一个片段（与旧行为一致）
     return out
+
+
+def matches_ai_self_identity(text: str) -> List[str]:
+    """公共入口：文本中「自曝 AI 身份」的命中片段（含否定句/感知语境豁免）。
+
+    供 quality_tracker 等监控组件复用同一判定口径，避免两套正则漂移
+    （此前 quality_tracker 自带简版正则，把「怕你觉得我是AI机器人」误报成 identity_leak）。
+    """
+    return _matches_ai_self_id(str(text or ""))
 
 
 def find_violations(text: str, persona: Dict[str, Any]) -> List[str]:
@@ -80,7 +107,14 @@ def find_violations(text: str, persona: Dict[str, Any]) -> List[str]:
 
 
 def _split_sentences(text: str) -> List[str]:
-    return [m.group(0) for m in _SENTENCE_SPLIT_RE.finditer(text) if m.group(0)]
+    parts = [m.group(0) for m in _SENTENCE_SPLIT_RE.finditer(text) if m.group(0)]
+    # 整段无句末标点的中文口语流（空格代逗号句号的人设风格）→ 按空格切子句。
+    # 否则整段=一个"句子"：一处违规 → 全删 → 触发「删光回退原文」= 守卫形同虚设
+    # （2026-07-20 阿龙实测：日志喊「已剥离」实际原样发出的根因）。
+    if (len(parts) <= 1 and text and not _SENT_PUNCT_RE.search(text)
+            and _CJK_RE.search(text) and re.search(r"\s", text.strip())):
+        return [m.group(0) for m in _WS_CLAUSE_RE.finditer(text)]
+    return parts
 
 
 def _sentence_violates(sentence: str, fb: Dict[str, Any]) -> bool:
@@ -119,4 +153,6 @@ def sanitize(text: str, persona: Dict[str, Any]) -> Tuple[str, List[str]]:
     return cleaned, violations
 
 
-__all__ = ["collect_forbidden", "find_violations", "sanitize"]
+__all__ = [
+    "collect_forbidden", "find_violations", "matches_ai_self_identity", "sanitize",
+]

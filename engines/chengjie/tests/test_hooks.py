@@ -41,6 +41,15 @@ class TestBaseDomainHook:
     def setup_method(self):
         self.hook = DomainHook()
 
+    def test_accepts_config_kwarg(self):
+        # skill_manager instantiates hooks as hook_class(config=...); the base
+        # class must accept it so config-less domain hooks (general/ecommerce)
+        # don't fail registration with "takes no arguments".
+        cfg = object()
+        h = DomainHook(config=cfg)
+        assert h._config is cfg
+        assert DomainHook()._config is None
+
     @pytest.mark.asyncio
     async def test_on_message_pre_process_noop(self):
         ctx = HookContext(text="test")

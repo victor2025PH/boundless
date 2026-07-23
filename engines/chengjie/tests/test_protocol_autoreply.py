@@ -182,7 +182,10 @@ async def test_inbox_autopilot_conv_skips_direct_send():
 
 @pytest.mark.asyncio
 async def test_non_auto_ai_conv_still_direct_sends():
-    """会话非 auto_ai（如 review/manual）→ 直发链路照常工作（账号级闸门开时）。"""
+    """会话为 review（拟稿人审，非人工独占）→ 直发链路照常工作（账号级闸门开时）。
+
+    注：Sprint1 起 manual 语义收敛为「坐席已接管」，protocol 直发对 manual 让位（见
+    test_manual_conv_stands_down）；review/multi_choice 仍照常直发。"""
     sent = []
     res = await pa.run_autoreply(
         _payload(), registry=_FakeRegistry(_row()),
@@ -193,6 +196,28 @@ async def test_non_auto_ai_conv_still_direct_sends():
     )
     assert res["sent"] is True
     assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_manual_conv_stands_down():
+    """Sprint1 接管即静音：会话为 manual（坐席已接管）→ protocol 直发让位，不生成不发。"""
+    sent = []
+    gen_called = []
+
+    async def _gen(**kw):
+        gen_called.append(kw)
+        return "不该生成"
+
+    res = await pa.run_autoreply(
+        _payload(), registry=_FakeRegistry(_row()),
+        cfg={"protocol_autoreply": {"enabled": True}},
+        generate=_gen, send=_make_send(sent),
+        risk_fn=lambda t: "low",
+        inbox_mode_fn=lambda p, a, c: "manual",
+    )
+    assert res["skipped"] == "inbox_manual"
+    assert sent == []
+    assert gen_called == []  # 让位在生成之前，不烧 token
 
 
 @pytest.mark.asyncio

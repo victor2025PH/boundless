@@ -1607,6 +1607,29 @@ class AIClient(LoggerMixin):
         _rl = context.get("reply_lang")
         if not _rl or context.get("_skip_lang_guard"):
             return reply
+        # 安全网（2026-07-23，belt-and-suspenders）：若**当前入站消息本身**就是对语言 L
+        # 的明确请求，且回复已满足 L，则信「刚刚的现场请求」而非可能陈旧的 reply_lang
+        # （window/sticky 偶发滞后）——拒绝把已经正确的回复翻走。这是对上游 lang_policy
+        # 源头修复的二道防线（真实事故：客户粤语要中文、reply_lang 陈旧=en → 中文回复被
+        # 整段翻成英文发出）。仅在「现场请求 ≠ 期望 且 回复已符合现场请求」时短路。
+        try:
+            _um = (context.get("_current_user_message_for_lang") or "").strip()
+            if _um:
+                from src.ai.lang_policy import parse_language_request
+                _req = parse_language_request(_um)
+                if _req and _req != _rl and not self._reply_lang_mismatch(reply, _req):
+                    self.logger.info(
+                        "Language guard skipped: live request=%s overrides stale "
+                        "reply_lang=%s", _req, _rl,
+                    )
+                    try:
+                        from src.monitoring.metrics_store import get_metrics_store
+                        get_metrics_store().record_lang_event("guard_live_request_skip")
+                    except Exception:
+                        pass
+                    return reply
+        except Exception:
+            pass
         if _rl == "zh":
             # 目标中文：仅当回复明显是英文(几乎无中文)才纠正，否则放行（零误伤中英混说）。
             if not self._reply_lang_mismatch(reply, "zh"):
@@ -1652,6 +1675,11 @@ class AIClient(LoggerMixin):
             if corrected and len(corrected) > 5:
                 if not self._reply_lang_mismatch(corrected, _rl):
                     self.logger.info("Language guard corrected reply successfully")
+                    try:
+                        from src.monitoring.metrics_store import get_metrics_store
+                        get_metrics_store().record_lang_event("guard_corrected")
+                    except Exception:
+                        pass
                     return corrected
                 self.logger.warning("Language guard correction still mismatched, using original")
         except Exception as e:
@@ -1707,6 +1735,21 @@ class AIClient(LoggerMixin):
         parts = []
         context = context or {}
         _suppress_global_identity = bool(context.get("suppress_global_ai_identity"))
+        # 单一身份源（2026-07-20）：会话/账号被显式绑定了人设时（chat_binding / account_profile
+        # 两个 tier），只用该人设身份，压制全局 ai.system_prompt（否则如 顾嘉(system_prompt) 与
+        # 林佳欣(会话人设) 双身份塞进提示词会互相打架、名字说岔）。未显式绑定的会话（域/默认 tier，
+        # 如 Telegram 主线）保持原样用全局 system_prompt → 零影响。tier 解析是纯内存字典查，很轻；
+        # 任何异常回落 False = 旧行为。此 flag 同时门控下方 _primary 与 _name_ov（名字覆盖）。
+        try:
+            from src.utils.persona_manager import PersonaManager as _PM_early
+            _pm_early = _PM_early.get_instance()
+            _cid_early = str((context or {}).get("chat_id", "") or "")
+            _acc_early = str((context or {}).get("account_persona_id", "") or "")
+            _, _tier_early = _pm_early.get_persona_with_tier(_cid_early, _acc_early)
+            if _tier_early in ("chat_binding", "account_profile"):
+                _suppress_global_identity = True
+        except Exception:
+            pass
         _primary = "" if _suppress_global_identity else self._primary_system_prompt_text()
         if _primary:
             parts.append(_primary)
@@ -1897,12 +1940,18 @@ class AIClient(LoggerMixin):
                     )
             else:
                 _no_zh_extra = " DO NOT output any Chinese characters (except channel names like EP/JC/EasyPaisa/JazzCash)."
+            # 会话级口径（lang_policy）：语言由「运营锁定 > 用户明确请求 > 稳定证据」
+            # 决策得出，不再是「最新一条消息的检测结果」。措辞对齐——旧文案的
+            # "follow the LATEST message" 会怂恿模型自行按最新消息改语言，
+            # 与「用户明确要求日语后仍继续打中文」的持久偏好语义冲突。
             parts.append(
                 f"【LANGUAGE RULE — TOP PRIORITY — MANDATORY】\n"
-                f"DETECTED USER LANGUAGE (from the user's LATEST message): {_lang_name}.\n"
+                f"ACTIVE CONVERSATION LANGUAGE: {_lang_name} "
+                f"(decided from the user's explicit request or their stable message language).\n"
                 f"You MUST reply ENTIRELY in {_lang_name}.{_no_zh_extra}\n"
                 f"If earlier turns were in another language, SWITCH to {_lang_name} NOW — "
-                f"follow the user's LATEST message, NOT the previous conversation language.\n"
+                f"this decision already accounts for the user's latest message and any "
+                f"explicit language request; do NOT second-guess it from conversation history.\n"
                 f"Any Chinese templates or knowledge base content MUST be translated to {_lang_name} before output.\n"
                 f"Commands (/cxds etc) stay as-is.\n"
                 f"Violating this rule is MORE SERIOUS than giving wrong content."
@@ -2163,6 +2212,16 @@ class AIClient(LoggerMixin):
                 f"【语音消息】对方发来语音{_vdur_txt}（已转文字）。"
                 "你的回复应更口语化、简短自然，像在对讲一样回应，避免书面长段。"
             )
+            # 可疑转写（ASR 语种与会话语言冲突/低置信）→ 澄清话术：像真人一样
+            # 「听不太清就先确认」，绝不基于可疑文本自信作答或切换语言。
+            if context.get("_voice_lang_suspect"):
+                prompt_parts.append(
+                    "【语音听不清 · 澄清优先】这条语音的转文字结果很可能不准确"
+                    "（识别语种与你们平时聊的语言对不上）。不要直接照转写内容回答，"
+                    "也绝对不要因此改变回复语言。用你们一直在用的语言，像真人一样"
+                    "轻松地确认一下（例如「刚才语音有点听不清，你是想说…吗？」），"
+                    "只确认这一次，语气自然不要道歉过度。"
+                )
         # 入站媒体（WhatsApp / Telegram 收件箱 / Messenger 等多端共用）
         if context.get("_peer_message_is_media"):
             _mkind = context.get("_media_kind") or "media"
@@ -2360,6 +2419,23 @@ class AIClient(LoggerMixin):
                     "你专注文字聊天：不要主动写「我发照片给你」「等我拍一张」"
                     "「我发条语音」这类承诺；对方要照片时自然回应即可（系统会处理），"
                     "也不要否认你能拍照。")
+
+        # 语音能力（2026-07-20）：开了自动语音（inbox.l2_autosend.voice.enabled）时，明确告诉
+        # AI 它能发语音——系统会把回复转成人设声音发出。否则拟人人设会自作主张编「我发不了语音/
+        # 嗓子哑/不方便」的借口，与「系统实际发出了语音条」自相矛盾（本轮实测碰到）。
+        # 仅陪伴人设 + 语音开关开时注入；发不发语音仍由 decide_voice 决定，这里只消除「否认能力」。
+        try:
+            _vcfg2 = (
+                (((self.config.config or {}).get("inbox") or {}).get("l2_autosend") or {}).get("voice") or {}
+            ) if (self.config and getattr(self.config, "config", None)) else {}
+        except Exception:
+            _vcfg2 = {}
+        if _is_companion and _vcfg2.get("enabled"):
+            prompt_parts.append(
+                "【语音能力·须遵守】你能发语音消息：系统会自动把你要说的话用你的声音发出。"
+                "对方要你发语音时，你就自然地正常回答（内容照说就行），系统会转成语音——"
+                "绝不要说「我发不了语音」「嗓子哑」「不方便发语音」「语音功能坏了」这类借口，"
+                "也不要主动写「我发条语音给你」这种承诺（系统会自动处理）。")
 
         # 当前真实时间（Phase19 时间一致性）：LLM 训练数据里没有"现在几点"，
         # 不注入就会深夜说"下午好"、凌晨发正午场景标记。仅陪伴人设注入
@@ -2621,6 +2697,10 @@ class AIClient(LoggerMixin):
         "bn": "বাংলা", "pt": "Português", "es": "Español",
         "fr": "Français", "de": "Deutsch", "it": "Italiano",
         "tr": "Türkçe", "vi": "Tiếng Việt", "id": "Bahasa Indonesia",
+        # lang_policy / translation_service 标准码补齐（缺条目会导致
+        # LANGUAGE RULE 整段不注入——空 _lang_name 短路）
+        "ar": "Arabic", "km": "ភាសាខ្មែរ (Khmer)", "he": "עברית (Hebrew)",
+        "el": "Ελληνικά (Greek)", "tl": "Tagalog",
     }
 
     _SHORT_EN_WORDS = frozenset({

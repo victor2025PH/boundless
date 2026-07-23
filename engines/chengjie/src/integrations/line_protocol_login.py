@@ -182,9 +182,11 @@ def make_provider(config: Dict[str, Any]):
             if st == "authorized" and mid and not state.get("_persisted"):
                 state["_persisted"] = True
                 try:
+                    # merge_meta：防重登录整块覆盖 meta 抹掉 persona_id 等绑定
                     get_account_registry().upsert(
                         "line", mid, mode="protocol", status="online",
-                        meta={"tokens_path": tokens_path(config, mid)})
+                        meta={"tokens_path": tokens_path(config, mid)},
+                        merge_meta=True)
                 except Exception:  # noqa: BLE001
                     logger.debug("[line_protocol] 注册表写入失败", exc_info=True)
                 try:

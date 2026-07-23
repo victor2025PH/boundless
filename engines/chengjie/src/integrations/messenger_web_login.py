@@ -101,9 +101,10 @@ def make_provider(config: Dict[str, Any]):
             aid = str(res.get("account_id") or "")
             if st == "authorized" and aid:
                 try:
+                    # merge_meta：防重登录整块覆盖 meta 抹掉 persona_id 等绑定
                     get_account_registry().upsert(
                         "messenger", aid, mode="web", status="online",
-                        meta={"messenger_login_id": login_id})
+                        meta={"messenger_login_id": login_id}, merge_meta=True)
                 except Exception:  # noqa: BLE001
                     logger.debug("[messenger_web] 注册表写入失败", exc_info=True)
                 # self_profile 富集：微服务若回传昵称/头像 URL → 富集账号自身身份

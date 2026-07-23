@@ -294,6 +294,57 @@ def test_post_with_retry_gives_up_after_retries():
     assert mock_post.call_count == 2  # 1 原始 + 1 重试，不无限重试
 
 
+# ── B1+ 忙碌感知多端点路由（2026-07-21 三端点扩容）─────────────────────────
+def _fake_audio_post(seen):
+    wav = _wav_bytes()
+
+    def fake_post(url, payload, *, timeout, headers=None):
+        seen.append(url)
+        return json.dumps(
+            {"audio_base64": base64.b64encode(wav).decode()}).encode()
+
+    return fake_post
+
+
+def test_post_any_priority_order_when_all_free():
+    """全部端点空闲 → 仍按配置优先级走主端点（主力机优先不变）。"""
+    c = _client(retries=0, base_urls=[
+        "http://10.9.0.1:7852", "http://10.9.0.2:7852"])
+    seen: list = []
+    with patch.object(AvatarVoiceClient, "_health_ok_base", return_value=True), \
+            patch.object(AvatarVoiceClient, "_post",
+                         side_effect=_fake_audio_post(seen)):
+        c.tts("hi", reference_audio_b64="QQ==")
+    assert seen and seen[0].startswith("http://10.9.0.1")
+
+
+def test_post_any_busy_aware_routes_to_free_endpoint():
+    """主端点 GPU 锁被占 → 请求派给空闲备用端点（并行合成而非排队）。"""
+    from src.ai.avatar_voice import _gpu_lock_for
+    c = _client(retries=0, base_urls=[
+        "http://10.9.1.1:7852", "http://10.9.1.2:7852"])
+    seen: list = []
+    lock_main = _gpu_lock_for("http://10.9.1.1:7852")
+    done = {"ok": False}
+
+    def _run():
+        c.tts("hi", reference_audio_b64="QQ==")
+        done["ok"] = True
+
+    with patch.object(AvatarVoiceClient, "_health_ok_base", return_value=True), \
+            patch.object(AvatarVoiceClient, "_post",
+                         side_effect=_fake_audio_post(seen)):
+        lock_main.acquire()  # 模拟主端点正在合成中
+        try:
+            t = threading.Thread(target=_run)
+            t.start()
+            t.join(timeout=5)
+        finally:
+            lock_main.release()
+    assert done["ok"], "主端点忙时请求不应排队等待（应切空闲端点）"
+    assert seen and seen[0].startswith("http://10.9.1.2")
+
+
 def test_tts_long_text_chunked_and_merged():
     """长文本按句切块逐块合成，产物为合法 WAV 且时长≈各块之和。"""
     c = _client(chunk_max_chars=20, chunk_gap_ms=0)

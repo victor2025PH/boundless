@@ -121,40 +121,68 @@ def resolve_reply_language(
     explicit: str = "",
     default: str = "zh",
 ) -> str:
-    """决定「回复正文该用哪种语言」——单一事实源（含防误切护栏）。
+    """决定「回复正文该用哪种语言」——单一事实源（会话语言策略版）。
 
-    优先级：
+    委托 ``src.ai.lang_policy.resolve_conversation_language``（会话级语言契约），
+    相对旧实现的行为升级：
       1. ``explicit`` 非空 → 直接采用（手动 UI 选定的目标语，最高优先，不二次猜）。
-      2. 否则按**最新一条入站**检测语言（贴合「客户切语言要跟上」的诉求）。
-      3. 防过度切换：最新一条过短（如 ``ok`` / ``哈哈`` / 纯 emoji，``detect_language``
-         极易误判）时，回落到**近窗口入站消息的主导语言**——长消息仍信任最新一条，
-         兼顾切换灵敏度与短 token 噪声稳定性。
+      2. 用户**明确语言请求**（"用日语聊吧" / "please speak japanese"）→ 立即生效；
+         且从历史恢复既往请求（``latest_explicit_request``），无状态产线免存储即
+         获得「偏好持久」语义——治「说了用日文还继续发中文」事故。
+      3. 语言中性 token（whatsapp/ok/URL/数字/emoji）不构成语言证据——治
+         「发一个 whatsapp 整条回复变英文」事故；短消息/弱证据一律粘住会话
+         主导语言，只有脚本级/成句级强证据才立即跟随（保留切换敏捷性）。
 
-    纯函数、零副作用、可单测；``detect_language`` 惰性导入（与本模块既有
-    ``TranslationService`` 同属 ``src.ai``，不抬升导入期成本）。
+    纯函数、零副作用、可单测；重依赖惰性导入（不抬升模块导入期成本）。
     """
     explicit = str(explicit or "").strip()
     if explicit:
         return explicit
-    from src.ai.translation_service import detect_language
+    from src.ai.lang_policy import (
+        latest_explicit_request,
+        resolve_conversation_language,
+    )
 
     last = str(last_inbound or "").strip()
-    lang = (detect_language(last) if last else "") or default
-    if len(last) < 4 and history:
-        window = " ".join(
-            str(m.get("content") or "")
-            for m in history[-6:]
-            if m.get("role") == "user"
-        ).strip()
-        if len(window) >= 4:
-            _win_lang = detect_language(window) or lang
-            if _win_lang != lang:
-                logger.debug(
-                    "[persona_reply] 短消息防误切：last=%r(%s) → 回落窗口主导=%s",
-                    last[:12], lang, _win_lang,
-                )
-            lang = _win_lang
-    return lang or default
+    pref = latest_explicit_request(history)
+    decision = resolve_conversation_language(
+        last,
+        history,
+        prev_lang="",       # 收件箱产线无跨轮内存状态——粘滞语义由 window/pref 承担
+        lang_pref=pref,
+        default=default,
+    )
+    if decision.source not in ("detected", "default"):
+        logger.debug(
+            "[persona_reply] 语言决策: last=%r → %s (source=%s, pref=%s)",
+            last[:20], decision.lang, decision.source, pref or "-",
+        )
+    return decision.lang or default
+
+
+def _initial_lang_default(
+    app: Any, platform: str, chat_key: str, conversation_id: str = ""
+) -> str:
+    """新会话首句语言 default（lang_prior 先验；禁用/无先验回落 zh）。
+
+    只影响「决策链全部落空」的场景（新好友首条 Hi/emoji），任何真实语言
+    证据/请求/历史窗口都优先——语义与 resolve_reply_language 的 default
+    参数一致。account_id 从 conversation_id（platform:account:chat_key）
+    解析（generate_persona_reply 签名无 account_id，不为此破坏契约）。
+    """
+    try:
+        from src.ai.lang_prior import initial_lang_hint
+        acct = ""
+        cid = str(conversation_id or "")
+        if cid.count(":") >= 2:
+            acct = cid.split(":", 2)[1]
+        cm = getattr(getattr(app, "state", None), "config_manager", None)
+        return initial_lang_hint(
+            platform=platform, account_id=acct, chat_key=chat_key,
+            config=getattr(cm, "config", None) or {},
+        ) or "zh"
+    except Exception:
+        return "zh"
 
 
 def _resolve_persona_badge(
@@ -241,10 +269,15 @@ async def generate_persona_reply(
         return {"ok": False, "detail": "无可用对话上下文", "reply": ""}
 
     # 语言决策单一事实源：显式 reply_lang > 坐席 target_lang > 自动决策(含短消息防误切)。
+    # 自动决策的最终 default 接 lang_prior 先验（新好友首条中性消息 → 按账号
+    # 配置/WA 国码定首句语言；有任何真实语言证据时先验不参与）。
     resolved_lang = (
         str(reply_lang or "").strip()
         or str(target_lang or "").strip()
-        or resolve_reply_language(last_inbound, history, default="zh")
+        or resolve_reply_language(
+            last_inbound, history,
+            default=_initial_lang_default(app, platform, chat_key, conversation_id),
+        )
     )
 
     state = getattr(app, "state", None)

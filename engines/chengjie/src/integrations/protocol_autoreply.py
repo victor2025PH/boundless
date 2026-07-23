@@ -169,12 +169,27 @@ async def run_autoreply(
 
     # Phase 3 防双发：会话已由收件箱「全自动」(auto_ai) 托管 → 交给 inbox 草稿/autosend
     # 链路（带人设+二次风控+L3/L4 审批），本直发链路早退，杜绝同一条消息双生成、双发。
+    # Sprint1 接管即静音：manual = 坐席已接管，本直发链路同样让位（否则接管置 manual 反而
+    # 解除 auto_ai 让位、恢复 protocol 直发，与「停 AI」相悖）。review/multi_choice 不受影响。
     if inbox_mode_fn is not None:
         try:
-            if inbox_mode_fn(platform, account_id, chat_key) == "auto_ai":
+            _im = inbox_mode_fn(platform, account_id, chat_key)
+            if _im == "auto_ai":
                 return _result("inbox_autopilot", inbound=text)
+            if _im == "manual":
+                return _result("inbox_manual", inbound=text)
         except Exception:
             logger.debug("[protocol-autoreply] inbox_mode_fn 检查失败（忽略）", exc_info=True)
+
+    # License 到期硬阻断（Sprint2）：enforce 开且授权失效(只读) → 决策期早退，不生成不发。
+    # 默认 enforce=false → 恒放行，零破坏；fail-open。
+    try:
+        from src.licensing.gate import is_outbound_blocked
+        from src.licensing.license_manager import get_license_manager
+        if is_outbound_blocked(get_license_manager().status()):
+            return _result("license_readonly", inbound=text)
+    except Exception:
+        logger.debug("[protocol-autoreply] license 检查失败（忽略）", exc_info=True)
 
     # G1 全局 Kill-Switch：紧急冻结时在决策期就早退（不生成、不发、不浪费 token）；
     # 与预热闸门正交（无视 companion_send_gate.enabled）。入站仍由收件箱 ingest 收录，
@@ -431,6 +446,27 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
             _ks_on, _ks_scope = False, ""
         if _ks_on:
             raise RuntimeError(f"kill_switch_blocked:{_ks_scope}")
+        # 语音自动回复（方案B · 2026-07-20）：复用 Path B 的跨平台 autosend_voice
+        #   （经 orch.send_media → WhatsApp 边车 /send-media 发 ogg/opus 语音条）。受
+        #   inbox.l2_autosend.voice 配置门控（enabled / trigger / 长度 / 人设白名单 / 克隆音优先），
+        #   人设声音取会话绑定人设的 voice_profile。判定该发语音 → 发语音并早退（跳过文本）；
+        #   否则回落文本。全程 try/except：语音任何异常都绝不影响文本回复这条主路径；
+        #   orch.send_media 内部自带 Kill-Switch + 反封号闸门，与文本同守。
+        try:
+            _vb = (((cfg or {}).get("inbox") or {}).get("l2_autosend") or {}).get("voice") or {}
+            if _vb.get("enabled"):
+                from types import SimpleNamespace as _SNS
+                from src.inbox.autosend_helpers import autosend_voice as _av
+                _shim = _SNS(
+                    config=getattr(app.state, "config_manager", None),
+                    logger=logger,
+                    inbox_store=getattr(app.state, "inbox_store", None),
+                    _web_loop=None,
+                )
+                if await _av(_shim, platform, account_id, chat_key, text):
+                    return {"delivered": True, "delivered_as": "voice"}
+        except Exception:
+            logger.debug("[protocol-autoreply] 语音尝试失败，回落文本", exc_info=True)
         # N 线 核心3：发送前反封号闸门（A/B 两线共用 companion_send_gate；默认关→零破坏）。
         # 拦截 → 抛错，交由 run_autoreply 既有熔断/转人工处理。
         from src.skills.companion_send_gate import evaluate, gate_enabled

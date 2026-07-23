@@ -101,9 +101,12 @@ def make_provider(config: Dict[str, Any]):
             aid = str(res.get("account_id") or "")
             if st == "authorized" and aid:
                 try:
+                    # merge_meta：只登记 baileys_login_id，绝不整块覆盖 meta——
+                    # 2026-07-23 事故：重登录抹掉 persona_id 绑定 → 新好友回落
+                    # 默认人设 + 错语言音色（客户投诉"老是讲日语"）。
                     get_account_registry().upsert(
                         "whatsapp", aid, mode="protocol", status="online",
-                        meta={"baileys_login_id": login_id})
+                        meta={"baileys_login_id": login_id}, merge_meta=True)
                 except Exception:  # noqa: BLE001
                     logger.debug("[wa_baileys] 注册表写入失败", exc_info=True)
                 # P4 身份化：Baileys 微服务若在 status 里回传 pushname/name → 富集自身昵称

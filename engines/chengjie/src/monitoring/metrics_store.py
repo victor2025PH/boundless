@@ -55,6 +55,12 @@ class MetricsStore:
         self._outbound_self_ref_fixes: int = 0
         self._outbound_repeats: int = 0
         self._lang_mismatch_count: int = 0
+        # 会话语言契约事件（lang_policy）：explicit_request / stable_switch /
+        # guard_corrected / voice_suspect / voice_lang_retry / llm_request_fallback…
+        self._lang_events: Dict[str, int] = {}
+        # 语言契约事件时间序列：(ts, name) 最近 2000 条 → 支持任意窗口聚合
+        # （与 _messenger_rpa_metrics_recent 同口径；快照暴露 lang_events_1h）
+        self._lang_events_recent: deque = deque(maxlen=2000)
         # 情景记忆 / 慢思考（可选观测）
         self._slow_think_count: int = 0
         self._episodic_inject_count: int = 0
@@ -239,6 +245,41 @@ class MetricsStore:
     def record_lang_mismatch(self):
         with self._lock:
             self._lang_mismatch_count += 1
+
+    def record_lang_event(self, name: str, count: int = 1) -> None:
+        """会话语言契约事件计数（lang_policy 观测）。
+
+        约定事件名：explicit_request（明确语言请求命中）/ stable_switch（偏好漂移
+        释放）/ guard_corrected（守卫翻译纠正成功）/ voice_suspect（可疑语音转写
+        隔离）/ voice_lang_retry（ASR 低置信/白名单外重转）/ llm_request_fallback
+        （间接表达 LLM 短判兜底命中）。守卫触发数沿用 lang_mismatch_count。
+        质量口径：guard 触发率持续走高 = 上游决策在错，应报警而非依赖翻译兜底。
+
+        累计计数 + 时间序列两路同时写入（与 record_messenger_rpa_metric 同口径），
+        供快照 lang_events_1h 做近 1 小时窗口聚合。
+        """
+        if not name:
+            return
+        c = int(max(0, count))
+        if c <= 0:
+            return
+        now = time.time()
+        with self._lock:
+            self._lang_events[name] = self._lang_events.get(name, 0) + c
+            for _ in range(c):
+                self._lang_events_recent.append((now, name))
+
+    def get_lang_events(self, window_sec: Optional[float] = None) -> Dict[str, int]:
+        """语言契约事件快照：``window_sec=None`` 返回累计；指定时返回最近 N 秒窗口聚合。"""
+        with self._lock:
+            if not window_sec or window_sec <= 0:
+                return dict(self._lang_events)
+            cutoff = time.time() - float(window_sec)
+            agg: Dict[str, int] = defaultdict(int)
+            for ts, name in self._lang_events_recent:
+                if ts >= cutoff:
+                    agg[name] += 1
+            return dict(agg)
 
     def record_slow_think(self):
         with self._lock:
@@ -793,6 +834,14 @@ class MetricsStore:
             ar_rw_ad = self._ar_rewrite_adopted
             ec_hit = self._embed_cache_hit
             ec_miss = self._embed_cache_miss
+            le_recent = list(self._lang_events_recent)
+        # 近 1 小时语言契约事件窗口聚合（与 lang_events 累计并列暴露）
+        _le_cutoff = time.time() - 3600
+        lang_events_1h: Dict[str, int] = defaultdict(int)
+        for _ts, _name in le_recent:
+            if _ts >= _le_cutoff:
+                lang_events_1h[_name] += 1
+        lang_events_1h = dict(lang_events_1h)
         lr_ms = list(self._line_rpa_total_ms)
         lr_avg = round(sum(lr_ms) / len(lr_ms), 2) if lr_ms else 0.0
         times = list(self._response_times)
@@ -826,6 +875,13 @@ class MetricsStore:
                 "truncated_count": truncated,
                 "truncated_rate_pct": round(truncated / replied * 100, 1),
                 "lang_mismatch_count": self._lang_mismatch_count,
+                # 语言错配率/千条回复（市场侧 KPI）：守卫触发数 ÷ 回复数 × 1000
+                "lang_mismatch_per_1k": round(
+                    self._lang_mismatch_count / replied * 1000, 2
+                ),
+                "lang_events": dict(self._lang_events),
+                # 近 1 小时各语言契约事件计数（时间序列窗口聚合）
+                "lang_events_1h": lang_events_1h,
             },
             # 主对话 LLM 容灾：本地兜底模型出话情况（云主模型不可达/熔断时）
             "local_llm_fallback": {

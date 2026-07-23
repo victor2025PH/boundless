@@ -1023,6 +1023,12 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 出站语音语言路由观测（哪些语种在被路由/拒发；拒发涨=该语种缺音色映射）
+        try:
+            from src.ai.lang_route_stats import get_lang_route_stats
+            metrics["lang_voice_route"] = get_lang_route_stats().dump()
+        except Exception:
+            pass
         # 会话 peer 身份「惰性解析/自愈补名」观测（数字号 healed 了多少 / 缓存命中 / 取不到）
         try:
             from src.web.peer_identity_stats import get_peer_identity_stats
@@ -1197,6 +1203,12 @@ def register_metrics_route(app, *, api_auth):
             except Exception:
                 pass
 
+            # 出站语音语言路由（routed by lang / 拒发守卫 / 克隆兜底对齐）
+            try:
+                from src.ai.lang_route_stats import get_lang_route_stats
+                buf.write(get_lang_route_stats().dump_prom())
+            except Exception:
+                pass
             # P58 通用 provider 用量（vision 入站识图 / ocr / asr 等；JSON 侧已有，
             # 此前 workspace prom 缺失——补齐后 vision_attempts_total 等可被抓取）
             try:

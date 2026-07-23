@@ -33,6 +33,14 @@ class DomainHook:
     no-ops wrapped in async for consistency.
     """
 
+    def __init__(self, config=None):
+        # Accept an optional config so every hook can be instantiated uniformly
+        # as ``hook_class(config=...)`` (skill_manager) or ``hook_class()`` (tests).
+        # Subclasses that need config may override, but no longer *must* define
+        # __init__ just to avoid "takes no arguments" (silent hook-registration
+        # failure for config-less domains like `general` / `ecommerce`).
+        self._config = config
+
     # ── Message lifecycle hooks ─────────────────────────────────
 
     async def on_message_pre_process(

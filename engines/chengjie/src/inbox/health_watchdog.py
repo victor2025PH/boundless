@@ -361,6 +361,10 @@ class HealthWatchdog:
         self._tgcall_down_since: float = 0.0
         self._tgcall_alerted: bool = False
         self._tgcall_last_remind: float = 0.0
+        # 日志巡检（triage）：稀疏节流（默认 6h 一轮）；只在出现新错误类/激增时经
+        # host_alert 外发。默认关（新子系统约定）。
+        self._last_triage_ts: float = 0.0
+        self.total_log_triage_alerts: int = 0
         self.last_check_ts: float = 0.0
         self.last_light: str = "green"
 
@@ -506,6 +510,14 @@ class HealthWatchdog:
             self._check_cloud_balance()
         except Exception:
             logger.debug("云端余额巡检异常（已忽略）", exc_info=True)
+
+        # 日志巡检（2026-07-23）：把 triage_watch 的「基线抑制+偏差检测」接进 in-process
+        # 看门狗——出现新错误类/激增时经 host_alert 走既有 EventBus→Webhook→Telegram
+        # 外发（比独立计划任务只能落 app.log/弹窗更能触达机主）。默认关、6h 稀疏节流。
+        try:
+            self._check_log_triage()
+        except Exception:
+            logger.debug("日志巡检异常（已忽略）", exc_info=True)
 
         # 备用 Key 主动探活（2026-07-12 下午）：池 key 每日 1-token chat ping——
         # 「被封/装错端点/模型名失效」只有真打一次才暴露，关掉「切过去才发现备用也坏」窗口。
@@ -1305,6 +1317,98 @@ class HealthWatchdog:
         self._colloquial_alerted = True
         self._colloquial_last_remind = ts
         self.total_colloquial_llm_reminders += 1
+
+    def _log_triage_path(self, lt: Dict[str, Any]) -> Optional[str]:
+        """决定巡检的日志路径：配置覆写 > 本实例 logging.file > None（跳过）。"""
+        p = str(lt.get("log_file") or "").strip()
+        if p:
+            return p
+        cfg = getattr(self._config_manager, "config", None) or {}
+        if isinstance(cfg, dict):
+            lf = str(((cfg.get("logging") or {}).get("file")) or "").strip()
+            if lf:
+                return lf
+        return None
+
+    def _check_log_triage(self, *, now: Optional[float] = None) -> None:
+        """日志巡检：新错误类/激增 → host_alert 外发（默认关，6h 稀疏节流）。
+
+        复用 ``scripts.triage_watch.scan_once``（与独立 CLI/计划任务同一偏差检测核心，
+        零逻辑漂移）：首跑只建立基线不告警；之后只对 ①基线里没有的新模板 ②已知模板
+        激增 上报，且每轮把当前计数并入基线 → 同一异常只轰一次（下轮成已知基线）。
+        告警走 ``host_alert.notify_host``（EventBus host_alert → Webhook → Telegram），
+        finding 集合作为去抖 key（相同异常集在 cooldown 内不重发）。
+
+        配置 ``health_watchdog.log_triage.{enabled=false, interval_min=360, window_hours=6,
+        log_file, new_min_count, warn_new_min_count, surge_factor, surge_min, cooldown_min}``。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        lt = (((cfg.get("health_watchdog") or {}).get("log_triage")) or {}) \
+            if isinstance(cfg, dict) else {}
+        if not lt.get("enabled", False):
+            return
+        ts = float(now if now is not None else time.time())
+        interval_sec = max(600.0, float(lt.get("interval_min", 360) or 360) * 60.0)
+        if self._last_triage_ts and (ts - self._last_triage_ts) < interval_sec:
+            return
+        self._last_triage_ts = ts
+
+        from pathlib import Path as _Path
+        log_file = self._log_triage_path(lt)
+        if not log_file or not _Path(log_file).exists():
+            return
+        try:
+            from scripts.triage_watch import (
+                _default_baseline_path, merge_baseline, save_baseline,
+                scan_once, summarize,
+            )
+        except Exception:
+            logger.debug("triage_watch 导入失败（已忽略）", exc_info=True)
+            return
+
+        log_path = _Path(log_file)
+        baseline_path = _default_baseline_path(log_path)
+        window_hours = float(lt.get("window_hours", 6) or 6)
+        try:
+            res = scan_once(
+                log_path, baseline_path,
+                window_hours=window_hours,
+                new_min_count=int(lt.get("new_min_count", 1) or 1),
+                warn_new_min_count=int(lt.get("warn_new_min_count", 10) or 10),
+                surge_factor=float(lt.get("surge_factor", 3.0) or 3.0),
+                surge_min=int(lt.get("surge_min", 20) or 20),
+            )
+        except Exception:
+            logger.debug("triage 扫描异常（已忽略）", exc_info=True)
+            return
+
+        # 每轮把当前计数并入基线（含首跑）——同一异常只告一次，之后成为已知基线。
+        try:
+            save_baseline(baseline_path, merge_baseline(res.baseline, res.groups))
+        except Exception:
+            logger.debug("triage 基线写入失败（已忽略）", exc_info=True)
+
+        if not res.findings:
+            return
+        summary = summarize(res.findings, window_hours=window_hours)
+        errs = sum(1 for f in res.findings if f.level == "ERROR")
+        title = "日志巡检告警" + (f"（{errs} 类新错误）" if errs else "（WARNING 激增）")
+        # 去抖 key = finding 集合指纹；cooldown 默认 = interval，相同异常集不重发
+        import hashlib
+        fp = hashlib.sha1(
+            "|".join(sorted(f"{f.level}:{f.logger}:{f.template}" for f in res.findings))
+            .encode("utf-8", "replace")
+        ).hexdigest()[:12]
+        cooldown_sec = max(600.0, float(lt.get("cooldown_min", lt.get("interval_min", 360))
+                                        or 360) * 60.0)
+        try:
+            from src.utils.host_alert import notify_host
+            fired = notify_host(title, summary, key=f"triage:{fp}", cooldown_sec=cooldown_sec)
+            if fired:
+                self.total_log_triage_alerts += 1
+                logger.info("HealthWatchdog 发出日志巡检告警: %s", title)
+        except Exception:
+            logger.debug("triage host_alert 发布失败（已忽略）", exc_info=True)
 
     def _check_avatar_auto_stock(self, *, now: Optional[float] = None) -> None:
         """备货缺口自动入库（Phase5）：达标短句自动进台词库，运营零操作。

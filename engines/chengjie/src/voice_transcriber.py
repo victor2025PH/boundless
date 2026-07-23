@@ -240,12 +240,22 @@ class FasterWhisperTranscriber(VoiceTranscriber):
 
             # 转录语音
             self.logger.info(f"开始转录: {voice_file_path}")
+            # 热词/专有名词引导（治同音误转："智聊"→"治療"、"回复"→"恢复"）：
+            # initial_prompt 把产品名/业务词喂给 whisper 当上文，显著提升专名命中。
+            _hotwords = self.config.get('hotwords') or (
+                self.config.get('whisper', {}) or {}).get('hotwords')
+            if isinstance(_hotwords, (list, tuple)):
+                _hotwords = "、".join(str(w) for w in _hotwords if w)
+            _kw = {}
+            if _hotwords and str(_hotwords).strip():
+                _kw['initial_prompt'] = str(_hotwords).strip()
             segments, info = self.model.transcribe(
                 audio=voice_file_path,
                 language=language if language != "auto" else None,
                 beam_size=5,
                 vad_filter=True,  # 语音活动检测（滤静音，减尾部幻觉）
                 condition_on_previous_text=False,  # 防跨段串读/幻觉传播（whisper 通病）
+                **_kw,
             )
 
             # 合并所有片段
@@ -425,6 +435,104 @@ class AvatarWhisperTranscriber(VoiceTranscriber):
                     pass
 
 
+class SenseVoiceTranscriber(VoiceTranscriber):
+    """SenseVoice-Small（FunASR）本机转录：中文方言/粤语显著强于 Whisper。
+
+    背景：Whisper base/small 对粤语基本失真（实测「漂唔漂亮」→「票股票量」）、
+    短音频易语言误判幻觉（中文→葡语）。SenseVoice-Small 训练含大量中文方言语料，
+    支持 zh/yue(粤)/en/ja/ko 自动检测，非自回归推理比 Whisper 快 ~15x，
+    RTX 3060 上单条语音亚秒级。模型 ~900MB，首次使用自动从 ModelScope 拉取
+    （国内网络友好，无需 HF 代理）。
+
+    配置（voice_recognition.sensevoice.*）：
+      model_dir: 模型名或本地路径（默认 iic/SenseVoiceSmall）
+      device:    cuda:0 / cpu（默认自动：有 CUDA 用 CUDA）
+    """
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        sv_cfg = config.get('sensevoice', {}) or {}
+        self.model_dir = str(sv_cfg.get('model_dir') or 'iic/SenseVoiceSmall')
+        dev = sv_cfg.get('device')
+        if not dev:
+            try:
+                import torch
+                dev = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+            except Exception:
+                dev = 'cpu'
+        self.device = str(dev)
+        self.model = None
+        self._load_lock = asyncio.Lock()
+        self.logger.info(
+            f"SenseVoice 转录服务初始化 model={self.model_dir} device={self.device}")
+
+    # SenseVoice 语言码映射：客户会话语言 → 模型 language 参数
+    _LANG_MAP = {
+        'zh': 'zh', 'yue': 'yue', 'en': 'en', 'ja': 'ja', 'ko': 'ko',
+        'auto': 'auto', '': 'auto',
+    }
+
+    async def _ensure_model(self):
+        if self.model is not None:
+            return
+        async with self._load_lock:
+            if self.model is not None:
+                return
+
+            def _load():
+                from funasr import AutoModel
+                # vad 前置切段：长语音稳、静音不产幻觉（与 whisper vad_filter 对等）
+                return AutoModel(
+                    model=self.model_dir,
+                    vad_model="fsmn-vad",
+                    vad_kwargs={"max_single_segment_time": 30000},
+                    device=self.device,
+                    disable_update=True,
+                )
+
+            self.logger.info(f"加载 SenseVoice 模型: {self.model_dir}（首次会自动下载）")
+            self.model = await asyncio.to_thread(_load)
+            self.logger.info("SenseVoice 模型加载完成")
+
+    async def _transcribe_impl(self, voice_file_path: str, language: str) -> Optional[str]:
+        try:
+            await self._ensure_model()
+
+            lang = self._LANG_MAP.get(str(language or 'auto').lower(), 'auto')
+
+            def _run():
+                res = self.model.generate(
+                    input=str(voice_file_path),
+                    cache={},
+                    language=lang,       # auto 自动检测（含粤语）
+                    use_itn=True,        # 数字/标点正规化
+                    batch_size_s=60,
+                    merge_vad=True,
+                    merge_length_s=15,
+                )
+                if not res:
+                    return ""
+                raw = " ".join(str(r.get("text", "")) for r in res if r)
+                try:
+                    # 剥掉 <|zh|><|NEUTRAL|><|Speech|> 等富文本标记，只留正文
+                    from funasr.utils.postprocess_utils import (
+                        rich_transcription_postprocess,
+                    )
+                    return rich_transcription_postprocess(raw)
+                except Exception:
+                    return re.sub(r"<\|[^|]*\|>", "", raw).strip()
+
+            text = await asyncio.to_thread(_run)
+            return (text or "").strip() or None
+
+        except ImportError:
+            self.logger.error("funasr 未安装，请运行: pip install funasr")
+            return None
+        except Exception as e:
+            self.logger.error(f"SenseVoice 转录失败: {e}")
+            return None
+
+
 class FallbackTranscriber(VoiceTranscriber):
     """主/备转录级联：主转录器返空或抛错 → 自动回落下一个（绝不阻塞理解链）。
 
@@ -495,10 +603,13 @@ class VoiceTranscriberFactory:
         """按 provider 建单个转录器（不含级联）。"""
         provider = str(config.get('provider', 'whisper_local')).strip().lower()
 
-        # qwen3_asr / funasr 等本机 OpenAI 兼容 ASR 服务复用 OpenAI 转录器
+        # qwen3_asr / funasr_api 等本机 OpenAI 兼容 ASR 服务复用 OpenAI 转录器
         # （契约相同：POST {base_url}/audio/transcriptions），仅换 base_url/model。
-        if provider in ('openai', 'qwen3_asr', 'funasr', 'openai_compatible'):
+        if provider in ('openai', 'qwen3_asr', 'funasr_api', 'openai_compatible'):
             return OpenAITranscriber(config)
+        elif provider in ('sensevoice', 'sense_voice', 'funasr'):
+            # 进程内 FunASR/SenseVoice（方言/粤语主力，无需独立服务）
+            return SenseVoiceTranscriber(config)
         elif provider in ('avatar_whisper', 'avatarhub'):
             return AvatarWhisperTranscriber(config)
         elif provider == 'faster_whisper':

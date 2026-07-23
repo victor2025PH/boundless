@@ -678,3 +678,124 @@ class TestVoiceUnifiedSendStack:
         assert reply_calls.get("text") == "hello there"   # 文本摘要交给 _send_reply
         assert "mirror" not in reply_calls                # summary 路径不重复 mirror
         assert counted["n"] == 1                          # 语音计一次（文本由 _send_reply 自记）
+
+
+# ─────────────────────────────────────────────────────────────────
+# 语言路由接线（原生 TG voice_reply 路径，与 B 线 voice_autosend 同口径）
+# ─────────────────────────────────────────────────────────────────
+
+class TestVoiceReplyLangRoute:
+    """原生 TG 语音回复也要走 lang_voice_route：音色跟随文本语种 + 拒发守卫。"""
+
+    def _make_sender(self, monkeypatch, *, voice_cfg, extra_cfg=None):
+        import logging
+
+        from src.client.sender import TelegramSenderMixin
+
+        cfg = {
+            "telegram": {"voice_reply": {
+                "enabled": True, "trigger": "always",
+                "max_text_chars": 500, "max_seconds": 60,
+            }},
+            "voice_lang_route": {"enabled": True},
+        }
+        cfg.update(extra_cfg or {})
+
+        class _Cfg:
+            config = cfg
+
+        class _S(TelegramSenderMixin):
+            def __init__(self):
+                self.config = _Cfg()
+                self.client = object()
+                self.logger = logging.getLogger("voice_lang_route")
+                self.account_id = "a"
+                self._last_send_wallclock = 0.0
+                self.account_persona_ids = []
+
+        monkeypatch.setattr(
+            "src.ai.persona_voice.resolve_voice_cfg_for_contact",
+            lambda pid, raw, contact_key=None: dict(voice_cfg),
+        )
+        s = _S()
+        monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+        return s
+
+    @pytest.mark.asyncio
+    async def test_edge_voice_follows_text_language(self, monkeypatch):
+        """ja 音色 + 英文文本 → TTSPipeline 收到的 cfg 已切英文音色。"""
+        from src.ai import tts_pipeline
+
+        captured = {}
+        orig_init = tts_pipeline.TTSPipeline.__init__
+
+        def _init(self, cfg, *a, **k):
+            captured.update(dict(cfg or {}))
+            orig_init(self, cfg, *a, **k)
+
+        monkeypatch.setattr(tts_pipeline.TTSPipeline, "__init__", _init)
+        synth = AsyncMock(return_value=types.SimpleNamespace(
+            ok=False, error="stop-here", audio_path="", duration_sec=0.0))
+        monkeypatch.setattr(tts_pipeline.TTSPipeline, "synthesize", synth)
+
+        s = self._make_sender(
+            monkeypatch,
+            voice_cfg={"enabled": True, "backend": "edge_tts",
+                       "voice": "ja-JP-NanamiNeural"})
+        msg = types.SimpleNamespace(chat=types.SimpleNamespace(id=7), id=1, from_user=None)
+        out = await s._maybe_send_voice_reply(
+            msg, "Hello there, how are you doing today?", is_peer_voice=False)
+
+        assert out is False                       # 合成失败 → 回落文本（预期）
+        assert captured.get("voice") == "en-US-JennyNeural"
+        assert captured.get("backend") == "edge_tts"
+
+    @pytest.mark.asyncio
+    async def test_reject_guard_skips_tts_and_falls_back_to_text(self, monkeypatch):
+        """语种明确但无音色映射 → 不合成、不发语音，直接回落文字。"""
+        from src.ai import tts_pipeline
+
+        synth = AsyncMock()
+        monkeypatch.setattr(tts_pipeline.TTSPipeline, "synthesize", synth)
+        # 强制检测出一个无映射语种（模拟检测器支持了新语言而映射表没跟上）
+        monkeypatch.setattr(
+            "src.ai.lang_voice_route.detect_text_lang", lambda t: "xx")
+
+        s = self._make_sender(
+            monkeypatch,
+            voice_cfg={"enabled": True, "backend": "edge_tts",
+                       "voice": "zh-CN-XiaoxiaoNeural"})
+        msg = types.SimpleNamespace(chat=types.SimpleNamespace(id=7), id=1, from_user=None)
+        out = await s._maybe_send_voice_reply(
+            msg, "some text in an unmapped language", is_peer_voice=False)
+
+        assert out is False
+        synth.assert_not_called()                 # 拒发守卫先于 TTS：不白跑合成
+
+    @pytest.mark.asyncio
+    async def test_route_disabled_keeps_original_voice(self, monkeypatch):
+        """voice_lang_route 未启用 → 原音色原样进 TTS（零行为变更）。"""
+        from src.ai import tts_pipeline
+
+        captured = {}
+        orig_init = tts_pipeline.TTSPipeline.__init__
+
+        def _init(self, cfg, *a, **k):
+            captured.update(dict(cfg or {}))
+            orig_init(self, cfg, *a, **k)
+
+        monkeypatch.setattr(tts_pipeline.TTSPipeline, "__init__", _init)
+        synth = AsyncMock(return_value=types.SimpleNamespace(
+            ok=False, error="stop-here", audio_path="", duration_sec=0.0))
+        monkeypatch.setattr(tts_pipeline.TTSPipeline, "synthesize", synth)
+
+        s = self._make_sender(
+            monkeypatch,
+            voice_cfg={"enabled": True, "backend": "edge_tts",
+                       "voice": "ja-JP-NanamiNeural"},
+            extra_cfg={"voice_lang_route": {"enabled": False}})
+        msg = types.SimpleNamespace(chat=types.SimpleNamespace(id=7), id=1, from_user=None)
+        await s._maybe_send_voice_reply(
+            msg, "Hello there, how are you doing today?", is_peer_voice=False)
+
+        assert captured.get("voice") == "ja-JP-NanamiNeural"

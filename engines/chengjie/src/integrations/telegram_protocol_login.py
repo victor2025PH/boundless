@@ -329,9 +329,11 @@ def make_provider(config: Dict[str, Any], sessions_dir: str = _DEFAULT_SESSIONS_
                         _meta.update(login.self_profile)
                 except Exception:  # noqa: BLE001
                     logger.debug("[tg_protocol_login] self_profile 合并失败（忽略）", exc_info=True)
+                # merge_meta：只更新会话凭据/self_* 键，防重登录整块覆盖 meta
+                # 抹掉 persona_id / auto_reply / autoreply_override 等运营绑定。
                 get_account_registry().upsert(
                     "telegram", res["account_id"], mode="protocol",
-                    status="online", meta=_meta,
+                    status="online", meta=_meta, merge_meta=True,
                 )
             except Exception:  # noqa: BLE001
                 logger.debug("[tg_protocol_login] 注册表写入失败", exc_info=True)

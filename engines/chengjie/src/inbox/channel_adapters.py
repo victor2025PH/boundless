@@ -496,10 +496,15 @@ class TelegramInboxAdapter:
         return out
 
     def status(self, request: Any) -> Dict[str, Dict[str, Any]]:
+        # 无 A 线 client（telegram 未配置/未初始化）时**不再上报幽灵 default 行**：
+        # 该行不在账号注册表里，删除/登出接口对它都是空操作，在连接中心表现为
+        # 「永远断线且删不掉的主账号」。未接入平台由抽屉的「尚未接入」空态承担展示。
         tg = getattr(request.app.state, "telegram_client", None)
+        if tg is None:
+            return {}
         return {"telegram": {
             "platform": "telegram", "account_id": "default", "label": "Telegram",
-            "running": bool(getattr(tg, "running", False)) if tg else False,
+            "running": bool(getattr(tg, "running", False)),
         }}
 
     async def send(self, request: Any, account_id: str, chat_key: str, text: str
