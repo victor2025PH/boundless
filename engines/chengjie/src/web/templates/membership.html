@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}{{ (i18n or {}).get('mb_title', '会员中心') }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('mb_title', '会员中心') }}{% endblock %}
+
+{% block content %}
+{#- 服务端全量渲染：无 JS 依赖（i18n 键在 i18n_packs/membership.py，数据装配在
+    routes/membership_routes.py::build_membership_snapshot,口径=feature_gate 单源） -#}
+<style>.mb-cur-col{background:rgba(59,130,246,.06)}</style>
+{% set gate = mb.gate or {} %}
+{% set lic = mb.license or {} %}
+{% set plan = gate.plan or 'community' %}
+{% set state = lic.state or 'unlicensed' %}
+
+<div style="max-width:980px">
+  <p style="color:var(--t2);margin:.2rem 0 1rem">{{ (i18n or {}).get('mb_subtitle', '当前授权档位、功能矩阵与用量一览') }}</p>
+
+  {% if not gate.enabled %}
+  <div class="card" style="border-left:3px solid var(--amber);margin-bottom:1rem">
+    <div style="padding:.7rem 1rem;color:var(--t2)">{{ (i18n or {}).get('mb_gate_off', '档位功能闸门当前未启用：所有功能全量放行。') }}</div>
+  </div>
+  {% endif %}
+
+  {#- 概要四卡 -#}
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:.8rem;margin-bottom:1.2rem">
+    <div class="card" style="padding:1rem">
+      <div style="font-size:.72rem;color:var(--t2);margin-bottom:.3rem">{{ (i18n or {}).get('mb_cur_plan', '当前档位') }}</div>
+      <div style="font-size:1.3rem;font-weight:800">{{ (i18n or {}).get('mb_plan_' ~ plan, plan) }}</div>
+      <div style="font-size:.72rem;color:var(--t2);margin-top:.3rem">
+        {% if gate.plan_source == 'override' %}{{ (i18n or {}).get('mb_plan_src_override', '厂商自营（override）') }}
+        {% elif gate.plan_source == 'license' %}{{ (i18n or {}).get('mb_plan_src_license', '授权文件') }}
+        {% else %}{{ (i18n or {}).get('mb_plan_src_community', '未激活授权') }}{% endif %}
+      </div>
+    </div>
+    <div class="card" style="padding:1rem">
+      <div style="font-size:.72rem;color:var(--t2);margin-bottom:.3rem">{{ (i18n or {}).get('mb_state', '授权状态') }}</div>
+      <div style="font-size:1.05rem;font-weight:700">{{ (i18n or {}).get('mb_state_' ~ state, state) }}</div>
+      <div style="font-size:.72rem;color:var(--t2);margin-top:.3rem">
+        {% if lic.days_left is not none and lic.days_left >= 0 %}
+          {{ ((i18n or {}).get('mb_days_left', '剩余 {n} 天')).format(n=lic.days_left) }}
+        {% elif lic.licensed %}
+          {{ (i18n or {}).get('mb_perpetual', '永久有效') }}
+        {% else %}—{% endif %}
+      </div>
+    </div>
+    <div class="card" style="padding:1rem">
+      <div style="font-size:.72rem;color:var(--t2);margin-bottom:.3rem">{{ (i18n or {}).get('mb_seats', '坐席席位') }}</div>
+      <div style="font-size:1.05rem;font-weight:700">
+        {% set su = mb.seats.used if mb.seats.used is not none else '—' %}
+        {% if mb.seats.limit > 0 %}
+          {{ ((i18n or {}).get('mb_seats_val', '已建 {used} / 上限 {limit}')).format(used=su, limit=mb.seats.limit) }}
+        {% else %}
+          {{ ((i18n or {}).get('mb_seats_unlimited', '已建 {used} / 不限')).format(used=su) }}
+        {% endif %}
+      </div>
+    </div>
+    <div class="card" style="padding:1rem">
+      <div style="font-size:.72rem;color:var(--t2);margin-bottom:.3rem">{{ (i18n or {}).get('mb_quota', '字符额度') }}</div>
+      <div style="font-size:1.05rem;font-weight:700">
+        {% if mb.quota.included_chars %}
+          {{ ((i18n or {}).get('mb_quota_val', '已用 {used} / 含 {included}')).format(used='{:,}'.format(mb.quota.used_chars), included='{:,}'.format(mb.quota.included_chars)) }}
+        {% else %}
+          {{ (i18n or {}).get('mb_quota_none', '无字符额度限制') }}
+        {% endif %}
+      </div>
+      <div style="font-size:.72rem;color:var(--t2);margin-top:.3rem">
+        {{ (i18n or {}).get('mb_channels', '允许渠道') }}:
+        {% if lic.channels %}{{ lic.channels|join(' · ') }}{% else %}{{ (i18n or {}).get('mb_channels_all', '全渠道') }}{% endif %}
+      </div>
+    </div>
+  </div>
+
+  {#- 升级引导 -#}
+  {% if gate.enabled %}
+  <div class="card" style="margin-bottom:1.2rem;border-left:3px solid {{ 'var(--green)' if not gate.locked else 'var(--blue,#3b82f6)' }}">
+    <div style="padding:.8rem 1rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+      <div style="flex:1;min-width:240px">
+        <div style="font-weight:700;margin-bottom:.2rem">{{ (i18n or {}).get('mb_upgrade_title', '升级套餐') }}</div>
+        <div style="font-size:.82rem;color:var(--t2)">
+          {% if gate.locked %}
+            {{ ((i18n or {}).get('mb_upgrade_desc', '有 {n} 项功能未包含在当前档位。联系您的服务商升级套餐，或在系统设置粘贴新的授权密钥激活。')).format(n=gate.locked|length) }}
+          {% else %}
+            {{ (i18n or {}).get('mb_upgrade_all_clear', '当前档位已解锁全部功能。') }}
+          {% endif %}
+        </div>
+      </div>
+      {% if user_role == 'master' %}
+      <a href="/settings#license" class="btn btn-p btn-sm">{{ (i18n or {}).get('mb_goto_activate', '去激活授权') }}</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {#- 功能矩阵 -#}
+  <div class="card">
+    <div class="card-h"><h3>{{ (i18n or {}).get('mb_matrix_title', '功能矩阵') }}</h3></div>
+    <div style="overflow-x:auto">
+      <table class="tbl" style="width:100%;min-width:560px">
+        <thead>
+          <tr>
+            <th style="text-align:left">{{ (i18n or {}).get('mb_matrix_feature', '功能') }}</th>
+            {% for p in mb.matrix.plans %}
+            <th style="text-align:center{% if p == plan %};color:var(--blue,#3b82f6){% endif %}">
+              {{ (i18n or {}).get('mb_plan_' ~ p, p) }}{% if p == plan %}{{ (i18n or {}).get('mb_matrix_cur', '（当前）') }}{% endif %}
+            </th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in mb.matrix.rows %}
+          <tr{% if gate.enabled and not row.allowed %} style="opacity:.55"{% endif %}>
+            <td>
+              {{ (i18n or {}).get('mb_feat_' ~ row.name, row.name) }}
+              {% if gate.enabled and not row.allowed %}
+              <span style="font-size:.68rem;color:var(--amber);margin-left:.35rem">🔒 {{ (i18n or {}).get('mb_locked_row', '未包含') }}</span>
+              {% endif %}
+            </td>
+            {% for cell in row.cells %}
+            <td style="text-align:center"{% if mb.matrix.plans[loop.index0] == plan %} class="mb-cur-col"{% endif %}>
+              {% if cell %}<span style="color:var(--green)">✓</span>{% else %}<span style="color:var(--t3,#666)">—</span>{% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

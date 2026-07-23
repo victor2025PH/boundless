@@ -17,6 +17,9 @@ base.html 的完整/简洁两种模式、命令面板(Ctrl+K)页面项、渠道�
 - dot      = 渠道在线状态点的 data-chan 值(base.html JS 轮询填充)
 - help     = base.html TERM_DICT 的悬浮词条 key
 - master_only(item/group)= 仅 master 角色渲染
+- feature  = 授权档位功能名(licensing/feature_gate.py 注册表;gate 默认关 = 全量渲染
+             零变化;P3 起锁定项渲染为「锁标 + 跳会员中心」升级引导(locked=True 注解,
+             base.html nav_item 宏消费);命令面板仍直接隐藏锁定项(跳转列表无升级语义)
 - cmd_keys = 命令面板搜索别名(含旧菜单名,保证改名后老用户仍搜得到)
 """
 
@@ -70,10 +73,10 @@ NAV_ITEMS = {
     "cases": dict(key="cases", path="/cases", icon="file-text", badge="badge-cases",
                   label_key="cases", label_zh="案例跟进", help="nav_cases",
                   cmd_keys="cases 案例 待处理 待处理案例 跟进 case"),
-    "care": dict(key="care", path="/care-schedule", icon="heart",
+    "care": dict(feature="care", key="care", path="/care-schedule", icon="heart",
                  label_key="care", label_zh="主动关怀", help="nav_care",
                  cmd_keys="care 关怀 主动 问候"),
-    "relations_health": dict(key="relations_health", path="/relations-health", icon="pulse",
+    "relations_health": dict(feature="care", key="relations_health", path="/relations-health", icon="pulse",
                              label_key="relations_health", label_zh="流失预警",
                              help="nav_relations_health",
                              cmd_keys="churn 流失 预警 关系 健康 relations"),
@@ -81,54 +84,60 @@ NAV_ITEMS = {
                          badge="badge-rpa-ov", label_key="rpa_overview", label_zh="渠道总览",
                          help="nav_rpa_overview",
                          cmd_keys="rpa overview 总览 跨平台 渠道 渠道总览 RPA跨平台总览 telegram line messenger whatsapp"),
-    "telegram": dict(key="telegram", path="/telegram", icon="telegram", dot="telegram",
+    # 渠道中心融合：四渠道设置页迁入工作台壳（/workspace/channels/*），
+    # 旧路径仍 302 兜底；侧栏/命令面板直指新址。
+    "telegram": dict(key="telegram", path="/workspace/channels/telegram",
+                     icon="telegram", dot="telegram",
                      label_key="telegram_settings", label_zh="Telegram 自动化",
                      help="nav_telegram",
-                     cmd_keys="telegram tg 电报 自动化 设置 主号 telegram设置"),
-    "line_rpa": dict(key="line_rpa", path="/line-rpa", icon="line", dot="line",
+                     cmd_keys="telegram tg 电报 自动化 设置 主号 telegram设置 渠道中心"),
+    "line_rpa": dict(feature="rpa", key="line_rpa", path="/workspace/channels/line", icon="line",
+                     dot="line",
                      label_key="line_rpa", label_zh="LINE 自动化", help="nav_line_rpa",
-                     cmd_keys="line rpa 自动化 自动聊天 真机"),
-    "messenger_rpa": dict(key="messenger_rpa", path="/messenger-rpa", icon="messenger",
+                     cmd_keys="line rpa 自动化 自动聊天 真机 渠道中心"),
+    "messenger_rpa": dict(feature="rpa", key="messenger_rpa", path="/workspace/channels/messenger",
+                          icon="messenger",
                           dot="messenger", label_key="messenger_rpa",
                           label_zh="Messenger 自动化", help="nav_messenger_rpa",
-                          cmd_keys="messenger facebook fb rpa 自动化 线索"),
-    "whatsapp_rpa": dict(key="whatsapp_rpa", path="/whatsapp-rpa", icon="whatsapp",
+                          cmd_keys="messenger facebook fb rpa 自动化 线索 渠道中心"),
+    "whatsapp_rpa": dict(feature="rpa", key="whatsapp_rpa", path="/workspace/channels/whatsapp",
+                         icon="whatsapp",
                          dot="whatsapp", label_key="whatsapp_rpa",
                          label_zh="WhatsApp 自动化", help="nav_whatsapp_rpa",
-                         cmd_keys="whatsapp wa rpa 自动化 自动聊天 模板"),
+                         cmd_keys="whatsapp wa rpa 自动化 自动聊天 模板 渠道中心"),
     "ai_studio": dict(key="ai_studio", path="/ai-studio", icon="plus-circle",
                       featured=True, strong=True, label_key="ai_studio",
                       label_zh="AI 工作室", help="nav_ai_studio",
                       cmd_keys="ai studio 工作室 中枢 hub"),
-    "personas": dict(key="personas", path="/personas", icon="persona",
+    "personas": dict(feature="personas", key="personas", path="/personas", icon="persona",
                      label_key="personas", label_zh="人设工作室", help="nav_personas",
                      cmd_keys="personas persona 人设 角色 工作室"),
-    "knowledge": dict(key="knowledge", path="/knowledge", icon="book",
+    "knowledge": dict(feature="kb", key="knowledge", path="/knowledge", icon="book",
                       label_key="knowledge", label_zh="知识库", help="nav_knowledge",
                       cmd_keys="knowledge 知识库 话术"),
-    "learner": dict(key="learner", path="/learner", icon="book-open", badge="badge-learner",
+    "learner": dict(feature="kb", key="learner", path="/learner", icon="book-open", badge="badge-learner",
                     label_key="learner", label_zh="学习队列", help="nav_learner",
                     cmd_keys="learner 学习 审核 AI 学习审核 学习队列 队列"),
     "episodic": dict(key="episodic", path="/episodic-memory", icon="brain",
                      label_key="episodic", label_zh="AI 记忆", help="nav_episodic",
                      cmd_keys="episodic memory 记忆 情景 情景记忆"),
-    "strategies": dict(key="strategies", path="/strategies", icon="sliders",
+    "strategies": dict(feature="ai_autosend", key="strategies", path="/strategies", icon="sliders",
                        label_key="strategies", label_zh="回复策略", help="nav_strategies",
                        cmd_keys="strategies 策略 配置 策略配置 回复策略 参数"),
-    "strategy_analytics": dict(key="strategy-analytics", path="/strategy-analytics",
+    "strategy_analytics": dict(feature="ai_autosend", key="strategy-analytics", path="/strategy-analytics",
                                icon="target", label_key="strategy_analytics",
                                label_zh="策略效果", help="nav_strategy_analytics",
                                cmd_keys="strategy analytics 策略 效果"),
     "dash": dict(key="dash", path="/", icon="grid", label_key="dashboard",
                  label_zh="数据概览", help="nav_dashboard",
                  cmd_keys="dashboard home 首页 概览 仪表盘"),
-    "analytics": dict(key="analytics", path="/analytics", icon="bar-chart",
+    "analytics": dict(feature="analytics", key="analytics", path="/analytics", icon="bar-chart",
                       label_key="analytics", label_zh="运营分析", help="nav_analytics",
                       cmd_keys="analytics 运营 分析 数据"),
-    "funnel": dict(key="funnel", path="/funnel", icon="funnel",
+    "funnel": dict(feature="analytics", key="funnel", path="/funnel", icon="funnel",
                    label_key="rpa_fn_title", label_zh="运营漏斗", help="nav_funnel",
                    cmd_keys="funnel 漏斗 转化 运营漏斗 conversion journey"),
-    "monetization": dict(key="monetization", path="/monetization", icon="dollar",
+    "monetization": dict(feature="monetization", key="monetization", path="/monetization", icon="dollar",
                          label_key="monetization", label_zh="变现营收",
                          help="nav_monetization",
                          cmd_keys="monetization revenue 变现 营收 订阅"),
@@ -142,6 +151,10 @@ NAV_ITEMS = {
     "settings": dict(key="settings", path="/settings", icon="gear",
                      label_key="system_settings", label_zh="系统设置", help="nav_settings",
                      cmd_keys="settings 系统 设置 品牌 授权 system"),
+    # 融合实例 P3：会员中心（档位/用量/功能矩阵/到期；nav 锁标与顶栏徽章的落点）
+    "membership": dict(key="membership", path="/membership", icon="wallet",
+                       master_only=True, label_key="mb_nav", label_zh="会员中心",
+                       cmd_keys="membership plan 会员 档位 套餐 授权 升级 license"),
     "diff": dict(key="diff", path="/diff", icon="git", label_key="diff", label_zh="版本对比",
                  help="nav_diff", cmd_keys="diff 对比 版本"),
     "logs": dict(key="logs", path="/logs", icon="terminal", label_key="logs",
@@ -183,7 +196,7 @@ NAV_GROUPS_FULL = [
     dict(label_key="section_compliance", label_zh="安全合规",
          items=["crisis_audit", "audit"]),
     dict(label_key="section_system", label_zh="系统管理", master_only=True,
-         items=["users", "settings", "diff", "logs", "developer"]),
+         items=["users", "settings", "membership", "diff", "logs", "developer"]),
     dict(label_key="section_support", label_zh="支持", items=["help"]),
 ]
 
@@ -233,6 +246,56 @@ _NAV_CONTEXT = dict(
 )
 
 
-def get_nav_context() -> dict:
-    """供 admin.py _enrich_context 与渲染类测试注入模板上下文(静态数据,进程内单例)。"""
-    return _NAV_CONTEXT
+def _drop_locked(items, locked):
+    """过滤掉 feature 被锁定的菜单项(命令面板用;哨兵与无标签项原样保留)。"""
+    return [
+        it for it in items
+        if it == DOMAIN_SENTINEL
+        or not (isinstance(it, dict) and it.get("feature") in locked)
+    ]
+
+
+def _mark_locked(items, locked):
+    """给 feature 被锁定的菜单项打 locked=True 注解(拷贝,绝不改单例)。
+
+    P3 语义：侧栏锁定项不消失,渲染为「锁标 + 跳 /membership 升级引导」
+    (base.html nav_item 宏消费 locked 字段)——市场面保留可见的升级面,
+    也避免「点进被锁页面 → API 全 403」的死路体验。
+    """
+    out = []
+    for it in items:
+        if isinstance(it, dict) and it.get("feature") in locked:
+            out.append(dict(it, locked=True))
+        else:
+            out.append(it)
+    return out
+
+
+def get_nav_context(config: dict = None) -> dict:
+    """供 admin.py _enrich_context 与渲染类测试注入模板上下文。
+
+    不传 config / 档位闸门关 / 无锁定项 → 返回静态全量(进程内单例,零变化);
+    传 config 且有锁定功能 → 侧栏视图锁定项带 locked=True 注解(锁标渲染),
+    命令面板视图直接隐藏锁定项。视图每次重建(列表极小,开销可忽略),
+    feature_gate 侧异常一律回落全量。
+    """
+    if config is None:
+        return _NAV_CONTEXT
+    try:
+        from src.licensing.feature_gate import gate_enabled, locked_features
+        if not gate_enabled(config):
+            return _NAV_CONTEXT
+        locked = set(locked_features(config))
+    except Exception:
+        return _NAV_CONTEXT
+    if not locked:
+        return _NAV_CONTEXT
+    groups = [dict(g, items=_mark_locked(g["items"], locked))
+              for g in _NAV_CONTEXT["nav_groups"]]
+    return dict(
+        _NAV_CONTEXT,
+        nav_groups=groups,
+        nav_simple_core=_mark_locked(_NAV_CONTEXT["nav_simple_core"], locked),
+        nav_simple_more=_mark_locked(_NAV_CONTEXT["nav_simple_more"], locked),
+        nav_cmd_items=_drop_locked(_NAV_CONTEXT["nav_cmd_items"], locked),
+    )

@@ -193,6 +193,37 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             pass
         return await call_next(request)
 
+    # ── C0-3b 档位功能闸门：按授权档位锁 API 族（feature_gate 关 = 全放行零变化）──
+    # 单点强制：前缀表见 src/licensing/feature_gate.py::API_FEATURE_PREFIXES；
+    # 先于路由/鉴权（未解锁 → 403 feature_locked；已解锁未登录 → 后续 401 照旧）。
+    @app.middleware("http")
+    async def _feature_gate_guard(request, call_next):
+        try:
+            from src.licensing.feature_gate import (
+                feature_enabled, feature_for_api_path, gate_enabled,
+            )
+
+            _cfg = getattr(config_manager, "config", None) or {}
+            if gate_enabled(_cfg):
+                _feat = feature_for_api_path(request.url.path)
+                if _feat and not feature_enabled(_feat, _cfg):
+                    from fastapi.responses import JSONResponse
+
+                    from src.web.web_i18n import tr as _tr
+
+                    return JSONResponse(
+                        status_code=403,
+                        content={
+                            "ok": False,
+                            "error": "feature_locked",
+                            "feature": _feat,
+                            "detail": _tr(request, "err.lic.feature_locked"),
+                        },
+                    )
+        except Exception:  # pragma: no cover - 守卫自身异常绝不阻断请求
+            pass
+        return await call_next(request)
+
     _static_dir = Path(__file__).parent / "static"
     if _static_dir.is_dir():
         app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
@@ -569,6 +600,7 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         "/funnel": "funnel",
         "/personas": "personas",
         "/ai-studio": "ai_studio",
+        "/membership": "membership",
     }
     for _dp in domain_web_pages:
         _PATH_TO_ACTIVE[_dp["path"]] = _dp["key"]
@@ -627,9 +659,29 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         context.setdefault("domain_dashboard_widgets", domain_dashboard_widgets)
 
         # ── 侧栏导航单源数据(nav_schema)──────────────────────
+        # 融合实例 P1/P3：传 config 让档位锁定项渲染锁标（gate 关 = 静态全量，零变化）
         from src.web.nav_schema import get_nav_context
-        for _k, _v in get_nav_context().items():
+        for _k, _v in get_nav_context(
+                getattr(config_manager, "config", None)).items():
             context.setdefault(_k, _v)
+
+        # ── 档位徽章(P3)：仅 feature_gate 开启时出现在顶栏,默认部署零变化 ──
+        try:
+            from src.licensing.feature_gate import effective_plan as _fg_plan
+            from src.licensing.feature_gate import gate_enabled as _fg_on
+            _fg_cfg = getattr(config_manager, "config", None)
+            if _fg_on(_fg_cfg):
+                _plan = _fg_plan(_fg_cfg)
+                context.setdefault(
+                    "plan_badge",
+                    {"plan": _plan, "label_key": f"mb_plan_{_plan}"})
+            else:
+                # 显式占位 None：templates 是模块级单例，多次 create_app 会层层
+                # 叠 i18n_render 包装（测试常态）——条件性缺席的键会被旧 app 闭包
+                # 的 setdefault 补上（陈旧档位徽章漏进本 app 渲染）。占位即封口。
+                context.setdefault("plan_badge", None)
+        except Exception:
+            pass
 
         # ── 悬浮提示词典单源数据(help_terms,原 base.html 内联 TERM_DICT)──
         from src.web.help_terms import get_help_terms
@@ -905,6 +957,19 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_lic
 
         _log_lic.getLogger("admin").warning("license 路由注册失败", exc_info=True)
+
+    # ── 融合实例 P3：会员中心（档位/矩阵/用量/到期）─────────
+    try:
+        from src.web.routes.membership_routes import register_membership_routes
+
+        register_membership_routes(
+            app, templates=templates, page_auth=_page_auth,
+            api_auth=_api_auth, config_manager=config_manager,
+            user_store=user_store)
+    except Exception:
+        import logging as _log_mb
+
+        _log_mb.getLogger("admin").warning("membership 路由注册失败", exc_info=True)
 
     # ── C1-1 白标品牌设置 API ──────────────────────────────
     try:
