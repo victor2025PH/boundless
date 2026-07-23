@@ -186,10 +186,20 @@ def setup_device_management(assistant):
 def setup_rpa_services(assistant):
     """装配三个 RPA 服务(Stage3,从 initialize() 原样迁出):LINE / Facebook
     Messenger / WhatsApp,均支持单/多账号,try/except 兜底,失败不挡启动。"""
+    # 融合实例 P1：授权档位闸门（gate 默认关 = 恒放行零变化）。
+    # 档位不含 rpa → 三个 RPA runner 一律不构建（LINE/Messenger/WhatsApp 真机自动化属旗舰）。
+    try:
+        from src.licensing.feature_gate import feature_enabled as _feat_on
+        _rpa_allowed = _feat_on("rpa", assistant.config.config or {})
+    except Exception:
+        _rpa_allowed = True
+    if not _rpa_allowed:
+        assistant.logger.info("RPA 服务全部跳过：授权档位未含 rpa（feature gate）")
     # LINE RPA 服务（单账号 or 多账号）
     try:
         _line_rpa_cfg = assistant.config.get_line_rpa_config() or {}
-        if isinstance(_line_rpa_cfg, dict) and _line_rpa_cfg.get("enabled"):
+        if _rpa_allowed and isinstance(_line_rpa_cfg, dict) \
+                and _line_rpa_cfg.get("enabled"):
             from src.integrations.line_rpa.service import LineRpaService
             _line_accounts = _line_rpa_cfg.get("accounts") or []
             if _line_accounts:
@@ -222,7 +232,7 @@ def setup_rpa_services(assistant):
     # Facebook Messenger RPA 服务（可选；主进程托管循环）
     try:
         _msgr_cfg = assistant.config.get_messenger_rpa_config() or {}
-        if isinstance(_msgr_cfg, dict) and _msgr_cfg.get("enabled"):
+        if _rpa_allowed and isinstance(_msgr_cfg, dict) and _msgr_cfg.get("enabled"):
             from src.integrations.messenger_rpa.service import MessengerRpaService
             assistant.messenger_rpa_service = MessengerRpaService(
                 config_manager=assistant.config,
@@ -239,7 +249,7 @@ def setup_rpa_services(assistant):
     # WhatsApp RPA 服务（单账号 or 多账号）
     try:
         _wa_cfg = (assistant.config.config or {}).get("whatsapp_rpa") or {}
-        if isinstance(_wa_cfg, dict) and _wa_cfg.get("enabled"):
+        if _rpa_allowed and isinstance(_wa_cfg, dict) and _wa_cfg.get("enabled"):
             from src.integrations.whatsapp_rpa.service import WhatsAppRpaService
             _wa_accounts = _wa_cfg.get("accounts") or []
             if _wa_accounts:

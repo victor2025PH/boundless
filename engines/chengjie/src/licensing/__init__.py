@@ -9,6 +9,18 @@
 - ``issue_license`` / ``generate_keypair`` —— 厂商侧签发工具（scripts/license_tool.py 调用）
 """
 
+from .feature_gate import (
+    API_FEATURE_PREFIXES,
+    FEATURE_MIN_PLAN,
+    PLAN_ORDER,
+    effective_plan,
+    feature_enabled,
+    feature_for_api_path,
+    gate_enabled,
+    gate_snapshot,
+    locked_features,
+    plan_rank,
+)
 from .gate import (
     READONLY_ALLOW_PREFIXES,
     WRITE_METHODS,
@@ -49,6 +61,17 @@ __all__ = [
     "get_license_manager",
     "issue_license",
     "reset_license_manager",
+    # feature gate（C0-3b 档位功能闸门）
+    "API_FEATURE_PREFIXES",
+    "FEATURE_MIN_PLAN",
+    "PLAN_ORDER",
+    "effective_plan",
+    "feature_enabled",
+    "feature_for_api_path",
+    "gate_enabled",
+    "gate_snapshot",
+    "locked_features",
+    "plan_rank",
     # gate
     "READONLY_ALLOW_PREFIXES",
     "WRITE_METHODS",

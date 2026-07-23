@@ -47,6 +47,20 @@ def voice_gate(
 _PHOTO_DEFAULT_MODES = ("gentle_checkin", "follow_up")
 
 
+def is_translation_account(platform: str, account_id: str) -> bool:
+    """账号是否翻译业务线（融合实例 P1）。
+
+    翻译线账号服务的是翻译客服场景客户，绝不主动"想你了"式陪伴触达——
+    与账号级 autodraft 封顶（translation → review）同源读注册表
+    ``business_line`` 标签。查询失败 / 未标注 → False（不过滤 = 旧行为）。
+    """
+    try:
+        from src.integrations.account_registry import cached_business_line
+        return cached_business_line(platform, account_id) == "translation"
+    except Exception:
+        return False
+
+
 def photo_share_gate(
     photo_cfg: Dict[str, Any], *, mode: str, intimacy: float, rand01: float,
 ) -> bool:
@@ -91,6 +105,17 @@ async def maybe_start_companion_proactive(assistant) -> None:
         comp = (assistant.config.config.get("companion") or {})
         cfg = (comp.get("proactive_topic") or {})
         enabled = bool(cfg.get("enabled", False))
+        # 融合实例 P1：授权档位闸门（gate 默认关 = 恒放行零变化）。
+        # 档位不含 companion → 主动触达调度整体不启（预览面板亦无意义）。
+        try:
+            from src.licensing.feature_gate import feature_enabled as _feat_on
+            if enabled and not _feat_on(
+                    "companion", assistant.config.config or {}):
+                assistant.logger.info(
+                    "companion proactive_topic 跳过：授权档位未含 companion（feature gate）")
+                enabled = False
+        except Exception:
+            pass
         # 预览（可观测面板）仅需 inbox + skill_manager；ai 仅"真发"时才需要。
         # 故即便未启用 / ai 未就绪，也先挂上"会发给谁、引用哪条记忆"的预览能力，
         # 让运营在真正开闸前先 dry-run 看清本轮候选。
@@ -151,7 +176,10 @@ async def maybe_start_companion_proactive(assistant) -> None:
             编排器受管协议号（orch.owns）→ worker 发送 ✓；default 账号 → 主 A 线
             客户端回落 ✓；其余（如 tg-desktop 桌面工作台镜像）没有出站通道——
             若不过滤，_send 会错用**主账号**向别人的会话发消息（张冠李戴事故）。
+            融合实例 P1：翻译业务线账号一票否决（翻译客服客户收到"想你了"=事故）。
             """
+            if is_translation_account(platform, account_id):
+                return False
             try:
                 from src.integrations.account_orchestrator import get_orchestrator
                 if get_orchestrator(assistant.config.config or {}).owns(

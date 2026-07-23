@@ -248,7 +248,20 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                         _as_cfg = (assistant.config.config or {}).get(
                             "inbox", {}
                         ).get("l2_autosend", {}) or {}
-                        if _as_cfg.get("enabled", True):
+                        # 融合实例 P1：授权档位闸门（gate 默认关 = 恒放行零变化）。
+                        # 档位不含 ai_autosend → worker 不启（AI 拟稿/自动发送属 pro+）。
+                        try:
+                            from src.licensing.feature_gate import (
+                                feature_enabled as _feat_on,
+                            )
+                            _autosend_allowed = _feat_on(
+                                "ai_autosend", assistant.config.config or {})
+                        except Exception:
+                            _autosend_allowed = True
+                        if not _autosend_allowed:
+                            assistant.logger.info(
+                                "AutosendWorker 跳过：授权档位未含 ai_autosend（feature gate）")
+                        elif _as_cfg.get("enabled", True):
                             # H3：合并 auto_draft 清理配置到 worker cfg
                             _ad_cleanup = (assistant.config.config or {}).get(
                                 "inbox", {}
