@@ -203,6 +203,72 @@ def parse_audio_response(body: bytes) -> bytes:
     return base64.b64decode(b64)
 
 
+# ── 幻声 hub Fish-Speech 高保真克隆（Phase B, 2026-07-24）────────────────────────
+# 幻声机(.176:9000) 的 hub 单一 LAN 网关暴露 ``POST /api/tts_only``：按声纹档名
+# (profile) 合成一句，内部走 Fish-Speech-1.5 优先的高保真链（44.1kHz 零样本克隆）。
+# 参考音在 hub 侧按 profile 已注册——本地**无需**参考音文件；chengjie 人设 id 与 hub
+# 档名同名 1:1（lin_jiaxin/zhao_laoshi/...）。失败一律由调用方回落本地 CosyVoice3。
+def build_tts_only_payload(
+    profile: str, text: str, *, language: str = "", emotion: str = "",
+    best_of: int = 1,
+) -> bytes:
+    """hub ``/api/tts_only`` 请求体（JSON bytes）。纯函数、可单测。
+
+    - ``emotion`` 为空或 ``neutral`` 不下发（走服务端保真默认路径）。
+    - ``best_of>1`` 才下发（多 seed 择优，牺牲耗时换音质，仅非实时）。
+    """
+    body: Dict[str, Any] = {"profile": str(profile), "text": str(text)}
+    lang = str(language or "").strip()
+    if lang:
+        body["language"] = lang
+    emo = str(emotion or "").strip().lower()
+    if emo and emo != "neutral":
+        body["emotion"] = emo
+    try:
+        n = int(best_of or 1)
+    except (TypeError, ValueError):
+        n = 1
+    if n > 1:
+        body["best_of"] = n
+    return json.dumps(body, ensure_ascii=False).encode("utf-8")
+
+
+def parse_tts_only_response(body: bytes) -> bytes:
+    """解析 hub ``/api/tts_only`` 响应 → WAV 字节。失败/空/ok=false → 抛 RuntimeError。"""
+    if not body:
+        raise RuntimeError("hub_fish: empty response")
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as ex:
+        raise RuntimeError(f"hub_fish: bad json ({ex})")
+    if not isinstance(data, dict):
+        raise RuntimeError("hub_fish: unexpected response shape")
+    if not data.get("ok"):
+        raise RuntimeError(f"hub_fish: {str(data.get('detail') or 'synthesis failed')[:200]}")
+    b64 = data.get("audio_base64") or ""
+    if not b64:
+        raise RuntimeError("hub_fish: no audio in response")
+    return base64.b64decode(b64)
+
+
+def hub_fish_synthesize(
+    base_url: str, profile: str, text: str, *, language: str = "",
+    emotion: str = "", best_of: int = 1, timeout_sec: float = 30.0,
+) -> bytes:
+    """调用幻声 hub ``/api/tts_only`` 合成一句 → WAV 字节（同步；供 to_thread 包裹）。
+
+    仅 HTTP，不加载任何本地模型（GPU 在 .176）。异常直抛，调用方回落本地克隆。
+    """
+    url = str(base_url or "").rstrip("/") + "/api/tts_only"
+    payload = build_tts_only_payload(
+        profile, text, language=language, emotion=emotion, best_of=best_of)
+    req = urllib.request.Request(
+        url, data=payload,
+        headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:  # nosec B310
+        return parse_tts_only_response(resp.read())
+
+
 def parse_batch_response(body: bytes) -> List[bytes]:
     """解析 7858 batch 响应 → WAV 字节列表（与 texts 等长同序）。失败抛。"""
     if not body:

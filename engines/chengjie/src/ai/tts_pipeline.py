@@ -711,9 +711,15 @@ class TTSPipeline:
         """
         ref_fp = ""
         emo_ref = ""
+        hub_fp = ""
         if backend in ("voice_clone_lan", "voice_clone_command", "coqui_http",
                        "minicpm_clone", "avatar_clone"):
             ref_fp = _reference_fingerprint(self.voice_profile)
+            # hub Fish 高保真优先时音频来源不同（.176 Fish vs 本机 CosyVoice3）→ 并入
+            # 键，使 toggle hub_fish / 改 base_url 自动失效缓存，防串用旧来源音频。
+            _hf = (self.avatar_voice or {}).get("hub_fish")
+            if isinstance(_hf, dict) and _hf.get("enabled"):
+                hub_fp = "hub:" + str(_hf.get("base_url") or "")
             try:
                 from src.ai.voice_emotion import pick_emotion_reference
                 _thr = float((self.avatar_voice or {}).get(
@@ -736,7 +742,8 @@ class TTSPipeline:
         rvc_v = self._rvc_target_voice()
         base = "|".join([
             backend, voice or "", self.format, self.model or "",
-            self.instructions or "", emo, ref_fp, emo_ref, night, rvc_v, text,
+            self.instructions or "", emo, ref_fp, emo_ref, night, rvc_v,
+            hub_fp, text,
         ])
         return hashlib.sha1(base.encode("utf-8")).hexdigest()
 
@@ -1218,6 +1225,102 @@ class TTSPipeline:
             return None
         return _finalize_err("minicpm_clone_empty")
 
+    async def _try_hub_fish(
+        self, rv: "TTSResult", out: Path, t0: float, *, spec: Any = None,
+    ) -> Optional["TTSResult"]:
+        """幻声 hub Fish-Speech 高保真克隆（.176:9000 /api/tts_only, Phase B）。
+
+        gated 于 ``avatar_voice.hub_fish.enabled``（默认关）。以人设 id 作 hub 声纹
+        档名（同名 1:1）；hub 侧已注册参考音，本地无需 ref 文件。送**干净文本**
+        （不注入 CosyVoice 专属的 [sigh]/emotion 标签，避免 Fish 读错）。
+
+        返回：成功 TTSResult(provider=hub_fish)；未启用/不在名单/不可达/失败 → None
+        （调用方贯穿回落本地 CosyVoice3，绝不阻塞出站）。
+        """
+        cfg = dict(self.avatar_voice or {})
+        hf = cfg.get("hub_fish") if isinstance(cfg.get("hub_fish"), dict) else {}
+        if not bool(hf.get("enabled", False)):
+            return None
+        profile = str(self.persona_id or "").strip()
+        if not profile:
+            return None
+        allow = hf.get("persona_allowlist") or []
+        if allow and profile not in allow:
+            return None
+        text = str(rv.text or "").strip()
+        if not text:
+            return None
+        base_url = str(hf.get("base_url") or "http://192.168.0.176:9000").rstrip("/")
+        timeout_sec = float(hf.get("timeout_sec", 30.0) or 30.0)
+        try:
+            best_of = int(hf.get("best_of", 1) or 1)
+        except (TypeError, ValueError):
+            best_of = 1
+
+        # 语言（防中文声纹念外语）+ 情绪（弱情绪归 neutral 保真，与本地链同口径）
+        language = "zh"
+        try:
+            from src.ai.voice_clone_client import effective_clone_language
+            language = effective_clone_language(text, default="zh") or "zh"
+        except Exception:
+            language = "zh"
+        emotion = ""
+        if spec is not None:
+            try:
+                from src.ai.voice_emotion import (
+                    STRONG_EMOTION_THRESHOLD,
+                    to_cosyvoice_emotion,
+                )
+                _thr = float(cfg.get(
+                    "emotion_channel_threshold", STRONG_EMOTION_THRESHOLD)
+                    or STRONG_EMOTION_THRESHOLD)
+                emotion = to_cosyvoice_emotion(
+                    spec, default="neutral", strong_threshold=_thr)
+            except Exception:
+                emotion = ""
+
+        av_out = out.with_suffix(".wav")
+
+        def _do_synth() -> None:
+            from src.ai.avatar_voice import hub_fish_synthesize
+            audio = hub_fish_synthesize(
+                base_url, profile, text, language=language, emotion=emotion,
+                best_of=best_of, timeout_sec=timeout_sec)
+            av_out.write_bytes(audio)
+
+        try:
+            budget = timeout_sec * (best_of if best_of > 1 else 1) + 15
+            await asyncio.wait_for(asyncio.to_thread(_do_synth), timeout=budget)
+        except Exception as ex:
+            try:
+                av_out.unlink(missing_ok=True)  # type: ignore[call-arg]
+            except Exception:
+                pass
+            _exs = f"{type(ex).__name__}: {ex}".rstrip(": ")
+            logger.info("[tts] hub_fish failed (%s) → 回落本地克隆", _exs)
+            return None
+
+        if av_out.exists() and av_out.stat().st_size > 0:
+            rv.ok = True
+            rv.provider = "hub_fish"
+            rv.format = "wav"
+            rv.audio_path = str(av_out)
+            rv.extra["bytes"] = av_out.stat().st_size
+            rv.extra["hub_fish_profile"] = profile
+            rv.extra["hub_fish_base_url"] = base_url
+            if emotion and emotion != "neutral":
+                rv.extra["hub_fish_emotion"] = emotion
+            try:
+                dur, src = compute_audio_duration_sec(str(av_out), "wav")
+                rv.duration_sec = float(dur)
+                rv.duration_source = str(src)
+            except Exception:
+                rv.duration_sec = -1.0
+                rv.duration_source = "unknown"
+            rv.latency_ms = int((time.monotonic() - t0) * 1000)
+            return rv
+        return None
+
     async def _try_avatar_clone(
         self, rv: "TTSResult", out: Path, t0: float, *, spec: Any = None,
         colloquial_lead: bool = True, pre_colloquialized: bool = False,
@@ -1252,6 +1355,14 @@ class TTSPipeline:
         ref = str(vp.get("reference_audio_path") or "").strip()
         if not bool(vp.get("owner_consent", False)):
             return _finalize_err("voice_profile_requires_owner_consent")
+
+        # Phase B（2026-07-24）：幻声 hub Fish-Speech 高保真优先——命中即用最高保真
+        # 44.1kHz 克隆音（hub 侧按 profile 已注册参考音，本地无需 ref 文件）；不可达/
+        # 失败 → 贯穿回落下方本地 CosyVoice3(7852) 原链，绝不阻塞。config 门控默认关。
+        hub_rv = await self._try_hub_fish(rv, out, t0, spec=spec)
+        if hub_rv is not None and hub_rv.ok:
+            return hub_rv
+
         if not ref:
             return _finalize_err("voice_profile_missing_reference_audio_path")
         if not Path(ref).is_file():

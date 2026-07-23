@@ -25,12 +25,15 @@ from src.ai.avatar_voice import (
     build_clone_payload,
     build_instruct_payload,
     build_stt_payload,
+    build_tts_only_payload,
     find_reference_text,
+    hub_fish_synthesize,
     load_reference_b64,
     normalize_avatar_emotion,
     parse_audio_response,
     parse_batch_response,
     parse_stt_response,
+    parse_tts_only_response,
     read_service_token,
     reset_caches,
 )
@@ -575,6 +578,172 @@ async def test_pipeline_avatar_clone_synth_error_falls_back(tmp_path):
         rv = await tts.synthesize("测试合成失败降级")
     assert rv.ok
     assert rv.provider == "edge_tts"
+
+
+# ── 幻声 hub Fish-Speech 高保真（Phase B, /api/tts_only）────────────────────────
+def test_build_tts_only_payload_omits_neutral_and_short():
+    """neutral 情绪不下发（走保真默认）；best_of<=1 不下发；language 空不下发。"""
+    body = json.loads(build_tts_only_payload("lin_jiaxin", "你好"))
+    assert body == {"profile": "lin_jiaxin", "text": "你好"}
+    body2 = json.loads(build_tts_only_payload(
+        "lin_jiaxin", "你好", language="zh", emotion="neutral", best_of=1))
+    assert body2 == {"profile": "lin_jiaxin", "text": "你好", "language": "zh"}
+
+
+def test_build_tts_only_payload_includes_emotion_and_bestof():
+    body = json.loads(build_tts_only_payload(
+        "zhao_laoshi", "晚上好", language="zh", emotion="warm", best_of=3))
+    assert body["emotion"] == "warm"
+    assert body["best_of"] == 3
+
+
+def test_parse_tts_only_response_ok_and_failures():
+    wav = _wav_bytes(200)
+    good = json.dumps(
+        {"ok": True, "audio_base64": base64.b64encode(wav).decode()}).encode()
+    assert parse_tts_only_response(good) == wav
+    with pytest.raises(RuntimeError):
+        parse_tts_only_response(json.dumps({"ok": False, "detail": "x"}).encode())
+    with pytest.raises(RuntimeError):
+        parse_tts_only_response(json.dumps({"ok": True}).encode())  # 无音频
+    with pytest.raises(RuntimeError):
+        parse_tts_only_response(b"")
+
+
+def test_hub_fish_synthesize_posts_and_decodes():
+    wav = _wav_bytes(250)
+    seen = {}
+
+    def fake_urlopen(req, timeout=None):
+        seen["url"] = req.full_url
+        seen["body"] = json.loads(req.data.decode())
+
+        class _R:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {"ok": True,
+                     "audio_base64": base64.b64encode(wav).decode()}).encode()
+
+        return _R()
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        out = hub_fish_synthesize(
+            "http://192.168.0.176:9000", "lin_jiaxin", "你好呀", language="zh")
+    assert out == wav
+    assert seen["url"] == "http://192.168.0.176:9000/api/tts_only"
+    assert seen["body"]["profile"] == "lin_jiaxin"
+
+
+def _pipeline_cfg_hub(tmp_path, ref: Path, *, hub_enabled=True,
+                      allowlist=None) -> dict:
+    cfg = _pipeline_cfg(tmp_path, ref)
+    cfg["persona_id"] = "lin_jiaxin"
+    hf = {"enabled": hub_enabled,
+          "base_url": "http://192.168.0.176:9000",
+          "timeout_sec": 5.0, "best_of": 1}
+    if allowlist is not None:
+        hf["persona_allowlist"] = allowlist
+    cfg["avatar_voice"]["hub_fish"] = hf
+    return cfg
+
+
+@pytest.mark.asyncio
+async def test_pipeline_hub_fish_hit_takes_priority(tmp_path):
+    """hub_fish 开 + 命中 → provider=hub_fish（最高保真优先于本地 CosyVoice3）。"""
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(_wav_bytes(300))
+    cfg = _pipeline_cfg_hub(tmp_path, ref)
+    wav = _wav_bytes(600)
+
+    def fake_hub(base_url, profile, text, **kw):
+        assert profile == "lin_jiaxin"
+        return wav
+
+    from src.ai.tts_pipeline import TTSPipeline
+    tts = TTSPipeline(cfg)
+    with patch("src.ai.avatar_voice.hub_fish_synthesize", side_effect=fake_hub):
+        rv = await tts.synthesize("你好呀，今天怎么样")
+    assert rv.ok
+    assert rv.provider == "hub_fish"
+    assert rv.extra.get("hub_fish_profile") == "lin_jiaxin"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_hub_fish_failure_falls_through_to_local(tmp_path):
+    """hub_fish 失败 → 贯穿回落本机 CosyVoice3(7852)，provider=avatar_clone。"""
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(_wav_bytes(300))
+    cfg = _pipeline_cfg_hub(tmp_path, ref)
+    local_wav = _wav_bytes(400)
+
+    def fake_post(self, url, payload, *, timeout, headers=None):
+        return json.dumps(
+            {"audio_base64": base64.b64encode(local_wav).decode()}).encode()
+
+    from src.ai.tts_pipeline import TTSPipeline
+    tts = TTSPipeline(cfg)
+    with patch("src.ai.avatar_voice.hub_fish_synthesize",
+               side_effect=OSError("hub down")), \
+         patch.object(AvatarVoiceClient, "health_ok", return_value=True), \
+         patch.object(AvatarVoiceClient, "_post", fake_post):
+        rv = await tts.synthesize("你好呀，回落测试")
+    assert rv.ok
+    assert rv.provider == "avatar_clone"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_hub_fish_not_in_allowlist_uses_local(tmp_path):
+    """人设不在 allowlist → 不走 hub，直接本地 CosyVoice3。"""
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(_wav_bytes(300))
+    cfg = _pipeline_cfg_hub(tmp_path, ref, allowlist=["zhao_laoshi"])
+    local_wav = _wav_bytes(400)
+    called = {"hub": False}
+
+    def fake_hub(*a, **k):
+        called["hub"] = True
+        return _wav_bytes(100)
+
+    def fake_post(self, url, payload, *, timeout, headers=None):
+        return json.dumps(
+            {"audio_base64": base64.b64encode(local_wav).decode()}).encode()
+
+    from src.ai.tts_pipeline import TTSPipeline
+    tts = TTSPipeline(cfg)
+    with patch("src.ai.avatar_voice.hub_fish_synthesize", side_effect=fake_hub), \
+         patch.object(AvatarVoiceClient, "health_ok", return_value=True), \
+         patch.object(AvatarVoiceClient, "_post", fake_post):
+        rv = await tts.synthesize("你好呀，名单外")
+    assert rv.ok
+    assert rv.provider == "avatar_clone"
+    assert called["hub"] is False
+
+
+@pytest.mark.asyncio
+async def test_pipeline_hub_fish_disabled_uses_local(tmp_path):
+    """hub_fish 关（默认）→ 行为不变，走本地 CosyVoice3。"""
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(_wav_bytes(300))
+    cfg = _pipeline_cfg_hub(tmp_path, ref, hub_enabled=False)
+    local_wav = _wav_bytes(400)
+
+    def fake_post(self, url, payload, *, timeout, headers=None):
+        return json.dumps(
+            {"audio_base64": base64.b64encode(local_wav).decode()}).encode()
+
+    from src.ai.tts_pipeline import TTSPipeline
+    tts = TTSPipeline(cfg)
+    with patch.object(AvatarVoiceClient, "health_ok", return_value=True), \
+         patch.object(AvatarVoiceClient, "_post", fake_post):
+        rv = await tts.synthesize("你好呀，关闭测试")
+    assert rv.ok
+    assert rv.provider == "avatar_clone"
 
 
 # ── AvatarWhisperTranscriber ─────────────────────────────────────────────────

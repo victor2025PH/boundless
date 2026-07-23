@@ -96,6 +96,8 @@ voice_recognition:
   language: auto               # auto | zh | yue | ja | en …
   temp_dir: ./temp/voice
   max_file_size: 16777216      # 16 MB
+  warmup_on_boot: true         # 启动即后台预载 ASR 模型（消重启后首条语音 ~20-30s 冷启动；
+                               # 只预热级联主级，回落级仍懒加载省显存）
   # 专有名词热词（faster_whisper 生效，作 initial_prompt 引导；治"智聊"→"治療"同音误转）
   # hotwords: 智聊ChatX、通译LingoX、无界科技
   # 主转录挂了/返空自动回落下一级（级联，绝不断链）；示例：SenseVoice 主 + whisper 兜底
@@ -793,6 +795,16 @@ avatar_voice:
     defer_during_image: true
   base_url: http://127.0.0.1:7852        # A：CosyVoice3 情感克隆（在线回复主力）
   qwen_base_url: http://127.0.0.1:7858   # B：Qwen3-TTS（仅离线批量预渲染，RTF≈2.8）
+  # 幻声 hub Fish-Speech 高保真优先（Phase B, 2026-07-24）：avatar_clone 人设合成时
+  # 先走幻声机(.176:9000)的 /api/tts_only（Fish-Speech-1.5 零样本克隆, 44.1kHz），
+  # 命中即用最高保真音；不可达/失败 → 贯穿回落本机 CosyVoice3(7852)，绝不阻塞出站。
+  # 前提：人设 id 与 hub 声纹档同名（lin_jiaxin/zhao_laoshi/... 已在 hub 注册参考音）。
+  hub_fish:
+    enabled: false                       # 默认关（opt-in；本机 overlay 开）
+    base_url: http://192.168.0.176:9000  # 幻声 hub 单一 LAN 网关
+    timeout_sec: 30.0                    # 单句合成超时（跨机 + Fish 推理）
+    best_of: 1                           # >1 多 seed 择优(campplus 挑最像)，牺牲耗时换音质
+    persona_allowlist: []                # 空=所有 avatar_clone 人设；非空=仅名单内启用
   health_timeout_sec: 3.0
   health_cache_sec: 30
   synth_timeout_sec: 90.0                # 单请求超时（并发纪律）
@@ -1199,6 +1211,11 @@ ai:
   temperature: 0.7                # 温度参数 (0.0-1.0)
   max_tokens: 1024                # 最大回复token数
   timeout: 30                     # API调用超时(秒)
+  # 启动连接探针的独立上限(秒)：冷启动时若云端限流/抖动，这一次探针会占满 timeout(30s)，
+  # 把「进程起来→/login 可服务」窗口拖到分钟级(seat 撞加载超时)。探针结果启动流程并不消费
+  # (仅日志+坏key告警)，故给它更短上限；超时=按未验证放行(首个真实请求确认健康)，坏 key 走
+  # 401 快败仍即时告警。默认 6；设 0/负=关闭上限(回退旧行为)。
+  boot_probe_timeout_sec: 6
   # P1-3：会话历史轮数。10 偏短，话题切换时模型容易忘记上下文导致跳话题；
   # 16 是质量/成本平衡点（多 60% token 但显著改善连贯性）。配合 _build_contents
   # 的字符上限 12000 双重截断，不会超长。
@@ -1532,6 +1549,15 @@ companion:
       #   --prompt, "{prompt}", --out, "{out}", --seed, "{seed}", --face-ref, "{base}",
       #   --lora, "{lora}", --lora-weight, "{lora_weight}",
       #   --pulid-start-at, "0.12", --face-weight, "0.8"]
+      # 【2026 人物一致性升级 · FLUX Kontext / FLUX.2】command 后端是**工作流无关**的（本管线
+      #   只按占位符拼命令、读 {out} 图，不关心 ComfyUI 内部用什么），所以「换更强的锁脸方案」
+      #   =在 ComfyUI 里换 workflow + 调 comfy_infer 的 --workflow/参数，**无需改本仓 Python**：
+      #   - FLUX.1 Kontext：单张参考图跨姿态/场景保持人物一致（社区实测 92–97%），多轮编辑不崩脸；
+      #     以 {base}（该人设定妆照）作 Kontext 参考，替代 PuLID 锁脸。
+      #   - FLUX.2：支持多达 ~10 张参考图，身份烘进权重，适合"同一虚拟人海量出图"。
+      #   迁移只切 command 指向新 workflow（如 --workflow flux_kontext.json）；出图自检
+      #   (vision_gate) / 换脸 / 入册 / 预算闸门全部照旧生效。⚠ 需在真实 GPU 上验证一致性达标
+      #   （用 tools 的人脸保真度探针 test_gpu_watermark 同族 face_fidelity 量化）后再上线。
       # 【GPU 分流（可选）】无脸/轻量图（物体图、无 face_ref 自拍）走独立命令 → 可指向
       #   另一台 ComfyUI（如备用 GPU 主机），把重的锁脸自拍留给主卡。缺省=沿用 command_args。
       #   ⚠ 权衡：分流主机若同时承担本管线的 VLM 体检（vision.base_urls），生图会与之抢显存，
@@ -1701,6 +1727,11 @@ memory:
 # 图像理解：zhipu（智谱 GLM-4V）或 openai_compatible（Ollama 等，多模态 Gemma/LLaVA）
 # 若同时配置 Ollama(base_url) 与智谱 key，请求时优先 Ollama，不可用或空结果时自动回退智谱
 vision:
+  # 入站识图总开关（默认关，opt-in）。A 线 TelegramClient._vision_usable 与协议直发线
+  # （src/inbox/media_enrich）都要求它显式为 true 才识图；缺省不写=关（与「多媒体默认关」
+  # 一致）。注意：视频抽帧路径 inbound_video.vision_usable 在「配了后端但没写 enabled」时
+  # 会按 true 处理——所以务必在此显式写 true/false，避免图片与视频两条路径判定不一致。
+  enabled: false
   provider: zhipu
   api_key: ""
   model: glm-4v-flash
@@ -1725,11 +1756,27 @@ vision:
   # 与 Ollama 并存时可用 zhipu_api_key 专存智谱 key（api_key 可填 ollama）
   # zhipu_api_key: ""
   # zhipu_model: glm-4v-flash
-  # OpenAI 兼容多模态示例（Ollama）:
+  # OpenAI 兼容多模态示例（Ollama / vLLM / LM Studio 等，本地或自建）:
   # provider: openai_compatible
   # base_url: http://127.0.0.1:11434/v1
   # api_key: ollama
   # model: llava  # 或本机已拉取的多模态模型名
+  # 【2026 推荐升级】识图/识票据/长图文字场景，本地主力建议换 Qwen2.5-VL（开源 OCR/文档最强
+  # 之一），消费方零改动即全平台获益（TG/WA/LINE/Messenger 识图 + 视频抽帧 + 图片翻译同一瓶颈）：
+  #   provider: openai_compatible
+  #   base_url: http://192.168.0.176:11434/v1   # Ollama: `ollama pull qwen2.5vl:7b`（或 32b/72b）
+  #   model: qwen2.5vl:7b                        # vLLM 部署则填其 served-model-name
+  # 云端兜底（难例/本地空答时自动回退）：把智谱 key 填进 zhipu_api_key（见下），或多端点双活 base_urls。
+
+# ── 出站媒体反封号处理（默认关，opt-in）────────────────────────────────────
+# dedup（去重微扰）：把同一张图/自拍发给很多人时，所有消息的文件哈希完全相同——这是
+# WhatsApp/Meta 内容模式识别的强垃圾信号。开启后，每次经编排器发媒体前产出一个「视觉无差、
+# 字节唯一」的临时副本（注入随机元数据 + 几个像素 ±1 抖动）喂给 worker，发完即删；canonical
+# 的 /static 原图不动。仅图片族（image/photo/sticker）生效；语音本就每次不同、视频重编码贵故跳过。
+# 软失败：Pillow 缺失/失败一律回落原图，绝不阻断发送。
+outbound_media:
+  dedup:
+    enabled: false
 
 # Skill工作流配置
 skills:
@@ -2027,6 +2074,12 @@ inbox:
         semantic_value_share_pct: 20.0  # 语义占比 ≥ 此值 → 明确其价值、建议保留
     # 注：会话档位优先——AutoDraft 实际用每会话 automation_mode（收件箱「🚀全自动」开关），
     #     未显式设置的会话回落上面的全局 automation_mode；manual 档跳过不生成草稿。
+    # ⭐ 账号业务线档位上限（融合实例 P1）：账号注册表打了 business_line 标签的账号，
+    #   自动化档位按业务线封顶（只降不升，会话显式 manual 仍最低）。内置默认
+    #   translation→review：翻译线账号 AI 只拟稿、强制人审、绝不自动发——防止
+    #   合并部署后陪伴线的全自动波及翻译客服账号。显式置空 {} 即关闭业务线封顶。
+    # business_line_modes:
+    #   translation: review
 
   # AI 回复质量退化告警（F1）：HealthWatchdog 周期性据 draft_audit_log 处置结果口径
   # （草稿采纳/弃用率 + 高危量环比）评估「AI 发得靠不靠谱」，退化即落 ops_incidents
@@ -2261,6 +2314,14 @@ accounts:
     # 连接中心/切换条里账号手机号是否脱敏显示（前3+****+后3）。默认 true（防截图外泄）；
     # 关 → 原样显示完整号（内网可信/排障场景）。与是否采集 self_profile 无关，独立生效。
     mask_phone: true
+  # 账号官方资料修改（写方向，P1）：在后台直接修改账号在平台侧的昵称/签名/头像。
+  # Telegram=协议直改；WhatsApp=经 Baileys 微服务；LINE/Messenger 不支持（后台只读展示）。
+  # 平台会风控频繁资料变更（尤其新号）→ 默认关 + 每账号冷却窗；开启是运营决策。
+  profile_push:
+    enabled: false
+    cooldown_hours: 24     # 同一账号两次修改的最小间隔
+    max_avatar_mb: 5       # 头像原图体积上限（会被裁方并压成 640x640 JPEG）
+    fresh_account_days: 7  # 新接入账号视为「新号」的天数，详情页保存前会二次确认提示风控风险
 
 platform_login:
   # 账号池编排器：进程启动后读 account_registry，按账号 (platform, mode) 用对应 worker
@@ -2363,6 +2424,22 @@ ops:
 licensing:
   enforce: false                      # 预留：true 时过期降级只读（当前未生效）
   # key_path: config/license.key      # 授权码路径（默认 config/license.key）
+  # ── 档位功能闸门（C0-3b，融合实例：不同会员档位解锁不同功能）────────
+  # 默认关 = 全功能放行（对既有部署零行为变更）。开启后按
+  # community < basic < pro < flagship 档位序解锁功能（注册表见
+  # src/licensing/feature_gate.py::FEATURE_MIN_PLAN），license 显式
+  # features 位可越档单点授予/禁用。锁定表现：侧栏隐藏 + API 403 +
+  # 相关后台 worker（autosend / companion 主动 / RPA）不启动。
+  feature_gate:
+    enabled: false
+    # plan_override: flagship         # 厂商自营/灰度：无视 license.plan 强制按此档位
+  # ── 购买/续费入口（融合实例 P4b）────────────────────────────────
+  # 会员中心「购买 / 续费」按钮的落地链接：商城页 / 定价页 / TG 客服均可。
+  # 留空或不配 = 不渲染按钮（自营/内网部署零变化）。
+  # shop_url: https://example.com/pricing
+  # 字符加量包（charpack）入账：POST /api/admin/license/topup
+  # {chars, ref(订单号,幂等), note}——加量并进 included 口径即时生效，
+  # 依赖已激活且带字符额度（included_chars>0）的授权。
 
 # ── 计费价目表（C2-2）──────────────────────────────────────────
 # 对账单（GET /api/workspace/billing）据此把用量换算成应收金额。
