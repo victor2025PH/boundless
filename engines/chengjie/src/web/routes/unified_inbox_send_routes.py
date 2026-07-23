@@ -372,8 +372,25 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             contact_key=chat_key or None, platform=platform,
             account_id=account_id, text=text)
         voice_cfg = voice_ctx.get("voice_cfg") or {}
+        _explicit_voice_override = isinstance(cfg_override, dict) and any(
+            cfg_override.get(k) for k in ("voice", "backend", "voice_profile"))
         if isinstance(cfg_override, dict):
             voice_cfg.update({k: v for k, v in cfg_override.items() if v not in (None, "")})
+        # 语言路由（与自动语音同口径）：edge 音色对齐文本语种，防止手动语音也踩
+        # 「ja 音色念中文」类错配；坐席显式覆写 voice/backend 时尊重人工选择不路由。
+        # 语种明确但无音色映射 → 明确报错回落（发错语言的语音比不发更糟）。
+        if not _explicit_voice_override:
+            try:
+                from src.ai.lang_voice_route import (
+                    is_reject_tag, route_voice_cfg_for_text)
+                voice_cfg, _lang_route = route_voice_cfg_for_text(
+                    voice_cfg, text, raw_cfg)
+                if is_reject_tag(_lang_route):
+                    return {"ok": False, "reason": "lang_mismatch",
+                            "message": tr(request, "err.inbox.voice_lang_mismatch",
+                                          lang=_lang_route.split(":", 1)[-1])}
+            except Exception:
+                logger.debug("[inbox/voice-send] 语言路由异常（忽略）", exc_info=True)
         voice_cfg["enabled"] = True
 
         # 合成到临时目录

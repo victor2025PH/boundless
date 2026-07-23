@@ -664,7 +664,25 @@ class TelegramSenderMixin:
                 return False
             # 统一节流：与文本共用墙钟，图文混发也排队（不瞬时双发触发反垃圾）。
             await self._presend_pace()
-            _sent = await self.client.send_photo(chat_id, photo_path, caption=caption or "")
+            # 反封号·去重微扰（默认关，opt-in）：A 线自拍/形象照直发多号 → 文件哈希相同是
+            # 垃圾信号。发送前产「视觉无差、字节唯一」临时副本发出、发完删；软失败回落原图。
+            # 与编排器 send_media 同一 outbound_media.dedup 语义——A 线是绕过编排器的直发缝，
+            # 这里补上覆盖（同时罩住 companion worker / skill_manager 的照片直发兜底）。
+            _send_path, _dedup_temp = photo_path, False
+            try:
+                from src.integrations.shared.media_dedup import perturb_for_send
+                _raw_cfg = self.config.config if hasattr(self.config, "config") else {}
+                _send_path, _dedup_temp = perturb_for_send(photo_path, "image", _raw_cfg)
+            except Exception:
+                _send_path, _dedup_temp = photo_path, False
+            try:
+                _sent = await self.client.send_photo(chat_id, _send_path, caption=caption or "")
+            finally:
+                try:
+                    from src.integrations.shared.media_dedup import cleanup_temp
+                    cleanup_temp(_send_path, _dedup_temp)
+                except Exception:
+                    pass
             # 统一记账：刷新墙钟 + 记入共用计数器（照片也计入今日外发量，反封号不漏算）。
             self._postsend_record_count()
             # 出站镜像 + contacts 记账：坐席台看见「AI 发了图」、亲密度计入这次外发。
@@ -909,9 +927,27 @@ class TelegramSenderMixin:
                 account_id=getattr(self, "account_id", None), text=clean_text,
                 peer_audio_emotion=peer_audio_emotion)
             voice_cfg = voice_ctx.get("voice_cfg") or {}
+            # 语言路由（粤语 + follow_text 音色跟随文本语种）：与 B 线 voice_autosend
+            # 同口径。主动选择而非兜底降级 → 命中路由后解除 no_edge 拒发；文本语种
+            # 明确但无音色可映射 → 拒发语音回落文字（发错语言的语音比不发更糟）。
+            _lang_route = ""
+            try:
+                from src.ai.lang_voice_route import (
+                    is_reject_tag, route_voice_cfg_for_text)
+                voice_cfg, _lang_route = route_voice_cfg_for_text(
+                    voice_cfg, synth_source, raw_cfg)
+                if is_reject_tag(_lang_route):
+                    self.logger.info(
+                        "[voice_reply] 语言不匹配拒发语音（%s）→ 回落文字",
+                        _lang_route)
+                    return False
+            except Exception:
+                self.logger.debug("[voice_reply] 语言路由异常（忽略）", exc_info=True)
             voice_cfg["enabled"] = True
             from src.inbox.voice_autosend import resolve_no_edge_fallback
             _no_edge = resolve_no_edge_fallback(raw_cfg, vr_cfg)
+            if _lang_route:
+                _no_edge = False
             if _no_edge:
                 voice_cfg["fallback_on_error"] = False
 

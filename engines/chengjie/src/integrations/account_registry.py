@@ -66,11 +66,13 @@ class AccountRegistry:
             self._conn.commit()
 
     @staticmethod
-    def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
-        d = dict(row)
+    def _decode_meta(meta_json: Any) -> Dict[str, Any]:
+        """meta_json 文本 → 解密后的 dict（坏 JSON/非 dict → {}）。"""
         try:
-            meta = json.loads(d.pop("meta_json", "{}") or "{}")
+            meta = json.loads(meta_json or "{}")
         except (json.JSONDecodeError, TypeError):
+            meta = {}
+        if not isinstance(meta, dict):
             meta = {}
         # N3：读出时解密 meta 敏感字段（session_string 等）；旧明文行透传不破
         try:
@@ -78,7 +80,12 @@ class AccountRegistry:
             meta = decrypt_meta(meta)
         except Exception:
             pass
-        d["meta"] = meta
+        return meta
+
+    @classmethod
+    def _row_to_dict(cls, row: sqlite3.Row) -> Dict[str, Any]:
+        d = dict(row)
+        d["meta"] = cls._decode_meta(d.pop("meta_json", "{}"))
         return d
 
     @staticmethod
@@ -103,9 +110,20 @@ class AccountRegistry:
         fingerprint_id: Optional[str] = None,
         status: Optional[str] = None,
         meta: Optional[Dict[str, Any]] = None,
+        merge_meta: bool = False,
     ) -> Dict[str, Any]:
         """新增或更新账号。**仅覆盖显式传入（非 None）的字段**，其余沿用既有值，
-        避免「只想改状态」的调用把 mode/label 等清掉。"""
+        避免「只想改状态」的调用把 mode/label 等清掉。
+
+        ``meta`` 的覆盖语义分两档：
+        - ``merge_meta=False``（默认，向后兼容）：**整块替换**——调用方须自行
+          read-merge-write，否则会清掉既有键。适用于「读出改完写回」或显式删键。
+        - ``merge_meta=True``：**锁内原子浅合并**——只更新传入的键，其余键
+          （persona_id / auto_reply / banned / self_* / session_string…）原样保留。
+          登录持久化等「只想登记自己那一两个键」的调用**必须**用这档：2026-07-23
+          生产事故＝baileys 重登 ``meta={"baileys_login_id"}`` 整块覆盖，把 WA 账号
+          的人设绑定抹掉 → 新好友回落默认人设+错语言音色。
+        """
         platform = str(platform or "").lower()
         account_id = str(account_id or "")
         now = time.time()
@@ -134,8 +152,14 @@ class AccountRegistry:
                 new_fp = (fingerprint_id if fingerprint_id is not None
                           else cur["fingerprint_id"])
                 new_status = status if status is not None else cur["status"]
-                new_meta = (self._meta_json(meta)
-                            if meta is not None else cur["meta_json"])
+                if meta is not None and merge_meta:
+                    base = self._decode_meta(cur["meta_json"])
+                    base.update(meta)
+                    new_meta = self._meta_json(base)
+                elif meta is not None:
+                    new_meta = self._meta_json(meta)
+                else:
+                    new_meta = cur["meta_json"]
                 last_online = (now if new_status == "online"
                                else cur["last_online_at"])
                 self._conn.execute(

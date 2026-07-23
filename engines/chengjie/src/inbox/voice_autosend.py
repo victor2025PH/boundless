@@ -455,6 +455,27 @@ async def _synth_ogg(config: Dict[str, Any], persona_id: str, text: str,
         logger.debug("[voice_autosend] resolve_voice_cfg 失败", exc_info=True)
         _set_synth_failure("resolve_voice_failed")
         return None, meta
+    # 语言路由（粤语→粤语音色 + follow_text 音色跟随文本语种）：主动选择而非
+    # 兜底降级 → 免受 no_edge 拒发/快检。必须在 preflight 之前：路由命中后
+    # backend 已非克隆类，"克隆不可达"快检自然放行。
+    _lang_route = ""
+    try:
+        from src.ai.lang_voice_route import is_reject_tag, route_voice_cfg_for_text
+        voice_cfg, _lang_route = route_voice_cfg_for_text(voice_cfg, text, config)
+        if is_reject_tag(_lang_route):
+            # 拒发守卫：文本语种明确但无匹配音色——发错语言的语音比不发更糟
+            # （生产实锤：ja 音色念中文被客户当"讲日语"投诉）→ 回落文字。
+            meta["lang_route"] = _lang_route
+            _set_synth_failure("lang_mismatch")
+            logger.info(
+                "[voice_autosend] 语言不匹配拒发语音（%s）pid=%s len=%d → 回落文字",
+                _lang_route, persona_id, meta["synth_text_len"])
+            return None, meta
+        if _lang_route:
+            meta["lang_route"] = _lang_route
+            _no_edge = False
+    except Exception:
+        logger.debug("[voice_autosend] 语言路由异常（忽略）", exc_info=True)
     skip = preflight_voice_synth(
         config, _vb, persona_id, text, voice_cfg=voice_cfg)
     if skip:

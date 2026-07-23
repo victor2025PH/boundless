@@ -365,9 +365,12 @@ class TTSPipeline:
         cfg = cfg or {}
         self.enabled = bool(cfg.get("enabled", False))
         self.backend = str(cfg.get("backend", "edge_tts")).strip().lower()
+        # 缺省音色＝中文女声（业务主力语言）。历史值 ja-JP-NanamiNeural 是 2026-07-23
+        # 「新好友被日语腔轰炸」事故的静默地雷之一：任何一层配置漏填 voice，
+        # 全站语音就默默变日语。
         self.voice = str(
             cfg.get("voice")
-            or ("ja-JP-NanamiNeural" if self.backend == "edge_tts" else "alloy")
+            or ("zh-CN-XiaoxiaoNeural" if self.backend == "edge_tts" else "alloy")
         ).strip()
         self.model = str(cfg.get("model") or "gpt-4o-mini-tts").strip()
         self.format = str(cfg.get("format") or "mp3").strip().lower()
