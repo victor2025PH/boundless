@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS platform_accounts (
     proxy_id        TEXT NOT NULL DEFAULT '',
     fingerprint_id  TEXT NOT NULL DEFAULT '',
     status          TEXT NOT NULL DEFAULT 'pending',
+    business_line   TEXT NOT NULL DEFAULT '',
     meta_json       TEXT NOT NULL DEFAULT '{}',
     created_at      REAL NOT NULL DEFAULT 0,
     updated_at      REAL NOT NULL DEFAULT 0,
@@ -38,9 +39,16 @@ CREATE INDEX IF NOT EXISTS idx_platform_accounts_plat
 """
 
 # 预留 ALTER 迁移位（新增列集中于此，已存在即忽略）
-_MIGRATIONS: List[str] = []
+_MIGRATIONS: List[str] = [
+    # 融合实例 P1：账号业务线标签（translation / companion / ''=未标注）。
+    # 消费方：autodraft 账号级档位封顶（translation → review）、proactive 过滤。
+    "ALTER TABLE platform_accounts ADD COLUMN business_line TEXT NOT NULL DEFAULT ''",
+]
 
 VALID_STATUS = ("pending", "online", "offline", "removed")
+
+# 业务线合法值（'' = 未标注，不封顶不过滤 = 旧行为）
+VALID_BUSINESS_LINES = ("", "translation", "companion")
 
 
 class AccountRegistry:
@@ -109,6 +117,7 @@ class AccountRegistry:
         proxy_id: Optional[str] = None,
         fingerprint_id: Optional[str] = None,
         status: Optional[str] = None,
+        business_line: Optional[str] = None,
         meta: Optional[Dict[str, Any]] = None,
         merge_meta: bool = False,
     ) -> Dict[str, Any]:
@@ -136,11 +145,13 @@ class AccountRegistry:
                 self._conn.execute(
                     """INSERT INTO platform_accounts
                        (platform, account_id, mode, label, proxy_id, fingerprint_id,
-                        status, meta_json, created_at, updated_at, last_online_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                        status, business_line, meta_json,
+                        created_at, updated_at, last_online_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (platform, account_id,
                      mode or "device", label or "", proxy_id or "",
                      fingerprint_id or "", status or "pending",
+                     business_line or "",
                      self._meta_json(meta),
                      now, now, now if status == "online" else 0),
                 )
@@ -152,6 +163,8 @@ class AccountRegistry:
                 new_fp = (fingerprint_id if fingerprint_id is not None
                           else cur["fingerprint_id"])
                 new_status = status if status is not None else cur["status"]
+                new_bl = (business_line if business_line is not None
+                          else cur.get("business_line", ""))
                 if meta is not None and merge_meta:
                     base = self._decode_meta(cur["meta_json"])
                     base.update(meta)
@@ -165,13 +178,32 @@ class AccountRegistry:
                 self._conn.execute(
                     """UPDATE platform_accounts
                        SET mode=?, label=?, proxy_id=?, fingerprint_id=?, status=?,
-                           meta_json=?, updated_at=?, last_online_at=?
+                           business_line=?, meta_json=?, updated_at=?, last_online_at=?
                        WHERE platform=? AND account_id=?""",
                     (new_mode, new_label, new_proxy, new_fp, new_status,
-                     new_meta, now, last_online, platform, account_id),
+                     new_bl, new_meta, now, last_online, platform, account_id),
                 )
             self._conn.commit()
+        _invalidate_business_line_cache(platform, account_id)
         return self.get(platform, account_id) or {}
+
+    def set_business_line(
+        self, platform: str, account_id: str, business_line: str
+    ) -> bool:
+        """打/改账号业务线标签（'' = 清除）。非法值拒绝返回 False。"""
+        bl = str(business_line or "").strip().lower()
+        if bl not in VALID_BUSINESS_LINES:
+            return False
+        with self._lock:
+            self._conn.execute(
+                """UPDATE platform_accounts SET business_line=?, updated_at=?
+                   WHERE platform=? AND account_id=?""",
+                (bl, time.time(), str(platform or "").lower(),
+                 str(account_id or "")),
+            )
+            self._conn.commit()
+        _invalidate_business_line_cache(platform, account_id)
+        return True
 
     def set_status(self, platform: str, account_id: str, status: str) -> None:
         if status not in VALID_STATUS:
@@ -233,3 +265,37 @@ def get_account_registry(db_path: Optional[Path] = None) -> AccountRegistry:
                 path = Path(db_path) if db_path else Path("config/account_registry.db")
                 _registry = AccountRegistry(path)
     return _registry
+
+
+# ── 业务线热路查询（autodraft 每条入站 / proactive 每 tick 都会问）─────────────
+# 30s TTL 进程内缓存；写路径（upsert/set_business_line）即时失效。
+# 单例未初始化（如纯单测 / 无编排器部署）→ 返回 ''，绝不在此隐式建库。
+_BL_CACHE: Dict[str, tuple] = {}
+_BL_CACHE_TTL = 30.0
+
+
+def _bl_cache_key(platform: str, account_id: str) -> str:
+    return f"{str(platform or '').lower()}:{str(account_id or '')}"
+
+
+def _invalidate_business_line_cache(platform: str, account_id: str) -> None:
+    _BL_CACHE.pop(_bl_cache_key(platform, account_id), None)
+
+
+def cached_business_line(platform: str, account_id: str) -> str:
+    """账号业务线标签（'' = 未标注）。带 TTL 缓存，任何异常回落 ''。"""
+    key = _bl_cache_key(platform, account_id)
+    now = time.time()
+    hit = _BL_CACHE.get(key)
+    if hit is not None and (now - hit[1]) < _BL_CACHE_TTL:
+        return hit[0]
+    val = ""
+    try:
+        reg = _registry  # 只读现有单例，不触发建库
+        if reg is not None:
+            row = reg.get(platform, account_id)
+            val = str((row or {}).get("business_line") or "").strip().lower()
+    except Exception:
+        val = ""
+    _BL_CACHE[key] = (val, now)
+    return val
