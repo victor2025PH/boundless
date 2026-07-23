@@ -115,6 +115,38 @@ def test_negation_only_still_misses(text):
     assert parse_language_request(text) == ""
 
 
+@pytest.mark.parametrize("text", [
+    # 抱怨/质问点名的是「不想要」的语言（2026-07-22 事故残留风险面）：
+    # 客户抗议「你怎么发英文给我」类质问若按请求解析，会把语言反向锁死在
+    # 错的方向（explicit_request 持久 + 继续写中文永不释放 = 死锁）。
+    "你为什么说英文？",
+    "你怎么说英文",
+    "怎么又说英文了",
+    "为什么现在又跟我说英文",
+    "为什么发英语",
+    "为什么还是英文",
+    "怎么能说英文呢？",
+    "点解你讲英文",          # 粤语「为什么」
+    "你做咩讲英文",          # 粤语「干嘛」
+    "你老是发英文",
+    "又说英文了",
+    "你怎么发英文给我",
+    "有时候说英文有时候说中文",
+    "why do you speak english",
+    "why did you switch to english",
+    "왜 영어로 말해?",
+    "なんで英語で話してるの",
+])
+def test_complaint_question_is_not_request(text):
+    assert parse_language_request(text) == ""
+
+
+def test_complaint_masked_but_following_request_honored():
+    """抱怨段被跳过后，同句后续的真请求仍生效；标点隔断则不算质问语境。"""
+    assert parse_language_request("为什么说英文？还是中文吧") == "zh"
+    assert parse_language_request("怎么样，说英文吧") == "en"
+
+
 # ── 2. 中性词剥离 ───────────────────────────────────────────────
 
 @pytest.mark.parametrize("text", [

@@ -186,6 +186,48 @@ _ZH_NEG_RE = re.compile(
     r"(?:说|說|讲|講|用|发|發)\s*" + _CJK_LANG_TOKEN
 )
 
+# 抱怨/质问语境（不是请求）：「你为什么说英文」「怎么又发英文了」「why do you speak english」
+# 是对现状的质问/吐槽，不是切换指令——2026-07-22 事故的残留风险面：客户抗议「发错语言」
+# 的质问句若被当请求解析，会把语言再锁死在错的方向上（质问里点名的恰是**不想要**的语言）。
+# 规则：请求命中片段起点前的同一小句内（无标点隔断）存在疑问词/惯常吐槽词 → 该命中不算请求。
+# 与否定处理同取「宁漏勿错」：被误屏蔽的真请求回落强证据检测/窗口逻辑（用户实际写什么语言
+# 就跟什么），绝不会反向锁错语言。
+_COMPLAINT_CTX_RE = re.compile(
+    r"(?:"
+    r"[为為](?:什么|什麼|甚么|甚麼|啥|何)"                    # 为什么/为啥/为何
+    r"|[凭憑](?:什么|什麼|啥)"                                # 凭什么
+    r"|怎么|怎麼|咋|干嘛|干吗|幹嘛|幹嗎"                      # 怎么/咋/干嘛
+    r"|点解|點解|做咩|做乜"                                    # 粤语疑问（为什么/干嘛）
+    r"|老是|老係|总是|總是|成日|整天|整日|天天|每次|次次|动不动|動不動"  # 惯常吐槽
+    r"|有时候|有時候|有时|有時|偶尔|偶爾|又"                  # 观察陈述 /「又…了」
+    r"|\bwhy\b|\bhow\s+come\b"                                # 英文疑问
+    r"|なんで|何で|どうして|なぜ"                              # 日文疑问
+    r"|왜"                                                     # 韩文疑问
+    r")[^。！？!?.，,、；;：:…\n]{0,30}$",
+    re.IGNORECASE,
+)
+_COMPLAINT_WINDOW = 34  # 质问词与命中点最大间距（中文 gap 通常 ≤10 字；英文 why do you always… 需更宽）
+
+
+def _search_skip_complaints(
+    pat: "re.Pattern[str]", text: str
+) -> Optional["re.Match[str]"]:
+    """``pat.search`` 变体：跳过「抱怨/质问语境」里的命中，返回首个干净命中。
+
+    「为什么现在又跟我说英文」——「说英文」前的同一小句内有「为什么/又」→ 不算请求；
+    「为什么说英文？还是中文吧」——抱怨段被跳过后「还是中文」仍正常命中 → zh。
+    """
+    pos = 0
+    while True:
+        m = pat.search(text, pos)
+        if m is None:
+            return None
+        ctx = text[max(0, m.start() - _COMPLAINT_WINDOW): m.start()]
+        if _COMPLAINT_CTX_RE.search(ctx):
+            pos = m.end()
+            continue
+        return m
+
 # —— 英文句式 ——
 _EN_LANG_UNION = _ALIAS_UNION
 _EN_REQ_RE = re.compile(
@@ -274,7 +316,9 @@ def valid_lang_code(code: str) -> str:
 def parse_language_request(text: str) -> str:
     """解析「用户明确要求的回复语言」→ 语言码；无明确请求返回 ""。
 
-    只认「指令/请求」语义，能力疑问（会说日语吗）与否定（别说英文）都不算。
+    只认「指令/请求」语义，能力疑问（会说日语吗）、否定（别说英文）与
+    抱怨/质问（你为什么说英文 / 怎么又发英文了）都不算——质问句里点名的
+    恰是用户**不想要**的语言，按请求解析会反向锁死（见 _COMPLAINT_CTX_RE）。
     支持中文/英文/日文/韩文四种书写的请求句式 + 「看不懂 X」负向请求。
     误伤代价高（突然切错语言），故取保守口径：宁漏勿错，漏网句式由
     P1 的 LLM 短判兜底扩展。
@@ -299,7 +343,8 @@ def parse_language_request(text: str) -> str:
         return ""
 
     # 礼貌请求（先于能力排除）：能不能说日语 / 可以用英文聊吗？
-    m = _ZH_POLITE_REQ_RE.search(t)
+    # （同样过质问屏蔽：「怎么能说英文呢」是质问不是请求）
+    m = _search_skip_complaints(_ZH_POLITE_REQ_RE, t)
     if m:
         name = next((g for g in m.groups() if g), "")
         code = _alias_code(name)
@@ -317,31 +362,31 @@ def parse_language_request(text: str) -> str:
     # 否定+正向（「唔系讲英文…讲中文」）屏蔽掉 讲英文 后 讲中文 命中 → zh。
     zt = _ZH_NEG_RE.sub("　", t)
     for pat in (_ZH_REQ_RE, _ZH_REQ_PREFIX_RE, _ZH_REQ_BACK_RE):
-        m = pat.search(zt)
+        m = _search_skip_complaints(pat, zt)
         if m:
             code = _alias_code(m.group(1))
             if code:
                 return code
 
-    m = _EN_REQ_RE.search(t)
+    m = _search_skip_complaints(_EN_REQ_RE, t)
     if m:
         code = _alias_code(m.group(1))
         if code:
             return code
-    m = _EN_SWITCH_RE.search(t)
+    m = _search_skip_complaints(_EN_SWITCH_RE, t)
     if m:
         name = next((g for g in m.groups() if g), "")
         code = _alias_code(name)
         if code:
             return code
 
-    m = _JA_REQ_RE.search(t)
+    m = _search_skip_complaints(_JA_REQ_RE, t)
     if m:
         code = _alias_code(m.group(1))
         if code:
             return code
 
-    m = _KO_REQ_RE.search(t)
+    m = _search_skip_complaints(_KO_REQ_RE, t)
     if m:
         code = _KO_LANG_WORD.get(m.group(1), "")
         if code:

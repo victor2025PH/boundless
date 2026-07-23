@@ -74,6 +74,27 @@ PARSE_REQUEST_CASES = [
     {"text": "whatsapp", "expect": ""},
     {"text": "ok", "expect": ""},
     {"text": "昨天有个客户说要用日语聊，我没理他", "expect": ""},
+    # 排除：抱怨/质问点名的是「不想要」的语言（2026-07-22 WhatsApp 线上事故
+    # 残留风险面：客户抗议发错语言的质问句若按请求解析会反向锁死）
+    {"text": "你为什么说英文？", "expect": ""},
+    {"text": "你怎么说英文", "expect": ""},
+    {"text": "怎么又说英文了", "expect": ""},
+    {"text": "为什么现在又跟我说英文", "expect": ""},
+    {"text": "点解你讲英文", "expect": ""},
+    {"text": "你老是发英文", "expect": ""},
+    {"text": "又说英文了", "expect": ""},
+    {"text": "你怎么发英文给我", "expect": ""},
+    {"text": "why do you speak english", "expect": ""},
+    {"text": "why did you switch to english", "expect": ""},
+    {"text": "왜 영어로 말해?", "expect": ""},
+    {"text": "なんで英語で話してるの", "expect": ""},
+    # 抱怨段屏蔽后，同句后续真请求仍生效；标点隔断则不算质问语境
+    {"text": "为什么说英文？还是中文吧", "expect": "zh"},
+    {"text": "怎么样，说英文吧", "expect": "en"},
+    # 粤语否定+正向同句（2026-07-22 事故回归钉：唔系讲英文 + 讲中文 → zh）
+    {"text": "我我都同你讲咗，我唔系讲英文噶，我同你讲啦同讲中文啊，大佬普通话国语啊。", "expect": "zh"},
+    {"text": "我唔系讲英文，讲中文", "expect": "zh"},
+    {"text": "我唔系讲英文噶", "expect": ""},
 ]
 
 # 剥离后应为空（不构成任何语言证据）
