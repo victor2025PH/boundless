@@ -102,22 +102,25 @@ def test_fulfillment_payload_maps_period_to_days():
 
 
 def test_fulfillment_payload_none_for_unmappable():
-    # 非 chatx
-    assert fulfillment_payload_for_order({"id": "X", "sku_id": "lingox-pro"}) is None
+    # 非本引擎产品（P4 起 lingox 已入表，外族改用 voicex 代表）
+    assert fulfillment_payload_for_order({"id": "X", "sku_id": "voicex-std"}) is None
     # chatx 但 sku_id 缺失/未知（老单）→ 转人工
     assert fulfillment_payload_for_order({"id": "Y", "product_id": "zhiliao"}) is None
 
 
-def test_select_fulfillable_skips_done_coded_and_nonchatx():
+def test_select_fulfillable_skips_done_coded_and_foreign():
     orders = [
         {"id": "O1", "sku_id": "chatx-entry", "contact": "a", "period": "monthly"},
         {"id": "O2", "sku_id": "chatx-team", "code": "已回填"},          # 已回填 → 跳
         {"id": "O3", "sku_id": "chatx-flagship"},                        # 待履约
-        {"id": "O4", "sku_id": "lingox-pro", "product_id": "tongyi"},    # 非 chatx → 跳
+        {"id": "O4", "sku_id": "voicex-std"},                            # 外族引擎 → 跳
         {"id": "O5", "product_id": "zhiliao"},                           # 无 sku_id → 跳(转人工)
         {"id": "", "sku_id": "chatx-team"},                              # 无 id → 跳
+        # P4：lingox 入表 → 与 chatx 同批自动履约（详见 test_lingox_fulfillment）
+        {"id": "O6", "sku_id": "lingox-team", "product_id": "tongyi"},
     ]
     picked = select_fulfillable(orders, done_ids={"O1"})  # O1 已 done → 跳
     ids = [o["id"] for o, _ in picked]
-    assert ids == ["O3"]
+    assert ids == ["O3", "O6"]
     assert picked[0][1]["sku_id"] == "chatx-flagship"
+    assert picked[1][1]["product_id"] == "tongyi"

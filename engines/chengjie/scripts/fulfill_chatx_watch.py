@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""fulfill_chatx_watch.py — chatx 订单履约守护（厂商机离线私钥自动开通）。
+"""fulfill_chatx_watch.py — chatx/lingox 订单履约守护（厂商机离线私钥自动开通）。
+
+融合实例 P4 起双产品线通吃：chatx（智聊）与 lingox（通译）订单同一守护签发，
+映射表见 src/licensing/chatx_fulfillment.py（lingox 档=翻译线 basic+显式 features；
+lingox-charpack 等加购型 SKU 走 [人工] 点名，不自动签发）。
 
 Sprint4：把 Sprint3 的「按单签发原语」升级为守护——轮询官网 paid 的 chatx 订单，用本地
 私钥签发 license token，回填到订单（status=activated + code=token），website 侧自动私信客户；
@@ -30,7 +34,10 @@ from pathlib import Path
 BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))
 
-from src.licensing.chatx_fulfillment import select_fulfillable  # noqa: E402
+from src.licensing.chatx_fulfillment import (  # noqa: E402
+    manual_followup_orders,
+    select_fulfillable,
+)
 from src.licensing.license_manager import issue_license  # noqa: E402
 
 STATE_FILE = BASE / "config" / "fulfilled_chatx.json"
@@ -89,6 +96,10 @@ def run_once(conf: dict, dry: bool) -> int:
         return 0
     orders = resp.get("orders", []) if resp.get("ok") else []
     todo = select_fulfillable(orders, done_ids)
+    # 本引擎订单但映射不出 payload（charpack 加购/老单缺 sku）→ 点名转人工，绝不静默漏单
+    for o in manual_followup_orders(orders, done_ids):
+        print(f"[人工] {o.get('id')} · {o.get('sku_id') or '(缺 sku)'} · "
+              f"{o.get('contact', '')} —— 不可自动签发（字符包/历史单），请人工跟进")
     handled = 0
     for order, payload in todo:
         oid = str(order.get("id") or "")

@@ -38,25 +38,32 @@ def _fake_http(paid_orders, posts):
 
 
 def test_run_once_signs_and_backfills(watch, monkeypatch):
+    """融合实例 P4 起：chatx + lingox 同表履约；真外族 SKU 仍跳过。"""
     kp = generate_keypair()
     posts = []
     orders = [
         {"id": "O1", "sku_id": "chatx-team", "contact": "acme@x.com", "period": "monthly", "status": "paid"},
-        {"id": "O2", "sku_id": "lingox-pro", "product_id": "tongyi", "status": "paid"},  # 非 chatx → 跳
+        {"id": "O2", "sku_id": "lingox-pro", "product_id": "tongyi", "status": "paid"},  # P4：并入履约
+        {"id": "O3", "sku_id": "voicex-std", "product_id": "voicex", "status": "paid"},  # 外族 → 跳
     ]
     monkeypatch.setattr(watch, "http_json", _fake_http(orders, posts))
     conf = {"site": "https://x", "key": "k", "priv_hex": kp["private_hex"]}
 
     handled = watch.run_once(conf, dry=False)
-    assert handled == 1
-    assert len(posts) == 1
-    p = posts[0]
-    assert p["id"] == "O1" and p["status"] == "activated" and p["code"]
+    assert handled == 2
+    assert [p["id"] for p in posts] == ["O1", "O2"]
+    p1, p2 = posts
+    assert p1["status"] == "activated" and p1["code"]
     # 回填的 code 是可验签的 chatx-team license（seats=10）
-    st = LicenseManager(license_token=p["code"], public_key_hex=kp["public_hex"]).status()
+    st = LicenseManager(license_token=p1["code"], public_key_hex=kp["public_hex"]).status()
     assert st.state == "active" and st.plan == "pro" and st.seats == 10
+    # lingox-pro：翻译线 basic 档 + analytics 显式特性 + 15 席
+    assert p2["status"] == "activated" and p2["code"]
+    st2 = LicenseManager(license_token=p2["code"], public_key_hex=kp["public_hex"]).status()
+    assert st2.state == "active" and st2.plan == "basic" and st2.seats == 15
+    assert st2.features.get("analytics") is True
 
-    # 幂等：O1 已 done → 二次运行不再回填
+    # 幂等：O1/O2 已 done → 二次运行不再回填（外族 O3 恒不碰）
     posts2 = []
     monkeypatch.setattr(watch, "http_json", _fake_http(orders, posts2))
     handled2 = watch.run_once(conf, dry=False)
