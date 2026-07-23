@@ -41,6 +41,13 @@ CREATE TABLE IF NOT EXISTS license_char_usage (
     chars     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (lic_id, day, category)
 );
+CREATE TABLE IF NOT EXISTS license_char_topup (
+    ref        TEXT PRIMARY KEY,
+    lic_id     TEXT NOT NULL,
+    chars      INTEGER NOT NULL,
+    note       TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -140,6 +147,64 @@ class LicenseQuotaStore:
             return None
         return max(0, inc - self.used_chars(lic_id))
 
+    # ── 字符加量包（charpack，融合实例 P4b）────────────────────────────────
+    #
+    # lingox-charpack 等「买字符包」订单的入账通道：license payload 的
+    # included_chars 是签发时固定值，加量不重签授权，落本表按 lic_id 累加，
+    # check_license_quota 把 topup 并进 included 口径。ref=订单号，主键幂等
+    # ——同一订单重复入账天然拒绝（对齐 fulfillment 的幂等 ref 语义）。
+
+    def add_topup(
+        self, lic_id: str, chars: int, ref: str, note: str = "",
+    ) -> bool:
+        """入账一笔加量包。ref 已存在/参数非法 → False（幂等，绝不抛）。"""
+        n = int(chars or 0)
+        r = str(ref or "").strip()
+        if n <= 0 or not r:
+            return False
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT INTO license_char_topup "
+                    "(ref, lic_id, chars, note, created_at) VALUES (?,?,?,?,?)",
+                    (r, str(lic_id or "default"), n, str(note or ""),
+                     time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())),
+                )
+                self._conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False  # 同 ref 已入账（幂等拒绝）
+        except Exception:
+            logger.debug("[license_quota] add_topup 失败（已忽略）", exc_info=True)
+            return False
+
+    def topup_chars(self, lic_id: str) -> int:
+        """该授权全部加量包字符合计。读失败按 0（不误加额度）。"""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT COALESCE(SUM(chars), 0) AS s FROM license_char_topup "
+                    "WHERE lic_id = ?",
+                    (str(lic_id or "default"),),
+                ).fetchone()
+            return int(row["s"] or 0)
+        except Exception:
+            logger.debug("[license_quota] topup_chars 读取失败（按 0）", exc_info=True)
+            return 0
+
+    def list_topups(self, lic_id: str, limit: int = 20) -> list:
+        """最近入账记录（会员页展示用）。读失败返回空表。"""
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT ref, chars, note, created_at FROM license_char_topup "
+                    "WHERE lic_id = ? ORDER BY created_at DESC, ref DESC LIMIT ?",
+                    (str(lic_id or "default"), int(limit)),
+                ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
 
 # ── 模块级单例 + 惰性建库（治理随授权走）────────────────────────────────────
 _STORE: Optional[LicenseQuotaStore] = None
@@ -235,19 +300,28 @@ def check_license_quota(*, lic_status: Any = None) -> Dict[str, Any]:
     """
     out: Dict[str, Any] = {
         "allowed": True, "exceeded": False, "enforce": False,
-        "used": 0, "included": 0, "remaining": None, "lic_id": "",
+        "used": 0, "included": 0, "included_base": 0, "topup_chars": 0,
+        "remaining": None, "lic_id": "",
     }
     try:
         st = lic_status if lic_status is not None else _current_status()
-        included = int(getattr(st, "included_chars", 0) or 0)
+        base = int(getattr(st, "included_chars", 0) or 0)
         out["enforce"] = bool(getattr(st, "enforce", False))
-        out["included"] = included
+        out["included"] = out["included_base"] = base
         out["lic_id"] = str(getattr(st, "lic_id", "") or "default")
-        if not getattr(st, "licensed", False) or included <= 0:
+        if not getattr(st, "licensed", False) or base <= 0:
+            # base<=0 = 不限量授权：加量包对其无意义，included 恒 0（不限）。
             return out
         store = _ensure_store()
         if store is None:
             return out
+        # charpack 加量包并进额度口径：included = 签发额度 + 累计加量。
+        # 下游所有消费方（gate.quota_exceeded / license_routes / 会员页）
+        # 读同一 included 字段 → 加量即时全局生效，零改动。
+        topup = store.topup_chars(out["lic_id"])
+        included = base + topup
+        out["topup_chars"] = topup
+        out["included"] = included
         used = store.used_chars(out["lic_id"])
         out["used"] = used
         out["remaining"] = max(0, included - used)
@@ -276,9 +350,45 @@ def check_license_quota(*, lic_status: Any = None) -> Dict[str, Any]:
     return out
 
 
+def add_license_topup(
+    chars: int, ref: str, note: str = "", *, lic_status: Any = None,
+) -> Dict[str, Any]:
+    """给当前授权入账一笔字符加量包（charpack 履约通道，P4b）。
+
+    返回 {ok, error?, lic_id, topup_chars, included}：
+    - 未激活授权 → error=not_licensed（加量包挂在授权上，无授权无处入账）；
+    - 授权本身不限量（included_chars<=0）→ error=unlimited（充值无意义，拒绝
+      防止误操作烧订单号）；
+    - ref 已入账 → error=duplicate_ref（幂等：同一订单绝不重复加量）；
+    - 建库失败 → error=store_unavailable。
+    自身绝不抛；成功后 check_license_quota 立即反映新额度。
+    """
+    try:
+        st = lic_status if lic_status is not None else _current_status()
+        if not getattr(st, "licensed", False):
+            return {"ok": False, "error": "not_licensed"}
+        base = int(getattr(st, "included_chars", 0) or 0)
+        if base <= 0:
+            return {"ok": False, "error": "unlimited"}
+        lic_id = str(getattr(st, "lic_id", "") or "default")
+        store = _ensure_store()
+        if store is None:
+            return {"ok": False, "error": "store_unavailable"}
+        if not store.add_topup(lic_id, chars, ref, note):
+            return {"ok": False, "error": "duplicate_ref", "lic_id": lic_id,
+                    "topup_chars": store.topup_chars(lic_id)}
+        topup = store.topup_chars(lic_id)
+        return {"ok": True, "lic_id": lic_id, "topup_chars": topup,
+                "included": base + topup}
+    except Exception:
+        logger.debug("[license_quota] add_license_topup 失败", exc_info=True)
+        return {"ok": False, "error": "internal"}
+
+
 __all__ = [
     "QUOTA_EXCEEDED_ERROR",
     "LicenseQuotaStore",
+    "add_license_topup",
     "check_license_quota",
     "configure_license_quota_store",
     "get_license_quota_store",

@@ -60,6 +60,18 @@ ZH = {
     "mb_upgrade_desc": "有 {n} 项功能未包含在当前档位。联系您的服务商升级套餐，或在系统设置粘贴新的授权密钥激活。",
     "mb_upgrade_all_clear": "当前档位已解锁全部功能。",
     "mb_goto_activate": "去激活授权",
+    # 购买/续费 CTA + 加量包（P4b）
+    "mb_buy_cta": "购买 / 续费",
+    "mb_topup_line": "含加量包 +{n} 字符",
+    # 坐席工作台顶栏徽章 title（data-i18n-title 消费）
+    "base.plan_badge_t": "当前授权档位 · 点击进入会员中心",
+    "base.plan_badge_ro_t": "当前系统授权档位",
+    # 加量包入账错误（POST /api/admin/license/topup）
+    "err.lic.topup_not_licensed": "尚未激活授权，无法入账加量包",
+    "err.lic.topup_unlimited": "当前授权不限字符量，无需加量包",
+    "err.lic.topup_duplicate_ref": "该订单号已入账过（幂等拒绝重复）",
+    "err.lic.topup_store_unavailable": "额度存储不可用，请查看服务日志",
+    "err.lic.topup_internal": "加量包入账失败，请查看服务日志",
 }
 
 EN = {
@@ -115,4 +127,13 @@ EN = {
     "mb_upgrade_desc": "{n} feature(s) are not included in your current plan. Contact your vendor to upgrade, or paste a new license key in system settings.",
     "mb_upgrade_all_clear": "All features are unlocked on your current plan.",
     "mb_goto_activate": "Activate license",
+    "mb_buy_cta": "Buy / Renew",
+    "mb_topup_line": "Includes top-up packs: +{n} chars",
+    "base.plan_badge_t": "Current plan · open membership center",
+    "base.plan_badge_ro_t": "Current system plan",
+    "err.lic.topup_not_licensed": "No active license — nothing to top up",
+    "err.lic.topup_unlimited": "Current license has no character limit; top-up not applicable",
+    "err.lic.topup_duplicate_ref": "This order ref was already credited (idempotent reject)",
+    "err.lic.topup_store_unavailable": "Quota store unavailable — check server logs",
+    "err.lic.topup_internal": "Top-up failed — check server logs",
 }

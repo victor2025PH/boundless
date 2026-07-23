@@ -77,3 +77,88 @@ def test_topbar_badge_absent_when_gate_off(auth_client, config_manager):
     html = auth_client.get("/").text
     assert 'class="plan-badge' not in html
     assert 'class="nav-locked"' not in html
+
+
+# ── P4b：购买/续费 CTA + 坐席工作台徽章 + charpack 加量包 ────────────────────
+
+def test_shop_cta_renders_when_configured(auth_client, config_manager):
+    """licensing.shop_url 配置 → 会员页出「购买/续费」CTA；未配 → 零渲染。"""
+    _set_gate(config_manager, override="basic")
+    config_manager.config["licensing"]["shop_url"] = "https://shop.example/pricing"
+    d = auth_client.get("/api/admin/membership").json()
+    assert d["shop"]["url"] == "https://shop.example/pricing"
+    html = auth_client.get("/membership").text
+    assert 'href="https://shop.example/pricing"' in html
+    assert ("购买 / 续费" in html) or ("Buy / Renew" in html)
+
+    config_manager.config["licensing"].pop("shop_url")
+    html2 = auth_client.get("/membership").text
+    assert "shop.example" not in html2
+
+
+def test_workspace_topbar_plan_badge(auth_client, config_manager):
+    """gate 开 → 坐席工作台顶栏渲染档位 pill（master 可点进会员中心）；关 → 无。"""
+    _set_gate(config_manager, override="pro")
+    html = auth_client.get("/workspace").text
+    assert 'class="ws-plan-pill ws-plan-pro"' in html
+    assert 'href="/membership"' in html
+    _set_gate(config_manager, enabled=False)
+    html2 = auth_client.get("/workspace").text
+    assert 'class="ws-plan-pill' not in html2
+
+
+def test_topup_route_idempotent(auth_client, tmp_path, monkeypatch):
+    """POST /api/admin/license/topup：入账→quota 生效；同 ref 重复→duplicate_ref。"""
+    from types import SimpleNamespace
+
+    import src.licensing.quota_store as qs
+
+    qs.reset_license_quota_store()
+    qs.configure_license_quota_store(db_path=tmp_path / "topup.db")
+    monkeypatch.setattr(qs, "_current_status", lambda: SimpleNamespace(
+        licensed=True, included_chars=1000, lic_id="LIC-T", enforce=True,
+        state="active"))
+    try:
+        r = auth_client.post("/api/admin/license/topup",
+                             json={"chars": 500, "ref": "ORD-77", "note": "测试"})
+        assert r.status_code == 200
+        d = r.json()
+        assert d["ok"] is True and d["included"] == 1500
+        assert d["topup_chars"] == 500
+
+        dup = auth_client.post("/api/admin/license/topup",
+                               json={"chars": 500, "ref": "ORD-77"}).json()
+        assert dup["ok"] is False and dup["error"] == "duplicate_ref"
+        assert dup.get("detail")  # i18n 文案已解析
+
+        q = qs.check_license_quota()
+        assert q["included"] == 1500 and q["topup_chars"] == 500
+    finally:
+        qs.reset_license_quota_store()
+
+
+def test_topup_route_guards(auth_client, tmp_path, monkeypatch):
+    """未激活授权 → not_licensed（含 i18n detail）；不限量授权 → unlimited。"""
+    from types import SimpleNamespace
+
+    import src.licensing.quota_store as qs
+
+    qs.reset_license_quota_store()
+    qs.configure_license_quota_store(db_path=tmp_path / "topup2.db")
+    monkeypatch.setattr(qs, "_current_status", lambda: SimpleNamespace(
+        licensed=False, included_chars=0, lic_id="", enforce=False,
+        state="unlicensed"))
+    try:
+        d = auth_client.post("/api/admin/license/topup",
+                             json={"chars": 100, "ref": "R1"}).json()
+        assert d["ok"] is False and d["error"] == "not_licensed"
+        assert d.get("detail")
+
+        monkeypatch.setattr(qs, "_current_status", lambda: SimpleNamespace(
+            licensed=True, included_chars=0, lic_id="L", enforce=False,
+            state="active"))
+        d2 = auth_client.post("/api/admin/license/topup",
+                              json={"chars": 100, "ref": "R1"}).json()
+        assert d2["ok"] is False and d2["error"] == "unlimited"
+    finally:
+        qs.reset_license_quota_store()

@@ -203,6 +203,56 @@ def test_check_quota_under_limit_allowed(tmp_path, monkeypatch):
     assert out["allowed"] is True and out["remaining"] == 40
 
 
+# ── P4b：charpack 字符加量包 ─────────────────────────────────────────────────
+
+def test_topup_store_idempotent_and_sum(tmp_path):
+    """ref=订单号主键：同单重复入账幂等拒绝；合计按 lic_id 隔离；重开持久。"""
+    store = LicenseQuotaStore(tmp_path / "q.db")
+    assert store.add_topup("L1", 50_000, "ORD-1") is True
+    assert store.add_topup("L1", 50_000, "ORD-1") is False   # 同订单幂等拒绝
+    assert store.add_topup("L1", 30_000, "ORD-2", note="promo") is True
+    assert store.add_topup("L1", 0, "ORD-3") is False        # 非法参数
+    assert store.add_topup("L1", 100, "") is False
+    assert store.topup_chars("L1") == 80_000
+    assert store.topup_chars("L2") == 0                      # 其它授权不串味
+    assert {t["ref"] for t in store.list_topups("L1")} == {"ORD-1", "ORD-2"}
+    assert LicenseQuotaStore(tmp_path / "q.db").topup_chars("L1") == 80_000
+
+
+def test_check_quota_folds_topup_into_included(tmp_path, monkeypatch):
+    """加量包并进 included 口径：enforce 超额被拦的授权，充值后立即恢复放行。"""
+    import src.licensing.quota_store as qs
+
+    configure_license_quota_store(db_path=tmp_path / "q.db")
+    st = _fake_status(included=100, enforce=True)
+    monkeypatch.setattr(qs, "_current_status", lambda: st)
+    record_license_chars("translation", 100)          # 恰好耗尽
+    assert check_license_quota()["allowed"] is False
+    res = qs.add_license_topup(50, "ORD-9")
+    assert res["ok"] is True and res["included"] == 150
+    out = check_license_quota()
+    assert out["allowed"] is True and out["exceeded"] is False
+    assert out["included"] == 150 and out["included_base"] == 100
+    assert out["topup_chars"] == 50 and out["remaining"] == 50
+
+
+def test_add_license_topup_guards(tmp_path, monkeypatch):
+    """入账护栏：未激活 / 不限量授权拒绝；重复 ref 幂等报 duplicate_ref。"""
+    import src.licensing.quota_store as qs
+
+    configure_license_quota_store(db_path=tmp_path / "q.db")
+    monkeypatch.setattr(qs, "_current_status",
+                        lambda: _fake_status(licensed=False))
+    assert qs.add_license_topup(100, "R1")["error"] == "not_licensed"
+    monkeypatch.setattr(qs, "_current_status",
+                        lambda: _fake_status(included=0))
+    assert qs.add_license_topup(100, "R1")["error"] == "unlimited"
+    monkeypatch.setattr(qs, "_current_status", lambda: _fake_status())
+    assert qs.add_license_topup(100, "R1")["ok"] is True
+    dup = qs.add_license_topup(100, "R1")
+    assert dup["ok"] is False and dup["error"] == "duplicate_ref"
+
+
 async def test_translation_blocked_and_metered(tmp_path, monkeypatch):
     """翻译热路：enforce+超额 → 引擎调用前被拦（稳定错误码）；未超额时成功翻译记账。"""
     import src.licensing.quota_store as qs

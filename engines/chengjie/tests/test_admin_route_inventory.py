@@ -903,6 +903,16 @@ _ADDITIONS_2026_07 = """
 """
 _BASELINE += _ADDITIONS_2026_07
 
+# 2026-07-23 融合实例 P3/P4b：会员中心（档位/功能矩阵/用量/到期 + nav 锁标与
+# 顶栏徽章的落点；membership_routes.py，数据口径=feature_gate.gate_snapshot 单源）
+# + charpack 字符加量包入账（quota_store.add_license_topup，ref 幂等）。
+_ADDITIONS_2026_07_23_MEMBERSHIP = """
+/membership	GET
+/api/admin/membership	GET
+/api/admin/license/topup	POST
+"""
+_BASELINE += _ADDITIONS_2026_07_23_MEMBERSHIP
+
 
 def _parse_baseline():
     expected = set()

@@ -62,6 +62,11 @@
           {{ (i18n or {}).get('mb_quota_none', '无字符额度限制') }}
         {% endif %}
       </div>
+      {% if mb.quota.topup_chars %}
+      <div style="font-size:.72rem;color:var(--green);margin-top:.3rem">
+        {{ ((i18n or {}).get('mb_topup_line', '含加量包 +{n} 字符')).format(n='{:,}'.format(mb.quota.topup_chars)) }}
+      </div>
+      {% endif %}
       <div style="font-size:.72rem;color:var(--t2);margin-top:.3rem">
         {{ (i18n or {}).get('mb_channels', '允许渠道') }}:
         {% if lic.channels %}{{ lic.channels|join(' · ') }}{% else %}{{ (i18n or {}).get('mb_channels_all', '全渠道') }}{% endif %}
@@ -83,8 +88,11 @@
           {% endif %}
         </div>
       </div>
+      {% if mb.shop.url %}
+      <a href="{{ mb.shop.url }}" target="_blank" rel="noopener" class="btn btn-p btn-sm">{{ (i18n or {}).get('mb_buy_cta', '购买 / 续费') }}</a>
+      {% endif %}
       {% if user_role == 'master' %}
-      <a href="/settings#license" class="btn btn-p btn-sm">{{ (i18n or {}).get('mb_goto_activate', '去激活授权') }}</a>
+      <a href="/settings#license" class="btn {{ 'btn-sm' if mb.shop.url else 'btn-p btn-sm' }}">{{ (i18n or {}).get('mb_goto_activate', '去激活授权') }}</a>
       {% endif %}
     </div>
   </div>

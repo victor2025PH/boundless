@@ -30,13 +30,15 @@ def _quota_snapshot() -> Dict[str, Any]:
         q = check_license_quota()
         return {
             "included_chars": q.get("included", 0),
+            "included_base": q.get("included_base", q.get("included", 0)),
+            "topup_chars": q.get("topup_chars", 0),
             "used_chars": q.get("used", 0),
             "remaining_chars": q.get("remaining"),
             "exceeded": q.get("exceeded", False),
         }
     except Exception:
-        return {"included_chars": 0, "used_chars": 0,
-                "remaining_chars": None, "exceeded": False}
+        return {"included_chars": 0, "included_base": 0, "topup_chars": 0,
+                "used_chars": 0, "remaining_chars": None, "exceeded": False}
 
 
 def build_membership_snapshot(config: dict, user_store=None) -> Dict[str, Any]:
@@ -58,6 +60,13 @@ def build_membership_snapshot(config: dict, user_store=None) -> Dict[str, Any]:
         out["gate"] = {"enabled": False, "plan": "community", "features": {},
                        "locked": [], "plan_order": []}
     out["quota"] = _quota_snapshot()
+    # 购买/续费入口（P4b）：运营配置 licensing.shop_url（商城/联系页/TG 客服链接
+    # 均可），空 = 不渲染 CTA（自营/内网部署零变化）。纯透传，不做校验。
+    try:
+        shop_url = str(((config.get("licensing") or {}).get("shop_url")) or "")
+    except Exception:
+        shop_url = ""
+    out["shop"] = {"url": shop_url}
     seats_used = None
     try:
         if user_store is not None:
@@ -99,6 +108,30 @@ def register_membership_routes(app, *, templates, page_auth, api_auth,
     async def api_admin_membership(request: Request):
         api_auth(request)
         return build_membership_snapshot(_cfg(), user_store)
+
+    @app.post("/api/admin/license/topup")
+    async def api_license_topup(request: Request, payload: dict):
+        """字符加量包入账（charpack 履约通道，P4b）。
+
+        body: {chars:int, ref:str, note?:str}。ref=订单号（幂等主键，重复拒绝）。
+        鉴权与 license activate 同口径（api_auth；坐席被全局白名单拦）。
+        当前为手工/半自动通道——fulfillment watcher 的 charpack 自动接线属下阶段。
+        """
+        from src.web.web_i18n import tr
+
+        api_auth(request)
+        from src.licensing.quota_store import add_license_topup
+
+        res = add_license_topup(
+            int(payload.get("chars") or 0),
+            str(payload.get("ref") or ""),
+            str(payload.get("note") or ""),
+        )
+        if not res.get("ok"):
+            err = str(res.get("error") or "internal")
+            res["detail"] = tr(request, f"err.lic.topup_{err}",
+                               f"topup failed: {err}")
+        return res
 
     @app.get("/membership", response_class=HTMLResponse)
     async def membership_page(request: Request, _=Depends(page_auth)):
