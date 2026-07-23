@@ -235,6 +235,11 @@ class LicenseManager:
         """授权文件路径（C4 粘贴激活写入目标；可能为 None＝纯内联/env 模式）。"""
         return self._path
 
+    @property
+    def public_key_hex(self) -> str:
+        """当前生效的厂商公钥（topup 凭证等同源签名物验签复用同一把钥匙）。"""
+        return self._public_key_hex
+
     def preview_token(self, token: str) -> LicenseStatus:
         """校验一段授权码并返回其状态快照——**不写盘、不动单例缓存**。
 
@@ -318,6 +323,15 @@ class LicenseManager:
             return LicenseStatus(
                 state="invalid",
                 messages=[f"授权无效：{e}"],
+            )
+
+        # 同一把厂商钥匙也签「字符加量凭证」（typ=topup，见 topup_voucher.py）——
+        # 验签会过，但它不是授权码。误贴当授权激活会得到一个"永久 basic 幽灵授权"
+        # （payload 缺 plan/exp 全走默认值），必须在这里挡下并指路。
+        if str(payload.get("typ") or "") == "topup":
+            return LicenseStatus(
+                state="invalid",
+                messages=["这是字符加量凭证（非授权码）：请到 会员中心 → 兑换加量包 使用"],
             )
 
         exp = int(payload.get("exp") or 0)

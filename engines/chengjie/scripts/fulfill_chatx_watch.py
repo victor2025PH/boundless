@@ -37,8 +37,10 @@ sys.path.insert(0, str(BASE))
 from src.licensing.chatx_fulfillment import (  # noqa: E402
     manual_followup_orders,
     select_fulfillable,
+    select_topup_fulfillable,
 )
 from src.licensing.license_manager import issue_license  # noqa: E402
+from src.licensing.topup_voucher import issue_topup_voucher  # noqa: E402
 
 STATE_FILE = BASE / "config" / "fulfilled_chatx.json"
 
@@ -99,8 +101,30 @@ def run_once(conf: dict, dry: bool) -> int:
     # 本引擎订单但映射不出 payload（charpack 加购/老单缺 sku）→ 点名转人工，绝不静默漏单
     for o in manual_followup_orders(orders, done_ids):
         print(f"[人工] {o.get('id')} · {o.get('sku_id') or '(缺 sku)'} · "
-              f"{o.get('contact', '')} —— 不可自动签发（字符包/历史单），请人工跟进")
+              f"{o.get('contact', '')} —— 不可自动履约（历史单/缺 contact），请人工跟进")
     handled = 0
+    # 加购包（charpack）→ topup 凭证：与授权码同一交付通道（回填 code，官网私信客户），
+    # 客户在 会员中心 → 兑换加量包 粘贴入账（ref=订单号幂等）。
+    for order, vargs in select_topup_fulfillable(orders, done_ids):
+        oid = str(order.get("id") or "")
+        print(f"[凭证] {oid} · {order.get('sku_id')} · chars={vargs['chars']} · "
+              f"{vargs['customer']}")
+        if dry:
+            continue
+        try:
+            token = issue_topup_voucher(conf["priv_hex"], **vargs)
+            r = http_json(
+                f"{conf['site']}/api/admin/order-status",
+                {"id": oid, "status": "activated", "code": token}, key=conf["key"])
+            if r.get("ok"):
+                st.setdefault("done", {})[oid] = int(time.time())
+                save_state(st)
+                handled += 1
+                print(f"[开通] {oid} ✓ 加量凭证已回填，客户在会员中心粘贴兑换")
+            else:
+                print(f"[错误] {oid} 凭证回填失败：{r}", file=sys.stderr)
+        except Exception as e:  # noqa: BLE001
+            print(f"[错误] {oid} 凭证履约异常：{e}", file=sys.stderr)
     for order, payload in todo:
         oid = str(order.get("id") or "")
         print(f"[签发] {oid} · {payload.get('sku_id')} · plan={payload.get('plan')} "

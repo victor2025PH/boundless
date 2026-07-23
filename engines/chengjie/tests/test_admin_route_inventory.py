@@ -913,6 +913,13 @@ _ADDITIONS_2026_07_23_MEMBERSHIP = """
 """
 _BASELINE += _ADDITIONS_2026_07_23_MEMBERSHIP
 
+# 2026-07-24 融合实例 P4c：字符加量凭证自助兑换（topup_voucher.redeem——验签+
+# 绑定校验+ref 幂等入账；charpack 自动履约闭环的客户侧终点）。
+_ADDITIONS_2026_07_24_TOPUP_VOUCHER = """
+/api/admin/license/topup-voucher	POST
+"""
+_BASELINE += _ADDITIONS_2026_07_24_TOPUP_VOUCHER
+
 
 def _parse_baseline():
     expected = set()

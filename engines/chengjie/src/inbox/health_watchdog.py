@@ -315,6 +315,9 @@ class HealthWatchdog:
         self._last_drift_sig: Optional[str] = None
         # 云端余额水位巡检（独立稀疏节流；间隔在 _check_cloud_balance 内读配置）
         self._last_cloud_balance_ts: float = 0.0
+        # 授权字符额度水位巡检（P4c）：稀疏节流 + 「告过警」标记（恢复通知只发给告过警的）
+        self._last_license_quota_ts: float = 0.0
+        self._license_quota_alerted: bool = False
         # 本地兜底顶班提醒：上次观测的兜底出话累计数 + 首次观测到顶班的时间
         self._fb_duty_last_calls: Optional[int] = None
         self._fb_duty_since_ts: float = 0.0
@@ -351,6 +354,7 @@ class HealthWatchdog:
         self.total_memory_key_drift_alerts: int = 0
         self.total_platform_session_reminders: int = 0
         self.total_cloud_balance_alerts: int = 0
+        self.total_license_quota_alerts: int = 0
         self.total_fallback_duty_reminders: int = 0
         self.total_avatar_voice_reminders: int = 0
         self.total_media_promise_alerts: int = 0
@@ -510,6 +514,14 @@ class HealthWatchdog:
             self._check_cloud_balance()
         except Exception:
             logger.debug("云端余额巡检异常（已忽略）", exc_info=True)
+
+        # 授权字符额度水位巡检（P4c）：临近/触顶 → host_alert 主动外发并指路
+        # 「会员中心 → 兑换加量包」，替代「翻译突然被拦才发现额度没了」。
+        # 无授权/不限量部署天然静默（included=0 直接返回），零误报零开销。
+        try:
+            self._check_license_quota()
+        except Exception:
+            logger.debug("授权额度巡检异常（已忽略）", exc_info=True)
 
         # 日志巡检（2026-07-23）：把 triage_watch 的「基线抑制+偏差检测」接进 in-process
         # 看门狗——出现新错误类/激增时经 host_alert 走既有 EventBus→Webhook→Telegram
@@ -1619,6 +1631,72 @@ class HealthWatchdog:
                 ):
                     self.total_cloud_balance_alerts += 1
 
+    def _check_license_quota(self, *, now: Optional[float] = None) -> None:
+        """授权字符额度水位巡检（P4c）：临近触顶提前提醒、触顶点名、恢复报平安。
+
+        口径＝``quota_store.check_license_quota``（含加量包的 included 合计）：
+        - ``used/included >= warn_pct``（默认 85%）→「即将用尽」提醒；
+        - ``exceeded``（gate 同款判定）→「已用尽」升级提醒（独立 key，不被 warn
+          冷却窗压住）；enforce 开=功能已被限制、关=仍在放行，文案如实区分；
+        - 兑换加量包/换新授权后回落阈值下 → 给**告过警的**部署补一条恢复通知。
+        无授权/不限量（included=0）天然静默。配置
+        ``health_watchdog.quota_remind.{enabled,warn_pct,interval_min}``（默认开/85/360，
+        与 fallback_duty_remind 同族——授权额度只在有额度授权的部署上有意义，
+        默认开零误报）。重提去抖交给 notify_host 按 key 冷却。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        qr = (((cfg.get("health_watchdog") or {}).get("quota_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not qr.get("enabled", True):
+            return
+        ts = float(now if now is not None else time.time())
+        if self._last_license_quota_ts and (ts - self._last_license_quota_ts) < 600.0:
+            return  # 10min 稀疏节流（读数=一次 sqlite SUM，纯为省无谓轮询）
+        self._last_license_quota_ts = ts
+        from src.licensing.quota_store import check_license_quota
+        q = check_license_quota()
+        included = int(q.get("included") or 0)
+        if included <= 0:
+            self._license_quota_alerted = False
+            return
+        used = int(q.get("used") or 0)
+        pct = used * 100.0 / included
+        warn_pct = float(qr.get("warn_pct", 85) or 85)
+        remind_sec = max(600.0, float(qr.get("interval_min", 360) or 360) * 60.0)
+        from src.utils.host_alert import notify_host
+        if bool(q.get("exceeded")):
+            effect = ("翻译/TTS 已被限制" if bool(q.get("enforce"))
+                      else "当前未开启强制，功能仍在放行")
+            if notify_host(
+                "字符额度已用尽",
+                (f"授权字符额度已用尽：{used:,} / {included:,}（{effect}）。"
+                 "请购买字符加量包（会员中心 → 兑换加量包）或升级套餐。"),
+                key="license_quota:exceeded",
+                cooldown_sec=remind_sec,
+            ):
+                self.total_license_quota_alerts += 1
+            self._license_quota_alerted = True
+        elif pct >= warn_pct:
+            if notify_host(
+                "字符额度即将用尽",
+                (f"授权字符额度已使用 {pct:.0f}%（{used:,} / {included:,}，"
+                 f"剩余 {max(0, included - used):,}）。耗尽后翻译/TTS 将受限，"
+                 "建议提前购买字符加量包（会员中心 → 兑换加量包）。"),
+                key="license_quota:warn",
+                cooldown_sec=remind_sec,
+            ):
+                self.total_license_quota_alerts += 1
+            self._license_quota_alerted = True
+        elif self._license_quota_alerted:
+            notify_host(
+                "字符额度已恢复",
+                (f"字符额度回落到安全水位：{used:,} / {included:,}"
+                 f"（{pct:.0f}%）。加量包/新授权已生效。"),
+                key="license_quota:recover",
+                cooldown_sec=0.0,
+            )
+            self._license_quota_alerted = False
+
     def _check_pool_key_pings(self, *, now: Optional[float] = None) -> None:
         """备用 Key 主动探活：每日一轮 1-token chat ping（节流在 run_chat_pings 内）。
 
@@ -2042,6 +2120,7 @@ class HealthWatchdog:
             "total_memory_key_drift_alerts": self.total_memory_key_drift_alerts,
             "total_weekly_reports": self.total_weekly_reports,
             "total_cloud_balance_alerts": self.total_cloud_balance_alerts,
+            "total_license_quota_alerts": self.total_license_quota_alerts,
             "total_fallback_duty_reminders": self.total_fallback_duty_reminders,
             "total_avatar_voice_reminders": self.total_avatar_voice_reminders,
             "total_media_promise_alerts": self.total_media_promise_alerts,

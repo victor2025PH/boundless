@@ -3,7 +3,8 @@
 不变量：
 - lingox 档位语义＝翻译线：plan 恒 basic，差异走 seats/channels/显式 features；
   绝不发 pro（防与同价 chatx-team 无差异 + 白送 ai_autosend）。
-- lingox-charpack（字符加购包）不可自动签发 → 转人工且守护可见。
+- lingox-charpack（字符加购包）不发 plan license（会覆掉订阅档）→ 走 topup 凭证
+  自动履约（P4c，见 test_topup_voucher.py）；缺 contact 才转人工且守护可见。
 - chatx 既有行为零变化（product_id 仍 zhiliao、features 仍空）。
 - 端到端：签发的 lingox license 在 feature_gate 下 translation_suite+analytics 开、
   ai_autosend/companion 锁。
@@ -41,16 +42,19 @@ def test_lingox_specs_are_translation_line():
     assert sku_spec("lingox-pro")["seats"] == 15
 
 
-def test_charpack_is_manual_only():
-    assert "lingox-charpack" in MANUAL_SKUS
+def test_charpack_never_issues_plan_license():
+    """charpack 绝不能走 license 签发通道（P4c 起改 topup 凭证，此不变量仍须守住）。"""
+    assert "lingox-charpack" not in MANUAL_SKUS  # 已迁自动凭证通道
     with pytest.raises(ValueError):
         sku_spec("lingox-charpack")
     order = {"id": "O1", "sku_id": "lingox-charpack", "contact": "c@x"}
     assert is_lingox_order(order) is True
     assert fulfillment_payload_for_order(order) is None
-    # 守护点名：charpack 在人工跟进清单里
-    manual = manual_followup_orders([order])
-    assert [o["id"] for o in manual] == ["O1"]
+    # 有 contact（可绑定）→ 凭证通道接走，不再进人工清单
+    assert manual_followup_orders([order]) == []
+    # 缺 contact（无绑定面）→ 仍要人工点名，绝不静默漏单
+    naked = {"id": "O2", "sku_id": "lingox-charpack", "contact": ""}
+    assert [o["id"] for o in manual_followup_orders([naked])] == ["O2"]
 
 
 def test_lingox_payload_carries_product_and_features():
@@ -98,9 +102,10 @@ def test_select_fulfillable_mixed_batch():
     assert got["B"]["plan"] == "basic" and got["B"]["product_id"] == "tongyi"
     # annual 周期 → ~366 天
     assert got["B"]["exp"] - got["A"]["exp"] > 300 * 86400
-    # 人工清单只点名 charpack（D 非本引擎、E 已回填）
-    manual = manual_followup_orders(orders)
-    assert [o["id"] for o in manual] == ["C"]
+    # charpack(C) 走凭证通道（P4c）；人工清单为空（D 非本引擎、E 已回填）
+    from src.licensing.chatx_fulfillment import select_topup_fulfillable
+    assert [o["id"] for o, _ in select_topup_fulfillable(orders)] == ["C"]
+    assert manual_followup_orders(orders) == []
 
 
 def test_end_to_end_lingox_license_under_feature_gate():

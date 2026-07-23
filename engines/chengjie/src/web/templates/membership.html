@@ -98,6 +98,59 @@
   </div>
   {% endif %}
 
+  {#- 兑换加量包（P4c）：粘贴厂商签发的 topup 凭证 → 验签+绑定校验+幂等入账。
+      写额度=运营动作，与「去激活授权」同权限面（master）；其余角色只读本页。 -#}
+  {% if user_role == 'master' and mb.quota.included_chars %}
+  <div class="card" style="margin-bottom:1.2rem">
+    <div class="card-h"><h3>{{ (i18n or {}).get('mb_redeem_title', '兑换加量包') }}</h3></div>
+    <div style="padding:.8rem 1rem">
+      <div style="font-size:.82rem;color:var(--t2);margin-bottom:.6rem">{{ (i18n or {}).get('mb_redeem_desc', '购买字符加量包后会收到一段凭证，粘贴到下方即可入账（同一凭证只能兑换一次）。') }}</div>
+      <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+        <input id="mb-voucher-input" type="text" autocomplete="off" spellcheck="false"
+               placeholder="{{ (i18n or {}).get('mb_redeem_ph', '粘贴加量凭证…') }}"
+               style="flex:1;min-width:260px;padding:.45rem .6rem;border:1px solid var(--bd);border-radius:6px;background:var(--input);color:var(--t1);font-family:monospace;font-size:.78rem">
+        <button id="mb-voucher-btn" class="btn btn-p btn-sm" type="button">{{ (i18n or {}).get('mb_redeem_btn', '兑换') }}</button>
+      </div>
+      <div id="mb-voucher-msg" style="font-size:.8rem;margin-top:.5rem;display:none"></div>
+    </div>
+  </div>
+  <script>
+  (function(){
+    var btn = document.getElementById('mb-voucher-btn');
+    var inp = document.getElementById('mb-voucher-input');
+    var msg = document.getElementById('mb-voucher-msg');
+    if (!btn || !inp || !msg) return;
+    btn.addEventListener('click', function(){
+      var v = (inp.value || '').trim();
+      if (!v) { inp.focus(); return; }
+      btn.disabled = true;
+      window.apiFetch('/api/admin/license/topup-voucher', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({voucher: v})
+      }, {timeoutMs: 15000}).then(function(r){ return r.json(); }).then(function(res){
+        msg.style.display = 'block';
+        if (res && res.ok) {
+          msg.style.color = 'var(--green)';
+          msg.textContent = (window.T ? window.T('mb_redeem_ok') : 'OK')
+            .replace('{n}', (res.chars || 0).toLocaleString());
+          setTimeout(function(){ location.reload(); }, 1400);
+        } else {
+          msg.style.color = 'var(--red,#ef4444)';
+          msg.textContent = (res && res.detail) || (res && res.error) || 'error';
+          btn.disabled = false;
+        }
+      }).catch(function(){
+        msg.style.display = 'block';
+        msg.style.color = 'var(--red,#ef4444)';
+        msg.textContent = 'network error';
+        btn.disabled = false;
+      });
+    });
+  })();
+  </script>
+  {% endif %}
+
   {#- 功能矩阵 -#}
   <div class="card">
     <div class="card-h"><h3>{{ (i18n or {}).get('mb_matrix_title', '功能矩阵') }}</h3></div>

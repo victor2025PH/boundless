@@ -21,9 +21,11 @@ seats/channels/显式 features（feature_gate 规则 3：license.features 可越
 「人工接管 / 数据看板 / AI 自动成交」等 note 卖点当前**未**在 ``gate.feature_allowed`` 接线，
 故不臆造 features（留 override 口子，待其 gating 落地后再填），避免签发出不被强制的空 features。
 
-``MANUAL_SKUS``＝已知但**不可自动签发**的 SKU（如 lingox-charpack 字符包：加购型用量包，
-字符计量尚未在 license 强制——自动发 plan license 要么变相永久 basic、要么覆掉客户已有
-订阅档，都错；转人工经 ``manual_followup_orders`` 在守护日志点名，不静默）。
+``TOPUP_SKU_CHARS``＝加购型用量包 SKU → 字符量（P4c）：不发 plan license（会覆掉客户
+订阅档），改签 **topup 凭证**（``topup_voucher.issue_topup_voucher``，绑定 sub=contact），
+回填 order.code 走与授权码同一交付通道；客户在会员中心粘贴兑换。
+``MANUAL_SKUS``＝已知但**不可自动履约**的 SKU（当前为空；机制保留——新 SKU 未定映射前
+先入此表，转人工经 ``manual_followup_orders`` 在守护日志点名，不静默）。
 
 安全：本模块**只产 payload，绝不签名**。Ed25519 私钥永不入库/上服务器——签名在厂商机
 ``scripts/fulfill_chatx.py`` 经 ``license_manager.issue_license(payload, private_hex)`` 完成。
@@ -72,8 +74,12 @@ LINGOX_SKU_SPECS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-# 已知但不可自动签发（转人工；理由见模块 docstring）。
-MANUAL_SKUS = frozenset({"lingox-charpack"})
+# 加购型用量包 → 字符量（topup 凭证自动履约；量取自 products/tongyi/product.yaml：
+# lingox-charpack $59 / 150 万字符 one-time）。
+TOPUP_SKU_CHARS: Dict[str, int] = {"lingox-charpack": 1_500_000}
+
+# 已知但不可自动履约（转人工；理由见模块 docstring）。charpack 已迁 TOPUP（P4c）。
+MANUAL_SKUS = frozenset()
 
 # 全部可签发 SKU（chatx + lingox；MANUAL_SKUS 刻意不在内）
 _ALL_SKU_SPECS: Dict[str, Dict[str, Any]] = {**CHATX_SKU_SPECS, **LINGOX_SKU_SPECS}
@@ -180,6 +186,41 @@ def fulfillment_payload_for_order(order: Dict[str, Any]) -> Optional[Dict[str, A
     )
 
 
+def topup_voucher_args_for_order(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """把一笔 paid 加购包订单映射为 ``issue_topup_voucher`` 的关键字参数；不可映射 → None。
+
+    绑定用 ``customer=contact``（订单没有 lic_id；授权 payload.sub=contact，同一客户
+    名下可兑）。contact 缺失 → None（没有绑定面=谁捡到谁兑，宁转人工不裸发）。
+    """
+    sku = str((order or {}).get("sku_id") or "").strip()
+    chars = TOPUP_SKU_CHARS.get(sku)
+    contact = str((order or {}).get("contact") or "").strip()
+    oid = str((order or {}).get("id") or "").strip()
+    if not chars or not contact or not oid:
+        return None
+    return {"chars": int(chars), "ref": oid, "customer": contact, "note": sku}
+
+
+def select_topup_fulfillable(
+    orders: List[Dict[str, Any]],
+    done_ids: Optional[set] = None,
+) -> List[tuple]:
+    """从 paid 订单挑出可自动签**加量凭证**的单，返回 [(order, voucher_args), ...]。
+
+    与 ``select_fulfillable`` 同骨架（跳过无 id/已处理/已回填 code），幂等安全。
+    """
+    done = done_ids or set()
+    out: List[tuple] = []
+    for o in orders or []:
+        oid = str((o or {}).get("id") or "")
+        if not oid or oid in done or (o or {}).get("code"):
+            continue
+        args = topup_voucher_args_for_order(o)
+        if args is not None:
+            out.append((o, args))
+    return out
+
+
 def select_fulfillable(
     orders: List[Dict[str, Any]],
     done_ids: Optional[set] = None,
@@ -206,9 +247,9 @@ def manual_followup_orders(
 ) -> List[Dict[str, Any]]:
     """本引擎的 paid 订单里**需要人工跟进**的（不可自动签发）——守护日志点名用。
 
-    命中：本引擎订单（chatx/lingox）且未处理未回填，但 fulfillment_payload_for_order
-    映射不出 payload（仅人工 SKU / 老单缺 sku / 未知 sku）。lingox-charpack 入表后属
-    「已知必人工」，静默跳过会漏单，必须可见。
+    命中：本引擎订单（chatx/lingox）且未处理未回填，但**license 与 topup 凭证两条
+    自动通道都映射不出**（老单缺 sku / 未知 sku / charpack 缺 contact 没绑定面）。
+    静默跳过会漏单，必须可见。
     """
     done = done_ids or set()
     out: List[Dict[str, Any]] = []
@@ -218,6 +259,7 @@ def manual_followup_orders(
             continue
         if not is_chengjie_order(o):
             continue
-        if fulfillment_payload_for_order(o) is None:
+        if (fulfillment_payload_for_order(o) is None
+                and topup_voucher_args_for_order(o) is None):
             out.append(o)
     return out

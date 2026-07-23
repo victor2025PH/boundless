@@ -72,6 +72,18 @@ ZH = {
     "err.lic.topup_duplicate_ref": "该订单号已入账过（幂等拒绝重复）",
     "err.lic.topup_store_unavailable": "额度存储不可用，请查看服务日志",
     "err.lic.topup_internal": "加量包入账失败，请查看服务日志",
+    # 兑换加量凭证（P4c，POST /api/admin/license/topup-voucher + 会员页表单）
+    "mb_redeem_title": "兑换加量包",
+    "mb_redeem_desc": "购买字符加量包后会收到一段凭证，粘贴到下方即可入账（同一凭证只能兑换一次）。",
+    "mb_redeem_ph": "粘贴加量凭证…",
+    "mb_redeem_btn": "兑换",
+    "mb_redeem_ok": "兑换成功：+{n} 字符已入账，正在刷新…",
+    "err.lic.voucher_bad_signature": "凭证无效或已被篡改（验签失败）",
+    "err.lic.voucher_not_voucher": "这不是加量凭证——授权码请到 系统设置 → 授权 激活",
+    "err.lic.voucher_malformed": "凭证内容不完整（缺字符量/订单号/绑定），请联系服务商重发",
+    "err.lic.voucher_lic_mismatch": "该凭证绑定的是其他授权编号，无法在本实例兑换",
+    "err.lic.voucher_customer_mismatch": "该凭证绑定的是其他客户，无法在本授权下兑换",
+    "err.lic.voucher_unavailable": "运行环境缺少 cryptography，无法验签凭证",
 }
 
 EN = {
@@ -136,4 +148,15 @@ EN = {
     "err.lic.topup_duplicate_ref": "This order ref was already credited (idempotent reject)",
     "err.lic.topup_store_unavailable": "Quota store unavailable — check server logs",
     "err.lic.topup_internal": "Top-up failed — check server logs",
+    "mb_redeem_title": "Redeem top-up pack",
+    "mb_redeem_desc": "After buying a character pack you'll receive a voucher — paste it below to credit your quota (each voucher can be redeemed once).",
+    "mb_redeem_ph": "Paste top-up voucher…",
+    "mb_redeem_btn": "Redeem",
+    "mb_redeem_ok": "Redeemed: +{n} characters credited, refreshing…",
+    "err.lic.voucher_bad_signature": "Invalid or tampered voucher (signature check failed)",
+    "err.lic.voucher_not_voucher": "This is not a top-up voucher — license keys go to Settings → License",
+    "err.lic.voucher_malformed": "Voucher is incomplete (missing chars/ref/binding) — ask your vendor to reissue",
+    "err.lic.voucher_lic_mismatch": "This voucher is bound to a different license ID and cannot be redeemed here",
+    "err.lic.voucher_customer_mismatch": "This voucher is bound to a different customer and cannot be redeemed under this license",
+    "err.lic.voucher_unavailable": "cryptography is missing in this environment; cannot verify vouchers",
 }

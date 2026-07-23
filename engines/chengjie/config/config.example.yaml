@@ -2437,9 +2437,12 @@ licensing:
   # 会员中心「购买 / 续费」按钮的落地链接：商城页 / 定价页 / TG 客服均可。
   # 留空或不配 = 不渲染按钮（自营/内网部署零变化）。
   # shop_url: https://example.com/pricing
-  # 字符加量包（charpack）入账：POST /api/admin/license/topup
-  # {chars, ref(订单号,幂等), note}——加量并进 included 口径即时生效，
-  # 依赖已激活且带字符额度（included_chars>0）的授权。
+  # 字符加量包（charpack）两条入账通道（均要求已激活且带字符额度的授权）：
+  # ① 凭证自助（P4c 推荐）：厂商签发 topup 凭证（license_tool.py topup /
+  #    fulfill_chatx_watch 自动回填订单）→ 客户在 会员中心 → 兑换加量包 粘贴，
+  #    验签+绑定校验+按订单号幂等入账（POST /api/admin/license/topup-voucher）。
+  # ② 手工直充：POST /api/admin/license/topup {chars, ref(订单号,幂等), note}。
+  # 加量并进 included 口径即时生效；触顶/临近由 health_watchdog.quota_remind 主动提醒。
 
 # ── 计费价目表（C2-2）──────────────────────────────────────────
 # 对账单（GET /api/workspace/billing）据此把用量换算成应收金额。
@@ -2524,6 +2527,15 @@ health_watchdog:
   incident_retention_days: 30         # 已关闭运维事件保留天数（每日清理一次，防表膨胀；<=0 关闭清理）
   weekly_report_enabled: false        # H1 运营周报自动外发（默认关；开后每周经 ops_report 事件推送，需在「告警渠道」订阅 ops_report）
   weekly_interval_sec: 604800         # 周报推送周期（秒，默认 7 天）
+  # 授权字符额度水位提醒（P4c，默认开）：check_license_quota（含加量包合计口径）
+  # 用量 ≥ warn_pct →「即将用尽」；触顶（quota_exceeded）→「已用尽」升级提醒并指路
+  # 会员中心 → 兑换加量包；兑换/换新授权回落后补恢复通知。经 host_alert 出口
+  #（app.log + 算力机弹窗 + EventBus→Webhook，订阅别名 host_alert）。
+  # 无授权/不限量部署（included_chars=0）天然静默，零误报。
+  quota_remind:
+    enabled: true
+    warn_pct: 85                      # 临近提醒阈值（用量百分比）
+    interval_min: 360                 # 重提间隔（6h；恢复自动停）
   # 本地兜底「长期顶班」升级提醒（默认开）：云端主模型持续不可用、由 ai.fallback 本地
   # 模型代答超过 after_min 分钟 → 主机弹窗再提醒，之后每 interval_min 一条（恢复自动停）。
   fallback_duty_remind:

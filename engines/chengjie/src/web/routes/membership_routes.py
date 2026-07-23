@@ -133,6 +133,30 @@ def register_membership_routes(app, *, templates, page_auth, api_auth,
                                f"topup failed: {err}")
         return res
 
+    @app.post("/api/admin/license/topup-voucher")
+    async def api_license_topup_voucher(request: Request, payload: dict):
+        """兑换字符加量凭证（P4c 自动履约闭环的客户侧终点）。
+
+        body: {voucher:str}——厂商签发的 topup token（官网私信送达/人工交付均可）。
+        验签+绑定校验+入账全在 ``topup_voucher.redeem_topup_voucher``；本路由只做
+        鉴权与 detail 文案。错误码全集见该函数 docstring（i18n 键 err.lic.voucher_*
+        与 topup_* 两族，duplicate_ref/unlimited 等入账层错误复用 topup_* 族）。
+        """
+        from src.web.web_i18n import tr
+
+        api_auth(request)
+        from src.licensing.topup_voucher import redeem_topup_voucher
+
+        res = redeem_topup_voucher(str(payload.get("voucher") or ""))
+        if not res.get("ok"):
+            err = str(res.get("error") or "internal")
+            fam = ("voucher" if err in (
+                "bad_signature", "not_voucher", "malformed",
+                "lic_mismatch", "customer_mismatch", "unavailable") else "topup")
+            res["detail"] = tr(request, f"err.lic.{fam}_{err}",
+                               f"redeem failed: {err}")
+        return res
+
     @app.get("/membership", response_class=HTMLResponse)
     async def membership_page(request: Request, _=Depends(page_auth)):
         snap = build_membership_snapshot(_cfg(), user_store)

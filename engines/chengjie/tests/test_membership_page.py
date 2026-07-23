@@ -137,6 +137,53 @@ def test_topup_route_idempotent(auth_client, tmp_path, monkeypatch):
         qs.reset_license_quota_store()
 
 
+# ── P4c：加量凭证自助兑换 ────────────────────────────────────────────────────
+
+def test_topup_voucher_route_success_and_error_mapping(auth_client, monkeypatch):
+    """POST /api/admin/license/topup-voucher：成功透传；错误码映射两族 i18n detail。
+
+    验签/绑定/幂等的真密码学全链在 test_topup_voucher.py；这里守路由胶水
+    （voucher 族 vs topup 族的 detail 键选择 + 结果透传）。"""
+    import src.licensing.topup_voucher as tv
+
+    monkeypatch.setattr(tv, "redeem_topup_voucher", lambda v: {
+        "ok": True, "chars": 50000, "ref": "ORD-1",
+        "lic_id": "L", "topup_chars": 50000, "included": 150000})
+    d = auth_client.post("/api/admin/license/topup-voucher",
+                         json={"voucher": "x.y"}).json()
+    assert d["ok"] is True and d["chars"] == 50000 and "detail" not in d
+
+    for err, needle_zh in [
+        ("bad_signature", "验签失败"),          # voucher 族
+        ("customer_mismatch", "其他客户"),       # voucher 族
+        ("duplicate_ref", "已入账"),             # 入账层 → topup 族
+    ]:
+        monkeypatch.setattr(tv, "redeem_topup_voucher",
+                            lambda v, e=err: {"ok": False, "error": e})
+        d = auth_client.post("/api/admin/license/topup-voucher",
+                             json={"voucher": "x.y"}).json()
+        assert d["ok"] is False and d["error"] == err
+        assert d.get("detail") and "err.lic." not in d["detail"], d
+        assert (needle_zh in d["detail"]) or d["detail"].isascii()
+
+
+def test_membership_page_renders_redeem_form(auth_client, monkeypatch):
+    """master + 带额度授权 → 兑换表单渲染；不限量授权 → 表单隐藏（充了也无意义）。"""
+    import src.licensing.quota_store as qs
+
+    monkeypatch.setattr(qs, "check_license_quota", lambda **kw: {
+        "included": 1000, "included_base": 1000, "topup_chars": 0,
+        "used": 0, "remaining": 1000, "exceeded": False})
+    html = auth_client.get("/membership").text
+    assert 'id="mb-voucher-input"' in html and 'id="mb-voucher-btn"' in html
+
+    monkeypatch.setattr(qs, "check_license_quota", lambda **kw: {
+        "included": 0, "included_base": 0, "topup_chars": 0,
+        "used": 0, "remaining": None, "exceeded": False})
+    html2 = auth_client.get("/membership").text
+    assert 'id="mb-voucher-input"' not in html2
+
+
 def test_topup_route_guards(auth_client, tmp_path, monkeypatch):
     """未激活授权 → not_licensed（含 i18n detail）；不限量授权 → unlimited。"""
     from types import SimpleNamespace

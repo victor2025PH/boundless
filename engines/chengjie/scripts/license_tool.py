@@ -20,6 +20,15 @@
          --out config/license.key
 
    把生成的 license.key 交付给客户放到其 ``config/license.key`` 即可。
+
+3) 签发字符加量凭证（charpack；客户在 会员中心 → 兑换加量包 粘贴）::
+
+     python scripts/license_tool.py topup \\
+         --priv config/.vendor_license_private.pem \\
+         --chars 1500000 --ref ORD-2026-001 \\
+         --lic-id lingox-pro-123          # 或 --sub "客户标识"（至少给一个）
+
+   ``--ref`` 是兑换幂等键（订单号），同 ref 在同一实例只会入账一次。
 """
 
 import argparse
@@ -77,6 +86,28 @@ def _cmd_issue(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_topup(args: argparse.Namespace) -> int:
+    from src.licensing.topup_voucher import issue_topup_voucher
+    priv_hex = Path(args.priv).read_text(encoding="utf-8").strip()
+    token = issue_topup_voucher(
+        priv_hex,
+        chars=int(args.chars),
+        ref=args.ref,
+        lic_id=args.lic_id,
+        customer=args.sub,
+        note=args.note,
+    )
+    if args.out:
+        Path(args.out).write_text(token, encoding="utf-8")
+        print(f"加量凭证已写入：{args.out}")
+    else:
+        print(token)
+    bind = f"lic={args.lic_id}" if args.lic_id else f"sub={args.sub}"
+    print(f"绑定：{bind} · chars={args.chars} · ref={args.ref}"
+          "（客户：会员中心 → 兑换加量包 粘贴）")
+    return 0
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="厂商授权工具（离线签发）")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -101,6 +132,16 @@ def main() -> int:
     i.add_argument("--trial", action="store_true", help="标记为试用授权")
     i.add_argument("--out", default="", help="授权码输出路径（默认打印）")
     i.set_defaults(func=_cmd_issue)
+
+    t = sub.add_parser("topup", help="签发字符加量凭证（charpack）")
+    t.add_argument("--priv", required=True, help="厂商私钥文件路径")
+    t.add_argument("--chars", required=True, help="加量字符数（如 1500000）")
+    t.add_argument("--ref", required=True, help="订单号（兑换幂等键）")
+    t.add_argument("--lic-id", dest="lic_id", default="", help="精确绑定授权编号")
+    t.add_argument("--sub", default="", help="客户级绑定（与授权 sub/customer 一致）")
+    t.add_argument("--note", default="", help="备注（随入账记录展示）")
+    t.add_argument("--out", default="", help="凭证输出路径（默认打印）")
+    t.set_defaults(func=_cmd_topup)
 
     args = p.parse_args()
     return args.func(args)
