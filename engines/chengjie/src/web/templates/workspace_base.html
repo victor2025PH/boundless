@@ -7,7 +7,9 @@
 <title>{% block title %}{{ i18n.get('base.page_title', '坐席工作台') }}{% endblock %} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}</title>
 {% include "_brand_head.html" %}
 <link rel="stylesheet" href="/static/brand/brand-lockup.css">
+<link rel="stylesheet" href="/static/theme-tokens.css?v=20260723c">
 {% include "_i18n_bootstrap.html" %}
+{% include "_api_fetch.html" %}
 <script>
 /* 主题应用提升到 base：让「所有」工作台页面（概览/客户/草稿…）都支持日/夜双模式，
    而非仅收件箱。与 localStorage('cp_theme') 同源；收件箱页另有更完整脚本会再覆写（含组件 css）。
@@ -304,7 +306,7 @@
     .ws-nav a.ws-nav-ic{display:inline-flex;align-items:center;justify-content:center;min-width:34px;}
     .ws-more-btn{padding:6px 8px;min-width:34px;text-align:center;border-color:rgba(255,255,255,.2);}
     .ws-pill{padding:0 7px;gap:0;}
-    .ws-lang-pill span:not([data-ui-icon]){display:none;}
+    .ws-lang-pill span:not([data-ui-icon]),.ws-pwa-pill span:not([data-ui-icon]){display:none;}
     .ws-brand .brand-lockup__name{max-width:4.5em;overflow:hidden;text-overflow:ellipsis;}
   }
   /* 七期：手机宽度只保留最高优先级 SLA 药丸；L4/待跟进入口仍在概览与待办页
@@ -411,31 +413,50 @@
       }).catch(function(){});
     });
   }
-  // 安装：捕获 beforeinstallprompt → 浮一个「安装App」按钮（自包含，不改顶栏结构）
-  var deferred=null, btn=null;
-  function makeBtn(){
-    if(btn) return btn;
-    btn=document.createElement('button');
-    btn.id='ws-pwa-install';
-    btn.type='button';
-    btn.textContent=window.T('base.pwa.install');
-    btn.style.cssText='position:fixed;right:16px;bottom:16px;z-index:9999;'+
-      'background:#3b82f6;color:#fff;border:0;border-radius:10px;padding:9px 16px;'+
-      'font-size:13px;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.22);';
-    btn.addEventListener('click', function(){
-      if(!deferred) return;
-      deferred.prompt();
-      deferred.userChoice.finally(function(){ deferred=null; btn.remove(); btn=null; });
-    });
-    document.body.appendChild(btn);
-    return btn;
+  // 安装：捕获 beforeinstallprompt → 点亮顶栏常驻「安装App」入口（原右下角浮动按钮
+  // 会盖住侧栏内容，2026-07 重叠事故后移入顶栏）；首次出现弹一条轻提示指路。
+  var deferred=null;
+  function _pwaShowEntry(){
+    if(!deferred) return;
+    if(window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) return; // 已装（独立窗口）不提示
+    var b=document.getElementById('ws-pwa-install');
+    if(!b) return;
+    b.style.display='inline-flex';
+    if(!b.__pwaBound){
+      b.__pwaBound=1;
+      b.addEventListener('click', function(){
+        if(!deferred) return;
+        deferred.prompt();
+        deferred.userChoice.finally(function(){ deferred=null; b.style.display='none'; });
+      });
+    }
+    try{
+      if(!localStorage.getItem('ws_pwa_hint_v1')){
+        localStorage.setItem('ws_pwa_hint_v1','1');
+        _pwaHintToast();
+      }
+    }catch(_){ }
+  }
+  function _pwaHintToast(){
+    var tst=document.createElement('div');
+    tst.textContent=window.T('base.pwa.hint');
+    tst.style.cssText='position:fixed;top:52px;right:14px;z-index:9998;max-width:280px;'+
+      'background:var(--th-bg-surface,#1e293b);color:var(--th-ink-main,#e2e8f0);border:1px solid var(--th-bd-gray2,#334155);'+
+      'border-radius:10px;padding:9px 13px;font-size:12px;line-height:1.5;box-shadow:0 6px 20px rgba(0,0,0,.25);cursor:pointer;';
+    tst.addEventListener('click', function(){ tst.remove(); });
+    document.body.appendChild(tst);
+    setTimeout(function(){ try{ tst.remove(); }catch(_){ } }, 8000);
   }
   window.addEventListener('beforeinstallprompt', function(e){
     e.preventDefault(); deferred=e;
-    // 独立窗口（已安装）下不再提示
-    if(!(window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)) makeBtn();
+    // 事件可能早于 <body> 解析完成 → 两处都试：立即 + DOM 就绪后
+    _pwaShowEntry();
+    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', _pwaShowEntry);
   });
-  window.addEventListener('appinstalled', function(){ if(btn){ btn.remove(); btn=null; } });
+  window.addEventListener('appinstalled', function(){
+    deferred=null;
+    var b=document.getElementById('ws-pwa-install'); if(b) b.style.display='none';
+  });
 })();
 </script>
 </head>
@@ -477,11 +498,11 @@
     <span data-ui-icon="search" data-size="14" style="position:absolute;left:9px;opacity:.55;pointer-events:none;"></span>
     <input id="gs-input" placeholder="全局搜索…" data-i18n-placeholder="base.search_ph" style="
       width:180px;height:26px;border:1px solid rgba(255,255,255,.25);border-radius:13px;
-      background:rgba(255,255,255,.12);color:#fff;font-size:12px;padding:0 10px 0 28px;
+      background:rgba(255,255,255,.12);color:var(--th-ink-inverse,#fff);font-size:12px;padding:0 10px 0 28px;
       outline:none;transition:width .2s;" onfocus="this.style.width='240px'" onblur="if(!this.value)this.style.width='180px'"
       oninput="_gsOnInput(this.value)" onkeydown="_gsKey(event)">
-    <div id="gs-panel" style="display:none;position:absolute;top:32px;left:0;width:340px;background:#fff;
-      border:1px solid #e5e7eb;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);
+    <div id="gs-panel" style="display:none;position:absolute;top:32px;left:0;width:340px;background:var(--th-bg-surface,#fff);
+      border:1px solid var(--th-bd-gray2,#e5e7eb);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);
       z-index:9999;max-height:380px;overflow-y:auto;"></div>
   </div>
   <span class="ws-spacer"></span>
@@ -496,11 +517,19 @@
     <span data-ui-icon="bell" data-size="16"></span><span class="ws-notif-badge" id="ws-notif-badge"></span>
   </span>
   <span class="ws-review" id="ws-review" data-i18n-title="base.review_t" title="待裁决的合并候选" onclick="window.__wsReviews&&window.__wsReviews.open()"></span>
+  <!-- PWA 安装：顶栏常驻小入口（beforeinstallprompt 捕获后由 head 内脚本点亮；已安装/不支持则始终隐藏）。
+       原实现为右下角浮动按钮，会盖住业务助手侧栏内容 → 移入顶栏。 -->
+  <a class="ws-pwa-pill" id="ws-pwa-install" data-i18n-title="base.pwa.install_t" title="安装为桌面应用（独立窗口 + 开机可启）"
+     style="display:none;align-items:center;gap:4px;height:26px;padding:0 10px;border-radius:13px;
+            border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.14);color:var(--th-ink-inverse,#fff);
+            font-size:12px;cursor:pointer;white-space:nowrap;user-select:none;margin-right:2px;">
+    <span data-ui-icon="download" data-size="13"></span><span class="ws-nav-lbl" data-i18n="base.pwa.install">安装App</span>
+  </a>
   <!-- 语言切换：顶栏常驻可见按钮（此前仅藏于用户菜单，不易发现）。点击整页切 中⇄英（/set_lang），全站含 copilot 组件随之重渲。 -->
   <a class="ws-lang-pill" id="ws-lang-pill" onclick="window.wsToggleLang&&window.wsToggleLang()"
      data-i18n-title="base.um.lang_t" title="切换语言 / Switch language"
      style="display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 10px;border-radius:13px;
-            border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.14);color:#fff;
+            border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.14);color:var(--th-ink-inverse,#fff);
             font-size:12px;cursor:pointer;white-space:nowrap;user-select:none;margin-right:2px;">
     <span data-ui-icon="globe" data-size="13"></span><span data-i18n="lang_toggle">English</span>
   </a>
@@ -539,20 +568,21 @@
   <span style="flex:0 0 auto;">🔑</span>
   <span style="flex:1 1 auto;line-height:1.5;" data-i18n="ws.aiguide.text">{{ i18n.get('ws.aiguide.text', 'AI 大模型还没配置：填好 API Key 后，翻译和智能回复才能用。') }}</span>
   <a href="/workspace/setup#ai" data-i18n="ws.aiguide.cta" style="flex:0 0 auto;padding:5px 14px;border-radius:8px;
-     background:#fff;color:#9a3412;font-weight:600;text-decoration:none;">{{ i18n.get('ws.aiguide.cta', '去配置') }}</a>
+     background:var(--th-bg-surface,#fff);color:#9a3412;font-weight:600;text-decoration:none;">{{ i18n.get('ws.aiguide.cta', '去配置') }}</a>
   <span onclick="_wsAiGuideDismiss()" data-i18n="ws.aiguide.dismiss" style="flex:0 0 auto;cursor:pointer;opacity:.75;
      padding:5px 8px;text-decoration:underline;">{{ i18n.get('ws.aiguide.dismiss', '先不管') }}</span>
 </div>
 <script>
 function _wsAiGuideDismiss(){
   try{ localStorage.setItem('ws_aiguide_dismissed','1'); }catch(_){ }
-  var b=document.getElementById('ws-aiguide'); if(b) b.style.display='none';
+  window.wsBanner.set('ws-aiguide', false);
 }
 (function(){
   var dismissed=false;
   try{ dismissed=localStorage.getItem('ws_aiguide_dismissed')==='1'; }catch(_){ }
   var b=document.getElementById('ws-aiguide');
-  if(b && !dismissed) b.style.display='flex';
+  /* 经仲裁器声明显示意愿：有更高优先级横幅（通道离线/连接中断）时自动让位，恢复后回显 */
+  if(b && !dismissed) window.wsBanner.set('ws-aiguide', true);
 })();
 </script>
 {% endif %}
@@ -560,11 +590,33 @@ function _wsAiGuideDismiss(){
      给坐席一条温和预期管理（回复稍慢），恢复自动消失。60s 轮询零开销内存快照；
      桌面壳包的也是本工作台 → 桌面端同享，无需壳侧代码。 -->
 <div id="ws-aidegrade" style="display:none;align-items:center;gap:10px;padding:6px 14px;
-     background:linear-gradient(90deg,#78350f,#92400e);color:#fef3c7;font-size:12.5px;">
+     background:linear-gradient(90deg,#78350f,var(--th-bg-amber8,#92400e));color:#fef3c7;font-size:12.5px;">
   <span style="flex:0 0 auto;">☁️</span>
   <span style="flex:1 1 auto;line-height:1.5;">
     <span data-i18n="ws.aidegrade.text">{{ i18n.get('ws.aidegrade.text', '云端 AI 降级中，回复可能稍慢；系统已自动切换备用通道，无需操作。') }}</span>
     <span id="ws-aidegrade-mode" style="opacity:.85"></span>
+  </span>
+</div>
+<!-- 平台通道离线警示横幅（2026-07-22）：外部 worker 会话（WhatsApp/Messenger…）掉线/
+     过期/放弃自愈时给坐席一条红色警示——「客户不说话」可能是通道假死而非真没消息。
+     数据随 ws-aidegrade 同一 60s 轮询（ai-runtime-status.channels），恢复自动隐藏。
+     文案全部由 JS 经 window.T/Tf 填充（platform/account 为英文原文，无需翻译）。 -->
+<div id="ws-chandown" style="display:none;align-items:center;gap:10px;padding:6px 14px;
+     background:linear-gradient(90deg,var(--th-bg-red9,#7f1d1d),var(--th-bg-red8,#991b1b));color:var(--th-ink-red2,#fecaca);font-size:12.5px;">
+  <span style="flex:0 0 auto;">📵</span>
+  <span style="flex:1 1 auto;line-height:1.5;">
+    <span id="ws-chandown-text"></span>
+    <span id="ws-chandown-detail" style="opacity:.85"></span>
+  </span>
+</div>
+<!-- 实例刚重启冷却条（Phase3）：连环 restart 是「加载超时」主因；冷却窗内温和预期管理，
+     勿催坐席狂刷。数据随同一 60s 轮询（ai-runtime-status.instance_restart）。 -->
+<div id="ws-restartcool" style="display:none;align-items:center;gap:10px;padding:6px 14px;
+     background:linear-gradient(90deg,#1e3a5f,var(--th-bg-blue8,#1e40af));color:#dbeafe;font-size:12.5px;">
+  <span style="flex:0 0 auto;">🔄</span>
+  <span style="flex:1 1 auto;line-height:1.5;">
+    <span id="ws-restartcool-text"></span>
+    <span id="ws-restartcool-detail" style="opacity:.85"></span>
   </span>
 </div>
 <script>
@@ -575,29 +627,111 @@ function _wsAiGuideDismiss(){
     if(mode === 'local') return window.T('ws.aidegrade.mode_local');
     return '';
   }
+  function _acctShort(s){
+    s = String(s || '');
+    return s.length > 12 ? (s.slice(0, 10) + '…') : s;
+  }
+  function _renderChanDown(ch){
+    var bar = document.getElementById('ws-chandown');
+    if(!bar) return;
+    var list = (ch && ch.unhealthy) || [];
+    if(!list.length){ window.wsBanner.set('ws-chandown', false); return; }
+    var first = list[0] || {};
+    var t = document.getElementById('ws-chandown-text');
+    if(t) t.textContent = window.Tf('ws.chandown.text',
+      {plat: String(first.platform || '?'), n: String(first.down_min != null ? first.down_min : '?')});
+    var det = document.getElementById('ws-chandown-detail');
+    if(det){
+      var names = list.map(function(s){
+        return String(s.platform || '?') + ':' + _acctShort(s.account_id);
+      }).join(' · ');
+      det.textContent = ' ' + window.Tf('ws.chandown.hint',
+        {count: String(ch.count || list.length), list: names});
+    }
+    window.wsBanner.set('ws-chandown', true);
+  }
+  // Phase4: shared soft-cool flag for inbox loadThread adaptive timeout/retry.
+  // until = epoch ms; inbox also OR's a local sticky window after /login probe fail.
+  window.__wsRestartCool = {active: false, leftSec: 0, until: 0, at: 0, flapping: false, quiet: false};
+  var _pollTimer = null;
+  function _setRestartCoolFlag(ir){
+    var active = !!(ir && ir.cooldown_active);
+    var flap = !!(ir && ir.flapping);
+    var quiet = !!(ir && (ir.quiet_poll || active || flap));
+    var left = active ? Math.max(0, parseInt(ir.cooldown_left_sec, 10) || 0) : 0;
+    var prevQuiet = !!(window.__wsRestartCool && window.__wsRestartCool.quiet);
+    window.__wsRestartCool = {
+      active: active,
+      leftSec: left,
+      until: active ? (Date.now() + left * 1000) : 0,
+      at: Date.now(),
+      flapping: flap,
+      quiet: quiet,
+      http_phase: ir && ir.http_phase ? ir.http_phase : null
+    };
+    // Phase7: notify inbox to retune adaptive poll when quiet window flips
+    if(prevQuiet !== quiet){
+      try{ window.dispatchEvent(new CustomEvent('ws-restart-cool-change', {detail: window.__wsRestartCool})); }catch(_e){}
+    }
+  }
+  function _renderRestartCool(ir){
+    var bar = document.getElementById('ws-restartcool');
+    if(!bar) return;
+    _setRestartCoolFlag(ir);
+    if(!(ir && ir.cooldown_active)){ window.wsBanner.set('ws-restartcool', false); return; }
+    var mins = ir.cooldown_left_min != null ? ir.cooldown_left_min : 1;
+    if(mins < 1) mins = 1;
+    var t = document.getElementById('ws-restartcool-text');
+    if(t) t.textContent = window.Tf('ws.restartcool.text', {n: String(mins)});
+    var det = document.getElementById('ws-restartcool-detail');
+    if(det) det.textContent = ' ' + window.T('ws.restartcool.hint');
+    window.wsBanner.set('ws-restartcool', true);
+  }
+  function _scheduleAiDegradePoll(ms){
+    if(_pollTimer){ clearInterval(_pollTimer); _pollTimer = null; }
+    _pollTimer = setInterval(_wsAiDegradePoll, ms);
+  }
   async function _wsAiDegradePoll(){
     var bar = document.getElementById('ws-aidegrade');
-    if(!bar) return;
+    var chan = document.getElementById('ws-chandown');
+    var cool = document.getElementById('ws-restartcool');
+    if(!bar && !chan && !cool) return;
     try{
-      var r = await fetch('/api/workspace/ai-runtime-status', {credentials:'same-origin'});
+      var r = await window.apiFetch('/api/workspace/ai-runtime-status',
+        {credentials:'same-origin'}, {timeoutMs: 10000});
       if(!r.ok) throw new Error('http ' + r.status);
       var d = await r.json();
       failStreak = 0;
-      if(d && d.degraded){
-        var m = document.getElementById('ws-aidegrade-mode');
-        if(m) m.textContent = _modeText(d.mode || '');
-        bar.style.display = 'flex';
-      }else{
-        bar.style.display = 'none';
+      if(bar){
+        if(d && d.degraded){
+          var m = document.getElementById('ws-aidegrade-mode');
+          if(m) m.textContent = _modeText(d.mode || '');
+          window.wsBanner.set('ws-aidegrade', true);
+        }else{
+          window.wsBanner.set('ws-aidegrade', false);
+        }
       }
+      _renderChanDown(d && d.channels);
+      _renderRestartCool(d && d.instance_restart);
+      // Faster refresh while cooling so banner/timeout adaptive clear sooner
+      _scheduleAiDegradePoll((d && d.instance_restart && d.instance_restart.cooldown_active) ? 30000 : 60000);
     }catch(_){
-      // 接口本身不可达≠AI 降级（可能整站重启）；连续失败只收起条子，不误报
+      // 接口本身不可达≠AI 降级/通道离线（可能整站重启）；连续失败只收起条子，不误报
+      // Phase4: sticky local soft-cool so inbox lengthens abort even before banner API returns
       failStreak += 1;
-      if(failStreak >= 2) bar.style.display = 'none';
+      if(failStreak >= 2){
+        window.wsBanner.set('ws-aidegrade', false);
+        window.wsBanner.set('ws-chandown', false);
+        window.wsBanner.set('ws-restartcool', false);
+        try{
+          window.__wsRestartCoolLocal = Date.now() + 180000;
+        }catch(_e){}
+        _scheduleAiDegradePoll(30000);
+      }
     }
   }
   _wsAiDegradePoll();
-  setInterval(_wsAiDegradePoll, 60000);
+  _scheduleAiDegradePoll(60000);
 })();
 </script>
 <script>
@@ -618,16 +752,16 @@ document.addEventListener('click',function(e){
   function _pillIc(name){ return '<span class="ws-pill-ic">'+_ui(name,12)+'</span>'; }
 
   function setPresence(st){
-    fetch('/api/workspace/presence',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({status:st,display_name:window.__wsAgent.name})}).catch(function(){});
+    apiFetch('/api/workspace/presence',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({status:st,display_name:window.__wsAgent.name})}, {timeoutMs: 60000}).catch(function(){});
   }
   function heartbeat(){
     var sel=document.getElementById('ws-presence');
-    fetch('/api/workspace/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({status:sel?sel.value:'online',display_name:window.__wsAgent.name})}).catch(function(){});
+    apiFetch('/api/workspace/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({status:sel?sel.value:'online',display_name:window.__wsAgent.name})}, {timeoutMs: 60000}).catch(function(){});
   }
   function loadFunnel(){
-    fetch('/api/workspace/metrics/web-funnel').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/metrics/web-funnel').then(function(r){return r.json();}).then(function(d){
       var m=(d&&d.metrics)||{};
       var el=document.getElementById('ws-funnel');
       if(!el) return;
@@ -636,7 +770,7 @@ document.addEventListener('click',function(e){
     }).catch(function(){});
   }
   function loadAgents(){
-    fetch('/api/workspace/presence').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/presence').then(function(r){return r.json();}).then(function(d){
       var el=document.getElementById('ws-agents-online');
       if(!el) return;
       var agents=(d&&d.agents)||[];
@@ -682,7 +816,7 @@ document.addEventListener('click',function(e){
   var list=document.getElementById('ws-review-list');
   function ov(o){ if(!o) return '—'; return esc(o.primary_name||window.T('base.review.no_name'))+' · '+((o.channels||[]).map(esc).join('/')||window.T('base.review.no_channel')); }
   function refresh(){
-    fetch('/api/workspace/merge-reviews').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/merge-reviews').then(function(r){return r.json();}).then(function(d){
       if(!d||!d.ok){ if(badge) badge.style.display='none'; return; }
       var n=(d.reviews||[]).length;
       if(badge){ badge.style.display=n?'inline-block':'none'; badge.textContent=window.Tf('base.review.badge',{n:n}); }
@@ -692,7 +826,7 @@ document.addEventListener('click',function(e){
   }
   function render(){
     var rv=window.__wsReviewData||[];
-    if(!rv.length){ list.innerHTML='<div style="color:#6b7280;font-size:13px;">'+window.T('base.review.empty')+'</div>'; return; }
+    if(!rv.length){ list.innerHTML='<div style="color:var(--th-ink-gray5,#6b7280);font-size:13px;">'+window.T('base.review.empty')+'</div>'; return; }
     list.innerHTML=rv.map(function(r){
       return '<div class="ws-rv-item">'
         +'<div>'+window.Tf('base.review.row_meta',{conf:(Number(r.confidence||0).toFixed(2)),ch:esc(r.candidate_channel||'')})+'</div>'
@@ -708,8 +842,8 @@ document.addEventListener('click',function(e){
     open:function(){ modal.style.display='flex'; render(); },
     close:function(){ modal.style.display='none'; },
     resolve:function(id,action){
-      fetch('/api/workspace/merge-reviews/'+encodeURIComponent(id),{method:'POST',
-        headers:{'Content-Type':'application/json'},body:JSON.stringify({action:action})})
+      apiFetch('/api/workspace/merge-reviews/'+encodeURIComponent(id),{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({action:action})}, {timeoutMs: 60000})
         .then(function(r){return r.json();}).then(function(){ refresh(); }).catch(function(){});
     },
     refresh:refresh
@@ -720,7 +854,7 @@ document.addEventListener('click',function(e){
   // 到期待跟进徽标（优先显示「我的」到期任务，括号内为全部）
   var fuBadge=document.getElementById('ws-followup');
   function refreshFu(){
-    fetch('/api/workspace/follow-ups?scope=due&limit=1').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/follow-ups?scope=due&limit=1').then(function(r){return r.json();}).then(function(d){
       if(!d||!d.ok){ if(fuBadge) fuBadge.style.display='none'; return; }
       var mine=d.due_tasks_mine||0, all=(d.due_tasks!=null?d.due_tasks:(d.due_follow_ups||0));
       var show=mine||all;
@@ -766,7 +900,7 @@ document.addEventListener('click',function(e){
     } else { slaBadge.title=window.Tf('base.sla.tip_brk',{n:brk}); }
   }
   function refreshSla(){
-    fetch('/api/workspace/sla-alerts').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/sla-alerts').then(function(r){return r.json();}).then(function(d){
       if(!d||!d.ok){ if(slaBadge) slaBadge.style.display='none'; return; }
       _slaItems=d.items||[];
       _slaState={ quiet:!!d.quiet, crit:d.critical||0, brk:d.breaching||0 };
@@ -858,7 +992,7 @@ document.addEventListener('click',function(e){
         message:window.Tf('base.drill.ignore_all_q',{n:ids.length})+'\n'+window.T('base.drill.ignore_all_note')}).then(function(ok){
         if(!ok) return;
         ab.disabled=true; ab.textContent=window.T('base.common.processing');
-        fetch('/api/workspace/batch/archive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation_ids:ids,archived:true})})
+        apiFetch('/api/workspace/batch/archive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation_ids:ids,archived:true})}, {timeoutMs: 60000})
           .then(function(r){return r.json();}).then(function(d){
             if(d&&d.ok){
               CRMW.toast(window.Tf('base.drill.ignored_n',{n:(d.updated||ids.length)}),'#16a34a','folder');
@@ -881,7 +1015,7 @@ document.addEventListener('click',function(e){
       if(act==='open'){ try{ sessionStorage.setItem('ws_focus_conv',cid); }catch(_){ } if(typeof window.__wsFocusConv==='function'){ _toggleSlaPanel(false); window.__wsFocusConv(cid); } else { location.href='/workspace'; } return; }
       if(act==='claim'){
         btn.disabled=true; btn.textContent='…';
-        fetch('/api/workspace/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation_id:cid})})
+        apiFetch('/api/workspace/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation_id:cid})}, {timeoutMs: 60000})
           .then(function(r){return r.json();}).then(function(d){
             if(d&&d.ok){ CRMW.toast(window.T('base.drill.claimed'),'#16a34a','check'); refreshSla(); refreshEsc(); }
             else { CRMW.toast(window.Tf('base.drill.claim_fail',{err:((d&&(d.error||d.reason))||window.T('base.drill.claim_taken'))}),'#dc2626'); }
@@ -891,7 +1025,7 @@ document.addEventListener('click',function(e){
       }
       if(act==='ignore'){
         btn.disabled=true; btn.textContent='…';
-        fetch('/api/workspace/batch/archive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation_ids:[cid],archived:true})})
+        apiFetch('/api/workspace/batch/archive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation_ids:[cid],archived:true})}, {timeoutMs: 60000})
           .then(function(r){return r.json();}).then(function(d){
             if(d&&d.ok&&d.updated){ CRMW.toast(window.T('base.drill.ignored_one'),'#64748b','folder'); if(row) row.remove();
               for(var i=(_slaItems||[]).length-1;i>=0;i--){ if(_slaItems[i].conversation_id===cid) _slaItems.splice(i,1); }
@@ -913,7 +1047,7 @@ document.addEventListener('click',function(e){
   var escBadge=document.getElementById('ws-esc');
   var _escItems=[];
   function refreshEsc(){
-    fetch('/api/workspace/escalations').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/escalations').then(function(r){return r.json();}).then(function(d){
       if(!d||!d.ok){ _escItems=[]; _renderSlaPill(); return; }
       _escItems=d.items||[];
       if(escBadge) escBadge.style.display='none';  // 已并入「严重超时」药丸
@@ -984,7 +1118,7 @@ document.addEventListener('click',function(e){
       ov.querySelector('#wp-npopup').value = _np.popup||'auto';
       ov.querySelector('#wp-ngroups').checked = !!_np.groups;
     }
-    fetch('/api/workspace/prefs').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/prefs').then(function(r){return r.json();}).then(function(d){
       if(!d||!d.ok) return; var p=d.prefs||{};
       document.getElementById('wp-warn').value = p.warn_sec? Math.round(p.warn_sec/60):'';
       document.getElementById('wp-crit').value = p.crit_sec? Math.round(p.crit_sec/60):'';
@@ -1013,7 +1147,7 @@ document.addEventListener('click',function(e){
       dnd_start: _toMin(document.getElementById('wp-dnds').value),
       dnd_end: _toMin(document.getElementById('wp-dnde').value),
       languages: _lgEl? _lgEl.value : '' };
-    fetch('/api/workspace/prefs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    apiFetch('/api/workspace/prefs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}, {timeoutMs: 60000})
       .then(function(r){return r.json();}).then(function(d){
         if(d&&d.ok){ document.getElementById('ws-prefs-modal').style.display='none'; CRMW.toast(window.T('base.prefs.saved'),'#16a34a'); refreshSla(); }
         else { CRMW.toast(window.T('base.common.save_fail'),'#dc2626'); }
@@ -1029,7 +1163,7 @@ document.addEventListener('click',function(e){
 
   // 当前坐席身份（Phase 6-24：定向升级 toast 需知道 MY_AGENT_ID）
   var MY_AGENT_ID='', MY_IS_SUP=false;
-  fetch('/api/workspace/me').then(function(r){return r.json();}).then(function(m){
+  apiFetch('/api/workspace/me').then(function(r){return r.json();}).then(function(m){
     if(m&&m.ok){ MY_AGENT_ID=String(m.agent_id||''); MY_IS_SUP=!!(m.is_supervisor); }
     // C1-2：演示模式横幅（存在 demo 数据时）
     if(m && m.demo_mode){
@@ -1085,7 +1219,7 @@ document.addEventListener('click',function(e){
   var _l4Prev=0, _slaPrev=0, _l4Inited=false;  // _l4Inited：首次加载只建基线、不弹，避免开页即把历史积压一次性弹出
   function refreshL4(){
     if(!MY_IS_SUP) return;
-    fetch('/api/drafts/risk-summary').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/drafts/risk-summary').then(function(r){return r.json();}).then(function(d){
       if(!d||!d.ok) return;
       var l4=(d.by_level&&d.by_level['L4'])||0;
       var l3=(d.by_level&&d.by_level['L3'])||0;
@@ -1534,7 +1668,7 @@ document.addEventListener('click',function(e){
     _updateBadge();
     _renderNotif();
     // P8：水位线上云（服务端按 MAX 单调前进）；以服务端回值为准对齐多设备
-    fetch('/api/workspace/notifications/read',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+    apiFetch('/api/workspace/notifications/read',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000})
       .then(function(r){return r.json();}).then(function(d){
         if(d&&d.read_at && d.read_at>_readAt){ _readAt=d.read_at; try{ localStorage.setItem('ws_notif_read_at',String(_readAt)); }catch(_){ } _updateBadge(); }
       }).catch(function(){});
@@ -1570,7 +1704,7 @@ document.addEventListener('click',function(e){
 
   // 拉取历史通知（SSE 断线重连后同步）
   function _loadNotifications(){
-    fetch('/api/workspace/notifications?limit=50').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/notifications?limit=50').then(function(r){return r.json();}).then(function(d){
       if(!d||!d.ok) return;
       // P8：以服务端「已读水位线」对齐本地（跨设备恢复「全部已读」状态，单调前进）
       if(d.read_at && d.read_at>_readAt){ _readAt=d.read_at; try{ localStorage.setItem('ws_notif_read_at',String(_readAt)); }catch(_){ } }
@@ -1763,30 +1897,30 @@ window.__wsNotify = (function(){
     _panel=document.getElementById('gs-panel');
     if(!_panel) return;
     _panel.style.display='block';
-    _panel.innerHTML='<div style="padding:10px;font-size:12px;color:#94a3b8;">'+window.T('base.gs.searching')+'</div>';
-    fetch('/api/workspace/search?'+new URLSearchParams({q:q,limit:'15'}))
+    _panel.innerHTML='<div style="padding:10px;font-size:12px;color:var(--th-ink-slate4,#94a3b8);">'+window.T('base.gs.searching')+'</div>';
+    apiFetch('/api/workspace/search?'+new URLSearchParams({q:q,limit:'15'}))
       .then(function(r){return r.json();}).then(function(d){
         if(!d.ok||!d.results||!d.results.length){
-          _panel.innerHTML='<div style="padding:12px;font-size:12px;color:#94a3b8;text-align:center;">'+window.T('base.gs.no_results')+'</div>';
+          _panel.innerHTML='<div style="padding:12px;font-size:12px;color:var(--th-ink-slate4,#94a3b8);text-align:center;">'+window.T('base.gs.no_results')+'</div>';
           return;
         }
         _panel.innerHTML=d.results.map(function(r){
           var icon=_TYPE_ICON[r.type]||'•';
           var color=_TYPE_COLOR[r.type]||'#64748b';
-          return '<a href="'+esc(r.url||'#')+'" style="display:flex;gap:8px;align-items:flex-start;padding:8px 12px;text-decoration:none;border-bottom:1px solid #f1f5f9;" '
+          return '<a href="'+esc(r.url||'#')+'" style="display:flex;gap:8px;align-items:flex-start;padding:8px 12px;text-decoration:none;border-bottom:1px solid var(--th-bd-slate1,#f1f5f9);" '
             +'onmouseover="this.style.background=\'#f8fafc\'" onmouseout="this.style.background=\'\'">'
             +'<span style="font-size:15px;flex:0 0 22px;margin-top:1px;">'+icon+'</span>'
             +'<div style="flex:1;min-width:0;">'
-              +'<div style="font-size:12px;font-weight:600;color:#1e293b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(r.title||'')+'</div>'
-              +'<div style="font-size:11px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(r.preview||'')+'</div>'
+              +'<div style="font-size:12px;font-weight:600;color:var(--th-ink-slate8,#1e293b);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(r.title||'')+'</div>'
+              +'<div style="font-size:11px;color:var(--th-ink-slate5,#64748b);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(r.preview||'')+'</div>'
             +'</div>'
-            +'<div style="font-size:11px;color:#94a3b8;flex:0 0 auto;margin-top:3px;">'+fmtTs(r.ts)+'</div>'
+            +'<div style="font-size:11px;color:var(--th-ink-slate4,#94a3b8);flex:0 0 auto;margin-top:3px;">'+fmtTs(r.ts)+'</div>'
             +'<div style="font-size:10px;background:'+color+'22;color:'+color+';border-radius:4px;padding:1px 5px;flex:0 0 auto;">'+esc(r.type)+'</div>'
             +'</a>';
         }).join('')
-        +'<div style="padding:6px;text-align:center;font-size:11px;color:#94a3b8;">'+window.Tf('base.gs.total',{n:d.total})+'</div>';
+        +'<div style="padding:6px;text-align:center;font-size:11px;color:var(--th-ink-slate4,#94a3b8);">'+window.Tf('base.gs.total',{n:d.total})+'</div>';
       }).catch(function(){
-        if(_panel)_panel.innerHTML='<div style="padding:10px;font-size:12px;color:#ef4444;">'+window.T('base.gs.search_fail')+'</div>';
+        if(_panel)_panel.innerHTML='<div style="padding:10px;font-size:12px;color:var(--th-ink-red5,#ef4444);">'+window.T('base.gs.search_fail')+'</div>';
       });
   }
   // 点击外部关闭

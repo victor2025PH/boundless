@@ -80,8 +80,11 @@ ok("badgeMeta chain run", sc.badgeMetaFromLoaded(
 // ── applyTabBadge (DOM) ──────────────────────────────────────────────────────
 const el = { classList: { contains: () => true }, className: "", textContent: "" };
 sc.applyTabBadge(el, "abcdefghijklmnopqrs", "warn");
-ok("applyTabBadge trunc", el.textContent.endsWith("…"));
+ok("applyTabBadge dot glyph", el.textContent === "●");
+ok("applyTabBadge full text→title", el.title === "abcdefghijklmnopqrs");
 ok("applyTabBadge warn class", el.className.indexOf("warn") >= 0);
+sc.applyTabBadge(el, "", "");
+ok("applyTabBadge clears dot+title", el.textContent === "" && el.title === "");
 
 // ── uiIcon ───────────────────────────────────────────────────────────────────
 ok("uiIcon known→svg", sc.uiIcon("spark").indexOf("<svg") === 0);

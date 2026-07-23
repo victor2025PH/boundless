@@ -137,7 +137,8 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
 }
 .cp-tab:hover { color: #111827; }
 .cp-tab.active { color: #3b82f6; border-bottom-color: #3b82f6; font-weight: 600; }
-.cp-tab-badge { font-size: 9px; font-weight: 700; padding: 0 5px; border-radius: 999px; background: #ef4444; color: #fff; line-height: 1.55; margin-left: 3px; vertical-align: middle; }
+/* 注意力圆点角标（文案挂 title）：文本徽章会撑爆 tab 压住相邻按钮，故只点不字 */
+.cp-tab-badge { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #ef4444; font-size: 0; line-height: 0; padding: 0; margin-left: 4px; vertical-align: middle; overflow: hidden; }
 .cp-tab-badge:empty { display: none; }
 .cp-tab-badge.warn { background: #f59e0b; }
 .cp-tab-badge.accent { background: #6366f1; }

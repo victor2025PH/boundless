@@ -195,11 +195,13 @@
     });
   }
 
+  /** tab 徽章＝注意力信号：非空文案渲染为圆点角标（完整文案挂 title 悬停可读）。
+      不再内联长文本——文本徽章会把 1/3 宽的 tab 撑爆、压住相邻按钮（2026-07 重叠事故）。 */
   function applyTabBadge(el, text, tone) {
     if (!el) return;
-    var t = text || "";
-    if (t.length > 14) t = t.slice(0, 14) + "…";
-    el.textContent = t;
+    var t = String(text || "");
+    el.textContent = t ? "●" : "";
+    el.title = t;
     el.className = (el.classList.contains("ws-cp-tab-badge") ? "ws-cp-tab-badge" : "cp-tab-badge") +
       (tone === "warn" ? " warn" : tone === "accent" ? " accent" : "");
   }
