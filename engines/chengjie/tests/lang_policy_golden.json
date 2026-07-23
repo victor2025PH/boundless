@@ -1,0 +1,419 @@
+{
+  "version": 1,
+  "generated_by": "engines/chengjie/tools/gen_lang_policy_golden.py",
+  "note": "行为金标准：chengjie 与 tgkz2026 两份 lang_policy 拷贝必须对本矩阵给出一致结果。修改任何一侧行为时，先改规范版并重新生成本文件，再同步移植版。",
+  "parse_request": [
+    {
+      "text": "我们用日语聊吧",
+      "expect": "ja"
+    },
+    {
+      "text": "说日语",
+      "expect": "ja"
+    },
+    {
+      "text": "跟我说日语吧",
+      "expect": "ja"
+    },
+    {
+      "text": "请用日文回复",
+      "expect": "ja"
+    },
+    {
+      "text": "换成英文",
+      "expect": "en"
+    },
+    {
+      "text": "换回中文吧",
+      "expect": "zh"
+    },
+    {
+      "text": "改用韩语",
+      "expect": "ko"
+    },
+    {
+      "text": "切换到西班牙语",
+      "expect": "es"
+    },
+    {
+      "text": "日文回复我",
+      "expect": "ja"
+    },
+    {
+      "text": "用英语交流",
+      "expect": "en"
+    },
+    {
+      "text": "算了还是中文吧",
+      "expect": "zh"
+    },
+    {
+      "text": "能不能说日语",
+      "expect": "ja"
+    },
+    {
+      "text": "please speak japanese",
+      "expect": "ja"
+    },
+    {
+      "text": "can you speak Japanese?",
+      "expect": "ja"
+    },
+    {
+      "text": "speak in english please",
+      "expect": "en"
+    },
+    {
+      "text": "reply in chinese",
+      "expect": "zh"
+    },
+    {
+      "text": "talk to me in korean",
+      "expect": "ko"
+    },
+    {
+      "text": "switch to english",
+      "expect": "en"
+    },
+    {
+      "text": "in japanese please",
+      "expect": "ja"
+    },
+    {
+      "text": "日本語で話してください",
+      "expect": "ja"
+    },
+    {
+      "text": "日本語でお願いします",
+      "expect": "ja"
+    },
+    {
+      "text": "英語で話して",
+      "expect": "en"
+    },
+    {
+      "text": "中国語にして",
+      "expect": "zh"
+    },
+    {
+      "text": "한국어로 말해줘",
+      "expect": "ko"
+    },
+    {
+      "text": "영어로 대답해 주세요",
+      "expect": "en"
+    },
+    {
+      "text": "sorry I can't understand chinese",
+      "expect": "en"
+    },
+    {
+      "text": "别说日语了",
+      "expect": ""
+    },
+    {
+      "text": "不要用英文",
+      "expect": ""
+    },
+    {
+      "text": "don't speak english to me",
+      "expect": ""
+    },
+    {
+      "text": "你会说日语吗？",
+      "expect": ""
+    },
+    {
+      "text": "我会说日语",
+      "expect": ""
+    },
+    {
+      "text": "日本語が難しいですね",
+      "expect": ""
+    },
+    {
+      "text": "今天天气不错",
+      "expect": ""
+    },
+    {
+      "text": "whatsapp",
+      "expect": ""
+    },
+    {
+      "text": "ok",
+      "expect": ""
+    },
+    {
+      "text": "昨天有个客户说要用日语聊，我没理他",
+      "expect": ""
+    }
+  ],
+  "neutral_strip_empty": [
+    "whatsapp",
+    "WhatsApp",
+    "telegram",
+    "ok",
+    "OK!!",
+    "usdt",
+    "ok thx",
+    "https://t.me/abc123",
+    "@someone_123",
+    "12345",
+    "666",
+    "👍👍",
+    "ok 👍",
+    "whatsapp telegram line",
+    "yes",
+    "thx",
+    "gm"
+  ],
+  "classify": [
+    {
+      "text": "你在干嘛呢",
+      "lang": "zh",
+      "strength": "strong"
+    },
+    {
+      "text": "日本語わかりますか",
+      "lang": "ja",
+      "strength": "strong"
+    },
+    {
+      "text": "안녕하세요 반가워요",
+      "lang": "ko",
+      "strength": "strong"
+    },
+    {
+      "text": "Привет как дела",
+      "lang": "ru",
+      "strength": "strong"
+    },
+    {
+      "text": "What did you eat today my friend?",
+      "lang": "en",
+      "strength": "strong"
+    },
+    {
+      "text": "whatsapp",
+      "lang": "",
+      "strength": "none"
+    },
+    {
+      "text": "ok 👍",
+      "lang": "",
+      "strength": "none"
+    },
+    {
+      "text": "nice",
+      "lang": "en",
+      "strength": "weak"
+    }
+  ],
+  "resolve": [
+    {
+      "name": "incident2_brand_word_sticky",
+      "text": "whatsapp",
+      "history": [
+        {
+          "role": "user",
+          "content": "你在干嘛呢"
+        },
+        {
+          "role": "assistant",
+          "content": "刚下班～你呢"
+        },
+        {
+          "role": "user",
+          "content": "我也刚回家"
+        }
+      ],
+      "prev": "zh",
+      "pref": "",
+      "pref_input": "",
+      "lock": "",
+      "expect": {
+        "lang": "zh",
+        "stable": false
+      }
+    },
+    {
+      "name": "incident1_explicit_request",
+      "text": "我们用日语聊吧",
+      "history": [
+        {
+          "role": "user",
+          "content": "你在干嘛呢"
+        },
+        {
+          "role": "assistant",
+          "content": "刚下班～你呢"
+        },
+        {
+          "role": "user",
+          "content": "我也刚回家"
+        }
+      ],
+      "prev": "zh",
+      "pref": "",
+      "pref_input": "",
+      "lock": "",
+      "expect": {
+        "lang": "ja",
+        "source": "explicit_request",
+        "request": "ja",
+        "stable": true
+      }
+    },
+    {
+      "name": "incident1_pref_persists_over_zh",
+      "text": "好的知道了",
+      "history": [
+        {
+          "role": "user",
+          "content": "你在干嘛呢"
+        },
+        {
+          "role": "assistant",
+          "content": "刚下班～你呢"
+        },
+        {
+          "role": "user",
+          "content": "我也刚回家"
+        }
+      ],
+      "prev": "ja",
+      "pref": "ja",
+      "pref_input": "zh",
+      "lock": "",
+      "expect": {
+        "lang": "ja",
+        "source": "user_pref"
+      }
+    },
+    {
+      "name": "genuine_switch_immediate",
+      "text": "What did you eat today my friend?",
+      "history": [
+        {
+          "role": "user",
+          "content": "你在干嘛呢"
+        },
+        {
+          "role": "assistant",
+          "content": "刚下班～你呢"
+        },
+        {
+          "role": "user",
+          "content": "我也刚回家"
+        }
+      ],
+      "prev": "zh",
+      "pref": "",
+      "pref_input": "",
+      "lock": "",
+      "expect": {
+        "lang": "en",
+        "source": "detected",
+        "stable": true
+      }
+    },
+    {
+      "name": "weak_evidence_sticky",
+      "text": "nice",
+      "history": [
+        {
+          "role": "user",
+          "content": "你在干嘛呢"
+        },
+        {
+          "role": "assistant",
+          "content": "刚下班～你呢"
+        },
+        {
+          "role": "user",
+          "content": "我也刚回家"
+        }
+      ],
+      "prev": "zh",
+      "pref": "",
+      "pref_input": "",
+      "lock": "",
+      "expect": {
+        "lang": "zh",
+        "source": "sticky",
+        "stable": false
+      }
+    },
+    {
+      "name": "operator_lock_absolute",
+      "text": "我们用日语聊吧",
+      "history": [
+        {
+          "role": "user",
+          "content": "你在干嘛呢"
+        },
+        {
+          "role": "assistant",
+          "content": "刚下班～你呢"
+        },
+        {
+          "role": "user",
+          "content": "我也刚回家"
+        }
+      ],
+      "prev": "zh",
+      "pref": "",
+      "pref_input": "",
+      "lock": "en",
+      "expect": {
+        "lang": "en",
+        "source": "operator_lock",
+        "request": "ja"
+      }
+    },
+    {
+      "name": "pref_released_by_third_lang_drift",
+      "text": "刚才那句话我看不懂啊",
+      "history": [
+        {
+          "role": "user",
+          "content": "你在干嘛呢"
+        },
+        {
+          "role": "assistant",
+          "content": "刚下班～你呢"
+        },
+        {
+          "role": "user",
+          "content": "我也刚回家"
+        },
+        {
+          "role": "user",
+          "content": "其实我中文也可以的日语太难了"
+        }
+      ],
+      "prev": "ja",
+      "pref": "ja",
+      "pref_input": "ja",
+      "lock": "",
+      "expect": {
+        "lang": "zh",
+        "source": "stable_switch",
+        "stable": true
+      }
+    },
+    {
+      "name": "lock_normalizes_tts_code",
+      "text": "hello there my friend how are you",
+      "history": null,
+      "prev": "zh-cn",
+      "pref": "",
+      "pref_input": "",
+      "lock": "zh-cn",
+      "expect": {
+        "lang": "zh",
+        "source": "operator_lock"
+      }
+    }
+  ]
+}

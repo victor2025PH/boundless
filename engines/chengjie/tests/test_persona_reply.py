@@ -96,6 +96,36 @@ def test_resolve_lang_empty_defaults():
     assert resolve_reply_language("", default="zh") == "zh"
 
 
+def test_resolve_lang_brand_word_not_english():
+    """事故2回归：中文会话里发「whatsapp」（8 字符，旧 <4 护栏漏过）→ 仍中文。"""
+    history = [
+        {"role": "user", "content": "你们支持哪些收款方式"},
+        {"role": "assistant", "content": "USDT、跨境电汇都可以"},
+        {"role": "user", "content": "whatsapp"},
+    ]
+    assert resolve_reply_language("whatsapp", history) == "zh"
+
+
+def test_resolve_lang_explicit_request_in_chinese():
+    """事故1回归：中文书写的「用日语」请求 → 回复语言立即切日语。"""
+    history = [
+        {"role": "user", "content": "你好呀"},
+        {"role": "assistant", "content": "你好！"},
+        {"role": "user", "content": "我们用日语聊吧"},
+    ]
+    assert resolve_reply_language("我们用日语聊吧", history) == "ja"
+
+
+def test_resolve_lang_request_persists_from_history():
+    """事故1回归：请求在历史里，本条是中性短词 → 偏好持久，仍日语。"""
+    history = [
+        {"role": "user", "content": "我们用日语聊吧"},
+        {"role": "assistant", "content": "わかりました！これから日本語で話しますね"},
+        {"role": "user", "content": "ok"},
+    ]
+    assert resolve_reply_language("ok", history) == "ja"
+
+
 # ── normalize_history ─────────────────────────────────────────
 
 def test_normalize_history_roles_and_last_inbound():

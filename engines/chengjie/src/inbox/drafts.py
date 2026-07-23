@@ -628,7 +628,17 @@ class DraftService:
                 from src.ai.chat_assistant_service import detect_language
                 _conv_meta = self._store.get_conv_meta(conv_id)
                 if should_auto_greet(_conv_meta, enabled=True):
-                    _lang = detect_language(t) or "zh"
+                    # 首条消息常是 Hi/emoji（检测落空）→ lang_prior 先验
+                    # （账号配置/WA 国码）先于 zh 兜底，与回复产线同口径。
+                    _hint = ""
+                    try:
+                        from src.ai.lang_prior import initial_lang_hint
+                        _hint = initial_lang_hint(
+                            platform=platform, account_id=account_id,
+                            chat_key=chat_key, config=self._cfg or {})
+                    except Exception:
+                        _hint = ""
+                    _lang = detect_language(t) or _hint or "zh"
                     _greet_draft = build_greeting_draft(
                         conv, _lang,
                         templates_store=self._store,

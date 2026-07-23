@@ -42,7 +42,7 @@ telegram:
     trigger: when_peer_voice
     probability: 0.3              # trigger=random 时生效
     backend: edge_tts             # edge_tts | openai | elevenlabs | voice_clone_command
-    voice: ja-JP-NanamiNeural     # edge_tts 声音 ID
+    voice: zh-CN-XiaoxiaoNeural   # edge_tts 声音 ID（⚠ 按语言训练：ja 音色念中文=日本腔）
     model: gpt-4o-mini-tts        # openai backend 模型
     format: mp3                   # mp3 | ogg；ogg 需 ffmpeg 转码
     opus:                         # Phase D：Telegram OGG/Opus 编码档
@@ -86,10 +86,24 @@ telegram:
 # provider: whisper_local | faster_whisper | openai
 voice_recognition:
   enabled: false               # true=开启语音接收转录
-  provider: faster_whisper     # 推荐 faster_whisper；openai 需 api_key
-  language: auto               # auto | zh | ja | en …
+  # provider 选型：
+  #   sensevoice     —— 推荐（有 GPU/大内存时）：FunASR SenseVoice-Small 进程内推理，
+  #                     中文方言/粤语显著强于 whisper（粤语实测 whisper base 全错、它全对），
+  #                     支持 zh/yue/en/ja/ko 自动检测，速度 ~15x whisper。需 pip install funasr。
+  #   faster_whisper —— 轻量默认：CPU 可跑；粤语/重口音弱、短音频易语言误判。
+  #   openai         —— 云端/自建 OpenAI 兼容 ASR（qwen3_asr/funasr_api 同契约）。
+  provider: faster_whisper
+  language: auto               # auto | zh | yue | ja | en …
   temp_dir: ./temp/voice
   max_file_size: 16777216      # 16 MB
+  # 专有名词热词（faster_whisper 生效，作 initial_prompt 引导；治"智聊"→"治療"同音误转）
+  # hotwords: 智聊ChatX、通译LingoX、无界科技
+  # 主转录挂了/返空自动回落下一级（级联，绝不断链）；示例：SenseVoice 主 + whisper 兜底
+  # fallback:
+  #   provider: faster_whisper
+  sensevoice:
+    model_dir: iic/SenseVoiceSmall   # ModelScope 模型名或本地路径（首用自动下载 ~900MB，国内直连）
+    device: ""                       # cuda:0 | cpu | 空=自动（有 CUDA 用 CUDA）
   whisper:
     model_size: base           # tiny(最快)|base|small|medium|large-v3
     device: cpu                # cpu | cuda
@@ -627,7 +641,7 @@ messenger_rpa:
     mode: approval_only         # approval_only | text_plus_voice | auto_voice
     trigger: when_peer_voice
     backend: edge_tts           # edge_tts | pyttsx3 | openai | disabled
-    voice: ja-JP-NanamiNeural
+    voice: zh-CN-XiaoxiaoNeural
     model: gpt-4o-mini-tts
     format: mp3
     out_dir: tmp_voice_replies
@@ -724,6 +738,44 @@ voice_clone_lan:
 # ── AvatarHub 本机语音服务（CosyVoice3 情感克隆 + Qwen3-TTS 批量 + 远端 Whisper STT）──
 # 本机作为 AvatarHub 集群 TTS 节点时（D:/faceX/mfys 常驻服务，计划任务开机自启），
 # backend=avatar_clone 走 7852 情感克隆（在线主力，2~4s/句，原生 emotion 标签 +
+# ── 出站语音按语言路由（粤语客户场景）────────────────────────────────
+# 克隆声（CosyVoice/avatar_clone）是普通话音色，读粤语文本"唔咸唔淡"。开启后：
+# 回复文本检测为粤语书写（嘅/咁/唔/哋 等特征字达阈值）→ 该条切 Edge zh-HK 粤语
+# 音色合成；普通话/外语照走原克隆链。属主动选择而非兜底 → 不受 no_edge_fallback
+# 拒发约束。注意：Edge 粤语音色非人设克隆音（音色会变）；要"同一把声讲粤语"
+# 需 CosyVoice2 粤语克隆（把 backend/voice 指过去即可复用本路由）。
+voice_lang_route:
+  enabled: false
+  cantonese:
+    enabled: true
+    backend: edge_tts
+    voice: zh-HK-HiuMaanNeural    # 女声；男声 zh-HK-WanLungNeural / 另一女声 zh-HK-HiuGaaiNeural
+    min_markers: 2                # 粤语特征分阈值（单字1分/词组2分），越高越保守
+  # follow_text（2026-07-23）：通用「音色跟随文本语种」——Edge 音色按语言训练，
+  # ja 音色念中文=「日本腔中文」（生产实锤被客户当"讲日语"投诉）。开启后 edge 链
+  # 每条合成前检测文本语种，与当前音色语言前缀不一致 → 换该语种映射音色
+  # （内置 22 语映射见 src/ai/lang_voice_route.EDGE_VOICE_BY_LANG，voices 可覆写）；
+  # Multilingual 系音色（自适应语种）与克隆链主后端不动（克隆原生跟随文本语种，
+  # 仅对齐其 edge fallback_voice）；语种明确但无映射 → 拒发语音回落文字（宁缺毋滥）。
+  follow_text:
+    enabled: true                 # 随父开关（voice_lang_route.enabled=false 时整体关）
+    reject_unmapped: true         # 无音色可映射时拒发语音（false=保持原音色照发）
+    voices: {}                    # 语种前缀→音色覆写，如 {en: en-US-AriaNeural}
+
+# ── 新会话初始语言先验（lang_prior，2026-07-23）────────────────────────
+# 新好友第一条消息常是 "Hi"/emoji/贴图——语言中性判不出证据，决策链落空到
+# default=zh，给菲律宾/泰国客户回中文首句。开启后在**全链落空时**按
+# ① 账号级配置（platform:account 精确键 > platform 平台键）
+# ② 电话号码国码（仅 phone_platforms 白名单平台，chat_key=E.164 号码；
+#    内置 ~70 国码映射见 src/ai/lang_prior.PHONE_CC_LANG，country_overrides 可覆写）
+# 供给首句语言。这是「先验」不是「覆写」：客户任何真实语言证据/明确请求/
+# 历史窗口/上一轮粘滞都优先，一旦有语言状态先验即让位。
+lang_prior:
+  enabled: false
+  phone_platforms: [whatsapp]     # chat_key 是电话号码的平台（tg 数字 id 形似号码，勿加）
+  account_defaults: {}            # {"whatsapp": "en", "whatsapp:639270135480": "en"}
+  country_overrides: {}           # {"63": "en"} 国码→语言，覆写/补充内置表
+
 # instruct 自由语气 + register_spk 预热）。**只 HTTP 调用，严禁本进程加载模型**。
 # 人设参考音：voice_profile.reference_audio_path 指 3~10s 干净单人声 WAV；
 # 同目录同名 .txt 为逐字稿（自动读取，显著提升音色相似度）。
@@ -1013,7 +1065,7 @@ personas:
       voice_profile:
         enabled: false
         backend: edge_tts
-        voice: ja-JP-NanamiNeural
+        voice: zh-CN-XiaoxiaoNeural
         owner_consent: true
         speaker_id: warm_companion_voice
         reference_audio_path: ""
