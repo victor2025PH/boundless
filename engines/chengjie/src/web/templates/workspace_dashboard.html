@@ -59,7 +59,7 @@
       <option value="7" data-i18n="dash.range.7d">近 7 日</option>
       <option value="30" data-i18n="dash.range.30d">近 30 日</option>
     </select>
-    <a id="db-quick-approve" href="#" style="display:none;font-size:12px;padding:5px 10px;border:1px solid #16a34a;border-radius:6px;text-decoration:none;color:#15803d;background:#f0fdf4;" data-i18n-title="dash.quick_approve_t" title="一键发出所有待发的低风险 AI 回复"><span data-ui-icon="zap" data-size="13" style="margin-right:5px;"></span><span data-i18n="dash.quick_approve">一键自动发送</span></a>
+    <a id="db-quick-approve" href="#" style="display:none;font-size:12px;padding:5px 10px;border:1px solid var(--th-bd-green6,#16a34a);border-radius:6px;text-decoration:none;color:var(--th-ink-green7,#15803d);background:#f0fdf4;" data-i18n-title="dash.quick_approve_t" title="一键发出所有待发的低风险 AI 回复"><span data-ui-icon="zap" data-size="13" style="margin-right:5px;"></span><span data-i18n="dash.quick_approve">一键自动发送</span></a>
     <a id="db-export" href="#" style="display:none;font-size:12px;padding:5px 10px;border:1px solid var(--tk-border);border-radius:6px;text-decoration:none;color:var(--tk-text);background:var(--tk-surface);"><span data-ui-icon="download" data-size="13" style="margin-right:5px;"></span><span data-i18n="dash.export">导出 CSV</span></a>
   </div>
   </div>
@@ -310,7 +310,7 @@
     body.innerHTML='<span class="tk-load">'+T('dash.loading')+'</span>';
     var qs='/api/workspace/sla-detail?scope='+encodeURIComponent(scope);
     if(_detailAgent!==null) qs+='&agent='+encodeURIComponent(_detailAgent);
-    fetch(qs).then(function(r){return r.json();}).then(function(d){
+    apiFetch(qs).then(function(r){return r.json();}).then(function(d){
       var its=d.items||[];
       window.__slaItems=its;
       body.innerHTML= its.length? ('<div style="font-size:12px;color:var(--tk-text-muted);margin-bottom:6px;">'+Tf('dash.detail.hint',{n:d.count})+'</div>'+its.map(function(it,ix){
@@ -326,9 +326,9 @@
     if(ev){ ev.stopPropagation(); ev.preventDefault(); }
     var it=(window.__slaItems||[])[ix]; if(!it) return;
     var btn=ev&&ev.target; if(btn){ btn.disabled=true; btn.textContent='…'; }
-    fetch('/api/workspace/sla/create-task',{method:'POST',headers:{'Content-Type':'application/json'},
+    apiFetch('/api/workspace/sla/create-task',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({platform:it.platform,chat_key:it.chat_key,conversation_id:it.conversation_id,
-        name:it.name,wait_sec:it.wait_sec})}).then(function(r){return r.json();}).then(function(d){
+        name:it.name,wait_sec:it.wait_sec})}, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
       if(d&&d.ok){ if(btn){ btn.textContent=T('dash.created_ok'); btn.style.color='var(--tk-ok-ink)'; } CRMW.toast(Tf('dash.task_ok',{name:esc(it.name)})); }
       else { if(btn){ btn.disabled=false; btn.textContent=T('dash.mk_task'); } CRMW.toast(Tf('dash.task_fail',{err:((d&&d.error)||T('dash.unknown'))}),'#dc2626'); }
     }).catch(function(){ if(btn){ btn.disabled=false; btn.textContent=T('dash.mk_task'); } CRMW.toast(T('dash.task_fail_generic'),'#dc2626'); });
@@ -340,7 +340,7 @@
     document.getElementById('db-modal-title').textContent=Tf('dash.agent_frt.title',{agent:(agent||'?'),days:curDays()});
     var body=document.getElementById('db-modal-body');
     body.innerHTML='<span class="tk-load">'+T('dash.loading')+'</span>';
-    fetch('/api/workspace/agent-frt-detail?days='+curDays()+'&agent='+encodeURIComponent(agent)).then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/agent-frt-detail?days='+curDays()+'&agent='+encodeURIComponent(agent)).then(function(r){return r.json();}).then(function(d){
       var its=d.items||[];
       body.innerHTML= its.length? ('<div style="font-size:12px;color:var(--tk-text-muted);margin-bottom:6px;">'+Tf('dash.agent_frt.hint',{n:d.count})+'</div>'+its.map(function(it){
         var col=it.attained?'var(--tk-ok-ink)':'var(--tk-danger-ink)';
@@ -356,7 +356,7 @@
     window.location='/api/workspace/daily-report.csv?days='+curDays()+'&agent='+encodeURIComponent(agent||''); }
   var ESC_REASON={unclaimed:T('base.reason.unclaimed'),holder_offline:T('base.reason.holder_offline'),holder_quiet:T('base.reason.holder_quiet')};
   function loadEsc(){
-    fetch('/api/workspace/escalations').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/escalations').then(function(r){return r.json();}).then(function(d){
       var its=(d&&d.items)||[]; window.__escItems=its;
       var _todayN=(d&&d.today_count)||0;
       var myId=(typeof MY_AGENT_ID!=='undefined')?MY_AGENT_ID:'';
@@ -381,10 +381,10 @@
     var newAgent=prompt(T('dash.esc.reassign_prompt'), it.assigned_to||'');
     if(!newAgent&&newAgent!==null) return;
     if(!newAgent) return;
-    fetch('/api/workspace/escalation/'+encodeURIComponent(escId)+'/assign',{
+    apiFetch('/api/workspace/escalation/'+encodeURIComponent(escId)+'/assign',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({agent_id:newAgent})
-    }).then(function(r){return r.json();}).then(function(d){
+    }, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
       if(d&&d.ok){ CRMW.toast(Tf('dash.esc.reassigned_ok',{agent:esc(newAgent)})); loadEsc(); }
       else { CRMW.toast(Tf('dash.esc.reassign_fail',{detail:((d&&d.detail)||T('dash.unknown'))}),'#dc2626'); }
     }).catch(function(){ CRMW.toast(T('dash.esc.reassign_fail_generic'),'#dc2626'); });
@@ -393,9 +393,9 @@
     if(ev){ ev.stopPropagation(); ev.preventDefault(); }
     var it=(window.__escItems||[])[ix]; if(!it) return;
     var btn=ev&&ev.target; if(btn){ btn.disabled=true; btn.textContent='…'; }
-    fetch('/api/workspace/sla/create-task',{method:'POST',headers:{'Content-Type':'application/json'},
+    apiFetch('/api/workspace/sla/create-task',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({platform:it.platform,chat_key:it.chat_key,conversation_id:it.conversation_id,
-        name:it.name,wait_sec:it.wait_sec})}).then(function(r){return r.json();}).then(function(d){
+        name:it.name,wait_sec:it.wait_sec})}, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
       if(d&&d.ok){ if(btn){ btn.textContent=T('dash.created_ok'); btn.style.color='var(--tk-ok-ink)'; } CRMW.toast(Tf('dash.task_ok',{name:esc(it.name)})); }
       else { if(btn){ btn.disabled=false; btn.textContent=T('dash.mk_task'); } CRMW.toast(Tf('dash.task_fail',{err:((d&&d.error)||T('dash.unknown'))}),'#dc2626'); }
     }).catch(function(){ if(btn){ btn.disabled=false; btn.textContent=T('dash.mk_task'); } CRMW.toast(T('dash.task_fail_generic'),'#dc2626'); });
@@ -407,7 +407,7 @@
     if(!IS_SUP) return;
     var sec=document.getElementById('db-risk-sec');
     if(sec) sec.style.display='block';
-    fetch('/api/drafts/risk-summary').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/drafts/risk-summary').then(function(r){return r.json();}).then(function(d){
       if(!d||!d.ok){ document.getElementById('db-risk').innerHTML='<span class="tk-fail">'+T('dash.load_fail')+'</span>'; return; }
       var lvls=d.by_level||{};
       var total=d.total_pending||0;
@@ -419,7 +419,7 @@
         html+='<div style="display:flex;align-items:center;gap:6px;padding:8px 14px;border-radius:8px;border:1px solid '+(isHigh&&n?'rgba(225,29,72,.4)':'var(--tk-border)')+';background:'+(isHigh&&n?'rgba(225,29,72,.08)':'var(--tk-surface-2)')+';">'
           +'<span style="font-size:18px;font-weight:700;color:'+LEVEL_COLORS[lv]+(';">'+n+'</span>')
           +'<span style="font-size:12px;color:var(--tk-text-muted);">'+LEVEL_LABELS[lv]+'</span>'
-          +(isHigh&&n?'<span style="font-size:10px;background:'+LEVEL_COLORS[lv]+';color:#fff;padding:1px 5px;border-radius:4px;margin-left:2px;">'+T('dash.risk.need_review')+'</span>':'')
+          +(isHigh&&n?'<span style="font-size:10px;background:'+LEVEL_COLORS[lv]+';color:var(--th-ink-inverse,#fff);padding:1px 5px;border-radius:4px;margin-left:2px;">'+T('dash.risk.need_review')+'</span>':'')
           +'</div>';
       });
       html+='</div>';
@@ -435,7 +435,7 @@
     var el=document.getElementById('db-metrics');
     if(!sec||!IS_SUP) return;
     sec.style.display='';
-    fetch('/api/workspace/metrics').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/metrics').then(function(r){return r.json();}).then(function(d){
       var as=d.autosend||{};
       var sw=d.sla_watcher||{};
       var wh=d.webhook||{};
@@ -446,7 +446,7 @@
       function _pill(v, ok, label){
         var color=ok?'var(--tk-ok-ink)':'var(--tk-danger-ink)';
         return '<span style="padding:2px 8px;border-radius:10px;background:'
-          +(ok?'#dcfce7':'#fee2e2')+';color:'+color+';font-size:11px;margin-right:4px;">'+label+': '+v+'</span>';
+          +(ok?'var(--th-bg-green100,#dcfce7)':'var(--th-bg-red1,#fee2e2)')+';color:'+color+';font-size:11px;margin-right:4px;">'+label+': '+v+'</span>';
       }
 
       var html='<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">'
@@ -515,7 +515,7 @@
     if(!sec||!IS_SUP) return;
     sec.style.display='';
     var days=(document.getElementById('db-trend-days')||{}).value||'7';
-    fetch('/api/workspace/trend?days='+days)
+    apiFetch('/api/workspace/trend?days='+days)
       .then(function(r){ return r.json(); })
       .then(function(d){
         var csat=d.csat_trend||[];
@@ -555,7 +555,7 @@
     if(!sec) return;
     sec.style.display='';
     var days=(document.getElementById('db-myp-days')||{}).value||'7';
-    fetch('/api/workspace/my-perf?days='+days)
+    apiFetch('/api/workspace/my-perf?days='+days)
       .then(function(r){ return r.json(); })
       .then(function(d){
         if(!d.ok){ el.innerHTML='<span style="color:var(--tk-text-muted);font-size:12px;">'+T('dash.no_data')+'</span>'; return; }
@@ -594,7 +594,7 @@
     if(!sec||!IS_SUP) return;
     sec.style.display='';
     var period=(document.getElementById('db-lb-period')||{}).value||'weekly';
-    fetch('/api/workspace/leaderboard?period='+period)
+    apiFetch('/api/workspace/leaderboard?period='+period)
       .then(function(r){ return r.json(); })
       .then(function(d){
         var lb=(d&&d.leaderboard)||[];
@@ -637,7 +637,7 @@
     var el=document.getElementById('db-workload-body');
     if(!sec||!IS_SUP) return;
     sec.style.display='';
-    fetch('/api/workspace/workload')
+    apiFetch('/api/workspace/workload')
       .then(function(r){return r.json();})
       .then(function(d){
         if(!d.ok){if(el) el.innerHTML='<span style="color:var(--tk-text-muted);font-size:12px;">'+T('dash.load_fail')+'</span>'; return;}
@@ -690,7 +690,7 @@
     var days=parseInt((document.getElementById('db-quality-days')||{}).value||'7');
 
     // Q2: 质量分分布
-    fetch('/api/workspace/quality-stats?days='+days)
+    apiFetch('/api/workspace/quality-stats?days='+days)
       .then(function(r){return r.json();})
       .then(function(d){
         if(!d.ok||!d.count){
@@ -720,7 +720,7 @@
       .catch(function(){ if(distEl) distEl.innerHTML='<span style="color:var(--tk-text-muted);font-size:12px;">'+T('dash.load_fail')+'</span>'; });
 
     // Q3: KB 命中率
-    fetch('/api/workspace/kb-stats?days='+days)
+    apiFetch('/api/workspace/kb-stats?days='+days)
       .then(function(r){return r.json();})
       .then(function(d){
         var entries=(d&&d.entries)||[];
@@ -755,7 +755,7 @@
         // 低命中率预警
         var low=(d.low_hit_entries||[]);
         if(low.length){
-          var lowHtml='<div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:6px;padding:6px 10px;font-size:11px;color:var(--tk-text);">'
+          var lowHtml='<div style="background:var(--th-bg-amber10,rgba(245,158,11,.1));border:1px solid rgba(245,158,11,.3);border-radius:6px;padding:6px 10px;font-size:11px;color:var(--tk-text);">'
             +'<strong style="color:var(--tk-warn-ink);">'+T('dash.q.low_hit_title')+'</strong><ul style="margin:4px 0 0;padding-left:14px;">';
           low.forEach(function(e){
             lowHtml+='<li>'+esc(e.entry_title||e.entry_id)+Tf('dash.q.low_hit_item',{rate:e.hit_rate,n:e.recommended})+'</li>';
@@ -775,7 +775,7 @@
     var el=document.getElementById('db-workspace-list');
     if(!sec||!IS_SUP) return;
     sec.style.display='';
-    fetch('/api/workspace/workspaces')
+    apiFetch('/api/workspace/workspaces')
       .then(function(r){ return r.json(); })
       .then(function(d){
         var list=d.workspaces||[];
@@ -815,11 +815,11 @@
     var wsName=(document.getElementById('ws-new-name')||{}).value||'';
     var res=document.getElementById('ws-create-result');
     if(!wsId.trim()){ if(res) res.innerHTML='<span style="color:var(--tk-danger-ink);">'+T('dash.ws.id_required')+'</span>'; return; }
-    fetch('/api/workspace/workspaces',{
+    apiFetch('/api/workspace/workspaces',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({workspace_id:wsId.trim(),display_name:wsName.trim()})
-    }).then(function(r){return r.json();}).then(function(d){
+    }, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
       if(d.ok){
         if(res) res.innerHTML='<span style="color:var(--tk-ok-ink);">'+Tf('dash.ws.saved',{id:esc(d.workspace_id)})+'</span>';
         loadWorkspaces();
@@ -836,14 +836,14 @@
     if(!sec||!IS_SUP) return;
     sec.style.display='';
     var period=(document.getElementById('db-report-period')||{}).value||'daily';
-    fetch('/api/workspace/report?period='+period+'&format=html')
+    apiFetch('/api/workspace/report?period='+period+'&format=html')
       .then(function(r){ return r.text(); })
       .then(function(html){
         el.innerHTML=html||'<span style="color:var(--tk-text-muted);font-size:12px;">'+T('dash.no_data')+'</span>';
       })
       .catch(function(){ if(el) el.innerHTML='<span style="color:var(--tk-text-muted);font-size:12px;">'+T('dash.load_fail')+'</span>'; });
     // 同步获取 json 数据供推送
-    fetch('/api/workspace/report?period='+period)
+    apiFetch('/api/workspace/report?period='+period)
       .then(function(r){ return r.json(); })
       .then(function(d){ _reportData=d; })
       .catch(function(){});
@@ -857,15 +857,15 @@
     var period=(document.getElementById('db-report-period')||{}).value||'daily';
     var _pl={'daily':T('dash.period.today'),'weekly':T('dash.period.week')}[period]||period;
     if(!confirm(Tf('dash.report.push_confirm',{period:_pl}))) return;
-    fetch('/api/workspace/report?period='+period+'&format=text')
+    apiFetch('/api/workspace/report?period='+period+'&format=text')
       .then(function(r){ return r.text(); })
       .then(function(text){
         // 通过 broadcast 接口发布一个 report 事件（如有配置，L2 Webhook 会接收）
-        return fetch('/api/workspace/broadcast',{
+        return apiFetch('/api/workspace/broadcast',{
           method:'POST',
           headers:{'Content-Type':'application/json'},
           body: JSON.stringify({type:'report',data:{period:period,text:text}})
-        });
+        }, {timeoutMs: 60000});
       })
       .then(function(r){ if(r.ok) alert(T('dash.report.push_ok')); else alert(T('dash.report.push_fail')); })
       .catch(function(e){ alert(Tf('dash.report.push_err',{err:e})); });
@@ -877,7 +877,7 @@
     var tsEl=document.getElementById('db-presence-ts');
     if(!sec||!IS_SUP) return;
     sec.style.display='';
-    fetch('/api/workspace/presence').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/presence').then(function(r){return r.json();}).then(function(d){
       var agents=(d&&d.agents)||[];
       if(tsEl) tsEl.textContent=window.wsFmtTime(null);
       if(!agents.length){
@@ -906,7 +906,7 @@
   function loadOnboard(){
     var box=document.getElementById('db-onboard');
     if(!box) return;
-    fetch('/api/setup/checklist').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/setup/checklist').then(function(r){return r.json();}).then(function(d){
       if(!d||!d.ok) return;
       if(d.light==='green'){ box.style.display='none'; return; }  // 已就绪不打扰
       var dismissed=false;
@@ -916,8 +916,8 @@
       var pending=(d.checks||[]).filter(function(c){return c.status!=='ok';});
       var steps=pending.map(function(c){
         var color=c.status==='fail'?'var(--tk-danger)':'var(--tk-amber)';
-        var act=c.action_url?'<a href="'+c.action_url+'" style="margin-left:auto;font-size:12px;font-weight:600;color:var(--tk-brand);text-decoration:none;border:1px solid var(--tk-brand);border-radius:7px;padding:5px 11px;background:rgba(59,130,246,.1);white-space:nowrap;">'+(c.action_label||T('dash.ob.go'))+' →</a>':'';
-        return '<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid rgba(245,158,11,.25);">'
+        var act=c.action_url?'<a href="'+c.action_url+'" style="margin-left:auto;font-size:12px;font-weight:600;color:var(--tk-brand);text-decoration:none;border:1px solid var(--tk-brand);border-radius:7px;padding:5px 11px;background:var(--th-bg-blue10,rgba(59,130,246,.1));white-space:nowrap;">'+(c.action_label||T('dash.ob.go'))+' →</a>':'';
+        return '<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--th-bd-amber25,rgba(245,158,11,.25));">'
           +'<span style="width:9px;height:9px;border-radius:50%;background:'+color+';flex-shrink:0;"></span>'
           +'<div style="min-width:0;"><div style="font-size:13px;font-weight:600;color:var(--tk-text);">'+escHtml(c.name)+'</div>'
           +'<div style="font-size:11px;color:var(--tk-warn-ink);">'+escHtml(c.detail)+'</div></div>'+act+'</div>';
@@ -927,7 +927,7 @@
       var dismissBtn=d.light==='yellow'
         ? '<span onclick="dismissOnboard()" style="cursor:pointer;font-size:12px;color:var(--tk-warn-ink);text-decoration:underline;">'+T('dash.ob.dismiss')+'</span>'
         : '';
-      box.innerHTML='<div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);border-radius:14px;padding:16px 18px;margin-bottom:14px;">'
+      box.innerHTML='<div style="background:var(--th-bg-amber10,rgba(245,158,11,.1));border:1px solid rgba(245,158,11,.35);border-radius:14px;padding:16px 18px;margin-bottom:14px;">'
         +'<div style="display:flex;align-items:center;gap:10px;">'
         +'<span style="color:var(--tk-brand);">'+uiIcon('rocket',20)+'</span>'
         +'<div><div style="font-size:15px;font-weight:700;color:var(--tk-text);">'+headline+'</div>'
@@ -949,9 +949,9 @@
     var tsEl=document.getElementById('db-health-ts');
     // 并发拉取两个端点，然后合并展示
     Promise.all([
-      fetch('/api/drafts/autosend-status').then(function(r){return r.json();}).catch(function(){return null;}),
-      fetch('/api/drafts/risk-summary').then(function(r){return r.json();}).catch(function(){return null;}),
-      fetch('/api/episodic-memory/key-health').then(function(r){return r.json();}).catch(function(){return null;})
+      apiFetch('/api/drafts/autosend-status').then(function(r){return r.json();}).catch(function(){return null;}),
+      apiFetch('/api/drafts/risk-summary').then(function(r){return r.json();}).catch(function(){return null;}),
+      apiFetch('/api/episodic-memory/key-health').then(function(r){return r.json();}).catch(function(){return null;})
     ]).then(function(results){
       var ws=results[0], rs=results[1], kh=results[2];
       var now=window.wsFmtTime(null,{hour:'2-digit',minute:'2-digit',second:'2-digit'});
@@ -1160,31 +1160,36 @@
       else if(rk.light==='amber'||rk.light==='yellow'){ dotC='#f59e0b'; rkTxt=T('dash.exec.risk_warn'); rkCol='var(--tk-warn-ink)'; }
       else if(rk.light==='green'){ dotC='#22c55e'; rkTxt=T('dash.exec.risk_ok'); rkCol='var(--tk-ok-ink)'; }
     }
+    // 机群改资料热点副行（无热点不占位；有则提示去 RPA 概览看明细）
+    var churnSub=(rk.ok&&rk.churnHot>0)
+      ?('<div class="db-exec-sub" style="color:var(--tk-warn-ink);">'+esc(Tf('dash.exec.churn_hot',{n:rk.churnHot}))+'</div>')
+      :'';
     html+='<div class="db-card"><div style="font-size:18px;font-weight:800;display:flex;align-items:center;gap:8px;min-height:34px;">'
       +_dbDot(dotC)+'<span style="color:'+rkCol+';">'+esc(rkTxt)+'</span></div>'
-      +'<div class="db-lbl">'+esc(T('dash.exec.risk'))+'</div></div>';
+      +'<div class="db-lbl">'+esc(T('dash.exec.risk'))+'</div>'+churnSub+'</div>';
     grid.innerHTML=html;
     sec.style.display='';
   }
   function loadExec(){
     if(!IS_SUP||_execDenied) return;
-    fetch('/api/workspace/roi?days='+curDays()).then(function(r){
+    apiFetch('/api/workspace/roi?days='+curDays()).then(function(r){
       if(r.status===403){ _execDenied=true; renderExec(); return null; }
       return r.json();
     }).then(function(d){
       if(d&&d.ok){ _execRoi=d; renderExec(); }
     }).catch(function(){});
-    fetch('/api/monetize/kpi?days='+curDays())
+    apiFetch('/api/monetize/kpi?days='+curDays())
       .then(function(r){ return r.ok?r.json():null; })
       .then(function(d){ _execMon=d; renderExec(); })
       .catch(function(){ _execMon=null; });
     Promise.all([
-      fetch('/api/ops/kill-switch').then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; }),
-      fetch('/api/accounts/fleet-health').then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; })
+      apiFetch('/api/ops/kill-switch').then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; }),
+      apiFetch('/api/accounts/fleet-health').then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; })
     ]).then(function(res){
       var ks=res[0], fh=res[1];
       if(ks&&ks.ok&&fh&&fh.ok){
-        _execRisk={ok:true, frozen:!!(ks.frozen||(ks.count||0)>0), light:String((fh.fleet||{}).fleet_light||'')};
+        _execRisk={ok:true, frozen:!!(ks.frozen||(ks.count||0)>0), light:String((fh.fleet||{}).fleet_light||''),
+          churnHot:Array.isArray(fh.profile_churn_hot)?fh.profile_churn_hot.length:0};
       } else { _execRisk={ok:false}; }
       renderExec();
     });
@@ -1200,7 +1205,7 @@
   function fmtDur(sec){ return CRMW.fmtDur(sec); }
   function curDays(){ var s=document.getElementById('db-days'); return s?s.value:'7'; }
   function load(){
-    fetch('/api/workspace/dashboard?days='+curDays()).then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/dashboard?days='+curDays()).then(function(r){return r.json();}).then(function(d){
       var t=d.today||{}, f=d.funnel||{}, sla=d.sla||{}, fr=d.first_response||{}, rs=d.resolution||{};
       _dashData=d; renderExec();  // 经营摘要卡3/4 复用本响应，不重复请求
       // P1.2 核心卡精选：坐席只看「与我当下相关」4 张；经营/团队卡仅主管（IS_SUP）。
@@ -1363,7 +1368,7 @@
     window.location='/api/workspace/daily-report.csv?days='+curDays(); }); }
   var _modal=document.getElementById('db-modal'); if(_modal){ _modal.addEventListener('click', function(e){ if(e.target===_modal) closeDetail(); }); }
   // 角色能力：主管才显示团队导出 / 升级历史 / 个人日报导出
-  fetch('/api/workspace/me').then(function(r){return r.json();}).then(function(m){
+  apiFetch('/api/workspace/me').then(function(r){return r.json();}).then(function(m){
     IS_SUP=!!(m&&m.is_supervisor);
   }).catch(function(){ IS_SUP=false; }).finally(function(){
     if(IS_SUP){

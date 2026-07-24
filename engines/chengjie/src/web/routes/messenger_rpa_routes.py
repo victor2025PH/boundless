@@ -1186,13 +1186,15 @@ def register_messenger_rpa_routes(
     """挂 Messenger RPA 的 Web + REST 路由。"""
 
     # ── Web: HTML 页 ────────────────────────────────
+    # 渠道中心融合：旧管理后台页整体迁入工作台壳（正文见
+    # templates/_channel_body_messenger.html），此处仅保留跳转（书签/站内旧链接不断）。
     @app.get("/messenger-rpa", response_class=HTMLResponse)
     async def messenger_rpa_page(request: Request):
-        # 手动调 page_auth（支持 sync 或 async 都在这里兜）
-        res = page_auth(request)
-        if hasattr(res, "__await__"):
-            await res
-        return templates.TemplateResponse(request, "messenger_rpa.html", {})
+        from fastapi.responses import RedirectResponse
+        q = request.url.query
+        return RedirectResponse(
+            "/workspace/channels/messenger" + (f"?{q}" if q else ""), status_code=302
+        )
 
     # ── REST: 状态 ─────────────────────────────────
     @app.get("/api/messenger-rpa/status")

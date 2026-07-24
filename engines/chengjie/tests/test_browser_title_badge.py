@@ -72,11 +72,12 @@ def test_visibility_listener_stops_flash(shared_scripts_text: str):
 # i18n（③-S9b/c/d）后 badge 标签不再是硬编码中文，而是「平台前缀 + 客户端 window.T(待审键)」——
 # 随语言切换（zh '待审' / en 'Pending'）。平台前缀（LINE/WA/FB）保留为字面量：它是多 tab 下区分
 # "哪个平台来的提醒"的线索，非文案，无需翻译。overview 用跨平台键、无平台前缀。
+# 渠道中心融合：三渠道正文迁 _channel_body_*.html（断言语义不变）
 INTEGRATIONS = [
-    ("line_rpa.html",      "LINE ", "ov_kpi_pending"),
-    ("whatsapp_rpa.html",  "WA ",   "ov_kpi_pending"),
-    ("messenger_rpa.html", "FB ",   "ov_kpi_pending"),
-    ("rpa_overview.html",  "",      "ov_tab_pending"),
+    ("_channel_body_line.html",      "LINE ", "ov_kpi_pending"),
+    ("_channel_body_whatsapp.html",  "WA ",   "ov_kpi_pending"),
+    ("_channel_body_messenger.html", "FB ",   "ov_kpi_pending"),
+    ("rpa_overview.html",            "",      "ov_tab_pending"),
 ]
 
 
@@ -126,7 +127,7 @@ def test_telegram_does_not_use_setBadge_because_no_approval_queue():
     如果将来给 Telegram 加 approval queue，再相应启用这个 badge；现在
     刻意不调用，避免误导运营（"Telegram 标题里(0)是什么意思？" → 困惑）。
     """
-    text = (TEMPLATES_DIR / "telegram.html").read_text(encoding="utf-8")
+    text = (TEMPLATES_DIR / "_channel_body_telegram.html").read_text(encoding="utf-8")
     assert "rpa.notify.setBadge" not in text, (
         "Telegram 无 pending queue，不应调用 setBadge；如已加 approval "
         "queue 请同步移除此约束测试"

@@ -41,7 +41,11 @@ logger = logging.getLogger(__name__)
 
 # SSE replay / live 订阅事件类型（与 monolith 原集合一致）
 _SSE_EVENT_TYPES = frozenset({
-    "inbox_message", "agent_presence",
+    "inbox_message",
+    # P2-2：出站镜像事件（autosend/主动触达/坐席手发经编排器回写收件箱时发布）——
+    # 前端据此「刷新线程/列表预览但不加未读」，选中会话轮询得以 10s→30s。
+    "outbound_message",
+    "agent_presence",
     "conversation_claim", "conversation_assigned", "follow_up",
     "draft_created",
     "draft_sla_breach",

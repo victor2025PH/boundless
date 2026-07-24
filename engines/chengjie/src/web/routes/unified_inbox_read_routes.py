@@ -140,6 +140,10 @@ def _merge_orchestrator_status(
             running = oa.get("state") == "running"
             key = f"{plat}:{aid}"
             label = label_map.get(key) or oa.get("label") or ""
+            # P1 资料修改配套：透传编排器 worker 状态（仅编排器在管条目；适配器
+            # 条目不动）——前端账号详情据此显示 starting/error 与失败原因摘要。
+            state_detail = str((oa.get("worker") or {}).get("detail")
+                               or oa.get("last_error") or "")[:120]
             existing = platform_status.get(key)
             if existing is None:
                 platform_status[key] = {
@@ -148,12 +152,35 @@ def _merge_orchestrator_status(
                     "running": running,
                     "label": label,
                     "mode": oa.get("mode") or "",
+                    "state": oa.get("state"),
+                    "state_detail": state_detail,
                 }
             else:
                 existing["running"] = bool(existing.get("running")) or running
+                existing["state"] = oa.get("state")
+                existing["state_detail"] = state_detail
                 # 注册表 label 是用户显式起的人格名 → 覆盖适配器的通用 label
                 if label_map.get(key):
                     existing["label"] = label_map[key]
+
+        # 掉线时长透传：外部 worker push 的会话健康表（platform_session_health）——
+        # 条目当前不健康且有 unhealthy_since 起点 → 注入，前端 _acctOfflineHint
+        # 据此显示「已掉线多久」。查找键必须与登记表 _key 同构（platform/account
+        # 经 _san 消毒），故直接用其 staticmethod 构造。best-effort，异常静默。
+        sess_map: Dict[str, Any] = {}
+        _sess_key = None
+        _unhealthy = frozenset()
+        try:
+            from src.integrations.platform_session_health import (
+                UNHEALTHY_STATUSES, get_platform_session_health,
+            )
+            hp = get_platform_session_health()
+            sess_map = (hp.dump() or {}).get("sessions") or {}
+            _sess_key = hp._key
+            _unhealthy = UNHEALTHY_STATUSES
+        except Exception:
+            sess_map = {}
+            logger.debug("[chats] 读取平台会话健康表失败", exc_info=True)
 
         # 收尾：对所有 platform_status 条目（含未经编排器的 A 线 default）统一用
         # 注册表 label / self_* 覆盖，确保改名 + 真实身份对每个号都即时反映。
@@ -173,8 +200,88 @@ def _merge_orchestrator_status(
                     v[_sk] = _sv
             if registry_keys is not None:
                 v["removable"] = pkey in registry_keys or k in registry_keys
+            if sess_map and _sess_key is not None:
+                try:
+                    sess = sess_map.get(_sess_key(
+                        str(v.get("platform") or ""),
+                        str(v.get("account_id") or ""))) or {}
+                    since = float(sess.get("unhealthy_since") or 0.0)
+                    if str(sess.get("status") or "") in _unhealthy and since > 0:
+                        v["unhealthy_since"] = float(since)
+                except Exception:
+                    logger.debug("[chats] unhealthy_since 透传失败", exc_info=True)
     except Exception:
         logger.debug("[chats] 并入编排器账号状态失败", exc_info=True)
+
+
+def _local_day_start_ts(now: Optional[float] = None) -> float:
+    """本机日历日 00:00 的 unix 时间戳（与前端 toDateString()「今日」口径对齐）。"""
+    t = time.localtime(float(now if now is not None else time.time()))
+    return time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0, 0, 0, -1))
+
+
+def _enrich_platform_status_value(
+    platform_status: Dict[str, Any], store: Any,
+) -> None:
+    """P4：给账号卡注入价值信息字段（best-effort，失败不阻断列表）。
+
+    - ``today_conv_count``：该账号今日有活动（last_ts ≥ 今日 0 点）的会话数；
+    - Telegram 另附：``last_sync_ts``（内存快照 finished_at 与 registry 持久化取较大）、
+      ``sync_state`` / ``sync_dialogs_done`` / ``sync_dialogs_total``（进行中进度）。
+    """
+    if not platform_status:
+        return
+    counts: Dict[Any, int] = {}
+    if store is not None:
+        try:
+            counts = store.count_conversations_active_since(_local_day_start_ts()) or {}
+        except Exception:
+            logger.debug("[chats] 今日会话计数失败", exc_info=True)
+            counts = {}
+
+    # 批量读注册表持久化同步时间（避免每个 TG 账号一次 get）
+    persisted: Dict[str, float] = {}
+    try:
+        from src.integrations.account_registry import get_account_registry
+        for row in get_account_registry().list(platform="telegram"):
+            aid = str(row.get("account_id") or "")
+            ts = float((row.get("meta") or {}).get("last_history_sync_ts") or 0)
+            if aid and ts > 0:
+                persisted[aid] = ts
+    except Exception:
+        logger.debug("[chats] 读持久化 sync 时间失败", exc_info=True)
+
+    try:
+        from src.web.routes.unified_inbox_account_routes import tg_history_sync_snapshot
+    except Exception:
+        tg_history_sync_snapshot = None  # type: ignore
+
+    for _k, v in platform_status.items():
+        if not isinstance(v, dict):
+            continue
+        plat = str(v.get("platform") or "")
+        aid = str(v.get("account_id") or "")
+        v["today_conv_count"] = int(counts.get((plat, aid), 0) or 0)
+        if plat != "telegram":
+            continue
+        snap: Dict[str, Any] = {}
+        if tg_history_sync_snapshot is not None:
+            try:
+                snap = tg_history_sync_snapshot(aid) or {}
+            except Exception:
+                snap = {}
+        mem_ts = float(snap.get("finished_at") or 0)
+        last = max(mem_ts, float(persisted.get(aid) or 0))
+        if last > 0:
+            v["last_sync_ts"] = last
+        state = str(snap.get("state") or "idle")
+        if state == "running":
+            v["sync_state"] = "running"
+            v["sync_dialogs_done"] = int(snap.get("dialogs_done") or 0)
+            v["sync_dialogs_total"] = int(snap.get("dialogs_total") or 0)
+        elif state == "error" and snap.get("error"):
+            v["sync_state"] = "error"
+            v["sync_error"] = str(snap.get("error") or "")[:120]
 
 
 def _enrich_chat_list(request: Request, chats: List[Dict[str, Any]], *, config_manager) -> None:
@@ -315,6 +422,11 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
                 has_more = store.count_conversations_older_than(oldest) > 0
             except Exception:
                 has_more = False
+        # P4：账号卡价值信息（今日会话数 / TG 上次同步）——与 has_more 共用 store
+        try:
+            _enrich_platform_status_value(platform_status, store)
+        except Exception:
+            logger.debug("[chats] platform_status 价值信息富集失败", exc_info=True)
         return {
             "ok": True,
             "ts": time.time(),
@@ -323,6 +435,48 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
             "has_more": has_more,
             "oldest_ts": oldest or None,
         }
+
+    @app.post("/api/unified-inbox/mark-read")
+    async def api_unified_inbox_mark_read(request: Request):
+        """P0 未读可信化：坐席打开会话即写「已读水位」（last_read_ts）到持久层。
+
+        为什么需要：协议号每轮 ``upsert_protocol_chats`` 会用手机端未读数覆盖
+        ``conversations.unread``——此前前端 ``_clearUnread`` 只清浏览器内存角标，
+        下一轮轮询数字原样回弹（用户报障「点开后数字还在/点开无消息」的根因之一）。
+        这里把已读态落库，读路径据 last_read_ts 派生「有效未读」，永不回弹。
+
+        body: ``{platform, account_id, chat_key}`` 或 ``{conversation_id}``；
+        可选 ``read_ts``（缺省=该会话当前 last_ts）。**仅坐席主动打开时调用**——
+        轮询刷新绝不可调，否则水位一路推到最新、未读永远归零。
+        """
+        api_auth(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        cid = str((body or {}).get("conversation_id") or "").strip()
+        if not cid:
+            platform = str((body or {}).get("platform") or "").lower()
+            account_id = str((body or {}).get("account_id") or "default")
+            chat_key = str((body or {}).get("chat_key") or "").strip()
+            if not platform or not chat_key:
+                raise HTTPException(400, tr(request, "err.ws.field_required",
+                                            field="chat_key"))
+            cid = conv_id(platform, account_id, chat_key)
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        read_ts_raw = (body or {}).get("read_ts")
+        try:
+            read_ts = float(read_ts_raw) if read_ts_raw is not None else None
+        except (TypeError, ValueError):
+            read_ts = None
+        try:
+            water = store.mark_conversation_read(cid, read_ts=read_ts)
+        except Exception:
+            logger.debug("[inbox] mark-read 落库失败 cid=%s", cid, exc_info=True)
+            return {"ok": False, "conversation_id": cid}
+        return {"ok": True, "conversation_id": cid, "last_read_ts": water}
 
     @app.get("/api/unified-inbox/thread")
     async def api_unified_inbox_thread(

@@ -42,7 +42,9 @@ _BASELINE = """
 /api/telemetry/frontend-error	POST
 /api/admin/ai-quality-calibrate	GET
 /api/admin/ai-quality-thresholds	POST
+/api/admin/instance-restart-status	GET
 /api/admin/platform-sessions/relogin	POST
+/api/admin/profile-audit	GET
 /api/admin/realtime-voice-alert-calibrate	GET
 /api/admin/realtime-voice-alert-thresholds	POST
 /api/admin/realtime-voice-trend	GET
@@ -649,6 +651,8 @@ _BASELINE = """
 /api/companion/standby	POST
 /api/companion/capabilities/signals	GET
 /api/companion/capabilities/advice	GET
+/api/companion/media-capabilities	GET
+/api/companion/media-capabilities/preset	POST
 /api/companion/quality-overview	GET
 /api/companion/quality-trend	GET
 /api/companion/proactive/sample	POST
@@ -846,6 +850,8 @@ _BASELINE = """
 /workspace/escalations	GET
 /workspace/roi	GET
 /workspace/setup	GET
+/workspace/channels	GET
+/workspace/channels/{channel}	GET
 /workspace/kb-start	GET
 /workspace/golive	GET
 /workspace/ai-quality	GET
@@ -902,6 +908,31 @@ _ADDITIONS_2026_07 = """
 /funnel	GET
 """
 _BASELINE += _ADDITIONS_2026_07
+
+# 2026-07-22 基线增量：Telegram 账号级聊天记录同步（对齐手机——云端 get_dialogs +
+# get_chat_history 直写 store；POST 触发后台同步 / GET 轮询进度）。
+_ADDITIONS_2026_07_22 = """
+/api/platforms/telegram/{account_id}/sync-history	GET
+/api/platforms/telegram/{account_id}/sync-history	POST
+"""
+_BASELINE += _ADDITIONS_2026_07_22
+
+# 2026-07-22 读路径 P0：坐席打开会话即写「已读水位」(last_read_ts) 落库，
+# 读路径据此派生有效未读、永不回弹（unified_inbox_read_routes.py）。
+_ADDITIONS_2026_07_22_READ = """
+/api/unified-inbox/mark-read	POST
+"""
+_BASELINE += _ADDITIONS_2026_07_22_READ
+
+# 2026-07-22 账号官方资料修改（accounts.profile_push，P1 写方向）：GET 详情
+# （能力/自身资料/冷却/审计）+ POST 推送昵称/签名/头像到平台官方
+# （Telegram 协议直改 / WhatsApp 经 Baileys；unified_inbox_account_routes.py）。
+_ADDITIONS_2026_07_22_PROFILE = """
+/api/accounts/{platform}/{account_id}/profile	GET
+/api/accounts/{platform}/{account_id}/profile	POST
+/api/accounts/persona-align	POST
+"""
+_BASELINE += _ADDITIONS_2026_07_22_PROFILE
 
 # 2026-07-23 融合实例 P3/P4b：会员中心（档位/功能矩阵/用量/到期 + nav 锁标与
 # 顶栏徽章的落点；membership_routes.py，数据口径=feature_gate.gate_snapshot 单源）

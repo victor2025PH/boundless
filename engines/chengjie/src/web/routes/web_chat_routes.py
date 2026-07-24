@@ -173,10 +173,16 @@ def _publish_outbound(hub: Any, cid: str, text: str, *, by: str) -> None:
 
 def _publish_inbox_event(cid: str, service: WebChatService, visitor_id: str,
                          text: str, *, direction: str) -> None:
-    """通知坐席工作台（EventBus inbox_message）。"""
+    """通知坐席工作台（EventBus）。
+
+    P2-2：入站发 inbox_message（前端会给非选中会话 unread+1 + 声音提醒语义）；
+    出站发 outbound_message（刷新预览/线程但**不加未读**）——AI/坐席自己发的话
+    不该点亮未读徽章。
+    """
     try:
         from src.integrations.shared.event_bus import get_event_bus
-        get_event_bus().publish("inbox_message", {
+        _etype = "outbound_message" if direction == "out" else "inbox_message"
+        get_event_bus().publish(_etype, {
             "conversation_id": cid, "platform": "web",
             "account_id": service.account_id, "chat_key": visitor_id,
             "name": "访客 " + visitor_id[-6:], "preview": text[:80],

@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict
 
 from fastapi import Request
@@ -48,6 +49,37 @@ def _kb_readiness_for(config_manager) -> dict:
     except Exception:
         logger.debug("读取 KB readiness 失败（已忽略）", exc_info=True)
         return {"available": False, "is_cold": True, "enabled_entries": 0}
+
+
+def _channel_health_snapshot() -> Dict[str, Any]:
+    """平台通道离线快照（坐席工作台「通道离线」警示横幅数据源，P0-2 延伸）。
+
+    读 ``platform_session_health.unhealthy_sessions()``（进程级内存登记表，零 IO），
+    把 ``platform:acct`` key 拆成结构化条目并按已离线时长降序（最久的排最前 =
+    横幅首条明细）。任何异常吞掉返回空快照——本函数挂在坐席状态条轮询接口上，
+    绝不能反过来把它拖垮（坐席端全靠该接口）。
+    """
+    try:
+        from src.integrations.platform_session_health import (
+            get_platform_session_health,
+        )
+        now = time.time()
+        items = []
+        for key, sess in get_platform_session_health().unhealthy_sessions().items():
+            platform, _, account_id = str(key).partition(":")
+            since = (float(sess.get("unhealthy_since") or 0.0)
+                     or float(sess.get("ts") or 0.0) or now)
+            items.append({
+                "platform": platform,
+                "account_id": account_id,
+                "status": str(sess.get("status") or ""),
+                "down_min": int(max(0.0, now - since) // 60),
+            })
+        items.sort(key=lambda it: -it["down_min"])
+        return {"unhealthy": items, "count": len(items)}
+    except Exception:
+        logger.debug("平台通道健康快照失败（已忽略）", exc_info=True)
+        return {"unhealthy": [], "count": 0}
 
 
 def _session_present(request: Request) -> bool:
@@ -278,20 +310,34 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
 
     @app.get("/api/workspace/ai-runtime-status")
     async def api_workspace_ai_runtime_status(request: Request):
-        """云端 AI 降级态（坐席工作台状态条轮询用，任意登录用户可读，纯内存零开销）。
+        """云端 AI 降级态 + 平台通道离线态（坐席工作台状态条轮询用，任意登录用户可读，
+        纯内存零开销）。
 
-        只报「降级/正常 + 谁在顶班」，不含密钥/端点/余额等敏感细节（那些在
-        supervisor 专属的 /api/setup/cloud-credentials）。
+        只报「降级/正常 + 谁在顶班」与「哪些通道离线多久」（结构化字段 + 英文枚举），
+        不含密钥/端点/余额等敏感细节（那些在 supervisor 专属的 /api/setup/cloud-credentials）。
+        ``channels`` 复用同一 60s 轮询驱动 #ws-chandown 横幅——WhatsApp 假死 2h 坐席
+        毫无感知的事故不再重演。
         """
         api_auth(request)
+        channels = _channel_health_snapshot()
+        # Phase3: restart cooldown for THIS instance → workbench soft banner
+        # (same 60s poll as degrade/chandown; seat-safe, no filesystem paths).
+        try:
+            from src.utils.instance_restart_status import seat_restart_banner
+            restart_banner = seat_restart_banner()
+        except Exception:
+            restart_banner = {"cooldown_active": False, "instance_id": None}
         ai_client = getattr(request.app.state, "ai_client", None)
         if ai_client is None or not hasattr(ai_client, "degradation_snapshot"):
-            return {"ok": True, "degraded": False, "mode": "primary"}
+            return {"ok": True, "degraded": False, "mode": "primary",
+                    "channels": channels, "instance_restart": restart_banner}
         try:
             snap = ai_client.degradation_snapshot()
         except Exception:
-            return {"ok": True, "degraded": False, "mode": "primary"}
-        return {"ok": True, **snap}
+            return {"ok": True, "degraded": False, "mode": "primary",
+                    "channels": channels, "instance_restart": restart_banner}
+        return {"ok": True, **snap, "channels": channels,
+                "instance_restart": restart_banner}
 
     @app.post("/api/setup/key-pool")
     async def api_setup_key_pool_save(request: Request):

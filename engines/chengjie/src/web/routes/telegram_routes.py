@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import Depends, File, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
@@ -348,11 +348,13 @@ def register_telegram_routes(
 ) -> None:
 
     # ── 页面 ─────────────────────────────────────────────────
+    # 渠道中心融合：旧管理后台页整体迁入工作台壳（正文见
+    # templates/_channel_body_telegram.html），此处仅保留跳转（书签/站内旧链接不断）。
     @app.get("/telegram", response_class=HTMLResponse)
     async def telegram_page(request: Request):
-        page_auth(request)
-        return templates.TemplateResponse(
-            request, "telegram.html", {"active": "telegram"},
+        q = request.url.query
+        return RedirectResponse(
+            "/workspace/channels/telegram" + (f"?{q}" if q else ""), status_code=302
         )
 
     # ── 读取全量设置 ─────────────────────────────────────────

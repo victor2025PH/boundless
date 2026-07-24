@@ -284,3 +284,76 @@ def test_update_message_text_empty_transcript_noop(tmp_path):
         "telegram:acc:c", media_ref="/x/1.ogg", text="   ") is False
     assert store.update_message_text("telegram:acc:c", text="有内容但无定位键") is False
     store.close()
+
+
+# ── P0 未读可信化：已读水位 + 有效未读 ────────────────────────────────────────
+
+def test_mark_read_sets_water_and_clears_effective_unread(tmp_path):
+    """打开会话 → 已读水位推到末条 → 有效未读归零；原始 unread（同步值）保留。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    store.upsert_conversation(_conv(cid="whatsapp:wa1:c", platform="whatsapp",
+                                    account_id="wa1", chat_key="c",
+                                    last_ts=100.0, unread=5))
+    water = store.mark_conversation_read("whatsapp:wa1:c")
+    assert water == 100.0
+    row = store.get_conversation("whatsapp:wa1:c")
+    assert row["last_read_ts"] == 100.0
+    assert row["unread"] == 5                       # 原始同步值不动
+    assert store.effective_unread(row) == 0          # 有效未读归零
+    store.close()
+
+
+def test_effective_unread_rebounds_only_on_newer_message(tmp_path):
+    """已读后同步覆盖 unread（手机端数字回来）不该复燃；真有更新的消息才重新未读。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    store.upsert_conversation(_conv(cid="whatsapp:wa1:c", platform="whatsapp",
+                                    account_id="wa1", chat_key="c",
+                                    last_ts=100.0, unread=3))
+    store.mark_conversation_read("whatsapp:wa1:c")
+    # 模拟协议号下一轮 upsert_protocol_chats：同一末条时间戳，unread 被手机端数字覆盖回 3
+    store.upsert_conversation(_conv(cid="whatsapp:wa1:c", platform="whatsapp",
+                                    account_id="wa1", chat_key="c",
+                                    last_ts=100.0, unread=3))
+    row = store.get_conversation("whatsapp:wa1:c")
+    assert store.effective_unread(row) == 0          # 末条未变 → 不复燃
+    # 来了真正更新的消息（last_ts 前进）→ 重新算未读
+    store.upsert_conversation(_conv(cid="whatsapp:wa1:c", platform="whatsapp",
+                                    account_id="wa1", chat_key="c",
+                                    last_ts=200.0, unread=4))
+    row2 = store.get_conversation("whatsapp:wa1:c")
+    assert store.effective_unread(row2) == 4         # last_ts>last_read → 复现未读
+    store.close()
+
+
+def test_mark_read_monotonic_and_clears_mention(tmp_path):
+    """水位单调不回退；打开会话一并清「@我」旗标。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    store.upsert_conversation(_conv(cid="whatsapp:wa1:g", platform="whatsapp",
+                                    account_id="wa1", chat_key="g",
+                                    last_ts=300.0, unread=1, chat_type="group"))
+    store.set_conversation_mentioned("whatsapp:wa1:g", True)
+    store.mark_conversation_read("whatsapp:wa1:g")
+    row = store.get_conversation("whatsapp:wa1:g")
+    assert row["last_read_ts"] == 300.0
+    assert row["mentioned_unread"] == 0              # @我 旗标随打开清零
+    # 显式回退到更早水位 → 不生效（单调）
+    store.mark_conversation_read("whatsapp:wa1:g", read_ts=50.0)
+    assert store.get_conversation("whatsapp:wa1:g")["last_read_ts"] == 300.0
+    store.close()
+
+
+def test_mark_read_missing_conversation_is_noop(tmp_path):
+    store = InboxStore(tmp_path / "inbox.db")
+    assert store.mark_conversation_read("nope:x:y") == 0.0
+    store.close()
+
+
+def test_effective_unread_zero_when_no_raw_unread(tmp_path):
+    store = InboxStore(tmp_path / "inbox.db")
+    assert store.effective_unread(
+        {"unread": 0, "last_ts": 10, "last_read_ts": 0}) == 0
+    assert store.effective_unread(
+        {"unread": 4, "last_ts": 10, "last_read_ts": 20}) == 0   # 已读覆盖
+    assert store.effective_unread(
+        {"unread": 4, "last_ts": 30, "last_read_ts": 20}) == 4   # 末条更新
+    store.close()

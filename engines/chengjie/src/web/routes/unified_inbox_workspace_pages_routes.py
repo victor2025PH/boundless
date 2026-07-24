@@ -130,6 +130,33 @@ def register_workspace_pages_routes(
             return RedirectResponse("/workspace/dash", status_code=307)
         return templates.TemplateResponse(request, "setup_wizard.html", _page_ctx(request))
 
+    # ── 渠道中心（四渠道设置融合，主管专属）─────────────────────────
+    # 旧管理后台四页（/telegram /line-rpa /messenger-rpa /whatsapp-rpa）整体迁入
+    # 工作台壳：正文 partial =_channel_body_<ch>.html，观感由 workspace_channels.html
+    # 的「变量桥」统一；旧路径 302 到这里（书签不断）。
+    _CHANNEL_KEYS = ("telegram", "line", "messenger", "whatsapp")
+
+    @app.get("/workspace/channels", response_class=HTMLResponse)
+    async def workspace_channels_root(request: Request, _=Depends(page_auth)):
+        if not _is_supervisor(request):
+            return RedirectResponse("/workspace/dash", status_code=307)
+        q = request.url.query
+        return RedirectResponse(
+            "/workspace/channels/telegram" + (f"?{q}" if q else ""), status_code=307
+        )
+
+    @app.get("/workspace/channels/{channel}", response_class=HTMLResponse)
+    async def workspace_channels_page(
+        channel: str, request: Request, _=Depends(page_auth),
+    ):
+        if channel not in _CHANNEL_KEYS:
+            return RedirectResponse("/workspace/channels/telegram", status_code=307)
+        if not _is_supervisor(request):
+            return RedirectResponse("/workspace/dash", status_code=307)
+        ctx = _page_ctx(request)
+        ctx["channel"] = channel
+        return templates.TemplateResponse(request, "workspace_channels.html", ctx)
+
     @app.get("/workspace/kb-start", response_class=HTMLResponse)
     async def workspace_kb_start_page(request: Request, _=Depends(page_auth)):
         # P1-2：知识库冷启动向导（主管专属；非主管回落今日概览）

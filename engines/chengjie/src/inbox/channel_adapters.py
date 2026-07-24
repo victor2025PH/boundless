@@ -608,7 +608,9 @@ class WebInboxAdapter:
                 logger.debug("[web_chat] set manual 失败", exc_info=True)
         try:
             from src.integrations.shared.event_bus import get_event_bus
-            get_event_bus().publish("inbox_message", {
+            # P2-2：出站走独立事件类型（inbox_message 会被前端当新入站给非选中会话
+            # unread+1；outbound_message = 刷新预览/线程但不加未读）。
+            get_event_bus().publish("outbound_message", {
                 "conversation_id": cid, "platform": "web", "account_id": wc.account_id,
                 "chat_key": visitor_id, "preview": text[:80],
                 "direction": "out", "ts": _time.time(),

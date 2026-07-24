@@ -30,7 +30,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .models import InboxConversation, InboxMessage, MessageAnalysis
 
@@ -622,6 +622,12 @@ _MIGRATIONS = [
     # （emoji/不可译，只译一次的证据）、deferred=转后台补译条数（首开消化量/趋势）。
     "ALTER TABLE inbound_xlate_daily ADD COLUMN noop INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE inbound_xlate_daily ADD COLUMN deferred INTEGER NOT NULL DEFAULT 0",
+    # 已读水位（P0 未读可信化）：坐席在工作台「读到哪条时间戳」。区别于 unread——
+    # unread 是平台/手机端同步来的未读数（协议号 upsert_protocol_chats 每轮覆盖，
+    # 坐席在台里读了它也照样回弹）。有了本列，「有效未读」由后端派生：
+    # 仅当 last_ts > last_read_ts 才算真未读，坐席打开会话即写高水位，永不回弹。
+    # 单调递增（见 mark_conversation_read 的 MAX 语义）。缺省 0=从未读过。
+    "ALTER TABLE conversations ADD COLUMN last_read_ts REAL NOT NULL DEFAULT 0",
 ]
 
 
@@ -1239,6 +1245,28 @@ class InboxStore:
             row = self._conn.execute(sql, params).fetchone()
         return int(row[0] if row else 0)
 
+    def count_conversations_active_since(
+        self, since_ts: float, *, platform: str = "",
+    ) -> Dict[Tuple[str, str], int]:
+        """按 (platform, account_id) 统计 ``last_ts >= since_ts`` 的会话数。
+
+        供账号卡「今日 N 会话」一次批量取数（避免 N 次 COUNT）。空结果 → {}。
+        """
+        since = float(since_ts or 0)
+        sql = ("SELECT platform, account_id, COUNT(*) AS n FROM conversations"
+               " WHERE last_ts >= ?")
+        params: List[Any] = [since]
+        if platform:
+            sql += " AND platform = ?"
+            params.append(platform)
+        sql += " GROUP BY platform, account_id"
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        out: Dict[Tuple[str, str], int] = {}
+        for r in rows:
+            out[(str(r["platform"] or ""), str(r["account_id"] or ""))] = int(r["n"] or 0)
+        return out
+
     def get_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             row = self._conn.execute(
@@ -1264,6 +1292,64 @@ class InboxStore:
             )
             self._conn.commit()
         return cur.rowcount > 0
+
+    def mark_conversation_read(
+        self, conversation_id: str, read_ts: Optional[float] = None,
+    ) -> float:
+        """P0 未读可信化：把会话已读水位推进到 ``read_ts``（缺省=该会话当前 last_ts）。
+
+        坐席在工作台打开会话即调用，写「读到这个时间戳」的高水位。「有效未读」由读路径
+        据此派生（``last_ts > last_read_ts`` 才算真未读），从而不被协议号每轮同步的
+        ``unread`` 覆盖回弹（手机端未读数与坐席已读态本是两套语义）。
+
+        水位**单调递增**（取 MAX，防乱序/旧值回退）；同时把 ``mentioned_unread`` 一并清零
+        （打开即视为看到 @我，与前端 _clearMention 同口径，避免两处状态漂移）。
+        返回写入后的有效水位。会话不存在 → 返回 0.0（不建空行）。
+        """
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return 0.0
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT last_ts, last_read_ts FROM conversations "
+                "WHERE conversation_id=?",
+                (cid,),
+            ).fetchone()
+            if row is None:
+                return 0.0
+            cur_last = float(row["last_ts"] or 0)
+            cur_read = float(row["last_read_ts"] or 0)
+            target = float(read_ts) if read_ts is not None else cur_last
+            new_read = max(cur_read, target, cur_last if read_ts is None else 0.0)
+            if new_read <= cur_read and cur_read > 0:
+                # 水位未前进：仅确保 @我 旗标清零，不无谓 bump updated_at
+                self._conn.execute(
+                    "UPDATE conversations SET mentioned_unread=0 "
+                    "WHERE conversation_id=? AND mentioned_unread!=0", (cid,))
+                self._conn.commit()
+                return cur_read
+            self._conn.execute(
+                "UPDATE conversations SET last_read_ts=?, mentioned_unread=0, "
+                "updated_at=? WHERE conversation_id=?",
+                (new_read, self._now(), cid),
+            )
+            self._conn.commit()
+        return new_read
+
+    def effective_unread(self, row: Dict[str, Any]) -> int:
+        """由会话行派生「有效未读」：已读水位覆盖到末条 → 0，否则用同步来的 unread。
+
+        纯函数（读 row 的 last_ts/last_read_ts/unread），供读路径统一口径。
+        """
+        try:
+            last_ts = float(row.get("last_ts") or 0)
+            last_read = float(row.get("last_read_ts") or 0)
+            raw = int(row.get("unread") or 0)
+        except (TypeError, ValueError):
+            return int(row.get("unread") or 0)
+        if raw <= 0:
+            return 0
+        return raw if last_ts > last_read else 0
 
     def update_conversation_identity(
         self,

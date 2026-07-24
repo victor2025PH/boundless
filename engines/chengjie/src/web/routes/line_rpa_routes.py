@@ -62,10 +62,15 @@ def register_line_rpa_routes(app, *, page_auth, api_auth, templates, config_mana
                               audit_store=None):
     """在 FastAPI app 上挂载 LINE RPA 相关路由。"""
 
+    # 渠道中心融合：旧管理后台页整体迁入工作台壳（正文见
+    # templates/_channel_body_line.html），此处仅保留跳转（书签/站内旧链接不断）。
     @app.get("/line-rpa", response_class=HTMLResponse)
-    async def line_rpa_page(request: Request, _=Depends(page_auth)):
-        # 权限由 page_auth + _require_role 负责（在 admin.py 里增加 line_rpa key）
-        return templates.TemplateResponse(request, "line_rpa.html", {})
+    async def line_rpa_page(request: Request):
+        from fastapi.responses import RedirectResponse
+        q = request.url.query
+        return RedirectResponse(
+            "/workspace/channels/line" + (f"?{q}" if q else ""), status_code=302
+        )
 
     @app.get("/api/line-rpa/status")
     async def api_line_rpa_status(request: Request):

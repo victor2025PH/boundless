@@ -103,9 +103,15 @@ def register_whatsapp_rpa_routes(
 
     # ── Web 页面 ─────────────────────────────────────────────────────────
 
+    # 渠道中心融合：旧管理后台页整体迁入工作台壳（正文见
+    # templates/_channel_body_whatsapp.html），此处仅保留跳转（书签/站内旧链接不断）。
     @app.get("/whatsapp-rpa", response_class=HTMLResponse)
-    async def whatsapp_rpa_page(request: Request, _=Depends(page_auth)):
-        return templates.TemplateResponse(request, "whatsapp_rpa.html", {})
+    async def whatsapp_rpa_page(request: Request):
+        from fastapi.responses import RedirectResponse
+        q = request.url.query
+        return RedirectResponse(
+            "/workspace/channels/whatsapp" + (f"?{q}" if q else ""), status_code=302
+        )
 
     # ── 状态 ─────────────────────────────────────────────────────────────
 

@@ -278,6 +278,23 @@ def normalize_chat(
     }
 
 
+def _effective_unread_from_row(row: Dict[str, Any]) -> int:
+    """P0：由会话行派生「有效未读」——已读水位覆盖末条则 0，否则用同步 unread。
+
+    纯逻辑（不依赖 store 实例，避免 normalizer→store 循环依赖）；与
+    ``InboxStore.effective_unread`` 同口径，读路径统一走这里。
+    """
+    try:
+        raw = int(row.get("unread") or 0)
+        if raw <= 0:
+            return 0
+        last_ts = float(row.get("last_ts") or 0)
+        last_read = float(row.get("last_read_ts") or 0)
+    except (TypeError, ValueError):
+        return int(row.get("unread") or 0)
+    return raw if last_ts > last_read else 0
+
+
 def store_row_to_chat(
     row: Dict[str, Any],
     *,
@@ -334,7 +351,16 @@ def store_row_to_chat(
         or infer_chat_type(platform, chat_key),
         "last_msg": last_text,
         "last_ts": row.get("last_ts") or 0,
-        "unread": int(row.get("unread") or 0),
+        # P0 未读可信化：``unread`` 对外恒为「有效未读」——已读水位（last_read_ts）覆盖到
+        # 末条则 0，否则用同步来的 unread。这样协议号每轮 upsert_protocol_chats 覆盖的
+        # 手机端未读数不会把坐席已读态冲回（打开即已读、永不回弹）。
+        # ``synced_unread`` 保留平台/手机端原始未读，供前端出「灰色·手机端未读」徽标区分。
+        "unread": _effective_unread_from_row(row),
+        "synced_unread": int(row.get("unread") or 0),
+        # 占位会话：有同步未读但本地零条消息（协议号只同步了会话列表、消息本体没回流）。
+        # 前端据此出专属空态（「历史尚未回流」+ 拉取按钮），而非通用「暂无消息」。
+        "is_placeholder": bool(int(row.get("unread") or 0) > 0
+                               and int(message_count or 0) == 0),
         # P4-11B 群「@我」未读旗标（store-backed 读路径透出；前端据此出 @ 徽标/置顶/提醒）
         "mentioned": bool(row.get("mentioned_unread") or 0),
         "language": language,

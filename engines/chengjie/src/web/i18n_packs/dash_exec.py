@@ -21,6 +21,7 @@ ZH = {
     "dash.exec.risk_warn": "需关注",
     "dash.exec.risk_frozen": "已冻结",
     "dash.exec.risk_unknown": "未知",
+    "dash.exec.churn_hot": "{n} 个号近 7 天改资料偏频繁",
 }
 
 EN = {
@@ -38,6 +39,7 @@ EN = {
     "dash.exec.risk_warn": "Attention",
     "dash.exec.risk_frozen": "Frozen",
     "dash.exec.risk_unknown": "Unknown",
+    "dash.exec.churn_hot": "{n} account(s) with frequent profile edits (7d)",
 }
 
 VI = {
@@ -52,4 +54,5 @@ VI = {
     "dash.exec.risk_warn": "Cần chú ý",
     "dash.exec.risk_frozen": "Đã đóng băng",
     "dash.exec.risk_unknown": "Không rõ",
+    "dash.exec.churn_hot": "{n} tài khoản đổi hồ sơ nhiều trong 7 ngày",
 }

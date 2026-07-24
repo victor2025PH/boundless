@@ -302,6 +302,12 @@
   [data-cp-theme="dark"] .ws-drill-allbtn:hover{background:#7c2d12;color:#fed7aa;border-color:#9a3412;}
   /* P7：窄屏药丸只留 图标+数字（标签隐藏，防溢出/换行） */
   @media (max-width:1180px){ .ws-pill-lb{display:none;} .ws-user-name{display:none;} }
+  /* 顶栏 PWA/语言药丸皮肤（内联只留布局，色值集中在此便于主题层覆盖） */
+  .ws-pwa-pill,.ws-lang-pill{
+    border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.14);
+    color:var(--th-ink-inverse,#fff);font-size:12px;cursor:pointer;
+    white-space:nowrap;user-select:none;margin-right:2px;
+  }
   /* 六期：窄屏顶栏收敛 —— 藏全局搜（CmdK 仍可用）、主导航图标化、药丸收成圆点 */
   @media (max-width:768px){
     .ws-top{gap:6px;padding:0 8px;}
@@ -448,7 +454,7 @@
     var tst=document.createElement('div');
     tst.textContent=window.T('base.pwa.hint');
     tst.style.cssText='position:fixed;top:52px;right:14px;z-index:9998;max-width:280px;'+
-      'background:var(--th-bg-surface,#1e293b);color:var(--th-ink-main,#e2e8f0);border:1px solid var(--th-bd-gray2,#334155);'+
+      'background:var(--th-bg-surface,#fff);color:var(--th-ink-slate8,#1e293b);border:1px solid var(--th-bd-gray2,#e5e7eb);'+
       'border-radius:10px;padding:9px 13px;font-size:12px;line-height:1.5;box-shadow:0 6px 20px rgba(0,0,0,.25);cursor:pointer;';
     tst.addEventListener('click', function(){ tst.remove(); });
     document.body.appendChild(tst);
@@ -493,6 +499,7 @@
         <div class="ws-more-grp" data-i18n="base.grp.boundless">无界产品族</div>
         <a href="{{ brand_hub_url|default('https://bd2026.cc/brand') }}" target="_blank" rel="noopener noreferrer" data-i18n="base.nav.brand_hub">了解更多产品 ↗</a>
         <div class="ws-more-grp" id="ws-grp-config" style="display:none;" data-i18n="base.grp.config">配置与上线</div>
+        <a href="/workspace/channels" id="ws-channels-link" style="display:none;" data-i18n="base.nav.channels" data-i18n-title="base.nav.channels_t" title="渠道中心：四渠道账号与自动化配置（主管）">渠道中心</a>
         <a href="/workspace/setup" id="ws-setup-link" style="display:none;" data-i18n="base.nav.setup" data-i18n-title="base.nav.setup_t" title="渠道接入向导（主管）">接入向导</a>
         <a href="/workspace/kb-start" id="ws-kbstart-link" style="display:none;" data-i18n="base.nav.kbstart" data-i18n-title="base.nav.kbstart_t" title="知识库冷启动（主管）">知识库起步</a>
         <a href="/workspace/workflows" id="ws-workflow-link" style="display:none;" data-i18n="base.nav.workflows" data-i18n-title="base.nav.workflows_t" title="工作流 / 路由规则配置">工作流</a>
@@ -527,22 +534,15 @@
   <!-- PWA 安装：顶栏常驻小入口（beforeinstallprompt 捕获后由 head 内脚本点亮；已安装/不支持则始终隐藏）。
        原实现为右下角浮动按钮，会盖住业务助手侧栏内容 → 移入顶栏。 -->
   <a class="ws-pwa-pill" id="ws-pwa-install" data-i18n-title="base.pwa.install_t" title="安装为桌面应用（独立窗口 + 开机可启）"
-     style="display:none;align-items:center;gap:4px;height:26px;padding:0 10px;border-radius:13px;
-            border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.14);color:var(--th-ink-inverse,#fff);
-            font-size:12px;cursor:pointer;white-space:nowrap;user-select:none;margin-right:2px;">
+     style="display:none;align-items:center;gap:4px;height:26px;padding:0 10px;border-radius:13px;">
     <span data-ui-icon="download" data-size="13"></span><span class="ws-nav-lbl" data-i18n="base.pwa.install">安装App</span>
   </a>
   <!-- 语言切换：顶栏常驻可见按钮（此前仅藏于用户菜单，不易发现）。点击整页切 中⇄英（/set_lang），全站含 copilot 组件随之重渲。 -->
   <a class="ws-lang-pill" id="ws-lang-pill" onclick="window.wsToggleLang&&window.wsToggleLang()"
      data-i18n-title="base.um.lang_t" title="切换语言 / Switch language"
-     style="display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 10px;border-radius:13px;
-            border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.14);color:var(--th-ink-inverse,#fff);
-            font-size:12px;cursor:pointer;white-space:nowrap;user-select:none;margin-right:2px;">
+     style="display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 10px;border-radius:13px;">
     <span data-ui-icon="globe" data-size="13"></span><span data-i18n="lang_toggle">English</span>
   </a>
-  <!-- 用户菜单：状态 / 今日概览 / 设置 / 退出 收纳，降低顶栏密度 -->
-  <div class="ws-user-wrap" id="ws-user-wrap">
-    <span class="ws-user-btn" id="ws-user-btn" onclick="_wsToggleUser(event)">
   {#- 档位徽章（融合实例 P4b）：feature_gate 开启才渲染（plan_badge 由 admin._enrich_context
       全局注入,gate 关=None=零变化）。主管可点进会员中心；坐席不可点（/membership 不在
       坐席页面白名单,渲染成纯标识防 302 死链）。配色与 base.html plan-badge 同族。 -#}
@@ -554,6 +554,9 @@
   <span class="{{ _pb_cls }}" data-i18n-title="base.plan_badge_ro_t" title="当前系统授权档位">{{ (i18n or {}).get(plan_badge.label_key, plan_badge.plan) }}</span>
     {% endif %}
   {% endif %}
+  <!-- 用户菜单：状态 / 今日概览 / 设置 / 退出 收纳，降低顶栏密度 -->
+  <div class="ws-user-wrap" id="ws-user-wrap">
+    <span class="ws-user-btn" id="ws-user-btn" onclick="_wsToggleUser(event)">
       <span class="ws-user-ava">{{ ((user_display_name or user_name or 'U'))[0]|upper }}</span>
       <span class="ws-user-name">{{ (user_display_name or user_name or '') }}</span>
       <span class="ws-user-caret">▾</span>
@@ -1213,6 +1216,8 @@ document.addEventListener('click',function(e){
       if(_gl) _gl.style.display='block';  // P2-1: 上线自检仅主管可见
       var _sl=document.getElementById('ws-setup-link');
       if(_sl) _sl.style.display='block';  // P1-1: 接入向导仅主管可见
+      var _chl=document.getElementById('ws-channels-link');
+      if(_chl) _chl.style.display='block';  // 渠道中心仅主管可见
       var _ksl=document.getElementById('ws-kbstart-link');
       if(_ksl) _ksl.style.display='block';  // P1-2: 知识库冷启动仅主管可见
       var _rl=document.getElementById('ws-roi-link');
