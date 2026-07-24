@@ -2,8 +2,20 @@
 # 用法: powershell -ExecutionPolicy Bypass -File .\start_main.ps1
 # 建议：任务计划程序「登录时」触发本脚本（见下方 schtasks 示例）。
 
+param([switch]$ForceLegacy)
 $ErrorActionPreference = "SilentlyContinue"
 Set-Location $PSScriptRoot
+
+# ⛔ 双实例部署护栏（2026-07-22）：本机迁移双实例后，本脚本的「清 18799 幽灵持有者」
+#    会把智聊生产实例当幽灵杀掉再起老配置单实例。检测到实例数据根即拒绝；
+#    单实例机器确需老行为传 -ForceLegacy。启停一律用 deploy\instances\ 下脚本。
+if (-not $ForceLegacy) {
+    if ((Test-Path "D:\chengjie-instances\zhiliao\data\config\config.yaml") -or
+        (Test-Path "D:\chengjie-instances\tongyi\data\config\config.yaml")) {
+        Write-Host "[start-main] ⛔ 双实例部署机器，禁止老式单实例启动；用 deploy\instances\start_zhiliao.ps1 / start_tongyi.ps1" -ForegroundColor Red
+        exit 1
+    }
+}
 
 # 已在跑则跳过（避免重复实例争端口）
 $existing = Get-CimInstance Win32_Process -Filter "name='python.exe'" |

@@ -52,6 +52,9 @@ EVALS: List[Dict[str, Any]] = [
      "label": {"zh": "记忆抽取质量（启发式）", "en": "Memory extraction quality"}},
     {"key": "voice-language", "args": ["--voice-language"],
      "label": {"zh": "语音合成语言一致性", "en": "Voice language consistency"}},
+    {"key": "media-consistency", "args": ["--media-consistency"],
+     "label": {"zh": "图文一致性（发图不否认/无图不谎称/场景不矛盾）",
+               "en": "Image-text consistency"}},
     {"key": "xlate-confidence", "args": ["--xlate-confidence"],
      "label": {"zh": "译文置信度 scorer", "en": "Translation confidence scorer"}},
     {"key": "intent", "args": [],
@@ -128,6 +131,11 @@ def _headline(key: str, report: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if key == "voice-language":
         return out("语音语种一致性", "Voice-language consistency",
                    _pct(s.get("accuracy")), s.get("total"))
+    if key == "media-consistency":
+        # 报告为顶层 {total, matched, passed}（无 summary 包裹）；对齐率 = matched/total
+        mt, tt = r.get("matched"), r.get("total")
+        val = _pct(mt / tt) if (isinstance(mt, int) and isinstance(tt, int) and tt) else None
+        return out("图文一致性对齐率（发图诚实红线）", "Image-text consistency", val, tt)
     if key == "xlate-confidence":
         return out("置信度判别准确率", "Confidence-scorer accuracy",
                    _pct(s.get("accuracy")), s.get("total"))

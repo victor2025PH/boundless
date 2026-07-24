@@ -154,6 +154,42 @@ Host tongchuan
     ServerAliveInterval 30
     ConnectTimeout 8
 
+Host huanying
+    HostName 192.168.0.173
+    User admin
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host livex173
+    HostName 192.168.0.173
+    User admin
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host gpu173
+    HostName 192.168.0.173
+    User admin
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host voice173
+    HostName 192.168.0.173
+    User admin
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
 Host vps-bd2026 bd2026
     HostName 165.154.233.121
     User ubuntu

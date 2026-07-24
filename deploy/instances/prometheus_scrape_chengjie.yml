@@ -1,0 +1,46 @@
+# Prometheus scrape snippet for dual-instance restart resilience metrics.
+# Merge under scrape_configs: in your prometheus.yml (or Grafana Alloy prometheus.scrape).
+#
+# Auth: each instance has its own web_admin.auth_token in
+#   D:\chengjie-instances\<id>\data\config\config.local.yaml
+# Prefer file-based credentials (do not commit real tokens):
+#   echo Bearer <token> > D:\chengjie-instances\.ops\prom_bearer_zhiliao
+#   echo Bearer <token> > D:\chengjie-instances\.ops\prom_bearer_tongyi
+#
+# Alert rules: prometheus_alerts_chengjie_restart.yml
+# Dashboard:   grafana_dashboard_restart.json
+# Validate:    probe_prom_restart.ps1
+
+scrape_configs:
+  - job_name: chengjie_zhiliao
+    metrics_path: /api/workspace/metrics
+    params:
+      format: [prometheus]
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    static_configs:
+      - targets: ["127.0.0.1:18799"]
+        labels:
+          product: zhiliao
+          product_name: ChatX
+    authorization:
+      type: Bearer
+      credentials_file: D:/chengjie-instances/.ops/prom_bearer_zhiliao_raw
+      # file contents = raw token only (no "Bearer " prefix) when using authorization:
+      # If your Prom version only supports bearer_token_file with full header value,
+      # switch to: bearer_token_file: D:/chengjie-instances/.ops/prom_bearer_zhiliao
+
+  - job_name: chengjie_tongyi
+    metrics_path: /api/workspace/metrics
+    params:
+      format: [prometheus]
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    static_configs:
+      - targets: ["127.0.0.1:18899"]
+        labels:
+          product: tongyi
+          product_name: LingoX
+    authorization:
+      type: Bearer
+      credentials_file: D:/chengjie-instances/.ops/prom_bearer_tongyi_raw

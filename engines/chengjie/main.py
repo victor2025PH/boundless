@@ -95,10 +95,28 @@ class AIChatAssistant:
         # 坐席工作台实时化（D5a）：收件箱后台 ingest 轮询任务 + web_app 引用
         self._web_app = None  # type: Optional[Any]  # noqa: F821
         self._inbox_ingest_task = None
+        # Phase 11：启动分阶段计时（冷启动归因）；initialize() 早期实例化，失败绝不挡启动
+        self._boot_timer = None  # type: Optional[Any]  # noqa: F821
+
+    def _boot_mark(self, name: str) -> None:
+        """标记一个启动阶段边界（None 安全 + 异常安全，绝不影响启动流程）。"""
+        t = getattr(self, "_boot_timer", None)
+        if t is not None:
+            try:
+                t.mark(name)
+            except Exception:
+                pass
 
     async def initialize(self):
         """初始化所有组件"""
         try:
+            # Phase 11：启动分阶段计时起点（尽早创建，覆盖 config 加载起）。
+            try:
+                from src.bootstrap.boot_timing import BootTimer
+                self._boot_timer = BootTimer()
+            except Exception:
+                self._boot_timer = None
+
             # 1. 先设置一个临时的控制台日志记录器
             self.logger = setup_logger(log_file=None, console_output=True)
             self.logger.info("开始初始化AI聊天助手...")
@@ -107,6 +125,7 @@ class AIChatAssistant:
             self.config = ConfigManager()
             await self.config.load()
             self.logger.info("配置加载成功")
+            self._boot_mark("config")
 
             # 2b. 本机情感克隆(IndexTTS2)进程托管：随主程序一起启停（默认关，见
             #     minicpm_clone.local_autostart）。尽早拉起，让 ~60-90s 的 eager 载入
@@ -129,6 +148,7 @@ class AIChatAssistant:
                     self.logger.info("AvatarHub 语音预热已调度（后台）")
             except Exception as ex:
                 self.logger.warning("AvatarHub 语音预热调度异常（忽略）: %s", ex)
+            self._boot_mark("local_tts")
 
             # 3. 根据配置重新配置日志记录器
             log_config = self.config.config.get("logging", {})
@@ -144,15 +164,26 @@ class AIChatAssistant:
             except Exception:
                 self.logger.debug("退出可观测安装失败（已忽略）", exc_info=True)
 
+            self._boot_mark("logging")
+
             # 3. 初始化AI客户端
             self.ai_client = AIClient(self.config)
             await self.ai_client.initialize()
             self.logger.info("AI客户端初始化成功")
+            # 语音口语化 LLM 档（voice_colloquial_llm）复用主 AIClient 的 ai.fallback 本地端点
+            # 做 rewrite_local——注入已初始化实例（否则其懒加载会建未初始化的空 client → 恒回落规则档）。
+            try:
+                from src.ai.voice_colloquial_llm import set_ai_client as _set_vcl_client
+                _set_vcl_client(self.ai_client)
+            except Exception as _e:
+                self.logger.debug("voice_colloquial_llm 注入 AIClient 失败（回落规则档）: %s", _e)
+            self._boot_mark("ai_client")
 
             # 4. 初始化Skill管理器
             self.skill_manager = SkillManager(self.config, self.ai_client)
             await self.skill_manager.initialize()
             self.logger.info("Skill管理器初始化成功")
+            self._boot_mark("skill_manager")
 
             # N 线 核心4：注入统一运行时上下文，供编排器把协议号（扫码登录）拉起为 A 线丰富 client
             try:
@@ -168,6 +199,7 @@ class AIChatAssistant:
             # 5. Telegram 协议客户端(registry + N5 + desktop/client-init)
             from src.bootstrap.services import setup_telegram_clients
             await setup_telegram_clients(self)
+            self._boot_mark("telegram_clients")
             self.logger.info("✅ AI聊天助手初始化完成")
 
             # C0-1 授权状态（只读提示，不阻断启动）
@@ -222,17 +254,22 @@ class AIChatAssistant:
             except Exception:
                 self.logger.debug("startup_advisory metrics 跳过", exc_info=True)
 
+            self._boot_mark("advisories")
+
             # RPA 服务: LINE / Messenger / WhatsApp
             from src.bootstrap.services import setup_rpa_services
             setup_rpa_services(self)
+            self._boot_mark("rpa_services")
 
             # 设备管理: 协调器 / 注册表 / 热插拔(HotPlug)
             from src.bootstrap.services import setup_device_management
             setup_device_management(self)
+            self._boot_mark("device_mgmt")
 
             # ── Contacts 跨平台子系统（feature flag 控制）──
             from src.bootstrap.services import setup_contacts_subsystem
             setup_contacts_subsystem(self)
+            self._boot_mark("contacts")
 
             # ── Mobile Bridge（依赖 Contacts 子系统，仅 contacts 启用时构建）──
             if self.contacts is not None:
@@ -264,14 +301,38 @@ class AIChatAssistant:
                 except Exception as ex:
                     self.logger.warning("Mobile Bridge 构建跳过: %s", ex)
 
+            self._boot_mark("mobile_bridge")
+
             # Web 管理后台
             web_cfg = self.config.config.get("web_admin", {})
             from src.bootstrap.web_app import setup_web_app
             setup_web_app(self, web_cfg)
+            # ★ /login 可服务的里程碑：web 线程在 setup_web_app 末尾已 bind+serve。
+            #    此处累计 = 「进程起来 → seat 可登录」的真实冷启动窗口。
+            self._boot_mark("web_app")
 
             # 监控 API 后台线程（Stage 2：抽到 bootstrap/web_app.py::start_monitoring_thread）
             from src.bootstrap.web_app import start_monitoring_thread
             start_monitoring_thread(self)
+            self._boot_mark("monitoring")
+
+            # Phase 11：落一行分阶段计时到 app.log + 入 metrics_store（下次重启即读真实归因）。
+            try:
+                if self._boot_timer is not None:
+                    _summary = self._boot_timer.summary()
+                    self.logger.info(self._boot_timer.format_line())
+                    try:
+                        from src.monitoring.metrics_store import get_metrics_store
+                        get_metrics_store().set_boot_timing(_summary)
+                    except Exception:
+                        self.logger.debug("boot_timing metrics 跳过", exc_info=True)
+                    if self._web_app is not None:
+                        try:
+                            self._web_app.state.boot_timing = _summary
+                        except Exception:
+                            pass
+            except Exception:
+                self.logger.debug("boot_timing 汇总跳过", exc_info=True)
             return True
 
         except Exception as e:
@@ -609,6 +670,23 @@ class AIChatAssistant:
                 self.logger.info("✅ 每人设相册/媒体注册表就绪（persona_media.db）")
         except Exception:
             self.logger.warning("每人设相册/媒体注册表初始化失败（已忽略）", exc_info=True)
+
+    def _init_fatex_store(self) -> None:
+        """装配 FateX（问衍）产品独立数据库（fatex.db，与主库物理分离）。
+
+        命理产品的权威生辰画像按 (platform, account_id, chat_key) 结构化落本库
+        （episodic 仅保留「说过生辰」的对话记忆），产品数据与主产品互不落对方库；
+        路径随 config 目录 → 双实例天然隔离。故障软忽略，绝不阻断主产品启动。
+        """
+        try:
+            from src.fatex import product_badge
+            from src.fatex.store import configure_fatex_store
+            _cfg_dir = Path(self.config.config_path).parent
+            store = configure_fatex_store(_cfg_dir / "fatex.db")
+            if store is not None:
+                self.logger.info("✅ %s 产品库就绪（fatex.db）", product_badge())
+        except Exception:
+            self.logger.warning("FateX 产品库初始化失败（已忽略）", exc_info=True)
 
     def _maybe_init_identity_trend_log(self) -> None:
         """F1：按 ``inbox.identity.trend_log`` 装配会话身份健康日聚合落库（默认关）。

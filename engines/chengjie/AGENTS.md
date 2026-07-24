@@ -901,9 +901,18 @@ steady=52、intimate=78…）→ 聊很多轮但 intimacy 分低也能更早主�
 - 验证类改动先跑 pytest（测试自建 app/store，不依赖常驻服务），别用「重启生产看效果」当测试。
 
 **必须重启时**（业务 .py 改动）：
-- 用 `scripts\restart_main.ps1`（停旧→起新→**轮询 /login 到 200**→报告窗口耗时；
-  起失败会大声报错而非静默死机）；
-- **攒批重启**：多项改动合一次重启，别每改一行重启一次（2026-07-12 曾一天重启 13 次，
+- ⛔ **本机已迁双实例部署（2026-07 起），禁止再用 `scripts\restart_main.ps1` / `start_main.ps1`**——
+  它们的「杀所有 main.py + 引擎根老配置起单实例」语义会**同时杀死智聊/通译两个生产实例**并起一个
+  抢同一 Telegram 账号的 18787 幽灵实例（2026-07-22 18:53 实锤事故：全站断连 + 看门狗被幽灵骗过）。
+  两脚本已加双实例检测护栏（拒跑 exit 1），别绕过；
+- **正确重启（唯一入口）**：
+  `powershell -ExecutionPolicy Bypass -File deploy\instances\restart_instance.ps1 -Instance zhiliao`
+  （通译改 `-Instance tongyi`）。脚本自带：只动一台、**机器级** 10min 冷却（与 watchdog 共用
+  `D:\chengjie-instances\.ops\restart_cooldown\`）、仅模板/i18n 脏树时拒重启、清 exit 哨兵、等 `/login` 200、
+  可选 ops 告警。不确定先 `-Advise`；应急 `-Force`；热文件仍要硬重启 `-AllowHotOnly`。
+  ops 卡「实例重启冷却」=`GET /api/admin/instance-restart-status`。看门狗假活强制重启读同一冷却（冷却中跳过）；
+  **不要**把 watchdog 当「改完代码必重启」；
+- **攒批重启**：多项改动合一次重启，别每改一行重启一次（2026-07-12 / 2026-07-22 曾连环重启 →
   坐席端反复撞「加载超时」红屏——前端虽已有自动退避重连自愈，但窗口本身应尽量少出现）；
 - 多 agent 并发**必须 worktree 隔离**（见 Git workflow），只有负责生产机的那条线才碰常驻服务。
 

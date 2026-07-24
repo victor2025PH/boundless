@@ -1,25 +1,25 @@
-﻿# stop_instance.ps1 — 按实例停止 chengjie 双实例（防呆：只停「持有实例端口且命令行是引擎 main.py」的进程树）
-# 用法: powershell -ExecutionPolicy Bypass -File .\stop_instance.ps1 -Instance tongyi [-TimeoutSec 15]
-# 行为：
-#   - 实例端口无监听 → 视为未在跑，幂等退出 0；
-#   - 端口持有者命令行不含 main.py → 报错退出 1，绝不误杀（与 start 脚本同一防呆哲学）；
-#   - 停止 = taskkill /T /F 进程树（引擎无优雅停止 HTTP 端点；main.py 的 SIGTERM 优雅路径
-#     在 Windows 分离进程上不可达——exit_sentinel 会把这次记为强停，属预期）；
-#     python 由 cmd /c 链拉起，python 树死后 cmd 壳自行退出；
-#   - 停止后确认端口释放（默认等 15s），未释放报错退出 1。
+﻿# stop_instance.ps1 — stop one chengjie dual-instance (port-holder must be engine main.py)
+# Usage: powershell -ExecutionPolicy Bypass -File .\stop_instance.ps1 -Instance tongyi [-TimeoutSec 20] [-GraceSec 8]
+#
+# Phase3 graceful stop:
+#   1) taskkill /T (no /F) — gives python a chance to run atexit / clear sentinel
+#   2) wait up to GraceSec for ports to release
+#   3) if still listening → taskkill /T /F (hard kill, then clear sentinel ourselves)
+#
+# ASCII-lean log lines mixed with existing Chinese status (file already bilingual).
 
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('tongyi', 'zhiliao')]
     [string]$Instance,
-    [int]$TimeoutSec = 15
+    [int]$TimeoutSec = 20,
+    [int]$GraceSec = 8
 )
 
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
 
-# 端口登记与 start_*.ps1 / status_instances.ps1 / stack.json 保持一致
 $PortMap = @{ tongyi = @(18899, 18887); zhiliao = @(18799, 18787) }
 $Ports   = $PortMap[$Instance]
 
@@ -28,8 +28,18 @@ function Fail([string]$msg) {
     exit 1
 }
 
-# ── 找端口持有者（主位+备用位都查，防端口漂移后漏停）────────────────────
-$holders = @{}   # pid -> 端口列表
+function Get-ListeningPorts {
+    $still = @()
+    foreach ($port in $Ports) {
+        if (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count) {
+            $still += $port
+        }
+    }
+    return $still
+}
+
+# Find port holders (primary + alt)
+$holders = @{}
 foreach ($port in $Ports) {
     foreach ($c in @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) {
         $holderPid = [int]$c.OwningProcess
@@ -42,11 +52,10 @@ if (-not $holders.Count) {
     exit 0
 }
 
-# ── 防呆：逐 PID 验明正身（命令行必须含 main.py），有一个不像就整体拒停 ────
 $targets = @()
 foreach ($holderPid in $holders.Keys) {
     $p = Get-CimInstance Win32_Process -Filter "ProcessId=$holderPid" -ErrorAction SilentlyContinue
-    if (-not $p) { continue }   # 竞态：刚退出
+    if (-not $p) { continue }
     if ($p.CommandLine -like '*main.py*') {
         $targets += [pscustomobject]@{ ProcessId = $holderPid; Name = $p.Name; Ports = $holders[$holderPid] }
     } else {
@@ -58,20 +67,94 @@ if (-not $targets.Count) {
     exit 0
 }
 
-# ── 停进程树 ─────────────────────────────────────────────────────────────
+$dataRoots = New-Object 'System.Collections.Generic.HashSet[string]'
 foreach ($t in $targets) {
-    Write-Host "[stop-$Instance] 停止 PID=$($t.ProcessId)($($t.Name)) 端口=$($t.Ports -join ',') （taskkill /T /F 进程树）"
-    & taskkill /PID $t.ProcessId /T /F 2>&1 | ForEach-Object { Write-Host "[stop-$Instance]   $_" -ForegroundColor DarkGray }
+    $p = Get-CimInstance Win32_Process -Filter "ProcessId=$($t.ProcessId)" -ErrorAction SilentlyContinue
+    for ($hop = 0; ($hop -lt 2) -and $p; $hop++) {
+        if ($p.CommandLine -match 'AITR_DATA_DIR=([^"&]+)') {
+            $root = $Matches[1].Trim().TrimEnd('\')
+            if ($root) { [void]$dataRoots.Add($root) }
+        }
+        $p = Get-CimInstance Win32_Process -Filter "ProcessId=$($p.ParentProcessId)" -ErrorAction SilentlyContinue
+    }
 }
 
-# ── 确认端口释放 ─────────────────────────────────────────────────────────
+# 1) Soft kill first (no /F) — atexit may clear sentinel.
+# Soft taskkill often fails without elevation (Access denied). Run via cmd so
+# stderr does not become a terminating NativeCommandError under $EAP=Stop.
+#
+# Phase10 SLA fix: headless python (no window) can't receive WM_CLOSE →
+# taskkill without /F returns "can only be terminated forcefully". Waiting the
+# full grace for a soft-kill that was REJECTED is pure wasted downtime (~8s every
+# restart). So: only wait grace when at least one soft-kill was ACCEPTED; if all
+# were rejected, skip straight to hard kill.
+$softAccepted = $false
+foreach ($t in $targets) {
+    Write-Host "[stop-$Instance] soft-stop PID=$($t.ProcessId)($($t.Name)) ports=$($t.Ports -join ',') (taskkill /T)"
+    $softOut = & cmd /c "taskkill /PID $($t.ProcessId) /T 2>&1"
+    $accepted = $false
+    foreach ($line in @($softOut)) {
+        Write-Host "[stop-$Instance]   $line" -ForegroundColor DarkGray
+        if ($line -match 'SUCCESS') { $accepted = $true }
+    }
+    if ($accepted) { $softAccepted = $true }
+}
+
+$released = $false
+if ($softAccepted) {
+    Write-Host "[stop-$Instance] soft-kill accepted; waiting up to ${GraceSec}s for atexit + port release" -ForegroundColor DarkGray
+    $graceDeadline = (Get-Date).AddSeconds([Math]::Max(0, $GraceSec))
+    while ((Get-Date) -lt $graceDeadline) {
+        Start-Sleep -Milliseconds 400
+        if (-not (Get-ListeningPorts).Count) { $released = $true; break }
+    }
+} else {
+    # All soft-kills rejected (headless process) — do not burn the grace window.
+    Write-Host "[stop-$Instance] soft-kill not applicable (headless); skipping grace, hard-stop now" -ForegroundColor DarkGray
+    Start-Sleep -Milliseconds 200
+    if (-not (Get-ListeningPorts).Count) { $released = $true }
+}
+
+# 2) Hard kill if still up
+if (-not $released) {
+    foreach ($t in $targets) {
+        $alive = Get-Process -Id $t.ProcessId -ErrorAction SilentlyContinue
+        if (-not $alive) { continue }
+        Write-Host "[stop-$Instance] hard-stop PID=$($t.ProcessId) (taskkill /T /F)" -ForegroundColor Yellow
+        try {
+            $hardOut = & cmd /c "taskkill /PID $($t.ProcessId) /T /F" 2>&1
+            foreach ($line in @($hardOut)) {
+                Write-Host "[stop-$Instance]   $line" -ForegroundColor DarkGray
+            }
+        } catch {
+            Write-Host "[stop-$Instance] hard-stop error: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+    # Hard kill skips atexit → clear sentinel ourselves
+    foreach ($root in $dataRoots) {
+        $sentinel = Join-Path $root 'logs\run_sentinel.json'
+        if (Test-Path $sentinel) {
+            Remove-Item $sentinel -Force -ErrorAction SilentlyContinue
+            Write-Host "[stop-$Instance] cleared sentinel after hard-stop: $sentinel" -ForegroundColor DarkGray
+        }
+    }
+} else {
+    Write-Host "[stop-$Instance] soft-stop released ports within grace" -ForegroundColor DarkGray
+    # Soft path usually clears sentinel via atexit; best-effort sweep if leftover
+    foreach ($root in $dataRoots) {
+        $sentinel = Join-Path $root 'logs\run_sentinel.json'
+        if (Test-Path $sentinel) {
+            Remove-Item $sentinel -Force -ErrorAction SilentlyContinue
+            Write-Host "[stop-$Instance] cleared leftover sentinel: $sentinel" -ForegroundColor DarkGray
+        }
+    }
+}
+
+# 3) Confirm ports free
 $deadline = (Get-Date).AddSeconds($TimeoutSec)
 do {
     Start-Sleep -Milliseconds 500
-    $still = @()
-    foreach ($port in $Ports) {
-        if (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count) { $still += $port }
-    }
+    $still = Get-ListeningPorts
     if (-not $still.Count) {
         Write-Host "[stop-$Instance] done — 端口 $($Ports -join '/') 已全部释放" -ForegroundColor Green
         exit 0

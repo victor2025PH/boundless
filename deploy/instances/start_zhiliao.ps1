@@ -142,6 +142,20 @@ $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
 if ($r.ReturnValue -ne 0) { Fail "进程创建失败 ReturnValue=$($r.ReturnValue)" }
 
 Start-Sleep -Seconds 4
+# 生产实例 CPU 保护（2026-07-23）：本机兼任开发/测试/坐席工作站（pytest -n auto、agent
+# 会话、浏览器常把 8 核打满），Normal 优先级下坐席 API 在尖峰期被挤到秒级 →「聊天记录
+# 加载失败/切换超时」。把引擎 python（cmd 壳的子进程）提到 AboveNormal；壳一并提，
+# 覆盖 python 尚未拉起时的继承路径。失败静默（优先级只是保护，不是启动前置条件）。
+try {
+    $shell = Get-Process -Id $r.ProcessId -ErrorAction SilentlyContinue
+    if ($shell) { $shell.PriorityClass = 'AboveNormal' }
+    foreach ($cp in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($r.ProcessId)" -ErrorAction SilentlyContinue)) {
+        if ($cp.Name -eq 'python.exe') {
+            (Get-Process -Id $cp.ProcessId -ErrorAction Stop).PriorityClass = 'AboveNormal'
+            Write-Host "[start-$InstanceId] 引擎进程优先级 → AboveNormal（坐席 API 抗本机负载挤压）"
+        }
+    }
+} catch {}
 $listening = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue).Count -gt 0
 if ($listening) {
     Write-Host "[start-$InstanceId] done — 端口 $Port 已在听  日志=$out" -ForegroundColor Green

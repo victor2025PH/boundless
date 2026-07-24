@@ -17,11 +17,44 @@
 #   - .py / web_i18n.py 键 / config 主档改动才需要重启。
 #
 # 用法: powershell -ExecutionPolicy Bypass -File scripts\restart_main.ps1
+#
+# ⛔ 双实例部署护栏（2026-07-22 事故加）：本机已迁移到双实例（智聊/通译各自
+#    AITR_DATA_DIR + deploy\instances\ 启停脚本）后，本脚本的「杀掉所有 main.py →
+#    引擎根配置起单实例」语义会**同时杀死两个生产实例**，再用老配置起一个抢
+#    同一 Telegram 账号的幽灵实例（18:53 实锤：坐席端全员断连 + 幽灵在 18787
+#    顶着智聊备用端口骗过看门狗）。检测到双实例数据根即拒绝运行；确需老行为
+#    （单实例机器）传 -ForceLegacy。
 
+param([switch]$ForceLegacy)
 $ErrorActionPreference = "Continue"
 Set-Location (Split-Path $PSScriptRoot -Parent)
 
-$port = 18799
+if (-not $ForceLegacy) {
+    $dualRoots = @(
+        "D:\chengjie-instances\zhiliao\data\config\config.yaml",
+        "D:\chengjie-instances\tongyi\data\config\config.yaml",
+        (Join-Path (Split-Path $PSScriptRoot -Parent) "..\..\deploy\instances\zhiliao\data\config\config.yaml")
+    )
+    if (@($dualRoots | Where-Object { Test-Path $_ }).Count) {
+        Write-Host "[restart] ⛔ 本机是双实例部署（检测到实例数据根），禁止使用本脚本！" -ForegroundColor Red
+        Write-Host "[restart]    请改用（单实例 + 冷却 + /login 就绪门禁）：" -ForegroundColor Yellow
+        Write-Host "[restart]      powershell -ExecutionPolicy Bypass -File deploy\instances\restart_instance.ps1 -Instance zhiliao" -ForegroundColor Yellow
+        Write-Host "[restart]      powershell -ExecutionPolicy Bypass -File deploy\instances\restart_instance.ps1 -Instance tongyi" -ForegroundColor Yellow
+        Write-Host "[restart]    先问要不要重启: …\restart_instance.ps1 -Instance zhiliao -Advise" -ForegroundColor Yellow
+        Write-Host "[restart]    （本脚本会杀掉全部 main.py 并用引擎根老配置起幽灵实例，2026-07-22 已因此全站断连 + 坐席加载超时）" -ForegroundColor Yellow
+        Write-Host "[restart]    单实例机器确需老行为：加 -ForceLegacy"
+        exit 1
+    }
+}
+
+# 就绪探测端口跟随 config/config.yaml::web.port（2026-07-22 修：脚本曾硬编码旧端口
+# 18799，而生产 web 实为 18787 → 每次重启都误报 NOT READY exit 1，且端口释放检查
+# 守错了门。读不到配置时回落 18787。
+$port = 18787
+try {
+    $cfgPort = python -c "import yaml,io;print((yaml.safe_load(io.open('config/config.yaml',encoding='utf-8')) or {}).get('web',{}).get('port') or '')" 2>$null
+    if ("$cfgPort" -match '^\d+$') { $port = [int]$cfgPort }
+} catch {}
 $probeUrl = "http://127.0.0.1:$port/login"   # 无需鉴权的最轻页面
 $t0 = Get-Date
 

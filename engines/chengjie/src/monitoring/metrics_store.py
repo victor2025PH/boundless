@@ -70,6 +70,8 @@ class MetricsStore:
         self._startup_advisory_total: int = 0
         self._startup_advisory_warnings: int = 0
         self._startup_advisory_audit_logged: Optional[int] = None
+        # Phase 11：启动分阶段计时快照（initialize() 末尾写入；供状态/ops 归因冷启动）
+        self._boot_timing: Optional[Dict[str, Any]] = None
         # LINE RPA（ADB 个人号）轮次统计
         self._line_rpa_runs: int = 0
         self._line_rpa_ok: int = 0
@@ -441,6 +443,16 @@ class MetricsStore:
         """Web 启用且 AuditStore 写入 warning 条数之后调用；n 为写入审计的条数。"""
         with self._lock:
             self._startup_advisory_audit_logged = max(0, int(n))
+
+    def set_boot_timing(self, summary: Optional[Dict[str, Any]]) -> None:
+        """Phase 11：initialize() 末尾写入启动分阶段计时摘要（BootTimer.summary()）。"""
+        with self._lock:
+            self._boot_timing = dict(summary) if isinstance(summary, dict) else None
+
+    def get_boot_timing(self) -> Optional[Dict[str, Any]]:
+        """读最近一次启动分阶段计时摘要（无则 None）。"""
+        with self._lock:
+            return dict(self._boot_timing) if self._boot_timing else None
 
     def record_companion_safe_skip(self, reason: str = "") -> None:
         """陪护模式 safe_skip 计数（pre_send_gate / credit_low / ascii_guard / 其他）。"""

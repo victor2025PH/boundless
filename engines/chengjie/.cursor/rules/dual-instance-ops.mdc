@@ -1,0 +1,32 @@
+---
+description: Chengjie 双实例生产重启纪律——防止坐席「加载超时」连环红屏
+globs: "**/*.{py,ps1,md,yaml,html}"
+alwaysApply: true
+---
+
+# 双实例运维铁律（智聊 / 通译）
+
+本机是 **双实例**（智聊 `18799` + 通译 `18899`），不是单进程 `main.py`。
+
+## 重启
+
+- **唯一入口**：`deploy\instances\restart_instance.ps1 -Instance zhiliao|tongyi`
+  - 自带：只动一台、机器级 10 分钟冷却（与 watchdog 共用）、脏树闸门（仅模板/i18n 脏则拒）、清哨兵、等 `/login` 200、可选 ops 告警
+  - 先判断：`-Advise`；演练：`-DryRun`；应急：`-Force`；热更新文件仍要硬重启：`-AllowHotOnly`
+- **禁止**：`scripts\restart_main.ps1`、`start_main.ps1`、`taskkill` 杀光 python、在引擎根裸起 `python main.py`
+- **能不重启就不重启**：模板 HTML/JS、`web_i18n`/i18n_packs、多数 `config.local.yaml` 热更新；pytest 自建 app，别用重启生产当测试
+- **攒批**：多项 `.py` 改完再重启一次；连环重启 = 坐席「加载超时」根因（前端 10s abort + 自动重连）
+
+## 探活 / 自愈
+
+- 改完先：`deploy\instances\status_instances.ps1`（两台都须 `GO`）
+- ops 卡「实例重启冷却」：`/api/admin/instance-restart-status`；坐席蓝条经 `ai-runtime-status.instance_restart`
+- 看门狗 **DOWN/假活均经** `restart_instance.ps1 -FromWatchdog`；status `http_phase=warming|ready` 与冷却窗均不计假活 strike
+- 停机用 `stop_instance.ps1`（soft → grace → hard `/F`），勿直接 `taskkill /F`
+- 坐席侧：冷却中 abort 拉长 + thread/chats/drafts **in-flight 去重**；勿连环 `-Force`
+- 30 分钟内同实例 ≥2 次重启 = **FLAP**（ops 卡 + webhook 🚨）；只读冒烟 `smoke_restart_resilience.ps1`
+- status 快照 SSOT：`D:\chengjie-instances\.ops\last_status.json`（UTF-8）；冷却/FLAP 期坐席轮询自动降速
+
+## 多 agent
+
+- 生产机只有一条线可以动实例进程；其余用 `git worktree` 隔离，禁止各自杀起服务

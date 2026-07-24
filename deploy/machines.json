@@ -99,6 +99,26 @@
       "wallpaper": "brand-assets/05_backgrounds/machines/tongchuan-node-wallpaper.png",
       "services": ["stt:7854", "nemo_stt:7857"],
       "note": "算力节点：改码只在幻声机，本机 git pull 后重启服务"
+    },
+    {
+      "id": "huanying",
+      "zh": "幻影",
+      "ssh": ["huanying", "livex173", "gpu173", "voice173"],
+      "ip": "192.168.0.173",
+      "hostname_hint": "DESKTOP-07NVNHG",
+      "user": "admin",
+      "key": "cluster_controller",
+      "role": "compute",
+      "gpu": "RTX 5090 32G",
+      "products": ["幻影"],
+      "brand_keys": ["livex"],
+      "primary_brand": "livex",
+      "dev_paths": ["engines/avatarhub"],
+      "workdir": "C:\\\\boundless",
+      "shortcut": "C:\\\\开发\\\\幻影",
+      "wallpaper": "brand-assets/05_backgrounds/machines/huanying-wallpaper.png",
+      "services": ["glm4voice_web:8888", "glm4voice_phone:10011", "glm4voice_vllm:10010"],
+      "note": "算力节点：GLM-4-Voice 实时语音（176 部署，C:\\\\models\\\\glm-4-voice）；改码在幻声机，本机 git pull 后重启服务"
     }
   ]
 }

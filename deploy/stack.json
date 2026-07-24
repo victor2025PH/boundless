@@ -1,4 +1,4 @@
-{
+﻿{
   "_comment": [
     "boundless 全域进程注册表（单一源）——deploy.ps1 / up|down|status|provision 读它。",
     "职责边界：本文件登记『本机可起停的逻辑服务』（进程/端口/健康/委派脚本/运行时依赖）；",
@@ -88,8 +88,8 @@
           "实例授权（可选）：data/config/license.key（instances/README §5）"
         ]
       },
-      "enabled": true,
-      "notes": "【生产 .117 · 2026-07-18 上线（实施14 阶段1-2 通过，观察期中）】数据根 D:\\chengjie-instances\\tongyi\\data；lingox 裁剪（companion/RPA/voice/monetization/contacts 全关，web_chat manual），未配协议号走纯收件箱/网页翻译路径；翻译=ollama_mt(.176 hy-mt2)→ai 兜底。对外暴露（0.0.0.0/子域反代）留观察期后人工做。端口 18899/18887。"
+      "enabled": false,
+      "notes": "【已退役 2026-07-24 融合切换】通译数据已并入智聊（cutover_merge.ps1，备份 D:\\chengjie-instances\\.ops\\cutover_backup\\20260724_005033）：账号 telegram:8755679833 携 business_line=translation 迁入智聊注册表（autodraft 封顶 review），KB/翻译记忆/会话/坐席账号随迁。退役旗 D:\\chengjie-instances\\.ops\\retired\\tongyi.flag（watchdog 跳过）；enabled=false 防 deploy up 误拉活造成同账号双实例双发。数据根原地保留=二级回滚点；回滚: cutover_merge.ps1 -Rollback -BackupId 20260724_005033（会删旗+复活双实例，此处 enabled 需手工改回 true）。原 notes:【生产 .117 · 2026-07-18 上线（实施14 阶段1-2）】lingox 裁剪，未配协议号（后期已配 8755679833），翻译=ollama_mt(.176 hy-mt2)→ai 兜底，从未对外暴露（仅 127.0.0.1）。"
     },
     {
       "id": "huoke",

@@ -1,0 +1,24 @@
+---
+description: Chengjie 双实例（智聊/通译）生产重启纪律，防止坐席加载超时
+globs: engines/chengjie/**/*,deploy/instances/**/*
+alwaysApply: false
+---
+
+# Chengjie 双实例运维
+
+碰 `engines/chengjie` 或 `deploy/instances` 时：
+
+- 重启唯一入口：`deploy\instances\restart_instance.ps1 -Instance zhiliao|tongyi`
+- 先 `-Advise`；禁止 `scripts\restart_main.ps1` / 引擎根裸起 / 乱 `taskkill`
+- 机器级冷却目录：`D:\chengjie-instances\.ops\restart_cooldown\`（与 watchdog 共用）
+- 看门狗自愈也走同一入口（`-FromWatchdog`）；`http_phase=warming|ready` 与冷却窗不计假活 strike
+- 模板与 i18n、多数 overlay **免重启**；发布前 `publish_gate.ps1`；只读冒烟 `smoke_restart_resilience.ps1`
+- ops 卡含 phase/warming/flap；30min 内同实例 ≥2 次重启会 🚨 FLAP 告警
+- 改完用 `status_instances.ps1` 确认 `GO`（看 phase/login/health）
+- **生产机跑测试纪律**（2026-07-23 实锤事故）：18799/18899 在听 = 本机正在服务坐席，
+  **禁止裸 `python -m pytest tests/ -n auto`**——8 核被 8 个 xdist worker 打满，坐席
+  「聊天记录加载失败/切换超时」。统一走 `engines\chengjie\scripts\regression.ps1`
+  （生产在线自动 BelowNormal + 全量并行度封顶 4），或定向跑单文件；重负载评测/批量
+  任务放低峰时段。
+- **攒批重启**：多项改动合一次重启窗口。一上午 3 波重启（8:53/9:24/10:31）＝坐席吃
+  3 次不可用窗口，每波都会点亮「连接中断」横幅。

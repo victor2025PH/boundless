@@ -18,6 +18,8 @@
 [CmdletBinding()]
 param(
     [switch]$Json,
+    [string]$SnapshotPath = '',  # Phase7: UTF-8 no-BOM snapshot path (ops/watchdog SSOT)
+    [switch]$NoSnapshot,         # skip default snapshot write
     [string]$ZhiliaoData = '',   # 与 start_zhiliao.ps1 -DataDir 同义（缺省按头注顺序自动探测）
     [string]$TongyiData  = ''    # 与 start_tongyi.ps1  -DataDir 同义（缺省按头注顺序自动探测）
 )
@@ -68,6 +70,33 @@ function Probe-Http([int]$port) {
     }
 }
 
+function Probe-Login([int]$port) {
+    # Public /login readiness (same gate restart_instance waits for). 200 = seat-ready.
+    $url = "http://127.0.0.1:$port/login"
+    try {
+        $resp = Invoke-WebRequest -Uri $url -TimeoutSec 4 -UseBasicParsing -ErrorAction Stop
+        return [int]$resp.StatusCode
+    } catch {
+        $code = 0
+        try { $code = [int]$_.Exception.Response.StatusCode.value__ } catch {}
+        return $code
+    }
+}
+
+function Get-ProcessAgeSec([int[]]$pids) {
+    # Youngest owning process age (seconds). -1 if unknown.
+    $minAge = [int]::MaxValue
+    foreach ($procId in $pids) {
+        $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
+        if ($proc -and $proc.StartTime) {
+            $age = [int]((Get-Date) - $proc.StartTime).TotalSeconds
+            if ($age -ge 0 -and $age -lt $minAge) { $minAge = $age }
+        }
+    }
+    if ($minAge -eq [int]::MaxValue) { return -1 }
+    return $minAge
+}
+
 $states = @()
 foreach ($inst in $Instances) {
     # ── 端口/持有者探测（先于数据根解析：②需要 pids）─────────────────────
@@ -77,6 +106,32 @@ foreach ($inst in $Instances) {
     if (-not $pids.Count -and $inst.alt_port) {
         $pids = Get-PortHolders $inst.alt_port
         if ($pids.Count) { $effPort = $inst.alt_port; $portNote = "主端口 $($inst.port) 不在听，备用位 $($inst.alt_port) 在听（端口漂移？核对实例 overlay）" }
+    }
+
+    # ── 退役实例（融合切换 cutover_merge.ps1 写 .ops\retired\<id>.flag，与 watchdog 同旗标）──
+    # 不在听 → RETIRED（不计退出码——退役是预期形态，不再整机误报 DEGRADED）；
+    # 仍在听 → 幽灵进程告警注记，照常走判定（退役实例复活属异常，必须可见）。
+    $retFlag = Join-Path $ProdBase (".ops\retired\{0}.flag" -f $inst.id)
+    if (Test-Path -LiteralPath $retFlag) {
+        if (-not $pids.Count) {
+            $states += [pscustomobject][ordered]@{
+                id = $inst.id; name = $inst.name; port = $inst.port
+                listening = $false; pids = @(); http = 0
+                login = 0; login_ready = $false
+                proc_age_sec = -1
+                http_phase = 'retired'
+                engine_owned = $false
+                data_root = ''; data_source = '退役旗标'
+                initialized = $false; overlay = $false
+                domains = $false; spool = $false; license = $false
+                verdict = 'RETIRED'
+                note = ('已退役（并入智聊；旗标 ' + $retFlag + '，cutover 回滚自动摘旗）')
+                note_en = 'retired (merged into zhiliao; flag present, rollback removes it)'
+                retired = $true
+            }
+            continue
+        }
+        $portNote = ('⚠ 退役旗在但端口仍有监听（幽灵进程？核对后处置） ' + $portNote).Trim()
     }
 
     # ── 数据根解析：参数 > 进程 > 生产缺省 > 仓库缺省（头注①→④）──────────
@@ -94,6 +149,9 @@ foreach ($inst in $Instances) {
     $s = [ordered]@{
         id = $inst.id; name = $inst.name; port = $effPort
         listening = $false; pids = @(); http = 0
+        login = 0; login_ready = $false
+        proc_age_sec = -1
+        http_phase = 'down'   # ready | warming | unresponsive | down | foreign
         engine_owned = $false
         data_root = $root
         data_source = $src
@@ -102,12 +160,13 @@ foreach ($inst in $Instances) {
         domains  = (Test-Path (Join-Path $root 'domains'))
         spool    = (Test-Path (Join-Path $root 'events\spool'))
         license  = (Test-Path (Join-Path $root 'config\license.key'))
-        verdict = 'DOWN'; note = $portNote
+        verdict = 'DOWN'; note = $portNote; note_en = ''
     }
 
     if ($pids.Count) {
         $s.listening = $true
         $s.pids = $pids
+        $s.proc_age_sec = Get-ProcessAgeSec $pids
         $isOurs = $false
         foreach ($holderPid in $pids) {
             $p = Get-CimInstance Win32_Process -Filter "ProcessId=$holderPid" -ErrorAction SilentlyContinue
@@ -115,25 +174,76 @@ foreach ($inst in $Instances) {
         }
         $s.engine_owned = $isOurs
         $s.http = Probe-Http $s.port
+        $s.login = Probe-Login $s.port
+        $s.login_ready = ($s.login -eq 200)
         if ($isOurs) {
-            $s.verdict = 'GO'
-            if ($s.http -eq 0) { $s.verdict = 'DEGRADED'; $s.note = '端口在听但 HTTP 无响应（启动中或假活）' }
-            elseif (-not $s.note) { $s.note = "HTTP $($s.http)（health 需鉴权，非 0 即视为活）" }
+            # Phase5 graded readiness:
+            #   ready        = health responds OR /login 200 (seat-capable)
+            #   warming      = listen+ours but neither ready yet, process young (<180s)
+            #   unresponsive = listen+ours, neither ready, process old (true zombie risk)
+            if (($s.http -gt 0) -or $s.login_ready) {
+                $s.http_phase = 'ready'
+                $s.verdict = 'GO'
+                if (-not $s.note) {
+                    if ($s.login_ready -and ($s.http -eq 0)) {
+                        $s.note = "login ready, health lag (HTTP 0) — still seat-ready"
+                    } else {
+                        $s.note = "HTTP $($s.http) login $($s.login)（health 需鉴权，非 0 即视为活）"
+                    }
+                }
+                # Phase8: ASCII note_en is ops/API SSOT (encoding-proof)
+                if ($s.login_ready -and ($s.http -eq 0)) {
+                    $s.note_en = "login ready, health lag (HTTP 0) - still seat-ready"
+                } else {
+                    $s.note_en = "HTTP $($s.http) login $($s.login) (health may need auth; non-zero = alive)"
+                }
+                if ($portNote) {
+                    $s.note_en = "alt-port drift; " + $s.note_en
+                }
+            } elseif (($s.proc_age_sec -ge 0) -and ($s.proc_age_sec -lt 180)) {
+                $s.http_phase = 'warming'
+                $s.verdict = 'DEGRADED'
+                $s.note = "warming: port up, /login+health not ready yet (age=$($s.proc_age_sec)s) — do not force-kill"
+                $s.note_en = "warming: port up, /login+health not ready yet (age=$($s.proc_age_sec)s) - do not force-kill"
+            } else {
+                $s.http_phase = 'unresponsive'
+                $s.verdict = 'DEGRADED'
+                $ageTxt = if ($s.proc_age_sec -ge 0) { "$($s.proc_age_sec)s" } else { '?' }
+                $s.note = "端口在听但 /login 与 health 均无响应（age=$ageTxt，假活风险）"
+                $s.note_en = "unresponsive: /login+health dead (age=$ageTxt) - zombie risk"
+            }
         } else {
+            $s.http_phase = 'foreign'
             $s.verdict = 'DEGRADED'
             $s.note = "端口被非引擎进程占用 PID=$($pids -join ',')"
+            $s.note_en = "foreign process on port PID=$($pids -join ',')"
         }
     } else {
-        if (-not (Test-Path $s.data_root)) { $s.note = '未初始化（数据根缺失，见 README §3）' }
-        elseif (-not $s.initialized)       { $s.note = '未初始化（缺 config\config.yaml，见 README §3）' }
-        else                               { $s.note = '未在跑（start_' + $inst.id + '.ps1 拉起）' }
+        $s.http_phase = 'down'
+        if (-not (Test-Path $s.data_root)) {
+            $s.note = '未初始化（数据根缺失，见 README §3）'
+            $s.note_en = 'not initialized (data root missing; see README §3)'
+        } elseif (-not $s.initialized) {
+            $s.note = '未初始化（缺 config\config.yaml，见 README §3）'
+            $s.note_en = 'not initialized (missing config\config.yaml; see README §3)'
+        } else {
+            $s.note = '未在跑（start_' + $inst.id + '.ps1 拉起）'
+            $s.note_en = 'not running (start_' + $inst.id + '.ps1)'
+        }
     }
-    if ($s.verdict -eq 'GO' -and -not $s.domains) { $s.verdict = 'DEGRADED'; $s.note += '；缺 domains junction（域包未加载）' }
+    if ($s.verdict -eq 'GO' -and -not $s.domains) {
+        $s.verdict = 'DEGRADED'
+        $s.note += '；缺 domains junction（域包未加载）'
+        if (-not $s.note_en) { $s.note_en = 'ready' }
+        $s.note_en += '; missing domains junction'
+    }
+    if (-not $s.note_en) { $s.note_en = 'see note' }
     $states += [pscustomobject]$s
 }
 
 $worst = 0; $best = 2
 foreach ($s in $states) {
+    if ($s.verdict -eq 'RETIRED') { continue }   # 退役=预期形态，不计汇总退出码
     $lvl = switch ($s.verdict) { 'GO' {0} 'DEGRADED' {1} 'DOWN' {2} default {2} }
     if ($lvl -gt $worst) { $worst = $lvl }
     if ($lvl -lt $best)  { $best  = $lvl }
@@ -141,13 +251,42 @@ foreach ($s in $states) {
 # 汇总退出码：全 GO=0；全 DOWN=2；其余（混合/降级）=1
 $exitCode = if ($worst -eq 0) { 0 } elseif ($best -eq 2) { 2 } else { 1 }
 
+$payload = [ordered]@{
+    timestamp = (Get-Date).ToString('o')
+    verdict = $exitCode
+    verdict_label = @('GO','DEGRADED','DOWN')[$exitCode]
+    instances = $states
+}
+
+# Phase7: always persist UTF-8 no-BOM snapshot (avoid Out-String / console CP garble).
+# Watchdog + ops card read this file; stdout -Json remains for quick scripts.
+function Write-StatusSnapshot([object]$obj) {
+    $targets = New-Object System.Collections.Generic.List[string]
+    if ($SnapshotPath) { [void]$targets.Add($SnapshotPath) }
+    elseif (-not $NoSnapshot) {
+        [void]$targets.Add('D:\chengjie-instances\.ops\last_status.json')
+        [void]$targets.Add((Join-Path $PSScriptRoot '.ops\last_status.json'))
+    }
+    if (-not $targets.Count) { return }
+    $json = ($obj | ConvertTo-Json -Depth 8)
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    foreach ($p in $targets) {
+        try {
+            $dir = Split-Path -Parent $p
+            if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+                New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            }
+            [System.IO.File]::WriteAllText($p, $json, $utf8)
+        } catch {}
+    }
+}
+Write-StatusSnapshot $payload
+
 if ($Json) {
-    [ordered]@{
-        timestamp = (Get-Date).ToString('o')
-        verdict = $exitCode
-        verdict_label = @('GO','DEGRADED','DOWN')[$exitCode]
-        instances = $states
-    } | ConvertTo-Json -Depth 5
+    # Force UTF-8 console so nested powershell capture keeps CJK notes intact when needed
+    try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
+    $OutputEncoding = [Text.Encoding]::UTF8
+    $payload | ConvertTo-Json -Depth 8
     exit $exitCode
 }
 
@@ -156,6 +295,10 @@ foreach ($s in $states) {
     $color = switch ($s.verdict) { 'GO' {'Green'} 'DEGRADED' {'Yellow'} 'DOWN' {'Red'} default {'Gray'} }
     $pidTxt = if ($s.pids.Count) { "PID=$($s.pids -join ',')" } else { '' }
     Write-Host ("  [{0,-8}] {1,-8} :{2,-6} {3,-14} {4}" -f $s.verdict, $s.id, $s.port, $pidTxt, $s.note) -ForegroundColor $color
+    if ($s.listening) {
+        Write-Host ("             phase={0} login={1} health={2} age={3}s" -f $s.http_phase, $s.login, $s.http, $s.proc_age_sec) -ForegroundColor DarkGray
+    }
+    if ($s.retired) { continue }   # 退役行：注记已说明一切，明细行的「缺」是噪音
     Write-Host ("             root={0}（{1}）" -f $s.data_root, $s.data_source) -ForegroundColor DarkGray
     $init = if ($s.initialized) { 'ok' } else { '缺' }
     $ovl  = if ($s.overlay)     { 'ok' } else { '缺' }

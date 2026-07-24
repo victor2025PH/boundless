@@ -1,0 +1,52 @@
+# Optional Prometheus / Grafana alert rules for dual-instance restart flaps.
+#
+# Scrape (either instance; metrics are machine-local filesystem reads):
+#   http://127.0.0.1:18799/api/workspace/metrics?format=prometheus
+#   http://127.0.0.1:18899/api/workspace/metrics?format=prometheus
+# Auth: same Bearer / cookie as ops. Metric source: instance_restart_status.dump_prom().
+#
+# Wire: copy this file into your Prometheus rules_files / Grafana Alloy / MIMIR ruler,
+# or paste expressions into Grafana alert rules. FLAP also pages via EVENT_INGEST webhook
+# without Prometheus (restart_instance / watchdog) — Prom is the second channel.
+groups:
+  - name: chengjie_instance_restart
+    rules:
+      - alert: ChengjieRestartCooldownActive
+        expr: chengjie_instance_restart_cooldown_active_any == 1
+        for: 2m
+        labels:
+          severity: info
+        annotations:
+          summary: "Chengjie instance restart cooldown active"
+          description: "Do not force-kill again; seat workbench may briefly load-timeout."
+
+      - alert: ChengjieRestartFlap
+        expr: chengjie_instance_restart_flapping_any == 1
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Chengjie restart flap (>=2 restarts / 30m)"
+          description: "Stop killing processes. Check boot logs and wait for cooldown."
+
+      - alert: ChengjieInstanceUnresponsive
+        expr: chengjie_instance_http_phase{phase="unresponsive"} == 2
+        for: 8m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Chengjie instance HTTP unresponsive (not warming)"
+          description: "Port listening but /login+health dead for >8m. Watchdog will heal after strikes."
+
+      - alert: ChengjieRestartWindowSlaBreach
+        # Last restart took longer than the SLA ceiling (default 60s; see
+        # CHENGJIE_RESTART_WINDOW_SLA_SEC). Fires from the recorded window of the
+        # most recent restart, so 'for' is short — it is a per-restart signal, not
+        # a sustained state. Recovers on the next fast restart.
+        expr: chengjie_instance_restart_window_sla_breach_any == 1
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Chengjie restart window exceeded SLA"
+          description: "A restart's stop->ready window blew the SLA ceiling. Seat was down too long; check cold-start / boot logs (chengjie_instance_restart_window_seconds per instance)."
