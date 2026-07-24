@@ -818,6 +818,8 @@ avatar_voice:
   colloquial:                            # 活人感 P0(2026-07-14)：书面语→口语化改写（减「念稿感」）
     enabled: false                       # 总开关（默认关）：书面词→口语词 + 句首迟疑/软化词
     mode: rule                           # rule=规则档(零延迟/确定性) · llm=本地模型深度口语化(更自然,失败自动回落 rule)
+    rewrite_intensity: natural           # 口语重塑力度(AI Live OS Agent6)：light=仅换词拆句 · natural=+句首连接/语气词(默认) · vivid=+主观口吻「说真的/我跟你讲」+停顿感(主播味最强)
+    #                                    # 三档共享事实红线：数字/时间/人名/金额/承诺不改、不编造、不串语言。llm 档 + Phase G 生成层都吃。
     llm_timeout_sec: 8.0                 # llm 档单次超时(秒)；超时/熔断/校验不过 → 回落规则档。走 ai.fallback 本地模型(不占云)
     generated: false                     # Phase G 生成层口语分叉：会发语音的中文会话让主 LLM 同次调用多产 [口语版]
     #                                    # （书面进镜像/记忆，口语直送 TTS，省一次改写往返；文本被守卫改写自动失效回落本链）
@@ -1207,7 +1209,7 @@ ai:
   provider: "openai_compatible"   # gemini | openai_compatible（DeepSeek/Ollama/vLLM 走这条）
   api_key: "YOUR_API_KEY"         # 对应 provider 的 API 密钥
   base_url: "https://api.deepseek.com"  # openai_compatible 时必填（如 DeepSeek）
-  model: "deepseek-chat"          # 使用的模型
+  model: "deepseek-v4-flash"      # 使用的模型（DeepSeek 已废弃 deepseek-chat 旧名）
   temperature: 0.7                # 温度参数 (0.0-1.0)
   max_tokens: 1024                # 最大回复token数
   timeout: 30                     # API调用超时(秒)
@@ -2327,6 +2329,8 @@ platform_login:
   # 账号池编排器：进程启动后读 account_registry，按账号 (platform, mode) 用对应 worker
   # 拉起并持续健康监督（失败指数退避重启）。关 → 不持有任何协议连接。
   orchestrator_enabled: false
+  # 上线时 registry meta 无人设 → 自动写入此默认（已绑定不覆盖）
+  default_persona_id: lin_xiaoyu
   telegram:
     # 关联设备二维码登录 provider（统一收件箱「账号管理 → ＋ 扫码新增」）。
     # 需 telegram.api_id/api_hash 已配 + pyrogram 已装。

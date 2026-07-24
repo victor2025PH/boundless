@@ -204,6 +204,16 @@ class AIClient(LoggerMixin):
             self.temperature = float(ai_config.get('temperature', 0.7))
             self.max_tokens = int(ai_config.get('max_tokens', 1024))
             self.timeout = int(ai_config.get('timeout', 30))
+            # 启动连接探针的独立上限（秒）：主链读超时 self.timeout 常为 30s，但**冷启动**
+            # 时若云端(DeepSeek)被限流/抖动，这一次探针会占满整读超时，把「进程起来→/login
+            # 可服务」的窗口拖到分钟级（seat 端撞加载超时）。探针结果 main 并不消费（仅日志 +
+            # 坏 key 告警），故给它一个更短的独立上限；超时=按「未验证」放行（首个真实请求自会
+            # 确认健康），绝不因慢云阻断启动。坏 key 走 401 快败（非超时）→ 告警仍即时。
+            # 0/负 = 关闭上限（回退旧行为）。
+            try:
+                self._boot_probe_timeout = float(ai_config.get('boot_probe_timeout_sec', 6.0))
+            except Exception:
+                self._boot_probe_timeout = 6.0
             self.system_prompt = ai_config.get('system_prompt', '').strip()
             self._domain_system_prompt = ""
             self._domain_terminology = {}
@@ -262,7 +272,7 @@ class AIClient(LoggerMixin):
 
             self.client = genai.Client(api_key=api_key)
 
-            test_result = await self._test_connection()
+            test_result = await self._run_boot_probe(self._test_connection())
             if not test_result:
                 self.logger.error("AI API 连接测试失败")
                 return False
@@ -427,7 +437,7 @@ class AIClient(LoggerMixin):
                     len(self._pool_entries),
                     ", ".join(e["name"] for e in self._pool_entries))
 
-        test_result = await self._test_openai_connection()
+        test_result = await self._run_boot_probe(self._test_openai_connection())
         if not test_result:
             self.logger.error(
                 "OpenAI 兼容 API 连接测试失败（请检查 base_url、密钥、网络及模型名）"
@@ -436,6 +446,30 @@ class AIClient(LoggerMixin):
 
         self.logger.info("✅ AI 客户端初始化成功 — OpenAI 兼容 API (模型: %s, base: %s)", self.model, raw_base)
         return True
+
+    async def _run_boot_probe(self, probe_coro) -> bool:
+        """给启动连接探针套一个短上限（self._boot_probe_timeout）。
+
+        - 探针在上限内返回 → 用其真实结果（成功/失败，失败已在探针内记日志+坏key告警）。
+        - 探针超时 → 记一行「探针超时，按未验证放行」的 WARNING 并返回 True（不阻断启动、
+          不误报坏 key；首个真实请求会确认健康）。
+        - 上限 <=0 → 不设限，直接 await（回退旧行为）。
+        任何包装层异常都软失败为 True（绝不让观测/上限逻辑拖垮启动）。
+        """
+        timeout = getattr(self, "_boot_probe_timeout", 0.0) or 0.0
+        if timeout <= 0:
+            return await probe_coro
+        try:
+            return await asyncio.wait_for(probe_coro, timeout=timeout)
+        except asyncio.TimeoutError:
+            self.logger.warning(
+                "AI 启动连接探针超过 %.1fs 上限（云端可能限流/抖动）；按未验证放行，"
+                "首个真实请求将确认健康。", timeout,
+            )
+            return True
+        except Exception:
+            self.logger.debug("AI 启动连接探针包装异常（忽略，放行）", exc_info=True)
+            return True
 
     async def _test_openai_connection(self) -> bool:
         try:
@@ -2385,10 +2419,14 @@ class AIClient(LoggerMixin):
                 _sv_cfg = (self.config.config
                            if (self.config and getattr(self.config, "config", None))
                            else {})
+                _sv_intensity = str(
+                    (((_sv_cfg.get("avatar_voice") or {}).get("colloquial") or {})
+                     .get("rewrite_intensity", "natural")) or "natural")
                 prompt_parts.append(build_spoken_variant_instruction(
                     disfluency=want_disfluency(
                         _sv_cfg,
-                        str(context.get("_current_user_message_for_lang") or ""))))
+                        str(context.get("_current_user_message_for_lang") or "")),
+                    intensity=_sv_intensity))
             except Exception:
                 pass
 
@@ -3293,7 +3331,10 @@ class AIClient(LoggerMixin):
                 )
                 written, spoken = split_spoken_variant(reply)
                 if spoken:
-                    stash_spoken_variant(written, spoken)
+                    stash_spoken_variant(
+                        written, spoken,
+                        scope=str(enhanced_context.get("account_id") or ""),
+                    )
                 reply = written
             except Exception:
                 self.logger.debug("spoken variant split skipped", exc_info=True)

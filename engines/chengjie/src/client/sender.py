@@ -900,7 +900,10 @@ class TelegramSenderMixin:
             _spoken = None
             try:
                 from src.ai.spoken_variant import take_spoken_variant
-                _spoken = take_spoken_variant(reply_text)
+                _spoken = take_spoken_variant(
+                    reply_text,
+                    scope=str(getattr(self, "account_id", "") or ""),
+                )
             except Exception:
                 _spoken = None
             synth_source = _spoken or clean_text
@@ -964,17 +967,43 @@ class TelegramSenderMixin:
                 # （节奏是表演出来的，不被 GPU 进度驱动）；任何失败回落单条整段路径。
                 split_cfg = (vr_cfg.get("split_send")
                              if isinstance(vr_cfg.get("split_send"), dict) else {})
-                if (split_cfg.get("enabled", False)
-                        and len(synth_source) >= int(split_cfg.get("min_total_chars", 24) or 24)):
-                    from src.ai.voice_clone_client import pack_voice_parts
-                    parts = pack_voice_parts(
-                        synth_source,
-                        part_max_chars=int(split_cfg.get("part_max_chars", 40) or 40),
-                        max_parts=int(split_cfg.get("max_parts", 3) or 3),
-                        min_tail_chars=int(split_cfg.get("min_tail_chars", 8) or 0))
-                    if len(parts) >= 2:
+                if split_cfg.get("enabled", False):
+                    # AI Live OS Agent4（dialogue_planner）：由「表演规划」Agent 决定分条 +
+                    # **情绪缩放条间节奏**（兴奋短促连发 / 低落慢而长停顿，真人节奏带情绪）。
+                    # planner 关或异常 → 回落原内联分条（gap_factor 用 split_cfg 静态值）。
+                    parts = None
+                    eff_split_cfg = split_cfg
+                    try:
+                        from src.ai.dialogue_planner import plan_voice_performance
+                        _emo = voice_ctx.get("emotion")
+                        _script = plan_voice_performance(
+                            synth_source,
+                            emotion=(getattr(_emo, "emotion", "neutral")
+                                     if _emo else "neutral"),
+                            intensity=(float(getattr(_emo, "intensity", 0.6) or 0.6)
+                                       if _emo else 0.6),
+                            split_cfg=split_cfg)
+                        if _script.should_split:
+                            parts = _script.part_texts
+                            eff_split_cfg = {
+                                **split_cfg,
+                                "gap_factor": _script.gap_factor,
+                                "gap_jitter_sec": list(_script.gap_jitter)}
+                    except Exception:
+                        parts = None
+                    if parts is None and len(synth_source) >= int(
+                            split_cfg.get("min_total_chars", 24) or 24):
+                        from src.ai.voice_clone_client import pack_voice_parts
+                        _p = pack_voice_parts(
+                            synth_source,
+                            part_max_chars=int(split_cfg.get("part_max_chars", 40) or 40),
+                            max_parts=int(split_cfg.get("max_parts", 3) or 3),
+                            min_tail_chars=int(split_cfg.get("min_tail_chars", 8) or 0))
+                        if len(_p) >= 2:
+                            parts = _p
+                    if parts and len(parts) >= 2:
                         split_sent = await self._send_voice_reply_parts(
-                            original_message, parts, tts, voice_ctx, vr_cfg, split_cfg,
+                            original_message, parts, tts, voice_ctx, vr_cfg, eff_split_cfg,
                             timeout_sec=timeout_sec, opus_application=_opus_app,
                             pre_colloquialized=bool(_spoken))
                         if split_sent:

@@ -746,6 +746,41 @@ async def test_pipeline_hub_fish_disabled_uses_local(tmp_path):
     assert rv.provider == "avatar_clone"
 
 
+@pytest.mark.asyncio
+async def test_pipeline_hub_fish_gets_colloquial_spoken_text(tmp_path):
+    """hub 命中前必须先口语化——送稿≠书面原文（读稿音根因回归网）。"""
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(_wav_bytes(300))
+    cfg = _pipeline_cfg_hub(tmp_path, ref)
+    cfg["avatar_voice"]["colloquial"] = {
+        "enabled": True, "mode": "rule", "fillers": True, "lexical": True,
+        "min_chars": 8, "lead_prob": 1.0,
+    }
+    seen = {"text": ""}
+
+    def fake_hub(base_url, profile, text, **kw):
+        seen["text"] = text
+        return _wav_bytes(500)
+
+    async def fake_llm(*a, **k):
+        return "说真的，这件事你不用急，慢慢来就好"
+
+    from src.ai.tts_pipeline import TTSPipeline
+    tts = TTSPipeline(cfg)
+    # 强制走 LLM 口语档返回固定口语稿，验证 hub 收到的是口语版而非原文
+    cfg["avatar_voice"]["colloquial"]["mode"] = "llm"
+    with patch("src.ai.avatar_voice.hub_fish_synthesize", side_effect=fake_hub), \
+         patch("src.ai.voice_colloquial_llm.llm_colloquialize", side_effect=fake_llm):
+        rv = await tts.synthesize(
+            "因此您无需着急，可以慢慢处理这件事。", emotion="warm")
+    assert rv.ok and rv.provider == "hub_fish"
+    assert seen["text"]
+    assert "因此您无需着急" not in seen["text"]
+    assert "说真的" in seen["text"] or "慢慢" in seen["text"]
+    assert rv.extra.get("colloquial") or rv.extra.get("colloquial_llm")
+    assert "[sigh]" not in seen["text"]
+
+
 # ── AvatarWhisperTranscriber ─────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_avatar_whisper_transcriber_ok(tmp_path):

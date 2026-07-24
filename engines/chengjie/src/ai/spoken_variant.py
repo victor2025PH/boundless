@@ -103,19 +103,27 @@ def should_request_spoken_variant_autosend(
         return False
 
 
-def build_spoken_variant_instruction(*, disfluency: bool = False) -> str:
+def build_spoken_variant_instruction(*, disfluency: bool = False,
+                                     intensity: str = "natural") -> str:
     """prompt 指令块：正常回复后另起一行输出口语版。
 
     ``disfluency``（⑥ 口误自纠，由调用方按文本 crc 低频开启）：允许口语版带
     **一处**很轻的自然口误自纠（「明天…啊不对，是后天」）——最像真人也最易
     做作，所以确定性低频 + 每条至多一处。
+    ``intensity``＝口语重塑力度 light|natural|vivid（AI Live OS Agent6，2026-07-24）：
+    vivid 放开「真人随口说」的主观口吻，但**事实红线不变**（意思/数字/承诺不改、不编造）。
     """
     base = (
         "【语音版输出——本条回复将以语音条发送】\n"
         f"正常写完回复后，另起一行，以 {SPOKEN_MARKER} 开头，再写一遍这条回复的"
-        "「说出来」版本：意思不变，改成像微信语音那样的自然口语（短句、顺口、"
+        "「说出来」版本：意思和所有事实不变，改成像微信语音那样的自然口语（短句、顺口、"
         "可带轻微语气词，去掉书面连接词/列表符号/括号注释），与正文同一种语言。"
     )
+    if str(intensity or "natural").strip().lower() == "vivid":
+        base += (
+            "可以有一点点「真人随口说」的主观口吻（比如「说真的」「我跟你讲」），"
+            "像真的在想着对你说，但绝不编造原文没有的事实。"
+        )
     if disfluency:
         base += (
             "这一版里可以有至多一处很轻的口误自纠（比如「明天…啊不对，后天」），"
@@ -125,15 +133,20 @@ def build_spoken_variant_instruction(*, disfluency: bool = False) -> str:
 
 
 def want_disfluency(raw_cfg: Optional[Dict[str, Any]], text: str) -> bool:
-    """⑥ 口误自纠门控：``colloquial.disfluency`` 开 && crc32(text)%7==0（约 1/7
-    的轮次允许）——LLM 概率自控不可靠，用确定性低频替代。纯函数。"""
+    """⑥ 口误自纠门控：``colloquial.disfluency`` 开 && crc32(text)%N==0。
+
+    默认 N=5（约 1/5，比旧 1/7 略放量——ChatGPT 式口误/思考感）；
+    可用 ``colloquial.disfluency_every`` 覆盖（夹在 2..20）。确定性；纯函数。
+    """
     cfg = raw_cfg or {}
     col = ((cfg.get("avatar_voice") or {}).get("colloquial") or {})
     if not col.get("disfluency", False):
         return False
     try:
         import zlib
-        return zlib.crc32(str(text or "").encode("utf-8")) % 7 == 0
+        every = int(col.get("disfluency_every", 5) or 5)
+        every = max(2, min(20, every))
+        return zlib.crc32(str(text or "").encode("utf-8")) % every == 0
     except Exception:
         return False
 
@@ -181,16 +194,23 @@ def split_spoken_variant(raw: str) -> Tuple[str, Optional[str]]:
     return written, spoken
 
 
-def _key(written: str) -> str:
-    return hashlib.sha1(str(written or "").strip().encode("utf-8")).hexdigest()
+def _key(written: str, scope: str = "") -> str:
+    """书面版哈希；``scope``=account_id 时双号互不抢口语暂存。"""
+    base = hashlib.sha1(str(written or "").strip().encode("utf-8")).hexdigest()
+    sc = str(scope or "").strip()
+    if sc and sc != "default":
+        return f"{sc}:{base}"
+    return base
 
 
-def stash_spoken_variant(written: str, spoken: str) -> None:
+def stash_spoken_variant(
+    written: str, spoken: str, *, scope: str = "",
+) -> None:
     """按书面版哈希暂存口语版（LRU+TTL；best-effort 绝不抛）。"""
     try:
         if not (written and spoken):
             return
-        k = _key(written)
+        k = _key(written, scope)
         now = time.monotonic()
         with _LOCK:
             _STORE[k] = (now + STORE_TTL_SEC, spoken)
@@ -201,10 +221,10 @@ def stash_spoken_variant(written: str, spoken: str) -> None:
         pass
 
 
-def take_spoken_variant(written: str) -> Optional[str]:
+def take_spoken_variant(written: str, *, scope: str = "") -> Optional[str]:
     """取（并消费）书面版对应的口语版；被后处理改过/过期/没有 → None。"""
     try:
-        k = _key(written)
+        k = _key(written, scope)
         with _LOCK:
             hit = _STORE.pop(k, None)
         if not hit:

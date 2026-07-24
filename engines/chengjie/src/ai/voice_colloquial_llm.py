@@ -38,11 +38,58 @@ _EMOTION_TONE = {
 }
 
 
+# ── 口语重塑力度（AI Live OS Agent6，2026-07-24）───────────────────────────────
+# rewrite_intensity 三档，力度渐进但**事实红线三条恒定**（不改值/不编造/不串语言）：
+#   light  = 仅换词 + 拆句（最保守，即使 lead=True 也不加句首连接；事实零风险）
+#   natural= + 句首口语连接 + 语气词（当前生产默认，≈ 旧行为）
+#   vivid  = + 主观口吻框架（「说真的/我跟你讲」）+ 停顿感（主播味/陪伴感最强）
+_INTENSITY = ("light", "natural", "vivid")
+
+
 def build_colloquial_prompt(emotion: str = "neutral", lead: bool = True,
-                            style: str = "", disfluency: bool = False) -> str:
-    """构建口语化系统提示（纯函数）。``lead``＝是否允许句首口语连接（分条非首条关）；
-    ``disfluency``＝允许一处轻口误自纠（⑥，调用方按文本 crc 低频开启）。"""
+                            style: str = "", disfluency: bool = False,
+                            intensity: str = "natural") -> str:
+    """构建口语化系统提示（纯函数）。
+
+    ``intensity``＝口语重塑力度 light|natural|vivid（AI Live OS Agent6，2026-07-24）：
+    档位越高允许的主观口吻/停顿越多，但**事实红线恒定**（数字/时间/人名/金额/承诺不改、
+    不编造、不串语言）。``lead``＝是否允许句首口语连接（分条非首条关）；
+    ``disfluency``＝允许一处轻口误自纠（⑥，调用方按文本 crc 低频开启）。
+    """
+    lvl = str(intensity or "natural").strip().lower()
+    if lvl not in _INTENSITY:
+        lvl = "natural"
     tone = _EMOTION_TONE.get(str(emotion or "").strip().lower(), "自然放松")
+    if lvl == "vivid":
+        # 陪伴态口语重塑：像真人随口说，而不是念稿——红线不变，放开主观口吻/停顿。
+        parts = [
+            "你是「把 AI 写的回复变成真人会怎么说」的口语重塑助手。"
+            "目标：听起来像一个真实的人在微信语音里随口说，而不是念稿。",
+            "红线（违反即失败）：",
+            "1. 事实不可变——数字、时间、日期、金额、人名、地名、任何承诺，值和含义一律原样保留；",
+            "2. 不编造——不得加入原文没有的具体事实（可加语气/口头禅/口语连接，但不加「信息」）；",
+            "3. 同一种语言，不串语言。",
+            "重塑方式：",
+            "- 拆开生硬长句，用日常口语词（因此→所以、是否→是不是、非常→特别、无需→不用）；",
+            "- 陪伴对话把「您」改成「你」（「您好」除外），去掉客服腔/播音腔；",
+            "- 允许加一点点主观口吻框架（「说真的」「我跟你讲」「其实我觉得」），但别每句都加；",
+            f"- 语气{tone}；",
+            "- 可以有轻微语气词和自然停顿感（用省略号……表示换气），像真的在想着说；",
+            "- 宁可碎一点、短一点，也不要一整段像念稿；",
+            "- 真人微特征（每条最多选一种，别堆；没有把握就不用）：",
+            "  · 思考时轻轻重复一个词（「我觉得……我觉得可以」）；",
+            "  · 开心时不要写「哈哈/哈哈哈/嘿嘿嘿」开场——TTS 念出来极假；"
+            "最多偶尔一个「嘿，」，否则靠语气本身表达开心；",
+        ]
+        if str(style or "").strip():
+            parts.append(f"- 说话风格：{str(style).strip()}；")
+        if disfluency:
+            parts.append(
+                "- 本条允许一处很轻的自然口误自纠（如「明天…啊不对，后天」），"
+                "优先于上面的微特征，随意不刻意；")
+        parts.append("只输出重塑后的那段话本身，不要引号、不要解释、不要任何前后缀。")
+        return "\n".join(parts)
+    # light / natural：保守档（事实零风险，力度渐进）
     parts = [
         "你是口语改写助手。把用户给的一句话改写成【适合用语音说出来】的口语版本。",
         "严格要求：",
@@ -51,7 +98,7 @@ def build_colloquial_prompt(emotion: str = "neutral", lead: bool = True,
         "2. 把书面表达换成日常口语（如「因此」→「所以」、「是否」→「是不是」），拆开生硬的长句；",
         f"3. 语气{tone}；",
     ]
-    if lead:
+    if lvl == "natural" and lead:
         parts.append("4. 可以在开头加一点点自然的口语连接（如「其实」「话说」），但别每句都加；")
     else:
         parts.append("4. 直接说正文，不要用语气词或开场白开头；")
@@ -109,9 +156,9 @@ _CACHE_LOCK = threading.Lock()
 
 
 def _cache_key(text: str, emotion: str, lead: bool, style: str,
-               disfluency: bool = False) -> str:
+               disfluency: bool = False, intensity: str = "natural") -> str:
     raw = (f"{text}\x1f{emotion}\x1f{int(bool(lead))}\x1f{style}"
-           f"\x1f{int(bool(disfluency))}")
+           f"\x1f{int(bool(disfluency))}\x1f{intensity}")
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -214,11 +261,14 @@ async def llm_colloquialize(
     timeout_sec: float = 8.0,
     max_expand: float = 1.8,
     disfluency: bool = False,
+    intensity: str = "natural",
 ) -> Optional[str]:
     """本地 LLM 口语化。命中缓存直接返回；失败/超时/熔断/校验不过 → None（回落规则档）。
 
     短句（<min_chars）/ 非中文 → None（与规则档同口径 no-op）。
     ``disfluency``＝本条允许一处轻口误自纠（⑥，调用方按 crc 低频开启；进缓存键）。
+    ``intensity``＝口语重塑力度 light|natural|vivid（AI Live OS Agent6）：vivid 允许主观
+    口吻框架/停顿，输出会比原文长一些 → 自动放宽长度上限（红线仍由 sanitize 守）。
     """
     core = str(text or "").strip()
     if len(core) < max(1, int(min_chars)):
@@ -227,7 +277,11 @@ async def llm_colloquialize(
     if not _is_chinese_dominant(core):
         return None
 
-    key = _cache_key(core, emotion, bool(lead), style, bool(disfluency))
+    # vivid 档加了主观口吻框架，天然更长 → 放宽膨胀上限（≤1.8 会误杀正常重塑）。
+    if str(intensity or "").strip().lower() == "vivid" and max_expand < 2.2:
+        max_expand = 2.2
+
+    key = _cache_key(core, emotion, bool(lead), style, bool(disfluency), intensity)
     hit = _cache_get(key)
     if hit is not None:
         return hit or None          # 缓存空串＝已知无有效改写 → 回落规则档
@@ -240,7 +294,8 @@ async def llm_colloquialize(
         return None
 
     system = build_colloquial_prompt(emotion, bool(lead), style,
-                                     disfluency=bool(disfluency))
+                                     disfluency=bool(disfluency),
+                                     intensity=intensity)
     try:
         raw = await client.rewrite_local(system, core, timeout_sec=timeout_sec)
     except Exception as exc:
@@ -258,6 +313,20 @@ async def llm_colloquialize(
     return None
 
 
+def set_ai_client(client: Optional[Any]) -> None:
+    """注入已初始化的主 AIClient（main.py bootstrap 调用）。
+
+    修复（2026-07-24）：本模块原靠 ``_get_ai_client`` 懒建 ``AIClient(ConfigManager())``，
+    但该 ConfigManager 从未 ``await load()``、AIClient 从未 ``await initialize()``
+    → ``_fb_model`` 恒空 → ``rewrite_local`` 恒 None → **colloquial LLM 档实际从未生效**
+    （静默回落规则档）。main.py 在 ``ai_client.initialize()`` 后注入已初始化实例，
+    口语化 LLM 档才真正走 ``ai.fallback`` 本地端点。未注入时仍回落原懒加载（兼容测试）。
+    """
+    global _AI_CLIENT
+    with _AI_LOCK:
+        _AI_CLIENT = client
+
+
 def reset_state() -> None:
     """清空缓存 + 熔断 + 懒加载客户端（测试用）。"""
     global _AI_CLIENT, _fail_streak, _cooldown_until, _last_ok_ts, _last_fail_ts
@@ -273,6 +342,6 @@ def reset_state() -> None:
 
 
 __all__ = [
-    "llm_colloquialize", "build_colloquial_prompt", "sanitize_llm_output",
+    "llm_colloquialize", "set_ai_client", "build_colloquial_prompt", "sanitize_llm_output",
     "health_signal", "reset_state",
 ]

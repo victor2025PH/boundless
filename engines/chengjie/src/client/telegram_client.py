@@ -200,7 +200,26 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
         # 多账号元信息（供日志/persona 路由使用）
         self.account_id: str = str(_ov.get('account_id') or 'default')
         self.account_label: str = str(_ov.get('account_label') or self.account_id)
-        self.account_persona_ids: List[str] = list(_ov.get('persona_ids') or [])
+        self.account_persona_ids: List[str] = [
+            str(p) for p in (list(_ov.get('persona_ids') or [])) if p
+        ]
+        # SSOT 回落：worker 漏传 persona_ids 时从 registry 再解析一次（防双号无身份）
+        if not self.account_persona_ids and self.account_id not in ("", "default"):
+            try:
+                from src.ai.persona_voice import resolve_account_persona_id
+                _full = config.config if hasattr(config, "config") else {}
+                _pid = resolve_account_persona_id(
+                    _full if isinstance(_full, dict) else {},
+                    "telegram", self.account_id,
+                )
+                if _pid:
+                    self.account_persona_ids = [_pid]
+            except Exception:
+                pass
+        self.logger.info(
+            "账号人设绑定 account=%s label=%s persona_ids=%s",
+            self.account_id, self.account_label, self.account_persona_ids or "[]",
+        )
         # N 线 核心2：每号独立代理（反封号命门）。proxy_id 指向 proxy_pool 条目；
         # 与 B 线协议 worker 复用同一份 proxy_pool + _to_pyrogram_proxy，不另造代理逻辑。
         self.proxy_id: str = str(
@@ -218,7 +237,12 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
         voice_config = self.config.get('voice_recognition', {})
 
         # 临时目录设置
-        self.temp_dir = Path(voice_config.get('temp_dir', './temp/voice'))
+        # ★ 必须钉成绝对路径：pyrogram download_media 对相对路径按 PARENT_DIR
+        #（main.py 所在目录）解析，而本类的 exists() 检查按进程 cwd 解析。
+        # 双实例部署 cwd=实例数据根 ≠ 引擎根 → 相对路径会让「写入」与「检查」
+        # 分家：文件好端端下载到引擎根，检查却报「下载失败或文件为空」
+        #（2026-07-23 语音收不到事故根因）。resolve() 锚定 cwd，保实例隔离。
+        self.temp_dir = Path(voice_config.get('temp_dir', './temp/voice')).resolve()
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         self.max_file_size = voice_config.get('max_file_size', 16777216)  # 16MB
         from src.ai.inbound_video import resolve_inbound_video_max_bytes
@@ -228,6 +252,11 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
         if voice_config.get('enabled', False) and VOICE_RECOGNITION_AVAILABLE:
             try:
                 self.voice_transcriber = VoiceTranscriberFactory.create_transcriber(voice_config)
+                try:
+                    from src.voice_transcriber import register_shared_transcriber
+                    register_shared_transcriber(self.voice_transcriber)
+                except Exception:
+                    pass
                 self.logger.info("语音转录服务初始化成功")
             except Exception as e:
                 self.logger.warning(f"语音转录服务初始化失败: {e}")
@@ -597,6 +626,12 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             # 用 RPC（get_dialogs，正常可用）定时拉新进站私聊喂给同一条 _process_message，
             # 保证全自动回复不因实时通道静默挂掉而失效。与实时 handler 共用去重，互不重复。
             asyncio.create_task(self._poll_inbound_loop())
+            # ASR 启动预热（voice_recognition.warmup_on_boot，默认开）：SenseVoice 懒加载
+            # 让重启后首条语音吃 ~20-30s 模型冷启动 → 启动即后台预载；失败不影响启动
+            # （转录时仍会按需懒加载兜底）。
+            if self.voice_transcriber is not None and \
+                    self.config.get('voice_recognition', {}).get('warmup_on_boot', True):
+                asyncio.create_task(self._warmup_transcriber())
             self._register_reload_notifier()
             self._start_scheduler()
             # P2：情绪增强配置可观测（便于部署核对）
@@ -870,6 +905,16 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             "开" if _tg.get("process_groups", True) else "关",
         )
 
+    async def _warmup_transcriber(self) -> None:
+        """后台预热 ASR 模型（start() 调度）：成功记耗时，失败降级为懒加载。"""
+        import time as _time
+        try:
+            t0 = _time.time()
+            await self.voice_transcriber.warmup()
+            self.logger.info(f"ASR 预热完成 ({_time.time() - t0:.1f}s)")
+        except Exception as e:
+            self.logger.warning(f"ASR 预热失败（首条语音将按需懒加载）: {e}")
+
     async def _download_voice_file(self, message: Message) -> Optional[Path]:
         """
         下载语音消息文件到临时目录
@@ -902,8 +947,8 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
 
             self.logger.info(f"下载语音文件: {file_id} -> {temp_file_path}")
 
-            # 下载文件
-            await message.download(file_name=str(temp_file_path))
+            # 下载文件（保留返回值：pyrogram 实际写入路径，路径分歧类故障的取证关键）
+            downloaded = await message.download(file_name=str(temp_file_path))
 
             # 检查文件是否下载成功
             if temp_file_path.exists() and temp_file_path.stat().st_size > 0:
@@ -916,7 +961,8 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 self.logger.info(f"语音文件下载成功: {temp_file_path} ({file_size} bytes)")
                 return temp_file_path
             else:
-                self.logger.error("文件下载失败或文件为空")
+                self.logger.error(
+                    f"文件下载失败或文件为空: download返回={downloaded!r} 检查路径={temp_file_path}")
                 return None
 
         except Exception as e:
@@ -990,8 +1036,8 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
 
             self.logger.info(f"下载图片文件: {file_id} -> {temp_file_path}")
 
-            # 下载文件
-            await message.download(file_name=str(temp_file_path))
+            # 下载文件（保留返回值：pyrogram 实际写入路径，路径分歧类故障的取证关键）
+            downloaded = await message.download(file_name=str(temp_file_path))
 
             # 检查文件是否下载成功
             if temp_file_path.exists() and temp_file_path.stat().st_size > 0:
@@ -1004,7 +1050,8 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 self.logger.info(f"图片文件下载成功: {temp_file_path} ({file_size} bytes)")
                 return temp_file_path
             else:
-                self.logger.error("文件下载失败或文件为空")
+                self.logger.error(
+                    f"文件下载失败或文件为空: download返回={downloaded!r} 检查路径={temp_file_path}")
                 return None
 
         except Exception as e:
@@ -1943,7 +1990,8 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 cooldown_remaining,
             )
             _rl_cfg = self.config.get('telegram', {}).get('reply_logic', {})
-            _rl_key = f"{chat_id}:{user_id}"
+            # 双号隔离：冷却/连发计数按协议号分桶，防 Katie/Jason 互踩闸门
+            _rl_key = f"{self.account_id}:{chat_id}:{user_id}"
             _rl_now = time.time()
             _rl_last = self._auto_reply_ts.get(_rl_key)
             _cd_left = cooldown_remaining(_rl_cfg, _rl_last, _rl_now)

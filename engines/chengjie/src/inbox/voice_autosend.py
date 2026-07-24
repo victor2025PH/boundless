@@ -496,7 +496,9 @@ async def _synth_ogg(config: Dict[str, Any], persona_id: str, text: str,
     _spoken = None
     try:
         from src.ai.spoken_variant import take_spoken_variant
-        _spoken = take_spoken_variant(text)
+        _spoken = take_spoken_variant(
+            text, scope=str(account_id or ""),
+        )
     except Exception:
         _spoken = None
     synth_src = _spoken or text

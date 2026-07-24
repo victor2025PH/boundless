@@ -78,6 +78,154 @@ def flatten_tts_clauses(text: str) -> str:
         return str(text or "").strip()
 
 
+# CosyVoice3 副语言标记——IndexTTS/hub 会当正文念出，hub 路径必须剥掉。
+_COSY_PARA_MARK_RE = re.compile(
+    r"\[(?:sigh|breath|laughter|laughs|laugh|strong)\]", re.IGNORECASE,
+)
+
+
+def polish_hub_speak_text(text: str) -> str:
+    """Hub/IndexTTS 送稿清洗：去 Cosy 专属标记 + 书面标点改口语换气。
+
+    读稿感一半来自「书面句号收束 / 一口气念完长句」。处理：
+      - 剥 Cosy ``[sigh]`` 等（IndexTTS 会当正文念出）；
+      - 非句末 ``。`` → ``……``；句末播音腔句号去掉；
+      - 长句（≥18 字且 ≥2 个逗号）把**第一个** ``，`` 改成 ``……`` 换气
+        （确定性；已是省略号则跳过）——逼 IndexTTS 喘一口气，减念稿腔。
+    """
+    try:
+        t = str(text or "")
+        t = _COSY_PARA_MARK_RE.sub("", t)
+        # 句首连环假笑（哈哈哈/嘿嘿嘿）→ 去掉；开心靠 emotion 标签，不靠念笑字
+        t = re.sub(
+            r"^\s*[「『\"']?\s*(?:哈{2,}|嘿{2,}|呵{2,}|嘻{2,})[，,！!\s]*",
+            "", t)
+        t = t.replace("；", "……").replace(";", "……")
+        # 句中句号 → 换气省略号（后面还有字才改）
+        t = re.sub(r"。(?=\S)", "……", t)
+        # 句末播音腔句号/叹号收束去掉（问号保留——真疑问）
+        t = re.sub(r"[。！]+$", "", t)
+        # 长句首逗号 → 换气（已有 …… 开场则改第二个逗号，防「嗯……」叠加重）
+        if len(t) >= 18 and t.count("，") >= 2 and "……" not in t[:12]:
+            t = t.replace("，", "……", 1)
+        elif len(t) >= 22 and t.count("，") >= 2:
+            # 已有开场省略号：改第二个逗号
+            first = t.find("，")
+            second = t.find("，", first + 1) if first >= 0 else -1
+            if second > 0:
+                t = t[:second] + "……" + t[second + 1:]
+        t = re.sub(r"[…]{4,}", "……", t)  # 省略号过长收成两个
+        t = re.sub(r"\s+", " ", t).strip()
+        return t
+    except Exception:
+        return str(text or "").strip()
+
+
+_NON_CJK_RE = re.compile(r"[^\u4e00-\u9fff]")
+
+
+def _cer_cjk(hyp: str, ref: str) -> float:
+    """CJK-only 字错率 = 编辑距离 / len(ref)。ref 无 CJK → -1.0（不可评）。
+
+    只留汉字再比：标点/省略号/副语言标记（[sigh] 等）/拉丁字符天然剥离，
+    专抓「错别字/含混/幻觉插句」这类内容级劣化，不被格式差异干扰。
+    """
+    h = _NON_CJK_RE.sub("", str(hyp or ""))
+    r = _NON_CJK_RE.sub("", str(ref or ""))
+    if not r:
+        return -1.0
+    m, n = len(h), len(r)
+    dp = list(range(n + 1))
+    for i in range(1, m + 1):
+        prev, dp[0] = dp[0], i
+        for j in range(1, n + 1):
+            cur = dp[j]
+            dp[j] = min(dp[j] + 1, dp[j - 1] + 1,
+                        prev + (0 if h[i - 1] == r[j - 1] else 1))
+            prev = cur
+    return dp[n] / n
+
+
+async def verify_and_retry_synth(
+    av_out: Path,
+    synth_text: str,
+    sv_cfg: Optional[Dict[str, Any]],
+    transcriber: Any,
+    resynth: Any,
+    *,
+    budget: float = 120.0,
+) -> Optional[Dict[str, Any]]:
+    """合成后 ASR 回转校验门（synth_verify，2026-07-24）——fail-open。
+
+    零样本克隆单次合成方差大：同参考音同文本 CER 可从 0.08 摆到 0.20+
+    （v5 烘焙实测；偶发开头幻觉「好,」/结尾含混「反馈→把盔」）。把合成产物
+    转写回来与送稿比 CJK 字错率，超阈值自动重合成取较优——只在坏抽样时
+    付第二次 GPU 代价，比无脑 best_of×N 省。
+
+    - ``transcriber``：进程内共享转写器（get_shared_transcriber，SenseVoice
+      亚秒级）；未登记/转写失败/超时 → 静默跳过，绝不阻塞发声链。
+    - ``resynth``：同参数重合成回调（覆写 av_out）；失败自动回滚上一版字节。
+    - 返回观测 dict {cer, retried}（进 rv.extra.synth_verify）；不适用 → None。
+    """
+    try:
+        cfg = sv_cfg if isinstance(sv_cfg, dict) else {}
+        if not cfg.get("enabled", False) or transcriber is None:
+            return None
+        threshold = float(cfg.get("cer_threshold", 0.30) or 0.30)
+        min_chars = max(1, int(cfg.get("min_chars", 6) or 6))
+        retries = max(0, min(2, int(cfg.get("max_retries", 1) or 0)))
+        stt_timeout = float(cfg.get("stt_timeout_sec", 15.0) or 15.0)
+        if len(_NON_CJK_RE.sub("", str(synth_text or ""))) < min_chars:
+            return None                     # 短句/非中文 → 指标不可靠，不评
+
+        async def _stt() -> Optional[str]:
+            try:
+                return await asyncio.wait_for(
+                    transcriber.transcribe_voice_message(str(av_out), "zh"),
+                    timeout=stt_timeout)
+            except Exception:
+                return None
+
+        hyp = await _stt()
+        if hyp is None:
+            return None                     # 转写不可用 → fail-open
+        best_cer = _cer_cjk(hyp, synth_text)
+        if best_cer < 0:
+            return None
+        attempt = 0
+        while best_cer > threshold and attempt < retries:
+            attempt += 1
+            try:
+                best_bytes: Optional[bytes] = av_out.read_bytes()
+            except Exception:
+                best_bytes = None
+            logger.warning(
+                "[tts] synth_verify CER=%.3f > %.2f → 重合成(第%d次) text=%s",
+                best_cer, threshold, attempt, synth_text[:40])
+            try:
+                await asyncio.wait_for(asyncio.to_thread(resynth), timeout=budget)
+            except Exception:
+                if best_bytes is not None:
+                    try:
+                        av_out.write_bytes(best_bytes)
+                    except Exception:
+                        pass
+                break                       # 重合成失败 → 保留上一版
+            hyp2 = await _stt()
+            c2 = _cer_cjk(hyp2, synth_text) if hyp2 is not None else -1.0
+            if 0 <= c2 < best_cer:
+                best_cer = c2               # 新版更好 → 保留新文件
+            else:
+                if best_bytes is not None:  # 新版更差/不可评 → 回滚
+                    try:
+                        av_out.write_bytes(best_bytes)
+                    except Exception:
+                        pass
+        return {"cer": round(best_cer, 3), "retried": attempt}
+    except Exception:
+        return None
+
+
 def suspect_tts_truncation(
     text: str,
     duration_ms: int,
@@ -1227,12 +1375,16 @@ class TTSPipeline:
 
     async def _try_hub_fish(
         self, rv: "TTSResult", out: Path, t0: float, *, spec: Any = None,
+        text: Optional[str] = None,
     ) -> Optional["TTSResult"]:
-        """幻声 hub Fish-Speech 高保真克隆（.176:9000 /api/tts_only, Phase B）。
+        """幻声 hub IndexTTS-2 高保真克隆（.176:9000 /api/tts_only）。
 
         gated 于 ``avatar_voice.hub_fish.enabled``（默认关）。以人设 id 作 hub 声纹
-        档名（同名 1:1）；hub 侧已注册参考音，本地无需 ref 文件。送**干净文本**
-        （不注入 CosyVoice 专属的 [sigh]/emotion 标签，避免 Fish 读错）。
+        档名（同名 1:1）；hub 侧已注册参考音，本地无需 ref 文件。
+
+        ``text``：调用方应传入**已口语化**的送稿（减读稿感）；缺省回落 ``rv.text``。
+        内部再经 ``polish_hub_speak_text``——剥 Cosy 副语言标记、书面句号改换气，
+        绝不下发 ``[sigh]`` 等 Cosy 专属标签（IndexTTS 会当正文念出）。
 
         返回：成功 TTSResult(provider=hub_fish)；未启用/不在名单/不可达/失败 → None
         （调用方贯穿回落本地 CosyVoice3，绝不阻塞出站）。
@@ -1247,9 +1399,14 @@ class TTSPipeline:
         allow = hf.get("persona_allowlist") or []
         if allow and profile not in allow:
             return None
-        text = str(rv.text or "").strip()
+        raw = str(text if text is not None else (rv.text or "")).strip()
+        text = polish_hub_speak_text(raw)
         if not text:
             return None
+        if text != raw:
+            rv.extra["hub_fish_polished"] = True
+        if text != str(rv.text or "").strip():
+            rv.extra["hub_fish_spoken_text"] = text
         base_url = str(hf.get("base_url") or "http://192.168.0.176:9000").rstrip("/")
         timeout_sec = float(hf.get("timeout_sec", 30.0) or 30.0)
         try:
@@ -1356,11 +1513,155 @@ class TTSPipeline:
         if not bool(vp.get("owner_consent", False)):
             return _finalize_err("voice_profile_requires_owner_consent")
 
-        # Phase B（2026-07-24）：幻声 hub Fish-Speech 高保真优先——命中即用最高保真
-        # 44.1kHz 克隆音（hub 侧按 profile 已注册参考音，本地无需 ref 文件）；不可达/
-        # 失败 → 贯穿回落下方本地 CosyVoice3(7852) 原链，绝不阻塞。config 门控默认关。
-        hub_rv = await self._try_hub_fish(rv, out, t0, spec=spec)
+        cfg = dict(self.avatar_voice or {})
+        cfg["enabled"] = True
+
+        # ── 口语化必须在 hub / 本地合成之前（2026-07-24 读稿音根因）────────
+        # 旧序：hub_fish 先命中 → 直接用 rv.text 书面稿 → IndexTTS「念稿感」。
+        # 新序：先口语化（LLM vivid / 规则档）→ hub 与 7852 共用同一口语送稿；
+        # Cosy 副语言标记只给本地 7852（hub 会当正文念出，见 polish_hub_speak_text）。
+        synth_text = str(rv.text or "")
+        col_cfg = (cfg.get("colloquial")
+                   if isinstance(cfg.get("colloquial"), dict) else {})
+        if pre_colloquialized:
+            rv.extra["colloquial_generated"] = True
+        elif (spec is not None and col_cfg.get("enabled", False)
+                and vp.get("colloquial", True) is not False):
+            _col = None
+            _emo_name = getattr(spec, "emotion", "neutral")
+            _catch = str(vp.get("catchphrase") or "").strip()
+            try:
+                from src.ai.voice_colloquial import (
+                    build_voice_style_hint,
+                    colloquialize,
+                    parse_persona_lead_phrases,
+                )
+                _persona_leads = parse_persona_lead_phrases(
+                    self.persona_quirks, catchphrase=_catch)
+                _style = build_voice_style_hint(
+                    str(vp.get("instruct_style") or ""),
+                    self.persona_quirks,
+                    catchphrase=_catch)
+            except Exception:
+                _persona_leads = ()
+                _style = str(vp.get("instruct_style") or "")
+            if str(col_cfg.get("mode") or "rule").strip().lower() == "llm":
+                try:
+                    import zlib as _zlib
+
+                    from src.ai.voice_colloquial_llm import llm_colloquialize
+                    _every = int(col_cfg.get("disfluency_every", 5) or 5)
+                    _every = max(2, min(20, _every))
+                    _disf = (bool(col_cfg.get("disfluency", False))
+                             and _zlib.crc32(
+                                 synth_text.encode("utf-8")) % _every == 0)
+                    _col = await llm_colloquialize(
+                        synth_text, emotion=_emo_name, lead=colloquial_lead,
+                        style=_style,
+                        min_chars=int(col_cfg.get("min_chars", 12) or 12),
+                        timeout_sec=float(col_cfg.get("llm_timeout_sec", 8.0) or 8.0),
+                        disfluency=_disf,
+                        intensity=str(
+                            col_cfg.get("rewrite_intensity", "natural")
+                            or "natural"))
+                    # 原样返回 ≠ 成功：让规则档再救一刀（因此/您/无需 等书面词）
+                    if _col and _col != synth_text:
+                        rv.extra["colloquial_llm"] = True
+                    else:
+                        _col = None
+                except Exception:
+                    _col = None
+            if not _col:
+                try:
+                    _lead_prob = float(col_cfg.get("lead_prob", 0.5) or 0.5)
+                    if _persona_leads:
+                        _lead_prob = min(0.85, _lead_prob + 0.15)
+                    # human_ticks：思考重复词 + 轻笑声（ChatGPT 式真人感，默认随 vivid 开）
+                    _ticks = col_cfg.get("human_ticks")
+                    if _ticks is None:
+                        _ticks = (str(col_cfg.get("rewrite_intensity", "")
+                                      or "").strip().lower() == "vivid")
+                    _col = colloquialize(
+                        synth_text, spec,
+                        min_chars=int(col_cfg.get("min_chars", 12) or 12),
+                        max_inserts=int(col_cfg.get("max_inserts", 2) or 2),
+                        enable_fillers=(col_cfg.get("fillers", True) is not False
+                                        and colloquial_lead),
+                        enable_sentence_final=bool(
+                            col_cfg.get("sentence_final", False)),
+                        enable_lexical=col_cfg.get("lexical", True) is not False,
+                        enable_thinking_repeat=bool(_ticks),
+                        enable_soft_laugh=bool(_ticks),
+                        lead_prob=_lead_prob,
+                        think_prob=float(col_cfg.get("think_prob", 0.22) or 0.22),
+                        laugh_prob=float(col_cfg.get("laugh_prob", 0.18) or 0.18),
+                        persona_leads=_persona_leads)
+                except Exception:
+                    _col = None
+            if _col and _col != synth_text:
+                synth_text = _col
+                rv.extra["colloquial"] = True
+
+            # C+：LLM/规则都没带上微特征时，确定性后补一层（互斥，低频）
+            _ticks = col_cfg.get("human_ticks")
+            if _ticks is None:
+                _ticks = (str(col_cfg.get("rewrite_intensity", "")
+                              or "").strip().lower() == "vivid")
+            if (bool(_ticks) and spec is not None
+                    and not re.match(r"^\s*(哈{2,}|嘿|呵{2,}|嘻{2,})", synth_text)
+                    and not re.search(
+                        r"([\u4e00-\u9fff]{2})……\1", synth_text or "")):
+                try:
+                    from src.ai.voice_colloquial import (
+                        _soft_laugh as _sl,
+                        _thinking_repeat as _tr,
+                        normalize_colloquial_emotion as _nce,
+                    )
+                    import zlib as _z2
+                    _emo2, _ = _nce(spec)
+                    _seed2 = _z2.crc32(synth_text.encode("utf-8"))
+                    _hit = False
+                    # 仅 happy/playful/excited 偶发「嘿」；warm 不加笑
+                    if (_seed2 & 1) == 0 and _emo2 in (
+                            "happy", "playful", "excited"):
+                        _nt, _hit = _sl(
+                            synth_text, _emo2, _seed2,
+                            prob=float(col_cfg.get("laugh_prob", 0.08) or 0.08))
+                        if _hit:
+                            synth_text = _nt
+                            rv.extra["soft_laugh"] = True
+                            rv.extra["colloquial"] = True
+                    if not _hit:
+                        _nt, _hit = _tr(
+                            synth_text, _seed2,
+                            prob=float(col_cfg.get("think_prob", 0.22) or 0.22))
+                        if _hit:
+                            synth_text = _nt
+                            rv.extra["thinking_repeat"] = True
+                            rv.extra["colloquial"] = True
+                except Exception:
+                    pass
+            elif re.match(r"^\s*嘿，", synth_text or ""):
+                rv.extra["soft_laugh"] = True
+            elif re.search(r"([\u4e00-\u9fff]{2})……\1", synth_text or ""):
+                rv.extra["thinking_repeat"] = True
+
+        # hub IndexTTS-2 优先（口语化后的送稿）；失败贯穿回落本地 CosyVoice3。
+        hub_rv = await self._try_hub_fish(
+            rv, out, t0, spec=spec, text=synth_text)
         if hub_rv is not None and hub_rv.ok:
+            try:
+                from src.ai.avatar_voice_stats import get_avatar_voice_stats
+                get_avatar_voice_stats().record_synth(
+                    ok=True, latency_ms=int(hub_rv.latency_ms or 0),
+                    channel="hub_fish",
+                    emotion=str(hub_rv.extra.get("hub_fish_emotion") or "neutral"),
+                    colloquial=bool(rv.extra.get("colloquial")),
+                    colloquial_llm=bool(rv.extra.get("colloquial_llm")),
+                    colloquial_generated=bool(rv.extra.get("colloquial_generated")),
+                    paralinguistic=False)
+            except Exception:
+                pass
             return hub_rv
 
         if not ref:
@@ -1368,8 +1669,6 @@ class TTSPipeline:
         if not Path(ref).is_file():
             return _finalize_err(f"voice_profile_reference_audio_missing:{ref}")
 
-        cfg = dict(self.avatar_voice or {})
-        cfg["enabled"] = True
         cloud_fallback = bool(cfg.get("cloud_fallback", True))
         client = AvatarVoiceClient(cfg)
 
@@ -1453,90 +1752,9 @@ class TTSPipeline:
             except Exception:
                 emotion = emotion_default
 
-        synth_text = rv.text
-        # 口语化改写（活人感 P0，2026-07-14）：书面语→可念口语（书面词→口语词 +
-        # 句首迟疑/软化词），减「念稿感」——大量对话走 neutral 保真路径（音色最像但
-        # 韵律最平），文字层口语化是零成本补活人感的最大杠杆。确定性（同文本同结果=
-        # 缓存/预渲染键安全）、情绪门控（庄重情绪只做中性词替换）、短句 no-op（保预渲染
-        # 命中）、非中文文本跳过（防中文口语词 garble 外语）。**只动 synth_text（送引擎），
-        # 不动 rv.text**（镜像/记忆/统计用原文＝分「眼睛看的字」与「耳朵听的口语」两版）。
-        # 开关：avatar_voice.colloquial.enabled + 人设级 voice_profile.colloquial（显式 False 关）。
-        col_cfg = (cfg.get("colloquial")
-                   if isinstance(cfg.get("colloquial"), dict) else {})
-        if pre_colloquialized:
-            # 生成层口语版（Phase G）：文本在生成时已是口语，跳过 TTS 前改写
-            # （防「其实，其实」叠加 + 省一次本地 LLM）；只记来源供观测。
-            rv.extra["colloquial_generated"] = True
-        elif (spec is not None and col_cfg.get("enabled", False)
-                and vp.get("colloquial", True) is not False):
-            _col = None
-            _emo_name = getattr(spec, "emotion", "neutral")
-            _catch = str(vp.get("catchphrase") or "").strip()
-            try:
-                from src.ai.voice_colloquial import (
-                    build_voice_style_hint,
-                    colloquialize,
-                    parse_persona_lead_phrases,
-                )
-                _persona_leads = parse_persona_lead_phrases(
-                    self.persona_quirks, catchphrase=_catch)
-                _style = build_voice_style_hint(
-                    str(vp.get("instruct_style") or ""),
-                    self.persona_quirks,
-                    catchphrase=_catch)
-            except Exception:
-                _persona_leads = ()
-                _style = str(vp.get("instruct_style") or "")
-            # A 档：LLM 深度口语化（LAN 本地模型，不占云）——语境贴合，比规则档更自然。
-            # 失败/超时/熔断/校验不过 → _col 仍为 None，落到下面规则档兜底（绝不阻塞）。
-            if str(col_cfg.get("mode") or "rule").strip().lower() == "llm":
-                try:
-                    import zlib as _zlib
-
-                    from src.ai.voice_colloquial_llm import llm_colloquialize
-                    # ⑥ 口误自纠：确定性低频（crc%7）+ 开关（disfluency）
-                    _disf = (bool(col_cfg.get("disfluency", False))
-                             and _zlib.crc32(
-                                 synth_text.encode("utf-8")) % 7 == 0)
-                    _col = await llm_colloquialize(
-                        synth_text, emotion=_emo_name, lead=colloquial_lead,
-                        style=_style,
-                        min_chars=int(col_cfg.get("min_chars", 12) or 12),
-                        timeout_sec=float(col_cfg.get("llm_timeout_sec", 8.0) or 8.0),
-                        disfluency=_disf)
-                    if _col:
-                        rv.extra["colloquial_llm"] = True
-                except Exception:
-                    _col = None
-            # 规则档：默认档 / LLM 未命中时的确定性兜底。分条非首条 colloquial_lead=False
-            # → 不加句首迟疑词（防连发都「其实，/话说，」开头做作），但仍做等义词替换。
-            if not _col:
-                try:
-                    _lead_prob = float(col_cfg.get("lead_prob", 0.5) or 0.5)
-                    if _persona_leads:
-                        _lead_prob = min(0.85, _lead_prob + 0.15)
-                    _col = colloquialize(
-                        synth_text, spec,
-                        min_chars=int(col_cfg.get("min_chars", 12) or 12),
-                        max_inserts=int(col_cfg.get("max_inserts", 2) or 2),
-                        enable_fillers=(col_cfg.get("fillers", True) is not False
-                                        and colloquial_lead),
-                        enable_sentence_final=bool(
-                            col_cfg.get("sentence_final", False)),
-                        enable_lexical=col_cfg.get("lexical", True) is not False,
-                        lead_prob=_lead_prob,
-                        persona_leads=_persona_leads)
-                except Exception:
-                    _col = None
-            if _col and _col != synth_text:
-                synth_text = _col
-                rv.extra["colloquial"] = True
-
-        # 副语言标记注入（活人感：叹气/气口/笑声）：基于**口语化后**的 synth_text
-        # （气口/叹气位置更贴合口语节奏）。确定性（同文本同结果=缓存安全）、情绪对路
-        # 才注入、每条至多 max_marks 个。开关：avatar_voice.paralinguistic.enabled +
-        # 人设级 voice_profile.paralinguistic（显式 False 关闭）。标记在 CosyVoice3
-        # tokenizer 层消费绝不读出（2026-07-13 真机 STT 回转验证）。
+        # 副语言标记注入（仅本地 CosyVoice3）：基于**口语化后**的 synth_text。
+        # hub 路径已在上方返回，不会走到这里。标记在 CosyVoice3 tokenizer 层消费
+        # 绝不读出（2026-07-13 真机 STT 回转验证）。
         para_cfg = (cfg.get("paralinguistic")
                     if isinstance(cfg.get("paralinguistic"), dict) else {})
         if (spec is not None and para_cfg.get("enabled", False)
@@ -1603,6 +1821,19 @@ class TTSPipeline:
                 logger.warning("[tts] avatar_clone failed (%s) → 回落兜底", _exs)
                 return None
             return _finalize_err(f"avatar_clone_failed:{_exs[:200]}")
+
+        # 合成后 ASR 回转校验门（synth_verify）：复用进程内共享转写器抓偶发
+        # 错别字/含混，超阈值同参数重合成取较优；未登记/异常 fail-open 零阻塞。
+        if av_out.exists() and av_out.stat().st_size > 0:
+            try:
+                from src.voice_transcriber import get_shared_transcriber
+                _sv = await verify_and_retry_synth(
+                    av_out, synth_text, cfg.get("synth_verify"),
+                    get_shared_transcriber(), _do_synth, budget=budget)
+                if _sv:
+                    rv.extra["synth_verify"] = _sv
+            except Exception:
+                pass
 
         if av_out.exists() and av_out.stat().st_size > 0:
             rv.ok = True
