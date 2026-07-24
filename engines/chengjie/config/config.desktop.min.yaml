@@ -24,7 +24,7 @@ ai:
   provider: "openai_compatible"     # gemini | openai_compatible（DeepSeek/Ollama/vLLM 走这条）
   api_key: ""                       # ← 首启向导写 config.local.yaml overlay，勿手改本文件
   base_url: "https://api.deepseek.com"
-  model: "deepseek-chat"
+  model: "deepseek-v4-flash"
   temperature: 0.7
   max_tokens: 1024
   timeout: 30

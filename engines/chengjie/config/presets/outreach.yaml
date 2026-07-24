@@ -12,7 +12,7 @@ ai:
   provider: openai_compatible
   api_key: "YOUR_API_KEY"            # ← 必填
   base_url: "https://api.deepseek.com"
-  model: "deepseek-chat"
+  model: "deepseek-v4-flash"
   temperature: 0.8                   # 陪聊更口语，温度略高
   max_tokens: 1024
   timeout: 30
