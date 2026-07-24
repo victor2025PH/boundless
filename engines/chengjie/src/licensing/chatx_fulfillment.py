@@ -61,15 +61,24 @@ CHATX_SKU_SPECS: Dict[str, Dict[str, Any]] = {
 # 渠道：产品定位「多平台文字+语音双向」→ 全渠道。
 # features：includes 里「漏斗看板/客户 journey/置信度看板」落在 analytics 功能位
 # （basic 档默认无 → 显式授予，feature_gate 规则 3）。
+# included_chars_monthly（P6 首单演练补，2026-07-24）：通译是字符计量产品线——
+# 订阅授权必须带字符额度，否则激活即「不限量」＝计量/水位提醒失效 + charpack
+# 凭证被 unlimited 护栏拒兑（加量包闭环断裂）。口径：
+#   - team：官网未承诺具体字符数 → 3_000_000/月（≈2 个 charpack 的量，$99 订阅
+#     对 $59×2 单买有折让感；商业数字可调，改这里即全链生效）；
+#   - pro：官网明示「不限字符」→ 0（=不限；charpack 对 pro 拒兑是正确语义）。
+# 签发时按授权月数放大（annual ×12），见 build_issue_payload。
 LINGOX_SKU_SPECS: Dict[str, Dict[str, Any]] = {
     "lingox-team": {
         "plan": "basic", "seats": 5, "channels": list(ALL_CHANNELS),
         "features": {"analytics": True}, "product_id": "tongyi",
+        "included_chars_monthly": 3_000_000,
         "note": "多坐席/客户 journey/漏斗看板",
     },
     "lingox-pro": {
         "plan": "basic", "seats": 15, "channels": list(ALL_CHANNELS),
         "features": {"analytics": True}, "product_id": "tongyi",
+        "included_chars_monthly": 0,
         "note": "不限字符/多模态翻译/置信度·引擎健康",
     },
 }
@@ -135,6 +144,13 @@ def build_issue_payload(
         "sku_id": str(sku_id),
         "product_id": str(spec.get("product_id") or "zhiliao"),
     }
+    # 字符计量产品线（P6）：spec 月度额度 × 授权月数 → payload.included_chars。
+    # 月付 32 天=1 个月、年付 366 天=12 个月（用量表按 lic_id 记账，月付续费
+    # =新单新 lic_id 额度自然重置；年付一个池）。0/缺省 = 不限量，不写字段。
+    monthly = int(spec.get("included_chars_monthly") or 0)
+    if monthly > 0:
+        months = 12 if d >= 360 else max(1, d // 28)
+        payload["included_chars"] = monthly * months
     if d > 0:
         payload["exp"] = now_ts + d * 86400
     if order_id:

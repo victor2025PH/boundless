@@ -179,8 +179,10 @@ export const translateOffers: PriceOffer[] = [
     price: "99",
     currency: "USD",
     unit: "month",
+    // 3M chars/mo 与引擎签发额度同源（chatx_fulfillment.LINGOX_SKU_SPECS
+    // included_chars_monthly）；改额度两处一起改，防「官网没说限量、实例按 3M 执行」预期错位。
     description:
-      "Per month; multi-seat unified inbox, customer journey, conversion funnel counter.",
+      "Per month; 3M translation chars, multi-seat unified inbox, customer journey, conversion funnel counter.",
   },
   {
     id: "translate-pro",

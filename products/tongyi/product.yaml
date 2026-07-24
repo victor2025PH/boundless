@@ -34,7 +34,8 @@ skus:
     name: { zh: 团队, en: Team }
     unit: month
     price: "99"                    # USD/月（NexScrm Standard $48/mo ×2=96 → 99）
-    includes: [多坐席, 客户 journey, 漏斗看板]
+    # 300万字符/月与引擎签发额度同源（chatx_fulfillment.LINGOX_SKU_SPECS），改两处一起改
+    includes: [300万字符/月, 多坐席, 客户 journey, 漏斗看板]
   - id: lingox-pro
     name: { zh: 专业, en: Pro }
     unit: month

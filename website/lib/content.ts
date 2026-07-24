@@ -459,7 +459,7 @@ const zh: Dict = {
       // 定价与 lib/pricing.ts::translateOffers 同步（USD，2026-07-18 定价决议：竞品×2）；改价两处一起改。
       pricing: [
         { plan: "字符包", price: "59", detail: "一次性 · 150 万字符 + 术语库 + 翻译记忆" },
-        { plan: "团队", price: "99 / 月", detail: "多坐席收件箱 + 客户 journey + 漏斗计数" },
+        { plan: "团队", price: "99 / 月", detail: "300 万字符/月 + 多坐席收件箱 + 客户 journey + 漏斗计数" },
         { plan: "专业", price: "198 / 月", detail: "不限字符 + 多模态翻译 + 置信度/引擎健康" },
       ],
     },
@@ -1119,7 +1119,7 @@ const en: Dict = {
       // Prices mirror lib/pricing.ts::translateOffers (USD; repriced 2026-07-18, competitor ×2); change both together.
       pricing: [
         { plan: "Char pack", price: "59", detail: "One-time · 1.5M chars + glossary + translation memory" },
-        { plan: "Team", price: "99 / mo", detail: "Multi-seat inbox + customer journey + funnel counter" },
+        { plan: "Team", price: "99 / mo", detail: "3M chars/mo + multi-seat inbox + customer journey + funnel counter" },
         { plan: "Pro", price: "198 / mo", detail: "Unlimited chars + multimodal translate + confidence/engine health" },
       ],
     },

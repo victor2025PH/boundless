@@ -77,6 +77,21 @@ def test_chatx_behavior_unchanged():
     assert p["features"] == {}
 
 
+def test_lingox_team_quota_carried_and_scaled():
+    """P6 首单演练实锤：通译订阅必须带字符额度，否则激活即不限量——
+    计量失效 + charpack 凭证被 unlimited 护栏拒兑（加量包闭环断裂）。"""
+    # team 月付：3M/月 × 1 个月
+    p = build_issue_payload("lingox-team", customer="c", order_id="O1")
+    assert p["included_chars"] == 3_000_000
+    # team 年付（366 天）：×12
+    p12 = build_issue_payload("lingox-team", customer="c", days=366)
+    assert p12["included_chars"] == 36_000_000
+    # pro 官网承诺不限字符 → 不写字段（=0 不限；charpack 对 pro 拒兑是正确语义）
+    assert "included_chars" not in build_issue_payload("lingox-pro", customer="c")
+    # chatx 聊天线不按字符计量 → 不写字段
+    assert "included_chars" not in build_issue_payload("chatx-entry", customer="c")
+
+
 def test_order_family_detection():
     assert is_lingox_order({"sku_id": "lingox-pro"}) is True
     assert is_lingox_order({"sku_id": "", "product_id": "tongyi"}) is True

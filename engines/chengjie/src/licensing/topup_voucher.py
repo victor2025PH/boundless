@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any, Dict, Optional
 
@@ -102,6 +103,39 @@ def issue_topup_voucher(
 
 # ── 产品侧：验签 + 兑换 ──────────────────────────────────────────────────────
 
+# TG handle / 邮箱抽取（contact_core 用）。handle 规则同 Telegram：5-32 位字母数字下划线；
+# 前缀容忍 tg: / telegram: / t.me/ / @ 及其组合（「Tg: @Alice」「t.me/alice」都命中 alice）。
+_TG_HANDLE_RE = re.compile(r"(?:t\.me/|tg\s*[:：]\s*|telegram\s*[:：]\s*|@)\s*@?([a-z0-9_]{4,32})")
+_EMAIL_RE = re.compile(r"[a-z0-9][\w.+-]*@[\w-]+\.[\w.-]+")
+
+
+def contact_core(s: str) -> str:
+    """联系方式 → 可比对的核心标识（客户级绑定的「同一客户」判定锚点）。
+
+    两次下单的 contact 几乎不可能逐字一致（大小写 / 空格 / ``tg:`` 前缀 / ``@`` 有无 /
+    括号备注——P6 首单演练实锤：订阅单与加量包单只差备注文字，精确比对直接
+    ``customer_mismatch`` 把合法凭证拒之门外）。比对语义应该是「同一个人」：
+
+    - 提得出 TG handle → 以 handle 为准（``Tg: @Alice (老板)`` ≡ ``t.me/alice``）；
+    - 否则提得出邮箱 → 以邮箱为准（大小写/围绕文本无关）；
+    - 都提不出 → 保守回退：casefold + 去全部空白的整串（仍是精确语义，防串号）。
+
+    返回空串表示无内容（调用方应拒绝）。
+    """
+    t = str(s or "").strip().casefold()
+    if not t:
+        return ""
+    # 邮箱先判：``Boss@Acme.com`` 里的 ``@acme`` 会被 TG 正则误抢；
+    # 反向不会（``tg:@alice`` / ``t.me/alice`` 无 ``local@domain.tld`` 结构）。
+    m = _EMAIL_RE.search(t)
+    if m:
+        return "mail:" + m.group(0)
+    m = _TG_HANDLE_RE.search(t)
+    if m:
+        return "tg:" + m.group(1)
+    return "raw:" + re.sub(r"\s+", "", t)
+
+
 def verify_topup_voucher(token: str, public_key_hex: str) -> Dict[str, Any]:
     """验签并做结构校验，返回 {ok, error?, payload?}。绝不抛。
 
@@ -173,8 +207,13 @@ def redeem_topup_voucher(
         if want_lic:
             if want_lic != str(getattr(st, "lic_id", "") or ""):
                 return {"ok": False, "error": "lic_mismatch"}
-        elif want_sub != str(getattr(st, "customer", "") or ""):
-            return {"ok": False, "error": "customer_mismatch"}
+        else:
+            # 客户级绑定按核心标识比对（同一 TG handle / 邮箱 = 同一客户），
+            # 免「两次下单 contact 写法不一致」把合法凭证拒掉（P6 演练实锤）。
+            core_want = contact_core(want_sub)
+            core_have = contact_core(str(getattr(st, "customer", "") or ""))
+            if not core_want or core_want != core_have:
+                return {"ok": False, "error": "customer_mismatch"}
         from src.licensing.quota_store import add_license_topup
         res = add_license_topup(
             chars, ref,
@@ -192,6 +231,7 @@ def redeem_topup_voucher(
 __all__ = [
     "VOUCHER_TYP",
     "batch_refs",
+    "contact_core",
     "issue_topup_voucher",
     "redeem_topup_voucher",
     "verify_topup_voucher",

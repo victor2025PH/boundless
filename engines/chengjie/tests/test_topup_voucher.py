@@ -126,6 +126,49 @@ def test_redeem_sub_binding(keypair):
     assert other["error"] == "customer_mismatch"
 
 
+# ── contact_core 核心标识比对（P6 首单演练实锤修复，2026-07-24）─────────────
+
+
+def test_contact_core_extraction():
+    """TG handle / 邮箱 / 回退归一化三档；提取结果带类型前缀防跨类碰撞。"""
+    from src.licensing.topup_voucher import contact_core
+
+    # TG handle：前缀/大小写/@/备注全不敏感
+    assert contact_core("tg:@Alice_88 (老板)") == "tg:alice_88"
+    assert contact_core("Telegram: alice_88") == "tg:alice_88"
+    assert contact_core("t.me/ALICE_88") == "tg:alice_88"
+    assert contact_core("@alice_88") == "tg:alice_88"
+    # 邮箱：大小写/围绕文本无关
+    assert contact_core("联系 Boss@Acme.COM 下单") == "mail:boss@acme.com"
+    # 回退：casefold + 去空白（无 handle/邮箱时仍是精确语义）
+    assert contact_core("微信 wxid 12345") == "raw:微信wxid12345"
+    assert contact_core("") == ""
+    # 类型前缀防「raw 串恰好等于别人 handle」跨类误配
+    assert contact_core("alice_88 无前缀纯文本") != contact_core("@alice_88")
+
+
+def test_redeem_sub_binding_core_match(keypair):
+    """P6 演练实锤：订阅单与加量包单 contact 只差备注 → 核心标识一致必须放行。"""
+    tok = issue_topup_voucher(
+        keypair["private_hex"], chars=1_500_000, ref="AH-20260724-G0EARY",
+        customer="tg:@boundless_selftest (P6 charpack 演练)")
+    st = _st(customer="tg:@boundless_selftest (P6 首单演练)")
+    res = redeem_topup_voucher(tok, lic_status=st, public_key_hex=keypair["public_hex"])
+    assert res["ok"] is True and res["chars"] == 1_500_000
+    # 不同 handle 仍拒（防串号语义不变）
+    evil = redeem_topup_voucher(
+        issue_topup_voucher(keypair["private_hex"], chars=10, ref="R-EVIL",
+                            customer="tg:@someone_else9"),
+        lic_status=st, public_key_hex=keypair["public_hex"])
+    assert evil["error"] == "customer_mismatch"
+    # 授权侧 customer 为空 → 核心标识空 → 拒（凭证不能兑进无主授权）
+    empty = redeem_topup_voucher(
+        issue_topup_voucher(keypair["private_hex"], chars=10, ref="R-EMPTY",
+                            customer="tg:@boundless_selftest"),
+        lic_status=_st(customer=""), public_key_hex=keypair["public_hex"])
+    assert empty["error"] == "customer_mismatch"
+
+
 def test_redeem_binding_and_state_guards(keypair):
     lic_tok = issue_topup_voucher(
         keypair["private_hex"], chars=10, ref="R1", lic_id="OTHER-LIC")
