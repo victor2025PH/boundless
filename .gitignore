@@ -83,3 +83,10 @@ website/public/brand/campaign/teaser-war-latest.png
 engines/chengjie/website/
 # Playwright browser profile cache (runtime artifact, not source)
 engines/avatarhub/demo_record/.pwprofile/
+
+# ---- runtime / cross-machine handoff (2026-07-25) ----
+deploy/instances/.ops/
+handoff/
+tmp_voice_ab/
+# nested repo (TG ZhiKongWang, independent repo - do not absorb)
+tgkz2026/
