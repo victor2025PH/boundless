@@ -81,4 +81,9 @@ if (-not $nodeExe) {
 }
 Add-Content -LiteralPath $log -Value ("[wa-baileys] " + (Get-Date -Format o) + " launching node=" + ($(if ($nodeExe) { $nodeExe } else { "<NOT FOUND>" })) + " server=" + $serverJs)
 if (-not $nodeExe) { Add-Content -LiteralPath $log -Value "[wa-baileys] FATAL: node.exe not found on PATH nor common install dirs"; exit 1 }
-& $nodeExe $serverJs *>> $log
+# 日志编码修复（P2）：PowerShell 5.1 下 `*>> $log` 会把 node stdout 按 UTF-16LE 落盘，
+# 与上面 Add-Content 写入的单字节行混在同一文件 → 乱码且排障工具读不了（2026-07-22
+# 事故排查即受害于此）。不能用 `Out-File -Append`：它全程独占文件句柄，服务在跑时
+# 任何人都读不了日志（排障反而更瞎）。用逐行 Add-Content（UTF-8）：每行写完即释放
+# 句柄，tail/Get-Content 随时可读；Baileys info 级日志量小，逐行开销可忽略。
+& $nodeExe $serverJs 2>&1 | ForEach-Object { Add-Content -LiteralPath $log -Value $_ -Encoding UTF8 }

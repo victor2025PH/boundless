@@ -60,6 +60,12 @@ def build_account_signals(
     status = str(acc.get("status") or "")
     meta = acc.get("meta") or {}
     sig["banned"] = bool(meta.get("banned")) or status == "removed"
+    # 官方资料变更频次（accounts.profile_push 审计）→ account_health 扣分轴
+    try:
+        from src.integrations.account_profile_push import profile_churn_count
+        sig["profile_churn_7d"] = int(profile_churn_count(meta, now, days=7))
+    except Exception:
+        sig["profile_churn_7d"] = 0
 
     if limiter is not None:
         try:
@@ -140,14 +146,21 @@ def fleet_overview(
             "platform": str(platform or "").lower(),
             "account_id": str(account_id or ""),
             "stage": stage,
+            "profile_churn_7d": int(sig.get("profile_churn_7d") or 0),
         })
 
     fleet = aggregate_fleet(sigs, config)
+    # 机群级资料变更热点（运营一眼看谁在狂改资料）
+    churn_hot = sorted(
+        [d for d in detail if int(d.get("profile_churn_7d") or 0) >= 3],
+        key=lambda x: -int(x.get("profile_churn_7d") or 0),
+    )[:8]
     return {
         "fleet": fleet,
         "lifecycle": lifecycle,
         "accounts": detail,
         "total": len(detail),
+        "profile_churn_hot": churn_hot,
     }
 
 

@@ -815,30 +815,14 @@ class PersonaManager:
         chat_id: str = "",
         account_persona_id: str = "",
     ) -> Dict[str, Any]:
-        """Get the effective persona with 3-tier fallback:
+        """Get the effective persona with tier fallback.
 
-        1. Per-chat binding (``bind_chat_persona``)
-        2. Account-level profile (``account_persona_id`` → profile store)
-        3. Domain default (``set_domain_persona``) → global hardcoded default
+        2026-07-24 双号串话修复：账号已绑人设时**优先账号人设**，跳过 peer-global
+        chat_binding（同一客户找 Katie/Jason 两号时，旧逻辑强制共用 ``5433982810→chen_mo``
+        → 女号说男声、内容互串）。无账号人设时仍走 chat_binding（单号运营绑会话）。
         """
-        if chat_id:
-            cid = str(chat_id)
-            # P4: reference binding — live-resolves to current profile data
-            ref_pid = self._chat_bindings.get(cid)
-            if ref_pid:
-                live = self._profile_personas.get(str(ref_pid))
-                if live is not None:
-                    return live
-                # Profile was deleted — fall through (no stale data served)
-            elif cid in self._chat_personas:
-                return self._chat_personas[cid]  # inline/legacy snapshot
-        if account_persona_id:
-            acct_p = self._profile_personas.get(str(account_persona_id))
-            if acct_p:
-                return acct_p
-        if self._domain_persona:
-            return self._domain_persona
-        return self._default_persona
+        p, _tier = self.get_persona_with_tier(chat_id, account_persona_id)
+        return p
 
     _TIER_CHAT = "chat_binding"
     _TIER_ACCOUNT = "account_profile"
@@ -850,14 +834,20 @@ class PersonaManager:
         chat_id: str = "",
         account_persona_id: str = "",
     ) -> tuple:
-        """Same 3-tier lookup as get_persona but also returns the resolved tier label.
+        """Resolve persona + tier label.
 
         Returns:
             (persona_dict, tier_str) where tier_str ∈
             {'chat_binding', 'account_profile', 'domain', 'default'}
 
-        Zero impact on existing callers — they can keep using get_persona().
+        多协议号：``account_persona_id`` 优先于 peer-global chat_binding
+        （见 get_persona 文档）。无人设账号仍可用 chat_binding。
         """
+        acc_pid = str(account_persona_id or "").strip()
+        if acc_pid:
+            acct_p = self._profile_personas.get(acc_pid)
+            if acct_p:
+                return acct_p, self._TIER_ACCOUNT
         if chat_id:
             cid = str(chat_id)
             # P4: reference binding — live-resolves
@@ -868,10 +858,6 @@ class PersonaManager:
                     return live, self._TIER_CHAT
             elif cid in self._chat_personas:
                 return self._chat_personas[cid], self._TIER_CHAT
-        if account_persona_id:
-            acct_p = self._profile_personas.get(str(account_persona_id))
-            if acct_p:
-                return acct_p, self._TIER_ACCOUNT
         if self._domain_persona:
             return self._domain_persona, self._TIER_DOMAIN
         return self._default_persona, self._TIER_DEFAULT
@@ -1004,6 +990,23 @@ class PersonaManager:
                 f"你就是真人「{name}」；不承认是 AI/机器人/语言模型，"
                 f"被问到时按「{reply}」回应，不解释运作原理。"
             )
+        # A2/A3（2026-07-22）compact 安全网：边界话题完整策略 + 通话能力边界
+        # （full 模式有对应完整版；compact 是生产主用格式，缺了就是真缺）。
+        _avoid_c = (persona.get("boundaries") or {}).get("topics_to_avoid") or []
+        if _avoid_c:
+            lines.append(
+                f"避开话题：{'、'.join(_avoid_c[:8])}——轻巧带过后立即换话题，"
+                "绝不以该话题反问对方（如求推荐/求分享）。"
+            )
+        _caps_c = persona.get("capabilities") or {}
+        if not (isinstance(_caps_c, dict) and _caps_c.get("video_call")):
+            lines.append(
+                "不能视频/语音通话：被邀请时自然婉拒（这边不方便），绝不答应。"
+            )
+        lines.append(
+            "绝不编造联系方式（微信/QQ/手机号等，对方会验证）：资料里没有就说"
+            "「先在这聊嘛」带过。"
+        )
         lines.append(
             "回复硬约束：先正面回答用户问的问题再扩展；不要用 () [] 描写动作"
             "或列举要点（如 (微笑) (1)(2)），用自然句子。"
@@ -1301,7 +1304,31 @@ class PersonaManager:
         b = persona.get("boundaries", {})
         avoid = b.get("topics_to_avoid", [])
         if avoid:
-            lines.append(f"避免讨论以下话题：{'、'.join(avoid)}。")
+            # A3（2026-07-22 真机复盘）：只写"避免讨论"不够——实测 AI 回避了正面
+            # 接话，却在句尾反问「是不是有什么好片单想分享给我呀？😏」把话题邀请
+            # 回来。补上"回避后立即转移、绝不以该话题反问收尾"的完整策略。
+            lines.append(
+                f"避免讨论以下话题：{'、'.join(avoid)}。"
+                "碰到这些话题时：轻巧带过后**立即转移**到别的日常话题，"
+                "绝不追问细节、绝不在结尾用该话题反问对方（如让对方推荐/分享），"
+                "不评判不说教。"
+            )
+        # A2（2026-07-22）：能力边界——陪聊人设默认不能视频/语音通话（无此能力，
+        # 应允=穿帮）。人设可显式声明 capabilities.video_call: true 关闭本约束。
+        _caps = persona.get("capabilities") or {}
+        if not (isinstance(_caps, dict) and _caps.get("video_call")):
+            lines.append(
+                "你不能进行视频通话或语音通话（设备/环境不方便）。对方提出视频/"
+                "通话时，自然婉拒（如「这边不方便开视频，先这样聊嘛」），"
+                "绝不答应「可以视频/开视频/回头拨给你」这类承诺。"
+            )
+        # 2026-07-22 真机事故：AI 被要微信时**编造**了一个微信号，客户搜索不到
+        # 当场穿帮（"哪有这个微信号，你编的吗"）。联系方式是可验证事实，绝不许编。
+        lines.append(
+            "绝不编造任何联系方式（微信号/QQ/手机号/邮箱/网址）——这些对方会去"
+            "验证，编造=当场穿帮。人设资料里没有的联系方式，被问时就说"
+            "「先在这聊嘛」自然带过；绝不现编一个号码或 ID 给对方。"
+        )
 
         # Emotion handling
         e = persona.get("emotion", {})

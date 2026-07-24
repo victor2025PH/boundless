@@ -284,12 +284,11 @@ class SkillManager(LoggerMixin):
         self._memory_llm_last: Dict[str, float] = {}
         if hasattr(config, "config") and isinstance(getattr(config, "config", None), dict):
             self._memory_cfg = dict((config.config or {}).get("memory") or {})
+        # _epath 供情景记忆与 CrossPlatformIdentity 共用——必须在 memory 开关分支外
+        # 定义（修复：memory.enabled=False 时 CPI 初始化 NameError → 静默降级为 None）
+        _mdb = self._memory_cfg.get("db_path")
+        _epath = Path(str(_mdb)) if _mdb else (cfg_dir / "bot.db")
         if self._memory_cfg.get("enabled", True):
-            _mdb = self._memory_cfg.get("db_path")
-            if _mdb:
-                _epath = Path(str(_mdb))
-            else:
-                _epath = cfg_dir / "bot.db"
             try:
                 from src.utils.episodic_memory_store import EpisodicMemoryStore
                 self._episodic_store = EpisodicMemoryStore(_epath)
@@ -683,7 +682,10 @@ class SkillManager(LoggerMixin):
         # 处理用户消息（Per-Chat-User 串�锁：同群同用户串行保序， 不同群可并�处理，避免跨群阻塞）
         """
         chat_id = (context or {}).get('chat_id', '')
-        lock_key = f"{chat_id}_{user_id}" if chat_id else str(user_id)
+        # 双号隔离：同 peer 不同 account_id 必须各锁各的，否则串行互踩 send 回调
+        _acct = str((context or {}).get('account_id') or '').strip()
+        _base = f"{chat_id}_{user_id}" if chat_id else str(user_id)
+        lock_key = f"{_acct}:{_base}" if _acct and _acct != "default" else _base
         lock = self._user_locks.setdefault(lock_key, asyncio.Lock())
         async with lock:
             return await self._handle_message_guarded(text, user_id, context)
@@ -707,9 +709,13 @@ class SkillManager(LoggerMixin):
             self._refresh_strategies()
 
             _chat_id = context.get('chat_id', '')
+            _acct_id = str(context.get('account_id') or '').strip()
 
             # 1. 获取或创建用户上下文（遗忘指令需优先于冷却）
-            user_context = self._get_user_context(user_id_str)
+            # 双号隔离：store key = account_id:user_id，避免 Katie/Jason 共用 peer 历史
+            user_context = self._get_user_context(user_id_str, account_id=_acct_id)
+            _ctx_store_key = str(
+                user_context.get("_context_store_key") or user_id_str)
             user_ctx_for_cleanup = user_context
             last_intent = user_context.get('current_intent', '')
 
@@ -751,17 +757,30 @@ class SkillManager(LoggerMixin):
                 # 入站媒体 / 短消息 / 语言切换提示（Telegram 收件箱与 RPA 共用）
                 "_peer_message_is_media", "_media_kind", "_media_desc", "_media_ref",
                 "_inbox_peer_kind", "_inbound_short_hint", "_topic_switch_hint",
+                # 2026-07-22 真机复盘：selfie/媒体发送走编排器路需要 account_id
+                # ——协议线（WA 等）ctx 带了它但没进 user_context，
+                # _try_send_selfie_media 读到 None → 图生成了也发不出（静默回落文字）。
+                "account_id",
             )
             for _mk in _line_merge_keys:
                 if _mk in context and context[_mk] is not None:
                     user_context[_mk] = context[_mk]
 
+            # 2026-07-22 真机复盘（TG 首条要图必失败）：媒体发送回调必须在
+            # Stage 0/A/B **之前**入 user_context——原 merge 点在 Stage A 之后，
+            # 首条消息发图时通道恒缺失（第二条才"继承"上一轮写入的回调），
+            # 且重启后 user_context 从磁盘恢复（callable 不落盘）再次全丢。
+            for _cbk in ("_send_to_chat", "_send_photo_to_chat",
+                         "_send_video_to_chat"):
+                if _cbk in context and context[_cbk] is not None:
+                    user_context[_cbk] = context[_cbk]
+
             _forget_reply = self._handle_episodic_forget_command(
                 text, user_id_str, user_context, _chat_id
             )
             if _forget_reply is not None:
-                self._context_store.mark_dirty(user_id_str)
-                self._context_store.flush(user_id_str)
+                self._context_store.mark_dirty(_ctx_store_key)
+                self._context_store.flush(_ctx_store_key)
                 return _forget_reply
 
             # Stage 1：剧情/成长指令前懒解析端用户真实付费权益进 user_context——
@@ -778,8 +797,8 @@ class SkillManager(LoggerMixin):
                 _story_reply = None
                 self.logger.debug("story command skipped", exc_info=True)
             if _story_reply is not None:
-                self._context_store.mark_dirty(user_id_str)
-                self._context_store.flush(user_id_str)
+                self._context_store.mark_dirty(_ctx_store_key)
+                self._context_store.flush(_ctx_store_key)
                 return _story_reply
 
             # Phase ④续³：关系/成长面板（端用户在对话内查询自己的成长——把记忆/成长/剧情
@@ -812,8 +831,8 @@ class SkillManager(LoggerMixin):
                 # （handler 预置 _stage_media_note），搪塞轮记搪塞文字——下一轮
                 # 经既有「上一轮补录进 _conversation_history」机制进入上下文。
                 self._record_stage_turn(user_context, text, _media_reply)
-                self._context_store.mark_dirty(user_id_str)
-                self._context_store.flush(user_id_str)
+                self._context_store.mark_dirty(_ctx_store_key)
+                self._context_store.flush(_ctx_store_key)
                 return _media_reply or None
 
             # Stage A：形象照/自拍请求（「给我看看你」）。返回字符串=短路（搪塞/付费引导/
@@ -827,8 +846,8 @@ class SkillManager(LoggerMixin):
                 self.logger.debug("selfie request skipped", exc_info=True)
             if _selfie_reply is not None:
                 self._record_stage_turn(user_context, text, _selfie_reply)
-                self._context_store.mark_dirty(user_id_str)
-                self._context_store.flush(user_id_str)
+                self._context_store.mark_dirty(_ctx_store_key)
+                self._context_store.flush(_ctx_store_key)
                 return _selfie_reply or None
 
             # Stage B：对话上下文「按需生图」（"你煮的面拍张照给我看"——对话里提到的东西）。
@@ -842,8 +861,8 @@ class SkillManager(LoggerMixin):
                 self.logger.debug("contextual image request skipped", exc_info=True)
             if _ctx_img_reply is not None:
                 self._record_stage_turn(user_context, text, _ctx_img_reply)
-                self._context_store.mark_dirty(user_id_str)
-                self._context_store.flush(user_id_str)
+                self._context_store.mark_dirty(_ctx_store_key)
+                self._context_store.flush(_ctx_store_key)
                 return _ctx_img_reply or None
 
             # Stage C：人生 K 线卡片（companion.bazi，「画一下我的运势曲线」→ 渲染 PNG 发图）。
@@ -857,13 +876,15 @@ class SkillManager(LoggerMixin):
                 self.logger.debug("bazi kline request skipped", exc_info=True)
             if _kline_reply is not None:
                 self._record_stage_turn(user_context, text, _kline_reply)
-                self._context_store.mark_dirty(user_id_str)
-                self._context_store.flush(user_id_str)
+                self._context_store.mark_dirty(_ctx_store_key)
+                self._context_store.flush(_ctx_store_key)
                 return _kline_reply or None
 
-            # 2. 冷却
-            if not self._check_cooldown(text, user_id_str, chat_id=_chat_id):
-                self.logger.warning(f"{log_prefix}用户 {user_id_str} 处于冷却期，跳过回�")
+            # 2. 冷却（按 account_id 分桶，双号互不踩）
+            if not self._check_cooldown(
+                    text, user_id_str, chat_id=_chat_id, account_id=_acct_id):
+                self.logger.warning(
+                    "%s用户 %s 处于冷却期，跳过回复", log_prefix, user_id_str)
                 return None
 
             # 3. 注入情景记忆（关键词 / 向量融合 + 分桶）
@@ -946,6 +967,14 @@ class SkillManager(LoggerMixin):
                 user_context['user_emotion_hint'] = context['user_emotion_hint']
             if '_send_to_chat' in context:
                 user_context['_send_to_chat'] = context['_send_to_chat']
+            # 2026-07-22 真机复盘：A 线照片/视频回调必须一并落 user_context——
+            # _try_send_selfie_media 读的是 user_context，不是本次 context；
+            # 此前只 merge 了 _send_to_chat（文本），TG 原生会话 selfie 生成成功
+            # 却"无可用媒体通道"静默回落文字（客户要图永远要不到）。
+            if '_send_photo_to_chat' in context:
+                user_context['_send_photo_to_chat'] = context['_send_photo_to_chat']
+            if '_send_video_to_chat' in context:
+                user_context['_send_video_to_chat'] = context['_send_video_to_chat']
             if context.get('triggered_by_mention') is not None:
                 user_context['triggered_by_mention'] = context['triggered_by_mention']
 
@@ -1485,6 +1514,42 @@ class SkillManager(LoggerMixin):
                     _kb = self._kb_store_if_exists()
                 else:
                     _kb = None
+                # ── A1 KB 注入守门（2026-07-22，真机事故复盘）────────────────
+                # ① 识图/识视频描述文本不是用户提问 → 整体跳过 KB（环境词噪声
+                #    实测把「怪味胡豆图」撞上「客户端安装指引」）。
+                # ② 显式绑定陪聊人设（chat_binding/account_profile）→ 抑制业务 KB
+                #    （护士人设推销 USDT 付款客服号事故；人设 kb_access: true 可恢复）。
+                if _kb is not None:
+                    from src.utils.kb_gate import (
+                        is_media_desc_text,
+                        lexical_overlap_ok,
+                        persona_kb_suppressed,
+                    )
+                    if is_media_desc_text(text):
+                        _kb = None
+                        self.logger.info(
+                            "%sKB 跳过：入站为媒体识别描述（识图/识视频），非用户提问",
+                            log_prefix,
+                        )
+                    else:
+                        try:
+                            from src.utils.persona_manager import PersonaManager
+                            _kbg_p, _kbg_tier = (
+                                PersonaManager.get_instance().get_persona_with_tier(
+                                    str(context.get("chat_id", "") or ""),
+                                    str((user_context or {}).get(
+                                        "account_persona_id") or ""),
+                                )
+                            )
+                            if persona_kb_suppressed(_kbg_p, _kbg_tier):
+                                _kb = None
+                                self.logger.info(
+                                    "%sKB 跳过：陪聊人设会话（tier=%s）抑制业务 KB 注入",
+                                    log_prefix, _kbg_tier,
+                                )
+                        except Exception:
+                            self.logger.debug(
+                                "%sKB 人设守门解析失败，放行", log_prefix, exc_info=True)
                 if _kb:
                     _lang = (user_context or {}).get("reply_lang", "zh")
 
@@ -1495,12 +1560,30 @@ class SkillManager(LoggerMixin):
                         if _bm25_result["entries"] else 0
                     )
 
-                    if _top_bm25_score >= _BM25_STRONG_THRESHOLD:
+                    # ③ 词汇重叠守门：加权 BM25 原始分与 0.30 阈值口径不匹配（实测
+                    # 14~292，一字重叠即"强命中"）。分数外再要求足够实词重叠（≥2 个
+                    # 非停用实词或单个 ≥4 字强词），否则视为弱命中 → 交向量语义裁决。
+                    _bm25_top_entry = (
+                        _bm25_result["entries"][0]
+                        if _bm25_result.get("entries") else None
+                    )
+                    _overlap_ok, _overlap_why = (
+                        lexical_overlap_ok(text, _bm25_top_entry)
+                        if _bm25_top_entry is not None else (False, "no_entries")
+                    )
+
+                    if _top_bm25_score >= _BM25_STRONG_THRESHOLD and _overlap_ok:
                         _search_result = _bm25_result
                         self.logger.info(
-                            "%sKB BM25 强命中(%.3f)，跳过向量化", log_prefix, _top_bm25_score
+                            "%sKB BM25 强命中(%.3f, %s)，跳过向量化",
+                            log_prefix, _top_bm25_score, _overlap_why,
                         )
                     else:
+                        if _top_bm25_score >= _BM25_STRONG_THRESHOLD:
+                            self.logger.info(
+                                "%sKB BM25 分数达标(%.3f)但词汇重叠不足(%s) → 向量语义裁决",
+                                log_prefix, _top_bm25_score, _overlap_why,
+                            )
                         #BM25 弱命�?�?尝试向量搜索（懒触发，最多等 8 秒，防� Embedding API 挂起�?
                         try:
                             _query_vec = await asyncio.wait_for(
@@ -1518,8 +1601,16 @@ class SkillManager(LoggerMixin):
                                 "%sKB 混合搜索模式 %s，BM25原始=%.3f",
                                 log_prefix, _mode, _top_bm25_score
                             )
-                        else:
+                        elif _overlap_ok:
                             _search_result = _bm25_result
+                        else:
+                            # 词汇重叠不足且向量不可用 → 宁可不注入，绝不让一字
+                            # 重叠的无关条目污染提示词（USDT 串台事故根因）。
+                            _search_result = {"entries": [], "search_mode": "bm25"}
+                            self.logger.info(
+                                "%sKB 放弃注入：BM25=%.3f 重叠=%s 且向量不可用",
+                                log_prefix, _top_bm25_score, _overlap_why,
+                            )
 
                     _kb_ctx = _kb.build_ai_context_from_result(_search_result, lang=_lang)
                     _hit = bool(_kb_ctx)
@@ -2004,6 +2095,7 @@ class SkillManager(LoggerMixin):
                     self._schedule_episodic_memory_extract(
                         user_id_str, text, reply, intent, _chat_id,
                         platform=user_context.get("platform", ""),  # S5
+                        account_id=str(user_context.get("account_id") or ""),
                     )
                 # J1: escalation suggestion via domain hook
                 if user_context.pop("_escalation_triggered", False):
@@ -2074,6 +2166,7 @@ class SkillManager(LoggerMixin):
         media_desc: str = "",
         conversation_id: str = "",
         peer_audio_emotion: Optional[Dict[str, Any]] = None,
+        account_id: str = "",
     ) -> Optional[Dict[str, Any]]:
         """收件箱草稿生成的「统一规则引擎」（单一事实源）。
 
@@ -2090,8 +2183,8 @@ class SkillManager(LoggerMixin):
              这些会绕过收件箱风险闸（L2/L3/L4）或吞掉草稿的分支——是否真正外发由
              下游 autosend 风险闸决定，本方法只负责「拟一条对齐全部规则的草稿」。
 
-        关系/记忆状态仍按 ``chat_key`` 持久化（复用 ``_get_user_context``），故陪伴
-        阶段（exchange_count / stage）能像原生 bot 一样**越聊越进**。
+        关系/记忆状态按 ``account_id:chat_key`` 分桶持久化（与 A 线 ContextStore
+        同口径），同 peer 对不同协议号互不串上下文。
 
         返回 ``{"reply": str, "intent": str}``；无法生成时返回 ``None``（调用方回落）。
         """
@@ -2103,6 +2196,12 @@ class SkillManager(LoggerMixin):
             return None
         log_prefix = "[inbox_draft] "
         chat_id = ""  # 记忆 key == platform:chat_key（与注入/写回/历史 backfill 一致）
+        _acct_id = str(account_id or "").strip()
+        if (not _acct_id or _acct_id == "default") and conversation_id:
+            # conversation_id = platform:account:chat_key
+            _parts = str(conversation_id).split(":", 2)
+            if len(_parts) >= 3 and _parts[1]:
+                _acct_id = str(_parts[1]).strip()
 
         def _metric(_name: str) -> None:
             """规则栈生效埋点（best-effort，绝不影响生成）。"""
@@ -2138,7 +2237,10 @@ class SkillManager(LoggerMixin):
         except Exception:
             pass
 
-        user_context = self._get_user_context(user_id)
+        # 双号隔离：与 process_message 同键（account_id:chat_key）
+        user_context = self._get_user_context(user_id, account_id=_acct_id)
+        if _acct_id:
+            user_context["account_id"] = _acct_id
         if persona_id:
             user_context["account_persona_id"] = str(persona_id)
         if platform:
@@ -2468,13 +2570,17 @@ class SkillManager(LoggerMixin):
                 try:
                     self._schedule_episodic_memory_extract(
                         user_id, text, reply, intent, chat_id, platform=platform,
+                        account_id=str(
+                            (user_context or {}).get("account_id") or ""),
                     )
                 except Exception:
                     self.logger.debug("%s记忆写回跳过", log_prefix, exc_info=True)
 
             try:
-                self._context_store.mark_dirty(user_id)
-                self._context_store.flush(user_id)
+                _sk = str(
+                    (user_context or {}).get("_context_store_key") or user_id)
+                self._context_store.mark_dirty(_sk)
+                self._context_store.flush(_sk)
             except Exception:
                 pass
 
@@ -2711,35 +2817,36 @@ class SkillManager(LoggerMixin):
 
         return None
 
-    def _check_cooldown(self, text: str, user_id: str, chat_id: Any = '') -> bool:
-        """�€查冷却时间（per_chat_user 替代全局冷却�?"""
+    def _check_cooldown(
+        self, text: str, user_id: str, chat_id: Any = '',
+        account_id: str = "",
+    ) -> bool:
+        """检查冷却时间（per_chat_user；双号按 account_id 分桶）。"""
         current_time = time.time()
-        user_context = self._get_user_context(user_id)
+        user_context = self._get_user_context(user_id, account_id=account_id)
 
-        # gxp 选项数字例�
         last_intent = user_context.get('current_intent', '')
         text_stripped = text.strip()
         gxp_last_ask = user_context.get("gxp_last_ask")
         if gxp_last_ask in ("what", "intent") and re.match(r"^[1-5]\s*$", text_stripped):
             return True
 
-        # 对话跟进例�：上�€条是「查单�€�且���像�单号
         is_likely_order_number = text_stripped.isdigit() and 6 <= len(text_stripped) <= 24
         if "order_query" in self.skills and last_intent == "order_query" and is_likely_order_number:
-            content_hash = self._hash_content(text, chat_id)
+            content_hash = self._hash_content(text, chat_id, account_id=account_id)
             last_content_time = self.reply_cache.get(content_hash, 0)
             if current_time - last_content_time < self.cooldown_per_content:
                 return False
             return True
 
-        # Bot 追问例�
         _bot_q_ts = user_context.get("_bot_question_ts", 0)
         if _bot_q_ts and (current_time - _bot_q_ts) < 120:
             return True
 
-        # 1. per_chat_user 冷却（同群同用户间隔，取代全�€冷却，不同群不互相影响）
+        # 1. per_chat_user 冷却（含 account_id，双协议号互不影响）
         if self.cooldown_per_chat_user > 0 and chat_id:
-            cu_key = f"{chat_id}_{user_id}"
+            from src.utils.context_store import make_context_key
+            cu_key = make_context_key(f"{chat_id}_{user_id}", account_id)
             last_cu = self._chat_user_last_reply.get(cu_key, 0)
             if current_time - last_cu < self.cooldown_per_chat_user:
                 return False
@@ -2749,14 +2856,14 @@ class SkillManager(LoggerMixin):
             if current_time - self.global_last_reply_time < self.cooldown_global:
                 return False
 
-        # 3. 用户冷却�€�?(如果 per _user > 0)
+        # 3. 用户冷却（读分桶后的 user_context.last_reply_time）
         if self.cooldown_per_user > 0:
             last_reply_time = user_context.get('last_reply_time', 0)
             if current_time - last_reply_time < self.cooldown_per_user:
                 return False
 
-        # 4. 内�重��€查（按群隔�，不同群相同文本不互相阻���
-        content_hash = self._hash_content(text, chat_id)
+        # 4. 内容重复检查（按账号+会话隔开）
+        content_hash = self._hash_content(text, chat_id, account_id=account_id)
         last_content_time = self.reply_cache.get(content_hash, 0)
         if current_time - last_content_time < self.cooldown_per_content:
             return False
@@ -3004,10 +3111,14 @@ class SkillManager(LoggerMixin):
             _rr = _rr[-_keep:]
         user_context["recent_replies"] = _rr
 
-    def _hash_content(self, text: str, chat_id: str = "") -> str:
-        """生成内�哈希（含 chat_id，不同群的相同文���互相阻断�?"""
+    def _hash_content(
+        self, text: str, chat_id: str = "", account_id: str = "",
+    ) -> str:
+        """内容哈希：含 account_id+chat_id，双号/不同群相同文本互不阻断。"""
         text_simple = text.lower().strip()
-        raw = f"{chat_id}:{text_simple}" if chat_id else text_simple
+        parts = [p for p in (str(account_id or "").strip(),
+                             str(chat_id or "").strip()) if p and p != "default"]
+        raw = f"{':'.join(parts)}:{text_simple}" if parts else text_simple
         return hashlib.md5(raw.encode()).hexdigest()[:8]
 
     async def _llm_judge_language_request(self, text: str) -> str:
@@ -3053,9 +3164,20 @@ class SkillManager(LoggerMixin):
             self.logger.info("LLM 语言请求短判命中: %r → %s", t[:40], out)
         return out
 
-    def _get_user_context(self, user_id: str) -> Dict[str, Any]:
-        """获取或创建用户上下文（持久化�?SQLite�?"""
-        return self._context_store.get(user_id)
+    def _get_user_context(
+        self, user_id: str, account_id: str = "",
+    ) -> Dict[str, Any]:
+        """获取或创建用户上下文（持久化 SQLite）。
+
+        ``account_id`` 非空时用 ``{account_id}:{user_id}`` 作存储键（双协议号隔离）；
+        ``user_context['user_id']`` 仍为逻辑 peer id，供 prompt/记忆业务使用。
+        """
+        from src.utils.context_store import make_context_key
+        key = make_context_key(user_id, account_id)
+        ctx = self._context_store.get(key)
+        ctx["user_id"] = str(user_id)
+        ctx["_context_store_key"] = key
+        return ctx
 
     def _get_persona_name_for_context(self, user_context: Dict[str, Any]) -> str:
         """Return the correct persona name for this user_context, or '' if unavailable."""
@@ -3203,11 +3325,20 @@ class SkillManager(LoggerMixin):
                 cleaned.append(turn)
         return cleaned
 
-    def _episodic_storage_key(self, user_id_str: str, chat_id: Any, platform: str = "") -> str:
+    def _episodic_storage_key(
+        self, user_id_str: str, chat_id: Any, platform: str = "",
+        account_id: str = "",
+        user_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
         from src.utils.episodic_memory_store import compute_memory_storage_key
+        from src.utils.context_store import make_context_key
 
+        if not account_id and user_context:
+            account_id = str(user_context.get("account_id") or "")
         scope = (self._memory_cfg or {}).get("scope", "user")
         base_key = compute_memory_storage_key(str(scope), user_id_str, chat_id)
+        # 双号隔离：同 peer 不同协议号记忆分桶（与 ContextStore 同口径）
+        base_key = make_context_key(base_key, account_id)
         # S5: resolve to cross-platform canonical_id when platform is known
         if self._cpi and platform:
             return self._cpi.resolve(platform, base_key)
@@ -3390,7 +3521,8 @@ class SkillManager(LoggerMixin):
             return
         mx = int(mcfg.get("inject_max_items", 8))
         mc = int(mcfg.get("inject_max_chars", 1200))
-        key = self._episodic_storage_key(user_id_str, chat_id, platform)
+        key = self._episodic_storage_key(
+            user_id_str, chat_id, platform, user_context=user_context)
         rr = bool(mcfg.get("inject_rerank_keywords", True))
         vcfg = mcfg.get("vector") or {}
         use_fusion = bool(vcfg.get("inject_fusion", True)) and bool(query_embedding)
@@ -3483,7 +3615,8 @@ class SkillManager(LoggerMixin):
         if not matches_forget_intent((text or "").strip(), phrases):
             return None
         _plat = (user_context or {}).get("platform", "")  # S5
-        key = self._episodic_storage_key(user_id_str, chat_id, _plat)
+        key = self._episodic_storage_key(
+            user_id_str, chat_id, _plat, user_context=user_context)
         n = self._episodic_store.clear_user(key)
         user_context["last_message"] = (text or "").strip()
         user_context["last_message_time"] = time.time()
@@ -3496,6 +3629,7 @@ class SkillManager(LoggerMixin):
     def _schedule_episodic_memory_extract(
         self, user_id: str, user_msg: str, reply: str, intent: str, chat_id: Any,
         platform: str = "",  # S5
+        account_id: str = "",
     ) -> None:
         if not self._episodic_store:
             self.logger.info(
@@ -3520,7 +3654,10 @@ class SkillManager(LoggerMixin):
         )
 
         async def _run():
-            await self._episodic_memory_extract_async(user_id, user_msg, reply, intent, chat_id, platform)
+            await self._episodic_memory_extract_async(
+                user_id, user_msg, reply, intent, chat_id, platform,
+                account_id=account_id,
+            )
 
         try:
             asyncio.get_running_loop().create_task(_run())
@@ -3532,6 +3669,7 @@ class SkillManager(LoggerMixin):
     async def _capture_birthday_fact(
         self, user_id: str, user_msg: str, reply: str, chat_id: Any,
         platform: str = "",
+        account_id: str = "",
     ) -> None:
         """Stage S：本轮若出现用户生日（原话或 AI 确认）→ 规范化落库为 user_stated 事实。
 
@@ -3544,7 +3682,8 @@ class SkillManager(LoggerMixin):
         bd = birthday_from_turn(user_msg, reply)
         if bd is None:
             return
-        key = self._episodic_storage_key(user_id, chat_id, platform)
+        key = self._episodic_storage_key(
+            user_id, chat_id, platform, account_id=account_id)
         if not key:
             return
         try:
@@ -3560,6 +3699,7 @@ class SkillManager(LoggerMixin):
     async def _episodic_memory_extract_async(
         self, user_id: str, user_msg: str, reply: str, intent: str, chat_id: Any,
         platform: str = "",  # S5
+        account_id: str = "",
     ) -> None:
         if not self._episodic_store:
             self.logger.info(
@@ -3570,13 +3710,15 @@ class SkillManager(LoggerMixin):
         # Stage S：生日即时回写——**独立于 intent/长度门控**，收到即解析落库，闭合 Stage R
         # 的采集环（问→答→立刻记住→当天庆）。即便本轮意图不可抽取，也不漏掉用户主动报的生日。
         try:
-            await self._capture_birthday_fact(user_id, user_msg, reply, chat_id, platform)
+            await self._capture_birthday_fact(
+                user_id, user_msg, reply, chat_id, platform, account_id=account_id)
         except Exception:
             self.logger.debug("[episodic] birthday capture skipped", exc_info=True)
         # 命理生辰即时回写（companion.bazi 开启时）——同 Stage S 机制：问→答→AI 复述
         # 确认→落库，下一轮追问即可排盘（闭合命理采集环，capture 内部自判开关）。
         try:
-            await self._capture_birth_info_fact(user_id, user_msg, reply, chat_id, platform)
+            await self._capture_birth_info_fact(
+                user_id, user_msg, reply, chat_id, platform, account_id=account_id)
         except Exception:
             self.logger.debug("[episodic] birth info capture skipped", exc_info=True)
         ex = (self._memory_cfg.get("extract") or {})
@@ -3594,7 +3736,8 @@ class SkillManager(LoggerMixin):
             )
             return
 
-        key = self._episodic_storage_key(user_id, chat_id, platform)  # S5
+        key = self._episodic_storage_key(
+            user_id, chat_id, platform, account_id=account_id)  # S5
 
         from src.utils.memory_heuristic import extract_heuristic_facts
 
@@ -4257,6 +4400,38 @@ class SkillManager(LoggerMixin):
             self.logger.debug("resolve_birth_info failed", exc_info=True)
         return None
 
+    def resolve_birth_info_scoped(
+        self, platform: str, account_id: str, chat_key: str,
+    ):
+        """FateX 产品级生辰解析（P0-2 根治）：结构化库优先，记忆扫描兜底。
+
+        读序：① FateX 独立库（(platform, account, chat) 结构化行，账号天然隔离）
+        → ② 账号作用域记忆键前缀扫描（新写入的 episodic 事实）
+        → ③ 存量裸键前缀扫描（键格式升级前的老数据，Phase 2 迁移后自然清空）。
+        任何一层异常软失败进下一层，绝不阻断调用链。
+        """
+        try:
+            from src.fatex.store import get_fatex_store
+            _fx = get_fatex_store()
+            if _fx is not None:
+                info = _fx.get_birth(platform, account_id, chat_key)
+                if info is not None:
+                    return info
+        except Exception:
+            self.logger.debug("[fatex] get_birth failed", exc_info=True)
+        try:
+            key = self._episodic_storage_key(
+                str(chat_key), "", platform, account_id=account_id)
+            info = self.resolve_birth_info(key) if key else None
+            if info is not None:
+                return info
+            legacy = self._episodic_storage_key(str(chat_key), "", platform)
+            if legacy and legacy != key:
+                return self.resolve_birth_info(legacy)
+        except Exception:
+            self.logger.debug("resolve_birth_info_scoped failed", exc_info=True)
+        return None
+
     def _inject_bazi_context(
         self, user_context: Dict[str, Any], text: str,
         user_id_str: str, chat_id: Any, platform: str = "",
@@ -4290,7 +4465,8 @@ class SkillManager(LoggerMixin):
             return
         if topical:
             touch_topic(user_context, now)
-        key = self._episodic_storage_key(user_id_str, chat_id, platform)
+        key = self._episodic_storage_key(
+            user_id_str, chat_id, platform, user_context=user_context)
         # 同轮闭环：本条消息自带完整生辰（「帮我算八字，我1995年3月5日早上8点生」）
         # → 即时排盘，别让 AI 反问一遍；落库仍由回复后的 capture 完成。
         from src.companion.bazi_profile import extract_birth_info
@@ -4460,7 +4636,8 @@ class SkillManager(LoggerMixin):
             return None
         from src.companion.bazi_profile import extract_birth_info
         key = self._episodic_storage_key(
-            user_id_str, chat_id, user_context.get("platform", ""))
+            user_id_str, chat_id, user_context.get("platform", ""),
+            user_context=user_context)
         info = extract_birth_info(text)
         if info is None:
             info = self.resolve_birth_info(key) if key else None
@@ -4512,6 +4689,7 @@ class SkillManager(LoggerMixin):
     async def _capture_birth_info_fact(
         self, user_id: str, user_msg: str, reply: str, chat_id: Any,
         platform: str = "",
+        account_id: str = "",
     ) -> None:
         """本轮若出现完整生辰（用户原话或 AI 复述确认）→ 规范化落库 user_stated 事实。
 
@@ -4522,14 +4700,17 @@ class SkillManager(LoggerMixin):
         from src.companion.bazi_profile import (
             birth_info_fact_text, birth_info_from_turn,
         )
-        key = self._episodic_storage_key(user_id, chat_id, platform)
+        key = self._episodic_storage_key(
+            user_id, chat_id, platform, account_id=account_id)
         if not key:
             return
         info = birth_info_from_turn(user_msg, reply)
         if info is None or not info.valid():
             # 性别补录：报完生辰后下一轮才说「我是女生」——命理话题窗口内、已知生辰
             # 缺性别时，把性别并进既有事实（解锁大运；窗口外的性别闲聊不采，防误归因）。
-            await self._complete_birth_gender(user_id, user_msg, key)
+            await self._complete_birth_gender(
+                user_id, user_msg, key, account_id=account_id,
+                platform=platform)
             return
         try:
             known = self.resolve_birth_info(key)
@@ -4542,6 +4723,17 @@ class SkillManager(LoggerMixin):
         fact = birth_info_fact_text(info)
         rid = self._episodic_store.add_fact(key, fact, "heuristic", source="user_stated")
         await self._episodic_patch_embedding(rid, fact)
+        # FateX 产品库双写：权威生辰进独立库（结构化、账号隔离）；episodic 那行
+        # 保留为「说过生辰」的对话记忆。软失败不阻断主链。
+        try:
+            from src.fatex.store import get_fatex_store
+            _fx = get_fatex_store()
+            if _fx is not None:
+                _fx.upsert_birth(
+                    platform, account_id, str(user_id), info,
+                    source="user_stated", raw_text=fact)
+        except Exception:
+            self.logger.debug("[fatex] upsert_birth failed", exc_info=True)
         try:
             from src.companion.bazi_stats import get_bazi_stats
             get_bazi_stats().record_birth_captured()
@@ -4551,18 +4743,22 @@ class SkillManager(LoggerMixin):
 
     async def _complete_birth_gender(
         self, user_id: str, user_msg: str, memory_key: str,
+        account_id: str = "",
+        platform: str = "",
     ) -> None:
         """命理采集补录：已知生辰但缺性别，且本轮用户报了性别 → 写入补全事实。
 
         仅在命理话题粘性窗口内触发（由用户 context 的 ``_bazi_topic_ts`` 判定），
         避免把无关闲聊里的「男生/女生」错并进生辰画像。
+        ``account_id`` 须与写入 ``_bazi_topic_ts`` 的 process_message 同口径分桶，
+        否则双号场景读裸键空桶 → 话题窗恒 False → 补录静默失效。
         """
         from src.companion.bazi_profile import birth_info_fact_text, extract_gender
         g = extract_gender(user_msg)
         if not g:
             return
         try:
-            ctx = self._get_user_context(str(user_id))
+            ctx = self._get_user_context(str(user_id), account_id)
             from src.companion.bazi_context import topic_active
             sticky_min = float(self._bazi_cfg().get("topic_sticky_minutes", 10) or 0)
             if not topic_active(ctx, sticky_minutes=sticky_min):
@@ -4577,6 +4773,16 @@ class SkillManager(LoggerMixin):
         rid = self._episodic_store.add_fact(
             memory_key, fact, "heuristic", source="user_stated")
         await self._episodic_patch_embedding(rid, fact)
+        # FateX 库同步补性别（merge 语义保留已知时辰）
+        try:
+            from src.fatex.store import get_fatex_store
+            _fx = get_fatex_store()
+            if _fx is not None:
+                _fx.upsert_birth(
+                    platform, account_id, str(user_id), known,
+                    source="user_stated", raw_text=fact)
+        except Exception:
+            self.logger.debug("[fatex] gender upsert failed", exc_info=True)
         try:
             from src.companion.bazi_stats import get_bazi_stats
             get_bazi_stats().record_gender_completed()
@@ -5308,6 +5514,23 @@ class SkillManager(LoggerMixin):
         _seed = stable_selfie_seed(_album_key, salt=(_vsalt or 0)) if bool(
             scfg.get("stable_seed", True)) else -1
         self.logger.info("[selfie] prompt=%r seed=%s base=%s", prompt, _seed, bool(_base))
+        # 防复读账本（2026-07-22）：该会话收过的相册文件（含系列排除，见
+        # _pick_from_album 分层回落）。A 线会话键 tg:<chat_id>，与 autosend 的
+        # platform:acct:peer 空间天然不冲突。
+        _conv_key = f"tg:{chat_id}"
+        _sent_files: Any = None
+        try:
+            from src.companion.persona_media_store import get_persona_media_store
+            _pms = get_persona_media_store()
+            if _pms is not None:
+                try:
+                    _rsd = float(scfg.get("resend_after_days", 90) or 0)
+                except (TypeError, ValueError):
+                    _rsd = 90.0
+                _sent_files = _pms.sent_history(
+                    _conv_key, max_age_days=_rsd).get("ids") or None
+        except Exception:
+            _sent_files = None
         try:
             # 出图自检闸门（与 autosend 链同口径）：VLM 体检不合格换种子重试→回落文字。
             from src.ai.image_gate import generate_with_gate, resolve_gate_cfg
@@ -5317,7 +5540,8 @@ class SkillManager(LoggerMixin):
                 root_config=_root_cfg if isinstance(_root_cfg, dict) else {},
                 gate_cfg=resolve_gate_cfg(scfg), seed=_seed,
                 album_key=_album_key, avoid_path=_avoid, base_image=_base,
-                lora=_lora["file"], lora_weight=_lora["weight"])
+                lora=_lora["file"], lora_weight=_lora["weight"],
+                exclude_paths=_sent_files)
         except Exception:
             res = None
             self.logger.debug("selfie generate error", exc_info=True)
@@ -5326,6 +5550,25 @@ class SkillManager(LoggerMixin):
             sent = await self._try_send_selfie_media(
                 user_context, chat_id, res.image_path, caption)
             if sent:
+                # 防复读账本：相册图记文件名（相册文件不在注册 DB，无 media_id）；
+                # 生成图不记（每次都是新图，账本排除无意义）。
+                try:
+                    if str(getattr(res, "provider", "")) == "album":
+                        from pathlib import Path as _P
+
+                        from src.ai.companion_selfie import album_series_of_path
+                        from src.companion.persona_media_store import (
+                            get_persona_media_store as _gpms,
+                        )
+                        _st2 = _gpms()
+                        if _st2 is not None:
+                            _fn = _P(str(res.image_path)).name
+                            _st2.record_send(
+                                _conv_key, _fn,
+                                persona_id=str(_album_key or ""),
+                                series=album_series_of_path(res.image_path))
+                except Exception:
+                    pass
                 # 只在客户真收到图时才消耗免费额度（生成成功但没送达不扣）
                 if decision.get("used_free"):
                     user_context["_selfie_used"] = free_used + 1
@@ -5341,11 +5584,20 @@ class SkillManager(LoggerMixin):
                 record_image_fallback("a_line_send_failed")
             except Exception:
                 pass
+            self.logger.info(
+                "[selfie] 出图成功但发送失败（无可用媒体通道）platform=%s "
+                "account_id=%s img=%s",
+                user_context.get("platform"), user_context.get("account_id"),
+                getattr(res, "image_path", ""))
             self._set_cant_send_photo_hint(user_context)
             return None
         # provider 未配/失败 → 优雅退回文字陪伴（不报错给用户）。
         # 客户没收到图 → 不消耗免费额度（额度只在真送达时扣）。
         # A2：同样交 LLM 带提示回应；模板不再顶掉用户的原话题。
+        self.logger.info(
+            "[selfie] 出图失败回落文字 error=%s provider=%s",
+            getattr(res, "error", None) if res is not None else "generate_exception",
+            getattr(res, "provider", "") if res is not None else "")
         self._set_cant_send_photo_hint(user_context)
         return None
 
@@ -5432,14 +5684,27 @@ class SkillManager(LoggerMixin):
         return None  # 出图/发送失败 → 交普通回复自然带过（带「别承诺」提示）
 
     def _selfie_album_key(self, user_context: Dict[str, Any]) -> str:
-        """album 后端分册键：多人设时用 persona id/name 选 ``album_dir/<key>`` 子目录；缺则空（用根目录）。"""
+        """album 后端分册键：多人设时用 persona id/name 选 ``album_dir/<key>`` 子目录；缺则空（用根目录）。
+
+        2026-07-22：会话未绑人设时回落 ``selfie.default_album_key``（单人设部署的
+        默认相册）——真机实录：TG 私聊未绑人设 → album_key 空 → 相册根目录无图 →
+        锁脸基础图与相册兜底双双落空，客户要图永远只能收到文字婉拒。
+        """
+        key = ""
         try:
             p = self._selfie_persona_for_prompt(user_context)
             if isinstance(p, dict):
-                return str(p.get("id") or p.get("persona_id") or p.get("name") or "").strip()
-            return str(p or "").strip()
+                key = str(p.get("id") or p.get("persona_id") or p.get("name") or "").strip()
+            else:
+                key = str(p or "").strip()
         except Exception:
-            return ""
+            key = ""
+        if not key:
+            try:
+                key = str(self._selfie_cfg().get("default_album_key") or "").strip()
+            except Exception:
+                key = ""
+        return key
 
     def _selfie_persona_for_prompt(self, user_context: Dict[str, Any]) -> Any:
         """取出图用 persona（dict 含 name/appearance 等）；拿不到则回 name 字符串/空。"""
@@ -6080,8 +6345,10 @@ class SkillManager(LoggerMixin):
                     "%s[promise_guard] 异步兑现失败已补台阶文本 user=%s",
                     log_prefix, user_id_str)
             try:
-                self._context_store.mark_dirty(user_id_str)
-                self._context_store.flush(user_id_str)
+                _sk = str(
+                    user_context.get("_context_store_key") or user_id_str)
+                self._context_store.mark_dirty(_sk)
+                self._context_store.flush(_sk)
             except Exception:
                 pass
         finally:
@@ -6141,10 +6408,19 @@ class SkillManager(LoggerMixin):
                 from src.integrations.account_orchestrator import get_orchestrator
                 orch = get_orchestrator(self.config.config or {})
                 if orch.owns_media(platform, account_id):
-                    await orch.send_media(
+                    _sres = await orch.send_media(
                         platform, account_id, chat_key,
                         media_path=image_path, media_url=media_url, media_type=_mt,
                         caption=caption)
+                    # 2026-07-22 真机复盘：必须验返回值——sidecar 读不到文件等
+                    # 失败以 {delivered:False} 返回而非抛异常，旧代码盲返 True
+                    # 会让上层以为图已发出（配文"这张够诚意了吧"实则没图，穿帮）。
+                    if isinstance(_sres, dict) and (
+                            _sres.get("delivered") is False or _sres.get("blocked")):
+                        self.logger.info(
+                            "[selfie] 编排器媒体投递失败 %s:%s blocked=%s",
+                            platform, account_id, _sres.get("blocked") or "-")
+                        return False
                     return True
         except Exception:
             self.logger.debug("selfie orchestrator media send failed", exc_info=True)
@@ -6202,7 +6478,8 @@ class SkillManager(LoggerMixin):
             return
         try:
             platform = str(user_context.get("platform", "") or "")
-            key = self._episodic_storage_key(user_id, chat_id, platform)
+            key = self._episodic_storage_key(
+                user_id, chat_id, platform, user_context=user_context)
             store.add_fact(key, mem, "story", source="user_stated")
             self.logger.info(
                 "[story] writeback shared-memory key=%s mem=%r", key, mem[:60]
@@ -6657,10 +6934,15 @@ class SkillManager(LoggerMixin):
             self.logger.debug("story advance skipped", exc_info=True)
 
         self.global_last_reply_time = current_time
+        _acct = str((user_context or {}).get("account_id") or "")
         if chat_id:
-            self._chat_user_last_reply[f"{chat_id}_{user_id}"] = current_time
+            from src.utils.context_store import make_context_key
+            self._chat_user_last_reply[
+                make_context_key(f"{chat_id}_{user_id}", _acct)
+            ] = current_time
 
-        content_hash = self._hash_content(user_context.get('last_message', ''), chat_id)
+        content_hash = self._hash_content(
+            user_context.get('last_message', ''), chat_id, account_id=_acct)
         self.reply_cache[content_hash] = current_time
 
         # L4: 更新用户画像标�
@@ -6672,9 +6954,11 @@ class SkillManager(LoggerMixin):
         # J1: �€测是否需要人工升�?
         self._check_escalation(user_id, user_context, chat_id, current_time)
 
-        self._context_store.mark_dirty(user_id)
+        _sk = str(
+            (user_context or {}).get("_context_store_key") or user_id)
+        self._context_store.mark_dirty(_sk)
         if int(current_time) % 5 == 0:
-            self._context_store.flush(user_id)
+            self._context_store.flush(_sk)
 
         self._cleanup_cache()
 

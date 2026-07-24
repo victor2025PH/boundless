@@ -1,7 +1,9 @@
 """3-tier persona resolution tests.
 
 Covers:
-- get_persona: chat-binding > account-profile > domain-default
+- get_persona: account-profile > chat-binding > domain-default
+  （2026-07-24 双号串话修复：账号已绑人设时优先账号人设，跳过 peer-global
+  chat_binding；无账号人设时 chat_binding 仍生效）
 - load_profiles_from_config: reads personas.profiles[].id
 - get_persona_by_id / upsert_profile / delete_profile
 - get_all_chat_bindings returns full dicts (bug-fix regression)
@@ -69,13 +71,20 @@ def test_list_profile_ids():
 
 # ── 3-tier get_persona ────────────────────────────────────────
 
-def test_tier1_chat_binding_takes_priority():
+def test_tier1_account_profile_takes_priority():
+    """2026-07-24 双号串话修复：账号已绑人设 → 优先账号人设（跳过 chat_binding）。
+
+    同一客户找 Katie/Jason 两号时，旧「chat_binding 最高」会强制两号共用
+    同一 peer-global 绑定 → 女号说男声、内容互串。
+    """
     pm = _pm()
     pm.set_domain_persona({"name": "Domain"})
     pm.upsert_profile("acc_p", {"name": "Account"})
     pm.bind_chat_persona("chat99", {"name": "ChatSpecific"})
     p = pm.get_persona("chat99", "acc_p")
-    assert p["name"] == "ChatSpecific"
+    assert p["name"] == "Account"
+    # 无账号人设（单号运营绑会话）→ chat_binding 仍最高优先
+    assert pm.get_persona("chat99")["name"] == "ChatSpecific"
 
 
 def test_tier2_account_profile_used_when_no_chat_binding():
@@ -107,13 +116,15 @@ def test_hardcoded_default_when_no_domain():
     assert p["name"] == "Assistant"  # global hardcoded default
 
 
-def test_account_profile_not_used_when_chat_bound():
-    """Chat binding wins even when both chat binding and account profile exist."""
+def test_account_profile_beats_chat_binding_when_both_exist():
+    """双号串话修复：chat 绑定与账号 profile 并存 → 账号 profile 赢。"""
     pm = _pm()
     pm.bind_chat_persona("42", {"name": "ChatBound"})
     pm.upsert_profile("profile_a", {"name": "AccountLevel"})
     pm.set_domain_persona({"name": "DomainLevel"})
-    assert pm.get_persona("42", "profile_a")["name"] == "ChatBound"
+    assert pm.get_persona("42", "profile_a")["name"] == "AccountLevel"
+    # 账号人设 id 悬空（profile 已删）→ 回落 chat_binding，不黑洞
+    assert pm.get_persona("42", "missing_profile")["name"] == "ChatBound"
 
 
 # ── get_all_chat_bindings returns dicts (bug-fix regression) ──
@@ -150,13 +161,16 @@ def test_format_persona_block_uses_account_persona_id():
     assert "DomainName" not in block
 
 
-def test_format_persona_block_ignores_account_id_when_chat_bound():
+def test_format_persona_block_account_id_beats_chat_binding():
     pm = _pm()
     pm.bind_chat_persona("chat7", {"name": "ChatName", "role": "R"})
     pm.upsert_profile("p", {"name": "ProfileName", "role": "R"})
     block = pm.format_persona_block("chat7", account_persona_id="p")
-    assert "ChatName" in block
-    assert "ProfileName" not in block
+    assert "ProfileName" in block
+    assert "ChatName" not in block
+    # 无 account_persona_id → chat_binding 供块（单号路径不回归）
+    block2 = pm.format_persona_block("chat7")
+    assert "ChatName" in block2
 
 
 def test_build_system_prompt_with_account_persona_id():

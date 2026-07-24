@@ -88,6 +88,64 @@ def _ingest_report() -> Dict[str, Any]:
         return {"sink_registered": False}
 
 
+_SELF_PROFILE_EMPTY_STATS: Dict[str, int] = {
+    "calls": 0, "written": 0, "skipped": 0,
+    "avatar_downloaded": 0, "avatar_reused": 0, "errors": 0,
+}
+
+
+def _self_profile_report(config: Dict[str, Any]) -> Dict[str, Any]:
+    """账号身份采集（self_profile）就绪度：发现「开关开了但实际没生效」。
+
+    判定：开关未开 → ready=True（未启用不算故障）；开关已开 → 至少成功富集
+    （written）或幂等跳过（skipped）过一次才算就绪。不参与 overall_ready
+    （身份采集是增强项，非协议栈可用性的必要条件）。
+    """
+    from src.integrations.account_self_profile import (
+        get_self_profile_stats, self_avatar_enabled, self_profile_enabled,
+    )
+    flag = self_profile_enabled(config)
+    avatar = self_avatar_enabled(config)
+    try:
+        stats = dict(get_self_profile_stats())
+    except Exception:
+        logger.debug("[diag] 读取 self_profile 计数失败", exc_info=True)
+        stats = dict(_SELF_PROFILE_EMPTY_STATS)
+    calls = int(stats.get("calls") or 0)
+    written = int(stats.get("written") or 0)
+    skipped = int(stats.get("skipped") or 0)
+    errors = int(stats.get("errors") or 0)
+    ready = True if not flag else (written > 0 or skipped > 0)
+    hints: List[str] = []
+    if not flag:
+        hints.append(
+            "未启用账号身份采集：config.accounts.self_profile.enabled: true"
+            "（开启后登录/重连自动提取账号昵称头像）"
+        )
+    elif calls == 0:
+        hints.append(
+            "已启用但从未触发富集：确认已扫码登录且 Baileys/后端已重启"
+            "（登录轮询/session-status/健康轮询三路任一会触发）"
+        )
+    elif written == 0 and skipped == 0 and errors > 0:
+        hints.append(
+            f"富集持续失败（errors={errors}）：查看后端日志 [self_profile]，"
+            "可能 Node 微服务未回传 pushname/avatar_url 字段"
+        )
+    if flag and ready:
+        hints.append(f"就绪：已富集 written={written} / 跳过 skipped={skipped}")
+    if flag and avatar and written > 0 \
+            and int(stats.get("avatar_downloaded") or 0) == 0:
+        hints.append("头像子开关已开但未下载过头像：可能账号无头像或 Node 未回传 avatar_url")
+    return {
+        "flag_enabled": flag,
+        "avatar_enabled": avatar,
+        "stats": stats,
+        "ready": ready,
+        "hints": hints,
+    }
+
+
 def readiness_static(config: Dict[str, Any]) -> Dict[str, Any]:
     """只读配置 + 进程内状态的就绪报告（不触网）。"""
     cfg = config or {}
@@ -108,6 +166,8 @@ def readiness_static(config: Dict[str, Any]) -> Dict[str, Any]:
         "whatsapp": wa,
         "orchestrator": orch,
         "inbox_ingest": ingest,
+        # 增强项：不参与 overall_ready（见 _self_profile_report 文档）
+        "self_profile": _self_profile_report(cfg),
         "overall_ready": overall,
     }
 
@@ -173,4 +233,14 @@ def format_report(report: Dict[str, Any]) -> str:
 
     ing = report["inbox_ingest"]
     lines.append(f"\n{mark(ing['sink_registered'])} 收件箱入站 sink: registered={ing['sink_registered']}")
+
+    sp = report["self_profile"]
+    sps = sp["stats"]
+    lines.append(f"\n{mark(sp['ready'])} 账号身份采集(self_profile)")
+    lines.append(
+        f"   flag_enabled={sp['flag_enabled']} avatar={sp['avatar_enabled']}"
+        f" written={sps.get('written', 0)} calls={sps.get('calls', 0)}"
+    )
+    for h in sp["hints"]:
+        lines.append(f"   - {h}")
     return "\n".join(lines)

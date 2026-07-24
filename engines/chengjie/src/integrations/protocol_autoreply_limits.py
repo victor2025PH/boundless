@@ -247,6 +247,22 @@ def get_autoreply_limiter(cfg: Optional[Dict[str, Any]] = None) -> AutoReplyLimi
                     breaker_cooldown=brk.get("cooldown_sec", 300),
                     store=store,
                 )
+    elif cfg:
+        # C1（2026-07-22 配置单例审计）：与 get_orchestrator 同款缺陷——单例在
+        # 启动时捕获阈值，热重载改 rate.hourly/daily 后不生效。调用方每次都带
+        # "当前"配置，这里跟着刷新数值阈值（store/断路器状态保持，不重建）。
+        try:
+            pa = (cfg or {}).get("protocol_autoreply") or {}
+            rate = pa.get("rate") or {}
+            brk = pa.get("breaker") or {}
+            _limiter.configure(
+                hourly=rate.get("hourly"),
+                daily=rate.get("daily"),
+                breaker_threshold=brk.get("threshold"),
+                breaker_cooldown=brk.get("cooldown_sec"),
+            )
+        except Exception:
+            logger.debug("[limiter] 热刷新阈值失败（保留旧值）", exc_info=True)
     return _limiter
 
 

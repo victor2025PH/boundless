@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ (i18n or {}).get('ov2_s001', "运营总览 · Ops Overview") }}</title>
   {% include "_i18n_bootstrap.html" %}
+  {% include "_api_fetch.html" %}
+  <link rel="stylesheet" href="/static/theme-tokens.css?v=20260723c">
   <style>
     :root { --bg:#0f1419; --card:#1a2029; --line:#2a323d; --fg:#e6edf3; --mut:#8b98a5;
             --green:#2ea043; --yellow:#d29922; --red:#da3633; --accent:#388bfd; }
@@ -159,6 +161,12 @@
   </section>
 
   <section>
+    <h2>♻️ {{ (i18n or {}).get('ov2_s_irst', "实例重启冷却（智聊/通译 · 防连环杀）") }}</h2>
+    <div class="grid" id="irstKpis"></div>
+    <div id="irstDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <section>
     <h2>🔌 {{ (i18n or {}).get('ov2_s_psess', "平台会话健康（网页号掉线/需重登，worker 主动上报）") }}</h2>
     <div class="grid" id="psessKpis"></div>
     <div id="psessDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
@@ -168,6 +176,13 @@
     <h2>🖼️ {{ (i18n or {}).get('ov2_s_pma', "人设相册（图/视频备货 + 命中）") }}</h2>
     <div class="grid" id="pmaKpis"></div>
     <div id="pmaDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <section id="profilePushSection" style="display:none;">
+    <h2>🪪 {{ (i18n or {}).get('ov2_s_pp', "账号资料推送") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_pp_sub', "后台直改平台官方昵称/签名/头像的使用观测") }}</div>
+    <div class="grid" id="profilePushKpis"></div>
+    <div id="profilePushDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
   <section>
@@ -181,6 +196,12 @@
     <h2>🖥️ {{ (i18n or {}).get('ov2_s_gpuwm', "LAN GPU 显存水位（Ollama 模型占用）") }}</h2>
     <div class="grid" id="gpuWmKpis"></div>
     <div id="gpuWmDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <section id="pAuditSection" style="display:none;">
+    <h2>🪪 {{ (i18n or {}).get('ov2_s_paudit', "资料变更审计流（官方昵称/头像 推送·对齐）") }}</h2>
+    <div class="grid" id="pAuditKpis"></div>
+    <div id="pAuditDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
   <section>
@@ -309,7 +330,7 @@ function sparkline(values, opts){
 
 async function loadOverview(){
   try{
-    const r = await fetch('/api/admin/ops-overview', {credentials:'same-origin'});
+    const r = await apiFetch('/api/admin/ops-overview', {credentials:'same-origin'});
     const d = await r.json();
     const k = d.kpis || {};
     document.getElementById('overallDot').className = 'light-dot ' + (({green:'green',yellow:'yellow',red:'red'})[d.overall_light]||'unknown');
@@ -422,7 +443,7 @@ function incFilterQS(){
 
 async function loadIncidents(){
   try{
-    const r = await fetch('/api/admin/incidents?limit='+_incPageSize+incFilterQS(), {credentials:'same-origin'});
+    const r = await apiFetch('/api/admin/incidents?limit='+_incPageSize+incFilterQS(), {credentials:'same-origin'});
     const d = await r.json();
     var sug = d.suggested_assignee;
     _suggestedAssignee = (sug && sug.agent_id) ? String(sug.agent_id) : '';
@@ -441,7 +462,7 @@ async function loadIncidents(){
 async function loadMoreIncidents(){
   if(!_incCursor) return;
   try{
-    const r = await fetch('/api/admin/incidents?limit='+_incPageSize+'&before_id='+_incCursor+incFilterQS(), {credentials:'same-origin'});
+    const r = await apiFetch('/api/admin/incidents?limit='+_incPageSize+'&before_id='+_incCursor+incFilterQS(), {credentials:'same-origin'});
     const d = await r.json();
     _incCursor = d.next_cursor || null;
     var tbl = document.getElementById('incTable');
@@ -463,10 +484,10 @@ function fixEndpoint(key, target){
 async function runFix(key, target){
   if(!confirm(window.T('ov2_js027')+' "'+target+'" '+window.T('ov2_js028')+key+'?')) return;
   try{
-    var r = await fetch(fixEndpoint(key, target), {
+    var r = await apiFetch(fixEndpoint(key, target), {
       method:'POST', credentials:'same-origin',
       headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},
-    });
+    }, {timeoutMs: 60000});
     var d = await r.json();
     if(!d.ok){ alert(window.T('ov2_js029')+(d.error||window.T('rpa_unknown'))); return; }
     if(key === 'migrate_memory_keys'){
@@ -481,10 +502,10 @@ async function recheckHealth(){
   var btn = document.getElementById('recheckBtn');
   if(btn){ btn.disabled = true; btn.textContent = window.T('ov2_js033'); }
   try{
-    await fetch('/api/admin/health/recheck', {
+    await apiFetch('/api/admin/health/recheck', {
       method:'POST', credentials:'same-origin',
       headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},
-    });
+    }, {timeoutMs: 60000});
   }catch(e){ /* 静默 */ }
   if(btn){ btn.disabled = false; btn.textContent = '🔄 '+window.T('ov2_s016'); }
   loadOverview(); loadIncidents();
@@ -494,18 +515,18 @@ async function ackIncident(id){
   var who = prompt(window.T('ov2_js034'), _suggestedAssignee) || '';
   var csrf=(document.cookie.match(/csrf_token=([^;]+)/)||[])[1]||'';
   try{
-    await fetch('/api/admin/incidents/'+id+'/ack', {
+    await apiFetch('/api/admin/incidents/'+id+'/ack', {
       method:'POST', credentials:'same-origin',
       headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
       body: JSON.stringify({assigned_to: who}),
-    });
+    }, {timeoutMs: 60000});
     loadIncidents(); loadOverview();
   }catch(e){ alert(window.T('ov_js_op_fail_e')+e); }
 }
 
 async function loadReport(){
   try{
-    const r = await fetch('/api/admin/ops-report?days=7', {credentials:'same-origin'});
+    const r = await apiFetch('/api/admin/ops-report?days=7', {credentials:'same-origin'});
     const d = await r.json();
     var lines = (d.headline||[]).map(function(s){ return '<li>'+s+'</li>'; }).join('');
     var inc = d.incidents||{};
@@ -524,7 +545,7 @@ async function loadTTS(){
   var kp = document.getElementById('ttsKpis');
   var pv = document.getElementById('ttsProviders');
   try{
-    const r = await fetch('/api/workspace/metrics', {credentials:'same-origin'});
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
     if(r.status === 403){
       kp.innerHTML = '';
       pv.innerHTML = '<div class="empty">'+window.T('ov2_js037')+'</div>';
@@ -582,7 +603,7 @@ async function loadTTSTrend(){
   var el = document.getElementById('ttsTrend');
   if(!el) return;
   try{
-    const r = await fetch('/api/admin/tts-cost-trend?days=7', {credentials:'same-origin'});
+    const r = await apiFetch('/api/admin/tts-cost-trend?days=7', {credentials:'same-origin'});
     const d = await r.json();
     if(!d.enabled){
       el.innerHTML = '<div class="muted" style="font-size:12px;">'+
@@ -612,7 +633,7 @@ async function loadXlateTrend(){
   var el = document.getElementById('xlateTrend');
   if(!el) return;
   try{
-    const r = await fetch('/api/admin/translation-confidence-trend?days=7', {credentials:'same-origin'});
+    const r = await apiFetch('/api/admin/translation-confidence-trend?days=7', {credentials:'same-origin'});
     const d = await r.json();
     if(!d.enabled){
       el.innerHTML = '<div class="muted" style="font-size:12px;">'+
@@ -655,9 +676,9 @@ function _toggleBlockedDetail(){
 function _logDrill(el){
   try{
     var cid=(el && el.dataset) ? (el.dataset.cid||'') : '';
-    fetch('/api/admin/ui-event', {method:'POST', credentials:'same-origin', keepalive:true,
+    apiFetch('/api/admin/ui-event', {method:'POST', credentials:'same-origin', keepalive:true,
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({event:'deep_link_opened', source:'ai_safety', conversation_id:cid})});
+      body:JSON.stringify({event:'deep_link_opened', source:'ai_safety', conversation_id:cid})}, {timeoutMs: 60000});
   }catch(_){}
 }
 
@@ -678,7 +699,7 @@ async function loadAiSafety(){
   if(!kp || !nt) return;
   refreshAiQualityAlertBadge();  // F2a：卡头一眼看有无未处理 AI 质量告警（独立于本卡启用状态）
   try{
-    const r = await fetch('/api/admin/ai-safety-overview?days='+_aiSafetyDays, {credentials:'same-origin'});
+    const r = await apiFetch('/api/admin/ai-safety-overview?days='+_aiSafetyDays, {credentials:'same-origin'});
     if(r.status === 403){ kp.innerHTML=''; if(tr) tr.innerHTML=''; nt.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; return; }
     const d = await r.json();
     if(!d || !d.ok || d.enabled===false){ kp.innerHTML=''; if(tr) tr.innerHTML=''; nt.innerHTML='<div class="empty">'+window.T('ov2_js_safe_empty')+'</div>'; return; }
@@ -757,7 +778,7 @@ async function refreshAiQualityAlertBadge(){
   var el = document.getElementById('aiSafetyAlert');
   if(!el) return;
   try{
-    var r = await fetch('/api/admin/incidents?status=open&kind=ai_quality&limit=20', {credentials:'same-origin'});
+    var r = await apiFetch('/api/admin/incidents?status=open&kind=ai_quality&limit=20', {credentials:'same-origin'});
     if(!r.ok){ el.style.display='none'; return; }
     var d = await r.json();
     var items = (d.incidents||[]).filter(function(it){ return it.kind==='ai_quality' && it.status==='open'; });
@@ -784,7 +805,7 @@ async function refreshRealtimeVoiceAlertBadge(){
   var el = document.getElementById('rtVoiceAlert');
   if(!el) return;
   try{
-    var r = await fetch('/api/admin/incidents?status=open&kind=realtime_voice&limit=20', {credentials:'same-origin'});
+    var r = await apiFetch('/api/admin/incidents?status=open&kind=realtime_voice&limit=20', {credentials:'same-origin'});
     if(!r.ok){ el.style.display='none'; return; }
     var d = await r.json();
     var items = (d.incidents||[]).filter(function(it){ return it.kind==='realtime_voice' && it.status==='open'; });
@@ -846,8 +867,8 @@ async function applyAiQualityThresholds(enable){
   if(st) st.textContent = window.T('dash.loading');
   var body = {thresholds: th}; if(enable) body.enable = true;
   try{
-    var r = await fetch('/api/admin/ai-quality-thresholds', {method:'POST', credentials:'same-origin',
-      headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()}, body: JSON.stringify(body)});
+    var r = await apiFetch('/api/admin/ai-quality-thresholds', {method:'POST', credentials:'same-origin',
+      headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()}, body: JSON.stringify(body)}, {timeoutMs: 60000});
     var d = await r.json();
     if(!d || !d.ok){ if(st) st.textContent = (d && d.message) || window.T('ov2_js_safe_apply_err'); return; }
     await loadAiQualityCalibrate(false);  // 按新 config 生效值重校准：刷新输入 + off note + 控件
@@ -910,7 +931,7 @@ async function loadAiQualityCalibrate(useOverrides){
   out.innerHTML = '<span class="muted" style="font-size:11px;">'+window.T('dash.loading')+'</span>';
   var qs = 'days=30' + (useOverrides ? _calOverrideQS() : '');
   try{
-    var r = await fetch('/api/admin/ai-quality-calibrate?'+qs, {credentials:'same-origin'});
+    var r = await apiFetch('/api/admin/ai-quality-calibrate?'+qs, {credentials:'same-origin'});
     if(r.status === 403){ out.innerHTML = '<div class="empty">'+window.T('ov2_js037')+'</div>'; return; }
     var d = await r.json();
     if(!d || !d.ok || d.enabled === false){
@@ -930,7 +951,7 @@ async function loadSlaBacklog(){
   var dt = document.getElementById('slaBacklogDetail');
   if(!kp || !dt) return;
   try{
-    const r = await fetch('/api/workspace/metrics', {credentials:'same-origin'});
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
     if(r.status === 403){ kp.innerHTML=''; dt.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; return; }
     const d = await r.json();
     var sw = d.sla_watcher || {};
@@ -979,11 +1000,11 @@ async function cleanStaleBacklog(){
   if(!btn) return;
   var body = {max_age_hours:168, levels:['L3','L4'], groups_only:true};
   async function _call(dry){
-    const r = await fetch('/api/drafts/expire-stale', {
+    const r = await apiFetch('/api/drafts/expire-stale', {
       method:'POST', credentials:'same-origin',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify(Object.assign({}, body, {dry_run:dry})),
-    });
+    }, {timeoutMs: 60000});
     if(r.status === 403){ return {forbidden:true}; }
     return await r.json();
   }
@@ -1013,7 +1034,7 @@ async function loadTranslationEngines(){
   var pv = document.getElementById('xlateProviders');
   if(!kp || !pv) return;
   try{
-    const r = await fetch('/api/workspace/metrics', {credentials:'same-origin'});
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
     if(r.status === 403){ kp.innerHTML=''; pv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; return; }
     const d = await r.json();
     var te = d.translation_engines || null;
@@ -1086,7 +1107,7 @@ async function loadVoiceSynthLang(){
   var bl = document.getElementById('voiceLangByLang');
   if(!kp || !bl) return;
   try{
-    const r = await fetch('/api/workspace/metrics', {credentials:'same-origin'});
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
     if(r.status === 403){ kp.innerHTML=''; bl.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; return; }
     const d = await r.json();
     var vs = d.voice_synth_language || null;
@@ -1128,7 +1149,7 @@ async function loadASRDegradation(){
   var dv = document.getElementById('asrDetail');
   if(!kp || !dv) return;
   try{
-    const r = await fetch('/api/workspace/metrics', {credentials:'same-origin'});
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
     if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; return; }
     const d = await r.json();
     var a = d.asr || null;
@@ -1170,7 +1191,7 @@ async function loadSpeechEmotion(){
   var bl = document.getElementById('speechEmoByEmotion');
   if(!kp || !bl) return;
   try{
-    const r = await fetch('/api/workspace/metrics', {credentials:'same-origin'});
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
     if(r.status === 403){ kp.innerHTML=''; bl.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; return; }
     const d = await r.json();
     var se = d.speech_emotion || null;
@@ -1215,7 +1236,7 @@ async function loadDeepPersona(){
   var hint = document.getElementById('deepPersonaHint');
   if(!kp || !hint) return;
   try{
-    const r = await fetch('/api/workspace/metrics', {credentials:'same-origin'});
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
     if(r.status === 403){ kp.innerHTML=''; hint.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; return; }
     const d = await r.json();
     var dp = d.deep_persona || null;
@@ -1248,14 +1269,16 @@ async function loadDeepPersona(){
 }
 
 // 🖱️ 前端哑按钮错误卡片：读 /api/workspace/metrics 的 frontend_errors（dead-click 守卫 beacon 累计）。
+// 同一次响应顺带喂 🪪 账号资料推送卡（renderProfilePush）——共享 metrics 响应，不为它单独再发请求。
 async function loadFrontendErrors(){
   var kp = document.getElementById('feErrKpis');
   var dv = document.getElementById('feErrDetail');
   if(!kp || !dv) return;
   try{
-    const r = await fetch('/api/workspace/metrics', {credentials:'same-origin'});
-    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; return; }
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
+    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; try{ renderProfilePush(null); }catch(_pp){} return; }
     const d = await r.json();
+    try{ renderProfilePush(d); }catch(_pp){}
     var fe = d.frontend_errors || null;
     if(!fe || !(Number(fe.total)||0)){
       kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js_fe_none')+'</div>'; return;
@@ -1290,6 +1313,58 @@ async function loadFrontendErrors(){
   }
 }
 
+// 🪪 账号资料推送卡：与 loadFrontendErrors 共享同一次 /api/workspace/metrics 响应（不单独发请求），
+// 读 profile_push 段（后台直改平台官方昵称/签名/头像）。active=false / 段缺失 / 403 → 整卡隐藏
+// （对齐 bazi/vision 的「零流量整卡隐藏」惯例）。
+function renderProfilePush(d){
+  var sec = document.getElementById('profilePushSection');
+  var kp = document.getElementById('profilePushKpis');
+  var dv = document.getElementById('profilePushDetail');
+  if(!sec || !kp || !dv) return;
+  var pp = (d && d.profile_push) || null;
+  if(!pp || !pp.active){ sec.style.display='none'; return; }
+  sec.style.display = '';
+  var attempts = Number(pp.attempts)||0;
+  var success = Number(pp.success)||0;
+  var partial = Number(pp.partial)||0;
+  var failed = Number(pp.failed)||0;
+  // 口径注意：后端 success=「至少一字段成功」（partial 已含在内，只是额外标记），
+  // 这里直接用 success，绝不能加 partial（会把部分成功重复计数）。
+  var kpis = [
+    {label:window.T('ov2_pp_attempts'), value:fmt(attempts)},
+    {label:window.T('ov2_pp_success'), value:fmt(success), color:'var(--green)'},
+    {label:window.T('ov2_pp_failed'), value:fmt(failed), color:(failed>0?'var(--red)':'')},
+    {label:window.T('ov2_pp_persona'), value:fmt(Number(pp.persona_fill)||0)},
+  ];
+  kp.innerHTML = kpis.map(function(c){
+    return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+      '</div><div style="font-size:20px;font-weight:600;margin-top:4px;'+(c.color?('color:'+c.color+';'):'')+'">'+c.value+'</div></div>';
+  }).join('');
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  var lines = [];
+  var blocked = [];
+  if((Number(pp.cooldown_blocked)||0) > 0) blocked.push(window.T('ov2_pp_cooldown')+' '+fmt(Number(pp.cooldown_blocked)||0));
+  if((Number(pp.offline_blocked)||0) > 0) blocked.push(window.T('ov2_pp_offline')+' '+fmt(Number(pp.offline_blocked)||0));
+  if(blocked.length){
+    lines.push('<div class="muted" style="font-size:12px;">'+blocked.join(' · ')+'</div>');
+  }
+  if(attempts > 0){
+    lines.push('<div class="muted" style="font-size:12px;margin-top:4px;">'+window.T('ov2_pp_rate')+': '
+      + Math.round(success/attempts*100)+'% ('+fmt(success)+'/'+fmt(attempts)+')</div>');
+  }
+  var byPlat = pp.by_platform || {};
+  var pk = Object.keys(byPlat);
+  if(pk.length){
+    var rows = pk.sort().map(function(k){
+      var o = byPlat[k] || {};
+      return '<tr><td>'+esc(k)+'</td><td>'+fmt(Number(o.attempts)||0)+' / '+fmt(Number(o.success)||0)+'</td></tr>';
+    }).join('');
+    lines.push('<div class="muted" style="font-size:12px;margin:8px 0 4px;">'+window.T('ov2_pp_byplat')+'</div>'
+      + '<table><tr><th>'+window.T('ov2_pp_col_plat')+'</th><th>'+window.T('ov2_pp_col_as')+'</th></tr>'+rows+'</table>');
+  }
+  dv.innerHTML = lines.join('') || '<div class="muted" style="font-size:12px;">—</div>';
+}
+
 // 👁️ 图像识别卡片：读 /api/workspace/metrics 的 providers.vision（VisionClient 单一瓶颈处
 // 累计的全平台入站识图调用：后端成功率/延迟 + 语义缓存命中 + 云端兜底 + tag 分布）。
 // 零流量（未开 vision 或还没图进来）整卡隐藏，与 bazi 卡同模式。
@@ -1299,7 +1374,7 @@ async function loadVisionUsage(){
   var dv = document.getElementById('visionUsageDetail');
   if(!sec || !kp || !dv) return;
   try{
-    const r = await fetch('/api/workspace/metrics', {credentials:'same-origin'});
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
     if(r.status === 403){ sec.style.display='none'; return; }
     const d = await r.json();
     var vz = (d.providers || {}).vision || null;
@@ -1362,6 +1437,100 @@ async function loadVisionUsage(){
   }
 }
 
+// ♻️ 双实例重启冷却：读 /api/admin/instance-restart-status（机器级 JSON，与 restart_instance/watchdog 同源）
+async function loadInstanceRestartStatus(){
+  var kp = document.getElementById('irstKpis');
+  var dv = document.getElementById('irstDetail');
+  if(!kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/admin/instance-restart-status', {credentials:'same-origin'});
+    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; return; }
+    const d = await r.json();
+    var rows = (d && d.instances) || [];
+    var activeN = rows.filter(function(x){ return x && x.cooldown_active; }).length;
+    var warmN = rows.filter(function(x){ return x && x.http_phase==='warming'; }).length;
+    var flapN = rows.filter(function(x){ return x && x.flap && x.flap.flapping; }).length;
+    var hasAny = rows.some(function(x){ return x && (x.has_record || x.http_phase); });
+    kp.innerHTML = [
+      {label:window.T('ov2_js_irst_active'), value:(activeN ? '🟡 '+activeN : '🟢 0')},
+      {label:window.T('ov2_js_irst_warming'), value:(warmN ? '🔵 '+warmN : '0')},
+      {label:window.T('ov2_js_irst_flap'), value:(flapN ? '🚨 '+flapN : '🟢 0')},
+      {label:window.T('ov2_js_irst_clear'), value:((activeN||flapN) ? '—' : '✅')},
+    ].map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    if(!hasAny){
+      dv.innerHTML = '<div class="empty">'+window.T('ov2_js_irst_none')+'</div>'
+        + '<div class="muted" style="font-size:12px;margin-top:8px;">'+window.T('ov2_js_irst_hint')+'</div>';
+      return;
+    }
+    function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+    function ageTxt(sec){
+      if(sec==null) return '—';
+      sec = Number(sec)||0;
+      if(sec < 90) return sec + 's';
+      if(sec < 3600) return Math.round(sec/60) + 'm';
+      return (sec/3600).toFixed(1) + 'h';
+    }
+    function phaseTxt(ph){
+      if(ph==='ready') return '🟢 ready';
+      if(ph==='warming') return '🔵 warming';
+      if(ph==='unresponsive') return '🔴 unresponsive';
+      if(ph==='foreign') return '🟠 foreign';
+      if(ph==='down') return '⚫ down';
+      return esc(ph||'—');
+    }
+    var body = rows.map(function(x){
+      var name = esc((x.name||x.id||'?') + ' ('+(x.id||'')+')');
+      var when = esc(window.T('ov2_js_irst_age')+' '+ageTxt(x.age_sec));
+      if(x.ts){
+        var sec = Date.parse(String(x.ts));
+        if(!isNaN(sec)) when = esc(tsfmt(sec/1000));
+      }
+      var left = x.cooldown_active
+        ? ('🟡 '+esc(window.T('ov2_js_irst_left')+' '+ageTxt(x.cooldown_left_sec)))
+        : '🟢 —';
+      var win = (x.window_sec!=null && Number(x.window_sec)>0) ? (esc(String(x.window_sec))+'s') : '—';
+      var flap = (x.flap && x.flap.flapping)
+        ? ('🚨 '+esc(String(x.flap.count||'?')+'/'+String(x.flap.window_sec||1800)+'s'))
+        : '—';
+      return '<tr><td>'+name+'</td><td>'+phaseTxt(x.http_phase)+'</td><td>'+when+
+        '</td><td>'+esc(x.reason||'—')+'</td><td>'+left+'</td><td>'+flap+
+        '</td><td class="muted">'+win+'</td></tr>';
+    }).join('');
+    var snapNote = (d.status_snapshot_age_sec!=null)
+      ? (' · '+window.T('ov2_js_irst_snap')+' '+ageTxt(d.status_snapshot_age_sec))
+      : '';
+    // Phase12b：本实例启动分段（BootTimer；进程跑在 Phase11 前代码时为 null，静默不显示）
+    var bootLine = '';
+    var bt = d.boot_timing;
+    if(bt && bt.total_sec){
+      var seat = (d.boot_seat_ready_sec!=null)
+        ? (' · '+window.T('ov2_js_irst_boot_seat')+' '+Number(d.boot_seat_ready_sec).toFixed(1)+'s') : '';
+      var phs = (bt.phases||[]).map(function(p){
+        return esc(p.name)+'='+Number(p.delta_sec).toFixed(1)+'s';
+      }).join(' ');
+      bootLine = '<div class="muted" style="font-size:12px;margin-top:6px;">'
+        + window.T('ov2_js_irst_boot')+' ('+esc(bt.instance||'')+'): '
+        + esc(String(bt.total_sec))+'s'+seat
+        + (bt.slowest_phase ? (' · '+window.T('ov2_js_irst_boot_slow')+' '+esc(bt.slowest_phase)+' '+esc(String(bt.slowest_sec))+'s') : '')
+        + (phs ? ('<br>'+phs) : '')
+        + '</div>';
+    }
+    dv.innerHTML =
+      '<table><tr><th>'+window.T('ov2_js_irst_col_name')+'</th><th>'+window.T('ov2_js_irst_col_phase')+
+      '</th><th>'+window.T('ov2_js_irst_col_when')+
+      '</th><th>'+window.T('ov2_js_irst_col_reason')+'</th><th>'+window.T('ov2_js_irst_col_left')+
+      '</th><th>'+window.T('ov2_js_irst_col_flap')+'</th><th>'+window.T('ov2_js_irst_col_window')+
+      '</th></tr>'+body+'</table>'
+      + bootLine
+      + '<div class="muted" style="font-size:12px;margin-top:8px;">'+window.T('ov2_js_irst_hint')+snapNote+'</div>';
+  }catch(e){
+    dv.innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
+  }
+}
+
 // 🔌 平台会话健康卡片：读 /api/workspace/metrics 的 platform_sessions（外部 worker 主动 push 的
 // 会话状态登记；unhealthy=掉线/需人工重登，绿色空态=无上报或全部健康）。
 async function loadPlatformSessions(){
@@ -1369,7 +1538,7 @@ async function loadPlatformSessions(){
   var dv = document.getElementById('psessDetail');
   if(!kp || !dv) return;
   try{
-    const r = await fetch('/api/workspace/metrics', {credentials:'same-origin'});
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
     if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; return; }
     const d = await r.json();
     var ps = d.platform_sessions || null;
@@ -1468,7 +1637,7 @@ async function loadSendRoutes(){
   var dv = document.getElementById('sendRouteDetail');
   if(!kp || !dv) return;
   try{
-    const r = await fetch('/api/workspace/metrics', {credentials:'same-origin'});
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
     if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; return; }
     const d = await r.json();
     var sr = d.send_routes || null;
@@ -1512,7 +1681,7 @@ async function loadSendRouteTrend(){
   var el = document.getElementById('sendRouteTrend');
   if(!el) return;
   try{
-    const r = await fetch('/api/admin/send-route-trend?days=7', {credentials:'same-origin'});
+    const r = await apiFetch('/api/admin/send-route-trend?days=7', {credentials:'same-origin'});
     const d = await r.json();
     if(!d.enabled){
       el.innerHTML = '<div class="muted" style="font-size:12px;">'+
@@ -1543,7 +1712,7 @@ async function loadPersonaMedia(){
   var dv = document.getElementById('pmaDetail');
   if(!kp || !dv) return;
   try{
-    const r = await fetch('/api/workspace/metrics', {credentials:'same-origin'});
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
     if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; return; }
     const d = await r.json();
     var pm = d.persona_media || null;
@@ -1588,7 +1757,7 @@ async function loadBazi(){
   var dv = document.getElementById('baziDetail');
   if(!sec || !kp || !dv) return;
   try{
-    const r = await fetch('/api/workspace/metrics', {credentials:'same-origin'});
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
     if(r.status === 403){ sec.style.display='none'; return; }
     const d = await r.json();
     var bz = d.bazi || null;
@@ -1634,7 +1803,7 @@ async function loadTgCall(){
   var dv = document.getElementById('tgCallDetail');
   if(!sec || !kp || !dv) return;
   try{
-    const r = await fetch('/api/workspace/metrics', {credentials:'same-origin'});
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
     if(r.status === 403){ sec.style.display='none'; return; }
     const d = await r.json();
     var c = d.tg_call || null;
@@ -1675,7 +1844,7 @@ async function loadTgCall(){
 // 未开启（enabled=false）→ 整卡隐藏，不占看板。
 async function _tgCallReadiness(sec, kp, dv){
   try{
-    const r = await fetch('/api/voice/call/readiness', {credentials:'same-origin'});
+    const r = await apiFetch('/api/voice/call/readiness', {credentials:'same-origin'});
     if(!r.ok){ sec.style.display='none'; return; }
     const d = await r.json();
     if(!d.enabled){ sec.style.display='none'; return; }
@@ -1706,7 +1875,7 @@ async function loadGpuWatermark(){
   var dv = document.getElementById('gpuWmDetail');
   if(!sec || !kp || !dv) return;
   try{
-    const r = await fetch('/api/admin/gpu-watermark', {credentials:'same-origin'});
+    const r = await apiFetch('/api/admin/gpu-watermark', {credentials:'same-origin'});
     const d = await r.json();
     if(!d.enabled){ sec.style.display='none'; return; }
     sec.style.display='';
@@ -1738,13 +1907,68 @@ async function loadGpuWatermark(){
   }
 }
 
+// 🪪 资料变更审计流卡：读 /api/admin/profile-audit（ops_events 的 profile_push/align）。
+// 近 7 天按天聚合 + 最近批次归组 + 明细；无事件/缺库则整卡隐藏。
+async function loadProfileAudit(){
+  var sec = document.getElementById('pAuditSection');
+  var kp = document.getElementById('pAuditKpis');
+  var dv = document.getElementById('pAuditDetail');
+  if(!sec || !kp || !dv) return;
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  try{
+    const r = await apiFetch('/api/admin/profile-audit?days=7&limit=40', {credentials:'same-origin'});
+    const d = await r.json();
+    if(!d.enabled){ sec.style.display='none'; return; }
+    sec.style.display='';
+    var t = d.totals || {};
+    var kpis = [
+      {label:window.T('ov2_js_pa_aligns'), value:fmt(Number(t.aligns)||0)},
+      {label:window.T('ov2_js_pa_singles'), value:fmt(Number(t.singles)||0)},
+      {label:window.T('ov2_js_pa_accounts'), value:fmt(Number(t.accounts)||0)},
+      {label:window.T('ov2_js_pa_failed'), value:fmt(Number(t.failed)||0)},
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    var html = '';
+    // 批次归组（同一次批量对齐折叠成一行：人设 / 命中数 / 平台分布 / 成败）
+    var runs = d.runs || [];
+    if(runs.length){
+      var rrows = runs.map(function(g){
+        var plats = Object.keys(g.platforms||{}).map(function(p){ return esc(p)+'×'+g.platforms[p]; }).join(' · ');
+        var warn = Object.keys(g.platforms||{}).some(function(p){ return g.platforms[p]>=2; }) ? ' ⚠' : '';
+        var ok = '<span style="color:var(--th-ink-green6,#16a34a);">'+ (Number(g.ok)||0) +'</span>';
+        var fl = (Number(g.failed)||0) ? ' / <span style="color:var(--th-ink-red6,#dc2626);">'+g.failed+'</span>' : '';
+        return '<tr><td>'+fmtTs(g.ts)+'</td><td>'+esc(g.persona||'—')+'</td><td>'+(Number(g.count)||0)+'</td><td>'+plats+warn+'</td><td>'+ok+fl+'</td></tr>';
+      }).join('');
+      html += '<div class="muted" style="font-size:12px;margin:4px 0;">'+window.T('ov2_js_pa_runs_head')+'</div>'
+        + '<table><tr><th>'+window.T('ov2_js_pa_col_ts')+'</th><th>'+window.T('ov2_js_pa_col_persona')+'</th><th>'+window.T('ov2_js_pa_col_n')+'</th><th>'+window.T('ov2_js_pa_col_plat')+'</th><th>'+window.T('ov2_js_pa_col_res')+'</th></tr>'+rrows+'</table>';
+    }
+    // 最近明细（含单号推送）
+    var rec = d.recent || [];
+    if(rec.length){
+      var mrows = rec.slice(0,20).map(function(e){
+        var k = (e.kind==='profile_align') ? window.T('inbox.acct.evt_align') : window.T('inbox.acct.evt_push');
+        var mark = e.ok ? '<span style="color:var(--th-ink-green6,#16a34a);">✓</span>' : '<span style="color:var(--th-ink-red6,#dc2626);">✗</span>';
+        return '<tr><td>'+fmtTs(e.ts)+'</td><td>'+esc(k)+'</td><td>'+esc(e.platform||'')+':'+esc(e.account_id||'')+'</td><td>'+esc(e.persona||'')+'</td><td>'+esc(e.fields||'')+'</td><td>'+mark+'</td></tr>';
+      }).join('');
+      html += '<div class="muted" style="font-size:12px;margin:10px 0 4px;">'+window.T('ov2_js_pa_recent_head')+'</div>'
+        + '<table><tr><th>'+window.T('ov2_js_pa_col_ts')+'</th><th>'+window.T('ov2_js_pa_col_kind')+'</th><th>'+window.T('ov2_js_pa_col_acct')+'</th><th>'+window.T('ov2_js_pa_col_persona')+'</th><th>'+window.T('ov2_js_pa_col_fields')+'</th><th>'+window.T('ov2_js_pa_col_res')+'</th></tr>'+mrows+'</table>';
+    }
+    dv.innerHTML = html || '<div class="empty">'+window.T('ov2_js_pa_none')+'</div>';
+  }catch(e){
+    dv.innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
+  }
+}
+
 // 🪪 会话身份自愈卡片：读 /api/workspace/metrics 的 peer_identity（数字号补真实昵称的证据）。
 async function loadPeerIdentity(){
   var kp = document.getElementById('pidKpis');
   var dv = document.getElementById('pidDetail');
   if(!kp || !dv) return;
   try{
-    const r = await fetch('/api/workspace/metrics', {credentials:'same-origin'});
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
     if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; return; }
     const d = await r.json();
     var pi = d.peer_identity || null;
@@ -1912,7 +2136,7 @@ async function loadIdentityTrend(){
   var el = document.getElementById('identityTrend');
   if(!el) return;
   try{
-    const r = await fetch('/api/admin/identity-health-trend?days=7', {credentials:'same-origin'});
+    const r = await apiFetch('/api/admin/identity-health-trend?days=7', {credentials:'same-origin'});
     const d = await r.json();
     if(!d.enabled){ el.innerHTML=''; return; }  // 未开趋势落库 → 静默隐藏（不占位）
     var days = d.days || [];
@@ -1938,7 +2162,7 @@ async function loadIdentityTrend(){
 var _rtvPending = null;   // null | "load" | "unload"
 
 function _rtvDot(on){
-  return '<span style="color:'+(on?'#22c55e':'#ef4444')+'">●</span> ';
+  return '<span style="color:'+(on?'var(--th-ink-green5,#22c55e)':'var(--th-ink-red5,#ef4444)')+'">●</span> ';
 }
 function _rtvTokenVal(){
   var el = document.getElementById('rtvToken');
@@ -2097,11 +2321,11 @@ async function loadRealtimeVoice(){
   var eng = document.getElementById('rtVoiceEngine');
   if(!kp || !dt || !eng) return;
   try{
-    var mP = fetch('/api/workspace/metrics', {credentials:'same-origin'}).then(function(r){ return r; });
-    var eP = fetch('/api/voice/engine/status', {credentials:'same-origin'}).then(function(r){ return r; });
-    var sP = fetch('/api/companion/capabilities/signals?window_hours=168', {credentials:'same-origin'})
+    var mP = apiFetch('/api/workspace/metrics', {credentials:'same-origin'}).then(function(r){ return r; });
+    var eP = apiFetch('/api/voice/engine/status', {credentials:'same-origin'}).then(function(r){ return r; });
+    var sP = apiFetch('/api/companion/capabilities/signals?window_hours=168', {credentials:'same-origin'})
       .then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
-    var rP = fetch('/api/voice/live/readiness', {credentials:'same-origin'})
+    var rP = apiFetch('/api/voice/live/readiness', {credentials:'same-origin'})
       .then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
     var mR = await mP, eR = await eP, sigPack = await sP, readyPack = await rP;
     var rv = null, st = {}, rtvSig = null, ready = null;
@@ -2259,8 +2483,8 @@ async function applyRtvAlertThresholds(enable){
   if(st) st.textContent = window.T('dash.loading');
   var body = {thresholds: th}; if(enable) body.enable = true;
   try{
-    var r = await fetch('/api/admin/realtime-voice-alert-thresholds', {method:'POST', credentials:'same-origin',
-      headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()}, body: JSON.stringify(body)});
+    var r = await apiFetch('/api/admin/realtime-voice-alert-thresholds', {method:'POST', credentials:'same-origin',
+      headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()}, body: JSON.stringify(body)}, {timeoutMs: 60000});
     var d = await r.json();
     if(!d || !d.ok){ if(st) st.textContent = (d && d.message) || window.T('ov2_js_safe_apply_err'); return; }
     await loadRtvAlertCalibrate(false);
@@ -2281,7 +2505,7 @@ async function loadRtvAlertCalibrate(useOverrides){
   out.innerHTML = '<span class="muted" style="font-size:11px;">'+window.T('dash.loading')+'</span>';
   var qs = useOverrides ? _rtvCalOverrideQS() : '';
   try{
-    var r = await fetch('/api/admin/realtime-voice-alert-calibrate?'+qs, {credentials:'same-origin'});
+    var r = await apiFetch('/api/admin/realtime-voice-alert-calibrate?'+qs, {credentials:'same-origin'});
     if(r.status === 403){ box.style.display='none'; return; }
     var d = await r.json();
     if(!d || !d.ok || d.enabled === false){
@@ -2301,7 +2525,7 @@ async function loadRtvTrend(){
   var el = document.getElementById('rtVoiceTrend');
   if(!el) return;
   try{
-    var r = await fetch('/api/admin/realtime-voice-trend?days=7', {credentials:'same-origin'});
+    var r = await apiFetch('/api/admin/realtime-voice-trend?days=7', {credentials:'same-origin'});
     var d = await r.json();
     if(!d.enabled){
       el.innerHTML = '<div class="muted" style="font-size:12px;">'+window.T('ov2_rtv_trend_off')+'</div>';
@@ -2334,12 +2558,12 @@ async function loadLocalTts(){
   var cb = document.getElementById('localTtsEnabled');
   if(!kp || !hint) return;
   try{
-    const r = await fetch('/api/voice/local-tts/status', {credentials:'same-origin'});
+    const r = await apiFetch('/api/voice/local-tts/status', {credentials:'same-origin'});
     if(r.status === 403){ kp.innerHTML=''; hint.textContent=window.T('ov2_js037'); return; }
     const d = await r.json();
     if(cb) cb.checked = !!d.configured_enabled;
     if(cb && !CAN_MANAGE_OPS) cb.disabled = true;
-    var dot = function(on){ return '<span style="color:'+(on?'#22c55e':'#ef4444')+'">●</span> '; };
+    var dot = function(on){ return '<span style="color:'+(on?'var(--th-ink-green5,#22c55e)':'var(--th-ink-red5,#ef4444)')+'">●</span> '; };
     var kpis = [
       {label:window.T('ov2_localtts_mode'), value:(d.mode||'off')},
       {label:window.T('ov2_localtts_reachable'), value:dot(!!d.reachable)+(d.reachable?window.T('yes'):window.T('no'))},
@@ -2381,7 +2605,7 @@ async function loadProactiveEngagement(){
   var det = document.getElementById('proactiveEngDetail');
   if(!sec || !kp || !det) return;
   try{
-    const r = await fetch('/api/companion/proactive/status', {credentials:'same-origin'});
+    const r = await apiFetch('/api/companion/proactive/status', {credentials:'same-origin'});
     if(r.status === 403){ sec.style.display='none'; return; }
     const d = await r.json();
     if(!d || !d.ok){ sec.style.display='none'; return; }
@@ -2444,7 +2668,7 @@ async function loadAutosendMedia(){
   var det = document.getElementById('autosendMediaDetail');
   if(!sec || !kp || !det) return;
   try{
-    const r = await fetch('/api/drafts/autosend-status', {credentials:'same-origin'});
+    const r = await apiFetch('/api/drafts/autosend-status', {credentials:'same-origin'});
     if(r.status === 403){ sec.style.display='none'; return; }
     const d = await r.json();
     var vo = d.voice || {};
@@ -2486,14 +2710,14 @@ async function loadAutosendMedia(){
       {label:window.T('ov2_asm_last_provider'), value:'<span style="color:'+(provColor||'inherit')+'">'+lastProv+(lastFb?(' ← '+lastFb):'')+'</span>'},
       {label:window.T('ov2_asm_trunc'), value:'<span style="color:'+(truncColor||'inherit')+'">'+fmt(truncN)+' / '+window.T('ov2_asm_retry')+' '+fmt(vo.truncation_retries||0)+'</span>'},
       {label:window.T('ov2_asm_img_sent'), value:fmt(im.sent||0)+' / '+window.T('ov2_asm_fallback')+' '+fmt(im.fallback||0)+(imgInflight>0?(' · '+window.T('ov2_asm_img_busy')+' '+imgInflight):'')},
-      {label:window.T('ov2_asm_promise'), value:'<span style="color:'+(promiseWarn?'#f59e0b':'inherit')+'">'
+      {label:window.T('ov2_asm_promise'), value:'<span style="color:'+(promiseWarn?'var(--th-ink-amber5,#f59e0b)':'inherit')+'">'
         +fmt(promiseDet)+' → '+fmt(promiseFul)+' / '+fmt(promiseRet)
         +(promiseWarn?(' ⚠'):'')+'</span>'},
       {label:window.T('ov2_asm_voice_ratio'), value:(function(){
         var vc=Number(vo.voice_chosen||0), tc=Number(vo.text_chosen||0), tot=vc+tc;
         return tot? (Math.round(vc/tot*1000)/10+'% ('+vc+'/'+tot+')'):'—';
       })()},
-      {label:window.T('ov2_asm_noedge'), value:'<span style="color:'+(noEdgeDown>0?'#f59e0b':'inherit')+'">'+fmt(noEdgeDown)+'</span>'},
+      {label:window.T('ov2_asm_noedge'), value:'<span style="color:'+(noEdgeDown>0?'var(--th-ink-amber5,#f59e0b)':'inherit')+'">'+fmt(noEdgeDown)+'</span>'},
     ];
     kp.innerHTML = kpis.map(function(c){
       return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
@@ -2506,7 +2730,7 @@ async function loadAutosendMedia(){
       + (vo.last_duration_ms?(' · '+Math.round(vo.last_duration_ms/100)/10+'s'): '')
       + (im.last_reason?(' &nbsp;|&nbsp; '+window.T('ov2_asm_img_last')+': '+String(im.last_reason).replace(/</g,'&lt;')): '')
       + (im.last_failure_detail?(' ('+String(im.last_failure_detail).replace(/</g,'&lt;')+')'): '')
-      + (promiseWarn?(' &nbsp;|&nbsp; <span style="color:#f59e0b">'+window.T('ov2_asm_promise_warn')+'</span>'): '')
+      + (promiseWarn?(' &nbsp;|&nbsp; <span style="color:var(--th-ink-amber5,#f59e0b)">'+window.T('ov2_asm_promise_warn')+'</span>'): '')
       + '</div>'
       + (vFbParts.length? '<div class="muted" style="font-size:12px;margin-top:4px;">'
         + window.T('ov2_asm_voice_fb_dist')+': '+vFbParts.join(' · ')+'</div>' : '')
@@ -2521,7 +2745,7 @@ async function loadPromiseTrend(){
   var el = document.getElementById('promiseTrend');
   if(!el) return;
   try{
-    const r = await fetch('/api/admin/media-promise-trend?days=7', {credentials:'same-origin'});
+    const r = await apiFetch('/api/admin/media-promise-trend?days=7', {credentials:'same-origin'});
     const d = await r.json();
     if(!d.enabled){ el.innerHTML=''; return; }  // 未开趋势落库：不占位，仅显瞬时快照
     var days = d.days || [];
@@ -2552,12 +2776,12 @@ async function loadAvatarVoice(){
   var det = document.getElementById('avatarVoiceDetail');
   if(!sec || !kp || !det) return;
   try{
-    const r = await fetch('/api/voice/avatar-status', {credentials:'same-origin'});
+    const r = await apiFetch('/api/voice/avatar-status', {credentials:'same-origin'});
     if(r.status === 403){ sec.style.display='none'; return; }
     const d = await r.json();
     if(!d || d.enabled === false){ sec.style.display='none'; return; }
     sec.style.display='';
-    var dot = function(on){ return '<span style="color:'+(on?'#22c55e':'#ef4444')+'">●</span> '; };
+    var dot = function(on){ return '<span style="color:'+(on?'var(--th-ink-green5,#22c55e)':'var(--th-ink-red5,#ef4444)')+'">●</span> '; };
     var h = d.health || {};
     var hp = function(x){ return !!(x && x.reachable && x.models_loaded); };
     var st = d.stats || {};
@@ -2567,7 +2791,7 @@ async function loadAvatarVoice(){
       {label:window.T('ov2_av_qwen'), value:dot(hp(h.qwen3))+(hp(h.qwen3)?window.T('ov2_localtts_ready'):window.T('ov2_js_gpuwm_unreach'))},
       {label:window.T('ov2_av_stt'), value:dot(hp(h.stt))+(hp(h.stt)?window.T('ov2_localtts_ready'):window.T('ov2_js_gpuwm_unreach'))},
       {label:window.T('ov2_av_synth'), value:fmt(okN)+' / '+fmt(total)+(total?(' · '+Math.round((st.avg_latency_ms||0))+'ms'):'')},
-      {label:window.T('ov2_av_prerender'), value:fmt(st.prerender_hits||0)+(st.prerender_coverage!==null&&st.prerender_coverage!==undefined?(' · '+Math.round(st.prerender_coverage*100)+'%'):'')+' · '+window.T('ov2_av_stock')+' '+fmt((d.prerender_inventory||{}).clips||0)+(((d.prerender_inventory||{}).stale||0)>0?(' <span style="color:#f59e0b">⚠'+window.T('ov2_av_stale')+' '+fmt(d.prerender_inventory.stale)+'</span>'):'')},
+      {label:window.T('ov2_av_prerender'), value:fmt(st.prerender_hits||0)+(st.prerender_coverage!==null&&st.prerender_coverage!==undefined?(' · '+Math.round(st.prerender_coverage*100)+'%'):'')+' · '+window.T('ov2_av_stock')+' '+fmt((d.prerender_inventory||{}).clips||0)+(((d.prerender_inventory||{}).stale||0)>0?(' <span style="color:var(--th-ink-amber5,#f59e0b)">⚠'+window.T('ov2_av_stale')+' '+fmt(d.prerender_inventory.stale)+'</span>'):'')},
       {label:window.T('ov2_av_queue'), value:fmt(st.queue_depth||0)+' · '+window.T('ov2_av_peak')+' '+fmt(st.queue_peak||0)},
     ];
     kp.innerHTML = kpis.map(function(c){
@@ -2645,11 +2869,11 @@ async function toggleLocalTts(on){
   var hint = document.getElementById('localTtsHint');
   if(hint) hint.textContent = window.T('ov2_localtts_saving');
   try{
-    const r = await fetch('/api/voice/local-tts/toggle', {
+    const r = await apiFetch('/api/voice/local-tts/toggle', {
       method:'POST', credentials:'same-origin',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({enabled: !!on}),
-    });
+    }, {timeoutMs: 60000});
     const d = await r.json();
     if(!d.ok){ if(hint) hint.textContent = d.error||window.T('ov_js_save_fail'); return; }
     await loadLocalTts();
@@ -2659,7 +2883,7 @@ async function toggleLocalTts(on){
 }
 
 if(CAN_MANAGE_OPS){ var _rb=document.getElementById('recheckBtn'); if(_rb) _rb.style.display=''; }
-function refreshAll(){ loadOverview(); loadIncidents(); loadReport(); loadTTS(); loadTTSTrend(); loadAiSafety(); loadSlaBacklog(); loadTranslationEngines(); loadXlateTrend(); loadVoiceSynthLang(); loadASRDegradation(); loadSpeechEmotion(); loadVisionUsage(); loadDeepPersona(); loadFrontendErrors(); loadPlatformSessions(); loadSendRoutes(); loadSendRouteTrend(); loadPersonaMedia(); loadPeerIdentity(); loadIdentityTrend(); loadLocalTts(); loadAutosendMedia(); loadPromiseTrend(); loadAvatarVoice(); loadProactiveEngagement(); loadBazi(); loadGpuWatermark(); loadRealtimeVoice(); loadRtvTrend(); refreshRealtimeVoiceAlertBadge(); loadTgCall(); }
+function refreshAll(){ loadOverview(); loadIncidents(); loadReport(); loadTTS(); loadTTSTrend(); loadAiSafety(); loadSlaBacklog(); loadTranslationEngines(); loadXlateTrend(); loadVoiceSynthLang(); loadASRDegradation(); loadSpeechEmotion(); loadVisionUsage(); loadDeepPersona(); loadFrontendErrors(); loadInstanceRestartStatus(); loadPlatformSessions(); loadSendRoutes(); loadSendRouteTrend(); loadPersonaMedia(); loadPeerIdentity(); loadIdentityTrend(); loadLocalTts(); loadAutosendMedia(); loadPromiseTrend(); loadAvatarVoice(); loadProactiveEngagement(); loadBazi(); loadGpuWatermark(); loadProfileAudit(); loadRealtimeVoice(); loadRtvTrend(); refreshRealtimeVoiceAlertBadge(); loadTgCall(); }
 function _onRtvOpsRefresh(){
   loadRealtimeVoice(); loadRtvTrend(); loadRtvAlertCalibrate(false); refreshRealtimeVoiceAlertBadge();
 }

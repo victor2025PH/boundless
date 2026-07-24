@@ -9,6 +9,18 @@ from typing import Dict, Any, Optional
 
 logger = logging.getLogger("ContextStore")
 
+
+def make_context_key(user_id: str, account_id: str = "") -> str:
+    """ContextStore 主键：多协议号同 peer 必须带 account_id，否则双号串话。
+
+    无 account_id / ``default`` → 保持旧裸 ``user_id``（单号/桌面路径零回归）。
+    """
+    uid = str(user_id or "").strip()
+    acct = str(account_id or "").strip()
+    if not acct or acct == "default":
+        return uid
+    return f"{acct}:{uid}"
+
 _PERSIST_KEYS = frozenset({
     "user_id", "last_message", "last_reply", "last_reply_time",
     "recent_replies",
@@ -19,6 +31,11 @@ _PERSIST_KEYS = frozenset({
     "_conversation_history", "_conversation_summary", "_user_profile",
     "_intent_chain", "_case_id",
     "companion_relationship",
+    # 会话语言契约（lang_policy）：用户明确请求的回复语言 + 请求时书写语言。
+    # 必须跨重启持久——「说了用日语」重启后失忆等于事故复发。
+    "user_lang_pref", "user_lang_pref_input",
+    # 会话当前语言（粘滞基准）：弱证据消息（ok/whatsapp/emoji)靠它保持语言稳定
+    "reply_lang",
 })
 
 _NON_PERSIST = frozenset({
@@ -34,6 +51,7 @@ _NON_PERSIST = frozenset({
     "funnel_stage",        # W3-3M: injected by runner, not persistent
     "_bond_level_block",   # Phase ②: per-request 关系成长厚度/里程碑感知块
     "_story_block",        # Phase ③: per-request 剧情场景导演指令（story_state 才持久）
+    "_voice_lang_suspect",  # lang_policy: per-request 可疑语音转写标记
 })
 
 

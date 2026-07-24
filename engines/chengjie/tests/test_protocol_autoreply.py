@@ -126,6 +126,28 @@ async def test_duplicate_inbound_skipped():
 
 
 @pytest.mark.asyncio
+async def test_duplicate_inbound_expires_allows_repeat():
+    """同文超过 AUTO_DEDUP_SEC 后应再回（客户催「你在干嘛」不得永久静默）。"""
+    sent = []
+    cfg = {"protocol_autoreply": {"enabled": True}}
+    reg = _FakeRegistry(_row())
+    first = await pa.run_autoreply(
+        _payload("你在干嘛"), registry=reg, cfg=cfg,
+        generate=_make_gen("在忙呀"), send=_make_send(sent),
+        risk_fn=lambda t: "low", now=1000.0,
+    )
+    later = await pa.run_autoreply(
+        _payload("你在干嘛"), registry=reg, cfg=cfg,
+        generate=_make_gen("还在呢"), send=_make_send(sent),
+        risk_fn=lambda t: "low",
+        now=1000.0 + pa.AUTO_DEDUP_SEC + 1.0,
+    )
+    assert first["sent"] is True
+    assert later.get("sent") is True
+    assert len(sent) == 2
+
+
+@pytest.mark.asyncio
 async def test_cooldown_blocks_rapid_distinct():
     sent = []
     cfg = {"protocol_autoreply": {"enabled": True}}
@@ -160,7 +182,7 @@ async def test_outbound_payload_ignored():
 
 @pytest.mark.asyncio
 async def test_inbox_autopilot_conv_skips_direct_send():
-    """会话 automation_mode=auto_ai（收件箱全自动）→ protocol_autoreply 早退，不直发。"""
+    """会话 auto_ai 且收件箱真发已开 → protocol 早退，交给 autosend。"""
     sent = []
     gen_called = []
 
@@ -170,7 +192,10 @@ async def test_inbox_autopilot_conv_skips_direct_send():
 
     res = await pa.run_autoreply(
         _payload(), registry=_FakeRegistry(_row()),
-        cfg={"protocol_autoreply": {"enabled": True}},
+        cfg={
+            "protocol_autoreply": {"enabled": True},
+            "inbox": {"l2_autosend": {"deliver": True}},
+        },
         generate=_gen, send=_make_send(sent),
         risk_fn=lambda t: "low",
         inbox_mode_fn=lambda p, a, c: "auto_ai",
@@ -178,6 +203,24 @@ async def test_inbox_autopilot_conv_skips_direct_send():
     assert res["skipped"] == "inbox_autopilot"
     assert sent == []
     assert gen_called == []  # 早退在生成之前，连 token 都不烧
+
+
+@pytest.mark.asyncio
+async def test_inbox_autopilot_keeps_protocol_when_deliver_off():
+    """auto_ai 但 l2 deliver 未开 → 不得让位吞消息，继续协议直发。"""
+    sent = []
+    res = await pa.run_autoreply(
+        _payload("你还在吗"), registry=_FakeRegistry(_row()),
+        cfg={
+            "protocol_autoreply": {"enabled": True},
+            "inbox": {"l2_autosend": {"deliver": False}},
+        },
+        generate=_make_gen("在呢~"), send=_make_send(sent),
+        risk_fn=lambda t: "low",
+        inbox_mode_fn=lambda p, a, c: "auto_ai",
+    )
+    assert res.get("sent") is True
+    assert len(sent) == 1
 
 
 @pytest.mark.asyncio
@@ -237,3 +280,105 @@ async def test_inbox_mode_fn_exception_does_not_block():
     )
     assert res["sent"] is True
     assert len(sent) == 1
+
+
+# ── 2026-07 媒体消息补坑：纯图片/语音/视频（无 caption）也应回复 ──────────────
+
+def _media_payload(*, text="", media_type="image", media_ref="/static/protocol_media/whatsapp/a.jpg"):
+    return {
+        "platform": "whatsapp", "account_id": "wa1", "chat_key": "8613800000000",
+        "text": text, "direction": "in",
+        "media_type": media_type, "media_ref": media_ref,
+    }
+
+
+@pytest.mark.asyncio
+async def test_media_only_inbound_generates_and_passes_media():
+    """纯图片消息（text 空、有 media_ref）不再被判 incomplete，且 media 字段透传到生成。"""
+    sent = []
+    cap = {}
+    res = await pa.run_autoreply(
+        _media_payload(text=""), registry=_FakeRegistry(_row()),
+        cfg={"protocol_autoreply": {"enabled": True}},
+        generate=_make_gen("这张图好看！", cap), send=_make_send(sent),
+        risk_fn=lambda t: "low",
+    )
+    assert res["sent"] is True
+    assert len(sent) == 1
+    # media 字段透传到 generate（供 _generate 做识别补全）
+    assert cap.get("media_type") == "image"
+    assert cap.get("media_ref") == "/static/protocol_media/whatsapp/a.jpg"
+
+
+@pytest.mark.asyncio
+async def test_placeholder_text_media_still_generates():
+    """文本是裸占位 [图片] 且有 media_ref → 照常进入生成（识别补全在 _generate 内）。"""
+    sent = []
+    res = await pa.run_autoreply(
+        _media_payload(text="[图片]"), registry=_FakeRegistry(_row()),
+        cfg={"protocol_autoreply": {"enabled": True}},
+        generate=_make_gen("收到你的图啦~"), send=_make_send(sent),
+        risk_fn=lambda t: "low",
+    )
+    assert res["sent"] is True
+    assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_distinct_media_not_deduped():
+    """两张不同的图（media_ref 不同、text 都空）不应被判 duplicate。"""
+    sent = []
+    cfg = {"protocol_autoreply": {"enabled": True}}
+    reg = _FakeRegistry(_row())
+    first = await pa.run_autoreply(
+        _media_payload(media_ref="/static/protocol_media/whatsapp/a.jpg"),
+        registry=reg, cfg=cfg,
+        generate=_make_gen("图1"), send=_make_send(sent),
+        risk_fn=lambda t: "low", now=3000.0,
+    )
+    second = await pa.run_autoreply(
+        _media_payload(media_ref="/static/protocol_media/whatsapp/b.jpg"),
+        registry=reg, cfg=cfg,
+        generate=_make_gen("图2"), send=_make_send(sent),
+        risk_fn=lambda t: "low", now=3100.0,  # 超冷却窗
+    )
+    assert first["sent"] is True
+    assert second["sent"] is True
+    assert len(sent) == 2
+
+
+@pytest.mark.asyncio
+async def test_same_media_deduped():
+    """同一张图连发（media_ref 相同、text 空）→ 第二次判 duplicate。"""
+    sent = []
+    cfg = {"protocol_autoreply": {"enabled": True}}
+    reg = _FakeRegistry(_row())
+    await pa.run_autoreply(
+        _media_payload(media_ref="/static/protocol_media/whatsapp/a.jpg"),
+        registry=reg, cfg=cfg,
+        generate=_make_gen("图1"), send=_make_send(sent),
+        risk_fn=lambda t: "low", now=4000.0,
+    )
+    res = await pa.run_autoreply(
+        _media_payload(media_ref="/static/protocol_media/whatsapp/a.jpg"),
+        registry=reg, cfg=cfg,
+        generate=_make_gen("图1"), send=_make_send(sent),
+        risk_fn=lambda t: "low", now=4001.0,
+    )
+    assert res["skipped"] == "duplicate"
+    assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_no_text_no_media_still_incomplete():
+    """既无文本也无媒体 → 仍判 incomplete（不生成不发）。"""
+    sent = []
+    res = await pa.run_autoreply(
+        _media_payload(text="", media_type="", media_ref=""),
+        registry=_FakeRegistry(_row()),
+        cfg={"protocol_autoreply": {"enabled": True}},
+        generate=_make_gen("x"), send=_make_send(sent),
+        risk_fn=lambda t: "low",
+    )
+    assert res["skipped"] == "incomplete"
+    assert sent == []

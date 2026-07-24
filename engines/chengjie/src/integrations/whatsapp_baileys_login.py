@@ -107,6 +107,12 @@ def make_provider(config: Dict[str, Any]):
                     get_account_registry().upsert(
                         "whatsapp", aid, mode="protocol", status="online",
                         meta={"baileys_login_id": login_id}, merge_meta=True)
+                    try:
+                        from src.ai.persona_voice import ensure_account_default_persona
+                        ensure_account_default_persona(
+                            get_account_registry(), "whatsapp", aid, config)
+                    except Exception:  # noqa: BLE001
+                        pass
                 except Exception:  # noqa: BLE001
                     logger.debug("[wa_baileys] 注册表写入失败", exc_info=True)
                 # P4 身份化：Baileys 微服务若在 status 里回传 pushname/name → 富集自身昵称

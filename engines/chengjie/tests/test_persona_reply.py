@@ -361,7 +361,8 @@ class _FakeSMUnified(_FakeSM):
                                    history=None, persona_id="", reply_lang="",
                                    risk_level="", media_type="", media_ref="",
                                    media_desc="", channel="inbox",
-                                   conversation_id="", peer_audio_emotion=None):
+                                   conversation_id="", peer_audio_emotion=None,
+                                   account_id=""):
         self.inbox_draft_calls.append({
             "text": text, "chat_key": chat_key, "platform": platform,
             "persona_id": persona_id, "reply_lang": reply_lang,

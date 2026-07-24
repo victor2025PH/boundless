@@ -317,6 +317,89 @@ def resolve_effective_voice_context(
     }
 
 
+def default_account_persona_id(
+    full_config: Optional[Dict[str, Any]],
+    platform: str = "",
+) -> str:
+    """上线/无人设账号的默认人设 id（只读配置，不写库）。
+
+    优先级：
+      1. ``platform_login.default_persona_id``（跨平台运营默认）
+      2. ``accounts.default_persona_id``（别名）
+      3. ``config[platform].persona_ids[0]``（平台静态默认）
+    """
+    cfg = full_config or {}
+    try:
+        pl = cfg.get("platform_login") or {}
+        pid = str(pl.get("default_persona_id") or "").strip()
+        if pid:
+            return pid
+    except Exception:
+        pass
+    try:
+        acct = cfg.get("accounts") or {}
+        pid = str(acct.get("default_persona_id") or "").strip()
+        if pid:
+            return pid
+    except Exception:
+        pass
+    try:
+        _dpids = (cfg.get(str(platform or "").lower(), {}) or {}).get(
+            "persona_ids") or []
+        if _dpids:
+            return str((_dpids[0] if _dpids else "") or "").strip()
+    except Exception:
+        pass
+    return ""
+
+
+def ensure_account_default_persona(
+    registry: Any,
+    platform: str,
+    account_id: str,
+    full_config: Optional[Dict[str, Any]],
+) -> str:
+    """账号上线前：meta 无人设则写入默认人设并返回生效 id。
+
+    已有 ``persona_id`` / ``persona_ids`` 则不动（尊重运营显式绑定）。
+    写库失败 / 无默认配置 → 返回空串，绝不抛。
+    """
+    plat = str(platform or "").lower().strip()
+    aid = str(account_id or "").strip()
+    if not plat or not aid or registry is None:
+        return ""
+    try:
+        row = registry.get(plat, aid) or {}
+        meta = row.get("meta") or {}
+        existing = str(meta.get("persona_id") or "").strip()
+        if not existing:
+            for p in (meta.get("persona_ids") or []):
+                existing = str(p or "").strip()
+                if existing:
+                    break
+        if existing:
+            return existing
+        default = default_account_persona_id(full_config, plat)
+        if not default:
+            return ""
+        registry.upsert(
+            plat, aid,
+            meta={"persona_id": default, "persona_ids": [default]},
+            merge_meta=True,
+        )
+        try:
+            import logging
+            logging.getLogger(__name__).info(
+                "[persona] 上线补默认人设 platform=%s account=%s persona=%s",
+                plat, aid, default,
+            )
+        except Exception:
+            pass
+        return default
+    except Exception:
+        return ""
+
+
 def resolve_account_persona_id(
     full_config: Dict[str, Any],
     platform: str,
@@ -333,7 +416,8 @@ def resolve_account_persona_id(
       1. registry ``meta.persona_id``   — explicit singular binding
       2. registry ``meta.persona_ids[0]`` — plural list written by
          ``TelegramAccountRegistry.sync_to_account_registry`` (config sync)
-      3. ``config[platform].persona_ids[0]`` — static config default
+      3. ``platform_login.default_persona_id`` / ``accounts.default_persona_id``
+      4. ``config[platform].persona_ids[0]`` — static config default
 
     Fixes the plural/singular mismatch root cause: sync writes ``persona_ids``
     (list) but callers historically read ``persona_id`` (scalar) → empty
@@ -357,13 +441,7 @@ def resolve_account_persona_id(
                 return pid
     except Exception:
         pass
-    try:
-        _dpids = (cfg.get(platform, {}) or {}).get("persona_ids") or []
-        if _dpids:
-            return str((_dpids[0] if _dpids else "") or "").strip()
-    except Exception:
-        pass
-    return ""
+    return default_account_persona_id(cfg, platform)
 
 
 def get_voice_profile_for_persona(

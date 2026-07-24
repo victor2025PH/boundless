@@ -105,6 +105,12 @@ def make_provider(config: Dict[str, Any]):
                     get_account_registry().upsert(
                         "messenger", aid, mode="web", status="online",
                         meta={"messenger_login_id": login_id}, merge_meta=True)
+                    try:
+                        from src.ai.persona_voice import ensure_account_default_persona
+                        ensure_account_default_persona(
+                            get_account_registry(), "messenger", aid, config)
+                    except Exception:  # noqa: BLE001
+                        pass
                 except Exception:  # noqa: BLE001
                     logger.debug("[messenger_web] 注册表写入失败", exc_info=True)
                 # self_profile 富集：微服务若回传昵称/头像 URL → 富集账号自身身份

@@ -187,6 +187,12 @@ def make_provider(config: Dict[str, Any]):
                         "line", mid, mode="protocol", status="online",
                         meta={"tokens_path": tokens_path(config, mid)},
                         merge_meta=True)
+                    try:
+                        from src.ai.persona_voice import ensure_account_default_persona
+                        ensure_account_default_persona(
+                            get_account_registry(), "line", mid, config)
+                    except Exception:  # noqa: BLE001
+                        pass
                 except Exception:  # noqa: BLE001
                     logger.debug("[line_protocol] 注册表写入失败", exc_info=True)
                 try:

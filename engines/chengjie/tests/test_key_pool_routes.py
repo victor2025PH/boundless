@@ -267,7 +267,15 @@ class TestAiRuntimeStatus:
     def test_without_ai_client_reports_normal(self, tmp_path):
         client, m = _client_mgr(tmp_path)
         r = client.get("/api/workspace/ai-runtime-status").json()
-        assert r == {"ok": True, "degraded": False, "mode": "primary"}
+        # 2026-07-22 起响应多带 channels（平台通道离线快照，驱动坐席端 ws-chandown
+        # 红横幅）——AI 降级契约字段不变，channels 无不健康会话时恒为空快照。
+        assert r["ok"] is True and r["degraded"] is False and r["mode"] == "primary"
+        assert isinstance(r.get("channels"), dict)
+        assert r["channels"].get("count") == 0
+        assert r["channels"].get("unhealthy") == []
+        # Phase3: seat restart-cooldown banner payload (may be inactive)
+        assert isinstance(r.get("instance_restart"), dict)
+        assert "cooldown_active" in r["instance_restart"]
 
     def test_with_ai_client_snapshot(self, tmp_path):
         import types
@@ -324,6 +332,10 @@ def test_workspace_base_wires_degrade_bar():
     assert 'id="ws-aidegrade"' in src
     assert "/api/workspace/ai-runtime-status" in src
     assert "ws.aidegrade.mode_pool" in src and "ws.aidegrade.mode_local" in src
+    assert 'id="ws-restartcool"' in src
+    assert "ws.restartcool.text" in src
+    assert "instance_restart" in src
+    assert "window.__wsRestartCool" in src
 
 
 # ── AIClient.pool_status ─────────────────────────────────────────

@@ -241,7 +241,7 @@
       <button class="btn-sec" type="button" id="ov-it-reload" style="font-size:.75rem;padding:.3rem .65rem" title="{{ (i18n or {}).get('ov_it_reload_title','不写文件，仅重读硬盘上现有 yaml') }}">⚡ {{ (i18n or {}).get('ov_it_reload_only','仅 reload') }}</button>
       <button class="btn-sec" type="button" id="ov-it-restore" style="font-size:.75rem;padding:.3rem .65rem" title="{{ (i18n or {}).get('ov_it_restore_title','查看备份并选择恢复') }}">⏪ {{ (i18n or {}).get('ov_it_restore','恢复备份') }}</button>
       <button class="btn-sec" type="button" id="ov-it-diff" style="font-size:.75rem;padding:.3rem .65rem" title="{{ (i18n or {}).get('ov_it_diff_title','保存前预览将增加/删除的关键词') }}">👁 {{ (i18n or {}).get('ov_it_diff','预览改动') }}</button>
-      <button class="btn" type="button" id="ov-it-save" style="font-size:.75rem;padding:.3rem .85rem;background:var(--p);color:#fff;border:0;border-radius:6px;cursor:pointer">💾 {{ (i18n or {}).get('ov_it_save','保存并 reload') }}</button>
+      <button class="btn" type="button" id="ov-it-save" style="font-size:.75rem;padding:.3rem .85rem;background:var(--p);color:var(--th-ink-inverse,#fff);border:0;border-radius:6px;cursor:pointer">💾 {{ (i18n or {}).get('ov_it_save','保存并 reload') }}</button>
     </div>
     <textarea id="ov-it-yaml" rows="14" spellcheck="false"
       style="width:100%;font-family:'SF Mono',Consolas,monospace;font-size:.78rem;padding:.6rem .8rem;background:var(--input);border:1px solid var(--bd2);border-radius:6px;color:var(--t);resize:vertical;line-height:1.45"></textarea>
@@ -265,8 +265,11 @@
   <div class="rpa-kpi"><div class="rpa-kpi-n amber" id="ov-fleet-warming">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_fleet_warming','预热中') }}</div></div>
   <div class="rpa-kpi"><div class="rpa-kpi-n red" id="ov-fleet-risk">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_fleet_risk','受限/封禁') }}</div></div>
   <div class="rpa-kpi" id="ov-fleet-selfprof-cell" style="display:none;cursor:help"><div class="rpa-kpi-n" id="ov-fleet-selfprof">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_fleet_selfprof','身份采集') }}</div></div>
+  <div class="rpa-kpi" id="ov-fleet-ppush-cell" style="display:none;cursor:help" title="{{ (i18n or {}).get('ov_fleet_ppush_title','本进程官方资料推送漏斗（与 ops 卡同源）') }}"><div class="rpa-kpi-n" id="ov-fleet-ppush">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_fleet_ppush','资料推送') }}</div></div>
+  <div class="rpa-kpi" id="ov-fleet-churn-cell" style="display:none;cursor:help" title="{{ (i18n or {}).get('ov_fleet_churn_title','近 7 天成功改资料 ≥3 次的账号数（机群热点）') }}"><div class="rpa-kpi-n amber" id="ov-fleet-churn">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_fleet_churn','改资料热点') }}</div></div>
   <div class="rpa-kpi" id="ov-preflight-cell" title="{{ (i18n or {}).get('ov_preflight_title','真号扫码陪聊上线前自检：开关一致性 + 反封号护栏就绪（点查看明细）') }}" style="cursor:pointer"><div class="rpa-kpi-n" id="ov-preflight-light">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_preflight_label','扫码陪聊就绪') }}</div></div>
 </div>
+<div id="ov-fleet-churn-detail" style="display:none;margin-top:.4rem;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.5rem .85rem;font-size:.76rem;line-height:1.55"></div>
 <div id="ov-preflight-detail" style="display:none;margin-top:.4rem;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.5rem .85rem;font-size:.76rem;line-height:1.6"></div>
 
 <!-- 主动话题预览（dry-run 可观测：本轮会主动联系谁、引用哪条记忆、是否被关怀去重让路；只读不发送） -->
@@ -325,7 +328,7 @@
           <option value="7200">{{ (i18n or {}).get('ov_og_ks_ttl_2h','TTL：2 小时') }}</option>
           <option value="86400">{{ (i18n or {}).get('ov_og_ks_ttl_24h','TTL：24 小时') }}</option>
         </select>
-        <button id="ov-og-ks-set" style="font-size:.72rem;padding:.22rem .6rem;border:1px solid #dc2626;border-radius:6px;background:transparent;color:#dc2626;cursor:pointer">🛑 {{ (i18n or {}).get('ov_og_ks_set','置位停发') }}</button>
+        <button id="ov-og-ks-set" style="font-size:.72rem;padding:.22rem .6rem;border:1px solid var(--th-bd-red6,#dc2626);border-radius:6px;background:transparent;color:var(--th-ink-red6,#dc2626);cursor:pointer">🛑 {{ (i18n or {}).get('ov_og_ks_set','置位停发') }}</button>
       </div>
     </div>
     <div>
@@ -521,7 +524,7 @@
 <div id="ov-tab-devices" class="st-pane">
   <div class="rpa-card">
     <div class="rpa-card-head">
-      <div class="rpa-card-icon" style="background:linear-gradient(135deg,#6366f1,#4f46e5)">📱</div>
+      <div class="rpa-card-icon" style="background:linear-gradient(135deg,var(--th-bg-indigo5,#6366f1),#4f46e5)">📱</div>
       <div class="rpa-card-title">{{ (i18n or {}).get('ov_devices','设备管理') }}</div>
       <span class="rpa-card-desc" id="dev-host-label">{{ (i18n or {}).get('ov_host_label','主机:') }} —</span>
       <button class="btn-sec" type="button" onclick="devRefresh()" style="font-size:.75rem;padding:.3rem .65rem;margin-left:auto">↻ {{ (i18n or {}).get('refresh','刷新') }}</button>
@@ -537,7 +540,7 @@
 <div id="ov-tab-device-stats" class="st-pane">
   <div class="rpa-card">
     <div class="rpa-card-head">
-      <div class="rpa-card-icon" style="background:linear-gradient(135deg,#8b5cf6,#6d28d9)">📊</div>
+      <div class="rpa-card-icon" style="background:linear-gradient(135deg,var(--th-bg-violet5,#8b5cf6),var(--th-bg-violet7,#6d28d9))">📊</div>
       <div class="rpa-card-title">{{ (i18n or {}).get('ov_devstats_24h','设备统计 (24h)') }}</div>
       <span class="rpa-card-desc" id="ds-summary-label">{{ (i18n or {}).get('rpa_loading','加载中…') }}</span>
       <select id="ds-hours" onchange="devStatsRefresh()" style="margin-left:auto;padding:.25rem .4rem;font-size:.72rem;border:1px solid var(--bd2);border-radius:4px;background:var(--input);color:var(--t)">
@@ -591,7 +594,7 @@
 <div id="ov-tab-lang" class="st-pane">
   <div class="rpa-card">
     <div class="rpa-card-head">
-      <div class="rpa-card-icon" style="background:linear-gradient(135deg,#0ea5e9,#0284c7)">🌍</div>
+      <div class="rpa-card-icon" style="background:linear-gradient(135deg,var(--th-bg-sky5,#0ea5e9),#0284c7)">🌍</div>
       <div class="rpa-card-title">{{ (i18n or {}).get('ov_lang_card_title','多平台语言分布') }}</div>
       <span class="rpa-card-desc" id="ov-lang-summary">{{ (i18n or {}).get('ov_lang_card_desc','WhatsApp（检测/锁定） + Messenger + LINE（7 天回复语言）') }}</span>
       <button class="btn-sec" type="button" onclick="ovLangLoad()" style="font-size:.75rem;padding:.3rem .65rem;margin-left:auto">↻ {{ (i18n or {}).get('refresh','刷新') }}</button>
@@ -604,7 +607,7 @@
        数据来自 lang-dist 响应的 lang_quality 块，缺失时保持 0，绝不报错 -->
   <div class="rpa-card">
     <div class="rpa-card-head">
-      <div class="rpa-card-icon" style="background:linear-gradient(135deg,#6366f1,#4f46e5)"></div>
+      <div class="rpa-card-icon" style="background:linear-gradient(135deg,var(--th-bg-indigo5,#6366f1),#4f46e5)"></div>
       <div class="rpa-card-title">{{ (i18n or {}).get('ov_lq_title','会话语言质量') }}</div>
       <span class="rpa-card-desc">{{ (i18n or {}).get('ov_lq_desc','语言契约事件与守卫触发（进程内累计）') }}</span>
     </div>
@@ -619,9 +622,9 @@
     </div>
     <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--bd);display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
       <span style="font-size:.74rem;color:var(--t3)">{{ (i18n or {}).get('ov_lq_pref','明确偏好会话') }}</span>
-      <span style="font-size:.75rem;background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.3);border-radius:5px;padding:.1rem .38rem;color:#a5b4fc">WhatsApp <b id="ov-lq-pref-whatsapp">0</b></span>
-      <span style="font-size:.75rem;background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.3);border-radius:5px;padding:.1rem .38rem;color:#a5b4fc">LINE <b id="ov-lq-pref-line">0</b></span>
-      <span style="font-size:.75rem;background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.3);border-radius:5px;padding:.1rem .38rem;color:#a5b4fc">Messenger <b id="ov-lq-pref-messenger">0</b></span>
+      <span style="font-size:.75rem;background:var(--th-bg-ind12,rgba(99,102,241,.12));border:1px solid var(--th-bd-ind30,rgba(99,102,241,.3));border-radius:5px;padding:.1rem .38rem;color:var(--th-ink-indigo3,#a5b4fc)">WhatsApp <b id="ov-lq-pref-whatsapp">0</b></span>
+      <span style="font-size:.75rem;background:var(--th-bg-ind12,rgba(99,102,241,.12));border:1px solid var(--th-bd-ind30,rgba(99,102,241,.3));border-radius:5px;padding:.1rem .38rem;color:var(--th-ink-indigo3,#a5b4fc)">LINE <b id="ov-lq-pref-line">0</b></span>
+      <span style="font-size:.75rem;background:var(--th-bg-ind12,rgba(99,102,241,.12));border:1px solid var(--th-bd-ind30,rgba(99,102,241,.3));border-radius:5px;padding:.1rem .38rem;color:var(--th-ink-indigo3,#a5b4fc)">Messenger <b id="ov-lq-pref-messenger">0</b></span>
     </div>
   </div>
 </div>
@@ -646,11 +649,11 @@ async function ovControl(platform, action, seconds){
   try{
     const body = {platform, action};
     if(action === 'pause') body.seconds = seconds || 300;
-    const r = await fetch('/api/rpa-overview/control', {
+    const r = await apiFetch('/api/rpa-overview/control', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify(body)
-    });
+    }, {timeoutMs: 60000});
     const d = await r.json();
     if(!r.ok){
       rpa.toast((d && d.detail) || window.Tf('ov_js_act_fail_http',{a:LABELS[action],s:r.status}), 'err');
@@ -743,7 +746,7 @@ function ovApplyCard(p){
       const flag = _OV_LANG_FLAGS[fl]||'🌐';
       const lockTs = p.last_lang_lock_ts ? ` <span style="font-size:.65rem;color:var(--t3);margin-left:.25rem" title="${window.T('ov_js_last_lock_time')}">${rpa.ago(p.last_lang_lock_ts)}</span>` : '';
       langSlot.style.display = '';
-      langSlot.innerHTML = `<span style="font-size:.7rem;background:rgba(99,102,241,.15);border:1px solid rgba(99,102,241,.4);border-radius:5px;padding:.1rem .38rem;color:#818cf8" title="${window.T('ov_js_global_lang_lock')}">🔒 ${flag} ${rpa.esc(fl)}</span>${lockTs}`;
+      langSlot.innerHTML = `<span style="font-size:.7rem;background:var(--th-bg-ind15,rgba(99,102,241,.15));border:1px solid rgba(99,102,241,.4);border-radius:5px;padding:.1rem .38rem;color:#818cf8" title="${window.T('ov_js_global_lang_lock')}">🔒 ${flag} ${rpa.esc(fl)}</span>${lockTs}`;
     } else {
       langSlot.style.display = 'none';
       langSlot.innerHTML = '';
@@ -857,7 +860,7 @@ async function ovLangLoad(force){
         plHtml += `<div style="display:flex;align-items:center;gap:.5rem;margin:.15rem 0;font-size:.8rem">
           <span style="width:80px;flex-shrink:0">${flag} ${rpa.esc(lang)}</span>
           <div style="flex:1;background:var(--bd2);border-radius:4px;height:12px;overflow:hidden">
-            <div style="width:${Math.round(cnt/max*100)}%;background:#0ea5e9;height:100%;border-radius:4px;transition:width .4s ease"></div>
+            <div style="width:${Math.round(cnt/max*100)}%;background:var(--th-bg-sky5,#0ea5e9);height:100%;border-radius:4px;transition:width .4s ease"></div>
           </div>
           <span style="width:36px;text-align:right;color:var(--t2)">${cnt}</span>
           <span style="width:36px;color:var(--t3);font-size:.72rem">${pct}%</span>
@@ -873,7 +876,7 @@ async function ovLangLoad(force){
       mergedHtml += `<div style="display:flex;align-items:center;gap:.5rem;margin:.15rem 0;font-size:.82rem">
         <span style="width:80px;flex-shrink:0">${flag} ${rpa.esc(lang)}</span>
         <div style="flex:1;background:var(--bd2);border-radius:4px;height:14px;overflow:hidden">
-          <div style="width:${Math.round(cnt/max*100)}%;background:linear-gradient(90deg,#0ea5e9,#6366f1);height:100%;border-radius:4px;transition:width .4s ease"></div>
+          <div style="width:${Math.round(cnt/max*100)}%;background:linear-gradient(90deg,var(--th-bg-sky5,#0ea5e9),var(--th-bg-indigo5,#6366f1));height:100%;border-radius:4px;transition:width .4s ease"></div>
         </div>
         <span style="width:36px;text-align:right;color:var(--t);font-weight:600">${cnt}</span>
         <span style="width:40px;color:var(--t3);font-size:.74rem">${pct}%</span>
@@ -923,7 +926,7 @@ async function ovLangLoad(force){
     if(totalLocked > 0){
       const _plIcons = {line:'📱 LINE',whatsapp:'📱 WA',messenger:'💬 MSG'};
       const parts = Object.entries(locked).filter(([,v])=>v>0)
-        .map(([pl,v])=>`<span style="font-size:.75rem;background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.3);border-radius:5px;padding:.1rem .38rem;color:#a5b4fc">🔒 ${_plIcons[pl]||pl} ${v}</span>`).join(' ');
+        .map(([pl,v])=>`<span style="font-size:.75rem;background:var(--th-bg-ind12,rgba(99,102,241,.12));border:1px solid var(--th-bd-ind30,rgba(99,102,241,.3));border-radius:5px;padding:.1rem .38rem;color:var(--th-ink-indigo3,#a5b4fc)">🔒 ${_plIcons[pl]||pl} ${v}</span>`).join(' ');
       lockedHtml = `<div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--bd);display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
         <span style="font-size:.74rem;color:var(--t3)">${window.T('ov_js_chat_locked')}</span>${parts}
         <span style="font-size:.72rem;color:var(--t3);margin-left:auto">${window.Tf('ov_js_locked_count',{n:totalLocked})}</span>
@@ -1069,6 +1072,59 @@ async function ovRefreshFleet(){
         spCell.style.display = 'none';
       }
     }
+    // 资料推送漏斗 KPI（零流量隐藏，与 ops「🪪」卡同源）
+    const pp = d.profile_push || null;
+    const ppCell = document.getElementById('ov-fleet-ppush-cell');
+    if(ppCell){
+      if(pp && pp.active){
+        const n = document.getElementById('ov-fleet-ppush');
+        const ok = Number(pp.success||0), fail = Number(pp.failed||0);
+        if(n){
+          n.textContent = String(ok);
+          n.className = 'rpa-kpi-n ' + (fail>0 ? 'amber' : 'green');
+        }
+        ppCell.title = window.Tf('ov_js_ppush_detail',{
+          a:Number(pp.attempts||0), ok:ok, f:fail,
+          cd:Number(pp.cooldown_blocked||0), al:Number(pp.align_runs||0)});
+        ppCell.style.display = '';
+      } else {
+        ppCell.style.display = 'none';
+      }
+    }
+    // 改资料热点：≥3 次/7d 的账号；有热点才露 KPI + 明细表（点 KPI 可折叠）
+    const hot = Array.isArray(d.profile_churn_hot) ? d.profile_churn_hot : [];
+    const churnCell = document.getElementById('ov-fleet-churn-cell');
+    const churnDet = document.getElementById('ov-fleet-churn-detail');
+    if(churnCell){
+      if(hot.length){
+        const n = document.getElementById('ov-fleet-churn');
+        if(n) n.textContent = String(hot.length);
+        churnCell.style.display = '';
+        churnCell.onclick = function(){
+          if(!churnDet) return;
+          churnDet.style.display = churnDet.style.display==='none' ? '' : 'none';
+        };
+        if(churnDet){
+          const rows = hot.map(function(h){
+            const plat = String((h&&h.platform)||'');
+            const aid = String((h&&h.account_id)||'');
+            const c = Number((h&&h.profile_churn_7d)||0);
+            return '<div>⚠ <strong>'+_ovPpEsc(plat)+'</strong> '+_ovPpEsc(aid)
+              +' — '+window.Tf('ov_js_churn_row',{n:c})+'</div>';
+          }).join('');
+          churnDet.innerHTML = '<div style="font-weight:600;margin-bottom:.25rem">'
+            +_ovPpEsc(window.T('ov_js_churn_head'))+'</div>'+rows;
+          // 有热点时默认展开一次，避免「有 KPI 却看不见谁」
+          if(churnDet.dataset.auto !== '1'){
+            churnDet.style.display = '';
+            churnDet.dataset.auto = '1';
+          }
+        }
+      } else {
+        churnCell.style.display = 'none';
+        if(churnDet){ churnDet.style.display='none'; churnDet.innerHTML=''; }
+      }
+    }
   }catch(e){ /* 看板非关键路径，静默 */ }
 }
 
@@ -1153,10 +1209,10 @@ async function ovProactiveSample(cid, btn){
   var out = document.getElementById('ov-pp-sample-out');
   if(btn){ btn.disabled = true; btn.textContent = window.T('ov_js_generating'); }
   try{
-    var res = await fetch('/api/companion/proactive/sample', {
+    var res = await apiFetch('/api/companion/proactive/sample', {
       method:'POST', headers:{'Content-Type':'application/json'},
       credentials:'same-origin', body: JSON.stringify({conversation_id: cid})
-    });
+    }, {timeoutMs: 60000});
     var d = await res.json();
     if(out){
       if(d && d.generated){
@@ -1202,11 +1258,11 @@ function _ovPpBindRate(sid, originalText){
 async function ovProactiveRate(sid, rating, editedText){
   var msg = document.getElementById('ov-pp-rate-msg');
   try{
-    var res = await fetch('/api/companion/proactive/sample/'+sid+'/rate', {
+    var res = await apiFetch('/api/companion/proactive/sample/'+sid+'/rate', {
       method:'POST', headers:{'Content-Type':'application/json'},
       credentials:'same-origin',
       body: JSON.stringify({rating: rating, edited_text: editedText||''})
-    });
+    }, {timeoutMs: 60000});
     var d = await res.json();
     if(msg){ msg.textContent = (d && d.ok) ? (window.T('ov_js_recorded')+(rating==='up'?'👍':'👎')) : (window.T('ov_js_record_fail')+((d&&d.message)||'')); }
   }catch(e){ if(msg){ msg.textContent = window.T('ov_js_rate_req_fail'); } }
@@ -1269,15 +1325,15 @@ async function ovRefreshDesktopHealth(){
   const sum  = document.getElementById('ov-dh-summary');
   if(!body) return;
   try{
-    const d = await fetch('/api/desktop/inject-health').then(r=>r.json());
+    const d = await apiFetch('/api/desktop/inject-health').then(r=>r.json());
     const accs = (d&&d.accounts)||[];
     const s = (d&&d.summary)||{};
     const mismatch = s.mismatch||0;
     const persist = s.persistent_mismatch||0;  // #4：失配持续超阈值的账号数
     if(sum){
       sum.innerHTML = window.T('ov_js_dh_total_pre')+(s.total||0)+window.T('ov_js_dh_acc_ok')+(s.ok||0)
-        + (mismatch ? ' · <strong style="color:#f85149">'+window.T('ov_js_dh_mismatch')+mismatch+'</strong>' : '')
-        + (persist ? ' · <strong style="color:#f85149" title="'+window.T('ov_js_dh_persist_title')+'">'+window.T('ov_js_dh_persist')+persist+'</strong>' : '');
+        + (mismatch ? ' · <strong style="color:var(--th-ink-ghred,#f85149)">'+window.T('ov_js_dh_mismatch')+mismatch+'</strong>' : '')
+        + (persist ? ' · <strong style="color:var(--th-ink-ghred,#f85149)" title="'+window.T('ov_js_dh_persist_title')+'">'+window.T('ov_js_dh_persist')+persist+'</strong>' : '');
     }
     // #4 告警升级：从「即时失配 0→>0 边沿」升级为「失配持续 N 分钟」——只对**新增持续失配**弹一次，
     // 抖动型一闪而过的失配会自愈、不再打扰运营。
@@ -1298,7 +1354,7 @@ async function ovRefreshDesktopHealth(){
         ? ' <span style="color:var(--muted);font-size:.68rem">'+window.T('ov_js_dh_missing')+bad.join('/')+'</span>' : '';
       // #4：失配持续时长（≥1 分钟标红，提示是「持续」而非「抖动」）
       const ms = a.mismatch_secs||0;
-      const durNote = (ms>0) ? ' <span style="font-size:.68rem;color:'+(ms>=60?'#f85149':'var(--muted)')+'" title="'+window.T('ov_js_dh_dur_title')+'">'+window.T('ov_js_dh_persist')+_dhDur(ms)+'</span>' : '';
+      const durNote = (ms>0) ? ' <span style="font-size:.68rem;color:'+(ms>=60?'var(--th-ink-ghred,#f85149)':'var(--muted)')+'" title="'+window.T('ov_js_dh_dur_title')+'">'+window.T('ov_js_dh_persist')+_dhDur(ms)+'</span>' : '';
       const gen = a.generic ? ' <span style="color:var(--muted);font-size:.68rem">'+window.T('ov_js_dh_generic')+'</span>' : '';
       const ing = a.can_ingest ? '' : ' <span style="color:var(--muted);font-size:.68rem" title="'+window.T('ov_js_dh_ingest_title')+'">'+window.T('ov_js_dh_ingest_off')+'</span>';
       return '<div style="display:flex;justify-content:space-between;gap:.5rem;padding:.2rem 0;border-bottom:1px solid var(--bd)">'
@@ -1321,14 +1377,14 @@ async function ovRefreshDesktopOutbound(){
   const sum  = document.getElementById('ov-dob-summary');
   if(!body) return;
   try{
-    const d = await fetch('/api/desktop/outbound/stats').then(r=>r.json());
+    const d = await apiFetch('/api/desktop/outbound/stats').then(r=>r.json());
     const s = (d&&d.summary)||{};
     const recent = (d&&d.recent)||[];
     const inflight = (s.pending||0)+(s.claimed||0);
     const failed = s.failed||0;
     if(sum){
       sum.innerHTML = window.T('ov_js_dob_inflight')+inflight+window.T('ov_js_dob_sent_pre')+(s.sent||0)
-        + (failed ? ' · <strong style="color:#f85149">'+window.T('ov_js_failed_n')+failed+'</strong>' : '');
+        + (failed ? ' · <strong style="color:var(--th-ink-ghred,#f85149)">'+window.T('ov_js_failed_n')+failed+'</strong>' : '');
     }
     // 失败告警：新出现失败时弹一次（去重，避免刷屏）
     if(failed>_dobLastFailed && window.rpa && rpa.toast){
@@ -1361,7 +1417,7 @@ function _ovCapEsc(s){ return (window.rpa&&rpa.esc)?rpa.esc(s):String(s==null?''
 function _ovCapBadge(stage){
   var m={active:['#16a34a',window.T('ov_js_stage_active')],dry_run:['#d97706',window.T('ov_js_dry')],blocked:['#dc2626',window.T('ov_js_stage_blocked')],off:['#9ca3af',window.T('ov_js_stage_off')]};
   var x=m[stage]||m.off;
-  return '<span style="display:inline-block;padding:.03rem .4rem;border-radius:5px;background:'+x[0]+';color:#fff;font-size:.66rem">'+x[1]+'</span>';
+  return '<span style="display:inline-block;padding:.03rem .4rem;border-radius:5px;background:'+x[0]+';color:var(--th-ink-inverse,#fff);font-size:.66rem">'+x[1]+'</span>';
 }
 async function ovCapDeliveryCalibration(){
   var el=document.getElementById('ov-cap-deliver'); if(!el){ return; }
@@ -1437,7 +1493,7 @@ async function ovCapSignals(){
   var VC={healthy:['#16a34a',window.T('ov_js_vc_healthy')],caution:['#d97706',window.T('ov_js_vc_caution')],failing:['#dc2626',window.T('ov_js_vc_failing')],
           insufficient:['#9ca3af',window.T('ov_js_vc_insufficient')],idle:['#9ca3af',window.T('ov_js_vc_idle')],unknown:['#9ca3af',window.T('ov_js_unknown')],
           unavailable:['#9ca3af',window.T('ov_js_unavailable')]};
-  function badge(v){var x=VC[v]||VC.unknown;return '<span style="display:inline-block;padding:.03rem .4rem;border-radius:5px;background:'+x[0]+';color:#fff;font-size:.66rem">'+x[1]+'</span>';}
+  function badge(v){var x=VC[v]||VC.unknown;return '<span style="display:inline-block;padding:.03rem .4rem;border-radius:5px;background:'+x[0]+';color:var(--th-ink-inverse,#fff);font-size:.66rem">'+x[1]+'</span>';}
   try{
     var d=await rpa.get('/api/companion/capabilities/signals?window_hours=168');
     if(!d || !d.ok || !(d.signals||[]).length){ el.textContent=window.T('ov_js_no_signals'); return; }
@@ -1468,13 +1524,13 @@ async function ovCapAdvice(forceOpen){
   el.style.display=''; el.textContent=window.T('rpa_loading');
   var AC={advance:['#16a34a',window.T('ov_js_go_live')],downgrade:['#dc2626',window.T('ov_js_ac_downgrade')],enable:['#2563eb',window.T('ov_js_enable')],
           fix:['#dc2626',window.T('ov_js_ac_fix')],watch:['#d97706',window.T('ov_js_ac_watch')],hold:['#9ca3af',window.T('ov_js_ac_hold')]};
-  function ab(a){var x=AC[a]||['#9ca3af',a];return '<span style="display:inline-block;padding:.03rem .4rem;border-radius:5px;background:'+x[0]+';color:#fff;font-size:.66rem">'+x[1]+'</span>';}
+  function ab(a){var x=AC[a]||['#9ca3af',a];return '<span style="display:inline-block;padding:.03rem .4rem;border-radius:5px;background:'+x[0]+';color:var(--th-ink-inverse,#fff);font-size:.66rem">'+x[1]+'</span>';}
   try{
     var d=await rpa.get('/api/companion/capabilities/advice?window_hours=168');
     if(!d || !d.ok){ el.textContent=(d&&d.message)||window.T('ov_js_unavailable'); return; }
     var html='', iss=d.consistency||[];
     html+='<div style="font-weight:600;margin-bottom:.2rem">'+window.T('ov_js_consistency')+'</div>';
-    if(!iss.length){ html+='<div style="color:#16a34a">'+window.T('ov_js_config_ok')+'</div>'; }
+    if(!iss.length){ html+='<div style="color:var(--th-ink-green6,#16a34a)">'+window.T('ov_js_config_ok')+'</div>'; }
     else{ html+=iss.map(function(i){var c=i.severity==='error'?'#dc2626':'#d97706';return '<div style="color:'+c+'">'+(i.severity==='error'?'■ ':'▲ ')+_ovCapEsc(i.message)+'</div>';}).join(''); }
     var recs=d.recommendations||[];
     html+='<div style="font-weight:600;margin:.35rem 0 .2rem">'+window.Tf('ov_js_rec_actions',{n:recs.length})+'</div>';
@@ -1514,9 +1570,9 @@ async function ovCapToggle(btn){
 }
 // P0-5 D8：反封号护栏面板（G1 Kill-Switch + G3 Canary，调既有 /api/ops/* 管理路由）。
 function _ovOgDel(path, body){
-  return fetch(path, {method:'DELETE', credentials:'include',
+  return apiFetch(path, {method:'DELETE', credentials:'include',
     headers:{'Content-Type':'application/json','X-CSRF-Token':rpa.csrf()},
-    body: JSON.stringify(body||{})});
+    body: JSON.stringify(body||{})}, {timeoutMs: 60000});
 }
 async function ovOgRefresh(){
   var st=document.getElementById('ov-og-status');
@@ -1526,7 +1582,7 @@ async function ovOgRefresh(){
     var ks=await rpa.get('/api/ops/kill-switch');
     if(!ks || !ks.ok){ ksEl.textContent=window.T('ov_js_og_load_fail'); }
     else if(!(ks.items||[]).length){
-      ksEl.innerHTML='<span style="color:#16a34a">✅ '+window.T('ov_js_og_ks_none')+'</span>';
+      ksEl.innerHTML='<span style="color:var(--th-ink-green6,#16a34a)">✅ '+window.T('ov_js_og_ks_none')+'</span>';
     }else{
       ksEl.innerHTML=ks.items.map(function(it){
         var exp=(it.expires_at&&Number(it.expires_at)>0)?(' · TTL→'+_ovCapEsc(window.wsFmtDateTime(it.expires_at))):'';
@@ -1548,13 +1604,13 @@ async function ovOgRefresh(){
     if(!cn || !cn.ok){ cnEl.textContent=window.T('ov_js_og_load_fail'); return; }
     var mode=String(cn.mode||'manual');
     var head=(cn.enabled
-        ? '<span style="color:#d97706">● '+window.T('ov_js_og_cn_on')+'</span>'
-        : '<span style="color:#9ca3af">○ '+window.T('ov_js_og_cn_off')+'</span>')
+        ? '<span style="color:var(--th-ink-amber6,#d97706)">● '+window.T('ov_js_og_cn_on')+'</span>'
+        : '<span style="color:var(--th-ink-gray4,#9ca3af)">○ '+window.T('ov_js_og_cn_off')+'</span>')
       +' · '+window.T('ov_js_og_cn_mode')+_ovCapEsc(mode)
       +' · '+window.Tf('ov_js_og_cn_n',{n:(cn.count||0)});
     var removable = mode==='auto_health';   // manual 模式 cohort 来自 config pinned，× 不生效则不画
     var chips=(cn.cohort||[]).map(function(m){
-      var rm=removable?(' <a href="#" class="ov-og-cn-rm" data-m="'+_ovCapEsc(m)+'" style="color:#dc2626;text-decoration:none">×</a>'):'';
+      var rm=removable?(' <a href="#" class="ov-og-cn-rm" data-m="'+_ovCapEsc(m)+'" style="color:var(--th-ink-red6,#dc2626);text-decoration:none">×</a>'):'';
       return '<span style="display:inline-block;border:1px solid var(--bd);border-radius:999px;padding:.02rem .45rem;margin:.12rem .15rem 0 0"><code>'+_ovCapEsc(m)+'</code>'+rm+'</span>';
     }).join('');
     var hints=[];
@@ -1748,7 +1804,7 @@ document.addEventListener('DOMContentLoaded', function(){
               + '&intent='+encodeURIComponent(gqIntent.value||'')
               + '&platforms='+encodeURIComponent(gqPlat.value||'')
               + '&days=30&limit=20';
-    fetch(url).then(r=>r.json()).then(d=>{
+    apiFetch(url).then(r=>r.json()).then(d=>{
       const rs = (d && d.results) || [];
       const bp = (d && d.by_platform) || {};
       const bpLine = Object.entries(bp).map(([k,v])=>`<span class="platform-tag ${k}" style="margin-right:.4rem">${PLATFORM_LABELS[k]||k} ${v}</span>`).join('');
@@ -1775,7 +1831,7 @@ document.addEventListener('DOMContentLoaded', function(){
           </div>`;
         }).join('');
     }).catch(()=>{
-      gqResults.innerHTML = '<div style="padding:.6rem 1rem;color:#dc2626;font-size:.8rem">'+window.T('ov_js_search_fail')+'</div>';
+      gqResults.innerHTML = '<div style="padding:.6rem 1rem;color:var(--th-ink-red6,#dc2626);font-size:.8rem">'+window.T('ov_js_search_fail')+'</div>';
     });
   }
   window.__ovOpen = function(apiBase, chatKey){
@@ -1821,7 +1877,7 @@ document.addEventListener('DOMContentLoaded', function(){
     return window.Tf('ov_js_save_fail_http',{status:status,detail:(detail || window.T('ov_js_unknown'))});
   }
   function itRefreshMeta(){
-    fetch('/api/rpa/intent-tags').then(r=>r.json()).then(d=>{
+    apiFetch('/api/rpa/intent-tags').then(r=>r.json()).then(d=>{
       if(!d || !d.ok) return;
       const txt = window.Tf('ov_js_meta_fmt',{c:d.category_count,k:d.keyword_count,f:(d.yaml_exists?window.T('ov_js_file_exists'):window.T('ov_js_builtin_default'))});
       if(itMeta) itMeta.textContent = txt;
@@ -1830,7 +1886,7 @@ document.addEventListener('DOMContentLoaded', function(){
   }
   function itLoadFile(){
     itStatus(window.T('rpa_loading'));
-    fetch('/api/rpa/intent-tags/raw').then(r=>r.text()).then(t=>{
+    apiFetch('/api/rpa/intent-tags/raw').then(r=>r.text()).then(t=>{
       if(itTextarea) itTextarea.value = t || '';
       itLoaded = true;
       itStatus(window.T('ov_js_loaded_raw'), '#16a34a');
@@ -1845,7 +1901,7 @@ document.addEventListener('DOMContentLoaded', function(){
     document.getElementById('ov-it-load')?.addEventListener('click', itLoadFile);
     document.getElementById('ov-it-reload')?.addEventListener('click', ()=>{
       itStatus(window.T('ov_js_reloading'));
-      fetch('/api/rpa/intent-tags/reload', {method:'POST'})
+      apiFetch('/api/rpa/intent-tags/reload', {method:'POST'}, {timeoutMs: 60000})
         .then(r=>r.json()).then(d=>{
           if(d && d.ok){
             itStatus(window.Tf('ov_js_reloaded_fmt',{c:d.category_count,k:d.keyword_count,d:(d.delta>=0?'+':'')+d.delta}), '#16a34a');
@@ -1858,14 +1914,14 @@ document.addEventListener('DOMContentLoaded', function(){
     function renderDiff(d){
       if(!diffPane) return;
       const esc = (s)=>String(s).replace(/[<>&]/g,(c)=>({'<':'&lt;','>':'&gt;','&':'&amp;'})[c]);
-      const greenSpan = (kw)=>`<span style="background:rgba(34,197,94,.15);color:#16a34a;padding:.05rem .35rem;border-radius:4px;margin-right:.2rem;font-family:monospace">+${esc(kw)}</span>`;
-      const redSpan = (kw)=>`<span style="background:rgba(239,68,68,.15);color:#dc2626;padding:.05rem .35rem;border-radius:4px;margin-right:.2rem;font-family:monospace">-${esc(kw)}</span>`;
+      const greenSpan = (kw)=>`<span style="background:rgba(34,197,94,.15);color:var(--th-ink-green6,#16a34a);padding:.05rem .35rem;border-radius:4px;margin-right:.2rem;font-family:monospace">+${esc(kw)}</span>`;
+      const redSpan = (kw)=>`<span style="background:rgba(239,68,68,.15);color:var(--th-ink-red6,#dc2626);padding:.05rem .35rem;border-radius:4px;margin-right:.2rem;font-family:monospace">-${esc(kw)}</span>`;
       const lines = [`<div style="margin-bottom:.4rem"><strong>📋 ${esc(d.summary)}</strong></div>`];
       if(d.added_tags && d.added_tags.length){
-        lines.push(`<div style="margin:.25rem 0"><strong style="color:#16a34a">${window.T('ov_js_added_cats')}</strong> ${d.added_tags.map(esc).join(', ')}</div>`);
+        lines.push(`<div style="margin:.25rem 0"><strong style="color:var(--th-ink-green6,#16a34a)">${window.T('ov_js_added_cats')}</strong> ${d.added_tags.map(esc).join(', ')}</div>`);
       }
       if(d.removed_tags && d.removed_tags.length){
-        lines.push(`<div style="margin:.25rem 0"><strong style="color:#dc2626">${window.T('ov_js_removed_cats')}</strong> ${d.removed_tags.map(esc).join(', ')}</div>`);
+        lines.push(`<div style="margin:.25rem 0"><strong style="color:var(--th-ink-red6,#dc2626)">${window.T('ov_js_removed_cats')}</strong> ${d.removed_tags.map(esc).join(', ')}</div>`);
       }
       const changed = d.changed_tags || {};
       const changedKeys = Object.keys(changed);
@@ -1881,7 +1937,7 @@ document.addEventListener('DOMContentLoaded', function(){
       }
       // P18-D: reorder-only tags (content same, order changed)
       if(d.reordered_tags && d.reordered_tags.length){
-        lines.push(`<div style="margin:.25rem 0;color:#b45309"><strong>${window.T('ov_js_reorder_only')}</strong> ${d.reordered_tags.map(esc).join(', ')} <span style="font-size:.7rem;color:var(--t3)">${window.T('ov_js_reorder_note')}</span></div>`);
+        lines.push(`<div style="margin:.25rem 0;color:var(--th-ink-amber7,#b45309)"><strong>${window.T('ov_js_reorder_only')}</strong> ${d.reordered_tags.map(esc).join(', ')} <span style="font-size:.7rem;color:var(--t3)">${window.T('ov_js_reorder_note')}</span></div>`);
       }
       if(!d.added_tags?.length && !d.removed_tags?.length && !changedKeys.length && !(d.reordered_tags||[]).length){
         lines.push('<div style="color:var(--t3)">'+window.T('ov_js_no_diff')+'</div>');
@@ -1890,10 +1946,10 @@ document.addEventListener('DOMContentLoaded', function(){
       diffPane.style.display = '';
     }
     function fetchDiff(content){
-      return fetch('/api/rpa/intent-tags/diff', {
+      return apiFetch('/api/rpa/intent-tags/diff', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({content: content})
-      }).then(r=>r.json().then(d=>({status:r.status, body:d})));
+      }, {timeoutMs: 60000}).then(r=>r.json().then(d=>({status:r.status, body:d})));
     }
     document.getElementById('ov-it-diff')?.addEventListener('click', ()=>{
       const content = (itTextarea && itTextarea.value) || '';
@@ -1969,10 +2025,10 @@ document.addEventListener('DOMContentLoaded', function(){
         btn.addEventListener('click', ()=>{
           const fn = btn.getAttribute('data-fn');
           itStatus(window.T('ov_js_previewing'));
-          fetch('/api/rpa/intent-tags/restore', {
+          apiFetch('/api/rpa/intent-tags/restore', {
             method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({filename: fn, dry_run: true})
-          }).then(r=>r.json().then(d=>({status:r.status, body:d})))
+          }, {timeoutMs: 60000}).then(r=>r.json().then(d=>({status:r.status, body:d})))
             .then(({status, body})=>{
               if(status === 200 && body.ok){
                 renderDiff(body);
@@ -1988,10 +2044,10 @@ document.addEventListener('DOMContentLoaded', function(){
           const fn = btn.getAttribute('data-fn');
           if(!confirm(window.Tf('ov_js_restore_confirm',{fn:fn}))) return;
           itStatus(window.T('ov_js_restoring'));
-          fetch('/api/rpa/intent-tags/restore', {
+          apiFetch('/api/rpa/intent-tags/restore', {
             method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({filename: fn})
-          }).then(r=>r.json().then(d=>({status:r.status, body:d})))
+          }, {timeoutMs: 60000}).then(r=>r.json().then(d=>({status:r.status, body:d})))
             .then(({status, body})=>{
               if(status === 200 && body.ok){
                 itStatus(window.Tf('ov_js_restored_fmt',{c:body.category_count,k:body.keyword_count}), '#16a34a');
@@ -2007,7 +2063,7 @@ document.addEventListener('DOMContentLoaded', function(){
     }
     document.getElementById('ov-it-restore')?.addEventListener('click', ()=>{
       itStatus(window.T('ov_js_load_baklist'));
-      fetch('/api/rpa/intent-tags/backups').then(r=>r.json()).then(d=>{
+      apiFetch('/api/rpa/intent-tags/backups').then(r=>r.json()).then(d=>{
         if(d && d.ok){
           renderBackups(d.backups || []);
           itStatus('');
@@ -2031,10 +2087,10 @@ document.addEventListener('DOMContentLoaded', function(){
           return;
         }
         itStatus(window.T('ov_js_saving'));
-        fetch('/api/rpa/intent-tags', {
+        apiFetch('/api/rpa/intent-tags', {
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({content: content})
-        }).then(r=>r.json().then(d=>({resp:r, body:d})))
+        }, {timeoutMs: 60000}).then(r=>r.json().then(d=>({resp:r, body:d})))
           .then(({resp, body})=>{
             if(resp.status === 200 && body.ok){
               itStatus(window.Tf('ov_js_saved_fmt',{c:body.category_count,k:body.keyword_count,b:(body.backup_path||window.T('ov_js_no_old_file'))}), '#16a34a');
@@ -2197,8 +2253,8 @@ function devCtxAction(el, action){
 async function devAutoDetect(serial){
   rpa.toast(window.Tf('ov_js_scanning_app',{s:serial.slice(0,8)}));
   try{
-    const r = await fetch(`/api/rpa-overview/registry/${encodeURIComponent(serial)}/auto-detect`,
-      {method:'POST', headers:{'Content-Type':'application/json'}});
+    const r = await apiFetch(`/api/rpa-overview/registry/${encodeURIComponent(serial)}/auto-detect`,
+      {method:'POST', headers:{'Content-Type':'application/json'}}, {timeoutMs: 60000});
     const d = await r.json();
     if(!r.ok){ rpa.toast((d&&d.detail)||window.T('ov_js_detect_fail'),'err'); return; }
     if(!Object.keys(d.detected||{}).length){
@@ -2434,7 +2490,7 @@ async function devRefresh(){
       _devCountBadge.style.display=totalDevices>0?'inline-flex':'none';
     }
   }catch(e){
-    _devGrid.innerHTML='<div class="rpa-empty" style="color:#dc2626">'+window.T('ov_js_load_fail_e2')+_esc(String(e))+'</div>';
+    _devGrid.innerHTML='<div class="rpa-empty" style="color:var(--th-ink-red6,#dc2626)">'+window.T('ov_js_load_fail_e2')+_esc(String(e))+'</div>';
   }
 }
 
@@ -2480,9 +2536,9 @@ async function devSavePlatforms(btn, serial){
     btn.disabled=true;
     btn.textContent=window.T('ov_js_saving');
     if(msg) msg.textContent='';
-    const r=await fetch('/api/rpa-overview/registry',{
+    const r=await apiFetch('/api/rpa-overview/registry',{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
-    });
+    }, {timeoutMs: 60000});
     const d=await r.json();
     if(!r.ok){
       if(msg) msg.textContent=(d&&d.detail)||window.T('ov_js_save_fail');
@@ -2552,10 +2608,10 @@ async function _batchPost(fields, label){
   btns.forEach(b=>{b.disabled=true;b.style.opacity='.5'});
   rpa.toast(window.T('ov_js_processing'));
   try{
-    const r=await fetch('/api/registry/batch',{
+    const r=await apiFetch('/api/registry/batch',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({serials,fields})
-    });
+    }, {timeoutMs: 60000});
     const d=await r.json();
     if(!r.ok){rpa.toast((d&&d.detail)||window.T('ov_js_op_fail'),'err');return;}
     const reloadOk=(d.reloads||[]).filter(x=>x.ok).length;
@@ -2594,9 +2650,9 @@ async function devRegister(btn, serial){
   try{
     btn.disabled=true;
     btn.textContent=window.T('ov_js_registering');
-    const r=await fetch('/api/rpa-overview/registry',{
+    const r=await apiFetch('/api/rpa-overview/registry',{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
-    });
+    }, {timeoutMs: 60000});
     const d=await r.json();
     if(!r.ok){rpa.toast((d&&d.detail)||window.T('ov_js_register_fail'),'err');return;}
     rpa.toast(window.Tf('ov_js_register_ok',{s:serial.slice(0,8)}),'ok');
@@ -2619,8 +2675,8 @@ async function devStatsRefresh(){
   const hours = document.getElementById('ds-hours')?.value || '6';
   try{
     const [statsR, tplR] = await Promise.all([
-      fetch('/api/rpa-overview/device-stats?hours='+hours),
-      fetch('/api/registry/templates'),
+      apiFetch('/api/rpa-overview/device-stats?hours='+hours),
+      apiFetch('/api/registry/templates'),
     ]);
     const statsD = await statsR.json();
     const tplD = await tplR.json();
@@ -2686,7 +2742,7 @@ async function devStatsRefresh(){
 
 async function _renderLoadBalance(){
   try{
-    const r = await fetch('/api/rpa-overview/load-balance');
+    const r = await apiFetch('/api/rpa-overview/load-balance');
     const d = await r.json();
     const hostsEl = document.getElementById('ds-lb-hosts');
     const sugEl = document.getElementById('ds-lb-suggestions');
@@ -2758,7 +2814,7 @@ async function _renderChartArea(summaries, hours){
   // 拉取前 4 台设备的时间序列
   const top4 = summaries.slice(0, 4);
   const fetches = top4.map(s =>
-    fetch(`/api/rpa-overview/device-stats/${encodeURIComponent(s.serial)}?hours=${hours}`)
+    apiFetch(`/api/rpa-overview/device-stats/${encodeURIComponent(s.serial)}?hours=${hours}`)
       .then(r=>r.json()).catch(()=>null)
   );
   const results = await Promise.all(fetches);
@@ -2835,10 +2891,10 @@ async function devApplyTemplate(){
   if(!tplName){ rpa.toast(window.T('ov_js_select_a_template'),'err'); return; }
 
   try{
-    const r = await fetch('/api/registry/apply-template',{
+    const r = await apiFetch('/api/registry/apply-template',{
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({serials, template_name: tplName}),
-    });
+    }, {timeoutMs: 60000});
     const d = await r.json();
     if(!r.ok){ rpa.toast((d&&d.detail)||window.T('ov_js_apply_tpl_fail'),'err'); return; }
     const reloadOk = (d.reloads||[]).filter(x=>x.ok).length;
@@ -2940,7 +2996,7 @@ document.addEventListener('click', function(e){
   <span style="font-size:.72rem;color:var(--t2)">{{ (i18n or {}).get('ov_fb_switch_persona','切换人设:') }}</span>
   <select class="fb-input" id="dev-fb-persona" style="min-width:120px"><option value="">{{ (i18n or {}).get('ov_select_persona','— 选择人设 —') }}</option></select>
   <button class="fb-btn primary" onclick="devBatchApplyPersona()">{{ (i18n or {}).get('ov_apply','应用') }}</button>
-  <button class="fb-btn ghost" onclick="devBatchClearPersona()" style="color:#f87171;border-color:#f87171">{{ (i18n or {}).get('ov_fb_clear_persona','清除人设') }}</button>
+  <button class="fb-btn ghost" onclick="devBatchClearPersona()" style="color:var(--th-ink-red4,#f87171);border-color:var(--th-bd-red4,#f87171)">{{ (i18n or {}).get('ov_fb_clear_persona','清除人设') }}</button>
   <div class="fb-sep"></div>
   <button class="fb-btn ghost" onclick="devSelectAll()">{{ (i18n or {}).get('ov_select_all','全选') }}</button>
   <button class="fb-btn ghost" onclick="devBatchClear()">{{ (i18n or {}).get('ov_deselect','取消选择') }}</button>

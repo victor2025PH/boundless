@@ -110,6 +110,10 @@ _MIGRATIONS: List[str] = [
     "ALTER TABLE wa_rpa_chat_state ADD COLUMN forced_lang  TEXT DEFAULT NULL",
     # P13-B: TTS 预览路径（approval mode pending 行）
     "ALTER TABLE wa_rpa_pending ADD COLUMN tts_path TEXT DEFAULT ''",
+    # 会话语言契约（lang_policy）：用户明确请求的回复语言 + 请求时书写语言
+    # （漂移释放豁免基准）。与运营 forced_lang 互不覆盖：forced > pref > 检测。
+    "ALTER TABLE wa_rpa_chat_state ADD COLUMN user_lang_pref TEXT DEFAULT NULL",
+    "ALTER TABLE wa_rpa_chat_state ADD COLUMN user_lang_pref_input TEXT DEFAULT NULL",
 ]
 
 
@@ -173,6 +177,7 @@ class WaRpaStateStore:
             "last_peer_text", "last_peer_hash", "last_reply",
             "last_peer_ts", "last_reply_ts", "intimacy_score",
             "detected_lang", "forced_lang", "quiet_until", "blacklist",
+            "user_lang_pref", "user_lang_pref_input",  # 会话语言契约（lang_policy）
             "last_proactive_template",  # P15-g: 记录最后一次主动续聊模板
         }
         fields = {k: v for k, v in kwargs.items() if k in _ALLOWED}

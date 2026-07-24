@@ -335,6 +335,15 @@ def make_provider(config: Dict[str, Any], sessions_dir: str = _DEFAULT_SESSIONS_
                     "telegram", res["account_id"], mode="protocol",
                     status="online", meta=_meta, merge_meta=True,
                 )
+                # 新人设空号：登录即落默认人设（已绑定 merge 不覆盖）
+                try:
+                    from src.ai.persona_voice import ensure_account_default_persona
+                    ensure_account_default_persona(
+                        get_account_registry(), "telegram",
+                        res["account_id"], config,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
             except Exception:  # noqa: BLE001
                 logger.debug("[tg_protocol_login] 注册表写入失败", exc_info=True)
 

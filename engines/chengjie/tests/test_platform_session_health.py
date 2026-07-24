@@ -163,6 +163,62 @@ def test_endpoint_keys_on_login_id_when_account_unknown():
     assert _store().is_unhealthy("messenger", "msg_abc") is True
 
 
+# ── P1 身份化：authorized 推送携带 pushname/avatar_url → 富集 self_* ─────────
+
+def _client_with_cfg():
+    from types import SimpleNamespace
+    app = FastAPI()
+    register_account_routes(
+        app, api_auth=lambda request: None,
+        config_manager=SimpleNamespace(config={
+            "accounts": {"self_profile": {"enabled": True}}}))
+    return TestClient(app)
+
+
+def test_endpoint_enriches_self_profile_on_authorized(monkeypatch):
+    """重启后 Node restoreAll 重连（不经登录轮询）→ authorized push 即回填身份。"""
+    import src.integrations.account_self_profile as sp
+    calls = []
+
+    async def fake_enrich(platform, account_id, **kw):
+        calls.append((platform, account_id, kw.get("name"),
+                      kw.get("avatar_url")))
+        return {"self_name": kw.get("name", "")}
+
+    monkeypatch.setattr(sp, "enrich_from_fields", fake_enrich)
+    c = _client_with_cfg()
+    r = c.post("/api/internal/protocol/session-status", json={
+        "platform": "whatsapp", "account_id": "639555000111",
+        "login_id": "wa_x", "status": "authorized", "detail": "connected",
+        "pushname": "雷人1", "avatar_url": "https://pps.whatsapp.net/p.jpg",
+    })
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert calls == [("whatsapp", "639555000111", "雷人1",
+                      "https://pps.whatsapp.net/p.jpg")]
+
+
+def test_endpoint_no_enrich_without_identity_or_when_unhealthy(monkeypatch):
+    """字段缺失 / 非 authorized 状态 → 不触发富集（向后兼容旧 Node）。"""
+    import src.integrations.account_self_profile as sp
+    calls = []
+
+    async def fake_enrich(*a, **k):  # pragma: no cover - 不应被调用
+        calls.append((a, k))
+        return {}
+
+    monkeypatch.setattr(sp, "enrich_from_fields", fake_enrich)
+    c = _client_with_cfg()
+    c.post("/api/internal/protocol/session-status", json={
+        "platform": "whatsapp", "account_id": "639555000111",
+        "status": "authorized",   # 无 pushname/avatar_url（旧版 Node）
+    })
+    c.post("/api/internal/protocol/session-status", json={
+        "platform": "whatsapp", "account_id": "639555000111",
+        "status": "logged_out", "pushname": "雷人1",   # 非 authorized
+    })
+    assert calls == []
+
+
 # ── 告警文案：platform_session_alert 有专属 _build_message 分支 ──────────────
 
 def test_notifier_message_branch():

@@ -98,6 +98,46 @@ class OpsEventStore:
             row = self._conn.execute(q, args).fetchone()
         return int((row[0] if row else 0) or 0)
 
+    def recent_kinds(self, kinds: List[str], *, limit: int = 50) -> List[Dict[str, Any]]:
+        """跨账号取指定 kind 集合的近期事件（资料审计流：不按号，按全局时间线）。"""
+        ks = [str(k) for k in (kinds or []) if k]
+        if not ks:
+            return []
+        ph = ",".join("?" * len(ks))
+        q = ("SELECT ts, platform, account_id, kind, reason, detail "
+             f"FROM ops_events WHERE kind IN ({ph}) ORDER BY id DESC LIMIT ?")
+        with self._lock:
+            rows = self._conn.execute(q, [*ks, int(limit)]).fetchall()
+        return [dict(r) for r in rows]
+
+    def daily_kinds(self, kinds: List[str], *, days: int = 7) -> List[Dict[str, Any]]:
+        """指定 kind 集合近 N 天按天聚合 {date, total, ok, failed}（本地日历日）。
+
+        用 sqlite ``date(ts,'unixepoch','localtime')`` 分组；``reason='ok'`` 计成功。
+        返回按日期升序，只含有事件的天（前端补零/画柱）。
+        """
+        ks = [str(k) for k in (kinds or []) if k]
+        if not ks:
+            return []
+        ph = ",".join("?" * len(ks))
+        since = time.time() - float(days) * _DAY
+        q = (
+            "SELECT date(ts,'unixepoch','localtime') AS d, "
+            "COUNT(*) AS total, "
+            "SUM(CASE WHEN reason='ok' THEN 1 ELSE 0 END) AS ok "
+            f"FROM ops_events WHERE ts>=? AND kind IN ({ph}) "
+            "GROUP BY d ORDER BY d ASC"
+        )
+        with self._lock:
+            rows = self._conn.execute(q, [since, *ks]).fetchall()
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            total = int(r["total"] or 0)
+            ok = int(r["ok"] or 0)
+            out.append({"date": str(r["d"]), "total": total,
+                        "ok": ok, "failed": max(0, total - ok)})
+        return out
+
     def summary(self, *, account_id: str = "", days: int = 7) -> Dict[str, Any]:
         """近 N 天各类事件计数（「号健康史」概览：paused/banned/… 各几次）。"""
         since = time.time() - float(days) * _DAY

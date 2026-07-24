@@ -233,16 +233,17 @@ async def test_sm_neutral_first_message_uses_phone_prior(tmp_path):
     uid = "whatsapp:63988:639270135480"
 
     await _say(sm, uid, "Hi 👋")
-    uc = sm._get_user_context(uid)
+    # 双号隔离后 store key = account_id:user_id → 读取须带同一 account_id
+    uc = sm._get_user_context(uid, "63988")
     assert uc.get("reply_lang") == "en"
 
     # 中性追问 → prev_lang=en 粘住（先验只供给首轮 default，不再参与）
     await _say(sm, uid, "ok ok")
-    assert sm._get_user_context(uid).get("reply_lang") == "en"
+    assert sm._get_user_context(uid, "63988").get("reply_lang") == "en"
 
     # 客户真写中文（强证据）→ 立即跟随，先验彻底让位
     await _say(sm, uid, "你好呀，可以说中文吗，今天有点忙")
-    assert sm._get_user_context(uid).get("reply_lang") == "zh"
+    assert sm._get_user_context(uid, "63988").get("reply_lang") == "zh"
 
 
 async def test_sm_prior_disabled_keeps_zh_default(tmp_path):
@@ -250,7 +251,7 @@ async def test_sm_prior_disabled_keeps_zh_default(tmp_path):
     sm = await _make_sm(tmp_path)
     uid = "whatsapp:63988:639270135481"
     await _say(sm, uid, "Hi 👋", chat_id="639270135481")
-    assert sm._get_user_context(uid).get("reply_lang") == "zh"
+    assert sm._get_user_context(uid, "63988").get("reply_lang") == "zh"
 
 
 async def test_sm_account_default_beats_phone_cc(tmp_path):
@@ -259,7 +260,7 @@ async def test_sm_account_default_beats_phone_cc(tmp_path):
         "enabled": True, "account_defaults": {"whatsapp": "ja"}})
     uid = "whatsapp:63988:639270135482"
     await _say(sm, uid, "Hi 👋", chat_id="639270135482")
-    assert sm._get_user_context(uid).get("reply_lang") == "ja"
+    assert sm._get_user_context(uid, "63988").get("reply_lang") == "ja"
 
 
 async def test_sm_strong_evidence_first_message_ignores_prior(tmp_path):
@@ -268,4 +269,4 @@ async def test_sm_strong_evidence_first_message_ignores_prior(tmp_path):
         "enabled": True, "account_defaults": {"whatsapp": "ja"}})
     uid = "whatsapp:63988:639270135483"
     await _say(sm, uid, "今天上班好累啊，晚上想吃火锅", chat_id="639270135483")
-    assert sm._get_user_context(uid).get("reply_lang") == "zh"
+    assert sm._get_user_context(uid, "63988").get("reply_lang") == "zh"

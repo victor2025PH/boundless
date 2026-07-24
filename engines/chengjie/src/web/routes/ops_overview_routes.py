@@ -725,6 +725,98 @@ def register_ops_overview_routes(app, ctx) -> None:
                 logger.debug("realtime_voice_alert_thresholds 审计写入失败（已忽略）", exc_info=True)
         return {"ok": True, "applied": applied, "enabled": enabled}
 
+    @app.get("/api/admin/instance-restart-status")
+    async def api_instance_restart_status(request: Request):
+        """双实例重启冷却快照（restart_instance + watchdog 共用机器级 JSON）。
+
+        坐席「加载超时」根因多为连环重启；本端点让 ops 一眼看到谁刚重启、冷却还剩多久。
+        只读文件系统，缺文件 = 无记录（不报错）。
+        """
+        api_auth(request)
+        from src.utils.instance_restart_status import collect_restart_status
+        return collect_restart_status()
+
+    @app.get("/api/admin/profile-audit")
+    async def api_profile_audit(request: Request, days: int = 7, limit: int = 40):
+        """官方资料「推送/对齐」审计流：近 N 天按天聚合 + 最近明细 + 批次归组。
+
+        读 ``ops_events``（profile_push / profile_align 两类）。缺库/无事件 →
+        ``enabled:false``（前端隐藏卡）。纯读，不写任何存储。
+        """
+        api_auth(request)
+        try:
+            from src.ops.ops_events import get_ops_event_store
+            store = get_ops_event_store()
+            if store is None:
+                return {"ok": True, "enabled": False}
+            span = max(1, int(days or 7))
+            lim = max(1, min(int(limit or 40), 200))
+            kinds = ["profile_push", "profile_align"]
+            daily = store.daily_kinds(kinds, days=span)
+            rows = store.recent_kinds(kinds, limit=lim)
+
+            def _parse_detail(s: str) -> dict:
+                out = {"persona": "", "run": "", "fields": "", "note": ""}
+                for seg in str(s or "").split(";"):
+                    seg = seg.strip()
+                    if seg.startswith("fields="):
+                        out["fields"] = seg[7:]
+                    elif seg.startswith("persona="):
+                        out["persona"] = seg[8:]
+                    elif seg.startswith("run="):
+                        out["run"] = seg[4:]
+                    elif seg:
+                        out["note"] = seg
+                return out
+
+            recent = []
+            runs: dict = {}
+            since = time.time() - span * 86400
+            aligns = singles = ok_n = failed_n = 0
+            accts: set = set()
+            for r in rows:
+                det = _parse_detail(r.get("detail") or "")
+                ok = bool(r.get("reason") == "ok")
+                kind = str(r.get("kind") or "")
+                plat = str(r.get("platform") or "")
+                aid = str(r.get("account_id") or "")
+                ts = float(r.get("ts") or 0)
+                recent.append({
+                    "ts": ts, "kind": kind, "ok": ok,
+                    "platform": plat, "account_id": aid,
+                    "persona": det["persona"], "run": det["run"],
+                    "fields": det["fields"],
+                })
+                if ts >= since:
+                    accts.add(f"{plat}:{aid}")
+                    if kind == "profile_align":
+                        aligns += 1
+                    else:
+                        singles += 1
+                    ok_n += 1 if ok else 0
+                    failed_n += 0 if ok else 1
+                run = det["run"]
+                if run:
+                    g = runs.setdefault(run, {
+                        "run": run, "ts": ts, "persona": det["persona"],
+                        "count": 0, "ok": 0, "failed": 0, "platforms": {}})
+                    g["count"] += 1
+                    g["ok"] += 1 if ok else 0
+                    g["failed"] += 0 if ok else 1
+                    g["ts"] = max(g["ts"], ts)
+                    g["platforms"][plat] = int(g["platforms"].get(plat, 0)) + 1
+            runs_list = sorted(runs.values(), key=lambda x: x["ts"], reverse=True)
+            return {
+                "ok": True, "enabled": True, "days": span,
+                "totals": {"aligns": aligns, "singles": singles,
+                           "ok": ok_n, "failed": failed_n,
+                           "accounts": len(accts)},
+                "daily": daily, "recent": recent, "runs": runs_list[:20],
+            }
+        except Exception:
+            logger.debug("profile-audit 读取失败（已忽略）", exc_info=True)
+            return {"ok": True, "enabled": False}
+
     @app.post("/api/admin/platform-sessions/relogin")
     async def api_platform_session_relogin(request: Request,
                                            _=Depends(api_write("manage_ops"))):

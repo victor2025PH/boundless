@@ -237,44 +237,82 @@ class LineRpaRunner:
         return self._cfg.get(key, default)
 
     def _resolve_line_reply_lang(self, chat_key: str, peer_text: str = "") -> str:
-        """语言优先级链：全局 force > 对话锁定 forced_lang > 客户消息语言检测 > default_reply_lang。
+        """语言决策（lang_policy 会话契约版）。
 
-        既往链条止于 default_reply_lang（默认 'zh'），缺「消息级检测」一层，导致运营未显式
-        force/lock 时，外语客户也被回中文。本次补上「跟随客户语言」——用统一检测器
-        ``translation_service.detect_language`` 检测当前（或最近）客户消息语言。
-        force / per-chat forced_lang 仍优先，保留运营强制开关；检测不出（短句/emoji）时
-        才回落 default_reply_lang。
+        优先级：全局 force > 对话锁定 forced_lang > 用户明确请求（持久偏好）>
+        强证据检测（立即跟随）> 弱证据粘住 detected_lang 缓存 > default_reply_lang。
+
+        相对旧「逐条 detect_language」链的行为升级（与 WA/收件箱产线同源）：
+          - 「用日语聊吧 / 日本語で話して」→ 立即切换并持久（user_lang_pref）；
+          - 品牌词/ok/emoji 等中性 token 不再翻转语言（沿用会话缓存）；
+          - 只有稳定证据才更新 detected_lang 缓存，单条误判不污染后续轮次。
         """
         # 1. Global force (operator override via config)
         _force = str(self._cfg.get("force_reply_lang") or "").strip().lower()
         if _force and _force not in ("auto", "detect", ""):
             return _force
-        # 2. Per-chat forced_lang from state_store
+        _cs: Dict[str, Any] = {}
         if self._state_store is not None:
             try:
                 _cs = self._state_store.get_chat_state(chat_key) or {}
-                _fl = str(_cs.get("forced_lang") or "").strip().lower()
-                if _fl and _fl not in ("auto", "detect"):
-                    return _fl
             except Exception:
-                pass
-        # 3. 跟随客户语言：检测当前消息；为空则回落 state_store 里最近一条客户消息
+                _cs = {}
+        # 2. Per-chat forced_lang（运营锁，交给策略的 operator_lock 层处理）
         _txt = (peer_text or "").strip()
-        if not _txt and self._state_store is not None:
-            try:
-                _cs = self._state_store.get_chat_state(chat_key) or {}
-                _txt = str(_cs.get("last_peer_text") or "").strip()
-            except Exception:
-                _txt = ""
-        if _txt:
-            try:
-                from src.ai.translation_service import detect_language as _detect
-                _d = str(_detect(_txt) or "").strip().lower()
-                if _d and _d != "unknown":
-                    return _d
-            except Exception:
-                logger.debug("[line] 客户语言检测失败，回落 default_reply_lang", exc_info=True)
-        # 4. Config default
+        if not _txt:
+            _txt = str(_cs.get("last_peer_text") or "").strip()
+        try:
+            from src.ai.lang_policy import (
+                classify_evidence as _lang_classify,
+                resolve_conversation_language as _lang_resolve,
+            )
+            _decision = _lang_resolve(
+                _txt,
+                None,  # RPA 无结构化历史，粘滞语义由 detected_lang 缓存承担
+                prev_lang=str(_cs.get("detected_lang") or ""),
+                lang_pref=str(_cs.get("user_lang_pref") or ""),
+                lang_pref_input=str(_cs.get("user_lang_pref_input") or ""),
+                operator_lock=str(_cs.get("forced_lang") or ""),
+                default=str(self._cfg_get("default_reply_lang", "zh") or "zh").lower(),
+            )
+            if self._state_store is not None and peer_text.strip():
+                try:
+                    if _decision.request:
+                        self._state_store.set_lang_state(
+                            chat_key,
+                            detected_lang=_decision.lang,
+                            user_lang_pref=_decision.request,
+                            user_lang_pref_input=(_lang_classify(_txt)[0] or ""),
+                        )
+                        logger.info(
+                            "[line] 语言请求命中: %r → %s (persisted) chat=%s",
+                            _txt[:40], _decision.request, chat_key,
+                        )
+                    elif _decision.source == "stable_switch":
+                        self._state_store.set_lang_state(
+                            chat_key, detected_lang=_decision.lang,
+                            user_lang_pref="", user_lang_pref_input="",
+                        )
+                    elif _decision.stable and _decision.lang != str(_cs.get("detected_lang") or ""):
+                        self._state_store.set_lang_state(
+                            chat_key, detected_lang=_decision.lang,
+                        )
+                except Exception:
+                    logger.debug("[line] 语言状态写入失败", exc_info=True)
+            # CRM 联动：明确请求/释放 → contact.language_hint + lang_pref 标签
+            if (_decision.request or _decision.source == "stable_switch") and self._contact_hooks is not None:
+                try:
+                    self._contact_hooks.on_language_preference(
+                        channel="line",
+                        account_id=str(self._cfg_get("account_id", "default") or "default"),
+                        external_id=chat_key,
+                        lang=_decision.request or "",
+                    )
+                except Exception:
+                    logger.debug("[line] on_language_preference 跳过", exc_info=True)
+            return _decision.lang
+        except Exception:
+            logger.debug("[line] lang_policy 决策失败，回落 default", exc_info=True)
         return str(self._cfg_get("default_reply_lang", "zh") or "zh").lower()
 
     # ── P6-C: LINE TTS approval-only ─────────────────────────────────────

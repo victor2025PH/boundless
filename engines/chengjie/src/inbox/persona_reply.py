@@ -242,6 +242,7 @@ async def generate_persona_reply(
     media_desc: str = "",
     conversation_id: str = "",
     peer_audio_emotion: Optional[Dict[str, Any]] = None,
+    account_id: str = "",
 ) -> Dict[str, Any]:
     """人设化智能回复（单一事实源）。
 
@@ -311,6 +312,11 @@ async def generate_persona_reply(
             _unified_on = True
         if _unified_on:
             try:
+                _acct = str(account_id or "").strip()
+                if (not _acct or _acct == "default") and conversation_id:
+                    _parts = str(conversation_id).split(":", 2)
+                    if len(_parts) >= 3 and _parts[1]:
+                        _acct = str(_parts[1]).strip()
                 _res = await sm.generate_inbox_draft(
                     text=last_inbound,
                     chat_key=chat_key,
@@ -324,6 +330,7 @@ async def generate_persona_reply(
                     media_desc=media_desc,
                     conversation_id=conversation_id,
                     peer_audio_emotion=peer_audio_emotion,
+                    account_id=_acct,
                 )
                 if _res and (_res.get("reply") or "").strip():
                     reply = _res["reply"]

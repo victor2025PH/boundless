@@ -417,6 +417,9 @@ class MessengerRpaStateStore:
                 "CREATE INDEX IF NOT EXISTS idx_msgr_runs_ts ON messenger_rpa_runs(ts DESC)",
                 # P5-A: 运营手动锁定对话语言（覆盖自动检测）
                 "ALTER TABLE messenger_rpa_chat_state ADD COLUMN forced_lang TEXT DEFAULT NULL",
+                # 会话语言契约（lang_policy）：用户明确请求偏好 + 请求时书写语言
+                "ALTER TABLE messenger_rpa_chat_state ADD COLUMN user_lang_pref TEXT DEFAULT NULL",
+                "ALTER TABLE messenger_rpa_chat_state ADD COLUMN user_lang_pref_input TEXT DEFAULT NULL",
             ):
                 try:
                     c.execute(alter)
@@ -459,6 +462,25 @@ class MessengerRpaStateStore:
             c.execute(
                 "UPDATE messenger_rpa_chat_state SET forced_lang=?, updated_at=? WHERE chat_key=?",
                 (lang or None, now, chat_key),
+            )
+
+    def set_user_lang_pref(
+        self, chat_key: str, lang: Optional[str], lang_input: Optional[str] = None,
+    ) -> None:
+        """会话语言契约（lang_policy）：写用户明确请求的语言偏好。lang=None/"" 表示释放。"""
+        import time as _time
+        now = _time.time()
+        with self._lock, self._conn() as c:
+            c.execute(
+                "INSERT OR IGNORE INTO messenger_rpa_chat_state (chat_key, updated_at) VALUES (?, ?)",
+                (chat_key, now),
+            )
+            c.execute(
+                "UPDATE messenger_rpa_chat_state SET user_lang_pref=?, "
+                "user_lang_pref_input=?, updated_at=? WHERE chat_key=?",
+                (str(lang or "").strip().lower() or None,
+                 str(lang_input or "").strip().lower() or None,
+                 now, chat_key),
             )
 
     def list_chat_states(self, limit: int = 100) -> List[Dict[str, Any]]:

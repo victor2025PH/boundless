@@ -8,7 +8,8 @@ protocol 模式 worker（Telegram pyrogram / WhatsApp Baileys）收到入站消�
   - 全局闸门 ``config.protocol_autoreply.enabled``（默认 False）
   - 账号闸门 registry ``meta.auto_reply``（默认 False）——两者皆开才会自动发
   - 高风险（支付/密码/账号安全，复用 keyword_risk_level）→ 不发,转人工
-  - 每会话冷却 + 同条入站去重 → 防刷屏、防回环
+  - 每会话冷却 + 同文入站短窗去重 → 防刷屏/回环；超时后同文可再回
+    （2026-07-22：原「同文永久去重」导致客户连发两句「你在干嘛」第二句永静默）
 
 生成复用生产级入口 ``SkillManager.process_message``（与真 bot/RPA 同一条产线,
 带人设/意图/策略/KB）；发送复用 ``AccountOrchestrator.send``（并回写收件箱线程）。
@@ -29,6 +30,9 @@ logger = logging.getLogger(__name__)
 # 每会话最近一次自动回复：key=platform:account_id:chat_key → (last_inbound_text, ts)
 _last_reply: Dict[str, tuple] = {}
 AUTO_COOLDOWN_SEC = 5.0  # 同会话两次自动发的最小间隔，防刷屏/回环
+# 同文入站去重窗口：窗口内相同文本/media_ref 判 duplicate；超时后允许再回
+# （客户催一句「你在干嘛」是正常聊天，不能永久静默）。
+AUTO_DEDUP_SEC = 45.0
 
 
 def is_autoreply_enabled(cfg: Dict[str, Any], account_row: Dict[str, Any]) -> bool:
@@ -157,7 +161,14 @@ async def run_autoreply(
     account_id = str(payload.get("account_id") or "")
     chat_key = str(payload.get("chat_key") or "")
     text = str(payload.get("text") or "").strip()
-    if not (platform and account_id and chat_key and text):
+    # 媒体消息（纯图片/语音/视频，无 caption）也应回复：有 media_ref 即视为有内容，
+    # 生成阶段再识别补全（见 build_reply_hook._generate）。此前 text 必填 → 纯媒体被判
+    # incomplete 早退，正是「WhatsApp/协议号收到图片 AI 不理」的根因之一。
+    media_type = str(payload.get("media_type") or "")
+    media_ref = str(payload.get("media_ref") or "")
+    if not (platform and account_id and chat_key):
+        return _result("incomplete")
+    if not text and not media_ref:
         return _result("incomplete")
 
     try:
@@ -171,11 +182,29 @@ async def run_autoreply(
     # 链路（带人设+二次风控+L3/L4 审批），本直发链路早退，杜绝同一条消息双生成、双发。
     # Sprint1 接管即静音：manual = 坐席已接管，本直发链路同样让位（否则接管置 manual 反而
     # 解除 auto_ai 让位、恢复 protocol 直发，与「停 AI」相悖）。review/multi_choice 不受影响。
+    #
+    # 2026-07-22 真机事故：会话已是 auto_ai，但 inbox.l2_autosend.deliver=false
+    # （AutosendWorker 只批草稿不投递）→ protocol 让位后客户「你还在吗」永静默。
+    # 真发未开时**不让位**，继续走协议直发，避免「让位=吞消息」。
     if inbox_mode_fn is not None:
         try:
             _im = inbox_mode_fn(platform, account_id, chat_key)
             if _im == "auto_ai":
-                return _result("inbox_autopilot", inbound=text)
+                _deliver_on = bool(
+                    ((((cfg or {}).get("inbox") or {}).get("l2_autosend") or {})
+                     .get("deliver"))
+                )
+                if _deliver_on:
+                    logger.info(
+                        "[protocol-autoreply] inbox_autopilot yield %s:%s:%s",
+                        platform, account_id, chat_key,
+                    )
+                    return _result("inbox_autopilot", inbound=text)
+                logger.warning(
+                    "[protocol-autoreply] auto_ai but l2 deliver=off → "
+                    "keep protocol path %s:%s:%s",
+                    platform, account_id, chat_key,
+                )
             if _im == "manual":
                 return _result("inbox_manual", inbound=text)
         except Exception:
@@ -232,20 +261,28 @@ async def run_autoreply(
             return _result(why, inbound=text)
 
     key = f"{platform}:{account_id}:{chat_key}"
+    # 去重标识：纯媒体消息 text 为空，用 media_ref（每条唯一）避免两张不同图被判重复。
+    dedup_text = text or media_ref
     last = _last_reply.get(key)
     if last is not None:
-        if last[0] == text:
+        age = ts - float(last[1] or 0)
+        if last[0] == dedup_text and age < AUTO_DEDUP_SEC:
+            logger.info(
+                "[protocol-autoreply] duplicate skip %s age=%.1fs text=%r",
+                key, age, str(dedup_text)[:40],
+            )
             return _result("duplicate")
-        if ts - last[1] < AUTO_COOLDOWN_SEC:
+        if age < AUTO_COOLDOWN_SEC:
             return _result("cooldown")
-    # 先占位（含本条入站文本），避免生成期间同条消息重复触发
-    _last_reply[key] = (text, ts)
+    # 先占位（含本条入站标识），避免生成期间同条消息重复触发
+    _last_reply[key] = (dedup_text, ts)
 
     persona_id = str((row.get("meta") or {}).get("persona_id") or "")
     try:
         reply = await generate(
             text=text, platform=platform, account_id=account_id,
             chat_key=chat_key, persona_id=persona_id,
+            media_type=media_type, media_ref=media_ref,
         )
     except Exception:
         logger.warning("[protocol-autoreply] 生成失败 %s", key, exc_info=True)
@@ -276,14 +313,21 @@ async def run_autoreply(
     try:
         await send(platform=platform, account_id=account_id,
                    chat_key=chat_key, text=reply)
-    except Exception:
+    except Exception as _send_ex:
         logger.warning("[protocol-autoreply] 发送失败 %s", key, exc_info=True)
+        _err = str(_send_ex)
+        # 闸门拦截（send_gate_blocked:*）是配置性节流，不是基础设施故障——
+        # 不喂熔断计数（否则限流会连带把断路器打开、雪上加霜）；
+        # 错误串带回 res 供 hook 层发「限流拦截」告警（2026-07-22 可见性铁律）。
+        if _err.startswith("send_gate_blocked"):
+            return _result("send_error", text=reply, inbound=text, risk=risk,
+                           breaker_opened=False, error=_err)
         opened = limiter.record_failure(account_key) if limiter is not None else False
         return _result("send_error", text=reply, inbound=text, risk=risk,
-                       breaker_opened=opened)
+                       breaker_opened=opened, error=_err)
     # 发送成功后用「发送时刻」刷新冷却基准 + 记账号配额/闭合熔断
     send_ts = ts if now is not None else time.time()
-    _last_reply[key] = (text, send_ts)
+    _last_reply[key] = (dedup_text, send_ts)
     if limiter is not None:
         limiter.record_sent(account_key, send_ts)
         limiter.record_success(account_key)
@@ -327,9 +371,12 @@ _ALERT_DEBOUNCE_SEC = 1800.0
 
 def publish_alert(kind: str, payload: Dict[str, Any], detail: str = "",
                   now: Optional[float] = None) -> bool:
-    """熔断 / 配额耗尽等运维告警 → EventBus（WebhookNotifier 转钉钉/飞书/企微）。
+    """熔断 / 配额耗尽等运维告警 → EventBus（WebhookNotifier 转钉钉/飞书/企微）
+    + 集团 TG 中继（ops_alert；未配 EVENT_INGEST_KEY 的部署自动降级只落日志）。
 
     防抖：同 (kind, platform, account) 30 分钟一次。返回是否真的发了。
+    2026-07-22 可见性铁律：WebhookNotifier 常见"0 个端点"（未配 webhook）——
+    只发 event_bus 等于没人看见，故同报 ops_alert 直达运营手机。
     """
     platform = str(payload.get("platform") or "")
     account_id = str(payload.get("account_id") or "")
@@ -339,16 +386,23 @@ def publish_alert(kind: str, payload: Dict[str, Any], detail: str = "",
     if last is not None and ts - last < _ALERT_DEBOUNCE_SEC:
         return False
     _alert_seen[key] = ts
+    sent = False
     try:
         from src.integrations.shared.event_bus import get_event_bus
         get_event_bus().publish("autoreply_alert", {
             "kind": kind, "platform": platform, "account_id": account_id,
             "detail": detail,
         })
-        return True
+        sent = True
     except Exception:
         logger.debug("[protocol-autoreply] 告警发布失败", exc_info=True)
-        return False
+    try:
+        from src.ops.ops_alert import notify as _ops_notify
+        _ops_notify(kind, f"⚠️ {platform}:{account_id} {detail or kind}",
+                    account_id=f"{platform}:{account_id}", reason=kind)
+    except Exception:
+        logger.debug("[protocol-autoreply] ops_alert 转发失败", exc_info=True)
+    return sent
 
 
 def clear_needs_human(store: Any, conversation_id: str) -> bool:
@@ -406,13 +460,52 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
         except Exception:
             return base
 
-    async def _generate(*, text, platform, account_id, chat_key, persona_id):
+    async def _generate(*, text, platform, account_id, chat_key, persona_id,
+                        media_type="", media_ref=""):
         sm = getattr(app.state, "skill_manager", None)
         if sm is None:
             tc = getattr(app.state, "telegram_client", None)
             sm = getattr(tc, "skill_manager", None) if tc is not None else None
         if sm is None or not hasattr(sm, "process_message"):
             return None
+        # 媒体识别补全（2026-07 补坑）：对方发来图片/语音/视频（含无 caption 的纯媒体，
+        # 此时 text 是 [图片]/[语音] 占位或空）→ 用共享识别层把它变成可喂 AI 的文本，
+        # 与 Telegram A 线、收件箱全自动草稿链同一口径。识别失败软降级回原 text，绝不阻断。
+        media_desc = ""
+        if media_ref:
+            try:
+                from src.inbox.media_enrich import (
+                    enrich_inbound_media_text, is_placeholder_only,
+                )
+                if not text or is_placeholder_only(text):
+                    _tc = getattr(app.state, "telegram_client", None)
+                    _vtr = getattr(_tc, "voice_transcriber", None) if _tc is not None else None
+                    _enriched, media_desc = await enrich_inbound_media_text(
+                        media_type=media_type, media_ref=media_ref,
+                        caption=("" if is_placeholder_only(text) else text),
+                        config=_cfg(), voice_transcriber=_vtr,
+                    )
+                    if _enriched and _enriched.strip():
+                        text = _enriched.strip()
+                        # 识别结果回写收件箱消息行（与全自动草稿链 update_message_text 同口径）：
+                        # 让坐席台/时间线/媒体卡看到"[图片内容] …/转写"而非裸 [图片] 占位。
+                        # best-effort + only_if_empty=True，绝不踩掉已有真实内容、失败不影响回复。
+                        if media_desc:
+                            try:
+                                _store = getattr(app.state, "inbox_store", None)
+                                if _store is not None:
+                                    from src.inbox.normalizer import conv_id
+                                    _store.update_message_text(
+                                        conv_id(platform, account_id, chat_key),
+                                        text=text, media_ref=media_ref,
+                                        only_if_empty=True,
+                                    )
+                            except Exception:
+                                logger.debug(
+                                    "[protocol-autoreply] 识别结果回写收件箱失败（忽略）",
+                                    exc_info=True)
+            except Exception:
+                logger.debug("[protocol-autoreply] 媒体识别补全失败（回落原文本）", exc_info=True)
         # N 线 核心1：复用共享 companion_context 装配标准上下文（与 A 线同一套）。
         # 记忆/情绪由 skill_manager 内部按 platform+user_id+chat_id 注入；
         # 此处保证平台/会话标识 + 人设一致（协议线默认私聊）。
@@ -421,6 +514,21 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
         if _emo is None:
             _tc = getattr(app.state, "telegram_client", None)
             _emo = getattr(_tc, "emotion_enhancer", None) if _tc is not None else None
+        _extra = {"channel": "protocol",
+                  # account_id 必带（2026-07-22 真机复盘）：selfie/媒体发送走
+                  # 编排器路（_try_send_selfie_media 路①）要求 platform+account_id
+                  # +chat_key 齐全——缺它则协议线（WA 等）生成了图也发不出，
+                  # 静默回落文字（客户要图永远只收到婉拒）。
+                  "account_id": account_id}
+        # 让 ai_client 多模态 prompt 知道"这是媒体消息 + 识别摘要"（与 inbound_enrich 同字段口径）
+        if media_ref:
+            _extra["_peer_message_is_media"] = True
+            _mk = str(media_type or "").strip().lower() or "media"
+            _extra["_media_kind"] = _mk
+            _extra["_inbox_peer_kind"] = _mk
+            if media_desc:
+                _extra["_media_desc"] = media_desc
+            _extra["_media_ref"] = str(media_ref)
         ctx = build_companion_context(
             platform=platform,
             chat_id=chat_key,
@@ -428,7 +536,7 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
             chat_type="private",
             persona_id=persona_id,
             emotion_enhancer=_emo,
-            extra={"channel": "protocol"},
+            extra=_extra,
         )
         return await sm.process_message(
             text, user_id=f"{platform}:{account_id}:{chat_key}", context=ctx
@@ -469,8 +577,11 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
             logger.debug("[protocol-autoreply] 语音尝试失败，回落文本", exc_info=True)
         # N 线 核心3：发送前反封号闸门（A/B 两线共用 companion_send_gate；默认关→零破坏）。
         # 拦截 → 抛错，交由 run_autoreply 既有熔断/转人工处理。
-        from src.skills.companion_send_gate import evaluate, gate_enabled
-        if gate_enabled(cfg):
+        # exempt_peers 白名单（2026-07-22）：测试号免限额，联调不再与养号策略打架。
+        from src.skills.companion_send_gate import (
+            evaluate, gate_enabled, peer_exempt,
+        )
+        if gate_enabled(cfg) and not peer_exempt(cfg, chat_key):
             try:
                 from src.integrations.account_registry import get_account_registry
                 from src.integrations.protocol_autoreply_limits import (
@@ -539,6 +650,17 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
         # Phase 8：配额耗尽 → 告警（防抖，避免刷屏）
         elif res.get("reason") in ("quota_hour", "quota_day"):
             publish_alert(res["reason"], payload, "自动回复配额已用尽，转人工")
+        # 2026-07-22 可见性铁律：发送闸门拦截绝不静默（真机事故：warmup_cap 拦下
+        # 全部回复，运营毫不知情）。event_bus + 集团 TG 双通道（防抖在各自内部）。
+        elif str(res.get("error") or "").startswith("send_gate_blocked"):
+            try:
+                from src.integrations.shared.send_guard import notify_send_blocked
+                notify_send_blocked(
+                    str(payload.get("platform") or ""),
+                    str(payload.get("account_id") or ""),
+                    str(res.get("error") or ""))
+            except Exception:
+                logger.debug("[protocol-autoreply] 限流告警失败", exc_info=True)
         # Phase 4：审计 + 转人工（best-effort，绝不影响主流程）
         try:
             from src.integrations.protocol_autoreply_audit import (

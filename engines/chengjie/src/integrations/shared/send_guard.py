@@ -33,11 +33,13 @@ def send_blocked(
     *,
     config: Optional[Dict[str, Any]] = None,
     registry: Any = None,
+    chat_key: str = "",
 ) -> Tuple[bool, str]:
     """编排器发送前统一护栏。返回 ``(blocked, reason)``；任何异常 → ``(False, "")`` 放行。
 
     reason 形如 ``kill_switch:<scope>`` / ``canary_hold`` / ``send_gate:<reason>``，
-    供日志/审计区分拦因。
+    供日志/审计区分拦因。``chat_key``（可选）：send_gate 白名单豁免用——
+    Kill-Switch/授权/金丝雀不豁免（那些是急停与放量控制，白名单只对限额有效）。
     """
     p = str(platform or "")
     a = str(account_id or "default")
@@ -66,10 +68,12 @@ def send_blocked(
             return True, _c_reason or "canary_hold"
     except Exception:
         pass
-    # 3) 反封号闸门（仅 enabled 时；默认关 → 零破坏）
+    # 3) 反封号闸门（仅 enabled 时；默认关 → 零破坏；exempt_peers 白名单豁免）
     try:
-        from src.skills.companion_send_gate import evaluate, gate_enabled
-        if gate_enabled(config):
+        from src.skills.companion_send_gate import (
+            evaluate, gate_enabled, peer_exempt,
+        )
+        if gate_enabled(config) and not peer_exempt(config, chat_key):
             from src.skills.account_signals import build_account_signals
             limiter = None
             try:
@@ -82,10 +86,39 @@ def send_blocked(
             sig = build_account_signals(p, a, registry=registry, limiter=limiter)
             dec = evaluate(sig, config)
             if not dec.get("allowed", True):
-                return True, f"send_gate:{dec.get('reason') or 'blocked'}"
+                _reason = f"send_gate:{dec.get('reason') or 'blocked'}"
+                notify_send_blocked(p, a, _reason)
+                return True, _reason
     except Exception:
         pass
     return False, ""
 
 
-__all__ = ["send_blocked"]
+def notify_send_blocked(platform: str, account_id: str, reason: str) -> None:
+    """发送被限流/闸门拦截 → 运营可见告警（2026-07-22，用户指令：限制必须有提示）。
+
+    真机事故：warmup_cap 静默拦截全部回复，运营以为系统坏了排查半天。
+    双通道（best-effort、防抖、绝不抛）：
+    - EventBus ``autoreply_alert``（WebhookNotifier → 钉钉/飞书/企微 + 工作台事件流）
+    - ops_alert 集团 TG 中继（EVENT_INGEST_KEY 已配置的部署直达老板手机）
+    Kill-Switch/授权类拦截不在此报（那是运营自己按的急停，不算意外）。
+    """
+    try:
+        from src.integrations.protocol_autoreply import publish_alert
+        publish_alert("send_gate_blocked",
+                      {"platform": platform, "account_id": account_id},
+                      f"发送被限流闸门拦截({reason})——回复未送出，请检查发送配额配置")
+    except Exception:
+        logger.debug("[send_guard] event_bus 告警失败", exc_info=True)
+    try:
+        from src.ops.ops_alert import notify
+        notify(
+            "send_gate_blocked",
+            f"⛔ {platform}:{account_id} 自动回复被发送闸门拦截（{reason}）。"
+            "客户消息不会得到回复；如非预期请调大/关闭 companion_send_gate 限额。",
+            account_id=f"{platform}:{account_id}", reason=reason)
+    except Exception:
+        logger.debug("[send_guard] ops_alert 告警失败", exc_info=True)
+
+
+__all__ = ["notify_send_blocked", "send_blocked"]

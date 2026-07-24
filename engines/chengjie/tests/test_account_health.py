@@ -66,6 +66,15 @@ class TestAccountHealth:
         assert h["over_cap"] is True
         assert h["recommended_cap"] == 2
 
+    def test_profile_churn_penalizes(self):
+        base = {"age_days": 30, "proxy_bound": True, "sends_today": 0}
+        green = account_health({**base, "profile_churn_7d": 0})
+        mild = account_health({**base, "profile_churn_7d": 3})
+        heavy = account_health({**base, "profile_churn_7d": 5})
+        assert green["score"] > mild["score"] > heavy["score"]
+        assert any("资料" in r for r in mild["reasons"])
+        assert any("暂停" in r for r in heavy["reasons"])
+
 
 class TestFleetHealth:
     def test_aggregate_worst_light(self):

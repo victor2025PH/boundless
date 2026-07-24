@@ -14,13 +14,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
 import secrets
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src.inbox.ingest import ingest_collected_chats
 from src.inbox.normalizer import PLATFORM_DISPLAY, message_obj, normalize_chat
@@ -302,6 +303,30 @@ def get_reply_hook() -> Optional[Callable[[Dict[str, Any]], Any]]:
     return _reply_hook
 
 
+def _publish_outbound_event(chat: Dict[str, Any]) -> None:
+    """出站镜像新插入后发 outbound_message 事件（SSE → 工作台即时刷新气泡/列表预览）。
+
+    与 ingest.py::_publish_inbox_message 同形 payload + direction/preview 语义一致；
+    独立事件类型使前端可以「刷新不加未读」。best-effort，绝不影响发送主流程。
+    """
+    try:
+        from src.integrations.shared.event_bus import get_event_bus
+        lm = chat.get("last_message") or {}
+        get_event_bus().publish("outbound_message", {
+            "conversation_id": str(chat.get("conversation_id") or ""),
+            "platform": str(chat.get("platform") or ""),
+            "account_id": str(chat.get("account_id") or ""),
+            "chat_key": str(chat.get("chat_key") or ""),
+            "name": str(chat.get("name") or ""),
+            "chat_type": str(chat.get("chat_type") or "private"),
+            "preview": str(chat.get("last_msg") or lm.get("text") or "")[:80],
+            "direction": "out",
+            "ts": float(lm.get("ts") or chat.get("last_ts") or time.time()),
+        })
+    except Exception:
+        logger.debug("[protocol_bridge] outbound_message 事件发布失败", exc_info=True)
+
+
 async def maybe_auto_reply(payload: Dict[str, Any]) -> None:
     """入站消息已落库后调用：若注册了 reply hook 且为入站，交由 hook 决定是否自动回复。
 
@@ -444,7 +469,14 @@ def ingest_incoming(
         _base = str(chat.get("last_msg") or "")
         chat["last_msg"] = f"{_sender_name}：{_base}" if _base else _sender_name
     try:
-        ingest_collected_chats(store, [chat], publish_events=(direction == "in"))
+        _n = ingest_collected_chats(store, [chat], publish_events=(direction == "in"))
+        # P2-2（2026-07-23）：出站镜像也发 SSE 事件（独立类型 outbound_message，不复用
+        # inbox_message——前端对后者会给非选中会话 unread+1，出站消息不该点未读）。
+        # 条件 _n>0 =「真的新插入」：编排器镜像与 worker fromMe 回显同 msg_id 落同键，
+        # 第二次 INSERT OR IGNORE 无行插入 → 不重复发事件。让打开会话的坐席在 AI
+        # autosend/主动触达后即时看到气泡，选中会话轮询由 10s 放宽到 30s（见 P1-3）。
+        if direction == "out" and _n > 0:
+            _publish_outbound_event(chat)
     except Exception:
         logger.debug("[protocol_bridge] ingest_collected_chats 失败", exc_info=True)
     # P4-11B：入站群消息 @ 本账号 → 置会话「@我」未读旗标（best-effort，不阻断落库）
@@ -602,3 +634,186 @@ async def backfill_telegram(
     except Exception:
         logger.debug("[protocol_bridge] tg 回填失败", exc_info=True)
     return n
+
+
+# ── Telegram 聊天记录同步（对齐手机/官方客户端） ────────────────────────────────
+#   Telegram 的云聊天历史存在其服务器上——用该账号的 session 拉 get_dialogs +
+#   get_chat_history 得到的就是手机上看到的同一份数据（密聊除外，其为端到端加密、
+#   不过云端）。与 backfill_telegram（仅每会话末条）不同，这里逐会话拉近期 N 条，
+#   落库走 ingest_thread 直写 store：**不**触发 SSE / auto-draft / 自动回复，
+#   避免把陈年历史当新消息洪泛处理。媒体不下载（防大流量/风控），以「[图片]」等
+#   占位文本入库，保留上下文可读性。
+
+
+def history_message_obj(payload: Optional[Dict[str, Any]], message: Any) -> Dict[str, Any]:
+    """把 ``tg_message_payload`` 的产物归一为 thread message dict（历史同步用）。
+
+    - 无文本但有媒体 → 用「[图片]」等占位文本（不下载媒体本体）；
+    - 仍无文本（服务消息等）→ 返回 {}，调用方跳过；
+    - ``source`` 带 ``id`` 让 ``extract_platform_msg_id`` 抽到 MTProto 消息 id，
+      与实时路径产出同一去重主键——重复同步/实时推送不会落重复行。
+    """
+    text = str((payload or {}).get("text") or "")
+    if not text:
+        meta = tg_media_meta(message)
+        if meta:
+            text = media_placeholder(meta[0])
+    if not text:
+        return {}
+    mid = str((payload or {}).get("msg_id") or "")
+    return message_obj(
+        text=text, ts=(payload or {}).get("ts") or 0,
+        direction=str((payload or {}).get("direction") or "in"),
+        message_id=mid, source={"id": mid} if mid else {},
+    )
+
+
+def tg_chat_dict(
+    chat: Any, account_id: str, *,
+    last_msg: str = "", last_ts: float = 0, unread: int = 0,
+) -> Optional[Dict[str, Any]]:
+    """把 pyrogram Chat 归一为收件箱 chat dict（历史同步/按需拉取共用）。
+
+    身份取自 ``tg_peer_identity``；``chat.type``（pyrogram ChatType 枚举）经 source
+    交由 ``infer_chat_type`` 归一（supergroup→group 等）。无 id → None。
+    """
+    chat_id = getattr(chat, "id", None)
+    if chat_id is None:
+        return None
+    ident = tg_peer_identity(chat)
+    ctype = str(getattr(getattr(chat, "type", None), "value", "") or "").lower()
+    return normalize_chat(
+        platform="telegram",
+        platform_name=PLATFORM_DISPLAY.get("telegram", "Telegram"),
+        account_id=str(account_id), account_label=str(account_id),
+        chat_key=str(chat_id), name=ident["name"] or str(chat_id),
+        last_msg=last_msg, last_ts=last_ts or 0, unread=int(unread or 0),
+        source={"chat_type": ctype} if ctype else None,
+        username=ident["username"], phone=ident["phone"],
+    )
+
+
+async def collect_tg_dialog_history(
+    client: Any, account_id: str, chat_key: str,
+    *, limit: int = 50, offset_id: int = 0,
+) -> Optional[Tuple[Dict[str, Any], List[Dict[str, Any]]]]:
+    """拉取单个 Telegram 会话的云端历史，归一为 ``(chat dict, [message dict])``。
+
+    ``offset_id`` > 0 时只取比该消息 id 更早的（「加载更早」锚点语义，与 WhatsApp
+    fetchMessageHistory 对齐）；0 = 从最新开始。拉不到任何可入库消息 → None。
+    """
+    if client is None or not chat_key:
+        return None
+    peer: Any = chat_key
+    try:
+        peer = int(chat_key)
+    except (TypeError, ValueError):
+        peer = chat_key
+    kwargs: Dict[str, Any] = {"limit": max(1, int(limit or 50))}
+    if offset_id:
+        kwargs["offset_id"] = int(offset_id)
+    msgs: List[Dict[str, Any]] = []
+    chat_obj = None
+    async for message in client.get_chat_history(peer, **kwargs):
+        if chat_obj is None:
+            chat_obj = getattr(message, "chat", None)
+        payload = tg_message_payload(message, account_id)
+        if payload is None:
+            continue
+        obj = history_message_obj(payload, message)
+        if obj:
+            msgs.append(obj)
+    if chat_obj is None or not msgs:
+        return None
+    newest = max(msgs, key=lambda m: float(m.get("ts") or 0))
+    chat = tg_chat_dict(
+        chat_obj, account_id,
+        last_msg=str(newest.get("text") or ""),
+        last_ts=float(newest.get("ts") or 0),
+    )
+    if chat is None:
+        return None
+    return chat, msgs
+
+
+async def sync_telegram_history(
+    client: Any, account_id: str, *,
+    dialogs_limit: int = 100, per_chat: int = 30,
+    ingest: Optional[Callable[[Dict[str, Any], List[Dict[str, Any]]], Any]] = None,
+    progress: Optional[Callable[[int, int, int], None]] = None,
+    pace_sec: float = 0.35,
+) -> Dict[str, int]:
+    """账号级聊天记录同步：遍历云端会话列表、逐会话拉最近 ``per_chat`` 条落库。
+
+    效果对齐「新设备登录官方客户端」：会话列表 + 未读数 + 近期历史与手机一致。
+
+    - ``ingest(chat, msgs) -> int``：由调用方注入（生产为 ``ingest_thread(store,…)``
+      直写 store——不触发 SSE/auto-draft/自动回复），返回新插入条数；
+    - ``progress(done, total, messages)``：每处理完一个会话回调一次（供进度轮询）；
+    - ``pace_sec``：会话间隔节流，叠加 pyrogram 自身的 FloodWait 自动等待，温和拉取；
+    - 单会话失败只跳过该会话（best-effort），返回 ``{"dialogs": n, "messages": m}``
+      —— n=成功处理的会话数，m=新插入消息总数。
+    """
+    stats = {"dialogs": 0, "messages": 0}
+    if client is None or dialogs_limit <= 0 or ingest is None:
+        return stats
+    dialogs: List[Any] = []
+    async for dialog in client.get_dialogs(limit=dialogs_limit):
+        dialogs.append(dialog)
+    total = len(dialogs)
+    if progress is not None:
+        try:
+            progress(0, total, 0)
+        except Exception:
+            pass
+    for idx, dialog in enumerate(dialogs):
+        try:
+            chat_obj = getattr(dialog, "chat", None)
+            chat_id = getattr(chat_obj, "id", None)
+            if chat_id is None:
+                continue
+            msgs: List[Dict[str, Any]] = []
+            async for message in client.get_chat_history(chat_id, limit=per_chat):
+                payload = tg_message_payload(message, account_id)
+                if payload is None:
+                    continue
+                obj = history_message_obj(payload, message)
+                if obj:
+                    msgs.append(obj)
+            last_msg, last_ts = "", 0.0
+            if msgs:
+                newest = max(msgs, key=lambda m: float(m.get("ts") or 0))
+                last_msg = str(newest.get("text") or "")
+                last_ts = float(newest.get("ts") or 0)
+            else:
+                # 近期无可入库消息的会话仍要在列表可见（与手机一致）：
+                # 用 top_message 文本兜底做预览，占位入库
+                top = getattr(dialog, "top_message", None)
+                top_payload = tg_message_payload(top, account_id) if top is not None else None
+                if top_payload is not None:
+                    top_obj = history_message_obj(top_payload, top)
+                    if top_obj:
+                        last_msg = str(top_obj.get("text") or "")
+                        last_ts = float(top_obj.get("ts") or 0)
+            chat = tg_chat_dict(
+                chat_obj, account_id, last_msg=last_msg, last_ts=last_ts,
+                unread=int(getattr(dialog, "unread_messages_count", 0) or 0),
+            )
+            if chat is None:
+                continue
+            try:
+                inserted = ingest(chat, msgs)
+                stats["messages"] += int(inserted or 0)
+            except Exception:
+                logger.debug("[protocol_bridge] tg 历史同步 ingest 失败", exc_info=True)
+            stats["dialogs"] += 1
+        except Exception:
+            logger.debug("[protocol_bridge] tg 历史同步单会话失败", exc_info=True)
+        if progress is not None:
+            try:
+                progress(idx + 1, total, stats["messages"])
+            except Exception:
+                pass
+        if pace_sec > 0:
+            await asyncio.sleep(pace_sec)
+    return stats

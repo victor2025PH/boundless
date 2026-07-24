@@ -87,7 +87,12 @@ class TelegramCompanionWorker:
         self.session_name = str(meta.get("session_name") or "")
         self.session_string = str(meta.get("session_string") or "")
         self.proxy_id = str(self.account.get("proxy_id") or "")
-        self.persona_ids: List[Any] = list(meta.get("persona_ids") or [])
+        # SSOT：persona_id 标量优先，再 persona_ids[0]（修「只写了 persona_id 工人读空」）
+        _pids = list(meta.get("persona_ids") or [])
+        _sing = str(meta.get("persona_id") or "").strip()
+        if _sing and (not _pids or str(_pids[0]) != _sing):
+            _pids = [_sing] + [p for p in _pids if str(p) != _sing]
+        self.persona_ids: List[Any] = _pids
         self.client: Any = None  # A 线 TelegramClient 实例
         self.state = "stopped"
         self.detail = ""

@@ -325,6 +325,27 @@ class TestL1MetricsAPI:
         assert r.status_code == 200
         assert "text/plain" in r.headers.get("content-type", "")
 
+    def test_prometheus_bearer_machine_scrape_no_session_role(self):
+        """Phase9: Prom scrape with Bearer + empty session must work; JSON still 403."""
+        app = FastAPI()
+
+        @app.middleware("http")
+        async def _inject(req: Request, call_next):
+            req.scope["session"] = {}
+            return await call_next(req)
+
+        def api_auth(r: Request):
+            return True
+
+        register_metrics_route(app, api_auth=api_auth)
+        client = TestClient(app, raise_server_exceptions=True)
+        hdr = {"Authorization": "Bearer machine-token"}
+        r = client.get("/api/workspace/metrics?format=prometheus", headers=hdr)
+        assert r.status_code == 200
+        assert "# HELP" in r.text or "ws_" in r.text or "chengjie_" in r.text or r.text is not None
+        r_json = client.get("/api/workspace/metrics", headers=hdr)
+        assert r_json.status_code == 403
+
     def test_prometheus_format_has_help(self):
         store = _make_store()
         svc = _make_svc(store)

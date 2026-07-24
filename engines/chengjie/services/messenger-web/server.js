@@ -146,6 +146,10 @@ async function postStatus(loginId, entry, status, detail) {
     login_id: String(loginId || ""),
     status: String(status || ""),
     detail: String(detail || ""),
+    // P1 身份化：authorized 时携带自身昵称/头像（promoteIfLoggedIn 已采集），
+    // Python session-status 端点据此富集 registry meta.self_*（重启重连即回填）。
+    pushname: String((entry && entry.name) || ""),
+    avatar_url: String((entry && entry.avatarUrl) || ""),
     ts: Math.floor(Date.now() / 1000),
   });
 }
@@ -1749,6 +1753,9 @@ app.get("/accounts", (_req, res) => {
         logged_in: e._loggedIn !== false,
         last_poll_ok_ts: Math.floor((e._lastPollOkTs || 0) / 1000),
         last_poll_err: String(e._lastPollErr || ""),
+        // P1 身份化：自身昵称/头像（promoteIfLoggedIn 采集），与 WA /accounts 对齐
+        pushname: String(e.name || ""),
+        avatar_url: String(e.avatarUrl || ""),
       });
     }
   }

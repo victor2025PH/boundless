@@ -3,9 +3,12 @@
  *
  * 为 Python 主进程（src/integrations/whatsapp_baileys_login.py）提供 HTTP 接口：
  *   POST /login/start            -> { login_id, qr_image }           发起一次扫码登录
- *   GET  /login/:id/status       -> { status, account_id, qr_image } 轮询登录状态
+ *   GET  /login/:id/status       -> { status, account_id, qr_image,
+ *                                     pushname, avatar_url }         轮询登录状态（含自身身份）
  *   POST /login/:id/cancel       -> { ok }                           取消/登出
- *   GET  /accounts               -> { accounts: [...] }              已连接账号
+ *   GET  /accounts               -> { accounts: [...] }              已连接账号（含自身身份）
+ *   POST /accounts/:id/profile   -> { ok, applied, errors,
+ *                                     pushname, avatar_url }         改账号自身官方资料（昵称/签名/头像）
  *   GET  /health                 -> { ok: true }
  *
  * status 取值：pending | scanned | authorized | expired | failed
@@ -31,11 +34,24 @@ import {
   downloadMediaMessage,
   proto,
 } from "@whiskeysockets/baileys";
+// close 分支决策抽成零依赖纯函数（2026-07-22 断网假死事故的根修）：决策可被 node --test
+// 单测（server.js 顶层 app.listen，测试没法安全 import 本文件），本文件只执行副作用。
+import { decideCloseAction, CLOSE_CODES } from "./close-policy.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SESSIONS_DIR = process.env.WA_SESSIONS_DIR || path.join(__dirname, "sessions");
 const PORT = Number(process.env.PORT || 8790);
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
+
+// close-policy 为保持零依赖内联了两个 DisconnectReason 码；这里与权威枚举比对一次，
+// 上游 Baileys 罕见改值时大声告警而非静默走错分支。
+if (CLOSE_CODES.restartRequired !== DisconnectReason.restartRequired ||
+    CLOSE_CODES.loggedOut !== DisconnectReason.loggedOut) {
+  logger.error({ closeCodes: CLOSE_CODES, disconnectReason: {
+    restartRequired: DisconnectReason.restartRequired,
+    loggedOut: DisconnectReason.loggedOut,
+  } }, "close-policy CLOSE_CODES drifted from Baileys DisconnectReason — fix close-policy.js");
+}
 
 // 韧性护栏：Baileys 是社区逆向库，偶发内部 promiseTimeout('Timed Out')/解密异常等会以
 // unhandledRejection/uncaughtException 冒泡；若不接住，整个网关进程会 ~60s 崩一次（app-state
@@ -107,7 +123,10 @@ async function postIngest(payload) {
   await postJson(PY_INGEST_URL, payload);
 }
 
-/** 会话健康状态 push（authorized / logged_out / expired）。 */
+/** 会话健康状态 push（authorized / logged_out / expired）。
+ *  P1 身份化：authorized 时顺带携带自身昵称/头像（pushname/avatar_url），
+ *  Python 的 session-status 端点据此富集 registry meta.self_*——重启重连即回填，
+ *  不必重新扫码。字段缺失时 Python 侧 no-op（前向/后向兼容）。 */
 async function postStatus(loginId, entry, status, detail) {
   if (!PY_STATUS_URL) return;
   await postJson(PY_STATUS_URL, {
@@ -116,8 +135,82 @@ async function postStatus(loginId, entry, status, detail) {
     login_id: String(loginId || ""),
     status: String(status || ""),
     detail: String(detail || ""),
+    pushname: String((entry && entry.selfName) || ""),
+    avatar_url: String((entry && entry.selfAvatarUrl) || ""),
     ts: Math.floor(Date.now() / 1000),
   });
+}
+
+/** P1 身份化：采集账号自身昵称(pushName)与头像直链（连接成功后调用；best-effort 绝不抛）。
+ *  昵称来自 sock.user（creds.me，登录即有）；头像走 profilePictureUrl(自身 jid)——
+ *  一号一次、仅连接成功时调用，无风控压力；无头像/隐私设置 → 留空（前端回落字首头像）。 */
+async function captureSelfProfile(entry) {
+  try {
+    const u = entry && entry.sock && entry.sock.user;
+    if (!u) return;
+    // pushname 兜底链：sock.user（=creds.me）常在刚 open 时无 name（要等 creds.update 推），
+    // 再显式兜底 authState.creds.me.name——两者理论同源，防御性双读。
+    const credsName = String(
+      (entry.sock.authState &&
+        entry.sock.authState.creds &&
+        entry.sock.authState.creds.me &&
+        entry.sock.authState.creds.me.name) || "").trim();
+    const nm = String(u.name || u.verifiedName || u.notify || "").trim() || credsName;
+    if (nm) entry.selfName = nm;
+    const jid = String(u.id || "");
+    if (jid && typeof entry.sock.profilePictureUrl === "function") {
+      try {
+        const url = await entry.sock.profilePictureUrl(jid, "image");
+        if (url) entry.selfAvatarUrl = String(url);
+      } catch (_) {
+        // 无头像/隐私设置 → 保持现值（可能为空）
+      }
+    }
+  } catch (e) {
+    logger.debug({ e }, "captureSelfProfile failed");
+  }
+}
+
+/** P1 加固：清掉 entry 上的延迟自采 timer（取消/登出/close/重连换 entry 时统一调，防泄漏）。 */
+function clearSelfProfileTimer(entry) {
+  try {
+    if (entry && entry._selfProfileTimer) {
+      clearTimeout(entry._selfProfileTimer);
+      entry._selfProfileTimer = null;
+    }
+  } catch (_) {}
+}
+
+/** P1 加固：连接 open 后自身昵称/头像仍缺 → 30s 后延迟重采一次（pushname 常在 open 后
+ *  才经 creds.update 推到、头像偶发首拉为空）。采到新值且仍 authorized、entry 仍是当前
+ *  会话时才补推 Python（profile-refresh）。timer 挂 entry._selfProfileTimer，所有清理
+ *  路径经 clearSelfProfileTimer 统一撤。best-effort 绝不抛。 */
+function scheduleSelfProfileRecapture(loginId, entry) {
+  try {
+    if (!entry || (entry.selfName && entry.selfAvatarUrl)) return; // 首采已齐 → 不排
+    clearSelfProfileTimer(entry);
+    entry._selfProfileTimer = setTimeout(() => {
+      entry._selfProfileTimer = null;
+      try {
+        if (sessions.get(loginId) !== entry || entry.status !== "authorized") return;
+        const before = (entry.selfName || "") + "|" + (entry.selfAvatarUrl || "");
+        captureSelfProfile(entry)
+          .catch(() => {})
+          .finally(() => {
+            const after = (entry.selfName || "") + "|" + (entry.selfAvatarUrl || "");
+            if (after !== before && entry.status === "authorized" &&
+                sessions.get(loginId) === entry) {
+              postStatus(loginId, entry, "authorized", "profile-refresh").catch(() => {});
+            }
+          });
+      } catch (e) {
+        logger.debug({ e }, "delayed self-profile recapture failed");
+      }
+    }, 30000);
+    if (typeof entry._selfProfileTimer.unref === "function") entry._selfProfileTimer.unref();
+  } catch (e) {
+    logger.debug({ e }, "scheduleSelfProfileRecapture failed");
+  }
 }
 
 // ── 断线自动重连（P3 发现的真缺口）────────────────────────────────────────────
@@ -166,9 +259,20 @@ function scheduleReconnect(loginId, proxyUrl) {
   logger.warn({ loginId, attempt: rec.count, delayMs: delay },
     "WA connection closed unexpectedly → scheduling reconnect");
   setTimeout(() => {
-    if (!sessions.has(loginId)) return; // 已被登出/取消 → 不复活
-    startLogin(loginId, proxyUrl).catch((e) =>
-      logger.error({ e, loginId }, "WA reconnect attempt failed"));
+    // 幂等护栏：快重连与慢重试/手动 reconnect 端点是并行通道，触发时会话可能已被
+    // 登出移除（不复活）或已由别的通道连回（authorized）——此时再 startLogin 会开出
+    // 第二个 socket 抢同一 authDir → WhatsApp 440 connectionReplaced 冲突循环。
+    const cur = sessions.get(loginId);
+    if (!cur || cur.status === "authorized") return;
+    startLogin(loginId, proxyUrl).catch((e) => {
+      // startLogin 自身抛异常（典型：断网时 fetchLatestBaileysVersion DNS 失败）＝这次
+      // 尝试连 socket 都没建出来，不会有 close 事件续命 → 只打日志重连链就断了（又一条
+      // 死径）。这里把失败重新入队 scheduleReconnect：计数自然递增 → 耗尽 → 慢重试兜底，
+      // 指数退避保证不会热循环。
+      logger.error({ e: String((e && e.message) || e), loginId },
+        "WA reconnect attempt failed → re-scheduling");
+      scheduleReconnect(loginId, proxyUrl);
+    });
   }, delay);
 }
 
@@ -224,6 +328,58 @@ async function groupName(entry, jid) {
     return subj;
   } catch (_) {
     return "";
+  }
+}
+
+/** 占位会话历史兜底（消除 no_anchor 死角）：缓存每个会话「已知最新一条消息的 key」。
+ *
+ *  为什么需要：会话列表同步（postChats）只有 jid/名字/未读数、没有消息本体，Python store
+ *  里因此存在"零消息"的占位会话——用户点开想拉历史时，store 找不到 platform_msg_id 锚点，
+ *  fetchMessageHistory 无从下手。这里在一切能看到消息 key 的事件（初次历史同步/实时消息/
+ *  新会话通知）里顺手记下每个会话的最新 key，/history 不带 oldest_id 时用它当锚点，
+ *  等价于"从最新往前拉 count 条"。内存态、随 entry 生存（重连继承），best-effort 绝不抛。
+ *  fallbackTs：消息自身无 messageTimestamp 时的兜底时间戳（如 chat.conversationTimestamp）。 */
+function rememberLastMsgKey(entry, msg, fallbackTs) {
+  try {
+    const key = (msg && msg.key) || {};
+    const id = key.id;
+    if (!id) return;
+    const ts = Number(msg.messageTimestamp || 0) || Number(fallbackTs || 0) || 0;
+    const rec = { id: String(id), fromMe: !!key.fromMe, ts };
+    // 群消息锚点需完整 key（含 participant），否则 fetchMessageHistory 可能定位失败
+    if (key.participant) rec.participant = String(key.participant);
+    if (!entry.lastMsgKeys) entry.lastMsgKeys = {};
+    // 同一条消息按两个地址索引：remoteJid（原生，@lid 私聊时是 LID）+ remoteJidAlt
+    // （Baileys 7 附带的真实号码）。Python 侧 chat_key 是解析后的真实号码 →
+    // 查询进来的是 <num>@s.whatsapp.net，必须能命中 alt 索引。
+    for (const j of [key.remoteJid, key.remoteJidAlt]) {
+      const jid = String(j || "");
+      if (!jid) continue;
+      const prev = entry.lastMsgKeys[jid];
+      if (prev && Number(prev.ts || 0) > ts) continue; // 只保留更新的（ts 更大才覆盖）
+      entry.lastMsgKeys[jid] = rec;
+    }
+  } catch (_) {
+    // 兜底缓存失败绝不影响消息主路径
+  }
+}
+
+/** 从会话对象里提取内嵌的最新消息 key（messaging-history.set 的 chats / chats.upsert）。
+ *  Baileys 历史同步的 Chat proto 携带 messages: [{ message: WebMessageInfo }]（HistorySyncMsg
+ *  包装）；部分版本/事件可能直接给 lastMessage——两者都防御性探测，取不到就跳过。 */
+function rememberChatLastKeys(entry, chats) {
+  try {
+    for (const ch of chats || []) {
+      const fallbackTs = Number((ch && ch.conversationTimestamp) || 0) || 0;
+      for (const hm of (ch && ch.messages) || []) {
+        const wmi = (hm && (hm.message || hm)) || null; // HistorySyncMsg 包装或裸 WebMessageInfo
+        if (wmi && wmi.key) rememberLastMsgKey(entry, wmi, fallbackTs);
+      }
+      const lm = ch && ch.lastMessage;
+      if (lm && lm.key) rememberLastMsgKey(entry, lm, fallbackTs);
+    }
+  } catch (_) {
+    // best-effort：缓存失败不影响会话列表同步
   }
 }
 
@@ -689,9 +845,36 @@ async function buildAgent(proxyUrl) {
   }
 }
 
+// P0-B startLogin 并发防重：restartRequired / 快重连 / 慢重试 / 手动 reconnect 端点是
+// 互相独立的触发通道，并发对同一 loginId 各跑一个 startLogin 会开出两个 socket 抢同一
+// authDir → WhatsApp 440 connectionReplaced 互踢循环 + 凭据文件互踩。同一时刻每个
+// loginId 只允许一个 startLogin 在建；后到者直接拿现有 entry 返回（不排队——触发方
+// 都有自己的重试通道，丢弃重复请求是安全的）。
+const _startingLogins = new Set();
+
 async function startLogin(loginId, proxyUrl) {
+  if (_startingLogins.has(loginId)) {
+    logger.warn({ loginId }, "startLogin already in flight → duplicate call skipped");
+    return sessions.get(loginId);
+  }
+  _startingLogins.add(loginId);
+  try {
+    return await _startLoginInner(loginId, proxyUrl);
+  } finally {
+    _startingLogins.delete(loginId);
+  }
+}
+
+async function _startLoginInner(loginId, proxyUrl) {
   const authDir = path.join(SESSIONS_DIR, loginId);
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
+  // P0-A：accountId 直接从持久化凭据取号，不等 connection open——修「服务重启后 WhatsApp
+  // 离线队列立即回放，messages.upsert 与 open 同 tick 竞速，pushWaMessage 带空 account_id
+  // → Python 建出孤儿会话」。creds.me.id 形如 "639270135480:1@s.whatsapp.net"（:1 为设备
+  // 序号），先去 ":" 后缀再去 "@" 域兜底；未配对 session（无 me）保持 ""（QR 流程语义不变）。
+  const credsAccountId = String(
+    (state.creds && state.creds.me && state.creds.me.id) || "")
+    .split(":")[0].split("@")[0];
   const { version, isLatest } = await fetchLatestBaileysVersion();
   logger.info({ loginId, waWebVersion: (version || []).join("."), isLatest },
     "WA socket negotiated WhatsApp Web version");
@@ -714,14 +897,48 @@ async function startLogin(loginId, proxyUrl) {
     sock,
     status: "pending",
     qrImage: "",
-    accountId: "",
+    accountId: credsAccountId,
+    // P1 身份化：账号自身昵称(pushName)/头像直链——连接成功后采集，供 Python 富集
+    // registry meta.self_*（连接中心/账号切换条显示真实身份而非「账号N」）。
+    selfName: "",
+    selfAvatarUrl: "",
+    // 占位会话历史兜底缓存：jid -> {id, fromMe, ts[, participant]}（该会话已知最新消息 key）。
+    // 重连（restartRequired/网络闪断）会新建 entry —— 继承旧 entry 的缓存，避免每次重连清零。
+    lastMsgKeys: ((sessions.get(loginId) || {}).lastMsgKeys) || {},
     createdAt: Date.now(),
     authDir,
     proxyUrl: proxyUrl || "",
   };
+  clearSelfProfileTimer(sessions.get(loginId)); // 换代（重连/重启）→ 旧 entry 的延迟自采 timer 撤掉
   sessions.set(loginId, entry);
 
   sock.ev.on("creds.update", saveCreds);
+
+  // P1 加固：pushname 常在连接 open 之后才由服务端经 creds.update 推到（me.name），
+  // 只在 open 时采集会拿到空名 → UI 回落「账号N」。这里监听 name 变化补采：
+  // 新名非空且与已采值不同才动作（去抖，防同名重复触发重复 post）。
+  sock.ev.on("creds.update", (update) => {
+    try {
+      if (sessions.get(loginId) !== entry) return; // 已被重连/登出换代 → 旧 sock 事件忽略
+      const nm = String(
+        (update && update.me && update.me.name) ||
+        (sock.authState && sock.authState.creds && sock.authState.creds.me &&
+          sock.authState.creds.me.name) || "").trim();
+      if (!nm || nm === entry.selfName) return;
+      entry.selfName = nm;
+      // 顺带补一次头像（captureSelfProfile 内部 best-effort），再把新身份推给 Python；
+      // 仅 authorized 后才 post，防止登录中途乱推。
+      captureSelfProfile(entry)
+        .catch(() => {})
+        .finally(() => {
+          if (entry.status === "authorized" && sessions.get(loginId) === entry) {
+            postStatus(loginId, entry, "authorized", "profile-refresh").catch(() => {});
+          }
+        });
+    } catch (e) {
+      logger.debug({ e }, "creds.update selfName refresh failed");
+    }
+  });
 
   // 入站消息 → push 到 Python 统一收件箱
   sock.ev.on("messages.upsert", async (m) => {
@@ -733,6 +950,9 @@ async function startLogin(loginId, proxyUrl) {
           const jid = (msg.key && msg.key.remoteJid) || "";
           if (jid) { await postMessageOp(entry, jid, op); continue; }
         }
+        // 占位会话兜底：实时消息顺手更新「该会话最新消息 key」缓存（撤回/编辑等协议消息
+        // 已在上面 continue——它们在手机历史里可能不存在，不适合当锚点）
+        rememberLastMsgKey(entry, msg);
         await pushWaMessage(entry, msg, false);
       }
     } catch (e) {
@@ -756,6 +976,8 @@ async function startLogin(loginId, proxyUrl) {
   // 不监听 chats.update（仅时间戳/未读变动，过于频繁；消息到达已由 messages.upsert 落库）。
   if (WA_SYNC_CHATS) {
     sock.ev.on("chats.upsert", async (arr) => {
+      // 新会话通知若内嵌 lastMessage/messages → 顺手缓存锚点（占位会话拉历史兜底）
+      try { rememberChatLastKeys(entry, arr); } catch (_) {}
       try { await postChats(entry, arr); } catch (_) {}
     });
   }
@@ -806,6 +1028,15 @@ async function startLogin(loginId, proxyUrl) {
   // 恒挂：on-demand 回填即使 WA_BACKFILL=0 也需落库。
   sock.ev.on("messaging-history.set", async (h) => {
     try {
+      // 占位会话兜底：历史同步里见到的所有消息 key 都记进缓存（含 chats 内嵌的最新消息）。
+      // 与下面的落库逻辑解耦——即使 WA_BACKFILL=0 不落库，锚点缓存也要填，
+      // 否则占位会话的 /history 兜底路径无 key 可用。
+      try {
+        if (h && Array.isArray(h.chats)) rememberChatLastKeys(entry, h.chats);
+        for (const msg of (h && Array.isArray(h.messages) && h.messages) || []) {
+          rememberLastMsgKey(entry, msg);
+        }
+      } catch (_) {}
       // P0 全量会话列表：把会话建为占位（无消息也可见，贴近官方）
       if (WA_SYNC_CHATS && h && Array.isArray(h.chats)) {
         await postChats(entry, h.chats);
@@ -826,6 +1057,11 @@ async function startLogin(loginId, proxyUrl) {
   });
 
   sock.ev.on("connection.update", async (update) => {
+    // 陈旧事件护栏（P0-B）：startLogin（重连/重启/手动 reconnect）会用新 entry 替换
+    // sessions 槽位，但旧 socket 的事件仍可能迟到——旧 close 若落到下面的分支，会把
+    // 新会话状态改坏 / 触发幽灵重连（双 socket 抢同一 authDir → 440 互踢循环），旧 qr
+    // 也会覆盖新码。已换代的 entry 一律整体忽略。
+    if (sessions.get(loginId) !== entry) return;
     const { connection, lastDisconnect, qr } = update;
     if (qr) {
       try {
@@ -837,15 +1073,27 @@ async function startLogin(loginId, proxyUrl) {
     if (connection === "open") {
       entry.status = "authorized";
       try {
-        entry.accountId = (sock.user && (sock.user.id || "").split(":")[0]) || "";
+        // 以 sock.user 为准刷新（P0-A 已在建 entry 时从凭据预填）；瞬时取不到时保留
+        // 凭据预填值，绝不清空——离线回放的 pushWaMessage 必须始终带真实 account_id。
+        entry.accountId =
+          (sock.user && (sock.user.id || "").split(":")[0].split("@")[0]) ||
+          entry.accountId || "";
       } catch (_) {
-        entry.accountId = "";
+        // 保留现值（凭据预填）；仅在读 sock.user 异常时走到这里
       }
       logger.info({ loginId, accountId: entry.accountId }, "WA connected");
       _reconnectAttempts.delete(loginId); // 连上 → 清零重连退避计数
       const _srt = _slowRetryTimers.get(loginId); // 已恢复 → 撤掉排队中的慢重试
       if (_srt) { clearTimeout(_srt); _slowRetryTimers.delete(loginId); }
-      postStatus(loginId, entry, "authorized", "connected").catch(() => {});
+      // P1 身份化：先采集自身昵称/头像再上报，让 authorized push 即携带身份
+      // （采集失败不阻断上报；登录轮询/GET /accounts 也各自透出同一份）。
+      captureSelfProfile(entry)
+        .catch(() => {})
+        .finally(() => {
+          postStatus(loginId, entry, "authorized", "connected").catch(() => {});
+          // P1 加固：首采若名/头像仍缺（pushname 未推到/头像首拉为空）→ 30s 后延迟重采一次
+          try { scheduleSelfProfileRecapture(loginId, entry); } catch (_) {}
+        });
       // P0 自愈：恢复的老 session 不会重放初次 contacts.set，(re)连成功后主动补拉一次
       // 通讯录 app-state（幂等，best-effort）——好友名单不必重扫码即可回流。只做一次。
       if (WA_SYNC_CONTACTS && !entry._resynced) {
@@ -858,6 +1106,7 @@ async function startLogin(loginId, proxyUrl) {
         backfillGroups(entry).catch(() => {});
       }
     } else if (connection === "close") {
+      clearSelfProfileTimer(entry); // socket 已死 → 撤延迟自采（重连成功会重新排）
       const code =
         (lastDisconnect &&
           lastDisconnect.error &&
@@ -872,11 +1121,22 @@ async function startLogin(loginId, proxyUrl) {
       logger.warn(
         { loginId, accountId: entry.accountId || "", code, status: entry.status, reason: _reason },
         "WA connection closed");
-      if (code === DisconnectReason.restartRequired) {
-        // 登录成功后 Baileys 要求重启 socket —— 重新拉起以维持连接（沿用同一代理）
-        startLogin(loginId, entry.proxyUrl).catch((e) =>
-          logger.error({ e }, "restart failed"));
-      } else if (code === DisconnectReason.loggedOut) {
+      // 分支决策抽在 close-policy.js（纯函数，node --test 单测）；这里只执行副作用。
+      // isStale 在 close 时点重算：处理器顶部已拦一次，但上方 qr 分支有 await，极端时序下
+      // entry 可能在 await 期间被 startLogin 换代——close 副作用绝不能落在已换代的会话上。
+      const decision = decideCloseAction(entry, code, sessions.get(loginId) !== entry);
+      if (decision.action === "ignore") {
+        return; // 陈旧事件：新 entry 已接管，旧 socket 的 close 不再有任何影响
+      } else if (decision.action === "restart") {
+        // 登录成功后 Baileys 要求重启 socket —— 重新拉起以维持连接（沿用同一代理）。
+        // 失败也要入重连队列：restart 时点恰逢断网时 startLogin 会在 DNS 处直接抛，
+        // 只打日志的话这条会话就永远停在原地（与快重连 catch 同一死径，同一修法）。
+        startLogin(loginId, entry.proxyUrl).catch((e) => {
+          logger.error({ e: String((e && e.message) || e), loginId },
+            "restart failed → re-scheduling reconnect");
+          scheduleReconnect(loginId, entry.proxyUrl);
+        });
+      } else if (decision.action === "logged_out") {
         entry.status = "failed";
         // 人为登出（/logout、/cancel 会先置 _intentionalLogout 再 sock.logout()）不告警；
         // 真被设备端解绑/风控登出才 push（需人工重新配对）。
@@ -885,12 +1145,17 @@ async function startLogin(loginId, proxyUrl) {
             "WhatsApp reports loggedOut (device unlinked / logged out on phone?); re-pair needed")
             .catch(() => {});
         }
-      } else if (entry.status === "authorized") {
-        // 已授权会话意外断开（网络/踢线/超时）→ 自动重连（此前这里什么都不做 = 假在线）。
-        // 会话若已被 /logout 删除则 scheduleReconnect 内部不复活。
+      } else if (decision.action === "reconnect") {
+        // 曾配对账号（authorized 掉线，或重连中的 pending 再失败）→ 继续重连。
+        // 2026-07-22 事故根因：重连中 startLogin 建的新 entry 是 pending，DNS 失败 close
+        // 落进旧的「非 authorized → expired」分支，快重连计数才 1/5、慢重试未武装 →
+        // 会话假死 2 小时。改为看 accountId（P0-A 起从凭据常驻）：曾配对就绝不判死。
+        // 刻意不 postStatus：Baileys 正常也会每小时 428 闪断一次、3 秒即恢复，推
+        // reconnecting 会告警刷屏；真放弃时 scheduleReconnect 耗尽路径自会 postStatus("expired")。
         entry.status = "reconnecting";
         scheduleReconnect(loginId, entry.proxyUrl);
-      } else if (entry.status !== "authorized") {
+      } else {
+        // 纯扫码流程失败（从未配对成功、无凭据）→ expired，等用户重新发起扫码
         entry.status = "expired";
       }
     }
@@ -913,6 +1178,16 @@ async function restoreAll() {
   let restored = 0;
   for (const loginId of dirs) {
     if (sessions.has(loginId)) continue; // 已在内存
+    // P0-D：无 creds.json 的目录＝扫码半途遗留的空壳（如现网 wa_tfq1yuxs），不是可恢复
+    // 会话——重跑只会白走一轮 QR 并留下 pending/expired 噪音，跳过（留档便于人工清理）。
+    try {
+      if (!fs.existsSync(path.join(SESSIONS_DIR, loginId, "creds.json"))) {
+        logger.info({ loginId }, "restore skipped: no creds.json (never paired)");
+        continue;
+      }
+    } catch (_) {
+      // 探测失败按可恢复处理（宁多试一次，不静默漏恢复）
+    }
     try {
       await startLogin(loginId);
       restored += 1;
@@ -931,6 +1206,43 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 app.post("/accounts/restore", async (_req, res) => {
   const restored = await restoreAll();
   res.json({ ok: true, restored });
+});
+
+// P0-C：强制重连端点——Python 编排器检测到会话不健康时调用做真自愈（不必重启本进程）。
+// :id=account_id（与 /accounts/:id/send 同寻址）。刻意不用 findByAccount：它只认
+// authorized，而本端点恰恰要救 expired/reconnecting/pending 的会话（P0-A 起 accountId
+// 从凭据常驻，掉线态也能按号找到）。响应契约（Python 侧按此对接，勿改结构）：
+//   404 {ok:false} / 已在线 {ok:true, already:true} / 已发起 {ok:true, reconnecting:true}。
+app.post("/accounts/:id/reconnect", async (req, res) => {
+  const accountId = String(req.params.id);
+  let loginId = "";
+  let entry = null;
+  for (const [lid, e] of sessions.entries()) {
+    if (e.accountId === accountId) {
+      loginId = lid;
+      entry = e;
+      if (e.status === "authorized") break; // 同号多条时优先 authorized（直接走 already）
+    }
+  }
+  if (!entry) {
+    return res.status(404).json({ ok: false, error: "account not found" });
+  }
+  if (entry.status === "authorized") {
+    return res.json({ ok: true, already: true });
+  }
+  // 人工/编排器触发＝新一轮重连预算：清退避计数与慢重试定时器，立即拉起。
+  _reconnectAttempts.delete(loginId);
+  const srt = _slowRetryTimers.get(loginId);
+  if (srt) { clearTimeout(srt); _slowRetryTimers.delete(loginId); }
+  logger.info({ loginId, accountId }, "WA manual reconnect requested");
+  // 异步拉起（_startingLogins 防与快/慢重试并发重入）；失败入重连队列而非静默——
+  // 调用方拿到的 reconnecting:true 语义是「自愈已接手」，后续必须有退避链兜住。
+  startLogin(loginId, entry.proxyUrl).catch((e) => {
+    logger.error({ e: String((e && e.message) || e), loginId },
+      "manual reconnect startLogin failed → re-scheduling");
+    scheduleReconnect(loginId, entry.proxyUrl);
+  });
+  res.json({ ok: true, reconnecting: true });
 });
 
 app.post("/login/start", async (req, res) => {
@@ -957,6 +1269,9 @@ app.get("/login/:id/status", (req, res) => {
     status: entry.status,
     account_id: entry.accountId,
     qr_image: entry.status === "authorized" ? "" : entry.qrImage,
+    // P1 身份化：登录轮询携带自身昵称/头像 → Python enrich_from_fields 富集
+    pushname: entry.selfName || "",
+    avatar_url: entry.selfAvatarUrl || "",
   });
 });
 
@@ -964,6 +1279,7 @@ app.post("/login/:id/cancel", async (req, res) => {
   const entry = sessions.get(req.params.id);
   if (entry) {
     entry._intentionalLogout = true; // 人为取消 → close 事件不推「被登出」告警
+    clearSelfProfileTimer(entry); // 会话清理 → 延迟自采 timer 一并撤
     try {
       if (entry.sock) await entry.sock.logout().catch(() => {});
     } catch (_) {}
@@ -981,17 +1297,34 @@ app.post("/accounts/:id/history", async (req, res) => {
   }
   const jid = toJid((req.body && req.body.jid) || "");
   const count = Math.max(1, Math.min(200, Number((req.body && req.body.count) || 50)));
-  const oldestId = String((req.body && req.body.oldest_id) || "");
-  const oldestTs = Number((req.body && req.body.oldest_ts) || 0);
-  const fromMe = !!(req.body && req.body.from_me);
-  if (!jid || !oldestId) {
-    return res.status(400).json({ ok: false, error: "jid and oldest_id required" });
+  let oldestId = String((req.body && req.body.oldest_id) || "");
+  let oldestTs = Number((req.body && req.body.oldest_ts) || 0);
+  let fromMe = !!(req.body && req.body.from_me);
+  let participant = "";
+  if (!jid) {
+    return res.status(400).json({ ok: false, error: "jid required" });
+  }
+  // 占位会话兜底：Python store 无锚点时发「空 oldest_id」请求 → 回落用缓存的
+  // 「该会话最新消息 key」当锚点（从最新往前拉 count 条 ≈ 拉最近历史）。
+  // 缓存也没有（进程刚重启/从未见过该会话的消息）→ HTTP 200 + no_cached_anchor，
+  // 让 Python 能读到 error 字段区分「无历史可拉」与「服务故障」（4xx/5xx 会被
+  // raise_for_status 吞成 service_error）。传了 oldest_id 则走原有行为，向后兼容。
+  if (!oldestId) {
+    const cached = (entry.lastMsgKeys || {})[jid];
+    if (!cached || !cached.id) {
+      return res.json({ ok: false, error: "no_cached_anchor" });
+    }
+    oldestId = String(cached.id);
+    oldestTs = Number(cached.ts || 0);
+    fromMe = !!cached.fromMe;
+    participant = String(cached.participant || "");
   }
   if (typeof entry.sock.fetchMessageHistory !== "function") {
     return res.status(501).json({ ok: false, error: "fetchMessageHistory unavailable" });
   }
   try {
     const key = { remoteJid: jid, id: oldestId, fromMe };
+    if (participant) key.participant = participant; // 群锚点需完整 key
     const reqId = await entry.sock.fetchMessageHistory(count, key, oldestTs);
     logger.info({ accountId: entry.accountId, jid, count }, "WA history fetch requested");
     res.json({ ok: true, request_id: String(reqId || "") });
@@ -1262,6 +1595,146 @@ app.post("/accounts/:id/send-media", async (req, res) => {
   }
 });
 
+// 头像直发降级：generateProfilePicture 依赖 jimp/sharp 图像库，若运行环境缺失
+// （官方 updateProfilePicture 抛 Cannot find module / No image processing library），
+// 按 lib/Socket/chats.js::updateProfilePicture 的 iq 节点结构自发同样的
+// <iq to=@s.whatsapp.net type=set xmlns=w:profile:picture><picture type="image">buf</picture></iq>。
+// 仅限自身头像（不带 target 属性＝更新自己，与源码 targetJid=undefined 分支一致）；
+// 调用方已保证 buf 是合规 640x640 JPEG，跳过 generateProfilePicture 安全。
+async function setProfilePictureRaw(sock, buf) {
+  await sock.query({
+    tag: "iq",
+    attrs: {
+      to: "@s.whatsapp.net", // S_WHATSAPP_NET（与 lib/WABinary/jid-utils.js 同值）
+      type: "set",
+      xmlns: "w:profile:picture",
+    },
+    content: [{ tag: "picture", attrs: { type: "image" }, content: buf }],
+  });
+}
+
+// 修改账号自身官方资料（昵称 pushname / 签名 about / 头像）。逐字段独立 try/catch
+// 互不阻塞；任一字段成功即 postStatus(profile-updated) 让 Python 刷新注册表身份。
+// :id 兼容 accountId（号码）与 login_id 两种寻址（与 /logout 的扫描风格一致）。
+app.post("/accounts/:id/profile", async (req, res) => {
+  try {
+    const id = String(req.params.id || "");
+    let loginId = "";
+    let entry = null;
+    for (const [lid, e] of sessions.entries()) {
+      if (e.accountId === id) {
+        loginId = lid;
+        entry = e;
+        if (e.status === "authorized") break; // 同号多条时优先 authorized 的那条
+      }
+    }
+    if (!entry && sessions.has(id)) {
+      loginId = id;
+      entry = sessions.get(id);
+    }
+    if (!entry) {
+      return res.status(404).json({ ok: false, error: "account_not_found" });
+    }
+    if (entry.status !== "authorized" || !entry.sock) {
+      return res.status(409).json({ ok: false, error: "not_connected" });
+    }
+    const body = req.body || {};
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    const hasName = !!name;
+    const hasStatus = typeof body.status_text === "string";
+    const statusText = hasStatus ? String(body.status_text) : "";
+    const avatarB64 = typeof body.avatar_b64 === "string" ? body.avatar_b64.trim() : "";
+    const hasAvatar = !!avatarB64;
+    if (!hasName && !hasStatus && !hasAvatar) {
+      return res.status(400).json({ ok: false, error: "no_fields" });
+    }
+    if (hasName && name.length > 25) { // WhatsApp pushname 上限 25 字符
+      return res.status(400).json({ ok: false, error: "name_too_long" });
+    }
+    if (hasStatus && statusText.length > 139) { // about/签名上限 139 字符
+      return res.status(400).json({ ok: false, error: "status_too_long" });
+    }
+    const applied = {};
+    const errors = {};
+    // 昵称（pushname）：updateProfileName 走 app-state chatModify(pushNameSetting)
+    if (hasName) {
+      try {
+        await entry.sock.updateProfileName(name);
+        entry.selfName = name;
+        applied.name = true;
+      } catch (e) {
+        applied.name = false;
+        errors.name = String((e && e.message) || e).slice(0, 120);
+      }
+    }
+    // 签名（about）
+    if (hasStatus) {
+      try {
+        await entry.sock.updateProfileStatus(statusText);
+        applied.status = true;
+      } catch (e) {
+        applied.status = false;
+        errors.status = String((e && e.message) || e).slice(0, 120);
+      }
+    }
+    // 头像：调用方已预处理为 640x640 JPEG base64（兼容带 data: 前缀的情况）
+    if (hasAvatar) {
+      try {
+        const b64 = avatarB64.replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/i, "");
+        const buf = Buffer.from(b64, "base64");
+        if (!buf.length) {
+          applied.avatar = false;
+          errors.avatar = "empty";
+        } else if (buf.length > 8 * 1024 * 1024) {
+          applied.avatar = false;
+          errors.avatar = "too_large";
+        } else {
+          const selfJid = String((entry.sock.user && entry.sock.user.id) || "");
+          if (!selfJid) throw new Error("no_self_jid");
+          try {
+            // 官方 API（内部 generateProfilePicture 依赖 sharp/jimp；本地 node_modules 已带 sharp）
+            await entry.sock.updateProfilePicture(selfJid, buf);
+          } catch (e) {
+            const msg = String((e && e.message) || e);
+            if (/cannot find (module|package)|no image processing library/i.test(msg)) {
+              await setProfilePictureRaw(entry.sock, buf); // 图像库缺失 → raw iq 降级
+            } else {
+              throw e;
+            }
+          }
+          applied.avatar = true;
+          // 成功后重拉一次头像直链刷新缓存（失败忽略，不影响 applied 判定）
+          try {
+            const url = await entry.sock.profilePictureUrl(selfJid, "image");
+            if (url) entry.selfAvatarUrl = String(url);
+          } catch (_) {}
+        }
+      } catch (e) {
+        applied.avatar = false;
+        if (!errors.avatar) errors.avatar = String((e && e.message) || e).slice(0, 120);
+      }
+    }
+    const okAny = Object.keys(applied).some((k) => applied[k]);
+    if (okAny) {
+      // 任一字段成功 → push 一次 profile-updated（Python session-status 钩子刷新注册表身份）
+      try {
+        await postStatus(loginId, entry, "authorized", "profile-updated");
+      } catch (_) {}
+    }
+    logger.info({ accountId: entry.accountId, applied, errors }, "WA profile update");
+    res.status(okAny ? 200 : 500).json({
+      ok: okAny,
+      applied,
+      errors,
+      pushname: entry.selfName || "",
+      avatar_url: entry.selfAvatarUrl || "",
+    });
+  } catch (e) {
+    logger.error({ e }, "profile update failed");
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
 // 登出账号：解除手机端设备关联 + 清掉本地持久化 session（开机不再自动恢复）。
 // 幂等：账号不在线（无 sock）也返回 ok，仅尽量清理磁盘残留。
 app.post("/accounts/:id/logout", async (req, res) => {
@@ -1273,6 +1746,7 @@ app.post("/accounts/:id/logout", async (req, res) => {
   }
   try {
     if (entry) entry._intentionalLogout = true; // 运营主动登出 → 不推「被登出」告警
+    clearSelfProfileTimer(entry); // 会话清理 → 延迟自采 timer 一并撤
     if (entry && entry.sock) await entry.sock.logout().catch(() => {});
   } catch (_) {}
   if (loginId) sessions.delete(loginId);
@@ -1291,7 +1765,13 @@ app.get("/accounts", (_req, res) => {
   const accounts = [];
   for (const [id, e] of sessions.entries()) {
     if (e.status === "authorized") {
-      accounts.push({ login_id: id, account_id: e.accountId });
+      accounts.push({
+        login_id: id,
+        account_id: e.accountId,
+        // P1 身份化：随健康轮询透出自身身份 → Python worker 机会式回填存量账号
+        pushname: e.selfName || "",
+        avatar_url: e.selfAvatarUrl || "",
+      });
     }
   }
   res.json({ accounts });

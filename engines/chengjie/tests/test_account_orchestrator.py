@@ -74,6 +74,17 @@ async def test_sync_starts_protocol_ignores_device(registry):
     assert account_key("telegram", "1") in {a["key"] for a in st["accounts"]}
 
 
+async def test_sync_skips_offline_and_pending(registry):
+    """offline/pending 不进期望集，避免无绑定号与在线号串话。"""
+    registry.upsert("telegram", "1", mode="protocol", status="online")
+    registry.upsert("telegram", "2", mode="protocol", status="offline")
+    registry.upsert("telegram", "3", mode="protocol", status="pending")
+    o = AccountOrchestrator(registry=registry)
+    await o.sync()
+    keys = {a["key"] for a in o.status()["accounts"]}
+    assert keys == {account_key("telegram", "1")}
+
+
 async def test_remove_account_stops_worker(registry):
     registry.upsert("telegram", "1", mode="protocol", status="online")
     o = AccountOrchestrator(registry=registry)

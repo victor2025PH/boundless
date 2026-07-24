@@ -133,9 +133,10 @@ class AccountOrchestrator:
     # ── 期望状态 ─────────────────────────────────────────────────────────
 
     def desired_accounts(self) -> List[Dict[str, Any]]:
+        """仅 ``online`` 账号进期望集；``offline/pending/removed`` 不拉起（防无绑定号串话）。"""
         out = []
         for a in self._registry.list():
-            if a.get("status") == "removed":
+            if a.get("status") != "online":
                 continue
             if worker_supported(a.get("platform", ""), a.get("mode", "")):
                 out.append(a)
@@ -183,6 +184,15 @@ class AccountOrchestrator:
         m.state = "starting"
         m.updated_at = self._now_wall()
         try:
+            # 上线无人设 → 写入默认人设（防宏图棋牌类空绑定串话/错声）
+            try:
+                from src.ai.persona_voice import ensure_account_default_persona
+                ensure_account_default_persona(
+                    self._registry, platform, account_id, self._config,
+                )
+                account = self._registry.get(platform, account_id) or account
+            except Exception:
+                pass
             if m.worker is None:
                 m.worker = factory(account, self._config)
             await m.worker.start()
@@ -386,7 +396,8 @@ class AccountOrchestrator:
         """
         # Stage M：编排器发送入口统一护栏（Kill-Switch + 反封号闸门）——富媒体与文本同守。
         _blk, _reason = send_blocked(
-            platform, account_id, config=self._config, registry=self._registry)
+            platform, account_id, config=self._config, registry=self._registry,
+            chat_key=str(chat_key or ""))
         if _blk:
             logger.warning("[orchestrator] 媒体发送被护栏拦截 %s:%s (%s)",
                            platform, account_id, _reason)
@@ -395,18 +406,38 @@ class AccountOrchestrator:
         if not (m is not None and m.state == "running"
                 and m.worker is not None and hasattr(m.worker, "send_media")):
             raise RuntimeError(f"无可用的运行中 worker(媒体): {platform}:{account_id}")
+        # 反封号·去重微扰（默认关，opt-in）：同一张图发多人 → 文件哈希相同是垃圾信号。
+        # 发送前产出「视觉无差、字节唯一」临时副本喂 worker，发完删除；canonical /static 原图不动
+        # （仍供收件箱展示 + 下次微扰的源）。软失败回落原图，绝不阻断发送。仅本地文件路径可微扰。
+        _send_path = media_path
+        _dedup_temp = False
+        try:
+            from src.integrations.shared.media_dedup import perturb_for_send
+            _send_path, _dedup_temp = perturb_for_send(
+                media_path, media_type, self._config)
+        except Exception:
+            logger.debug("[orchestrator] 媒体去重微扰跳过", exc_info=True)
+            _send_path, _dedup_temp = media_path, False
         # 透传 media_url 给支持的 worker（LINE/Messenger 官方通道需公网 URL 拉取）；
         # 旧 worker（telegram/wa-protocol/测试 fake）签名无此参 → 经签名探测跳过，零回归。
         _sm = m.worker.send_media
         _kw: Dict[str, Any] = dict(
-            media_path=media_path, media_type=media_type, caption=caption)
+            media_path=_send_path, media_type=media_type, caption=caption)
         try:
             import inspect
             if "media_url" in inspect.signature(_sm).parameters:
                 _kw["media_url"] = media_url
         except (ValueError, TypeError):
             pass
-        res = await _sm(chat_key, **_kw)
+        try:
+            res = await _sm(chat_key, **_kw)
+        finally:
+            # 无论成功失败都清理微扰临时副本（原图不受影响）
+            try:
+                from src.integrations.shared.media_dedup import cleanup_temp
+                cleanup_temp(_send_path, _dedup_temp)
+            except Exception:
+                logger.debug("[orchestrator] 微扰临时文件清理失败", exc_info=True)
         # P0-4：带回平台消息 id(wamid)，让出站回写与 worker 的 fromMe 回显同键去重
         _mid = str(res.get("message_id") or "") if isinstance(res, dict) else ""
         try:
@@ -435,7 +466,8 @@ class AccountOrchestrator:
         # Stage M：编排器发送入口统一护栏（Kill-Switch + 反封号闸门）——所有经编排器的
         # 外发（主动问候/唤醒/关怀/接管）都从这里走，旁路发送不再绕过急停与反封号。
         _blk, _reason = send_blocked(
-            platform, account_id, config=self._config, registry=self._registry)
+            platform, account_id, config=self._config, registry=self._registry,
+            chat_key=str(chat_key or ""))
         if _blk:
             logger.warning("[orchestrator] 发送被护栏拦截 %s:%s (%s)",
                            platform, account_id, _reason)
@@ -592,8 +624,12 @@ class TelegramProtocolWorker:
             vc = (self.config.get("voice_recognition") or {})
             if not vc.get("enabled"):
                 return None
-            from src.voice_transcriber import VoiceTranscriberFactory
+            from src.voice_transcriber import (
+                VoiceTranscriberFactory,
+                register_shared_transcriber,
+            )
             self._voice_transcriber = VoiceTranscriberFactory.create_transcriber(vc)
+            register_shared_transcriber(self._voice_transcriber)
         except Exception:
             logger.debug("[tg-worker] voice transcriber 初始化失败", exc_info=True)
         return self._voice_transcriber
@@ -823,6 +859,9 @@ class WhatsAppProtocolWorker:
         self.account_id = str(account.get("account_id") or "")
         self.state = "stopped"
         self.detail = ""
+        # P1 身份化：上次已回填的 (昵称, 头像URL)——健康轮询每 ~15s 一次，仅当 Node 侧
+        # 身份变化才走 enrich（避免每 tick 白读注册表 + 观测计数虚增）。
+        self._last_profile: tuple = ("", "")
 
     def _base(self) -> str:
         from src.integrations.whatsapp_baileys_login import service_base_url
@@ -841,9 +880,27 @@ class WhatsAppProtocolWorker:
             return False
 
     async def start(self) -> None:
-        from src.integrations.whatsapp_baileys_login import _post_json
+        from src.integrations.whatsapp_baileys_login import _get_json, _post_json
         # 触发 Node 恢复所有持久化 session（幂等）；Node 自身也会在开机时恢复
         await _post_json(f"{self._base()}/accounts/restore", {})
+        # 真自愈（2026-07 事故）：Node 的 restoreAll 对内存里已存在的 session（哪怕
+        # expired 假死态）直接 skip → 断线账号靠 restore 永远拉不活，编排器
+        # error→退避→start() 循环空转两小时无人管。restore 后核对 /accounts：自己
+        # 不在列表 → 追加账号级 reconnect（Node 新端点契约：404={ok:false}；已在线
+        # ={ok:true,already:true}；触发重连={ok:true,reconnecting:true}），第一轮
+        # 退避重启就能真正拉活 expired 会话。best-effort：核对/reconnect 失败（Node
+        # 可能正在重启、或旧版无此端点）只记 debug 不抛——start() 抛异常会被编排器
+        # 计为启动失败再进退避，反而拖慢下一轮自愈。
+        try:
+            res = await _get_json(f"{self._base()}/accounts")
+            rows = (res or {}).get("accounts") or []
+            ids = {str(a.get("account_id") or "") for a in rows}
+            if self.account_id and self.account_id not in ids:
+                await _post_json(
+                    f"{self._base()}/accounts/{self.account_id}/reconnect", {})
+        except Exception:
+            logger.debug("[orchestrator] WA reconnect 自愈调用失败（忽略）account=%s",
+                         self.account_id, exc_info=True)
         self.state = "running"
         self.detail = ""
 
@@ -916,10 +973,37 @@ class WhatsAppProtocolWorker:
         from src.integrations.whatsapp_baileys_login import _get_json
         try:
             res = await _get_json(f"{self._base()}/accounts")
-            ids = {str(a.get("account_id") or "") for a in (res.get("accounts") or [])}
+            rows = (res or {}).get("accounts") or []
+            ids = {str(a.get("account_id") or "") for a in rows}
+            await self._maybe_enrich_self_profile(rows)
             return self.account_id in ids
         except Exception:
             return False
+
+    async def _maybe_enrich_self_profile(self, rows: Any) -> None:
+        """P1 身份化机会式回填：健康轮询的 /accounts 已带回自身昵称/头像 →
+        写 registry meta.self_*（连接中心/切换条显真实身份）。
+
+        关键在覆盖「服务重启后 Node restoreAll 自动重连」的存量账号——它们不经
+        登录轮询，此前永远拿不到身份。仅当 Node 侧身份较上次变化才 enrich
+        （enrich 内部另有幂等跳写）；flag 关时 enrich 自身 no-op。绝不抛。
+        """
+        try:
+            row = next((a for a in (rows or [])
+                        if str(a.get("account_id") or "") == self.account_id), None)
+            if row is None:
+                return
+            name = str(row.get("pushname") or "")
+            avatar = str(row.get("avatar_url") or "")
+            if not (name or avatar) or (name, avatar) == self._last_profile:
+                return
+            from src.integrations.account_self_profile import enrich_from_fields
+            await enrich_from_fields(
+                "whatsapp", self.account_id,
+                name=name, avatar_url=avatar, config=self.config)
+            self._last_profile = (name, avatar)
+        except Exception:
+            logger.debug("[orchestrator] WA self_profile 回填失败（忽略）", exc_info=True)
 
     def status(self) -> Dict[str, Any]:
         return {"type": "whatsapp_protocol", "account_id": self.account_id,
@@ -1212,6 +1296,11 @@ def get_orchestrator(config: Optional[Dict[str, Any]] = None) -> AccountOrchestr
     global _orchestrator
     if _orchestrator is None:
         _orchestrator = AccountOrchestrator(config=config or {})
+    elif config:
+        # 配置热重载后 config_manager.config 是**新 dict 对象**，单例里存的还是
+        # 启动时的旧引用 → 发送护栏（send_gate cap 等运营开关）永远读旧值、
+        # 热调参形同虚设。调用方每次都传"当前"配置，这里跟着刷新引用。
+        _orchestrator._config = config
     return _orchestrator
 
 

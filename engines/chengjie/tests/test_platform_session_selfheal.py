@@ -360,6 +360,159 @@ def test_wa_worker_unreported_session_not_gated(monkeypatch):
     assert res["delivered"] is True
 
 
+# ── 5b) P1 身份化：健康轮询机会式回填自身昵称/头像（覆盖 restore 存量号） ────
+
+def test_wa_worker_healthy_backfills_self_profile(monkeypatch):
+    """/accounts 带回 pushname/avatar_url → 回填一次；身份未变不重复打扰。"""
+    import src.integrations.account_self_profile as sp
+    import src.integrations.whatsapp_baileys_login as wab
+
+    async def _fake_get(url, timeout=20.0):
+        return {"accounts": [
+            {"login_id": "wa_x", "account_id": "wa100",
+             "pushname": "雷人1", "avatar_url": "https://pps/x.jpg"},
+            {"login_id": "wa_y", "account_id": "other", "pushname": "别家"},
+        ]}
+
+    enriched = []
+
+    async def _fake_enrich(platform, account_id, **kw):
+        enriched.append((platform, account_id, kw.get("name"),
+                         kw.get("avatar_url")))
+        return {"self_name": kw.get("name", "")}
+
+    monkeypatch.setattr(wab, "_get_json", _fake_get)
+    monkeypatch.setattr(sp, "enrich_from_fields", _fake_enrich)
+    w = _wa_worker()
+    assert asyncio.run(w.healthy()) is True
+    assert asyncio.run(w.healthy()) is True   # 第二轮：身份未变 → 不再 enrich
+    assert enriched == [("whatsapp", "wa100", "雷人1", "https://pps/x.jpg")]
+
+
+def test_wa_worker_healthy_no_identity_fields_noop(monkeypatch):
+    """旧版 Node（/accounts 不带身份字段）→ 健康判定照旧、不触发富集。"""
+    import src.integrations.account_self_profile as sp
+    import src.integrations.whatsapp_baileys_login as wab
+
+    async def _fake_get(url, timeout=20.0):
+        return {"accounts": [{"login_id": "wa_x", "account_id": "wa100"}]}
+
+    async def _boom(*a, **k):  # pragma: no cover - 不应被调用
+        raise AssertionError("无身份字段不应 enrich")
+
+    monkeypatch.setattr(wab, "_get_json", _fake_get)
+    monkeypatch.setattr(sp, "enrich_from_fields", _boom)
+    assert asyncio.run(_wa_worker().healthy()) is True
+
+
+# ── 5c) 编排器真自愈：restore 后账号仍缺席 → 追加账号级 reconnect ────────────
+# 事故：Node restoreAll 对内存里已存在（哪怕 expired 假死）的 session 直接 skip，
+# 编排器 error→退避→start() 只打 restore → 自愈永远空转。新契约：restore 后核对
+# /accounts，自己不在 → POST /accounts/{id}/reconnect（best-effort，失败不抛——
+# start() 抛异常会被编排器计为启动失败进退避，反拖慢自愈）。
+
+_WA_BASE = "http://127.0.0.1:8790"  # 空 config 的默认 base（service_base_url 兜底值）
+
+
+def test_wa_worker_start_reconnects_missing_account(monkeypatch):
+    """/accounts 缺自己 → 调用序列：restore → GET /accounts → 账号级 reconnect。"""
+    import src.integrations.whatsapp_baileys_login as wab
+    calls = []
+
+    async def _fake_post(url, payload, timeout=20.0):
+        calls.append(("post", url))
+        return {"ok": True, "reconnecting": True}
+
+    async def _fake_get(url, timeout=20.0):
+        calls.append(("get", url))
+        return {"accounts": [{"account_id": "other"}]}  # 假死账号不在列表
+
+    monkeypatch.setattr(wab, "_post_json", _fake_post)
+    monkeypatch.setattr(wab, "_get_json", _fake_get)
+    w = _wa_worker()
+    asyncio.run(w.start())
+    assert w.state == "running"
+    assert calls == [
+        ("post", f"{_WA_BASE}/accounts/restore"),
+        ("get", f"{_WA_BASE}/accounts"),
+        ("post", f"{_WA_BASE}/accounts/wa100/reconnect"),
+    ]
+
+
+def test_wa_worker_start_no_reconnect_when_account_present(monkeypatch):
+    """/accounts 已含自己（restore 生效/本就在线）→ 不打 reconnect。"""
+    import src.integrations.whatsapp_baileys_login as wab
+    posts = []
+
+    async def _fake_post(url, payload, timeout=20.0):
+        posts.append(url)
+        return {"ok": True}
+
+    async def _fake_get(url, timeout=20.0):
+        return {"accounts": [{"account_id": "wa100"}]}
+
+    monkeypatch.setattr(wab, "_post_json", _fake_post)
+    monkeypatch.setattr(wab, "_get_json", _fake_get)
+    w = _wa_worker()
+    asyncio.run(w.start())
+    assert w.state == "running"
+    assert posts == [f"{_WA_BASE}/accounts/restore"]  # 只有 restore，无 reconnect
+
+
+def test_wa_worker_start_reconnect_failure_swallowed(monkeypatch):
+    """reconnect 打不通（Node 正在重启/旧版无端点 404 抛错）→ start() 不抛、照常 running。"""
+    import src.integrations.whatsapp_baileys_login as wab
+
+    async def _fake_post(url, payload, timeout=20.0):
+        if url.endswith("/reconnect"):
+            raise RuntimeError("connect refused")
+        return {"ok": True}
+
+    async def _fake_get(url, timeout=20.0):
+        return {"accounts": []}
+
+    monkeypatch.setattr(wab, "_post_json", _fake_post)
+    monkeypatch.setattr(wab, "_get_json", _fake_get)
+    w = _wa_worker()
+    asyncio.run(w.start())  # 不得抛出
+    assert w.state == "running"
+
+
+def test_wa_worker_start_accounts_probe_failure_swallowed(monkeypatch):
+    """restore 成功但 GET /accounts 挂了 → 核对步骤整体吞掉，start() 仍成功（原语义）。"""
+    import src.integrations.whatsapp_baileys_login as wab
+
+    async def _fake_post(url, payload, timeout=20.0):
+        if url.endswith("/reconnect"):  # pragma: no cover - 不应走到
+            raise AssertionError("核对失败时不应盲打 reconnect")
+        return {"ok": True}
+
+    async def _fake_get(url, timeout=20.0):
+        raise RuntimeError("node restarting")
+
+    monkeypatch.setattr(wab, "_post_json", _fake_post)
+    monkeypatch.setattr(wab, "_get_json", _fake_get)
+    w = _wa_worker()
+    asyncio.run(w.start())
+    assert w.state == "running"
+
+
+def test_wa_worker_start_restore_failure_still_raises(monkeypatch):
+    """回归钉：restore 本身失败仍按旧语义抛出（编排器计启动失败→退避，行为不变）。"""
+    import src.integrations.whatsapp_baileys_login as wab
+
+    async def _boom_post(url, payload, timeout=20.0):
+        raise RuntimeError("service down")
+
+    async def _fake_get(url, timeout=20.0):  # pragma: no cover - 不应走到
+        raise AssertionError("restore 失败后不应继续核对")
+
+    monkeypatch.setattr(wab, "_post_json", _boom_post)
+    monkeypatch.setattr(wab, "_get_json", _fake_get)
+    with pytest.raises(RuntimeError):
+        asyncio.run(_wa_worker().start())
+
+
 # ── 6) messenger verified 观测位（回读二次确认）不改送达语义 ─────────────────
 
 def test_worker_send_verified_false_still_delivered(monkeypatch):

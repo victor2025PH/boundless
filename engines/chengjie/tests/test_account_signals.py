@@ -48,6 +48,23 @@ def test_signals_from_registry_age_and_proxy():
     assert round(sig["age_days"]) == 5
     assert sig["proxy_bound"] is True
     assert sig["banned"] is False
+    assert sig.get("profile_churn_7d") == 0
+
+
+def test_signals_profile_churn_from_push_log():
+    reg = _FakeRegistry({
+        ("whatsapp", "w1"): {
+            "created_at": NOW - 30 * 86400, "proxy_id": "px", "status": "online",
+            "meta": {"profile_push_log": [
+                {"ts": NOW - 100, "ok": True},
+                {"ts": NOW - 200, "ok": True},
+                {"ts": NOW - 300, "ok": True},
+                {"ts": NOW - 10 * 86400, "ok": True},
+            ]},
+        },
+    })
+    sig = build_account_signals("whatsapp", "w1", registry=reg, now=NOW)
+    assert sig["profile_churn_7d"] == 3
 
 
 def test_signals_banned_from_status_removed():
@@ -137,6 +154,7 @@ def test_fleet_overview_aggregates_health_and_lifecycle():
     assert ov["lifecycle"].get(STAGE_ACTIVE) == 1
     assert ov["lifecycle"].get(STAGE_WARMING) == 1
     assert ov["lifecycle"].get(STAGE_BANNED) == 1
+    assert ov.get("profile_churn_hot") == []
 
 
 def test_fleet_overview_accepts_dicts():
@@ -146,12 +164,38 @@ def test_fleet_overview_accepts_dicts():
     )
     assert ov["total"] == 1
     assert ov["accounts"][0]["stage"] == STAGE_PENDING
+    assert "profile_churn_7d" in ov["accounts"][0]
 
 
 def test_fleet_overview_empty():
     ov = fleet_overview([], now=NOW)
     assert ov["total"] == 0
     assert ov["fleet"]["fleet_light"] == "unknown"
+    assert ov.get("profile_churn_hot") == []
+
+
+def test_fleet_overview_profile_churn_hot():
+    reg = _FakeRegistry({
+        ("whatsapp", "hot"): {
+            "created_at": NOW - 40 * 86400, "proxy_id": "px",
+            "status": "online",
+            "meta": {"profile_push_log": [
+                {"ts": NOW - i * 100, "ok": True} for i in range(4)
+            ]},
+        },
+        ("whatsapp", "cool"): {
+            "created_at": NOW - 40 * 86400, "proxy_id": "px2",
+            "status": "online", "meta": {},
+        },
+    })
+    ov = fleet_overview(
+        [("whatsapp", "hot", "online"), ("whatsapp", "cool", "online")],
+        registry=reg, now=NOW,
+    )
+    assert len(ov["profile_churn_hot"]) == 1
+    assert ov["profile_churn_hot"][0]["account_id"] == "hot"
+    assert ov["profile_churn_hot"][0]["profile_churn_7d"] == 4
+
 
 
 # ── 优化1：统一发送计数器（A 线 record → 同一 limiter → 闸门读到） ──────────────
