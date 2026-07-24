@@ -74,13 +74,25 @@ def build_membership_snapshot(config: dict, user_store=None) -> Dict[str, Any]:
         out["gate"] = {"enabled": False, "plan": "community", "features": {},
                        "locked": [], "plan_order": []}
     out["quota"] = _quota_snapshot()
-    # 购买/续费入口（P4b）：运营配置 licensing.shop_url（商城/联系页/TG 客服链接
-    # 均可），空 = 不渲染 CTA（自营/内网部署零变化）。纯透传，不做校验。
+    # 购买/续费入口（P4b/P7）：运营配置 licensing.shop_url；指向 /order 时按当前
+    # 授权自动拼 ?plan=<offer>（额度耗尽→字符包）。TG 客服等非 order 链原样透传。
     try:
         shop_url = str(((config.get("licensing") or {}).get("shop_url")) or "")
     except Exception:
         shop_url = ""
-    out["shop"] = {"url": shop_url}
+    try:
+        from src.licensing.shop_link import shop_cta_from_license
+        # 闸门生效档（含 plan_override）优先：未激活社区部署仍应按「当前对外档」深链，
+        # 避免 CTA 落到裸 /order 让客户再猜产品线。有 sku_id/lic_id 时仍以 SKU 为准。
+        lic_for_shop = dict(lic)
+        if out["gate"].get("plan"):
+            lic_for_shop["plan"] = out["gate"]["plan"]
+        out["shop"] = shop_cta_from_license(
+            shop_url, lic_for_shop,
+            quota_exceeded=bool(out["quota"].get("exceeded")),
+        )
+    except Exception:
+        out["shop"] = {"url": shop_url, "offer": ""}
     seats_used = None
     try:
         if user_store is not None:

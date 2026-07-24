@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { QRCodeSVG } from "qrcode.react";
 import { BadgeCheck, Check, Clapperboard, Copy, KeyRound, ShieldCheck, Sparkles, Timer, Wallet, X } from "lucide-react";
@@ -20,30 +20,71 @@ import {
   USDT_ADDR,
   tierPrice,
   type Period,
-  type Tier,
 } from "@/lib/avatarhub-pricing";
+import {
+  FAMILIES,
+  familyDefaultTier,
+  familyOfPlan,
+  familyTiers,
+  type LineTier,
+  type OrderFamily,
+} from "@/lib/order-lines";
 
 const fmt = (n: number) => n.toLocaleString("en-US");
+
+/** 家族通用价格：一次性商品（charpack）不随周期变价；其余走 tierPrice（年付 ×10）。 */
+function linePrice(t: LineTier, period: Period): number {
+  return t.oneTime ? t.monthly : tierPrice(t, period);
+}
 
 export default function OrderPanel() {
   const { lang } = useLang();
   const zh = lang === "zh";
+  const [family, setFamily] = useState<OrderFamily>("avatarhub");
   const [period, setPeriod] = useState<Period>("monthly");
   const [selected, setSelected] = useState("pro");
   const [checkout, setCheckout] = useState(false);
   const [prefillFp, setPrefillFp] = useState("");
+  // 深链预填完成前不写回 URL，避免首帧用默认 pro 盖掉 ?plan=autochat-entry。
+  const urlReady = useRef(false);
 
-  const tier = useMemo(() => TIERS.find((t) => t.key === selected) ?? TIERS[3], [selected]);
+  const tiers = useMemo(() => familyTiers(family, TIERS), [family]);
+  const tier = useMemo<LineTier>(
+    () => tiers.find((t) => t.key === selected) ?? tiers[0],
+    [tiers, selected],
+  );
+  const familyMeta = FAMILIES.find((f) => f.key === family) ?? FAMILIES[0];
 
-  // 深链预填：/order?plan=pro&period=annual&fp=<指纹>（客户端内"购买"按钮可带参跳转，绑机零输入）
-  useEffect(() => {
+  // 深链预填：/order?plan=<档位|offer id>&period=annual&fp=<指纹>——plan 跨三条产品线检索，
+  // 命中即自动切到所属产品线（产品页「购买」按钮带参直达，见 config.example.yaml shop_url 注）。
+  // useLayoutEffect（非 useEffect）：家族切换必须发生在 framer-motion 注册视口观察器之前，
+  // 否则挂载后立刻换掉子树会让全页 whileInView 观察失效 → 面板整段卡在 opacity:0（实测）。
+  useLayoutEffect(() => {
     const q = new URLSearchParams(window.location.search);
     const plan = q.get("plan");
-    if (plan && TIERS.some((t) => t.key === plan)) setSelected(plan);
+    const fam = plan ? familyOfPlan(plan, TIERS) : undefined;
+    if (plan && fam) {
+      setFamily(fam);
+      setSelected(plan.trim().toLowerCase());
+    }
     if (q.get("period") === "annual") setPeriod("annual");
     const fp = q.get("fp");
     if (fp) setPrefillFp(fp.slice(0, 128));
+    urlReady.current = true;
   }, []);
+
+  // 选档/周期 → URL 同步（replaceState，可分享/刷新不丢；保留 fp/check 等其它参数）。
+  useEffect(() => {
+    if (!urlReady.current || typeof window === "undefined") return;
+    const u = new URL(window.location.href);
+    u.searchParams.set("plan", selected);
+    if (period === "annual" && !tier.oneTime) u.searchParams.set("period", "annual");
+    else u.searchParams.delete("period");
+    const next = u.pathname + u.search + u.hash;
+    if (next !== window.location.pathname + window.location.search + window.location.hash) {
+      window.history.replaceState(null, "", next);
+    }
+  }, [selected, period, tier.oneTime]);
 
   return (
     <section className="relative pb-24 pt-32">
@@ -61,18 +102,43 @@ export default function OrderPanel() {
             {zh ? "购买与下单" : "Plans & Ordering"}
           </h1>
           <p className="mx-auto mt-3 max-w-2xl text-slate-400">
-            {zh
-              ? "引擎跑在你自己的设备上——我们不卖算力，所以不按字符、张数、时长计费，用量不限。设备自备（下方有配置与配件清单），我们协助部署；到账后按机器指纹签发授权，客户端一键激活。"
-              : "The engine runs on your own hardware — we don't sell compute, so there's no per-character or per-minute metering. Bring your device (specs below), we help you deploy; licenses are issued against your machine fingerprint after payment."}
-            {" "}
-            <a href={zh ? "/download" : "/en/download"} className="text-neon-cyan hover:underline">
-              {zh ? "前往下载客户端 →" : "Download the client →"}
-            </a>
+            {zh ? familyMeta.blurb.zh : familyMeta.blurb.en}
+            {family === "avatarhub" && (
+              <>
+                {" "}
+                <a href={zh ? "/download" : "/en/download"} className="text-neon-cyan hover:underline">
+                  {zh ? "前往下载客户端 →" : "Download the client →"}
+                </a>
+              </>
+            )}
           </p>
         </Reveal>
 
+        {/* ── 产品线切换（幻境数字人 / 智聊 / 通译）——eager：首屏关键交互不依赖滚动显现 ── */}
+        <Reveal eager className="mt-8 flex justify-center">
+          <div className="glass inline-flex max-w-full flex-wrap justify-center rounded-full border border-white/10 p-1">
+            {FAMILIES.map((f) => (
+              <button
+                key={f.key}
+                onClick={() => {
+                  setFamily(f.key);
+                  setSelected(familyDefaultTier(f.key, TIERS));
+                  track("order_family", { family: f.key });
+                }}
+                className={`rounded-full px-5 py-2 text-sm transition ${
+                  family === f.key
+                    ? "bg-gradient-to-r from-neon-cyan to-neon-violet font-medium text-ink-950"
+                    : "text-slate-300 hover:text-white"
+                }`}
+              >
+                {zh ? f.tab.zh : f.tab.en}
+              </button>
+            ))}
+          </div>
+        </Reveal>
+
         {/* ── 月付 / 年付 ── */}
-        <Reveal className="mt-10 flex flex-col items-center gap-3">
+        <Reveal eager className="mt-6 flex flex-col items-center gap-3">
           <div className="glass inline-flex rounded-full border border-white/10 p-1">
             {(["monthly", "annual"] as Period[]).map((p) => (
               <button
@@ -92,7 +158,7 @@ export default function OrderPanel() {
             ))}
           </div>
           <AnimatePresence>
-            {period === "annual" && (
+            {period === "annual" && family === "avatarhub" && (
               <motion.span
                 initial={{ opacity: 0, y: -6 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -103,16 +169,28 @@ export default function OrderPanel() {
               </motion.span>
             )}
           </AnimatePresence>
+          {tier.oneTime && (
+            <p className="text-xs text-slate-500">
+              {zh
+                ? "字符包为一次性加购，价格不受月/年付切换影响"
+                : "Char pack is one-time — the period toggle does not change its price"}
+            </p>
+          )}
         </Reveal>
 
         {/* ── 套餐卡片 ── */}
-        <div className="mt-10 grid gap-5 sm:grid-cols-2 xl:grid-cols-5">
-          {TIERS.map((t, i) => (
+        <div
+          className={`mt-10 grid gap-5 sm:grid-cols-2 ${
+            tiers.length >= 5 ? "xl:grid-cols-5" : "mx-auto max-w-4xl lg:grid-cols-3"
+          }`}
+        >
+          {tiers.map((t, i) => (
             <TierCard
               key={t.key}
               tier={t}
               zh={zh}
               period={period}
+              showPromo={family === "avatarhub"}
               selected={selected === t.key}
               delay={i * 0.05}
               onSelect={() => {
@@ -124,7 +202,7 @@ export default function OrderPanel() {
         </div>
 
         {/* ── 结算条 ── */}
-        <Reveal className="mt-8">
+        <Reveal eager className="mt-8">
           <div className="glass flex flex-wrap items-center gap-x-8 gap-y-3 rounded-2xl border border-white/10 px-6 py-4">
             <div>
               <div className="text-xs text-slate-500">{zh ? "已选套餐" : "Selected plan"}</div>
@@ -137,7 +215,9 @@ export default function OrderPanel() {
                   ? zh
                     ? "免费 · 14 天"
                     : "Free · 14 days"
-                  : `${fmt(tierPrice(tier, period))} USD / ${period === "monthly" ? (zh ? "月" : "mo") : zh ? "年" : "yr"}`}
+                  : tier.oneTime
+                    ? `${fmt(tier.monthly)} USD${zh ? " · 一次性" : " · one-time"}`
+                    : `${fmt(linePrice(tier, period))} USD / ${period === "monthly" ? (zh ? "月" : "mo") : zh ? "年" : "yr"}`}
               </div>
             </div>
             <button
@@ -152,6 +232,10 @@ export default function OrderPanel() {
           </div>
         </Reveal>
 
+        {/* ── 以下大区块（演示 / 硬件 / 配件 / 私有授权 / 代部署 / 信任卡）均为
+              AvatarHub 本机算力产品专属；ChatX / LingoX 的能力详情走各自产品页 ── */}
+        {family === "avatarhub" && (
+          <>
         {/* ── 效果演示（真实引擎输出优先；未就绪的显示制作中占位） ── */}
         <ShowcaseGrid zh={zh} />
 
@@ -254,21 +338,34 @@ export default function OrderPanel() {
             ))}
           </div>
         </Reveal>
+          </>
+        )}
 
         {/* ── 订单进度自助查询 ── */}
         <OrderStatusLookup />
 
         <p className="mx-auto mt-10 max-w-3xl text-center text-xs leading-relaxed text-slate-500">
-          {zh
-            ? "会员等级对应引擎授权档（trial / standard / pro / enterprise），到账后由激活服务器按机器指纹签发 Ed25519 签名授权。产出默认带 C2PA 内容凭证 + 不可见水印可验真；克隆需本人合法授权，禁止用于冒充 / 诈骗。下单前请向客服核对最新收款地址。"
-            : "Plan tiers map to engine license editions (trial / standard / pro / enterprise). Licenses are Ed25519-signed against your machine fingerprint after payment. Outputs carry C2PA credentials + invisible watermark; cloning requires the subject's consent. Always verify the payment address with support before sending."}
+          {family === "avatarhub"
+            ? zh
+              ? "会员等级对应引擎授权档（trial / standard / pro / enterprise），到账后由激活服务器按机器指纹签发 Ed25519 签名授权。产出默认带 C2PA 内容凭证 + 不可见水印可验真；克隆需本人合法授权，禁止用于冒充 / 诈骗。下单前请向客服核对最新收款地址。"
+              : "Plan tiers map to engine license editions (trial / standard / pro / enterprise). Licenses are Ed25519-signed against your machine fingerprint after payment. Outputs carry C2PA credentials + invisible watermark; cloning requires the subject's consent. Always verify the payment address with support before sending."
+            : zh
+              ? "到账后自动签发 Ed25519 签名授权码并按联系方式送达，在后台「会员中心」粘贴即激活；字符包凭证同样在会员中心兑换（绑定下单联系方式，防串号）。下单前请向客服核对最新收款地址。"
+              : "After payment an Ed25519-signed license code is issued automatically and delivered to your contact — paste it in the admin Membership Center to activate. Char-pack vouchers redeem the same way (bound to your order contact). Always verify the payment address with support before sending."}
         </p>
       </div>
 
       {/* ── 结算弹窗 ── */}
       <AnimatePresence>
         {checkout && (
-          <CheckoutModal zh={zh} tier={tier} period={period} initialFp={prefillFp} onClose={() => setCheckout(false)} />
+          <CheckoutModal
+            zh={zh}
+            tier={tier}
+            period={period}
+            family={family}
+            initialFp={prefillFp}
+            onClose={() => setCheckout(false)}
+          />
         )}
       </AnimatePresence>
     </section>
@@ -279,21 +376,33 @@ function TierCard({
   tier: t,
   zh,
   period,
+  showPromo,
   selected,
   delay,
   onSelect,
 }: {
-  tier: Tier;
+  tier: LineTier;
   zh: boolean;
   period: Period;
+  showPromo: boolean;
   selected: boolean;
   delay: number;
   onSelect: () => void;
 }) {
-  const price = tierPrice(t, period);
-  const unit = period === "monthly" ? (zh ? "USD / 月" : "USD / mo") : zh ? "USD / 年" : "USD / yr";
+  const price = linePrice(t, period);
+  const unit = t.oneTime
+    ? zh
+      ? "USD · 一次性"
+      : "USD one-time"
+    : period === "monthly"
+      ? zh
+        ? "USD / 月"
+        : "USD / mo"
+      : zh
+        ? "USD / 年"
+        : "USD / yr";
   return (
-    <Reveal delay={delay} className="h-full">
+    <Reveal eager delay={delay} className="h-full">
       <button
         onClick={onSelect}
         className={`relative flex h-full w-full flex-col rounded-2xl border p-5 text-left transition ${
@@ -324,7 +433,7 @@ function TierCard({
             </>
           )}
         </div>
-        {period === "annual" && t.monthly > 0 && (
+        {period === "annual" && t.monthly > 0 && showPromo && !t.oneTime && (
           <div className="mt-1 text-xs text-neon-pink">
             {zh ? "首年 8 折 ≈ " : "1st year ≈ "}
             {fmt(Math.round(price * FIRST_YEAR_PROMO))} USD
@@ -492,12 +601,14 @@ function CheckoutModal({
   zh,
   tier,
   period,
+  family,
   initialFp,
   onClose,
 }: {
   zh: boolean;
-  tier: Tier;
+  tier: LineTier;
   period: Period;
+  family: OrderFamily;
   initialFp: string;
   onClose: () => void;
 }) {
@@ -511,7 +622,7 @@ function CheckoutModal({
   const [pay, setPay] = useState<PayMethodsInfo | null>(null);
   const [method, setMethod] = useState<"usdt" | "card">("usdt");
   const [cardNotice, setCardNotice] = useState(false);
-  const price = tierPrice(tier, period);
+  const price = linePrice(tier, period);
   // 卡通道可用 = 后台启用 + 服务器已配 Stripe Secret；免费档（price=0）无可扣金额，不给卡入口。
   const cardAvailable = !!pay?.card?.enabled && pay?.cardSecretConfigured !== false && price > 0;
   const usdtAvailable = !pay || pay.usdt?.enabled !== false;
@@ -574,7 +685,9 @@ function CheckoutModal({
         body: JSON.stringify({
           plan: tier.key,
           edition: tier.edition,
-          period,
+          // 一次性商品（charpack）不随周期——履约走 topup 凭证通道不读 period，
+          // 送 "onetime" 让台账/TG 通知语义诚实。
+          period: tier.oneTime ? "onetime" : period,
           amount: price,
           contact: contact.trim(),
           fingerprint: fp.trim(),
@@ -660,13 +773,17 @@ function CheckoutModal({
                 ? zh
                   ? "免费试用 14 天"
                   : "14-day free trial"
-                : period === "monthly"
+                : tier.oneTime
                   ? zh
-                    ? "按月订阅"
-                    : "Monthly"
-                  : zh
-                    ? `按年订阅（送 2 个月）`
-                    : "Annual (2 months free)"
+                    ? "一次性加购（不续费）"
+                    : "One-time purchase"
+                  : period === "monthly"
+                    ? zh
+                      ? "按月订阅"
+                      : "Monthly"
+                    : zh
+                      ? `按年订阅（送 2 个月）`
+                      : "Annual (2 months free)"
             }
           />
           <Row
@@ -717,15 +834,29 @@ function CheckoutModal({
           placeholder={zh ? "@yourname 或 you@email.com" : "@yourname or you@email.com"}
           className="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/60 px-4 py-2.5 text-sm text-white placeholder-slate-600 outline-none transition focus:border-neon-cyan/50"
         />
-        <label className="mt-3 block text-xs text-slate-400">
-          {zh ? "机器指纹（选填，绑机签发授权用）" : "Machine fingerprint (optional)"}
-        </label>
-        <input
-          value={fp}
-          onChange={(e) => setFp(e.target.value)}
-          placeholder={zh ? "客户端「设置 → 授权」中复制，或留空" : "Copy from client Settings → License, or leave empty"}
-          className="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/60 px-4 py-2.5 text-sm text-white placeholder-slate-600 outline-none transition focus:border-neon-cyan/50"
-        />
+        {family === "avatarhub" ? (
+          <>
+            <label className="mt-3 block text-xs text-slate-400">
+              {zh ? "机器指纹（选填，绑机签发授权用）" : "Machine fingerprint (optional)"}
+            </label>
+            <input
+              value={fp}
+              onChange={(e) => setFp(e.target.value)}
+              placeholder={zh ? "客户端「设置 → 授权」中复制，或留空" : "Copy from client Settings → License, or leave empty"}
+              className="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/60 px-4 py-2.5 text-sm text-white placeholder-slate-600 outline-none transition focus:border-neon-cyan/50"
+            />
+          </>
+        ) : (
+          <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+            {tier.oneTime
+              ? zh
+                ? "字符包凭证绑定此联系方式，且需与订阅时填写的一致（同一 Telegram / 邮箱即可，写法不必逐字相同）。"
+                : "The top-up voucher is bound to this contact — use the same Telegram / email as your subscription (formatting may differ)."
+              : zh
+                ? "授权码将按此联系方式送达，激活后绑定到你的实例，无需机器指纹。"
+                : "Your license code is delivered to this contact and binds to your instance — no machine fingerprint needed."}
+          </p>
+        )}
 
         {method === "usdt" ? (
           <>

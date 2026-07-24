@@ -86,6 +86,7 @@ def test_shop_cta_renders_when_configured(auth_client, config_manager):
     _set_gate(config_manager, override="basic")
     config_manager.config["licensing"]["shop_url"] = "https://shop.example/pricing"
     d = auth_client.get("/api/admin/membership").json()
+    # 非 /order 基址原样透传（TG/外链商城不被深链污染）
     assert d["shop"]["url"] == "https://shop.example/pricing"
     html = auth_client.get("/membership").text
     assert 'href="https://shop.example/pricing"' in html
@@ -94,6 +95,17 @@ def test_shop_cta_renders_when_configured(auth_client, config_manager):
     config_manager.config["licensing"].pop("shop_url")
     html2 = auth_client.get("/membership").text
     assert "shop.example" not in html2
+
+
+def test_shop_cta_deeplinks_order_by_plan(auth_client, config_manager):
+    """P7：shop_url 指向 /order 时按当前档拼 ?plan=（basic → autochat-entry）。"""
+    _set_gate(config_manager, override="basic")
+    config_manager.config["licensing"]["shop_url"] = "https://bd2026.cc/order"
+    d = auth_client.get("/api/admin/membership").json()
+    assert "plan=autochat-entry" in d["shop"]["url"]
+    assert d["shop"]["offer"] == "autochat-entry"
+    html = auth_client.get("/membership").text
+    assert "plan=autochat-entry" in html
 
 
 def test_workspace_topbar_plan_badge(auth_client, config_manager):
