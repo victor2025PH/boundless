@@ -59,6 +59,18 @@ CREATE TABLE IF NOT EXISTS persona_media (
 );
 CREATE INDEX IF NOT EXISTS idx_pmedia_persona ON persona_media(persona_id, enabled);
 CREATE INDEX IF NOT EXISTS idx_pmedia_sha ON persona_media(persona_id, sha256);
+-- 2026-07-22 防复读记忆账本：每会话已发媒体（含系列标签）持久记录。
+-- 「同一张/同一系列（同套服装连拍）再发给同一个人」= 像 AI 复读机的穿帮信号；
+-- 进程内 _LAST_SENT 只避上一条且重启即失 → 落库成为跨重启的"发过什么"记忆。
+CREATE TABLE IF NOT EXISTS persona_media_sends (
+    conv_key    TEXT NOT NULL,
+    media_id    TEXT NOT NULL,
+    persona_id  TEXT NOT NULL DEFAULT '',
+    series      TEXT NOT NULL DEFAULT '',
+    sent_at     REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (conv_key, media_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pmsends_conv ON persona_media_sends(conv_key, sent_at);
 """
 
 # update() 允许热改的元数据字段（file_path/url/sha 等身份字段不可改——换文件请删了重传）。
@@ -230,6 +242,90 @@ class PersonaMediaStore:
                 self._conn.commit()
         except Exception:
             logger.debug("[persona_media] record_hit 失败（已忽略）", exc_info=True)
+
+    # ── 每会话已发媒体账本（2026-07-22 防复读记忆）────────────────────────
+
+    def record_send(
+        self, conv_key: str, media_id: str, *,
+        persona_id: str = "", series: str = "",
+        now: Optional[float] = None,
+    ) -> None:
+        """记「这条媒体发给过这个会话」（幂等 upsert）。绝不抛。"""
+        if not conv_key or not media_id:
+            return
+        ts = float(now if now is not None else time.time())
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT INTO persona_media_sends"
+                    "(conv_key, media_id, persona_id, series, sent_at) "
+                    "VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(conv_key, media_id) DO UPDATE SET sent_at = ?",
+                    (str(conv_key), str(media_id), str(persona_id or ""),
+                     str(series or ""), ts, ts))
+                self._conn.commit()
+        except Exception:
+            logger.debug("[persona_media] record_send 失败（已忽略）", exc_info=True)
+
+    def sent_history(
+        self, conv_key: str, *, max_age_days: float = 0,
+        now: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """该会话收过的媒体：``{"ids": set, "series": set}``。查失败返回空集合。
+
+        ``max_age_days`` > 0 时只看最近 N 天（时间衰减，2026-07-22）：太久之前
+        发过的图重新可用——真人也会隔几个月重发怀旧照，永久排除反而把相册
+        提前耗尽逼进"翻旧照"模式。0=不衰减（全历史排除）。
+        """
+        out: Dict[str, Any] = {"ids": set(), "series": set()}
+        if not conv_key:
+            return out
+        try:
+            sql = ("SELECT media_id, series FROM persona_media_sends "
+                   "WHERE conv_key = ?")
+            args: list = [str(conv_key)]
+            if max_age_days and max_age_days > 0:
+                ts = float(now if now is not None else time.time())
+                sql += " AND sent_at >= ?"
+                args.append(ts - float(max_age_days) * 86400.0)
+            with self._lock:
+                rows = self._conn.execute(sql, tuple(args)).fetchall()
+            for r in rows:
+                out["ids"].add(str(r["media_id"]))
+                s = str(r["series"] or "")
+                if s:
+                    out["series"].add(s)
+        except Exception:
+            logger.debug("[persona_media] sent_history 失败（已忽略）", exc_info=True)
+        return out
+
+    def send_ledger_stats(self) -> Dict[str, Any]:
+        """相册投放观测（自检卡 runtime 用）：库存/投放次数/覆盖会话/已消耗唯一图。
+
+        - ``media_total``/``media_enabled``：库存条目
+        - ``total_sends``：账本累计投放（同图同会话只记一次）
+        - ``convs_covered``：收到过相册媒体的会话数
+        - ``unique_media_sent``：被发出过的唯一条目数（消耗率=unique/enabled）
+        """
+        out = {"media_total": 0, "media_enabled": 0, "total_sends": 0,
+               "convs_covered": 0, "unique_media_sent": 0}
+        try:
+            with self._lock:
+                r1 = self._conn.execute(
+                    "SELECT COUNT(*) c, COALESCE(SUM(enabled),0) e "
+                    "FROM persona_media").fetchone()
+                r2 = self._conn.execute(
+                    "SELECT COUNT(*) c, COUNT(DISTINCT conv_key) k, "
+                    "COUNT(DISTINCT media_id) m FROM persona_media_sends"
+                ).fetchone()
+            out["media_total"] = int(r1["c"] or 0)
+            out["media_enabled"] = int(r1["e"] or 0)
+            out["total_sends"] = int(r2["c"] or 0)
+            out["convs_covered"] = int(r2["k"] or 0)
+            out["unique_media_sent"] = int(r2["m"] or 0)
+        except Exception:
+            logger.debug("[persona_media] send_ledger_stats 失败", exc_info=True)
+        return out
 
     def stats(self, persona_id: Optional[str] = None) -> Dict[str, Any]:
         """条目计数（总/按类型/启用数）。"""

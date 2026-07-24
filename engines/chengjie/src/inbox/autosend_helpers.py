@@ -602,13 +602,19 @@ async def autosend_bazi_kline(assistant, platform, account_id, chat_key, text) -
     if not _peer_text:
         return False
 
-    # 生辰解析回调：与草稿注入路径同一记忆键口径（user_id=chat_key, chat_id=""）。
+    # 生辰解析回调（P0-2 根治，2026-07-25）：走 FateX 作用域解析器——
+    # ① FateX 独立库（账号隔离结构化行）→ ② 账号作用域记忆键 → ③ 存量裸键。
+    # 旧实现漏传 account_id → 键与写入侧失配，客户给过生辰仍被反复追问。
     def _resolve_birth():
         _sm = getattr(assistant, "skill_manager", None)
         if _sm is None:
             return None
         try:
-            _key = _sm._episodic_storage_key(str(chat_key), "", platform)
+            if hasattr(_sm, "resolve_birth_info_scoped"):
+                return _sm.resolve_birth_info_scoped(
+                    platform, account_id, str(chat_key))
+            _key = _sm._episodic_storage_key(
+                str(chat_key), "", platform, account_id=account_id)
             return _sm.resolve_birth_info(_key) if _key else None
         except Exception:
             return None
@@ -873,6 +879,21 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled):
                 _rpe("retracted")
                 _assistant_ref.logger.info(
                     "[promise_guard] 发图承诺无法兑现 → 已撤回改写文本 "
+                    "platform=%s acct=%s", platform, account_id)
+            elif _promised == "video_call":
+                # A2（2026-07-22）：视频通话承诺没有兑现路径（无此能力），
+                # 直接撤回改写（真机实录 AI 曾声称「WhatsApp 视频都开到㗎」，
+                # 客户真拨即穿帮）。
+                from src.inbox.image_autosend import (
+                    record_promise_event as _rpe_vc,
+                )
+                _rpe_vc("detected")
+                text = await _depromise_autosend_text(
+                    _assistant_ref, text, "video_call")
+                original_text = None
+                _rpe_vc("retracted")
+                _assistant_ref.logger.info(
+                    "[promise_guard] 视频通话承诺（无此能力）→ 已撤回改写文本 "
                     "platform=%s acct=%s", platform, account_id)
             # 全自动数字人视频（gated，默认关；客户明确要视频才发）：成功即作为视频发出、
             # 跳过语音/文本；未启用/不满足/失败 → 继续走语音/文本。视频念**翻译前原文**

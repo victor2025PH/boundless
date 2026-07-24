@@ -32,6 +32,10 @@ from typing import Any, Dict, List, Optional, Sequence
 
 KIND_IMAGE = "image"
 KIND_VOICE = "voice"
+# 视频通话承诺（2026-07-22 A2）：真机实录 AI 声称「我微信视频号同 WhatsApp 视频
+# 都开到㗎」——系统并无视频通话能力，客户真拨即穿帮。与 image/voice 不同：
+# 没有"兑现"路径，检测到只能撤回改写。
+KIND_VIDEOCALL = "video_call"
 
 # ── 句子切分（剥离粒度=整句：承诺句常带"你等着哈"这类跟班短语，整句剥最干净）──
 _SENT_SPLIT_RE = re.compile(r"([。！？!?～~;；…\n]+)")
@@ -93,6 +97,22 @@ _IMG_PROMISE = [re.compile(p, re.IGNORECASE) for p in (
     r"\bvou\s+te\s+mandar\s+uma\s+(?:foto|selfie)",
 )]
 
+# 视频通话承诺/应允（区别于"发你个视频"——那是媒体视频，走 _try_autosend_video 可兑现；
+# 这里抓的是**通话**：可以视频/开视频/同你视频/视频聊/接你视频。宁漏勿误：
+# 单说"视频"名词不算，必须带"可以/开/来/接/同你"等应允动词结构。
+_VIDEOCALL_PROMISE = [re.compile(p, re.IGNORECASE) for p in (
+    # zh/粤：可以视频(通话)、视频都开到、开个视频、同你/跟你/和你视频
+    r"(?:可以|可與|可与|能|冇问题|冇問題|没问题|沒問題)\s*(?:同你|跟你|和你)?\s*(?:开|開)?\s*(?:视频|視頻|視像)\s*(?:通话|通話|聊|傾)?",
+    r"(?:视频|視頻|視像)\s*(?:通话|通話)?\s*(?:都)?\s*(?:开到|開到|开得|開得|开着|開著)",
+    r"(?:同你|跟你|和你|陪你)\s*(?:视频|視頻|視像)",
+    r"(?:开|開|来|來|接)\s*(?:个|個)?\s*(?:视频|視頻|視像)\s*(?:通话|通話|聊|傾)?(?:啦|吧|喽|咯|啊)?",
+    r"(?:视频|視頻|視像)\s*(?:聊|傾|见|見)\s*(?:一下|下)?",
+    # en：video call promises
+    r"\b(?:we\s+can|i\s+can|let(?:'|’)?s)\s+(?:do\s+a\s+)?video\s*(?:call|chat)",
+    r"\bvideo\s*call\s+(?:me|you|works|is\s+fine|anytime)",
+    r"\bi(?:'|’)?ll\s+video\s*(?:call|chat)\s+you",
+)]
+
 _VOICE_PROMISE = [re.compile(p, re.IGNORECASE) for p in (
     r"(?:发|發|传|傳)\s*你\s*(?:一?[条條段个個])?\s*(?:语音|語音)",
     r"给\s*你\s*(?:发|發|录|錄)\s*(?:一?[条條段个個])?\s*(?:语音|語音)",
@@ -134,7 +154,7 @@ _QUESTION_TAIL_RE = re.compile(r"[?？]\s*$")
 
 
 def _sentence_is_promise(sent: str) -> str:
-    """单句判定：返回 'image'/'voice'/''。疑问句/排除面命中一律不算。"""
+    """单句判定：返回 'image'/'voice'/'video_call'/''。疑问句/排除面命中一律不算。"""
     s = str(sent or "").strip()
     if not s:
         return ""
@@ -146,6 +166,9 @@ def _sentence_is_promise(sent: str) -> str:
     for rx in _IMG_PROMISE:
         if rx.search(s):
             return KIND_IMAGE
+    for rx in _VIDEOCALL_PROMISE:
+        if rx.search(s):
+            return KIND_VIDEOCALL
     for rx in _VOICE_PROMISE:
         if rx.search(s):
             return KIND_VOICE
@@ -153,7 +176,8 @@ def _sentence_is_promise(sent: str) -> str:
 
 
 def detect_media_promise(text: str) -> str:
-    """出站文本是否承诺「即刻发照片/语音」。返回 'image'/'voice'/''（image 优先）。
+    """出站文本是否承诺「即刻发照片/语音/视频通话」。
+    返回 'image'/'voice'/'video_call'/''（image 优先——它有真实兑现路径）。
 
     注意：整条文本按句判定——疑问句结尾的句子不算（offer 语义），但同条里
     其他陈述句照常判。
@@ -198,8 +222,19 @@ def strip_media_promises(text: str) -> str:
 
 def build_promise_rewrite_instruction(text: str, kind: str = KIND_IMAGE) -> str:
     """LLM 撤回重写指令（首选路径；任意语言可靠）。只输出改写后的消息正文。"""
-    what = "语音" if kind == KIND_VOICE else "照片"
     t = str(text or "").strip()[:400]
+    if kind == KIND_VIDEOCALL:
+        # 视频通话没有兑现路径：承诺=谎言。改写方向是"婉拒但不冷场"。
+        return (
+            "下面这条聊天消息答应了可以视频通话，但实际上不能视频通话。\n"
+            "请改写这条消息：删掉所有「可以视频/开视频/跟你视频」这类应允，"
+            "换成自然的婉拒（比如这边不方便开视频、先文字/语音聊），"
+            "其余内容、语言、语气尽量保持原样；不要道歉连篇、不要解释系统原因、"
+            "不要说自己是 AI。\n"
+            "只输出改写后的消息正文，不要引号。\n"
+            f"原消息：「{t}」"
+        )
+    what = "语音" if kind == KIND_VOICE else "照片"
     return (
         f"下面这条聊天消息答应了要发{what}，但{what}这一轮实际发不出去。\n"
         f"请改写这条消息：删掉所有「要发/正在发/等我拍/来了」这类关于{what}的承诺或暗示，"
@@ -228,6 +263,12 @@ _DEFLECTIONS = {
         "ja": "まずはメッセージでお話しよ〜？",
         "ko": "일단 문자로 얘기하자~ 나중에 잘해주면 몰라도😉",
         "en": "let's just text for now, sweet-talk me a bit first~",
+    },
+    KIND_VIDEOCALL: {
+        "zh": "视频就先不啦，我这边不太方便～先这样聊嘛😊",
+        "ja": "ビデオ通話はまた今度ね、今はこのままお話しよ😊",
+        "ko": "영상통화는 다음에~ 지금은 이렇게 얘기하자😊",
+        "en": "no video for now, it's not convenient on my side~ let's keep chatting like this 😊",
     },
 }
 
@@ -304,7 +345,7 @@ def offer_accepted(peer_text: str, history: Optional[Sequence[Dict[str, Any]]]) 
 
 
 __all__ = [
-    "KIND_IMAGE", "KIND_VOICE",
+    "KIND_IMAGE", "KIND_VIDEOCALL", "KIND_VOICE",
     "detect_media_promise", "strip_media_promises",
     "build_promise_rewrite_instruction", "deflection_line",
     "detect_media_offer", "is_short_affirmative", "offer_accepted",

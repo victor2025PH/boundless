@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import random
+import re
 import shlex
 import subprocess
 import threading
@@ -25,7 +26,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Pattern, Tuple
 
 from src.utils.monetization import feature_allowed
 
@@ -45,17 +46,44 @@ _REQUEST_MARKERS = (
     # （客户谈自己的新照片被误发一张自拍属可接受的便宜错误，方向反了也不崩人设）。
     "新照片", "近照", "新自拍", "新的自拍", "最新的照片", "现在的照片",
     "再来一张", "再发一张", "再拍一张", "再來一張", "再發一張", "再拍一張",
+    # 2026-07-22 真机漏报补齐：首图发出后客户换量词/口语追要，一个都没命中 →
+    # AI 顺话题空谈还幻觉"发了呀"。追要/追问句是高频索图形态（"张照片/个照片"
+    # 单独收录会误伤"我拍了张照片"类叙述，不收）。
+    "再拍一个", "再拍个", "再来一个", "再发一个", "再给我一个", "再给我一张",
+    "再來一個", "再發一個", "再給我一個", "再給我一張",
+    "给我照片", "給我照片", "给我你的照片", "給我你的照片",
+    # 量词插入漏报（2026-07-22 TG 真机）：「给我个照片」不含连续子串「给我照片」。
+    "给我个照片", "給我個照片", "给我一张照片", "給我一張照片",
+    "给我张照片", "給我張照片", "给我个相片", "給我個相片",
+    "发个照片", "發個照片", "发张相", "發張相", "来个照片", "來個照片",
+    "照片呢", "图呢", "圖呢", "照片没看到", "照片沒看到", "没收到照片", "沒收到照片",
     # 繁体 / 港台常见写法（对方多为繁体输入，简体 marker 匹配不到 → 补齐同义）
     "發張照片", "發個照片", "發張自拍", "發個自拍", "發張圖", "傳張照片", "傳個照片",
     "拍個照片", "來張照片", "給我看看你", "給我看看妳", "看看妳", "想看妳",
     "你的樣子", "妳的照片", "妳的相片", "妳的樣子", "你長什麼樣", "你長啥樣",
     "妳長什麼樣", "你的寫真", "你的近照",
+    # 粤语（2026-07-22 WA 真机）：「我要你嘅相片 / 你个相啊」简繁词表零命中。
+    # 不收裸「相啊」（会误伤「互相啊」）；靠「个相啊 / 你个相」+ 下方正则。
+    "你嘅相片", "你嘅照片", "你嘅相", "妳嘅相片", "妳嘅照片",
+    "你个相", "你個相", "妳个相", "妳個相", "个相啊", "個相啊",
+    "睇下你相", "睇下你个相", "睇下你個相", "睇睇你相",
+    "有相未", "有照片未", "整张相", "整張相", "俾张相", "俾張相", "俾个相", "俾個相",
+    # 闽南语常见书面/ASR 落字（说话用闽南、打字常混普通话字）
+    "欲看你的相", "欲看你的照", "要看你的相", "看你的相",
+    "你的相拿来", "你的相拿來", "寄张照片", "寄張照片", "寄个照片", "寄個照片",
     "selfie", "photo of you", "pic of you", "picture of you", "send a pic",
     "send me a pic", "send a photo", "show me you", "show me your face",
     "what do you look like", "your photo", "your picture", "see your face",
     "your recent photo", "recent photo of you", "latest photo of you",
     "new photo", "new pic", "another photo", "another pic", "one more photo",
     "one more pic",
+    # 日/韩/西/葡/泰/越常见索图
+    "写真送", "自撮り", "顔見せ", "顔を見せ",
+    "사진 보내", "셀카", "셀피", "얼굴 보여",
+    "tu foto", "sua foto", "una selfie", "manda una foto", "manda a foto",
+    "envía una foto", "envia uma foto",
+    "ส่งรูป", "รูปคุณ", "รูปเธอ",
+    "gửi ảnh", "gửi hình", "ảnh của bạn", "hình của bạn",
 )
 
 # 反向护栏：明确指向"对方做/煮/买的东西"的照片（"你煮的…拍张照给我看"）属**对话临时要图**
@@ -64,21 +92,88 @@ _OBJECT_PHOTO_MARKERS = (
     "你煮的", "妳煮的", "你做的", "妳做的", "你买的", "你買的",
     "你拍的", "你點的", "你点的", "你種的", "你种的", "你養的", "你养的",
     "你寫的", "你写的", "你画的", "你畫的",
+    # 粤语同义
+    "你煮嘅", "妳煮嘅", "你整嘅", "你買嘅", "你买嘅",
+)
+
+# 用户谈自己的照片：无指向 AI 领属时不命中（防「我给你看我的照片」）。
+_OWN_PHOTO_GUARD = (
+    "我的照片", "我的相片", "我嘅照片", "我嘅相片", "我拍了", "我拍的照片",
+    "给你看我的", "給你看我的", "我发的照片", "我發的照片", "看我的照片",
+    "我的自拍", "發我的照片", "发我的照片",
+)
+
+# 结构化索图（量词/方言插入后纯子串不够）：要/发/睇 + 可选领属 + 相/照片。
+# 裸「相」只收 个相/嘅相/的相/张相/相啊 等，避开「相信/相关/互相」。
+_PHOTO_CORE = (
+    r"(?:自拍|相片|照片|近照|写真|寫真|"
+    r"个相|個相|嘅相|的相|张相|張相|相啊|相呀)"
+)
+_YOUR_POS = r"(?:你的|妳的|你嘅|妳嘅|你个|你個|妳个|妳個|your\s+)?"
+_REQUEST_PATTERNS: Tuple[Pattern[str], ...] = (
+    # 给我个照片 / 发张自拍 / 要你嘅相片 / 睇下你个相 / send me a photo
+    re.compile(
+        r"(?:给我|給我|发|發|传|傳|寄|拍|来|來|要|想要|整|俾|"
+        r"睇下|睇睇|看下|看看|想看|想睇|"
+        r"甲我|乎我|予我|共我|"
+        r"show\s*me|send\s*(?:me\s*)?)"
+        r".{0,14}"
+        + _YOUR_POS
+        + _PHOTO_CORE,
+        re.I,
+    ),
+    # 领属在前：你嘅相片 / 你个相 / your photo
+    re.compile(
+        r"(?:你的|妳的|你嘅|妳嘅|你个|你個|妳个|妳個|your\s+)"
+        + _PHOTO_CORE,
+        re.I,
+    ),
+    # 闽南「甲我看…相」
+    re.compile(
+        r"(?:甲我|乎我|予我|共我).{0,8}(?:看|睇).{0,10}" + _PHOTO_CORE
+    ),
+    # 日
+    re.compile(
+        r"(?:写真|自撮り).{0,6}(?:送|見せ|くれ)|(?:顔|かお).{0,4}見せ"
+    ),
+    # 韩
+    re.compile(
+        r"(?:사진|셀카|셀피).{0,8}(?:보내|보여)|얼굴\s*보여"
+    ),
+    # 西/葡
+    re.compile(
+        r"(?:manda|env[ií]a|envia).{0,10}(?:foto|selfie)|(?:tu|sua)\s+foto",
+        re.I,
+    ),
+    # 泰 / 越
+    re.compile(r"ส่ง\s*รูป|รูป(?:คุณ|เธอ)|เซลฟ[ีิ]"),
+    re.compile(
+        r"(?:gửi|cho)\s*(?:ảnh|hình)|(?:ảnh|hình)\s*của\s*bạn",
+        re.I,
+    ),
 )
 
 
 def detect_selfie_request(text: str) -> bool:
-    """是否在向 AI 索要形象照/自拍（多语、保守，含繁体）。
+    """是否在向 AI 索要形象照/自拍（多语/方言，含繁体与粤语/闽南常见写法）。
 
     反向护栏：请求明确指向"对方做/煮/买的东西"的照片（``你煮的…拍张照``）→ 返回 False，
     交由上下文要图路径处理，避免把"拍下你煮的面"误当成"发一张你的自拍"。
+    另：用户谈自己的照片且无「你的/你嘅」领属 → False。
     """
     t = str(text or "").strip().lower()
     if not t or len(t) > 200:  # 超长多半是叙述而非索图
         return False
     if any(m in t for m in _OBJECT_PHOTO_MARKERS):
         return False
-    return any(m in t for m in _REQUEST_MARKERS)
+    if any(g in t for g in _OWN_PHOTO_GUARD):
+        if not any(x in t for x in (
+            "你的", "妳的", "你嘅", "妳嘅", "你个", "你個", "your",
+        )):
+            return False
+    if any(m in t for m in _REQUEST_MARKERS):
+        return True
+    return any(p.search(t) for p in _REQUEST_PATTERNS)
 
 
 def _persona_visual(persona: Any) -> str:
@@ -326,6 +421,19 @@ def normalize_content_rating(content_rating: str = "", *, sfw: bool = True) -> s
     if r in ("explicit", "nsfw", "porn"):
         return "suggestive"  # 露骨诉求一律降级到不露骨（硬护栏，不给 explicit 口子）
     return "sfw"
+
+
+def album_series_of_path(path: Any) -> str:
+    """从策展文件名解析系列：``<scene>_<series>_<nn>.jpg`` → series；不合式返回空。
+
+    与 album_curator 的命名约定同源（scene 与 series 都是小写连字符 slug，
+    末段是 2 位序号）。auto_selfie_* 等非策展名 → ""（只按整文件排除）。
+    """
+    stem = Path(str(path or "")).stem
+    parts = stem.split("_")
+    if len(parts) >= 3 and parts[-1].isdigit():
+        return "_".join(parts[1:-1])
+    return ""
 
 
 def build_selfie_prompt(
@@ -842,12 +950,38 @@ _STAGE_TEXTS: dict = {
         ],
     },
     "caption": {
-        "zh": "这是刚拍的，给你看～喜欢吗？😊",
-        "en": "just took this for you~ do you like it? 😊",
+        # 2026-07-22 复盘（whatsapp 阿龙会话实录）：一分钟内连发 3 张相册图，
+        # 配文一字不差都是「这是刚拍的」→ 客户当场质疑"你刚拍的怎么衣服和场景
+        # 都变了""脸怎么这么假"。两条教训：① 高频配文键也必须是变体池（同
+        # no_photo/capped 的防复读语义）；② album 后端发的是**旧照**，配文不能
+        # 每次都声称「刚拍」——变体池里只保留一条弱时间声明，其余不带拍摄时间，
+        # 图文一致性（media_consistency_eval「附图否认/无图称已发」红线）不受
+        # 影响：这些句子都只随真实已附图的消息发出。
+        "zh": [
+            "给你看张照片～喜欢吗？😊",
+            "喏，照片来啦～要给好评哦😆",
+            "偷偷发你一张，不许外传哦😝",
+            "翻了张我觉得好看的发你，嘿嘿～",
+            "这张怎么样？拍的时候光线刚刚好😊",
+        ],
+        "en": [
+            "here's a pic for you~ do you like it? 😊",
+            "sending you one, don't share it around 😝",
+            "picked one I really like, just for you 😊",
+            "how's this one? the lighting was so nice~",
+        ],
     },
     "caption_object": {
-        "zh": "拍好啦，给你看～😊",
-        "en": "here you go, just took it~ 😊",
+        "zh": [
+            "拍好啦，给你看～😊",
+            "喏，就是这个～",
+            "看，拍给你啦😆",
+        ],
+        "en": [
+            "here you go, just took it~ 😊",
+            "there it is~ 😊",
+            "took this for you, see? 😆",
+        ],
     },
     "promise_fail": {
         # 异步兑现失败的补偿（承诺文本已发出、图没出来）：像真人一样找个台阶，
@@ -1013,12 +1147,18 @@ class SelfieProvider:
         self.out_dir = Path(str(cfg.get("out_dir") or "tmp_selfies"))
         # backend=album：从预制相册随机挑图（不出图、零 API 费、同一张脸最一致）。
         self.album_dir = Path(str(cfg.get("album_dir") or "config/persona_albums"))
+        # 分册回落（2026-07-22）：persona 分册无图时先试 default_album_key 分册再根目录
+        # ——真机实录：会话人设 lin_jiaxin 无相册，图全在 lin_xiaoyu 分册，
+        # album 兜底空手而归。单素材套多人设的测试/小客户部署靠它兜住。
+        self.default_album_key = str(cfg.get("default_album_key") or "").strip()
         self.command_args = cfg.get("command_args")
         # 无脸/轻量图（物体图、无 face_ref 自拍）可走独立命令（如指向另一台 ComfyUI），
         # 把重的锁脸自拍留给主卡、分流 GPU。缺省=沿用 command_args（零行为变更）。
         self.command_args_noface = cfg.get("command_args_noface")
         self.command_template = str(cfg.get("command_template") or "").strip()
         self.command_timeout_sec = float(cfg.get("command_timeout_sec", 180) or 180)
+        # 生图后端失败时回落相册真图（2026-07-22，默认开；album_fallback: false 关）。
+        self.album_fallback = bool(cfg.get("album_fallback", True))
 
     def stats(self) -> Dict[str, Any]:
         return {"enabled": self.enabled, "backend": self.backend,
@@ -1029,20 +1169,24 @@ class SelfieProvider:
         self, prompt: str, *, timeout_sec: Optional[float] = None,
         album_key: str = "", avoid_path: str = "", base_image: str = "",
         seed: int = -1, lora: str = "", lora_weight: float = 1.0,
+        exclude_paths: Any = None,
     ) -> SelfieResult:
         """出图。``base_image`` 非空且存在 → img2img（openai images.edit / command ``{base}``），
         用于锁住人设一致性；album 后端忽略 prompt/base（只挑现成图）。
         ``seed`` ≥0 时透传给 command 后端 ``{seed}`` 占位（人设自拍固定种子稳外观）；
         -1=随机（openai 后端无种子概念，忽略）。
         ``lora``/``lora_weight``（角色 LoRA 部署）：透传给 command 后端 ``{lora}``/
-        ``{lora_weight}`` 占位（per-persona 各自的 LoRA 文件）；openai/album 忽略。"""
+        ``{lora_weight}`` 占位（per-persona 各自的 LoRA 文件）；openai/album 忽略。
+        ``exclude_paths``：会话已发过的相册文件（防复读），album 直选与兜底两路都生效。"""
         rv = SelfieResult(prompt=str(prompt or ""), provider=self.backend)
         if not self.enabled or self.backend in ("", "disabled"):
             rv.error = "provider_disabled"
             return rv
         # album 后端：不出图，从预制相册挑一张已有照片（无需 prompt）。
         if self.backend == "album":
-            return self._pick_from_album(album_key=album_key, avoid_path=avoid_path)
+            return self._pick_from_album(
+                album_key=album_key, avoid_path=avoid_path,
+                exclude_paths=exclude_paths)
         if not rv.prompt.strip():
             rv.error = "empty_prompt"
             return rv
@@ -1073,10 +1217,28 @@ class SelfieProvider:
         except Exception as ex:  # noqa: BLE001
             rv.error = f"{type(ex).__name__}: {ex}"
         rv.latency_ms = int((time.monotonic() - t0) * 1000)
+        # ── 生图失败 → 相册兜底（2026-07-22，album_fallback 默认开）──────────
+        # 真机场景：176 GPU 被占/ComfyUI 挂/超时 → 与其回落"发不出图找借口"，
+        # 不如从人设相册挑一张真图兑现（策展相册的图本就是该人设的"本人照片"）。
+        # 相册空/仍失败 → 保留原错误原样返回（外层照旧走文字兜底）。
+        if not rv.ok and self.album_fallback:
+            fb = self._pick_from_album(
+                album_key=album_key, avoid_path=avoid_path,
+                exclude_paths=exclude_paths)
+            if fb.ok:
+                fb.prompt = rv.prompt
+                fb.extra["fallback_from"] = self.backend
+                fb.extra["primary_error"] = rv.error
+                fb.latency_ms = rv.latency_ms
+                logger.info(
+                    "[selfie] 生图后端 %s 失败(%s) → 相册兜底命中",
+                    self.backend, rv.error)
+                return fb
         return rv
 
     def _album_dirs(self, album_key: str = "") -> list:
-        """候选相册目录：优先 ``album_dir/<persona_key>``（多人设分册），回落 ``album_dir`` 根目录。
+        """候选相册目录：``album_dir/<persona_key>`` →（配置了则）``album_dir/<default_album_key>``
+        → ``album_dir`` 根目录，取第一个有图的（见 ``_list_album``）。
 
         ``album_key`` 只保留字母/数字（含 CJK）/``-``/``_``——挡掉路径分隔符与 ``..``，防目录穿越。
         """
@@ -1084,6 +1246,9 @@ class SelfieProvider:
         key = "".join(c for c in str(album_key or "") if c.isalnum() or c in ("-", "_"))
         if key:
             dirs.append(self.album_dir / key)
+        dkey = "".join(c for c in self.default_album_key if c.isalnum() or c in ("-", "_"))
+        if dkey and dkey != key:
+            dirs.append(self.album_dir / dkey)
         dirs.append(self.album_dir)
         return dirs
 
@@ -1103,16 +1268,43 @@ class SelfieProvider:
         return []
 
     def _pick_from_album(
-        self, *, album_key: str = "", avoid_path: str = ""
+        self, *, album_key: str = "", avoid_path: str = "",
+        exclude_paths: Any = None,
     ) -> SelfieResult:
-        """从预制相册随机挑一张（尽量避开上一张 ``avoid_path``，避免连发同图）。"""
-        files = self._list_album(album_key)
+        """从预制相册随机挑一张（尽量避开上一张 ``avoid_path``，避免连发同图）。
+
+        ``exclude_paths``（2026-07-22 防复读）：该会话已发过的文件路径/文件名集合
+        ——分层回落：先排除已发+同系列 → 只排已发 → 全发过用全池（绝不拒发）。
+        系列从策展命名解析（``<scene>_<series>_<nn>.jpg``）。face_ref 不参与投放
+        （那是锁脸基准照，发出去会和生成图"同脸同构图"穿帮）。
+        """
+        files = [f for f in self._list_album(album_key)
+                 if Path(f).stem.lower() != "face_ref"]
         if not files:
             return SelfieResult(provider="album", error="album_empty")
         pool = [f for f in files if f != str(avoid_path or "")] or files
+        ex = {str(p) for p in (exclude_paths or ())}
+        ex_names = {Path(p).name for p in ex}
+        if ex:
+            sent_series = {album_series_of_path(p) for p in ex}
+            sent_series.discard("")
+            fresh = [f for f in pool
+                     if Path(f).name not in ex_names
+                     and (album_series_of_path(f) not in sent_series
+                          or not album_series_of_path(f))]
+            unsent = [f for f in pool if Path(f).name not in ex_names]
+            pool = fresh or unsent or pool
         pick = random.choice(pool)
+        # 绝对路径（2026-07-22 真机复盘）：album_dir 常为相对路径（相对引擎 cwd），
+        # 相对路径经编排器发给 Node sidecar（cwd 不同）时 readFileSync ENOENT →
+        # WhatsApp 相册图 100% 发送失败。resolve 一处，所有消费方受益。
+        try:
+            pick = str(Path(pick).resolve())
+        except OSError:
+            pass
         return SelfieResult(ok=True, image_path=pick, provider="album",
-                            extra={"album_size": len(files)})
+                            extra={"album_size": len(files),
+                                   "series": album_series_of_path(pick)})
 
     def reference_image(self, album_key: str = "") -> str:
         """挑一张相册图当"基础图/锁脸参考"（openai/command 后端 img2img 用）；无相册回空串。
@@ -1253,12 +1445,17 @@ class SelfieProvider:
 
 
 _selfie_singleton: Optional[SelfieProvider] = None
+_selfie_cfg_key: str = ""
 
 
 def get_selfie_provider(cfg: Optional[Dict[str, Any]] = None) -> SelfieProvider:
-    global _selfie_singleton
-    if _selfie_singleton is None:
+    """配置指纹变了就重建（2026-07-22 配置单例审计第 3 处；与 get_orchestrator/
+    get_autoreply_limiter 同款缺陷：热重载改 provider 配置后单例仍用旧 backend）。"""
+    global _selfie_singleton, _selfie_cfg_key
+    key = repr(sorted((str(k), repr(v)) for k, v in (cfg or {}).items()))
+    if _selfie_singleton is None or (cfg and key != _selfie_cfg_key):
         _selfie_singleton = SelfieProvider(cfg or {})
+        _selfie_cfg_key = key
     return _selfie_singleton
 
 

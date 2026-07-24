@@ -790,7 +790,16 @@ def register_metrics_route(app, *, api_auth):
         format: str = "json",
         _=Depends(api_auth),
     ):
-        if not _is_supervisor(request):
+        fmt = (format or "json").strip().lower()
+        # Phase9: Prometheus scrape uses static Bearer auth_token (no browser session).
+        # api_auth already validated the token; allow text export for machine scrapers
+        # without opening JSON metrics to non-supervisor humans.
+        auth_h = request.headers.get("Authorization", "") or ""
+        bearer_ok = auth_h.startswith("Bearer ") and len(auth_h) > 8
+        if fmt == "prometheus":
+            if not (_is_supervisor(request) or bearer_ok):
+                raise HTTPException(403, tr(request, "err.perm.supervisor_required"))
+        elif not _is_supervisor(request):
             raise HTTPException(403, tr(request, "err.perm.supervisor_required"))
 
         # ── 聚合各子系统指标 ──────────────────────────────────────
@@ -1029,6 +1038,14 @@ def register_metrics_route(app, *, api_auth):
             metrics["lang_voice_route"] = get_lang_route_stats().dump()
         except Exception:
             pass
+
+        # 双实例重启冷却（机器级 JSON；连环重启是坐席「加载超时」主因）
+        try:
+            from src.utils.instance_restart_status import collect_restart_status
+            metrics["instance_restart"] = collect_restart_status()
+        except Exception:
+            pass
+
         # 会话 peer 身份「惰性解析/自愈补名」观测（数字号 healed 了多少 / 缓存命中 / 取不到）
         try:
             from src.web.peer_identity_stats import get_peer_identity_stats
@@ -1071,6 +1088,16 @@ def register_metrics_route(app, *, api_auth):
                 metrics["platform_sessions"]["tg_cooldown"] = _cd
             elif _cd:
                 metrics["platform_sessions"] = {"tg_cooldown": _cd}
+        except Exception:
+            pass
+
+        # 账号官方资料修改推送观测（accounts.profile_push 漏斗：attempts/success/
+        # partial/failed/cooldown_blocked/offline_blocked/persona_fill + by_platform）
+        try:
+            from src.integrations.account_profile_push import (
+                get_profile_push_stats,
+            )
+            metrics["profile_push"] = get_profile_push_stats()
         except Exception:
             pass
 
@@ -1209,6 +1236,14 @@ def register_metrics_route(app, *, api_auth):
                 buf.write(get_lang_route_stats().dump_prom())
             except Exception:
                 pass
+
+            # 双实例重启冷却（连环重启 / 坐席加载超时根因可告警）
+            try:
+                from src.utils.instance_restart_status import dump_prom as _inst_restart_prom
+                buf.write(_inst_restart_prom())
+            except Exception:
+                pass
+
             # P58 通用 provider 用量（vision 入站识图 / ocr / asr 等；JSON 侧已有，
             # 此前 workspace prom 缺失——补齐后 vision_attempts_total 等可被抓取）
             try:
@@ -1275,6 +1310,17 @@ def register_metrics_route(app, *, api_auth):
                        "Persona album media items by type", labels='type="photo"')
                 _gauge("ws_persona_media_by_type", pm.get("video", 0),
                        labels='type="video"')
+
+            # 账号官方资料修改推送（accounts.profile_push 漏斗）
+            ppst = metrics.get("profile_push") or {}
+            if ppst:
+                _gauge("profile_push_attempts_total", ppst.get("attempts", 0),
+                       "Account profile push attempts (process lifetime)")
+                _gauge("profile_push_success_total", ppst.get("success", 0),
+                       "Account profile pushes with at least one field applied")
+                _gauge("profile_push_cooldown_blocked_total",
+                       ppst.get("cooldown_blocked", 0),
+                       "Account profile pushes blocked by the per-account cooldown")
 
             return PlainTextResponse(buf.getvalue(), media_type="text/plain; version=0.0.4")
 

@@ -473,7 +473,9 @@ async def test_global_cap_ignored_when_provider_disabled():
 async def test_allow_direct_send_returns_empty_when_photo_sent(monkeypatch):
     from src.ai import companion_selfie as cs
     cs.reset_selfie_provider()
-    prov = cs.get_selfie_provider({"enabled": True, "backend": "disabled"})
+    # 预建 cfg 必须与 _ON["provider"] 指纹一致：get_selfie_provider 现按配置
+    # 指纹重建单例（热重载语义），不一致会在 handle 内重建、monkeypatch 丢失。
+    prov = cs.get_selfie_provider(dict(_ON["provider"]))
 
     async def _fake_gen(prompt, **kw):
         return cs.SelfieResult(ok=True, image_path="/tmp/fake.png", provider="x")
@@ -712,7 +714,8 @@ async def test_selfie_sent_records_media_note_for_history(monkeypatch):
     经 _record_stage_turn 进 last_reply → 下一轮 LLM 知道自己刚发过图。"""
     from src.ai import companion_selfie as cs
     cs.reset_selfie_provider()
-    prov = cs.get_selfie_provider({"enabled": True, "backend": "disabled"})
+    # 同上：预建 cfg 与 _ON["provider"] 指纹一致，防 handle 内重建丢 monkeypatch
+    prov = cs.get_selfie_provider(dict(_ON["provider"]))
 
     async def _gen(p, **k):
         return cs.SelfieResult(ok=True, image_path="/tmp/ok.png", provider="x")

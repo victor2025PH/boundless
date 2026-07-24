@@ -426,7 +426,7 @@ def note_media_sent(conv_key: str, media_id: str) -> None:
 def pick_registered_media(
     config: Dict[str, Any], persona_id: str, peer_text: str, *,
     avoid_id: str = "", bond_level: Optional[int] = None,
-    force_generic: bool = False,
+    force_generic: bool = False, conv_key: str = "",
 ) -> Optional[Dict[str, Any]]:
     """查该人设注册相册：关键词命中，或（是泛化「要照片/自拍」请求时）通用池。命中返回行 dict。
 
@@ -435,6 +435,7 @@ def pick_registered_media(
     额外放开无触发词的通用相册池（对齐老"随机挑自拍"）。
     ``force_generic=True``＝调用方已从别处判定这是一次要图（承诺兑现/offer-接受桥），
     peer_text 没有关键词也放开通用池。
+    ``conv_key`` 非空＝启用防复读记忆（同会话不重发同一张/同一系列，见 select_media）。
     """
     scfg = resolve_image_autosend_cfg(config)
     if not scfg.get("enabled", False):
@@ -450,9 +451,14 @@ def pick_registered_media(
         return None
     generic_ok = bool(force_generic) or bool(
         detect_selfie_request(str(peer_text or "")))
+    try:
+        _resend_days = float(scfg.get("resend_after_days", 90) or 0)
+    except (TypeError, ValueError):
+        _resend_days = 90.0
     return pick_media(
         store, str(persona_id or ""), str(peer_text or ""),
-        generic_ok=generic_ok, avoid_id=avoid_id, bond_level=bond_level)
+        generic_ok=generic_ok, avoid_id=avoid_id, bond_level=bond_level,
+        conv_key=conv_key, resend_after_days=_resend_days)
 
 
 def media_caption(row: Optional[Dict[str, Any]], lang: str = "", *, fallback: str = "") -> str:
@@ -530,6 +536,7 @@ async def _llm_caption_safe(fn, *, kind: str, subject: str = "", scene: str = ""
 
 def _maybe_register_generated_selfie(
     scfg: Dict[str, Any], persona_id: str, image_path: str,
+    scene: str = "",
 ) -> str:
     """「自动定妆」：把刚**生成并成功发出**的自拍复制进人设相册目录并登记注册相册（通用池）。
 
@@ -559,8 +566,12 @@ def _maybe_register_generated_selfie(
         suffix = Path(str(image_path)).suffix or ".png"
         dst = ddir / f"auto_selfie_{int(time.time())}_{uuid.uuid4().hex[:6]}{suffix}"
         shutil.copy2(image_path, dst)
+        _tags = [AUTO_REG_TAG]
+        if scene:
+            # series 标签让"同场景生成图"互为一个系列（防复读账本按系列排除）
+            _tags += [f"scene:{scene}", f"series:auto-{scene}"]
         row = st.add(str(persona_id), "photo", str(dst), "", triggers=[],
-                     tags=[AUTO_REG_TAG], created_by="image_autosend")
+                     tags=_tags, created_by="image_autosend")
         logger.info("[image_autosend] 生成自拍已入册（自动定妆） persona=%s file=%s n=%d",
                     persona_id, dst.name, auto_n + 1)
         return str((row or {}).get("id") or "")
@@ -684,9 +695,10 @@ async def run_autosend_image(
             logger.debug("[image_autosend] offer-accept 判定异常（忽略）", exc_info=True)
 
     # 1) 注册相册优先（DB）——关键词命中或泛化要图的通用池；图/视频均可，秒发零成本。
+    # conv_key 启用防复读记忆：同会话不重发同一张/同一系列（分层回落见 select_media）。
     row = pick_registered_media(
         config, persona_id, peer_text, avoid_id=last_media_sent(ck),
-        force_generic=bool(assume_intent))
+        force_generic=bool(assume_intent), conv_key=ck)
     # 相册自动扩容：通用池只剩「上次刚发过的那张 auto 照片」且额度未满 → 本次改走
     # 生成（新场景照，发完自动入册），相册有机长到 max 张后回到纯轮换。
     if row and _should_grow_album(scfg, persona_id, row, ck):
@@ -696,7 +708,16 @@ async def run_autosend_image(
         local = str(row.get("file_path") or "")
         url = str(row.get("url") or "")
         mt = str(row.get("media_type") or "photo")
-        cap = media_caption(row, lang, fallback="")
+        # 配文语言对齐（2026-07-22）：粤语客户取 caption_i18n["yue"]（语言检测器
+        # 把粤语归 zh，靠特征字识别补路由）；其余按调用方 lang（en 等）。
+        _cap_lang = lang
+        try:
+            from src.ai.lang_voice_route import is_cantonese_text
+            if is_cantonese_text(str(peer_text or "")):
+                _cap_lang = "yue"
+        except Exception:
+            pass
+        cap = media_caption(row, _cap_lang, fallback="")
         cap_src = "registry" if cap else ""
         if not cap:
             # 相册条目无运营配文（如 auto 定妆照）→ LLM 按当前对话写配文 → 固定配文。
@@ -721,10 +742,15 @@ async def run_autosend_image(
                     record_caption(cap_src, cap)
                 note_media_sent(ck, str(row.get("id")))
                 try:
+                    from src.companion.persona_media import series_of
                     from src.companion.persona_media_store import get_persona_media_store
                     st = get_persona_media_store()
                     if st is not None:
                         st.record_hit(str(row.get("id")))
+                        # 防复读账本：记「这张（这系列）发给过这个会话」，跨重启持久
+                        st.record_send(ck, str(row.get("id")),
+                                       persona_id=str(persona_id or ""),
+                                       series=series_of(row))
                 except Exception:
                     pass
                 record_image_sent(mt, source="registry")
@@ -802,9 +828,24 @@ async def run_autosend_image(
         # 使下一次请求轮换到旧照或触发下一轮扩容。
         _backend = str(((scfg.get("provider") or {}).get("backend")) or "").lower()
         if kind == KIND_SELFIE and _backend not in ("", "album", "disabled"):
-            _new_id = _maybe_register_generated_selfie(scfg, persona_id, local)
+            _new_id = _maybe_register_generated_selfie(
+                scfg, persona_id, local, scene=_scene)
             if _new_id:
                 note_media_sent(ck, _new_id)
+                # T2（2026-07-22）：生成图同样入防复读持久账本——入册后它就是
+                # 相册候选，不记账本则同客户可能再次收到这张"新照片"。
+                # series=auto-<scene>（与入册 tags 同名：同场景生成图互为一个系列）。
+                try:
+                    from src.companion.persona_media_store import (
+                        get_persona_media_store,
+                    )
+                    _st = get_persona_media_store()
+                    if _st is not None:
+                        _st.record_send(
+                            ck, _new_id, persona_id=str(persona_id or ""),
+                            series=f"auto-{_scene}" if _scene else "")
+                except Exception:
+                    pass
     else:
         record_image_fallback("deliver_failed")
     return ok

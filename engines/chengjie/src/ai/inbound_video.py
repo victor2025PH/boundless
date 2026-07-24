@@ -62,6 +62,25 @@ def vision_usable(vision_config: Optional[Dict[str, Any]]) -> bool:
     return bool(vcfg.get("api_key"))
 
 
+# ── C2 跨链路理解缓存（2026-07-22）────────────────────────────────────────
+# 背景：同一条入站视频会被**直发线**（protocol_autoreply→media_enrich）和
+# **全自动草稿链**（autodraft_helpers）各理解一遍——真机实测同文件 5 秒内两次
+# 完整「抽帧+VLM+音轨 ASR」（两次 VLM 输出还不一致）。按「路径+mtime+size」
+# 记忆成品描述，第二链路直接复用；短 TTL 防陈旧。进程内 dict + 锁，绝不落盘。
+_UNDERSTAND_CACHE: Dict[str, Tuple[float, Optional[str]]] = {}
+_UNDERSTAND_CACHE_LOCK = asyncio.Lock()
+_UNDERSTAND_CACHE_TTL = 600.0   # 10 分钟：覆盖双链路窗口，也容错人工重放
+_UNDERSTAND_CACHE_MAX = 64
+
+
+def _understand_cache_key(video_path: str) -> str:
+    try:
+        st = Path(video_path).stat()
+        return f"{video_path}|{int(st.st_mtime)}|{st.st_size}"
+    except OSError:
+        return ""
+
+
 async def understand_video_file(
     video_path: str,
     *,
@@ -70,10 +89,26 @@ async def understand_video_file(
     speech_emotion_config: Optional[Dict[str, Any]] = None,
     voice_recognition_config: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
-    """理解本地视频文件 → 「画面：… 语音：…」综合描述；都空返回 None。"""
+    """理解本地视频文件 → 「画面：… 语音：…」综合描述；都空返回 None。
+
+    同一文件（路径+mtime+size）10 分钟内重复调用直接回缓存成品——
+    直发线与全自动草稿链各理解一遍的双倍 GPU 消耗由此消除。
+    """
     from src.ai.inbound_video_stats import get_inbound_video_stats
 
     stats = get_inbound_video_stats()
+    _ck = _understand_cache_key(video_path)
+    if _ck:
+        async with _UNDERSTAND_CACHE_LOCK:
+            hit = _UNDERSTAND_CACHE.get(_ck)
+            if hit is not None and (asyncio.get_event_loop().time() - hit[0]
+                                    ) < _UNDERSTAND_CACHE_TTL:
+                logger.info("[inbound_video] 命中理解缓存（跨链路复用）")
+                # 只记 outcome 不记 attempt：attempts/success_rate 语义保持
+                # "真实理解尝试"，缓存命中作为独立观测项。
+                stats.record_outcome("cache_hit")
+                return hit[1]
+
     stats.record_attempt()
     if not vision_usable(vision_config) and not voice_transcriber:
         stats.record_outcome("no_backend")
@@ -96,11 +131,22 @@ async def understand_video_file(
     if audio_text:
         emo = f"（说话语气：{audio_emotion}）" if audio_emotion else ""
         parts.append(f"语音：{audio_text}{emo}")
+    result: Optional[str]
     if not parts:
         stats.record_outcome("empty")
-        return None
-    stats.record_outcome("ok")
-    return " ".join(parts)[:2400]
+        result = None
+    else:
+        stats.record_outcome("ok")
+        result = " ".join(parts)[:2400]
+
+    # 空结果不缓存：可能是后端瞬时不可用，下一链路应有机会重试
+    if _ck and result is not None:
+        async with _UNDERSTAND_CACHE_LOCK:
+            if len(_UNDERSTAND_CACHE) >= _UNDERSTAND_CACHE_MAX:
+                _oldest = min(_UNDERSTAND_CACHE.items(), key=lambda kv: kv[1][0])[0]
+                _UNDERSTAND_CACHE.pop(_oldest, None)
+            _UNDERSTAND_CACHE[_ck] = (asyncio.get_event_loop().time(), result)
+    return result
 
 
 async def enrich_tg_video_payload(

@@ -304,7 +304,12 @@ async def generate_with_gate(
     gate_on = bool(gcfg.get("enabled", True))
     backend = str(getattr(provider, "backend", "")).lower()
     res = await provider.generate(prompt, seed=seed, **gen_kwargs)
-    if not gate_on or backend == "album" or not getattr(res, "ok", False):
+    # album 免体检看的是**结果**来源而非 provider.backend（2026-07-22 真机复盘）：
+    # command 生图失败 → album_fallback 挑的相册真图也曾被体检+换种子重试——
+    # 相册是人工策展的"本人照片"，体检它纯烧 VLM；换种子重试对相册更无意义。
+    _res_provider = str(getattr(res, "provider", "") or "").lower()
+    if not gate_on or backend == "album" or _res_provider == "album" \
+            or not getattr(res, "ok", False):
         return res
     retries = max(0, int(gcfg.get("retries", 1) or 0))
     tol = int(gcfg.get("age_tolerance", 18) or 18)
@@ -316,6 +321,10 @@ async def generate_with_gate(
         content_rating=rating)
     if ok:
         return res
+    # 拒因必须可见（2026-07-22 盲排查教训：体检静默拒图，日志只见"Vision 初始化"
+    # 就没了下文，selfie 失败原因全靠猜）。
+    logger.info("[image_gate] 体检不合格(%s) file=%s → 换种子重试",
+                reason, res.image_path)
     last_reason = reason
     for attempt in range(1, retries + 1):
         new_seed = ((seed + 7919 * attempt) % (2 ** 31)) if seed >= 0 else -1

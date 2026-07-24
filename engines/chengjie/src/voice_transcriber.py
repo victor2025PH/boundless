@@ -145,6 +145,15 @@ class VoiceTranscriber:
         """具体转录实现（由子类重写）"""
         raise NotImplementedError("子类必须实现此方法")
 
+    async def warmup(self) -> None:
+        """启动预热钩子：默认无操作。
+
+        懒加载型子类（如 SenseVoice）重写之，在启动阶段后台预载模型，
+        消掉重启后首条语音的冷启动延迟（实测 ~20-30s）。远程/云端型
+        转录器保持无操作——启动时不应产生外呼流量。
+        """
+        return None
+
     def cleanup_temp_files(self):
         """清理临时文件"""
         try:
@@ -494,6 +503,10 @@ class SenseVoiceTranscriber(VoiceTranscriber):
             self.model = await asyncio.to_thread(_load)
             self.logger.info("SenseVoice 模型加载完成")
 
+    async def warmup(self) -> None:
+        """启动预热：提前加载模型（幂等，_ensure_model 自带锁与已载判断）。"""
+        await self._ensure_model()
+
     async def _transcribe_impl(self, voice_file_path: str, language: str) -> Optional[str]:
         try:
             await self._ensure_model()
@@ -553,6 +566,12 @@ class FallbackTranscriber(VoiceTranscriber):
                 pass
         _names = " → ".join(t.__class__.__name__ for t in self._chain) or "(空)"
         self.logger.info(f"级联转录服务初始化: {_names}")
+
+    async def warmup(self) -> None:
+        """只预热主转录器（chain[0]）：回落级是小概率路径，启动即加载
+        会白占显存/内存（本机 GPU 显存紧张纪律）；主级挂了再懒加载兜底。"""
+        if self._chain:
+            await self._chain[0].warmup()
 
     async def transcribe_voice_message(
         self, voice_file_path: str, language: str = "zh"
@@ -650,6 +669,25 @@ class VoiceTranscriberFactory:
             merged.pop('fallback', None)
             chain.append(VoiceTranscriberFactory._create_one(merged))
         return FallbackTranscriber(config, chain)
+
+
+# ── 进程级共享转写器（2026-07-24，供 TTS synth_verify 等旁路消费）─────────────
+# 旁路消费方复用主链已加载的模型（SenseVoice ~900MB VRAM），绝不自行再加载一份。
+# 首个登记生效（主链转写器最先创建=配置最全）；未登记时消费方必须 fail-open。
+_SHARED_TRANSCRIBER: Optional[VoiceTranscriber] = None
+
+
+def register_shared_transcriber(t: Optional[VoiceTranscriber]) -> None:
+    """登记进程级共享转写器（首个生效，重复登记忽略）。"""
+    global _SHARED_TRANSCRIBER
+    if t is not None and _SHARED_TRANSCRIBER is None:
+        _SHARED_TRANSCRIBER = t
+
+
+def get_shared_transcriber() -> Optional[VoiceTranscriber]:
+    """取共享转写器；未登记 → None（消费方自行跳过）。"""
+    return _SHARED_TRANSCRIBER
+
 
 # 简易测试函数
 async def test_voice_transcription():

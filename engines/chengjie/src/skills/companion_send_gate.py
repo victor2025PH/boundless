@@ -24,6 +24,28 @@ def gate_enabled(config: Optional[Dict[str, Any]]) -> bool:
         return False
 
 
+def peer_exempt(config: Optional[Dict[str, Any]], chat_key: str) -> bool:
+    """测试白名单（2026-07-22）：``companion_send_gate.exempt_peers`` 里的对话对象
+    免限额——联调测试不再与养号策略打架（真机两次事故：warmup_cap 拦下测试回复）。
+
+    匹配宽松：白名单项是 chat_key 的子串即命中（号码常带/不带国家码、@suffix）。
+    生产客户不在名单 → 完全不受影响。
+    """
+    ck = str(chat_key or "").strip()
+    if not ck:
+        return False
+    try:
+        peers = ((config or {}).get("companion_send_gate") or {}).get(
+            "exempt_peers") or []
+        for p in peers:
+            ps = str(p or "").strip()
+            if ps and (ps in ck or ck in ps):
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def _gate_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     try:
         return dict((config or {}).get("companion_send_gate") or {})

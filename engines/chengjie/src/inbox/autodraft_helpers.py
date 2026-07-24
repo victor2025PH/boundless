@@ -6,7 +6,7 @@ enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv, text, draft_id
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict, text: str, draft_id: str, mode: str) -> None:
@@ -92,6 +92,24 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                     )
                     if _desc:
                         _peer_media_desc = str(_desc).strip()
+                        # 识别结果回写收件箱消息行（与语音/视频分支对等，补齐此前缺口）：
+                        # 让坐席台/时间线/媒体卡看到「[图片内容] …」而非裸 [图片] 占位。
+                        # 写成带前缀格式，供前端媒体卡 _splitMediaDesc 剥离出「AI 识图」摘要。
+                        # only_if_empty=True 幂等：仅覆盖占位行，不踩已有真实内容/协议线已回写的。
+                        # 不改 last/history（图片非「对方说的话」，正文保持干净，描述走 media_desc 上下文）。
+                        try:
+                            _ad_store.update_message_text(
+                                cid,
+                                message_id=_peer_msg_id,
+                                media_ref=_peer_media_ref,
+                                text=f"[图片内容] {_peer_media_desc}",
+                                only_if_empty=True,
+                            )
+                        except Exception:
+                            assistant.logger.debug(
+                                "[AutoDraft] 图片识别回写消息失败（忽略）",
+                                exc_info=True,
+                            )
             except Exception:
                 assistant.logger.debug(
                     "[AutoDraft] 图片识别补全失败",
@@ -120,6 +138,11 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                 _vtr = getattr(
                     _tc, "voice_transcriber", None,
                 ) if _tc is not None else None
+                if _vtr is None:
+                    # 宿主启动后才热开 ASR → 懒建兜底（同 media_enrich 口径）
+                    from src.inbox.media_enrich import lazy_voice_transcriber
+                    _vtr = lazy_voice_transcriber(
+                        assistant.config.config or {})
                 if _voice_path and _vtr is not None:
                     _vlang = str(
                         (assistant.config.get(
@@ -243,6 +266,10 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                 )
                 _cfg = assistant.config.config or {}
                 _vtr = getattr(_tc, "voice_transcriber", None) if _tc else None
+                if _vtr is None:
+                    # 宿主启动后才热开 ASR → 懒建兜底（同 media_enrich 口径）
+                    from src.inbox.media_enrich import lazy_voice_transcriber
+                    _vtr = lazy_voice_transcriber(_cfg)
                 if _video_path:
                     _vdesc = await understand_video_file(
                         str(_video_path),
@@ -333,6 +360,7 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
             media_desc=_peer_media_desc,
             conversation_id=cid,
             peer_audio_emotion=_peer_audio_emotion,
+            account_id=account_id,
         )
         if out.get("ok") and out.get("reply"):
             done = draft_svc.enrich_draft(
@@ -416,6 +444,11 @@ class AutoDraftConfig:
     platform_ceilings: dict
     skip_groups: bool
     enrich: bool
+    # 融合实例 P1：账号业务线 → 档位上限（inbox.auto_draft.business_line_modes；
+    # 内置默认 translation→review：翻译线账号 AI 只拟稿人审后发，绝不自动发送。
+    # 账号未打 business_line 标签 = 不封顶 = 旧行为）。
+    business_line_ceilings: dict = field(
+        default_factory=lambda: {"translation": "review"})
 
 
 def make_auto_draft_cb(
@@ -488,6 +521,21 @@ def make_auto_draft_cb(
             except Exception:
                 logger.debug(
                     "[AutoDraft] 平台档位封顶失败（忽略）", exc_info=True)
+        # 账号业务线封顶（融合实例：翻译线账号 → review，AI 仍拟稿、强制人审、
+        # 绝不自动发）。封顶链 = 会话显式 > 账号业务线 > 平台 > 全局，各级只降不升；
+        # 账号无标签 / 注册表未就绪 = 不封顶（零行为变更）。
+        try:
+            from src.integrations.account_registry import cached_business_line
+            _bl = cached_business_line(
+                str(conv.get("platform") or ""),
+                str(conv.get("account_id") or ""))
+            _bl_ceil = (cfg.business_line_ceilings or {}).get(_bl) if _bl else None
+            if _bl_ceil:
+                from src.inbox.drafts import cap_automation_mode
+                mode = cap_automation_mode(mode, _bl_ceil)
+        except Exception:
+            logger.debug(
+                "[AutoDraft] 业务线档位封顶失败（忽略）", exc_info=True)
         if mode == "manual":
             return
         draft_id = draft_svc.auto_generate_draft(
@@ -532,6 +580,16 @@ def setup_auto_draft(assistant, draft_svc, web_app):
                 _ad_cfg.get("platform_modes", {}) or {}
             ).items()
         }
+        # 账号业务线档位上限（融合实例 P1）：默认 translation→review。
+        # config 可覆盖/扩展（inbox.auto_draft.business_line_modes: {translation: review}）；
+        # 显式置空 dict 即关闭业务线封顶。
+        _ad_bl_raw = _ad_cfg.get("business_line_modes")
+        if isinstance(_ad_bl_raw, dict):
+            _ad_bl_ceilings = {
+                str(k).lower(): str(v).lower() for k, v in _ad_bl_raw.items()
+            }
+        else:
+            _ad_bl_ceilings = {"translation": "review"}
         # 源头止血：群/频道会话默认不入人审草稿队列（默认关=旧行为）。
         # 群消息本非 1:1 客服场景，生成 L3/L4 待审草稿只会长期无人处置、
         # 反复触发 SLA 铃铛，故提供开关从源头跳过。
@@ -553,6 +611,7 @@ def setup_auto_draft(assistant, draft_svc, web_app):
                 mode=_ad_mode, min_len=_ad_min_len, skip=_ad_skip,
                 platform_ceilings=_ad_platform_ceilings,
                 skip_groups=_ad_skip_groups, enrich=_ad_enrich,
+                business_line_ceilings=_ad_bl_ceilings,
             ),
             draft_svc, _ad_store, _ad_loop, _enrich_auto_draft, assistant.logger,
             app_config=assistant.config.config or {},

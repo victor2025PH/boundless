@@ -407,6 +407,78 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
             resp["warn"] = chk.get("reason")
         return resp
 
+    @app.get("/api/companion/media-capabilities")
+    async def api_media_capabilities(request: Request, _=Depends(api_auth)):
+        """入站多媒体能力（识图/识别语音/识别视频/自动发自拍）就绪自检：每项开没开 + 后端配没配。
+
+        只读。回 ``{capabilities:[{key,label,enabled,backend_ready,stage,hint}], summary}``。
+        stage=off（未开）/ needs_backend（开了但没配后端）/ active（开了且后端就绪）。
+        """
+        from src.companion.media_capability import collect_media_status
+
+        state = request.app.state
+        cm = getattr(state, "config_manager", None)
+        config = getattr(cm, "config", None) if cm is not None else None
+        if not isinstance(config, dict):
+            return {"ok": False, "available": False,
+                    "message": "config 未就绪", "capabilities": []}
+        try:
+            data = collect_media_status(config)
+        except Exception:
+            logger.warning("media capability status 计算失败", exc_info=True)
+            return {"ok": False, "available": True, "capabilities": [],
+                    "message": "聚合计算失败"}
+        return {"ok": True, "available": True, **data}
+
+    @app.post("/api/companion/media-capabilities/preset")
+    async def api_media_capabilities_preset(request: Request, _=Depends(api_auth)):
+        """一键预设多媒体能力（只翻 vision/voice_recognition/selfie 开关，写 overlay + 审计）。
+
+        body: {name: understand_all|understand_and_selfie|media_off, actor?}。
+        开启类预设会附带 ``warnings``（若将开启的能力后端未就绪，如实提示但仍写开关——
+        运营可先开开关再补后端，与其它 overlay 开关同语义）。
+        """
+        from src.companion.media_capability import (
+            MEDIA_PRESETS, build_media_preset, collect_media_status,
+            preset_backend_warnings,
+        )
+
+        state = request.app.state
+        cm = getattr(state, "config_manager", None)
+        config = getattr(cm, "config", None) if cm is not None else None
+        if cm is None or not isinstance(config, dict) or not hasattr(cm, "set_overlay_flag"):
+            return {"ok": False, "available": False, "message": "config 未就绪"}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        name = str(body.get("name") or "").strip()
+        actor = (str(body.get("actor") or "").strip() or "web-admin")
+        spec = build_media_preset(name)
+        if spec is None:
+            return {"ok": False, "message": f"未知媒体预设: {name}",
+                    "presets": {k: v["label"] for k, v in MEDIA_PRESETS.items()}}
+
+        warnings = preset_backend_warnings(name, config)
+        applied, failed = [], []
+        for path, value in (spec.get("flags") or {}).items():
+            ok, msg = cm.set_overlay_flag(path, bool(value))
+            if ok:
+                _audit_toggle(cm, actor=actor, key=path, field="enabled",
+                              value=bool(value), path=path, reason=f"media_preset:{name}")
+                applied.append({"path": path, "value": bool(value)})
+            else:
+                failed.append({"path": path, "value": bool(value), "reason": msg})
+        status = None
+        try:
+            status = collect_media_status(config)
+        except Exception:
+            logger.debug("回算媒体能力状态失败", exc_info=True)
+        return {"ok": True, "preset": name, "label": spec["label"],
+                "applied": applied, "failed": failed, "warnings": warnings,
+                "status": status}
+
     @app.get("/api/companion/capabilities/toggle-audit")
     async def api_companion_toggle_audit(
         request: Request, limit: int = 50, _=Depends(api_auth),

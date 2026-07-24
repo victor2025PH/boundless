@@ -123,3 +123,46 @@ async def test_fallback_all_fail_returns_none():
     out = await fb.transcribe_voice_message("x.ogg", "auto")
     assert out is None
     assert primary.called and backup.called
+
+
+# ── 启动预热（warmup_on_boot，2026-07-23）────────────────────────────
+# 语义：消重启后首条语音的模型冷启动（~20-30s）。不变量：
+#   ① 基类默认无操作（远程/云端型启动零外呼）；
+#   ② 级联只预热主级——回落级懒加载省显存；
+#   ③ SenseVoice 预热=复用 _ensure_model（幂等，已载直接返回）。
+
+
+class _WarmFake(_FakeTranscriber):
+    def __init__(self):
+        super().__init__(result="x")
+        self.warmed = 0
+
+    async def warmup(self):
+        self.warmed += 1
+
+
+async def test_warmup_base_default_noop():
+    t = _FakeTranscriber(result="ok")
+    assert await t.warmup() is None  # 不抛不外呼即过
+
+
+async def test_fallback_warmup_only_primary():
+    primary, backup = _WarmFake(), _WarmFake()
+    fb = FallbackTranscriber({}, [primary, backup])
+    await fb.warmup()
+    assert primary.warmed == 1 and backup.warmed == 0
+    await FallbackTranscriber({}, []).warmup()  # 空链不炸
+
+
+async def test_sensevoice_warmup_delegates_to_ensure_model(monkeypatch):
+    t = SenseVoiceTranscriber(
+        {"temp_dir": "./temp/test_voice_fb", "sensevoice": {"device": "cpu"}})
+    calls = []
+
+    async def fake_ensure():
+        calls.append(1)
+        t.model = object()
+
+    monkeypatch.setattr(t, "_ensure_model", fake_ensure)
+    await t.warmup()
+    assert calls == [1]

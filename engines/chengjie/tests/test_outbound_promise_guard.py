@@ -82,6 +82,58 @@ def test_detect_promise_question_sentence_skipped_but_statement_caught():
     assert pg.detect_media_promise(txt) == "image"
 
 
+# ── A2 视频通话承诺（2026-07-22，真机实录：AI 声称"视频都开到㗎"）──────────────
+@pytest.mark.parametrize("text", [
+    # 真机事故原文（粤语）
+    "哈哈，有得啊，我微信视频号同 WhatsApp 视频都开到㗎～",
+    "可以视频啊，你打过来嘛",
+    "我们开个视频聊吧",
+    "跟你视频也没问题呀",
+    "同你視頻傾下啦",
+    "we can do a video call anytime",
+    "let's video chat!",
+    "I'll video call you tonight",
+])
+def test_detect_videocall_promise_positive(text):
+    assert pg.detect_media_promise(text) == "video_call"
+
+
+@pytest.mark.parametrize("text", [
+    # 否认/婉拒：正是我们想要的行为，绝不能剥
+    "这边不方便开视频啦，先文字聊嘛",
+    "我不能视频哦，你别闹",
+    "视频就算了吧，打字挺好的",
+    # 远期/条件
+    "改天有机会我们再视频～",
+    "下次见面前先视频认识下吧",
+    # 疑问 offer
+    "要不要视频呀？",
+    "想视频吗？",
+    # 谈论视频内容（媒体视频，不是通话）
+    "你发的视频我看了，好好笑",
+    "我在拍视频素材呢",
+    "这个视频拍得真好看",
+])
+def test_detect_videocall_promise_negative(text):
+    assert pg.detect_media_promise(text) != "video_call"
+
+
+def test_videocall_rewrite_instruction_and_deflection():
+    ins = pg.build_promise_rewrite_instruction("可以视频啊，你打过来", pg.KIND_VIDEOCALL)
+    assert "视频通话" in ins and "婉拒" in ins
+    d = pg.deflection_line("可以视频啊", pg.KIND_VIDEOCALL)
+    assert d and "视频" in d
+    d_en = pg.deflection_line("sure let's video call", pg.KIND_VIDEOCALL)
+    assert d_en and "video" in d_en.lower()
+
+
+def test_videocall_strip_sentence_level():
+    txt = "今天好累呀。可以视频啊，你打过来嘛！你吃饭了没？"
+    out = pg.strip_media_promises(txt)
+    assert "视频" not in out
+    assert "今天好累" in out and "吃饭" in out
+
+
 # ── Phase18 多语种承诺检测（宁漏勿误：只收宣告形）──────────────────────────────
 @pytest.mark.parametrize("text", [
     "写真を送るね！",          # ja 宣告

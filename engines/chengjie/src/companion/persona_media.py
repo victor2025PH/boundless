@@ -67,6 +67,18 @@ def _weighted_choice(
     return r.choices(list(rows), weights=weights, k=1)[0]
 
 
+def series_of(row: Optional[Dict[str, Any]]) -> str:
+    """条目的系列标签（tags 里 ``series:<xxx>``）；无则空串。
+
+    系列=同套服装/同场景连拍的视觉近似组（album_curator 按 outfit 聚类打标）。
+    """
+    for t in (row or {}).get("tags") or []:
+        ts = str(t or "")
+        if ts.startswith("series:"):
+            return ts[7:]
+    return ""
+
+
 def select_media(
     rows: Sequence[Dict[str, Any]], text: str, *,
     generic_ok: bool = False,
@@ -74,8 +86,16 @@ def select_media(
     avoid_id: str = "",
     bond_level: Optional[int] = None,
     rng: Optional[random.Random] = None,
+    exclude_ids: Optional[Any] = None,
+    exclude_series: Optional[Any] = None,
 ) -> Optional[Dict[str, Any]]:
-    """从候选行里挑一个媒体条目；挑不到返回 None。纯函数（rng 可注入以确定性测试）。"""
+    """从候选行里挑一个媒体条目；挑不到返回 None。纯函数（rng 可注入以确定性测试）。
+
+    防复读分层回落（2026-07-22）：``exclude_ids``＝该会话已发过的条目、
+    ``exclude_series``＝已发过的系列（同套服装连拍）。优先挑「没发过且系列也新」
+    的；全排除后**逐层放宽**：先允许旧系列的新图，再允许重发（此时挑
+    ``last_sent_at`` 最老的——像真人"翻旧照"，永不因记忆而拒发）。
+    """
     keyword, generic = _partition(
         rows, text, media_types=media_types, bond_level=bond_level)
     pool = keyword if keyword else (generic if generic_ok else [])
@@ -85,6 +105,21 @@ def select_media(
         alt = [r for r in pool if str(r.get("id")) != str(avoid_id)]
         if alt:
             pool = alt
+    ex_ids = {str(x) for x in (exclude_ids or ())}
+    ex_series = {str(x) for x in (exclude_series or ()) if str(x)}
+    if ex_ids or ex_series:
+        # 层1：id 新 + 系列新
+        fresh = [r for r in pool
+                 if str(r.get("id")) not in ex_ids
+                 and (series_of(r) not in ex_series or not series_of(r))]
+        if fresh:
+            return _weighted_choice(fresh, rng)
+        # 层2：id 新（允许旧系列——同系列另一张，好过重发同一张）
+        unsent = [r for r in pool if str(r.get("id")) not in ex_ids]
+        if unsent:
+            return _weighted_choice(unsent, rng)
+        # 层3：全发过 → 挑最久没发的（翻旧照），不拒发
+        return min(pool, key=lambda r: float(r.get("last_sent_at") or 0))
     return _weighted_choice(pool, rng)
 
 
@@ -123,17 +158,33 @@ def pick_media(
     avoid_id: str = "",
     bond_level: Optional[int] = None,
     rng: Optional[random.Random] = None,
+    conv_key: str = "",
+    resend_after_days: float = 90,
 ) -> Optional[Dict[str, Any]]:
-    """store 便捷封装：取该人设 enabled 行 → select_media。store/persona 缺失 → None。"""
+    """store 便捷封装：取该人设 enabled 行 → select_media。store/persona 缺失 → None。
+
+    ``conv_key`` 非空时启用防复读记忆：查该会话已发账本（id+系列）作排除面。
+    ``resend_after_days``：账本时间衰减（默认 90 天后旧图重新可用；0=永久排除）。
+    """
     if store is None or not persona_id:
         return None
     try:
         rows = store.list(str(persona_id), enabled_only=True)
     except Exception:
         return None
+    ex_ids, ex_series = None, None
+    if conv_key:
+        try:
+            hist = store.sent_history(
+                str(conv_key), max_age_days=float(resend_after_days or 0))
+            ex_ids = hist.get("ids") or None
+            ex_series = hist.get("series") or None
+        except Exception:
+            ex_ids = ex_series = None
     return select_media(
         rows, text, generic_ok=generic_ok, media_types=media_types,
-        avoid_id=avoid_id, bond_level=bond_level, rng=rng)
+        avoid_id=avoid_id, bond_level=bond_level, rng=rng,
+        exclude_ids=ex_ids, exclude_series=ex_series)
 
 
 def caption_for(row: Optional[Dict[str, Any]], lang: str = "", *, fallback: str = "") -> str:
