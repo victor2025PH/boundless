@@ -147,7 +147,7 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
     unavailable:{bg:'var(--input)',fg:'var(--t2)', icon:'❓', label:window.T('db_js_006')}
   };
   function planName(p){return {community:window.T('db_js_007'),basic:window.T('db_js_008'),pro:window.T('db_js_009'),flagship:window.T('db_js_010')}[p]||p||'—';}
-  fetch('/api/admin/license').then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/admin/license').then(function(r){return r.json();}).then(function(d){
     if(!d||!d.ok) return;
     var card=document.getElementById('lic-card'); if(!card) return;
     var m=META[d.state]||META.unlicensed;
@@ -194,7 +194,7 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
   };
   var SMETA={ok:'var(--green)',warn:'var(--amber)',fail:'var(--red)'};
   function render(){
-    fetch('/api/admin/health').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/admin/health').then(function(r){return r.json();}).then(function(d){
       if(!d||!d.ok) return;
       var card=document.getElementById('health-card'); if(!card) return;
       var m=LMETA[d.light]||LMETA.yellow;
@@ -242,7 +242,7 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
     red:{fg:'var(--red)',icon:'⚠️',label:window.T('msg_js_1245')}};
   var SM={ok:'var(--green)',warn:'var(--amber)',fail:'var(--red)'};
   function render(){
-    fetch('/api/admin/reliability?hours=24').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/admin/reliability?hours=24').then(function(r){return r.json();}).then(function(d){
       if(!d||!d.ok) return;
       var card=document.getElementById('rel-card'); if(!card) return;
       var m=LM[d.light]||LM.yellow;
@@ -717,7 +717,7 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
 var _alertCollapsed=localStorage.getItem('dash_alert_collapsed')==='1';
 async function loadAlerts(){
   try{
-    var r=await fetch('/api/alert-status');
+    var r=await apiFetch('/api/alert-status');
     if(!r.ok)return;
     var d=await r.json();
     if(!d.alert_count)return;
@@ -755,7 +755,7 @@ const ACT_COLORS=['#5b7cf6','#10b981','#ef4444','#f59e0b','#8b5cf6','#06b6d4','#
 
 async function loadActivityStats(){
   try{
-    const r=await fetch('/api/activity-stats?hours=24');
+    const r=await apiFetch('/api/activity-stats?hours=24');
     if(!r.ok)return;
     const d=await r.json();
     document.getElementById('act-loading').style.display='none';
@@ -827,7 +827,7 @@ async function runHealthCheck(){
   document.getElementById('hc-score-num').textContent='…';
   document.getElementById('hc-ring-fg').setAttribute('stroke-dasharray','0 100');
   try{
-    const r=await fetch('/api/health-check');
+    const r=await apiFetch('/api/health-check');
     const d=await r.json();
     /* Score ring */
     const score=d.score||0;
@@ -868,7 +868,7 @@ async function runHealthCheck(){
 /* ── Bot 实时性能指标 ─────────────────────── */
 async function loadBotMetrics(){
   try{
-    const r=await fetch('/api/bot-metrics');
+    const r=await apiFetch('/api/bot-metrics');
     if(!r.ok)return;
     const d=await r.json();
     document.getElementById('bm-loading').style.display='none';
@@ -1053,7 +1053,7 @@ async function loadDrySamples(reset){
     list.innerHTML='<div style="color:var(--t3)">'+window.T('msg_js_1047')+'...</div>';
   }
   try{
-    const r=await fetch('/api/reactivation/dry-run-samples?limit='+_dryPageSize,{credentials:'same-origin'});
+    const r=await apiFetch('/api/reactivation/dry-run-samples?limit='+_dryPageSize,{credentials:'same-origin'});
     if(!r.ok){list.innerHTML='<div style="color:var(--red)">'+window.T('rpa_load_failed')+'</div>';return;}
     const d=await r.json();
     _dryShown=d.samples||[];
@@ -1068,7 +1068,7 @@ async function loadMoreDry(){
   const earliest=_dryShown.length?_dryShown[_dryShown.length-1].ts:0;
   if(!earliest)return;
   try{
-    const r=await fetch('/api/reactivation/dry-run-samples?limit='+_dryPageSize+'&before_ts='+earliest,{credentials:'same-origin'});
+    const r=await apiFetch('/api/reactivation/dry-run-samples?limit='+_dryPageSize+'&before_ts='+earliest,{credentials:'same-origin'});
     if(!r.ok)return;
     const d=await r.json();
     const more=d.samples||[];
@@ -1092,12 +1092,12 @@ async function submitDryFb(btn,ts,verdict){
   if(btns){btns.querySelectorAll('button').forEach(b=>{b.disabled=true;});}
   const csrf=(document.cookie.match(/csrf_token=([^;]+)/)||[])[1]||'';
   try{
-    const r=await fetch('/api/reactivation/dry-run-feedback',{
+    const r=await apiFetch('/api/reactivation/dry-run-feedback',{
       method:'POST',
       headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
       credentials:'same-origin',
       body:JSON.stringify({sample_ts:ts,verdict:verdict}),
-    });
+    }, {timeoutMs: 60000});
     if(r.ok){
       if(btns){
         // ★ W3-D2.3：dislike 时显示"已加入黑名单（重启后清空）"
@@ -1157,7 +1157,7 @@ async function loadCareDry(reset){
   if(!list)return;
   if(reset){_careDryShown=[];list.innerHTML='<div style="color:var(--t3)">'+window.T('msg_js_1047')+'...</div>';}
   try{
-    const r=await fetch('/api/care/dry-run-samples?limit=20',{credentials:'same-origin'});
+    const r=await apiFetch('/api/care/dry-run-samples?limit=20',{credentials:'same-origin'});
     if(!r.ok){list.innerHTML='<div style="color:var(--red)">'+window.T('rpa_load_failed')+'</div>';return;}
     const d=await r.json();
     _careDryShown=d.samples||[];
@@ -1168,7 +1168,7 @@ async function loadMoreCareDry(){
   const earliest=_careDryShown.length?_careDryShown[_careDryShown.length-1].ts:0;
   if(!earliest)return;
   try{
-    const r=await fetch('/api/care/dry-run-samples?limit=20&before_ts='+earliest,{credentials:'same-origin'});
+    const r=await apiFetch('/api/care/dry-run-samples?limit=20&before_ts='+earliest,{credentials:'same-origin'});
     if(!r.ok)return;
     const d=await r.json();
     const more=d.samples||[];
@@ -1187,12 +1187,12 @@ async function submitCareDryFb(btn,ts,verdict){
   if(btns){btns.querySelectorAll('button').forEach(b=>{b.disabled=true;});}
   const csrf=(document.cookie.match(/csrf_token=([^;]+)/)||[])[1]||'';
   try{
-    const r=await fetch('/api/care/dry-run-feedback',{
+    const r=await apiFetch('/api/care/dry-run-feedback',{
       method:'POST',
       headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
       credentials:'same-origin',
       body:JSON.stringify({sample_ts:ts,verdict:verdict}),
-    });
+    }, {timeoutMs: 60000});
     if(r.ok){
       if(btns){
         const tip=verdict==='dislike'
@@ -1226,7 +1226,7 @@ async function loadQualityOverview(){
   if(!body)return;
   body.innerHTML='<div style="color:var(--t3)">'+window.T('msg_js_1047')+'...</div>';
   try{
-    const r=await fetch('/api/companion/quality-overview?window_hours=24',{credentials:'same-origin'});
+    const r=await apiFetch('/api/companion/quality-overview?window_hours=24',{credentials:'same-origin'});
     if(!r.ok){body.innerHTML='<div style="color:var(--red)">'+window.T('rpa_load_failed')+'</div>';return;}
     const d=await r.json();
     if(!d.ok){body.innerHTML='<div style="color:var(--red)">'+_esc(d.error||'error')+'</div>';return;}
@@ -1255,7 +1255,7 @@ async function loadQualityTrend(){
   const el=document.getElementById('bm-q-trend');
   if(!el)return;
   try{
-    const r=await fetch('/api/companion/quality-trend?hours=24',{credentials:'same-origin'});
+    const r=await apiFetch('/api/companion/quality-trend?hours=24',{credentials:'same-origin'});
     if(!r.ok)return;
     const d=await r.json();
     if(!d.enabled){el.innerHTML='<div style="color:var(--t3);font-size:.68rem">'+window.T('db_js_059')+'（companion.quality_trend.enabled=false）</div>';return;}
@@ -1286,7 +1286,7 @@ async function loadDeferredOutbox(){
   if(!body)return;
   body.innerHTML='<div style="color:var(--t3)">'+window.T('msg_js_1047')+'...</div>';
   try{
-    const r=await fetch('/api/deferred-outbox/status?limit=30',{credentials:'same-origin'});
+    const r=await apiFetch('/api/deferred-outbox/status?limit=30',{credentials:'same-origin'});
     if(!r.ok){body.innerHTML='<div style="color:var(--red)">'+window.T('rpa_load_failed')+'</div>';return;}
     const d=await r.json();
     if(!d.enabled){
@@ -1334,8 +1334,8 @@ async function loadDeferredOutbox(){
 // ★ deferred 队列运营动作（mutate；经 api_auth）
 async function _dobPost(path,payload){
   try{
-    const r=await fetch(path,{method:'POST',credentials:'same-origin',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify(payload||{})});
+    const r=await apiFetch(path,{method:'POST',credentials:'same-origin',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(payload||{})}, {timeoutMs: 60000});
     const d=await r.json();
     if(!d.ok){alert(window.T('ov_js_op_fail_e')+(d.error||window.T('rpa_unknown')));}
     loadDeferredOutbox();
@@ -1358,7 +1358,7 @@ document.addEventListener('visibilitychange',()=>{
 /* ── 触发器决策日志 ──────────────────────── */
 async function loadTriggerDecisions(){
   try{
-    const r=await fetch('/api/trigger-decisions?limit=20');
+    const r=await apiFetch('/api/trigger-decisions?limit=20');
     if(!r.ok)return;
     const d=await r.json();
     document.getElementById('td-loading').style.display='none';
@@ -1403,7 +1403,7 @@ if(!_isSimple) loadActivityStats();
 let _sysBarTimer = null;
 async function loadSysBar(){
   try{
-    const r = await fetch('/api/system-info');
+    const r = await apiFetch('/api/system-info');
     if(!r.ok) return;
     const d = await r.json();
     const bar  = document.getElementById('sys-bar');
@@ -1456,10 +1456,10 @@ async function loadKbHealth(){
   try{
     // 并行拉取所有数据
     const [r, r2, r3, r4] = await Promise.all([
-      fetch('/api/kb/health-stats'),
-      fetch('/api/kb/embed-coverage'),
-      fetch('/api/kb/today-hit-rate'),
-      fetch('/api/kb/query-analytics?hours=24'),
+      apiFetch('/api/kb/health-stats'),
+      apiFetch('/api/kb/embed-coverage'),
+      apiFetch('/api/kb/today-hit-rate'),
+      apiFetch('/api/kb/query-analytics?hours=24'),
     ]);
     if(!r.ok)return;
     const d=await r.json();
@@ -1514,9 +1514,9 @@ async function loadKbHealth(){
         window.Tf('db_js_p04', {done: cov.done||0, total: cov.total||0, pct: pct});
       const modeEl=document.getElementById('kb-search-mode-badge');
       if(cov.mode&&cov.mode.includes('hybrid')){
-        modeEl.innerHTML='<span style="background:#d4edda;color:#155724;padding:.15rem .6rem;border-radius:99px;font-size:.72rem">✅ '+window.T('db_js_081')+'（BM25 + '+window.T('db_js_082')+'</span>';
+        modeEl.innerHTML='<span style="background:var(--th-bg-bsok,#d4edda);color:var(--th-ink-bsok,#155724);padding:.15rem .6rem;border-radius:99px;font-size:.72rem">✅ '+window.T('db_js_081')+'（BM25 + '+window.T('db_js_082')+'</span>';
       } else {
-        modeEl.innerHTML='<span style="background:#fff3cd;color:#856404;padding:.15rem .6rem;border-radius:99px;font-size:.72rem">⚠️ '+window.T('db_js_083')+'</span>';
+        modeEl.innerHTML='<span style="background:var(--th-bg-bswarn,#fff3cd);color:var(--th-ink-bswarn,#856404);padding:.15rem .6rem;border-radius:99px;font-size:.72rem">⚠️ '+window.T('db_js_083')+'</span>';
       }
     }
 
@@ -1546,7 +1546,7 @@ async function loadKbHealth(){
 
     // 回复质量统计
     try{
-      const qr=await fetch('/api/kb/reply-quality?days=7');
+      const qr=await apiFetch('/api/kb/reply-quality?days=7');
       const qd=qr.ok?await qr.json():{};
       const qEl=document.getElementById('kb-quality-stats');
       if(qd.total>0){
@@ -1575,7 +1575,7 @@ document.addEventListener('visibilitychange', ()=>{
 });
 
 /* Monetize KPI card: hidden unless /api/monetize/kpi is ok + enabled (viewer 403 / disabled / fetch error keep it hidden) */
-fetch('/api/monetize/kpi?days=30',{credentials:'same-origin'}).then(function(r){
+apiFetch('/api/monetize/kpi?days=30',{credentials:'same-origin'}).then(function(r){
   if(!r.ok) return null;
   return r.json();
 }).then(function(d){

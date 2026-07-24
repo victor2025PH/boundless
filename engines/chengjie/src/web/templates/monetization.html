@@ -174,7 +174,7 @@ async function mzLoad(){
   const tx=document.getElementById('mz-tx');
   const flag=document.getElementById('mz-flag');
   try{
-    const res=await fetch('/api/monetize/overview?days='+encodeURIComponent(days));
+    const res=await apiFetch('/api/monetize/overview?days='+encodeURIComponent(days));
     if(!res.ok){flag.textContent=window.T('ln_js_036')+' '+res.status;return;}
     const d=await res.json();
     flag.textContent=d.enabled?window.T('mo_js001'):window.T('mo_js002')+' (monetization.enabled=false, '+window.T('mo_js003');
@@ -216,7 +216,7 @@ async function mzTeaserFunnel(days){
   const cards=document.getElementById('mz-teaser-cards');
   const scn=document.getElementById('mz-teaser-scn');
   try{
-    const res=await fetch('/api/monetize/teaser-funnel?window_days='+encodeURIComponent(days)+'&attribution_days=14');
+    const res=await apiFetch('/api/monetize/teaser-funnel?window_days='+encodeURIComponent(days)+'&attribution_days=14');
     const d=await res.json();
     const f=(d&&d.funnel)||{};
     if(!d.enabled){
@@ -239,7 +239,7 @@ async function mzTeaserFunnel(days){
 async function mzSelfieFunnel(days){
   const cards=document.getElementById('mz-selfie-cards');
   try{
-    const res=await fetch('/api/monetize/selfie-funnel?window_days='+encodeURIComponent(days)+'&attribution_days=14');
+    const res=await apiFetch('/api/monetize/selfie-funnel?window_days='+encodeURIComponent(days)+'&attribution_days=14');
     const d=await res.json();
     const f=(d&&d.funnel)||{};
     if(!d.enabled){
@@ -258,7 +258,7 @@ async function mzSelfieFunnel(days){
 async function mzSelfieCap(){
   const cards=document.getElementById('mz-selfiecap-cards');
   try{
-    const res=await fetch('/api/monetize/selfie-cap');
+    const res=await apiFetch('/api/monetize/selfie-cap');
     const d=await res.json();
     if(!d.enabled){
       cards.innerHTML='<div class="mz-card"><div class="lb">'+window.T('mo_s033')+'</div><div class="v" style="font-size:1rem;color:var(--t3)">'+window.T('rpa_unlimited')+'</div><div class="sub">daily_global_cap=0 ('+window.T('mo_js023')+'</div></div>';
@@ -298,7 +298,7 @@ async function mzSelfieContacts(kind){
     document.getElementById('mz-drill-h').textContent=window.T('mo_js033')+kind+')';
   tb.innerHTML='<tr><td colspan="4" style="padding:1.2rem;color:var(--t3)">'+window.T('dash.loading')+'</td></tr>';
   try{
-    var res=await fetch('/api/monetize/selfie-contacts?kind='+encodeURIComponent(kind)+'&window_days='+encodeURIComponent(days)+'&attribution_days=14&limit=100');
+    var res=await apiFetch('/api/monetize/selfie-contacts?kind='+encodeURIComponent(kind)+'&window_days='+encodeURIComponent(days)+'&attribution_days=14&limit=100');
     var d=await res.json();
     if(!d.enabled){tb.innerHTML='<tr><td colspan="4" style="padding:1.2rem;color:var(--t3)">'+window.T('mo_js034')+'</td></tr>';return;}
     drillRender(d.items,kind==='locked');
@@ -310,7 +310,7 @@ async function mzTeaserContacts(){
   document.getElementById('mz-drill-h').textContent=window.T('mo_js035');
   tb.innerHTML='<tr><td colspan="4" style="padding:1.2rem;color:var(--t3)">'+window.T('dash.loading')+'</td></tr>';
   try{
-    var res=await fetch('/api/monetize/teaser-contacts?window_days='+encodeURIComponent(days)+'&attribution_days=14&limit=100');
+    var res=await apiFetch('/api/monetize/teaser-contacts?window_days='+encodeURIComponent(days)+'&attribution_days=14&limit=100');
     var d=await res.json();
     if(!d.enabled){tb.innerHTML='<tr><td colspan="4" style="padding:1.2rem;color:var(--t3)">'+window.T('mo_js034')+'</td></tr>';return;}
     drillRender(d.items,true);
@@ -320,14 +320,14 @@ async function mzTeaserContacts(){
 async function mzRetention(){
   const tb=document.getElementById('mz-retention');
   try{
-    const res=await fetch('/api/monetize/retention?recent_days=30&limit=50');
+    const res=await apiFetch('/api/monetize/retention?recent_days=30&limit=50');
     if(!res.ok){tb.innerHTML='<tr><td colspan="5" style="padding:1.2rem;color:var(--t3)">'+window.T('ln_js_036')+' '+res.status+'</td></tr>';return;}
     const d=await res.json();
     const cur=d.currency||'USD';
     const items=d.items||[];
     if(!items.length){tb.innerHTML='<tr><td colspan="5" style="padding:1.2rem;color:var(--t3)">'+window.T('em_js013')+' '+(d.recent_days||30)+' '+window.T('mo_js036')+' 🎉</td></tr>';return;}
     tb.innerHTML=items.map(function(it){
-      var tier=(it.tier&&it.tier!=='free')?'<span class="badge-tier" style="display:inline-block;padding:.1rem .4rem;border-radius:4px;font-size:.62rem;font-weight:700;background:rgba(168,85,247,.16);color:#a855f7;text-transform:uppercase">'+esc(it.tier)+'</span>':'<span style="color:var(--t3)">—</span>';
+      var tier=(it.tier&&it.tier!=='free')?'<span class="badge-tier" style="display:inline-block;padding:.1rem .4rem;border-radius:4px;font-size:.62rem;font-weight:700;background:var(--th-bg-pur16,rgba(168,85,247,.16));color:var(--th-ink-purple5,#a855f7);text-transform:uppercase">'+esc(it.tier)+'</span>':'<span style="color:var(--t3)">—</span>';
       var dsp=(it.days_since_paid!=null)?(it.days_since_paid+' '+window.T('wa_s158')):'—';
       return '<tr><td class="mono">'+esc(it.contact_key)+'</td>'+
         '<td><strong style="color:var(--amber)">'+cur+' '+(it.ltv||0)+'</strong></td>'+
@@ -357,7 +357,7 @@ async function mzGrant(){
   const payload={contact_key:contact,kind:kind,item_id:item};
   if(kind==='subscribe')payload.days=parseFloat(document.getElementById('g-days').value||'30');
   try{
-    const res=await fetch('/api/monetize/grant',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const res=await apiFetch('/api/monetize/grant',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}, {timeoutMs: 60000});
     const d=await res.json();
     if(!d.ok){alert(window.T('rpa_js_fail_colon')+(d.message||d.reason));return;}
     if(d.entitlement)renderEnt(d.entitlement);
@@ -369,7 +369,7 @@ async function mzLookup(){
   const contact=document.getElementById('g-contact').value.trim();
   if(!contact){alert(window.T('mo_js039')+' key');return;}
   try{
-    const res=await fetch('/api/monetize/entitlement?contact_key='+encodeURIComponent(contact));
+    const res=await apiFetch('/api/monetize/entitlement?contact_key='+encodeURIComponent(contact));
     const d=await res.json();
     if(!d.ok){alert(window.T('rpa_js_fail_colon')+(d.message||d.reason));return;}
     renderEnt(d.entitlement);
@@ -394,7 +394,7 @@ async function mzFeatureCheck(){
   if(!contact){alert(window.T('mo_js039')+' key');return;}
   flag.textContent=window.T('kb_js_092');box.style.display='none';
   try{
-    const res=await fetch('/api/monetize/feature-check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contact_key:contact,feature:feature})});
+    const res=await apiFetch('/api/monetize/feature-check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contact_key:contact,feature:feature})}, {timeoutMs: 60000});
     const d=await res.json();
     if(!d.ok){flag.textContent=window.T('rpa_js_fail_colon')+(d.message||d.reason);return;}
     flag.textContent=d.gate_enabled?window.T('mo_js045'):window.T('mo_js046')+' (gate.enabled=false → '+window.T('mo_js047');
@@ -408,7 +408,7 @@ async function mzFeatureCheck(){
 }
 
 function renderUpsellCard(contact,offer,pitch){
-  if(!offer)return '<div class="mz-allow" style="background:rgba(245,158,11,.12);color:var(--amber)">'+window.T('mo_js050')+'</div>';
+  if(!offer)return '<div class="mz-allow" style="background:var(--th-bg-amber12,rgba(245,158,11,.12));color:var(--amber)">'+window.T('mo_js050')+'</div>';
   var grants=(offer.grants||[]);
   var cur=esc(offer.currency||'USD');
   var html='<div class="upsell-card">'+
@@ -428,7 +428,7 @@ async function mzCheckout(btn,contact,kind,item,provider){
   const link=document.getElementById('uc-paylink');
   btn.disabled=true;link.textContent=window.T('mo_js056');
   try{
-    const res=await fetch('/api/monetize/checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contact_key:contact,kind:kind,item_id:item,provider:provider})});
+    const res=await apiFetch('/api/monetize/checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contact_key:contact,kind:kind,item_id:item,provider:provider})}, {timeoutMs: 60000});
     const d=await res.json();
     if(!d.ok){
       link.innerHTML='<span style="color:var(--amber)">'+esc(d.message||d.reason||window.T('rpa_js_st_failed'))+'</span>';

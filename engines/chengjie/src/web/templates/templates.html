@@ -45,7 +45,7 @@
 {% set active="tpl" %}
 
 {% if ui_mode == 'simple' %}
-<div class="simple-guide" style="background:linear-gradient(135deg,rgba(91,124,246,.06),rgba(245,158,11,.06));border:1px solid rgba(91,124,246,.15);border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem">
+<div class="simple-guide" style="background:linear-gradient(135deg,var(--th-bg-brand06,rgba(91,124,246,.06)),var(--th-bg-amber06,rgba(245,158,11,.06)));border:1px solid var(--th-bd-brand15,rgba(91,124,246,.15));border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem">
   <span style="font-size:1.1rem;flex-shrink:0;margin-top:.1rem">📝</span>
   <div>
     <strong style="color:var(--t);font-size:.85rem">{{ (i18n or {}).get('tp_s003', "只读模式") }}</strong>
@@ -363,11 +363,11 @@ function tplBatchDelete(){
     `${window.T('tp_js006')} <strong>${keys.length}</strong> ${window.T('tp_js007')}`,
     async ()=>{
       try{
-        const r=await fetch('/api/batch-templates',{
+        const r=await apiFetch('/api/batch-templates',{
           method:'POST',
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify({keys,action:'delete'})
-        });
+        }, {timeoutMs: 60000});
         const d=await r.json();
         if(r.ok&&d.ok){
           showToast(window.Tf('tp_deleted_n', {n: d.removed.length}),'ok');

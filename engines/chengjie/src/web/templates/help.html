@@ -45,12 +45,12 @@
 {% set active="help" %}
 
 {% if ui_mode == 'simple' %}
-<div style="background:var(--ps);border:1px solid rgba(91,124,246,.2);border-radius:10px;padding:.8rem 1rem;margin-bottom:1rem;font-size:.85rem;color:var(--t2);display:flex;align-items:center;gap:.6rem">
+<div style="background:var(--ps);border:1px solid var(--th-bd-brand20,rgba(91,124,246,.2));border-radius:10px;padding:.8rem 1rem;margin-bottom:1rem;font-size:.85rem;color:var(--t2);display:flex;align-items:center;gap:.6rem">
   <span style="font-size:1.2rem">💡</span>
   <span>{{ (i18n or {}).get('hp_s003', "仅显示常用指令。") }}<a href="/set_ui_mode?mode=full" style="color:var(--p);font-weight:600">{{ (i18n or {}).get('hp_s004', "切换完整模式") }}</a>{{ (i18n or {}).get('hp_s005', "查看全部指令。") }}</span>
 </div>
 {% endif %}
-<div style="background:linear-gradient(135deg,rgba(16,185,129,.1),rgba(91,124,246,.1));border:1px solid rgba(91,124,246,.22);border-radius:12px;padding:.85rem 1.1rem;margin-bottom:1rem;font-size:.86rem;color:var(--t2);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.65rem">
+<div style="background:linear-gradient(135deg,var(--th-bg-grn10,rgba(16,185,129,.1)),var(--th-bg-brand10,rgba(91,124,246,.1)));border:1px solid var(--th-bd-brand22,rgba(91,124,246,.22));border-radius:12px;padding:.85rem 1.1rem;margin-bottom:1rem;font-size:.86rem;color:var(--t2);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.65rem">
   <span style="display:flex;align-items:center;gap:.5rem"><span style="font-size:1.25rem">📽</span><span><strong style="color:var(--t)">{{ (i18n or {}).get('hp_s006', "客服培训演示") }}</strong>{{ (i18n or {}).get('hp_s007', "（全屏幻灯片，含知识库与人工转接流程）") }}</span></span>
   <a href="/training" target="_blank" rel="noopener" class="btn btn-p btn-sm" style="text-decoration:none;white-space:nowrap">{{ (i18n or {}).get('hp_s008', "打开培训演示") }}</a>
 </div>

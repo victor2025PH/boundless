@@ -99,7 +99,7 @@
   <!-- ══ AI 接口配置 ═════════════════════════════════════════ -->
   <div class="acc">
     <div class="acc-hd open" onclick="toggleAcc(this)">
-      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#5b7cf6,#8b5cf6)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-brand,#5b7cf6),var(--th-bg-violet5,#8b5cf6))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
       </div>
       <div>
@@ -302,7 +302,7 @@
   <!-- ══ 意图路由管理 ══════════════════════════════════ -->
   <div class="acc">
     <div class="acc-hd" onclick="toggleAcc(this)">
-      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#8b5cf6,#7c3aed)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-violet5,#8b5cf6),var(--th-bg-violet6,#7c3aed))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
       </div>
       <div>
@@ -331,7 +331,7 @@
   <!-- ══ Web 管理安全 ════════════════════════════════════════ -->
   <div class="acc">
     <div class="acc-hd" onclick="toggleAcc(this)">
-      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#10b981,#059669)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-emerald5,#10b981),var(--th-bg-emerald6,#059669))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
       </div>
       <div>
@@ -376,7 +376,7 @@
   <!-- ══ 通知 Webhook ═════════════════════════════════════════ -->
   <div class="acc">
     <div class="acc-hd" onclick="toggleAcc(this)">
-      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#f59e0b,#d97706)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-amber5,#f59e0b),var(--th-bg-amber6,#d97706))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
       </div>
       <div>
@@ -422,7 +422,7 @@
   <!-- ══ Bot 行为配置 ══════════════════════════════════════════════ -->
   <div class="acc">
     <div class="acc-hd" onclick="toggleAcc(this)">
-      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#06b6d4,#0891b2)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-cyan5,#06b6d4),var(--th-bg-cyan6,#0891b2))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
       </div>
       <div>
@@ -647,11 +647,11 @@ async function saveSection(section){
   resEl.textContent = window.T('ov_js_saving'); resEl.className = 'save-result';
   try{
     const fields = _getFields(prefix);
-    const r = await fetch('/api/settings/save',{
+    const r = await apiFetch('/api/settings/save',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({section, fields}),
-    });
+    }, {timeoutMs: 60000});
     const d = await r.json();
     if(!r.ok){ resEl.textContent = window.T('ov_js_save_fail_e')+(d.detail||window.T('inbox.voice.unknown_err')); resEl.className='save-result err'; return null; }
     resEl.textContent = window.Tf('dv_saved_n', {n: d.updated.length}); resEl.className='save-result ok';
@@ -724,11 +724,11 @@ async function saveVoiceAi(){
     owner_consent: document.getElementById('vai-owner_consent').checked,
   };
   try{
-    const r = await fetch('/api/settings/save',{
+    const r = await apiFetch('/api/settings/save',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({section:'voice_ai', fields}),
-    });
+    }, {timeoutMs: 60000});
     const d = await r.json();
     if(!r.ok){ resEl.textContent = window.T('ov_js_save_fail_e')+(d.detail||window.T('inbox.voice.unknown_err')); resEl.className='save-result err'; return; }
     document.getElementById('vai-dashscope_api_key').value = '';
@@ -745,7 +745,7 @@ async function testApiConn(opts){
   resEl.textContent = window.T('dv_js006'); resEl.className='save-result';
   refreshAiStatus(window.T('dv_js006'));
   try{
-    const r = await fetch('/api/setup/test-ai',{
+    const r = await apiFetch('/api/setup/test-ai',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
@@ -753,7 +753,7 @@ async function testApiConn(opts){
         base_url: document.getElementById('ai-base_url').value.trim(),
         model:    document.getElementById('ai-model').value.trim(),
       }),
-    });
+    }, {timeoutMs: 60000});
     const d = await r.json();
     resEl.textContent = (d.ok?'✓ ':'✗ ') + d.msg;
     resEl.className = 'save-result '+(d.ok?'ok':'err');
@@ -789,7 +789,7 @@ function _dvccRender(rt, pings){
     const r = rt[k.name] || {};
     const p = pings[k.name];
     const chips = [];
-    if(r.cooling) chips.push('<span class="ai-pill" style="color:#dc2626">' + window.Tf('dv_cc_js_cooling', {s: r.cooldown_remaining_sec || 0}) + '</span>');
+    if(r.cooling) chips.push('<span class="ai-pill" style="color:var(--th-ink-red6,#dc2626)">' + window.Tf('dv_cc_js_cooling', {s: r.cooldown_remaining_sec || 0}) + '</span>');
     if(p) chips.push('<span class="ai-pill">' + window.T('dv_cc_js_ping') + ' ' + (p.ok ? '🟢' : '🔴') + '</span>');
     return '<div style="display:flex;gap:.6rem;align-items:center;font-size:.8rem;border:1px solid var(--bd);border-radius:8px;padding:.35rem .6rem">'
       + '<b style="min-width:90px">' + _dvccEsc(k.name) + '</b>'
@@ -804,7 +804,7 @@ async function dvccLoad(probe){
   const st = document.getElementById('dvcc-status');
   if(!st) return;
   try{
-    const r = await fetch('/api/setup/cloud-credentials' + (probe ? '?probe=1' : ''), {credentials:'same-origin'});
+    const r = await apiFetch('/api/setup/cloud-credentials' + (probe ? '?probe=1' : ''), {credentials:'same-origin'});
     const d = await r.json();
     if(!d.ok) throw new Error('bad response');
     const parts = [];
@@ -813,7 +813,7 @@ async function dvccLoad(probe){
       const icon = b.status === 'low' ? '🔴' : (b.status === 'auth_failed' ? '⛔' : (b.status === 'ok' ? '🟢' : '⚪'));
       const bad = (b.status === 'low' || b.status === 'auth_failed');
       parts.push('<span style="margin-right:.9rem">' + icon + ' ' + _dvccEsc(b.provider) + ' '
-        + window.T('dv_cc_js_bal') + ' <b style="color:' + (bad ? '#dc2626' : 'inherit') + '">' + _dvccEsc(bal) + '</b></span>');
+        + window.T('dv_cc_js_bal') + ' <b style="color:' + (bad ? 'var(--th-ink-red6,#dc2626)' : 'inherit') + '">' + _dvccEsc(bal) + '</b></span>');
     });
     const stats = (d.pool && d.pool.stats) || {};
     if(stats.calls){
@@ -869,10 +869,10 @@ async function dvccSave(){
   const res = document.getElementById('dvcc-save-res');
   res.textContent = window.T('ov_js_saving'); res.className = 'save-result';
   try{
-    const r = await fetch('/api/setup/key-pool', {
+    const r = await apiFetch('/api/setup/key-pool', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({keys: _dvccKeys}),
-    });
+    }, {timeoutMs: 60000});
     const d = await r.json();
     if(!d.ok){ res.textContent = '✗ ' + (d.detail || ''); res.className = 'save-result err'; return; }
     res.textContent = '✓ ' + (d.detail || '') + (d.ai_ready ? '' : (' · ' + window.T('dv_cc_js_reload_warn')));
@@ -908,7 +908,7 @@ async function testWebhook(){
   const resEl = document.getElementById('save-res-notif');
   resEl.textContent = window.T('rpa_js_st_sending'); resEl.className='save-result';
   try{
-    const r = await fetch('/api/settings/test-webhook');
+    const r = await apiFetch('/api/settings/test-webhook');
     const d = await r.json();
     resEl.textContent = (d.ok?'✓ '+window.T('dv_js012'):'✗ '+window.T('dv_js013')+(d.error||d.status));
     resEl.className = 'save-result '+(d.ok?'ok':'err');
@@ -927,7 +927,7 @@ const _intentLabels = {
 async function loadIntentKeywords(){
   const el=document.getElementById('intent-kw-editor');
   try{
-    const r=await fetch('/api/settings/intent-keywords');
+    const r=await apiFetch('/api/settings/intent-keywords');
     const d=await r.json();
     _intentKeywords=d.keywords||{};
     renderIntentEditor();
@@ -968,11 +968,11 @@ async function saveIntentKeywords(){
     updated[intent]=lines;
   });
   try{
-    const r=await fetch('/api/settings/intent-keywords',{
+    const r=await apiFetch('/api/settings/intent-keywords',{
       method:'PUT',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({keywords:updated}),
-    });
+    }, {timeoutMs: 60000});
     const d=await r.json();
     if(d.ok){
       _intentKeywords=updated;
@@ -991,11 +991,11 @@ async function testIntent(){
   if(!text){ resEl.textContent=window.T('dv_js021'); return; }
   resEl.textContent=window.T('dv_js006');
   try{
-    const r=await fetch('/api/settings/test-intent',{
+    const r=await apiFetch('/api/settings/test-intent',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({text}),
-    });
+    }, {timeoutMs: 60000});
     const d=await r.json();
     const label=_intentLabels[d.intent]||d.intent;
     resEl.innerHTML=`${window.T('dv_js025')}: <b style="color:var(--p)">${label}</b> (<code>${d.intent}</code>) — ${window.T('dv_js026')}: ${d.matched_by}`;
@@ -1013,7 +1013,7 @@ refreshAiStatus();
 /* ── Reply Logic ─────────────────────────────────── */
 async function loadReplyLogic(){
   try{
-    const r = await fetch('/api/reply-logic');
+    const r = await apiFetch('/api/reply-logic');
     const d = await r.json();
     document.getElementById('rl-trigger_enabled').checked = !!d.trigger_enabled;
     document.getElementById('rl-group_reply_mode').value = d.group_reply_mode || 'mention_or_keyword';
@@ -1047,11 +1047,11 @@ async function saveReplyLogic(){
       l2_reply_threshold: parseFloat(document.getElementById('rl-l2_reply_threshold').value) || 0.75,
       l3_cooldown_seconds: parseInt(document.getElementById('rl-l3_cooldown_seconds').value) || 90,
     };
-    const r = await fetch('/api/reply-logic',{
+    const r = await apiFetch('/api/reply-logic',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify(body),
-    });
+    }, {timeoutMs: 60000});
     const d = await r.json();
     if(!r.ok){ resEl.textContent=window.T('ov_js_save_fail_e')+(d.detail||window.T('inbox.voice.unknown_err')); resEl.className='save-result err'; return; }
     resEl.textContent=window.Tf('dv_saved_n', {n: d.updated.length}); resEl.className='save-result ok';

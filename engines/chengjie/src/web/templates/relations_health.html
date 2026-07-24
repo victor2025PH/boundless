@@ -165,7 +165,7 @@ async function rhLoad(){
   try{
     const q=new URLSearchParams({limit:String(limit),min_intimacy:String(minIntim),scan:'400'});
     if(risk)q.set('risk',risk);
-    const res=await fetch('/api/relations/health-board?'+q.toString());
+    const res=await apiFetch('/api/relations/health-board?'+q.toString());
     if(!res.ok){st.textContent=window.T('ln_js_036')+' '+res.status;return;}
     const d=await res.json();
     const items=d.items||[];
@@ -178,7 +178,7 @@ async function rhLoad(){
       '<div class="rh-pill">'+window.T('rh_js010')+' <strong>'+items.length+'</strong> '+window.T('dash.items')+'</div>'+
       '<div class="rh-pill"'+(var_n?' style="background:rgba(239,68,68,.12)"':'')+'>'+window.T('rh_js011')+' <strong>'+var_n+'</strong></div>'+
       '<div class="rh-pill"'+(pay_n?' style="background:rgba(16,185,129,.12)"':'')+'>'+window.T('rh_js012')+' <strong>'+pay_n+'</strong></div>'+
-      '<div class="rh-pill"'+(payvar_n?' style="background:rgba(168,85,247,.12)"':'')+'>'+window.T('rh_js013')+' <strong>'+payvar_n+'</strong></div>'+
+      '<div class="rh-pill"'+(payvar_n?' style="background:var(--th-bg-pur12,rgba(168,85,247,.12))"':'')+'>'+window.T('rh_js013')+' <strong>'+payvar_n+'</strong></div>'+
       '<div class="rh-pill"'+(lapsed_n?' style="background:rgba(239,68,68,.12)"':'')+'>'+window.T('rh_js007')+' <strong>'+lapsed_n+'</strong></div>';
     var sortDesc=d.payer_sort_priority?window.T('rh_js014')+' + ':'';
     sortDesc+=window.T('rh_js015')+' + '+window.T('rh_js016');
@@ -203,7 +203,7 @@ async function rhLoad(){
         '<td>'+trendBadge(ib?ib.emotion_trend:'')+'</td>'+
         '<td>'+churnCell(ib)+'</td>'+
         '<td>'+payCell(mb)+'</td>'+
-        '<td class="rh-reasons">'+(it.reasons||[]).map(esc).join('; ')+(it.value_at_risk?'<span class="badge-var">'+window.T('msg_s110')+'</span>':'')+(payAtRisk?'<span class="badge-var" style="background:rgba(168,85,247,.16);color:#a855f7">'+window.T('rh_js013')+'</span>':'')+'</td>'+
+        '<td class="rh-reasons">'+(it.reasons||[]).map(esc).join('; ')+(it.value_at_risk?'<span class="badge-var">'+window.T('msg_s110')+'</span>':'')+(payAtRisk?'<span class="badge-var" style="background:var(--th-bg-pur16,rgba(168,85,247,.16));color:var(--th-ink-purple5,#a855f7)">'+window.T('rh_js013')+'</span>':'')+'</td>'+
         '<td>'+rlBadge(it.risk_level)+' <span style="font-size:.74rem;color:var(--t2)">'+esc(it.action_hint)+'</span></td>'+
         '<td class="mono">'+esc(it.journey_id)+'</td>'+
         '<td>'+op+'</td></tr>';
@@ -220,7 +220,7 @@ async function rhDraft(el){
   var ibx=document.getElementById('rh-modal-inbox');ibx.style.display='none';ibx.textContent='';
   document.getElementById('rh-modal-bg').classList.add('open');
   // Phase R：拉单人健康卡，展示 inbox 跨域语境（情绪趋势/风险/摘要）供发送前参考
-  fetch('/api/relations/health/'+encodeURIComponent(jid)).then(function(r){return r.ok?r.json():null;}).then(function(d){
+  apiFetch('/api/relations/health/'+encodeURIComponent(jid)).then(function(r){return r.ok?r.json():null;}).then(function(d){
     if(!d)return;
     var parts=[];
     var ib=d.inbox;
@@ -251,7 +251,7 @@ async function rhDraft(el){
     if(parts.length){ibx.innerHTML='📥 '+parts.join(' · ');ibx.style.display='block';}
   }).catch(function(){});
   try{
-    const res=await fetch('/api/reactivation/'+encodeURIComponent(jid)+'/draft-reunion',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const res=await apiFetch('/api/reactivation/'+encodeURIComponent(jid)+'/draft-reunion',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000});
     if(!res.ok){
       document.getElementById('rh-modal-meta').textContent=window.T('dash.task_fail_generic')+' '+res.status+' ('+window.T('tg_s074')+' ai_client + reactivation '+window.T('rh_js023');
       return;
@@ -274,7 +274,7 @@ async function rhMarkSent(){
   if(!_rhPendingJid)return;
   const btn=document.getElementById('rh-sent-btn');btn.disabled=true;
   try{
-    const res=await fetch('/api/reactivation/'+encodeURIComponent(_rhPendingJid)+'/mark-sent',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const res=await apiFetch('/api/reactivation/'+encodeURIComponent(_rhPendingJid)+'/mark-sent',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000});
     if(!res.ok){alert(window.T('inbox.conv.mark_fail')+' '+res.status);return;}
     rhCloseModal();rhLoad();
   }catch(e){alert(e);}finally{btn.disabled=false;}
@@ -290,7 +290,7 @@ function rhRenderBackfill(r){
 }
 async function rhBackfillStatus(){
   try{
-    const res=await fetch('/api/relations/backfill-status');
+    const res=await apiFetch('/api/relations/backfill-status');
     if(!res.ok)return;
     const d=await res.json();
     rhRenderBackfill(d.result);

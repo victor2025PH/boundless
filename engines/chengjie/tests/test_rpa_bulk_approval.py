@@ -160,14 +160,14 @@ def test_shared_styles_has_bulk_css(styles_text: str, cls: str):
 INTEGRATIONS = [
     {
         "name":           "line",
-        "template":       "line_rpa.html",
+        "template":       "_channel_body_line.html",
         "container_id":   "lr-pending-body",
         "row_class":      "lr-pend",
         "approve_endpoint":"/api/line-rpa/pending/",
     },
     {
         "name":           "whatsapp",
-        "template":       "whatsapp_rpa.html",
+        "template":       "_channel_body_whatsapp.html",
         "container_id":   "wa-pending-list",
         "row_class":      "rpa-pend",
         "approve_endpoint":"/api/whatsapp-rpa/pending/",
@@ -233,7 +233,7 @@ def test_platform_calls_onPendingRendered_after_refresh(spec):
 
 def test_telegram_does_not_register_bulk():
     """Telegram 直发模式无 approval queue，不接 bulk。"""
-    text = (TEMPLATES_DIR / "telegram.html").read_text(encoding="utf-8")
+    text = (TEMPLATES_DIR / "_channel_body_telegram.html").read_text(encoding="utf-8")
     assert "rpa.bulk.register" not in text
 
 
@@ -241,7 +241,7 @@ def test_messenger_keeps_own_batch_implementation():
     """Messenger 已有自家批量审批（P2-6 / P6-3 / batch endpoint /
     dry_run / pacing_sec / reject_reason 等丰富参数），不接 shared bulk。
     """
-    text = (TEMPLATES_DIR / "messenger_rpa.html").read_text(encoding="utf-8")
+    text = (TEMPLATES_DIR / "_channel_body_messenger.html").read_text(encoding="utf-8")
     assert "rpa.bulk.register" not in text, (
         "Messenger 不应该接入 shared bulk —— 它有自家更丰富的 batch endpoint"
     )

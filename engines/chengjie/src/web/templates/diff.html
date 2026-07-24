@@ -70,7 +70,7 @@
 {% set active="diff" %}
 
 {% if ui_mode == 'simple' %}
-<div style="background:linear-gradient(135deg,rgba(245,158,11,.08),rgba(91,124,246,.06));border:1px solid rgba(245,158,11,.2);border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:center;gap:.6rem">
+<div style="background:linear-gradient(135deg,var(--th-bg-amber08,rgba(245,158,11,.08)),var(--th-bg-brand06,rgba(91,124,246,.06)));border:1px solid var(--th-bd-amber20,rgba(245,158,11,.2));border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:center;gap:.6rem">
   <span style="font-size:1.1rem;flex-shrink:0">🔍</span>
   <div><strong style="color:var(--t)">{{ (i18n or {}).get('logs_adv_title', "高级功能") }}</strong> — {{ (i18n or {}).get('diff_s001', "版本对比供管理员追溯配置变更。") }}<a href="/cases" style="color:var(--p);font-weight:600">{{ (i18n or {}).get('logs_back_cases', "返回案例") }}</a></div>
 </div>
@@ -245,7 +245,7 @@ const PREFIX_LABELS = {
 
 async function loadSnapshots() {
   try {
-    const r = await fetch('/api/snapshots?limit=60');
+    const r = await apiFetch('/api/snapshots?limit=60');
     const d = await r.json();
     _allSnaps = d.snapshots || [];
     renderSnapList();
@@ -384,11 +384,11 @@ async function doRollback(snapId) {
     window.Tf('diff_tf_rollback_q',{id:'<strong>'+snapId+'</strong>'}),
     async () => {
       try {
-        const r = await fetch('/api/rollback', {
+        const r = await apiFetch('/api/rollback', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({snapshot_id: snapId})
-        });
+        }, {timeoutMs: 60000});
         const d = await r.json();
         if (r.ok && d.ok) {
           showToast(window.T('diff_js_rolledback') + d.restored + ' ← ' + d.snapshot, 'ok');

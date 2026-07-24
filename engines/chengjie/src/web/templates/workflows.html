@@ -162,7 +162,7 @@
       <div class="form-row">
         <div class="form-col"><label>{{ (i18n or {}).get('wf_s051', "工作链名称") }} *</label><input id="cf-name" placeholder="{{ (i18n or {}).get('wf_s052', '例：沉默客户挽回流程') }}"></div>
       </div>
-      <div class="form-row" style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin-bottom:12px;">
+      <div class="form-row" style="background:#f8fafc;border:1px solid var(--th-bd-gray2,#e5e7eb);border-radius:8px;padding:10px 12px;margin-bottom:12px;">
         <div class="form-col" style="flex:0 0 160px;">
           <label>{{ (i18n or {}).get('wf_s053', "自动触发 · 沉默天数") }}</label>
           <input id="cf-silence-days" type="number" min="0" value="0" placeholder="0={{ (i18n or {}).get('wf_s054', '不自动触发') }}">
@@ -173,11 +173,11 @@
             {{ (i18n or {}).get('wf_s055', "仅高流失风险客户") }}
           </label>
         </div>
-        <div class="form-col" style="font-size:11px;color:#64748b;align-self:center;">
+        <div class="form-col" style="font-size:11px;color:var(--th-ink-slate5,#64748b);align-self:center;">
           P44: {{ (i18n or {}).get('wf_s056', "后台定时扫描，满足条件时自动启动本链（防重：同会话同链仅一条 running）") }}
         </div>
       </div>
-      <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:8px;">{{ (i18n or {}).get('wf_s057', "工作步骤（按序执行）") }}</div>
+      <div style="font-size:13px;font-weight:600;color:var(--th-ink-gray7,#374151);margin-bottom:8px;">{{ (i18n or {}).get('wf_s057', "工作步骤（按序执行）") }}</div>
       <div id="cf-steps"></div>
       <button class="btn-sm" style="margin-bottom:10px;" onclick="WF.addStep()">+ {{ (i18n or {}).get('wf_s058', "添加步骤") }}</button>
       <input type="hidden" id="cf-id">
@@ -195,7 +195,7 @@
       <h3>🔀 {{ (i18n or {}).get('wf_s060', "分流路由规则") }}
         <button class="btn-sm btn-primary" onclick="WF.showRoutingForm()">+ {{ (i18n or {}).get('wf_s061', "新建规则") }}</button>
       </h3>
-      <p style="font-size:12px;color:#64748b;margin:0 0 10px;">{{ (i18n or {}).get('wf_s062', "根据平台、关键词等条件自动将新会话分配给指定坐席。规则按优先级（数值大优先）依次匹配，取最高优先级命中规则。") }}</p>
+      <p style="font-size:12px;color:var(--th-ink-slate5,#64748b);margin:0 0 10px;">{{ (i18n or {}).get('wf_s062', "根据平台、关键词等条件自动将新会话分配给指定坐席。规则按优先级（数值大优先）依次匹配，取最高优先级命中规则。") }}</p>
       <table class="wf-table">
         <thead>
           <tr><th>{{ (i18n or {}).get('dash.ws.col_name', "名称") }}</th><th>{{ (i18n or {}).get('wf_s063', "条件") }}</th><th>{{ (i18n or {}).get('wf_s064', "分配给") }}</th><th>{{ (i18n or {}).get('msg_js_2014', "优先级") }}</th><th>{{ (i18n or {}).get('enable', "启用") }}</th><th>{{ (i18n or {}).get('ov_js_th_action', "操作") }}</th></tr>
@@ -250,7 +250,7 @@
           <button class="btn-sm btn-primary" onclick="WF.testRouting()">{{ (i18n or {}).get('wa_js_108', "测试") }}</button>
         </div>
       </div>
-      <div id="rt-result" style="font-size:13px;color:#374151;margin-top:8px;"></div>
+      <div id="rt-result" style="font-size:13px;color:var(--th-ink-gray7,#374151);margin-top:8px;"></div>
     </div>
   </div>
 
@@ -258,12 +258,12 @@
   <div id="panel-monitor" class="wf-panel">
     <div class="wf-section">
       <h3>📊 {{ (i18n or {}).get('wf_s077', "工作链执行监控") }}
-        <span id="mon-running-badge" style="font-size:12px;font-weight:500;color:#1e40af;"></span>
+        <span id="mon-running-badge" style="font-size:12px;font-weight:500;color:var(--th-ink-blue8,#1e40af);"></span>
         <button class="btn-sm" onclick="WF.loadMonitor()" style="margin-left:8px;">{{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
       </h3>
-      <p style="font-size:12px;color:#64748b;margin:0 0 10px;">{{ (i18n or {}).get('wf_s078', "实时查看运行中 / 最近完成 / 失败的工作链。后台 ScheduledReporter 每 tick 推进到期步骤。") }}</p>
+      <p style="font-size:12px;color:var(--th-ink-slate5,#64748b);margin:0 0 10px;">{{ (i18n or {}).get('wf_s078', "实时查看运行中 / 最近完成 / 失败的工作链。后台 ScheduledReporter 每 tick 推进到期步骤。") }}</p>
       <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
-        <select id="mon-filter" onchange="WF.loadMonitor()" style="font-size:12px;padding:4px 8px;border:1px solid #d1d5db;border-radius:6px;">
+        <select id="mon-filter" onchange="WF.loadMonitor()" style="font-size:12px;padding:4px 8px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:6px;">
           <option value="">{{ (i18n or {}).get('psn_all_status', "全部状态") }}</option>
           <option value="running">{{ (i18n or {}).get('ov_js_running', "运行中") }}</option>
           <option value="completed">{{ (i18n or {}).get('ops.ct.st_completed', "已完成") }}</option>
@@ -281,7 +281,7 @@
       <h3>🎭 {{ (i18n or {}).get('wf_s079', "剧本话题库（按关系阶段）") }}
         <button class="btn-sm btn-primary" onclick="WF.showScriptForm()">+ {{ (i18n or {}).get('wf_s080', "新建话题") }}</button>
       </h3>
-      <p style="font-size:12px;color:#64748b;margin:0 0 10px;">{{ (i18n or {}).get('wf_s081', "阶段与关系亲密度对齐") }} (companion_relationship): initial={{ (i18n or {}).get('wf_s082', "初识") }} → warming={{ (i18n or {}).get('wf_s083', "熟悉") }} → intimate={{ (i18n or {}).get('wf_s084', "深入") }} → steady={{ (i18n or {}).get('rpa_js_intimacy', "亲密") }}</p>
+      <p style="font-size:12px;color:var(--th-ink-slate5,#64748b);margin:0 0 10px;">{{ (i18n or {}).get('wf_s081', "阶段与关系亲密度对齐") }} (companion_relationship): initial={{ (i18n or {}).get('wf_s082', "初识") }} → warming={{ (i18n or {}).get('wf_s083', "熟悉") }} → intimate={{ (i18n or {}).get('wf_s084', "深入") }} → steady={{ (i18n or {}).get('rpa_js_intimacy', "亲密") }}</p>
       <table class="wf-table">
         <thead><tr><th>{{ (i18n or {}).get('msg_js_1039', "阶段") }}</th><th>{{ (i18n or {}).get('kb_s106', "标题") }}</th><th>{{ (i18n or {}).get('wf_s085', "开场话术") }}</th><th>{{ (i18n or {}).get('psn_tag', "标签") }}</th><th>{{ (i18n or {}).get('ov_js_th_action', "操作") }}</th></tr></thead>
         <tbody id="scripts-tbody"><tr><td colspan="5" class="wf-empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</td></tr></tbody>
@@ -345,7 +345,7 @@ var _TYPE_LABELS={template:window.T('templates'),task:window.T('wf_s013'),tag:wi
 var _TYPE_BADGE={template:'badge-template',task:'badge-task',tag:'badge-tag',note:'badge-note',escalate:'badge-escalate',chain:'badge-chain'};
 
 WF.loadActions=function(){
-  fetch('/api/workspace/workflow-actions').then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/workspace/workflow-actions').then(function(r){return r.json();}).then(function(d){
     var tbody=document.getElementById('actions-tbody');
     var acts=d.actions||[];
     if(!acts.length){tbody.innerHTML='<tr><td colspan="7" class="wf-empty">'+window.T('wf_js001')+' — '+window.T('dash.q.clicked')+' "'+window.T('wf_js002')+'" '+window.T('wf_js003')+'</td></tr>';return;}
@@ -396,7 +396,7 @@ WF.onTypeChange=function(){
   });
 };
 WF.editAction=function(id){
-  fetch('/api/workspace/workflow-actions').then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/workspace/workflow-actions').then(function(r){return r.json();}).then(function(d){
     var act=(d.actions||[]).find(function(a){return a.action_id===id;});
     if(act)WF.showActionForm(act);
   });
@@ -424,38 +424,38 @@ WF.saveAction=function(){
   if(!data.name){document.getElementById('af-msg').textContent=window.T('psn_js_137');document.getElementById('af-msg').style.color='#ef4444';return;}
   var url=data.action_id?'/api/workspace/workflow-actions/'+encodeURIComponent(data.action_id):'/api/workspace/workflow-actions';
   var method=data.action_id?'PUT':'POST';
-  fetch(url,{method:method,headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})
+  apiFetch(url,{method:method,headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}, {timeoutMs: 60000})
     .then(function(r){return r.json();}).then(function(d){
       if(d.ok){document.getElementById('af-msg').textContent=window.T('wa_js_053');document.getElementById('af-msg').style.color='#10b981';WF.loadActions();setTimeout(function(){WF.cancelForm();},1000);}
       else{document.getElementById('af-msg').textContent=window.T('ov_js_save_fail');document.getElementById('af-msg').style.color='#ef4444';}
     });
 };
 WF.toggleAction=function(id,enabled){
-  fetch('/api/workspace/workflow-actions/'+encodeURIComponent(id),{method:'PUT',
-    headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:enabled?1:0})});
+  apiFetch('/api/workspace/workflow-actions/'+encodeURIComponent(id),{method:'PUT',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:enabled?1:0})}, {timeoutMs: 60000});
 };
 WF.delAction=function(id){
   if(!confirm(window.T('wf_js005')))return;
-  fetch('/api/workspace/workflow-actions/'+encodeURIComponent(id),{method:'DELETE'})
+  apiFetch('/api/workspace/workflow-actions/'+encodeURIComponent(id),{method:'DELETE'}, {timeoutMs: 60000})
     .then(function(){WF.loadActions();});
 };
 
 // ── 工作链 ──────────────────────────────────────────────────────────────────
 var _chainSteps=[];
 WF.loadChains=function(){
-  fetch('/api/workspace/workflow-chains').then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/workspace/workflow-chains').then(function(r){return r.json();}).then(function(d){
     var box=document.getElementById('chains-list');
     var chains=d.chains||[];
     if(!chains.length){box.innerHTML='<div class="wf-empty">'+window.T('wf_js006')+' — '+window.T('wf_js007')+'</div>';return;}
     box.innerHTML=chains.map(function(c){
       var steps=c.steps||[];
-      return '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:12px 14px;margin-bottom:10px;">'
+      return '<div style="background:var(--th-bg-surface,#fff);border:1px solid var(--th-bd-gray2,#e5e7eb);border-radius:8px;padding:12px 14px;margin-bottom:10px;">'
         +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
           +'<strong style="font-size:14px;">🔗 '+esc(c.name)+'</strong>'
           +'<div><button class="btn-sm" onclick="WF.editChain(\''+esc(c.chain_id)+'\')">'+window.T('edit')+'</button> '
             +'<button class="btn-sm btn-danger" onclick="WF.delChain(\''+esc(c.chain_id)+'\')">'+window.T('delete')+'</button></div>'
         +'</div>'
-        +'<div style="font-size:11px;color:#94a3b8;margin-bottom:6px;">ID: '+esc(c.chain_id)+'</div>'
+        +'<div style="font-size:11px;color:var(--th-ink-slate4,#94a3b8);margin-bottom:6px;">ID: '+esc(c.chain_id)+'</div>'
         +(function(){
           var tc=c.trigger_conditions||{};
           var tags=[];
@@ -469,8 +469,8 @@ WF.loadChains=function(){
               +'<div class="step-num">'+(i+1)+'</div>'
               +'<div style="flex:1;font-size:12px;">'
                 +'<strong>'+esc(_TYPE_LABELS[s.action_type]||s.action_type||window.T('rpa_unknown'))+'</strong>'
-                +(s.delay_hours?'<span style="color:#94a3b8;margin-left:8px;">'+window.T('wf_js009')+' '+s.delay_hours+' '+window.T('msg_js_009')+'</span>':'')
-                +(s.note?'<div style="color:#64748b;margin-top:2px;">'+esc(s.note)+'</div>':'')
+                +(s.delay_hours?'<span style="color:var(--th-ink-slate4,#94a3b8);margin-left:8px;">'+window.T('wf_js009')+' '+s.delay_hours+' '+window.T('msg_js_009')+'</span>':'')
+                +(s.note?'<div style="color:var(--th-ink-slate5,#64748b);margin-top:2px;">'+esc(s.note)+'</div>':'')
               +'</div></div>';
           }).join('')
         +'</div>'
@@ -497,12 +497,12 @@ WF.renderSteps=function(){
     return '<div class="step-card">'
       +'<div class="step-num">'+(i+1)+'</div>'
       +'<div style="flex:1;display:flex;gap:8px;flex-wrap:wrap;">'
-        +'<select style="font-size:12px;padding:3px 6px;border:1px solid #d1d5db;border-radius:5px;" onchange="_stepField('+i+',\'action_type\',this.value)">'
+        +'<select style="font-size:12px;padding:3px 6px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:5px;" onchange="_stepField('+i+',\'action_type\',this.value)">'
           +Object.keys(_TYPE_LABELS).map(function(t){return '<option value="'+t+'"'+(s.action_type===t?' selected':'')+'>'+_TYPE_LABELS[t]+'</option>';}).join('')
         +'</select>'
-        +'<input style="font-size:12px;width:180px;padding:3px 7px;border:1px solid #d1d5db;border-radius:5px;" '
+        +'<input style="font-size:12px;width:180px;padding:3px 7px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:5px;" '
           +'placeholder="'+window.T('wf_js013')+'" value="'+esc(s.note||'')+'" oninput="_stepField('+i+',\'note\',this.value)">'
-        +'<input style="font-size:12px;width:90px;padding:3px 7px;border:1px solid #d1d5db;border-radius:5px;" '
+        +'<input style="font-size:12px;width:90px;padding:3px 7px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:5px;" '
           +'type="number" min="0" placeholder="'+window.T('wf_js009')+'(h)" value="'+(s.delay_hours||0)+'" oninput="_stepField('+i+',\'delay_hours\',Number(this.value))">'
         +'<button class="btn-sm btn-danger" onclick="_delStep('+i+')">×</button>'
       +'</div></div>';
@@ -512,7 +512,7 @@ window._stepField=function(i,k,v){_chainSteps[i][k]=v;};
 window._delStep=function(i){_chainSteps.splice(i,1);WF.renderSteps();};
 WF.addStep=function(){_chainSteps.push({action_type:'template',note:'',delay_hours:0});WF.renderSteps();};
 WF.editChain=function(id){
-  fetch('/api/workspace/workflow-chains').then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/workspace/workflow-chains').then(function(r){return r.json();}).then(function(d){
     var c=(d.chains||[]).find(function(x){return x.chain_id===id;});
     if(c)WF.showChainForm(c);
   });
@@ -528,19 +528,19 @@ WF.saveChain=function(){
   if(churnHigh)trigger.churn_risk_high=true;
   var data={chain_id:document.getElementById('cf-id').value||undefined,name:name,steps:_chainSteps,trigger_conditions:trigger};
   var url=data.chain_id?'/api/workspace/workflow-chains/'+encodeURIComponent(data.chain_id):'/api/workspace/workflow-chains';
-  fetch(url,{method:data.chain_id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})
+  apiFetch(url,{method:data.chain_id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}, {timeoutMs: 60000})
     .then(function(r){return r.json();}).then(function(d){
       if(d.ok){document.getElementById('cf-msg').textContent=window.T('wa_js_053');document.getElementById('cf-msg').style.color='#10b981';WF.loadChains();setTimeout(function(){WF.cancelChainForm();},1000);}
     });
 };
 WF.delChain=function(id){
   if(!confirm(window.T('wf_js014')))return;
-  fetch('/api/workspace/workflow-chains/'+encodeURIComponent(id),{method:'DELETE'}).then(function(){WF.loadChains();});
+  apiFetch('/api/workspace/workflow-chains/'+encodeURIComponent(id),{method:'DELETE'}, {timeoutMs: 60000}).then(function(){WF.loadChains();});
 };
 
 // ── 分流路由 ──────────────────────────────────────────────────────────────
 WF.loadRouting=function(){
-  fetch('/api/workspace/routing-rules').then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/workspace/routing-rules').then(function(r){return r.json();}).then(function(d){
     var tbody=document.getElementById('routing-tbody');
     var rules=d.rules||[];
     if(!rules.length){tbody.innerHTML='<tr><td colspan="6" class="wf-empty">'+window.T('wf_js015')+'</td></tr>';return;}
@@ -549,7 +549,7 @@ WF.loadRouting=function(){
       var condStr=[conds.platform?window.T('inbox.info.platform')+'='+conds.platform:'',conds.keyword?window.T('wf_js016')+'='+conds.keyword:''].filter(Boolean).join('; ')||window.T('wf_js017');
       return '<tr>'
         +'<td><strong>'+esc(r.name)+'</strong></td>'
-        +'<td style="font-size:12px;color:#64748b;">'+esc(condStr)+'</td>'
+        +'<td style="font-size:12px;color:var(--th-ink-slate5,#64748b);">'+esc(condStr)+'</td>'
         +'<td>'+esc(r.assign_to||'—')+'</td>'
         +'<td>'+r.priority+'</td>'
         +'<td><label class="toggle-sw"><input type="checkbox"'+(r.enabled?'checked':'')
@@ -573,7 +573,7 @@ WF.showRoutingForm=function(rule){
   document.getElementById('routing-form-wrap').scrollIntoView({behavior:'smooth'});
 };
 WF.editRule=function(id){
-  fetch('/api/workspace/routing-rules').then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/workspace/routing-rules').then(function(r){return r.json();}).then(function(d){
     var rule=(d.rules||[]).find(function(r){return r.rule_id===id;});
     if(rule)WF.showRoutingForm(rule);
   });
@@ -590,22 +590,22 @@ WF.saveRouting=function(){
     priority:Number(document.getElementById('rf-priority').value)||0,
     conditions:conds,enabled:1};
   var url=data.rule_id?'/api/workspace/routing-rules/'+encodeURIComponent(data.rule_id):'/api/workspace/routing-rules';
-  fetch(url,{method:data.rule_id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})
+  apiFetch(url,{method:data.rule_id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}, {timeoutMs: 60000})
     .then(function(r){return r.json();}).then(function(d){
       if(d.ok){document.getElementById('rf-msg').textContent=window.T('wa_js_053');document.getElementById('rf-msg').style.color='#10b981';WF.loadRouting();setTimeout(function(){WF.cancelRoutingForm();},1000);}
     });
 };
 WF.toggleRule=function(id,enabled){
-  fetch('/api/workspace/routing-rules/'+encodeURIComponent(id),{method:'PUT',
-    headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:enabled?1:0})});
+  apiFetch('/api/workspace/routing-rules/'+encodeURIComponent(id),{method:'PUT',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:enabled?1:0})}, {timeoutMs: 60000});
 };
 WF.delRule=function(id){
   if(!confirm(window.T('wf_js019')))return;
-  fetch('/api/workspace/routing-rules/'+encodeURIComponent(id),{method:'DELETE'}).then(function(){WF.loadRouting();});
+  apiFetch('/api/workspace/routing-rules/'+encodeURIComponent(id),{method:'DELETE'}, {timeoutMs: 60000}).then(function(){WF.loadRouting();});
 };
 WF.testRouting=function(){
   var conv={platform:document.getElementById('rt-platform').value,text:document.getElementById('rt-text').value};
-  fetch('/api/workspace/routing-rules/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation:conv})})
+  apiFetch('/api/workspace/routing-rules/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation:conv})}, {timeoutMs: 60000})
     .then(function(r){return r.json();}).then(function(d){
       var el=document.getElementById('rt-result');
       if(!d.matched||!d.matched.length){el.textContent=window.T('wf_js020');el.style.color='#94a3b8';return;}
@@ -618,7 +618,7 @@ WF.testRouting=function(){
 // ── 剧本话题（P40） ──────────────────────────────────────────────────────
 var _STAGE_ZH={initial:window.T('c3_js028'),warming:window.T('wf_s083'),intimate:window.T('wf_s084'),steady:window.T('rpa_js_intimacy')};
 WF.loadScripts=function(){
-  fetch('/api/workspace/script-topics').then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/workspace/script-topics').then(function(r){return r.json();}).then(function(d){
     var tbody=document.getElementById('scripts-tbody');
     var topics=d.topics||[];
     if(!topics.length){tbody.innerHTML='<tr><td colspan="5" class="wf-empty">'+window.T('wf_js022')+'</td></tr>';return;}
@@ -643,7 +643,7 @@ WF.showScriptForm=function(t){
   document.getElementById('script-form-wrap').style.display='block';
 };
 WF.editScript=function(id){
-  fetch('/api/workspace/script-topics').then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/workspace/script-topics').then(function(r){return r.json();}).then(function(d){
     var t=(d.topics||[]).find(function(x){return x.topic_id===id;});
     if(t) WF.showScriptForm(t);
   });
@@ -661,21 +661,21 @@ WF.saveScript=function(){
   };
   if(!data.title||!data.opener){alert(window.T('wf_js024'));return;}
   var url=data.topic_id?'/api/workspace/script-topics/'+encodeURIComponent(data.topic_id):'/api/workspace/script-topics';
-  fetch(url,{method:data.topic_id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})
+  apiFetch(url,{method:data.topic_id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}, {timeoutMs: 60000})
     .then(function(r){return r.json();}).then(function(d){
       if(d.ok){WF.loadScripts();WF.cancelScriptForm();}
     });
 };
 WF.delScript=function(id){
   if(!confirm(window.T('kb_js_047')))return;
-  fetch('/api/workspace/script-topics/'+encodeURIComponent(id),{method:'DELETE'}).then(function(){WF.loadScripts();});
+  apiFetch('/api/workspace/script-topics/'+encodeURIComponent(id),{method:'DELETE'}, {timeoutMs: 60000}).then(function(){WF.loadScripts();});
 };
 
 // ── 执行监控（P47） ──────────────────────────────────────────────────────────
 WF.loadMonitor=function(){
   var st=document.getElementById('mon-filter').value;
   var url='/api/workspace/chain-executions?limit=60'+(st?'&status='+encodeURIComponent(st):'');
-  fetch(url).then(function(r){return r.json();}).then(function(d){
+  apiFetch(url).then(function(r){return r.json();}).then(function(d){
     var box=document.getElementById('monitor-list');
     var badge=document.getElementById('mon-running-badge');
     if(badge) badge.textContent=d.running_count?(' · '+d.running_count+' '+window.T('wf_js025')):'';
@@ -688,20 +688,20 @@ WF.loadMonitor=function(){
         if(s.done)c+=' done'; else if(s.active)c+=' active';
         return '<div class="'+c+'" title="'+(s.action_label||'')+'"></div>';
       }).join('');
-      var cd=ex.countdown_sec>0?('<span style="color:#b45309;">⏱ '+ex.countdown_sec+'s</span>'):'';
-      var lr=ex.last_result&&ex.last_result.text?('<div style="font-size:11px;color:#64748b;margin-top:3px;">'+window.T('wf_js027')+esc(ex.last_result.text).slice(0,60)+'</div>'):'';
-      return '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin-bottom:8px;">'
+      var cd=ex.countdown_sec>0?('<span style="color:var(--th-ink-amber7,#b45309);">⏱ '+ex.countdown_sec+'s</span>'):'';
+      var lr=ex.last_result&&ex.last_result.text?('<div style="font-size:11px;color:var(--th-ink-slate5,#64748b);margin-top:3px;">'+window.T('wf_js027')+esc(ex.last_result.text).slice(0,60)+'</div>'):'';
+      return '<div style="background:var(--th-bg-surface,#fff);border:1px solid var(--th-bd-gray2,#e5e7eb);border-radius:8px;padding:10px 12px;margin-bottom:8px;">'
         +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">'
           +'<div style="flex:1;">'
             +'<div style="font-size:13px;font-weight:600;">'+esc(ex.chain_name||ex.chain_id)+'</div>'
-            +'<div style="font-size:11px;color:#94a3b8;margin-top:2px;">'
+            +'<div style="font-size:11px;color:var(--th-ink-slate4,#94a3b8);margin-top:2px;">'
               +esc(ex.display_name||ex.conversation_id||'')+' · '+window.T('tour_step')+' '+ex.current_step_display+'/'+ex.total_steps
               +(ex.current_step_label?' · '+esc(ex.current_step_label):'')+'</div>'
             +'<div class="exec-step-mini">'+dots+'</div>'+lr
           +'</div>'
           +'<div style="text-align:right;flex:0 0 auto;">'
             +'<span class="badge '+(_badgeCls[ex.status]||'')+'">'+esc(ex.status_label||ex.status)+'</span>'
-            +'<div style="font-size:10px;color:#94a3b8;margin-top:4px;">'+cd+'</div>'
+            +'<div style="font-size:10px;color:var(--th-ink-slate4,#94a3b8);margin-top:4px;">'+cd+'</div>'
             +(ex.status==='running'?'<button class="btn-sm btn-danger" style="margin-top:6px;" onclick="WF.cancelExec(\''+esc(ex.exec_id)+'\')">'+window.T('ov_js_cancel')+'</button>':'')
           +'</div>'
         +'</div></div>';
@@ -710,9 +710,9 @@ WF.loadMonitor=function(){
 };
 WF.cancelExec=function(id){
   if(!confirm(window.T('wf_js028')))return;
-  fetch('/api/workspace/chain-executions/'+encodeURIComponent(id)+'/cancel',{
+  apiFetch('/api/workspace/chain-executions/'+encodeURIComponent(id)+'/cancel',{
     method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reason:window.T('wf_js029')})
-  }).then(function(r){return r.json();}).then(function(d){
+  }, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
     if(d.ok) WF.loadMonitor(); else alert(window.T('msg_js_2058'));
   });
 };

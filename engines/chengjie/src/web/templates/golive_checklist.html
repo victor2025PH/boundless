@@ -63,7 +63,7 @@ function render(d){
 }
 
 function load(){
-  fetch('/api/setup/checklist').then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/setup/checklist').then(function(r){return r.json();}).then(function(d){
     if(!d||!d.ok) return; render(d);
   }).catch(function(){});
 }

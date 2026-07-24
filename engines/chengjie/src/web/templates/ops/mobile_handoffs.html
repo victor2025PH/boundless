@@ -2,6 +2,8 @@
 <html lang="{{ 'zh-CN' if (ui_lang|default('zh')) == 'zh' else 'en' }}"><head><meta charset="utf-8">
 <title>{{ (i18n or {}).get('ops.nav.mobile', 'Mobile 交接单') }} · Ops</title>
 {% include "_i18n_bootstrap.html" %}
+{% include "_api_fetch.html" %}
+<link rel="stylesheet" href="/static/theme-tokens.css?v=20260723c">
 <style>
 *{box-sizing:border-box}
 body{font-family:-apple-system,Segoe UI,sans-serif;max-width:1260px;margin:20px auto;padding:0 20px;background:#f8fafc;color:#222}
@@ -90,13 +92,13 @@ a:hover{text-decoration:underline}
 <p class="sub">{{ (i18n or {}).get('ops.mh.sub_src', '来源：mobile-auto0423 / openclaw.db') }} &nbsp;·&nbsp; {{ (i18n or {}).get('ops.mh.sub_refresh', '每 15s 自动刷新') }}</p>
 
 <!-- Dead Letter 管理区块 -->
-<div id="dl-section" style="display:none;margin-bottom:14px;background:#fff5f5;border:1px solid #fecaca;border-radius:6px;padding:10px 14px">
+<div id="dl-section" style="display:none;margin-bottom:14px;background:var(--th-bg-red50,#fff5f5);border:1px solid var(--th-bd-red2,#fecaca);border-radius:6px;padding:10px 14px">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-    <span style="font-size:13px;font-weight:700;color:#991b1b">⚠️ {{ (i18n or {}).get('ops.mh.dl_title', 'Dead Letter 队列（彻底失败，需人工介入）') }}</span>
-    <button style="margin-left:auto;padding:3px 10px;font-size:11px;border:1px solid #fca5a5;border-radius:4px;background:#fee2e2;color:#991b1b;cursor:pointer" onclick="loadDeadLetters()">&#8635; {{ (i18n or {}).get('ops.mh.refresh', '刷新') }}</button>
+    <span style="font-size:13px;font-weight:700;color:var(--th-ink-red8,#991b1b)">⚠️ {{ (i18n or {}).get('ops.mh.dl_title', 'Dead Letter 队列（彻底失败，需人工介入）') }}</span>
+    <button style="margin-left:auto;padding:3px 10px;font-size:11px;border:1px solid var(--th-bd-red3,#fca5a5);border-radius:4px;background:var(--th-bg-red1,#fee2e2);color:var(--th-ink-red8,#991b1b);cursor:pointer" onclick="loadDeadLetters()">&#8635; {{ (i18n or {}).get('ops.mh.refresh', '刷新') }}</button>
   </div>
   <table style="width:100%;font-size:12px;border-collapse:collapse" id="dl-table">
-    <thead><tr style="background:#fef2f2">
+    <thead><tr style="background:var(--th-bg-red50tw,#fef2f2)">
       <th style="padding:5px 8px;text-align:left">ID</th>
       <th style="padding:5px 8px;text-align:left">Handoff ID</th>
       <th style="padding:5px 8px;text-align:left">{{ (i18n or {}).get('ops.mh.col_action', '操作') }}</th>
@@ -105,7 +107,7 @@ a:hover{text-decoration:underline}
       <th style="padding:5px 8px;text-align:left">{{ (i18n or {}).get('ops.mh.col_last_error', '最后错误') }}</th>
       <th style="padding:5px 8px;text-align:left">{{ (i18n or {}).get('ops.mh.col_force_retry', '强制重试') }}</th>
     </tr></thead>
-    <tbody id="dl-tbody"><tr><td colspan="7" style="text-align:center;color:#9ca3af;padding:10px">{{ (i18n or {}).get('dash.loading', '加载中…') }}</td></tr></tbody>
+    <tbody id="dl-tbody"><tr><td colspan="7" style="text-align:center;color:var(--th-ink-gray4,#9ca3af);padding:10px">{{ (i18n or {}).get('dash.loading', '加载中…') }}</td></tr></tbody>
   </table>
 </div>
 
@@ -185,7 +187,7 @@ function switchTab(el, state){
 /* ── Bridge 健康 ── */
 async function loadHealth(){
   try{
-    const r = await fetch('/api/mobile-bridge/health');
+    const r = await apiFetch('/api/mobile-bridge/health');
     if(!r.ok)throw new Error('HTTP '+r.status);
     const d = await r.json();
     const bar = document.getElementById('health-bar');
@@ -227,7 +229,7 @@ async function loadHealth(){
 /* ── Summary counts ── */
 async function loadSummary(){
   try{
-    const r = await fetch('/api/mobile-handoffs/summary');
+    const r = await apiFetch('/api/mobile-handoffs/summary');
     if(!r.ok)return;
     const d = await r.json();
     const b = d.by_state||{};
@@ -245,7 +247,7 @@ async function loadData(reset=false){
   const params = new URLSearchParams({limit:PAGE, offset:currentOffset});
   if(currentState) params.set('state', currentState);
   try{
-    const r = await fetch('/api/mobile-handoffs?'+params.toString());
+    const r = await apiFetch('/api/mobile-handoffs?'+params.toString());
     if(!r.ok)throw new Error('HTTP '+r.status);
     const d = await r.json();
     const items = d.items||[];
@@ -311,7 +313,7 @@ async function doAction(handoffId, action, btn){
   if(!confirm(window.Tf('ops.mh.confirm_action',{label:label}))) return;
   btn.disabled=true;
   try{
-    const r = await fetch(`/api/mobile-handoffs/${encodeURIComponent(handoffId)}/${action}`,{method:'POST'});
+    const r = await apiFetch(`/api/mobile-handoffs/${encodeURIComponent(handoffId)}/${action}`,{method:'POST'}, {timeoutMs: 60000});
     const d = await r.json().catch(()=>({}));
     if(r.status===202){
       // mobile 暂时不可达，已入队自动重试
@@ -346,7 +348,7 @@ function showToast(msg,type){
 async function loadDeadLetters(){
   const tbody = document.getElementById('dl-tbody');
   try{
-    const d = await fetch('/api/mobile-bridge/writeback-queue?status=dead_letter&limit=50').then(r=>r.json());
+    const d = await apiFetch('/api/mobile-bridge/writeback-queue?status=dead_letter&limit=50').then(r=>r.json());
     const items = d.items||[];
     if(!items.length){
       document.getElementById('dl-section').style.display='none';
@@ -355,21 +357,21 @@ async function loadDeadLetters(){
     tbody.innerHTML = items.map(row=>{
       const hid = (row.handoff_id||'').slice(0,12)+'…';
       const err = esc((row.last_error||'').slice(0,60));
-      return `<tr style="border-top:1px solid #fecaca">
+      return `<tr style="border-top:1px solid var(--th-bd-red2,#fecaca)">
         <td style="padding:4px 8px">${row.id}</td>
         <td style="padding:4px 8px;font-family:monospace">${esc(hid)}</td>
         <td style="padding:4px 8px;font-weight:600">${esc(row.action||'')}</td>
         <td style="padding:4px 8px">${esc(row.by_user||'-')}</td>
         <td style="padding:4px 8px;text-align:center">${row.attempt_count||0}</td>
-        <td style="padding:4px 8px;color:#dc2626;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${err}">${err}</td>
+        <td style="padding:4px 8px;color:var(--th-ink-red6,#dc2626);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${err}">${err}</td>
         <td style="padding:4px 8px">
-          <button style="padding:2px 8px;font-size:11px;border:1px solid #d1d5db;border-radius:3px;cursor:pointer;background:#fff"
+          <button style="padding:2px 8px;font-size:11px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:3px;cursor:pointer;background:var(--th-bg-surface,#fff)"
             onclick="retryDeadLetter(${row.id},this)">\u25b6 ${window.T('ops.mh.retry')}</button>
         </td>
       </tr>`;
     }).join('');
   }catch(e){
-    tbody.innerHTML=`<tr><td colspan="7" style="color:#dc2626;padding:8px">${window.T('dash.load_fail')}: ${e}</td></tr>`;
+    tbody.innerHTML=`<tr><td colspan="7" style="color:var(--th-ink-red6,#dc2626);padding:8px">${window.T('dash.load_fail')}: ${e}</td></tr>`;
   }
 }
 
@@ -377,7 +379,7 @@ async function retryDeadLetter(itemId, btn){
   btn.disabled=true;
   btn.textContent=window.T('ops.mh.processing');
   try{
-    const r = await fetch(`/api/mobile-bridge/writeback-queue/${itemId}/retry`,{method:'POST'});
+    const r = await apiFetch(`/api/mobile-bridge/writeback-queue/${itemId}/retry`,{method:'POST'}, {timeoutMs: 60000});
     if(!r.ok){ const d=await r.json().catch(()=>({})); throw new Error(d.detail||'HTTP '+r.status); }
     showToast(window.Tf('ops.mh.retry_ok',{id:itemId}), 'ok');
     setTimeout(()=>{ loadHealth(); loadDeadLetters(); }, 800);

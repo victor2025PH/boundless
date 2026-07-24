@@ -109,7 +109,7 @@ function renderSpark(trend){
 }
 
 function loadRoi(){
-  fetch('/api/workspace/roi?days='+ROI_DAYS).then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/workspace/roi?days='+ROI_DAYS).then(function(r){return r.json();}).then(function(d){
     if(!d||!d.ok) return;
     var a=d.automation||{}, b=d.business||{}, h=d.config_health||{}, cmp=a.compare||{}, rel=d.relationship||{};
     // KPI 卡

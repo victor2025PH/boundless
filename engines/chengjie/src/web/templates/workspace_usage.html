@@ -44,13 +44,13 @@
   <div class="ug-lic ok" id="ug-lic" style="display:none;">
     <span style="font-size:1.2rem;">🔑</span>
     <div style="flex:1;">
-      <div id="ug-lic-title" style="font-weight:700;color:#0f172a;"></div>
-      <div id="ug-lic-sub" style="color:#64748b;font-size:12px;margin-top:2px;"></div>
+      <div id="ug-lic-title" style="font-weight:700;color:var(--th-ink-slate9,#0f172a);"></div>
+      <div id="ug-lic-sub" style="color:var(--th-ink-slate5,#64748b);font-size:12px;margin-top:2px;"></div>
     </div>
     <span class="badge" id="ug-lic-badge"></span>
   </div>
 
-  <div id="ug-empty" style="display:none;color:#94a3b8;font-size:14px;padding:40px;text-align:center;">
+  <div id="ug-empty" style="display:none;color:var(--th-ink-slate4,#94a3b8);font-size:14px;padding:40px;text-align:center;">
     {{ (i18n or {}).get('wu_s002', "暂无用量数据（接入渠道并开始收发消息后将逐步积累）。") }}
   </div>
 
@@ -61,10 +61,10 @@
       <div class="ug-spark" id="ug-spark"></div>
       <div class="ug-legend">
         <span><span class="ug-dot" style="background:#93c5fd;"></span>{{ (i18n or {}).get('wu_s004', "消息量") }}</span>
-        <span><span class="ug-dot" style="background:#2563eb;"></span>AI {{ (i18n or {}).get('wu_s005', "调用数") }}</span>
+        <span><span class="ug-dot" style="background:var(--th-bg-blue6,#2563eb);"></span>AI {{ (i18n or {}).get('wu_s005', "调用数") }}</span>
       </div>
     </div>
-    <div style="font-size:11px;color:#94a3b8;text-align:center;">
+    <div style="font-size:11px;color:var(--th-ink-slate4,#94a3b8);text-align:center;">
       {{ (i18n or {}).get('wu_s006', "口径：消息量") }}={{ (i18n or {}).get('wu_s007', "收发消息条数；AI 调用数") }}={{ (i18n or {}).get('wu_s008', "生成的 AI 草稿数；活跃坐席") }}={{ (i18n or {}).get('wu_s009', "窗口内有处置记录的去重坐席数。") }}
     </div>
   </div>
@@ -74,25 +74,25 @@
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
       <h3 style="margin:0;">{{ (i18n or {}).get('wu_s010', "计费对账单") }}</h3>
       <div style="display:flex;align-items:center;gap:8px;">
-        <input type="month" id="bl-month" style="font-size:13px;padding:4px 8px;border:1px solid #d1d5db;border-radius:8px;">
+        <input type="month" id="bl-month" style="font-size:13px;padding:4px 8px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:8px;">
         <button class="ug-pill" onclick="blLoad()">{{ (i18n or {}).get('as_js046', "生成") }}</button>
-        <button class="ug-pill" onclick="blCsv()" style="background:#2563eb;color:#fff;border-color:#2563eb;">{{ (i18n or {}).get('export', "导出") }} CSV</button>
+        <button class="ug-pill" onclick="blCsv()" style="background:var(--th-bg-blue6,#2563eb);color:var(--th-ink-inverse,#fff);border-color:var(--th-bd-blue6,#2563eb);">{{ (i18n or {}).get('export', "导出") }} CSV</button>
       </div>
     </div>
-    <div id="bl-meta" style="font-size:12px;color:#64748b;margin-bottom:10px;"></div>
+    <div id="bl-meta" style="font-size:12px;color:var(--th-ink-slate5,#64748b);margin-bottom:10px;"></div>
     <table id="bl-table" style="width:100%;border-collapse:collapse;font-size:13px;display:none;">
-      <thead><tr style="text-align:left;color:#64748b;border-bottom:1px solid #e5e7eb;">
+      <thead><tr style="text-align:left;color:var(--th-ink-slate5,#64748b);border-bottom:1px solid var(--th-bd-gray2,#e5e7eb);">
         <th style="padding:6px 4px;">{{ (i18n or {}).get('mo_s009', "项目") }}</th><th style="padding:6px 4px;text-align:right;">{{ (i18n or {}).get('wu_s011', "数量") }}</th></tr></thead>
       <tbody id="bl-rows"></tbody>
     </table>
     <div id="bl-charges" style="margin-top:14px;display:none;">
-      <div style="font-size:13px;color:#374151;font-weight:700;margin-bottom:6px;">{{ (i18n or {}).get('wu_s012', "应收金额") }}</div>
+      <div style="font-size:13px;color:var(--th-ink-gray7,#374151);font-weight:700;margin-bottom:6px;">{{ (i18n or {}).get('wu_s012', "应收金额") }}</div>
       <table style="width:100%;border-collapse:collapse;font-size:13px;">
         <tbody id="bl-charge-rows"></tbody>
       </table>
-      <div id="bl-total" style="text-align:right;font-size:16px;font-weight:800;color:#0f172a;margin-top:8px;"></div>
+      <div id="bl-total" style="text-align:right;font-size:16px;font-weight:800;color:var(--th-ink-slate9,#0f172a);margin-top:8px;"></div>
     </div>
-    <div id="bl-empty" style="color:#94a3b8;font-size:13px;padding:14px 4px;display:none;">{{ (i18n or {}).get('wu_s013', "该账期暂无用量数据。") }}</div>
+    <div id="bl-empty" style="color:var(--th-ink-slate4,#94a3b8);font-size:13px;padding:14px 4px;display:none;">{{ (i18n or {}).get('wu_s013', "该账期暂无用量数据。") }}</div>
   </div>
 </div>
 <script>
@@ -146,7 +146,7 @@ function renderCards(u,cmp,mq){
 
 function renderSpark(trend){
   var el=document.getElementById('ug-spark'); if(!el) return;
-  if(!trend||!trend.length){ el.innerHTML='<span style="color:#94a3b8;font-size:12px;">'+window.T('wu_js006')+'</span>'; return; }
+  if(!trend||!trend.length){ el.innerHTML='<span style="color:var(--th-ink-slate4,#94a3b8);font-size:12px;">'+window.T('wu_js006')+'</span>'; return; }
   var max=1;
   trend.forEach(function(t){ max=Math.max(max,t.messages||0,t.ai_calls||0); });
   el.innerHTML=trend.map(function(t){
@@ -158,7 +158,7 @@ function renderSpark(trend){
 }
 
 function load(){
-  fetch('/api/workspace/usage?days='+UG_DAYS).then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/workspace/usage?days='+UG_DAYS).then(function(r){return r.json();}).then(function(d){
     if(!d||!d.ok) return;
     renderLicense(d.license, d.quota);
     if(!d.available || !(d.usage&&d.usage.messages_total)){
@@ -179,7 +179,7 @@ function blMonth(){
 }
 function blLoad(){
   var m=blMonth();
-  fetch('/api/workspace/billing?month='+encodeURIComponent(m)).then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/workspace/billing?month='+encodeURIComponent(m)).then(function(r){return r.json();}).then(function(d){
     if(!d||!d.ok) return;
     var rec=d.reconcile||{};
     var meta=window.Tf('wu_tf_meta1', {period: d.period, plan: planName(d.plan)})
@@ -198,13 +198,13 @@ function blLoad(){
     document.getElementById('bl-empty').style.display='none';
     document.getElementById('bl-table').style.display='table';
     document.getElementById('bl-rows').innerHTML=items.map(function(li){
-      return '<tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:6px 4px;">'+esc(li.label)
+      return '<tr style="border-bottom:1px solid var(--th-bd-slate1,#f1f5f9);"><td style="padding:6px 4px;">'+esc(li.label)
         +'</td><td style="padding:6px 4px;text-align:right;font-weight:600;">'+(li.qty||0)+'</td></tr>';
     }).join('');
     if(ch && ch.lines){
       document.getElementById('bl-charges').style.display='block';
       document.getElementById('bl-charge-rows').innerHTML=ch.lines.map(function(ln){
-        return '<tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:6px 4px;color:#475569;">'+esc(ln.label)
+        return '<tr style="border-bottom:1px solid var(--th-bd-slate1,#f1f5f9);"><td style="padding:6px 4px;color:var(--th-ink-slate6,#475569);">'+esc(ln.label)
           +'</td><td style="padding:6px 4px;text-align:right;">'+esc(ch.currency)+' '+(ln.amount||0)+'</td></tr>';
       }).join('');
       document.getElementById('bl-total').textContent=window.Tf('wu_tf_total', {cur: ch.currency, n: ch.total||0});

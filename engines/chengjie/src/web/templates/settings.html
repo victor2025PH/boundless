@@ -105,7 +105,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
 {% set active="settings" %}
 
 {% if ui_mode == 'simple' %}
-<div class="simple-guide" style="background:linear-gradient(135deg,rgba(91,124,246,.06),rgba(16,185,129,.06));border:1px solid rgba(91,124,246,.15);border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem;max-width:min(920px,96vw)">
+<div class="simple-guide" style="background:linear-gradient(135deg,var(--th-bg-brand06,rgba(91,124,246,.06)),var(--th-bg-grn06,rgba(16,185,129,.06)));border:1px solid var(--th-bd-brand15,rgba(91,124,246,.15));border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem;max-width:min(920px,96vw)">
   <span style="font-size:1.1rem;flex-shrink:0;margin-top:.1rem">⚙️</span>
   <div>
     <strong style="color:var(--t);font-size:.85rem">{{ (i18n or {}).get('mode_simple', "简洁模式") }}</strong>
@@ -125,11 +125,11 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
   <!-- ══ C1-1 品牌 / 白标 ═══════════════════════════════════════ -->
   <div class="acc">
     <div class="acc-hd" onclick="toggleAcc(this)">
-      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#8b5cf6,#6d28d9)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-violet5,#8b5cf6),var(--th-bg-violet7,#6d28d9))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.4 7.4H22l-6 4.6 2.3 7.4-6.3-4.6L5.7 21l2.3-7.4-6-4.6h7.6z"/></svg>
       </div>
       <div>
-        <div class="acc-title">{{ (i18n or {}).get('set_s016', "品牌 / 白标") }} <span id="br-plan-tag" style="font-size:.68rem;padding:.12rem .45rem;border-radius:5px;background:rgba(139,92,246,.14);color:#7c3aed;font-weight:600;vertical-align:middle;margin-left:.4rem"></span></div>
+        <div class="acc-title">{{ (i18n or {}).get('set_s016', "品牌 / 白标") }} <span id="br-plan-tag" style="font-size:.68rem;padding:.12rem .45rem;border-radius:5px;background:rgba(139,92,246,.14);color:var(--th-ink-violet6,#7c3aed);font-weight:600;vertical-align:middle;margin-left:.4rem"></span></div>
         <div class="acc-sub">{{ (i18n or {}).get('set_s017', "自定义系统名称 / 主题色 / Logo / 登录文案；去除厂商署名为旗舰版功能") }}</div>
       </div>
       <svg class="acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
@@ -173,10 +173,10 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
       <label style="display:flex;align-items:center;gap:.5rem;margin-top:1rem;font-size:.85rem;" id="br-hide-wrap">
         <input type="checkbox" id="br-hide_powered_by">
         <span>{{ (i18n or {}).get('set_s026', "去除") }}「Powered by」{{ (i18n or {}).get('set_s027', "厂商署名") }}</span>
-        <span id="br-hide-lock" style="font-size:.72rem;color:#b45309;display:none;">（{{ (i18n or {}).get('set_s028', "旗舰版功能，当前套餐不可用）") }}</span>
+        <span id="br-hide-lock" style="font-size:.72rem;color:var(--th-ink-amber7,#b45309);display:none;">（{{ (i18n or {}).get('set_s028', "旗舰版功能，当前套餐不可用）") }}</span>
       </label>
       <div style="margin-top:1rem;display:flex;align-items:center;gap:.8rem;">
-        <button class="btn-primary" onclick="brSave()" style="padding:.5rem 1.2rem;border:0;border-radius:8px;background:var(--p);color:#fff;font-weight:600;cursor:pointer;">{{ (i18n or {}).get('set_s029', "保存品牌") }}</button>
+        <button class="btn-primary" onclick="brSave()" style="padding:.5rem 1.2rem;border:0;border-radius:8px;background:var(--p);color:var(--th-ink-inverse,#fff);font-weight:600;cursor:pointer;">{{ (i18n or {}).get('set_s029', "保存品牌") }}</button>
         <span class="save-result" id="br-res" style="font-size:.82rem;"></span>
       </div>
       <p style="font-size:.76rem;color:var(--t3);margin-top:.8rem;line-height:1.6;">
@@ -188,7 +188,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
   (function(){
     function g(id){return document.getElementById(id);}
     function load(){
-      fetch('/api/admin/branding').then(function(r){return r.json();}).then(function(d){
+      apiFetch('/api/admin/branding').then(function(r){return r.json();}).then(function(d){
         if(!d||!d.ok) return;
         g('br-company_name').value=d.company_name||'';
         g('br-product_name').value=d.product_name||'';
@@ -216,7 +216,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
         login_subtitle:g('br-login_subtitle').value,
         hide_powered_by:g('br-hide_powered_by').checked
       };
-      fetch('/api/admin/branding',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({values:values})})
+      apiFetch('/api/admin/branding',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({values:values})}, {timeoutMs: 60000})
         .then(function(r){return r.json();}).then(function(d){
           if(d&&d.ok){ res.textContent='✓ '+window.T('set_js_003'); res.style.color='#16a34a'; }
           else { res.textContent=window.T('ov_js_save_fail_e')+((d&&d.detail)||window.T('inbox.voice.unknown_err')); res.style.color='#dc2626'; }
@@ -229,7 +229,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
   <!-- ══ P0-4/C4 授权 / 激活（粘贴已签发 key → 写 config/license.key → reload） ══ -->
   <div class="acc">
     <div class="acc-hd" onclick="toggleAcc(this)">
-      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#10b981,#059669)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-emerald5,#10b981),var(--th-bg-emerald6,#059669))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
       </div>
       <div>
@@ -246,7 +246,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
         <p class="f-hint">{{ (i18n or {}).get('set_s305', "激活成功即写入 config/license.key 并立即生效；无效或过期的授权码不会写入。授权码由厂商离线签发，本系统不保存签发私钥。") }}</p>
       </div>
       <div style="display:flex;align-items:center;gap:.8rem;">
-        <button class="btn-primary" onclick="licActivate()" style="padding:.5rem 1.2rem;border:0;border-radius:8px;background:var(--p);color:#fff;font-weight:600;cursor:pointer;">{{ (i18n or {}).get('set_s306', "激活授权") }}</button>
+        <button class="btn-primary" onclick="licActivate()" style="padding:.5rem 1.2rem;border:0;border-radius:8px;background:var(--p);color:var(--th-ink-inverse,#fff);font-weight:600;cursor:pointer;">{{ (i18n or {}).get('set_s306', "激活授权") }}</button>
         <span class="save-result" id="lic-act-res"></span>
       </div>
     </div>
@@ -274,7 +274,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
       cur.textContent=parts.join('　·　');
     }
     function load(){
-      fetch('/api/admin/license').then(function(r){return r.json();}).then(function(d){
+      apiFetch('/api/admin/license').then(function(r){return r.json();}).then(function(d){
         if(d&&d.ok) render(d);
       }).catch(function(){});
     }
@@ -283,7 +283,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
       var key=(g('lic-key-input').value||'').trim();
       if(!key){ res.textContent=window.T('set_js_096'); res.className='save-result err'; return; }
       res.textContent=window.T('ov_js_saving'); res.className='save-result';
-      fetch('/api/admin/license/activate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:key})})
+      apiFetch('/api/admin/license/activate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:key})}, {timeoutMs: 60000})
         .then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});})
         .then(function(x){
           if(x.ok&&x.d&&x.d.ok){
@@ -306,11 +306,11 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
   <!-- ══ C1-2 试用 / 演示数据 ═══════════════════════════════════ -->
   <div class="acc">
     <div class="acc-hd" onclick="toggleAcc(this)">
-      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#06b6d4,#0891b2)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-cyan5,#06b6d4),var(--th-bg-cyan6,#0891b2))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
       </div>
       <div>
-        <div class="acc-title">{{ (i18n or {}).get('set_s032', "试用 / 演示数据") }} <span id="demo-tag" style="font-size:.68rem;padding:.12rem .45rem;border-radius:5px;background:rgba(6,182,212,.14);color:#0891b2;font-weight:600;vertical-align:middle;margin-left:.4rem"></span></div>
+        <div class="acc-title">{{ (i18n or {}).get('set_s032', "试用 / 演示数据") }} <span id="demo-tag" style="font-size:.68rem;padding:.12rem .45rem;border-radius:5px;background:rgba(6,182,212,.14);color:var(--th-ink-cyan6,#0891b2);font-weight:600;vertical-align:middle;margin-left:.4rem"></span></div>
         <div class="acc-sub">{{ (i18n or {}).get('set_s033', "一键铺示例会话/草稿/坐席数据，让 ROI/质量/用量看板当场有效果；可一键清空") }}</div>
       </div>
       <svg class="acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
@@ -321,8 +321,8 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
       </div>
       <div id="demo-status" style="font-size:.85rem;color:var(--t2);margin-bottom:1rem;">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div>
       <div style="display:flex;align-items:center;gap:.8rem;flex-wrap:wrap;">
-        <button onclick="demoSeed()" id="demo-seed-btn" style="padding:.5rem 1.2rem;border:0;border-radius:8px;background:#7c3aed;color:#fff;font-weight:600;cursor:pointer;">{{ (i18n or {}).get('set_s038', "铺示例数据") }}</button>
-        <button onclick="demoClear()" id="demo-clear-btn" style="padding:.5rem 1.2rem;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#374151;font-weight:600;cursor:pointer;">{{ (i18n or {}).get('set_s039', "清空演示数据") }}</button>
+        <button onclick="demoSeed()" id="demo-seed-btn" style="padding:.5rem 1.2rem;border:0;border-radius:8px;background:var(--th-bg-violet6,#7c3aed);color:var(--th-ink-inverse,#fff);font-weight:600;cursor:pointer;">{{ (i18n or {}).get('set_s038', "铺示例数据") }}</button>
+        <button onclick="demoClear()" id="demo-clear-btn" style="padding:.5rem 1.2rem;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:8px;background:var(--th-bg-surface,#fff);color:var(--th-ink-gray7,#374151);font-weight:600;cursor:pointer;">{{ (i18n or {}).get('set_s039', "清空演示数据") }}</button>
         <span class="save-result" id="demo-res" style="font-size:.82rem;"></span>
       </div>
     </div>
@@ -332,7 +332,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
     function g(id){return document.getElementById(id);}
     function fmt(c){c=c||{};return window.T('dash.ws.col_convs')+' '+(c.conversations||0)+' · '+window.T('set_js_005')+' '+(c.messages||0)+' · '+window.T('set_js_006')+' '+(c.draft_audits||0);}
     function refresh(){
-      fetch('/api/admin/demo').then(function(r){return r.json();}).then(function(d){
+      apiFetch('/api/admin/demo').then(function(r){return r.json();}).then(function(d){
         if(!d||!d.ok){ g('demo-status').textContent=window.T('msg_js_010'); return; }
         var tag=g('demo-tag');
         if(d.present){ g('demo-status').textContent=window.T('set_js_007')+fmt(d.counts); if(tag) tag.textContent=window.T('set_js_008'); }
@@ -342,7 +342,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
     window.demoSeed=function(){
       var res=g('demo-res'); res.textContent=window.T('set_js_010'); res.style.color='var(--t3)';
       g('demo-seed-btn').disabled=true;
-      fetch('/api/admin/demo/seed',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+      apiFetch('/api/admin/demo/seed',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000})
         .then(function(r){return r.json();}).then(function(d){
           g('demo-seed-btn').disabled=false;
           if(d&&d.ok){
@@ -357,7 +357,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
       if(!confirm(window.T('set_js_014')+' demo: '+window.T('set_js_015'))) return;
       var res=g('demo-res'); res.textContent=window.T('set_js_016'); res.style.color='var(--t3)';
       g('demo-clear-btn').disabled=true;
-      fetch('/api/admin/demo/clear',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+      apiFetch('/api/admin/demo/clear',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000})
         .then(function(r){return r.json();}).then(function(d){
           g('demo-clear-btn').disabled=false;
           if(d&&d.ok){ res.textContent='✓ '+window.T('set_js_017'); res.style.color='#16a34a'; refresh(); }
@@ -375,23 +375,23 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
       </div>
       <div>
-        <div class="acc-title">AI {{ (i18n or {}).get('set_s003', "提示词") }} & {{ (i18n or {}).get('set_s010', "行为配置") }} <span style="font-size:.68rem;padding:.12rem .45rem;border-radius:5px;background:rgba(59,130,246,.12);color:#2563eb;font-weight:600;vertical-align:middle;margin-left:.4rem">Telegram {{ (i18n or {}).get('set_s040', "专用") }}</span></div>
+        <div class="acc-title">AI {{ (i18n or {}).get('set_s003', "提示词") }} & {{ (i18n or {}).get('set_s010', "行为配置") }} <span style="font-size:.68rem;padding:.12rem .45rem;border-radius:5px;background:rgba(59,130,246,.12);color:var(--th-ink-blue6,#2563eb);font-weight:600;vertical-align:middle;margin-left:.4rem">Telegram {{ (i18n or {}).get('set_s040', "专用") }}</span></div>
         <div class="acc-sub">{{ (i18n or {}).get('set_s041', "控制 Telegram 端 AI 的人格、回复风格、SOP 规则") }} — {{ (i18n or {}).get('set_s042', "三端 RPA 使用独立人设") }}</div>
       </div>
       <svg class="acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
     </div>
     <div class="acc-body open" id="body-prompt">
       <!-- P0: 作用域提示 banner -->
-      <div style="margin-bottom:1rem;padding:.7rem 1rem;background:linear-gradient(135deg,rgba(251,191,36,.08),rgba(245,158,11,.12));border:1px solid rgba(245,158,11,.35);border-radius:10px;line-height:1.7;font-size:.82rem;display:flex;align-items:flex-start;gap:.7rem">
+      <div style="margin-bottom:1rem;padding:.7rem 1rem;background:linear-gradient(135deg,rgba(251,191,36,.08),var(--th-bg-amber12,rgba(245,158,11,.12)));border:1px solid rgba(245,158,11,.35);border-radius:10px;line-height:1.7;font-size:.82rem;display:flex;align-items:flex-start;gap:.7rem">
         <span style="font-size:1.2rem;flex-shrink:0;margin-top:.1rem">⚠️</span>
         <div>
-          <strong style="color:#b45309;font-size:.84rem">{{ (i18n or {}).get('set_s043', "作用域：仅") }} Telegram</strong><br>
+          <strong style="color:var(--th-ink-amber7,#b45309);font-size:.84rem">{{ (i18n or {}).get('set_s043', "作用域：仅") }} Telegram</strong><br>
           {{ (i18n or {}).get('set_s044', "以下 AI 名称、回复风格、系统提示词") }}<strong>{{ (i18n or {}).get('set_s045', "仅影响 Telegram 端") }}</strong>。<br>
           {{ (i18n or {}).get('set_s046', "三端 RPA（Messenger / LINE / WhatsApp）使用独立人设系统，请前往各自设置页配置：") }}
           <div style="margin-top:.4rem;display:flex;flex-wrap:wrap;gap:.35rem">
-            <a href="/messenger-rpa" style="display:inline-flex;align-items:center;gap:.25rem;padding:.15rem .55rem;border-radius:6px;background:rgba(59,130,246,.1);color:#2563eb;font-weight:600;font-size:.74rem;text-decoration:none;border:1px solid rgba(59,130,246,.2)"><i data-platform-icon="messenger" data-size="15" style="display:inline-flex;line-height:0"></i> Messenger</a>
-            <a href="/line-rpa" style="display:inline-flex;align-items:center;gap:.25rem;padding:.15rem .55rem;border-radius:6px;background:rgba(34,197,94,.1);color:#16a34a;font-weight:600;font-size:.74rem;text-decoration:none;border:1px solid rgba(34,197,94,.2)"><i data-platform-icon="line" data-size="15" style="display:inline-flex;line-height:0"></i> LINE</a>
-            <a href="/whatsapp-rpa" style="display:inline-flex;align-items:center;gap:.25rem;padding:.15rem .55rem;border-radius:6px;background:rgba(37,211,102,.1);color:#15803d;font-weight:600;font-size:.74rem;text-decoration:none;border:1px solid rgba(37,211,102,.2)"><i data-platform-icon="whatsapp" data-size="15" style="display:inline-flex;line-height:0"></i> WhatsApp</a>
+            <a href="/messenger-rpa" style="display:inline-flex;align-items:center;gap:.25rem;padding:.15rem .55rem;border-radius:6px;background:var(--th-bg-blue10,rgba(59,130,246,.1));color:var(--th-ink-blue6,#2563eb);font-weight:600;font-size:.74rem;text-decoration:none;border:1px solid rgba(59,130,246,.2)"><i data-platform-icon="messenger" data-size="15" style="display:inline-flex;line-height:0"></i> Messenger</a>
+            <a href="/line-rpa" style="display:inline-flex;align-items:center;gap:.25rem;padding:.15rem .55rem;border-radius:6px;background:rgba(34,197,94,.1);color:var(--th-ink-green6,#16a34a);font-weight:600;font-size:.74rem;text-decoration:none;border:1px solid rgba(34,197,94,.2)"><i data-platform-icon="line" data-size="15" style="display:inline-flex;line-height:0"></i> LINE</a>
+            <a href="/whatsapp-rpa" style="display:inline-flex;align-items:center;gap:.25rem;padding:.15rem .55rem;border-radius:6px;background:rgba(37,211,102,.1);color:var(--th-ink-green7,#15803d);font-weight:600;font-size:.74rem;text-decoration:none;border:1px solid rgba(37,211,102,.2)"><i data-platform-icon="whatsapp" data-size="15" style="display:inline-flex;line-height:0"></i> WhatsApp</a>
           </div>
         </div>
       </div>
@@ -453,7 +453,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
   <!-- ══ 人工客服转接（阶段 A + B1） ═══════════════════════════ -->
   <div class="acc">
     <div class="acc-hd" onclick="toggleAcc(this)">
-      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#f59e0b,#d97706)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-amber5,#f59e0b),var(--th-bg-amber6,#d97706))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
       </div>
       <div>
@@ -899,11 +899,11 @@ async function saveSection(section){
       heAgentsSyncToTextarea();
     }
     const fields = _getFields(prefix);
-    const r = await fetch('/api/settings/save',{
+    const r = await apiFetch('/api/settings/save',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({section, fields}),
-    });
+    }, {timeoutMs: 60000});
     const d = await r.json();
     if(!r.ok){ resEl.textContent = window.T('ov_js_save_fail_e')+(d.detail||window.T('inbox.voice.unknown_err')); resEl.className='save-result err'; return; }
     resEl.textContent = window.Tf('set_js_p01', {n: d.updated.length}); resEl.className='save-result ok';
@@ -937,10 +937,10 @@ async function savePrompt(){
     const styleEl = document.getElementById('prompt-reply_style');
     if(nameEl) fields.ai_name = nameEl.value.trim();
     if(styleEl) fields.reply_style = styleEl.value;
-    const r = await fetch('/api/settings/save',{
+    const r = await apiFetch('/api/settings/save',{
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({section:'ai', fields}),
-    });
+    }, {timeoutMs: 60000});
     const d = await r.json();
     if(!r.ok){ resEl.textContent = window.T('ov_js_save_fail_e')+(d.detail||window.T('inbox.voice.unknown_err')); resEl.className='save-result err'; return; }
     _originalPrompt = _promptEl.value;
@@ -1607,7 +1607,7 @@ async function loadHeRoundRobinSnapshot(){
   if(!el) return;
   el.textContent = window.T('dash.loading');
   try{
-    const r = await fetch('/api/human-escalation/mention-round-robin');
+    const r = await apiFetch('/api/human-escalation/mention-round-robin');
     const d = await r.json();
     if(!d.ok){
       el.textContent = window.T('set_js_084') + (d.msg || '');
@@ -1629,7 +1629,7 @@ async function loadHeVerify(){
   if(!el) return;
   el.textContent = window.T('dash.loading');
   try{
-    const r = await fetch('/api/human-escalation/verify');
+    const r = await apiFetch('/api/human-escalation/verify');
     const d = await r.json();
     el.textContent = JSON.stringify(d, null, 2);
   }catch(e){
@@ -1642,7 +1642,7 @@ async function loadHeScheduleStatus(){
   if(!el) return;
   el.textContent = window.T('dash.loading');
   try{
-    const r = await fetch('/api/human-escalation/schedule-status');
+    const r = await apiFetch('/api/human-escalation/schedule-status');
     const d = await r.json();
     if(!d.ok){ el.textContent = window.T('set_js_086'); return; }
     const lines = [
@@ -1672,7 +1672,7 @@ async function loadHeScheduleStatus(){
 
 async function loadShiftDuty(){
   try{
-    const r = await fetch('/api/human-escalation/shift');
+    const r = await apiFetch('/api/human-escalation/shift');
     const d = await r.json();
     const cb = document.getElementById('human-shift-on-duty');
     if(cb && d.ok) cb.checked = !!d.on_duty;
@@ -1684,11 +1684,11 @@ async function saveShiftDuty(){
   if(!cb) return;
   resEl.textContent = window.T('ov_js_saving'); resEl.className = 'save-result';
   try{
-    const r = await fetch('/api/human-escalation/shift',{
+    const r = await apiFetch('/api/human-escalation/shift',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({on_duty: cb.checked}),
-    });
+    }, {timeoutMs: 60000});
     const d = await r.json();
     if(r.ok && d.ok){
       resEl.textContent = '✓ '+window.T('set_js_093'); resEl.className = 'save-result ok';

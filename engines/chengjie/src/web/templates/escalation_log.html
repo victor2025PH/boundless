@@ -67,7 +67,7 @@
     load:function(){
       document.getElementById('el-list').innerHTML='<span class="tk-load">'+window.T('dash.loading')+'</span>';
       var days=document.getElementById('el-days').value;
-      fetch('/api/workspace/escalation-log?days='+days).then(function(r){return r.json();}).then(function(d){
+      apiFetch('/api/workspace/escalation-log?days='+days).then(function(r){return r.json();}).then(function(d){
         if(!d.ok){ document.getElementById('el-list').innerHTML='<span class="tk-load">'+window.T('el_js_009')+'</span>'; return; }
         render(d);
       }).catch(function(){ document.getElementById('el-list').innerHTML='<span class="tk-fail">'+window.T('rpa_load_failed')+'</span>'; });

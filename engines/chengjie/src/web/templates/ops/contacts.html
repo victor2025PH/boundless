@@ -2,6 +2,8 @@
 <html lang="{{ 'zh-CN' if (ui_lang|default('zh')) == 'zh' else 'en' }}"><head><meta charset="utf-8">
 <title>Contacts · Ops</title>
 {% include "_i18n_bootstrap.html" %}
+{% include "_api_fetch.html" %}
+<link rel="stylesheet" href="/static/theme-tokens.css?v=20260723c">
 <style>
 body{font-family:-apple-system,Segoe UI,sans-serif;max-width:1100px;margin:20px auto;padding:0 20px;background:#fafafa;color:#222}
 h1{font-size:20px;margin-bottom:4px}
@@ -172,7 +174,7 @@ function doSearch(q){
 
 async function renderContacts(q){
   const qs = q ? `&q=${encodeURIComponent(q)}` : '';
-  const list = await fetch(`/api/contacts?limit=100&expand=journey${qs}`).then(r=>r.json());
+  const list = await apiFetch(`/api/contacts?limit=100&expand=journey${qs}`).then(r=>r.json());
   const badge = document.getElementById('result-badge');
   const hint = document.getElementById('search-hint');
   if(q){
@@ -212,7 +214,7 @@ async function load(){
   const initQ = new URLSearchParams(location.search).get('q')||'';
   if(initQ){ document.getElementById('search-input').value = initQ; _currentQ = initQ; }
   const [stats] = await Promise.all([
-    fetch('/api/funnel/stats').then(r=>r.json()),
+    apiFetch('/api/funnel/stats').then(r=>r.json()),
   ]);
   const s=document.getElementById('stats');
   s.innerHTML = `<div class="pill">${window.T('ops.ct.total')} <strong>${stats.total_contacts}</strong></div>`
@@ -282,17 +284,17 @@ async function openDrawer(contactId, name){
   document.getElementById('drawer-overlay').style.display='block';
   document.getElementById('drawer').classList.add('open');
   try{
-    const d = await fetch(`/api/contacts/${contactId}/timeline?limit=80`).then(r=>r.json());
+    const d = await apiFetch(`/api/contacts/${contactId}/timeline?limit=80`).then(r=>r.json());
     const events = d.events||[];
     if(!events.length){
       document.getElementById('drawer-body').innerHTML='<p class="tl-empty">'+window.T('ops.ct.no_events')+'</p>';
       return;
     }
     document.getElementById('drawer-body').innerHTML =
-      `<p style="font-size:11px;color:#9ca3af;margin:0 0 12px">${window.Tf('ops.ct.tl_summary',{n:events.length})}<strong>${d.funnel_stage||'-'}</strong></p>`
+      `<p style="font-size:11px;color:var(--th-ink-gray4,#9ca3af);margin:0 0 12px">${window.Tf('ops.ct.tl_summary',{n:events.length})}<strong>${d.funnel_stage||'-'}</strong></p>`
       + events.map(renderEvent).join('');
   }catch(e){
-    document.getElementById('drawer-body').innerHTML=`<p class="tl-empty" style="color:#dc2626">${window.T('dash.load_fail')}: ${e}</p>`;
+    document.getElementById('drawer-body').innerHTML=`<p class="tl-empty" style="color:var(--th-ink-red6,#dc2626)">${window.T('dash.load_fail')}: ${e}</p>`;
   }
 }
 

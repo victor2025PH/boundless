@@ -103,9 +103,9 @@ def test_partial_handles_disabled_contacts_subsystem(partial_text: str):
 
 # (template_name, init_call_marker)
 INTEGRATIONS = [
-    ("line_rpa.html",       "window.rpa.funnel.init"),
-    ("whatsapp_rpa.html",   "window.rpa.funnel.init"),
-    ("telegram.html",       "window.rpa.funnel.init"),
+    ("_channel_body_line.html",       "window.rpa.funnel.init"),
+    ("_channel_body_whatsapp.html",   "window.rpa.funnel.init"),
+    ("_channel_body_telegram.html",       "window.rpa.funnel.init"),
     ("rpa_overview.html",   "window.rpa.funnel.init"),
 ]
 
@@ -194,7 +194,7 @@ def test_messenger_keeps_own_funnel():
     """Messenger 自家 funnel 增强了 variants/handoff/ab_conclusions，
     不应被 shared partial 替换；其页面仍调用 /api/messenger-rpa/funnel。
     """
-    path = TEMPLATES_DIR / "messenger_rpa.html"
+    path = TEMPLATES_DIR / "_channel_body_messenger.html"
     text = path.read_text(encoding="utf-8")
     # Messenger 自己的 funnel 端点仍在
     assert "/api/messenger-rpa/funnel" in text

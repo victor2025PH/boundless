@@ -69,7 +69,7 @@
     <div class="s-lbl">{{ (i18n or {}).get('analytics_avg_resp','平均响应时间') }}</div>
   </div>
   <div class="card stat-card">
-    <div class="s-icon ico-b" style="background:linear-gradient(135deg,#8b5cf6,#7c3aed)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></div>
+    <div class="s-icon ico-b" style="background:linear-gradient(135deg,var(--th-bg-violet5,#8b5cf6),var(--th-bg-violet6,#7c3aed))"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></div>
     <div class="s-num" data-count="{{ cmd_stats|length }}">0</div>
     <div class="s-lbl">{{ (i18n or {}).get('analytics_cmd_types','指令种类') }}</div>
   </div>
@@ -293,11 +293,11 @@ async function copilotAsk() {
   ansEl.textContent = window.T('analytics_cp_querying');
   btn.disabled = true;
   try {
-    const res = await fetch('/api/copilot/query', {
+    const res = await apiFetch('/api/copilot/query', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ question: q })
-    });
+    }, {timeoutMs: 60000});
     const d = await res.json();
     if (d.ok) {
       ansEl.textContent = d.answer || window.T('analytics_cp_no_answer');

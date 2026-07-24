@@ -252,7 +252,7 @@ function toggleDiff(btn) {
 (async function initHeatmap(){
   const DAYS = 84;
   try{
-    const r = await fetch('/api/audit/activity?days=' + DAYS);
+    const r = await apiFetch('/api/audit/activity?days=' + DAYS);
     if(!r.ok) return;
     const { days: dayMap, max } = await r.json();
 

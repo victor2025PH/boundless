@@ -33,7 +33,7 @@
 {% set active="cases" %}
 
 {% if ui_mode == 'simple' %}
-<div class="simple-guide" style="background:linear-gradient(135deg,rgba(91,124,246,.06),rgba(16,185,129,.06));border:1px solid rgba(91,124,246,.15);border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem">
+<div class="simple-guide" style="background:linear-gradient(135deg,var(--th-bg-brand06,rgba(91,124,246,.06)),var(--th-bg-grn06,rgba(16,185,129,.06)));border:1px solid var(--th-bd-brand15,rgba(91,124,246,.15));border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem">
   <span style="font-size:1.1rem;flex-shrink:0;margin-top:.1rem">📋</span>
   <div>
     <strong style="color:var(--t);font-size:.85rem">{{ (i18n or {}).get('cases_guide_title','操作说明') }}</strong>
@@ -61,7 +61,7 @@
 async function loadCases() {
   const el = document.getElementById('case-list');
   try {
-    const res = await fetch('/api/cases/active');
+    const res = await apiFetch('/api/cases/active');
     const d = await res.json();
     const cases = d.cases || [];
     document.getElementById('case-total').textContent = d.count || 0;
@@ -110,7 +110,7 @@ async function loadCases() {
            '<div class="case-actions">'
            + '<input class="input case-note-input" id="note-' + c.case_id + '" placeholder="' + window.T('cases_note_ph') + '" value="' + (c.note || '') + '" />'
            + '<button class="btn btn-xs" data-help="btn_save" onclick="saveNote(\'' + c.case_id + '\')">' + window.T('cases_save_note') + '</button>'
-           + '<button class="btn btn-xs" data-help="close_case" style="background:var(--green);color:#fff" onclick="closeCase(\'' + c.case_id + '\')">' + window.T('cases_close') + '</button>'
+           + '<button class="btn btn-xs" data-help="close_case" style="background:var(--green);color:var(--th-ink-inverse,#fff)" onclick="closeCase(\'' + c.case_id + '\')">' + window.T('cases_close') + '</button>'
            + '</div>')
         + '</div>';
     }).join('');
@@ -124,20 +124,20 @@ async function loadCases() {
 
 async function saveNote(cid) {
   const note = document.getElementById('note-' + cid).value.trim();
-  await fetch('/api/cases/' + cid + '/note', {
+  await apiFetch('/api/cases/' + cid + '/note', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ note })
-  });
+  }, {timeoutMs: 60000});
   loadCases();
 }
 
 async function closeCase(cid) {
   const res = prompt(window.T('cases_close_prompt'));
   if (res === null) return;
-  await fetch('/api/cases/' + cid + '/close', {
+  await apiFetch('/api/cases/' + cid + '/close', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ resolution: res })
-  });
+  }, {timeoutMs: 60000});
   loadCases();
 }
 

@@ -579,7 +579,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
   <div class="unsync-banner" id="unsync-banner">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
     <span id="unsync-text" style="flex:1"></span>
-    <button class="btn btn-sm" style="background:rgba(245,158,11,.15);border-color:rgba(245,158,11,.4);color:#d97706;font-size:.75rem" onclick="syncToConfig()">{{ (i18n or {}).get('psn_sync_now_yaml','立即同步 yaml') }}</button>
+    <button class="btn btn-sm" style="background:var(--th-bg-amber15,rgba(245,158,11,.15));border-color:var(--th-bd-amber40,rgba(245,158,11,.4));color:var(--th-ink-amber6,#d97706);font-size:.75rem" onclick="syncToConfig()">{{ (i18n or {}).get('psn_sync_now_yaml','立即同步 yaml') }}</button>
   </div>
   <div style="display:flex;justify-content:flex-end;gap:.5rem;margin-bottom:.8rem">
     <button class="btn btn-sm" id="dash-refresh-btn" onclick="_dashRefresh()" title="{{ (i18n or {}).get('psn_refresh_dash_t','刷新概览') }}">
@@ -764,7 +764,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
          （getElementById 只命中第一个 → DOM id 碰撞）。真正可用的批量导入见 #import-panel。此卡保留「同步到 yaml」。 #}
       <button class="btn btn-sm" id="sync-config-btn" onclick="syncToConfig()"
         title="{{ (i18n or {}).get('psn_sync_to_yaml_t','将当前运营人设推送到 personas.yaml（可 git 追踪）') }}"
-        style="background:rgba(59,130,246,.1);border-color:rgba(59,130,246,.3);color:#3b82f6">⭐ {{ (i18n or {}).get('psn_sync_to_yaml','同步到 personas.yaml') }}</button>
+        style="background:var(--th-bg-blue10,rgba(59,130,246,.1));border-color:var(--th-bd-blue30,rgba(59,130,246,.3));color:var(--th-ink-blue5,#3b82f6)">⭐ {{ (i18n or {}).get('psn_sync_to_yaml','同步到 personas.yaml') }}</button>
       <div id="sync-config-status" class="tts-status" style="margin-top:.6rem"></div>
     </div>
   </details>
@@ -1007,7 +1007,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
     <div id="pe-wizard" class="pe-wizard" style="display:none"></div>
     <div id="pe-draft-banner" class="draft-banner"></div>
     <div id="pe-canonical-banner" class="diff-banner" style="margin-top:.1rem"></div>
-    <div class="field-row"><label>Profile ID</label><input id="pe-id" type="text" placeholder="warm_companion_2024" style="font-family:monospace"><span id="pe-id-warn" style="display:none;font-size:.72rem;color:#ef4444;margin-top:.2rem">⚠ {{ (i18n or {}).get('psn_id_exists_warn','该 ID 已存在，保存将覆盖现有人设') }}</span></div>
+    <div class="field-row"><label>Profile ID</label><input id="pe-id" type="text" placeholder="warm_companion_2024" style="font-family:monospace"><span id="pe-id-warn" style="display:none;font-size:.72rem;color:var(--th-ink-red5,#ef4444);margin-top:.2rem">⚠ {{ (i18n or {}).get('psn_id_exists_warn','该 ID 已存在，保存将覆盖现有人设') }}</span></div>
     <div class="ps-row">
       <div class="field-row"><label>{{ (i18n or {}).get('psn_th_name','名称') }}</label><input id="pe-name" type="text" placeholder="{{ (i18n or {}).get('psn_name_ph','小灵') }}"></div>
       <div class="field-row"><label>{{ (i18n or {}).get('psn_th_role','角色') }}</label><input id="pe-role" type="text" placeholder="{{ (i18n or {}).get('psn_role_ph','亲密的私聊对象') }}"></div>
@@ -1392,12 +1392,12 @@ async function bindProfileToChatB() {
   if (!cid) { if(st){st.textContent=window.T('psn_js_026');st.className='tts-status err';} return; }
   let personaData = {};
   if (profileId) {
-    try { const r = await fetch('/api/personas/profiles/' + encodeURIComponent(profileId)); const d = await r.json(); personaData = d.persona || {}; }
+    try { const r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(profileId)); const d = await r.json(); personaData = d.persona || {}; }
     catch(e) { if(st){st.textContent=window.T('psn_js_027');st.className='tts-status err';} return; }
   }
   if(st){st.textContent=window.T('psn_js_028');st.className='tts-status';}
   try {
-    const r = await fetch('/api/persona/bind', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:cid,persona:personaData})});
+    const r = await apiFetch('/api/persona/bind', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:cid,persona:personaData})}, {timeoutMs: 60000});
     const d = await r.json();
     if(d.ok){ _toast(window.T('psn_js_029') + cid,'ok'); if(st){st.textContent='';} _reloadBindingsList(); loadProfileList(); refreshStatus(); }
     else { if(st){st.textContent=window.T('psn_js_030');st.className='tts-status err';} }
@@ -1411,7 +1411,7 @@ async function bulkBindB(dryRun) {
   if(!pid){ if(st){st.textContent=window.T('psn_js_032');st.className='tts-status err';} return; }
   if(st){st.textContent=dryRun?window.T('psn_js_033'):window.T('psn_js_034');st.className='tts-status';}
   try {
-    const r = await fetch('/api/personas/bulk-bind',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile_id:pid,scope,dry_run:dryRun})});
+    const r = await apiFetch('/api/personas/bulk-bind',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile_id:pid,scope,dry_run:dryRun})}, {timeoutMs: 60000});
     const d = await r.json();
     if(d.ok){
       if(dryRun){
@@ -1446,7 +1446,7 @@ function _copyProfileId(pid) {
 
 async function _cloneProfile(pid) {
   try {
-    const r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid));
+    const r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid));
     if (!r.ok) { _toast(window.T('psn_js_040'), 'err'); return; }
     const d = await r.json();
     const p = d.persona || {};
@@ -1534,7 +1534,7 @@ function _renderBindingsList(bindings) {
 
 async function _reloadBindingsList() {
   try {
-    const r = await fetch('/api/persona/bindings');
+    const r = await apiFetch('/api/persona/bindings');
     if (!r.ok) return;
     const d = await r.json();
     _renderBindingsList(d.bindings || {});
@@ -1575,7 +1575,7 @@ function _unbindInline(btn) {
 async function _doUnbind(cid, btn) {
   btn.disabled = true; btn.textContent = window.T('psn_js_055');
   try {
-    await fetch('/api/persona/unbind', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:cid})});
+    await apiFetch('/api/persona/unbind', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:cid})}, {timeoutMs: 60000});
     _toast(window.T('psn_js_056') + cid, 'info');
     _reloadBindingsList(); loadProfileList(); refreshStatus();
   } catch(e) { _toast(window.T('psn_js_057') + e, 'err'); btn.disabled = false; btn.textContent = window.T('psn_js_058'); }
@@ -1626,7 +1626,7 @@ function _personaPayload() {
 // 打开「默认人设」tab 时，把后端当前默认人设回填到表单
 async function loadDefaultPersonaForm() {
   try {
-    var r = await fetch('/api/persona');   // chat_id 为空 → 域级默认人设
+    var r = await apiFetch('/api/persona');   // chat_id 为空 → 域级默认人设
     var d = await r.json();
     var p = (d && d.persona) || {};
     _defaultPersonaFull = p;
@@ -1649,11 +1649,11 @@ async function saveDefaultPersona() {
   const st = document.getElementById('save-status');
   st.textContent = window.T('psn_js_061'); st.className = 'tts-status';
   try {
-    const r = await fetch('/api/persona/update-default', {
+    const r = await apiFetch('/api/persona/update-default', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({persona: _personaPayload()})
-    });
+    }, {timeoutMs: 60000});
     const d = await r.json();
     if (d.ok) {
       _toast(window.T('psn_js_062'), 'ok'); st.textContent = window.T('psn_js_063'); st.className = 'tts-status ok';
@@ -1671,7 +1671,7 @@ async function previewPrompt() {
   box.style.display = 'block';
   box.textContent = window.T('psn_js_065');
   try {
-    const r = await fetch('/api/persona/preview-prompt');
+    const r = await apiFetch('/api/persona/preview-prompt');
     const d = await r.json();
     box.textContent = d.prompt || window.T('psn_js_066');
   } catch(e) { box.textContent = window.T('psn_js_031') + e; }
@@ -1680,7 +1680,7 @@ async function previewPrompt() {
 async function unbindChat(chatId) {
   if (!confirm(window.T('psn_js_067') + chatId + window.T('psn_js_068'))) return;
   try {
-    await fetch('/api/persona/unbind', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:chatId})});
+    await apiFetch('/api/persona/unbind', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:chatId})}, {timeoutMs: 60000});
     _toast(window.T('psn_js_056') + chatId, 'info');
     _reloadBindingsList(); loadProfileList(); refreshStatus();
   } catch(e) { _toast(window.T('psn_js_057') + e, 'err'); }
@@ -1692,7 +1692,7 @@ async function refreshStatus() {
   if (body) body.textContent = window.T('psn_js_069');
   _lastRefreshAt = Date.now();
   try {
-    const r = await fetch('/api/personas/status');
+    const r = await apiFetch('/api/personas/status');
     if (!r.ok) {
       if (body) body.textContent = window.T('psn_js_070') + r.status;
       var _dpErr = document.getElementById('dashboard-platforms');
@@ -1722,9 +1722,9 @@ async function refreshStatus() {
       const syncLabel = d.canonical_last_sync
         ? window.T('psn_js_074') + d.canonical_last_sync
         : window.T('psn_js_075');
-      unsyncHtml = `<div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.5rem;padding:.4rem .7rem;border-radius:7px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.28)">
-        <span style="font-size:.78rem;color:#d97706">⚠️ <strong>${unsyncN}</strong> ${window.T('psn_js_342')} — ${syncLabel}</span>
-        <button class="btn btn-sm" style="font-size:.7rem;padding:.18rem .55rem;background:rgba(59,130,246,.1);border-color:rgba(59,130,246,.3);color:#3b82f6;flex-shrink:0" onclick="syncToConfig()">${window.T('psn_js_343')}</button>
+      unsyncHtml = `<div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.5rem;padding:.4rem .7rem;border-radius:7px;background:var(--th-bg-amber08,rgba(245,158,11,.08));border:1px solid var(--th-bd-amber28,rgba(245,158,11,.28))">
+        <span style="font-size:.78rem;color:var(--th-ink-amber6,#d97706)">⚠️ <strong>${unsyncN}</strong> ${window.T('psn_js_342')} — ${syncLabel}</span>
+        <button class="btn btn-sm" style="font-size:.7rem;padding:.18rem .55rem;background:var(--th-bg-blue10,rgba(59,130,246,.1));border-color:var(--th-bd-blue30,rgba(59,130,246,.3));color:var(--th-ink-blue5,#3b82f6);flex-shrink:0" onclick="syncToConfig()">${window.T('psn_js_343')}</button>
       </div>`;
     } else if (d.canonical_last_sync) {
       unsyncHtml = `<div style="font-size:.74rem;color:var(--t2);margin-bottom:.4rem">✓ personas.yaml ${window.T('psn_js_344')} — ${d.canonical_last_sync}</div>`;
@@ -1772,7 +1772,7 @@ async function refreshStatus() {
       d.wa_accounts.forEach(a => {
         const hasProfile = !!a.active_profile;
         const pname = hasProfile ? a.active_profile.name : window.T('psn_js_079');
-        const btnHtml = `<button class="btn btn-sm" style="font-size:.68rem;padding:.15rem .45rem;background:rgba(59,130,246,.1);border-color:rgba(59,130,246,.3);color:#3b82f6;flex-shrink:0" onclick="_assignWaProfile('${a.account_id}')" title="${window.T('psn_js_351')}">${hasProfile ? window.T('psn_js_013') : window.T('psn_js_014')}</button>`;
+        const btnHtml = `<button class="btn btn-sm" style="font-size:.68rem;padding:.15rem .45rem;background:var(--th-bg-blue10,rgba(59,130,246,.1));border-color:var(--th-bd-blue30,rgba(59,130,246,.3));color:var(--th-ink-blue5,#3b82f6);flex-shrink:0" onclick="_assignWaProfile('${a.account_id}')" title="${window.T('psn_js_351')}">${hasProfile ? window.T('psn_js_013') : window.T('psn_js_014')}</button>`;
         html += `<div class="account-row" style="padding:.35rem 0">
           <div style="flex:1">
             <span style="font-weight:600">${a.label}</span>
@@ -1788,7 +1788,7 @@ async function refreshStatus() {
       const total = d.mrpa_reply_profiles.length;
       const imp = d.mrpa_imported_count || 0;
       const allOk = imp === total;
-      html += `<div style="margin-top:.6rem;padding:.5rem .7rem;border-radius:8px;background:${allOk ? 'rgba(16,185,129,.06)' : 'rgba(245,158,11,.06)'};border:1px solid ${allOk ? 'rgba(16,185,129,.2)' : 'rgba(245,158,11,.2)'}">
+      html += `<div style="margin-top:.6rem;padding:.5rem .7rem;border-radius:8px;background:${allOk ? 'var(--th-bg-grn06,rgba(16,185,129,.06))' : 'var(--th-bg-amber06,rgba(245,158,11,.06))'};border:1px solid ${allOk ? 'var(--th-bd-grn20,rgba(16,185,129,.2))' : 'var(--th-bd-amber20,rgba(245,158,11,.2))'}">
         <div style="font-size:.78rem;font-weight:600;margin-bottom:.3rem">
           🎭 Messenger reply_profiles → PersonaManager&nbsp;
           <span class="tag ${allOk ? 'tag-green' : 'tag-gray'}">${imp}/${total} ${window.T('psn_js_352')}</span>
@@ -1833,7 +1833,7 @@ async function _onBindingsToggle(el) {
   if (!pid || !body) return;
   body.textContent = window.T('psn_js_083');
   try {
-    const r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/bindings');
+    const r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/bindings');
     if (!r.ok) { body.textContent = window.T('psn_js_070') + r.status; return; }
     const d = await r.json();
 
@@ -1876,7 +1876,7 @@ async function _onBindingsToggle(el) {
 async function _unbindFromPreview(cid, btn) {
   if (btn) { btn.disabled = true; btn.textContent = window.T('psn_js_055'); }
   try {
-    await fetch('/api/persona/unbind', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:cid})});
+    await apiFetch('/api/persona/unbind', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:cid})}, {timeoutMs: 60000});
     _toast(window.T('psn_js_056') + cid, 'info');
     _bindingsLoaded = false;
     const panel = document.getElementById('pe-bindings-panel');
@@ -1896,7 +1896,7 @@ async function _onPromptToggle(el) {
   if (!pid || !body) return;
   body.innerHTML = window.T('psn_js_083');
   try {
-    const r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/prompt-preview?detail=both');
+    const r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/prompt-preview?detail=both');
     if (!r.ok) { body.textContent = window.T('psn_js_070') + r.status; return; }
     const d = await r.json();
     const esc = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -1935,7 +1935,7 @@ async function pmaLoad() {
   if (!pid || !body) return;
   body.innerHTML = window.T('pma_loading');
   try {
-    const r = await fetch('/api/personas/' + encodeURIComponent(pid) + '/media');
+    const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/media');
     if (!r.ok) { body.textContent = window.T('pma_load_fail') + r.status; return; }
     const d = await r.json();
     _pmaRender(body, d.items || [], d.stats || {});
@@ -1951,7 +1951,7 @@ async function pmaFaceLoad() {
   const pid = _pmaPid();
   if (!box || !pid) return;
   try {
-    const r = await fetch('/api/personas/' + encodeURIComponent(pid) + '/face-ref');
+    const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/face-ref');
     if (!r.ok) { box.style.display = 'none'; return; }
     const d = await r.json();
     let inner = '<div style="font-weight:600;font-size:.78rem;margin-bottom:.3rem">'
@@ -2000,7 +2000,7 @@ async function pmaFaceDelete() {
   const pid = _pmaPid();
   if (!pid || !confirm(window.T('pma_faceref_del_confirm'))) return;
   try {
-    await fetch('/api/personas/' + encodeURIComponent(pid) + '/face-ref', { method: 'DELETE' });
+    await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/face-ref', { method: 'DELETE' }, {timeoutMs: 60000});
     pmaFaceLoad();
   } catch (e) { /* 忽略，下次加载自纠 */ }
 }
@@ -2195,7 +2195,7 @@ async function promoteProfile(pid) {
   if (!pid) return;
   if (!confirm(window.Tf('psn_js_361', {pid: pid}))) return;
   try {
-    const r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/promote', { method: 'POST' });
+    const r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/promote', { method: 'POST' }, {timeoutMs: 60000});
     if (r.status === 403) { alert(window.T('psn_js_091')); return; }
     const d = await r.json();
     if (d.ok) {
@@ -2216,7 +2216,7 @@ async function syncToConfig() {
   st.textContent = window.T('psn_js_093'); st.className = 'tts-status';
   if (btn) btn.disabled = true;
   try {
-    const r = await fetch('/api/personas/sync-to-config', { method: 'POST' });
+    const r = await apiFetch('/api/personas/sync-to-config', { method: 'POST' }, {timeoutMs: 60000});
     if (r.status === 403) {
       st.textContent = window.T('psn_js_094'); st.className = 'tts-status err';
       return;
@@ -2278,8 +2278,8 @@ async function loadProfileList() {
   try {
     // P0 改版：头像索引与列表并行拉取（单请求批量，无 N+1；接口不存在时静默回落）
     const [r, fr] = await Promise.all([
-      fetch('/api/personas/profiles'),
-      fetch('/api/personas/face-refs').catch(function(){ return null; }),
+      apiFetch('/api/personas/profiles'),
+      apiFetch('/api/personas/face-refs').catch(function(){ return null; }),
     ]);
     _faceRefs = {};
     if (fr && fr.ok) {
@@ -2462,7 +2462,7 @@ function openNewProfile() {
 async function editProfile(pid) {
   var _prevPid = _editingProfileId;
   try {
-    const r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid));
+    const r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid));
     if (!r.ok) { _toast(window.T('psn_js_070') + r.status, 'err'); return; }
     const d = await r.json();
     const p = d.persona || {};
@@ -2564,9 +2564,9 @@ async function saveProfile() {
     }
   };
   try {
-    const r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid), {
+    const r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid), {
       method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload),
-    });
+    }, {timeoutMs: 60000});
     const d = await r.json();
     if (d.ok) {
       _toast(window.T('psn_js_140') + (payload.persona.name || pid) + window.T('psn_js_141'), 'ok');
@@ -2598,7 +2598,7 @@ async function deleteCurrentProfile() {
   var prof = _allProfiles.find(function(x){ return x.id === pid; });
   var name = (prof && prof.name) || pid;
   try {
-    const r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid), { method: 'DELETE' });
+    const r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid), { method: 'DELETE' }, {timeoutMs: 60000});
     const d = await r.json();
     if (d.ok) {
       if (_closeDrawer()) _editingProfileId = null;
@@ -2623,7 +2623,7 @@ function _toastDeletedUndo(pid, name) {
   btn.onclick = async function() {
     btn.disabled = true;
     try {
-      const r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/revert', { method: 'POST' });
+      const r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/revert', { method: 'POST' }, {timeoutMs: 60000});
       const d = await r.json().catch(function(){ return {}; });
       if (r.ok && d.ok !== false) {
         _toast(_fmt(window.T('psn_undo_restored'), {name: name}), 'ok');
@@ -2652,7 +2652,7 @@ async function undoProfile() {
   if (!confirm(window.T('psn_js_146'))) return;
   try {
     // 修复：原先调用不存在的 /undo（404 死按钮），改走真实的 /revert 端点
-    const r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/revert', { method: 'POST' });
+    const r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/revert', { method: 'POST' }, {timeoutMs: 60000});
     const d = await r.json();
     if (d.ok) { _toast(window.T('psn_js_147'), 'ok'); editProfile(pid); loadProfileList(); }
     else { _toast(window.T('psn_js_148') + (d.detail || ''), 'err'); }
@@ -2662,7 +2662,7 @@ async function undoProfile() {
 async function _checkUndoAvailable(pid) {
   try {
     // 修复：原先调用不存在的 /undo-available，改用 /history 的条数判断
-    const r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/history');
+    const r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/history');
     if (!r.ok) return;
     const d = await r.json();
     var btn = document.getElementById('pe-undo-btn');
@@ -2677,7 +2677,7 @@ async function _loadCanonicalBanner(pid) {
   try {
     // 修复：原先调用不存在的 /diff（每次开抽屉都 404 的死横幅），
     // 改走真实的 /diff-canonical 并适配其返回结构 {has_canonical, is_identical, diff:{added,removed,changed}}
-    const r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/diff-canonical');
+    const r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid) + '/diff-canonical');
     if (!r.ok) return;
     const d = await r.json();
     if (!d.has_canonical) return;
@@ -2814,7 +2814,7 @@ function _importFromJson() {
 // ── Auto-refresh ───────────────────────────────────────────────────
 async function _autoRefreshStatus() {
   try {
-    const r = await fetch('/api/personas/status');
+    const r = await apiFetch('/api/personas/status');
     if (!r.ok) return;
     const d = await r.json();
     if (d.last_changed_ts && d.last_changed_ts !== _lastStatusTs) {
@@ -2886,10 +2886,10 @@ async function _ppPick(profileId) {
   if (!ep) return;
   closePersonaPicker();
   try {
-    const r = await fetch(ep(ctx.accountId), {
+    const r = await apiFetch(ep(ctx.accountId), {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ profile_id: profileId })
-    });
+    }, {timeoutMs: 60000});
     const d = await r.json();
     if (r.ok && d.ok) {
       _toast(profileId ? (window.T('psn_js_162') + profileId) : window.T('psn_js_163'), 'ok');
@@ -3153,7 +3153,7 @@ async function _bulkDelete() {
   _bulkProgressStart(pids.length);
   for (var i = 0; i < pids.length; i++) {
     try {
-      var r = await fetch('/api/personas/profiles/' + encodeURIComponent(pids[i]), {method:'DELETE'});
+      var r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pids[i]), {method:'DELETE'}, {timeoutMs: 60000});
       var d = await r.json();
       if (d.ok) ok++; else fail++;
     } catch(e) { fail++; } finally { _bulkProgressTick(); }
@@ -3169,7 +3169,7 @@ async function _bulkExport() {
   _toast(window.T('psn_js_193'), 'ok');
   var personas = (await Promise.all(pids.map(async function(pid) {
     try {
-      var r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid));
+      var r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid));
       return r.ok ? ((await r.json()).persona || null) : null;
     } catch(e) { return null; }
   }))).filter(Boolean);
@@ -3235,7 +3235,7 @@ async function _bulkAddTag() {
   _toast(window.T('psn_js_197') + pids.length + window.T('psn_js_198'), 'ok');
   var results = await Promise.all(pids.map(async function(pid) {
     try {
-      var r1 = await fetch('/api/personas/profiles/' + encodeURIComponent(pid));
+      var r1 = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid));
       if (!r1.ok) return false;
       var data = await r1.json();
       var p = Object.assign({}, data.persona || {});
@@ -3243,10 +3243,10 @@ async function _bulkAddTag() {
       if (tags.indexOf(tag) >= 0) return true;
       tags.push(tag);
       p.tags = tags;
-      var r2 = await fetch('/api/personas/profiles/' + encodeURIComponent(pid), {
+      var r2 = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid), {
         method: 'PUT', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({persona: p})
-      });
+      }, {timeoutMs: 60000});
       var d2 = await r2.json();
       return !!d2.ok;
     } catch(e) { return false; }
@@ -3272,17 +3272,17 @@ async function _bulkRemoveTag() {
   var ok = 0, skip = 0, fail = 0;
   await Promise.all(pids.map(async function(pid) {
     try {
-      var r1 = await fetch('/api/personas/profiles/' + encodeURIComponent(pid));
+      var r1 = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid));
       if (!r1.ok) { fail++; return; }
       var data = await r1.json();
       var p = Object.assign({}, data.persona || {});
       var tags = (p.tags || []).slice();
       if (tags.indexOf(tag) < 0) { skip++; return; }
       p.tags = tags.filter(function(t){ return t !== tag; });
-      var r2 = await fetch('/api/personas/profiles/' + encodeURIComponent(pid), {
+      var r2 = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid), {
         method: 'PUT', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({persona: p})
-      });
+      }, {timeoutMs: 60000});
       if ((await r2.json()).ok) ok++; else fail++;
     } catch(e) { fail++; }
   }));
@@ -3434,7 +3434,7 @@ function _parseImport() {
       + '<td style="font-family:monospace;font-size:.7rem">' + (p.id || '—') + '</td>'
       + '<td>' + (p.name || p.id || '—') + '</td>'
       + '<td style="color:var(--t2)">' + (p.role || '') + '</td>'
-      + '<td style="font-size:.68rem;color:' + (conflict ? '#d97706' : '#10b981') + '">'
+      + '<td style="font-size:.68rem;color:' + (conflict ? 'var(--th-ink-amber6,#d97706)' : 'var(--th-ink-emerald5,#10b981)') + '">'
       + (conflict ? window.T('psn_js_214') : window.T('psn_js_215')) + '</td></tr>';
   }).join('');
   if (pv) pv.style.display = 'block';
@@ -3454,10 +3454,10 @@ async function _executeImport() {
     var p = _importData[i];
     var pid = p.id;
     try {
-      var r = await fetch('/api/personas/profiles/' + encodeURIComponent(pid), {
+      var r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid), {
         method: 'PUT', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({persona: p})
-      });
+      }, {timeoutMs: 60000});
       var d = await r.json();
       if (d.ok) {
         ok++;
@@ -3497,13 +3497,13 @@ async function _switchBinding(sel) {
   var origVal = sel.dataset.curr;
   sel.disabled = true;
   try {
-    var r1 = await fetch('/api/personas/profiles/' + encodeURIComponent(newPid));
+    var r1 = await apiFetch('/api/personas/profiles/' + encodeURIComponent(newPid));
     if (!r1.ok) throw new Error('profile load ' + r1.status);
     var d1 = await r1.json();
-    var r2 = await fetch('/api/persona/bind', {
+    var r2 = await apiFetch('/api/persona/bind', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({chat_id: cid, persona: {id: newPid, name: (d1.persona||{}).name || newPid}})
-    });
+    }, {timeoutMs: 60000});
     var d2 = await r2.json();
     if (!d2.ok) throw new Error('bind failed');
     _toast((cid.length>18?cid.slice(0,18)+'…':cid) + ' → ' + ((d1.persona||{}).name || newPid), 'ok');
@@ -3584,17 +3584,17 @@ async function _bulkSwitchPlatform() {
   var confirmBtn = document.querySelector('#bulk-switch-toolbar .btn-primary');
   if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = window.T('psn_js_034'); }
   try {
-    var r1 = await fetch('/api/personas/profiles/' + encodeURIComponent(newPid));
+    var r1 = await apiFetch('/api/personas/profiles/' + encodeURIComponent(newPid));
     if (!r1.ok) throw new Error('profile ' + r1.status);
     var d1 = await r1.json();
     var personaRef = {id: newPid, name: (d1.persona || {}).name || newPid};
     var ok = 0, fail = 0;
     await Promise.all(matchingCids.map(async function(cid) {
       try {
-        var r = await fetch('/api/persona/bind', {
+        var r = await apiFetch('/api/persona/bind', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({chat_id: cid, persona: personaRef})
-        });
+        }, {timeoutMs: 60000});
         if ((await r.json()).ok) ok++; else fail++;
       } catch(e) { fail++; }
     }));
@@ -3636,7 +3636,7 @@ function _navigateCards(dir) {
 function _deleteProfileById(pid) {
   if (!pid) return;
   if (!confirm(window.T('psn_js_142') + pid + '」？')) return;
-  fetch('/api/personas/profiles/' + encodeURIComponent(pid), { method: 'DELETE' })
+  apiFetch('/api/personas/profiles/' + encodeURIComponent(pid), { method: 'DELETE' }, {timeoutMs: 60000})
     .then(function(r){ return r.json(); })
     .then(function(d){ if (d.ok) { _toast(window.T('psn_js_144') + pid, 'ok'); _focusedProfileId = null; loadProfileList(); } })
     .catch(function(e){ _toast(window.T('psn_js_145') + e, 'err'); });
@@ -3766,15 +3766,15 @@ function _iteAdd(tag) {
 async function _iteSave() {
   if (!_iteEditPid) return;
   try {
-    var r = await fetch('/api/personas/profiles/' + encodeURIComponent(_iteEditPid));
+    var r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(_iteEditPid));
     if (!r.ok) return;
     var d = await r.json();
     var prof = d.persona || {};
     prof.tags = _iteEditTags.slice();
-    var r2 = await fetch('/api/personas/profiles/' + encodeURIComponent(_iteEditPid), {
+    var r2 = await apiFetch('/api/personas/profiles/' + encodeURIComponent(_iteEditPid), {
       method: 'PUT', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({persona: prof})
-    });
+    }, {timeoutMs: 60000});
     if (r2.ok) {
       var idx = _allProfiles.findIndex(function(p){ return p.id === _iteEditPid; });
       if (idx >= 0) { _allProfiles[idx].tags = _iteEditTags.slice(); _applyFilter(); renderTagCloud(_allProfiles); }
@@ -3833,17 +3833,17 @@ async function _applyBulkTagEdit() {
     var ok = 0, fail = 0; _bulkProgressStart(pids.length);
     await Promise.all(pids.map(async function(pid) {
       try {
-        var r1 = await fetch('/api/personas/profiles/' + encodeURIComponent(pid));
+        var r1 = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid));
         if (!r1.ok) { fail++; return; }
         var data = await r1.json();
         var p = Object.assign({}, data.persona || {});
         var tags = (p.tags || []).slice();
         if (tags.indexOf(tag) >= 0) { ok++; return; }
         tags.push(tag); p.tags = tags;
-        var r2 = await fetch('/api/personas/profiles/' + encodeURIComponent(pid), {
+        var r2 = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid), {
           method: 'PUT', headers: {'Content-Type':'application/json'},
           body: JSON.stringify({persona: p})
-        });
+        }, {timeoutMs: 60000});
         if ((await r2.json()).ok) ok++; else fail++;
       } catch(e) { fail++; } finally { _bulkProgressTick(); }
     }));
@@ -3858,15 +3858,15 @@ async function _applyBulkTagEdit() {
     var selected = _bulkTagSelected; // capture
     await Promise.all(pids.map(async function(pid) {
       try {
-        var r1 = await fetch('/api/personas/profiles/' + encodeURIComponent(pid));
+        var r1 = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid));
         if (!r1.ok) { fail++; return; }
         var data = await r1.json();
         var p = Object.assign({}, data.persona || {});
         p.tags = (p.tags || []).filter(function(t){ return !selected.has(t); });
-        var r2 = await fetch('/api/personas/profiles/' + encodeURIComponent(pid), {
+        var r2 = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid), {
           method: 'PUT', headers: {'Content-Type':'application/json'},
           body: JSON.stringify({persona: p})
-        });
+        }, {timeoutMs: 60000});
         if ((await r2.json()).ok) ok++; else fail++;
       } catch(e) { fail++; } finally { _bulkProgressTick(); }
     }));
@@ -3975,7 +3975,7 @@ function _pctxAct(action, pid) {
     if (!confirm(window.T('psn_js_142') + pid + '」？')) return;
     var _prof = _allProfiles.find(function(x){ return x.id === pid; });
     var _nm = (_prof && _prof.name) || pid;
-    fetch('/api/personas/profiles/' + encodeURIComponent(pid), {method:'DELETE'})
+    apiFetch('/api/personas/profiles/' + encodeURIComponent(pid), {method:'DELETE'}, {timeoutMs: 60000})
       .then(function(r){ return r.json(); })
       .then(function(d){ if (d.ok) { if (_focusedProfileId === pid) _focusedProfileId = null; loadProfileList(); refreshStatus(); _toastDeletedUndo(pid, _nm); } })
       .catch(function(e){ _toast(window.T('psn_js_145') + e, 'err'); });
@@ -4218,7 +4218,7 @@ var _grDirty = false;
 var _grOrigJson = '';
 
 function grLoadRules() {
-  fetch('/api/persona/global-rules').then(r => r.json()).then(d => {
+  apiFetch('/api/persona/global-rules').then(r => r.json()).then(d => {
     if (!d.ok) { _grStatus(window.T('psn_js_040'), true); return; }
     _grData = d.rules || {};
     _grOrigJson = JSON.stringify(_grData);
@@ -4272,11 +4272,11 @@ function grSaveRules() {
   _grCollectFromUI();
   var btn = document.getElementById('gr-save-btn');
   if (btn) { btn.disabled = true; btn.textContent = window.T('psn_js_061'); }
-  fetch('/api/persona/global-rules', {
+  apiFetch('/api/persona/global-rules', {
     method: 'PUT',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ rules: _grData })
-  }).then(r => r.json()).then(d => {
+  }, {timeoutMs: 60000}).then(r => r.json()).then(d => {
     if (btn) { btn.disabled = false; btn.textContent = window.T('psn_js_297'); }
     if (d.ok) {
       _grOrigJson = JSON.stringify(_grData);
@@ -4342,7 +4342,7 @@ function _grMove(idx, dir) {
 
 // P2-c: backup/restore
 function _grLoadBackups() {
-  fetch('/api/persona/global-rules/backups').then(r => r.json()).then(d => {
+  apiFetch('/api/persona/global-rules/backups').then(r => r.json()).then(d => {
     var bar = document.getElementById('gr-backup-bar');
     var pills = document.getElementById('gr-backup-pills');
     if (!bar || !pills) return;
@@ -4359,7 +4359,7 @@ function _grLoadBackups() {
 
 function _grRestore(slot) {
   if (!confirm(window.T('psn_js_300') + slot + window.T('psn_js_301'))) return;
-  fetch('/api/persona/global-rules/restore/' + slot, { method: 'POST' })
+  apiFetch('/api/persona/global-rules/restore/' + slot, { method: 'POST' }, {timeoutMs: 60000})
     .then(r => r.json()).then(d => {
       if (d.ok) {
         _grData = d.rules || {};
@@ -4631,11 +4631,11 @@ function _grRefreshPreview() {
   if (box) box.textContent = window.T('psn_js_083');
   var platSel = document.getElementById('gr-preview-plat');
   var plat = platSel ? platSel.value : '';
-  fetch('/api/persona/global-rules/preview', {
+  apiFetch('/api/persona/global-rules/preview', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ rules: _grData, platform: plat })
-  }).then(function(r) { return r.json(); }).then(function(d) {
+  }, {timeoutMs: 60000}).then(function(r) { return r.json(); }).then(function(d) {
     if (d.ok && box) {
       box.textContent = d.text || window.T('psn_js_325');
       if (chars) chars.textContent = (d.text || '').length + window.T('psn_js_326');
@@ -4726,7 +4726,7 @@ function _grImport(ev) {
 
 // ── P4-c: Audit timeline ────────────────────────────────────────────────────
 function _grLoadAudit() {
-  fetch('/api/audit?action=global_rules&limit=10').then(function(r) { return r.json(); }).then(function(entries) {
+  apiFetch('/api/audit?action=global_rules&limit=10').then(function(r) { return r.json(); }).then(function(entries) {
     var wrap = document.getElementById('gr-audit-list');
     if (!wrap) return;
     if (!entries || !entries.length) { wrap.innerHTML = window.T('psn_js_341'); return; }

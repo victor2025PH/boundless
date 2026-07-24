@@ -20,7 +20,7 @@
 </div>
 
 {% if ui_mode == 'simple' %}
-<div class="simple-guide" style="background:linear-gradient(135deg,rgba(139,92,246,.06),rgba(91,124,246,.06));border:1px solid rgba(139,92,246,.15);border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem">
+<div class="simple-guide" style="background:linear-gradient(135deg,var(--th-bg-vio06,rgba(139,92,246,.06)),var(--th-bg-brand06,rgba(91,124,246,.06)));border:1px solid var(--th-bd-vio15,rgba(139,92,246,.15));border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem">
   <span style="font-size:1.1rem;flex-shrink:0;margin-top:.1rem">🧠</span>
   <div>
     <strong style="color:var(--t);font-size:.85rem">{{ (i18n or {}).get('cases_guide_title', "操作说明") }}</strong>
@@ -78,7 +78,7 @@
   </div>
 
   <!-- A2: Batch action bar -->
-  <div id="batch-bar" style="display:none;padding:.5rem 1rem;background:rgba(91,124,246,.06);border-bottom:1px solid rgba(91,124,246,.18);font-size:.82rem;align-items:center;gap:.6rem">
+  <div id="batch-bar" style="display:none;padding:.5rem 1rem;background:var(--th-bg-brand06,rgba(91,124,246,.06));border-bottom:1px solid var(--th-bd-brand18,rgba(91,124,246,.18));font-size:.82rem;align-items:center;gap:.6rem">
     <input type="checkbox" id="batch-all" onchange="toggleAllChecks(this.checked)" style="margin-right:.3rem">
     <span id="batch-count">0</span> {{ (i18n or {}).get('lr_s019', "条已选") }}
     <button class="btn btn-sm btn-green" onclick="batchAction('approve')" style="margin-left:.5rem">✔ {{ (i18n or {}).get('lr_s020', "批量通过") }}</button>
@@ -91,7 +91,7 @@
 </div>
 
 <!-- Edit Modal -->
-<div id="edit-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.5);backdrop-filter:blur(4px)">
+<div id="edit-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:var(--th-bg-scrim50,rgba(0,0,0,.5));backdrop-filter:blur(4px)">
   <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(600px,90vw);max-height:80vh;overflow-y:auto;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--s2);padding:1.5rem">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
       <h3 style="margin:0;font-size:1.1rem">{{ (i18n or {}).get('lr_s021', "编辑草稿") }}</h3>
@@ -179,7 +179,7 @@ let currentFilter='pending';
 
 async function loadStats(){
   try{
-    const r=await fetch('/api/learner/stats');
+    const r=await apiFetch('/api/learner/stats');
     const d=await r.json();
     document.getElementById('stat-pending').textContent=d.pending||0;
     document.getElementById('stat-approved').textContent=d.approved||0;
@@ -197,7 +197,7 @@ async function loadDrafts(){
   const c=document.getElementById('drafts-container');
   c.innerHTML='<div style="padding:2rem;text-align:center;color:var(--t3)">'+window.T('msg_js_1047')+'...</div>';
   try{
-    const r=await fetch('/api/learner/drafts?status='+currentFilter+'&sort='+currentSort);
+    const r=await apiFetch('/api/learner/drafts?status='+currentFilter+'&sort='+currentSort);
     const d=await r.json();
     renderDrafts(d.drafts||[]);
   }catch(e){
@@ -265,7 +265,7 @@ async function runLearning(){
   const btn=document.getElementById('btn-run');
   btn.disabled=true;btn.textContent=window.T('lr_js012')+'...';
   try{
-    const r=await fetch('/api/learner/run',{method:'POST'});
+    const r=await apiFetch('/api/learner/run',{method:'POST'}, {timeoutMs: 60000});
     const d=await r.json();
     if(typeof showToast==='function')showToast(window.Tf('lr_learn_done', {c: d.collected, g: d.generated, s: d.saved}),'success');
     loadDrafts();
@@ -279,7 +279,7 @@ async function runLearning(){
 async function recheckDup(id,btn){
   if(btn){btn.disabled=true;btn.textContent=window.T('tg_s121')+'...'}
   try{
-    const r=await fetch('/api/learner/drafts/'+id+'/recheck-dup',{method:'POST'});
+    const r=await apiFetch('/api/learner/drafts/'+id+'/recheck-dup',{method:'POST'}, {timeoutMs: 60000});
     const d=await r.json();
     if(d.dup){
       if(typeof showToast==='function')showToast(window.T('lr_js014')+': '+d.dup.entry_title+' ('+Math.round(d.dup.score*100)+'%)','warning');
@@ -296,7 +296,7 @@ async function approveDraft(id){
   var msg=hasDup?'⚠ '+window.T('lr_js016'):window.T('lr_js017');
   if(!confirm(msg))return;
   try{
-    await fetch('/api/learner/drafts/'+id+'/approve',{method:'POST'});
+    await apiFetch('/api/learner/drafts/'+id+'/approve',{method:'POST'}, {timeoutMs: 60000});
     if(typeof showToast==='function')showToast(window.T('lr_js018'),'success');
     loadDrafts();
   }catch(e){if(typeof showToast==='function')showToast(window.T('ov_js_op_fail'),'error')}
@@ -304,7 +304,7 @@ async function approveDraft(id){
 
 async function rejectDraft(id){
   try{
-    await fetch('/api/learner/drafts/'+id+'/reject',{method:'POST'});
+    await apiFetch('/api/learner/drafts/'+id+'/reject',{method:'POST'}, {timeoutMs: 60000});
     if(typeof showToast==='function')showToast(window.T('draft.tab.rejected'),'info');
     loadDrafts();
   }catch(e){}
@@ -313,7 +313,7 @@ async function rejectDraft(id){
 async function approveAll(){
   if(!confirm(window.T('lr_js019')))return;
   try{
-    const r=await fetch('/api/learner/drafts/approve-all',{method:'POST'});
+    const r=await apiFetch('/api/learner/drafts/approve-all',{method:'POST'}, {timeoutMs: 60000});
     const d=await r.json();
     if(typeof showToast==='function')showToast(window.Tf('lr_batch_approved', {n: d.approved}),'success');
     loadDrafts();
@@ -321,7 +321,7 @@ async function approveAll(){
 }
 
 function editDraft(id){
-  fetch('/api/learner/drafts/'+id).then(r=>r.json()).then(d=>{
+  apiFetch('/api/learner/drafts/'+id).then(r=>r.json()).then(d=>{
     document.getElementById('edit-id').value=d.id;
     document.getElementById('edit-query').textContent=d.query;
     document.getElementById('edit-category').value=d.category||'';
@@ -343,7 +343,7 @@ async function saveDraft(){
     example_reply:document.getElementById('edit-reply').value,
   };
   try{
-    await fetch('/api/learner/drafts/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    await apiFetch('/api/learner/drafts/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}, {timeoutMs: 60000});
     if(typeof showToast==='function')showToast(window.T('wa_js_053'),'success');
     closeModal();
     loadDrafts();
@@ -377,10 +377,10 @@ async function batchAction(action){
   const label=action==='approve'?window.T('lr_s008'):window.T('rpa_js_act_reject');
   if(!confirm(window.Tf('lr_confirm_batch', {n: ids.length, label: label})))return;
   try{
-    const r=await fetch('/api/learner/drafts/batch-action',{
+    const r=await apiFetch('/api/learner/drafts/batch-action',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({ids,action})
-    });
+    }, {timeoutMs: 60000});
     const d=await r.json();
     if(typeof showToast==='function')showToast(window.Tf('lr_batch_result', {label: label, a: d.approved||0, r: d.rejected||0}),'success');
     loadDrafts();

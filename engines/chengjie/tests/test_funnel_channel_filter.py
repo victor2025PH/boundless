@@ -276,9 +276,9 @@ class TestFunnelPartialChipUI:
 
 # (template, expected_default_scope)
 EXPECTED_SCOPES = [
-    ("line_rpa.html",     "'line'"),
-    ("telegram.html",     "'telegram'"),
-    ("whatsapp_rpa.html", "'all'"),   # WhatsApp 不接入 contacts → 看 all
+    ("_channel_body_line.html",     "'line'"),
+    ("_channel_body_telegram.html",     "'telegram'"),
+    ("_channel_body_whatsapp.html", "'all'"),   # WhatsApp 不接入 contacts → 看 all
     ("rpa_overview.html", "'all'"),   # overview 就是跨平台总览
 ]
 
@@ -307,7 +307,7 @@ def test_messenger_does_not_use_shared_funnel():
     由 test_rpa_shared_funnel.py 锁定，这里只做"不重复定义 defaultScope"
     的二次保险。
     """
-    text = (TEMPLATES_DIR / "messenger_rpa.html").read_text(encoding="utf-8")
+    text = (TEMPLATES_DIR / "_channel_body_messenger.html").read_text(encoding="utf-8")
     assert "rpa.funnel.init" not in text, (
         "Messenger 不应该调用共享 funnel init（它有自己的 /api/messenger-rpa/funnel）"
     )

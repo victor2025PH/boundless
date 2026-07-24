@@ -51,7 +51,7 @@
   function chCls(c){return ({line:'ch-line',whatsapp:'ch-whatsapp',messenger:'ch-messenger',telegram:'ch-telegram',web:'ch-web'})[c]||'ch-default';}
   function fmtTs(ts){ if(!ts) return window.T('tk_js_001'); return window.wsFmtDate(ts)+' '+window.wsFmtTime(ts,{hour:'2-digit',minute:'2-digit'}); }
   function loadAgents(){
-    fetch('/api/workspace/presence').then(function(r){return r.json();}).then(function(d){
+    apiFetch('/api/workspace/presence').then(function(r){return r.json();}).then(function(d){
       agents=(d.agents||[]).map(function(a){return {id:a.agent_id||a.id, name:a.display_name||a.agent_id||a.id};});
     }).catch(function(){});
   }
@@ -83,25 +83,25 @@
     load:function(){
       document.getElementById('tk-list').innerHTML='<span class="tk-load">'+window.T('dash.loading')+'</span>';
       var scope=document.getElementById('tk-scope').value, due=document.getElementById('tk-due').value;
-      fetch('/api/workspace/my-tasks?scope='+scope+'&due='+due).then(function(r){return r.json();}).then(function(d){
+      apiFetch('/api/workspace/my-tasks?scope='+scope+'&due='+due).then(function(r){return r.json();}).then(function(d){
         if(!d.ok){ document.getElementById('tk-list').innerHTML='<span class="tk-load">'+window.T('tk_js_004')+'</span>'; return; }
         document.getElementById('tk-count').textContent=window.Tf('tk_tf_count',{n:(d.tasks||[]).length,mine:d.due_tasks_mine||0,all:d.due_tasks||0});
         render(d.tasks||[]);
       }).catch(function(){ document.getElementById('tk-list').innerHTML='<span class="tk-fail">'+window.T('rpa_load_failed')+'</span>'; });
     },
     done:function(tid){
-      fetch('/api/workspace/follow-up/'+encodeURIComponent(tid)+'/done',{method:'POST'})
+      apiFetch('/api/workspace/follow-up/'+encodeURIComponent(tid)+'/done',{method:'POST'}, {timeoutMs: 60000})
         .then(function(r){return r.json();}).then(function(){ TK.load(); }).catch(function(){ alert(window.T('draft.net_err')); });
     },
     snooze:function(tid, days){
-      fetch('/api/workspace/follow-up/'+encodeURIComponent(tid)+'/snooze',{method:'POST',
-        headers:{'Content-Type':'application/json'}, body:JSON.stringify({days:days})})
+      apiFetch('/api/workspace/follow-up/'+encodeURIComponent(tid)+'/snooze',{method:'POST',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify({days:days})}, {timeoutMs: 60000})
         .then(function(r){return r.json();}).then(function(){ TK.load(); }).catch(function(){ alert(window.T('draft.net_err')); });
     },
     assign:function(tid, who){
       if(!who) return;
-      fetch('/api/workspace/follow-up/'+encodeURIComponent(tid)+'/assign',{method:'POST',
-        headers:{'Content-Type':'application/json'}, body:JSON.stringify({assignee:who})})
+      apiFetch('/api/workspace/follow-up/'+encodeURIComponent(tid)+'/assign',{method:'POST',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify({assignee:who})}, {timeoutMs: 60000})
         .then(function(r){return r.json();}).then(function(d){ if(d.ok) TK.load(); else alert(window.T('c3_js016')); }).catch(function(){ alert(window.T('draft.net_err')); });
     }
   };

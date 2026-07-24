@@ -137,7 +137,7 @@
 {% block content %}
 
 {% if ui_mode == 'simple' %}
-<div style="background:linear-gradient(135deg,rgba(245,158,11,.08),rgba(91,124,246,.06));border:1px solid rgba(245,158,11,.2);border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:center;gap:.6rem">
+<div style="background:linear-gradient(135deg,var(--th-bg-amber08,rgba(245,158,11,.08)),var(--th-bg-brand06,rgba(91,124,246,.06)));border:1px solid var(--th-bd-amber20,rgba(245,158,11,.2));border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:center;gap:.6rem">
   <span style="font-size:1.1rem;flex-shrink:0">📊</span>
   <div><strong style="color:var(--t)">{{ (i18n or {}).get('sa_s003', "高级分析") }}</strong> — {{ (i18n or {}).get('sa_s004', "策略效果追踪供管理员调优使用。") }}<a href="/cases" style="color:var(--p);font-weight:600">{{ (i18n or {}).get('logs_back_cases', "返回案例") }}</a></div>
 </div>
@@ -446,7 +446,7 @@
   var tctx=document.getElementById('trend-chart');
   if(!tctx||!sids.length)return;
   var hours={{ hours }};
-  Promise.all(sids.slice(0,4).map(function(sid){return fetch('/api/strategy-analytics/'+sid+'/hourly?hours='+hours).then(function(r){return r.json()})})).then(function(results){
+  Promise.all(sids.slice(0,4).map(function(sid){return apiFetch('/api/strategy-analytics/'+sid+'/hourly?hours='+hours).then(function(r){return r.json()})})).then(function(results){
     var allLabels=[];
     var datasets=results.map(function(res,i){
       var data=res.data||[];
@@ -466,13 +466,13 @@ async function doPurge(){
 }
 async function toggleAP(){
   const on={% if autopilot.enabled|default(false) %}true{% else %}false{% endif %};
-  const r=await fetch('/api/autopilot',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!on})});
+  const r=await apiFetch('/api/autopilot',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!on})}, {timeoutMs: 60000});
   if((await r.json()).ok){showToast('Auto-Pilot '+(on?window.T('sa_js006'):window.T('sa_js007')),'ok');setTimeout(()=>location.reload(),800)}
   else showToast(window.T('ov_js_op_fail'),'err');
 }
 async function applySuggestion(sid,param,val){
   if(!await confirmAction(window.T('sa_js008')+': '+sid+'.'+param+' → '+val+'?',{okText:window.T('sa_js012'),danger:false}))return;
-  const r=await fetch('/api/apply-param-suggestion',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({strategy_id:sid,param:param,value:val})});
+  const r=await apiFetch('/api/apply-param-suggestion',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({strategy_id:sid,param:param,value:val})}, {timeoutMs: 60000});
   const d=await r.json();
   if(d.ok){showToast(window.T('sa_js013')+': '+sid+'.'+param+' = '+val,'ok');setTimeout(()=>location.reload(),800)}
   else showToast(window.T('sa_js009')+': '+(d.detail||''),'err');
@@ -490,7 +490,7 @@ async function toggleCompare(){
   grid.innerHTML='<div style="text-align:center;color:var(--t3);padding:1rem">'+window.T('sa_js010')+'...</div>';
   try{
     var hours=document.getElementById('sa-hours').value;
-    var r=await fetch('/api/strategy-analytics/compare?hours='+hours);
+    var r=await apiFetch('/api/strategy-analytics/compare?hours='+hours);
     var d=await r.json();
     var cur=d.current||[],prev=d.previous||[],ch=d.changes||{};
     if(!cur.length){grid.innerHTML='<div style="color:var(--t3);padding:1rem">'+window.T('sa_js011')+'</div>';return}

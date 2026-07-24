@@ -145,19 +145,25 @@ _ADMIN_SEALED_PAGES = {"cases.html": 0, "logs.html": 0, "analytics.html": 0, "pe
                        "rpa_overview.html": 0,
                        # ③-S9b：Messenger RPA 运营台（静态 468 处 → Jinja get；JS 1102 唯一裸串 →
                        # window.T/Tf，msg_s*/msg_js* 键；CSS ::before content + 日期解析正则 \u53f7 收口）。
-                       "messenger_rpa.html": 0,
+                       # 渠道中心融合：正文迁 _channel_body_messenger.html（cap 沿用）。
+                       "_channel_body_messenger.html": 0,
                        # ③-S9c：WhatsApp RPA 运营台（静态 221 处 → Jinja get + 158 wa_s* 键；JS 227 处 →
                        # window.T + 13 window.Tf，109 wa_js*/wa_js_p* 键；余 118 处按 zh 复用既有键，
                        # 全站复用率 52%——用 scripts/i18n_htmlconv + i18n_jsconv 两把可复用扫描器收口）。
-                       "whatsapp_rpa.html": 0,
+                       # 渠道中心融合：正文迁 _channel_body_whatsapp.html（cap 沿用）。
+                       "_channel_body_whatsapp.html": 0,
                        # ③-S9d：LINE RPA 运营台（静态 172 处 → Jinja get + 70 ln_s* 键；JS 160 处 →
                        # window.T + 7 window.Tf，81 ln_js*/ln_js_p* 键；余 142 处按 zh 复用既有键，
                        # 静/动复用率 60%/53%——同两把扫描器收口；title site_name 默认复用 msg_s444）。
-                       "line_rpa.html": 0,
+                       # 渠道中心融合：正文迁 _channel_body_line.html（cap 沿用）。
+                       "_channel_body_line.html": 0,
                        # ③-S9e：Telegram 原生（mtproto）运营台（静态 161 处 → Jinja get + 130 tg_s* 键；
                        # JS 70 处 → window.T + 8 window.Tf，43 tg_js*/tg_js_p* 键 + 单/双声道 2 键；
                        # 基线复用仅 21%（原生 console 术语独立）；日期解析正则内 CJK(小時分秒)→\u 转义收口）。
-                       "telegram.html": 0,
+                       # 渠道中心融合：正文迁 _channel_body_telegram.html（cap 沿用）。
+                       "_channel_body_telegram.html": 0,
+                       # 渠道中心壳页（工作台壳 + 渠道 tab + 变量桥；正文见上四个 partial）。
+                       "workspace_channels.html": 0,
                        # ③-S9f：落地首屏 Dashboard（静态 104 处 → Jinja get + 51 db_s* 键；JS 167 处（5 个
                        # 分散 <script>）→ window.T + 4 window.Tf，102 db_js*/db_js_p* 键；title {% if %}双态
                        # 分支 + 成功判定逻辑 '成功' in msg → \u 转义、status 默认值复用 status_running；
@@ -392,8 +398,13 @@ def test_admin_content_pages_no_untagged_regression(name, cap):
 #    键由 key-def 门禁保证存在，故无需中文兜底。cases/logs/analytics 走 T(key,'中文默认') 防御式
 #    默认值写法（属另一种可接受约定），不在本门禁；如日后亦改全键化可并入。
 _SCRIPT_CJK_ZERO_PAGES = ("personas.html", "_rpa_shared_funnel.html", "_rpa_shared_scripts.html",
-                          "rpa_overview.html", "messenger_rpa.html", "whatsapp_rpa.html",
-                          "line_rpa.html", "telegram.html", "dashboard.html", "settings.html",
+                          "rpa_overview.html",
+                          # 渠道中心融合：四渠道正文迁 _channel_body_*.html（门禁语义沿用），
+                          # 壳页 workspace_channels.html 一并纳管。
+                          "_channel_body_messenger.html", "_channel_body_whatsapp.html",
+                          "_channel_body_line.html", "_channel_body_telegram.html",
+                          "workspace_channels.html",
+                          "dashboard.html", "settings.html",
                           "knowledge.html",
                           # ③-S9i：坐席绩效看板（工作台家族首页）JS 层零裸 CJK（ap_js*/ap_js_p* 键）。
                           "agent_perf.html",
@@ -852,21 +863,17 @@ SEALED_PAGES = (
     # rpa_overview.html（③-S9a-2）：标题/检索/KPI/意图字典/设备管理/统计/SSE 全量接 i18n
     # （静态 Jinja get + JS window.T/Tf，ov_*/ov_js_* 键）。正文无 ui_mode 分支，一态即可。
     ("rpa_overview.html", {"ui_mode": "full"}),
-    # messenger_rpa.html（③-S9b）：Hero/KPI/六大 tab（总览/线索/人设/账号/审批/数据）/策略配置/
-    # 应急停发/设备抽屉/人设编辑 modal 全量接 i18n（静态 Jinja get + JS window.T/Tf，msg_s*/msg_js* 键）。
-    # 正文无 ui_mode 分支，一态即可。
-    ("messenger_rpa.html", {"ui_mode": "full"}),
-    # whatsapp_rpa.html（③-S9c）：Hero/KPI/五大 tab（对话/待审/模板分析/配置/运维）/策略轮换/语音·媒体/
-    # 表情控制/设备抽屉/语言锁定 全量接 i18n（静态 Jinja get + JS window.T/Tf，wa_s*/wa_js* 键）。
-    # 正文无 ui_mode 分支，一态即可。
-    ("whatsapp_rpa.html", {"ui_mode": "full"}),
-    # line_rpa.html（③-S9d）：Hero/KPI/会话流/通知栏对账/时间轴/审计/审批/节奏与服务配置/语言锁定
-    # 全量接 i18n（静态 Jinja get + JS window.T/Tf，ln_s*/ln_js* 键）。正文无 ui_mode 分支，一态即可。
-    ("line_rpa.html", {"ui_mode": "full"}),
-    # telegram.html（③-S9e）：Telegram 原生运营台——场景预设/消息处理/语音识别(ASR)/语音回复(TTS)/
-    # 声音克隆/Edge TTS 声线/账号状态/配置摘要/版本快照 全量接 i18n（静态 Jinja get + JS window.T/Tf，
-    # tg_s*/tg_js* 键）。正文无 ui_mode 分支，一态即可。
-    ("telegram.html", {"ui_mode": "full"}),
+    # 渠道中心（渠道融合）：四渠道正文 partial 装进工作台壳渲染（壳 chrome + 原页正文
+    # 一次覆盖；原 messenger_rpa/whatsapp_rpa/line_rpa/telegram 四页渲染门禁语义不变，
+    # 仅渲染入口从旧独立页换成 workspace_channels.html?channel=*）。
+    ("workspace_channels.html", dict(ui_mode="full", user_name="admin",
+                                     user_display_name="Admin", channel="messenger")),
+    ("workspace_channels.html", dict(ui_mode="full", user_name="admin",
+                                     user_display_name="Admin", channel="whatsapp")),
+    ("workspace_channels.html", dict(ui_mode="full", user_name="admin",
+                                     user_display_name="Admin", channel="line")),
+    ("workspace_channels.html", dict(ui_mode="full", user_name="admin",
+                                     user_display_name="Admin", channel="telegram")),
     # dashboard.html（③-S9f）：落地首屏——KPI 卡/运维可靠性/系统告警/快捷入口/实时性能/待审话术/
     # 主动消息质量/触发器决策/知识库状态/回复质量 全量接 i18n（静态 Jinja get + JS window.T/Tf，
     # db_s*/db_js* 键）。title/page_title 有 ui_mode 双态分支 → 两态都渲染验证。

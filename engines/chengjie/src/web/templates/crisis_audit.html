@@ -122,7 +122,7 @@ async function caLoad() {
     const q = new URLSearchParams({ limit: String(limit) });
     if (prefix) q.set('prefix', prefix);
     if (onlyUnhandled) q.set('only_unhandled', 'true');
-    const res = await fetch('/api/crisis-events?' + q.toString());
+    const res = await apiFetch('/api/crisis-events?' + q.toString());
     if (!res.ok) { st.textContent = window.T('ln_js_036')+' ' + res.status; return; }
     const d = await res.json();
     const items = d.items || [];
@@ -192,11 +192,11 @@ async function caConfirmHandle() {
   const note = document.getElementById('ca-modal-note').value.trim();
   btn.disabled = true;
   try {
-    const res = await fetch('/api/crisis-events/' + _caPendingId + '/handle', {
+    const res = await apiFetch('/api/crisis-events/' + _caPendingId + '/handle', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ note: note })
-    });
+    }, {timeoutMs: 60000});
     if (!res.ok) { alert(window.T('ca_js005')+' ' + res.status); return; }
     caCloseModal();
     caLoad();

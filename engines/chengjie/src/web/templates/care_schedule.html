@@ -100,7 +100,7 @@ async function csLoad(){
   try{
     const q=new URLSearchParams({limit:String(limit)});
     if(status)q.set('status',status);
-    const res=await fetch('/api/care/schedule?'+q.toString());
+    const res=await apiFetch('/api/care/schedule?'+q.toString());
     if(!res.ok){sl.textContent=window.T('ln_js_036')+' '+res.status;return;}
     const d=await res.json();
     const items=d.items||[];
@@ -144,7 +144,7 @@ async function csAdd(){
     due_in_hours:parseFloat(document.getElementById('cs-a-hours').value||'24')
   };
   try{
-    const res=await fetch('/api/care/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const res=await apiFetch('/api/care/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}, {timeoutMs: 60000});
     const d=await res.json();
     if(!d.ok){alert(window.T('c3_js014')+(d.message||d.reason));return;}
     document.getElementById('cs-a-topic').value='';
@@ -155,7 +155,7 @@ async function csAdd(){
 async function csSendNow(id){
   if(!confirm(window.T('cs_js003')))return;
   try{
-    const res=await fetch('/api/care/schedule/'+id+'/send-now',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const res=await apiFetch('/api/care/schedule/'+id+'/send-now',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000});
     const d=await res.json();
     if(!d.ok){alert(window.T('ov_js_op_fail_e')+(d.message||d.reason));return;}
     csLoad();
@@ -164,7 +164,7 @@ async function csSendNow(id){
 async function csCancel(id){
   if(!confirm(window.T('cs_js004')))return;
   try{
-    const res=await fetch('/api/care/schedule/'+id+'/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const res=await apiFetch('/api/care/schedule/'+id+'/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000});
     const d=await res.json();
     if(!d.ok){alert(window.T('cs_js005')+(d.message||d.reason));return;}
     csLoad();

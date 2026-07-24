@@ -1,12 +1,14 @@
 <!DOCTYPE html>
-<html lang="{{ 'zh-CN' if (ui_lang|default('zh')) == 'zh' else 'en' }}" data-theme="light" data-ui-mode="{{ ui_mode|default('simple') }}"{% if embedded %} data-embedded="1"{% endif %}>
+<html lang="{{ 'zh-CN' if (ui_lang|default('zh')) == 'zh' else 'en' }}" data-theme="dark" data-ui-mode="{{ ui_mode|default('simple') }}"{% if embedded %} data-embedded="1"{% endif %}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{% block title %}{{ site_name|default((i18n or {}).get('brand', '无界科技 · 智聊')) }}{% endblock %}</title>
 {% include "_brand_head.html" %}
 <link rel="stylesheet" href="/static/brand/brand-lockup.css">
+<link rel="stylesheet" href="/static/theme-tokens.css?v=20260723c">
 {% include "_i18n_bootstrap.html" %}
+{% include "_api_fetch.html" %}
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
@@ -42,12 +44,18 @@
   --s2:0 12px 32px rgba(0,0,0,.12);
   --sp:0 4px 14px rgba(91,124,246,.35);
 }
+/* 暗色为默认主题（渠道中心融合 P0）：调色与工作台 --tk-* 暗版逐值对齐
+   （bg/surface/border/text 同工作台，强调色统一 #3b82f6 系），两壳同观感。 */
 [data-theme="dark"]{
   --bg:#0f1014; --card:#17181d; --nav:rgba(15,16,20,.98); --input:#1e2026;
   --t:#ececf0; --t2:#a0a3ab; --t3:#85888f;
   --bd:#26272e; --bd2:#30313a;
-  --p:#58a6ff; --pd:#79b8ff; --ps:rgba(88,166,255,.15);
-  --green:#3fb950; --red:#f85149; --amber:#e3b341;
+  --p:#3b82f6; --pd:#60a5fa; --ps:rgba(59,130,246,.16);
+  --g:linear-gradient(135deg,#22d3ee,#3b82f6);
+  --green:#34d399; --gs:rgba(52,211,153,.13);
+  --red:#fb7185;   --rs:rgba(251,113,133,.13);
+  --amber:#fbbf24; --as:rgba(251,191,36,.13);
+  --purple:#a855f7;--prs:rgba(168,85,247,.16);
   --s0:0 1px 3px rgba(0,0,0,.5); --s1:0 4px 12px rgba(0,0,0,.6); --s2:0 12px 32px rgba(0,0,0,.8);
 }
 /* ── Reset ─────────────────────────────────────── */
@@ -73,6 +81,17 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 .sb-nav a.nav-featured:hover{background:linear-gradient(135deg,rgba(91,124,246,.2),rgba(139,92,246,.14))}
 /* Channel online dot — filled by /api/rpa-overview/status poll */
 .nav-dot{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.16);margin-left:auto;flex-shrink:0;transition:background .3s;cursor:pointer}
+/* P3 档位锁定项：压暗 + 锁标（点击进会员中心升级引导） */
+.sb-nav a.nav-locked{opacity:.5}
+.sb-nav a.nav-locked:hover{opacity:.8}
+.nav-lock-ico{margin-left:auto;flex-shrink:0;opacity:.85}
+.sidebar.collapsed .nav-lock-ico{display:none}
+/* P3 顶栏档位徽章（feature_gate 开启时渲染） */
+.plan-badge{display:inline-flex;align-items:center;gap:.3rem;padding:.18rem .6rem;border-radius:6px;font-size:.72rem;font-weight:700;text-decoration:none;border:1px solid var(--bd);background:var(--input);color:var(--t2);transition:.2s}
+.plan-badge:hover{filter:brightness(1.15)}
+.plan-badge-basic{background:rgba(59,130,246,.12);color:var(--blue,#3b82f6);border-color:rgba(59,130,246,.25)}
+.plan-badge-pro{background:rgba(139,92,246,.12);color:var(--violet,#8b5cf6);border-color:rgba(139,92,246,.25)}
+.plan-badge-flagship{background:var(--th-bg-amber12,rgba(245,158,11,.12));color:var(--amber);border-color:var(--th-bd-amber25,rgba(245,158,11,.25))}
 .nav-dot-ok{background:var(--green);box-shadow:0 0 5px var(--green)}
 .nav-dot-warn{background:var(--amber)}
 .nav-dot-off{background:rgba(255,255,255,.16)}
@@ -418,6 +437,7 @@ code{background:var(--input);padding:.15rem .45rem;border-radius:5px;font-size:.
 </style>
 <!-- 平台原生图标库(单一事实来源)：window.platformIconSVG / platformBrandColor -->
 <script src="/static/platform_icons.js?v=20260701"></script>
+<script src="/static/ui_icons.js?v=20260702d"></script>
 {% block head %}{% endblock %}
 <script>
 (function(){
@@ -450,6 +470,14 @@ code{background:var(--input);padding:.15rem .45rem;border-radius:5px;font-size:.
   <nav class="sb-nav">
   {#- 导航由 src/web/nav_schema.py 单源驱动:改菜单请改 schema,不要在这里加 <a> -#}
   {%- macro nav_item(it) %}
+    {%- if it.locked %}
+    {#- 档位锁定项(P3)：不消失,渲染锁标并跳会员中心升级引导(点被锁页面只会撞 403) -#}
+    <a href="/membership" class="nav-locked" title="{{ (i18n or {}).get('mb_locked_tip', '当前套餐未包含，点击查看升级') }}">
+      {{ nav_icons[it.icon]|safe }}
+      <span>{{ (i18n or {}).get(it.label_key, it.label_zh) }}</span>
+      <svg class="nav-lock-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+    </a>
+    {%- else %}
     {%- set _cls = (('nav-featured ' if it.featured else '') ~ ('active' if (it.key and active == it.key) else '')).strip() %}
     <a href="{{ it.path }}"{% if it.target %} target="{{ it.target }}"{% endif %}{% if _cls %} class="{{ _cls }}"{% endif %}{% if it.help %} data-help="{{ it.help }}"{% endif %}>
       {{ nav_icons[it.icon]|safe }}
@@ -461,6 +489,7 @@ code{background:var(--input);padding:.15rem .45rem;border-radius:5px;font-size:.
       <span class="sb-badge" id="{{ it.badge }}"></span>
       {%- endif %}
     </a>
+    {%- endif %}
   {%- endmacro %}
   {%- macro nav_domain(simple_mode) %}
     {%- for dp in domain_web_pages if (dp.get('show_in_simple') if simple_mode else dp.get('section') == 'ops') %}
@@ -530,7 +559,9 @@ code{background:var(--input);padding:.15rem .45rem;border-radius:5px;font-size:.
         <span style="opacity:.6" id="cmd-trigger-txt">{{ (i18n or {}).get('search','搜索') }}...</span>
         <kbd style="font-size:.65rem;background:var(--card);border:1px solid var(--bd);padding:0 .3rem;border-radius:3px;margin-left:.3rem;line-height:1.5">⌘K</kbd>
       </button>
-      {% if user_role == 'viewer' %}<span style="display:inline-flex;align-items:center;gap:.3rem;padding:.18rem .6rem;border-radius:6px;font-size:.72rem;font-weight:700;background:rgba(245,158,11,.12);color:var(--amber);border:1px solid rgba(245,158,11,.25)" title="{{ (i18n or {}).get('viewer_badge_title','当前账号为只读观察员，无法修改配置') }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="12" height="12"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>{{ (i18n or {}).get('viewer_badge','只读') }}</span>{% endif %}
+      {% if user_role == 'viewer' %}<span style="display:inline-flex;align-items:center;gap:.3rem;padding:.18rem .6rem;border-radius:6px;font-size:.72rem;font-weight:700;background:var(--th-bg-amber12,rgba(245,158,11,.12));color:var(--amber);border:1px solid var(--th-bd-amber25,rgba(245,158,11,.25))" title="{{ (i18n or {}).get('viewer_badge_title','当前账号为只读观察员，无法修改配置') }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="12" height="12"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>{{ (i18n or {}).get('viewer_badge','只读') }}</span>{% endif %}
+      {#- 档位徽章(P3)：仅 feature_gate 开启时渲染,点击进会员中心;默认部署零变化 -#}
+      {% if plan_badge %}<a href="/membership" class="plan-badge plan-badge-{{ plan_badge.plan }}" title="{{ (i18n or {}).get('mb_badge_tip','当前授权档位 · 点击进入会员中心') }}">{{ (i18n or {}).get(plan_badge.label_key, plan_badge.plan) }}</a>{% endif %}
       <div class="notif-wrap" id="notif-wrap">
         <button class="notif-btn" onclick="toggleNotif(event)" title="{{ (i18n or {}).get('notifications','通知') }}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
@@ -748,7 +779,8 @@ document.addEventListener('keydown',function(e){
 });
 /* Theme */
 function toggleTheme(){const h=document.documentElement,n=h.getAttribute('data-theme')==='dark'?'light':'dark';h.setAttribute('data-theme',n);localStorage.setItem('theme',n)}
-(function(){const s=localStorage.getItem('theme');if(s)document.documentElement.setAttribute('data-theme',s);else if(window.matchMedia?.('(prefers-color-scheme:dark)').matches)document.documentElement.setAttribute('data-theme','dark')})();
+/* 默认暗色（与工作台一致的深色现代风）；用户手动切亮色仍尊重其选择 */
+(function(){const s=localStorage.getItem('theme');document.documentElement.setAttribute('data-theme',(s==='light'||s==='dark')?s:'dark')})();
 /* Sidebar */
 function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sb-overlay').classList.toggle('open')}
 function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('sb-overlay').classList.remove('open')}
@@ -788,21 +820,21 @@ window.addEventListener('resize',function(){
       else{el.classList.remove('has-count')}
     });
   }
-  fetch('/api/cases/active',{credentials:'same-origin'}).then(r=>r.json()).then(d=>{
+  apiFetch('/api/cases/active',{credentials:'same-origin'}).then(r=>r.json()).then(d=>{
     var open=0;
     if(d.cases){d.cases.forEach(function(c){if(!c.closed)open++})}
     setBadge('badge-cases',open);
   }).catch(()=>{});
-  fetch('/api/learner/drafts?status=pending',{credentials:'same-origin'}).then(r=>r.json()).then(d=>{
+  apiFetch('/api/learner/drafts?status=pending',{credentials:'same-origin'}).then(r=>r.json()).then(d=>{
     setBadge('badge-learner',(d.drafts||[]).length);
   }).catch(()=>{});
-  fetch('/api/crisis-events?only_unhandled=true&limit=1',{credentials:'same-origin'}).then(r=>r.json()).then(d=>{
+  apiFetch('/api/crisis-events?only_unhandled=true&limit=1',{credentials:'same-origin'}).then(r=>r.json()).then(d=>{
     setBadge('badge-crisis',d.unhandled_total||0);
   }).catch(()=>{});
   /* 渠道总览徽标(待审+未确认告警) + 渠道在线状态点 — 单请求覆盖四平台;
      60s 轮询保持新鲜,页签不可见时暂停,回到前台立即刷新 */
   function refreshRpaNav(){
-    fetch('/api/rpa-overview/status',{credentials:'same-origin'}).then(r=>r.json()).then(d=>{
+    apiFetch('/api/rpa-overview/status',{credentials:'same-origin'}).then(r=>r.json()).then(d=>{
       window._rpaNavStatus=d;
       var agg=d.aggregate||{};
       setBadge('badge-rpa-ov',(agg.pending_total||0)+(agg.alerts_unacked_total||0));
@@ -900,7 +932,7 @@ function closeAllDropdowns(){
 }
 async function loadNotifs(){
   try{
-    var r=await fetch('/api/notifications');
+    var r=await apiFetch('/api/notifications');
     if(!r.ok)throw new Error(r.status);
     var d=await r.json();
     _notifData=d.notifications||[];
@@ -936,7 +968,7 @@ async function submitPwdChange(){
   if(new_pw.length<6){errEl.textContent=window.T('base.shell.pwd_min_len');errEl.style.display='block';return}
   if(new_pw!==cfm){errEl.textContent=window.T('base.shell.pwd_mismatch');errEl.style.display='block';return}
   var btn=document.getElementById('pwd-submit-btn');btn.disabled=true;btn.textContent=window.T('base.shell.pwd_submitting');
-  try{var r=await fetch('/api/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({old_password:old_pw,new_password:new_pw})});
+  try{var r=await apiFetch('/api/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({old_password:old_pw,new_password:new_pw})}, {timeoutMs: 60000});
     var d=await r.json();
     if(r.ok&&d.ok){closePwdModal();showToast(window.T('base.shell.pwd_ok'),'ok')}
     else{errEl.textContent=d.detail||window.T('base.shell.pwd_fail');errEl.style.display='block'}
@@ -1313,7 +1345,7 @@ function _diffLines(oldL, newL){
 })();
 </script>
 {% if ui_mode == 'simple' %}
-<div id="onboard-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);align-items:center;justify-content:center">
+<div id="onboard-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:var(--th-bg-scrim55,rgba(0,0,0,.55));backdrop-filter:blur(4px);align-items:center;justify-content:center">
   <div style="background:var(--card);border-radius:16px;box-shadow:0 8px 40px rgba(0,0,0,.25);max-width:440px;width:92vw;padding:2rem;text-align:center;animation:fadeUp .3s ease">
     <div style="font-size:2.5rem;margin-bottom:.8rem">👋</div>
     <h2 style="font-size:1.2rem;font-weight:700;margin-bottom:.5rem">{{ (i18n or {}).get('onb_welcome_title','欢迎使用简洁模式') }}</h2>
@@ -1329,7 +1361,7 @@ function _diffLines(oldL, newL){
       <div style="display:flex;align-items:center;gap:.6rem;font-size:.88rem"><span style="font-size:1.1rem">🧠</span> <b>{{ (i18n or {}).get('onb_review_label','学习队列') }}</b> — {{ (i18n or {}).get('onb_review_desc','审核 AI 生成的草稿') }}</div>
     </div>
     <p style="font-size:.78rem;color:var(--t3);margin-bottom:1rem">{{ (i18n or {}).get('onb_footer','你随时可以在侧边栏底部切换到完整模式') }}</p>
-    <button onclick="dismissOnboard()" style="background:var(--p);color:#fff;border:none;border-radius:10px;padding:.65rem 2rem;font-size:.92rem;font-weight:600;cursor:pointer;transition:.15s">{{ (i18n or {}).get('onb_start','开始使用') }}</button>
+    <button onclick="dismissOnboard()" style="background:var(--p);color:var(--th-ink-inverse,#fff);border:none;border-radius:10px;padding:.65rem 2rem;font-size:.92rem;font-weight:600;cursor:pointer;transition:.15s">{{ (i18n or {}).get('onb_start','开始使用') }}</button>
   </div>
 </div>
 <script>

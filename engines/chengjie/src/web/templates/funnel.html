@@ -27,7 +27,7 @@ document.addEventListener('DOMContentLoaded', function(){
   }
 
   // 变现 KPI 条:403(viewer)/未启用/网络失败 一律保持隐藏
-  fetch('/api/monetize/kpi?days=30', {credentials:'same-origin'}).then(function(r){
+  apiFetch('/api/monetize/kpi?days=30', {credentials:'same-origin'}).then(function(r){
     if(!r.ok) return null;
     return r.json();
   }).then(function(d){

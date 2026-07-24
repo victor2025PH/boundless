@@ -55,7 +55,7 @@
 {% set active="" %}
 
 {% if ui_mode == 'simple' %}
-<div style="background:linear-gradient(135deg,rgba(245,158,11,.08),rgba(239,68,68,.06));border:1px solid rgba(245,158,11,.2);border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:center;gap:.6rem">
+<div style="background:linear-gradient(135deg,var(--th-bg-amber08,rgba(245,158,11,.08)),var(--th-bg-red06,rgba(239,68,68,.06)));border:1px solid var(--th-bd-amber20,rgba(245,158,11,.2));border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:center;gap:.6rem">
   <span style="font-size:1.1rem;flex-shrink:0">🔒</span>
   <div><strong style="color:var(--t)">{{ (i18n or {}).get('im_s003', "管理员页面") }}</strong> — {{ (i18n or {}).get('im_s004', "导入/导出为高级管理功能。") }}<a href="/set_ui_mode?mode=full&next=/import" style="color:var(--p);font-weight:600">{{ (i18n or {}).get('tp_s005', "切换到完整模式") }}</a>{{ (i18n or {}).get('im_s005', "获得完整体验，或") }}<a href="/cases" style="color:var(--p);font-weight:600">{{ (i18n or {}).get('logs_back_cases', "返回案例") }}</a>。</div>
 </div>
@@ -80,7 +80,7 @@
     <div class="mode-sel">
       <label class="mode-opt active" id="mode-overwrite-lbl" onclick="setMode('overwrite')">
         <input type="radio" name="mode" value="overwrite" checked>
-        <div class="m-icon" style="background:linear-gradient(135deg,#ef4444,#dc2626)">
+        <div class="m-icon" style="background:linear-gradient(135deg,var(--th-bg-red5,#ef4444),var(--th-bg-red6,#dc2626))">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg>
         </div>
         <div class="m-title">{{ (i18n or {}).get('im_s006', "覆盖模式") }}</div>
@@ -88,7 +88,7 @@
       </label>
       <label class="mode-opt" id="mode-merge-lbl" onclick="setMode('merge')">
         <input type="radio" name="mode" value="merge">
-        <div class="m-icon" style="background:linear-gradient(135deg,#10b981,#059669)">
+        <div class="m-icon" style="background:linear-gradient(135deg,var(--th-bg-emerald5,#10b981),var(--th-bg-emerald6,#059669))">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 009 9"/></svg>
         </div>
         <div class="m-title">{{ (i18n or {}).get('im_s008', "增量合并") }}</div>
@@ -134,7 +134,7 @@
   <div class="export-options">
     <form method="post" action="/export" style="contents">
       <button type="submit" name="format" value="yaml" class="export-opt">
-        <div class="opt-icon" style="background:linear-gradient(135deg,#5b7cf6,#8b5cf6)">
+        <div class="opt-icon" style="background:linear-gradient(135deg,var(--th-bg-brand,#5b7cf6),var(--th-bg-violet5,#8b5cf6))">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
         </div>
         <div class="opt-name" data-help="YAML">YAML {{ (i18n or {}).get('im_s016', "格式") }}</div>
@@ -143,7 +143,7 @@
     </form>
     <form method="post" action="/export" style="contents">
       <button type="submit" name="format" value="zip" class="export-opt">
-        <div class="opt-icon" style="background:linear-gradient(135deg,#10b981,#059669)">
+        <div class="opt-icon" style="background:linear-gradient(135deg,var(--th-bg-emerald5,#10b981),var(--th-bg-emerald6,#059669))">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8m-4-4v4"/><path d="M12 7l-2 4h4l-2 4"/></svg>
         </div>
         <div class="opt-name" data-help="ZIP">ZIP {{ (i18n or {}).get('im_s018', "打包") }}</div>
@@ -152,7 +152,7 @@
     </form>
     <form method="post" action="/export" style="contents">
       <button type="submit" name="format" value="json" class="export-opt">
-        <div class="opt-icon" style="background:linear-gradient(135deg,#f59e0b,#d97706)">
+        <div class="opt-icon" style="background:linear-gradient(135deg,var(--th-bg-amber5,#f59e0b),var(--th-bg-amber6,#d97706))">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
         </div>
         <div class="opt-name" data-help="JSON">JSON {{ (i18n or {}).get('im_s016', "格式") }}</div>
@@ -268,7 +268,7 @@ document.getElementById('import-form').addEventListener('submit', e => {
 /* ── Webhook Settings ──────────────────────────── */
 async function loadWebhook() {
   try {
-    const r = await fetch('/api/webhook-settings');
+    const r = await apiFetch('/api/webhook-settings');
     if (!r.ok) return;
     const d = await r.json();
     document.getElementById('wh-url').value = d.url || '';
@@ -295,16 +295,16 @@ async function saveWebhook() {
   };
   const secret = document.getElementById('wh-secret').value.trim();
   if (secret) body.secret = secret;
-  const r = await fetch('/api/webhook-settings', {
+  const r = await apiFetch('/api/webhook-settings', {
     method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
-  });
+  }, {timeoutMs: 60000});
   const d = await r.json();
   if (d.ok) showToast('Webhook '+window.T('im_js004'), 'ok');
   else showToast(window.T('ov_js_save_fail')+': ' + (d.detail || window.T('inbox.voice.unknown_err')), 'err');
 }
 
 async function testWebhook() {
-  const r = await fetch('/api/webhook-test', { method: 'POST' });
+  const r = await apiFetch('/api/webhook-test', { method: 'POST' }, {timeoutMs: 60000});
   const d = await r.json();
   if (d.ok) showToast(d.msg || window.T('im_js005'), 'ok');
   else showToast(window.T('inbox.autolog.autosend_failed')+': ' + (d.detail || window.T('inbox.voice.unknown_err')), 'err');

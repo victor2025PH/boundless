@@ -86,7 +86,7 @@ function seed(domain, btn){
 }
 
 function load(){
-  fetch('/api/kb/cold-start').then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/kb/cold-start').then(function(r){return r.json();}).then(function(d){
     if(!d||!d.ok) return;
     renderStatus(d.readiness||{});
     renderPacks(d.packs||[]);

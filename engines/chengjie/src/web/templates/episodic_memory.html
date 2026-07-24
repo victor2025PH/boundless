@@ -109,7 +109,7 @@ async function emLoad() {
     const q = new URLSearchParams({ limit: String(limit) });
     if (prefix) q.set('prefix', prefix);
     if (source) q.set('source', source);
-    const res = await fetch('/api/episodic-memory?' + q.toString());
+    const res = await apiFetch('/api/episodic-memory?' + q.toString());
     if (!res.ok) { st.textContent = window.T('ln_js_036')+' ' + res.status; return; }
     const d = await res.json();
     const items = d.items || [];
@@ -141,7 +141,7 @@ async function emLoad() {
 async function emDel(id) {
   if (!confirm(window.T('em_js006')+' ID ' + id + ' ?')) return;
   try {
-    const res = await fetch('/api/episodic-memory/' + id, { method: 'DELETE' });
+    const res = await apiFetch('/api/episodic-memory/' + id, { method: 'DELETE' }, {timeoutMs: 60000});
     if (!res.ok) { alert(window.T('inbox.toast.del_fail')+' ' + res.status); return; }
     emLoad();
   } catch (e) { alert(e); }
@@ -177,7 +177,7 @@ async function emBackfill() {
 }
 async function csLoad() {
   try {
-    const res = await fetch('/api/episodic-memory/correction-stats?days=30');
+    const res = await apiFetch('/api/episodic-memory/correction-stats?days=30');
     if (!res.ok) return;
     const d = await res.json();
     document.getElementById('cs-confirmed').textContent = d.confirmed != null ? d.confirmed : '—';
