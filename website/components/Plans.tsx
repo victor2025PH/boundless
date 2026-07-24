@@ -7,10 +7,16 @@ import Reveal from "./fx/Reveal";
 import BorderBeam from "./fx/BorderBeam";
 import Magnetic from "./fx/Magnetic";
 import { CONTACT_URL } from "@/lib/site";
+import { track } from "@/lib/track";
 
 export default function Plans() {
-  const { t } = useLang();
+  const { t, lang } = useLang();
   const [yearly, setYearly] = useState(false);
+  // 档位卡直达自助下单（到账自动开通）；没配 plan 键的档位回落 Telegram 客服。
+  const orderHref = (plan?: string) =>
+    plan
+      ? `${lang === "zh" ? "" : "/en"}/order?plan=${plan}${yearly ? "&period=annual" : ""}`
+      : CONTACT_URL;
 
   return (
     <div className="mx-auto max-w-7xl px-5">
@@ -83,9 +89,9 @@ export default function Plans() {
 
               <Magnetic className="mt-6 w-full">
                 <a
-                  href={CONTACT_URL}
-                  target="_blank"
-                  rel="noreferrer"
+                  href={orderHref(p.plan)}
+                  {...(p.plan ? {} : { target: "_blank", rel: "noreferrer" })}
+                  onClick={() => track("cta_click", { where: "plans", which: p.plan ?? "contact", yearly })}
                   className={`block w-full rounded-full px-5 py-2.5 text-center text-sm font-medium transition ${
                     p.highlight
                       ? "bg-gradient-to-r from-neon-cyan to-neon-violet text-ink-950 hover:opacity-90"

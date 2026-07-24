@@ -4,6 +4,8 @@ export interface PricingRow {
   plan: string;
   price: string;
   detail: string;
+  /** 自助 SKU 的 /order 深链 plan 键（lib/order-lines.ts 的 tier key）；缺省 = 走客服。 */
+  order?: string;
 }
 
 export interface Solution {
@@ -23,6 +25,8 @@ export interface Plan {
   desc: string;
   features: string[];
   highlight?: boolean;
+  /** 自助下单深链键（/order?plan=<key>）；缺省 = CTA 回落客服。 */
+  plan?: string;
 }
 
 export interface Dict {
@@ -147,6 +151,7 @@ export interface Dict {
     priceCol: string;
     detailCol: string;
     allLabel: string;
+    selfServe: string;
   };
   about: {
     title: string;
@@ -458,9 +463,9 @@ const zh: Dict = {
       highlight: true,
       // 定价与 lib/pricing.ts::translateOffers 同步（USD，2026-07-18 定价决议：竞品×2）；改价两处一起改。
       pricing: [
-        { plan: "字符包", price: "59", detail: "一次性 · 150 万字符 + 术语库 + 翻译记忆" },
-        { plan: "团队", price: "99 / 月", detail: "300 万字符/月 + 多坐席收件箱 + 客户 journey + 漏斗计数" },
-        { plan: "专业", price: "198 / 月", detail: "不限字符 + 多模态翻译 + 置信度/引擎健康" },
+        { plan: "字符包", price: "59", detail: "一次性 · 150 万字符 + 术语库 + 翻译记忆", order: "translate-charpack" },
+        { plan: "团队", price: "99 / 月", detail: "300 万字符/月 + 多坐席收件箱 + 客户 journey + 漏斗计数", order: "translate-team" },
+        { plan: "专业", price: "198 / 月", detail: "不限字符 + 多模态翻译 + 置信度/引擎健康", order: "translate-pro" },
       ],
     },
     {
@@ -520,6 +525,7 @@ const zh: Dict = {
     priceCol: "价格 (USD)",
     detailCol: "说明",
     allLabel: "全部",
+    selfServe: "自助开通",
   },
   trust: {
     platformsLabel: "已覆盖全球主流平台",
@@ -567,6 +573,7 @@ const zh: Dict = {
         priceYearly: "50",
         desc: "小团队 / 个人起步",
         features: ["3 个聊天账号", "AI 拟人翻译", "1 个平台", "基础声音克隆体验"],
+        plan: "autochat-entry",
       },
       {
         name: "团队",
@@ -575,6 +582,7 @@ const zh: Dict = {
         desc: "成长型团队首选",
         features: ["10 个聊天账号", "全平台聚合", "AI 自动成交回复", "人设语音消息", "优先客服"],
         highlight: true,
+        plan: "autochat-team",
       },
       {
         name: "旗舰",
@@ -582,23 +590,24 @@ const zh: Dict = {
         priceYearly: "508",
         desc: "规模化 / 企业级",
         features: ["50 个聊天账号", "AI 自动成交 + 人设语音", "人工接管 + 知识库", "数据看板", "可选私有化部署"],
+        plan: "autochat-flagship",
       },
     ],
   },
   orderSteps: {
     title: "三步即可开通",
-    subtitle: "流程透明，确认即开通，开通即用。",
+    subtitle: "标准套餐全程自助：在线下单、付款到账、自动开通；定制方案随时找客服。",
     steps: [
-      { title: "选择服务", desc: "在业务与价格中挑选适合的套餐或组合。" },
-      { title: "Telegram 沟通确认", desc: "添加客服，确认需求、用量与最终报价。" },
-      { title: "确认付款开通", desc: "核对收款信息后付款，快速开通账号与权限。" },
+      { title: "选择套餐", desc: "在下单页选择套餐与周期；企业定制或拿不准的，加 Telegram 客服帮你选。" },
+      { title: "在线下单付款", desc: "支持 USDT / 银行卡；订单页实时显示到账进度，链接可收藏随时回查。" },
+      { title: "到账自动开通", desc: "付款确认后系统自动签发授权码 / 凭证，订单页直接复制，即刻激活使用。" },
     ],
   },
   faq: {
     title: "常见问题",
     subtitle: "还有疑问？直接联系 Telegram 客服。",
     items: [
-      { q: "支持哪些付款方式？", a: "下单前通过官方 Telegram 客服确认需求与报价；跨境客户支持 USDT 等结算，大额或企业合作可商定其它方式。" },
+      { q: "支持哪些付款方式？", a: "标准套餐可在官网下单页自助购买，支持 USDT（TRC20）等结算，到账后自动开通；大额或企业定制可通过官方 Telegram 客服商定其它方式。" },
       { q: "支持私有化部署吗？", a: "支持。聊天聚合与自主可控 AI 均可部署到你的服务器，数据本地化、无云端上报。" },
       { q: "你们的 AI 翻译和谷歌翻译有什么不同？", a: "我们用 AI 翻译 + 对话技术，输出地道口语、地方俚语与文化语气，对方看不出你是外国人；不同于市面软件直接套谷歌等 API 的生硬直译。" },
       { q: "AI 能自动跟客户成交吗？人工能接管吗？", a: "可以。AI 以你的人设 7×24 自动接洽、答疑、跟进、促单转化，遇到关键节点人工可随时一键接管。" },
@@ -1118,9 +1127,9 @@ const en: Dict = {
       highlight: true,
       // Prices mirror lib/pricing.ts::translateOffers (USD; repriced 2026-07-18, competitor ×2); change both together.
       pricing: [
-        { plan: "Char pack", price: "59", detail: "One-time · 1.5M chars + glossary + translation memory" },
-        { plan: "Team", price: "99 / mo", detail: "3M chars/mo + multi-seat inbox + customer journey + funnel counter" },
-        { plan: "Pro", price: "198 / mo", detail: "Unlimited chars + multimodal translate + confidence/engine health" },
+        { plan: "Char pack", price: "59", detail: "One-time · 1.5M chars + glossary + translation memory", order: "translate-charpack" },
+        { plan: "Team", price: "99 / mo", detail: "3M chars/mo + multi-seat inbox + customer journey + funnel counter", order: "translate-team" },
+        { plan: "Pro", price: "198 / mo", detail: "Unlimited chars + multimodal translate + confidence/engine health", order: "translate-pro" },
       ],
     },
     {
@@ -1180,6 +1189,7 @@ const en: Dict = {
     priceCol: "Price (USD)",
     detailCol: "Details",
     allLabel: "All",
+    selfServe: "Order online",
   },
   trust: {
     platformsLabel: "Global platforms covered",
@@ -1227,6 +1237,7 @@ const en: Dict = {
         priceYearly: "50",
         desc: "Small teams / individuals",
         features: ["3 chat accounts", "Human-like AI translation", "1 platform", "Basic voice cloning trial"],
+        plan: "autochat-entry",
       },
       {
         name: "Team",
@@ -1235,6 +1246,7 @@ const en: Dict = {
         desc: "Best for growing teams",
         features: ["10 chat accounts", "All platforms unified", "AI auto-closing replies", "Persona voice messages", "Priority support"],
         highlight: true,
+        plan: "autochat-team",
       },
       {
         name: "Flagship",
@@ -1242,23 +1254,24 @@ const en: Dict = {
         priceYearly: "508",
         desc: "Scale / enterprise",
         features: ["50 chat accounts", "AI auto-closing + persona voice", "Human handoff + knowledge base", "Analytics dashboard", "Optional private deployment"],
+        plan: "autochat-flagship",
       },
     ],
   },
   orderSteps: {
     title: "Get started in 3 steps",
-    subtitle: "Transparent process, confirm and go live instantly.",
+    subtitle: "Standard plans are fully self-serve: order online, pay, and activation is automatic. Custom deals — just ping support.",
     steps: [
-      { title: "Pick a service", desc: "Choose the plan or combination that fits in solutions & pricing." },
-      { title: "Confirm on Telegram", desc: "Add support to confirm needs, usage and the final quote." },
-      { title: "Pay & go live", desc: "Verify payment details, pay, and get your account provisioned fast." },
+      { title: "Pick a plan", desc: "Choose your plan and billing period on the order page; for custom needs, Telegram support helps you decide." },
+      { title: "Order & pay online", desc: "USDT / bank card accepted; the order page tracks payment progress live — bookmark it to check anytime." },
+      { title: "Auto-activation", desc: "Once payment confirms, your license key / voucher is issued automatically — copy it right on the order page and activate." },
     ],
   },
   faq: {
     title: "FAQ",
     subtitle: "Still have questions? Reach our Telegram support directly.",
     items: [
-      { q: "What payment methods do you accept?", a: "Confirm your needs and quote with our official Telegram support before ordering; cross-border clients can settle in USDT and others, and large or enterprise deals can arrange alternative methods." },
+      { q: "What payment methods do you accept?", a: "Standard plans are self-serve on the order page — pay in USDT (TRC20) and more, with automatic activation once payment lands. Large or enterprise deals can arrange alternative methods via our official Telegram support." },
       { q: "Do you support private deployment?", a: "Yes. Chat aggregation and self-controlled AI can both deploy to your own servers — data stays local with no cloud reporting." },
       { q: "How is your AI translation different from Google Translate?", a: "We use AI translation + chat tech that outputs native slang, local idioms and cultural tone — they can't tell you're foreign — unlike tools that wire up Google-style APIs and read stiff and literal." },
       { q: "Can AI close deals automatically? Can humans take over?", a: "Yes. AI works your persona 24/7 to engage, answer, follow up and convert; at key moments a human can take over in one click." },

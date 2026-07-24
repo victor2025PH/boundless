@@ -7,7 +7,7 @@ import Reveal from "./fx/Reveal";
 import { track } from "@/lib/track";
 
 export default function Pricing() {
-  const { t } = useLang();
+  const { t, lang } = useLang();
   const [cat, setCat] = useState("all");
   const filtered =
     cat === "all" ? t.solutions : t.solutions.filter((s) => s.id === cat);
@@ -89,7 +89,18 @@ export default function Pricing() {
                     <tr key={p.plan} className="border-t border-white/5">
                       <td className="px-5 py-2.5 text-slate-300">{p.plan}</td>
                       <td className="whitespace-nowrap px-5 py-2.5 font-semibold text-neon-cyan">{p.price}</td>
-                      <td className="px-5 py-2.5 text-slate-400">{p.detail}</td>
+                      <td className="px-5 py-2.5 text-slate-400">
+                        {p.detail}
+                        {p.order && (
+                          <a
+                            href={`${lang === "zh" ? "" : "/en"}/order?plan=${p.order}`}
+                            onClick={() => track("cta_click", { where: "pricing_table", which: p.order })}
+                            className="ml-2 whitespace-nowrap text-neon-cyan hover:underline"
+                          >
+                            {t.pricingSection.selfServe} →
+                          </a>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
