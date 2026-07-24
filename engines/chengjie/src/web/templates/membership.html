@@ -151,6 +151,33 @@
   </script>
   {% endif %}
 
+  {#- 用量趋势（P5）：按月字符用量柱状图，服务端渲染零 JS；无记录/不限量自动隐藏。
+      口径=license_char_usage 按 UTC 自然月聚合（quota_store.usage_history）。 -#}
+  {% if mb.quota.history %}
+  <div class="card" style="margin-bottom:1.2rem">
+    <div class="card-h"><h3>{{ (i18n or {}).get('mb_trend_title', '用量趋势') }}</h3></div>
+    <div style="padding:.9rem 1.1rem 1rem">
+      {% set mx = mb.quota.history | map(attribute='chars') | max %}
+      {% set mx = mx if mx and mx > 0 else 1 %}
+      <div id="mb-trend-bars" style="display:flex;align-items:flex-end;gap:14px;min-height:110px">
+        {% for it in mb.quota.history %}
+        <div style="flex:1;max-width:84px;display:flex;flex-direction:column;align-items:center;gap:4px;justify-content:flex-end"
+             title="{{ it.month }} · {{ '{:,}'.format(it.chars) }}">
+          <div style="font-size:.66rem;color:var(--t2)">
+            {%- if it.chars >= 10000 -%}{{ '%.0f' % (it.chars / 1000) }}k
+            {%- elif it.chars >= 1000 -%}{{ '%.1f' % (it.chars / 1000) }}k
+            {%- else -%}{{ it.chars }}{%- endif -%}
+          </div>
+          <div style="width:100%;border-radius:4px 4px 0 0;background:var(--blue,#3b82f6);opacity:{{ '.95' if loop.last else '.5' }};height:{{ (it.chars * 72 / mx) | round(1) }}px;min-height:2px"></div>
+          <div style="font-size:.68rem;color:var(--t2)">{{ it.month[5:] }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      <div style="font-size:.7rem;color:var(--t2);margin-top:.55rem">{{ (i18n or {}).get('mb_trend_note', '按月统计（UTC）；含翻译与语音合成两类字符消耗。') }}</div>
+    </div>
+  </div>
+  {% endif %}
+
   {#- 功能矩阵 -#}
   <div class="card">
     <div class="card-h"><h3>{{ (i18n or {}).get('mb_matrix_title', '功能矩阵') }}</h3></div>

@@ -219,6 +219,35 @@ def test_topup_store_idempotent_and_sum(tmp_path):
     assert LicenseQuotaStore(tmp_path / "q.db").topup_chars("L1") == 80_000
 
 
+def test_usage_history_month_aggregation(tmp_path):
+    """按月聚合：跨月/跨类目求和、旧→新排序、months 截断、lic 隔离、空表。"""
+    from datetime import datetime, timezone
+
+    store = LicenseQuotaStore(tmp_path / "q.db")
+
+    def ts(y, m, d):
+        return datetime(y, m, d, tzinfo=timezone.utc).timestamp()
+
+    store.record("L1", "translate", 100, now=ts(2026, 4, 3))
+    store.record("L1", "tts", 50, now=ts(2026, 4, 28))       # 同月异类目并月
+    store.record("L1", "translate", 700, now=ts(2026, 5, 15))
+    store.record("L1", "translate", 900, now=ts(2026, 7, 1))  # 跳月不补零
+    store.record("L2", "translate", 999, now=ts(2026, 5, 2))  # 其它授权不串味
+
+    hist = store.usage_history("L1")
+    assert hist == [
+        {"month": "2026-04", "chars": 150},
+        {"month": "2026-05", "chars": 700},
+        {"month": "2026-07", "chars": 900},
+    ]
+    # months 截断：只留最近 2 个月（仍旧→新）
+    assert store.usage_history("L1", months=2) == [
+        {"month": "2026-05", "chars": 700},
+        {"month": "2026-07", "chars": 900},
+    ]
+    assert store.usage_history("L-none") == []
+
+
 def test_check_quota_folds_topup_into_included(tmp_path, monkeypatch):
     """加量包并进 included 口径：enforce 超额被拦的授权，充值后立即恢复放行。"""
     import src.licensing.quota_store as qs

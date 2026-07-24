@@ -209,3 +209,42 @@ def test_topup_route_guards(auth_client, tmp_path, monkeypatch):
         assert d2["ok"] is False and d2["error"] == "unlimited"
     finally:
         qs.reset_license_quota_store()
+
+
+# ── P5：按月用量趋势 ─────────────────────────────────────────────────────────
+
+def test_membership_page_renders_usage_trend(auth_client, tmp_path, monkeypatch):
+    """带额度授权 + 历史用量 → 趋势卡渲染（柱 + 月份标签）；空历史 → 卡隐藏。"""
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    import src.licensing.quota_store as qs
+
+    qs.reset_license_quota_store()
+    store = qs.LicenseQuotaStore(tmp_path / "trend.db")
+    qs.configure_license_quota_store(store=store)
+    monkeypatch.setattr(qs, "_current_status", lambda: SimpleNamespace(
+        licensed=True, included_chars=100000, lic_id="LIC-TR", enforce=False,
+        state="active"))
+    try:
+        ts_may = datetime(2026, 5, 10, tzinfo=timezone.utc).timestamp()
+        ts_jun = datetime(2026, 6, 20, tzinfo=timezone.utc).timestamp()
+        store.record("LIC-TR", "translate", 1200, now=ts_may)
+        store.record("LIC-TR", "tts", 800, now=ts_may + 3600)
+        store.record("LIC-TR", "translate", 5000, now=ts_jun)
+
+        html = auth_client.get("/membership").text
+        assert 'id="mb-trend-bars"' in html
+        assert ("用量趋势" in html) or ("Usage trend" in html)
+        # 月份标签（month[5:]）+ 千位缩写标注（2.0k / 5.0k）
+        assert ">05<" in html and ">06<" in html
+        assert "2.0k" in html and "5.0k" in html
+
+        # 无任何用量记录的授权 → history 空 → 卡隐藏
+        monkeypatch.setattr(qs, "_current_status", lambda: SimpleNamespace(
+            licensed=True, included_chars=100000, lic_id="LIC-EMPTY",
+            enforce=False, state="active"))
+        html2 = auth_client.get("/membership").text
+        assert 'id="mb-trend-bars"' not in html2
+    finally:
+        qs.reset_license_quota_store()

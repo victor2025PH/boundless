@@ -2436,7 +2436,10 @@ licensing:
   # ── 购买/续费入口（融合实例 P4b）────────────────────────────────
   # 会员中心「购买 / 续费」按钮的落地链接：商城页 / 定价页 / TG 客服均可。
   # 留空或不配 = 不渲染按钮（自营/内网部署零变化）。
-  # shop_url: https://example.com/pricing
+  # 官网统一下单页支持带参直达：/order?plan=<offer>&period=monthly|annual
+  #（offer id 对照 website/lib/offer-map.ts：autochat-entry/-pro/-flagship、
+  #  translate-solo/-team、translate-charpack）。
+  # shop_url: https://example.com/order
   # 字符加量包（charpack）两条入账通道（均要求已激活且带字符额度的授权）：
   # ① 凭证自助（P4c 推荐）：厂商签发 topup 凭证（license_tool.py topup /
   #    fulfill_chatx_watch 自动回填订单）→ 客户在 会员中心 → 兑换加量包 粘贴，

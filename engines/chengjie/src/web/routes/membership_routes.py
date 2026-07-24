@@ -25,9 +25,21 @@ logger = logging.getLogger(__name__)
 def _quota_snapshot() -> Dict[str, Any]:
     """P0-4 字符额度快照（与 license_routes 同源实现；无额度 → included=0）。"""
     try:
-        from src.licensing.quota_store import check_license_quota
+        from src.licensing.quota_store import (
+            check_license_quota,
+            get_license_quota_store,
+        )
 
         q = check_license_quota()
+        # 按月用量趋势（P5）：只在计量库已建（=确有额度授权在记账）时查询；
+        # 不限量/社区部署 store 为 None → 恒空表，页面自动隐藏趋势卡。
+        history: list = []
+        try:
+            store = get_license_quota_store()
+            if store is not None and int(q.get("included") or 0) > 0:
+                history = store.usage_history(str(q.get("lic_id") or "default"))
+        except Exception:
+            history = []
         return {
             "included_chars": q.get("included", 0),
             "included_base": q.get("included_base", q.get("included", 0)),
@@ -35,10 +47,12 @@ def _quota_snapshot() -> Dict[str, Any]:
             "used_chars": q.get("used", 0),
             "remaining_chars": q.get("remaining"),
             "exceeded": q.get("exceeded", False),
+            "history": history,
         }
     except Exception:
         return {"included_chars": 0, "included_base": 0, "topup_chars": 0,
-                "used_chars": 0, "remaining_chars": None, "exceeded": False}
+                "used_chars": 0, "remaining_chars": None, "exceeded": False,
+                "history": []}
 
 
 def build_membership_snapshot(config: dict, user_store=None) -> Dict[str, Any]:

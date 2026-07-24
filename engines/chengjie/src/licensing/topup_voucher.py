@@ -43,6 +43,21 @@ VOUCHER_TYP = "topup"
 
 # ── 厂商侧：签发（scripts/license_tool.py topup / fulfill_chatx_watch.py 使用）──
 
+def batch_refs(ref: str, count: int) -> list:
+    """批量签发的 ref 派生（大客户一次买 N 包，license_tool ``--count``）。
+
+    ``count==1`` → ``[ref]``（单张行为不变）；``N>1`` → ``ref-01..-NN``
+    （序号零填充、宽度随 N 自适应）。每张 ref 独立 → 兑换幂等互不干扰，
+    台账可按前缀归集回订单。
+    """
+    base = str(ref or "").strip()
+    n = max(1, int(count or 1))
+    if n == 1:
+        return [base]
+    width = max(2, len(str(n)))
+    return [f"{base}-{i:0{width}d}" for i in range(1, n + 1)]
+
+
 def issue_topup_voucher(
     private_hex: str,
     *,
@@ -176,6 +191,7 @@ def redeem_topup_voucher(
 
 __all__ = [
     "VOUCHER_TYP",
+    "batch_refs",
     "issue_topup_voucher",
     "redeem_topup_voucher",
     "verify_topup_voucher",

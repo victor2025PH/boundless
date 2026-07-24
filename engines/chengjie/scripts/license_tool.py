@@ -29,6 +29,8 @@
          --lic-id lingox-pro-123          # 或 --sub "客户标识"（至少给一个）
 
    ``--ref`` 是兑换幂等键（订单号），同 ref 在同一实例只会入账一次。
+   大客户一次买 N 包：加 ``--count 10`` → ref 自动派生 ``ORD-2026-001-01..-10``，
+   每张独立幂等；``--out`` 时写成每行 ``ref<TAB>token`` 的清单文件。
 """
 
 import argparse
@@ -87,24 +89,37 @@ def _cmd_issue(args: argparse.Namespace) -> int:
 
 
 def _cmd_topup(args: argparse.Namespace) -> int:
-    from src.licensing.topup_voucher import issue_topup_voucher
+    from src.licensing.topup_voucher import batch_refs, issue_topup_voucher
     priv_hex = Path(args.priv).read_text(encoding="utf-8").strip()
-    token = issue_topup_voucher(
-        priv_hex,
-        chars=int(args.chars),
-        ref=args.ref,
-        lic_id=args.lic_id,
-        customer=args.sub,
-        note=args.note,
-    )
+    count = max(1, int(args.count or 1))
+    if count > 500:
+        print("[错误] --count 上限 500（防误操作批量灌爆）", file=sys.stderr)
+        return 2
+    pairs = [
+        (r, issue_topup_voucher(
+            priv_hex, chars=int(args.chars), ref=r,
+            lic_id=args.lic_id, customer=args.sub, note=args.note))
+        for r in batch_refs(args.ref, count)
+    ]
     if args.out:
-        Path(args.out).write_text(token, encoding="utf-8")
-        print(f"加量凭证已写入：{args.out}")
+        if count == 1:
+            Path(args.out).write_text(pairs[0][1], encoding="utf-8")
+            print(f"加量凭证已写入：{args.out}")
+        else:
+            Path(args.out).write_text(
+                "".join(f"{r}\t{t}\n" for r, t in pairs), encoding="utf-8")
+            print(f"加量凭证已写入：{args.out}（{count} 张，每行 ref<TAB>token）")
     else:
-        print(token)
+        for r, t in pairs:
+            print(t if count == 1 else f"{r}\t{t}")
     bind = f"lic={args.lic_id}" if args.lic_id else f"sub={args.sub}"
-    print(f"绑定：{bind} · chars={args.chars} · ref={args.ref}"
-          "（客户：会员中心 → 兑换加量包 粘贴）")
+    if count == 1:
+        print(f"绑定：{bind} · chars={args.chars} · ref={args.ref}"
+              "（客户：会员中心 → 兑换加量包 粘贴）")
+    else:
+        print(f"绑定：{bind} · chars={args.chars} × {count} 张 · "
+              f"ref={pairs[0][0]}..{pairs[-1][0]}"
+              "（每张独立幂等，客户逐张粘贴兑换）")
     return 0
 
 
@@ -137,6 +152,8 @@ def main() -> int:
     t.add_argument("--priv", required=True, help="厂商私钥文件路径")
     t.add_argument("--chars", required=True, help="加量字符数（如 1500000）")
     t.add_argument("--ref", required=True, help="订单号（兑换幂等键）")
+    t.add_argument("--count", default="1",
+                   help="批量签发张数（>1 时 ref 自动派生 -01..-NN，每张独立幂等）")
     t.add_argument("--lic-id", dest="lic_id", default="", help="精确绑定授权编号")
     t.add_argument("--sub", default="", help="客户级绑定（与授权 sub/customer 一致）")
     t.add_argument("--note", default="", help="备注（随入账记录展示）")

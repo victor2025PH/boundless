@@ -84,6 +84,9 @@ ZH = {
     "err.lic.voucher_lic_mismatch": "该凭证绑定的是其他授权编号，无法在本实例兑换",
     "err.lic.voucher_customer_mismatch": "该凭证绑定的是其他客户，无法在本授权下兑换",
     "err.lic.voucher_unavailable": "运行环境缺少 cryptography，无法验签凭证",
+    # 用量趋势（P5）
+    "mb_trend_title": "用量趋势",
+    "mb_trend_note": "按月统计（UTC）；含翻译与语音合成两类字符消耗。",
 }
 
 EN = {
@@ -159,4 +162,6 @@ EN = {
     "err.lic.voucher_lic_mismatch": "This voucher is bound to a different license ID and cannot be redeemed here",
     "err.lic.voucher_customer_mismatch": "This voucher is bound to a different customer and cannot be redeemed under this license",
     "err.lic.voucher_unavailable": "cryptography is missing in this environment; cannot verify vouchers",
+    "mb_trend_title": "Usage trend",
+    "mb_trend_note": "Monthly totals (UTC), covering translation and voice-synthesis characters.",
 }

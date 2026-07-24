@@ -147,6 +147,29 @@ class LicenseQuotaStore:
             return None
         return max(0, inc - self.used_chars(lic_id))
 
+    def usage_history(self, lic_id: str, months: int = 6) -> list:
+        """按月聚合用量（近 N 个自然月，UTC 口径随 ``_day_str``）。
+
+        返回 ``[{month: 'YYYY-MM', chars: int}, ...]`` **旧 → 新**（渲染顺序）；
+        只含有记录的月份（会员页据此隐藏空趋势，不补零月）。读失败返回空表。
+        """
+        n = max(1, int(months or 6))
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT substr(day, 1, 7) AS ym, SUM(chars) AS s "
+                    "FROM license_char_usage WHERE lic_id = ? "
+                    "GROUP BY ym ORDER BY ym DESC LIMIT ?",
+                    (str(lic_id or "default"), n),
+                ).fetchall()
+            return [
+                {"month": str(r["ym"]), "chars": int(r["s"] or 0)}
+                for r in reversed(rows)
+            ]
+        except Exception:
+            logger.debug("[license_quota] usage_history 读取失败（空表）", exc_info=True)
+            return []
+
     # ── 字符加量包（charpack，融合实例 P4b）────────────────────────────────
     #
     # lingox-charpack 等「买字符包」订单的入账通道：license payload 的

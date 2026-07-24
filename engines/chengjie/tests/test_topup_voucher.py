@@ -220,3 +220,38 @@ def test_end_to_end_vendor_to_customer(keypair):
     q = check_license_quota(lic_status=_st())
     assert q["included"] == 100_000 + 1_500_000
     assert q["topup_chars"] == 1_500_000
+
+
+# ── 批量签发（license_tool --count，大客户一次买 N 包）──────────────────────
+
+def test_batch_refs_derivation():
+    """count==1 原样；N>1 零填充序号宽度自适应；ref 全体唯一。"""
+    from src.licensing.topup_voucher import batch_refs
+
+    assert batch_refs("ORD-9", 1) == ["ORD-9"]
+    refs = batch_refs("ORD-9", 3)
+    assert refs == ["ORD-9-01", "ORD-9-02", "ORD-9-03"]
+    wide = batch_refs("O", 120)
+    assert wide[0] == "O-001" and wide[-1] == "O-120"
+    assert len(set(wide)) == 120
+    assert batch_refs("R", 0) == ["R"]   # 非法 count 回落单张
+
+
+def test_batch_vouchers_redeem_independently(keypair):
+    """批量 3 张：逐张兑换独立入账、任一张重复兑换幂等拒绝、合计正确。"""
+    from src.licensing.topup_voucher import batch_refs
+
+    tokens = [
+        issue_topup_voucher(keypair["private_hex"], chars=500_000, ref=r,
+                            customer="boss@acme.com", note="batch")
+        for r in batch_refs("ORD-BAT", 3)
+    ]
+    for t in tokens:
+        assert redeem_topup_voucher(
+            t, lic_status=_st(), public_key_hex=keypair["public_hex"],
+        )["ok"] is True
+    dup = redeem_topup_voucher(
+        tokens[1], lic_status=_st(), public_key_hex=keypair["public_hex"])
+    assert dup["ok"] is False and dup["error"] == "duplicate_ref"
+    q = check_license_quota(lic_status=_st())
+    assert q["topup_chars"] == 1_500_000   # 3 × 50 万，一张不多一张不少
