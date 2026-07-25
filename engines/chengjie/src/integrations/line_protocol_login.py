@@ -24,6 +24,7 @@ LINE 官方**没有可嵌入的完整网页聊天端**，但社区有等价 What
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import threading
@@ -149,6 +150,28 @@ def _self_profile_fields(client: Any) -> tuple[str, str]:
         return "", ""
 
 
+def _kick_orchestrator() -> None:
+    """登录成功后立刻催一次编排器巡检，让新号的 worker 马上起来。
+
+    不催的话要等下一轮 15s 巡检才 ``start_account``，再叠加前端账号列表 20~45s 轮询
+    ——用户侧表现＝「登录成功了但图标要一分钟才变蓝」（2026-07-25 真机反馈）。
+
+    刻意用 ``create_task`` 不 await：``sync()`` 会顺带拉起其它待起 worker（Telegram 的
+    ``start`` 要联网握手，秒级），await 会把这次 2.5s 一轮的登录轮询请求拖住。也刻意用
+    ``get_orchestrator_if_running``——绝不在这里以空配置误建单例遮蔽 app 的真实实例。
+    """
+    try:
+        from src.integrations.account_orchestrator import get_orchestrator_if_running
+        orch = get_orchestrator_if_running()
+        if orch is None:
+            return
+        task = asyncio.create_task(orch.sync())
+        # 加个回调把异常读掉，否则 task 被 GC 时抛 "exception was never retrieved"
+        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+    except Exception:  # noqa: BLE001
+        logger.debug("[line_protocol] 催巡检失败（等 15s 兜底）", exc_info=True)
+
+
 def _discard_certificate(config: Dict[str, Any], account_id: str, used_cert: str) -> None:
     """带证书登录失败 → 删掉它，下一轮走干净的 PIN 流程。
 
@@ -165,6 +188,24 @@ def _discard_certificate(config: Dict[str, Any], account_id: str, used_cert: str
             logger.info("[line_protocol] 带证书登录失败，已丢弃证书 account=%s（下轮走 PIN）", account_id)
     except Exception:  # noqa: BLE001
         logger.debug("[line_protocol] 丢弃证书失败", exc_info=True)
+
+
+def _dump_login_transcript(client: Any, config: Dict[str, Any], tag: str) -> str:
+    """登录失败时把 okline 的协议 transcript 落盘，给下次事故留第一现场。
+
+    okline 的 recorder 记了每一次 thrift 往返；只有落盘才能回答「PIN 几点签发的 /
+    checkPinCodeVerified 每轮返回什么 / 到底是网关超时还是服务端拒绝」这类问题——
+    靠 app.log 里一行 warning 永远说不清（2026-07-25 排障全程都在靠推理补这段盲区）。
+    ``redact=True`` 掩掉 token/X-Hmac；只在失败路径调用，正常登录不产生文件。
+    """
+    try:
+        d = os.path.join(sessions_dir(config), "_diag")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, f"login_{tag}_{time.strftime('%Y%m%d_%H%M%S')}.log")
+        client.save_log(path, fmt="text", redact=True)
+        return path
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _mark_failed(state: Dict[str, Any], reason_code: str) -> None:
@@ -222,6 +263,9 @@ def _drive_qr_login(client: Any, state: Dict[str, Any], config: Dict[str, Any],
                 result = client.qr_login(**kwargs)
         except Exception as ex:  # noqa: BLE001
             logger.warning("[line_protocol] qr_login 失败: %s", ex)
+            diag = _dump_login_transcript(client, config, "qrfail")
+            if diag:
+                logger.warning("[line_protocol] 协议 transcript 已落盘: %s", diag)
             _discard_certificate(config, account_id, cert)
             _mark_failed(state, classify_login_error(str(ex)))
             return
@@ -230,6 +274,9 @@ def _drive_qr_login(client: Any, state: Dict[str, Any], config: Dict[str, Any],
         if not getattr(result, "success", False) or not mid:
             display_message = str(getattr(result, "display_message", "") or "login failed")
             logger.warning("[line_protocol] qr_login 未成功: %s", display_message)
+            diag = _dump_login_transcript(client, config, "notok")
+            if diag:
+                logger.warning("[line_protocol] 协议 transcript 已落盘: %s", diag)
             _discard_certificate(config, account_id, cert)
             _mark_failed(state, classify_login_error(display_message))
             return
@@ -265,6 +312,47 @@ def _drive_qr_login(client: Any, state: Dict[str, Any], config: Dict[str, Any],
                 pass
 
 
+# QR 登录 HTTP read timeout：必须远大于单轮长轮询窗口 X-LST（interval*1000，实测 30s），
+# 否则与网关 hold 同时到期 → requests 竞态抢先抛 ReadTimeout → okline _poll 不认（非 408/410）
+# → 整条扫码登录随机暴毙。120s 覆盖 interval 到 ~100s；只作用于一次性登录实例。
+# 服务端 createQrCode 实测回 longPollingIntervalSec=150（X-LST=150000），HTTP read
+# timeout 必须显著高于它，否则长轮询没等到结果就被本地掐断。上一版取 120 曾与服务端
+# 120.3s 的过期响应擦肩而过（transcript #6），故留足缓冲。
+_LOGIN_HTTP_TIMEOUT_SEC = 200.0
+
+
+# ⚠ 别再「优化」掉 okline qr_login 里那次空证书 verifyCertificate。
+# 它看着像一次多余的试探（首登证书为空，服务端必回 code=2「验证码不正确」），实则是
+# 服务端状态机的必需一步：2026-07-25 曾把它拦下不发，结果紧随其后的 createPinCode
+# 直接 code=100「QR code has expired」，连 PIN 都签不出来（transcript 实证，已回滚）。
+# 门禁 test_empty_certificate_probe_must_not_be_skipped 钉住这个行为。
+
+
+def _build_okline(okline_cls: Any) -> Any:
+    """构造登录用 OkLine，把 HTTP read timeout 抬到远大于 QR 长轮询窗口（消除竞态）。
+
+    okline 2.7.0 的 ``qr_check_verified`` / ``qr_check_pincode_verified`` 走 X-LST 长轮询
+    （网关 hold ``interval*1000`` ms，实测 30~150s 不等），但底层 HTTP read timeout 用
+    ``LineConfig.timeout`` 默认 30.0——两者相等即竞态：网络稍慢 requests 先抛
+    ``Read timed out``，而它不是 okline ``_poll`` 认的 408/410 翻页信号 → 不重试
+    → 整条扫码登录在任意一轮长轮询上随机暴毙（用户根本进不了 PIN，2026-07-25 实录事故）。
+    抬高 read timeout 后，长轮询靠网关正常 408/410 翻页续等，扫码确认阶段不再随机死。
+
+    只作用于这个一次性登录实例；登录成功后收发交给 ``LineProtocolWorker`` 的独立实例
+    （沿用默认超时，不受影响）。okline 若换构造签名 → 回落无参构造（退回老行为，
+    不因这一优化把登录整条打死）。
+
+    只动 timeout：qr_login 的其余步骤（含那次看似多余的空证书 verifyCertificate）都是
+    协议必需的，不要在这里加"聪明"的拦截。
+    """
+    try:
+        from okline.transport import LineConfig
+        return okline_cls(config=LineConfig(timeout=_LOGIN_HTTP_TIMEOUT_SEC))
+    except Exception:  # noqa: BLE001
+        logger.debug("[line_protocol] 自定义 LineConfig 失败，回落默认构造", exc_info=True)
+        return okline_cls()
+
+
 def make_provider(config: Dict[str, Any]):
 
     async def _provider(request: Any, platform: str, mode: str, account_id: str,
@@ -276,7 +364,7 @@ def make_provider(config: Dict[str, Any]):
             return {"instruction": "", "reason_code": "okline_missing"}
         try:
             from okline import OkLine
-            client = OkLine()
+            client = _build_okline(OkLine)
         except Exception as ex:  # noqa: BLE001
             logger.warning("[line_protocol] 初始化 OkLine 失败: %s", ex)
             return {"instruction": "", "reason_code": "client_init"}
@@ -320,6 +408,7 @@ def make_provider(config: Dict[str, Any]):
                         avatar_url=str(state.get("avatar_url") or ""), config=config)
                 except Exception:  # noqa: BLE001
                     logger.debug("[line_protocol] self_profile 富集失败（忽略）", exc_info=True)
+                _kick_orchestrator()
             # pin/reason_code 只在各自状态下回填：PIN 属一次性凭据，登录成功后不该还留在响应里
             return {"status": st, "account_id": mid,
                     "detail": str(state.get("detail") or ""),

@@ -9581,6 +9581,13 @@ function _cancelPendingLogin(){
   _connectLoginId=null;
   return done;
 }
+// 授权成功那一刻 worker 往往还没 running——后端是在同一瞬间才催编排器拉起（异步），
+// 所以紧接着的 loadChats() 读到的仍是离线，图标要等常规 20~45s 轮询才变蓝（真机反馈
+// 「登录后要一分钟才显示图标变蓝」）。这里补刷一次把那段空窗填掉；失败无所谓，
+// 常规轮询照旧兜底。
+function _refreshAfterAuthorize(){
+  setTimeout(async()=>{ try{ await loadChats(); renderDrawerAccounts(); }catch(_){} }, 1800);
+}
 function openConnect(pl, acctId){
   _connectPlat=pl; _connectAcct=acctId||''; _connectMode=''; _connectAuthorized=false; _connectAutoRefresh=0;
   _showConnectPin(false); _showConnectErrDetail('');
@@ -9982,6 +9989,7 @@ async function pollConnect(){
       _setConnectState('ok',window.T('inbox.connect.st_ok'),window.T('inbox.connect.hint_ok'));
       if(_connectPollTimer){ clearInterval(_connectPollTimer); _connectPollTimer=null; }
       await loadChats(); renderDrawerAccounts();
+      _refreshAfterAuthorize();
       setTimeout(closeConnect, 1200);
     }
     else if(st==='expired'){
@@ -10048,6 +10056,7 @@ async function submitConnectPassword(){
       _setConnectStep(3);
       _setConnectState('ok',window.T('inbox.connect.st_ok'),window.T('inbox.connect.hint_ok'));
       await loadChats(); renderDrawerAccounts();
+      _refreshAfterAuthorize();
       setTimeout(closeConnect, 1200);
     } else {
       // 密码错误等：保持密码区可重试

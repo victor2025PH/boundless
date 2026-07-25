@@ -1170,6 +1170,145 @@ class LineProtocolWorker:
         self._start_receiver()
         self.state = "running"
         self.detail = ""
+        # 存量名单同步刻意放在 running 之后且**不 await**：前端在线态就看编排器 state，
+        # 先让账号亮起来；名单后台补齐，免得大号（上千好友）把 start 拖成分钟级。
+        try:
+            asyncio.create_task(self._sync_bootstrap(path))
+        except Exception:  # noqa: BLE001
+            logger.debug("[line-worker] 存量同步调度失败", exc_info=True)
+
+    # ── 登录后存量同步（好友通讯录 / 群会话占位）─────────────────────────────────
+
+    def _sync_cfg(self) -> Dict[str, Any]:
+        line_cfg = ((self.config or {}).get("platform_login") or {}).get("line") or {}
+        cfg = line_cfg.get("sync") if isinstance(line_cfg, dict) else None
+        return cfg if isinstance(cfg, dict) else {}
+
+    async def _sync_bootstrap(self, tokens_file: str) -> None:
+        """登录后一次性存量同步：好友 → 通讯录，群 → 会话占位。
+
+        ⚠ LINE 副设备协议**不下发历史消息**——官方 Chrome 版扩展登录后同样是空列表，
+        只靠后续 ops 流拿新消息。所以这里能同步的存量只有「名单」：好友进
+        ``protocol_contacts``（通讯录可见 + 入站自动补名），群进会话占位。别期待历史。
+
+        okline 是同步 requests 库 → 整段丢线程池；且**另建一次性 client**，不与
+        ``Bot.run`` 的长轮询共用连接/Session（跨线程并发复用同一实例是 requests 的雷区）。
+        全程 best-effort：任何一步失败只记日志，不动已 running 的收发主职能。
+        """
+        cfg = self._sync_cfg()
+        if not bool(cfg.get("enabled", True)):
+            return
+        try:
+            await asyncio.to_thread(self._sync_bootstrap_blocking, tokens_file, cfg)
+        except Exception:  # noqa: BLE001
+            logger.debug("[line-worker] 存量同步失败 account=%s", self.account_id, exc_info=True)
+
+    def _sync_bootstrap_blocking(self, tokens_file: str, cfg: Dict[str, Any]) -> None:
+        from okline import OkLine
+        from src.integrations.protocol_bridge import get_inbox_store
+        store = get_inbox_store()
+        if store is None:
+            logger.debug("[line-worker] inbox store 未就绪，跳过存量同步")
+            return
+        client = OkLine.from_tokens_file(tokens_file)
+        try:
+            contacts = self._fetch_contact_rows(client, int(cfg.get("max_contacts") or 1000))
+            if contacts:
+                n = store.upsert_protocol_contacts("line", self.account_id, contacts)
+                logger.info("[line-worker] 通讯录同步 %d 条 account=%s", n, self.account_id)
+            groups = self._fetch_group_rows(client, int(cfg.get("max_groups") or 200))
+            rows: List[Dict[str, Any]] = list(groups)
+            # 好友建会话占位只对小号做：这样工作台立刻能主动发起对话；大号（上千好友）
+            # 全建会话会把列表灌成噪音，那种情况只留通讯录（新消息到了自然冒出会话）。
+            seed_max = int(cfg.get("seed_chats_max", 200) or 0)
+            if contacts and seed_max and len(contacts) <= seed_max:
+                rows += [{"jid": r["jid"], "name": r.get("name") or ""} for r in contacts]
+            elif contacts and seed_max:
+                logger.info(
+                    "[line-worker] 好友 %d 个 > seed_chats_max=%d：只同步通讯录，不建会话占位",
+                    len(contacts), seed_max)
+            if rows:
+                n = store.upsert_protocol_chats("line", self.account_id, rows)
+                logger.info("[line-worker] 会话占位同步 %d 条（其中群 %d）account=%s",
+                            n, len(groups), self.account_id)
+        finally:
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _fetch_contact_rows(self, client: Any, limit: int) -> List[Dict[str, Any]]:
+        """好友名单 → ``upsert_protocol_contacts`` 的 rows，顺带预热 peer 身份缓存。
+
+        ``getAllContactIds`` 实测直接回 mid 列表（也兼容被包一层 dict 的形态）；
+        ``getContactsV2`` 由 okline 自动按 100 分块，mid 数量无上限。
+        """
+        rows: List[Dict[str, Any]] = []
+        mids = self._extract_mids(client.get_all_contact_ids())
+        if not mids:
+            return rows
+        if limit > 0:
+            mids = mids[:limit]
+        res = client.get_contacts(mids)
+        entries = ((res or {}).get("contacts") or {}) if isinstance(res, dict) else {}
+        for mid, entry in entries.items():
+            name, avatar = self._contact_identity(entry)
+            rows.append({"jid": str(mid), "name": name})
+            # 预热缓存：首条消息进来时不必再打 getContactsV2，名字/头像当场就有
+            if name or avatar:
+                self._peer_ident_cache.setdefault(str(mid), (name, avatar))
+        return rows
+
+    def _fetch_group_rows(self, client: Any, limit: int) -> List[Dict[str, Any]]:
+        """群名单 → 会话占位 rows（``is_group`` → chat_type=group，不刷 SLA）。"""
+        raw = client.get_all_chat_mids()
+        mids = list((raw or {}).get("memberChatMids") or []) if isinstance(raw, dict) else []
+        mids = [m for m in mids if isinstance(m, str) and m]
+        if not mids:
+            return []
+        if limit > 0:
+            mids = mids[:limit]
+        res = client.get_chats(mids)
+        rows: List[Dict[str, Any]] = []
+        for chat in (((res or {}).get("chats") or []) if isinstance(res, dict) else []):
+            if not isinstance(chat, dict):
+                continue
+            ck = str(chat.get("chatMid") or chat.get("mid") or "")
+            if not ck:
+                continue
+            rows.append({
+                "jid": ck,
+                "name": str(chat.get("chatName") or chat.get("name") or ""),
+                "is_group": True,
+            })
+        return rows
+
+    @staticmethod
+    def _extract_mids(raw: Any) -> List[str]:
+        if isinstance(raw, list):
+            return [m for m in raw if isinstance(m, str) and m]
+        if isinstance(raw, dict):
+            for key in ("contactIds", "ids", "mids"):
+                v = raw.get(key)
+                if isinstance(v, list):
+                    return [m for m in v if isinstance(m, str) and m]
+        return []
+
+    @staticmethod
+    def _contact_identity(entry: Any) -> tuple:
+        """从 ``getContactsV2`` 的一条 entry 抽 ``(显示名, 头像 URL)``，备注名优先。
+
+        直接读 raw dict（字段名已由真机探针确认）——比绕 ``Contact`` 模型少一层
+        「okline 换字段名就静默变空」的风险；``entry`` 形如 ``{contact: {...}}``。
+        """
+        from src.integrations.line_protocol_login import line_picture_url
+        inner = entry
+        if isinstance(entry, dict) and isinstance(entry.get("contact"), dict):
+            inner = entry["contact"]
+        if not isinstance(inner, dict):
+            return "", ""
+        name = str(inner.get("displayNameOverridden") or inner.get("displayName") or "").strip()
+        return name, line_picture_url(str(inner.get("picturePath") or ""))
 
     def _start_receiver(self) -> None:
         """后台 daemon 线程跑 okline Bot：收到消息 → 落库 + 自动回复（best-effort）。"""

@@ -485,3 +485,83 @@ def test_certificate_unsupported_falls_back_to_plain_login(tmp_path):
     lpl._drive_qr_login(_C(), state, config, mid)
     assert seen == [True, False], "未在 TypeError 后摘掉 certificate 重试"
     assert state["status"] == "authorized", "证书降级路径没能正常登录"
+
+
+# ── 七、长轮询 read timeout 竞态（2026-07-25 真机事故根因）────────────────────
+
+def test_login_client_lifts_http_timeout_above_longpoll_window():
+    """okline QR 长轮询把网关 hold 窗口(X-LST=interval*1000，实测 30s)与底层 HTTP read
+    timeout(LineConfig.timeout 默认 30.0)取成同一个值 → 两者同时到期是竞态：网络稍慢
+    requests 先抛 ``Read timed out``，而它不是 okline ``_poll`` 认的 408/410 翻页信号
+    → 不重试 → 整条扫码登录在任意一轮长轮询上随机暴毙（用户根本进不了 PIN）。
+
+    登录实例必须把 HTTP read timeout 抬到明显大于单轮长轮询窗口，长轮询才能靠网关正常
+    408/410 续等。这是那次事故的直接回归钉。
+    """
+    captured: dict = {}
+
+    class _CaptureCfg:
+        def __init__(self, *a, config=None, **k):
+            captured["config"] = config
+
+    client = lpl._build_okline(_CaptureCfg)
+    assert isinstance(client, _CaptureCfg)
+    cfg = captured.get("config")
+    assert cfg is not None, "登录实例未注入自定义 LineConfig（会退回默认 30s 竞态）"
+    # 服务端实测 longPollingIntervalSec=150（X-LST=150000），且曾在 120.3s 才回过期响应；
+    # 取 180 下限＝必须盖过 150s 窗口并留缓冲，否则换个网关参数竞态立刻复发。
+    assert getattr(cfg, "timeout", 0) >= 180.0, (
+        f"HTTP read timeout={getattr(cfg, 'timeout', None)} 未抬过长轮询窗口，竞态仍在")
+
+
+def test_build_okline_falls_back_when_config_rejected():
+    """okline 将来换构造签名(不认 config) → 回落无参构造，退回老行为而非把登录整条打死。"""
+    calls: list = []
+
+    class _PickyClient:
+        def __init__(self, *a, **k):
+            if "config" in k:
+                calls.append("with_config")
+                raise TypeError("unexpected kwarg config")
+            calls.append("plain")
+
+    client = lpl._build_okline(_PickyClient)
+    assert isinstance(client, _PickyClient)
+    assert calls == ["with_config", "plain"], f"未在 config 被拒后回落无参构造：{calls}"
+
+
+# ── 八、空证书探测不可跳过（2026-07-25 真机 transcript 实证的反向门禁）──────────
+
+class _ProbeAuth:
+    def __init__(self) -> None:
+        self.sent: list = []
+
+    def qr_verify_certificate(self, auth_session_id, certificate=""):
+        self.sent.append(certificate)
+        return {"ok": True}
+
+
+class _ProbeClient:
+    def __init__(self, *a, **k) -> None:
+        self.auth = _ProbeAuth()
+
+
+def test_empty_certificate_probe_must_not_be_skipped():
+    """okline qr_login 里那次「空证书 verifyCertificate」是协议必需的一步，别当多余试探删掉。
+
+    它必然回 code=2「The verification code you entered is incorrect」，看着像白跑一趟，
+    但服务端靠它推进 secondary-login 状态机：2026-07-25 曾把空证书就地拦下不发，结果
+    紧随其后的 createPinCode 直接 code=100「QR code has expired」，PIN 根本签不出来
+    （用户侧表现＝扫完码直接失败、连验证码都不显示）。这条门禁防同样的"优化"再来一次。
+    """
+    client = lpl._build_okline(_ProbeClient)
+    client.auth.qr_verify_certificate("SQ_TEST", "")
+    assert client.auth.sent == [""], (
+        "空证书探测被拦下 → 服务端状态机不推进，createPinCode 必以 QR expired 失败")
+
+
+def test_real_certificate_probe_untouched():
+    """回访设备(有证书)照常探 verifyCertificate —— 那是免 PIN 直登的正路。"""
+    client = lpl._build_okline(_ProbeClient)
+    assert client.auth.qr_verify_certificate("SQ_TEST", "REAL_CERT_BLOB") == {"ok": True}
+    assert client.auth.sent == ["REAL_CERT_BLOB"]
