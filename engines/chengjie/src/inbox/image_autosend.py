@@ -867,7 +867,8 @@ async def run_autosend_kline(
     渲染或投递失败）→ 回落正常草稿流（缺生辰时草稿注入路径会顺势要生辰）。
     ``resolve_birth``：由调用方注入的「从记忆解析生辰」回调（拿不到 → None）。
     """
-    bcfg = ((config or {}).get("companion") or {}).get("bazi") or {}
+    from src.fatex.config import fatex_cfg
+    bcfg = fatex_cfg(config)  # FateX 合并视图（fatex.* 优先，companion.bazi 兼容）
     if not (isinstance(bcfg, dict) and bcfg.get("enabled", False)
             and bcfg.get("kline", True)):
         return False

@@ -31,6 +31,8 @@ def test_counters_and_dump():
     s.record_kline(ok=True)
     s.record_kline(ok=False)
     d = s.dump()
+    # 产品标识：命理已分离为 FateX，dump 首键即产品归属
+    assert d["product"] == "fatex" and list(d)[0] == "product"
     assert d["topic_turns"] == 1
     assert d["chart_injections"] == 2 and d["same_turn_charts"] == 1
     assert d["ask_directives"] == 1 and d["birth_captured"] == 1

@@ -572,7 +572,8 @@ async def autosend_bazi_kline(assistant, platform, account_id, chat_key, text) -
     True=已作为图发出（跳过语音/文本）；False=未发→回落正常草稿流。
     一处生效全平台（telegram/whatsapp/messenger/line/ig）。"""
     _cfg = assistant.config.config or {}
-    _bcfg = ((_cfg.get("companion") or {}).get("bazi") or {})
+    from src.fatex.config import fatex_cfg as _fx_cfg
+    _bcfg = _fx_cfg(_cfg)  # FateX 合并视图（fatex.* 优先，companion.bazi 兼容）
     if not (isinstance(_bcfg, dict) and _bcfg.get("enabled", False)
             and _bcfg.get("kline", True)):
         return False

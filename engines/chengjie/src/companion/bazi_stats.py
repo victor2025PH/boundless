@@ -86,6 +86,8 @@ class BaziStats:
         with self._lock:
             total_daily = self.daily_chat + self.daily_ritual
             out: Dict[str, Any] = {
+                # 产品标识：命理已分离为独立产品 FateX（幻缘），下游按此归属数据
+                "product": "fatex",
                 "since": self._since,
                 "topic_turns": self.topic_turns,
                 "chart_injections": self.chart_injections,

@@ -164,6 +164,9 @@ async def start_assistant(assistant):
             # ★ 每人设「相册/媒体」注册表（图/视频 + 触发词；始终开启，供相册后台/回复链读写）
             assistant._init_persona_media_store()
 
+            # ★ FateX（问衍）产品独立库：生辰画像结构化行（与主库物理分离，账号隔离）
+            assistant._init_fatex_store()
+
             # ★ Q 延伸：ingest 回写 contact_id（默认关）
             assistant._maybe_wire_ingest_contact_writeback()
 
