@@ -30,17 +30,19 @@ scrape_configs:
       # If your Prom version only supports bearer_token_file with full header value,
       # switch to: bearer_token_file: D:/chengjie-instances/.ops/prom_bearer_zhiliao
 
-  - job_name: chengjie_tongyi
-    metrics_path: /api/workspace/metrics
-    params:
-      format: [prometheus]
-    scrape_interval: 30s
-    scrape_timeout: 10s
-    static_configs:
-      - targets: ["127.0.0.1:18899"]
-        labels:
-          product: tongyi
-          product_name: LingoX
-    authorization:
-      type: Bearer
-      credentials_file: D:/chengjie-instances/.ops/prom_bearer_tongyi_raw
+# 2026-07-24 融合切换：通译 LingoX(18899) 已并库进智聊退役（.ops/retired/tongyi.flag）。
+# 18899 scrape target 同步摘除；若将来回滚双实例，恢复下面这段：
+#  - job_name: chengjie_tongyi
+#    metrics_path: /api/workspace/metrics
+#    params:
+#      format: [prometheus]
+#    scrape_interval: 30s
+#    scrape_timeout: 10s
+#    static_configs:
+#      - targets: ["127.0.0.1:18899"]
+#        labels:
+#          product: tongyi
+#          product_name: LingoX
+#    authorization:
+#      type: Bearer
+#      credentials_file: D:/chengjie-instances/.ops/prom_bearer_tongyi_raw
