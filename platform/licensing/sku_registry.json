@@ -1,19 +1,19 @@
 {
-  "generated": "2026-07-18",
+  "generated": "2026-07-20",
   "source": "products/*/product.yaml",
   "note": "Single source of SKUs for website pricing + license gating + order. Regenerate via platform/licensing/build_sku_registry.py.",
   "summary": {
-    "product_count": 7,
-    "sku_count": 22,
+    "product_count": 8,
+    "sku_count": 25,
     "tbd_price_count": 2,
     "by_category": {
       "studio": 3,
       "lingo": 2,
-      "growth": 2
+      "growth": 3
     },
     "by_visibility": {
       "public": 3,
-      "gated": 2,
+      "gated": 3,
       "mixed": 2
     }
   },
@@ -219,6 +219,42 @@
           "price": "198",
           "currency": "USD",
           "note": ""
+        }
+      ]
+    },
+    {
+      "id": "zhikong",
+      "brand_key": "matrixx",
+      "name": "智控王",
+      "category": "growth",
+      "visibility": "gated",
+      "risk": "high",
+      "engine": "tgkz2026",
+      "landing": null,
+      "skus": [
+        {
+          "sku_id": "matrixx-silver",
+          "name": "白银精英",
+          "unit": "month",
+          "price": "4.99",
+          "currency": "USD",
+          "note": "5个TG账号/100条日消息/50次AI回复"
+        },
+        {
+          "sku_id": "matrixx-gold",
+          "name": "黄金大师",
+          "unit": "month",
+          "price": "19.9",
+          "currency": "USD",
+          "note": "15个TG账号/300次AI调用/智能模式+数据洞察，性价比主力档"
+        },
+        {
+          "sku_id": "matrixx-diamond",
+          "name": "钻石王牌",
+          "unit": "month",
+          "price": "59.9",
+          "currency": "USD",
+          "note": "50个TG账号/AI调用无限/策略自动化+高级分析"
         }
       ]
     },
@@ -495,6 +531,42 @@
       "price": "198",
       "currency": "USD",
       "note": ""
+    },
+    {
+      "product": "zhikong",
+      "brand_key": "matrixx",
+      "category": "growth",
+      "visibility": "gated",
+      "sku_id": "matrixx-silver",
+      "name": "白银精英",
+      "unit": "month",
+      "price": "4.99",
+      "currency": "USD",
+      "note": "5个TG账号/100条日消息/50次AI回复"
+    },
+    {
+      "product": "zhikong",
+      "brand_key": "matrixx",
+      "category": "growth",
+      "visibility": "gated",
+      "sku_id": "matrixx-gold",
+      "name": "黄金大师",
+      "unit": "month",
+      "price": "19.9",
+      "currency": "USD",
+      "note": "15个TG账号/300次AI调用/智能模式+数据洞察，性价比主力档"
+    },
+    {
+      "product": "zhikong",
+      "brand_key": "matrixx",
+      "category": "growth",
+      "visibility": "gated",
+      "sku_id": "matrixx-diamond",
+      "name": "钻石王牌",
+      "unit": "month",
+      "price": "59.9",
+      "currency": "USD",
+      "note": "50个TG账号/AI调用无限/策略自动化+高级分析"
     },
     {
       "product": "zhiliao",

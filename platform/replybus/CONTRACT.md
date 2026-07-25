@@ -114,7 +114,8 @@ platform 不 import 任何产品/引擎，仅通过 HTTP 契约交互；话术/�
 ## 8. 落地状态与下一步
 
 - 本层交付：`CONTRACT.md`（本文件）+ `client.py`（瘦客户端 + `--selftest` 全通过）+ `reply_schema.json`。
-- 待接线（下一阶段）：
-  1. chengjie 侧实现 `POST /api/replybus/decide` + `GET /api/replybus/status`（按 `msg_id` 幂等；接人设/话术/意向管线；恪守 §5 不代发、§6 原文不落日志）；
-  2. 智控王在"收到入站私信"处调 `ReplyBusClient().decide(...)`，按 action 分派执行（send 落实 `delay_ms` 拟人节律；draft 进人工确认队列；handoff 挂转人工），`fallback` 走本地 ai_auto_chat，并**另发** observability 计数事件（不含原文）；
-  3. 承接用号与获客用号分池的账号台账落到 `platform/identity`（防双发的组织侧保险）。
+- ✅ **chengjie 侧 `POST /api/replybus/decide` + `GET /api/replybus/status` 已实现**（`src/web/routes/replybus_routes.py`，接 `generate_persona_reply` 人设/话术管线；`api_auth` 支持 `Authorization: Bearer` 鉴权；恪守 §5 不代发——刻意不 import 任何发送函数、§6 原文不落日志——`message.text` 只临时传参不打印不落盘）；chengjie 自带单测 `tests/test_replybus_routes.py`（14 项，mock 掉 `generate_persona_reply`，覆盖 draft/silent 映射、防双发字段红线、异常兜底）。
+- ✅ **智控王侧已接线**（`private_message_handler.py::_try_replybus_decide`）：`AI_BACKEND=chengjie` 时真实调用；默认 `local` 时不调用（零行为变化）；另有 **S3.5 影子模式**（`REPLYBUS_SHADOW`，见 `_maybe_shadow_log_replybus`/`_shadow_log_task`）：`AI_BACKEND` 仍为 `local`（真实回复不变）时背景问一次 chengjie 并写对比日志，供业务方用 `shadow_report.py` 看数据决策，见 `docs/实施31_影子模式部署指南`。
+- ✅ **2026-07-20 第七阶段·真实端到端验证**（不是分别测两端，是让智控王侧生产代码真的用真实 HTTP 打到一个真绑端口的 chengjie 路由实例）：起一个裸 `FastAPI()` + 真实 `register_replybus_routes`（只 mock `generate_persona_reply` 这一个函数，装配手法与 chengjie 自己的单测一致）+ `uvicorn` 真绑端口；直接实例化生产类 `PrivateMessageHandler()`（无需 Telegram 登录，构造零依赖）调用真实 `_shadow_log_task`/`_maybe_shadow_log_replybus`，验证：①`Authorization: Bearer` 头确实由 `ReplyBusClient` 发出且被 chengjie 侧 `api_auth` 正确校验（未带/带错 token 时正确 401 → 客户端 fail-soft 收敛不炸）；②5 条不同话术样本的决策（draft/silent 分布）被正确写入 `shadow-*.jsonl`；③chengjie 不可达时优雅记录 `chengjie_available=false`，不抛异常；④`_maybe_shadow_log_replybus` 门控：`REPLYBUS_SHADOW=false` 时零任务创建、`=true` 时创建即返回（0.03ms 级，真正不阻塞私信主流程）；⑤`shadow_report.py` 读取真实产出文件，统计结果（采集率/决策分布/分歧样本/长度对比）与 §3 报告样例格式一致。测试文件用后即删，未在库内留存。
+- ✅ **`replybus_routes.py` 的一处过期记录已修正**：该文件曾记录"智控王侧瘦客户端不发送 Authorization 头"为已知缺口——此说法在 2026-07-19 第五阶段已被修复（`client.py` 支持 `auth_token`/`BOUNDLESS_BUS_TOKEN`），但服务端注释一直没同步更新，本轮借上面的真实验证顺手订正，避免继续误导后续读者。
+- 待接线（仍开放，无明确业务时间线，非本轮范围）：承接用号与获客用号分池的账号台账落到 `platform/identity`（防双发的组织侧保险——当前防双发靠"执行单点"的架构性保证已经成立，账号台账是纵深防御的锦上添花，不是当前风险缺口）。
