@@ -1,4 +1,4 @@
-<#
+﻿<#
   华灵网站 · 本地一键部署 (Windows / PowerShell)
   流程: sync:brand → 打包 website/ → 上传(部署包 + deploy.sh) → 服务器侧原子部署 → 公网体检
   绝不在脚本中存放密码：从 $env:VPS_PASS 读取，缺失则安全提示输入(SecureString)。
@@ -17,7 +17,8 @@ param(
   [string]$User         = $(if ($env:VPS_USER) { $env:VPS_USER } else { 'ubuntu' }),
   [string]$RemoteDir    = '/home/ubuntu',
   [string]$SiteUrl      = $(if ($env:SITE_URL) { $env:SITE_URL } else { 'https://bd2026.cc' }),
-  [string]$KeyFile      = $(if ($env:VPS_KEY) { $env:VPS_KEY } else { Join-Path $HOME '.ssh/hualing_deploy' })
+  [string]$KeyFile      = $(if ($env:VPS_KEY) { $env:VPS_KEY } else { Join-Path $HOME '.ssh/hualing_deploy' }),
+  [switch]$SkipAssets   # 只发源码，跳过 public/downloads、public/releases 发布物同步
 )
 
 $ErrorActionPreference = 'Stop'
@@ -29,6 +30,7 @@ if ($PSVersionTable.PSEdition -ne 'Core') {
     Write-Host "检测到 Windows PowerShell $($PSVersionTable.PSVersion)；改用 pwsh 重新启动本脚本..."
     $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath,
       '-VpsHost', $VpsHost, '-User', $User, '-RemoteDir', $RemoteDir, '-SiteUrl', $SiteUrl, '-KeyFile', $KeyFile)
+    if ($SkipAssets) { $argList += '-SkipAssets' }
     & $pwshCmd.Source @argList
     exit $LASTEXITCODE
   }
@@ -67,10 +69,13 @@ try {
 
   Write-Host '[1/4] 打包 website/ (排除 node_modules/.next/.git/.env.local/临时文件) ...'
   if (Test-Path $tar) { Remove-Item $tar -Force }
+  # public/downloads、public/releases（安装包等大文件）不进源码包：服务器侧 rsync 已 exclude
+  # 令其常驻，由下方 [3.5/4] 差量上传，避免每次部署重传数百 MB。
   tar -czf $tar --exclude=node_modules "--exclude=.next*" --exclude=.git --exclude=.env.local `
       --exclude=.hand-shots --exclude=.robot-shots `
       "--exclude=*.tsbuildinfo" "--exclude=*.log" --exclude=og-test.png --exclude=test-fill.png `
-      --exclude=ops-overlay.tgz "--exclude=scripts/_*" .
+      --exclude=ops-overlay.tgz "--exclude=scripts/_*" `
+      --exclude=public/downloads --exclude=public/releases .
   if ($LASTEXITCODE -ne 0) { throw '打包失败' }
   Write-Host ("    包大小 {0:N1} MB" -f ((Get-Item $tar).Length / 1MB))
 
@@ -132,6 +137,44 @@ try {
       }
     } until ((Get-Date) -gt $deadline)
     if (-not $done) { throw "部署轮询超时(>10min)，请上服务器查看 $RemoteDir/deploy.log" }
+
+    # [3.5/4] 差量同步发布物：源码包与服务器 rsync 都排除了这些目录，此处是唯一上载通道。
+    # 远端同名同大小即跳过，只有新增/换版的安装包才真正走网络。
+    if (-not $SkipAssets) {
+      $appDir = "$RemoteDir/yuntech"
+      $changed = 0
+      foreach ($rel in @('public/downloads', 'public/releases')) {
+        $localDir = Join-Path $WebRoot ($rel -replace '/', '\')
+        if (-not (Test-Path $localDir)) { continue }
+        $files = @(Get-ChildItem $localDir -File -Recurse)
+        if ($files.Count -eq 0) { continue }
+        Write-Host "[3.5/4] 同步 $rel（$($files.Count) 个文件）..."
+        foreach ($f in $files) {
+          $sub = $f.FullName.Substring($localDir.Length).TrimStart('\') -replace '\\', '/'
+          $remoteFile = "$appDir/$rel/$sub"
+          $remoteParent = $remoteFile.Substring(0, $remoteFile.LastIndexOf('/'))
+          $sz = (Invoke-Remote "stat -c %s '$remoteFile' 2>/dev/null || echo 0").Trim()
+          if ($sz -eq [string]$f.Length) {
+            Write-Host ("    = {0}（远端同大小，跳过）" -f $sub)
+            continue
+          }
+          Write-Host ("    ^ {0}（{1:N1} MB）上传中..." -f $sub, ($f.Length / 1MB))
+          Invoke-Remote "mkdir -p '$remoteParent'" | Out-Null
+          if ($useOpenSsh) {
+            & $scpExe @('-o', 'StrictHostKeyChecking=accept-new', '-i', $script:keyPath) $f.FullName "${User}@${VpsHost}:$remoteFile"
+            if ($LASTEXITCODE -ne 0) { throw "scp 上传 $sub 失败" }
+          } else {
+            Set-SCPItem @auth -Path $f.FullName -Destination $remoteParent -Force
+          }
+          $changed++
+        }
+      }
+      # Next.js 只在启动时建立 public/ 静态索引：新增文件后不重启会 404（本次事故的第二成因）。
+      if ($changed -gt 0) {
+        Write-Host "    发布物有 $changed 项变更 → 重启 pm2 让静态索引生效"
+        Invoke-Remote "pm2 restart yuntech --update-env >/dev/null 2>&1 && sleep 4 && echo restarted" | Out-Null
+      }
+    }
   } finally {
     if (-not $useOpenSsh -and $script:sshSession) {
       Remove-SSHSession -SessionId $script:sshSession.SessionId | Out-Null

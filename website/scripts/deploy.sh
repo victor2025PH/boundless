@@ -122,9 +122,14 @@ rm -rf "$STAGE" && mkdir -p "$STAGE"
 tar -xzf "$TARBALL" -C "$STAGE"
 
 log "3/7 sync into place (keep .env.local/node_modules/.next, prune stale)"
+# 发布物目录（安装包等大文件）常驻服务器、不随源码 tarball 走：本地 deploy.ps1 打包时排除、
+# 部署后单独差量上传。这里 exclude + --delete 语义 = 不覆盖也不删除；缺此保护时，
+# 任何一次「不含安装包的部署」都会把线上下载文件整目录删掉（2026-07-25 实际发生两次）。
 rsync -a --delete \
   --exclude=node_modules --exclude=.next --exclude=.env.local --exclude='*.log' \
+  --exclude=public/downloads --exclude=public/releases \
   "$STAGE"/ "$APP_DIR"/
+mkdir -p "$APP_DIR/public/downloads" "$APP_DIR/public/releases"
 
 cd "$APP_DIR"
 
