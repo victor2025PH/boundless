@@ -379,6 +379,81 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // ── 下载中心漏斗：入口点击 → 下载页到达 → 安装包下载点击（计数 + 会话级，受 ?days= 窗约束）──
+  // 客户端口径：chatx=/download/chatx 专页；avatarhub=下载中心 hub（其详情区嵌在 /download）；
+  // matrixx=/matrix/download（gated 页）。rate = 下载点击/页面到达（计数比，非会话比）。
+  const dlPageKind = (p: string): string | null => {
+    const norm = p.replace(/^\/en(?=\/|$)/, "").replace(/\/+$/, "") || "/";
+    if (norm === "/download/chatx") return "chatx";
+    if (norm === "/matrix/download") return "matrixx";
+    if (norm === "/download") return "avatarhub"; // hub 页承载 AvatarHub 详情区
+    return null;
+  };
+  const DL_CLICK_EV: Record<string, string> = {
+    download_click: "avatarhub",
+    chatx_download_click: "chatx",
+    matrixx_download_click: "matrixx",
+  };
+  const dlEntryMenu: Record<string, number> = {};
+  const dlEntryHub: Record<string, number> = {};
+  const dlPv: Record<string, number> = {};
+  const dlClicks: Record<string, number> = {};
+  const dlFaq: Record<string, number> = {};
+  const dlBySid: Record<string, { reach: boolean; clicked: boolean }> = {};
+  for (const e of winEvents) {
+    const ev = String(e.event ?? "");
+    const sid = String(e.sid ?? "");
+    if (ev === "download_menu_click") {
+      const c = propStr(e, "client") || "?";
+      dlEntryMenu[c] = (dlEntryMenu[c] ?? 0) + 1;
+    } else if (ev === "download_hub_click") {
+      const c = propStr(e, "client") || "?";
+      dlEntryHub[c] = (dlEntryHub[c] ?? 0) + 1;
+    } else if (ev === "chatx_faq_open") {
+      const q = propStr(e, "q") || "?";
+      dlFaq[q] = (dlFaq[q] ?? 0) + 1;
+    } else if (ev === "pageview") {
+      const kind = dlPageKind(String(e.path ?? ""));
+      if (kind) {
+        dlPv[kind] = (dlPv[kind] ?? 0) + 1;
+        if (sid) (dlBySid[sid] ??= { reach: false, clicked: false }).reach = true;
+      }
+    } else {
+      const client = DL_CLICK_EV[ev];
+      if (client) {
+        dlClicks[client] = (dlClicks[client] ?? 0) + 1;
+        if (sid) (dlBySid[sid] ??= { reach: false, clicked: false }).clicked = true;
+      }
+    }
+  }
+  let dlSessions = 0;
+  let dlConverted = 0;
+  for (const s of Object.values(dlBySid)) {
+    if (!s.reach) continue; // 只统计真正到达下载页的会话
+    dlSessions++;
+    if (s.clicked) dlConverted++;
+  }
+  const dlClients = ["chatx", "avatarhub", "matrixx"].map((key) => ({
+    key,
+    pv: dlPv[key] ?? 0,
+    clicks: dlClicks[key] ?? 0,
+    rate: pct(dlClicks[key] ?? 0, dlPv[key] ?? 0),
+  }));
+  const dlFaqTop = Object.entries(dlFaq)
+    .map(([q, n]) => ({ q, n }))
+    .sort((a, b) => b.n - a.n)
+    .slice(0, 8);
+  const downloads = {
+    entry: { menu: dlEntryMenu, hub: dlEntryHub },
+    clients: dlClients,
+    funnel: {
+      sessions: dlSessions,
+      converted: dlConverted,
+      rate: pct(dlConverted, dlSessions),
+    },
+    faqTop: dlFaqTop,
+  };
+
   // ── 获客归因：会话级「来源 → 留资」转化 ──
   // 会话来源 = 该会话内首个非空 utm（"source/medium/campaign"）；无 utm 按 referrer 兜底分类。
   // 只统计带 sid 的网站事件（miniapp_* 有独立漏斗，不混入）；站内互跳的自站 referrer 不算来源。
@@ -577,6 +652,17 @@ export async function GET(req: NextRequest) {
   for (const e of miOpens) bump(miOpenSeries, e.t ?? e.ts);
   for (const e of miCta) bump(miCtaSeries, e.t ?? e.ts);
   for (const e of miLead) bump(miLeadSeries, e.t ?? e.ts);
+  // 下载中心 14 天序列（页面到达 / 安装包点击）：固定 14 天语义，用全量 events 不受 ?days= 窗影响
+  const dlPvSeries = new Array(14).fill(0);
+  const dlClickSeries = new Array(14).fill(0);
+  for (const e of events) {
+    const ev = String(e.event ?? "");
+    if (ev === "pageview") {
+      if (dlPageKind(String(e.path ?? ""))) bump(dlPvSeries, e.t ?? e.ts);
+    } else if (DL_CLICK_EV[ev]) {
+      bump(dlClickSeries, e.t ?? e.ts);
+    }
+  }
   const sumRange = (arr: number[], a: number, b: number) =>
     arr.slice(a, b).reduce((x, y) => x + y, 0);
   const wow = {
@@ -635,6 +721,7 @@ export async function GET(req: NextRequest) {
     },
     ctaByWhere,
     sprite,
+    downloads: { ...downloads, series: { pv: dlPvSeries, clicks: dlClickSeries } },
     dragon: { events: dragonEvents, store: dragonStore, compare: dragonCompare },
     ab: abStats,
     attribution,

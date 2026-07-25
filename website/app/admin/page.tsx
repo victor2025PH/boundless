@@ -60,6 +60,14 @@ interface Stats {
     compare?: { engagedLeadRate: number; othersLeadRate: number; othersLeads: number };
     news: { key: string; impressions: number; clicks: number; ctr: number }[];
   };
+  /** 下载中心：入口点击 → 下载页到达 → 安装包下载点击 */
+  downloads?: {
+    entry: { menu: Record<string, number>; hub: Record<string, number> };
+    clients: { key: string; pv: number; clicks: number; rate: number }[];
+    funnel: { sessions: number; converted: number; rate: number };
+    faqTop: { q: string; n: number }[];
+    series?: { pv: number[]; clicks: number[] };
+  };
   /** 龙珠彩蛋：事件漏斗 + 存储层权威计数 */
   dragon?: {
     events: {
@@ -178,6 +186,13 @@ const MINIAPP_VIEW_LABELS: Record<string, string> = {
   soulsync: "智聊沟通",
   pricing: "价格",
   engage: "合作",
+};
+// 下载中心的客户端 key → 中文标签（与 lib/downloads.ts 的 CLIENT_APPS.key 对应）。
+const DL_CLIENT_LABELS: Record<string, string> = {
+  chatx: "智聊 ChatX",
+  avatarhub: "AvatarHub",
+  matrixx: "智控 MatrixX",
+  hub: "下载中心入口",
 };
 // 机器人播报的版块 id → 中文标签。
 const SPRITE_SECTION_LABELS: Record<string, string> = {
@@ -1717,6 +1732,98 @@ export default function AdminPage() {
                               ))}
                             </tbody>
                           </table>
+                        )}
+                      </div>
+                    </div>
+                  </SectionCard>
+                )}
+
+                {stats.downloads && (
+                  <SectionCard title="下载中心（到达 → 安装包下载）" Icon={Download} accent="text-cyan-300">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div>
+                        <div className="mb-2 flex items-center justify-between">
+                          <span className="text-[11px] text-slate-400">会话级（按 sid 串联，到达任一下载页）</span>
+                          <span className="text-[11px] text-emerald-300">会话转化 {stats.downloads.funnel.rate}%</span>
+                        </div>
+                        <Funnel
+                          steps={[
+                            { label: "下载页会话", value: stats.downloads.funnel.sessions, color: "from-cyan-400 to-cyan-500" },
+                            { label: "点了下载", value: stats.downloads.funnel.converted, color: "from-emerald-400 to-emerald-500" },
+                          ]}
+                        />
+                        <div className="mt-3 rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+                          <div className="mb-2 text-[11px] text-slate-400">分客户端（页面到达 → 下载点击，计数口径）</div>
+                          <table className="w-full text-[11px]">
+                            <thead>
+                              <tr className="text-slate-500">
+                                <th className="text-left font-medium">客户端</th>
+                                <th className="text-right font-medium">到达</th>
+                                <th className="text-right font-medium">下载</th>
+                                <th className="text-right font-medium">点击率</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {stats.downloads.clients.map((c) => (
+                                <tr key={c.key} className="border-t border-slate-800/60 text-slate-300">
+                                  <td className="py-1">{DL_CLIENT_LABELS[c.key] ?? c.key}</td>
+                                  <td className="py-1 text-right">{c.pv}</td>
+                                  <td className="py-1 text-right text-emerald-300">{c.clicks}</td>
+                                  <td className="py-1 text-right font-medium text-cyan-300">{c.rate}%</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                      <div className="space-y-3">
+                        <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+                          <div className="mb-2 text-[11px] text-slate-400">入口点击（顶栏下拉 / hub 卡片，按目标客户端）</div>
+                          {Object.keys(stats.downloads.entry.menu).length === 0 && Object.keys(stats.downloads.entry.hub).length === 0 ? (
+                            <div className="text-[11px] text-slate-600">暂无入口点击数据</div>
+                          ) : (
+                            <div className="grid grid-cols-2 gap-2">
+                              {(["menu", "hub"] as const).map((src) => (
+                                <div key={src}>
+                                  <div className="mb-1 text-[11px] text-slate-500">{src === "menu" ? "顶栏下拉" : "hub 卡片"}</div>
+                                  {Object.entries(stats.downloads!.entry[src])
+                                    .sort((a, b) => b[1] - a[1])
+                                    .map(([k, n]) => (
+                                      <div key={k} className="flex justify-between text-[11px] text-slate-300">
+                                        <span>{DL_CLIENT_LABELS[k] ?? k}</span>
+                                        <span className="font-medium">{n}</span>
+                                      </div>
+                                    ))}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        {stats.downloads.faqTop.length > 0 && (
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+                            <div className="mb-2 text-[11px] text-slate-400">ChatX 安装 FAQ 展开 Top（哪一步卡人）</div>
+                            {stats.downloads.faqTop.map((f) => (
+                              <div key={f.q} className="flex justify-between gap-2 text-[11px] text-slate-300">
+                                <span className="truncate">{f.q}</span>
+                                <span className="shrink-0 font-medium text-amber-300">{f.n}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {stats.downloads.series && (
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+                            <div className="mb-1 flex items-center justify-between text-[11px] text-slate-400">
+                              <span>近 14 天趋势</span>
+                              <span>
+                                到达 <span className="text-cyan-300">{stats.downloads.series.pv.reduce((a, b) => a + b, 0)}</span>
+                                {" · "}下载 <span className="text-emerald-300">{stats.downloads.series.clicks.reduce((a, b) => a + b, 0)}</span>
+                              </span>
+                            </div>
+                            <Sparkline data={stats.downloads.series.pv} color="#22d3ee" w={240} h={30} full />
+                            <div className="mt-1">
+                              <Sparkline data={stats.downloads.series.clicks} color="#34d399" w={240} h={30} full />
+                            </div>
+                          </div>
                         )}
                       </div>
                     </div>

@@ -117,6 +117,22 @@ export const PLATFORM_LABEL: Record<PlatformStatus, { zh: string; en: string }> 
   planned: { zh: "规划中", en: "Planned" },
 };
 
+/** electron-updater latest.yml 的最小解析（version / path / size）。
+ *  格式固定且极简，行级正则即可，不为此引 yaml 依赖；
+ *  MatrixX（及未来任何 electron-updater 发布物）的运行时版本校正共用此函数。 */
+export function parseLatestYml(text: string): { version: string; filename: string; sizeBytes: number } | null {
+  const version = text.match(/^version:\s*(\S+)/m)?.[1];
+  if (!version) return null;
+  const filename = text.match(/^path:\s*(\S+)/m)?.[1] ?? "";
+  const sizeBytes = Number(text.match(/^\s*size:\s*(\d+)/m)?.[1] ?? 0);
+  return { version, filename, sizeBytes };
+}
+
+/** 字节 → 「507 MB」标签（latest.yml 只有字节数） */
+export function formatMb(sizeBytes: number): string {
+  return sizeBytes > 0 ? `${Math.round(sizeBytes / 1048576)} MB` : "";
+}
+
 export function pf(field: { zh: string; en: string }, lang: BrandLang): string {
   return field[lang];
 }

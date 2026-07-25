@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { AnimatePresence, motion } from "framer-motion";
@@ -22,7 +22,8 @@ import {
 import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
 import RichText from "./RichText";
-import { MATRIXX } from "@/lib/matrixxContent";
+import { MATRIXX, MATRIXX_RELEASE_BASE } from "@/lib/matrixxContent";
+import { parseLatestYml, formatMb } from "@/lib/downloads";
 import { track } from "@/lib/track";
 import { CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
 import type { BrandLang } from "@/lib/brand";
@@ -39,6 +40,26 @@ export default function MatrixxDownloadSection({ lang: forced }: { lang?: BrandL
   const [openFaq, setOpenFaq] = useState<number | null>(null);
 
   const d = MATRIXX.download;
+
+  // 运行时清单校正：electron-updater 的 latest.yml 是发布脚本必产物，以它为准，
+  // 发新版只传文件即可、页面版本/大小/下载链自动跟上（构建常量仅兜底）。
+  const [live, setLive] = useState<{ version: string; filename: string; sizeLabel: string } | null>(null);
+  useEffect(() => {
+    fetch(`${MATRIXX_RELEASE_BASE}/latest.yml`)
+      .then((r) => (r.ok ? r.text() : null))
+      .then((t) => {
+        const m = t ? parseLatestYml(t) : null;
+        if (m?.filename) setLive({ version: m.version, filename: m.filename, sizeLabel: formatMb(m.sizeBytes) });
+      })
+      .catch(() => {});
+  }, []);
+  const version = live?.version ?? d.version;
+  const filename = live?.filename ?? d.filename;
+  const sizeLabel = live?.sizeLabel || d.size[lang];
+  const url = live ? `${MATRIXX_RELEASE_BASE}/${live.filename}` : d.url;
+  // 构建常量里的 SHA-256 只对应它同版的安装包；服务器已发更新版时展示口径切「与最新发布一致」，
+  // 绝不给新包配旧校验值（比不显示更糟）。
+  const shaFresh = version === d.version;
 
   const quickNav = [
     {
@@ -103,23 +124,28 @@ export default function MatrixxDownloadSection({ lang: forced }: { lang?: BrandL
                 <div>
                   <div className="font-semibold text-white">{d.os[lang]}</div>
                   <div className="text-xs text-slate-500">
-                    {zh ? "版本" : "Version"} v{d.version} · {d.size[lang]}
+                    {zh ? "版本" : "Version"} v{version} · {sizeLabel}
                   </div>
                 </div>
               </div>
               <div className="mt-5 flex-1">
                 <a
-                  href={d.url}
+                  href={url}
                   download
-                  onClick={() => track("matrixx_download_click", { os: "windows", ver: d.version })}
+                  onClick={() => track("matrixx_download_click", { os: "windows", ver: version })}
                   className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-6 py-2.5 text-sm font-medium text-ink-950 transition hover:opacity-90"
                 >
                   <Download className="h-4 w-4" />
-                  {zh ? "下载" : "Download"} {d.filename}
+                  {zh ? "下载" : "Download"} {filename}
                 </a>
               </div>
               <div className="mt-4 break-all rounded-lg bg-ink-950/60 px-3 py-2 font-mono text-[11px] text-slate-600">
-                SHA-256: {d.sha256 || (zh ? "发布时公布" : "published at release")}
+                SHA-256:{" "}
+                {shaFresh && d.sha256
+                  ? d.sha256
+                  : zh
+                    ? "以最新发布为准（安装包由 latest.yml 内 SHA-512 校验）"
+                    : "verified via SHA-512 in latest.yml for the current release"}
               </div>
             </div>
           </Reveal>
@@ -356,7 +382,7 @@ export default function MatrixxDownloadSection({ lang: forced }: { lang?: BrandL
               <RefreshCw className="mt-0.5 h-6 w-6 shrink-0 text-neon-cyan" />
               <div>
                 <div className="font-semibold text-white">
-                  {zh ? `当前版本 v${d.version} · 内置自动更新` : `Current v${d.version} · built-in auto-update`}
+                  {zh ? `当前版本 v${version} · 内置自动更新` : `Current v${version} · built-in auto-update`}
                 </div>
                 <p className="mt-1 max-w-xl text-sm leading-relaxed text-slate-400">
                   {zh

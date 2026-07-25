@@ -37,7 +37,9 @@ if ($PSVersionTable.PSEdition -ne 'Core') {
 }
 
 $WebRoot = Split-Path -Parent $PSScriptRoot
-$tar = Join-Path $env:TEMP 'website-deploy.tar.gz'
+# tar 名带 PID+时间戳：多条线（多 agent/多窗口）并发部署时各用各的临时包，
+# 不再互踩「文件被另一进程占用」（2026-07-25 实际发生）。服务器端并发由 deploy.sh 的 flock 锁串行化。
+$tar = Join-Path $env:TEMP ("website-deploy-{0}-{1}.tar.gz" -f $PID, (Get-Date -Format 'HHmmss'))
 $sshCmd = Get-Command ssh -ErrorAction SilentlyContinue
 $scpCmd = Get-Command scp -ErrorAction SilentlyContinue
 $useOpenSsh = ($null -ne $sshCmd) -and ($null -ne $scpCmd)
@@ -106,9 +108,12 @@ try {
   }
 
   Write-Host "[2/4] 上传部署包 + deploy.sh（通道: $(if ($useOpenSsh) {'OpenSSH'} else {'Posh-SSH'})）..."
+  # 远端 tar 名同样唯一：上传阶段不在 deploy.sh 的 flock 锁内，两条并发线同名上传会互相截断包体。
+  # deploy.sh 收 $1 指定包路径、部署完成后自行 rm，唯一名不会堆积。
+  $remoteTarName = Split-Path $tar -Leaf
   if ($useOpenSsh) {
     $scpArgs = @('-o', 'StrictHostKeyChecking=accept-new', '-i', $script:keyPath)
-    & $scpExe @scpArgs $tar "${User}@${VpsHost}:${RemoteDir}/website-deploy.tar.gz"
+    & $scpExe @scpArgs $tar "${User}@${VpsHost}:${RemoteDir}/$remoteTarName"
     if ($LASTEXITCODE -ne 0) { throw 'scp 上传 tar 失败' }
     & $scpExe @scpArgs (Join-Path $PSScriptRoot 'deploy.sh') "${User}@${VpsHost}:${RemoteDir}/deploy.sh"
     if ($LASTEXITCODE -ne 0) { throw 'scp 上传 deploy.sh 失败' }
@@ -120,23 +125,28 @@ try {
 
   Write-Host '[3/4] 服务器侧原子部署 (后台执行 deploy.sh + 轮询日志) ...'
   try {
-    $launch = "sed -i 's/\r$//' $RemoteDir/deploy.sh; cd $RemoteDir && rm -f deploy.log && nohup bash deploy.sh $RemoteDir/website-deploy.tar.gz >deploy.log 2>&1 </dev/null & echo launched"
+    # 日志名跟 tar 同后缀：并发线各写各的日志，后来者不再截断先行者正在写的 deploy.log
+    # （撞 flock 锁的那条线只会在自己的日志里看到 ERROR，不污染别人的轮询判定）。
+    $remoteLog = "deploy-$($remoteTarName -replace '\.tar\.gz$','').log"
+    $launch = "sed -i 's/\r$//' $RemoteDir/deploy.sh; cd $RemoteDir && nohup bash deploy.sh $RemoteDir/$remoteTarName >$remoteLog 2>&1 </dev/null & echo launched"
     Invoke-Remote $launch | Out-Null
 
     $deadline = (Get-Date).AddMinutes(10); $done = $false
     do {
       Start-Sleep -Seconds 8
-      $p = Invoke-Remote "tail -4 $RemoteDir/deploy.log 2>/dev/null; pgrep -f '[b]ash deploy.sh' >/dev/null && echo __RUN__ || echo __STOP__"
+      $p = Invoke-Remote "tail -4 $RemoteDir/$remoteLog 2>/dev/null; pgrep -f '[b]ash deploy.sh' >/dev/null && echo __RUN__ || echo __STOP__"
       Write-Host ('    ' + (($p -replace '__RUN__|__STOP__','').Trim() -replace "`n","`n    "))
       if ($p -match 'DONE @')                     { $done = $true; break }
-      if ($p -match 'deploy ERROR|rolling back')  { throw "服务器部署失败(已尝试自动回滚)，详见服务器 $RemoteDir/deploy.log" }
+      if ($p -match 'deploy ERROR|rolling back')  { throw "服务器部署失败(已尝试自动回滚)，详见服务器 $RemoteDir/$remoteLog" }
       if ($p -match '__STOP__') {
-        $final = Invoke-Remote "tail -25 $RemoteDir/deploy.log"
+        $final = Invoke-Remote "tail -25 $RemoteDir/$remoteLog"
         if ($final -match 'DONE @') { $done = $true; break }
         throw "deploy.sh 已退出但未见 DONE，疑似中断：`n$final"
       }
     } until ((Get-Date) -gt $deadline)
-    if (-not $done) { throw "部署轮询超时(>10min)，请上服务器查看 $RemoteDir/deploy.log" }
+    if (-not $done) { throw "部署轮询超时(>10min)，请上服务器查看 $RemoteDir/$remoteLog" }
+    # 成功后清掉本次日志与历史遗留的唯一名日志（>2 天），避免 /home/ubuntu 堆积
+    Invoke-Remote "rm -f $RemoteDir/$remoteLog; find $RemoteDir -maxdepth 1 -name 'deploy-*.log' -mtime +2 -delete 2>/dev/null; true" | Out-Null
 
     # [3.5/4] 差量同步发布物：源码包与服务器 rsync 都排除了这些目录，此处是唯一上载通道。
     # 远端同名同大小即跳过，只有新增/换版的安装包才真正走网络。

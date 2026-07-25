@@ -6,7 +6,7 @@ import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
 import ProductIcon from "./ProductIcon";
 import BrandMark from "./BrandMark";
-import { CLIENT_APPS, PLATFORM_LABEL, type ClientApp } from "@/lib/downloads";
+import { CLIENT_APPS, PLATFORM_LABEL, parseLatestYml, formatMb, type ClientApp } from "@/lib/downloads";
 import { CATEGORIES } from "@/lib/brand";
 import { localePath } from "@/lib/site";
 import { track } from "@/lib/track";
@@ -29,6 +29,14 @@ function useLiveVersions(): Record<string, LiveMeta> {
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
         if (j?.version) setLive((o) => ({ ...o, chatx: { version: j.version, size: j.size_mb ? `${j.size_mb} MB` : undefined } }));
+      })
+      .catch(() => {});
+    // MatrixX 复用 electron-updater 的 latest.yml（发布脚本必产物，天然免维护）
+    fetch("/releases/matrixx/latest.yml")
+      .then((r) => (r.ok ? r.text() : null))
+      .then((t) => {
+        const m = t ? parseLatestYml(t) : null;
+        if (m) setLive((o) => ({ ...o, matrixx: { version: m.version, size: formatMb(m.sizeBytes) || undefined } }));
       })
       .catch(() => {});
   }, []);
