@@ -864,10 +864,12 @@ class TTSPipeline:
                        "minicpm_clone", "avatar_clone"):
             ref_fp = _reference_fingerprint(self.voice_profile)
             # hub Fish 高保真优先时音频来源不同（.176 Fish vs 本机 CosyVoice3）→ 并入
-            # 键，使 toggle hub_fish / 改 base_url 自动失效缓存，防串用旧来源音频。
+            # 键，使 toggle hub_fish / 改 base_url / 改 response_format 自动失效缓存，
+            # 防串用旧来源/旧格式音频（缓存 replay 按 rv.format 复原后缀）。
             _hf = (self.avatar_voice or {}).get("hub_fish")
             if isinstance(_hf, dict) and _hf.get("enabled"):
-                hub_fp = "hub:" + str(_hf.get("base_url") or "")
+                hub_fp = ("hub:" + str(_hf.get("base_url") or "") + ":"
+                          + (str(_hf.get("response_format") or "wav").strip().lower() or "wav"))
             try:
                 from src.ai.voice_emotion import pick_emotion_reference
                 _thr = float((self.avatar_voice or {}).get(
@@ -1413,6 +1415,10 @@ class TTSPipeline:
             best_of = int(hf.get("best_of", 1) or 1)
         except (TypeError, ValueError):
             best_of = 1
+        # ogg 直出（2026-07-25）：请求 hub 侧转 opus 48k，省本机发送前一次 ffmpeg 转码
+        # （voice_sender.convert_to_ogg_opus 对 .ogg 直接放行）。基线 wav=零行为变化；
+        # 实际落盘格式以响应字节魔数为准（hub ffmpeg 异常会静默回退 wav）。
+        response_format = str(hf.get("response_format") or "wav").strip().lower() or "wav"
 
         # 语言（防中文声纹念外语）+ 情绪（弱情绪归 neutral 保真，与本地链同口径）
         language = "zh"
@@ -1436,44 +1442,64 @@ class TTSPipeline:
             except Exception:
                 emotion = ""
 
-        av_out = out.with_suffix(".wav")
+        # 落盘后缀按**实际返回格式**起（默认 wav；请求 ogg 而 hub 回退 wav 时仍落 .wav）
+        synth: Dict[str, Any] = {"path": out.with_suffix(".wav"), "fmt": "wav"}
 
         def _do_synth() -> None:
             from src.ai.avatar_voice import hub_fish_synthesize
-            audio = hub_fish_synthesize(
+            audio, fmt = hub_fish_synthesize(
                 base_url, profile, text, language=language, emotion=emotion,
-                best_of=best_of, timeout_sec=timeout_sec)
-            av_out.write_bytes(audio)
+                best_of=best_of, timeout_sec=timeout_sec,
+                audio_format=response_format)
+            fmt = str(fmt or "wav").strip().lower() or "wav"
+            synth["fmt"] = fmt
+            synth["path"] = out.with_suffix(f".{fmt}")
+            synth["path"].write_bytes(audio)
 
         try:
             budget = timeout_sec * (best_of if best_of > 1 else 1) + 15
             await asyncio.wait_for(asyncio.to_thread(_do_synth), timeout=budget)
         except Exception as ex:
             try:
-                av_out.unlink(missing_ok=True)  # type: ignore[call-arg]
+                synth["path"].unlink(missing_ok=True)  # type: ignore[call-arg]
             except Exception:
                 pass
             _exs = f"{type(ex).__name__}: {ex}".rstrip(": ")
             logger.info("[tts] hub_fish failed (%s) → 回落本地克隆", _exs)
             return None
 
+        av_out: Path = synth["path"]
+        av_fmt: str = synth["fmt"]
         if av_out.exists() and av_out.stat().st_size > 0:
             rv.ok = True
             rv.provider = "hub_fish"
-            rv.format = "wav"
+            rv.format = av_fmt
             rv.audio_path = str(av_out)
             rv.extra["bytes"] = av_out.stat().st_size
             rv.extra["hub_fish_profile"] = profile
             rv.extra["hub_fish_base_url"] = base_url
             if emotion and emotion != "neutral":
                 rv.extra["hub_fish_emotion"] = emotion
-            try:
-                dur, src = compute_audio_duration_sec(str(av_out), "wav")
-                rv.duration_sec = float(dur)
-                rv.duration_source = str(src)
-            except Exception:
+            if av_fmt == "wav":
+                try:
+                    dur, src = compute_audio_duration_sec(str(av_out), "wav")
+                    rv.duration_sec = float(dur)
+                    rv.duration_source = str(src)
+                except Exception:
+                    rv.duration_sec = -1.0
+                    rv.duration_source = "unknown"
+            else:
+                # ogg 无轻量解析器 → ffprobe（预渲染层同款）；取不到按 -1/unknown fail-open
                 rv.duration_sec = -1.0
                 rv.duration_source = "unknown"
+                try:
+                    from src.client.voice_sender import probe_audio_duration_ms
+                    ms = probe_audio_duration_ms(str(av_out))
+                    if ms and ms > 0:
+                        rv.duration_sec = ms / 1000.0
+                        rv.duration_source = "ffprobe"
+                except Exception:
+                    pass
             rv.latency_ms = int((time.monotonic() - t0) * 1000)
             return rv
         return None

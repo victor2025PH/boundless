@@ -805,6 +805,10 @@ avatar_voice:
     timeout_sec: 30.0                    # 单句合成超时（跨机 + Fish 推理）
     best_of: 1                           # >1 多 seed 择优(campplus 挑最像)，牺牲耗时换音质
     persona_allowlist: []                # 空=所有 avatar_clone 人设；非空=仅名单内启用
+    # 响应音频格式：wav（默认=旧行为）/ ogg（hub 侧 ffmpeg 直出 opus 48k，省本机发送前
+    # 一次转码；hub ffmpeg 异常会静默回退 wav——chengjie 按响应字节魔数落对后缀，兼容）。
+    # 灰度开法：overlay 里改 response_format: ogg（缓存键含此值，翻开关自动失效旧缓存）。
+    response_format: wav
   health_timeout_sec: 3.0
   health_cache_sec: 30
   synth_timeout_sec: 90.0                # 单请求超时（并发纪律）

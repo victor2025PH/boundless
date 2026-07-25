@@ -210,12 +210,14 @@ def parse_audio_response(body: bytes) -> bytes:
 # 档名同名 1:1（lin_jiaxin/zhao_laoshi/...）。失败一律由调用方回落本地 CosyVoice3。
 def build_tts_only_payload(
     profile: str, text: str, *, language: str = "", emotion: str = "",
-    best_of: int = 1,
+    best_of: int = 1, audio_format: str = "",
 ) -> bytes:
     """hub ``/api/tts_only`` 请求体（JSON bytes）。纯函数、可单测。
 
     - ``emotion`` 为空或 ``neutral`` 不下发（走服务端保真默认路径）。
     - ``best_of>1`` 才下发（多 seed 择优，牺牲耗时换音质，仅非实时）。
+    - ``audio_format`` 为空或 ``wav`` 不下发 ``format`` 键（Hub 缺省回 wav=旧行为）；
+      如 ``ogg`` 才下发（hub 侧 opus 48k 直出，省本机发送前转码）。
     """
     body: Dict[str, Any] = {"profile": str(profile), "text": str(text)}
     lang = str(language or "").strip()
@@ -230,11 +232,33 @@ def build_tts_only_payload(
         n = 1
     if n > 1:
         body["best_of"] = n
+    fmt = str(audio_format or "").strip().lower()
+    if fmt and fmt != "wav":
+        body["format"] = fmt
     return json.dumps(body, ensure_ascii=False).encode("utf-8")
 
 
-def parse_tts_only_response(body: bytes) -> bytes:
-    """解析 hub ``/api/tts_only`` 响应 → WAV 字节。失败/空/ok=false → 抛 RuntimeError。"""
+def sniff_audio_format(audio: bytes, default: str = "wav") -> str:
+    """按音频魔数判格式：前 4 字节 ``OggS``→ogg / ``RIFF``→wav；识别不出回落 default。
+
+    Hub 侧 ffmpeg 异常时会静默回退 wav（响应 format 字段可能与实际字节不符）——
+    魔数为准，绝不允许 .ogg 后缀文件装 wav 字节（Telegram 播不出）。
+    """
+    head = bytes(audio[:4] if audio else b"")
+    if head == b"OggS":
+        return "ogg"
+    if head == b"RIFF":
+        return "wav"
+    return default
+
+
+def parse_tts_only_response(body: bytes) -> Tuple[bytes, str]:
+    """解析 hub ``/api/tts_only`` 响应 → (音频字节, 实际格式)。失败/空/ok=false → 抛 RuntimeError。
+
+    格式判定：先取响应 JSON 的 ``format`` 字段（缺省 wav），再按魔数双校验
+    （``sniff_audio_format``）——字段与魔数不符时以魔数为准（兼容 Hub ffmpeg
+    异常静默回退 wav 的场景）。
+    """
     if not body:
         raise RuntimeError("hub_fish: empty response")
     try:
@@ -248,20 +272,25 @@ def parse_tts_only_response(body: bytes) -> bytes:
     b64 = data.get("audio_base64") or ""
     if not b64:
         raise RuntimeError("hub_fish: no audio in response")
-    return base64.b64decode(b64)
+    audio = base64.b64decode(b64)
+    claimed = str(data.get("format") or "wav").strip().lower() or "wav"
+    return audio, sniff_audio_format(audio, default=claimed)
 
 
 def hub_fish_synthesize(
     base_url: str, profile: str, text: str, *, language: str = "",
     emotion: str = "", best_of: int = 1, timeout_sec: float = 30.0,
-) -> bytes:
-    """调用幻声 hub ``/api/tts_only`` 合成一句 → WAV 字节（同步；供 to_thread 包裹）。
+    audio_format: str = "",
+) -> Tuple[bytes, str]:
+    """调用幻声 hub ``/api/tts_only`` 合成一句 → (音频字节, 实际格式)（同步；供 to_thread 包裹）。
 
     仅 HTTP，不加载任何本地模型（GPU 在 .176）。异常直抛，调用方回落本地克隆。
+    ``audio_format="ogg"`` 请求 hub 直出 opus 48k；实际格式以响应为准（可能回退 wav）。
     """
     url = str(base_url or "").rstrip("/") + "/api/tts_only"
     payload = build_tts_only_payload(
-        profile, text, language=language, emotion=emotion, best_of=best_of)
+        profile, text, language=language, emotion=emotion, best_of=best_of,
+        audio_format=audio_format)
     req = urllib.request.Request(
         url, data=payload,
         headers={"Content-Type": "application/json"}, method="POST")

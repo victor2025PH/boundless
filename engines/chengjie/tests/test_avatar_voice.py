@@ -36,6 +36,7 @@ from src.ai.avatar_voice import (
     parse_tts_only_response,
     read_service_token,
     reset_caches,
+    sniff_audio_format,
 )
 
 
@@ -597,17 +598,59 @@ def test_build_tts_only_payload_includes_emotion_and_bestof():
     assert body["best_of"] == 3
 
 
+def test_build_tts_only_payload_format_two_states():
+    """audio_format 空/wav 不下发 format 键（旧行为）；ogg 才下发。"""
+    body = json.loads(build_tts_only_payload("lin_jiaxin", "你好"))
+    assert "format" not in body
+    body_wav = json.loads(build_tts_only_payload(
+        "lin_jiaxin", "你好", audio_format="wav"))
+    assert "format" not in body_wav
+    body_ogg = json.loads(build_tts_only_payload(
+        "lin_jiaxin", "你好", audio_format="ogg"))
+    assert body_ogg["format"] == "ogg"
+
+
+def test_sniff_audio_format_magic():
+    assert sniff_audio_format(b"OggS" + b"\x00" * 32) == "ogg"
+    assert sniff_audio_format(_wav_bytes(50)) == "wav"          # RIFF
+    assert sniff_audio_format(b"\x01\x02\x03\x04") == "wav"     # 未知 → default
+    assert sniff_audio_format(b"\x01\x02", default="ogg") == "ogg"
+    assert sniff_audio_format(b"") == "wav"
+
+
 def test_parse_tts_only_response_ok_and_failures():
     wav = _wav_bytes(200)
     good = json.dumps(
         {"ok": True, "audio_base64": base64.b64encode(wav).decode()}).encode()
-    assert parse_tts_only_response(good) == wav
+    assert parse_tts_only_response(good) == (wav, "wav")
     with pytest.raises(RuntimeError):
         parse_tts_only_response(json.dumps({"ok": False, "detail": "x"}).encode())
     with pytest.raises(RuntimeError):
         parse_tts_only_response(json.dumps({"ok": True}).encode())  # 无音频
     with pytest.raises(RuntimeError):
         parse_tts_only_response(b"")
+
+
+def test_parse_tts_only_response_format_field_and_magic():
+    """格式判定：字段与魔数不符以魔数为准；缺字段默认 wav；OggS → ogg。"""
+    wav = _wav_bytes(100)
+    ogg = b"OggS" + b"\x00" * 64
+    # ① 字段说 ogg 但魔数是 RIFF（hub ffmpeg 异常回退 wav 场景）→ 判 wav
+    body = json.dumps({"ok": True, "format": "ogg",
+                       "audio_base64": base64.b64encode(wav).decode()}).encode()
+    assert parse_tts_only_response(body) == (wav, "wav")
+    # ② 缺 format 字段 → 判 wav
+    body = json.dumps({"ok": True,
+                       "audio_base64": base64.b64encode(wav).decode()}).encode()
+    assert parse_tts_only_response(body) == (wav, "wav")
+    # ③ OggS 魔数（字段一致）→ 判 ogg
+    body = json.dumps({"ok": True, "format": "ogg",
+                       "audio_base64": base64.b64encode(ogg).decode()}).encode()
+    assert parse_tts_only_response(body) == (ogg, "ogg")
+    # ④ 字段说 wav 但魔数是 OggS → 魔数为准判 ogg
+    body = json.dumps({"ok": True, "format": "wav",
+                       "audio_base64": base64.b64encode(ogg).decode()}).encode()
+    assert parse_tts_only_response(body) == (ogg, "ogg")
 
 
 def test_hub_fish_synthesize_posts_and_decodes():
@@ -635,13 +678,44 @@ def test_hub_fish_synthesize_posts_and_decodes():
     with patch("urllib.request.urlopen", side_effect=fake_urlopen):
         out = hub_fish_synthesize(
             "http://192.168.0.176:9000", "lin_jiaxin", "你好呀", language="zh")
-    assert out == wav
+    assert out == (wav, "wav")
     assert seen["url"] == "http://192.168.0.176:9000/api/tts_only"
     assert seen["body"]["profile"] == "lin_jiaxin"
+    assert "format" not in seen["body"]  # 缺省不下发（Hub 缺省回 wav=旧行为）
+
+
+def test_hub_fish_synthesize_requests_ogg_and_detects_format():
+    """audio_format=ogg 透传进请求体；返回格式按响应字节魔数判定。"""
+    ogg = b"OggS" + b"\x00" * 64
+    seen = {}
+
+    def fake_urlopen(req, timeout=None):
+        seen["body"] = json.loads(req.data.decode())
+
+        class _R:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {"ok": True, "format": "ogg",
+                     "audio_base64": base64.b64encode(ogg).decode()}).encode()
+
+        return _R()
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        out = hub_fish_synthesize(
+            "http://192.168.0.176:9000", "lin_jiaxin", "你好呀",
+            audio_format="ogg")
+    assert seen["body"]["format"] == "ogg"
+    assert out == (ogg, "ogg")
 
 
 def _pipeline_cfg_hub(tmp_path, ref: Path, *, hub_enabled=True,
-                      allowlist=None) -> dict:
+                      allowlist=None, response_format=None) -> dict:
     cfg = _pipeline_cfg(tmp_path, ref)
     cfg["persona_id"] = "lin_jiaxin"
     hf = {"enabled": hub_enabled,
@@ -649,6 +723,8 @@ def _pipeline_cfg_hub(tmp_path, ref: Path, *, hub_enabled=True,
           "timeout_sec": 5.0, "best_of": 1}
     if allowlist is not None:
         hf["persona_allowlist"] = allowlist
+    if response_format is not None:
+        hf["response_format"] = response_format
     cfg["avatar_voice"]["hub_fish"] = hf
     return cfg
 
@@ -663,7 +739,7 @@ async def test_pipeline_hub_fish_hit_takes_priority(tmp_path):
 
     def fake_hub(base_url, profile, text, **kw):
         assert profile == "lin_jiaxin"
-        return wav
+        return wav, "wav"
 
     from src.ai.tts_pipeline import TTSPipeline
     tts = TTSPipeline(cfg)
@@ -671,7 +747,71 @@ async def test_pipeline_hub_fish_hit_takes_priority(tmp_path):
         rv = await tts.synthesize("你好呀，今天怎么样")
     assert rv.ok
     assert rv.provider == "hub_fish"
+    assert rv.format == "wav"
+    assert rv.audio_path.endswith(".wav")
     assert rv.extra.get("hub_fish_profile") == "lin_jiaxin"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_hub_fish_ogg_direct_out(tmp_path):
+    """response_format=ogg → 请求透传 + 按实际 ogg 落 .ogg 后缀 + ffprobe 测时长。"""
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(_wav_bytes(300))
+    cfg = _pipeline_cfg_hub(tmp_path, ref, response_format="ogg")
+    ogg = b"OggS" + b"\x00" * 128
+    seen = {}
+
+    def fake_hub(base_url, profile, text, **kw):
+        seen["audio_format"] = kw.get("audio_format")
+        return ogg, "ogg"
+
+    from src.ai.tts_pipeline import TTSPipeline
+    tts = TTSPipeline(cfg)
+    with patch("src.ai.avatar_voice.hub_fish_synthesize", side_effect=fake_hub), \
+         patch("src.client.voice_sender.probe_audio_duration_ms",
+               return_value=1234):
+        rv = await tts.synthesize("你好呀，直出测试")
+    assert rv.ok and rv.provider == "hub_fish"
+    assert seen["audio_format"] == "ogg"
+    assert rv.format == "ogg"
+    assert rv.audio_path.endswith(".ogg")
+    assert Path(rv.audio_path).read_bytes() == ogg
+    assert rv.duration_sec == pytest.approx(1.234)
+    assert rv.duration_source == "ffprobe"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_hub_fish_ogg_config_but_hub_falls_back_wav(tmp_path):
+    """配置要 ogg 但 hub 回退 wav（ffmpeg 异常）→ 按实际格式落 .wav，绝不装 ogg。"""
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(_wav_bytes(300))
+    cfg = _pipeline_cfg_hub(tmp_path, ref, response_format="ogg")
+    wav = _wav_bytes(400)
+
+    def fake_hub(base_url, profile, text, **kw):
+        assert kw.get("audio_format") == "ogg"
+        return wav, "wav"   # hub 侧回退：字节实为 RIFF
+
+    from src.ai.tts_pipeline import TTSPipeline
+    tts = TTSPipeline(cfg)
+    with patch("src.ai.avatar_voice.hub_fish_synthesize", side_effect=fake_hub):
+        rv = await tts.synthesize("你好呀，回退测试")
+    assert rv.ok and rv.provider == "hub_fish"
+    assert rv.format == "wav"
+    assert rv.audio_path.endswith(".wav")
+
+
+def test_pipeline_hub_fish_cache_key_includes_response_format(tmp_path):
+    """缓存键并入 response_format：翻 ogg 开关自动失效旧 wav 缓存。"""
+    from src.ai.tts_pipeline import TTSPipeline
+    from src.ai.voice_emotion import NEUTRAL
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(_wav_bytes(300))
+    p1 = TTSPipeline(_pipeline_cfg_hub(tmp_path, ref))                          # 缺省=wav
+    p2 = TTSPipeline(_pipeline_cfg_hub(tmp_path, ref, response_format="ogg"))
+    k1 = p1._cache_key("你好", "v", "avatar_clone", NEUTRAL, hour=12)
+    k2 = p2._cache_key("你好", "v", "avatar_clone", NEUTRAL, hour=12)
+    assert k1 != k2
 
 
 @pytest.mark.asyncio
@@ -708,7 +848,7 @@ async def test_pipeline_hub_fish_not_in_allowlist_uses_local(tmp_path):
 
     def fake_hub(*a, **k):
         called["hub"] = True
-        return _wav_bytes(100)
+        return _wav_bytes(100), "wav"
 
     def fake_post(self, url, payload, *, timeout, headers=None):
         return json.dumps(
@@ -760,7 +900,7 @@ async def test_pipeline_hub_fish_gets_colloquial_spoken_text(tmp_path):
 
     def fake_hub(base_url, profile, text, **kw):
         seen["text"] = text
-        return _wav_bytes(500)
+        return _wav_bytes(500), "wav"
 
     async def fake_llm(*a, **k):
         return "说真的，这件事你不用急，慢慢来就好"
