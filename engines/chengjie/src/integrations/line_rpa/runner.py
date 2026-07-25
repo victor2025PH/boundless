@@ -739,6 +739,8 @@ class LineRpaRunner:
             "line_rpa_chat_key": chat_key,
             "line_rpa_style_hint": line_style,
             "account_persona_id": self._account_persona_id(),  # private path
+            # P2-1：账号维度进上下文（default=裸键零迁移；多号部署自动分桶）
+            "account_id": str(self._cfg_get("account_id", "default") or "default"),
         }
         out["reply_lang"] = ctx["reply_lang"]
 
@@ -1176,6 +1178,8 @@ class LineRpaRunner:
                 "mentioned": False,
                 "vision_room": True,
                 "account_persona_id": self._account_persona_id(),  # vision branch private
+                # P2-1：账号维度进上下文（default=裸键零迁移；多号部署自动分桶）
+                "account_id": str(self._cfg_get("account_id", "default") or "default"),
             }
             out["reply_lang"] = ctx["reply_lang"]
             # W4-Runner: inbound 入库（vision-peer 分支）
@@ -1378,6 +1382,8 @@ class LineRpaRunner:
             "is_group": verdict.is_group,
             "mentioned": verdict.mentioned,
             "account_persona_id": self._account_persona_id(is_group=verdict.is_group),
+            # P2-1：账号维度进上下文（default=裸键零迁移；多号部署自动分桶）
+            "account_id": str(self._cfg_get("account_id", "default") or "default"),
         }
         out["reply_lang"] = ctx["reply_lang"]
         # W4-Runner: inbound 入库（nav-scan 分支）

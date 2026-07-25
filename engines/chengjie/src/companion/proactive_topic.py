@@ -260,11 +260,25 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 _resolve_intimacy_score = None
                 _resolve_funnel_stage = None
             out = []
+            _sm_for_key = getattr(assistant, "skill_manager", None)
             for r in rows:
                 cid = str(r.get("conversation_id") or "")
                 chat_key = str(r.get("chat_key") or "")
                 platform = str(r.get("platform") or "telegram")
                 account_id = str(r.get("account_id") or "default")
+                # P0-1（2026-07-25）：记忆键与写入侧**同源**——草稿/A 线落库用
+                # `_episodic_storage_key`（含 account 分桶 + CPI canonical），此前这里
+                # 传裸 chat_key 做前缀查询 → 双号(companion)账号的主动开场/生日/槽位
+                # 采集全部读不到记忆（回访式开场退化成 generic）。软失败回落裸键。
+                _mem_key = chat_key
+                if _sm_for_key is not None and hasattr(
+                        _sm_for_key, "_episodic_storage_key"):
+                    try:
+                        _mem_key = _sm_for_key._episodic_storage_key(
+                            chat_key, "", platform, account_id=account_id,
+                        ) or chat_key
+                    except Exception:
+                        _mem_key = chat_key
                 meta = tags_map.get(cid, {}) or {}
                 _intim = 0.0
                 _stage = ""
@@ -287,8 +301,8 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     "first_seen_ts": r.get("created_at") or 0,
                     "last_direction": (dirs.get(cid) or {}).get("direction") or "",
                     "archived": bool(meta.get("archived")),
-                    # 私聊：episodic 记忆 key == 对端 id == chat_key
-                    "memory_key": chat_key,
+                    # 私聊：episodic 记忆 key 与写入侧同源（账号分桶 + CPI canonical）
+                    "memory_key": _mem_key,
                     "stage": _stage,
                     "intimacy": _intim,
                     "last_emotion": str(

@@ -710,14 +710,23 @@ class SkillManager(LoggerMixin):
 
             _chat_id = context.get('chat_id', '')
             _acct_id = str(context.get('account_id') or '').strip()
+            # P1-2：群聊分窗（仅显式群信号；私聊/协议链复合键不受影响）
+            _chat_scope = self._context_chat_scope(context, user_id_str)
 
             # 1. 获取或创建用户上下文（遗忘指令需优先于冷却）
             # 双号隔离：store key = account_id:user_id，避免 Katie/Jason 共用 peer 历史
-            user_context = self._get_user_context(user_id_str, account_id=_acct_id)
+            user_context = self._get_user_context(
+                user_id_str, account_id=_acct_id, chat_scope=_chat_scope)
             _ctx_store_key = str(
                 user_context.get("_context_store_key") or user_id_str)
             user_ctx_for_cleanup = user_context
             last_intent = user_context.get('current_intent', '')
+
+            # P3-2：群聊场景提示（每轮重算防陈旧）——群窗回复注入群感知约束，
+            # 修「把群当私聊」（自我介绍/亲昵开场/长篇输出，2026-07-25 实测反馈）。
+            user_context.pop("_group_chat_hint", None)
+            if _chat_scope:
+                user_context["_group_chat_hint"] = self._group_chat_hint_text()
 
             # P7-1：将调用方单次请求的 LINE RPA 上下文并入 user_context，
             # 供 AIClient._build_context_prompt 读取 channel / line_rpa_style_hint 等
@@ -880,9 +889,10 @@ class SkillManager(LoggerMixin):
                 self._context_store.flush(_ctx_store_key)
                 return _kline_reply or None
 
-            # 2. 冷却（按 account_id 分桶，双号互不踩）
+            # 2. 冷却（按 account_id 分桶，双号互不踩；群聊读群窗同键）
             if not self._check_cooldown(
-                    text, user_id_str, chat_id=_chat_id, account_id=_acct_id):
+                    text, user_id_str, chat_id=_chat_id, account_id=_acct_id,
+                    chat_scope=_chat_scope):
                 self.logger.warning(
                     "%s用户 %s 处于冷却期，跳过回复", log_prefix, user_id_str)
                 return None
@@ -2820,10 +2830,16 @@ class SkillManager(LoggerMixin):
     def _check_cooldown(
         self, text: str, user_id: str, chat_id: Any = '',
         account_id: str = "",
+        chat_scope: str = "",
     ) -> bool:
-        """检查冷却时间（per_chat_user；双号按 account_id 分桶）。"""
+        """检查冷却时间（per_chat_user；双号按 account_id 分桶）。
+
+        ``chat_scope`` 与主路径 ``_get_user_context`` 同口径（群聊分窗后
+        必须读同一窗，否则 gxp/order 续答判定看错上下文）。
+        """
         current_time = time.time()
-        user_context = self._get_user_context(user_id, account_id=account_id)
+        user_context = self._get_user_context(
+            user_id, account_id=account_id, chat_scope=chat_scope)
 
         last_intent = user_context.get('current_intent', '')
         text_stripped = text.strip()
@@ -3164,16 +3180,62 @@ class SkillManager(LoggerMixin):
             self.logger.info("LLM 语言请求短判命中: %r → %s", t[:40], out)
         return out
 
+    @staticmethod
+    def _group_chat_hint_text() -> str:
+        """群聊场景约束（P3-2）：注入 prompt 的群感知提示。
+
+        群窗（``_chat_scope`` 非空）每轮注入；私聊窗从不出现。修实测三连击：
+        进群自我介绍像私聊开场、把群里闲聊当「对你说」、答非所问长篇输出。
+        """
+        return (
+            "你此刻在一个多人群聊里发言（不是一对一私聊）：\n"
+            "- 回复对全体群成员可见；不要自我介绍、不要用私聊式亲昵开场\n"
+            "- 只回应当前这条消息本身；群里别人的对话不一定是对你说的，"
+            "不确定时宽泛自然地接话即可\n"
+            "- 不要提及或编造你和某个成员的私聊经历/照片/约定\n"
+            "- 群聊回复要简短口语化（一两句为宜），像群友插话，不要长篇输出"
+        )
+
+    @staticmethod
+    def _context_chat_scope(
+        context: Optional[Dict[str, Any]], user_id_str: str,
+    ) -> str:
+        """群聊分窗判据（P1-2）：仅显式群信号才返回群 id 作窗口前缀。
+
+        只信 ``context.is_group`` / ``chat_type in (group, supergroup, channel)``
+        ——**不能**用 ``chat_id != user_id`` 判群：protocol 链 user_id 为复合键
+        （``platform:acct:chat``）而 chat_id 为裸键，字符串恒不等会把全部协议
+        私聊误判断窗。无显式信号一律返 ""（私聊键格式一个字节不变）。
+        键格式与 ``ConversationScope.context_key``（chat_id 非空 →
+        ``{chat_id}:{chat_key}`` 为 base）同构，有门禁锁定。
+        """
+        ctx = context or {}
+        ctype = str(ctx.get("chat_type") or "").strip().lower()
+        grouped = bool(ctx.get("is_group")) or ctype in (
+            "group", "supergroup", "channel")
+        if not grouped:
+            return ""
+        raw = ctx.get("chat_id")
+        cid = str(raw if raw is not None else "").strip()
+        if not cid or cid == str(user_id_str):
+            return ""
+        return cid
+
     def _get_user_context(
         self, user_id: str, account_id: str = "",
+        chat_scope: str = "",
     ) -> Dict[str, Any]:
         """获取或创建用户上下文（持久化 SQLite）。
 
         ``account_id`` 非空时用 ``{account_id}:{user_id}`` 作存储键（双协议号隔离）；
+        ``chat_scope`` 非空（群聊分窗，P1-2）时 base 为 ``{chat_scope}:{user_id}``
+        ——同一用户的群聊发言与私聊各开一窗，互不污染；episodic 记忆键刻意
+        **不带** chat_scope（用户事实是用户级的，跨窗共享）。
         ``user_context['user_id']`` 仍为逻辑 peer id，供 prompt/记忆业务使用。
         """
         from src.utils.context_store import make_context_key
-        key = make_context_key(user_id, account_id)
+        base = f"{chat_scope}:{user_id}" if chat_scope else str(user_id)
+        key = make_context_key(base, account_id)
         ctx = self._context_store.get(key)
         ctx["user_id"] = str(user_id)
         ctx["_context_store_key"] = key
@@ -4368,13 +4430,18 @@ class SkillManager(LoggerMixin):
             self.logger.debug("resolve_birthday failed", exc_info=True)
         return None
 
-    # ── 命理技能（companion.bazi）─────────────────────────────────────────────
+    # ── 命理技能（FateX 幻缘产品；配置 fatex.* 新命名空间 + companion.bazi 兼容）──
 
     def _bazi_cfg(self) -> Dict[str, Any]:
+        """FateX 生效配置（单一咽喉：本方法即全部 skill 链的配置出口）。
+
+        产品分离（2026-07-25）后经 ``fatex_cfg`` 合并视图取值——顶层 ``fatex.*``
+        优先、旧 ``companion.bazi.*`` 兜底，两处任一开着都生效（存量 overlay 零迁移）。
+        """
         try:
+            from src.fatex.config import fatex_cfg
             cfg = self.config.config if hasattr(self.config, "config") else {}
-            out = ((cfg.get("companion") or {}).get("bazi") or {}) if isinstance(cfg, dict) else {}
-            return out if isinstance(out, dict) else {}
+            return fatex_cfg(cfg)
         except Exception:
             return {}
 
@@ -4752,6 +4819,8 @@ class SkillManager(LoggerMixin):
         避免把无关闲聊里的「男生/女生」错并进生辰画像。
         ``account_id`` 须与写入 ``_bazi_topic_ts`` 的 process_message 同口径分桶，
         否则双号场景读裸键空桶 → 话题窗恒 False → 补录静默失效。
+        已知边界（P1-2 群聊分窗后）：群聊窗的话题时间戳写在群窗 ctx，本函数读
+        私窗 → 群内性别补录不触发——命理主打私聊陪伴，宁缺勿错，刻意不透传。
         """
         from src.companion.bazi_profile import birth_info_fact_text, extract_gender
         g = extract_gender(user_msg)
