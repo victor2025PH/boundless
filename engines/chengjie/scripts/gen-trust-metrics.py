@@ -1,8 +1,9 @@
 """可信指标流水线（P0-5 D11）：把 run_eval 的硬门禁结果导出成营销站可引用的 JSON。
 
 逐项调用 ``python -m scripts.run_eval <flag> --json``，解析报告，产出
-``website/public/metrics/<key>.json`` + 汇总 ``index.json``。营销站由此引用
+``<monorepo>/website/public/metrics/<key>.json`` + 汇总 ``index.json``。营销站由此引用
 **真实评测数字**（营销可以强，数字必须真）。
+（2026-07-25：输出目标从 engines/chengjie/website（过期副本，已删除）改为 monorepo 根 website/。）
 
 设计要点：
 - 缺资源的评测（翻译引擎无 key / KB 未备货 / 无真实嵌入）**优雅跳过**记为 skipped，
@@ -14,7 +15,7 @@
 用法：
   python scripts/gen-trust-metrics.py                 # 全量（缺资源自动 skip）
   python scripts/gen-trust-metrics.py --only persona,crisis-overview
-  python scripts/gen-trust-metrics.py --out website/public/metrics --strict
+  python scripts/gen-trust-metrics.py --out ../../website/public/metrics --strict
 """
 
 from __future__ import annotations
@@ -234,8 +235,8 @@ def run_one(spec: Dict[str, Any], *, timeout: float = 300.0) -> Dict[str, Any]:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="可信指标流水线：run_eval → website/public/metrics/*.json")
-    ap.add_argument("--out", default="website/public/metrics",
-                    help="输出目录（默认 website/public/metrics）")
+    ap.add_argument("--out", default="../../website/public/metrics",
+                    help="输出目录（默认 monorepo 根 website/public/metrics；相对路径相对 engines/chengjie 解析）")
     ap.add_argument("--only", default="",
                     help="仅跑这些 key（逗号分隔，如 persona,crisis-overview）")
     ap.add_argument("--timeout", type=float, default=300.0, help="单项超时秒数")

@@ -91,5 +91,7 @@ engines/avatarhub/demo_record/.pwprofile/
 deploy/instances/.ops/
 handoff/
 tmp_voice_ab/
+# local-only archives (e.g. chengjie/website dup-only files rescued before deletion)
+_archive/
 # nested repo (TG ZhiKongWang, independent repo - do not absorb)
 tgkz2026/

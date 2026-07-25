@@ -1,8 +1,12 @@
 name: trust-metrics
 
-# 定时刷新对外「可信指标」公开产物（website/public/metrics/*.json → /proof-metrics 页引用）。
+# 定时刷新对外「可信指标」公开产物（monorepo 根 website/public/metrics/*.json）。
 # 数字必须真：由确定性门禁 run_eval 生成，不手填。此前只能手动跑 scripts/gen-trust-metrics.py，
 # 本 workflow 让它每周自动刷新 + 可手动触发，保证营销站引用的评测数字始终新鲜。
+#
+# ⚠ monorepo 迁移遗留：本文件位于 engines/chengjie/.github/（非仓库根 .github/workflows/），
+# GitHub Actions 不会执行它。要恢复自动刷新需把它搬到仓库根并保留下方相对路径。
+# 2026-07-25：输出目标已从 engines/chengjie/website（过期副本，已删除）改为 monorepo 根 website/。
 #
 # 设计：
 # - schedule 每周一次 + workflow_dispatch 手动；push 到本文件/评测相关代码时也跑一次（自检不回归）。
@@ -53,15 +57,15 @@ jobs:
           pip install -r requirements-ci.txt
 
       - name: Regenerate trust metrics (deterministic gates; missing-resource evals skip)
-        run: python scripts/gen-trust-metrics.py --out website/public/metrics
+        run: python scripts/gen-trust-metrics.py --out ../../website/public/metrics
 
       - name: Commit refreshed metrics if changed
         # 仅当产物真的变了才提交（否则每周攒空提交）。跳过 CI 防触发死循环。
         run: |
-          if [ -n "$(git status --porcelain website/public/metrics)" ]; then
+          if [ -n "$(git status --porcelain ../../website/public/metrics)" ]; then
             git config user.name  "trust-metrics-bot"
             git config user.email "trust-metrics-bot@users.noreply.github.com"
-            git add website/public/metrics
+            git add ../../website/public/metrics
             git commit -m "chore(trust-metrics): scheduled refresh [skip ci]"
             git push
           else
