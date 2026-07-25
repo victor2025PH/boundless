@@ -106,3 +106,19 @@ def test_module_entrypoint_never_raises():
     record_login_stage(None, None, None)  # type: ignore[arg-type]
     record_login_stage("line", "protocol", "started")
     assert get_login_funnel_stats() is get_login_funnel_stats()
+
+
+def test_readout_wired_into_metrics_endpoints():
+    """读出端接线门禁（本次功能测试发现的缺口教训）。
+
+    2026-07-25：模块埋点全接、纯函数门禁全绿，但 ``dump()``/``dump_prom()`` 两个读出端
+    从没被任何 ``/metrics`` 路由调用——漏斗在进程里累积却对外不可见，恰好复刻了它本要
+    根治的「没人在看」。静态断言 drafts_routes 同时接了 JSON 与 Prometheus 两侧，
+    任一侧再被摘掉即红。
+    """
+    import pathlib
+
+    src = (pathlib.Path(__file__).resolve().parents[1]
+           / "src" / "web" / "routes" / "drafts_routes.py").read_text(encoding="utf-8")
+    assert "get_login_funnel_stats().dump()" in src, "JSON 侧 /api/workspace/metrics 未接登录漏斗"
+    assert "get_login_funnel_stats().dump_prom()" in src, "Prometheus /metrics 未接登录漏斗"

@@ -1078,6 +1078,14 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 扫码登录漏斗（started→qr_shown→pin_issued→authorized ↘ failed[reason]）：
+        # rows[].stalled=True（发起≥3 次零授权）即某平台某登录方式事实不可用——LINE 事故形态
+        try:
+            from src.integrations.login_funnel_stats import get_login_funnel_stats
+            metrics["login_funnel"] = get_login_funnel_stats().dump()
+        except Exception:
+            pass
+
         # TG 断网冷却（web 侧观察态：get_chat 超时→账号级 60s 冷却）附进同一块——
         # 与 worker push 的登记表语义不同（这是「正在断网重连」的瞬时信号），
         # 但用户视角同属「平台会话健康」，ops 卡据此给 telegram 行标「冷却中」。
@@ -1277,6 +1285,15 @@ def register_metrics_route(app, *, api_auth):
                     get_platform_session_health,
                 )
                 buf.write(get_platform_session_health().dump_prom())
+            except Exception:
+                pass
+
+            # 扫码登录漏斗（started→qr_shown→pin_issued→authorized ↘ failed[reason]）：
+            # 读出端此前漏接线（埋点在累积却对外不可见），2026-07-25 功能测试补齐——
+            # 「pin_issued 有量 / authorized 近零」即 LINE 事故形态，Prometheus 侧现可抓取告警
+            try:
+                from src.integrations.login_funnel_stats import get_login_funnel_stats
+                buf.write(get_login_funnel_stats().dump_prom())
             except Exception:
                 pass
 
