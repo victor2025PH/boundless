@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import time
 from typing import Any, Dict
 
 from fastapi import Request
@@ -29,11 +30,31 @@ from src.integrations.platform_login import (
     mode_available,
     online_account_keys,
 )
+from src.integrations.login_funnel_stats import record_login_stage
 from src.integrations.proxy_pool import get_proxy_pool
 from src.web.routes.unified_inbox_aggregate import _INBOX_ADAPTERS
 from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
+
+
+def _funnel(sess, stage: str, *, reason_code: str = "") -> None:
+    """记一次登录漏斗分段（每会话每段只记一次）。
+
+    去重靠 ``sess.funnel_marks``——状态轮询 2.5s 一轮，不去重会把一次登录记成上百次，
+    漏斗比例失真。观测全程 best-effort，绝不能影响登录本身。
+    """
+    try:
+        if stage in sess.funnel_marks:
+            return
+        sess.funnel_marks.add(stage)
+        elapsed = 0.0
+        if stage == "authorized":
+            elapsed = max(0.0, (time.time() - sess.created_at) * 1000.0)
+        record_login_stage(sess.platform, sess.mode, stage,
+                           reason_code=reason_code, elapsed_ms=elapsed)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def register_platform_login_routes(app, *, api_auth, config_manager=None) -> None:
@@ -179,7 +200,7 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
             except Exception:
                 logger.debug("生成指纹失败", exc_info=True)
 
-        qr_url = qr_image = instruction = ""
+        qr_url = qr_image = instruction = prov_reason = ""
         poll_fn = cancel_fn = submit_fn = provider_state = None
         provider = get_login_provider(platform, mode)
         if provider is not None:
@@ -199,6 +220,7 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                 cancel_fn = info.get("cancel")
                 submit_fn = info.get("submit_password")
                 provider_state = info.get("state")
+                prov_reason = str(info.get("reason_code") or "")
             except Exception:
                 logger.debug("登录 provider[%s:%s] 失败（回落设备端指引）",
                              platform, mode, exc_info=True)
@@ -211,6 +233,15 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
             provider_state=provider_state, poll_fn=poll_fn, cancel_fn=cancel_fn,
             submit_fn=submit_fn,
         )
+        _funnel(sess, "started")
+        if sess.qr_image or sess.qr_url:
+            _funnel(sess, "qr_shown")
+        # provider 开局就报致命故障（组件缺失/客户端起不来）且没给 poll：立刻置终态，
+        # 否则会话只能挂到 TTL 耗尽——用户对着转圈等满三分钟才等来一句超时。
+        if prov_reason and poll_fn is None:
+            sess.reason_code = prov_reason
+            sess.status = "failed"
+            _funnel(sess, "failed", reason_code=prov_reason)
         # 落库：重连/已知账号即记录（mode + 代理 + 指纹持久化，供编排器重启后正确拉起）
         if account_id:
             try:
@@ -230,6 +261,7 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
             "qr_url": sess.qr_url,
             "qr_image": sess.qr_image or _login_qr_data_url(sess.qr_url),
             "instruction": sess.instruction,
+            "reason_code": sess.reason_code,
         }
 
     @app.get("/api/platforms/{platform}/login/{login_id}/status")
@@ -238,12 +270,15 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
         platform = str(platform or "").lower()
         sess = get_login_manager().get(login_id)
         if sess is None:
-            return {"ok": True, "status": "expired", "detail": tr(request, "err.login.session_expired")}
+            return {"ok": True, "status": "expired", "pin": "", "reason_code": "",
+                    "detail": tr(request, "err.login.session_expired")}
         if sess.status in ("authorized", "failed"):
-            return {"ok": True, "status": sess.status, "detail": sess.detail}
+            # 终态早退绕过 provider poll，原因码只能从会话读（poll 时已落 sess）
+            return {"ok": True, "status": sess.status, "pin": "",
+                    "reason_code": sess.reason_code, "detail": sess.detail}
         if sess.is_expired():
             sess.status = "expired"
-            return {"ok": True, "status": "expired"}
+            return {"ok": True, "status": "expired", "pin": "", "reason_code": ""}
         # provider 事件驱动（protocol/web）：直接问 provider 拿登录结果
         if sess.poll_fn is not None:
             try:
@@ -253,6 +288,18 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                 res = res or {}
                 st = str(res.get("status") or sess.status)
                 sess.status = st
+                rc = str(res.get("reason_code") or "")
+                if rc:
+                    # 只在非空时落：failed 是终态，原因码不应被后续轮询的空值抹掉
+                    sess.reason_code = rc
+                if res.get("qr_image") or res.get("qr_url"):
+                    _funnel(sess, "qr_shown")
+                if st == "pin_needed":
+                    _funnel(sess, "pin_issued")
+                elif st == "authorized":
+                    _funnel(sess, "authorized")
+                elif st == "failed":
+                    _funnel(sess, "failed", reason_code=sess.reason_code)
                 if st == "authorized" and res.get("account_id"):
                     _persist_login_account(platform, str(res["account_id"]), sess)
                 poll_qr = str(res.get("qr_url") or sess.qr_url)
@@ -260,12 +307,16 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                     sess.qr_url = poll_qr
                 return {"ok": True, "status": st,
                         "detail": str(res.get("detail") or ""),
+                        "pin": str(res.get("pin") or ""),
+                        "reason_code": sess.reason_code,
                         "qr_url": poll_qr,
                         "qr_image": str(res.get("qr_image") or "")
                         or _login_qr_data_url(poll_qr)}
             except Exception:
-                logger.debug("provider poll 失败", exc_info=True)
-                return {"ok": True, "status": sess.status}
+                # poll 是登录链路的心跳，静默失败会让整条链路查无实据
+                logger.warning("provider poll 失败", exc_info=True)
+                return {"ok": True, "status": sess.status, "pin": "",
+                        "reason_code": sess.reason_code}
         # 实时对比基线：检测到该平台有新账号上线 → 判定登录成功
         try:
             status_map = status_via_adapters(request, _INBOX_ADAPTERS)
@@ -273,12 +324,14 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
             new_accounts = online - sess.baseline
             if new_accounts:
                 sess.status = "authorized"
+                _funnel(sess, "authorized")
                 for aid in new_accounts:
                     _persist_login_account(platform, aid, sess)
-                return {"ok": True, "status": "authorized"}
+                return {"ok": True, "status": "authorized", "pin": "", "reason_code": ""}
         except Exception:
             logger.debug("登录状态轮询失败", exc_info=True)
-        return {"ok": True, "status": sess.status, "instruction": sess.instruction}
+        return {"ok": True, "status": sess.status, "pin": "", "reason_code": "",
+                "instruction": sess.instruction}
 
     @app.post("/api/platforms/{platform}/login/{login_id}/password")
     async def api_platform_login_password(platform: str, login_id: str, request: Request):

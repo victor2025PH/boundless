@@ -495,7 +495,14 @@
       "cp.acct.qr_waiting": "等待扫码确认…",
       "cp.acct.login_ok": "登录成功 ✓",
       "cp.acct.qr_expired": "二维码已过期，请重试",
-      "cp.acct.login_fail": "登录失败"
+      "cp.acct.login_fail": "登录失败",
+      "cp.acct.pin_label": "请在手机上输入这组验证码",
+      "cp.acct.pin_waiting": "等待手机确认…",
+      "cp.acct.fail.pin_timeout": "验证码超时，请重新扫码",
+      "cp.acct.fail.rate_limited": "操作过于频繁，请稍后再试",
+      "cp.acct.fail.network": "网络连接失败，请检查网络后重试",
+      "cp.acct.fail.unavailable": "该登录方式当前不可用，请联系管理员",
+      "cp.acct.fail.cancelled": "登录已取消"
     },
     {
       "cp.acct.mode.protocol": "Protocol multi-login",
@@ -601,7 +608,14 @@
       "cp.acct.qr_waiting": "Waiting for scan confirmation…",
       "cp.acct.login_ok": "Login successful ✓",
       "cp.acct.qr_expired": "QR code expired, please retry",
-      "cp.acct.login_fail": "Login failed"
+      "cp.acct.login_fail": "Login failed",
+      "cp.acct.pin_label": "Enter this code on your phone",
+      "cp.acct.pin_waiting": "Waiting for phone confirmation…",
+      "cp.acct.fail.pin_timeout": "Verification code timed out, please scan again",
+      "cp.acct.fail.rate_limited": "Too many attempts, please try again later",
+      "cp.acct.fail.network": "Network error, please check your connection and retry",
+      "cp.acct.fail.unavailable": "This login method is currently unavailable, please contact your admin",
+      "cp.acct.fail.cancelled": "Login cancelled"
     }
   );
   reg(

@@ -8,8 +8,10 @@ LINE 官方**没有可嵌入的完整网页聊天端**，但社区有等价 What
 架构（仿 Telegram pyrogram 的进程内 worker，而非 Baileys 的 Node 微服务）：
 - 登录：``okline`` 的二维码流是回调驱动的阻塞长轮询（create_session→qr→长轮询扫码→PIN→
   长轮询确认→login_v2）。这里放到**后台线程**里驱动，把 QR/PIN/状态写进共享状态，
-  provider 的 ``poll`` 只读状态——契合统一收件箱的「发起→轮询」模型。
-- 成功：落 tokens 到 ``sessions/line/<mid>.json``、写账号注册表、富集自身昵称/头像。
+  provider 的 ``poll`` 只读状态——契合统一收件箱的「发起→轮询」模型；PIN 走
+  ``pin_needed`` 状态 + 独立 ``pin`` 字段回给前端（用户必须在手机上输入它才算登录完成）。
+- 成功：落 tokens 到 ``sessions/line/<mid>.json``、落 certificate 到 ``<mid>.cert``
+  （下次复登带上它即可免 PIN）、写账号注册表、富集自身昵称/头像。
 - 收发：见 ``account_orchestrator.LineProtocolWorker``（okline ``Bot`` 后台线程收消息 →
   protocol_bridge 落库 + 自动回复；``send_text`` 出站）。
 
@@ -61,6 +63,43 @@ def tokens_path(config: Dict[str, Any], mid: str) -> str:
     return os.path.join(sessions_dir(config), f"{mid}.json")
 
 
+def cert_path(config: Dict[str, Any], mid: str) -> str:
+    return os.path.join(sessions_dir(config), f"{mid}.cert")
+
+
+def load_certificate(config: Dict[str, Any], mid: str) -> str:
+    """读取上次登录留下的 LINE 证书；读不到一律返回空串（调用方据此决定传不传 kwarg）。"""
+    if not mid:
+        return ""
+    try:
+        with open(cert_path(config, mid), "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def classify_login_error(text: str) -> str:
+    """把 okline / 网关抛出的原始异常文本归类为 ``reason_code`` 枚举之一。
+
+    纯函数：原文只进日志，前端拿 code 出本地化文案——既不给用户看英文 thrift 路径，
+    也不暴露我们在走逆向协议。判定按「具体 → 泛化」排序，例如 PIN 超时的原文同时含
+    ``pin`` 与 ``expired``，必须先于笼统的二维码过期/网络规则命中。
+    """
+    t = str(text or "").strip().lower()
+    if not t:
+        return "login_failed"
+    if "pin" in t and any(k in t for k in ("timeout", "timed out", "expired", "not verified")):
+        return "pin_timeout"
+    if "qr code has expired" in t or "code=100" in t or "expired" in t:
+        return "qr_expired"
+    if any(k in t for k in ("429", "rate limit", "too many", "flood")):
+        return "rate_limited"
+    if any(k in t for k in ("timeout", "timed out", "connection", "network",
+                            "unreachable", "ssl", "dns")):
+        return "network"
+    return "login_failed"
+
+
 def _qr_data_uri(qr_url: str) -> str:
     """把 QR 回调 URL 渲染成二维码图片 data URI（前端弹窗直接显示）。"""
     if not qr_url:
@@ -110,8 +149,40 @@ def _self_profile_fields(client: Any) -> tuple[str, str]:
         return "", ""
 
 
-def _drive_qr_login(client: Any, state: Dict[str, Any], config: Dict[str, Any]) -> None:
+def _discard_certificate(config: Dict[str, Any], account_id: str, used_cert: str) -> None:
+    """带证书登录失败 → 删掉它，下一轮走干净的 PIN 流程。
+
+    代价不对称：坏证书留着 = 每次复登都带同一张坏牌，用户怎么刷新都登不上（要运维手工
+    删文件才能解），而误删 = 最多多输一次 PIN。所以不做「是不是证书的锅」的启发式判断，
+    只要这轮带了证书又失败就丢弃。
+    """
+    if not used_cert or not account_id:
+        return
+    try:
+        path = cert_path(config, account_id)
+        if os.path.exists(path):
+            os.remove(path)
+            logger.info("[line_protocol] 带证书登录失败，已丢弃证书 account=%s（下轮走 PIN）", account_id)
+    except Exception:  # noqa: BLE001
+        logger.debug("[line_protocol] 丢弃证书失败", exc_info=True)
+
+
+def _mark_failed(state: Dict[str, Any], reason_code: str) -> None:
+    """写失败终态：原文不外泄，前端按 ``reason_code`` 出本地化文案。"""
+    # 用户主动取消已经写过终态，别让随后 qr_login 抛出的连接错误把它改写成故障
+    if str(state.get("reason_code") or "") == "cancelled":
+        return
+    state["status"] = "failed"
+    state["reason_code"] = reason_code
+    state["detail"] = ""
+
+
+def _drive_qr_login(client: Any, state: Dict[str, Any], config: Dict[str, Any],
+                    account_id: str = "") -> None:
     """在后台线程里驱动 okline 的二维码登录流，把 QR/PIN/状态写进 ``state``（同步、阻塞）。
+
+    ``account_id`` 为重连场景的既有 mid：能读到它上次的证书就带上，okline 内部
+    ``verifyCertificate`` 通过后 ``need_pin=False``，整个 PIN 环节被跳过。
 
     单测可直接调用本函数（传 fake client），无需起线程。
     """
@@ -122,33 +193,76 @@ def _drive_qr_login(client: Any, state: Dict[str, Any], config: Dict[str, Any]) 
 
     def on_pin(pin: str) -> None:
         state["pin"] = str(pin or "")
-        state["status"] = "scanned"
-        state["detail"] = f"在手机 LINE 上输入 PIN：{pin}"
+        state["status"] = "pin_needed"
+        # PIN 只走独立字段：detail 会被后续阶段的失败文案覆盖，塞这里会在第二段轮询时丢失
+        state["detail"] = "请在手机 LINE 上输入验证码"
 
     try:
-        result = client.qr_login(on_qr=on_qr, on_pin=on_pin, wait_seconds=170.0)
-    except Exception as ex:  # noqa: BLE001
-        logger.debug("[line_protocol] qr_login 失败", exc_info=True)
-        state["status"] = "failed"
-        state["detail"] = str(ex)
-        return
+        kwargs: Dict[str, Any] = {
+            "on_qr": on_qr,
+            "on_pin": on_pin,
+            # okline 把这份预算在「等扫码」「等 PIN」两阶段各消耗一轮，而用户真人操作
+            # （进设置、扫码、手机上输 6 位并勾确认）常超 platform_login.TTL_SEC(180)；
+            # TTL 那侧已对 pin_needed 豁免过期，故这里放宽到 240。
+            "wait_seconds": 240.0,
+        }
+        cert = load_certificate(config, account_id)
+        if cert:
+            kwargs["certificate"] = cert
+        try:
+            try:
+                result = client.qr_login(**kwargs)
+            except TypeError as ex:
+                # 装的 okline 版本不认 certificate 形参：摘掉重试一次。免 PIN 只是优化，
+                # 不能让它把整条登录打死（降级路径 == 老行为，用户多输一次 PIN 而已）。
+                if not cert or "certificate" not in str(ex):
+                    raise
+                logger.warning("[line_protocol] okline 不支持 certificate，回落常规扫码: %s", ex)
+                kwargs.pop("certificate", None)
+                result = client.qr_login(**kwargs)
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("[line_protocol] qr_login 失败: %s", ex)
+            _discard_certificate(config, account_id, cert)
+            _mark_failed(state, classify_login_error(str(ex)))
+            return
 
-    mid = str(getattr(result, "mid", "") or "")
-    if not getattr(result, "success", False) or not mid:
-        state["status"] = "failed"
-        state["detail"] = str(getattr(result, "display_message", "") or "login failed")
-        return
+        mid = str(getattr(result, "mid", "") or "")
+        if not getattr(result, "success", False) or not mid:
+            display_message = str(getattr(result, "display_message", "") or "login failed")
+            logger.warning("[line_protocol] qr_login 未成功: %s", display_message)
+            _discard_certificate(config, account_id, cert)
+            _mark_failed(state, classify_login_error(display_message))
+            return
 
-    state["mid"] = mid
-    try:
-        os.makedirs(sessions_dir(config), exist_ok=True)
-        client.save_tokens(tokens_path(config, mid))
-    except Exception:  # noqa: BLE001
-        logger.debug("[line_protocol] save_tokens 失败", exc_info=True)
-    name, avatar = _self_profile_fields(client)
-    state["name"] = name
-    state["avatar_url"] = avatar
-    state["status"] = "authorized"
+        state["mid"] = mid
+        try:
+            os.makedirs(sessions_dir(config), exist_ok=True)
+            client.save_tokens(tokens_path(config, mid))
+        except Exception:  # noqa: BLE001
+            logger.debug("[line_protocol] save_tokens 失败", exc_info=True)
+        certificate = str(getattr(result, "certificate", "") or "")
+        if certificate:
+            try:
+                os.makedirs(sessions_dir(config), exist_ok=True)
+                with open(cert_path(config, mid), "w", encoding="utf-8") as f:
+                    f.write(certificate)
+            except Exception:  # noqa: BLE001
+                logger.debug("[line_protocol] 证书落盘失败（下次仍走 PIN）", exc_info=True)
+        name, avatar = _self_profile_fields(client)
+        state["name"] = name
+        state["avatar_url"] = avatar
+        # 清掉 PIN 引导语，否则登录成功后前端还挂着「请输入验证码」
+        state["detail"] = ""
+        state["status"] = "authorized"
+    finally:
+        # 成功的客户端会被 LineProtocolWorker 接手继续收发，close() 等于把刚登上的账号
+        # 踢下线；只有未成功（失败/取消/异常）时才收连接，否则每次刷新二维码都泄漏一条
+        # HTTPS 长连 + WASM bridge + 杀不掉的守护线程。
+        if str(state.get("status") or "") != "authorized":
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def make_provider(config: Dict[str, Any]):
@@ -156,20 +270,24 @@ def make_provider(config: Dict[str, Any]):
     async def _provider(request: Any, platform: str, mode: str, account_id: str,
                         ctx: Optional[Dict[str, Any]] = None):
         if not is_okline_available():
-            return {"instruction": "未安装 LINE 协议库 okline。请先 `pip install okline` 再重试。"}
+            # 面向用户的话术由前端按 reason_code 本地化；这里不点库名（无谓暴露走的是逆向协议），
+            # 真正的安装指引留在 logger 与文档里给运维看。
+            logger.warning("[line_protocol] 未安装 okline，LINE 协议登录不可用（pip install okline）")
+            return {"instruction": "", "reason_code": "okline_missing"}
         try:
             from okline import OkLine
             client = OkLine()
         except Exception as ex:  # noqa: BLE001
-            logger.debug("[line_protocol] 初始化 OkLine 失败", exc_info=True)
-            return {"instruction": f"初始化 LINE 协议客户端失败（{ex}）。"}
+            logger.warning("[line_protocol] 初始化 OkLine 失败: %s", ex)
+            return {"instruction": "", "reason_code": "client_init"}
 
         state: Dict[str, Any] = {
             "status": "pending", "qr_url": "", "qr_image": "", "pin": "",
-            "mid": "", "name": "", "avatar_url": "", "detail": "", "_persisted": False,
+            "mid": "", "name": "", "avatar_url": "", "detail": "",
+            "reason_code": "", "_persisted": False,
         }
         t = threading.Thread(
-            target=_drive_qr_login, args=(client, state, config), daemon=True)
+            target=_drive_qr_login, args=(client, state, config, account_id), daemon=True)
         t.start()
         # 等首个二维码（最多 ~8s）
         deadline = time.time() + 8.0
@@ -202,13 +320,21 @@ def make_provider(config: Dict[str, Any]):
                         avatar_url=str(state.get("avatar_url") or ""), config=config)
                 except Exception:  # noqa: BLE001
                     logger.debug("[line_protocol] self_profile 富集失败（忽略）", exc_info=True)
+            # pin/reason_code 只在各自状态下回填：PIN 属一次性凭据，登录成功后不该还留在响应里
             return {"status": st, "account_id": mid,
                     "detail": str(state.get("detail") or ""),
+                    "pin": (str(state.get("pin") or "") if st == "pin_needed" else ""),
+                    "reason_code": (str(state.get("reason_code") or "") if st == "failed" else ""),
                     "qr_image": ("" if st == "authorized" else str(state.get("qr_image") or ""))}
 
         async def _cancel(session: Any) -> None:
+            # 已授权的会话不接受取消：客户端已交给 LineProtocolWorker 收发，close() 等于
+            # 把刚上线的号踢下线。出货副驾（cp-accounts.js）就在 authorized 分支里调
+            # _stopPoll()→cancelLogin，这里兜住任何「登录成功后又取消」的调用方。
+            if str(state.get("status") or "") == "authorized":
+                return
             # daemon 线程无法强杀；置 failed 让其 qr_login 超时后自然结束。
-            state["status"] = "failed"
+            _mark_failed(state, "cancelled")
             try:
                 client.close()
             except Exception:  # noqa: BLE001

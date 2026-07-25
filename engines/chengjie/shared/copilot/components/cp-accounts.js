@@ -19,6 +19,17 @@
   });
   const MODE_KEY = { protocol: "cp.acct.mode.protocol", web: "cp.acct.mode.web", device: "cp.acct.mode.device", desktop: "cp.acct.mode.desktop" };
   const STATUS_KEY = { online: "cp.acct.status.online", offline: "cp.acct.status.offline", pending: "cp.acct.status.pending", unknown: "cp.acct.status.unknown" };
+  // 后端 reason_code → 本地化文案。未知 code 回落通用失败文案，不显示裸 code。
+  const REASON_KEYS = {
+    qr_expired: "cp.acct.qr_expired",
+    pin_timeout: "cp.acct.fail.pin_timeout",
+    rate_limited: "cp.acct.fail.rate_limited",
+    network: "cp.acct.fail.network",
+    okline_missing: "cp.acct.fail.unavailable",
+    client_init: "cp.acct.fail.unavailable",
+    cancelled: "cp.acct.fail.cancelled",
+    login_failed: "cp.acct.login_fail",
+  };
   function T(key, vars) {
     const f = root.CopilotShared && root.CopilotShared.t;
     return f ? f(key, vars) : key;
@@ -69,6 +80,12 @@
     .qr .st { font-size:var(--cp-fs-sm,12px); margin-top:6px; }
     .qr .st.ok { color:#2f9e6e; }
     .qr .st.fail { color:var(--cp-danger,#dc2626); }
+    .qr .pin { margin-top:10px; }
+    .qr .pin-label { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); }
+    .qr .pin-code { display:flex; gap:6px; justify-content:center; margin-top:6px; }
+    .qr .pin-d { min-width:26px; padding:6px 0; border:1px solid var(--cp-border,#e2e8f0);
+                 border-radius:6px; font:600 20px/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+                 color:var(--cp-text,#0f172a); background:var(--cp-bg-soft,#f8fafc); }
     .audit { margin-top:10px; border-top:1px dashed var(--cp-border,#e2e8f0); padding-top:10px; }
     .audit .sum { display:flex; align-items:center; gap:8px; font-size:var(--cp-fs-tiny,11px);
             color:var(--cp-text-dim,#64748b); margin-bottom:6px; }
@@ -746,26 +763,52 @@
           d = await this._client.loginStatus(this._login);
         } catch (e) { return; }
         const st = (d && d.status) || "";
-        // provider 可能在轮询里刷新 QR（如 protocol 令牌轮换）
-        if ((d && d.qr_image) || (d && d.qr_url)) {
+        // provider 可能在轮询里刷新 QR（如 protocol 令牌轮换）。但 PIN 阶段 provider 仍会
+        // 回带 qr_image，重绘会把刚显示的验证码冲掉——那正是用户此刻要照着输的东西。
+        if (((d && d.qr_image) || (d && d.qr_url)) && st !== "pin_needed") {
           const stEl = qr.querySelector(".st");
           if (stEl && st !== "authorized") this._paintQr(qr, d);
         }
         const stEl = qr.querySelector(".st");
         if (st === "authorized") {
-          this._stopPoll();
+          this._stopPoll({ authorized: true });
           if (stEl) { stEl.textContent = T("cp.acct.login_ok"); stEl.className = "st ok"; }
           setTimeout(() => this.reload(), 1000);
+        } else if (st === "pin_needed") {
+          // 不停轮询：PIN 要用户在手机上输完，后端才会走到 authorized
+          this._paintPin(qr, (d && d.pin) || "");
+          if (stEl) { stEl.textContent = T("cp.acct.pin_waiting"); stEl.className = "st"; }
         } else if (st === "failed" || st === "expired") {
           this._stopPoll();
-          if (stEl) { stEl.textContent = st === "expired" ? T("cp.acct.qr_expired") : T("cp.acct.login_fail"); stEl.className = "st fail"; }
+          const reason = (d && d.reason_code) || "";
+          const key = REASON_KEYS[reason] || (st === "expired" ? "cp.acct.qr_expired" : "cp.acct.login_fail");
+          if (stEl) { stEl.textContent = T(key); stEl.className = "st fail"; }
         }
       }, 2500);
     }
 
-    _stopPoll() {
+    /** PIN 区幂等重绘：同一串码重复回来不重建 DOM（否则每 2.5s 闪一次）。 */
+    _paintPin(qr, pin) {
+      const code = String(pin || "");
+      if (!code) return;
+      let box = qr.querySelector(".pin");
+      if (box && box.dataset.pin === code) return;
+      if (!box) {
+        box = document.createElement("div");
+        box.className = "pin";
+        const st = qr.querySelector(".st");
+        if (st) qr.insertBefore(box, st); else qr.appendChild(box);
+      }
+      box.dataset.pin = code;
+      const digits = code.split("").map((c) => `<span class="pin-d">${this._esc(c)}</span>`).join("");
+      box.innerHTML = `<div class="pin-label">${this._esc(T("cp.acct.pin_label"))}</div>`
+        + `<div class="pin-code" aria-live="polite">${digits}</div>`;
+    }
+
+    _stopPoll(opts) {
       if (this._poll) { clearInterval(this._poll); this._poll = null; }
-      if (this._login && this._client) {
+      // 已授权的会话绝不 cancel：客户端已交给后台 worker 收发，取消等于把刚上线的号踢下线
+      if (this._login && this._client && !(opts && opts.authorized)) {
         try { this._client.cancelLogin(this._login); } catch (e) { /* ignore */ }
       }
       this._login = null;

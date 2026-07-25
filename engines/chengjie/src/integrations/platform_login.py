@@ -9,6 +9,9 @@
   即无论扫码在设备端还是网页端完成，账号真正连上后前端弹窗会自动转「登录成功」。
 - ``register_login_provider``：预留真实 per-platform QR provider 的注册点（如未来为
   Telegram 接入 pyrogram ExportLoginToken 网页二维码），核心轮询逻辑无需改动。
+- ``HOLD_STATES``（等云密码 / 等用户输 PIN）豁免常规 TTL：此时连接已建立，用户正在
+  另一端输入，判过期会把整轮流程作废；但仍受 ``HOLD_MAX_SEC`` 封顶，否则用户扫到一半
+  关页面就会永久滞留一条会话（连带底层长连与守护线程）直到进程重启。
 
 设计原则：只读各服务的 ``status()``，**绝不触碰正在运行的客户端**，零副作用。
 """
@@ -23,6 +26,16 @@ from typing import Any, Callable, Dict, Optional, Set
 
 # 登录会话有效期（秒）：二维码/等待窗口超过即过期，前端可「刷新」重开
 TTL_SEC = 180
+
+# 这些状态下连接已建立、正等用户在另一端完成输入（云密码 / LINE 的 6 位 PIN），
+# 判过期会误清会话导致前功尽弃——用户读码、切 App、手输的耗时经常超过 TTL_SEC。
+HOLD_STATES = frozenset({"password_needed", "pin_needed"})
+
+# hold 只是「豁免常规 TTL」，不是「永不回收」：用户扫到一半关掉页面是常态，而每个滞留
+# 会话都挂着一条 okline 长连 + 杀不掉的守护线程，不封顶就是按放弃次数线性泄漏到重启为止。
+# 上限取 provider 的 wait_seconds(240s) 之上留足余量——超过它，底层长轮询早已自行超时，
+# 会话再留着也不可能走到 authorized。
+HOLD_MAX_SEC = 600
 
 SUPPORTED_PLATFORMS = ("telegram", "line", "whatsapp", "messenger", "web")
 
@@ -76,11 +89,18 @@ class LoginSession:
     mode: str = "device"
     account_id: str = ""
     created_at: float = field(default_factory=time.time)
-    status: str = "pending"  # pending | scanned | authorized | expired | failed
+    # pending | scanned | pin_needed | password_needed | authorized | expired | failed
+    # scanned = 等用户在手机上点确认（我方无信息要传递）；
+    # pin_needed = 我方持有 PIN，等用户在手机上输入（LINE 协议登录）
+    status: str = "pending"
     qr_url: str = ""          # 网页二维码可编码的 URL（如 tg://login?token=...）
     qr_image: str = ""        # data URI（可选，provider 直接给出二维码图片）
     instruction: str = ""
     detail: str = ""
+    # failed 的机器可读原因（provider poll 落此，供 status 早退分支继续吐给前端本地化）
+    reason_code: str = ""
+    # 已上报过的漏斗分段：轮询每 2.5s 一次，不去重会把一次登录记成上百次
+    funnel_marks: Set[str] = field(default_factory=set)
     baseline: Set[str] = field(default_factory=set)
     # M4：账号配置（防关联）—— 登录成功后随 account_id 一起落库
     label: str = ""
@@ -94,11 +114,10 @@ class LoginSession:
     submit_fn: Optional[Callable[..., Any]] = None   # 两步验证云密码提交（Telegram protocol）
 
     def is_expired(self) -> bool:
-        # 两步验证等待态不受 TTL 过期影响：扫码已确认、连接持有中，等用户输入云密码，
-        # 此时若判过期会误清会话导致前功尽弃。
-        if self.status == "password_needed":
-            return False
-        return (time.time() - self.created_at) > TTL_SEC
+        age = time.time() - self.created_at
+        if self.status in HOLD_STATES:
+            return age > HOLD_MAX_SEC
+        return age > TTL_SEC
 
 
 class LoginManager:
@@ -112,7 +131,7 @@ class LoginManager:
         now = time.time()
         dead = [
             k for k, s in self._sessions.items()
-            if (now - s.created_at) > TTL_SEC * 2 and s.status != "password_needed"
+            if (now - s.created_at) > (HOLD_MAX_SEC if s.status in HOLD_STATES else TTL_SEC * 2)
         ]
         for k in dead:
             self._sessions.pop(k, None)
