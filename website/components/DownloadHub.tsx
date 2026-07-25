@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { ArrowDown, ArrowRight, Download, ShieldCheck } from "lucide-react";
 import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
@@ -9,6 +10,30 @@ import { CLIENT_APPS, PLATFORM_LABEL, type ClientApp } from "@/lib/downloads";
 import { CATEGORIES } from "@/lib/brand";
 import { localePath } from "@/lib/site";
 import { track } from "@/lib/track";
+
+/** 运行时清单校正：发布脚本更新服务器 manifest 后，卡片版本/大小即时跟上，
+ *  不等 releaseNotes/chatxContent 构建常量改版（防止与页内详情区并排出现两个版本号）。 */
+type LiveMeta = { version?: string; size?: string };
+
+function useLiveVersions(): Record<string, LiveMeta> {
+  const [live, setLive] = useState<Record<string, LiveMeta>>({});
+  useEffect(() => {
+    fetch("/releases/release_manifest.json")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        const b = j?.builds?.find((x: { ready?: boolean }) => x?.ready) ?? j?.builds?.[0];
+        if (b?.ver) setLive((o) => ({ ...o, avatarhub: { version: b.ver, size: b.size || undefined } }));
+      })
+      .catch(() => {});
+    fetch("/downloads/manifest.json")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (j?.version) setLive((o) => ({ ...o, chatx: { version: j.version, size: j.size_mb ? `${j.size_mb} MB` : undefined } }));
+      })
+      .catch(() => {});
+  }, []);
+  return live;
+}
 
 /** 三系 accent → 静态 Tailwind 类（不可动态拼接，故写全映射） */
 const ACCENT: Record<string, { chip: string; icon: string; hover: string }> = {
@@ -38,6 +63,7 @@ const ACCENT: Record<string, { chip: string; icon: string; hover: string }> = {
 export default function DownloadHub() {
   const { lang } = useLang();
   const zh = lang === "zh";
+  const live = useLiveVersions();
 
   return (
     <section className="relative pt-32">
@@ -65,7 +91,7 @@ export default function DownloadHub() {
         <div className="mt-10 grid gap-5 md:grid-cols-3">
           {CLIENT_APPS.map((app, i) => (
             <Reveal key={app.key} delay={i * 0.08}>
-              <ClientCard app={app} zh={zh} />
+              <ClientCard app={app} zh={zh} live={live[app.key]} />
             </Reveal>
           ))}
         </div>
@@ -74,9 +100,11 @@ export default function DownloadHub() {
   );
 }
 
-function ClientCard({ app, zh }: { app: ClientApp; zh: boolean }) {
+function ClientCard({ app, zh, live }: { app: ClientApp; zh: boolean; live?: LiveMeta }) {
   const lang = zh ? "zh" : "en";
   const accent = ACCENT[CATEGORIES[app.family].accent] ?? ACCENT.cyan;
+  const version = live?.version || app.version;
+  const sizeLabel = live?.size || app.sizeLabel[lang];
   // AvatarHub 的详情就在本页下方：锚点下滑而非跳页，少一次导航。
   const inPage = app.page === "/download";
   const href = inPage ? "#avatarhub" : localePath(lang, app.page);
@@ -124,7 +152,7 @@ function ClientCard({ app, zh }: { app: ClientApp; zh: boolean }) {
 
       <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-3.5">
         <span className="font-mono text-xs text-slate-500">
-          v{app.version} · {app.sizeLabel[lang]}
+          v{version} · {sizeLabel}
         </span>
         <span className={`inline-flex items-center gap-1 text-xs font-medium ${accent.icon}`}>
           {inPage ? (

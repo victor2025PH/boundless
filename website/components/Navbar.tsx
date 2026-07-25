@@ -281,7 +281,8 @@ export default function Navbar() {
                       <span className="block text-sm text-slate-200 group-hover/dl:text-white">{app.name[lang]}</span>
                       <span className="block truncate text-[11px] text-slate-500">{app.tagline[lang]}</span>
                     </span>
-                    <span className="shrink-0 font-mono text-[11px] text-slate-500">v{app.version}</span>
+                    {/* 版本号刻意不进下拉：构建时常量会落后于运行时 manifest（页面内有权威版本） */}
+                    <Download className="h-3.5 w-3.5 shrink-0 text-slate-600 transition group-hover/dl:text-neon-cyan" />
                   </a>
                 ))}
                 <div className="mt-1 border-t border-white/5 pt-1">
@@ -426,7 +427,7 @@ export default function Navbar() {
                       <BrandMark className="h-5 w-5" />
                     )}
                     <span className="flex-1">{app.name[lang]}</span>
-                    <span className="font-mono text-[11px] text-slate-500">v{app.version}</span>
+                    <Download className="h-3.5 w-3.5 text-slate-600" />
                   </a>
                 ))}
               </div>
