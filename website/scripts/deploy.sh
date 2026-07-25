@@ -127,6 +127,18 @@ rsync -a --delete \
   "$STAGE"/ "$APP_DIR"/
 
 cd "$APP_DIR"
+
+# 品牌 preset 门禁：官网已 vendored 到 vendor/brand，服务器没有 monorepo 的 platform/。
+# 缺文件时 next build 会在解析 tailwind.config 时炸掉；这里在 npm ci 之前 fail-fast，
+# 避免白跑几分钟安装再回滚。本地发包前请跑 npm run sync:brand（release/deploy 脚本已强制）。
+log "3.5/7 assert vendored brand"
+if [ ! -f "$APP_DIR/vendor/brand/tailwind-preset.cjs" ] || [ ! -f "$APP_DIR/vendor/brand/tokens.json" ]; then
+  fail "vendor/brand/{tailwind-preset.cjs,tokens.json} missing in deploy package"
+  fail "  fix: on monorepo machine run (cd website && npm run sync:brand) then re-pack"
+  rollback
+fi
+log "vendor/brand OK"
+
 log "4/7 npm ci"
 # LIBC=glibc：本机 prebuild-install 探测不到 libc（日志见 libc= 空），会放弃预编译二进制
 # 转而源码编译 better-sqlite3，在 1C 小鸡上必失败；显式声明后直接下载官方 glibc 预编译包。

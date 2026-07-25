@@ -32,7 +32,7 @@ const suffix = (skin) => (skin === "normal" ? "" : `-${skin}`);
     for (const mode of stills) {
       await page.goto(`${BASE}/robot-stage?mode=${mode}&skin=${skin}&scale=3&bg=transparent&pool=0`, { waitUntil: "domcontentloaded", timeout: 90000 });
       await page.waitForSelector("[data-stage-ready]", { timeout: 60000 });
-      // 等姿态弹簧落定 / 挥手进入循环段（含五指完全展开）
+      // 等姿态弹簧落定 / 挥手进入循环段（含引力三指扇形展开）
       await page.waitForTimeout(mode === "idle_wave" ? 1800 : mode === "idle_spin" ? 2400 : 1600);
       await page.screenshot({ path: `${OUT}/eve${suffix(skin)}-${mode}@3x.png`, omitBackground: true });
       console.log(`still  eve${suffix(skin)}-${mode}@3x.png`);

@@ -1271,7 +1271,7 @@ export default function AdminPage() {
 
   async function publishCatalog() {
     const where = catTarget === "channel" ? "频道" : catTarget === "group" ? "群" : "频道+群";
-    if (!confirm(`把官网七款产品（${catLang === "zh" ? "中文" : "英文"}）图文帖发布到${where}？会自动替换上次发布的目录。`)) return;
+    if (!confirm(`把官网九款产品（${catLang === "zh" ? "中文" : "英文"}）图文帖发布到${where}？会自动替换上次发布的目录。`)) return;
     setGenning(true);
     setBcMsg("正在发布产品目录…");
     try {

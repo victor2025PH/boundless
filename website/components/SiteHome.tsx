@@ -4,8 +4,7 @@ import Navbar from "@/components/Navbar";
 import SectionNav from "@/components/SectionNav";
 import Hero from "@/components/Hero";
 import BrandShowcase from "@/components/BrandShowcase";
-import AISprite from "@/components/AISprite";
-import DragonQuest from "@/components/DragonQuest";
+import { LazyAISprite, LazyDragonQuest } from "@/components/fx/LazyFx";
 import TrustBar from "@/components/TrustBar";
 import ProductMatrix from "@/components/ProductMatrix";
 import Personas from "@/components/Personas";
@@ -34,9 +33,10 @@ export default function SiteHome() {
   return (
     <main className="relative min-h-screen">
       <IntroCover />
-      <AISprite />
+      {/* 两个纯装饰彩蛋走 LazyFx（dynamic ssr:false）懒加载，不占首屏关键路径 */}
+      <LazyAISprite />
       {/* 龙珠彩蛋：每日到访集星珠，七星聚召唤界龙（与 AISprite 通过 bl:apply-skin 事件解耦） */}
-      <DragonQuest />
+      <LazyDragonQuest />
       <Navbar />
       <SectionNav />
       {/* 品牌块(公司+三系七图标) 在上，营销主文案区(大标题+按钮) 在下 */}

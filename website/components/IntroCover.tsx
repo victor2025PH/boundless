@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useLang } from "@/components/LanguageContext";
 import { BRAND, PRODUCT_ORDER, type ProductKey } from "@/lib/brand";
-import { PRODUCT_IMG, PRODUCT_GLOW } from "@/components/productMeta";
+import { PRODUCT_IMG, PRODUCT_GLOW, PRODUCT_OPTICAL_SCALE } from "@/components/productMeta";
 import { track } from "@/lib/track";
 import { abVariant, abExpose } from "@/lib/ab";
 
@@ -18,6 +18,10 @@ const SEEN_KEY = "bl-intro-seen";
 /* 同一 JS 运行时内（SPA 内部跳转回首页）直接跳过，避免一帧闪现；
  * 服务器端渲染时恒为 false，保证 SSR/hydration 一致。 */
 let dismissedInRuntime = false;
+
+/* 星门粒子等原生 DOM 直取图标处优先 .webp 变体（并行工作线陆续产出，体积远小于 PNG）；
+ * 变体可能尚未存在——所有消费点都挂 onerror 一次性回退原 PNG（回退时清 onerror 防循环）。 */
+const productImgSrc = (key: ProductKey) => PRODUCT_IMG[key].replace(/\.png$/, ".webp");
 
 const COPY = {
   zh: {
@@ -49,12 +53,24 @@ const COPY = {
  * mp3 加载失败时回退到干净的合成和弦垫（无噪声层）。 */
 
 const THEME_URL = "/intro/theme.mp3";
+/* AAC 64kbps 变体（并行工作线产出，体积约为 mp3 的 1/3）：支持 mp4 音频的浏览器优先取它，
+ * 文件尚未产出（HTTP 非 ok）或网络错则回退 mp3。文件级回退，解码失败仍走既有合成和弦垫兜底。 */
+const THEME_M4A_URL = "/intro/theme-64.m4a";
 let themePromise: Promise<ArrayBuffer | null> | null = null;
+
+const fetchTrack = (url: string) => fetch(url).then((r) => (r.ok ? r.arrayBuffer() : null));
 
 function preloadTheme() {
   if (!themePromise) {
-    themePromise = fetch(THEME_URL)
-      .then((r) => (r.ok ? r.arrayBuffer() : null))
+    // canPlayType 探测放在函数体内（本函数只在浏览器事件/effect 后调用），模块顶层不触碰 document
+    let m4aOk = false;
+    if (typeof document !== "undefined") {
+      try {
+        m4aOk = !!document.createElement("audio").canPlayType('audio/mp4; codecs="mp4a.40.2"');
+      } catch {}
+    }
+    themePromise = (m4aOk ? fetchTrack(THEME_M4A_URL).catch(() => null) : Promise.resolve<ArrayBuffer | null>(null))
+      .then((ab) => ab ?? fetchTrack(THEME_URL))
       .catch(() => null);
   }
   return themePromise;
@@ -484,15 +500,22 @@ function spawnGateParticle(
   el.style.setProperty("--tx", ux.toFixed(3));
   el.style.setProperty("--ty", uy.toFixed(3));
   const img = document.createElement("img");
-  img.src = PRODUCT_IMG[key];
+  img.onerror = () => {
+    img.onerror = null;
+    img.src = PRODUCT_IMG[key];
+  };
+  img.src = productImgSrc(key);
   img.alt = "";
   img.draggable = false;
   img.decoding = "async";
+  // 与 ProductIcon 同源光学补偿：星门粒子不经 React，需在 DOM 层自管缩放
+  const optical = PRODUCT_OPTICAL_SCALE[key] ?? 1;
   // C4 产品主色辉光：辉光/拖尾/涟漪同色，强化产品识别（近层追加紫晕纵深）
   const glow = PRODUCT_GLOW[key];
   img.style.filter =
     `drop-shadow(0 0 ${layer.glowPx}px rgba(${glow},${layer.glowA}))` +
     (layer.cls === "bl-gl-near" ? " drop-shadow(0 0 34px rgba(167,139,250,0.35))" : "");
+  if (optical !== 1) img.style.transform = `scale(${optical})`;
   el.appendChild(img);
   host.appendChild(el);
 
@@ -1003,7 +1026,11 @@ export default function IntroCover() {
     enterBtnRef.current?.setAttribute("data-lite", lite ? "1" : "0");
     PRODUCT_ORDER.forEach((k) => {
       const im = new Image();
-      im.src = PRODUCT_IMG[k];
+      im.onerror = () => {
+        im.onerror = null;
+        im.src = PRODUCT_IMG[k];
+      };
+      im.src = productImgSrc(k);
     });
     const host = gateHostRef.current;
     return () => {
@@ -1041,9 +1068,15 @@ export default function IntroCover() {
         el.style.opacity = "0.55";
         el.style.transform = `translate3d(${(ux * d).toFixed(0)}px, ${(uy * d).toFixed(0)}px, 0)`;
         const img = document.createElement("img");
-        img.src = PRODUCT_IMG[k];
+        img.onerror = () => {
+          img.onerror = null;
+          img.src = PRODUCT_IMG[k];
+        };
+        img.src = productImgSrc(k);
         img.alt = "";
         img.draggable = false;
+        const optical = PRODUCT_OPTICAL_SCALE[k] ?? 1;
+        if (optical !== 1) img.style.transform = `scale(${optical})`;
         el.appendChild(img);
         host.appendChild(el);
       });
@@ -1160,9 +1193,12 @@ export default function IntroCover() {
             <span className="dot">·</span> 无界引擎
           </span>
         </div>
-        {/* 公司主标 + 无界科技 组成居中锁定图 */}
+        {/* 公司主标 + 无界科技 组成居中锁定图（picture：webp -79% 体积，旧浏览器原生回退 png） */}
         <div className="bl-stage bl-brandmark">
-          <img src="/brand/logos/boundless-mark-512.png" alt={BRAND.company.full} draggable={false} />
+          <picture>
+            <source srcSet="/brand/logos/boundless-mark-512.webp" type="image/webp" />
+            <img src="/brand/logos/boundless-mark-512.png" alt={BRAND.company.full} draggable={false} />
+          </picture>
         </div>
         <div className="bl-title-zh">{c.title}</div>
         <div className="bl-stage bl-title-en">{c.sub}</div>

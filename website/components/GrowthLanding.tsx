@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight, Check, Target, MessagesSquare, Send, Home, Languages } from "lucide-react";
 import { useLang } from "./LanguageContext";
@@ -11,7 +10,7 @@ import Footer from "./Footer";
 import AutoChatDemo from "./AutoChatDemo";
 import LandingFamilyNav, { type LandingNavFocus } from "./LandingFamilyNav";
 import { BRAND } from "@/lib/brand";
-import { PRODUCT_IMG } from "./productMeta";
+import ProductIcon from "./ProductIcon";
 import { GROWTH_FAQ } from "@/lib/growthContent";
 import { CONTACT_URL, localePath } from "@/lib/site";
 import { track } from "@/lib/track";
@@ -220,13 +219,11 @@ export default function GrowthLanding() {
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-center gap-3">
-                        <Image
-                          src={PRODUCT_IMG[card.key]}
+                        <ProductIcon
+                          product={card.key}
+                          size={48}
                           alt={`${p.zh} ${p.en}`}
-                          width={48}
-                          height={48}
                           className="h-12 w-12 object-contain"
-                          draggable={false}
                         />
                         <div>
                           <div className="flex items-baseline gap-2">

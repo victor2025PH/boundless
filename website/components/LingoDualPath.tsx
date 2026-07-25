@@ -1,12 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Image from "next/image";
 import { MessagesSquare, Headphones, ArrowRight, Check } from "lucide-react";
 import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
 import { BRAND } from "@/lib/brand";
-import { PRODUCT_IMG } from "./productMeta";
+import ProductIcon from "./ProductIcon";
 import { track } from "@/lib/track";
 import { TranslateDemoPanel } from "./TranslateDemo";
 import GlossaryLockDemo from "./GlossaryLockDemo";
@@ -124,13 +123,11 @@ export default function LingoDualPath() {
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    <Image
-                      src={PRODUCT_IMG[card.key]}
+                    <ProductIcon
+                      product={card.key}
+                      size={48}
                       alt={`${p.zh} ${p.en}`}
-                      width={48}
-                      height={48}
                       className="h-12 w-12 object-contain"
-                      draggable={false}
                     />
                     <div>
                       <div className="flex items-baseline gap-2">

@@ -9,19 +9,21 @@ import {
   DemonHorns,
   DigitalEye,
   EveArm,
-  EveHand,
   LoongAntlers,
   NeuralNeck,
   NewsHologram,
   SKIN,
   SWAY_MODES,
+  TriPodHand,
   armSwayVariants,
   buildBodyVariants,
-  handWrapperVariants,
+  formationForMode,
   leftArmVariants,
   rightArmVariants,
   type BotMode,
   type EyeExpr,
+  type HandFormation,
+  type HandGesture,
   type Skin,
 } from "./formShared";
 
@@ -42,11 +44,15 @@ type EveBotProps = {
   lowFx?: boolean;
   /** 皮肤：normal | demon（隐藏彩蛋，纯外观） */
   skin?: Skin;
+  /** 手势指令（场景播报/舞台页下发）：非空时覆盖 mode 默认队形 */
+  gesture?: HandGesture | null;
+  /** 连击蓄力进度 0..1：>0 时指荚进入 burst 紊乱队形（磁场受激预兆） */
+  charge?: number;
 };
 
-/** 机器人本体：头 / 颈 / 蛋形身体 / 双臂（左臂带五指手掌）/ 推进器光焰 / 悬浮光池。
+/** 机器人本体：头 / 颈 / 蛋形身体 / 双臂（引力三指指荚）/ 推进器光焰 / 悬浮光池。
  *  已导出：/robot-stage 素材舞台页复用同一实现，保证站内外 IP 形象一致。 */
-export const EveBot: React.FC<EveBotProps> = ({ mode, isHovered, newsText, newsCta, scrollTilt, flightRotate, gazeX, gazeY, squashY, shadowOpacity, onNewsCta, reduced, lowFx = false, skin = "normal" }) => {
+export const EveBot: React.FC<EveBotProps> = ({ mode, isHovered, newsText, newsCta, scrollTilt, flightRotate, gazeX, gazeY, squashY, shadowOpacity, onNewsCta, reduced, lowFx = false, skin = "normal", gesture = null, charge = 0 }) => {
   const theme = SKIN[skin];
   const isDemon = skin === "demon";
   const isLoong = skin === "loong";
@@ -58,6 +64,8 @@ export const EveBot: React.FC<EveBotProps> = ({ mode, isHovered, newsText, newsC
   /* 着陆回弹的挤压-拉伸：Y 压缩时 X 反向微胖，卡通物理更可信 */
   const squashX = useTransform(squashY, (v) => 1 + (1 - v) * 0.55);
   const swayOn = !reduced && !lowFx && SWAY_MODES.has(mode);
+  /* 左手队形优先级：连击蓄力 burst ＞ 场景手势指令 ＞ mode 默认映射 */
+  const handFormation: HandFormation = charge > 0 ? "burst" : gesture ? gesture.formation : formationForMode(mode);
 
   /* 眼睛霓虹色轮换（随皮肤切换取色池；页面隐藏时暂停；低配挡放慢一倍减少重绘） */
   useEffect(() => {
@@ -167,15 +175,10 @@ export const EveBot: React.FC<EveBotProps> = ({ mode, isHovered, newsText, newsC
           >
             <motion.div style={{ transformOrigin: ANATOMY.shoulderLeft }} variants={armSwayVariants("left")} animate={swayOn ? "sway" : "still"}>
               <EveArm side="left" stops={theme.armStops} />
-              <motion.div
-                className="eve-hand absolute"
-                style={{ left: 4, top: 40, transformOrigin: "12px 22px" }}
-                variants={handWrapperVariants(reduced)}
-                initial="hidden"
-                animate={waving ? "shown" : "hidden"}
-              >
-                <EveHand skin={skin} />
-              </motion.div>
+              {/* 引力三指：指荚常驻臂尖（收纳态=分瓣臂尖），随姿态/手势绽放成队形 */}
+              <div className="eve-hand absolute" style={{ left: -15, top: 53 }}>
+                <TriPodHand skin={skin} color={eyeColor} formation={handFormation} icon={gesture?.icon} reduced={reduced} lowFx={lowFx} />
+              </div>
             </motion.div>
           </motion.div>
           {/* 右臂：挥手时仅轻微外张配重 */}
@@ -187,6 +190,10 @@ export const EveBot: React.FC<EveBotProps> = ({ mode, isHovered, newsText, newsC
           >
             <motion.div style={{ transformOrigin: ANATOMY.shoulderRight }} variants={armSwayVariants("right")} animate={swayOn ? "sway" : "still"}>
               <EveArm side="right" stops={theme.armStops} />
+              {/* 右手配重荚：常态收纳成分瓣臂尖，坠落/舞蹈等大动作时对称展开 */}
+              <div className="absolute" style={{ left: -30, top: 53 }}>
+                <TriPodHand skin={skin} color={eyeColor} formation={formationForMode(mode, { secondary: true })} side="right" reduced={reduced} lowFx={lowFx} />
+              </div>
             </motion.div>
           </motion.div>
           {/* 推进器：用 framer 的 x 居中而非 translate 类（会被 transform 动画覆盖，存量bug） */}

@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import { useLang } from "@/components/LanguageContext";
 import {
   BRAND,
@@ -12,7 +11,8 @@ import {
   productsInCategory,
 } from "@/lib/brand";
 import { CATEGORY_UI } from "@/lib/categoryUi";
-import { PRODUCT_IMG, PRODUCT_LANDING, PRODUCT_ANCHOR } from "@/components/productMeta";
+import { PRODUCT_LANDING, PRODUCT_ANCHOR } from "@/components/productMeta";
+import ProductIcon from "@/components/ProductIcon";
 import BrandMark from "@/components/BrandMark";
 import { CONTACT_URL, localePath } from "@/lib/site";
 import { track } from "@/lib/track";
@@ -29,13 +29,13 @@ const COPY = {
       "一张脸，限制了你能成为谁；一种声音，困住了你能扮演谁；一门语言，隔开了你与世界；一道平台的围墙，挡住了客户走向你。",
       "无界，为打破这一切而生。",
     ],
-    wallsHead: "我们用 AI 拆掉六道墙",
+    wallsHead: "我们用 AI 拆掉七道墙",
     closingHead: "底座本身，也没有边界",
     closing:
       "私有部署、数据不出网、自主可控——一切按你的业务自由定制。这才是「无界」二字真正的底气。",
     slogan: "无界。让沟通，真正没有边界。",
     breakLabel: "打破",
-    productsHead: `${PRODUCT_COUNT} 条产品线 · 三系 · 破六道边界`,
+    productsHead: `${PRODUCT_COUNT} 条产品线 · 三系 · 破七道边界`,
     ctaTitle: "把「无界」用起来",
     ctaDesc: "一句话告诉我们你的场景，我们给方案与报价。",
     ctaBtn: "联系我们",
@@ -54,13 +54,13 @@ const COPY = {
       "A face limits who you can be; a voice limits who you can play; a language separates you from the world; a platform's walls keep customers from reaching you.",
       "BOUNDLESS was born to break them all.",
     ],
-    wallsHead: "We tear down six walls with AI",
+    wallsHead: "We tear down seven walls with AI",
     closingHead: "Even the foundation is borderless",
     closing:
       "Private deployment, data stays off-net, fully self-controlled — freely tailored to your business. That is what truly backs the name BOUNDLESS.",
     slogan: "BOUNDLESS. Communication, with no borders at all.",
     breakLabel: "Breaks",
-    productsHead: `${PRODUCT_COUNT} lines · three families · six barriers`,
+    productsHead: `${PRODUCT_COUNT} lines · three families · seven barriers`,
     ctaTitle: "Put BOUNDLESS to work",
     ctaDesc: "Tell us your scenario in one line — we'll send a plan and a quote.",
     ctaBtn: "Contact us",
@@ -158,19 +158,17 @@ export default function BrandPage() {
                           className={`group relative flex h-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] p-5 transition hover:bg-white/[0.05] ${ui.border}`}
                         >
                           <div className="mb-4 flex items-center justify-between">
-                            <Image
-                              src={PRODUCT_IMG[key]}
+                            <ProductIcon
+                              product={key}
+                              size={48}
                               alt={`${p.zh} ${p.en}`}
-                              width={48}
-                              height={48}
                               className="h-12 w-12 object-contain transition-transform group-hover:scale-110"
-                              draggable={false}
                             />
                             <span className="font-mono text-xs text-slate-600">0{idx + 1}</span>
                           </div>
                           <div className="flex items-baseline gap-2">
                             <span className="text-xl font-bold text-white">{p.zh}</span>
-                            <span className="text-sm font-semibold text-neon-cyan">{p.en}</span>
+                            <span className={`text-sm font-semibold ${ui.enName}`}>{p.en}</span>
                           </div>
                           <p className="mt-0.5 text-xs text-slate-500">
                             {p.scene[lang]} · {p.alt}

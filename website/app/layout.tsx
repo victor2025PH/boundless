@@ -101,6 +101,8 @@ const PRODUCT_SCHEMA_ANCHOR: Record<ProductKey, string> = {
   livex: "#realtime",
   lingox: "#translate",
   voxx: "#showcase",
+  matrixx: "matrix",
+  fatex: "#showcase",
 };
 const productServices = PRODUCT_ORDER.map((key) => {
   const p = BRAND.products[key];

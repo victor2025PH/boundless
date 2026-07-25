@@ -5,7 +5,7 @@ import type { Dict, Solution } from "@/lib/content";
 import { CHANNEL_URL, GROUP_URL, CONTACT_URL } from "@/lib/site";
 import { track } from "@/lib/track";
 import { BRAND, FAMILY_PITCH, PRODUCT_ORDER, productLineItems } from "@/lib/brand";
-import { PRODUCT_IMG } from "@/components/productMeta";
+import ProductIcon from "@/components/ProductIcon";
 import { PRODUCT_VIEW, type View } from "./routing";
 
 // 视觉系（liveavatar view）= 幻颜/幻声/幻影；沟通系（soulsync view）= 智拓/智聊/通译/通传。
@@ -185,7 +185,7 @@ export function HomeView({ t, zh, onGo }: { t: Dict; zh: boolean; onGo: (v: View
             onClick={() => onGo(PRODUCT_VIEW[p.key])}
             className="rounded-2xl border border-slate-800 bg-slate-900/60 p-3 text-left active:scale-[0.98] transition"
           >
-            <img src={PRODUCT_IMG[p.key]} alt={p.name} width={36} height={36} className="h-9 w-9 object-contain" draggable={false} />
+            <ProductIcon product={p.key} size={36} alt={p.name} className="h-9 w-9 object-contain" />
             <div className="mt-1 text-sm font-bold text-white">{p.name}</div>
             <div className="mt-0.5 text-[11px] leading-snug text-slate-400">{p.desc}</div>
             <div className="mt-2 text-[11px] font-medium text-cyan-300">{zh ? "查看 →" : "Explore →"}</div>

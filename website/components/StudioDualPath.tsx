@@ -1,12 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Image from "next/image";
 import { Images, MonitorPlay, ArrowRight, Check } from "lucide-react";
 import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
 import { BRAND } from "@/lib/brand";
-import { PRODUCT_IMG } from "./productMeta";
+import ProductIcon from "./ProductIcon";
 import { track } from "@/lib/track";
 
 type Track = "swap" | "live";
@@ -74,7 +73,7 @@ export default function StudioDualPath() {
   return (
     <section className="mx-auto mt-12 max-w-4xl scroll-mt-24" id="paths">
       <Reveal className="text-center">
-        <p className="text-xs font-semibold uppercase tracking-[0.28em] text-neon-violet">{c.kicker}</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.28em] text-violet-300">{c.kicker}</p>
         <h2 className="mt-2 text-2xl font-bold text-white md:text-3xl">{c.head}</h2>
         <p className="mx-auto mt-2 max-w-2xl text-sm text-slate-400">{c.sub}</p>
       </Reveal>
@@ -97,25 +96,23 @@ export default function StudioDualPath() {
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    <Image
-                      src={PRODUCT_IMG[card.key]}
+                    <ProductIcon
+                      product={card.key}
+                      size={48}
                       alt={`${p.zh} ${p.en}`}
-                      width={48}
-                      height={48}
                       className="h-12 w-12 object-contain"
-                      draggable={false}
                     />
                     <div>
                       <div className="flex items-baseline gap-2">
                         <span className="text-lg font-bold text-white">{p.zh}</span>
-                        <span className="text-sm font-semibold text-neon-violet">{p.en}</span>
+                        <span className="text-sm font-semibold text-violet-300">{p.en}</span>
                       </div>
                       <p className="mt-0.5 text-xs text-slate-500">{p.scene[lang]}</p>
                     </div>
                   </div>
                   <span
                     className={`grid h-9 w-9 place-items-center rounded-xl ${
-                      on ? "bg-neon-violet/20 text-neon-violet" : "bg-white/5 text-slate-400"
+                      on ? "bg-neon-violet/20 text-violet-300" : "bg-white/5 text-slate-400"
                     }`}
                   >
                     <Icon className="h-4 w-4" />
@@ -133,7 +130,7 @@ export default function StudioDualPath() {
                   ))}
                 </ul>
 
-                <span className="mt-5 inline-flex items-center gap-1.5 text-sm font-medium text-neon-violet">
+                <span className="mt-5 inline-flex items-center gap-1.5 text-sm font-medium text-violet-300">
                   {card.cta}
                   <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
                 </span>

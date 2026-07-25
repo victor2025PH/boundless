@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { Menu, X } from "lucide-react";
 import { useLang } from "./LanguageContext";
 import { BRAND, CATEGORIES, CATEGORY_ORDER, productsInCategory, type ProductKey } from "@/lib/brand";
 import { CATEGORY_UI } from "@/lib/categoryUi";
-import { PRODUCT_IMG, PRODUCT_LANDING, PRODUCT_ANCHOR } from "./productMeta";
+import { PRODUCT_LANDING, PRODUCT_ANCHOR } from "./productMeta";
+import ProductIcon from "./ProductIcon";
 import { localePath } from "@/lib/site";
 import { track } from "@/lib/track";
 import type { LandingKey } from "@/lib/landingContent";
@@ -75,14 +75,7 @@ function FamilyChips({
                   }`}
                   aria-current={on ? "page" : undefined}
                 >
-                  <Image
-                    src={PRODUCT_IMG[key]}
-                    alt=""
-                    width={16}
-                    height={16}
-                    className="h-4 w-4 object-contain"
-                    draggable={false}
-                  />
+                  <ProductIcon product={key} size={16} alt="" className="h-4 w-4 object-contain" />
                   {lang === "zh" ? p.zh : p.en}
                 </Link>
               );
@@ -141,7 +134,7 @@ export default function LandingFamilyNav({ product }: { product: LandingNavFocus
           <div className="absolute inset-x-0 bottom-0 max-h-[75vh] overflow-y-auto rounded-t-3xl border border-white/10 bg-ink-900 p-5 shadow-2xl">
             <div className="mb-4 flex items-center justify-between">
               <p className="text-sm font-semibold text-white">
-                {lang === "zh" ? "三系七产品" : "Three families · seven lines"}
+                {lang === "zh" ? "三系九产品" : "Three families · nine lines"}
               </p>
               <button
                 type="button"

@@ -24,9 +24,21 @@ export const ISOLATED_SITE_URL = process.env.NEXT_PUBLIC_ISOLATED_URL || "https:
 export type Visibility = "public" | "gated";
 
 /** 路由可见性映射。未登记的路由默认 public；此处只登记 gated（高风险）路由。
- *  未来其他高风险产品（如情感陪伴 "/companion"）上线时同样在此登记。 */
+ *  未来其他高风险产品（如情感陪伴 "/companion"）上线时同样在此登记。
+ *
+ *  2026-07-20 第九阶段新增 "/matrix"（智控 MatrixX，原「智控王」）：不是 deepfake 类
+ *  监管风险，而是"客户画像风险"——其独立引擎侧的既有市场材料把加密货币/博彩/成人
+ *  产业列为目标付费客户（详见融合方案文档 §9.24），若在主站公开可搜索索引，会把这层
+ *  客户画像风险传导给"无界科技"这个母品牌与主域名信誉。处理方式与 /face 完全对齐
+ *  （仅 noindex + robots disallow，页面/导航/产品矩阵不隐藏，直达链接仍可访问）——
+ *  这是当前代码库对 gated 路由的实际处理水平（见 docs/实施10），不是"给智控单独降低
+ *  标准"，也不是"做到位"，只是与既有唯一先例保持一致；若未来风险评估认为需要更强隔离
+ *  （比照 face 的独立域 ISOLATED_DOMAIN 方案），需要单独的运维/法务动作，不是本次改代码
+ *  范围内能完成的事。 */
 export const ROUTE_VISIBILITY: Record<string, Visibility> = {
   "/face": "gated",
+  "/matrix": "gated",
+  "/matrix/download": "gated",
 };
 
 /** gated slug 列表（由 ROUTE_VISIBILITY 派生，勿手工另行维护）。 */

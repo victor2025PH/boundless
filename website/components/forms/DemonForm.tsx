@@ -7,13 +7,13 @@ import {
   DemonEmbers,
   DigitalEye,
   EveArm,
-  EveHand,
   NewsHologram,
   SKIN,
   SWAY_MODES,
+  TriPodHand,
   armSwayVariants,
   buildBodyVariants,
-  handWrapperVariants,
+  formationForMode,
   leftArmVariants,
   rightArmVariants,
   type DemonProps,
@@ -135,10 +135,12 @@ const DemonTail = ({ glow, sway, bias, flick = false }: { glow: string; sway: bo
  * 全新恶魔形象（不复用机器人剪影）：悬浮兜帽小恶魔——蝠翼 + 犄角 + 兜帽 + 红眼 +
  * 胸口符文 + 尾巴 + 三节指骨爪。复用眼睛/爪/余烬/姿态变体，保证与站内 IP 同源。
  */
-export const DemonForm: React.FC<DemonProps> = ({ mode, isHovered, newsText, newsCta, scrollTilt, flightRotate, gazeX, gazeY, squashY, shadowOpacity, onNewsCta, reduced, lowFx = false, revealed = true }) => {
+export const DemonForm: React.FC<DemonProps> = ({ mode, isHovered, newsText, newsCta, scrollTilt, flightRotate, gazeX, gazeY, squashY, shadowOpacity, onNewsCta, reduced, lowFx = false, revealed = true, gesture = null }) => {
   const [eyeColor, setEyeColor] = useState(SKIN.demon.eyeColors[0]);
   const [eyeExpression, setEyeExpression] = useState<EyeExpr>("focused");
   const waving = mode === "idle_wave";
+  /* 爪荚队形：场景手势指令 ＞ mode 默认映射 */
+  const handFormation = gesture ? gesture.formation : formationForMode(mode);
   const squashX = useTransform(squashY, (v) => 1 + (1 - v) * 0.55);
   const anim = !reduced && !lowFx;
   const swayOn = anim && SWAY_MODES.has(mode);
@@ -284,9 +286,10 @@ export const DemonForm: React.FC<DemonProps> = ({ mode, isHovered, newsText, new
           >
             <motion.div style={{ transformOrigin: ANATOMY.shoulderLeft }} variants={armSwayVariants("left")} animate={swayOn ? "sway" : "still"}>
               <EveArm side="left" stops={SKIN.demon.armStops} edge={`${eyeColor}66`} />
-              <motion.div className="eve-hand absolute" style={{ left: 4, top: 40, transformOrigin: "12px 22px" }} variants={handWrapperVariants(reduced)} initial="hidden" animate={waving ? "shown" : "hidden"}>
-                <EveHand skin="demon" />
-              </motion.div>
+              {/* 引力尖爪荚：暗甲材质+爪尖赤光，引力丝随红眼轮换色 */}
+              <div className="eve-hand absolute" style={{ left: -15, top: 53 }}>
+                <TriPodHand skin="demon" color={eyeColor} formation={handFormation} icon={gesture?.icon} reduced={reduced} lowFx={lowFx} />
+              </div>
             </motion.div>
           </motion.div>
           {/* 右臂：完整袖臂静垂配重（同款镜像） */}
@@ -298,6 +301,9 @@ export const DemonForm: React.FC<DemonProps> = ({ mode, isHovered, newsText, new
           >
             <motion.div style={{ transformOrigin: ANATOMY.shoulderRight }} variants={armSwayVariants("right")} animate={swayOn ? "sway" : "still"}>
               <EveArm side="right" stops={SKIN.demon.armStops} edge={`${eyeColor}66`} />
+              <div className="absolute" style={{ left: -30, top: 53 }}>
+                <TriPodHand skin="demon" color={eyeColor} formation={formationForMode(mode, { secondary: true })} side="right" reduced={reduced} lowFx={lowFx} />
+              </div>
             </motion.div>
           </motion.div>
         </motion.div>

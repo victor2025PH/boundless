@@ -68,7 +68,7 @@ const FALLBACK: Build[] = [
 /** 版本标签徽章的配色与双语文案 */
 const TAG_STYLE: Record<ReleaseTag, string> = {
   feature: "border-neon-cyan/40 bg-neon-cyan/10 text-neon-cyan",
-  improve: "border-neon-violet/40 bg-neon-violet/10 text-neon-violet",
+  improve: "border-neon-violet/40 bg-neon-violet/15 text-violet-300",
   fix: "border-emerald-400/40 bg-emerald-400/10 text-emerald-300",
   security: "border-amber-400/40 bg-amber-400/10 text-amber-300",
 };
@@ -184,7 +184,7 @@ export default function DownloadSection() {
                         href={CONTACT_URL}
                         target="_blank"
                         rel="noreferrer"
-                        className="inline-block rounded-full border border-neon-violet/40 px-6 py-2.5 text-sm text-neon-violet transition hover:bg-neon-violet/10"
+                        className="inline-block rounded-full border border-neon-violet/40 px-6 py-2.5 text-sm text-violet-300 transition hover:bg-neon-violet/10"
                       >
                         {zh ? "上线后通知我" : "Notify me"}
                       </a>
@@ -288,7 +288,7 @@ export default function DownloadSection() {
               </div>
               <button
                 onClick={() => startInstallAssist("guide_header")}
-                className="inline-flex items-center gap-1.5 rounded-full border border-neon-violet/40 px-4 py-1.5 text-xs text-neon-violet transition hover:bg-neon-violet/10"
+                className="inline-flex items-center gap-1.5 rounded-full border border-neon-violet/40 px-4 py-1.5 text-xs text-violet-300 transition hover:bg-neon-violet/10"
               >
                 <Bot className="h-3.5 w-3.5" />
                 {zh ? "AI 协助安装" : "AI install assistant"}

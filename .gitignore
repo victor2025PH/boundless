@@ -20,6 +20,9 @@ __pycache__/
 # ---- node / next ----
 node_modules/
 .next/
+# 隔离验证/历史构建目录（.next-verify* / .next-old / .next-hand-redesign）与截图缓存
+.next-*/
+website/.hand-shots/
 build/
 dist/
 

@@ -2178,6 +2178,7 @@ html[data-mode="day"] .form-beam label {
 
 /* ---- 状态色透明度变体(夜间高亮色带透明度,白底上直接用实色深一档) ---- */
 html[data-mode="day"] .text-amber-300\/80 { color: #b45309; }
+html[data-mode="day"] .text-violet-300\/90 { color: #6d28d9; }
 html[data-mode="day"] .text-emerald-300\/90 { color: #047857; }
 html[data-mode="day"] .text-emerald-400\/80 { color: #059669; }
 html[data-mode="day"] .text-red-400\/80 { color: #dc2626; }

@@ -1,5 +1,5 @@
 /**
- * EveBot 行为回归：进场问好（断言手掌展开）/ 点击空白飞行（断言落点）/ 8s 自动回家（断言归位）/
+ * EveBot 行为回归：进场问好（断言引力三指展开）/ 点击空白飞行（断言落点）/ 8s 自动回家（断言归位）/
  * 坠落与飞行姿态拍摄 / 全息播报点击带种子问题开客服 / 移动端轻量版可见可点。
  * 任一断言失败以退出码 1 结束。用法：node scripts/robot-behavior.mjs [outDir]
  * 环境变量 ROBOT_BASE_URL 可指向 staging/生产跑部署后冒烟（默认 http://localhost:3210；
@@ -46,15 +46,27 @@ const browser = await chromium.launch();
 
   const clip = { x: VW - 460, y: VH - 560, width: 460, height: 560 };
 
-  // 进场问好（挥手窗口约 [2.8s, 5.6s]，取中段拍摄并断言五指手掌可见）
+  // 进场问好（挥手窗口约 [2.8s, 5.6s]）：窗口内多次采样取峰值，断言引力三指展开成扇形。
+  // 屏幕像素≈SVG 单位×0.6 渲染缩放：收纳态两梢荚水平距约 5px，fan 队形满展开约 20px，
+  // 阈值 14px 区分两态；多帧采样抗弹簧过渡/腕摆相位的瞬时收窄。
   await page.waitForTimeout(1900);
-  const handOpacity = await page.evaluate(() => {
-    const el = document.querySelector(".eve-hand");
-    return el ? parseFloat(getComputedStyle(el).opacity) : -1;
-  });
-  check("进场问好时手掌展开", handOpacity > 0.5, `opacity=${handOpacity}`);
-  await page.screenshot({ path: `${OUT}/b1-greet.png`, clip });
-  await page.waitForTimeout(3600);
+  let podSpread = -1;
+  for (let s = 0; s < 4; s++) {
+    const v = await page.evaluate(() => {
+      const pods = document.querySelectorAll(".eve-hand [data-pod]");
+      if (pods.length < 3) return -1;
+      const xs = Array.from(pods, (p) => {
+        const r = p.getBoundingClientRect();
+        return r.left + r.width / 2;
+      });
+      return Math.max(...xs) - Math.min(...xs);
+    });
+    podSpread = Math.max(podSpread, v);
+    if (s === 1) await page.screenshot({ path: `${OUT}/b1-greet.png`, clip });
+    await page.waitForTimeout(450);
+  }
+  check("进场问好时引力三指展开", podSpread > 14, `podSpread=${podSpread?.toFixed?.(1) ?? podSpread}`);
+  await page.waitForTimeout(1800);
 
   // 点击空白 → 飞行
   await page.mouse.click(700, 380);

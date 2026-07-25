@@ -106,7 +106,7 @@ export default function KpiPage() {
 
       <PageHeader
         title="集团 KPI · 全域事件流"
-        desc="七产品 + 官网 + 平台层的运营事件统一入库（group-events.db，独立于账本）。上报链路：产品 spool → uploader 补传 → /api/collect 幂等入库。"
+        desc="八产品 + 官网 + 平台层的运营事件统一入库（group-events.db，独立于账本）。上报链路：产品 spool → uploader 补传 → /api/collect 幂等入库。"
       />
 
       {empty && (

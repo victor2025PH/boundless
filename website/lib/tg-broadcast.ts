@@ -303,7 +303,7 @@ async function setChatMeta(
 }
 
 /** 无界科技品牌头像（深底圆裁友好）本地路径，供频道/群 setChatPhoto 使用。
- *  由 scripts/build-boundless-marks.ps1 生成 boundless-avatar.png（深底渐变 + ∞ 破框主形）。 */
+ *  由 brand-assets 管线（build_brand_assets.py → sync_brand_targets.py）同步 boundless-avatar.png。 */
 function brandAvatarPath(): string {
   return path.join(process.cwd(), "public", "brand", "logos", "boundless-avatar.png");
 }

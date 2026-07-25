@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useMotionValue } from "framer-motion";
 import { EveBot, DemonForm, LoongForm, type BotMode, type Skin } from "./AISprite";
+import { FORMATIONS, type HandFormation, type HandGesture } from "./forms/formShared";
 
 /**
  * IP 素材舞台：把 EveBot 单独摆上纯净舞台，供截图/录屏导出品牌素材
@@ -14,11 +15,13 @@ import { EveBot, DemonForm, LoongForm, type BotMode, type Skin } from "./AISprit
  * - bg:    transparent（默认，配合截图 omitBackground 出透明 PNG）| ink（品牌深色，录 webm 用）
  * - pool:  1 显示悬浮光池（默认）| 0 隐藏（透明素材叠加到任意底图时更干净）
  * - skin:  normal（默认）| demon（恶魔彩蛋形态素材）
+ * - hand:  collapsed | fan | point | tripod | keyboard | radar | burst（锁定引力三指队形，供手势素材/回归）
+ * - icon:  tripod 队形托举的字符（如 emoji；配合 hand=tripod）
  */
 const STAGE_MODES: BotMode[] = ["idle_base", "idle_wave", "idle_dance", "idle_scan", "idle_news", "idle_spin", "flying", "falling"];
 
 export default function RobotStage() {
-  const [params, setParams] = useState<{ mode: BotMode; scale: number; bg: string; pool: boolean; skin: Skin } | null>(null);
+  const [params, setParams] = useState<{ mode: BotMode; scale: number; bg: string; pool: boolean; skin: Skin; gesture: HandGesture | null } | null>(null);
   const zero = useMotionValue(0);
   const one = useMotionValue(1);
   const poolOpacity = useMotionValue(0.5);
@@ -32,7 +35,9 @@ export default function RobotStage() {
     const pool = q.get("pool") !== "0";
     const s = q.get("skin");
     const skin: Skin = s === "demon" ? "demon" : s === "loong" ? "loong" : "normal";
-    setParams({ mode, scale, bg, pool, skin });
+    const h = q.get("hand");
+    const gesture: HandGesture | null = h && h in FORMATIONS ? { formation: h as HandFormation, icon: q.get("icon") ?? undefined } : null;
+    setParams({ mode, scale, bg, pool, skin, gesture });
     /* 透明导出：全链路清掉底色（globals 给 body 铺了品牌深色） */
     if (bg === "transparent") {
       document.documentElement.style.background = "transparent";
@@ -67,6 +72,7 @@ export default function RobotStage() {
             shadowOpacity={poolOpacity}
             onNewsCta={() => {}}
             reduced={false}
+            gesture={params.gesture}
           />
         ) : params.skin === "loong" ? (
           <LoongForm
@@ -98,6 +104,7 @@ export default function RobotStage() {
             onNewsCta={() => {}}
             reduced={false}
             skin={params.skin}
+            gesture={params.gesture}
           />
         )}
       </div>

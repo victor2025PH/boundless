@@ -154,7 +154,7 @@ function DemoBlock({ product, L, clipLabels }: { product: LandingKey; L: Landing
         {product === "face" && (
           <div className="grid items-start gap-5 md:grid-cols-[1.25fr_auto]">
             <div id="swap" className="scroll-mt-28">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-neon-violet">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-violet-300">
                 {lang === "zh" ? "幻颜 FaceX · 换脸样片" : "FaceX · swap sample"}
               </p>
               <BeforeAfter
@@ -170,7 +170,7 @@ function DemoBlock({ product, L, clipLabels }: { product: LandingKey; L: Landing
               </div>
             </div>
             <div id="live" className="scroll-mt-28">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-neon-violet">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-violet-300">
                 {lang === "zh" ? "幻影 LiveX · 活体数字人" : "LiveX · living digital human"}
               </p>
               <VideoClip

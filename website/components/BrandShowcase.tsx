@@ -5,6 +5,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { useReducedMotionSafe } from "@/components/fx/useReducedMotionSafe";
 import { useLang } from "@/components/LanguageContext";
 import Reveal from "@/components/fx/Reveal";
+import ProductIcon from "@/components/ProductIcon";
 import { track } from "@/lib/track";
 import {
   BRAND,
@@ -19,7 +20,7 @@ import {
 } from "@/lib/brand";
 import { CATEGORY_UI } from "@/lib/categoryUi";
 import { localePath } from "@/lib/site";
-import { PRODUCT_IMG, PRODUCT_ANCHOR, PRODUCT_LANDING, PRODUCT_OPTICAL_SCALE, PRODUCT_GLOW } from "@/components/productMeta";
+import { PRODUCT_ANCHOR, PRODUCT_LANDING, PRODUCT_GLOW } from "@/components/productMeta";
 
 /** 品牌家族展示带：无界公司主标 + 三系七产品 LOGO 星阵。
  *  与下方 ProductMatrix（详细目录卡片）分工不同——这里是品牌形象「全家福」：
@@ -64,13 +65,12 @@ function ProductTile({
   const p = BRAND.products[keyName];
   const landing = PRODUCT_LANDING[keyName];
   const href = landing ? localePath(lang, landing) : PRODUCT_ANCHOR[keyName];
-  const optical = PRODUCT_OPTICAL_SCALE[keyName] ?? 1;
 
   return (
     <a
       href={href}
       onClick={() => track("product_click", { key: keyName, where: "brand_showcase" })}
-      className="group flex w-[7.25rem] flex-col items-center text-center sm:w-32"
+      className="group flex w-24 flex-col items-center text-center sm:w-32"
     >
       <span className="relative grid h-24 w-24 place-items-center md:h-28 md:w-28">
         <span
@@ -82,22 +82,20 @@ function ProductTile({
         <span
           className={`relative inline-grid place-items-center${landed ? " bl-land" : ""}`}
           style={
-            {
-              ...(optical !== 1 ? { transform: `scale(${optical})` } : {}),
-              ...(landed
-                ? { "--land-delay": `${PRODUCT_ORDER.indexOf(keyName) * 95}ms`, "--land-glow": PRODUCT_GLOW[keyName] }
-                : {}),
-            } as CSSProperties
+            landed
+              ? ({
+                  "--land-delay": `${PRODUCT_ORDER.indexOf(keyName) * 95}ms`,
+                  "--land-glow": PRODUCT_GLOW[keyName],
+                } as CSSProperties)
+              : undefined
           }
         >
-          <Image
-            src={PRODUCT_IMG[keyName]}
+          <ProductIcon
+            product={keyName}
+            size={80}
             alt={`${p.zh} ${p.en}`}
-            width={96}
-            height={96}
             className={`relative h-16 w-16 object-contain transition-transform duration-500 group-hover:scale-110 md:h-20 md:w-20 ${float ? "animate-float" : ""}`}
-            style={float ? { animationDelay: `${idx * 0.55}s` } : undefined}
-            draggable={false}
+            imgStyle={float ? { animationDelay: `${idx * 0.55}s` } : undefined}
           />
         </span>
       </span>
@@ -105,7 +103,7 @@ function ProductTile({
       <span className="mt-4 block text-base font-bold text-white transition-colors group-hover:text-neon-cyan md:text-lg">
         {p.zh}
       </span>
-      <span className="mt-0.5 block text-xs font-semibold uppercase tracking-wider text-neon-cyan/80">
+      <span className={`mt-0.5 block text-xs font-semibold uppercase tracking-wider ${accent.enName}`}>
         {p.en}
       </span>
       <span className="mt-1 block text-[11px] leading-snug text-slate-500">{p.scene[lang]}</span>
@@ -216,7 +214,9 @@ export default function BrandShowcase() {
                     </span>
                   </div>
 
-                  <div className="flex flex-wrap items-start justify-center gap-x-3 gap-y-8 sm:gap-x-5">
+                  {/* 移动端 3 tile 一行不换行的预算：360 视口 − px-5×2(40) − 列 px-2×2(16) = 304px
+                      = 3×w-24(96) + 2×gap-x-2(8)，恰好放满；tile 再宽或 gap 再大就会 2+1 断行漂移 */}
+                  <div className="flex flex-wrap items-start justify-center gap-x-2 gap-y-8 sm:gap-x-5">
                     {items.map((key) => (
                       <ProductTile
                         key={key}

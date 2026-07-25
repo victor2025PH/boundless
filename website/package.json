@@ -4,9 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "prebuild": "node scripts/sync-brand.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "sync:brand": "node scripts/sync-brand.mjs",
     "verify:robot": "node scripts/robot-shot.mjs .robot-shots && node scripts/robot-behavior.mjs .robot-shots",
     "perf:robot": "node scripts/robot-perf.mjs",
     "assets:robot": "node scripts/robot-capture.mjs",

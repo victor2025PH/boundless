@@ -31,6 +31,15 @@ const nextConfig = {
         headers: [{ key: "Cache-Control", value: "public, max-age=2592000" }],
       },
       {
+        // 品牌图标/开场资源：变更频率低但文件名无内容 hash，1 天新鲜 + 7 天 SWR（不敢用 immutable）
+        source: "/brand/:path*",
+        headers: [{ key: "Cache-Control", value: "public, max-age=86400, stale-while-revalidate=604800" }],
+      },
+      {
+        source: "/intro/:path*",
+        headers: [{ key: "Cache-Control", value: "public, max-age=86400, stale-while-revalidate=604800" }],
+      },
+      {
         // 后台不入索引（robots.ts 已 disallow，这里再加响应头双保险）
         source: "/admin/:path*",
         headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow" }],

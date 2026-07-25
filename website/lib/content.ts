@@ -415,7 +415,7 @@ const zh: Dict = {
   },
   solutionsSection: {
     title: "三大产品系 · 一个无界底座",
-    subtitle: "智连获客成交（智拓·智聊）、幻境数字分身（幻颜·幻声·幻影）、通达跨语沟通（通译·通传）——三系七产品共享无界底座，私有部署、数据不出网，按需单独选用或组合。",
+    subtitle: "智连获客成交（智拓·智聊·智控）、幻境数字分身（幻颜·幻声·幻影·幻缘）、通达跨语沟通（通译·通传）——三系九产品共享无界底座，私有部署、数据不出网，按需单独选用或组合。",
   },
   solutions: [
     {
@@ -1079,7 +1079,7 @@ const en: Dict = {
   },
   solutionsSection: {
     title: "Three Families · Full Product Matrix",
-    subtitle: "Growth (ReachX lead-gen · ChatX closing), Studio (FaceX · VoiceX · LiveX digital twins), Lingo (LingoX chat translation · VoxX voice interpreting) — seven lines across three families on one BOUNDLESS core, privately deployed and composable on demand.",
+    subtitle: "Growth (ReachX lead-gen · ChatX closing · MatrixX fleet ops), Studio (FaceX · VoiceX · LiveX digital twins · FateX fortune AI), Lingo (LingoX chat translation · VoxX voice interpreting) — nine lines across three families on one BOUNDLESS core, privately deployed and composable on demand.",
   },
   solutions: [
     {

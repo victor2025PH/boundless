@@ -1,13 +1,13 @@
 "use client";
 
-import Image from "next/image";
 import { motion, type MotionProps } from "framer-motion";
 import { useReducedMotionSafe } from "@/components/fx/useReducedMotionSafe";
 import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
 import { BRAND, PRODUCT_ORDER, PRODUCT_COUNT, CATEGORIES, CATEGORY_ORDER, productsInCategory } from "@/lib/brand";
 import { CATEGORY_UI } from "@/lib/categoryUi";
-import { PRODUCT_IMG, PRODUCT_ANCHOR, PRODUCT_LANDING, PRODUCT_OPTICAL_SCALE } from "./productMeta";
+import { PRODUCT_ANCHOR, PRODUCT_LANDING } from "./productMeta";
+import ProductIcon from "./ProductIcon";
 import { track } from "@/lib/track";
 import { ArrowRight, ShieldCheck } from "lucide-react";
 import { localePath } from "@/lib/site";
@@ -109,7 +109,6 @@ export default function ProductMatrix() {
                     const p = BRAND.products[key];
                     const landing = PRODUCT_LANDING[key];
                     const href = landing ? localePath(lang, landing) : PRODUCT_ANCHOR[key];
-                    const optical = PRODUCT_OPTICAL_SCALE[key] ?? 1;
                     return (
                       <Reveal key={key} delay={(idx % 3) * 0.05}>
                         <a
@@ -119,22 +118,18 @@ export default function ProductMatrix() {
                         >
                           <div className="mb-4 flex items-center justify-between">
                             <motion.span className="inline-grid place-items-center rounded-xl" {...iconGlow(idx)}>
-                              <span style={optical !== 1 ? { transform: `scale(${optical})` } : undefined} className="inline-grid">
-                                <Image
-                                  src={PRODUCT_IMG[key]}
-                                  alt={`${p.zh} ${p.en}`}
-                                  width={48}
-                                  height={48}
-                                  className="h-12 w-12 object-contain transition-transform group-hover:scale-110"
-                                  draggable={false}
-                                />
-                              </span>
+                              <ProductIcon
+                                product={key}
+                                size={48}
+                                alt={`${p.zh} ${p.en}`}
+                                className="h-12 w-12 object-contain transition-transform group-hover:scale-110"
+                              />
                             </motion.span>
                             <span className="font-mono text-xs text-slate-600">0{idx + 1}</span>
                           </div>
                           <div className="flex items-baseline gap-2">
                             <span className="text-xl font-bold text-white">{p.zh}</span>
-                            <span className="text-sm font-semibold text-neon-cyan">{p.en}</span>
+                            <span className={`text-sm font-semibold ${ui.enName}`}>{p.en}</span>
                           </div>
                           <p className="mt-0.5 text-xs text-slate-500">{p.scene[lang]} · {p.alt}</p>
                           <p className="mt-3 flex-1 text-sm leading-relaxed text-slate-300">{p.desc[lang]}</p>

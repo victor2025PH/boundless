@@ -1,10 +1,12 @@
 import type { Config } from "tailwindcss";
-// 无界品牌设计令牌 preset（单一真相 platform/brand/tokens.json 的 Tailwind 派生产物）。
-// 仅新增 bl-*/growth/studio/lingo 等品牌类，本文件下方 theme.extend 的 fontFamily.sans
-// 会覆盖 preset 字体，故不改动官网现有字体栈（Montserrat 待 webfont 加载后再切）。
-// 详见 platform/brand/BRAND_TOKENS.md。
+// 无界品牌设计令牌 preset。
+// 🔧 单一真相仍是 monorepo 的 platform/brand/{tailwind-preset.cjs,tokens.json}，
+// 但官网部署到只含 website/ 的服务器时无法引用 website 之外的路径（曾导致 build 失败：
+// Cannot find module '../platform/brand/tailwind-preset.cjs'）。故改引 website 自带的
+// vendored 副本 vendor/brand/（由 `npm run sync:brand` 从 platform/brand 机械同步，勿手改），
+// 让官网自包含、部署零外部依赖。详见 vendor/brand/README.md 与 platform/brand/BRAND_TOKENS.md。
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const boundlessPreset = require("../platform/brand/tailwind-preset.cjs");
+const boundlessPreset = require("./vendor/brand/tailwind-preset.cjs");
 
 const config: Config = {
   presets: [boundlessPreset],

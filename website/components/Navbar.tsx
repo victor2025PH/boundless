@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { Menu, X, Languages, ChevronDown } from "lucide-react";
 import { useLang } from "./LanguageContext";
@@ -12,7 +11,8 @@ import BrandMark from "./BrandMark";
 import ModeToggle from "./ModeToggle";
 import { BRAND, CATEGORIES, CATEGORY_ORDER, productsInCategory, type ProductKey } from "@/lib/brand";
 import { CATEGORY_UI } from "@/lib/categoryUi";
-import { PRODUCT_LANDING, PRODUCT_ANCHOR, PRODUCT_IMG } from "./productMeta";
+import { PRODUCT_LANDING, PRODUCT_ANCHOR } from "./productMeta";
+import ProductIcon from "./ProductIcon";
 import { abVariant, abExpose, NAV_BUY, type AbVariant } from "@/lib/ab";
 
 export default function Navbar() {
@@ -167,18 +167,16 @@ export default function Navbar() {
                               }}
                               className="group/item flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition hover:bg-white/5"
                             >
-                              <Image
-                                src={PRODUCT_IMG[key]}
+                              <ProductIcon
+                                product={key}
+                                size={28}
                                 alt=""
-                                width={28}
-                                height={28}
                                 className="h-7 w-7 shrink-0 object-contain opacity-90 transition group-hover/item:opacity-100"
-                                draggable={false}
                               />
                               <span className="min-w-0">
                                 <span className="block text-sm text-slate-200 group-hover/item:text-white">
                                   {p.zh}
-                                  <span className="ml-1.5 text-xs text-slate-500">{p.en}</span>
+                                  <span className={`ml-1.5 text-xs ${CATEGORY_UI[cat].enName}`}>{p.en}</span>
                                 </span>
                                 <span className="block truncate text-[11px] text-slate-500">{p.scene[lang]}</span>
                               </span>
@@ -277,13 +275,11 @@ export default function Navbar() {
                           onClick={() => setOpen(false)}
                           className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-slate-300 hover:bg-white/5 hover:text-white"
                         >
-                          <Image
-                            src={PRODUCT_IMG[key]}
+                          <ProductIcon
+                            product={key}
+                            size={22}
                             alt=""
-                            width={22}
-                            height={22}
                             className="h-5 w-5 object-contain"
-                            draggable={false}
                           />
                           <span>
                             {p.zh}

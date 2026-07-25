@@ -53,7 +53,7 @@ export default function ManualSection() {
         <Reveal eager>
           <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div>
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-neon-violet/30 bg-neon-violet/10 px-3 py-1 text-xs text-neon-violet">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-neon-violet/30 bg-neon-violet/10 px-3 py-1 text-xs text-violet-300">
                 <BookOpen className="h-3.5 w-3.5" />
                 {zh ? `适用版本 v${LATEST_VERSION} · 持续更新` : `For v${LATEST_VERSION} · continuously updated`}
               </span>

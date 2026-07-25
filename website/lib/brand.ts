@@ -43,7 +43,7 @@ export const BRAND = {
       en: "Communication, Boundless.",
     },
   },
-  // 三系七产品（无界品牌族）：每个打破一种「界」，每个产品用 category 归系。
+  // 三系九产品（无界品牌族）：每个打破一种「界」，每个产品用 category 归系。
   // 英文主名走统一 `…X` 系列（X = 突破边界 / 无限变换）；alt 为更自解释的渠道备选名。
   products: {
     reachx: {
@@ -147,6 +147,40 @@ export const BRAND = {
       },
       skuIds: ["interpret"],
     },
+    matrixx: {
+      category: "growth",
+      zh: "智控",
+      en: "MatrixX",
+      alt: "TeleFleet",
+      emoji: "⚡",
+      scene: { zh: "矩阵运营", en: "Fleet ops" },
+      break: { zh: "矩阵运营之界", en: "the fleet-scale barrier" },
+      desc: {
+        zh: "Telegram 多账号矩阵化运营：AI 团队协作 + 智能防封，规模化不失控",
+        en: "Telegram fleet ops at scale: AI multi-persona teamwork + smart anti-ban",
+      },
+      // 对接实现在独立部署的引擎侧（platform/licensing 契约），非本仓 engines/ 目录内，
+      // 见 products/zhikong/product.yaml 与 LICENSE_CONTRACT.md。gated 高风险线，
+      // 落地页 /matrix 已 noindex（见 lib/isolation.ts），暂不进 solutions SKU 列表。
+      skuIds: [],
+    },
+    fatex: {
+      category: "studio",
+      zh: "幻缘",
+      en: "FateX",
+      alt: "FortuneMate",
+      emoji: "🔮",
+      scene: { zh: "命理陪伴", en: "Fortune AI" },
+      break: { zh: "缘运之界", en: "the fate barrier" },
+      desc: {
+        zh: "AI 命理陪伴：八字运势与人生 K 线",
+        en: "AI fortune companion: BaZi astrology & life K-line chart",
+      },
+      // 命理能力在 engines/chengjie 的 companion.bazi 技能栈（八字排盘 / 每日灵签 / 人生 K 线）。
+      // tagline 定稿「知缘知运 · 人生 K 线」/ "Ask fate, chart life."——现阶段无独立落地页，
+      // 待落地页上线时消费；非 gated 产品，不进 lib/isolation.ts。暂不进 solutions SKU 列表。
+      skuIds: [],
+    },
   },
   engine: {
     zh: "无界底座",
@@ -161,27 +195,32 @@ export const BRAND = {
 export type BrandLang = "zh" | "en";
 export type ProductKey = keyof typeof BRAND.products;
 
-/** 七产品的固定展示顺序，与 CATEGORY_ORDER 对齐（商业主线）：
- *  通达(通译·通传) → 智连(智拓·智聊) → 幻境(幻声·幻颜·幻影)。
- *  通译领跑现金流、幻声(低风险第二现金流)在幻境系居首、换脸/直播殿后。
+/** 九产品的固定展示顺序，与 CATEGORY_ORDER 对齐（商业主线）：
+ *  通达(通译·通传) → 智连(智拓·智聊·智控) → 幻境(幻声·幻颜·幻影·幻缘)。
+ *  通译领跑现金流、幻声(低风险第二现金流)在幻境系居首、换脸/直播随后；
+ *  智控（矩阵化运营，gated 高风险线）排在智连系末位，不抢智拓/智聊的获客/成交叙事位置；
+ *  幻缘（命理陪伴，2026-07 新线）殿后。
  *  驱动矩阵卡编号 / bot 与 SEO 的产品概述顺序，故与 CATEGORY_ORDER 保持一致。 */
-export const PRODUCT_ORDER: ProductKey[] = ["lingox", "voxx", "reachx", "chatx", "voicex", "facex", "livex"];
+export const PRODUCT_ORDER: ProductKey[] = ["lingox", "voxx", "reachx", "chatx", "matrixx", "voicex", "facex", "livex", "fatex"];
 
-/** 产品数量唯一真相——UI / bot / SEO 禁止手写「六大/七条」数字，统一拼此常量。 */
+/** 产品数量唯一真相——UI / bot / SEO 禁止手写「六大/七条/八条」数字，统一拼此常量。 */
 export const PRODUCT_COUNT = PRODUCT_ORDER.length;
 
 /**
- * 品牌家族口径（七款产品 · 破六道边界）。
- * 通译与通传同破「语言之界」，所以产品数 7、边界数 6——这是刻意的记忆点，不是笔误。
+ * 品牌家族口径（九款产品 · 破八道边界）。
+ * 通译与通传同破「语言之界」，所以产品数 9、边界数 8——这是刻意的记忆点，不是笔误。
+ * 2026-07-20 第九阶段：智控 MatrixX（原「智控王」，融入前独立命名）新增第八款产品，
+ * 破「规模」这一新边界，不与既有六道边界重叠。
+ * 2026-07-25：幻缘 FateX（AI 命理陪伴）新增第九款产品，归幻境系，破「缘运」新边界。
  */
 export const FAMILY_PITCH = {
   zh: {
-    headline: "一个无界底座 · 七款产品 · 破六道边界",
-    sub: "同一套私有化底座，打破触达、成交、容貌、声音、身份、语言六道边界——七款产品按需单选，或组合成从获客到成交的完整闭环。",
+    headline: "一个无界底座 · 九款产品 · 破八道边界",
+    sub: "同一套私有化底座，打破触达、成交、规模、容貌、声音、身份、语言、缘运八道边界——九款产品按需单选，或组合成从获客到成交的完整闭环。",
   },
   en: {
-    headline: "One core · Seven products · Six barriers broken",
-    sub: "One private-deployment core breaks the barriers of reach, closing, face, voice, identity and language — pick any line, or combine them into a full loop from lead-gen to close.",
+    headline: "One core · Nine products · Eight barriers broken",
+    sub: "One private-deployment core breaks the barriers of reach, closing, scale, face, voice, identity, language and fate — pick any line, or combine them into a full loop from lead-gen to close.",
   },
 } as const;
 
@@ -201,7 +240,7 @@ export function productLabel(key: ProductKey, lang: BrandLang = "zh"): string {
   return lang === "zh" ? `${p.zh} ${p.en}` : `${p.en} (${p.zh})`;
 }
 
-/** 七产品的结构化清单（emoji + 名称 + 一句话能力），按固定展示顺序。
+/** 九产品的结构化清单（emoji + 名称 + 一句话能力），按固定展示顺序。
  *  欢迎语 / bot 知识库 / system prompt / 营销帖等"产品线概述"统一消费这一份，
  *  避免同一段产品介绍散落多个文件、改一处漏五处。 */
 export function productLineItems(lang: BrandLang) {

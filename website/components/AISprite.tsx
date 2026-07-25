@@ -17,6 +17,7 @@ import {
 } from "framer-motion";
 import { useReducedMotionSafe } from "@/components/fx/useReducedMotionSafe";
 import { Activity } from "lucide-react";
+import { BRAND, PRODUCT_COUNT, PRODUCT_ORDER } from "@/lib/brand";
 import { useLang } from "./LanguageContext";
 import { track } from "@/lib/track";
 import BatSwarm, { type BatFlight } from "./BatSwarm";
@@ -40,7 +41,7 @@ import {
 import { LoongForm } from "./forms/LoongForm";
 import { EveBot } from "./forms/EveBot";
 import { DemonForm } from "./forms/DemonForm";
-import { SKIN, type Skin } from "./forms/formShared";
+import { SKIN, type HandGesture, type Skin } from "./forms/formShared";
 
 export type { BotMode, Skin } from "./forms/formShared";
 export { SKIN } from "./forms/formShared";
@@ -70,15 +71,15 @@ const HOME = { right: 24, bottom: 160 };
 
 /** 通用资讯池（未识别到特定版块时使用） */
 const NEWS = {
-  zh: ["扫描出海获客机会…", "AI 拟人翻译已就绪…", "多号矩阵 7×24 运转中…", "监测实时换脸链路…", "分析客户成交意向…", "同步 6 大产品能力…", "私有部署 · 数据不出网…", "自动跟单催单进行中…"],
-  en: ["Scanning lead-gen ops…", "Human-like translation ready…", "Multi-account matrix 24/7…", "Monitoring live face-swap…", "Analyzing buyer intent…", "Syncing 6 product lines…", "Private deploy · off-net…", "Auto follow-up running…"],
+  zh: ["扫描出海获客机会…", "AI 拟人翻译已就绪…", "多号矩阵 7×24 运转中…", "监测实时换脸链路…", "分析客户成交意向…", `同步 ${PRODUCT_COUNT} 大产品能力…`, "私有部署 · 数据不出网…", "自动跟单催单进行中…"],
+  en: ["Scanning lead-gen ops…", "Human-like translation ready…", "Multi-account matrix 24/7…", "Monitoring live face-swap…", "Analyzing buyer intent…", `Syncing ${PRODUCT_COUNT} product lines…`, "Private deploy · off-net…", "Auto follow-up running…"],
 };
 
 /** 场景化资讯池：随访客正在浏览的版块切换话术（IntersectionObserver 感知） */
 const SECTION_NEWS: Record<"zh" | "en", Record<string, string[]>> = {
   zh: {
     autochat: ["AI 正在自动接待询盘…", "拟人回复 · 客户无感知…", "自动成交流程演示中…"],
-    products: ["6 大引擎能力已就绪…", "翻译 · 换脸 · 矩阵一站集成…", "挑一个引擎试试？"],
+    products: [`${PRODUCT_COUNT} 大引擎能力已就绪…`, "翻译 · 换脸 · 矩阵一站集成…", "挑一个引擎试试？"],
     pricing: ["按需订阅 · 支持私有化…", "算一算你的获客 ROI…", "方案可按业务定制…"],
     cases: ["实测数据 · 转化提升显著…", "看看同行的用法…"],
     proof: ["真实交付截图在此…", "数据不注水 · 可复核…"],
@@ -86,7 +87,7 @@ const SECTION_NEWS: Record<"zh" | "en", Record<string, string[]>> = {
   },
   en: {
     autochat: ["AI answering inquiries live…", "Human-like replies, seamless…", "Auto-closing demo running…"],
-    products: ["6 engines ready to deploy…", "Translate · Swap · Matrix in one…", "Pick an engine to try?"],
+    products: [`${PRODUCT_COUNT} engines ready to deploy…`, "Translate · Swap · Matrix in one…", "Pick an engine to try?"],
     pricing: ["Subscribe or self-host…", "Estimate your lead-gen ROI…", "Plans tailored to your ops…"],
     cases: ["Field-tested conversion lift…", "See how peers use it…"],
     proof: ["Real delivery screenshots…", "Verifiable numbers only…"],
@@ -99,7 +100,7 @@ const SECTION_SEED: Record<"zh" | "en", Record<string, string>> = {
   zh: {
     top: "介绍一下你们的核心能力和适合我的方案",
     autochat: "AI 自动成交聊天怎么部署？怎么收费？",
-    products: "帮我介绍下你们 6 大产品能力分别解决什么问题",
+    products: `帮我介绍下你们 ${PRODUCT_COUNT} 大产品能力分别解决什么问题`,
     pricing: "帮我算一下价格方案和获客 ROI",
     cases: "有哪些实测案例和转化数据？",
     proof: "交付数据和真实截图能详细讲讲吗？",
@@ -108,13 +109,28 @@ const SECTION_SEED: Record<"zh" | "en", Record<string, string>> = {
   en: {
     top: "Give me an overview of your core capabilities and the right plan for me",
     autochat: "How do I deploy AI auto-closing chat, and what does it cost?",
-    products: "Walk me through your 6 product lines and what each solves",
+    products: `Walk me through your ${PRODUCT_COUNT} product lines and what each solves`,
     pricing: "Help me estimate pricing and lead-gen ROI",
     cases: "What field-tested cases and conversion data do you have?",
     proof: "Can you detail your delivery data and real screenshots?",
     contact: "I want a tailored 1-on-1 plan — how do we start?",
   },
 };
+
+/** 场景手势：全息播报时左手同步演出该版块的能力隐喻（引力三指队形，tripod 队形托举 icon）。
+ *  文案讲给耳朵，手势演给眼睛——「能力剧场」把播报从字幕升级成表演 */
+const SECTION_GESTURE: Record<string, HandGesture> = {
+  top: { formation: "point" },
+  autochat: { formation: "keyboard" },
+  products: { formation: "tripod" },
+  pricing: { formation: "tripod", icon: "💎" },
+  cases: { formation: "radar" },
+  proof: { formation: "radar" },
+  contact: { formation: "fan" },
+};
+
+/** products 版块托举的产品 emoji 轮播序列（每次播报换下一个，8 款产品都有出场机会） */
+const PRODUCT_EMOJIS = PRODUCT_ORDER.map((k) => BRAND.products[k].emoji);
 
 /** 挥手问候等一次性行为的会话级标记 */
 const GREET_KEY = "bl-sprite-greeted";
@@ -142,6 +158,9 @@ export default function AISprite() {
   const [mode, setMode] = useState<BotMode>("idle_base");
   const [newsText, setNewsText] = useState("");
   const [newsCta, setNewsCta] = useState("");
+  /* 播报期手势指令（引力三指队形 + tripod 托举物），随播报同起同收 */
+  const [newsGesture, setNewsGesture] = useState<HandGesture | null>(null);
+  const productEmojiRef = useRef(0);
   const [questNews, setQuestNews] = useState(false);
   const [ceremonyActive, setCeremonyActive] = useState(false);
   const ceremonyPauseRef = useRef(false);
@@ -291,12 +310,14 @@ export default function AISprite() {
       setNewsText(txt);
       setNewsCta(lang === "zh" ? "打开星图 →" : "Open star map →");
       setQuestNews(true);
+      setNewsGesture({ formation: "point" });
       setMode("idle_news");
       track("sprite_news_impression", { text: txt, section: "dragon_teaser" });
       setTimeout(() => {
         setMode((p) => (p === "idle_news" ? "idle_base" : p));
         setQuestNews(false);
         setNewsCta("");
+        setNewsGesture(null);
       }, 5200);
     };
     window.addEventListener(LOONG_TEASER, onTeaser);
@@ -403,16 +424,27 @@ export default function AISprite() {
         /* 全息播报不占号但避让：台上有气泡时本轮改做普通待机 */
         if (attnActive()) return;
         next = "idle_news";
-        const pool = SECTION_NEWS[lang]?.[currentSectionRef.current] ?? NEWS[lang] ?? NEWS.en;
+        const section = currentSectionRef.current;
+        const pool = SECTION_NEWS[lang]?.[section] ?? NEWS[lang] ?? NEWS.en;
         const txt = pool[Math.floor(Math.random() * pool.length)];
         setNewsText(txt);
-        track("sprite_news_impression", { text: txt, section: currentSectionRef.current });
+        /* 能力剧场：播报的同时左手演出该版块的产品手势；products 版块轮播托举 8 款产品 emoji */
+        const g = SECTION_GESTURE[section] ?? { formation: "point" as const };
+        setNewsGesture(
+          section === "products"
+            ? { formation: "tripod", icon: PRODUCT_EMOJIS[productEmojiRef.current++ % PRODUCT_EMOJIS.length] }
+            : g
+        );
+        track("sprite_news_impression", { text: txt, section });
       } else if (rand > 0.5) next = "idle_scan";
       if (next === "idle_wave") greetUntilRef.current = Date.now() + 3000;
       setMode(next);
       if (next !== "idle_base") {
         const dur = next === "idle_dance" ? 3600 : next === "idle_news" ? 5000 : next === "idle_spin" ? 1500 : 3000;
-        setTimeout(() => setMode((p) => (p === next ? "idle_base" : p)), dur);
+        setTimeout(() => {
+          setMode((p) => (p === next ? "idle_base" : p));
+          if (next === "idle_news") setNewsGesture(null);
+        }, dur);
       }
     }, 6000);
     return () => clearInterval(loop);
@@ -829,6 +861,7 @@ export default function AISprite() {
                 reduced={reduced}
                 lowFx={lowFx || ceremonyActive}
                 revealed={!dissolved}
+                gesture={mode === "idle_news" ? newsGesture : null}
               />
             ) : skin === "loong" ? (
               <LoongForm
@@ -862,6 +895,8 @@ export default function AISprite() {
                 reduced={reduced}
                 lowFx={lowFx || ceremonyActive}
                 skin={skin}
+                gesture={mode === "idle_news" ? newsGesture : null}
+                charge={charge}
               />
             )}
           </motion.div>
