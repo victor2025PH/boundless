@@ -79,9 +79,15 @@ const TAG_LABEL: Record<ReleaseTag, { zh: string; en: string }> = {
   security: { zh: "安全", en: "Security" },
 };
 
-export default function DownloadSection() {
+/**
+ * AvatarHub 客户端下载页主体。
+ * embedded=true 时作为下载中心（DownloadHub 卡片矩阵）之下的区块渲染：
+ * hero 降级为 h2 区块标题（页面 h1 归 DownloadHub），顶距收紧，并带 #avatarhub 锚点。
+ */
+export default function DownloadSection({ embedded = false }: { embedded?: boolean }) {
   const { lang } = useLang();
   const zh = lang === "zh";
+  const Heading = embedded ? ("h2" as const) : ("h1" as const);
   const [builds, setBuilds] = useState<Build[]>(FALLBACK);
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   const [showAllReleases, setShowAllReleases] = useState(false);
@@ -125,18 +131,20 @@ export default function DownloadSection() {
   ];
 
   return (
-    <section className="relative pb-24 pt-32">
+    <section className={`relative pb-24 ${embedded ? "pt-16" : "pt-32"}`}>
       <div className="pointer-events-none absolute left-1/3 top-24 h-80 w-80 rounded-full bg-neon-blue/15 blur-[130px]" />
 
-      <div className="relative mx-auto max-w-5xl px-5">
+      <div id={embedded ? "avatarhub" : undefined} className="relative mx-auto max-w-5xl scroll-mt-28 px-5">
         <Reveal eager className="text-center">
           <span className="inline-flex items-center gap-1.5 rounded-full border border-neon-cyan/30 bg-neon-cyan/10 px-3 py-1 text-xs text-neon-cyan">
             <ShieldCheck className="h-3.5 w-3.5" />
             {zh ? "薄核心安装包 · 组件按需下载 · SHA-256 可校验" : "Thin-core installer · on-demand components · SHA-256 verifiable"}
           </span>
-          <h1 className="mt-4 text-3xl font-bold text-white md:text-5xl">
-            {zh ? "下载客户端" : "Download the Client"}
-          </h1>
+          <Heading className={`mt-4 font-bold text-white ${embedded ? "text-2xl md:text-4xl" : "text-3xl md:text-5xl"}`}>
+            {embedded
+              ? zh ? "AvatarHub 实时数字人引擎" : "AvatarHub Digital Human Engine"
+              : zh ? "下载客户端" : "Download the Client"}
+          </Heading>
           <p className="mx-auto mt-3 max-w-2xl text-slate-400">
             {zh
               ? "AvatarHub 实时数字人引擎：声音克隆、实时换脸、数字人直播、克隆音同传，本地部署数据不出机房。"

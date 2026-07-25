@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { Menu, X, Languages, ChevronDown } from "lucide-react";
+import { Menu, X, Languages, ChevronDown, Download, ArrowRight } from "lucide-react";
 import { useLang } from "./LanguageContext";
 import { useTelegram } from "./TelegramProvider";
 import { CONTACT_URL, localePath } from "@/lib/site";
@@ -13,6 +13,7 @@ import { BRAND, CATEGORIES, CATEGORY_ORDER, productsInCategory, type ProductKey 
 import { CATEGORY_UI } from "@/lib/categoryUi";
 import { PRODUCT_LANDING, PRODUCT_ANCHOR } from "./productMeta";
 import ProductIcon from "./ProductIcon";
+import { CLIENT_APPS, CLIENT_COVERED_PRODUCTS } from "@/lib/downloads";
 import { abVariant, abExpose, NAV_BUY, type AbVariant } from "@/lib/ab";
 
 export default function Navbar() {
@@ -23,10 +24,12 @@ export default function Navbar() {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState("");
   const [buyVariant, setBuyVariant] = useState<AbVariant>("a");
-  // 产品下拉：hover（鼠标）+ click（触屏/键盘）双模式。纯 :hover 在触屏上打不开，
+  // 产品 / 下载下拉：hover（鼠标）+ click（触屏/键盘）双模式。纯 :hover 在触屏上打不开，
   // 鼠标用户点击也无反馈——两类用户都会感知为「点击没有响应」。
   const [prodOpen, setProdOpen] = useState(false);
   const prodRef = useRef<HTMLDivElement>(null);
+  const [dlOpen, setDlOpen] = useState(false);
+  const dlRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const v = abVariant("nav_buy");
@@ -34,14 +37,18 @@ export default function Navbar() {
     abExpose("nav_buy", v);
   }, []);
 
-  // 点击面板外 / Esc 关闭
+  // 点击面板外 / Esc 关闭（两个下拉共用一套监听）
   useEffect(() => {
-    if (!prodOpen) return;
+    if (!prodOpen && !dlOpen) return;
     const onDown = (e: PointerEvent) => {
       if (!prodRef.current?.contains(e.target as Node)) setProdOpen(false);
+      if (!dlRef.current?.contains(e.target as Node)) setDlOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setProdOpen(false);
+      if (e.key === "Escape") {
+        setProdOpen(false);
+        setDlOpen(false);
+      }
     };
     document.addEventListener("pointerdown", onDown);
     document.addEventListener("keydown", onKey);
@@ -49,11 +56,12 @@ export default function Navbar() {
       document.removeEventListener("pointerdown", onDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [prodOpen]);
+  }, [prodOpen, dlOpen]);
 
-  // 路由变化（跳到产品落地页）后收起
+  // 路由变化（跳到产品落地页 / 下载页）后收起
   useEffect(() => {
     setProdOpen(false);
+    setDlOpen(false);
   }, [pathname]);
 
   // 锚点仅在首页有效；子页面（/order /download 等）跳回对应语言首页的锚点。
@@ -96,20 +104,21 @@ export default function Navbar() {
   const buyHref = lang === "zh" ? buy.zhPath : buy.enPath;
   const buyLabel = lang === "zh" ? buy.zhLabel : buy.enLabel;
 
+  // 顶栏收敛（2026-07-25）：翻译 / AI 聊天 / 合作方式三个首页锚点从顶栏移除（产品下拉
+  // 与首页滚动已覆盖发现路径），聚焦转化主链：产品 → 演示 → 购买 → 下载 → 联系。
+  // 「下载」升级为下拉（多客户端后单链接语义不再成立），数据源 lib/downloads.ts。
   const links = [
-    { href: anchor("#translate"), label: t.nav.translate, id: "translate" },
-    { href: anchor("#autochat"), label: t.nav.autochat, id: "autochat" },
     { href: anchor("#realtime"), label: t.nav.demo, id: "realtime" },
-    { href: anchor("#engage"), label: t.nav.engage, id: "engage" },
     {
       href: buyHref,
       label: buyLabel,
       id: "buy",
       onClick: () => track("cta_click", { where: "nav_buy", ab: buyVariant }),
     },
-    { href: lang === "zh" ? "/download" : "/en/download", label: lang === "zh" ? "下载" : "Download", id: "download" },
-    { href: anchor("#contact"), label: t.nav.contact, id: "contact" },
   ];
+  const tailLinks = [{ href: anchor("#contact"), label: t.nav.contact, id: "contact" }];
+  // /download /download/chatx /matrix/download 与 /en 前缀版全部命中
+  const onDownloadPage = pathname.includes("/download");
 
   return (
     <header
@@ -173,13 +182,24 @@ export default function Navbar() {
                                 alt=""
                                 className="h-7 w-7 shrink-0 object-contain opacity-90 transition group-hover/item:opacity-100"
                               />
-                              <span className="min-w-0">
+                              <span className="min-w-0 flex-1">
                                 <span className="block text-sm text-slate-200 group-hover/item:text-white">
                                   {p.zh}
                                   <span className={`ml-1.5 text-xs ${CATEGORY_UI[cat].enName}`}>{p.en}</span>
                                 </span>
                                 <span className="block truncate text-[11px] text-slate-500">{p.scene[lang]}</span>
                               </span>
+                              {CLIENT_COVERED_PRODUCTS.has(key) && (
+                                <span
+                                  title={lang === "zh" ? "提供桌面客户端" : "Desktop client available"}
+                                  className="shrink-0"
+                                >
+                                  <Download
+                                    aria-hidden
+                                    className="h-3 w-3 text-slate-600 transition group-hover/item:text-neon-cyan"
+                                  />
+                                </span>
+                              )}
                             </a>
                           );
                         })}
@@ -200,6 +220,96 @@ export default function Navbar() {
                 key={l.id}
                 href={l.href}
                 onClick={"onClick" in l ? l.onClick : undefined}
+                className={`relative text-sm transition-colors hover:text-white ${
+                  isOn ? "text-white" : "text-slate-300"
+                }`}
+              >
+                {l.label}
+                {isOn && (
+                  <span className="absolute -bottom-1.5 left-0 h-0.5 w-full rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet" />
+                )}
+              </a>
+            );
+          })}
+
+          {/* 下载 · 多客户端下拉（数据源 lib/downloads.ts；gated 客户端 nofollow） */}
+          <div ref={dlRef} className="group relative">
+            <button
+              onClick={() => setDlOpen((v) => !v)}
+              aria-expanded={dlOpen}
+              aria-haspopup="menu"
+              className={`relative inline-flex items-center gap-1 text-sm transition-colors hover:text-white ${
+                onDownloadPage ? "text-white" : "text-slate-300"
+              }`}
+            >
+              {lang === "zh" ? "下载" : "Download"}
+              <ChevronDown
+                className={`h-3.5 w-3.5 opacity-70 transition-transform group-hover:rotate-180 ${dlOpen ? "rotate-180" : ""}`}
+              />
+              {onDownloadPage && (
+                <span className="absolute -bottom-1.5 left-0 h-0.5 w-full rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet" />
+              )}
+            </button>
+            <div
+              className={`absolute left-1/2 top-full z-50 -translate-x-1/2 pt-3 transition duration-150 group-hover:visible group-hover:opacity-100 ${
+                dlOpen ? "visible opacity-100" : "invisible opacity-0"
+              }`}
+            >
+              <div className="glass w-[340px] rounded-2xl border border-white/10 p-2">
+                {CLIENT_APPS.map((app) => (
+                  <a
+                    key={app.key}
+                    href={localePath(lang, app.page)}
+                    rel={app.gated ? "nofollow" : undefined}
+                    onClick={() => {
+                      setDlOpen(false);
+                      track("download_menu_click", { client: app.key });
+                    }}
+                    className="group/dl flex items-center gap-2.5 rounded-lg px-2.5 py-2 transition hover:bg-white/5"
+                  >
+                    {app.productIcon ? (
+                      <ProductIcon
+                        product={app.productIcon}
+                        size={28}
+                        alt=""
+                        className="h-7 w-7 shrink-0 object-contain opacity-90 transition group-hover/dl:opacity-100"
+                      />
+                    ) : (
+                      <BrandMark className="h-7 w-7 shrink-0" />
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm text-slate-200 group-hover/dl:text-white">{app.name[lang]}</span>
+                      <span className="block truncate text-[11px] text-slate-500">{app.tagline[lang]}</span>
+                    </span>
+                    <span className="shrink-0 font-mono text-[11px] text-slate-500">v{app.version}</span>
+                  </a>
+                ))}
+                <div className="mt-1 border-t border-white/5 pt-1">
+                  <a
+                    href={localePath(lang, "/download")}
+                    onClick={() => {
+                      setDlOpen(false);
+                      track("download_menu_click", { client: "hub" });
+                    }}
+                    className="flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium text-neon-cyan transition hover:bg-white/5"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    {lang === "zh" ? "打开下载中心" : "Open Download Center"}
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {tailLinks.map((l) => {
+            const isOn = l.href.includes("#")
+              ? active === l.href.split("#")[1]
+              : pathname === l.href || pathname === l.href.split("#")[0];
+            return (
+              <a
+                key={l.id}
+                href={l.href}
                 className={`relative text-sm transition-colors hover:text-white ${
                   isOn ? "text-white" : "text-slate-300"
                 }`}
@@ -292,6 +402,35 @@ export default function Navbar() {
                 </div>
               ))}
             </div>
+            {/* 客户端下载 · 与桌面端下载下拉同一数据源 */}
+            <div className="mb-1 rounded-lg bg-white/[0.02] p-2">
+              <div className="flex items-center gap-1.5 px-1 py-1 text-xs font-semibold text-slate-400">
+                <Download className="h-3.5 w-3.5" />
+                {lang === "zh" ? "客户端下载" : "Downloads"}
+              </div>
+              <div className="flex flex-col gap-0.5">
+                {CLIENT_APPS.map((app) => (
+                  <a
+                    key={app.key}
+                    href={localePath(lang, app.page)}
+                    rel={app.gated ? "nofollow" : undefined}
+                    onClick={() => {
+                      setOpen(false);
+                      track("download_menu_click", { client: app.key, where: "mobile" });
+                    }}
+                    className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-slate-300 hover:bg-white/5 hover:text-white"
+                  >
+                    {app.productIcon ? (
+                      <ProductIcon product={app.productIcon} size={22} alt="" className="h-5 w-5 object-contain" />
+                    ) : (
+                      <BrandMark className="h-5 w-5" />
+                    )}
+                    <span className="flex-1">{app.name[lang]}</span>
+                    <span className="font-mono text-[11px] text-slate-500">v{app.version}</span>
+                  </a>
+                ))}
+              </div>
+            </div>
             {links.map((l) => (
               <a
                 key={l.id}
@@ -300,6 +439,16 @@ export default function Navbar() {
                   if ("onClick" in l && l.onClick) l.onClick();
                   setOpen(false);
                 }}
+                className="rounded-lg px-3 py-2 text-sm text-slate-300 hover:bg-white/5 hover:text-white"
+              >
+                {l.label}
+              </a>
+            ))}
+            {tailLinks.map((l) => (
+              <a
+                key={l.id}
+                href={l.href}
+                onClick={() => setOpen(false)}
                 className="rounded-lg px-3 py-2 text-sm text-slate-300 hover:bg-white/5 hover:text-white"
               >
                 {l.label}
