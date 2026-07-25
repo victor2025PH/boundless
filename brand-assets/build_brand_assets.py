@@ -20,6 +20,9 @@ import math
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import numpy as np
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fill_hollow_icons import refine_master  # noqa: E402  (母版构图加工，见 build_masters)
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(ROOT, "00_master", "src")
 KEYED = os.path.join(ROOT, "00_master", "keyed")
@@ -278,6 +281,11 @@ def build_masters():
     for name, fn in jobs.items():
         keyed = key_out_white(os.path.join(SRC, fn))
         keyed = autocrop(keyed, 0.02)
+        # 构图加工（空心补玻璃底 / 收外侧装饰条）必须嵌在这里：本函数每次都从 src
+        # 重新抠白覆盖 keyed，加工若只是「手工改一次 keyed」会被静默冲掉。
+        refined = refine_master(name, keyed)
+        if refined is not keyed:
+            keyed = autocrop(refined, 0.0)
         MASTERS[name] = keyed
         save_png(keyed, os.path.join(KEYED, name + "-keyed.png"), "透明底母版（抠白，防高光穿孔）")
 

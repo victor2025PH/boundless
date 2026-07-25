@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight, Download } from "lucide-react";
 import Navbar from "@/components/Navbar";
+import ProductIcon from "@/components/ProductIcon";
 import Footer from "@/components/Footer";
 import { CONTACT_URL } from "@/lib/site";
 import { MATRIXX } from "@/lib/matrixxContent";
@@ -45,7 +45,7 @@ export default function MatrixLanding() {
           {/* Hero */}
           <section className="text-center">
             <div className="mx-auto mb-6 flex items-center justify-center gap-3">
-              <Image src="/brand/products/matrixx.png" alt="智控 MatrixX" width={56} height={56} />
+              <ProductIcon product="matrixx" size={56} className="h-14 w-14 object-contain" alt="智控 MatrixX" />
               <span className="text-2xl font-bold tracking-wide">
                 智控 <span className="text-slate-400">MatrixX</span>
               </span>

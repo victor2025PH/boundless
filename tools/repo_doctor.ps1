@@ -86,8 +86,9 @@ else {
   $copyHits | Select-Object -First 8 | ForEach-Object { Write-Output ('      ' + $_) }
 }
 
-# I 产品图标完整性：7 张必须存在且为正方形（防再混入非方/缺 voxx）
-$iconKeys = @('reachx','chatx','facex','voicex','livex','lingox','voxx','matrixx')
+# I 产品图标完整性：九张必须存在且为正方形（防再混入非方/缺款）。
+# 名单漏一款就等于该款完全不设防——fatex 曾漏登记，靠 I2 的 "9/8" 计数才暴露。
+$iconKeys = @('reachx','chatx','facex','voicex','livex','lingox','voxx','matrixx','fatex')
 $iconBad = @()
 Add-Type -AssemblyName System.Drawing -EA SilentlyContinue
 foreach ($k in $iconKeys) {
@@ -99,7 +100,7 @@ foreach ($k in $iconKeys) {
     $img.Dispose()
   } catch { $iconBad += "$k unreadable" }
 }
-if ($iconBad.Count -eq 0) { Line 'OK' 'product icons: 8 square PNGs present' }
+if ($iconBad.Count -eq 0) { Line 'OK' ('product icons: ' + $iconKeys.Count + ' square PNGs present') }
 else { Line 'FAIL' ('product icons bad: ' + ($iconBad -join '; ')) }
 
 # I2 icon visual-size regression gate (lesson from the 2026-07-22 redraw: stale optical
@@ -110,6 +111,13 @@ else { Line 'FAIL' ('product icons bad: ' + ($iconBad -join '; ')) }
 # (canvas-crop guard keeps them off-baseline by design) but must still match their own
 # expected value. Perf: LockBits + Marshal.Copy bulk byte[] read; GetPixel loops are
 # unusably slow in PowerShell and must not be used here.
+#
+# NOTE (calibrator v3, 2026-07-25): normalization target is now the mixed metric
+# visual = eq^(1-w) * bboxGeo^w, so ink (eq) is deliberately NOT uniform across icons
+# (~20% spread by design). The self-consistency check below must therefore read
+# expected_visual, not expected_eq -- asserting eq uniformity would fail on a healthy
+# calibration. The per-artifact check (b) still uses eq: it is a function of both the
+# master and the final k, so any drift in either still trips it.
 function Get-AlphaEqDiam([string]$pngPath) {
   $bmp = New-Object System.Drawing.Bitmap($pngPath)
   if ($null -eq $bmp) { throw ('cannot load bitmap: ' + $pngPath) }
@@ -151,10 +159,16 @@ if (-not (Test-Path $optPath)) {
       $cappedKeys = @()
       $capProp = $optCfg.PSObject.Properties['capped']
       if ($capProp -and $capProp.Value) { $cappedKeys = @($capProp.Value) }
-      # (a) expected_eq self-consistency: non-capped icons must sit within 5% of their median,
-      #     otherwise the calibration output itself is broken.
+      # (a) calibration self-consistency: non-capped icons must sit within 5% of the median
+      #     of the *normalized* metric, otherwise the calibration output itself is broken.
+      #     Prefer expected_visual (v3 mixed metric); fall back to expected_eq for old JSON.
+      $selfMetric = 'expected_visual'
+      $selfSrc = $null
+      $visProp = $optCfg.PSObject.Properties['expected_visual']
+      if ($visProp -and $visProp.Value) { $selfSrc = $visProp.Value }
+      else { $selfSrc = $expectedEq; $selfMetric = 'expected_eq (legacy JSON: no expected_visual)' }
       $nonCapped = @()
-      foreach ($p in $expectedEq.PSObject.Properties) {
+      foreach ($p in $selfSrc.PSObject.Properties) {
         $pv = 0.0
         try { $pv = [double]$p.Value } catch { $pv = 0.0 }
         if (($cappedKeys -notcontains $p.Name) -and ($pv -gt 0)) { $nonCapped += ,@($p.Name, $pv) }
@@ -175,7 +189,7 @@ if (-not (Test-Path $optPath)) {
         }
       }
       if ($selfBad.Count -gt 0) {
-        Line 'FAIL' ('optical-scale expected_eq self-inconsistent (non-capped icon vs median >5%, calibration output suspect): ' + $selfBad.Count)
+        Line 'FAIL' ('optical-scale ' + $selfMetric + ' self-inconsistent (non-capped icon vs median >5%, calibration output suspect): ' + $selfBad.Count)
         $selfBad | ForEach-Object { Write-Output ('      ' + $_) }
       }
       # (b) baked artifact vs expectation: measured eq of each PNG must match expected_eq within 2.5%.
@@ -205,7 +219,7 @@ if (-not (Test-Path $optPath)) {
         Line 'FAIL' ('product icon visual-size regression (measured vs expected_eq >2.5%): ' + $eqBad.Count + ' icon(s)')
         $eqBad | ForEach-Object { Write-Output ('      ' + $_) }
       } elseif ($selfBad.Count -eq 0) {
-        Line 'OK' ('product icons optical size: ' + $eqChecked + '/' + $iconKeys.Count + ' match expected_eq (tol 2.5%); calibration self-consistent')
+        Line 'OK' ('product icons optical size: ' + $eqChecked + '/' + $iconKeys.Count + ' match expected_eq (tol 2.5%); ' + $selfMetric + ' self-consistent')
       }
     }
   }

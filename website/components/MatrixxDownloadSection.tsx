@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertTriangle,
@@ -22,6 +21,7 @@ import {
 import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
 import RichText from "./RichText";
+import ProductIcon from "./ProductIcon";
 import { MATRIXX, MATRIXX_RELEASE_BASE } from "@/lib/matrixxContent";
 import { parseLatestYml, formatMb } from "@/lib/downloads";
 import { track } from "@/lib/track";
@@ -103,7 +103,7 @@ export default function MatrixxDownloadSection({ lang: forced }: { lang?: BrandL
               : "Runs locally · data on-device · no GPU · SHA-256 verifiable"}
           </span>
           <div className="mt-5 flex items-center justify-center gap-3">
-            <Image src="/brand/products/matrixx.png" alt="智控 MatrixX" width={48} height={48} />
+            <ProductIcon product="matrixx" size={48} className="h-12 w-12 object-contain" alt="智控 MatrixX" />
             <h1 className="text-3xl font-bold text-white md:text-5xl">
               {zh ? "下载智控 MatrixX 客户端" : "Download the MatrixX Client"}
             </h1>

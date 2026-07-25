@@ -3,7 +3,12 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useLang } from "@/components/LanguageContext";
 import { BRAND, PRODUCT_ORDER, type ProductKey } from "@/lib/brand";
-import { PRODUCT_IMG, PRODUCT_GLOW, PRODUCT_OPTICAL_SCALE } from "@/components/productMeta";
+import {
+  PRODUCT_IMG,
+  PRODUCT_IMG_WEBP,
+  PRODUCT_GLOW,
+  PRODUCT_OPTICAL_SCALE,
+} from "@/components/productMeta";
 import { track } from "@/lib/track";
 import { abVariant, abExpose } from "@/lib/ab";
 
@@ -19,9 +24,11 @@ const SEEN_KEY = "bl-intro-seen";
  * 服务器端渲染时恒为 false，保证 SSR/hydration 一致。 */
 let dismissedInRuntime = false;
 
-/* 星门粒子等原生 DOM 直取图标处优先 .webp 变体（并行工作线陆续产出，体积远小于 PNG）；
- * 变体可能尚未存在——所有消费点都挂 onerror 一次性回退原 PNG（回退时清 onerror 防循环）。 */
-const productImgSrc = (key: ProductKey) => PRODUCT_IMG[key].replace(/\.png$/, ".webp");
+/* 星门粒子等原生 DOM 直取图标处优先 .webp 变体（体积远小于 PNG）；变体可能尚未存在
+ * ——所有消费点都挂 onerror 一次性回退原 PNG（回退时清 onerror 防循环）。
+ * 取 productMeta 的成品映射而非在此拿 PNG 路径改后缀：URL 带 `?v=rev` 指纹后
+ * `/\.png$/` 锚不住结尾，正则会静默失效导致 webp 全线回落。 */
+const productImgSrc = (key: ProductKey) => PRODUCT_IMG_WEBP[key];
 
 const COPY = {
   zh: {

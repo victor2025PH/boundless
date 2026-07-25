@@ -2,7 +2,7 @@
  * 品牌 preset 同步脚本：platform/brand → website/vendor/brand（vendored 副本）。
  *
  * 为什么需要它：
- *   单一真相是 monorepo 的 `platform/brand/{tailwind-preset.cjs,tokens.json,optical-scale.json}`，
+ *   单一真相是 monorepo 的 `platform/brand/{tailwind-preset.cjs,tokens.json,optical-scale.json,asset-rev.json}`，
  *   但官网部署到只包含 `website/` 的服务器时无法引用 website 之外的路径
  *   （曾导致 next build 失败：Cannot find module '../platform/brand/tailwind-preset.cjs'）。
  *   因此 website 保留一份 vendored 副本自包含；本脚本把上游机械同步过来，避免两处手改漂移。
@@ -21,7 +21,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const websiteRoot = join(here, "..");
 const srcDir = join(websiteRoot, "..", "platform", "brand");
 const dstDir = join(websiteRoot, "vendor", "brand");
-const FILES = ["tailwind-preset.cjs", "tokens.json", "optical-scale.json"];
+const FILES = ["tailwind-preset.cjs", "tokens.json", "optical-scale.json", "asset-rev.json"];
 const checkOnly = process.argv.includes("--check");
 
 const HEADER = {
