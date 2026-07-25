@@ -163,10 +163,22 @@ try {
           $sub = $f.FullName.Substring($localDir.Length).TrimStart('\') -replace '\\', '/'
           $remoteFile = "$appDir/$rel/$sub"
           $remoteParent = $remoteFile.Substring(0, $remoteFile.LastIndexOf('/'))
-          $sz = (Invoke-Remote "stat -c %s '$remoteFile' 2>/dev/null || echo 0").Trim()
-          if ($sz -eq [string]$f.Length) {
-            Write-Host ("    = {0}（远端同大小，跳过）" -f $sub)
-            continue
+          # 变更判定分两档：大安装包比大小（快，几百 MB 不值当算哈希）；
+          # 小元数据文件（manifest/latest.yml）比 MD5——换版本号后字节数常常不变
+          # （版本/哈希/日期全定长），按大小判会被误跳过导致页面停在旧版本。
+          if ($f.Length -gt 1MB) {
+            $sz = (Invoke-Remote "stat -c %s '$remoteFile' 2>/dev/null || echo 0").Trim()
+            if ($sz -eq [string]$f.Length) {
+              Write-Host ("    = {0}（远端同大小，跳过）" -f $sub)
+              continue
+            }
+          } else {
+            $localMd5 = (Get-FileHash -Algorithm MD5 -Path $f.FullName).Hash.ToLower()
+            $remoteMd5 = (Invoke-Remote "md5sum '$remoteFile' 2>/dev/null | cut -d' ' -f1 || true").Trim()
+            if ($remoteMd5 -eq $localMd5) {
+              Write-Host ("    = {0}（远端同内容，跳过）" -f $sub)
+              continue
+            }
           }
           Write-Host ("    ^ {0}（{1:N1} MB）上传中..." -f $sub, ($f.Length / 1MB))
           Invoke-Remote "mkdir -p '$remoteParent'" | Out-Null
