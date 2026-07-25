@@ -1071,6 +1071,10 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
         <div class="field-row"><label>{{ (i18n or {}).get('psn_voice_id','音色 / Voice ID') }}</label><input id="pe-vp-voice" type="text" placeholder="zh-CN-XiaoxiaoNeural"></div>
       </div>
       <div style="font-size:.74rem;color:var(--t2);margin-top:.5rem;line-height:1.5">💡 {{ (i18n or {}).get('psn_voice_hint','留空则继承域级默认人设的语音设置') }}</div>
+      <!-- 音色体检（只读）：夜间探针 voice_similarity 最新读数（声纹/自然度/日期） -->
+      <div id="pe-vq-row" style="font-size:.74rem;color:var(--t2);margin-top:.55rem;border-top:1px solid var(--bd);padding-top:.55rem;line-height:1.5">
+        🩺 {{ (i18n or {}).get('psn_vq_title','音色体检') }}：<span id="pe-vq-line">{{ (i18n or {}).get('psn_vq_none','暂无体检数据') }}</span>
+      </div>
     </div>
   </div>
   <!-- Pane: Preview -->
@@ -1468,6 +1472,7 @@ async function _cloneProfile(pid) {
     const vp = p.voice_profile || {};
     document.getElementById('pe-vp-backend').value = vp.backend || '';
     document.getElementById('pe-vp-voice').value = vp.voice || '';
+    _loadVoiceQuality();   // 克隆=新档（无 pid）→ 体检行回空态，防残留上一人设读数
     document.getElementById('pe-delete-btn').style.display = 'none';
     document.getElementById('pe-undo-btn').style.display = 'none';
     _toggleP1DrawerBtns(false);
@@ -2436,6 +2441,32 @@ function _fillDrawerFields(p) {
   document.getElementById('pe-claim-human').checked = !!(ident.claim_human || p.claim_human);
   document.getElementById('pe-vp-backend').value = vp.backend || '';
   document.getElementById('pe-vp-voice').value = vp.voice || '';
+  _loadVoiceQuality();
+}
+
+// ── 音色体检（只读）：/api/voice/avatar-status 的 voice_quality（夜间探针最新一行）
+//    按当前编辑人设展示 声纹/自然度/日期；score<0.70 标黄提醒；无数据显示空态。
+let _vqMap = null, _vqAt = 0;
+async function _loadVoiceQuality() {
+  var el = document.getElementById('pe-vq-line');
+  if (!el) return;
+  var pid = _editingProfileId;
+  el.style.color = ''; el.title = '';
+  if (!pid) { el.textContent = window.T('psn_vq_none'); return; }
+  if (!_vqMap || (Date.now() - _vqAt) > 60000) {   // 60s 缓存：反复开抽屉不重复拉
+    try {
+      const r = await apiFetch('/api/voice/avatar-status');
+      const d = await r.json();
+      _vqMap = (d && d.voice_quality) || {}; _vqAt = Date.now();
+    } catch (e) { _vqMap = _vqMap || {}; }
+  }
+  if (pid !== _editingProfileId) return;   // 拉取期间已切换人设
+  var q = _vqMap[pid];
+  if (!q || q.score == null) { el.textContent = window.T('psn_vq_none'); return; }
+  var sc = Number(q.score);
+  var nat = (q.naturalness == null || isNaN(Number(q.naturalness))) ? '—' : Number(q.naturalness).toFixed(2);
+  el.textContent = window.Tf('psn_vq_line', {score: sc.toFixed(2), naturalness: nat, date: q.date || '—'});
+  if (sc < 0.70) { el.style.color = '#f59e0b'; el.title = window.T('psn_vq_low_t'); }
 }
 
 function openNewProfile() {

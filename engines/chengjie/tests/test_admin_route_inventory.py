@@ -951,6 +951,13 @@ _ADDITIONS_2026_07_24_TOPUP_VOUCHER = """
 """
 _BASELINE += _ADDITIONS_2026_07_24_TOPUP_VOUCHER
 
+# 2026-07-25 账号隔离健康观测：多协议号数据分桶（记忆键形态）+ 在线号人设绑定 +
+# FateX 独立库备货，一屏可见（ops_overview_routes.py，只读 + 60s TTL 缓存）。
+_ADDITIONS_2026_07_25_ISOLATION = """
+/api/admin/isolation-health	GET
+"""
+_BASELINE += _ADDITIONS_2026_07_25_ISOLATION
+
 
 def _parse_baseline():
     expected = set()

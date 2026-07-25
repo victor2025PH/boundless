@@ -200,7 +200,7 @@
   border:1px solid var(--border);border-radius:6px;background:var(--bg-soft);
   color:var(--text-tiny);font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all;}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260723b">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260725">
 <script src="/static/workspace/inbox-messages.js?v=20260720b"></script>
 
 <!-- 主布局 -->
@@ -517,6 +517,8 @@
               </div>
               <div class="cdraft-body" id="cdraft-body" onclick="acceptComposerDraft()" title="点击填入输入框" data-i18n-title="inbox.cdraft.body_t" tabindex="0"></div>
             </div>
+            <!-- 身份可视化：回复区身份条（以哪个人设 · 哪个号回复；未绑人设=黄色警示） -->
+            <div id="identity-bar" class="identity-bar" style="display:none"></div>
             <div class="reply-bar">
               <textarea class="reply-textarea" id="reply-ta" placeholder="输入消息… 或输入 / 选择快捷指令" data-i18n-placeholder="inbox.reply.ph" rows="2"
                 onkeydown="onTextareaKey(event)" oninput="_onReplyInput(this.value)"></textarea>
@@ -1223,12 +1225,13 @@ function _rebuildAcctOrdinals(){
   _acctOrdinal={};
   Object.keys(byPlat).forEach(p=>{ Array.from(byPlat[p]).sort().forEach((id,i)=>{ _acctOrdinal[p+':'+id]=i+1; }); });
 }
-// 重建 accountMeta（从 platform_status 抽取每个号的 label/running）
+// 重建 accountMeta（从 platform_status 抽取每个号的 label/running/人设）
 function rebuildAccountMeta(){
   accountMeta={};
   Object.values(platformStatus||{}).forEach(a=>{
     const pl=a.platform||'web'; const id=a.account_id||'default';
     accountMeta[`${pl}:${id}`]={label:a.label||'', running:!!a.running,
+      persona_id:a.persona_id||'', persona_name:a.persona_name||'',
       self_name:a.self_name||'', self_username:a.self_username||'', self_avatar:a.self_avatar||''};
   });
 }
@@ -1295,10 +1298,14 @@ function buildAccountChips(){
       : esc(ini);
     const avBg=meta.self_avatar?'var(--bg-soft)':_avatarGrad(platFilter+':'+a.account_id);
     const ghost=!a.paired;
-    const tip=ghost?`${a.account_id} · ${window.T('inbox.acct.ghost_t')}`:String(a.account_id);
+    // 身份可视化：有人设的 chip 提示带人设名；运行中却未绑人设 → 黄色警示点
+    const noPersona=!ghost&&a.running&&!meta.persona_id;
+    let tip=ghost?`${a.account_id} · ${window.T('inbox.acct.ghost_t')}`:String(a.account_id);
+    if(!ghost&&meta.persona_id) tip+=` · ${window.Tf('inbox.ident.persona_t',{persona:meta.persona_name||meta.persona_id})}`;
     html+=`<div class="acct-chip ${accountFilter===a.account_id?'active':''}${ghost?' ac-ghost':''}" onclick="setAccountFilter('${esc(a.account_id)}')" title="${esc(tip)}">
       <span class="ac-av ${a.running?'on':'off'}" style="background:${avBg};">${avInner}</span>
       <span class="ac-name">${esc(nm)}</span>
+      ${noPersona?`<span class="conv-nopersona-dot" title="${esc(window.T('inbox.ident.no_persona_t'))}"></span>`:''}
       ${ghost?`<span class="ac-ghost-tag">${window.T('inbox.acct.ghost_tag')}</span>`:''}
       ${a.unread?`<span class="ac-unread">${a.unread>99?'99+':a.unread}</span>`:''}</div>`;
   });
@@ -2035,6 +2042,7 @@ function _convItemSig(c, isSel){
     _isSnoozed(c)?1:0,   // P0-companion: 搁置态变化（含到点跨越）触发重绘 + 快捷键刷新
     _convSuggestMine(c)?1:0,
     c.account_id||'default', _multiAcctSet.has(c.platform)?1:0,  // P0: 账号维度变化触发重绘
+    (accountMeta[`${c.platform}:${c.account_id||'default'}`]||{}).persona_id||'',  // 身份可视化：人设绑定变化触发徽章更新
     c.last_direction||'',   // P2: 方向变化（我方/对方）触发预览前缀更新
     Number(c.risk_blocked||0),   // B-2: 风控拦截数变化触发重绘（chip 出现/消失）
     _handlerSig(c)   // 二期：谁在处理（AI/我/同事）变化触发徽章更新
@@ -2259,7 +2267,55 @@ function _applyAcctVisuals(dom, c){
       badge.title=window.Tf('inbox.conv.acct_badge_t',{label:_acctLabel(c.platform,c.account_id)});
       badge.innerHTML=`<span class="cab-dot" style="background:${clr};"></span>${esc(_acctShort(c.platform,c.account_id))}`;
     } else if(badge){ badge.remove(); }
+    // 身份可视化：账号徽章后追加人设徽章（多号平台）；运行数据缺人设 → 黄色警示点
+    const pmeta=accountMeta[`${c.platform}:${c.account_id||'default'}`]||{};
+    let pb=nameEl.querySelector('.conv-persona-badge');
+    let nd=nameEl.querySelector('.conv-nopersona-dot');
+    if(show && pmeta.persona_id){
+      if(nd) nd.remove();
+      if(!pb){ pb=document.createElement('span'); pb.className='conv-persona-badge'; nameEl.appendChild(pb); }
+      const pn=pmeta.persona_name||pmeta.persona_id;
+      const pclr=_acctColor('persona:'+pmeta.persona_id);
+      pb.style.background=pclr+'22'; pb.style.color=pclr;
+      pb.title=window.Tf('inbox.ident.persona_t',{persona:pn});
+      pb.textContent=_personaShort(pn);
+    } else if(show && !pmeta.persona_id && pmeta.running){
+      if(pb) pb.remove();
+      if(!nd){ nd=document.createElement('span'); nd.className='conv-nopersona-dot'; nameEl.appendChild(nd); }
+      nd.title=window.T('inbox.ident.no_persona_t');
+    } else {
+      if(pb) pb.remove();
+      if(nd) nd.remove();
+    }
   }
+}
+// 身份可视化：人设短名（≤4 字全显，更长取首字；徽章 title 已带全名）
+function _personaShort(name){
+  const s=String(name||'').trim();
+  if(!s) return '';
+  return s.length<=4?s:s.charAt(0);
+}
+// 身份可视化：回复区身份条——发送前一眼确认「以哪个人设 · 哪个号」在回；
+// accountMeta 尚无数据/人设缺失 → 黄色「未绑人设」警示（null 安全，绝不抛错）。
+function _renderIdentityBar(c){
+  const bar=document.getElementById('identity-bar');
+  if(!bar) return;
+  if(!c){ bar.style.display='none'; return; }
+  try{
+    const pmeta=accountMeta[`${c.platform||'web'}:${c.account_id||'default'}`]||{};
+    const acct=_acctLabel(c.platform||'web', c.account_id||'default');
+    const pn=pmeta.persona_name||pmeta.persona_id||'';
+    if(pn){
+      bar.classList.remove('warn');
+      bar.title='';
+      bar.innerHTML=`<span class="ib-dot" style="background:${_acctColor('persona:'+(pmeta.persona_id||''))};"></span><span class="ib-txt">${esc(window.Tf('inbox.ident.bar',{persona:pn,account:acct}))}</span>`;
+    }else{
+      bar.classList.add('warn');
+      bar.title=window.T('inbox.ident.no_persona_t');
+      bar.innerHTML=`<span class="ib-dot"></span><span class="ib-txt">${esc(window.T('inbox.ident.no_persona'))} · ${esc(acct)}</span>`;
+    }
+    bar.style.display='flex';
+  }catch(_){ bar.style.display='none'; }
 }
 
 /* ===== P2: 会话条悬浮快捷操作（按 key 取实时对象，避免闭包过期） ===== */
@@ -2712,6 +2768,7 @@ async function _loadChatsBody(){
     _chatsHasMore=!!d.has_more; _chatsOldestTs=d.oldest_ts||0; _syncLoadMoreBar();
     platformStatus=d.platform_status||{};
     rebuildAccountMeta();          // P0: 刷新账号 label/running 映射
+    if(selectedChat) _renderIdentityBar(selectedChat);   // 身份可视化：人设绑定变更即时反映到身份条
     buildNavRail(allChats);
     buildAccountChips();           // P0: 刷新账号切换条
     _updateListTitleVisuals(platFilter);
@@ -2949,6 +3006,7 @@ function selectChat(key){
   const cc=document.getElementById('chat-content');
   cc.style.display='flex';
   renderChatHeader(c);
+  _renderIdentityBar(c);  // 身份可视化：回复区身份条（以哪个人设·哪个号回复）
   _maybeResolvePeer(c);   // Telegram「一排数字」私聊：按需惰性补真实昵称/username/电话（自愈回填）
   document.getElementById('msg-area').innerHTML='<div style="text-align:center;color:var(--text-tiny);padding:20px;"><span class="spin"></span></div>';
   document.getElementById('draft-panel').classList.remove('show');

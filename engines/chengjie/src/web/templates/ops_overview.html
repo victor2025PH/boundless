@@ -241,6 +241,14 @@
     <div id="baziDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
+  <section id="isoSection">
+    <h2>🔒 {{ (i18n or {}).get('ov2_iso_title', "账号隔离健康（记忆分桶 / 人设绑定 / FateX 独立库）") }}<span id="isoWarnDot" title="{{ (i18n or {}).get('ov2_iso_warn_hint', '隔离有缺口：在线号未绑人设或存量键占比越线') }}" style="display:none;margin-left:8px;font-size:13px;">🟡</span></h2>
+    <div id="isoRegress" style="display:none;margin-bottom:8px;"></div>
+    <div class="grid" id="isoKpis"></div>
+    <div id="isoDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+    <div id="isoTrend" style="margin-top:8px;"></div>
+  </section>
+
   <section>
     <h2>📞 {{ (i18n or {}).get('ov2_s_rtvoice', "实时语音通话（接通率 / 时长 / 挂断原因 / 主机健康）") }}<span id="rtVoiceAlert" onclick="jumpToRealtimeVoiceIncidents()" title="{{ (i18n or {}).get('ov2_rtv_alert_hint', '跳到事件流处理') }}" style="display:none;margin-left:10px;font-size:12px;cursor:pointer;"></span></h2>
     <div class="grid" id="rtVoiceKpis"></div>
@@ -1795,6 +1803,85 @@ async function loadBazi(){
   }
 }
 
+// 🔒 账号隔离健康卡：读 /api/admin/isolation-health（记忆键分桶形态 / 在线号人设绑定 / FateX 独立库）。
+async function loadIsolationHealth(){
+  var kp = document.getElementById('isoKpis');
+  var dv = document.getElementById('isoDetail');
+  var dot = document.getElementById('isoWarnDot');
+  if(!kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/admin/isolation-health', {credentials:'same-origin'});
+    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; return; }
+    const d = await r.json();
+    var keys = d.keys || {};
+    var ps = d.personas || {};
+    var fx = d.fatex || {};
+    if(dot) dot.style.display = (d.level === 'warn') ? '' : 'none';
+    var legacyKeys = (Number(keys.legacy_platform)||0) + (Number(keys.bare)||0);
+    kp.innerHTML = [
+      {label:window.T('ov2_iso_online'), value:fmt(Number(ps.online)||0)},
+      {label:window.T('ov2_iso_bound'), value:fmt(Number(ps.bound)||0)+' / '+fmt(Number(ps.online)||0)},
+      {label:window.T('ov2_iso_keys'), value:fmt(Number(keys.scoped)||0)+' / '+fmt(Number(keys.legacy_platform)||0)+' / '+fmt(Number(keys.bare)||0)},
+      {label:window.T('ov2_iso_fatex'), value:fmt(Number(fx.birth_profiles)||0)+' ('+window.T('ov2_iso_fatex_complete')+' '+fmt(Number(fx.complete)||0)+')'},
+    ].map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+    var parts = [];
+    var unbound = ps.unbound || [];
+    if(unbound.length){
+      var names = unbound.map(function(a){ return esc((a.platform||'?')+':'+(a.label||a.account_id||'?')); }).join('、');
+      parts.push('<span style="color:var(--tk-amber-ink,#d97706);">'+window.T('ov2_iso_unbound')+': '+names+'</span>');
+    }
+    if(legacyKeys > 0){
+      var legacyRows = (Number(keys.legacy_rows)||0) + (Number(keys.bare_rows)||0);
+      parts.push('<span style="color:var(--tk-amber-ink,#d97706);">'+window.T('ov2_iso_legacy_hint')+': '
+        +fmt(legacyKeys)+' ('+window.T('ov2_iso_legacy_rows')+' '+fmt(legacyRows)+')</span>');
+    }
+    if(!parts.length){ parts.push(window.T('ov2_iso_all_good')); }
+    dv.innerHTML = '<div class="muted" style="font-size:12px;">'+parts.join(' · ')+'</div>'
+      + '<div class="muted" style="font-size:12px;margin-top:6px;">'+window.T('ov2_iso_hint')+'</div>';
+    // 回升告警条（趋势落库开启且最近两日 存量键/未绑号 上升 → 卡顶点名；否则隐藏）。
+    var rg = document.getElementById('isoRegress');
+    if(rg){
+      var reg = d.regression || {};
+      if(reg.regressed){
+        rg.style.display = '';
+        rg.innerHTML = '<div style="color:var(--red,#f85149);font-size:12px;font-weight:600;'
+          +'padding:6px 8px;border:1px solid var(--tk-amber-ink,#d97706);border-radius:6px;">⚠️ '
+          +window.T('ov2_iso_regress')+(reg.detail ? ' — '+esc(reg.detail) : '')+'</div>';
+      } else {
+        rg.style.display = 'none';
+        rg.innerHTML = '';
+      }
+    }
+    // 近 7 天趋势 sparkline（存量键合计 + 未绑号两条线）；未开趋势落库 = 无 trend 键 → 整块隐藏。
+    var tr = document.getElementById('isoTrend');
+    if(tr){
+      var trend = d.trend || [];
+      if(!trend.length){
+        tr.innerHTML = '';
+      } else if(trend.length < 2){
+        tr.innerHTML = '<div class="muted" style="font-size:12px;">'+window.T('ov2_iso_trend_wait')+'</div>';
+      } else {
+        var legacySeries = trend.map(function(x){ return (Number(x.legacy_keys)||0)+(Number(x.bare_keys)||0); });
+        var unboundSeries = trend.map(function(x){ return Number(x.unbound_accounts)||0; });
+        var tlabels = trend.map(function(x){
+          var lb = (Number(x.legacy_keys)||0)+(Number(x.bare_keys)||0);
+          return (x.day||'')+': '+window.T('ov2_iso_legacy_hint')+' '+lb
+            +' · '+window.T('ov2_iso_unbound')+' '+(Number(x.unbound_accounts)||0);
+        });
+        tr.innerHTML = '<div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_iso_trend_title')+'</div>'
+          + sparkline(legacySeries, {labels:tlabels, color:'#d29922', w:300})
+          + ' '+sparkline(unboundSeries, {labels:tlabels, color:'#f85149', w:300});
+      }
+    }
+  }catch(e){
+    dv.innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
+  }
+}
+
 // 📞 原生来电卡：读 metrics.tg_call（有来电→读数）；零来电但已开→读 readiness 显示「差哪些」；
 // 未开启→整卡隐藏。落地「看→校→开」范式：开关打开后、真机联调前就能看清前置缺口。
 async function loadTgCall(){
@@ -2883,7 +2970,7 @@ async function toggleLocalTts(on){
 }
 
 if(CAN_MANAGE_OPS){ var _rb=document.getElementById('recheckBtn'); if(_rb) _rb.style.display=''; }
-function refreshAll(){ loadOverview(); loadIncidents(); loadReport(); loadTTS(); loadTTSTrend(); loadAiSafety(); loadSlaBacklog(); loadTranslationEngines(); loadXlateTrend(); loadVoiceSynthLang(); loadASRDegradation(); loadSpeechEmotion(); loadVisionUsage(); loadDeepPersona(); loadFrontendErrors(); loadInstanceRestartStatus(); loadPlatformSessions(); loadSendRoutes(); loadSendRouteTrend(); loadPersonaMedia(); loadPeerIdentity(); loadIdentityTrend(); loadLocalTts(); loadAutosendMedia(); loadPromiseTrend(); loadAvatarVoice(); loadProactiveEngagement(); loadBazi(); loadGpuWatermark(); loadProfileAudit(); loadRealtimeVoice(); loadRtvTrend(); refreshRealtimeVoiceAlertBadge(); loadTgCall(); }
+function refreshAll(){ loadOverview(); loadIncidents(); loadReport(); loadTTS(); loadTTSTrend(); loadAiSafety(); loadSlaBacklog(); loadTranslationEngines(); loadXlateTrend(); loadVoiceSynthLang(); loadASRDegradation(); loadSpeechEmotion(); loadVisionUsage(); loadDeepPersona(); loadFrontendErrors(); loadInstanceRestartStatus(); loadPlatformSessions(); loadSendRoutes(); loadSendRouteTrend(); loadPersonaMedia(); loadPeerIdentity(); loadIdentityTrend(); loadLocalTts(); loadAutosendMedia(); loadPromiseTrend(); loadAvatarVoice(); loadProactiveEngagement(); loadBazi(); loadIsolationHealth(); loadGpuWatermark(); loadProfileAudit(); loadRealtimeVoice(); loadRtvTrend(); refreshRealtimeVoiceAlertBadge(); loadTgCall(); }
 function _onRtvOpsRefresh(){
   loadRealtimeVoice(); loadRtvTrend(); loadRtvAlertCalibrate(false); refreshRealtimeVoiceAlertBadge();
 }

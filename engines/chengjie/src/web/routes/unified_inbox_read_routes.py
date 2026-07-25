@@ -109,12 +109,14 @@ def _merge_orchestrator_status(
         # 给前端 removable=False 隐藏删除/登出按钮。注册表读取失败时保持 None 不标注
         # （前端按可删处理，行为回落旧版）。
         registry_keys: Optional[set] = None
+        registry_obj = None   # 身份可视化：留给下方 persona 解析复用（不逐号重建）
         try:
             from src.integrations.account_self_profile import (
                 read_self_profile_from_meta,
             )
+            registry_obj = get_account_registry()
             registry_keys = set()
-            for row in get_account_registry().list():
+            for row in registry_obj.list():
                 key = f"{row.get('platform')}:{row.get('account_id')}"
                 registry_keys.add(key)
                 lbl = str(row.get("label") or "")
@@ -182,6 +184,22 @@ def _merge_orchestrator_status(
             sess_map = {}
             logger.debug("[chats] 读取平台会话健康表失败", exc_info=True)
 
+        # 身份可视化：每号补生效人设 id/显示名（meta.persona_id → persona_ids[0] →
+        # 默认配置），坐席据此一眼看清「哪个号、哪个人设在回」。resolver/PersonaManager
+        # 任一不可用则字段留空；同一 pid 名字查一次（_pname_cache）。
+        _resolve_pid = None
+        try:
+            from src.ai.persona_voice import resolve_account_persona_id as _resolve_pid
+        except Exception:
+            _resolve_pid = None
+        _pm = None
+        try:
+            from src.utils.persona_manager import PersonaManager
+            _pm = PersonaManager.get_instance()
+        except Exception:
+            _pm = None
+        _pname_cache: Dict[str, str] = {}
+
         # 收尾：对所有 platform_status 条目（含未经编排器的 A 线 default）统一用
         # 注册表 label / self_* 覆盖，确保改名 + 真实身份对每个号都即时反映。
         # 关键：适配器可能用裸平台名当 key（如 telegram 适配器 key="telegram"，
@@ -190,6 +208,29 @@ def _merge_orchestrator_status(
         for k, v in platform_status.items():
             if not isinstance(v, dict):
                 continue
+            # 身份可视化：账号级人设 id/名（逐号软失败留空串，绝不让 chats 500）
+            v["persona_id"] = ""
+            v["persona_name"] = ""
+            if _resolve_pid is not None:
+                try:
+                    _pid = _resolve_pid(
+                        cfg, str(v.get("platform") or ""),
+                        str(v.get("account_id") or "default"),
+                        registry=registry_obj)
+                    if _pid:
+                        if _pid not in _pname_cache:
+                            _nm = ""
+                            try:
+                                if _pm is not None:
+                                    _nm = str((_pm.get_persona_by_id(_pid) or {})
+                                              .get("name") or "")
+                            except Exception:
+                                _nm = ""
+                            _pname_cache[_pid] = _nm or _pid   # 拿不到名字回落 id
+                        v["persona_id"] = _pid
+                        v["persona_name"] = _pname_cache[_pid]
+                except Exception:
+                    logger.debug("[chats] 账号人设解析失败 key=%s", k, exc_info=True)
             pkey = f"{v.get('platform') or ''}:{v.get('account_id') or ''}"
             lk = pkey if label_map.get(pkey) else k
             pk = pkey if profile_map.get(pkey) else k

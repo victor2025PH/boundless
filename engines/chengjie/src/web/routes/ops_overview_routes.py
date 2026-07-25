@@ -14,12 +14,17 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 logger = logging.getLogger(__name__)
+
+# 「账号隔离健康」60s 进程内 TTL 缓存（episodic GROUP BY 属全表扫描，
+# 看板 60s 轮询别每次直打；force=1 绕过）。
+_ISOLATION_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
+_ISOLATION_TTL_SEC = 60.0
 
 
 def _reliability_payload(request: Request, hours: int):
@@ -76,6 +81,8 @@ def register_ops_overview_routes(app, ctx) -> None:
     templates = ctx.templates
     config_manager = ctx.config_manager
     audit_store = ctx.audit_store
+    # 部分轻量测试 Ctx 未带 telegram_client（send-route-trend 等只测别的端点）→ getattr 防摔
+    telegram_client = getattr(ctx, "telegram_client", None)
 
     @app.get("/api/admin/ops-overview")
     async def api_ops_overview(request: Request, days: int = 7, month: str = "", hours: int = 24):
@@ -735,6 +742,77 @@ def register_ops_overview_routes(app, ctx) -> None:
         api_auth(request)
         from src.utils.instance_restart_status import collect_restart_status
         return collect_restart_status()
+
+    @app.get("/api/admin/isolation-health")
+    async def api_isolation_health(request: Request, force: int = 0):
+        """多协议号「账号隔离健康」快照：记忆键分桶形态 + 在线号人设绑定 + FateX 独立库。
+
+        隔离改造（context/记忆/人设按 account 分桶，FateX 数据独立建库）完成后的常驻
+        观测——legacy/bare 存量键回升或新上号漏绑人设，在看板即可见。三路数据源全部
+        软失败（拿不到按空算，绝不 5xx）；60s 进程内 TTL 缓存，``force=1`` 绕过。
+        """
+        api_auth(request)
+        now = time.time()
+        if (not force and _ISOLATION_CACHE["data"] is not None
+                and now - float(_ISOLATION_CACHE["ts"]) < _ISOLATION_TTL_SEC):
+            return _ISOLATION_CACHE["data"]
+        from src.utils.isolation_health import build_isolation_health
+
+        key_stats: list = []
+        try:
+            sm = (getattr(telegram_client, "skill_manager", None)
+                  if telegram_client else None)
+            store = getattr(sm, "_episodic_store", None) if sm else None
+            if store is not None and hasattr(store, "list_key_stats"):
+                key_stats = store.list_key_stats()
+        except Exception:
+            logger.debug("isolation-health：episodic 键统计读取失败（已忽略）", exc_info=True)
+        accounts: list = []
+        try:
+            from src.integrations.account_registry import get_account_registry
+            accounts = get_account_registry().list()
+        except Exception:
+            logger.debug("isolation-health：账号注册表读取失败（已忽略）", exc_info=True)
+        fatex_stats: dict = {}
+        try:
+            from src.fatex.store import get_fatex_store
+            fx = get_fatex_store()
+            fatex_stats = fx.stats() if fx is not None else {}
+        except Exception:
+            logger.debug("isolation-health：FateX 库统计读取失败（已忽略）", exc_info=True)
+        data = {"ok": True, **build_isolation_health(key_stats, accounts, fatex_stats)}
+        # 趋势落库（ops.isolation_trend.enabled，默认关）：开着才 upsert 当日水位并附
+        # trend/regression 两键；关 = 响应不带这两键。全程 best-effort，绝不影响 200。
+        try:
+            cfg = getattr(config_manager, "config", None) or {}
+            trend_cfg = ((cfg.get("ops") or {}).get("isolation_trend") or {})
+            if isinstance(trend_cfg, dict) and trend_cfg.get("enabled", False):
+                from src.utils.isolation_trend_store import (
+                    configure_isolation_trend_store,
+                    get_isolation_trend_store,
+                )
+                tstore = get_isolation_trend_store()
+                if tstore is None:
+                    # 懒配置：库随实例 config 目录走（与 fatex.db 同目录模式）。
+                    cfg_path = getattr(config_manager, "config_path", None)
+                    if cfg_path:
+                        from pathlib import Path
+                        tstore = configure_isolation_trend_store(
+                            Path(cfg_path).parent / "isolation_trend.db")
+                if tstore is not None:
+                    tstore.upsert_today(data)
+                    data["trend"] = tstore.recent(7)
+                    regression = tstore.regression_signal()
+                    data["regression"] = regression
+                    if regression.get("regressed"):
+                        logger.warning(
+                            "isolation-health：隔离指标回升 %s",
+                            regression.get("detail", ""))
+        except Exception:
+            logger.debug("isolation-health：趋势落库失败（已忽略）", exc_info=True)
+        _ISOLATION_CACHE["ts"] = now
+        _ISOLATION_CACHE["data"] = data
+        return data
 
     @app.get("/api/admin/profile-audit")
     async def api_profile_audit(request: Request, days: int = 7, limit: int = 40):
