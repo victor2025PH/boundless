@@ -17,7 +17,29 @@ function fpEnabled() {
   return f.enabled !== false; // 默认开启
 }
 
-const CONFIG_PATH = path.join(__dirname, "config.json");
+// 配置路径：打包态 __dirname 在只读 asar 内，fs.writeFileSync 必抛（首启向导保存
+// 语言/令牌静默失败、设置不持久）→ 落 app.getPath("userData")/config.json（可写、
+// 卸载重装/升级均保留）；首启若 userData 无 config.json 而随包有种子（asar 内可读），
+// 先拷贝再用。开发态保持仓库内路径不变（直接编辑可生效，开发流程零变化）。
+// 时序：app.getPath("userData") 在 app ready 前即可用（基于 appData+productName），
+// 本文件顶层 loadConfig() 前求值安全。
+function resolveConfigPath() {
+  const devPath = path.join(__dirname, "config.json");
+  if (!app.isPackaged) return devPath;
+  const userPath = path.join(app.getPath("userData"), "config.json");
+  try {
+    if (!fs.existsSync(userPath)) {
+      fs.mkdirSync(path.dirname(userPath), { recursive: true });
+      // 用 readFileSync+writeFileSync 而非 copyFileSync：asar 虚拟 fs 对前者支持最稳
+      if (fs.existsSync(devPath)) fs.writeFileSync(userPath, fs.readFileSync(devPath));
+    }
+  } catch (e) {
+    // 种子拷贝失败不阻断启动：loadConfig 走内置默认，saveConfigPatch 时再尝试写 userPath
+  }
+  return userPath;
+}
+
+const CONFIG_PATH = resolveConfigPath();
 
 function loadConfig() {
   try {
@@ -132,6 +154,7 @@ function saveConfigPatch(patch) {
       next[k] = (v && typeof v === "object" && !Array.isArray(v))
         ? Object.assign({}, config[k] || {}, v) : v;
     }
+    fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2), "utf-8");
     config = next;
     return { ok: true };
