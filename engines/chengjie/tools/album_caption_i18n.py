@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import urllib.request
@@ -71,10 +72,13 @@ def main() -> int:
     ap.add_argument("--persona", required=True)
     ap.add_argument("--langs", default="en,yue")
     ap.add_argument("--api-base", default="https://api.deepseek.com/v1")
-    ap.add_argument("--api-key", default="sk-241a2991aa3348449d614cf62918e824")
+    # 密钥绝不硬编码（repo_doctor 门禁扫描）：CLI 传参或环境变量 DEEPSEEK_API_KEY
+    ap.add_argument("--api-key", default=os.environ.get("DEEPSEEK_API_KEY", ""))
     ap.add_argument("--model", default="deepseek-v4-flash")
     ap.add_argument("--batch", type=int, default=15)
     args = ap.parse_args()
+    if not args.api_key:
+        ap.error("--api-key 缺失（或设环境变量 DEEPSEEK_API_KEY）")
 
     store = PersonaMediaStore(args.db)
     rows = store.list(args.persona, enabled_only=False)
