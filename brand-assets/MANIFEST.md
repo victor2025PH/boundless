@@ -12,6 +12,8 @@
 | `00_master/keyed/livex-keyed.png` | 940x839 | 透明底母版（抠白，防高光穿孔） |
 | `00_master/keyed/lingox-keyed.png` | 910x906 | 透明底母版（抠白，防高光穿孔） |
 | `00_master/keyed/voxx-keyed.png` | 957x776 | 透明底母版（抠白，防高光穿孔） |
+| `00_master/keyed/matrixx-keyed.png` | 902x851 | 透明底母版（抠白，防高光穿孔） |
+| `00_master/keyed/fatex-keyed.png` | 838x913 | 透明底母版（抠白，防高光穿孔） |
 | `01_logos/mark/boundless-mark-1024.png` | 1024x600 | 公司主标 透明底 1024px |
 | `01_logos/mark/boundless-mark-512.png` | 512x300 | 公司主标 透明底 512px |
 | `01_logos/mark/boundless-mark-256.png` | 256x150 | 公司主标 透明底 256px |
@@ -21,27 +23,33 @@
 | `01_logos/mono/boundless-mark-mono-white-1024.png` | 1024x600 | 公司主标 单色白版 |
 | `01_logos/mono/boundless-mark-mono-ink-1024.png` | 1024x600 | 公司主标 单色墨版 |
 | `01_logos/favicon/boundless.ico` | 16-64 | 网站 favicon（多尺寸 ico） |
-| `02_product-icons/reachx/reachx-512.png` | 512x497 | 智拓 ReachX 图标 透明底 512px |
-| `02_product-icons/reachx/reachx-256.png` | 256x248 | 智拓 ReachX 图标 透明底 256px |
-| `02_product-icons/reachx/reachx-128.png` | 128x124 | 智拓 ReachX 图标 透明底 128px |
-| `02_product-icons/chatx/chatx-512.png` | 507x512 | 智聊 ChatX 图标 透明底 512px |
-| `02_product-icons/chatx/chatx-256.png` | 253x256 | 智聊 ChatX 图标 透明底 256px |
-| `02_product-icons/chatx/chatx-128.png` | 126x128 | 智聊 ChatX 图标 透明底 128px |
-| `02_product-icons/facex/facex-512.png` | 504x512 | 幻颜 FaceX 图标 透明底 512px |
-| `02_product-icons/facex/facex-256.png` | 252x256 | 幻颜 FaceX 图标 透明底 256px |
-| `02_product-icons/facex/facex-128.png` | 126x128 | 幻颜 FaceX 图标 透明底 128px |
-| `02_product-icons/voicex/voicex-512.png` | 512x387 | 幻声 VoiceX 图标 透明底 512px |
-| `02_product-icons/voicex/voicex-256.png` | 256x193 | 幻声 VoiceX 图标 透明底 256px |
-| `02_product-icons/voicex/voicex-128.png` | 128x96 | 幻声 VoiceX 图标 透明底 128px |
-| `02_product-icons/livex/livex-512.png` | 512x456 | 幻影 LiveX 图标 透明底 512px |
-| `02_product-icons/livex/livex-256.png` | 256x228 | 幻影 LiveX 图标 透明底 256px |
-| `02_product-icons/livex/livex-128.png` | 128x114 | 幻影 LiveX 图标 透明底 128px |
-| `02_product-icons/lingox/lingox-512.png` | 512x509 | 通译 LingoX 图标 透明底 512px |
-| `02_product-icons/lingox/lingox-256.png` | 256x254 | 通译 LingoX 图标 透明底 256px |
-| `02_product-icons/lingox/lingox-128.png` | 128x127 | 通译 LingoX 图标 透明底 128px |
-| `02_product-icons/voxx/voxx-512.png` | 512x415 | 通传 VoxX 图标 透明底 512px |
-| `02_product-icons/voxx/voxx-256.png` | 256x207 | 通传 VoxX 图标 透明底 256px |
-| `02_product-icons/voxx/voxx-128.png` | 128x103 | 通传 VoxX 图标 透明底 128px |
+| `02_product-icons/reachx/reachx-512.png` | 512x512 | 智拓 ReachX 图标 透明底正方形 512px（pad 8%, optical×0.91） |
+| `02_product-icons/reachx/reachx-256.png` | 256x256 | 智拓 ReachX 图标 透明底正方形 256px（pad 8%, optical×0.91） |
+| `02_product-icons/reachx/reachx-128.png` | 128x128 | 智拓 ReachX 图标 透明底正方形 128px（pad 8%, optical×0.91） |
+| `02_product-icons/chatx/chatx-512.png` | 512x512 | 智聊 ChatX 图标 透明底正方形 512px（pad 8%） |
+| `02_product-icons/chatx/chatx-256.png` | 256x256 | 智聊 ChatX 图标 透明底正方形 256px（pad 8%） |
+| `02_product-icons/chatx/chatx-128.png` | 128x128 | 智聊 ChatX 图标 透明底正方形 128px（pad 8%） |
+| `02_product-icons/facex/facex-512.png` | 512x512 | 幻颜 FaceX 图标 透明底正方形 512px（pad 8%, optical×0.82） |
+| `02_product-icons/facex/facex-256.png` | 256x256 | 幻颜 FaceX 图标 透明底正方形 256px（pad 8%, optical×0.82） |
+| `02_product-icons/facex/facex-128.png` | 128x128 | 幻颜 FaceX 图标 透明底正方形 128px（pad 8%, optical×0.82） |
+| `02_product-icons/voicex/voicex-512.png` | 512x512 | 幻声 VoiceX 图标 透明底正方形 512px（pad 8%, optical×1.18） |
+| `02_product-icons/voicex/voicex-256.png` | 256x256 | 幻声 VoiceX 图标 透明底正方形 256px（pad 8%, optical×1.18） |
+| `02_product-icons/voicex/voicex-128.png` | 128x128 | 幻声 VoiceX 图标 透明底正方形 128px（pad 8%, optical×1.18） |
+| `02_product-icons/livex/livex-512.png` | 512x512 | 幻影 LiveX 图标 透明底正方形 512px（pad 8%, optical×0.97） |
+| `02_product-icons/livex/livex-256.png` | 256x256 | 幻影 LiveX 图标 透明底正方形 256px（pad 8%, optical×0.97） |
+| `02_product-icons/livex/livex-128.png` | 128x128 | 幻影 LiveX 图标 透明底正方形 128px（pad 8%, optical×0.97） |
+| `02_product-icons/lingox/lingox-512.png` | 512x512 | 通译 LingoX 图标 透明底正方形 512px（pad 8%, optical×0.85） |
+| `02_product-icons/lingox/lingox-256.png` | 256x256 | 通译 LingoX 图标 透明底正方形 256px（pad 8%, optical×0.85） |
+| `02_product-icons/lingox/lingox-128.png` | 128x128 | 通译 LingoX 图标 透明底正方形 128px（pad 8%, optical×0.85） |
+| `02_product-icons/voxx/voxx-512.png` | 512x512 | 通传 VoxX 图标 透明底正方形 512px（pad 8%, optical×1.18） |
+| `02_product-icons/voxx/voxx-256.png` | 256x256 | 通传 VoxX 图标 透明底正方形 256px（pad 8%, optical×1.18） |
+| `02_product-icons/voxx/voxx-128.png` | 128x128 | 通传 VoxX 图标 透明底正方形 128px（pad 8%, optical×1.18） |
+| `02_product-icons/matrixx/matrixx-512.png` | 512x512 | 智控 MatrixX 图标 透明底正方形 512px（pad 8%, optical×0.78） |
+| `02_product-icons/matrixx/matrixx-256.png` | 256x256 | 智控 MatrixX 图标 透明底正方形 256px（pad 8%, optical×0.78） |
+| `02_product-icons/matrixx/matrixx-128.png` | 128x128 | 智控 MatrixX 图标 透明底正方形 128px（pad 8%, optical×0.78） |
+| `02_product-icons/fatex/fatex-512.png` | 512x512 | 幻缘 FateX 图标 透明底正方形 512px（pad 8%） |
+| `02_product-icons/fatex/fatex-256.png` | 256x256 | 幻缘 FateX 图标 透明底正方形 256px（pad 8%） |
+| `02_product-icons/fatex/fatex-128.png` | 128x128 | 幻缘 FateX 图标 透明底正方形 128px（pad 8%） |
 | `03_lockups/company/company-horizontal-ink.png` | 2400x731 | 公司组合标 horizontal（墨色字，透明底） |
 | `03_lockups/company/company-horizontal-white.png` | 2400x731 | 公司组合标 horizontal（白色字，透明底） |
 | `03_lockups/company/company-stacked-ink.png` | 2364x2400 | 公司组合标 stacked（墨色字，透明底） |
@@ -62,6 +70,10 @@
 | `03_lockups/products/lingox-lockup-white.png` | 1800x845 | 通译 LingoX 组合标（白色字，透明底） |
 | `03_lockups/products/voxx-lockup-ink.png` | 1799x764 | 通传 VoxX 组合标（墨色字，透明底） |
 | `03_lockups/products/voxx-lockup-white.png` | 1799x764 | 通传 VoxX 组合标（白色字，透明底） |
+| `03_lockups/products/matrixx-lockup-ink.png` | 1800x828 | 智控 MatrixX 组合标（墨色字，透明底） |
+| `03_lockups/products/matrixx-lockup-white.png` | 1800x828 | 智控 MatrixX 组合标（白色字，透明底） |
+| `03_lockups/products/fatex-lockup-ink.png` | 1800x890 | 幻缘 FateX 组合标（墨色字，透明底） |
+| `03_lockups/products/fatex-lockup-white.png` | 1800x890 | 幻缘 FateX 组合标（白色字，透明底） |
 | `04_avatars/company/avatar-brand-dark-512.png` | 512x512 | 公司主头像 深空底（TG Bot/官方号通用） |
 | `04_avatars/company/thumbs/avatar-brand-dark-128.png` | 128x128 | 公司主头像 深空底（TG Bot/官方号通用）（128 预览） |
 | `04_avatars/company/avatar-brand-light-512.png` | 512x512 | 公司主头像 浅色底（浅色场景备用） |
@@ -100,6 +112,14 @@
 | `04_avatars/products/thumbs/avatar-voxx-dark-128.png` | 128x128 | 通传 VoxX 产品号头像（128 预览） |
 | `04_avatars/products/avatar-voxx-ring-512.png` | 512x512 | 通传 VoxX 产品资源号头像（通达系光环） |
 | `04_avatars/products/thumbs/avatar-voxx-ring-128.png` | 128x128 | 通传 VoxX 产品资源号头像（通达系光环）（128 预览） |
+| `04_avatars/products/avatar-matrixx-dark-512.png` | 512x512 | 智控 MatrixX 产品号头像 |
+| `04_avatars/products/thumbs/avatar-matrixx-dark-128.png` | 128x128 | 智控 MatrixX 产品号头像（128 预览） |
+| `04_avatars/products/avatar-matrixx-ring-512.png` | 512x512 | 智控 MatrixX 产品资源号头像（智连系光环） |
+| `04_avatars/products/thumbs/avatar-matrixx-ring-128.png` | 128x128 | 智控 MatrixX 产品资源号头像（智连系光环）（128 预览） |
+| `04_avatars/products/avatar-fatex-dark-512.png` | 512x512 | 幻缘 FateX 产品号头像 |
+| `04_avatars/products/thumbs/avatar-fatex-dark-128.png` | 128x128 | 幻缘 FateX 产品号头像（128 预览） |
+| `04_avatars/products/avatar-fatex-ring-512.png` | 512x512 | 幻缘 FateX 产品资源号头像（幻境系光环） |
+| `04_avatars/products/thumbs/avatar-fatex-ring-128.png` | 128x128 | 幻缘 FateX 产品资源号头像（幻境系光环）（128 预览） |
 | `05_backgrounds/tg-post-1280x720.png` | 1280x720 | TG 频道贴文 / OG 分享图（16:9） |
 | `05_backgrounds/desktop-1920x1080-dark.png` | 1920x1080 | 桌面壁纸 / 直播垫片 / PPT 封面（深色） |
 | `05_backgrounds/desktop-1920x1080-light.png` | 1920x1080 | 桌面壁纸 / PPT 封面（浅色） |
@@ -109,4 +129,4 @@
 | `05_backgrounds/wechat-banner-900x383-dark.png` | 900x383 | 公众号封面 / 横版卡片（深色） |
 | `05_backgrounds/wechat-banner-900x383-light.png` | 900x383 | 公众号封面 / 横版卡片（浅色） |
 | `05_backgrounds/youtube-banner-2560x1440.png` | 2560x1440 | YouTube 频道横幅（关键内容已置于 1546x423 安全区内） |
-| `05_backgrounds/matrix-poster-1920x1080.png` | 1920x1080 | 产品矩阵总览海报（母品牌 + 三系七产品，一图讲清） |
+| `05_backgrounds/matrix-poster-1920x1080.png` | 1920x1080 | 产品矩阵总览海报（母品牌 + 三系八产品，一图讲清） |

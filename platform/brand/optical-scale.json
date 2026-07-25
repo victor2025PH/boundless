@@ -1,0 +1,35 @@
+{
+  "_note": "产品图标光学补偿单一真相（官网/头像/lockup/桌面图标共用）。由 brand-assets/calibrate_optical_scales.py 自动校准生成——换图标后重跑该脚本即可，勿手改 scales/expected_eq；人工微调请写 overrides。applyInUi=false 表示系数已烘焙进资产，前端 ProductIcon 不再叠加 CSS 缩放。",
+  "version": "2.0.0",
+  "applyInUi": false,
+  "anchor": "chatx",
+  "baseline_eq": 161.3,
+  "shape_correction": 0.1,
+  "fill_pivot": 0.55,
+  "k_cap": 1.1776,
+  "auto_calibrated_at": "2026-07-25T09:45:06",
+  "scales": {
+    "reachx": 0.91,
+    "chatx": 1.0,
+    "facex": 0.816,
+    "voicex": 1.012,
+    "livex": 0.968,
+    "lingox": 0.854,
+    "voxx": 1.178,
+    "matrixx": 0.775,
+    "fatex": 0.91
+  },
+  "expected_eq": {
+    "reachx": 161.4,
+    "chatx": 161.3,
+    "facex": 158.7,
+    "voicex": 161.7,
+    "livex": 161.0,
+    "lingox": 160.0,
+    "voxx": 159.9,
+    "matrixx": 157.5,
+    "fatex": 160.1
+  },
+  "capped": [],
+  "overrides": {}
+}
