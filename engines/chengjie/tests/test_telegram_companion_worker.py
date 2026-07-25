@@ -415,3 +415,36 @@ def test_emit_inbox_swallows_errors(monkeypatch):
     obj._mirror_inbox = True
     # 镜像失败绝不冒泡（不影响主消息流）
     obj._emit_inbox(chat_id=1, text="x", direction="in")
+
+
+def test_emit_inbox_group_sender_in_source(monkeypatch):
+    """群消息镜像带发言人结构化字段（P4-11E 对齐）：sender_id/sender_name 经
+    source 透传 → ingest 落 messages.sender_id/sender_name。灰度实测镜像行
+    sender_id 恒空 → 群观测无法按发言者聚合（2026-07-25），此测钉死修复。"""
+    import src.integrations.protocol_bridge as pb
+    calls = []
+    monkeypatch.setattr(pb, "emit_incoming", lambda m: calls.append(m))
+    obj = _bare_tc()
+    obj.account_id = "u1"
+    obj._mirror_inbox = True
+    obj._emit_inbox(chat_id=-1003431196068, text="群里发言", direction="in",
+                    name="小明", sender_id="6834964252", sender_name="小明")
+    assert len(calls) == 1
+    src = calls[0].get("source")
+    assert isinstance(src, dict)
+    assert src["sender_id"] == "6834964252"
+    assert src["sender_name"] == "小明"
+
+
+def test_emit_inbox_private_has_no_sender_source(monkeypatch):
+    """私聊镜像不带 sender 字段（normalizer 语义「缺省空=非群」），source 保持
+    None——防私聊气泡误显发言人条。"""
+    import src.integrations.protocol_bridge as pb
+    calls = []
+    monkeypatch.setattr(pb, "emit_incoming", lambda m: calls.append(m))
+    obj = _bare_tc()
+    obj.account_id = "u1"
+    obj._mirror_inbox = True
+    obj._emit_inbox(chat_id=12345, text="在吗", direction="in", name="甜心")
+    assert len(calls) == 1
+    assert calls[0].get("source") is None

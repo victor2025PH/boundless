@@ -753,6 +753,15 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
 
                 chat_id = getattr(message.chat, 'id', 0)
                 self.logger.info("[群消息] 收到一条群消息 chat_id=%s", chat_id)
+
+                # 群聊灰度白名单（P3-1）：allowlist_chat_ids 非空时仅名单内群放行。
+                from src.client.reply_logic_gates import group_allowlist_blocked
+                _gr_cfg = self.config.get('telegram', {}).get('group_reply', {})
+                if group_allowlist_blocked(_gr_cfg, chat_id):
+                    self.logger.debug(
+                        "[群消息] 跳过: 不在灰度白名单 chat_id=%s", chat_id)
+                    return
+
                 # P-1: 跳过 bot 启动之前的旧消息（防止重启后处理历史队列导致循环）
                 msg_date = getattr(message, 'date', None)
                 if msg_date:
@@ -1675,17 +1684,26 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
     def _emit_inbox(self, *, chat_id: Any, text: str, direction: str,
                     name: str = "", msg_id: str = "",
                     media_type: str = "", media_ref: str = "",
-                    username: str = "", phone: str = "") -> None:
+                    username: str = "", phone: str = "",
+                    sender_id: str = "", sender_name: str = "") -> None:
         """N4b：companion 运行时把 A 线收/发的消息镜像进统一收件箱（坐席台可见）。
 
         默认关（``self._mirror_inbox`` False）→ standalone main.py 零影响。仅 emit 到
         收件箱 sink（不触发 B 线 autoreply，避免与 A 线自身回复重复）。best-effort，
         绝不影响主消息流。
+
+        ``sender_id`` / ``sender_name``：群消息发言人（P4-11E 同款结构化落库，经
+        ``source`` 透传 → ``messages.sender_id/sender_name``），供坐席群气泡显示
+        发言人名 + 稳定色、群观测按发言者聚合。私聊调用方不传（保持空）。
         """
         if not getattr(self, "_mirror_inbox", False):
             return
         try:
             from src.integrations.protocol_bridge import emit_incoming, make_message
+            _src = None
+            if sender_id or sender_name:
+                _src = {"sender_id": str(sender_id or ""),
+                        "sender_name": str(sender_name or "")}
             emit_incoming(make_message(
                 platform="telegram",
                 account_id=getattr(self, "account_id", "default"),
@@ -1699,6 +1717,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 media_ref=media_ref,
                 username=username or "",
                 phone=phone or "",
+                source=_src,
             ))
         except Exception:
             try:
@@ -1800,6 +1819,13 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     _peer_name = ('@' + _peer_username) if _peer_username else ''
             if not _peer_name:
                 _peer_name = str(message_data.get('username') or '')
+            # 群消息带发言人结构化字段（P4-11E 对齐 WhatsApp）：镜像行 sender_id 一直
+            # 为空 → 群观测无法按发言者聚合（2026-07-25 灰度实测盲区）。仅群传，
+            # 私聊保持空（normalizer 语义「缺省空=非群」）。
+            from src.client.reply_logic_gates import normalize_chat_type as _nct
+            _mirror_is_group = _nct(
+                getattr(getattr(message, 'chat', None), 'type', '')
+            ) in ('group', 'supergroup', 'channel')
             self._emit_inbox(
                 chat_id=chat_id, text=text, direction="in",
                 name=_peer_name,
@@ -1808,6 +1834,9 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 media_ref=_media_ref,
                 username=_peer_username,
                 phone=_peer_phone,
+                sender_id=(str(getattr(_peer, 'id', '') or '')
+                           if (_mirror_is_group and _peer is not None) else ''),
+                sender_name=(_peer_name if _mirror_is_group else ''),
             )
 
             _es_cnt, _es_key = 0, ""
@@ -1889,8 +1918,13 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             # 群名（用于额度规则：特殊客户/黑名单按群名识别）
             msg = message_data.get('message')
             chat_title = (getattr(msg.chat, 'title', None) or '').strip() if msg and getattr(msg, 'chat', None) else ''
-            # chat_type 用于 3-tier persona 路由和下游决策
-            _chat_type_str = str(getattr(getattr(msg, 'chat', None), 'type', '') or '').lower()
+            # chat_type 用于 3-tier persona 路由和下游决策。
+            # pyrogram 的 chat.type 是枚举（str() 出 "ChatType.SUPERGROUP"），
+            # 必须经 normalize_chat_type 取 .name，否则群判定恒 False →
+            # 群消息误入私聊上下文窗（P1-2 分窗失效，2026-07-25 灰度实测踩坑）。
+            from src.client.reply_logic_gates import normalize_chat_type
+            _chat_type_str = normalize_chat_type(
+                getattr(getattr(msg, 'chat', None), 'type', ''))
             _is_group = _chat_type_str in ('group', 'supergroup', 'channel')
 
             # request_id 串联整条链路，便于日志与排错

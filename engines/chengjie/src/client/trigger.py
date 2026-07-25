@@ -42,6 +42,8 @@ class TelegramTriggerMixin:
         follow_up = reply_logic.get('follow_up', {})
         if not follow_up.get('enabled', True):
             return False
+        if not self._group_bare_gate(message):
+            return False
         if not self.client or not self.user_info:
             return False
         lookback = max(5, min(20, follow_up.get('lookback_count', 10)))
@@ -88,6 +90,36 @@ class TelegramTriggerMixin:
         except Exception as e:
             self.logger.debug("追问上下文检查异常: %s", e)
             return False
+
+    def _group_bare_gate(self, message) -> bool:
+        """群聊兜底闸（P3-2）：无显式信号路径在群里只对「刚互动过的人」放行。
+
+        follow_up / l2_fallback / ai_context 三条兜底原是私聊语义——群里
+        「45 分钟窗 + 10 条内我说过话」= 见谁都抢答（2026-07-25 测试群实锤：
+        用户点名「每句都回复」）。收紧为：群聊中仅当「我们最近回复过这位
+        发言者」且在群短窗（``telegram.group_reply.follow_window_minutes``，
+        默认 3 分钟，0=群里彻底关兜底）内才放行；reply/@/关键词/L1 显式
+        信号不经此闸。私聊恒放行（行为一字不变）。
+        """
+        from src.client.reply_logic_gates import normalize_chat_type
+        ctype = normalize_chat_type(
+            getattr(getattr(message, 'chat', None), 'type', ''))
+        if ctype not in ('group', 'supergroup', 'channel'):
+            return True
+        from_user = getattr(message, 'from_user', None)
+        uid = getattr(from_user, 'id', None) if from_user else None
+        cid = getattr(getattr(message, 'chat', None), 'id', None)
+        if uid is None or cid is None:
+            return False
+        grp_cfg = self.config.get('telegram', {}).get('group_reply', {})
+        try:
+            win_min = float(grp_cfg.get('follow_window_minutes', 3))
+        except (TypeError, ValueError):
+            win_min = 3.0
+        if win_min <= 0:
+            return False
+        ts = self._session_reply_ts.get(f"{cid}:{uid}")
+        return ts is not None and (time.time() - ts) <= win_min * 60
 
     def _record_session_reply(self, chat_id: int, user_id: int) -> None:
         reply_logic = self.config.get('telegram', {}).get('reply_logic', {})
@@ -144,6 +176,8 @@ class TelegramTriggerMixin:
         cfg = reply_logic.get('ai_context_reply', {})
         if not cfg.get('enabled', True):
             return False
+        if not self._group_bare_gate(message):
+            return False
         if not self.ai_client or not text or len(text) > 600:
             return False
         prev = await self._get_previous_message(message.chat.id)
@@ -171,6 +205,8 @@ class TelegramTriggerMixin:
         reply_logic = self.config.get('telegram', {}).get('reply_logic', {})
         l2_cfg = reply_logic.get('l2_fallback', {})
         if not l2_cfg.get('enabled', True):
+            return False
+        if not self._group_bare_gate(message):
             return False
         if not self.four_layer_trigger:
             return False
@@ -299,7 +335,10 @@ class TelegramTriggerMixin:
 
     def _should_reply_with_legacy_method(self, message) -> bool:
         group_config = self.config.get('telegram', {}).get('group_reply', {})
-        mode = group_config.get('mode', 'always')
+        # 缺省从 always 改 mention_or_keyword（P3-2，2026-07-25 实测事故）：
+        # 实例基线 config 漂移丢 mode 键时，always 会让群里每句都回且短路
+        # 全部兜底闸——缺配置=部署不完整，宁静默勿刷屏。要旧行为请显式配。
+        mode = group_config.get('mode', 'mention_or_keyword')
         if mode == 'always':
             return True
         text = message.text or message.caption or ""

@@ -14,6 +14,8 @@ from src.client.reply_logic_gates import (
     DEFAULT_STREAK_RESET_AFTER,
     consecutive_limit_reached,
     cooldown_remaining,
+    group_allowlist_blocked,
+    normalize_chat_type,
     should_ignore_edited,
 )
 
@@ -135,3 +137,59 @@ def test_ignore_edited_explicit_true():
 
 def test_ignore_edited_none_cfg_safe():
     assert should_ignore_edited(None, edit_date=1234567890) is True
+
+
+# ── group_allowlist_blocked（P3-1 群聊灰度白名单）──────────────────────────────
+def test_group_allowlist_missing_means_unrestricted():
+    """缺省/空名单 = 不限制（历史行为一字不变）。"""
+    assert group_allowlist_blocked({}, -1003142518418) is False
+    assert group_allowlist_blocked(None, -1003142518418) is False
+    assert group_allowlist_blocked({"allowlist_chat_ids": []}, -100) is False
+
+
+def test_group_allowlist_bad_type_fails_open():
+    """名单类型坏（str/dict/数字）→ 视为不限制，绝不误杀全部群。"""
+    assert group_allowlist_blocked({"allowlist_chat_ids": "oops"}, -1) is False
+    assert group_allowlist_blocked({"allowlist_chat_ids": 123}, -1) is False
+    assert group_allowlist_blocked({"allowlist_chat_ids": [""]}, -1) is False
+
+
+def test_group_allowlist_blocks_unlisted_group():
+    cfg = {"allowlist_chat_ids": [-1003142518418]}
+    assert group_allowlist_blocked(cfg, -1003088334335) is True
+
+
+def test_group_allowlist_allows_listed_group_int_or_str():
+    """int/str 混填均可匹配（YAML 手填两种形态都合法）。"""
+    cfg = {"allowlist_chat_ids": [-1003142518418, "-1003431196068"]}
+    assert group_allowlist_blocked(cfg, -1003142518418) is False
+    assert group_allowlist_blocked(cfg, "-1003142518418") is False
+    assert group_allowlist_blocked(cfg, -1003431196068) is False
+    assert group_allowlist_blocked(cfg, " -1003431196068 ") is False
+
+
+# ── normalize_chat_type（pyrogram 枚举 → 规范小写名）───────────────────────────
+def test_normalize_chat_type_pyrogram_enum():
+    """pyrogram ChatType 枚举必须取 .name——str() 出 "ChatType.SUPERGROUP"，
+    直接 lower 永远匹配不上，群消息会误入私聊上下文窗（2026-07-25 实锤）。"""
+    import enum
+
+    class ChatType(enum.Enum):  # 形态与 pyrogram.enums.ChatType 同构
+        PRIVATE = "private"
+        GROUP = "group"
+        SUPERGROUP = "supergroup"
+        CHANNEL = "channel"
+
+    assert normalize_chat_type(ChatType.SUPERGROUP) == "supergroup"
+    assert normalize_chat_type(ChatType.GROUP) == "group"
+    assert normalize_chat_type(ChatType.PRIVATE) == "private"
+    # 反例钉死回归：str(枚举) 的旧写法产物绝不该是归一化输出
+    assert normalize_chat_type(ChatType.SUPERGROUP) != "chattype.supergroup"
+
+
+def test_normalize_chat_type_plain_string_and_empty():
+    """纯字符串（旧版本/测试桩）原样规范化；None/空安全返 ""。"""
+    assert normalize_chat_type("SUPERGROUP") == "supergroup"
+    assert normalize_chat_type(" group ") == "group"
+    assert normalize_chat_type(None) == ""
+    assert normalize_chat_type("") == ""

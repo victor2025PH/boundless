@@ -2407,6 +2407,11 @@ class AIClient(LoggerMixin):
         if topic_switch:
             prompt_parts.append(f"【话题/语境切换——注意】\n{topic_switch}")
 
+        # P3-2：群聊场景约束（群窗才有该键；私聊窗永不出现）
+        _group_hint = (context.get('_group_chat_hint') or '').strip()
+        if _group_hint:
+            prompt_parts.append(f"【群聊场景——重要】\n{_group_hint}")
+
         # 生成层口语分叉（Phase G）：本条回复会走语音条 → 让 LLM 同一次调用多产
         # 一个 [口语版] 段（书面版进镜像/记忆，口语版直接送 TTS）。门控/剥离/暂存
         # 全在 spoken_variant 模块；这里只在被请求时追加指令。

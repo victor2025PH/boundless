@@ -108,3 +108,35 @@ def should_ignore_edited(reply_logic_cfg: dict, edit_date: Any) -> bool:
     if not edit_date:
         return False
     return bool((reply_logic_cfg or {}).get("ignore_edited", True))
+
+
+def normalize_chat_type(raw: Any) -> str:
+    """pyrogram ChatType 枚举 / 字符串 → 规范小写名（"supergroup"/"private"…）。
+
+    pyrogram 的 ``chat.type`` 是枚举：``str(ChatType.SUPERGROUP)`` 出
+    ``"ChatType.SUPERGROUP"``——直接 lower 永远匹配不上 ``"supergroup"``，
+    导致群判定恒 False、群消息误入私聊上下文窗（2026-07-25 灰度首日实测）。
+    必须优先取 ``.name``；纯字符串输入（测试/旧版本）原样规范化。
+    """
+    return str(getattr(raw, "name", None) or raw or "").strip().lower()
+
+
+def group_allowlist_blocked(group_reply_cfg: dict, chat_id: Any) -> bool:
+    """群聊灰度白名单：该群是否应被跳过（不处理）。
+
+    ``telegram.group_reply.allowlist_chat_ids``（list，元素 int/str 均可）：
+
+    - 缺省 / 空列表 / 非法类型 → 不限制（返回 False，与历史行为一致）；
+    - 非空列表 → 仅名单内的群放行，其余群返回 True（跳过）。
+
+    用途＝群聊功能灰度：先对指定测试群开 ``process_groups``，业务群零触碰；
+    验证后清空名单即全量放开。比对按字符串（TG 群 id 为负数，int/str 混填
+    都能匹配）。每条消息重读 config → 保存即生效，无需重启。
+    """
+    raw = (group_reply_cfg or {}).get("allowlist_chat_ids")
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return False
+    allowed = {str(item).strip() for item in raw if str(item).strip()}
+    if not allowed:
+        return False
+    return str(chat_id).strip() not in allowed
