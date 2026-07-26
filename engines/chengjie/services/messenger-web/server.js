@@ -508,20 +508,26 @@ async function readSelfProfile(page) {
   return out;
 }
 
-// 真实 Chrome UA（避免暴露 HeadlessChrome / 老旧 Playwright 版本特征）。
+// 仅在回落到捆绑 Chromium 时才用的兜底 UA（真 Chrome 通道下不覆盖，理由见 launchOptions）。
 const REAL_UA = process.env.MSG_UA ||
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
 const LOCALE = process.env.MSG_LOCALE || "zh-CN";
 const TZ = process.env.MSG_TZ || "Asia/Shanghai";
+// 浏览器通道：默认走系统安装的 Google Chrome，而非 Playwright 捆绑的 Chromium
+// （Chrome for Testing）。捆绑版有两处硬伤：二进制自带 for-Testing 特征；版本长期落后于
+// 真 Chrome，而一旦按新版伪造 UA，浏览器自己发出的 Sec-CH-UA 仍报真实内核版本与
+// "Chromium" 品牌 —— UA 与 Client Hints 自相矛盾，是最容易被抓的自动化信号，
+// 也是「账密+验证码都对却被弹回登录页、cookie 只剩 datr」的成因。
+// 置空串可强制用捆绑 Chromium；机器没装 Chrome 时 launchContext 会自动回落。
+const BROWSER_CHANNEL = process.env.MSG_BROWSER_CHANNEL ?? "chrome";
 
 /** 浏览器启动参数（一号一代理 + 反自动化检测）。
  *  Facebook/Meta 会检测自动化浏览器（navigator.webdriver、AutomationControlled、
  *  HeadlessChrome UA 等），命中即登录后一导航就作废会话弹回登录页 → 必须 stealth。 */
-function launchOptions(proxyUrl) {
+function launchOptions(proxyUrl, channel = BROWSER_CHANNEL) {
   const opts = {
     headless: HEADLESS,
-    userAgent: REAL_UA,
     locale: LOCALE,
     timezoneId: TZ,
     viewport: { width: 1280, height: 800 },
@@ -533,8 +539,37 @@ function launchOptions(proxyUrl) {
     ],
     ignoreDefaultArgs: ["--enable-automation"],
   };
+  if (channel) opts.channel = channel;
+  // UA 只在显式指定、或回落到捆绑 Chromium 时才覆盖：真 Chrome 自带的 UA 与它发出的
+  // Client Hints 本就一致，此时再伪造只会重新制造上面那条矛盾。
+  if (process.env.MSG_UA) opts.userAgent = process.env.MSG_UA;
+  else if (!channel) opts.userAgent = REAL_UA;
   if (proxyUrl) opts.proxy = { server: proxyUrl };
   return opts;
+}
+
+/** 该错误是否意味着「这台机器用不了这个通道」。
+ *  只有这类才值得降级重开。冷启途中被取消/关窗抛的 "browser has been closed" 属于
+ *  用户意图——把它当通道不可用会拿更弱的指纹把已取消的登录再开一次，等于白送一次
+ *  风控命中（实测已发生：取消后自动用捆绑 Chromium 重开）。 */
+function isChannelUnavailable(err) {
+  const s = String((err && err.message) || err || "");
+  return /executable doesn't exist|Chromium distribution|is not found|Failed to launch|ENOENT|cannot find/i
+    .test(s);
+}
+
+/** 起持久化上下文：优先真 Chrome 通道，机器没装 Chrome 才回落捆绑 Chromium。 */
+async function launchPersistent(userDataDir, proxyUrl) {
+  try {
+    return await chromium.launchPersistentContext(
+      userDataDir, launchOptions(proxyUrl));
+  } catch (e) {
+    if (!BROWSER_CHANNEL || !isChannelUnavailable(e)) throw e;
+    logger.warn({ e: String(e), channel: BROWSER_CHANNEL },
+      "channel unavailable on this host → falling back to bundled chromium (weaker stealth)");
+    return await chromium.launchPersistentContext(
+      userDataDir, launchOptions(proxyUrl, ""));
+  }
 }
 
 /** 登录会话 cookie 快照路径（与 profile 目录并列）。 */
@@ -1173,8 +1208,7 @@ function scheduleRecovery(loginId) {
 
 async function startLogin(loginId, proxyUrl, isRestore = false) {
   const userDataDir = path.join(SESSIONS_DIR, loginId);
-  const context = await chromium.launchPersistentContext(
-    userDataDir, launchOptions(proxyUrl));
+  const context = await launchPersistent(userDataDir, proxyUrl);
   // 崩溃自愈：context 意外关闭 → 自动重启（正常退出由 _shuttingDown 拦掉）。
   context.on("close", () => scheduleRecovery(loginId));
   await applyStealth(context);
@@ -1222,10 +1256,25 @@ async function startLogin(loginId, proxyUrl, isRestore = false) {
     const started = Date.now();
     const deadline = started + (isRestore ? 1000 * 60 * 10 : 1000 * 60 * 30);
     let warnedReLogin = false;
+    let lastSig = "";
     while (sessions.has(loginId) && entry.status !== "authorized" && Date.now() < deadline) {
       try {
         if (await promoteIfLoggedIn(loginId, entry)) break;
         entry.qrImage = await snapshot(page);
+        // 登录失败不抛异常——页面被静默弹回登录页、凭证 cookie 始终不下发，全程无声。
+        // 把「当前 URL + 关键 cookie 是否到位」的每次变化记成一条，失败时的跳转序列
+        // （登录页 → checkpoint → 登录页）才有据可查。仅变化时写，不刷屏。
+        try {
+          const url = page.url();
+          const names = (await context.cookies()).map((c) => c.name);
+          const hasCUser = names.includes("c_user");
+          const hasXs = names.includes("xs");
+          const sig = `${url}|${hasCUser}|${hasXs}`;
+          if (sig !== lastSig) {
+            lastSig = sig;
+            logger.info({ loginId, url, hasCUser, hasXs }, "login page state");
+          }
+        } catch (_) {}
         // 正常自愈通常 2-4s 内就 re-auth；>10s 仍停在登录页 → 判定需人工重登，告警一次（不误报）。
         if (isRestore && !warnedReLogin && Date.now() - started > 10000) {
           warnedReLogin = true;

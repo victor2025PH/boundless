@@ -78,8 +78,12 @@ if (-not $nodeExe) {
 }
 Add-Content -LiteralPath $log -Value ("[messenger-web] " + (Get-Date -Format o) + " launching node=" + ($(if ($nodeExe) { $nodeExe } else { "<NOT FOUND>" })) + " server=" + $serverJs)
 if (-not $nodeExe) { Add-Content -LiteralPath $log -Value "[messenger-web] FATAL: node.exe not found on PATH nor common install dirs"; exit 1 }
-# 日志编码修复：PowerShell 5.1 下 `*>> $log` 会把 node stdout 按 UTF-16LE 落盘，与上面
-# Add-Content 写入的单字节行混在同一文件 → 乱码且排障工具读不了。不能用 `Out-File -Append`：
-# 它全程独占文件句柄，服务在跑时谁都读不了日志。用逐行 Add-Content（UTF-8）：每行写完即释放
-# 句柄，tail/Get-Content 随时可读。
-& $nodeExe $serverJs 2>&1 | ForEach-Object { Add-Content -LiteralPath $log -Value $_ -Encoding UTF8 }
+# 日志重定向交给 cmd 的 `>>`，由内核直接把 node 的 stdout 落盘。
+# 不能用 PowerShell 管道逐行 Add-Content（曾用）：那样 PowerShell 是 stdout 的唯一消费者，
+# 而它每行都要开关一次文件句柄，写盘速度远赶不上 node 产出 → 管道缓冲一满，node 侧的
+# stdout 写入就转为**阻塞**，整个事件循环卡死（实测 /health 间歇超时、日志断流数小时，
+# 服务却看着"活着"）。也不能用 `*>> $log`（PS5.1 按 UTF-16LE 落盘）或 `Out-File -Append`
+# （全程独占句柄，服务在跑时读不了日志）。cmd 重定向没有中间消费者，且 node 输出本就是
+# UTF-8 字节流，直写即得正确编码（顺带修掉此前的二次转码乱码）。
+$cmdLine = '"' + $nodeExe + '" "' + $serverJs + '" >> "' + $log + '" 2>&1'
+& cmd /c $cmdLine

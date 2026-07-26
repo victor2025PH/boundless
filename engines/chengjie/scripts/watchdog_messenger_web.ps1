@@ -79,7 +79,9 @@ try {
 
 function Write-Log([string]$level, [string]$msg) {
     $line = "[{0}] [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $level, $msg
-    Add-Content -Path $LogPath -Value $line
+    # UTF8: .NET exception text is localized (e.g. Chinese on zh-CN hosts); the PS5.1
+    # default ANSI writer mangles it into unreadable bytes.
+    Add-Content -Path $LogPath -Value $line -Encoding UTF8
     Write-Host $line
 }
 
