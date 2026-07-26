@@ -39,15 +39,38 @@ OUT = HERE / "backend-dist"                      # 产出目录（electron-build
 NAME = "backend"
 
 # 后端运行需要的数据（模板/静态/示例配置）。格式：(源, 包内目标相对路径)
+# 注意：src/web/static 不直接入包——见 _stage_static()（剔除运行时落地的真实媒体后再打）。
 DATAS = [
     (REPO / "src" / "web" / "templates", "src/web/templates"),
-    (REPO / "src" / "web" / "static", "src/web/static"),
     # P0-1 A1：桌面随包种子 = 最小配置（无 YOUR_* 占位）。AITR_DESKTOP_MODE 下
     # ConfigManager._ensure_seeded 优先播种它 → 首启只差一个 AI Key（向导写 overlay）。
     # 完整 example 仍随包：供参考 + 非桌面模式回落种子。
     (REPO / "config" / "config.desktop.min.yaml", "config"),
     (REPO / "config" / "config.example.yaml", "config"),
 ]
+
+# static/ 下的运行时落地目录：protocol_media＝客户聊天媒体（语音/照片/视频），
+# persona_avatars＝运行时同步的账号/人设头像。均为 gitignore 的生产数据，随包分发
+# ＝把真实客户隐私打进公网安装包（0.1.0 曾中招），必须剔除；两目录代码均按需重建。
+RUNTIME_STATIC_EXCLUDES = {"protocol_media", "persona_avatars"}
+STATIC_SRC = REPO / "src" / "web" / "static"
+STATIC_STAGED = HERE / "static-staged"
+
+
+def _stage_static() -> Path:
+    """把 src/web/static 复制到构建暂存目录，顶层剔除运行时媒体目录后供 --add-data 使用。"""
+    shutil.rmtree(STATIC_STAGED, ignore_errors=True)
+
+    def _ignore(dirpath: str, names: list[str]):
+        if Path(dirpath).resolve() == STATIC_SRC.resolve():
+            return set(names) & RUNTIME_STATIC_EXCLUDES
+        return set()
+
+    shutil.copytree(STATIC_SRC, STATIC_STAGED, ignore=_ignore)
+    leaked = [n for n in RUNTIME_STATIC_EXCLUDES if (STATIC_STAGED / n).exists()]
+    if leaked:
+        raise RuntimeError(f"static 暂存仍含运行时目录（打包中止防隐私泄漏）: {leaked}")
+    return STATIC_STAGED
 
 # 动态 import 的包，PyInstaller 静态分析抓不全 → 显式 collect。
 COLLECT_SUBMODULES = ["src", "uvicorn", "pyrogram", "fastapi"]
@@ -94,10 +117,12 @@ def main() -> int:
         return 2
 
     if args.clean:
-        for d in (OUT, HERE / "build", HERE / "__pycache__"):
+        for d in (OUT, HERE / "build", HERE / "__pycache__", STATIC_STAGED):
             shutil.rmtree(d, ignore_errors=True)
 
     OUT.mkdir(parents=True, exist_ok=True)
+
+    datas = [(_stage_static(), "src/web/static")] + DATAS
 
     cmd = [
         sys.executable, "-m", "PyInstaller",
@@ -117,7 +142,7 @@ def main() -> int:
     if not args.keep_heavy:
         for mod in EXCLUDES:
             cmd += ["--exclude-module", mod]
-    for src, dst in DATAS:
+    for src, dst in datas:
         if Path(src).exists():
             cmd += ["--add-data", f"{src}{_sep()}{dst}"]
         else:
