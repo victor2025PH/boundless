@@ -42,6 +42,7 @@
     .empty { color:var(--mut); padding:10px; }
     .refresh { margin-left:auto; }
     a { color:var(--accent); text-decoration:none; }
+    .mc-warn-row { color:#e5484d; }
   </style>
 </head>
 <body>
@@ -1378,7 +1379,9 @@ function renderPersonaOverride(d){
   var dv = document.getElementById('personaOvDetail');
   if(!sec || !kp || !dv) return;
   var po = (d && d.persona_override) || null;
-  if(!po || (!(Number(po.resolves)||0) && !(Number(po.actions_total)||0))){ sec.style.display='none'; return; }
+  var debt = (po && typeof po.legacy_debt === 'number') ? po.legacy_debt : null;
+  // 债>0 时即使零流量也要露卡（债回升正是要在没人看时被看见的信号）
+  if(!po || (!(Number(po.resolves)||0) && !(Number(po.actions_total)||0) && !debt)){ sec.style.display='none'; return; }
   sec.style.display = '';
   var resolves = Number(po.resolves)||0;
   var conv = Number(po.conv_hits)||0;
@@ -1389,6 +1392,7 @@ function renderPersonaOverride(d){
     {label:window.T('ov2_po_conv'), value:fmt(conv)+pct(conv)},
     {label:window.T('ov2_po_acct'), value:fmt(acct)+pct(acct)},
     {label:window.T('ov2_po_legacy_sup'), value:fmt(Number(po.legacy_suppressed)||0)},
+    {label:window.T('ov2_po_debt'), value:(debt === null ? '—' : fmt(debt))},
     {label:window.T('ov2_po_actions'), value:fmt(Number(po.actions_total)||0)}
   ];
   kp.innerHTML = kpis.map(function(c){
@@ -2075,7 +2079,7 @@ async function loadMediaConsistency(){
         var miss = (g.missing_personas||[]);
         var missTxt = miss.length ? esc(miss.join(', ')) : '<span class="muted">—</span>';
         var warn = (Number(g.unmet)||0) > 0 && (Number(g.supply)||0) === 0;
-        return '<tr'+(warn?' style="color:#e5484d;"':'')+'><td>'+esc(g.scene)+'</td><td>'+fmt(Number(g.demand)||0)+
+        return '<tr'+(warn?' class="mc-warn-row"':'')+'><td>'+esc(g.scene)+'</td><td>'+fmt(Number(g.demand)||0)+
           '</td><td>'+fmt(Number(g.unmet)||0)+' ('+rate+')</td><td>'+fmt(Number(g.supply)||0)+'</td><td>'+missTxt+'</td></tr>';
       }).join('');
       html += '<div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_mc_gap_top')+'</div>'

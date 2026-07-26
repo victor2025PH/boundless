@@ -1124,6 +1124,13 @@ let threadMsgs=[], pollTimer=null, pollFast=false;
 let _threadHasMore=false, _threadOldestTs=null, _threadLoadingOlder=false;
 let _pullingPhone=false;   // P1: 正在向手机补拉更早历史
 let _contactsMode=false, _contactsData=[];  // P1: 通讯录面板状态
+// P2: 分块渲染 + 截断披露 + 服务端搜索回落（几千人名单的性能/限流护栏）
+const _CONTACT_CHUNK=200;
+let _contactsRenderRows=[], _contactsRenderedN=0;
+let _contactsTruncated=false;      // 本地集合是否被单页上限截断（决定搜索是否打服务端）
+let _contactsSearchSeq=0;          // 服务端搜索乱序回包令牌
+let _contactsSearchTimer=null;
+const _CONTACTS_PAGE_LIMIT=2000;
 let _outXlPending=null; // P55: 发送前译文待确认 {orig, translated}
 let claimMap={}, claimRenewTimer=null;
 let aiDraftOn=false, infoOn=false;
@@ -3342,6 +3349,20 @@ window.__desktopOpenConversation = function(p){
     // 解除可能挡住目标的平台过滤/搜索，确保会话在列表可见
     platFilter='all'; searchQ='';
     const sb=document.getElementById('search-input'); if(sb) sb.value='';
+    const synth={ platform:p.platform, account_id:acc, chat_key:p.chat_key,
+                  name:p.name||p.chat_key, conversation_id:key, unread:0 };
+    if(p.optimistic){
+      // 乐观开面板：未开口联系人库里没有会话行，先刷一次 100 条全量纯属白等——
+      // 直接合成占位立即开；loadChats 只有 in-flight 去重、会整体替换 allChats，
+      // 完成后必须对账补回占位，否则刚打开的会话会从列表里消失。
+      if(!allChats.find(x=>convKey(x)===key)) allChats.push(synth);
+      applyFilters(); selectChat(key);
+      Promise.resolve(loadChats()).then(()=>{
+        if(!allChats.find(x=>convKey(x)===key)) allChats.push(synth);
+        applyFilters();
+      }).catch(()=>{});
+      return true;
+    }
     const openIfPresent=()=>{
       if(allChats.find(x=>convKey(x)===key)){ applyFilters(); selectChat(key); return true; }
       return false;
@@ -3350,8 +3371,7 @@ window.__desktopOpenConversation = function(p){
     // 不在当前列表 → 刷新一次再试；仍无则合成最小会话项（线程按 platform/account/chat_key 直接拉取）
     Promise.resolve(loadChats()).then(()=>{
       if(openIfPresent()) return;
-      allChats.push({ platform:p.platform, account_id:acc, chat_key:p.chat_key,
-                      name:p.name||p.chat_key, conversation_id:key, unread:0 });
+      allChats.push(synth);
       applyFilters(); selectChat(key);
     });
     return true;
@@ -3780,58 +3800,120 @@ async function loadContactsList(accountId){
   const s=document.getElementById('contacts-search'); if(s) s.value='';
   listEl.innerHTML=`<div class="empty-list"><span class="spin"></span></div>`;
   try{
-    const r=await apiFetch(`/api/platforms/whatsapp/${enc(accountId)}/contacts?limit=2000`);
+    // enriched=1：每行带 never_spoke/has_conversation（头像闸门与乐观开面板都靠它）
+    const r=await apiFetch(`/api/platforms/whatsapp/${enc(accountId)}/contacts?enriched=1&limit=${_CONTACTS_PAGE_LIMIT}`);
     const d=await r.json().catch(()=>({ok:false}));
     _contactsData=(d.contacts||[]).map(x=>Object.assign({}, x, {_acct:accountId}));
+    // 截断判定：summary.total 是全表基数（跟随 q 但本处 q 为空=全景）；
+    // summary 缺失时按「拉满单页上限」保守判定。
+    const total=Number(((d||{}).summary||{}).total);
+    _contactsTruncated = Number.isFinite(total) && total>0
+      ? total>_contactsData.length
+      : _contactsData.length>=_CONTACTS_PAGE_LIMIT;
     _renderContacts(_contactsData);
   }catch(_){
     listEl.innerHTML=`<div class="empty-list">${window.T('inbox.contacts.load_fail')}</div>`;
   }
 }
 
+function _contactRowHtml(c){
+  const nm=c.name||c.notify_name||c.chat_key;
+  const sub=(c.name||c.notify_name)?c.chat_key:'';
+  const ini=esc((nm||'?').trim().slice(0,1).toUpperCase());
+  const never=!!c.never_spoke;
+  // 未开口联系人不渲染 <img>：头像端点磁盘未命中会打一次真 RPC（TG get_chat /
+  // WA profilePictureUrl），而「从没聊过的人」必然未命中——几千行名单滚一遍
+  // ＝几千次 RPC 排在生产 client 的 loop 上，足以触发 FloodWait 并挤占真实收发。
+  // 已聊过的人保持 loading=lazy（进视口才回源，天然节流）。
+  const ava = never ? '' : `<img loading="lazy" src="/api/platforms/whatsapp/${enc(c._acct)}/avatar?chat_key=${enc(c.chat_key)}" alt="" onload="this.style.opacity=1" onerror="this.remove()">`;
+  return `<div class="contact-row" onclick="_contactStartChat('${esc(c._acct)}','${esc(c.chat_key)}','${esc(nm)}',${never?1:0})" title="${window.T('inbox.contacts.start_chat')}">
+    <div class="contact-ava">${ini}${ava}</div>
+    <div style="min-width:0;flex:1;">
+      <div class="contact-nm">${esc(nm)}</div>
+      <div class="contact-sub">${esc(sub)}</div>
+    </div>
+  </div>`;
+}
+
+function _contactsAppendChunk(){
+  const listEl=document.getElementById('contacts-list');
+  if(!listEl) return;
+  const next=_contactsRenderRows.slice(_contactsRenderedN, _contactsRenderedN+_CONTACT_CHUNK);
+  if(!next.length) return;
+  // 续块必须 insertAdjacentHTML 追加：整体 innerHTML 赋值会一次性渲染数千行，
+  // 既拖首屏，又让 loading=lazy 的头像在快速滚动时瞬间并发一大把。
+  listEl.insertAdjacentHTML('beforeend', next.map(_contactRowHtml).join(''));
+  _contactsRenderedN+=next.length;
+  // 首块可能填不满视口（无滚动条 → onscroll 永不触发）：填满为止
+  if(listEl.scrollHeight<=listEl.clientHeight+8 && _contactsRenderedN<_contactsRenderRows.length){
+    _contactsAppendChunk();
+  }
+}
+
 function _renderContacts(rows){
   const listEl=document.getElementById('contacts-list');
   const cntEl=document.getElementById('contacts-count');
-  if(cntEl) cntEl.textContent=window.Tf('inbox.contacts.count',{n:rows.length});
+  if(cntEl){
+    // 名单被单页上限截断时如实告知——「搜不到就以为没这个人」是信任问题
+    cntEl.textContent=_contactsTruncated
+      ? window.Tf('inbox.contacts.count_capped',{n:rows.length})
+      : window.Tf('inbox.contacts.count',{n:rows.length});
+  }
   if(!listEl) return;
   if(!rows.length){
     listEl.innerHTML=`<div class="empty-list">${window.T('inbox.contacts.empty')}</div>`;
     return;
   }
-  listEl.innerHTML=rows.map(c=>{
-    const nm=c.name||c.notify_name||c.chat_key;
-    const sub=(c.name||c.notify_name)?c.chat_key:'';
-    const ini=esc((nm||'?').trim().slice(0,1).toUpperCase());
-    // 头像懒加载：native loading=lazy 只在滚动进视口才回源（天然节流，防批量拉头像触发速率限制）；
-    // 无头像/加载失败 → 移除 <img>，露出底层首字母头像。
-    const avaUrl=`/api/platforms/whatsapp/${enc(c._acct)}/avatar?chat_key=${enc(c.chat_key)}`;
-    return `<div class="contact-row" onclick="_contactStartChat('${esc(c._acct)}','${esc(c.chat_key)}','${esc(nm)}')" title="${window.T('inbox.contacts.start_chat')}">
-      <div class="contact-ava">${ini}<img loading="lazy" src="${avaUrl}" alt="" onload="this.style.opacity=1" onerror="this.remove()"></div>
-      <div style="min-width:0;flex:1;">
-        <div class="contact-nm">${esc(nm)}</div>
-        <div class="contact-sub">${esc(sub)}</div>
-      </div>
-    </div>`;
-  }).join('');
+  _contactsRenderRows=rows;
+  _contactsRenderedN=0;
+  listEl.innerHTML='';
+  listEl.onscroll=function(){
+    if(this.scrollTop+this.clientHeight>=this.scrollHeight-240) _contactsAppendChunk();
+  };
+  _contactsAppendChunk();
 }
 
 function _filterContacts(q){
-  q=(q||'').trim().toLowerCase();
-  if(!q){ _renderContacts(_contactsData); return; }
+  q=(q||'').trim();
+  const ql=q.toLowerCase();
+  if(!ql){ _renderContacts(_contactsData); _contactsSearchSeq++; return; }
   _renderContacts(_contactsData.filter(c=>
-    (c.name||'').toLowerCase().includes(q) ||
-    (c.notify_name||'').toLowerCase().includes(q) ||
-    (c.chat_key||'').includes(q)));
+    (c.name||'').toLowerCase().includes(ql) ||
+    (c.notify_name||'').toLowerCase().includes(ql) ||
+    (c.chat_key||'').includes(ql)));
+  _contactsServerSearch(q);
 }
 
-function _contactStartChat(accountId, chatKey, name){
+function _contactsServerSearch(q){
+  // 本地只有一页时不打后端（省一次往返）；一旦截断就必须打，
+  // 否则第 2001 个人永远搜不到（SQL 侧按 名字/备注名/号码 覆盖全表）。
+  if(!_contactsTruncated) return;
+  const seq=++_contactsSearchSeq;
+  const sel=document.getElementById('contacts-acct-select');
+  const acct=sel&&sel.value; if(!acct) return;
+  if(_contactsSearchTimer) clearTimeout(_contactsSearchTimer);
+  _contactsSearchTimer=setTimeout(async()=>{
+    try{
+      const r=await apiFetch(`/api/platforms/whatsapp/${enc(acct)}/contacts?enriched=1&limit=500&q=${enc(q)}`);
+      const d=await r.json().catch(()=>({}));
+      if(seq!==_contactsSearchSeq) return;   // 乱序回包：只认最新一次
+      const cur=document.getElementById('contacts-search');
+      if(!cur || cur.value.trim()!==q) return;  // 输入已变，结果过期
+      _renderContacts((d.contacts||[]).map(x=>Object.assign({}, x, {_acct:acct})));
+    }catch(_){}
+  },260);
+}
+
+function _contactStartChat(accountId, chatKey, name, never){
   _contactsMode=false;
   const panel=document.getElementById('contacts-panel'); if(panel) panel.style.display='none';
   const convs=document.getElementById('conv-items'); if(convs) convs.style.display='';
   const btn=document.getElementById('contacts-toggle-btn'); if(btn) btn.classList.remove('active');
   if(window.__desktopOpenConversation){
+    // 未开口联系人库里没有会话行：optimistic 让深链入口直接合成占位开面板，
+    // 不必先白等一次 100 条全量拉取——「点未开口的人去主动开口」是通讯录主操作。
     window.__desktopOpenConversation({platform:'whatsapp', account_id:accountId,
-                                      chat_key:chatKey, name:name});
+                                      chat_key:chatKey, name:name, optimistic:!!never});
   }
 }
 
