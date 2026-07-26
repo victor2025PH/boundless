@@ -146,8 +146,17 @@ def test_widget_shows_product_icon():
 
 
 def test_parse_brand_ts():
-    from scripts.sync_brand_json import parse_brand_ts
+    """解析官网品牌真源 TS。
 
+    brand.ts 不在此 checkout（精简部署，见 ebbddfc 把 chengjie/website 副本取消跟踪）
+    → 优雅跳过，与下面的漂移门禁同口径；否则精简部署上这条会常红，把真问题淹掉。
+    """
+    import pytest
+
+    from scripts.sync_brand_json import TS, parse_brand_ts
+
+    if not TS.is_file():
+        pytest.skip("website/lib/brand.ts 不在此 checkout，跳过 TS 解析用例")
     data = parse_brand_ts()
     assert data["company"]["zh"] == "无界科技"
     assert data["product"]["en"] == "ChatX"

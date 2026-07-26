@@ -299,16 +299,28 @@ def _to_pyrogram_proxy(proxy: Optional[Dict[str, Any]]) -> Optional[Dict[str, An
 
 
 def make_provider(config: Dict[str, Any], sessions_dir: str = _DEFAULT_SESSIONS_DIR):
-    creds = resolve_credentials(config)
 
     async def _provider(request: Any, platform: str, mode: str, account_id: str,
                         ctx: Optional[Dict[str, Any]] = None):
+        # 凭据按**每次登录**解析（而非 provider 注册时定死一组）：中央池优先，
+        # 回落配置自带。这样每个账号能拿到各自的 api_id，避免全部号共用一组
+        # 凭据被 Telegram 聚类连坐。
+        from src.integrations import credpool_bridge as _cp
+        pool_key = _cp.new_pool_key() if _cp.credpool_enabled(config) else ""
+        creds, cred_source = await _cp.aresolve_credentials_for_account(
+            config, pool_key=pool_key)
         if creds is None:
             return {"instruction": "未配置 Telegram api_id/api_hash，无法发起协议登录。"}
         api_id, api_hash = creds
+        # 只有真从池里拿到才需要把粘定键落库/回报（配置自带的不占池容量）
+        used_pool_key = pool_key if cred_source == "credpool" else ""
         proxy = _to_pyrogram_proxy((ctx or {}).get("proxy"))
         login = TelegramQrLogin(api_id, api_hash, sessions_dir, proxy=proxy)
-        await login.start()
+        try:
+            await login.start()
+        except Exception as exc:  # 连不上/凭据坏 → 回报池，让健康分与自动切换生效
+            _cp.report(config, api_id, False, error=str(exc)[:200], pool_key=used_pool_key)
+            raise
 
         def _persist_if_authorized(res: Dict[str, Any]) -> None:
             """扫码/两步验证成功即把账号落注册表（幂等；供编排器重启后拉起）。"""
@@ -316,6 +328,13 @@ def make_provider(config: Dict[str, Any], sessions_dir: str = _DEFAULT_SESSIONS_
                 return
             try:
                 _meta = {"session_name": login.session_name, "phone": login.phone}
+                # 中央池粘定键：pyrogram session 与登录所用 api_id 绑定，之后 runner
+                # 每次拉起都用同一个 key 向池索取，保证拿回**同一组**凭据。
+                # 只存 key，不存 api_hash 明文（凭据权威始终在中央池）。
+                if used_pool_key:
+                    from src.integrations import credpool_bridge as _cpb
+                    _meta[_cpb.META_KEY] = used_pool_key
+                    _cpb.report(config, api_id, True, pool_key=used_pool_key)
                 # N2：有 session_string 则一并存（A 线优先 in-memory 启动；见 telegram_client）
                 if getattr(login, "session_string", ""):
                     _meta["session_string"] = login.session_string
@@ -384,7 +403,11 @@ def maybe_register(config: Dict[str, Any], *, sessions_dir: str = _DEFAULT_SESSI
     if not is_pyrogram_available():
         return False
     if resolve_credentials(config) is None:
-        return False
+        # 开了中央池就无需本地自带凭据——凭据在登录时按账号从池里取，
+        # 这正是「新用户不用申请 api_id」的前提。
+        from src.integrations.credpool_bridge import credpool_enabled
+        if not credpool_enabled(config):
+            return False
     if not protocol_enabled(config):
         return False
     register_login_provider("telegram", "protocol", make_provider(config, sessions_dir))

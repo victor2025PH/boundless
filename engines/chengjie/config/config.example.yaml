@@ -31,6 +31,22 @@ telegram:
   # 防大文件拖垮收件箱与磁盘。B 线 protocol worker 与 A 线 mirror 共用此键。
   inbound_video_max_bytes: 20971520   # 20MB
 
+  # ── 轮询兜底（补实时推送缺失）────────────────────────────────
+  poll_fallback:
+    enabled: true                 # 定时 RPC 拉最近会话，捞回实时推送漏掉的新进站私聊
+    interval_seconds: 12          # 轮询间隔
+    dialogs_limit: 30             # 每轮扫描最近会话数
+    catchup_seconds: 600          # 除「boot 之后」外，额外补捞距今这么多秒内的消息
+    # 老板/运营用**手机 App 亲自回复**客户时，把这条已发消息同步进工作台
+    # （落 direction=out、不加未读）。默认关；开了之后：
+    #   · 工作台不再把「其实已经回过」的会话显示成未回复 → 坐席不会再回一次；
+    #   · L2 autosend/主动触达看到会话已有出站，也不会重复回复。
+    # 安全性：镜像走 direction="out"，收件箱侧 auto-draft / 智能分析 / 记忆累积 /
+    # 自动回复全部只在 direction=="in" 分支内 → 出站镜像永不触发任何自动回复。
+    # 去重：用 MTProto message.id 做主键，与系统自身发送时的出站镜像同键 → 同一条
+    # 消息只会有一个气泡。仅覆盖私聊（群噪音大，客服作业在私聊线）。
+    mirror_outgoing: false
+
   # ── Telegram 语音回复（TTS）────────────────────────────────
   # 启用后，AI 文字回复可自动合成语音发送；fallback 始终为纯文字
   voice_reply:
@@ -295,6 +311,15 @@ rpa_intent_tags:
 # 需：开发者选项 USB 调试、已登录 LINE 的会话在前台、建议安装 ADB Keyboard 以输入中文
 line_rpa:
   enabled: false
+  # ── 图片消息识别（P2.4，2026-07-26；默认关）──────────────────────────
+  # XML 路径只认文本节点，对方发图此前完全不可见（no_peer_text / 被去重吞掉）。
+  # 开启后：最新一条对方消息是图片 → 整屏截图按气泡 bounds 裁剪 → 共享识别层
+  # （src/inbox/media_enrich，与 TG/WA 同源）→ `[图片内容] {desc}` 作为消息内容
+  # 参与回复（Telegram A 线同款语义）。同图 sha256 去重防复读；识别不可用/失败
+  # 一律回落旧行为（不回复），绝不阻塞。几何调优键（机型适配）见 service._defaults：
+  # min_width_ratio / min_height_ratio / left_edge_max_ratio / cx_max_ratio。
+  media_enrich:
+    enabled: false
   adb_serial: ""   # 空则自动选择已安装 LINE 的设备
   prefer_line_device: true
   line_package: jp.naver.line.android
@@ -1371,6 +1396,14 @@ companion:
     interval_sec: 300        # 快照间隔（秒）
     window_hours: 24         # 每次快照统计的回看窗口（小时）
     retention_days: 30       # 时序保留天数（超期自动清理）
+  # 群脉 CrowdX 真发（group_show.live）—— 双锁之一（另一把是调用方显式 confirm_live=True）。
+  # 缺省关：任何一把没开齐，live.perform 一条都不发。开闸前先用
+  # ``python -m scripts.group_show_live --check`` 跑预检，再用导播台/API 真发。
+  # 单号场景请用 ``config/playbooks/solo_*.yaml``（四角剧本 + 一个号会被拒演，防自问自答）。
+  group_show:
+    live:
+      enabled: false         # 配置侧那把锁（缺省关；出事时改这里即可全局急停）
+      # quiet_hours: [23, 8] # 禁演时段（本地钟点，半开半闭）；配 [0, 0] ＝ 不禁
   # 主动话题调度（沉默驱动）：用户久未说话时，从其高置信记忆挑话题主动开场
   # （"上次你说在备考，后来怎么样？"）。仅 Telegram 协议号；只在「我方说完后冷场」时主动
   # （对方未回属 SLA，不在此）。与 proactive_care(承诺驱动) 互补，且对已排关怀的会话自动让路。
@@ -1485,7 +1518,10 @@ companion:
     appearance: ""             # 默认外貌描述（persona 无 appearance 字段时的兜底出图描述）
     style: ""                  # 出图风格附加（如 "soft daylight, cozy room, candid"）
     scene_hint: ""             # 场景提示（如 "sitting by the window with a coffee"）
-    caption: ""                # 出图配文（空=用内置人设化默认文案）
+    caption: ""                # 出图配文（空=用内置人设化默认文案；口径=「刚拍的」，只配刚生成的图）
+    caption_album: ""          # 相册旧照配文（空=内置双语「翻到一张之前拍的」变体池）——注册相册/相册
+    #   兜底发的是存货，绝不能用上面 caption 的「刚拍」口径（实录事故：旧照配「刚拍的」被客户
+    #   按衣着/时间对不上当场戳穿）。LLM 配文可用时优先 LLM（自带 freshness=old 诚实指令）。
     # 【Stage B 对话上下文「按需生图」】对方要"对话里提到的东西"的照片（如"你煮的面拍张照给我看"）：
     #   从聊天上下文抽主体 → 组生图 prompt(关键词) → text2img 出图发出（物体图，不带人设的脸）。
     #   仅在接了真出图后端(provider.backend=openai/command)时生效；album 无法凭空生成任意图 → 交普通回复。
@@ -1506,6 +1542,20 @@ companion:
     meal_state_in_chat: true             # 饮食状态事实源（2026-07-15「还没吃→刚吃了面包」矛盾修复）：
     #   按 persona+日期确定性生成今天三餐时刻 → 「刚吃过/还没吃」注入 prompt 作内部事实，
     #   同一天内任意两次生成结论一致（防重复系统换角度重写时事实漂移）。随 scene_in_chat 总闸。
+    # 【图文一致性护栏】（P0，2026-07-27，默认开）修「发的图和说的话/时间/衣服对不上」四类实录事故：
+    #   ① 场景硬匹配：客户/承诺显式点名场景（"发张海边的"）→ 相册（注册相册+文件系统相册两路）只出
+    #      场景类匹配的图，挑不到=如实失败交诚实文字，绝不拿车内自拍顶包；物体图生成失败也绝不拿
+    #      人像相册顶包（allow_album_fallback=False 硬线）。
+    #   ② 时段软过滤：白天照深夜不发（依 tags `tod:day|night` / 相册目录 _meta.json sidecar；
+    #      无标注不判；全冲突放行但配文按「之前拍的」口径兜底诚实）。
+    #   ③ 重发冷却：同图同会话冷却窗内硬排除（任何回落层都不放宽；几分钟内重发同图=机器人实锤）。
+    #   ④ 服装连续窗：窗口内接连要图优先同系列（同套衣服连拍），防「30 秒换一身衣服」瞬移换装。
+    #   元数据备货：scripts/persona_media_backfill_meta.py（文件名约定/manifest 归并 + VLM 补 tod，
+    #   写 _meta.json sidecar + DB tod: 标签）。观测：autosend-status 的 complaints（收图后质疑计数）。
+    consistency:
+      enabled: true            # false=整组关（回旧行为：无场景硬匹配/时段过滤/冷却/连续窗）
+      resend_cooldown_hours: 24  # 同图同会话重发冷却（小时；0=关）
+      continuity_minutes: 90     # 服装连续窗（分钟；0=关）——窗内优先同系列未发图
     # 【出图多样性 / 真人感】治「每张头位置、表情都一样」（PuLID 从正面定妆照锁脸 +
     #   固定种子 + prompt 恒『看镜头』三重叠加把构图钉死，像证件照连拍）。开启后每次出图
     #   随机取一组「取景/头部姿态/视线/表情/写实质感」修饰词注入 prompt，并给种子掺 salt →
@@ -1625,6 +1675,25 @@ companion:
     kline_years: 10            # 曲线覆盖年数（从「今年-2」起画）
     kline_out_dir: tmp_bazi    # 出图临时目录（/tmp_* 已在 .gitignore）
     # kline_caption: ""        # 自定义配文（空=内置默认「给你画好啦～仅供参考」）
+  # 营销目标（marketing goals）：给会话设定「工作目标」（付费转化/关系推进/沉默唤回…），
+  #   AI 按模板弧线（4 里程碑）+ 每日意图自然推进——编排层复用既有引擎（contacts 漏斗、
+  #   intimacy、monetization 权益、回复生成注入、proactive 主动触达），不新建发送链路。
+  #   进度结算 settle-on-read（读到目标时按权益/漏斗/亲密度事实源现算，无轮询任务）。
+  goals:
+    enabled: false             # 总开关（默认关；开启走 config.local.yaml overlay）
+    # db_path: config/marketing_goals.db   # 目标库（缺省=config 目录下 marketing_goals.db）
+    max_active_per_conversation: 1   # 每会话同时活跃目标数（>1 时多目标并存，注入仍只取最高优先级）
+    inject:
+      enabled: true            # 把「目标块」注入回复/草稿生成 prompt（suggest/auto 档生效）
+      max_chars: 360           # 目标块限长（方向盘不是剧本，绝不淹没人设与记忆）
+    planner:
+      backoff_after_unanswered: 2   # 对方未回期间已带目标发过 N 拍 → 退避纯陪伴日（力度 none）
+      halt_after_unanswered: 4      # 达 N 拍仍未回 → 完全 hold（目标块不再注入，彻底让路）
+    # P1 主动触达桥（默认关）：autonomy=auto 的目标搭 proactive_topic 主动开场的顺风车，
+    #   把「今日拍」意图并进开场 directive（仅 auto_ai 会话；发送成功回执记拍）。
+    #   桥不自己发消息——主动触达的全部护栏（pacing/冷却/安静时段/情绪）原样生效。
+    bridge:
+      enabled: false
   story:
     enabled: false
     advance_turns: 3           # 每 N 个用户轮次推进一个 beat（剧终自动收场）
@@ -1994,6 +2063,10 @@ workspace:
 
 inbox:
   enabled: true                      # 安全默认开；如需保守可设 false（全程走实时聚合）
+  # 会话级人设覆写：坐席在统一收件箱给单条会话显式换绑人设（覆写 > 账号人设 >
+  # legacy chat 绑定）。默认关＝旧行为；也是 kill-switch（关掉即全部失效但不删除）。
+  # persona_conv_override:
+  #   enabled: true
   # db_path: config/inbox.db         # 可选：自定义 db 位置（相对路径基于 config_path）
   # 后台 ingest 轮询（RPA/兜底路径的坐席可见延迟由它决定；协议号 TG/Baileys 走事件直写不受影响）：
   #   realtime_poll_sec      空闲档间隔，默认 10（<=0 = 禁用后台轮询）
@@ -2043,6 +2116,11 @@ inbox:
                               # review:   low→L1, medium→L3, high→L4（无 L2 自动发）
                               # auto_ai:  low→L2, medium→L3, high→L4（L2 由 AutosendWorker 自动发）
     skip_platforms: []        # 跳过指定平台不生成草稿，如: [line, messenger]
+    media_backscan: 5         # ⭐ 图文连发补识（2026-07-26）：拟稿时向前回扫最近 N 条消息，
+                              #   找最近一条「仍是占位」的入站媒体行（图/语音/视频）补识别——
+                              #   覆盖「先发图、紧跟一句话」节奏（触发拟稿的是那句话，媒体行
+                              #   从未被识别）。结果回写消息行 + 替换 history 占位 + media_desc
+                              #   送产线；每稿至多补一条控制成本；≤1 = 关闭回扫（旧行为）。
     skip_group_chats: false   # ⭐ true = 群/频道会话不生成人审草稿（源头止血）。群消息非 1:1 客服，
                               #   生成 L3/L4 待审草稿会长期无人处置、反复触发 SLA 铃铛。识别双判据：
                               #   chat_type∈{group/supergroup/channel…} 或 Telegram peer 为负 id。
@@ -2271,6 +2349,18 @@ ecommerce_tools:
 contacts:
   enabled: false                     # 总开关
   # db_path: config/contacts.db     # 可选：自定义 db 位置（相对路径基于 config_path）
+  # ── 跨平台身份影子匹配（P2.3，2026-07-26；默认关）────────────────────
+  # 自动发现「疑似同一人」的跨平台会话配对（high=电话规范化相等 / medium=username
+  # 相等 / low=display_name 相等，均带防误报护栏），只读报告绝不自动写关联；
+  # 人工核实后仍走既有 POST /api/identity/link。CLI：
+  #   python -m scripts.identity_shadow_scan --force [--json]
+  # P3.2 周期化：enabled=true 后由 HealthWatchdog 每 scan_interval_hours 只读
+  # 扫一轮（最多 max_rows 条最近会话），结果落 config/identity_shadow_state.json；
+  # 看板：ops-overview「🪪 跨平台身份影子」卡 + /api/workspace/metrics.identity_shadow。
+  identity_shadow:
+    enabled: false
+    scan_interval_hours: 6             # 扫描间隔（小时，夹 0.25~168）
+    max_rows: 2000                     # 每轮最多扫描的会话数（last_ts 降序取最近）
   daily_cap: 15                      # 每个 Messenger 账号每天最多发多少次引流
   global_cap: 0                      # 全局日上限（0=不启用）
   token_ttl_hours: 72                # 引流暗号有效期
@@ -2337,8 +2427,20 @@ platform_login:
   default_persona_id: lin_xiaoyu
   telegram:
     # 关联设备二维码登录 provider（统一收件箱「账号管理 → ＋ 扫码新增」）。
-    # 需 telegram.api_id/api_hash 已配 + pyrogram 已装。
+    # 需 telegram.api_id/api_hash 已配（或开下方 credpool）+ pyrogram 已装。
     protocol_enabled: false
+    # ── 中央凭据池（集团底座 platform/credpool → 智控主后台 api-pool）──────────
+    # 开 → 扫码时按账号向中央池索取 api_id/api_hash，**终端用户无需自己去
+    # my.telegram.org 申请**（那套流程一号只能一组、无提示 ERROR、国内极易失败，
+    # 是接入转化率的最大黑洞）。每个账号首次扫码生成一个粘定键写进注册表 meta，
+    # 之后 runner 每次拉起用同一 key 取回**同一组**凭据（session 与 api_id 绑定，
+    # 换凭据会把会话跑坏）。池不可达/未配 token → 自动回落下方 telegram.api_id。
+    credpool:
+      enabled: false
+      base_url: ""        # 空=读环境变量 CREDPOOL_BASE_URL（缺省 http://127.0.0.1:8000）
+      # 🔒 建议**留空**、只走环境变量 CREDPOOL_SERVICE_TOKEN——服务 token 明文不该入库
+      service_token: ""
+      timeout_sec: 8
     # N4 统一运行时：开 → 协议号（扫码 session）跑 A 线 TelegramClient
     #   （记忆/人设/情绪/语音图片/四层触发/人工转接全在线 + N4b 收发镜像进收件箱，坐席可见）；
     # 关 → 用 B 线薄连接 worker（仅收消息→收件箱 + 简单 autoreply）。
@@ -2353,6 +2455,21 @@ platform_login:
     #   开前需确认 contacts.enabled=true 且接受 telegram 联系人被纳入 contacts 下游
     #   （reactivation / handoff 等）的纳管范围。受 contacts.rpa_hooks.telegram 总开关约束。
     contacts_recording: false
+    # 目录同步：好友名单 → 通讯录，云端会话列表 → 会话占位，让「加了好友但从没开口」
+    # 的人也能在工作台被看到、被主动发起对话（对齐 WhatsApp/LINE 早已有的同款生产者）。
+    # 全程只读 RPC（get_contacts / get_dialogs），只写 protocol_contacts 与会话占位，
+    # 绝不喂消息管道（不触发自动回复 / 不进记忆 / 不算新消息 / 不刷 SLA）。
+    # 主账号 A 线跑周期 loop，协议号 worker 登录后跑一次。
+    sync:
+      # 默认关（新子系统约定）：大号一次同步会把上千行灌进工作台，属运营决策，
+      # 由本机 overlay（config.local.yaml）按账号规模显式开启。
+      enabled: false
+      interval_seconds: 21600  # 增量周期（6h）；名单变化慢，频繁拉只是白吃风控
+      max_contacts: 3000       # 单轮好友上限（pyrogram 一次返回全量，超出客户端截断）
+      max_dialogs: 500         # 单轮会话上限（get_dialogs 分页拉取）
+      seed_chats_max: 200      # 好友数超过此值只同步名单、不建会话占位（防列表噪音）
+      pace_seconds: 0.35       # 会话每翻一页歇一下，温和拉取
+      first_delay_seconds: 45  # A 线首轮延迟（避开启动风暴，但不必等满一个周期）
   # 官方 API 出站 worker（mode=official）：让 companion/autoreply 主管道经官方通道发
   # （LINE Messaging / Messenger Send / WhatsApp Cloud），与 RPA/Baileys 按账号并存。
   # 凭证优先读账号 meta，回退到对应通道块（line / facebook_messenger / whatsapp_cloud）。

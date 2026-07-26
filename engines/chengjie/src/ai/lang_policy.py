@@ -74,16 +74,33 @@ _EMOJI_RE = re.compile(
 )
 _PUNCT_ONLY_RE = re.compile(r"^[\s!-/:-@\[-`{-~。，、！？；：「」『』（）…—·～\u3000]*$")
 
+# —— 系统注入文本（2026-07-26 Phase1.3 配套加固）——
+# 识图/识视频描述（"[图片内容] 一只橘猫…"）是**本系统生成的中文模板文本**，不是客户
+# 说的话；英文客户发一张图 → 中文描述并入正文 → 若被当语言证据会把回复整段带偏成中文
+# （视频描述并正文的既有链路早已暴露此风险，识图对齐后暴露面扩大 → 在证据剥离的单一
+# 入口统一修）。视觉/文件类整行剥（描述全是系统文案）；语音类只剥「[语音]」标记本身、
+# 保留转写正文（转写是客户原话＝真语言证据）；「[N天前]」时间断层标签同理只剥标记。
+_MEDIA_DESC_LINE_RE = re.compile(
+    r"(?:^|\n)\s*\[(?:图片|贴纸|动态贴纸|LINE贴图|表情|视频|GIF|动图|动态表情"
+    r"|媒体|文件|上下文提示)[^\]\n]*\][^\n]*"
+)
+_VOICE_TAG_RE = re.compile(r"\[(?:语音|音频)[^\]\n]*\]")
+_STALE_LABEL_RE = re.compile(r"\[\s*(?:\d+\s*天前|很久以前)\s*\]")
+
 
 def strip_neutral_tokens(text: str) -> str:
     """剥离语言中性内容，返回可作为语言证据的「实质文本」。
 
-    剥离：URL / @mention / email / 数字串 / emoji / 品牌与填充词（词边界，大小写无关）。
+    剥离：URL / @mention / email / 数字串 / emoji / 品牌与填充词（词边界，大小写无关）
+    / 系统注入的媒体描述与占位标记（识图/识视频中文模板不构成客户语言证据）。
     返回残余文本（已压缩空白）。残余为空 = 本条消息不构成任何语言证据。
     """
     t = str(text or "")
     if not t.strip():
         return ""
+    t = _MEDIA_DESC_LINE_RE.sub(" ", t)
+    t = _VOICE_TAG_RE.sub(" ", t)
+    t = _STALE_LABEL_RE.sub(" ", t)
     t = _URL_RE.sub(" ", t)
     t = _MENTION_RE.sub(" ", t)
     t = _EMAIL_RE.sub(" ", t)

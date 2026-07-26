@@ -187,7 +187,8 @@ class TestPromiseGuardDeliver:
         calls = []
 
         async def _fake_image(assistant, platform, account_id, chat_key, text,
-                              assume_intent="", directive_override=None):
+                              assume_intent="", assume_scene="",
+                              directive_override=None):
             calls.append(assume_intent)
             return bool(assume_intent)  # 常规判定 False；兑现路径 True
 
@@ -249,7 +250,8 @@ class TestPromiseGuardDeliver:
         calls = []
 
         async def _fake_image(assistant, platform, account_id, chat_key, text,
-                              assume_intent="", directive_override=None):
+                              assume_intent="", assume_scene="",
+                              directive_override=None):
             calls.append(assume_intent)
             return False
         monkeypatch.setattr(autosend_helpers, "autosend_image", _fake_image)

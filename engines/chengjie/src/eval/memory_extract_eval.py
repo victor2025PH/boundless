@@ -143,15 +143,22 @@ def build_llm_extract_fn(
             return await client.extract_memory_bullets(
                 "我叫小明，住在大阪", "好的小明，我记住啦")
 
+        # 单一常驻 loop 贯穿 probe + 全部样本：AsyncOpenAI/httpx 连接绑定首个事件
+        # 循环，逐样本各开新 asyncio.run 会撞已关闭的旧 loop → 异常被吞成 [] →
+        # 召回假性掉到 50%（2026-07-26 实锤，逐条单跑全过而 harness 批跑随机漏）。
+        loop = asyncio.new_event_loop()
         try:
-            _ = asyncio.run(_probe())
+            _ = loop.run_until_complete(_probe())
         except Exception:
+            loop.close()
             return None
 
         def _extract(text: str, reply: str = "") -> List[str]:
             r = reply or "嗯嗯，我记下了"
             try:
-                return list(asyncio.run(client.extract_memory_bullets(text, r)) or [])
+                return list(
+                    loop.run_until_complete(
+                        client.extract_memory_bullets(text, r)) or [])
             except Exception:
                 return []
 

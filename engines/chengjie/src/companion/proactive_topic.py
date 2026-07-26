@@ -162,8 +162,10 @@ async def maybe_start_companion_proactive(assistant) -> None:
         _collect_cd_by_mode = {
             f"ask_{s['slot']}": s["cd"] for s in _collect_specs}
 
-        # Telegram 官方服务号（通知/验证码）——绝不主动"想你了"
-        _SERVICE_CHAT_KEYS = {"777000", "42777", "1087968824"}
+        # Telegram 系统 peer（官方通知号 / 匿名代理 / 自己的收藏夹）——绝不主动"想你了"。
+        # 判据走 store 的单一事实源：此前这里是一份独立硬编码，多带 42777/1087968824
+        # 但**漏了 Saved Messages**，等于「给账号自己的云笔记发想你了」只差一条占位会话。
+        from src.inbox.store import is_system_peer as _is_system_peer
 
         # worker session 不认识的 peer（发送报 PEER_ID_INVALID）——进程内黑名单。
         # 不过滤则每 tick 重试同一批坏 peer（失败不记冷却→按沉默降序永远排前），
@@ -221,7 +223,8 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 if str(r.get("conversation_id") or "") in _bad_peers:
                     continue  # session 解析不了的 peer（PEER_ID_INVALID 拉黑）
                 if _pf == "telegram":
-                    if _ck in _SERVICE_CHAT_KEYS:
+                    if _is_system_peer(
+                            _pf, str(r.get("account_id") or ""), _ck):
                         continue
                     try:
                         if int(_ck) < 0:  # 负 ID=群/频道（chat_type 缺失时兜底）
@@ -234,10 +237,17 @@ async def maybe_start_companion_proactive(assistant) -> None:
             rows = _filtered
             cids = [str(r.get("conversation_id") or "")
                     for r in rows if r.get("conversation_id")]
+            # dirs 兼作「这条会话到底有没有消息」的判据（见下方占位会话护栏），故取不到时
+            # 要能区分「真的没消息」与「查失败」——查失败一律不主动发（fail-closed）：
+            # tick 每 15 分钟一轮，漏一轮零代价；而无法核实就外呼的代价是给陌生人群发。
+            dirs_ok = True
             try:
                 dirs = assistant.inbox_store.last_message_dirs(cids)
             except Exception:
                 dirs = {}
+                dirs_ok = False
+                assistant.logger.warning(
+                    "[proactive] 末条方向查询失败 → 本轮不主动发送（无法核实是否真交谈过）")
             try:
                 tags_map = assistant.inbox_store.list_conv_tags_map(cids)
             except Exception:
@@ -263,6 +273,17 @@ async def maybe_start_companion_proactive(assistant) -> None:
             _sm_for_key = getattr(assistant, "skill_manager", None)
             for r in rows:
                 cid = str(r.get("conversation_id") or "")
+                # ⚠ 会话占位护栏（2026-07-26，目录同步上线后新增的风险面）：
+                # 目录同步把「云端会话列表」建成会话占位（upsert_protocol_chats），让工作台
+                # 贴近手机所见。这些占位带着**手机上的真实 last_ts**（可能沉默数月）却
+                # 从未经本系统交谈过——库里一条消息都没有，故末条方向为空。
+                # 不拦的话首轮同步后主动触达会把这批陌生会话按沉默降序当成「好久不见的老
+                # 朋友」挨个问候：既是老板没授权的外呼，也重演 2026-07-13 那次
+                # PEER_ID_INVALID → ban_signal → 冻结主账号 1h 的事故路径。
+                # 判据取「末条方向为空」而非另查消息计数：真交谈过的会话必有 in/out 之一，
+                # 且 dirs 本轮已查好（零额外查询）。
+                if not dirs_ok or not (dirs.get(cid) or {}).get("direction"):
+                    continue
                 chat_key = str(r.get("chat_key") or "")
                 platform = str(r.get("platform") or "telegram")
                 account_id = str(r.get("account_id") or "default")
@@ -441,6 +462,18 @@ async def maybe_start_companion_proactive(assistant) -> None:
         )
         _real_max_per_tick = int(cfg.get("max_per_tick", 3))
 
+        def _goal_priority(plan):
+            # 营销目标排序增益（companion.goals.bridge，默认关）：auto 档活跃目标
+            # 的会话优先占每 tick 名额——只改排序不改准入；桥关时恒 0（退化为纯
+            # 沉默时长降序）。轻量 store 读，绝不抛。
+            try:
+                from src.companion.goals.bridge import plan_priority
+                return plan_priority(
+                    assistant.config.config or {},
+                    getattr(assistant.config, "config_path", None), plan)
+            except Exception:
+                return 0.0
+
         def _proactive_preview(limit=50):
             """可观测预览（dry-run）：本轮"会主动联系谁、引用哪条记忆、带哪些背景"。
             不发送、不写冷却；即便功能未启用也可调用（开闸前先看清候选）。"""
@@ -454,11 +487,12 @@ async def maybe_start_companion_proactive(assistant) -> None:
             except Exception:
                 cooldown_map = {}
             # 预览展示全部候选（最多 lim 条），不受 max_per_tick 截断；
-            # 另标出本 tick 实际会发的前 N 条（按沉默时长降序）。
+            # 另标出本 tick 实际会发的前 N 条（目标优先级 + 沉默时长同真发口径，
+            # 预览才不骗人）。
             plans = plan_proactive_sends(
                 convs, cooldown_map=cooldown_map, opener_fn=_opener,
                 has_pending_care=_has_pending_care, max_per_tick=lim, **_pp_params,
-                pacing_cfg=_pacing_cfg)
+                pacing_cfg=_pacing_cfg, priority_fn=_goal_priority)
             for i, p in enumerate(plans):
                 p["would_send_this_tick"] = i < _real_max_per_tick
             return {
@@ -708,12 +742,14 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 orch = get_orchestrator(_cfg_root)
                 if not orch.owns(platform, account_id):
                     return False
-                from src.ai.persona_voice import resolve_account_persona_id
+                from src.ai.persona_voice import resolve_effective_persona_id
                 from src.inbox.voice_autosend import (
                     persona_allowed_for_voice,
                     stage_voice_file,
                 )
-                pid = resolve_account_persona_id(_cfg_root, platform, account_id)
+                # 含会话覆写：主动语音开场与自动回复同声（换绑后不串音色）
+                pid = resolve_effective_persona_id(
+                    _cfg_root, platform, account_id, str(chat_key or ""))
                 _l2_voice = (((_cfg_root.get("inbox") or {})
                              .get("l2_autosend") or {}).get("voice") or {})
                 if not persona_allowed_for_voice(_l2_voice, pid):
@@ -774,9 +810,11 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 if not get_orchestrator(_cfg_root).owns_media(
                         plan["platform"], plan["account_id"]):
                     return None
-                from src.ai.persona_voice import resolve_account_persona_id
-                pid = resolve_account_persona_id(
-                    _cfg_root, plan["platform"], plan["account_id"])
+                from src.ai.persona_voice import resolve_effective_persona_id
+                # 含会话覆写：主动生活照的人设/场景池与该会话生效人设一致
+                pid = resolve_effective_persona_id(
+                    _cfg_root, plan["platform"], plan["account_id"],
+                    str(plan.get("chat_key") or ""))
                 if not pid:
                     return None
                 from src.ai.companion_selfie import pick_scene_hint, scene_pool
@@ -830,7 +868,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     {"kind": "selfie", "scene": scene})
                 if not staged:
                     return False
-                local, url, _kind = staged
+                local, url, _kind = staged[:3]
                 from src.integrations.account_orchestrator import get_orchestrator
                 orch = get_orchestrator(_cfg_root)
                 res = await _run_on_web_loop(lambda: orch.send_media(
@@ -872,6 +910,18 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 assistant.logger.debug("[proactive] outreach 落库失败", exc_info=True)
 
         async def _send(plan):
+            # -1) 营销目标桥（companion.goals.bridge，默认关）：auto 档目标 + auto_ai
+            # 会话 → 把「今日拍」意图并进开场 directive（顺风车，不新增发送）。
+            # best-effort：桥内部异常绝不影响开场本身。
+            try:
+                from src.companion.goals.bridge import augment_plan_with_goal
+                from src.integrations.protocol_bridge import get_inbox_store
+                augment_plan_with_goal(
+                    assistant.config.config or {},
+                    getattr(assistant.config, "config_path", None),
+                    plan, inbox_store=get_inbox_store())
+            except Exception:
+                assistant.logger.debug("[proactive] 目标桥跳过", exc_info=True)
             # 0) 生活照预决策（Phase17/18）：先定"要不要配图 + 什么场景"，场景注入文案
             _photo_plan = await _plan_photo(plan)
             # 1) 生成开场文案（directive + 背景记忆 + 最近上下文 ± 场景叙事）
@@ -947,6 +997,13 @@ async def maybe_start_companion_proactive(assistant) -> None:
             return False
 
         def _on_teaser_sent(plan) -> None:
+            # 营销目标桥回执：带目标意图的开场真发成功 → 今日拍记 sent（防同日重复带）。
+            try:
+                if (plan or {}).get("_goal_action_id"):
+                    from src.companion.goals.bridge import on_proactive_sent
+                    on_proactive_sent(plan)
+            except Exception:
+                assistant.logger.debug("[proactive] 目标拍回执失败", exc_info=True)
             _mode = str((plan or {}).get("mode") or "")
             # Stage T：画像采集发出 → 记对应槽位冷却（cooldown_days 内不再问同一人，避免反复打听）。
             _collect_cd = _collect_cd_by_mode.get(_mode)
@@ -1124,6 +1181,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
             ritual_fn=_ritual_fn,
             ritual_cooldown=_ritual_cd,
             pacing_cfg=_pacing_cfg,
+            priority_fn=_goal_priority,
         )
         await loop.start()
         assistant._companion_proactive_loop = loop

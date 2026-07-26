@@ -293,6 +293,17 @@ class SkillManager(LoggerMixin):
                 from src.utils.episodic_memory_store import EpisodicMemoryStore
                 self._episodic_store = EpisodicMemoryStore(_epath)
                 self.logger.info("情景记忆已启用: %s", _epath)
+                # P8：启动时 observe-only 扫一轮，ops 去重卡立刻有读数
+                try:
+                    _obs = self._episodic_store.observe_dedup_all_users()
+                    if _obs.get("users"):
+                        self.logger.info(
+                            "[episodic] boot dedup observe users=%s gray=%s held=%s",
+                            _obs.get("users"), _obs.get("gray_pairs"),
+                            _obs.get("held_merges"),
+                        )
+                except Exception:
+                    self.logger.debug("boot dedup observe skipped", exc_info=True)
             except Exception as _mem_err:
                 self.logger.warning("情景记忆初始化失败（将禁用）: %s", _mem_err)
                 self._episodic_store = None
@@ -826,6 +837,10 @@ class SkillManager(LoggerMixin):
             # 不让它渗漏进本轮 prompt）；本轮如需会由 Stage B/draft 路径重新设置。
             user_context.pop("_media_coherence_hint", None)
 
+            # 收图后质疑信号（P0 一致性观测）：最近发过媒体且本条像在质疑图
+            # （重复/不像/假图）→ 计数 + 设纠偏 hint（别争辩/别再重发同图）。
+            self._maybe_flag_media_complaint(text, user_context)
+
             # Stage 0：人设注册相册（DB 预制图/视频，按触发词命中即发）。先于生成，秒发零成本。
             # 返回 ""=媒体已发出不再补文字；None=未命中/未开/发送不可用（交 Stage A/B）。
             try:
@@ -1099,6 +1114,18 @@ class SkillManager(LoggerMixin):
                 )
             except Exception:
                 self.logger.debug("bazi inject skipped", exc_info=True)
+
+            # 营销目标（companion.goals，默认关）：会话有活跃目标 → 注入「今日拍」
+            # 方向块（settle-on-read；情绪低落/沉默熔断时 service 侧自动 hold）。
+            # account_id 显式透传：多账号同 peer（同 chat_key 不同协议号）各有目标时
+            # 精确命中本账号的那条，防串号（store 侧无 account 时才回落宽匹配）。
+            self._inject_goal_context(
+                user_context,
+                platform=user_context.get("platform", ""),
+                chat_key=str(_chat_id),
+                account_id=_acct_id,
+                chain="reply",
+            )
 
             from src.hooks.registry import HookRegistry as _HR
             _hooks = _HR.get_instance()
@@ -2433,6 +2460,10 @@ class SkillManager(LoggerMixin):
                         "就当这一轮发不了照片，用人设口吻自然回应"
                         "（可以撒娇、岔开话题或改天再说），也不要否认你能拍照。")
                     _metric("media_hint")
+                elif not user_context.get("_media_coherence_hint"):
+                    # 收图后质疑信号（P0，与 A 线同口径）：不是在要图 → 查是否在
+                    # 质疑刚发的图（重复/不像/假图），命中则计数 + 设纠偏 hint。
+                    self._maybe_flag_media_complaint(text, user_context)
             except Exception:
                 self.logger.debug("%s发图协同 hint 跳过", log_prefix, exc_info=True)
 
@@ -2448,6 +2479,20 @@ class SkillManager(LoggerMixin):
                     _metric("bazi_active")
             except Exception:
                 self.logger.debug("%s命理注入跳过", log_prefix, exc_info=True)
+
+            # 3d. 营销目标（companion.goals）：会话有活跃目标 → 注入「今日拍」方向块。
+            # 必须在 3c 之后——service 会读 _bazi_block 判定同轮已有变现引导时把
+            # direct 降 soft（防同一条回复双线推销）。
+            self._inject_goal_context(
+                user_context,
+                platform=platform,
+                chat_key=chat_key,
+                account_id=account_id,
+                conversation_id=conversation_id,
+                chain="draft",
+            )
+            if (user_context.get("_goal_block") or "").strip():
+                _metric("goal_active")
 
             # 4. 意图识别（草稿模式不做意图继承/链跟踪，保持无状态纯净）
             intent = self._recognize_intent(text)
@@ -3392,15 +3437,31 @@ class SkillManager(LoggerMixin):
         account_id: str = "",
         user_context: Optional[Dict[str, Any]] = None,
     ) -> str:
-        from src.utils.episodic_memory_store import compute_memory_storage_key
+        from src.utils.episodic_memory_store import (
+            compute_memory_storage_key, strip_composite_user_id,
+        )
         from src.utils.context_store import make_context_key
 
         if not account_id and user_context:
             account_id = str(user_context.get("account_id") or "")
         scope = (self._memory_cfg or {}).get("scope", "user")
         base_key = compute_memory_storage_key(str(scope), user_id_str, chat_id)
-        # 双号隔离：同 peer 不同协议号记忆分桶（与 ContextStore 同口径）
-        base_key = make_context_key(base_key, account_id)
+        # 防复合 id 回喂：conversation_id / 完整 canonical 被当 chat_key 传入时
+        # 剥回裸形态——否则 resolve 注册 platform:platform:… 翻倍键、记忆落错桶
+        # （2026-07-27 生产 user_identity_map 实锤 8 行）。留 info 日志溯源真调用方。
+        _stripped = strip_composite_user_id(base_key, platform)
+        if _stripped != base_key:
+            self.logger.info(
+                "[episodic] composite user_id normalized %r -> %r (acct=%r)",
+                base_key, _stripped, account_id,
+            )
+            base_key = _stripped
+        # 双号隔离：同 peer 不同协议号记忆分桶（与 ContextStore 同口径）；
+        # 复合 id 剥出的 ``acct:peer`` 已带同账号分桶 → 不二次前缀。
+        _acct = str(account_id or "").strip()
+        if not (_acct and _acct != "default"
+                and base_key.startswith(_acct + ":")):
+            base_key = make_context_key(base_key, account_id)
         # S5: resolve to cross-platform canonical_id when platform is known
         if self._cpi and platform:
             return self._cpi.resolve(platform, base_key)
@@ -3804,12 +3865,14 @@ class SkillManager(LoggerMixin):
         from src.utils.memory_heuristic import extract_heuristic_facts
 
         try:
+            n_heuristic = 0
             for fact in extract_heuristic_facts(mu):
                 # R12：启发式事实从用户原话正则提取 → user_stated（高置信）
                 rid = self._episodic_store.add_fact(
                     key, fact, "heuristic", source="user_stated"
                 )
                 await self._episodic_patch_embedding(rid, fact)
+                n_heuristic += 1
 
             facts_llm: List[str] = []
             cooldown = float(ex.get("cooldown_seconds", 20))
@@ -3861,11 +3924,15 @@ class SkillManager(LoggerMixin):
                     if (
                         res.get("promoted") or res.get("merged")
                         or res.get("superseded") or res.get("stable_superseded")
+                        or res.get("gray_pairs") or res.get("held_merges")
                     ):
                         self.logger.info(
                             "[episodic] consolidate key=%s promoted=%s merged=%s "
-                            "superseded=%s stable_superseded=%s stable=%s",
+                            "gray=%s held=%s observe_only=%s superseded=%s "
+                            "stable_superseded=%s stable=%s",
                             key, res.get("promoted"), res.get("merged"),
+                            res.get("gray_pairs"), res.get("held_merges"),
+                            res.get("observe_only"),
                             res.get("superseded"), res.get("stable_superseded"),
                             res.get("stable_total"),
                         )
@@ -3877,9 +3944,9 @@ class SkillManager(LoggerMixin):
                 self.logger.debug("episodic pruned key=%s removed=%s", key, pr)
             # P3-deep 诊断：写入数量统计
             self.logger.info(
-                "[episodic] extract done key=%s heuristic_count=? llm_count=%d "
+                "[episodic] extract done key=%s heuristic_count=%d llm_count=%d "
                 "intent=%s msg_len=%d",
-                key, len(facts_llm), intent, len(mu),
+                key, n_heuristic, len(facts_llm), intent, len(mu),
             )
         except Exception as _e:
             self.logger.warning("[episodic] extract failed key=%s: %s", key, _e)
@@ -4431,6 +4498,34 @@ class SkillManager(LoggerMixin):
         return None
 
     # ── 命理技能（FateX 幻缘产品；配置 fatex.* 新命名空间 + companion.bazi 兼容）──
+
+    def _inject_goal_context(
+        self, user_context: Dict[str, Any], *,
+        platform: str = "", chat_key: str = "", account_id: str = "",
+        conversation_id: str = "", chain: str = "reply",
+    ) -> None:
+        """营销目标（companion.goals）→ 注入 ``_goal_block``。
+
+        单一入口 ``goals.service.build_block_for_chat``（settle-on-read + 当日拍）
+        ——右栏卡/看板/本注入读同一份结算口径。未启用/无目标/hold/observe 档 →
+        清残留不注入。任何异常零阻断主链。
+        """
+        user_context.pop("_goal_block", None)
+        try:
+            from src.companion.goals.service import build_block_for_chat
+            block = build_block_for_chat(
+                self.config,
+                platform=str(platform or "") or "telegram",
+                chat_key=str(chat_key or ""),
+                account_id=str(account_id or ""),
+                conversation_id=str(conversation_id or ""),
+                user_context=user_context,
+                chain=chain,
+            )
+            if block:
+                user_context["_goal_block"] = block
+        except Exception:
+            self.logger.debug("goal inject skipped", exc_info=True)
 
     def _bazi_cfg(self) -> Dict[str, Any]:
         """FateX 生效配置（单一咽喉：本方法即全部 skill 链的配置出口）。
@@ -5416,9 +5511,42 @@ class SkillManager(LoggerMixin):
         except Exception:
             bond = None
         avoid = str(user_context.get("_persona_media_last") or "")
+        # P0 一致性（与 B 线 pick_registered_media 同口径）：持久防复读账本 +
+        # 重发冷却 + 时段过滤 + 服装连续窗 + 客户点名场景硬匹配。
+        _conv_key = f"tg:{chat_id}"
+        try:
+            _rsd = float(scfg.get("resend_after_days", 90) or 0)
+        except (TypeError, ValueError):
+            _rsd = 90.0
+        try:
+            from src.inbox.image_autosend import resolve_consistency_cfg
+            _cc = resolve_consistency_cfg(scfg)
+        except Exception:
+            _cc = {"now_hour": None, "resend_cooldown_hours": 0,
+                   "continuity_minutes": 0}
+        _scene_cls = ""
+        try:
+            from src.ai.companion_selfie import (
+                extract_requested_scene, wants_same_scene,
+            )
+            from src.companion.persona_media import scene_class_of
+            _req = extract_requested_scene(text)
+            if not _req and wants_same_scene(text):
+                _req = self._last_sent_media_scene(user_context)
+            if _req:
+                _scene_cls = scene_class_of(_req) or _req.strip().lower()
+        except Exception:
+            _scene_cls = ""
         try:
             row = pick_media(store, pid, text, generic_ok=generic_ok,
-                             avoid_id=avoid, bond_level=bond)
+                             avoid_id=avoid, bond_level=bond,
+                             conv_key=_conv_key, resend_after_days=_rsd,
+                             now_hour=_cc.get("now_hour"),
+                             required_scene_class=_scene_cls,
+                             resend_cooldown_hours=_cc.get(
+                                 "resend_cooldown_hours", 0),
+                             continuity_minutes=_cc.get(
+                                 "continuity_minutes", 0))
         except Exception:
             row = None
         if not row:
@@ -5433,7 +5561,14 @@ class SkillManager(LoggerMixin):
             _lang = ""
         if not _lang:
             _lang = str(user_context.get("reply_lang") or "")
-        cap = caption_for(row, _lang, fallback="") or str(scfg.get("caption") or "")
+        # 配文：条目多语配文 → 运营 caption_album（旧照口径）→ 双语 old-photo
+        # 文案池。**不**回落全局 caption（那是「刚拍」口径——注册相册是备货旧照，
+        # 「刚拍的～」配同一张图反复出现是实录穿帮点）。
+        cap = caption_for(row, _lang, fallback="")
+        if not cap:
+            from src.ai.companion_selfie import selfie_stage_text
+            cap = str(scfg.get("caption_album") or "") or selfie_stage_text(
+                "caption_album", self._stage_lang(user_context, text))
         sent = await self._try_send_selfie_media(
             user_context, chat_id, str(row.get("file_path") or ""), cap,
             media_type=("video" if mt == "video" else "image"),
@@ -5444,14 +5579,70 @@ class SkillManager(LoggerMixin):
                 store.record_hit(str(row.get("id")))
             except Exception:
                 pass
+            # 持久防复读账本（与 B 线同一张表）：同图同会话冷却/系列连续性据此判。
+            try:
+                from src.companion.persona_media import series_of
+                store.record_send(_conv_key, str(row.get("id")),
+                                  persona_id=pid, series=series_of(row))
+            except Exception:
+                pass
             self.logger.info(
                 "[persona_media] 已发注册相册媒体 pid=%s type=%s id=%s",
                 pid, mt, row.get("id"))
-            # 媒体轮回写：下一轮 LLM 要知道"我刚发过图/视频+配文"
+            # 媒体轮回写：下一轮 LLM 要知道"我刚发过图/视频+配文"；场景记条目
+            # scene:* 标签（「跟上次一样的」复刻据此指对场景）。
             _tag = "[视频] " if mt == "video" else "[图片] "
             user_context["_stage_media_note"] = (_tag + (cap or "")).strip()
+            try:
+                from src.companion.persona_media import row_scene_class
+                user_context["_stage_media_scene"] = row_scene_class(row)
+            except Exception:
+                pass
             return ""  # 媒体已发出，短路（不再补文字）
         return None  # 发送不可用 → 交 Stage A/B/文字
+
+    _MEDIA_COMPLAINT_WINDOW_SEC = 24 * 3600.0
+
+    def _maybe_flag_media_complaint(
+        self, text: str, user_context: Dict[str, Any],
+    ) -> None:
+        """收图后「质疑」信号（P0 观测补盲 + 回应纠偏，A/B 线共用）。
+
+        最近窗口内真发过媒体（``_media_sent_log``）且本条入站像在质疑图
+        （重复/不像本人/假图）→ ①计数进 autosend 观测（图文一致性劣化的第一
+        现场，此前只能人工翻聊天记录）②设回应纠偏 hint（别争辩、别坚称真实、
+        别马上再发一张——那是二次穿帮的标准路径）。纯启发式，软失败零阻断。
+        """
+        try:
+            log = user_context.get("_media_sent_log")
+            if not isinstance(log, list) or not log:
+                return
+            last_ts = float((log[-1] or {}).get("ts") or 0)
+            if (time.time() - last_ts) > self._MEDIA_COMPLAINT_WINDOW_SEC:
+                return
+            from src.ai.companion_selfie import detect_media_complaint
+            kind = detect_media_complaint(text)
+            if not kind:
+                return
+            try:
+                from src.inbox.image_autosend import record_media_complaint
+                record_media_complaint(
+                    f"{kind}:{str(text or '')[:60]}", kind=kind,
+                    persona_id=self._selfie_album_key(user_context))
+            except Exception:
+                pass
+            desc = {"repeat": "觉得这张图之前发过/重复了",
+                    "not_you": "觉得图里的人不像你",
+                    "fake": "觉得图是假的/网图/生成的"}.get(kind, "对图有质疑")
+            user_context["_media_coherence_hint"] = (
+                f"注意：对方似乎在质疑你刚发的照片（{desc}）。不要争辩，"
+                "不要赌咒发誓说照片绝对真实，也不要立刻承诺再拍/再发一张；"
+                "用人设口吻自然轻松地回应（可以撒娇带过、坦然一点、把话题"
+                "引回对方身上），绝不要重复发同样的照片。")
+            self.logger.info("[media_complaint] kind=%s text=%r",
+                             kind, str(text or "")[:80])
+        except Exception:
+            self.logger.debug("media complaint check skipped", exc_info=True)
 
     def _set_cant_send_photo_hint(self, user_context: Dict[str, Any]) -> None:
         """「要图但这轮发不出」→ 注入发图协同提示后交回普通 LLM 回复。
@@ -5550,26 +5741,83 @@ class SkillManager(LoggerMixin):
         _scene = extract_requested_scene(text)
         if not _scene and wants_same_scene(text):
             _scene = self._last_sent_media_scene(user_context)
+        # P0 一致性：点名/复刻上次＝**说出口的场景**→硬要求（相册兜底必须同场景
+        # 类，挑不到如实回落文字，绝不发不相干场景的图）；轮换场景只是默认值不加硬。
+        _scene_strict = bool(str(_scene or "").strip())
         if not _scene:
             _scene = resolve_current_scene(_sp, scfg)
+        # album 后端按人设分册挑图 + 尽量避开上一张（连发不重复）；其它后端忽略这两参。
+        _album_key = self._selfie_album_key(user_context)
+        # 防复读账本（2026-07-22）：该会话收过的相册文件（含系列排除，见
+        # _pick_from_album 分层回落）。A 线会话键 tg:<chat_id>，与 autosend 的
+        # platform:acct:peer 空间天然不冲突。
+        _conv_key = f"tg:{chat_id}"
+        _sent_files: Any = None
+        _series_pref = ""
+        # 一致性护栏（P0，与 B 线 stage_image_file 同口径）：时段过滤 + 服装连续窗。
+        try:
+            from src.inbox.image_autosend import resolve_consistency_cfg
+            _cc = resolve_consistency_cfg(scfg)
+        except Exception:
+            _cc = {"now_hour": None, "continuity_minutes": 0}
+        try:
+            from src.companion.persona_media_store import get_persona_media_store
+            _pms = get_persona_media_store()
+            if _pms is not None:
+                try:
+                    _rsd = float(scfg.get("resend_after_days", 90) or 0)
+                except (TypeError, ValueError):
+                    _rsd = 90.0
+                _hist = _pms.sent_history(_conv_key, max_age_days=_rsd)
+                _sent_files = _hist.get("ids") or None
+                # 服装连续性：连续窗内最近一次发过的系列 → 相册优先同系列
+                # （半小时前海边连衣裙、现在居家睡衣的「瞬移换装」收口）。
+                _cont_min = float(_cc.get("continuity_minutes") or 0)
+                if _cont_min > 0:
+                    _now_ts = time.time()
+                    _best_ts = 0.0
+                    for _it in (_hist.get("items") or []):
+                        _its = float(_it.get("ts") or 0)
+                        if (_it.get("series") and _its > _best_ts
+                                and (_now_ts - _its) <= _cont_min * 60.0):
+                            _best_ts = _its
+                            _series_pref = str(_it.get("series"))
+        except Exception:
+            _sent_files = None
+        # 今日衣着状态（P1）：连续窗系列（账本→媒体日志兜底）跟随刚发照片，
+        # 否则「今天穿什么」确定性取值——生图 prompt 与聊天状态块同源。
+        _outfit = ""
+        try:
+            from src.companion.outfit_state import current_outfit
+            _rec_series = _series_pref or self._last_sent_media_series(
+                user_context, within_minutes=float(
+                    _cc.get("continuity_minutes") or 0))
+            _outfit = current_outfit(
+                _sp, scfg, persona_key=_album_key,
+                recent_series=_rec_series)["outfit"]
+        except Exception:
+            _outfit = ""
         # 多样性 salt（治千篇一律，默认关）：开时每次取随机 salt → 姿态/表情/构图各异。
         _vsalt = resolve_variety_salt(scfg)
         _lora = resolve_persona_lora(_sp, scfg)   # per-persona 角色 LoRA spec
+        # 时段光线兜底（P1-2，Phase19 语义）：场景没带时间词 → 按当前小时补光线
+        # 氛围（凌晨要图不出正午烈日照）。只作用于生图 prompt——相册硬匹配
+        # （album_scene）仍用原始场景短语，词表零耦合。
+        from src.ai.companion_selfie import ensure_time_of_day
         prompt = build_selfie_prompt(
             _sp,
-            scene_hint=_scene,
+            scene_hint=ensure_time_of_day(_scene),
             style=str(scfg.get("style") or ""),
             default_appearance=str(scfg.get("appearance") or ""),
             content_rating=str(scfg.get("content_rating") or ""),
             variety_salt=_vsalt,
             lora_trigger=_lora["trigger"],
+            outfit=_outfit,
         )
         caption = str(scfg.get("caption") or "") or selfie_stage_text(
             "caption", _lang, persona_name=persona_name)
         if will_generate and cap > 0:
             self._get_selfie_cap(cap).record_sent(1)
-        # album 后端按人设分册挑图 + 尽量避开上一张（连发不重复）；其它后端忽略这两参。
-        _album_key = self._selfie_album_key(user_context)
         _avoid = str(user_context.get("_selfie_last_img") or "")
         # openai/command 后端：拿相册里一张当"锁脸基础图"(img2img)，让生成的自拍保持同一张脸。
         _base = ""
@@ -5583,23 +5831,6 @@ class SkillManager(LoggerMixin):
         _seed = stable_selfie_seed(_album_key, salt=(_vsalt or 0)) if bool(
             scfg.get("stable_seed", True)) else -1
         self.logger.info("[selfie] prompt=%r seed=%s base=%s", prompt, _seed, bool(_base))
-        # 防复读账本（2026-07-22）：该会话收过的相册文件（含系列排除，见
-        # _pick_from_album 分层回落）。A 线会话键 tg:<chat_id>，与 autosend 的
-        # platform:acct:peer 空间天然不冲突。
-        _conv_key = f"tg:{chat_id}"
-        _sent_files: Any = None
-        try:
-            from src.companion.persona_media_store import get_persona_media_store
-            _pms = get_persona_media_store()
-            if _pms is not None:
-                try:
-                    _rsd = float(scfg.get("resend_after_days", 90) or 0)
-                except (TypeError, ValueError):
-                    _rsd = 90.0
-                _sent_files = _pms.sent_history(
-                    _conv_key, max_age_days=_rsd).get("ids") or None
-        except Exception:
-            _sent_files = None
         try:
             # 出图自检闸门（与 autosend 链同口径）：VLM 体检不合格换种子重试→回落文字。
             from src.ai.image_gate import generate_with_gate, resolve_gate_cfg
@@ -5610,19 +5841,32 @@ class SkillManager(LoggerMixin):
                 gate_cfg=resolve_gate_cfg(scfg), seed=_seed,
                 album_key=_album_key, avoid_path=_avoid, base_image=_base,
                 lora=_lora["file"], lora_weight=_lora["weight"],
-                exclude_paths=_sent_files)
+                exclude_paths=_sent_files,
+                album_scene=(_scene if _scene_strict else ""),
+                now_hour=_cc.get("now_hour"),
+                prefer_series=_series_pref)
         except Exception:
             res = None
             self.logger.debug("selfie generate error", exc_info=True)
         if res is not None and getattr(res, "ok", False):
             user_context["_selfie_last_img"] = getattr(res, "image_path", "") or ""
+            _extra = dict(getattr(res, "extra", {}) or {})
+            # provider=album＝相册来源（后端直选/生成失败兜底两路都是；
+            # fallback_from 记的是失败的主后端名，不能用它判相册）。
+            _from_album = (str(getattr(res, "provider", "")) == "album")
+            # P0 配文口径对齐：相册图（后端直选/生成失败兜底）＝「之前拍的」——
+            # 「刚拍的给你看～」配旧图是实录穿帮点（同图两次都"刚拍"）。运营
+            # 显式配 caption_album 优先，否则用双语 old-photo 文案池。
+            if _from_album:
+                caption = str(scfg.get("caption_album") or "") or selfie_stage_text(
+                    "caption_album", _lang, persona_name=persona_name)
             sent = await self._try_send_selfie_media(
                 user_context, chat_id, res.image_path, caption)
             if sent:
                 # 防复读账本：相册图记文件名（相册文件不在注册 DB，无 media_id）；
                 # 生成图不记（每次都是新图，账本排除无意义）。
                 try:
-                    if str(getattr(res, "provider", "")) == "album":
+                    if _from_album:
                         from pathlib import Path as _P
 
                         from src.ai.companion_selfie import album_series_of_path
@@ -5635,7 +5879,8 @@ class SkillManager(LoggerMixin):
                             _st2.record_send(
                                 _conv_key, _fn,
                                 persona_id=str(_album_key or ""),
-                                series=album_series_of_path(res.image_path))
+                                series=(str(_extra.get("series") or "")
+                                        or album_series_of_path(res.image_path)))
                 except Exception:
                     pass
                 # 只在客户真收到图时才消耗免费额度（生成成功但没送达不扣）
@@ -5643,7 +5888,30 @@ class SkillManager(LoggerMixin):
                     user_context["_selfie_used"] = free_used + 1
                 # 媒体轮回写：下一轮 LLM 要知道"我刚发过一张照片+配文"
                 user_context["_stage_media_note"] = "[图片] " + caption
-                user_context["_stage_media_scene"] = _scene
+                # 场景以实际产出为准：相册图记条目场景类（可能≠轮换场景），
+                # 「跟上次一样的」复刻才不会指错场景。
+                user_context["_stage_media_scene"] = (
+                    str(_extra.get("scene_class") or "") or _scene)
+                # 衣着系列以实际产出为准（P1）：相册图记条目系列，生成图记
+                # 本次注入衣着的 slug——媒体日志连续窗（跨 A/B）据此跟装。
+                try:
+                    from src.companion.outfit_state import outfit_slug
+                    if _from_album:
+                        from src.ai.companion_selfie import album_series_of_path
+                        user_context["_stage_media_series"] = (
+                            str(_extra.get("series") or "")
+                            or album_series_of_path(res.image_path))
+                    else:
+                        user_context["_stage_media_series"] = outfit_slug(_outfit)
+                except Exception:
+                    pass
+                # 点名场景兑现计数（P1 补货需求侧）
+                if _scene_strict:
+                    try:
+                        from src.inbox.image_autosend import record_scene_request
+                        record_scene_request(_scene, unmet=False)
+                    except Exception:
+                        pass
                 return ""  # 媒体已发出，无需再发文字（空串=已处理、不再生成普通回复）
             # 出图成功但发送失败/无媒体通道 → 绝不能把「这是刚拍的，给你看～」
             # 这类"图已到手"配文当文字发出去（图根本没到，实录谎言事故）。
@@ -5651,6 +5919,9 @@ class SkillManager(LoggerMixin):
             try:
                 from src.inbox.image_autosend import record_image_fallback
                 record_image_fallback("a_line_send_failed")
+                if _scene_strict:
+                    from src.inbox.image_autosend import record_scene_request
+                    record_scene_request(_scene, unmet=True)
             except Exception:
                 pass
             self.logger.info(
@@ -5667,6 +5938,12 @@ class SkillManager(LoggerMixin):
             "[selfie] 出图失败回落文字 error=%s provider=%s",
             getattr(res, "error", None) if res is not None else "generate_exception",
             getattr(res, "provider", "") if res is not None else "")
+        if _scene_strict:
+            try:
+                from src.inbox.image_autosend import record_scene_request
+                record_scene_request(_scene, unmet=True)
+            except Exception:
+                pass
         self._set_cant_send_photo_hint(user_context)
         return None
 
@@ -5738,7 +6015,9 @@ class SkillManager(LoggerMixin):
         caption = str(scfg.get("contextual_caption") or "") or selfie_stage_text(
             "caption_object", self._stage_lang(user_context, text))
         try:
-            res = await provider.generate(prompt)  # 物体图走 text2img，不带人设的脸
+            # 物体图走 text2img，不带人设的脸。P0：生成失败**绝不回落相册人像**
+            # （要面条/海景发车内自拍=实录「你真会骗人」事故）——如实失败回落文字。
+            res = await provider.generate(prompt, allow_album_fallback=False)
         except Exception:
             res = None
             self.logger.debug("contextual image generate error", exc_info=True)
@@ -5844,6 +6123,8 @@ class SkillManager(LoggerMixin):
                 user_context.pop("_stage_media_note", "") or "").strip()
             media_scene = str(
                 user_context.pop("_stage_media_scene", "") or "").strip()
+            media_series = str(
+                user_context.pop("_stage_media_series", "") or "").strip()
             note = str(reply_note or "").strip() or media_note
             if not note:
                 return
@@ -5856,7 +6137,8 @@ class SkillManager(LoggerMixin):
                 user_context.get("reply_count", 0) or 0) + 1
             if media_note:
                 self._record_media_sent(
-                    user_context, note=media_note, scene=media_scene, ts=now)
+                    user_context, note=media_note, scene=media_scene,
+                    series=media_series, ts=now)
         except Exception:
             self.logger.debug("record_stage_turn skipped", exc_info=True)
 
@@ -5864,13 +6146,14 @@ class SkillManager(LoggerMixin):
 
     def _record_media_sent(
         self, user_context: Dict[str, Any], *, note: str, scene: str = "",
-        ts: float = 0.0,
+        series: str = "", ts: float = 0.0,
     ) -> None:
         """已发媒体日志（Phase18，bounded=5，随 ContextStore 持久化）。
 
-        记「什么时候发过什么图/什么场景」——供 ①「跟上次一样的」场景指涉
-        （``_last_sent_media_scene``）②prompt「你最近发过的照片」块（防"我没发过
-        照片"失忆抵赖）。刻意**不**写 episodic memory：那是"用户事实"存储，
+        记「什么时候发过什么图/什么场景/什么衣着系列」——供 ①「跟上次一样的」
+        场景指涉（``_last_sent_media_scene``）②prompt「你最近发过的照片」块
+        （防"我没发过照片"失忆抵赖）③衣着连续窗（``_last_sent_media_series``，
+        P1）。刻意**不**写 episodic memory：那是"用户事实"存储，
         系统行为混进去会污染记忆语义（Phase8 治理过的教训）。
         """
         try:
@@ -5881,6 +6164,7 @@ class SkillManager(LoggerMixin):
                 "ts": float(ts or time.time()),
                 "note": str(note or "")[:160],
                 "scene": str(scene or "")[:120],
+                "series": str(series or "")[:80],
             })
             user_context["_media_sent_log"] = log[-self._MEDIA_SENT_LOG_MAX:]
         except Exception:
@@ -5895,6 +6179,32 @@ class SkillManager(LoggerMixin):
                     sc = str((row or {}).get("scene") or "").strip()
                     if sc:
                         return sc
+        except Exception:
+            pass
+        return ""
+
+    def _last_sent_media_series(
+        self, user_context: Dict[str, Any], *, within_minutes: float = 0.0,
+    ) -> str:
+        """连续窗内最近一次已发媒体的衣着系列（P1 跨 A/B 跟装用；过窗/无则空串）。
+
+        媒体日志是 A/B 两线合流后的视图（B 线经 on_sent 回写）——比只看
+        persona_media 账本多覆盖「生成图」的衣着（生成图不进相册账本）。
+        """
+        try:
+            if within_minutes <= 0:
+                return ""
+            log = user_context.get("_media_sent_log")
+            if isinstance(log, list):
+                now_ts = time.time()
+                for row in reversed(log):
+                    sr = str((row or {}).get("series") or "").strip()
+                    if not sr:
+                        continue
+                    ts = float((row or {}).get("ts") or 0)
+                    if (now_ts - ts) <= within_minutes * 60.0:
+                        return sr
+                    return ""  # 日志按时间序，最近一条带系列的已过窗 → 不再回看
         except Exception:
             pass
         return ""
@@ -5924,8 +6234,24 @@ class SkillManager(LoggerMixin):
             # LLM 可自然引用"早上去过哪/晚点打算干嘛"（scene_itinerary 可关）。
             _itin = (build_day_itinerary(persona, scfg)
                      if bool(scfg.get("scene_itinerary", True)) else None)
+            # 今日衣着（P1）：与生成链同 key 同函数取值——被问「穿了什么」的
+            # 回答和照片里的衣服同源。连续窗内刚发过照片 → 跟随照片衣着。
+            _outfit = ""
+            try:
+                from src.companion.outfit_state import current_outfit
+                from src.inbox.image_autosend import resolve_consistency_cfg
+                _ccc = resolve_consistency_cfg(scfg)
+                _outfit = current_outfit(
+                    persona, scfg,
+                    persona_key=self._selfie_album_key(user_context),
+                    recent_series=self._last_sent_media_series(
+                        user_context, within_minutes=float(
+                            _ccc.get("continuity_minutes") or 0)))["outfit"]
+            except Exception:
+                _outfit = ""
             note = scene_chat_note(
-                resolve_current_scene(persona, scfg), itinerary=_itin)
+                resolve_current_scene(persona, scfg), itinerary=_itin,
+                outfit=_outfit)
             # 饮食状态事实源（2026-07-15 矛盾事故修复）：吃没吃饭从「LLM 现编」
             # 改为确定性事实（persona+日期 hash），防重复系统换角度时事实漂移。
             if bool(scfg.get("meal_state_in_chat", True)):
@@ -6027,11 +6353,15 @@ class SkillManager(LoggerMixin):
     async def _photo_directive_selfie(
         self, scene: str, user_id_str: str, user_context: Dict[str, Any],
         chat_id: Any, scfg: Dict[str, Any], log_prefix: str = "",
+        *, scene_strict: bool = True,
     ) -> bool:
         """按 LLM 指令出一张人设自拍（准入/预算/质检与 Stage A 完全同款）。
 
         与 Stage A 的差异只有两点：场景来自 LLM 对话内理解（贴正文、贴时间），
         配文交由正文承担（图本身空 caption，先图后文）。True=图已真实送达。
+        ``scene_strict``（P0 一致性）：场景是否「说出口」级硬要求——LLM 指令
+        场景与正文出自同一次思考（默认 True，相册兜底必须同场景类）；异步兑现
+        的**轮换**场景没人说过（False，相册兜底可放宽）。
         """
         from src.ai.companion_selfie import (
             build_selfie_prompt, decide_selfie, get_selfie_provider,
@@ -6079,6 +6409,20 @@ class SkillManager(LoggerMixin):
         from src.ai.companion_selfie import ensure_time_of_day
         _vsalt = resolve_variety_salt(scfg)  # 多样性 salt（治千篇一律，默认关）
         _lora = resolve_persona_lora(_sp, scfg)   # per-persona 角色 LoRA spec
+        _album_key = self._selfie_album_key(user_context)
+        # 今日衣着状态（P1，与 Stage A/聊天注入同源）：连续窗跟随刚发照片。
+        _outfit = ""
+        try:
+            from src.companion.outfit_state import current_outfit
+            from src.inbox.image_autosend import resolve_consistency_cfg
+            _ccd = resolve_consistency_cfg(scfg)
+            _outfit = current_outfit(
+                _sp, scfg, persona_key=_album_key,
+                recent_series=self._last_sent_media_series(
+                    user_context, within_minutes=float(
+                        _ccd.get("continuity_minutes") or 0)))["outfit"]
+        except Exception:
+            _outfit = ""
         prompt = build_selfie_prompt(
             _sp,
             scene_hint=ensure_time_of_day(scene) or str(scfg.get("scene_hint") or ""),
@@ -6087,10 +6431,10 @@ class SkillManager(LoggerMixin):
             content_rating=str(scfg.get("content_rating") or ""),
             variety_salt=_vsalt,
             lora_trigger=_lora["trigger"],
+            outfit=_outfit,
         )
         if cap > 0:
             self._get_selfie_cap(cap).record_sent(1)
-        _album_key = self._selfie_album_key(user_context)
         _avoid = str(user_context.get("_selfie_last_img") or "")
         _base = ""
         try:
@@ -6102,6 +6446,29 @@ class SkillManager(LoggerMixin):
             scfg.get("stable_seed", True)) else -1
         self.logger.info("%s[photo_directive] selfie prompt=%r seed=%s base=%s",
                          log_prefix, prompt, _seed, bool(_base))
+        # P0 一致性：LLM 指令场景＝**正文亲口说的场景**→相册兜底硬匹配（正文
+        # "图书馆自习"配车内自拍=打脸）；时段过滤 + 防复读账本与 Stage A 同口径。
+        _conv_key = f"tg:{chat_id}"
+        _sent_files: Any = None
+        try:
+            from src.inbox.image_autosend import resolve_consistency_cfg
+            _cc = resolve_consistency_cfg(scfg)
+        except Exception:
+            _cc = {"now_hour": None}
+        try:
+            from src.companion.persona_media_store import (
+                get_persona_media_store as _gpms0,
+            )
+            _pms0 = _gpms0()
+            if _pms0 is not None:
+                try:
+                    _rsd = float(scfg.get("resend_after_days", 90) or 0)
+                except (TypeError, ValueError):
+                    _rsd = 90.0
+                _sent_files = _pms0.sent_history(
+                    _conv_key, max_age_days=_rsd).get("ids") or None
+        except Exception:
+            _sent_files = None
         try:
             from src.ai.image_gate import generate_with_gate, resolve_gate_cfg
             _root_cfg = self.config.config if hasattr(self.config, "config") else {}
@@ -6110,11 +6477,20 @@ class SkillManager(LoggerMixin):
                 root_config=_root_cfg if isinstance(_root_cfg, dict) else {},
                 gate_cfg=resolve_gate_cfg(scfg), seed=_seed,
                 album_key=_album_key, avoid_path=_avoid, base_image=_base,
-                lora=_lora["file"], lora_weight=_lora["weight"])
+                lora=_lora["file"], lora_weight=_lora["weight"],
+                exclude_paths=_sent_files,
+                album_scene=(str(scene or "").strip() if scene_strict else ""),
+                now_hour=_cc.get("now_hour"))
         except Exception:
             res = None
             self.logger.debug("photo_directive selfie 生成异常", exc_info=True)
         if res is None or not getattr(res, "ok", False):
+            if scene_strict:
+                try:
+                    from src.inbox.image_autosend import record_scene_request
+                    record_scene_request(str(scene or ""), unmet=True)
+                except Exception:
+                    pass
             return False
         user_context["_selfie_last_img"] = getattr(res, "image_path", "") or ""
         sent = await self._try_send_selfie_media(
@@ -6123,11 +6499,50 @@ class SkillManager(LoggerMixin):
             self._record_selfie_event(user_id_str, "delivered")
             if decision.get("used_free"):
                 user_context["_selfie_used"] = free_used + 1
+            # 防复读账本：相册兜底图记账（与 Stage A 同口径；生成图不记）。
+            try:
+                if str(getattr(res, "provider", "")) == "album":
+                    from pathlib import Path as _P
+
+                    from src.ai.companion_selfie import album_series_of_path
+                    _st2 = _gpms0()
+                    if _st2 is not None:
+                        _extra0 = dict(getattr(res, "extra", {}) or {})
+                        _st2.record_send(
+                            _conv_key, _P(str(res.image_path)).name,
+                            persona_id=str(_album_key or ""),
+                            series=(str(_extra0.get("series") or "")
+                                    or album_series_of_path(res.image_path)))
+            except Exception:
+                pass
             user_context["_stage_media_note"] = "[图片] （刚按对话情境发出一张自拍）"
+            user_context["_stage_media_scene"] = str(scene or "").strip()
+            # 衣着系列（P1）：相册兜底记条目系列，生成图记本次注入衣着 slug。
+            try:
+                from src.companion.outfit_state import outfit_slug
+                if str(getattr(res, "provider", "")) == "album":
+                    from src.ai.companion_selfie import album_series_of_path
+                    _extra1 = dict(getattr(res, "extra", {}) or {})
+                    user_context["_stage_media_series"] = (
+                        str(_extra1.get("series") or "")
+                        or album_series_of_path(res.image_path))
+                else:
+                    user_context["_stage_media_series"] = outfit_slug(_outfit)
+            except Exception:
+                pass
+            if scene_strict:
+                try:
+                    from src.inbox.image_autosend import record_scene_request
+                    record_scene_request(str(scene or ""), unmet=False)
+                except Exception:
+                    pass
             return True
         try:
             from src.inbox.image_autosend import record_image_fallback
             record_image_fallback("a_line_directive_send_failed")
+            if scene_strict:
+                from src.inbox.image_autosend import record_scene_request
+                record_scene_request(str(scene or ""), unmet=True)
         except Exception:
             pass
         return False
@@ -6168,7 +6583,9 @@ class SkillManager(LoggerMixin):
             self._get_selfie_cap(cap).record_sent(1)
         self.logger.info("%s[photo_directive] object prompt=%r", log_prefix, prompt)
         try:
-            res = await provider.generate(prompt)  # 物体图 text2img，不带人设的脸
+            # 物体图 text2img，不带人设的脸。P0：失败绝不回落相册人像（如实失败，
+            # 正文承诺由 promise_guard 撤回）。
+            res = await provider.generate(prompt, allow_album_fallback=False)
         except Exception:
             res = None
             self.logger.debug("photo_directive object 生成异常", exc_info=True)
@@ -6238,8 +6655,17 @@ class SkillManager(LoggerMixin):
                     and bool(pg_cfg.get("async_fulfill", False))
                     and self._async_fulfill_precheck(
                         user_id_str, user_context, chat_id)):
+                # P0 一致性：承诺句点名了场景（「拍张海边的发你」）→ 兑现的图
+                # 必须贴承诺场景（词表外/没点名 → 空串走场景轮换）。
+                _pscene = ""
+                try:
+                    from src.ai.outbound_promise_guard import promised_scene
+                    _pscene = promised_scene(reply)
+                except Exception:
+                    _pscene = ""
                 self._spawn_promise_fulfill_task(
-                    user_id_str, user_context, chat_id, log_prefix)
+                    user_id_str, user_context, chat_id, log_prefix,
+                    promised_scene=_pscene)
                 try:
                     from src.inbox.image_autosend import record_promise_event
                     record_promise_event("fulfill_scheduled")
@@ -6331,7 +6757,7 @@ class SkillManager(LoggerMixin):
 
     def _spawn_promise_fulfill_task(
         self, user_id_str: str, user_context: Dict[str, Any], chat_id: Any,
-        log_prefix: str = "",
+        log_prefix: str = "", promised_scene: str = "",
     ) -> None:
         """把「真拍真发」排进当前事件循环（不阻塞本轮文本回复）。"""
         if not hasattr(self, "_promise_fulfill_inflight"):
@@ -6340,35 +6766,41 @@ class SkillManager(LoggerMixin):
         try:
             loop = asyncio.get_running_loop()
             loop.create_task(self._fulfill_promised_selfie_async(
-                user_id_str, user_context, chat_id, log_prefix))
+                user_id_str, user_context, chat_id, log_prefix,
+                promised_scene=promised_scene))
         except Exception:
             self._promise_fulfill_inflight.discard(user_id_str)
             self.logger.debug("spawn promise fulfill failed", exc_info=True)
 
     async def _fulfill_promised_selfie_async(
         self, user_id_str: str, user_context: Dict[str, Any], chat_id: Any,
-        log_prefix: str = "",
+        log_prefix: str = "", *, promised_scene: str = "",
     ) -> None:
         """异步兑现主体：延迟数秒（文本先到 + "去拍了"的真人时间感）→ 复用
         ``_photo_directive_selfie`` 全套管线（decide/cap/PuLID/vision_gate/发送/
-        额度）→ 成功记媒体日志；失败发语言对齐的台阶补偿文本。软失败绝不抛。"""
+        额度）→ 成功记媒体日志；失败发语言对齐的台阶补偿文本。软失败绝不抛。
+
+        ``promised_scene``（P0 一致性）＝承诺句点名的场景（硬要求，兑现必须贴）；
+        空＝没点名 → 场景轮换（与聊天注入同源，相册兜底可放宽）。"""
         import random as _rnd
         try:
             await asyncio.sleep(_rnd.uniform(4.0, 9.0))
             scfg = self._selfie_cfg()
-            # 场景与聊天注入同源（resolve_current_scene），图文一致。
-            _scene = ""
-            try:
-                from src.ai.companion_selfie import resolve_current_scene
-                _scene = resolve_current_scene(
-                    self._selfie_persona_for_prompt(user_context), scfg)
-            except Exception:
-                _scene = ""
+            # 场景：承诺点名 →（否则）场景轮换（与聊天注入同源，图文一致）。
+            _scene = str(promised_scene or "").strip()
+            _strict = bool(_scene)
+            if not _scene:
+                try:
+                    from src.ai.companion_selfie import resolve_current_scene
+                    _scene = resolve_current_scene(
+                        self._selfie_persona_for_prompt(user_context), scfg)
+                except Exception:
+                    _scene = ""
             sent = False
             try:
                 sent = await self._photo_directive_selfie(
                     _scene, user_id_str, user_context, chat_id,
-                    scfg, log_prefix)
+                    scfg, log_prefix, scene_strict=_strict)
             except Exception:
                 sent = False
                 self.logger.debug("promise fulfill selfie error", exc_info=True)

@@ -281,6 +281,32 @@ async def generate_persona_reply(
         )
     )
 
+    # 账号解析（提早到语言决策后：人设解析/统一引擎两处共用）：
+    # 显式 account_id 优先；缺省从 conversation_id（platform:account:chat_key）取。
+    _acct = str(account_id or "").strip()
+    if (not _acct or _acct == "default") and conversation_id:
+        _parts = str(conversation_id).split(":", 2)
+        if len(_parts) >= 3 and _parts[1]:
+            _acct = str(_parts[1]).strip()
+
+    # 人设决策单一事实源（2026-07-26 方案 A）：显式 persona_id（坐席在草稿面板
+    # 手选，一次性生效）最高优先；为空 → 与出站链同一 resolver 补全
+    # （会话覆写 > 账号人设；两者皆无 → 保持空串走 legacy chat/domain 链）。
+    # _eff_tier 非空 = persona_id 出自 resolver，徽标直接采信该 tier（说真话）。
+    _eff_tier = ""
+    if not str(persona_id or "").strip():
+        try:
+            from src.ai.persona_voice import resolve_effective_persona
+            _cm = getattr(getattr(app, "state", None), "config_manager", None)
+            _pid_r, _tier_r = resolve_effective_persona(
+                getattr(_cm, "config", None) or {},
+                platform, _acct, str(chat_key or ""),
+            )
+            if _pid_r:
+                persona_id, _eff_tier = _pid_r, _tier_r
+        except Exception:
+            logger.debug("[persona_reply] effective persona 解析跳过", exc_info=True)
+
     state = getattr(app, "state", None)
     sm = getattr(state, "skill_manager", None)
     if sm is None:
@@ -312,11 +338,6 @@ async def generate_persona_reply(
             _unified_on = True
         if _unified_on:
             try:
-                _acct = str(account_id or "").strip()
-                if (not _acct or _acct == "default") and conversation_id:
-                    _parts = str(conversation_id).split(":", 2)
-                    if len(_parts) >= 3 and _parts[1]:
-                        _acct = str(_parts[1]).strip()
                 _res = await sm.generate_inbox_draft(
                     text=last_inbound,
                     chat_key=chat_key,
@@ -442,9 +463,13 @@ async def generate_persona_reply(
             logger.debug("[persona_reply] 情景记忆写回调度跳过", exc_info=True)
     persona_tier = ""
     if reply:
-        used_persona, persona_tier = _resolve_persona_badge(
-            chat_key, persona_id, used_persona
-        )
+        if persona_id and _eff_tier:
+            # resolver 补全的 persona（含会话覆写）→ tier 直接采信，徽标说真话
+            used_persona, persona_tier = persona_id, _eff_tier
+        else:
+            used_persona, persona_tier = _resolve_persona_badge(
+                chat_key, persona_id, used_persona
+            )
 
     out: Dict[str, Any] = {
         "ok": bool(reply),

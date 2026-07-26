@@ -277,6 +277,14 @@ foreach ($inst in $st.instances) {
         }
         continue
     }
+    # 幽灵防护（2026-07-26）：restart_instance 正在窗口内（已停、未绑好端口）。
+    # 此时再拉起会在同一数据根起第二个引擎——端口绑定失败但 Telegram 客户端照跑，
+    # 与正主抢会话（2026-07-22 幽灵事故同型）。哨兵带 TTL，脚本崩溃残留会自动过期。
+    $inflight = Test-RestartInflight -Instance $inst.id
+    if ($inflight.active) {
+        Say "$($inst.id) DOWN 但 restart_inflight 哨兵在窗（age=$($inflight.age_sec)s reason=$($inflight.record.reason)），本轮不拉起（防双起幽灵），交回重启方等 /login 就绪"
+        continue
+    }
     # DOWN 仍拉起，即使冷却中（进程已死；-FromWatchdog 含 -Force）
     Say "$($inst.id) DOWN，经 restart_instance -FromWatchdog 拉起（数据根=$($inst.data_root) 来源=$($inst.data_source)）"
     $rr = Invoke-WatchdogRestart -InstanceId $inst.id -DataRoot ([string]$inst.data_root) -Reason 'watchdog_start'

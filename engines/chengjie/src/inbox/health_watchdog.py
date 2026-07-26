@@ -369,6 +369,10 @@ class HealthWatchdog:
         # host_alert 外发。默认关（新子系统约定）。
         self._last_triage_ts: float = 0.0
         self.total_log_triage_alerts: int = 0
+        # 跨平台身份影子周期扫描（P3.2）：内存节流 ts（冷启动采纳 state 文件里的
+        # last_scan_ts——重启不重扫）+ 成功扫描计数。默认关（contacts.identity_shadow）。
+        self._ishadow_last_ts: float = 0.0
+        self.total_identity_shadow_scans: int = 0
         self.last_check_ts: float = 0.0
         self.last_light: str = "green"
 
@@ -568,6 +572,13 @@ class HealthWatchdog:
             self._check_memory_key_drift()
         except Exception:
             logger.debug("记忆 key 漂移巡检异常（已忽略）", exc_info=True)
+
+        # 跨平台身份影子周期扫描（P3.2）：只读发现「疑似同一人」配对，state 落文件
+        # 供看板读。默认关；稀疏节流（默认 6h）；异常全吞绝不影响巡检主流程。
+        try:
+            self._check_identity_shadow()
+        except Exception:
+            logger.warning("身份影子扫描巡检异常（已忽略）", exc_info=True)
 
         # 运维卫生：按保留期清理已关闭事件（每日节流一次）。
         try:
@@ -1631,6 +1642,48 @@ class HealthWatchdog:
                 ):
                     self.total_cloud_balance_alerts += 1
 
+    def _check_identity_shadow(self, *, now: Optional[float] = None) -> None:
+        """跨平台身份影子周期扫描（P3.2）：只读发现「疑似同一人」跨平台会话配对，
+        压缩结果落 ``config/identity_shadow_state.json`` 供 ops 看板 / metrics 读。
+
+        配置 ``contacts.identity_shadow.{enabled,scan_interval_hours,max_rows}``
+        （默认 关/6h/2000）。未启用零开销（每 tick 一次 dict 取值即返回）；扫描只读
+        （sqlite mode=ro，复用 run_shadow_scan，**绝不写关联**）；节流基准＝内存 ts，
+        冷启动采纳 state 文件 last_scan_ts（重启不重扫）；ts 在扫描前推进——持续失败
+        也只按周期重试，不会每 tick 刷。_tick 跑在 executor 线程，阻塞读库无害。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        from src.utils.identity_shadow_periodic import (
+            read_state, run_periodic_scan, shadow_periodic_config, state_path,
+        )
+        pcfg = shadow_periodic_config(cfg)
+        if not pcfg["enabled"]:
+            return
+        from pathlib import Path
+        cfg_path = str(getattr(self._config_manager, "config_path", "")
+                       or "config/config.yaml")
+        cfg_dir = Path(cfg_path).parent
+        ts = float(now if now is not None else time.time())
+        if not self._ishadow_last_ts:
+            self._ishadow_last_ts = float(
+                (read_state(state_path(cfg_dir)) or {}).get("last_scan_ts") or 0.0)
+        interval_sec = pcfg["scan_interval_hours"] * 3600.0
+        if self._ishadow_last_ts and (ts - self._ishadow_last_ts) < interval_sec:
+            return
+        self._ishadow_last_ts = ts
+        st = run_periodic_scan(cfg, cfg_dir, now=ts)
+        if st.get("ok"):
+            self.total_identity_shadow_scans += 1
+            counts = st.get("counts") or {}
+            logger.info(
+                "身份影子扫描完成: 会话=%s 候选=%s 配对=%s (high=%s medium=%s low=%s 已关联=%s)",
+                st.get("scanned_conversations"), st.get("candidates"), st.get("pairs"),
+                counts.get("high"), counts.get("medium"), counts.get("low"),
+                counts.get("already_linked"),
+            )
+        else:
+            logger.warning("身份影子扫描失败（已忽略，按周期重试）: %s", st.get("error"))
+
     def _check_license_quota(self, *, now: Optional[float] = None) -> None:
         """授权字符额度水位巡检（P4c）：临近触顶提前提醒、触顶点名、恢复报平安。
 
@@ -2125,6 +2178,7 @@ class HealthWatchdog:
             "total_avatar_voice_reminders": self.total_avatar_voice_reminders,
             "total_media_promise_alerts": self.total_media_promise_alerts,
             "total_colloquial_llm_reminders": self.total_colloquial_llm_reminders,
+            "total_identity_shadow_scans": self.total_identity_shadow_scans,
             "last_check_ts": self.last_check_ts,
             "last_light": self.last_light,
         }

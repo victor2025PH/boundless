@@ -259,7 +259,15 @@
       else text = t("inbox.pill.draft_ready");
       tone = "ok";
     } else if (suf === "persona") {
-      text = d.boundName || (d.boundId ? String(d.boundId).slice(0, 10) : "");
+      // 生效人设优先（/api/persona/effective 全景）：pill 显示实际说话者;
+      // 会话覆写标 ✓（一眼区分「本会话专属」与「账号默认」）。无 eff 回落 legacy 字段。
+      var eff = d.eff && d.eff.effective;
+      if (eff && (eff.name || eff.id)) {
+        text = _trunc(eff.name || eff.id, 12);
+        if (eff.tier === "conv_override") { text = "✓ " + text; tone = "ok"; }
+      } else {
+        text = d.boundName || (d.boundId ? String(d.boundId).slice(0, 10) : "");
+      }
     } else if (suf === "relstage") {
       var s = d.display_stage_label || d.stage_label || "";
       var pct = Math.max(0, Math.min(100, Math.round(d.progress_pct || 0)));

@@ -81,6 +81,7 @@ def plan_proactive_sends(
     has_pending_care: Optional[Callable[[str], bool]] = None,
     on_crisis_block: Optional[Callable[[Dict[str, Any]], None]] = None,
     pacing_cfg: Optional[Dict[str, Any]] = None,
+    priority_fn: Optional[Callable[[Dict[str, Any]], float]] = None,
 ) -> List[Dict[str, Any]]:
     """决定本轮该主动开场的会话清单（确定性纯函数）。
 
@@ -107,6 +108,9 @@ def plan_proactive_sends(
         按沉默时长降序，截断到 max_per_tick。
         pacing_cfg: 可选，``parse_adaptive_pacing_cfg`` 产出；enabled 时按 intimacy
             逐会话缩放 min_silent_hours / cooldown_hours。
+        priority_fn: 可选排序增益 ``(plan) -> float``（如营销目标桥：有 auto 档活跃
+            目标的会话优先占每 tick 名额）。只影响**排序**不影响准入——所有护栏照旧；
+            回调异常按 0 处理。提供时 plan 带 ``goal_priority`` 字段（预览可见）。
     """
     from src.utils.proactive_pacing import (
         effective_cooldown_hours,
@@ -206,7 +210,19 @@ def plan_proactive_sends(
             "stage": _stage,
         })
 
-    plans.sort(key=lambda p: p["silent_hours"], reverse=True)
+    if priority_fn is not None:
+        # 营销目标等业务优先级：先按增益、同增益再按沉默时长——目标会话优先
+        # 占据每 tick 名额，但绝不放宽任何准入护栏（上面的过滤已全部走完）。
+        for p in plans:
+            try:
+                p["goal_priority"] = float(priority_fn(p) or 0.0)
+            except Exception:
+                p["goal_priority"] = 0.0
+        plans.sort(
+            key=lambda p: (p.get("goal_priority", 0.0), p["silent_hours"]),
+            reverse=True)
+    else:
+        plans.sort(key=lambda p: p["silent_hours"], reverse=True)
     return plans[: max(0, int(max_per_tick))]
 
 
@@ -262,6 +278,7 @@ class CompanionProactiveLoop:
         ritual_cooldown: Any = None,
         fresh_activity_provider: Optional[Callable[[str], float]] = None,
         pacing_cfg: Optional[Dict[str, Any]] = None,
+        priority_fn: Optional[Callable[[Dict[str, Any]], float]] = None,
         now: Callable[[], float] = time.time,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -272,6 +289,7 @@ class CompanionProactiveLoop:
         # 真发前拿最新 last_ts 再判一次，近期活跃则跳过——不对刚聊过的人发主动「好久不见」。
         self._fresh_activity_provider = fresh_activity_provider
         self._pacing_cfg = pacing_cfg
+        self._priority_fn = priority_fn
         self._cooldown = cooldown_store
         self._ritual_fn = ritual_fn
         self._ritual_cooldown = ritual_cooldown
@@ -311,6 +329,7 @@ class CompanionProactiveLoop:
             has_pending_care=self._has_pending_care,
             on_crisis_block=self._on_crisis_block,
             pacing_cfg=self._pacing_cfg,
+            priority_fn=self._priority_fn,
         )
         # 每日仪式问候（晨 / 晚安）：时段驱动、独立每日每档去重；与沉默回访互补。
         # 同一会话本 tick 既到仪式点又够沉默时，仪式优先（不重复打扰一人）。

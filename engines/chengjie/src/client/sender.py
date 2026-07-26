@@ -10,6 +10,41 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
+# A1 text-first 占位句内置池（config reply.ai_fallback_replies 缺席时的兜底备货——
+# 2026-07-26 实锤：实例配置池为空 → 硬编码单句「稍等我一下哈～」4 分钟连发 3 次，
+# 触发出站复读告警，真人不会这样说话）。
+_TF_FILLER_DEFAULTS = (
+    "稍等我一下哈～",
+    "等我一下下哈～",
+    "来了来了，稍微等我一下～",
+    "嗯嗯在的，马上回你～",
+    "手头有点小事，马上就来～",
+)
+
+
+def pick_text_first_filler(
+    pool, *, last_text: str = "", last_ts: float = 0.0,
+    now: Optional[float] = None, cooldown_sec: float = 180.0,
+) -> Optional[str]:
+    """text-first 占位句选择（纯函数）。
+
+    - 冷却窗内（该会话 ``cooldown_sec`` 秒内已发过占位）→ ``None``＝本轮不发：
+      对方刚被「稍等」过一次，紧接着又「稍等」只会像机器人——语音/兜底文字反正会到；
+    - 出窗 → 从 ``pool``（空则内置池）随机挑一句，并避开该会话上一条占位措辞。
+    """
+    now_ts = time.time() if now is None else float(now)
+    try:
+        cd = float(cooldown_sec or 0)
+    except (TypeError, ValueError):
+        cd = 0.0
+    if cd > 0 and float(last_ts or 0) > 0 and (now_ts - float(last_ts)) < cd:
+        return None
+    cand = [str(x).strip() for x in (pool or []) if str(x).strip()]
+    if not cand:
+        cand = list(_TF_FILLER_DEFAULTS)
+    fresh = [x for x in cand if x != str(last_text or "")]
+    return random.choice(fresh or cand)
+
 
 class TelegramSenderMixin:
 
@@ -594,7 +629,9 @@ class TelegramSenderMixin:
                         f"group_{original_message.chat.id}",
                         str(original_message.from_user.id),
                     )
-            self.logger.info("已回复消息: %s", self._log_safe_text(reply_text))
+            # 打真实发出的文本（out_text 可能被质量管道改写过）——
+            # 2026-07-26 排障实锤：这里打 reply_text 原文，与镜像/对端看到的不一致，误导排查。
+            self.logger.info("已回复消息: %s", self._log_safe_text(_out_text))
         except Exception as e:
             self.logger.error("发送回复失败: %s", e)
             self._handle_send_exc(e)   # G2 分级急停 + 实施31 TG 告警（best-effort）
@@ -1126,13 +1163,33 @@ class TelegramSenderMixin:
                 if not bool(_tf.get("filler", True)):
                     return
                 # 占位句复用 reply.ai_fallback_replies（现成的"在场感"话术池，
-                # 措辞不硬承诺语音——语音失败改发文字也不算食言）
+                # 措辞不硬承诺语音——语音失败改发文字也不算食言）；配置池空
+                # 用内置池。per-chat 冷却 + 避开上一条措辞（2026-07-26 实锤：
+                # 单句占位 4 分钟连发 3 次触发出站复读告警）。
                 _pool = [str(x).strip() for x in
                          ((raw_cfg.get("reply") or {}).get("ai_fallback_replies")
                           or []) if str(x).strip()]
-                await self._send_reply(
-                    original_message,
-                    random.choice(_pool) if _pool else "稍等我一下哈～")
+                _state = getattr(self, "_tf_filler_state", None)
+                if _state is None:
+                    _state = {}
+                    self._tf_filler_state = _state
+                _fkey = str(original_message.chat.id)
+                _last_ts, _last_txt = _state.get(_fkey, (0.0, ""))
+                _cd = float(_tf.get("filler_cooldown_sec", 180) or 0)
+                _txt = pick_text_first_filler(
+                    _pool, last_text=_last_txt, last_ts=_last_ts,
+                    cooldown_sec=_cd)
+                if _txt is None:
+                    self.logger.info(
+                        "[voice_reply] text-first：%.0fs 占位冷却窗内 → 本轮不发占位",
+                        _cd)
+                    return
+                _state[_fkey] = (time.time(), _txt)
+                if len(_state) > 2000:   # 防膨胀：清一天前的会话项
+                    _cut = time.time() - 86400.0
+                    for _k in [k for k, v in _state.items() if v[0] < _cut]:
+                        _state.pop(_k, None)
+                await self._send_reply(original_message, _txt)
 
             async def _send_fallback_text():
                 await self._send_reply(original_message, reply_text)

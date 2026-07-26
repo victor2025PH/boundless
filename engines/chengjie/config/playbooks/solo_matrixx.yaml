@@ -1,0 +1,60 @@
+# 单号炒群 · 智控 MatrixX —— P3-1 最小可发单元
+#
+# 为什么要有一本「只声明一个角色」的剧本
+# --------------------------------------
+# 四角剧本 + 一个号 = 自问自答（同一个号先以 asker 提问、再以 advocate 回答），
+# 这是水军最经典、群友最认得出的破绽。真发路径因此**拒绝降级顶替**
+# （live.perform → understaffed）。单号的正确形态是：这个号就是推手，戏围绕
+# 「有人随口分享体感」展开，不造出第二个人。
+#
+# 容量含义（与 capacity.py 一字不差）
+# ----------------------------------
+# 每一场都是 advocate → 带货密度 = 100%。10 个号铺群的真实上限是
+# 号数 × NORMAL_ROLE_CO = 30，不是「无上限」。想铺到 100 个群，必须把
+# 带货场次占比压到约 30%——也就是多数场次干脆不演这本戏，演纯陪聊。
+#
+# 弧线刻意短（5 拍）：单号没有 skeptic 可以对打，戏越长越像独白广告。
+# soft 前低后高再回落——一上来就推＝广告，一路推到底＝更像广告。
+id: solo_matrixx
+name: 单号体感分享 · 智控 MatrixX
+system: growth
+products:
+  - matrixx
+soft_ad_level: 3
+
+roles:
+  - slot: advocate
+    desc: 真在用的人。像在群里随口分享体感，不背话术、不发链接、不自问自答。
+
+beats:
+  - id: b1_context
+    role: advocate
+    intent: 先接一下群里正在聊的话题或随口抱怨最近号越来越多、切来切去很烦。这一拍绝对不要提任何工具或产品，只是把自己放进对话里。
+    soft: 0
+    pace: chatty
+
+  - id: b2_pain
+    role: advocate
+    intent: 补一个自己刚踩过的具体小事故（比如把给 A 客户的话发到了 B），语气是吐槽不是推销。
+    soft: 0
+    pace: chatty
+
+  - id: b3_reveal
+    role: advocate
+    intent: 顺着说自己现在把消息收在一个后台里看，不用来回切。像随口分享，不要介绍功能清单，不要念宣传语。
+    product: matrixx
+    soft: 3
+    pace: normal
+
+  - id: b4_proof
+    role: advocate
+    intent: 给一个具体体感（比如一个人看十几个号的消息不乱），可以提到有个总览界面。避免数字堆砌。承认好不好用取决于自己怎么管，不要打包票。
+    product: matrixx
+    soft: 4
+    pace: slow
+
+  - id: b5_exit
+    role: advocate
+    intent: 自然收住，把话题让回群里（比如问问别人平时怎么管）。不要再推产品，不要留联系方式。
+    soft: 1
+    pace: chatty

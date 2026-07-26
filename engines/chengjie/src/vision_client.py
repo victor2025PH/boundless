@@ -359,6 +359,9 @@ class VisionClient:
                         }
                     ],
                     max_tokens=int(self.config.get("max_tokens") or 300),
+                    # 识图是抽取任务不是创作任务：贪心解码保确定性（2026-07-26 实锤：
+                    # 默认采样温度下同图偶发漏抄 Name 等字段——同图同 prompt 应同答）。
+                    temperature=0,
                 )
             except Exception as e:
                 _mark_url_bad(url)
@@ -416,6 +419,7 @@ class VisionClient:
                 ],
                 max_tokens=1024,
                 timeout=timeout,
+                temperature=0,   # 抽取任务贪心解码（与 openai 兼容路径同口径）
             )
             if resp and getattr(resp, "choices", None) and len(resp.choices) > 0:
                 content = getattr(resp.choices[0].message, "content", None)

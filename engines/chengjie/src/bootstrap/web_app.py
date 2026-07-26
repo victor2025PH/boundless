@@ -21,13 +21,94 @@ from starlette.requests import Request
 from src.utils.net_helpers import is_bind_address_in_use_error
 
 
+def classify_web_serve_outcome(
+    exc: BaseException | None,
+    started: bool,
+    should_exit: bool,
+    web_port: int,
+) -> str | None:
+    """serve() 结束后的定性（纯函数，可测）：返回 None=合法退出，否则返回致命原因。
+
+    幽灵实例事故（2026-07-22 18:53）取证：uvicorn 绑定失败在 startup() 内部
+    `sys.exit(1)`——SystemExit 是 BaseException，旧代码 `except OSError/Exception`
+    全接不住；非主线程里 SystemExit 只杀线程本身，于是进程带着 Telegram 客户端
+    继续裸奔（对看门狗/坐席完全不可见，却抢同一个 TG 会话）。
+
+    合法退出只有一种：lifecycle 优雅停机（should_exit=True）。其余任何
+    「web 没起来/中途死了」都按致命处理。
+    """
+    if should_exit:
+        return None
+    if exc is None:
+        if started:
+            # 已成功启动且非异常返回：uvicorn 实现上只在 should_exit 时返回，
+            # 走到这里多半是竞态（should_exit 刚被清）；保守放行不误杀。
+            return None
+        return f"web 服务从未完成启动（疑似端口 {web_port} 绑定失败，被 uvicorn 内部吞掉）"
+    if isinstance(exc, SystemExit):
+        return (
+            f"uvicorn 启动失败 sys.exit(code={exc.code})"
+            f"（通常=端口 {web_port} 被占用；本进程疑似重复启动的幽灵实例）"
+        )
+    if isinstance(exc, OSError) and is_bind_address_in_use_error(exc):
+        return f"端口 {web_port} 已被占用（本进程疑似重复启动的幽灵实例）"
+    return f"web 服务异常终止: {exc!r}"
+
+
+def handle_web_fatal(assistant: Any, reason: str, web_port: int, *, _exit=os._exit) -> None:
+    """web 管理后台致命失败的处置：默认整进程立刻退出（幽灵纵深防御）。
+
+    没有 web 的实例 = 看门狗探活/坐席/重启脚本都找不到它，却仍占着 Telegram
+    会话收发消息。与其留一个不可见的幽灵，不如立刻退出让 watchdog/操作员
+    走正规重启路径。`web_admin.exit_on_bind_fail: false` 可退回旧「只告警」
+    行为（不建议，仅留给特殊部署逃生）。
+    """
+    try:
+        cfg = (getattr(assistant.config, "config", {}) or {}).get("web_admin", {}) or {}
+    except Exception:
+        cfg = {}
+    if not cfg.get("exit_on_bind_fail", True):
+        assistant.logger.warning(
+            "Web 管理后台未启动（%s）；exit_on_bind_fail=false，按旧行为继续运行（进程将对看门狗不可见）",
+            reason,
+        )
+        return
+    try:
+        assistant.logger.critical(
+            "Web 管理后台致命失败（%s）——为防幽灵实例抢占 Telegram 会话，进程立即退出（exit 78）。"
+            "如确需换端口请改 web_admin.port；旧行为可用 web_admin.exit_on_bind_fail: false 恢复。",
+            reason,
+        )
+    except Exception:
+        pass
+    try:
+        from src.utils.host_alert import notify_host
+
+        notify_host(
+            "实例启动失败已自杀（防幽灵）",
+            f"web 端口 {web_port} 启动失败：{reason}",
+            key=f"web_bind_fatal:{web_port}",
+        )
+    except Exception:
+        pass
+    try:
+        import logging
+
+        logging.shutdown()
+    except Exception:
+        pass
+    _exit(78)
+
+
 def start_web_server_thread(assistant: Any, server: Any, web_host: str, web_port: int) -> threading.Thread:
     """在独立线程 + 独立 event loop 里跑 uvicorn server，避免与主 loop 抢占。
 
-    从 main.py 的 initialize() 原样抽出（行为不变）：主 loop 上的同步阻塞
-    （SQLite 写、BM25 全表扫描）不再卡 web 请求。绑定失败只告警、不挡启动。
+    主 loop 上的同步阻塞（SQLite 写、BM25 全表扫描）不再卡 web 请求。
+    2026-07-26 起：绑定失败不再「只告警继续跑」——那正是幽灵实例的温床，
+    见 classify_web_serve_outcome / handle_web_fatal。
     """
     def _run_web_in_thread():
+        exc: BaseException | None = None
         try:
             web_loop = asyncio.new_event_loop()
             assistant._web_loop = web_loop
@@ -39,17 +120,17 @@ def start_web_server_thread(assistant: Any, server: Any, web_host: str, web_port
                     web_loop.close()
                 except Exception:
                     pass
-        except OSError as e:
-            if is_bind_address_in_use_error(e):
-                assistant.logger.warning(
-                    "Web 管理后台未启动: 端口 %s 已被占用（通常为先前未退出的本程序实例）。"
-                    "请先结束占用进程: taskkill /F /IM python.exe 或修改 config.yaml 中 web_admin.port",
-                    web_port,
-                )
-            else:
-                assistant.logger.warning("Web 管理后台启动失败: %s", e)
-        except Exception as ex:
-            assistant.logger.warning("Web 管理后台启动跳过: %s", ex)
+        except BaseException as e:  # 必须含 SystemExit：uvicorn bind 失败的真实路径
+            exc = e
+        reason = classify_web_serve_outcome(
+            exc,
+            bool(getattr(server, "started", False)),
+            bool(getattr(server, "should_exit", False)),
+            web_port,
+        )
+        if reason is None:
+            return
+        handle_web_fatal(assistant, reason, web_port)
 
     web_thread = threading.Thread(
         target=_run_web_in_thread,
@@ -290,16 +371,21 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                                 build_autosend_typing_cb(assistant)
                                 if _deliver else None
                             )
-                            # 人设解析器（人设化节奏参数 + 观测分维）：按 (platform,account_id)
-                            # 解析账号人设 id。仅投递模式需要；失败/未就绪回落空（顶层默认）。
+                            # 人设解析器（人设化节奏参数 + 观测分维）：按 (platform,
+                            # account_id, chat_key) 解析生效人设 id（含会话级覆写，
+                            # 节奏参数跟随实际说话的人设）。仅投递模式需要；
+                            # 失败/未就绪回落空（顶层默认）。
                             _persona_resolver = None
                             if _deliver:
-                                def _persona_resolver(platform, account_id, _cfg=assistant.config.config or {}):
+                                def _persona_resolver(platform, account_id, chat_key="", _cfg=assistant.config.config or {}):
                                     try:
                                         from src.ai.persona_voice import (
-                                            resolve_account_persona_id as _rapi,
+                                            resolve_effective_persona_id as _repi,
                                         )
-                                        return _rapi(_cfg, platform, account_id) or ""
+                                        return _repi(
+                                            _cfg, platform, account_id,
+                                            str(chat_key or ""),
+                                        ) or ""
                                     except Exception:
                                         return ""
                             _as_worker = AutosendWorker(

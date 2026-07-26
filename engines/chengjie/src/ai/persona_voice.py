@@ -13,7 +13,7 @@ Usage::
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 
 # Fields that pin a *specific* cloned/reference voice. When a persona switches
@@ -275,8 +275,15 @@ def resolve_effective_voice_context(
             if isinstance(p, dict):
                 resolved_persona = p
         else:
+            # 会话级覆写（与文本出站链同一优先级：conv_override > account >
+            # legacy chat > domain）——开关关/键缺失时 _conv_key 为空，行为不变。
+            _conv_key = ""
+            if chat_key and account_id and conv_override_enabled(cfg):
+                _conv_key = conv_binding_key(
+                    str(platform or ""), str(account_id or ""), str(chat_key))
             p, tier = pm.get_persona_with_tier(
-                str(chat_key or ""), str(account_persona_id or ""))
+                str(chat_key or ""), str(account_persona_id or ""),
+                conversation_key=_conv_key)
             if isinstance(p, dict):
                 resolved_persona = p
                 resolved_id = str(p.get("id") or "").strip()
@@ -398,6 +405,138 @@ def ensure_account_default_persona(
         return default
     except Exception:
         return ""
+
+
+def conv_override_enabled(full_config: Optional[Dict[str, Any]]) -> bool:
+    """会话级人设覆写总开关（``inbox.persona_conv_override.enabled``，默认关）。
+
+    关 = 出站链完全等同旧行为（只看账号人设/legacy chat 绑定）——既是灰度闸，
+    也是事故 kill-switch（关掉后所有已写入的会话覆写立即失效但不删除）。
+    """
+    try:
+        cfg = full_config or {}
+        return bool(
+            ((cfg.get("inbox") or {}).get("persona_conv_override") or {})
+            .get("enabled", False)
+        )
+    except Exception:
+        return False
+
+
+def conv_binding_key(platform: str, account_id: str, chat_key: str) -> str:
+    """会话级人设绑定键：``platform:account_id:chat_key``（3 段）。
+
+    与 ``src.inbox.normalizer.conv_id`` 刻意同构（本模块不 import inbox 层防环；
+    一致性由 tests/test_persona_effective.py 门禁钉住）。3 段键与 legacy
+    peer-global 绑定键（裸 chat_id / ``line_rpa:xxx`` 2 段）天然无碰撞，
+    可安全共存于 PersonaManager._chat_bindings 同一存储（bindings_runtime.yaml）。
+    """
+    return f"{platform}:{account_id}:{chat_key}"
+
+
+# conv_binding_key 首段的合法平台集（会话覆写只会由统一收件箱会话产生，
+# 平台集与 inbox normalizer 同源）。legacy 键即便自带冒号（line_rpa:U123 /
+# web:visitor42）首段也不在此集合或段数不足 3，不会被误判。
+_CONV_KEY_PLATFORMS = frozenset(
+    {"telegram", "whatsapp", "line", "messenger", "web"}
+)
+
+
+def is_conv_binding_key(binding_key: str) -> bool:
+    """判别绑定键是否为 3 段会话覆写键（legacy 清理工具的盘点判据）。
+
+    规则：``split(":", 2)`` 出满 3 个非空段 **且** 首段 ∈ 已知平台集。
+    宁可漏判（未知平台的 3 段键按 legacy 对待，只是多列一行）不可错判
+    （把 legacy 键当覆写键会让清理工具漏掉真正的债）。
+    """
+    parts = str(binding_key or "").split(":", 2)
+    return (
+        len(parts) == 3
+        and all(p.strip() for p in parts)
+        and parts[0].strip().lower() in _CONV_KEY_PLATFORMS
+    )
+
+
+def resolve_effective_persona(
+    full_config: Dict[str, Any],
+    platform: str,
+    account_id: str,
+    chat_key: str = "",
+    *,
+    registry: Any = None,
+) -> Tuple[str, str]:
+    """出站链单一事实源：这条会话到底以谁的身份说话。
+
+    返回 ``(persona_id, tier)``：
+      - ``("chen_mo", "conv_override")``   — 会话级覆写命中（开关开 + 绑定存在 + profile 有效）
+      - ``("lin_xiaoyu", "account_profile")`` — 账号级人设（registry meta / config）
+      - ``("", "")``                        — 都没有（调用方回落 legacy chat 绑定 / 域默认，
+                                              即 PersonaManager 内部既有链）
+
+    覆写命中但 profile 已被删除 → 视同未覆写（回落账号级），绝不让出站链
+    拿到悬空 id。任何异常按下一档降级，永不抛。
+    """
+    cfg = full_config or {}
+    ck = str(chat_key or "").strip()
+    pid, tier = "", ""
+    if ck and conv_override_enabled(cfg):
+        try:
+            from src.utils.persona_manager import PersonaManager
+            pm = PersonaManager.get_instance()
+            key = conv_binding_key(
+                str(platform or "").strip(), str(account_id or "").strip(), ck
+            )
+            ref = pm.get_chat_binding_ref(key)
+            if ref and pm.get_persona_by_id(ref) is not None:
+                pid, tier = ref, "conv_override"
+        except Exception:
+            pass
+    if not pid:
+        pid = resolve_account_persona_id(
+            cfg, platform, account_id, registry=registry
+        )
+        tier = "account_profile" if pid else ""
+    _record_resolve_observation(platform, ck, tier)
+    return pid, tier
+
+
+def _record_resolve_observation(platform: str, chat_key: str, tier: str) -> None:
+    """resolve 观测打点（best-effort，绝不影响解析结果）。
+
+    legacy_present：这条会话存在 legacy peer-global 绑定（引用式或内联快照）——
+    与 tier 一起交给 stats 判「被压制」口径（tier 非空才算压制；tier 空时
+    legacy 会在调用方回落链里真的生效）。
+    """
+    try:
+        from src.ai.persona_override_stats import get_persona_override_stats
+        legacy_present = False
+        if chat_key:
+            try:
+                from src.utils.persona_manager import PersonaManager
+                legacy_present = PersonaManager.get_instance().has_chat_binding(
+                    chat_key
+                )
+            except Exception:
+                legacy_present = False
+        get_persona_override_stats().record_resolve(
+            tier, platform, legacy_present
+        )
+    except Exception:
+        pass
+
+
+def resolve_effective_persona_id(
+    full_config: Dict[str, Any],
+    platform: str,
+    account_id: str,
+    chat_key: str = "",
+    *,
+    registry: Any = None,
+) -> str:
+    """``resolve_effective_persona`` 的 id-only 薄壳（出站链调用点用）。"""
+    return resolve_effective_persona(
+        full_config, platform, account_id, chat_key, registry=registry
+    )[0]
 
 
 def resolve_account_persona_id(

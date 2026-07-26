@@ -167,6 +167,19 @@ class LineRpaService:
                 "skip_if_unchanged": True,
             },
             "vision_read_fallback": {"enabled": False},
+            # P2.4：图片消息识别（XML 定位图片气泡 → 截屏裁剪 → 共享识别层
+            # src/inbox/media_enrich → [图片内容] desc 注入回复上下文）。
+            # 新子系统默认关；开启还需全局 vision.enabled + 可用后端。
+            "media_enrich": {
+                "enabled": False,
+                "crop_margin_px": 8,        # 气泡裁剪外扩像素
+                "mirror_desc_chars": 60,    # inbox/contacts 镜像 [图片] 描述截断
+                # 几何启发式（相对屏幕尺寸；LINE 版本/机型差异大时可调）
+                "min_width_ratio": 0.16,    # 图片气泡最小宽（滤头像/小图标）
+                "min_height_ratio": 0.09,   # 图片气泡最小高
+                "left_edge_max_ratio": 0.32,  # 左缘上限（对方在左；己方图不命中）
+                "cx_max_ratio": 0.62,       # 中心横坐标上限
+            },
             "use_backend_persona": True,
             # 多会话导航（MVP）：开启后 runner 会自动回到聊天列表→扫未读→逐个回
             "navigation": {
@@ -331,7 +344,11 @@ class LineRpaService:
                 if peer:
                     self._last_had_peer_ts = time.time()
                     empty_streak = 0
-                elif step in ("no_peer_text", "duplicate_peer_skipped", "screen_unchanged_skipped", "no_unread"):
+                elif step in (
+                    "no_peer_text", "duplicate_peer_skipped",
+                    "screen_unchanged_skipped", "no_unread",
+                    "image_duplicate_skipped", "image_enrich_skipped",
+                ):
                     empty_streak += 1
                 # 失败计数仅统计非"空跑"类 step
                 success_like = ok or step in (

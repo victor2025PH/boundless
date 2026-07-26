@@ -277,7 +277,24 @@ async def run_autoreply(
     # 先占位（含本条入站标识），避免生成期间同条消息重复触发
     _last_reply[key] = (dedup_text, ts)
 
-    persona_id = str((row.get("meta") or {}).get("persona_id") or "")
+    # 生效人设（2026-07-26）：与 autodraft/autosend 同一共享解析器——
+    # 会话覆写(开关开) → meta.persona_id → meta.persona_ids[0] → config 默认。
+    # 修两处旧缺口：① 只读单数 persona_id，QR 号 sync 写的是复数 persona_ids
+    # → 恒空；② cp-persona 换绑对协议号自动回复不生效。
+    # registry 用调用方已持有的 row 适配（不重查全局库——保住"调用方给什么行
+    # 就按什么行解析"的旧契约，测试/多 registry 语境同样成立）。失败回落旧直读。
+    try:
+        from src.ai.persona_voice import resolve_effective_persona_id as _repi
+
+        class _RowRegistry:
+            def get(self, _platform, _account_id):
+                return row
+
+        persona_id = _repi(
+            cfg, platform, account_id, str(chat_key or ""),
+            registry=_RowRegistry())
+    except Exception:
+        persona_id = str((row.get("meta") or {}).get("persona_id") or "")
     try:
         reply = await generate(
             text=text, platform=platform, account_id=account_id,

@@ -157,16 +157,17 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
                 return False
         except Exception:
             pass
-    # 账号级人设（声音克隆 voice_profile 来源）。编排器
+    # 生效人设（声音克隆 voice_profile 来源）。编排器
     # Telegram 协议号 meta 常无 persona_id（_pid 空）→ 用
-    # 共享解析器按 meta.persona_id → meta.persona_ids[0] →
+    # 共享解析器按 会话覆写 → meta.persona_id → meta.persona_ids[0] →
     # config[platform].persona_ids[0] 统一回退（根治复数/单数
     # 命名不匹配：sync 写 persona_ids 而旧代码读 persona_id →
-    # 空 _real_pid → 灰度白名单误拦真声、回落纯文本的根因）。
+    # 空 _real_pid → 灰度白名单误拦真声、回落纯文本的根因；
+    # 2026-07-26 起会话级覆写让声与文同源，换绑后语音跟着换人）。
     from src.ai.persona_voice import (
-        resolve_account_persona_id as _rapi,
+        resolve_effective_persona_id as _repi,
     )
-    _pid = _rapi(_cfg, platform, account_id)
+    _pid = _repi(_cfg, platform, account_id, str(chat_key))
     # 解析真实人设（_pid 空时按 chat_key 绑定/默认回退），与
     # stage_voice_file 内部同口径（同 chat_key/account）。
     _real_pid = _pid
@@ -322,9 +323,9 @@ async def autosend_video(assistant, platform, account_id, chat_key, text) -> boo
         _log("[autosend video] 判非视频 reason=%s platform=%s acct=%s",
              _reason, platform, account_id)
         return False
-    # 账号级人设（与 autosend voice 同口径解析）
-    from src.ai.persona_voice import resolve_account_persona_id as _rapi
-    _pid = _rapi(_cfg, platform, account_id)
+    # 生效人设（与 autosend voice 同口径解析，含会话覆写）
+    from src.ai.persona_voice import resolve_effective_persona_id as _repi
+    _pid = _repi(_cfg, platform, account_id, str(chat_key))
     _real_pid = _pid
     try:
         from src.ai.persona_voice import resolve_effective_voice_context as _revc
@@ -377,6 +378,7 @@ async def autosend_video(assistant, platform, account_id, chat_key, text) -> boo
 
 async def autosend_image(assistant, platform, account_id, chat_key, text,
                          assume_intent: str = "",
+                         assume_scene: str = "",
                          directive_override=None) -> bool:
     """全自动「按需发图」（gated, 默认关）：客户最近一条在要图/命中关键词时，
     优先发人设注册相册(关键词/通用池, 图或视频, 秒发)，否则回落生成
@@ -385,6 +387,8 @@ async def autosend_image(assistant, platform, account_id, chat_key, text,
     一处生效全平台（telegram/whatsapp/messenger/line/ig）。
     ``assume_intent="selfie"``＝承诺兑现路径：出站文本承诺了发照片，跳过
     peer_text 意图判定强制走自拍链（预算/关系闸门照常）。
+    ``assume_scene``（P0 一致性）＝承诺句里点名的场景（promised_scene 抽取）：
+    兑现必须贴承诺场景（相册场景类硬匹配/生成带场景），杜绝随机人像顶包。
     ``directive_override``＝主 LLM 的 [PHOTO …] 发图指令（photo_directive，
     2026-07-14）：意图+场景直通生成链，跳过关键词/相册判定。"""
     _cfg = assistant.config.config or {}
@@ -429,11 +433,11 @@ async def autosend_image(assistant, platform, account_id, chat_key, text,
         return False
     if not _peer_text:
         return False
-    # 账号级人设（相册分册 / 出图 prompt 来源），与语音同口径解析。
+    # 生效人设（相册分册 / 出图 prompt 来源），与语音同口径解析（含会话覆写）。
     from src.ai.persona_voice import (
-        resolve_account_persona_id as _rapi,
+        resolve_effective_persona_id as _repi,
     )
-    _pid = _rapi(_cfg, platform, account_id)
+    _pid = _repi(_cfg, platform, account_id, str(chat_key))
     _real_pid = _pid
     try:
         from src.ai.persona_voice import (
@@ -473,13 +477,14 @@ async def autosend_image(assistant, platform, account_id, chat_key, text,
         except Exception:
             _pname = ""
 
-        async def _caption(_kind, _subject, _scene=""):
+        async def _caption(_kind, _subject, _scene="", _freshness="fresh"):
             from src.ai.companion_selfie import (
                 build_photo_caption_instruction as _bc,
             )
             return await _ai.chat(_bc(
                 _peer_text, kind=_kind, subject=_subject,
-                persona_name=_pname, scene=_scene))
+                persona_name=_pname, scene=_scene,
+                freshness=_freshness))
 
     # 发送 marshalling：把 orch.send_media 投到 web loop（与语音同口径）。
     async def _send_fn(_mp, _mu, _mt, _cap, _inbox):
@@ -502,16 +507,18 @@ async def autosend_image(assistant, platform, account_id, chat_key, text,
 
     # Phase20 已发媒体日志合流（A/B 线同一份）：deliver 与 draft 同属 worker 线程
     # 串行流程，ContextStore（draft 已在读写）此处追加安全。发图成功 → 记
-    # {note, scene} 进 user_context._media_sent_log —— draft 的场景注入块
-    # 【最近发过的照片】与「跟上次一样的」复刻两线通用。skill_manager 缺席时静默跳过。
+    # {note, scene, series} 进 user_context._media_sent_log —— draft 的场景注入块
+    # 【最近发过的照片】/「跟上次一样的」复刻/衣着连续窗（P1）三处通用。
+    # skill_manager 缺席时静默跳过。
     _sm_ref = getattr(assistant, "skill_manager", None)
 
-    def _on_sent(_note: str, _scene: str) -> None:
+    def _on_sent(_note: str, _scene: str, _series: str = "") -> None:
         if _sm_ref is None:
             return
         try:
             _uc = _sm_ref._get_user_context(str(chat_key))
-            _sm_ref._record_media_sent(_uc, note=_note, scene=_scene)
+            _sm_ref._record_media_sent(
+                _uc, note=_note, scene=_scene, series=_series)
             _sm_ref._context_store.mark_dirty(str(chat_key))
             _sm_ref._context_store.flush(str(chat_key))
         except Exception:
@@ -535,6 +542,7 @@ async def autosend_image(assistant, platform, account_id, chat_key, text,
         send_fn=_send_fn, ai_text=text,
         llm_refine=_refine, llm_caption=_caption,
         assume_intent=str(assume_intent or ""),
+        assume_scene=str(assume_scene or ""),
         directive_override=directive_override,
         requested_scene=_req_scene,
         on_sent=_on_sent)
@@ -859,10 +867,22 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled):
                 )
                 _rpe("detected")
                 if _pg.get("fulfill", True):
+                    # P0 一致性：承诺句点名了场景（「拍张海边的发你」）→ 兑现
+                    # 必须贴场景（相册场景类硬匹配/生成带场景），随机人像不算兑现。
+                    _pscene = ""
+                    try:
+                        from src.ai.outbound_promise_guard import (
+                            promised_scene as _psc,
+                        )
+                        _pscene = (_psc(str(original_text or ""))
+                                   or _psc(str(text or "")))
+                    except Exception:
+                        _pscene = ""
                     try:
                         if await autosend_image(
                             _assistant_ref, platform, account_id,
                             chat_key, text, assume_intent="selfie",
+                            assume_scene=_pscene,
                         ):
                             _rpe("fulfilled")
                             _assistant_ref.logger.info(

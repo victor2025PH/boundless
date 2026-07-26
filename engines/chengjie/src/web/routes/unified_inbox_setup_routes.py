@@ -427,6 +427,18 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
         ok, msg, issues = config_manager.save_channel_credentials(channel, values)
         if not ok:
             return {"ok": False, "detail": msg}
+        # 凭据齐全会顺带开 platform_login（channel_setup.enable_on_ready 桥接）。
+        # 编排器原本只在 app 启动时拉起——这里 best-effort 热拉起，免得「向导配完
+        # 还得重启一次，扫上的号才会上线」。ensure/start_loop 均幂等，已在跑零副作用。
+        try:
+            from src.integrations.account_orchestrator import (
+                ensure_builtin_workers, get_orchestrator, orchestrator_enabled)
+            cfg_now = config_manager.config or {}
+            if orchestrator_enabled(cfg_now):
+                ensure_builtin_workers(cfg_now)
+                await get_orchestrator(cfg_now).start_loop()
+        except Exception:
+            logger.debug("保存凭据后热拉起编排器失败（已忽略；重启后生效）", exc_info=True)
         from src.utils.channel_setup import channel_status
         status = next(
             (c for c in channel_status(config_manager.config or {})

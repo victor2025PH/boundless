@@ -415,9 +415,9 @@
           <label style="font-size:.72rem;color:var(--t3);font-weight:600">{{ (i18n or {}).get('inbox.info.platform', "平台") }} A</label>
           <select id="id-pa" style="padding:.3rem .5rem;border:1px solid var(--bd);border-radius:6px;background:var(--input);color:var(--t);font-size:.8rem">
             <option value="telegram">Telegram</option>
-            <option value="messenger_rpa">Messenger</option>
-            <option value="whatsapp_rpa">WhatsApp</option>
-            <option value="line_rpa">LINE</option>
+            <option value="messenger">Messenger</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="line">LINE</option>
           </select>
         </div>
         <div style="display:flex;flex-direction:column;gap:.2rem">
@@ -429,9 +429,9 @@
           <label style="font-size:.72rem;color:var(--t3);font-weight:600">{{ (i18n or {}).get('inbox.info.platform', "平台") }} B</label>
           <select id="id-pb" style="padding:.3rem .5rem;border:1px solid var(--bd);border-radius:6px;background:var(--input);color:var(--t);font-size:.8rem">
             <option value="telegram">Telegram</option>
-            <option value="messenger_rpa">Messenger</option>
-            <option value="whatsapp_rpa">WhatsApp</option>
-            <option value="line_rpa">LINE</option>
+            <option value="messenger">Messenger</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="line">LINE</option>
           </select>
         </div>
         <div style="display:flex;flex-direction:column;gap:.2rem">
@@ -472,8 +472,10 @@
 <script>
 const AS_TABS = ['personas','memory','learner','relations','identity'];
 // S6: Platform display name normalization
+// 写侧一律 inbox 平台名（与记忆键 canonical 同口径）；`_rpa` 键仅为存量行显示兼容。
 function _platLabel(p) {
-  return ({telegram:'Telegram',messenger_rpa:'Messenger',whatsapp_rpa:'WhatsApp',line_rpa:'LINE'})[p] || p;
+  return ({telegram:'Telegram',messenger:'Messenger',whatsapp:'WhatsApp',line:'LINE',web:'Web',
+           messenger_rpa:'Messenger',whatsapp_rpa:'WhatsApp',line_rpa:'LINE'})[p] || p;
 }
 const AS_LOADED_FRAMES = new Set();
 

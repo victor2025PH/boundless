@@ -250,7 +250,10 @@ class ConfigManager:
             if path.exists():
                 with open(path, "r", encoding="utf-8") as f:
                     overlay = yaml.safe_load(f) or {}
-            ok, msg = apply_channel_values(overlay, channel, values)
+            # base_config=运行合并视图：主 config 已有的凭据也算「就绪」，
+            # 使 enable_on_ready 桥接（如 Telegram protocol_enabled）判定不漏。
+            ok, msg = apply_channel_values(
+                overlay, channel, values, base_config=self.config)
             if not ok:
                 return False, msg, []
             tmp = path.with_suffix(".tmp")

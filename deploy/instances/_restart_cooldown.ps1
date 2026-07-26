@@ -197,6 +197,66 @@ function Test-RestartCooldownActive {
     return @{ active = $false; record = $cd; left_min = 0; path = (Get-RestartCooldownPath $Instance).primary }
 }
 
+# ── Restart-inflight sentinel (2026-07-26 ghost-instance fix) ────────────────
+# restart_instance stops the port ~40-60s before the new process binds. The
+# watchdog DOWN heal path deliberately ignores the cooldown ("process is dead
+# anyway"), so a watchdog tick inside that window started a SECOND engine on
+# the same data root: it lost the port race (bind 10048) but its Telegram
+# client kept running — a ghost fighting the real instance for the session
+# (same class as the 2026-07-22 incident). The sentinel marks "a restart is
+# being orchestrated right now" so the watchdog skips healing inside the
+# window. TTL self-expires if the restart script crashes mid-run.
+
+function Get-RestartInflightPath([string]$Instance) {
+    return (Join-Path (Get-RestartCooldownDir) ("restart_inflight_{0}.json" -f $Instance))
+}
+
+function Write-RestartInflight {
+    param(
+        [Parameter(Mandatory = $true)][string]$Instance,
+        [string]$Reason = 'restart',
+        [int]$TtlSec = 330
+    )
+    $p = Get-RestartInflightPath $Instance
+    $payload = [ordered]@{
+        instance   = $Instance
+        ts         = (Get-Date).ToString('o')
+        unix       = [int]([DateTimeOffset]::Now.ToUnixTimeSeconds())
+        reason     = $Reason
+        ttl_sec    = $TtlSec
+        host       = $env:COMPUTERNAME
+        script_pid = $PID
+    } | ConvertTo-Json -Compress
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($p, $payload, $utf8)
+    return $p
+}
+
+function Clear-RestartInflight([string]$Instance) {
+    $p = Get-RestartInflightPath $Instance
+    if (Test-Path -LiteralPath $p) {
+        Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-RestartInflight([string]$Instance) {
+    $p = Get-RestartInflightPath $Instance
+    if (-not (Test-Path -LiteralPath $p)) {
+        return @{ active = $false; record = $null; age_sec = -1; path = $p }
+    }
+    try {
+        $o = Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json
+        $ttl = 330
+        try { if ($o.ttl_sec -and [int]$o.ttl_sec -gt 0) { $ttl = [int]$o.ttl_sec } } catch {}
+        $age = [int](([DateTimeOffset]::Now.ToUnixTimeSeconds()) - [int]$o.unix)
+        if ($age -ge 0 -and $age -lt $ttl) {
+            return @{ active = $true; record = $o; age_sec = $age; path = $p }
+        }
+    } catch {}
+    # Stale (past TTL) or unreadable -> treat as not active (self-heal)
+    return @{ active = $false; record = $null; age_sec = -1; path = $p }
+}
+
 function Get-ChengjieDirtyRestartAdvice {
     # Returns: must_restart | hot_only | clean | unknown
     param([string]$EngineDir = '')

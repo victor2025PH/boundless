@@ -49,6 +49,14 @@ DATAS = [
     (REPO / "config" / "config.example.yaml", "config"),
 ]
 
+# 集团底座 platform/credpool 的 stdlib 瘦客户端（中央凭据池）。
+# 它在**引擎目录之外**（仓库根 platform/），PyInstaller 不会自动带上——不打进包，
+# 桌面版就找不到它，中央池静默失效、用户又被逼回 my.telegram.org 自己申请 api_id。
+# 冻结后落在 sys._MEIPASS/platform/credpool/，与 credpool_bridge 的查找顺序对应。
+_CREDPOOL_SRC = REPO.parent.parent / "platform" / "credpool"
+if _CREDPOOL_SRC.is_dir():
+    DATAS.append((_CREDPOOL_SRC, "platform/credpool"))
+
 # static/ 下的运行时落地目录：protocol_media＝客户聊天媒体（语音/照片/视频），
 # persona_avatars＝运行时同步的账号/人设头像。均为 gitignore 的生产数据，随包分发
 # ＝把真实客户隐私打进公网安装包（0.1.0 曾中招），必须剔除；两目录代码均按需重建。

@@ -271,17 +271,18 @@ class PersonaMediaStore:
         self, conv_key: str, *, max_age_days: float = 0,
         now: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """该会话收过的媒体：``{"ids": set, "series": set}``。查失败返回空集合。
+        """该会话收过的媒体：``{"ids": set, "series": set, "items": [{id,series,ts}]}``。
+        查失败返回空集合。
 
         ``max_age_days`` > 0 时只看最近 N 天（时间衰减，2026-07-22）：太久之前
         发过的图重新可用——真人也会隔几个月重发怀旧照，永久排除反而把相册
         提前耗尽逼进"翻旧照"模式。0=不衰减（全历史排除）。
         """
-        out: Dict[str, Any] = {"ids": set(), "series": set()}
+        out: Dict[str, Any] = {"ids": set(), "series": set(), "items": []}
         if not conv_key:
             return out
         try:
-            sql = ("SELECT media_id, series FROM persona_media_sends "
+            sql = ("SELECT media_id, series, sent_at FROM persona_media_sends "
                    "WHERE conv_key = ?")
             args: list = [str(conv_key)]
             if max_age_days and max_age_days > 0:
@@ -295,6 +296,10 @@ class PersonaMediaStore:
                 s = str(r["series"] or "")
                 if s:
                     out["series"].add(s)
+                # items：带时间戳的明细（P0 一致性——重发冷却/服装连续性判断用）
+                out["items"].append({
+                    "id": str(r["media_id"]), "series": s,
+                    "ts": float(r["sent_at"] or 0)})
         except Exception:
             logger.debug("[persona_media] sent_history 失败（已忽略）", exc_info=True)
         return out

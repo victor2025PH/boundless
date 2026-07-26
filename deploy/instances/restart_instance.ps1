@@ -65,7 +65,12 @@ $EngineDir = Join-Path $RepoRoot 'engines\chengjie'
 function Say([string]$m, [string]$color = 'Gray') {
     Write-Host ("[restart-{0}] {1}" -f $Instance, $m) -ForegroundColor $color
 }
+$script:InflightMarked = $false
 function Fail([string]$msg) {
+    if ($script:InflightMarked) {
+        Clear-RestartInflight $Instance
+        $script:InflightMarked = $false
+    }
     Say $msg 'Red'
     exit 1
 }
@@ -201,6 +206,18 @@ if ($DryRun) {
     exit 0
 }
 
+# Ghost-instance guard (2026-07-26): refuse when another orchestrator is
+# mid-restart (fresh inflight sentinel). -Force = operator override.
+$inflight = Test-RestartInflight $Instance
+if ($inflight.active -and -not $Force) {
+    Fail ("Another restart of {0} is in flight (age={1}s reason={2} pid={3}). Wait for it to finish; -Force only if you are sure it died." -f $Instance, $inflight.age_sec, $inflight.record.reason, $inflight.record.script_pid)
+}
+# Mark the stop->bind window so the watchdog DOWN path does not double-start
+# (a second engine on the same data root loses the port bind but its Telegram
+# client still runs = session-fighting ghost).
+$null = Write-RestartInflight -Instance $Instance -Reason $Reason -TtlSec ($ReadyWaitSec + 120)
+$script:InflightMarked = $true
+
 $t0 = Get-Date
 
 $stopScript = Join-Path $PSScriptRoot 'stop_instance.ps1'
@@ -247,6 +264,8 @@ if (-not $ready) {
     Fail ("Not ready after {0}s (/login). Check {1}\logs\ latest boot_*.out.log; keep agents off the workbench." -f $sec, $root)
 }
 
+Clear-RestartInflight $Instance
+$script:InflightMarked = $false
 $written = Write-RestartCooldown -Instance $Instance -DataRoot $root -Port $effPort -Reason $Reason -CooldownMin $CooldownMin -WindowSec $sec
 $cdPath = if ($written -is [hashtable]) { [string]$written.path } else { [string]$written }
 $flap = if ($written -is [hashtable]) { $written.flap } else { $null }

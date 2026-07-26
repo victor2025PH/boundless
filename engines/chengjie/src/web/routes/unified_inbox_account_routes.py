@@ -137,6 +137,32 @@ _TG_FETCH_TIMEOUT_SEC = 8.0
 # 断网时每个 resolve 挂满 8s，无上限会把池吃空。超限直接快败（best-effort 补名，可重试）。
 _RESOLVE_PEER_SEM = threading.Semaphore(4)
 
+# 通讯录「立即同步」按钮的进程内限频：{platform:account_id: 上次触发的 monotonic}。
+# 目录同步是重 RPC（Telegram 要遍历 dialogs / WhatsApp 要 resyncAppState 全量回流），
+# 坐席狂点会把 Telegram RPC 打爆触发 FloodWait——那会**连累正常收发消息**几分钟到几小时，
+# 代价远大于「晚 10 分钟看到新好友」。故限死同号 10 分钟一次。
+# 只放进程内 dict：重启后重新计时的代价（最多多一次同步）远小于持久化的复杂度。
+_CONTACTS_REFRESH_COOLDOWN_SEC = 600.0
+_CONTACTS_REFRESH_LAST: Dict[str, float] = {}
+
+
+def _contacts_refresh_cooldown_left(platform: str, account_id: str) -> float:
+    """距下次允许「立即同步」还剩几秒；0 = 现在可以。"""
+    key = f"{platform}:{account_id}"
+    last = _CONTACTS_REFRESH_LAST.get(key)
+    if last is None:
+        return 0.0
+    left = _CONTACTS_REFRESH_COOLDOWN_SEC - (time.monotonic() - last)
+    if left <= 0:
+        _CONTACTS_REFRESH_LAST.pop(key, None)
+        return 0.0
+    return left
+
+
+def _contacts_refresh_mark(platform: str, account_id: str) -> None:
+    """记一次真实触发（仅在同步真的发出去之后调用，失败不该占用冷却窗）。"""
+    _CONTACTS_REFRESH_LAST[f"{platform}:{account_id}"] = time.monotonic()
+
 # Telegram 账号级聊天记录同步的进度状态：{account_id: {state, dialogs_done, dialogs_total,
 # messages, error, started_at, finished_at}}。同步协程跑在 pyrogram 自身 loop（独立线程），
 # web 线程轮询读——全程经 _TG_HIST_SYNC_LOCK 保护。
@@ -1184,7 +1210,29 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
 
     @app.get("/api/platforms/{platform}/{account_id}/contacts")
     async def api_platform_contacts(platform: str, account_id: str, request: Request):
-        """好友名单：读取某协议账号已同步的通讯录（供前端「通讯录」视图）。"""
+        """好友名单：读取某协议账号已同步的通讯录（供前端「通讯录」视图）。
+
+        query:
+        - ``limit``：条数上限（store 侧封顶 5000）；
+        - ``enriched=1``：改走「联系人 + 会话状态」联表，每行补
+          ``has_conversation/last_ts/unread/never_spoke``，并额外返回 ``summary``
+          资产盘点段（未开口 / 沉默 / 已有会话）。**默认 0 = 旧形状逐字段不变**
+          （现有前端仍在消费旧形状，向后兼容是硬约束）；
+        - ``only``：仅 enriched 有效，``""``/``never_spoke``/``silent``/``chat_only``
+          档位筛选（``chat_only``＝有往来但没存进通讯录，仅并集口径下有内容）；
+        - ``q``：仅 enriched 有效，服务端按 名字/备注名/号码 模糊匹配（不传=全量，
+          旧「全量拉下来本地筛」的调用方零改动）；
+        - ``include_chats``：仅 enriched 有效，**默认开**。取数口径从「通讯录表」
+          升级为「人的并集」＝通讯录 ∪ 会话里的私聊 peer。为什么默认开：Telegram
+          的 ``get_contacts()`` 只含「我主动保存过的联系人」，线上实测三个生产 TG
+          账号同步全部成功而通讯录=0、同账号却有 62 条真实往来会话——默认关等于
+          「联系人」面板对 Telegram 恒空，坐席按名字找昨天聊过的客户永远找不到。
+          需要纯通讯录口径的消费方显式传 ``include_chats=0``。
+          已知的纯名单口径消费方：ops-overview「客户资产（目录同步）」卡
+          （``enriched=1&limit=1&include_chats=0``）——它问的是「已同步的**好友名单**
+          里有多少沉睡线索」，并集会把分母扩到全部往来的人（只有会话的人天然算
+          「开过口」）使「未开口占比」语义漂移，故显式关。改动该卡时勿丢这个参数。
+        """
         api_auth(request)
         store = getattr(request.app.state, "inbox_store", None)
         if store is None:
@@ -1193,9 +1241,109 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             limit = int(request.query_params.get("limit") or 1000)
         except (TypeError, ValueError):
             limit = 1000
-        contacts = store.list_protocol_contacts(platform, account_id, limit=limit)
-        return {"ok": True, "platform": platform, "account_id": account_id,
-                "count": len(contacts), "contacts": contacts}
+        if str(request.query_params.get("enriched") or "") not in ("1", "true", "yes"):
+            contacts = store.list_protocol_contacts(platform, account_id, limit=limit)
+            return {"ok": True, "platform": platform, "account_id": account_id,
+                    "count": len(contacts), "contacts": contacts}
+        only = str(request.query_params.get("only") or "")
+        q = str(request.query_params.get("q") or "")
+        # 缺省=开（本轮要交付的用户价值）；显式传值时与 enriched 同一套真值口径
+        _inc_raw = request.query_params.get("include_chats")
+        include_chats = (True if _inc_raw is None or _inc_raw == ""
+                         else str(_inc_raw) in ("1", "true", "yes"))
+        contacts = store.list_protocol_contacts_enriched(
+            platform, account_id, limit=limit, only=only, query=q,
+            include_chats=include_chats)
+        summary = store.protocol_contacts_summary(
+            platform, account_id, query=q, include_chats=include_chats)
+        return {
+            "ok": True, "platform": platform, "account_id": account_id,
+            "count": len(contacts),
+            # 回显生效口径：前端据此如实标注「通讯录 / 通讯录+会话」，
+            # 避免用户把并集基数当成通讯录同步成果去判断同步有没有跑通
+            "include_chats": include_chats,
+            # 汇总跟随 q 但不跟随 only（档位是视图筛选，盘点数字要给全景基数）；
+            # silent_30d 的 30 天口径见 store.PROTOCOL_CONTACT_SILENT_DAYS
+            "summary": {
+                "total": summary["total"],
+                "never_spoke": summary["never_spoke"],
+                "silent_30d": summary["silent"],
+                "with_conversation": summary["with_conversation"],
+                "in_book": summary["in_book"],
+                "chat_only": summary["chat_only"],
+            },
+            "contacts": contacts,
+        }
+
+    @app.post("/api/platforms/{platform}/{account_id}/contacts/refresh")
+    async def api_platform_contacts_refresh(platform: str, account_id: str,
+                                            request: Request):
+        """手动触发该账号的「目录重新同步」（好友名单 + 会话占位）。
+
+        供工作台通讯录面板的「立即同步」按钮用。异步触发、立即返回——目录同步走
+        平台 RPC 可能耗时数十秒，同步等待会把 web 请求挂死。
+
+        返回 ``{"ok": True, "started": True, ...}``，或 ``ok=False`` + ``reason``：
+        ``unsupported_platform`` / ``protocol_disabled`` / ``account_offline`` /
+        ``service_error`` / ``cooldown``（附 ``retry_after_sec``）。
+        """
+        api_auth(request)
+        platform = str(platform or "").lower()
+        if platform not in ("telegram", "whatsapp"):
+            return {"ok": False, "reason": "unsupported_platform"}
+        left = _contacts_refresh_cooldown_left(platform, account_id)
+        if left > 0:
+            return {"ok": False, "reason": "cooldown",
+                    "retry_after_sec": int(left) + 1}
+        if platform == "telegram":
+            # 软依赖：目录同步模块由并行工作线交付，此刻可能还不存在。import 失败
+            # 只让本端点降级成 unsupported，绝不能在模块顶层 import 把整个 app 带崩。
+            try:
+                from src.integrations.telegram_directory_sync import (
+                    sync_directory_once,
+                )
+            except ImportError:
+                return {"ok": False, "reason": "unsupported_platform"}
+            pyro = _get_tg_pyro_for_account(request.app, account_id)
+            loop = getattr(pyro, "loop", None)
+            if pyro is None or loop is None or not loop.is_running():
+                return {"ok": False, "reason": "account_offline"}
+            cfg = (config_manager.config if config_manager is not None else {}) or {}
+
+            async def _run() -> None:
+                try:
+                    await sync_directory_once(pyro, account_id, cfg)
+                except Exception:
+                    logger.debug("[protocol] telegram 目录同步失败 acct=%s",
+                                 account_id, exc_info=True)
+
+            _contacts_refresh_mark(platform, account_id)
+            asyncio.run_coroutine_threadsafe(_run(), loop)
+            return {"ok": True, "started": True, "platform": platform,
+                    "account_id": account_id}
+        # WhatsApp：复用 Baileys 既有 /accounts/:id/resync（resyncAppState →
+        # contacts.upsert 回流 → 内部桥 /api/internal/protocol/contacts 落库）
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations.whatsapp_baileys_login import (
+            protocol_enabled as wa_enabled, service_base_url, _post_json,
+        )
+        if not wa_enabled(cfg):
+            return {"ok": False, "reason": "protocol_disabled"}
+        try:
+            res = await _post_json(
+                f"{service_base_url(cfg)}/accounts/{account_id}/resync", {})
+        except Exception as exc:
+            # Node 对「账号未连接」回 404 —— 语义是号离线，不是服务坏了，区分开
+            status = getattr(getattr(exc, "response", None), "status_code", 0)
+            if status == 404:
+                return {"ok": False, "reason": "account_offline"}
+            logger.debug("[protocol] whatsapp 通讯录重同步触发失败", exc_info=True)
+            return {"ok": False, "reason": "service_error"}
+        if not bool((res or {}).get("ok", False)):
+            return {"ok": False, "reason": "service_error"}
+        _contacts_refresh_mark(platform, account_id)
+        return {"ok": True, "started": True, "platform": platform,
+                "account_id": account_id}
 
     @app.post("/api/platforms/{platform}/{account_id}/history")
     async def api_platform_history(platform: str, account_id: str, request: Request):

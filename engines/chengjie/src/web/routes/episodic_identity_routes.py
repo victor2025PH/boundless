@@ -8,10 +8,67 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict
+from pathlib import Path
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 from fastapi import HTTPException, Request
+from src.utils.identity_shadow_actions import (
+    build_pair_evidence,
+    confirm_link_pair,
+    dismiss_pair,
+    pair_key,
+)
+from src.utils.identity_shadow_periodic import (
+    resolve_inbox_db,
+    read_state,
+    run_periodic_scan,
+    shadow_periodic_config,
+    state_path,
+    write_state,
+)
 from src.web.web_i18n import tr
+
+
+def _parse_pair_body(body: Optional[Mapping[str, Any]]) -> Tuple[str, str, str, str]:
+    """Extract platform_a/chat_a/platform_b/chat_b from JSON body or query-like mapping."""
+    src = body or {}
+    return (
+        str(src.get("platform_a") or "").strip(),
+        str(src.get("chat_a") or "").strip(),
+        str(src.get("platform_b") or "").strip(),
+        str(src.get("chat_b") or "").strip(),
+    )
+
+
+def _sample_row_pair_key(row: Mapping[str, Any]) -> str:
+    """pair_key from structured sample fields, or from a/b ``plat:chat`` strings."""
+    pa = str(row.get("a_platform") or "").strip()
+    ca = str(row.get("a_chat") or "").strip()
+    pb = str(row.get("b_platform") or "").strip()
+    cb = str(row.get("b_chat") or "").strip()
+    if pa and ca and pb and cb:
+        return pair_key(pa, ca, pb, cb)
+    a = str(row.get("a") or "").strip()
+    b = str(row.get("b") or "").strip()
+    if ":" in a and ":" in b:
+        pa, ca = a.split(":", 1)
+        pb, cb = b.split(":", 1)
+        return pair_key(pa, ca, pb, cb)
+    return ""
+
+
+def _sample_has_structured_pair_fields(sample: Any) -> bool:
+    if not isinstance(sample, list):
+        return False
+    for row in sample:
+        if not isinstance(row, Mapping):
+            continue
+        if all(
+            str(row.get(k) or "").strip()
+            for k in ("a_platform", "a_chat", "b_platform", "b_chat")
+        ):
+            return True
+    return False
 
 
 def build_correction_stats(
@@ -255,6 +312,22 @@ def register_episodic_identity_routes(app, ctx) -> None:
         sm = getattr(telegram_client, "skill_manager", None) if telegram_client else None
         return getattr(sm, "_cpi", None) if sm else None
 
+    def _audit_identity(
+        request: Request, action: str, target: str, *, new_val: str = "",
+    ) -> None:
+        """best-effort 身份操作审计（谁链/解链了什么）；绝不阻断请求。"""
+        audit = getattr(ctx, "audit_store", None)
+        if not audit:
+            return
+        try:
+            actor = str(
+                request.session.get("username")
+                or request.session.get("role") or "web_admin"
+            )
+            audit.log(actor, action, target=target, new_val=new_val)
+        except Exception:
+            pass
+
     @app.get("/api/identity")
     async def api_identity_list(request: Request, limit: int = 200):
         """List all (platform, platform_uid, canonical_id) rows."""
@@ -271,7 +344,10 @@ def register_episodic_identity_routes(app, ctx) -> None:
     @app.post("/api/identity/link")
     async def api_identity_link(request: Request):
         """Link two platform UIDs to share the same episodic memory.
-        Body: {platform_a, uid_a, platform_b, uid_b}"""
+        Body: {platform_a, uid_a, platform_b, uid_b}
+
+        P10：与影子确认同口径——B 侧旧 canonical 的历史情景记忆随关联
+        merge 进共享 canonical，B 既有 cluster 整簇改挂（传递性）。"""
         _api_write("identity")(request)
         cpi = _get_cpi()
         if not cpi:
@@ -281,13 +357,43 @@ def register_episodic_identity_routes(app, ctx) -> None:
         pb, ub = str(body.get("platform_b", "")), str(body.get("uid_b", ""))
         if not all([pa, ua, pb, ub]):
             raise HTTPException(status_code=400, detail=tr(request, "err.epi.need_ab_pairs"))
-        canon = cpi.link(pa, ua, pb, ub)
-        return {"ok": True, "canonical_id": canon}
+        from src.utils.cross_platform_identity import link_and_merge_memory
+        _sm = getattr(telegram_client, "skill_manager", None) if telegram_client else None
+        _store = getattr(_sm, "_episodic_store", None) if _sm else None
+        out = link_and_merge_memory(cpi, _store, pa, ua, pb, ub)
+        # 合流观测累计（与影子确认同一 totals 文件）
+        try:
+            from src.utils.identity_shadow_actions import record_merge_event
+            _, _cfg_dir = _cfg_and_dir()
+            record_merge_event(
+                _cfg_dir, "manual_link",
+                merged_rows=int(out.get("memory_rows_merged") or 0),
+                cluster_relinked=len(out.get("cluster_relinked") or []),
+                canonical=str(out.get("canonical_id") or ""),
+            )
+        except Exception:
+            pass
+        _audit_identity(
+            request, "identity_link", f"{pa}:{ua}|{pb}:{ub}",
+            new_val=(
+                f"{str(out.get('canonical_id') or '')[:80]}"
+                f" merged={int(out.get('memory_rows_merged') or 0)}"
+            ),
+        )
+        return {
+            "ok": True,
+            "canonical_id": out.get("canonical_id"),
+            "memory_rows_merged": int(out.get("memory_rows_merged") or 0),
+            "cluster_relinked": out.get("cluster_relinked") or [],
+        }
 
     @app.post("/api/identity/unlink")
     async def api_identity_unlink(request: Request):
         """Detach a platform UID back to its own canonical_id.
-        Body: {platform, uid}"""
+        Body: {platform, uid}
+
+        注意：已合流的历史记忆留在共享 canonical（内容已混合无法归属拆分），
+        unlink 只影响未来读写。"""
         _api_write("identity")(request)
         cpi = _get_cpi()
         if not cpi:
@@ -297,4 +403,181 @@ def register_episodic_identity_routes(app, ctx) -> None:
         if not plat or not uid:
             raise HTTPException(status_code=400, detail=tr(request, "err.epi.need_platform_uid"))
         new_canon = cpi.unlink(plat, uid)
+        _audit_identity(request, "identity_unlink", f"{plat}:{uid}",
+                        new_val=str(new_canon or "")[:80])
         return {"ok": True, "canonical_id": new_canon}
+
+    # ── 身份影子：证据包 / 否定 / 确认关联（只读扫描之外的人工处置）──────────
+
+    def _cfg_and_dir():
+        cm = getattr(ctx, "config_manager", None)
+        cfg = (getattr(cm, "config", None) if cm is not None else None) or {}
+        raw_path = getattr(cm, "config_path", None) if cm is not None else None
+        cfg_dir = Path(raw_path).parent if raw_path else Path("config")
+        return cfg, cfg_dir
+
+    @app.get("/api/identity/shadow/evidence")
+    async def api_identity_shadow_evidence(
+        request: Request,
+        platform_a: str = "",
+        chat_a: str = "",
+        platform_b: str = "",
+        chat_b: str = "",
+    ):
+        """影子配对证据包（消息片段 + 账号分桶），供人工核对。"""
+        _api_auth(request)
+        pa, ca, pb, cb = _parse_pair_body({
+            "platform_a": platform_a,
+            "chat_a": chat_a,
+            "platform_b": platform_b,
+            "chat_b": chat_b,
+        })
+        if not all([pa, ca, pb, cb]):
+            raise HTTPException(status_code=400, detail=tr(request, "err.ish.need_pair"))
+        cfg, cfg_dir = _cfg_and_dir()
+        inbox_db = resolve_inbox_db(cfg, cfg_dir)
+        pair = {
+            "a": {"platform": pa, "chat_key": ca},
+            "b": {"platform": pb, "chat_key": cb},
+        }
+        evidence = build_pair_evidence(inbox_db, pair)
+        return {"ok": True, **evidence}
+
+    @app.post("/api/identity/shadow/dismiss")
+    async def api_identity_shadow_dismiss(request: Request):
+        """标记「不是同一人」并轻量刷新影子 state 样本。"""
+        _api_write("identity")(request)
+        body = await request.json()
+        pa, ca, pb, cb = _parse_pair_body(body if isinstance(body, dict) else {})
+        if not all([pa, ca, pb, cb]):
+            raise HTTPException(status_code=400, detail=tr(request, "err.ish.need_pair"))
+        cfg, cfg_dir = _cfg_and_dir()
+        reason = str((body or {}).get("reason") or "not_same_person")[:80]
+        result = dismiss_pair(cfg_dir, pa, ca, pb, cb, reason=reason)
+        pk = str(result.get("pair_key") or "")
+        if result.get("ok") and pk:
+            try:
+                sp = state_path(cfg_dir)
+                st = read_state(sp)
+                sample = st.get("sample")
+                if isinstance(sample, list) and sample:
+                    has_structured = _sample_has_structured_pair_fields(sample)
+                    can_match = any(
+                        _sample_row_pair_key(r)
+                        for r in sample if isinstance(r, Mapping)
+                    )
+                    if has_structured or can_match:
+                        kept = []
+                        removed_tiers: Dict[str, int] = {}
+                        for row in sample:
+                            if not isinstance(row, Mapping):
+                                kept.append(row)
+                                continue
+                            if _sample_row_pair_key(row) == pk:
+                                tier = str(row.get("tier") or "")
+                                if tier:
+                                    removed_tiers[tier] = (
+                                        removed_tiers.get(tier, 0) + 1
+                                    )
+                                continue
+                            kept.append(row)
+                        removed_n = len(sample) - len(kept)
+                        if removed_n > 0:
+                            st["sample"] = kept
+                            st["pairs"] = max(
+                                0, int(st.get("pairs") or 0) - removed_n,
+                            )
+                            counts = dict(st.get("counts") or {})
+                            for tier, n in removed_tiers.items():
+                                counts[tier] = max(
+                                    0, int(counts.get(tier) or 0) - n,
+                                )
+                            st["counts"] = counts
+                            write_state(sp, st)
+                    elif (
+                        not has_structured
+                        and shadow_periodic_config(cfg).get("enabled")
+                    ):
+                        # 样本既无结构化字段也无法解析 a/b → 整轮重扫兜底
+                        run_periodic_scan(cfg, cfg_dir)
+            except Exception:
+                pass
+        return result
+
+    @app.post("/api/identity/shadow/confirm-link")
+    async def api_identity_shadow_confirm_link(request: Request):
+        """人工确认同一人：链两侧全部账号分桶键 → 同一 canonical。"""
+        _api_write("identity")(request)
+        cpi = _get_cpi()
+        if not cpi:
+            raise HTTPException(
+                status_code=503, detail=tr(request, "err.epi.identity_not_ready"),
+            )
+        body = await request.json()
+        pa, ca, pb, cb = _parse_pair_body(body if isinstance(body, dict) else {})
+        if not all([pa, ca, pb, cb]):
+            raise HTTPException(status_code=400, detail=tr(request, "err.ish.need_pair"))
+        cfg, cfg_dir = _cfg_and_dir()
+        inbox_db = resolve_inbox_db(cfg, cfg_dir)
+        # 顺带记忆合流：把两侧旧 canonical 下的历史事实并入共享 canonical
+        # （store 缺席=纯关联，行为同旧版，绝不阻断）
+        _sm = getattr(telegram_client, "skill_manager", None) if telegram_client else None
+        _store = getattr(_sm, "_episodic_store", None) if _sm else None
+        result = confirm_link_pair(
+            cpi, inbox_db, pa, ca, pb, cb, episodic_store=_store)
+        if not result.get("ok"):
+            err = str(result.get("error") or "")
+            if err == "bad_pair_or_cpi":
+                raise HTTPException(
+                    status_code=400, detail=tr(request, "err.ish.bad_pair"),
+                )
+            if err == "no_uids":
+                raise HTTPException(
+                    status_code=400, detail=tr(request, "err.ish.no_uids"),
+                )
+            raise HTTPException(status_code=400, detail=err or "confirm_failed")
+        pk = str(result.get("pair_key") or "")
+        try:
+            sp = state_path(cfg_dir)
+            st = read_state(sp)
+            sample = st.get("sample")
+            bumped = False
+            if isinstance(sample, list) and pk:
+                for row in sample:
+                    if not isinstance(row, dict):
+                        continue
+                    if _sample_row_pair_key(row) != pk:
+                        continue
+                    if not row.get("already_linked"):
+                        row["already_linked"] = True
+                        bumped = True
+                if bumped:
+                    counts = dict(st.get("counts") or {})
+                    counts["already_linked"] = int(
+                        counts.get("already_linked") or 0
+                    ) + 1
+                    st["counts"] = counts
+                    st["sample"] = sample
+                    write_state(sp, st)
+        except Exception:
+            pass
+        # 合流观测累计（best-effort；独立 totals 文件，ops 卡读数）
+        try:
+            from src.utils.identity_shadow_actions import record_merge_event
+            record_merge_event(
+                cfg_dir, "confirm",
+                merged_rows=int(result.get("merged_rows") or 0),
+                cluster_relinked=len(result.get("cluster_relinked") or []),
+                canonical=str(result.get("canonical_id") or ""),
+            )
+        except Exception:
+            pass
+        _audit_identity(
+            request, "identity_shadow_confirm",
+            pk or f"{pa}:{ca}|{pb}:{cb}",
+            new_val=(
+                f"{str(result.get('canonical_id') or '')[:80]}"
+                f" merged={int(result.get('merged_rows') or 0)}"
+            ),
+        )
+        return result

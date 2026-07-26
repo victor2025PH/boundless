@@ -824,25 +824,45 @@ class PersonaManager:
         p, _tier = self.get_persona_with_tier(chat_id, account_persona_id)
         return p
 
+    _TIER_CONV = "conv_override"
     _TIER_CHAT = "chat_binding"
     _TIER_ACCOUNT = "account_profile"
     _TIER_DOMAIN = "domain"
     _TIER_DEFAULT = "default"
 
+    def get_chat_binding_ref(self, binding_key: str) -> str:
+        """按绑定键读引用式绑定的 profile_id（无绑定/内联快照 → 空串）。
+
+        供 ``persona_voice.resolve_effective_persona`` 查会话级覆写
+        （3 段键 ``platform:account:chat_key``）——只读访问器，避免外部摸私有 dict。
+        """
+        if not binding_key:
+            return ""
+        return str(self._chat_bindings.get(str(binding_key)) or "")
+
     def get_persona_with_tier(
         self,
         chat_id: str = "",
         account_persona_id: str = "",
+        conversation_key: str = "",
     ) -> tuple:
         """Resolve persona + tier label.
 
         Returns:
             (persona_dict, tier_str) where tier_str ∈
-            {'chat_binding', 'account_profile', 'domain', 'default'}
+            {'conv_override', 'chat_binding', 'account_profile', 'domain', 'default'}
 
-        多协议号：``account_persona_id`` 优先于 peer-global chat_binding
-        （见 get_persona 文档）。无人设账号仍可用 chat_binding。
+        优先级：``conversation_key``（会话级覆写，2026-07-26 方案 A——只影响
+        这一条会话，开关/键构造由调用方 ``persona_voice`` 收口，这里只做纯查表）
+        > ``account_persona_id``（多协议号 2026-07-24 修复：账号人设优先于
+        peer-global chat_binding，防双号串话）> chat_binding > domain > default。
         """
+        if conversation_key:
+            _conv_ref = self._chat_bindings.get(str(conversation_key))
+            if _conv_ref:
+                _conv_p = self._profile_personas.get(str(_conv_ref))
+                if _conv_p is not None:
+                    return _conv_p, self._TIER_CONV
         acc_pid = str(account_persona_id or "").strip()
         if acc_pid:
             acct_p = self._profile_personas.get(acc_pid)

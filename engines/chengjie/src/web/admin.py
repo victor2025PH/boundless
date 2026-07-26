@@ -1258,6 +1258,14 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_pm
         _log_pm.getLogger("admin").debug("Persona media 路由注册跳过", exc_info=True)
 
+    # ── 营销目标（marketing goals）：会话级工作目标 CRUD + settle-on-read 视图 ──
+    try:
+        from src.web.routes.goal_routes import register_goal_routes
+        register_goal_routes(app, auth_dep=_api_auth, config_manager=config_manager)
+    except Exception:
+        import logging as _log_goal
+        _log_goal.getLogger("admin").warning("营销目标路由注册失败", exc_info=True)
+
     @app.get("/personas", response_class=HTMLResponse)
     async def personas_page(request: Request, _=Depends(_page_auth)):
         from src.utils.persona_manager import PersonaManager
@@ -1790,6 +1798,16 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_ovw
 
         _log_ovw.getLogger("admin").warning("ops overview 路由注册失败", exc_info=True)
+
+    # 群脉 CrowdX 导播台：剧本库 / 逐拍详情 / 一键排练（dry-run）/ 历史场次
+    try:
+        from src.web.routes.group_show_routes import register_group_show_routes
+
+        register_group_show_routes(app, _admin_ctx)
+    except Exception:
+        import logging as _log_gs
+
+        _log_gs.getLogger("admin").warning("group show 路由注册失败", exc_info=True)
 
     # ── 告警状态 API ───────────────────────────────────────────
     # ── Webhook 通知 ──────────────────────────────────────────

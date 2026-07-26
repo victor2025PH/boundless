@@ -8,6 +8,12 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 
+# 图文连发补识（Phase1.3）：拟稿时向前回扫多少条消息找「还没识别过」的入站媒体行。
+# 窗口大小读 `inbox.auto_draft.media_backscan`（缺省本默认值；≤1 = 关闭回扫，退化为
+# 「只看最新一条入站」旧行为）。覆盖「先发图/语音、紧跟一句话」的常见节奏；
+# 窗口过大会把很久前的旧媒体也拉来识别。
+_MEDIA_BACKSCAN_DEFAULT = 5
+
 
 async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict, text: str, draft_id: str, mode: str) -> None:
     """异步：拉历史 → 人设产线生成正文 → enrich_draft 收尾。
@@ -96,7 +102,6 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                         # 让坐席台/时间线/媒体卡看到「[图片内容] …」而非裸 [图片] 占位。
                         # 写成带前缀格式，供前端媒体卡 _splitMediaDesc 剥离出「AI 识图」摘要。
                         # only_if_empty=True 幂等：仅覆盖占位行，不踩已有真实内容/协议线已回写的。
-                        # 不改 last/history（图片非「对方说的话」，正文保持干净，描述走 media_desc 上下文）。
                         try:
                             _ad_store.update_message_text(
                                 cid,
@@ -110,6 +115,40 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                                 "[AutoDraft] 图片识别回写消息失败（忽略）",
                                 exc_info=True,
                             )
+                        # 2026-07-26 Phase1.3：识别结果并入待回复正文 + 历史，
+                        # 与 Telegram A 线（入站即成 "[图片内容] …"）及本文件
+                        # 语音/视频分支同口径。此前图片描述只走 media_desc 辅助
+                        # 块、正文停留 [图片] 占位——模型对占位正文的回应明显弱
+                        # 于描述在正文（WA/协议线识图「答非所问」的直接根源）。
+                        _cap = last.strip()
+                        if _cap.startswith("[图片") or _cap in (
+                                "[贴纸]", "[媒体]", ""):
+                            _cap = ""
+                        _ifull = (
+                            f"{_cap}\n[图片内容] {_peer_media_desc}"
+                            if _cap
+                            else f"[图片内容] {_peer_media_desc}"
+                        )
+                        if last.strip() in (
+                                "[图片]", "[贴纸]", "[媒体]", "") or _cap:
+                            last = _ifull
+                        for _hm in reversed(history or []):
+                            if isinstance(_hm, dict) and _hm.get(
+                                    "role") == "user":
+                                _hc = str(
+                                    _hm.get("content") or "").strip()
+                                if _hc in (
+                                    "[图片]", "[贴纸]", "[媒体]", "",
+                                ) or (
+                                    _hc
+                                    and not _hc.startswith("[图片内容]")
+                                ):
+                                    _hm["content"] = _ifull
+                                break
+                        assistant.logger.info(
+                            "[AutoDraft] 图片识别补全: %s",
+                            _peer_media_desc[:80],
+                        )
             except Exception:
                 assistant.logger.debug(
                     "[AutoDraft] 图片识别补全失败",
@@ -325,17 +364,153 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                     _peer_media_ref,
                     exc_info=True,
                 )
-        # 账号级人设（单一事实源，与 autosend voice 同口径）：
-        # meta.persona_id → meta.persona_ids[0] → config 默认，
-        # 根治复数/单数不匹配导致的空 persona。
+        # —— 图文连发补识（2026-07-26 Phase1.3）——
+        # 上面三个分支只富化「最新一条入站」：客户先发图（/语音/视频）紧跟一句话
+        # 时，触发拟稿的是那句话，媒体行永远停在占位（识别从未发生）→ 模型对刚收
+        # 到的媒体毫无感知。这里向前回扫最近 N 条消息（N 读 inbox.auto_draft.
+        # media_backscan，默认 _MEDIA_BACKSCAN_DEFAULT；≤1 关闭回扫=旧行为），找最近
+        # 一条「还没识别过」的入站媒体行，用共享识别层补识：结果回写消息行（坐席
+        # 可见）+ 精确替换 history 对应占位（模型可见）。不动 last（当前待回复消息
+        # 语义不变）；每次拟稿至多补一条控制成本；全程软失败。
+        _backfill_desc = ""  # 回扫补识出的描述（供下方 media_desc 接线）
+        _backfill_kind = ""
+        try:
+            try:
+                _backscan_n = int(
+                    ((assistant.config.config or {}).get("inbox", {})
+                     .get("auto_draft", {}) or {})
+                    .get("media_backscan", _MEDIA_BACKSCAN_DEFAULT)
+                )
+            except Exception:
+                _backscan_n = _MEDIA_BACKSCAN_DEFAULT
+            from src.inbox.media_enrich import (
+                enrich_inbound_media_text,
+                is_placeholder_only,
+            )
+            _bf_kinds = {
+                "image", "photo", "sticker", "voice", "audio",
+                "video", "video_note", "animation", "gif",
+            }
+            _bf_seen = 0
+            for _r in (reversed(msgs) if _backscan_n > 1 else ()):
+                _bf_seen += 1
+                if _bf_seen > _backscan_n:
+                    break
+                if str(_r.get("direction") or "") != "in":
+                    continue
+                _bmid = str(_r.get("message_id") or "")
+                if _bmid and _bmid == _peer_msg_id:
+                    continue  # 最新入站行已由上方主分支处理
+                _bmt = str(_r.get("media_type") or "").lower()
+                _bref = str(_r.get("media_ref") or "")
+                if _bmt not in _bf_kinds or not _bref:
+                    continue
+                _brt = str(_r.get("text") or "")
+                if _brt.strip() and not is_placeholder_only(_brt):
+                    continue  # 已有 caption/识别结果 → 不重复识别
+                _tc_bf = getattr(
+                    getattr(_ad_app, "state", None),
+                    "telegram_client", None,
+                )
+                _vtr_bf = getattr(
+                    _tc_bf, "voice_transcriber", None,
+                ) if _tc_bf is not None else None
+                _bf_text, _bf_desc = await enrich_inbound_media_text(
+                    media_type=_bmt, media_ref=_bref, caption="",
+                    config=assistant.config.config or {},
+                    voice_transcriber=_vtr_bf,
+                )
+                if _bf_desc:
+                    _backfill_desc = str(_bf_desc).strip()
+                    _backfill_kind = _bmt
+                    try:
+                        _ad_store.update_message_text(
+                            cid,
+                            message_id=_bmid,
+                            media_ref=_bref,
+                            text=_bf_text,
+                            only_if_empty=True,
+                        )
+                    except Exception:
+                        assistant.logger.debug(
+                            "[AutoDraft] 媒体补识回写失败（忽略）",
+                            exc_info=True,
+                        )
+                    # 精确定位该行在 history 里的下标：按 normalize_history
+                    # 同一规则重放（非空文本/媒体占位各占一条，顺序不变），
+                    # 多张同类占位（如连发两图）也不会替换错行。
+                    try:
+                        _hidx = -1
+                        _cursor = 0
+                        for _mm in msgs:
+                            _mt2 = str(_mm.get("text") or "").strip()
+                            if not _mt2 and (
+                                _mm.get("media_type")
+                                or _mm.get("media_ref")
+                            ):
+                                try:
+                                    from src.integrations.protocol_bridge \
+                                        import media_placeholder
+                                    _mt2 = media_placeholder(
+                                        str(_mm.get("media_type") or ""))
+                                except Exception:
+                                    _mt2 = "[媒体]"
+                            if not _mt2:
+                                continue
+                            if _mm is _r:
+                                _hidx = _cursor
+                                break
+                            _cursor += 1
+                        if (
+                            0 <= _hidx < len(history or [])
+                            and isinstance(history[_hidx], dict)
+                            and history[_hidx].get("role") == "user"
+                            and is_placeholder_only(
+                                str(history[_hidx].get("content") or ""))
+                        ):
+                            history[_hidx]["content"] = _bf_text
+                    except Exception:
+                        assistant.logger.debug(
+                            "[AutoDraft] 媒体补识历史替换失败（忽略）",
+                            exc_info=True,
+                        )
+                    assistant.logger.info(
+                        "[AutoDraft] 补识此前媒体 kind=%s: %s",
+                        _bmt, str(_bf_desc)[:80],
+                    )
+                break  # 只补最近一条未识别媒体行（成本上限=每稿一次识别）
+        except Exception:
+            assistant.logger.debug(
+                "[AutoDraft] 媒体补识扫描失败（忽略）", exc_info=True)
+        # 图在前文在后：补识描述除已替换 history 占位（全路径通用通道）外，再照带
+        # media_desc 送产线（统一引擎经 apply_inbound_enrichments → ai_client 媒体
+        # 块），并附一条简短注记声明「媒体是之前那条、当前待回复是最新文字」——
+        # 防模型把最新文字误当媒体消息回应。仅当最新入站行本身不是媒体时接线
+        # （媒体行自有上方主分支语义，不混两条媒体的描述）；media_type 保持空，
+        # 忠实于「当前待回复的是文字」。
+        if _backfill_desc and not _peer_media_type and not _peer_media_desc:
+            _bf_label = {
+                "voice": "语音", "audio": "语音",
+                "video": "视频", "video_note": "视频",
+                "animation": "动图", "gif": "动图",
+                "sticker": "贴纸",
+            }.get(_backfill_kind, "图片")
+            _peer_media_desc = (
+                f"{_backfill_desc}\n（注：这条{_bf_label}是对方在最新一句"
+                "文字之前发来的，当前待回复的是对方最新那句文字）"
+            )
+        # 生效人设（单一事实源，与 autosend voice 同口径）：
+        # 会话覆写(开关开) → meta.persona_id → meta.persona_ids[0] →
+        # config 默认。根治复数/单数不匹配导致的空 persona；
+        # 2026-07-26 起同时消费会话级覆写（cp-persona 换绑立即生效）。
         _persona_id = ""
         try:
             from src.ai.persona_voice import (
-                resolve_account_persona_id as _rapi2,
+                resolve_effective_persona_id as _repi,
             )
-            _persona_id = _rapi2(
+            _persona_id = _repi(
                 assistant.config.config or {},
-                platform, account_id,
+                platform, account_id, str(chat_key or ""),
             )
         except Exception:
             _persona_id = ""

@@ -844,6 +844,17 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
         </div>
       </div>
     </div>
+    <!-- P3: 遗留 peer 绑定清理（旧式全局绑定盘点；空列表时整卡隐藏） -->
+    <div class="ps-card" id="legacy-clean-card" style="margin-top:1rem;display:none">
+      <div class="card-hd">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        {{ (i18n or {}).get('psn_legacy_title','遗留 peer 绑定清理') }}
+        <span id="legacy-count" style="font-size:.68rem;font-weight:700;padding:.08rem .4rem;border-radius:999px;background:rgba(245,158,11,.12);color:#b45309"></span>
+        <button class="btn btn-sm" style="margin-left:auto;font-size:.7rem;padding:.14rem .42rem" onclick="loadLegacyBindings(true)">↻ {{ (i18n or {}).get('psn_reload_full','重新加载') }}</button>
+      </div>
+      <div class="card-sub">{{ (i18n or {}).get('psn_legacy_sub','旧式绑定按 peer 全局生效，已被账号级/会话级人设压制。可升级为逐会话覆写（语义保真）或直接清除（回到账号/域默认）。') }}</div>
+      <div id="legacy-list" style="margin-top:.45rem"></div>
+    </div>
   </div>
 </div>
 
@@ -1558,6 +1569,7 @@ async function _reloadBindingsList() {
       if (dl) { var opt = document.createElement('option'); opt.value = cid; opt.label = pname ? cid + ' → ' + pname : cid; dl.appendChild(opt); }
     });
     _refreshQuickPick();
+    loadLegacyBindings();   // P3: 遗留绑定面板与绑定列表同步刷新
   } catch(e) {}
 }
 
@@ -1585,6 +1597,124 @@ async function _doUnbind(cid, btn) {
     _reloadBindingsList(); loadProfileList(); refreshStatus();
   } catch(e) { _toast(window.T('psn_js_057') + e, 'err'); btn.disabled = false; btn.textContent = window.T('psn_js_058'); }
 }
+
+// ── P3: 遗留 peer 绑定清理面板 ────────────────────────────────────────────────
+// 旧式 peer-global 绑定（裸 chat_id 键）已被账号级/会话级压制成「暗债」。
+// 面板盘点每条债的落点与压制态，动作＝升级为逐会话覆写（语义保真）或清除。
+// 动态行全部走事件委托（data-lgact/data-lgdo），不产生内联 handler。
+var _legacyEnabled = false;
+
+async function loadLegacyBindings(manual) {
+  var card = document.getElementById('legacy-clean-card');
+  var list = document.getElementById('legacy-list');
+  if (!card || !list) return;
+  try {
+    const r = await apiFetch('/api/persona/legacy-bindings');
+    if (!r.ok) return;
+    const d = await r.json();
+    _legacyEnabled = !!d.enabled;
+    var items = d.items || [];
+    var cnt = document.getElementById('legacy-count');
+    if (cnt) cnt.textContent = String(items.length);
+    if (!items.length) {
+      card.style.display = 'none';
+      list.innerHTML = '';
+      if (manual === true) _toast(window.T('psn_legacy_none'), 'ok');
+      return;
+    }
+    card.style.display = '';
+    list.innerHTML = items.map(_legacyRowHtml).join('');
+  } catch(e) {}
+}
+
+function _legacyRowHtml(it) {
+  var convs = it.conversations || [];
+  var supp = 0;
+  convs.forEach(function(c){ if (c.suppressed) supp++; });
+  var live = convs.length - supp;
+  var tag = function(txt, bg, fg) {
+    return '<span style="font-size:.62rem;font-weight:700;padding:.05rem .35rem;border-radius:4px;margin-left:.35rem;background:' + bg + ';color:' + fg + '">' + _escHtml(txt) + '</span>';
+  };
+  var tags = '';
+  if (it.stale) tags += tag(window.T('psn_legacy_stale'), 'rgba(239,68,68,.1)', '#dc2626');
+  if (convs.length && !live) tags += tag(window.T('psn_legacy_suppressed'), 'rgba(148,163,184,.15)', 'var(--t3)');
+  else if (live) tags += tag(window.T('psn_legacy_live') + ' ' + live, 'rgba(245,158,11,.12)', '#b45309');
+  var preview = convs.slice(0, 3).map(function(c) {
+    return _escHtml((c.platform || '?') + ':' + (c.display_name || c.chat_key || '?'));
+  }).join('、');
+  var sub = convs.length
+    ? convs.length + ' ' + window.T('psn_legacy_convs')
+      + (supp ? '（' + supp + ' ' + window.T('psn_legacy_suppressed') + '）' : '')
+      + '：' + preview + (convs.length > 3 ? ' …' : '')
+    : window.T('psn_legacy_no_conv');
+  var upWhy = '';
+  if (it.stale) upWhy = window.T('psn_legacy_up_stale');
+  else if (!convs.length) upWhy = window.T('psn_legacy_up_noconv');
+  else if (!_legacyEnabled) upWhy = window.T('psn_legacy_up_off');
+  var kdisp = it.key.length > 30 ? it.key.slice(0, 30) + '…' : it.key;
+  return '<div class="bind-item" data-lgkey="' + _escAttr(it.key) + '" data-lgconvs="' + convs.length + '">'
+    + '<div style="flex:1;min-width:0">'
+    + '<div style="font-size:.78rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><code title="' + _escAttr(it.key) + '">' + _escHtml(kdisp) + '</code> → <b>' + _escHtml(it.profile_name || it.profile_id || '?') + '</b>' + tags + '</div>'
+    + '<div style="font-size:.68rem;color:var(--t3);margin-top:.1rem">' + sub + '</div>'
+    + '</div>'
+    + '<button class="btn btn-sm" data-lgact="upgrade" style="font-size:.7rem;padding:.14rem .42rem"' + (upWhy ? ' disabled title="' + _escAttr(upWhy) + '"' : '') + '>' + window.T('psn_legacy_upgrade') + '</button>'
+    + '<button class="btn btn-sm btn-danger" data-lgact="remove" style="font-size:.7rem;padding:.14rem .42rem">' + window.T('psn_legacy_remove') + '</button>'
+    + '</div>';
+}
+
+function _legacyOpenConfirm(row, action) {
+  var next = row.nextElementSibling;
+  if (next && next.classList.contains('bind-confirm-row')) { next.remove(); return; }
+  var n = row.dataset.lgconvs || '0';
+  var txt = action === 'upgrade'
+    ? window.Tf('psn_legacy_upgrade_c', {n: n})
+    : window.T('psn_legacy_remove_c');
+  var okLbl = action === 'upgrade' ? window.T('psn_legacy_upgrade') : window.T('psn_legacy_remove');
+  var conf = document.createElement('div');
+  conf.className = 'bind-confirm-row';
+  conf.dataset.lgkey = row.dataset.lgkey;
+  conf.innerHTML = _escHtml(txt) + ' '
+    + '<button class="btn btn-sm ' + (action === 'remove' ? 'btn-danger' : 'btn-primary') + '" style="font-size:.7rem;padding:.14rem .42rem" data-lgdo="' + action + '">' + okLbl + '</button>'
+    + '<button class="btn btn-sm" style="font-size:.7rem;padding:.14rem .42rem" data-lgdo="cancel">' + window.T('psn_js_354') + '</button>';
+  row.after(conf);
+}
+
+async function _legacyDo(key, action, btn) {
+  btn.disabled = true;
+  try {
+    const r = await apiFetch('/api/persona/legacy-bindings/cleanup', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key: key, action: action})}, {timeoutMs: 60000});
+    const d = await r.json().catch(function(){ return {}; });
+    if (r.ok && d.ok) {
+      _toast(action === 'upgrade'
+        ? window.Tf('psn_legacy_ok_upgrade', {n: d.upgraded_count || 0})
+        : window.T('psn_legacy_ok_remove'), 'ok');
+      _reloadBindingsList(); refreshStatus();
+    } else {
+      _toast(window.T('psn_legacy_fail') + (d.detail || ('HTTP ' + r.status)), 'err');
+      btn.disabled = false;
+    }
+  } catch(e) { _toast(window.T('psn_legacy_fail') + e, 'err'); btn.disabled = false; }
+}
+
+(function _wireLegacyPanel() {
+  var list = document.getElementById('legacy-list');
+  if (!list) return;
+  list.addEventListener('click', function(ev) {
+    var actBtn = ev.target.closest('[data-lgact]');
+    if (actBtn) {
+      var row = actBtn.closest('.bind-item');
+      if (row) _legacyOpenConfirm(row, actBtn.dataset.lgact);
+      return;
+    }
+    var doBtn = ev.target.closest('[data-lgdo]');
+    if (doBtn) {
+      var conf = doBtn.closest('.bind-confirm-row');
+      if (!conf) return;
+      if (doBtn.dataset.lgdo === 'cancel') { conf.remove(); return; }
+      _legacyDo(conf.dataset.lgkey || '', doBtn.dataset.lgdo, doBtn);
+    }
+  });
+})();
 
 // ── P12: Dashboard refresh with spin ─────────────────────────────────────────
 function _dashRefresh() {

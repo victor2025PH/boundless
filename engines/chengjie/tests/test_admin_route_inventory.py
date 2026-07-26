@@ -51,6 +51,7 @@ _BASELINE = """
 /api/admin/gpu-watermark	GET
 /api/admin/send-route-trend	GET
 /api/admin/media-promise-trend	GET
+/api/admin/media-consistency	GET
 /api/admin/workers/{worker_id}/reset-circuit	POST
 /api/admin/reliability	GET
 /api/admin/license	GET
@@ -130,6 +131,9 @@ _BASELINE = """
 /api/human-escalation/verify	GET
 /api/identity	GET
 /api/identity/link	POST
+/api/identity/shadow/confirm-link	POST
+/api/identity/shadow/dismiss	POST
+/api/identity/shadow/evidence	GET
 /api/identity/unlink	POST
 /api/kb/accept-suggestion	POST
 /api/kb/ai-generate	POST
@@ -344,6 +348,8 @@ _BASELINE = """
 /api/persona/global-rules/backups	GET
 /api/persona/global-rules/preview	POST
 /api/persona/global-rules/restore/{slot}	POST
+/api/persona/legacy-bindings	GET
+/api/persona/legacy-bindings/cleanup	POST
 /api/persona/preview-prompt	GET
 /api/persona/unbind	POST
 /api/persona/update-default	POST
@@ -487,6 +493,7 @@ _BASELINE = """
 /api/platforms/{platform}/{account_id}/avatar	GET
 /api/platforms/telegram/{account_id}/resolve-peer	GET
 /api/platforms/{platform}/{account_id}/contacts	GET
+/api/platforms/{platform}/{account_id}/contacts/refresh	POST
 /api/platforms/{platform}/{account_id}/history	POST
 /api/platforms/{platform}/{account_id}/sync-groups	POST
 /api/platforms/{platform}/{account_id}/subscribe-presence	POST
@@ -957,6 +964,61 @@ _ADDITIONS_2026_07_25_ISOLATION = """
 /api/admin/isolation-health	GET
 """
 _BASELINE += _ADDITIONS_2026_07_25_ISOLATION
+
+# 2026-07-25 群脉 CrowdX 导演控制台：剧本库 + 逐拍详情 + 一键离线排练（dry-run，
+# 不发任何真消息）+ 历史场次 + 关联风险体检（group_show_routes.py，页面 /group-show）。
+# linkage 是只读体检：排练永远用占位号，这个接口回答「换成真号最多能上几个」。
+_ADDITIONS_2026_07_25_GROUP_SHOW = """
+/api/group-show/attendance	POST
+/api/group-show/attendance/joined	POST
+/api/group-show/exposure	GET
+/api/group-show/live	POST
+/api/group-show/linkage	GET
+/api/group-show/playbooks	GET
+/api/group-show/playbooks/{pid}	GET
+/api/group-show/rehearse	POST
+/api/group-show/schedule	POST
+/api/group-show/sessions	GET
+/group-show	GET
+"""
+_BASELINE += _ADDITIONS_2026_07_25_GROUP_SHOW
+
+# 2026-07-25 前端 UI 交互埋点 beacon（空态引导按钮点击率/群区模式切换等，任意登录
+# 用户可写；UiEventStats 进程级计数，读出走 workspace metrics.ui_events +
+# Prometheus ui_events_*；drafts_routes.py::register_telemetry_route）。
+_ADDITIONS_2026_07_25_UI_EVENT = """
+/api/telemetry/ui-event	POST
+"""
+_BASELINE += _ADDITIONS_2026_07_25_UI_EVENT
+
+# 2026-07-27 人设有效解析 + 账号人设绑定（persona_routes.py）：坐席侧读「此刻生效人设」
+# 与写「账号→人设」映射；与群脉真发选角共用同一份 persona 解析口径。
+_ADDITIONS_2026_07_27_PERSONA_EFFECTIVE = """
+/api/persona/account-persona	POST
+/api/persona/effective	GET
+"""
+_BASELINE += _ADDITIONS_2026_07_27_PERSONA_EFFECTIVE
+
+# 2026-07-27 营销目标（goal_routes.py）：会话级「工作目标」（付费转化/关系推进/沉默唤回…）
+# CRUD + settle-on-read 视图。右栏卡/看板/prompt 注入三个消费面读同一份结算口径
+# （service.refresh_goal）；companion.goals.enabled 关闭时全端点 403。
+_ADDITIONS_2026_07_27_GOALS = """
+/api/goals	GET,POST
+/api/goals/templates	GET
+/api/goals/for-conversation	GET
+/api/goals/{goal_id}	GET
+/api/goals/{goal_id}/update	POST
+/api/goals/{goal_id}/status	POST
+"""
+_BASELINE += _ADDITIONS_2026_07_27_GOALS
+
+# P2（同日）：结果闭环报表 + 批量 campaign + 坐席今日拍反馈（采纳/驳回回流 planner）。
+_ADDITIONS_2026_07_27_GOALS_P2 = """
+/api/goals/report	GET
+/api/goals/batch	POST
+/api/goals/{goal_id}/beat/feedback	POST
+"""
+_BASELINE += _ADDITIONS_2026_07_27_GOALS_P2
 
 
 def _parse_baseline():

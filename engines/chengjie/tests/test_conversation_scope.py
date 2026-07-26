@@ -86,7 +86,10 @@ def test_legacy_format_table_locked():
     """存量键格式 ratchet：这些格式下有生产数据，改格式必须显式改本表+迁移。"""
     fmts = legacy_key_formats()
     assert fmts["a_line_companion"][1] == "8244899900:5433982810"
-    assert "双重前缀" in fmts["protocol_autoreply"][0]
+    # P10（2026-07-27）：protocol_autoreply 的双重前缀在 episodic/CPI 层归一为
+    # acct:peer（strip_composite_user_id）；ContextStore 层保持旧双重前缀键。
+    assert "strip_composite_user_id" in fmts["protocol_autoreply"][0]
+    assert fmts["protocol_autoreply"][1] == "639270135480:639273815533"
     assert "双重前缀" in fmts["whatsapp_rpa"][0]
     assert "P2-1 已接" in fmts["line_rpa"][0]
     # make_context_key 语义锁（本模块一切派生的地基）

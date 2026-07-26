@@ -12,6 +12,11 @@ import time
 from html import escape as _html_escape
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
+
+from src.inbox.store import (
+    TELEGRAM_SERVICE_CHAT_KEYS as _STORE_SERVICE_CHAT_KEYS,
+)
+
 # 语音识别导入
 try:
     from src.voice_transcriber import VoiceTranscriberFactory
@@ -97,6 +102,19 @@ def _metrics():
         return get_metrics_store()
     except Exception:
         return None
+
+
+# Telegram 官方通知号等「非人」固定 id。它们是货真价实的 PRIVATE 会话且
+# outgoing=False，会一路穿过出站守卫落进 AI 管道——让 AI 对着 Telegram 官方回话既
+# 荒唐又白烧 token。
+# 名单本体在 ``src.inbox.store``（全仓单一事实源），这里只做一次 int 化：热路径每条
+# 消息都要比对，用 int 集合免去反复 str 转换。store 只依赖 .models，无循环导入风险。
+TELEGRAM_SERVICE_CHAT_IDS = frozenset(
+    int(k) for k in _STORE_SERVICE_CHAT_KEYS if str(k).lstrip("-").isdigit()
+)
+
+# 兼容旧名（曾只有服务号一条规则时的常量名）。
+TELEGRAM_SERVICE_CHAT_ID = 777000
 
 
 def _normalize_message_text(raw: Any) -> str:
@@ -626,6 +644,9 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             # 用 RPC（get_dialogs，正常可用）定时拉新进站私聊喂给同一条 _process_message，
             # 保证全自动回复不因实时通道静默挂掉而失效。与实时 handler 共用去重，互不重复。
             asyncio.create_task(self._poll_inbound_loop())
+            # 目录同步：好友名单 + 云端会话列表 → 通讯录/会话占位（只写名单不产生消息），
+            # 让「加了好友但从没开口」的人也能在工作台被看到并主动发起对话。
+            asyncio.create_task(self._directory_sync_loop())
             # ASR 启动预热（voice_recognition.warmup_on_boot，默认开）：SenseVoice 懒加载
             # 让重启后首条语音吃 ~20-30s 模型冷启动 → 启动即后台预载；失败不影响启动
             # （转录时仍会按需懒加载兜底）。
@@ -680,6 +701,19 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
         async def handle_private_message(client, message: Message):
             """处理私聊消息（动态读配置，无需重启即可切换行为）"""
             try:
+                # ── P0 出站/系统会话守卫：必须是本 handler 的第一件事 ──
+                # 「为什么需要」「三条位置约束（限流之前 / claim 之前 / process_private
+                # 之前）」「系统会话为何判在出站之前」全部见 _should_skip_as_outbound
+                # 的 docstring，此处不复述。
+                _skip, _mirror = self._should_skip_as_outbound(message)
+                if _skip:
+                    if _mirror:
+                        # catchup 传 0：实时到达的消息 mts >= self._boot_timestamp 恒成立，
+                        # 镜像方法里的 after_boot 分支必过，不需要 catchup 补窗
+                        # （catchup 存在只是为了让轮询能补回宕机期间的旧消息）。
+                        self._mirror_outgoing_message(message.chat, message, 0)
+                    return
+
                 uid = str(getattr(getattr(message, 'from_user', None), 'id', 0))
 
                 # ── 限流：私聊也走令牌桶 ──
@@ -1319,6 +1353,10 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
         时间闸门：消息时间在 boot 之后**或**距今 ``catchup`` 秒内（覆盖宕机/重启期间到达的
         未读消息），既能补回最近未读、又不回灌远古历史。已回复的会话 top_message 变 outgoing
         会被跳过，故不会重复回复。
+
+        ``telegram.poll_fallback.mirror_outgoing``（默认关）开启后，outgoing 的 top_message
+        不再只是被跳过，而是额外镜像进工作台（见 ``_mirror_outgoing_message``）——修
+        「老板用手机亲自回了、工作台却仍显示未回复」导致坐席/AI 重复回复的事故。
         """
         if not self.client:
             return 0
@@ -1328,6 +1366,9 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             tg_cfg = {}
         if not (tg_cfg.get("process_private", True) if isinstance(tg_cfg, dict) else True):
             return 0
+        _pf = (tg_cfg.get("poll_fallback") or {}) if isinstance(tg_cfg, dict) else {}
+        # 每轮现读（config 热重载后下一轮即生效，无需重启）
+        mirror_outgoing = bool(_pf.get("mirror_outgoing", False))
         processed = 0
         scanned = 0
         async for dialog in self.client.get_dialogs(limit=dlimit):
@@ -1343,7 +1384,11 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 msg = getattr(dialog, "top_message", None)
                 if msg is None:
                     continue
-                if getattr(msg, "outgoing", False):  # 我们自己发的（含已回复）→ 跳过
+                if getattr(msg, "outgoing", False):
+                    # 我们自己发的（含已回复）→ **绝不进 AI 管道**。flag 开时额外镜像
+                    # 进工作台（老板/运营用手机 App 亲自回复的场景），随后照旧跳过。
+                    if mirror_outgoing:
+                        self._mirror_outgoing_message(chat, msg, catchup)
                     continue
                 from_user = getattr(msg, "from_user", None)
                 if from_user and self.user_info and \
@@ -1390,6 +1435,215 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
         if processed:
             self.logger.info("[轮询兜底] 本轮处理 %d 条新进站私聊", processed)
         return scanned
+
+    def _is_system_chat(self, chat_id: Any) -> bool:
+        """是否为「不属于任何客户」的系统会话：Saved Messages（自己和自己）/ Telegram 服务号。
+
+        **刻意自包含**：不 import ``src/inbox/store.py`` 里的同类判定。那边服务于联系人
+        列表的**展示**（这个 peer 要不要在坐席通讯录里露出），这里服务于消息管道的**安全**
+        （要不要让 AI 对它开口）；两个关注点的判据将来完全可能分叉（展示层也许想把
+        Saved Messages 当草稿箱入口留着，管道层永远不能）。为两个整数比较让实时 handler
+        的热路径吃一次跨模块 import 不划算，故有意重复这几行。
+
+        ``user_info`` 尚未就绪（登录中）时只判服务号——身份未知不是崩溃的理由，
+        且此时本账号也还发不出消息，漏判窗口为空。
+
+        「哪些 id 算系统号」读 ``store.TELEGRAM_SERVICE_CHAT_KEYS`` 单一事实源；
+        但 Saved Messages 这条**刻意仍按 ``user_info.id`` 判、不改用 account_id**：
+        单账号老配置里 ``account_id`` 可能是字面量 ``'default'``，那时 store 版规则
+        对本客户端完全失效，而 ``user_info.id`` 恒为真实 TG user id。
+        """
+        try:
+            cid = int(chat_id)
+        except (TypeError, ValueError):
+            return False
+        if cid in TELEGRAM_SERVICE_CHAT_IDS:
+            return True
+        me_id = getattr(getattr(self, "user_info", None), "id", None)
+        try:
+            return me_id is not None and cid == int(me_id)
+        except (TypeError, ValueError):
+            return False
+
+    def _should_skip_as_outbound(self, message: Any) -> Tuple[bool, bool]:
+        """私聊实时 handler 的**第一道闸**：本条要不要整个跳过、跳过时要不要镜像。
+
+        返回 ``(skip, mirror)``。之所以抽成不碰限流器/去重表/网络的独立方法，纯粹是为了
+        可测——handler 本身是 ``_setup_handlers`` 里的装饰器闭包，测试拿不到句柄。
+
+        **为什么需要**（2026-07-26 修的 P0 潜伏事故）：pyrogram 的 dispatcher 对
+        ``UpdateNewMessage`` 零方向过滤（``Message._parse`` 只是把 MTProto 的
+        ``message.out`` 原样落进 ``outgoing`` 字段），``filters.private`` 也只看
+        ``chat.type``。于是老板用手机 App 回客户时，那条 outgoing 消息经多端同步推给本
+        session、照样派发进这个 handler。此前私聊侧一道守卫都没有（群 handler 有双重
+        守卫），后果两个且互相耦合：
+
+          1. **安全**：我方自己的话被当客户消息走完整 AI 管道 → 镜像成 ``direction="in"``
+             并生成一条回复发给客户（对着自己人的话回复）；
+          2. **功能死锁**：``_mirror_outgoing_message`` 内部要 ``claim`` 同一个 mid，而
+             实时 handler 已抢先 claim → 轮询侧那次镜像调用**必然失败**，「镜像手机已发
+             消息」上线即死（线上实证：2452 条轮询兜底日志，镜像 0 条）。
+
+        **这一改同时解决三件事**：安全（AI 永不处理我方消息）、功能（镜像从上线即死变为
+        真正生效）、覆盖度（从「每轮轮询只镜像每会话最后一条」升级为「每条都镜像」——
+        老板手机连发 3 条，3 条都进工作台，此前最多 1 条）。轮询侧的镜像调用保留不动，
+        降级为真兜底（覆盖客户端断线期间漏收的消息），两条路共用同一把 ``_msg_dedup.claim``
+        天然不会重复镜像。
+
+        **三条位置约束**（调用点必须在这三样之前，顺序错了修复就废掉一半）：
+
+          - 在**限流器之前**：否则我方自己的 uid 会白耗令牌桶，连发几条甚至触发
+            ``check_auto_ban`` 把自己封了；
+          - 在 ``_msg_dedup.claim`` **之前**：镜像方法内部自己 claim，外层先 claim 它就
+            再也拿不到——这正是上面第 2 点的机制，别复刻；
+          - 在 ``process_private`` 开关**之前**：「是否处理私聊」与「老板手机回复要不要在
+            工作台可见」是正交的两件事，关掉私聊 AI 处理不代表坐席就不该看见老板回过了。
+
+        **系统会话判在出站之前**（与需求给的顺序相反，此处刻意如此）：pyrogram 文档写明
+        「发给自己的 Saved Messages 不算 outgoing」，但那是服务端 ``message.out`` 的行为，
+        不同 layer/客户端并非铁板一块。万一哪天 Saved Messages 真带上 ``outgoing=True``，
+        先判出站就会把**老板的私人笔记镜像进客户工作台**（隐私外泄）；先判系统会话则两种
+        情况都只是静默 return，恒安全。对「AI 不得处理」这条红线而言两种顺序等价，
+        故取更安全的这个。
+        """
+        chat_id = getattr(getattr(message, "chat", None), "id", None)
+        if self._is_system_chat(chat_id):
+            # 既不处理也不镜像：收藏夹笔记 / 官方验证码都不是客户会话，落进工作台
+            # 只会给坐席凭空造出一条假的「待回复」。
+            self.logger.debug("[私聊] 跳过: 系统会话 chat=%s", chat_id)
+            return True, False
+        if not getattr(message, "outgoing", False):
+            return False, False
+        # 每次现读（对齐 ``_poll_inbound_once`` 的写法）：config 热重载后下一条消息即生效，
+        # 无需重启。读失败 → 不镜像但**仍然跳过**：AI 红线优先于镜像功能。
+        try:
+            tg_cfg = self.config.get_telegram_config()
+            pf = (tg_cfg.get("poll_fallback") or {}) if isinstance(tg_cfg, dict) else {}
+            mirror = bool(pf.get("mirror_outgoing", False))
+        except Exception:
+            mirror = False
+        return True, mirror
+
+    def _mirror_outgoing_message(self, chat: Any, msg: Any, catchup: float) -> bool:
+        """把「本账号在手机 App 上亲自发出的消息」镜像进统一收件箱（``direction="out"``）。
+
+        **为什么需要**：老板/运营常直接用手机回客户。轮询兜底原先见 ``outgoing`` 就跳过，
+        工作台永远停在客户那条「未回复」上 → 坐席看到会再回一次，L2 autosend 也可能再发
+        一次，同一客户收到两三条重复回复。镜像后工作台与手机同一份事实，重复回复消失。
+
+        **绝不触发任何自动化**（本任务红线，三重保证，任一独立成立）：
+          1. 本方法只调 ``_emit_inbox``（→ ``emit_incoming`` → inbox sink），**不**调
+             ``maybe_auto_reply``、**不**调 ``_process_message``；
+          2. sink 内 ``ingest_collected_chats`` 的 new_inbound 回调（auto-draft/System Z）、
+             ``quick_analyze``、deep_persona 记忆累积、CSAT 检测**全部**在
+             ``direction == "in"`` 分支内（见 src/inbox/ingest.py:210）；
+          3. ``maybe_auto_reply`` 自身开头即 ``direction != "in" → return``。
+
+        **去重实证**（2026-07-26 核实，代码级证据）：消息主键
+        ``_message_pk = f"{conversation_id}:{platform_msg_id}"``（src/inbox/store.py:655），
+        Telegram 的 ``platform_msg_id`` 由 ``extract_platform_msg_id`` 从 ``source.id``
+        取，即 MTProto ``message.id``。系统自身发 Telegram 的**每条**出站镜像都带真实
+        ``message.id``（编排器 protocol worker → ``send_message`` 返回 ``msg.id``；
+        A 线 ``_postsend_mirror_and_record`` → ``_sent.id``；companion worker →
+        ``send_message_return_id``），与本方法用的 ``message.id`` 同值 → 主键相同 →
+        ``INSERT OR IGNORE`` 无行插入 → 既不多气泡、也不重复发 ``outbound_message`` 事件。
+        万一某条发送侧镜像丢了 id（落 ``:h:<hash>`` 兜底键），store 的出站分支会在带 pmid
+        的行落库时**删掉** 120s 窗口内同文本的 hash 孪生（store.py:996），仍收敛为一条。
+        故 ``mid`` 为空时本方法**直接放弃镜像**——宁可少一条气泡，也不制造重复气泡。
+
+        **只做私聊**：调用点位于 ``_poll_inbound_once`` 的 PRIVATE 过滤之后。群里自己发的
+        话噪音大（群本就有四层触发、坐席主要在私聊线作业），且群 top_message 频繁翻动会
+        持续刷镜像；先只覆盖私聊这条真正会造成「重复回复事故」的线。
+
+        返回是否真的镜像了一条。best-effort：任何异常吞掉，绝不影响轮询主循环。
+        """
+        try:
+            if not _has_ingestable_media(msg):
+                return False
+            # 时间闸门：与入站同一判据，防重启后把几年前的老消息回灌进工作台
+            mdate = getattr(msg, "date", None)
+            mts = mdate.timestamp() if (mdate and hasattr(mdate, "timestamp")) else 0.0
+            if mts:
+                after_boot = mts >= self._boot_timestamp - 5
+                within_catchup = catchup > 0 and (time.time() - mts) <= catchup
+                if not (after_boot or within_catchup):
+                    return False
+            mid = getattr(msg, "id", 0) or getattr(msg, "message_id", 0)
+            if not mid:
+                return False  # 无 message.id ⇒ 去重不成立，见 docstring
+            _cid = getattr(chat, "id", 0)
+            # 与入站共用同一把 claim：Telegram 同会话内收发共用一套 message.id 序号空间，
+            # 故出站 mid 绝不会与入站 mid 相撞。claim 让同一条消息在后续每 12s 一轮的
+            # 轮询里不再重复走镜像（store 侧本就幂等，这里是省 I/O 的前置闸）。
+            if not self._msg_dedup.claim(_cid, mid):
+                return False
+            text = _normalize_message_text(
+                getattr(msg, "text", None) or getattr(msg, "caption", None) or "")
+            if not text:
+                # 无正文的媒体 → 落占位文案（与历史同步 history_message_obj 同口径）。
+                # 刻意**不下载**媒体本体：出站媒体本就在客户手机上，为镜像多打一次
+                # 下载 RPC 既费流量又增风控面；坐席看到「[图片]」已足以知道回过了。
+                from src.integrations.protocol_bridge import media_placeholder, tg_media_meta
+                meta = tg_media_meta(msg)
+                if meta:
+                    text = media_placeholder(meta[0])
+            if not text:
+                return False
+            from src.integrations.protocol_bridge import tg_peer_identity
+            ident = tg_peer_identity(chat)
+            self._emit_inbox(
+                chat_id=_cid, text=text, direction="out",
+                name=ident.get("name") or "",
+                msg_id=str(mid),
+                username=ident.get("username") or "",
+                phone=ident.get("phone") or "",
+                ts=mts or None,
+            )
+            self.logger.info(
+                "[轮询兜底] 镜像手机已发消息 chat=%s mid=%s text=%r",
+                _cid, mid, text[:50],
+            )
+            return True
+        except Exception as e:
+            self.logger.debug("[轮询兜底] 出站镜像失败（已忽略）: %s", e, exc_info=True)
+            return False
+
+    async def _directory_sync_loop(self):
+        """目录同步主循环：定时把好友名单 / 云端会话列表同步进通讯录与会话占位。
+
+        config-gated：``platform_login.telegram.sync.enabled``（默认关，新子系统约定）。
+        与 ``_poll_inbound_loop`` 同构——首轮延迟避开启动风暴、异常吞掉不退出循环。
+        首轮刻意只等 ``first_delay_seconds``（默认 45s）而非整个 6 小时周期：
+        重启后坐席马上就该看到全量名单，不该等到下一个整周期。
+
+        ⚠ 只写 ``protocol_contacts`` 与会话占位两张表，绝不喂消息管道
+        （不触发自动回复 / 不进记忆 / 不算新消息），详见模块 docstring 的红线说明。
+        """
+        from src.integrations.telegram_directory_sync import (
+            directory_sync_cfg, sync_directory_once, sync_enabled,
+        )
+        try:
+            cfg = directory_sync_cfg(self.config)
+        except Exception:
+            cfg = {}
+        if not sync_enabled(cfg):
+            return  # 默认关：静默返回，不给日志添噪
+        interval = float(cfg.get("interval_seconds", 21600) or 21600)
+        first_delay = float(cfg.get("first_delay_seconds", 45) or 45)
+        self.logger.info(
+            "[目录同步] 已启动 interval=%.0fs first_delay=%.0fs"
+            "（好友名单 + 会话占位，只读 RPC 不产生消息）",
+            interval, first_delay,
+        )
+        await asyncio.sleep(first_delay)  # 首轮延迟，避开启动风暴
+        while self.running:
+            try:
+                stats = await sync_directory_once(self.client, self.account_id, cfg)
+                self.logger.info("[目录同步] 本轮完成 通讯录=%d 会话占位=%d",
+                                 stats.get("contacts", 0), stats.get("chats", 0))
+            except Exception as e:
+                self.logger.warning("[目录同步] 本轮异常（已忽略，下轮继续）: %s", e)
+            await asyncio.sleep(interval)
 
     async def _process_message(self, message: Message):
         """处理接收到的消息"""
@@ -1685,7 +1939,8 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     name: str = "", msg_id: str = "",
                     media_type: str = "", media_ref: str = "",
                     username: str = "", phone: str = "",
-                    sender_id: str = "", sender_name: str = "") -> None:
+                    sender_id: str = "", sender_name: str = "",
+                    ts: Optional[float] = None) -> None:
         """N4b：companion 运行时把 A 线收/发的消息镜像进统一收件箱（坐席台可见）。
 
         默认关（``self._mirror_inbox`` False）→ standalone main.py 零影响。仅 emit 到
@@ -1695,6 +1950,10 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
         ``sender_id`` / ``sender_name``：群消息发言人（P4-11E 同款结构化落库，经
         ``source`` 透传 → ``messages.sender_id/sender_name``），供坐席群气泡显示
         发言人名 + 稳定色、群观测按发言者聚合。私聊调用方不传（保持空）。
+
+        ``ts``：消息真实发生时间（epoch 秒）。缺省 None＝落 ``time.time()``（实时
+        路径「此刻」即消息时刻）。轮询兜底镜像手机已发消息时会传 ``message.date``，
+        否则会话 last_ts 被抬到「发现时刻」而与客户入站消息错序。
         """
         if not getattr(self, "_mirror_inbox", False):
             return
@@ -1710,7 +1969,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 chat_key=str(chat_id),
                 name=name or "",
                 text=text or "",
-                ts=time.time(),
+                ts=float(ts) if ts else time.time(),
                 msg_id=str(msg_id or ""),
                 direction=direction,
                 media_type=media_type,
@@ -1947,6 +2206,33 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 route_persona_id as _route_persona_id,
             )
             user_emotion_hint = _companion_emotion_hint(text, self.emotion_enhancer)
+            # 会话级人设覆写（2026-07-26 方案 A）：坐席在统一收件箱给这条会话
+            # 显式换绑过人设 → 原生 bot 回复同样跟随（与 autodraft/autosend 同一
+            # 事实源）。仅覆写命中才改写；否则保持 _route_persona_id 原路由
+            # （含群聊 3-tier 语义）。开关关/异常＝零行为变化。
+            _eff_persona_id = _route_persona_id(
+                getattr(self, 'account_persona_ids', None), _chat_type_str
+            )
+            try:
+                from src.ai.persona_voice import (
+                    conv_binding_key as _conv_key_fn,
+                    conv_override_enabled as _conv_on_fn,
+                )
+                _full_cfg = getattr(self.config, "config", None) or {}
+                if _conv_on_fn(_full_cfg):
+                    from src.utils.persona_manager import (
+                        PersonaManager as _PM_conv,
+                    )
+                    _pm_conv = _PM_conv.get_instance()
+                    _conv_ref = _pm_conv.get_chat_binding_ref(_conv_key_fn(
+                        "telegram",
+                        str(getattr(self, "account_id", "") or "default"),
+                        str(chat_id),
+                    ))
+                    if _conv_ref and _pm_conv.get_persona_by_id(_conv_ref) is not None:
+                        _eff_persona_id = _conv_ref
+            except Exception:
+                pass
             # Q3：先把本条入站记入 contacts（recorder 未开则 no-op）→ 刷新 journey 的
             # intimacy_score，再读出，保证融合用到的是"含本轮"的最新分（与 RPA 各线同序）。
             _record_relationship_message(
@@ -1987,10 +2273,9 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 'media_desc': image_ocr_text or "",
                 '_current_user_message_for_lang': ai_text,
                 '_peer_audio_emotion': message_data.get('_peer_audio_emotion'),
-                # N 线 核心1：复用共享 companion_context.route_persona_id（A/B 同一套 3-tier 路由）
-                'account_persona_id': _route_persona_id(
-                    getattr(self, 'account_persona_ids', None), _chat_type_str
-                ),
+                # N 线 核心1：复用共享 companion_context.route_persona_id（A/B 同一套
+                # 3-tier 路由）；会话覆写命中时已在上方改写为覆写人设。
+                'account_persona_id': _eff_persona_id,
                 'is_group': _is_group,
                 'chat_type': _chat_type_str or 'private',
                 'platform': 'telegram',  # S5: CrossPlatformIdentity

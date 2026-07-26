@@ -87,7 +87,9 @@ async def test_stage_album_selfie(tmp_path, monkeypatch):
         "enabled": True, "backend": "album", "album_dir": str(album)})
     out = await ia.stage_image_file(
         cfg, "telegram", "acct1", "", {"kind": "selfie"})
-    assert out == ("/tmp/out.png", "/static/out.png", "selfie")
+    local, url, kind, info = out
+    assert (local, url, kind) == ("/tmp/out.png", "/static/out.png", "selfie")
+    assert info.get("provider") == "album" and not info.get("fallback_from")
     assert saved["data"] == b"\x89PNGdummy"
     assert saved["platform"] == "telegram" and saved["account"] == "acct1"
 
@@ -180,7 +182,9 @@ async def test_stage_object_text2img_and_llm_refine(tmp_path, monkeypatch):
     out = await ia.stage_image_file(
         cfg, "telegram", "acct1", "",
         {"kind": "object", "prompt": "a bowl of noodles"}, llm_refine=refine)
-    assert out == ("/l", "/u", "object")
+    local, url, kind, info = out
+    assert (local, url, kind) == ("/l", "/u", "object")
+    assert info.get("provider") == "openai" and not info.get("fallback_from")
     # 用了精炼后的 prompt（去引号），物体图不带人设基础图
     assert captured["prompt"] == "a gourmet bowl of ramen, steam"
     assert not captured.get("base_image")
@@ -345,6 +349,7 @@ async def test_run_selfie_album_growth_and_llm_caption(tmp_path, monkeypatch):
         "src.integrations.protocol_bridge.save_outbound_media", fake_save)
     cfg = _cfg(enabled=True, appearance="a young woman",
                register_generated_max=3,
+               consistency={"enabled": False},  # 关重发冷却：本测试专测轮换语义
                provider={"enabled": True, "backend": "openai", "api_key": "x",
                          "album_dir": str(album)})
     prov = cs.get_selfie_provider(cfg["companion"]["selfie"]["provider"])

@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from src.integrations.line_rpa import adb_helpers as adb
 from src.integrations.line_rpa import group_policy
+from src.integrations.line_rpa import media_read
 from src.integrations.line_rpa import screen_ocr
 from src.integrations.line_rpa import screen_state as ss
 from src.integrations.line_rpa import ui_hierarchy as ui
@@ -461,6 +462,116 @@ class LineRpaRunner:
             return None, f"vision_no_peer:{vtag}:role={role}:{kind_tag}"
         return peer_text, f"vision_structured:{vtag}:{kind_tag}"
 
+    # ── P2.4：图片消息识别（XML 路径） ────────────────────────────────
+    # XML 只认文本节点 → 对方发图此前完全不可见（no_peer_text / 重读旧文本被
+    # 去重吞掉）。开 line_rpa.media_enrich.enabled 后：最新一条对方消息是图片
+    # 时，截屏 → 按气泡 bounds 裁剪 → 共享识别层（src/inbox/media_enrich）→
+    # `[图片内容] {desc}` 作为消息内容参与回复（Telegram A 线同款语义）。
+
+    def _media_enrich_cfg(self) -> Dict[str, Any]:
+        me = self._cfg_get("media_enrich") or {}
+        return me if isinstance(me, dict) else {}
+
+    async def _capture_screen_for_media(self) -> Optional[bytes]:
+        """整屏截图（供图片气泡裁剪）；失败返回 None，绝不抛。"""
+        if not self._serial:
+            return None
+        try:
+            return await asyncio.to_thread(
+                screen_ocr.capture_screen_png, self._serial, adb
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("media_enrich 截屏失败", exc_info=True)
+            return None
+
+    async def _maybe_enrich_peer_image(
+        self,
+        xml: Optional[bytes],
+        *,
+        prev_image_sha: str = "",
+        force_reply: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """最新一条对方消息是图片时，走共享识别层拿视觉描述。
+
+        返回四态（调用方据此分流；全程软失败绝不抛）：
+          - None：未启用 / 无图 / 图不是最新一条 → 走原文本流程（行为不变）；
+          - {"outcome": "dup", ...}：同一张图已处理过（裁剪位图 sha 相同）→
+            调用方直接跳过本会话（防 vision 描述不稳定导致重复回复）；
+          - {"outcome": "skip", ...}：图是最新但识别不可用（截屏/裁剪失败、
+            vision 关/挂/空描述）→ 调用方跳过＝回落旧行为（不回复）；
+          - {"outcome": "enriched", "peer_text": "[图片内容] …", "mirror_text":
+            "[图片] …", "sha": …}：注入成功。
+        """
+        me = self._media_enrich_cfg()
+        if not me.get("enabled") or not xml:
+            return None
+        try:
+            cand, dbg = media_read.find_latest_peer_image(
+                xml,
+                text_left_ratio=float(self._cfg_get("peer_left_ratio", 0.42)),
+                min_width_ratio=float(me.get("min_width_ratio", 0.16) or 0.16),
+                min_height_ratio=float(me.get("min_height_ratio", 0.09) or 0.09),
+                left_edge_max_ratio=float(
+                    me.get("left_edge_max_ratio", 0.32) or 0.32
+                ),
+                cx_max_ratio=float(me.get("cx_max_ratio", 0.62) or 0.62),
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("find_latest_peer_image 异常", exc_info=True)
+            return None
+        if cand is None:
+            return None
+
+        png = await self._capture_screen_for_media()
+        if not png:
+            return {"outcome": "skip", "debug": f"{dbg}|screencap_failed"}
+        crop = media_read.crop_png_region(
+            png, cand.bounds, margin=int(me.get("crop_margin_px", 8) or 8)
+        )
+        if not crop:
+            return {"outcome": "skip", "debug": f"{dbg}|crop_failed"}
+        sha = media_read.image_sha256(crop)
+        if not force_reply and prev_image_sha and sha == prev_image_sha:
+            return {"outcome": "dup", "sha": sha, "debug": f"{dbg}|sha_dup"}
+
+        text, desc = "", ""
+        fd, path = tempfile.mkstemp(suffix=".png")
+        try:
+            os.close(fd)
+            Path(path).write_bytes(crop)
+            from src.inbox.media_enrich import enrich_inbound_media_text
+
+            root_cfg = getattr(self._cm, "config", None) or {}
+            text, desc = await enrich_inbound_media_text(
+                media_type="image",
+                media_ref=path,
+                caption="",
+                config=root_cfg,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("media_enrich 识别失败", exc_info=True)
+            text, desc = "", ""
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+        desc = (desc or "").strip()
+        if not desc:
+            # 共享层拿不到描述（vision 关/无后端/识别空）→ 回落旧行为
+            return {"outcome": "skip", "sha": sha, "debug": f"{dbg}|no_desc"}
+        peer_text = (text or "").strip() or f"[图片内容] {desc}"
+        mirror_chars = int(me.get("mirror_desc_chars", 60) or 60)
+        return {
+            "outcome": "enriched",
+            "peer_text": peer_text,
+            "mirror_text": f"[图片] {desc[:mirror_chars]}",
+            "desc": desc,
+            "sha": sha,
+            "debug": dbg,
+        }
+
     def _dump_ui_xml(self) -> tuple[Optional[bytes], str]:
         serial = self._serial
         if not serial:
@@ -599,6 +710,7 @@ class LineRpaRunner:
     ) -> Dict[str, Any]:
         _ = t_run0
         crop_fp = ""
+        mirror_in: Optional[str] = None  # P2.4：inbox/contacts 镜像用短占位（图片时）
 
         self._serial = self._resolve_serial()
         if not self._serial:
@@ -639,6 +751,44 @@ class LineRpaRunner:
             if xml:
                 left_ratio = float(self._cfg_get("peer_left_ratio", 0.42))
                 peer_text, dbg = ui.pick_last_peer_text(xml, left_ratio=left_ratio)
+                # P2.4：最新一条对方消息是图片 → 共享识别层注入 [图片内容] desc
+                # （语义与 _process_chat_room 同口径，详见 _maybe_enrich_peer_image）
+                if self._media_enrich_cfg().get("enabled"):
+                    img_meta = await self._maybe_enrich_peer_image(
+                        xml,
+                        prev_image_sha=str(
+                            st.get("last_screen_crop_sha256") or ""
+                        ),
+                        force_reply=force_reply,
+                    )
+                    if img_meta is not None:
+                        result["image_enrich"] = {
+                            "outcome": img_meta.get("outcome"),
+                            "debug": img_meta.get("debug"),
+                        }
+                        oc = img_meta.get("outcome")
+                        if oc == "dup":
+                            result["ok"] = True
+                            result["step"] = "image_duplicate_skipped"
+                            return result
+                        if oc == "skip":
+                            result["ok"] = True
+                            result["step"] = "image_enrich_skipped"
+                            return result
+                        itext = str(img_meta.get("peer_text") or "")
+                        imirror = str(img_meta.get("mirror_text") or itext)
+                        base = (peer_text or "").strip()
+                        prev_peer = (st.get("last_peer_text") or "").strip()
+                        if base and base != prev_peer:
+                            # 「文字+图」连发：未回过的文字拼在图描述前
+                            peer_text = f"{base}\n{itext}"
+                            mirror_in = f"{base}\n{imirror}"
+                        else:
+                            peer_text = itext
+                            mirror_in = imirror
+                        dbg = f"{dbg}|image_enrich" if dbg else "image_enrich"
+                        # 复用既有指纹持久化（dry-run / 发送成功时随 st 落盘）
+                        crop_fp = str(img_meta.get("sha") or "")
             else:
                 mode = str(self._cfg_get("read_fallback", "none")).strip().lower()
                 ocr_cfg = screen_ocr.resolve_screenshot_ocr_cfg(
@@ -742,12 +892,12 @@ class LineRpaRunner:
             # P2-1：账号维度进上下文（default=裸键零迁移；多号部署自动分桶）
             "account_id": str(self._cfg_get("account_id", "default") or "default"),
         }
-        out["reply_lang"] = ctx["reply_lang"]
+        result["reply_lang"] = ctx["reply_lang"]
 
-        # W4-Runner: inbound 入库（失败静默）
+        # W4-Runner: inbound 入库（失败静默）；图片消息镜像短占位 [图片] desc
         self._emit_contact_message(
             chat_key=chat_key, direction="in",
-            text=peer_text.strip(), trace_id=req_id,
+            text=(mirror_in or peer_text.strip()), trace_id=req_id,
         )
         # W3-3A.1：把 IntimacyEngine 写回 journey 的最新 score 透传给 skill_manager
         # → companion_relationship 双信号融合（沉默衰减触发自动降级 + reunion 提示）
@@ -1311,6 +1461,55 @@ class LineRpaRunner:
         out["peer_text"] = peer_text
         out["peer_bubbles"] = bubbles  # 便于 Web / 日志排障
         out["peer_debug"] = peer_dbg
+
+        # P2.4：图片消息识别（line_rpa.media_enrich，默认关）。XML 只认文本节点，
+        # 图片气泡此前完全不可见（落 no_peer_text，或重读屏上旧文本被去重吞掉）。
+        # 最新一条对方消息是图片时：截屏 → 按气泡 bounds 裁剪 → 共享识别层 →
+        # `[图片内容] {desc}` 作为消息内容参与回复（Telegram A 线同款语义）；
+        # 识别不可用 / 同图已回过 → 跳过本会话（＝旧行为不回复），绝不阻塞。
+        image_meta: Optional[Dict[str, Any]] = None
+        mirror_in: Optional[str] = None
+        if self._media_enrich_cfg().get("enabled"):
+            prev_sha = ""
+            prev_peer = ""
+            if self._state_store is not None:
+                try:
+                    _pst = self._state_store.get_chat_state(chat_key) or {}
+                    prev_sha = str(_pst.get("last_screen_sha256") or "")
+                    prev_peer = str(_pst.get("last_peer_text") or "").strip()
+                except Exception:  # noqa: BLE001
+                    pass
+            image_meta = await self._maybe_enrich_peer_image(
+                xml, prev_image_sha=prev_sha, force_reply=force_reply,
+            )
+            if image_meta is not None:
+                out["image_enrich"] = {
+                    "outcome": image_meta.get("outcome"),
+                    "debug": image_meta.get("debug"),
+                }
+                oc = image_meta.get("outcome")
+                if oc == "dup":
+                    out["ok"] = True
+                    out["step"] = "image_duplicate_skipped"
+                    return out
+                if oc == "skip":
+                    out["ok"] = True
+                    out["step"] = "image_enrich_skipped"
+                    return out
+                itext = str(image_meta.get("peer_text") or "")
+                imirror = str(image_meta.get("mirror_text") or itext)
+                base = (peer_text or "").strip()
+                if base and base != prev_peer:
+                    # 「文字+图」连发：未回过的文字气泡拼在图描述前
+                    peer_text = f"{base}\n{itext}"
+                    mirror_in = f"{base}\n{imirror}"
+                else:
+                    peer_text = itext
+                    mirror_in = imirror
+                peer_dbg = f"{peer_dbg}|image_enrich" if peer_dbg else "image_enrich"
+                out["peer_text"] = peer_text
+                out["peer_debug"] = peer_dbg
+
         if not peer_text or not peer_text.strip():
             out["ok"] = True
             out["step"] = "no_peer_text"
@@ -1386,10 +1585,10 @@ class LineRpaRunner:
             "account_id": str(self._cfg_get("account_id", "default") or "default"),
         }
         out["reply_lang"] = ctx["reply_lang"]
-        # W4-Runner: inbound 入库（nav-scan 分支）
+        # W4-Runner: inbound 入库（nav-scan 分支）；图片消息镜像短占位 [图片] desc
         self._emit_contact_message(
             chat_key=chat_key, direction="in",
-            text=peer_text.strip(), trace_id=req_id,
+            text=(mirror_in or peer_text.strip()), trace_id=req_id,
         )
         # W3-3A.1：nav-scan 分支同样透传 intimacy_score
         _intim = self._lookup_intimacy_score(chat_key)
@@ -1461,13 +1660,17 @@ class LineRpaRunner:
             )
             out["ok"] = True
             out["step"] = "sent"
-            # 写 per-chat 状态（动态 chat_key）
+            # 写 per-chat 状态（动态 chat_key）；图片轮附带落裁剪指纹（同图去重）
             if self._state_store is not None:
+                _img_sha: Optional[str] = None
+                if image_meta and image_meta.get("outcome") == "enriched":
+                    _img_sha = str(image_meta.get("sha") or "") or None
                 try:
                     self._state_store.update_chat_state(
                         chat_key,
                         last_peer_text=peer_text.strip(),
                         last_reply=str(reply_text)[:2000],
+                        last_screen_sha256=_img_sha,
                     )
                 except Exception:
                     logger.debug("update_chat_state 失败", exc_info=True)
@@ -1727,6 +1930,7 @@ class LineRpaRunner:
             r.get("step") in (
                 "sent", "dry_run_done", "empty_reply",
                 "no_peer_text", "duplicate_peer_skipped",
+                "image_duplicate_skipped", "image_enrich_skipped",
             ) for r in per_chat_results
         )
         if any_sent:

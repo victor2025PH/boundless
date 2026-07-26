@@ -74,6 +74,27 @@
     async unbindPersona({ chatKey }) {
       return this._post(`/api/persona/unbind`, { chat_id: chatKey });
     }
+    /* 会话级人设覆写（2026-07-26 方案 A）:读生效全景 / 换绑 / 解除 / 账号级整号换绑 */
+    async personaEffective({ conversationId: cid, platform, accountId, chatKey }) {
+      const q = cid
+        ? `conversation_id=${encodeURIComponent(cid)}`
+        : `platform=${encodeURIComponent(platform || "")}` +
+          `&account_id=${encodeURIComponent(accountId || "")}` +
+          `&chat_key=${encodeURIComponent(chatKey || "")}`;
+      return this._get(`/api/persona/effective?${q}`);
+    }
+    async bindConvPersona({ conversationId: cid, profileId }) {
+      return this._post(`/api/persona/bind`,
+        { scope: "conversation", conversation_id: cid, profile_id: profileId });
+    }
+    async unbindConvPersona({ conversationId: cid }) {
+      return this._post(`/api/persona/unbind`,
+        { scope: "conversation", conversation_id: cid });
+    }
+    async setAccountPersona({ platform, accountId, profileId }) {
+      return this._post(`/api/persona/account-persona`,
+        { platform, account_id: accountId, profile_id: profileId || "" });
+    }
     async getCollabContext({ conversationId: cid }) {
       if (!cid) return { ok: false, error: "missing conversationId" };
       return this._get(`/api/workspace/conv/${encodeURIComponent(cid)}/collab-context`);
@@ -267,6 +288,31 @@
     async unbindPersona({ chatKey }) {
       const s = this._shell();
       return s.personaUnbind ? s.personaUnbind({ chat_id: chatKey }) : { ok: false };
+    }
+    /* 会话级覆写:壳未暴露对应 IPC 时优雅降级（组件退回 legacy 绑定 UI）*/
+    async personaEffective({ conversationId: cid, platform, accountId, chatKey }) {
+      const s = this._shell();
+      return s.personaEffective
+        ? s.personaEffective({ conversation_id: cid, platform, account_id: accountId, chat_key: chatKey })
+        : { ok: false, error: "shell.personaEffective 未暴露" };
+    }
+    async bindConvPersona({ conversationId: cid, profileId }) {
+      const s = this._shell();
+      return s.personaBindConv
+        ? s.personaBindConv({ conversation_id: cid, profile_id: profileId })
+        : { ok: false, error: "shell.personaBindConv 未暴露" };
+    }
+    async unbindConvPersona({ conversationId: cid }) {
+      const s = this._shell();
+      return s.personaUnbindConv
+        ? s.personaUnbindConv({ conversation_id: cid })
+        : { ok: false, error: "shell.personaUnbindConv 未暴露" };
+    }
+    async setAccountPersona({ platform, accountId, profileId }) {
+      const s = this._shell();
+      return s.personaAccountSet
+        ? s.personaAccountSet({ platform, account_id: accountId, profile_id: profileId || "" })
+        : { ok: false, error: "shell.personaAccountSet 未暴露" };
     }
     async getCollabContext({ conversationId: cid }) {
       if (!cid) return { ok: false, error: "missing conversationId" };

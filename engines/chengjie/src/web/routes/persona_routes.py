@@ -112,16 +112,203 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         if role and role != _ROLE_MASTER:
             raise HTTPException(403, tr(request, "err.perm.master_only"))
 
+    # ── 会话级人设覆写（2026-07-26 方案 A）共用小件 ──────────────────────
+    def _live_config(request: Request) -> dict:
+        cm = getattr(request.app.state, "config_manager", None) or config_manager
+        return getattr(cm, "config", None) or {}
+
+    def _record_override_action(kind: str) -> None:
+        """人设治理动作观测（bind/unbind/整号/legacy 清理；best-effort 不抛）。"""
+        try:
+            from src.ai.persona_override_stats import get_persona_override_stats
+            get_persona_override_stats().record_action(kind)
+        except Exception:
+            pass
+
+    def _parse_conv_ref(data: dict) -> tuple:
+        """从请求体取 (platform, account_id, chat_key)。
+
+        优先显式三元组；缺则解析 ``conversation_id``（platform:account:chat_key，
+        chat_key 自身可含冒号 → split 限 2 刀）。返回 ("","","") 表示解析失败。
+        """
+        plat = str(data.get("platform") or "").strip()
+        acct = str(data.get("account_id") or "").strip()
+        ck = str(data.get("chat_key") or "").strip()
+        if plat and acct and ck:
+            return plat, acct, ck
+        cid = str(data.get("conversation_id") or "").strip()
+        parts = cid.split(":", 2)
+        if len(parts) == 3 and all(p.strip() for p in parts):
+            return parts[0].strip(), parts[1].strip(), parts[2].strip()
+        return "", "", ""
+
+    def _persona_brief(pm, pid: str) -> dict:
+        """人设摘要（id/name/role/voice）——effective API 响应用，找不到返回 None。"""
+        p = pm.get_persona_by_id(pid) if pid else None
+        if not isinstance(p, dict):
+            return None
+        vp = p.get("voice_profile") or {}
+        return {
+            "id": str(p.get("id") or pid),
+            "name": str(p.get("name") or pid),
+            "role": str(p.get("role") or ""),
+            "has_voice": bool(vp.get("enabled") or vp.get("voice") or vp.get("backend")),
+        }
+
+    @app.get("/api/persona/effective")
+    async def api_persona_effective(
+        request: Request,
+        conversation_id: str = "",
+        platform: str = "",
+        account_id: str = "",
+        chat_key: str = "",
+        _=Depends(auth_dep),
+    ):
+        """会话生效人设（与出站链同一 resolver 的读侧真相）。
+
+        返回四层全景：effective（真正生效者+tier）/ conv（会话覆写）/
+        account（账号人设）/ legacy（旧 peer-global 绑定）+ 冲突态 +
+        弹窗口径素材（has_outbound）。前端 cp-persona 据此渲染"当前生效"横幅，
+        彻底消灭「面板绑了陈默、出站却是林小雨」的两套真相。
+        """
+        data = {
+            "conversation_id": conversation_id,
+            "platform": platform, "account_id": account_id, "chat_key": chat_key,
+        }
+        plat, acct, ck = _parse_conv_ref(data)
+        if not (plat and acct and ck):
+            raise HTTPException(400, tr(request, "err.persona.conv_ref_required"))
+        from src.ai.persona_voice import (
+            conv_binding_key,
+            conv_override_enabled,
+            resolve_effective_persona,
+        )
+        from src.utils.persona_manager import PersonaManager
+        pm = PersonaManager.get_instance()
+        cfg = _live_config(request)
+        enabled = conv_override_enabled(cfg)
+        conv_key = conv_binding_key(plat, acct, ck)
+
+        # 三个独立层（不含回落语义，纯粹"各层绑了谁"）
+        conv_pid = pm.get_chat_binding_ref(conv_key)
+        from src.ai.persona_voice import resolve_account_persona_id
+        acct_pid = resolve_account_persona_id(cfg, plat, acct)
+        legacy_pid = pm.get_chat_binding_ref(ck)
+        if not legacy_pid:
+            try:
+                legacy_pid = str(
+                    ((getattr(pm, "_chat_personas", {}) or {}).get(ck) or {}).get("id") or ""
+                )
+            except Exception:
+                legacy_pid = ""
+
+        # 生效者：与出站链同一 resolver；(pid="") → PersonaManager legacy/domain 链
+        eff_pid, eff_tier = resolve_effective_persona(cfg, plat, acct, ck)
+        if eff_pid:
+            eff = _persona_brief(pm, eff_pid) or {"id": eff_pid, "name": eff_pid,
+                                                  "role": "", "has_voice": False}
+            eff["tier"] = eff_tier
+        else:
+            _p, _tier = pm.get_persona_with_tier(ck, "")
+            eff = {
+                "id": str((_p or {}).get("id") or ""),
+                "name": str((_p or {}).get("name") or ""),
+                "role": str((_p or {}).get("role") or ""),
+                "has_voice": bool((( _p or {}).get("voice_profile") or {}).get("enabled")),
+                "tier": _tier,
+            }
+
+        # 弹窗口径素材：这条会话是否已有出站历史（近 50 条内任一 out 即算）
+        has_outbound = False
+        try:
+            store = getattr(request.app.state, "inbox_store", None)
+            if store is not None:
+                cid_full = f"{plat}:{acct}:{ck}"
+                for m in store.list_recent_messages(cid_full, limit=50):
+                    if str(m.get("direction") or "") == "out":
+                        has_outbound = True
+                        break
+        except Exception:
+            has_outbound = False
+
+        # 语音灰度素材（换绑弹窗提示行）：allowlist 非空 = 名单外人设自动语音
+        # 回落文本/通用声（与 voice_autosend.persona_allowed_for_voice 同口径）。
+        _vb = ((cfg.get("inbox") or {}).get("l2_autosend") or {}).get("voice") or {}
+        _allow_raw = _vb.get("persona_allowlist") or []
+        if not isinstance(_allow_raw, (list, tuple)):
+            _allow_raw = []
+        voice_autosend = {
+            "enabled": bool(_vb.get("enabled")),
+            "allowlist": [str(x).strip() for x in _allow_raw if str(x).strip()],
+        }
+
+        return {
+            "ok": True,
+            "enabled": enabled,
+            "platform": plat, "account_id": acct, "chat_key": ck,
+            "conversation_id": f"{plat}:{acct}:{ck}",
+            "effective": eff,
+            "conv": _persona_brief(pm, conv_pid),
+            "account": _persona_brief(pm, acct_pid),
+            "legacy": _persona_brief(pm, legacy_pid),
+            # 旧 peer-global 绑定存在但没赢（被账号/会话层压制）→ 前端黄条讲清原因
+            "legacy_suppressed": bool(
+                legacy_pid and eff.get("tier") not in ("chat_binding",)
+                and legacy_pid != eff.get("id")
+            ),
+            "has_outbound": has_outbound,
+            "voice_autosend": voice_autosend,
+        }
+
     @app.post("/api/persona/bind")
     async def api_persona_bind(request: Request, _=Depends(auth_dep)):
         _check_write_role(request)
         data = await request.json()
+        scope = str(data.get("scope") or "").strip().lower()
+        from src.utils.persona_manager import PersonaManager
+        pm = PersonaManager.get_instance()
+        actor = request.session.get("username", "web_admin")
+
+        # ── 会话级覆写（scope=conversation，2026-07-26 方案 A）────────────
+        # 只影响 platform:account:chat_key 这一条会话；仅引用式（profile 必须存在），
+        # 不收内联快照——覆写的语义就是"换成另一个已定义的人设"。
+        if scope == "conversation":
+            cfg = _live_config(request)
+            from src.ai.persona_voice import conv_binding_key, conv_override_enabled
+            if not conv_override_enabled(cfg):
+                raise HTTPException(
+                    400, tr(request, "err.persona.conv_override_disabled"))
+            plat, acct, ck = _parse_conv_ref(data)
+            if not (plat and acct and ck):
+                raise HTTPException(400, tr(request, "err.persona.conv_ref_required"))
+            _pid = str(
+                data.get("profile_id")
+                or (data.get("persona") or {}).get("id") or ""
+            ).strip()
+            if not _pid or pm.get_persona_by_id(_pid) is None:
+                raise HTTPException(
+                    404, tr(request, "err.persona.profile_not_found", name=_pid or "?"))
+            key = conv_binding_key(plat, acct, ck)
+            _prev = pm.get_chat_binding_ref(key)
+            pm.bind_chat_persona_by_profile_id(key, _pid)
+            try:
+                cm = getattr(request.app.state, "config_manager", None) or config_manager
+                pm.persist_chat_bindings(cm)
+            except Exception:
+                pass
+            if audit_store:
+                audit_store.log(actor, "persona_bind",
+                              f"scope=conv conv={key} from={_prev or '-'} to={_pid}")
+            _record_override_action("bind_conv")
+            return {"ok": True, "scope": "conversation", "conversation_key": key,
+                    "from": _prev or "", "to": _pid}
+
+        # ── legacy peer-global 绑定（原语义不变，audit 补 from→to）────────
         chat_id = data.get("chat_id")
         persona_data = data.get("persona")
         if not chat_id or not persona_data:
             raise HTTPException(400, "chat_id and persona required")
-        from src.utils.persona_manager import PersonaManager
-        pm = PersonaManager.get_instance()
+        _prev_legacy = pm.get_chat_binding_ref(str(chat_id))
         # 优先"引用式"绑定（只存 profile_id，实时解析当前 profile 内容）：这样之后在页面编辑
         # 该人设，所有绑定会话立即跟随，不再出现"改了人设但会话还用旧快照"的冲突。
         # 仅当 persona 带合法 profile id 且该 profile 存在时走引用；否则回落旧内联快照（自定义/无 id）。
@@ -135,31 +322,293 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
             pm.persist_chat_bindings(cm)
         except Exception:
             pass
-        actor = request.session.get("username", "web_admin")
         if audit_store:
             audit_store.log(actor, "persona_bind",
-                          f"chat={chat_id} name={persona_data.get('name', '?')}")
+                          f"chat={chat_id} from={_prev_legacy or '-'} "
+                          f"name={persona_data.get('name', '?')}")
         return {"ok": True}
 
     @app.post("/api/persona/unbind")
     async def api_persona_unbind(request: Request, _=Depends(auth_dep)):
         _check_write_role(request)
         data = await request.json()
+        scope = str(data.get("scope") or "").strip().lower()
+        from src.utils.persona_manager import PersonaManager
+        pm = PersonaManager.get_instance()
+        actor = request.session.get("username", "web_admin")
+
+        # ── 会话级覆写解除：只删 3 段键，legacy/账号层不动 ─────────────────
+        if scope == "conversation":
+            plat, acct, ck = _parse_conv_ref(data)
+            if not (plat and acct and ck):
+                raise HTTPException(400, tr(request, "err.persona.conv_ref_required"))
+            from src.ai.persona_voice import conv_binding_key
+            key = conv_binding_key(plat, acct, ck)
+            _prev = pm.get_chat_binding_ref(key)
+            pm.unbind_chat_persona(key)
+            try:
+                cm = getattr(request.app.state, "config_manager", None) or config_manager
+                pm.persist_chat_bindings(cm)
+            except Exception:
+                pass
+            if audit_store:
+                audit_store.log(actor, "persona_unbind",
+                              f"scope=conv conv={key} from={_prev or '-'}")
+            _record_override_action("unbind_conv")
+            return {"ok": True, "scope": "conversation", "from": _prev or ""}
+
         chat_id = data.get("chat_id")
         if not chat_id:
             raise HTTPException(400, "chat_id required")
-        from src.utils.persona_manager import PersonaManager
-        pm = PersonaManager.get_instance()
+        _prev_legacy = pm.get_chat_binding_ref(str(chat_id))
         pm.unbind_chat_persona(str(chat_id))
         try:
             cm = getattr(request.app.state, "config_manager", None) or config_manager
             pm.persist_chat_bindings(cm)
         except Exception:
             pass
+        if audit_store:
+            audit_store.log(actor, "persona_unbind",
+                          f"chat={chat_id} from={_prev_legacy or '-'}")
+        return {"ok": True}
+
+    # ── 账号级整号换绑（写 account registry，QR 协议号的 SSOT）────────────
+    @app.post("/api/persona/account-persona")
+    async def api_account_persona_set(request: Request, _=Depends(auth_dep)):
+        """给任意平台账号换绑/清除账号级人设（写 registry ``meta.persona_id``）。
+
+        与既有 ``/api/personas/tg-account/{id}/assign-profile``（只写 config）互补：
+        QR 扫码登录的协议号不在 config 里，registry 才是它们的人设 SSOT
+        （``resolve_account_persona_id`` 第 1 优先级）。写入要点：
+        - ``merge_meta=True`` 锁内原子合并——绝不整块覆盖 meta
+          （2026-07-23 baileys 事故教训：别抹掉 session_string）；
+        - ``persona_id_auto=False`` 显式绑定标记——config 目录同步
+          （sync_to_account_registry）看到该标记后不会用 config 值刷回。
+        Body: {platform, account_id, profile_id}  profile_id 空 = 清除回默认。
+        权限：写权限即可（运营拍板：账号级换绑不限 master）。
+        """
+        _check_write_role(request)
+        data = await request.json()
+        plat = str(data.get("platform") or "").strip().lower()
+        acct = str(data.get("account_id") or "").strip()
+        profile_id = str(data.get("profile_id") or "").strip()
+        if not plat or not acct:
+            raise HTTPException(400, tr(request, "err.persona.account_ref_required"))
+        from src.utils.persona_manager import PersonaManager
+        pm = PersonaManager.get_instance()
+        if profile_id and pm.get_persona_by_id(profile_id) is None:
+            raise HTTPException(
+                404, tr(request, "err.persona.profile_not_found", name=profile_id))
+        try:
+            from src.integrations.account_registry import get_account_registry
+            registry = get_account_registry()
+        except Exception:
+            registry = None
+        if registry is None:
+            raise HTTPException(503, tr(request, "err.persona.registry_unavailable"))
+        _prev = ""
+        try:
+            _row = registry.get(plat, acct) or {}
+            _meta = _row.get("meta") or {}
+            _prev = str(_meta.get("persona_id") or "").strip()
+            if not _prev:
+                for _p in (_meta.get("persona_ids") or []):
+                    _prev = str(_p or "").strip()
+                    if _prev:
+                        break
+        except Exception:
+            _prev = ""
+        registry.upsert(
+            plat, acct,
+            meta={
+                "persona_id": profile_id,
+                "persona_ids": [profile_id] if profile_id else [],
+                "persona_id_auto": False,
+            },
+            merge_meta=True,
+        )
         actor = request.session.get("username", "web_admin")
         if audit_store:
-            audit_store.log(actor, "persona_unbind", f"chat={chat_id}")
-        return {"ok": True}
+            audit_store.log(actor, "account_persona_set",
+                          f"{plat}:{acct} from={_prev or '-'} to={profile_id or '(cleared)'}")
+        _record_override_action("account_set")
+        return {"ok": True, "platform": plat, "account_id": acct,
+                "from": _prev or "", "to": profile_id}
+
+    # ── legacy peer-global 绑定清理（P3：升级为会话级 / 清除）────────────
+    # 2026-07-24 双账号串音修复后，legacy 绑定在有账号人设时恒被压制=「活债」。
+    # 这里给运营一个盘点+收官工具：看清每条 legacy 键落在哪些会话、是否还生效，
+    # 按条升级成显式 3 段会话覆写（语义保真）或直接清除（认账号人设）。
+
+    def _legacy_conversations(request: Request, key: str) -> list:
+        """按 legacy 绑定键反查 inbox 会话落点（含压制态判定）。"""
+        from src.ai.persona_voice import (
+            conv_binding_key,
+            conv_override_enabled,
+            resolve_account_persona_id,
+        )
+        from src.utils.persona_manager import PersonaManager
+        pm = PersonaManager.get_instance()
+        cfg = _live_config(request)
+        enabled = conv_override_enabled(cfg)
+        store = getattr(request.app.state, "inbox_store", None)
+        rows = []
+        if store is not None and hasattr(store, "find_conversations_by_chat_key"):
+            try:
+                rows = store.find_conversations_by_chat_key(key) or []
+            except Exception:
+                rows = []
+        out = []
+        for r in rows:
+            plat = str(r.get("platform") or "")
+            acct = str(r.get("account_id") or "")
+            ck = str(r.get("chat_key") or "")
+            try:
+                acct_pid = resolve_account_persona_id(cfg, plat, acct)
+            except Exception:
+                acct_pid = ""
+            conv_pid = pm.get_chat_binding_ref(conv_binding_key(plat, acct, ck))
+            out.append({
+                "conversation_id": str(r.get("conversation_id") or ""),
+                "platform": plat,
+                "account_id": acct,
+                "chat_key": ck,
+                "display_name": str(r.get("display_name") or ""),
+                "account_persona": acct_pid,
+                "conv_override": conv_pid,
+                # legacy 在这条会话没戏的两种情况：账号层有人设（7/24 起优先）
+                # 或 已有会话覆写（开关开时优先级最高）
+                "suppressed": bool(acct_pid or (conv_pid and enabled)),
+            })
+        return out
+
+    @app.get("/api/persona/legacy-bindings")
+    async def api_persona_legacy_bindings(request: Request, _=Depends(auth_dep)):
+        """盘点全部 legacy peer-global 绑定（清理面板读侧）。
+
+        逐条给出：绑定的 profile（stale=引用的 profile 已删除）、落在哪些
+        inbox 会话（跨平台/账号）、每个落点是否被账号/会话层压制。
+        3 段会话覆写键不在此列（它们是新语义，不是债）。
+        """
+        from src.ai.persona_voice import (
+            conv_override_enabled,
+            is_conv_binding_key,
+        )
+        from src.utils.persona_manager import PersonaManager
+        pm = PersonaManager.get_instance()
+        cfg = _live_config(request)
+        enabled = conv_override_enabled(cfg)
+
+        entries: dict = {}
+        for k, pid in (getattr(pm, "_chat_bindings", {}) or {}).items():
+            if is_conv_binding_key(k):
+                continue
+            entries[str(k)] = {"profile_id": str(pid or ""), "kind": "reference"}
+        for k, p in (getattr(pm, "_chat_personas", {}) or {}).items():
+            ks = str(k)
+            if ks in entries or is_conv_binding_key(ks):
+                continue
+            entries[ks] = {
+                "profile_id": str((p or {}).get("id") or ""),
+                "kind": "inline",
+                "inline_name": str((p or {}).get("name") or ""),
+            }
+
+        items = []
+        for k in sorted(entries):
+            info = entries[k]
+            pid = info["profile_id"]
+            prof = pm.get_persona_by_id(pid) if pid else None
+            convs = _legacy_conversations(request, k)
+            items.append({
+                "key": k,
+                "kind": info["kind"],
+                "profile_id": pid,
+                "profile_name": (
+                    str((prof or {}).get("name") or "")
+                    or info.get("inline_name") or pid or "?"
+                ),
+                # stale=引用式绑定指向已删除的 profile（只能清除，升不了级）
+                "stale": info["kind"] == "reference" and bool(pid) and prof is None,
+                "conversations": convs,
+                "suppressed_all": bool(convs) and all(
+                    c["suppressed"] for c in convs),
+            })
+        return {"ok": True, "enabled": enabled, "total": len(items),
+                "items": items}
+
+    @app.post("/api/persona/legacy-bindings/cleanup")
+    async def api_persona_legacy_cleanup(request: Request, _=Depends(auth_dep)):
+        """处理一条 legacy 绑定：``upgrade``（升级为会话级覆写）或 ``remove``（清除）。
+
+        Body: {key, action: "upgrade"|"remove"}
+        upgrade 语义保真：把 legacy「这个 peer 用这个人设」显式落到该 peer 的
+        **每一条** inbox 会话（3 段覆写键），然后删 legacy 键——绑定从「被压制的
+        全局暗债」变成「逐会话的显式覆写」。要求覆写开关开着（关着升级=静默失效，
+        直接拒绝）且 profile 仍存在；stale/查无会话 → 只能 remove。
+        """
+        _check_write_role(request)
+        data = await request.json()
+        key = str(data.get("key") or "").strip()
+        action = str(data.get("action") or "").strip().lower()
+        from src.ai.persona_voice import (
+            conv_binding_key,
+            conv_override_enabled,
+            is_conv_binding_key,
+        )
+        from src.utils.persona_manager import PersonaManager
+        pm = PersonaManager.get_instance()
+        if not key or is_conv_binding_key(key):
+            raise HTTPException(400, tr(request, "err.persona.legacy_key_invalid"))
+        if action not in ("upgrade", "remove"):
+            raise HTTPException(400, tr(request, "err.persona.legacy_action_invalid"))
+        has_ref = bool(pm.get_chat_binding_ref(key))
+        has_inline = key in (getattr(pm, "_chat_personas", {}) or {})
+        if not (has_ref or has_inline):
+            raise HTTPException(404, tr(request, "err.persona.legacy_not_found"))
+        actor = request.session.get("username", "web_admin")
+
+        upgraded: list = []
+        if action == "upgrade":
+            cfg = _live_config(request)
+            if not conv_override_enabled(cfg):
+                raise HTTPException(
+                    400, tr(request, "err.persona.conv_override_disabled"))
+            pid = pm.get_chat_binding_ref(key)
+            if not pid and has_inline:
+                pid = str(
+                    ((getattr(pm, "_chat_personas", {}) or {}).get(key) or {})
+                    .get("id") or ""
+                )
+            if not pid or pm.get_persona_by_id(pid) is None:
+                raise HTTPException(
+                    409, tr(request, "err.persona.legacy_stale_upgrade"))
+            convs = _legacy_conversations(request, key)
+            if not convs:
+                raise HTTPException(
+                    404, tr(request, "err.persona.legacy_no_conversations"))
+            for c in convs:
+                ckey = conv_binding_key(
+                    c["platform"], c["account_id"], c["chat_key"])
+                pm.bind_chat_persona_by_profile_id(ckey, pid)
+                upgraded.append(ckey)
+
+        pm.unbind_chat_persona(key)
+        try:
+            cm = getattr(request.app.state, "config_manager", None) or config_manager
+            pm.persist_chat_bindings(cm)
+        except Exception:
+            pass
+        if audit_store:
+            if action == "upgrade":
+                audit_store.log(actor, "persona_legacy_upgrade",
+                              f"key={key} convs={len(upgraded)}")
+            else:
+                audit_store.log(actor, "persona_legacy_remove", f"key={key}")
+        _record_override_action(
+            "legacy_upgrade" if action == "upgrade" else "legacy_remove")
+        return {"ok": True, "action": action, "key": key,
+                "upgraded": upgraded, "upgraded_count": len(upgraded)}
 
     @app.post("/api/persona/update-default")
     async def api_persona_update_default(request: Request, _=Depends(auth_dep)):
@@ -528,6 +977,11 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
 
         def _detect_platform(cid: str) -> str:
             c = str(cid).lower()
+            # 会话级覆写键（3 段 platform:account:chat_key）按首段归平台
+            if c.count(":") >= 2:
+                _head = c.split(":", 1)[0]
+                if _head in ("telegram", "whatsapp", "line", "messenger", "web"):
+                    return _head
             if c.startswith("line_rpa:") or c.startswith("line:"):
                 return "line"
             if c.startswith("mrpa:") or c.startswith("messenger:"):

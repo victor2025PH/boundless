@@ -98,8 +98,9 @@ def register_desktop_routes(app, *, api_auth) -> None:
         （domain ``conversion`` 的「线上陪伴」或 account_persona_id 指定的画像），
         因此回复带人设口吻、禁用「作为AI」等机器措辞、并融合知识库——而非通用提示词。
 
-        body: {messages:[{direction,text}], persona_id?, platform?, chat_key?, target_lang?}
-        返回: {ok, reply, persona?, intent?, translated?}
+        body: {messages:[{direction,text}], persona_id?, platform?, chat_key?,
+               target_lang?, conversation_id?, account_id?}
+        返回: {ok, reply, persona?, persona_tier?, intent?, translated?}
         """
         body = await request.json()
         msgs = body.get("messages") if isinstance(body.get("messages"), list) else []
@@ -107,6 +108,14 @@ def register_desktop_routes(app, *, api_auth) -> None:
         persona_id = str(body.get("persona_id") or "").strip()
         platform = str(body.get("platform") or "telegram").strip()
         chat_key = str(body.get("chat_key") or "").strip()
+        conversation_id = str(body.get("conversation_id") or "").strip()
+        account_id = str(body.get("account_id") or "").strip()
+        # 兼容旧前端：只给 conversation_id 时反解 platform/account/chat_key
+        if conversation_id and conversation_id.count(":") >= 2 and not chat_key:
+            _p3 = conversation_id.split(":", 2)
+            platform = platform or _p3[0]
+            account_id = account_id or _p3[1]
+            chat_key = _p3[2]
 
         # 归一对话历史（OpenAI 风格）+ 取最后一条入站消息作为「待回复」
         history, last_inbound = normalize_history(msgs)
@@ -115,6 +124,8 @@ def register_desktop_routes(app, *, api_auth) -> None:
 
         # 人设化回复走单一事实源（persona_reply.generate_persona_reply）：
         # 与收件箱全自动草稿 / 协议自动回复同一条产线，避免逻辑分叉。
+        # persona_id 为空时由 generate_persona_reply 内部按
+        # 会话覆写 > 账号人设 > legacy 统一解析（与出站链同一 resolver）。
         out = await generate_persona_reply(
             app=request.app,
             platform=platform,
@@ -123,6 +134,8 @@ def register_desktop_routes(app, *, api_auth) -> None:
             history=history,
             persona_id=persona_id,
             target_lang=target_lang,
+            conversation_id=conversation_id,
+            account_id=account_id,
         )
         out.pop("detail", None)
         return out
@@ -579,6 +592,8 @@ def register_desktop_routes(app, *, api_auth) -> None:
         out = await generate_persona_reply(
             app=request.app, platform=platform, chat_key=chat_key,
             last_inbound=last_inbound, history=history,
+            conversation_id=str(cmd.get("conversation_id") or ""),
+            account_id=account_id,
         )
         if not (out.get("ok") and out.get("reply")):
             return {"ok": False, "detail": str(out.get("detail") or "生成失败")}

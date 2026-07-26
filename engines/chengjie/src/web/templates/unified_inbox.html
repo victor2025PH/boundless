@@ -77,6 +77,7 @@
 <script src="/copilot/components/cp-chain-exec.js?v=20260611"></script>
 <script src="/copilot/components/cp-draft.js?v=20260704"></script>
 <script src="/copilot/components/cp-voice.js?v=20260611b"></script>
+<script src="/copilot/components/cp-goal.js?v=20260727b"></script>
 {% endblock %}
 {% block content %}
 <style>
@@ -772,6 +773,14 @@
                   </div>
                 </div>
               </section>
+              <!-- 关系进展与团队协作之间：工作目标（cp-goal → /api/goals*；功能未开(403)时组件自动隐藏整卡） -->
+              <section class="cp-card" data-cp-card="goal">
+                <button type="button" class="cp-card-hd" data-cp-toggle="goal">
+                  <span class="cp-card-ttl"><span class="cp-card-ic">🎯</span><span data-i18n="inbox.goal.title">工作目标</span></span>
+                  <span class="cp-card-chev" aria-hidden="true"></span>
+                </button>
+                <div class="cp-card-bd"><cp-goal id="ws-cp-goal"></cp-goal></div>
+              </section>
               <!-- 三层重组第 3 层「团队协作」：协作上下文 + 内部注解合一卡（同为「同事间怎么接力」语义） -->
               <section class="cp-card collapsed" data-cp-card="collab">
                 <button type="button" class="cp-card-hd" data-cp-toggle="collab">
@@ -943,6 +952,41 @@
     <div id="connect-mode-view">
       <div class="connect-modes-tip" data-i18n="inbox.connect.mode_tip">选择登录方式：</div>
       <div class="connect-modes" id="connect-modes"><div style="text-align:center;padding:16px;"><span class="spin"></span></div></div>
+      <!-- 方式不可用说明卡：为什么不能用 / 需要做什么 / 现在可以怎么办 -->
+      <div class="connect-unavail" id="connect-unavail" style="display:none;" role="note" aria-live="polite">
+        <div class="connect-unavail-head">
+          <span class="connect-unavail-lock" aria-hidden="true">&#128274;</span>
+          <span class="connect-unavail-title" id="connect-unavail-title" data-i18n="inbox.connect.unavail_title">这个方式暂时不能用</span>
+        </div>
+        <div class="connect-unavail-sec">
+          <div class="connect-unavail-t" data-i18n="inbox.connect.unavail_why_t">为什么</div>
+          <div class="connect-unavail-b" id="connect-unavail-why"></div>
+        </div>
+        <div class="connect-unavail-sec">
+          <div class="connect-unavail-t" data-i18n="inbox.connect.unavail_how_t">需要做什么</div>
+          <div class="connect-unavail-b" id="connect-unavail-how"></div>
+        </div>
+        <div class="connect-unavail-sec">
+          <div class="connect-unavail-t" data-i18n="inbox.connect.unavail_alt_t">现在可以怎么办</div>
+          <div class="connect-unavail-b" id="connect-unavail-alt"></div>
+        </div>
+        <!-- Telegram 协议模式一键启用：填 API ID/Hash -> /api/setup/channels/telegram
+             enable_on_ready 联动开启 protocol_enabled + orchestrator_enabled，免重启 -->
+        <div class="connect-unavail-sec" id="connect-enable" style="display:none;">
+          <div class="connect-unavail-t" data-i18n="inbox.connect.enable_t">在这里直接启用</div>
+          <div class="connect-unavail-b" id="connect-enable-hint" data-i18n="inbox.connect.enable_hint">去 https://my.telegram.org → API development tools 申请一对凭据，填入保存后本方式立即可用，无需重启。</div>
+          <div id="connect-enable-ready" style="display:none;">
+            <button type="button" id="connect-enable-ready-btn" class="connect-enable-go" onclick="enableProtocolMode(true)" data-i18n="inbox.connect.enable_btn_ready">一键启用协议多开</button>
+          </div>
+          <div class="connect-enable-form" id="connect-enable-form">
+            <input id="connect-enable-apiid" class="cfg-input" inputmode="numeric" autocomplete="off" placeholder="API ID（纯数字）" data-i18n-placeholder="inbox.connect.enable_apiid_ph">
+            <input id="connect-enable-apihash" class="cfg-input" autocomplete="off" placeholder="API Hash" data-i18n-placeholder="inbox.connect.enable_apihash_ph">
+            <button type="button" id="connect-enable-btn" class="connect-enable-go" onclick="enableProtocolMode()" data-i18n="inbox.connect.enable_btn">保存并启用</button>
+          </div>
+          <div id="connect-enable-msg" class="connect-enable-msg" role="status" aria-live="polite"></div>
+        </div>
+        <button type="button" class="connect-unavail-back" onclick="hideModeUnavailable()" data-i18n="inbox.connect.unavail_back">← 返回方式列表</button>
+      </div>
     </div>
     <!-- 步骤②：账号配置（代理 + 指纹，仿截图） -->
     <div id="connect-config-view" style="display:none;">
@@ -6182,7 +6226,7 @@ function _cdraftResolveAdopted(){
 /* ===== 业务助手右栏（与桌面 copilot 同源 shared/copilot） ===== */
 var _wsCpClient=null, _wsCpTab='reply', _wsCpCid='', _wsCpCtx=null;
 var _wsCpTabCtrl=null;
-var _WS_CP_IDS=['draft','voice','persona','script','relstage','collab','nba','chain'];
+var _WS_CP_IDS=['draft','voice','persona','script','relstage','collab','nba','chain','goal'];
 
 /* ===== 方案1：可折叠卡片（默认态 + localStorage 记忆 + 懒加载） =====
    默认展开：hero(英雄卡) / draft(AI回复) / custinfo(客户信息)；其余默认折叠。
@@ -6201,7 +6245,7 @@ try{
 }catch(_){}
 var _CP_CARD_DEF_COLLAPSED={convops:1,voice:1,persona:1,script:1,collab:1,chain:1,analysis:1};
 /* 组件 suffix → 所属折叠卡（NBA 承载于英雄卡 hero）。用于「懒加载」按卡展开态决定是否取数。 */
-var _CP_ID_CARD={draft:'draft',voice:'voice',persona:'persona',script:'script',relstage:'relstage',collab:'collab',nba:'hero',chain:'chain'};
+var _CP_ID_CARD={draft:'draft',voice:'voice',persona:'persona',script:'script',relstage:'relstage',collab:'collab',nba:'hero',chain:'chain',goal:'goal'};
 /* 展开某卡时：把折叠期暂存的会话上下文补喂给其组件（触发取数），
    并触发该卡的非组件取数（hero 关系摘要 / analysis 的 AI 分析 LLM 调用）。 */
 function _cpOnCardExpand(cardName){
@@ -6550,6 +6594,25 @@ function initWsCopilot(){
       _refreshWsCpComponent('collab');
       _refreshWsCpComponent('nba');
       _renderHeroRel();
+    });
+  }
+  /* 人设换绑联动（2026-07-26 方案 A）：toast 提示 + 有草稿时自动重生成。
+     侧栏 pill / 徽标由组件自身 refresh 与 cp-data-loaded 周期刷新，无需强刷。
+     scope=account（P3 整号切换）单独文案——影响面是整个账号，提示语要说清。 */
+  var _perEl=document.getElementById('ws-cp-persona');
+  if(_perEl){
+    _perEl.addEventListener('cp-persona-changed', function(ev){
+      var d=(ev&&ev.detail)||{};
+      if(!d.ok){ _toast(window.T('inbox.persona.switch_failed'),'#dc2626'); return; }
+      if(d.scope==='account'){
+        _toast(window.Tf('inbox.persona.account_switched_to',
+                         {name:d.personaName||'?', acct:d.accountId||'?'}),'#0f9d75');
+      } else {
+        _toast(d.personaName?window.Tf('inbox.persona.switched_to',{name:d.personaName})
+                            :window.T('inbox.persona.switched'),'#0f9d75');
+      }
+      var _dr=document.getElementById('ws-cp-draft');
+      if(_dr&&typeof _dr.regenerate==='function') _dr.regenerate();
     });
   }
   document.addEventListener('cp-fill', function(e){
@@ -9623,31 +9686,130 @@ function backToModeSelect(){
   _showConnectPin(false); _showConnectErrDetail('');
   _showModeView();
 }
+// modes 状态缓存：不可用说明卡 / 一键启用文案按 reason_code 取键
+let _connectModes=[];
+function _modeReasonKeys(rc){
+  const known={not_enabled:1, needs_server_setup:1};
+  const k=known[String(rc||'')]?String(rc):'not_enabled';
+  return {why:`inbox.connect.rc_${k}_why`, how:`inbox.connect.rc_${k}_how`};
+}
+function _connModeLabel(m){ return (m.label_key&&window.T(m.label_key,null))||m.label||m.mode; }
+function _modeDesc(m){ return (m.desc_key&&window.T(m.desc_key,null))||m.desc||''; }
 async function loadConnectModes(){
   const box=document.getElementById('connect-modes');
+  hideModeUnavailable();
   box.innerHTML='<div style="text-align:center;padding:16px;"><span class="spin"></span></div>';
   try{
     const r=await fetch(`/api/platforms/${enc(_connectPlat)}/modes`);
     const d=await r.json();
     const modes=(d&&d.modes)||[];
+    _connectModes=modes;
     if(!modes.length){ // 无可选方式（如 web）→ 直接走默认
       _connectMode=''; _showQrView(); startConnect(); return;
     }
     box.innerHTML=modes.map(m=>{
       const dis=!m.available;
-      const badge=m.recommended?'<span class="connect-mode-badge">'+window.T('inbox.connect.mode_recommended')+'</span>'
-        :(dis?'<span class="connect-mode-badge soon">'+window.T('inbox.connect.mode_soon')+'</span>':'');
-      return `<div class="connect-mode-opt${m.recommended?' recommended':''}${dis?' disabled':''}"
-        ${dis?'':`onclick="chooseMode('${esc(m.mode)}')"`}>
-        <div class="connect-mode-radio"></div>
+      // 徽标：不可用优先显示「即将支持」；preferred 且可用才标「推荐」
+      const badge=dis?'<span class="connect-mode-badge soon">'+window.T('inbox.connect.mode_soon')+'</span>'
+        :(m.preferred?'<span class="connect-mode-badge">'+window.T('inbox.connect.mode_recommended')+'</span>':'');
+      const caps=(m.caps||[]).map(c=>{
+        const t=window.T(`inbox.connect.cap_${c}`,null);
+        return t?`<span class="connect-cap-chip">${esc(t)}</span>`:'';
+      }).join('');
+      const act=dis?`onclick="showModeUnavailable('${esc(m.mode)}')"`:`onclick="chooseMode('${esc(m.mode)}')"`;
+      return `<div class="connect-mode-opt${!dis&&m.preferred?' recommended':''}${dis?' disabled':''}"
+        role="button" tabindex="0" ${dis?'aria-disabled="true"':''} ${act}
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click();}">
+        <div class="connect-mode-radio">${dis?'<span class="connect-mode-lock" aria-hidden="true">&#128274;</span>':''}</div>
         <div class="connect-mode-body">
-          <div class="connect-mode-name">${esc(m.label)}${badge}</div>
-          <div class="connect-mode-desc">${esc(m.desc||'')}${dis&&m.reason?` · ${esc(m.reason)}`:''}</div>
+          <div class="connect-mode-name">${esc(_connModeLabel(m))}${badge}</div>
+          <div class="connect-mode-desc">${esc(_modeDesc(m))}</div>
+          ${caps?`<div class="connect-mode-caps">${caps}</div>`:''}
+          ${dis?`<div class="connect-mode-unavail-cue">${esc(window.T('inbox.connect.unavail_title'))} →</div>`:''}
         </div></div>`;
     }).join('');
   }catch(_){
     box.innerHTML='<div style="font-size:12px;color:var(--red);text-align:center;padding:16px;">'+window.T('inbox.connect.modes_fail')+'</div>';
   }
+}
+function showModeUnavailable(mode){
+  const m=(_connectModes||[]).find(x=>String(x.mode)===String(mode));
+  const card=document.getElementById('connect-unavail');
+  if(!card) return;
+  const keys=_modeReasonKeys(m&&m.reason_code);
+  const nameEl=document.getElementById('connect-unavail-title');
+  if(nameEl&&m) nameEl.textContent=window.T('inbox.connect.unavail_title')+'：'+_connModeLabel(m);
+  const put=(id,txt)=>{ const el=document.getElementById(id); if(el) el.textContent=txt; };
+  put('connect-unavail-why', window.T(keys.why));
+  put('connect-unavail-how', window.T(keys.how));
+  put('connect-unavail-alt', window.T('inbox.connect.unavail_alt'));
+  const en=document.getElementById('connect-enable');
+  if(en){
+    const show=_canOneClickEnable(m);
+    en.style.display=show?'block':'none';
+    const emsg=document.getElementById('connect-enable-msg');
+    if(emsg){ emsg.style.display='none'; emsg.textContent=''; }
+    if(show) _primeEnableProtocolForm();
+  }
+  document.getElementById('connect-modes').style.display='none';
+  card.style.display='block';
+}
+function hideModeUnavailable(){
+  const card=document.getElementById('connect-unavail');
+  if(card) card.style.display='none';
+  const box=document.getElementById('connect-modes');
+  if(box) box.style.display='';
+}
+function _canOneClickEnable(m){
+  return _connectPlat==='telegram' && m && String(m.mode)==='protocol'
+    && String(m.reason_code||'not_enabled')==='not_enabled';
+}
+function _setEnableFormMode(hasCreds){
+  const ready=document.getElementById('connect-enable-ready');
+  const form=document.getElementById('connect-enable-form');
+  const hint=document.getElementById('connect-enable-hint');
+  if(ready) ready.style.display=hasCreds?'block':'none';
+  if(form) form.style.display=hasCreds?'none':'flex';
+  if(hint) hint.textContent=window.T(hasCreds?'inbox.connect.enable_hint_ready':'inbox.connect.enable_hint');
+}
+function _primeEnableProtocolForm(){
+  _setEnableFormMode(false);
+  apiFetch('/api/setup/channels').then(r=>r.ok?r.json():null).then(d=>{
+    const tg=((d&&d.channels)||[]).find(c=>String(c.id)==='telegram');
+    _setEnableFormMode(!!(tg&&tg.configured));
+  }).catch(()=>{ _setEnableFormMode(false); });
+}
+// reuseExisting=true＝凭据已在后台配好：POST 空 values 走 enable_on_ready 直启
+function enableProtocolMode(reuseExisting){
+  const apiId=(document.getElementById('connect-enable-apiid').value||'').trim();
+  const apiHash=(document.getElementById('connect-enable-apihash').value||'').trim();
+  const msg=document.getElementById('connect-enable-msg');
+  const btn=document.getElementById(reuseExisting?'connect-enable-ready-btn':'connect-enable-btn');
+  const say=(txt,ok)=>{ if(msg){ msg.className='connect-enable-msg '+(ok?'ok':'err'); msg.style.display='block'; msg.textContent=txt; } };
+  const values=reuseExisting?{}:{api_id:apiId, api_hash:apiHash};
+  if(!reuseExisting&&(!apiId||!apiHash)){ say(window.T('inbox.connect.enable_need_fields'),false); return; }
+  if(btn) btn.disabled=true;
+  say(window.T('inbox.connect.enable_saving'),true);
+  apiFetch('/api/setup/channels/telegram',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({values:values})})
+  .then(r=>{
+    if(r.status===401||r.status===403) throw new Error('forbidden');
+    return r.json();
+  })
+  .then(async d=>{
+    if(!d||!d.ok) throw new Error((d&&d.detail)||'');
+    await loadConnectModes();
+    const proto=(_connectModes||[]).find(x=>String(x.mode)==='protocol');
+    if(btn) btn.disabled=false;
+    if(proto&&proto.available){ chooseMode('protocol'); return; }
+    showModeUnavailable('protocol');
+    say(window.T('inbox.connect.enable_saved_wait'),true);
+  })
+  .catch(e=>{
+    if(btn) btn.disabled=false;
+    say(String(e&&e.message)==='forbidden'?window.T('inbox.connect.enable_forbidden')
+      :(window.T('inbox.connect.enable_fail')+((e&&e.message)?('：'+e.message):'')), false);
+  });
 }
 let _connectCfg={};
 function chooseMode(mode){
@@ -10622,6 +10784,7 @@ Object.assign(window, {
   refreshAcct, reconnectAcct, reloginMessengerAcct, viewAcctChats, logoutAcct, removeAcct, syncHistoryAcct, toggleAcctMenu, dismissTgSyncHint, syncSuggestedAcct,
   openConnect, closeConnect, restartConnect,
   chooseMode, backToModeSelect, backToConfig,
+  showModeUnavailable, hideModeUnavailable, enableProtocolMode,
   onProxyToggle, onFpToggle, toggleAddProxy, submitAddProxy, previewFingerprint,
   confirmConfigAndScan, orchSync, submitConnectPassword,
   // 筛选空态 / 会话记录 / 业务助手切换 / 文档·多线路翻译

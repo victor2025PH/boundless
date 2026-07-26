@@ -425,16 +425,24 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
     @app.get("/api/unified-inbox/chats")
     async def api_unified_inbox_chats(
         request: Request, limit: int = 30, before_ts: float = 0,
+        platform: str = "", account_id: str = "",
     ):
         api_auth(request)
-        limit = max(5, min(100, int(limit or 30)))
+        # scoped 过滤参数规范化：platform 小写（store 落库口径即小写平台名）、
+        # account_id 保大小写（协议号/RPA 账号 id 可能大小写敏感）。
+        platform = str(platform or "").strip().lower()
+        account_id = str(account_id or "").strip()
+        scoped = bool(platform or account_id)
 
         # ── 十期：游标分页页（before_ts>0）——仅 store 有历史分页语义 ──
         # live 聚合是各平台「最近 N 条」快照，翻不出更旧的；分页页直接 store 读，
-        # 首页已完成 ingest 旁路，这里无需再跑实时聚合。
+        # 首页已完成 ingest 旁路，这里无需再跑实时聚合。platform/account_id 透传
+        # 后 scoped 翻页自然工作（无参数时行为与旧版逐字段一致）。
         if before_ts and float(before_ts) > 0:
+            limit = max(5, min(100, int(limit or 30)))
             older = _collect_chats_from_store(
-                request, limit=limit, before_ts=float(before_ts))
+                request, limit=limit, before_ts=float(before_ts),
+                platform=platform, account_id=account_id)
             older = older or []
             _enrich_chat_list(request, older, config_manager=config_manager)
             oldest = min((float(c.get("last_ts") or 0) for c in older), default=0.0)
@@ -442,7 +450,8 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
             store = _inbox_store(request)
             if store is not None and oldest > 0:
                 try:
-                    has_more = store.count_conversations_older_than(oldest) > 0
+                    has_more = store.count_conversations_older_than(
+                        oldest, platform=platform, account_id=account_id) > 0
                 except Exception:
                     has_more = False
             return {
@@ -450,6 +459,37 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
                 "has_more": has_more, "oldest_ts": oldest or None,
             }
 
+        # ── scoped 首页（platform/account_id 非空）：直接按需查 store ──
+        # 根因：前端全局轮询只拿最近 100 条（live 聚合快照 + top100 截断），
+        # 点开某账号时其老会话不在窗口内 → 「看不到会话」。账号视角改为绕过
+        # 全局截断、按 (platform, account_id) 直查持久事实源；limit 单独放宽到
+        # 200（单账号列表本就该一次多拿些）。store 不可用 → 回落下方全量路径
+        # （行为兼容绝不 500，回落响应形状与无参数版完全一致）。
+        if scoped:
+            slimit = max(5, min(200, int(limit or 30)))
+            scoped_chats = _collect_chats_from_store(
+                request, limit=slimit, platform=platform, account_id=account_id)
+            if scoped_chats is not None:
+                _enrich_chat_list(request, scoped_chats, config_manager=config_manager)
+                oldest = min((float(c.get("last_ts") or 0) for c in scoped_chats),
+                             default=0.0)
+                has_more = False
+                store = _inbox_store(request)
+                if store is not None and oldest > 0:
+                    try:
+                        has_more = store.count_conversations_older_than(
+                            oldest, platform=platform, account_id=account_id) > 0
+                    except Exception:
+                        has_more = False
+                # 刻意不带 platform_status：账号切换是高频操作，省一趟 orchestrator
+                # /adapter 状态聚合开销——前端全局轮询已持有该数据。
+                return {
+                    "ok": True, "ts": time.time(), "chats": scoped_chats,
+                    "has_more": has_more, "oldest_ts": oldest or None,
+                    "scope": {"platform": platform, "account_id": account_id},
+                }
+
+        limit = max(5, min(100, int(limit or 30)))
         chats = _chats_for_listing(request, limit=limit)
         platform_status: Dict[str, Any] = status_via_adapters(request, _INBOX_ADAPTERS)
         _merge_orchestrator_status(platform_status, config_manager)

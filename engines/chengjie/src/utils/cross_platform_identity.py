@@ -111,3 +111,56 @@ class CrossPlatformIdentity:
         if self._conn:
             self._conn.close()
             self._conn = None
+
+
+def link_and_merge_memory(
+    cpi: "CrossPlatformIdentity",
+    episodic_store,
+    platform_a: str,
+    uid_a: str,
+    platform_b: str,
+    uid_b: str,
+) -> dict:
+    """link + 把 B 侧旧 canonical 的情景记忆行迁入共享 canonical，
+    并把 B 既有 cluster 成员整簇改挂（传递性）。
+
+    修两件事：① 「关联后失忆」——``link()`` 只改 map 指向，B 侧历史
+    episodic 行仍挂旧 canonical 变孤儿，这里同动作经
+    :meth:`EpisodicMemoryStore.merge_key`（幂等、content_hash 去重）搬家；
+    ② 「簇分裂」——B 若已属 cluster（先前手动链过第三平台），其余成员
+    map 行仍指旧 canonical，历史被搬走后未来写入会重新孤儿化，故整簇
+    一并改挂 A 的 canonical。
+
+    ``episodic_store=None`` → 只做 link+整簇改挂。绝不抛：merge/relink
+    失败只损失合并，不影响关联本身。
+    """
+    pre_b = cpi.resolve(platform_b, uid_b)
+    canon = cpi.link(platform_a, uid_a, platform_b, uid_b)
+    relinked: List[dict] = []
+    merged = 0
+    if pre_b and pre_b != canon:
+        # B 的 map 行已改挂 canon → 此刻仍指 pre_b 的就是簇友，整簇跟走
+        try:
+            members = list(cpi.get_by_canonical(pre_b) or [])
+        except Exception:
+            members = []
+        for p, u in members:
+            try:
+                cpi.link(platform_a, uid_a, p, u)
+                relinked.append({"platform": p, "uid": u})
+            except Exception:
+                logger.warning(
+                    "cluster relink failed %s:%s", p, u, exc_info=True)
+        if episodic_store is not None:
+            try:
+                merged = int(episodic_store.merge_key(pre_b, canon) or 0)
+            except Exception:
+                logger.warning(
+                    "episodic merge_key %s→%s failed",
+                    pre_b, canon, exc_info=True)
+    return {
+        "canonical_id": canon,
+        "memory_rows_merged": merged,
+        "merged_from": [pre_b] if merged else [],
+        "cluster_relinked": relinked,
+    }

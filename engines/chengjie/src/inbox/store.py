@@ -30,7 +30,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .models import InboxConversation, InboxMessage, MessageAnalysis
 
@@ -43,6 +43,180 @@ _DEFAULT_AUTOMATION_MODE = "review"
 # worker、SLA 看门狗、工作链、无登录用户回退），它们不是人工坐席，不应计入授权
 # 席位（否则会把自动化跑量误判成 over_seats 触发计费红灯告警）。统计活跃坐席时排除。
 _NON_BILLABLE_AGENT_IDS = ("autosend_worker", "system")
+
+# 好友名单「沉默」判定阈值（天）：聊过但超过这么久没动静 = 需要激活的存量线索。
+# 做成常量而非 SQL 魔数，便于运营侧调档（30 天 ≈ 一个自然运营周期）。
+PROTOCOL_CONTACT_SILENT_DAYS = 30.0
+
+
+def _contact_query_clause(query: str) -> Tuple[str, List[Any]]:
+    """好友名单模糊匹配子句（name / notify_name / chat_key），空 query → 无子句。
+
+    转义 LIKE 通配符：客户名里出现 ``%`` / ``_`` 时不该被当成通配符（``\\`` 先转，
+    否则会把后面补的转义符再次转义）。
+    """
+    q = str(query or "").strip().lower()
+    if not q:
+        return "", []
+    esc = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    like = f"%{esc}%"
+    clause = ("(LOWER(c.name) LIKE ? ESCAPE '\\' "
+              "OR LOWER(c.notify_name) LIKE ? ESCAPE '\\' "
+              "OR LOWER(c.chat_key) LIKE ? ESCAPE '\\')")
+    return clause, [like, like, like]
+
+
+# Telegram 的「非人」固定 id：全网通用，与账号无关。
+#   777000      官方服务号（登录验证码 / 账号安全通知）
+#   42777       Telegram Notifications（另一个官方通知号）
+#   1087968824  @GroupAnonymousBot（群匿名发言的代理身份，不是某个人）
+# 全仓**唯一**一份名单：管道安全（telegram_client）、主动触达抑制（proactive_topic）、
+# 联系人展示与目录同步（本模块）三条链路都读它。此前是三份各自维护且互相有缺口的
+# 硬编码——两处漏 Saved Messages、一处漏 42777，谁也不知道自己漏了什么。
+TELEGRAM_SERVICE_CHAT_KEYS = frozenset({"777000", "42777", "1087968824"})
+
+# 兼容旧名（曾只有服务号一条规则时的常量名）。
+TELEGRAM_SERVICE_NOTIFICATION_ID = "777000"
+
+
+def is_system_peer(platform: str, account_id: str, chat_key: str) -> bool:
+    """该 peer 是否为平台**系统条目**（不是人，不该进客户名单）。
+
+    读侧（联系人面板取数）与写侧（目录同步落库）共用这一个判定，避免「界面滤掉了
+    但库里照样堆噪音」/「两侧口径漂移」——所以它放在 store 模块顶层、不带任何
+    self 依赖。
+
+    当前只认两条 Telegram 规则（其余平台一律 False）：
+
+    - ``chat_key == account_id``：Saved Messages（收藏夹，「自己发给自己」的云
+      笔记）。本仓 Telegram 的 ``account_id`` 就是该账号自己的 TG user id，故
+      两者相等即可判定，不必额外 RPC 查 self。
+    - ``chat_key`` 落在 ``TELEGRAM_SERVICE_CHAT_KEYS``：官方通知号与匿名代理身份。
+
+    **刻意不过滤 bot**：bot 只有真给你发过消息才会出现在会话列表里，「要不要联系
+    某个 bot」是产品决策而不是脏数据——有人就是拿 bot 当工作入口。宁可留着让人
+    自己忽略，也不替用户做删名单的决定（漏过一条噪音可恢复，误删一个真实往来对象
+    在面板上就是「人凭空消失」，无从察觉）。
+    """
+    platform = str(platform or "").lower()
+    chat_key = str(chat_key or "")
+    if platform != "telegram" or not chat_key:
+        return False
+    if chat_key in TELEGRAM_SERVICE_CHAT_KEYS:
+        return True
+    # account_id 为空时不判 Saved Messages：空账号名下 chat_key 也不会是空串
+    # （上面已挡），这里只是防「'' == ''」式的意外全命中。
+    account_id = str(account_id or "")
+    return bool(account_id) and chat_key == account_id
+
+
+def _system_peer_where(platform: str, account_id: str) -> Tuple[List[str], List[Any]]:
+    """``is_system_peer`` 的 SQL 对应物（子句 + 按出现顺序排好的参数）。
+
+    与纯函数同源、同规则：非 telegram 平台返回空子句（**任何**其他平台的 chat_key
+    哪怕恰好等于 account_id 或 '777000' 都不受影响）。返回值是「子句列表 + 参数
+    列表」的配对，调用方只要保证 ``append`` 顺序一致，绑定就不会错位。
+    """
+    if platform != "telegram":
+        return [], []
+    # sorted() 而非直接迭代 frozenset：集合迭代序随进程哈希种子变化，排序后生成的
+    # SQL 文本才是确定的（语义无差别，但可断言、diff 可读）。
+    keys = sorted(TELEGRAM_SERVICE_CHAT_KEYS)
+    clauses = ["c.chat_key NOT IN ({})".format(",".join("?" for _ in keys))]
+    params: List[Any] = list(keys)
+    if account_id:
+        clauses.append("c.chat_key <> ?")
+        params.append(account_id)
+    return clauses, params
+
+
+def _contacts_base_from(
+    platform: str, account_id: str, include_chats: bool,
+) -> Tuple[str, List[Any], List[str], List[Any]]:
+    """「联系人」取数的基表 + 会话联表 FROM 块（列表与汇总两个方法共用）。
+
+    返回 ``(from_sql, from_params, base_where, base_where_params)``。**刻意把 SQL
+    文本和「按文本里 ``?`` 出现先后排好的参数」一起返回**：并集版与通讯录版的
+    ``?`` 顺序不同（并集版的基表参数出现在 JOIN 前缀 **之前**），两个调用点各自
+    手拼极易错位——而 SQLite 对错位绑定不报错，只会静默返回错数据。同理，UNION
+    只在这里写一次，不给第二份拷贝留漂移空间。
+
+    两种口径都在 ``base_where`` 里排除**系统 peer**（见 ``is_system_peer``）：
+    Saved Messages 与 Telegram 官方服务号是 private 类型，不挡就会实打实出现在
+    联系人面板里，并污染「好友总数 / 未开口数」这些运营盘点数字。挡在这里而不是
+    各方法自己加，是为了让列表与汇总永远同集合。
+
+    ``include_chats=False``（默认）：基表＝``protocol_contacts``，与本函数引入前
+    逐字符一致——现有调用方（旧前端 / ops 卡）的向后兼容是硬约束。
+
+    ``include_chats=True``：基表＝「**人的并集**」＝通讯录 ∪ 会话里的私聊 peer。
+    **为什么非并集不可**：Telegram 的 ``get_contacts()`` 语义是「我主动保存过的
+    联系人」，群里认识的、主动找上来的客户全都不算——2026-07 线上实测三个生产 TG
+    账号目录同步全部成功、零失败，通讯录仍是 0，而同一账号有 62 条真实往来会话。
+    只读通讯录 → 「联系人」面板对 Telegram 恒空，坐席想按名字找「昨天聊过的那个
+    客户」永远找不到人，而这正是这个面板存在的唯一理由。WhatsApp 同样漏掉「主动
+    找上来但没存进通讯录」的客户。
+
+    复杂度：两侧各走自己的索引区间扫（``protocol_contacts`` 的
+    ``(platform, account_id, chat_key)`` 唯一索引 / ``conversations`` 的
+    ``idx_conv_platform(platform, account_id)``），无全表扫；``GROUP BY chat_key``
+    走一次临时 b-tree 排序（O(n log n)，n = 该账号的人数，千级无感），外层再对每
+    个人做一次 ``conversations`` 主键点查。
+    """
+    prefix = f"{platform}:{account_id}:"
+    join = " LEFT JOIN conversations v ON v.conversation_id = ? || c.chat_key "
+    # 系统 peer 子句放在 base_where 末尾：两个调用方都在 base_where 之后才追加
+    # only / query 的子句与参数，故只要这里子句与参数同序，整体绑定顺序就成立。
+    sys_where, sys_params = _system_peer_where(platform, account_id)
+    if not include_chats:
+        return (" FROM protocol_contacts c " + join, [prefix],
+                ["c.platform=?", "c.account_id=?"] + sys_where,
+                [platform, account_id] + sys_params)
+    # 存量群组的第二道闸：``chat_type`` 是**后加的迁移列**，默认 'private'（见
+    # ``_MIGRATIONS``），存量群会话只有再来一条消息触发 ingest 回填才会变成
+    # 'group'——一个再没人说话的老群会永远顶着 'private' 混进「联系人」。故对
+    # chat_type 判不出来的情况，补上 ``normalizer.infer_chat_type`` 用的同一套
+    # chat_key 形态启发式（TG 群/频道 id 为负；LINE 官方 webhook 键形如
+    # ``line:group:`` / ``line:room:``），两处口径必须同源。
+    legacy_group = ""
+    if platform == "telegram":
+        legacy_group = " AND chat_key NOT GLOB '-[0-9]*'"
+    elif platform == "line":
+        legacy_group = (" AND LOWER(chat_key) NOT LIKE '%:group:%'"
+                        " AND LOWER(chat_key) NOT LIKE '%:room:%'")
+    union = (
+        " FROM (SELECT chat_key, "
+        # 同一个人可能两边都在（存了通讯录又聊过）→ 按 chat_key 聚合去重，
+        # in_book 取 MAX：只要通讯录里有就算「已在通讯录」。
+        "              MAX(in_book) AS in_book, "
+        # 名字优先取通讯录名：那是坐席自己存的备注名，贴近「我认识的这个人叫什么」；
+        # 会话 display_name 是平台推送的昵称，客户随时会改。通讯录名为空才回落会话
+        # 名——纯会话来源的人（TG 的绝大多数）只有会话名，不回落就会显示成空白行。
+        "              COALESCE(NULLIF(MAX(CASE WHEN in_book=1 THEN name END), ''), "
+        "                       MAX(CASE WHEN in_book=0 THEN name END), '') AS name, "
+        # 会话侧恒为空串 → MAX 天然取到非空的那个（空串排在任何非空串之前）。
+        "              MAX(notify_name) AS notify_name, "
+        "              MAX(updated_at) AS updated_at "
+        "         FROM (SELECT chat_key, name, notify_name, updated_at, 1 AS in_book "
+        "                 FROM protocol_contacts WHERE platform=? AND account_id=? "
+        "               UNION ALL "
+        "               SELECT chat_key, display_name AS name, '' AS notify_name, "
+        "                      updated_at, 0 AS in_book "
+        "                 FROM conversations "
+        "                WHERE platform=? AND account_id=? AND chat_key != '' "
+        # 群/频道**必须**排除：把群灌进「联系人」会毁掉这个面板（坐席要找的是人，
+        # 不是群）。这里用**白名单**而非 `chat_type != 'group'`——上游 ingest 可能
+        # 原样落 'channel'/'supergroup' 等未归一值（见 normalizer.infer_chat_type
+        # 的类型集），黑名单会漏网；空串是 chat_type 特性之前的历史行，按 DDL 默认
+        # 语义算私聊。chat_key='' 的行（如未带 peer 的兜底会话）也一并排除：它们
+        # 拼出来的 conversation_id 是 'plat:acct:' 这种无意义前缀。
+        "                  AND chat_type IN ('private', '')" + legacy_group + ") "
+        "        GROUP BY chat_key) c "
+    )
+    # 绑定顺序＝文本里 ? 的出现顺序：通讯录侧 → 会话侧 → JOIN 前缀（FROM 块内）
+    # → 系统 peer（外层 WHERE，排在 FROM 之后）。
+    return (union + join, [platform, account_id, platform, account_id, prefix],
+            sys_where, sys_params)
 
 
 _DDL = """
@@ -871,14 +1045,22 @@ class InboxStore:
                 INSERT OR IGNORE INTO messages
                     (message_id, conversation_id, platform_msg_id, direction, text,
                      original_text, translated_text, source_lang, target_lang,
-                     media_type, media_ref, ts, ingested_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     media_type, media_ref, ts, ingested_at,
+                     reply_to_id, reply_to_text, reply_to_sender, mentions_json,
+                     sender_id, sender_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     mid, msg.conversation_id, str(msg.platform_msg_id or ""), msg.direction,
                     msg.text, msg.original_text or msg.text, msg.translated_text,
                     msg.source_lang, msg.target_lang, msg.media_type, msg.media_ref,
                     float(msg.ts or 0), self._now(),
+                    str(getattr(msg, "reply_to_id", "") or ""),
+                    str(getattr(msg, "reply_to_text", "") or ""),
+                    str(getattr(msg, "reply_to_sender", "") or ""),
+                    str(getattr(msg, "mentions_json", "") or "[]"),
+                    str(getattr(msg, "sender_id", "") or ""),
+                    str(getattr(msg, "sender_name", "") or ""),
                 ),
             )
             self._conn.commit()
@@ -1082,6 +1264,175 @@ class InboxStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def list_protocol_contacts_enriched(
+        self, platform: str, account_id: str, *,
+        limit: int = 1000, only: str = "", query: str = "",
+        silent_days: float = PROTOCOL_CONTACT_SILENT_DAYS, now: Optional[float] = None,
+        include_chats: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """好友名单 + 会话状态联表（市场侧「加了好友但从没开口」的资产盘点数据源）。
+
+        以 ``protocol_contacts`` 为主表 LEFT JOIN ``conversations``（关联键与
+        ``upsert_protocol_contacts`` 同口径的 ``platform:account_id:chat_key``），
+        在 ``{chat_key, name, notify_name, updated_at}`` 之上补：
+
+        - ``has_conversation``：库里是否存在这条会话（占位会话也算）；
+        - ``last_ts``：会话最后活动时间（无会话/仅占位无消息 → 0）；
+        - ``unread``：未读数，走 ``effective_unread`` 同口径（已读水位覆盖末条即 0），
+          与工作台会话列表保持一致，避免「通讯录说有未读、列表说没有」的漂移；
+        - ``never_spoke``：派生「未开口」徽章——无会话 **或** 会话从无消息；
+        - ``in_book``：是否在通讯录里（``include_chats=False`` 时恒 ``True``——
+          那时基表就是通讯录本身，口径自洽）。
+
+        **刻意不返回 msg_count**：``conversations`` 表没有现成的消息计数列，而为几千
+        联系人逐行 ``COUNT(messages)`` 会退化成全表扫（messages 只有
+        ``(conversation_id, ts)`` 索引，N 次子查询 × 上万行）。运营真正要区分的是
+        「聊过 / 没聊过」而非精确条数，故用 ``last_ts > 0`` 作判据——占位会话
+        （``upsert_protocol_chats`` 建的、从无消息）last_ts 为 0，同样被判为未开口。
+
+        ``only`` 档位：``""``=全部、``"never_spoke"``=只看未开口、``"silent"``=聊过但
+        超过 ``silent_days``（默认见 ``PROTOCOL_CONTACT_SILENT_DAYS``）没动静、
+        ``"chat_only"``=有往来但没存进通讯录（运营语义＝「该补进通讯录的客户」，
+        仅在 ``include_chats=True`` 下有意义，否则必然是空集）。
+        ``query`` 为空即全量（保持旧「全量拉下来前端本地筛」的调用方向后兼容）。
+
+        ``include_chats``（默认 **False** = 今天的行为逐字节不变）为 True 时基表
+        换成「人的并集」，见 ``_contacts_base_from`` 的说明与复杂度分析。
+
+        筛选与截断都在 SQL 里做：几千联系人先 LIMIT 再筛会漏掉靠后的命中项。
+        """
+        platform = str(platform or "").lower()
+        account_id = str(account_id or "")
+        # 上限与 list_protocol_contacts 保持一致（5000），防单次请求把整库拽进内存
+        limit = max(1, min(5000, int(limit or 1000)))
+        only = str(only or "").strip().lower()
+        now = time.time() if now is None else float(now)
+        cutoff = now - max(0.0, float(silent_days)) * 86400.0
+
+        # 基表取候选（走索引，见 _contacts_base_from），再按会话主键
+        # (conversations.conversation_id 是 PK) 逐行等值 JOIN——3000 联系人 = 一次
+        # 索引区间扫 + 3000 次 PK 点查。
+        # ⚠ params 必须严格按 SQL 文本里 ? 的出现顺序追加：
+        # 基表/JOIN（from_params）→ 基表 WHERE → only → query → LIMIT。
+        from_sql, params, where, base_wparams = _contacts_base_from(
+            platform, account_id, include_chats)
+        params = list(params)
+        where = list(where)
+        params.extend(base_wparams)
+        if only == "never_spoke":
+            where.append("COALESCE(v.last_ts, 0) <= 0")
+        elif only == "silent":
+            where.append("COALESCE(v.last_ts, 0) > 0")
+            where.append("COALESCE(v.last_ts, 0) <= ?")
+            params.append(cutoff)
+        elif only == "chat_only":
+            # 不并集时基表就是通讯录，in_book 列根本不存在 → 用恒假常量返回空集
+            # （语义上「没存进通讯录的人」在纯通讯录口径下本就不存在），而不是报错：
+            # 前端可能在切换口径的一瞬间把旧档位带上来，不该 500。
+            where.append("c.in_book = 0" if include_chats else "1 = 0")
+        qclause, qparams = _contact_query_clause(query)
+        if qclause:
+            where.append(qclause)
+            params.extend(qparams)
+        params.append(limit)
+        sql = (
+            "SELECT c.chat_key, c.name, c.notify_name, c.updated_at, "
+            # 纯通讯录口径下每一行按定义都在通讯录里 → 常量 1，让取行代码只有一套
+            + ("c.in_book AS in_book, " if include_chats else "1 AS in_book, ") +
+            "       v.conversation_id AS cid, "
+            "       COALESCE(v.last_ts, 0) AS last_ts, "
+            "       COALESCE(v.unread, 0) AS unread, "
+            "       COALESCE(v.last_read_ts, 0) AS last_read_ts "
+            + from_sql
+            + ((" WHERE " + " AND ".join(where)) if where else "") +
+            # 有名字的排前（裸号码沉底）→ 最近有互动的排前 → 名字/号码稳定兜底
+            " ORDER BY (c.name != '') DESC, last_ts DESC, c.name, c.chat_key LIMIT ?"
+        )
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            last_ts = float(r["last_ts"] or 0)
+            out.append({
+                "chat_key": r["chat_key"],
+                "name": r["name"],
+                "notify_name": r["notify_name"],
+                "updated_at": float(r["updated_at"] or 0),
+                "has_conversation": r["cid"] is not None,
+                "last_ts": last_ts,
+                "unread": self.effective_unread({
+                    "last_ts": last_ts,
+                    "last_read_ts": float(r["last_read_ts"] or 0),
+                    "unread": int(r["unread"] or 0),
+                }),
+                "never_spoke": (r["cid"] is None) or last_ts <= 0,
+                "in_book": bool(r["in_book"]),
+            })
+        return out
+
+    def protocol_contacts_summary(
+        self, platform: str, account_id: str, *,
+        query: str = "", silent_days: float = PROTOCOL_CONTACT_SILENT_DAYS,
+        now: Optional[float] = None, include_chats: bool = False,
+    ) -> Dict[str, int]:
+        """好友名单资产盘点汇总（未开口 / 沉默 / 已有会话 / 在册 / 仅会话 的条数）。
+
+        口径：**不受 ``only`` 档位影响**（档位是视图筛选，汇总要给出全景基数，否则
+        「只看未开口」时 never_spoke 会恒等于 total 而失去参考意义），但**跟随
+        ``query``**（搜索时数字与列表同一集合，读感一致）。
+
+        ``include_chats`` 与 ``list_protocol_contacts_enriched`` 同义、共用同一个
+        基表构造（``_contacts_base_from``），保证两者数字永远同源。并集口径下多回
+        两个数：``in_book``（在通讯录里的人数）/ ``chat_only``（只有会话的人数），
+        两者相加恒等于 ``total``；其余字段口径不变，只是基数变成并集。
+
+        单条聚合 SQL，不受 limit 截断——3000 联系人也只是一次索引扫 + PK 点查。
+        """
+        platform = str(platform or "").lower()
+        account_id = str(account_id or "")
+        now = time.time() if now is None else float(now)
+        cutoff = now - max(0.0, float(silent_days)) * 86400.0
+        qclause, qparams = _contact_query_clause(query)
+        # ⚠ 绑定顺序必须与下面 SQL 文本里 ? 出现的先后一致：
+        # cutoff(SELECT) → 基表/JOIN(FROM，见 _contacts_base_from) → 基表 WHERE
+        # → query(WHERE)。并集版把基表参数插在 JOIN 前缀之前，与通讯录版不同。
+        from_sql, from_params, where, base_wparams = _contacts_base_from(
+            platform, account_id, include_chats)
+        where = list(where)
+        params: List[Any] = [cutoff] + list(from_params) + list(base_wparams)
+        if qclause:
+            where.append(qclause)
+            params.extend(qparams)
+        sql = (
+            "SELECT COUNT(*) AS total, "
+            "       SUM(CASE WHEN COALESCE(v.last_ts,0) <= 0 THEN 1 ELSE 0 END) "
+            "           AS never_spoke, "
+            "       SUM(CASE WHEN v.conversation_id IS NOT NULL THEN 1 ELSE 0 END) "
+            "           AS with_conversation, "
+            "       SUM(CASE WHEN COALESCE(v.last_ts,0) > 0 "
+            "                 AND COALESCE(v.last_ts,0) <= ? THEN 1 ELSE 0 END) "
+            "           AS silent, "
+            # 纯通讯录口径下人人在册 → in_book == total、chat_only == 0
+            + ("SUM(c.in_book) AS in_book " if include_chats
+               else "COUNT(*) AS in_book ")
+            + from_sql
+            + ((" WHERE " + " AND ".join(where)) if where else "")
+        )
+        with self._lock:
+            row = self._conn.execute(sql, params).fetchone()
+        total = int((row["total"] if row else 0) or 0)
+        in_book = int((row["in_book"] if row else 0) or 0)
+        return {
+            "total": total,
+            "never_spoke": int((row["never_spoke"] if row else 0) or 0),
+            "silent": int((row["silent"] if row else 0) or 0),
+            "with_conversation": int((row["with_conversation"] if row else 0) or 0),
+            "in_book": in_book,
+            # 派生而非再来一个 SUM：两者互补，减法保证 in_book + chat_only == total
+            # 恒成立（前端拿这两个数拼「该补进通讯录」的引导，对不上会露馅）。
+            "chat_only": max(0, total - in_book),
+        }
+
     def get_protocol_contact_name(
         self, platform: str, account_id: str, chat_key: str,
     ) -> str:
@@ -1212,10 +1563,16 @@ class InboxStore:
         return [dict(r) for r in rows]
 
     def list_conversations(
-        self, *, limit: int = 50, platform: str = "",
+        self, *, limit: int = 50, platform: str = "", account_id: str = "",
         before_ts: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
-        """会话列表（last_ts 降序）。``before_ts``：游标分页，只取更旧的会话。"""
+        """会话列表（last_ts 降序）。``before_ts``：游标分页，只取更旧的会话。
+
+        ``platform`` / ``account_id``：scoped 过滤，非空才生效、可独立组合——
+        账号视角按需查库的基础（前端全局列表只保留最近若干条，点开单账号时
+        必须能绕过全局截断直接查该账号的全部会话）。索引 idx_conv_platform
+        (platform, account_id) 覆盖此 WHERE。
+        """
         limit = max(1, min(500, int(limit or 50)))
         sql = "SELECT * FROM conversations"
         wheres: List[str] = []
@@ -1223,6 +1580,9 @@ class InboxStore:
         if platform:
             wheres.append("platform = ?")
             params.append(platform)
+        if account_id:
+            wheres.append("account_id = ?")
+            params.append(account_id)
         if before_ts is not None and float(before_ts) > 0:
             wheres.append("last_ts < ?")
             params.append(float(before_ts))
@@ -1234,13 +1594,22 @@ class InboxStore:
             rows = self._conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
-    def count_conversations_older_than(self, ts: float, *, platform: str = "") -> int:
-        """last_ts 早于 ts 的会话数（列表分页 has_more 判定）。"""
+    def count_conversations_older_than(
+        self, ts: float, *, platform: str = "", account_id: str = "",
+    ) -> int:
+        """last_ts 早于 ts 的会话数（列表分页 has_more 判定）。
+
+        ``platform`` / ``account_id`` 与 :meth:`list_conversations` 同口径过滤，
+        scoped 翻页的 has_more 才能按同范围计数（否则全局计数会误报还有更多）。
+        """
         sql = "SELECT COUNT(*) FROM conversations WHERE last_ts < ?"
         params: List[Any] = [float(ts or 0)]
         if platform:
             sql += " AND platform = ?"
             params.append(platform)
+        if account_id:
+            sql += " AND account_id = ?"
+            params.append(account_id)
         with self._lock:
             row = self._conn.execute(sql, params).fetchone()
         return int(row[0] if row else 0)
@@ -1442,6 +1811,36 @@ class InboxStore:
                 (plat, acc, ext, f"%:{esc}"),
             ).fetchall()
         return [str(r["conversation_id"]) for r in rows if r["conversation_id"]]
+
+    def find_conversations_by_chat_key(
+        self, chat_key: str, *, limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """按裸 chat_key 跨平台/账号反查会话（legacy 人设绑定清理工具用）。
+
+        legacy peer-global 绑定键就是裸 chat_key（如 tg 数字 id / LINE U 号），
+        同一 peer 可能出现在多个 (platform, account) 下——升级为会话级覆写前
+        必须先盘出全部落点。兼容带前缀的旧绑定键（``line_rpa:U123``）：
+        同时匹配 ``chat_key == key`` 与 ``chat_key == key 去掉首段前缀``。
+        只取清理面板所需轻量字段，按最近活跃排序。
+        """
+        ck = str(chat_key or "").strip()
+        if not ck:
+            return []
+        lim = max(1, min(int(limit or 50), 200))
+        keys = [ck]
+        if ":" in ck:
+            _tail = ck.split(":", 1)[1].strip()
+            if _tail and _tail != ck:
+                keys.append(_tail)
+        ph = ",".join("?" for _ in keys)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT conversation_id, platform, account_id, chat_key, "
+                "display_name, chat_type, last_ts FROM conversations "
+                f"WHERE chat_key IN ({ph}) ORDER BY last_ts DESC LIMIT ?",
+                (*keys, lim),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def list_conversations_missing_contact_id(
         self, *, limit: int = 200, platform: str = "",
@@ -2861,6 +3260,174 @@ class InboxStore:
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
         return {str(r["conversation_id"]): int(r["n"] or 0) for r in rows if int(r["n"] or 0) > 0}
+
+    def group_speech_ledger(
+        self,
+        *,
+        since_ts: float = 0.0,
+        platform: str = "",
+    ) -> Dict[str, List[str]]:
+        """``{群 chat_key: [在该群发过言的 account_id, ...]}``——**所有**出向发言。
+
+        群脉的暴露度量要回答「平台能看见哪两个号总在同一批群里说话」。它自己的场次库
+        只记编排出来的戏，可日常自动回复、坐席手发、主动触达同样是这些号在这些群里
+        开口，平台一视同仁地统计。只读场次库 ⇒ 没演过戏就报「安全」，而号可能早已经
+        在几十个群里互相同框——**假安全**，风险卡最不能犯的那种错。这里按出向消息取
+        真账，把两条来源合并到同一个口径上。
+
+        只算群会话（``chat_type`` 非 private/空；私聊里两个号同框对平台毫无意义），
+        ``since_ts>0`` 限时间窗（共现要随时间淡出，否则跑几个月每一对都饱和）。
+        返回形状与 ``GroupShowStore.performance_ledger`` 一致，可直接喂给共现矩阵。
+        """
+        clauses = ["m.direction='out'", "c.chat_key != ''", "c.account_id != ''",
+                   "c.chat_type NOT IN ('private', '')"]
+        params: List[Any] = []
+        if since_ts and since_ts > 0:
+            clauses.append("m.ts>=?")
+            params.append(float(since_ts))
+        if platform:
+            clauses.append("c.platform=?")
+            params.append(str(platform))
+        sql = (
+            "SELECT DISTINCT c.chat_key AS g, c.account_id AS a "
+            "FROM messages m JOIN conversations c "
+            "  ON c.conversation_id = m.conversation_id "
+            "WHERE " + " AND ".join(clauses)
+        )
+        out: Dict[str, List[str]] = {}
+        try:
+            with self._lock:
+                rows = self._conn.execute(sql, params).fetchall()
+        except Exception:  # noqa: BLE001 —— 读不出台账只该让卡片显示空，不该 500
+            logger.debug("[inbox] 群发言台账查询失败", exc_info=True)
+            return {}
+        for r in rows:
+            g, a = str(r["g"] or ""), str(r["a"] or "")
+            if g and a:
+                out.setdefault(g, []).append(a)
+        return out
+
+    def group_last_spoke_at(
+        self,
+        *,
+        since_ts: float = 0.0,
+        platform: str = "",
+        exclude_group: str = "",
+    ) -> Dict[str, float]:
+        """``{account_id: 最近一次在**群里**出向发言的时刻}``——时间轴的另一半真账。
+
+        与 :meth:`group_speech_ledger` 同源同过滤，只是聚合成每个号的最新时刻。
+        跨群间隔闸门要挡的是「同一个号前后脚在两个群冒头」，而自动回复、坐席手发同样
+        会让号在群里冒头——只看编排库会给出「这个号三天没说话」的假读数，闸门当场放行，
+        实际上它十秒前刚在隔壁群回过消息。两边取 max 才是这个号真实的最近出场时刻。
+
+        ``exclude_group``（chat_key）把**目标群自己**排除掉。闸门问的是「有没有在
+        *别的* 群刚冒过头」，同一个群里连着说两句是正常对话、不是跨群编排痕迹；不排除
+        的话，一个刚在本群自动回复过的号会被自己挡住，而这条拦截既没有风险意义、又会
+        让运营觉得闸门在乱拦（进而把它关掉）。
+        """
+        clauses = ["m.direction='out'", "c.chat_key != ''", "c.account_id != ''",
+                   "c.chat_type NOT IN ('private', '')"]
+        params: List[Any] = []
+        if since_ts and since_ts > 0:
+            clauses.append("m.ts>=?")
+            params.append(float(since_ts))
+        if platform:
+            clauses.append("c.platform=?")
+            params.append(str(platform))
+        if exclude_group:
+            clauses.append("c.chat_key<>?")
+            params.append(str(exclude_group))
+        sql = (
+            "SELECT c.account_id AS a, MAX(m.ts) AS last_ts "
+            "FROM messages m JOIN conversations c "
+            "  ON c.conversation_id = m.conversation_id "
+            "WHERE " + " AND ".join(clauses) + " GROUP BY c.account_id"
+        )
+        out: Dict[str, float] = {}
+        try:
+            with self._lock:
+                rows = self._conn.execute(sql, params).fetchall()
+        except Exception:  # noqa: BLE001 —— 读不出台账只该让闸门退回保守值，不该 500
+            logger.debug("[inbox] 群最近发言查询失败", exc_info=True)
+            return {}
+        for r in rows:
+            a = str(r["a"] or "")
+            try:
+                ts = float(r["last_ts"] or 0.0)
+            except Exception:  # noqa: BLE001
+                continue
+            if a and ts > 0:
+                out[a] = ts
+        return out
+
+    def group_inbound_since(
+        self,
+        chat_key: str,
+        *,
+        since_ts: float = 0.0,
+        platform: str = "",
+        exclude_senders: Optional[Sequence[str]] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """某群自 ``since_ts`` 起的**进向**消息（真人插话），供群脉真发让路/接管。
+
+        返回 ``[{ts, sender_id, sender_name, text}, ...]`` 按时间升序。排除空文、
+        排除 ``exclude_senders``（通常是本场演员号——他们的出站镜像偶发会标成 in）。
+        读挂 → 空列表（让路失效总好过整场戏崩）。
+        """
+        key = str(chat_key or "").strip()
+        if not key:
+            return []
+        clauses = [
+            "c.chat_key=?",
+            "c.chat_type NOT IN ('private', '')",
+            "m.direction='in'",
+            "m.text != ''",
+        ]
+        params: List[Any] = [key]
+        if since_ts and since_ts > 0:
+            # 严格大于：已喂给导演的最后一条不要在下一拍重复 observe
+            clauses.append("m.ts>?")
+            params.append(float(since_ts))
+        if platform:
+            clauses.append("c.platform=?")
+            params.append(str(platform))
+        ban = {str(s) for s in (exclude_senders or ()) if str(s or "")}
+        sql = (
+            "SELECT m.ts AS ts, m.text AS text, "
+            "  COALESCE(NULLIF(m.sender_id, ''), '') AS sender_id, "
+            "  COALESCE(NULLIF(m.sender_name, ''), '') AS sender_name "
+            "FROM messages m JOIN conversations c "
+            "  ON c.conversation_id = m.conversation_id "
+            "WHERE " + " AND ".join(clauses) + " "
+            "ORDER BY m.ts ASC LIMIT ?"
+        )
+        params.append(max(1, min(int(limit or 50), 200)))
+        try:
+            with self._lock:
+                rows = self._conn.execute(sql, params).fetchall()
+        except Exception:  # noqa: BLE001
+            logger.debug("[inbox] 群进向消息查询失败", exc_info=True)
+            return []
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            sid = str(r["sender_id"] or "")
+            if sid and sid in ban:
+                continue
+            try:
+                ts = float(r["ts"] or 0.0)
+            except Exception:  # noqa: BLE001
+                continue
+            text = str(r["text"] or "").strip()
+            if not text or ts <= 0:
+                continue
+            name = str(r["sender_name"] or "") or sid or "human"
+            out.append({
+                "ts": ts, "sender_id": sid or name,
+                "sender_name": name, "text": text,
+            })
+        return out
 
     # ── Phase A / C1：坐席绩效聚合 ───────────────────────────
 

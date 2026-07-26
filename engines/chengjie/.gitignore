@@ -364,3 +364,6 @@ config/purged_trash/
 # 运行时事件 spool（telemetry 落盘，非版本资产）
 config/events/
 
+# P3.2 跨平台身份影子周期扫描 state（watchdog 每轮落盘的观测快照，机器本地）
+config/identity_shadow_state.json
+

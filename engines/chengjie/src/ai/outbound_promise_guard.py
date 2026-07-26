@@ -192,6 +192,27 @@ def detect_media_promise(text: str) -> str:
     return found
 
 
+def promised_scene(text: str) -> str:
+    """承诺发图句里点名的**场景**（纯函数）：「等我拍张海边的发你」→ beach 场景短语。
+
+    与客户点名共用同一张场景词表（``companion_selfie.extract_requested_scene``）——
+    兑现层据此把承诺场景升为硬要求（相册场景类匹配 / 生成带场景），修
+    「承诺海景、兑现成车内自拍」实录事故。只扫**承诺句本身**（同条里别的句子
+    提到的地点不算承诺内容）；没点名/词表外返回空串（兑现不限场景）。
+    """
+    for sent in _sentences(text):
+        if _sentence_is_promise(sent) != KIND_IMAGE:
+            continue
+        try:
+            from src.ai.companion_selfie import extract_requested_scene
+            sc = extract_requested_scene(sent)
+        except Exception:
+            sc = ""
+        if sc:
+            return sc
+    return ""
+
+
 def strip_media_promises(text: str) -> str:
     """句级剥离承诺句（保定界符结构；剥空返回空串，由调用方兜底）。
 

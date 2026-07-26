@@ -969,6 +969,39 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 营销目标观测：建目标→每日拍（含 hold 分桶）→注入生成链→主动桥真发→终态
+        try:
+            from src.companion.goals.stats import get_goal_stats
+            metrics["goals"] = get_goal_stats().dump()
+        except Exception:
+            pass
+
+        # 跨平台身份影子扫描（P3.2）：读周期扫描落的 state 文件快照（绝不在请求里
+        # 现场扫库）；未启用 → {"enabled": false}，ops 卡据此整卡隐藏。
+        try:
+            _iscm = getattr(request.app.state, "config_manager", None)
+            if _iscm is not None:
+                from pathlib import Path as _ISPath
+                from src.utils.identity_shadow_periodic import (
+                    metrics_snapshot as _ism,
+                )
+                metrics["identity_shadow"] = _ism(
+                    getattr(_iscm, "config", None) or {},
+                    _ISPath(str(getattr(_iscm, "config_path", "")
+                                or "config/config.yaml")).parent)
+        except Exception:
+            pass
+
+        # 记忆去重观测（P5）：灰区对（差一点就并的近义对）累计——「要不要上
+        # LLM 仲裁合并」的两周观察读数；store 未接（如纯 web 部署）→ 键缺省。
+        try:
+            _edsm = getattr(request.app.state, "skill_manager", None)
+            _edst = getattr(_edsm, "_episodic_store", None)
+            if _edst is not None and hasattr(_edst, "dedup_stats_snapshot"):
+                metrics["episodic_dedup"] = _edst.dedup_stats_snapshot()
+        except Exception:
+            pass
+
         # 深度人设观测：巩固/画像/内部梗/经历/未收尾话题/回指 累计（真人感"长出来"的证据）
         try:
             from src.companion.deep_persona_stats import get_deep_persona_stats
@@ -1032,6 +1065,20 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 前端 UI 交互埋点（空态引导按钮点击率/群区模式切换等；观测「引导有效性」）
+        try:
+            from src.web.ui_event_stats import get_ui_event_stats
+            metrics["ui_events"] = get_ui_event_stats().dump()
+        except Exception:
+            pass
+
+        # 目录同步（好友名单→通讯录）观测（分账号轮数/条数/失败段/上次同步时间）
+        try:
+            from src.integrations.directory_sync_stats import get_directory_sync_stats
+            metrics["directory_sync"] = get_directory_sync_stats().dump()
+        except Exception:
+            pass
+
         # 出站语音语言路由观测（哪些语种在被路由/拒发；拒发涨=该语种缺音色映射）
         try:
             from src.ai.lang_route_stats import get_lang_route_stats
@@ -1066,6 +1113,13 @@ def register_metrics_route(app, *, api_auth):
             _pms = get_persona_media_store()
             if _pms is not None:
                 metrics["persona_media"] = _pms.analytics()
+        except Exception:
+            pass
+
+        # 会话级人设覆写观测（出站解析 tier 分布 / 覆写命中 / legacy 被压制 / 治理动作）
+        try:
+            from src.ai.persona_override_stats import get_persona_override_stats
+            metrics["persona_override"] = get_persona_override_stats().dump()
         except Exception:
             pass
 
@@ -1231,10 +1285,39 @@ def register_metrics_route(app, *, api_auth):
             except Exception:
                 pass
 
+            # 营销目标（建目标/每日拍/注入/主动桥/终态 漏斗计数）
+            try:
+                from src.companion.goals.stats import get_goal_stats
+                buf.write(get_goal_stats().dump_prom())
+            except Exception:
+                pass
+
             # 前端「哑按钮」运行时错误（by page / by fn / by type）
             try:
                 from src.web.frontend_error_stats import get_frontend_error_stats
                 buf.write(get_frontend_error_stats().dump_prom())
+            except Exception:
+                pass
+
+            # 会话级人设覆写（tier 分布 / legacy 被压制 / 治理动作）
+            try:
+                from src.ai.persona_override_stats import get_persona_override_stats
+                buf.write(get_persona_override_stats().dump_prom())
+            except Exception:
+                pass
+
+            # 前端 UI 交互埋点（by action / by page；空态引导点击率等）
+            try:
+                from src.web.ui_event_stats import get_ui_event_stats
+                buf.write(get_ui_event_stats().dump_prom())
+            except Exception:
+                pass
+
+            # 目录同步（分账号 runs/failures + 最近一轮条数 + 上次同步时间戳）：
+            # last_ts 陈旧 = 该号名单同步事实上死了，此前只有日志能看出来
+            try:
+                from src.integrations.directory_sync_stats import get_directory_sync_stats
+                buf.write(get_directory_sync_stats().dump_prom())
             except Exception:
                 pass
 
@@ -1345,12 +1428,16 @@ def register_metrics_route(app, *, api_auth):
 
 
 def register_telemetry_route(app, *, api_auth):
-    """前端「哑按钮」运行时错误上报（任意登录用户可写，不限主管）。
+    """前端遥测上报（任意登录用户可写，不限主管）。
 
     POST /api/telemetry/frontend-error  body: {page, fn, type}
     dead-click 守卫（unified_inbox + _rpa_shared_scripts）捕获 ReferenceError 后 beacon 到此，
     经 FrontendErrorStats 累计，读出走 /api/workspace/metrics.frontend_errors（主管专属）。
     只收计数用的三个消毒字段，绝不落原文/堆栈；任何异常都吞掉返回 ok，绝不影响前端。
+
+    POST /api/telemetry/ui-event  body: {page, action}
+    UI 交互埋点（空态引导按钮点击/群区显示模式切换等），经 UiEventStats 累计，
+    读出走 /api/workspace/metrics.ui_events。同款契约：只收两个消毒字段，吞异常恒返 ok。
     """
     from fastapi import Depends
 
@@ -1367,6 +1454,28 @@ def register_telemetry_route(app, *, api_auth):
                     page=str(body.get("page") or ""),
                     fn=str(body.get("fn") or ""),
                     etype=str(body.get("type") or ""),
+                )
+            except Exception:
+                pass
+        return {"ok": True}
+
+    @app.post("/api/telemetry/ui-event")
+    async def api_ui_event_beacon(request: Request, _=Depends(api_auth)):
+        """前端 UI 交互埋点 beacon（空态引导点击率/群区模式切换等「引导有效性」观测）。
+
+        与 frontend-error 同款契约：body 解析失败按 {}、只取 page+action 两个字段
+        （消毒在 UiEventStats 内做）、任何异常都吞掉返回 ok，绝不影响前端。
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if isinstance(body, dict):
+            try:
+                from src.web.ui_event_stats import get_ui_event_stats
+                get_ui_event_stats().record(
+                    page=str(body.get("page") or ""),
+                    action=str(body.get("action") or ""),
                 )
             except Exception:
                 pass

@@ -29,6 +29,11 @@ contextBridge.exposeInMainWorld("shell", {
   personaBind: (args) => ipcRenderer.invoke("desktop:persona-bind", args),
   guardCheck: (args) => ipcRenderer.invoke("desktop:guard-check", args),
   personaUnbind: (args) => ipcRenderer.invoke("desktop:persona-unbind", args),
+  // 会话级人设覆写（2026-07-26 方案 A）:效果全景/换绑/解除/账号级整号换绑
+  personaEffective: (args) => ipcRenderer.invoke("desktop:persona-effective", args),
+  personaBindConv: (args) => ipcRenderer.invoke("desktop:persona-bind-conv", args),
+  personaUnbindConv: (args) => ipcRenderer.invoke("desktop:persona-unbind-conv", args),
+  personaAccountSet: (args) => ipcRenderer.invoke("desktop:persona-account-set", args),
   smartReply: (args) => ipcRenderer.invoke("desktop:smart-reply", args),
   translate: (args) => ipcRenderer.invoke("desktop:translate", args),
   relStage: (args) => ipcRenderer.invoke("desktop:rel-stage", args),

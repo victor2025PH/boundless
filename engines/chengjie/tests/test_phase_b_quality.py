@@ -108,6 +108,36 @@ def test_b2_name_followed_by_wo_dedupes():
     assert out == "我跟你说哦" and n >= 1
 
 
+def test_b2_name_mention_contexts_protected():
+    """2026-07-26 实锤：问对方名字的句子被改坏——「所以你是叫"林小雨"还是另有
+    其名呀？」→「所以你是叫"我"还是另有其名呀？」真发给了客户。引号内提及 /
+    「叫＋名」/ 问名句式 / 「名字是＋名」都是谈论名字本身，绝不改写。"""
+    from src.ai.outbound_quality import sanitize_self_reference
+    cases = (
+        "哈哈我眼瞎了！订单上真有名字…所以你是叫“林小雨”还是另有其名呀？",
+        "你是叫林小雨还是另有其名呀？",
+        "你是林小雨吗？",
+        "是不是林小雨呀？",
+        "你的名字是林小雨吗",
+        "订单上写着“林小雨”三个字",
+        "我朋友也叫林小雨呢",
+        "备注就叫林小雨好啦",
+    )
+    for t in cases:
+        out, n = sanitize_self_reference(t, "林小雨")
+        assert out == t and n == 0, t
+
+
+def test_b2_real_third_person_still_rewritten_after_mention_guard():
+    """防提及保护过宽：真第三人称自称必须照常被改写。"""
+    from src.ai.outbound_quality import sanitize_self_reference
+    out, n = sanitize_self_reference("林小雨今天有点忙哦", "林小雨")
+    assert n == 1 and out == "我今天有点忙哦"
+    # 「你是X的粉丝」名后接「的」不是问名尾 → 仍改写
+    out2, n2 = sanitize_self_reference("你是林小雨的粉丝吗？", "林小雨")
+    assert n2 == 1 and out2 == "你是我的粉丝吗？"
+
+
 def test_b2_no_name_zero_cost():
     from src.ai.outbound_quality import sanitize_self_reference
     out, n = sanitize_self_reference("今天天气不错", "林小雨")

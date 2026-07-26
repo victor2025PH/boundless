@@ -18,6 +18,37 @@ logger = logging.getLogger("EpisodicMemoryStore")
 # R3：稳定层（已巩固的人设级记忆）在重排时的小幅加权（仅 use_salience_rerank 时生效）
 _STABLE_TIER_BOOST = 0.05
 
+# 去重灰区带宽：cos ∈ [threshold-带宽, threshold) 记为「差一点就并」观测对。
+# 0.17 取自 2026-07-26 bge-m3 生产校准（应并组 min 0.741 vs 默认阈 0.92）。
+_DEDUP_GRAY_BAND = 0.17
+
+# bullets 年龄标注：raw 层事实距今 ≥ 该秒数才加「（X天前提到）」后缀——
+# 持久事实 48h 内不标注（防噪声）；stable 层永不标注。
+# 瞬态事实（天气/当下动作，与抽取「持久性铁律」同族）6h 即标注——
+# 否则旧雨事实要等满 48h 仍以现在时注入（2026-07-27 生产窗口事故）。
+_AGE_HINT_MIN_SEC = 48 * 3600
+_AGE_HINT_TRANSIENT_SEC = 6 * 3600
+_TRANSIENT_FACT_RE = re.compile(
+    r"(下雨|下大雨|在下雨|好热|好冷|天气|在吃饭|刚到家|好困|正在)"
+)
+
+
+def _looks_transient_fact(text: str) -> bool:
+    """内容像转瞬状态（天气/当下动作）→ 用更短的年龄标注门槛。"""
+    return bool(_TRANSIENT_FACT_RE.search(text or ""))
+
+
+def _age_hint_label(age_sec: float) -> str:
+    """秒龄 → 粗粒度中文年龄串（N小时/天/周/月）。"""
+    if age_sec < 86400:
+        return f"{max(1, int(age_sec // 3600))}小时"
+    days = int(age_sec // 86400)
+    if days < 14:
+        return f"{days}天"
+    if days < 60:
+        return f"{days // 7}周"
+    return f"{days // 30}个月"
+
 
 def compute_memory_storage_key(scope: str, user_id_str: str, chat_id: Any) -> str:
     """
@@ -38,6 +69,25 @@ def compute_memory_storage_key(scope: str, user_id_str: str, chat_id: Any) -> st
     if cid == 0:
         return user_id_str
     return f"{cid}_{user_id_str}"
+
+
+def strip_composite_user_id(user_id: str, platform: str = "") -> str:
+    """防「完整记忆键回喂」（2026-07-27 实锤：user_identity_map 出现
+    ``whatsapp:whatsapp:acct:peer`` / ``acct:whatsapp:acct:peer`` 翻倍键，
+    最早 07-20——某些调用方把 conversation_id / canonical 当 chat_key 传）。
+
+    user_id 若以 ``<platform>:`` 开头则剥掉（可重复剥治嵌套翻倍）；真实
+    peer id（数字 / U-hex / jid）不可能以平台名+冒号开头，零误伤。
+    platform 未知时不动（此时也不会走 CPI resolve，读写自洽）。
+    """
+    uid = str(user_id or "")
+    plat = str(platform or "").strip().lower()
+    if not uid or not plat:
+        return uid
+    prefix = plat + ":"
+    while uid.lower().startswith(prefix) and len(uid) > len(prefix):
+        uid = uid[len(prefix):]
+    return uid
 
 
 def _norm_for_hash(text: str) -> str:
@@ -63,6 +113,14 @@ class EpisodicMemoryStore:
     def __init__(self, db_path: Path):
         self._db_path = Path(db_path)
         self._conn: Optional[sqlite3.Connection] = None
+        # 进程级去重观测（2026-07-27）：灰区对/归并数累计，经
+        # /api/workspace/metrics.episodic_dedup 出看板——「要不要上 LLM 仲裁合并」
+        # 的两周观察期直接读数，不用翻日志。
+        self._dedup_stats: Dict[str, Any] = {
+            "scans": 0, "merged": 0, "gray_pairs": 0,
+            "held_merges": 0, "observe_only_scans": 0,
+            "last_gray_at": 0.0, "last_gray_example": "",
+        }
         self._init_db()
 
     def _ensure_embedding_column(self) -> None:
@@ -489,14 +547,28 @@ class EpisodicMemoryStore:
         survivor（让"换着说法反复提"也累积成复发证据，反哺 ``consolidate`` 晋升）。
 
         仅作用于 ``raw``（``stable`` 是已巩固结论，不动）；O(n²) 但 n≤max_scan 且向量
-        预归一化为点积；raw 不足 ``min_raw`` 直接跳过（早期/小历史不值当）。
+        预归一化为点积。
 
-        返回 ``{"merged": 被删条数, "clusters": 发生归并的簇数}``。
+        **观测与合并门槛解耦**（P7，2026-07-27）：raw ≥2 即扫描计灰区；
+        raw < ``min_raw`` 时进入 ``observe_only``——只计灰区/应并对、绝不 DELETE。
+        原「raw < min_raw 整段跳过」会让生产早期用户（常见 2–5 条）两周观察期
+        灰区读数恒 0，误判成「源头已干净」。合并仍守 ``min_raw``（默认 6）。
+
+        另计**灰区对**（``thr-0.17 ≤ cos < thr``，宽度取自 2026-07-26 bge-m3 生产校准：
+        应并组下探 0.74 而禁并组上顶 0.876，两分布重叠 → 阈值不能降，灰区只能观测）：
+        「差一点就并」的近义对数量是决策「要不要上 LLM 仲裁合并」的直接读数，
+        随返回值/巩固日志可见，不影响任何合并行为。
+
+        返回 ``{"merged", "clusters", "gray_pairs", "observe_only", "held_merges"}``
+        （``held_merges``＝observe_only 下本应合并的条数，便于看「门槛挡住了多少」）。
         """
         from src.utils.episodic_vector import blob_to_vec
 
-        if self._count_tier(user_id, "raw") < max(2, int(min_raw)):
-            return {"merged": 0, "clusters": 0}
+        raw_n = self._count_tier(user_id, "raw")
+        if raw_n < 2:
+            return {"merged": 0, "clusters": 0, "gray_pairs": 0,
+                    "observe_only": False, "held_merges": 0}
+        observe_only = raw_n < max(2, int(min_raw))
         thr = max(0.5, min(float(threshold or 0.92), 0.999))
         try:
             rows = self._conn.execute(
@@ -511,7 +583,8 @@ class EpisodicMemoryStore:
             ).fetchall()
         except Exception as e:  # noqa: BLE001
             logger.debug("episodic dedupe fetch failed: %s", e)
-            return {"merged": 0, "clusters": 0}
+            return {"merged": 0, "clusters": 0, "gray_pairs": 0,
+                    "observe_only": observe_only, "held_merges": 0}
 
         # 预归一化向量 → 余弦退化为点积，省去 n² 次开方
         items: List[Dict[str, Any]] = []
@@ -533,10 +606,15 @@ class EpisodicMemoryStore:
                 "last_seen": float(r[6] or r[3] or 0.0),
             })
         if len(items) < 2:
-            return {"merged": 0, "clusters": 0}
+            return {"merged": 0, "clusters": 0, "gray_pairs": 0,
+                    "observe_only": observe_only, "held_merges": 0}
 
+        gray_low = max(0.5, thr - _DEDUP_GRAY_BAND)
+        gray_pairs = 0
+        gray_best: Optional[Tuple[float, str, str]] = None
         used: set = set()
         merged_total = 0
+        held_merges = 0
         clusters = 0
         for i in range(len(items)):
             if items[i]["id"] in used:
@@ -555,7 +633,17 @@ class EpisodicMemoryStore:
                 if dot >= thr:
                     cluster.append(items[j])
                     used.add(items[j]["id"])
+                elif dot >= gray_low:
+                    gray_pairs += 1
+                    if gray_best is None or dot > gray_best[0]:
+                        gray_best = (
+                            dot, items[i]["content"][:40], items[j]["content"][:40])
             if len(cluster) < 2:
+                continue
+            if observe_only:
+                # 只观测：计「本应合并」条数，不写库
+                held_merges += len(cluster) - 1
+                clusters += 1
                 continue
             survivor = max(
                 cluster,
@@ -581,7 +669,34 @@ class EpisodicMemoryStore:
                 logger.debug("episodic dedupe merge failed: %s", e)
         if merged_total:
             self._conn.commit()
-        return {"merged": merged_total, "clusters": clusters}
+        if gray_pairs and gray_best is not None:
+            logger.info(
+                "episodic 去重灰区 %d 对 (%.2f≤cos<%.2f) user=%s observe_only=%s "
+                "最近对: %.3f 「%s」×「%s」",
+                gray_pairs, gray_low, thr, user_id, observe_only, *gray_best,
+            )
+        try:
+            self._dedup_stats["scans"] += 1
+            self._dedup_stats["merged"] += merged_total
+            self._dedup_stats["gray_pairs"] += gray_pairs
+            self._dedup_stats["held_merges"] = (
+                int(self._dedup_stats.get("held_merges") or 0) + held_merges)
+            self._dedup_stats["observe_only_scans"] = (
+                int(self._dedup_stats.get("observe_only_scans") or 0)
+                + (1 if observe_only else 0))
+            if gray_best is not None:
+                self._dedup_stats["last_gray_at"] = time.time()
+                self._dedup_stats["last_gray_example"] = (
+                    f"{gray_best[0]:.3f} 「{gray_best[1]}」×「{gray_best[2]}」")
+        except Exception:
+            pass
+        return {
+            "merged": merged_total,
+            "clusters": clusters,
+            "gray_pairs": gray_pairs,
+            "observe_only": observe_only,
+            "held_merges": held_merges,
+        }
 
     def consolidate(
         self,
@@ -612,8 +727,8 @@ class EpisodicMemoryStore:
         stable 需更高复发门槛（``inferred_min_hits``，默认 ``min_hits+1``），且推翻 stable
         的证据只数 ``user_stated``。``user_stated`` 走原门槛，行为不变。
 
-        返回 ``{"promoted", "stable_total", "raw_total", "merged", "superseded",
-        "stable_superseded"}``。
+        返回 ``{"promoted", "stable_total", "raw_total", "merged", "gray_pairs",
+        "superseded", "stable_superseded"}``。
         """
         superseded = 0
         stable_superseded = 0
@@ -627,10 +742,17 @@ class EpisodicMemoryStore:
             superseded = _rc.get("superseded", 0)
             stable_superseded = _rc.get("stable_superseded", 0)
         merged = 0
+        gray_pairs = 0
+        held_merges = 0
+        observe_only = False
         if dedup_threshold is not None:
-            merged = self.merge_near_duplicates(
+            _dd = self.merge_near_duplicates(
                 user_id, threshold=float(dedup_threshold)
-            ).get("merged", 0)
+            )
+            merged = _dd.get("merged", 0)
+            gray_pairs = _dd.get("gray_pairs", 0)
+            held_merges = int(_dd.get("held_merges") or 0)
+            observe_only = bool(_dd.get("observe_only"))
         mh = max(2, int(min_hits or 2))
         # 既有"明说"晋升条件：复发 hits 达标，或（若给）情绪显著性达标
         stated_cond = "hits >= ?"
@@ -672,9 +794,47 @@ class EpisodicMemoryStore:
             "stable_total": self._count_tier(user_id, "stable"),
             "raw_total": self._count_tier(user_id, "raw"),
             "merged": merged,
+            "gray_pairs": gray_pairs,
+            "held_merges": held_merges,
+            "observe_only": observe_only,
             "superseded": superseded,
             "stable_superseded": stable_superseded,
         }
+
+    def dedup_stats_snapshot(self) -> Dict[str, Any]:
+        """进程级去重观测快照（自实例创建起累计；无 PII——示例对截断 40 字）。
+
+        ``gray_pairs`` 是「差一点就并」的近义对累计数：持续为 0 → 抽取源头已干净，
+        LLM 仲裁合并不必建；持续增长 → 值得上仲裁。供 workspace metrics 消费。
+        """
+        return dict(self._dedup_stats)
+
+    def observe_dedup_all_users(
+        self,
+        *,
+        threshold: float = 0.92,
+        min_raw: int = 6,
+    ) -> Dict[str, Any]:
+        """启动/运维：对所有 raw≥2 的用户跑一轮去重扫描（未满 min_raw 只观察）。
+
+        填满进程级 ``dedup_stats``，让 ops 卡重启后立刻有读数，不必等下一轮聊天。
+        """
+        try:
+            rows = self._conn.execute(
+                "SELECT user_id FROM episodic_memory "
+                "WHERE COALESCE(tier, 'raw') = 'raw' "
+                "GROUP BY user_id HAVING COUNT(*) >= 2"
+            ).fetchall()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("observe_dedup_all list failed: %s", e)
+            return {"users": 0, "gray_pairs": 0, "held_merges": 0}
+        gray = held = 0
+        for (uid,) in rows:
+            r = self.merge_near_duplicates(
+                str(uid), threshold=float(threshold), min_raw=int(min_raw))
+            gray += int(r.get("gray_pairs") or 0)
+            held += int(r.get("held_merges") or 0)
+        return {"users": len(rows), "gray_pairs": gray, "held_merges": held}
 
     def profile_summary(self, user_id: str, *, top_stable: int = 3) -> Dict[str, Any]:
         """R14：记忆画像聚合——按 tier/source 计数 + 取若干稳定事实摘要。
@@ -847,11 +1007,17 @@ class EpisodicMemoryStore:
         salience_weight: float = 0.15,
         recency_weight: float = 0.10,
         recency_half_life_days: float = 30.0,
+        age_hints: bool = True,
     ) -> str:
         """Newline bullets; optional vector+keyword fusion when query_embedding set.
 
         R2（REMT-lite）：``use_salience_rerank`` 开启后，在既有相关度之上叠加
         情绪显著性 + 时间衰减重排（默认关 → 行为与旧版完全一致）。
+
+        ``age_hints``（2026-07-26）：raw 层事实距今 ≥48h 时缀「（X天前提到）」——
+        没有年龄的 bullet 会被 LLM 当成「现在时」（「那里正在下大雨」三周后仍被当
+        实时状态复述），标注后陈旧事实反而成为自然回访素材（「上次你说下雨…」）。
+        stable 层是巩固过的无时效结论（爱好/身份），不标注；48h 内新鲜事实不标注。
         """
         from src.utils.episodic_vector import blob_to_vec, cosine_similarity
 
@@ -923,7 +1089,8 @@ class EpisodicMemoryStore:
             except Exception:
                 _rerank = None
 
-        contents: List[str]
+        # (text, created_at, tier)——ts/tier 一路带到渲染层供年龄标注
+        contents: List[Tuple[str, float, str]]
         if want_vec:
             vw = max(0.0, min(1.0, float(vector_weight)))
             kw_w = max(0.0, min(1.0, float(keyword_weight)))
@@ -935,7 +1102,7 @@ class EpisodicMemoryStore:
                 for t, _, _, _, _ in pairs
             ]
             max_kw = max(kws) if kws else 0.0
-            scored_rows: List[Tuple[float, str]] = []
+            scored_rows: List[Tuple[float, str, float, str]] = []
             for (t, emb_blob, ts, sal, tier), kw in zip(pairs, kws):
                 kw_n = (kw / max_kw) if max_kw > 1e-9 else 0.0
                 ev = blob_to_vec(emb_blob)
@@ -943,11 +1110,11 @@ class EpisodicMemoryStore:
                 vs = max(0.0, min(1.0, (vs + 1.0) / 2.0))
                 fusion = vw * vs + kw_w * kw_n
                 final = _rerank(fusion, t, ts, sal, tier) if _rerank else fusion
-                scored_rows.append((final, t))
+                scored_rows.append((final, t, ts, tier))
             scored_rows.sort(key=lambda x: (-x[0], -len(x[1])))
-            contents = [x[1] for x in scored_rows]
+            contents = [(x[1], x[2], x[3]) for x in scored_rows]
         elif want_kw:
-            scored: List[Tuple[float, str]] = []
+            scored: List[Tuple[float, str, float, str]] = []
             kws2 = [self._keyword_overlap_score(qt, t) for t, _, _, _, _ in pairs]
             max_kw2 = max(kws2) if kws2 else 0.0
             for (t, _, ts, sal, tier), sc in zip(pairs, kws2):
@@ -956,25 +1123,32 @@ class EpisodicMemoryStore:
                     final = _rerank(base, t, ts, sal, tier)
                 else:
                     final = sc
-                scored.append((final, t))
+                scored.append((final, t, ts, tier))
             scored.sort(key=lambda x: (-x[0], -len(x[1])))
-            contents = [x[1] for x in scored]
+            contents = [(x[1], x[2], x[3]) for x in scored]
         elif _rerank:
             # 无 query（纯近期）但开了重排：以新鲜度为 base 叠加显著性 + 稳定层加权
             from src.utils.memory_salience import recency_factor as _rf
-            scored3: List[Tuple[float, str]] = []
+            scored3: List[Tuple[float, str, float, str]] = []
             for t, _, ts, sal, tier in pairs:
                 base = _rf(ts, None, recency_half_life_days)
-                scored3.append((_rerank(base, t, ts, sal, tier), t))
+                scored3.append((_rerank(base, t, ts, sal, tier), t, ts, tier))
             scored3.sort(key=lambda x: (-x[0], -len(x[1])))
-            contents = [x[1] for x in scored3]
+            contents = [(x[1], x[2], x[3]) for x in scored3]
         else:
-            contents = [p[0] for p in pairs]
+            contents = [(p[0], p[2], p[4]) for p in pairs]
 
+        now_ts = time.time()
         lines: List[str] = []
         total = 0
-        for content in contents:
+        for content, ts, tier in contents:
             line = f"- {content}"
+            if age_hints and tier != "stable" and ts > 0:
+                age = now_ts - ts
+                need = (_AGE_HINT_TRANSIENT_SEC if _looks_transient_fact(content)
+                        else _AGE_HINT_MIN_SEC)
+                if age >= need:
+                    line = f"- {content}（{_age_hint_label(age)}前提到）"
             if total + len(line) + 1 > max_chars:
                 break
             lines.append(line)

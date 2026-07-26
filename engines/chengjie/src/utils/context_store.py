@@ -52,6 +52,8 @@ _NON_PERSIST = frozenset({
     "_bond_level_block",   # Phase ②: per-request 关系成长厚度/里程碑感知块
     "_story_block",        # Phase ③: per-request 剧情场景导演指令（story_state 才持久）
     "_voice_lang_suspect",  # lang_policy: per-request 可疑语音转写标记
+    "_bazi_block",         # companion.bazi: 每轮注入前 pop 重建，落盘只是死重
+    "_goal_block",         # companion.goals: 同上（目标态在 marketing_goals.db 才持久）
 })
 
 

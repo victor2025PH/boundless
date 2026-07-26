@@ -250,6 +250,13 @@ class AccountRegistry:
             cleanup_avatar(platform, account_id)
         except Exception:
             pass
+        # 中央凭据池：把该账号占的容量还回去，否则池侧容量缓慢泄漏、
+        # 预测虚报「快耗尽」逼运营多注册凭据（后台线程，不阻塞本调用）
+        try:
+            from src.integrations.credpool_bridge import release_for_account_bg
+            release_for_account_bg(platform, account_id)
+        except Exception:
+            pass
 
 
 _registry: Optional[AccountRegistry] = None

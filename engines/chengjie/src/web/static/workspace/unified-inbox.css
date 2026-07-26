@@ -136,15 +136,15 @@
 
 .conv-items{flex:1;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent;}
 /* 群组动态折叠区：贴底，群/频道单列，默认折叠；展开后自身可滚动，不挤占私聊列表。 */
-.group-section{flex:none;border-top:1px solid var(--border);background:var(--bg-soft);max-height:46%;display:flex;flex-direction:column;overflow:hidden;}
+.group-section{position:relative;flex:none;border-top:1px solid var(--border);background:var(--bg-soft);max-height:46%;display:flex;flex-direction:column;overflow:hidden;}
 .group-sec-head{display:flex;align-items:center;gap:7px;padding:9px 14px;cursor:pointer;user-select:none;font-size:12px;font-weight:700;color:var(--text-sub);transition:background .15s;}
 .group-sec-head:hover{background:var(--bg-elev);}
-.group-sec-head .gs-caret{font-size:10px;color:var(--text-tiny);width:10px;}
+.group-sec-head .gs-caret{font-size:10px;color:var(--text-tiny);width:10px;transition:transform .16s ease;}
 .group-sec-head .gs-title{letter-spacing:.3px;}
 .group-sec-head .gs-count{font-size:11px;font-weight:700;color:var(--text-tiny);background:rgba(148,163,184,.18);border-radius:8px;padding:0 7px;line-height:17px;}
-.group-sec-head .gs-mention{margin-left:auto;font-size:11px;font-weight:800;color:#fff;background:linear-gradient(135deg,#f59e0b,#f97316);border-radius:9px;padding:0 7px;line-height:18px;}
+.group-sec-head .gs-mention{font-size:11px;font-weight:800;color:#fff;background:linear-gradient(135deg,#f59e0b,#f97316);border-radius:9px;padding:0 7px;line-height:18px;}
 .group-sec-head .gs-mention + .gs-unread{margin-left:6px;}
-.group-sec-head .gs-unread{margin-left:auto;font-size:11px;font-weight:700;color:#fff;background:var(--tk-brand,#3b82f6);border-radius:9px;padding:0 7px;line-height:18px;min-width:18px;text-align:center;}
+.group-sec-head .gs-unread{font-size:11px;font-weight:700;color:#fff;background:rgba(100,116,139,.5);border-radius:9px;padding:0 7px;line-height:18px;min-width:18px;text-align:center;}
 .group-sec-body{overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent;}
 /* 首次引导气泡 */
 .group-sec-hint{margin:2px 10px 6px;padding:8px 10px;font-size:11px;line-height:1.6;color:var(--text-sub);background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.25);border-radius:8px;}
@@ -158,6 +158,70 @@
 .group-sec-body .conv-item.grp-muted{opacity:.5;}
 .group-sec-body .conv-item.grp-muted .unread-dot{font-variant-numeric:tabular-nums;background:var(--text-tiny)!important;}
 .group-sec-body .cq-btn.on{background:rgba(59,130,246,.18);border-color:var(--accent);}
+/* ===== P0/P1 2026-07-25: 群区显示模式 + 空态引导 + 徽章口径 ===== */
+/* 头部：caret 旋转 / 弹性占位 / 收起标签 / 齿轮按钮 */
+.group-sec-head.open .gs-caret{transform:rotate(90deg);transform-origin:center;}
+.gs-spacer{flex:1;min-width:6px;}
+.gs-toggle-lbl{font-size:11px;font-weight:600;color:var(--text-tiny);padding:1px 7px;border:1px solid var(--border);border-radius:7px;line-height:16px;white-space:nowrap;}
+.group-sec-head:hover .gs-toggle-lbl{color:var(--accent);border-color:var(--accent);}
+.gs-menu-btn{width:22px;height:22px;border:none;background:transparent;border-radius:6px;cursor:pointer;color:var(--text-tiny);display:inline-flex;align-items:center;justify-content:center;padding:0;}
+.gs-menu-btn:hover{background:var(--bg-elev);color:var(--text-sub);}
+/* 群区显示设置下拉（挂 .group-section 内绝对定位；section 已补 position:relative）。
+   群区贴左栏底部 → 菜单必须向上弹（bottom 锚定），否则折叠态直接弹出视口；
+   且 section 常态 overflow:hidden 会裁掉菜单 → 菜单开时由 JS 加 .menu-open 放开。 */
+.gs-menu{position:absolute;right:8px;bottom:34px;top:auto;z-index:40;min-width:150px;background:var(--bg-elev,#fff);border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:4px;display:none;}
+.gs-menu.show{display:block;}
+.group-section.menu-open{overflow:visible;}
+.gsm-item{display:flex;align-items:center;gap:7px;padding:7px 10px;font-size:12px;color:var(--text-sub);border-radius:7px;cursor:pointer;}
+.gsm-item:hover{background:var(--bg-soft);}
+.gsm-item.active{color:var(--accent);font-weight:700;}
+.gsm-item .gsm-check{width:14px;text-align:center;}
+/* 隐藏态迷你条（群区「彻底隐藏」时整个 section 只渲染这一条） */
+.gs-hidden-bar{display:flex;align-items:center;justify-content:center;gap:8px;padding:5px 10px;font-size:11px;color:var(--text-tiny);cursor:pointer;user-select:none;}
+.gs-hidden-bar:hover{background:var(--bg-elev);}
+.gs-hidden-bar .ghb-show{color:var(--accent);font-weight:600;}
+.gs-hidden-bar.has-at{color:#c2570a;background:rgba(249,115,22,.10);}
+.gs-hidden-bar.has-at:hover{background:rgba(249,115,22,.16);}
+/* 智能高度 + 定位闪烁 */
+.group-section.gs-tall{max-height:78%;}
+.group-sec-head.gs-flash{animation:gsFlash 1.5s ease;}
+@keyframes gsFlash{0%,100%{background:transparent}25%,65%{background:rgba(59,130,246,.18)}}
+/* 空态上下文按钮组（渲染在 .empty-list 内部） */
+.empty-ctx-actions{display:flex;flex-direction:column;gap:8px;margin-top:12px;width:100%;max-width:220px;align-items:stretch;}
+.empty-act-btn{display:block;width:100%;padding:7px 12px;font-size:12px;font-weight:600;color:var(--text-sub);background:transparent;border:1px solid var(--border);border-radius:8px;cursor:pointer;text-align:center;transition:all .15s;}
+.empty-act-btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(59,130,246,.06);}
+.empty-act-btn.primary{background:var(--accent,#3b82f6);border-color:var(--accent,#3b82f6);color:#fff;}
+.empty-act-btn.primary:hover{filter:brightness(1.08);}
+.empty-filters-line{margin-top:12px;font-size:11px;color:var(--text-tiny);line-height:1.7;}
+.empty-filters-line .efl-clear{color:var(--accent);cursor:pointer;font-weight:600;margin-left:6px;}
+.empty-filters-line .efl-clear:hover{text-decoration:underline;}
+/* 账号 chip 群未读灰点（信息级，与 .ac-unread 任务红点口径区分） */
+.acct-chip .ac-grp-dot{width:7px;height:7px;border-radius:50%;background:rgba(100,116,139,.55);flex:none;display:inline-block;}
+/* 平台导航图标群未读灰点：私聊未读=0 但群有未读时替代 .nav-badge；
+   描边与 .nav-badge/.nav-status-dot 同款 #17181d（导航轨恒为深色渐变底，非变量底色） */
+.nav-grp-dot{position:absolute;top:3px;right:3px;width:9px;height:9px;border-radius:50%;background:rgba(100,116,139,.65);border:2px solid #17181d;pointer-events:none;}
+/* ===== P2 2026-07-25: 群搜索 + 迷你条脉冲 + @可点 + 空态加载 ===== */
+/* @我徽章可点（JS 绑定跳转最近 @ 会话）——独立追加，不动上方既有底色规则 */
+.group-sec-head .gs-mention{cursor:pointer;}
+.group-sec-head .gs-mention:hover{filter:brightness(1.18);}
+/* 群搜索行（渲染在群区 body 顶部，仅群多时出现） */
+.gs-search{display:flex;align-items:center;gap:6px;padding:4px 10px 2px;}
+.gs-search input{flex:1;min-width:0;height:24px;padding:0 8px;font-size:12px;border-radius:6px;background:var(--bg-elev,#1e2027);border:1px solid var(--tk-border,rgba(255,255,255,.08));color:var(--tk-text,#e5e7eb);transition:border-color .15s;}
+.gs-search input::placeholder{color:var(--tk-text-muted,#a0a3ab);}
+.gs-search input:focus{border-color:var(--accent,#3b82f6);outline:none;}
+.gs-search-x{border:none;background:transparent;color:var(--tk-text-muted,#a0a3ab);cursor:pointer;font-size:12px;padding:2px 4px;}
+.gs-search-x:hover{color:var(--tk-text,#e5e7eb);}
+.gs-search-none{color:var(--tk-text-muted,#a0a3ab);font-size:12px;text-align:center;padding:10px 0 12px;}
+/* 迷你条脉冲：隐藏模式下收到新 @我 时 JS 加 .pulse（琥珀光晕呼吸两轮，与 has-at 橙色系一致） */
+.gs-hidden-bar.pulse{animation:ghbPulse 1.2s ease 2;}
+@keyframes ghbPulse{0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,0)}50%{box-shadow:0 0 0 4px rgba(245,158,11,.30)}}
+/* 空态按需加载中提示（点账号后后台拉取该账号会话时替代空态按钮组显示） */
+.empty-loading{display:flex;align-items:center;justify-content:center;gap:6px;padding:8px 0;font-size:12.5px;color:var(--tk-text-muted,#a0a3ab);}
+.empty-loading .el-dots{display:inline-flex;align-items:center;line-height:0;}
+.empty-loading .el-dots i{display:inline-block;width:4px;height:4px;border-radius:50%;background:currentColor;margin:0 1.5px;opacity:.25;animation:elDot 1.2s infinite;}
+.empty-loading .el-dots i:nth-child(2){animation-delay:.2s;}
+.empty-loading .el-dots i:nth-child(3){animation-delay:.4s;}
+@keyframes elDot{0%,60%,100%{opacity:.25}30%{opacity:1}}
 /* 名单：去掉条间白色分隔线（靠留白分隔，更清爽）；选中态用蓝色 inset accent，不挤压布局。 */
 .conv-item{display:flex;gap:10px;padding:10px 14px;cursor:pointer;transition:background .15s,box-shadow .15s;position:relative;}
 .conv-item:hover{background:var(--bg-soft);}
@@ -921,6 +985,8 @@ button.fleet-cell:disabled{cursor:default;}
 .acct-cap-chip{font-size:10.5px;font-weight:600;color:var(--text-sub);background:var(--bg-elev);border:1px solid var(--border);border-radius:999px;padding:2px 8px;line-height:1.4;}
 .acct-empty-cta{align-self:stretch;padding:8px 12px;border-radius:9px;border:0;background:var(--accent);color:#fff;font-size:12.5px;font-weight:700;cursor:pointer;transition:filter .15s;}
 .acct-empty-cta:hover{filter:brightness(1.07);}
+/* 平台接入方式与「扫码」心智不符时的补充说明（如 Messenger 要在服务器上登录） */
+.acct-empty-note{font-size:10.5px;color:var(--text-tiny);line-height:1.6;margin-top:2px;}
 
 /* ===== 账号详情面板 (P1)：drawer-body.detail-open 切列表/详情双视图 ===== */
 #acct-detail-view{display:none;}
@@ -952,6 +1018,12 @@ button.fleet-cell:disabled{cursor:default;}
 .acct-dv-chip.persona{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 35%,var(--border));background:color-mix(in srgb,var(--accent) 8%,transparent);}
 .acct-dv-chip.ok{color:var(--tk-ok-ink);border-color:color-mix(in srgb,var(--green) 35%,var(--border));background:color-mix(in srgb,var(--green) 8%,transparent);}
 .acct-dv-chip.dim{color:var(--text-tiny);}
+/* 账号级整号换绑面板（归属行下内联展开） */
+.acct-dv-rebind-btn{font-size:11px;align-self:center;}
+.acct-dv-rebindbox{border:1px solid var(--border);border-radius:10px;background:var(--bg-elev);padding:10px 12px;margin:0 0 12px;}
+.acct-dv-rebind-warn{font-size:11.5px;color:var(--tk-warn-ink);line-height:1.5;margin-bottom:8px;}
+.acct-dv-rebind-row{display:flex;gap:8px;align-items:center;}
+.acct-dv-rebind-row select{flex:1;min-width:0;font-size:12px;}
 /* 官方资料卡 */
 .acct-dv-card{border:1px solid var(--border);border-radius:12px;background:var(--bg-elev);padding:12px 14px;margin-bottom:12px;}
 .acct-dv-card-title{font-size:13px;font-weight:700;color:var(--text-main);margin-bottom:2px;}
@@ -1038,12 +1110,49 @@ button.fleet-cell:disabled{cursor:default;}
 /* 登录方式选择 */
 .connect-modes{display:flex;flex-direction:column;gap:8px;margin:4px 0 6px;text-align:left;}
 .connect-modes-tip{font-size:11.5px;color:var(--text-sub);margin-bottom:2px;}
-.connect-mode-opt{display:flex;align-items:flex-start;gap:10px;padding:11px 12px;border:1px solid var(--border);border-radius:10px;cursor:pointer;transition:border-color .15s,background .15s;}
+.connect-mode-opt{display:flex;align-items:flex-start;gap:10px;padding:11px 12px;border:1px solid var(--border);border-radius:10px;cursor:pointer;transition:border-color .15s,background .15s,box-shadow .15s;}
 .connect-mode-opt:hover{border-color:var(--accent);background:rgba(59,130,246,.08);}
-.connect-mode-opt.disabled{opacity:.5;cursor:not-allowed;background:var(--bg-soft);}
-.connect-mode-opt.disabled:hover{border-color:var(--border);background:var(--bg-soft);}
-.connect-mode-radio{width:16px;height:16px;border-radius:50%;border:2px solid var(--border);flex-shrink:0;margin-top:2px;}
+.connect-mode-opt:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+.connect-mode-opt.recommended{border-color:rgba(59,130,246,.45);box-shadow:0 1px 6px rgba(59,130,246,.10);}
+/* 不可用态：斜纹 + 锁，而不是单纯半透明。半透明只说明「这里坏了」，斜纹加锁说明「这是有
+   条件的」——且该项**仍可点击**（展开解释卡），所以保留 pointer，不用 not-allowed。 */
+.connect-mode-opt.disabled{opacity:.72;background:
+  repeating-linear-gradient(135deg,var(--bg-soft),var(--bg-soft) 7px,transparent 7px,transparent 14px);}
+.connect-mode-opt.disabled .connect-mode-name,
+.connect-mode-opt.disabled .connect-mode-desc{color:var(--text-tiny);}
+.connect-mode-opt.disabled:hover{border-color:var(--text-tiny);background:
+  repeating-linear-gradient(135deg,var(--bg-soft),var(--bg-soft) 7px,transparent 7px,transparent 14px);}
+.connect-mode-radio{width:16px;height:16px;border-radius:50%;border:2px solid var(--border);flex-shrink:0;margin-top:2px;display:flex;align-items:center;justify-content:center;}
 .connect-mode-opt.recommended .connect-mode-radio{border-color:var(--accent);}
+.connect-mode-opt.recommended .connect-mode-radio::after{content:"";width:7px;height:7px;border-radius:50%;background:var(--accent);}
+.connect-mode-opt.disabled .connect-mode-radio{border:0;margin-top:0;}
+.connect-mode-lock{font-size:12px;line-height:1;filter:grayscale(1);opacity:.75;}
+/* 能力标签：让运营不读技术描述也能横向比较（可多开 / 需手机 / 需运维…） */
+.connect-mode-caps{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;}
+.connect-cap-chip{font-size:10px;font-weight:600;color:var(--text-sub);background:var(--bg-soft);border:1px solid var(--border);border-radius:999px;padding:1px 7px;line-height:1.5;}
+.connect-mode-unavail-cue{font-size:10.5px;font-weight:700;color:var(--accent);margin-top:6px;}
+/* 不可用方式的解释卡 */
+.connect-unavail{text-align:left;border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--bg-soft);animation:cuFade .16s ease-out;}
+@keyframes cuFade{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:none;}}
+.connect-unavail-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
+.connect-unavail-lock{font-size:15px;line-height:1;}
+.connect-unavail-title{font-size:13.5px;font-weight:700;color:var(--text-main);}
+.connect-unavail-sec{margin-bottom:9px;}
+.connect-unavail-t{font-size:10.5px;font-weight:700;color:var(--accent);letter-spacing:.5px;margin-bottom:3px;}
+.connect-unavail-b{font-size:11.5px;color:var(--text-sub);line-height:1.65;}
+.connect-unavail-back{margin-top:2px;background:none;border:none;color:var(--accent);font-size:11.5px;font-weight:600;cursor:pointer;padding:4px 0;}
+/* 引导式启用（Telegram 协议多开）：解释卡内直接填 api_id/api_hash 保存开闸 */
+.connect-enable-form{display:flex;flex-direction:column;gap:7px;margin-top:7px;}
+.connect-enable-form .cfg-input{width:100%;box-sizing:border-box;}
+.connect-enable-go{padding:8px 12px;border-radius:9px;border:0;background:var(--accent);color:#fff;font-size:12.5px;font-weight:700;cursor:pointer;transition:filter .15s;}
+.connect-enable-go:hover{filter:brightness(1.07);}
+.connect-enable-go:disabled{opacity:.5;cursor:not-allowed;}
+.connect-enable-msg{font-size:11.5px;line-height:1.5;margin-top:6px;display:none;}
+.connect-enable-msg.ok{color:#16a34a;}
+.connect-enable-msg.err{color:var(--red);}
+/* 服务器托管登录：图是登录页截图不是二维码，角标常驻说明，避免坐席举着手机扫 */
+.connect-qr-wrap.server-shot{width:260px;height:190px;}
+.connect-shot-tag{position:absolute;left:0;right:0;bottom:0;background:rgba(15,23,42,.78);color:#e2e8f0;font-size:10px;font-weight:600;padding:4px 6px;line-height:1.4;text-align:center;}
 .connect-mode-body{flex:1;min-width:0;}
 .connect-mode-name{font-size:13px;font-weight:700;color:var(--text-main);display:flex;align-items:center;gap:6px;}
 .connect-mode-badge{font-size:11px;font-weight:700;padding:1px 6px;border-radius:8px;background:rgba(59,130,246,.12);color:var(--accent);}
@@ -1445,3 +1554,141 @@ button.fleet-cell:disabled{cursor:default;}
 .ce-roi .roi-chip.ok{background:var(--bdg-ok-bg);color:var(--bdg-ok-ink);}
 .ce-roi .roi-chip .n{font-weight:800;font-variant-numeric:tabular-nums;}
 .ce-roi .roi-note{font-size:11px;color:var(--text-tiny);flex-basis:100%;text-align:center;margin-top:2px;}
+
+/* ===== P3 2026-07-25: 群区/搜索/空态按钮 窄屏触控适配 =====
+   对齐主移动断点 768px（与 .inbox-root 单栏布局同一临界）。要点：
+   ① iOS Safari 对 font-size<16px 的 input 聚焦会强制整页放大（zoom bug）→ 移动端搜索框固定 16px；
+   ② 触控目标加高：群区头部/菜单按钮/菜单项/迷你条 —— 桌面鼠标精度的 22~24px 在指尖不可靠；
+   ③ 只在移动端放大，桌面信息密度不受影响。 */
+@media(max-width:768px){
+  .gs-search{padding:6px 12px 4px;}
+  .gs-search input{font-size:16px;height:36px;border-radius:8px;}
+  .gs-search-x{font-size:16px;padding:6px 10px;}
+  .group-sec-head{padding:12px 14px;}
+  .gs-menu-btn{width:34px;height:34px;}
+  .gs-menu{min-width:180px;}
+  .gsm-item{padding:11px 12px;font-size:13px;}
+  .gs-hidden-bar{padding:12px 10px;font-size:12px;}
+  .gs-mention,.gs-unread{line-height:22px;padding:0 9px;}
+  .empty-act-btn{padding:11px 12px;font-size:13px;}
+}
+
+/* ===== P4 2026-07-26: 联系人 Tab（好友名单 + 「加了好友但从未开口」线索）=====
+   左栏从「只有会话列表」升级为「会话 / 联系人」双视图。三条约束贯穿本区：
+   ① 零硬编码色：底/字/描边一律取 --bdg-* 徽章语义档、--text-*、--bg-*、--accent，
+      暗色由 workspace_base 的 token 翻转自动适配（参照 .ce-roi 的 token 收口示范）；
+      需要「同色系半透明」的地方用 color-mix(var(--accent)…) 而非字面 rgba，
+      白标换品牌色时本区跟着走，不会留一片写死的蓝。
+   ② 不新造视觉语言：分段控件抄 .standby-seg / 筛选 pill 抄 .ftab / 摘要 chip 抄 .roi-chip /
+      小按钮抄 .tiny-btn / 搜索框直接复用 .gs-search 的 DOM 与样式。
+   ③ 只追加、不改既有选择器的既有属性——本区所有规则都是新选择器（或对既有类的新属性），
+      与并行改 HTML/后端的工作线不会互相覆盖。 */
+
+/* --- 1. 列表面板顶部分段控件（会话 / 联系人）--- */
+/* 与 .standby-seg 同族（1px 描边 + 8px 圆角 + soft 底 + overflow 裁内段边线）。
+   唯一差异：它是列表主视图切换而非弹层里的三档旋钮 → 占满整行、两段等宽，故 flex 而非 inline-flex。 */
+.list-pane-seg{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg-soft);margin-bottom:8px;}
+.lp-opt{flex:1 1 0;min-width:0;display:inline-flex;align-items:center;justify-content:center;gap:5px;border:0;background:transparent;color:var(--text-sub);font:inherit;font-size:12px;font-weight:600;padding:6px 8px;cursor:pointer;white-space:nowrap;border-right:1px solid var(--border);transition:background .15s,color .15s;}
+.lp-opt:last-child{border-right:0;}
+.lp-opt:hover{background:var(--bg-hover,rgba(0,0,0,.04));}
+.lp-opt.active{background:var(--accent);color:#fff;}
+.lp-opt:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+/* 段上计数徽章：刻意中性灰（.gs-count 同款观感，配色改走 token 混色以随主题走）。
+   它表达的是「名单里有多少人」这种静态盘点，不是待办；用红/蓝会和未读红点抢注意力，
+   坐席一眼扫过去会误以为有 1240 条要处理。 */
+.lp-opt .lp-badge{font-size:11px;font-weight:700;line-height:16px;padding:0 6px;border-radius:8px;background:color-mix(in srgb,var(--text-sub) 18%,transparent);color:var(--text-tiny);font-variant-numeric:tabular-nums;}
+/* 激活段是实心品牌底，灰徽章会糊在上面 → 换成白色蒙版档（与 .cdraft-btn kbd 同手法）。 */
+.lp-opt.active .lp-badge{background:rgba(255,255,255,.24);color:#fff;}
+
+/* --- 2. 资产盘点摘要行（联系人 Tab 顶部）--- */
+.cp-summary{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:2px 0 6px;font-size:11.5px;color:var(--text-sub);}
+.cp-sum-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:999px;background:var(--bdg-info-bg);color:var(--bdg-info-ink);font-weight:600;white-space:nowrap;}
+.cp-sum-chip .n{font-weight:800;font-variant-numeric:tabular-nums;}
+/* 「未开口 320」是本功能的运营价值锚点，用琥珀不用红：本工作台的红已经被 SLA 超时 /
+   危机标签 / 未读占满，语义是「出事了要救火」；而「加了好友还没开口」是待开采的存量机会、
+   不是故障。warn 档 + 一圈同色描边把它抬成摘要行里最重的一枚，又不触发报错的条件反射。
+   描边占 1px → padding 相应减 1px，与无描边的兄弟 chip 保持同高不错位。 */
+.cp-sum-chip.warn{background:var(--bdg-warn-bg);color:var(--bdg-warn-ink);border:1px solid color-mix(in srgb,var(--bdg-warn-ink) 32%,transparent);padding:2px 9px;}
+.cp-sum-chip.muted{background:var(--bdg-neutral-bg);color:var(--bdg-neutral-ink);}
+
+/* --- 3. 筛选档位 pill（全部 / 未开口 / 沉默 30 天）--- */
+/* 与 .ftab 同款几何（20px 胶囊 / 11px / 透明描边占位防 active 抖动）。
+   .ftab 是 div，这里按 <button> 也能用：显式清掉 UA 的 font/background。 */
+.cp-filters{display:flex;flex-wrap:wrap;align-items:center;gap:4px;padding:2px 0 6px;}
+.cp-fpill{flex-shrink:0;white-space:nowrap;line-height:1.4;padding:4px 10px;border-radius:20px;font:inherit;font-size:11px;color:var(--text-sub);background:transparent;border:1px solid transparent;cursor:pointer;transition:all .15s;}
+.cp-fpill:hover{background:var(--bg-soft);}
+.cp-fpill.active{background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent);border-color:color-mix(in srgb,var(--accent) 35%,transparent);font-weight:600;}
+.cp-fpill:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+/* 暗色档：与文件顶部对 .ftab.active 的处理同口径——12% 的蓝在深底上几乎看不出选中，提到 18%。 */
+:root[data-cp-theme="dark"] .cp-fpill.active{background:color-mix(in srgb,var(--accent) 18%,transparent);border-color:color-mix(in srgb,var(--accent) 40%,transparent);}
+:root[data-cp-theme="dark"] .cp-fpill:not(.active){border-color:color-mix(in srgb,var(--text-sub) 22%,transparent);}
+
+/* --- 4. 同步状态行（账号下拉 + 上次同步 + 刷新）--- */
+.cp-sync-row{display:flex;align-items:center;gap:6px;padding:2px 0 8px;min-width:0;}
+/* 账号下拉只约束尺寸不碰配色：外观沿用 .sort-select / .mode-select 现成皮肤，
+   这里只保证它在窄栏里能被压缩而不把右侧时间与按钮挤出去。 */
+.cp-sync-row select{flex:0 1 auto;min-width:0;max-width:52%;}
+.cp-sync-ts{margin-left:auto;font-size:11px;color:var(--text-tiny);white-space:nowrap;font-variant-numeric:tabular-nums;}
+.cp-sync-btn{flex-shrink:0;display:inline-flex;align-items:center;gap:4px;border:1px solid var(--btn-border);background:var(--bg-elev);border-radius:6px;padding:4px 9px;font:inherit;font-size:11px;color:var(--text-sub);cursor:pointer;white-space:nowrap;transition:background .12s,border-color .12s,color .12s;}
+.cp-sync-btn:hover{background:var(--bg-soft);border-color:var(--accent);color:var(--accent);}
+.cp-sync-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+/* 限频冷却态：降透明度 + not-allowed。hover 态一并压回原样——否则鼠标划过仍会变蓝，
+   看着像还能点，坐席会反复戳一个不会响应的按钮。 */
+.cp-sync-btn:disabled{opacity:.5;cursor:not-allowed;}
+.cp-sync-btn:disabled:hover{background:var(--bg-elev);border-color:var(--btn-border);color:var(--text-sub);}
+.cp-sync-ic{display:inline-flex;line-height:0;flex:0 0 auto;}
+/* 复用文件里既有的 @keyframes spin（工具类 .spin 用的那个），不新造一份。 */
+.cp-sync-btn.running .cp-sync-ic{animation:spin .7s linear infinite;}
+@media (prefers-reduced-motion:reduce){.cp-sync-btn.running .cp-sync-ic{animation:none;}}
+
+/* --- 5. 联系人行扩展（在既有 .contact-row / .contact-ava / .contact-nm / .contact-sub 之上加右侧元信息）--- */
+/* margin-left:auto 是兜底：中间那块若带 flex:1（当前 HTML 如此）它无副作用；
+   若将来中间块不再撑开，meta 仍会被推到最右，不会跟副标题黏在一起。 */
+.contact-meta{display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0;margin-left:auto;text-align:right;}
+.contact-ts{font-size:11px;color:var(--text-tiny);white-space:nowrap;font-variant-numeric:tabular-nums;}
+.contact-badge{display:inline-flex;align-items:center;justify-content:center;gap:3px;padding:0 6px;border-radius:8px;font-size:11px;font-weight:700;line-height:17px;background:var(--bdg-neutral-bg);color:var(--bdg-neutral-ink);border:1px solid transparent;white-space:nowrap;}
+/* 「未开口」徽章：与摘要行 .cp-sum-chip.warn 同一套琥珀语义（同一件事在两处必须同色，
+   否则坐席建立不起「琥珀=可开采」的直觉）。字重提到 800 对齐群区 @提及 那一档的视觉权重，
+   但底色走 token 而非 @提及 的写死橙渐变——渐变在暗色下会亮得刺眼，且不随白标品牌走。 */
+.contact-badge.never{background:var(--bdg-warn-bg);color:var(--bdg-warn-ink);border-color:color-mix(in srgb,var(--bdg-warn-ink) 35%,transparent);font-weight:800;}
+/* 未读数：照抄会话行未读徽章 .unread-dot 的配色。注意它是品牌蓝不是红——
+   本工作台的红留给 SLA/危机/群 @，未读一直走 accent，这里跟着来才不会自成一派。 */
+.contact-unread{display:flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 4px;border-radius:10px;background:var(--accent);color:#fff;font-size:10px;font-weight:700;font-variant-numeric:tabular-nums;}
+/* 已有会话的行：inset 左条而不是真 border-left——真描边会挤动行内容导致「聊过/没聊过」
+   两种行左边界对不齐。透明度压到 34%，只做余光可辨的暗示，不跟未读/未开口抢视线。 */
+.contact-row.has-conv{box-shadow:inset 2px 0 0 color-mix(in srgb,var(--accent) 34%,transparent);}
+/* hover 才显形的「发起会话 →」：常态 opacity:0 而非 display:none，元素始终占位，
+   悬停时不会把右侧元信息挤动。pointer-events 恒 none —— 它只是提示，点击语义属整行。 */
+.contact-go{flex:0 0 auto;font-size:11px;font-weight:600;color:var(--accent);white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .12s;}
+.contact-row:hover .contact-go,.contact-row:focus-visible .contact-go,.contact-row:focus-within .contact-go{opacity:1;}
+@media (prefers-reduced-motion:reduce){.contact-go{transition:none;}}
+/* 键盘可达：与 .conv-item:focus-visible 同口径（inset offset，避免焦点环被列表边缘裁掉）。 */
+.contact-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:8px;}
+
+/* --- 6. 平台能力提示（如 Messenger 读不到好友名单）--- */
+/* 用 info 蓝档而不是 warn/danger：这是平台本身没这个能力的如实说明，不是我们出故障。
+   写成琥珀/红，坐席会当成「系统坏了」去报障，白白消耗支持人力。 */
+.cp-plat-note{display:flex;align-items:flex-start;gap:6px;margin:2px 0 6px;padding:6px 10px;border-radius:9px;font-size:11.5px;line-height:1.55;background:var(--bdg-info-bg);color:var(--bdg-info-ink);border:1px solid color-mix(in srgb,var(--bdg-info-ink) 26%,transparent);}
+.cp-plat-note .cpn-ic{flex:0 0 auto;line-height:1.4;}
+
+/* --- 7. 窄屏触控适配（对齐文件里 P3 2026-07-25 那块的既有口径）---
+   ① 行高/控件加大到 44px 级：桌面鼠标精度下够用的 24-28px 在指尖上必误触；
+   ② 输入框 16px：iOS Safari 对 font-size<16px 的 input 聚焦会强制整页缩放；
+      联系人搜索复用 .gs-search，上面 P3 块已把它固定成 16px/36px，此处不重复；
+   ③ .contact-go 恒显：触屏没有 hover，靠 hover 显形的提示在手机上永远不出现，
+      等于这条线索对移动端坐席不存在 → 移动端直接常驻。 */
+@media(max-width:768px){
+  .lp-opt{padding:11px 8px;font-size:13px;}
+  .lp-opt .lp-badge{line-height:18px;padding:0 7px;}
+  .cp-fpill{padding:8px 14px;font-size:12px;}
+  .cp-sync-row{flex-wrap:wrap;row-gap:6px;}
+  .cp-sync-row select{max-width:100%;font-size:16px;}
+  .cp-sync-btn{padding:9px 13px;font-size:12px;}
+  .cp-summary{gap:5px;}
+  .cp-sum-chip{padding:5px 11px;font-size:12px;}
+  .cp-sum-chip.warn{padding:4px 10px;}
+  .contact-row{min-height:44px;padding:10px 12px;}
+  .contact-ava{width:38px;height:38px;}
+  .contact-badge,.contact-unread{line-height:19px;height:auto;min-height:19px;}
+  .contact-go{opacity:1;}
+}

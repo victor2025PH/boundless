@@ -1,0 +1,89 @@
+# 内容陪伴系 · 幻声 VoiceX —— 「配音又贵又慢」痛点线
+#
+# 场景：做内容/短视频/直播的群。这条线的特殊之处是**可以给样本**——
+# 声音效果听一耳朵就知道，比任何话术都有说服力。所以 media 拍是全剧的高点，
+# 但要让它像「顺手发一个」而不是「产品演示」。
+#
+# 质疑角负责本条线最致命的疑虑：克隆声听起来假。这个疑虑必须被样本而不是被话术化解。
+id: studio_voicex
+name: 配音成本痛点 · 幻声 VoiceX
+system: studio
+products:
+  - voicex
+soft_ad_level: 4
+
+roles:
+  - slot: asker
+    desc: 做内容被配音卡住的人。讲具体的钱和时间成本。
+  - slot: advocate
+    desc: 已经在用克隆配音的人。讲体感，愿意甩样本。
+  - slot: bystander
+    desc: 同行附和的人。补充自己的将就办法（自己录 / 用系统朗读）。
+  - slot: skeptic
+    desc: 质疑克隆声机械感的人。要求听效果，不听不信。
+
+beats:
+  - id: b1_pain
+    role: asker
+    intent: 吐槽做视频每次找配音又贵又要等，改一句话就得重录一遍。用具体的时间或价格感受来说，不要提任何工具。
+    soft: 0
+    pace: chatty
+
+  - id: b2_echo
+    role: bystander
+    intent: 附和，说自己干脆自己录，但一录就是好几遍，嗓子还不稳。不要提解决方案。
+    soft: 0
+    pace: chatty
+
+  - id: b3_reveal
+    role: advocate
+    intent: 顺着说自己现在用声音克隆，给几十秒样本就能一直用那个声音念稿。像随口分享，不要介绍参数。
+    product: voicex
+    soft: 3
+    pace: normal
+
+  - id: b4_doubt
+    role: skeptic
+    intent: 质疑克隆出来的声音一听就假、平得像播报，用在正片里会掉档次。语气是行家的挑剔。
+    soft: 0
+    pace: chatty
+
+  - id: b5_resolve
+    role: advocate
+    intent: 回应这个挑剔——说现在能带情绪，语气会跟着内容走，不是平铺直叙那种。不要吹到天上，承认还是挑稿子。
+    product: voicex
+    soft: 4
+    pace: slow
+
+  - id: b6_ask_lang
+    role: asker
+    intent: 追问中英文都行吗，做海外号能不能用同一个声音。
+    soft: 1
+    pace: normal
+
+  - id: b7_multilang
+    role: advocate
+    intent: 说同一个声音可以说多国语言，做多语言号不用换配音。克制，不要罗列语种。
+    product: voicex
+    soft: 4
+    pace: normal
+
+  - id: b8_sample
+    role: advocate
+    intent: 像顺手一样说「我发一段你们听听」，把样本甩出来。语气是随手分享不是产品演示，不要配一堆说明文字。
+    product: voicex
+    media: voicex_sample
+    soft: 5
+    pace: chatty
+
+  - id: b9_react
+    role: skeptic
+    intent: 听完后态度松动，承认比想象中自然，但仍说要自己试过才算数。不要秒变吹捧。
+    soft: 1
+    pace: normal
+
+  - id: b10_close
+    role: bystander
+    intent: 说这个确实能省不少事，把话题自然收住。不要发链接，不要喊私聊。
+    soft: 2
+    pace: slow

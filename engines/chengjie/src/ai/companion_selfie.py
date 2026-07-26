@@ -436,6 +436,61 @@ def album_series_of_path(path: Any) -> str:
     return ""
 
 
+def album_scene_class_of_path(path: Any) -> str:
+    """从策展文件名解析场景类：``<scene>_<series>_<nn>.jpg`` → scene 段归一；
+    不合式/认不出返回 ""（场景未知）。归一词表见 ``persona_media.scene_class_of``。"""
+    stem = Path(str(path or "")).stem
+    parts = stem.split("_")
+    if len(parts) >= 3 and parts[-1].isdigit():
+        from src.companion.persona_media import scene_class_of
+        return scene_class_of(parts[0])
+    return ""
+
+
+# ── 相册目录元数据 sidecar（P0 图文一致性，2026-07-27）──────────────────────
+# 每相册目录可放 ``_meta.json``：``{"<文件名>": {"tod": "day|night", "scene":
+# "<场景类>", "series": "<系列>"}}``（由 scripts/persona_media_backfill_meta.py
+# 用 VLM+文件名约定生成，运营也可手改）。运行时按 mtime 缓存；无 sidecar =
+# 全部字段未知（向后兼容零行为变更）。
+_ALBUM_META_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+ALBUM_META_NAME = "_meta.json"
+
+
+def load_album_meta(dir_path: Any) -> Dict[str, Any]:
+    """读相册目录的 ``_meta.json``（mtime 缓存）；无/坏文件返回 {}。"""
+    try:
+        p = Path(str(dir_path or "")) / ALBUM_META_NAME
+        if not p.is_file():
+            return {}
+        mt = p.stat().st_mtime
+        key = str(p)
+        cached = _ALBUM_META_CACHE.get(key)
+        if cached and cached[0] == mt:
+            return cached[1]
+        import json as _json
+        data = _json.loads(p.read_text(encoding="utf-8"))
+        meta = data if isinstance(data, dict) else {}
+        _ALBUM_META_CACHE[key] = (mt, meta)
+        return meta
+    except Exception:
+        return {}
+
+
+def album_file_meta(path: Any, meta: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    """单文件的 {tod, scene, series}：sidecar 优先，文件名约定兜底；未知留空。"""
+    name = Path(str(path or "")).name
+    m = (meta or {}).get(name)
+    m = m if isinstance(m, dict) else {}
+    tod = str(m.get("tod") or "").strip().lower()
+    scene = str(m.get("scene") or "").strip().lower()
+    series = str(m.get("series") or "").strip()
+    if not scene:
+        scene = album_scene_class_of_path(name)
+    if not series:
+        series = album_series_of_path(name)
+    return {"tod": tod, "scene": scene, "series": series}
+
+
 def build_selfie_prompt(
     persona: Any,
     *,
@@ -446,6 +501,7 @@ def build_selfie_prompt(
     content_rating: str = "",
     variety_salt: Optional[int] = None,
     lora_trigger: str = "",
+    outfit: str = "",
 ) -> str:
     """构造形象照生成提示词（纯函数）。强制安全约束 + 强制人类单人主体。
 
@@ -465,6 +521,11 @@ def build_selfie_prompt(
 
     ``lora_trigger``（角色 LoRA 部署）：非空则作**首个** token 前置（LoRA 靠训练时的
     稀有触发词唤起身份，须领衔）；空=不加（无 LoRA 时零影响，向后兼容）。
+
+    ``outfit``（P1 今日衣着状态，2026-07-27）：非空则在场景后注入
+    ``wearing <outfit>``——衣着从「模型自由发挥」变成确定性事实
+    （``outfit_state.current_outfit``：同日恒定/连续窗跟随刚发照片），
+    聊天状态块同源注入 → 图-文-跨链衣着一致。空=不注入（旧行为）。
     """
     base = (
         _persona_visual(persona)
@@ -488,6 +549,9 @@ def build_selfie_prompt(
     sc = str(scene_hint or "").strip()
     if sc:
         parts.append(sc)
+    of = str(outfit or "").strip()
+    if of:
+        parts.append(f"wearing {of}")
     st = str(style or "").strip() or "natural lighting, candid, photorealistic, high quality"
     parts.append(st)
     if v is not None:
@@ -751,7 +815,7 @@ def build_day_itinerary(
 
 
 def scene_chat_note(
-    scene: str, itinerary: Any = None, *, now: Any = None,
+    scene: str, itinerary: Any = None, *, now: Any = None, outfit: str = "",
 ) -> str:
     """把场景短语渲染成聊天 prompt 的「状态设定」块（纯函数）。
 
@@ -760,6 +824,8 @@ def scene_chat_note(
     LLM 需换成口语转述而非原样输出。
     ``itinerary``（Phase20 可选）＝``build_day_itinerary`` 输出：注入「今天动线」
     一行，LLM 获得跨时段叙事（早上做过什么/晚点打算什么），当前时段以（现在）标注。
+    ``outfit``（P1 今日衣着状态）＝``outfit_state.current_outfit`` 输出：注入
+    「今天穿着」事实行——被问「穿了什么」按此答，与生图 prompt 同源不再现编。
     """
     sc = str(scene or "").strip()
     if not sc:
@@ -767,6 +833,13 @@ def scene_chat_note(
     lines = [
         "【你此刻的状态（内部设定）】你现在的场景：" + sc + "。",
     ]
+    try:
+        from src.companion.outfit_state import outfit_chat_line
+        _ol = outfit_chat_line(outfit)
+        if _ol:
+            lines.append(_ol)
+    except Exception:
+        pass
     rows = [r for r in (itinerary or [])
             if isinstance(r, (list, tuple)) and len(r) == 2 and str(r[1]).strip()]
     if len(rows) >= 2:
@@ -912,6 +985,46 @@ def wants_same_scene(text: str) -> bool:
     return any(m in t for m in _SAME_SCENE_MARKERS)
 
 
+# 收图后的「质疑」信号词表（P0 观测补盲）：只收高置信表达；调用方须先确认
+# 「最近真发过媒体」再判（没发过图时这些词多半在聊别的，不计入）。
+_MEDIA_COMPLAINT_MAP: tuple = (
+    ("repeat", (
+        "又是这张", "又是這張", "又发这张", "又發這張", "同一张", "同一張",
+        "一样的照片", "一樣的照片", "发过了", "發過了", "重复的图", "重複的圖",
+        "上次发过", "上次發過", "same photo", "same pic", "already sent",
+        "sent this before", "same picture again",
+    )),
+    ("not_you", (
+        "不是你吧", "不像你", "根本不是你", "这是你吗", "這是你嗎", "换人了",
+        "換人了", "别人的照片", "別人的照片", "长得不一样", "長得不一樣",
+        "怎么变了个人", "doesn't look like you", "not you", "who is this",
+        "looks like someone else",
+    )),
+    ("fake", (
+        "照骗", "照騙", "网图", "網圖", "p的吧", "p图", "p圖", "ai画", "ai畫",
+        "ai生成", "ai做的", "假的吧", "假照片", "骗人", "騙人", "fake",
+        "photoshopped", "ai generated", "ai-generated", "not real",
+    )),
+)
+
+
+def detect_media_complaint(text: str) -> str:
+    """客户是否在**质疑刚收到的图**（纯函数）：返回 ``repeat``（图重复）/
+    ``not_you``（不像本人）/``fake``（假图/网图/骗人）/``""``（无质疑）。
+
+    这是图文一致性劣化的第一现场信号（此前只能人工翻聊天记录）。词表刻意保守
+    （宁漏勿滥）；调用方须先确认「最近窗口内真发过媒体」再采信，进一步压误报。
+    """
+    t = str(text or "").strip().lower()
+    if not t or len(t) > 200:
+        return ""
+    for kind, keys in _MEDIA_COMPLAINT_MAP:
+        for k in keys:
+            if k in t:
+                return kind
+    return ""
+
+
 _STAGE_TEXTS: dict = {
     # Stage 短路直发文案（绕过 LLM 与出站翻译）——硬编码单语会对外语客户穿帮
     # （英文会话突然蹦中文）。zh/en 双语按会话语言取；其余语种暂用 en（比 zh 更
@@ -983,6 +1096,22 @@ _STAGE_TEXTS: dict = {
             "took this for you, see? 😆",
         ],
     },
+    "caption_album": {
+        # P0 一致性（2026-07-27）：**明确旧照口径**的配文池——注册相册/相册兜底
+        # 发的是存货，配文声称「刚拍」曾被客户按衣着/时间对不上当场戳穿。
+        # 本池所有变体都不含"刚拍/现在"类时间声明，诚实且自然。
+        "zh": [
+            "翻到一张之前拍的，给你看～😊",
+            "找到一张我还挺喜欢的，分享给你嘿嘿",
+            "这张是前阵子拍的，感觉还不错吧～",
+            "给你看张我的照片，不许笑话我哦😝",
+        ],
+        "en": [
+            "found an older pic of me, here you go~ 😊",
+            "this one's from a while back, but I kinda like it hehe",
+            "sharing one of my favorite pics with you 😊",
+        ],
+    },
     "promise_fail": {
         # 异步兑现失败的补偿（承诺文本已发出、图没出来）：像真人一样找个台阶，
         # 不否认能力、给出「改天补」的软承诺（远期承诺不在守卫打击面）。
@@ -1048,6 +1177,7 @@ def build_photo_caption_instruction(
     subject: str = "",
     persona_name: str = "",
     scene: str = "",
+    freshness: str = "fresh",
 ) -> str:
     """构造「照片配文」LLM 指令（纯函数）——文图协同的关键一环。
 
@@ -1056,13 +1186,20 @@ def build_photo_caption_instruction(
     本指令让 LLM 在**明知照片已发出**的前提下补一句贴上下文的配文。
     ``scene``（Phase18）＝这张照片实际的拍摄场景（英文短语，与生图 prompt 同源）：
     给了就让配文自然贴场景（"便利店夜班好无聊～"），图文叙事一体。
+    ``freshness``（P0 一致性，2026-07-27）：``fresh``=刚生成的图（可说「刚拍」）；
+    ``old``=相册存货（注册相册/相册兜底）——**禁止声称刚拍**（实录事故：相册旧照
+    配「刚拍的，新鲜出炉」→ 客户对时间/衣着对不上当场质疑「你真会骗人」），
+    改为「翻到一张之前拍的」口径，时间上永远诚实。
     解析/调用在 autosend 侧（保持本模块纯净可测）。
     """
     who = f"「{persona_name}」" if persona_name else "一个真人"
+    is_old = str(freshness or "").strip().lower() == "old"
     if kind == "object" and subject:
         desc = f"一张「{subject}」的照片"
     elif kind == "video":
         desc = "一段你的小视频"
+    elif is_old:
+        desc = "一张你之前拍的照片（存货，不是现在拍的）"
     else:
         desc = "一张你刚拍的自拍照"
     pt = str(peer_text or "").strip()[:120]
@@ -1070,6 +1207,10 @@ def build_photo_caption_instruction(
     scene_line = (
         f"照片的拍摄场景是：{sc}（配文可自然带到你正在做的事，用对话语言口语化转述，"
         "不要输出英文原文）。\n" if sc else "")
+    old_line = (
+        "- 这张是之前拍的：**禁止**说「刚拍的/刚出炉/现在拍的」这类话，"
+        "可以自然带过「翻到一张之前拍的/之前拍的这张」，也不要编造现在的拍摄过程\n"
+        if is_old else "")
     return (
         f"你在聊天软件里扮演{who}（真人口吻）。你刚刚把{desc}发给了对方。\n"
         f"对方刚才的消息：「{pt}」\n"
@@ -1078,6 +1219,7 @@ def build_photo_caption_instruction(
         "- 使用与对方消息相同的语言\n"
         "- 口语化、自然、不超过 30 字，最多 1 个 emoji\n"
         "- 照片已经发出去了：禁止写「等我去拍」「我发不了照片」这类否认或拖延的话\n"
+        + old_line +
         "- 不要复述对方的话，不要加引号\n"
         "只输出配文正文。"
     )
@@ -1170,6 +1312,9 @@ class SelfieProvider:
         album_key: str = "", avoid_path: str = "", base_image: str = "",
         seed: int = -1, lora: str = "", lora_weight: float = 1.0,
         exclude_paths: Any = None,
+        allow_album_fallback: Optional[bool] = None,
+        album_scene: str = "", now_hour: Optional[int] = None,
+        prefer_series: str = "",
     ) -> SelfieResult:
         """出图。``base_image`` 非空且存在 → img2img（openai images.edit / command ``{base}``），
         用于锁住人设一致性；album 后端忽略 prompt/base（只挑现成图）。
@@ -1177,7 +1322,20 @@ class SelfieProvider:
         -1=随机（openai 后端无种子概念，忽略）。
         ``lora``/``lora_weight``（角色 LoRA 部署）：透传给 command 后端 ``{lora}``/
         ``{lora_weight}`` 占位（per-persona 各自的 LoRA 文件）；openai/album 忽略。
-        ``exclude_paths``：会话已发过的相册文件（防复读），album 直选与兜底两路都生效。"""
+        ``exclude_paths``：会话已发过的相册文件（防复读），album 直选与兜底两路都生效。
+
+        P0 图文一致性（2026-07-27）：
+        - ``allow_album_fallback``：本次调用级覆盖 ``self.album_fallback``——
+          **object（物体图）请求必须传 False**：物体图生成失败绝不能拿相册人像顶包
+          （实录事故：要海景/水墨画/抹茶拿铁 → ComfyUI 失败 → 发了张车内自拍配文
+          「刚拍的」→ 客户质问"你真会骗人"）。None=沿用实例配置。
+        - ``album_scene``：相册挑图（直选与兜底两路）的**场景硬要求**（canonical
+          场景类或场景短语，内部归一）：客户/LLM 显式点名场景时挑不到匹配图 →
+          如实失败（交诚实文字），绝不发不相干场景的图。空=不限。
+        - ``now_hour``：软时段过滤（白天照深夜不发；全冲突时放行但结果
+          ``extra["tod_softened"]=True``，配文层须按「之前拍的」口径兜底）。
+        - ``prefer_series``：连续性窗口内优先同系列（同套衣服）。
+        """
         rv = SelfieResult(prompt=str(prompt or ""), provider=self.backend)
         if not self.enabled or self.backend in ("", "disabled"):
             rv.error = "provider_disabled"
@@ -1186,7 +1344,8 @@ class SelfieProvider:
         if self.backend == "album":
             return self._pick_from_album(
                 album_key=album_key, avoid_path=avoid_path,
-                exclude_paths=exclude_paths)
+                exclude_paths=exclude_paths, required_scene=album_scene,
+                now_hour=now_hour, prefer_series=prefer_series)
         if not rv.prompt.strip():
             rv.error = "empty_prompt"
             return rv
@@ -1221,10 +1380,15 @@ class SelfieProvider:
         # 真机场景：176 GPU 被占/ComfyUI 挂/超时 → 与其回落"发不出图找借口"，
         # 不如从人设相册挑一张真图兑现（策展相册的图本就是该人设的"本人照片"）。
         # 相册空/仍失败 → 保留原错误原样返回（外层照旧走文字兜底）。
-        if not rv.ok and self.album_fallback:
+        # P0（2026-07-27）：兜底继承 album_scene/now_hour 硬软过滤——点名场景
+        # 挑不到匹配图时如实失败，不再随机顶包（「要海景发车内自拍」事故收口）。
+        _fb_on = (self.album_fallback if allow_album_fallback is None
+                  else bool(allow_album_fallback))
+        if not rv.ok and _fb_on:
             fb = self._pick_from_album(
                 album_key=album_key, avoid_path=avoid_path,
-                exclude_paths=exclude_paths)
+                exclude_paths=exclude_paths, required_scene=album_scene,
+                now_hour=now_hour, prefer_series=prefer_series)
             if fb.ok:
                 fb.prompt = rv.prompt
                 fb.extra["fallback_from"] = self.backend
@@ -1234,6 +1398,8 @@ class SelfieProvider:
                     "[selfie] 生图后端 %s 失败(%s) → 相册兜底命中",
                     self.backend, rv.error)
                 return fb
+            if fb.error:
+                rv.extra["album_fallback_error"] = fb.error
         return rv
 
     def _album_dirs(self, album_key: str = "") -> list:
@@ -1252,10 +1418,43 @@ class SelfieProvider:
         dirs.append(self.album_dir)
         return dirs
 
+    def _root_has_sub_albums(self) -> bool:
+        """相册根目录下是否存在「含图的人设分册」（多人设分册布局判定）。"""
+        try:
+            for sub in self.album_dir.iterdir():
+                if not sub.is_dir():
+                    continue
+                for p in sub.iterdir():
+                    if p.is_file() and p.suffix.lower() in _ALBUM_IMAGE_EXT:
+                        return True
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+
     def _list_album(self, album_key: str = "") -> list:
-        """列出候选目录里第一个含图片的目录的所有图片路径（排序稳定）；无则空列表。"""
+        """列出候选目录里第一个含图片的目录的所有图片路径（排序稳定）；无则空列表。
+
+        跨人设隔离（P0，2026-07-27）：``album_key`` 非空（人设已知）且根目录下
+        存在**别的人设分册**（多人设布局）时，**根目录候选不参与回落**——多人设
+        部署里根目录散图来源不明，静默发出等于「换脸换人」（发 A 人设时挑到
+        B 人设/遗留素材）。显式共享素材包用 ``default_album_key``（运营 opt-in，
+        2026-07-22 语义保持不变）；单人设平铺布局（根目录放图、无分册）不受影响。
+        """
+        key = "".join(c for c in str(album_key or "") if c.isalnum() or c in ("-", "_"))
+        _root = None
+        try:
+            _root = self.album_dir.resolve()
+        except Exception:  # noqa: BLE001
+            _root = self.album_dir
         for d in self._album_dirs(album_key):
             try:
+                _is_root = False
+                try:
+                    _is_root = (d.resolve() == _root)
+                except Exception:  # noqa: BLE001
+                    _is_root = (d == self.album_dir)
+                if _is_root and key and self._root_has_sub_albums():
+                    continue  # 多人设布局：根目录不做跨人设兜底
                 if d.is_dir():
                     files = sorted(
                         str(p) for p in d.iterdir()
@@ -1269,7 +1468,8 @@ class SelfieProvider:
 
     def _pick_from_album(
         self, *, album_key: str = "", avoid_path: str = "",
-        exclude_paths: Any = None,
+        exclude_paths: Any = None, required_scene: str = "",
+        now_hour: Optional[int] = None, prefer_series: str = "",
     ) -> SelfieResult:
         """从预制相册随机挑一张（尽量避开上一张 ``avoid_path``，避免连发同图）。
 
@@ -1277,14 +1477,52 @@ class SelfieProvider:
         ——分层回落：先排除已发+同系列 → 只排已发 → 全发过用全池（绝不拒发）。
         系列从策展命名解析（``<scene>_<series>_<nn>.jpg``）。face_ref 不参与投放
         （那是锁脸基准照，发出去会和生成图"同脸同构图"穿帮）。
+
+        P0 图文一致性（2026-07-27，元数据来自目录 ``_meta.json`` sidecar +
+        文件名约定，见 ``album_file_meta``）：
+        - ``required_scene``：场景硬要求（短语/场景类均可，内部归一）——挑不到
+          匹配场景的图 → ``ok=False, error=album_scene_mismatch``（如实失败）；
+        - ``now_hour``：时段软过滤（剔 ``tod`` 冲突项；剔空放行 +
+          ``extra["tod_softened"]=True``，配文层须按「之前拍的」口径兜底）；
+        - ``prefer_series``：连续性窗口内优先同系列未发文件（同套衣服再拍一张）。
         """
         files = [f for f in self._list_album(album_key)
                  if Path(f).stem.lower() != "face_ref"]
         if not files:
             return SelfieResult(provider="album", error="album_empty")
-        pool = [f for f in files if f != str(avoid_path or "")] or files
+        meta = load_album_meta(Path(files[0]).parent)
+        fmeta = {f: album_file_meta(f, meta) for f in files}
+        pool = files
+        # 场景硬要求：点名要海边就只出海边；场景未知的图不算匹配（宁缺勿错）。
+        if str(required_scene or "").strip():
+            from src.companion.persona_media import scene_class_of
+            want = scene_class_of(required_scene) or str(
+                required_scene).strip().lower()
+            pool = [f for f in pool if fmeta[f]["scene"] == want]
+            if not pool:
+                return SelfieResult(
+                    provider="album", error="album_scene_mismatch",
+                    extra={"required_scene": want, "album_size": len(files)})
+        # 时段软过滤：白天照深夜不发（有标注才判）；剔空放行但标记 softened。
+        tod_softened = False
+        if now_hour is not None:
+            from src.companion.persona_media import tod_conflicts_with_hour
+            lit = [f for f in pool
+                   if not tod_conflicts_with_hour(fmeta[f]["tod"], now_hour)]
+            if lit:
+                pool = lit
+            else:
+                tod_softened = True
+        pool = [f for f in pool if f != str(avoid_path or "")] or pool
         ex = {str(p) for p in (exclude_paths or ())}
         ex_names = {Path(p).name for p in ex}
+        # 服装连续性：短窗口内「再拍一张」优先同系列未发文件。
+        if prefer_series:
+            same = [f for f in pool
+                    if fmeta[f]["series"] == prefer_series
+                    and Path(f).name not in ex_names]
+            if same:
+                pool = same
         if ex:
             sent_series = {album_series_of_path(p) for p in ex}
             sent_series.discard("")
@@ -1295,6 +1533,7 @@ class SelfieProvider:
             unsent = [f for f in pool if Path(f).name not in ex_names]
             pool = fresh or unsent or pool
         pick = random.choice(pool)
+        _pm = fmeta.get(pick) or album_file_meta(pick, meta)
         # 绝对路径（2026-07-22 真机复盘）：album_dir 常为相对路径（相对引擎 cwd），
         # 相对路径经编排器发给 Node sidecar（cwd 不同）时 readFileSync ENOENT →
         # WhatsApp 相册图 100% 发送失败。resolve 一处，所有消费方受益。
@@ -1304,7 +1543,10 @@ class SelfieProvider:
             pass
         return SelfieResult(ok=True, image_path=pick, provider="album",
                             extra={"album_size": len(files),
-                                   "series": album_series_of_path(pick)})
+                                   "series": _pm["series"],
+                                   "scene_class": _pm["scene"],
+                                   "tod": _pm["tod"],
+                                   "tod_softened": tod_softened})
 
     def reference_image(self, album_key: str = "") -> str:
         """挑一张相册图当"基础图/锁脸参考"（openai/command 后端 img2img 用）；无相册回空串。
@@ -1467,6 +1709,9 @@ def reset_selfie_provider() -> None:
 __all__ = [
     "SELFIE_FEATURE",
     "detect_selfie_request",
+    "detect_media_complaint",
+    "extract_requested_scene",
+    "wants_same_scene",
     "build_selfie_prompt",
     "selfie_variety",
     "resolve_variety_salt",
@@ -1478,6 +1723,10 @@ __all__ = [
     "build_scene_choice_instruction",
     "parse_scene_choice",
     "build_photo_caption_instruction",
+    "album_scene_class_of_path",
+    "album_series_of_path",
+    "load_album_meta",
+    "album_file_meta",
     "decide_selfie",
     "SelfieResult",
     "SelfieProvider",

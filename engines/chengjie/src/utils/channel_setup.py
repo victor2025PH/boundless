@@ -44,6 +44,12 @@ class Channel:
     fields: List[Field] = field(default_factory=list)
     login_required: bool = False   # 填完后是否还需扫码/登录（交棒现有登录流程）
     intro: str = ""
+    # 必填字段全部就绪时顺带置 true 的 config 路径（声明式桥接）：修「凭据填了但
+    # 登录开关没人开」的断层——如 Telegram 填齐 api_id/api_hash 后若不开
+    # platform_login.telegram.protocol_enabled + orchestrator_enabled，接入弹窗的
+    # 「协议多开」永远灰着、扫上的号也不会被编排器拉上线，而这两个键没有别的
+    # 产品入口会写。语义：只把「从未设置」的键补成 true；显式 false 尊重不动。
+    enable_on_ready: List[str] = field(default_factory=list)
 
 
 CHANNELS: List[Channel] = [
@@ -53,6 +59,10 @@ CHANNELS: List[Channel] = [
         enable_key="telegram.enabled",
         login_required=True,
         intro="填入 API 凭证后，回到账号页扫码 / 验证码登录账号。",
+        enable_on_ready=[
+            "platform_login.telegram.protocol_enabled",
+            "platform_login.orchestrator_enabled",
+        ],
         fields=[
             Field("telegram.api_id", "API ID", type="int",
                   help="https://my.telegram.org → API development tools 获取"),
@@ -174,14 +184,41 @@ def _set_dotted(target: Dict[str, Any], dotted: str, value: Any) -> None:
     cur[parts[-1]] = value
 
 
+def _get_dotted(source: Any, dotted: str) -> Any:
+    cur = source
+    for p in dotted.split("."):
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(p)
+    return cur
+
+
+def _required_ready(
+    ch: Channel, overlay: Dict[str, Any], base_config: Optional[Dict[str, Any]],
+) -> bool:
+    """该渠道所有必填字段是否已就绪（overlay 优先，缺的回看运行 config）。"""
+    for f in ch.fields:
+        if not f.required:
+            continue
+        val = _get_dotted(overlay, f.key)
+        if _is_placeholder(val) and base_config is not None:
+            val = _get_dotted(base_config, f.key)
+        if _is_placeholder(val):
+            return False
+    return True
+
+
 def apply_channel_values(
     overlay: Dict[str, Any], channel: str, values: Dict[str, Any],
+    *, base_config: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, str]:
     """把 values 中的**已声明字段**写入 overlay（就地），并自动置 enabled=true。
 
     - 只认 channel 规格里的 field.key（其它键忽略，防注入任意配置）；
     - 空值跳过（不覆盖已有）；类型按 field.type 强转，转换失败即报错；
-    - 写入任一字段后顺带把该渠道 enable_key 设为 true。
+    - 写入任一字段后顺带把该渠道 enable_key 设为 true；
+    - 必填字段全部就绪（overlay 优先，缺的回看 ``base_config``）时，把渠道声明的
+      ``enable_on_ready`` 路径补成 true——显式 false 视为管理员手工关闭，不扳回。
     返回 (成功?, 说明)。
     """
     ch = get_channel(channel)
@@ -207,4 +244,13 @@ def apply_channel_values(
     # web 等无字段渠道：仅开启
     if wrote or not ch.fields:
         _set_dotted(overlay, ch.enable_key, True)
+    # 必填凭据齐全 → 顺带打开声明的配套开关（enable_on_ready 声明式桥接）
+    if ch.enable_on_ready and _required_ready(ch, overlay, base_config):
+        for dotted in ch.enable_on_ready:
+            cur = _get_dotted(overlay, dotted)
+            if cur is None and base_config is not None:
+                cur = _get_dotted(base_config, dotted)
+            if cur is False:  # 显式关过 → 尊重管理员决定
+                continue
+            _set_dotted(overlay, dotted, True)
     return True, "ok"

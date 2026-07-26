@@ -694,6 +694,48 @@ ipcMain.handle("desktop:persona-unbind", async (_e, { chat_id }) => {
   }
 });
 
+// 会话级人设覆写（2026-07-26 方案 A）:读生效全景 / 换绑 / 解除 / 账号级整号换绑。
+// 壳只做薄代理——语义(开关闸/权限/审计)全在后端;后端旧版本时前端组件自动降级 legacy UI。
+ipcMain.handle("desktop:persona-effective", async (_e, args) => {
+  try {
+    const a = args || {};
+    return await backendGet("/api/persona/effective", {
+      conversation_id: a.conversation_id || "",
+      platform: a.platform || "", account_id: a.account_id || "",
+      chat_key: a.chat_key || "",
+    });
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+});
+
+ipcMain.handle("desktop:persona-bind-conv", async (_e, { conversation_id, profile_id }) => {
+  try {
+    return await backendPost("/api/persona/bind",
+      { scope: "conversation", conversation_id, profile_id });
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+});
+
+ipcMain.handle("desktop:persona-unbind-conv", async (_e, { conversation_id }) => {
+  try {
+    return await backendPost("/api/persona/unbind",
+      { scope: "conversation", conversation_id });
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+});
+
+ipcMain.handle("desktop:persona-account-set", async (_e, { platform, account_id, profile_id }) => {
+  try {
+    return await backendPost("/api/persona/account-persona",
+      { platform, account_id, profile_id: profile_id || "" });
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+});
+
 ipcMain.handle("desktop:thread", async (_e, { platform, account_id, chat_key }) => {
   try {
     return await backendGet("/api/unified-inbox/thread", { platform, account_id, chat_key, limit: 100 });

@@ -43,6 +43,11 @@ _METRICS: Dict[str, Any] = {
     # 失败原因分布（与 voice_autosend.fallback_counts 同口径，供看板读 Top 原因）
     "fallback_reasons": {},
     "last_failure_detail": "",
+    # 收图后质疑信号（P0 一致性观测）：客户质疑「重复/不像/假图」计数 + 末样本
+    "complaints": 0, "last_complaint": "",
+    # P1 分维度：质疑按类型/人设分布 + 点名场景需求（demand）与未兑现（unmet）
+    "complaints_by_kind": {}, "complaints_by_persona": {},
+    "scene_demand": {}, "scene_unmet": {},
 }
 _METRICS_LOCK = threading.Lock()
 
@@ -106,6 +111,52 @@ def record_image_fallback(reason: str, *, detail: str = "") -> None:
         _METRICS["last_ts"] = time.time()
 
 
+def record_media_complaint(
+    detail: str = "", *, kind: str = "", persona_id: str = "",
+) -> None:
+    """「图被客户质疑」信号计数（P0 观测补盲，2026-07-27；P1 分维度）。
+
+    客户在收图后短窗口内发出「骗人/假的/网图/怎么又是这张/衣服怎么变了」类
+    质疑 → 这里+1 并留样本——线上图文一致性劣化的**第一现场信号**（此前只能
+    人工翻聊天记录发现）。经 autosend-status / metrics 出口供看板读。
+    ``kind``（repeat/not_you/fake，缺省从 detail 的 ``kind:`` 前缀解析）与
+    ``persona_id`` 分维计数（P1 看板：哪个人设、哪类质疑最多）。
+    """
+    k = str(kind or "").strip()
+    if not k and ":" in str(detail or ""):
+        k = str(detail).split(":", 1)[0].strip()
+    with _METRICS_LOCK:
+        _METRICS["complaints"] = int(_METRICS.get("complaints", 0) or 0) + 1
+        if k:
+            _bump_counter(_METRICS.setdefault("complaints_by_kind", {}), k)
+        if persona_id:
+            _bump_counter(
+                _METRICS.setdefault("complaints_by_persona", {}),
+                str(persona_id)[:40])
+        if detail:
+            _METRICS["last_complaint"] = str(detail)[:120]
+        _METRICS["last_ts"] = time.time()
+
+
+def record_scene_request(scene: str, *, unmet: bool) -> None:
+    """「点名场景」需求计数（P1 补货闭环的需求侧）。
+
+    客户/承诺点名了具体场景（硬要求）→ 按归一场景类记需求；最终没能出
+    该场景的图（相册无匹配+生成失败/未启用）→ 追记 unmet——「客户要了但
+    库里没有」的真实需求排序，直接驱动相册补货清单（与库存缺口报告 join）。
+    """
+    try:
+        from src.companion.persona_media import scene_class_of
+        cls = scene_class_of(scene) or "other"
+    except Exception:
+        cls = "other"
+    with _METRICS_LOCK:
+        _bump_counter(_METRICS.setdefault("scene_demand", {}), cls)
+        if unmet:
+            _bump_counter(_METRICS.setdefault("scene_unmet", {}), cls)
+        _METRICS["last_ts"] = time.time()
+
+
 def record_promise_event(name: str) -> None:
     """出站媒体承诺守卫事件计数（detected/fulfilled/retracted/offer_accept…）。
 
@@ -126,9 +177,11 @@ def record_promise_event(name: str) -> None:
 def metrics_snapshot() -> Dict[str, Any]:
     with _METRICS_LOCK:
         snap = dict(_METRICS)
-        snap["fallback_reasons"] = dict(_METRICS.get("fallback_reasons") or {})
-        snap["gen_inflight"] = image_gen_inflight()
-        return snap
+        for k in ("fallback_reasons", "complaints_by_kind",
+                  "complaints_by_persona", "scene_demand", "scene_unmet"):
+            snap[k] = dict(_METRICS.get(k) or {})
+    snap["gen_inflight"] = image_gen_inflight()
+    return snap
 
 
 def resolve_image_autosend_cfg(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -201,6 +254,38 @@ def _album_key_for(persona_id: str) -> str:
     return str(p or "").strip()
 
 
+# 文件系统相册「服装连续性」账本（P0）：conv_key → (series, ts)。
+# 注册相册（DB）走 persona_media_store.record_send 持久账本；文件系统相册无 DB，
+# 用进程内 bounded LRU 兜底——重启丢失可接受（连续窗本就只有 ~90min）。
+_ALBUM_SERIES: "OrderedDict[str, Tuple[str, float]]" = OrderedDict()
+_ALBUM_SERIES_CAP = 4000
+_ALBUM_SERIES_LOCK = threading.Lock()
+
+
+def _album_series_note(conv_key: str, series: str) -> None:
+    if not conv_key or not series:
+        return
+    with _ALBUM_SERIES_LOCK:
+        _ALBUM_SERIES[str(conv_key)] = (str(series), time.time())
+        _ALBUM_SERIES.move_to_end(str(conv_key))
+        while len(_ALBUM_SERIES) > _ALBUM_SERIES_CAP:
+            _ALBUM_SERIES.popitem(last=False)
+
+
+def _album_series_recent(conv_key: str, *, within_minutes: float) -> str:
+    """连续窗内本会话最近一次相册出图的 series（过窗/无记录返 ""）。"""
+    if not conv_key or within_minutes <= 0:
+        return ""
+    with _ALBUM_SERIES_LOCK:
+        ent = _ALBUM_SERIES.get(str(conv_key))
+    if not ent:
+        return ""
+    series, ts = ent
+    if (time.time() - float(ts)) > within_minutes * 60.0:
+        return ""
+    return str(series or "")
+
+
 async def stage_image_file(
     config: Dict[str, Any],
     platform: str,
@@ -209,12 +294,26 @@ async def stage_image_file(
     directive: Dict[str, Any],
     *,
     llm_refine: Optional[Callable[[], Awaitable[str]]] = None,
-) -> Optional[Tuple[str, str, str]]:
-    """按 ``directive`` 出图并落到出站媒体目录，返回 ``(本地路径, /static URL, kind)``；失败/不满足返回 None。
+    conv_key: str = "",
+) -> Optional[Tuple[str, str, str, Dict[str, Any]]]:
+    """按 ``directive`` 出图并落到出站媒体目录，返回 ``(本地路径, /static URL, kind,
+    info)``；失败/不满足返回 None。
 
     调用方据此 ``orch.send_media(media_path=local, media_url=url, media_type="image")``。
     - selfie：``album`` 后端挑现成图；``openai``/``command`` 后端 build_selfie_prompt + 相册基础图 img2img。
     - object：仅真出图后端（非 disabled/album）；可选 ``llm_refine`` 把 prompt 提炼得更准。
+
+    P0 图文一致性（2026-07-27）：
+    - ``info``＝真实来源记账 ``{"provider", "fallback_from", "series",
+      "scene_class", "tod_softened"}``——相册兜底冒充「生成」曾把观测口径
+      全部带偏（配文按"刚拍"写、相册旧照被再入册），调用方按 info 对齐配文
+      口径（**provider=album → 旧照口径**；``fallback_from``=失败的主后端名，
+      非空即「相册是生成失败的兜底」）与计数。
+    - ``directive["scene_strict"]``＝场景硬要求（客户/LLM/媒体日志显式点名）：
+      相册兜底必须场景类匹配，挑不到 → 如实失败。
+    - **object 绝不回落相册**（要海景发人像自拍=实录「你真会骗人」事故）。
+    - ``conv_key`` 非空＝启用文件系统相册的**服装连续性**（同会话连续窗内偏好
+      同一 series 子目录——十分钟前海边连衣裙、现在居家睡衣的「瞬移换装」收口）。
     """
     scfg = resolve_image_autosend_cfg(config)
     try:
@@ -249,11 +348,31 @@ async def stage_image_file(
                 logger.info("[image_autosend] daily_global_cap=%d 已达上限，回落不发", _cap)
                 record_image_fallback("global_cap")
                 return None
+    # 一致性护栏参数（P0）：场景硬要求 + 当前时段 + 服装连续性（相册两路共用）。
+    cc = resolve_consistency_cfg(scfg)
+    _scene_req = ""
+    if bool((directive or {}).get("scene_strict")):
+        _scene_req = str((directive or {}).get("scene") or "").strip()
+    _now_hour: Optional[int] = cc["now_hour"]
+    _prefer_series = str((directive or {}).get("prefer_series") or "")
+    if (not _prefer_series and conv_key
+            and float(cc["continuity_minutes"] or 0) > 0):
+        _prefer_series = _album_series_recent(
+            conv_key, within_minutes=float(cc["continuity_minutes"]))
+    _outfit = ""  # 生成链今日衣着（P1）；相册/物体路径恒空
+
+    def _scene_outcome(met: bool) -> None:
+        """点名场景的最终结局计数（P1 补货需求侧；无点名=零开销）。"""
+        if _scene_req:
+            record_scene_request(_scene_req, unmet=(not met))
+
     res = None
     try:
         if kind == KIND_SELFIE:
             if backend == "album":
-                res = await provider.generate("", album_key=album_key)
+                res = await provider.generate(
+                    "", album_key=album_key, album_scene=_scene_req,
+                    now_hour=_now_hour, prefer_series=_prefer_series)
             else:
                 persona = _resolve_persona(persona_id)
                 # 场景：directive 可显式指定（proactive 文案-场景对齐用，Phase17）；
@@ -268,20 +387,36 @@ async def stage_image_file(
                         fallback_scenes=scfg.get("scene_rotation"),
                         salt=_auto_photo_count(persona_id),
                     )
+                # 今日衣着状态（P1，与 A 线/聊天注入同 key 同函数）：连续窗内
+                # 刚发过照片 → 跟随其系列；否则今日确定性衣着。发出成功后以
+                # slug 记连续性账本（下条相册挑图也优先同系列——跨链跟装）。
+                _outfit = ""
+                try:
+                    from src.companion.outfit_state import current_outfit
+                    _outfit = current_outfit(
+                        persona, scfg,
+                        persona_key=(persona_id or album_key),
+                        recent_series=_prefer_series)["outfit"]
+                except Exception:
+                    _outfit = ""
                 # 多样性 salt（治头位置/表情千篇一律，默认关，overlay opt-in）：开时
                 # 每次发送取随机 salt → prompt 姿态/表情/取景 + 底噪一起变，同一人不同瞬间。
                 _vsalt = resolve_variety_salt(scfg)
                 # per-persona 角色 LoRA spec（file/weight/trigger）：多人设各自 LoRA。
                 _lora = resolve_persona_lora(persona, scfg)
+                # 时段光线兜底（P1-2）：轮换场景无时间词时补当前时段光线（凌晨
+                # 不出正午烈日照）；只进生图 prompt，scene 原文留给场景记录。
+                from src.ai.companion_selfie import ensure_time_of_day
                 # 人设级 appearance 优先（多人设各有长相），config 全局 appearance 兜底。
                 prompt = build_selfie_prompt(
                     persona,
-                    scene_hint=scene,
+                    scene_hint=ensure_time_of_day(scene),
                     style=str(scfg.get("style") or ""),
                     default_appearance=str(scfg.get("appearance") or ""),
                     content_rating=str(scfg.get("content_rating") or ""),
                     variety_salt=_vsalt,
                     lora_trigger=_lora["trigger"],
+                    outfit=_outfit,
                 )
                 base = ""
                 try:
@@ -307,7 +442,9 @@ async def stage_image_file(
                         provider, prompt, persona=persona, root_config=config,
                         gate_cfg=resolve_gate_cfg(scfg), seed=_seed,
                         album_key=album_key, base_image=base,
-                        lora=_lora["file"], lora_weight=_lora["weight"])
+                        lora=_lora["file"], lora_weight=_lora["weight"],
+                        album_scene=_scene_req, now_hour=_now_hour,
+                        prefer_series=_prefer_series)
                     # 像素级换脸（可选，默认关）：把 face_ref 的脸贴到生成图上——同一张脸
                     # 一致性远强于 PuLID。已通过体检的生成图才换；换完补一次体检，
                     # 不过则弃换脸结果、保留原生成图（换脸失败绝不劣化已合格的图）。
@@ -347,6 +484,7 @@ async def stage_image_file(
         elif kind == KIND_OBJECT:
             if backend == "album":
                 # 相册无法凭空生成任意物体图 → 回落（不发图）。
+                _scene_outcome(False)
                 return None
             prompt = str((directive or {}).get("prompt") or "")
             if bool(scfg.get("contextual_images_llm_prompt", False)) and callable(llm_refine):
@@ -367,37 +505,66 @@ async def stage_image_file(
                 _subject = prompt.strip()[:80]
             logger.info("[image_autosend] object prompt=%r subject=%r", prompt, _subject)
             # 物体图走 text2img（不带人设的脸）+ 主体匹配体检（要蛋糕别发面条）。
+            # P0：object 生成失败**绝不回落相册人像**（要海景/抹茶拿铁发车内自拍
+            # =实录「你真会骗人」事故）——如实失败，调用方走承诺撤回/诚实文字。
             from src.ai.image_gate import generate_with_gate, resolve_gate_cfg
             _image_gen_begin()
             try:
                 res = await generate_with_gate(
                     provider, prompt, root_config=config,
                     gate_cfg=resolve_gate_cfg(scfg), seed=-1,
-                    kind="object", subject=_subject)
+                    kind="object", subject=_subject,
+                    allow_album_fallback=False)
             finally:
                 _image_gen_end()
         else:
             return None
     except Exception:
         logger.debug("[image_autosend] 出图异常", exc_info=True)
+        _scene_outcome(False)
         return None
     if not (res is not None and getattr(res, "ok", False) and getattr(res, "image_path", "")):
+        _scene_outcome(False)
         return None
     try:
         with open(res.image_path, "rb") as fh:
             data = fh.read()
     except Exception:
         logger.debug("[image_autosend] 读取出图文件失败", exc_info=True)
+        _scene_outcome(False)
         return None
     if not data:
+        _scene_outcome(False)
         return None
+    _extra = dict(getattr(res, "extra", {}) or {})
+    info: Dict[str, Any] = {
+        "provider": str(getattr(res, "provider", "") or "").lower(),
+        "fallback_from": str(_extra.get("fallback_from") or ""),
+        "series": str(_extra.get("series") or ""),
+        "scene_class": str(_extra.get("scene_class") or ""),
+        "tod_softened": bool(_extra.get("tod_softened", False)),
+    }
+    # 生成图的「系列」＝本次注入的今日衣着 slug（P1）：与相册策展系列同一命名
+    # 空间，连续窗内下条（相册挑图/再生成）都能跟住这身衣服。
+    if kind == KIND_SELFIE and not info["series"] and info["provider"] != "album":
+        try:
+            from src.companion.outfit_state import outfit_slug
+            info["series"] = outfit_slug(_outfit)
+        except Exception:
+            pass
+    # 服装连续性账本：出图记住本会话用的 series（相册系列/生成衣着），
+    # 连续窗内下次优先同系列。
+    if conv_key and info["series"]:
+        _album_series_note(conv_key, info["series"])
     try:
         from src.integrations.protocol_bridge import save_outbound_media
         local, url, _mt = save_outbound_media(
             platform, account_id, os.path.basename(res.image_path), data)
-        return (local, url, kind)
+        _scene_outcome(True)
+        return (local, url, kind, info)
     except Exception:
         logger.debug("[image_autosend] 落出站媒体失败", exc_info=True)
+        _scene_outcome(False)
         return None
 
 
@@ -423,10 +590,37 @@ def note_media_sent(conv_key: str, media_id: str) -> None:
             _LAST_SENT.popitem(last=False)
 
 
+def resolve_consistency_cfg(scfg: Dict[str, Any]) -> Dict[str, Any]:
+    """``companion.selfie.consistency`` 一致性护栏配置（P0，默认开）。
+
+    与 media_promise_guard 同族的**出站正确性守卫**：修「发的图和说的话/时间/
+    衣服对不上」——enabled=false 一键回旧行为。默认值集中在这里（config 可覆盖）：
+    ``resend_cooldown_hours``（同图同会话重发冷却）/``continuity_minutes``
+    （同会话服装连续窗）/时段过滤随 enabled。
+    """
+    c = scfg.get("consistency") if isinstance(scfg.get("consistency"), dict) else {}
+    try:
+        cooldown = float(c.get("resend_cooldown_hours", 24) or 0)
+    except (TypeError, ValueError):
+        cooldown = 24.0
+    try:
+        continuity = float(c.get("continuity_minutes", 90) or 0)
+    except (TypeError, ValueError):
+        continuity = 90.0
+    enabled = bool(c.get("enabled", True))
+    return {
+        "enabled": enabled,
+        "now_hour": (time.localtime().tm_hour if enabled else None),
+        "resend_cooldown_hours": (cooldown if enabled else 0),
+        "continuity_minutes": (continuity if enabled else 0),
+    }
+
+
 def pick_registered_media(
     config: Dict[str, Any], persona_id: str, peer_text: str, *,
     avoid_id: str = "", bond_level: Optional[int] = None,
     force_generic: bool = False, conv_key: str = "",
+    required_scene: str = "",
 ) -> Optional[Dict[str, Any]]:
     """查该人设注册相册：关键词命中，或（是泛化「要照片/自拍」请求时）通用池。命中返回行 dict。
 
@@ -436,13 +630,16 @@ def pick_registered_media(
     ``force_generic=True``＝调用方已从别处判定这是一次要图（承诺兑现/offer-接受桥），
     peer_text 没有关键词也放开通用池。
     ``conv_key`` 非空＝启用防复读记忆（同会话不重发同一张/同一系列，见 select_media）。
+    ``required_scene``（P0 一致性）＝显式点名场景（客户原话/承诺原文抽取）：
+    通用池只出场景类匹配条目，挑不到 → None（交生成/诚实文字）。
+    另自动带时段过滤 + 重发冷却 + 服装连续窗（``companion.selfie.consistency``）。
     """
     scfg = resolve_image_autosend_cfg(config)
     if not scfg.get("enabled", False):
         return None
     try:
         from src.ai.companion_selfie import detect_selfie_request
-        from src.companion.persona_media import pick_media
+        from src.companion.persona_media import pick_media, scene_class_of
         from src.companion.persona_media_store import get_persona_media_store
     except Exception:
         return None
@@ -455,10 +652,26 @@ def pick_registered_media(
         _resend_days = float(scfg.get("resend_after_days", 90) or 0)
     except (TypeError, ValueError):
         _resend_days = 90.0
+    cc = resolve_consistency_cfg(scfg)
+    # 场景硬要求：调用方显式给的优先，否则从客户原话提取点名场景。
+    _scene_cls = ""
+    if cc["enabled"]:
+        _req = str(required_scene or "").strip()
+        if not _req:
+            try:
+                from src.ai.companion_selfie import extract_requested_scene
+                _req = extract_requested_scene(str(peer_text or ""))
+            except Exception:
+                _req = ""
+        if _req:
+            _scene_cls = scene_class_of(_req) or _req.strip().lower()
     return pick_media(
         store, str(persona_id or ""), str(peer_text or ""),
         generic_ok=generic_ok, avoid_id=avoid_id, bond_level=bond_level,
-        conv_key=conv_key, resend_after_days=_resend_days)
+        conv_key=conv_key, resend_after_days=_resend_days,
+        now_hour=cc["now_hour"], required_scene_class=_scene_cls,
+        resend_cooldown_hours=cc["resend_cooldown_hours"],
+        continuity_minutes=cc["continuity_minutes"])
 
 
 def media_caption(row: Optional[Dict[str, Any]], lang: str = "", *, fallback: str = "") -> str:
@@ -511,19 +724,49 @@ def _should_grow_album(
         return False
 
 
-async def _llm_caption_safe(fn, *, kind: str, subject: str = "", scene: str = "") -> str:
+def _fixed_caption(scfg: Dict[str, Any], kind: str, freshness: str,
+                   lang: str = "") -> str:
+    """固定配文兜底（运营/LLM 配文都缺时），按图片来源新旧取**诚实口径**（P0）。
+
+    ``freshness="old"``（相册存货/注册相册）→ ``caption_album`` 配置 → 双语
+    旧照文案池——绝不回落全局 ``caption``（那是「刚拍」口径，配旧照是实录
+    穿帮点）；``fresh``（刚生成）→ 原有 ``caption``/``contextual_caption``。
+    video 无旧照文案池（措辞是"照片"），只认 ``caption_album`` 配置。
+    """
+    if kind == KIND_OBJECT:
+        return str(scfg.get("contextual_caption") or "")
+    if str(freshness or "").strip().lower() == "old":
+        cap = str(scfg.get("caption_album") or "")
+        if cap or kind == "video":
+            return cap
+        try:
+            from src.ai.companion_selfie import selfie_stage_text
+            _lg = "zh" if str(lang or "").lower() == "yue" else str(lang or "")
+            return selfie_stage_text("caption_album", _lg)
+        except Exception:
+            return ""
+    return str(scfg.get("caption") or "")
+
+
+async def _llm_caption_safe(fn, *, kind: str, subject: str = "", scene: str = "",
+                            freshness: str = "fresh") -> str:
     """调 LLM 写照片配文（知道图已发出的上下文配文）；失败/超长回空串让调用方回落。
 
     ``scene``（Phase18）＝照片实际拍摄场景，透传给配文指令（图文叙事一体）。
-    回调旧签名 ``fn(kind, subject)`` 兼容（TypeError 回退），防漏改的调用方拿不到配文。
+    ``freshness``（P0 一致性）＝``old`` 时配文指令按「之前拍的存货」口径写
+    （禁止「刚拍」谎言）；``fresh``=刚生成的图（可说刚拍）。
+    回调旧签名 ``fn(kind, subject[, scene])`` 兼容（TypeError 回退），防漏改的调用方拿不到配文。
     """
     if fn is None:
         return ""
     try:
         try:
-            raw = await fn(kind, subject, scene)
+            raw = await fn(kind, subject, scene, freshness)
         except TypeError:
-            raw = await fn(kind, subject)
+            try:
+                raw = await fn(kind, subject, scene)
+            except TypeError:
+                raw = await fn(kind, subject)
         s = str(raw or "").strip().strip('"').strip("“”'").strip()
         if not s:
             return ""
@@ -588,6 +831,7 @@ async def run_autosend_image(
     llm_caption: Optional[Callable[[str, str], Awaitable[str]]] = None,
     conv_key: str = "", lang: str = "",
     assume_intent: str = "",
+    assume_scene: str = "",
     directive_override: Optional[Dict[str, str]] = None,
     requested_scene: str = "",
     on_sent: Optional[Callable[[str, str], None]] = None,
@@ -601,25 +845,29 @@ async def run_autosend_image(
     （文图协同）；缺省/失败回落固定配文 → ai_text。
     ``assume_intent="selfie"``＝调用方已判定要发自拍（出站文本承诺了照片的「兑现」路径），
     跳过 peer_text 意图判定直接走自拍链（相册通用池/生成；预算与关系闸门照常）。
+    ``assume_scene``（P0 一致性）＝承诺兑现路径的**承诺内容场景**（从 AI 承诺
+    原文抽取，如「发你张海景」→ beach）：兑现必须贴承诺场景（相册硬匹配/生成
+    带场景），绝不拿随机人像顶包——「承诺海景兑现成车内自拍」实录事故收口。
     ``directive_override={"kind","scene"}``＝主 LLM 的发图指令（[PHOTO …] 标记，
     2026-07-14 决策权上移）：跳过关键词判定与注册相册，直接按 LLM 给的类型+对话内
     场景生成（scene 直通 ``stage_image_file``；预算/vision_gate 闸门照常）。
     ``requested_scene``（Phase20）＝调用方解析出的期望场景（如「跟上次一样的」
     取自已发媒体日志），优先于场景轮换（低于 directive_override/客户显式点名）。
-    ``on_sent(note, scene)``（Phase20，可选同步回调）＝真发出后通知调用方
-    「发了什么/什么场景」——B 线借此把媒体记进与 A 线共用的 ``_media_sent_log``。
+    ``on_sent(note, scene, series)``（Phase20，可选同步回调）＝真发出后通知调用方
+    「发了什么/什么场景/什么衣着系列」——B 线借此把媒体记进与 A 线共用的
+    ``_media_sent_log``（series 供 P1 跨链衣着连续窗）。
     """
     scfg = resolve_image_autosend_cfg(config)
     if not scfg.get("enabled", False):
         return False
     ck = conv_key or f"{platform}:{account_id}:{chat_key}"
 
-    def _notify_sent(note: str, scene: str) -> None:
+    def _notify_sent(note: str, scene: str, series: str = "") -> None:
         """发出成功后的调用方通知（软失败：日志记录绝不影响已完成的发送）。"""
         if on_sent is None:
             return
         try:
-            on_sent(str(note or ""), str(scene or ""))
+            on_sent(str(note or ""), str(scene or ""), str(series or ""))
         except Exception:
             logger.debug("[image_autosend] on_sent 回调异常（忽略）", exc_info=True)
 
@@ -637,7 +885,10 @@ async def run_autosend_image(
             except Exception:
                 pass
         _d = {"kind": str(directive_override.get("kind")),
-              "subject": _scene, "scene": _scene}
+              "subject": _scene, "scene": _scene,
+              # LLM 亲口点名的场景＝硬要求：相册兜底必须同场景类，挑不到如实失败
+              # （正文"图书馆自习"配车内自拍=打脸）。
+              "scene_strict": bool(_scene.strip())}
         if _d["kind"] == KIND_OBJECT:
             # object 链吃 prompt 字段；LLM 已给英文主体 → 直接组生图 prompt，
             # 无需 llm_refine 二次调用（那是给正则抽中文主体兜底的）。
@@ -645,23 +896,30 @@ async def run_autosend_image(
             _d["prompt"] = build_object_image_prompt(
                 _scene, style=str(scfg.get("style") or ""))
         staged = await stage_image_file(
-            config, platform, account_id, persona_id, _d, llm_refine=None)
+            config, platform, account_id, persona_id, _d, llm_refine=None,
+            conv_key=ck)
         if not staged:
             record_image_fallback("directive_stage_failed")
             return False
-        local, url, kind = staged
+        local, url, kind, sinfo = staged
+        # provider=album＝相册来源（后端直选或生成失败兜底两路都是；fallback_from
+        # 记的是**失败的主后端名**，不能用它判相册）。
+        _from_album = (sinfo.get("provider") == "album")
+        _fresh = "old" if _from_album else "fresh"
         # 配文优先级与关键词链相反：**LLM 正文优先**——标记和正文出自同一次思考
         # （正文"刚在图书馆自习完啦"+图书馆场景图），天然文图一致，无需再调 LLM 配文。
-        cap = str(ai_text or "").strip()
+        # 例外（P0 一致性）：LLM 指令期待现拍，但实际回落了相册旧图 → 正文的
+        # 「刚拍」措辞会撒谎 → 弃正文改走 freshness 感知配文。
+        cap = str(ai_text or "").strip() if _fresh == "fresh" else ""
         cap_src = "draft" if cap else ""
         if not cap:
             cap = await _llm_caption_safe(
                 llm_caption, kind=kind, subject=_d["subject"],
-                scene=(_d["scene"] if kind == KIND_SELFIE else ""))
+                scene=(_d["scene"] if kind == KIND_SELFIE else ""),
+                freshness=_fresh)
             cap_src = "llm" if cap else ""
         if not cap:
-            cap = (str(scfg.get("contextual_caption") or "")
-                   if kind == KIND_OBJECT else str(scfg.get("caption") or ""))
+            cap = _fixed_caption(scfg, kind, _fresh, lang)
             cap_src = "fixed" if cap else ""
         try:
             ok = bool(await send_fn(local, url, "image", cap,
@@ -672,12 +930,16 @@ async def run_autosend_image(
         if ok:
             if cap_src:
                 record_caption(cap_src, cap)
-            record_image_sent(kind, source="llm_directive")
+            record_image_sent(kind, source=(
+                "llm_directive_album" if _fresh == "old" else "llm_directive"))
             _notify_sent("[图片] " + (cap or ""),
-                         _d["scene"] if kind == KIND_SELFIE else "")
+                         str(sinfo.get("scene_class") or (
+                             _d["scene"] if kind == KIND_SELFIE else "")),
+                         str(sinfo.get("series") or ""))
             logger.info(
-                "[autosend image] 已发图(LLM指令) platform=%s acct=%s kind=%s scene=%r",
-                platform, account_id, kind, _d["scene"][:120])
+                "[autosend image] 已发图(LLM指令) platform=%s acct=%s kind=%s scene=%r src=%s",
+                platform, account_id, kind, _d["scene"][:120],
+                sinfo.get("provider") or "?")
         else:
             record_image_fallback("directive_deliver_failed")
         return ok
@@ -696,9 +958,14 @@ async def run_autosend_image(
 
     # 1) 注册相册优先（DB）——关键词命中或泛化要图的通用池；图/视频均可，秒发零成本。
     # conv_key 启用防复读记忆：同会话不重发同一张/同一系列（分层回落见 select_media）。
+    # required_scene（P0 一致性）：承诺兑现（assume_scene）/「跟上次一样的」
+    # （requested_scene）时，注册相册只允许出**场景匹配**的条目——没有匹配条目
+    # 就放弃相册走生成链，绝不拿随机人像顶包承诺场景。
+    _need_scene = str(assume_scene or requested_scene or "").strip()
     row = pick_registered_media(
         config, persona_id, peer_text, avoid_id=last_media_sent(ck),
-        force_generic=bool(assume_intent), conv_key=ck)
+        force_generic=bool(assume_intent), conv_key=ck,
+        required_scene=_need_scene)
     # 相册自动扩容：通用池只剩「上次刚发过的那张 auto 照片」且额度未满 → 本次改走
     # 生成（新场景照，发完自动入册），相册有机长到 max 张后回到纯轮换。
     if row and _should_grow_album(scfg, persona_id, row, ck):
@@ -721,11 +988,15 @@ async def run_autosend_image(
         cap_src = "registry" if cap else ""
         if not cap:
             # 相册条目无运营配文（如 auto 定妆照）→ LLM 按当前对话写配文 → 固定配文。
+            # freshness=old：相册图是「之前拍的」，配文不得写「刚拍的」。
             _k = "video" if mt == "video" else KIND_SELFIE
-            cap = await _llm_caption_safe(llm_caption, kind=_k)
+            cap = await _llm_caption_safe(llm_caption, kind=_k, freshness="old")
             cap_src = "llm" if cap else ""
         if not cap:
-            cap = str(scfg.get("caption") or "")
+            # 注册相册＝备货旧照：固定兜底走旧照口径（caption_album 配置/双语池），
+            # 绝不用全局 caption 的「刚拍」措辞（P0 实录穿帮点）。
+            cap = _fixed_caption(scfg, ("video" if mt == "video" else KIND_SELFIE),
+                                 "old", _cap_lang)
             cap_src = "fixed" if cap else ""
         if not cap:
             cap = str(ai_text or "")
@@ -754,7 +1025,18 @@ async def run_autosend_image(
                 except Exception:
                     pass
                 record_image_sent(mt, source="registry")
-                _notify_sent((tag + (cap or "")).strip(), "")  # 相册现成图场景未知
+                if _need_scene:
+                    record_scene_request(_need_scene, unmet=False)
+                # 相册现成图：场景取条目 scene:* 标签（回填后可用；无标签则未知留空）
+                _row_scene = ""
+                _row_series = ""
+                try:
+                    from src.companion.persona_media import row_scene_class, series_of
+                    _row_scene = row_scene_class(row)
+                    _row_series = series_of(row)
+                except Exception:
+                    pass
+                _notify_sent((tag + (cap or "")).strip(), _row_scene, _row_series)
                 logger.info(
                     "[autosend image] 已发相册媒体 platform=%s acct=%s type=%s id=%s",
                     platform, account_id, mt, row.get("id"))
@@ -770,18 +1052,25 @@ async def run_autosend_image(
         directive = plan_autosend_image(peer_text, history, scfg)
     if not directive:
         return False
-    # Phase18 场景显式化：自拍 + 真出图后端时，把本次将用的场景**先算出来**放进
-    # directive（客户点名场景 → 调用方期望场景（Phase20「跟上次一样的」取自媒体
-    # 日志）→ 场景状态轮换含相册扩容 salt——与 stage_image_file 内部回落同口径）
+    # Phase18 场景显式化：自拍时把本次将用的场景**先算出来**放进 directive
+    # （承诺内容 → 调用方期望场景（Phase20「跟上次一样的」取自媒体日志）→
+    # 场景状态轮换含相册扩容 salt——与 stage_image_file 内部回落同口径）
     # → 配文 LLM 能拿到「照片实际拍摄场景」，图、配文、（草稿链的）聊天场景状态
-    # 三者同源。album 后端挑现成图，场景未知不注。
+    # 三者同源。
+    # 场景优先级：承诺内容（assume_scene，AI 亲口说过的必须兑现）→ requested_scene
+    # →（仅真出图后端）场景状态轮换。前两者是「说出口的场景」＝硬要求
+    # （scene_strict，album 后端靠 _meta 场景过滤同样能兑现）；轮换场景仅是默认值，
+    # 相册兜底可放宽（发别的场景不算撒谎，没人点过名）。
     _backend = str(((scfg.get("provider") or {}).get("backend")) or "").lower()
     if (str(directive.get("kind") or "") == KIND_SELFIE
-            and not str(directive.get("scene") or "").strip()
-            and _backend not in ("", "disabled", "album")):
-        if str(requested_scene or "").strip():
+            and not str(directive.get("scene") or "").strip()):
+        if str(assume_scene or "").strip():
+            directive["scene"] = str(assume_scene).strip()
+            directive["scene_strict"] = True
+        elif str(requested_scene or "").strip():
             directive["scene"] = str(requested_scene).strip()
-        else:
+            directive["scene_strict"] = True
+        elif _backend not in ("", "disabled", "album"):
             try:
                 from src.ai.companion_selfie import resolve_current_scene
                 directive["scene"] = resolve_current_scene(
@@ -790,22 +1079,28 @@ async def run_autosend_image(
             except Exception:
                 logger.debug("[image_autosend] 场景解析跳过", exc_info=True)
     staged = await stage_image_file(
-        config, platform, account_id, persona_id, directive, llm_refine=llm_refine)
+        config, platform, account_id, persona_id, directive,
+        llm_refine=llm_refine, conv_key=ck)
     if not staged:
         record_image_fallback("stage_failed")
         return False
-    local, url, kind = staged
-    # 配文（文图协同）：LLM 上下文配文（知道图已发出+场景）→ 固定配文 → 草稿文本兜底。
+    local, url, kind, sinfo = staged
+    # 相册来源（album 后端直选 or 生成失败兜底，两路 provider 都=album）＝
+    # 「之前拍的」照片：配文按旧照口径写（B 线文件系统相册无跨天防复读账本，
+    # 声称「刚拍」重复发同图必穿帮）。
+    _from_album = (sinfo.get("provider") == "album")
+    _fresh = "old" if _from_album else "fresh"
+    # 配文（文图协同）：LLM 上下文配文（知道图已发出+场景+新旧）→ 固定配文 → 草稿兜底。
+    # 场景以 staged 实际产出为准（生成失败回落相册时 directive.scene 已不成立）。
     _subject = str((directive or {}).get("subject") or "")
-    _scene = str((directive or {}).get("scene") or "") if kind == KIND_SELFIE else ""
+    _scene = str(sinfo.get("scene_class") or (
+        (directive or {}).get("scene") if _fresh == "fresh" else "") or "") \
+        if kind == KIND_SELFIE else ""
     cap = await _llm_caption_safe(
-        llm_caption, kind=kind, subject=_subject, scene=_scene)
+        llm_caption, kind=kind, subject=_subject, scene=_scene, freshness=_fresh)
     cap_src = "llm" if cap else ""
     if not cap:
-        if kind == KIND_OBJECT:
-            cap = str(scfg.get("contextual_caption") or "")
-        else:
-            cap = str(scfg.get("caption") or "")
+        cap = _fixed_caption(scfg, kind, _fresh, lang)
         cap_src = "fixed" if cap else ""
     if not cap:
         cap = str(ai_text or "")
@@ -818,16 +1113,21 @@ async def run_autosend_image(
     if ok:
         if cap_src:
             record_caption(cap_src, cap)
-        record_image_sent(kind, source="keyword")
-        _notify_sent("[图片] " + (cap or ""), _scene)
+        record_image_sent(kind, source=(
+            "keyword_album" if _fresh == "old" else "keyword"))
+        _notify_sent("[图片] " + (cap or ""), _scene,
+                     str(sinfo.get("series") or ""))
         logger.info(
             "[autosend image] 已发图(生成) platform=%s acct=%s kind=%s",
             platform, account_id, kind)
         # 自动定妆：真出图后端生成的自拍入册，下次同类请求秒发同一张（脸恒定、零 GPU）。
         # album 后端不入册（图本来就来自相册，登记是循环）。入册后记会话避重，
         # 使下一次请求轮换到旧照或触发下一轮扩容。
+        # P0：生成失败回落的相册旧照（_from_album）同样不入册——否则同一张照片
+        # 会被反复登记成"新 auto 照"，相册被重复项灌爆且轮换失真。
         _backend = str(((scfg.get("provider") or {}).get("backend")) or "").lower()
-        if kind == KIND_SELFIE and _backend not in ("", "album", "disabled"):
+        if (kind == KIND_SELFIE and not _from_album
+                and _backend not in ("", "album", "disabled")):
             _new_id = _maybe_register_generated_selfie(
                 scfg, persona_id, local, scene=_scene)
             if _new_id:

@@ -118,3 +118,48 @@ async def test_filler_disabled_none_still_watches():
         send_fallback_text=None, logger=_LOG)
     assert ok is True
     await asyncio.sleep(0.2)                # 看护不因 None 回调而崩
+
+
+# ── 占位句防复读（2026-07-26：实例池空 → 单句「稍等我一下哈～」4 分钟连发 3 次）──
+def test_filler_cooldown_suppresses_second_filler():
+    from src.client.sender import pick_text_first_filler
+    # 冷却窗内（180s 默认）→ None＝本轮不发占位
+    assert pick_text_first_filler(
+        [], last_text="稍等我一下哈～", last_ts=1000.0, now=1100.0) is None
+    # 出窗 → 正常出句
+    assert pick_text_first_filler(
+        [], last_text="稍等我一下哈～", last_ts=1000.0, now=1300.0)
+
+
+def test_filler_avoids_repeating_last_wording():
+    from src.client.sender import pick_text_first_filler
+    pool = ["来啦来啦～", "稍等哈～"]
+    for _ in range(20):
+        out = pick_text_first_filler(
+            pool, last_text="稍等哈～", last_ts=0.0, now=1000.0)
+        assert out == "来啦来啦～"          # 唯一不同措辞必选
+
+
+def test_filler_empty_pool_uses_builtin_variety():
+    from src.client.sender import (_TF_FILLER_DEFAULTS,
+                                   pick_text_first_filler)
+    out = pick_text_first_filler([], last_text="", last_ts=0.0, now=1.0)
+    assert out in _TF_FILLER_DEFAULTS
+    # 内置池也避开上一条措辞
+    outs = {pick_text_first_filler([], last_text=_TF_FILLER_DEFAULTS[0],
+                                   last_ts=0.0, now=1.0) for _ in range(30)}
+    assert _TF_FILLER_DEFAULTS[0] not in outs
+
+
+def test_filler_cooldown_zero_restores_old_behavior():
+    from src.client.sender import pick_text_first_filler
+    assert pick_text_first_filler(
+        ["稍等哈～"], last_text="", last_ts=999.0, now=1000.0,
+        cooldown_sec=0) == "稍等哈～"
+
+
+def test_filler_single_item_pool_never_none_out_of_cooldown():
+    from src.client.sender import pick_text_first_filler
+    # 池只有一句且与上一条相同：出窗时仍要出句（宁复读不悬空）
+    assert pick_text_first_filler(
+        ["稍等哈～"], last_text="稍等哈～", last_ts=0.0, now=1000.0) == "稍等哈～"

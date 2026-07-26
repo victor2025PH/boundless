@@ -136,6 +136,39 @@ skill_manager `_handle_persona_media_request`）；关键词池独立于自拍/�
 `/api/workspace/metrics.persona_media` + Prometheus `ws_persona_media_*` + ops-overview「🖼️ 人设相册」卡。
 总开关沿用 `companion.selfie.enabled`。
 
+**图文一致性 P0 主线**（2026-07-27，修「发的图和说的话/时间/衣服对不上」四类实录事故）：
+```bash
+python -m pytest tests/test_persona_media_consistency.py tests/test_persona_media.py \
+ tests/test_image_autosend.py tests/test_selfie_wiring.py tests/test_scene_state.py \
+ tests/test_outbound_promise_guard.py tests/test_media_consistency_eval.py -q --tb=line
+```
+预期：全绿。四层护栏（`companion.selfie.consistency` 默认开，`enabled:false` 一键回旧行为；
+默认值集中在 `image_autosend.resolve_consistency_cfg`，A 线 skill_manager / B 线 autosend 同口径）：
+① **场景硬匹配**——客户点名（`extract_requested_scene`）/承诺句点名（`outbound_promise_guard.
+promised_scene`，兑现层升为硬要求）→ 注册相册 `pick_media(required_scene_class=)`（仅通用池受限，
+运营触发词池最高优先）与文件系统相册 `_pick_from_album(required_scene=)`（挑不到 →
+`album_scene_mismatch` 如实失败交诚实文字）**绝不顶包**；物体图生成失败绝不拿人像相册顶包
+（`generate(allow_album_fallback=False)`，「要海景发车内自拍」收口）。② **时段软过滤**——
+`tod:day|night`（DB tags / 相册目录 `_meta.json` sidecar，`album_file_meta` sidecar 优先于
+文件名约定）与当前小时硬冲突剔除（22-6 不发白天照、6-17 不发夜景照、17-22 傍晚放行、无标注不判；
+`tod_conflicts_with_hour` 纯函数）；剔空放行但 `extra["tod_softened"]=True`，配文层按旧照口径兜底。
+③ **重发冷却 + 服装连续窗**——`persona_media_sends` 账本（A/B 线同一张表）推导：冷却窗（默认 24h）
+内同图硬排除（`select_media(hard_exclude_ids=)` 任何回落层不放宽，全排除→拒发）；连续窗（默认
+90min）内优先同系列未发图（`prefer_series`，防「30 秒换一身衣服」瞬移换装）；`pick_media(now=)`
+与账本衰减同时钟。④ **配文诚实**——相册存货 freshness=old：LLM 配文指令显式禁「刚拍」
+（`build_photo_caption_instruction(freshness=)`）、固定兜底走 `caption_album` 配置/双语变体池
+（`_fixed_caption`，**绝不**回落「刚拍」口径的全局 `caption`；video 无旧照池只认配置）。
+**跨人设隔离**：多人设分册布局下相册根目录不参与兜底（`_list_album`——根目录散图来源不明，
+静默发出=「换脸换人」；显式共享走 `default_album_key` 语义不变；单人设平铺布局不受影响）。
+**质疑观测**：`detect_media_complaint`（repeat/not_you/fake 保守词表）→ A/B 线
+`_maybe_flag_media_complaint`（24h 内真发过媒体才采信）→ `record_media_complaint` →
+autosend-status `complaints`/`last_complaint` + 回应纠偏 hint（别争辩/别再发同图）。
+**元数据回填**：`scripts/persona_media_backfill_meta.py`（纯核心
+`src/companion/persona_media_meta_backfill.py`）＝manifest/文件名/已有 sidecar 三源归并（人工值
+优先）+ VLM（qwen3-vl，176/140 双活）昼夜**保守**分类（室内歧义=不打标）→ 写 `_meta.json` +
+DB `tod:` 标签（幂等）；默认 dry-run 且 DB 走只读连接（对活体生产库零写事务），`--vlm --apply`
+才写。门禁 `tests/test_persona_media_consistency.py`（32 例）。
+
 **外部 worker 会话健康 + Messenger 受控降级主线**（2026-07：网页链路不稳的止血与自愈闭环）：
 ```bash
 python -m pytest tests/test_messenger_send_semantics.py tests/test_platform_session_health.py \

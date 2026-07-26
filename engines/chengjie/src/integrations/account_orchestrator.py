@@ -646,8 +646,12 @@ class TelegramProtocolWorker:
             return None
 
     async def start(self) -> None:
-        from src.integrations.telegram_protocol_login import resolve_credentials
-        creds = resolve_credentials(self.config)
+        # 凭据解析统一走 credpool_bridge：账号 meta 里有中央池粘定键就向池索取
+        # （池按 key 粘定返回同一组凭据，与该 session 登录时所用的一致），
+        # 没有/池不可达则回落配置自带凭据——行为与接池之前完全一致。
+        from src.integrations.credpool_bridge import aresolve_credentials_for_account
+        creds, _cred_source = await aresolve_credentials_for_account(
+            self.config, account=self.account)
         if creds is None or not (self.session_name or self.session_string):
             raise RuntimeError("缺少 api 凭据或 session_name/session_string")
         api_id, api_hash = creds
@@ -677,6 +681,30 @@ class TelegramProtocolWorker:
         self.state = "running"
         self.detail = ""
         await self._backfill()
+        # 目录同步（好友名单 + 会话占位）：与 LINE worker 同构的 best-effort 后台任务——
+        # 刻意**不 await**，大号上千好友会把 start 拖成分钟级，而账号在线态不该等名单。
+        try:
+            asyncio.create_task(self._sync_directory_bootstrap())
+        except Exception:  # noqa: BLE001
+            logger.debug("[tg-worker] 目录同步调度失败", exc_info=True)
+
+    async def _sync_directory_bootstrap(self) -> None:
+        """登录后一次性目录同步（协议号无常驻 loop，不为它改架构）。
+
+        只写通讯录 + 会话占位，绝不喂消息管道（红线见
+        ``src/integrations/telegram_directory_sync.py`` 的模块 docstring）。
+        """
+        try:
+            from src.integrations.telegram_directory_sync import (
+                directory_sync_cfg, sync_directory_once,
+            )
+            cfg = directory_sync_cfg(self.config)
+            stats = await sync_directory_once(self.client, self.account_id, cfg)
+            if stats.get("contacts") or stats.get("chats"):
+                logger.info("[tg-worker] 目录同步完成 通讯录=%d 会话占位=%d account=%s",
+                            stats.get("contacts", 0), stats.get("chats", 0), self.account_id)
+        except Exception:  # noqa: BLE001
+            logger.debug("[tg-worker] 目录同步失败 account=%s", self.account_id, exc_info=True)
 
     def _wire_inbound(self) -> None:
         """注册 pyrogram 消息处理器：收到消息 → 推入统一收件箱（best-effort）。"""

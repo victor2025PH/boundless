@@ -116,8 +116,12 @@ def legacy_key_formats() -> Dict[str, Tuple[str, str]]:
         "a_line_default": ("裸 peer（default 账号零前缀）", "5433982810"),
         "a_line_companion": ("acct:peer", "8244899900:5433982810"),
         "protocol_autoreply": (
-            "acct:platform:acct:chat（user_id 自拼 + make_context_key 叠加，双重前缀）",
-            "639270135480:whatsapp:639270135480:639273815533"),
+            "acct:peer（P10 2026-07-27 起：历史「user_id 自拼 platform:acct:chat + "
+            "make_context_key 叠加」的双重前缀在 episodic/CPI 层经 "
+            "strip_composite_user_id 归一，与 A/B 线同格式；迁移＝存量双重前缀键"
+            "经核零事实行、user_identity_map 惰性默认行已清理。ContextStore 层"
+            "键不变仍双重前缀，见 context_key 口径）",
+            "639270135480:639273815533"),
         "whatsapp_rpa": (
             "acct:wa:acct:peer（chat_key 自带账号 + 叠加，双重前缀）",
             "worker1:wa:worker1:Alice"),

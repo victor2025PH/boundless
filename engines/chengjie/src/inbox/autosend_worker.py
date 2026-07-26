@@ -237,10 +237,16 @@ class AutosendWorker:
         from src.inbox.humanize import run_presend_humanization
 
         # 人设解析（best-effort）：用于人设化节奏参数 + 观测分维。失败→空（用顶层默认）。
+        # 优先 3 参（含 chat_key → 会话级覆写生效，节奏跟人走）；旧 2 参 resolver
+        # （测试替身/历史注入）TypeError 回落，保持兼容。
         _pid = ""
         if self._persona_resolver is not None:
             try:
-                _pid = str(self._persona_resolver(platform, account_id) or "")
+                try:
+                    _pid = str(
+                        self._persona_resolver(platform, account_id, chat_key) or "")
+                except TypeError:
+                    _pid = str(self._persona_resolver(platform, account_id) or "")
             except Exception:
                 _pid = ""
 

@@ -153,6 +153,20 @@
     <div id="feErrDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
+  <section id="personaOvSection" style="display:none;">
+    <h2>🎭 {{ (i18n or {}).get('ov2_s_po', "人设覆写（会话级换绑用量与 legacy 债）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_po_sub', "出站解析按档位分布 + 治理动作累计。决策「conv_override 要不要默认开」与「legacy 清理收官时点」都看这里。") }}</div>
+    <div class="grid" id="personaOvKpis"></div>
+    <div id="personaOvDetail"></div>
+  </section>
+
+  <section id="uiEventsSection" style="display:none;">
+    <h2>👆 {{ (i18n or {}).get('ov2_s_uiev', "UI 交互引导") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_uiev_sub', "工作台空态引导按钮点击 / 群区显示模式切换的采用率观测（决策「引导是否有效」）") }}</div>
+    <div class="grid" id="uiEventsKpis"></div>
+    <div id="uiEventsDetail"></div>
+  </section>
+
   <section>
     <h2>📤 {{ (i18n or {}).get('ov2_s_sr', "出站路由（编排器接管 vs 回落适配器）") }}</h2>
     <div class="grid" id="sendRouteKpis"></div>
@@ -178,11 +192,25 @@
     <div id="pmaDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
+  <section id="mconsistSection" style="display:none;">
+    <h2>🧷 {{ (i18n or {}).get('ov2_s_mconsist', "图文一致性（点名场景兑现 · 投诉 · 相册缺口）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_mc_sub', "客户点名的场景要到了没有、谁在抱怨图不对、哪些场景相册零备货——照单补图即闭环") }}</div>
+    <div class="grid" id="mconsistKpis"></div>
+    <div id="mconsistDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
   <section id="profilePushSection" style="display:none;">
     <h2>🪪 {{ (i18n or {}).get('ov2_s_pp', "账号资料推送") }}</h2>
     <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_pp_sub', "后台直改平台官方昵称/签名/头像的使用观测") }}</div>
     <div class="grid" id="profilePushKpis"></div>
     <div id="profilePushDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <section id="custAssetsSection" style="display:none;">
+    <h2>👥 {{ (i18n or {}).get('ov2_s_ca', "客户资产（目录同步）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_ca_sub', "各账号已同步的好友名单盘点：加了好友却从没开口的沉睡线索有多少、名单多久没刷新") }}</div>
+    <div class="grid" id="custAssetsKpis"></div>
+    <div id="custAssetsDetail"></div>
   </section>
 
   <section>
@@ -239,6 +267,24 @@
     <h2>🔮 {{ (i18n or {}).get('ov2_s_bazi', "命理技能（话题触达 → 生辰采集 → 灵签/命盘 → 详批变现）") }}</h2>
     <div class="grid" id="baziKpis"></div>
     <div id="baziDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <section id="goalSection" style="display:none;">
+    <h2>🎯 {{ (i18n or {}).get('ov2_s_goal', "营销目标（建目标 → 每日拍 → 注入 → 主动桥 → 终态）") }}</h2>
+    <div class="grid" id="goalKpis"></div>
+    <div id="goalDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <section id="ishadowSection" style="display:none;">
+    <h2>🪪 {{ (i18n or {}).get('ov2_s_ishadow', "跨平台身份影子（只发现 · 不写关联）") }}</h2>
+    <div class="grid" id="ishadowKpis"></div>
+    <div id="ishadowDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <section id="ededupSection" style="display:none;">
+    <h2>🧠 {{ (i18n or {}).get('ov2_s_ededup', "记忆去重观测（灰区 · 观察扫 · 合并）") }}</h2>
+    <div class="grid" id="ededupKpis"></div>
+    <div id="ededupDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
   <section id="isoSection">
@@ -1284,9 +1330,11 @@ async function loadFrontendErrors(){
   if(!kp || !dv) return;
   try{
     const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
-    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; try{ renderProfilePush(null); }catch(_pp){} return; }
+    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; try{ renderProfilePush(null); }catch(_pp){} try{ renderUiEvents(null); }catch(_ue){} try{ renderPersonaOverride(null); }catch(_po){} return; }
     const d = await r.json();
     try{ renderProfilePush(d); }catch(_pp){}
+    try{ renderUiEvents(d); }catch(_ue){}
+    try{ renderPersonaOverride(d); }catch(_po){}
     var fe = d.frontend_errors || null;
     if(!fe || !(Number(fe.total)||0)){
       kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js_fe_none')+'</div>'; return;
@@ -1319,6 +1367,107 @@ async function loadFrontendErrors(){
   }catch(e){
     dv.innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
   }
+}
+
+// 🎭 人设覆写卡：与 loadFrontendErrors 共享同一次 /api/workspace/metrics 响应（不单独发请求），
+// 读 persona_override 段（出站解析档位分布 + 换绑/整号/legacy 清理动作累计）。
+// 零解析且零动作 → 整卡隐藏（该机器没用人设覆写就不占版面）。
+function renderPersonaOverride(d){
+  var sec = document.getElementById('personaOvSection');
+  var kp = document.getElementById('personaOvKpis');
+  var dv = document.getElementById('personaOvDetail');
+  if(!sec || !kp || !dv) return;
+  var po = (d && d.persona_override) || null;
+  if(!po || (!(Number(po.resolves)||0) && !(Number(po.actions_total)||0))){ sec.style.display='none'; return; }
+  sec.style.display = '';
+  var resolves = Number(po.resolves)||0;
+  var conv = Number(po.conv_hits)||0;
+  var acct = Number(po.account_hits)||0;
+  var pct = function(n){ return resolves ? ' ('+Math.round(n*100/resolves)+'%)' : ''; };
+  var kpis = [
+    {label:window.T('ov2_po_resolves'), value:fmt(resolves)},
+    {label:window.T('ov2_po_conv'), value:fmt(conv)+pct(conv)},
+    {label:window.T('ov2_po_acct'), value:fmt(acct)+pct(acct)},
+    {label:window.T('ov2_po_legacy_sup'), value:fmt(Number(po.legacy_suppressed)||0)},
+    {label:window.T('ov2_po_actions'), value:fmt(Number(po.actions_total)||0)}
+  ];
+  kp.innerHTML = kpis.map(function(c){
+    return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+      '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+  }).join('');
+  // 平台键经后端 _san_platform 消毒（小写截断），动作键为固定白名单——可直接拼 HTML。
+  var byPlat = po.conv_by_platform || {};
+  var platRows = Object.keys(byPlat).map(function(k){
+    return '<tr><td>'+k+'</td><td>'+byPlat[k]+'</td></tr>';
+  }).join('') || '<tr><td colspan="2" class="muted">—</td></tr>';
+  var actLabel = {
+    bind_conv: window.T('ov2_po_a_bind'),
+    unbind_conv: window.T('ov2_po_a_unbind'),
+    account_set: window.T('ov2_po_a_acct'),
+    legacy_upgrade: window.T('ov2_po_a_lg_up'),
+    legacy_remove: window.T('ov2_po_a_lg_rm')
+  };
+  var acts = po.actions || {};
+  var actRows = Object.keys(acts).map(function(k){
+    return '<tr><td>'+(actLabel[k]||k)+'</td><td>'+acts[k]+'</td></tr>';
+  }).join('') || '<tr><td colspan="2" class="muted">—</td></tr>';
+  dv.innerHTML =
+    '<div style="display:flex;gap:16px;flex-wrap:wrap;">'
+    + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_po_by_platform')+'</div>'
+    +   '<table><tr><th>'+window.T('ov2_po_col_platform')+'</th><th>'+window.T('ov2_po_col_count')+'</th></tr>'+platRows+'</table></div>'
+    + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_po_actions_bd')+'</div>'
+    +   '<table><tr><th>'+window.T('ov2_po_col_action')+'</th><th>'+window.T('ov2_po_col_count')+'</th></tr>'+actRows+'</table></div>'
+    + '</div>'
+    + '<div class="muted" style="font-size:12px;margin-top:8px;">'+window.T('ov2_po_hint')+'</div>';
+}
+
+// 👆 UI 交互引导卡：与 loadFrontendErrors 共享同一次 /api/workspace/metrics 响应（不单独发请求），
+// 读 ui_events 段（工作台空态引导按钮/群区模式切换的 beacon 累计）。零流量/段缺失/403 → 整卡隐藏。
+// action 键是前端埋点写死的标识符（如 empty.show_all），这里映射成人话标签便于运营读数；
+// 未登记的新 action 原样显示（不丢数据）。键由后端消毒（仅安全字符），可直接拼 HTML。
+function renderUiEvents(d){
+  var sec = document.getElementById('uiEventsSection');
+  var kp = document.getElementById('uiEventsKpis');
+  var dv = document.getElementById('uiEventsDetail');
+  if(!sec || !kp || !dv) return;
+  var ue = (d && d.ui_events) || null;
+  if(!ue || !(Number(ue.total)||0)){ sec.style.display='none'; return; }
+  sec.style.display = '';
+  var actionLabel = {
+    'empty.show_all':   window.T('ov2_uiev_a_show_all'),
+    'empty.go_groups':  window.T('ov2_uiev_a_go_groups'),
+    'empty.open_contacts': window.T('ov2_uiev_a_open_contacts'),
+    'grp.mode_all':     window.T('ov2_uiev_a_mode_all'),
+    'grp.mode_focus':   window.T('ov2_uiev_a_mode_focus'),
+    'grp.mode_hidden':  window.T('ov2_uiev_a_mode_hidden'),
+    'acct.scoped_fetch': window.T('ov2_uiev_a_scoped_fetch')
+  };
+  var lastTs = Number(ue.last_record_ts)||0;
+  // 走统一本地化助手（随 ?lang= 出正确 locale）；秒/毫秒由它自行判定。
+  // 勿改回内联的日期本地化写法——门禁 test_swept_admin_pages_localized_dates 会红。
+  var lastStr = lastTs ? window.wsFmtDateTime(lastTs) : '—';
+  var kpis = [
+    {label:window.T('ov2_uiev_total'), value:fmt(Number(ue.total)||0)},
+    {label:window.T('ov2_uiev_last'), value:lastStr}
+  ];
+  kp.innerHTML = kpis.map(function(c){
+    return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+      '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+  }).join('');
+  function rows(obj, labelMap){
+    return Object.keys(obj).slice(0,8).map(function(k){
+      var lbl = labelMap && labelMap[k] ? labelMap[k]+' <span class="muted" style="font-size:11px;">'+k+'</span>' : k;
+      return '<tr><td>'+lbl+'</td><td>'+obj[k]+'</td></tr>';
+    }).join('') || '<tr><td colspan="2" class="muted">—</td></tr>';
+  }
+  dv.innerHTML =
+    '<div style="display:flex;gap:16px;flex-wrap:wrap;">'
+    + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_uiev_by_action')+'</div>'
+    +   '<table><tr><th>'+window.T('ov2_uiev_col_action')+'</th><th>'+window.T('ov2_uiev_col_count')+'</th></tr>'+rows(ue.by_action||{}, actionLabel)+'</table></div>'
+    + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_uiev_by_page')+'</div>'
+    +   '<table><tr><th>'+window.T('ov2_uiev_col_page')+'</th><th>'+window.T('ov2_uiev_col_count')+'</th></tr>'+rows(ue.by_page||{}, null)+'</table></div>'
+    + '</div>'
+    + '<div class="muted" style="font-size:12px;margin-top:8px;">'+window.T('ov2_uiev_hint')+'</div>';
 }
 
 // 🪪 账号资料推送卡：与 loadFrontendErrors 共享同一次 /api/workspace/metrics 响应（不单独发请求），
@@ -1371,6 +1520,136 @@ function renderProfilePush(d){
       + '<table><tr><th>'+window.T('ov2_pp_col_plat')+'</th><th>'+window.T('ov2_pp_col_as')+'</th></tr>'+rows+'</table>');
   }
   dv.innerHTML = lines.join('') || '<div class="muted" style="font-size:12px;">—</div>';
+}
+
+// 👥 客户资产（目录同步）卡：私域资产盘点——各账号已同步的好友名单里，有多少是「加了好友
+// 但从没开口」的沉睡线索。数据源全部是**已存在**的接口，不需要新后端：
+//   1) GET /api/accounts —— 账号清单（1 个请求）；
+//   2) GET /api/platforms/{platform}/{account_id}/contacts?enriched=1&limit=1 —— 每账号一发，
+//      并发（上限 CA_MAX_ACCOUNTS 个，防账号多时打爆）。summary 只有 enriched=1 才回；它是整表
+//      聚合、**不受 limit 截断**，故 limit=1 足够（只为顺带拿一行的 updated_at 当名单新鲜度），
+//      不拉全量省带宽。字段口径：summary{total, never_spoke, silent_30d, with_conversation}；
+//   3) GET /api/workspace/metrics 的 directory_sync 段（另一条工作线在建）—— 有则补一行同步
+//      轮数/失败数，段缺失或接口失败一律跳过，绝不因它报错。
+// 任一账号请求失败（403 / 平台离线 / 超时）逐个 catch 成 null，不影响其他账号。
+// 所有账号都没有好友名单数据（或账号接口不可用）→ 整卡隐藏，对齐 renderProfilePush / bazi 惯例。
+var CA_MAX_ACCOUNTS = 12;
+async function loadCustomerAssets(){
+  var sec = document.getElementById('custAssetsSection');
+  var kp = document.getElementById('custAssetsKpis');
+  var dv = document.getElementById('custAssetsDetail');
+  if(!sec || !kp || !dv) return;
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  // 名单新鲜度：相对时间（updated_at 由目录同步每轮整批刷新，故一行的值即约等于该账号上次同步时刻）
+  function ago(ts){
+    if(!ts) return '—';
+    var s = Math.max(0, Math.floor(Date.now()/1000 - Number(ts)));
+    if(s < 60) return window.T('ov2_ca_ago_now');
+    if(s < 3600) return window.Tf('ov2_ca_ago_min', {n: Math.floor(s/60)});
+    if(s < 86400) return window.Tf('ov2_ca_ago_hour', {n: Math.floor(s/3600)});
+    return window.Tf('ov2_ca_ago_day', {n: Math.floor(s/86400)});
+  }
+  // 按候选名逐个取（首选真名 total_runs/total_failures，其余为历史兜底；全都没有 → null = 不渲染该行）
+  function pick(obj, names){
+    for(var i=0;i<names.length;i++){
+      var v = obj[names[i]];
+      if(v !== undefined && v !== null) return Number(v)||0;
+    }
+    return null;
+  }
+  try{
+    var accResp = await apiFetch('/api/accounts', {credentials:'same-origin'});
+    if(!accResp.ok){ sec.style.display='none'; return; }
+    var accJson = await accResp.json();
+    var accounts = (accJson && accJson.accounts) || [];
+    if(!accounts.length){ sec.style.display='none'; return; }
+    var picked = accounts.slice(0, CA_MAX_ACCOUNTS);
+    // 与账号明细并发发出；失败/无该段一律回 null（本卡的主体数据不依赖它）
+    var metricsP = apiFetch('/api/workspace/metrics', {credentials:'same-origin'})
+      .then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
+    var results = await Promise.all(picked.map(function(a){
+      // include_chats=0 是本卡的口径要求：这张卡问的是「已同步的**好友名单**里有多少沉睡线索」，
+      // 而联系人面板默认走并集（通讯录 ∪ 聊过的人）。并集会把分母从名单扩到全部往来的人，
+      // 「未开口占比」的语义随之漂移（只有会话的人天然算「开过口」）→ 显式关掉并集保住口径。
+      var url = '/api/platforms/' + encodeURIComponent(String(a.platform||''))
+        + '/' + encodeURIComponent(String(a.account_id||''))
+        + '/contacts?enriched=1&limit=1&include_chats=0';
+      return apiFetch(url, {credentials:'same-origin'})
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(j){
+          var sm = (j && j.summary) || null;
+          if(!sm) return null;
+          var head = (j.contacts && j.contacts[0]) || null;
+          return {acct:a, total:Number(sm.total)||0, never:Number(sm.never_spoke)||0,
+                  silent:Number(sm.silent_30d)||0,
+                  fresh: head ? (Number(head.updated_at)||0) : 0};
+        })
+        .catch(function(){ return null; });
+    }));
+    var rows = results.filter(function(x){ return x && x.total > 0; });
+    if(!rows.length){ sec.style.display='none'; return; }
+    sec.style.display = '';
+    // 目录同步统计（两个请求本就并发发出，这里提前 await 不增加墙钟时间）——
+    // per-account last_sync_ts 是「名单新鲜度」的精确值，优于「某一行的 updated_at」近似。
+    var ds = null;
+    try{ var mj = await metricsP; ds = (mj && mj.directory_sync) || null; }catch(_dse){ ds = null; }
+    var dsAccts = (ds && ds.accounts && typeof ds.accounts === 'object') ? ds.accounts : null;
+    function syncTsOf(a){
+      if(!dsAccts) return 0;
+      var r = dsAccts[String(a.platform||'')+':'+String(a.account_id||'')];
+      return (r && Number(r.last_sync_ts)) || 0;
+    }
+    var total = 0, never = 0, silent = 0;
+    rows.forEach(function(x){ total += x.total; never += x.never; silent += x.silent; });
+    var neverPct = total ? Math.round(never/total*100) : 0;
+    var kpis = [
+      {label:window.T('ov2_ca_total'), value:fmt(total)},
+      {label:window.T('ov2_ca_never'), value:fmt(never)+' ('+neverPct+'%)',
+       color:(neverPct >= 50 ? 'var(--red)' : '')},
+      {label:window.T('ov2_ca_silent'), value:fmt(silent)},
+      {label:window.T('ov2_ca_accounts'), value:fmt(rows.length)}
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;'+(c.color?('color:'+c.color+';'):'')+'">'+c.value+'</div></div>';
+    }).join('');
+    // 未开口最多的账号排前——运营要先捞的就是它
+    rows.sort(function(a,b){ return (b.never - a.never) || (b.total - a.total); });
+    var trs = rows.map(function(x){
+      var name = String(x.acct.label || x.acct.account_id || '');
+      var pct = x.total ? Math.round(x.never/x.total*100) : 0;
+      return '<tr><td>'+esc(name)+' <span class="muted" style="font-size:11px;">'+esc(x.acct.platform)+'</span></td>'
+        + '<td>'+fmt(x.total)+'</td>'
+        + '<td>'+fmt(x.never)+' <span class="muted" style="font-size:11px;">'+pct+'%</span></td>'
+        + '<td>'+fmt(x.silent)+'</td>'
+        + '<td>'+ago(syncTsOf(x.acct) || x.fresh)+'</td></tr>';
+    }).join('');
+    var lines = ['<div class="muted" style="font-size:12px;margin:8px 0 4px;">'+window.T('ov2_ca_by_acct')+'</div>'
+      + '<table><tr><th>'+window.T('ov2_ca_col_acct')+'</th><th>'+window.T('ov2_ca_col_total')+'</th>'
+      + '<th>'+window.T('ov2_ca_col_never')+'</th><th>'+window.T('ov2_ca_col_silent')+'</th>'
+      + '<th>'+window.T('ov2_ca_col_fresh')+'</th></tr>'+trs+'</table>'];
+    if(accounts.length > picked.length){
+      lines.push('<div class="muted" style="font-size:12px;margin-top:4px;">'
+        + window.Tf('ov2_ca_capped', {n: picked.length})+'</div>');
+    }
+    if(ds && typeof ds === 'object'){
+      // 字段名对齐 directory_sync_stats.dump()：total_runs / total_failures（旧候选名保留兜底）。
+      // 口径注意：runs 与 failures 正交（同一轮可能既跑过又有段级失败）→ 绝不做 failures/runs 失败率。
+      var seg = [];
+      var rounds = pick(ds, ['total_runs', 'rounds', 'sync_rounds', 'runs']);
+      var failed = pick(ds, ['total_failures', 'failed', 'failures', 'errors']);
+      if(rounds !== null) seg.push(window.T('ov2_ca_sync_rounds')+' '+fmt(rounds));
+      if(failed !== null) seg.push(window.T('ov2_ca_sync_failed')+' '+fmt(failed));
+      if(seg.length){
+        lines.push('<div class="muted" style="font-size:12px;margin-top:4px;">'
+          + window.T('ov2_ca_sync')+': '+seg.join(' · ')+'</div>');
+      }
+    }
+    lines.push('<div class="muted" style="font-size:12px;margin-top:8px;">'+window.T('ov2_ca_hint')+'</div>');
+    dv.innerHTML = lines.join('');
+  }catch(e){
+    sec.style.display='none';
+  }
 }
 
 // 👁️ 图像识别卡片：读 /api/workspace/metrics 的 providers.vision（VisionClient 单一瓶颈处
@@ -1758,6 +2037,69 @@ async function loadPersonaMedia(){
   }
 }
 
+// 🧷 图文一致性卡：读 /api/admin/media-consistency（点名场景供需缺口 + 投诉分类）。
+// 零流量零投诉零备货 → 整卡隐藏（active:false）。
+async function loadMediaConsistency(){
+  var sec = document.getElementById('mconsistSection');
+  var kp = document.getElementById('mconsistKpis');
+  var dv = document.getElementById('mconsistDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/admin/media-consistency', {credentials:'same-origin'});
+    if(r.status === 403){ sec.style.display='none'; return; }
+    const d = await r.json();
+    if(!d.active){ sec.style.display='none'; return; }
+    sec.style.display = '';
+    var comp = d.complaints || {};
+    var gap = d.gap || {};
+    var rows = gap.rows || [];
+    var demandTotal = 0, unmetTotal = 0;
+    rows.forEach(function(g){ demandTotal += Number(g.demand)||0; unmetTotal += Number(g.unmet)||0; });
+    var supplyTotals = gap.supply_totals || {};
+    var supplySum = 0; Object.keys(supplyTotals).forEach(function(k){ supplySum += Number(supplyTotals[k])||0; });
+    var kpis = [
+      {label:window.T('ov2_mc_demand'), value:fmt(demandTotal)},
+      {label:window.T('ov2_mc_unmet'), value:fmt(unmetTotal)},
+      {label:window.T('ov2_mc_complaints'), value:fmt(Number(comp.total)||0)},
+      {label:window.T('ov2_mc_supply'), value:fmt(supplySum)},
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+    var html = '';
+    if(rows.length){
+      var trs = rows.map(function(g){
+        var rate = (g.unmet_rate===null||g.unmet_rate===undefined) ? '—' : Math.round(g.unmet_rate*100)+'%';
+        var miss = (g.missing_personas||[]);
+        var missTxt = miss.length ? esc(miss.join(', ')) : '<span class="muted">—</span>';
+        var warn = (Number(g.unmet)||0) > 0 && (Number(g.supply)||0) === 0;
+        return '<tr'+(warn?' style="color:#e5484d;"':'')+'><td>'+esc(g.scene)+'</td><td>'+fmt(Number(g.demand)||0)+
+          '</td><td>'+fmt(Number(g.unmet)||0)+' ('+rate+')</td><td>'+fmt(Number(g.supply)||0)+'</td><td>'+missTxt+'</td></tr>';
+      }).join('');
+      html += '<div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_mc_gap_top')+'</div>'
+        + '<table><tr><th>'+window.T('ov2_mc_col_scene')+'</th><th>'+window.T('ov2_mc_col_demand')+'</th><th>'
+        + window.T('ov2_mc_col_unmet')+'</th><th>'+window.T('ov2_mc_col_supply')+'</th><th>'
+        + window.T('ov2_mc_col_missing')+'</th></tr>'+trs+'</table>';
+    }
+    var kinds = comp.by_kind || {};
+    var kindKeys = Object.keys(kinds);
+    if((Number(comp.total)||0) > 0){
+      var kindTxt = kindKeys.map(function(k){ return esc(k)+'×'+kinds[k]; }).join('，') || '—';
+      var pers = comp.by_persona || {};
+      var persTxt = Object.keys(pers).map(function(k){ return esc(k||'?')+'×'+pers[k]; }).join('，');
+      html += '<div class="muted" style="font-size:12px;margin-top:8px;">'+window.T('ov2_mc_comp_kinds')+' '+kindTxt
+        + (persTxt ? ('　·　'+window.T('ov2_mc_comp_personas')+' '+persTxt) : '')+'</div>';
+    }
+    if(!html) html = '<div class="empty">'+window.T('ov2_mc_none')+'</div>';
+    html += '<div class="muted" style="font-size:12px;margin-top:8px;">'+window.T('ov2_mc_hint')+'</div>';
+    dv.innerHTML = html;
+  }catch(e){
+    dv.innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
+  }
+}
+
 // 🔮 命理技能卡：读 /api/workspace/metrics 的 bazi（漏斗四段计数；无流量则整卡隐藏）。
 async function loadBazi(){
   var sec = document.getElementById('baziSection');
@@ -1802,6 +2144,335 @@ async function loadBazi(){
     dv.innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
   }
 }
+
+// 🎯 营销目标卡：读 /api/workspace/metrics 的 goals（进程级漏斗计数）+ /api/goals?status=active（Top5 进行中 + summary）。
+// 隐藏规则：metrics 无 goals 键，或（goals.active=false 且 拿不到 summary / summary.total=0）→ 整卡隐藏；
+// /api/goals 功能关闭时 403 → 静默只用 metrics 渲染，不弹错。
+async function loadGoals(){
+  var sec = document.getElementById('goalSection');
+  var kp = document.getElementById('goalKpis');
+  var dv = document.getElementById('goalDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
+    if(r.status === 403){ sec.style.display='none'; return; }
+    const d = await r.json();
+    var g = d.goals || null;
+    if(!g){ sec.style.display='none'; return; }
+    var summary = null, tops = [], report = null;
+    try{
+      const r2 = await apiFetch('/api/goals?status=active&limit=5', {credentials:'same-origin'});
+      if(r2.ok){
+        const d2 = await r2.json();
+        summary = (d2 && d2.summary) || null;
+        tops = (d2 && Array.isArray(d2.goals)) ? d2.goals : [];
+      }
+    }catch(_){ /* 接口抖动 → 只用 metrics 渲染 */ }
+    try{
+      const r3 = await apiFetch('/api/goals/report?days=30', {credentials:'same-origin'});
+      if(r3.ok){ report = await r3.json(); }
+    }catch(_){ /* P2 报表缺席不阻塞卡片 */ }
+    var total = summary ? (Number(summary.total)||0) : 0;
+    if(!g.active && (!summary || total === 0)){ sec.style.display='none'; return; }
+    sec.style.display = '';
+    function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+    var by = (summary && summary.by_status) || null;
+    var term = g.terminal || {};
+    var doneN = by ? (Number(by.done)||0) : (Number(term.done)||0);
+    var failN = by ? ((Number(by.failed)||0)+(Number(by.expired)||0))
+                   : ((Number(term.failed)||0)+(Number(term.expired)||0));
+    var cancN = by ? (Number(by.cancelled)||0) : (Number(term.cancelled)||0);
+    var kpis = [
+      {label:window.T('ov2_goal_active'), value: by ? fmt(Number(by.active)||0) : '—'},
+      {label:window.T('ov2_goal_done'), value:fmt(doneN)},
+      {label:window.T('ov2_goal_failed'), value:fmt(failN)},
+      {label:window.T('ov2_goal_cancelled'), value:fmt(cancN)},
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    var beats = g.beats || {};
+    var inj = g.injected || {};
+    var injTitle = window.T('ov2_goal_inj_split')+': '
+      + fmt(Number(inj.draft)||0)+' / '+fmt(Number(inj.reply)||0)+' / '+fmt(Number(inj.proactive)||0);
+    var parts = [];
+    parts.push(window.T('ov2_goal_beats')+': '+fmt(Number(beats.planned)||0));
+    parts.push(window.T('ov2_goal_hold_emotion')+': '+fmt(Number(beats.hold_emotion)||0));
+    parts.push(window.T('ov2_goal_hold_silent')+': '+fmt(Number(beats.hold_silent)||0));
+    parts.push('<span title="'+esc(injTitle)+'">'+window.T('ov2_goal_injected')+': '+fmt(Number(inj.total)||0)+'</span>');
+    if(report && report.totals && Number(report.totals.n) > 0){
+      var rate = Math.round(Math.max(0, Math.min(1, Number(report.totals.done_rate)||0))*100);
+      var avgD = report.totals.avg_days_to_done;
+      parts.push(window.T('ov2_goal_done_rate')+': '+rate+'%'
+        + (avgD != null ? ' · '+(Math.round(Number(avgD)*10)/10)+'d' : ''));
+    }
+    var fb = (report && report.feedback) || g.feedback || null;
+    if(fb && ((Number(fb.adopt)||0) + (Number(fb.reject)||0)) > 0){
+      parts.push(window.T('ov2_goal_fb')+': '+fmt(Number(fb.adopt)||0)+' / '+fmt(Number(fb.reject)||0));
+    }
+    var actives = tops.filter(function(v){ return v && String(v.status) === 'active'; }).slice(0, 5);
+    var rows = actives.map(function(v){
+      var title = String(v.title||'');
+      if(title.length > 24) title = title.slice(0, 23)+'…';
+      var mi = Math.max(0, Number(v.milestone_idx)||0) + 1;
+      var totalDays = Number(v.total_days)||0;
+      var dayTxt = totalDays > 0
+        ? Math.min(Math.max(1, Number(v.day_index)||1), totalDays)+'/'+totalDays : '—';
+      var prog = Math.round(Math.max(0, Math.min(1, Number(v.progress)||0))*100)+'%';
+      return '<tr><td>'+esc(title)+'</td><td>'+esc(v.platform||'—')+'</td>'
+        + '<td>'+mi+'/4 '+esc(v.milestone_label||'')+'</td><td>'+dayTxt+'</td><td>'+prog+'</td></tr>';
+    }).join('') || '<tr><td colspan="5" class="muted">'+window.T('ov2_goal_none')+'</td></tr>';
+    dv.innerHTML = '<div class="muted" style="font-size:12px;">'+parts.join(' · ')+'</div>'
+      + '<div class="muted" style="font-size:12px;margin:8px 0 4px;">'+window.T('ov2_goal_top')+'</div>'
+      + '<table><tr><th>'+window.T('ov2_goal_col_title')+'</th><th>'+window.T('ov2_goal_col_platform')+'</th>'
+      + '<th>'+window.T('ov2_goal_col_milestone')+'</th><th>'+window.T('ov2_goal_col_day')+'</th>'
+      + '<th>'+window.T('ov2_goal_col_progress')+'</th></tr>'+rows+'</table>'
+      + '<div class="muted" style="font-size:12px;margin-top:6px;">'+window.T('ov2_goal_hint')+'</div>';
+  }catch(e){
+    dv.innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
+  }
+}
+
+// 🧠 记忆去重观测卡：读 /api/workspace/metrics.episodic_dedup（进程级累计）。
+// 无 skill_manager / 零扫描 → 整卡隐藏或空态；灰区/held 是「要不要上 LLM 仲裁」读数。
+async function loadEpisodicDedup(){
+  var sec = document.getElementById('ededupSection');
+  var kp = document.getElementById('ededupKpis');
+  var dv = document.getElementById('ededupDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
+    if(r.status === 403){ sec.style.display='none'; return; }
+    const d = await r.json();
+    var ed = d.episodic_dedup || null;
+    if(!ed){ sec.style.display='none'; return; }
+    sec.style.display = '';
+    function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+    var scans = Number(ed.scans)||0;
+    if(scans <= 0){
+      kp.innerHTML = '';
+      dv.innerHTML = '<div class="empty">'+window.T('ov2_ed_wait')+'</div>';
+      return;
+    }
+    var obs = Number(ed.observe_only_scans)||0;
+    var kpis = [
+      {label:window.T('ov2_ed_scans'), value:fmt(scans)},
+      {label:window.T('ov2_ed_observe'), value:fmt(obs)+' / '+fmt(scans)},
+      {label:window.T('ov2_ed_gray'), value:fmt(Number(ed.gray_pairs)||0)},
+      {label:window.T('ov2_ed_held'), value:fmt(Number(ed.held_merges)||0)},
+      {label:window.T('ov2_ed_merged'), value:fmt(Number(ed.merged)||0)},
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    var blocks = [];
+    if(ed.last_gray_example){
+      blocks.push('<div class="muted" style="font-size:12px;margin-bottom:4px;">'
+        +window.T('ov2_ed_last')+'：'+esc(ed.last_gray_example)+'</div>');
+    }
+    blocks.push('<div class="muted" style="font-size:12px;margin-top:6px;">'+window.T('ov2_ed_hint')+'</div>');
+    dv.innerHTML = blocks.join('');
+  }catch(e){
+    dv.innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
+  }
+}
+
+// 🪪 跨平台身份影子卡：读 /api/workspace/metrics 的 identity_shadow（HealthWatchdog 周期
+// 只读扫描落的 state 快照）。contacts.identity_shadow.enabled=false → 整卡隐藏（bazi 惯例）。
+async function loadIdentityShadow(){
+  var sec = document.getElementById('ishadowSection');
+  var kp = document.getElementById('ishadowKpis');
+  var dv = document.getElementById('ishadowDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
+    if(r.status === 403){ sec.style.display='none'; return; }
+    const d = await r.json();
+    var isd = d.identity_shadow || null;
+    if(!isd || !isd.enabled){ sec.style.display='none'; return; }
+    sec.style.display = '';
+    function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+    if(!isd.state_available){
+      kp.innerHTML = '';
+      dv.innerHTML = '<div class="empty">'+window.T('ov2_ish_wait')+'</div>';
+      return;
+    }
+    var counts = isd.counts || {};
+    var kpis = [
+      {label:window.T('ov2_ish_last'), value:esc(isd.last_scan_at || '-')},
+      {label:window.T('ov2_ish_scanned'), value:fmt(Number(isd.scanned_conversations)||0)},
+      {label:window.T('ov2_ish_cands'), value:fmt(Number(isd.candidates)||0)},
+      {label:window.T('ov2_ish_pairs'), value:fmt(Number(counts.high)||0)+' / '+fmt(Number(counts.medium)||0)+' / '+fmt(Number(counts.low)||0)},
+      {label:window.T('ov2_ish_linked'), value:fmt(Number(counts.already_linked)||0)},
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    var blocks = [];
+    if(isd.ok === false){
+      blocks.push('<div style="color:var(--tk-amber-ink,#d97706);font-size:12px;margin-bottom:4px;">⚠️ '
+        +window.T('ov2_ish_scan_failed')+(isd.error ? ' — '+esc(isd.error) : '')+'</div>');
+    }
+    // P7 信号覆盖：配对为 0 时看板自解释（覆盖不足 vs 匹配问题），
+    // 顺带可视化通讯录 phone/username 回填进度。
+    var cov = isd.coverage || {};
+    var covParts = Object.keys(cov).sort().map(function(plat){
+      var s = cov[plat] || {};
+      var t = Number(s.total)||0;
+      return esc(plat)+' ☎ '+fmt(Number(s.phone)||0)+'/'+fmt(t)
+        +' · @ '+fmt(Number(s.username)||0)+'/'+fmt(t);
+    });
+    if(covParts.length){
+      blocks.push('<div class="muted" style="font-size:12px;margin-bottom:6px;">'
+        +window.T('ov2_ish_cov')+'：'+covParts.join('　|　')+'</div>');
+    }
+    if(Number(isd.dismissed_total)||0){
+      blocks.push('<div class="muted" style="font-size:12px;margin-bottom:6px;">'
+        +window.T('ov2_ish_dismissed')+'：'+fmt(Number(isd.dismissed_total)||0)+'</div>');
+    }
+    // 合流观测（累计）：确认/手动链动作把多少历史记忆迁进了共享 canonical
+    var tot = isd.totals || null;
+    if(tot){
+      blocks.push('<div class="muted" style="font-size:12px;margin-bottom:6px;">'
+        +window.T('ov2_ish_totals')+'：'
+        +window.T('ov2_ish_tot_confirm')+' '+fmt(Number(tot.confirm_pairs)||0)
+        +' · '+window.T('ov2_ish_tot_link')+' '+fmt(Number(tot.manual_links)||0)
+        +' · '+window.T('ov2_ish_tot_rows')+' '+fmt(Number(tot.merged_rows)||0)
+        +' · '+window.T('ov2_ish_tot_relink')+' '+fmt(Number(tot.cluster_relinked)||0)
+        +((tot.last && tot.last.at) ? '（'+window.T('ov2_ish_tot_last')+' '+esc(tot.last.at)+'）' : '')
+        +'</div>');
+    }
+    var rows = (isd.sample || []).map(function(p, idx){
+      var tc = p.tier==='high' ? 'var(--tk-emerald-ink,#059669)'
+        : (p.tier==='medium' ? 'var(--tk-brand,#2563eb)' : 'var(--tk-text-muted,#64748b)');
+      var who = esc(p.a)+(p.a_name?' ('+esc(p.a_name)+')':'')+' ↔ '
+        +esc(p.b)+(p.b_name?' ('+esc(p.b_name)+')':'');
+      var ev = esc((p.evidence||[]).join('; '))
+        +(p.already_linked?' · '+window.T('ov2_ish_linked_tag'):'');
+      // 旧 state 只有 a/b「plat:chat」字符串时现场拆字段，免等下一轮扫描才出按钮
+      if(!p.a_platform && p.a){
+        var _ap = String(p.a).split(':');
+        if(_ap.length >= 2){ p.a_platform = _ap[0]; p.a_chat = _ap.slice(1).join(':'); }
+      }
+      if(!p.b_platform && p.b){
+        var _bp = String(p.b).split(':');
+        if(_bp.length >= 2){ p.b_platform = _bp[0]; p.b_chat = _bp.slice(1).join(':'); }
+      }
+      var acts = '';
+      if(CAN_MANAGE_OPS && p.a_platform && p.a_chat && p.b_platform && p.b_chat){
+        acts = '<td style="padding:3px 8px;white-space:nowrap;font-size:11px;">'
+          +'<a href="javascript:void(0)" onclick="ishadowEvidence('+idx+')">'+window.T('ov2_ish_btn_evidence')+'</a>';
+        if(!p.already_linked){
+          acts += ' · <a href="javascript:void(0)" onclick="ishadowConfirm('+idx+')">'+window.T('ov2_ish_btn_confirm')+'</a>'
+            +' · <a href="javascript:void(0)" onclick="ishadowDismiss('+idx+')">'+window.T('ov2_ish_btn_dismiss')+'</a>';
+        }
+        acts += '</td>';
+      } else {
+        acts = '<td></td>';
+      }
+      return '<tr>'
+        +'<td style="padding:3px 8px;white-space:nowrap;"><span style="color:'+tc+';font-weight:600;">'+esc(p.tier)+'</span></td>'
+        +'<td style="padding:3px 8px;">'+who+'</td>'
+        +'<td style="padding:3px 8px;" class="muted">'+ev+'</td>'
+        +acts
+        +'</tr>';
+    });
+    window.__ishadowSample = isd.sample || [];
+    if(rows.length){
+      blocks.push('<div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_ish_sample')+'</div>'
+        +'<table style="width:100%;border-collapse:collapse;font-size:12px;">'+rows.join('')+'</table>');
+    } else if(isd.ok !== false){
+      blocks.push('<div class="muted" style="font-size:12px;">'+window.T('ov2_ish_none')+'</div>');
+    }
+    blocks.push('<div id="ishadowEvidenceBox" class="muted" style="font-size:12px;margin-top:8px;"></div>');
+    blocks.push('<div class="muted" style="font-size:12px;margin-top:6px;">'+window.T('ov2_ish_hint')+'</div>');
+    dv.innerHTML = blocks.join('');
+  }catch(e){
+    dv.innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
+  }
+}
+
+function _ishadowPairBody(idx){
+  var p = (window.__ishadowSample || [])[idx] || {};
+  return {
+    platform_a: String(p.a_platform||''),
+    chat_a: String(p.a_chat||''),
+    platform_b: String(p.b_platform||''),
+    chat_b: String(p.b_chat||''),
+  };
+}
+
+async function ishadowEvidence(idx){
+  var box = document.getElementById('ishadowEvidenceBox');
+  var body = _ishadowPairBody(idx);
+  if(!body.platform_a || !box) return;
+  box.textContent = '…';
+  try{
+    var q = new URLSearchParams(body).toString();
+    var r = await apiFetch('/api/identity/shadow/evidence?'+q, {credentials:'same-origin'});
+    var d = await r.json();
+    if(!r.ok || !d.ok){ box.textContent = (d && d.detail) || ('HTTP '+r.status); return; }
+    function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+    function side(lab, s){
+      var msgs = (s.messages||[]).map(function(m){
+        return '<div style="margin:2px 0;">['+esc(m.direction)+'] '+esc(m.text)+'</div>';
+      }).join('') || '<div class="muted">—</div>';
+      return '<div style="margin-bottom:8px;"><b>'+esc(lab)+'</b> '
+        +esc(s.platform)+':'+esc(s.chat_key)
+        +(s.display_name?' ('+esc(s.display_name)+')':'')
+        +(s.phone?' ☎'+esc(s.phone):'')
+        +'<div class="muted">acct: '+esc((s.account_ids||[]).join(', ')||'-')+'</div>'
+        +msgs+'</div>';
+    }
+    box.innerHTML = '<div style="font-weight:600;margin-bottom:4px;">'+window.T('ov2_ish_evidence_title')
+      +' · '+esc((d.evidence||[]).join('; '))+'</div>'
+      +side('A', d.a||{})+side('B', d.b||{});
+  }catch(e){ box.textContent = String(e); }
+}
+
+async function ishadowDismiss(idx){
+  if(!CAN_MANAGE_OPS) return;
+  if(!window.confirm(window.T('ov2_ish_dismiss_q'))) return;
+  var body = _ishadowPairBody(idx);
+  try{
+    var r = await apiFetch('/api/identity/shadow/dismiss', {
+      method:'POST', credentials:'same-origin',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+    });
+    var d = await r.json();
+    if(!r.ok || !d.ok){ alert((d && d.detail) || ('HTTP '+r.status)); return; }
+    alert(window.T('ov2_ish_dismiss_ok'));
+    loadIdentityShadow();
+  }catch(e){ alert(String(e)); }
+}
+
+async function ishadowConfirm(idx){
+  if(!CAN_MANAGE_OPS) return;
+  if(!window.confirm(window.T('ov2_ish_confirm_q'))) return;
+  var body = _ishadowPairBody(idx);
+  try{
+    var r = await apiFetch('/api/identity/shadow/confirm-link', {
+      method:'POST', credentials:'same-origin',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+    });
+    var d = await r.json();
+    if(!r.ok || !d.ok){ alert((d && d.detail) || ('HTTP '+r.status)); return; }
+    var okMsg = window.T('ov2_ish_confirm_ok')+' → '+(d.canonical_id||'');
+    if(Number(d.merged_rows)>0){
+      okMsg += '\n'+window.T('ov2_ish_merged')+': '+d.merged_rows;
+    }
+    alert(okMsg);
+    loadIdentityShadow();
+  }catch(e){ alert(String(e)); }
+}
+window.ishadowEvidence = ishadowEvidence;
+window.ishadowDismiss = ishadowDismiss;
+window.ishadowConfirm = ishadowConfirm;
 
 // 🔒 账号隔离健康卡：读 /api/admin/isolation-health（记忆键分桶形态 / 在线号人设绑定 / FateX 独立库）。
 async function loadIsolationHealth(){
@@ -2970,7 +3641,7 @@ async function toggleLocalTts(on){
 }
 
 if(CAN_MANAGE_OPS){ var _rb=document.getElementById('recheckBtn'); if(_rb) _rb.style.display=''; }
-function refreshAll(){ loadOverview(); loadIncidents(); loadReport(); loadTTS(); loadTTSTrend(); loadAiSafety(); loadSlaBacklog(); loadTranslationEngines(); loadXlateTrend(); loadVoiceSynthLang(); loadASRDegradation(); loadSpeechEmotion(); loadVisionUsage(); loadDeepPersona(); loadFrontendErrors(); loadInstanceRestartStatus(); loadPlatformSessions(); loadSendRoutes(); loadSendRouteTrend(); loadPersonaMedia(); loadPeerIdentity(); loadIdentityTrend(); loadLocalTts(); loadAutosendMedia(); loadPromiseTrend(); loadAvatarVoice(); loadProactiveEngagement(); loadBazi(); loadIsolationHealth(); loadGpuWatermark(); loadProfileAudit(); loadRealtimeVoice(); loadRtvTrend(); refreshRealtimeVoiceAlertBadge(); loadTgCall(); }
+function refreshAll(){ loadOverview(); loadIncidents(); loadReport(); loadTTS(); loadTTSTrend(); loadAiSafety(); loadSlaBacklog(); loadTranslationEngines(); loadXlateTrend(); loadVoiceSynthLang(); loadASRDegradation(); loadSpeechEmotion(); loadVisionUsage(); loadDeepPersona(); loadFrontendErrors(); loadCustomerAssets(); loadInstanceRestartStatus(); loadPlatformSessions(); loadSendRoutes(); loadSendRouteTrend(); loadPersonaMedia(); loadMediaConsistency(); loadPeerIdentity(); loadIdentityTrend(); loadLocalTts(); loadAutosendMedia(); loadPromiseTrend(); loadAvatarVoice(); loadProactiveEngagement(); loadBazi(); loadGoals(); loadIdentityShadow(); loadEpisodicDedup(); loadIsolationHealth(); loadGpuWatermark(); loadProfileAudit(); loadRealtimeVoice(); loadRtvTrend(); refreshRealtimeVoiceAlertBadge(); loadTgCall(); }
 function _onRtvOpsRefresh(){
   loadRealtimeVoice(); loadRtvTrend(); loadRtvAlertCalibrate(false); refreshRealtimeVoiceAlertBadge();
 }

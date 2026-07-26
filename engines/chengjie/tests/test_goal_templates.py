@@ -1,0 +1,168 @@
+"""营销目标「模板注册表」门禁（纯函数，零 IO）。
+
+覆盖：
+- 6 模板结构不变量：每模板 4 里程碑、push_curve 全在 PUSH_LEVELS、intents 池键覆盖 0..3；
+- list_templates 公开形状不泄漏 intents 内部池，且返回副本（改返回值不脏注册表）；
+- pick_intent crc32 确定性轮换（同目标同日恒定、跨日采样至少两种）+ {item}/{note}
+  参数代入与缺参留白；
+- pick_care_intent 确定性；push_for_milestone 越界夹取；milestone_label zh/en 与越界。
+"""
+
+from __future__ import annotations
+
+from src.companion.goals.templates import (
+    AUTONOMY_LEVELS,
+    CARE_INTENTS,
+    GOAL_STATUSES,
+    PUSH_LEVELS,
+    STAGE_ORDER,
+    TEMPLATES,
+    get_template,
+    list_templates,
+    milestone_label,
+    pick_care_intent,
+    pick_intent,
+    push_for_milestone,
+    template_ids,
+)
+
+EXPECTED_IDS = {
+    "conversion_unlock", "conversion_subscribe", "relationship_stage",
+    "relationship_intimacy", "engagement_reactivate", "custom",
+}
+
+# 14 天采样窗：意图池最小 size=2，crc32 确定性下必然轮换出 ≥2 种（已实测）
+_DAYS = [f"2026-07-{d:02d}" for d in range(1, 15)]
+
+
+# ── 结构不变量 ──────────────────────────────────────────────────────────────
+
+def test_exactly_six_templates():
+    assert set(TEMPLATES) == EXPECTED_IDS
+    assert set(template_ids()) == EXPECTED_IDS
+
+
+def test_every_template_structural_invariants():
+    for tid, t in TEMPLATES.items():
+        ms = t["milestones"]
+        assert len(ms) == 4, tid
+        for m in ms:
+            assert m.get("id") and m.get("zh") and m.get("en"), tid
+        curve = t["push_curve"]
+        assert len(curve) == 4, tid
+        assert all(lvl in PUSH_LEVELS for lvl in curve), tid
+        assert set(t["intents"].keys()) == {0, 1, 2, 3}, tid
+        for pool in t["intents"].values():
+            assert pool and all(isinstance(s, str) and s for s in pool), tid
+        assert t["kind"] and t["name_zh"] and t["name_en"], tid
+        assert int(t["default_days"]) > 0, tid
+
+
+def test_shared_vocabularies():
+    assert PUSH_LEVELS == ("none", "soft", "direct")
+    assert AUTONOMY_LEVELS == ("observe", "suggest", "auto")
+    assert set(GOAL_STATUSES) == {
+        "active", "paused", "done", "failed", "expired", "cancelled"}
+    assert STAGE_ORDER[0] == "initial" and STAGE_ORDER[-1] == "converted"
+    assert len(CARE_INTENTS) >= 2
+
+
+def test_get_template_hit_strip_and_miss():
+    assert get_template("custom") is TEMPLATES["custom"]
+    assert get_template(" custom ") is TEMPLATES["custom"]
+    assert get_template("no_such") is None
+    assert get_template("") is None
+    assert get_template(None) is None
+
+
+def test_list_templates_public_shape_no_intents_leak():
+    out = list_templates()
+    assert len(out) == 6
+    assert {e["id"] for e in out} == EXPECTED_IDS
+    for e in out:
+        assert "intents" not in e, e["id"]
+        assert {"id", "name_zh", "name_en", "kind", "default_days",
+                "params", "milestones"} <= set(e)
+        assert len(e["milestones"]) == 4
+
+
+def test_list_templates_returns_copies_not_registry_refs():
+    out = list_templates()
+    e = next(x for x in out if x["id"] == "custom")
+    e["params"][0]["key"] = "hacked"
+    e["milestones"][0]["zh"] = "hacked"
+    assert TEMPLATES["custom"]["params"][0]["key"] == "note"
+    assert TEMPLATES["custom"]["milestones"][0]["zh"] == "起步"
+
+
+# ── pick_intent：确定性轮换 + 参数代入 ──────────────────────────────────────
+
+def test_pick_intent_deterministic_same_goal_same_day():
+    t = TEMPLATES["conversion_unlock"]
+    a = pick_intent(t, 0, "goal-x", "2026-07-01")
+    b = pick_intent(t, 0, "goal-x", "2026-07-01")
+    assert a == b
+    assert a in t["intents"][0]      # 里程碑 0 池无占位符 → 原样命中池内
+
+def test_pick_intent_rotates_across_days():
+    t = TEMPLATES["conversion_unlock"]
+    seen = {pick_intent(t, 0, "goal-rot", d) for d in _DAYS}
+    assert len(seen) >= 2
+
+
+def test_pick_intent_clamps_milestone_and_handles_empty():
+    t = TEMPLATES["conversion_unlock"]
+    assert pick_intent(t, 99, "g", "2026-07-01") in t["intents"][3]   # 上越界夹到末段
+    assert pick_intent(t, -5, "g", "2026-07-01") in t["intents"][0]   # 下越界夹到 0
+    assert pick_intent({}, 0, "g", "2026-07-01") == ""
+    assert pick_intent({"intents": {}}, 0, "g", "2026-07-01") == ""
+
+
+def test_pick_intent_item_substitution_and_fallbacks():
+    t = TEMPLATES["conversion_unlock"]
+    out = pick_intent(t, 1, "g", "2026-07-01", params={"item_label": "八字详批"})
+    assert "「八字详批」" in out and "{item}" not in out
+    # item_label 缺省回落 item_id
+    out2 = pick_intent(t, 1, "g", "2026-07-01", params={"item_id": "bazi_reading"})
+    assert "「bazi_reading」" in out2 and "{item}" not in out2
+    # 全缺 → 留白词「它」，不留花括号
+    out3 = pick_intent(t, 1, "g", "2026-07-01")
+    assert "「它」" in out3 and "{item}" not in out3
+
+
+def test_pick_intent_note_substitution_and_fallback():
+    t = TEMPLATES["custom"]
+    out = pick_intent(t, 0, "g", "2026-07-01", params={"note": "推广新品"})
+    assert "「推广新品」" in out and "{note}" not in out
+    out2 = pick_intent(t, 0, "g", "2026-07-01", params={})
+    assert "「这个目标」" in out2 and "{note}" not in out2
+
+
+def test_pick_care_intent_deterministic_and_rotates():
+    a = pick_care_intent("goal-x", "2026-07-01")
+    assert a == pick_care_intent("goal-x", "2026-07-01")
+    assert a in CARE_INTENTS
+    seen = {pick_care_intent("goal-x", d) for d in _DAYS}
+    assert len(seen) >= 2
+
+
+# ── push_for_milestone / milestone_label ────────────────────────────────────
+
+def test_push_for_milestone_curve_and_clamps():
+    t = TEMPLATES["conversion_unlock"]
+    assert [push_for_milestone(t, i) for i in range(4)] == [
+        "none", "soft", "direct", "soft"]
+    assert push_for_milestone(t, -3) == "none"    # 下越界 → 首段
+    assert push_for_milestone(t, 99) == "soft"    # 上越界 → 末段
+    assert push_for_milestone({}, 0) == "soft"    # 无曲线 → soft 兜底
+    assert push_for_milestone({"push_curve": ("bogus",)}, 0) == "soft"  # 非法值兜底
+
+
+def test_milestone_label_zh_en_and_clamps():
+    t = TEMPLATES["conversion_unlock"]
+    assert milestone_label(t, 0) == "破冰回暖"
+    assert milestone_label(t, 0, "en") == "Reconnect"
+    assert milestone_label(t, 0, "en-US") == "Reconnect"   # en 前缀即认
+    assert milestone_label(t, 99) == "跟进收口"            # 越界夹到末段
+    assert milestone_label(t, -2) == "破冰回暖"
+    assert milestone_label({}, 0) == ""

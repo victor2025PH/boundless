@@ -456,6 +456,42 @@ def register_ops_overview_routes(app, ctx) -> None:
             logger.debug("gpu-watermark 探测失败（已忽略）", exc_info=True)
             return {"ok": True, "enabled": False, "hosts": []}
 
+    @app.get("/api/admin/media-consistency")
+    async def api_media_consistency(request: Request, force: int = 0):
+        """图文一致性观测（P1）：投诉分类计数 + 点名场景供需缺口报告。
+
+        需求侧＝``image_autosend`` 进程级计数（重启清零）；供给侧＝注册相册(DB)
+        + 文件系统相册按场景类清点（300s TTL，``?force=1`` 强制重扫）。
+        selfie 未启用且零数据 → active:false，前端隐藏卡。
+        """
+        api_auth(request)
+        try:
+            from src.companion.media_gap import (
+                collect_scene_supply, scene_gap_report)
+            from src.inbox.image_autosend import metrics_snapshot as _ims
+            snap = _ims()
+            cfg = getattr(config_manager, "config", None) or {}
+            scfg = ((cfg.get("companion") or {}).get("selfie") or {}) \
+                if isinstance(cfg, dict) else {}
+            supply = collect_scene_supply(scfg, force=bool(force))
+            gap = scene_gap_report(
+                supply, snap.get("scene_demand"), snap.get("scene_unmet"))
+            complaints = {
+                "total": int(snap.get("complaints", 0) or 0),
+                "by_kind": dict(snap.get("complaints_by_kind") or {}),
+                "by_persona": dict(snap.get("complaints_by_persona") or {}),
+            }
+            active = bool(
+                gap.get("active") or complaints["total"]
+                or snap.get("scene_demand") or snap.get("scene_unmet"))
+            return {"ok": True, "active": active,
+                    "complaints": complaints, "gap": gap}
+        except Exception:
+            logger.debug("media-consistency 汇总失败（已忽略）", exc_info=True)
+            return {"ok": True, "active": False,
+                    "complaints": {"total": 0, "by_kind": {}, "by_persona": {}},
+                    "gap": {"rows": [], "supply_totals": {}, "active": False}}
+
     @app.get("/api/admin/realtime-voice-trend")
     async def api_realtime_voice_trend(request: Request, days: int = 7):
         """E 线：近 N 天实时语音接通率/健康率按日聚合（供看板 sparkline）。

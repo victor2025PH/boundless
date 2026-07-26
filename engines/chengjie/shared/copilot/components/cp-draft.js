@@ -20,7 +20,7 @@
     ["vi", "cp.lang.vi"], ["id", "cp.lang.id"], ["ja", "cp.lang.ja"],
     ["ko", "cp.lang.ko"], ["ru", "cp.lang.ru"], ["es", "cp.lang.es"], ["pt", "cp.lang.pt"],
   ];
-  const TIER = { chat_binding: "cp.draft.tier_chat_binding", account_profile: "cp.draft.tier_account_profile", domain: "cp.draft.tier_domain", default: "cp.draft.tier_default" };
+  const TIER = { conv_override: "cp.draft.tier_conv_override", chat_binding: "cp.draft.tier_chat_binding", account_profile: "cp.draft.tier_account_profile", domain: "cp.draft.tier_domain", default: "cp.draft.tier_default" };
 
   class CpDraft extends Base {
     constructor() {
@@ -344,7 +344,9 @@
 
       const personaSel = this.shadowRoot.querySelector('select[data-role="persona"]');
       const personaId = personaSel ? personaSel.value : "";
-      const payload = { messages, platform, chat_key: chatKey, target_lang: lang };
+      // conversation_id 必带：服务端由它反解 account → 会话覆写/账号人设才解析得准
+      // （只给 platform+chat_key 时多账号下会落到 config 默认人设 → 口径与出站链分裂）。
+      const payload = { messages, platform, chat_key: chatKey, target_lang: lang, conversation_id: cid };
       if (personaId) payload.persona_id = personaId;
       let r;
       try {
@@ -361,6 +363,12 @@
       //       供 _paintDraft 判定是否取译文文本，替代仅看本地记忆的 _loadLang()。
       this._reqLang = lang;
       this._paintDraft(r);
+    }
+
+    /* 宿主联动（cp-persona-changed 后调用）：人设换绑使已展示的草稿口吻过期 ——
+       仅当面板里已有草稿时才重生成（闲置面板不烧 LLM；下次手动生成天然用新人设）。 */
+    regenerate() {
+      if (this._draft) this._generate();
     }
 
     _paintDraft(r) {

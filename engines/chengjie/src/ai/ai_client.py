@@ -56,7 +56,9 @@ def build_time_context_line(now: Any = None) -> str:
     line = (
         "【当前真实时间】" + _t.strftime("%Y-%m-%d %H:%M")
         + f"（{_tod}）。问候语、作息话题、以及照片场景标记里的光线时段"
-          "都必须符合这个时间（深夜就是室内暖光/夜景，不要白天场景）。")
+          "都必须符合这个时间（深夜就是室内暖光/夜景，不要白天场景）。"
+          "凡涉及日期的推理（票据/行程/纪念日的先后、隔了几天）一律以上面日期"
+          "为「今天」计算——早于今天的日期是已经发生的过去，不要当成未来安排。")
     if _tod == "清晨":
         line += (
             "\n【作息合理性】现在是清晨：合理状态只有刚睡醒/洗漱/准备出门/"
@@ -698,11 +700,21 @@ class AIClient(LoggerMixin):
                     elapsed_time = time.time() - start_time
                     reply = None
                     if response and response.choices:
-                        _msg = response.choices[0].message
+                        _choice0 = response.choices[0]
+                        _msg = _choice0.message
                         reply = (_msg.content or "").strip()
                         if not reply:
                             _extra = getattr(_msg, "model_extra", None) or {}
                             reply = (_extra.get("reasoning") or "").strip()
+                        # 非 stop 收尾（length=截断 / content_filter 等）此前完全静默——
+                        # 2026-07-26 出过一条 5 字符残句发到线上，事后无从判断是模型
+                        # 自己停的还是被截断。只记日志不改行为。
+                        _fin = getattr(_choice0, "finish_reason", None)
+                        if reply and _fin and str(_fin) != "stop":
+                            self.logger.warning(
+                                "AI 回复 finish_reason=%s（非 stop，可能被截断）"
+                                "len=%d request_id=%s",
+                                _fin, len(reply), request_id or "n/a")
                     try:
                         u = response.usage
                         if u:
@@ -2375,6 +2387,11 @@ class AIClient(LoggerMixin):
         _bazi = (context.get("_bazi_block") or "").strip()
         if _bazi:
             prompt_parts.append(_bazi)
+        # 营销目标（companion.goals）：会话工作目标的「今日拍」方向块（skill_manager
+        # 注入；开关/情绪 hold/沉默熔断/力度判定全在注入侧，这里有块即消费）
+        _goal = (context.get("_goal_block") or "").strip()
+        if _goal:
+            prompt_parts.append(_goal)
         # ★ 情感智能上下文引擎（时间感知 + 情绪弧线 + 关系温度 + 记忆反思）
         _emo_block = (context.get("_emotional_context_block") or "").strip()
         if _emo_block:
@@ -2879,6 +2896,12 @@ class AIClient(LoggerMixin):
             "ASSISTANT 回复只是语境参考——凡是只出现在助手回复里的猜测、提议、问句内容"
             "（如助手问「明天不用上班吗？」而用户没有确认），一律不得作为事实输出。"
             "用户没有明确说的，宁可不抽。"
+            "【持久性铁律】只抽取有持续意义的信息（身份/称呼/偏好/关系/经历/约定/计划）；"
+            "转瞬即逝的当下状态一律不抽——此刻天气（正在下雨/好热）、正在做的动作"
+            "（在吃饭/刚到家）、当下瞬时情绪（现在好困）等，这些由近期对话自然衔接，"
+            "存成长期记忆只会积累过期噪声。"
+            "【称呼判别】「叫我X」只有当 X 是名字/昵称/称号时才是称呼事实；"
+            "「叫我别走」「叫我怎么办」这类 X 为动词短语的是祈使/求助语气，不是称呼，不得抽取。"
             "输出严格为一行 JSON，不要 markdown："
             '{"facts":["..."]} facts 为 0～4 条中文短句，无则 []。'
         )

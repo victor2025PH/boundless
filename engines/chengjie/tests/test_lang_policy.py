@@ -392,3 +392,56 @@ def test_operator_lock_normalizes_tts_codes():
     )
     assert d.lang == "zh"
     assert d.source == "operator_lock"
+
+
+# ── 7. 系统注入文本不构成语言证据（2026-07-26 Phase1.3 配套） ────
+# 识图/识视频描述是本系统生成的中文模板，不是客户说的话；英文客户发图
+# → 中文描述并入正文 → 若算证据会把回复整段带偏成中文。
+
+def test_strip_media_desc_lines():
+    out = strip_neutral_tokens("Look at this photo!\n[图片内容] 一只橘猫趴在沙发上")
+    assert "橘猫" not in out
+    assert "Look" in out
+
+
+def test_bare_image_desc_is_no_evidence():
+    lang, strength = classify_evidence("[图片内容] 一只橘猫趴在沙发上，很可爱")
+    assert strength == EvidenceStrength.NONE
+    assert lang == ""
+
+
+def test_video_desc_is_no_evidence():
+    lang, strength = classify_evidence("[视频内容] 画面：海边日落 语音：无")
+    assert strength == EvidenceStrength.NONE
+
+
+def test_voice_transcript_keeps_evidence():
+    """语音转写是客户原话＝真语言证据：只剥 [语音] 标记，保留正文。"""
+    lang, strength = classify_evidence("[语音] I miss you so much today")
+    assert lang == "en"
+    assert strength == EvidenceStrength.STRONG
+
+
+def test_bare_voice_placeholder_is_no_evidence():
+    lang, strength = classify_evidence("[语音]")
+    assert strength == EvidenceStrength.NONE
+
+
+def test_stale_label_not_counted_as_cjk():
+    """时间断层标签「[3天前] 」是系统文案——不得把英文历史判成中文。"""
+    lang, strength = classify_evidence("[3天前] hello how are you doing")
+    assert lang == "en"
+
+
+def test_english_convo_image_turn_stays_english():
+    """端到端：英文会话里客户发图（正文=中文识图描述）→ 语言决策不得翻成中文。"""
+    hist = [
+        {"role": "user", "content": "good morning! how was your night"},
+        {"role": "assistant", "content": "it was lovely, thinking of you"},
+        {"role": "user", "content": "haha you always know what to say"},
+        {"role": "user", "content": "[图片内容] 一只橘猫趴在沙发上，旁边有一杯咖啡"},
+    ]
+    d = resolve_conversation_language(
+        "[图片内容] 一只橘猫趴在沙发上，旁边有一杯咖啡", hist, prev_lang="",
+    )
+    assert d.lang == "en"

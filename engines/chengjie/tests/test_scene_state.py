@@ -342,7 +342,8 @@ async def test_run_autosend_on_sent_and_requested_scene(tmp_path, monkeypatch):
         cfg, "telegram", "acct", "chatRS", "lin",
         "發個照片給我看看嘛", [], send_fn=_send_fn,
         requested_scene="at the beach, sea in the background",
-        on_sent=lambda note, scene: seen.update(note=note, scene=scene))
+        on_sent=lambda note, scene, series="": seen.update(
+            note=note, scene=scene, series=series))
     assert ok is True
     assert seen["note"].startswith("[图片]")
     assert "beach" in seen["scene"]  # requested_scene 覆盖了轮换场景
@@ -368,7 +369,8 @@ async def test_run_autosend_on_sent_registry_scene_empty(monkeypatch):
     ok = await ia.run_autosend_image(
         {"companion": {"selfie": {"enabled": True}}}, "telegram", "a", "cReg2",
         "lin", "给我跳舞", [], send_fn=_send_fn,
-        on_sent=lambda note, scene: seen.update(note=note, scene=scene))
+        on_sent=lambda note, scene, series="": seen.update(
+            note=note, scene=scene, series=series))
     assert ok is True
     assert seen["note"].startswith("[图片]") and seen["scene"] == ""
     reset_persona_media_store()
@@ -386,7 +388,7 @@ async def test_run_autosend_on_sent_exception_never_breaks_send(monkeypatch):
     async def _send_fn(mp, mu, mt, cap, inbox):
         return True
 
-    def _boom(note, scene):
+    def _boom(note, scene, series=""):
         raise RuntimeError("log fail")
 
     ok = await ia.run_autosend_image(
@@ -456,7 +458,8 @@ async def test_guard_keeps_promise_and_fulfills_async(monkeypatch):
         sm = _SM(selfie_cfg=_GEN_ON, guard_cfg={"async_fulfill": True})
         calls = {}
 
-        async def _fake_directive_selfie(scene, uid, ctx, chat_id, scfg, lp=""):
+        async def _fake_directive_selfie(scene, uid, ctx, chat_id, scfg, lp="",
+                                         *, scene_strict=True):
             calls["scene"] = scene
             ctx["_stage_media_note"] = "[图片] 兑现自拍"
             return True
@@ -488,7 +491,8 @@ async def test_guard_fulfill_failure_sends_compensation(monkeypatch):
         sm = _SM(selfie_cfg=_GEN_ON, guard_cfg={"async_fulfill": True})
         sent_texts = []
 
-        async def _fake_directive_selfie(scene, uid, ctx, chat_id, scfg, lp=""):
+        async def _fake_directive_selfie(scene, uid, ctx, chat_id, scfg, lp="",
+                                         *, scene_strict=True):
             return False  # 生成/发送失败
 
         async def _capture_text(chat_id, text):
