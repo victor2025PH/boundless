@@ -51,6 +51,50 @@ MODE_DESC: Dict[str, str] = {
     "web": "隔离浏览器 + 平台网页二维码，兼容好、更像真人",
     "device": "真机 / 模拟器扫码，最难封号，账号数受设备数限制",
 }
+# 上面两张表是**后端兜底**文案；前端优先用下面的 i18n 键取本地化文案（英文坐席看到的
+# 不该是中文模式名）。键值缺失时前端自动回落 label/desc。
+MODE_LABEL_KEYS: Dict[str, str] = {
+    "protocol": "inbox.connect.mode_l_protocol",
+    "web": "inbox.connect.mode_l_web",
+    "device": "inbox.connect.mode_l_device",
+}
+MODE_DESC_KEYS: Dict[str, str] = {
+    "protocol": "inbox.connect.mode_d_protocol",
+    "web": "inbox.connect.mode_d_web",
+    "device": "inbox.connect.mode_d_device",
+}
+# 能力标签（前端渲染成 chips → i18n 键 inbox.connect.cap_<name>）：让运营不必读技术描述
+# 就能横向比较「能挂几个号 / 要不要买手机 / 要不要运维」。
+MODE_CAPS: Dict[str, tuple] = {
+    "protocol": ("multi", "light"),
+    "web": ("compat", "human"),
+    "device": ("antiban", "need_device"),
+}
+
+# 不可用原因码（结构化，前端按码取本地化解释与处置建议；文本仅作后端兜底）
+REASON_NOT_ENABLED = "not_enabled"
+REASON_NEEDS_SERVER_SETUP = "needs_server_setup"
+REASON_TEXTS: Dict[str, str] = {
+    REASON_NOT_ENABLED: "开发中 / 未启用",
+    REASON_NEEDS_SERVER_SETUP: "需服务器端配置后启用",
+}
+
+# 平台级覆盖：同一个 mode 名在不同平台可能是**完全不同的东西**。典型如 Messenger 的 web——
+# Facebook 网页端并没有 WhatsApp 那种「手机扫码配对设备」，其二维码只用于加好友；登录必须在
+# 服务器的隔离浏览器里用账密 / 2FA 完成。沿用通用的「网页扫码」文案，坐席只会对着弹窗干等一个
+# 永远不会出现的码（本条即该故障的修复点）。
+PLATFORM_MODE_OVERRIDES: Dict[str, Dict[str, Dict[str, Any]]] = {
+    "messenger": {
+        "web": {
+            "label": "服务器托管登录",
+            "desc": "在服务器的隔离浏览器内完成 Facebook 官方登录（账密 / 2FA），不使用二维码",
+            "label_key": "inbox.connect.mode_l_msg_web",
+            "desc_key": "inbox.connect.mode_d_msg_web",
+            "caps": ("server", "human", "need_ops"),
+            "unavailable_reason_code": REASON_NEEDS_SERVER_SETUP,
+        },
+    },
+}
 
 # 每平台默认可选方式与默认方式（可被 config.platform_login.<platform> 覆盖）
 DEFAULT_PLATFORM_MODES: Dict[str, Dict[str, Any]] = {
@@ -261,15 +305,43 @@ def list_modes(
     cfg = platform_cfg or {}
     modes = cfg.get("modes") or pdef["modes"]
     default = cfg.get("default") or pdef["default"]
+    overrides = PLATFORM_MODE_OVERRIDES.get(platform, {})
     out: List[Dict[str, Any]] = []
     for m in modes:
         avail = mode_available(platform, m)
+        ov = overrides.get(m, {})
+        rc = "" if avail else str(
+            ov.get("unavailable_reason_code") or REASON_NOT_ENABLED)
         out.append({
             "mode": m,
-            "label": MODE_LABELS.get(m, m),
-            "desc": MODE_DESC.get(m, ""),
+            "label": str(ov.get("label") or MODE_LABELS.get(m, m)),
+            "desc": str(ov.get("desc") or MODE_DESC.get(m, "")),
+            "label_key": str(ov.get("label_key") or MODE_LABEL_KEYS.get(m, "")),
+            "desc_key": str(ov.get("desc_key") or MODE_DESC_KEYS.get(m, "")),
+            "caps": list(ov.get("caps") or MODE_CAPS.get(m, ())),
             "available": avail,
+            # recommended = 该平台的**默认方式**（配置语义，与可用性正交，勿改）。
             "recommended": (m == default),
-            "reason": "" if avail else "开发中 / 未启用",
+            # preferred = 给 UI 用的「主推」标记：默认方式 **且** 当前真的能用。
+            # 二者曾被混为一谈 —— Messenger 的 web 同时是默认方式和不可用，界面便渲染出
+            # 一个挂着绿色「推荐」角标却点不动、无任何反馈的选项。可用性是硬前提。
+            "preferred": bool(avail and m == default),
+            "reason_code": rc,
+            "reason": REASON_TEXTS.get(rc, "") if rc else "",
         })
     return out
+
+
+def first_available_mode(modes: List[Dict[str, Any]]) -> str:
+    """从 list_modes 结果里挑一个能真正走通的方式：优先主推，其次任一可用。
+
+    调用方原本取「第一个 recommended」，而默认方式可能恰好不可用（Messenger 即如此），
+    于是回落到 modes[0] —— 那还是同一个不可用项，用户拿到的是一句无从下手的报错。
+    """
+    for m in modes:
+        if m.get("preferred"):
+            return str(m.get("mode") or "")
+    for m in modes:
+        if m.get("available"):
+            return str(m.get("mode") or "")
+    return str(modes[0].get("mode") or "") if modes else "device"

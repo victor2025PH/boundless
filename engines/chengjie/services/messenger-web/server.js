@@ -1083,6 +1083,9 @@ async function promoteIfLoggedIn(loginId, entry) {
 // 冻着。此处监听 context 'close' 事件：清理旧 entry/定时器 → 延时用 startLogin 重启（复用磁盘
 // profile + 回灌 cookie，通常免重扫）。用 _recovering 防并发重建；_shuttingDown 时不自愈（正常退出）。
 const _recovering = new Set();
+// 主动关闭（cancel / logout）的 login_id：这两条路径同样会触发 context 'close'，而自愈
+// 分不清「崩溃」和「我们自己关的」。一次性标记，close 事件消费掉即失效，真崩溃不受影响。
+const _intentionalClose = new Set();
 // 自愈退避 + 上限：连续崩溃时用指数退避（3s→6s→12s→24s→48s，封顶 60s），超过 5 次即放弃自愈、
 // 置 expired 并告警——防「崩溃循环无限 3s 重启」既堆 Chromium 又高频重连触发 FB 反自动化登出。
 // 距上次尝试 >5min 视为新事件，计数清零（promoteIfLoggedIn 成功授权后亦清零）。
@@ -1112,6 +1115,27 @@ function scheduleSlowRetry(loginId) {
 }
 function scheduleRecovery(loginId) {
   if (_shuttingDown || _recovering.has(loginId)) return;
+  // 人为关闭不是崩溃：不拦的话，坐席一关接入弹窗（前端会自动 cancel）浏览器就在 3 秒后
+  // 被重新拉起；logout 更糟——profile 已删，自愈等于凭空弹出一个全新的空白登录窗口。
+  if (_intentionalClose.delete(loginId)) {
+    logger.debug({ loginId }, "context closed intentionally → skip auto-recovery");
+    return;
+  }
+  // 还没登录成功就被关掉：headed 模式下坐席直接点窗口右上角的 X 是最自然的放弃方式，
+  // 而 close 事件与真崩溃长得一模一样。这时重新弹窗毫无意义——没人在等它，只会骚扰
+  // （关一次弹一次）。置 expired 收摊，profile 是空壳一并清掉；坐席想登随时可重新发起。
+  // 只有 authorized 会话才值得自愈：那是在收发消息的生产会话，掉了必须救回来。
+  const cur0 = sessions.get(loginId);
+  if (cur0 && cur0.status !== "authorized") {
+    logger.info({ loginId, status: cur0.status },
+      "login window closed before authorization → treat as abandoned (no relaunch)");
+    stopPolling(cur0);
+    cur0.status = "expired";
+    sessions.delete(loginId);
+    purgeProfile(loginId);
+    postStatus(loginId, cur0, "expired", "login window closed before authorization").catch(() => {});
+    return;
+  }
   const now = Date.now();
   const rec = _recoveryAttempts.get(loginId) || { count: 0, lastTs: 0 };
   if (now - rec.lastTs > 5 * 60 * 1000) rec.count = 0;
@@ -1241,6 +1265,14 @@ async function restoreAll() {
   let restored = 0;
   for (const loginId of dirs) {
     if (sessions.has(loginId)) continue;
+    // 没有 cookie 快照 = 从没登录成功过（saveCookies 只在授权后写）。这种空壳目录多半是
+    // 「发起接入又取消」留下的，拉起来也只会停在登录页，白弹一个窗口再盯 10 分钟。
+    // cancel 时的 purge 偶尔会因文件仍被占用而放弃，这里兜底再清一次。
+    if (!fs.existsSync(cookiesPath(loginId))) {
+      logger.info({ loginId }, "skip restore: never authorized (no cookie snapshot) → purging shell profile");
+      purgeProfile(loginId);
+      continue;
+    }
     try {
       await startLogin(loginId, "", true);
       restored += 1;
@@ -1693,19 +1725,67 @@ app.post("/shutdown", async (_req, res) => {
   setTimeout(() => gracefulShutdown("http"), 200);
 });
 
+// 冷启期间被 cancel 的 login_id：startLogin 是后台任务，取消时它的浏览器可能还没起来，
+// 等它起来后必须立刻收掉，否则留下一个谁也管不着的孤儿 Chromium 窗口。
+const _cancelledBoots = new Set();
+
+/** 删掉「没登成」留下的空壳 profile（best-effort，延迟等浏览器彻底放开文件句柄）。
+ *  不删会越攒越多，而每次服务启动 restoreAll 都要把它们逐个拉起浏览器、等 10s 判未授权、
+ *  再盯 10 分钟——全是噪音窗口。已授权的 profile 绝不碰，那是免重登的登录资产。 */
+function purgeProfile(loginId, attempt = 0) {
+  // Chromium 关闭后还会攥着 BrowserMetrics/*.pma 之类的句柄一小会儿，首删常被拒 → 退避重试。
+  const delays = [2000, 6000, 15000];
+  if (attempt >= delays.length) {
+    logger.debug({ loginId }, "purge profile gave up (still locked)");
+    return;
+  }
+  setTimeout(() => {
+    const dir = path.join(SESSIONS_DIR, loginId);
+    try {
+      if (!fs.existsSync(dir)) return;
+      fs.rmSync(dir, { recursive: true, force: true });
+      logger.debug({ loginId }, "purged unauthorized profile");
+    } catch (_) {
+      purgeProfile(loginId, attempt + 1);
+    }
+  }, delays[attempt]);
+}
+
 app.post("/login/start", async (req, res) => {
   try {
     const loginId = newLoginId();
     const proxyUrl = (req.body && req.body.proxy_url) || "";
-    const entry = await startLogin(loginId, proxyUrl);
-    // 等首帧登录页截图（最多 ~8s）
-    const deadline = Date.now() + 8000;
-    while (!entry.qrImage && entry.status === "pending" && Date.now() < deadline) {
-      entry.qrImage = await snapshot(entry.page);
-      if (entry.qrImage) break;
-      await new Promise((r) => setTimeout(r, 300));
-    }
-    res.json({ login_id: loginId, qr_image: entry.qrImage, status: entry.status });
+    // 不等浏览器起来就回：Chromium 冷启 + goto messenger.com + 首帧截图实测 ~36s，
+    // 远超调用方 20s 超时 → 请求被判失败，UI 报「连接服务未运行」，而服务其实好好的
+    // （这正是 Messenger 接入一直走不通的根因）。契约本就对齐 baileys：start 只发 login_id，
+    // 登录页截图由 /login/:id/status 送达，前端每 2.5s 轮询本就在等它。
+    // 占位会话先入表——startLogin 内部要到浏览器就绪才 sessions.set，中间这段空窗期若
+    // 表里没有该 id，轮询会拿到 "session not found" 并被归一化成 expired。
+    sessions.set(loginId, {
+      status: "pending", booting: true, qrImage: "", accountId: "",
+      name: "", avatarUrl: "", createdAt: Date.now(),
+      proxyUrl: proxyUrl || "", seen: new Map(), pollTimer: null,
+    });
+    startLogin(loginId, proxyUrl).then(() => {
+      if (!_cancelledBoots.delete(loginId)) return;
+      const cur = sessions.get(loginId);
+      if (!cur) return;
+      _intentionalClose.add(loginId); // 同 cancel：这是我们自己收的，不是崩溃
+      stopPolling(cur);
+      if (cur.context) cur.context.close().catch(() => {});
+      sessions.delete(loginId);
+      if (cur.status !== "authorized") purgeProfile(loginId);
+      logger.info({ loginId }, "boot finished after cancel - context closed");
+    }).catch((e) => {
+      logger.error({ e, loginId }, "start failed (background boot)");
+      _cancelledBoots.delete(loginId);
+      const cur = sessions.get(loginId);
+      // 只在仍是占位时置终态：startLogin 若已换上真 entry，它自己的状态机说了算
+      if (cur && cur.booting) { cur.status = "failed"; cur.detail = String(e); }
+      // 启动就失败 → profile 必然是空壳，不清会留到下次开机被 restore 扫到
+      if (!cur || cur.status !== "authorized") purgeProfile(loginId);
+    });
+    res.json({ login_id: loginId, qr_image: "", status: "pending" });
   } catch (e) {
     logger.error({ e }, "start failed");
     res.status(500).json({ error: String(e) });
@@ -1715,6 +1795,13 @@ app.post("/login/start", async (req, res) => {
 app.get("/login/:id/status", async (req, res) => {
   const entry = sessions.get(req.params.id);
   if (!entry) return res.json({ status: "expired", detail: "session not found" });
+  // 浏览器还在冷启（start 已秒回但 context/page 尚未就绪）：如实回 pending，别去碰还不存在
+  // 的 page。前端此时显示「准备环境」，截图在浏览器就绪后的下一轮轮询自然到达。
+  if (entry.booting && !entry.page) {
+    return res.json({ status: entry.status || "pending", account_id: "",
+                      name: "", avatar_url: "", qr_image: "",
+                      detail: String(entry.detail || "") });
+  }
   // 未授权时先复检登录态（看门狗超时/慢登录的补救）；仍未登录才刷新登录页截图。
   if (entry.status !== "authorized") {
     const ok = await promoteIfLoggedIn(req.params.id, entry);
@@ -1734,9 +1821,16 @@ app.get("/login/:id/status", async (req, res) => {
 app.post("/login/:id/cancel", async (req, res) => {
   const entry = sessions.get(req.params.id);
   if (entry) {
+    // 冷启途中被取消：浏览器还没起来，删表拦不住后台任务——记下 id，等它起来再收
+    if (entry.booting && !entry.context) _cancelledBoots.add(req.params.id);
+    _intentionalClose.add(req.params.id); // 主动关，别让自愈把它当崩溃再拉起来
     stopPolling(entry);
     try { await entry.context.close(); } catch (_) {}
     sessions.delete(req.params.id);
+    // 没登成就取消 → profile 是空壳，留着只会污染下次开机 restore
+    if (entry.status !== "authorized" && !_cancelledBoots.has(req.params.id)) {
+      purgeProfile(req.params.id);
+    }
   }
   res.json({ ok: true });
 });
@@ -1923,6 +2017,7 @@ app.post("/accounts/:id/logout", async (req, res) => {
     if (e.accountId === accountId) { loginId = id; entry = e; break; }
   }
   if (entry) {
+    if (loginId) _intentionalClose.add(loginId); // 同 cancel：登出不是崩溃，别触发自愈
     stopPolling(entry);
     try { await entry.context.close(); } catch (_) {}
   }

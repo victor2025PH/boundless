@@ -85,7 +85,9 @@ def make_provider(config: Dict[str, Any]):
             data = await _post_json(f"{base}/login/start", payload)
         except Exception as ex:  # noqa: BLE001
             logger.debug("[wa_baileys] start 调用失败", exc_info=True)
-            return {"instruction": f"无法连接 WhatsApp 协议服务（{ex}）。请确认 Baileys 微服务已启动。"}
+            # 同 messenger_web：不带 reason_code 上游无从判定失败，会话只能挂到 TTL 耗尽。
+            return {"instruction": f"无法连接 WhatsApp 协议服务（{ex}）。请确认 Baileys 微服务已启动。",
+                    "reason_code": "service_down"}
 
         login_id = str(data.get("login_id") or "")
         qr_image = str(data.get("qr_image") or "")

@@ -98,5 +98,41 @@ def test_provider_start_service_down(monkeypatch):
         info = await provider(None, "messenger", "web", "")
         assert "instruction" in info
         assert "poll" not in info  # 服务不可达 → 仅返回提示，不进入轮询
+        # reason_code 是上游把会话立刻置为 failed 的唯一依据（unified_inbox_login_routes
+        # 的 `prov_reason and poll_fn is None` 分支）。漏掉它 → 会话按 pending 挂到 TTL
+        # 耗尽，坐席对着转圈干等三分钟才等来超时，而真相只是服务没启动。
+        assert info.get("reason_code") == "service_down"
 
     asyncio.run(run())
+
+
+def test_start_route_returns_failed_when_service_down(monkeypatch):
+    """端到端接缝：sidecar 不可达 → login/start 当场返回终态 + 原因码。
+
+    provider 与路由各自正确、接缝却漏信息，是「坐席对着转圈干等三分钟」的现场：
+    没有 reason_code 时会话按 pending 挂起，前端一路轮询到 TTL 耗尽才显示超时。
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src.integrations import platform_login as pl
+    from src.web.routes import unified_inbox_login_routes as lr
+
+    async def boom(url, payload, timeout=20.0):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(mgw, "_post_json", boom)
+    # 直接塞注册表（monkeypatch 自动还原）：路由内的 _ensure_login_providers 是闭包，
+    # 但 config_manager=None → 各 maybe_register 均因未启用而跳过，不会覆盖这里塞的 provider。
+    monkeypatch.setitem(pl._PROVIDERS, "messenger:web", mgw.make_provider({}))
+    # config_manager=None → platform_login.enabled 取缺省 True，无需另行放行
+    monkeypatch.setattr(lr, "mode_available", lambda platform, mode: True)
+    monkeypatch.setattr(lr, "status_via_adapters", lambda request, adapters: {})
+
+    app = FastAPI()
+    lr.register_platform_login_routes(
+        app, api_auth=lambda request: None, config_manager=None)
+    d = TestClient(app).post("/api/platforms/messenger/login/start",
+                             json={"mode": "web"}).json()
+    assert d.get("ok") is True
+    assert d.get("status") == "failed"
+    assert d.get("reason_code") == "service_down"

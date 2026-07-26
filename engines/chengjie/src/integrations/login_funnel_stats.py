@@ -38,6 +38,9 @@ _IDENT_RE = re.compile(r"^[a-z0-9_]{1,24}$")
 _REASON_CODES = frozenset({
     "qr_expired", "pin_timeout", "network", "rate_limited",
     "login_failed", "okline_missing", "client_init", "cancelled",
+    # sidecar（WA Baileys / Messenger web 的 Node 服务）没起来。与 network 分开计：
+    # 前者是运维照单启动即可修，后者要查网络，混在一起看不出「又是服务没开」这个高频项。
+    "service_down",
 })
 
 _STAGES = ("started", "qr_shown", "pin_issued", "authorized", "failed")

@@ -24,6 +24,7 @@ from src.integrations.account_registry import get_account_registry
 from src.integrations.fingerprint import get_fingerprint_store
 from src.integrations.platform_login import (
     SUPPORTED_PLATFORMS,
+    first_available_mode,
     get_login_manager,
     get_login_provider,
     list_modes,
@@ -170,8 +171,7 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
         modes = list_modes(platform, platform_cfg)
         mode = str((body or {}).get("mode") or "").lower()
         if not mode:
-            mode = next((m["mode"] for m in modes if m["recommended"]),
-                        modes[0]["mode"] if modes else "device")
+            mode = first_available_mode(modes)
         if not mode_available(platform, mode):
             return {"ok": False, "detail": tr(request, "err.login.mode_unavailable", platform=platform, mode=mode)}
 

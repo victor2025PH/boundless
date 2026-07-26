@@ -96,6 +96,8 @@ def test_provider_start_service_down(monkeypatch):
         info = await provider(None, "whatsapp", "protocol", "")
         assert "instruction" in info
         assert "poll" not in info  # 服务不可达 → 仅返回提示，不进入轮询
+        # 同 messenger_web：缺 reason_code 上游无从判定失败，会话会挂到 TTL 耗尽
+        assert info.get("reason_code") == "service_down"
 
     asyncio.run(run())
 

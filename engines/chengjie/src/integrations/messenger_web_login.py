@@ -86,7 +86,10 @@ def make_provider(config: Dict[str, Any]):
             data = await _post_json(f"{base}/login/start", payload)
         except Exception as ex:  # noqa: BLE001
             logger.debug("[messenger_web] start 调用失败", exc_info=True)
-            return {"instruction": f"无法连接 Messenger 网页服务（{ex}）。请确认 messenger-web 微服务已启动。"}
+            # 必须带 reason_code：只给 instruction 的话上游拿不到失败信号，会按「已开始登录」
+            # 挂起会话，坐席对着转圈干等到 TTL（180s）才等来一句超时——而真相是服务压根没起。
+            return {"instruction": f"无法连接 Messenger 网页服务（{ex}）。请确认 messenger-web 微服务已启动。",
+                    "reason_code": "service_down"}
 
         login_id = str(data.get("login_id") or "")
         qr_image = str(data.get("qr_image") or "")
