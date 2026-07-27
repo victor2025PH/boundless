@@ -94,6 +94,8 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     "avatar_voice": {"types": {"avatar_voice_alert"}, "levels": None},
     # 原生通话主机持续不可用（MiniCPM-o 176:7860 掉线 → 打进来的电话全接不了）
     "tg_call": {"types": {"tg_call_alert"}, "levels": None},
+    # 试用履约端停摆（厂商机是签发链单点：它不跑，领了试用的人永远停在「正在签发」）
+    "trial_fulfiller": {"types": {"trial_fulfiller_alert"}, "levels": None},
     # 编排器受管 worker 崩溃告警（某账号 protocol/web worker 进 error 态 → 出站降级）
     "orchestrator_worker": {"types": {"orchestrator_worker_alert"}, "levels": None},
     # 记忆 key 漂移告警（裸 key 复发 → 记忆对引擎不可见）
@@ -470,6 +472,47 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 f"**异常**: {len(probs)} 项\n"
                 + "\n".join(lines) + "\n"
                 "[📊 查看运营总览](/admin/ops)"
+            )
+
+    elif event_type == "trial_fulfiller_alert":
+        if data.get("recovered"):
+            title = "✅ 试用签发链已恢复"
+            text = (
+                "**状态**: 厂商机履约端已在正常取待办，积压已清\n"
+                "[📊 查看试用台账](/console/trial)"
+            )
+        else:
+            kind = str(data.get("kind") or "stale")
+            pending = int(data.get("pending") or 0)
+            backlog = int(data.get("backlog_min") or 0)
+            beat = int(data.get("heartbeat_min") or -1)
+            # 三种故障的处置动作不同，标题就直接把动作说清，别让人再去猜
+            if kind == "stuck":
+                title = "🚨 试用签发在跑但清不掉活"
+                why = (f"履约端心跳正常（{beat} 分钟前），但待办 {pending} 条、"
+                       f"最老已等 {backlog} 分钟 —— 大概率是回填失败或签不出，"
+                       "看 logs\\fulfill_trial\\ 当日日志")
+            elif kind == "unreachable":
+                title = "🚨 取不到试用台账（签发链状态未知）"
+                why = ("厂商机读不到官网台账：本机网络或官网异常，也可能 ADMIN_KEY 失效。"
+                       "此期间领了试用的人都拿不到授权")
+            else:
+                title = "🚨 试用签发链停摆"
+                if data.get("never"):
+                    why = ("履约端从未来取过待办 —— 常驻任务大概没装："
+                           "scripts\\fulfill_trial_service.ps1 -Install")
+                else:
+                    why = (f"履约端已 {beat} 分钟没来取待办（任务被删/python 路径变了/"
+                           "机器关了都会这样）")
+                if pending > 0:
+                    why += f"；当前 {pending} 条待办，最老已等 {backlog} 分钟"
+            text = (
+                f"**问题**: {why}\n"
+                f"**站点**: {data.get('site') or '-'}\n"
+                f"**持续**: {int(data.get('down_minutes') or 0)} 分钟"
+                + ("（重提）" if data.get("reminder") else "") + "\n"
+                "**影响**: 用户点了「免费领取」会一直停在「正在签发」，客户端不报错\n"
+                "[📊 查看试用台账](/console/trial)"
             )
 
     elif event_type == "avatar_voice_alert":

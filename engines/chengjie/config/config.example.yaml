@@ -1328,6 +1328,16 @@ ai:
 # 陪伴关系阶段（conversion 域）；状态存 bot.db user_context JSON
 companion:
   enabled: true
+  # 当地天气事实源（Open-Meteo，免 API key；默认关）。依赖人设 location.lat/lon
+  # （见 persona_location.CITY_PRESETS / profiles_runtime.location）。热路径只读缓存，
+  # 绝不在出话链阻塞等 HTTP；缺数据/陈旧>max_stale → 不注入（禁编数值）。
+  weather:
+    enabled: false
+    ttl_sec: 1800            # 新鲜缓存（秒）
+    max_stale_sec: 10800     # 陈旧仍可用上限（秒）；再旧丢弃
+    inject_chat: true        # 写入聊天 prompt 内部事实块
+    proactive_hook: true     # 暴雨/雷暴/极端气温时给主动开场种子
+    scene_filter: true       # 生图/场景轮换避开高置信天气冲突（沙滩×暴雨等）
   # 人设一致性守卫：回复生成后做确定性后置体检，剥离 LLM 漏出的禁用语
   # （persona.speaking.forbidden_phrases）与 AI 自曝身份（persona.identity.deny_ai）。
   # 默认开；仅当人设声明了上述项才实际生效（对无禁用项的默认人设零影响）。
@@ -2484,6 +2494,9 @@ platform_login:
       # 之后换机会降回 free，需联系客服解绑。同样建议走环境变量 CREDPOOL_LICENSE_KEY。
       license_key: ""
       timeout_sec: 8
+      # 池服务外部看门狗的状态文件路径（ops 卡「池看门狗」行读它）。
+      # **仅供应商侧运维填**——客户桌面没有我们的运维目录；留空 → 该行不显示。
+      watchdog_state_path: ""
     # ── 每账号设备指纹（防多开被聚类连坐）──────────────────────────────────
     # Telegram 封的往往不是单个号而是**簇**：一批号若 device_model/system_version/
     # app_version 全是 pyrogram 默认值，即使各自换了 api_id 和 IP 也会被判定为
@@ -2622,6 +2635,22 @@ licensing:
     # 厂商机（私钥离线，scripts/fulfill_trial.py）签发 → 客户端轮询取回并自动
     # 落盘激活。改这里只在自建/私有化部署时需要，公版走默认官网。
     # site_url: https://bd2026.cc
+    #
+    # ── 履约端存活监控（**只在厂商机开**）─────────────────────────
+    # 签发链上唯一的单点是厂商机：它不跑，用户点了「免费领取」就永远停在
+    # 「正在签发」——客户端不报错、台账只多一条 pending，整条链静默失效。
+    # 客服控制台有心跳卡但那是被动的；开了这个由 HealthWatchdog 主动外发
+    # （EventBus trial_fulfiller_alert → webhook 订阅别名 trial_fulfiller）。
+    # 别的机器开了只会对着别人的台账瞎报，故默认关。
+    # admin_key_file 只给**路径**：密钥内容不入配置、不进日志、不上命令行。
+    # fulfiller_watch:
+    #   enabled: false
+    #   site_url: https://bd2026.cc          # 缺省沿用上面的 site_url
+    #   admin_key_file: D:/chengjie-instances/vendor/website_admin_key.txt
+    #   stale_min: 15                        # 心跳超这么久没更新 = 没来取待办
+    #   backlog_min: 20                      # 心跳新鲜但最老待办等超这么久 = 清不掉活
+    #   after_min: 15                        # 持续不健康多久首提
+    #   interval_min: 240                    # 未恢复时的重提间隔
   # ── 档位功能闸门（C0-3b，融合实例：不同会员档位解锁不同功能）────────
   # 默认关 = 全功能放行（对既有部署零行为变更）。开启后按
   # community < basic < pro < flagship 档位序解锁功能（注册表见

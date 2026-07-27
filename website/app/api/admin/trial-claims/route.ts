@@ -33,11 +33,19 @@ export async function GET(req: NextRequest) {
   const limit = Number(sp.get("limit") || 100);
   // 取待办 = 心跳。厂商机没活干时也会来问，所以这是判断「签发链还活着吗」的信号；
   // 单独开 /heartbeat 反而要求脚本额外配合，且不如「还能取待办」贴近存活语义。
-  await touchFulfiller();
+  //
+  // `?peek=1` = 只读，不打卡。**监控方必须用它**：看门狗若走普通路径，它自己的轮询
+  // 就会把心跳刷新，于是心跳永远新鲜、永远发现不了履约端已死——监控自我失效。
+  const peek = sp.get("peek") === "1";
+  if (!peek) await touchFulfiller();
   const claims = await listClaims({ status, needsTopup, limit });
   const s = await claimStats();
   return NextResponse.json({
     ok: true,
+    // 能力握手：回声 peek 让监控方能确认「这个服务端认识 peek」。旧版本不会带这个
+    // 字段，监控方据此选择**不监控**而不是闭眼监控——否则它自己的轮询会刷新心跳，
+    // 心跳永远新鲜、履约端死了也永远不报（部署顺序错了就会静默变成这样）。
+    peeked: peek,
     // 线上格式统一 snake_case（与下面 claims 的字段口径一致）；claimStats 的
     // camelCase 只在 TS 内部用，别让两种命名混在同一个响应体里。
     stats: {

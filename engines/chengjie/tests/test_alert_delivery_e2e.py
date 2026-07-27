@@ -171,6 +171,19 @@ _EMITTED_ALERTS = [
      {"reachable": False, "model_loaded": False, "url": "http://192.168.0.176:7860",
       "error": "connection refused", "down_minutes": 45, "reminder": False,
       "rate_key": "tg_call:remind"}),
+    # 试用履约端停摆（厂商机是签发链单点；三种故障各有不同处置，故三个 payload 都过一遍）
+    ("trial_fulfiller", "trial_fulfiller_alert",
+     {"kind": "stale", "never": False, "heartbeat_min": 47, "pending": 3,
+      "backlog_min": 52, "site": "https://bd2026.cc", "down_minutes": 30,
+      "reminder": False, "rate_key": "trial_fulfiller:remind"}),
+    ("trial_fulfiller", "trial_fulfiller_alert",
+     {"kind": "stuck", "never": False, "heartbeat_min": 2, "pending": 5,
+      "backlog_min": 41, "site": "https://bd2026.cc", "down_minutes": 20,
+      "reminder": True, "rate_key": "trial_fulfiller:remind"}),
+    ("trial_fulfiller", "trial_fulfiller_alert",
+     {"kind": "unreachable", "never": False, "heartbeat_min": -1, "pending": -1,
+      "backlog_min": -1, "site": "https://bd2026.cc", "down_minutes": 18,
+      "reminder": False, "rate_key": "trial_fulfiller:remind"}),
 ]
 
 

@@ -315,6 +315,8 @@ class HealthWatchdog:
         self._last_drift_sig: Optional[str] = None
         # 云端余额水位巡检（独立稀疏节流；间隔在 _check_cloud_balance 内读配置）
         self._last_cloud_balance_ts: float = 0.0
+        # 试用领取兑现巡检（P2）：只在「本地有未兑现的单」时才真跑，正常部署零开销
+        self._last_trial_poll_ts: float = 0.0
         # 授权字符额度水位巡检（P4c）：稀疏节流 + 「告过警」标记（恢复通知只发给告过警的）
         self._last_license_quota_ts: float = 0.0
         self._license_quota_alerted: bool = False
@@ -326,6 +328,11 @@ class HealthWatchdog:
         self._avatar_down_since: float = 0.0
         self._avatar_alerted: bool = False
         self._avatar_last_remind: float = 0.0
+        # 履约端（厂商机签发链单点）停摆升级提醒：首次不健康时刻 + 已首提 + 上次重提 + 种类
+        self._fulfiller_bad_since: float = 0.0
+        self._fulfiller_alerted: bool = False
+        self._fulfiller_last_remind: float = 0.0
+        self._fulfiller_kind: str = ""
         # 告警种类：down=不可达/未载入（health 探测红）；hang=半死（health 绿但合成连败，
         # 2026-07-14 事故形态）。恢复语义不同：hang 需要「失败后真的又成过一次」的正面证据。
         self._avatar_alert_kind: str = ""
@@ -337,6 +344,10 @@ class HealthWatchdog:
         self._last_auto_stock_ts: float = 0.0
         self._auto_stock_day: str = ""
         self._auto_stock_added_today: int = 0
+        # 相册场景缺口自动补货（P2 图文一致性）：同款节流+预算，写计划文件
+        self._last_media_restock_ts: float = 0.0
+        self._media_restock_day: str = ""
+        self._media_restock_added_today: int = 0
         # 出站媒体承诺未兑现升级提醒（Phase21a）：delta 口径累加净撤回数 + 首提/重提去抖
         self._promise_last_ret: Optional[int] = None
         self._promise_last_ful: Optional[int] = None
@@ -357,8 +368,10 @@ class HealthWatchdog:
         self.total_license_quota_alerts: int = 0
         self.total_fallback_duty_reminders: int = 0
         self.total_avatar_voice_reminders: int = 0
+        self.total_trial_fulfiller_reminders: int = 0
         self.total_media_promise_alerts: int = 0
         self.total_auto_stocked: int = 0
+        self.total_media_restock_planned: int = 0
         self.total_tg_call_reminders: int = 0
         self.total_colloquial_llm_reminders: int = 0
         # 原生通话主机升级式提醒状态（镜像 avatar_voice 那套）
@@ -373,6 +386,11 @@ class HealthWatchdog:
         # last_scan_ts——重启不重扫）+ 成功扫描计数。默认关（contacts.identity_shadow）。
         self._ishadow_last_ts: float = 0.0
         self.total_identity_shadow_scans: int = 0
+        # 官网订单拉取回流（goals order_pull）：稀疏节流 + 结算计数。默认关。
+        self._last_goal_pull_ts: float = 0.0
+        self.total_goal_orders_settled: int = 0
+        # 流失挽回扫描（goals winback）：小时级节流。默认关。
+        self._last_goal_winback_ts: float = 0.0
         self.last_check_ts: float = 0.0
         self.last_light: str = "green"
 
@@ -484,6 +502,12 @@ class HealthWatchdog:
         except Exception:
             logger.debug("AvatarHub 语音巡检异常（已忽略）", exc_info=True)
 
+        # 试用履约端（厂商机）停摆：客服台心跳卡是被动的，得有人去看；这里升级为主动外发。
+        try:
+            self._check_trial_fulfiller()
+        except Exception:
+            logger.debug("试用履约端巡检异常（已忽略）", exc_info=True)
+
         # 原生通话主机（brain=s2s 复用 MiniCPM-o 176:7860）持续不可用升级提醒：掉了=打进来
         # 的电话全接不了（陪护"她会接电话"卖点静默失效），比看板黄灯更该主动轰人。
         try:
@@ -504,6 +528,13 @@ class HealthWatchdog:
             self._check_avatar_auto_stock()
         except Exception:
             logger.debug("缺口自动入库巡检异常（已忽略）", exc_info=True)
+
+        # 相册场景缺口自动补货（P2 图文一致性）：点名场景反复要不到 + 相册零备货
+        # → 写补货计划（渲染交夜间 CLI album_restock）——「看缺口→补图」零人工。
+        try:
+            self._check_media_restock()
+        except Exception:
+            logger.debug("相册补货巡检异常（已忽略）", exc_info=True)
 
         # 出站媒体承诺未兑现升级提醒（Phase21a）：AI 文本承诺发图/语音却撤回=信任受损，
         # 看板黄条只被动可见；本窗口净撤回累加达阈值→主动外发（首提+周期重提，恢复清零）。
@@ -526,6 +557,14 @@ class HealthWatchdog:
             self._check_license_quota()
         except Exception:
             logger.debug("授权额度巡检异常（已忽略）", exc_info=True)
+
+        # 试用领取兑现巡检（P2）：官网建单后厂商机异步签发，用户早就关掉向导去干活了。
+        # 没有这条后台轮询，授权就只在「首启窗口恰好还开着」时才落地——而那个窗口
+        # 一辈子只弹一次。这里让它与 UI 彻底解耦：领过单就一直查到激活为止。
+        try:
+            self._check_trial_claim()
+        except Exception:
+            logger.debug("试用领取巡检异常（已忽略）", exc_info=True)
 
         # 日志巡检（2026-07-23）：把 triage_watch 的「基线抑制+偏差检测」接进 in-process
         # 看门狗——出现新错误类/激增时经 host_alert 走既有 EventBus→Webhook→Telegram
@@ -579,6 +618,20 @@ class HealthWatchdog:
             self._check_identity_shadow()
         except Exception:
             logger.warning("身份影子扫描巡检异常（已忽略）", exc_info=True)
+
+        # 官网订单拉取回流（goals P2 成交闭环）：引擎在 NAT 后收不到官网 push，
+        # 主动拉带 ref 的已付款单结算目标 done。默认关；稀疏节流（默认 10min）。
+        try:
+            self._check_goal_order_pull()
+        except Exception:
+            logger.debug("官网订单拉取巡检异常（已忽略）", exc_info=True)
+
+        # 流失挽回扫描（goals P6）：留存目标流失冷却后自动起低频挽回目标；
+        # 顺手把静默会话的到期目标结算落库。默认关；小时级节流。
+        try:
+            self._check_goal_winback()
+        except Exception:
+            logger.debug("流失挽回巡检异常（已忽略）", exc_info=True)
 
         # 运维卫生：按保留期清理已关闭事件（每日节流一次）。
         try:
@@ -1185,6 +1238,96 @@ class HealthWatchdog:
         self._avatar_last_remind = ts
         self.total_avatar_voice_reminders += 1
 
+    def _check_trial_fulfiller(self, *, now: Optional[float] = None) -> None:
+        """试用履约端（厂商机）停摆的升级式提醒。
+
+        签发链上唯一的单点是厂商机：它不跑，用户点了「免费领取」就永远停在
+        「正在签发」——客户端不报错、台账只多一条 pending，**整条链静默失效**。
+        客服控制台已有心跳卡，但那是被动的；本巡检把它升级为主动外发：
+          - 不健康持续 ≥ ``after_min``（默认 15min）→ 首提（EventBus ``trial_fulfiller_alert``）；
+          - 仍未恢复 → 每 ``interval_min``（默认 240min）重提；
+          - 恢复 → 补发恢复通知 + 清零（未曾告警的抖动恢复不发，防噪）。
+
+        配置 ``licensing.trial.fulfiller_watch.{enabled,site_url,admin_key_file,
+        stale_min,backlog_min,after_min,interval_min}``——**默认关**，只有厂商机该开
+        （别的机器开了只会对着别人的台账瞎报）。未启用时 probe 返回 None 天然静默。
+
+        三种不健康分开报，因为处置动作不同：``stale`` 履约端没来取待办（任务被删/
+        python 路径变了/机器关了）；``stuck`` 它在来却清不掉活（回填失败/签不出）；
+        ``unreachable`` 连台账都取不到（本机网络或官网出问题，链路状态未知）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        try:
+            from src.licensing.trial_fulfiller_watch import probe as _probe
+            from src.licensing.trial_fulfiller_watch import watch_target
+        except Exception:
+            return
+        target = watch_target(cfg)
+        if target is None:
+            return  # 非厂商机 / 未启用
+        snap = _probe(cfg, now=now)
+        if snap is None:
+            return
+        ts = float(now if now is not None else time.time())
+
+        if snap.get("healthy"):
+            if self._fulfiller_alerted:
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("trial_fulfiller_alert", {
+                        "recovered": True,
+                        "rate_key": "trial_fulfiller:recovered",
+                    })
+                    logger.info("HealthWatchdog 发出试用履约端恢复通知")
+                except Exception:
+                    logger.debug("trial_fulfiller recovery 发布失败（已忽略）", exc_info=True)
+            self._fulfiller_bad_since = 0.0
+            self._fulfiller_alerted = False
+            self._fulfiller_last_remind = 0.0
+            self._fulfiller_kind = ""
+            return
+
+        kind = str(snap.get("kind") or "stale")
+        # 换了故障种类（如 stale → stuck）视作新问题：立刻重新计时并允许再首提，
+        # 否则「换了病因」会被上一次的重提间隔压住，处置线索也就丢了。
+        if kind != self._fulfiller_kind:
+            self._fulfiller_kind = kind
+            self._fulfiller_bad_since = ts
+            self._fulfiller_alerted = False
+            return
+        if not self._fulfiller_bad_since:
+            self._fulfiller_bad_since = ts
+            return
+        bad_sec = ts - self._fulfiller_bad_since
+        after_sec = max(60.0, float(target.get("after_min", 15) or 15) * 60.0)
+        interval_sec = max(600.0, float(target.get("interval_min", 240) or 240) * 60.0)
+        due = (
+            (not self._fulfiller_alerted and bad_sec >= after_sec)
+            or (self._fulfiller_alerted
+                and ts - self._fulfiller_last_remind >= interval_sec)
+        )
+        if not due:
+            return
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("trial_fulfiller_alert", {
+                "kind": kind,
+                "never": bool(snap.get("never")),
+                "heartbeat_min": int(snap.get("heartbeat_min") or -1),
+                "pending": int(snap.get("pending") or 0),
+                "backlog_min": int(snap.get("backlog_min") or 0),
+                "site": str(snap.get("site") or ""),
+                "down_minutes": int(bad_sec // 60),
+                "reminder": bool(self._fulfiller_alerted),
+                "rate_key": "trial_fulfiller:remind",
+            })
+        except Exception:
+            logger.debug("trial_fulfiller alert 发布失败（已忽略）", exc_info=True)
+            return
+        self._fulfiller_alerted = True
+        self._fulfiller_last_remind = ts
+        self.total_trial_fulfiller_reminders += 1
+
     def _check_native_call(self, *, now: Optional[float] = None) -> None:
         """原生通话主机持续不可用的升级式提醒（镜像 ``_check_avatar_voice``）。
 
@@ -1481,6 +1624,64 @@ class HealthWatchdog:
                         "; ".join(f"{a['text']}→{a['target']}"
                                   for a in rv["added"]))
 
+    def _check_media_restock(self, *, now: Optional[float] = None) -> None:
+        """相册场景缺口自动补货（P2 图文一致性）：需求侧反复要不到 + 供给侧
+        零备货 → 写补货**计划文件**（渲染交 ``scripts/album_restock.py``
+        夜间低峰跑，主进程零 GPU 占用）。
+
+        配置 ``companion.selfie.consistency.auto_restock.{enabled,min_unmet,
+        per_scene,max_per_day}``（**默认关**——新子系统约定）；每小时一轮 +
+        每日入队预算；同 (人设,场景) pending 去重在 ``plan_add`` 内。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        scfg = ((cfg.get("companion") or {}).get("selfie") or {}) \
+            if isinstance(cfg, dict) else {}
+        if not scfg.get("enabled", False):
+            return
+        from src.companion.media_restock import (load_plan, plan_add,
+                                                 qualify_restock_targets,
+                                                 resolve_restock_cfg, save_plan)
+        rc = resolve_restock_cfg(scfg)
+        if not rc["enabled"]:
+            return
+        ts = float(now if now is not None else time.time())
+        if self._last_media_restock_ts and (ts - self._last_media_restock_ts) < 3600.0:
+            return
+        self._last_media_restock_ts = ts
+        day = time.strftime("%Y%m%d", time.localtime(ts))
+        if day != self._media_restock_day:
+            self._media_restock_day = day
+            self._media_restock_added_today = 0
+        budget = int(rc["max_per_day"]) - self._media_restock_added_today
+        if budget <= 0:
+            return
+        try:
+            from src.companion.media_gap import (collect_scene_supply,
+                                                 scene_gap_report)
+            from src.inbox.image_autosend import metrics_snapshot as _ims
+            snap = _ims()
+            supply = collect_scene_supply(scfg)
+            gap = scene_gap_report(
+                supply, snap.get("scene_demand"), snap.get("scene_unmet"))
+            targets = qualify_restock_targets(
+                gap.get("rows"), supply,
+                min_unmet=int(rc["min_unmet"]), max_targets=budget)
+        except Exception:
+            logger.debug("相册补货缺口计算失败（已忽略）", exc_info=True)
+            return
+        if not targets:
+            return
+        plan = load_plan(rc["plan_path"])
+        added = []
+        for pid, scene in targets:
+            if plan_add(plan, pid, scene, int(rc["per_scene"]), now=ts):
+                added.append(f"{pid or '(root)'}:{scene}")
+        if added and save_plan(rc["plan_path"], plan):
+            self._media_restock_added_today += len(added)
+            self.total_media_restock_planned += len(added)
+            logger.info("相册补货计划入队 %d 项：%s（渲染交夜间 album_restock）",
+                        len(added), "; ".join(added))
+
     def _check_media_promise(self, *, now: Optional[float] = None) -> None:
         """出站媒体承诺未兑现升级式提醒（Phase21a）。
 
@@ -1602,6 +1803,48 @@ class HealthWatchdog:
         except Exception:
             logger.debug("media_promise recovery 发布失败（已忽略）", exc_info=True)
 
+    def _check_trial_claim(self, *, now: Optional[float] = None) -> None:
+        """试用领取兑现巡检（P2）：把「授权到账」从 UI 手里拿走。
+
+        用户在首启向导点了「免费领取」之后就走了——厂商机可能一分钟后才签发，
+        客服核销赠量更可能是几小时后。没有这条后台轮询，两者都只能等下次有人
+        恰好打开那个一辈子只弹一次的向导。
+
+        触发条件极窄，正常部署零开销：**本地有单 且 还没激活或还没领到赠量**。
+        单子领完（已激活 + 赠量已入账）或本机试用已用尽 → 永久静默。
+        节流 ``licensing.trial.poll_interval_sec``（默认 120s）。
+        """
+        try:
+            from src.licensing import trial_claim_client as tc
+        except Exception:
+            return
+        cfg = getattr(self._config_manager, "config", None) or {}
+        state = tc.load_state(cfg)
+        if not state.get("claim_id") or state.get("exhausted"):
+            return
+        if state.get("activated_at") and state.get("topup_redeemed_at"):
+            return  # 授权与赠量都到位，这条单子的生命周期结束
+
+        interval = float(((cfg.get("licensing") or {}).get("trial") or {})
+                         .get("poll_interval_sec") or 120)
+        ts = float(now if now is not None else time.time())
+        if self._last_trial_poll_ts and (ts - self._last_trial_poll_ts) < interval:
+            return
+        self._last_trial_poll_ts = ts
+
+        res = tc.poll(config=cfg)
+        if not res.get("ok"):
+            return  # 网络抖动：下一轮再来，不告警（用户此刻用体验档照常干活）
+        lic, voucher = str(res.get("license") or ""), str(res.get("topup_voucher") or "")
+        if not lic and not voucher:
+            return
+        from src.web.routes.license_routes import _consume_trial_payload
+        out = _consume_trial_payload({"ok": True}, lic, voucher)
+        if out.get("activated"):
+            logger.info("[trial] 后台轮询已激活 7 天试用授权（无需用户回到向导）")
+        if out.get("gift_redeemed"):
+            logger.info("[trial] 后台轮询已入账客服赠量 %s 字符", out.get("gift_chars") or 0)
+
     def _check_cloud_balance(self, *, now: Optional[float] = None) -> None:
         """云端余额水位巡检：主 Key + 备用池全部 DeepSeek 凭证，低于阈值 → 主机告警。
 
@@ -1683,6 +1926,86 @@ class HealthWatchdog:
             )
         else:
             logger.warning("身份影子扫描失败（已忽略，按周期重试）: %s", st.get("error"))
+
+    def _check_goal_order_pull(self, *, now: Optional[float] = None) -> None:
+        """官网订单拉取回流（goals P2 成交闭环，默认关）。
+
+        部署形态：官网在公网 VPS、本引擎在 NAT 后——官网 push（order-hook）
+        打不进来，引擎**主动拉** ``GET {site}/api/admin/orders``（x-setup-key
+        鉴权，与履约机同通道），筛带 ``ref``（会话归因串）且 paid/activated
+        的订单，经 ``service.settle_order_ref``（与 order-hook 路由同一入口）
+        把对应目标结算 done。幂等由 settle 层保证（同 order_id → dup）。
+        配置 ``companion.goals.order_pull.{enabled,site_url,admin_key,
+        interval_min,timeout_sec}``；goals 总闸关时天然静默。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        from src.companion.goals.order_pull import (
+            pull_and_settle, resolve_pull_cfg,
+        )
+        pc = resolve_pull_cfg(cfg)
+        if not (pc["enabled"] and pc["site_url"] and pc["admin_key"]):
+            return
+        from src.companion.goals.service import goals_enabled
+        if not goals_enabled(cfg):
+            return
+        ts = float(now if now is not None else time.time())
+        interval_sec = max(300.0, pc["interval_min"] * 60.0)
+        if self._last_goal_pull_ts and (ts - self._last_goal_pull_ts) < interval_sec:
+            return
+        self._last_goal_pull_ts = ts
+        from src.companion.goals.service import get_configured_store
+        store = get_configured_store(
+            cfg, getattr(self._config_manager, "config_path", None))
+        summary = pull_and_settle(store, cfg, now=ts)
+        settled = int(summary.get("settled") or 0)
+        if settled:
+            self.total_goal_orders_settled += settled
+        if settled or summary.get("errors"):
+            logger.info(
+                "官网订单拉取: 总单=%s 候选=%s 结算=%s 重复=%s 未匹配=%s 错误=%s",
+                summary.get("pulled"), summary.get("candidates"), settled,
+                summary.get("dup"), summary.get("unmatched"),
+                summary.get("errors"))
+
+    def _check_goal_winback(self, *, now: Optional[float] = None) -> None:
+        """流失挽回扫描（goals P6，默认关）。
+
+        留存目标 deadline 过后 ``cooldown_days`` 没续费（expired=真实流失）→
+        自动起低频 ``engagement_reactivate`` 挽回目标（一次流失只挽回一次、
+        每日预算、窗口上限防陈年流失群发）；候选里还挂 active 的静默会话先
+        settle-on-read 结算落库（流失报表盲区补齐）。配置
+        ``companion.goals.retention.winback.{enabled,cooldown_days,max_age_days,
+        template,days,max_per_day,interval_min}``；goals 总闸关时天然静默。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        from src.companion.goals.service import goals_enabled, resolve_goals_cfg
+        if not goals_enabled(cfg):
+            return
+        wb = ((resolve_goals_cfg(cfg).get("retention") or {})
+              .get("winback") or {})
+        if not (isinstance(wb, dict) and wb.get("enabled", False)):
+            return
+        ts = float(now if now is not None else time.time())
+        try:
+            interval_min = float(wb.get("interval_min", 60) or 60)
+        except (TypeError, ValueError):
+            interval_min = 60.0
+        interval_sec = max(600.0, interval_min * 60.0)
+        if self._last_goal_winback_ts and (ts - self._last_goal_winback_ts) < interval_sec:
+            return
+        self._last_goal_winback_ts = ts
+        from src.companion.goals.service import (
+            get_configured_store, run_winback_scan,
+        )
+        store = get_configured_store(
+            cfg, getattr(self._config_manager, "config_path", None))
+        summary = run_winback_scan(store, cfg, inbox_store=self._inbox(), now=ts)
+        if summary.get("created") or summary.get("swept"):
+            logger.info(
+                "流失挽回扫描: 候选=%s 清扫=%s 新建=%s 跳过=%s 预算触顶=%s",
+                summary.get("candidates"), summary.get("swept"),
+                summary.get("created"), summary.get("skipped"),
+                summary.get("budget_hit"))
 
     def _check_license_quota(self, *, now: Optional[float] = None) -> None:
         """授权字符额度水位巡检（P4c）：临近触顶提前提醒、触顶点名、恢复报平安。
