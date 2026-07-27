@@ -219,6 +219,31 @@ class AIChatAssistant:
                     )
                 elif _lic.state == "unlicensed":
                     self.logger.info("🔑 授权：社区模式（未检测到授权文件）")
+                    # 无授权时启用首启体验档（本地赠量，默认关；桌面随包种子里开）。
+                    # 只在 unlicensed 分支装配：有正式授权的部署压根不该出现体验档口径。
+                    try:
+                        from src.licensing.local_trial import (
+                            configure_local_trial, get_local_trial,
+                        )
+                        configure_local_trial(
+                            self.config.config or {},
+                            config_dir=str(self.config.config_path.parent))
+                        _lt = get_local_trial()
+                        if _lt is not None:
+                            # 首次启动即落锚点：「装完直接能用」不该依赖用户先走完向导。
+                            # begin() 幂等（已关闭/已开始原样返回），并顺带无节流地
+                            # 推进 last_seen 水位——每次启动校准一次即可，热路上的
+                            # touch() 是节流的（见 local_trial.TOUCH_MIN_INTERVAL_SEC）。
+                            _lt.begin()
+                            _snap = _lt.snapshot()
+                            self.logger.info(
+                                "🎁 首启体验档：%s · %s 字符 / %s 小时窗口（剩 %s 小时）",
+                                "已结束" if not _snap.get("active") else "生效中",
+                                _snap.get("included"), _snap.get("window_hours"),
+                                _snap.get("hours_left"),
+                            )
+                    except Exception:
+                        self.logger.debug("首启体验档装配跳过", exc_info=True)
                 else:
                     self.logger.warning(
                         "🔑 授权状态=%s：%s",

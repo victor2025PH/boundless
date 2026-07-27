@@ -63,6 +63,10 @@ ZH = {
     # 购买/续费 CTA + 加量包（P4b）
     "mb_buy_cta": "购买 / 续费",
     "mb_topup_line": "含加量包 +{n} 字符",
+    # P2 首启体验档（额度来自本地赠量，不是签名授权 —— 说法必须区分开）
+    "mb_trial_line": "首启体验档 · 还剩 {h} 小时",
+    "mb_trial_expired": "首启体验档已到期",
+    "mb_trial_used_up": "首启体验档额度已用完",
     # 坐席工作台顶栏徽章 title（data-i18n-title 消费）
     "base.plan_badge_t": "当前授权档位 · 点击进入会员中心",
     "base.plan_badge_ro_t": "当前系统授权档位",
@@ -144,6 +148,10 @@ EN = {
     "mb_goto_activate": "Activate license",
     "mb_buy_cta": "Buy / Renew",
     "mb_topup_line": "Includes top-up packs: +{n} chars",
+    # P2 starter allowance (local grant, not a signed license — wording differs)
+    "mb_trial_line": "Starter allowance · {h}h left",
+    "mb_trial_expired": "Starter allowance has expired",
+    "mb_trial_used_up": "Starter allowance is used up",
     "base.plan_badge_t": "Current plan · open membership center",
     "base.plan_badge_ro_t": "Current system plan",
     "err.lic.topup_not_licensed": "No active license — nothing to top up",

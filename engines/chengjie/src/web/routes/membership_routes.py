@@ -48,11 +48,17 @@ def _quota_snapshot() -> Dict[str, Any]:
             "remaining_chars": q.get("remaining"),
             "exceeded": q.get("exceeded", False),
             "history": history,
+            # P2 首启体验档：source=local_trial 时额度是本地赠量（非签名授权），
+            # 页面据此换一套说法，并把「还剩几小时」也讲出来。
+            "source": q.get("source", "license"),
+            "trial_hours_left": q.get("trial_hours_left"),
+            "trial_expired": q.get("trial_expired", False),
         }
     except Exception:
         return {"included_chars": 0, "included_base": 0, "topup_chars": 0,
                 "used_chars": 0, "remaining_chars": None, "exceeded": False,
-                "history": []}
+                "history": [], "source": "license", "trial_hours_left": None,
+                "trial_expired": False}
 
 
 def build_membership_snapshot(config: dict, user_store=None) -> Dict[str, Any]:

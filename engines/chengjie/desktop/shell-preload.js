@@ -17,6 +17,13 @@ contextBridge.exposeInMainWorld("shell", {
   saveConfig: (patch) => ipcRenderer.invoke("desktop:save-config", patch),
   // P0-1 首启向导：AI Key 状态 / 测试 / 保存（写后端 overlay，热生效）
   setupAiStatus: () => ipcRenderer.invoke("desktop:setup-ai-status"),
+  trialStatus: () => ipcRenderer.invoke("desktop:trial-status"),
+  // P2 注册领 7 天 / 加客服领字符（主进程侧走后端，renderer 不直连外网）
+  trialClaim: (body) => ipcRenderer.invoke("desktop:trial-claim", body),
+  trialClaimStatus: () => ipcRenderer.invoke("desktop:trial-claim-status"),
+  trialBindCode: () => ipcRenderer.invoke("desktop:trial-bind-code"),
+  // 仅放行客服深链（t.me / wa.me），白名单在主进程侧
+  openExternal: (url) => ipcRenderer.invoke("desktop:open-external", url),
   setupTestAi: (body) => ipcRenderer.invoke("desktop:setup-test-ai", body),
   setupSaveAiKey: (body) => ipcRenderer.invoke("desktop:setup-save-ai-key", body),
   injectUrl,

@@ -158,6 +158,74 @@ def build_issue_payload(
     return payload
 
 
+# ── 注册试用（P2）：官网 claim → 厂商机签发 → 客户端 activate ─────────────────
+#
+# 试用不是一笔 SKU 销售，但它的 payload 口径同样必须只有一个来源，否则「试用到底给什么」
+# 会散落在脚本里各写一遍。规格集中在此：
+#
+#  · plan=pro —— 试用要展示的是核心价值（翻译套件 + AI 自动发 + 知识库）。给 basic
+#    会让评估者看不到 AI 自动发；给 flagship 则把陪伴/RPA 这类溢价能力也送出去，
+#    转化时降级反而难受。
+#  · channels=全渠道 —— 评估期本来就要挨个平台试，被渠道卡住等于让人无法评估。
+#  · grace_days=0 —— **必须显式写 0**。默认宽限 7 天，而 grace 状态同样算 licensed
+#    （见 LicenseStatus.licensed），不写就把「7 天试用」变成实际 14 天。
+#  · machine=<机器指纹> —— 绑机，防「一份试用发给一群人」。
+TRIAL_SPEC: Dict[str, Any] = {
+    "plan": "pro",
+    "seats": 2,
+    "channels": list(ALL_CHANNELS),
+    "days": 7,
+    "included_chars": 25_000,
+    "product_id": "zhiliao",
+}
+
+#: 加客服送额度的默认赠量（与官网 TRIAL_GIFT_CHARS 同口径，此处为厂商机兜底默认）
+TRIAL_GIFT_CHARS = 100_000
+
+
+def build_trial_payload(
+    *,
+    customer: str,
+    machine: str,
+    claim_id: str = "",
+    days: Optional[int] = None,
+    chars: Optional[int] = None,
+    now: Optional[int] = None,
+) -> Dict[str, Any]:
+    """把一条官网试用领取（claim）映射为可直接签发的 payload。
+
+    ``machine`` 为客户端机器指纹（``XXXX-XXXX-XXXX-XXXX``）：写进 payload 后由
+    `license_manager` 在本机校验，绑到别的机器上会判 invalid。空 machine 直接抛——
+    不绑机的「试用」等于可无限转发，这条链就白做了。
+    """
+    m = str(machine or "").strip().upper()
+    if not m:
+        raise ValueError("试用授权必须绑定机器指纹（machine 不能为空）")
+    now_ts = int(now if now is not None else time.time())
+    d = int(TRIAL_SPEC["days"] if days is None else days)
+    c = int(TRIAL_SPEC["included_chars"] if chars is None else chars)
+    # lic_id 取指纹短码：一机一份，额度表按它记账；claim_id 另存于 note 便于对账。
+    fp8 = m.replace("-", "")[:8] or "unknown"
+    payload: Dict[str, Any] = {
+        "sub": str(customer or "")[:120],
+        "plan": str(TRIAL_SPEC["plan"]),
+        "seats": int(TRIAL_SPEC["seats"]),
+        "channels": list(TRIAL_SPEC["channels"]),
+        "features": {},
+        "product_id": str(TRIAL_SPEC["product_id"]),
+        "included_chars": max(0, c),
+        "trial": True,
+        "machine": m,
+        "grace_days": 0,
+        "lic_id": f"trial-{fp8}",
+    }
+    if claim_id:
+        payload["claim_id"] = str(claim_id)[:64]
+    if d > 0:
+        payload["exp"] = now_ts + d * 86400
+    return payload
+
+
 # ── 履约守护纯逻辑（Sprint4；HTTP/签名/state 由 scripts/fulfill_chatx_watch.py 薄壳注入）──
 # 与 avatarhub/fulfill_orders.py 同构，但把「订单→是否可履约→签发 payload」抽成纯函数以便单测。
 

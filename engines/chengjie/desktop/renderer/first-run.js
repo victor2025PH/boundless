@@ -19,14 +19,17 @@
   function run() {
     var shell = window.shell || {};
     var cfgPromise = shell.getConfig ? shell.getConfig() : Promise.resolve({});
-    var aiPromise = shell.setupAiStatus ? shell.setupAiStatus().catch(function () { return null; }) : Promise.resolve(null);
-    Promise.all([Promise.resolve(cfgPromise), Promise.resolve(aiPromise)]).then(function (rs) {
+      var aiPromise = shell.setupAiStatus ? shell.setupAiStatus().catch(function () { return null; }) : Promise.resolve(null);
+    var trialPromise = shell.trialStatus ? shell.trialStatus().catch(function () { return null; }) : Promise.resolve(null);
+    Promise.all([Promise.resolve(cfgPromise), Promise.resolve(aiPromise),
+      Promise.resolve(trialPromise)]).then(function (rs) {
       var cfg = rs[0] || {};
       var aiStatus = rs[1];
+      var trialStatus = rs[2];
       var curToken = (cfg.backend && cfg.backend.token) || "admin";
       var curLang = (cfg.unified_inbox && cfg.unified_inbox.lang) || "";
 
-      var steps = window.frBuildSteps ? window.frBuildSteps(aiStatus) : ["basic"];
+      var steps = window.frBuildSteps ? window.frBuildSteps(aiStatus, trialStatus) : ["basic"];
       var prefill = window.frAiPrefill ? window.frAiPrefill(aiStatus) : { base_url: "", model: "" };
       var state = { lang: curLang, token: curToken, saveView: null };
 
@@ -88,6 +91,7 @@
           state.lang = langSel.value;
           state.token = tokenInp.value;
           if (hasAiStep) renderAi();
+          else if (steps.indexOf("trial") >= 0) renderTrial();
           else finish(true);
         });
         card.querySelector("#fr-skip").addEventListener("click", function () { finish(false); });
@@ -169,7 +173,180 @@
           '<div style="font-size:13px;color:#97a3b6;line-height:1.7;margin-bottom:20px">' + view.sub + '</div>' +
           '<button id="fr-done" style="' + BTN_PRIMARY + ';width:100%">' + t("btn_finish") + '</button>' +
           '</div>';
-        card.querySelector("#fr-done").addEventListener("click", function () { finish(true); });
+        card.querySelector("#fr-done").addEventListener("click", function () {
+          if (steps.indexOf("trial") >= 0) renderTrial();
+          else finish(true);
+        });
+      }
+
+      // ── 收尾步（P2）：告知体验额度 + 引导注册换 7 天完整版 ──
+      // 体验额度是**默默生效**的：后端在无授权时自动开，用户压根不知道自己有；
+      // 不说出来等于白送，也让后面「额度快用完了」的提示显得莫名其妙。
+      // 说清楚之后顺势给出升级路径——注册链路（官网建单 → 厂商机签发 → 本机自动激活）
+      // 现已闭合，可以承诺了。
+      //
+      // 铁律：**这一步随时可跳过**。体验档已在跑，用户此刻什么都不做也能干活；
+      // 领取慢/失败都只是提示，绝不拦人。签发真到账由后端后台轮询兜底
+      // （HealthWatchdog._check_trial_claim），不依赖这个窗口开着。
+      function renderTrial() {
+        var view = window.frTrialView ? window.frTrialView(trialStatus, state.lang)
+          : { show: false, title: "", sub: "", chars: 0, hours: null };
+        var num = function (n) {
+          var v = Number(n || 0);
+          if (v >= 10000) return (v / 10000).toFixed(v >= 100000 ? 0 : 1).replace(/\.0$/, "") + "w";
+          if (v >= 1000) return (v / 1000).toFixed(v >= 10000 ? 0 : 1).replace(/\.0$/, "") + "k";
+          return String(Math.round(v));
+        };
+        var cell = function (label, value) {
+          return '<div style="flex:1;background:#0f1420;border:1px solid #2a3344;border-radius:10px;padding:12px 8px">' +
+            '<div style="font-size:11px;color:#97a3b6;margin-bottom:4px">' + label + '</div>' +
+            '<div style="font-size:20px;font-weight:700;color:#a78bfa">' + value + '</div></div>';
+        };
+        var hoursCell = (view.hours == null) ? "" :
+          cell(t("trial_hours"), Math.round(view.hours) + " " + t("trial_hours_unit"));
+        var esc = function (s) {
+          return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+        };
+        var TONE = { ok: "#34d399", warn: "#fbbf24", err: "#f87171", info: "#97a3b6" };
+
+        card.innerHTML =
+          '<div style="padding:2px 0">' +
+          '<div style="text-align:center">' +
+          '<div style="font-size:36px;line-height:1;margin-bottom:10px">🎁</div>' +
+          '<div style="font-size:17px;font-weight:600;margin-bottom:6px;color:#a78bfa">' + view.title + '</div>' +
+          '</div>' +
+          '<div style="display:flex;gap:10px;margin:12px 0 14px">' +
+          cell(t("trial_chars"), num(view.chars)) + hoursCell +
+          '</div>' +
+          // 升级区：把「7 天完整版」放在体验额度正下方，对比即是理由。
+          '<div style="border-top:1px solid #2a3344;margin:4px 0 14px"></div>' +
+          '<div style="font-size:14px;font-weight:600;color:#e6ecf5;margin-bottom:6px">' + t("claim_title") + '</div>' +
+          '<div style="font-size:12.5px;color:#97a3b6;line-height:1.7;margin-bottom:12px">' + t("claim_sub") + '</div>' +
+          '<input id="fr-contact" type="text" placeholder="' + esc(t("claim_ph")) + '" ' +
+          'style="width:100%;box-sizing:border-box;padding:9px 12px;background:#0f1420;border:1px solid #2a3344;' +
+          'border-radius:8px;color:#e6ecf5;font-size:13px;margin-bottom:10px" />' +
+          '<div id="fr-claim-msg" style="font-size:12.5px;line-height:1.6;margin-bottom:10px;min-height:0"></div>' +
+          '<div id="fr-claim-acts" style="display:flex;gap:10px">' +
+          '<button id="fr-claim" style="' + BTN_PRIMARY + ';flex:1">' + t("btn_claim") + '</button>' +
+          '<button id="fr-trial-go" style="' + BTN_GHOST + '">' + t("btn_skip_claim") + '</button>' +
+          '</div></div>';
+
+        var msg = card.querySelector("#fr-claim-msg");
+        var acts = card.querySelector("#fr-claim-acts");
+        var input = card.querySelector("#fr-contact");
+        var claimBtn = card.querySelector("#fr-claim");
+        card.querySelector("#fr-trial-go").addEventListener("click", function () { finish(true); });
+        try { input.focus(); } catch (e) {}
+
+        function say(cls, text) {
+          msg.style.color = TONE[cls] || TONE.info;
+          msg.textContent = text;
+        }
+
+        // 终态：换掉按钮组。已激活 → 继续领赠量；用尽/失败 → 只留「开始使用」。
+        function settle(v) {
+          var html = '';
+          if (v.canGift) {
+            html += '<button id="fr-gift" style="' + BTN_PRIMARY + ';flex:1">' + t("btn_gift") + '</button>';
+          }
+          html += '<button id="fr-done2" style="' + (v.canGift ? BTN_GHOST : BTN_PRIMARY + ';flex:1') + '">'
+            + t("btn_start") + '</button>';
+          acts.innerHTML = html;
+          try { input.style.display = "none"; } catch (e) {}
+          acts.querySelector("#fr-done2").addEventListener("click", function () { finish(true); });
+          var g = acts.querySelector("#fr-gift");
+          if (g) g.addEventListener("click", function () { renderGift(); });
+        }
+
+        function poll(attempt) {
+          var plan = window.frClaimPollPlan ? window.frClaimPollPlan(attempt)
+            : { again: attempt < 6, delayMs: 5000, giveUpKey: "claim_slow" };
+          if (!plan.again) {
+            // 交给后端后台轮询：用户该走了，签发到账不需要这个窗口开着。
+            say("info", t(plan.giveUpKey));
+            settle({ canGift: false });
+            return;
+          }
+          setTimeout(function () {
+            if (!shell.trialClaimStatus) { say("info", t("claim_slow")); settle({ canGift: false }); return; }
+            shell.trialClaimStatus().then(function (r) {
+              var v = window.frClaimResultView ? window.frClaimResultView(r, state.lang)
+                : { phase: "waiting", cls: "info", text: "", done: false, canGift: false };
+              say(v.cls, v.text);
+              if (v.done) settle(v);
+              else poll(attempt + 1);
+            }).catch(function () { poll(attempt + 1); });
+          }, plan.delayMs);
+        }
+
+        claimBtn.addEventListener("click", function () {
+          var contact = input.value;
+          var chk = window.frClaimValidate ? window.frClaimValidate(contact) : { ok: !!contact, err: "claim_need_contact" };
+          if (!chk.ok) { say("err", t(chk.err)); try { input.focus(); } catch (e) {} return; }
+          claimBtn.disabled = true;
+          say("info", t("claim_sending"));
+          var p = shell.trialClaim ? shell.trialClaim({ contact: contact })
+            : Promise.resolve({ ok: false, error: "unsupported" });
+          p.then(function (r) {
+            var v = window.frClaimResultView ? window.frClaimResultView(r, state.lang)
+              : { phase: "fail", cls: "err", text: t("claim_fail"), done: true, canGift: false };
+            say(v.cls, v.text);
+            if (v.done) { settle(v); return; }
+            poll(0);
+          }).catch(function () {
+            say("err", t("claim_network"));
+            settle({ canGift: false });
+          });
+        });
+      }
+
+      // ── 加客服领 10 万字符 ──
+      // 只负责「把码交到用户手上」；客服核销后的到账走后端后台轮询，
+      // 所以这一屏永远可以直接关掉，不会丢东西。
+      function renderGift() {
+        card.innerHTML =
+          '<div style="text-align:center;padding:6px 0 2px">' +
+          '<div style="font-size:36px;line-height:1;margin-bottom:10px">💬</div>' +
+          '<div style="font-size:17px;font-weight:600;margin-bottom:8px;color:#a78bfa">' + t("gift_title") + '</div>' +
+          '<div id="fr-gift-body" style="font-size:12.5px;color:#97a3b6;line-height:1.7;margin:12px 0">…</div>' +
+          '<div id="fr-gift-acts" style="display:flex;gap:10px;margin-top:14px">' +
+          '<button id="fr-gift-done" style="' + BTN_PRIMARY + ';width:100%">' + t("btn_start") + '</button>' +
+          '</div></div>';
+        var body = card.querySelector("#fr-gift-body");
+        var gacts = card.querySelector("#fr-gift-acts");
+        card.querySelector("#fr-gift-done").addEventListener("click", function () { finish(true); });
+
+        var p = shell.trialBindCode ? shell.trialBindCode() : Promise.resolve({ ok: false });
+        p.then(function (r) {
+          var v = window.frGiftView ? window.frGiftView(r, state.lang) : { ok: false, text: t("gift_fail") };
+          if (!v.ok) { body.style.color = "#fbbf24"; body.textContent = v.text; return; }
+          body.innerHTML = '<div style="text-align:left">' + v.text + '</div>' +
+            '<div style="display:flex;align-items:center;gap:10px;margin-top:12px">' +
+            '<code id="fr-code" style="flex:1;background:#0f1420;border:1px solid #2a3344;border-radius:8px;' +
+            'padding:10px;font-size:16px;letter-spacing:1px;color:#a78bfa;font-weight:700">' + v.code + '</code>' +
+            '<button id="fr-copy" style="' + BTN_GHOST + '">' + t("btn_copy") + '</button></div>';
+          var copyBtn = body.querySelector("#fr-copy");
+          copyBtn.addEventListener("click", function () {
+            try {
+              navigator.clipboard.writeText(v.code);
+              copyBtn.textContent = t("copied");
+            } catch (e) { /* 剪贴板不可用：码就在屏幕上，手抄也行 */ }
+          });
+          if (v.tgUrl) {
+            var open = document.createElement("button");
+            open.setAttribute("style", BTN_PRIMARY + ";flex:1");
+            open.textContent = t("btn_open_tg");
+            open.addEventListener("click", function () {
+              if (shell.openExternal) shell.openExternal(v.tgUrl);
+            });
+            gacts.insertBefore(open, gacts.firstChild);
+            gacts.querySelector("#fr-gift-done").setAttribute("style", BTN_GHOST);
+          }
+        }).catch(function () {
+          body.style.color = "#fbbf24";
+          body.textContent = t("gift_fail");
+        });
       }
 
       renderBasic();

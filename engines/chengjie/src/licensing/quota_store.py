@@ -238,8 +238,10 @@ _WARNED_LIC_IDS: set = set()
 
 
 def _default_db_path() -> str:
-    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return os.path.join(here, "config", "license_quota.db")
+    """用量库位置：跟随可写数据区。落在安装目录的话每次升级用量归零＝白送额度。"""
+    from src.licensing.data_paths import data_file
+
+    return data_file("license_quota.db")
 
 
 def configure_license_quota_store(
@@ -288,21 +290,40 @@ def _current_status():
     return get_license_manager().status()
 
 
+def _local_trial() -> Any:
+    """首启体验档（未启用 → None）。它是**无授权时**的额度来源。"""
+    try:
+        from src.licensing.local_trial import get_local_trial
+        return get_local_trial()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def record_license_chars(
     category: str, chars: int, *, lic_status: Any = None,
 ) -> None:
     """成功交付后记账（翻译/TTS 热路旁路调用一行）。
 
-    无额度授权（unlicensed / included_chars<=0）→ 立即返回零 IO。绝不抛。
+    无额度授权时改记到**首启体验档**的 lic_id（若已启用）；两者都没有 → 零 IO。绝不抛。
     """
     try:
         n = int(chars or 0)
         if n <= 0:
             return
         st = lic_status if lic_status is not None else _current_status()
-        if not getattr(st, "licensed", False):
-            return
-        if int(getattr(st, "included_chars", 0) or 0) <= 0:
+        licensed = bool(getattr(st, "licensed", False))
+        base = int(getattr(st, "included_chars", 0) or 0)
+        if not licensed or base <= 0:
+            # 无授权（或不限量授权）→ 体验档记账。不限量授权本就无需计量，故只在
+            # 真的没有授权时才落体验档，避免给付费不限量客户凭空造出一条用量。
+            lt = None if licensed else _local_trial()
+            if lt is None:
+                return
+            store = _ensure_store()
+            if store is None:
+                return
+            lt.touch()          # 顺手推进单调水位（防时钟回拨）
+            store.record(lt.lic_id(), category, n)
             return
         store = _ensure_store()
         if store is None:
@@ -310,6 +331,53 @@ def record_license_chars(
         store.record(str(getattr(st, "lic_id", "") or "default"), category, n)
     except Exception:
         logger.debug("[license_quota] record_license_chars 失败（已忽略）", exc_info=True)
+
+
+def _merge_local_trial_quota(out: Dict[str, Any]) -> None:
+    """把首启体验档的额度并进 check 结果（就地改 out）。
+
+    只在「完全没有授权」时被调用。语义与正式授权一致（used/included/remaining/
+    exceeded/allowed），额外给 ``source="local_trial"`` 与剩余时长，供会员页/首启
+    向导显示「体验档还剩 X 小时 / Y 字符」。
+
+    ``enforce`` 走独立开关 ``licensing.trial.enforce``（默认关）——不共用
+    ``licensing.enforce``：那个开关是给**正式客户过期只读**用的，把体验档
+    绑在它上面会让「开了 enforce 的存量客户」顺带把新装用户也锁死。
+    """
+    try:
+        from src.licensing.local_trial import local_trial_enforced
+        lt = _local_trial()
+        if lt is None:
+            return
+        store = _ensure_store()
+        used = store.used_chars(lt.lic_id()) if store is not None else 0
+        snap = lt.snapshot(used_chars=used)
+        if not snap.get("started"):
+            return                       # 还没开始计时（首启向导尚未落锚点）
+        enforce = local_trial_enforced()
+        out["source"] = "local_trial"
+        out["lic_id"] = snap["lic_id"]
+        out["included"] = out["included_base"] = int(snap["included"])
+        out["used"] = int(snap["used"])
+        out["remaining"] = max(0, int(snap["included"]) - int(snap["used"]))
+        out["enforce"] = enforce
+        out["trial_hours_left"] = snap.get("hours_left")
+        out["trial_expired"] = bool(snap.get("expired"))
+        out["trial_closed"] = bool(snap.get("closed"))
+        # 过期与用尽都算"没额度了"——两者都该走同一条软/硬拦截口径。
+        out["exceeded"] = bool(snap.get("exhausted") or snap.get("expired")
+                               or snap.get("closed"))
+        if out["exceeded"] and enforce:
+            out["allowed"] = False
+        elif out["exceeded"] and snap["lic_id"] not in _WARNED_LIC_IDS:
+            _WARNED_LIC_IDS.add(snap["lic_id"])
+            logger.warning(
+                "[license_quota] 体验档已结束（used=%s/%s expired=%s）；"
+                "licensing.trial.enforce 未开启，仅提醒不阻断",
+                snap["used"], snap["included"], snap.get("expired"),
+            )
+    except Exception:
+        logger.debug("[license_quota] 体验档额度合并失败（放行）", exc_info=True)
 
 
 def check_license_quota(*, lic_status: Any = None) -> Dict[str, Any]:
@@ -334,6 +402,9 @@ def check_license_quota(*, lic_status: Any = None) -> Dict[str, Any]:
         out["lic_id"] = str(getattr(st, "lic_id", "") or "default")
         if not getattr(st, "licensed", False) or base <= 0:
             # base<=0 = 不限量授权：加量包对其无意义，included 恒 0（不限）。
+            # 但「完全没有授权」时还有一条额度来源：首启体验档。
+            if not getattr(st, "licensed", False):
+                _merge_local_trial_quota(out)
             return out
         store = _ensure_store()
         if store is None:

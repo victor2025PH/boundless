@@ -67,6 +67,19 @@
         {{ ((i18n or {}).get('mb_topup_line', '含加量包 +{n} 字符')).format(n='{:,}'.format(mb.quota.topup_chars)) }}
       </div>
       {% endif %}
+      {#- P2 首启体验档：额度来自本地赠量而非签名授权，必须换一套说法，
+          并把「还剩几小时」讲出来——用户任何时候都该一眼看到还剩多少。 -#}
+      {% if mb.quota.source == 'local_trial' %}
+      <div style="font-size:.72rem;color:{{ 'var(--red)' if mb.quota.exceeded else 'var(--blue,#3b82f6)' }};margin-top:.3rem">
+        {% if mb.quota.trial_expired %}
+          {{ (i18n or {}).get('mb_trial_expired', '首启体验档已到期') }}
+        {% elif mb.quota.exceeded %}
+          {{ (i18n or {}).get('mb_trial_used_up', '首启体验档额度已用完') }}
+        {% else %}
+          {{ ((i18n or {}).get('mb_trial_line', '首启体验档 · 还剩 {h} 小时')).format(h=mb.quota.trial_hours_left) }}
+        {% endif %}
+      </div>
+      {% endif %}
       <div style="font-size:.72rem;color:var(--t2);margin-top:.3rem">
         {{ (i18n or {}).get('mb_channels', '允许渠道') }}:
         {% if lic.channels %}{{ lic.channels|join(' · ') }}{% else %}{{ (i18n or {}).get('mb_channels_all', '全渠道') }}{% endif %}

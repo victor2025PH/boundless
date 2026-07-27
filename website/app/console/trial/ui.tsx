@@ -1,0 +1,115 @@
+"use client";
+
+// 客服核销面板：贴码 → 核销 → 厂商机自动签凭证 → 用户端后台轮询自动入账。
+// 客服全程不接触密钥，也不需要告诉用户「去哪粘贴」——这是这条链最省事的地方。
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { CheckCircle2, Gift } from "lucide-react";
+
+const inputCls =
+  "rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-amber-500";
+const btnPrimary =
+  "rounded-lg bg-amber-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-400 disabled:opacity-50";
+
+type Result = { ok: boolean; msg: string };
+
+export function TrialRedeemPanel({ defaultChars }: { defaultChars: number }) {
+  const router = useRouter();
+  const [code, setCode] = useState("");
+  const [chars, setChars] = useState(String(defaultChars));
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<Result | null>(null);
+
+  // 客服是照着聊天记录手打的：小写、丢横杠、前后空格都很常见，全在前端补齐，
+  // 别让「BC-」这种格式细节变成一次失败的核销和一轮来回。
+  function normalize(raw: string): string {
+    const s = raw.trim().toUpperCase().replace(/\s+/g, "").replace(/^BC-?/, "");
+    const body = s.replace(/-/g, "");
+    if (body.length !== 8) return raw.trim().toUpperCase();
+    return `BC-${body.slice(0, 4)}-${body.slice(4)}`;
+  }
+
+  async function submit() {
+    const norm = normalize(code);
+    if (!norm) return;
+    setBusy(true);
+    setRes(null);
+    try {
+      const r = await fetch("/api/console/trial-redeem", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: norm, chars: Number(chars) || defaultChars }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d?.ok) {
+        const why =
+          d?.error === "bad_code"
+            ? "码的格式不对（应形如 BC-XXXX-XXXX）"
+            : d?.error === "not_found"
+              ? "查无此码——确认用户报的是绑定码而不是别的编号"
+              : String(d?.error || `失败 (${r.status})`);
+        setRes({ ok: false, msg: why });
+        return;
+      }
+      setRes({
+        ok: true,
+        msg: d.already_redeemed
+          ? `这个码之前已经核销过了（${d.contact || "—"}），没有重复赠送。`
+          : `已核销：${d.contact || "—"} 将获得 ${Number(d.chars || 0).toLocaleString()} 字符，`
+            + `厂商机签发后自动到账，不用让用户做任何操作。`,
+      });
+      setCode("");
+      router.refresh();
+    } catch (e) {
+      setRes({ ok: false, msg: "网络错误，请重试" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mb-5 rounded-xl border border-amber-500/25 bg-amber-500/[0.04] p-4">
+      <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-amber-300">
+        <Gift className="h-4 w-4" />
+        核销绑定码
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !busy) submit();
+          }}
+          placeholder="BC-XXXX-XXXX"
+          className={`${inputCls} w-48 font-mono tracking-wider`}
+          autoFocus
+        />
+        <label className="flex items-center gap-1.5 text-xs text-slate-400">
+          赠送字符
+          <input
+            value={chars}
+            onChange={(e) => setChars(e.target.value.replace(/[^0-9]/g, ""))}
+            className={`${inputCls} w-28`}
+          />
+        </label>
+        <button onClick={submit} disabled={busy || !code.trim()} className={btnPrimary}>
+          {busy ? "核销中…" : "核销"}
+        </button>
+      </div>
+      {res && (
+        <div
+          className={`mt-3 flex items-start gap-1.5 text-xs ${
+            res.ok ? "text-emerald-400" : "text-rose-400"
+          }`}
+        >
+          {res.ok && <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+          <span>{res.msg}</span>
+        </div>
+      )}
+      <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
+        用户会在客户端「加客服领 10 万字符」拿到这串码。核销只是登记「该赠多少」，
+        真凭证由厂商机用离线私钥签发后回填，客户端自动入账。重复核销不会重复赠送。
+      </p>
+    </div>
+  );
+}

@@ -503,6 +503,7 @@ _BASELINE = """
 /api/unified-inbox/send-media	POST
 /api/unified-inbox/send-voice	POST
 /api/unified-inbox/send-caps	GET
+/api/workspace/quota	GET
 /api/desktop/ping	GET
 /api/desktop/smart-reply	POST
 /api/desktop/guard-check	POST
@@ -999,6 +1000,16 @@ _ADDITIONS_2026_07_27_PERSONA_EFFECTIVE = """
 /api/persona/effective	GET
 """
 _BASELINE += _ADDITIONS_2026_07_27_PERSONA_EFFECTIVE
+
+# 2026-07-27 P2 注册领试用（license_routes.py）：官网按机器码建单 → 厂商机离线签发
+# → 客户端轮询取回并**自动落盘激活**；bind-code 出「加客服领字符」深链，客服核销后
+# 同一轮询把加量凭证入账。三端点都不抛（领取失败仍可退回粘贴授权码那条老路）。
+_ADDITIONS_2026_07_27_TRIAL_CLAIM = """
+/api/admin/license/trial-bind-code	POST
+/api/admin/license/trial-claim	GET
+/api/admin/license/trial-claim	POST
+"""
+_BASELINE += _ADDITIONS_2026_07_27_TRIAL_CLAIM
 
 # 2026-07-27 营销目标（goal_routes.py）：会话级「工作目标」（付费转化/关系推进/沉默唤回…）
 # CRUD + settle-on-read 视图。右栏卡/看板/prompt 注入三个消费面读同一份结算口径

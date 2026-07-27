@@ -366,4 +366,8 @@ config/events/
 
 # P3.2 跨平台身份影子周期扫描 state（watchdog 每轮落盘的观测快照，机器本地）
 config/identity_shadow_state.json
+# 首启体验档锚点（每机独有的运行时状态：首次运行时间/机器短码/是否已关闭）
+config/local_trial.json
+# 中央凭据池的粘定机器 id（credpool_bridge 运行时写入，每机独有）
+config/.credpool_machine_id
 

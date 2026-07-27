@@ -57,3 +57,13 @@ translation:
 inbox:
   enabled: true
   read_from_store: true
+
+# 首启体验档：桌面装完直接能用（1 万字符 / 48 小时），不要求注册。
+# 只在没有授权文件时生效；有正式授权即整段失效（见 config.example.yaml 的详细说明）。
+# enforce 保持 false —— 「注册换正式试用」链路上线前开它会让新装用户用尽即无路可走。
+licensing:
+  trial:
+    enabled: true
+    enforce: false
+    chars: 10000
+    window_hours: 48

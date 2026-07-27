@@ -824,12 +824,20 @@ avatar_voice:
   # 先走幻声机(.176:9000)的 /api/tts_only（Fish-Speech-1.5 零样本克隆, 44.1kHz），
   # 命中即用最高保真音；不可达/失败 → 贯穿回落本机 CosyVoice3(7852)，绝不阻塞出站。
   # 前提：人设 id 与 hub 声纹档同名（lin_jiaxin/zhao_laoshi/... 已在 hub 注册参考音）。
+  # 音色一致性（2026-07-27）：strict=hub 挂了拒发语音（回落文字），绝不让本机 7852
+  # 另一份参考音静默顶班换声；lenient=旧行为（贯穿回落本地克隆）。
+  voice_consistency: lenient
   hub_fish:
     enabled: false                       # 默认关（opt-in；本机 overlay 开）
     base_url: http://192.168.0.176:9000  # 幻声 hub 单一 LAN 网关
     timeout_sec: 30.0                    # 单句合成超时（跨机 + Fish 推理）
     best_of: 1                           # >1 多 seed 择优(campplus 挑最像)，牺牲耗时换音质
     persona_allowlist: []                # 空=所有 avatar_clone 人设；非空=仅名单内启用
+    # 人设 id → hub 声纹档名（与幻影共用同一档=音色天然一致；缺省＝persona_id 同名）。
+    # 例：profile_map: {lin_xiaoyu: 林小玲}。换角色克隆音只改这里。
+    profile_map: {}
+    # 请求级钉住 TTS 引擎（空=沿用 hub 档配置）。需 hub /api/tts_only 认 tts_engine 键。
+    # tts_engine: moss_ttsd
     # 响应音频格式：wav（默认=旧行为）/ ogg（hub 侧 ffmpeg 直出 opus 48k，省本机发送前
     # 一次转码；hub ffmpeg 异常会静默回退 wav——chengjie 按响应字节魔数落对后缀，兼容）。
     # 灰度开法：overlay 里改 response_format: ogg（缓存键含此值，翻开关自动失效旧缓存）。
@@ -1553,9 +1561,39 @@ companion:
     #   元数据备货：scripts/persona_media_backfill_meta.py（文件名约定/manifest 归并 + VLM 补 tod，
     #   写 _meta.json sidecar + DB tod: 标签）。观测：autosend-status 的 complaints（收图后质疑计数）。
     consistency:
-      enabled: true            # false=整组关（回旧行为：无场景硬匹配/时段过滤/冷却/连续窗）
+      enabled: true            # false=整组关（回旧行为：无场景硬匹配/时段过滤/冷却/连续窗/衣着）
       resend_cooldown_hours: 24  # 同图同会话重发冷却（小时；0=关）
       continuity_minutes: 90     # 服装连续窗（分钟；0=关）——窗内优先同系列未发图
+      # 【今日衣着状态】（P1）：persona+日期确定性选一件「今天穿的」，A/B 两条生成链
+      #   prompt 注入 wearing <outfit>、聊天状态块同源注入（被问「穿了什么」按此答）——
+      #   图-文-跨链三同源，明天自动换装；连续窗内刚发过相册某衣着系列 → 衣着跟随该系列
+      #   （照片事实 > 每日默认，「再拍一张」不换装）。衣橱池优先级：人设 outfits 字段 →
+      #   下面 pool → 相册系列里认得出服装词的（white-dress → white dress）→ 内置中性便装池。
+      # 【场景×衣着联动 + 季节】（P2，随 outfit 开关）：衣着按本次照片/聊天状态的**场景**
+      #   与**季节**适配——泳装绝不进咖啡馆/办公室、健身房自动换运动装（衣橱有货才换）、
+      #   海边不裹毛衣、冬天不发泳装、夏天不发大衣、冬季户外不发短袖吊带（室内不管）；
+      #   违和且衣橱无可换 → 放弃注入（生图模型按场景自由穿，比硬注入冲突衣着诚实）。
+      #   换装确定性（同日同场景恒定），连续窗衣着同样过此闸（照片事实也不能泳装进办公室）。
+      #   dict 写法示例：{enabled: true, pool: [...], season: true, hemisphere: north}
+      #   （season: false 关季节排除；hemisphere: south 南半球季节倒扣）。
+      outfit: true             # true/false 或写成 {enabled: true, pool: [white dress, ...]}
+      # 【出图后验】（P2，位于 vision_gate 内，默认开）：生成图发出前的 VLM 体检**同一次调用**
+      #   顺带后验 场景/时段（零额外 GPU 往返）——点名海边生成出健身房 → scene_mismatch 拒 +
+      #   换种子重试；深夜要图生成出白天照 → tod_mismatch 拒（8-16 点=day、20-4 点=night 才校验，
+      #   晨昏光线两可不判；VLM 答 other/unclear 放行不误伤）。关闭：vision_gate 下
+      #   scene_check: false / tod_check: false。
+      # 【缺口自动补货】（P2，**默认关**）：watchdog 每小时把「点名场景反复要不到（unmet ≥
+      #   min_unmet）+ 该人设该场景零备货」写进补货计划文件（每日 ≤ max_per_day 项、pending
+      #   去重）；渲染由独立 CLI `python -m scripts.album_restock` 跑（建议夜间低峰/挂计划任务）：
+      #   衣着走 P2 场景联动、体检走 vision_gate 全套含场景后验，策展命名
+      #   <场景>_<系列>_<序号>.jpg 入册 album_dir/<persona>/ 并登记 _meta.json——
+      #   「看缺口→补图→下次有货」零人工。观测：ops-overview「图文一致性」卡 restock 行。
+      # auto_restock:
+      #   enabled: false
+      #   min_unmet: 2         # 场景未兑现次数达标线（进程级计数，重启清零）
+      #   per_scene: 2         # 每 (人设,场景) 一次补几张
+      #   max_per_day: 6       # 每日最多入队补货项（防灌爆夜间 GPU）
+      #   plan_path: config/album_restock_plan.json
     # 【出图多样性 / 真人感】治「每张头位置、表情都一样」（PuLID 从正面定妆照锁脸 +
     #   固定种子 + prompt 恒『看镜头』三重叠加把构图钉死，像证件照连拍）。开启后每次出图
     #   随机取一组「取景/头部姿态/视线/表情/写实质感」修饰词注入 prompt，并给种子掺 salt →
@@ -2440,7 +2478,20 @@ platform_login:
       base_url: ""        # 空=读环境变量 CREDPOOL_BASE_URL（缺省 http://127.0.0.1:8000）
       # 🔒 建议**留空**、只走环境变量 CREDPOOL_SERVICE_TOKEN——服务 token 明文不该入库
       service_token: ""
+      # 客户的会员卡密：付费档才拿得到专属/高优凭据 + 独立出口 IP（＝专业版权益）。
+      # 档位由中央池**服务端查库判定**，这里填什么都不能提权；不填=按 free 分配，仍可用。
+      # 卡密**首次使用即绑机**（机器标识存 config/.credpool_machine_id，重启/重装不变），
+      # 之后换机会降回 free，需联系客服解绑。同样建议走环境变量 CREDPOOL_LICENSE_KEY。
+      license_key: ""
       timeout_sec: 8
+    # ── 每账号设备指纹（防多开被聚类连坐）──────────────────────────────────
+    # Telegram 封的往往不是单个号而是**簇**：一批号若 device_model/system_version/
+    # app_version 全是 pyrogram 默认值，即使各自换了 api_id 和 IP 也会被判定为
+    # 「同一套软件跑出来的」。开 → 每个号按扫码时生成的种子派生一套自洽的桌面
+    # 指纹，逐次连接恒定。**只对开启后新扫码的号生效**，存量账号保持原行为
+    # （会话建成后忽然换设备型号反而可疑）。建议与 credpool 一同开启（三隔离）。
+    device_fingerprint:
+      enabled: false
     # N4 统一运行时：开 → 协议号（扫码 session）跑 A 线 TelegramClient
     #   （记忆/人设/情绪/语音图片/四层触发/人工转接全在线 + N4b 收发镜像进收件箱，坐席可见）；
     # 关 → 用 B 线薄连接 worker（仅收消息→收件箱 + 简单 autoreply）。
@@ -2549,6 +2600,28 @@ ops:
 licensing:
   enforce: false                      # 预留：true 时过期降级只读（当前未生效）
   # key_path: config/license.key      # 授权码路径（默认 config/license.key）
+  # ── 首启体验档（P2：装完直接能用，不要求注册）─────────────────────
+  # 只在**完全没有授权文件**时生效：给一小笔本地字符额度 + 一个时间窗，让新装用户
+  # 先跑通一条真实客户消息，再引导注册换完整试用。用量记进同一个 license_quota.db
+  # （lic_id 形如 local:ab12cd34），会员页/ops 读同一口径。
+  #
+  # 它**不是**签名授权：本地签发就得把厂商私钥塞进安装包，所以体验档刻意不进
+  # LicenseManager 语义，也因此天然可绕过（删 config/local_trial.json 即重置）。
+  # 这是取舍而非缺陷——赠量刻意很小，真正的防滥用在签发侧按机器码去重。
+  #
+  # enforce 独立于上面的 licensing.enforce：那个是给正式客户「过期只读」用的，
+  # 共用会让开了 enforce 的存量客户顺带把新装用户也锁死。
+  # ⚠️ 在「注册换正式试用」的链路上线前不要开 enforce，否则用尽即无路可走。
+  trial:
+    enabled: false                    # 默认关；桌面随包种子 config.desktop.min.yaml 里开
+    enforce: false                    # true = 用尽/过窗后真的拦（默认只提醒）
+    chars: 10000                      # 赠送字符数
+    window_hours: 48                  # 时间窗（小时）
+    # ── 注册换正式试用（P2）───────────────────────────────────────
+    # 首启向导「注册领 7 天」打的官网地址。链路：客户端按机器码建单 →
+    # 厂商机（私钥离线，scripts/fulfill_trial.py）签发 → 客户端轮询取回并自动
+    # 落盘激活。改这里只在自建/私有化部署时需要，公版走默认官网。
+    # site_url: https://bd2026.cc
   # ── 档位功能闸门（C0-3b，融合实例：不同会员档位解锁不同功能）────────
   # 默认关 = 全功能放行（对既有部署零行为变更）。开启后按
   # community < basic < pro < flagship 档位序解锁功能（注册表见

@@ -25,6 +25,7 @@ grace_days      到期后宽限天数（默认 7）
 lic_id          授权编号（便于吊销登记）
 included_chars  含翻译/TTS 字符额度（0/省略 = 不限；P0-4 试用计量用）
 trial           是否试用授权（bool，仅标记/展示用）
+machine         绑定的机器指纹（省略/空 = 不绑机；``*`` = 站点授权不限机器）
 ==============  ====================================================
 """
 
@@ -334,6 +335,24 @@ class LicenseManager:
                 messages=["这是字符加量凭证（非授权码）：请到 会员中心 → 兑换加量包 使用"],
             )
 
+        # 绑机校验（可选字段，存量授权无 machine → 逐字节按旧行为放行）。
+        # 试用授权靠它防「一份 7 天试用发给一群人」：服务端按机器码去重签发，
+        # 客户端只需确认"这张是发给本机的"。
+        #
+        # 判定不出来（platform/licensing/machine_id.py 缺失、注册表读不到）→ **放行**。
+        # 反过来做会把正当付费用户锁在门外，而绑机本身只是防滥用、不是防破解——
+        # 指纹取自本机可读信息，客户端侧一定可伪造，真正的闸门在签发侧台账。
+        bound = str(payload.get("machine") or "").strip()
+        if bound:
+            from src.licensing.machine_bridge import machine_matches
+            verdict = machine_matches(bound)
+            if verdict is False:
+                return LicenseStatus(
+                    state="invalid",
+                    messages=["此授权绑定到另一台机器，无法在本机使用；"
+                              "如需换机请联系客服解绑"],
+                )
+
         exp = int(payload.get("exp") or 0)
         grace_days = int(payload.get("grace_days", DEFAULT_GRACE_DAYS))
         now = int(self._now())
@@ -386,8 +405,11 @@ _SINGLETON_LOCK = threading.Lock()
 
 
 def _default_license_path() -> str:
-    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return os.path.join(here, "config", "license.key")
+    """授权文件位置：跟随可写数据区（见 data_paths 顶部说明——打包后 __file__ 指向
+    安装目录，升级即被替换/可能只读，激活会失效）。"""
+    from src.licensing.data_paths import data_file
+
+    return data_file("license.key")
 
 
 def get_license_manager(
