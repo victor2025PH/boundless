@@ -81,6 +81,81 @@ def test_explicit_env_anchor_wins(mid, monkeypatch):
     assert mid.machine_fingerprint(env_vars=("BD_TEST_MID",)) == a
 
 
+def test_empty_env_vars_means_disabled_not_default(mid, monkeypatch):
+    """``env_vars=()`` 必须是「禁用 env 覆盖」，不能回落到默认名。
+
+    原实现写 ``tuple(env_vars) if env_vars else DEFAULT``，空元组是假值 → 回落默认，
+    于是调用方想收紧反而把覆盖打开了。绑机绕过口的修复正是靠这个三态语义。
+    """
+    monkeypatch.setenv("BOUNDLESS_MACHINE_ID", "attacker-picked-constant")
+    hijacked = mid.machine_fingerprint()                 # None → 用默认名，会被劫持
+    disabled = mid.machine_fingerprint(env_vars=())      # 空 → 禁用，回到真硬件锚点
+    assert hijacked != disabled, "空元组没能禁用 env 覆盖"
+    monkeypatch.setenv("BOUNDLESS_MACHINE_ID", "another-constant")
+    assert mid.machine_fingerprint(env_vars=()) == disabled, "禁用后不该再随 env 变"
+
+
+def test_packaged_build_ignores_env_override(monkeypatch):
+    """打包态必须无视 env 指纹覆盖——否则绑机零门槛可绕。
+
+    威胁具体是：发布出去的 backend.exe 里这两个 env 同样生效，启动前设个固定值，
+    一份签好的试用授权就能在任意机器复用，官网按机器码去重也一并失效。
+    """
+    import sys
+
+    from src.licensing import machine_bridge as mb
+
+    monkeypatch.setenv("BOUNDLESS_MACHINE_ID", "attacker-picked-constant")
+    mb.reset_machine_bridge()
+    src_fp = mb.machine_fingerprint()                    # 源码态：覆盖生效
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    mb.reset_machine_bridge()
+    frozen_fp = mb.machine_fingerprint()                 # 打包态：必须忽略
+
+    assert src_fp and frozen_fp
+    assert frozen_fp != src_fp, "打包态仍在认 env 覆盖 —— 绑机可被绕过"
+
+    monkeypatch.setenv("BOUNDLESS_MACHINE_ID", "yet-another-constant")
+    mb.reset_machine_bridge()
+    assert mb.machine_fingerprint() == frozen_fp, "打包态指纹不该随 env 变"
+    mb.reset_machine_bridge()
+
+
+def test_source_build_keeps_override_for_selftest(monkeypatch):
+    """源码态保留覆盖：自测与演练台靠它隔离，而能跑源码的人本就能改代码。"""
+    from src.licensing import machine_bridge as mb
+
+    monkeypatch.setenv("BOUNDLESS_MACHINE_ID", "selftest-aaa")
+    mb.reset_machine_bridge()
+    a = mb.machine_fingerprint()
+    monkeypatch.setenv("BOUNDLESS_MACHINE_ID", "selftest-bbb")
+    mb.reset_machine_bridge()
+    assert mb.machine_fingerprint() != a
+    mb.reset_machine_bridge()
+
+
+def test_packaged_binding_check_also_ignores_env(monkeypatch):
+    """绑机**校验**这一侧同样要忽略——只堵取指纹不堵校验等于没堵。"""
+    import sys
+
+    from src.licensing import machine_bridge as mb
+
+    monkeypatch.delenv("BOUNDLESS_MACHINE_ID", raising=False)
+    mb.reset_machine_bridge()
+    real = mb.machine_fingerprint()
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setenv("BOUNDLESS_MACHINE_ID", "attacker-picked-constant")
+    mb.reset_machine_bridge()
+    # 攻击者用自选常量签的授权，在打包态必须匹配不上
+    from src.licensing.machine_bridge import machine_fingerprint as _fp
+    forged = _fp()
+    assert mb.machine_matches(real) is True, "真硬件指纹应仍然匹配"
+    assert forged == real, "打包态取到的就该是真硬件指纹"
+    mb.reset_machine_bridge()
+
+
 def test_candidates_include_primary_and_legacy(mid):
     cands = mid.machine_fingerprints()
     assert cands and cands[0] == mid.machine_fingerprint()

@@ -110,8 +110,14 @@ def _raw_legacy_id() -> str:
 def machine_fingerprint(
     *, salt: str = DEFAULT_SALT, env_vars: Optional[Iterable[str]] = None,
 ) -> str:
-    """本机稳定指纹（展示/签发用）。"""
-    envs = tuple(env_vars) if env_vars else DEFAULT_ENV_VARS
+    """本机稳定指纹（展示/签发用）。
+
+    ``env_vars`` 三态要分清：``None``＝用 :data:`DEFAULT_ENV_VARS`；给了名字＝用它们；
+    **空序列＝显式禁用 env 覆盖**。原写法 ``if env_vars else DEFAULT`` 会把空元组
+    当没传而回落到默认，于是「我要关掉 env 覆盖」反倒把它打开了——调用方想收紧
+    却收不紧（绑机绕过口的修复正踩在这上面）。
+    """
+    envs = DEFAULT_ENV_VARS if env_vars is None else tuple(env_vars)
     ex = _explicit(envs)
     if ex:
         return _fp_from_raw("env:" + ex, salt)

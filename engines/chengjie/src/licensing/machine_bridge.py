@@ -20,6 +20,28 @@ logger = logging.getLogger(__name__)
 #: 本产品的显式锚点 env（运维给虚机固定指纹用），外加集团默认名
 ENV_VARS = ("AITR_MACHINE_ID", "BOUNDLESS_MACHINE_ID")
 
+
+def _env_vars() -> tuple:
+    """本次取指纹允许哪些 env 覆盖。**打包态一律不允许**。
+
+    这两个 env 本是给运维「把虚机指纹钉死」用的，但它们在发布出去的 backend.exe
+    里同样生效 —— 于是任何人只要启动前设一个固定值，就能让绑机形同虚设：
+    一份签好的试用授权可在任意机器复用，官网按机器码去重也一并失效。
+    这是**零门槛、无需工具**的绕过口，必须堵掉。
+
+    冻结态（桌面安装版）返回空元组＝显式禁用（`machine_id` 已把「空序列」与
+    「未传」区分开）；源码态保留覆盖能力——自测（`fulfill_trial.py --self-test`）
+    与演练台靠它做隔离，而能跑源码的人本来就能直接改代码，堵它没有意义。
+
+    虚机集群若真需要钉指纹，应走一个显式的配置项而非 env（可审计、可随配置同步），
+    等有此需求再加；现在不预留，免得又是一个可被误用的口子。
+    """
+    import sys
+
+    if getattr(sys, "frozen", False) or getattr(sys, "_MEIPASS", ""):
+        return ()
+    return ENV_VARS
+
 _MOD: Any = None
 _LOAD_FAILED = False
 
@@ -78,7 +100,7 @@ def machine_fingerprint() -> str:
     if mod is None:
         return ""
     try:
-        return str(mod.machine_fingerprint(env_vars=ENV_VARS) or "")
+        return str(mod.machine_fingerprint(env_vars=_env_vars()) or "")
     except Exception:  # noqa: BLE001
         logger.debug("[machine_id] 取指纹失败", exc_info=True)
         return ""
@@ -97,7 +119,7 @@ def machine_matches(bound: str) -> Optional[bool]:
     if mod is None:
         return None
     try:
-        return bool(mod.matches_this_machine(b, env_vars=ENV_VARS))
+        return bool(mod.matches_this_machine(b, env_vars=_env_vars()))
     except Exception:  # noqa: BLE001
         logger.debug("[machine_id] 绑机匹配失败", exc_info=True)
         return None
