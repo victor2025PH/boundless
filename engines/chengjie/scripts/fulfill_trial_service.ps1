@@ -98,9 +98,35 @@ exit `$rc
   Say "  runner -> $Runner"
 }
 
+function Protect-Secret([string]$Path) {
+  <#
+    厂商私钥与官网 ADMIN_KEY 是本机最敏感的两件东西：拿到私钥即可**任意伪造授权**，
+    比「复用一份已签发的授权」严重一个量级。实测这两个文件继承来的 ACL 让
+    BUILTIN\Users 可读、Authenticated Users 可改 —— 任何本机用户都能签license。
+    故安装时顺手收紧到 Administrators + SYSTEM（任务以 SYSTEM 跑，必须保留它）。
+    靠人记得 icacls 是不可靠的，所以放进安装流程。
+  #>
+  if (-not (Test-Path $Path)) { return }
+  try {
+    $acl = Get-Acl $Path
+    $acl.SetAccessRuleProtection($true, $false)
+    $acl.Access | ForEach-Object { [void]$acl.RemoveAccessRule($_) }
+    foreach ($who in "BUILTIN\Administrators", "NT AUTHORITY\SYSTEM") {
+      $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+        $who, "FullControl", "None", "None", "Allow")))
+    }
+    Set-Acl -Path $Path -AclObject $acl
+    Say ("  已收紧权限（仅 Administrators/SYSTEM）: " + (Split-Path $Path -Leaf))
+  } catch {
+    Say ("  ! 收紧权限失败（请手工 icacls）: " + (Split-Path $Path -Leaf)) Yellow
+  }
+}
+
 if ($Install) {
   Head "安装履约常驻任务"
   if (-not (Test-Path $Priv)) { throw "厂商私钥不存在: $Priv" }
+  Protect-Secret $Priv
+  if ($KeyFile) { Protect-Secret $KeyFile }
   if (-not $KeyFile) {
     Say "  未给 -KeyFile：runner 将回落读环境变量 TRIAL_ADMIN_KEY" Yellow
     Say "  建议落成文件（任务里不出现明文，也不随会话丢失）" DarkGray
