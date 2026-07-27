@@ -7,9 +7,13 @@
 // 自包含、不依赖 renderer 内部；CSP: script-src 'self' 故为独立文件，样式走 inline（'unsafe-inline' 已许可）。
 (function () {
   var FLAG = "aitr_firstrun_v1";
-  try {
-    if (localStorage.getItem(FLAG)) return;
-  } catch (e) { /* localStorage 不可用：仍展示一次（不持久化） */ }
+  var forced = false;
+  try { forced = !!(window.shell && window.shell.forceFirstRun); } catch (e) {}
+  var flagged = false;
+  try { flagged = !!localStorage.getItem(FLAG); }
+  catch (e) { /* localStorage 不可用：仍展示一次（不持久化） */ }
+  var show = window.frShouldShowWizard ? window.frShouldShowWizard(flagged, forced) : !flagged;
+  if (!show) return;
 
   var INPUT_STYLE = "width:100%;box-sizing:border-box;padding:8px 10px;background:#0f1420;color:#e6e9ef;border:1px solid #2a3344;border-radius:8px";
   var LABEL_STYLE = "display:block;font-size:13px;margin-bottom:6px;color:#c4ccd9";
@@ -192,10 +196,7 @@
         var view = window.frTrialView ? window.frTrialView(trialStatus, state.lang)
           : { show: false, title: "", sub: "", chars: 0, hours: null };
         var num = function (n) {
-          var v = Number(n || 0);
-          if (v >= 10000) return (v / 10000).toFixed(v >= 100000 ? 0 : 1).replace(/\.0$/, "") + "w";
-          if (v >= 1000) return (v / 1000).toFixed(v >= 10000 ? 0 : 1).replace(/\.0$/, "") + "k";
-          return String(Math.round(v));
+          return window.frFormatChars ? window.frFormatChars(n, state.lang) : String(Math.round(Number(n) || 0));
         };
         var cell = function (label, value) {
           return '<div style="flex:1;background:#0f1420;border:1px solid #2a3344;border-radius:10px;padding:12px 8px">' +
@@ -221,8 +222,10 @@
           '</div>' +
           // 升级区：把「7 天完整版」放在体验额度正下方，对比即是理由。
           '<div style="border-top:1px solid #2a3344;margin:4px 0 14px"></div>' +
+          '<div id="fr-claim-pitch">' +
           '<div style="font-size:14px;font-weight:600;color:#e6ecf5;margin-bottom:6px">' + t("claim_title") + '</div>' +
           '<div style="font-size:12.5px;color:#97a3b6;line-height:1.7;margin-bottom:12px">' + t("claim_sub") + '</div>' +
+          '</div>' +
           '<input id="fr-contact" type="text" placeholder="' + esc(t("claim_ph")) + '" ' +
           'style="width:100%;box-sizing:border-box;padding:9px 12px;background:#0f1420;border:1px solid #2a3344;' +
           'border-radius:8px;color:#e6ecf5;font-size:13px;margin-bottom:10px" />' +
@@ -254,6 +257,13 @@
             + t("btn_start") + '</button>';
           acts.innerHTML = html;
           try { input.style.display = "none"; } catch (e) {}
+          // 已用尽/领不到时收掉「免费领 7 天完整版」这段推介——它和紧接着的
+          // 「这台机器的免费试用已经用过了」直接打脸（视觉验收所见）。
+          // 成功态保留：那句推介正是对「已激活：7 天完整版」的说明。
+          if (v.phase === "exhausted" || v.phase === "fail") {
+            var pitch = card.querySelector("#fr-claim-pitch");
+            if (pitch) pitch.style.display = "none";
+          }
           acts.querySelector("#fr-done2").addEventListener("click", function () { finish(true); });
           var g = acts.querySelector("#fr-gift");
           if (g) g.addEventListener("click", function () { renderGift(); });
@@ -333,15 +343,30 @@
               copyBtn.textContent = t("copied");
             } catch (e) { /* 剪贴板不可用：码就在屏幕上，手抄也行 */ }
           });
-          if (v.tgUrl) {
-            var open = document.createElement("button");
-            open.setAttribute("style", BTN_PRIMARY + ";flex:1");
-            open.textContent = t("btn_open_tg");
-            open.addEventListener("click", function () {
-              if (shell.openExternal) shell.openExternal(v.tgUrl);
+          // 两个渠道都要给按钮。原来只渲染 Telegram，而 waUrl 明明已经算出来了——
+          // 产品承诺的是「加客服 Telegram 或 WhatsApp」，只给一个等于让 WhatsApp
+          // 用户自己去找人（视觉验收时抓到）。首个渠道主色，其余次要色。
+          var chans = [];
+          if (v.tgUrl) chans.push(["btn_open_tg", v.tgUrl]);
+          if (v.waUrl) chans.push(["btn_open_wa", v.waUrl]);
+          if (chans.length) {
+            // 渠道各占一行内的等宽格，「开始使用」另起一行：三颗挤一行会把
+            // 「打开 Telegram 发给客服」压到折行（视觉验收所见），且层次也不对——
+            // 此刻的主动作是「选个渠道找客服」，开始使用是退路。
+            gacts.setAttribute("style", "display:flex;flex-direction:column;gap:10px;margin-top:14px");
+            var row = document.createElement("div");
+            row.setAttribute("style", "display:flex;gap:10px");
+            chans.forEach(function (ch, i) {
+              var open = document.createElement("button");
+              open.setAttribute("style", (i === 0 ? BTN_PRIMARY : BTN_GHOST) + ";flex:1");
+              open.textContent = t(ch[0]);
+              open.addEventListener("click", function () {
+                if (shell.openExternal) shell.openExternal(ch[1]);
+              });
+              row.appendChild(open);
             });
-            gacts.insertBefore(open, gacts.firstChild);
-            gacts.querySelector("#fr-gift-done").setAttribute("style", BTN_GHOST);
+            gacts.insertBefore(row, gacts.firstChild);
+            gacts.querySelector("#fr-gift-done").setAttribute("style", BTN_GHOST + ";width:100%");
           }
         }).catch(function () {
           body.style.color = "#fbbf24";

@@ -41,7 +41,9 @@ var FR_STRINGS = {
     btn_start: "开始使用",
     // ── 注册领 7 天（P2）──
     claim_title: "留个联系方式，免费领 7 天完整版",
-    claim_sub: "7 天不限渠道 · 25000 字符，绑定本机使用。填 Telegram 用户名或手机号即可，不用注册账号、不填邮箱。",
+    // 「2.5 万」而非「25000」：上方额度格用 frFormatChars 出的是「1 万」，
+    // 同一屏两种数字写法看着像两个人写的（视觉验收所见）。
+    claim_sub: "7 天不限渠道 · 2.5 万字符，绑定本机使用。填 Telegram 用户名或手机号即可，不用注册账号、不填邮箱。",
     claim_ph: "@你的Telegram用户名 或 手机号",
     btn_claim: "免费领取",
     btn_skip_claim: "先不领，直接开始",
@@ -59,6 +61,7 @@ var FR_STRINGS = {
     gift_sub: "把下面这串码发给客服，核销后额度自动到账——不用你再回来操作。",
     btn_gift: "领 10 万字符",
     btn_open_tg: "打开 Telegram 发给客服",
+    btn_open_wa: "用 WhatsApp 发给客服",
     btn_copy: "复制",
     copied: "已复制",
     gift_fail: "取码失败，稍后可在「会员中心」再试",
@@ -120,6 +123,7 @@ var FR_STRINGS = {
       + "automatically — you don't have to come back.",
     btn_gift: "Get 100,000 characters",
     btn_open_tg: "Open Telegram and message support",
+    btn_open_wa: "Message support on WhatsApp",
     btn_copy: "Copy",
     copied: "Copied",
     gift_fail: "Couldn't get a code — retry later from the membership center",
@@ -130,6 +134,19 @@ var FR_STRINGS = {
 function frT(lang, key) {
   var d = FR_STRINGS[lang === "en" ? "en" : "zh"] || FR_STRINGS.zh;
   return d[key] != null ? d[key] : key;
+}
+
+// 字符数展示。原实现一律缩成「1w / 2.5w」——那是中文口语写法，**英文界面照样显示
+// `1w`**，对英文用户就是个不明所以的字符串（视觉验收时抓到）。改为跟语言走：
+// 中文用「万」，英文用千分位。语言判定与 frT 同口径（只有显式 en 算英文）。
+function frFormatChars(n, lang) {
+  var v = Math.max(0, Math.round(Number(n) || 0));
+  if (lang === "en") return v.toLocaleString("en-US");
+  if (v >= 10000) {
+    var w = v / 10000;
+    return (w >= 100 ? w.toFixed(0) : w.toFixed(1).replace(/\.0$/, "")) + " 万";
+  }
+  return v.toLocaleString("zh-CN");
 }
 
 // 步骤编排：AI 已配置（升级/重装保留数据目录）→ 只走基础步；未配置 → 基础 + AI + 结果。
@@ -268,10 +285,21 @@ function frResultView(saveView, lang) {
   return { cls: "warn", title: frT(lang, "result_warn_title"), sub: frT(lang, "result_warn_sub") };
 }
 
+// 是否弹向导。默认「只弹一次」（有标记就不弹），但支持强制重看：
+// 带 `--first-run` 启动即无视标记。有它之前，想再看一遍向导只能让人打开
+// DevTools 敲 `localStorage.removeItem('aitr_firstrun_v1')`——这对客服远程
+// 协助和自己验收都太别扭（trial_rig.ps1 的复位提示一直就写着这句话）。
+// 强制态下**仍然照常写标记**：强制是显式的一次性动作，不该顺手改掉常态。
+function frShouldShowWizard(flagPresent, forced) {
+  return !!forced || !flagPresent;
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     FR_STRINGS: FR_STRINGS,
     frT: frT,
+    frFormatChars: frFormatChars,
+    frShouldShowWizard: frShouldShowWizard,
     frBuildSteps: frBuildSteps,
     frAiPrefill: frAiPrefill,
     frValidateAiInput: frValidateAiInput,

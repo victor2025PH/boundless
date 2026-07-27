@@ -10,6 +10,9 @@ function injectUrl(file) {
 }
 
 contextBridge.exposeInMainWorld("shell", {
+  // 带 --first-run 启动 → 无视「只弹一次」标记重看首启向导（客服远程协助 / 自己验收用）。
+  // 主进程解析 argv 后写进 env，这里同步读出，免得向导为一个布尔值等一次 IPC。
+  forceFirstRun: process.env.AITR_FORCE_FIRSTRUN === "1",
   getConfig: () => ipcRenderer.invoke("desktop:config"),
   applyWhatsappUa: (args) => ipcRenderer.invoke("desktop:apply-whatsapp-ua", args),
   backendHealth: () => ipcRenderer.invoke("desktop:backend-health"),

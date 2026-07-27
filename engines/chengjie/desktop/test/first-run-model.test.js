@@ -16,6 +16,8 @@ const {
   frClaimResultView,
   frClaimPollPlan,
   frGiftView,
+  frShouldShowWizard,
+  frFormatChars,
 } = require("../renderer/first-run-model.js");
 
 let pass = 0;
@@ -23,6 +25,22 @@ function ok(name, cond) {
   assert.ok(cond, name);
   pass++;
 }
+
+// ── 字符数展示跟语言走（原来一律「1w」，英文界面也是「1w」= 看不懂）──
+ok("中文万位", frFormatChars(10000, "zh") === "1 万");
+ok("中文带小数", frFormatChars(25000, "zh") === "2.5 万");
+ok("中文小于万给千分位", frFormatChars(8000, "zh") === "8,000");
+ok("英文一律千分位", frFormatChars(10000, "en") === "10,000");
+ok("英文不出现万", frFormatChars(25000, "en").indexOf("万") < 0);
+ok("英文不出现 w 缩写", /w/i.test(frFormatChars(100000, "en")) === false);
+ok("空值不炸", frFormatChars(null, "zh") === "0");
+ok("语言留空按中文", frFormatChars(10000, "") === "1 万");
+
+// ── 弹不弹：默认只弹一次，--first-run 可强制重看 ──
+ok("首次弹", frShouldShowWizard(false, false) === true);
+ok("弹过就不再弹", frShouldShowWizard(true, false) === false);
+ok("强制时无视标记", frShouldShowWizard(true, true) === true);
+ok("强制且没弹过照样弹", frShouldShowWizard(false, true) === true);
 
 // ── 步骤编排：AI 已配置 → 只走基础步；未配置/后端不可达 → 三步 ──
 ok("已配置只走基础步", frBuildSteps({ ok: true, configured: true }).join(",") === "basic");

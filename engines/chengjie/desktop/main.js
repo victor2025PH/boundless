@@ -9,6 +9,11 @@ const { fingerprintArg, accountIdFromPartition } = require("./inject/fingerprint
 const { createBackendManager } = require("./backend-launcher.js");
 const brandUtil = require("./brand-util.js");
 
+// `--first-run`：无视「只弹一次」标记重看首启向导。写进 env 而不是走 IPC，是为了让
+// shell-preload 能同步读到（向导在 DOM 就绪那一刻就要判断弹不弹，等不起一次往返）。
+// 在这里而非 ready 里设置：preload 可能先于任何 ready 回调求值。
+if (process.argv.includes("--first-run")) process.env.AITR_FORCE_FIRSTRUN = "1";
+
 // D3：每账号确定性指纹缓存（account_id → fingerprint）。启动/运行时新增账号前拉取，
 // 供 session UA / Accept-Language / webview additionalArguments 注入，使多号内嵌互不关联。
 const FP_BY_ACCOUNT = {};

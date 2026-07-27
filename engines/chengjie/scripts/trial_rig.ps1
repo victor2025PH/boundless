@@ -245,9 +245,7 @@ function Start-All {
   Say "下一步：桌面壳指向本测试台并重弹向导" White
   Say "  1) cd $Engine\desktop" DarkGray
   Say "  2) 确认 config.json 的 backend.base_url = http://127.0.0.1:$Port" DarkGray
-  Say "  3) npm start" DarkGray
-  Say "  4) 窗口里 Ctrl+Shift+I 打开 DevTools，Console 执行：" DarkGray
-  Say "     localStorage.removeItem('aitr_firstrun_v1'); location.reload()" DarkGray
+  Say "  3) npm start -- --first-run   （强制重弹首启向导）" DarkGray
 }
 
 function Stop-All {
@@ -280,8 +278,8 @@ function Reset-State {
     if (Test-Path $p) { Remove-Item $p -Force; Say "  已删 $f" } else { Say "  $f 本来就没有" DarkGray }
   }
   if (Test-Path $LeadsDir) { Remove-Item $LeadsDir -Recurse -Force; Say "  已清官网测试台账" }
-  Say "`n还需在桌面窗口 DevTools Console 执行（清掉「只弹一次」标记）：" White
-  Say "  localStorage.removeItem('aitr_firstrun_v1'); location.reload()" DarkGray
+  Say "`n重看首启向导：带 --first-run 启动即可（无需再开 DevTools 清标记）" White
+  Say "  npm start -- --first-run     # 或 智聊.exe --first-run" DarkGray
   Say "后端若在跑，改完状态建议重启后端让单例重读：-Down 再 -Up" DarkGray
 }
 
