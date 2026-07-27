@@ -6,7 +6,7 @@
     "dev": "next dev",
     "prebuild": "node scripts/sync-brand.mjs",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -H 127.0.0.1",
     "lint": "next lint",
     "sync:brand": "node scripts/sync-brand.mjs",
     "verify:robot": "node scripts/robot-shot.mjs .robot-shots && node scripts/robot-behavior.mjs .robot-shots",

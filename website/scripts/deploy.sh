@@ -17,6 +17,18 @@ flock -xn 9 || { echo "[deploy ERROR] another deploy holds /tmp/yuntech-deploy.l
 APP_DIR="${APP_DIR:-/home/ubuntu/yuntech}"
 PM2_NAME="${PM2_NAME:-yuntech}"
 PORT="${PORT:-3000}"
+
+# 绑定地址由 package.json 的 `start: next start -H 127.0.0.1` 决定，本脚本只**校验结果**。
+# 背景：`next start` 默认绑 0.0.0.0，应用端口因此对公网直接开放（2026-07-28 实测外部
+# 直连 http://<vps>:3000/api/health 返回 200，且 ufw inactive）。那条路径绕过 nginx：
+#   ① X-Forwarded-For 完全由客户端写 → 按 IP 的限流（后台/客服台登录爆破、领取刷量）全失效；
+#   ② 没有 TLS；③ 反代层的一切策略（跳转、体积限制）统统绕过。
+# nginx 的 proxy_pass 指向 127.0.0.1:3000，故绑回环对反代零影响。
+#
+# 为什么校验而不是在这里设环境变量：**试过，不管用**——`next start`（14.x）只认 `-H`
+# 参数，不读 HOSTNAME（env 确实进了进程，监听仍是 *:3000）。所以断言结果比指望机制可靠：
+# 机制换了、package.json 被改回去、有人手工重建 pm2 应用，这里都能立刻喊出来。
+BIND_EXPECT="${BIND_EXPECT:-127.0.0.1}"
 TARBALL="${1:-/home/ubuntu/website-deploy.tar.gz}"
 
 PARENT="$(dirname "$APP_DIR")"
@@ -162,6 +174,24 @@ if curl -sf "http://127.0.0.1:$PORT/api/health" >/dev/null; then
 else
   rollback
 fi
+
+# 绑定面校验：应用端口必须只在回环上监听。非致命（站点照常工作）故不回滚，但要喊出来
+# ——它决定了「按 IP 的限流是否有意义」，静默失效过一次就够了。
+BIND_ADDRS=$(ss -tlnH "sport = :$PORT" 2>/dev/null | awk '{print $4}' | sed 's/:[0-9]*$//' | sort -u | tr '\n' ' ')
+case "$BIND_ADDRS" in
+  *"$BIND_EXPECT"*)
+    if echo "$BIND_ADDRS" | grep -qE '(\*|0\.0\.0\.0|\[::\])'; then
+      log "WARN bind: :$PORT 仍在非回环地址监听 ($BIND_ADDRS) —— 应用端口对公网直接开放，"
+      log "WARN bind: 反代会被绕过、按 IP 的限流失效。检查 package.json 的 start 是否为 'next start -H $BIND_EXPECT'"
+    else
+      log "bind OK ($BIND_ADDRS)"
+    fi
+    ;;
+  "")
+    log "WARN bind: 读不到 :$PORT 的监听地址（ss 不可用？），跳过校验" ;;
+  *)
+    log "WARN bind: :$PORT 监听在 $BIND_ADDRS，期望 $BIND_EXPECT —— 见上一条说明" ;;
+esac
 
 # SEO: 部署成功后把可收录 URL 推给 IndexNow（Bing/Naver/Yandex 等）。失败不影响部署。
 SETUP_KEY=$(grep -E '^TELEGRAM_SETUP_KEY=' "$APP_DIR/.env.local" 2>/dev/null | sed -E 's/^[^=]+=//; s/^"//; s/"$//' | tr -d '\r')
