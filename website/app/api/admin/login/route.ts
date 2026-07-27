@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { clientIp } from "@/lib/client-ip";
 
 export const dynamic = "force-dynamic";
 
@@ -9,11 +10,6 @@ const WINDOW_MS = 10 * 60 * 1000;
 const MAX_FAILS = 8;
 const fails = new Map<string, number[]>();
 
-function clientIp(req: NextRequest): string {
-  const xff = req.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0].trim();
-  return req.headers.get("x-real-ip") || "unknown";
-}
 
 function tooMany(ip: string): boolean {
   const now = Date.now();

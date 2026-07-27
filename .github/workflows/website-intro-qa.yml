@@ -95,6 +95,12 @@ jobs:
         # 热点文件，绕开它可以让本门禁的改动自洽（少一处跨文件耦合）。
         run: node scripts/qa-trial-flow.mjs --url http://localhost:3470
 
+      # 滥用面：IP/指纹双轴限流的实际拦截点、XFF 伪造能否绕过、指纹幂等、蜜罐。
+      # XFF 那条是回归钉——限流键一旦回到「取 XFF 第一段」，客户端就能自称任意 IP，
+      # 登录爆破与领取刷量的 IP 轴一起失效。
+      - name: 试用领取滥用面压测
+        run: node scripts/qa-trial-abuse.mjs --url http://localhost:3470
+
       - name: 失败时上传诊断截图
         if: failure()
         uses: actions/upload-artifact@v4

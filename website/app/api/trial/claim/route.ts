@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { clientIp } from "@/lib/client-ip";
 import { createClaim, issueBindCode } from "@/lib/trial-claim-store";
 
 export const runtime = "nodejs";
@@ -25,11 +26,6 @@ const MAX_PER_IP = 12;         // 同一出口 IP 下多台机器装机是正常
 const MAX_PER_FP = 5;          // 同一台机器十分钟内不该反复来
 const hits = new Map<string, number[]>();
 
-function clientIp(req: NextRequest): string {
-  const xff = req.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0].trim();
-  return req.headers.get("x-real-ip") || "unknown";
-}
 
 function limited(key: string, max: number): boolean {
   const now = Date.now();
