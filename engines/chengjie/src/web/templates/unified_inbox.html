@@ -77,7 +77,7 @@
 <script src="/copilot/components/cp-chain-exec.js?v=20260611"></script>
 <script src="/copilot/components/cp-draft.js?v=20260704"></script>
 <script src="/copilot/components/cp-voice.js?v=20260611b"></script>
-<script src="/copilot/components/cp-goal.js?v=20260727b"></script>
+<script src="/copilot/components/cp-goal.js?v=20260727d"></script>
 {% endblock %}
 {% block content %}
 <style>
@@ -201,7 +201,7 @@
   border:1px solid var(--border);border-radius:6px;background:var(--bg-soft);
   color:var(--text-tiny);font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all;}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260725">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260727">
 <script src="/static/workspace/inbox-messages.js?v=20260720b"></script>
 
 <!-- 主布局 -->
@@ -984,6 +984,11 @@
             <button type="button" id="connect-enable-btn" class="connect-enable-go" onclick="enableProtocolMode()" data-i18n="inbox.connect.enable_btn">保存并启用</button>
           </div>
           <div id="connect-enable-msg" class="connect-enable-msg" role="status" aria-live="polite"></div>
+        </div>
+        <!-- 重新检测：sidecar/依赖是实时状态，运维刚起完服务不该逼用户关弹窗重开 -->
+        <div class="connect-unavail-acts">
+          <button type="button" id="connect-recheck-btn" class="connect-enable-go" onclick="recheckModes()" data-i18n="inbox.connect.recheck">重新检测</button>
+          <button type="button" id="connect-proceed-btn" class="connect-unavail-proceed" style="display:none;" onclick="proceedAnyway()" data-i18n="inbox.connect.proceed_anyway">仍要继续</button>
         </div>
         <button type="button" class="connect-unavail-back" onclick="hideModeUnavailable()" data-i18n="inbox.connect.unavail_back">← 返回方式列表</button>
       </div>
@@ -9770,19 +9775,55 @@ function backToModeSelect(){
 }
 // modes 状态缓存：不可用说明卡 / 一键启用文案按 reason_code 取键
 let _connectModes=[];
+// 后端 platform_readiness 出的原因码全集。每个码都必须配齐 rc_<code>_why / _how /
+// bk_<code> 三个键——不认识的码回落 not_enabled，宁可笼统也不能让说明卡空着。
+const _CONN_REASON_CODES={not_enabled:1, needs_server_setup:1, dep_missing:1,
+  creds_missing:1, service_down:1, login_disabled:1, orchestrator_off:1,
+  provider_unavailable:1};
 function _modeReasonKeys(rc){
-  const known={not_enabled:1, needs_server_setup:1};
-  const k=known[String(rc||'')]?String(rc):'not_enabled';
+  const k=_CONN_REASON_CODES[String(rc||'')]?String(rc):'not_enabled';
   return {why:`inbox.connect.rc_${k}_why`, how:`inbox.connect.rc_${k}_how`};
 }
+// blocker → 本地化文案。params 由后端给（{dep}/{install}/{url}/{svc}/{field}），
+// 用 Tf 插值，使「缺 okline，跑 pip install okline」这类可直接照做的指令落到界面上。
+function _blockerText(b, kind){
+  const keys=_modeReasonKeys(b&&b.code);
+  const key=kind==='how'?keys.how:keys.why;
+  const p=(b&&b.params)||null;
+  try{ return p?window.Tf(key,p):window.T(key); }catch(_){ return window.T(key); }
+}
+// 显式映射而非拼键：动态拼 i18n 键会绕过「键必须可解析」门禁，一个拼错就只在
+// 线上显示裸键名。键集写死在这里才可 grep、可被 test_platform_readiness_i18n 校验。
+const _CONN_BK_CHIP={
+  not_enabled:'inbox.connect.bk_not_enabled',
+  needs_server_setup:'inbox.connect.bk_needs_server_setup',
+  dep_missing:'inbox.connect.bk_dep_missing',
+  creds_missing:'inbox.connect.bk_creds_missing',
+  service_down:'inbox.connect.bk_service_down',
+  provider_unavailable:'inbox.connect.bk_provider_unavailable',
+  login_disabled:'inbox.connect.bk_login_disabled',
+  orchestrator_off:'inbox.connect.bk_orchestrator_off',
+};
+function _blockerChip(b){
+  const k=_CONN_BK_CHIP[String((b&&b.code)||'')];
+  return k?(window.T(k,null)||''):'';
+}
+// 排序：block 先于 warn（先说致命的），其余保持后端给的顺序
+function _sortedBlockers(m){
+  const bs=((m&&m.blockers)||[]).slice();
+  bs.sort((a,b)=>(a.severity==='block'?0:1)-(b.severity==='block'?0:1));
+  return bs;
+}
+function _topBlocker(m){ return _sortedBlockers(m)[0]||null; }
 function _connModeLabel(m){ return (m.label_key&&window.T(m.label_key,null))||m.label||m.mode; }
 function _modeDesc(m){ return (m.desc_key&&window.T(m.desc_key,null))||m.desc||''; }
-async function loadConnectModes(){
+async function loadConnectModes(opts){
   const box=document.getElementById('connect-modes');
   hideModeUnavailable();
   box.innerHTML='<div style="text-align:center;padding:16px;"><span class="spin"></span></div>';
   try{
-    const r=await fetch(`/api/platforms/${enc(_connectPlat)}/modes`);
+    const q=(opts&&opts.recheck)?'?recheck=1':'';
+    const r=await fetch(`/api/platforms/${enc(_connectPlat)}/modes${q}`);
     const d=await r.json();
     const modes=(d&&d.modes)||[];
     _connectModes=modes;
@@ -9791,15 +9832,24 @@ async function loadConnectModes(){
     }
     box.innerHTML=modes.map(m=>{
       const dis=!m.available;
-      // 徽标：不可用优先显示「即将支持」；preferred 且可用才标「推荐」
-      const badge=dis?'<span class="connect-mode-badge soon">'+window.T('inbox.connect.mode_soon')+'</span>'
-        :(m.preferred?'<span class="connect-mode-badge">'+window.T('inbox.connect.mode_recommended')+'</span>':'');
+      // ready===false 且 available===true＝「点得动但一定失败」（典型：sidecar 没起）。
+      // 旧行为给它挂「推荐」角标骗点击，用户点进去干等一个永远不来的二维码。
+      const blocked=!dis && m.ready===false;
+      const top=_topBlocker(m);
+      const chip=top?_blockerChip(top):'';
+      // 徽标优先级：具体卡点 > 即将支持 > 推荐。说清楚卡在哪一环，比说「暂时不能用」有用。
+      let badge='';
+      if(dis) badge='<span class="connect-mode-badge soon">'+esc(chip||window.T('inbox.connect.mode_soon'))+'</span>';
+      else if(blocked) badge='<span class="connect-mode-badge warn">'+esc(chip||window.T('inbox.connect.st_sidecar_down'))+'</span>';
+      else if(m.preferred) badge='<span class="connect-mode-badge">'+window.T('inbox.connect.mode_recommended')+'</span>';
       const caps=(m.caps||[]).map(c=>{
         const t=window.T(`inbox.connect.cap_${c}`,null);
         return t?`<span class="connect-cap-chip">${esc(t)}</span>`:'';
       }).join('');
-      const act=dis?`onclick="showModeUnavailable('${esc(m.mode)}')"`:`onclick="chooseMode('${esc(m.mode)}')"`;
-      return `<div class="connect-mode-opt${!dis&&m.preferred?' recommended':''}${dis?' disabled':''}"
+      // 只有 warn（如编排器没开）不拦点击：它不影响这次能否扫上，只影响能否常驻。
+      const softWarn=(!dis && !blocked && top && top.severity==='warn') ? _blockerChip(top) : '';
+      const act=(dis||blocked)?`onclick="showModeUnavailable('${esc(m.mode)}')"`:`onclick="chooseMode('${esc(m.mode)}')"`;
+      return `<div class="connect-mode-opt${!dis&&!blocked&&m.preferred?' recommended':''}${dis?' disabled':''}${blocked?' blocked':''}"
         role="button" tabindex="0" ${dis?'aria-disabled="true"':''} ${act}
         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click();}">
         <div class="connect-mode-radio">${dis?'<span class="connect-mode-lock" aria-hidden="true">&#128274;</span>':''}</div>
@@ -9807,24 +9857,36 @@ async function loadConnectModes(){
           <div class="connect-mode-name">${esc(_connModeLabel(m))}${badge}</div>
           <div class="connect-mode-desc">${esc(_modeDesc(m))}</div>
           ${caps?`<div class="connect-mode-caps">${caps}</div>`:''}
-          ${dis?`<div class="connect-mode-unavail-cue">${esc(window.T('inbox.connect.unavail_title'))} →</div>`:''}
+          ${softWarn?`<div class="connect-mode-softwarn">${esc(softWarn)}</div>`:''}
+          ${(dis||blocked)?`<div class="connect-mode-unavail-cue">${esc(window.T('inbox.connect.unavail_title'))} →</div>`:''}
         </div></div>`;
     }).join('');
   }catch(_){
     box.innerHTML='<div style="font-size:12px;color:var(--red);text-align:center;padding:16px;">'+window.T('inbox.connect.modes_fail')+'</div>';
   }
 }
+let _connectBlockedMode='';   // 「仍要继续」要放行的那个 mode
 function showModeUnavailable(mode){
   const m=(_connectModes||[]).find(x=>String(x.mode)===String(mode));
   const card=document.getElementById('connect-unavail');
   if(!card) return;
-  const keys=_modeReasonKeys(m&&m.reason_code);
+  _connectBlockedMode=(m&&m.available)?String(mode):'';
   const nameEl=document.getElementById('connect-unavail-title');
   if(nameEl&&m) nameEl.textContent=window.T('inbox.connect.unavail_title')+'：'+_connModeLabel(m);
   const put=(id,txt)=>{ const el=document.getElementById(id); if(el) el.textContent=txt; };
-  put('connect-unavail-why', window.T(keys.why));
-  put('connect-unavail-how', window.T(keys.how));
+  // 多条卡点全列出来：开关没开 + 依赖没装是两件事，只说一件会让运维修完一个再来一轮。
+  const bs=_sortedBlockers(m);
+  const putList=(id,kind)=>{
+    const el=document.getElementById(id); if(!el) return;
+    // 没有 blockers（理论上不会：后端有兜底）也不能让说明卡空着 —— 回落笼统文案。
+    if(!bs.length){ el.textContent=_blockerText({code:m&&m.reason_code}, kind); return; }
+    el.innerHTML=bs.map(b=>'<div class="connect-unavail-item">'+esc(_blockerText(b,kind))+'</div>').join('');
+  };
+  putList('connect-unavail-why','why');
+  putList('connect-unavail-how','how');
   put('connect-unavail-alt', window.T('inbox.connect.unavail_alt'));
+  const pb=document.getElementById('connect-proceed-btn');
+  if(pb) pb.style.display=_connectBlockedMode?'inline-block':'none';
   const en=document.getElementById('connect-enable');
   if(en){
     const show=_canOneClickEnable(m);
@@ -9841,6 +9903,35 @@ function hideModeUnavailable(){
   if(card) card.style.display='none';
   const box=document.getElementById('connect-modes');
   if(box) box.style.display='';
+  _connectBlockedMode='';
+}
+// 依赖/服务是实时状态：运维刚把 sidecar 起起来，不该逼用户关弹窗重开。
+// recheck=1 让后端跳过探测缓存重新打一次 /health。
+async function recheckModes(){
+  const btn=document.getElementById('connect-recheck-btn');
+  const before=_connectBlockedMode||'';
+  const prevReady=((_connectModes||[]).find(x=>String(x.mode)===before)||{}).ready;
+  if(btn){ btn.disabled=true; btn.textContent=window.T('inbox.connect.rechecking'); }
+  try{
+    await loadConnectModes({recheck:true});
+    const m=(_connectModes||[]).find(x=>String(x.mode)===before);
+    if(m&&(m.available&&m.ready!==false)){ chooseMode(before); return; }   // 好了就直接放行
+    if(before) showModeUnavailable(before);
+    if(m&&m.ready===prevReady){
+      const msg=document.getElementById('connect-enable-msg');
+      if(msg){ msg.className='connect-enable-msg err'; msg.style.display='block';
+        msg.textContent=window.T('inbox.connect.recheck_same'); }
+    }
+  }finally{
+    if(btn){ btn.disabled=false; btn.textContent=window.T('inbox.connect.recheck'); }
+  }
+}
+// 诊断也可能误判（探测超时但服务其实活着）→ 留一条「我就要试」的路，不做家长式硬拦。
+function proceedAnyway(){
+  const m=_connectBlockedMode;
+  if(!m) return;
+  hideModeUnavailable();
+  chooseMode(m);
 }
 function _canOneClickEnable(m){
   return _connectPlat==='telegram' && m && String(m.mode)==='protocol'
@@ -10867,6 +10958,7 @@ Object.assign(window, {
   openConnect, closeConnect, restartConnect,
   chooseMode, backToModeSelect, backToConfig,
   showModeUnavailable, hideModeUnavailable, enableProtocolMode,
+  recheckModes, proceedAnyway,
   onProxyToggle, onFpToggle, toggleAddProxy, submitAddProxy, previewFingerprint,
   confirmConfigAndScan, orchSync, submitConnectPassword,
   // 筛选空态 / 会话记录 / 业务助手切换 / 文档·多线路翻译

@@ -134,15 +134,61 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
         except Exception:
             logger.debug("账号注册表上线 upsert 失败", exc_info=True)
 
+    async def _diagnose_modes(platform: str, modes: list, *, force: bool = False) -> None:
+        """给每个 mode 补 ``ready`` / ``blockers``，并把笼统的 reason_code 换成真原因。
+
+        为什么要在这里做：`list_modes` 的 reason_code 来自一张静态表，只会说
+        「尚未启用」。LINE 缺 okline、Telegram 缺 api_id、Baileys 没起，三种完全
+        不同的处置被压成同一句话，运维照着它去翻开关只会白跑。此处按真实依赖状态
+        重算，弹窗的「为什么 / 怎么办」说明卡才有意义。
+
+        另一半价值是**预检**：WhatsApp 开关开着、provider 也注册了（available=true），
+        但 sidecar 没起——旧行为要用户点下去等二维码，等来一句 service_down。
+        现在开弹窗那一刻就能看见警示。
+        """
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        svc: Dict[str, Any] = {}
+        try:
+            from src.integrations.protocol_diagnostics import probe_services
+            svc = await probe_services(cfg, force=force)
+        except Exception:  # noqa: BLE001
+            logger.debug("sidecar 可达性探测失败（按未知处理）", exc_info=True)
+        try:
+            from src.integrations.platform_readiness import diagnose_mode
+        except Exception:  # noqa: BLE001
+            logger.debug("平台诊断模块不可用，跳过 blockers 富集", exc_info=True)
+            return
+        for m in modes:
+            try:
+                d = diagnose_mode(
+                    platform, str(m.get("mode") or ""), cfg,
+                    provider_registered=bool(m.get("available")),
+                    service_ok=svc.get(platform),
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug("诊断 %s/%s 失败", platform, m.get("mode"), exc_info=True)
+                continue
+            m["ready"] = d["ready"]
+            m["blockers"] = d["blockers"]
+            # 只在诊断出更具体原因时覆盖，避免把静态表已有的准确值（如 Messenger 的
+            # needs_server_setup）冲成空。
+            if d["reason_code"]:
+                m["reason_code"] = d["reason_code"]
+            # 可用但未就绪（典型：sidecar 挂了）不该继续挂「推荐」角标去骗点击。
+            if not d["ready"]:
+                m["preferred"] = False
+
     @app.get("/api/platforms/{platform}/modes")
-    async def api_platform_login_modes(platform: str, request: Request):
+    async def api_platform_login_modes(platform: str, request: Request, recheck: int = 0):
         api_auth(request)
         platform = str(platform or "").lower()
         if platform not in SUPPORTED_PLATFORMS:
             return {"ok": False, "detail": tr(request, "err.login.platform_unsupported", platform=platform)}
         _ensure_login_providers()
         platform_cfg = _platform_login_cfg().get(platform, {}) or {}
-        return {"ok": True, "platform": platform, "modes": list_modes(platform, platform_cfg)}
+        modes = list_modes(platform, platform_cfg)
+        await _diagnose_modes(platform, modes, force=bool(recheck))
+        return {"ok": True, "platform": platform, "modes": modes}
 
     @app.post("/api/platforms/{platform}/login/start")
     async def api_platform_login_start(platform: str, request: Request):

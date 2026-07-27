@@ -1131,6 +1131,12 @@ button.fleet-cell:disabled{cursor:default;}
 .connect-mode-caps{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;}
 .connect-cap-chip{font-size:10px;font-weight:600;color:var(--text-sub);background:var(--bg-soft);border:1px solid var(--border);border-radius:999px;padding:1px 7px;line-height:1.5;}
 .connect-mode-unavail-cue{font-size:10.5px;font-weight:700;color:var(--accent);margin-top:6px;}
+/* blocked：能点但一定失败（依赖已具备、服务没起）。刻意不用 .disabled 的斜纹灰——
+   那是「还没做」的语义；这里是「做了但现在不通」，用琥珀左边框区分。 */
+.connect-mode-opt.blocked{border-color:rgba(217,119,6,.45);box-shadow:inset 3px 0 0 var(--warn);}
+.connect-mode-opt.blocked:hover{border-color:var(--warn);}
+/* softwarn：只影响「能否常驻在线」这类非阻断隐患，低调一行，不拦点击 */
+.connect-mode-softwarn{font-size:10.5px;color:var(--tk-amber-ink,#b45309);margin-top:5px;}
 /* 不可用方式的解释卡 */
 .connect-unavail{text-align:left;border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--bg-soft);animation:cuFade .16s ease-out;}
 @keyframes cuFade{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:none;}}
@@ -1140,6 +1146,13 @@ button.fleet-cell:disabled{cursor:default;}
 .connect-unavail-sec{margin-bottom:9px;}
 .connect-unavail-t{font-size:10.5px;font-weight:700;color:var(--accent);letter-spacing:.5px;margin-bottom:3px;}
 .connect-unavail-b{font-size:11.5px;color:var(--text-sub);line-height:1.65;}
+/* 多条卡点各占一行：「开关没开」和「依赖没装」是两件事，合成一段会让人只修一半 */
+.connect-unavail-item{position:relative;padding-left:11px;margin-bottom:4px;}
+.connect-unavail-item:last-child{margin-bottom:0;}
+.connect-unavail-item::before{content:"";position:absolute;left:2px;top:7px;width:4px;height:4px;border-radius:50%;background:var(--text-tiny);}
+.connect-unavail-acts{display:flex;gap:8px;align-items:center;margin:10px 0 2px;}
+.connect-unavail-proceed{background:none;border:1px solid var(--border);border-radius:9px;color:var(--text-sub);font-size:12px;font-weight:600;cursor:pointer;padding:7px 12px;}
+.connect-unavail-proceed:hover{border-color:var(--accent);color:var(--accent);}
 .connect-unavail-back{margin-top:2px;background:none;border:none;color:var(--accent);font-size:11.5px;font-weight:600;cursor:pointer;padding:4px 0;}
 /* 引导式启用（Telegram 协议多开）：解释卡内直接填 api_id/api_hash 保存开闸 */
 .connect-enable-form{display:flex;flex-direction:column;gap:7px;margin-top:7px;}
@@ -1157,6 +1170,9 @@ button.fleet-cell:disabled{cursor:default;}
 .connect-mode-name{font-size:13px;font-weight:700;color:var(--text-main);display:flex;align-items:center;gap:6px;}
 .connect-mode-badge{font-size:11px;font-weight:700;padding:1px 6px;border-radius:8px;background:rgba(59,130,246,.12);color:var(--accent);}
 .connect-mode-badge.soon{background:var(--bg-soft);color:var(--text-tiny);}
+/* warn 徽标＝「开关开着但这条路现在走不通」（典型：sidecar 没起）。
+   与 soon 的灰色区分开：灰=还没做，琥珀=做了但没跑起来，处置动作完全不同。 */
+.connect-mode-badge.warn{background:rgba(217,119,6,.16);color:var(--tk-amber-ink,#b45309);}
 .connect-mode-desc{font-size:11px;color:var(--text-sub);line-height:1.5;margin-top:2px;}
 /* 账号配置（代理 + 指纹），仿截图分区 */
 .cfg-section{border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px;text-align:left;}

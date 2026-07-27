@@ -99,6 +99,40 @@ def test_format_report_renders():
     assert "WhatsApp Baileys" in text
 
 
+def test_report_carries_four_platform_matrix():
+    """LINE / Messenger 也要进报告——只覆盖 TG/WA 的自检答不了「今天能不能接 LINE」。"""
+    mtx = pd.readiness_static({}).get("platforms") or {}
+    assert {"telegram", "line", "whatsapp", "messenger"} <= set(mtx)
+    for plat, pr in mtx.items():
+        assert "ready" in pr and pr.get("modes"), plat
+        for mode, d in pr["modes"].items():
+            assert set(d) >= {"ready", "blockers", "reason_code"}, (plat, mode)
+
+
+def test_doctor_cli_loads_the_same_config_as_the_app():
+    """CLI 必须走 ConfigManager（主配置 + config.local.yaml overlay 深合并）。
+
+    旧实现只 safe_load 主 config.yaml，而**所有运营开关都写在 overlay**：本机 overlay
+    开着 whatsapp.protocol_enabled，doctor 却一直报「未启用」。会说谎的诊断比没有诊断
+    更糟——它把人引向错误的修复方向。
+    （用 ast 静态校验：`scripts.protocol_doctor` 在 import 期就 os.chdir(ROOT)，
+    直接 import 会污染整个测试进程的 cwd。）
+    """
+    import ast
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "scripts" / "protocol_doctor.py"
+           ).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and n.name == "_load_config"), None)
+    assert fn is not None, "protocol_doctor 里找不到 _load_config"
+    body = ast.dump(fn)
+    assert "ConfigManager" in body, (
+        "_load_config 必须经 ConfigManager 装载（含 config.local.yaml overlay 合并）"
+    )
+
+
 # ── 账号身份就绪度（self_profile）自检 ───────────────────────────────────────
 
 def _sp_stats(**kw):

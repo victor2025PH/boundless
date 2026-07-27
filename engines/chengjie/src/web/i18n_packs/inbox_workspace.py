@@ -464,6 +464,46 @@ ZH = {
     "inbox.connect.rc_needs_server_setup_how":
         "请联系运维：① 安装 messenger-web 连接服务依赖；② 启动该服务（默认 127.0.0.1:8791）；"
         "③ 在配置中开启 platform_login.messenger.web_enabled 并重启实例。",
+    # ── 真实诊断出的原因码（后端 platform_readiness 出码，此处出人话）──
+    # 旧行为：所有不可用一律「尚未启用」，运维照着去翻开关，开关明明开着 → 白跑一趟。
+    "inbox.connect.rc_dep_missing_why":
+        "服务器上缺少这条链路要用的组件 {dep}，所以开关虽然开着也起不来。",
+    "inbox.connect.rc_dep_missing_how":
+        "请联系运维在后端环境执行：{install}；装完重启实例即可。",
+    "inbox.connect.rc_creds_missing_why":
+        "这条链路需要平台开发者凭据（{field}），目前还没配置。",
+    "inbox.connect.rc_creds_missing_how":
+        "在下方「在这里直接启用」填入并保存即可，保存后立即生效；"
+        "也可由运维开启中央凭据池，让新账号免申请直接用。",
+    "inbox.connect.rc_service_down_why":
+        "本机的连接服务 {svc} 没有响应（{url}）。开关是开的，但服务没跑起来，扫码会卡在生成二维码这一步。",
+    "inbox.connect.rc_service_down_how":
+        "请让运维启动该服务后，点上方「重新检测」；服务恢复后本方式会自动变为可用。",
+    "inbox.connect.rc_provider_unavailable_why":
+        "开关和依赖看起来都正常，但这条链路没有被装载——多半是刚改过配置、进程还没重新加载。",
+    "inbox.connect.rc_provider_unavailable_how":
+        "先点「重新检测」；仍不行请让运维重启实例后再试。",
+    "inbox.connect.rc_login_disabled_why":
+        "本系统的账号接入总开关处于关闭状态，所有平台的扫码接入都不可用。",
+    "inbox.connect.rc_login_disabled_how":
+        "请联系管理员开启 platform_login.enabled。",
+    "inbox.connect.rc_orchestrator_off_why":
+        "账号编排器没有开启：这次能扫码登录，但登录后不会被托管为 7×24 常驻在线，重启后需要重扫。",
+    "inbox.connect.rc_orchestrator_off_how":
+        "如需长期挂号，请让运维开启 platform_login.orchestrator_enabled。",
+    # 方式卡上的短标签（一眼看出卡在哪一环，不用点开说明卡）
+    "inbox.connect.bk_not_enabled": "未启用",
+    "inbox.connect.bk_dep_missing": "缺组件",
+    "inbox.connect.bk_creds_missing": "缺凭据",
+    "inbox.connect.bk_service_down": "服务未运行",
+    "inbox.connect.bk_provider_unavailable": "未装载",
+    "inbox.connect.bk_needs_server_setup": "需运维配置",
+    "inbox.connect.bk_login_disabled": "接入已关闭",
+    "inbox.connect.bk_orchestrator_off": "不会常驻在线",
+    "inbox.connect.recheck": "重新检测",
+    "inbox.connect.rechecking": "检测中…",
+    "inbox.connect.recheck_same": "状态没变化，仍未就绪。",
+    "inbox.connect.proceed_anyway": "仍要继续",
     # ── 服务器托管登录的流程词汇（替代扫码语汇，避免让人干等二维码）──
     "inbox.connect.step_prep": "准备环境",
     "inbox.connect.step_login": "登录验证",
@@ -1748,6 +1788,49 @@ EN = {
     "inbox.connect.rc_needs_server_setup_how":
         "Ask your ops team to: (1) install the messenger-web connector dependencies; (2) start the "
         "service (default 127.0.0.1:8791); (3) set platform_login.messenger.web_enabled and restart the instance.",
+    # ── Reason codes from real diagnosis (backend platform_readiness) ──
+    "inbox.connect.rc_dep_missing_why":
+        "The server is missing {dep}, a component this path needs — so it can’t start even "
+        "though the switch is on.",
+    "inbox.connect.rc_dep_missing_how":
+        "Ask your ops team to run: {install} — then restart the instance.",
+    "inbox.connect.rc_creds_missing_why":
+        "This path needs platform developer credentials ({field}), which aren’t configured yet.",
+    "inbox.connect.rc_creds_missing_how":
+        "Fill them in under “Enable it right here” below — it takes effect immediately. "
+        "Ops can also turn on the shared credential pool so new accounts need no application.",
+    "inbox.connect.rc_service_down_why":
+        "The local connector service {svc} isn’t responding ({url}). The switch is on, but the "
+        "service isn’t running, so QR generation will hang.",
+    "inbox.connect.rc_service_down_how":
+        "Ask ops to start it, then hit “Re-check” above — this method turns available automatically.",
+    "inbox.connect.rc_provider_unavailable_why":
+        "Switches and dependencies look fine, but this path isn’t loaded — most likely the "
+        "config changed recently and the process hasn’t picked it up yet.",
+    "inbox.connect.rc_provider_unavailable_how":
+        "Hit “Re-check” first; if it persists, ask ops to restart the instance.",
+    "inbox.connect.rc_login_disabled_why":
+        "Account onboarding is switched off system-wide, so no platform can be connected.",
+    "inbox.connect.rc_login_disabled_how":
+        "Ask an administrator to enable platform_login.enabled.",
+    "inbox.connect.rc_orchestrator_off_why":
+        "The account orchestrator is off: you can sign in now, but the account won’t be kept "
+        "online 24/7 and will need re-scanning after a restart.",
+    "inbox.connect.rc_orchestrator_off_how":
+        "For long-running accounts, ask ops to enable platform_login.orchestrator_enabled.",
+    # Short chips on the method card
+    "inbox.connect.bk_not_enabled": "Not enabled",
+    "inbox.connect.bk_dep_missing": "Component missing",
+    "inbox.connect.bk_creds_missing": "Credentials missing",
+    "inbox.connect.bk_service_down": "Service not running",
+    "inbox.connect.bk_provider_unavailable": "Not loaded",
+    "inbox.connect.bk_needs_server_setup": "Ops setup required",
+    "inbox.connect.bk_login_disabled": "Onboarding disabled",
+    "inbox.connect.bk_orchestrator_off": "Won’t stay online",
+    "inbox.connect.recheck": "Re-check",
+    "inbox.connect.rechecking": "Checking…",
+    "inbox.connect.recheck_same": "No change — still not ready.",
+    "inbox.connect.proceed_anyway": "Continue anyway",
     # ── Vocabulary for server-hosted login (replaces QR wording) ──
     "inbox.connect.step_prep": "Prepare",
     "inbox.connect.step_login": "Sign in",
