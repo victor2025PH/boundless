@@ -503,6 +503,7 @@ _BASELINE = """
 /api/unified-inbox/send-media	POST
 /api/unified-inbox/send-voice	POST
 /api/unified-inbox/send-caps	GET
+/api/desktop/ping	GET
 /api/desktop/smart-reply	POST
 /api/desktop/guard-check	POST
 /api/desktop/ingest	POST

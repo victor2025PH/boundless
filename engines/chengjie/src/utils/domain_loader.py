@@ -16,6 +16,37 @@ import yaml
 logger = logging.getLogger("DomainLoader")
 
 
+def resolve_domains_dir(config_path: Any, domain_name: str = "") -> Path:
+    """定位 domains/ 根目录（消费方唯一入口）。
+
+    首选「配置文件的 ../..」下的 domains——源码部署即仓库根，同时保留「客户把私有域包
+    放在数据目录里」的能力。找不到目标域的 manifest 时，回落到**代码所在处**的 domains。
+
+    为什么要回落：冻结态（PyInstaller）config_path 落在用户数据目录
+    （``<userData>/data/config/config.yaml``），其 ``../domains`` 永远是空的，而域包是
+    只读代码资产、随包躺在 ``<_MEIPASS>/domains``。不回落 → 安装版静默丢掉领域系统
+    提示词 / 术语 / 上下文补充 / 看板挂件（0.2.1 实测日志：
+    ``Domain 'conversion' has no manifest.yaml``），AI 回复质量无声降级。
+
+    只在「首选位置没有该域」时才回落，故源码与生产部署行为逐字节不变。
+    """
+    preferred: Optional[Path] = None
+    try:
+        if config_path:
+            preferred = Path(config_path).parent.parent / "domains"
+    except Exception:
+        preferred = None
+
+    if preferred is not None:
+        if not domain_name or (preferred / domain_name / "manifest.yaml").exists():
+            return preferred
+
+    bundled = Path(__file__).resolve().parents[2] / "domains"
+    if domain_name and (bundled / domain_name / "manifest.yaml").exists():
+        return bundled
+    return preferred if preferred is not None else bundled
+
+
 class DomainPack:
     """Represents a loaded domain pack with all its components."""
 

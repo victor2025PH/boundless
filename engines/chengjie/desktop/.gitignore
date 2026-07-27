@@ -5,4 +5,5 @@ out/
 build/backend-dist/
 build/build/
 build/static-staged/
+build/domains-staged/
 build/*.spec

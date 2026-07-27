@@ -3,7 +3,10 @@
 // 后端 sidecar 命令解析纯函数单测（无框架，node 直跑）：node test/backend-launcher.test.js
 const assert = require("assert");
 const path = require("path");
-const { resolveBackendSpawn, healthUrl, webEnvFromBackend, createBackendManager } = require("../backend-launcher.js");
+const {
+  resolveBackendSpawn, healthUrl, identityUrl, webEnvFromBackend,
+  createBackendManager, classifyBackendIdentity,
+} = require("../backend-launcher.js");
 
 let pass = 0;
 function ok(name, cond) {
@@ -121,6 +124,32 @@ ok(
 // ── ⑥ healthUrl 归一化 ───────────────────────────────────────────────────────
 ok("healthUrl 默认", healthUrl({}) === "http://127.0.0.1:18799/login");
 ok("healthUrl 去尾斜杠", healthUrl({ backend: { base_url: "http://x:9/" } }) === "http://x:9/login");
+ok("identityUrl 默认", identityUrl({}) === "http://127.0.0.1:18799/api/desktop/ping");
+
+// ── ⑦ 身份判定：只有「确认是别家服务」才拒绝复用 ─────────────────────────────
+//   探针的价值在于区分三种「端口上有东西在应答」：自家后端 / 老版自家后端 / 别家程序。
+//   过严会让新壳配旧后端直接罢工（比要解决的问题更严重），故拿不到身份一律放行。
+{
+  const legacy = classifyBackendIdentity(null, "0.2.2");
+  ok("拿不到身份→放行（老后端无该端点）", legacy.reusable === true && legacy.foreign === false);
+
+  const foreign = classifyBackendIdentity({ app: "some-other-app", version: "1.0" }, "0.2.2");
+  ok("别家服务→拒绝复用", foreign.reusable === false && foreign.foreign === true);
+  ok("别家服务→给得出原因", /some-other-app/.test(foreign.detail));
+
+  const same = classifyBackendIdentity({ app: "chengjie", version: "0.2.2" }, "0.2.2");
+  ok("自家同版本→复用且无告警", same.reusable === true && same.versionMismatch === false);
+
+  const skew = classifyBackendIdentity({ app: "chengjie", version: "0.2.1" }, "0.2.2");
+  ok("自家版本错配→仍复用", skew.reusable === true);
+  ok("自家版本错配→记下线索", skew.versionMismatch === true && /0\.2\.1/.test(skew.detail));
+
+  const devBackend = classifyBackendIdentity({ app: "chengjie", version: "dev" }, "0.2.2");
+  ok("源码态 dev 后端不算错配", devBackend.versionMismatch === false);
+
+  const junk = classifyBackendIdentity({ nope: 1 }, "0.2.2");
+  ok("响应无 app 字段→按未知放行", junk.reusable === true && junk.foreign === false);
+}
 
 console.log(`backend-launcher.test.js: ${pass} passed`);
 
@@ -180,6 +209,37 @@ console.log(`backend-launcher.test.js: ${pass} passed`);
     await mgr.start(CFG);          // 第一次：spawn 一次（之后 child 存活）
     await mgr.start(CFG);          // 第二次：child 非空 → 跳过
     lok("child 存活→再次 start 不二次 spawn", spawned === 1);
+  }
+
+  // (d) 端口被别家程序占着 → 不复用、不 spawn、状态 port-conflict（可被 UI 直接指路）
+  {
+    let spawned = 0;
+    const mgr = createBackendManager(baseDeps({
+      spawn: () => { spawned++; return fakeChild(); },
+      fetch: async (url) => (String(url).endsWith("/api/desktop/ping")
+        ? { ok: true, status: 200, json: async () => ({ app: "grafana", version: "11" }) }
+        : { status: 200 }),
+    }));
+    await mgr.start(CFG);
+    const st = mgr.getStatus();
+    lok("别家占端口→状态 port-conflict", st.status === "port-conflict");
+    lok("别家占端口→不 spawn（端口本就被占，抢也没用）", spawned === 0);
+    lok("别家占端口→lastError 说得出是谁", /grafana/.test(st.lastError || ""));
+  }
+
+  // (e) 自家旧版本后端在跑 → 照常复用，但把版本错配记进状态供排查
+  {
+    const mgr = createBackendManager(baseDeps({
+      app: { isPackaged: false, getPath: () => "/tmp", getVersion: () => "0.2.2" },
+      spawn: () => fakeChild(),
+      fetch: async (url) => (String(url).endsWith("/api/desktop/ping")
+        ? { ok: true, status: 200, json: async () => ({ app: "chengjie", version: "0.2.1" }) }
+        : { status: 200 }),
+    }));
+    await mgr.start(CFG);
+    const st = mgr.getStatus();
+    lok("自家旧后端→仍复用", st.status === "running-external");
+    lok("自家旧后端→记录版本错配", st.versionMismatch === true);
   }
 
   console.log(`backend-launcher.test.js lifecycle: ${lpass} passed`);

@@ -10,6 +10,16 @@ from typing import Dict, Any, Optional
 import logging
 
 
+def _path_str(p: Any) -> str:
+    """日志用路径字符串（Path→posix，其余→str）。
+
+    绝不抛异常：这些调用点都在「可选文件缺失」的降级分支里，日志格式化把
+    整个请求弄崩过一次（安装版缺 config/templates.yaml → dashboard 500）。
+    """
+    as_posix = getattr(p, "as_posix", None)
+    return as_posix() if callable(as_posix) else str(p)
+
+
 class ConfigManager:
     """配置管理器类"""
 
@@ -546,7 +556,7 @@ class ConfigManager:
             except Exception:
                 pass
         if not templates_file.exists():
-            self.logger.debug("动态话术模板文件不存在，将使用主配置中的模板: %s", getattr(templates_file, 'as_posix', str)(templates_file))
+            self.logger.debug("动态话术模板文件不存在，将使用主配置中的模板: %s", _path_str(templates_file))
             return {}
         try:
             mtime = os.path.getmtime(templates_file)
@@ -573,7 +583,7 @@ class ConfigManager:
             except Exception:
                 pass
         if not exchange_rates_file.exists():
-            self.logger.debug("动态汇率配置文件不存在: %s", getattr(exchange_rates_file, 'as_posix', str)(exchange_rates_file))
+            self.logger.debug("动态汇率配置文件不存在: %s", _path_str(exchange_rates_file))
             return {}
         try:
             mtime = os.path.getmtime(exchange_rates_file)
@@ -716,7 +726,7 @@ class ConfigManager:
             except Exception:
                 pass
         if not quota_file.exists():
-            self.logger.debug("额度规则文件不存在，将使用 AI 回复额度类问题: %s", getattr(quota_file, 'as_posix', str)(quota_file))
+            self.logger.debug("额度规则文件不存在，将使用 AI 回复额度类问题: %s", _path_str(quota_file))
             return {}
         try:
             mtime = os.path.getmtime(quota_file)

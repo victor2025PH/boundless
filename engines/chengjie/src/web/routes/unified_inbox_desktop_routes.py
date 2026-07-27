@@ -89,6 +89,19 @@ _ROBOTIC_PHRASES = (
 def register_desktop_routes(app, *, api_auth) -> None:
     """挂载桌面壳 smart-reply / guard-check / ingest 端点。"""
 
+    @app.get("/api/desktop/ping")
+    async def api_desktop_ping():
+        """后端身份探针（**刻意免鉴权**——壳要在登录之前判断这个端口上是不是自家后端）。
+
+        桌面壳原本只判「有没有 HTTP 响应」就复用外部后端，端口被别的程序或上一版本的
+        残留后端占用时，壳会连上去当自己的用：工作台打得开、部分页面 404/500，
+        极难排查。有了这个端点，壳可以在复用前核对 app 与版本。
+
+        只回 ``{ok, app, version}``——不含主机名/路径/进程号（见 app_identity 文档）。
+        """
+        from src.utils.app_identity import identity_payload
+        return identity_payload()
+
     @app.post("/api/desktop/smart-reply")
     async def api_desktop_smart_reply(request: Request, _=Depends(api_auth)):
         """桌面壳（嵌官方 web 客户端）专用：**人设化**智能回复。

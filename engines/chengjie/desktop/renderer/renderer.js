@@ -218,7 +218,11 @@ function resolveAccounts(cfg) {
     wv.dataset.id = INBOX_ID;
     wv.dataset.kind = "backend";
     wv.className = "active";
-    wv.setAttribute("src", fullUrl);
+    // 启动闸门：先挂空白页，等后端探活通过再 loadURL（见 bootLoad）。
+    // 直接把 fullUrl 写进 src 会与后端冷启动赛跑——输了这一跑，工作台的
+    // Service Worker 会用离线壳接管这次导航（HTTP 200 且 URL 不变），
+    // 壳误判为加载成功 → 遮罩消失 + 自动重连停摆 → 用户只能手点「重新连接」。
+    wv.setAttribute("src", "about:blank");
     wv.setAttribute("partition", "persist:backend-workspace");
     wv.setAttribute("allowpopups", "true");
     wv._loginIdx = 0;       // 凭据链游标
@@ -286,6 +290,7 @@ function resolveAccounts(cfg) {
     }
 
     function reload() {
+      Inbox._bootAborted = true; // 手动重试接管启动闸门，避免闸门稍后再导航一次
       stopReconnectPoll();
       wv._loginIdx = 0;
       wv._loginPending = false;
@@ -298,9 +303,25 @@ function resolveAccounts(cfg) {
     // 单一导航处理：凭据链自动登录 + 三态遮罩。
     // _loginIdx 指向下一组待试凭据；_loginPending 防同一次 /login 加载被 dom-ready+did-navigate 重复触发。
     function onNav(url) {
+      if (!url || url.indexOf("about:") === 0) return; // 启动闸门期的空白页，不参与状态判定
       let p = "";
       try { p = new URL(url).pathname; } catch (e) { return; }
-      if (p === navPath) { wv._phase = "done"; wv._loginIdx = 0; setPhase("ready"); return; }
+      if (p === navPath) {
+        // 路径对 ≠ 真的进了工作台：PWA 离线壳被 SW 回落时 URL 仍是 navPath 且 200。
+        // 用页面自带的 data-ws-offline 标记区分，识破后回到 error 态继续自动重连。
+        wv.executeJavaScript(
+          "!!(document.body && document.body.dataset && document.body.dataset.wsOffline)"
+        ).then((isOfflineShell) => {
+          if (!isOfflineShell) { wv._phase = "done"; wv._loginIdx = 0; setPhase("ready"); return; }
+          wv._phase = "error";
+          setPhase("error", "后台还没起来（当前是离线页）。\n正在等待后台启动并自动重连…\n后端地址：" + base);
+          startReconnectPoll();
+        }).catch(() => {
+          // 旧后端不带该标记 / 取值失败 → 保持原行为，不因探测失败卡住用户
+          wv._phase = "done"; wv._loginIdx = 0; setPhase("ready");
+        });
+        return;
+      }
       if (p === "/login") {
         if (wv._loginPending) return; // 本次登录尝试进行中，等其 location.replace
         const idx = wv._loginIdx || 0;
@@ -342,8 +363,64 @@ function resolveAccounts(cfg) {
       startReconnectPoll();
     });
 
+    // ── 启动闸门：后端可达后才真正加载工作台 ─────────────────────────────
+    // 安装版的 backend.exe 冷启动常需 15-30s（PyInstaller 解压 + 初始化）。
+    // 先探活再导航，把「和后端赛跑」变成「等后端就位」，顺带让首屏不再闪 /login。
+    const BOOT_POLL_MS = 700;
+    const BOOT_ESCAPE_MS = 20000; // 超过它就露出可点的错误态（但后台继续自愈，不放弃）
+    async function bootLoad() {
+      // 探活 API 缺失（老壳/异常打包）→ 退回「直接加载」旧行为，绝不把用户卡在遮罩后面
+      if (!window.shell || typeof window.shell.backendHealth !== "function") {
+        try { wv.loadURL(fullUrl); } catch (e) { wv.setAttribute("src", fullUrl); }
+        return;
+      }
+      const t0 = Date.now();
+      Inbox._bootAborted = false;
+      for (;;) {
+        if (Inbox._bootAborted) return; // 用户点了「重试连接」，导航交给 reload()
+        let ok = false, conflict = null;
+        try {
+          const h = await window.shell.backendHealth();
+          ok = !!(h && h.ok);
+          if (h && h.conflict) conflict = String(h.error || "");
+        } catch (e) {}
+        // 端口冲突：继续等只会一直等（对方一直在应答），必须立刻告诉用户怎么办。
+        if (conflict !== null) {
+          setPhase("error", "后端端口被占用：" + conflict
+            + "\n请停掉占用该端口的程序，或改 config.json 的 backend.base_url 端口后重启本应用。"
+            + "\n后端地址：" + base);
+          return;
+        }
+        if (ok) break;
+
+        const secs = Math.round((Date.now() - t0) / 1000);
+        let spawnPhase = "", spawnErr = "";
+        try {
+          const st = window.shell.backendSpawnStatus ? await window.shell.backendSpawnStatus() : null;
+          spawnPhase = (st && st.status) || "";
+          spawnErr = (st && st.lastError) || "";
+        } catch (e) {}
+
+        // 20s 内静默等待（正常冷启动），之后升级为 error 态：重试按钮可见、
+        // 后台轮询不停。既不让用户面对无出口的转圈，也不放弃自动恢复。
+        if (Date.now() - t0 > BOOT_ESCAPE_MS || spawnPhase === "failed") {
+          const why = spawnPhase === "failed"
+            ? "后台启动失败：" + (spawnErr || "未知错误") + "\n详见 用户数据/logs/backend.log。"
+            : "后台还没起来（已等待 " + secs + "s，首次启动较慢）。";
+          setPhase("error", why + "\n正在自动重试…\n后端地址：" + base);
+        } else if (secs >= 3) {
+          setPhase("loading", "正在启动后台服务…（首次启动较慢，已 " + secs + "s）");
+        }
+        await new Promise((r) => setTimeout(r, BOOT_POLL_MS));
+      }
+      if (Inbox._bootAborted) return;
+      setPhase("loading", "正在载入工作台…");
+      try { wv.loadURL(fullUrl); } catch (e) { wv.setAttribute("src", fullUrl); }
+    }
+
     // 主动先点亮 loading 遮罩，遮住首屏可能的 /login 闪屏（不依赖 did-start-loading 时序）
     setPhase("loading", "正在连接后台…");
+    bootLoad();
     return true;
   }
 

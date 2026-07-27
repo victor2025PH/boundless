@@ -42,6 +42,11 @@ NAME = "backend"
 # 注意：src/web/static 不直接入包——见 _stage_static()（剔除运行时落地的真实媒体后再打）。
 DATAS = [
     (REPO / "src" / "web" / "templates", "src/web/templates"),
+    # 两端共享的 copilot 组件库。admin.py 用 Path(__file__).parents[2]/"shared"/"copilot"
+    # 定位并挂到 /copilot——冻结后即 <_MEIPASS>/shared/copilot。漏打 → 目录不存在 →
+    # mount 被 if 跳过 → /copilot/* 全 404：桌面右栏业务助手 iframe 显示 {"detail":"Not Found"}，
+    # 网页工作台侧栏的 cp-* 组件与 tokens.css 一并失效（0.2.0/0.2.1 安装版实测中招）。
+    (REPO / "shared" / "copilot", "shared/copilot"),
     # P0-1 A1：桌面随包种子 = 最小配置（无 YOUR_* 占位）。AITR_DESKTOP_MODE 下
     # ConfigManager._ensure_seeded 优先播种它 → 首启只差一个 AI Key（向导写 overlay）。
     # 完整 example 仍随包：供参考 + 非桌面模式回落种子。
@@ -49,13 +54,18 @@ DATAS = [
     (REPO / "config" / "config.example.yaml", "config"),
 ]
 
-# 集团底座 platform/credpool 的 stdlib 瘦客户端（中央凭据池）。
-# 它在**引擎目录之外**（仓库根 platform/），PyInstaller 不会自动带上——不打进包，
-# 桌面版就找不到它，中央池静默失效、用户又被逼回 my.telegram.org 自己申请 api_id。
-# 冻结后落在 sys._MEIPASS/platform/credpool/，与 credpool_bridge 的查找顺序对应。
-_CREDPOOL_SRC = REPO.parent.parent / "platform" / "credpool"
-if _CREDPOOL_SRC.is_dir():
-    DATAS.append((_CREDPOOL_SRC, "platform/credpool"))
+# 集团底座 platform/ 下被引擎**按文件路径**加载的瘦模块。它们在引擎目录之外，
+# PyInstaller 的静态分析看不见（没有 import 语句可追），必须显式登记：
+#   · credpool  —— 中央凭据池瘦客户端；漏打 → 中央池静默失效，用户被逼回
+#     my.telegram.org 自己申请 api_id（0.2.1 安装版实测漏打）。
+#   · licensing —— 机器指纹（授权绑机 + 首启体验档归属）；漏打 → 绑机校验放行、
+#     体验档退化为无机器归属，一样是静默降级。
+# 冻结后落在 sys._MEIPASS/platform/<name>/，与各 bridge 的查找顺序一一对应。
+_PLATFORM_ROOT = REPO.parent.parent / "platform"
+for _pkg in ("credpool", "licensing"):
+    _src = _PLATFORM_ROOT / _pkg
+    if _src.is_dir():
+        DATAS.append((_src, f"platform/{_pkg}"))
 
 # static/ 下的运行时落地目录：protocol_media＝客户聊天媒体（语音/照片/视频），
 # persona_avatars＝运行时同步的账号/人设头像。均为 gitignore 的生产数据，随包分发
@@ -63,6 +73,16 @@ if _CREDPOOL_SRC.is_dir():
 RUNTIME_STATIC_EXCLUDES = {"protocol_media", "persona_avatars"}
 STATIC_SRC = REPO / "src" / "web" / "static"
 STATIC_STAGED = HERE / "static-staged"
+
+# 领域包（只读代码资产：系统提示词/术语/KB 种子/看板挂件/域内模板）。
+# 消费方经 domain_loader.resolve_domains_dir 定位：冻结态回落到 <_MEIPASS>/domains。
+# 漏打 → 安装版日志出 "Domain 'xxx' has no manifest.yaml"，领域提示词与挂件静默丢失
+# （0.2.1 实测），AI 回复质量无声降级且没有任何报错。
+DOMAINS_SRC = REPO / "domains"
+DOMAINS_STAGED = HERE / "domains-staged"
+
+# 需要「暂存清洗后再打」的目录的包内目标（打包完整性门禁读这个常量，防两边口径漂移）
+STAGED_DESTS = ("src/web/static", "domains")
 
 
 def _stage_static() -> Path:
@@ -79,6 +99,21 @@ def _stage_static() -> Path:
     if leaked:
         raise RuntimeError(f"static 暂存仍含运行时目录（打包中止防隐私泄漏）: {leaked}")
     return STATIC_STAGED
+
+
+def _stage_domains() -> Path:
+    """domains/ 暂存：剔除 __pycache__（构建机路径与 magic 号无谓入包）。"""
+    shutil.rmtree(DOMAINS_STAGED, ignore_errors=True)
+    shutil.copytree(DOMAINS_SRC, DOMAINS_STAGED,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    return DOMAINS_STAGED
+
+
+def _staged_datas() -> list:
+    out = [(_stage_static(), "src/web/static")]
+    if DOMAINS_SRC.is_dir():
+        out.append((_stage_domains(), "domains"))
+    return out
 
 # 动态 import 的包，PyInstaller 静态分析抓不全 → 显式 collect。
 COLLECT_SUBMODULES = ["src", "uvicorn", "pyrogram", "fastapi"]
@@ -125,12 +160,12 @@ def main() -> int:
         return 2
 
     if args.clean:
-        for d in (OUT, HERE / "build", HERE / "__pycache__", STATIC_STAGED):
+        for d in (OUT, HERE / "build", HERE / "__pycache__", STATIC_STAGED, DOMAINS_STAGED):
             shutil.rmtree(d, ignore_errors=True)
 
     OUT.mkdir(parents=True, exist_ok=True)
 
-    datas = [(_stage_static(), "src/web/static")] + DATAS
+    datas = _staged_datas() + DATAS
 
     cmd = [
         sys.executable, "-m", "PyInstaller",

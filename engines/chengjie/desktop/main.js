@@ -259,6 +259,15 @@ ipcMain.handle("desktop:backend-spawn-status", () => backendManager.getStatus())
 ipcMain.handle("desktop:backend-health", async () => {
   const { base_url } = config.backend || {};
   if (!base_url) return { ok: false, error: "no base_url" };
+  // 端口冲突时「有响应」恰恰是最危险的信号：应答的不是自家后端。此处以 launcher 的
+  // 身份判定为准（见 backend-launcher.classifyBackendIdentity），否则 renderer 会把
+  // 占了端口的别家服务当成后台加载进来。
+  try {
+    const st = backendManager.getStatus();
+    if (st && st.status === "port-conflict") {
+      return { ok: false, conflict: true, error: st.lastError || "port conflict" };
+    }
+  } catch (e) { /* 状态不可读时按旧逻辑走探针 */ }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 2500);
   try {
@@ -281,6 +290,64 @@ ipcMain.handle("desktop:setup-ai-status", async () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     return await r.json();
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+
+// 首启体验额度状态（P2）：首启向导收尾步用它告知「你有多少额度、能用多久」。
+// 走后端 /api/workspace/quota（任意登录用户可读，无敏感字段）。
+ipcMain.handle("desktop:trial-status", async () => {
+  const { base_url, token } = config.backend || {};
+  try {
+    const r = await fetch(`${base_url}/api/workspace/quota`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    return await r.json();
+  } catch (e) {
+    // 后端还没起来 / 老版本没这个端点 → 视为"没有体验额度"，向导直接跳过该步，
+    // 绝不凭空承诺一份可能不存在的额度。
+    return { ok: false, visible: false };
+  }
+});
+
+// ── P2 注册领 7 天：建单 / 轮询 / 取客服绑定码 ──────────────────────────────
+// 三个都用 backendGet/Post 的容错语义：后端没起来或版本旧 → 返回错误码而不是抛，
+// 首启向导据此显示「可跳过的提示」，绝不把人卡在开机第一屏。
+
+ipcMain.handle("desktop:trial-claim", async (_e, body) => {
+  try {
+    return await backendPost("/api/admin/license/trial-claim", body || {});
+  } catch (e) {
+    return { ok: false, error: "network" };
+  }
+});
+
+ipcMain.handle("desktop:trial-claim-status", async () => {
+  try {
+    return await backendGet("/api/admin/license/trial-claim");
+  } catch (e) {
+    return { ok: false, error: "network" };
+  }
+});
+
+ipcMain.handle("desktop:trial-bind-code", async () => {
+  try {
+    return await backendPost("/api/admin/license/trial-bind-code", {});
+  } catch (e) {
+    return { ok: false, error: "network" };
+  }
+});
+
+// 外链白名单。renderer 里跑着第三方 webview，把裸 openExternal 暴露给它等于把
+// 「用默认程序打开任意 URL」的能力交出去；这里只放行客服深链两个域。
+const EXTERNAL_ALLOW = /^https:\/\/(t\.me|wa\.me|api\.whatsapp\.com)\//i;
+ipcMain.handle("desktop:open-external", async (_e, url) => {
+  const u = String(url || "");
+  if (!EXTERNAL_ALLOW.test(u)) return { ok: false, error: "not_allowed" };
+  try {
+    await shell.openExternal(u);
+    return { ok: true };
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   }

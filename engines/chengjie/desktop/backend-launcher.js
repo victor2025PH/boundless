@@ -10,6 +10,11 @@
 // 本模块拆成「纯解析器（resolveBackendSpawn，可单测）」+「生命周期（spawn/health/kill）」两层。
 
 const FP_HEALTH_PATH = "/login"; // 无需鉴权即返回 200，任何 HTTP 响应都代表后端可达
+// 身份探针：判断目标端口上的**是不是自家后端**。原先只要有 HTTP 响应就"复用，不重复
+// 拉起"——端口被别的程序或上一版本残留后端占着时，壳会连上去当自己的用，症状是
+// 工作台能开、部分页面 404/500，极难排查。老后端没有此端点 → 返回 null，按旧行为放行。
+const FP_IDENTITY_PATH = "/api/desktop/ping";
+const EXPECTED_APP_ID = "chengjie";
 
 /**
  * 解析后端启动命令（纯函数，便于单测）。
@@ -82,7 +87,12 @@ function resolveBackendSpawn(o) {
       // 打包态默认桌面模式：后端跳过 config-Telegram 协议号初始化，
       // 让「纯收件箱/网页翻译」形态无需任何凭证即可开机；
       // 并把 web host/port/token 对齐桌面壳，保证 renderer 连得上后端。
-      const env = Object.assign({ AITR_DESKTOP_MODE: "1" }, webEnvFromBackend(backend));
+      // 把壳版本注入后端：/api/desktop/ping 据此自报版本，壳复用时才能发现
+      // 「装了新版却连着旧后端」这种错配（见 app_identity.py）。
+      const env = Object.assign(
+        { AITR_DESKTOP_MODE: "1" },
+        o.appVersion ? { AITR_APP_VERSION: String(o.appVersion) } : {},
+        webEnvFromBackend(backend));
       if (dataDir) {
         env.AITR_DATA_DIR = dataDir;
         env.AITR_CONFIG_PATH = path.join(dataDir, "config", "config.yaml");
@@ -114,6 +124,41 @@ function healthUrl(config) {
   return String(base).replace(/\/+$/, "") + FP_HEALTH_PATH;
 }
 
+function identityUrl(config) {
+  const base = ((config || {}).backend || {}).base_url || "http://127.0.0.1:18799";
+  return String(base).replace(/\/+$/, "") + FP_IDENTITY_PATH;
+}
+
+/**
+ * 判定「端口上这个后端能不能复用」（纯函数，便于单测）。
+ *
+ * @param {object|null} identity  /api/desktop/ping 的响应；null = 拿不到（老后端/非 JSON）
+ * @param {string} shellVersion   桌面壳自身版本（package.json）
+ * @returns {{reusable:boolean, foreign:boolean, versionMismatch:boolean, detail:string}}
+ */
+function classifyBackendIdentity(identity, shellVersion) {
+  // 拿不到身份 = 老版本后端（0.2.2 之前没有该端点）→ 保持旧行为放行，
+  // 否则新壳配旧后端会直接罢工，比它要解决的问题更严重。
+  if (!identity || typeof identity !== "object" || !identity.app) {
+    return { reusable: true, foreign: false, versionMismatch: false, detail: "legacy-or-unknown" };
+  }
+  const app = String(identity.app);
+  if (app !== EXPECTED_APP_ID) {
+    return {
+      reusable: false, foreign: true, versionMismatch: false,
+      detail: `端口被另一个服务占用（app=${app}）`,
+    };
+  }
+  const ver = String(identity.version || "");
+  // 版本不一致仍复用：它确实是自家后端，开发态壳/后端版本错开是常态。
+  // 但要记下来——「装了新版却还连着旧后端」的疑难杂症全靠这条线索。
+  const mismatch = !!(ver && shellVersion && ver !== "dev" && ver !== String(shellVersion));
+  return {
+    reusable: true, foreign: false, versionMismatch: mismatch,
+    detail: mismatch ? `后端版本 ${ver} ≠ 壳版本 ${shellVersion}` : "",
+  };
+}
+
 /**
  * 生命周期管理器。注入 electron/node 依赖以便测试与复用。
  *
@@ -137,12 +182,22 @@ function createBackendManager(deps) {
   let child = null;
   let quitting = false;
   let starting = false; // 同进程重复/并发调用 start() 的幂等卫（防 TOCTOU 重复 spawn）
-  let status = "idle"; // idle | probing | starting | ready | running-external | failed | disabled | stopped
+  // idle | probing | starting | ready | running-external | port-conflict | failed | disabled | stopped
+  let status = "idle";
   let lastError = "";
   let logStream = null;
+  let identity = null;        // 最近一次身份探针结果（null=未探到/老后端）
+  let versionMismatch = false;
+
+  function shellVersion() {
+    try { return String(app && app.getVersion ? app.getVersion() : ""); } catch (e) { return ""; }
+  }
 
   function getStatus() {
-    return { status, lastError, pid: child && child.pid ? child.pid : null };
+    return {
+      status, lastError, pid: child && child.pid ? child.pid : null,
+      identity, versionMismatch,
+    };
   }
 
   async function probeHealth(config, timeoutMs) {
@@ -153,6 +208,22 @@ function createBackendManager(deps) {
       return !!r; // 任何响应=可达
     } catch (e) {
       return false;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  /** 身份探针：拿 /api/desktop/ping 的 {app, version}；拿不到（老后端/非 JSON）返回 null。 */
+  async function probeIdentity(config, timeoutMs) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs || 2500);
+    try {
+      const r = await doFetch(identityUrl(config), { method: "GET", signal: ctrl.signal });
+      if (!r || !r.ok) return null;          // 404 = 老后端，按未知处理
+      const j = await r.json();
+      return (j && typeof j === "object" && j.app) ? j : null;
+    } catch (e) {
+      return null;
     } finally {
       clearTimeout(t);
     }
@@ -217,6 +288,7 @@ function createBackendManager(deps) {
       appDir: __dirname,
       platform: process.platform,
       dataDir,
+      appVersion: shellVersion(),
       exists: (p) => { try { return fs.existsSync(p); } catch (e) { return false; } },
     });
 
@@ -229,8 +301,23 @@ function createBackendManager(deps) {
     // 已有后端在跑（含用户手动起 / 上次残留）→ 不重复拉起，避免端口冲突
     status = "probing";
     if (await probeHealth(config, 2000)) {
+      // 端口上有东西在应答——但它是谁？核对身份再决定复用（见 classifyBackendIdentity）。
+      identity = await probeIdentity(config, 2000);
+      const verdict = classifyBackendIdentity(identity, shellVersion());
+      versionMismatch = verdict.versionMismatch;
+      if (!verdict.reusable) {
+        status = "port-conflict";
+        lastError = verdict.detail;
+        log(`拒绝复用：${verdict.detail}。请改 config.json 的 backend.base_url 端口，或停掉占用该端口的程序`);
+        return;
+      }
       status = "running-external";
-      log("检测到后端已在运行 → 复用，不重复拉起");
+      let note = "";
+      if (verdict.versionMismatch) note = `（注意：${verdict.detail}）`;
+      // 把「无法确认身份」显式记下来：0.2.2 之前的后端没有 ping 端点，此时端口冲突
+      // 仍是盲区。留一行日志，排查时能一眼看出判定是"确认过"还是"没得确认"。
+      else if (!identity) note = "（未能确认后端身份：可能是 0.2.2 之前的旧后端）";
+      log("检测到后端已在运行 → 复用，不重复拉起" + note);
       return;
     }
 
@@ -313,7 +400,11 @@ function createBackendManager(deps) {
     status = "stopped";
   }
 
-  return { start, stop, getStatus, probeHealth, waitForReady };
+  return { start, stop, getStatus, probeHealth, probeIdentity, waitForReady };
 }
 
-module.exports = { resolveBackendSpawn, healthUrl, createBackendManager, FP_HEALTH_PATH, webEnvFromBackend };
+module.exports = {
+  resolveBackendSpawn, healthUrl, identityUrl, createBackendManager,
+  classifyBackendIdentity, FP_HEALTH_PATH, FP_IDENTITY_PATH, EXPECTED_APP_ID,
+  webEnvFromBackend,
+};
