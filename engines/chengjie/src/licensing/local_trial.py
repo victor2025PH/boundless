@@ -277,11 +277,23 @@ def configure_local_trial(
 
     桌面版在随包种子 ``config.desktop.min.yaml`` 里开启——服务器部署不受影响，
     而体验档本来就是给桌面首装用户的。
+
+    **但种子只在配置文件不存在时播种**，所以升级安装（config.yaml 是旧的、
+    压根没有 licensing 段）永远拿不到体验档——173 实机升级到 0.2.3 后实测
+    `source=license / included=0`，装完还是什么都没有。改用户的 config.yaml 去补
+    这一段太脏（会动他们的注释和自定义），故改为：**桌面模式下、且配置里完全没写过
+    `licensing.trial` 时，按桌面默认开启**。配置里一旦写了就完全以配置为准
+    （包括显式 `enabled: false`），服务器部署没有 AITR_DESKTOP_MODE 也不受影响。
     """
     global _TRIAL, _ENABLED, _ENFORCE
     c = _cfg(config)
+    # 「没写过」与「写了 false」必须分开：后者是明确的关闭意愿，不能被默认值顶掉。
+    unset = "enabled" not in c
+    desktop = str(os.environ.get("AITR_DESKTOP_MODE") or "") == "1"
     with _CFG_LOCK:
-        _ENABLED = bool(c.get("enabled", False))
+        _ENABLED = desktop if unset else bool(c.get("enabled", False))
+        if unset and desktop:
+            logger.info("[local_trial] 配置未写 licensing.trial，桌面模式按默认开启体验档")
         _ENFORCE = bool(c.get("enforce", False))
         if trial is not None:
             _TRIAL = trial

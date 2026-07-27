@@ -102,12 +102,54 @@ def _check_readiness_matrix(d: dict) -> str:
     return ""
 
 
+def _check_trial_claim_state(d: dict) -> str:
+    """试用领取口在冻结态可用、且**指纹能算出来**。
+
+    0.2.1/0.2.2 安装版实测漏打 platform/licensing → 指纹取空 → 授权绑机校验按
+    fail-open 放行，一份试用可在任意机器复用。而漏包是静默的（聊天照跑），
+    只有这里真调一次才暴露。未领取时该口回 {ok, claimed:false}，够判断链路在。
+    """
+    if d.get("ok") is not True:
+        return f"ok={d.get('ok')}（领取口不该报错，失败也要软返回）"
+    if "claimed" not in d:
+        return "缺 claimed 字段"
+    return ""
+
+
 # (路径, 说明, 校验器) —— 校验器返回空串=通过，否则返回失败原因
 JSON_CHECKS = [
     ("/api/platforms/telegram/modes", "登录方式带诊断字段", _check_modes_carry_blockers),
     ("/api/platforms/line/modes", "登录方式带诊断字段", _check_modes_carry_blockers),
     ("/api/accounts/protocol/readiness", "四平台就绪矩阵", _check_readiness_matrix),
+    ("/api/admin/license/trial-claim", "试用领取口在冻结态可用", _check_trial_claim_state),
 ]
+
+
+def check_packaged_fingerprint(dist: Path) -> str:
+    """按文件路径加载的瘦模块必须真在包里、且真能算出指纹。
+
+    PyInstaller 的静态分析追不到「按路径加载」的模块（没有 import 语句），
+    platform/licensing 漏打过一次：指纹取空 → 授权绑机按 fail-open 放行 →
+    一份试用可在任意机器复用。而漏包是**静默**的（聊天照跑），只有真算一次才暴露。
+    刻意不经 HTTP：坐席端点刻意屏蔽指纹这类字段，绕开端点直验本体更稳。
+    """
+    import importlib.util
+
+    mid = dist / "_internal" / "platform" / "licensing" / "machine_id.py"
+    if not mid.exists():
+        mid = dist / "platform" / "licensing" / "machine_id.py"
+    if not mid.exists():
+        return "platform/licensing/machine_id.py 不在包里（绑机会静默失效）"
+    try:
+        spec = importlib.util.spec_from_file_location("_smoke_mid", mid)
+        mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        fp = str(mod.machine_fingerprint() or "")
+    except Exception as e:  # noqa: BLE001
+        return f"加载失败 {type(e).__name__}: {e}"
+    if len(fp.replace("-", "")) != 16:
+        return f"指纹形态异常: {fp!r}"
+    return ""
 
 
 def _free_port() -> int:
@@ -285,6 +327,13 @@ def main() -> int:
                       + (f" —— {why}" if why else ""))
                 if why:
                     failures.append(f"[json] {path}（{desc}）: {why}")
+
+            print("· 按路径加载的瘦模块")
+            why = check_packaged_fingerprint(dist)
+            print(f"  {'✓' if not why else '✗'} [pkg] platform/licensing 机器指纹"
+                  + (f" —— {why}" if why else ""))
+            if why:
+                failures.append(f"[pkg] platform/licensing: {why}")
 
             print()
             if failures:

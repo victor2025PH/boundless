@@ -323,6 +323,47 @@ def test_desktop_seed_config_enables_the_trial():
     )
 
 
+def test_upgrade_install_still_gets_the_trial(monkeypatch, tmp_path):
+    """升级安装（旧 config.yaml 里根本没有 licensing 段）也必须拿到体验档。
+
+    173 实机踩到：种子 config.desktop.min.yaml **只在配置文件不存在时播种**，
+    所以从 0.2.1/0.2.2 升到 0.2.3 的机器 config.yaml 里没有 licensing 段
+    → 体验档全程是关的（实测 `source=license / included=0`，装完什么都没有）。
+    修法是桌面模式下把「没写过」当默认开，而不是去改用户的 config.yaml。
+    """
+    from src.licensing.local_trial import configure_local_trial, reset_local_trial
+
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    reset_local_trial()
+    t = configure_local_trial({}, config_dir=str(tmp_path))  # 整个 licensing 段缺失
+    assert t is not None, "桌面模式 + 配置未写 → 应按默认开启"
+    snap = t.snapshot()
+    assert snap["included"] == 10_000 and snap["window_hours"] == 48.0
+    reset_local_trial()
+
+
+def test_explicit_false_is_never_overridden_by_desktop_default(monkeypatch, tmp_path):
+    """写了 `enabled: false` 是明确的关闭意愿，桌面默认值不得顶掉它。"""
+    from src.licensing.local_trial import configure_local_trial, reset_local_trial
+
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    reset_local_trial()
+    t = configure_local_trial(
+        {"licensing": {"trial": {"enabled": False}}}, config_dir=str(tmp_path))
+    assert t is None
+    reset_local_trial()
+
+
+def test_server_deploy_unaffected_by_desktop_default(monkeypatch, tmp_path):
+    """没有 AITR_DESKTOP_MODE 的服务器部署仍是默认关（零行为变更）。"""
+    from src.licensing.local_trial import configure_local_trial, reset_local_trial
+
+    monkeypatch.delenv("AITR_DESKTOP_MODE", raising=False)
+    reset_local_trial()
+    assert configure_local_trial({}, config_dir=str(tmp_path)) is None
+    reset_local_trial()
+
+
 def test_baseline_config_keeps_the_trial_off():
     """基线 example 保持默认关（新子系统惯例；服务器部署零行为变更）。"""
     import yaml
