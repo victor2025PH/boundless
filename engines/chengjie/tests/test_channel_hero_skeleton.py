@@ -112,3 +112,15 @@ def test_whatsapp_stays_on_shared_card_family():
     """WA 是共享卡片族的存量正统（74×），别被反向"统一"回私有类。"""
     html = _read(_BODIES["whatsapp"])
     assert html.count("rpa-card") >= 50
+
+
+def test_line_cards_migrated_to_shared_family():
+    """LINE 曾是最后一个用 chc-scope 桥 `.card` + `<h2><svg>` 卡头习语的渠道页
+    ——收编后卡片全数走共享 `.rpa-card` 族，正文不再依赖壳层组件桥。"""
+    html = _read(_BODIES["line"])
+    assert 'class="card"' not in html, "LINE 残留 chc-scope 桥 .card 习语"
+    assert "<h2" not in html, "LINE 残留 <h2> 卡头（应为 rpa-card-head）"
+    assert html.count('class="rpa-card"') >= 11
+    assert html.count('class="rpa-card-head"') >= 11
+    # 动作区不再依赖桥的 .card h2 .actions 规则（内联 margin-left:auto 自立）
+    assert 'class="actions" style="margin-left:auto' in html
