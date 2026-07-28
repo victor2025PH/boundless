@@ -10970,6 +10970,7 @@ async function init(){
   _maybeShowSearchModeHint();
   _tryRestoreFocus(); // SLA/升级badge点击后跳回正确会话
   // 外部页深链：?conv= / 兼容旧 ?focus= ；可选 &mid= 滚动高亮气泡
+  // 渠道中心对齐：?drawer=1&connect=telegram|whatsapp|line|messenger → 账号抽屉 + 接入弹窗
   try{
     const _q=new URLSearchParams(location.search);
     const _dc=_q.get('conv')||_q.get('focus');
@@ -10982,6 +10983,23 @@ async function init(){
       } else {
         window.__wsFocusConv(_dc, _mid||undefined);
       }
+    }
+    const _connect=String(_q.get('connect')||'').toLowerCase().trim();
+    const _drawerRaw=String(_q.get('drawer')||'').toLowerCase().trim();
+    const _wantDrawer=_drawerRaw==='1'||_drawerRaw==='true'||!!_connect;
+    const _CONNECT_PLATS=new Set(['telegram','whatsapp','line','messenger']);
+    if(_wantDrawer && typeof openDrawer==='function'){
+      openDrawer();
+      if(_connect && _CONNECT_PLATS.has(_connect) && typeof openConnect==='function'){
+        setTimeout(function(){ try{ openConnect(_connect); }catch(_){} }, 180);
+      }
+      try{
+        const u=new URL(location.href);
+        u.searchParams.delete('drawer');
+        u.searchParams.delete('connect');
+        const qs=u.searchParams.toString();
+        history.replaceState({}, '', u.pathname+(qs?('?'+qs):'')+u.hash);
+      }catch(_){}
     }
   }catch(_){}
   startAdaptivePoll();

@@ -204,6 +204,12 @@ ZH = {
     "tg_s209": "集群 Whisper",
     "tg_s210": "局域网集群节点 · 需服务令牌",
     "tg_s211": "级联在 config 文件维护（voice_recognition.fallback），本页保存不影响级联",
+    "tg_login_offline_t": "主会话未登录",
+    "tg_login_connecting_t": "主会话连接中",
+    "tg_login_body": "本页显示的是 Telegram 主会话（A 线）。工作台扫码新增的是坐席多开号（B 线），不会自动修好主会话离线。",
+    "tg_login_ops": "主会话离线需运维恢复 session（实例目录 / code.txt）。扫码只能管理坐席多开号。",
+    "tg_login_cta": "去工作台管理账号",
+    "tg_login_manage": "管理坐席多开号（工作台扫码）",
 }
 
 EN = {
@@ -409,4 +415,10 @@ EN = {
     "tg_s209": "Cluster Whisper",
     "tg_s210": "AvatarHub LAN node · requires service token",
     "tg_s211": "The cascade is maintained in the config file (voice_recognition.fallback); saving on this page does not touch it",
+    "tg_login_offline_t": "Main session offline",
+    "tg_login_connecting_t": "Main session connecting",
+    "tg_login_body": "This page shows the Telegram main session (line A). Workspace QR adds seat multi-accounts (line B) and will not fix a main-session outage.",
+    "tg_login_ops": "A main-session outage needs ops to restore the session (instance dir / code.txt). QR only manages seat multi-accounts.",
+    "tg_login_cta": "Manage accounts in workspace",
+    "tg_login_manage": "Manage seat multi-accounts (workspace QR)",
 }

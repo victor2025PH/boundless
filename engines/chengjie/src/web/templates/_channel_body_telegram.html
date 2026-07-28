@@ -25,6 +25,18 @@
 .tg-hero-refresh{padding:.4rem .7rem;border:1px solid var(--bd2);border-radius:8px;background:var(--input);color:var(--t3);cursor:pointer;font-size:.75rem;transition:all .15s;align-self:flex-start;margin-left:.3rem}
 .tg-hero-refresh:hover{color:var(--p);border-color:var(--p)}
 
+/* ─── Login CTA（A 线主会话诚实说明 + 跳转工作台 B 线扫码）─────────── */
+.tg-login-cta{display:none;width:100%;margin:.85rem 0 1.1rem;padding:.85rem 1rem;border-radius:12px;border:1px solid rgba(239,68,68,.28);background:rgba(239,68,68,.06);box-sizing:border-box}
+.tg-login-cta.is-show{display:block}
+.tg-login-cta.is-connecting{border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.08)}
+.tg-login-cta-title{font-size:.86rem;font-weight:700;color:var(--t);margin-bottom:.3rem}
+.tg-login-cta-body{font-size:.76rem;color:var(--t2);line-height:1.45;margin:0 0 .55rem}
+.tg-login-cta-ops{font-size:.72rem;color:var(--t3);line-height:1.4;margin:0 0 .7rem}
+.tg-login-cta-actions{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+.tg-login-cta a.btn-p{text-decoration:none}
+.tg-login-manage{font-size:.75rem;color:var(--p);text-decoration:none;font-weight:600}
+.tg-login-manage:hover{text-decoration:underline}
+
 /* ─── Tab bar ─────────────────────────────────────────────────── */
 .st-bar{display:flex;gap:.25rem;border-bottom:2px solid var(--bd);margin-bottom:1.3rem;flex-wrap:wrap}
 .st-tab{position:relative;padding:.55rem 1.15rem;border-radius:8px 8px 0 0;font-size:.875rem;font-weight:600;color:var(--t2);cursor:pointer;border:none;background:transparent;transition:all .15s;bottom:-2px;border-bottom:2px solid transparent}
@@ -259,6 +271,15 @@ select.f-inp{cursor:pointer}
     </div>
   </div>
   <div style="flex-basis:100%;font-size:.68rem;color:var(--t3)">{{ (i18n or {}).get('tg_s203', "口径：今日日志统计") }}</div>
+</div>
+<div class="tg-login-cta" id="tg-login-cta" hidden>
+  <div class="tg-login-cta-title" id="tg-login-cta-title">{{ (i18n or {}).get('tg_login_offline_t', "主会话未登录") }}</div>
+  <p class="tg-login-cta-body">{{ (i18n or {}).get('tg_login_body', "本页显示的是 Telegram 主会话（A 线）。工作台扫码新增的是坐席多开号（B 线），不会自动修好主会话离线。") }}</p>
+  <p class="tg-login-cta-ops">{{ (i18n or {}).get('tg_login_ops', "主会话离线需运维恢复 session（实例目录 / code.txt）。扫码只能管理坐席多开号。") }}</p>
+  <div class="tg-login-cta-actions">
+    <a class="btn-p" href="/workspace?drawer=1&amp;connect=telegram" id="tg-login-cta-btn">{{ (i18n or {}).get('tg_login_cta', "去工作台管理账号") }}</a>
+    <button type="button" class="btn-sec" onclick="loadAccountInfo()">↻ {{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
+  </div>
 </div>
 
 <!-- ══ TABS ═══════════════════════════════════════════════════════════════ -->
@@ -742,6 +763,17 @@ select.f-inp{cursor:pointer}
       </div>
     </div>
     <p style="font-size:.75rem;color:var(--t3)">{{ (i18n or {}).get('tg_s122', "会话文件：") }}<code id="acc-session">—</code></p>
+    <div class="tg-login-cta" id="tg-login-cta-acc" hidden style="margin-top:.85rem">
+      <div class="tg-login-cta-title" id="tg-login-cta-acc-title">{{ (i18n or {}).get('tg_login_offline_t', "主会话未登录") }}</div>
+      <p class="tg-login-cta-body">{{ (i18n or {}).get('tg_login_body', "本页显示的是 Telegram 主会话（A 线）。工作台扫码新增的是坐席多开号（B 线），不会自动修好主会话离线。") }}</p>
+      <p class="tg-login-cta-ops">{{ (i18n or {}).get('tg_login_ops', "主会话离线需运维恢复 session（实例目录 / code.txt）。扫码只能管理坐席多开号。") }}</p>
+      <div class="tg-login-cta-actions">
+        <a class="btn-p" href="/workspace?drawer=1&amp;connect=telegram">{{ (i18n or {}).get('tg_login_cta', "去工作台管理账号") }}</a>
+      </div>
+    </div>
+    <p style="font-size:.75rem;margin-top:.7rem;margin-bottom:0">
+      <a class="tg-login-manage" href="/workspace?drawer=1&amp;connect=telegram">{{ (i18n or {}).get('tg_login_manage', "管理坐席多开号（工作台扫码）") }}</a>
+    </p>
   </div>
 
   <div class="tg-card">
@@ -1516,6 +1548,24 @@ function _setConnDot(el,status){
   if(status==='connecting') el.classList.add('connecting');
   else if(status!=='connected') el.classList.add('disconnected');
 }
+/* 主会话离线/连接中：诚实 CTA（扫码≠修 A 线）；已连接则收起 */
+function _renderTgLoginCta(status){
+  const show=status==='offline'||status==='connecting';
+  const title=status==='connecting'
+    ? (window.T('tg_login_connecting_t')||'主会话连接中')
+    : (window.T('tg_login_offline_t')||'主会话未登录');
+  ['tg-login-cta','tg-login-cta-acc'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(!el) return;
+    el.hidden=!show;
+    el.classList.toggle('is-show', show);
+    el.classList.toggle('is-connecting', status==='connecting');
+  });
+  ['tg-login-cta-title','tg-login-cta-acc-title'].forEach(id=>{
+    const t=document.getElementById(id);
+    if(t) t.textContent=title;
+  });
+}
 async function loadAccountInfo(){
   try{
     const d=await tgApi('/api/telegram/account-info');
@@ -1528,9 +1578,18 @@ async function loadAccountInfo(){
         ? (d.display_name||d.username||window.T('tg_js_012'))
         : (status==='connecting' ? window.T('tg_js_v10') : window.T('tg_js_012'));
     }
-    document.getElementById('h-sub').textContent=
-      [d.username, d.phone].filter(Boolean).join(' · ')||'Telegram '+window.T('ov_js_th_account');
+    const hSub=document.getElementById('h-sub');
+    if(hSub){
+      if(status==='connected'){
+        hSub.textContent=[d.username, d.phone].filter(Boolean).join(' · ')||'Telegram '+window.T('ov_js_th_account');
+      } else if(status==='connecting'){
+        hSub.textContent=window.T('tg_login_connecting_t')||window.T('tg_js_v10');
+      } else {
+        hSub.textContent=window.T('tg_login_offline_t')||window.T('tg_js_012');
+      }
+    }
     _setConnDot(document.getElementById('h-dot'), status);
+    _renderTgLoginCta(status);
     document.getElementById('st-msg').textContent=(d.stats?.messages??'—');
     document.getElementById('st-vin').textContent=(d.stats?.voice_in??'—');
     document.getElementById('st-tts').textContent=(d.stats?.tts_sent??'—');
