@@ -26,6 +26,34 @@
   .chc-tab.active{border-color:var(--tk-brand);background:linear-gradient(135deg,rgba(59,130,246,.14),rgba(34,211,238,.10));box-shadow:0 0 0 3px var(--tk-ring) inset;}
   .chc-tab .chc-tab-ic{display:inline-flex;width:18px;height:18px;flex-shrink:0;}
   .chc-tab .chc-tab-ic svg{width:18px;height:18px;display:block;}
+  /* ── 职责边界引导条（P1-5）：本页管什么 / 其他设置去哪改 ── */
+  .chc-note{display:flex;gap:8px;align-items:flex-start;margin:-8px 0 16px;padding:8px 12px;border:1px solid var(--tk-border);border-left:3px solid var(--tk-brand);border-radius:9px;background:var(--tk-surface);font-size:12.5px;color:var(--tk-text-muted);line-height:1.7;}
+  .chc-note a{color:var(--tk-brand);text-decoration:none;font-weight:600;white-space:nowrap;}
+  .chc-note a:hover{text-decoration:underline;}
+  .chc-note .chc-note-sep{margin:0 7px;opacity:.45;}
+  /* ── 收件箱封顶/跳过徽章（.chc-note 内，Jinja 渲染）───────────── */
+  .chc-cap-badge{display:inline-flex;align-items:center;align-self:center;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:700;white-space:nowrap;margin-left:auto;flex-shrink:0;}
+  .chc-cap-badge + .chc-cap-badge{margin-left:8px;}
+  .chc-cap-badge.chc-cap-amber{background:rgba(245,158,11,.12);color:var(--tk-amber);border:1px solid rgba(245,158,11,.35);}
+  .chc-cap-badge.chc-cap-red{background:rgba(225,29,72,.10);color:var(--tk-danger);border:1px solid rgba(225,29,72,.35);}
+  /* ── 网页会话健康条（P0）：messenger/whatsapp 外部 worker 会话状态 ── */
+  #chc-session-strip{margin:-6px 0 16px;}
+  .chc-sess{display:flex;flex-direction:column;gap:6px;padding:8px 12px;border:1px solid var(--tk-border);border-left:3px solid var(--tk-emerald);border-radius:9px;background:var(--tk-surface);font-size:12.5px;color:var(--tk-text-muted);line-height:1.7;}
+  .chc-sess .chc-sess-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;flex-shrink:0;background:var(--tk-emerald);}
+  .chc-sess.chc-sess-ok{flex-direction:row;align-items:center;}
+  .chc-sess.chc-sess-warn{border-left-color:var(--tk-amber);}
+  .chc-sess.chc-sess-warn .chc-sess-dot{background:var(--tk-amber);}
+  .chc-sess.chc-sess-down{border-left-color:var(--tk-danger);}
+  .chc-sess.chc-sess-down .chc-sess-dot{background:var(--tk-danger);}
+  .chc-sess .chc-sess-title{display:flex;align-items:center;font-weight:600;color:var(--tk-text);}
+  .chc-sess .chc-sess-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-left:15px;}
+  .chc-sess .chc-sess-acct{font-family:'Consolas','JetBrains Mono','Courier New',monospace;font-size:12px;color:var(--tk-text);}
+  .chc-sess .chc-sess-st{color:var(--tk-danger);font-weight:600;}
+  .chc-sess .chc-sess-btn{padding:3px 10px;border:1px solid var(--tk-border);border-radius:7px;background:var(--tk-surface-2);color:var(--tk-brand);font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:all .15s;}
+  .chc-sess .chc-sess-btn:hover{border-color:var(--tk-brand);}
+  .chc-sess .chc-sess-btn[disabled]{opacity:.55;cursor:default;}
+  .chc-sess a.chc-sess-link{color:var(--tk-brand);font-weight:600;text-decoration:none;white-space:nowrap;}
+  .chc-sess a.chc-sess-link:hover{text-decoration:underline;}
   /* ============================================================
      管理后台变量桥（单一事实源）：旧渠道页正文与 _rpa_shared_styles
      全部以 base.html 的 --card/--t/--bd 词汇写就；此处把这套词汇映射到
@@ -157,6 +185,23 @@
     <a class="chc-tab{% if channel == _key %} active{% endif %}" href="/workspace/channels/{{ _key }}"><span class="chc-tab-ic" data-pf="{{ _key }}"></span>{{ _name }}</a>
     {% endfor %}
   </div>
+  <div class="chc-note">
+    <span>{{ (i18n or {}).get('chc_note_lead', '本页管平台级配置（账号进程 · 接收规则 · 回复节奏 · 语音链路 · 运维）。常找的其他设置：') }}
+      <a href="/workspace">{{ (i18n or {}).get('chc_note_conv', '单个客户的自动化档位 → 聊天坐席') }}</a><span class="chc-note-sep">·</span>
+      <a href="/personas">{{ (i18n or {}).get('chc_note_persona', '每个人设的音色 → 人设工作室') }}</a><span class="chc-note-sep">·</span>
+      <a href="/rpa-overview">{{ (i18n or {}).get('chc_note_gate', 'AI 真发总闸 → 能力看板') }}</a>
+    </span>
+    {# P0 可见化：收件箱对本渠道的封顶/跳过（数据源 _page_ctx.platform_mode_caps /
+       platform_draft_skips，即 inbox.auto_draft 配置）——主管在渠道页就能看见
+       「为什么全自动不生效」，不再跨页猜。 #}
+    {% set _chc_cap = (platform_mode_caps or {}).get(channel) %}
+    {% if _chc_cap %}<span class="chc-cap-badge chc-cap-amber">{{ ((i18n or {}).get('chc_cap_capped', '本渠道已被收件箱封顶为 {mode} · 全自动不生效')).replace('{mode}', _chc_cap) }}</span>{% endif %}
+    {% if channel in (platform_draft_skips or []) %}<span class="chc-cap-badge chc-cap-red">{{ (i18n or {}).get('chc_cap_skipped', '本渠道已被收件箱跳过自动拟稿') }}</span>{% endif %}
+  </div>
+  {# 网页会话健康条（P0）：messenger/whatsapp 才拉数据；空/失败静默隐藏 #}
+  <div id="chc-session-strip" style="display:none"></div>
+  {# 壳层契约：收件箱平台封顶表，供各渠道正文 script 消费（名字勿改） #}
+  <script>window.__chcPlatformCaps = {{ (platform_mode_caps or {})|tojson }};</script>
   <div class="chc-scope">
     {% include "_channel_body_" ~ channel ~ ".html" %}
   </div>
@@ -192,5 +237,95 @@
     setTimeout(function(){ t.style.opacity='0'; setTimeout(function(){ t.remove(); },250); },dur);
   };
 })();
+/* ============================================================
+   网页会话健康条（P0）：messenger-web / whatsapp-baileys 两类 Node worker
+   push 的会话状态（platform_session_health 登记表）经
+   GET /api/workspace/channel-sessions 出数——全部健康显示一行绿点；有掉线
+   账号按行列出（messenger 附「重新登录」按钮直连既有 relogin 端点，
+   whatsapp 指引去聊天坐席账号面板扫码）。telegram/line 无外部 worker，
+   不拉取；接口失败/无会话记录 → 静默隐藏（观测旁路，不打扰配置工作）。
+   onclick 目标函数均为顶层全局（哑按钮门禁约定）。
+   ============================================================ */
+var CHC_CHANNEL = {{ channel|tojson }};
+function chcSessEsc(s){
+  return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function chcSessAge(sec){
+  sec = Math.max(0, Number(sec)||0);
+  if(sec < 90) return window.Tf('chc_sess_age_sec',{n:Math.round(sec)});
+  if(sec < 5400) return window.Tf('chc_sess_age_min',{n:Math.round(sec/60)});
+  if(sec < 129600) return window.Tf('chc_sess_age_hour',{n:String((sec/3600).toFixed(1)).replace(/\.0$/,'')});
+  return window.Tf('chc_sess_age_day',{n:String((sec/86400).toFixed(1)).replace(/\.0$/,'')});
+}
+async function chcLoadSessions(){
+  var el = document.getElementById('chc-session-strip');
+  if(!el) return;
+  try{
+    var r = await window.apiFetch('/api/workspace/channel-sessions?platform='+encodeURIComponent(CHC_CHANNEL),
+      {credentials:'same-origin'});
+    if(!r.ok) throw new Error('http '+r.status);
+    var d = await r.json();
+    var list = (d && d.ok && d.sessions) || [];
+    if(!list.length){ el.style.display='none'; return; }
+    var bad = list.filter(function(s){ return s.unhealthy; });
+    if(!bad.length){
+      el.innerHTML = '<div class="chc-sess chc-sess-ok"><span class="chc-sess-dot"></span>'+
+        chcSessEsc(window.Tf('chc_sess_ok_line',{n:list.length}))+'</div>';
+      el.style.display='';
+      return;
+    }
+    /* 部分掉线=琥珀条；全军覆没=红条 */
+    var cls = (bad.length >= list.length) ? 'chc-sess-down' : 'chc-sess-warn';
+    var h = '<div class="chc-sess '+cls+'">';
+    h += '<div class="chc-sess-title"><span class="chc-sess-dot"></span>'+
+      chcSessEsc(window.Tf('chc_sess_bad_title',{bad:bad.length,total:list.length}))+'</div>';
+    bad.forEach(function(s){
+      h += '<div class="chc-sess-row"><span class="chc-sess-acct">'+chcSessEsc(s.account_id)+'</span>'+
+        '<span class="chc-sess-st">'+chcSessEsc(s.status)+'</span>'+
+        '<span>'+chcSessEsc(window.Tf('chc_sess_down_for',{t:chcSessAge(s.age_sec)}))+'</span>';
+      if(d.relogin_supported){
+        h += '<button type="button" class="chc-sess-btn" data-acct="'+chcSessEsc(s.account_id)+
+          '" data-lid="'+chcSessEsc(s.login_id||'')+'" onclick="chcSessRelogin(this)">'+
+          chcSessEsc(window.T('chc_sess_relogin_btn'))+'</button>';
+      }else{
+        h += '<span>'+chcSessEsc(window.T('chc_sess_wa_hint'))+'</span>'+
+          '<a class="chc-sess-link" href="/workspace">'+chcSessEsc(window.T('chc_sess_wa_link'))+'</a>';
+      }
+      h += '</div>';
+    });
+    h += '</div>';
+    el.innerHTML = h;
+    el.style.display='';
+  }catch(_e){ el.style.display='none'; }
+}
+async function chcSessRelogin(btn){
+  if(!btn || btn.disabled) return;
+  btn.disabled = true;
+  var old = btn.textContent;
+  btn.textContent = '…';
+  try{
+    /* 后端转发 worker relogin 上游最长 60s → 超时给足 65s（默认 20s 会误报） */
+    var r = await window.apiFetch('/api/admin/platform-sessions/relogin', {
+      method:'POST', credentials:'same-origin',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ platform: CHC_CHANNEL,
+        login_id: btn.getAttribute('data-lid')||'',
+        account_id: btn.getAttribute('data-acct')||'' })
+    }, {timeoutMs: 65000});
+    var d = await r.json().catch(function(){ return {}; });
+    if(r.ok && d && d.ok){
+      window.showToast(window.T('chc_sess_relogin_ok'), 'ok', 8000);
+      setTimeout(chcLoadSessions, 8000);
+    }else{
+      window.showToast(window.T('chc_sess_relogin_fail')+' '+((d && d.detail) || r.status), 'err');
+      btn.disabled = false; btn.textContent = old;
+    }
+  }catch(e){
+    window.showToast(window.T('chc_sess_relogin_fail')+' '+e, 'err');
+    btn.disabled = false; btn.textContent = old;
+  }
+}
+if(CHC_CHANNEL === 'messenger' || CHC_CHANNEL === 'whatsapp'){ chcLoadSessions(); }
 </script>
 {% endblock %}

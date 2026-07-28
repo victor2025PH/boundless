@@ -10,6 +10,8 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
+from src.client import daily_stats
+
 # A1 text-first 占位句内置池（config reply.ai_fallback_replies 缺席时的兜底备货——
 # 2026-07-26 实锤：实例配置池为空 → 硬编码单句「稍等我一下哈～」4 分钟连发 3 次，
 # 触发出站复读告警，真人不会这样说话）。
@@ -636,6 +638,144 @@ class TelegramSenderMixin:
             self.logger.error("发送回复失败: %s", e)
             self._handle_send_exc(e)   # G2 分级急停 + 实施31 TG 告警（best-effort）
 
+    @staticmethod
+    def _is_peer_invalid_error(exc: Any) -> bool:
+        """「本地不认识这个 peer」类错误——**不是**平台风控信号。
+
+        三种形态（2026-07-27 双号群演灰度全部实录）：
+        - ``utils.get_peer_type`` 的 ``ValueError("Peer id invalid: …")``
+          （本地 id 边界校验；2.0.106 撞超 int32 群 id 时抛它）；
+        - RPC ``PeerIdInvalid``（服务器 400 PEER_ID_INVALID）；
+        - RPC ``ChannelInvalid``（400 CHANNEL_INVALID by channels.GetChannels）
+          ——resolve 缓存 miss 后 pyrogram 拿 ``access_hash=0`` 去要 peer 被拒
+          的直接症状，dialogs 预热拿到真 access_hash 即愈。
+        刻意**不含** ``ChannelPrivate``（CHANNEL_PRIVATE=被踢/无权限，预热无意义）。
+        """
+        name = type(exc).__name__
+        low = str(exc or "").lower()
+        return ("PeerIdInvalid" in name or "ChannelInvalid" in name
+                or "peer_id_invalid" in low or "peer id invalid" in low
+                or "channel_invalid" in low)
+
+    async def _warm_group_peer(self, chat_id: Any) -> bool:
+        """两级预热让 pyrogram 把群 peer 写进 session 缓存（见到目标群 → True）。
+
+        「号在群里但本地无 access_hash」时 ``get_chat`` 救不了自己（内部同样走
+        ``resolve_peer``），标准姿势：
+        ① ``get_dialogs``——响应带全量 peer，SQLite session 顺手入库、且**不经过**
+          id 边界校验。刚有动静的新群必在 dialogs 前排，limit=60 足够；
+        ② ①未见 → raw ``messages.GetAllChats``——返回**该号所在的全部群/频道**，
+          无视文件夹/归档（新号常开「陌生会话自动归档」，被拉进群直接落 folder 1，
+          get_dialogs 主列表根本看不见——2026-07-27 双号群演灰度实锤盲区）；
+          响应 chats 经 ``fetch_peers`` 写库后即可正常 resolve。
+        两级都未见 → 号确实不在群内（地面真相，调用方据此明确报错）。
+        仅群/频道（负 id）值得预热：私聊 peer 不会出现在 dialogs 预热收益里。
+        """
+        try:
+            cid = int(chat_id)
+        except (TypeError, ValueError):
+            return False
+        if cid >= 0 or not self.client:
+            return False
+        try:
+            async for dialog in self.client.get_dialogs(limit=60):
+                c = getattr(dialog, "chat", None)
+                if c is not None and getattr(c, "id", None) == cid:
+                    return True
+        except Exception:  # noqa: BLE001
+            self.logger.debug("[peer预热] get_dialogs 失败", exc_info=True)
+        return await self._warm_via_all_chats(cid)
+
+    async def _warm_via_all_chats(self, cid: int) -> bool:
+        """预热第 ② 级：raw GetAllChats 全量所在群写缓存（见到目标群 → True）。
+
+        与 get_dialogs 的差异就是**归档不隐身**。响应按 raw 类型换算 bot-api id：
+        Channel* → ``-100`` 前缀形态，Chat*（基础小群）→ 取负。fetch_peers 失败
+        不阻断命中判定（缓存没写上，重发仍会失败，但「在不在群」的答案是真的）。
+        """
+        try:
+            from pyrogram import raw, utils as _pu
+        except Exception:  # noqa: BLE001 —— 纯单测无 pyrogram 环境
+            return False
+        try:
+            r = await self.client.invoke(
+                raw.functions.messages.GetAllChats(except_ids=[]))
+        except Exception:  # noqa: BLE001
+            self.logger.debug("[peer预热] GetAllChats 失败", exc_info=True)
+            return False
+        chats = list(getattr(r, "chats", None) or [])
+        if chats:
+            try:
+                await self.client.fetch_peers(chats)
+            except Exception:  # noqa: BLE001
+                self.logger.debug("[peer预热] fetch_peers 失败", exc_info=True)
+        for c in chats:
+            raw_id = getattr(c, "id", None)
+            if raw_id is None:
+                continue
+            tname = type(c).__name__
+            try:
+                if tname.startswith("Channel"):
+                    bot_id = _pu.get_channel_id(int(raw_id))
+                elif tname.startswith("Chat"):
+                    bot_id = -int(raw_id)
+                else:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            if bot_id == cid:
+                self.logger.info("[peer预热] GetAllChats 命中群 %s（主列表未见，"
+                                 "疑似归档/文件夹）", cid)
+                return True
+        return False
+
+    async def ensure_group_peer(self, chat_id: Any) -> bool:
+        """群 peer 可达性体检（供开演前 preflight 等前置校验）：True=此号能对群发言。
+
+        先直查 ``resolve_peer``（缓存热=零 RPC），冷则走两级预热再复核。
+        非负 id（私聊/username）不属本检查范围，恒 True 交给发送路径。
+        群演场景专用语义：**False 就是「号不在群/不可达」的确定结论**，
+        调用方应当拦下而不是带病开演。
+        """
+        try:
+            cid = int(chat_id)
+        except (TypeError, ValueError):
+            return True
+        if cid >= 0:
+            return True
+        if not self.client:
+            return False
+        try:
+            await self.client.resolve_peer(cid)
+            return True
+        except Exception:  # noqa: BLE001 —— 缓存冷/边界拦截，进预热
+            pass
+        if not await self._warm_group_peer(cid):
+            return False
+        try:
+            await self.client.resolve_peer(cid)
+            return True
+        except Exception:  # noqa: BLE001
+            self.logger.debug("[peer预热] 预热后 resolve 仍失败 %s", cid, exc_info=True)
+            return False
+
+    async def _retry_send_after_peer_warmup(self, chat_id: Any, text: str):
+        """peer-invalid 自愈：dialogs 预热 → 原样重发一次。失败返回 None（绝不抛）。
+
+        重试抛出的**新**异常若已不是 peer 类（FloodWait/封号特征等）→ 照常喂
+        G2 风控分级，不因走了自愈岔路而漏报真风控。
+        """
+        try:
+            if not await self._warm_group_peer(chat_id):
+                self.logger.warning("[peer预热] dialogs 未见群 %s（号不在群内？）", chat_id)
+                return None
+            return await self.client.send_message(chat_id, text)
+        except Exception as e2:  # noqa: BLE001
+            self.logger.warning("[peer预热] 重试仍失败 %s: %s", chat_id, e2)
+            if not self._is_peer_invalid_error(e2):
+                self._handle_send_exc(e2)
+            return None
+
     async def _send_text_guarded(self, chat_id: int, text: str):
         """A 线外发文本核心：过发送前护栏 + 节流 + 记账，返回 ``(ok, sent_message)``。
 
@@ -658,6 +798,20 @@ class TelegramSenderMixin:
             self.logger.info("已发送消息到 %s: %s...", chat_id, text[:50])
             return True, _sent
         except Exception as e:
+            # 群聊 peer 冷启动自愈（2026-07-27 双号群演灰度实锤）：新号第一次对群
+            # 开口时本地缓存缺失 → resolve 失败，dialogs 预热后原样重发一次即活。
+            # peer-invalid 是本地缓存/边界问题**不是风控**——成败都不喂 ban_signal
+            # （PeerIdInvalid 在 _PAUSE_NAMES 里，误喂＝无辜冻号 60min，正是此前
+            # proactive 主账号被 kill-switch 冻 1h 事故的同款机制）。
+            if self._is_peer_invalid_error(e):
+                _sent2 = await self._retry_send_after_peer_warmup(chat_id, text)
+                if _sent2 is not None:
+                    self._postsend_record_count()
+                    self.logger.info("已发送消息到 %s（peer 预热重试）: %s...",
+                                     chat_id, str(text or "")[:50])
+                    return True, _sent2
+                self.logger.error("发送消息失败（peer 预热后仍不可达）: %s", e)
+                return False, None
             self.logger.error("发送消息失败: %s", e)
             self._handle_send_exc(e)   # G2 分级急停 + 实施31 TG 告警（best-effort）
             return False, None
@@ -997,13 +1151,38 @@ class TelegramSenderMixin:
             tts = TTSPipeline(voice_cfg)
             timeout_sec = float(vr_cfg.get("timeout_sec", 30) or 30)
 
+            # A1 text-first 与分条的错序防线（2026-07-27）：任一条语音已送达后，
+            # 占位文字就不该再发（实锤日志：语音→「收到收到，马上回你」→语音）。
+            _voice_progress = {"sent": False}
+
+            def _note_voice_sent() -> None:
+                _voice_progress["sent"] = True
+
             async def _voice_flow() -> bool:
                 """合成→质检→发送全流程（A1 抽为内协程：可被 text-first 预算编排）。"""
+                nonlocal synth_source
                 # ── 分条发送（活人感）：长回复像真人一样连发 2-3 条短语音，条间按
                 # 「按住录音的时长」留拟人间隔 + 挂"录音中"状态。全部合成成功才发
                 # （节奏是表演出来的，不被 GPU 进度驱动）；任何失败回落单条整段路径。
                 split_cfg = (vr_cfg.get("split_send")
                              if isinstance(vr_cfg.get("split_send"), dict) else {})
+                # 整段先口语化一次（2026-07-27）：分条原本逐条各打一次 LLM 改写
+                # （云端一次往返实测 ~5s ×N 条）→ 2 条即越过 text-first 25s 预算，
+                # 客户先吃占位文字。生成层口语版已命中(_spoken)时整段本就是口语，
+                # 无需再改；预处理失败 → 保持旧链逐条改写，行为不劣于旧版。
+                _skip_llm_col = False
+                if (not _spoken and split_cfg.get("enabled", False)
+                        and len(synth_source) >= int(
+                            split_cfg.get("min_total_chars", 24) or 24)):
+                    _pre = await tts.prepass_colloquial_llm(
+                        synth_source, spec=voice_ctx.get("emotion"),
+                        colloquial_lead=True)
+                    if _pre:
+                        self.logger.info(
+                            "[voice_reply] 整段口语化一次（len=%d→%d）→ 各条免打 LLM",
+                            len(synth_source), len(_pre))
+                        synth_source = _pre
+                        _skip_llm_col = True
                 if split_cfg.get("enabled", False):
                     # AI Live OS Agent4（dialogue_planner）：由「表演规划」Agent 决定分条 +
                     # **情绪缩放条间节奏**（兴奋短促连发 / 低落慢而长停顿，真人节奏带情绪）。
@@ -1042,7 +1221,9 @@ class TelegramSenderMixin:
                         split_sent = await self._send_voice_reply_parts(
                             original_message, parts, tts, voice_ctx, vr_cfg, eff_split_cfg,
                             timeout_sec=timeout_sec, opus_application=_opus_app,
-                            pre_colloquialized=bool(_spoken))
+                            pre_colloquialized=bool(_spoken),
+                            skip_llm_colloquial=_skip_llm_col,
+                            on_part_sent=_note_voice_sent)
                         if split_sent:
                             if vr_cfg.get("send_text_summary", False):
                                 await self._send_reply(original_message, reply_text)
@@ -1052,7 +1233,8 @@ class TelegramSenderMixin:
                 result = await tts.synthesize(
                     synth_source, timeout_sec=timeout_sec,
                     emotion=voice_ctx.get("emotion"),
-                    pre_colloquialized=bool(_spoken))
+                    pre_colloquialized=bool(_spoken),
+                    skip_llm_colloquial=_skip_llm_col)
                 if not result.ok:
                     self.logger.warning("[voice_reply] TTS failed: %s", result.error)
                     return False
@@ -1129,12 +1311,14 @@ class TelegramSenderMixin:
                     pass
 
                 if sent:
+                    _note_voice_sent()
                     self.logger.info(
                         "[voice_reply] voice sent chat=%s persona=%s dur=%s",
                         original_message.chat.id,
                         voice_ctx.get("persona_id") or "",
                         dur_int,
                     )
+                    daily_stats.bump("tts_sent")
                     # 连发监测（2026-07-15 三连发事故指纹回归防线）
                     from src.client.voice_burst_guard import note_voice_send
                     note_voice_send(original_message.chat.id, vr_cfg)
@@ -1198,7 +1382,8 @@ class TelegramSenderMixin:
             _vt = _aio.create_task(_voice_flow())
             return await self.race_voice_with_text_first(
                 _vt, budget_sec=_tf_budget, send_filler=_send_filler,
-                send_fallback_text=_send_fallback_text, logger=self.logger)
+                send_fallback_text=_send_fallback_text, logger=self.logger,
+                already_sent=lambda: bool(_voice_progress["sent"]))
         except Exception as ex:
             self.logger.error("[voice_reply] unexpected error: %s", ex)
             return False
@@ -1209,7 +1394,7 @@ class TelegramSenderMixin:
     @staticmethod
     async def race_voice_with_text_first(
         voice_task, *, budget_sec: float, send_filler, send_fallback_text,
-        logger,
+        logger, already_sent=None,
     ) -> bool:
         """A1「先文字后语音」编排（2026-07-15 阶段A）：3 分钟静默的解药。
 
@@ -1235,6 +1420,15 @@ class TelegramSenderMixin:
         logger.info(
             "[voice_reply] text-first：合成超 %.0fs 预算 → 先发文字占位，语音后台继续",
             budget_sec)
+        # 分条场景：预算到点时前几条可能已经送达（实锤：语音→占位文字→语音，
+        # 占位反在语音之后到，语义彻底错乱）→ 已发过语音就不再补占位。
+        try:
+            if already_sent is not None and already_sent():
+                logger.info(
+                    "[voice_reply] text-first：已有语音条送达 → 跳过占位文字（防错序）")
+                send_filler = None
+        except Exception:
+            logger.debug("[voice_reply] text-first 进度探测异常（忽略）", exc_info=True)
         if send_filler is not None:
             try:
                 await send_filler()
@@ -1285,6 +1479,8 @@ class TelegramSenderMixin:
         self, original_message, parts, tts, voice_ctx, vr_cfg, split_cfg,
         *, timeout_sec: float, opus_application: str = "voip",
         pre_colloquialized: bool = False,
+        skip_llm_colloquial: bool = False,
+        on_part_sent=None,
     ) -> bool:
         """分条语音发送（活人感核心）：先全部合成，再按真人录音节奏逐条发。
 
@@ -1319,8 +1515,11 @@ class TelegramSenderMixin:
             # pre_colloquialized=True（生成层口语版）时整段已是口语，各条跳过改写。
             rv = await tts.synthesize(
                 p, timeout_sec=timeout_sec, emotion=emotion,
-                colloquial_lead=(i == 0),
-                pre_colloquialized=pre_colloquialized)
+                # 整段已 LLM 口语化过（含句首起头）→ 各条都不再加 lead，
+                # 免得首条被规则档二次起头（「其实，说真的，…」）。
+                colloquial_lead=(i == 0 and not skip_llm_colloquial),
+                pre_colloquialized=pre_colloquialized,
+                skip_llm_colloquial=skip_llm_colloquial)
             if not rv.ok:
                 self.logger.info(
                     "[voice_reply] 分条第 %d/%d 条合成失败(%s)",
@@ -1434,6 +1633,12 @@ class TelegramSenderMixin:
                         pass
                 break
             sent_n += 1
+            # 告知 text-first 编排「已有语音条送达」→ 不再补占位文字（防错序）
+            if on_part_sent is not None:
+                try:
+                    on_part_sent()
+                except Exception:
+                    pass
             # 连发监测（2026-07-15 三连发事故指纹回归防线）：分条每条都记账
             from src.client.voice_burst_guard import note_voice_send
             note_voice_send(chat_id, vr_cfg)
@@ -1444,6 +1649,7 @@ class TelegramSenderMixin:
                 "[voice_reply] 分条语音已发 %d/%d 条 chat=%s persona=%s 总时长=%.1fs",
                 sent_n, len(results), chat_id,
                 voice_ctx.get("persona_id") or "", total_dur)
+            daily_stats.bump("tts_sent")
             self._postsend_mirror_and_record(
                 chat_id, f"[语音]×{sent_n}" if sent_n > 1 else "[语音]")
         return sent_n > 0

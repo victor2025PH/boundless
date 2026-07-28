@@ -413,6 +413,51 @@ class ConfigManager:
         self.logger.info("运营开关已更新: %s = %r", ".".join(keys), value)
         return True, "已保存"
 
+    def save_overlay_patch(self, patch: Dict[str, Any]) -> bool:
+        """把「本次真正改动」的最小 patch 深合并进 config.local.yaml 并即时生效。
+
+        渠道路由等运行时设置保存的统一出口：写 overlay 而非整文件回写主
+        config.yaml（保住主配置注释/结构，运行时值不固化进 git 跟踪文件）。
+        合并语义与 ``_deep_merge`` 一致：dict 递归、其余类型（**含 list，整体
+        替换不 extend**）以 patch 覆盖。patch 为空 → 直接 True 不落盘。
+
+        写盘为 tmp 文件 + ``os.replace`` 原子替换；成功后深合并进 self.config
+        保持内存一致，并同步刷新 ``_overlay_loaded_mtime`` 基线——自己刚写的
+        overlay 不触发 ``check_and_hot_reload`` 的整装重载（重载走 load() 同
+        路径、值与内存一致，幂等无害但多余）。返回 True/False（异常记日志并
+        返回 False，绝不抛）。
+        """
+        if not patch:
+            return True
+        if not isinstance(patch, dict):
+            self.logger.error(
+                "save_overlay_patch: patch 须为 dict，收到 %s", type(patch).__name__)
+            return False
+        path = self._overlay_path()
+        try:
+            overlay: Dict[str, Any] = {}
+            if path.exists():
+                with open(path, "r", encoding="utf-8") as f:
+                    overlay = yaml.safe_load(f) or {}
+            if not isinstance(overlay, dict):
+                overlay = {}
+            self._deep_merge(overlay, patch)
+            tmp = path.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write("# 运行时设置写入（渠道中心等）的 overlay（深合并覆盖 config.yaml）。\n")
+                f.write("# 请勿提交到 git（应在 .gitignore）。\n")
+                yaml.dump(overlay, f, default_flow_style=False,
+                          allow_unicode=True, sort_keys=False)
+            os.replace(tmp, path)
+            self._deep_merge(self.config, overlay)
+            self._overlay_loaded_mtime = self._overlay_mtime()
+        except Exception as exc:
+            self.logger.error("写入运行时设置 overlay 失败: %s", exc)
+            return False
+        self.logger.info(
+            "运行时设置已写入 overlay（顶层键: %s）", ", ".join(sorted(map(str, patch))))
+        return True
+
     def _run_startup_self_check(self) -> None:
         """启动时跑配置自检并把 error/warn 摘要写日志（永不抛、永不阻断启动）。"""
         try:

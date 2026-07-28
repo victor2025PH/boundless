@@ -998,6 +998,8 @@ body:has(.mr-page.monitor-mode) .wrap{padding:.65rem .85rem 1.5rem}
               <div class="mode-card" data-mode="off"><b>{{ (i18n or {}).get('msg_s195', "👁️ 只读模式") }}</b><small>{{ (i18n or {}).get('msg_s196', "只扫描，不回复") }}</small></div>
             </div>
             <input type="hidden" id="cfg-reply-mode" value="approve">
+            <div class="mr-note" style="margin-top:.4rem">{{ (i18n or {}).get('msg_reply_mode_note', "设备链自动化档位（auto=自动回复 / approve=生成后人审 / off=只收不回），独立于聊天坐席的会话档位与 AI 值守总闸——单个客户的档位请到") }}<a href="/workspace">{{ (i18n or {}).get('msg_reply_mode_note_link', "聊天坐席") }}</a>{{ (i18n or {}).get('msg_reply_mode_note_tail', "调整") }}</div>
+            <div class="badge b-a" id="mr-cap-note" style="display:none;margin-top:.35rem;white-space:normal"></div>
           </div>
           <div class="mr-field" style="margin-top:.65rem">
             <label for="cfg-start-mode">{{ (i18n or {}).get('msg_s197', "扫描起点 ") }}<span class="mr-tip" title="{{ (i18n or {}).get('msg_s198', "手机停在某聊天页时如何处理：智能=直接使用，强制=先回收件箱") }}">ⓘ</span></label>
@@ -5820,4 +5822,18 @@ async function _msgrSetLang(chatKey, lang) {
     if (typeof refreshLeads === 'function') refreshLeads();
   } catch(e) { alert(window.T('draft.net_err')+': ' + e); }
 }
+
+// ── 回复模式封顶提示：inbox.auto_draft.platform_modes 若把 messenger 封顶（壳层注入 window.__chcPlatformCaps），
+//    在 RPA 档位下方如实提示「这里选 auto 也按封顶档执行」。DOMContentLoaded 后读取，兼容壳层脚本在 body 之后执行。
+(function(){
+  function applyMrCapNote(){
+    var cap=String((window.__chcPlatformCaps||{})['messenger']||'');
+    var el=document.getElementById('mr-cap-note');
+    if(!el||!cap) return;
+    el.textContent=window.Tf('msg_reply_mode_cap',{mode:cap});
+    el.style.display='';
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',applyMrCapNote);
+  else applyMrCapNote();
+})();
 </script>

@@ -4,11 +4,21 @@ Endpoints
 ---------
 POST /api/voice/tts-test
     Generate a TTS preview for a given persona + text.
-    Body: {text, persona_id?, format?}
+    Body: {text, persona_id?, format?, background?}
     Returns: {ok, url, duration_sec, provider, voice, error?}
+    background=true → validation/quota still run synchronously, the synthesis
+    itself moves to a background job; returns {ok, job_id} immediately.
+
+GET  /api/voice/tts-test-jobs/{job_id}
+    Poll a background preview job: running/done/error ("done" carries the same
+    payload as the sync success response; unknown or expired job → not_found).
 
 GET  /api/voice/tts-test/{filename}
     Serve the generated preview audio file (short-lived).
+
+GET  /api/voice/effective-config
+    Read-only snapshot of the effective voice config for a platform/persona
+    (channel-center preview panel).
 """
 from __future__ import annotations
 
@@ -64,6 +74,35 @@ def _cleanup_old_previews() -> None:
         pass
 
 
+# ── tts-test 后台 job 模式（channel-center「后台试听」）──────────────────────
+# 模块级注册表 {job_id: {"status","result","error","ts","task"}}：
+# - status: running|done|error（英文枚举，前端直接消费）；
+# - result: 与同步成功响应完全同构的 dict（status=done 时非空）；
+# - error: 同步失败路径会返回的 error 文案（status=error 时使用）；
+# - ts: 提交时刻；条目超过 _TTS_JOB_TTL_SEC 由提交/轮询路径顺手清理（表有界，
+#   无后台清扫线程）；
+# - task: asyncio.Task 强引用（create_task 对任务仅弱引用，防 GC 吞任务）。
+_TTS_JOBS: Dict[str, Dict[str, Any]] = {}
+_TTS_JOB_TTL_SEC = 900.0   # 结果保留 15 min，过期轮询按 not_found 处理
+_TTS_JOB_MAX_RUNNING = 3   # 并发在跑上限：第 4 个提交立即拒绝（busy）
+
+
+def _cleanup_tts_jobs() -> None:
+    """清掉 ts 超过 ``_TTS_JOB_TTL_SEC`` 的 job 条目（best-effort）。
+
+    单事件循环内的纯 dict 操作，无需加锁；条目被清后仍在跑的后台任务
+    写的是自己持有的 entry 引用，不会 KeyError。
+    """
+    try:
+        now = time.time()
+        for jid in list(_TTS_JOBS):
+            entry = _TTS_JOBS.get(jid) or {}
+            if now - float(entry.get("ts") or 0.0) > _TTS_JOB_TTL_SEC:
+                _TTS_JOBS.pop(jid, None)
+    except Exception:
+        pass
+
+
 # 「立即渲染」后台进程句柄（防重复拉起；渲染幂等，丢句柄无害）
 _PRERENDER_PROC: Dict[str, Any] = {"proc": None}
 
@@ -95,31 +134,15 @@ def _spawn_prerender_render() -> bool:
 def register_voice_routes(app, api_auth, config_manager=None):
     """Register /api/voice/* endpoints on *app*."""
 
-    @app.post("/api/voice/tts-test")
-    async def api_voice_tts_test(request: Request, _=Depends(api_auth)):
-        """Generate a TTS audio preview.
+    async def _run_tts_preview(body: Dict[str, Any], text: str) -> Dict[str, Any]:
+        """tts-test 核心段：resolve voice_cfg → override → fast 档 → 合成 → 整形响应。
 
-        Request body (JSON):
-            text        — text to synthesise (required)
-            persona_id  — persona ID for voice config lookup (optional)
-            format      — output format override: mp3|ogg (optional)
+        同步路径 ``return await`` 本函数（响应与历史行为逐字节一致）；background
+        路径由 ``asyncio.create_task`` 包住、把结果/异常写进模块级 ``_TTS_JOBS``。
+        入参在提交时已从 request 取好（body 为已解析 dict、text 已校验），本函数
+        不得引用 request——后台任务在请求生命周期结束后仍在跑。
+        返回值＝POST /api/voice/tts-test 的响应 dict（成功/失败两种形状都在此组装）。
         """
-        try:
-            body: Dict[str, Any] = await request.json()
-        except Exception:
-            raise HTTPException(400, "invalid JSON body")
-
-        text = str(body.get("text") or "").strip()
-        if not text:
-            raise HTTPException(400, "text is required")
-        if len(text) > 400:
-            raise HTTPException(400, "text too long (max 400 chars)")
-
-        # P0-4/C3：字符额度用尽且 licensing.enforce 开 → 402 + i18n（试听同样耗额度）
-        from src.licensing.quota_store import check_license_quota
-        if not check_license_quota()["allowed"]:
-            raise HTTPException(402, tr(request, "err.lic.chars_exhausted"))
-
         persona_id: Optional[str] = body.get("persona_id") or None
         fmt_override: Optional[str] = body.get("format") or None
         # Optional: caller passes current UI settings to override saved config
@@ -149,6 +172,20 @@ def register_voice_routes(app, api_auth, config_manager=None):
         if fmt_override:
             voice_cfg["format"] = fmt_override.strip().lower()
 
+        # fast=true → force the always-hot edge_tts backend so the preview answers
+        # within seconds even when the production clone chain (avatar_clone → hub
+        # → 7852) is cold or queued. ``requested_backend`` keeps the pre-swap
+        # backend name so the UI can still show what a real send would use.
+        fast = bool(body.get("fast"))
+        requested_backend = str(voice_cfg.get("backend") or "")
+        if fast:
+            voice_cfg["backend"] = "edge_tts"
+            voice_cfg.pop("voice_profile", None)
+            _fast_voice = str(voice_cfg.get("voice") or "")
+            if not _fast_voice or "Neural" not in _fast_voice:
+                # current voice is not an edge voice id → safe zh default
+                voice_cfg["voice"] = "zh-CN-XiaoxiaoNeural"
+
         # Redirect output to preview dir
         _TTS_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
         uid = uuid.uuid4().hex[:10]
@@ -156,22 +193,39 @@ def register_voice_routes(app, api_auth, config_manager=None):
         preview_path = _TTS_PREVIEW_DIR / f"ttspreview-{uid}.{suffix}"
         voice_cfg["out_dir"] = str(_TTS_PREVIEW_DIR)
 
+        _t0 = time.monotonic()
         try:
             from src.ai.tts_pipeline import TTSPipeline
             tts = TTSPipeline(voice_cfg)
             # Override out path so we control filename
             import asyncio as _aio
+            # total_budget_sec：链内各级（LLM 口语化/hub/本机克隆）按剩余预算收口，
+            # 在 45s 内要么出货要么带着具体失败级返回——外层 wait_for 只兜极端。
+            # （2026-07-28 复盘：旧链各级预算之和 ≫ 50s 外闸 → 被掐死时 TimeoutError
+            # str() 为空，日志只剩一行「TTS error: 」，无从排查。）
+            # fast mode gets a tighter budget: edge_tts is cheap and the whole
+            # point is answering before the frontend gives up waiting.
             result = await _aio.wait_for(
                 tts.synthesize(
-                    text, timeout_sec=45.0, emotion=voice_ctx.get("emotion")),
-                timeout=50.0,
+                    text, timeout_sec=(15.0 if fast else 45.0),
+                    emotion=voice_ctx.get("emotion"),
+                    total_budget_sec=(15.0 if fast else 45.0)),
+                timeout=(20.0 if fast else 50.0),
             )
         except Exception as ex:
-            logger.error("[voice/tts-test] TTS error: %s", ex)
-            return {"ok": False, "error": str(ex)[:200]}
+            _exs = f"{type(ex).__name__}: {ex}".rstrip(": ")
+            logger.error(
+                "[voice/tts-test] TTS error (persona=%s text_len=%d elapsed=%.1fs): %s",
+                voice_ctx.get("persona_id") or persona_id or "-", len(text),
+                time.monotonic() - _t0, _exs)
+            return {"ok": False, "error": _exs[:200], "fast": fast}
 
         if not result.ok:
-            return {"ok": False, "error": result.error}
+            logger.warning(
+                "[voice/tts-test] synth not ok (persona=%s provider=%s elapsed=%.1fs): %s",
+                voice_ctx.get("persona_id") or persona_id or "-",
+                result.provider, time.monotonic() - _t0, result.error)
+            return {"ok": False, "error": result.error, "fast": fast}
 
         # Rename to our deterministic preview path
         try:
@@ -195,6 +249,8 @@ def register_voice_routes(app, api_auth, config_manager=None):
             "provider": result.provider,
             "voice": result.voice,
             "format": result.format,
+            "fast": fast,
+            "requested_backend": requested_backend,
             "bytes": preview_path.stat().st_size if preview_path.is_file() else 0,
             "voice_meta": {
                 "persona_id": voice_ctx.get("persona_id") or "",
@@ -208,6 +264,145 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 "fallback_from": (result.extra or {}).get("fallback_from", ""),
             },
         }
+
+    @app.post("/api/voice/tts-test")
+    async def api_voice_tts_test(request: Request, _=Depends(api_auth)):
+        """Generate a TTS audio preview (sync by default; background job opt-in).
+
+        Request body (JSON):
+            text        — text to synthesise (required)
+            persona_id  — persona ID for voice config lookup (optional)
+            format      — output format override: mp3|ogg (optional)
+            background  — true → validate + quota-check now, run the synthesis
+                          in a background job and return {ok, job_id} at once;
+                          poll GET /api/voice/tts-test-jobs/{job_id} (optional)
+        """
+        try:
+            body: Dict[str, Any] = await request.json()
+        except Exception:
+            raise HTTPException(400, "invalid JSON body")
+
+        text = str(body.get("text") or "").strip()
+        if not text:
+            raise HTTPException(400, "text is required")
+        if len(text) > 400:
+            raise HTTPException(400, "text too long (max 400 chars)")
+
+        # P0-4/C3：字符额度用尽且 licensing.enforce 开 → 402 + i18n（试听同样耗额度）
+        # 后台模式下配额检查同样在**提交时**同步执行（提交即检查，任务里不再重复）。
+        from src.licensing.quota_store import check_license_quota
+        if not check_license_quota()["allowed"]:
+            raise HTTPException(402, tr(request, "err.lic.chars_exhausted"))
+
+        # 提交路径顺手清理过期 job（与轮询路径同口径；纯内存操作，不影响响应）
+        _cleanup_tts_jobs()
+
+        if bool(body.get("background")):
+            running = sum(1 for e in _TTS_JOBS.values()
+                          if e.get("status") == "running")
+            if running >= _TTS_JOB_MAX_RUNNING:
+                return {"ok": False, "error": "busy"}
+
+            job_id = uuid.uuid4().hex
+            entry: Dict[str, Any] = {"status": "running", "result": None,
+                                     "error": None, "ts": time.time()}
+            _TTS_JOBS[job_id] = entry
+
+            async def _job_runner() -> None:
+                # 任务内部整体兜住：后台没有外层错误处理，任何异常都写进 job 条目
+                try:
+                    rv = await _run_tts_preview(body, text)
+                except Exception as ex:  # noqa: BLE001
+                    entry["status"] = "error"
+                    entry["error"] = (f"{type(ex).__name__}: {ex}".rstrip(": "))[:200]
+                    return
+                if rv.get("ok"):
+                    entry["status"] = "done"
+                    entry["result"] = rv
+                else:
+                    # 失败文案与同步路径完全一致（rv 的 error 字段原样透出）
+                    entry["status"] = "error"
+                    entry["error"] = str(rv.get("error") or "")
+
+            # create_task 对任务仅弱引用 → Task 存进条目防 GC（任务亦持 entry 引用）
+            entry["task"] = asyncio.create_task(
+                _job_runner(), name=f"tts-preview-job-{job_id}")
+            return {"ok": True, "job_id": job_id}
+
+        return await _run_tts_preview(body, text)
+
+    @app.get("/api/voice/tts-test-jobs/{job_id}")
+    async def api_voice_tts_test_job(job_id: str, request: Request,
+                                     _=Depends(api_auth)):
+        """Poll a background TTS preview job (see POST /api/voice/tts-test).
+
+        running → {ok, status: "running", age_sec}
+        done    → {ok, status: "done", result: <same dict as the sync success>}
+        error   → {ok, status: "error", error: <same text as the sync failure>}
+        unknown or expired job_id → {ok: false, error: "not_found"}
+        """
+        _cleanup_tts_jobs()
+        entry = _TTS_JOBS.get(job_id)
+        if entry is None:
+            return {"ok": False, "error": "not_found"}
+        status = str(entry.get("status") or "")
+        if status == "running":
+            age = max(0.0, time.time() - float(entry.get("ts") or 0.0))
+            return {"ok": True, "status": "running", "age_sec": round(age, 1)}
+        if status == "done":
+            return {"ok": True, "status": "done", "result": entry.get("result")}
+        return {"ok": True, "status": "error",
+                "error": str(entry.get("error") or "")}
+
+    @app.get("/api/voice/effective-config")
+    async def api_voice_effective_config(request: Request, platform: str = "telegram",
+                                         persona_id: str = "", _=Depends(api_auth)):
+        """Read-only effective voice config snapshot (channel-center preview panel).
+
+        Resolves the same voice context as a real send (persona layers merged)
+        and reports the backend/voice that would actually be used, plus the raw
+        per-channel backend straight from config. Never raises: any resolver
+        error returns ``{ok: false}`` so the frontend can silently hide the panel.
+        """
+        try:
+            raw_cfg: Dict[str, Any] = {}
+            if config_manager and hasattr(config_manager, "config"):
+                raw_cfg = config_manager.config or {}
+
+            from src.ai.persona_voice import resolve_effective_voice_context
+            ctx = resolve_effective_voice_context(
+                raw_cfg, persona_id=persona_id or None, platform=platform, text="")
+            voice_cfg = ctx.get("voice_cfg") or {}
+
+            # Raw per-channel backend (config as-written, before persona layering).
+            _chan_path = {
+                "telegram": ("telegram", "voice_reply"),
+                "whatsapp": ("whatsapp_rpa", "voice_output"),
+                "messenger": ("messenger_rpa", "voice_output"),
+                "line": ("line_rpa", "voice_output"),
+            }.get(str(platform or "").strip().lower())
+            channel_backend = ""
+            if _chan_path:
+                _sect = raw_cfg.get(_chan_path[0])
+                _sub = _sect.get(_chan_path[1]) if isinstance(_sect, dict) else None
+                if isinstance(_sub, dict):
+                    channel_backend = str(_sub.get("backend") or "")
+
+            # basename only — never leak server directory layout to the UI
+            vp = voice_cfg.get("voice_profile")
+            ref = str(vp.get("reference_audio_path") or "").strip() if isinstance(vp, dict) else ""
+            return {
+                "ok": True,
+                "platform": platform,
+                "persona_id": ctx.get("persona_id") or "",
+                "persona_source": ctx.get("persona_source") or "",
+                "backend": str(voice_cfg.get("backend") or ""),
+                "voice": str(voice_cfg.get("voice") or ""),
+                "channel_backend": channel_backend,
+                "reference_audio": os.path.basename(ref) if ref else "",
+            }
+        except Exception as ex:  # noqa: BLE001
+            return {"ok": False, "error": str(ex)[:200]}
 
     @app.get("/api/voice/profiles")
     async def api_voice_profiles(request: Request, _=Depends(api_auth)):

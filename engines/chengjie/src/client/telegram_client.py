@@ -13,6 +13,7 @@ from html import escape as _html_escape
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 
+from src.client import daily_stats
 from src.inbox.store import (
     TELEGRAM_SERVICE_CHAT_KEYS as _STORE_SERVICE_CHAT_KEYS,
 )
@@ -51,6 +52,10 @@ try:
         PhoneCodeExpired, FloodWait, Unauthorized
     )
     PYROGRAM_AVAILABLE = True
+    # 2.0.106 冻结版兼容：channel id 边界放宽（超 int32 群 id，见 pyrogram_compat）。
+    # A 线所有 client 从本模块出生 → import 时打补丁即全覆盖。
+    from src.client.pyrogram_compat import ensure_wide_channel_ids
+    ensure_wide_channel_ids()
 except ImportError:
     PYROGRAM_AVAILABLE = False
     ParseMode = None  # type: ignore
@@ -153,6 +158,24 @@ def _has_ingestable_media(message: Any) -> bool:
     )
 
 
+def _username_blocked(no_reply_usernames: Any, username: Any) -> bool:
+    """「不自动回复发送者」（telegram.no_reply_sender_usernames，渠道中心「屏蔽名单」）命中判定。
+
+    单一实现供私聊/群聊实时 handler 与轮询兜底共用，防三处各写一份再漂移。
+    语义与群路径历史内联实现完全一致：
+
+    - 名单项：strip 空白 + lower + 去前导 ``@``（UI 里 ``@name`` 与 ``name`` 等价）；
+    - 待判 username：strip + lower（Telegram API 给的 username 本身不带 ``@``，不剥）；
+    - username 为空/None 恒不命中（没有 username 的用户无从按名单匹配）。
+    """
+    if not no_reply_usernames:
+        return False
+    uname = (username or "").strip().lower()
+    if not uname:
+        return False
+    return uname in [u.strip().lower().lstrip("@") for u in no_reply_usernames]
+
+
 class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
     """Telegram MTProto客户端"""
 
@@ -211,6 +234,13 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
         telegram_config = config.get_telegram_config()
         self.api_id = _ov.get('api_id') or telegram_config.get('api_id')
         self.api_hash = _ov.get('api_hash') or telegram_config.get('api_hash')
+        # 每账号隔离字段（由 companion worker 现场解析后经 account_cfg 注入）：
+        # 设备指纹本体 + 中央池按付费档下发的独立出口。都缺省为空＝行为不变。
+        self._device_fp: Dict[str, Any] = {
+            k: v for k, v in (_ov or {}).items()
+            if k in ("device_model", "system_version", "app_version") and v
+        }
+        self._account_proxy: Dict[str, Any] = dict(_ov.get('proxy') or {})
         self.phone_number = _ov.get('phone_number') or telegram_config.get('phone_number')
         self.session_name = (
             _ov.get('session_name') or telegram_config.get('session_name', 'camille_bot')
@@ -405,12 +435,31 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 _client_kwargs["session_string"] = self.session_string
             # N 线 核心2：注入每号独立代理（复用 B 线 proxy_pool + _to_pyrogram_proxy）
             _proxy = self._resolve_proxy()
+            if not _proxy:
+                # 中央池按付费档下发的独立出口（account_cfg 直接给的 pyrogram 形状）
+                _acct_proxy = getattr(self, "_account_proxy", None) or {}
+                if isinstance(_acct_proxy, dict) and _acct_proxy:
+                    _proxy = _acct_proxy
             if _proxy:
                 _client_kwargs["proxy"] = _proxy
                 self.logger.info(
                     "Telegram 客户端绑定代理 proxy_id=%s (%s)",
-                    self.proxy_id, _proxy.get("hostname"),
+                    self.proxy_id or "pool", _proxy.get("hostname"),
                 )
+            # 每账号设备指纹：一批号若 device_model/system_version/app_version 全是
+            # pyrogram 默认值，即便各自换了凭据和 IP 也会被判成「同一套软件跑出来的」。
+            # 关键是**与该号扫码那一刻报给 Telegram 的必须一致**——每次重连换设备
+            # 本身就是可疑信号，所以这里读的是该号落库的指纹本体。
+            # getattr 兜底：这两个字段是可选 overlay，而 initialize() 也会被
+            # `__new__` 造出的最小对象调用（测试里就是），缺了就是「没配」。
+            _fp: Dict[str, Any] = getattr(self, "_device_fp", None) or {}
+            for _fk in ("device_model", "system_version", "app_version"):
+                _fv = _fp.get(_fk)
+                if _fv:
+                    _client_kwargs[_fk] = str(_fv)
+            if _fp:
+                self.logger.info("Telegram 客户端设备指纹 account=%s device=%s",
+                                 getattr(self, "account_id", "?"), _fp.get("device_model"))
             self.client = Client(**_client_kwargs)
 
             self.logger.info("Telegram客户端创建成功")
@@ -747,6 +796,18 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                         if _m:
                             _m.record_dedup_blocked()
                         return
+                    # 屏蔽名单（渠道中心「不自动回复发送者」）：与群路径同口径、
+                    # 每消息动态读 config（渠道中心保存后热生效）。刻意放在去重
+                    # claim 之后——先占住 mid，共用同一去重表的轮询兜底才不会把
+                    # 已屏蔽的这条消息当「新进站」再捞回来处理。
+                    no_reply = self.config.get('telegram', {}).get('no_reply_sender_usernames') or []
+                    _from_user = getattr(message, 'from_user', None)
+                    if no_reply and _from_user:
+                        _uname = (getattr(_from_user, 'username', None) or '').strip().lower()
+                        if _username_blocked(no_reply, _uname):
+                            self.logger.debug(
+                                "[私聊] 跳过: 配置的不回复发送者 username=%s", _uname)
+                            return
                     if _has_ingestable_media(message):
                         await self._process_message(message)
                     else:
@@ -855,8 +916,8 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     return
                 no_reply = self.config.get('telegram', {}).get('no_reply_sender_usernames') or []
                 if no_reply and from_user:
-                    uname = (getattr(from_user, 'username') or '').strip().lower()
-                    if uname and uname in [u.strip().lower().lstrip('@') for u in no_reply]:
+                    uname = (getattr(from_user, 'username', None) or '').strip().lower()
+                    if _username_blocked(no_reply, uname):
                         self.logger.info("[群消息] 跳过: 配置的不回复发送者 username=%s", uname)
                         return
                 # 📊 强制记录所有群组消息（监控完整性）- 新增
@@ -864,6 +925,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 chat_title = message.chat.title if message.chat.title else "Unknown"
                 username = from_user.username if from_user else "unknown"
                 self.logger.info(f"[群组监控] 收到消息 [{chat_title}/{username}]: {text[:100]}...")
+                daily_stats.bump("messages")
 
                 # 检查是否需要回复（使用异步方法）
                 if not await self._should_reply_to_group_message(message):
@@ -1396,6 +1458,15 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     continue
                 if getattr(from_user, "is_bot", False):
                     continue
+                # 屏蔽名单：与实时私聊/群路径同一助手。实时推送通道失效时本循环是
+                # 私聊唯一入口，不在此处同判则名单在降级模式下形同虚设。
+                # （tg_cfg 每轮现读，热生效口径与 mirror_outgoing 一致。）
+                _no_reply = (tg_cfg.get("no_reply_sender_usernames") or []) if isinstance(tg_cfg, dict) else []
+                if _username_blocked(_no_reply, getattr(from_user, "username", None)):
+                    self.logger.debug(
+                        "[轮询兜底] 跳过: 配置的不回复发送者 username=%s",
+                        getattr(from_user, "username", None))
+                    continue
                 if not _has_ingestable_media(msg):
                     continue
                 mdate = getattr(msg, "date", None)
@@ -1664,6 +1735,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 if self.voice_transcriber:
                     try:
                         self.logger.info(f"收到语音消息 [{chat_title}/{username}]，开始转录...")
+                        daily_stats.bump("voice_in")
 
                         # 1. 下载语音文件
                         voice_file = await self._download_voice_file(message)
@@ -1742,6 +1814,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                         text = "[语音消息 - 处理异常]"
                 else:
                     self.logger.info(f"收到语音消息 [{chat_title}/{username}]（语音识别未启用或依赖未安装）")
+                    daily_stats.bump("voice_in")
                     text = "[语音消息 - 识别功能未启用]"
 
             # 有说明文字但带图时：Vision 为主、OCR 兜底，把图内容给 AI
@@ -1861,6 +1934,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
 
             if text:
                 self.logger.info(f"收到消息 [{chat_title}/{username}]: {self._log_safe_text(text)}")
+                daily_stats.bump("messages")
                 m = _metrics()
                 if m:
                     m.record_message_received()
@@ -2301,6 +2375,47 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     text=ai_text)
             except Exception:
                 pass
+            # ── 收件箱自动化档位闸（companion 镜像开时生效）────────────────
+            # UI「手动 / AI草稿我审 / 多选」只写 conversation_settings；此前 A 线
+            # 完全不读 → 坐席切档后仍全自动互聊。仅 auto_ai 才直发；其余档位
+            # 已镜像进收件箱，交 System Z 拟稿人审（或静音）。store 未就绪 fail-open。
+            if getattr(self, "_mirror_inbox", False):
+                try:
+                    from src.integrations.protocol_bridge import get_inbox_store
+                    from src.inbox.normalizer import conv_id as _conv_id
+                    from src.inbox.automation_mode import (
+                        allows_direct_autosend,
+                        resolve_automation_mode,
+                    )
+                    _ibx = get_inbox_store()
+                    if _ibx is not None:
+                        _cid = _conv_id(
+                            "telegram",
+                            str(getattr(self, "account_id", "default") or "default"),
+                            str(chat_id),
+                        )
+                        _cfg_root = (
+                            self.config.config
+                            if hasattr(self.config, "config") else {}
+                        )
+                        _mode = resolve_automation_mode(_ibx, _cid, _cfg_root)
+                        if not allows_direct_autosend(_mode):
+                            self.logger.info(
+                                "[automation] A线让位 mode=%s chat=%s account=%s"
+                                "（收件箱档位非全自动）",
+                                _mode, chat_id,
+                                getattr(self, "account_id", "default"),
+                            )
+                            try:
+                                from src.client.gate_stats import bump as _gate_bump
+                                _gate_bump("automation_mode")
+                            except Exception:
+                                pass
+                            return
+                except Exception:
+                    self.logger.debug(
+                        "[automation] 档位闸检查失败（放行）", exc_info=True)
+
             # ── 回复逻辑闸门（UI「回复逻辑」页：冷却 + 最大连续回复；每条消息重读
             # config → 保存即生效）。私聊/群/轮询兜底三条入站路径都汇到本函数，
             # 闸门对三者统一生效。放在 process_message 之前 → 被拦时不白跑 LLM。──

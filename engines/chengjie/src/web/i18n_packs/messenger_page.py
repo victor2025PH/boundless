@@ -965,6 +965,10 @@ ZH = {
     "msg_s467": "💳 信用积分",
     "msg_s468": "📄 原始配置（高级）",
     "msg_s469": "截图加载中",
+    "msg_reply_mode_note": "设备链自动化档位（auto=自动回复 / approve=生成后人审 / off=只收不回），独立于聊天坐席的会话档位与 AI 值守总闸——单个客户的档位请到",
+    "msg_reply_mode_note_link": "聊天坐席",
+    "msg_reply_mode_note_tail": "调整",
+    "msg_reply_mode_cap": "已被收件箱封顶为 {mode}：即使这里选 auto，自动拟稿也按 {mode} 执行",
 }
 
 EN = {
@@ -1931,4 +1935,8 @@ EN = {
     "msg_s467": "💳 Credit score",
     "msg_s468": "📄 Raw config (advanced)",
     "msg_s469": "Loading screenshot",
+    "msg_reply_mode_note": "Device-chain automation mode (auto = send replies automatically / approve = human review before sending / off = receive only). It is independent of each conversation's mode in the agent inbox and of the AI autopilot master switch — to adjust a single customer's mode, go to the ",
+    "msg_reply_mode_note_link": "agent workspace",
+    "msg_reply_mode_note_tail": ".",
+    "msg_reply_mode_cap": "Capped by the inbox at {mode}: even if you choose auto here, auto-drafting still runs as {mode}.",
 }

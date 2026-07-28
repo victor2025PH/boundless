@@ -282,6 +282,14 @@ ZH = {
     "wa_s156": "回复成功",
     "wa_s157": "总巡检次",
     "wa_s158": "天",
+    "wa_s159": "随机发送概率",
+    "wa_s160": "暂停 15 分钟",
+    "wa_s161": "暂停 1 小时",
+    "wa_s162": "暂停 4 小时",
+    "wa_reply_mode_note": "设备链自动化档位（auto=自动回复 / approve=生成后人审 / off=只收不回），独立于聊天坐席的会话档位与 AI 值守总闸——单个客户的档位请到",
+    "wa_reply_mode_note_link": "聊天坐席",
+    "wa_reply_mode_note_tail": "调整",
+    "wa_reply_mode_cap": "已被收件箱封顶为 {mode}：即使这里选 auto，自动拟稿也按 {mode} 执行",
 }
 
 EN = {
@@ -565,4 +573,12 @@ EN = {
     "wa_s156": "Replies sent",
     "wa_s157": "Total scans",
     "wa_s158": "days",
+    "wa_s159": "Random send probability",
+    "wa_s160": "Pause 15 min",
+    "wa_s161": "Pause 1 hour",
+    "wa_s162": "Pause 4 hours",
+    "wa_reply_mode_note": "Device-chain automation mode (auto = send replies automatically / approve = human review before sending / off = receive only). It is independent of each conversation's mode in the agent inbox and of the AI autopilot master switch — to adjust a single customer's mode, go to the ",
+    "wa_reply_mode_note_link": "agent workspace",
+    "wa_reply_mode_note_tail": ".",
+    "wa_reply_mode_cap": "Capped by the inbox at {mode}: even if you choose auto here, auto-drafting still runs as {mode}.",
 }

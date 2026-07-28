@@ -539,6 +539,10 @@ def register_line_rpa_routes(app, *, page_auth, api_auth, templates, config_mana
             "approve_stale_check", "approve_pending_ttl_hours",
             "alert_thresholds", "auto_accept",
             "vision_scan",
+            # 语音审核试听：runner._maybe_generate_tts_for_pending 消费 enabled，
+            # 整段经 shared.tts_preview.generate_approval_tts → get_tts_pipeline
+            # 消费 backend/voice（tts_pipeline.py __init__）
+            "voice_output",
         }
         bad = [k for k in body.keys() if k not in ALLOWED]
         if bad:
@@ -555,10 +559,21 @@ def register_line_rpa_routes(app, *, page_auth, api_auth, templates, config_mana
             else:
                 lr[k] = v
         cfg["line_rpa"] = lr
+        # 最小 patch＝本次 body 命中白名单、真正落进配置的键（dict 值为浅合并
+        # 后的最终值）；优先经 save_overlay_patch 落 config.local.yaml overlay
+        # （保住主 config.yaml 注释/结构）。兜底：方法缺失（简化 fake）或返回
+        # 非 bool（MagicMock 桩）→ 回落整文件 save()。
+        patch = {"line_rpa": {k: lr[k] for k in body.keys()}}
         try:
-            config_manager.save()
+            _sop = getattr(config_manager, "save_overlay_patch", None)
+            ok = _sop(patch) if callable(_sop) else None
+            if not isinstance(ok, bool):
+                ok = config_manager.save()
         except Exception as e:
             raise HTTPException(500, tr(request, "err.set.save_config_failed", err=e))
+        if ok is False:
+            raise HTTPException(500, tr(
+                request, "err.set.save_config_failed", err="overlay write failed"))
         # 热更新 service
         svc = _get_service(request)
         if svc is not None:
@@ -566,6 +581,14 @@ def register_line_rpa_routes(app, *, page_auth, api_auth, templates, config_mana
                 svc.reconfigure(lr)
             except Exception:
                 logger.debug("service.reconfigure 失败", exc_info=True)
+        # voice_output 变更 → 重建共享 TTS 单例（get_tts_pipeline 首建方 cfg 生效；
+        # 与 messenger_rpa_routes 媒体保存同款模式，否则改 backend/voice 要等重启）
+        if "voice_output" in body:
+            try:
+                from src.ai.tts_pipeline import reset_tts_pipeline
+                reset_tts_pipeline()
+            except Exception:
+                logger.debug("reset_tts_pipeline 失败", exc_info=True)
         if audit_store:
             actor = request.session.get("username", "web_admin")
             audit_store.log(actor, "line_rpa_config_update",

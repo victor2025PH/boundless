@@ -12,15 +12,69 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+import time
+from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, Request
 from fastapi.responses import HTMLResponse
 from starlette.responses import RedirectResponse
 
+from src.integrations.platform_session_health import UNHEALTHY_STATUSES
 from src.web.routes.unified_inbox_auth import _is_supervisor
 
 logger = logging.getLogger(__name__)
+
+
+# ── 渠道中心壳层「网页会话健康条」（P0）──────────────────────────────────────
+# messenger-web / whatsapp-baileys 两类 Node worker 会把会话状态 push 进
+# platform_session_health 登记表（telegram/line 无外部 worker，不在其中）。
+# 本函数把 dump() 快照过滤/整形成单一平台的会话行，供
+# GET /api/workspace/channel-sessions 出数——模块级纯函数，便于独立测试。
+def summarize_channel_sessions(
+    dump: Dict[str, Any], platform: str, *, now: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """把 ``PlatformSessionHealth.dump()`` 整形成指定平台的会话列表。
+
+    输出行 ``{key, account_id, login_id, status, unhealthy, age_sec}``：
+    - ``age_sec``：不健康会话＝掉线时长（``unhealthy_since`` 起算，缺则退回
+      最近上报时刻 ``ts``）；健康会话＝距最近一次状态上报的秒数；
+    - 登记表键形如 ``platform:account_id``（account_id 可含冒号，按首个冒号切）；
+    - 脏条目（值非 dict / 键无冒号 / 时间戳非数值）一律跳过，绝不抛。
+    """
+    ts_now = time.time() if now is None else float(now)
+    plat = str(platform or "").strip().lower()
+    rows: List[Dict[str, Any]] = []
+    sessions = (dump or {}).get("sessions")
+    if not plat or not isinstance(sessions, dict):
+        return rows
+    for key in sorted(sessions):
+        sess = sessions.get(key)
+        if not isinstance(sess, dict):
+            continue
+        k = str(key)
+        k_plat, _, k_acct = k.partition(":")
+        if k_plat != plat or not k_acct:
+            continue
+        status = str(sess.get("status") or "unknown")
+        unhealthy = status in UNHEALTHY_STATUSES
+        try:
+            if unhealthy:
+                since = (float(sess.get("unhealthy_since") or 0.0)
+                         or float(sess.get("ts") or 0.0))
+            else:
+                since = float(sess.get("ts") or 0.0)
+        except (TypeError, ValueError):
+            since = 0.0
+        age_sec = int(max(0.0, ts_now - since)) if since > 0 else 0
+        rows.append({
+            "key": k,
+            "account_id": k_acct,
+            "login_id": str(sess.get("login_id") or ""),
+            "status": status,
+            "unhealthy": unhealthy,
+            "age_sec": age_sec,
+        })
+    return rows
 
 
 def register_workspace_pages_routes(
@@ -156,6 +210,38 @@ def register_workspace_pages_routes(
         ctx = _page_ctx(request)
         ctx["channel"] = channel
         return templates.TemplateResponse(request, "workspace_channels.html", ctx)
+
+    @app.get("/api/workspace/channel-sessions")
+    async def api_workspace_channel_sessions(
+        request: Request, platform: str = "", _=Depends(page_auth),
+    ):
+        """渠道中心壳层「网页会话健康条」数据源（P0）。
+
+        读 platform_session_health 登记表（messenger-web / whatsapp-baileys 两类
+        Node worker push 的会话状态），按 ``platform`` 过滤整形；telegram/line 无
+        外部 worker → 恒空列表（前端据此隐藏健康条）。``relogin_supported`` 标记
+        该平台是否支持既有 ``POST /api/admin/platform-sessions/relogin`` 一键重登
+        （当前仅 messenger；whatsapp 走坐席账号面板重新扫码）。
+
+        观测旁路：任何异常回 ``{ok:false}``，绝不 500；响应为纯数据字段
+        （无人话文案，措辞由前端 i18n 渲染）。
+        """
+        plat = str(platform or "").strip().lower()
+        try:
+            from src.integrations.platform_session_health import (
+                get_platform_session_health,
+            )
+            snap = get_platform_session_health().dump()
+            return {
+                "ok": True,
+                "platform": plat,
+                "sessions": summarize_channel_sessions(snap, plat),
+                "relogin_supported": plat == "messenger",
+            }
+        except Exception:
+            logger.debug("channel-sessions 快照读取失败（已忽略）", exc_info=True)
+            return {"ok": False, "platform": plat, "sessions": [],
+                    "relogin_supported": False}
 
     @app.get("/workspace/kb-start", response_class=HTMLResponse)
     async def workspace_kb_start_page(request: Request, _=Depends(page_auth)):

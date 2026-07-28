@@ -350,6 +350,7 @@ _BASELINE = """
 /api/persona/global-rules/restore/{slot}	POST
 /api/persona/legacy-bindings	GET
 /api/persona/legacy-bindings/cleanup	POST
+/api/persona/legacy-bindings/cleanup-all	POST
 /api/persona/preview-prompt	GET
 /api/persona/unbind	POST
 /api/persona/update-default	POST
@@ -360,6 +361,10 @@ _BASELINE = """
 /api/ops/canary	POST
 /api/ops/canary	DELETE
 /api/personas/bulk-bind	POST
+/api/personas/import-doc/status	GET
+/api/personas/import-doc/parse	POST
+/api/personas/import-doc/extract	POST
+/api/personas/import-doc/jobs/{job_id}	GET
 /api/personas/list	GET
 /api/personas/mrpa-account/{account_id}/assign-profile	POST
 /api/personas/profiles	GET
@@ -505,6 +510,7 @@ _BASELINE = """
 /api/unified-inbox/send-caps	GET
 /api/workspace/quota	GET
 /api/desktop/ping	GET
+/api/group-show/attendance/invite	POST
 /api/desktop/smart-reply	POST
 /api/desktop/guard-check	POST
 /api/desktop/ingest	POST
@@ -537,6 +543,7 @@ _BASELINE = """
 /api/unified-inbox/analyze	POST
 /api/unified-inbox/automation	GET
 /api/unified-inbox/automation	POST
+/api/unified-inbox/automation/bulk-downgrade	POST
 /api/unified-inbox/automation-stats	GET
 /api/unified-inbox/chats	GET
 /api/unified-inbox/history	GET
@@ -726,6 +733,7 @@ _BASELINE = """
 /api/users/at-risk	GET
 /api/vision-stats	GET
 /api/voice/cloned	GET
+/api/voice/effective-config	GET
 /api/voice/enroll	POST
 /api/voice/persona-audit	GET
 /api/voice/profiles	GET
@@ -737,6 +745,8 @@ _BASELINE = """
 /api/voice/tts-file/{filename}	GET
 /api/voice/tts-test	POST
 /api/voice/tts-test/{filename}	GET
+/api/voice/tts-test-jobs/{job_id}	GET
+/api/workspace/channel-sessions	GET
 /api/webhook-settings	GET
 /api/webhook-settings	PUT
 /api/webhook-test	POST
@@ -1011,12 +1021,20 @@ _ADDITIONS_2026_07_27_TRIAL_CLAIM = """
 """
 _BASELINE += _ADDITIONS_2026_07_27_TRIAL_CLAIM
 
+# 2026-07-28 首启漏斗埋点（license_routes.py）：向导曝光/领取/跳过事件经本地后端
+# 转发官网 /api/track（事件白名单在 trial_claim_client.FUNNEL_EVENTS 收口）。
+_ADDITIONS_2026_07_28_TRIAL_FUNNEL = """
+/api/admin/license/trial-funnel	POST
+"""
+_BASELINE += _ADDITIONS_2026_07_28_TRIAL_FUNNEL
+
 # 2026-07-27 营销目标（goal_routes.py）：会话级「工作目标」（付费转化/关系推进/沉默唤回…）
 # CRUD + settle-on-read 视图。右栏卡/看板/prompt 注入三个消费面读同一份结算口径
 # （service.refresh_goal）；companion.goals.enabled 关闭时全端点 403。
 _ADDITIONS_2026_07_27_GOALS = """
 /api/goals	GET,POST
 /api/goals/templates	GET
+/api/goals/agenda	GET
 /api/goals/for-conversation	GET
 /api/goals/{goal_id}	GET
 /api/goals/{goal_id}/update	POST
@@ -1031,6 +1049,66 @@ _ADDITIONS_2026_07_27_GOALS_P2 = """
 /api/goals/{goal_id}/beat/feedback	POST
 """
 _BASELINE += _ADDITIONS_2026_07_27_GOALS_P2
+
+# 获客转化漏斗（同日 P1）：客户画像卡（双轨槽位 GET + 坐席手录 POST；
+# auto 采集只填空槽，agent 手录覆盖一切）。
+_ADDITIONS_2026_07_27_GOALS_PROFILE = """
+/api/goals/profile	GET,POST
+/api/goals/order-hook	POST
+"""
+_BASELINE += _ADDITIONS_2026_07_27_GOALS_PROFILE
+
+# P10：开闸就绪度（goals 关也 200——正是「为什么跑不起来」的答案）。
+_ADDITIONS_2026_07_27_GOALS_READINESS = """
+/api/goals/readiness	GET
+"""
+_BASELINE += _ADDITIONS_2026_07_27_GOALS_READINESS
+
+# 2026-07-27 人设上线前质检（E 线统一登记两家）：quiz=档案自动出题→真人设 prompt
+# 逐题实测→自动判分（persona_quiz_routes.py，任务经 persona_doc_import 注册表轮询）；
+# bio-doc=D2 线「人设传记文档」三端点（契约固定先行入册，路由实现由 D2 落地）。
+_ADDITIONS_2026_07_27_PERSONA_QUIZ_BIO = """
+/api/personas/quiz/status	GET
+/api/personas/{profile_id}/quiz	POST
+/api/personas/{profile_id}/quiz/jobs/{job_id}	GET
+/api/personas/{profile_id}/bio-doc	POST
+/api/personas/{profile_id}/bio-doc	GET
+/api/personas/{profile_id}/bio-doc	DELETE
+"""
+_BASELINE += _ADDITIONS_2026_07_27_PERSONA_QUIZ_BIO
+
+# 2026-07-27 H3：考题报告持久化历史 API
+_ADDITIONS_2026_07_27_PERSONA_QUIZ_REPORTS = """
+/api/personas/{profile_id}/quiz/reports	GET
+/api/personas/{profile_id}/quiz/reports/{report_id}	GET
+"""
+_BASELINE += _ADDITIONS_2026_07_27_PERSONA_QUIZ_REPORTS
+
+# 2026-07-28 人设质检续（I3 线统一登记两家）：quiz/trend=考题跨进程趋势（读 quiz.db，
+# flag 关也 200 供 ops 卡显隐判断）；bio-doc/search=I1 线「传记片段检索」（契约逐字固定
+# 先行入册，路由实现由 I1 落地）。
+_ADDITIONS_2026_07_28_PERSONA_QUIZ_TREND = """
+/api/personas/quiz/trend	GET
+/api/personas/{profile_id}/bio-doc/search	POST
+"""
+_BASELINE += _ADDITIONS_2026_07_28_PERSONA_QUIZ_TREND
+
+# 2026-07-28 P17 营销目标「今日工作清单」（goal_routes.py）：把看板的计数变成坐席能
+# 照着干的点名单（今天该推谁 / 谁还没人审 / 谁让路了）。只读端点（viewer 也能看），
+# 逐条走 GET /api/goals 同一条 settle-on-read 口径，不另开第二条结算路。
+# 反馈撤销（verdict=undo）与手动标成交的可选归因 meta 都挂在既有端点上，故只增一条。
+_ADDITIONS_2026_07_28_GOALS_AGENDA = """
+/api/goals/agenda	GET
+"""
+_BASELINE += _ADDITIONS_2026_07_28_GOALS_AGENDA
+
+# 2026-07-28 J1：长传记「补齐向量」运维口——句向量改入库期预计算后，早于该改动入库的
+# 传记库整表无句向量、检索静默退化成纯关键词；本端点给缺向量的块/句补嵌（后台任务，
+# 轮询复用既有 /api/personas/import-doc/jobs/{job_id}，故此处只增一条）。
+_ADDITIONS_2026_07_28_PERSONA_BIO_REEMBED = """
+/api/personas/{profile_id}/bio-doc/reembed	POST
+"""
+_BASELINE += _ADDITIONS_2026_07_28_PERSONA_BIO_REEMBED
 
 
 def _parse_baseline():

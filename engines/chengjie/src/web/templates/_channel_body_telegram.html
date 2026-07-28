@@ -16,6 +16,8 @@
 .tg-hero-sub{font-size:.78rem;color:var(--t3);margin-top:.15rem}
 .tg-online-dot{width:9px;height:9px;border-radius:50%;background:var(--green);flex-shrink:0;box-shadow:0 0 0 2px rgba(34,197,94,.25)}
 .tg-online-dot.offline{background:var(--t3);box-shadow:none}
+.tg-online-dot.connecting{background:var(--amber);box-shadow:0 0 0 2px var(--as)}
+.tg-online-dot.disconnected{background:var(--red);box-shadow:0 0 0 2px var(--rs)}
 .tg-stats{display:flex;gap:.7rem;flex-wrap:wrap;margin-left:auto}
 .tg-stat{display:flex;flex-direction:column;align-items:center;background:var(--input);border:1px solid var(--bd);border-radius:10px;padding:.45rem .9rem;min-width:64px}
 .tg-stat-n{font-size:1.25rem;font-weight:800;color:var(--p);line-height:1.1}
@@ -256,6 +258,7 @@ select.f-inp{cursor:pointer}
       </button>
     </div>
   </div>
+  <div style="flex-basis:100%;font-size:.68rem;color:var(--t3)">{{ (i18n or {}).get('tg_s203', "口径：今日日志统计") }}</div>
 </div>
 
 <!-- ══ TABS ═══════════════════════════════════════════════════════════════ -->
@@ -283,6 +286,7 @@ select.f-inp{cursor:pointer}
       <div>
         <div class="tg-card-title">{{ (i18n or {}).get('tg_s014', "接收范围") }}</div>
       </div>
+      <span class="badge b-g" style="margin-left:auto">⚡ {{ (i18n or {}).get('tg_s204', "保存后立即生效") }}</span>
     </div>
     <div style="display:flex;gap:2rem;flex-wrap:wrap">
       <label class="tg-toggle">
@@ -336,7 +340,7 @@ select.f-inp{cursor:pointer}
       <div><div class="tg-card-title">{{ (i18n or {}).get('tg_s025', "屏蔽名单") }}</div></div>
     </div>
     <div class="f-row">
-      <label class="f-lbl">{{ (i18n or {}).get('tg_s026', "不自动回复的用户名（每行一个，不含") }} @）</label>
+      <label class="f-lbl">{{ (i18n or {}).get('tg_s026', "不自动回复的用户名（每行一个，不含 @）· 适用于群聊与私聊") }}</label>
       <textarea class="f-inp" id="rl-no_reply_usernames" rows="4"
         placeholder="bot_name&#10;spam_user" style="resize:vertical;font-family:monospace;font-size:.82rem"
         oninput="markDirty('reply')"></textarea>
@@ -378,6 +382,7 @@ select.f-inp{cursor:pointer}
         <div class="tg-card-title">{{ (i18n or {}).get('tg_s034', "语音识别（接收用户语音）") }}</div>
         <div style="font-size:.75rem;color:var(--t3);margin-top:.1rem">{{ (i18n or {}).get('tg_s035', "将用户发来的语音消息转为文字，再由 AI 理解回复") }}</div>
       </div>
+      <span class="badge b-a">↻ {{ (i18n or {}).get('tg_s205', "改动需重启实例生效") }}</span>
       <label class="tg-toggle" style="margin-left:auto">
         <input type="checkbox" id="asr-enabled" onchange="markDirty('voice')">
         <span class="tg-sw"></span>
@@ -386,6 +391,11 @@ select.f-inp{cursor:pointer}
 
     <div class="sub-hd">{{ (i18n or {}).get('tg_s036', "识别引擎") }}</div>
     <div class="be-cards" id="asr-be-cards">
+      <div class="be-card" data-val="sensevoice" onclick="selectAsrProvider(this)">
+        <div class="be-card-icon">🀄</div>
+        <div class="be-card-name">{{ (i18n or {}).get('tg_s207', "本地 SenseVoice") }}</div>
+        <div class="be-card-desc">SenseVoice (FunASR)<br>{{ (i18n or {}).get('tg_s208', "方言/粤语主力 · 无需独立服务") }}</div>
+      </div>
       <div class="be-card" data-val="faster_whisper" onclick="selectAsrProvider(this)">
         <div class="be-card-icon">⚡</div>
         <div class="be-card-name">{{ (i18n or {}).get('tg_s037', "本地快速") }}</div>
@@ -401,8 +411,17 @@ select.f-inp{cursor:pointer}
         <div class="be-card-name">{{ (i18n or {}).get('tg_s041', "云端") }} API</div>
         <div class="be-card-desc">Groq / SiliconFlow<br>{{ (i18n or {}).get('tg_s042', "极速，需") }} API Key</div>
       </div>
+      <div class="be-card" data-val="avatar_whisper" onclick="selectAsrProvider(this)">
+        <div class="be-card-icon">🛰️</div>
+        <div class="be-card-name">{{ (i18n or {}).get('tg_s209', "集群 Whisper") }}</div>
+        <div class="be-card-desc">AvatarHub Whisper<br>{{ (i18n or {}).get('tg_s210', "局域网集群节点 · 需服务令牌") }}</div>
+      </div>
     </div>
     <input type="hidden" id="asr-provider" value="faster_whisper">
+    <!-- 识别级联链（只读）：voice_recognition.fallback 属 yaml 高级配置，
+         PUT voice-asr 白名单不含 fallback → 本页保存不影响；此行只保证级联不再隐身 -->
+    <div id="asr-cascade-line" style="display:none;font-size:.75rem;color:var(--t3);margin:.15rem 0 .4rem"
+      title="{{ (i18n or {}).get('tg_s211', '级联在 config 文件维护（voice_recognition.fallback），本页保存不影响级联') }}"></div>
 
     <div class="f-row">
       <label class="f-lbl">{{ (i18n or {}).get('tg_s043', "识别语言") }}</label>
@@ -473,6 +492,7 @@ select.f-inp{cursor:pointer}
         <div class="tg-card-title">{{ (i18n or {}).get('tg_s056', "语音回复（向用户发语音）") }}</div>
         <div style="font-size:.75rem;color:var(--t3);margin-top:.1rem">AI {{ (i18n or {}).get('tg_s057', "回复通过 TTS 合成语音后发送，替代纯文字") }}</div>
       </div>
+      <span class="badge b-g">⚡ {{ (i18n or {}).get('tg_s204', "保存后立即生效") }}</span>
       <label class="tg-toggle" style="margin-left:auto">
         <input type="checkbox" id="vr-enabled" onchange="markDirty('voice')">
         <span class="tg-sw"></span>
@@ -510,11 +530,12 @@ select.f-inp{cursor:pointer}
     </div>
 
     <div class="sub-hd" style="margin-top:1.1rem">TTS {{ (i18n or {}).get('tg_s067', "引擎") }}</div>
+    <div id="vr-effective-line" style="display:none;font-size:.75rem;color:var(--t3);margin-bottom:.55rem"></div>
     <div class="be-cards" id="vr-be-cards">
-      <div class="be-card" data-val="voice_clone_command" onclick="selectTtsBackend(this)">
-        <div class="be-card-icon">🤖</div>
-        <div class="be-card-name">{{ (i18n or {}).get('tg_s068', "克隆声音") }}</div>
-        <div class="be-card-desc">Qwen TTS<br>{{ (i18n or {}).get('tg_s069', "最自然，需参考音频") }}</div>
+      <div class="be-card" data-val="avatar_clone" onclick="selectTtsBackend(this)">
+        <div class="be-card-icon">🎙️</div>
+        <div class="be-card-name">{{ (i18n or {}).get('tg_s201', "AvatarHub 克隆") }}</div>
+        <div class="be-card-desc">CosyVoice3<br>{{ (i18n or {}).get('tg_s202', "本机克隆声 · 生产推荐") }}</div>
       </div>
       <div class="be-card" data-val="edge_tts" onclick="selectTtsBackend(this)">
         <div class="be-card-icon">🔵</div>
@@ -525,6 +546,11 @@ select.f-inp{cursor:pointer}
         <div class="be-card-icon">🟢</div>
         <div class="be-card-name">OpenAI TTS</div>
         <div class="be-card-desc">{{ (i18n or {}).get('tg_s073', "高质量音色") }}<br>{{ (i18n or {}).get('tg_s074', "需") }} API Key</div>
+      </div>
+      <div class="be-card" data-val="voice_clone_command" onclick="selectTtsBackend(this)">
+        <div class="be-card-icon">🤖</div>
+        <div class="be-card-name">{{ (i18n or {}).get('tg_s068', "克隆声音") }}</div>
+        <div class="be-card-desc">Qwen TTS<br>{{ (i18n or {}).get('tg_s069', "旧版命令行克隆（遗留）") }}</div>
       </div>
     </div>
     <input type="hidden" id="vr-backend" value="voice_clone_command">
@@ -544,17 +570,20 @@ select.f-inp{cursor:pointer}
         </div>
         <span class="f-hint" id="vr-ref-hint">WAV {{ (i18n or {}).get('tg_s079', "格式，") }}10–30 {{ (i18n or {}).get('tg_s080', "秒干净人声，用于声音克隆") }}</span>
       </div>
-      <div class="f-row">
-        <label class="f-lbl">{{ (i18n or {}).get('tg_s081', "声音配置文件路径（可选）") }}</label>
-        <input class="f-inp" type="text" id="vr-voice_profile_path"
-          placeholder="D:/workspace/telegram-mtproto-ai/voice_samples/qwen_my_voice.json"
-          onchange="markDirty('voice')">
-        <span class="f-hint">qwen_tts_wrapper.py {{ (i18n or {}).get('tg_s082', "生成的 JSON 文件") }}</span>
-      </div>
-      <div class="f-grid2">
+      <!-- 仅旧版命令行克隆（voice_clone_command）使用的字段；avatar_clone 只需参考音频 -->
+      <div id="vr-cmd-only-fields">
         <div class="f-row">
-          <label class="f-lbl">{{ (i18n or {}).get('tg_s083', "克隆命令超时（秒）") }}</label>
-          <input class="f-inp" type="number" id="vr-cmd_timeout" min="30" max="600" placeholder="120" onchange="markDirty('voice')">
+          <label class="f-lbl">{{ (i18n or {}).get('tg_s081', "声音配置文件路径（可选）") }}</label>
+          <input class="f-inp" type="text" id="vr-voice_profile_path"
+            placeholder="D:/workspace/telegram-mtproto-ai/voice_samples/qwen_my_voice.json"
+            onchange="markDirty('voice')">
+          <span class="f-hint">qwen_tts_wrapper.py {{ (i18n or {}).get('tg_s082', "生成的 JSON 文件") }}</span>
+        </div>
+        <div class="f-grid2">
+          <div class="f-row">
+            <label class="f-lbl">{{ (i18n or {}).get('tg_s083', "克隆命令超时（秒）") }}</label>
+            <input class="f-inp" type="number" id="vr-cmd_timeout" min="30" max="600" placeholder="120" onchange="markDirty('voice')">
+          </div>
         </div>
       </div>
     </div>
@@ -645,6 +674,9 @@ select.f-inp{cursor:pointer}
       <button class="btn-p" id="preview-btn" onclick="testTts()" style="flex-shrink:0">
         ▶ {{ (i18n or {}).get('wa_s116', "试听") }}
       </button>
+      <button class="btn-sec" id="preview-btn-fast" onclick="testTtsFast()" style="flex-shrink:0;white-space:nowrap">
+        ⚡ {{ (i18n or {}).get('tg_s206', "快速试听") }}
+      </button>
     </div>
     <div id="preview-result" style="font-size:.78rem;color:var(--t3);margin-top:.4rem"></div>
     <audio id="preview-audio" class="preview-audio" controls></audio>
@@ -723,6 +755,7 @@ select.f-inp{cursor:pointer}
       <div class="tg-stat" style="flex:1"><span class="tg-stat-n" id="acc-st-tts">—</span><span class="tg-stat-l">TTS {{ (i18n or {}).get('rpa_js_send', "发送") }}</span></div>
       <div class="tg-stat" style="flex:1"><span class="tg-stat-n" id="acc-st-gate">—</span><span class="tg-stat-l">{{ (i18n or {}).get('tg_gate_blocked', "今日拦截") }}</span></div>
     </div>
+    <div style="font-size:.72rem;color:var(--t3);margin-top:.45rem">{{ (i18n or {}).get('tg_s203', "口径：今日日志统计") }}</div>
     <div style="margin-top:.6rem">
       <div style="font-size:.72rem;color:var(--t3);margin-bottom:.25rem">{{ (i18n or {}).get('tg_gate_trend', "近 7 日拦截") }}</div>
       <div id="acc-gate-trend" style="display:flex;align-items:flex-end;gap:3px;height:34px"></div>
@@ -778,7 +811,8 @@ select.f-inp{cursor:pointer}
 let _cfg = {};
 let _dirty = {reply:false, voice:false};
 let _origSettings = null;
-
+let _origVrBackend = null;    // 保存防呆：加载时缓存的 TTS 后端
+let _origAsrProvider = null;  // 保存防呆：加载时缓存的 ASR 引擎
 /* ─── Dirty tracking ────────────────────────────────────────── */
 function markDirty(tab){
   _dirty[tab] = true;
@@ -804,7 +838,7 @@ function switchTab(name){
   } else {
     stopLogStream();
   }
-  if(name==='voice') loadHealth();
+  if(name==='voice'){ loadHealth(); loadEffectiveVoiceLine(); }
 }
 
 /* ─── Helpers ───────────────────────────────────────────────── */
@@ -834,11 +868,13 @@ function setRes(id,msg,cls=''){
 }
 
 /* 页内 JSON 包装（历史名 apiFetch 曾与全局 window.apiFetch 同名互踩致自递归，
-   迁移渠道中心时改名 tgApi；底层仍走全局 apiFetch 的超时/重试语义）。 */
-async function tgApi(url,method='GET',body=null){
+   迁移渠道中心时改名 tgApi；底层仍走全局 apiFetch 的超时/重试语义）。
+   opts 透传 window.apiFetch 第三参（{timeoutMs,retries,retryDelayMs}），
+   不传＝旧行为（默认 20s 超时）。 */
+async function tgApi(url,method='GET',body=null,opts){
   const opt={method,headers:{'Content-Type':'application/json'}};
   if(body) opt.body=JSON.stringify(body);
-  const r=await window.apiFetch(url,opt);
+  const r=await window.apiFetch(url,opt,opts);
   const d=await r.json();
   if(!r.ok) throw new Error(d.detail||window.T('ov_js_req_fail'));
   return d;
@@ -865,14 +901,91 @@ function selectAsrProvider(card){
   markDirty('voice');
 }
 
+/* 后端 → 配置字段显隐（参考音频为 avatar_clone / voice_clone_command 共用；
+   voice_profile_path / cmd_timeout 仅旧版命令行克隆使用） */
+function _syncTtsBackendFields(val){
+  show('vr-clone-fields', val==='voice_clone_command'||val==='avatar_clone');
+  show('vr-cmd-only-fields', val==='voice_clone_command');
+  show('vr-edge-fields', val==='edge_tts');
+  show('vr-oai-fields', val==='openai');
+}
+
 function selectTtsBackend(card){
   const val=card.dataset.val;
   _selectCard('vr-be-cards', val);
   setV('vr-backend', val);
-  show('vr-clone-fields', val==='voice_clone_command');
-  show('vr-edge-fields', val==='edge_tts');
-  show('vr-oai-fields', val==='openai');
+  _syncTtsBackendFields(val);
   markDirty('voice');
+}
+
+/* 配置里是卡片集合外的后端（如 minicpm_clone）→ 注入「当前配置」保护卡并选中，
+   防止加载后无选中态、用户随手点别的卡保存把生产后端改坏 */
+function _ensureBackendCard(backend){
+  const wrap=document.getElementById('vr-be-cards');
+  if(!wrap||!backend) return;
+  wrap.querySelectorAll('.be-card[data-dynamic="1"]').forEach(c=>{
+    if(c.dataset.val!==backend) c.remove();
+  });
+  let hit=null;
+  wrap.querySelectorAll('.be-card').forEach(c=>{ if(c.dataset.val===backend) hit=c; });
+  if(hit) return; // 静态卡或已注入的保护卡存在，选中态由 _selectCard 处理
+  const card=document.createElement('div');
+  card.className='be-card';
+  card.dataset.val=backend;
+  card.dataset.dynamic='1';
+  card.innerHTML='<div class="be-card-icon">⚙️</div><div class="be-card-name"></div><div class="be-card-desc"></div>';
+  card.querySelector('.be-card-name').textContent=window.T('tg_js_v06');
+  card.querySelector('.be-card-desc').textContent=backend;
+  card.addEventListener('click',()=>selectTtsBackend(card));
+  wrap.appendChild(card);
+  _selectCard('vr-be-cards', backend);
+}
+
+/* 配置里是卡片集合外的 ASR provider（工厂别名如 qwen3_asr / funasr /
+   sense_voice / avatarhub，或未知值）→ 注入「当前配置」保护卡并选中，
+   防加载后无选中态、用户随手点别的卡保存把生产识别链改坏（与 TTS 侧
+   _ensureBackendCard 同款语义） */
+function _ensureAsrCard(prov){
+  const wrap=document.getElementById('asr-be-cards');
+  if(!wrap||!prov) return;
+  wrap.querySelectorAll('.be-card[data-dynamic="1"]').forEach(c=>{
+    if(c.dataset.val!==prov) c.remove();
+  });
+  let hit=null;
+  wrap.querySelectorAll('.be-card').forEach(c=>{ if(c.dataset.val===prov) hit=c; });
+  if(hit) return; // 静态卡或已注入的保护卡存在，选中态由 _selectCard 处理
+  const card=document.createElement('div');
+  card.className='be-card';
+  card.dataset.val=prov;
+  card.dataset.dynamic='1';
+  card.innerHTML='<div class="be-card-icon">⚙️</div><div class="be-card-name"></div><div class="be-card-desc"></div>';
+  card.querySelector('.be-card-name').textContent=window.T('tg_js_v06');
+  card.querySelector('.be-card-desc').textContent=prov;
+  card.addEventListener('click',()=>selectAsrProvider(card));
+  wrap.appendChild(card);
+  _selectCard('asr-be-cards', prov);
+}
+
+/* ─── 识别级联链只读展示 ────────────────────────────────────────
+   voice_recognition.fallback（dict 或 dict 列表，工厂两种形态都认，见
+   src/voice_transcriber.py create_transcriber）→ 渲染
+   「识别级联：sensevoice → faster_whisper」；无级联配置整行隐藏。
+   纯展示：PUT voice-asr 白名单不含 fallback，本页保存不会动级联。 */
+function _asrLevelLabel(cfg){
+  const p=(cfg&&cfg.provider)||'?';
+  const u=(cfg&&(cfg.base_url||((cfg.openai||{}).base_url)))||'';
+  const m=/^https?:\/\/([^\/]+)/.exec(u);
+  return m?(p+'('+m[1]+')'):p;
+}
+function renderAsrCascade(asr){
+  const el=document.getElementById('asr-cascade-line');
+  if(!el) return;
+  const fb=(asr||{}).fallback;
+  const list=(Array.isArray(fb)?fb:(fb?[fb]:[])).filter(x=>x&&typeof x==='object');
+  if(!list.length){ el.style.display='none'; return; }
+  const chain=[_asrLevelLabel(asr)].concat(list.map(_asrLevelLabel)).join(' → ');
+  el.textContent='⛓️ '+window.T('tg_js_v18')+chain;
+  el.style.display='';
 }
 
 function selectTrigger(card){
@@ -929,9 +1042,9 @@ async function loadSettings(){
     const backend=vr.backend||'voice_clone_command';
     setV('vr-backend', backend);
     _selectCard('vr-be-cards', backend);
-    show('vr-clone-fields', backend==='voice_clone_command');
-    show('vr-edge-fields', backend==='edge_tts');
-    show('vr-oai-fields', backend==='openai');
+    _ensureBackendCard(backend);
+    _syncTtsBackendFields(backend);
+    _origVrBackend=backend;
 
     // voice_profile
     const vp=vr.voice_profile||{};
@@ -961,9 +1074,12 @@ async function loadSettings(){
     const prov=asr.provider||'faster_whisper';
     setV('asr-provider', prov);
     _selectCard('asr-be-cards', prov);
+    _ensureAsrCard(prov);
     show('asr-cloud-fields', prov==='openai');
     show('asr-local-fields', prov!=='openai');
+    _origAsrProvider=prov;
     setV('asr-language', asr.language||'auto');
+    renderAsrCascade(asr);
 
     const oai=asr.openai||{};
     const hasAsrKey=!!(oai.api_key && oai.api_key!=='***');
@@ -976,8 +1092,27 @@ async function loadSettings(){
     setV('asr-device', wh.device||'cpu');
 
     clearDirty('reply'); clearDirty('voice');
+    loadEffectiveVoiceLine();
   } catch(e){
     console.error('loadSettings failed', e);
+  }
+}
+
+/* ─── 当前生效链路行（人设声线 vs 本页配置）────────────────────
+   端点未部署（后端未重启）/请求失败 → 静默隐藏，不打扰页面 */
+async function loadEffectiveVoiceLine(){
+  const el=document.getElementById('vr-effective-line');
+  if(!el) return;
+  try{
+    const d=await tgApi('/api/voice/effective-config?platform=telegram');
+    if(!d || d.ok===false){ el.style.display='none'; return; }
+    const be=d.backend||d.channel_backend||'—';
+    el.textContent=d.persona_id
+      ? window.Tf('tg_js_v11', {pid: d.persona_id, be: be})
+      : window.Tf('tg_js_v12', {be: be});
+    el.style.display='';
+  } catch(e){
+    el.style.display='none';
   }
 }
 
@@ -1027,10 +1162,16 @@ async function saveReplyLogic(){
 
 /* ─── Save voice ────────────────────────────────────────────── */
 async function saveVoice(){
+  const backend=$v('vr-backend');
+  const asrProv=$v('asr-provider');
+  // 保存防呆：引擎切换（TTS 后端 / ASR provider）需二次确认，防误点卡片改坏生产链路
+  const changes=[];
+  if(_origVrBackend && backend!==_origVrBackend) changes.push(window.Tf('tg_js_v07', {from: _origVrBackend, to: backend}));
+  if(_origAsrProvider && asrProv!==_origAsrProvider) changes.push(window.Tf('tg_js_v08', {from: _origAsrProvider, to: asrProv}));
+  if(changes.length && !confirm(changes.join('\n')+'\n'+window.T('tg_js_v09'))) return;
   setRes('save-res-voice',window.T('ov_js_saving'));
   try{
     const prob=parseInt($v('vr-probability')||30)/100;
-    const backend=$v('vr-backend');
     const vrBody={
       enabled: $chk('vr-enabled'),
       trigger: $v('vr-trigger'),
@@ -1046,6 +1187,8 @@ async function saveVoice(){
         command_timeout_sec: parseInt($v('vr-cmd_timeout'))||120,
         enabled: true,
         owner_consent: true,
+        // 克隆系后端把 voice_profile.backend 一并写成同名，保持配置自洽（白名单已允许）
+        ...((backend==='avatar_clone'||backend==='voice_clone_command')?{backend: backend}:{}),
       },
       openai_tts:{
         api_key: $v('vr-oai_api_key'),
@@ -1070,9 +1213,11 @@ async function saveVoice(){
     const d2=await tgApi('/api/telegram/settings/voice-asr','PUT',asrBody);
     const total=d1.updated.length+d2.updated.length;
     setRes('save-res-voice',window.Tf('tg_js_p05', {n: total}),'ok');
+    _origVrBackend=backend; _origAsrProvider=asrProv;
     clearDirty('voice');
     await loadSettings();
     loadHealth();
+    loadEffectiveVoiceLine();
   } catch(e){ setRes('save-res-voice',window.T('ov_js_save_fail_e')+e.message,'err'); }
 }
 
@@ -1142,9 +1287,7 @@ function applyPreset(name){
   const bk=p.vr_backend;
   setV('vr-backend', bk);
   _selectCard('vr-be-cards', bk);
-  show('vr-clone-fields', bk==='voice_clone_command');
-  show('vr-edge-fields', bk==='edge_tts');
-  show('vr-oai-fields', bk==='openai');
+  _syncTtsBackendFields(bk);
   setChk('asr-enabled', p.asr_enabled);
   setV('asr-provider', p.asr_provider);
   _selectCard('asr-be-cards', p.asr_provider);
@@ -1251,18 +1394,28 @@ function renderQuality(q, container){
     </div>`;
 }
 
-/* ─── TTS Preview (uses current UI settings via override) ───────── */
-async function testTts(){
+/* ─── TTS Preview (uses current UI settings via override) ─────────
+   主路径异步任务化：body 带 background:true（提交应秒回，15s 超时兜底）→
+   响应含 job_id → 每 2.5s 轮询 GET /api/voice/tts-test-jobs/{job_id}
+   （进度行实时显示已等待秒数，上限 150s；连续 2 次轮询网络失败即中止）。
+   后端未重启装载异步支持的窗口期：旧代码忽略 background 键直接同步返回
+   完整结果（有 url 无 job_id）→ 按旧同步路径渲染（向后兼容）。
+   fastMode=true → 保持纯同步：body 带 fast:true，后端强制 edge 引擎
+   快速出声（链路连通性验证），60s 超时。 */
+async function testTts(fastMode){
   const text=$v('preview-text').trim();
   if(!text){ document.getElementById('preview-result').textContent=window.T('wa_js_062'); return; }
   const btn=document.getElementById('preview-btn');
-  btn.disabled=true; btn.textContent=window.T('tg_js_010');
-  document.getElementById('preview-result').textContent='';
+  const fastBtn=document.getElementById('preview-btn-fast');
+  btn.disabled=true; if(fastBtn) fastBtn.disabled=true;
+  btn.textContent=window.T('tg_js_010');
+  const res=document.getElementById('preview-result');
+  res.textContent=fastMode?window.T('tg_js_010'):window.T('tg_js_v01');
 
   // Build override from current UI — preview uses live settings even before save
   const backend=$v('vr-backend');
   const override={backend, voice:$v('vr-voice')};
-  if(backend==='voice_clone_command'){
+  if(backend==='voice_clone_command'||backend==='avatar_clone'){
     override.voice_profile={reference_audio_path:$v('vr-reference_audio_path')};
   } else if(backend==='openai'){
     override.openai_tts={
@@ -1271,41 +1424,113 @@ async function testTts(){
     };
   }
 
+  const body={text, format:'mp3', voice_cfg_override: override};
+  if(fastMode) body.fast=true; else body.background=true;
   try{
-    const d=await tgApi('/api/voice/tts-test','POST',{
-      text, format:'mp3', voice_cfg_override: override
-    });
-    if(d.ok){
-      const audio=document.getElementById('preview-audio');
-      audio.src=d.url+'?t='+Date.now();
-      audio.className='preview-audio show';
-      audio.play().catch(()=>{});
-      document.getElementById('preview-result').textContent=
-        `✓ ${d.provider||''} · ${d.voice||''} · ${(d.duration_sec||0).toFixed(1)}s · ${Math.round((d.bytes||0)/1024)}KB`;
+    const d=await tgApi('/api/voice/tts-test','POST',body,
+      {timeoutMs: fastMode?60000:15000});
+    if(!fastMode && d && d.ok && d.job_id){
+      res.textContent=window.T('tg_js_v13');
+      await _pollTtsJob(d.job_id, res, btn);
     } else {
-      document.getElementById('preview-result').textContent='⚠️ '+d.error;
+      // 同步响应（fast 档 / 旧后端兼容窗口：忽略 background 直接给完整结果）
+      _renderTtsResult(d, fastMode);
     }
   } catch(e){
-    document.getElementById('preview-result').textContent=window.T('tg_js_011')+e.message;
+    const emsg=(e&&e.message)||'';
+    const isAbort=(e&&(e.name==='TimeoutError'||e.name==='AbortError'))||/abort|timeout/i.test(emsg);
+    res.textContent=isAbort?window.T('tg_js_v05'):(window.T('tg_js_011')+emsg);
   } finally{
-    btn.disabled=false; btn.textContent='▶ '+window.T('wa_s116');
+    btn.disabled=false; if(fastBtn) fastBtn.disabled=false;
+    btn.textContent='▶ '+window.T('wa_s116');
   }
 }
 
+/* 同步响应与异步 job done.result 同构，共用一套结果渲染 */
+function _renderTtsResult(d, fastMode){
+  const res=document.getElementById('preview-result');
+  if(d && d.ok){
+    const audio=document.getElementById('preview-audio');
+    audio.src=d.url+'?t='+Date.now();
+    audio.className='preview-audio show';
+    audio.play().catch(()=>{});
+    let line=`✓ ${d.provider||''} · ${d.voice||''} · ${(d.duration_sec||0).toFixed(1)}s · ${Math.round((d.bytes||0)/1024)}KB`;
+    const fb=(d.voice_meta||{}).fallback_from;
+    if(fb) line+=window.Tf('tg_js_v03', {from: fb});
+    if(fastMode) line+=' · '+window.T('tg_js_v04');
+    res.textContent=line;
+  } else {
+    res.textContent='⚠️ '+((d&&d.error)||window.T('tg_js_v17'));
+  }
+}
+
+/* 异步试听任务轮询状态机（每 2.5s 一拍）：
+   running   → 继续轮询，进度行/按钮实时显示已等待秒数；
+   done      → 复用 _renderTtsResult 渲染 result（与旧同步成功响应同构）；
+   error / ok:false(not_found) → 渲染失败原因；
+   150s 上限 → 停止并给人话文案；连续 2 次轮询网络失败 → 中止（不无限轮询）。 */
+async function _pollTtsJob(jobId, res, btn){
+  const t0=Date.now();
+  let netFails=0;
+  while((Date.now()-t0)<150000){
+    await new Promise(r=>setTimeout(r,2500));
+    let d;
+    try{
+      d=await tgApi('/api/voice/tts-test-jobs/'+encodeURIComponent(jobId),'GET',null,{timeoutMs:8000});
+      netFails=0;
+    } catch(e){
+      netFails++;
+      if(netFails>=2){ res.textContent='⚠️ '+window.T('tg_js_v16'); return; }
+      continue;
+    }
+    if(d && d.ok && d.status==='running'){
+      const s=Math.round((Date.now()-t0)/1000);
+      res.textContent=window.Tf('tg_js_v14', {s: s});
+      btn.textContent='⏳ '+s+'s';
+      continue;
+    }
+    if(d && d.ok && d.status==='done'){ _renderTtsResult(d.result||{}, false); return; }
+    // status:error（带 error 文案）或 ok:false（如 not_found：任务丢失/服务重启）
+    res.textContent='⚠️ '+((d&&d.error)||window.T('tg_js_v17'));
+    return;
+  }
+  res.textContent=window.T('tg_js_v15');
+}
+
+/* 「⚡ 快速试听」：Edge 直连出声验证链路（非生产音色） */
+function testTtsFast(){ testTts(true); }
+
 /* ─── Account info ──────────────────────────────────────────── */
+/* 后端 status 字段（connected|connecting|offline）优先；缺失（后端未重启）时
+   按 online + 身份（display_name/username）推导同样三态 */
+function _deriveTgStatus(d){
+  const s=(d&&typeof d.status==='string')?d.status:'';
+  if(s==='connected'||s==='connecting'||s==='offline') return s;
+  if(d&&d.online) return (d.display_name||d.username)?'connected':'connecting';
+  return 'offline';
+}
+/* connected=绿(默认) / connecting=琥珀 / offline=红 */
+function _setConnDot(el,status){
+  if(!el) return;
+  el.classList.remove('offline','connecting','disconnected');
+  if(status==='connecting') el.classList.add('connecting');
+  else if(status!=='connected') el.classList.add('disconnected');
+}
 async function loadAccountInfo(){
   try{
     const d=await tgApi('/api/telegram/account-info');
+    const status=_deriveTgStatus(d);
 
-    // hero
-    document.getElementById('h-name').textContent=d.display_name||d.username||window.T('tg_js_012');
+    // hero（三态：connected=名字+绿点 / connecting=连接中+琥珀点 / offline=未登录+红点）
+    const hName=document.getElementById('h-name');
+    if(hName){
+      hName.textContent = status==='connected'
+        ? (d.display_name||d.username||window.T('tg_js_012'))
+        : (status==='connecting' ? window.T('tg_js_v10') : window.T('tg_js_012'));
+    }
     document.getElementById('h-sub').textContent=
       [d.username, d.phone].filter(Boolean).join(' · ')||'Telegram '+window.T('ov_js_th_account');
-    const online=d.online;
-    ['h-dot'].forEach(id=>{
-      const el=document.getElementById(id);
-      if(el){ el.classList.toggle('offline',!online); }
-    });
+    _setConnDot(document.getElementById('h-dot'), status);
     document.getElementById('st-msg').textContent=(d.stats?.messages??'—');
     document.getElementById('st-vin').textContent=(d.stats?.voice_in??'—');
     document.getElementById('st-tts').textContent=(d.stats?.tts_sent??'—');
@@ -1319,9 +1544,10 @@ async function loadAccountInfo(){
     document.getElementById('acc-username').textContent=d.username||'';
     document.getElementById('acc-phone').textContent=d.phone||'';
     document.getElementById('acc-session').textContent=d.session_name||'default';
-    const dot=document.getElementById('acc-dot');
-    if(dot) dot.classList.toggle('offline',!online);
-    document.getElementById('acc-status-txt').textContent=online?window.T('dash.pr.online'):window.T('dash.pr.offline');
+    _setConnDot(document.getElementById('acc-dot'), status);
+    document.getElementById('acc-status-txt').textContent=
+      status==='connected' ? window.T('dash.pr.online')
+      : (status==='connecting' ? window.T('tg_js_v10') : window.T('dash.pr.offline'));
 
     // stats
     document.getElementById('acc-st-msg').textContent=d.stats?.messages??0;
@@ -1382,7 +1608,7 @@ function _renderAccountSummary(){
   if(!tbl) return;
   const rows=[
     [window.T('tg_s058'), vr.trigger||'—'],
-    ['TTS '+window.T('tg_s067'), ({voice_clone_command:window.T('tg_s068'),edge_tts:window.T('tg_s070')+'Edge',openai:'OpenAI'}[vr.backend])||vr.backend||'—'],
+    ['TTS '+window.T('tg_s067'), ({avatar_clone:window.T('tg_s201'),voice_clone_command:window.T('tg_s068'),edge_tts:window.T('tg_s070')+'Edge',openai:'OpenAI'}[vr.backend])||vr.backend||'—'],
     ['ASR '+window.T('tg_s067'), ({faster_whisper:window.T('tg_s037'),whisper_local:window.T('tg_s039'),openai:window.T('tg_s041')+'API'}[asr.provider])||asr.provider||'—'],
     [window.T('tg_s043'), asr.language||'auto'],
     [window.T('tg_js_015'), (vr.voice_profile||{}).reference_audio_path||window.T('msg_js_497')],
@@ -1553,7 +1779,7 @@ async function loadSnapshots(){
         <span class="snap-ts">${s.ts.replace('_',' ').replace(/(\u5c0f\u6642)(\u5206)(\u79d2)/,'$1:$2:$3').replace(/(\d{4})(\d{2})(\d{2}) (\d{2})(\d{2})(\d{2})/,'$1-$2-$3 $4:$5:$6')}</span>
         ${s.label?`<span class="snap-lbl">${lblMap[s.label]||s.label}</span>`:''}
         <span style="font-size:.7rem;color:var(--t3)">${s.size_kb}KB</span>
-        <button class="btn-sec" style="padding:.2rem .5rem;font-size:.72rem" onclick="restoreSnapshot('${s.filename}')”>${window.T('ov_ctrl_resume')}</button>
+        <button class="btn-sec" style="padding:.2rem .5rem;font-size:.72rem" onclick="restoreSnapshot('${s.filename}')">${window.T('ov_ctrl_resume')}</button>
       </div>`).join('');
   } catch(e){
     wrap.innerHTML='<div class="snap-empty">'+window.T('rpa_load_failed')+'</div>';

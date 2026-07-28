@@ -544,6 +544,25 @@
     <label><span>{{ (i18n or {}).get('ln_s040', "读停顿 ms（最高）") }}</span><input type="number" id="cfg-read-hi" min="0" step="100" value="2000"></label>
     <label><span>{{ (i18n or {}).get('ln_s041', "条间隔 ms（最低）") }}</span><input type="number" id="cfg-inter-lo" min="0" step="100" value="700"></label>
     <label><span>{{ (i18n or {}).get('ln_s042', "条间隔 ms（最高）") }}</span><input type="number" id="cfg-inter-hi" min="0" step="100" value="1800"></label>
+    <!-- ── 语音回复（审核试听） ─────────────── -->
+    <div class="row2" style="font-size:.72rem;font-weight:700;color:var(--t3);padding:.6rem 0 .3rem;letter-spacing:.04em;text-transform:uppercase;border-top:1px dashed var(--bd);margin-top:.35rem">{{ (i18n or {}).get('lr_voice_sec', "语音回复（审核试听）") }}</div>
+    <div class="row2" style="font-size:.72rem;color:var(--t3)">{{ (i18n or {}).get('lr_voice_note', "启用后，待审核队列的条目会自动生成语音试听供人工审核；审批通过仍按文字投递（LINE 链路不发送语音消息）。") }}</div>
+    <div class="row2" style="display:flex;gap:1.2rem;flex-wrap:wrap">
+      <label class="switch"><input type="checkbox" id="cfg-voice-on"> {{ (i18n or {}).get('lr_voice_on', "启用语音试听（待审条目自动生成）") }}</label>
+    </div>
+    <label><span>{{ (i18n or {}).get('lr_voice_backend', "TTS 引擎") }}</span>
+      <select id="cfg-voice-backend">
+        <option value="edge_tts">{{ (i18n or {}).get('lr_voice_backend_edge', "本机 edge-tts（默认，免配置）") }}</option>
+        <option value="openai">{{ (i18n or {}).get('lr_voice_backend_openai', "线上 OpenAI 兼容") }}</option>
+        <option value="avatar_clone">{{ (i18n or {}).get('lr_voice_backend_avatar', "本机 AvatarHub 克隆声") }}</option>
+      </select>
+    </label>
+    <label><span>{{ (i18n or {}).get('lr_voice_voice', "TTS 声音名（空=引擎默认）") }}</span><input type="text" id="cfg-voice-voice" placeholder="zh-CN-XiaoxiaoNeural / alloy"></label>
+    <div class="row2" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+      <input type="text" id="lr-voice-test-text" placeholder="{{ (i18n or {}).get('lr_voice_test_ph', '输入一句试听文本…') }}" style="flex:1;min-width:12rem">
+      <button type="button" class="btn btn-xs" id="lr-voice-test-btn" onclick="lrVoiceTtsTest()">{{ (i18n or {}).get('lr_voice_test_btn', "试听") }}</button>
+    </div>
+    <div class="row2" id="lr-voice-test-out" style="font-size:.76rem;color:var(--t3)">{{ (i18n or {}).get('lr_voice_test_hint', "试听为全站默认声线（不代表上方 TTS 引擎/声音名设置）。") }}</div>
     <!-- ── 限制与安全 ──────────────────────── -->
     <div class="row2" style="font-size:.72rem;font-weight:700;color:var(--t3);padding:.6rem 0 .3rem;letter-spacing:.04em;text-transform:uppercase;border-top:1px dashed var(--bd);margin-top:.35rem">{{ (i18n or {}).get('ln_s043', "限制与安全") }}</div>
     <label><span>{{ (i18n or {}).get('wa_s085', "每日发送上限") }}（0={{ (i18n or {}).get('ln_s044', "不限）") }}</span><input type="number" id="cfg-daily-cap" min="0" step="1" value="0"></label>
@@ -554,6 +573,8 @@
         <option value="off">off — {{ (i18n or {}).get('ln_s046', "永不回复") }}</option>
       </select>
     </label>
+    <div class="row2" style="font-size:.74rem;color:var(--t3);line-height:1.55">{{ (i18n or {}).get('lr_reply_mode_note', "设备链自动化档位（auto=自动回复 / approve=生成后人审 / off=只收不回），独立于聊天坐席的会话档位与 AI 值守总闸——单个客户的档位请到") }}<a href="/workspace">{{ (i18n or {}).get('lr_reply_mode_note_link', "聊天坐席") }}</a>{{ (i18n or {}).get('lr_reply_mode_note_tail', "调整") }}</div>
+    <div class="row2 badge b-a" id="lr-cap-note" style="display:none;white-space:normal"></div>
     <!-- ── 开关 ──────────────────────────── -->
     <div class="row2" style="font-size:.72rem;font-weight:700;color:var(--t3);padding:.6rem 0 .3rem;letter-spacing:.04em;text-transform:uppercase;border-top:1px dashed var(--bd);margin-top:.35rem">{{ (i18n or {}).get('wa_s126', "全局开关") }}</div>
     <div class="row2" style="display:flex;gap:1.2rem;flex-wrap:wrap">
@@ -1342,6 +1363,17 @@ async function loadLineRpaCfg(){
     document.getElementById('cfg-reply-mode').value=rm;
     const aa=(e.auto_accept)||{};
     document.getElementById('cfg-auto-accept').checked=!!(aa.enabled);
+    // 语音回复（审核试听）
+    const vo=e.voice_output||{};
+    document.getElementById('cfg-voice-on').checked=!!vo.enabled;
+    const voSel=document.getElementById('cfg-voice-backend');
+    const voBk=String(vo.backend||'edge_tts');
+    // 手工配置的后端不在下拉里 → 动态补一项，防保存时被静默改成 edge_tts
+    if(!Array.from(voSel.options).some(o=>o.value===voBk)){
+      const opt=document.createElement('option'); opt.value=voBk; opt.textContent=voBk; voSel.appendChild(opt);
+    }
+    voSel.value=voBk;
+    document.getElementById('cfg-voice-voice').value=vo.voice||'';
   }catch(e){console.warn('cfg fail', e);}
 }
 
@@ -1374,6 +1406,11 @@ async function saveLineRpaCfg(){
     daily_cap: Number(document.getElementById('cfg-daily-cap').value)||0,
     reply_mode: document.getElementById('cfg-reply-mode').value||'auto',
     auto_accept: { enabled: document.getElementById('cfg-auto-accept').checked },
+    voice_output: {
+      enabled: document.getElementById('cfg-voice-on').checked,
+      backend: document.getElementById('cfg-voice-backend').value||'edge_tts',
+      voice: (document.getElementById('cfg-voice-voice').value||'').trim(),
+    },
     navigation: (function(){
       const tabRaw=(document.getElementById('cfg-nav-tab').value||'').trim();
       let tab=[];
@@ -1423,6 +1460,31 @@ async function lrPost(path, body){
     headers:{'Content-Type':'application/json','X-CSRF-Token':tok},
     body: JSON.stringify(body||{}),
   }, {timeoutMs: 60000});
+}
+
+// ── 语音试听（全站通用 TTS 预览端点，默认人设声线） ─────────
+async function lrVoiceTtsTest(){
+  const btn=document.getElementById('lr-voice-test-btn');
+  const out=document.getElementById('lr-voice-test-out');
+  const text=(document.getElementById('lr-voice-test-text').value||'').trim();
+  if(!text){ out.textContent=window.T('lr_voice_test_empty'); return; }
+  const old=btn.textContent;
+  btn.disabled=true; btn.textContent=window.T('lr_voice_test_busy');
+  out.textContent='…';
+  try{
+    const r=await lrPost('/api/voice/tts-test',{text:text.slice(0,400),format:'mp3'});
+    let d={}; try{ d=await r.json(); }catch(_){}
+    if(!r.ok||!d.ok||!d.url){
+      out.textContent=window.T('lr_voice_test_fail')+': '+String((d&&(d.error||d.detail))||('HTTP '+r.status));
+      return;
+    }
+    out.innerHTML='<audio controls autoplay src="'+_esc(d.url)+'" style="height:2rem;max-width:100%;vertical-align:middle"></audio>'
+      +(d.provider?' <span style="color:var(--t3)">'+_esc(String(d.provider)+(d.voice?' · '+String(d.voice):''))+'</span>':'');
+  }catch(e){
+    out.textContent=window.T('lr_voice_test_fail')+': '+String((e&&e.message)||e);
+  }finally{
+    btn.disabled=false; btn.textContent=old;
+  }
 }
 
 document.getElementById('lr-btn-trigger').addEventListener('click',async ()=>{
@@ -1695,4 +1757,18 @@ async function loadLrLogTail(){
     wrap.scrollTop=wrap.scrollHeight;
   }catch(e){ wrap.textContent=window.T('rpa_load_failed')+': '+e; }
 }
+
+// ── 回复模式封顶提示：inbox.auto_draft.platform_modes 若把 line 封顶（壳层注入 window.__chcPlatformCaps），
+//    在 RPA 档位下方如实提示「这里选 auto 也按封顶档执行」。DOMContentLoaded 后读取，兼容壳层脚本在 body 之后执行。
+(function(){
+  function applyLrCapNote(){
+    var cap=String((window.__chcPlatformCaps||{})['line']||'');
+    var el=document.getElementById('lr-cap-note');
+    if(!el||!cap) return;
+    el.textContent=window.Tf('lr_reply_mode_cap',{mode:cap});
+    el.style.display='';
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',applyLrCapNote);
+  else applyLrCapNote();
+})();
 </script>

@@ -244,7 +244,13 @@
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
     {{ (i18n or {}).get('wa_s018', "立即触发") }}
   </button>
-  <button class="btn-sec" id="wa-btn-pause">{{ (i18n or {}).get('ov_ctrl_pause_title', "暂停 5 分钟") }}</button>
+  <select id="wa-pause-select" class="f-inp" style="width:auto;padding:.45rem .7rem;font-size:.82rem">
+    <option value="300">{{ (i18n or {}).get('ov_ctrl_pause_title', "暂停 5 分钟") }}</option>
+    <option value="900">{{ (i18n or {}).get('wa_s160', "暂停 15 分钟") }}</option>
+    <option value="3600">{{ (i18n or {}).get('wa_s161', "暂停 1 小时") }}</option>
+    <option value="14400">{{ (i18n or {}).get('wa_s162', "暂停 4 小时") }}</option>
+  </select>
+  <button class="btn-sec" id="wa-btn-pause">⏸ {{ (i18n or {}).get('ov_ctrl_pause', "暂停") }}</button>
   <button class="btn-sec" id="wa-btn-resume">{{ (i18n or {}).get('ov_ctrl_resume', "恢复") }}</button>
   <span id="wa-ctrl-msg" style="font-size:.8rem;color:var(--t3)"></span>
 </div>
@@ -543,6 +549,8 @@
         </div>
       </div>
       <input type="hidden" id="cfg-wa-reply-mode" value="auto">
+      <span class="f-hint">{{ (i18n or {}).get('wa_reply_mode_note', "设备链自动化档位（auto=自动回复 / approve=生成后人审 / off=只收不回），独立于聊天坐席的会话档位与 AI 值守总闸——单个客户的档位请到") }}<a href="/workspace">{{ (i18n or {}).get('wa_reply_mode_note_link', "聊天坐席") }}</a>{{ (i18n or {}).get('wa_reply_mode_note_tail', "调整") }}</span>
+      <div class="badge b-a" id="wa-cap-note" style="display:none;margin-top:.25rem;white-space:normal"></div>
     </div>
     <div class="f-grid2">
       <div class="f-row">
@@ -638,6 +646,13 @@
           <option value="always">{{ (i18n or {}).get('wa_s109', "每条回复") }}</option>
           <option value="random">{{ (i18n or {}).get('wa_s110', "随机概率") }}</option>
         </select>
+      </div>
+      <div class="f-row" id="wa-voice-prob-row" style="display:none">
+        <label class="f-lbl">{{ (i18n or {}).get('wa_s159', "随机发送概率") }}</label>
+        <div style="display:flex;gap:.5rem;align-items:center">
+          <input class="f-inp" type="range" id="cfg-wa-voice-prob" min="0" max="100" step="5" value="30" style="flex:1;padding:0">
+          <span id="cfg-wa-voice-prob-val" style="font-size:.82rem;color:var(--t2);min-width:3em;text-align:right">30%</span>
+        </div>
       </div>
       <div class="f-row">
         <label class="f-lbl">TTS {{ (i18n or {}).get('wa_s111', "最大文字长度") }}</label>
@@ -1685,7 +1700,8 @@ $('wa-btn-trigger').onclick = async ()=>{
   setTimeout(waLoadStatus, 500);
 };
 $('wa-btn-pause').onclick = async ()=>{
-  const r = await rpa.post('/api/whatsapp-rpa/pause', {seconds: 300});
+  const secs = Number($('wa-pause-select').value)||300;
+  const r = await rpa.post('/api/whatsapp-rpa/pause', {seconds: secs});
   rpa.toast(r.ok ? window.T('msg_js_1990') : window.T('wa_js_036'), r.ok?'ok':'err');
   waLoadStatus();
 };
@@ -1774,7 +1790,7 @@ async function waLoadCfg(){
     $('cfg-wa-slow-after').value = Number(svc.slow_after_empty||6);
     const hp = e.human_pacing||{};
     $('cfg-wa-pacing-on').checked = hp.enabled !== false;
-    $('cfg-wa-split').value = hp.split_strategy||'sentence';
+    $('cfg-wa-split').value = hp.split_mode || hp.split_strategy || 'sentence';  // legacy 键回落
     $('cfg-wa-split-chars').value = Number(hp.split_max_chars||80);
     $('cfg-wa-split-parts').value = Number(hp.split_max_parts||3);
     const rp = hp.read_pause_ms||[800,2000];
@@ -1790,6 +1806,10 @@ async function waLoadCfg(){
     $('cfg-wa-voice-out').checked = !!vo.enabled;
     $('cfg-wa-voice-mode').value = vo.mode||'approval_only';
     $('cfg-wa-voice-trigger').value = vo.trigger||'when_peer_voice';
+    const vprob = (vo.voice_probability == null) ? 0.3 : (Number(vo.voice_probability)||0);
+    $('cfg-wa-voice-prob').value = Math.round(Math.min(1, Math.max(0, vprob))*100);
+    $('cfg-wa-voice-prob-val').textContent = $('cfg-wa-voice-prob').value + '%';
+    waVoiceProbVis();
     $('cfg-wa-voice-maxchars').value = Number(vo.max_text_chars||220);
     $('cfg-wa-voice-maxsec').value = Number(vo.max_seconds||20);
     $('wa-voice-out-opts').style.display = vo.enabled ? '' : 'none';
@@ -1840,7 +1860,7 @@ $('wa-cfg-save').addEventListener('click', async ()=>{
     },
     human_pacing: {
       enabled: $('cfg-wa-pacing-on').checked,
-      split_strategy: $('cfg-wa-split').value,
+      split_mode: $('cfg-wa-split').value,
       split_max_chars: Number($('cfg-wa-split-chars').value)||80,
       split_max_parts: Number($('cfg-wa-split-parts').value)||3,
       read_pause_ms: [Number($('cfg-wa-read-lo').value)||800, Number($('cfg-wa-read-hi').value)||2000],
@@ -1851,6 +1871,7 @@ $('wa-cfg-save').addEventListener('click', async ()=>{
       enabled: $('cfg-wa-voice-out').checked,
       mode: $('cfg-wa-voice-mode').value||'approval_only',
       trigger: $('cfg-wa-voice-trigger').value||'when_peer_voice',
+      voice_probability: Math.min(100, Math.max(0, Number($('cfg-wa-voice-prob').value)||0))/100,
       max_text_chars: Number($('cfg-wa-voice-maxchars').value)||220,
       max_seconds: Number($('cfg-wa-voice-maxsec').value)||20,
     },
@@ -1898,6 +1919,15 @@ $('wa-cfg-save').addEventListener('click', async ()=>{
 /* ── 语音选项联动 ──────────────────────────────────────── */
 $('cfg-wa-voice-out').addEventListener('change', function(){
   $('wa-voice-out-opts').style.display = this.checked ? '' : 'none';
+  rpa.markDirty('wa-tab-settings');
+});
+// 随机概率滑杆：仅 trigger==random 时显示（加载回填与 change 都经 waVoiceProbVis）
+function waVoiceProbVis(){
+  $('wa-voice-prob-row').style.display = ($('cfg-wa-voice-trigger').value === 'random') ? '' : 'none';
+}
+$('cfg-wa-voice-trigger').addEventListener('change', waVoiceProbVis);
+$('cfg-wa-voice-prob').addEventListener('input', function(){
+  $('cfg-wa-voice-prob-val').textContent = this.value + '%';
   rpa.markDirty('wa-tab-settings');
 });
 
@@ -2507,6 +2537,20 @@ Object.assign(window, {
   waLangLock, waLangUnlock, waLoadTemplateAnalytics, waSaveTemplateStrategy,
 });
 
+})();
+
+// ── 回复模式封顶提示：inbox.auto_draft.platform_modes 若把 whatsapp 封顶（壳层注入 window.__chcPlatformCaps），
+//    在 RPA 档位下方如实提示「这里选 auto 也按封顶档执行」。DOMContentLoaded 后读取，兼容壳层脚本在 body 之后执行。
+(function(){
+  function applyWaCapNote(){
+    var cap=String((window.__chcPlatformCaps||{})['whatsapp']||'');
+    var el=document.getElementById('wa-cap-note');
+    if(!el||!cap) return;
+    el.textContent=window.Tf('wa_reply_mode_cap',{mode:cap});
+    el.style.display='';
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',applyWaCapNote);
+  else applyWaCapNote();
 })();
 </script>
 

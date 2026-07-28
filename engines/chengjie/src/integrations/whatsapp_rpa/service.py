@@ -139,7 +139,7 @@ class WhatsAppRpaService:
             },
             "human_pacing": {
                 "enabled": True,
-                "split_strategy": "sentence",
+                "split_mode": "sentence",
                 "split_max_chars": 80,
                 "split_max_parts": 5,
                 "read_pause_ms": [800, 2000],
@@ -167,6 +167,13 @@ class WhatsAppRpaService:
                 d[k] = merged_sub
             else:
                 d[k] = v
+        # legacy 归一：旧版页面把分条策略存成 human_pacing.split_strategy；
+        # 默认块现在提供 split_mode，若不归一会遮蔽用户旧值（用户没显式给 split_mode 时才回落）。
+        hp_user = self._cfg.get("human_pacing")
+        if isinstance(hp_user, dict) and not hp_user.get("split_mode"):
+            legacy_split = hp_user.get("split_strategy")
+            if legacy_split and isinstance(d.get("human_pacing"), dict):
+                d["human_pacing"]["split_mode"] = legacy_split
         return d
 
     def reconfigure(self, new_cfg: Dict[str, Any]) -> None:

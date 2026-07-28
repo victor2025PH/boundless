@@ -68,6 +68,11 @@ class PacingConfig:
         rp_lo, rp_hi = _pair("read_pause_ms", 800, 2000)
         pc_lo, pc_hi = _pair("per_char_ms", 40, 80)
         im_lo, im_hi = _pair("inter_msg_ms", 700, 1800)
+        # split_mode 为准；缺失时回落 legacy 键 split_strategy
+        # （旧版 WhatsApp 渠道页保存的是 split_strategy，兼容线上已持久化的旧配置）
+        split_raw = c.get("split_mode")
+        if split_raw in (None, ""):
+            split_raw = c.get("split_strategy")
         return cls(
             enabled=bool(c.get("enabled", True)),
             read_pause_ms_lo=rp_lo,
@@ -75,7 +80,7 @@ class PacingConfig:
             per_char_ms_lo=pc_lo,
             per_char_ms_hi=pc_hi,
             slow_type=bool(c.get("slow_type", False)),
-            split_mode=str(c.get("split_mode", "sentence") or "sentence").lower(),
+            split_mode=str(split_raw or "sentence").lower(),
             split_max_chars=max(20, int(c.get("split_max_chars", 80) or 80)),
             split_max_parts=max(1, int(c.get("split_max_parts", 3) or 3)),
             inter_msg_ms_lo=im_lo,

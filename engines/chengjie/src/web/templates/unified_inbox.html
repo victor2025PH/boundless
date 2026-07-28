@@ -284,6 +284,7 @@
                 <button type="button" class="standby-opt" data-mode="watching" onclick="setStandbyMode('watching')" data-i18n="inbox.standby.watching">值守中</button>
               </div>
               <span class="standby-hint" id="standby-hint"></span>
+              <button type="button" class="standby-bulk-btn" id="standby-bulk-btn" onclick="bulkDowngradeAutoAi(event)" data-i18n="inbox.standby.bulk_review" title="把所有「全自动」会话降为 AI草稿·我审，并取消待自动发送">全部降为草稿审</button>
             </div>
           </div>
         </span>
@@ -2113,7 +2114,11 @@ function _handlerSig(c){
   if(cl && cl.agent_id){
     return (String(cl.agent_id)===String(MY_AGENT().id)?'me':'o:'+cl.agent_id);
   }
-  return c.automation_mode==='auto_ai' ? 'ai' : '';
+  var m=c.automation_mode||'';
+  if(m==='auto_ai') return 'ai';
+  if(m==='review'||m==='multi_choice') return 'rev:'+m;
+  if(m==='manual') return 'man';
+  return '';
 }
 function _handlerBadgeHtml(c){
   const cl=claimMap[c.conversation_id];
@@ -2127,6 +2132,12 @@ function _handlerBadgeHtml(c){
   }
   if(c.automation_mode==='auto_ai'){
     return `<span class="conv-handler h-ai" title="${esc(window.T('inbox.row.h_ai_t'))}">AI</span>`;
+  }
+  if(c.automation_mode==='review'||c.automation_mode==='multi_choice'){
+    return `<span class="conv-handler h-review" title="${esc(window.T('inbox.row.h_review_t'))}">${esc(window.T('inbox.row.h_review'))}</span>`;
+  }
+  if(c.automation_mode==='manual'){
+    return `<span class="conv-handler h-manual" title="${esc(window.T('inbox.row.h_manual_t'))}">${esc(window.T('inbox.row.h_manual'))}</span>`;
   }
   return '';
 }
@@ -6018,9 +6029,34 @@ async function loadModeState(c){
       var mode=d.mode||'review';
       if(sel) sel.value=mode;
       _lastAutomationMode=mode;
+      if(c) c.automation_mode=mode;
+      try{
+        var row=(typeof allChats!=='undefined'?allChats:chats||[]).find(function(x){
+          return x && c && x.conversation_id===c.conversation_id;
+        });
+        if(row) row.automation_mode=mode;
+        var el=c&&c.conversation_id
+          ? document.querySelector('.conv-item[data-cid="'+CSS.escape(c.conversation_id)+'"] .conv-meta')
+          : null;
+        if(el && typeof _syncHandlerBadge==='function') _syncHandlerBadge(el, c);
+      }catch(_){}
     }
   }catch(_){}
   _syncAutoUi();
+}
+function _applyLocalAutomationMode(c, mode){
+  if(!c) return;
+  c.automation_mode=mode;
+  try{
+    var pools=[chats, typeof allChats!=='undefined'?allChats:null];
+    pools.forEach(function(arr){
+      if(!arr||!arr.length) return;
+      var row=arr.find(function(x){ return x && x.conversation_id===c.conversation_id; });
+      if(row) row.automation_mode=mode;
+    });
+    var el=document.querySelector('.conv-item[data-cid="'+CSS.escape(c.conversation_id)+'"] .conv-meta');
+    if(el && typeof _syncHandlerBadge==='function') _syncHandlerBadge(el, c);
+  }catch(_){}
 }
 async function setMode(mode){
   var prev=_lastAutomationMode;
@@ -6033,11 +6069,68 @@ async function setMode(mode){
   _syncAutoUi();
   if(!selectedChat) return;
   try{
-    await apiFetch('/api/unified-inbox/automation',{method:'POST',headers:{'Content-Type':'application/json'},
+    var r=await apiFetch('/api/unified-inbox/automation',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({platform:selectedChat.platform,account_id:selectedChat.account_id||'default',chat_key:selectedChat.chat_key,mode})}, {timeoutMs: 60000});
-  }catch(_){}
+    var d={}; try{ d=await r.json(); }catch(_){ d={}; }
+    if(!r.ok || d.ok===false) throw new Error((d&&d.detail)||'save failed');
+    _applyLocalAutomationMode(selectedChat, mode);
+    var tip=window.Tf('inbox.mode.saved_to',{mode:_modeLabel(mode)});
+    if(d.cancelled_l2>0){
+      tip+=' · '+window.Tf('inbox.mode.cancelled_l2',{n:d.cancelled_l2});
+    }
+    try{ _toast(tip, mode==='auto_ai'?'#2563eb':'#64748b'); }catch(_){}
+    // 切到人审档：自动打开待审草稿面板，避免「停了自动却看不见草稿」
+    if((mode==='review'||mode==='multi_choice') && typeof toggleAiDraft==='function'){
+      try{
+        if(typeof aiDraftOn!=='undefined' && !aiDraftOn) toggleAiDraft();
+        else if(typeof loadDrafts==='function') loadDrafts(selectedChat);
+      }catch(_){}
+    }
+  }catch(e){
+    // 写库失败时回滚 UI，避免「下拉显示手动、后端仍全自动」假象
+    if(sel) sel.value=prev;
+    _lastAutomationMode=prev;
+    _syncAutoUi();
+    try{ _toast(window.T('inbox.mode.save_fail'),'#b91c1c'); }catch(_){}
+    return;
+  }
   // P1-2：会话档位变化会改变「值守中」的真发就绪（auto_ai 计数）→ 若主管在场刷新值守提示
   try{ if(typeof window.loadStandbyMode==='function') window.loadStandbyMode(); }catch(_){}
+}
+async function bulkDowngradeAutoAi(ev){
+  if(ev){ try{ ev.preventDefault(); ev.stopPropagation(); }catch(_){} }
+  if(!_standbyBar()) return;
+  if(!confirm(window.T('inbox.standby.bulk_confirm'))) return;
+  var btn=document.getElementById('standby-bulk-btn');
+  if(btn) btn.disabled=true;
+  try{
+    var r=await apiFetch('/api/unified-inbox/automation/bulk-downgrade',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({to_mode:'review'})
+    },{timeoutMs:60000});
+    var d=await r.json();
+    if(!r.ok || !d.ok) throw new Error((d&&d.detail)||'bulk failed');
+    try{
+      (typeof allChats!=='undefined'?allChats:chats||[]).forEach(function(c){
+        if(c && c.automation_mode==='auto_ai') c.automation_mode='review';
+      });
+      if(selectedChat && selectedChat.automation_mode==='auto_ai'){
+        selectedChat.automation_mode='review';
+        var sel=document.getElementById('mode-select');
+        if(sel) sel.value='review';
+        _lastAutomationMode='review';
+        _syncAutoUi();
+      }
+      if(typeof renderConvList==='function') renderConvList();
+      else if(typeof applyFilters==='function') applyFilters();
+    }catch(_){}
+    _toast(window.Tf('inbox.standby.bulk_done',{n:d.changed||0,c:d.cancelled_l2||0}),'#64748b');
+    try{ if(typeof window.loadStandbyMode==='function') window.loadStandbyMode(); }catch(_){}
+  }catch(_){
+    _toast(window.T('inbox.standby.bulk_fail'),'#b91c1c');
+  }finally{
+    if(btn) btn.disabled=false;
+  }
 }
 /* 自动化档位 UI 联动（方案 A：mode-select 为唯一入口）：
    ①全自动档下拉变绿；②「待审」仅在 AI草稿/多选 档显示；③B-1 安全条仅在全自动档显示。 */
@@ -10910,7 +11003,7 @@ Object.assign(window, {
   toggleBatchMode, toggleSearchMode, setFilter, _expandListHeader, _onDoneKpiClick, _onDoneKpiDblClick,
   toggleTagFilterDropdown, setTagFilter, saveCurrentView,
   onSearch, setSortMode,   // P5-4: 内联 oninput/onchange 引用者一并登记进暴露块（与既有惯例一致，防御性）
-  toggleStandbyPop, openOldestWaiting,   // 一期美化：值守胶囊弹层 + 空态驾驶舱 CTA
+  toggleStandbyPop, openOldestWaiting, bulkDowngradeAutoAi,   // 一期美化：值守胶囊弹层 + 空态驾驶舱 CTA + 一键降档
   acceptComposerDraft, dismissComposerDraft, _cdraftHdClick, _cdraftExpand, _openAiDraftPanel,   // 二期：composer 草稿条
   // 批量操作
   batchArchive, batchTagPrompt, batchAssignPrompt,
