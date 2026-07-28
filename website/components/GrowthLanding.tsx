@@ -21,19 +21,20 @@ const COPY = {
   zh: {
     badge: "智连系 · 获客到成交",
     title: "先触达，再成交",
-    accent: "智拓 + 智聊",
-    sub: "智拓用真机多号把人加进私域；智聊用 AI 自动跟进、逼单、成交。两条产品可单选，也可串成完整闭环。",
-    points: ["真机 RPA 获客 · 防封风控", "AI 多平台聊天成交", "私有部署 · 数据不出网"],
-    reachCta: "看获客能力",
+    accent: "智聊 + 智拓",
+    sub: "智聊用 AI 承接多平台会话，自动跟进、推进成交；智拓提供真机集群获客方案，邀请制评估、私有化交付。两条产品可单选，也可串成从触达到成交的闭环。",
+    points: ["AI 多平台聊天成交", "真机集群获客 · 邀请制评估", "私有部署 · 数据不出网"],
+    reachCta: "看获客方案",
     chatCta: "看成交能力",
     book: "预约方案咨询",
+    reachBook: "预约邀请制评估",
     home: "返回首页",
-    reachHead: "智拓 ReachX · 真机获客",
+    reachHead: "智拓 ReachX · 真机集群获客 · 邀请制",
     chatHead: "智聊 ChatX · AI 成交",
     reachItems: [
-      { t: "真机多号并发", d: "主控 + Worker 集群，Facebook / Messenger / TikTok / Instagram 等平台自动加友、打招呼。" },
-      { t: "群成员批量提取", d: "把公开群里的潜客抽进私域漏斗，7×24 不停机。" },
-      { t: "防封风控 + VPN 池", d: "设备指纹与网络池协同，降低批量运营封号风险。" },
+      { t: "真机集群 · 多号管理", d: "主控 + Worker 真机集群统一管理多账号，覆盖 Facebook / Messenger / TikTok / Instagram 等平台，动作与节奏按你的合规边界配置。" },
+      { t: "群成员提取 · 打招呼引流", d: "把公开群里的潜客沉淀进私域漏斗，触达节奏按平台规则配置，放量走人工闸门把关。" },
+      { t: "邀请制评估 · 私有化交付", d: "不做自助开通：先评估你的场景与合规边界，再私有化部署交付，全程手动闸门控制。" },
     ],
     chatItems: [
       { t: "聚合收件箱", d: "多平台会话统一承接，AI 自动开发客户、推进成交。" },
@@ -44,19 +45,20 @@ const COPY = {
   en: {
     badge: "Growth · reach to close",
     title: "Reach first, then close",
-    accent: "ReachX + ChatX",
-    sub: "ReachX puts leads into your private funnel with real-device automation; ChatX follows up and closes with AI chat. Pick one, or chain them into a full loop.",
-    points: ["Real-device RPA lead-gen", "AI omni-channel closing", "Private deploy · off-net"],
-    reachCta: "Lead-gen capabilities",
+    accent: "ChatX + ReachX",
+    sub: "ChatX picks up conversations across platforms and closes with AI follow-ups; ReachX is a real-device lead-gen program — invite-only assessment, private delivery. Pick one, or chain them into a reach-to-close loop.",
+    points: ["AI omni-channel closing", "Real-device lead-gen · invite-only", "Private deploy · off-net"],
+    reachCta: "Lead-gen program",
     chatCta: "Closing capabilities",
     book: "Book a consult",
+    reachBook: "Request an invite-only assessment",
     home: "Home",
-    reachHead: "ReachX · real-device lead-gen",
+    reachHead: "ReachX · real-device lead-gen · invite-only",
     chatHead: "ChatX · AI closing",
     reachItems: [
-      { t: "Multi-device concurrency", d: "Controller + workers auto-add and greet across Facebook / Messenger / TikTok / Instagram." },
-      { t: "Group extract", d: "Pull public-group prospects into your funnel, 24/7." },
-      { t: "Anti-ban + VPN pool", d: "Device fingerprinting and network pools reduce ban risk at scale." },
+      { t: "Real-device cluster · multi-account", d: "A controller + worker device cluster manages accounts across Facebook / Messenger / TikTok / Instagram, with actions and pacing configured to your compliance boundaries." },
+      { t: "Group extract · greet & funnel", d: "Move public-group prospects into your private funnel, paced to platform rules with a manual gate on volume." },
+      { t: "Invite-only · private delivery", d: "No self-serve signup: we assess your scenario and compliance boundaries first, then deliver as a private deployment under manual gating." },
     ],
     chatItems: [
       { t: "Unified inbox", d: "Omni-channel threads with AI that develops and closes." },
@@ -102,9 +104,10 @@ export default function GrowthLanding() {
     track("product_click", { key: which === "reach" ? "reachx" : "chatx", where: "growth_dual" });
   };
 
+  // 主推位：智聊（生产运行）在前，智拓（邀请制）为辅
   const cards: { id: TrackId; key: "reachx" | "chatx"; icon: typeof Target; cta: string }[] = [
-    { id: "reach", key: "reachx", icon: Target, cta: c.reachCta },
     { id: "chat", key: "chatx", icon: MessagesSquare, cta: c.chatCta },
+    { id: "reach", key: "reachx", icon: Target, cta: c.reachCta },
   ];
 
   return (
@@ -250,31 +253,8 @@ export default function GrowthLanding() {
         </section>
       </section>
 
-      <section id="reach" className="scroll-mt-28 border-y border-white/5 bg-white/[0.015] px-5 py-16">
-        <div className="mx-auto max-w-5xl">
-          <Reveal className="text-center">
-            <h2 className="text-2xl font-bold text-white md:text-3xl">{c.reachHead}</h2>
-            <p className="mx-auto mt-2 max-w-2xl text-sm text-slate-400">{BRAND.products.reachx.desc[lang]}</p>
-          </Reveal>
-          <div className="mt-9 grid gap-4 sm:grid-cols-3">
-            {c.reachItems.map((it, i) => (
-              <Reveal key={it.t} delay={i * 0.05}>
-                <div className="h-full rounded-2xl border border-white/10 bg-ink-900/50 p-5">
-                  <h3 className="font-semibold text-white">{it.t}</h3>
-                  <p className="mt-2 text-sm leading-relaxed text-slate-400">{it.d}</p>
-                </div>
-              </Reveal>
-            ))}
-          </div>
-          <Reveal delay={0.1} className="mt-8 text-center">
-            <Link href={localePath(lang, "/#autochat")} className="text-sm text-neon-cyan hover:underline">
-              {lang === "zh" ? "回首页看获客 / 成交演示 →" : "See lead-gen / closing demos on home →"}
-            </Link>
-          </Reveal>
-        </div>
-      </section>
-
-      <section id="chat" className="scroll-mt-28 px-5 py-16">
+      {/* 主推：智聊 ChatX（生产运行）在前 */}
+      <section id="chat" className="scroll-mt-28 border-y border-white/5 bg-white/[0.015] px-5 py-16">
         <div className="mx-auto max-w-5xl">
           <Reveal className="text-center">
             <h2 className="text-2xl font-bold text-white md:text-3xl">{c.chatHead}</h2>
@@ -307,6 +287,41 @@ export default function GrowthLanding() {
               <Send className="h-4 w-4" />
               {c.book}
             </a>
+          </Reveal>
+        </div>
+      </section>
+
+      {/* 辅：智拓 ReachX（邀请制评估 · 私有化交付） */}
+      <section id="reach" className="scroll-mt-28 px-5 py-16">
+        <div className="mx-auto max-w-5xl">
+          <Reveal className="text-center">
+            <h2 className="text-2xl font-bold text-white md:text-3xl">{c.reachHead}</h2>
+            <p className="mx-auto mt-2 max-w-2xl text-sm text-slate-400">{BRAND.products.reachx.desc[lang]}</p>
+          </Reveal>
+          <div className="mt-9 grid gap-4 sm:grid-cols-3">
+            {c.reachItems.map((it, i) => (
+              <Reveal key={it.t} delay={i * 0.05}>
+                <div className="h-full rounded-2xl border border-white/10 bg-ink-900/50 p-5">
+                  <h3 className="font-semibold text-white">{it.t}</h3>
+                  <p className="mt-2 text-sm leading-relaxed text-slate-400">{it.d}</p>
+                </div>
+              </Reveal>
+            ))}
+          </div>
+          <Reveal delay={0.1} className="mt-8 flex flex-col items-center justify-center gap-3 text-center sm:flex-row">
+            <a
+              href={CONTACT_URL}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => track("cta_click", { where: "growth_reach" })}
+              className="inline-flex items-center gap-2 rounded-full border border-white/15 px-6 py-2.5 text-sm font-medium text-slate-200 transition hover:border-neon-cyan/50 hover:text-white"
+            >
+              <Send className="h-3.5 w-3.5" />
+              {c.reachBook}
+            </a>
+            <Link href={localePath(lang, "/#autochat")} className="text-sm text-neon-cyan hover:underline">
+              {lang === "zh" ? "回首页看获客 / 成交演示 →" : "See lead-gen / closing demos on home →"}
+            </Link>
           </Reveal>
         </div>
       </section>

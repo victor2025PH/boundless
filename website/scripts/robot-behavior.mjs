@@ -46,26 +46,24 @@ const browser = await chromium.launch();
 
   const clip = { x: VW - 460, y: VH - 560, width: 460, height: 560 };
 
-  // 进场问好（挥手窗口约 [2.8s, 5.6s]）：窗口内多次采样取峰值，断言引力三指展开成扇形。
-  // 屏幕像素≈SVG 单位×0.6 渲染缩放：收纳态两梢荚水平距约 5px，fan 队形满展开约 20px，
-  // 阈值 14px 区分两态；多帧采样抗弹簧过渡/腕摆相位的瞬时收窄。
+  // 进场问好：花瓣臂挥手，无手指 DOM；期间机器人保持可见。
   await page.waitForTimeout(1900);
-  let podSpread = -1;
+  let greetOk = false;
+  let handGone = true;
   for (let s = 0; s < 4; s++) {
     const v = await page.evaluate(() => {
-      const pods = document.querySelectorAll(".eve-hand [data-pod]");
-      if (pods.length < 3) return -1;
-      const xs = Array.from(pods, (p) => {
-        const r = p.getBoundingClientRect();
-        return r.left + r.width / 2;
-      });
-      return Math.max(...xs) - Math.min(...xs);
+      const el = document.querySelector(".ai-sprite-container [role='button']");
+      const opacity = el ? parseFloat(getComputedStyle(el).opacity) : 0;
+      const hands = document.querySelectorAll(".eve-hand, [data-pod]").length;
+      return { opacity, hands };
     });
-    podSpread = Math.max(podSpread, v);
+    greetOk = greetOk || v.opacity > 0.95;
+    handGone = handGone && v.hands === 0;
     if (s === 1) await page.screenshot({ path: `${OUT}/b1-greet.png`, clip });
     await page.waitForTimeout(450);
   }
-  check("进场问好时引力三指展开", podSpread > 14, `podSpread=${podSpread?.toFixed?.(1) ?? podSpread}`);
+  check("进场问好期间机器人可见", greetOk, `greetOk=${greetOk}`);
+  check("无手指 DOM", handGone, `handGone=${handGone}`);
   await page.waitForTimeout(1800);
 
   // 点击空白 → 飞行

@@ -1,11 +1,13 @@
 # products/zhikong/product.yaml — 智控王 TG Matrix
 #
 # 🔧 2026-07-20 第八阶段新增：与本目录其它产品的关键差异——本产品实现**不在**
-# `engines/` 目录下，而是独立仓库/部署（`D:\aixyc2026\tgkz2026`，内部项目名/数据库
-# 均叫 "TG-Matrix"/"tgmatrix.db"，故取 brand_key=matrixx）。boundless 侧只通过
-# `platform/licensing`（HTTP 契约 + stdlib 瘦客户端）对接其 `license_server.py`，
-# 不 import、不搬迁任何实现代码——与 avatarhub/chengjie 模式一致，只是物理位置在
-# 仓库外。详细依据与已修复问题见 platform/licensing/LICENSE_CONTRACT.md。
+# `engines/` 目录下，而是独立仓库（内部项目名/数据库均叫 "TG-Matrix"/"tgmatrix.db"，
+# 故取 brand_key=matrixx）。boundless 侧只通过 platform 的 HTTP 契约 + stdlib 瘦客户端
+# 对接，不 import、不搬迁任何实现代码——与 avatarhub/chengjie 模式一致。
+# 🔧 2026-07-27 修正：原注释写「实现在 D:\aixyc2026\tgkz2026（仓库外）」已过期——
+# 该路径不存在；真实代码就在本仓 `tgkz2026/`（独立 git 仓，remote victor2025PH/tgkz2026）。
+# 对接契约现有两条：`platform/licensing` → `license_server.py`（卡密/会员/收款，:8080）；
+# `platform/credpool` → 主后台 `:8000` 的 api-pool（Telegram 凭据托管池，见 CREDPOOL_CONTRACT.md）。
 id: zhikong
 brand_key: matrixx
 name:   { zh: 智控, en: MatrixX }

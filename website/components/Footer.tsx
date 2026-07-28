@@ -5,19 +5,24 @@ import { useLang } from "./LanguageContext";
 import BrandMark from "./BrandMark";
 import { BRAND } from "@/lib/brand";
 
-const anchors = ["#showcase", "#pricing", "#about", "#contact"];
-
 export default function Footer() {
   const { t, lang } = useLang();
   const year = new Date().getFullYear();
   const zh = lang === "zh";
   // 锚点带上首页前缀：Footer 也出现在 /voice 等落地页，纯 #hash 在那里会失效
   const home = zh ? "/" : "/en";
+  // 主导航（标签来自 content.ts footer.links，顺序固定）：#showcase/#about section
+  // 已随首页收敛下线，改指仍存在的 #products/#pricing/#contact 与品牌故事页。
+  const mainLinks = [
+    { href: `${home}#products`, label: t.footer.links[0] },
+    { href: `${home}#pricing`, label: t.footer.links[1] },
+    { href: zh ? "/brand" : "/en/brand", label: t.footer.links[2] },
+    { href: `${home}#contact`, label: t.footer.links[3] },
+  ];
+  // 合规隔离（lib/isolation.ts）：gated 线（幻颜/智控的落地页）不出现在页脚，页面仅供直达。
   const landingLinks = [
     { href: zh ? "/voice" : "/en/voice", label: zh ? "幻声 · 声音克隆" : "VoiceX · Voice cloning" },
-    { href: zh ? "/face" : "/en/face", label: zh ? "幻颜 · 实时换脸" : "FaceX · Live face swap" },
     { href: zh ? "/interpreting" : "/en/interpreting", label: zh ? "通译 · 克隆音同传" : "LingoX · Interpreting" },
-    { href: zh ? "/matrix" : "/en/matrix", label: zh ? "智控 · 矩阵运营" : "MatrixX · Fleet ops" },
     { href: zh ? "/download" : "/en/download", label: zh ? "下载客户端" : "Download client" },
     { href: zh ? "/manual" : "/en/manual", label: zh ? "使用手册" : "User manual" },
     { href: zh ? "/order" : "/en/order", label: zh ? "购买与下单" : "Plans & ordering" },
@@ -41,13 +46,13 @@ export default function Footer() {
 
           <div className="flex flex-col gap-4">
             <nav className="flex flex-wrap gap-x-8 gap-y-2">
-              {t.footer.links.map((label, i) => (
+              {mainLinks.map((l) => (
                 <a
-                  key={label}
-                  href={`${home}${anchors[i]}`}
+                  key={l.label}
+                  href={l.href}
                   className="text-sm text-slate-400 transition hover:text-white"
                 >
-                  {label}
+                  {l.label}
                 </a>
               ))}
             </nav>

@@ -18,6 +18,7 @@ export const SITE_PAGES: SitePage[] = [
   { slug: "/voice", bilingual: true, locales: ["ko", "ja"], changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
   { slug: "/face", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
   { slug: "/interpreting", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
+  { slug: "/fate", bilingual: true, changeFrequency: "weekly", priority: 0.7, enPriority: 0.6 },
   { slug: "/growth", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
   { slug: "/order", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
   { slug: "/download", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },

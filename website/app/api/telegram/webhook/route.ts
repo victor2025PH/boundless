@@ -11,6 +11,7 @@ import {
 } from "@/lib/telegram-bot";
 import { bindAdminChat, getAdminChats, unbindAdminChat } from "@/lib/admin-store";
 import { bindOrderNotify, notifyAdmins } from "@/lib/order-store";
+import { customerHandoffTexts, extractBindCodes, redeemForAdmin } from "@/lib/cs-redeem";
 import { bindTelegram, collectPearlByTg, parseStartToken, redeemDragonCode, setRemindByTg, type DragonState } from "@/lib/dragon-store";
 import { isDuplicateUpdate } from "@/lib/tg-dedup";
 import { BOT_HANDLE, TELEGRAM_GROUP, TELEGRAM_DISPLAY, SITE_URL } from "@/lib/site";
@@ -276,6 +277,28 @@ export async function POST(req: NextRequest) {
     const dragonCode = extractDragonCode(text);
     if (dragonCode) {
       await handleDragonRedeem(chatId, dragonCode, lang === "zh" ? "zh" : "en", msg.from);
+      return NextResponse.json({ ok: true });
+    }
+
+    // ── 试用赠量绑定码（BC-XXXX-XXXX）：管理员/客服会话直接核销；客户发来则转交客服 ──
+    // 客户端「加客服领 10 万字符」的码。管理员集合复用 /bindadmin 绑定的 admin_chats
+    //（与 /ops /diag 同一信任面）；客户误把码发给 bot 也不白发——转交 + 安抚，人在环。
+    const bcCodes = extractBindCodes(text);
+    if (bcCodes.length) {
+      const isAdmin = (await getAdminChats().catch(() => [] as string[]))
+        .includes(String(chatId));
+      if (isAdmin) {
+        console.log(`[tg-cs-redeem] chat=${chatId} codes=${bcCodes.join(",")}`); // 审计
+        const reply = await redeemForAdmin(bcCodes, chatId);
+        await sendText(chatId, reply, undefined, { plain: true });
+      } else {
+        const who = msg.from?.username
+          ? `@${msg.from.username}`
+          : `${msg.from?.first_name || "客户"}（chat_id: ${chatId}）`;
+        const t = customerHandoffTexts(bcCodes, who, lang === "zh" ? "zh" : "en");
+        await sendText(chatId, t.reply, undefined, { plain: true });
+        await notifyAdmins(t.notify).catch(() => {});
+      }
       return NextResponse.json({ ok: true });
     }
 

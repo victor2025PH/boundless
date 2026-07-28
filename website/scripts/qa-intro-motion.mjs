@@ -13,6 +13,12 @@
  *   先启动站点服务（npm run dev 或 npm run build && npm run start），
  *   确保 --url 指向的地址可访问。
  *
+ * 与生产行为的关系（2026-07 片头改造）：
+ *   开场遮罩默认 ~2.6s 自动散场、任意点击即跳过、移动端视口整体不出现。本脚本要在
+ *   桌面视口无交互观察 --ms 时长，故对被测 URL 自动追加 ?introhold=1（组件内置的
+ *   QA 逃生舱，仅禁用自动散场，粒子引擎行为不变）。移动端「遮罩不出现」的验收
+ *   见 scripts/qa-intro-button-ios.mjs。
+ *
  * 用法：
  *   node scripts/qa-intro-motion.mjs --url http://localhost:3470/
  *   node scripts/qa-intro-motion.mjs --url http://localhost:3470/ --ms 15000
@@ -49,6 +55,8 @@ function argValue(name, def) {
 }
 
 const url = argValue('--url', 'http://localhost:3470/');
+// 片头默认 ~2.6s 自动散场：长时间观察需要 ?introhold=1 逃生舱（仅禁用自动散场）
+const qaUrl = url.includes('introhold=') ? url : url + (url.includes('?') ? '&' : '?') + 'introhold=1';
 const msParsed = Number(argValue('--ms', '12000'));
 const observeMs = Number.isFinite(msParsed) && msParsed > 0 ? msParsed : 12000;
 // --headed：有头模式（无 GPU 的 headless 会把 rAF 节流到 ~2fps，速度/时长指标会失真）
@@ -76,19 +84,13 @@ let exitCode = 0;
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 
-  // 钉死实验桶保证确定性：auto_enter=a（本脚本要无交互观察 12s，B 桶自动进入会抢时序）、
-  // btn_shape=a（统一视觉基准）。
-  await page.addInitScript(() => {
-    try {
-      localStorage.setItem('ab_intro_auto_enter', 'a');
-      localStorage.setItem('ab_intro_btn_shape', 'a');
-    } catch {}
-  });
+  // 旧 A/B 桶钉死（ab_intro_auto_enter / ab_intro_btn_shape）已随实验下线移除：
+  // 12s 自动进入实验被片头无条件自动散场取代，时序确定性现由 URL 上的 ?introhold=1 保证。
 
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(qaUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
   } catch (err) {
-    console.error(`[qa-intro-motion] 页面打开失败：${url}`);
+    console.error(`[qa-intro-motion] 页面打开失败：${qaUrl}`);
     console.error(String(err && err.message ? err.message : err));
     await browser.close();
     process.exit(2);
@@ -360,7 +362,7 @@ try {
   };
 
   const pass = checks.every((c) => c.pass);
-  const result = { url, ms: observeMs, metrics, checks, pass };
+  const result = { url: qaUrl, ms: observeMs, metrics, checks, pass };
   console.log(JSON.stringify(result, null, 2));
   exitCode = pass ? 0 : 1;
 } finally {

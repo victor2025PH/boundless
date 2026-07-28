@@ -3,25 +3,40 @@
 import { useEffect, useState } from "react";
 import { useMotionValue } from "framer-motion";
 import { EveBot, DemonForm, LoongForm, type BotMode, type Skin } from "./AISprite";
-import { FORMATIONS, type HandFormation, type HandGesture } from "./forms/formShared";
 
 /**
  * IP 素材舞台：把 EveBot 单独摆上纯净舞台，供截图/录屏导出品牌素材
  * （TG 广告、开屏、频道贴图等），与站内形象同一份实现，永不走样。
  *
  * URL 参数：
- * - mode:  idle_base | idle_wave | idle_dance | idle_scan | idle_news | idle_spin | flying | falling
+ * - mode:  idle_base | idle_wave | idle_dance | idle_scan | idle_news | idle_spin
+ *          | idle_nod | idle_stretch | idle_tilt | idle_invite | idle_alert
+ *          | idle_clap | idle_shy | flying | falling
  * - scale: 渲染倍数（默认 2，导出 4x 高清用 4）
  * - bg:    transparent（默认，配合截图 omitBackground 出透明 PNG）| ink（品牌深色，录 webm 用）
  * - pool:  1 显示悬浮光池（默认）| 0 隐藏（透明素材叠加到任意底图时更干净）
- * - skin:  normal（默认）| demon（恶魔彩蛋形态素材）
- * - hand:  collapsed | fan | point | tripod | keyboard | radar | burst（锁定引力三指队形，供手势素材/回归）
- * - icon:  tripod 队形托举的字符（如 emoji；配合 hand=tripod）
+ * - skin:  normal（默认）| demon | loong
  */
-const STAGE_MODES: BotMode[] = ["idle_base", "idle_wave", "idle_dance", "idle_scan", "idle_news", "idle_spin", "flying", "falling"];
+const STAGE_MODES: BotMode[] = [
+  "idle_base",
+  "idle_wave",
+  "idle_dance",
+  "idle_scan",
+  "idle_news",
+  "idle_spin",
+  "idle_nod",
+  "idle_stretch",
+  "idle_tilt",
+  "idle_invite",
+  "idle_alert",
+  "idle_clap",
+  "idle_shy",
+  "flying",
+  "falling",
+];
 
 export default function RobotStage() {
-  const [params, setParams] = useState<{ mode: BotMode; scale: number; bg: string; pool: boolean; skin: Skin; gesture: HandGesture | null } | null>(null);
+  const [params, setParams] = useState<{ mode: BotMode; scale: number; bg: string; pool: boolean; skin: Skin } | null>(null);
   const zero = useMotionValue(0);
   const one = useMotionValue(1);
   const poolOpacity = useMotionValue(0.5);
@@ -35,10 +50,7 @@ export default function RobotStage() {
     const pool = q.get("pool") !== "0";
     const s = q.get("skin");
     const skin: Skin = s === "demon" ? "demon" : s === "loong" ? "loong" : "normal";
-    const h = q.get("hand");
-    const gesture: HandGesture | null = h && h in FORMATIONS ? { formation: h as HandFormation, icon: q.get("icon") ?? undefined } : null;
-    setParams({ mode, scale, bg, pool, skin, gesture });
-    /* 透明导出：全链路清掉底色（globals 给 body 铺了品牌深色） */
+    setParams({ mode, scale, bg, pool, skin });
     if (bg === "transparent") {
       document.documentElement.style.background = "transparent";
       document.body.style.background = "transparent";
@@ -51,6 +63,21 @@ export default function RobotStage() {
 
   if (!params) return null;
 
+  const shared = {
+    mode: params.mode,
+    isHovered: false,
+    newsText: "AI 拟人翻译已就绪…",
+    newsCta: "BOUNDLESS · AI",
+    scrollTilt: zero,
+    flightRotate: zero,
+    gazeX: zero,
+    gazeY: zero,
+    squashY: one,
+    shadowOpacity: poolOpacity,
+    onNewsCta: () => {},
+    reduced: false,
+  };
+
   return (
     <main
       data-stage-ready="1"
@@ -59,53 +86,11 @@ export default function RobotStage() {
     >
       <div style={{ transform: `scale(${params.scale})` }}>
         {params.skin === "demon" ? (
-          <DemonForm
-            mode={params.mode}
-            isHovered={false}
-            newsText="AI 拟人翻译已就绪…"
-            newsCta="BOUNDLESS · AI"
-            scrollTilt={zero}
-            flightRotate={zero}
-            gazeX={zero}
-            gazeY={zero}
-            squashY={one}
-            shadowOpacity={poolOpacity}
-            onNewsCta={() => {}}
-            reduced={false}
-            gesture={params.gesture}
-          />
+          <DemonForm {...shared} />
         ) : params.skin === "loong" ? (
-          <LoongForm
-            mode={params.mode}
-            isHovered={false}
-            newsText="AI 拟人翻译已就绪…"
-            newsCta="BOUNDLESS · AI"
-            scrollTilt={zero}
-            flightRotate={zero}
-            gazeX={zero}
-            gazeY={zero}
-            squashY={one}
-            shadowOpacity={poolOpacity}
-            onNewsCta={() => {}}
-            reduced={false}
-          />
+          <LoongForm {...shared} />
         ) : (
-          <EveBot
-            mode={params.mode}
-            isHovered={false}
-            newsText="AI 拟人翻译已就绪…"
-            newsCta="BOUNDLESS · AI"
-            scrollTilt={zero}
-            flightRotate={zero}
-            gazeX={zero}
-            gazeY={zero}
-            squashY={one}
-            shadowOpacity={poolOpacity}
-            onNewsCta={() => {}}
-            reduced={false}
-            skin={params.skin}
-            gesture={params.gesture}
-          />
+          <EveBot {...shared} skin={params.skin} />
         )}
       </div>
     </main>

@@ -1,6 +1,7 @@
 import { content } from "./content";
 import { SITE_URL } from "./site";
 import { BRAND, PRODUCT_COUNT, productLineItems, productLinesText } from "./brand";
+import productFacts from "./generated/product-facts.json";
 
 export type BotLang = "zh" | "en";
 
@@ -16,6 +17,101 @@ export function detectKnowledgeLang(text: string): BotLang {
 
 function t(lang: BotLang) {
   return content[lang];
+}
+
+// ---------------------------------------------------------------------------
+// 报价单一事实源：lib/generated/product-facts.json（npm run sync:facts 生成，
+// 上游 = products/*/product.yaml + platform/licensing/sku_registry.json）。
+// bot 语料里的报价数字一律经下面的 sku 工具从事实源取数——官网改价（改上游
+// 后重新 sync:facts）bot 自动跟价，消灭「官网新价、bot 旧价」双源漂移。
+// 报价范围刻意维持现状：只报聊天（智聊 chatx）/ 翻译（通译 lingox）/ 声音
+// （幻声 voicex）三条主推线的定值 SKU；换脸/直播分身等定制交付业务不在线上
+// 报价（合规隔离口径，见 keywordRules / buildKnowledgeContext 的定制交付段）。
+// 查不到 / 非定值（TBD、from N、按规模报价）→ null → 调用处省略该报价行，
+// 绝不 throw（bot 语料生成失败不能弄崩页面/接口）。
+// ---------------------------------------------------------------------------
+
+interface FactSku {
+  id: string;
+  name: { zh: string; en: string };
+  unit: string;
+  price: string;
+}
+
+/** SKU 索引（防御性构建：生成物形状异常 → 空表 → 一律按查不到处理）。 */
+const FACT_SKUS: ReadonlyMap<string, FactSku> = (() => {
+  const map = new Map<string, FactSku>();
+  try {
+    for (const product of productFacts.products ?? []) {
+      for (const s of product.skus ?? []) {
+        if (typeof s?.id === "string" && typeof s?.price === "string" && typeof s?.unit === "string") {
+          map.set(s.id, {
+            id: s.id,
+            name: { zh: String(s.name?.zh ?? s.id), en: String(s.name?.en ?? s.id) },
+            unit: s.unit,
+            price: s.price,
+          });
+        }
+      }
+    }
+  } catch {
+    /* 空表兜底：所有报价行优雅省略 */
+  }
+  return map;
+})();
+
+/** 主推线的报价 SKU（顺序即展示顺序，与 content.ts 对应板块的档位顺序一致）。 */
+const CHATX_PLAN_SKUS: readonly string[] = ["chatx-entry", "chatx-team", "chatx-flagship"];
+const LINGOX_SKUS: readonly string[] = ["lingox-charpack", "lingox-team", "lingox-pro"];
+const VOICEX_SKUS: readonly string[] = ["voicex-starter", "voicex-std", "voicex-pro", "voicex-usage"];
+
+/** 业务能力段里价格对改由事实源生成的 solution（content.ts 的 Solution.id → SKU 列表）；
+ *  其余板块（定制交付 / 按需报价类）没有定值 SKU，维持 content 文案原样。 */
+const FACT_PRICED_SOLUTIONS: Record<string, readonly string[]> = {
+  chatx: CHATX_PLAN_SKUS,
+  voice: VOICEX_SKUS,
+  translate: LINGOX_SKUS,
+};
+
+/** 定值报价才可外报（"TBD" / "from 980" / "按规模报价" 一律不报，宁可漏报不错报）。 */
+const NUMERIC_PRICE_RE = /^\d+(\.\d+)?$/;
+
+function sku(id: string | undefined): FactSku | null {
+  if (!id) return null;
+  return FACT_SKUS.get(id) ?? null;
+}
+
+/** 报价数字（如 "58"）；查不到 / 非定值 → null。 */
+function skuPriceNumber(id: string | undefined): string | null {
+  const s = sku(id);
+  return s && NUMERIC_PRICE_RE.test(s.price) ? s.price : null;
+}
+
+/** 计费周期后缀，对齐现有文案风格（"58 / 月"、一次性 "59"、"10 / 万字符"）；未知周期不猜。 */
+function unitSuffix(unit: string, lang: BotLang): string | null {
+  if (unit === "month") return lang === "zh" ? " / 月" : " / mo";
+  if (unit === "one-time") return "";
+  if (unit === "per-10k-chars") return lang === "zh" ? " / 万字符" : " / 10K chars";
+  return null;
+}
+
+/** 「价格 + 周期」文本（如 "99 / 月"）；查不到 / 非定值 / 未知周期 → null。 */
+function skuPriceText(id: string | undefined, lang: BotLang): string | null {
+  const s = sku(id);
+  if (!s || !NUMERIC_PRICE_RE.test(s.price)) return null;
+  const suffix = unitSuffix(s.unit, lang);
+  return suffix === null ? null : `${s.price}${suffix}`;
+}
+
+/** 「档位名 + 价格」对（如 体验 → 18 / 月）；逐个过滤查不到的 SKU。 */
+function skuPlanPrices(ids: readonly string[], lang: BotLang): Array<{ name: string; price: string }> {
+  const rows: Array<{ name: string; price: string }> = [];
+  for (const id of ids) {
+    const s = sku(id);
+    const price = skuPriceText(id, lang);
+    if (s && price !== null) rows.push({ name: s.name[lang], price });
+  }
+  return rows;
 }
 
 export function buildWelcome(lang: BotLang) {
@@ -50,12 +146,12 @@ export function buildCsWelcome(lang: BotLang) {
   return lang === "zh"
     ? `👋 您好，我是 <b>${BRAND.company.full}</b> 的方案顾问顾嘉（Gary）。
 
-换脸 / 克隆声音 / 实时翻译 / AI 自动成交 / 私有部署 / 价格——都能直接问我，7×24 秒回。
+实时翻译 / AI 自动成交 / 克隆声音 / 私有部署 / 价格——都能直接问我，7×24 秒回。
 
 也可以点下面按钮：`
     : `👋 Hi, I'm Gary — senior solutions consultant at <b>${BRAND.company.full}</b>.
 
-Face swap / voice cloning / real-time translation / AI auto-closing / private deployment / pricing — ask me anything, 24/7.
+Real-time translation / AI auto-closing / voice cloning / private deployment / pricing — ask me anything, 24/7.
 
 Or tap below:`;
 }
@@ -70,12 +166,18 @@ export function buildServices(lang: BotLang) {
 
 export function buildPricing(lang: BotLang) {
   const c = t(lang);
+  // 档位名/权益文案取 content，价格数字取事实源（按档位顺序对应）；查不到的档省略该行
   const plans = c.plans.items
-    .map((p) => `· <b>${p.name}</b> — ${p.priceMonthly} USD/${lang === "zh" ? "月" : "mo"}`)
+    .map((p, i) => {
+      const price = skuPriceNumber(CHATX_PLAN_SKUS[i]);
+      return price === null ? null : `· <b>${p.name}</b> — ${price} USD/${lang === "zh" ? "月" : "mo"}`;
+    })
+    .filter((line): line is string => line !== null)
     .join("\n");
-  const rt = c.realtime.plans
-    .map((p) => `· <b>${p.name}</b> — ${p.price}`)
+  const xlate = skuPlanPrices(LINGOX_SKUS, lang)
+    .map((r) => `· <b>${r.name}</b> — ${r.price}`)
     .join("\n");
+  // 合作方式（部署/托管/分红）非 SKU 定价，事实源没有对应条目，维持 content 原文
   const engage = c.engage.models.map((m) => `· <b>${m.name}</b> — ${m.price}`).join("\n");
 
   return lang === "zh"
@@ -84,8 +186,8 @@ export function buildPricing(lang: BotLang) {
 <b>AI 成交聊天 · 月付</b>
 ${plans}
 
-<b>实时换脸 · 一次性部署</b>
-${rt}
+<b>跨境聊天翻译 · 通译</b>
+${xlate}
 
 <b>合作方式</b>
 ${engage}
@@ -96,8 +198,8 @@ ${engage}
 <b>AI auto-closing chat · monthly</b>
 ${plans}
 
-<b>Real-time face swap · one-time deploy</b>
-${rt}
+<b>Chat translation · LingoX</b>
+${xlate}
 
 <b>Engagement models</b>
 ${engage}
@@ -171,20 +273,27 @@ Full tutorial and manual: /download and /manual. Stuck? 99 USD remote install (U
 function keywordRules(lang: BotLang) {
   const zh = [
     { keys: ["安装", "下载", "装不上", "装机", "smartscreen", "杀毒", "报毒", "激活", "试用", "显卡", "显存", "配置要求", "客户端"], fn: () => buildInstallHelp(lang) },
-    { keys: ["换脸", "换声", "直播", "连麦", "视频通话"], fn: () => t(lang).realtime.subtitle.slice(0, 400) + "…" },
+    // 换脸/直播分身属定制交付业务：网页端不做营销式报价，统一引导人工顾问评估（合规隔离口径）。
+    { keys: ["换脸", "换声", "直播", "连麦", "视频通话"], fn: () => "换脸 / 直播分身属于私有定制交付业务，需要人工顾问先评估场景与合规边界再报价交付。点下方「人工客服」或留个联系方式，我们来跟进。" },
     { keys: ["成交", "翻译", "聊天", "聚合", "客服", "谷歌"], fn: () => buildAutochat(lang) },
     { keys: ["价格", "多少钱", "费用", "usdt", "套餐", "月付"], fn: () => buildPricing(lang) },
     { keys: ["部署", "私有", "托管", "交钥匙", "投资", "分红", "合作"], fn: () => buildDeploy(lang) },
     { keys: ["声音", "克隆", "配音", "tts"], fn: () => {
       const s = t(lang).solutions.find((x) => x.id === "voice");
-      return s ? `🎙 <b>${s.title}</b>\n${s.desc}\n\n价格：${s.pricing.map((p) => `${p.plan} ${p.price}`).join(" · ")}` : buildServices(lang);
+      if (!s) return buildServices(lang);
+      // 价格对取事实源（幻声 voicex）；一个都查不到就整行省略
+      const rows = skuPlanPrices(VOICEX_SKUS, lang).map((r) => `${r.name} ${r.price}`);
+      const priceLine = rows.length ? `\n\n价格：${rows.join(" · ")}` : "";
+      return `🎙 <b>${s.title}</b>\n${s.desc}${priceLine}`;
     }},
     { keys: ["人工", "客服", "联系", "下单"], fn: () => buildContact(lang) },
     { keys: ["业务", "服务", "能力"], fn: () => buildServices(lang) },
   ];
   const en = [
     { keys: ["install", "download", "setup", "smartscreen", "antivirus", "activate", "trial", "gpu", "vram", "requirement", "client"], fn: () => buildInstallHelp(lang) },
-    { keys: ["face", "swap", "live", "stream", "voice"], fn: () => t(lang).realtime.subtitle.slice(0, 400) + "…" },
+    // Face/live-swap is custom-delivery only: no marketing quote on the web widget, route to a human consultant.
+    // ("voice" removed from this rule so voice-clone questions fall through to the dedicated voice rule below.)
+    { keys: ["face", "swap", "live", "stream"], fn: () => "Face swap / live avatar is a custom private-delivery service — a human consultant needs to assess your scenario and compliance boundary before quoting. Tap Human support below or leave your contact and we'll follow up." },
     { keys: ["chat", "translat", "clos", "aggregat", "google"], fn: () => buildAutochat(lang) },
     { keys: ["price", "cost", "usdt", "plan", "monthly"], fn: () => buildPricing(lang) },
     { keys: ["deploy", "private", "turnkey", "invest", "partner"], fn: () => buildDeploy(lang) },
@@ -219,8 +328,8 @@ export function matchFreeText(text: string, lang: BotLang): string | null {
 
 export function buildFallback(lang: BotLang) {
   return lang === "zh"
-    ? `我没完全理解你的问题 🤔\n\n试试发：价格、换脸、AI成交、合作方式\n或点下方按钮打开 Mini App 查看详情`
-    : `I didn't quite catch that 🤔\n\nTry: pricing, face swap, AI chat, engagement\nOr tap below to open the Mini App`;
+    ? `我没完全理解你的问题 🤔\n\n试试发：价格、翻译、AI成交、合作方式\n或点下方按钮打开 Mini App 查看详情`
+    : `I didn't quite catch that 🤔\n\nTry: pricing, translation, AI chat, engagement\nOr tap below to open the Mini App`;
 }
 
 /** Compact, grounded knowledge context for the LLM (real prices & facts). */
@@ -245,22 +354,33 @@ export function buildKnowledgeContext(lang: BotLang): string {
   parts.push(
     (lang === "zh" ? "套餐：" : "Plans: ") +
       c.plans.items
-        .map((p) => `${p.name} ${p.priceMonthly} USD/${lang === "zh" ? "月" : "mo"}（${p.features.join("、")}）`)
+        .map((p, i) => {
+          // 档位名/权益取 content，价格数字取事实源（按档位顺序对应）；查不到省略该档
+          const price = skuPriceNumber(CHATX_PLAN_SKUS[i]);
+          return price === null
+            ? null
+            : `${p.name} ${price} USD/${lang === "zh" ? "月" : "mo"}（${p.features.join("、")}）`;
+        })
+        .filter((line): line is string => line !== null)
         .join("; ")
   );
 
-  parts.push(lang === "zh" ? "【实时换脸换声 · 私有部署】" : "[Real-time Face/Voice Swap · Private Deploy]");
-  parts.push(c.realtime.subtitle);
+  // 换脸/直播分身（定制交付）刻意不进公开知识库：网页顾问不主动报价，统一引导人工评估（合规隔离口径）。
   parts.push(
-    (lang === "zh" ? "部署套餐：" : "Deploy plans: ") +
-      c.realtime.plans.map((p) => `${p.name} ${p.price}（${p.specs.join("、")}）`).join("; ")
+    lang === "zh"
+      ? "【定制交付业务】换脸 / 直播分身等属私有定制交付：不在线上报价，需人工顾问评估场景与合规边界后交付；用户问到时引导添加 Telegram 人工客服。"
+      : "[Custom delivery] Face swap / live avatar are private custom-delivery services: no online quotes — a human consultant assesses scenario and compliance first; route interested users to Telegram human support."
   );
-  parts.push((lang === "zh" ? "更多服务：" : "Extras: ") + c.realtime.extras.join("; "));
 
   parts.push(lang === "zh" ? "【业务能力】" : "[Solutions]");
-  c.solutions.forEach((s) =>
-    parts.push(`- ${s.title}: ${s.desc} | ${s.pricing.map((p) => `${p.plan} ${p.price}`).join(", ")}`)
-  );
+  c.solutions.forEach((s) => {
+    // 主推线（chatx/voice/translate）价格对由事实源生成；其余板块维持 content 原文
+    const factIds: readonly string[] | undefined = FACT_PRICED_SOLUTIONS[s.id];
+    const rows = factIds
+      ? skuPlanPrices(factIds, lang).map((r) => `${r.name} ${r.price}`)
+      : s.pricing.map((p) => `${p.plan} ${p.price}`);
+    parts.push(rows.length ? `- ${s.title}: ${s.desc} | ${rows.join(", ")}` : `- ${s.title}: ${s.desc}`);
+  });
 
   parts.push(lang === "zh" ? "【三种合作方式】" : "[Three engagement models]");
   c.engage.models.forEach((m) => parts.push(`- ${m.name}（${m.badge}）: ${m.tagline} | ${m.you} / ${m.we} | ${m.price}`));
@@ -312,6 +432,7 @@ export function systemPrompt(lang: BotLang): string {
 - 【语言镜像】务必用「用户最新一条消息所用的语言」作答：用户用西班牙语/葡萄牙语/阿拉伯语/泰语/英语等，就用同种语言地道、口语化地回复（像本地母语顾问，不要翻译腔）。用户用中文则用简体中文。
 - 涉及价格只用资料里的真实数字；资料没有的就说"具体可按你的需求报价，留个联系方式我跟进"。
 - 适当推荐主推「AI 自动成交聊天系统」。
+- 换脸、直播分身等定制交付业务不主动推销、不报价：用户问到时说明属私有定制交付、需人工评估合规与场景，引导添加 Telegram 人工客服。
 - 纯文本回复，不要使用 markdown 符号（如 * # 等）。
 - 不讨论违法用途；强调私有部署、数据不出网、USDT 结算。
 - 结尾可引导："想要方案/报价可以留个联系方式，或点菜单打开官网。"
@@ -330,6 +451,7 @@ Rules:
 - [Language mirroring] ALWAYS reply in the SAME language as the user's latest message: if they write Spanish/Portuguese/Arabic/Thai/etc., reply fluently and idiomatically in that exact language (like a native consultant, no translationese). If Chinese, reply in Simplified Chinese.
 - Use only real numbers from the material; if missing, say "I can quote based on your needs — leave your contact and I'll follow up".
 - Promote the flagship "AI Auto-Closing Chat System" when relevant.
+- Never proactively pitch or quote face swap / live avatar: they are custom private-delivery services — explain that a human consultant must assess compliance and scenario first, and route to Telegram human support.
 - Plain text only, no markdown symbols (no * # etc).
 - No illegal use; emphasize private deployment, off-net data, USDT.
 - End by guiding: "leave your contact for a plan/quote, or open the site from the menu."

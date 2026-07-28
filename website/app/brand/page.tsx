@@ -1,17 +1,14 @@
 "use client";
 
 import { useLang } from "@/components/LanguageContext";
-import {
-  BRAND,
-  CATEGORIES,
-  CATEGORY_ORDER,
-  FAMILY_PITCH,
-  PRODUCT_COUNT,
-  PRODUCT_ORDER,
-  productsInCategory,
-} from "@/lib/brand";
+import { BRAND, CATEGORIES, CATEGORY_ORDER } from "@/lib/brand";
 import { CATEGORY_UI } from "@/lib/categoryUi";
-import { PRODUCT_LANDING, PRODUCT_ANCHOR } from "@/components/productMeta";
+import {
+  PRODUCT_LANDING,
+  PRODUCT_ANCHOR,
+  PUBLIC_PRODUCT_ORDER,
+  publicProductsInCategory,
+} from "@/components/productMeta";
 import ProductIcon from "@/components/ProductIcon";
 import BrandMark from "@/components/BrandMark";
 import { CONTACT_URL, localePath } from "@/lib/site";
@@ -29,13 +26,13 @@ const COPY = {
       "一张脸，限制了你能成为谁；一种声音，困住了你能扮演谁；一门语言，隔开了你与世界；一道平台的围墙，挡住了客户走向你。",
       "无界，为打破这一切而生。",
     ],
-    wallsHead: "我们用 AI 拆掉七道墙",
+    wallsHead: "我们用 AI 拆掉这些墙",
     closingHead: "底座本身，也没有边界",
     closing:
       "私有部署、数据不出网、自主可控——一切按你的业务自由定制。这才是「无界」二字真正的底气。",
     slogan: "无界。让沟通，真正没有边界。",
     breakLabel: "打破",
-    productsHead: `${PRODUCT_COUNT} 条产品线 · 三系 · 破七道边界`,
+    productsHead: `${PUBLIC_PRODUCT_ORDER.length} 条产品线 · 三大产品系`,
     ctaTitle: "把「无界」用起来",
     ctaDesc: "一句话告诉我们你的场景，我们给方案与报价。",
     ctaBtn: "联系我们",
@@ -54,13 +51,13 @@ const COPY = {
       "A face limits who you can be; a voice limits who you can play; a language separates you from the world; a platform's walls keep customers from reaching you.",
       "BOUNDLESS was born to break them all.",
     ],
-    wallsHead: "We tear down seven walls with AI",
+    wallsHead: "The walls we tear down with AI",
     closingHead: "Even the foundation is borderless",
     closing:
       "Private deployment, data stays off-net, fully self-controlled — freely tailored to your business. That is what truly backs the name BOUNDLESS.",
     slogan: "BOUNDLESS. Communication, with no borders at all.",
     breakLabel: "Breaks",
-    productsHead: `${PRODUCT_COUNT} lines · three families · seven barriers`,
+    productsHead: `${PUBLIC_PRODUCT_ORDER.length} lines · three families`,
     ctaTitle: "Put BOUNDLESS to work",
     ctaDesc: "Tell us your scenario in one line — we'll send a plan and a quote.",
     ctaBtn: "Contact us",
@@ -73,7 +70,6 @@ const COPY = {
 export default function BrandPage() {
   const { lang } = useLang();
   const c = COPY[lang];
-  const pitch = FAMILY_PITCH[lang];
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-ink-950 text-white">
@@ -95,7 +91,6 @@ export default function BrandPage() {
             {c.heroTitle}
           </h1>
           <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-slate-300 sm:text-lg">{c.heroDesc}</p>
-          <p className="mx-auto mt-4 max-w-xl text-sm text-slate-500">{pitch.headline}</p>
         </section>
 
         <section className="mx-auto mt-20 max-w-3xl">
@@ -109,7 +104,7 @@ export default function BrandPage() {
           </div>
         </section>
 
-        {/* 三系七产品（与首页 ProductMatrix / BrandShowcase 同口径） */}
+        {/* 三系公开产品线（与首页 ProductMatrix 同口径：gated / 未上线线不陈列） */}
         <section className="mt-16">
           <h2 className="mb-2 text-center text-sm font-medium uppercase tracking-[0.25em] text-slate-400">
             {c.wallsHead}
@@ -120,7 +115,7 @@ export default function BrandPage() {
             {CATEGORY_ORDER.map((cat) => {
               const cc = CATEGORIES[cat];
               const ui = CATEGORY_UI[cat];
-              const items = productsInCategory(cat);
+              const items = publicProductsInCategory(cat);
               return (
                 <div key={cat}>
                   <div className={`mb-4 border-l-2 pl-3 ${
@@ -141,10 +136,11 @@ export default function BrandPage() {
                     </p>
                   </div>
 
-                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {/* 每系 ≤2 张卡时收成两列，避免三列网格留空位 */}
+                  <div className={`grid gap-4 sm:grid-cols-2 ${items.length > 2 ? "lg:grid-cols-3" : ""}`}>
                     {items.map((key) => {
                       const p = BRAND.products[key];
-                      const idx = PRODUCT_ORDER.indexOf(key);
+                      const idx = PUBLIC_PRODUCT_ORDER.indexOf(key);
                       const landing = PRODUCT_LANDING[key];
                       const href = landing
                         ? localePath(lang, landing)

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import {
   ArrowRight,
   ArrowDown,
@@ -10,6 +11,7 @@ import {
   ShieldCheck,
   AudioLines,
   PlayCircle,
+  Sparkles,
   Home,
 } from "lucide-react";
 import { useLang } from "./LanguageContext";
@@ -202,6 +204,46 @@ function DemoBlock({ product, L, clipLabels }: { product: LandingKey; L: Landing
             </div>
           </div>
         )}
+
+        {product === "fate" && (
+          <div className="space-y-6">
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-fuchsia-300">
+                {lang === "zh" ? "人生 K 线卡 · 引擎出图" : "Life K-line card · engine render"}
+              </p>
+              <Image
+                src={LANDING_MEDIA.fateKline.img}
+                alt={
+                  lang === "zh"
+                    ? "人生 K 线 · 十年运势曲线（示例样盘，虚构生辰）"
+                    : "Life K-line: ten-year fortune curve (sample chart, fictional birth data)"
+                }
+                width={LANDING_MEDIA.fateKline.width}
+                height={LANDING_MEDIA.fateKline.height}
+                className="w-full rounded-2xl border border-fuchsia-400/25 bg-ink-900"
+              />
+            </div>
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-fuchsia-300">
+                {lang === "zh" ? "排盘摘要 · 引擎逐字输出" : "Chart summary · verbatim engine output"}
+              </p>
+              <div className="rounded-2xl border border-white/10 bg-ink-900/60 p-5">
+                <pre className="whitespace-pre-wrap font-mono text-[13px] leading-relaxed text-slate-300">
+                  {LANDING_MEDIA.fateKline.chartSummary}
+                </pre>
+                <p className="mt-3 text-[11px] text-slate-500">
+                  {lang === "zh"
+                    ? "示例样盘 · 虚构生辰（1995-08-17）——时辰性别齐全，所以有时柱与大运；缺哪项，引擎就少排哪项。"
+                    : "Sample chart, fictional birth data (1995-08-17) — hour and gender were provided, hence the hour pillar and luck cycles; whatever is missing, the engine simply leaves out."}
+                </p>
+              </div>
+              <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
+                <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-emerald-400/80" />
+                {d.realNote[lang]}
+              </div>
+            </div>
+          </div>
+        )}
       </Reveal>
     </div>
   );
@@ -220,7 +262,7 @@ export default function ProductLanding({ product, content, ui }: LandingProps) {
         <div className="mx-auto max-w-3xl text-center">
           <Reveal>
             <span className="inline-flex items-center gap-1.5 rounded-full border border-neon-cyan/30 bg-neon-cyan/10 px-3.5 py-1 text-xs font-medium text-neon-cyan">
-              {product === "voice" ? <AudioLines className="h-3.5 w-3.5" /> : product === "face" ? <PlayCircle className="h-3.5 w-3.5" /> : <Languages className="h-3.5 w-3.5" />}
+              {product === "voice" ? <AudioLines className="h-3.5 w-3.5" /> : product === "face" ? <PlayCircle className="h-3.5 w-3.5" /> : product === "fate" ? <Sparkles className="h-3.5 w-3.5" /> : <Languages className="h-3.5 w-3.5" />}
               {L.productLine[lang]}
             </span>
           </Reveal>
@@ -253,7 +295,15 @@ export default function ProductLanding({ product, content, ui }: LandingProps) {
                 onClick={() => track("cta_click", { where: `landing_${product}_hero` })}
                 className="group inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-7 py-3 font-medium text-ink-950 transition hover:opacity-90"
               >
-                {ui ? ui.bookDemo : lang === "zh" ? "预约真机演示" : "Book a live demo"}
+                {ui
+                  ? ui.bookDemo
+                  : product === "fate"
+                  ? lang === "zh"
+                    ? "Telegram 试聊排盘"
+                    : "Try a reading on Telegram"
+                  : lang === "zh"
+                  ? "预约真机演示"
+                  : "Book a live demo"}
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
               </a>
               <a
@@ -266,6 +316,10 @@ export default function ProductLanding({ product, content, ui }: LandingProps) {
                   ? lang === "zh"
                     ? "先选场景再往下看"
                     : "Pick a scene first"
+                  : product === "fate"
+                  ? lang === "zh"
+                    ? "先看真盘与 K 线"
+                    : "See a real chart"
                   : lang === "zh"
                   ? "先看真实样片"
                   : "See real samples"}
@@ -278,6 +332,10 @@ export default function ProductLanding({ product, content, ui }: LandingProps) {
               <ShieldCheck className="h-3.5 w-3.5 text-emerald-400/80" />
               {ui
                 ? ui.trustLine
+                : product === "fate"
+                ? lang === "zh"
+                  ? "运势是倾向，不是命令 · 参考与陪伴定位 · 不做恐吓式断言"
+                  : "Fortune is a tendency, not a command · reflection & companionship · never fear-mongering"
                 : lang === "zh"
                 ? "本地部署 · 数据不出机房 · USDT 结算 · 产出可验真"
                 : "Private deployment · data stays in-house · USDT settlement · verifiable output"}
@@ -419,11 +477,20 @@ export default function ProductLanding({ product, content, ui }: LandingProps) {
                 {ui ? ui.tgCta : lang === "zh" ? "Telegram 一对一咨询" : "1-on-1 on Telegram"}
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
               </a>
+              {/* 幻缘无对外 SKU（详批付费未开闸）：不给「套餐与价格」入口，改回首页看其他产品线 */}
               <Link
-                href={ui ? ui.pricingHref : localePath(lang, "/#pricing")}
+                href={ui ? ui.pricingHref : product === "fate" ? localePath(lang, "/") : localePath(lang, "/#pricing")}
                 className="inline-flex items-center gap-2 rounded-full border border-white/15 px-7 py-3 font-medium text-slate-200 transition hover:border-neon-cyan/50 hover:text-white"
               >
-                {ui ? ui.pricingLabel : lang === "zh" ? "查看套餐与价格" : "Plans & pricing"}
+                {ui
+                  ? ui.pricingLabel
+                  : product === "fate"
+                  ? lang === "zh"
+                    ? "看看其他产品线"
+                    : "Explore other products"
+                  : lang === "zh"
+                  ? "查看套餐与价格"
+                  : "Plans & pricing"}
               </Link>
             </div>
           </div>

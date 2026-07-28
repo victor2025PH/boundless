@@ -13,7 +13,23 @@ const BASE = process.env.ROBOT_BASE_URL || "http://localhost:3210";
 const OUT = ".robot-assets";
 mkdirSync(OUT, { recursive: true });
 
-const STILL_MODES = ["idle_base", "idle_wave", "idle_dance", "idle_scan", "idle_news", "idle_spin", "flying", "falling"];
+const STILL_MODES = [
+  "idle_base",
+  "idle_wave",
+  "idle_dance",
+  "idle_scan",
+  "idle_news",
+  "idle_spin",
+  "idle_nod",
+  "idle_stretch",
+  "idle_tilt",
+  "idle_invite",
+  "idle_alert",
+  "idle_clap",
+  "idle_shy",
+  "flying",
+  "falling",
+];
 const VIDEO_MODES = ["idle_base", "idle_wave", "idle_dance", "idle_news"];
 // 皮肤：normal 全套 + demon/loong 精选（彩蛋营销素材）
 const SKINS = [

@@ -55,8 +55,8 @@ export const BRAND = {
       scene: { zh: "真机获客", en: "Lead gen" },
       break: { zh: "触达与获客之界", en: "the reach barrier" },
       desc: {
-        zh: "真机多号自动加友、打招呼、群提取，7×24 全自动获客引流进私域",
-        en: "Multi-device auto add / greet / group-extract — automated lead-gen into your funnel",
+        zh: "真机集群获客：多号管理、群成员提取、打招呼引流；邀请制评估、私有化交付",
+        en: "Real-device lead-gen fleet: multi-account ops, group extraction, outreach — invite-only assessment, private delivery",
       },
       // 获客能力对应 mobile-auto0423（OpenClaw 真机 RPA 集群）；SKU 卡 = content.solutions#reach。
       skuIds: ["reach"],
@@ -156,8 +156,8 @@ export const BRAND = {
       scene: { zh: "矩阵运营", en: "Fleet ops" },
       break: { zh: "矩阵运营之界", en: "the fleet-scale barrier" },
       desc: {
-        zh: "Telegram 多账号矩阵化运营：AI 团队协作 + 智能防封，规模化不失控",
-        en: "Telegram fleet ops at scale: AI multi-persona teamwork + smart anti-ban",
+        zh: "Telegram 多账号矩阵化运营：AI 团队协作 + 智能频控，规模化不失控",
+        en: "Telegram fleet ops at scale: AI multi-persona teamwork + smart rate control",
       },
       // 对接实现在独立部署的引擎侧（platform/licensing 契约），非本仓 engines/ 目录内，
       // 见 products/zhikong/product.yaml 与 LICENSE_CONTRACT.md。gated 高风险线，

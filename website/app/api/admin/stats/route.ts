@@ -214,9 +214,15 @@ export async function GET(req: NextRequest) {
   }
 
   // ── 机器人 IP（EveBot）互动：会话级漏斗（浏览→互动→点开客服→留资）+ 播报效果 ──
-  // 互动 = 悬停/让它飞/点播报/点机器人；点开客服 = ai_sprite_click 或 ai_chat_open(from=sprite|hologram)。
+  // 互动 = 悬停/让它飞/点播报/点贴身短句/点机器人；点开客服 = ai_sprite_click 或 ai_chat_open(from=sprite|hologram)。
   // 只统计带 sid 的网站会话（miniapp 有独立漏斗），受 ?days= 时间窗约束。
-  const SPRITE_ENGAGE = new Set(["sprite_hover", "sprite_fly", "sprite_news_click", "ai_sprite_click"]);
+  const SPRITE_ENGAGE = new Set([
+    "sprite_hover",
+    "sprite_fly",
+    "sprite_news_click",
+    "sprite_speech_click",
+    "ai_sprite_click",
+  ]);
   const spriteBySid: Record<string, Set<string>> = {};
   for (const e of winEvents) {
     const ev = String(e.event ?? "");
@@ -240,10 +246,28 @@ export async function GET(req: NextRequest) {
       continue;
     }
     spEngaged++;
-    if (arr.some((x) => x === "ai_sprite_click" || x === "ai_chat_open:sprite" || x === "ai_chat_open:hologram")) spOpened++;
+    /* sprite_* 含贴身短句开客服（sprite_greet / sprite_invite / …） */
+    if (
+      arr.some(
+        (x) =>
+          x === "ai_sprite_click" ||
+          x === "ai_chat_open:hologram" ||
+          x === "ai_chat_open:hologram_demon" ||
+          x.startsWith("ai_chat_open:sprite")
+      )
+    )
+      spOpened++;
     if (set.has("lead_submit")) spLeads++;
   }
   const spriteNewsAgg: Record<string, { imp: number; clk: number }> = {};
+  const speechByKind: Record<string, number> = {};
+  const speechClickByKind: Record<string, number> = {};
+  let speech = 0;
+  let speechClick = 0;
+  let shy = 0;
+  let alert = 0;
+  let demonUnlock = 0;
+  let demonRevert = 0;
   for (const e of winEvents) {
     if (e.event === "sprite_news_impression") {
       const s = propStr(e, "section") || "?";
@@ -251,6 +275,22 @@ export async function GET(req: NextRequest) {
     } else if (e.event === "sprite_news_click") {
       const s = propStr(e, "section") || "?";
       (spriteNewsAgg[s] ??= { imp: 0, clk: 0 }).clk++;
+    } else if (e.event === "sprite_speech") {
+      speech++;
+      const k = propStr(e, "kind") || "?";
+      speechByKind[k] = (speechByKind[k] ?? 0) + 1;
+    } else if (e.event === "sprite_speech_click") {
+      speechClick++;
+      const k = propStr(e, "kind") || "?";
+      speechClickByKind[k] = (speechClickByKind[k] ?? 0) + 1;
+    } else if (e.event === "sprite_shy") {
+      shy++;
+    } else if (e.event === "sprite_alert") {
+      alert++;
+    } else if (e.event === "sprite_demon_unlock") {
+      demonUnlock++;
+    } else if (e.event === "sprite_demon_revert") {
+      demonRevert++;
     }
   }
   const sprite = {
@@ -259,6 +299,15 @@ export async function GET(req: NextRequest) {
     greet: winEvents.filter((e) => e.event === "sprite_greet").length,
     newsImpressions: winEvents.filter((e) => e.event === "sprite_news_impression").length,
     newsClicks: winEvents.filter((e) => e.event === "sprite_news_click").length,
+    speech,
+    speechClick,
+    speechByKind,
+    speechClickByKind,
+    shy,
+    alert,
+    demonUnlock,
+    demonRevert,
+    speechCtr: pct(speechClick, speech),
     funnel: {
       sessions: spSessions,
       engaged: spEngaged,

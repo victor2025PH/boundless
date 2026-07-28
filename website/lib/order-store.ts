@@ -39,6 +39,9 @@ export interface OrderEntry {
   contact: string;
   fingerprint: string;
   lang: string;
+  /** 会话归因串（AI 坐席聊天里发出的下单链接带 ?ref=<platform:acct:chat>）：
+   *  记录这单是哪个 AI 会话促成的；chengjie 引擎按 ref 拉单自动结算营销目标。 */
+  ref?: string;
   ip?: string;
   ua?: string;
   paid_at?: string;
@@ -124,6 +127,7 @@ export async function createOrder(
     const sku = resolveOrderSku(input.plan, input.edition, input.period);
     if (sku.skuId) entry.sku_id = sku.skuId;
     if (sku.productId) entry.product_id = sku.productId;
+    if (!entry.ref) delete entry.ref; // 空归因串不落字段（绝大多数自然流量单）
     db.orders[entry.id] = entry;
     await writeDb(db);
     await appendFile(LOG, JSON.stringify(entry) + "\n", "utf-8").catch(() => {});
@@ -325,10 +329,14 @@ export async function notifyCustomerOfStatus(o: OrderEntry, kind: "paid" | "acti
       [[{ text: "📄 打开订单页", url: checkUrl }]]
     );
   } else if (kind === "expiring") {
+    // 续费链接透传原单 ref（会话归因串）：老客户点这里续的单继承归因 →
+    // 引擎 order_pull 才匹配得上留存目标（否则续了费目标仍按流失 expired，
+    // winback 反去骚扰刚付钱的客户）。无 ref 的自然流量单保持原样。
+    const refQ = o.ref ? `&ref=${encodeURIComponent(o.ref)}` : "";
     await tgSend(
       o.notify_chat,
       `⏰ <b>订阅即将到期</b>\n订单 <code>${o.id}</code>（${zhPlan(o)}）将在约 ${daysLeft ?? 3} 天后到期。点下方续费保持不中断。`,
-      [[{ text: "🔄 立即续费", url: `${site}/order?plan=${encodeURIComponent(o.plan)}&period=${o.period}` }]]
+      [[{ text: "🔄 立即续费", url: `${site}/order?plan=${encodeURIComponent(o.plan)}&period=${o.period}${refQ}` }]]
     );
   }
 }
@@ -349,6 +357,7 @@ export async function notifyAdminsOfOrder(o: OrderEntry) {
     `应付：${o.pay_amount} USDT（挂牌 ${o.amount} + 识别尾数）\n` +
     `联系：${o.contact}\n` +
     (o.fingerprint ? `指纹：${o.fingerprint}\n` : "") +
+    (o.ref ? `🤖 AI 会话促成：${o.ref}\n` : "") +
     `状态：待付款`;
   const body = {
     text,

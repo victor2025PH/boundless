@@ -14,16 +14,12 @@ import {
   NewsHologram,
   SKIN,
   SWAY_MODES,
-  TriPodHand,
   armSwayVariants,
   buildBodyVariants,
-  formationForMode,
   leftArmVariants,
   rightArmVariants,
   type BotMode,
   type EyeExpr,
-  type HandFormation,
-  type HandGesture,
   type Skin,
 } from "./formShared";
 
@@ -44,15 +40,12 @@ type EveBotProps = {
   lowFx?: boolean;
   /** 皮肤：normal | demon（隐藏彩蛋，纯外观） */
   skin?: Skin;
-  /** 手势指令（场景播报/舞台页下发）：非空时覆盖 mode 默认队形 */
-  gesture?: HandGesture | null;
-  /** 连击蓄力进度 0..1：>0 时指荚进入 burst 紊乱队形（磁场受激预兆） */
+  /** 保留兼容：连击蓄力外观由皮肤/表情承担 */
   charge?: number;
 };
 
-/** 机器人本体：头 / 颈 / 蛋形身体 / 双臂（引力三指指荚）/ 推进器光焰 / 悬浮光池。
- *  已导出：/robot-stage 素材舞台页复用同一实现，保证站内外 IP 形象一致。 */
-export const EveBot: React.FC<EveBotProps> = ({ mode, isHovered, newsText, newsCta, scrollTilt, flightRotate, gazeX, gazeY, squashY, shadowOpacity, onNewsCta, reduced, lowFx = false, skin = "normal", gesture = null, charge = 0 }) => {
+/** 机器人本体：头 / 颈 / 蛋形身体 / 花瓣双臂 / 推进器光焰 / 悬浮光池。 */
+export const EveBot: React.FC<EveBotProps> = ({ mode, isHovered, newsText, newsCta, scrollTilt, flightRotate, gazeX, gazeY, squashY, shadowOpacity, onNewsCta, reduced, lowFx = false, skin = "normal" }) => {
   const theme = SKIN[skin];
   const isDemon = skin === "demon";
   const isLoong = skin === "loong";
@@ -64,8 +57,6 @@ export const EveBot: React.FC<EveBotProps> = ({ mode, isHovered, newsText, newsC
   /* 着陆回弹的挤压-拉伸：Y 压缩时 X 反向微胖，卡通物理更可信 */
   const squashX = useTransform(squashY, (v) => 1 + (1 - v) * 0.55);
   const swayOn = !reduced && !lowFx && SWAY_MODES.has(mode);
-  /* 左手队形优先级：连击蓄力 burst ＞ 场景手势指令 ＞ mode 默认映射 */
-  const handFormation: HandFormation = charge > 0 ? "burst" : gesture ? gesture.formation : formationForMode(mode);
 
   /* 眼睛霓虹色轮换（随皮肤切换取色池；页面隐藏时暂停；低配挡放慢一倍减少重绘） */
   useEffect(() => {
@@ -85,8 +76,9 @@ export const EveBot: React.FC<EveBotProps> = ({ mode, isHovered, newsText, newsC
     if (isHovered) return setEyeExpression("happy");
     if (mode === "falling") return setEyeExpression("scared");
     if (mode === "flying") return setEyeExpression("focused");
-    if (mode === "idle_scan") return setEyeExpression("scanning");
-    if (mode === "idle_wave" || mode === "idle_dance") return setEyeExpression("happy");
+    if (mode === "idle_scan" || mode === "idle_tilt" || mode === "idle_alert") return setEyeExpression("scanning");
+    if (mode === "idle_wave" || mode === "idle_dance" || mode === "idle_stretch" || mode === "idle_nod" || mode === "idle_invite" || mode === "idle_clap") return setEyeExpression("happy");
+    if (mode === "idle_shy") return setEyeExpression("wink");
     if (mode === "idle_news") return setEyeExpression("focused");
     let alive = true;
     const blinkLoop = () => {
@@ -159,11 +151,31 @@ export const EveBot: React.FC<EveBotProps> = ({ mode, isHovered, newsText, newsC
           <div className="relative z-20 w-[4rem] h-[5.5rem] mt-[-10px]">
             <div className="w-full h-full relative overflow-hidden" style={{ background: theme.body, borderRadius: "30% 30% 50% 50% / 20% 20% 80% 80%", boxShadow: theme.bodyShadow }}>
               <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[90%] h-5 to-transparent rounded-b-full opacity-40 blur-[1px]" style={{ backgroundImage: `linear-gradient(to bottom, ${isDemon ? "#7f1d2e" : isLoong ? "#f5c542" : "#a5f3fc"}, transparent)` }} />
-              <div className="absolute top-[45%] left-1/2 -translate-x-1/2 w-8 h-8 flex items-center justify-center opacity-100">
-                <div className="w-2 h-2 rounded-full animate-pulse transition-colors duration-1000" style={{ backgroundColor: eyeColor, boxShadow: `0 0 10px ${eyeColor}` }} />
-                <div className="absolute w-full h-[1px] bg-black/5 top-1/2 -translate-y-1/2" />
-                <div className="absolute h-full w-[1px] bg-black/5 left-1/2 -translate-x-1/2" />
-              </div>
+              {/* 心脏位（方案 C）：小号 ∞ mark，弱而慢的青绿呼吸光 */}
+              <motion.div
+                className="absolute"
+                style={{ left: "70%", top: "34%", marginLeft: -8, marginTop: -6 }}
+                animate={reduced || lowFx ? { opacity: 0.78 } : { opacity: [0.62, 0.88, 0.62] }}
+                transition={reduced || lowFx ? undefined : { repeat: Infinity, duration: 3.6, ease: "easeInOut" }}
+              >
+                <div
+                  aria-hidden
+                  style={{
+                    width: 16,
+                    height: 12,
+                    backgroundColor: "#22d3ee",
+                    WebkitMaskImage: "url(/brand/logos/boundless-mark-256.png)",
+                    maskImage: "url(/brand/logos/boundless-mark-256.png)",
+                    WebkitMaskSize: "contain",
+                    maskSize: "contain",
+                    WebkitMaskRepeat: "no-repeat",
+                    maskRepeat: "no-repeat",
+                    WebkitMaskPosition: "center",
+                    maskPosition: "center",
+                    filter: "drop-shadow(0 0 2.5px #22d3ee99)",
+                  }}
+                />
+              </motion.div>
             </div>
           </div>
           {/* 左臂（屏幕左侧 = 机器人右手）：朝页面内容方向挥手，不会被视口右缘裁切 */}
@@ -175,10 +187,6 @@ export const EveBot: React.FC<EveBotProps> = ({ mode, isHovered, newsText, newsC
           >
             <motion.div style={{ transformOrigin: ANATOMY.shoulderLeft }} variants={armSwayVariants("left")} animate={swayOn ? "sway" : "still"}>
               <EveArm side="left" stops={theme.armStops} />
-              {/* 引力三指：指荚常驻臂尖（收纳态=分瓣臂尖），随姿态/手势绽放成队形 */}
-              <div className="eve-hand absolute" style={{ left: -15, top: 53 }}>
-                <TriPodHand skin={skin} color={eyeColor} formation={handFormation} icon={gesture?.icon} reduced={reduced} lowFx={lowFx} />
-              </div>
             </motion.div>
           </motion.div>
           {/* 右臂：挥手时仅轻微外张配重 */}
@@ -190,10 +198,6 @@ export const EveBot: React.FC<EveBotProps> = ({ mode, isHovered, newsText, newsC
           >
             <motion.div style={{ transformOrigin: ANATOMY.shoulderRight }} variants={armSwayVariants("right")} animate={swayOn ? "sway" : "still"}>
               <EveArm side="right" stops={theme.armStops} />
-              {/* 右手配重荚：常态收纳成分瓣臂尖，坠落/舞蹈等大动作时对称展开 */}
-              <div className="absolute" style={{ left: -30, top: 53 }}>
-                <TriPodHand skin={skin} color={eyeColor} formation={formationForMode(mode, { secondary: true })} side="right" reduced={reduced} lowFx={lowFx} />
-              </div>
             </motion.div>
           </motion.div>
           {/* 推进器：用 framer 的 x 居中而非 translate 类（会被 transform 动画覆盖，存量bug） */}

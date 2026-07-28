@@ -9,6 +9,7 @@ const ACCENT: Record<LandingKey, string> = {
   voice: "#22d3ee",
   face: "#8b5cf6",
   interpreting: "#34d399",
+  fate: "#ce56cb", // 紫粉（productMeta PRODUCT_GLOW fatex 同源）
 };
 
 const TAGLINE: Record<LandingKey, { zh: string; en: string }> = {
@@ -23,6 +24,22 @@ const TAGLINE: Record<LandingKey, { zh: string; en: string }> = {
   interpreting: {
     zh: "你的声音说外语 · 实时同传 · 多语种",
     en: "Your voice, other languages · real-time · multilingual",
+  },
+  fate: {
+    zh: "八字排盘 · 每日灵签 · 人生 K 线",
+    en: "BaZi charting · daily sign · life K-line",
+  },
+};
+
+// 底行信任线：销售线共用「私有部署 · USDT」口径；幻缘是陪伴产品，改免责基调。
+const FOOT_LINE: Record<"default" | "fate", { zh: string; en: string }> = {
+  default: {
+    zh: "私有部署 · 真机实测 · USDT 结算",
+    en: "Private deployment · real-machine demos · USDT",
+  },
+  fate: {
+    zh: "知缘知运 · 运势是倾向，不是命令",
+    en: "Ask fate, chart life — a tendency, not a command",
   },
 };
 
@@ -75,9 +92,7 @@ export async function landingOgImage(key: LandingKey, lang: "zh" | "en") {
           }}
         >
           <div style={{ display: "flex", width: 46, height: 4, background: accent, borderRadius: 2 }} />
-          <span>
-            {lang === "zh" ? "私有部署 · 真机实测 · USDT 结算" : "Private deployment · real-machine demos · USDT"}
-          </span>
+          <span>{FOOT_LINE[key === "fate" ? "fate" : "default"][lang]}</span>
         </div>
       </div>
     ),

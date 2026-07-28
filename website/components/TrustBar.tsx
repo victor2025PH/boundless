@@ -1,6 +1,6 @@
 "use client";
 
-import { Quote, Star } from "lucide-react";
+import { FileCheck, ShieldCheck } from "lucide-react";
 import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
 import CountUp from "./fx/CountUp";
@@ -60,13 +60,10 @@ export default function TrustBar() {
           {t.trust.testimonials.map((tm, i) => (
             <Reveal key={tm.name} delay={i * 0.08}>
               <figure className="card-hover flex h-full flex-col rounded-2xl border border-white/10 bg-ink-900/60 p-6">
+                {/* 工程证据卡（非好评卡）：星级评分换成中性来源徽标，出处见卡底 role 行 */}
                 <div className="flex items-center justify-between">
-                  <Quote className="h-6 w-6 text-neon-violet/70" />
-                  <span className="flex gap-0.5">
-                    {[0, 1, 2, 3, 4].map((s) => (
-                      <Star key={s} className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
-                    ))}
-                  </span>
+                  <ShieldCheck className="h-6 w-6 text-neon-cyan/70" aria-hidden />
+                  <FileCheck className="h-4 w-4 text-slate-500" aria-hidden />
                 </div>
                 <blockquote className="mt-3 flex-1 text-sm leading-relaxed text-slate-300">
                   &ldquo;{tm.quote}&rdquo;

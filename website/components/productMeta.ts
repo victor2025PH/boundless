@@ -1,7 +1,7 @@
 // 九产品的「展示元数据」单一来源：图标路径 + 首页内锚点。
 // 纯文案/名称在 lib/brand.ts；这里只补 UI 层需要、又不该污染纯数据源的部分。
 // ProductMatrix / /brand 页 / 小程序首页共用本文件，避免「同一映射散落多份、改一处漏一处」。
-import type { ProductKey } from "@/lib/brand";
+import { PRODUCT_ORDER, productsInCategory, type CategoryKey, type ProductKey } from "@/lib/brand";
 
 // 产品专属玻璃 3D 图标（透明底 256×256）：唯一来源是 brand-assets/ 新管线
 // （build_brand_assets.py → 02_product-icons/{key}/{key}-256.png）。
@@ -38,19 +38,37 @@ export const PRODUCT_IMG = stamped(".png");
 // 做 `.replace(/\.png$/, ".webp")`——带 `?v=` 后正则锚不住结尾会静默失效。
 export const PRODUCT_IMG_WEBP = stamped(".webp");
 
-// 每个产品在首页跳转到的现有 demo / 详情 section（均为已存在的真实锚点，
-// 见 SectionNav：autochat / realtime / showcase）。避免坏锚点。
+// 每个产品在首页跳转到的现有 demo / 详情 section（均为已存在的真实锚点；
+// 2026-07-26 首页收敛后仅剩 #products / #autochat / #translate / #pricing / #contact）。避免坏锚点。
 export const PRODUCT_ANCHOR: Record<ProductKey, string> = {
   reachx: "#autochat",
   chatx: "#autochat",
-  facex: "#showcase",
-  voicex: "#realtime",
-  livex: "#realtime",
+  facex: "#products",
+  voicex: "#pricing",
+  livex: "#pricing",
   lingox: "#translate",
-  voxx: "#realtime",
-  matrixx: "/matrix",
-  fatex: "#showcase",
+  voxx: "#pricing",
+  matrixx: "#products",
+  fatex: "#products",
 };
+
+/** 主站公开陈列过滤清单（导航下拉 / 首页产品矩阵 / 品牌页 / 落地页家族导航消费）：
+ *  - facex / matrixx：合规隔离 gated 线（lib/isolation.ts），页面保留可直达，
+ *    但不再从主站任何公开入口露出（风险画像不绑母品牌）；
+ *  - fatex：有独立落地页 /fate（品牌层九磁贴与 sitemap 可达），但不进销售陈列位
+ *    （矩阵/导航下拉）。
+ *  gated 落地页自身不消费本清单，直达渲染不受影响。 */
+export const PUBLIC_LIST_HIDDEN: ReadonlySet<ProductKey> = new Set(["facex", "matrixx", "fatex"]);
+
+/** 某系下「主站公开可陈列」的产品（productsInCategory 的过滤包装）。 */
+export function publicProductsInCategory(cat: CategoryKey): ProductKey[] {
+  return productsInCategory(cat).filter((k) => !PUBLIC_LIST_HIDDEN.has(k));
+}
+
+/** 公开陈列顺序（编号 / 计数用；PRODUCT_ORDER 剔除隐藏线）。 */
+export const PUBLIC_PRODUCT_ORDER: ProductKey[] = PRODUCT_ORDER.filter(
+  (k) => !PUBLIC_LIST_HIDDEN.has(k),
+);
 
 // 九款图标资产虽已按同一 bbox 归一（pad 8%），但形状密度差异很大：实心方块阵（智控）
 // 同 bbox 下感观远大于稀疏麦克风（幻声）。光学补偿系数的单一真相是
@@ -87,16 +105,18 @@ export const PRODUCT_GLOW: Record<ProductKey, string> = {
 
 // 拥有独立落地页的产品线（zh 路径；en 为 /en 前缀）。矩阵卡片优先跳落地页，
 // 没有落地页的产品仍回退到首页锚点。
+// 注意：gated 线刻意不登记（facex、livex 原共用幻颜落地页；matrixx 原智控落地页）——
+// 这些页面仍可直达，但主站公开组件（含 BrandShowcase 等本文件消费方）
+// 不得再渲染指向 gated 路由的链接（合规隔离，见 lib/isolation.ts）。
 export const PRODUCT_LANDING: Partial<Record<ProductKey, string>> = {
   voicex: "/voice",
-  // 幻境系共用 /face，hash 区分出片 / 开播（StudioDualPath 消费）
-  facex: "/face#swap",
-  livex: "/face#live",
   // 智连系共用 /growth，hash 区分获客 / 成交
   reachx: "/growth#reach",
   chatx: "/growth#chat",
   // 通达系共用 /interpreting，用 hash 区分双轨（LingoDualPath 消费）
   lingox: "/interpreting#chat",
   voxx: "/interpreting#interpret",
-  matrixx: "/matrix",
+  // 幻缘：独立落地页（BrandShowcase 九磁贴由此拿链接）；仍在 PUBLIC_LIST_HIDDEN，
+  // 不进矩阵/导航下拉等销售陈列位。
+  fatex: "/fate",
 };

@@ -4,9 +4,9 @@ import { motion, type MotionProps } from "framer-motion";
 import { useReducedMotionSafe } from "@/components/fx/useReducedMotionSafe";
 import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
-import { BRAND, PRODUCT_ORDER, PRODUCT_COUNT, CATEGORIES, CATEGORY_ORDER, productsInCategory } from "@/lib/brand";
+import { BRAND, CATEGORIES, CATEGORY_ORDER } from "@/lib/brand";
 import { CATEGORY_UI } from "@/lib/categoryUi";
-import { PRODUCT_ANCHOR, PRODUCT_LANDING } from "./productMeta";
+import { PRODUCT_ANCHOR, PRODUCT_LANDING, PUBLIC_PRODUCT_ORDER, publicProductsInCategory } from "./productMeta";
 import ProductIcon from "./ProductIcon";
 import { track } from "@/lib/track";
 import { ArrowRight, ShieldCheck } from "lucide-react";
@@ -69,7 +69,7 @@ export default function ProductMatrix() {
           </p>
           <h2 className="mx-auto mt-3 max-w-3xl text-center text-3xl font-bold text-white md:text-4xl">
             {c.headPrefix}
-            {PRODUCT_COUNT}
+            {PUBLIC_PRODUCT_ORDER.length}
             {c.headSuffix}
           </h2>
           <p className="mx-auto mt-4 max-w-2xl text-center text-base text-slate-400">
@@ -81,7 +81,8 @@ export default function ProductMatrix() {
           {CATEGORY_ORDER.map((cat) => {
             const cc = CATEGORIES[cat];
             const ui = CATEGORY_UI[cat];
-            const items = productsInCategory(cat);
+            // 公开陈列清单（gated / 未上线线已过滤，见 productMeta.PUBLIC_LIST_HIDDEN）
+            const items = publicProductsInCategory(cat);
             const borderL =
               cat === "growth"
                 ? "border-neon-cyan/50"
@@ -103,9 +104,10 @@ export default function ProductMatrix() {
                     </span>
                   </div>
                 </Reveal>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {/* 每系 ≤2 张卡时收成两列，避免三列网格留空位 */}
+                <div className={`grid gap-4 sm:grid-cols-2 ${items.length > 2 ? "lg:grid-cols-3" : ""}`}>
                   {items.map((key) => {
-                    const idx = PRODUCT_ORDER.indexOf(key);
+                    const idx = PUBLIC_PRODUCT_ORDER.indexOf(key);
                     const p = BRAND.products[key];
                     const landing = PRODUCT_LANDING[key];
                     const href = landing ? localePath(lang, landing) : PRODUCT_ANCHOR[key];
@@ -145,12 +147,12 @@ export default function ProductMatrix() {
             );
           })}
 
-          {/* 无界底座横幅（托起三系七产品） */}
+          {/* 无界底座横幅（托起三系公开产品线） */}
           <Reveal>
             <div className="relative flex flex-col overflow-hidden rounded-2xl border border-neon-cyan/30 bg-gradient-to-br from-neon-cyan/[0.08] to-neon-violet/[0.08] p-5 sm:flex-row sm:items-center sm:gap-4">
               <motion.span
                 className="mb-4 flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-neon-cyan/20 text-neon-cyan sm:mb-0"
-                {...iconGlow(PRODUCT_ORDER.length)}
+                {...iconGlow(PUBLIC_PRODUCT_ORDER.length)}
               >
                 <ShieldCheck className="h-5 w-5" />
               </motion.span>

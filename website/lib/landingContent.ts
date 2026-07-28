@@ -1,8 +1,8 @@
-// 三条产品线独立落地页内容（/voice /face /interpreting + /en/*）。
+// 四条产品线独立落地页内容（/voice /face /interpreting /fate + /en/*）。
 // 设计原则：一页一卖点，媒体证据前置（真实引擎产出），CTA 直达 Telegram。
 // 指标口径与 engineContent.ts 保持一致——营销可以强，数字必须真。
 
-export type LandingKey = "voice" | "face" | "interpreting";
+export type LandingKey = "voice" | "face" | "interpreting" | "fate";
 
 interface L {
   zh: string;
@@ -60,7 +60,7 @@ export const LANDINGS: Record<LandingKey, LandingDict> = {
         en: "Three engines (Fish / Qwen3 / VoxCPM) auto-picked per job: real-time chat, ultra-fast first packet, commercial 48kHz. Ten languages in one voice with natural emotion — fully private, audio never leaves your racks.",
       },
       points: [
-        { zh: "Qwen3 首包 ≈97ms · 3 秒克隆 · 实时对话级", en: "≈97ms first packet · 3s cloning · real-time grade" },
+        { zh: "Qwen3 首包 ≈97ms · 3 秒克隆 · 实时对话级", en: "Qwen3 ≈97ms first packet · 3s cloning · real-time grade" },
         { zh: "中 / 英 / 日 / 韩等 10 语种 · 同一音色", en: "10 languages · one identical voice" },
         { zh: "C2PA 可验真水印 · 克隆伦理校验", en: "C2PA-verifiable watermark · clone-ethics checks" },
       ],
@@ -83,7 +83,7 @@ export const LANDINGS: Record<LandingKey, LandingDict> = {
           zh: "几十秒样本零样本克隆。Fish 实时 / Qwen3 首包极速 10 语种 / VoxCPM 48kHz 可商用，克隆完引擎自动推荐最合适的一路。",
           en: "Zero-shot cloning from seconds of audio. Fish real-time / Qwen3 ultra-fast across 10 languages / VoxCPM commercial 48kHz — auto-recommended per use case.",
         },
-        proof: { zh: "Qwen3 首包 ≈97ms · 3 秒克隆 · 10 语种", en: "≈97ms first packet · 3s clone · 10 languages" },
+        proof: { zh: "Qwen3 首包 ≈97ms · 3 秒克隆 · 10 语种", en: "Qwen3 ≈97ms first packet · 3s clone · 10 languages" },
       },
       {
         title: { zh: "情感与语气 · 像真人一样说话", en: "Emotion & prosody that feel human" },
@@ -283,8 +283,8 @@ export const LANDINGS: Record<LandingKey, LandingDict> = {
         en: "Chat Translation + Real-time Interpreting | LingoX · VoxX — BOUNDLESS",
       },
       description: {
-        zh: "通达系双产品：通译做多平台聊天文字/语音互译与客户资产沉淀；通传做克隆音双向同传、OBS 双语字幕与会议直播口译。术语锁定、本地部署、数据不出网。",
-        en: "Lingo family: LingoX for omni-channel chat translation and customer assets; VoxX for cloned-voice interpreting, OBS bilingual subtitles and meeting/live coverage. Glossary-locked, privately deployed.",
+        zh: "通达系双产品：通译做多平台聊天文字/语音互译与客户资产沉淀，生产运行中；通传做克隆音双向同传与 OBS 双语字幕，面向会议 / 直播场景内测中，预约演示后按场景配置交付。术语锁定、本地部署、数据不出网。",
+        en: "Lingo family: LingoX for omni-channel chat translation and customer assets, running in production; VoxX for cloned-voice interpreting and OBS bilingual subtitles, in beta for meeting / live-stream scenarios — demo first, delivery configured per scenario. Glossary-locked, privately deployed.",
       },
       keywords: [
         "AI同传",
@@ -303,12 +303,12 @@ export const LANDINGS: Record<LandingKey, LandingDict> = {
       title: { zh: "打破语言之界，", en: "Break the language barrier —" },
       accent: { zh: "聊天翻译 + 同声传译", en: "chat translate + live interpret" },
       subtitle: {
-        zh: "通译 LingoX 承接跨境聊天互译与统一收件箱；通传 VoxX 用你的克隆音做会议/直播双向同传与 OBS 双语字幕。两条产品，两种场景，一套通达底座。",
-        en: "LingoX covers cross-border chat translation and a unified inbox; VoxX does two-way cloned-voice interpreting for meetings and streams with OBS bilingual subtitles. Two products, two scenes, one Lingo core.",
+        zh: "通译 LingoX 承接跨境聊天互译与统一收件箱，已在生产环境稳定运行；通传 VoxX 用你的克隆音做双向同传与 OBS 双语字幕，面向会议 / 直播场景内测中，预约演示后按场景配置交付。两条产品，两种场景，一套通达底座。",
+        en: "LingoX covers cross-border chat translation and a unified inbox, running in production; VoxX does two-way cloned-voice interpreting with OBS bilingual subtitles, in beta for meeting and live-stream scenarios — demo first, delivery configured per scenario. Two products, two scenes, one Lingo core.",
       },
       points: [
         { zh: "通译 · 多平台聊天文字/语音互译", en: "LingoX · omni-channel chat translation" },
-        { zh: "通传 · 克隆音同传 + 双语字幕", en: "VoxX · cloned-voice interpret + subtitles" },
+        { zh: "通传 · 克隆音同传 + 双语字幕（内测中）", en: "VoxX · cloned-voice interpret + subtitles (beta)" },
         { zh: "术语锁定 · 私有部署不出网", en: "Glossary lock · private, off-net" },
       ],
     },
@@ -319,8 +319,8 @@ export const LANDINGS: Record<LandingKey, LandingDict> = {
         en: "Hear the Chinese source, then the English interpretation — same cloned voice.",
       },
       realNote: {
-        zh: "以上为引擎真实产出、未经剪辑。预约真机演示，用你的声音、你的术语表现场跑一遍。",
-        en: "Real, unedited engine output. Book a live demo and run it with your voice and your glossary.",
+        zh: "以上为引擎真实产出、未经剪辑。预约内测演示，用你的声音、你的术语表现场跑一遍。",
+        en: "Real, unedited engine output. Book a beta demo and run it with your voice and your glossary.",
       },
     },
     caps: [
@@ -349,12 +349,12 @@ export const LANDINGS: Record<LandingKey, LandingDict> = {
         proof: { zh: "10 语种 · 首包亚秒级", en: "10 languages · sub-second first packet" },
       },
       {
-        title: { zh: "会议 / 直播 / 电话全场景", en: "Meetings, streams and calls" },
+        title: { zh: "会议 / 直播场景 · 内测中", en: "Meetings & live streams · in beta" },
         desc: {
-          zh: "视频会议、跨境直播、电话桥接一条链路全覆盖，一键开通话套餐。",
-          en: "Video meetings, cross-border streams and phone bridges on one pipeline, with a one-tap call package.",
+          zh: "面向视频会议与跨境直播场景内测中，预约演示后按你的场景配置交付；电话桥接在评估后按需接入。",
+          en: "In beta for video meetings and cross-border live streams — book a demo and we configure delivery for your scenario; phone bridging is scoped on request.",
         },
-        proof: { zh: "会议 · 直播 · 电话一条链路", en: "One pipeline for all three" },
+        proof: { zh: "内测中 · 按场景配置交付", en: "In beta · configured per scenario" },
       },
     ],
     steps: [
@@ -367,8 +367,8 @@ export const LANDINGS: Record<LandingKey, LandingDict> = {
         desc: { zh: "中英日韩等 10 语种互译；把行业词表交给引擎，专有名词从此零翻车。", en: "Ten languages; hand the engine your term list and proper nouns never break." },
       },
       {
-        title: { zh: "开会 / 开播 / 通话", en: "Meet, stream or call" },
-        desc: { zh: "实时同传自动跟话，支持抢话打断；直播加字幕只需一条 OBS 链接。", en: "Real-time interpretation with barge-in; live subtitles are one OBS URL away." },
+        title: { zh: "开会 / 开播", en: "Meet or stream" },
+        desc: { zh: "实时同传自动跟话，支持抢话打断；直播加字幕只需一条 OBS 链接。内测期按你的场景配置后交付。", en: "Real-time interpretation with barge-in; live subtitles are one OBS URL away. Beta delivery is configured per scenario." },
       },
     ],
     faq: [
@@ -389,16 +389,151 @@ export const LANDINGS: Record<LandingKey, LandingDict> = {
       {
         q: { zh: "能用在电话和会议软件里吗？", en: "Does it work with calls and meeting apps?" },
         a: {
-          zh: "可以。支持电话桥接与通话套餐，会议软件走虚拟声卡接入；直播场景还能同步输出双语字幕。",
-          en: "Yes — phone bridging with a call package, meeting apps via virtual audio, and live streams get bilingual subtitles on top.",
+          zh: "通传目前面向会议 / 直播场景内测：会议软件走虚拟声卡接入，直播可同步输出双语字幕；电话桥接在内测评估后按需配置。预约内测演示，我们按你的场景配置交付。",
+          en: "VoxX is in beta for meeting and live-stream scenarios: meeting apps connect via virtual audio, and live streams get bilingual subtitles. Phone bridging is scoped after a beta assessment. Book a beta demo and we configure delivery for your scenario.",
         },
       },
     ],
     finalCta: {
-      title: { zh: "带上你的术语表来试", en: "Bring your glossary and try it" },
+      title: { zh: "带上你的术语表，预约内测演示", en: "Bring your glossary — book a beta demo" },
       desc: {
-        zh: "30 分钟真机演示：用你的声音、你的行业词表现场双向同传，数据全程不出机房。",
-        en: "30-minute live demo: two-way interpreting with your voice and your term list — data never leaves the room.",
+        zh: "30 分钟内测演示：用你的声音、你的行业词表现场双向同传，数据全程不出机房。通传内测期按你的会议 / 直播场景配置交付。",
+        en: "30-minute beta demo: two-way interpreting with your voice and your term list — data never leaves the room. During beta, VoxX is delivered configured to your meeting / live-stream scenario.",
+      },
+    },
+  },
+
+  // 幻缘 FateX：AI 命理陪伴（engines/chengjie companion.bazi 技能栈）。
+  // 文案红线：不写价格/SKU（详批付费未开闸）、不承诺式预言、不恐吓、不碰医疗/投资建议；
+  // 可用数字仅工程事实（约 345 盘交叉验证 / 9/9 零幻觉基线 / 十年曲线 / 1080×640）。
+  fate: {
+    slug: "/fate",
+    productLine: { zh: "幻缘 FateX · AI 命理陪伴", en: "FateX · AI fortune companion" },
+    seo: {
+      title: {
+        zh: "AI 八字命理陪伴 · 每日灵签与人生 K 线 | 幻缘 FateX — 无界科技",
+        en: "AI BaZi Fortune Companion · Daily Sign & Life K-Line | FateX — BOUNDLESS",
+      },
+      description: {
+        zh: "在 AI 陪聊里自然聊八字：四柱十神大运流年全套排盘，算法经约 345 盘交叉验证，同一张盘永远算出同一个结果；每日灵签千人千面、当天恒定，人生 K 线十年逐年可复算。时辰未知不出时柱，AI 解读过零幻觉门禁——不知道就是不知道。",
+        en: "BaZi astrology inside an AI companion chat: full charting cross-validated on ~345 charts — the same chart always yields the same result. A daily sign that's yours alone, a reproducible ten-year life K-line, and honest limits: no birth hour, no hour pillar; readings gated by zero-hallucination evals.",
+      },
+      keywords: ["AI算命", "八字排盘", "AI命理", "每日运势", "人生K线", "命理陪伴", "BaZi", "Chinese astrology", "fortune AI", "daily horoscope"],
+    },
+    hero: {
+      title: { zh: "把八字聊明白，", en: "Ask fate like a friend," },
+      accent: { zh: "把人生画成 K 线", en: "chart life as a K-line" },
+      subtitle: {
+        zh: "幻缘是长在 AI 陪聊里的命理师：四柱、十神、大运、流年一次排齐，算法经约 345 盘交叉验证——同一张盘，永远算出同一个结果。每天翻一张只属于你的灵签，十年运势画成一条可复算的人生 K 线；不知道就是不知道，时辰未知绝不瞎编时柱。",
+        en: "FateX is a fortune reader living inside an AI companion chat: four pillars, ten gods, luck cycles and yearly stars charted in one pass, cross-validated on ~345 charts — the same chart always returns the same result. Flip a daily sign that's yours alone, see ten years drawn as a reproducible life K-line. And when something is unknown, it says so instead of making it up.",
+      },
+      points: [
+        { zh: "全套八字排盘 · 约 345 盘交叉验证", en: "Full BaZi charting · cross-checked on ~345 charts" },
+        { zh: "每日灵签千人千面 · 当天恒定可验证", en: "Daily sign, yours alone · fixed for the day" },
+        { zh: "人生 K 线十年曲线 · 同盘同图可复算", en: "Ten-year life K-line · fully reproducible" },
+      ],
+    },
+    demo: {
+      title: { zh: "先看一张真盘", en: "See a real chart first" },
+      subtitle: {
+        zh: "上面是引擎画的人生 K 线卡，下面是同一张盘的排盘摘要——都是逐字原样输出，没有一处人工修饰。",
+        en: "The life K-line card above and the chart summary below — both verbatim engine output from the same sample chart, untouched.",
+      },
+      realNote: {
+        zh: "以上为引擎真实产出、未经修饰；示例样盘为虚构生辰（1995-08-17）。想看自己的盘？Telegram 上报个生辰，当场排给你。",
+        en: "Real, unedited engine output; the sample chart uses a fictional birth date (1995-08-17). Want yours? Share a birth date on Telegram and get charted on the spot.",
+      },
+    },
+    caps: [
+      {
+        title: { zh: "全套八字排盘 · 工程级可信", en: "Full BaZi charting, engineering-grade" },
+        desc: {
+          zh: "四柱、十神、藏干、纳音、五行强弱、喜用神、大运、流年一次排齐；立春分年，农历公历都认。算法经金标命例回归 + 十神双实现交叉验证约 345 盘——同一张盘，永远算出同一个结果。",
+          en: "Four pillars, ten gods, hidden stems, nayin, elemental strength, favorable elements, luck cycles and yearly stars in one pass; solar-term year boundaries, lunar and solar dates both accepted. Golden-case regressions plus dual-implementation cross-checks on ~345 charts — the same chart always yields the same result.",
+        },
+        proof: { zh: "约 345 盘交叉验证 · 同盘同果", en: "~345 charts cross-checked · deterministic" },
+      },
+      {
+        title: { zh: "不知道，就是不知道", en: "Honest about the unknown" },
+        desc: {
+          zh: "时辰未知就不出时柱，性别未知就不排大运——绝不瞎编凑数。命理是参考视角，宁可少算一柱，也不给你一个编出来的答案。",
+          en: "No birth hour? Then no hour pillar. Gender unknown? No luck cycles. It never pads a chart with guesses — better one pillar short than one answer made up.",
+        },
+        proof: { zh: "时辰未知不出时柱 · 性别未知不排大运", en: "Missing inputs are never faked" },
+      },
+      {
+        title: { zh: "每日灵签 · 人生 K 线", en: "Daily sign · life K-line" },
+        desc: {
+          zh: "签面由今日干支 × 你的日主生成：千人千面、当天恒定可验证，词库吉凶零断言，没有「恐吓式」用词；十年运势画成 1080×640 曲线卡，评分确定性可解释——不是玄学随机数。",
+          en: "Your sign comes from today's stems crossed with your day master — unique to you, fixed for the whole day, zero doom verdicts in the wording. Ten years of fortune drawn as a 1080×640 K-line card with an explainable, deterministic score — not mystic dice.",
+        },
+        proof: { zh: "当天恒定可验证 · 同盘同图可复算", en: "Verifiable daily · reproducible curve" },
+      },
+      {
+        title: { zh: "聊出来的运势 · 记得住的你", en: "A companion that remembers you" },
+        desc: {
+          zh: "以 AI 人设口吻自然展开，不是冷冰冰的排盘报告；「那我明年呢」这类追问接得住，记得你的生辰，晨安问候顺手翻一张今日签。",
+          en: "Readings unfold in the companion's own voice — not a cold printout. Follow-ups like \"what about next year?\" just work; it remembers your birth data and slips your daily sign into the morning hello.",
+        },
+        proof: { zh: "追问接得住 · 生辰记得住", en: "Handles follow-ups · remembers your chart" },
+      },
+    ],
+    steps: [
+      {
+        title: { zh: "报一个生辰", en: "Share a birth date" },
+        desc: { zh: "聊天里说一句「我 1995 年 8 月 17 日早上十点生」就够了；农历也认，时辰不记得可以先不给。", en: "One line in chat is enough — lunar dates work too, and the hour can wait if you don't remember it." },
+      },
+      {
+        title: { zh: "当轮排盘开聊", en: "Charted in the same turn" },
+        desc: { zh: "盘当场排好，运势用人话聊开；追问明年、后年、某个年份，都接得住。", en: "The chart is cast on the spot and read in plain words; ask about next year or any year — it keeps up." },
+      },
+      {
+        title: { zh: "每天翻签，十年看线", en: "Daily sign, ten-year line" },
+        desc: { zh: "早安问候顺手翻今日签；想看长线，一张人生 K 线卡把十年趋势画给你。", en: "Mornings come with your daily sign; for the long view, one K-line card draws the whole decade." },
+      },
+    ],
+    faq: [
+      {
+        q: { zh: "排盘准不准？每次算的会不会不一样？", en: "Is the charting reliable? Will it change between runs?" },
+        a: {
+          zh: "排盘是确定性算法，不是大模型即兴发挥：金标命例回归 + 十神双实现交叉验证约 345 盘，同一张盘永远算出同一个结果。AI 只负责把盘面聊成人话，解读过零幻觉评测门禁（基线 9/9 合格）——盘里没有的干支，AI 不会编。",
+          en: "Charting is a deterministic algorithm, not LLM improvisation: golden-case regressions plus dual-implementation cross-checks on ~345 charts mean the same chart always yields the same result. The AI only turns the chart into conversation, gated by zero-hallucination evals (9/9 on the baseline set) — it never invents stems that aren't in your chart.",
+        },
+      },
+      {
+        q: { zh: "不记得出生时辰怎么办？", en: "What if I don't know my birth hour?" },
+        a: {
+          zh: "没关系，前三柱照样排——但我们不会替你编一个时柱凑数。时辰未知不出时柱、性别未知不排大运，这是幻缘的诚实边界：宁可少算，不瞎算。",
+          en: "No problem — the first three pillars still work. What we won't do is invent an hour pillar to fill the gap. No hour, no hour pillar; no gender, no luck cycles. Better under-read than made up.",
+        },
+      },
+      {
+        q: { zh: "会不会吓唬人？「大凶」「血光」那种？", en: "Will it scare me with doom talk?" },
+        a: {
+          zh: "不会。灵签词库吉凶零断言，没有恐吓式用词；不预言死亡、重病、灾祸时点；你情绪低落时先共情、再谈运势——这些是写进产品的安全底线，不是客服话术。",
+          en: "No. The daily-sign wording carries zero doom verdicts, it never predicts death, illness or disaster dates, and when you're feeling low it comforts first and reads later. These are safety rules built into the product, not a support script.",
+        },
+      },
+      {
+        q: { zh: "AI 算命能信到什么程度？", en: "How seriously should I take an AI fortune reading?" },
+        a: {
+          zh: "把它当参考和陪伴，不是命令——K 线卡自己的脚注就写着「运势是倾向不是命令」。重大决策仅供参考，医疗、投资请找专业人士；幻缘提供的是聊得来的情绪价值，不是改命服务。",
+          en: "Treat it as reflection and companionship, not instruction — the K-line card itself is footnoted \"a tendency, not a command.\" Major decisions deserve professional advice (medical and financial included); FateX offers a companion worth talking to, not a destiny-fixing service.",
+        },
+      },
+      {
+        q: { zh: "每日灵签和别家「今日运势」有什么不一样？", en: "How is the daily sign different from a generic horoscope?" },
+        a: {
+          zh: "签面由今日干支 × 你的日主（十神关系）生成：千人千面，而且当天恒定——早上翻和晚上翻是同一张，可验证、不糊弄。宜忌、幸运色按确定性规则轮转，不是随机抽。",
+          en: "Your sign is generated from today's stems crossed with your day master — different for everyone, yet fixed for the whole day, so you can check it isn't reshuffled. Do's, don'ts and lucky colors rotate deterministically, not randomly.",
+        },
+      },
+    ],
+    finalCta: {
+      title: { zh: "把生辰交给幻缘，当场排给你看", en: "Give FateX a birth date — charted on the spot" },
+      desc: {
+        zh: "Telegram 上聊两句：报个生辰当场排盘，翻一张今日灵签，人生 K 线画给你看。知缘知运，聊过才知道。",
+        en: "Two lines on Telegram: share a birth date, watch the chart cast live, flip today's sign and get your K-line card. Ask fate, chart life — one chat away.",
       },
     },
   },
@@ -422,4 +557,14 @@ export const LANDING_MEDIA = {
   },
   dhVideoZh: { src: "/showcase/real/digital-human.mp4?v=20260708", poster: "/showcase/real/digital-human-poster.png?v=20260708" },
   dhVideoEn: { src: "/showcase/real/digital-human-en.mp4", poster: "/showcase/real/digital-human-en-poster.jpg" },
+  // 幻缘 /fate：真实引擎产出——K 线卡由 bazi_kline.render_kline_png 出图（1080×640，
+  // 自带「仅供参考·运势是倾向不是命令」脚注），排盘摘要为 bazi_engine.format_chart_summary
+  // 逐字输出。示例样盘=虚构生辰 1995-08-17（时辰性别齐全，故有时柱与大运）。
+  fateKline: {
+    img: "/fate/kline-sample.png?v=20260726",
+    width: 1080,
+    height: 640,
+    chartSummary:
+      "四柱：乙亥 甲申 庚辰 辛巳（1995-08-17 生，属猪）\n日主：庚金\n透干十神：年正财、月偏财、时劫财\n五行（月令双计）：金4 木2 水1 火1 土1；日主偏强（粗判），喜用候选：火、水、木\n当前大运：丁亥（28岁起）\n今年流年：2026 丙午",
+  },
 };

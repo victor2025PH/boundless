@@ -7,21 +7,14 @@ import GlobalChrome from "@/components/GlobalChrome";
 import TgRedirect from "@/components/TgRedirect";
 import { SITE_URL, CONTACT_URL } from "@/lib/site";
 import { content } from "@/lib/content";
-import {
-  realtimeOffers,
-  voiceOffers,
-  livexOffers,
-  autochatOffers,
-  translateOffers,
-  toSchemaOffer,
-} from "@/lib/pricing";
+import { voiceOffers, autochatOffers, translateOffers, toSchemaOffer } from "@/lib/pricing";
 import { BRAND, PRODUCT_ORDER, type ProductKey } from "@/lib/brand";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: "无界科技 BOUNDLESS · 让沟通无界",
   description:
-    "无界科技 BOUNDLESS：用 AI 打破语言、沟通、声音、容貌的边界。跨境实时翻译 SCRM、AI 自动成交聊天、声音克隆、数字人；换脸 / 直播分身按需定制。私有部署、合规可溯源。BOUNDLESS: cross-border real-time translation SCRM, AI auto-closing chat, voice cloning and digital humans; face & live-swap available as custom projects — privately deployed, verifiably compliant.",
+    "无界科技 BOUNDLESS：用 AI 打破语言与沟通的边界。跨境实时翻译 SCRM、AI 自动成交聊天、声音克隆与数字人，私有部署、数据不出网。BOUNDLESS: cross-border real-time translation SCRM, AI auto-closing chat, voice cloning and digital humans — privately deployed, data stays on-prem.",
   keywords: [
     "无界科技",
     "BOUNDLESS",
@@ -32,7 +25,6 @@ export const metadata: Metadata = {
     "聊天聚合",
     "声音克隆",
     "数字人",
-    "AI换脸",
     "私有部署",
     "合规可溯源",
     // 旧品牌词保留，承接更名期的搜索流量
@@ -60,14 +52,14 @@ export const metadata: Metadata = {
     url: SITE_URL,
     title: "无界科技 BOUNDLESS · 让沟通无界",
     description:
-      "跨境实时翻译 SCRM · AI 自动成交聊天 · 声音克隆 · 数字人。换脸 / 直播分身按需定制。自主可控私有部署，合规可溯源。",
+      "跨境实时翻译 SCRM · AI 自动成交聊天 · 声音克隆 · 数字人。自主可控私有部署，数据不出网，合规可溯源。",
     siteName: "无界科技 BOUNDLESS",
   },
   twitter: {
     card: "summary_large_image",
     title: "无界科技 BOUNDLESS · 让沟通无界",
     description:
-      "跨境实时翻译 SCRM · AI 自动成交聊天 · 声音克隆 · 数字人。换脸 / 直播分身按需定制。私有部署，合规可溯源。",
+      "跨境实时翻译 SCRM · AI 自动成交聊天 · 声音克隆 · 数字人。私有部署，数据不出网，合规可溯源。",
   },
 };
 
@@ -78,33 +70,30 @@ const jsonLd = {
   url: SITE_URL,
   slogan: "让沟通，无界 · Communication, Boundless.",
   description:
-    "BOUNDLESS: an AI software company breaking the barriers of language, communication, voice and identity — cross-border real-time translation SCRM, AI auto-closing chat, voice cloning and digital humans, with face & live-swap as custom projects, on a self-controlled private-deployment base. Verifiably compliant (C2PA-watermarked).",
+    "BOUNDLESS: an AI software company breaking the barriers of language, communication and voice — cross-border real-time translation SCRM, AI auto-closing chat, voice cloning and digital humans, on a self-controlled private-deployment base. Verifiably compliant (C2PA-watermarked).",
   sameAs: [CONTACT_URL],
 };
 
 // 产品结构化数据（Service）：名称/描述取自 lib/brand.ts 单一数据源。
 // 已落地定价的产品挂 offers（2026-07-18 起报价币种全线 USD）：LingoX（通译·主推现金流）/
-// ChatX（自动成交三档）/ VoiceX（幻声会员三档）/ LiveX（定制部署 + 形象买断/矩阵）。
-// gated 线（facex-image/video、reachx-deploy）与 per-usage 计量 SKU 不进公开 JSON-LD。
-// 锚点均指向已存在的首页 section，避免坏链。
+// ChatX（自动成交三档）/ VoiceX（幻声会员三档）。
+// 不进公开 JSON-LD 的线（2026-07-26 合规收口）：facex / matrixx（gated 合规隔离，
+// 见 lib/isolation.ts）、livex（描述含 face-swap 类目词，随隔离一并撤出结构化数据）、
+// fatex（未上线）；per-usage 计量 SKU 亦不进。锚点均指向仍存在的页面/section，避免坏链。
+const SCHEMA_HIDDEN: ReadonlySet<ProductKey> = new Set(["facex", "livex", "matrixx", "fatex"]);
 const PRODUCT_OFFERS: Partial<Record<ProductKey, Parameters<typeof toSchemaOffer>[0][]>> = {
   lingox: translateOffers,
   chatx: autochatOffers,
   voicex: voiceOffers,
-  livex: [...realtimeOffers, ...livexOffers],
 };
-const PRODUCT_SCHEMA_ANCHOR: Record<ProductKey, string> = {
+const PRODUCT_SCHEMA_ANCHOR: Partial<Record<ProductKey, string>> = {
   reachx: "#autochat",
   chatx: "#autochat",
-  facex: "#showcase",
-  voicex: "#realtime",
-  livex: "#realtime",
+  voicex: "voice",
   lingox: "#translate",
-  voxx: "#showcase",
-  matrixx: "matrix",
-  fatex: "#showcase",
+  voxx: "interpreting",
 };
-const productServices = PRODUCT_ORDER.map((key) => {
+const productServices = PRODUCT_ORDER.filter((key) => !SCHEMA_HIDDEN.has(key)).map((key) => {
   const p = BRAND.products[key];
   const offers = PRODUCT_OFFERS[key];
   return {
@@ -115,7 +104,7 @@ const productServices = PRODUCT_ORDER.map((key) => {
     description: `${p.en}: ${p.desc.en}. Part of BOUNDLESS — breaking ${p.break.en}. Privately deployed on your own hardware, data stays off the public net, verifiably compliant.`,
     provider: { "@type": "Organization", name: "无界科技 BOUNDLESS", url: SITE_URL },
     areaServed: "Global",
-    url: `${SITE_URL}/${PRODUCT_SCHEMA_ANCHOR[key]}`,
+    url: `${SITE_URL}/${PRODUCT_SCHEMA_ANCHOR[key] ?? "#products"}`,
     ...(offers ? { offers: offers.map(toSchemaOffer) } : {}),
   };
 });
@@ -161,6 +150,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           dangerouslySetInnerHTML={{
             __html:
               "(function(){try{var p=location.pathname;if(p.indexOf('/admin')===0||p==='/app'||p.indexOf('/app/')===0)return;var m=null;try{m=localStorage.getItem('bl-mode')}catch(e){}var day=m?m==='day':matchMedia('(prefers-color-scheme: light)').matches;if(day)document.documentElement.setAttribute('data-mode','day');}catch(e){}})();",
+          }}
+        />
+        {/* 会话归因跨页暂存：AI 坐席链接可能先落首页（如收益试算器锚点 /?ref=..#autochat），
+            用户逛完再点「下单」时 URL 上的 ?ref 已丢。任何页面带 ?ref 进站即暂存
+            localStorage（OrderPanel 无 URL ref 时 7 天内兜底读取），归因不断链。 */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "(function(){try{var m=location.search.match(/[?&]ref=([^&]+)/);if(m){var v=decodeURIComponent(m[1]).slice(0,160);localStorage.setItem('bl-ref',v);localStorage.setItem('bl-ref-ts',String(Date.now()));}}catch(e){}})();",
           }}
         />
         <Script src="https://telegram.org/js/telegram-web-app.js" strategy="beforeInteractive" />

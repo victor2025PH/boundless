@@ -15,6 +15,16 @@ const loongArmVariants: Variants = {
   idle_dance: { rotate: [0, 50, 0], transition: { rotate: { repeat: Infinity, duration: 0.4 } } },
   idle_news: { rotate: 6 },
   idle_spin: { rotate: 0 },
+  idle_nod: { rotate: 8, transition: { type: "spring", stiffness: 200, damping: 18 } },
+  idle_stretch: { rotate: 110, transition: { type: "spring", stiffness: 140, damping: 14 } },
+  idle_tilt: { rotate: 24, transition: { type: "spring", stiffness: 160, damping: 16 } },
+  idle_invite: { rotate: 88, transition: { type: "spring", stiffness: 150, damping: 15 } },
+  idle_alert: { rotate: 42, transition: { type: "spring", stiffness: 170, damping: 16 } },
+  idle_clap: {
+    rotate: [30, 55, 30, 55, 20],
+    transition: { duration: 1.55, ease: "easeInOut", times: [0, 0.22, 0.45, 0.68, 1] },
+  },
+  idle_shy: { rotate: 14, transition: { type: "spring", stiffness: 180, damping: 18 } },
   flying: { rotate: 30 },
   falling: { rotate: 120 },
 };
@@ -162,11 +172,13 @@ export const LoongForm: React.FC<DemonProps> = ({ mode, isHovered, newsText, new
   useEffect(() => {
     if (isHovered) return setEyeExpression("happy");
     if (mode === "falling") return setEyeExpression("scared");
-    if (mode === "idle_wave" || mode === "idle_dance") return setEyeExpression("happy");
+    if (mode === "idle_scan" || mode === "idle_tilt" || mode === "idle_alert") return setEyeExpression("scanning");
+    if (mode === "idle_wave" || mode === "idle_dance" || mode === "idle_stretch" || mode === "idle_nod" || mode === "idle_invite" || mode === "idle_clap") return setEyeExpression("happy");
+    if (mode === "idle_shy") return setEyeExpression("wink");
     let alive = true;
     const blinkLoop = () => {
       if (!alive) return;
-      if (mode === "idle_base" || mode === "idle_scan" || mode === "idle_news") {
+      if (mode === "idle_base" || mode === "idle_news") {
         setEyeExpression("blink");
         setTimeout(() => setEyeExpression("normal"), 140);
       }
@@ -352,9 +364,6 @@ export const LoongForm: React.FC<DemonProps> = ({ mode, isHovered, newsText, new
               <path d="M80 82 C82 88 80 93 75 96" stroke="#c98a1b" strokeWidth="7.5" strokeLinecap="round" fill="none" />
               <path d="M80 82 C82 88 80 93 75 96" stroke="url(#lg-body)" strokeWidth="5.5" strokeLinecap="round" fill="none" />
               <ellipse cx="74" cy="97" rx="4.6" ry="4" fill="url(#lg-head)" stroke="#b8860b" strokeWidth="0.8" />
-              {[-1, 0, 1].map((i) => (
-                <path key={i} d={`M${72 + i * 3} 99 C${71.4 + i * 3} 101.5 ${72.2 + i * 3} 103 ${73.4 + i * 3} 103.4 C${74.2 + i * 3} 101.8 ${74.2 + i * 3} 100 ${73.8 + i * 3} 98.6 Z`} fill="#fff3d1" stroke="#c98a1b" strokeWidth="0.6" />
-              ))}
             </g>
 
             {/* ── 左臂（挥手臂：肩点 48,82 旋转）── */}
@@ -362,9 +371,6 @@ export const LoongForm: React.FC<DemonProps> = ({ mode, isHovered, newsText, new
               <path d="M48 82 C45 88 47 94 53 97" stroke="#c98a1b" strokeWidth="7.5" strokeLinecap="round" fill="none" />
               <path d="M48 82 C45 88 47 94 53 97" stroke="url(#lg-body)" strokeWidth="5.5" strokeLinecap="round" fill="none" />
               <ellipse cx="54" cy="98" rx="4.6" ry="4" fill="url(#lg-head)" stroke="#b8860b" strokeWidth="0.8" />
-              {[-1, 0, 1].map((i) => (
-                <path key={i} d={`M${52 + i * 3} 100 C${51.4 + i * 3} 102.5 ${52.2 + i * 3} 104 ${53.4 + i * 3} 104.4 C${54.2 + i * 3} 102.8 ${54.2 + i * 3} 101 ${53.8 + i * 3} 99.6 Z`} fill="#fff3d1" stroke="#c98a1b" strokeWidth="0.6" />
-              ))}
             </motion.g>
 
             {/* ── 蓝鬃（贴头蓬松鬃毛：呼吸微摆 × 游动跟随滞后双层驱动）── */}

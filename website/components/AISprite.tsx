@@ -17,7 +17,7 @@ import {
 } from "framer-motion";
 import { useReducedMotionSafe } from "@/components/fx/useReducedMotionSafe";
 import { Activity } from "lucide-react";
-import { BRAND, PRODUCT_COUNT, PRODUCT_ORDER } from "@/lib/brand";
+import { PRODUCT_COUNT } from "@/lib/brand";
 import { useLang } from "./LanguageContext";
 import { track } from "@/lib/track";
 import BatSwarm, { type BatFlight } from "./BatSwarm";
@@ -29,7 +29,7 @@ import {
   type LoongCeremonyDetail,
   type LoongTeaserDetail,
 } from "@/lib/loong-events";
-import { attnActive, DOCK_EVENT, type DockDetail } from "@/lib/dock";
+import { attnActive, attnRelease, attnTryRequest, DOCK_EVENT, type DockDetail } from "@/lib/dock";
 import {
   NewsHologram,
   DemonEmbers,
@@ -41,7 +41,7 @@ import {
 import { LoongForm } from "./forms/LoongForm";
 import { EveBot } from "./forms/EveBot";
 import { DemonForm } from "./forms/DemonForm";
-import { SKIN, type HandGesture, type Skin } from "./forms/formShared";
+import { SKIN, type Skin } from "./forms/formShared";
 
 export type { BotMode, Skin } from "./forms/formShared";
 export { SKIN } from "./forms/formShared";
@@ -71,25 +71,23 @@ const HOME = { right: 24, bottom: 160 };
 
 /** 通用资讯池（未识别到特定版块时使用） */
 const NEWS = {
-  zh: ["扫描出海获客机会…", "AI 拟人翻译已就绪…", "多号矩阵 7×24 运转中…", "监测实时换脸链路…", "分析客户成交意向…", `同步 ${PRODUCT_COUNT} 大产品能力…`, "私有部署 · 数据不出网…", "自动跟单催单进行中…"],
-  en: ["Scanning lead-gen ops…", "Human-like translation ready…", "Multi-account matrix 24/7…", "Monitoring live face-swap…", "Analyzing buyer intent…", `Syncing ${PRODUCT_COUNT} product lines…`, "Private deploy · off-net…", "Auto follow-up running…"],
+  zh: ["扫描出海获客机会…", "AI 拟人翻译已就绪…", "多平台收件箱 7×24 运转中…", "监测翻译链路延迟…", "分析客户成交意向…", `同步 ${PRODUCT_COUNT} 大产品能力…`, "私有部署 · 数据不出网…", "自动跟单催单进行中…"],
+  en: ["Scanning lead-gen ops…", "Human-like translation ready…", "Omni-channel inbox 24/7…", "Monitoring translation latency…", "Analyzing buyer intent…", `Syncing ${PRODUCT_COUNT} product lines…`, "Private deploy · off-net…", "Auto follow-up running…"],
 };
 
 /** 场景化资讯池：随访客正在浏览的版块切换话术（IntersectionObserver 感知） */
 const SECTION_NEWS: Record<"zh" | "en", Record<string, string[]>> = {
   zh: {
     autochat: ["AI 正在自动接待询盘…", "拟人回复 · 客户无感知…", "自动成交流程演示中…"],
-    products: [`${PRODUCT_COUNT} 大引擎能力已就绪…`, "翻译 · 换脸 · 矩阵一站集成…", "挑一个引擎试试？"],
+    products: [`${PRODUCT_COUNT} 大引擎能力已就绪…`, "翻译 · 聊天 · 语音一站集成…", "挑一个引擎试试？"],
     pricing: ["按需订阅 · 支持私有化…", "算一算你的获客 ROI…", "方案可按业务定制…"],
-    cases: ["实测数据 · 转化提升显著…", "看看同行的用法…"],
     proof: ["真实交付截图在此…", "数据不注水 · 可复核…"],
     contact: ["留下需求 · 1 对 1 方案…", "工程师在线 · 随时可聊…"],
   },
   en: {
     autochat: ["AI answering inquiries live…", "Human-like replies, seamless…", "Auto-closing demo running…"],
-    products: [`${PRODUCT_COUNT} engines ready to deploy…`, "Translate · Swap · Matrix in one…", "Pick an engine to try?"],
+    products: [`${PRODUCT_COUNT} engines ready to deploy…`, "Translate · Chat · Voice in one…", "Pick an engine to try?"],
     pricing: ["Subscribe or self-host…", "Estimate your lead-gen ROI…", "Plans tailored to your ops…"],
-    cases: ["Field-tested conversion lift…", "See how peers use it…"],
     proof: ["Real delivery screenshots…", "Verifiable numbers only…"],
     contact: ["Leave a brief, get a plan…", "Engineers online now…"],
   },
@@ -102,7 +100,6 @@ const SECTION_SEED: Record<"zh" | "en", Record<string, string>> = {
     autochat: "AI 自动成交聊天怎么部署？怎么收费？",
     products: `帮我介绍下你们 ${PRODUCT_COUNT} 大产品能力分别解决什么问题`,
     pricing: "帮我算一下价格方案和获客 ROI",
-    cases: "有哪些实测案例和转化数据？",
     proof: "交付数据和真实截图能详细讲讲吗？",
     contact: "我想要 1 对 1 定制方案，怎么对接？",
   },
@@ -111,26 +108,42 @@ const SECTION_SEED: Record<"zh" | "en", Record<string, string>> = {
     autochat: "How do I deploy AI auto-closing chat, and what does it cost?",
     products: `Walk me through your ${PRODUCT_COUNT} product lines and what each solves`,
     pricing: "Help me estimate pricing and lead-gen ROI",
-    cases: "What field-tested cases and conversion data do you have?",
     proof: "Can you detail your delivery data and real screenshots?",
     contact: "I want a tailored 1-on-1 plan — how do we start?",
   },
 };
 
-/** 场景手势：全息播报时左手同步演出该版块的能力隐喻（引力三指队形，tripod 队形托举 icon）。
- *  文案讲给耳朵，手势演给眼睛——「能力剧场」把播报从字幕升级成表演 */
-const SECTION_GESTURE: Record<string, HandGesture> = {
-  top: { formation: "point" },
-  autochat: { formation: "keyboard" },
-  products: { formation: "tripod" },
-  pricing: { formation: "tripod", icon: "💎" },
-  cases: { formation: "radar" },
-  proof: { formation: "radar" },
-  contact: { formation: "fan" },
+/** 贴身短句文案（动作同步；多数可点开客服，shy 不可点以免打断彩蛋连击） */
+type SpeechKind = "greet" | "invite" | "alert" | "clap" | "shy";
+type SpeechLine = { zh: string; en: string; seed?: string; kind: SpeechKind; clickable?: boolean };
+const GREET_LINES: SpeechLine[] = [
+  { zh: "嗨～需要帮忙吗？", en: "Hi — need a hand?", kind: "greet" },
+  { zh: "有问题随时问我", en: "Got a question?", kind: "greet" },
+  { zh: "我在这儿～", en: "I'm right here", kind: "greet" },
+];
+const INVITE_BY_SECTION: Record<string, SpeechLine> = {
+  products: { zh: "看这款？", en: "This one?", kind: "invite", seed: "products" },
+  pricing: { zh: "算下合适方案？", en: "Need a fit?", kind: "invite", seed: "pricing" },
+  autochat: { zh: "想看看怎么部署？", en: "See how it deploys?", kind: "invite", seed: "autochat" },
+  proof: { zh: "交付证据在这", en: "Proof is here", kind: "invite", seed: "proof" },
+  contact: { zh: "聊聊你的场景？", en: "Tell me your case?", kind: "invite", seed: "contact" },
 };
-
-/** products 版块托举的产品 emoji 轮播序列（每次播报换下一个，8 款产品都有出场机会） */
-const PRODUCT_EMOJIS = PRODUCT_ORDER.map((k) => BRAND.products[k].emoji);
+const ALERT_LINE: SpeechLine = { zh: "欢迎回来", en: "Welcome back", kind: "alert" };
+/** 轻鼓文案按版块：proof 走「数据说话」 */
+const CLAP_BY_SECTION: Record<string, SpeechLine> = {
+  proof: { zh: "数据说话", en: "Numbers talk", kind: "clap", seed: "proof" },
+};
+const SHY_LINE: SpeechLine = { zh: "再点有惊喜…", en: "Tap more…", kind: "shy", clickable: false };
+const CLAP_SECTIONS = new Set(Object.keys(CLAP_BY_SECTION));
+const SPEECH_MS = 3200;
+/** 自动短句会话预算：间隔 + 上限（shy/进场招呼不吃间隔，进场仍计入上限） */
+const SPEECH_GAP_MS = 16_000;
+const SPEECH_SESSION_CAP = 10;
+const SPEECH_LAST_KEY = "bl-sprite-speech-at";
+const SPEECH_COUNT_KEY = "bl-sprite-speech-n";
+/** 回欢迎动作的会话冷却（避免刷屏） */
+const ALERT_COOLDOWN_KEY = "bl-sprite-alert-at";
+const ALERT_COOLDOWN_MS = 90_000;
 
 /** 挥手问候等一次性行为的会话级标记 */
 const GREET_KEY = "bl-sprite-greeted";
@@ -148,7 +161,36 @@ const OPEN_DEBOUNCE = 300;
 const FLY_IGNORE = "a,button,input,textarea,select,label,[role='button'],[data-robot-avoid='true'],.ai-sprite-container";
 
 /** 调试用的可锁定姿态白名单（URL ?robot=idle_news 等），供视觉回归与联调 */
-const DEBUG_MODES: BotMode[] = ["idle_wave", "idle_news", "idle_dance", "idle_scan", "idle_spin", "flying", "falling"];
+const DEBUG_MODES: BotMode[] = [
+  "idle_wave",
+  "idle_news",
+  "idle_dance",
+  "idle_scan",
+  "idle_spin",
+  "idle_nod",
+  "idle_stretch",
+  "idle_tilt",
+  "idle_invite",
+  "idle_alert",
+  "idle_clap",
+  "idle_shy",
+  "flying",
+  "falling",
+];
+
+const MODE_MS: Partial<Record<BotMode, number>> = {
+  idle_dance: 3600,
+  idle_news: 5000,
+  idle_spin: 1500,
+  idle_nod: 1500,
+  idle_stretch: 2400,
+  idle_tilt: 2200,
+  idle_invite: 2300,
+  idle_alert: 2100,
+  idle_clap: 1700,
+  idle_shy: 1700,
+  idle_wave: 3000,
+};
 
 export default function AISprite() {
   const { lang } = useLang();
@@ -158,12 +200,14 @@ export default function AISprite() {
   const [mode, setMode] = useState<BotMode>("idle_base");
   const [newsText, setNewsText] = useState("");
   const [newsCta, setNewsCta] = useState("");
-  /* 播报期手势指令（引力三指队形 + tripod 托举物），随播报同起同收 */
-  const [newsGesture, setNewsGesture] = useState<HandGesture | null>(null);
-  const productEmojiRef = useRef(0);
   const [questNews, setQuestNews] = useState(false);
   const [ceremonyActive, setCeremonyActive] = useState(false);
   const ceremonyPauseRef = useRef(false);
+  /* 贴身短句：与动作同步；占 sprite-greet 注意力位（软抢占，不排队） */
+  const [speech, setSpeech] = useState<SpeechLine | null>(null);
+  const speechTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const greetLineIdxRef = useRef(0);
+  const leftContentRef = useRef(false);
   /* 互动坞占用：聊天面板打开 → 精灵淡出让位；任意浮层活跃 → 播报让位 */
   const [chatDock, setChatDock] = useState(false);
   const dockBusyRef = useRef(false);
@@ -240,12 +284,19 @@ export default function AISprite() {
   const avoidRectsRef = useRef<Array<{ l: number; t: number; r: number; b: number }>>([]);
   const currentSectionRef = useRef<string>("top");
   const greetUntilRef = useRef(0);
+  /** 非挥手姿态持有窗：挡住悬停强制 idle_wave（shy 连击提示用） */
+  const poseHoldUntilRef = useRef(0);
   const homeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastHoverTrackRef = useRef(0);
   const lastFlyTrackRef = useRef(0);
   const forcedModeRef = useRef<BotMode | null>(null);
   /* 连击彩蛋：count 计数、timer 连击窗口、openTimer 单击开客服去抖 */
-  const comboRef = useRef<{ count: number; timer: ReturnType<typeof setTimeout> | null; openTimer: ReturnType<typeof setTimeout> | null }>({ count: 0, timer: null, openTimer: null });
+  const comboRef = useRef<{
+    count: number;
+    timer: ReturnType<typeof setTimeout> | null;
+    openTimer: ReturnType<typeof setTimeout> | null;
+    shyShown: boolean;
+  }>({ count: 0, timer: null, openTimer: null, shyShown: false });
 
   /* ---- 调试模式：?robot=idle_news 锁定姿态；?skin=demon 直接进恶魔态，供视觉回归与联调 ---- */
   useEffect(() => {
@@ -310,14 +361,12 @@ export default function AISprite() {
       setNewsText(txt);
       setNewsCta(lang === "zh" ? "打开星图 →" : "Open star map →");
       setQuestNews(true);
-      setNewsGesture({ formation: "point" });
       setMode("idle_news");
       track("sprite_news_impression", { text: txt, section: "dragon_teaser" });
       setTimeout(() => {
         setMode((p) => (p === "idle_news" ? "idle_base" : p));
         setQuestNews(false);
         setNewsCta("");
-        setNewsGesture(null);
       }, 5200);
     };
     window.addEventListener(LOONG_TEASER, onTeaser);
@@ -335,8 +384,73 @@ export default function AISprite() {
     return () => window.removeEventListener(LOONG_CEREMONY, onCer);
   }, []);
 
+  const clearSpeech = () => {
+    if (speechTimerRef.current) {
+      clearTimeout(speechTimerRef.current);
+      speechTimerRef.current = null;
+    }
+    setSpeech(null);
+    attnRelease("sprite-greet");
+  };
+
+  /**
+   * 动作同步短句：台上已有注意力位则软失败（不排队迟到）。
+   * ignoreHover：连击 shy 等必须在悬停点击中弹出。
+   * ignoreBudget：进场招呼跳过间隔（仍计入会话上限）；shy 完全不占预算。
+   */
+  const offerSpeech = (
+    line: SpeechLine,
+    opts?: { ignoreHover?: boolean; ignoreBudget?: boolean }
+  ): boolean => {
+    if (reduced || dockBusyRef.current || document.hidden) return false;
+    if (!opts?.ignoreHover && isHoveredRef.current) return false;
+    if (attnActive() && attnActive() !== "sprite-greet") return false;
+    const isShy = line.kind === "shy";
+    if (!isShy) {
+      try {
+        const n = Number(sessionStorage.getItem(SPEECH_COUNT_KEY) || 0);
+        if (n >= SPEECH_SESSION_CAP) return false;
+        if (!opts?.ignoreBudget) {
+          const last = Number(sessionStorage.getItem(SPEECH_LAST_KEY) || 0);
+          if (last && Date.now() - last < SPEECH_GAP_MS) return false;
+        }
+      } catch {}
+    }
+    if (!attnTryRequest("sprite-greet")) return false;
+    setSpeech(line);
+    if (speechTimerRef.current) clearTimeout(speechTimerRef.current);
+    speechTimerRef.current = setTimeout(() => {
+      speechTimerRef.current = null;
+      setSpeech(null);
+      attnRelease("sprite-greet");
+    }, SPEECH_MS);
+    if (!isShy) {
+      try {
+        const n = Number(sessionStorage.getItem(SPEECH_COUNT_KEY) || 0);
+        sessionStorage.setItem(SPEECH_COUNT_KEY, String(n + 1));
+        sessionStorage.setItem(SPEECH_LAST_KEY, String(Date.now()));
+      } catch {}
+    }
+    track("sprite_speech", { kind: line.kind, section: currentSectionRef.current });
+    return true;
+  };
+
+  const alertAllowed = (): boolean => {
+    try {
+      const last = Number(sessionStorage.getItem(ALERT_COOLDOWN_KEY) || 0);
+      if (Date.now() - last < ALERT_COOLDOWN_MS) return false;
+    } catch {}
+    return true;
+  };
+
+  const markAlert = () => {
+    try {
+      sessionStorage.setItem(ALERT_COOLDOWN_KEY, String(Date.now()));
+    } catch {}
+  };
+
   /* 互动坞：聊天开 → 本体淡出（面板有 AI 头像，不需要双形象）；
-     任意浮层（聊天/龙珠托盘面板）活跃 → 全息播报让位（正在播的立刻收回） */
+     任意浮层（聊天/龙珠托盘面板）活跃 → 全息播报/贴身短句让位 */
   useEffect(() => {
     const dockState = { chat: false, "dragon-panel": false };
     const onDock = (e: Event) => {
@@ -347,11 +461,31 @@ export default function AISprite() {
       dockBusyRef.current = dockState.chat || dockState["dragon-panel"];
       if (dockBusyRef.current) {
         setMode((p) => (p === "idle_news" ? "idle_base" : p));
+        if (speechTimerRef.current) {
+          clearTimeout(speechTimerRef.current);
+          speechTimerRef.current = null;
+        }
+        setSpeech(null);
+        attnRelease("sprite-greet");
       }
     };
     window.addEventListener(DOCK_EVENT, onDock);
     return () => window.removeEventListener(DOCK_EVENT, onDock);
   }, []);
+
+  /* 悬停 tip 优先：收起可点短句；shy（连击提示）保留，不与 tip 抢「点开客服」 */
+  useEffect(() => {
+    if (!isHovered) return;
+    setSpeech((cur) => {
+      if (!cur || cur.kind === "shy") return cur;
+      if (speechTimerRef.current) {
+        clearTimeout(speechTimerRef.current);
+        speechTimerRef.current = null;
+      }
+      attnRelease("sprite-greet");
+      return null;
+    });
+  }, [isHovered]);
 
   useEffect(() => {
     const refreshHome = () => {
@@ -393,20 +527,67 @@ export default function AISprite() {
     };
   }, []);
 
-  /* ---- 感知当前浏览版块，供场景化播报选池与种子问题 ---- */
+  /* ---- 感知当前浏览版块；离开内容区再回顶栏 → 欢迎回来（冷却） ---- */
   useEffect(() => {
-    const ids = ["top", "autochat", "products", "pricing", "cases", "proof", "contact"];
+    if (reduced) return;
+    const ids = ["top", "autochat", "products", "pricing", "proof", "contact"];
     const els = ids.map((id) => document.getElementById(id)).filter((el): el is HTMLElement => !!el);
     if (!els.length) return;
     const io = new IntersectionObserver(
       (entries) => {
-        for (const e of entries) if (e.isIntersecting) currentSectionRef.current = e.target.id;
+        for (const e of entries) {
+          if (!e.isIntersecting) continue;
+          const id = e.target.id;
+          const wasAway = leftContentRef.current;
+          if (id !== "top") leftContentRef.current = true;
+          currentSectionRef.current = id;
+          if (
+            id === "top" &&
+            wasAway &&
+            !forcedModeRef.current &&
+            !dockBusyRef.current &&
+            !isHoveredRef.current &&
+            alertAllowed()
+          ) {
+            leftContentRef.current = false;
+            markAlert();
+            setMode("idle_alert");
+            greetUntilRef.current = Date.now() + 2100;
+            offerSpeech(ALERT_LINE);
+            setTimeout(() => setMode((p) => (p === "idle_alert" ? "idle_base" : p)), 2100);
+            track("sprite_alert", { reason: "section_home" });
+          }
+        }
       },
       { rootMargin: "-35% 0px -45% 0px" }
     );
     els.forEach((el) => io.observe(el));
     return () => io.disconnect();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reduced]);
+
+  /* ---- 标签页长时间隐藏后再可见 → 欢迎回来 ---- */
+  useEffect(() => {
+    if (reduced) return;
+    let hiddenAt = 0;
+    const onVis = () => {
+      if (document.hidden) {
+        hiddenAt = Date.now();
+        return;
+      }
+      if (!hiddenAt || Date.now() - hiddenAt < 30_000) return;
+      if (forcedModeRef.current || dockBusyRef.current || isHoveredRef.current) return;
+      if (!alertAllowed()) return;
+      markAlert();
+      setMode("idle_alert");
+      offerSpeech(ALERT_LINE);
+      setTimeout(() => setMode((p) => (p === "idle_alert" ? "idle_base" : p)), 2100);
+      track("sprite_alert", { reason: "tab_return" });
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reduced]);
 
   /* ---- 行为调度：每 6s 随机小动作；隐藏页 / 高速滚动 / 悬停 / 调试锁定时静默 ---- */
   useEffect(() => {
@@ -416,34 +597,45 @@ export default function AISprite() {
       if (document.hidden || isHoveredRef.current) return;
       if (Math.abs(springScrollVelocity.get()) > 100 || Math.abs(flightVelX.get()) > 10) return;
       const rand = Math.random();
+      const section = currentSectionRef.current;
+      const inviteLine = INVITE_BY_SECTION[section];
       let next: BotMode = "idle_base";
-      if (rand > 0.95) next = "idle_spin";
-      else if (rand > 0.9) next = "idle_dance";
-      else if (rand > 0.8) next = "idle_wave";
-      else if (rand > 0.65) {
+      let pendingSpeech: SpeechLine | null = null;
+      if (rand > 0.97) next = "idle_spin";
+      else if (rand > 0.92) next = "idle_dance";
+      else if (rand > 0.86) {
+        next = "idle_wave";
+        /* 挥手可沉默：降说话密度，姿态仍在 */
+        if (Math.random() < 0.35) {
+          pendingSpeech = GREET_LINES[greetLineIdxRef.current % GREET_LINES.length];
+          greetLineIdxRef.current += 1;
+        }
+      } else if (rand > 0.83 && inviteLine) {
+        next = "idle_invite";
+        /* 邀约最密，约 2/3 才开口 */
+        if (Math.random() < 0.65) pendingSpeech = inviteLine;
+      } else if (rand > 0.78 && CLAP_SECTIONS.has(section)) {
+        next = "idle_clap";
+        if (Math.random() < 0.45) pendingSpeech = CLAP_BY_SECTION[section] ?? null;
+      } else if (rand > 0.72) next = "idle_stretch";
+      else if (rand > 0.66) next = "idle_nod";
+      else if (rand > 0.60) next = "idle_tilt";
+      else if (rand > 0.47) {
         /* 全息播报不占号但避让：台上有气泡时本轮改做普通待机 */
         if (attnActive()) return;
         next = "idle_news";
-        const section = currentSectionRef.current;
         const pool = SECTION_NEWS[lang]?.[section] ?? NEWS[lang] ?? NEWS.en;
         const txt = pool[Math.floor(Math.random() * pool.length)];
         setNewsText(txt);
-        /* 能力剧场：播报的同时左手演出该版块的产品手势；products 版块轮播托举 8 款产品 emoji */
-        const g = SECTION_GESTURE[section] ?? { formation: "point" as const };
-        setNewsGesture(
-          section === "products"
-            ? { formation: "tripod", icon: PRODUCT_EMOJIS[productEmojiRef.current++ % PRODUCT_EMOJIS.length] }
-            : g
-        );
         track("sprite_news_impression", { text: txt, section });
-      } else if (rand > 0.5) next = "idle_scan";
+      } else if (rand > 0.36) next = "idle_scan";
       if (next === "idle_wave") greetUntilRef.current = Date.now() + 3000;
       setMode(next);
+      if (pendingSpeech) offerSpeech(pendingSpeech);
       if (next !== "idle_base") {
-        const dur = next === "idle_dance" ? 3600 : next === "idle_news" ? 5000 : next === "idle_spin" ? 1500 : 3000;
+        const dur = MODE_MS[next] ?? 3000;
         setTimeout(() => {
           setMode((p) => (p === next ? "idle_base" : p));
-          if (next === "idle_news") setNewsGesture(null);
         }, dur);
       }
     }, 6000);
@@ -464,13 +656,14 @@ export default function AISprite() {
       timers.push(
         setTimeout(() => {
           if (isHoveredRef.current || forcedModeRef.current) return;
-          greetUntilRef.current = Date.now() + 2800;
+          greetUntilRef.current = Date.now() + Math.max(2800, SPEECH_MS);
           setMode("idle_wave");
+          offerSpeech(GREET_LINES[0], { ignoreBudget: true });
           track("sprite_greet");
           try {
             sessionStorage.setItem(GREET_KEY, "1");
           } catch {}
-          timers.push(setTimeout(() => setMode((p) => (p === "idle_wave" ? "idle_base" : p)), 2800));
+          timers.push(setTimeout(() => setMode((p) => (p === "idle_wave" ? "idle_base" : p)), 3000));
         }, 1600)
       );
     };
@@ -606,6 +799,7 @@ export default function AISprite() {
       }
     }
     if (forced) return;
+    if (Date.now() < poseHoldUntilRef.current) return;
     if (hovered) {
       if (mode !== "idle_wave") setMode("idle_wave");
     } else if (mode === "idle_wave" && Date.now() > greetUntilRef.current) {
@@ -677,6 +871,7 @@ export default function AISprite() {
     if (c.timer) clearTimeout(c.timer);
     c.timer = setTimeout(() => {
       c.count = 0;
+      c.shyShown = false;
       setCharge(0);
     }, COMBO_WINDOW);
     if (c.openTimer) {
@@ -686,11 +881,22 @@ export default function AISprite() {
     if (c.count >= DEMON_CLICKS) {
       if (c.timer) clearTimeout(c.timer);
       c.count = 0;
+      c.shyShown = false;
       setCharge(0);
       toggleDemon();
       return;
     }
     if (c.count >= 3) setCharge((c.count - 2) / (DEMON_CLICKS - 2)); // 3→1/5 … 6→4/5
+    /* 蓄力中段一次性 shy：与 charge 同节奏，不进随机调度、气泡不可点 */
+    if (c.count === 4 && !c.shyShown && !forcedModeRef.current && !reduced) {
+      c.shyShown = true;
+      const shyMs = MODE_MS.idle_shy ?? 1700;
+      poseHoldUntilRef.current = Date.now() + shyMs;
+      setMode("idle_shy");
+      offerSpeech(SHY_LINE, { ignoreHover: true });
+      setTimeout(() => setMode((p) => (p === "idle_shy" ? "idle_base" : p)), shyMs);
+      track("sprite_shy", { count: c.count });
+    }
     c.openTimer = setTimeout(() => {
       c.openTimer = null;
       track("ai_sprite_click", { mode, skin: skinRef.current });
@@ -773,9 +979,57 @@ export default function AISprite() {
           animate={reduced ? { opacity: 1 } : { y: 0, opacity: 1 }}
           transition={{ type: "spring", stiffness: 50, damping: 20, delay: 0.6 }}
         >
-          {/* 悬停提示气泡：给“可点击开客服”一个明确的转化引导（恶魔态换皮而不换转化目标） */}
+          {/* 贴身短句：动作同步；shy 不可点且可与悬停共存（引导继续连点） */}
           <AnimatePresence>
-            {isHovered && (
+            {speech && !chatDock && (!isHovered || speech.kind === "shy") && (
+              <motion.div
+                role={speech.clickable === false ? "status" : "button"}
+                tabIndex={speech.clickable === false ? -1 : 0}
+                className={`absolute right-full top-6 mr-2 max-w-[9.5rem] rounded-2xl rounded-br-md border px-2.5 py-1.5 text-left text-[11px] font-medium leading-snug shadow-lg backdrop-blur ${
+                  speech.clickable === false ? "pointer-events-none" : "pointer-events-auto cursor-pointer"
+                }`}
+                style={
+                  skin === "demon"
+                    ? { borderColor: "rgba(244,63,94,0.45)", background: "rgba(30,10,16,0.92)", color: "#fda4af" }
+                    : skin === "loong"
+                      ? { borderColor: "rgba(245,197,66,0.45)", background: "rgba(24,18,8,0.92)", color: "#fde68a" }
+                      : { borderColor: "rgba(34,211,238,0.35)", background: "rgba(10,12,27,0.92)", color: "#a5f3fc" }
+                }
+                initial={{ opacity: 0, x: 8, scale: 0.92 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                exit={{ opacity: 0, x: 6, scale: 0.96 }}
+                transition={{ duration: 0.2 }}
+                onClick={(e) => {
+                  if (speech.clickable === false) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const seedKey = speech.seed;
+                  const seed = seedKey ? SECTION_SEED[lang]?.[seedKey] : undefined;
+                  clearSpeech();
+                  openChatEvent(`sprite_${speech.kind}`, seed);
+                  track("sprite_speech_click", { kind: speech.kind });
+                }}
+                onKeyDown={(e) => {
+                  if (speech.clickable === false) return;
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const seedKey = speech.seed;
+                    const seed = seedKey ? SECTION_SEED[lang]?.[seedKey] : undefined;
+                    clearSpeech();
+                    openChatEvent(`sprite_${speech.kind}`, seed);
+                    track("sprite_speech_click", { kind: speech.kind });
+                  }
+                }}
+              >
+                {lang === "zh" ? speech.zh : speech.en}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* 悬停提示：shy 提示在场时让位，避免双气泡 */}
+          <AnimatePresence>
+            {isHovered && !(speech && speech.kind === "shy") && (
               <motion.div
                 className="pointer-events-none absolute right-full top-8 mr-1 whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-medium shadow-lg backdrop-blur"
                 style={
@@ -861,7 +1115,6 @@ export default function AISprite() {
                 reduced={reduced}
                 lowFx={lowFx || ceremonyActive}
                 revealed={!dissolved}
-                gesture={mode === "idle_news" ? newsGesture : null}
               />
             ) : skin === "loong" ? (
               <LoongForm
@@ -895,7 +1148,6 @@ export default function AISprite() {
                 reduced={reduced}
                 lowFx={lowFx || ceremonyActive}
                 skin={skin}
-                gesture={mode === "idle_news" ? newsGesture : null}
                 charge={charge}
               />
             )}
@@ -920,6 +1172,7 @@ export default function AISprite() {
                     comboRef.current.openTimer = null;
                   }
                   comboRef.current.count = 0;
+                  comboRef.current.shyShown = false;
                   toggleDemon();
                 }}
               >

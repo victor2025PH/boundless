@@ -11,7 +11,8 @@
  * 本文件不另存版本，防止双源漂移。
  *
  * 合规注意（lib/isolation.ts 是唯一裁判）：gated 客户端（智控）在 public 页面上
- * 只允许出现「产品名 + 中性一句话」，营销能力词（防封等）留在它自己的 noindex 页内；
+ * 只允许出现「产品名 + 中性一句话」，能力细节留在它自己的 noindex 页内（对抗平台
+ * 风控类表述全站禁用，见 scripts/check-content-integrity.mjs 黑名单）；
  * 指向 gated 页的链接统一 rel="nofollow"，且不进任何结构化数据（ItemList 等）。
  */
 import type { BrandLang, CategoryKey, ProductKey } from "./brand";

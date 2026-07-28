@@ -6,24 +6,14 @@ import Hero from "@/components/Hero";
 import BrandShowcase from "@/components/BrandShowcase";
 import { LazyAISprite, LazyDragonQuest } from "@/components/fx/LazyFx";
 import TrustBar from "@/components/TrustBar";
+import SolutionPicker from "@/components/SolutionPicker";
 import ProductMatrix from "@/components/ProductMatrix";
-import Personas from "@/components/Personas";
-import Compare from "@/components/Compare";
 import AutoChat from "@/components/AutoChat";
 import TranslateDemo from "@/components/TranslateDemo";
-import RealtimeSwap from "@/components/RealtimeSwap";
-import EngineCapabilities from "@/components/EngineCapabilities";
-import Showcase from "@/components/Showcase";
-import Cases from "@/components/Cases";
 import RealProof from "@/components/RealProof";
-import EngagementModels from "@/components/EngagementModels";
 import Pricing from "@/components/Pricing";
 import ClientAppCTA from "@/components/ClientAppCTA";
-import OrderSteps from "@/components/OrderSteps";
-import About from "@/components/About";
 import Faq from "@/components/Faq";
-import Community from "@/components/Community";
-import UnlockGate from "@/components/UnlockGate";
 import Contact from "@/components/Contact";
 import Footer from "@/components/Footer";
 
@@ -43,29 +33,20 @@ export default function SiteHome() {
       <BrandShowcase />
       <Hero />
       <TrustBar />
-      {/* 光弧分隔线:只放在五个主要叙事转折处,保持稀缺感 */}
+      {/* 光弧分隔线:只放在四个主要叙事转折处,保持稀缺感 */}
       <SectionDivider />
+      {/* 30 秒选型器：两个问题直接给产品+套餐推荐 */}
+      <SolutionPicker />
       <ProductMatrix />
-      <Personas />
-      <Compare />
+      {/* AutoChat 内部已含 Plans（AI 成交聊天三档套餐 + 自助下单）与 ROI 计算器 */}
       <AutoChat />
       <TranslateDemo />
-      <RealtimeSwap />
       <SectionDivider />
-      <EngineCapabilities />
-      <Showcase />
-      <SectionDivider />
-      <Cases />
       <RealProof />
-      <EngagementModels />
       <SectionDivider />
       <Pricing />
       <ClientAppCTA />
-      <OrderSteps />
-      <About />
       <Faq />
-      <Community />
-      <UnlockGate />
       <SectionDivider />
       <Contact />
       <Footer />

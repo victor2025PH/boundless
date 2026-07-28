@@ -50,6 +50,15 @@ interface Stats {
     greet: number;
     newsImpressions: number;
     newsClicks: number;
+    speech?: number;
+    speechClick?: number;
+    speechByKind?: Record<string, number>;
+    speechClickByKind?: Record<string, number>;
+    shy?: number;
+    alert?: number;
+    demonUnlock?: number;
+    demonRevert?: number;
+    speechCtr?: number;
     funnel: {
       sessions: number;
       engaged: number;
@@ -1694,6 +1703,23 @@ export default function AdminPage() {
                         />
                         <div className="mt-2 text-[11px] text-slate-500">
                           悬停 {stats.sprite.hover} · 让它飞 {stats.sprite.fly} · 进场问好 {stats.sprite.greet}
+                        </div>
+                        <div className="mt-2 text-[11px] text-slate-400">
+                          贴身短句：展示 {stats.sprite.speech ?? 0} / 点击 {stats.sprite.speechClick ?? 0} / CTR{" "}
+                          {stats.sprite.speechCtr ?? 0}%
+                        </div>
+                        <div className="mt-0.5 text-[10px] text-slate-600">
+                          {(["greet", "invite", "alert", "clap", "shy"] as const)
+                            .map((k) => {
+                              const n = stats.sprite?.speechByKind?.[k] ?? 0;
+                              const c = stats.sprite?.speechClickByKind?.[k] ?? 0;
+                              return `${k} ${n}/${c}`;
+                            })
+                            .join(" · ")}
+                        </div>
+                        <div className="mt-1.5 text-[11px] text-slate-500">
+                          害羞提示 {stats.sprite.shy ?? 0} · 欢迎回来 {stats.sprite.alert ?? 0} · 彩蛋解锁{" "}
+                          {stats.sprite.demonUnlock ?? 0}
                         </div>
                         {stats.sprite.compare && stats.sprite.funnel.engaged > 0 && (
                           <div className="mt-2 rounded-lg border border-slate-800 bg-slate-950/40 px-2.5 py-2 text-[11px]">

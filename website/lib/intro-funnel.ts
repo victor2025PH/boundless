@@ -24,7 +24,8 @@ export interface IntroFunnel {
   rates: { gestureRate: number; soundRate: number; enterRate: number };
 }
 
-// auto = intro_auto_enter 实验 B 桶的「无操作 12s 自动进入」
+// auto = 片头自动散场（桌面 ~2.6s / reduced ~0.8s 定时进入，2026-07-26 起的生产行为；
+// 历史数据里的 auto 是已下线 intro_auto_enter 实验 B 桶的「无操作 12s 自动进入」）
 const ENTER_METHODS = ["click", "scroll", "touch", "key", "auto"] as const;
 type EnterMethod = (typeof ENTER_METHODS)[number];
 

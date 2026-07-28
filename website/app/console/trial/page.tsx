@@ -5,6 +5,7 @@
 import { Gift, HeartPulse } from "lucide-react";
 import { hasConsoleSession } from "@/lib/console-auth";
 import { claimStats, listClaims } from "@/lib/trial-claim-store";
+import { readTrialFunnel } from "@/lib/trial-funnel";
 import { Card, DataTable, EmptyState, PageHeader, Td, fmtDateTime } from "../parts";
 import { TrialRedeemPanel } from "./ui";
 
@@ -37,7 +38,11 @@ function fulfillerHealth(lastSeen: string, oldestPendingMin: number) {
 export default async function TrialPage() {
   if (!hasConsoleSession()) return null;
 
-  const [stats, rows] = await Promise.all([claimStats(), listClaims({ limit: 200 })]);
+  const [stats, rows, funnel] = await Promise.all([
+    claimStats(),
+    listClaims({ limit: 200 }),
+    readTrialFunnel(7),
+  ]);
   const recent = rows.slice().reverse();
   const health = fulfillerHealth(stats.fulfillerLastSeen, stats.oldestPendingMin);
   const waiting = recent.filter((c) => c.bindRedeemedAt && !c.topupVoucher).length;
@@ -75,6 +80,30 @@ export default async function TrialPage() {
           点了领取会一直停在「正在签发」——先去厂商机确认 fulfill_trial.py 还在跑。
         </p>
       </Card>
+
+      {funnel.machines.welcome > 0 && (
+        <Card className="mb-4 border-slate-800 bg-slate-900/40 !py-3">
+          <div className="mb-2 text-[11px] text-slate-500">
+            首启向导漏斗（近 {funnel.days} 天 · 按机器去重）
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+            <FunnelStep label="看到欢迎页" value={funnel.machines.welcome} />
+            <FunnelArrow />
+            <FunnelStep
+              label="提交领取"
+              value={funnel.machines.claim_submit}
+              rate={funnel.rates.claimSubmit}
+            />
+            <FunnelArrow />
+            <FunnelStep label="领取成功" value={funnel.machines.claim_ok} rate={funnel.rates.claimOk} />
+            <FunnelArrow />
+            <FunnelStep label="完成进入" value={funnel.machines.done} rate={funnel.rates.done} />
+            <span className="ml-2 text-slate-600">
+              跳过 {funnel.machines.claim_skip} · 打开客服码 {funnel.machines.gift_open}
+            </span>
+          </div>
+        </Card>
+      )}
 
       <TrialRedeemPanel defaultChars={DEFAULT_GIFT} />
 
@@ -123,6 +152,21 @@ export default async function TrialPage() {
       )}
     </div>
   );
+}
+
+function FunnelStep({ label, value, rate }: { label: string; value: number; rate?: number }) {
+  return (
+    <span className="text-slate-300">
+      {label} <span className="font-semibold text-slate-100">{value}</span>
+      {rate != null && (
+        <span className="ml-0.5 text-[10px] text-slate-500">({Math.round(rate * 100)}%)</span>
+      )}
+    </span>
+  );
+}
+
+function FunnelArrow() {
+  return <span className="text-slate-600">→</span>;
 }
 
 function Stat({ label, value, tone }: { label: string; value: number; tone?: "amber" }) {

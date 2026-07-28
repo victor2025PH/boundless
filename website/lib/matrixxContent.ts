@@ -27,8 +27,8 @@ export const MATRIXX = {
       en: "Telegram fleet operations at scale — without losing control",
     },
     subtitle: {
-      zh: "多账号统一调度、AI 团队 24 小时协作跟进，配合智能防封与本地私有部署，让规模化增长真正可持续、可衡量。",
-      en: "Unified multi-account orchestration, 24/7 AI-team follow-ups, smart anti-ban and fully local deployment — sustainable, measurable growth at scale.",
+      zh: "多账号统一调度、AI 团队 24 小时协作跟进，配合智能频控与本地私有部署，让规模化增长真正可持续、可衡量。",
+      en: "Unified multi-account orchestration, 24/7 AI-team follow-ups, smart rate control and fully local deployment — sustainable, measurable growth at scale.",
     },
     trustline: {
       zh: "本地运行 · 数据不出网 · 免显卡 · 一次安装即用",
@@ -65,10 +65,10 @@ export const MATRIXX = {
       },
     },
     {
-      title: { zh: "消息群发 · 智能防封", en: "Broadcast with smart anti-ban" },
+      title: { zh: "消息触达 · 智能频控", en: "Broadcast with smart rate control" },
       desc: {
-        zh: "账号轮换、FloodWait 冷却、频率限制与行为模拟结合，规模化触达同时压低封号风险。",
-        en: "Account rotation, FloodWait cooldown, rate limiting and behavior simulation — reach at scale while cutting ban risk.",
+        zh: "账号轮换、FloodWait 冷却、频率限制与行为模拟结合，按平台规则控制节奏、规模化触达。",
+        en: "Account rotation, FloodWait cooldown, rate limiting and behavior simulation — reach at scale while pacing within platform rules.",
       },
     },
     {

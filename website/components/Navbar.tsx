@@ -9,9 +9,9 @@ import { CONTACT_URL, localePath } from "@/lib/site";
 import { track } from "@/lib/track";
 import BrandMark from "./BrandMark";
 import ModeToggle from "./ModeToggle";
-import { BRAND, CATEGORIES, CATEGORY_ORDER, productsInCategory, type ProductKey } from "@/lib/brand";
+import { BRAND, CATEGORIES, CATEGORY_ORDER, type ProductKey } from "@/lib/brand";
 import { CATEGORY_UI } from "@/lib/categoryUi";
-import { PRODUCT_LANDING, PRODUCT_ANCHOR } from "./productMeta";
+import { PRODUCT_LANDING, PRODUCT_ANCHOR, publicProductsInCategory } from "./productMeta";
 import ProductIcon from "./ProductIcon";
 import { CLIENT_APPS, CLIENT_COVERED_PRODUCTS } from "@/lib/downloads";
 import { abVariant, abExpose, NAV_BUY, type AbVariant } from "@/lib/ab";
@@ -84,7 +84,8 @@ export default function Navbar() {
   }, []);
 
   useEffect(() => {
-    const ids = ["translate", "autochat", "realtime", "showcase", "engage", "pricing", "contact"];
+    // 仅观察仍存在的首页 section（#realtime/#showcase/#engage 已随首页收敛下线）
+    const ids = ["translate", "autochat", "pricing", "contact"];
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((e) => {
@@ -105,10 +106,11 @@ export default function Navbar() {
   const buyLabel = lang === "zh" ? buy.zhLabel : buy.enLabel;
 
   // 顶栏收敛（2026-07-25）：翻译 / AI 聊天 / 合作方式三个首页锚点从顶栏移除（产品下拉
-  // 与首页滚动已覆盖发现路径），聚焦转化主链：产品 → 演示 → 购买 → 下载 → 联系。
-  // 「下载」升级为下拉（多客户端后单链接语义不再成立），数据源 lib/downloads.ts。
+  // 与首页滚动已覆盖发现路径），聚焦转化主链：产品 → 购买 → 下载 → 联系。
+  // 「实时换脸」演示锚点（#realtime）已随首页 section 下线一并撤除（2026-07-26）。
+  // 「下载」升级为下拉（多客户端后单链接语义不再成立），数据源 lib/downloads.ts；
+  // gated 客户端（isolation.ts 裁定）不进公开下拉，只在其 noindex 页面内直达。
   const links = [
-    { href: anchor("#realtime"), label: t.nav.demo, id: "realtime" },
     {
       href: buyHref,
       label: buyLabel,
@@ -117,7 +119,8 @@ export default function Navbar() {
     },
   ];
   const tailLinks = [{ href: anchor("#contact"), label: t.nav.contact, id: "contact" }];
-  // /download /download/chatx /matrix/download 与 /en 前缀版全部命中
+  const publicClients = CLIENT_APPS.filter((app) => !app.gated);
+  // 所有客户端下载页路径（含 /en 前缀版）都包含 "/download" 片段
   const onDownloadPage = pathname.includes("/download");
 
   return (
@@ -164,7 +167,7 @@ export default function Navbar() {
                         <span className="ml-1 font-normal text-slate-500">{lang === "zh" ? cc.en : cc.zh}</span>
                       </div>
                       <div className="flex flex-col gap-0.5">
-                        {productsInCategory(cat).map((key) => {
+                        {publicProductsInCategory(cat).map((key) => {
                           const p = BRAND.products[key];
                           return (
                             <a
@@ -256,7 +259,7 @@ export default function Navbar() {
               }`}
             >
               <div className="glass w-[340px] rounded-2xl border border-white/10 p-2">
-                {CLIENT_APPS.map((app) => (
+                {publicClients.map((app) => (
                   <a
                     key={app.key}
                     href={localePath(lang, app.page)}
@@ -377,7 +380,7 @@ export default function Navbar() {
                     {lang === "zh" ? CATEGORIES[cat].zh : CATEGORIES[cat].en}
                   </div>
                   <div className="flex flex-col gap-0.5">
-                    {productsInCategory(cat).map((key) => {
+                    {publicProductsInCategory(cat).map((key) => {
                       const p = BRAND.products[key];
                       return (
                         <a
@@ -410,7 +413,7 @@ export default function Navbar() {
                 {lang === "zh" ? "客户端下载" : "Downloads"}
               </div>
               <div className="flex flex-col gap-0.5">
-                {CLIENT_APPS.map((app) => (
+                {publicClients.map((app) => (
                   <a
                     key={app.key}
                     href={localePath(lang, app.page)}

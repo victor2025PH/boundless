@@ -45,6 +45,9 @@ export default function OrderPanel() {
   const [selected, setSelected] = useState("pro");
   const [checkout, setCheckout] = useState(false);
   const [prefillFp, setPrefillFp] = useState("");
+  // 会话归因串（AI 坐席聊天里发的下单链接带 ?ref=<会话id>）：静默随单提交，
+  // 供 chengjie 引擎按 ref 自动结算营销目标；对用户不可见不可编辑。
+  const [prefillRef, setPrefillRef] = useState("");
   // 深链预填完成前不写回 URL，避免首帧用默认 pro 盖掉 ?plan=autochat-entry。
   const urlReady = useRef(false);
 
@@ -70,6 +73,17 @@ export default function OrderPanel() {
     if (q.get("period") === "annual") setPeriod("annual");
     const fp = q.get("fp");
     if (fp) setPrefillFp(fp.slice(0, 128));
+    const ref = q.get("ref");
+    if (ref) setPrefillRef(ref.slice(0, 160));
+    else {
+      // 跨页归因兜底：AI 链接可能先落首页（试算器锚点），root layout 已把
+      // ?ref 暂存 localStorage（bl-ref）——7 天内进下单页仍能归因到会话。
+      try {
+        const v = localStorage.getItem("bl-ref") || "";
+        const ts = Number(localStorage.getItem("bl-ref-ts") || 0);
+        if (v && ts && Date.now() - ts < 7 * 86400e3) setPrefillRef(v.slice(0, 160));
+      } catch {}
+    }
     urlReady.current = true;
   }, []);
 
@@ -364,6 +378,7 @@ export default function OrderPanel() {
             period={period}
             family={family}
             initialFp={prefillFp}
+            attributionRef={prefillRef}
             onClose={() => setCheckout(false)}
           />
         )}
@@ -603,6 +618,7 @@ function CheckoutModal({
   period,
   family,
   initialFp,
+  attributionRef = "",
   onClose,
 }: {
   zh: boolean;
@@ -610,6 +626,8 @@ function CheckoutModal({
   period: Period;
   family: OrderFamily;
   initialFp: string;
+  /** 会话归因串（?ref=…，AI 坐席链接带入）：静默随单提交，不渲染任何 UI。 */
+  attributionRef?: string;
   onClose: () => void;
 }) {
   const [contact, setContact] = useState("");
@@ -693,6 +711,8 @@ function CheckoutModal({
           fingerprint: fp.trim(),
           lang: zh ? "zh" : "en",
           method,
+          // 会话归因串（AI 坐席链接 ?ref=…）：有值才带，供营销目标自动结算
+          ...(attributionRef ? { ref: attributionRef } : {}),
         }),
       });
       const j = await r.json();

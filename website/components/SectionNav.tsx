@@ -9,15 +9,11 @@ export default function SectionNav() {
 
   const items = [
     { id: "top", label: lang === "zh" ? "首页" : "Home" },
+    { id: "picker", label: lang === "zh" ? "选方案" : "Find fit" },
     { id: "products", label: lang === "zh" ? "产品" : "Products" },
     { id: "autochat", label: t.nav.autochat },
     { id: "translate", label: lang === "zh" ? "实时翻译" : "Translate" },
-    { id: "realtime", label: t.nav.demo },
-    { id: "engine", label: lang === "zh" ? "新能力" : "Engine" },
-    { id: "showcase", label: t.nav.solutions },
-    { id: "cases", label: t.nav.cases },
     { id: "proof", label: lang === "zh" ? "真实案例" : "Proof" },
-    { id: "engage", label: t.nav.engage },
     { id: "pricing", label: t.nav.pricing },
     { id: "contact", label: t.nav.contact },
   ];

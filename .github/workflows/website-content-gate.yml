@@ -1,0 +1,80 @@
+# ---------------------------------------------------------------------------
+# 官网内容门禁 CI（Website Content Gate）
+#
+# 用途：把官网内容完整性门禁与产品事实源新鲜度校验挂进 CI，作为合入门禁：
+#   1. 事实源新鲜度 —— 在 CI 里重跑 sync:facts 后 git diff 生成物：
+#      products/*/product.yaml 或 platform/licensing/sku_registry.json 改了
+#      但 lib/generated/product-facts.json 没重新生成提交 → 红（防事实源过期）。
+#   2. 内容完整性门禁（gate:content，4 道检查）—— 静态资产存在性 / 价格一致性 /
+#      禁用宣传语黑名单 / 测试数 ratchet（宣传测试数 > 实际测试文件数即红；
+#      CI 检出的是完整 monorepo，engines/*/tests 存在，走实跑分支而非 skip）。
+#   3. TypeScript 类型检查（tsc --noEmit）。
+#
+# 触发路径覆盖官网本身 + 两处事实上游（产品清单 / SKU 注册表）。
+# 注意：SKU 注册表真实路径是 platform/licensing/sku_registry.json
+# （scripts/sync-product-facts.mjs 的读取路径），paths 过滤须与之对齐。
+#
+# 本地等效命令（在 website/ 目录下执行）：
+#   npm ci
+#   npm run sync:facts
+#   npm run gate:content
+#   npx tsc --noEmit
+# ---------------------------------------------------------------------------
+
+name: Website Content Gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - "products/**"
+      - "platform/licensing/**"
+      - ".github/workflows/website-content-gate.yml"
+  pull_request:
+    paths:
+      - "website/**"
+      - "products/**"
+      - "platform/licensing/**"
+      - ".github/workflows/website-content-gate.yml"
+
+jobs:
+  content-gate:
+    runs-on: ubuntu-latest
+    # monorepo 结构：npm 工程在 website/ 子目录，所有 run 步骤统一在此执行
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      # 检出完整 monorepo（不只 website/）：sync:facts 要读 ../products 与
+      # ../platform/licensing，gate:content 检查 4 要数 ../engines/*/tests
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: 安装依赖
+        run: npm ci
+
+      # 用仓库当前的 product.yaml + sku_registry.json 重新生成产品事实源
+      - name: 重新生成产品事实源
+        run: npm run sync:facts
+
+      # 生成物必须与上游 YAML/JSON 同步提交：重跑后若有实质差异，说明改了事实源
+      # 却没把 product-facts.json 重新生成进提交 → 红。
+      # -I 忽略 generatedAt 行：sync:facts 每次都会重写该时间戳，不属于实质差异。
+      - name: 事实源新鲜度校验（生成物须已同步提交）
+        run: git diff --exit-code -I '"generatedAt"' -- lib/generated/product-facts.json
+
+      # 4 道内容检查：资产存在性 / 价格一致性 / 禁用语黑名单 / 测试数 ratchet
+      - name: 内容完整性门禁
+        run: npm run gate:content
+
+      # 类型检查兜底（next build 才会全量查类型，这里提前到门禁一起红）
+      - name: TypeScript 类型检查
+        run: npx tsc --noEmit
