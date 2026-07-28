@@ -17,6 +17,22 @@ _ROLE_VIEWER = "viewer"
 _ROLE_MASTER = "master"
 
 
+def _save_binding_patch(cm, patch) -> bool:
+    """账号人设绑定的**扁平键**持久化：最小 patch 落 config.local.yaml overlay
+    （保住主 config.yaml 注释/结构）。兜底：方法缺失（简化 fake）或返回非 bool
+    （MagicMock 桩）→ 整文件 save()。
+
+    注意：仅限扁平 ``<platform>.persona_ids``。accounts **列表内**成员的改动
+    不走此路——overlay 的 list 整体替换语义会把整个 accounts 快照固化进
+    overlay，从此遮蔽运营在主配置里的账号增删（双源真相事故），那些调用点
+    保持整文件 save()。"""
+    saver = getattr(cm, "save_overlay_patch", None)
+    ok = saver(patch) if callable(saver) else None
+    if not isinstance(ok, bool):
+        ok = cm.save()
+    return bool(ok)
+
+
 def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None):
     """Register persona management API endpoints。config_manager 用于人设持久化。"""
 
@@ -1112,6 +1128,7 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         # Mutate in-memory config: find account or fallback to top-level
         accounts: list = wa_cfg.get("accounts") or []
         matched = False
+        matched_flat = False
         for acc in accounts:
             aid = str(acc.get("id") or acc.get("account_id") or acc.get("adb_serial") or "")
             if aid == account_id:
@@ -1123,14 +1140,18 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
             if account_id in ("default", ""):
                 # Single-account mode: set top-level persona_ids
                 wa_cfg["persona_ids"] = pids
-                matched = True
+                matched = matched_flat = True
 
         if not matched:
             raise HTTPException(404, f"WA account '{account_id}' not found in config")
 
-        # Persist to config.yaml
+        # Persist：扁平键走 overlay 最小 patch；accounts 列表内改动保持整文件
+        # save()（overlay list 整体替换会遮蔽主配置账号增删，见 _save_binding_patch）
         cm.config["whatsapp_rpa"] = wa_cfg
-        saved = cm.save()
+        if matched_flat:
+            saved = _save_binding_patch(cm, {"whatsapp_rpa": {"persona_ids": pids}})
+        else:
+            saved = cm.save()
 
         # Hot-reload matching service runner (best-effort)
         reloaded = False
@@ -1179,6 +1200,7 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
 
         accounts = tg_cfg.get("accounts")
         matched = False
+        matched_flat = False
         if isinstance(accounts, list) and accounts:
             for acc in accounts:
                 aid = str(acc.get("id") or acc.get("account_id") or "").strip()
@@ -1189,12 +1211,15 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         if not matched and (account_id in ("default", "") or not accounts):
             # 单账号 / default：写扁平槽（注册表 default 分支已支持读取）
             tg_cfg["persona_ids"] = pids
-            matched = True
+            matched = matched_flat = True
         if not matched:
             raise HTTPException(404, f"TG account '{account_id}' not found")
 
         cm.config["telegram"] = tg_cfg
-        saved = cm.save()
+        if matched_flat:
+            saved = _save_binding_patch(cm, {"telegram": {"persona_ids": pids}})
+        else:
+            saved = cm.save()  # accounts 列表内改动：overlay 整列表会遮蔽主配置
         actor = request.session.get("username", "web_admin")
         if audit_store:
             audit_store.log(actor, "tg_assign_profile",
@@ -1226,6 +1251,7 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
 
         accounts = mrpa_cfg.get("accounts") or []
         matched = False
+        matched_flat = False
         for acc in accounts:
             aid = str(acc.get("id") or acc.get("account_id") or acc.get("adb_serial") or "").strip()
             if aid == account_id:
@@ -1234,12 +1260,15 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
                 break
         if not matched and account_id in ("default", ""):
             mrpa_cfg["persona_ids"] = pids
-            matched = True
+            matched = matched_flat = True
         if not matched:
             raise HTTPException(404, f"Messenger account '{account_id}' not found")
 
         cm.config["messenger_rpa"] = mrpa_cfg
-        saved = cm.save()
+        if matched_flat:
+            saved = _save_binding_patch(cm, {"messenger_rpa": {"persona_ids": pids}})
+        else:
+            saved = cm.save()  # accounts 列表内改动：overlay 整列表会遮蔽主配置
         reloaded = False
         try:
             _svcs = getattr(request.app.state, "messenger_rpa_services", None) or []

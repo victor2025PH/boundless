@@ -413,13 +413,19 @@ class ConfigManager:
         self.logger.info("运营开关已更新: %s = %r", ".".join(keys), value)
         return True, "已保存"
 
-    def save_overlay_patch(self, patch: Dict[str, Any]) -> bool:
+    def save_overlay_patch(self, patch: Dict[str, Any], *,
+                           replace_paths: Any = ()) -> bool:
         """把「本次真正改动」的最小 patch 深合并进 config.local.yaml 并即时生效。
 
         渠道路由等运行时设置保存的统一出口：写 overlay 而非整文件回写主
         config.yaml（保住主配置注释/结构，运行时值不固化进 git 跟踪文件）。
         合并语义与 ``_deep_merge`` 一致：dict 递归、其余类型（**含 list，整体
         替换不 extend**）以 patch 覆盖。patch 为空 → 直接 True 不落盘。
+
+        ``replace_paths``：点分路径集合（如 ``("intent.keywords",)``），命中的
+        子树按**整体赋值**而非 dict 递归合并——供「整字典替换」语义的配置
+        （意图关键词表等：删掉的键必须真被删掉，深合并会让陈旧键赖着不走）。
+        overlay 落盘与内存刷新走同一 replace 感知合并，删除即时生效不等重启。
 
         写盘为 tmp 文件 + ``os.replace`` 原子替换；成功后深合并进 self.config
         保持内存一致，并同步刷新 ``_overlay_loaded_mtime`` 基线——自己刚写的
@@ -433,6 +439,7 @@ class ConfigManager:
             self.logger.error(
                 "save_overlay_patch: patch 须为 dict，收到 %s", type(patch).__name__)
             return False
+        replace = {str(p) for p in (replace_paths or ())}
         path = self._overlay_path()
         try:
             overlay: Dict[str, Any] = {}
@@ -441,7 +448,7 @@ class ConfigManager:
                     overlay = yaml.safe_load(f) or {}
             if not isinstance(overlay, dict):
                 overlay = {}
-            self._deep_merge(overlay, patch)
+            self._merge_patch_replace_aware(overlay, patch, replace)
             tmp = path.with_suffix(".tmp")
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write("# 运行时设置写入（渠道中心等）的 overlay（深合并覆盖 config.yaml）。\n")
@@ -449,7 +456,10 @@ class ConfigManager:
                 yaml.dump(overlay, f, default_flow_style=False,
                           allow_unicode=True, sort_keys=False)
             os.replace(tmp, path)
-            self._deep_merge(self.config, overlay)
+            # 内存刷新仍合并整个 overlay（吸收落盘前的人工手改，行为与旧版一致），
+            # 但 replace 路径按赋值处理——overlay 里该子树刚被整树替换，深合并会把
+            # 内存里已删除的键留到重启。
+            self._merge_patch_replace_aware(self.config, overlay, replace)
             self._overlay_loaded_mtime = self._overlay_mtime()
         except Exception as exc:
             self.logger.error("写入运行时设置 overlay 失败: %s", exc)
@@ -457,6 +467,18 @@ class ConfigManager:
         self.logger.info(
             "运行时设置已写入 overlay（顶层键: %s）", ", ".join(sorted(map(str, patch))))
         return True
+
+    def _merge_patch_replace_aware(self, dst: Dict[str, Any],
+                                   patch: Dict[str, Any],
+                                   replace: set, _prefix: str = "") -> None:
+        """_deep_merge 的 replace 感知版：命中 replace 点分路径的键整体赋值。"""
+        for k, v in patch.items():
+            path = f"{_prefix}{k}"
+            if (path not in replace and isinstance(v, dict)
+                    and isinstance(dst.get(k), dict)):
+                self._merge_patch_replace_aware(dst[k], v, replace, path + ".")
+            else:
+                dst[k] = v
 
     def _run_startup_self_check(self) -> None:
         """启动时跑配置自检并把 error/warn 摘要写日志（永不抛、永不阻断启动）。"""

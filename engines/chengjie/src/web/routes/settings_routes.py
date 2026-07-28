@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import time
@@ -22,6 +23,28 @@ from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
 
+_MISSING = object()
+
+
+def _dict_diff(before, after):
+    """after 相对 before 的最小嵌套 patch（只表达新增/变更）。
+
+    本文件各保存 handler 只 set 不 delete——快照 diff 出的补丁可证明恰含本次
+    真实改动，不用逐行镜像赋值；需要删除语义的端点（意图关键词整表替换）
+    自行走 ``replace_paths``。"""
+    out = {}
+    for k, v in (after or {}).items():
+        b = (before or {}).get(k, _MISSING)
+        if isinstance(v, dict) and (b is _MISSING or isinstance(b, dict)):
+            # 新增/既有 dict 一律递归；空产物不进补丁（handler 的 ensure-init
+            # 空字典不算改动）
+            sub = _dict_diff({} if b is _MISSING else b, v)
+            if sub:
+                out[k] = sub
+        elif b is _MISSING or b != v:
+            out[k] = v
+    return out
+
 
 def register_settings_routes(app, ctx):
     from src.web.admin import templates, invalidate_schedule_status_cache
@@ -32,6 +55,24 @@ def register_settings_routes(app, ctx):
     _api_auth = ctx.api_auth
     _api_write = ctx.api_write
     _require_role = ctx.require_role
+
+    def _persist_patch(request, patch, *, replace_paths=()):
+        """最小 patch 落 config.local.yaml overlay（保住主 config.yaml 注释/结构，
+        与渠道路由 _save_cfg 同口径）。兜底：方法缺失（简化 fake）/旧签名不认
+        replace_paths（TypeError）/返回非 bool（MagicMock 桩）→ 整文件 save()。"""
+        saver = getattr(config_manager, "save_overlay_patch", None)
+        ok = None
+        if callable(saver):
+            try:
+                ok = (saver(patch, replace_paths=replace_paths)
+                      if replace_paths else saver(patch))
+            except TypeError:
+                ok = saver(patch)
+        if not isinstance(ok, bool):
+            ok = config_manager.save()
+        if ok is False:
+            raise HTTPException(
+                500, tr(request, "err.set.save_config_failed", err="persist"))
 
     @app.get("/settings", response_class=HTMLResponse)
     async def settings_page(request: Request):
@@ -83,6 +124,10 @@ def register_settings_routes(app, ctx):
             cfg = {}
             config_manager.config = cfg
         updated = []
+        # 快照真实写入的子树（voice_ai 实际落在 messenger_rpa.voice_output）——
+        # 保存时 diff 出最小 patch 走 overlay，不再整文件 dump。
+        _patch_root = "messenger_rpa" if section == "voice_ai" else section
+        _before = copy.deepcopy(cfg.get(_patch_root) or {})
         if section == "voice_ai":
             mr = cfg.get("messenger_rpa")
             if not isinstance(mr, dict):
@@ -154,7 +199,8 @@ def register_settings_routes(app, ctx):
                 "--voice-profile", profile_path,
                 "--language-type", "Japanese",
             ]
-            config_manager.save()
+            _persist_patch(request, {
+                _patch_root: _dict_diff(_before, cfg.get(_patch_root) or {})})
             try:
                 from src.ai.tts_pipeline import reset_tts_pipeline
                 reset_tts_pipeline()
@@ -252,10 +298,8 @@ def register_settings_routes(app, ctx):
             cfg[section]["forward_to_group"] = ftg
             updated.append("forward_to_group")
 
-        try:
-            config_manager.save()
-        except Exception as e:
-            raise HTTPException(500, tr(request, "err.set.save_config_failed", err=e))
+        _persist_patch(request, {
+            _patch_root: _dict_diff(_before, cfg.get(_patch_root) or {})})
 
         actor = request.session.get("username", "web_admin")
         if audit_store:
@@ -322,6 +366,10 @@ def register_settings_routes(app, ctx):
         if cfg is None:
             cfg = {}
             config_manager.config = cfg
+        # 快照两棵真实写入的子树（telegram.reply_logic/group_reply + trigger.enabled），
+        # 保存时 diff 最小 patch 走 overlay；trigger_rules.yaml 是独立文件不在此列。
+        _tg_before = copy.deepcopy(cfg.get("telegram") or {})
+        _trig_before = copy.deepcopy(cfg.get("trigger") or {})
         if "telegram" not in cfg:
             cfg["telegram"] = {}
         tg = cfg["telegram"]
@@ -418,10 +466,14 @@ def register_settings_routes(app, ctx):
                 except Exception:
                     pass
 
-        try:
-            config_manager.save()
-        except Exception as e:
-            raise HTTPException(500, tr(request, "err.set.save_config_failed", err=e))
+        _patch = {}
+        _tg_diff = _dict_diff(_tg_before, cfg.get("telegram") or {})
+        if _tg_diff:
+            _patch["telegram"] = _tg_diff
+        _trig_diff = _dict_diff(_trig_before, cfg.get("trigger") or {})
+        if _trig_diff:
+            _patch["trigger"] = _trig_diff
+        _persist_patch(request, _patch)
 
         actor = request.session.get("username", "web_admin")
         if audit_store:
@@ -453,10 +505,10 @@ def register_settings_routes(app, ctx):
         if "intent" not in cfg:
             cfg["intent"] = {}
         cfg["intent"]["keywords"] = new_kw
-        try:
-            config_manager.save()
-        except Exception as e:
-            raise HTTPException(500, tr(request, "err.set.save_failed", err=e))
+        # 关键词表是「整字典替换」语义（删掉的意图必须真被删掉）——深合并会让
+        # 陈旧意图赖在 overlay/内存里，故走 replace_paths 整树替换。
+        _persist_patch(request, {"intent": {"keywords": new_kw}},
+                       replace_paths=("intent.keywords",))
 
         # 热更新 SkillManager
         if telegram_client:
