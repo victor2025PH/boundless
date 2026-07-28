@@ -40,31 +40,40 @@ FACT_LOCK_LINE = (
 )
 
 
-def build_time_context_line(now: Any = None) -> str:
+def build_time_context_line(now: Any = None, *, place_label: str = "") -> str:
     """陪伴域「当前真实时间」prompt 行（纯函数，Phase19 + 2026-07-15 作息白名单）。
 
     LLM 训练数据里没有"现在几点"，不注入就会深夜说"下午好"；清晨/深夜两个高危
     时段额外加作息合理性硬约束——清晨 7:44 说「刚下课回来」这类穿帮（LLM 对
     "这个点什么事还没发生"没有常识保证）。
+
+    ``now`` 应为**人设当地** naive 时间（由调用方经 ``persona_now`` 换算后传入）；
+    ``place_label`` 非空时标明「当地」以免与服务器时钟混淆。
     """
     import datetime as _dt
     _t = now if isinstance(now, _dt.datetime) else _dt.datetime.now()
-    _h = _t.hour
-    _tod = ("清晨" if 5 <= _h < 8 else "上午" if 8 <= _h < 12 else
-            "中午" if 12 <= _h < 14 else "下午" if 14 <= _h < 18 else
-            "傍晚" if 18 <= _h < 20 else "晚上" if 20 <= _h < 23 else "深夜")
+    # 与 persona_location.daypart_label 阈值对齐（避免「时间行」与「当地时间行」时段词打架）
+    try:
+        from src.companion.persona_location import daypart_label as _daypart
+        _tod = _daypart(_t.hour, "zh")
+    except Exception:
+        _h = _t.hour
+        _tod = ("清晨" if 5 <= _h < 8 else "上午" if 8 <= _h < 12 else
+                "中午" if 12 <= _h < 14 else "下午" if 14 <= _h < 18 else
+                "傍晚" if 18 <= _h < 20 else "晚上" if 20 <= _h < 23 else "深夜")
+    _where = f"（{place_label}当地）" if str(place_label or "").strip() else ""
     line = (
         "【当前真实时间】" + _t.strftime("%Y-%m-%d %H:%M")
-        + f"（{_tod}）。问候语、作息话题、以及照片场景标记里的光线时段"
+        + f"（{_tod}）{_where}。问候语、作息话题、以及照片场景标记里的光线时段"
           "都必须符合这个时间（深夜就是室内暖光/夜景，不要白天场景）。"
           "凡涉及日期的推理（票据/行程/纪念日的先后、隔了几天）一律以上面日期"
           "为「今天」计算——早于今天的日期是已经发生的过去，不要当成未来安排。")
-    if _tod == "清晨":
+    if _tod in ("清晨", "early morning"):
         line += (
             "\n【作息合理性】现在是清晨：合理状态只有刚睡醒/洗漱/准备出门/"
             "还没吃早饭这类；绝不能说「刚下课/刚下班/刚逛街回来」——"
             "这个点这些事根本还没发生。")
-    elif _tod == "深夜":
+    elif _tod in ("深夜", "late night"):
         line += (
             "\n【作息合理性】现在是深夜：合理状态是宅在室内/准备睡/失眠刷手机；"
             "不要说刚从学校、公司、商场这类白天场合回来。")
@@ -1227,6 +1236,61 @@ class AIClient(LoggerMixin):
             self.logger.debug("rewrite_local failed: %s", e)
             return None
 
+    async def rewrite_cloud(
+        self,
+        system_prompt: str,
+        user_text: str,
+        *,
+        timeout_sec: float = 12.0,
+        max_tokens: int = 600,
+        temperature: float = 0.7,
+    ) -> Optional[str]:
+        """同 ``rewrite_local``，但走**主云端模型**（``ai.base_url``/``ai.model``）。
+
+        用于「本地 LAN 模型不可用 / 运营选择云端质量」的短文本工具任务（如语音口语化）。
+        与主对话链的区别同 ``rewrite_local``：不跑语言守卫/质检、**不碰熔断窗口、不记
+        主链 ok 时间戳**——工具调用失败不该被 ``degradation_snapshot`` 误读成云端故障。
+        成本单列 ``tier="tool"``，与主链/备用池/本地兜底的用量分开看。
+        仅支持 OpenAI 兼容口（本仓生产口径）；其它 provider 返回 None 由调用方回落。
+        """
+        if not (self._oa_client and self.model):
+            return None
+        messages = [
+            {"role": "system", "content": str(system_prompt or "")},
+            {"role": "user", "content": str(user_text or "")},
+        ]
+
+        async def _run() -> str:
+            kw: Dict[str, Any] = dict(
+                model=self.model, messages=messages,
+                temperature=temperature, max_tokens=max_tokens)
+            if self._oa_extra_body:
+                kw["extra_body"] = self._oa_extra_body
+            resp = await self._oa_client.chat.completions.create(**kw)
+            try:
+                _u = getattr(resp, "usage", None)
+                if _u:
+                    from src.ai.llm_cost import get_llm_cost
+                    get_llm_cost().record(
+                        model=str(self.model),
+                        prompt_tokens=int(getattr(_u, "prompt_tokens", 0) or 0),
+                        completion_tokens=int(
+                            getattr(_u, "completion_tokens", 0) or 0),
+                        tier="tool")
+            except Exception:
+                self.logger.debug("llm_cost.record(tool) 失败", exc_info=True)
+            if resp and getattr(resp, "choices", None):
+                return (resp.choices[0].message.content or "").strip()
+            return ""
+
+        try:
+            out = await asyncio.wait_for(
+                _run(), timeout=max(1.0, float(timeout_sec)))
+            return (out or "").strip() or None
+        except Exception as e:
+            self.logger.debug("rewrite_cloud failed: %s", e)
+            return None
+
     def _apply_tier_overrides(
         self,
         strategy_overrides: Optional[Dict[str, Any]],
@@ -1836,6 +1900,31 @@ class AIClient(LoggerMixin):
             )
             if context is not None and _p_spoken:
                 context["_resolved_persona_name"] = _p_spoken
+            # 人设本地时钟（与 deep_persona 开关无关）：海外人设按当地时刻驱动
+            # 时间行 / temporal_anchor / 场景状态；失败则静默回落服务器时钟。
+            _persona_local_now = None
+            try:
+                from src.companion.persona_location import (
+                    resolve_place_with_fallback,
+                    persona_now as _persona_now_fn,
+                    local_time_line,
+                    time_gap_line,
+                )
+                _place = resolve_place_with_fallback(_p_resolved)
+                _persona_local_now = _persona_now_fn(_place)
+                if context is not None:
+                    context["_resolved_persona"] = _p_resolved
+                    context["_persona_local_now"] = _persona_local_now
+                    if _place is not None:
+                        context["_persona_place_label"] = _place.display("zh")
+                        _lt = local_time_line(_place, "zh", _persona_local_now)
+                        if _lt:
+                            context["_persona_local_time_line"] = _lt
+                        _gap = time_gap_line(_place, "zh", _persona_local_now)
+                        if _gap:
+                            context["_persona_time_gap_line"] = _gap
+            except Exception:
+                self.logger.debug("[persona_location] 本地时钟解析跳过", exc_info=True)
             # 深度人设增强（5 层：生活线/关系画像+回指/口味/内部梗/经历式记忆/拟人细节）——
             # 默认关，master flag `companion.deep_persona.enabled` 灰度；best-effort 绝不阻塞。
             try:
@@ -1894,8 +1983,9 @@ class AIClient(LoggerMixin):
                                     _dctx["experiential_sim_fn"] = make_embedding_sim_fn(_qv, _emap)
                     except Exception:
                         self.logger.debug("[deep_persona] 语义 sim 构造失败（回落字面）", exc_info=True)
+                    _dp_now = _persona_local_now if _persona_local_now is not None else _dt.now()
                     _dp_block = build_deep_persona_block(
-                        _p_resolved, now=_dt.now(), cfg=_dp_cfg, stage=_p_funnel,
+                        _p_resolved, now=_dp_now, cfg=_dp_cfg, stage=_p_funnel,
                         deep_ctx=_dctx, imperfection_roll=_rnd.random(),
                     )
                     if _dp_block:
@@ -2387,6 +2477,11 @@ class AIClient(LoggerMixin):
         _bazi = (context.get("_bazi_block") or "").strip()
         if _bazi:
             prompt_parts.append(_bazi)
+        # 人设长传记检索（personas.bio_retrieval）：客户追问人设长尾细节时
+        # skill_manager 关键词检索命中才注入；开关与预算判定都在注入侧，有块即消费
+        _pbio = (context.get("_persona_bio_block") or "").strip()
+        if _pbio:
+            prompt_parts.append(_pbio)
         # 营销目标（companion.goals）：会话工作目标的「今日拍」方向块（skill_manager
         # 注入；开关/情绪 hold/沉默熔断/力度判定全在注入侧，这里有块即消费）
         _goal = (context.get("_goal_block") or "").strip()
@@ -2500,8 +2595,86 @@ class AIClient(LoggerMixin):
         # 当前真实时间（Phase19 时间一致性）：LLM 训练数据里没有"现在几点"，
         # 不注入就会深夜说"下午好"、凌晨发正午场景标记。仅陪伴人设注入
         # （客服域时间敏感话术由业务模板负责，不吃这块 token）。
+        # 优先用人设当地时钟（skill_manager / deep_persona 路径写入 context）。
         if _is_companion:
-            prompt_parts.append(build_time_context_line())
+            _local_now = context.get("_persona_local_now")
+            _place_lbl = str(context.get("_persona_place_label") or "").strip()
+            if not isinstance(_local_now, __import__("datetime").datetime):
+                _local_now = None
+                # 兜底：若上游未注入，尝试从 context 里已挂的人设再算一次
+                try:
+                    _p_fb = context.get("_resolved_persona") or context.get("persona")
+                    if isinstance(_p_fb, dict):
+                        from src.companion.persona_location import (
+                            resolve_place_with_fallback,
+                            persona_now as _p_now,
+                            local_time_line as _lt_line,
+                            time_gap_line as _gap_line,
+                        )
+                        _pl = resolve_place_with_fallback(_p_fb)
+                        if _pl is not None:
+                            _local_now = _p_now(_pl)
+                            _place_lbl = _pl.display("zh")
+                            if not context.get("_persona_local_time_line"):
+                                context["_persona_local_time_line"] = _lt_line(
+                                    _pl, "zh", _local_now)
+                            if not context.get("_persona_time_gap_line"):
+                                _g = _gap_line(_pl, "zh", _local_now)
+                                if _g:
+                                    context["_persona_time_gap_line"] = _g
+                except Exception:
+                    _local_now = None
+            prompt_parts.append(
+                build_time_context_line(_local_now, place_label=_place_lbl))
+            _loc_line = (context.get("_persona_local_time_line") or "").strip()
+            if _loc_line:
+                prompt_parts.append("【人设当地时间】" + _loc_line)
+            _gap_line_txt = (context.get("_persona_time_gap_line") or "").strip()
+            if _gap_line_txt:
+                prompt_parts.append(_gap_line_txt)
+            _wx_note = (context.get("_persona_weather_note") or "").strip()
+            if _wx_note:
+                prompt_parts.append(_wx_note)
+            # P2 用户侧在地化：对方当地时间 + 对方那边的节日（skill_manager 注入，
+            # 只吃显式信号——见 `_inject_peer_locale` 的 docstring）。有了这两块，
+            # 「对方那边几点、今天是不是 TA 的节日」不再靠 LLM 瞎猜。
+            _peer_clk = (context.get("_peer_clock_line") or "").strip()
+            if _peer_clk:
+                prompt_parts.append(_peer_clk)
+            _peer_hol = (context.get("_peer_holiday_note") or "").strip()
+            if _peer_hol:
+                prompt_parts.append(_peer_hol)
+            # 人设侧节日：算在这里而不是 skill_manager——人设与人设本地钟此处已在手，
+            # 且 holidays_on 是带缓存的纯函数（零 IO）。语义是**生活纹理**而非群发问候：
+            # 「你所在地今天过节」让人设的日常自洽（街上气氛/店铺关门），不催它去祝贺。
+            try:
+                _hcfg = (
+                    ((self.config.config or {}).get("companion") or {})
+                    .get("locale_holidays") or {}
+                ) if self.config else {}
+                if (isinstance(_hcfg, dict) and _hcfg.get("enabled")
+                        and _hcfg.get("persona_side_texture", True)):
+                    _p_for_hol = (context.get("_resolved_persona")
+                                  or context.get("persona"))
+                    if isinstance(_p_for_hol, dict):
+                        from src.companion.locale_holidays import (
+                            holiday_fact_line as _hol_line,
+                            holidays_on as _hol_on,
+                        )
+                        from src.companion.persona_location import (
+                            resolve_place_with_fallback as _rp_place,
+                        )
+                        _pl_h = _rp_place(_p_for_hol)
+                        _ctry_h = str(getattr(_pl_h, "country", "") or "").strip()
+                        if _ctry_h:
+                            _day_h = (_local_now or __import__(
+                                "datetime").datetime.now()).date()
+                            _pn = _hol_line(
+                                _hol_on(_day_h, _ctry_h), "zh", side="persona")
+                            if _pn:
+                                prompt_parts.append(_pn)
+            except Exception:
+                pass
 
         # 场景状态（Phase18 图文同源）：聊天文本与生图共用的「AI 此刻在哪」——
         # 文本围绕它说话、自拍在它里面拍，从源头消灭"说上班发海边图"打脸。

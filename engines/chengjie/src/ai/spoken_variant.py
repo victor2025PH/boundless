@@ -35,8 +35,10 @@ from typing import Any, Dict, Optional, Tuple
 
 # 标记：要求 LLM 另起一行以此开头输出口语版（方/尖括号、可带冒号都认）
 SPOKEN_MARKER = "[口语版]"
-_MARKER_RE = re.compile(
-    r"^[ \t>*\-]*[\[【]\s*口语版\s*[\]】][:：]?[ \t]*", re.MULTILINE)
+# 刻意**不锚定行首**：实测 DeepSeek 常把标记接在正文末尾同一行（「…来看看？[口语版] 我在
+# 宿舍呢…」）。行首锚定时这类输出既取不到口语版（白吃 token + 口语化静默失效），书面版还
+# 会带着标记连同重复内容发给客户并被 TTS 念出来。宽口径匹配同时修掉这两件事。
+_MARKER_RE = re.compile(r"[ \t>*\-]*[\[【]\s*口语版\s*[\]】][:：]?[ \t]*")
 
 # 暂存：sha1(书面版) -> (expire_monotonic, 口语版)
 _STORE: "OrderedDict[str, Tuple[float, str]]" = OrderedDict()

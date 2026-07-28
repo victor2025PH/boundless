@@ -21,12 +21,13 @@ def register_report_routes(app, ctx) -> None:
     _api_auth = ctx.api_auth
     _kb_store = ctx.kb_store
 
+    def _get_sm():
+        from src.web.web_context import resolve_skill_manager
+        return resolve_skill_manager(telegram_client, app)
+
     def _get_strategy_tracker():
-        if telegram_client:
-            sm = getattr(telegram_client, "skill_manager", None)
-            if sm:
-                return getattr(sm, "strategy_tracker", None)
-        return None
+        sm = _get_sm()
+        return getattr(sm, "strategy_tracker", None) if sm else None
 
     @app.get("/api/report/daily")
     async def api_daily_report(request: Request, hours: int = 24):
@@ -132,10 +133,9 @@ def register_report_routes(app, ctx) -> None:
         # 6. at_risk 用户
         try:
             ctx_store = None
-            if telegram_client:
-                sm = getattr(telegram_client, "skill_manager", None)
-                if sm:
-                    ctx_store = getattr(sm, "_context_store", None)
+            sm = _get_sm()
+            if sm:
+                ctx_store = getattr(sm, "_context_store", None)
             if ctx_store:
                 risk_count = sum(
                     1 for c in ctx_store._cache.values()

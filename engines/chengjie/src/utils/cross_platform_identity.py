@@ -134,6 +134,7 @@ def link_and_merge_memory(
     ``episodic_store=None`` → 只做 link+整簇改挂。绝不抛：merge/relink
     失败只损失合并，不影响关联本身。
     """
+    pre_a = cpi.resolve(platform_a, uid_a)
     pre_b = cpi.resolve(platform_b, uid_b)
     canon = cpi.link(platform_a, uid_a, platform_b, uid_b)
     relinked: List[dict] = []
@@ -163,4 +164,7 @@ def link_and_merge_memory(
         "memory_rows_merged": merged,
         "merged_from": [pre_b] if merged else [],
         "cluster_relinked": relinked,
+        # 幂等信号：两侧 link 前已同 canonical → 重复关联（调用方据此
+        # 跳过合流观测计数，防 totals 虚胀；与 confirm_link_pair 同口径）
+        "already_linked": bool(pre_a and pre_a == pre_b),
     }

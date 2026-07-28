@@ -224,21 +224,25 @@ async def test_inbox_autopilot_keeps_protocol_when_deliver_off():
 
 
 @pytest.mark.asyncio
-async def test_non_auto_ai_conv_still_direct_sends():
-    """会话为 review（拟稿人审，非人工独占）→ 直发链路照常工作（账号级闸门开时）。
-
-    注：Sprint1 起 manual 语义收敛为「坐席已接管」，protocol 直发对 manual 让位（见
-    test_manual_conv_stands_down）；review/multi_choice 仍照常直发。"""
+async def test_review_conv_stands_down():
+    """「AI草稿我审」须停 protocol 直发（与 A 线 / UI 同口径），改由 System Z 拟稿人审。"""
     sent = []
+    gen_called = []
+
+    async def _gen(**kw):
+        gen_called.append(kw)
+        return "不该生成"
+
     res = await pa.run_autoreply(
         _payload(), registry=_FakeRegistry(_row()),
         cfg={"protocol_autoreply": {"enabled": True}},
-        generate=_make_gen("亲，在的~"), send=_make_send(sent),
+        generate=_gen, send=_make_send(sent),
         risk_fn=lambda t: "low",
         inbox_mode_fn=lambda p, a, c: "review",
     )
-    assert res["sent"] is True
-    assert len(sent) == 1
+    assert res["skipped"] == "inbox_human_gate"
+    assert sent == []
+    assert gen_called == []
 
 
 @pytest.mark.asyncio

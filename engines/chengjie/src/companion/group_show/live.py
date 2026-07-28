@@ -197,6 +197,53 @@ def live_quiet_hours(app_config: Optional[Dict[str, Any]] = None) -> Any:
         return QUIET_HOURS
 
 
+def live_preflight_enabled(app_config: Optional[Dict[str, Any]] = None) -> bool:
+    """开演前 peer 体检开关：``companion.group_show.live.preflight_peers``（缺省 **开**）。
+
+    为什么默认开而不是随新功能惯例默认关：它是**纯只读**校验（resolve/预热 RPC，
+    零发言），拦的是「演员根本不在群」这种必然翻车——2026-07-27 双号灰度连烧三场，
+    每场都是首拍成功、第二号连炸两拍收场，群里留下一半的戏。带病开演没有任何
+    合法场景，故默认拦。真要绕（如平台侧体检误报）配 ``false``。
+    """
+    try:
+        node = ((app_config or {}).get("companion") or {}).get("group_show") or {}
+        got = (node.get("live") or {}).get("preflight_peers")
+        return True if got is None else bool(got)
+    except Exception:  # noqa: BLE001
+        return True
+
+
+async def preflight_peers(
+    orchestrator: Any, casting: Any, *, platform: str, group_key: str,
+) -> Dict[str, Any]:
+    """开演前逐演员做群 peer 可达性体检：``{ok, checked, unreachable: [...]}``。
+
+    只拦**确定不可达**（编排器答复 ``ok=False``）；编排器缺此能力 / 单查异常
+    → 视作未检出问题放行（发送路径仍有 peer 自愈兜底）。``send`` 直传（无
+    编排器）的调用方天然跳过——它们自带出口，链路健康归它们自己管。
+    """
+    out: Dict[str, Any] = {"ok": True, "checked": 0, "unreachable": []}
+    fn = getattr(orchestrator, "ensure_peer", None) if orchestrator is not None else None
+    if fn is None:
+        return out
+    for member in list(getattr(casting, "members", ()) or ()):
+        acct = str(getattr(member, "account_id", "") or "")
+        if not acct:
+            continue
+        try:
+            res = await fn(str(platform), acct, str(group_key))
+        except Exception:  # noqa: BLE001 —— 体检自身故障不拦戏
+            logger.debug("[group_show.live] preflight 查询异常 acct=%s", acct,
+                         exc_info=True)
+            continue
+        if (res or {}).get("checked"):
+            out["checked"] += 1
+        if (res or {}).get("ok") is False:
+            out["unreachable"].append(acct)
+    out["ok"] = not out["unreachable"]
+    return out
+
+
 def looks_like_app_config(config: Optional[Dict[str, Any]]) -> bool:
     """这个 dict 像不像**整份 app 配置**被误传进了 ``config``（导演配置）位。
 
@@ -471,6 +518,20 @@ async def perform(
         orchestrator, platform=platform, group_key=str(group_key))
     casting = plan.casting
     assert casting is not None  # plan.ok ⇒ casting 已定
+
+    # 开演前 peer 体检：演员「不在群/解析不了」是必然翻车，宁可后台拒演也不上台
+    # 演半场（首拍成功+第二号连炸=群里留一半戏，比不演更假）。只读零发言。
+    if orchestrator is not None and live_preflight_enabled(app_config):
+        pf = await preflight_peers(orchestrator, casting,
+                                   platform=platform, group_key=str(group_key))
+        if not pf["ok"]:
+            result.terminate_reason = "peer_unreachable"
+            result.warnings.append(
+                "开演前体检：演员对群不可达（不在群内？）: "
+                + ", ".join(pf["unreachable"]))
+            logger.warning("[group_show.live] 拒演：演员 peer 不可达 %s group=%s",
+                           pf["unreachable"], group_key)
+            return result
 
     started = float(now())
     state = ShowState(

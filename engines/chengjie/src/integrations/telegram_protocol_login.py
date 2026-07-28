@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_SESSIONS_DIR = "sessions"
 _registered = False
+#: 最近一次 maybe_register 收到的配置（ConfigManager 热重载会整个换掉字典对象，
+#: provider 闭包里那份会永远停在启动时刻——见 make_provider 的 config_getter）
+_latest_config: Dict[str, Any] = {}
 
 
 # ── 纯函数（可单测） ─────────────────────────────────────────────────────────
@@ -95,9 +98,13 @@ class TelegramQrLogin:
     """管理一次 Telegram 二维码登录的生命周期（异步）。"""
 
     def __init__(self, api_id: int, api_hash: str, sessions_dir: str,
-                 proxy: Optional[Dict[str, Any]] = None) -> None:
+                 proxy: Optional[Dict[str, Any]] = None,
+                 device_kwargs: Optional[Dict[str, str]] = None) -> None:
         self.api_id = int(api_id)
         self.api_hash = str(api_hash)
+        # 每账号设备指纹（防多开被聚类连坐）；空 = 用 pyrogram 默认值，行为不变。
+        # 必须与该账号后续 runner 拉起时用的指纹一致，故由调用方按同一种子派生。
+        self.device_kwargs = dict(device_kwargs or {})
         self.sessions_dir = Path(sessions_dir)
         self.session_name = f"tg_login_{secrets.token_hex(6)}"
         self.proxy = proxy or None
@@ -132,6 +139,7 @@ class TelegramQrLogin:
             )
             if self.proxy:
                 client_kwargs["proxy"] = self.proxy
+            client_kwargs.update(self.device_kwargs)
             self.client = Client(self.session_name, **client_kwargs)
             await self.client.connect()
             r = await self.client.invoke(ExportLoginToken(
@@ -298,28 +306,65 @@ def _to_pyrogram_proxy(proxy: Optional[Dict[str, Any]]) -> Optional[Dict[str, An
     return out
 
 
-def make_provider(config: Dict[str, Any], sessions_dir: str = _DEFAULT_SESSIONS_DIR):
+def make_provider(config: Dict[str, Any], sessions_dir: str = _DEFAULT_SESSIONS_DIR,
+                  config_getter: Optional[Any] = None):
+    """构造 protocol 登录 provider。
+
+    ``config_getter``：返回**实时**配置的可调用对象。为什么需要它——
+    provider 只在首次 ``maybe_register`` 时构造一次，而 ``ConfigManager`` 热重载是
+    **整个替换** config 字典（``self.config = new_data``），闭包里捕获的那份会永远停在
+    启动那一刻。于是「开中央池 / 开设备指纹」这类开关改了配置也不生效，只能重启生产。
+    传入 getter 后这些开关即刻热生效；不传（如单测直接构造）就用捕获的那份，行为不变。
+    """
+
+    def _live(cfg_fallback: Dict[str, Any]) -> Dict[str, Any]:
+        if config_getter is None:
+            return cfg_fallback
+        try:
+            fresh = config_getter()
+        except Exception:  # noqa: BLE001 —— 取不到实时配置就用捕获的，绝不因此挂掉登录
+            logger.debug("[tg_protocol_login] 实时配置获取失败，回落注册时快照", exc_info=True)
+            return cfg_fallback
+        return fresh if isinstance(fresh, dict) and fresh else cfg_fallback
 
     async def _provider(request: Any, platform: str, mode: str, account_id: str,
                         ctx: Optional[Dict[str, Any]] = None):
+        cfg = _live(config)
         # 凭据按**每次登录**解析（而非 provider 注册时定死一组）：中央池优先，
         # 回落配置自带。这样每个账号能拿到各自的 api_id，避免全部号共用一组
         # 凭据被 Telegram 聚类连坐。
         from src.integrations import credpool_bridge as _cp
-        pool_key = _cp.new_pool_key() if _cp.credpool_enabled(config) else ""
-        creds, cred_source = await _cp.aresolve_credentials_for_account(
-            config, pool_key=pool_key)
-        if creds is None:
+        pool_key = _cp.new_pool_key() if _cp.credpool_enabled(cfg) else ""
+        alloc = await _cp.aresolve_for_account(cfg, pool_key=pool_key)
+        if alloc is None:
             return {"instruction": "未配置 Telegram api_id/api_hash，无法发起协议登录。"}
-        api_id, api_hash = creds
+        api_id, api_hash = alloc.api_id, alloc.api_hash
         # 只有真从池里拿到才需要把粘定键落库/回报（配置自带的不占池容量）
-        used_pool_key = pool_key if cred_source == "credpool" else ""
-        proxy = _to_pyrogram_proxy((ctx or {}).get("proxy"))
-        login = TelegramQrLogin(api_id, api_hash, sessions_dir, proxy=proxy)
+        used_pool_key = pool_key if alloc.source == "credpool" else ""
+        # 出口优先级：运营在 ctx 里显式指定的代理 > 中央池按付费档下发的独立出口。
+        # 显式配置代表人的意图，不该被自动分配悄悄覆盖。
+        proxy = (_to_pyrogram_proxy((ctx or {}).get("proxy"))
+                 or _to_pyrogram_proxy(alloc.proxy))
+        # 设备指纹种子在**扫码这一刻**定下并随账号落库，runner 后续用同一种子派生
+        # 出完全相同的指纹——会话建立后换设备型号等于自曝异常。
+        from src.integrations import device_fingerprint as _fp
+        device_seed = _fp.new_device_seed() if _fp.enabled(cfg) else ""
+        device_fp = _fp.client_kwargs(cfg, device_seed)
+        # 指纹不经中央池，覆盖率只能在这里记（否则三隔离里有一件套在看板上是黑的）
+        try:
+            from src.integrations.credpool_stats import get_credpool_stats
+            get_credpool_stats().record_login(bool(device_fp))
+        except Exception:  # noqa: BLE001
+            pass
+        login = TelegramQrLogin(
+            api_id, api_hash, sessions_dir, proxy=proxy, device_kwargs=device_fp)
         try:
             await login.start()
         except Exception as exc:  # 连不上/凭据坏 → 回报池，让健康分与自动切换生效
-            _cp.report(config, api_id, False, error=str(exc)[:200], pool_key=used_pool_key)
+            _cp.report(cfg, api_id, False, error=str(exc)[:200], pool_key=used_pool_key)
+            # 起不来就不会有人来 cancel/poll，容量必须在这里还，否则直接漏掉
+            if used_pool_key:
+                _cp.release(cfg, used_pool_key)
             raise
 
         def _persist_if_authorized(res: Dict[str, Any]) -> None:
@@ -330,11 +375,25 @@ def make_provider(config: Dict[str, Any], sessions_dir: str = _DEFAULT_SESSIONS_
                 _meta = {"session_name": login.session_name, "phone": login.phone}
                 # 中央池粘定键：pyrogram session 与登录所用 api_id 绑定，之后 runner
                 # 每次拉起都用同一个 key 向池索取，保证拿回**同一组**凭据。
-                # 只存 key，不存 api_hash 明文（凭据权威始终在中央池）。
                 if used_pool_key:
                     from src.integrations import credpool_bridge as _cpb
                     _meta[_cpb.META_KEY] = used_pool_key
-                    _cpb.report(config, api_id, True, pool_key=used_pool_key)
+                    # 凭据本体也缓存一份：池不可达时 runner 用它上线，而**不能**回落
+                    # 配置自带凭据（那会让这条 session 报出另一个 api_id＝风控信号）。
+                    # 注册表本来就存 session_string（账号完全访问权），api_hash 的
+                    # 敏感度远低于它，不构成暴露面升级。
+                    _cred = {"api_id": api_id, "api_hash": api_hash,
+                             "tier": str(getattr(alloc, "tier", "") or "free")}
+                    if getattr(alloc, "proxy", None):
+                        _cred["proxy"] = dict(alloc.proxy)
+                    _meta[_cpb.META_CRED_KEY] = _cred
+                    _cpb.report(cfg, api_id, True, pool_key=used_pool_key)
+                # 指纹**本体**随账号落库（不只是种子）——机型表将来刷新时，
+                # 存量账号仍报同一套设备信息，不会被悄悄换掉身份。
+                if device_seed:
+                    _meta[_fp.META_KEY] = device_seed
+                if device_fp:
+                    _meta[_fp.META_FP_KEY] = dict(device_fp)
                 # N2：有 session_string 则一并存（A 线优先 in-memory 启动；见 telegram_client）
                 if getattr(login, "session_string", ""):
                     _meta["session_string"] = login.session_string
@@ -344,40 +403,78 @@ def make_provider(config: Dict[str, Any], sessions_dir: str = _DEFAULT_SESSIONS_
                     from src.integrations.account_self_profile import (
                         self_profile_enabled,
                     )
-                    if self_profile_enabled(config) and getattr(login, "self_profile", None):
+                    if self_profile_enabled(cfg) and getattr(login, "self_profile", None):
                         _meta.update(login.self_profile)
                 except Exception:  # noqa: BLE001
                     logger.debug("[tg_protocol_login] self_profile 合并失败（忽略）", exc_info=True)
                 # merge_meta：只更新会话凭据/self_* 键，防重登录整块覆盖 meta
                 # 抹掉 persona_id / auto_reply / autoreply_override 等运营绑定。
+                _prev = get_account_registry().get("telegram", res["account_id"]) or {}
                 get_account_registry().upsert(
                     "telegram", res["account_id"], mode="protocol",
                     status="online", meta=_meta, merge_meta=True,
                 )
+                # 重扫同一个号会生成**新的**粘定键，旧键那笔分配就成了孤儿永远挂在
+                # active 上（容量泄漏：一个号反复重扫能把一组凭据的名额吃干）。
+                # 这里拿旧键去归还——只有走到授权、确认换了键才做。
+                if used_pool_key:
+                    _old_key = str((_prev.get("meta") or {}).get(_cpb.META_KEY) or "")
+                    if _old_key and _old_key != used_pool_key:
+                        try:
+                            _cpb.release(cfg, _old_key)
+                            logger.info(
+                                "[tg_protocol_login] 重扫换键，已归还旧键容量 %s → %s",
+                                _old_key, used_pool_key)
+                        except Exception:  # noqa: BLE001
+                            logger.debug("[tg_protocol_login] 旧键归还失败（池侧巡检兜底）",
+                                         exc_info=True)
                 # 新人设空号：登录即落默认人设（已绑定 merge 不覆盖）
                 try:
                     from src.ai.persona_voice import ensure_account_default_persona
                     ensure_account_default_persona(
                         get_account_registry(), "telegram",
-                        res["account_id"], config,
+                        res["account_id"], cfg,
                     )
                 except Exception:  # noqa: BLE001
                     pass
             except Exception:  # noqa: BLE001
                 logger.debug("[tg_protocol_login] 注册表写入失败", exc_info=True)
 
+        def _release_if_abandoned(reason: str) -> None:
+            """登录没走到授权就结束 → 把池容量还回去。
+
+            不还会造成**每次放弃扫码都永久吃掉一个账号位**：一次登录申请一组凭据，
+            用户没扫完（关页面 / 码过期 / 取消），那笔分配就永远挂在 active 上。
+            max_accounts=5 时，五次放弃就能把一组凭据占满，之后新号全部回落自带凭据。
+            （2026-07 真实演练读台账时发现：只成功扫了 1 个号，却占了 3 个位。）
+            """
+            if not used_pool_key:
+                return
+            try:
+                _cp.release(cfg, used_pool_key)
+                logger.info("[tg_protocol_login] 登录未完成（%s），已归还池容量 key=%s",
+                            reason, used_pool_key)
+            except Exception:  # noqa: BLE001
+                logger.debug("[tg_protocol_login] 归还池容量失败（忽略）", exc_info=True)
+
         async def _poll(session: Any) -> Dict[str, Any]:
             res = await login.poll()
             _persist_if_authorized(res)
+            if res.get("status") in ("expired", "failed"):
+                _release_if_abandoned(res.get("status") or "terminal")
             return res
 
         async def _submit_password(session: Any, password: str) -> Dict[str, Any]:
             res = await login.submit_password(password)
             _persist_if_authorized(res)
+            if res.get("status") == "failed":
+                _release_if_abandoned("password_failed")
             return res
 
         async def _cancel(session: Any) -> None:
             await login.cancel()
+            if getattr(login, "status", "") != "authorized":
+                _release_if_abandoned("cancelled")
 
         return {
             "qr_url": login.qr_url,
@@ -396,8 +493,15 @@ def maybe_register(config: Dict[str, Any], *, sessions_dir: str = _DEFAULT_SESSI
 
     仅当：pyrogram 可用 + 配置了 api 凭据 + ``protocol_enabled: true`` 时注册（幂等）。
     返回是否已注册（已注册过也返回 True）。
+
+    **每次调用都会刷新 `_latest_config`**（即使已注册直接短路）——调用方
+    ``unified_inbox_login_routes._ensure_login_providers`` 每个登录请求都会带着
+    ``config_manager.config`` 调一次，于是 provider 总能看到热重载后的新配置。
+    没有这一步，`credpool` / `device_fingerprint` 这类开关就只能靠重启生产才生效。
     """
-    global _registered
+    global _registered, _latest_config
+    if isinstance(config, dict) and config:
+        _latest_config = config
     if _registered:
         return True
     if not is_pyrogram_available():
@@ -410,7 +514,9 @@ def maybe_register(config: Dict[str, Any], *, sessions_dir: str = _DEFAULT_SESSI
             return False
     if not protocol_enabled(config):
         return False
-    register_login_provider("telegram", "protocol", make_provider(config, sessions_dir))
+    register_login_provider("telegram", "protocol",
+                            make_provider(config, sessions_dir,
+                                          config_getter=lambda: _latest_config))
     _registered = True
     logger.info("[tg_protocol_login] Telegram protocol 登录 provider 已注册")
     return True

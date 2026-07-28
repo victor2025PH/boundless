@@ -31,6 +31,8 @@
     "_note": "桌面默认仅显示统一收件箱（与网页同源同款）。置 true 可恢复左侧账号栏 + 内嵌官方 Telegram/WhatsApp 网页 Tab（免安卓真机扫码 + 注入翻译/智能回复）。"
   },
   "debug": false,
+  "_onboarding_note": "首启完成后向导会写入 onboarding:{completed,completed_at,edition}；打包态默认 managed（见 main.js AITR_MANAGED_EDITION），开发态 npm start 为自建。勿在此种子写 managed:true，否则开发态也会藏掉 AI/令牌调试字段。",
+
   "platforms": [
     {
       "id": "telegram",

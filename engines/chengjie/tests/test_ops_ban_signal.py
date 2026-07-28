@@ -24,6 +24,10 @@ class UserDeactivatedBan(Exception):
 class Unauthorized(Exception):
     pass
 
+class InputUserDeactivated(Exception):
+    """400 INPUT_USER_DEACTIVATED＝**对方**账号注销（对端侧，非我方风控）。"""
+    pass
+
 
 # ── classify ─────────────────────────────────────────────────────────────────
 
@@ -37,6 +41,21 @@ def test_classify_peerflood_is_pause():
 def test_classify_ban_signals():
     assert classify(UserDeactivatedBan())["kind"] == "ban"
     assert classify(Unauthorized())["kind"] == "ban"
+
+def test_classify_peer_side_deactivated_is_none():
+    """2026-07-27 实锤回归钉：主动触达发到已注销测试号，INPUT_USER_DEACTIVATED
+    撞 "DEACTIVAT" 关键词兜底被判 ban → 主账号被永久 kill-switch + 注册表误标
+    banned，全线停发 2h。对方注销是对端侧事实，绝不能停我方账号。"""
+    # 精确类名（pyrogram.errors.InputUserDeactivated）
+    a = classify(InputUserDeactivated())
+    assert a["kind"] == "none" and a["reason"].startswith("peer_side:")
+    # 泛化异常带错误码消息（真机日志形态：Telegram says: [400 INPUT_USER_DEACTIVATED] …）
+    generic = RuntimeError(
+        "Telegram says: [400 INPUT_USER_DEACTIVATED] - The target user has been "
+        "deleted/deactivated (caused by \"messages.SendMessage\")")
+    assert classify(generic)["kind"] == "none"
+    # 我方账号注销（401 USER_DEACTIVATED，无 INPUT_ 前缀）仍必须判 ban 不受影响
+    assert classify(UserDeactivatedBan())["kind"] == "ban"
 
 def test_classify_unknown_is_none():
     assert classify(ValueError("boom"))["kind"] == "none"

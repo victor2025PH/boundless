@@ -51,8 +51,59 @@ _GARMENT_WORDS = frozenset((
     "pajama", "pajamas", "nightgown", "camisole", "sweatshirt", "polo",
     "vest", "overalls", "jumpsuit", "romper", "gown", "knit", "turtleneck",
     "parka", "windbreaker", "robe", "qipao", "cheongsam", "hanfu",
-    "kimono", "yukata", "swimsuit", "tank", "sweatpants", "joggers",
+    "kimono", "yukata", "swimsuit", "bikini", "swimwear", "tank",
+    "sweatpants", "joggers", "tracksuit", "sportswear",
 ))
+
+# ── 场景×衣着联动（P2）────────────────────────────────────────────────────
+# 衣着类别（token → 类别；一件衣着可命中多类："denim jacket over a white tee"
+# ＝outer+casual）。类别只服务场景/季节适配的排除与优先，不追求服装学完备。
+_OUTFIT_CATEGORY_TOKENS: Dict[str, frozenset] = {
+    "swim": frozenset(("swimsuit", "bikini", "swimwear")),
+    "sleep": frozenset(("pajama", "pajamas", "nightgown", "robe")),
+    "sport": frozenset(("leggings", "joggers", "sweatpants", "tracksuit",
+                        "sportswear")),
+    "work": frozenset(("suit", "blazer", "uniform")),
+    "dressy": frozenset(("dress", "gown", "skirt", "qipao", "cheongsam",
+                         "hanfu", "kimono", "yukata", "jumpsuit", "romper")),
+    "outer": frozenset(("coat", "parka", "jacket", "windbreaker", "cardigan",
+                        "sweater", "hoodie", "sweatshirt", "turtleneck",
+                        "knit")),
+    "light": frozenset(("tank", "shorts", "camisole")),   # 轻薄单穿
+}
+
+# 场景类 → 衣着约束：exclude=该场景绝不注入的类别（命中→换装，无可换→放弃注入
+# 交生图模型按场景自由穿）；prefer=优先从衣橱挑的类别（有货才换，没货不硬凑）。
+# 词表外场景类无约束。刻意保守：只写高置信违和（泳装进咖啡馆/西装进健身房）。
+_SCENE_OUTFIT_RULES: Dict[str, Dict[str, frozenset]] = {
+    "gym": {"exclude": frozenset(("sleep", "work", "dressy", "swim")),
+            "prefer": frozenset(("sport",))},
+    "beach": {"exclude": frozenset(("work", "sleep", "outer")),
+              "prefer": frozenset(("dressy", "light"))},
+    "office": {"exclude": frozenset(("sleep", "swim", "sport")),
+               "prefer": frozenset(("work",))},
+    "bedroom": {"exclude": frozenset(("swim",)), "prefer": frozenset()},
+    "home": {"exclude": frozenset(("swim",)), "prefer": frozenset()},
+    "kitchen": {"exclude": frozenset(("swim",)), "prefer": frozenset()},
+    "cafe": {"exclude": frozenset(("swim", "sleep")), "prefer": frozenset()},
+    "restaurant": {"exclude": frozenset(("swim", "sleep")), "prefer": frozenset()},
+    "library": {"exclude": frozenset(("swim", "sleep")), "prefer": frozenset()},
+    "campus": {"exclude": frozenset(("swim", "sleep")), "prefer": frozenset()},
+    "street": {"exclude": frozenset(("swim", "sleep")), "prefer": frozenset()},
+    "park": {"exclude": frozenset(("swim", "sleep")), "prefer": frozenset()},
+    "night_city": {"exclude": frozenset(("swim", "sleep")), "prefer": frozenset()},
+    "car": {"exclude": frozenset(("swim", "sleep")), "prefer": frozenset()},
+}
+
+# 季节排除（P2-4，token 级）：冬天不发泳装、夏天不裹大衣；冬季**户外**场景再排
+# 轻薄单穿（室内暖气吊带合理，不动）。月份粗分（默认北半球，config 可换 south）；
+# 春秋不约束。jacket/cardigan 夏夜也合理 → 夏季只排重外套 token。
+_SEASON_EXCLUDE_TOKENS: Dict[str, frozenset] = {
+    "summer": frozenset(("parka", "coat", "turtleneck")),
+    "winter": frozenset(("swimsuit", "bikini", "swimwear")),
+}
+_WINTER_OUTDOOR_TOKENS = frozenset(("tank", "shorts", "camisole"))
+_OUTDOOR_SCENES = frozenset(("beach", "park", "street", "campus", "night_city"))
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -118,11 +169,118 @@ def resolve_today_outfit(key: str, pool: Any, now: Any = None) -> str:
     return items[zlib.crc32(payload.encode("utf-8")) % len(items)]
 
 
+def _outfit_tokens(phrase: Any) -> frozenset:
+    """衣着短语的小写 token 集（纯函数）。"""
+    s = str(phrase or "").strip().lower()
+    if not s:
+        return frozenset()
+    return frozenset(t for t in re.split(r"[-_\s]+", s) if t)
+
+
+def outfit_categories(phrase: Any) -> frozenset:
+    """衣着短语 → 命中的类别集合（可多类；认不出返回空集=不受约束）。"""
+    toks = _outfit_tokens(phrase)
+    if not toks:
+        return frozenset()
+    return frozenset(
+        cat for cat, words in _OUTFIT_CATEGORY_TOKENS.items() if toks & words)
+
+
+def season_of(now: Any = None, hemisphere: str = "north") -> str:
+    """月份 → 季节（纯函数，粗分即可）：summer|winter|spring|autumn。"""
+    import datetime as _dt
+
+    t = now if isinstance(now, _dt.datetime) else _dt.datetime.now()
+    m = t.month
+    if str(hemisphere or "").strip().lower() == "south":
+        m = ((m + 5) % 12) + 1   # 南半球倒扣半年
+    if m in (6, 7, 8):
+        return "summer"
+    if m in (12, 1, 2):
+        return "winter"
+    return "spring" if m in (3, 4, 5) else "autumn"
+
+
+def outfit_scene_conflict(
+    outfit: Any, scene_class: str, *,
+    now: Any = None, season_on: bool = True, hemisphere: str = "north",
+) -> bool:
+    """衣着与 场景类/季节 是否**高置信违和**（纯函数；存疑不判）。"""
+    toks = _outfit_tokens(outfit)
+    if not toks:
+        return False
+    cats = outfit_categories(outfit)
+    sc = str(scene_class or "").strip()
+    rules = _SCENE_OUTFIT_RULES.get(sc)
+    if rules and (cats & rules["exclude"]):
+        return True
+    if season_on:
+        season = season_of(now, hemisphere)
+        if toks & _SEASON_EXCLUDE_TOKENS.get(season, frozenset()):
+            return True
+        if season == "winter" and sc in _OUTDOOR_SCENES \
+                and (toks & _WINTER_OUTDOOR_TOKENS):
+            return True
+    return False
+
+
+def adapt_outfit_to_scene(
+    outfit: str, pool: Any, scene_class: str, key: str, *,
+    now: Any = None, season_on: bool = True, hemisphere: str = "north",
+) -> Tuple[str, str]:
+    """把当前衣着适配到场景（纯函数）。返回 ``(衣着, tag)``，
+    tag ∈ ``""``（未动）/``switched``（换装）/``vetoed``（放弃注入）。
+
+    语义（P2 场景×衣着联动）：
+    - 场景无约束 / 当前衣着不违和且已属场景优先类（或场景无优先类）→ 原样保持
+      （「一天一套」仍是主旋律）；
+    - 场景有优先类（gym→运动装 / beach→裙装轻装 / office→通勤）且衣橱有货 →
+      确定性换装（换装本身是真实行为：去健身当然换运动服）；
+    - 当前衣着违和（泳装进咖啡馆/冬天短袖户外）→ 从池里挑不违和的换；
+      **全池都违和 → 返回空**（放弃注入，生图模型按场景自由穿——比硬注入
+      冲突衣着诚实）。同 key 同日同场景确定性稳定。
+    """
+    o = str(outfit or "").strip()
+    if not o:
+        return "", ""
+    sc = str(scene_class or "").strip()
+    rules = _SCENE_OUTFIT_RULES.get(sc)
+
+    def _bad(phrase: str) -> bool:
+        return outfit_scene_conflict(
+            phrase, sc, now=now, season_on=season_on, hemisphere=hemisphere)
+
+    def _pick(cands: List[str]) -> str:
+        import datetime as _dt
+        t = now if isinstance(now, _dt.datetime) else _dt.datetime.now()
+        payload = f"{str(key or '')}#outfit-scene#{t.strftime('%Y-%m-%d')}#{sc}"
+        return cands[zlib.crc32(payload.encode("utf-8")) % len(cands)]
+
+    items = [str(x).strip() for x in (pool or []) if str(x).strip()]
+    prefer = rules["prefer"] if rules else frozenset()
+    cur_ok = not _bad(o)
+    if cur_ok and (not prefer or (outfit_categories(o) & prefer)):
+        return o, ""
+    if prefer:
+        cands = [p for p in items
+                 if (outfit_categories(p) & prefer) and not _bad(p)]
+        if cands:
+            picked = _pick(cands)
+            return (picked, "") if picked == o else (picked, "switched")
+    if cur_ok:
+        return o, ""    # 无优先货可换，但当前不违和 → 保持
+    cands = [p for p in items if not _bad(p)]
+    if cands:
+        return _pick(cands), "switched"
+    return "", "vetoed"
+
+
 def resolve_outfit_cfg(scfg: Any) -> Dict[str, Any]:
     """``companion.selfie.consistency.outfit`` 配置（默认开，随 P0 一致性总闸）。
 
-    ``outfit`` 可为 bool（开关）或 dict（``{enabled, pool}``）。父级
-    ``consistency.enabled=false`` 一并关闭（与 P0 护栏同一杀开关）。
+    ``outfit`` 可为 bool（开关）或 dict（``{enabled, pool, season, hemisphere}``）。
+    父级 ``consistency.enabled=false`` 一并关闭（与 P0 护栏同一杀开关）；
+    ``season``（默认开）＝季节排除；``hemisphere``（north|south）季节倒扣。
     """
     c = (scfg or {}).get("consistency") if isinstance(scfg, dict) else None
     c = c if isinstance(c, dict) else {}
@@ -131,11 +289,16 @@ def resolve_outfit_cfg(scfg: Any) -> Dict[str, Any]:
     if isinstance(o, dict):
         enabled = bool(o.get("enabled", True))
         pool = o.get("pool")
+        season_on = bool(o.get("season", True))
+        hemisphere = str(o.get("hemisphere") or "north")
     else:
         enabled = bool(o)
         pool = None
+        season_on = True
+        hemisphere = "north"
     return {"enabled": parent_on and enabled,
-            "pool": pool if isinstance(pool, (list, tuple)) else None}
+            "pool": pool if isinstance(pool, (list, tuple)) else None,
+            "season": season_on, "hemisphere": hemisphere}
 
 
 # ── 相册衣橱（带 IO，TTL 缓存）─────────────────────────────────────────────
@@ -233,31 +396,68 @@ def current_outfit(
     *,
     persona_key: str = "",
     recent_series: str = "",
+    scene: str = "",
     now: Any = None,
 ) -> Dict[str, str]:
     """「此刻该穿什么」单一入口（A/B 生成链 + 聊天状态块共用）。
 
     优先级：连续窗内刚发过的衣着系列（照片事实，``recent_series`` 由调用方从
-    P0 连续性信号取）→ 今日确定性衣着（衣橱池）。关闭/异常返回空衣着
+    P0 连续性信号取）→ 今日确定性衣着（衣橱池）；随后按 ``scene``（本次照片/
+    聊天状态的场景短语）做**场景×季节适配**（P2）：违和→换装/放弃注入，
+    场景优先类（gym→运动装等）衣橱有货→换装。关闭/异常返回空衣着
     （调用方不注入 = 旧行为）。返回 ``{"outfit", "source"}``，source ∈
-    ``continuity|daily|disabled|none``。
+    ``continuity|daily|scene|disabled|none``（scene=被场景适配改过）。
     """
     try:
         cfg = resolve_outfit_cfg(scfg)
         if not cfg["enabled"]:
             return {"outfit": "", "source": "disabled"}
-        rec = series_outfit_phrase(recent_series)
-        if rec:
-            return {"outfit": rec, "source": "continuity"}
         pid = ""
         if isinstance(persona, dict):
             pid = str(persona.get("id") or "").strip()
         key = str(persona_key or "").strip() or pid
-        pool = outfit_pool(
-            persona=persona, cfg_pool=cfg["pool"],
-            wardrobe=wardrobe_for(pid or key, scfg))
-        outfit = resolve_today_outfit(key or pid, pool, now=now)
-        return {"outfit": outfit, "source": ("daily" if outfit else "none")}
+        rec = series_outfit_phrase(recent_series)
+        pool: Optional[List[str]] = None
+
+        def _pool() -> List[str]:
+            nonlocal pool
+            if pool is None:
+                pool = outfit_pool(
+                    persona=persona, cfg_pool=cfg["pool"],
+                    wardrobe=wardrobe_for(pid or key, scfg))
+            return pool
+
+        if rec:
+            outfit, source = rec, "continuity"
+        else:
+            outfit = resolve_today_outfit(key or pid, _pool(), now=now)
+            source = "daily" if outfit else "none"
+        # 场景×季节适配（P2）：换装是真实行为（去健身当然换运动服）；
+        # 违和且无可换 → 放弃注入（比硬注入冲突衣着诚实）。
+        if outfit:
+            sc = ""
+            try:
+                from src.companion.persona_media import scene_class_of
+                sc = scene_class_of(scene)
+            except Exception:
+                sc = ""
+            # 半球优先取人设居住地（南半球悉尼/墨尔本/巴厘等季节倒扣），
+            # 配置显式 hemisphere 仍作缺省；place 解析失败回落 cfg。
+            _hemi = str(cfg.get("hemisphere") or "north")
+            try:
+                from src.companion.persona_location import resolve_place_with_fallback
+                _pl = resolve_place_with_fallback(persona)
+                if _pl is not None:
+                    _hemi = _pl.hemisphere
+            except Exception:
+                pass
+            adapted, tag = adapt_outfit_to_scene(
+                outfit, _pool(), sc, key or pid, now=now,
+                season_on=bool(cfg.get("season", True)),
+                hemisphere=_hemi)
+            if tag:
+                outfit, source = adapted, "scene"
+        return {"outfit": outfit, "source": source}
     except Exception:
         return {"outfit": "", "source": "none"}
 

@@ -632,6 +632,52 @@ class GroupShowStore:
                 out[(acct, role)] = n
         return out
 
+    def prior_slots(
+        self, *, group_key: str, platform: str = "telegram",
+    ) -> Dict[str, str]:
+        """``{号: 它在**这个群**最近一次真发时演的角色槽}``——群内角色粘性的台账。
+
+        角色轮转（``role_ledger`` 轴）防「单号在很多群长期当主推」，是**跨群**语义；
+        但在同一个群里翻转立场是另一种破绽：上一场泼冷水的号下一场安利同一个产品，
+        群里的真人翻两屏聊天记录就能看出来（2026-07-27 双号灰度实录：两场之间
+        advocate/skeptic 恰好对调）。这本台账让选角在**群内粘住**上次的角色，
+        轮转照常发生在不同群之间——两条轴不打架。
+
+        与 :meth:`role_ledger` 同源同过滤（排练不算暴露、真人插话不算我们的号），
+        每个号取**最近**一次发言的角色（事件缺时刻回落场次开演时刻）。
+        """
+        gk = _s(group_key)
+        if self._conn is None or not gk:
+            return {}
+        kinds = tuple(SPOKEN_KINDS) or ("line",)
+        placeholders = ", ".join("?" * len(kinds))
+        sql = (
+            "SELECT e.speaker_account AS acct, e.role AS role, "
+            "MAX(COALESCE(NULLIF(e.ts, 0), s.started_at)) AS at "
+            "FROM choreography_events e "
+            "JOIN choreography_sessions s ON s.session_id = e.session_id "
+            "WHERE s.platform = ? AND s.dry_run = 0 AND s.group_key = ? "
+            f"AND e.kind IN ({placeholders}) "
+            "AND e.speaker_account <> '' AND e.role <> '' "
+            "GROUP BY e.speaker_account, e.role"
+        )
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    sql, [_s(platform) or "telegram", gk, *kinds]).fetchall()
+        except Exception:  # noqa: BLE001
+            logger.debug("[group_show.store] prior_slots 失败（已忽略）", exc_info=True)
+            return {}
+        latest: Dict[str, Tuple[float, str]] = {}
+        for r in rows:
+            try:
+                acct, role, at = _s(r["acct"]), _s(r["role"]), _f(r["at"])
+            except Exception:  # noqa: BLE001 —— 一行脏数据不该吞掉整本台账
+                continue
+            if acct and role and at >= latest.get(acct, (0.0, ""))[0]:
+                latest[acct] = (at, role)
+        return {acct: role for acct, (_, role) in latest.items()}
+
     def last_spoke_at(
         self, *, platform: str = "telegram", since: float = 0.0,
         exclude_group: str = "",

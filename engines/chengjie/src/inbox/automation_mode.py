@@ -71,9 +71,33 @@ def maybe_bootstrap_automation_mode(
     return mode
 
 
+def allows_direct_autosend(mode: str) -> bool:
+    """是否允许直发自动回复（companion A 线 / 主动触达 / protocol 直发）。
+
+    仅 ``auto_ai``（🚀 全自动）放行。``manual`` / ``review`` / ``multi_choice``
+    表示坐席接管或「AI 出草稿我审」——直发必须停，改由 System Z 拟稿人审
+    （或完全静音）。companion 双轨曾只改收件箱档位、A 线仍直回，本闸是修复点。
+    """
+    return str(mode or "").strip().lower() == "auto_ai"
+
+
+def human_gate_skip_reason(mode: str) -> str:
+    """非全自动档位的跳过原因码（供 protocol / 观测）。空串=可直发。"""
+    m = str(mode or "").strip().lower()
+    if m == "auto_ai" or not m:
+        return ""
+    if m == "manual":
+        return "inbox_manual"
+    if m in ("review", "multi_choice"):
+        return "inbox_human_gate"
+    return "inbox_human_gate"
+
+
 __all__ = [
     "global_automation_mode_from_config",
     "bootstrap_enabled_from_config",
     "resolve_automation_mode",
     "maybe_bootstrap_automation_mode",
+    "allows_direct_autosend",
+    "human_gate_skip_reason",
 ]

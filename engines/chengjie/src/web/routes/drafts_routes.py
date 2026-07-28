@@ -969,6 +969,87 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 真实世界接轨观测（P0 人设时钟 / P1 天气 / P2 用户侧时钟 + 双侧节日）。
+        # 三者都是「静默降级」型能力：推不出时区、天气拉不到、节日缺库，链路照常跑但
+        # 价值悄悄归零——不在看板上给出读数就等于没上线。
+        try:
+            _rw: Dict[str, Any] = {}
+            try:
+                from src.companion.weather_state import dump_stats as _wx_dump
+                _rw["weather"] = _wx_dump()
+            except Exception:
+                _rw["weather"] = {}
+            try:
+                from src.companion.user_clock import dump_stats as _uc_dump
+                _rw["clock_core"] = _uc_dump()
+            except Exception:
+                _rw["clock_core"] = {}
+            try:
+                from src.companion.user_clock_resolver import (
+                    distribution as _uc_dist, dump_stats as _ucr_dump,
+                )
+                _rw["clock"] = _ucr_dump()
+                _rw["sources"] = _uc_dist()
+            except Exception:
+                _rw["clock"], _rw["sources"] = {}, {}
+            try:
+                from src.companion.locale_holidays import (
+                    load_calendar as _hol_cal, lunar_available as _lunar_ok,
+                )
+                _cal = _hol_cal() or {}
+                _ctys = _cal.get("countries") or {}
+                _rw["holidays"] = {
+                    "countries": len(_ctys),
+                    "entries": sum(
+                        len(v or []) for v in _ctys.values()
+                        if isinstance(v, (list, tuple))),
+                    "lunar_ok": bool(_lunar_ok()),
+                }
+            except Exception:
+                _rw["holidays"] = {}
+            # active：任一子系统真的动过（全零 → ops 卡整卡隐藏，不占版面）
+            _rw["active"] = bool(
+                sum(int(v or 0) for v in (_rw.get("weather") or {}).values())
+                or sum(int(v or 0) for v in (_rw.get("clock") or {}).values())
+                or sum(int(v or 0) for v in (_rw.get("clock_core") or {}).values())
+            )
+            metrics["real_world"] = _rw
+        except Exception:
+            pass
+
+        # 中央凭据池观测：池分配 vs 回落自带的比例（pool_share）+ 生效会员档 + 回落原因。
+        # 中央池的失败是静默降级，没有这组数就看不出「池到底有没有在生效」。
+        try:
+            from src.integrations.credpool_stats import get_credpool_stats
+            _cp = get_credpool_stats().dump()
+            # 风控隔离三盾覆盖率（按**在册账号**算，不是按登录事件比率——
+            # 运营要回答的是「我的号里有几个真被隔离了」）。即使本进程还没发生过
+            # 分配（active=false），只要有协议号就该看得见覆盖率。
+            try:
+                from src.integrations.isolation_shields import collect_shields
+                _cp["shields"] = collect_shields()
+            except Exception:
+                pass
+            # 池服务自身的健康只有外部看门狗知道（health 200 但 allocate 已死的
+            # 「半死」形态本项目吃过 2h20m 的亏）。路径由配置给出，客户桌面不配
+            # 这个键 → 这一段自然不存在。
+            try:
+                _wcm = getattr(request.app.state, "config_manager", None)
+                _wcfg = (_wcm.config if _wcm is not None else {}) or {}
+                _wpath = ((((_wcfg.get("platform_login") or {}).get("telegram") or {})
+                           .get("credpool") or {}).get("watchdog_state_path") or "")
+                if _wpath:
+                    from src.integrations.credpool_stats import watchdog_state
+                    _wd = watchdog_state(str(_wpath))
+                    if _wd:
+                        _cp["watchdog"] = _wd
+            except Exception:
+                pass
+            if _cp.get("active") or (_cp.get("shields", {}).get("total") or 0) > 0:
+                metrics["credpool"] = _cp
+        except Exception:
+            pass
+
         # 营销目标观测：建目标→每日拍（含 hold 分桶）→注入生成链→主动桥真发→终态
         try:
             from src.companion.goals.stats import get_goal_stats
@@ -1065,6 +1146,13 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 人设文档导入/考题观测（解析→抽取→传记入库→一致性考题 漏斗计数与均值）
+        try:
+            from src.utils.persona_import_stats import get_persona_import_stats
+            metrics["persona_import"] = get_persona_import_stats().dump()
+        except Exception:
+            pass
+
         # 前端 UI 交互埋点（空态引导按钮点击率/群区模式切换等；观测「引导有效性」）
         try:
             from src.web.ui_event_stats import get_ui_event_stats
@@ -1120,6 +1208,14 @@ def register_metrics_route(app, *, api_auth):
         try:
             from src.ai.persona_override_stats import get_persona_override_stats
             metrics["persona_override"] = get_persona_override_stats().dump()
+            # 活水位：现在还剩多少条 legacy 债（清零后回升=有路径在重新制造）。
+            # 嵌套 try：水位失败不连累计数器段。
+            try:
+                from src.web.routes.persona_routes import legacy_debt_snapshot
+                metrics["persona_override"]["legacy_debt"] = (
+                    legacy_debt_snapshot(request.app))
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -1278,6 +1374,14 @@ def register_metrics_route(app, *, api_auth):
             except Exception:
                 pass
 
+            # 中央凭据池（分配来源/生效档位/回落原因/池承载比例）
+            try:
+                from src.integrations.credpool_stats import get_credpool_stats
+                if get_credpool_stats().dump().get("active"):
+                    buf.write(get_credpool_stats().dump_prom())
+            except Exception:
+                pass
+
             # 命理技能（话题/采集/灵签/详批/K线 漏斗计数）
             try:
                 from src.companion.bazi_stats import get_bazi_stats
@@ -1299,10 +1403,28 @@ def register_metrics_route(app, *, api_auth):
             except Exception:
                 pass
 
+            # 人设文档导入/考题（漏斗事件计数 + 抽取耗时/完整度/考题分均值）
+            try:
+                from src.utils.persona_import_stats import get_persona_import_stats
+                buf.write(get_persona_import_stats().dump_prom())
+            except Exception:
+                pass
+
             # 会话级人设覆写（tier 分布 / legacy 被压制 / 治理动作）
             try:
                 from src.ai.persona_override_stats import get_persona_override_stats
                 buf.write(get_persona_override_stats().dump_prom())
+                try:
+                    from src.web.routes.persona_routes import legacy_debt_snapshot
+                    _debt = legacy_debt_snapshot(request.app)
+                    buf.write(
+                        "# HELP persona_override_legacy_debt Remaining legacy "
+                        "peer-global bindings (excl. RPA-managed)\n"
+                        "# TYPE persona_override_legacy_debt gauge\n"
+                        f"persona_override_legacy_debt {_debt}\n"
+                    )
+                except Exception:
+                    pass
             except Exception:
                 pass
 

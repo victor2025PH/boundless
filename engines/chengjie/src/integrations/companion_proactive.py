@@ -47,6 +47,22 @@ def _in_quiet_hours(hour: int, start: int, end: int) -> bool:
     return hour >= start or hour < end
 
 
+def _resolve_user_clock(
+    provider: Optional[Callable[[str], Optional[Any]]], cid: str,
+) -> Optional[Any]:
+    """注入式取该会话的用户时钟；无 provider / 解析失败 → None（＝服务器钟旧行为）。
+
+    provider 是 IO（读收件箱/记忆），一个坏会话绝不能炸掉整个 tick 的规划。
+    """
+    if provider is None:
+        return None
+    try:
+        return provider(cid)
+    except Exception:
+        logger.debug("[proactive] user_clock_provider 失败 cid=%s", cid, exc_info=True)
+        return None
+
+
 def should_skip_recent_active(
     last_ts: float, *, now: float, min_silent_hours: float,
 ) -> bool:
@@ -82,6 +98,7 @@ def plan_proactive_sends(
     on_crisis_block: Optional[Callable[[Dict[str, Any]], None]] = None,
     pacing_cfg: Optional[Dict[str, Any]] = None,
     priority_fn: Optional[Callable[[Dict[str, Any]], float]] = None,
+    user_clock_provider: Optional[Callable[[str], Optional[Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """决定本轮该主动开场的会话清单（确定性纯函数）。
 
@@ -111,15 +128,26 @@ def plan_proactive_sends(
         priority_fn: 可选排序增益 ``(plan) -> float``（如营销目标桥：有 auto 档活跃
             目标的会话优先占每 tick 名额）。只影响**排序**不影响准入——所有护栏照旧；
             回调异常按 0 处理。提供时 plan 带 ``goal_priority`` 字段（预览可见）。
+        user_clock_provider: 可选 ``(cid) -> UserClock|None``。**不给**＝服务器钟在安静
+            时段就整 tick 早退（零成本、零行为变化）；**给了**则撤掉全局早退，改为逐会话
+            过 ``user_clock.in_quiet_hours``——那里收口了三档安全语义：显式信号
+            （replace）只看用户钟、行为推断（narrow）「服务器安静 **或** 用户安静都算
+            安静」只收窄绝不新开窗口、弱信号（advisory）完全不参与调度。解析排在
+            沉默/冷却等便宜过滤**之后**；provider 异常按无时钟处理。
+            ``silent_hours`` / pacing / 冷却均为纯时长差，与时区无关，故一律不动。
     """
+    from src.companion.user_clock import in_quiet_hours as _user_in_quiet_hours
+    from src.companion.user_clock import schedule_clock as _schedule_clock
     from src.utils.proactive_pacing import (
         effective_cooldown_hours,
         effective_min_silent_hours,
     )
     now = now if now is not None else time.time()
     local_hour = time.localtime(now).tm_hour
-    if _in_quiet_hours(local_hour, int(quiet_start_hour), int(quiet_end_hour)):
-        return []  # 安静时段不打扰
+    if (user_clock_provider is None
+            and _in_quiet_hours(local_hour, int(quiet_start_hour),
+                                int(quiet_end_hour))):
+        return []  # 安静时段不打扰（有用户时钟时下沉到每会话判定，见循环内）
 
     plans: List[Dict[str, Any]] = []
     for c in conversations or []:
@@ -162,6 +190,17 @@ def plan_proactive_sends(
             last_pro = 0.0
         if last_pro and (now - last_pro) < _eff_cool * 3600.0:
             continue
+        # 用户时钟安静时段（逐会话）：解析故意排在沉默/冷却等便宜过滤之后，且在
+        # opener_fn（读记忆，本循环最贵的一步）之前——半夜的人连开场都不必生成。
+        clock: Optional[Any] = None
+        conv_hour = local_hour
+        if user_clock_provider is not None:
+            clock = _resolve_user_clock(user_clock_provider, cid)
+            if _user_in_quiet_hours(
+                    clock, now, quiet_start=int(quiet_start_hour),
+                    quiet_end=int(quiet_end_hour), server_hour=local_hour):
+                continue
+            conv_hour = _schedule_clock(clock, now)[0]
         try:
             opener = opener_fn(
                 memory_key=str(c.get("memory_key") or ""),
@@ -208,6 +247,10 @@ def plan_proactive_sends(
             "effective_cooldown_hours": round(_eff_cool, 2),
             "intimacy": round(_intim, 1),
             "stage": _stage,
+            # 观测/排障：安静时段按谁的钟判的（server=服务器钟）、时钟偏移、本地小时
+            "clock_source": str(getattr(clock, "source", "") or "server"),
+            "clock_offset": round(float(getattr(clock, "offset_hours", 0.0) or 0.0), 1),
+            "local_hour": conv_hour,
         })
 
     if priority_fn is not None:
@@ -279,6 +322,7 @@ class CompanionProactiveLoop:
         fresh_activity_provider: Optional[Callable[[str], float]] = None,
         pacing_cfg: Optional[Dict[str, Any]] = None,
         priority_fn: Optional[Callable[[Dict[str, Any]], float]] = None,
+        user_clock_provider: Optional[Callable[[str], Optional[Any]]] = None,
         now: Callable[[], float] = time.time,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -290,6 +334,8 @@ class CompanionProactiveLoop:
         self._fresh_activity_provider = fresh_activity_provider
         self._pacing_cfg = pacing_cfg
         self._priority_fn = priority_fn
+        # 用户时钟（None=服务器钟旧行为）：安静时段逐会话判，别把「对方的凌晨」当白天
+        self._user_clock_provider = user_clock_provider
         self._cooldown = cooldown_store
         self._ritual_fn = ritual_fn
         self._ritual_cooldown = ritual_cooldown
@@ -330,6 +376,7 @@ class CompanionProactiveLoop:
             on_crisis_block=self._on_crisis_block,
             pacing_cfg=self._pacing_cfg,
             priority_fn=self._priority_fn,
+            user_clock_provider=self._user_clock_provider,
         )
         # 每日仪式问候（晨 / 晚安）：时段驱动、独立每日每档去重；与沉默回访互补。
         # 同一会话本 tick 既到仪式点又够沉默时，仪式优先（不重复打扰一人）。

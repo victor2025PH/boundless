@@ -146,7 +146,9 @@ skill_manager `_handle_persona_media_request`）；关键词池独立于自拍/�
 ```bash
 python -m pytest tests/test_persona_media_consistency.py tests/test_persona_media.py \
  tests/test_image_autosend.py tests/test_selfie_wiring.py tests/test_scene_state.py \
- tests/test_outbound_promise_guard.py tests/test_media_consistency_eval.py -q --tb=line
+ tests/test_outbound_promise_guard.py tests/test_media_consistency_eval.py \
+ tests/test_outfit_state.py tests/test_media_gap.py tests/test_media_restock.py \
+ tests/test_image_gate.py -q --tb=line
 ```
 预期：全绿。四层护栏（`companion.selfie.consistency` 默认开，`enabled:false` 一键回旧行为；
 默认值集中在 `image_autosend.resolve_consistency_cfg`，A 线 skill_manager / B 线 autosend 同口径）：
@@ -174,8 +176,58 @@ autosend-status `complaints`/`last_complaint` + 回应纠偏 hint（别争辩/�
 优先）+ VLM（qwen3-vl，176/140 双活）昼夜**保守**分类（室内歧义=不打标）→ 写 `_meta.json` +
 DB `tod:` 标签（幂等）；默认 dry-run 且 DB 走只读连接（对活体生产库零写事务），`--vlm --apply`
 才写。门禁 `tests/test_persona_media_consistency.py`（32 例）。
-
-**出站媒体承诺守卫 + 文图一致性主线**（2026-07-13/14：修「嘴上说发照片实际没发」与「发图后失忆」）：
+**P1 增量**（同日，衣着状态机+生成链时段+缺口闭环；门禁 `tests/test_outfit_state.py` +
+`tests/test_media_gap.py`）：① **今日衣着状态** `src/companion/outfit_state.py`——与
+`resolve_current_scene`/`meal_state` 同哲学：crc32(persona#日期) 从衣橱池确定性取「今天穿什么」
+（跨请求/跨 A、B 链同日恒定、明天自动换、零 LLM 零存储）；衣橱池优先级＝人设 `outfits` 字段 →
+`consistency.outfit.pool` → **相册衣橱**（注册相册+FS 相册系列 slug 里认得出服装词的，
+`series_outfit_phrase("white-dress")→"white dress"`，token 级词表防 rooftop→top 误命中；600s TTL，
+尊重跨人设隔离）→ 内置中性便装池，首个非空层胜出；**连续性覆盖**＝媒体日志连续窗（90min）内刚发过
+相册衣着系列 → 衣着跟随该系列（照片事实>每日默认，「再拍一张」不换装，`current_outfit(recent_series=)`
+单一入口）。接线：A 线 Stage A/photo_directive + B 线 `stage_image_file` 生成 prompt 注入
+`wearing <outfit>`（`build_selfie_prompt(outfit=)`）+ 聊天状态块同源（`scene_chat_note(outfit=)`
+「你今天穿着…被问到与之一致」）；**媒体日志记 series**（`_record_media_sent(series=)`/B 线
+`_notify_sent` 回调第三参）：相册图记条目系列、生成图记 `outfit_slug(衣着)`——生成↔相册跨链同一
+连续性命名空间。开关 `consistency.outfit`（bool 或 `{enabled,pool}`，随 P0 总闸）。
+② **生成链时段光线**：`ensure_time_of_day` 补齐 A/B 生成 prompt 的 `scene_hint`（深夜要图不再出
+正午大太阳自拍；相册 `album_scene` 保持 raw 不受影响）。③ **投诉/需求分维观测**：
+`record_media_complaint(kind=,persona_id=)` 分类型/人设计数 + `record_scene_request(scene,unmet=)`
+（点名场景硬要求的 demand/unmet，A 线成功/发送失败/生成失败 + B 线全路径都记，认不出归 other）→
+metrics `complaints_by_kind/complaints_by_persona/scene_demand/scene_unmet`。④ **相册缺口报告**
+`src/companion/media_gap.py`：供给侧 `collect_scene_supply`（注册相册 DB enabled 图 + FS 相册
+按 persona×场景类盘点，meta sidecar 优先，根目录平铺记 "" 共享池，300s TTL）× 需求侧（③ 的进程级
+计数）→ 纯函数 `scene_gap_report`（未兑现↓→需求↓排序、共享池有货不算缺、`missing_personas`=有库存
+但该场景 0 张的人设）→ `GET /api/admin/media-consistency`（?force=1 重扫）→ ops-overview
+「🧷 图文一致性」卡（i18n `ov2_s_mconsist`/`ov2_mc_*` zh+en；零流量整卡隐藏）——「客户要什么场景、
+缺什么」从翻日志变成看板照单补货。
+**P2 增量**（同日，场景×衣着联动+出图后验+缺口自动补货；门禁 `tests/test_outfit_state.py`（P2 段）+
+`tests/test_image_gate.py`（后验段）+ `tests/test_media_restock.py`）：① **场景×衣着联动 + 季节**
+（`outfit_state`——衣着类别词表 `outfit_categories`（swim/sleep/sport/work/dressy/outer/light）×
+场景规则表 `_SCENE_OUTFIT_RULES`（exclude=高置信违和：泳装进咖啡馆/办公室、睡衣进健身房、海边裹毛衣；
+prefer=场景优先类：gym→运动装/beach→裙装轻装/office→通勤，衣橱有货才换）× 季节排除 `season_of`
+（夏排重外套/冬排泳装/冬季**户外**再排短袖吊带——室内暖气吊带合理不动；`hemisphere: south` 倒扣）：
+`adapt_outfit_to_scene` 纯函数＝换装（真实行为，确定性同日同场景恒定）或**放弃注入**（全池违和→
+生图模型按场景自由穿，比硬注入冲突衣着诚实）；`current_outfit(scene=)` 单一入口内生效——A 线
+Stage A/photo_directive/聊天状态块 + B 线 `stage_image_file` + 补货渲染六个消费口零改动自动获益，
+连续窗衣着同样过闸（照片事实也不能泳装进办公室）。开关 `consistency.outfit.{season,hemisphere}`。
+② **出图后验**（`image_gate`——`build_gate_prompt(scene_check/tod_check)` 在**同一次** VLM 体检
+JSON 里顺带取 `scene`（14 类词表 `_GATE_SCENE_CLASSES` + 等价组 `scenes_equivalent`：home/bedroom/
+kitchen 互认、cafe/restaurant 互认防误拒）与 `time_of_day`（day|night|unclear），零额外 GPU 往返；
+`gate_verdict(expect_scene_class=,expect_tod=)` 只拒「VLM 明确判了不同」——`scene_mismatch`（点名
+海边生成出健身房，prompt 层管不住的最后防线）/`tod_mismatch`（深夜要图出正午烈日照；`expected_tod`
+仅无争议区间 8-16=day/20-4=night 才校验，晨昏两可不判），other/unclear/词表外一律放行不误伤；
+不合格走既有换种子重试。接线 `generate_with_gate(expect_scene=,expect_hour=)`（A 线 Stage A/
+photo_directive + B 线 + 补货渲染），开关 `vision_gate.{scene_check,tod_check}` 默认开。
+③ **缺口自动补货**（`src/companion/media_restock.py` + CLI `scripts/album_restock.py`，与语音侧
+auto_stock→夜间渲染同哲学；配置 `consistency.auto_restock` **默认关**）：watchdog
+`_check_media_restock`（每小时 + 每日预算 max_per_day + pending 去重）把「P1 缺口报告里 unmet ≥
+min_unmet 且该人设该场景零备货」（`qualify_restock_targets`；单人设布局补根册）写**计划文件**
+`config/album_restock_plan.json`；渲染在**独立进程** CLI（建议夜间低峰）逐项真出图——衣着走 ①
+场景联动（健身房补运动装图）、体检走 ② 全套含场景后验（补进相册的图保证真是该场景）、随机种子
+（备货要多样性，stable_seed 会全长一样）、`allow_album_fallback=False`（补相册不许从相册自我复制）
+→ 策展命名 `<场景>_<系列>_<nn>.jpg` 落 `album_dir/<persona>/` + 登记 `_meta.json`（scene/tod/
+series）→ 供给/衣橱缓存失效——「看缺口→补图→下次有货」零人工。逐项落盘（中途崩溃已完成项不重跑）；
+0 张也标 done 防死循环（重试由运营改回 pending）。观测：ops 卡 restock 行（`ov2_mc_restock*`）。
 ```bash
 python -m pytest tests/test_outbound_promise_guard.py tests/test_selfie_wiring.py \
  tests/test_image_autosend.py tests/test_autosend_helpers.py \
@@ -958,6 +1010,34 @@ steady=52、intimate=78…）→ 聊很多轮但 intimacy 分低也能更早主�
   同一工作目录 → 文件互相串改、`index.lock` 互撞（本仓曾反复踩）。各 agent 各开
   `git worktree add -b feat-xxx ../telegram-mtproto-ai-xxx <base>`（独立工作目录 +
   独立 index、共用 .git refs），冲突只在 merge 时显式解决；收尾 `git worktree remove`。
+
+### 多 agent 共享工作树并发协议（2026-07-28，当日三线并发实录教训）
+
+worktree 隔离是理想态（见上），但实践中多条 agent 线常共用主工作树（生产实例共享
+代码根 + 模板热更新的便利让隔离名存实亡）。当日实录踩过：同实例被两线各自重启触发
+FLAP、内联按钮写了函数没挂 window 暴露块经热更新**直接上生产**变死按钮、
+`unified_inbox.html` 三线先后编辑、ops 卡两线险些同时动工。共享树并发按以下四条，
+每条都有当日实证：
+
+1. **动手前探活**：`powershell -ExecutionPolicy Bypass -File scripts\agent_probe.ps1`
+   ——列最近 30min 内变动的 dirty 文件（≤10min 标 ACTIVE=别人正在写）+ 高冲突热区
+   标记 + 实例重启冷却状态。目标文件 ACTIVE（尤其热区）→ 避让或先协商，别开工。
+   热区清单（历史互踩多发，工具内维护）：`unified_inbox.html`、`ops_overview.html`、
+   `shared/copilot/**`、`skill_manager.py`、`src/web/i18n_packs/*.py`。
+2. **热更新＝直接上生产**：模板 / i18n pack / 共享组件保存即生效（Jinja auto_reload
+   + mtime 热加载），没有「未部署」缓冲。分步保存时**每一步都必须自洽**——当日实录：
+   `onclick="_openGoalQuick()"` 的函数定义了、window 暴露块没挂，死按钮在生产工作台
+   存活到广域门禁扫出为止。
+3. **重启搭便车**：代码根共享 → 任何一次实例重启装载**所有线**已落盘的 .py。重启前
+   看冷却（probe 第 2 段）：30min 内别人刚重启 → 你的改动大概率已被装载，用只读探针
+   验证（打一发新路由 / readiness 看新字段）而不是再吃一次重启窗口（当日实录：11:57
+   对方重启已装载本线 P15 代码，12:40 又重启一次即触发 FLAP 告警）。
+4. **收口跑广域门禁，不只跑自己的**：一条命令
+   `powershell -ExecutionPolicy Bypass -File scripts\gate_sweep.ps1`（清单在脚本内
+   维护：前端接线全套 + i18n 契约 + 共享组件双树同步/主题 token + 路由契约；
+   `-Full` 追加全量回归）。当日两例跨线 bug（哑按钮、暗色 token 缺口）都是甲改
+   乙扫出来的——门禁互验是共享树上唯一可靠的「代码评审」。别人文件红了先报告，
+   别在对方活跃编辑窗内默默替改。
 
 ### 崩溃恢复提示
 

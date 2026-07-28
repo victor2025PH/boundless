@@ -205,9 +205,12 @@ def test_metrics_endpoint_exposes_persona_override():
     assert po["resolves"] == 1 and po["conv_hits"] == 1
     assert po["legacy_suppressed"] == 1
     assert po["actions"]["bind_conv"] == 1
+    # 活水位随计数器一起出（值取决于进程内 pm 状态，只验类型语义）
+    assert isinstance(po.get("legacy_debt"), int) and po["legacy_debt"] >= 0
 
     r = c.get("/api/workspace/metrics?format=prometheus")
     assert r.status_code == 200
     assert "persona_override_resolves_total 1" in r.text
     assert 'persona_override_actions_total{action="bind_conv"} 1' in r.text
+    assert "persona_override_legacy_debt " in r.text
     stats.reset()

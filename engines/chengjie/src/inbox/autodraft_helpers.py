@@ -638,25 +638,6 @@ def make_auto_draft_cb(
     def _auto_draft_cb(conv: dict, text: str) -> None:
         if conv.get("platform", "") in cfg.skip:
             return
-        # Sprint1 双轨互斥：companion 运行时 TG 号由 A 线(telegram_client)直接回复，其入站经
-        # mirror_inbox 镜像进收件箱仅供坐席台可见；System Z 不得再为同一条消息拟稿/autosend，
-        # 否则「A 线一条 + autosend 一条」双发。仅在 companion 运行时且编排器确实持有该 TG 号
-        # 时抑制（默认 companion 关 + 无 orchestrator → 守卫不触发，零行为变更）。
-        try:
-            if str(conv.get("platform") or "") == "telegram" and app_config is not None:
-                from src.integrations.telegram_companion_worker import (
-                    companion_runtime_enabled,
-                )
-                if companion_runtime_enabled(app_config):
-                    from src.integrations.account_orchestrator import (
-                        get_orchestrator_if_running,
-                    )
-                    _orch = get_orchestrator_if_running()
-                    if _orch is not None and _orch.owns(
-                            "telegram", str(conv.get("account_id") or "default")):
-                        return
-        except Exception:
-            logger.debug("[AutoDraft] companion 双轨互斥判定失败（忽略）", exc_info=True)
         if cfg.skip_groups:
             try:
                 from src.inbox.ingest import is_group_conversation
@@ -668,6 +649,8 @@ def make_auto_draft_cb(
             return
         # 每会话档位：坐席显式设置 > 全局 auto_draft.automation_mode。
         # Phase13：首条入站 bootstrap 持久化 auto_ai → UI/让位/System Z 口径一致。
+        # 须在 companion 双轨判定之前解析——仅 auto_ai 时 A 线直发、System Z 让位；
+        # review/manual 时 A 线停、System Z 拟稿（或静音），否则 UI「手动」无效。
         mode = cfg.mode
         try:
             cid = str(conv.get("conversation_id") or "")
@@ -711,6 +694,25 @@ def make_auto_draft_cb(
         except Exception:
             logger.debug(
                 "[AutoDraft] 业务线档位封顶失败（忽略）", exc_info=True)
+        # Sprint1 双轨互斥（收窄）：companion 持有的 TG 号在 **auto_ai** 时由 A 线
+        # 直发 → System Z 抑制防双发。坐席切到 review/manual/multi_choice 后 A 线
+        # 让位，本回调继续拟稿（manual 下方早退），收件箱档位才真正生效。
+        try:
+            if str(conv.get("platform") or "") == "telegram" and app_config is not None:
+                from src.integrations.telegram_companion_worker import (
+                    companion_runtime_enabled,
+                )
+                from src.inbox.automation_mode import allows_direct_autosend
+                if companion_runtime_enabled(app_config) and allows_direct_autosend(mode):
+                    from src.integrations.account_orchestrator import (
+                        get_orchestrator_if_running,
+                    )
+                    _orch = get_orchestrator_if_running()
+                    if _orch is not None and _orch.owns(
+                            "telegram", str(conv.get("account_id") or "default")):
+                        return
+        except Exception:
+            logger.debug("[AutoDraft] companion 双轨互斥判定失败（忽略）", exc_info=True)
         if mode == "manual":
             return
         draft_id = draft_svc.auto_generate_draft(

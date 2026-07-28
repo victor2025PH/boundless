@@ -169,6 +169,25 @@ def _rotation_key(playbook_id: str, slot: str, account_key: str,
 # ── 候选池 ──────────────────────────────────────────────────────────────────
 
 
+def _stickiness(prior_slots: Optional[Mapping[str, str]],
+                account_id: str, slot: str) -> int:
+    """群内角色粘性分（越大越优先）：2＝上次在本群就演这个槽；1＝本群没演过；
+    0＝在本群演过**别的**槽（翻脸位，最后才轮到它）。
+
+    角色轮转（``role_headroom`` 轴）是**跨群**语义——防单号在很多群长期当主推；
+    可它在**同一个群**里会主动制造翻脸：上一场演过 advocate 的号余量变小，下一场
+    恰好被轮去演 skeptic（2026-07-27 双号灰度实录，两场之间立场对调）。群里的
+    真人翻两屏聊天记录就能看出「昨天质疑今天安利」。粘性排在轮转**之前**：
+    群内粘住、跨群照转，两条轴各管各的。
+    """
+    if not prior_slots:
+        return 1
+    prior = _s((prior_slots or {}).get(_s(account_id)))
+    if not prior:
+        return 1
+    return 2 if prior == _s(slot) else 0
+
+
 def _normalize_candidate(
     raw: Any,
     overrides: Mapping[str, str],
@@ -285,6 +304,7 @@ def _pick_for_slot(
     seed: str = "",
     role_counts: Optional[Mapping[Tuple[str, str], int]] = None,
     role_limit: int = 0,
+    prior_slots: Optional[Mapping[str, str]] = None,
 ) -> Optional[Dict[str, str]]:
     """给一个角色槽挑人：先过硬约束，再按「同台历史」排序，最后做性别软优化。
 
@@ -321,8 +341,11 @@ def _pick_for_slot(
     # 第二主键取「角色余量还剩多少」的**负值**＝余量大的先上：主推轴的容量是线性的
     # （号数 × NORMAL_ROLE_CO），买不到杠杆，只能靠均摊把它用满。同台历史相同时优先
     # 挑没怎么演过主推的号，主推就自然轮着来了；掩护角色的余量恒为满值、该项无影响。
+    # 粘性分排在同台历史之后、主推轮转之前：共现是算法抓的（最重），群内翻脸是
+    # 真人肉眼看的（次重），轮转均衡是长线卫生（最轻）——见 _stickiness docstring。
     available.sort(key=lambda c: (
         added_co_performance(c["account_id"], picked, co_counts),
+        -_stickiness(prior_slots, c["account_id"], slot),
         -role_headroom(c["account_id"], slot, role_counts, limit=role_limit),
         _rotation_key(playbook_id, slot, c["account_key"], seed),
         c["account_key"],
@@ -391,6 +414,7 @@ def cast_roles(
     seed: str = "",
     role_counts: Optional[Mapping[Tuple[str, str], int]] = None,
     role_limit: int = NORMAL_ROLE_CO,
+    prior_slots: Optional[Mapping[str, str]] = None,
 ) -> Casting:
     """把剧本角色槽分配给候选账号，返回 :class:`Casting`。
 
@@ -444,6 +468,12 @@ def cast_roles(
         :data:`~src.companion.group_show.roles.NORMAL_ROLE_CO`，``<=0`` ＝关闭）。
         与 ``co_limit`` 正交：那条防「这几个号是一伙的」，这条防「这个号自己是个托」。
         同样地，没传 ``role_counts`` 时恒不生效——**无台账＝无行为变化**。
+    prior_slots:
+        ``{号: 上次在目标群演的槽}``，由
+        :meth:`~src.companion.group_show.store.GroupShowStore.prior_slots` 派生。
+        传了就**群内粘住角色**：上次演过本槽的号优先、在本群演过别的槽的号最后
+        （防「上一场泼冷水、下一场安利」的当群翻脸，2026-07-27 双号灰度实录）。
+        跨群轮转不受影响——这本台账是按目标群查的。不传＝无行为变化。
 
     硬约束（任何情况下都成立）
     --------------------------
@@ -482,6 +512,7 @@ def cast_roles(
                 pool, slot, playbook_id, used_accounts, used_groups,
                 cast_genders, gender_by_persona, co_performance, chosen_ids,
                 _int(co_limit), _s(seed), role_counts, _int(role_limit),
+                prior_slots=prior_slots,
             )
             if cand is None:
                 # 号已用尽（或剩下的全被指纹/闸门锁死）——后面的低优先级槽多半也填不上，

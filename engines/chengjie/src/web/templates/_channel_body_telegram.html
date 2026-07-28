@@ -1542,8 +1542,8 @@ function _setConnDot(el,status){
 function _renderTgLoginCta(status){
   const show=status==='offline'||status==='connecting';
   const title=status==='connecting'
-    ? (window.T('tg_login_connecting_t')||'主会话连接中')
-    : (window.T('tg_login_offline_t')||'主会话未登录');
+    ? window.T('tg_login_connecting_t')
+    : window.T('tg_login_offline_t');
   ['tg-login-cta','tg-login-cta-acc'].forEach(id=>{
     const el=document.getElementById(id);
     if(!el) return;

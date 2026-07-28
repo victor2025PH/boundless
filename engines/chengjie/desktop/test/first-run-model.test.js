@@ -4,6 +4,7 @@
 const assert = require("assert");
 const {
   FR_STRINGS,
+  FR_FUNNEL_EVENTS,
   frT,
   frBuildSteps,
   frAiPrefill,
@@ -17,6 +18,8 @@ const {
   frClaimPollPlan,
   frGiftView,
   frShouldShowWizard,
+  frWelcomeView,
+  frCelebrateView,
   frFormatChars,
 } = require("../renderer/first-run-model.js");
 
@@ -36,17 +39,53 @@ ok("英文不出现 w 缩写", /w/i.test(frFormatChars(100000, "en")) === false)
 ok("空值不炸", frFormatChars(null, "zh") === "0");
 ok("语言留空按中文", frFormatChars(10000, "") === "1 万");
 
-// ── 弹不弹：默认只弹一次，--first-run 可强制重看 ──
+// ── 弹不弹：默认只弹一次，--first-run 可强制重看；config.onboarding 也是权威完成态 ──
 ok("首次弹", frShouldShowWizard(false, false) === true);
 ok("弹过就不再弹", frShouldShowWizard(true, false) === false);
 ok("强制时无视标记", frShouldShowWizard(true, true) === true);
 ok("强制且没弹过照样弹", frShouldShowWizard(false, true) === true);
+ok("config 已完成也不弹", frShouldShowWizard(false, false, true) === false);
+ok("localStorage 或 config 任一完成即不弹", frShouldShowWizard(true, false, false) === false);
+ok("强制无视 config 完成态", frShouldShowWizard(true, true, true) === true);
 
 // ── 步骤编排：AI 已配置 → 只走基础步；未配置/后端不可达 → 三步 ──
 ok("已配置只走基础步", frBuildSteps({ ok: true, configured: true }).join(",") === "basic");
 ok("未配置走三步", frBuildSteps({ ok: true, configured: false }).join(",") === "basic,ai,result");
 ok("后端不可达也给填 Key 机会", frBuildSteps(null).join(",") === "basic,ai,result");
 ok("状态接口失败同上", frBuildSteps({ ok: false }).join(",") === "basic,ai,result");
+
+// ── 托管版（客户成品）：固定 welcome→claim→celebrate，永不出现 ai/result ──
+//   不靠「此刻 AI 配没配好」猜；领取失败可跳过，故无额度状态也照样进漏斗。
+ok("托管版即使 AI 未配置也不出 ai/result 步",
+  frBuildSteps({ ok: false }, null, { managed: true }).join(",") === "welcome,claim,celebrate");
+ok("托管版 AI 后端不可达也不出配置步",
+  frBuildSteps(null, null, { managed: true }).join(",") === "welcome,claim,celebrate");
+ok("托管版有体验额度仍是固定三屏(额度并入欢迎屏)",
+  frBuildSteps(null, TRIAL_ON_EARLY(), { managed: true }).join(",") === "welcome,claim,celebrate");
+ok("非托管保持旧行为(未配置走三步)",
+  frBuildSteps({ ok: false }, null, { managed: false }).join(",") === "basic,ai,result");
+ok("缺 opts 视为非托管(向后兼容)",
+  frBuildSteps({ ok: false }, null).join(",") === "basic,ai,result");
+function TRIAL_ON_EARLY() {
+  return { ok: true, visible: true, source: "local_trial", included: 10000,
+    remaining: 8500, hours_left: 46.2, exceeded: false };
+}
+
+// ── 托管欢迎 / 庆祝纯模型 ──
+const wv = frWelcomeView(TRIAL_ON_EARLY(), "zh");
+ok("欢迎屏有额度时展示数字", wv.showQuota === true && wv.chars === 8500);
+ok("欢迎屏 CTA 是领取完整版", wv.cta === FR_STRINGS.zh.btn_claim_start);
+ok("欢迎屏价值钩子非空", !!wv.sub && wv.sub.indexOf("不用") >= 0);
+ok("无额度状态不展示数字格", frWelcomeView(null, "zh").showQuota === false);
+const cel1 = frCelebrateView({ claimed: true }, "zh");
+ok("已领取→激活文案", cel1.sub === FR_STRINGS.zh.celebrate_sub_claimed);
+const cel2 = frCelebrateView({ claimed: false, giftShown: true }, "zh");
+ok("看过赠量码→赠量文案", cel2.sub === FR_STRINGS.zh.celebrate_sub_gift);
+const cel3 = frCelebrateView({}, "zh");
+ok("跳过领取→体验就绪文案", cel3.sub === FR_STRINGS.zh.celebrate_sub_skipped);
+ok("庆祝 CTA 进工作台", cel3.cta === FR_STRINGS.zh.btn_enter);
+ok("英文庆祝文案独立",
+  frCelebrateView({ claimed: true }, "en").sub === FR_STRINGS.en.celebrate_sub_claimed);
 
 // ── 体验额度收尾步（P2）：只在后端确认「真的有、真的是体验档、还没用尽」时追加 ──
 //   这份额度默默生效，不说出来等于白送；但也绝不能凭空承诺一份不存在的额度。
@@ -173,6 +212,14 @@ ok("有 ok 无 code 也算失败", frGiftView({ ok: true }, "zh").ok === false);
 ok("空响应不炸", frGiftView(null, "zh").ok === false);
 ok("无深链但有码仍算成功",
   frGiftView({ ok: true, bind_code: "BC-A" }, "zh").ok === true);
+
+// ── 漏斗事件白名单：与后端 trial_claim_client.FUNNEL_EVENTS 同口径 ──
+//   first-run.js 只从这张表取名——拼错事件名在这里就红，而不是线上数据悄悄丢。
+ok("漏斗事件表齐全", FR_FUNNEL_EVENTS.join(",")
+  === "welcome,claim_submit,claim_ok,claim_skip,gift_open,done");
+ok("漏斗事件名全小写下划线", FR_FUNNEL_EVENTS.every(function (e) {
+  return /^[a-z_]+$/.test(e);
+}));
 
 // ── i18n：zh/en 键齐 + 回落 ──
 const zhKeys = Object.keys(FR_STRINGS.zh).sort().join("|");

@@ -218,6 +218,17 @@
   .ws-pill.task{background:rgba(34,211,238,.12);color:#a5f3fc;border-color:rgba(34,211,238,.4);}
   .ws-pill.task .ws-pill-ic{color:#22d3ee;}
   .ws-pill.task .ws-pill-n{background:linear-gradient(135deg,#67e8f9,#22d3ee);box-shadow:0 0 8px rgba(34,211,238,.4);}
+  /* 额度徽章：不在紧急度单轴上（它不是"待处理的活"，是"还能干多久"），故用中性紫作第四语义。
+     三档＝充足(紫) / 偏低(琥珀) / 用尽(红)，与告警药丸的红橙不冲突：颜色只在真用尽时才逼近红。 */
+  .ws-pill.quota{background:rgba(167,139,250,.14);color:#ddd6fe;border-color:rgba(167,139,250,.42);}
+  .ws-pill.quota .ws-pill-ic{color:#a78bfa;}
+  .ws-pill.quota .ws-pill-n{background:linear-gradient(135deg,#ddd6fe,#a78bfa);box-shadow:0 0 8px rgba(167,139,250,.4);}
+  .ws-pill.quota-low{background:rgba(245,158,11,.16);color:#fcd34d;border-color:rgba(245,158,11,.5);}
+  .ws-pill.quota-low .ws-pill-ic{color:#fbbf24;}
+  .ws-pill.quota-low .ws-pill-n{background:linear-gradient(135deg,#fcd34d,#f59e0b);box-shadow:0 0 8px rgba(245,158,11,.5);}
+  .ws-pill.quota-out{background:rgba(225,29,72,.18);color:#fda4af;border-color:rgba(225,29,72,.55);}
+  .ws-pill.quota-out .ws-pill-ic{color:#fb7185;}
+  .ws-pill.quota-out .ws-pill-n{background:linear-gradient(135deg,#fda4af,#e11d48);box-shadow:0 0 10px rgba(225,29,72,.55);}
   .ws-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;align-items:center;justify-content:center;}
   .ws-modal-box{background:#fff;border-radius:12px;max-width:560px;width:92vw;max-height:80vh;overflow:auto;padding:18px;}
   .ws-modal-box h3{margin:0 0 12px;font-size:16px;}
@@ -526,6 +537,10 @@
   <a class="ws-pill sev" id="ws-sla" data-i18n-title="base.pill.sla_t" title="需要处理的会话（超时未回复 / 还没人接）"></a>
   <a class="ws-pill review-l4" id="ws-l4-badge" href="/workspace/dash" data-i18n-title="base.pill.l4_t" title="AI 写好的回复，发出前需要你确认（主管放行）"></a>
   <a class="ws-pill task" id="ws-followup" href="/workspace/tasks" data-i18n-title="base.pill.followup_t" title="到期待跟进任务"></a>
+  <!-- 字符额度 / 首启体验档徽章（P2）：额度用尽会让翻译与 AI 草稿直接停摆，而坐席是
+       第一个撞上的人。只让主管在会员中心看得到，等于让一线在毫无预警下发现「AI 不干活了」。
+       无额度授权（不限量 / 社区且体验档未启用）时整个徽章隐藏。 -->
+  <a class="ws-pill quota" id="ws-quota" href="/membership" data-i18n-title="base.pill.quota_t" title="剩余字符额度 · 点击进入会员中心"></a>
   <!-- P24: 通知铃铛（事件流 / 回溯，不与上方告警药丸重复堆数字） -->
   <span class="ws-notif-btn" id="ws-notif-btn" data-i18n-title="base.notif_t" title="通知中心" style="display:inline-flex;align-items:center;">
     <span data-ui-icon="bell" data-size="16"></span><span class="ws-notif-badge" id="ws-notif-badge"></span>
@@ -887,6 +902,43 @@ document.addEventListener('click',function(e){
     }).catch(function(){});
   }
   refreshFu(); setInterval(refreshFu, 60000);
+
+  // 额度 / 体验档徽章：额度变化慢（按字符累计），5 分钟一轮足够，不再加密轮询。
+  // 分级（ok/low/out）由服务端算（license_routes.quota_level）——顶栏、会员中心、
+  // 首启向导三处共用同一套阈值，前端各写一份必然漂移。
+  var quotaPill=document.getElementById('ws-quota');
+  function _compactNum(n){
+    var v=Number(n||0);
+    if(v>=1e6) return (v/1e6).toFixed(v>=1e7?0:1).replace(/\.0$/,'')+'M';
+    if(v>=1e3) return (v/1e3).toFixed(v>=1e4?0:1).replace(/\.0$/,'')+'k';
+    return String(Math.round(v));
+  }
+  function refreshQuota(){
+    if(!quotaPill) return;
+    apiFetch('/api/workspace/quota').then(function(r){return r.json();}).then(function(d){
+      if(!d||!d.ok||!d.visible){ quotaPill.style.display='none'; return; }
+      var lv=String(d.level||'ok');
+      quotaPill.className='ws-pill quota'+(lv==='out'?' quota-out':(lv==='low'?' quota-low':''));
+      quotaPill.style.display='inline-flex';
+      var isTrial=(d.source==='local_trial');
+      var lb=window.T(isTrial?'base.pill.quota_trial':'base.pill.quota');
+      var num=(d.remaining==null)?'—':_compactNum(d.remaining);
+      if(lv==='out') num=window.T('base.pill.quota_out');
+      quotaPill.innerHTML=_pillIc('zap')+'<span class="ws-pill-lb">'+lb+
+        '</span><span class="ws-pill-n">'+num+'</span>';
+      // tooltip 讲全：已用/含量 + 体验档剩余时长 + 用尽后会发生什么
+      var tip=window.Tf('base.pill.quota_tip',{used:_compactNum(d.used),
+        included:_compactNum(d.included)});
+      if(isTrial && d.hours_left!=null && lv!=='out'){
+        tip+=' · '+window.Tf('base.pill.quota_tip_hours',{h:d.hours_left});
+      }
+      if(lv==='out'){
+        tip+=' · '+window.T(d.expired?'base.pill.quota_tip_expired':'base.pill.quota_tip_out');
+      }
+      quotaPill.title=tip;
+    }).catch(function(){});
+  }
+  refreshQuota(); setInterval(refreshQuota, 300000);
 
   // 「严重超时」药丸 + 下钻清单（已合并「升级/无人接管」：count 取 SLA 严重数，
   // 无人接管数以副标 + tooltip ⚠ 标记呈现，避免两颗红 49 同义重复）。

@@ -802,6 +802,18 @@ _MIGRATIONS = [
     # 仅当 last_ts > last_read_ts 才算真未读，坐席打开会话即写高水位，永不回弹。
     # 单调递增（见 mark_conversation_read 的 MAX 语义）。缺省 0=从未读过。
     "ALTER TABLE conversations ADD COLUMN last_read_ts REAL NOT NULL DEFAULT 0",
+    # 用户时区推断缓存（src/companion/user_clock_resolver 落库口径）：主动触达要按**客户**
+    # 本地时间择时/判安静时段，每 tick 重扫消息推断太贵 → 结果按 TTL 缓存在这里。
+    # tz_hint=IANA 名或 "UTC+07:00" 伪名（空=推不出）；tz_source=stated_city/phone_cc/
+    # behavior/behavior_corroborated/lang_default（空=负结果，trust 由 source 反推）；
+    # tz_confidence=-1 表示未知；tz_resolved_at=0 表示从未推断（TTL 过期即重算）。
+    # 纯缓存语义、非事实源——推断信号（自述记忆/平台号码/入站小时）本身都在别处持久。
+    "ALTER TABLE conversation_meta ADD COLUMN tz_hint TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE conversation_meta ADD COLUMN tz_confidence REAL NOT NULL DEFAULT -1",
+    "ALTER TABLE conversation_meta ADD COLUMN tz_source TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE conversation_meta ADD COLUMN tz_country TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE conversation_meta ADD COLUMN tz_offset REAL NOT NULL DEFAULT 0",
+    "ALTER TABLE conversation_meta ADD COLUMN tz_resolved_at REAL NOT NULL DEFAULT 0",
 ]
 
 
@@ -2725,6 +2737,58 @@ class InboxStore:
                 (conversation_id, mode, self._now()),
             )
             self._conn.commit()
+
+    def cancel_pending_l2_drafts(
+        self, conversation_id: str, *, decided_by: str = "mode_downgraded",
+    ) -> int:
+        """会话降出全自动时立即取消待投递 L2（含 enriching），不必等 autosend tick。
+
+        返回取消条数。不含 L1/人审草稿——那些本就该留给坐席。
+        """
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return 0
+        now = self._now()
+        with self._lock:
+            cur = self._conn.execute(
+                """
+                UPDATE reply_drafts
+                   SET status='cancelled', decided_by=?, decided_at=?, updated_at=?
+                 WHERE conversation_id=?
+                   AND autopilot_level='L2'
+                   AND status IN ('pending', 'enriching')
+                """,
+                (str(decided_by or "mode_downgraded"), now, now, cid),
+            )
+            self._conn.commit()
+        return int(cur.rowcount or 0)
+
+    def bulk_set_automation_mode(
+        self, from_mode: str, to_mode: str,
+    ) -> List[str]:
+        """把所有 ``from_mode`` 会话改成 ``to_mode``。返回被改动的 conversation_id 列表。"""
+        if from_mode not in AUTOMATION_MODES or to_mode not in AUTOMATION_MODES:
+            return []
+        if from_mode == to_mode:
+            return []
+        now = self._now()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT conversation_id FROM conversation_settings WHERE automation_mode=?",
+                (from_mode,),
+            ).fetchall()
+            cids = [str(r["conversation_id"]) for r in rows]
+            if cids:
+                self._conn.execute(
+                    """
+                    UPDATE conversation_settings
+                       SET automation_mode=?, updated_at=?
+                     WHERE automation_mode=?
+                    """,
+                    (to_mode, now, from_mode),
+                )
+                self._conn.commit()
+        return cids
 
     def all_automation_modes(self) -> Dict[str, str]:
         with self._lock:
@@ -6829,6 +6893,9 @@ class InboxStore:
     _META_PATCH_COLUMNS = frozenset({
         "rel_stage_cached", "rel_stage_pending", "rel_stage_pending_ts",
         "rel_reunion_ack_ts", "qa_score", "churn_risk", "snooze_until",
+        # 用户时区推断缓存（user_clock_resolver 按 TTL 低频写；读侧走 get_conv_meta 的 SELECT *）
+        "tz_hint", "tz_confidence", "tz_source", "tz_country", "tz_offset",
+        "tz_resolved_at",
     })
 
     def _ensure_conv_meta_row(self, conversation_id: str) -> None:

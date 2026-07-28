@@ -1,6 +1,6 @@
 {
   "name": "telegram-ai-desktop",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "description": "桌面壳：嵌官方 web 客户端 + 注入点击翻译/智能回复（对接本仓库 FastAPI 后端）",
   "main": "main.js",
@@ -19,7 +19,7 @@
     "dist:win": "electron-builder --win",
     "predist:mac": "node copy-shared.js",
     "dist:mac": "electron-builder --mac",
-    "test": "node test/inject-status.test.js && node test/account-utils.test.js && node test/media-format.test.js && node test/webview-ua.test.js && node test/profiles.test.js && node test/fingerprint.test.js && node test/backend-launcher.test.js && node test/health-panel.test.js && node test/brand-util.test.js && node test/sidebar-chrome.test.js && node test/first-run-model.test.js"
+    "test": "node test/inject-status.test.js && node test/account-utils.test.js && node test/media-format.test.js && node test/webview-ua.test.js && node test/profiles.test.js && node test/fingerprint.test.js && node test/backend-launcher.test.js && node test/health-panel.test.js && node test/brand-util.test.js && node test/sidebar-chrome.test.js && node test/first-run-model.test.js && node test/token-util.test.js"
   },
   "devDependencies": {
     "electron": "^31.0.0",
@@ -45,11 +45,15 @@
       {
         "from": "build/backend-dist",
         "to": "backend",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "icon": "build/icon.ico",
       "artifactName": "ChatX-Setup-${version}.${ext}"
     },
@@ -59,7 +63,9 @@
       "perMachine": false
     },
     "mac": {
-      "target": ["dmg"],
+      "target": [
+        "dmg"
+      ],
       "category": "public.app-category.business",
       "artifactName": "${productName}-${version}.${ext}"
     },

@@ -92,6 +92,15 @@ class GoalStore:
         ts      REAL NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_goal_events_goal ON goal_events(goal_id, ts DESC);
+
+    CREATE TABLE IF NOT EXISTS customer_profiles (
+        platform   TEXT NOT NULL DEFAULT '',
+        chat_key   TEXT NOT NULL DEFAULT '',
+        fields     TEXT NOT NULL DEFAULT '{}',
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        PRIMARY KEY (platform, chat_key)
+    );
     """
 
     def __init__(self, db_path):
@@ -282,6 +291,147 @@ class GoalStore:
         except Exception:
             return 0
 
+    def has_any_goal(
+        self,
+        *,
+        conversation_id: str = "",
+        platform: str = "",
+        chat_key: str = "",
+    ) -> bool:
+        """会话历史上建过任何目标（含终态）——auto_create 幂等闸：
+        建过（哪怕已 done/cancelled）就不再自动建，避免对同一客户反复起盘。
+        匹配口径与 find_active_goal 同宽（conversation_id 或 platform+chat_key
+        任一命中即算有）。查询失败按「有」处理（宁可不建，别重复建）。"""
+        try:
+            if conversation_id:
+                r = self._conn.execute(
+                    "SELECT 1 FROM goals WHERE conversation_id = ? LIMIT 1",
+                    (str(conversation_id),),
+                ).fetchone()
+                if r:
+                    return True
+            if platform and chat_key:
+                r = self._conn.execute(
+                    "SELECT 1 FROM goals WHERE platform = ? AND chat_key = ?"
+                    " LIMIT 1",
+                    (str(platform), str(chat_key)),
+                ).fetchone()
+                if r:
+                    return True
+            return False
+        except Exception:
+            return True
+
+    def count_created_by_since(self, created_by: str, since_ts: float) -> int:
+        """某创建者自 since_ts 起建的目标数（auto_create 每日预算闸；
+        进库计数=跨重启稳）。失败返回大数（fail-closed 不超预算）。"""
+        try:
+            r = self._conn.execute(
+                "SELECT COUNT(*) FROM goals WHERE created_by = ?"
+                " AND created_at >= ?",
+                (str(created_by or ""), float(since_ts or 0.0)),
+            ).fetchone()
+            return int(r[0]) if r else 0
+        except Exception:
+            return 10 ** 9
+
+    def list_overdue_goals(
+        self,
+        *,
+        template: str,
+        before_ts: float,
+        after_ts: float = 0.0,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """某模板下 deadline 落在 ``(after_ts, before_ts]`` 窗口的到期目标
+        （status ∈ active/expired——active=还没被 settle-on-read 扫到的静默会话，
+        winback 扫描顺手把它们结算掉）。P6 流失挽回扫描的候选源。失败返回 []。"""
+        try:
+            rows = self._conn.execute(
+                "SELECT * FROM goals WHERE template = ?"
+                " AND status IN ('active', 'expired')"
+                " AND deadline_ts > ? AND deadline_ts <= ?"
+                " ORDER BY deadline_ts ASC LIMIT ?",
+                (str(template or ""), float(after_ts or 0.0),
+                 float(before_ts or 0.0), max(1, min(int(limit or 50), 200))),
+            ).fetchall()
+            return [self._row_to_goal(r) for r in rows]
+        except Exception:
+            logger.debug("list_overdue_goals failed", exc_info=True)
+            return []
+
+    def has_goal_created_after(
+        self,
+        ts: float,
+        *,
+        conversation_id: str = "",
+        platform: str = "",
+        chat_key: str = "",
+    ) -> bool:
+        """会话在 ``ts`` 之后建过任何目标（winback 幂等闸：流失点之后已有
+        新目标——挽回目标 / 迟到续费起的新周期 / 手动新盘——就不再挽回）。
+        匹配口径与 find_active_goal 同宽；查询失败按「有」处理（宁可不建）。"""
+        try:
+            t = float(ts or 0.0)
+            if conversation_id:
+                r = self._conn.execute(
+                    "SELECT 1 FROM goals WHERE conversation_id = ?"
+                    " AND created_at > ? LIMIT 1",
+                    (str(conversation_id), t),
+                ).fetchone()
+                if r:
+                    return True
+            if platform and chat_key:
+                r = self._conn.execute(
+                    "SELECT 1 FROM goals WHERE platform = ? AND chat_key = ?"
+                    " AND created_at > ? LIMIT 1",
+                    (str(platform), str(chat_key), t),
+                ).fetchone()
+                if r:
+                    return True
+            return False
+        except Exception:
+            return True
+
+    def order_event_exists(
+        self,
+        *,
+        order_id: str,
+        conversation_id: str = "",
+        platform: str = "",
+        chat_key: str = "",
+    ) -> bool:
+        """同会话**任一**目标（含终态）是否已回流过该订单号——settle_order_ref
+        的会话级幂等闸（P5）。留存环 spawn 后会话常年挂着活跃目标，幂等若只看
+        「当前活跃目标」的事件，旧单重放（order_pull 的 paid→activated 二次出现、
+        进程重启 _SEEN 清空）会假结算新周期。detail 格式 ``order_id|plan``，
+        Python 侧子串匹配（与旧逻辑同口径，免 LIKE 转义坑）。
+        查询失败按「已存在」处理（宁可漏结算一单，别假续费）。"""
+        oid = str(order_id or "").strip()
+        if not oid:
+            return False
+        try:
+            rows: list = []
+            if conversation_id:
+                rows = self._conn.execute(
+                    "SELECT e.detail FROM goal_events e JOIN goals g"
+                    " ON e.goal_id = g.goal_id WHERE e.kind = 'order'"
+                    " AND g.conversation_id = ? ORDER BY e.ts DESC LIMIT 400",
+                    (str(conversation_id),),
+                ).fetchall()
+            if not rows and platform and chat_key:
+                rows = self._conn.execute(
+                    "SELECT e.detail FROM goal_events e JOIN goals g"
+                    " ON e.goal_id = g.goal_id WHERE e.kind = 'order'"
+                    " AND g.platform = ? AND g.chat_key = ?"
+                    " ORDER BY e.ts DESC LIMIT 400",
+                    (str(platform), str(chat_key)),
+                ).fetchall()
+            return any(oid in str(r["detail"] or "") for r in rows)
+        except Exception:
+            logger.debug("order_event_exists failed", exc_info=True)
+            return True
+
     def list_goals(
         self,
         *,
@@ -424,7 +574,125 @@ class GoalStore:
         except Exception:
             return 0
 
+    # ── 客户画像（P1：BANT 商机 + 关系双轨；slot 语义见 profile_slots）──────────
+    def get_customer_profile(
+        self, platform: str, chat_key: str
+    ) -> Optional[Dict[str, Any]]:
+        """画像行（fields 已反序列化）。无记录/坏行 → None。"""
+        try:
+            row = self._conn.execute(
+                "SELECT * FROM customer_profiles WHERE platform = ?"
+                " AND chat_key = ?",
+                (str(platform or ""), str(chat_key or "")),
+            ).fetchone()
+        except Exception:
+            return None
+        if not row:
+            return None
+        d = dict(row)
+        try:
+            d["fields"] = json.loads(d.get("fields") or "{}")
+            if not isinstance(d["fields"], dict):
+                d["fields"] = {}
+        except Exception:
+            d["fields"] = {}
+        return d
+
+    def upsert_customer_profile(
+        self,
+        platform: str,
+        chat_key: str,
+        updates: Dict[str, Any],
+        *,
+        source: str = "auto",
+        overwrite: bool = False,
+        now: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """合并写画像槽位。返回合并后的行；无有效更新 → 返回现状（可能 None）。
+
+        写入规则（防「机器猜的覆盖人核实的」）：
+        - ``overwrite=False``（auto 采集）：只填**空槽**；已有值（无论 auto/agent）不动。
+        - ``overwrite=True``（坐席画像卡）：覆盖一切；传空串 = 清除该槽。
+        每槽存 ``{"v", "src", "ts"}``；槽位键不在注册表的忽略（防脏键撑爆）。
+        """
+        from src.companion.goals.profile_slots import get_slot
+        pf = str(platform or "").strip()
+        ck = str(chat_key or "").strip()
+        if not pf or not ck or not isinstance(updates, dict):
+            return self.get_customer_profile(pf, ck)
+        n = float(now if now is not None else _now())
+        cur = self.get_customer_profile(pf, ck)
+        fields: Dict[str, Any] = dict((cur or {}).get("fields") or {})
+        changed = False
+        for key, raw in updates.items():
+            k = str(key or "").strip().lower()
+            if get_slot(k) is None:
+                continue
+            v = str(raw or "").strip()[:80]
+            old = fields.get(k) if isinstance(fields.get(k), dict) else None
+            old_v = str((old or {}).get("v") or "").strip()
+            if not overwrite:
+                if not v or old_v:
+                    continue        # auto 只填空槽
+                fields[k] = {"v": v, "src": str(source or "auto")[:12], "ts": n}
+                changed = True
+            else:
+                if not v:
+                    if k in fields:
+                        fields.pop(k, None)
+                        changed = True
+                    continue
+                if v == old_v:
+                    continue
+                fields[k] = {"v": v, "src": str(source or "agent")[:12], "ts": n}
+                changed = True
+        if not changed:
+            return cur
+        try:
+            fjson = json.dumps(fields, ensure_ascii=False)
+        except Exception:
+            return cur
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT INTO customer_profiles (platform, chat_key, fields,"
+                    " created_at, updated_at) VALUES (?,?,?,?,?)"
+                    " ON CONFLICT(platform, chat_key) DO UPDATE SET"
+                    " fields = excluded.fields, updated_at = excluded.updated_at",
+                    (pf, ck, fjson, n, n),
+                )
+                self._conn.commit()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("upsert_customer_profile failed: %s", e)
+            return cur
+        return self.get_customer_profile(pf, ck)
+
     # ── 结果闭环（P2）─────────────────────────────────────────────────────────
+    def sold_plan_counts(
+        self, days: int = 90, *, now: Optional[float] = None
+    ) -> Dict[str, int]:
+        """近 N 天经聊天归因真实成交的订单按 plan 计数（P4 选品反哺）。
+
+        口径与 ``outcome_report.orders_by_plan`` 同：result=``order:<plan>:<id>``；
+        手动「标成交」（result=manual:agent）刻意不计——读的是「哪个 SKU 在
+        聊天里真卖动了」。失败返回空（选品退回纯 pains 排序，零阻断）。"""
+        try:
+            n = float(now if now is not None else _now())
+            since = n - max(1, int(days or 90)) * 86400.0
+            rows = self._conn.execute(
+                "SELECT result FROM goals WHERE status = 'done'"
+                " AND done_at >= ? AND result LIKE 'order:%'", (since,),
+            ).fetchall()
+            out: Dict[str, int] = {}
+            for r in rows:
+                parts = str(r["result"] or "").split(":", 2)
+                plan = (parts[1] if len(parts) > 1 else "").strip()
+                if plan:
+                    out[plan] = out.get(plan, 0) + 1
+            return out
+        except Exception:
+            return {}
+
     def count_events_since(self, goal_id: str, kind: str, since_ts: float) -> int:
         """某目标自 ``since_ts`` 起某类事件数（planner 读坐席驳回回流用）。"""
         try:
@@ -455,6 +723,11 @@ class GoalStore:
             "feedback": {"adopt": 0, "reject": 0},
             "recent": [],
             "active_now": 0,
+            "orders_by_plan": {},
+            "orders_settled": 0,
+            "churn_reasons": {},
+            # P12：生命周期终态 × 主流失原因（won=真金白银/手动成交）
+            "churn_outcomes": {},
         }
         try:
             rows = self._conn.execute(
@@ -505,6 +778,19 @@ class GoalStore:
             if organic:
                 t["done_rate"] = round(t["done"] / organic, 3)
 
+            # 终态时的里程碑分布（获客漏斗「死在哪一段」读数；cancelled 不计——
+            # 运营叫停不代表客户走到哪）
+            rows = self._conn.execute(
+                "SELECT template, milestone_idx, COUNT(*) AS n FROM goals"
+                " WHERE status IN ('done','failed','expired') AND done_at >= ?"
+                " GROUP BY template, milestone_idx", (s,),
+            ).fetchall()
+            for r in rows:
+                bt = out["by_template"].get(str(r["template"]))
+                if bt is not None:
+                    dist = bt.setdefault("milestone_dist", {})
+                    dist[str(int(r["milestone_idx"] or 0))] = int(r["n"])
+
             rows = self._conn.execute(
                 "SELECT status, COUNT(*) AS n FROM goal_actions"
                 " WHERE created_at >= ? GROUP BY status", (s,),
@@ -537,6 +823,95 @@ class GoalStore:
                               / 86400.0, 1) if float(r["done_at"] or 0) > 0 else None,
                 "done_at": float(r["done_at"] or 0),
             } for r in rows]
+
+            # 成交单按 plan 拆分（order-hook/order_pull 结算的 result 形如
+            # ``order:<plan>:<order_id>``；手动「标成交」result=manual:agent
+            # 刻意不计——这里读的是「哪个 SKU 在聊天里真卖动了」，反哺
+            # site_catalog 的 pains→产品映射与主推序）
+            rows = self._conn.execute(
+                "SELECT result FROM goals WHERE status = 'done'"
+                " AND done_at >= ? AND result LIKE 'order:%'", (s,),
+            ).fetchall()
+            by_plan: Dict[str, int] = {}
+            for r in rows:
+                parts = str(r["result"] or "").split(":", 2)
+                plan = (parts[1] if len(parts) > 1 else "").strip() or "-"
+                by_plan[plan] = by_plan.get(plan, 0) + 1
+            out["orders_by_plan"] = by_plan
+            out["orders_settled"] = sum(by_plan.values())
+
+            # 流失原因分布（P8）：画像里 lifecycle 采到的 churn_reason 按
+            # 分类标签计数（值形如「太贵、没用起来」→ 逐标签拆）——定价/
+            # 引导策略的直接读数（「都嫌贵」调价，「都没用起来」补 onboarding）。
+            # 窗口按槽位自己的 ts（行级 updated_at 会被别的槽位刷新）。
+            rows = self._conn.execute(
+                "SELECT fields FROM customer_profiles"
+                " WHERE fields LIKE '%churn_reason%'",
+            ).fetchall()
+            reasons: Dict[str, int] = {}
+            for r in rows:
+                try:
+                    cell = (json.loads(r["fields"] or "{}")
+                            .get("churn_reason") or {})
+                except Exception:
+                    continue
+                if not isinstance(cell, dict):
+                    continue
+                if float(cell.get("ts") or 0.0) < s:
+                    continue
+                for label in str(cell.get("v") or "").split("、"):
+                    lab = label.strip()
+                    if lab:
+                        reasons[lab] = reasons.get(lab, 0) + 1
+            out["churn_reasons"] = dict(sorted(
+                reasons.items(), key=lambda kv: -kv[1]))
+
+            # P12 流失×转化：生命周期终态目标 JOIN 画像主因——看「嫌贵的
+            # 有没有买回来 / 没用起来的有没有续上」。won 只认 order:/manual:
+            # （winback done=回话≠成交，计入 done 但不进 won）。
+            rows = self._conn.execute(
+                "SELECT g.status, g.created_by, g.result, cp.fields"
+                " FROM goals g"
+                " LEFT JOIN customer_profiles cp"
+                " ON cp.platform = g.platform AND cp.chat_key = g.chat_key"
+                " WHERE g.created_by IN"
+                " ('retention_auto','winback_auto','reconvert_auto')"
+                " AND g.status IN ('done','failed','expired')"
+                " AND g.done_at >= ?",
+                (s,),
+            ).fetchall()
+            outcomes: Dict[str, Dict[str, Any]] = {}
+            for r in rows:
+                primary = "(未采)"
+                try:
+                    cell = (json.loads(r["fields"] or "{}")
+                            .get("churn_reason") or {})
+                    if isinstance(cell, dict):
+                        raw = str(cell.get("v") or "").split("、", 1)[0].strip()
+                        if raw:
+                            primary = raw
+                except Exception:
+                    pass
+                bucket = outcomes.setdefault(primary, {
+                    "n": 0, "done": 0, "failed": 0, "expired": 0,
+                    "won": 0, "done_rate": 0.0, "won_rate": 0.0,
+                })
+                st = str(r["status"] or "")
+                bucket["n"] += 1
+                if st in bucket:
+                    bucket[st] += 1
+                res = str(r["result"] or "")
+                if st == "done" and (res.startswith("order:")
+                                     or res.startswith("manual:")):
+                    bucket["won"] += 1
+            for b in outcomes.values():
+                organic = int(b["done"]) + int(b["failed"]) + int(b["expired"])
+                if organic:
+                    b["done_rate"] = round(int(b["done"]) / organic, 3)
+                    b["won_rate"] = round(int(b["won"]) / organic, 3)
+            out["churn_outcomes"] = dict(sorted(
+                outcomes.items(),
+                key=lambda kv: (-int(kv[1].get("n") or 0), kv[0])))
 
             r = self._conn.execute(
                 "SELECT COUNT(*) FROM goals WHERE status = 'active'").fetchone()

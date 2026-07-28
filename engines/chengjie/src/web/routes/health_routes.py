@@ -209,7 +209,8 @@ def register_health_routes(app, ctx) -> None:
 
             # 3. 未处理危机事件（R9c：接 crisis_audit 落库数据）
             try:
-                sm = getattr(telegram_client, "skill_manager", None) if telegram_client else None
+                from src.web.web_context import resolve_skill_manager
+                sm = resolve_skill_manager(telegram_client, app)
                 if sm:
                     unhandled = sm.crisis_count_for_admin(only_unhandled=True)
                     if unhandled > 0:
@@ -234,7 +235,8 @@ def register_health_routes(app, ctx) -> None:
             # 4. AI 推断低采纳（R18：采纳率持续偏低=推断在产噪声，提示调阈值）
             #    R19：窗口/样本/采纳率阈值经 memory.adoption_alert 可配（默认 30/10/0.30）
             try:
-                sm = getattr(telegram_client, "skill_manager", None) if telegram_client else None
+                from src.web.web_context import resolve_skill_manager
+                sm = resolve_skill_manager(telegram_client, app)
                 _mcfg = getattr(config_manager, "config", None) or {}
                 _acfg = ((_mcfg.get("memory") or {}).get("adoption_alert") or {}) \
                     if isinstance(_mcfg, dict) else {}

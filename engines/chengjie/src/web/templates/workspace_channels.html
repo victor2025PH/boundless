@@ -405,10 +405,10 @@ async function chcLoadTgMainStatus(){
     rail.setAttribute('data-status', st);
     if(badge){
       badge.textContent = st === 'connected'
-        ? (window.T('chc_acct_badge_main_ok') || '主会话在线')
+        ? window.T('chc_acct_badge_main_ok')
         : (st === 'connecting'
-          ? (window.T('chc_acct_badge_main_connecting') || '主会话连接中')
-          : (window.T('chc_acct_badge_main_off') || '主会话离线'));
+          ? window.T('chc_acct_badge_main_connecting')
+          : window.T('chc_acct_badge_main_off'));
     }
     if(ops && (st === 'offline' || st === 'connecting')) ops.open = true;
   }catch(_e){ /* 旁路 */ }

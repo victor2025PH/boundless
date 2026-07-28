@@ -456,6 +456,26 @@ def register_ops_overview_routes(app, ctx) -> None:
             logger.debug("gpu-watermark 探测失败（已忽略）", exc_info=True)
             return {"ok": True, "enabled": False, "hosts": []}
 
+    @app.get("/api/admin/duel-bench")
+    async def api_duel_bench(request: Request, days: int = 14):
+        """AI 对练台状态：夜跑最新摘要 + LAST_RUN + 产品/裁判两条趋势线。
+
+        纯读盘（``logs/duel/*`` + ``logs/eval/duel_semantic_trend.jsonl``），
+        缺文件 → ``active:false``，前端可整卡隐藏。不依赖实例重启。
+        """
+        api_auth(request)
+        try:
+            from src.utils.duel_bench_status import build_status
+            # 夜跑脚本把产物写在引擎代码根 logs/duel（与本模块 DEFAULT_ROOT 同树），
+            # 不要用实例 data 根的 config_path 推——那会指到 chengjie-instances。
+            return build_status(None, days=int(days or 14))
+        except Exception:
+            logger.debug("duel-bench 状态读取失败（已忽略）", exc_info=True)
+            return {"ok": True, "active": False, "latest": None,
+                    "last_run": None, "over_budget": False,
+                    "nightly": {"rows": [], "direction": "unknown", "points": 0},
+                    "semantic": {"rows": [], "points": 0, "last_passed": None}}
+
     @app.get("/api/admin/media-consistency")
     async def api_media_consistency(request: Request, force: int = 0):
         """图文一致性观测（P1）：投诉分类计数 + 点名场景供需缺口报告。
@@ -481,11 +501,28 @@ def register_ops_overview_routes(app, ctx) -> None:
                 "by_kind": dict(snap.get("complaints_by_kind") or {}),
                 "by_persona": dict(snap.get("complaints_by_persona") or {}),
             }
+            # P2 自动补货计划状态（默认关=全零；开了才有读数）。
+            restock = {"enabled": False, "pending": 0, "done": 0}
+            try:
+                from src.companion.media_restock import (load_plan,
+                                                         pending_items,
+                                                         resolve_restock_cfg)
+                rc = resolve_restock_cfg(scfg)
+                restock["enabled"] = bool(rc["enabled"])
+                plan = load_plan(rc["plan_path"])
+                items = plan.get("items") or []
+                restock["pending"] = len(pending_items(plan))
+                restock["done"] = sum(
+                    1 for it in items
+                    if isinstance(it, dict) and str(it.get("status")) == "done")
+            except Exception:
+                pass
             active = bool(
                 gap.get("active") or complaints["total"]
-                or snap.get("scene_demand") or snap.get("scene_unmet"))
+                or snap.get("scene_demand") or snap.get("scene_unmet")
+                or restock["pending"])
             return {"ok": True, "active": active,
-                    "complaints": complaints, "gap": gap}
+                    "complaints": complaints, "gap": gap, "restock": restock}
         except Exception:
             logger.debug("media-consistency 汇总失败（已忽略）", exc_info=True)
             return {"ok": True, "active": False,
@@ -796,8 +833,8 @@ def register_ops_overview_routes(app, ctx) -> None:
 
         key_stats: list = []
         try:
-            sm = (getattr(telegram_client, "skill_manager", None)
-                  if telegram_client else None)
+            from src.web.web_context import resolve_skill_manager
+            sm = resolve_skill_manager(telegram_client, app)
             store = getattr(sm, "_episodic_store", None) if sm else None
             if store is not None and hasattr(store, "list_key_stats"):
                 key_stats = store.list_key_stats()

@@ -171,6 +171,22 @@ def read_role_counts(shows: Any = None, *, window_days: int = 0,
     return rows if isinstance(rows, dict) else {}
 
 
+def read_prior_slots(shows: Any = None, *, group_key: str = "",
+                     platform: str = "telegram",
+                     degraded: Optional[List[str]] = None) -> Dict[str, str]:
+    """``{号: 它在**这个群**最近一次真发时演的角色槽}``——群内角色粘性。
+
+    没有目标群（全局看板）时恒为空：粘性是「对这一个群的观众别翻脸」的语义，
+    离开具体的群没有意义。老 store 没这方法 → 空表 ＝ 无行为变化。
+    """
+    gk = str(group_key or "")
+    if not gk:
+        return {}
+    rows = _call(shows, "prior_slots", degraded, "shows",
+                 group_key=gk, platform=platform)
+    return rows if isinstance(rows, dict) else {}
+
+
 def read_last_spoke(shows: Any = None, inbox: Any = None, *, group_key: str = "",
                     platform: str = "telegram",
                     degraded: Optional[List[str]] = None) -> Dict[str, float]:
@@ -234,6 +250,8 @@ class ShowContext:
     speech: Dict[str, List[str]] = field(default_factory=dict)
     co_performance: Dict[Tuple[str, str], int] = field(default_factory=dict)
     role_counts: Dict[Tuple[str, str], int] = field(default_factory=dict)
+    #: ``{号: 上次在目标群演的槽}``——群内角色粘性（无目标群时为空）。
+    prior_slots: Dict[str, str] = field(default_factory=dict)
     last_spoke: Dict[str, float] = field(default_factory=dict)
     budget: Dict[str, Any] = field(default_factory=dict)
     advice: Tuple[str, ...] = ()
@@ -283,6 +301,7 @@ class ShowContext:
                                                  allow_over=allow_over)["effective"]),
             "role_counts": dict(self.role_counts),
             "role_limit": int(self.role_limit),
+            "prior_slots": dict(self.prior_slots),
             "seed": str(seed or ""),
         }
 
@@ -394,6 +413,8 @@ def read_show_context(
         speech=speech,
         co_performance=co_performance(speech) if speech else {},
         role_counts=roles,
+        prior_slots=read_prior_slots(shows, group_key=group_key,
+                                     platform=platform, degraded=degraded),
         last_spoke=last,
         budget=budget,
         advice=tuple(advice),

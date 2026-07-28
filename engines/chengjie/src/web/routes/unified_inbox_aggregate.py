@@ -29,26 +29,56 @@ logger = logging.getLogger(__name__)
 _INBOX_ADAPTERS = default_inbox_adapters()
 
 
+def _app_config_dict(request: Request) -> Dict[str, Any]:
+    """读 config_manager.config（缺省 {}）——供 resolve_automation_mode 对齐全局档位。"""
+    try:
+        cm = getattr(request.app.state, "config_manager", None)
+        cfg = getattr(cm, "config", None) if cm is not None else None
+        return cfg if isinstance(cfg, dict) else {}
+    except Exception:
+        return {}
+
+
 def _read_automation_mode(request: Request, conversation_id: str) -> str:
-    """优先读持久层，回落进程内 dict（修掉「重启即丢」生产阻断点）。"""
+    """有效档位：显式设置 > 全局 auto_draft（与 A 线 / protocol 同源）。
+
+    旧实现走 ``get_automation_mode``（无记录回落 review）→ UI 显示「草稿我审」
+    而 A 线按全局 auto_ai 直发，坐席误以为已停自动。
+    """
     store = _inbox_store(request)
     if store is not None:
         try:
-            return store.get_automation_mode(conversation_id)
+            from src.inbox.automation_mode import resolve_automation_mode
+            return resolve_automation_mode(
+                store, conversation_id, _app_config_dict(request),
+            )
         except Exception:
-            logger.debug("inbox_store.get_automation_mode 失败，回落进程内 dict", exc_info=True)
+            logger.debug("resolve_automation_mode 失败，回落进程内 dict", exc_info=True)
     return _automation_store(request).get(conversation_id, "review")
 
 
-def _write_automation_mode(request: Request, conversation_id: str, mode: str) -> None:
+def _write_automation_mode(request: Request, conversation_id: str, mode: str) -> int:
+    """写入档位；若降出 auto_ai，立即取消该会话待投递 L2 草稿。返回取消条数。"""
+    cancelled = 0
     store = _inbox_store(request)
     if store is not None:
         try:
+            prev = None
+            try:
+                prev = store.get_automation_mode_if_set(conversation_id)
+            except Exception:
+                prev = None
             store.set_automation_mode(conversation_id, mode)
-            return
+            from src.inbox.automation_mode import allows_direct_autosend
+            if allows_direct_autosend(prev or "") and not allows_direct_autosend(mode):
+                if hasattr(store, "cancel_pending_l2_drafts"):
+                    cancelled = int(store.cancel_pending_l2_drafts(
+                        conversation_id, decided_by="mode_downgraded") or 0)
+            return cancelled
         except Exception:
             logger.debug("inbox_store.set_automation_mode 失败，回落进程内 dict", exc_info=True)
     _automation_store(request)[conversation_id] = mode
+    return cancelled
 
 
 def _ingest_best_effort(request: Request, chats: List[Dict[str, Any]]) -> None:

@@ -20,7 +20,10 @@ base.html 的完整/简洁两种模式、命令面板(Ctrl+K)页面项、渠道�
 - feature  = 授权档位功能名(licensing/feature_gate.py 注册表;gate 默认关 = 全量渲染
              零变化;P3 起锁定项渲染为「锁标 + 跳会员中心」升级引导(locked=True 注解,
              base.html nav_item 宏消费);命令面板仍直接隐藏锁定项(跳转列表无升级语义)
-- cmd_keys = 命令面板搜索别名(含旧菜单名,保证改名后老用户仍搜得到)
+- cmd_keys = 命令面板搜索别名(含旧菜单名/同义词,保证改名或术语分裂后老用户仍搜得到)
+- simple   = 命令面板「简洁模式」可见性覆写(默认按是否在 SIMPLE_CORE/SIMPLE_MORE 推导;
+             CMD_EXTRA_ITEMS 的项不在简洁清单里 → 不显式声明 simple=True 就只在完整
+             模式的面板里出现,而全角色默认档位是简洁模式,见 web_user_store)
 """
 
 _STROKE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">%s</svg>'
@@ -181,6 +184,16 @@ CMD_EXTRA_ITEMS = {
                       cmd_keys="templates 模板 话术"),
     "import": dict(key="import", path="/import", icon="package",
                    label_key="import_page", label_zh="导入配置", cmd_keys="import 导入"),
+    # 坐席「工作目标」深链(/workspace?card=goal → 自动切「客户&关系」tab + 展开目标卡)。
+    # 只进命令面板不进侧栏:侧栏已有 workspace 行,同一目的页不重复占位。
+    # 术语三分裂(坐席端=工作目标 / 配置与 ops=营销目标 / 运营口语=工作计划)全塞 cmd_keys
+    # ——面板按 name+keys 子串搜,搜任一说法都命中这一个入口。
+    # simple=True 必须显式声明:全角色默认简洁模式,否则坐席根本搜不到(本项要解的正是「找不到」)。
+    "work_goal": dict(key="", path="/workspace?card=goal", icon="target",
+                      simple=True, label_key="nav_work_goal",
+                      label_zh="工作目标（工作计划）", help="work_goal",
+                      cmd_keys="工作目标 工作计划 营销目标 目标 计划 推进 里程碑 今日拍 "
+                               "goal goals plan milestone agenda"),
 }
 
 DOMAIN_SENTINEL = "__domain_pages__"
@@ -217,7 +230,11 @@ def _resolve(ids):
 
 
 def _cmd_items():
-    """命令面板页面项:完整模式顺序 + 简洁专属项 + 面板专属页。"""
+    """命令面板页面项:完整模式顺序 + 简洁专属项 + 面板专属页。
+
+    simple 默认按简洁清单推导,项内显式声明 simple 则以其为准(面板专属页无侧栏行,
+    只能这样进简洁模式的面板)。
+    """
     simple_ids = set(SIMPLE_CORE) | set(SIMPLE_MORE)
     seen, out = set(), []
 
@@ -226,7 +243,7 @@ def _cmd_items():
             return
         seen.add(item_id)
         d = dict(item)
-        d["simple"] = item_id in simple_ids
+        d["simple"] = bool(item.get("simple", item_id in simple_ids))
         out.append(d)
 
     for grp in NAV_GROUPS_FULL:

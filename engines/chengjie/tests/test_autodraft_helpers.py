@@ -125,3 +125,75 @@ def test_setup_auto_draft_disabled_skips():
     setup_auto_draft(a, MagicMock(), MagicMock())
     a.inbox_store.register_new_inbound_cb.assert_not_called()
     a.logger.info.assert_called()
+
+
+def _companion_app_cfg():
+    return {
+        "inbox": {"auto_draft": {"automation_mode": "auto_ai"}},
+        "platform_login": {"telegram": {"companion_runtime": True}},
+    }
+
+
+def _orch_owns_tg():
+    orch = MagicMock()
+    orch.owns.side_effect = (
+        lambda p, a: str(p).lower() == "telegram"
+    )
+    return orch
+
+
+def test_companion_auto_ai_suppresses_system_z():
+    """companion 持号 + auto_ai → System Z 让位（防与 A 线双发）。"""
+    ds = MagicMock()
+    store = MagicMock()
+    store.get_automation_mode_if_set.return_value = "auto_ai"
+    cb = make_auto_draft_cb(
+        _cfg(mode="auto_ai"), ds, store, MagicMock(), MagicMock(),
+        MagicMock(), app_config=_companion_app_cfg(),
+    )
+    with patch(
+        "src.integrations.account_orchestrator.get_orchestrator_if_running",
+        return_value=_orch_owns_tg(),
+    ):
+        cb({"platform": "telegram", "account_id": "katie",
+            "conversation_id": "telegram:katie:1"}, "hello there")
+    ds.auto_generate_draft.assert_not_called()
+
+
+def test_companion_review_allows_system_z_draft():
+    """companion 持号但坐席切「AI草稿我审」→ System Z 须拟稿（A 线已让位）。"""
+    ds = MagicMock()
+    ds.auto_generate_draft.return_value = "d1"
+    store = MagicMock()
+    store.get_automation_mode_if_set.return_value = "review"
+    cb = make_auto_draft_cb(
+        _cfg(mode="auto_ai"), ds, store, MagicMock(), MagicMock(),
+        MagicMock(), app_config=_companion_app_cfg(),
+    )
+    with patch(
+        "src.integrations.account_orchestrator.get_orchestrator_if_running",
+        return_value=_orch_owns_tg(),
+    ):
+        cb({"platform": "telegram", "account_id": "katie",
+            "conversation_id": "telegram:katie:1"}, "hello there")
+    ds.auto_generate_draft.assert_called_once()
+    _, kw = ds.auto_generate_draft.call_args
+    assert kw["automation_mode"] == "review"
+
+
+def test_companion_manual_still_silent():
+    """companion 持号 + 手动 → 不拟稿不直发。"""
+    ds = MagicMock()
+    store = MagicMock()
+    store.get_automation_mode_if_set.return_value = "manual"
+    cb = make_auto_draft_cb(
+        _cfg(mode="auto_ai"), ds, store, MagicMock(), MagicMock(),
+        MagicMock(), app_config=_companion_app_cfg(),
+    )
+    with patch(
+        "src.integrations.account_orchestrator.get_orchestrator_if_running",
+        return_value=_orch_owns_tg(),
+    ):
+        cb({"platform": "telegram", "account_id": "katie",
+            "conversation_id": "telegram:katie:1"}, "hello there")
+    ds.auto_generate_draft.assert_not_called()

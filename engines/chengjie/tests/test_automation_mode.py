@@ -3,8 +3,10 @@
 from unittest.mock import MagicMock
 
 from src.inbox.automation_mode import (
+    allows_direct_autosend,
     bootstrap_enabled_from_config,
     global_automation_mode_from_config,
+    human_gate_skip_reason,
     maybe_bootstrap_automation_mode,
     resolve_automation_mode,
 )
@@ -65,3 +67,22 @@ def test_maybe_bootstrap_records_stats():
     snap = metrics_snapshot()
     assert snap["bootstrap_total"] >= 1
     assert snap["last"]["platform"] == "messenger"
+
+
+def test_allows_direct_autosend_only_auto_ai():
+    """坐席「手动/草稿我审」必须停 A 线直发与主动触达。"""
+    assert allows_direct_autosend("auto_ai") is True
+    assert allows_direct_autosend("AUTO_AI") is True
+    assert allows_direct_autosend("manual") is False
+    assert allows_direct_autosend("review") is False
+    assert allows_direct_autosend("multi_choice") is False
+    assert allows_direct_autosend("") is False
+    assert allows_direct_autosend(None) is False
+
+
+def test_human_gate_skip_reason():
+    assert human_gate_skip_reason("manual") == "inbox_manual"
+    assert human_gate_skip_reason("review") == "inbox_human_gate"
+    assert human_gate_skip_reason("multi_choice") == "inbox_human_gate"
+    assert human_gate_skip_reason("auto_ai") == ""
+    assert human_gate_skip_reason("") == ""

@@ -242,6 +242,58 @@ async def test_worker_send_returns_real_msg_id(monkeypatch):
     assert res2 == {"delivered": True, "message_id": ""}
 
 
+async def test_invite_to_group_maps_platform_errors_to_actionable_kinds():
+    """排班补位：拉群回执按平台语义归类——privacy/admin_required/already 各有
+    明确下一步，绝不把失败静默装成功（P3-5「人工拉群无回执」的修复面）。"""
+    from src.integrations.telegram_companion_worker import TelegramCompanionWorker
+
+    class _Inner:
+        def __init__(self, exc=None):
+            self.exc = exc
+            self.calls = []
+
+        async def add_chat_members(self, chat, user):
+            self.calls.append((chat, user))
+            if self.exc is not None:
+                raise self.exc
+
+    class _Cli:
+        def __init__(self, exc=None):
+            self.client = _Inner(exc)
+
+    w = TelegramCompanionWorker({"account_id": "kt", "meta": {}}, {})
+
+    w.client = _Cli()
+    ok = await w.invite_to_group("-1003142518418", "@whigger96")
+    assert ok == {"ok": True, "kind": "invited", "error": ""}
+    assert w.client.client.calls == [(-1003142518418, "whigger96")]  # int 群 + 去@
+
+    class UserAlreadyParticipant(Exception):
+        pass
+
+    w.client = _Cli(UserAlreadyParticipant("already in"))
+    r = await w.invite_to_group("-100g", "77")
+    assert r["ok"] is True and r["kind"] == "already"   # 幂等成功
+
+    class UserPrivacyRestricted(Exception):
+        pass
+
+    w.client = _Cli(UserPrivacyRestricted("privacy"))
+    r = await w.invite_to_group("-100g", "77")
+    assert r["ok"] is False and r["kind"] == "privacy"
+
+    class ChatAdminRequired(Exception):
+        pass
+
+    w.client = _Cli(ChatAdminRequired("no right"))
+    r = await w.invite_to_group("-100g", "77")
+    assert r["ok"] is False and r["kind"] == "admin_required"
+
+    w.client = None
+    r = await w.invite_to_group("-100g", "77")
+    assert r["ok"] is False and r["kind"] == "offline"
+
+
 # ── A 线 initialize/start 改造 ───────────────────────────────────────────────
 
 async def test_initialize_session_string_skips_phone(monkeypatch):

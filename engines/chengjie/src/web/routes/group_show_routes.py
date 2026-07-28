@@ -835,6 +835,63 @@ def register_group_show_routes(app, ctx) -> None:
         return {"ok": True, "group": group, "account": account,
                 "done": done is not False}
 
+    @app.post("/api/group-show/attendance/invite")
+    async def api_group_show_attendance_invite(
+            request: Request, _=Depends(api_write("manage_ops"))):
+        """排班补位：让**已在群里的受管号**把候补号拉进群（真实平台动作）。
+
+        与 ``/joined``（只记账）相对，这是「排班表 → 群成员」的执行端。P3-5 灰度
+        实锤的缺口：人工拉群没有回执（隐私弹窗/加错群全静默），台账标了「已进群」
+        实际没进 → 开演首拍才炸。这里给一条**有回执**的程序化路径，成功即顺手记
+        进出席台账（source=invite）。
+
+        body: ``{group: str, inviter: str, invitee: str, platform?: str}``
+        —— invitee 可以是 user_id 或 @username（username 可绕开邀请方 peer
+        缓存冷启动）。回执 ``kind``：``invited/already`` 成功；``privacy`` =
+        对方隐私禁止被拉（发链接让 TA 自己进）；``admin_required`` = 本号无
+        邀请权限；其余如实透传，绝不静默装成功。
+        """
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        group = str(body.get("group") or "").strip()
+        inviter = str(body.get("inviter") or "").strip()
+        invitee = str(body.get("invitee") or "").strip()
+        platform = str(body.get("platform") or "telegram").strip() or "telegram"
+        if not group or not inviter or not invitee:
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="group/inviter/invitee"))
+        try:
+            from src.integrations.account_orchestrator import (
+                get_orchestrator_if_running,
+            )
+            orch = get_orchestrator_if_running()
+        except Exception:  # noqa: BLE001
+            orch = None
+        fn = getattr(orch, "invite_to_group", None) if orch is not None else None
+        if fn is None:
+            raise HTTPException(503, tr(request, "err.gs.unavailable"))
+        res = await fn(platform, inviter, group, invitee)
+        res = res if isinstance(res, dict) else {"ok": bool(res)}
+        if res.get("ok"):
+            # 台账记 account_id（排班/共现全按 account_id 对账）；用 @username 邀请时
+            # 调用方应同时给 invitee_account，缺省退回去掉 @ 的引用值。
+            ledger_id = str(body.get("invitee_account") or "").strip() \
+                or invitee.lstrip("@")
+            st = _store(config_manager)
+            if st is not None:
+                try:
+                    st.record_membership(group, ledger_id, source="invite")
+                except Exception:  # noqa: BLE001
+                    logger.debug("[group-show] 邀请后记台账失败", exc_info=True)
+        logger.info("[group-show] attendance invite %s -> %s @ %s: %s",
+                    inviter, invitee, group, res)
+        return {"ok": bool(res.get("ok")), "kind": str(res.get("kind") or ""),
+                "error": str(res.get("error") or ""), "group": group,
+                "inviter": inviter, "invitee": invitee}
+
     @app.get("/api/group-show/exposure")
     async def api_group_show_exposure(request: Request, window_days: int = 0):
         """成员共现 vs 演出共现双读数 + 每场开口人数预算。
@@ -1077,6 +1134,29 @@ def register_group_show_routes(app, ctx) -> None:
                 qh = live_quiet_hours(diag_cfg)
             except Exception:  # noqa: BLE001
                 qh = None
+            # peer 体检回显：逐演员查「能不能对这个群开口」（只读零发言）。
+            # 「号没进群/被归档」在这里就点名，而不是真发第一拍才炸——
+            # 2026-07-27 双号灰度连烧三场即此盲区。
+            peer_check: Dict[str, Any] = {}
+            if plan.casting is not None:
+                try:
+                    from src.integrations.account_orchestrator import (
+                        get_orchestrator_if_running,
+                    )
+                    from src.companion.group_show.live import preflight_peers
+                    _orch = get_orchestrator_if_running()
+                    if _orch is not None:
+                        pf = await preflight_peers(
+                            _orch, plan.casting, platform=platform,
+                            group_key=group_key)
+                        peer_check = {
+                            "checked": pf.get("checked", 0),
+                            "unreachable": list(pf.get("unreachable") or ()),
+                            "ok": bool(pf.get("ok", True)),
+                        }
+                except Exception:  # noqa: BLE001 —— 体检失败不挡体检报告本身
+                    logger.debug("[group-show] check_only peer 体检失败",
+                                 exc_info=True)
             return {
                 "ok": True, "check_only": True,
                 "playbook_id": pid, "group_key": group_key,
@@ -1089,6 +1169,7 @@ def register_group_show_routes(app, ctx) -> None:
                 "quiet_hours": list(qh) if qh is not None else None,
                 "warnings": list(plan.warnings),
                 "actors": len(actors), "casting": casting_view,
+                "peer_check": peer_check,
                 "inflight": _inflight_sid(group_key),
             }
 

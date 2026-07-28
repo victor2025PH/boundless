@@ -317,3 +317,27 @@ def test_assemble_license_absent_defaults_empty():
     assert ov["kpis"]["license_included_chars"] == 0
     assert ov["kpis"]["license_remaining_chars"] is None
     assert ov["sections"]["license"] == {}
+
+
+# ── J1：「📄 人设导入」卡的长传记检索区（入库≠被用上，命中率才是真读数） ──────
+
+def test_persona_import_card_renders_bio_retrieval_region():
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1]
+           / "src" / "web" / "templates" / "ops_overview.html").read_text(
+               encoding="utf-8")
+    assert 'id="personaBioRetrieval"' in src
+    assert "_pbRetrievalHtml" in src
+    assert "pi.bio_retrieval" in src           # 复用既有 metrics 拉取，不另发请求
+
+
+def test_persona_import_bio_retrieval_i18n_keys_bilingual():
+    from src.web.i18n_packs.ops_overview_page import EN, ZH
+
+    keys = ("ov2_pi_bio_avg_hits", "ov2_pi_bio_embed_fail",
+            "ov2_pi_bio_embed_warn", "ov2_pi_bio_empty", "ov2_pi_bio_hint",
+            "ov2_pi_bio_hit_rate", "ov2_pi_bio_queries", "ov2_pi_bio_title")
+    for k in keys:
+        assert ZH.get(k), k
+        assert EN.get(k), k

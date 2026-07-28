@@ -709,8 +709,13 @@
 /* 会话行「谁在处理」微标（右侧 meta 列，与未读点/SLA 同列） */
 .conv-handler{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:16px;padding:0 4px;border-radius:8px;font-size:10px;font-weight:800;line-height:1;border:1px solid transparent;}
 .conv-handler.h-ai{color:var(--accent);border-color:rgba(59,130,246,.45);background:rgba(59,130,246,.10);}
+.conv-handler.h-review{color:#b45309;border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.12);}
+.conv-handler.h-manual{color:var(--text-sub);border-color:var(--border);background:var(--bg-soft);}
 .conv-handler.h-me{color:var(--tk-ok-ink);border-color:rgba(16,185,129,.45);background:rgba(16,185,129,.10);}
 .conv-handler.h-other{color:var(--text-sub);border-color:var(--border);background:var(--bg-soft);}
+.standby-bulk-btn{border:1px solid var(--border);background:var(--bg-soft);color:var(--text-sub);font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;cursor:pointer;margin-top:2px;}
+.standby-bulk-btn:hover{background:rgba(245,158,11,.12);color:#b45309;border-color:rgba(245,158,11,.45);}
+.standby-bulk-btn:disabled{opacity:.5;cursor:progress;}
 
 /* AI 草稿面板 (内嵌式，底部浮动可折叠) */
 .draft-panel{background:var(--bg-soft);border-top:1px solid #dbeafe;padding:8px 16px;max-height:180px;overflow-y:auto;display:none;}
@@ -799,6 +804,26 @@
 .cp-hero-rel .hr-ic{display:inline-flex;color:var(--accent);opacity:.9;}
 .cp-hero-rel .hr-stage{font-weight:700;color:var(--accent);}
 .cp-hero-rel .hr-next{color:var(--text-tiny);}
+/* A2: 英雄卡工作目标摘要行（与 .cp-hero-rel 同款紧凑可点） */
+.cp-hero-goal{font-size:12px;color:var(--text-sub);padding:0 12px 8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;cursor:pointer;border-radius:6px;margin:0 4px;}
+.cp-hero-goal[hidden]{display:none!important;}
+.cp-hero-goal:hover{background:color-mix(in srgb,var(--accent) 8%,transparent);color:var(--text-main);}
+.cp-hero-goal .hg-ic{display:inline-flex;color:var(--accent);opacity:.9;}
+.cp-hero-goal .hg-main{font-weight:600;color:var(--accent);}
+.cp-hero-goal .hg-fb{color:var(--accent);text-decoration:underline;text-underline-offset:2px;font-weight:600;}
+.cp-hero-goal .hg-hold{color:var(--text-tiny);font-style:italic;}
+.cp-hero-goal.cta{color:var(--text-tiny);font-weight:500;opacity:.85;}
+.cp-hero-goal.cta:hover{opacity:1;color:var(--accent);}
+/* B2: 今日目标清单筛选 chips（列表头可展开区） */
+.goal-agenda-filters{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:6px;padding-top:2px;}
+.goal-agenda-filters[hidden]{display:none!important;}
+.goal-af-chip{font:inherit;font-size:11px;line-height:1.4;padding:3px 9px;border-radius:20px;cursor:pointer;border:1px solid transparent;color:var(--text-sub);background:transparent;transition:all .15s;white-space:nowrap;}
+.goal-af-chip:hover{background:var(--bg-soft);}
+.goal-af-chip.on{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);border-color:color-mix(in srgb,var(--accent) 35%,transparent);font-weight:600;}
+.conv-goal-mark{display:inline-flex;align-items:center;vertical-align:-2px;margin-left:3px;color:var(--accent);opacity:.85;}
+.conv-goal-mark .ui-ic{display:block;}
+:root[data-cp-theme="dark"] .goal-af-chip:not(.on){border-color:rgba(148,163,184,.22);}
+:root[data-cp-theme="dark"] .goal-af-chip:not(.on):hover{background:rgba(148,163,184,.10);}
 /* 把 NBA 组件外框压平融入英雄卡（组件外观由 CSS 变量控制，置为透明/无内边距） */
 .cp-hero-nba{display:block;padding:0 10px 10px;--cp-surface:transparent;--cp-border:transparent;--cp-gap:0;--cp-radius:0;}
 /* 卡内子分区（关系卡并旅程 / 协作卡并注解）：虚线分隔 + 小节标题 */

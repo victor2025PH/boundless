@@ -17,6 +17,7 @@ from src.companion.group_show.ledgers import (
     ShowContext,
     merge_speech,
     read_last_spoke,
+    read_prior_slots,
     read_role_counts,
     read_show_context,
     read_speech,
@@ -30,12 +31,15 @@ from src.companion.group_show.ledgers import (
 class _Shows:
     """场次库替身：记下每次被问到的 ``since``，好断言窗口口径。"""
 
-    def __init__(self, *, speech=None, roles=None, last=None, members=None):
+    def __init__(self, *, speech=None, roles=None, last=None, members=None,
+                 prior=None):
         self._speech = speech or {}
         self._roles = roles or {}
         self._last = last or {}
         self._members = members or {}
+        self._prior = prior or {}
         self.since_seen = []
+        self.prior_groups_seen = []
 
     def performance_ledger(self, *, platform="telegram", since=0.0):
         self.since_seen.append(since)
@@ -43,6 +47,10 @@ class _Shows:
 
     def role_ledger(self, *, platform="telegram", since=0.0):
         return dict(self._roles)
+
+    def prior_slots(self, *, group_key="", platform="telegram"):
+        self.prior_groups_seen.append(group_key)
+        return dict(self._prior)
 
     def last_spoke_at(self, *, platform="telegram", since=0.0, exclude_group=""):
         return {k: v for k, v in self._last.items() if k != exclude_group}
@@ -68,6 +76,9 @@ class _Boom:
         raise RuntimeError("boom")
 
     def role_ledger(self, **kw):
+        raise RuntimeError("boom")
+
+    def prior_slots(self, **kw):
         raise RuntimeError("boom")
 
     def last_spoke_at(self, **kw):
@@ -190,14 +201,38 @@ def test_cast_kwargs_carries_every_gate_at_once():
     ctx = read_show_context(
         _Shows(speech={f"g{i}": ["a", "b"] for i in range(40)},
                roles={("a", "advocate"): 4},
-               members={f"g{i}": ["a", "b"] for i in range(40)}),
+               members={f"g{i}": ["a", "b"] for i in range(40)},
+               prior={"a": "advocate"}),
         None, pool=["a", "b", "c"], group_key="new")
     kwargs = ctx.cast_kwargs(seed="new")
     assert set(kwargs) == {"co_performance", "max_speakers", "role_counts",
-                           "role_limit", "seed"}
+                           "role_limit", "prior_slots", "seed"}
     assert kwargs["co_performance"][("a", "b")] == 40
     assert kwargs["role_counts"] == {("a", "advocate"): 4}
+    assert kwargs["prior_slots"] == {"a": "advocate"}
     assert kwargs["role_limit"] > 0 and kwargs["seed"] == "new"
+
+
+def test_prior_slots_are_asked_for_the_target_group_only():
+    """粘性是「对这个群的观众别翻脸」——问账必须带目标群，全局看板问不出粘性。"""
+    shows = _Shows(prior={"a": "advocate"})
+    ctx = read_show_context(shows, None, pool=["a"], group_key="g7")
+    assert ctx.prior_slots == {"a": "advocate"}
+    assert shows.prior_groups_seen == ["g7"]
+
+
+def test_prior_slots_stay_empty_without_a_target_group():
+    shows = _Shows(prior={"a": "advocate"})
+    ctx = read_show_context(shows, None, pool=["a"])
+    assert ctx.prior_slots == {}
+    assert shows.prior_groups_seen == [], "没有目标群就不该去问这本账"
+
+
+def test_an_old_store_without_the_prior_ledger_is_not_an_incident():
+    """缺方法是老库/降级实例的正常形态：空表即可，不该记降级、更不该拦开演。"""
+    degraded = []
+    assert read_prior_slots(_Old(), group_key="g", degraded=degraded) == {}
+    assert degraded == []
 
 
 def test_role_gate_stays_off_without_a_ledger():

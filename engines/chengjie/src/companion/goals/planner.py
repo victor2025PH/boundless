@@ -32,6 +32,16 @@ def day_key(now: Optional[float] = None) -> str:
     return f"{t.tm_year:04d}-{t.tm_mon:02d}-{t.tm_mday:02d}"
 
 
+def effective_rejects(rejected: int, undone: int = 0) -> int:
+    """近窗**有效**驳回数 ＝ 驳回数 − 撤销数（下限 0）。纯函数。
+
+    坐席「撤销驳回」必须真正撤销退避：只把今日拍改回 planned 而不补偿这里的
+    计数，明天照旧被降档 —— 那样的撤销是骗人的。事件台账只增不删（审计要留痕），
+    所以补偿走「同窗口内 ``beat_reject_undone`` 事件数相减」这条路。
+    """
+    return max(0, int(rejected or 0) - int(undone or 0))
+
+
 def plan_beat(
     *,
     template: Dict[str, Any],
@@ -51,8 +61,9 @@ def plan_beat(
             （store.count_engaged_since 提供）。对方一直不回还连着推 = 骚扰，熔断。
         backoff_after: 达到该数 → 退避陪伴日（push none，只陪伴不推进）。
         halt_after: 达到该数 → 完全 hold（连陪伴式的目标块也不注入，彻底让路）。
-        recent_rejects: 坐席近窗驳回今日拍的次数（store.count_events_since
-            ``beat_rejected`` 提供）。人审说「推得不对」是最强的负反馈信号：
+        recent_rejects: 坐席近窗驳回今日拍的**有效**次数（调用方经
+            ``effective_rejects(驳回数, 撤销数)`` 算好再传——撤销过的不算）。
+            人审说「推得不对」是最强的负反馈信号：
             1 次 → 力度封顶 soft（direct 降档）；≥2 次 → 退避陪伴日。
             回流只降不升——坐席采纳不加码，防正反馈螺旋。
     """
@@ -86,4 +97,4 @@ def plan_beat(
     return {"intent": intent, "push_level": push}
 
 
-__all__ = ["NEGATIVE_INTENSITY_HOLD", "day_key", "plan_beat"]
+__all__ = ["NEGATIVE_INTENSITY_HOLD", "day_key", "effective_rejects", "plan_beat"]

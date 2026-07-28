@@ -13,6 +13,10 @@ contextBridge.exposeInMainWorld("shell", {
   // 带 --first-run 启动 → 无视「只弹一次」标记重看首启向导（客服远程协助 / 自己验收用）。
   // 主进程解析 argv 后写进 env，这里同步读出，免得向导为一个布尔值等一次 IPC。
   forceFirstRun: process.env.AITR_FORCE_FIRSTRUN === "1",
+  // 托管版（客户成品：AI 我们预置、按字符卖额度）。true 时首启向导隐藏「AI 配置」
+  // 「后台令牌」等自建概念。main.js 已按 app.isPackaged/config/env 定好并写进 env，
+  // 这里同步暴露给向导（与 forceFirstRun 同款，向导渲染那刻就要用）。
+  managedEdition: process.env.AITR_MANAGED_EDITION === "1",
   getConfig: () => ipcRenderer.invoke("desktop:config"),
   applyWhatsappUa: (args) => ipcRenderer.invoke("desktop:apply-whatsapp-ua", args),
   backendHealth: () => ipcRenderer.invoke("desktop:backend-health"),
@@ -25,6 +29,8 @@ contextBridge.exposeInMainWorld("shell", {
   trialClaim: (body) => ipcRenderer.invoke("desktop:trial-claim", body),
   trialClaimStatus: () => ipcRenderer.invoke("desktop:trial-claim-status"),
   trialBindCode: () => ipcRenderer.invoke("desktop:trial-bind-code"),
+  // 首启漏斗埋点（fire-and-forget；主进程 → 本地后端 → 官网 /api/track）
+  trialFunnel: (body) => ipcRenderer.invoke("desktop:trial-funnel", body),
   // 仅放行客服深链（t.me / wa.me），白名单在主进程侧
   openExternal: (url) => ipcRenderer.invoke("desktop:open-external", url),
   setupTestAi: (body) => ipcRenderer.invoke("desktop:setup-test-ai", body),

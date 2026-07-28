@@ -4,13 +4,20 @@
 - ``GET  /api/goals/templates``        —— 模板库（建目标表单用；含里程碑/参数 schema）
 - ``GET  /api/goals/for-conversation`` —— 会话活跃目标视图（右栏卡；settle-on-read）
 - ``GET  /api/goals/report``           —— 结果闭环聚合（P2：模板×终态成功率/天数/反馈）
+- ``GET  /api/goals/readiness``        —— 开闸就绪度（P10：开关/人设/账号绑定/订单通道）
 - ``POST /api/goals/batch``            —— 批量 campaign（P2：多会话同款目标，逐条护栏）
+- ``GET  /api/goals/profile``          —— 客户画像卡（P1：双轨槽位+填充率+缺口）
+- ``POST /api/goals/profile``          —— 坐席手录画像（覆盖 auto；空串=清槽）
+- ``POST /api/goals/order-hook``       —— 官网订单回流（token 鉴权；按 ref 结算 done）
+- ``GET  /api/goals/agenda``           —— 今日工作清单（P17：把计数变成点名单；
+  ``?names=1`` 时信封顶层附 {conversation_id: 客户展示名} 映射）
 - ``GET  /api/goals``                  —— 目标列表 + 状态聚合（看板；逐条 settle）
 - ``POST /api/goals``                  —— 建目标（viewer 只读拦截；每会话活跃数上限）
 - ``GET  /api/goals/{goal_id}``        —— 详情（视图 + 拍时间线 + 事件台账）
 - ``POST /api/goals/{goal_id}/update`` —— 改字段（title/autonomy/priority/deadline/params）
-- ``POST /api/goals/{goal_id}/status`` —— 生命周期操作（pause/resume/cancel）
-- ``POST /api/goals/{goal_id}/beat/feedback`` —— 坐席采纳/驳回今日拍（P2 回流 planner）
+- ``POST /api/goals/{goal_id}/status`` —— 生命周期操作（pause/resume/cancel/done 手动成交，
+  done 可带可选 ``meta`` 成交归因）
+- ``POST /api/goals/{goal_id}/beat/feedback`` —— 坐席采纳/驳回/撤销今日拍（P2 回流 planner）
 
 口径唯一性：读路径一律经 ``service.refresh_goal``（settle + 当日拍）再出
 ``service.goal_view``——右栏卡、看板、prompt 注入三个消费面读同一份结算结果。
@@ -94,6 +101,37 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         return svc.goal_view(
             res["goal"], res.get("action"), res.get("hold"), lang=lang)
 
+    def _attach_products(view, store, *, lang: str):
+        """catalog 模板的活跃目标 → 附「系统会推什么」预览（坐席人工回复
+        对齐口径用；与 prompt 注入同一套选品纯函数，读数零写入）。"""
+        if not isinstance(view, dict) or not view.get("catalog"):
+            return view
+        try:
+            from src.companion.goals import site_catalog as sc
+            cat = sc.load_catalog(sc.catalog_path(_cfg_root(), _config_path()))
+            prof = store.get_customer_profile(
+                str(view.get("platform") or ""), str(view.get("chat_key") or ""))
+            fields = dict((prof or {}).get("fields") or {})
+            pinned = str((view.get("params") or {}).get("product_id") or "")
+            site = (cat or {}).get("site") or {}
+            en = str(lang).lower().startswith("en")
+            # 与 prompt 注入同口径：近窗成交量做痛点同分裁决（P4 反哺）
+            sold = sc.sold_boost_map(
+                cat, _svc().sold_plan_counts_cached(store))
+            view["products"] = [{
+                "id": str(p.get("id") or ""),
+                "name": str(p.get("name_en" if en else "name_zh")
+                            or p.get("name_zh") or p.get("id") or ""),
+                "pitch": str(p.get("pitch_en" if en else "pitch_zh")
+                             or p.get("pitch_zh") or ""),
+                "price_from": str(p.get("price_from") or ""),
+                "url": sc.product_link(site, p),
+            } for p in sc.pick_products(
+                cat, fields, pinned=pinned, limit=2, sold=sold)]
+        except Exception:   # 目录层软失败：不出产品行即可
+            logger.debug("attach products failed", exc_info=True)
+        return view
+
     # ── 静态路径（先注册）────────────────────────────────────────────────────
     @app.get("/api/goals/templates")
     async def goals_templates(request: Request, _auth=Depends(auth_dep)):
@@ -131,8 +169,10 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 "goal": None,
                 "last": svc.goal_view(last, lang=_lang(request)) if last else None,
             }
-        return {"goal": _refreshed_view(svc, store, goal, lang=_lang(request)),
-                "last": None}
+        lang = _lang(request)
+        view = _attach_products(
+            _refreshed_view(svc, store, goal, lang=lang), store, lang=lang)
+        return {"goal": view, "last": None}
 
     @app.get("/api/goals/report")
     async def goals_report(
@@ -147,6 +187,45 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         report = store.outcome_report(_t.time() - d * 86400.0)
         report["window_days"] = d
         return report
+
+    @app.get("/api/goals/readiness")
+    async def goals_readiness(request: Request, _auth=Depends(auth_dep)):
+        """开闸就绪度（P10）+ 校准建议（P12）。
+
+        总闸/自动建/人设/绑定/目录/订单/留存环一次看清；并附
+        ``calibration``（priority/hints/personas_href）与可选 30 天
+        churn_outcomes 对症提示。goals 关也 200（正是「为什么跑不起来」），
+        不走 ``_require_enabled``。"""
+        from src.companion.goals.calibration import growth_calibration
+        from src.companion.goals.readiness import growth_readiness
+        from src.companion.goals.stats import get_goal_stats
+        snap = growth_readiness(_cfg_root())
+        report = None
+        try:
+            if (snap.get("checks") or {}).get("goals_enabled"):
+                import time as _t
+                report = _store(_svc()).outcome_report(
+                    _t.time() - 30 * 86400.0)
+        except Exception:
+            report = None
+        stats_dump: Dict[str, Any] = {}
+        try:
+            stats_dump = get_goal_stats().dump()
+        except Exception:
+            stats_dump = {}
+        try:
+            snap["calibration"] = growth_calibration(
+                readiness=snap, report=report, stats=stats_dump)
+        except Exception:
+            snap["calibration"] = {
+                "priority": "idle", "hints": [], "focus": "",
+                "personas_href": snap.get("personas_href") or "/personas",
+            }
+        # P16：进程漏斗计数随就绪快照一起出（周审 CLI 单靠本路由即可读全
+        # 「拍/注入/目录/画像/守卫剥离」——workspace metrics 是坐席会话口径，
+        # admin bearer 读不到）。内容为计数+守卫片段，无客户原文。
+        snap["stats"] = stats_dump
+        return snap
 
     @app.post("/api/goals/batch")
     async def goals_batch(
@@ -252,6 +331,235 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 pass
         return {"ok": True, "requested": len(raw_targets),
                 "created": created, "skipped": skipped}
+
+    def _profile_view(svc, pf: str, ck: str, lang: str) -> Dict[str, Any]:
+        """画像视图（GET 与 POST 共用同一形状，前端保存后免二次拉取）。"""
+        from src.companion.goals.profile_slots import (
+            SLOTS,
+            fill_rates,
+            missing_slots,
+        )
+        store = _store(svc)
+        prof = store.get_customer_profile(pf, ck)
+        fields = dict((prof or {}).get("fields") or {})
+        slots = []
+        for s in SLOTS:
+            key = s["key"]
+            cell = fields.get(key) if isinstance(fields.get(key), dict) else {}
+            slots.append({
+                "key": key,
+                "track": s["track"],
+                "label": str(s.get(
+                    "label_en" if lang.startswith("en") else "label_zh") or key),
+                "value": str((cell or {}).get("v") or ""),
+                "src": str((cell or {}).get("src") or ""),
+                "ts": float((cell or {}).get("ts") or 0),
+            })
+        return {
+            "platform": pf, "chat_key": ck,
+            "slots": slots,
+            "fill": fill_rates(fields),
+            "missing_bant": [m["key"] for m in
+                             missing_slots(fields, track="bant", limit=6)],
+            "updated_at": float((prof or {}).get("updated_at") or 0),
+        }
+
+    @app.get("/api/goals/profile")
+    async def goals_profile_get(
+        request: Request,
+        platform: str = "",
+        chat_key: str = "",
+        conversation_id: str = "",
+        _auth=Depends(auth_dep),
+    ):
+        """客户画像卡（P1）：双轨槽位 + 值/来源/时间 + 填充率 + 缺口。
+        坐席右栏「客户」页消费；``conversation_id`` 可替代 platform+chat_key。"""
+        svc = _require_enabled(request)
+        pf = str(platform or "").strip()
+        ck = str(chat_key or "").strip()
+        if not (pf and ck) and conversation_id:
+            pf2, _acct, ck2 = _split_conversation_id(conversation_id)
+            pf, ck = pf or pf2, ck or ck2
+        if not pf or not ck:
+            raise HTTPException(400, tr(request, "err.goals.conversation_required"))
+        return _profile_view(svc, pf, ck, _lang(request))
+
+    @app.post("/api/goals/profile")
+    async def goals_profile_set(
+        request: Request, payload: Dict[str, Any], _auth=Depends(auth_dep)
+    ):
+        """坐席手录画像槽位（overwrite 语义：传值覆盖、传空串清除；
+        未知槽位键忽略）。auto 采集永不覆盖坐席手录，此处反向覆盖一切。
+        返回保存后的完整画像视图（与 GET 同形，免二次拉取）。"""
+        svc = _require_enabled(request)
+        _deny_viewer(request)
+        body = payload or {}
+        pf = str(body.get("platform") or "").strip()
+        ck = str(body.get("chat_key") or "").strip()
+        conv = str(body.get("conversation_id") or "").strip()
+        if not (pf and ck) and conv:
+            pf2, _acct, ck2 = _split_conversation_id(conv)
+            pf, ck = pf or pf2, ck or ck2
+        if not pf or not ck:
+            raise HTTPException(400, tr(request, "err.goals.conversation_required"))
+        fields = body.get("fields")
+        if not isinstance(fields, dict) or not fields:
+            raise HTTPException(400, tr(request, "err.goals.profile_fields_required"))
+        store = _store(svc)
+        store.upsert_customer_profile(
+            pf, ck, fields, source="agent", overwrite=True)
+        view = _profile_view(svc, pf, ck, _lang(request))
+        view["ok"] = True
+        return view
+
+    @app.post("/api/goals/order-hook")
+    async def goals_order_hook(request: Request, payload: Dict[str, Any]):
+        """官网订单回流（P2 成交闭环）：下单页 ``?ref=<conversation_id>`` 提交后
+        官网后端 POST 回本端点 → 按 ref 反查活跃目标 → 自动结算 done。
+
+        **无会话 auth**（外部 webhook）——独立 token 鉴权（``Authorization:
+        Bearer <token>`` / ``X-Goals-Token`` 头 / body.token 三选一，与
+        ``companion.goals.order_hook.token`` 恒时比较）。推荐 Bearer 头：
+        它同时天然通过全站 CSRF 中间件的 Bearer 豁免口（本路径亦已加显式
+        豁免，X-Goals-Token/body 形式同样可达——CSRF 防的是浏览器 ambient
+        session，本端点不认 session，token 即唯一边界）。
+        幂等：同 order_id 已回流过 → 直接返回 dup，不重复结算。
+        没匹配到目标也返回 200（订单本就可能来自非目标流量），只记 stats。
+        """
+        svc = _svc()
+        cfg = svc.resolve_goals_cfg(_cfg_root())
+        hook = cfg.get("order_hook") or {}
+        if not (cfg.get("enabled") and isinstance(hook, dict)
+                and hook.get("enabled")):
+            raise HTTPException(403, tr(request, "err.goals.disabled"))
+        import hmac as _hmac
+        token = str(hook.get("token") or "")
+        auth_h = str(request.headers.get("authorization") or "")
+        bearer = auth_h[7:].strip() if auth_h.startswith("Bearer ") else ""
+        given = str(bearer
+                    or request.headers.get("x-goals-token")
+                    or (payload or {}).get("token") or "")
+        if not token or not given or not _hmac.compare_digest(token, given):
+            raise HTTPException(403, tr(request, "err.goals.bad_hook_token"))
+        body = payload or {}
+        ref = str(body.get("ref") or "").strip()
+        if ref.lower().startswith("chat:"):
+            ref = ref[5:]
+        if not ref:
+            raise HTTPException(400, tr(request, "err.goals.ref_required"))
+        # 结算核心与 order_pull（引擎拉单）共用 service.settle_order_ref 单一入口
+        res = svc.settle_order_ref(
+            _store(svc), ref=ref,
+            order_id=str(body.get("order_id") or ""),
+            plan=str(body.get("plan") or ""),
+            cfg_root=_cfg_root())
+        if not res.get("matched"):
+            return {"ok": True, "matched": False}
+        if res.get("dup"):
+            return {"ok": True, "matched": True,
+                    "goal_id": res.get("goal_id"), "dup": True}
+        if not res.get("updated"):
+            raise HTTPException(500, tr(request, "err.goals.update_failed"))
+        return {"ok": True, "matched": True, "goal_id": res.get("goal_id")}
+
+    def _agenda_peer_names(items) -> Dict[str, str]:
+        """B3 ops 抽屉：把清单行的 conversation_id 批量解析成客户展示名。
+
+        读 inbox 主表 ``get_conversations_for_ids``（一次 IN 批查，不逐行打库），
+        只收非空名（优先 ``display_name``，兼容 ``name``）；无 store／任何异常
+        → 软失败返空 map，绝不拖垮清单本体。
+        """
+        try:
+            ids = [c for c in (str(it.get("conversation_id") or "")
+                               for it in items or []) if c]
+            if not ids:
+                return {}
+            inbox = _inbox_store()
+            if inbox is None:
+                return {}
+            out: Dict[str, str] = {}
+            for cid, row in (inbox.get_conversations_for_ids(ids) or {}).items():
+                row = row or {}
+                name = str(row.get("display_name") or row.get("name") or "").strip()
+                if name:
+                    out[str(cid)] = name
+            return out
+        except Exception:
+            logger.debug("agenda names enrichment failed", exc_info=True)
+            return {}
+
+    @app.get("/api/goals/agenda")
+    async def goals_agenda(
+        request: Request,
+        scope: str = "today",
+        limit: int = 100,
+        state: str = "",
+        names: str = "",
+        _auth=Depends(auth_dep),
+    ):
+        """今日工作清单（P17）：看板给的是「计数」，坐席要的是「点名单」。
+
+        逐条走 ``GET /api/goals`` 同一条 settle-on-read（``_refreshed_view``）——
+        不另开第二条结算路，清单里的力度/反馈态与右栏卡逐字一致。
+        取数上限受 ``_LIST_SETTLE_CAP`` 护（逐条 settle=逐条 DB 读）。
+
+        - ``scope``：目前只有 ``today``（别的值 400，不装死返空清单）
+        - ``state``：可选筛选 push/pending/hold/adopted/rejected（``all``/空=不筛）
+        - ``names``：``1``/``true``（大小写不限）＝信封顶层附
+          ``names: {conversation_id: 展示名}`` 映射（B3 ops 抽屉直显客户名用；
+          只收非空名，软失败返 ``{}``）；其他值/缺省＝完全不带 ``names`` 键
+        - ``counts``：**过滤前**的真实清单规模（``total``）+ 各态计数；
+          ``shown``＝过滤后条数，前端「筛掉了多少」直接可显
+
+        只读端点，viewer 照常可读。清单行本身仍不联表客户昵称（``ITEM_KEYS``
+        行契约不动）——展示名走可选 ``?names=1`` 的顶层 map 按需 opt-in，
+        默认路径不反向依赖 inbox store。
+        """
+        svc = _require_enabled(request)
+        sc = str(scope or "").strip().lower() or "today"
+        if sc != "today":
+            raise HTTPException(400, tr(request, "err.goals.bad_scope"))
+        st = str(state or "").strip().lower()
+        if st in ("", "all"):
+            st = ""
+        elif st not in svc.AGENDA_STATES:
+            raise HTTPException(400, tr(request, "err.goals.bad_state"))
+        try:
+            lim = int(limit or 100)
+        except (TypeError, ValueError):
+            lim = 100
+        lim = max(1, min(lim, 200))
+
+        from src.companion.goals.planner import day_key
+        store = _store(svc)
+        lang = _lang(request)
+        items = []
+        for g in store.list_goals(
+                status="active", limit=min(lim, _LIST_SETTLE_CAP)):
+            try:
+                view = _refreshed_view(svc, store, g, lang=lang)
+                # settle-on-read 可能当场把目标结算成终态（到期/已达成）——
+                # 那它今天已不是待办，不该占清单名额（也不该虚增 total）
+                if str(view.get("status") or "") != "active":
+                    continue
+                items.append(svc.agenda_item(view))
+            except Exception:      # 单条坏数据不该让整张清单 500
+                logger.debug("agenda item skipped", exc_info=True)
+        items.sort(key=svc.agenda_sort_key)
+        counts = svc.agenda_counts(items)
+        if st:
+            items = [it for it in items if svc.agenda_state_match(it, st)]
+        counts["shown"] = len(items)
+        try:
+            from src.companion.goals.stats import get_goal_stats
+            get_goal_stats().record_agenda_read()
+        except Exception:
+            pass
+        out = {"ok": True, "scope": "today", "day": day_key(),
+               "counts": counts, "items": items}
+        if str(names or "").strip().lower() in ("1", "true"):
+            out["names"] = _agenda_peer_names(items)
+        return out
 
     @app.get("/api/goals")
     async def goals_list(
@@ -412,10 +720,18 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         request: Request, goal_id: str, payload: Dict[str, Any],
         _auth=Depends(auth_dep),
     ):
-        """suggest 档坐席闭环（P2）：对「今日拍」采纳/驳回。
+        """suggest 档坐席闭环（P2）：对「今日拍」采纳/驳回/撤销。
         - adopt：正向信号入事件台账（不改拍状态；detail 标记供卡片显示 ✓）。
         - reject：今日拍置 skipped（当天立即停注入/停主动带意图），事件回流
-          planner——近窗驳回 1 次力度封顶 soft、≥2 次退避陪伴日。"""
+          planner——近窗驳回 1 次力度封顶 soft、≥2 次退避陪伴日。
+        - undo（P17）：撤销上一次反馈，**真撤**不是擦标记——
+          驳回撤销把拍打回 planned（``build_block_for_chat`` 的 skipped/blocked
+          闸门随之放开，当天恢复注入）并落 ``beat_reject_undone``，后者在
+          ``refresh_goal`` 里逐一抵消近窗 ``beat_rejected``（见
+          ``planner.effective_rejects``），明天不再被无故降档；
+          采纳撤销只清 detail 标记（采纳本就没改状态）。
+          没有既有反馈时是**幂等空操作**：照常 200 出视图，不落事件——
+          连点两下撤销不该在台账里刷出两行。"""
         svc = _require_enabled(request)
         _deny_viewer(request)
         store = _store(svc)
@@ -426,7 +742,7 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             raise HTTPException(409, tr(request, "err.goals.not_active"))
         body = payload or {}
         verdict = str(body.get("verdict") or "").strip().lower()
-        if verdict not in ("adopt", "reject"):
+        if verdict not in ("adopt", "reject", "undo"):
             raise HTTPException(400, tr(request, "err.goals.bad_verdict"))
         from src.companion.goals.planner import day_key
         action = store.get_action(goal_id, day_key())
@@ -434,7 +750,24 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             raise HTTPException(409, tr(request, "err.goals.no_beat_today"))
         reason = str(body.get("reason") or "agent").strip()[:120]
         aid = str(action.get("action_id") or "")
-        if verdict == "reject":
+        if verdict == "undo":
+            # 撤销哪一种，由拍现状说话（与清单渲染同一个判定函数）
+            prev = svc.beat_feedback_state(action)
+            if prev == "rejected":
+                store.mark_action(aid, "planned", detail="")
+                store.add_event(goal_id, "beat_reject_undone", reason)
+            elif prev == "adopted":
+                # 采纳没动过状态 → 原状态原样写回，只清标记
+                store.mark_action(
+                    aid, str(action.get("status") or "planned"), detail="")
+                store.add_event(goal_id, "beat_adopt_undone", reason)
+            if prev:
+                try:
+                    from src.companion.goals.stats import get_goal_stats
+                    get_goal_stats().record_feedback_undo()
+                except Exception:
+                    pass
+        elif verdict == "reject":
             store.mark_action(aid, "skipped", detail=f"rejected:{reason}")
             store.add_event(goal_id, "beat_rejected", reason)
         else:
@@ -442,11 +775,12 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             store.mark_action(
                 aid, str(action.get("status") or "planned"), detail="adopted")
             store.add_event(goal_id, "beat_adopted", reason)
-        try:
-            from src.companion.goals.stats import get_goal_stats
-            get_goal_stats().record_feedback(verdict)
-        except Exception:
-            pass
+        if verdict in ("adopt", "reject"):
+            try:
+                from src.companion.goals.stats import get_goal_stats
+                get_goal_stats().record_feedback(verdict)
+            except Exception:
+                pass
         goal = store.get_goal(goal_id) or goal
         action = store.get_action(goal_id, day_key())
         return {"ok": True,
@@ -457,6 +791,14 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         request: Request, goal_id: str, payload: Dict[str, Any],
         _auth=Depends(auth_dep),
     ):
+        """生命周期操作（pause/resume/cancel/done）。
+
+        ``action="done"`` 可附**可选** ``meta``＝成交归因
+        ``{product?, amount?, note?}``（``sanitize_won_meta`` 消毒截断，未知键丢弃，
+        金额非必填——录成交不该有摩擦）。落 ``goal_events(kind="won_meta")`` 的
+        紧凑 JSON：零 schema 迁移，且 ``result`` 保持 ``manual:agent`` 原样，
+        ``outcome_report`` 的 won 判定（``manual:`` 前缀）与 ``sold_plan_counts``
+        的 ``order:`` 口径逐字不变。其余 action 传了 meta 一律忽略。"""
         svc = _require_enabled(request)
         _deny_viewer(request)
         store = _store(svc)
@@ -470,6 +812,10 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             ("paused", "resume"): "active",
             ("active", "cancel"): "cancelled",
             ("paused", "cancel"): "cancelled",
+            # 坐席拍板「已成交/已达成」——线下收单、口头成交等 webhook 看不见的
+            # 终局，人工闭环（P2 成交回流的保底路径）。
+            ("active", "done"): "done",
+            ("paused", "done"): "done",
         }
         new_status = transitions.get((cur, action))
         if new_status is None:
@@ -479,18 +825,48 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         fields: Dict[str, Any] = {"status": new_status}
         if new_status == "cancelled":
             fields["done_at"] = _t.time()
+        elif new_status == "done":
+            fields["done_at"] = _t.time()
+            fields["progress"] = 1.0
+            fields["result"] = "manual:agent"
+            try:
+                from src.companion.goals.templates import get_template
+                tmpl = get_template(str(goal.get("template") or "")) or {}
+                ms = tmpl.get("milestones") or []
+                if ms:
+                    fields["milestone_idx"] = len(ms) - 1
+            except Exception:
+                pass
         if not store.update_goal_fields(goal_id, **fields):
             raise HTTPException(500, tr(request, "err.goals.update_failed"))
         store.add_event(goal_id, "status", f"{cur}->{new_status}:manual")
+        # 成交归因（P17）：只在 done 收，全空则连事件都不落（不留噪声行）
+        if new_status == "done":
+            won_meta = svc.sanitize_won_meta((payload or {}).get("meta"))
+            if won_meta:
+                import json as _json
+                store.add_event(goal_id, "won_meta", _json.dumps(
+                    won_meta, ensure_ascii=False, separators=(",", ":")))
         try:
             from src.companion.goals.stats import get_goal_stats
             if new_status == "cancelled":
                 get_goal_stats().record_terminal("cancelled")
+            elif new_status == "done":
+                get_goal_stats().record_terminal("done")
             elif new_status == "paused":
                 get_goal_stats().record_paused()
         except Exception:
             pass
         goal = store.get_goal(goal_id)
+        # P5 留存环：手动标成交（线下收款等）与订单回流同权——成交即续期
+        # （manual=True：只有带 catalog 能力的模板才有「续费」语义）
+        if new_status == "done" and goal is not None:
+            svc.maybe_create_retention_goal(
+                store, _cfg_root(), goal, manual=True,
+                plan=str((goal.get("params") or {}).get("last_plan") or ""))
+            # P7 回流再转化：坐席手动把挽回目标标 done（对方回来了）与
+            # settle-on-read 同权（内部门控 created_by=winback_auto，普通目标零影响）
+            svc.maybe_spawn_reconvert(store, _cfg_root(), goal)
         return {"ok": True,
                 "goal": svc.goal_view(goal, lang=_lang(request))}
 

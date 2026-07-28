@@ -98,7 +98,11 @@ class TelegramCompanionWorker:
         self.detail = ""
 
     def _account_cfg(self) -> Dict[str, Any]:
-        """组装 A 线 TelegramClient 的 account_cfg overlay（session/代理/人设）。"""
+        """组装 A 线 TelegramClient 的 account_cfg overlay（session/代理/人设）。
+
+        凭据与指纹**不在这里定**——它们要向中央池现场解析（异步），见 ``start()``
+        里的 ``_isolation_overlay``。
+        """
         cfg: Dict[str, Any] = {
             "account_id": self.account_id,
             "account_label": str(self.account.get("label") or self.account_id),
@@ -112,6 +116,72 @@ class TelegramCompanionWorker:
         # N4b：协议号默认把收/发镜像进统一收件箱，坐席台/收件箱可见（"有灵魂"且可托管）
         cfg["mirror_inbox"] = True
         return cfg
+
+    async def _isolation_overlay(self) -> Dict[str, Any]:
+        """三隔离在**连接这一刻**的落地：池凭据 + 设备指纹 + 池出口。
+
+        为什么必须在这条路上做（2026-07-27 实测发现的空转）：本实例开
+        ``companion_runtime``，协议号实际由本 worker → A 线 ``TelegramClient``
+        拉起，而那条路原本只从全局 ``telegram.*`` 取 api_id、且完全不带设备字段。
+        后果有两层：
+          · 凭据：扫码时用的是池凭据，重连却用配置里的那组 —— 池里一旦有第二组
+            凭据，就是「session 与 api_id 错配」（Telegram 明确的风控信号）。
+            当下没出事只因为配置里那组恰好就是池里唯一那组，是巧合不是设计。
+          · 指纹：扫码时向 Telegram 报的是派生机型（如 MacBook Pro），重连又变回
+            pyrogram 默认值 —— **每次重连都在换设备**，比根本不做指纹更可疑。
+
+        解析不到凭据 → 抛错让 worker 保持 stopped，绝不用配置凭据顶上（同
+        credpool 契约 §4b：宁可这一个号暂时不上线，也不能带着错配的 api_id 连）。
+        """
+        from src.integrations.credpool_bridge import (
+            aresolve_for_account,
+            credpool_enabled,
+            pool_key_of,
+        )
+
+        overlay: Dict[str, Any] = {}
+        # 设备指纹独立于中央池（本地种子派生），先做——它自己有开关，关着就返回空。
+        from src.integrations.device_fingerprint import client_kwargs_for_account
+
+        overlay.update(client_kwargs_for_account(self.config, self.account))
+
+        if not credpool_enabled(self.config):
+            # 没开池 → **一个字都不改凭据**：让 TelegramClient 照旧从
+            # config.get_telegram_config() 取（那条路可能带 env 覆盖/账号 overlay，
+            # 与 resolve_credentials 的读法并不完全等价）。所有客户桌面都是这一档，
+            # 不该为了池的正确性去动它们的行为。
+            return overlay
+
+        alloc = await aresolve_for_account(self.config, account=self.account)
+        is_pool_account = bool(pool_key_of(self.account))
+        if alloc is None:
+            if is_pool_account:
+                raise RuntimeError(
+                    "无法解析 api 凭据（中央池不可达且该号无凭据缓存）；"
+                    "为避免 session 与 api_id 错配触发风控，本号暂不上线"
+                )
+            return overlay  # 存量号：交给 TelegramClient 原读法，它自己会报凭据不全
+        if alloc.source not in ("credpool", "credpool_cache"):
+            # 凭据不是池给的（存量号回落自带那组）→ **不覆盖**。
+            # 值虽然通常相同，但两条读法并不等价：resolve_credentials 直接读
+            # config["telegram"]，TelegramClient 走 config.get_telegram_config()
+            # （可能带 env 覆盖/账号 overlay）。不动我不拥有的东西。
+            return overlay
+        overlay["api_id"] = alloc.api_id
+        overlay["api_hash"] = alloc.api_hash
+        # 出口优先级与 B 线一致：账号上显式绑定的代理 > 池按付费档下发的独立出口
+        if alloc.proxy and not self.proxy_id:
+            from src.integrations.telegram_protocol_login import _to_pyrogram_proxy
+
+            pxy = _to_pyrogram_proxy(alloc.proxy)
+            if pxy:
+                overlay["proxy"] = pxy
+        logger.info(
+            "[companion_worker] %s 连接凭据 source=%s tier=%s 独立出口=%s 指纹=%s",
+            self.account_id, alloc.source, alloc.tier,
+            "有" if overlay.get("proxy") else "无",
+            overlay.get("device_model") or "默认")
+        return overlay
 
     async def start(self) -> None:
         ctx = get_companion_context()
@@ -134,11 +204,13 @@ class TelegramCompanionWorker:
             self.client = None
 
         from src.client.telegram_client import TelegramClient  # 惰性：避开 pyrogram 重依赖
+        _cfg = self._account_cfg()
+        _cfg.update(await self._isolation_overlay())
         self.client = TelegramClient(
             config=config_manager,
             skill_manager=skill_manager,
             ai_client=ctx.get("ai_client"),
-            account_cfg=self._account_cfg(),
+            account_cfg=_cfg,
         )
         ok = await self.client.initialize()
         if not ok:
@@ -165,6 +237,77 @@ class TelegramCompanionWorker:
             return {"delivered": bool(ok), "message_id": str(mid or "")}
         ok = await self.client.send_message(target, text)
         return {"delivered": bool(ok), "message_id": ""}
+
+    async def ensure_peer(self, chat_key: str) -> bool:
+        """群 peer 可达性体检（开演前 preflight）：True=此号能对该群发言。
+
+        转发 A 线 ``TelegramClient.ensure_group_peer``（缓存热零 RPC，冷则
+        dialogs → GetAllChats 两级预热后复核）。旧壳无此方法 → True 不拦
+        （交给发送路径的 peer 自愈兜底）。
+        """
+        if self.client is None:
+            return False
+        fn = getattr(self.client, "ensure_group_peer", None)
+        if fn is None:
+            return True
+        target: Any = chat_key
+        try:
+            target = int(chat_key)
+        except (TypeError, ValueError):
+            target = chat_key
+        return bool(await fn(target))
+
+    async def invite_to_group(self, chat_key: str, user_ref: str) -> Dict[str, Any]:
+        """把 ``user_ref``（user_id 或 username）拉进群 ``chat_key``（排班补位）。
+
+        P3-5 灰度实锤的缺口：运营手工拉群不可靠（隐私弹窗/加错群都无回执），
+        排班台账标了「已进群」实际没进 → 开演首拍才炸。这里给「群里的号拉
+        候补号」一条有回执的程序化路径；username 引用可绕开「邀请方不认识
+        被邀请方」的 peer 缓存死锁（ResolveUsername 是全局 RPC）。
+
+        返回 ``{ok, kind, error}``；kind 归类平台语义，供上层决定下一步：
+        ``already``＝本就在群（幂等成功）、``privacy``＝对方隐私禁止被拉
+        （只能发链接让 TA 自己进）、``admin_required``＝本号无邀请权限。
+        """
+        if self.client is None:
+            return {"ok": False, "kind": "offline", "error": "client 未连接"}
+        inner = getattr(self.client, "client", None)
+        if inner is None or not hasattr(inner, "add_chat_members"):
+            return {"ok": False, "kind": "unsupported", "error": "无 add_chat_members 能力"}
+        target: Any = chat_key
+        try:
+            target = int(chat_key)
+        except (TypeError, ValueError):
+            target = chat_key
+        user: Any = str(user_ref or "").lstrip("@")
+        try:
+            user = int(user)
+        except (TypeError, ValueError):
+            pass
+        try:
+            await inner.add_chat_members(target, user)
+            return {"ok": True, "kind": "invited", "error": ""}
+        except Exception as exc:  # noqa: BLE001
+            name = type(exc).__name__
+            text = f"{name}: {exc}"
+            low = (name + " " + str(exc)).lower()
+            if "alreadyparticipant" in low.replace("_", ""):
+                return {"ok": True, "kind": "already", "error": ""}
+            if "privacy" in low:
+                kind = "privacy"
+            elif "adminrequired" in low.replace("_", "") or "right" in low:
+                kind = "admin_required"
+            elif "mutual" in low:
+                kind = "not_mutual"
+            elif "peer" in low or "channelinvalid" in low.replace("_", ""):
+                kind = "peer"
+            elif "flood" in low:
+                kind = "flood"
+            else:
+                kind = "error"
+            logger.warning("[tg-companion] 拉群失败 inviter=%s group=%s user=%s: %s",
+                           self.account_id, chat_key, user_ref, text)
+            return {"ok": False, "kind": kind, "error": text}
 
     async def mark_read(self, chat_key: str) -> bool:
         """对该会话发「已读」回执（经 A 线内层 pyrogram client；拟人「先看后回」）。"""

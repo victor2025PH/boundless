@@ -1338,6 +1338,34 @@ companion:
     inject_chat: true        # 写入聊天 prompt 内部事实块
     proactive_hook: true     # 暴雨/雷暴/极端气温时给主动开场种子
     scene_filter: true       # 生图/场景轮换避开高置信天气冲突（沙滩×暴雨等）
+  # ── 用户侧时钟（P2，默认关）──────────────────────────────────────────────
+  # 主动触达此前全部锚定**服务器**时区（UTC+8），而客户遍布多时区 → 「早安」发到对方
+  # 半夜。开启后按会话推断客户时区（src/companion/user_clock.py），择时/安静时段改按
+  # 客户本地钟评估。信任三档是**安全设计**（详见该模块 docstring）：
+  #   - 显式信号（自述城市 / WhatsApp 号码国码 / 行为+地区互证）→ 取代服务器钟；
+  #   - 纯行为统计推断 → 只**收窄**发送窗口（服务器或客户任一为安静时段即不发），
+  #     故推断错了最多少发一条，绝不会新开一个凌晨窗口；
+  #   - 语种默认国家等弱信号 → 只供节日/展示，不参与调度。
+  user_clock:
+    enabled: false
+    schedule: true           # 主动触达择时 / 安静时段按客户本地钟（需 enabled 同时为真）
+    inject_chat: true        # prompt 注入「对方当地时间」内部事实行（只吃显式信号）
+    min_samples: 12          # 行为推断最少入站消息数（不足则不猜）；12 由生产库标定——
+                             # 8/12 收下的会话数相同，真正把关的是下面的边际门槛
+    min_margin: 0.35         # 行为推断胜出边际门槛（0..1，占理论可分辨度的比例）
+    ttl_sec: 21600           # 推断结果缓存（秒）；落 conversation_meta.tz_*
+  # ── 双侧节日日历（P2，默认关）──────────────────────────────────────────────
+  # 规则引擎（config/locale_holidays.yaml）：fixed / lunar / nth_weekday / easter_offset /
+  # table / jieqi 六型，**一次写规则永久正确**——不再像 milestone_ritual.holiday_calendar
+  # 那样要运营每年手填农历公历日期（必然腐烂）。农历与节气走 lunar_python（已在依赖）。
+  # 「用户侧」＝按客户所在国（时区推断的 country → 回落语种默认国家）；
+  # 「人设侧」＝按人设居住城市所在国，语义是**生活纹理**（街上气氛）而非群发问候。
+  locale_holidays:
+    enabled: false
+    inject_chat: true            # 双侧节日作 prompt 内部事实块（安全，默认口径）
+    greet_user_side: false       # 用户侧节日走主动问候（默认关：群发式节日祝福最像套话）
+    persona_side_texture: true   # 人设所在国节日进人设生活纹理
+    lookahead_days: 2            # 「快到了」预热窗（天）
   # 人设一致性守卫：回复生成后做确定性后置体检，剥离 LLM 漏出的禁用语
   # （persona.speaking.forbidden_phrases）与 AI 自曝身份（persona.identity.deny_ai）。
   # 默认开；仅当人设声明了上述项才实际生效（对无禁用项的默认人设零影响）。
@@ -1742,6 +1770,25 @@ companion:
     #   桥不自己发消息——主动触达的全部护栏（pacing/冷却/安静时段/情绪）原样生效。
     bridge:
       enabled: false
+    # 出站正确性守卫（默认开；只在带货会话生效，非目标会话零影响）
+    link_guard:
+      enabled: true            # soft/hold 日 LLM 复读出的官网下单链 → 按当日 CTA 档剥离
+    offer_guard:
+      enabled: true            # AI 自己编的折扣/券码/赠送/客户数承诺 → 剥掉那一小句
+      #   白名单＝site_catalog.yaml 里 offers 在效活动 + 产品 pitch/起价 + claims 段
+      #   （texts 子串 + free_days 按天数比对），即「运营写下来的事实才许说」；
+      #   婉拒语气（暂时没有折扣）刻意放行。评测轨：scripts.run_eval --offer-guard。
+    claim_guard:
+      enabled: true            # 说的话对不对得上「登记的事实」（offer_guard 的互补轴）
+      #   四类处置：① 报价与 site_catalog 登记价不符（实录「团队版198…算下来一个月168」
+      #   ＝偷偷 8.5 折，措辞轴抓不到裸数字）；② 试用时长与 claims.free_days 不符
+      #   （实录「官网有14天客户端试用」——真实是 7 天，14 天属 AvatarHub 线）；
+      #   ③ gated 产品线泄漏（实录向 ChatX 客户推「免费图片换脸」）；
+      #   ④ 内部出图指令当字面文本发出（实录 `[PHOTO object ...]`）。
+      #   人设自家生意报价（「芒果干450比索」）无产品词 → 天然不进判定。
+      #   评测轨：scripts.run_eval --outbound-claims。
+      #   注：回复语种漂移只检测不在此处纠正——根因在上游 lang_policy 语言决策
+      #   （独有脚本碎片曾被判强证据，2026-07-28 已修），出站层再翻一次更糟。
   story:
     enabled: false
     advance_turns: 3           # 每 N 个用户轮次推进一个 beat（剧终自动收场）

@@ -6,7 +6,7 @@
 <link rel="stylesheet" href="/copilot/tokens.css?v=20260611">
 <!-- P2 主题：auto 跟随系统 / 手动 light / 手动 dark，持久化到 localStorage('cp_theme')。
      在 <head> 内联尽早执行，避免首屏闪烁；theme-*.css 动态切换，data-cp-theme 同时驱动 cp-* 组件与本页暗色变量。 -->
-<link rel="stylesheet" id="cp-theme-css" href="/copilot/theme-light.css?v=20260611b">
+<link rel="stylesheet" id="cp-theme-css" href="/copilot/theme-light.css?v=20260728a">
 <script>
 (function(){
   var KEY='cp_theme';
@@ -20,7 +20,7 @@
     var eff=effective();
     document.documentElement.setAttribute('data-cp-theme',eff);
     var l=document.getElementById('cp-theme-css');
-    if(l){ var want='/copilot/theme-'+eff+'.css?v=20260611b'; if(l.getAttribute('href')!==want) l.setAttribute('href',want); }
+    if(l){ var want='/copilot/theme-'+eff+'.css?v=20260728a'; if(l.getAttribute('href')!==want) l.setAttribute('href',want); }
     // 注意：按钮内含 .nav-tip 子节点，不能用 btn.textContent（会清掉悬浮提示）。
     // 图标固定 🎨（调色板＝改配色，语义明确），仅更新标题与提示里的当前模式。
     var p=pref();
@@ -77,7 +77,7 @@
 <script src="/copilot/components/cp-chain-exec.js?v=20260611"></script>
 <script src="/copilot/components/cp-draft.js?v=20260704"></script>
 <script src="/copilot/components/cp-voice.js?v=20260611b"></script>
-<script src="/copilot/components/cp-goal.js?v=20260727d"></script>
+<script src="/copilot/components/cp-goal.js?v=20260728b"></script>
 {% endblock %}
 {% block content %}
 <style>
@@ -334,6 +334,11 @@
         </div>
       </div>
       <div class="filter-summary" id="filter-summary"></div>
+      <div class="goal-agenda-filters" id="goal-agenda-filters" hidden>
+        <button type="button" class="goal-af-chip" data-gaf="push" data-i18n="inbox.goal.filter.push">今日有推进</button>
+        <button type="button" class="goal-af-chip" data-gaf="pending" data-i18n="inbox.goal.filter.pending">待反馈</button>
+        <button type="button" class="goal-af-chip" data-gaf="hold" data-i18n="inbox.goal.filter.hold">让路中</button>
+      </div>
       </div><!-- /.list-header-body -->
     </div><!-- /.list-header -->
     <!-- Phase 16: 标签概览 strip -->
@@ -422,6 +427,8 @@
           </select>
           <button class="hdr-btn" id="ai-toggle-btn" onclick="toggleAiDraft()" style="display:none;" title="待审 AI 草稿队列（仅「AI草稿/多选」档显示，人工审批后发送）" data-i18n-title="inbox.ai.pending_t"><span data-i18n="inbox.ai.pending">📝 待审</span><span id="ai-pending-badge" style="display:none;margin-left:4px;background:var(--th-bg-red5,#ef4444);color:var(--th-ink-inverse,#fff);border-radius:9px;font-size:11px;font-weight:700;padding:0 5px;">0</span></button>
           <button class="hdr-btn" id="info-toggle-btn" onclick="toggleInfoSidebar()" title="业务助手（AI回复/洞察/客户档案）" data-i18n-title="inbox.assist_t"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="14" y1="3" x2="14" y2="21"/></svg><span data-i18n="inbox.assist">助手</span></button>
+          <!-- P17 Phase2: 右栏收起时的「工作目标」快捷入口（U6 窄屏可达性；JS 按 featureOn+会话选中 控显） -->
+          <button class="hdr-btn" id="goal-quick-btn" onclick="_openGoalQuick()" style="display:none;" title="工作目标（工作计划）" data-i18n-title="inbox.goal.title_hint"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></svg><span data-i18n="inbox.goal.title">工作目标</span></button>
         </div>
       </div>
 
@@ -707,6 +714,7 @@
             </button>
             <div class="cp-card-bd" style="padding:0;">
               <div class="cp-hero-rel" id="cp-hero-rel"></div>
+              <div class="cp-hero-goal" id="cp-hero-goal" hidden></div>
               <cp-next-actions id="ws-cp-nba" class="cp-hero-nba"></cp-next-actions>
             </div>
           </section>
@@ -777,7 +785,7 @@
               <!-- 关系进展与团队协作之间：工作目标（cp-goal → /api/goals*；功能未开(403)时组件自动隐藏整卡） -->
               <section class="cp-card" data-cp-card="goal">
                 <button type="button" class="cp-card-hd" data-cp-toggle="goal">
-                  <span class="cp-card-ttl"><span class="cp-card-ic">🎯</span><span data-i18n="inbox.goal.title">工作目标</span></span>
+                  <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="target"></span><span data-i18n="inbox.goal.title">工作目标</span></span>
                   <span class="cp-card-chev" aria-hidden="true"></span>
                 </button>
                 <div class="cp-card-bd"><cp-goal id="ws-cp-goal"></cp-goal></div>
@@ -1112,6 +1120,42 @@ const FUNNEL = {INITIAL:window.T('inbox.funnel.initial'),ENGAGED:window.T('inbox
 /* ===== 状态 ===== */
 let allChats=[], filtered=[], platFilter='all', chatFilter='all', searchQ='', tagFilter='';
 let funnelFilter='';   // P5-2：按具体漏斗阶段过滤（来自看板阶段柱深链 ?funnel=X），空=不限
+/* B2/P17: today work-goal agenda (list filter + row mark + hero/tab signal) */
+var _goalAgenda={day:'', items:[], byCid:{}, featureOn:false, ts:0};
+var _goalAgendaFilter='';
+var _goalTabSignal={active:false, pendingFeedback:false};
+var _goalDeepLinkPending=false;
+var _goalAgendaTimer=0;
+function _goalT(key, en){
+  try{ var t=window.T&&window.T(key); if(t&&t!==key) return t; }catch(_){}
+  return en||key;
+}
+function _goalTf(key, params, en){
+  try{ var t=window.Tf&&window.Tf(key, params||{}); if(t&&t!==key) return t; }catch(_){}
+  var s=_goalT(key, en);
+  if(params){ Object.keys(params).forEach(function(k){ s=String(s).split('{'+k+'}').join(String(params[k])); }); }
+  return s;
+}
+function _uiBeacon(action){
+  try{
+    var body=JSON.stringify({page:location.pathname||'/workspace', action:String(action||'')});
+    navigator.sendBeacon('/api/telemetry/ui-event', new Blob([body],{type:'application/json'}));
+  }catch(_){}
+}
+function _goalAgendaMatch(cid, state){
+  var it=_goalAgenda.byCid[cid||''];
+  if(!it) return false;
+  var st=String(state||'');
+  if(st==='push') return !!String(it.intent||'');
+  if(st==='pending') return !!(String(it.intent||'') && !String(it.feedback||''));
+  if(st==='hold') return !!String(it.hold||'');
+  return true;
+}
+function _goalMarkHtml(c){
+  var cid=c&&c.conversation_id;
+  if(!cid||!_goalAgenda.byCid[cid]) return '';
+  return ' <span class="conv-goal-mark" title="'+esc(_goalT('inbox.goal.badge_active','Has work goal'))+'">'+uiIcon('target',11)+'</span>';
+}
 let filteredGroups=[];          // 群组分流：群/频道单列「群组动态」折叠区，不混主列表
 let _groupExpanded=false;       // 「群组动态」折叠区是否展开（默认折叠，localStorage 记忆）
 let _groupPins=new Set();       // 群组置顶（个人偏好，按 convKey 存 localStorage）
@@ -2043,6 +2087,7 @@ function applyFilters(){
     if(chatFilter==='snoozed' && !_isSnoozed(c)) return false;
     if(chatFilter==='waiting' && !((c.unanswered_sec||0)>0)) return false;
     if(chatFilter==='done' && !_isFunnelDone(c)) return false;
+    if(_goalAgendaFilter && !_goalAgendaMatch(c.conversation_id, _goalAgendaFilter)) return false;
     return true;
   });
   _applySort(filtered);   // P2: 应用当前排序模式
@@ -2102,7 +2147,8 @@ function _convItemSig(c, isSel){
     (accountMeta[`${c.platform}:${c.account_id||'default'}`]||{}).persona_id||'',  // 身份可视化：人设绑定变化触发徽章更新
     c.last_direction||'',   // P2: 方向变化（我方/对方）触发预览前缀更新
     Number(c.risk_blocked||0),   // B-2: 风控拦截数变化触发重绘（chip 出现/消失）
-    _handlerSig(c)   // 二期：谁在处理（AI/我/同事）变化触发徽章更新
+    _handlerSig(c),   // 二期：谁在处理（AI/我/同事）变化触发徽章更新
+    (_goalAgenda.byCid[c.conversation_id||'']?1:0)
   ].join('|');
 }
 
@@ -2213,7 +2259,8 @@ var _UIIC={
   sync:'<path d="M8 17.5 12 21l4-3.5"/><path d="M12 21v-8"/><path d="M20.9 18.4A5 5 0 0 0 18 9.5h-1.3A8 8 0 1 0 4 16.9"/>',
   logout:'<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
   trash:'<polyline points="3 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>',
-  more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>'
+  more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+  target:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/>'
 };
 function uiIcon(name,size,cls){
   var p=_UIIC[name]; if(!p) return '';
@@ -2293,7 +2340,7 @@ function _buildConvItemDom(c, isSel){
       <div class="conv-avatar-badge">${platIcon(c.platform,16)}</div>
     </div>
     <div class="conv-body">
-      <div class="conv-name">${esc(c.name||c.chat_key||window.T('dash.unknown'))} ${groupTag}${archiveIcon}</div>
+      <div class="conv-name">${esc(c.name||c.chat_key||window.T('dash.unknown'))} ${groupTag}${archiveIcon}${_goalMarkHtml(c)}</div>
       <div class="conv-preview">${_previewHtml(c)}</div>
       ${tagsHtml}
       ${suggestHtml}
@@ -6434,7 +6481,7 @@ function _cpOnCardExpand(cardName){
     var el=document.getElementById('ws-cp-'+s);
     if(el && el._pendingCtx){ var c=el._pendingCtx; el._pendingCtx=null; el.context=c; }
   });
-  if(cardName==='hero') _renderHeroRel();
+  if(cardName==='hero'){ _renderHeroRel(); _renderHeroGoal(); }
   if(cardName==='analysis' && infoOn && selectedChat && typeof _loadAiAnalysis==='function') _loadAiAnalysis(selectedChat);
 }
 /* 折叠卡状态/切换核心复用共享 sidebar-chrome.createCardController（与桌面壳同源单一实现）；
@@ -6511,6 +6558,10 @@ function _updateCustomerTabBadge(){
   var text='', tone='';
   if(rs&&rs.textContent&&rs.classList.contains('pill-danger')) text=rs.textContent;
   else if(rs&&rs.textContent&&rs.classList.contains('pill-warn')){ text=rs.textContent; tone='warn'; }
+  else if(_goalTabSignal.active||_goalTabSignal.pendingFeedback){
+    text=_goalT('inbox.goal.tab_badge','Push planned today');
+    tone='accent';
+  }
   var sc=window.CopilotShared&&window.CopilotShared.sidebarChrome;
   if(sc&&sc.applyTabBadge) sc.applyTabBadge(el,text,tone);
   else{ el.textContent=text?'●':''; el.title=text; el.className='ws-cp-tab-badge'+(tone?' '+tone:''); }
@@ -6633,6 +6684,234 @@ async function _renderHeroRel(){
   }catch(_){ el.textContent=window.T('inbox.hero.rel_na'); }
 }
 
+
+/* ===== A1/A2/B2/C3: work-goal host wiring ===== */
+function _applyGoalTabSignal(g){
+  var active=!!(g && (String(g.status||'')==='active'||String(g.status||'')==='paused'));
+  var today=(g && g.today && typeof g.today==='object')?g.today:null;
+  var intent=today?String(today.intent||''):'';
+  var fb='';
+  try{
+    var ag=_goalAgenda.byCid[(g&&g.conversation_id)||_wsCpCid||''];
+    if(ag) fb=String(ag.feedback||'');
+    else if(today){
+      var det=String(today.detail||'');
+      if(det==='adopted') fb='adopted';
+      else if(String(today.status||'')==='skipped'||String(today.status||'')==='blocked'||det.indexOf('rejected')===0) fb='rejected';
+    }
+  }catch(_){}
+  _goalTabSignal={active:active, pendingFeedback:!!(active && intent && !fb)};
+  _updateCustomerTabBadge();
+  if(typeof _syncGoalQuickBtn==='function') _syncGoalQuickBtn();
+}
+function _paintHeroGoal(el, mode, opts){
+  opts=opts||{};
+  el.hidden=false;
+  el.className='cp-hero-goal'+(mode==='cta'?' cta':'');
+  el.onclick=null;
+  if(mode==='hide'){ el.hidden=true; el.innerHTML=''; return; }
+  if(mode==='cta'){
+    el.innerHTML='<span class="hg-ic">'+uiIcon('target',12)+'</span><span>'+esc(_goalT('inbox.goal.hero.set','Set a work goal for them \u2192'))+'</span>';
+    el.onclick=function(){
+      _uiBeacon('goal_hero_click');
+      _cpExpandAndScroll('goal','customer');
+      try{
+        var ge=document.getElementById('ws-cp-goal');
+        if(ge) ge.dispatchEvent(new CustomEvent('cp-goal-open-form',{bubbles:true,composed:true}));
+      }catch(_){}
+    };
+    return;
+  }
+  if(mode==='hold'){
+    el.innerHTML='<span class="hg-ic">'+uiIcon('target',12)+'</span><span class="hg-hold">'+esc(_goalTf('inbox.goal.hero.hold',{day:opts.day,total:opts.total},'Day {day}/{total} \u00b7 yielding today'))+'</span>';
+    el.onclick=function(){ _uiBeacon('goal_hero_click'); _cpExpandAndScroll('goal','customer'); };
+    return;
+  }
+  var main=_goalTf('inbox.goal.hero.active',{day:opts.day,total:opts.total,intent:opts.intent||''},
+    'Day {day}/{total} \u00b7 Today: {intent}');
+  var fbHtml=opts.showFeedback
+    ?(' <span class="hg-fb">('+esc(_goalT('inbox.goal.hero.feedback','Give feedback'))+')</span>')
+    :'';
+  el.innerHTML='<span class="hg-ic">'+uiIcon('target',12)+'</span><span class="hg-main">'+esc(main)+'</span>'+fbHtml;
+  el.onclick=function(){ _uiBeacon('goal_hero_click'); _cpExpandAndScroll('goal','customer'); };
+}
+async function _renderHeroGoal(fromData){
+  var el=document.getElementById('cp-hero-goal'); if(!el) return;
+  if(_cpCardCollapsed('hero')){ _paintHeroGoal(el,'hide'); return; }
+  if(!_wsCpCid){ _paintHeroGoal(el,'hide'); _goalTabSignal={active:false,pendingFeedback:false}; _updateCustomerTabBadge(); return; }
+  var _cid=_wsCpCid;
+  var d=fromData||null;
+  if(!d){
+    try{
+      var r=await apiFetch('/api/goals/for-conversation?conversation_id='+encodeURIComponent(_cid), undefined, {timeoutMs:12000});
+      if(_cid!==_wsCpCid) return;
+      if(r.status===403){ _paintHeroGoal(el,'hide'); _goalTabSignal={active:false,pendingFeedback:false}; _updateCustomerTabBadge(); return; }
+      if(!r.ok){ _paintHeroGoal(el,'hide'); return; }
+      d=await r.json();
+    }catch(_){ if(_cid===_wsCpCid) _paintHeroGoal(el,'hide'); return; }
+  }
+  if(_cid!==_wsCpCid) return;
+  var g=d&&d.goal;
+  if(!g || (g.status&&g.status!=='active'&&g.status!=='paused')){
+    _applyGoalTabSignal(null);
+    _paintHeroGoal(el,'cta');
+    return;
+  }
+  _applyGoalTabSignal(g);
+  var day=g.day_index||0, total=g.total_days||0;
+  var hold=String(g.hold||'');
+  var today=(g.today&&typeof g.today==='object')?g.today:null;
+  var intent=today?String(today.intent||''):'';
+  if(hold){ _paintHeroGoal(el,'hold',{day:day,total:total}); return; }
+  if(intent){
+    var fb='';
+    var ag=_goalAgenda.byCid[g.conversation_id||_cid];
+    if(ag) fb=String(ag.feedback||'');
+    else if(today){
+      var det=String(today.detail||'');
+      if(det==='adopted') fb='adopted';
+      else if(String(today.status||'')==='skipped'||String(today.status||'')==='blocked'||det.indexOf('rejected')===0) fb='rejected';
+    }
+    _paintHeroGoal(el,'active',{day:day,total:total,intent:intent,showFeedback:!fb});
+    return;
+  }
+  _paintHeroGoal(el,'active',{
+    day:day, total:total,
+    intent:_goalT('inbox.goal.push.none','Companion day'),
+    showFeedback:false
+  });
+}
+function _onGoalHostEvent(ev){
+  try{
+    var det=(ev&&ev.detail)||{};
+    if(ev.type==='cp-data-loaded'){
+      var pid=det.panelId||'';
+      if(pid!=='ws-cp-goal') return;
+      if(det.data&&det.data.__forbidden){
+        var _hel=document.getElementById('cp-hero-goal');
+        if(_hel) _paintHeroGoal(_hel,'hide');
+        _goalTabSignal={active:false,pendingFeedback:false};
+        _updateCustomerTabBadge();
+        return;
+      }
+      if(det.ok && det.data){ _renderHeroGoal(det.data); }
+      else { _renderHeroGoal(); }
+      _refreshGoalAgenda(true);
+      return;
+    }
+    if(ev.type==='cp-goal-loaded'){
+      _goalTabSignal={active:!!det.active, pendingFeedback:!!det.pendingFeedback};
+      _updateCustomerTabBadge();
+      _renderHeroGoal();
+      return;
+    }
+    _renderHeroGoal();
+    _refreshGoalAgenda(true);
+  }catch(_){}
+}
+async function _refreshGoalAgenda(force){
+  var now=Date.now();
+  if(!force && _goalAgenda.ts && (now-_goalAgenda.ts)<55000) return;
+  try{
+    var r=await apiFetch('/api/goals/agenda?scope=today', undefined, {timeoutMs:15000});
+    if(r.status===403){
+      _goalAgenda={day:'',items:[],byCid:{},featureOn:false,ts:now};
+      _syncGoalAgendaFiltersUi();
+      return;
+    }
+    if(!r.ok){ _syncGoalAgendaFiltersUi(); return; }
+    var d=await r.json();
+    var items=(d&&d.items)||[];
+    var by={};
+    items.forEach(function(it){ if(it&&it.conversation_id) by[it.conversation_id]=it; });
+    _goalAgenda={day:(d&&d.day)||'', items:items, byCid:by, featureOn:true, ts:now};
+    _syncGoalAgendaFiltersUi();
+    if(typeof _syncGoalQuickBtn==='function') _syncGoalQuickBtn();
+    if(typeof applyFilters==='function') applyFilters();
+  }catch(_){ _syncGoalAgendaFiltersUi(); }
+}
+function _syncGoalAgendaFiltersUi(){
+  var bar=document.getElementById('goal-agenda-filters'); if(!bar) return;
+  var show=!!(_goalAgenda.featureOn || (_goalAgenda.items&&_goalAgenda.items.length));
+  bar.hidden=!show;
+  bar.querySelectorAll('.goal-af-chip').forEach(function(b){
+    b.classList.toggle('on', b.getAttribute('data-gaf')===_goalAgendaFilter);
+  });
+}
+function _setGoalAgendaFilter(state){
+  var next=String(state||'');
+  if(_goalAgendaFilter===next) _goalAgendaFilter='';
+  else _goalAgendaFilter=next;
+  if(_goalAgendaFilter) _uiBeacon('goal_filter_'+_goalAgendaFilter);
+  _syncGoalAgendaFiltersUi();
+  if(typeof applyFilters==='function') applyFilters();
+}
+function _wireGoalAgendaFilters(){
+  var bar=document.getElementById('goal-agenda-filters');
+  if(!bar||bar.__gafBound) return;
+  bar.__gafBound=1;
+  bar.addEventListener('click', function(e){
+    var b=e.target.closest('.goal-af-chip'); if(!b) return;
+    e.preventDefault();
+    _setGoalAgendaFilter(b.getAttribute('data-gaf')||'');
+  });
+}
+function _handleGoalDeepLink(){
+  try{
+    var q=new URLSearchParams(location.search);
+    if(q.get('card')!=='goal') return;
+    _goalDeepLinkPending=true;
+    // ?conv=/&focus= 同行时会话稍后自动打开——此刻别急着消费（否则误弹「请先选择会话」）
+    var hasConv=!!(q.get('conv')||q.get('focus'));
+    q.delete('card');
+    var url=location.pathname+(q.toString()?('?'+q.toString()):'')+(location.hash||'');
+    try{ history.replaceState(null,'',url); }catch(_){}
+    _uiBeacon('goal_deep_link');
+    if(!hasConv) _tryConsumeGoalDeepLink();
+  }catch(_){}
+}
+function _tryConsumeGoalDeepLink(){
+  if(!_goalDeepLinkPending) return;
+  if(_wsCpCid || (typeof selectedChat!=='undefined'&&selectedChat)){
+    _goalDeepLinkPending=false;
+    _cpExpandAndScroll('goal','customer');
+    return;
+  }
+  if(!_tryConsumeGoalDeepLink._toasted){
+    _tryConsumeGoalDeepLink._toasted=1;
+    try{ _toast(window.T('inbox.toast.select_first')||_goalT('ws.cmdk.need_conv','Select a conversation first'),'#b45309'); }catch(_){}
+  }
+}
+function _startGoalAgendaPoll(){
+  _wireGoalAgendaFilters();
+  _refreshGoalAgenda(true);
+  if(_goalAgendaTimer) clearInterval(_goalAgendaTimer);
+  _goalAgendaTimer=setInterval(function(){ _refreshGoalAgenda(false); }, 60000);
+}
+/* Phase2: 切到「客户&关系」tab 且今日拍待反馈 → 每会话一次自动展开目标卡（软引导，不反复打扰） */
+var _goalAutoExposed={};
+function _maybeAutoExposeGoal(){
+  if(!_goalTabSignal.pendingFeedback||!_wsCpCid) return;
+  if(_goalAutoExposed[_wsCpCid]) return;
+  _goalAutoExposed[_wsCpCid]=1;
+  _uiBeacon('goal_auto_expand');
+  _cpExpandAndScroll('goal','customer');
+}
+/* Phase2: 右栏收起时的顶栏快捷入口（U6）——仅在 goals 功能可用且选中会话时出现 */
+function _syncGoalQuickBtn(){
+  var b=document.getElementById('goal-quick-btn'); if(!b) return;
+  var show=!!(typeof selectedChat!=='undefined' && selectedChat && !infoOn
+    && (_goalAgenda.featureOn || _goalTabSignal.active || _goalTabSignal.pendingFeedback));
+  b.style.display=show?'':'none';
+}
+function _openGoalQuick(){
+  if(typeof selectedChat==='undefined'||!selectedChat){ _toast(window.T('inbox.toast.select_first'),'#b45309'); return; }
+  _uiBeacon('goal_quick_open');
+  if(!infoOn) toggleInfoSidebar();
+  _cpExpandAndScroll('goal','customer');
+  _syncGoalQuickBtn();
+}
+
 /* ===== 单一前端 App 模式（与桌面壳 🧪 同源 /copilot/app.html）=====
    开发一处（shared/copilot/app.html + 组件）→ 网页与桌面两端同源同款。
    默认关闭、可回退：?app=1 或 localStorage('ws_use_app')==='1' 才启用，原手写右栏作为兜底保留。 */
@@ -6704,13 +6983,18 @@ function _maybeLoadAiAnalysis(){
   if(_wsCpTab==='tools'&&infoOn&&selectedChat&&!_cpCardCollapsed('analysis')&&typeof _loadAiAnalysis==='function') _loadAiAnalysis(selectedChat);
 }
 function setWsCpTab(tab){
-  if(_wsCpTabCtrl){ _wsCpTabCtrl.setTab(tab); return; }
+  if(_wsCpTabCtrl){
+    _wsCpTabCtrl.setTab(tab);
+    if(String(tab||'')==='customer'&&typeof _maybeAutoExposeGoal==='function') _maybeAutoExposeGoal();
+    return;
+  }
   var sc=window.CopilotShared&&window.CopilotShared.sidebarChrome;
   _wsCpTab=sc&&sc.normalizeTab?sc.normalizeTab(tab):(tab||'reply');
   document.querySelectorAll('.ws-cp-tab').forEach(function(b){ b.classList.toggle('active', b.dataset.tab===_wsCpTab); });
   document.querySelectorAll('.ws-cp-sec').forEach(function(sec){ sec.classList.toggle('active', sec.dataset.tab===_wsCpTab); });
   if(sc&&sc.storeTab) sc.storeTab(_wsCpTab);
   _maybeLoadAiAnalysis();
+  if(_wsCpTab==='customer'&&typeof _maybeAutoExposeGoal==='function') _maybeAutoExposeGoal();
 }
 
 function initWsCopilot(){
@@ -6812,7 +7096,29 @@ function initWsCopilot(){
     _refreshWsCpComponent('relstage');
     _refreshWsCpComponent('chain');
     _renderHeroRel();
+    _renderHeroGoal();
   });
+  if(!document.__goalHostBound){
+    document.__goalHostBound=1;
+    document.addEventListener('cp-goal-changed', _onGoalHostEvent);
+    document.addEventListener('cp-goal-loaded', _onGoalHostEvent);
+    document.addEventListener('cp-data-loaded', _onGoalHostEvent);
+    document.addEventListener('cp-goal-drive-draft', function(e){
+      var intent=e&&e.detail&&e.detail.intent;
+      _uiBeacon('goal_drive_draft');
+      if(typeof setWsCpTab==='function') setWsCpTab('reply');
+      _cpExpandAndScroll('draft','reply');
+      var ta=document.getElementById('reply-ta');
+      // 防覆盖：坐席已手打内容时不清空（意图只作生成种子；生成产物在草稿卡不动 composer）
+      if(ta && intent && !ta.value.trim()) ta.value=String(intent);
+      if(ta) ta.focus();
+      var dr=document.getElementById('ws-cp-draft');
+      try{
+        if(dr && typeof dr.onAction==='function') dr.onAction('gen', null);
+        else if(dr && typeof dr.regenerate==='function'){ dr._draft=dr._draft||{ok:1}; dr.regenerate(); }
+      }catch(_){}
+    });
+  }
   /* 卡头 pill：组件取数/生成完成后刷新折叠态摘要（事件委托，无内联 handler） */
   if(!document.__cpPillBound){
     document.__cpPillBound=1;
@@ -6863,11 +7169,14 @@ function syncWsCopilot(c){
   });
   _wsCpCid=cid;
   _renderHeroRel();
+  _renderHeroGoal();
+  _tryConsumeGoalDeepLink();
   infoOn=true;
   var sb=document.getElementById('info-sidebar');
   var btn=document.getElementById('info-toggle-btn');
   if(sb) sb.classList.add('show');
   if(btn) btn.classList.add('active');
+  if(typeof _syncGoalQuickBtn==='function') _syncGoalQuickBtn();
   if(_wsCpTab==='tools'&&!_cpCardCollapsed('analysis')) _loadAiAnalysis(c);
 }
 
@@ -7117,6 +7426,7 @@ function toggleInfoSidebar(){
   sb.classList.toggle('show',infoOn);
   document.getElementById('info-toggle-btn').classList.toggle('active',infoOn);
   if(infoOn && selectedChat && threadMsgs.length && !_cpCardCollapsed('analysis')) _loadAiAnalysis(selectedChat);
+  if(typeof _syncGoalQuickBtn==='function') _syncGoalQuickBtn();
 }
 
 /* ===== Claim ===== */
@@ -10960,6 +11270,8 @@ window.__wsFocusConv = function(convId, messageId){
 /* ===== 初始化 ===== */
 async function init(){
   initWsCopilot();
+  try{ _handleGoalDeepLink(); }catch(_){}
+  try{ _startGoalAgendaPoll(); }catch(_){}
   _initShowXlate();  // P1：恢复「显示译文」显隐偏好（浏览器本地）
   _loadSavedViews(); // Phase 18: 立即渲染保存视图（localStorage，无需等待）
   _updateListTitleVisuals(platFilter);
@@ -11027,6 +11339,8 @@ Object.assign(window, {
   batchArchive, batchTagPrompt, batchAssignPrompt,
   // 会话头 / 移动端
   closeMobileChat, toggleAiDraft, toggleInfoSidebar, toggleArchive, snoozeConv, unsnoozeConv, setMode, pauseAutoMode,
+  _openGoalQuick,   // P17 Phase2: 右栏收起时的「工作目标」顶栏快捷入口
+
   // 发送 / 回复区
   sendMsg, resendFailed, sendMediaFile, _cancelMedia, genAiReply, genVoiceReply, sendVoiceReply, _onVoicePersonaChange,
   unbindVoice, toggleQrPanel,
@@ -11090,6 +11404,8 @@ Object.assign(window, {
   _noteKey, _onNoteInput, _hideMentionSuggest,
   // 图片/语音/文档(.txt/.docx) 翻译的文件选择 onchange
   _onImgXlatePick, _onVoiceXlatePick, _onDocFilePick, _onDocxFilePick,
+  // P17 Phase2: 右栏收起时的「工作目标」快捷入口（窄屏可达性）
+  _openGoalQuick,
 });
 
 /* 兜底：内联 onclick 调到未暴露函数会抛 ReferenceError，过去表现为「点击无响应」

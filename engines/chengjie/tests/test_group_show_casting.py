@@ -613,3 +613,73 @@ def test_validate_casting_tolerates_a_junk_playbook(junk_playbook):
     casting = Casting(members=(CastMember("advocate", "a0", "p0"),))
     problems = validate_casting(casting, junk_playbook, fingerprint_groups=_FP_TABLE)
     assert isinstance(problems, list)
+
+
+# ── 群内角色粘性（prior_slots）──────────────────────────────────────────────
+
+
+def test_prior_slot_holders_keep_their_roles_in_the_same_group():
+    """**2026-07-27 双号灰度实录的回归钉**：两场之间 advocate/skeptic 恰好对调。
+
+    对调来自主推轮转——上一场演过 advocate 的号角色余量变小，下一场被轮去演
+    skeptic。跨群轮转是对的（防单号长期当托）；**群内**轮转是翻脸：同一批观众
+    看着上一场泼冷水的号这一场安利同一个产品。粘性表一到，群内角色钉住。
+    """
+    pb = _playbook(("advocate", "skeptic"))
+    cands = _cands(2)
+    roles = {("a1", "advocate"): 1}          # 上一场 a1 演过主推 → 轮转想换掉它
+    # 无粘性表：轮转生效，两号对调（这正是灰度里观察到的行为）
+    swapped = cast_roles(pb, cands, fingerprint_groups=_FP_TABLE, seed="g",
+                         role_counts=roles)
+    assert swapped.by_slot("advocate").account_id == "a0", (
+        "前置假设：无粘性表时主推轮转应把 advocate 换给 a0（测试才有意义）")
+    # 有粘性表：群内钉住上一场的分配
+    sticky = cast_roles(pb, cands, fingerprint_groups=_FP_TABLE, seed="g",
+                        role_counts=roles,
+                        prior_slots={"a1": "advocate", "a0": "skeptic"})
+    assert sticky.by_slot("advocate").account_id == "a1"
+    assert sticky.by_slot("skeptic").account_id == "a0"
+
+
+def test_a_turncoat_is_the_last_choice_for_a_new_role():
+    """在本群演过**别的**角色的号，排在「没在本群露过面」的号后面。
+
+    生面孔开口没有历史包袱；翻脸的号一开口就自带矛盾人设。
+    """
+    pb = _playbook(("advocate",))
+    cands = _cands(2)
+    control = cast_roles(pb, cands, fingerprint_groups=_FP_TABLE, seed="g")
+    winner = control.by_slot("advocate").account_id
+    other = "a0" if winner == "a1" else "a1"
+    cast = cast_roles(pb, cands, fingerprint_groups=_FP_TABLE, seed="g",
+                      prior_slots={winner: "skeptic"})
+    assert cast.by_slot("advocate").account_id == other, (
+        "本来会赢的号因为在本群演过 skeptic，要让位给生面孔")
+
+
+def test_stickiness_never_outranks_the_co_performance_axis():
+    """同台共现是算法抓的、粘性是给人看的——共现更重。
+
+    粘住角色的号若与场上已选的人同台过多群，宁可换个没同台过的生面孔：翻脸的
+    观感损失 < 共现进台账的实质暴露。
+    """
+    pb = _playbook(("advocate", "asker"))
+    cast = cast_roles(pb, _cands(3), fingerprint_groups=_FP_TABLE, seed="g",
+                      co_performance={("a0", "a1"): 5},
+                      prior_slots={"a0": "advocate", "a1": "asker"})
+    assert cast.by_slot("advocate").account_id == "a0", "粘性正常钉住第一个槽"
+    assert cast.by_slot("asker").account_id == "a2", (
+        "a1 虽有 asker 粘性，但与 a0 同台 5 群——共现轴优先，换生面孔")
+
+
+def test_an_empty_prior_table_changes_nothing():
+    """无台账＝无行为变化（与 co_performance/role_counts 同一条军规）。"""
+    pb = _playbook(("advocate", "skeptic"))
+    a = cast_roles(pb, _cands(2), fingerprint_groups=_FP_TABLE, seed="g")
+    b = cast_roles(pb, _cands(2), fingerprint_groups=_FP_TABLE, seed="g",
+                   prior_slots={})
+    c = cast_roles(pb, _cands(2), fingerprint_groups=_FP_TABLE, seed="g",
+                   prior_slots=None)
+    assert ({m.slot: m.account_id for m in a.members}
+            == {m.slot: m.account_id for m in b.members}
+            == {m.slot: m.account_id for m in c.members})

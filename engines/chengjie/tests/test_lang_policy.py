@@ -194,6 +194,37 @@ def test_evidence_strong_english_sentence():
     assert (lang, strength) == ("en", EvidenceStrength.STRONG)
 
 
+def test_minority_script_fragment_is_only_weak():
+    """独有脚本碎片不得成为强证据（弱证据永不触发切换）。
+
+    2026-07-28 实录事故：客户主体说中文/英文，只夹了一句泰语
+    「อร่อยมาก」（8 字符 vs 同句 ~10 汉字 + ~40 拉丁字母），旧口径
+    「≥2 字符即强」把整个会话语言切成泰语，随后连续 7 轮全泰语回复，
+    客户当场吐槽「你居然跟着我乱跳语言」。
+    """
+    lang, strength = classify_evidence(
+        "btw do you ship to Thailand? my customers keep asking 🤔 "
+        "อร่อยมาก 你们那芒果干真的好吃 😋")
+    assert lang == "th"
+    assert strength == EvidenceStrength.WEAK
+    # 中文里夹泰文/韩文碎片同理（同一 bug 类）
+    assert classify_evidence(
+        "我朋友说 อร่อย 那个芒果干很好吃你们多少钱")[1] == EvidenceStrength.WEAK
+    assert classify_evidence(
+        "他发了个 안녕 给我不知道什么意思")[1] == EvidenceStrength.WEAK
+
+
+def test_dominant_script_still_strong():
+    """占比够的独有脚本仍是强证据——修复不能把真语言切换也一起挡掉。"""
+    assert classify_evidence(
+        "อร่อยมาก ต้องสั่งหลายถุงเลย") == ("th", EvidenceStrength.STRONG)
+    assert classify_evidence(
+        "안녕하세요 무엇을 도와드릴까요") == ("ko", EvidenceStrength.STRONG)
+    assert classify_evidence("Привет как дела") == ("ru", EvidenceStrength.STRONG)
+    # 假名分支刻意未改（日文汉字与中文汉字天然歧义，相对口径会误降级真日文）
+    assert classify_evidence("これは日本語ですよ") == ("ja", EvidenceStrength.STRONG)
+
+
 def test_evidence_weak_short_latin():
     lang, strength = classify_evidence("good morning")  # good 是中性词 → 剩 morning
     assert strength in (EvidenceStrength.WEAK, EvidenceStrength.STRONG)

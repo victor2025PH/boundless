@@ -78,6 +78,19 @@ def test_sanitize_length_guard():
     assert sanitize_llm_output("其实" * 20, orig) is None    # 过长（发挥过度/夹带）
 
 
+def test_sanitize_rejects_content_eating_shrink():
+    """2026-07-27 实锤回归钉：讲故事回复被口语化腰斩（67→33，比率 0.49）竟能过
+    旧 0.3 下限 → 客户听到半截故事（「怎么说话说一半呀」）。改写砍 >40% 必拒。"""
+    story = ("从前有只小猫特别爱喝抹茶拿铁，每天下午都蹲在咖啡馆窗边，"
+             "盯着拉花师傅做小熊图案，有一天它终于忍不住伸爪子偷喝了一口")  # 60+ 字
+    half = "从前有只小猫爱喝抹茶，有一天它偷喝了一口"  # ~原文一半
+    assert sanitize_llm_output(half, story) is None
+    # 正常口语化（轻度压缩 ~0.8）仍应放行
+    ok = ("从前有只小猫超爱抹茶拿铁，天天下午蹲咖啡馆窗边看拉花师傅画小熊，"
+          "有天忍不住伸爪子偷喝了一口")
+    assert sanitize_llm_output(ok, story) == ok
+
+
 def test_sanitize_rejects_non_chinese_output():
     # 原文 12 字、输出 17 字（长度守卫放行）→ 只可能被语言守卫拒，精确测语言分支
     assert sanitize_llm_output("i feel pretty good today",
@@ -101,6 +114,70 @@ async def test_llm_success_and_cache():
     out2 = await llm_colloquialize(src, ai_client=fake, emotion="warm")
     assert out2 == out1
     assert fake.calls == 1          # 缓存命中：没再调 LLM
+    reset_state()
+
+
+class _DualAI:
+    """假 AIClient：分别记录 rewrite_local / rewrite_cloud 的调用与返回。"""
+
+    def __init__(self, local=None, cloud=None):
+        self.local_calls = 0
+        self.cloud_calls = 0
+        self._local = local
+        self._cloud = cloud
+
+    async def rewrite_local(self, system, user, *, timeout_sec=8.0, **kw):
+        self.local_calls += 1
+        return self._local
+
+    async def rewrite_cloud(self, system, user, *, timeout_sec=12.0, **kw):
+        self.cloud_calls += 1
+        return self._cloud
+
+
+_SRC = "我今天其实过得挺不错的但是有点累"
+
+
+@pytest.mark.asyncio
+async def test_provider_cloud_uses_cloud_only():
+    """provider=cloud：只打云端，本地节点缺模型时也不再白等一次本地往返。"""
+    reset_state()
+    fake = _DualAI(local="本地不该被调用的改写内容", cloud="其实我今天过得还不错啦")
+    out = await llm_colloquialize(_SRC, ai_client=fake, provider="cloud")
+    assert out == "其实我今天过得还不错啦"
+    assert (fake.cloud_calls, fake.local_calls) == (1, 0)
+    reset_state()
+
+
+@pytest.mark.asyncio
+async def test_provider_auto_falls_back_to_local():
+    """provider=auto：云端失败（超时/未配）→ 回落本地，不直接掉规则档。"""
+    reset_state()
+    fake = _DualAI(local="其实我今天过得还不错啦", cloud=None)
+    out = await llm_colloquialize(_SRC, ai_client=fake, provider="auto")
+    assert out == "其实我今天过得还不错啦"
+    assert (fake.cloud_calls, fake.local_calls) == (1, 1)
+    reset_state()
+
+
+@pytest.mark.asyncio
+async def test_provider_default_is_local():
+    """缺省仍是 local（向后兼容：未配 provider 的部署行为不变）。"""
+    reset_state()
+    fake = _DualAI(local="其实我今天过得还不错啦", cloud="云端不该被调用")
+    out = await llm_colloquialize(_SRC, ai_client=fake)
+    assert out == "其实我今天过得还不错啦"
+    assert (fake.cloud_calls, fake.local_calls) == (0, 1)
+    reset_state()
+
+
+@pytest.mark.asyncio
+async def test_provider_cloud_missing_method_degrades():
+    """老客户端没有 rewrite_cloud → 返回 None 回落规则档，绝不抛。"""
+    reset_state()
+    fake = _FakeAI("本地改写内容不该被用到")
+    assert await llm_colloquialize(_SRC, ai_client=fake, provider="cloud") is None
+    assert fake.calls == 0
     reset_state()
 
 

@@ -11,7 +11,9 @@ Phase13(2026-07-13)：主动消息**语音化**——主动打招呼按概率发
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -132,6 +134,29 @@ async def maybe_start_companion_proactive(assistant) -> None:
         from src.utils.proactive_pacing import parse_adaptive_pacing_cfg
         _pacing_cfg = parse_adaptive_pacing_cfg(cfg)
 
+        # ── 用户时钟（companion.user_clock，默认关）────────────────────────────
+        # 主动触达此前全锚定服务器本地钟（UTC+8），客户却遍布十几个时区 →「早安」发到
+        # 对方半夜。enabled + schedule **都为真**才把调度基准换成用户钟；两个开关分开是
+        # 因为时钟推断还有别的用途（prompt 注入「对方那边几点」），开那个不等于敢改调度。
+        _uc_raw = (comp.get("user_clock") or {})
+        _uc_enabled = (bool(_uc_raw.get("enabled", False))
+                       and bool(_uc_raw.get("schedule", False)))
+        _uc_cfg = dict(_uc_raw)
+        try:
+            _uc_cfg.update(
+                min_samples=int(_uc_raw.get("min_samples", 24) or 24),
+                min_margin=float(_uc_raw.get("min_margin", 0.35) or 0.35),
+                ttl_sec=float(_uc_raw.get("ttl_sec", 900) or 900),
+            )
+        except (TypeError, ValueError):
+            _uc_cfg = dict(_uc_raw)
+        # 地区节日（companion.locale_holidays）：给用户侧节日问候用「对方那边过什么节」
+        # 替代中文公历日历。与用户时钟开关独立——没有时区推断时它仍可按会话语种定国家，
+        # 用服务器日期查该国节日，属纯增益。
+        _lh_raw = (comp.get("locale_holidays") or {})
+        _lh_enabled = (bool(_lh_raw.get("enabled", False))
+                       and bool(_lh_raw.get("greet_user_side", False)))
+
         # Stage T：主动画像采集——把最 bland 的 gentle_checkin 开场，在「关系够深 +
         # 该槽位未知 + 距上次问够久」时升级成"顺势自然问一句"，让缺失画像补得起来。
         # 生日(birthday, Stage R)、称呼(name, Stage T) 共用一套通用框架，按优先级择一问。
@@ -167,10 +192,48 @@ async def maybe_start_companion_proactive(assistant) -> None:
         # 但**漏了 Saved Messages**，等于「给账号自己的云笔记发想你了」只差一条占位会话。
         from src.inbox.store import is_system_peer as _is_system_peer
 
-        # worker session 不认识的 peer（发送报 PEER_ID_INVALID）——进程内黑名单。
+        # worker session 不认识的 peer（发送报 PEER_ID_INVALID）——黑名单。
         # 不过滤则每 tick 重试同一批坏 peer（失败不记冷却→按沉默降序永远排前），
         # 正常候选永远轮不上；反复对无效 peer 打 API 也是风控信号。
+        # 落盘持久化（2026-07-27 实锤：开发期频繁重启，进程内集每次清零 →
+        # 同一批已注销 peer 每次重启后重烧 2 次失败才回黑名单）；对方若复活，
+        # 运营删 companion_bad_peers.json 即可恢复。
         _bad_peers: set = set()
+        _bad_peers_path = (
+            Path(assistant.config.config_path).parent / "companion_bad_peers.json")
+        try:
+            if _bad_peers_path.exists():
+                _bad_peers.update(
+                    str(x)
+                    for x in (json.loads(_bad_peers_path.read_text("utf-8")) or [])
+                    if str(x))
+        except Exception:
+            assistant.logger.debug("[proactive] bad_peers 装载失败", exc_info=True)
+
+        def _persist_bad_peers() -> None:
+            try:
+                _bad_peers_path.parent.mkdir(parents=True, exist_ok=True)
+                _bad_peers_path.write_text(
+                    json.dumps(sorted(_bad_peers), ensure_ascii=False), "utf-8")
+            except Exception:
+                assistant.logger.debug("[proactive] bad_peers 落盘失败", exc_info=True)
+
+        # 主客户端回落路径吞异常只回 False（拿不到错误类型）→ 按连败计数拉黑：
+        # 连败 2 次进 _bad_peers（2026-07-27 实锤：INPUT_USER_DEACTIVATED 会话
+        # 每 tick 烧掉一个名额；单败不拉防网络抖动误伤）。
+        _send_fail_streak: dict = {}
+
+        def _note_send_result(cid: str, ok: bool) -> None:
+            if ok:
+                _send_fail_streak.pop(cid, None)
+                return
+            n = _send_fail_streak.get(cid, 0) + 1
+            _send_fail_streak[cid] = n
+            if n >= 2:
+                _bad_peers.add(cid)
+                _persist_bad_peers()
+                assistant.logger.info(
+                    "[proactive] 发送连败 ×%d 已拉黑 %s（已落盘，重启不再重试）", n, cid)
 
         def _account_can_send(platform: str, account_id: str) -> bool:
             """该账号有真实发送通道才让其会话进候选。
@@ -192,9 +255,31 @@ async def maybe_start_companion_proactive(assistant) -> None:
             return (account_id == "default"
                     and assistant.telegram_client is not None)
 
+        # 本 tick 会话快照索引 {cid: conv}——用户时钟/地区节日 provider 只拿到 cid，
+        # 需要回查该会话的 memory_key / language 才能解析。每 tick 由 _conversations() 重建。
+        _conv_index: Dict[str, Dict[str, Any]] = {}
+        # 用户时钟接管观测：proactive_stats 没有对应入口（record_tick/voice/photo 三个），
+        # 刻意不改那个模块 → 每 tick 一行 info 摘要，够回答「接管了多少个会话」。
+        _uc_seen: Dict[str, int] = {"resolved": 0, "takeover": 0}
+
+        def _uc_tick_summary() -> None:
+            """把上一 tick 累计的用户时钟接管数记一行日志并清零（best-effort）。"""
+            try:
+                if _uc_seen["resolved"]:
+                    from src.companion.user_clock import dump_stats as _uc_stats
+                    assistant.logger.info(
+                        "[proactive] 用户时钟：上轮解析出 %d 个会话的时钟，其中 %d 个"
+                        "接管了调度（推断源累计 %s）",
+                        _uc_seen["resolved"], _uc_seen["takeover"], _uc_stats())
+            except Exception:
+                pass
+            _uc_seen["resolved"] = 0
+            _uc_seen["takeover"] = 0
+
         def _conversations():
             # 扫描平台：默认全平台（编排器能发的私聊都纳入主动触达）；
             # 可配 companion.proactive_topic.platforms 白名单收窄。
+            _uc_tick_summary()
             _plat_filter = cfg.get("platforms")
             if isinstance(_plat_filter, str):
                 _plat_filter = [_plat_filter]
@@ -284,6 +369,20 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 # 且 dirs 本轮已查好（零额外查询）。
                 if not dirs_ok or not (dirs.get(cid) or {}).get("direction"):
                     continue
+                # 收件箱档位闸：仅全自动会话可主动触达。手动/人审会话被坐席接管后
+                # 不应再「想你了」冷开场（与 A 线直发闸同一口径）。
+                try:
+                    from src.inbox.automation_mode import (
+                        allows_direct_autosend,
+                        resolve_automation_mode,
+                    )
+                    _amode = resolve_automation_mode(
+                        assistant.inbox_store, cid,
+                        getattr(assistant.config, "config", None) or {})
+                    if not allows_direct_autosend(_amode):
+                        continue
+                except Exception:
+                    pass
                 chat_key = str(r.get("chat_key") or "")
                 platform = str(r.get("platform") or "telegram")
                 account_id = str(r.get("account_id") or "default")
@@ -326,10 +425,89 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     "memory_key": _mem_key,
                     "stage": _stage,
                     "intimacy": _intim,
+                    # 会话语言（ingest 持续标注）：用户时钟/地区节日在缺显式信号时按语种
+                    # 兜底猜国家（跨洲通用语刻意不猜，见 user_clock/locale_holidays）。
+                    "language": str(r.get("language") or "").strip().lower(),
                     "last_emotion": str(
                         (meta_intel.get(cid) or {}).get("last_emotion") or ""),
                 })
+            _conv_index.clear()
+            _conv_index.update({str(c["conversation_id"]): c for c in out})
             return out
+
+        def _resolve_clock(cid):
+            """该会话的用户时钟（``UserClock|None``）。绝不抛：解析服务未上线 / 模块缺失 /
+            任何异常 → None，规划器按服务器钟走＝本能力上线前的行为。"""
+            try:
+                from src.companion.user_clock_resolver import (
+                    resolve_for_conversation,
+                )
+                conv = _conv_index.get(cid) or {}
+                # episodic store 实际挂在 skill_manager 上（assistant 无此属性），
+                # 两处都探一遍，免得自述城市信号白丢。
+                _epi = getattr(assistant, "_episodic_store", None)
+                if _epi is None:
+                    _epi = getattr(
+                        assistant.skill_manager, "_episodic_store", None)
+                return resolve_for_conversation(
+                    cid,
+                    inbox_store=assistant.inbox_store,
+                    episodic_store=_epi,
+                    memory_key=str(conv.get("memory_key") or ""),
+                    cfg=_uc_cfg,
+                )
+            except Exception:
+                return None
+
+        def _user_clock(cid):
+            """规划器用的时钟 provider＝裸解析 + 接管观测计数（解析不出时不计数，
+            这样解析服务没上线就一行日志都不刷）。"""
+            clock = _resolve_clock(cid)
+            try:
+                if clock is not None:
+                    _uc_seen["resolved"] += 1
+                    if getattr(clock, "trust", "") in ("replace", "narrow"):
+                        _uc_seen["takeover"] += 1
+            except Exception:
+                pass
+            return clock
+
+        def _locale_holiday(cid):
+            """该会话所在地区今天适合问候的节日 ``(key, 名称)``；无 → None。绝不抛。
+
+            国家优先取时钟推断结果（自述城市/号码国码最硬），退而按会话语种猜；
+            日期取**用户钟下的今天**（对方的 12-25 不是服务器的 12-25）。只认
+            ``greet=True`` 的条目——国庆/国难日之类绝不群发「快乐」。"""
+            try:
+                from src.companion.locale_holidays import (
+                    country_for_language,
+                    holidays_on,
+                )
+                from src.companion.user_clock import user_now
+                conv = _conv_index.get(cid) or {}
+                clock = _resolve_clock(cid)
+                lang = str(conv.get("language") or "")
+                country = str(getattr(clock, "country", "") or "")
+                if not country:
+                    country = country_for_language(lang)
+                if not country:
+                    return None
+                today = user_now(clock, time.time()).date()
+                for h in holidays_on(today, country):
+                    if not getattr(h, "greet", False):
+                        continue
+                    name = (str(getattr(h, "name_en", "") or "")
+                            if lang.startswith("en")
+                            else str(getattr(h, "name_zh", "") or ""))
+                    name = name or str(getattr(h, "name_zh", "") or "")
+                    key = str(getattr(h, "key", "") or "")
+                    if key and name:
+                        return (key, name)
+                return None
+            except Exception:
+                assistant.logger.debug(
+                    "[proactive] 地区节日解析失败 cid=%s", cid, exc_info=True)
+                return None
 
         def _opener(*, memory_key, silent_hours, stage, intimacy,
                     last_emotion="", last_emotion_intensity=-1.0, contact_key="",
@@ -492,7 +670,9 @@ async def maybe_start_companion_proactive(assistant) -> None:
             plans = plan_proactive_sends(
                 convs, cooldown_map=cooldown_map, opener_fn=_opener,
                 has_pending_care=_has_pending_care, max_per_tick=lim, **_pp_params,
-                pacing_cfg=_pacing_cfg, priority_fn=_goal_priority)
+                pacing_cfg=_pacing_cfg, priority_fn=_goal_priority,
+                # 预览与真发同口径：安静时段按用户钟判，预览才不骗人
+                user_clock_provider=_user_clock if _uc_enabled else None)
             for i, p in enumerate(plans):
                 p["would_send_this_tick"] = i < _real_max_per_tick
             return {
@@ -892,6 +1072,49 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     "[proactive] 生活照开场失败，回落语音/文本", exc_info=True)
             return False
 
+        def _guard_offer_text(text: str, plan=None) -> str:
+            """剥掉目标驱动开场里未授权的折扣/券码/赠送承诺（P14）。绝不抛。"""
+            try:
+                cfg = getattr(assistant.config, "config", None) or {}
+                _og = (((cfg.get("companion") or {}).get("goals") or {})
+                       .get("offer_guard") or {})
+                if not bool(_og.get("enabled", True)):
+                    return text
+                from src.companion.goals import offers as offers_mod
+                from src.companion.goals import site_catalog as sc
+                from src.companion.goals.offer_guard import sanitize_offer_claims
+                catalog = sc.load_catalog(sc.catalog_path(
+                    cfg, getattr(assistant.config, "config_path", None)))
+                out, n, hits = sanitize_offer_claims(
+                    text,
+                    allowed_texts=offers_mod.allowlist_texts(catalog),
+                    allowed_free_days=offers_mod.authorized_free_days(catalog))
+                if n:
+                    assistant.logger.warning(
+                        "[proactive] 未授权优惠承诺已剥离 %d 处: %s",
+                        n, " | ".join(hits[:3]))
+                    pid = ""
+                    try:
+                        # 人设归属（P16）：与生活照/语音分支同一解析口径
+                        from src.ai.persona_voice import (
+                            resolve_effective_persona_id,
+                        )
+                        pid = str(resolve_effective_persona_id(
+                            cfg, (plan or {}).get("platform") or "",
+                            (plan or {}).get("account_id") or "",
+                            str((plan or {}).get("chat_key") or "")) or "")
+                    except Exception:
+                        pid = ""
+                    try:
+                        from src.companion.goals.stats import get_goal_stats
+                        get_goal_stats().record_offer_claim_stripped(
+                            n, samples=hits, source="proactive", persona=pid)
+                    except Exception:
+                        pass
+                return out
+            except Exception:
+                return text
+
         def _log_outreach(plan, kind: str) -> None:
             """主动触达落 outreach_log（batch_id=proactive_topic，note=派发形态）。
             复用 P61 回执统计：photo/voice/text 的回复率可经 outreach_response_stats
@@ -929,6 +1152,11 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 plan, scene_note=_photo_plan[1] if _photo_plan else "")
             if not text:
                 return False
+            # 1.1) 出站优惠守卫（P14）：目标桥带来的开场也可能被 LLM 加一句
+            # 「给你打个折」。只守目标驱动的开场（普通陪伴开场不碰），文案/
+            # 配图配文/语音稿三条分支同源，所以放在这里一次搞定。
+            if (plan or {}).get("_goal_action_id"):
+                text = _guard_offer_text(text, plan)
             platform = plan["platform"]
             account_id = plan["account_id"]
             chat_key = plan["chat_key"]
@@ -954,6 +1182,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     _ok = bool((res or {}).get("delivered", True))
                     if _ok:
                         _log_outreach(plan, "text")
+                    _note_send_result(plan["conversation_id"], _ok)
                     return _ok
             except Exception as e:
                 # PEER_ID_INVALID = session 不认识对方（无 access_hash，多为
@@ -968,6 +1197,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     "YOU_BLOCKED_USER", "CHAT_WRITE_FORBIDDEN"))
                 if _permanent:
                     _bad_peers.add(plan["conversation_id"])
+                    _persist_bad_peers()
                     assistant.logger.info(
                         "[proactive] peer 不可达已拉黑 %s（%s）",
                         plan["conversation_id"], e)
@@ -990,9 +1220,11 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     ok = await assistant.telegram_client.send_message(target, text)
                     if ok:
                         _log_outreach(plan, "text")
+                    _note_send_result(plan["conversation_id"], bool(ok))
                     return bool(ok)
                 except Exception:
                     assistant.logger.debug("[proactive] 主客户端发送失败", exc_info=True)
+                    _note_send_result(plan["conversation_id"], False)
                     return False
             return False
 
@@ -1051,14 +1283,14 @@ async def maybe_start_companion_proactive(assistant) -> None:
 
             _personalize = bool(_r_cfg.get("personalize_active_hour", True))
 
-            def _active_hours(cid):
-                # 该用户历史**入站**消息的本地小时样本，推断习惯晨 / 晚点（仅候选才查）。
+            def _inbound_ts(cid):
+                """该用户历史**入站**消息的时间戳（仅候选才查，控成本）。"""
                 try:
                     msgs = assistant.inbox_store.list_recent_messages(
                         cid, limit=80) or []
                 except Exception:
                     return []
-                hrs = []
+                out = []
                 for m in msgs:
                     if str(m.get("direction") or "") != "in":
                         continue
@@ -1067,8 +1299,20 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     except (TypeError, ValueError):
                         ts = 0.0
                     if ts > 0:
-                        hrs.append(time.localtime(ts).tm_hour)
-                return hrs
+                        out.append(ts)
+                return out
+
+            def _active_hours(cid):
+                # 遗留口径：**服务器本地**小时样本（跨时区不正确，只在用户时钟未启用时用）。
+                return [time.localtime(ts).tm_hour for ts in _inbound_ts(cid)]
+
+            def _active_utc_hours(cid):
+                # UTC 小时样本：与时区无关的原始事实，由规划器按该会话时钟换算成对方的
+                # 本地小时再推断作息（服务器小时会把「对方的早上」记成别的时段）。
+                return [
+                    datetime.fromtimestamp(ts, tz=timezone.utc).hour
+                    for ts in _inbound_ts(cid)
+                ]
 
             _r_morning = tuple(_r_cfg.get("morning_window", [7, 10]))
             _r_night = tuple(_r_cfg.get("night_window", [21, 24]))
@@ -1123,6 +1367,12 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     max_per_tick=_r_max,
                     has_pending_care=_has_pending_care,
                     active_hours_provider=_active_hours if _personalize else None,
+                    # 用户时钟未启用 → 一个新参数都不传（逐位旧行为）
+                    **({
+                        "user_clock_provider": _user_clock,
+                        "active_utc_hours_provider": (
+                            _active_utc_hours if _personalize else None),
+                    } if _uc_enabled else {}),
                 ) or []
                 if _plan_milestones is None:
                     return daily
@@ -1140,6 +1390,12 @@ async def maybe_start_companion_proactive(assistant) -> None:
                         has_pending_care=_has_pending_care,
                         birthday_provider=(
                             _birthday_provider if _m_bday_on else None),
+                        # 各自独立：时钟接管整点/日期，地区节日换掉中文公历日历；
+                        # 两个都未启用时一个参数都不传（逐位旧行为）。
+                        **({"user_clock_provider": _user_clock}
+                           if _uc_enabled else {}),
+                        **({"locale_holiday_provider": _locale_holiday}
+                           if _lh_enabled else {}),
                     ) or []
                 except Exception:
                     assistant.logger.debug("[milestone] 规划失败", exc_info=True)
@@ -1182,6 +1438,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
             ritual_cooldown=_ritual_cd,
             pacing_cfg=_pacing_cfg,
             priority_fn=_goal_priority,
+            user_clock_provider=_user_clock if _uc_enabled else None,
         )
         await loop.start()
         assistant._companion_proactive_loop = loop

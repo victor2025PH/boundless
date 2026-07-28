@@ -23,12 +23,10 @@ def register_cases_routes(app, ctx) -> None:
     audit_store = ctx.audit_store
 
     def _get_ctx_store():
-        """获取 context_store 实例（仅依赖 telegram_client）。"""
-        if telegram_client:
-            sm = getattr(telegram_client, "skill_manager", None)
-            if sm:
-                return getattr(sm, "_context_store", None)
-        return None
+        """获取 context_store 实例（主客户端 → app.state 双通路）。"""
+        from src.web.web_context import resolve_skill_manager
+        sm = resolve_skill_manager(telegram_client, app)
+        return getattr(sm, "_context_store", None) if sm else None
 
     @app.get("/api/cases/active")
     async def api_cases_active(request: Request):

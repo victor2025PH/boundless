@@ -1,0 +1,90 @@
+# 官网产品目录（bd2026.cc）——聊天带货的单一事实源（site_catalog.py 消费）。
+#
+# 镜像来源（改价先改上游，再同步这里）：
+#   - website/lib/pricing.ts        价格/币种（2026-07-18 定价决议，USD）
+#   - website/lib/order-lines.ts    自助下单 plan 键（/order?plan=<key>）
+#   - products/*/product.yaml       产品事实
+# 收录纪律：只收公开货架产品；gated 线（ReachX/FaceX 类）绝不入目录。
+# pains 关键词 = 选品匹配面（对方画像 need/channel/occupation 文本命中计分）。
+
+site:
+  base_url: https://bd2026.cc
+  order_path: /order
+  calc_url: https://bd2026.cc/#autochat          # AI 成交收益试算器所在区块
+  support_contact: "Telegram @WJKJ2026（官网页脚同号，谨防仿冒）"
+
+products:
+  - id: chatx
+    name_zh: 智聊 ChatX
+    name_en: ChatX
+    pitch_zh: AI 客服成交引擎——多平台账号统一接管，AI 自动回复、主动跟进、引导成交，人工随时接管；我自己店里和电商小店的客服就是它在顶
+    pitch_en: AI closing engine — unify accounts across platforms with auto-reply, proactive follow-up and guided closing; humans can take over anytime
+    price_from: $58/月
+    url: https://bd2026.cc/#autochat
+    pains: [客服, 回消息, 回不过来, 回不完, 人手, 招人, 雇人, 人工, 成交, 跟单, 催单,
+            客户多, 半夜, 熬夜, 自动回复, 咨询, 售后, 群发, 跟进, 转化, 获客,
+            customer service, reply, follow up, leads, support]
+    plans:
+      - {key: autochat-entry,    name_zh: 入门版, price: $58/月}
+      - {key: autochat-team,     name_zh: 团队版, price: $198/月, hot: true}
+      - {key: autochat-flagship, name_zh: 旗舰版, price: $598/月}
+
+  - id: lingox
+    name_zh: 通译 LingoX
+    name_en: LingoX
+    pitch_zh: 多平台聊天双向实时翻译——术语锁定、翻译记忆，不会外语也能在 WhatsApp/Telegram/LINE 上直接谈客户谈供应商；我跟菲律宾供应商砍价全靠它
+    pitch_en: Real-time two-way chat translation across platforms with term-lock glossary and translation memory
+    price_from: $99/月
+    url: https://bd2026.cc/#translate
+    pains: [翻译, 语言, 外语, 英语, 听不懂, 看不懂, 沟通, 供应商, 外国客户, 老外,
+            菲律宾语, 他加禄, 越南, 泰国, 多语, 语言不通,
+            translate, translation, language, english, foreign]
+    plans:
+      - {key: translate-team,     name_zh: 团队版, price: $99/月, hot: true}
+      - {key: translate-pro,      name_zh: 专业版, price: $198/月}
+      - {key: translate-charpack, name_zh: 字符包, price: $59 一次性}
+
+# 运营授权在售活动（P13）——**引擎只转述，永不自行发明折扣**。
+# 只有官网真在跑的活动才填这里；到 valid_until 当天 23:59 后自动失效停止引用。
+# 硬护栏（任一不满足即整条忽略）：enabled 显式 true / authorized_by 留痕 /
+# valid_until 未过期 / url 必须是 site.base_url 同域 / for_churn 命中主流失原因。
+# 引用面：仅生命周期会话（留存·挽回·回流）且当日 CTA 为 order（带链接）或 cs（只提及）。
+offers: []
+
+# 运营授权的**非活动类**价格/试用事实（2026-07-28）——出站优惠守卫的白名单。
+# 与 offers 的区别：offers 是有档期的促销（到期自动失效、聊天里会主动引用一次），
+# claims 是长期成立的事实（不主动推，但 LLM 说到时守卫不该当成编的给剥掉）。
+#
+# 为什么必须登记：守卫默认把「免费用 N 天」一律当 LLM 编的赠送承诺剥掉，整条即
+# 承诺时还会换成「我这边不能私自给折扣」——真有试用却这么答＝对客户说谎，且正好
+# 发生在「能不能先试试」这个成交必经的异议上。
+#
+# ⚠ 只填**客户端真给得出**的：客户端首启向导「注册领 7 天完整版 · 2.5 万字符」
+#   （renderer/first-run-model.js 的 claim_sub/claim_ok；每台机器一次，绑本机）。
+# ⚠ 官网 OrderPanel 那个「14 天免费试用」属 **AvatarHub/FaceX 线**
+#   （website/lib/avatarhub-pricing.ts 的 trial 档），gated 线本目录刻意不收 →
+#   **不要**往 free_days 里加 14，否则等于授权苏婉承诺一个这两个产品没有的试用。
+claims:
+  # 授权免费时长（天）。守卫按天数比对而非按措辞：登记 7 → 「7 天」「一周」放行，
+  # 「14 天」「一个月」照剥。改动即时生效（目录 mtime 热加载，无需重启）。
+  free_days: [7]
+  # texts 同时也是「客户数」类社会证明的白名单（P15）：守卫会剥「已有500家在用」
+  # 这类带数字的临场发挥；官网案例页真有的数据写进 texts（含数字原样），LLM
+  # 说到时即放行。没登记 = 任何具体客户数都按编的处理。
+  texts:
+    - 注册领 7 天完整版 · 2.5 万字符，绑定本机使用
+    - 7 days, all channels, 25,000 characters — bound to this machine
+    - 装完即用，无需注册，体验额度在顶栏徽章和会员中心随时可查
+    - Works right after install — no signup needed
+
+# offers:
+#   - id: entry-trial-2608
+#     enabled: true
+#     authorized_by: victor            # 谁批的（审计留痕，必填）
+#     valid_until: "2026-08-31"        # 当天 23:59 后自动失效
+#     label_zh: 入门版首月体验价（官网活动页可查）
+#     label_en: Starter first-month promo
+#     url: https://bd2026.cc/order?plan=autochat-entry   # 必须同域
+#     plan_key: autochat-entry
+#     product_id: chatx                # 留空=不限产品
+#     for_churn: [太贵, 预算紧张]       # 留空=默认价格敏感三类

@@ -340,6 +340,96 @@ async def test_an_empty_slot_says_which_of_the_four_guardrails_emptied_it():
     assert "号不够" in blob, "pool 原因必须译成「补号／配独立出口」而不是含糊的缺角"
 
 
+# ── 三之二b、开演前 peer 体检（演员对群可达性）───────────────────────────────
+
+
+class _PeerOrch:
+    """带 ``ensure_peer`` 能力的编排器桩：可按号编排「在不在群」的答案。"""
+
+    def __init__(self, unreachable=(), checked=True):
+        self.unreachable = {str(a) for a in unreachable}
+        self.checked = bool(checked)
+        self.peer_queries: list = []
+        self.sent: list = []
+
+    async def ensure_peer(self, platform, account_id, chat_key):
+        self.peer_queries.append((platform, account_id, chat_key))
+        if not self.checked:
+            return {"ok": True, "checked": False}
+        return {"ok": str(account_id) not in self.unreachable, "checked": True}
+
+    async def send(self, platform, account_id, chat_key, text):
+        self.sent.append((account_id, text))
+        return {"delivered": True, "message_id": f"m{len(self.sent)}"}
+
+
+@pytest.mark.asyncio
+async def test_an_actor_who_cannot_reach_the_group_stops_the_show_backstage():
+    """P3-5 三连烧的钉子：演员「不在群/解析不了」→ 后台拒演，**零拍上台**。
+
+    没有这道闸时的真实收场：首拍（缓存热的号）成功、第二个号连炸两拍、
+    session send_failed——群里留一半戏比不演更假，且烧掉的首拍收不回来。
+    """
+    orch = _PeerOrch(unreachable=["a2"])
+    res, _s, _c = await _perform(send=None, sender=None, orchestrator=orch)
+
+    assert res.terminate_reason == "peer_unreachable"
+    assert orch.sent == []                          # 一条都没上台
+    assert "a2" in " ".join(res.warnings)           # 点名到号，运营可处置
+    assert len(orch.peer_queries) >= 1
+
+
+@pytest.mark.asyncio
+async def test_the_show_goes_on_when_every_actor_can_reach_the_group():
+    orch = _PeerOrch()
+    res, _s, _c = await _perform(send=None, sender=None, orchestrator=orch)
+
+    assert res.terminate_reason == "completed"
+    assert len(orch.sent) == res.sent > 0
+    # 体检查过每个上台的号
+    assert {q[1] for q in orch.peer_queries} == {a for a, _t in orch.sent} \
+        or len(orch.peer_queries) >= len({a for a, _t in orch.sent})
+
+
+@pytest.mark.asyncio
+async def test_an_orchestrator_without_the_probe_is_not_blocked():
+    """旧编排器（无 ``ensure_peer``）→ 不拦不崩，交发送路径自愈兜底。"""
+
+    class _Legacy:
+        def __init__(self):
+            self.sent: list = []
+
+        async def send(self, platform, account_id, chat_key, text):
+            self.sent.append((account_id, text))
+            return {"delivered": True, "message_id": f"m{len(self.sent)}"}
+
+    orch = _Legacy()
+    res, _s, _c = await _perform(send=None, sender=None, orchestrator=orch)
+    assert res.terminate_reason == "completed" and len(orch.sent) == res.sent
+
+
+@pytest.mark.asyncio
+async def test_the_preflight_gate_can_be_configured_off():
+    """``live.preflight_peers: false`` → 即使体检会说不，也放行（平台侧误报逃生门）。"""
+    armed_no_pf = {"companion": {"group_show": {
+        "live": {"enabled": True, "preflight_peers": False}}}}
+    orch = _PeerOrch(unreachable=["a1", "a2", "a3", "a4"])
+    res, _s, _c = await _perform(send=None, sender=None, orchestrator=orch,
+                                 app_config=armed_no_pf)
+
+    assert res.terminate_reason == "completed"
+    assert orch.peer_queries == []                  # 关掉就一次都不查
+    assert len(orch.sent) == res.sent > 0
+
+
+@pytest.mark.asyncio
+async def test_an_inconclusive_probe_lets_the_show_through():
+    """体检「查不了」（checked=False）≠「不可达」：放行，别把好戏误杀在后台。"""
+    orch = _PeerOrch(unreachable=["a2"], checked=False)
+    res, _s, _c = await _perform(send=None, sender=None, orchestrator=orch)
+    assert res.terminate_reason == "completed" and len(orch.sent) == res.sent
+
+
 # ── 三之三、禁演时段（轴五在真发路径上的那半条）──────────────────────────────
 
 

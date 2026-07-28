@@ -214,6 +214,134 @@ async def test_send_without_reply_to_no_source(registry, monkeypatch):
     orch._WORKER_FACTORIES.pop("telegram:protocol", None)
 
 
+class FakeFailingSendWorker(FakeWorker):
+    """send 永远失败（delivered=False）的假 worker——P3-5 假镜像 bug 的钉子。"""
+    def __init__(self, account, config):
+        super().__init__(account, config)
+        FakeFailingSendWorker.last = self
+        self.sent = []
+
+    async def send(self, chat_key, text, *, reply_to=None):
+        self.sent.append({"chat_key": chat_key, "text": text})
+        return {"delivered": False, "error": "peer unreachable"}
+
+
+async def test_failed_send_is_not_mirrored_into_the_inbox(registry, monkeypatch):
+    """delivered=False 的出站**不回写收件箱**。
+
+    2026-07-27 群演灰度实锤：连炸三场的 6 条失败台词全进了线程——坐席视角
+    「发了」、群里啥也没有，且群发言台账把它们算进暴露面（speaker budget 被
+    虚占）。失败消息就该只留在日志里。
+    """
+    orch._WORKER_FACTORIES.pop("telegram:protocol", None)
+    orch.register_worker("telegram", "protocol",
+                         lambda a, c: FakeFailingSendWorker(a, c))
+    registry.upsert("telegram", "1", mode="protocol", status="online")
+    o = AccountOrchestrator(registry=registry)
+    await o.sync()
+    mirrored = []
+    import src.integrations.protocol_bridge as pb
+    monkeypatch.setattr(pb, "emit_incoming", lambda msg: mirrored.append(msg))
+
+    res = await o.send("telegram", "1", "-1003142518418", "这条根本没发出去")
+
+    assert res.get("delivered") is False
+    assert FakeFailingSendWorker.last.sent, "worker 确实被调过"
+    assert mirrored == [], "失败出站被镜像进收件箱＝伪造暴露面"
+    orch._WORKER_FACTORIES.pop("telegram:protocol", None)
+
+
+class FakePeerWorker(FakeWorker):
+    """带 ensure_peer 能力的假 worker（开演前 preflight 分发测试）。"""
+    def __init__(self, account, config):
+        super().__init__(account, config)
+        FakePeerWorker.last = self
+        self.peer_ok = True
+        self.peer_raises = False
+        self.queries = []
+
+    async def ensure_peer(self, chat_key):
+        self.queries.append(chat_key)
+        if self.peer_raises:
+            raise RuntimeError("flood wait")
+        return self.peer_ok
+
+
+async def test_ensure_peer_routes_to_worker_capability(registry):
+    """worker 有 ensure_peer → 编排器转发真查，可达/不可达如实透传。"""
+    orch._WORKER_FACTORIES.pop("telegram:protocol", None)
+    orch.register_worker("telegram", "protocol",
+                         lambda a, c: FakePeerWorker(a, c))
+    registry.upsert("telegram", "1", mode="protocol", status="online")
+    o = AccountOrchestrator(registry=registry)
+    await o.sync()
+    w = FakePeerWorker.last
+
+    ok = await o.ensure_peer("telegram", "1", "-100grp")
+    assert ok == {"ok": True, "checked": True} and w.queries == ["-100grp"]
+
+    w.peer_ok = False
+    bad = await o.ensure_peer("telegram", "1", "-100grp")
+    assert bad == {"ok": False, "checked": True}
+    orch._WORKER_FACTORIES.pop("telegram:protocol", None)
+
+
+async def test_ensure_peer_is_inconclusive_when_unsupported_or_broken(registry):
+    """无能力 worker / 查询抛异常 → ok=True, checked=False（放行不误杀）。"""
+    # 默认 FakeWorker 没有 ensure_peer
+    registry.upsert("telegram", "1", mode="protocol", status="online")
+    o = AccountOrchestrator(registry=registry)
+    await o.sync()
+    r = await o.ensure_peer("telegram", "1", "-100grp")
+    assert r == {"ok": True, "checked": False}
+    # 完全没接管的号同理
+    r2 = await o.ensure_peer("telegram", "ghost", "-100grp")
+    assert r2 == {"ok": True, "checked": False}
+
+    # 有能力但查询自身炸了（限流/断网）→ 不确定，放行
+    orch._WORKER_FACTORIES.pop("telegram:protocol", None)
+    orch.register_worker("telegram", "protocol",
+                         lambda a, c: FakePeerWorker(a, c))
+    registry.upsert("telegram", "2", mode="protocol", status="online")
+    o2 = AccountOrchestrator(registry=registry)
+    await o2.sync()
+    w2 = o2._managed[account_key("telegram", "2")].worker
+    w2.peer_raises = True
+    r3 = await o2.ensure_peer("telegram", "2", "-100grp")
+    assert r3.get("ok") is True and r3.get("checked") is False
+    orch._WORKER_FACTORIES.pop("telegram:protocol", None)
+
+
+class FakeInviteWorker(FakeWorker):
+    """带 invite_to_group 的假 worker（排班补位分发测试）。"""
+    def __init__(self, account, config):
+        super().__init__(account, config)
+        FakeInviteWorker.last = self
+        self.invites = []
+
+    async def invite_to_group(self, chat_key, user_ref):
+        self.invites.append((chat_key, user_ref))
+        return {"ok": True, "kind": "invited", "error": ""}
+
+
+async def test_invite_to_group_dispatches_and_reports_unsupported(registry):
+    """有能力 worker → 转发并透传回执；无能力 → unsupported 如实回报不装成功。"""
+    orch._WORKER_FACTORIES.pop("telegram:protocol", None)
+    orch.register_worker("telegram", "protocol",
+                         lambda a, c: FakeInviteWorker(a, c))
+    registry.upsert("telegram", "1", mode="protocol", status="online")
+    o = AccountOrchestrator(registry=registry)
+    await o.sync()
+
+    r = await o.invite_to_group("telegram", "1", "-100grp", "@newbie")
+    assert r == {"ok": True, "kind": "invited", "error": ""}
+    assert FakeInviteWorker.last.invites == [("-100grp", "@newbie")]
+
+    r2 = await o.invite_to_group("telegram", "ghost", "-100grp", "@newbie")
+    assert r2["ok"] is False and r2["kind"] == "unsupported"
+    orch._WORKER_FACTORIES.pop("telegram:protocol", None)
+
+
 class FakeReadWorker(FakeWorker):
     """带 mark_read 的假 worker（拟人已读回执分发测试）。"""
     def __init__(self, account, config):

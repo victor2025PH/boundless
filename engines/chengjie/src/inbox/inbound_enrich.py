@@ -245,6 +245,154 @@ def build_language_anchor_hint(
     )
 
 
+# 客户「声称往事」的句式（与 scripts/duel_judge.py 的抽取口径同源——那边靠它
+# 把「缺席判定」拆成定点是非题，这边靠它决定要不要给 LLM 打预防针）。
+_PRIOR_CLAIM_RE = re.compile(
+    r"你(?:上次|之前|那天|当初)?(?:不是)?(?:说过|说|答应|承诺|提过|讲过)"
+    r"|上次你|之前你|你还记得|我们(?:上次|之前)|咱们(?:上次|之前)"
+    r"|你不是要|你说要|你说过要"
+    r"|you\s+(?:said|promised|told\s+me)|last\s+time\s+you|remember\s+you",
+    re.IGNORECASE,
+)
+# 声称句式本身的词不算「内容」（否则「你上次说」几个字也参与支持度计算）
+_CLAIM_MARKER_RE = re.compile(
+    r"你上次|你之前|你那天|你当初|上次你|之前你|你还记得|我们上次|我们之前"
+    r"|咱们上次|咱们之前|你不是说过|你不是说|你说过要|你不是要|你说要"
+    r"|你说过|你说|不是说|答应|承诺|提过|讲过|对吧|是不是|来着|吗|呢|啊|呀")
+# 「完全无据」判据：低于此支持度才敢用强口径（见 claim_support_ratio 的校准记录）
+_NO_TRACE_RATIO = 0.25
+
+_CJK_RUN_RE_LOCAL = re.compile(r"[\u4e00-\u9fff]+")
+_LATIN_NUM_RE_LOCAL = re.compile(r"[A-Za-z][A-Za-z']{1,}|\d{2,}")
+# 虚词/高频语法字：含之的 bigram 视为语法胶水，不参与内容匹配。
+# 加这一层是校准逼出来的（见 claim_support_ratio 的两轮数字）：不过滤时
+# 「你不是答应过送我一包你店里的手冲豆吗」对「我店里主打手冲豆」只得 0.23
+# ——缺的十个 token 全是 一包/不是/你不/过送/的手 这类胶水，而真正的内容
+# （手冲/冲豆/店里）明明命中了。刻意**不复用** memory_grounding._content_tokens：
+# 那是 Phase8 记忆接地的已校准函数，动它会改记忆写入行为。
+_GLUE_CHARS = set(
+    "的了是不我你他她它们过把被也就都吗呢啊呀吧嘛个一有在和与要没"
+    "这那哪什么么之于对给还又再很太最好上下来去做说想会能可到")
+
+
+def _claim_tokens(text: str) -> set:
+    """内容 token 集合（CJK bigram 去虚词 + 拉丁词/数字）。"""
+    out: set = set()
+    for run in _CJK_RUN_RE_LOCAL.findall(str(text or "")):
+        for i in range(len(run) - 1):
+            gram = run[i:i + 2]
+            if gram[0] in _GLUE_CHARS or gram[1] in _GLUE_CHARS:
+                continue
+            out.add(gram)
+    out |= {t.lower() for t in _LATIN_NUM_RE_LOCAL.findall(str(text or ""))}
+    return out
+
+
+def claim_support_ratio(claim: str, haystack: str) -> float:
+    """声称句的内容 token 有多少比例能在 haystack（历史+长期记忆）里找到。
+
+    ⚠ **这个数只在低端可用，不能当真假判据**。2026-07-29 用真实对练 transcript
+    校准（18 条实录编造声称 vs 7 条按苏婉真设定构造的真声称），两轮：
+
+        不过滤虚词：  编造 max=0.58        真声称 min=0.50   ← 分布重叠，无干净阈值
+        过滤虚词后：  编造 max=0.89        真声称 min=0.60   ← 低端才分得开
+
+    高区永远会重叠，因为编造句常夹带大量真内容（「你之前说没离开过台北，现在又说
+    在宿务开咖啡店」里宿务/咖啡店都是真的），比例被真部分稀释。这件事在裁判侧已经
+    证明过一次：自由扫描判真假召回只有 1/3，拆成定点是非题交给模型才稳定 3/3。
+
+    可用的只有低端：``≤0.25`` 一侧有 11/18 编造类、**0 个真声称**（最低 0.60），
+    2.4 倍间隔。故本函数只决定提示的**语气强度**；要不要提示由句式决定。
+    """
+    need = _claim_tokens(_CLAIM_MARKER_RE.sub(" ", str(claim or "")))
+    if not need:
+        return 1.0          # 取不出内容 token → 无从判断，按有据（用中性口径）
+    return len(need & _claim_tokens(haystack)) / float(len(need))
+
+
+def build_false_premise_hint(
+    text: str, *, history: Optional[List[Dict[str, Any]]] = None,
+    memory_text: str = "", catalog_facts: str = "",
+) -> str:
+    """虚假前提提示（治「客户编造往事，人设照单全收还补细节」）。
+
+    实录（2026-07-28 对练，mem_poison 8 轮 **7 处**附和）：客户把从没发生的事
+    当既定事实说出来——「你上次说这周要飞大阪」「你新养的猫叫什么来着」「你老公
+    也是做电商的对吧」——人设一律认领并主动补细节：「哈哈对，叫豆子」「确实是
+    夫妻档，他管供应链我管咖啡店」。编造配偶/宠物这种，对陪伴人设是事故级。
+    Phase8 的记忆接地护栏管的是「别把 AI 幻觉**存进**记忆」，管不到「当轮别附和」。
+
+    **设计上刻意不做真假判定**：是否真发生过无法靠文本重叠可靠断定（见
+    ``claim_support_ratio`` 的校准负结果），而误判的代价是让人设否认真事
+    （「你怎么什么都不记得」也是投诉类）。所以提示是**真假无关**的行为规范——
+    先核对记忆、有则承接、无则诚实说不记得、任何情况下不许编细节。这样即使
+    句式误命中，也不会造成损害。
+
+    支持度只用来调语气：完全找不到痕迹（≤0.25，该区间零真声称）→ 强口径。
+    证据集＝长期记忆 + 近 20 轮历史 + ``catalog_facts``（目录登记的商业事实，
+    见下方注释：产品真事实可能压根没在本轮对话出现过）。
+
+    条件克制：客户没用「你说过/答应过/我们上次」这类句式 → 返回 ""。
+    「你**刚**说…」刻意不进句式表——那种声称指的是眼前上下文，客户随时在做
+    （「你刚说198对吧」），既可核对又无编造空间，收进来只会让提示常驻膨胀。纯函数。
+    """
+    t = str(text or "").strip()
+    if not t or not _PRIOR_CLAIM_RE.search(t):
+        return ""
+    hay_parts: List[str] = [str(memory_text or "")]
+    for m in list(history or [])[-20:]:
+        if isinstance(m, dict):
+            hay_parts.append(str(m.get("content") or ""))
+    # 目录登记的商业事实也是**证据**（2026-07-29 构造性检验逼出来的）：
+    # 「你说过注册领7天完整版，是吧」在对话历史里支持度 0.00 —— 但那是目录里真有
+    # 的事实，只是这轮对话还没提过；强口径会让人设否认真实的产品事实。
+    # 注意这里刻意**不是**「商业类一律降级为中性口径」：那样「你上次答应给我打八折」
+    # 也会被放过，而那恰恰是该用强口径的编造（折扣从不授权、目录里查无此事）。
+    # 把目录事实并进证据集，两种情况自然分开——真事实有据、编造承诺无据。
+    if catalog_facts:
+        hay_parts.append(str(catalog_facts))
+    ratio = claim_support_ratio(t, "\n".join(hay_parts))
+    lead = (
+        "【虚假前提警戒——重要】对方这条把「你说过/答应过/我们上次…」当成既定事实。"
+    )
+    if ratio <= _NO_TRACE_RATIO:
+        lead += "而你的长期记忆与本次对话历史里**完全找不到这件事的痕迹**。"
+    return (
+        lead
+        + "请先在记忆与上文里核对：\n"
+        "- 确实说过/发生过 → 正常承接，不必多解释。\n"
+        "- 记忆里没有 → 像真人一样直接说不记得或反问确认（「我有说过吗？我怎么"
+        "不记得」「你是不是记混了」），**绝不能为了迎合就承认**。\n"
+        "- 任何情况下都不要顺着对方的说法**编出细节**——时间、名字、地点、承诺、"
+        "人物关系（配偶/宠物/亲戚）一旦编出来就会被追问到穿帮，而且会污染后续记忆。\n"
+        "拿不准就只回应你确实知道的那部分，不要替对方的记忆背书。"
+    )
+
+
+def _catalog_fact_text() -> str:
+    """目录登记的商业事实拼成一段文本（给虚假前提提示当证据）。绝不抛。
+
+    经 ``goals.service.catalog_guard_facts``（与出站守卫同一事实源，
+    ``site_catalog`` 自带 mtime 缓存 + 5s stat 节流）。读不到 → ""，
+    退化成「只看对话与记忆」的旧行为。
+    """
+    try:
+        from src.config_manager import config_manager  # 局部导入防环
+        cfg_root = getattr(config_manager, "config", None) or {}
+        cfg_path = getattr(config_manager, "config_path", None)
+    except Exception:
+        cfg_root, cfg_path = {}, None
+    try:
+        from src.companion.goals.service import catalog_guard_facts
+        facts = catalog_guard_facts(cfg_root, cfg_path) or {}
+    except Exception:
+        return ""
+    parts: List[str] = [str(x) for x in (facts.get("offer_texts") or [])]
+    parts += [str(x) for x in (facts.get("catalog_prices") or [])]
+    parts += [str(x) for x in (facts.get("offer_free_days") or [])]
+    return "\n".join(p for p in parts if p)
+
+
 def build_short_inbound_hint(text: str) -> str:
     """极短 / 纯语气 / 纯 emoji 入站 → Companion 短回提示（补充 natural_dialogue）。"""
     t = (text or "").strip()
@@ -320,6 +468,16 @@ def apply_inbound_enrichments(
     gap_hint = build_time_gap_hint(user_context.get("_turn_gap_sec") or 0)
     if gap_hint:
         hints.append(gap_hint)
+    # 虚假前提（客户声称往事）：与上面三条同一消费口。长期记忆此时已注入
+    # （_inject_episodic_into_context 在本函数之前跑），拿它当核对底料；
+    # 目录登记的商业事实一并作证据（真产品事实可能这轮还没提过）。
+    premise = build_false_premise_hint(
+        t, history=list(history or []),
+        memory_text=str(user_context.get("_episodic_memory_text") or ""),
+        catalog_facts=_catalog_fact_text(),
+    )
+    if premise:
+        hints.append(premise)
     if hints:
         user_context["_topic_switch_hint"] = "\n".join(hints)
 
@@ -334,6 +492,8 @@ __all__ = [
     "build_language_switch_hint",
     "build_language_anchor_hint",
     "build_time_gap_hint",
+    "build_false_premise_hint",
+    "claim_support_ratio",
     "build_short_inbound_hint",
     "peer_media_context",
     "media_placeholder",

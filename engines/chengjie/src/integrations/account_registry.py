@@ -11,11 +11,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS platform_accounts (
@@ -257,6 +260,58 @@ class AccountRegistry:
             release_for_account_bg(platform, account_id)
         except Exception:
             pass
+
+
+def parse_persona_ids(meta: Optional[Dict[str, Any]]) -> List[str]:
+    """账号 meta → 绑定的人设 id 列表（容忍历史存储形态）。
+
+    registry 里 ``persona_ids`` 实际存在三种形态（真实数据实测）：list、
+    ``"['su_wan']"`` 这种 **str(list) 字符串**、缺失只有单数 ``persona_id``。
+    """
+    m = meta or {}
+    out: List[str] = []
+    single = str(m.get("persona_id") or "").strip()
+    if single:
+        out.append(single)
+    raw = m.get("persona_ids")
+    if isinstance(raw, (list, tuple)):
+        out.extend(str(x).strip() for x in raw)
+    elif isinstance(raw, str):
+        for part in raw.strip().strip("[]").split(","):
+            p = part.strip().strip("'\"").strip()
+            if p:
+                out.append(p)
+    seen: set = set()
+    uniq = []
+    for p in out:
+        if p and p not in seen:
+            seen.add(p)
+            uniq.append(p)
+    return uniq
+
+
+def persona_binding_refs(profile_id: str) -> List[str]:
+    """反查：哪些**未移除**账号显式绑定了该人设 → ``["platform:account_id", …]``。
+
+    删除类操作的核查项（误删实锤 2026-07-28：pid=mizuki 的传记库存被当
+    「孤儿」清掉，而账号 8438080491 的 registry meta 明明写着
+    ``persona_id: mizuki``——「有没有档案/有没有审计」都不是「在不在用」的
+    判据，**绑定表才是**）。fail-open：registry 不可用返回 []——护栏失明时
+    不挡正常运维，删除本身仍有 force 语义兜底。
+    """
+    pid = str(profile_id or "").strip()
+    if not pid:
+        return []
+    try:
+        reg = get_account_registry()
+        return [
+            f"{row.get('platform')}:{row.get('account_id')}"
+            for row in reg.list()
+            if pid in parse_persona_ids(row.get("meta"))
+        ]
+    except Exception:
+        logger.debug("persona_binding_refs 反查失败（fail-open）", exc_info=True)
+        return []
 
 
 _registry: Optional[AccountRegistry] = None

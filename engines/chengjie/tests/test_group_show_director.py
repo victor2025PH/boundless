@@ -317,6 +317,38 @@ def test_responsive_pick_walks_down_to_whoever_is_available():
     assert d.select_next_speaker().account_id == "a_ask"
 
 
+def test_a_responsive_answer_pulls_the_responders_own_beat_forward():
+    """响应式覆盖选了 advocate 答疑后，他念的得是**自己角色的拍**。
+
+    旧行为：speaker 换成 advocate、directive 仍是队头 asker 的拍——他顶着别人
+    的意图开口（与刷屏闸换嘴同一类脱钩）。对齐后队列里他的拍被提前，推后的拍
+    不丢。
+    """
+    d = _director()      # 默认拍序：b1 asker / b2 advocate / b3 skeptic / b4 bystander
+    d.observe_human("这个会不会封号？", ts=T0)
+    speaker = d.select_next_speaker()
+    directive = d.next_directive()
+    assert speaker.slot == "advocate"
+    assert directive.beat_id == "b2", "advocate 念自己的 b2，不是队头 asker 的 b1"
+    assert [b.id for b in d._queue] == ["b2", "b1", "b3", "b4"], "对齐是重排不是丢拍"
+
+
+def test_a_responder_without_a_scripted_beat_keeps_the_head_beat():
+    """队列里没有 responder 的拍 → 保持队头不动。
+
+    此时 ``respond_to_human`` 主导生成，意图错位影响可接受——比「不让最懂的人
+    回答真人」好。
+    """
+    beats = [Beat("b1", "asker", "i1"), Beat("b2", "asker", "i2")]
+    d = _director(beats=beats)
+    d.observe_human("多少钱？", ts=T0)
+    speaker = d.select_next_speaker()
+    directive = d.next_directive()
+    assert speaker.slot == "advocate"
+    assert directive.beat_id == "b1"
+    assert "多少钱" in directive.respond_to_human
+
+
 def test_the_pending_human_line_is_cleared_once_someone_answered():
     """回应过就不该反复回应同一句话（那会变成对着一句话说三遍）。"""
     d = _director()
@@ -380,24 +412,116 @@ def test_share_gate_stays_out_of_the_way_while_the_sample_is_tiny():
     assert d.select_next_speaker().account_id == "a_ask"
 
 
-def test_share_gate_swaps_in_the_quietest_account_when_one_号_hogs_the_room():
-    """单号占比超阈值 → 本拍换人，换给发言最少的那个（把话筒真正分出去）。"""
+def test_share_gate_swaps_the_beat_not_the_mouth_when_one_号_hogs_the_room():
+    """单号真刷屏时，闸门把**别人的拍**提前——绝不把这个号的拍塞给别人念。
+
+    换嘴是 2026-07-27 双号灰度事故的根因：b5_doubt（skeptic 的质疑拍）被塞给
+    advocate 念成「自己泼自己冷水」，b6_resolve（advocate 的化解拍）被塞给
+    skeptic 念成「自问自答洗地」——比刷屏本身刺眼得多的水军痕迹。拍的意图与
+    角色人格绑定，speaker 与 directive 必须由同一次重排一起改。
+    """
+    beats = ([Beat(f"b{i}", "asker", "i") for i in range(4)]
+             + [Beat("b4", "asker", "i4"), Beat("b5", "advocate", "i5")])
+    d = _director(beats=beats, config={"max_share_per_account": 0.45})
+    for i in range(3):
+        _say(d, "a_ask", f"b{i}", ts=T0 + i)
+    _say(d, "a_bys", "b3", ts=T0 + 3)   # 上一个发言者≠asker：隔离自我接话规避
+    picked = d.select_next_speaker()
+    directive = d.next_directive()
+    assert picked.account_id == "a_adv", "闸门应把 advocate 的拍换上来"
+    assert directive.beat_id == "b5", "advocate 念的是自己角色的拍，不是 b4"
+    assert "b4" in {b.id for b in d._queue}, "asker 的拍被推后，不是丢弃"
+
+
+def test_the_share_swap_also_avoids_handing_the_mic_back_to_the_last_speaker():
+    """刷屏闸换拍时优先跳过「上一个发言者」的拍。
+
+    为压占比反手制造背靠背自我接话是拆东墙补西墙——队列里有第三人的拍就用
+    第三人的，只有实在没有时才接受连说（次优解仍好过换嘴）。
+    """
+    beats = ([Beat(f"b{i}", "asker", "i") for i in range(4)]
+             + [Beat("b4", "asker", "i4"),
+                Beat("b5", "advocate", "i5"),      # 上一个发言者的拍：应被跳过
+                Beat("b6", "skeptic", "i6")])      # 第三人的拍：应被提前
+    d = _director(beats=beats, config={"max_share_per_account": 0.45})
+    for i in range(3):
+        _say(d, "a_ask", f"b{i}", ts=T0 + i)
+    _say(d, "a_adv", "b3", ts=T0 + 3)
+    picked = d.select_next_speaker()
+    directive = d.next_directive()
+    assert picked.account_id == "a_skp", "有第三人的拍就不该让 a_adv 连说"
+    assert directive.beat_id == "b6"
+    assert [b.id for b in d._queue][:3] == ["b6", "b4", "b5"], "重排不丢拍"
+
+
+def test_when_every_remaining_beat_belongs_to_the_hog_the_script_wins():
+    """队列剩下全是超占号的拍 → 照发不换（剧本完整性 > 占比均衡）。
+
+    独角戏段落里占比本来就高；此时换嘴是唯一的「均衡」手段，而换嘴恰恰是最贵的
+    穿帮。宁可占比略超。
+    """
     beats = [Beat(f"b{i}", "asker", "i") for i in range(8)]
     d = _director(beats=beats, config={"max_share_per_account": 0.45})
-    for i in range(4):
+    for i in range(3):
         _say(d, "a_ask", f"b{i}", ts=T0 + i)
-    picked = d.select_next_speaker()
-    assert picked is not None and picked.account_id != "a_ask"
+    _say(d, "a_bys", "b3", ts=T0 + 3)
+    assert d.select_next_speaker().account_id == "a_ask"
+    assert d.next_directive().beat_id == "b4"
 
 
 def test_share_gate_gives_up_gracefully_when_there_is_no_one_else():
-    """只有一个演员时刷屏闸无处可换——必须让他继续说，不能返回 None 把戏卡死。"""
+    """只有一个演员时刷屏闸不该生效——单人卡司天然占比 1.0，自适应阈值
+    （1/1+0.10）直接让闸门失效；就算触发也无拍可换。绝不能返回 None 把戏卡死。"""
     cast = Casting(members=(CastMember("asker", "a_ask", "p"),))
     beats = [Beat(f"b{i}", "asker", "i") for i in range(8)]
     d = _director(beats=beats, casting=cast, config={"max_share_per_account": 0.1})
     for i in range(4):
         _say(d, "a_ask", f"b{i}", ts=T0 + i)
     assert d.select_next_speaker().account_id == "a_ask"
+
+
+def test_a_two_account_duet_plays_the_script_in_role_and_in_order():
+    """**2026-07-27 双号灰度事故回归钉**：双人剧本必须按剧本对位、按剧本顺序演完。
+
+    事故机制：两人轮流说话占比天然 0.5，固定阈值 0.45 从第 5 拍起每拍触发换人
+    ——advocate 念了 skeptic 的质疑拍、skeptic 念了 advocate 的化解拍，错位还
+    级联触发自我接话重排把 b7 提到 b6 前。自适应阈值（1/2+0.10=0.60）下轮流
+    说话不再触闸，全场 8 拍严格对位。
+    """
+    roles = ["skeptic", "advocate"] * 4        # duo_matrixx 的角色交替结构
+    beats = [Beat(f"b{i+1}", r, f"意图{i+1}") for i, r in enumerate(roles)]
+    cast = Casting(members=(CastMember("advocate", "a_adv", "p_adv"),
+                            CastMember("skeptic", "a_skp", "p_skp")))
+    d = _director(beats=beats, casting=cast)
+    by_slot = {"advocate": "a_adv", "skeptic": "a_skp"}
+    for i, want_role in enumerate(roles):
+        speaker = d.select_next_speaker()
+        directive = d.next_directive()
+        assert speaker.slot == want_role, f"第{i+1}拍该由 {want_role} 说"
+        assert speaker.account_id == by_slot[want_role]
+        assert directive.beat_id == f"b{i+1}", "拍序不得被闸门搅乱"
+        _say(d, speaker.account_id, directive.beat_id, ts=T0 + i * 30)
+    assert d.should_terminate(now=T0 + 999) == (True, "completed")
+
+
+def test_the_speaker_always_matches_the_beat_he_is_given():
+    """不变量：正常拍流程里「谁在说」==「队头拍的角色」，嘴与拍永不脱钩。
+
+    刷屏闸/自我接话规避都通过**重排队列**改变下一拍，speaker 与 directive 从
+    同一个队头导出；「speaker 换了、directive 没换」正是灰度事故里 advocate
+    顶着 skeptic 意图开口的机制。全程压着一个刻意调低的阈值走完整场验证。
+    """
+    roles = ["asker", "asker", "advocate", "asker", "skeptic", "asker", "asker"]
+    beats = [Beat(f"b{i}", r, f"i{i}") for i, r in enumerate(roles)]
+    d = _director(beats=beats, config={"max_share_per_account": 0.3})
+    by_id = {b.id: b for b in beats}
+    for _ in range(len(beats)):
+        speaker = d.select_next_speaker()
+        directive = d.next_directive()
+        if speaker is None or directive is None:
+            break
+        assert by_id[directive.beat_id].role == speaker.slot
+        _say(d, speaker.account_id, directive.beat_id, ts=T0)
 
 
 # ── directive：意图而非台词 ────────────────────────────────────────────────

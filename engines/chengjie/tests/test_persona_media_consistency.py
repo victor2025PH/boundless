@@ -124,10 +124,15 @@ def test_select_required_scene_only_from_generic_pool():
 
 def test_select_required_scene_keyword_pool_unrestricted():
     # 运营显式绑定触发词的条目优先级最高，不受场景硬匹配限制
+    # （例句须带求图动词——「你会跳舞吗」这类信息性疑问句会让关键词池
+    #   整体让路（is_info_question 语义），与场景硬匹配正交）
     rows = [_row(1, triggers=["跳舞"], tags=["scene:home"])]
-    out = pm.select_media(rows, "你会跳舞吗", generic_ok=False,
+    out = pm.select_media(rows, "跳舞给我看看", generic_ok=False,
                           required_scene_class="beach")
     assert out and out["id"] == "1"
+    # 信息性提问（问名词本身）→ 关键词池让路，通用池又没开 → None
+    assert pm.select_media(rows, "你会跳舞吗", generic_ok=False,
+                           required_scene_class="beach") is None
 
 
 def test_select_now_hour_soft_filter():

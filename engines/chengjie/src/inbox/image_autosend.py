@@ -390,13 +390,14 @@ async def stage_image_file(
                 # 今日衣着状态（P1，与 A 线/聊天注入同 key 同函数）：连续窗内
                 # 刚发过照片 → 跟随其系列；否则今日确定性衣着。发出成功后以
                 # slug 记连续性账本（下条相册挑图也优先同系列——跨链跟装）。
+                # P2：传本次场景做 场景×季节 适配。
                 _outfit = ""
                 try:
                     from src.companion.outfit_state import current_outfit
                     _outfit = current_outfit(
                         persona, scfg,
                         persona_key=(persona_id or album_key),
-                        recent_series=_prefer_series)["outfit"]
+                        recent_series=_prefer_series, scene=scene)["outfit"]
                 except Exception:
                     _outfit = ""
                 # 多样性 salt（治头位置/表情千篇一律，默认关，overlay opt-in）：开时
@@ -441,6 +442,7 @@ async def stage_image_file(
                     res = await generate_with_gate(
                         provider, prompt, persona=persona, root_config=config,
                         gate_cfg=resolve_gate_cfg(scfg), seed=_seed,
+                        expect_scene=_scene_req, expect_hour=_now_hour,
                         album_key=album_key, base_image=base,
                         lora=_lora["file"], lora_weight=_lora["weight"],
                         album_scene=_scene_req, now_hour=_now_hour,
@@ -1018,10 +1020,13 @@ async def run_autosend_image(
                     st = get_persona_media_store()
                     if st is not None:
                         st.record_hit(str(row.get("id")))
-                        # 防复读账本：记「这张（这系列）发给过这个会话」，跨重启持久
+                        # 防复读账本：记「这张（这系列）发给过这个会话」，跨重启持久。
+                        # file_key＝文件名：生成链的文件系统相册按文件名比对，缺这个
+                        # 键就认不出同一张图刚发过（2026-07-28 重复发图事故）。
                         st.record_send(ck, str(row.get("id")),
                                        persona_id=str(persona_id or ""),
-                                       series=series_of(row))
+                                       series=series_of(row),
+                                       file_key=os.path.basename(local or ""))
                 except Exception:
                     pass
                 record_image_sent(mt, source="registry")
@@ -1073,8 +1078,11 @@ async def run_autosend_image(
         elif _backend not in ("", "disabled", "album"):
             try:
                 from src.ai.companion_selfie import resolve_current_scene
+                from src.companion.persona_location import resolve_persona_now
+                _p_img = _resolve_persona(persona_id)
                 directive["scene"] = resolve_current_scene(
-                    _resolve_persona(persona_id), scfg,
+                    _p_img, scfg,
+                    now=resolve_persona_now(_p_img),
                     salt=_auto_photo_count(persona_id))
             except Exception:
                 logger.debug("[image_autosend] 场景解析跳过", exc_info=True)
@@ -1143,7 +1151,8 @@ async def run_autosend_image(
                     if _st is not None:
                         _st.record_send(
                             ck, _new_id, persona_id=str(persona_id or ""),
-                            series=f"auto-{_scene}" if _scene else "")
+                            series=f"auto-{_scene}" if _scene else "",
+                            file_key=os.path.basename(local or ""))
                 except Exception:
                     pass
     else:

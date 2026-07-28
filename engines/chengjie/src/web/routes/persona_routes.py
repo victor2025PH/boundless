@@ -33,6 +33,83 @@ def _save_binding_patch(cm, patch) -> bool:
     return bool(ok)
 
 
+# ── legacy 债三件套（模块级：drafts_routes 的 metrics 也要用）────────────────
+
+def legacy_binding_entries(pm) -> dict:
+    """收集全部 legacy 绑定键 → {key: {profile_id, kind, inline_name}}。
+
+    reference 优先于 inline（同键两处都有时以引用为准，与解析链一致）；
+    3 段会话覆写键不算债，跳过。盘点 GET / 批量收官 / metrics 水位共用这一份口径。
+    """
+    from src.ai.persona_voice import is_conv_binding_key
+    entries: dict = {}
+    for k, pid in (getattr(pm, "_chat_bindings", {}) or {}).items():
+        if is_conv_binding_key(k):
+            continue
+        entries[str(k)] = {"profile_id": str(pid or ""), "kind": "reference"}
+    for k, p in (getattr(pm, "_chat_personas", {}) or {}).items():
+        ks = str(k)
+        if ks in entries or is_conv_binding_key(ks):
+            continue
+        entries[ks] = {
+            "profile_id": str((p or {}).get("id") or ""),
+            "kind": "inline",
+            "inline_name": str((p or {}).get("name") or ""),
+        }
+    return entries
+
+
+def mrpa_managed_cids(app) -> set:
+    """Messenger RPA 托管的 PM 绑定键集合（合成 cid，best-effort）。
+
+    Messenger RPA 的 per-chat 人设覆写以自己的 SQLite 为 SSOT，启动时经
+    ``_warmup_pm_chat_bindings`` 回灌进 PM——键形态是 ``mrpa_chat_cid`` 合成的
+    **纯数字**（与 TG 用户 id 形状无法区分）。这些键不是债：在 PM 侧删除会在
+    下次重启被回灌，且 runner 对有绑定的 chat 会清空 account_persona_id 让
+    绑定真赢（「被账号层压制」的判定对它们不成立）。清理链路必须把它们
+    隔离出去。服务未注入 / 任一账号读取失败 → 尽力集合（宁可漏标不误标；
+    漏标的兜底是「查无收件箱落点 → skip 留人工」）。
+    """
+    out: set = set()
+    try:
+        svc = getattr(getattr(app, "state", None), "messenger_rpa_service", None)
+        if svc is None:
+            return out
+        from src.integrations.messenger_rpa.state_store import mrpa_chat_cid
+        reg = getattr(svc, "_account_registry", None)
+        merged = getattr(svc, "_merged_cfg", {}) or {}
+        if reg is None:
+            return out
+        for ctx in reg.all_contexts():
+            try:
+                store = ctx.state_store()
+                mc = ctx.merged_config(merged) or {}
+                prefix = mc.get("chat_key_prefix") or "messenger_rpa"
+                for ov in (store.list_chat_persona_overrides() or []):
+                    chat_name = str((ov or {}).get("chat_name") or "").strip()
+                    if chat_name:
+                        out.add(str(mrpa_chat_cid(chat_name, prefix)))
+            except Exception:
+                continue
+    except Exception:
+        return out
+    return out
+
+
+def legacy_debt_snapshot(app) -> int:
+    """剩余 legacy 债条数（排除 RPA 托管键）——metrics/ops 卡的活水位。
+
+    进程计数器（persona_override_stats）只记「本次启动以来清了多少」，
+    这里补「现在还剩多少」：债清零后若回升，说明有路径在重新制造
+    peer-global 绑定，看板直接可见。
+    """
+    from src.utils.persona_manager import PersonaManager
+    pm = PersonaManager.get_instance()
+    entries = legacy_binding_entries(pm)
+    managed = mrpa_managed_cids(app)
+    return sum(1 for k in entries if k not in managed)
+
+
 def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None):
     """Register persona management API endpoints。config_manager 用于人设持久化。"""
 
@@ -504,31 +581,16 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
 
         逐条给出：绑定的 profile（stale=引用的 profile 已删除）、落在哪些
         inbox 会话（跨平台/账号）、每个落点是否被账号/会话层压制。
-        3 段会话覆写键不在此列（它们是新语义，不是债）。
+        3 段会话覆写键不在此列（它们是新语义，不是债）；Messenger RPA 托管键
+        （rpa_managed=True）列出但不算债（debt_total 不含），处置须去 RPA 页。
         """
-        from src.ai.persona_voice import (
-            conv_override_enabled,
-            is_conv_binding_key,
-        )
+        from src.ai.persona_voice import conv_override_enabled
         from src.utils.persona_manager import PersonaManager
         pm = PersonaManager.get_instance()
         cfg = _live_config(request)
         enabled = conv_override_enabled(cfg)
-
-        entries: dict = {}
-        for k, pid in (getattr(pm, "_chat_bindings", {}) or {}).items():
-            if is_conv_binding_key(k):
-                continue
-            entries[str(k)] = {"profile_id": str(pid or ""), "kind": "reference"}
-        for k, p in (getattr(pm, "_chat_personas", {}) or {}).items():
-            ks = str(k)
-            if ks in entries or is_conv_binding_key(ks):
-                continue
-            entries[ks] = {
-                "profile_id": str((p or {}).get("id") or ""),
-                "kind": "inline",
-                "inline_name": str((p or {}).get("name") or ""),
-            }
+        entries = legacy_binding_entries(pm)
+        managed = mrpa_managed_cids(request.app)
 
         items = []
         for k in sorted(entries):
@@ -546,12 +608,14 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
                 ),
                 # stale=引用式绑定指向已删除的 profile（只能清除，升不了级）
                 "stale": info["kind"] == "reference" and bool(pid) and prof is None,
+                "rpa_managed": k in managed,
                 "conversations": convs,
                 "suppressed_all": bool(convs) and all(
                     c["suppressed"] for c in convs),
             })
+        debt_total = sum(1 for it in items if not it["rpa_managed"])
         return {"ok": True, "enabled": enabled, "total": len(items),
-                "items": items}
+                "debt_total": debt_total, "items": items}
 
     @app.post("/api/persona/legacy-bindings/cleanup")
     async def api_persona_legacy_cleanup(request: Request, _=Depends(auth_dep)):
@@ -582,6 +646,11 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         has_inline = key in (getattr(pm, "_chat_personas", {}) or {})
         if not (has_ref or has_inline):
             raise HTTPException(404, tr(request, "err.persona.legacy_not_found"))
+        # Messenger RPA 托管键：SSOT 在 RPA 自己的 SQLite，PM 侧删除会在下次
+        # 重启被回灌（且会打断运营在 RPA 页设的显式绑定）——拒绝，指路 RPA 页。
+        if key in mrpa_managed_cids(request.app):
+            raise HTTPException(
+                400, tr(request, "err.persona.legacy_rpa_managed"))
         actor = request.session.get("username", "web_admin")
 
         upgraded: list = []
@@ -606,6 +675,10 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
             for c in convs:
                 ckey = conv_binding_key(
                     c["platform"], c["account_id"], c["chat_key"])
+                # 落点已有会话覆写＝比 legacy 更新的显式意图，升级不得踩掉
+                #（否则新机制下运营刚设的覆写会被旧值静默覆盖）。
+                if pm.get_chat_binding_ref(ckey):
+                    continue
                 pm.bind_chat_persona_by_profile_id(ckey, pid)
                 upgraded.append(ckey)
 
@@ -625,6 +698,134 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
             "legacy_upgrade" if action == "upgrade" else "legacy_remove")
         return {"ok": True, "action": action, "key": key,
                 "upgraded": upgraded, "upgraded_count": len(upgraded)}
+
+    @app.post("/api/persona/legacy-bindings/cleanup-all")
+    async def api_persona_legacy_cleanup_all(request: Request,
+                                             _=Depends(auth_dep)):
+        """一键安全收官：按「行为保真」自动策略批量处置全部 legacy 绑定。
+
+        与手动逐条不同（手动 upgrade=意图恢复——全落点落覆写让 legacy 人设
+        重新生效），批量的硬不变量是 **执行前后每条会话的生效人设 100% 不变**，
+        只消债不改行为。逐条决策：
+        - 引用的 profile 已删（stale）→ 清除：解析链对它本就 fall-through=死配置；
+        - 有落点且全部被压制 → 清除：账号/覆写层已接管，删掉不改变任何会话；
+        - 仍有活落点（legacy 当前真在赢）且 profile 可解析 → 升级：**只给活落点**
+          落 3 段覆写键（被压制落点不落——落了会反超账号层=行为改变），删 legacy 键；
+        - 拿不准 → 跳过留人工：查无落点（no_conversations）/ 内联人设无法转引用
+          （inline_unresolvable）/ 覆写开关关着无法升级（disabled）；
+        - Messenger RPA 托管键（rpa_managed）→ 跳过：SSOT 在 RPA 的 SQLite，
+          PM 侧删除会被重启回灌，处置入口在 Messenger RPA 页。
+        按键排序逐条执行；同 peer 的多条变体键（如 ``777`` 与 ``line_rpa:777``）
+        先处理者落覆写、后处理者自动判压制清除（planned 集合保证 dry_run 与
+        真跑决策一致）。Body: {dry_run: bool}——dry_run=true 只出计划零副作用，
+        前端确认框直接渲染该计划。
+        """
+        _check_write_role(request)
+        data = await request.json()
+        dry_run = bool(data.get("dry_run"))
+        from src.ai.persona_voice import conv_binding_key, conv_override_enabled
+        from src.utils.persona_manager import PersonaManager
+        pm = PersonaManager.get_instance()
+        cfg = _live_config(request)
+        enabled = conv_override_enabled(cfg)
+        actor = request.session.get("username", "web_admin")
+
+        entries = legacy_binding_entries(pm)
+        managed = mrpa_managed_cids(request.app)
+        planned_conv: set = set()   # 本批已（计划）落的覆写键：级联判定用
+        results: list = []
+        summary = {"upgrade": 0, "remove": 0, "skip": 0, "conv_bindings": 0}
+        mutated = False
+
+        for key in sorted(entries):
+            info = entries[key]
+            if key in managed:
+                summary["skip"] += 1
+                results.append({
+                    "key": key, "kind": info["kind"],
+                    "profile_id": info["profile_id"],
+                    "decision": "skip", "reason": "rpa_managed",
+                    "conversations": 0, "live": 0, "upgraded": [],
+                })
+                continue
+            pid = info["profile_id"]
+            resolvable = bool(pid) and pm.get_persona_by_id(pid) is not None
+            convs = _legacy_conversations(request, key)
+            # 压制口径叠加本批 planned：先处理的变体键落了覆写，后处理的同落点
+            # 条目在 dry_run（pm 未变）与真跑（pm 已变）下都必须判为被压制。
+            live = []
+            for c in convs:
+                ckey = conv_binding_key(
+                    c["platform"], c["account_id"], c["chat_key"])
+                if c["suppressed"] or (enabled and ckey in planned_conv):
+                    continue
+                live.append((c, ckey))
+
+            if info["kind"] == "reference" and not resolvable:
+                decision, reason = "remove", "stale"
+            elif convs and not live:
+                decision, reason = "remove", "suppressed"
+            elif live:
+                if not enabled:
+                    decision, reason = "skip", "disabled"
+                elif not resolvable:
+                    decision, reason = "skip", "inline_unresolvable"
+                else:
+                    decision, reason = "upgrade", "live"
+            else:
+                decision, reason = "skip", "no_conversations"
+
+            upgraded_keys: list = []
+            if decision == "upgrade":
+                for _c, ckey in live:
+                    planned_conv.add(ckey)
+                    upgraded_keys.append(ckey)
+                    if not dry_run:
+                        pm.bind_chat_persona_by_profile_id(ckey, pid)
+                if not dry_run:
+                    pm.unbind_chat_persona(key)
+                    mutated = True
+            elif decision == "remove" and not dry_run:
+                pm.unbind_chat_persona(key)
+                mutated = True
+
+            if not dry_run and decision in ("upgrade", "remove"):
+                if audit_store:
+                    if decision == "upgrade":
+                        audit_store.log(
+                            actor, "persona_legacy_upgrade",
+                            f"key={key} convs={len(upgraded_keys)} via=auto")
+                    else:
+                        audit_store.log(actor, "persona_legacy_remove",
+                                        f"key={key} reason={reason} via=auto")
+                _record_override_action(
+                    "legacy_upgrade" if decision == "upgrade"
+                    else "legacy_remove")
+
+            summary[decision] += 1
+            summary["conv_bindings"] += len(upgraded_keys)
+            results.append({
+                "key": key, "kind": info["kind"], "profile_id": pid,
+                "decision": decision, "reason": reason,
+                "conversations": len(convs), "live": len(live),
+                "upgraded": upgraded_keys,
+            })
+
+        if mutated:
+            try:
+                cm = (getattr(request.app.state, "config_manager", None)
+                      or config_manager)
+                pm.persist_chat_bindings(cm)
+            except Exception:
+                pass
+            if audit_store:
+                audit_store.log(
+                    actor, "persona_legacy_auto",
+                    f"upgrade={summary['upgrade']} remove={summary['remove']} "
+                    f"skip={summary['skip']} convs={summary['conv_bindings']}")
+
+        return {"ok": True, "dry_run": dry_run, "enabled": enabled,
+                "total": len(results), "summary": summary, "results": results}
 
     @app.post("/api/persona/update-default")
     async def api_persona_update_default(request: Request, _=Depends(auth_dep)):
@@ -718,7 +919,17 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
             raise HTTPException(400, "persona dict required")
         from src.utils.persona_manager import PersonaManager
         pm = PersonaManager.get_instance()
-        pm.upsert_profile(profile_id, persona_data)
+        # merge 语义（2026-07-27）：Studio 表单只重建部分字段 → merge=true 时与
+        # 既有人设深合并落库，富人设字段（background/life_arc/tastes…）不再被
+        # 整体替换抹掉；不带 merge 或人设不存在 → 维持整体替换旧契约。
+        did_merge = False
+        store_data = persona_data
+        if bool(data.get("merge")):
+            existing = pm.get_persona_by_id(profile_id)
+            if existing:
+                store_data = pm.deep_merge_profile(existing, persona_data)
+                did_merge = True
+        pm.upsert_profile(profile_id, store_data)
         try:
             cm = getattr(request.app.state, "config_manager", None) or config_manager
             pm.persist_profiles(cm)
@@ -728,11 +939,25 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         if audit_store:
             audit_store.log(actor, "profile_upsert",
                           f"id={profile_id} name={persona_data.get('name','?')}")
-        return {"ok": True, "profile_id": profile_id}
+        return {"ok": True, "profile_id": profile_id, "merged": did_merge}
 
     @app.delete("/api/personas/profiles/{profile_id}")
     async def api_profile_delete(profile_id: str, request: Request, _=Depends(auth_dep)):
+        """删除人设档案。
+
+        **绑定护栏**（与 bio-doc 删除同源，2026-07-28 误删实锤）：档案被账号
+        显式绑定时删除 = 绑定悬空 → 该账号**静默**回落默认人设（比丢传记更重：
+        名字/口吻/记忆全换）。有绑定 → 409 列明账号；``?force=1`` 显式越过。
+        """
         _check_write_role(request)
+        from src.integrations.account_registry import persona_binding_refs
+        force = str(request.query_params.get("force") or "").lower() in (
+            "1", "true", "yes")
+        refs = [] if force else persona_binding_refs(profile_id)
+        if refs:
+            raise HTTPException(
+                409, tr(request, "err.persona.profile_bound",
+                        accounts=", ".join(refs[:5]), n=len(refs)))
         from src.utils.persona_manager import PersonaManager
         pm = PersonaManager.get_instance()
         existed = pm.delete_profile(profile_id)

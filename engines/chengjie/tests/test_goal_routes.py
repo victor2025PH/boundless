@@ -77,6 +77,9 @@ def test_disabled_all_endpoints_403():
     assert client.post("/api/goals/batch", json={}).status_code == 403
     assert client.post("/api/goals/some-id/beat/feedback",
                        json={}).status_code == 403
+    assert client.get("/api/goals/profile?platform=x&chat_key=y"
+                      ).status_code == 403
+    assert client.post("/api/goals/profile", json={}).status_code == 403
 
 
 # ── templates ───────────────────────────────────────────────────────────────
@@ -86,16 +89,17 @@ def test_templates_shape():
     r = client.get("/api/goals/templates")
     assert r.status_code == 200
     d = r.json()
-    assert len(d["templates"]) == 6
+    assert len(d["templates"]) == 8
     assert {t["id"] for t in d["templates"]} == {
         "conversion_unlock", "conversion_subscribe", "relationship_stage",
-        "relationship_intimacy", "engagement_reactivate", "custom"}
+        "relationship_intimacy", "engagement_reactivate",
+        "acquire_and_convert", "retention_expand", "custom"}
     assert d["autonomy_levels"] == ["observe", "suggest", "auto"]
     assert set(d["statuses"]) == {"active", "paused", "done", "failed",
                                   "expired", "cancelled"}
     for t in d["templates"]:
         assert "intents" not in t                 # 内部意图池不外泄
-        assert len(t["milestones"]) == 4
+        assert len(t["milestones"]) in (4, 5)     # 获客转化=5 段弧线
 
 
 # ── create ──────────────────────────────────────────────────────────────────
@@ -472,6 +476,67 @@ def test_report_shape_and_window_clamp():
         "/api/goals/report?days=0").json()["window_days"] == 30   # 0=用默认
 
 
+# ── P1：客户画像卡 ──────────────────────────────────────────────────────────
+
+class TestProfile:
+    def test_get_empty_profile_full_slot_skeleton(self):
+        from src.companion.goals.profile_slots import SLOTS
+        client, _ = _build_client()
+        r = client.get("/api/goals/profile?platform=telegram&chat_key=u1")
+        assert r.status_code == 200
+        d = r.json()
+        # 4 relation + 6 bant + 1 lifecycle（churn_reason）——随注册表走
+        assert len(d["slots"]) == len(SLOTS)
+        assert all(s["value"] == "" for s in d["slots"])
+        assert d["fill"]["bant"] == 0.0
+        assert len(d["missing_bant"]) == 6
+
+    def test_post_then_get_roundtrip_conversation_id(self):
+        client, _ = _build_client()
+        r = client.post("/api/goals/profile", json={
+            "conversation_id": "telegram:a1:u2",
+            "fields": {"need": "获客难", "budget": "500刀", "bogus": "x"}})
+        assert r.status_code == 200
+        assert r.json()["fill"]["bant"] > 0
+        # POST 返回与 GET 同形的完整视图（前端保存后免二次拉取）
+        assert r.json()["ok"] is True
+        from src.companion.goals.profile_slots import SLOTS
+        assert len(r.json()["slots"]) == len(SLOTS)
+        d = client.get("/api/goals/profile"
+                       "?conversation_id=telegram:a1:u2").json()
+        vals = {s["key"]: s for s in d["slots"]}
+        assert vals["need"]["value"] == "获客难"
+        assert vals["need"]["src"] == "agent"
+        assert "bogus" not in vals                   # 未知槽位键被忽略
+        assert "need" not in d["missing_bant"]
+
+    def test_post_clears_with_empty_string(self):
+        client, _ = _build_client()
+        client.post("/api/goals/profile", json={
+            "platform": "telegram", "chat_key": "u3",
+            "fields": {"budget": "500刀"}})
+        client.post("/api/goals/profile", json={
+            "platform": "telegram", "chat_key": "u3",
+            "fields": {"budget": ""}})
+        d = client.get(
+            "/api/goals/profile?platform=telegram&chat_key=u3").json()
+        assert {s["key"]: s["value"] for s in d["slots"]}["budget"] == ""
+
+    def test_profile_validation_and_viewer(self):
+        client, sess = _build_client()
+        assert client.get("/api/goals/profile").status_code == 400
+        assert client.post("/api/goals/profile", json={
+            "platform": "telegram", "chat_key": "u4"}).status_code == 400
+        sess["role"] = "viewer"
+        assert client.post("/api/goals/profile", json={
+            "platform": "telegram", "chat_key": "u4",
+            "fields": {"need": "x"}}).status_code == 403
+        # viewer 读画像照常
+        assert client.get(
+            "/api/goals/profile?platform=telegram&chat_key=u4"
+        ).status_code == 200
+
+
 # ── viewer 只读 ─────────────────────────────────────────────────────────────
 
 def test_viewer_write_endpoints_403_reads_ok():
@@ -491,3 +556,258 @@ def test_viewer_write_endpoints_403_reads_ok():
     assert client.get(
         f"/api/goals/for-conversation?conversation_id={CONV}").status_code == 200
     assert client.get(f"/api/goals/{gid}").status_code == 200
+
+
+# ── P17：反馈撤销（verdict=undo）─────────────────────────────────────────────
+
+def _events(client, gid, kind):
+    d = client.get(f"/api/goals/{gid}").json()
+    return [e for e in d["events"] if e["kind"] == kind]
+
+
+def _today_action(gid):
+    from src.companion.goals.planner import day_key
+    from src.companion.goals.store import peek_goal_store
+    return peek_goal_store().get_action(gid, day_key())
+
+
+class TestBeatFeedbackUndo:
+    def _fb(self, client, gid, verdict, **extra):
+        body = {"verdict": verdict}
+        body.update(extra)
+        return client.post(f"/api/goals/{gid}/beat/feedback", json=body)
+
+    def test_undo_reverts_reject_and_reopens_injection(self):
+        client, _ = _build_client()
+        gid = _create(client).json()["goal"]["goal_id"]
+        assert self._fb(client, gid, "reject",
+                        reason="too_pushy").status_code == 200
+        r = self._fb(client, gid, "undo", reason="misclick")
+        assert r.status_code == 200
+        g = r.json()["goal"]
+        assert g["today"]["status"] == "planned"     # 拍打回可用态
+        assert g["today"]["detail"] == ""            # 驳回标记清干净
+        assert len(_events(client, gid, "beat_reject_undone")) == 1
+        # 驳回本身留在台账里（审计只增不删；退避补偿靠相减不靠删行）
+        assert len(_events(client, gid, "beat_rejected")) == 1
+        # 当天注入口随之放开（服务层 skipped/blocked 闸门读同一张拍）
+        from types import SimpleNamespace as NS
+
+        from src.companion.goals.service import build_block_for_chat
+        cfg = NS(config={"companion": {"goals": {
+            "enabled": True, "db_path": ":memory:"}}}, config_path=None)
+        assert build_block_for_chat(
+            cfg, platform="telegram", chat_key="100", account_id="a1",
+            conversation_id=CONV)
+
+    def test_undo_of_adopt_clears_mark_only(self):
+        client, _ = _build_client()
+        gid = _create(client).json()["goal"]["goal_id"]
+        assert self._fb(client, gid, "adopt").status_code == 200
+        r = self._fb(client, gid, "undo")
+        assert r.status_code == 200
+        g = r.json()["goal"]
+        assert g["today"]["detail"] == "" and g["today"]["status"] == "planned"
+        assert len(_events(client, gid, "beat_adopt_undone")) == 1
+        assert not _events(client, gid, "beat_reject_undone")
+
+    def test_undo_keeps_consumed_status(self):
+        """采纳发生在拍已进入生成之后 → 撤销只清标记，不把 consumed 打回 planned。"""
+        client, _ = _build_client()
+        gid = _create(client).json()["goal"]["goal_id"]
+        from src.companion.goals.store import peek_goal_store
+        aid = str(_today_action(gid)["action_id"])
+        assert peek_goal_store().mark_action(aid, "consumed", detail="reply")
+        assert self._fb(client, gid, "adopt").status_code == 200
+        g = self._fb(client, gid, "undo").json()["goal"]
+        assert g["today"]["status"] == "consumed" and g["today"]["detail"] == ""
+
+    def test_undo_without_prior_feedback_is_quiet_noop(self):
+        client, _ = _build_client()
+        gid = _create(client).json()["goal"]["goal_id"]
+        r = self._fb(client, gid, "undo")
+        assert r.status_code == 200 and r.json()["ok"] is True
+        assert r.json()["goal"]["today"]["status"] == "planned"
+        assert not _events(client, gid, "beat_reject_undone")
+        assert not _events(client, gid, "beat_adopt_undone")
+
+    def test_undo_is_idempotent(self):
+        client, _ = _build_client()
+        gid = _create(client).json()["goal"]["goal_id"]
+        self._fb(client, gid, "reject")
+        for _i in range(3):                       # 连点三下撤销
+            assert self._fb(client, gid, "undo").status_code == 200
+        assert len(_events(client, gid, "beat_reject_undone")) == 1
+        assert _today_action(gid)["status"] == "planned"
+
+    def test_undo_shares_existing_gates(self):
+        client, sess = _build_client()
+        assert self._fb(client, "ghost", "undo").status_code == 404
+        gid = _create(client).json()["goal"]["goal_id"]
+        from src.companion.goals.store import peek_goal_store
+        store = peek_goal_store()
+        store._conn.execute("DELETE FROM goal_actions")   # 模拟 hold 日无拍
+        store._conn.commit()
+        assert self._fb(client, gid, "undo").status_code == 409
+        sess["role"] = "viewer"
+        assert self._fb(client, gid, "undo").status_code == 403
+
+    def test_legacy_verdicts_unchanged(self):
+        """老客户端只会发 adopt/reject —— 新增 undo 后行为逐字如前。"""
+        client, _ = _build_client()
+        gid = _create(client).json()["goal"]["goal_id"]
+        g = self._fb(client, gid, "adopt").json()["goal"]
+        assert g["today"]["detail"] == "adopted" and g["today"]["status"] == "planned"
+        g = self._fb(client, gid, "reject", reason="r1").json()["goal"]
+        assert g["today"]["status"] == "skipped"
+        assert g["today"]["detail"] == "rejected:r1"
+        assert self._fb(client, gid, "meh").status_code == 400
+
+
+# ── P17：撤销必须真撤 —— planner 退避补偿 ───────────────────────────────────
+
+class TestRejectUndoCompensatesPlanner:
+    def _fb(self, client, gid, verdict):
+        return client.post(f"/api/goals/{gid}/beat/feedback",
+                           json={"verdict": verdict})
+
+    def _tomorrow_beat(self, client, gid):
+        """清掉今日拍模拟「到了明天」，再读一次让 planner 按现有台账重排。"""
+        from src.companion.goals.store import peek_goal_store
+        store = peek_goal_store()
+        store._conn.execute(
+            "DELETE FROM goal_actions WHERE goal_id = ?", (gid,))
+        store._conn.commit()
+        return client.get(f"/api/goals/{gid}").json()["goal"]["today"]
+
+    def _direct_goal(self, client):
+        from src.companion.goals.store import peek_goal_store
+        gid = _create(client).json()["goal"]["goal_id"]
+        assert peek_goal_store().update_goal_fields(gid, milestone_idx=2)
+        return gid                                # 转化模板 m2 = direct
+
+    def test_effective_rejects_is_floored_difference(self):
+        from src.companion.goals.planner import effective_rejects
+        assert effective_rejects(0, 0) == 0
+        assert effective_rejects(3) == 3                 # 没撤过 = 原样
+        assert effective_rejects(2, 1) == 1
+        assert effective_rejects(1, 3) == 0              # 撤多于驳不倒扣成负
+        assert effective_rejects(None, None) == 0        # 坏输入按 0
+
+    def test_reject_downgrades_tomorrow(self):
+        client, _ = _build_client()
+        gid = self._direct_goal(client)
+        assert self._tomorrow_beat(client, gid)["push_level"] == "direct"
+        assert self._fb(client, gid, "reject").status_code == 200
+        assert self._tomorrow_beat(client, gid)["push_level"] == "soft"
+
+    def test_undo_restores_tomorrows_push_level(self):
+        client, _ = _build_client()
+        gid = self._direct_goal(client)
+        assert self._fb(client, gid, "reject").status_code == 200
+        assert self._fb(client, gid, "undo").status_code == 200
+        # 撤销后明天恢复 direct——否则「撤销」只是擦掉标记的谎话
+        assert self._tomorrow_beat(client, gid)["push_level"] == "direct"
+
+    def test_two_rejects_force_care_day(self):
+        """基线（不撤销）：连驳两次 → 明天退避成纯陪伴日。"""
+        from src.companion.goals.templates import CARE_INTENTS
+        client, _ = _build_client()
+        gid = self._direct_goal(client)
+        assert self._fb(client, gid, "reject").status_code == 200      # 第 1 次
+        assert self._tomorrow_beat(client, gid)["push_level"] == "soft"
+        assert self._fb(client, gid, "reject").status_code == 200      # 第 2 次
+        beat = self._tomorrow_beat(client, gid)
+        assert beat["push_level"] == "none"                # ≥2 次 = 退避陪伴日
+        assert beat["intent"] in CARE_INTENTS
+
+    def test_undo_walks_care_day_back_to_soft(self):
+        """撤掉第 2 次驳回 → 有效驳回 2-1=1 → 明天从陪伴日回到封顶 soft。"""
+        client, _ = _build_client()
+        gid = self._direct_goal(client)
+        assert self._fb(client, gid, "reject").status_code == 200      # 第 1 次
+        assert self._tomorrow_beat(client, gid)["push_level"] == "soft"
+        assert self._fb(client, gid, "reject").status_code == 200      # 第 2 次
+        assert self._fb(client, gid, "undo").status_code == 200        # 撤掉它
+        assert self._tomorrow_beat(client, gid)["push_level"] == "soft"
+
+
+# ── P17：手动标成交的可选归因 meta ──────────────────────────────────────────
+
+class TestWonMeta:
+    def _done(self, client, gid, **body):
+        payload = {"action": "done"}
+        payload.update(body)
+        return client.post(f"/api/goals/{gid}/status", json=payload)
+
+    def _won_meta(self, client, gid):
+        import json
+        rows = _events(client, gid, "won_meta")
+        return [json.loads(r["detail"]) for r in rows]
+
+    def test_done_with_meta_persists_attribution(self):
+        client, _ = _build_client()
+        gid = _create(client).json()["goal"]["goal_id"]
+        r = self._done(client, gid, meta={
+            "product": "chengjie-pro", "amount": "1980",
+            "note": "线下微信收款，走对公", "bogus": "ignored"})
+        assert r.status_code == 200
+        g = r.json()["goal"]
+        assert g["status"] == "done" and g["progress"] == 1.0
+        # result 逐字不变：outcome_report 的 won 判定（manual: 前缀）与
+        # sold_plan_counts 的 order: 口径都不能被归因 meta 搅动
+        assert g["result"] == "manual:agent"
+        assert self._won_meta(client, gid) == [{
+            "product": "chengjie-pro", "amount": 1980,
+            "note": "线下微信收款，走对公"}]                # 未知键已丢弃
+
+    def test_done_without_meta_behaves_exactly_as_before(self):
+        client, _ = _build_client()
+        gid = _create(client).json()["goal"]["goal_id"]
+        r = self._done(client, gid)
+        assert r.status_code == 200
+        g = r.json()["goal"]
+        assert g["status"] == "done" and g["result"] == "manual:agent"
+        assert g["progress"] == 1.0 and g["milestone_idx"] == 3
+        assert self._won_meta(client, gid) == []          # 不落噪声行
+        d = client.get(f"/api/goals/{gid}").json()
+        assert "status" in {e["kind"] for e in d["events"]}
+
+    def test_amount_optional_and_empty_meta_drops(self):
+        client, _ = _build_client()
+        gid = _create(client).json()["goal"]["goal_id"]
+        assert self._done(client, gid, meta={"product": "只填了产品"}
+                          ).status_code == 200
+        assert self._won_meta(client, gid) == [{"product": "只填了产品"}]
+
+        g2 = _create(client, conv="telegram:a1:920").json()["goal"]["goal_id"]
+        assert self._done(client, g2, meta={"amount": "", "note": "  "}
+                          ).status_code == 200
+        assert self._won_meta(client, g2) == []           # 全空 = 不落事件
+
+    def test_meta_ignored_for_non_done_actions(self):
+        client, _ = _build_client()
+        gid = _create(client).json()["goal"]["goal_id"]
+        assert client.post(f"/api/goals/{gid}/status", json={
+            "action": "pause", "meta": {"product": "x"}}).status_code == 200
+        assert self._won_meta(client, gid) == []
+
+    def test_sanitize_won_meta_pure_rules(self):
+        from src.companion.goals.service import (
+            WON_META_NOTE_MAX,
+            WON_META_PRODUCT_MAX,
+            sanitize_won_meta,
+        )
+        assert sanitize_won_meta(None) == {}
+        assert sanitize_won_meta("nope") == {}
+        assert sanitize_won_meta({}) == {}
+        assert sanitize_won_meta({"amount": -1}) == {}        # 负数丢弃
+        assert sanitize_won_meta({"amount": "abc"}) == {}     # 非数丢弃
+        assert sanitize_won_meta({"amount": True}) == {}      # 布尔不是金额
+        assert sanitize_won_meta({"amount": 0}) == {"amount": 0}
+        assert sanitize_won_meta({"amount": 19.999}) == {"amount": 20}
+        assert sanitize_won_meta({"amount": 19.5}) == {"amount": 19.5}
+        assert sanitize_won_meta(
+            {"product": "P" * 200})["product"] == "P" * WON_META_PRODUCT_MAX
+        assert sanitize_won_meta(
+            {"note": "N" * 500})["note"] == "N" * WON_META_NOTE_MAX

@@ -62,12 +62,17 @@ CREATE INDEX IF NOT EXISTS idx_pmedia_sha ON persona_media(persona_id, sha256);
 -- 2026-07-22 防复读记忆账本：每会话已发媒体（含系列标签）持久记录。
 -- 「同一张/同一系列（同套服装连拍）再发给同一个人」= 像 AI 复读机的穿帮信号；
 -- 进程内 _LAST_SENT 只避上一条且重启即失 → 落库成为跨重启的"发过什么"记忆。
+-- file_key（2026-07-28）：同一张图的**跨链身份**。注册相册链按 DB uuid 记账、
+-- 文件系统相册链按文件名记账 → 两套命名空间互不相认，24h 重发冷却形同虚设
+-- （实录：06:25:14 发 uuid=364afa02…、06:25:27 又发同一个 cafe_white-dress_01.jpg，
+-- 而该系列明明还有 _02.._04 没发过）。两条链都补记文件名，冷却才真的拦得住。
 CREATE TABLE IF NOT EXISTS persona_media_sends (
     conv_key    TEXT NOT NULL,
     media_id    TEXT NOT NULL,
     persona_id  TEXT NOT NULL DEFAULT '',
     series      TEXT NOT NULL DEFAULT '',
     sent_at     REAL NOT NULL DEFAULT 0,
+    file_key    TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (conv_key, media_id)
 );
 CREATE INDEX IF NOT EXISTS idx_pmsends_conv ON persona_media_sends(conv_key, sent_at);
@@ -104,7 +109,23 @@ class PersonaMediaStore:
                 self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA busy_timeout=5000")
             self._conn.executescript(_DDL)
+            self._migrate()
             self._conn.commit()
+
+    def _migrate(self) -> None:
+        """存量库补列（幂等；调用方已持锁）。失败不抛——建表已成，缺列走降级路径。"""
+        for table, col, decl in (
+            ("persona_media_sends", "file_key", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            try:
+                have = {r[1] for r in self._conn.execute(
+                    "PRAGMA table_info(%s)" % table)}
+                if col not in have:
+                    self._conn.execute(
+                        "ALTER TABLE %s ADD COLUMN %s %s" % (table, col, decl))
+            except Exception:
+                logger.debug("[persona_media] 迁移 %s.%s 跳过", table, col,
+                             exc_info=True)
 
     @staticmethod
     def _row_to_dict(r: sqlite3.Row) -> Dict[str, Any]:
@@ -248,9 +269,15 @@ class PersonaMediaStore:
     def record_send(
         self, conv_key: str, media_id: str, *,
         persona_id: str = "", series: str = "",
+        file_key: str = "",
         now: Optional[float] = None,
     ) -> None:
-        """记「这条媒体发给过这个会话」（幂等 upsert）。绝不抛。"""
+        """记「这条媒体发给过这个会话」（幂等 upsert）。绝不抛。
+
+        ``file_key``＝该媒体的文件名（``Path(file_path).name``，大小写原样——
+        文件系统相册链按 ``Path(f).name`` 精确比对）。两条链都填它，冷却/排除面
+        才能认出「注册相册的 uuid」与「相册文件」是同一张图。
+        """
         if not conv_key or not media_id:
             return
         ts = float(now if now is not None else time.time())
@@ -258,11 +285,13 @@ class PersonaMediaStore:
             with self._lock:
                 self._conn.execute(
                     "INSERT INTO persona_media_sends"
-                    "(conv_key, media_id, persona_id, series, sent_at) "
-                    "VALUES (?, ?, ?, ?, ?) "
-                    "ON CONFLICT(conv_key, media_id) DO UPDATE SET sent_at = ?",
+                    "(conv_key, media_id, persona_id, series, sent_at, file_key) "
+                    "VALUES (?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(conv_key, media_id) DO UPDATE SET sent_at = ?, "
+                    "file_key = CASE WHEN excluded.file_key != '' "
+                    "THEN excluded.file_key ELSE file_key END",
                     (str(conv_key), str(media_id), str(persona_id or ""),
-                     str(series or ""), ts, ts))
+                     str(series or ""), ts, str(file_key or ""), ts))
                 self._conn.commit()
         except Exception:
             logger.debug("[persona_media] record_send 失败（已忽略）", exc_info=True)
@@ -271,19 +300,23 @@ class PersonaMediaStore:
         self, conv_key: str, *, max_age_days: float = 0,
         now: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """该会话收过的媒体：``{"ids": set, "series": set, "items": [{id,series,ts}]}``。
-        查失败返回空集合。
+        """该会话收过的媒体：``{"ids": set, "series": set, "file_keys": set,
+        "items": [{id,series,ts,file_key}]}``。查失败返回空集合。
 
         ``max_age_days`` > 0 时只看最近 N 天（时间衰减，2026-07-22）：太久之前
         发过的图重新可用——真人也会隔几个月重发怀旧照，永久排除反而把相册
         提前耗尽逼进"翻旧照"模式。0=不衰减（全历史排除）。
+
+        ``file_keys``（2026-07-28）＝跨链身份面：两条相册链各按自己的 id 记账，
+        排除面必须并上文件名才认得出「同一张图刚发过」。
         """
-        out: Dict[str, Any] = {"ids": set(), "series": set(), "items": []}
+        out: Dict[str, Any] = {
+            "ids": set(), "series": set(), "file_keys": set(), "items": []}
         if not conv_key:
             return out
         try:
-            sql = ("SELECT media_id, series, sent_at FROM persona_media_sends "
-                   "WHERE conv_key = ?")
+            sql = ("SELECT media_id, series, sent_at, file_key "
+                   "FROM persona_media_sends WHERE conv_key = ?")
             args: list = [str(conv_key)]
             if max_age_days and max_age_days > 0:
                 ts = float(now if now is not None else time.time())
@@ -296,10 +329,16 @@ class PersonaMediaStore:
                 s = str(r["series"] or "")
                 if s:
                     out["series"].add(s)
+                try:
+                    fk = str(r["file_key"] or "")
+                except (IndexError, KeyError):
+                    fk = ""      # 迁移前的旧行
+                if fk:
+                    out["file_keys"].add(fk)
                 # items：带时间戳的明细（P0 一致性——重发冷却/服装连续性判断用）
                 out["items"].append({
                     "id": str(r["media_id"]), "series": s,
-                    "ts": float(r["sent_at"] or 0)})
+                    "ts": float(r["sent_at"] or 0), "file_key": fk})
         except Exception:
             logger.debug("[persona_media] sent_history 失败（已忽略）", exc_info=True)
         return out

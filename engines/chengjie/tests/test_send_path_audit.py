@@ -40,6 +40,10 @@ ALLOWLIST: Dict[str, tuple] = {
         (GUARDED, "Stage M/P4-4：send_message 与 send_message_return_id 共用的外发文本"
                   "护栏核心（presend Kill-Switch+反封号+节流+记账；裸调用点从 send_message"
                   " 内联迁到此）"),
+    "client/sender.py::TelegramSenderMixin._retry_send_after_peer_warmup":
+        (GUARDED, "同一次受护栏发送的 peer-invalid 自愈第二腿：仅由 _send_text_guarded"
+                  " 在护栏/节流已过后调用，dialogs 预热后原样重发一次（本地 peer 缓存缺失"
+                  "非风控，不喂 ban_signal 防误冻）；重试冒出的非 peer 新异常仍喂 G2 分级"),
     "client/sender.py::TelegramSenderMixin.send_photo":
         (GUARDED, "Stage G：形象照直发纳入统一发送栈"),
     # ── 编排器受管 worker：物理发送在 worker，护栏在 orchestrator.send/send_media（Stage M）──

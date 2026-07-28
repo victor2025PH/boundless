@@ -498,27 +498,83 @@ class AccountOrchestrator:
             res = await m.worker.send(chat_key, text)
         # P0-4：带回平台消息 id(wamid)，让出站回写与 worker 的 fromMe 回显同键去重
         _mid = str(res.get("message_id") or "") if isinstance(res, dict) else ""
-        try:
-            from src.integrations.protocol_bridge import emit_incoming, make_message
-            _src = None
-            if reply_to and (reply_to.get("id") or reply_to.get("text")):
-                _src = {"reply_to": {
-                    "id": str(reply_to.get("id") or ""),
-                    "text": str(reply_to.get("text") or ""),
-                    "sender": str(reply_to.get("sender") or ""),
-                }}
-            emit_incoming(make_message(
-                platform=platform, account_id=account_id, chat_key=chat_key,
-                text=text, direction="out", msg_id=_mid, source=_src,
-            ))
-            # P4-4：Telegram 发送成功即置「已发送」（单勾）；对端读后由
-            # UpdateReadHistoryOutbox 回执升级为「已读」（蓝色双勾）。
-            if platform == "telegram" and _mid:
-                from src.integrations.protocol_bridge import report_message_status
-                report_message_status(platform, account_id, chat_key, _mid, "sent")
-        except Exception:
-            logger.debug("[orchestrator] 出站回写收件箱失败", exc_info=True)
+        # 失败不镜像：worker 明确报 delivered=False 的消息**没有发出去**，回写会在
+        # 收件箱伪造一条对端根本看不到的出站气泡，且群发言台账（speech ledger 从
+        # inbox 读 out 方向）会把它算进暴露面——2026-07-27 群演灰度实锤：连炸三场
+        # 的 6 条失败台词全部进了线程，坐席视角"发了"、群里啥也没有。
+        _delivered = (not isinstance(res, dict)) or (res.get("delivered", True)
+                                                     is not False)
+        if _delivered:
+            try:
+                from src.integrations.protocol_bridge import emit_incoming, make_message
+                _src = None
+                if reply_to and (reply_to.get("id") or reply_to.get("text")):
+                    _src = {"reply_to": {
+                        "id": str(reply_to.get("id") or ""),
+                        "text": str(reply_to.get("text") or ""),
+                        "sender": str(reply_to.get("sender") or ""),
+                    }}
+                emit_incoming(make_message(
+                    platform=platform, account_id=account_id, chat_key=chat_key,
+                    text=text, direction="out", msg_id=_mid, source=_src,
+                ))
+                # P4-4：Telegram 发送成功即置「已发送」（单勾）；对端读后由
+                # UpdateReadHistoryOutbox 回执升级为「已读」（蓝色双勾）。
+                if platform == "telegram" and _mid:
+                    from src.integrations.protocol_bridge import report_message_status
+                    report_message_status(platform, account_id, chat_key, _mid, "sent")
+            except Exception:
+                logger.debug("[orchestrator] 出站回写收件箱失败", exc_info=True)
         return res if isinstance(res, dict) else {"delivered": True}
+
+    async def invite_to_group(self, platform: str, inviter_id: str,
+                              chat_key: str, user_ref: str) -> Dict[str, Any]:
+        """经群内受管号把 ``user_ref`` 拉进群（排班补位）。``{ok, kind, error}``。
+
+        邀请属高风控出站动作 → 与 send 同过 ``send_blocked`` 护栏（Kill-Switch/
+        反封号闸门冻结中的号不许去拉人）。worker 无该能力 → unsupported 如实回报。
+        """
+        _blk, _reason = send_blocked(
+            platform, inviter_id, config=self._config, registry=self._registry,
+            chat_key=str(chat_key or ""))
+        if _blk:
+            return {"ok": False, "kind": "blocked", "error": str(_reason)}
+        m = self._managed.get(account_key(platform, inviter_id))
+        w = getattr(m, "worker", None) if m is not None else None
+        fn = getattr(w, "invite_to_group", None) if w is not None else None
+        if fn is None or not (m is not None and m.state == "running"):
+            return {"ok": False, "kind": "unsupported",
+                    "error": f"无可用的运行中 worker(invite): {platform}:{inviter_id}"}
+        try:
+            res = await fn(str(chat_key), str(user_ref))
+            return res if isinstance(res, dict) else {
+                "ok": bool(res), "kind": "invited" if res else "error", "error": ""}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[orchestrator] invite_to_group 异常 %s:%s: %s",
+                           platform, inviter_id, exc)
+            return {"ok": False, "kind": "error", "error": str(exc)}
+
+    async def ensure_peer(self, platform: str, account_id: str,
+                          chat_key: str) -> Dict[str, Any]:
+        """群 peer 可达性体检（开演前 preflight 入口）：``{ok, checked, error?}``。
+
+        worker 具备 ``ensure_peer`` 能力才真查（当前=Telegram companion worker）；
+        无能力/查询自身异常 → ``ok=True, checked=False`` **放行不拦**——preflight
+        只拦「确定不可达」，不确定时交给发送路径的 peer 自愈兜底，避免网络抖动
+        把一场好戏误杀在后台。
+        """
+        m = self._managed.get(account_key(platform, account_id))
+        w = getattr(m, "worker", None) if m is not None else None
+        fn = getattr(w, "ensure_peer", None) if w is not None else None
+        if fn is None:
+            return {"ok": True, "checked": False}
+        try:
+            ok = bool(await fn(str(chat_key)))
+            return {"ok": ok, "checked": True}
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[orchestrator] ensure_peer 异常 %s:%s", platform,
+                         account_id, exc_info=True)
+            return {"ok": True, "checked": False, "error": str(exc)}
 
     # ── 状态 ─────────────────────────────────────────────────────────────
 
@@ -548,6 +604,13 @@ def ensure_builtin_workers(config: Dict[str, Any]) -> None:
         from src.integrations.telegram_protocol_login import (
             is_pyrogram_available, protocol_enabled as tg_enabled, resolve_credentials,
         )
+        # B 线薄连接 worker 不经 telegram_client 模块 → 这里补同一发 channel id
+        # 边界补丁（幂等），防「A 线好好的、B 线薄壳撞超 int32 群 id」的半修状态。
+        try:
+            from src.client.pyrogram_compat import ensure_wide_channel_ids
+            ensure_wide_channel_ids()
+        except Exception:
+            pass
         if (tg_enabled(config) and is_pyrogram_available()
                 and resolve_credentials(config) is not None
                 and get_worker_factory("telegram", "protocol") is None):
@@ -649,12 +712,11 @@ class TelegramProtocolWorker:
         # 凭据解析统一走 credpool_bridge：账号 meta 里有中央池粘定键就向池索取
         # （池按 key 粘定返回同一组凭据，与该 session 登录时所用的一致），
         # 没有/池不可达则回落配置自带凭据——行为与接池之前完全一致。
-        from src.integrations.credpool_bridge import aresolve_credentials_for_account
-        creds, _cred_source = await aresolve_credentials_for_account(
-            self.config, account=self.account)
-        if creds is None or not (self.session_name or self.session_string):
+        from src.integrations.credpool_bridge import aresolve_for_account
+        alloc = await aresolve_for_account(self.config, account=self.account)
+        if alloc is None or not (self.session_name or self.session_string):
             raise RuntimeError("缺少 api 凭据或 session_name/session_string")
-        api_id, api_hash = creds
+        api_id, api_hash = alloc.api_id, alloc.api_hash
         # 重试前先清理可能残留的旧 client，避免连接泄漏
         if self.client is not None:
             try:
@@ -664,9 +726,18 @@ class TelegramProtocolWorker:
             self.client = None
         from pyrogram import Client
         kwargs: Dict[str, Any] = dict(api_id=api_id, api_hash=api_hash)
+        # 出口优先级：账号上显式绑定的代理 > 中央池按付费档下发的独立出口。
+        # 显式绑定代表运营意图，不该被自动分配悄悄覆盖。
         proxy = self._proxy()
+        if not proxy and alloc.proxy:
+            from src.integrations.telegram_protocol_login import _to_pyrogram_proxy
+            proxy = _to_pyrogram_proxy(alloc.proxy)
         if proxy:
             kwargs["proxy"] = proxy
+        # 设备指纹：与该号扫码时用的同一种子派生，逐次连接恒定。
+        # 存量账号（meta 无种子）不受影响，保持 pyrogram 默认值。
+        from src.integrations.device_fingerprint import client_kwargs_for_account
+        kwargs.update(client_kwargs_for_account(self.config, self.account))
         if self.session_string:
             # N2/N4：内存会话启动——不碰 sessions/*.session 文件，规避扫码 client
             # 残留连接造成的 "database is locked"，也更抗 DC 迁移。

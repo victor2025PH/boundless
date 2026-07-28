@@ -228,6 +228,9 @@ def confirm_link_pair(
     for uid in uids_b:
         pre[(pb, uid)] = str(cpi.resolve(pb, uid) or "")
     canon = pre[(pa, primary)]
+    # 幂等信号：两侧全部 uid 关联前就已指向同一 canonical → 重复确认
+    # （验证 ping / 双击），调用方据此跳过合流观测计数，防 totals 虚胀。
+    was_already_linked = all(v == canon for v in pre.values())
     linked: List[Dict[str, str]] = [{"platform": pa, "uid": primary}]
     for uid in uids_a[1:]:
         cpi.link(pa, primary, pa, uid)
@@ -275,6 +278,7 @@ def confirm_link_pair(
         "merged_rows": merged_rows,
         "merged_from": merged_from,
         "cluster_relinked": cluster_relinked,
+        "already_linked": was_already_linked,
     }
 
 

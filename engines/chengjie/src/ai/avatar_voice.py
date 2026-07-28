@@ -210,7 +210,7 @@ def parse_audio_response(body: bytes) -> bytes:
 # 档名同名 1:1（lin_jiaxin/zhao_laoshi/...）。失败一律由调用方回落本地 CosyVoice3。
 def build_tts_only_payload(
     profile: str, text: str, *, language: str = "", emotion: str = "",
-    best_of: int = 1, audio_format: str = "",
+    best_of: int = 1, audio_format: str = "", tts_engine: str = "",
 ) -> bytes:
     """hub ``/api/tts_only`` 请求体（JSON bytes）。纯函数、可单测。
 
@@ -218,6 +218,10 @@ def build_tts_only_payload(
     - ``best_of>1`` 才下发（多 seed 择优，牺牲耗时换音质，仅非实时）。
     - ``audio_format`` 为空或 ``wav`` 不下发 ``format`` 键（Hub 缺省回 wav=旧行为）；
       如 ``ogg`` 才下发（hub 侧 opus 48k 直出，省本机发送前转码）。
+    - ``tts_engine``（2026-07-27 音色一致性）：为空不下发＝沿用 hub 侧档上配置；
+      显式给值（如 ``moss_ttsd``）让同一 hub 上各产品用同一引擎——智聊的档被
+      ``avatar_profile_sync`` 钉成 fish_speech 而幻影对话走 moss_ttsd，正是「同人设
+      两种音色」的根因之一。hub 若忽略此键，行为与不下发完全一致（无害）。
     """
     body: Dict[str, Any] = {"profile": str(profile), "text": str(text)}
     lang = str(language or "").strip()
@@ -235,6 +239,9 @@ def build_tts_only_payload(
     fmt = str(audio_format or "").strip().lower()
     if fmt and fmt != "wav":
         body["format"] = fmt
+    eng = str(tts_engine or "").strip()
+    if eng:
+        body["tts_engine"] = eng
     return json.dumps(body, ensure_ascii=False).encode("utf-8")
 
 
@@ -280,7 +287,7 @@ def parse_tts_only_response(body: bytes) -> Tuple[bytes, str]:
 def hub_fish_synthesize(
     base_url: str, profile: str, text: str, *, language: str = "",
     emotion: str = "", best_of: int = 1, timeout_sec: float = 30.0,
-    audio_format: str = "",
+    audio_format: str = "", tts_engine: str = "",
 ) -> Tuple[bytes, str]:
     """调用幻声 hub ``/api/tts_only`` 合成一句 → (音频字节, 实际格式)（同步；供 to_thread 包裹）。
 
@@ -290,7 +297,7 @@ def hub_fish_synthesize(
     url = str(base_url or "").rstrip("/") + "/api/tts_only"
     payload = build_tts_only_payload(
         profile, text, language=language, emotion=emotion, best_of=best_of,
-        audio_format=audio_format)
+        audio_format=audio_format, tts_engine=tts_engine)
     req = urllib.request.Request(
         url, data=payload,
         headers={"Content-Type": "application/json"}, method="POST")

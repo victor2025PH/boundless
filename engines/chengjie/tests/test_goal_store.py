@@ -312,6 +312,9 @@ class TestOutcomeReport:
         assert bt["done"] == 1 and bt["failed"] == 1 and bt["n"] == 2
         assert bt["done_rate"] == 0.5
         assert bt["avg_days_to_done"] == 8.0
+        # 终态里程碑分布（两条都停在 m0；cancelled 不计入）
+        assert bt["milestone_dist"] == {"0": 2}
+        assert "milestone_dist" not in rep["by_template"]["custom"]
         assert rep["by_template"]["custom"]["cancelled"] == 1
         assert rep["by_template"]["custom"]["done_rate"] == 0.0
         assert rep["beats"]["planned"] == 1

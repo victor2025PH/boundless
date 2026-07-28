@@ -334,6 +334,47 @@ class TestSettleCustom:
         assert res["status"] == "expired"                   # 过期而非 done
 
 
+# ── ledger：retention_expand（P5 留存环，相位 7/15/24/30） ──────────────────
+
+class TestSettleRetentionExpand:
+    def test_activate_on_inbound_and_phase_floor(self):
+        # 第 8 天购后开口 → 激活段推进 m1（信号与相位兑底同向）
+        goal = _goal("retention_expand", start_ts=NOW - 8 * _DAY,
+                     deadline_ts=NOW + 22 * _DAY)
+        res = _settle(goal, _sig(last_inbound_ts=NOW - _DAY))
+        assert res["status"] == "active"
+        assert res["milestone_idx"] == 1
+        # 全程没开口，第 16 天 → 纯相位兑底到「深化种草」段
+        goal2 = _goal("retention_expand", start_ts=NOW - 16 * _DAY,
+                      deadline_ts=NOW + 14 * _DAY)
+        res2 = _settle(goal2, _sig())
+        assert res2["milestone_idx"] == 2
+
+    def test_direct_engaged_capped_by_phase_then_released(self):
+        # 第 8 天 direct 拍被接：意愿到收口，但相位封顶（lookahead 1）压回 2
+        goal = _goal("retention_expand", start_ts=NOW - 8 * _DAY,
+                     deadline_ts=NOW + 22 * _DAY)
+        res = _settle(goal, _sig(last_inbound_ts=NOW - _DAY),
+                      direct_beat_engaged=True)
+        assert res["milestone_idx"] == 2
+        # 第 25 天同信号 → 续费收口段放行
+        goal2 = _goal("retention_expand", start_ts=NOW - 25 * _DAY,
+                      deadline_ts=NOW + 5 * _DAY)
+        res2 = _settle(goal2, _sig(last_inbound_ts=NOW - _DAY),
+                       direct_beat_engaged=True)
+        assert res2["milestone_idx"] == 3
+
+    def test_never_auto_done_expires_honestly(self):
+        # 续费信号在站外（settle_order_ref/手动标成交），信号再热 ledger 也绝不
+        # 自动 done；到期没续 = expired（诚实流失记录，不是 failed）
+        goal = _goal("retention_expand", start_ts=NOW - 31 * _DAY,
+                     deadline_ts=NOW - _DAY)
+        res = _settle(goal, _sig(last_inbound_ts=NOW - 2 * _DAY, intimacy=90.0),
+                      direct_beat_engaged=True)
+        assert res["status"] == "expired"
+        assert res["result"] == "deadline"
+
+
 # ── ledger：单调性 + changed 语义 ───────────────────────────────────────────
 
 class TestMonotonicityAndChanged:

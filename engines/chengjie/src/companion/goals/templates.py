@@ -154,9 +154,17 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
         "name_en": "Reactivate",
         "kind": "engagement",
         "default_days": 10,
+        # P11：winback_auto 默认用本模板——挂 catalog 后流失原因才能驱动
+        # 选品/CTA（push_curve 前段 none 日仍不带货，行为零扩散到纯唤回）。
+        "catalog": True,
         "params": [
             {"key": "note", "type": "string", "default": "",
              "label_zh": "备注（对方为何沉默/背景）", "label_en": "Context note"},
+            {"key": "product_id", "type": "string", "default": "",
+             "label_zh": "主推产品（挽回可继承上单）",
+             "label_en": "Pinned product (winback may inherit)"},
+            {"key": "last_plan", "type": "string", "default": "",
+             "label_zh": "上单套餐", "label_en": "Last plan"},
         ],
         "milestones": [
             {"id": "probe", "zh": "轻触探温", "en": "Probe"},
@@ -174,6 +182,96 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
                 "提供一点新鲜价值（趣事/进展/内容），别空转寒暄"),
             3: ("最后一次轻触达：表示自己一直在、随时可以聊，完全不施压",
                 "轻轻收尾：祝好 + 留门（想聊随时找我），保持体面"),
+        },
+    },
+    "acquire_and_convert": {
+        # 「获客→转化」时间相位漏斗（B2B 官网产品线；配 su_wan 类获客人设）：
+        # 前段（~1-3 天）自然摸清对方业务底细（BANT 商机画像，见 profile_slots），
+        # 中段深聊种草（自己在用的工具+省下的钱），后段（~7-10 天）开价收口。
+        # `phase_days` 按 default_days 标定各里程碑的「目标截止日」，ledger 据此做
+        # 时间兑底（到点没推进就兑底推进）与超前封顶（信号再热也不允许第 1 天开价）；
+        # 实际 deadline 不同（如 20 天）时按比例线性缩放。
+        # `catalog: True` → 注入层随里程碑挂官网产品目录块（site_catalog）。
+        # `profile_slots: True` → 摸底段在目标块附「画像缺口」提示（profile_slots）。
+        "name_zh": "获客转化（官网产品）",
+        "name_en": "Acquire & convert",
+        "kind": "conversion",
+        "default_days": 10,
+        "phase_days": (2, 4, 7, 9, 10),
+        "catalog": True,
+        "profile_slots": True,
+        "params": [
+            {"key": "product_id", "type": "string", "default": "",
+             "label_zh": "主推产品（留空=按画像自动选品）",
+             "label_en": "Pinned product (blank = auto-pick)"},
+            {"key": "note", "type": "string", "default": "",
+             "label_zh": "备注（客户背景/来源）", "label_en": "Context note"},
+        ],
+        "milestones": [
+            {"id": "acquire", "zh": "破冰互认", "en": "Acquire"},
+            {"id": "qualify", "zh": "摸清底细", "en": "Qualify"},
+            {"id": "rapport", "zh": "深聊种草", "en": "Rapport"},
+            {"id": "offer", "zh": "方案报价", "en": "Offer"},
+            {"id": "close", "zh": "临门收口", "en": "Close"},
+        ],
+        "push_curve": ("none", "none", "soft", "direct", "soft"),
+        "intents": {
+            0: ("以自己的生活和生意日常自然开场，互相认识，让对方觉得你是有趣的真实同路人",
+                "顺着对方的话题聊，先建立「聊得来」的感觉，完全不谈任何工具产品"),
+            1: ("像同行交流一样自然好奇对方在做什么生意/工作，顺势聊到TA平时怎么打理这些事",
+                "顺着生意话题摸一摸对方的日常痛点（人手/回消息/语言/获客），只听只共情不给方案"),
+            2: ("聊到对方的痛点时，自然分享自己踩过的同款坑和现在的解法，让TA觉得有共鸣有收获",
+                "以自己真实使用体验的口吻聊聊工具帮自己省了多少事，别报价别发链接，点到即止"),
+            3: ("对方兴致好时大方介绍适合TA的那款产品：能解决什么、大概什么价，给出官网下单方式",
+                "对方主动追问时详细说明产品与价格档位，附上官网链接，语气像帮朋友参谋不像销售"),
+            4: ("对方还在犹豫就退回日常话题，轻轻补一句有问题随时问我，给足台阶不催单",
+                "对方已有意向的话，帮TA下决心：说清开通后马上能用到什么，提醒官网自助下单即可"),
+        },
+    },
+    "retention_expand": {
+        # 「留存/续费」LTV 环（P5；订阅制官网产品线的成交后半场）：
+        # acquire_and_convert 成交（订单回流/手动标成交）→ service 自动起本目标
+        # （companion.goals.retention，默认关）。30 天一周期：前段激活陪跑
+        # （像朋友售后不像客服工单）→ 中段价值确认/深化 → 到期前续费收口。
+        # 续费单带同一会话 ref → settle_order_ref 结算本目标 done → 自动起
+        # 下一周期（链式，bounded by 真实续费）；到期没续=expired（诚实流失记录）。
+        "name_zh": "留存续费（官网产品）",
+        "name_en": "Retain & renew",
+        "kind": "conversion",
+        "default_days": 30,
+        "phase_days": (7, 15, 24, 30),
+        "catalog": True,
+        "profile_slots": True,
+        "params": [
+            {"key": "product_id", "type": "string", "default": "",
+             "label_zh": "续费产品（自动继承上单）",
+             "label_en": "Renewal product (inherited)"},
+            {"key": "last_plan", "type": "string", "default": "",
+             "label_zh": "上单套餐", "label_en": "Last plan"},
+            {"key": "last_period", "type": "string", "default": "",
+             "label_zh": "上单周期（monthly/annual，定本目标天数）",
+             "label_en": "Last billing period"},
+            {"key": "base_goal", "type": "string", "default": "",
+             "label_zh": "来源目标 ID", "label_en": "Source goal id"},
+            {"key": "note", "type": "string", "default": "",
+             "label_zh": "备注（历史流失原因等背景）", "label_en": "Context note"},
+        ],
+        "milestones": [
+            {"id": "activate", "zh": "激活陪跑", "en": "Activate"},
+            {"id": "value", "zh": "价值确认", "en": "Value"},
+            {"id": "expand", "zh": "深化种草", "en": "Expand"},
+            {"id": "renew", "zh": "续费收口", "en": "Renew"},
+        ],
+        "push_curve": ("soft", "soft", "soft", "direct"),
+        "intents": {
+            0: ("关心TA用得顺不顺手，主动问有没有卡壳的地方，像朋友售后不像客服工单",
+                "顺手分享一个自己常用的小技巧或用法，帮TA更快把工具用起来"),
+            1: ("自然聊聊用了之后有没有省事，帮TA把省下的时间和钱说出来，让价值看得见",
+                "听到抱怨或没用起来，先共情再给具体解法，绝不辩解产品"),
+            2: ("顺着TA的业务增长，聊到更高档位或别的产品还能帮上什么，种草不报价",
+                "以自己升级后的真实体验聊聊差别，点到即止不催"),
+            3: ("到期前自然提醒续费，说清续上不断档的好处，附官网自助续费方式",
+                "TA犹豫就问清顾虑（价格/用量/效果），对症回应，给足台阶不催单"),
         },
     },
     "custom": {
@@ -279,6 +377,69 @@ def pick_care_intent(goal_id: str, day: str) -> str:
     return CARE_INTENTS[h % len(CARE_INTENTS)]
 
 
+def milestone_count(template: Dict[str, Any]) -> int:
+    """模板里程碑数（缺省 4——存量模板全是 4 段弧线）。"""
+    ms = template.get("milestones") or ()
+    return len(ms) if ms else 4
+
+
+def scaled_phase_days(template: Dict[str, Any], total_days: float) -> List[float]:
+    """把模板 ``phase_days``（按 default_days 标定）线性缩放到目标实际总天数。
+
+    模板没声明 phase_days → []（纯信号驱动，零行为变更）。
+    例：phase_days=(2,4,7,9,10)、default_days=10、实际 20 天 → (4,8,14,18,20)。
+    """
+    pd = template.get("phase_days") or ()
+    if not pd:
+        return []
+    try:
+        default_days = float(template.get("default_days") or 0) or float(pd[-1])
+        total = float(total_days) if float(total_days) > 0 else default_days
+        scale = total / default_days if default_days > 0 else 1.0
+        return [float(d) * scale for d in pd]
+    except (TypeError, ValueError):
+        return []
+
+
+def phase_floor(phase_days: List[float], elapsed_days: float) -> int:
+    """时间兑底：某里程碑的天窗已过 → 至少推进到下一段。
+
+    最后一段的边界是 deadline（过了归过期判定管），不参与兑底。
+    例（2,4,7,9,10）：第 2.5 天 → 1（该摸底了）；第 7.5 天 → 3（该报价了）。
+    """
+    if not phase_days:
+        return 0
+    floor = 0
+    try:
+        e = float(elapsed_days)
+    except (TypeError, ValueError):
+        return 0
+    for i, edge in enumerate(phase_days[:-1]):
+        if e > float(edge):
+            floor = i + 1
+    return floor
+
+
+def phase_cap(phase_days: List[float], elapsed_days: float, lookahead: int = 1) -> int:
+    """超前封顶：信号再热也只允许比当前天窗超前 ``lookahead`` 段。
+
+    防「第 1 天就开价」——获客节奏是弧线不是开关；对方当轮明确要买时由
+    回复层直接应答（目标块是方向盘不是闸门），这里只约束**主动推进**的节奏。
+    """
+    if not phase_days:
+        return 10**6
+    try:
+        e = float(elapsed_days)
+    except (TypeError, ValueError):
+        return 10**6
+    cur = len(phase_days) - 1
+    for i, edge in enumerate(phase_days):
+        if e <= float(edge):
+            cur = i
+            break
+    return min(cur + max(0, int(lookahead)), len(phase_days) - 1)
+
+
 __all__ = [
     "AUTONOMY_LEVELS",
     "CARE_INTENTS",
@@ -288,9 +449,13 @@ __all__ = [
     "TEMPLATES",
     "get_template",
     "list_templates",
+    "milestone_count",
     "milestone_label",
+    "phase_cap",
+    "phase_floor",
     "pick_care_intent",
     "pick_intent",
     "push_for_milestone",
+    "scaled_phase_days",
     "template_ids",
 ]

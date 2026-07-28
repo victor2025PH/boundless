@@ -24,7 +24,24 @@ import logging
 import os
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, NamedTuple, Optional, Tuple
+
+
+class Allocation(NamedTuple):
+    """一次凭据分配的完整结果。
+
+    刻意不是「一对 api_id/api_hash」——隔离是**三件套**（独立凭据 + 独立出口 IP
+    + 独立设备指纹），把出口和档位和凭据放在同一个返回值里，调用方就不会
+    「拿了凭据忘了拿 IP」。指纹不在这里：它由本地种子派生，不经过中央池。
+
+    🔒 api_hash 与 proxy 里的账密都是密钥，禁止落日志/回显。
+    """
+
+    api_id: int
+    api_hash: str
+    source: str = "credpool"           # credpool | config
+    tier: str = "free"                 # 服务端判定的生效会员档
+    proxy: Optional[Dict[str, Any]] = None  # {scheme,host,port,username,password}
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +130,61 @@ def pool_key_of(account: Optional[Dict[str, Any]]) -> str:
     return str(meta.get(META_KEY) or "")
 
 
+# ── 池内号的凭据本地缓存 ────────────────────────────────────────────────────
+# 为什么要缓存（2026-07-27 实测发现）：一个 session 是用某一组 api_id/api_hash
+# 建的。池内号在池不可达时若回落到「配置自带凭据」，就成了「A 的 session 报
+# B 的 api_id」—— Telegram 侧明确的风控信号。原设计「只存 key 不存凭据」在
+# 池挂时会踩这个坑。
+# 两个可选修法：① 拒绝启动（安全但池一挂全部协议号掉线）；② 缓存该号上次分配到
+# 的凭据（池挂时照常在线，且用的就是 session 原本那组）。选 ②，① 作为无缓存时
+# 的兜底。安全性上不是升级暴露面：注册表里本来就存着 session_string（等于账号
+# 完全访问权），api_hash 是应用级凭据，敏感度远低于它。
+META_CRED_KEY = "credpool_cred"
+
+
+def cached_cred_of(account: Optional[Dict[str, Any]]) -> Optional["Allocation"]:
+    """取该号上次从池里拿到的凭据（含出口/档位）；没有则 None。"""
+    c = ((account or {}).get("meta") or {}).get(META_CRED_KEY) or {}
+    if not isinstance(c, dict):
+        return None
+    try:
+        api_id = int(c.get("api_id") or 0)
+    except (TypeError, ValueError):
+        return None
+    api_hash = str(c.get("api_hash") or "")
+    if not api_id or not api_hash:
+        return None
+    proxy = c.get("proxy") if isinstance(c.get("proxy"), dict) else None
+    return Allocation(api_id, api_hash, "credpool_cache",
+                      str(c.get("tier") or "free"), proxy)
+
+
+def remember_cred(account: Optional[Dict[str, Any]], alloc: "Allocation") -> None:
+    """把本次池分配结果缓存到账号 meta（best-effort，失败绝不影响启动）。
+
+    只在内容变化时写库——worker 每次拉起都会走到这里，没变就别碰磁盘。
+    """
+    acct_id = str((account or {}).get("account_id") or "")
+    platform = str((account or {}).get("platform") or "telegram")
+    if not acct_id:
+        return
+    payload = {"api_id": int(alloc.api_id), "api_hash": str(alloc.api_hash),
+               "tier": str(alloc.tier or "free")}
+    if alloc.proxy:
+        payload["proxy"] = dict(alloc.proxy)
+    old = ((account or {}).get("meta") or {}).get(META_CRED_KEY) or {}
+    if isinstance(old, dict) and {k: old.get(k) for k in payload} == payload:
+        return
+    try:
+        from src.integrations.account_registry import get_account_registry
+
+        get_account_registry().upsert(platform, acct_id,
+                                      meta={META_CRED_KEY: payload}, merge_meta=True)
+    except Exception:  # noqa: BLE001
+        logger.debug("[credpool] 凭据缓存写入失败（不影响启动）", exc_info=True)
+
+
+
 def _make_client(config: Dict[str, Any]) -> Any:
     mod = _client_module()
     if mod is None:
@@ -130,44 +202,183 @@ def _make_client(config: Dict[str, Any]) -> Any:
         return None
 
 
+# ── 观测（best-effort，任何异常都不得影响凭据解析）──────────────────────────
+
+def _stat_resolve(source: str, tier: Optional[str] = None, with_proxy: bool = False) -> None:
+    try:
+        from src.integrations.credpool_stats import get_credpool_stats
+
+        get_credpool_stats().record_resolve(source, tier, with_proxy)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _stat_fallback(reason: str, detail: str = "") -> None:
+    try:
+        from src.integrations.credpool_stats import get_credpool_stats
+
+        get_credpool_stats().record_fallback(reason, detail)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _stat_report(ok: bool) -> None:
+    try:
+        from src.integrations.credpool_stats import get_credpool_stats
+
+        get_credpool_stats().record_report(ok)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _stat_release() -> None:
+    try:
+        from src.integrations.credpool_stats import get_credpool_stats
+
+        get_credpool_stats().record_release()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def license_key(config: Dict[str, Any]) -> str:
+    """客户的会员卡密：环境变量优先（不入库），回落配置。
+
+    只是**送去服务端定档**的凭证，档位由智控查库判定——这里传什么都不能提权。
+    """
+    return (os.environ.get("CREDPOOL_LICENSE_KEY", "").strip()
+            or str(_cfg(config).get("license_key") or "").strip())
+
+
+_MACHINE_ID: str = ""
+
+
+def machine_id() -> str:
+    """本机稳定标识（卡密绑机用）。
+
+    卡密首次使用会被服务端绑到这个 id 上，之后换机就拿不到付费档——这是收口
+    「一张卡密贴到几台机器上白拿几份专属凭据」的关键。因此它必须：
+    **重启不变、重装不变**（存在数据目录里，与配置同寿命），且**不含任何可反查
+    身份的信息**（纯随机，不用 MAC / 主机名 / 序列号）。
+    """
+    global _MACHINE_ID
+    env = os.environ.get("CREDPOOL_MACHINE_ID", "").strip()
+    if env:
+        return env
+    if _MACHINE_ID:
+        return _MACHINE_ID
+
+    path = None
+    try:
+        from src.utils.config_manager import ConfigManager
+
+        path = Path(ConfigManager().config_path).parent / ".credpool_machine_id"
+        if path.is_file():
+            got = path.read_text(encoding="utf-8").strip()
+            if got:
+                _MACHINE_ID = got
+                return _MACHINE_ID
+    except Exception:  # noqa: BLE001
+        logger.debug("[credpool] 机器标识读取失败", exc_info=True)
+
+    _MACHINE_ID = f"chatx-{uuid.uuid4().hex}"
+    try:
+        if path is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(_MACHINE_ID, encoding="utf-8")
+    except Exception:  # noqa: BLE001 —— 落不了盘就本进程内用，重启会换（宁可少给权益）
+        logger.warning("[credpool] 机器标识无法持久化，重启后会变（卡密可能需重新绑机）")
+    return _MACHINE_ID
+
+
 def allocate(
     config: Dict[str, Any],
     pool_key: str,
     account_id: Optional[str] = None,
-) -> Optional[Tuple[int, str]]:
-    """按粘定键向中央池索取凭据；任何失败返回 None（调用方回落自带凭据）。"""
+    prefer_api_id: Optional[int] = None,
+) -> Optional[Allocation]:
+    """按粘定键向中央池索取一次分配；任何失败返回 None（调用方回落自带凭据）。
+
+    ``prefer_api_id``＝该号 session 已绑定的那组凭据（来自本地缓存）。粘定本来
+    由池侧按 key 保证，但池的分配台账**是会丢的**（早期临时模式、库被换、人工
+    清理…；2026-07-27 实测就有一个号在池里查不到记录）。台账一丢，池会当新号
+    重新分配，多凭据池里就可能悄悄换成另一组 api_id —— 对已有 session 就是错配。
+    传上这个钉子，让池优先给回同一组。
+    """
     if not credpool_enabled(config) or not pool_key:
         return None
     client = _make_client(config)
     if client is None:
+        _stat_fallback("no_client")
         return None
     if not client.configured():
         logger.warning("[credpool] 未配置服务 token（环境变量 CREDPOOL_SERVICE_TOKEN），跳过中央池")
+        _stat_fallback("no_token")
         return None
 
     try:
-        res = client.allocate(phone=pool_key, account_id=account_id)
-    except Exception:  # noqa: BLE001 —— 瘦客户端契约上不抛，这里是双保险
+        res = client.allocate(phone=pool_key, account_id=account_id,
+                              api_id=prefer_api_id,
+                              license_key=license_key(config) or None,
+                              machine_id=machine_id())
+    except Exception as exc:  # noqa: BLE001 —— 瘦客户端契约上不抛，这里是双保险
         logger.debug("[credpool] allocate 异常", exc_info=True)
+        _stat_fallback("error", str(exc))
         return None
 
     if not res.get("available"):
         logger.warning("[credpool] 中央池不可达，回落自带凭据：%s", res.get("error"))
+        _stat_fallback("unreachable", str(res.get("detail") or res.get("error") or ""))
         return None
     if not res.get("success"):
-        logger.warning("[credpool] 分配被拒（池空/越权？）：%s", res.get("message") or res.get("error"))
+        msg = res.get("message") or res.get("error")
+        logger.warning("[credpool] 分配被拒（池空/越权？）：%s", msg)
+        _stat_fallback("rejected", str(msg or ""))
         return None
 
     data = res.get("data") or {}
     api_id, api_hash = data.get("api_id"), data.get("api_hash")
     try:
         if api_id and api_hash:
-            # 🔒 只记 api_id，绝不记 api_hash
-            logger.info("[credpool] 已分配凭据 api_id=%s key=%s", api_id, pool_key)
-            return int(api_id), str(api_hash)
+            tier = str(data.get("member_level") or "free")
+            proxy = _sanitize_proxy(data.get("proxy"))
+            # 🔒 只记 api_id / 档位 / 有无出口，绝不记 api_hash 与代理账密
+            logger.info("[credpool] 已分配 api_id=%s key=%s tier=%s proxy=%s",
+                        api_id, pool_key, tier, "yes" if proxy else "no")
+            _stat_resolve("credpool", tier, bool(proxy))
+            return Allocation(int(api_id), str(api_hash), "credpool", tier, proxy)
     except (TypeError, ValueError):
         logger.warning("[credpool] 池返回的 api_id 非法，回落自带凭据")
+        _stat_fallback("bad_data", "api_id not an int")
+        return None
+    _stat_fallback("bad_data", "empty api_id/api_hash")
     return None
+
+
+def _sanitize_proxy(raw: Any) -> Optional[Dict[str, Any]]:
+    """把池返回的出口整成 `_to_pyrogram_proxy` 认得的形状；不完整就当没有。
+
+    宁可不用代理也不能用半个代理——端口缺失之类的脏数据会让整条连接起不来，
+    而「没有代理」只是回落直连，不阻塞登录。
+    """
+    if not isinstance(raw, dict):
+        return None
+    host = str(raw.get("host") or "").strip()
+    try:
+        port = int(raw.get("port") or 0)
+    except (TypeError, ValueError):
+        return None
+    if not host or port <= 0:
+        return None
+    out: Dict[str, Any] = {
+        "scheme": str(raw.get("scheme") or "socks5").strip() or "socks5",
+        "host": host,
+        "port": port,
+    }
+    if str(raw.get("username") or "").strip():
+        out["username"] = str(raw["username"]).strip()
+    if str(raw.get("password") or "").strip():
+        out["password"] = str(raw["password"])
+    return out
 
 
 def report(
@@ -184,9 +395,11 @@ def report(
     if client is None or not client.configured():
         return
     try:
-        client.report(api_id=str(api_id), success=success, error=error, phone=pool_key)
+        res = client.report(api_id=str(api_id), success=success, error=error, phone=pool_key)
+        _stat_report(bool(res.get("available")))
     except Exception:  # noqa: BLE001
         logger.debug("[credpool] report 异常（忽略）", exc_info=True)
+        _stat_report(False)
 
 
 def release(config: Dict[str, Any], pool_key: str) -> None:
@@ -198,6 +411,7 @@ def release(config: Dict[str, Any], pool_key: str) -> None:
         return
     try:
         client.release(phone=pool_key)
+        _stat_release()
     except Exception:  # noqa: BLE001
         logger.debug("[credpool] release 异常（忽略）", exc_info=True)
 
@@ -236,26 +450,68 @@ def release_for_account_bg(platform: str, account_id: str) -> None:
         logger.debug("[credpool] 无法启动释放线程（忽略）", exc_info=True)
 
 
-def resolve_credentials_for_account(
+def resolve_for_account(
     config: Dict[str, Any],
     account: Optional[Dict[str, Any]] = None,
     pool_key: Optional[str] = None,
-) -> Tuple[Optional[Tuple[int, str]], str]:
-    """统一凭据解析：中央池优先，回落配置自带。
+) -> Optional[Allocation]:
+    """统一分配解析：中央池优先，回落配置自带凭据；都没有则 None。
 
-    返回 ``(creds, source)``，source ∈ {"credpool", "config", "none"}——
-    调用方据此决定要不要回报池、日志怎么写。
+    两类调用方，回落规则**刻意不同**（这是封号级的区别）：
+
+    - **新登录**（``account=None``，pool_key 现场生成）：池不可达 → 回落配置自带
+      凭据完全安全，session 就是用这组建的，之后也不会被登记成池内号。
+    - **既有号**（粘定键来自 account meta，session 已绑在某组池凭据上）：绝不
+      回落配置凭据——那会让 Telegram 看到「session 与 api_id 不匹配」。顺序是
+      池 → 该号的本地凭据缓存 → 都没有就返回 None（宁可这一个号暂时不上线，
+      也不能带着错配的 api_id 连上去）。
+
+    回落来的 Allocation 只有凭据（``source="config"``，无出口、free 档）——
+    自带凭据本来就不带隔离能力，如实反映即可。
     """
-    key = pool_key or pool_key_of(account)
+    meta_key = pool_key_of(account)  # 非空＝既有号，session 已绑池凭据
+    key = pool_key or meta_key
     if key:
-        creds = allocate(config, key, account_id=(account or {}).get("account_id"))
-        if creds:
-            return creds, "credpool"
+        cached = cached_cred_of(account) if meta_key else None
+        alloc = allocate(config, key, account_id=(account or {}).get("account_id"),
+                         prefer_api_id=(cached.api_id if cached else None))
+        if alloc:
+            if cached and alloc.api_id != cached.api_id:
+                # 池给了另一组：台账丢了 or 人工换过凭据。session 绑的是缓存那组，
+                # 换过去必然错配 —— 宁可用缓存继续跑（凭据真被停用就是连不上，
+                # 运营重扫即可），也不能带着不匹配的 api_id 连上去。
+                logger.error(
+                    "[credpool] 池返回 api_id=%s 与该号 session 绑定的 %s 不一致，"
+                    "按 session 绑定的那组执行（池台账可能丢了记录）",
+                    alloc.api_id, cached.api_id)
+                _stat_resolve("credpool_cache", cached.tier, bool(cached.proxy))
+                return cached
+            if meta_key:
+                remember_cred(account, alloc)
+            return alloc
+        if meta_key:
+            if cached:
+                logger.warning(
+                    "[credpool] 池不可达，改用该号上次分配到的凭据 api_id=%s"
+                    "（不能换成自带凭据：会与既有 session 的 api_id 错配）",
+                    cached.api_id)
+                _stat_resolve("credpool_cache", cached.tier, bool(cached.proxy))
+                return cached
+            logger.error(
+                "[credpool] 池不可达且该号无凭据缓存 → 拒绝以自带凭据启动"
+                "（session 与 api_id 错配会触发风控）。等池恢复后自动上线。")
+            _stat_fallback("pool_down_no_cache")
+            return None
 
     from src.integrations.telegram_protocol_login import resolve_credentials
 
     local = resolve_credentials(config)
-    return (local, "config") if local else (None, "none")
+    # 只在开了池的前提下记账——没开池时这条链路本就不该被观测
+    if credpool_enabled(config):
+        _stat_resolve("config" if local else "none")
+    if not local:
+        return None
+    return Allocation(local[0], local[1], "config")
 
 
 # ── 异步侧包装 ───────────────────────────────────────────────────────────────
@@ -263,18 +519,16 @@ def resolve_credentials_for_account(
 # 直接调用会把整个 loop 卡住最多 timeout 秒。故异步调用方一律走这两个包装。
 # 池未启用时不产生任何 I/O，直接同步返回（省掉线程切换开销）。
 
-async def aresolve_credentials_for_account(
+async def aresolve_for_account(
     config: Dict[str, Any],
     account: Optional[Dict[str, Any]] = None,
     pool_key: Optional[str] = None,
-) -> Tuple[Optional[Tuple[int, str]], str]:
+) -> Optional[Allocation]:
     if not credpool_enabled(config):
-        return resolve_credentials_for_account(config, account, pool_key)
+        return resolve_for_account(config, account, pool_key)
     import asyncio
 
-    return await asyncio.to_thread(
-        resolve_credentials_for_account, config, account, pool_key
-    )
+    return await asyncio.to_thread(resolve_for_account, config, account, pool_key)
 
 
 async def areport(

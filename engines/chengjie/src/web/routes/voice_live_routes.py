@@ -1108,11 +1108,14 @@ def register_voice_live_routes(app, *, api_auth=None, config_manager=None) -> No
             from src.ai.tts_pipeline import TTSPipeline
             tts = TTSPipeline(voice_cfg)
             result = await asyncio.wait_for(
-                tts.synthesize(text, timeout_sec=45.0, emotion=voice_ctx.get("emotion")),
+                tts.synthesize(text, timeout_sec=45.0, emotion=voice_ctx.get("emotion"),
+                               total_budget_sec=45.0),
                 timeout=50.0)
         except Exception as ex:  # noqa: BLE001
-            logger.warning("[voice/preview] 合成失败: %s", ex)
-            return JSONResponse({"ok": False, "error": f"synth_failed:{str(ex)[:120]}"})
+            # TimeoutError 的 str() 为空 → 带上异常类型名，日志/前端都有排查抓手
+            _exs = f"{type(ex).__name__}: {ex}".rstrip(": ")
+            logger.warning("[voice/preview] 合成失败: %s", _exs)
+            return JSONResponse({"ok": False, "error": f"synth_failed:{_exs[:120]}"})
         if not getattr(result, "ok", False):
             return JSONResponse({"ok": False, "error": getattr(result, "error", "synth_failed")})
         try:

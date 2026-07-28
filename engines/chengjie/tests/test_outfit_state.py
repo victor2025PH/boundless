@@ -182,3 +182,126 @@ def test_outfit_chat_line():
     assert ost.outfit_chat_line("") == ""
     line = ost.outfit_chat_line("white dress")
     assert "white dress" in line and "穿" in line
+
+
+# ── P2 场景×衣着联动 + 季节 ─────────────────────────────────────────────────
+_SUMMER = dt.datetime(2026, 7, 27, 10, 0)
+_WINTER = dt.datetime(2026, 1, 15, 10, 0)
+_SPRING = dt.datetime(2026, 4, 10, 10, 0)
+
+
+def test_outfit_categories_tokens():
+    assert "swim" in ost.outfit_categories("white bikini")
+    assert "sleep" in ost.outfit_categories("silk pajamas")
+    assert "sport" in ost.outfit_categories("black leggings and sports bra")
+    assert "work" in ost.outfit_categories("navy blazer")
+    assert "dressy" in ost.outfit_categories("white dress")
+    cats = ost.outfit_categories("denim jacket over a white tee")
+    assert "outer" in cats
+    assert ost.outfit_categories("") == frozenset()
+    assert ost.outfit_categories("something plain") == frozenset()
+
+
+def test_season_of_months_and_hemisphere():
+    assert ost.season_of(_SUMMER) == "summer"
+    assert ost.season_of(_WINTER) == "winter"
+    assert ost.season_of(_SPRING) == "spring"
+    assert ost.season_of(dt.datetime(2026, 10, 1)) == "autumn"
+    # 南半球倒扣：7 月=冬
+    assert ost.season_of(_SUMMER, hemisphere="south") == "winter"
+
+
+def test_outfit_scene_conflict_rules():
+    # 泳装进咖啡馆/健身房穿睡衣/办公室穿泳装 → 高置信违和
+    assert ost.outfit_scene_conflict("white swimsuit", "cafe", now=_SUMMER)
+    assert ost.outfit_scene_conflict("silk pajamas", "gym", now=_SUMMER)
+    assert ost.outfit_scene_conflict("white bikini", "office", now=_SUMMER)
+    # 海边不该裹毛衣（outer 排除）
+    assert ost.outfit_scene_conflict("beige knit sweater", "beach", now=_SUMMER)
+    # 便装进咖啡馆 / 未知场景类 → 不违和
+    assert not ost.outfit_scene_conflict("white t-shirt and jeans", "cafe", now=_SPRING)
+    assert not ost.outfit_scene_conflict("white dress", "", now=_SPRING)
+    # 睡衣在家/卧室合理
+    assert not ost.outfit_scene_conflict("silk pajamas", "bedroom", now=_SPRING)
+
+
+def test_outfit_season_conflict():
+    # 冬天泳装（任何场景）/冬天户外短袖 → 违和；室内吊带不管
+    assert ost.outfit_scene_conflict("white swimsuit", "beach", now=_WINTER)
+    assert ost.outfit_scene_conflict("tank top and shorts", "street", now=_WINTER)
+    assert not ost.outfit_scene_conflict("tank top and shorts", "home", now=_WINTER)
+    # 夏天重外套 → 违和；季节开关关掉 → 放行
+    assert ost.outfit_scene_conflict("long wool coat", "street", now=_SUMMER)
+    assert not ost.outfit_scene_conflict(
+        "long wool coat", "street", now=_SUMMER, season_on=False)
+    # 春秋不加季节约束
+    assert not ost.outfit_scene_conflict("beige knit sweater", "street", now=_SPRING)
+
+
+def test_adapt_outfit_prefer_tier_switches():
+    pool = ["white t-shirt and jeans", "black leggings and sportswear",
+            "white dress"]
+    # gym 有运动装 → 换（换装是真实行为）
+    o, tag = ost.adapt_outfit_to_scene(
+        "white t-shirt and jeans", pool, "gym", "lin", now=_SPRING)
+    assert tag == "switched" and "sport" in ost.outfit_categories(o)
+    # beach：日常 hoodie（outer 违和）→ 换裙装/轻装
+    o2, tag2 = ost.adapt_outfit_to_scene(
+        "light gray hoodie", pool, "beach", "lin", now=_SUMMER)
+    assert tag2 == "switched" and o2 == "white dress"
+    # 已是优先类 → 不动（同场景重复调用稳定）
+    o3, tag3 = ost.adapt_outfit_to_scene(o, pool, "gym", "lin", now=_SPRING)
+    assert (o3, tag3) == (o, "")
+
+
+def test_adapt_outfit_keep_and_veto():
+    # 无优先货可换但当前不违和 → 保持（一天一套是主旋律）
+    o, tag = ost.adapt_outfit_to_scene(
+        "white t-shirt and jeans", ["white t-shirt and jeans"], "cafe",
+        "lin", now=_SPRING)
+    assert (o, tag) == ("white t-shirt and jeans", "")
+    # 违和且全池违和 → 放弃注入（生图模型按场景自由穿，比硬注入诚实）
+    o2, tag2 = ost.adapt_outfit_to_scene(
+        "white swimsuit", ["white swimsuit"], "office", "lin", now=_SUMMER)
+    assert (o2, tag2) == ("", "vetoed")
+    # 空衣着不适配
+    assert ost.adapt_outfit_to_scene("", ["a"], "gym", "lin") == ("", "")
+
+
+def test_adapt_outfit_deterministic_same_day():
+    pool = ["black leggings and sportswear", "gray tracksuit",
+            "white t-shirt and jeans"]
+    picks = {ost.adapt_outfit_to_scene(
+        "white dress", pool, "gym", "lin", now=_SPRING)[0] for _ in range(5)}
+    assert len(picks) == 1   # 同 key 同日同场景恒定
+
+
+def test_current_outfit_scene_adaptation_integration():
+    persona = {"id": "lin",
+               "outfits": ["light gray hoodie", "white dress"]}
+    # 海边场景：今日若为 hoodie（outer 违和）→ 场景适配换 white dress
+    out = ost.current_outfit(
+        persona, {}, persona_key="lin",
+        scene="walking on the beach at sunset", now=_SUMMER)
+    assert out["outfit"] == "white dress"
+    # 连续性衣着与场景冲突同样被适配（照片事实也不能泳装进办公室）
+    out2 = ost.current_outfit(
+        persona, {}, persona_key="lin", recent_series="white-bikini",
+        scene="at the office", now=_SUMMER)
+    assert out2["outfit"] != "white bikini"
+    # 场景不冲突时连续性照旧优先
+    out3 = ost.current_outfit(
+        persona, {}, persona_key="lin", recent_series="pink-dress",
+        scene="sitting in a cozy cafe", now=_SPRING)
+    assert out3 == {"outfit": "pink dress", "source": "continuity"}
+    # 不传场景 = 只有季节约束（行为兼容 P1）
+    out4 = ost.current_outfit(persona, {}, persona_key="lin", now=_SPRING)
+    assert out4["source"] in ("daily", "scene") and out4["outfit"]
+
+
+def test_resolve_outfit_cfg_season_keys():
+    c = ost.resolve_outfit_cfg({})
+    assert c["season"] is True and c["hemisphere"] == "north"
+    c2 = ost.resolve_outfit_cfg(
+        {"consistency": {"outfit": {"season": False, "hemisphere": "south"}}})
+    assert c2["season"] is False and c2["hemisphere"] == "south"

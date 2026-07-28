@@ -836,6 +836,38 @@ def test_role_ledger_is_empty_when_the_store_is_degraded(store):
     assert store.role_ledger() == {}
 
 
+def test_prior_slots_pins_each_account_to_its_latest_role_in_that_group(store):
+    """群内角色粘性的台账：每个号取**这个群**里最近一次的角色，别的群不掺和。
+
+    2026-07-27 双号灰度实录：两场之间 advocate/skeptic 恰好被主推轮转对调——同一批
+    观众看着上一场泼冷水的号这一场安利。选角要能问到「它在这个群上次演的谁」。
+    """
+    _spoke(store, "s1", "g1", "a", "skeptic", ts=1000.0)
+    _spoke(store, "s2", "g1", "a", "advocate", ts=2000.0)    # 本群最近一次
+    _spoke(store, "s3", "g2", "a", "bystander", ts=9000.0)   # 别的群，不掺和
+    _spoke(store, "s4", "g1", "b", "skeptic", ts=1500.0)
+    assert store.prior_slots(group_key="g1") == {"a": "advocate", "b": "skeptic"}
+
+
+def test_prior_slots_applies_the_same_filters_as_every_other_ledger(store):
+    """排练不算暴露、真人插话不是我们的号——口径与 role_ledger 一字不差。
+
+    排练算进去的话，一次 dry-run 就能把线上角色「钉」在一个从没对观众亮过相的槽上。
+    """
+    _spoke(store, "s1", "g1", "a", "advocate", dry_run=True, ts=9000.0)
+    _spoke(store, "s2", "g1", "real_person", "advocate", kind="human", ts=9000.0)
+    _spoke(store, "s3", "g1", "a", "skeptic", ts=1000.0)
+    assert store.prior_slots(group_key="g1") == {"a": "skeptic"}
+
+
+def test_prior_slots_needs_a_group_and_survives_degradation(store):
+    """没有目标群＝没有粘性语义（空表）；降级库同样空表，绝不抛。"""
+    _spoke(store, "s1", "g1", "a", "advocate")
+    assert store.prior_slots(group_key="") == {}
+    store._conn = None                   # noqa: SLF001
+    assert store.prior_slots(group_key="g1") == {}
+
+
 def test_last_spoke_at_takes_the_newest_moment_per_account(store):
     """闸门问的是「离上次开口过了多久」，所以只有最新那一刻有意义。"""
     _spoke(store, "s1", "g1", "a", "advocate", ts=1000.0)

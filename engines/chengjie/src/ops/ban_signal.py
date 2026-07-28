@@ -27,6 +27,12 @@ _BAN_NAMES = frozenset({
     "Unauthorized", "AuthKeyUnregistered", "AuthKeyDuplicated",
     "SessionRevoked", "SessionExpired", "UserBlocked",
 })
+# 对端侧错误：**对方**账号注销（400 INPUT_USER_DEACTIVATED）≠ 我方被风控。
+# 2026-07-27 实锤：主动触达发到已注销测试号，撞下方 "DEACTIVAT" 关键词兜底被判
+# kind=ban → 主账号被永久 kill-switch + 注册表误标 banned，全线停发 2h。
+# 对端侧一律 none（peer 级拉黑由发送方自理，如 proactive _bad_peers）。
+_PEER_SIDE_NAMES = frozenset({"InputUserDeactivated"})
+_PEER_SIDE_MARKERS = ("INPUT_USER_DEACTIVATED", "INPUTUSERDEACTIVATED")
 _PAUSE_NAMES = frozenset({"PeerFlood", "PeerIdInvalid", "ChatWriteForbidden"})
 _BACKOFF_NAMES = frozenset({"FloodWait", "SlowmodeWait", "FloodPremiumWait"})
 
@@ -57,6 +63,9 @@ def classify(exc: Any) -> Dict[str, Any]:
     msg = str(exc or "")
     if any(msg.startswith(p) for p in _OWN_PREFIXES):
         return {"kind": "none", "cooldown_sec": 0.0, "reason": "own_control_flow"}
+    _low_all = (name + " " + msg).upper()
+    if name in _PEER_SIDE_NAMES or any(m in _low_all for m in _PEER_SIDE_MARKERS):
+        return {"kind": "none", "cooldown_sec": 0.0, "reason": f"peer_side:{name}"}
     if name in _BACKOFF_NAMES:
         return {"kind": "backoff", "cooldown_sec": _exc_seconds(exc),
                 "reason": f"{name}:{_exc_seconds(exc):.0f}s"}

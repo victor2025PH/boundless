@@ -647,6 +647,7 @@ def pick_scene_hint(
     fallback_scenes: Any = None,
     now: Any = None,
     salt: int = 0,
+    weather_snap: Any = None,
 ) -> str:
     """场景轮换（纯函数）：按「日期 + 时段 + salt」从场景池确定性取一条。
 
@@ -658,6 +659,7 @@ def pick_scene_hint(
     2026-07-14（Phase19）：先按当前时段剔除**硬冲突**场景（凌晨不取
     "afternoon light"——聊天注入/生图都从这取，深夜发白天图直接穿帮）再轮换；
     全池冲突则回退原池（有场景总比没场景强）。
+    ``weather_snap``（可选）：再滤高置信天气冲突（沙滩×暴雨）；全滤空则回退时段池。
     """
     pool = scene_pool(persona, fallback_scenes)
     if not pool:
@@ -669,6 +671,17 @@ def pick_scene_hint(
     fitting = [s for s in pool if not scene_conflicts_with_hour(s, h)]
     if fitting:
         pool = fitting
+    if weather_snap is not None:
+        try:
+            from src.companion.weather_state import scene_conflicts_with_weather
+            weather_ok = [
+                s for s in pool
+                if not scene_conflicts_with_weather(s, weather_snap)
+            ]
+            if weather_ok:
+                pool = weather_ok
+        except Exception:
+            pass
     bucket = 0 if 6 <= h < 11 else 1 if 11 <= h < 17 else 2 if 17 <= h < 22 else 3
     idx = (t.timetuple().tm_yday * 4 + bucket + int(salt)) % len(pool)
     return pool[idx]
@@ -751,6 +764,7 @@ def resolve_current_scene(
     *,
     now: Any = None,
     salt: int = 0,
+    weather_snap: Any = None,
 ) -> str:
     """「AI 此刻在哪/在干嘛」的**单一事实源**（纯函数，Phase18 场景状态化）。
 
@@ -762,6 +776,7 @@ def resolve_current_scene(
 
     取值口径与既有生图链完全一致（persona ``selfie_scenes`` → config
     ``scene_rotation`` → ``scene_hint``），保证收口不改变已有出图行为。
+    ``weather_snap`` 可选：滤高置信天气冲突场景。
     """
     return pick_scene_hint(
         persona,
@@ -769,6 +784,7 @@ def resolve_current_scene(
         fallback_scenes=(scfg or {}).get("scene_rotation"),
         now=now,
         salt=salt,
+        weather_snap=weather_snap,
     )
 
 
@@ -791,6 +807,7 @@ def _bucket_label(hour: int) -> str:
 
 def build_day_itinerary(
     persona: Any, scfg: Dict[str, Any], *, now: Any = None,
+    weather_snap: Any = None,
 ) -> list:
     """「今天的动线」（纯函数，Phase20 时间叙事）：把场景状态从「点」升级为「线」。
 
@@ -806,7 +823,8 @@ def build_day_itinerary(
     for hour, label in _ITINERARY_BUCKETS:
         try:
             rep = t.replace(hour=hour, minute=0, second=0, microsecond=0)
-            sc = resolve_current_scene(persona, scfg, now=rep)
+            sc = resolve_current_scene(
+                persona, scfg, now=rep, weather_snap=weather_snap)
         except Exception:
             sc = ""
         if sc:

@@ -55,7 +55,47 @@ def reset_metrics() -> None:
 
 # ── 纯函数：提示词 / 解析 / 判定 ─────────────────────────────────────────
 
-def build_gate_prompt() -> str:
+# P2 一致性后验：VLM 场景分类词表（与 persona_media 场景类同名空间）+ 等价组
+# （室内家居/餐饮/街景 组内互认——VLM 把卧室说成 home 不算错，防误拒）。
+_GATE_SCENE_CLASSES: Tuple[str, ...] = (
+    "beach", "cafe", "office", "gym", "kitchen", "park", "bedroom",
+    "library", "street", "campus", "restaurant", "night_city", "home", "car",
+)
+_SCENE_EQUIV: Tuple[frozenset, ...] = (
+    frozenset(("home", "bedroom", "kitchen")),
+    frozenset(("cafe", "restaurant")),
+    frozenset(("street", "night_city", "campus")),
+)
+
+
+def scenes_equivalent(a: str, b: str) -> bool:
+    """两个场景类是否同义可互认（纯函数）。"""
+    x = str(a or "").strip().lower()
+    y = str(b or "").strip().lower()
+    if not x or not y:
+        return True
+    if x == y:
+        return True
+    return any(x in grp and y in grp for grp in _SCENE_EQUIV)
+
+
+def expected_tod(now_hour: Any) -> str:
+    """当前小时 → 期望画面时段（纯函数，保守）：仅无争议区间给出期望——
+    8-16 点＝day、20-4 点＝night；晨昏（5-7/17-19）光线本就两可，返回 ""=不校验。"""
+    try:
+        h = int(now_hour)
+    except (TypeError, ValueError):
+        return ""
+    if not 0 <= h <= 23:
+        return ""
+    if 8 <= h <= 16:
+        return "day"
+    if h >= 20 or h <= 4:
+        return "night"
+    return ""
+
+
+def build_gate_prompt(*, scene_check: bool = False, tod_check: bool = False) -> str:
     """让 VLM 输出结构化体检 JSON 的指令（英文——本地 VLM 对英文指令遵循度最好）。
 
     ``people_count`` 只数**前景主体**：真机实测（2026-07-13）街景自拍会把虚化背景
@@ -64,13 +104,21 @@ def build_gate_prompt() -> str:
     ``explicit`` 与 ``nsfw`` 分开取（2026-07-14 尺度分级）：``nsfw``=任何露肤性感即真，
     ``explicit``=真正露骨（露点/生殖器/性行为）。suggestive 档只拦 explicit，sfw 档拦 nsfw。
     ``looks_underage`` 独立取——未成年性化是硬红线，任何档位、无视 nsfw/explicit 一律拦。
+
+    ``scene_check``/``tod_check``（P2 一致性后验）：**同一次** VLM 调用顺带取
+    场景分类与画面时段（零额外往返）；不开时 prompt 与旧版逐字一致（零漂移）。
     """
-    return (
-        "Inspect this image and answer with STRICT JSON only (no prose, no markdown):\n"
+    fields = (
         '{"people_count": <int>, "gender": "male"|"female"|"unknown", '
         '"apparent_age": <int, 0 if no person>, "is_animal_subject": <bool>, '
         '"visible_text_or_watermark": <bool>, "nsfw": <bool>, '
-        '"explicit": <bool>, "looks_underage": <bool>}\n'
+        '"explicit": <bool>, "looks_underage": <bool>'
+    )
+    if scene_check:
+        fields += ', "scene": "<one word>"'
+    if tod_check:
+        fields += ', "time_of_day": "day"|"night"|"unclear"'
+    rules = (
         "Rules: people_count = number of MAIN human subjects in the foreground only — "
         "IGNORE blurred or distant passers-by in the background; "
         "gender/apparent_age describe the main subject; "
@@ -82,6 +130,22 @@ def build_gate_prompt() -> str:
         "explicit = true ONLY for exposed genitalia/nipples, or a depicted sexual act "
         "(a clothed or swimwear photo is NOT explicit); "
         "looks_underage = true if the main person appears younger than 18."
+    )
+    if scene_check:
+        rules += (
+            " scene = the type of LOCATION in the background, one of: "
+            + "|".join(_GATE_SCENE_CLASSES)
+            + '|other — answer "other" when unsure.'
+        )
+    if tod_check:
+        rules += (
+            ' time_of_day: judge by lighting — "day" for clear daylight, '
+            '"night" for darkness or artificial night lighting, '
+            '"unclear" for indoor/ambiguous lighting.'
+        )
+    return (
+        "Inspect this image and answer with STRICT JSON only (no prose, no markdown):\n"
+        + fields + "}\n" + rules
     )
 
 
@@ -107,6 +171,8 @@ def gate_verdict(
     age_tolerance: int = 18,
     strict_watermark: bool = False,
     content_rating: str = "sfw",
+    expect_scene_class: str = "",
+    expect_tod: str = "",
 ) -> Tuple[bool, str]:
     """体检判定（纯函数）。返回 ``(是否放行, 原因)``。
 
@@ -119,6 +185,13 @@ def gate_verdict(
     - **尺度分级**（``content_rating``）：
         ``sfw``（默认）→ 任何 ``nsfw`` 即拒（历史行为不变）；
         ``suggestive`` → 放行性感，但 ``explicit``（露点/性行为）仍硬拒。
+    - **场景后验**（P2，``expect_scene_class`` 非空才校验）：VLM 分类出**词表内**
+      的另一个场景类且不同义（等价组互认）→ 拒 ``scene_mismatch``——点名海边
+      生成出健身房，prompt 层管不住时这里兜底；VLM 答 other/词表外 → 放行
+      （分类器没把握不误伤）。
+    - **时段后验**（P2，``expect_tod`` ∈ day|night 才校验）：VLM 明确判了相反
+      时段 → 拒 ``tod_mismatch``（凌晨两点发正午烈日照的最后防线）；
+      ``unclear``（室内光线两可）→ 放行。
     - 文字/水印：**默认只记录不拦**（``watermark_ignored``）——真机实测 VLM 分不清
       "盖在图上的水印"与"场景里的店招/霓虹"，误拒率高；安全关键是前几项。
       ``strict_watermark=True`` 才升级为拦截。
@@ -156,6 +229,16 @@ def gate_verdict(
         age = 0
     if expect_age > 0 and age > 0 and abs(age - int(expect_age)) > int(age_tolerance):
         return False, f"age_mismatch({age})"
+    # ── P2 一致性后验（场景/时段）：只拒「VLM 明确判了不同」的高置信违和 ──
+    es = str(expect_scene_class or "").strip().lower()
+    got_s = str(parsed.get("scene") or "").strip().lower()
+    if es and got_s and got_s in _GATE_SCENE_CLASSES \
+            and not scenes_equivalent(es, got_s):
+        return False, f"scene_mismatch({got_s})"
+    et = str(expect_tod or "").strip().lower()
+    got_t = str(parsed.get("time_of_day") or "").strip().lower()
+    if et in ("day", "night") and got_t in ("day", "night") and et != got_t:
+        return False, f"tod_mismatch({got_t})"
     if bool(parsed.get("visible_text_or_watermark")):
         if strict_watermark:
             return False, "text_watermark"
@@ -221,6 +304,10 @@ def resolve_gate_cfg(scfg: Dict[str, Any]) -> Dict[str, Any]:
     ``content_rating`` 从父级 ``companion.selfie.content_rating`` 继承（体检档位须与出图
     档位一致：出 suggestive 图却按 sfw 体检会把自己生成的性感照全拒）。vision_gate 段可
     显式覆盖。
+
+    ``scene_check``/``tod_check``（P2 一致性后验，默认开）：调用方给了期望场景/
+    时段才真正生效（点名场景/硬时段区间），且判定只拒高置信违和——与 P0
+    「点名场景是硬要求」同一哲学：错场景的图宁可不发。
     """
     raw = (scfg or {}).get("vision_gate")
     cfg = dict(raw) if isinstance(raw, dict) else {}
@@ -229,6 +316,8 @@ def resolve_gate_cfg(scfg: Dict[str, Any]) -> Dict[str, Any]:
     cfg.setdefault("age_tolerance", 18)
     cfg.setdefault("strict_watermark", False)
     cfg.setdefault("content_rating", str((scfg or {}).get("content_rating") or "sfw"))
+    cfg.setdefault("scene_check", True)
+    cfg.setdefault("tod_check", True)
     return cfg
 
 
@@ -239,18 +328,25 @@ async def check_image(
     kind: str = "selfie",
     subject: str = "",
     content_rating: str = "sfw",
+    expect_scene_class: str = "",
+    expect_tod: str = "",
 ) -> Tuple[bool, str]:
     """对单张图跑 VLM 体检（``kind``：selfie=人像项 / object=主体匹配项）。
 
     ``content_rating``（``sfw`` | ``suggestive``）透传给 ``gate_verdict`` 做尺度分级；
     object 图不参与分级（食物/物件本不该有性内容）。
+    ``expect_scene_class``/``expect_tod``（P2）：非空则同一次体检顺带后验
+    场景/时段一致性（prompt 增量字段，零额外 VLM 往返）。
     基础设施故障一律放行（soft-pass），仅明确不合格才 False。"""
     vcfg = dict((root_config or {}).get("vision") or {})
     if not vcfg:
         _record("soft_pass", "no_vision_cfg")
         return True, "no_vision_cfg"
     is_object = str(kind or "").lower() == "object"
-    gate_prompt = build_object_gate_prompt(subject) if is_object else build_gate_prompt()
+    _es = str(expect_scene_class or "").strip().lower()
+    _et = str(expect_tod or "").strip().lower()
+    gate_prompt = build_object_gate_prompt(subject) if is_object \
+        else build_gate_prompt(scene_check=bool(_es), tod_check=bool(_et))
     try:
         from src.vision_client import VisionClient
         vc = VisionClient(vcfg)
@@ -269,7 +365,8 @@ async def check_image(
         eg, age = persona_expectations(persona)
         ok, reason = gate_verdict(
             parsed, expect_gender=eg, expect_age=age, age_tolerance=age_tolerance,
-            strict_watermark=strict_watermark, content_rating=content_rating)
+            strict_watermark=strict_watermark, content_rating=content_rating,
+            expect_scene_class=_es, expect_tod=_et)
     _record("checked")
     if reason == "parse_fail":
         _record("soft_pass", reason)
@@ -290,6 +387,8 @@ async def generate_with_gate(
     seed: int = -1,
     kind: str = "selfie",
     subject: str = "",
+    expect_scene: str = "",
+    expect_hour: Any = None,
     **gen_kwargs: Any,
 ):
     """生成 + 体检 + 换种子重试的统一入口（autosend 链与 Stage A 共用）。
@@ -299,6 +398,10 @@ async def generate_with_gate(
       最多 ``retries`` 次；全部不合格 → 返回 ``ok=False, error=vision_gate:<reason>``，
       调用方按既有失败路径回落文字/语音。
     - ``kind="object"`` 走主体匹配体检（``subject``=期望主体，如 "a bowl of noodles"）。
+    - ``expect_scene``（P2，场景短语）：点名场景时传入 → 同次体检后验生成图
+      场景是否真是点名的类（prompt 层管不住的「说海边出健身房」在此兜底）；
+      ``expect_hour``（当前小时）→ 硬时段区间（8-16/20-4）后验画面昼夜。
+      各受 ``gate_cfg.scene_check/tod_check`` 开关控制。
     """
     gcfg = gate_cfg or {}
     gate_on = bool(gcfg.get("enabled", True))
@@ -315,10 +418,19 @@ async def generate_with_gate(
     tol = int(gcfg.get("age_tolerance", 18) or 18)
     strict_wm = bool(gcfg.get("strict_watermark", False))
     rating = str(gcfg.get("content_rating") or "sfw")
+    # P2 一致性后验期望值（软解析：场景类词表认不出 → 不校验，绝不误伤）。
+    _es = ""
+    if bool(gcfg.get("scene_check", True)) and str(expect_scene or "").strip():
+        try:
+            from src.companion.persona_media import scene_class_of
+            _es = scene_class_of(expect_scene)
+        except Exception:
+            _es = ""
+    _et = expected_tod(expect_hour) if bool(gcfg.get("tod_check", True)) else ""
     ok, reason = await check_image(
         res.image_path, persona, root_config or {}, age_tolerance=tol,
         strict_watermark=strict_wm, kind=kind, subject=subject,
-        content_rating=rating)
+        content_rating=rating, expect_scene_class=_es, expect_tod=_et)
     if ok:
         return res
     # 拒因必须可见（2026-07-22 盲排查教训：体检静默拒图，日志只见"Vision 初始化"
@@ -337,7 +449,7 @@ async def generate_with_gate(
         ok2, reason2 = await check_image(
             res2.image_path, persona, root_config or {}, age_tolerance=tol,
             strict_watermark=strict_wm, kind=kind, subject=subject,
-            content_rating=rating)
+            content_rating=rating, expect_scene_class=_es, expect_tod=_et)
         if ok2:
             _record("retry_ok")
             return res2
@@ -365,6 +477,8 @@ __all__ = [
     "resolve_gate_cfg",
     "check_image",
     "generate_with_gate",
+    "scenes_equivalent",
+    "expected_tod",
     "metrics_snapshot",
     "reset_metrics",
 ]

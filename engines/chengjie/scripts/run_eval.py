@@ -204,7 +204,82 @@ def main(argv=None) -> int:
                     help="LLM 命理解读质量（干支反幻觉+接地度+宿命断言红线；需 EVAL_LLM=1）")
     ap.add_argument("--media-consistency", action="store_true",
                     help="图文一致性评测（附图否认/无图称已发/场景强断言冲突/时间冲突；纯函数常驻）")
+    ap.add_argument("--offer-guard", action="store_true",
+                    help="出站优惠守卫评测（编折扣/券码/赠送/客户数必剥 + 婉拒/授权事实零误伤；纯函数常驻）")
+    ap.add_argument("--outbound-claims", action="store_true",
+                    help="出站事实声明校验（报价/试用时长对不对得上目录 + gated 线泄漏"
+                         "/回复语种漂移/内部指令泄漏；纯函数常驻）")
+    ap.add_argument("--duel-semantic", action="store_true",
+                    help="对练语义层评测（sycophancy/编身世/不合时宜推销三轴；"
+                         "金标形状常驻，实跑需 EVAL_LLM=1）")
     args = ap.parse_args(argv)
+
+    if args.duel_semantic:
+        from src.eval.duel_semantic_eval import (
+            append_trend, check_corpus, format_report, load_samples, run_llm,
+        )
+        samples = load_samples()
+        report = check_corpus(samples)
+        _mode = "corpus"
+        if report.get("passed") and os.environ.get("EVAL_LLM") == "1":
+            # 实跑轨：复用对练裁判的评审链（配置从实例 config 读，不在 eval 里硬编）
+            import sys as _sys
+            from pathlib import Path as _Path
+            _root = str(_Path(__file__).resolve().parents[1])
+            if _root not in _sys.path:
+                _sys.path.insert(0, _root)
+            from scripts.duel_judge import (
+                _load_ai_cfg, _load_persona, load_fact_sheet, semantic_review,
+            )
+            cfg_dir = os.environ.get(
+                "AITR_EVAL_CONFIG_DIR",
+                r"D:\chengjie-instances\zhiliao\data\config")
+            ai_cfg = _load_ai_cfg(cfg_dir)
+            if not ai_cfg.get("api_key"):
+                print("[warn] 读不到云端 key，实跑轨跳过（仅金标形状校验）")
+            else:
+                persona = _load_persona(cfg_dir, "su_wan")
+                facts = load_fact_sheet("su_wan")
+
+                def _review(rows):
+                    return semantic_review(
+                        rows, [int(r.get("turn") or 0) for r in rows],
+                        ai_cfg=ai_cfg, persona=persona, facts=facts)
+
+                report = run_llm(_review, samples)
+                _mode = "llm"
+        if args.out_jsonl and report.get("available"):
+            append_trend(report, args.out_jsonl, mode=_mode)
+            print(f"[trend] 已追加 → {args.out_jsonl}")
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(format_report(report))
+        if not report.get("available"):
+            return 0          # 缺金标优雅跳过（与其他 eval 同约定）
+        return 0 if report["passed"] else 1
+
+    if args.outbound_claims:
+        from src.eval.outbound_claim_eval import (
+            evaluate_outbound_claims, format_outbound_claim_report,
+        )
+        report = evaluate_outbound_claims()
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(format_outbound_claim_report(report))
+        return 0 if report["passed"] else 1
+
+    if args.offer_guard:
+        from src.eval.offer_guard_eval import (
+            evaluate_offer_guard, format_offer_guard_report,
+        )
+        report = evaluate_offer_guard()
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(format_offer_guard_report(report))
+        return 0 if report["passed"] else 1
 
     if args.media_consistency:
         from src.eval.media_consistency_eval import (

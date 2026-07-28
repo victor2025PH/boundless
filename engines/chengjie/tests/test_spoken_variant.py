@@ -44,6 +44,19 @@ def test_split_marker_variants():
         assert spoken == _S, mk
 
 
+def test_split_inline_marker_same_line():
+    """标记接在正文同一行（DeepSeek 实测最常见形态）也要能切开。
+
+    行首锚定时这类输出会双重失败：口语版取不到 + 标记连同重复内容漏给客户并被念出来。
+    """
+    written, spoken = split_spoken_variant(f"{_W}{SPOKEN_MARKER} {_S}")
+    assert written == _W
+    assert spoken == _S
+    written2, spoken2 = split_spoken_variant(f"{_W} {SPOKEN_MARKER}{_S}")
+    assert "口语版" not in written2
+    assert spoken2 == _S
+
+
 def test_split_no_marker_passthrough():
     written, spoken = split_spoken_variant(_W)
     assert written == _W and spoken is None

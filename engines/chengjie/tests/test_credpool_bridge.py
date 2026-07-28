@@ -1,10 +1,11 @@
 """中央凭据池桥接门禁（platform/credpool 的引擎侧适配层）。
 
-守住三条不变量：
+守住四条不变量：
 1. **默认关**：不开 `platform_login.telegram.credpool.enabled` 时零网络、行为与接池前一致；
 2. **绝不阻塞主流程**：池不可达 / 未配 token / 分配被拒 / 返回脏数据，一律回落自带凭据；
 3. **粘定键语义**：pyrogram session 与登录所用 api_id 绑定，故 runner 必须凭 meta 里的
-   key 向池索取同一组凭据——key 丢了就等于换凭据，会话会坏。
+   key 向池索取同一组凭据——key 丢了就等于换凭据，会话会坏；
+4. **半个代理比没有更糟**：出口数据不完整时宁可直连，也不能拿残缺配置去建连接。
 """
 from __future__ import annotations
 
@@ -43,8 +44,8 @@ class _FakeClient:
     def configured(self):
         return self._configured
 
-    def allocate(self, phone, account_id=None, **_kw):
-        self.calls.append(("allocate", phone, account_id))
+    def allocate(self, phone, account_id=None, license_key=None, machine_id=None, **_kw):
+        self.calls.append(("allocate", phone, account_id, license_key, machine_id))
         return self._allocate_result
 
     def report(self, api_id, success, error=None, phone=None):
@@ -57,14 +58,14 @@ class _FakeClient:
 
 
 def _install_fake(monkeypatch, client):
-    """把桥接层的客户端工厂替换成替身。"""
     monkeypatch.setattr(cb, "_make_client", lambda config: client)
     return client
 
 
-def _ok_payload(api_id="222", api_hash="poolhash"):
-    return {"available": True, "success": True,
-            "data": {"api_id": api_id, "api_hash": api_hash}}
+def _ok_payload(api_id="222", api_hash="poolhash", **extra):
+    data = {"api_id": api_id, "api_hash": api_hash}
+    data.update(extra)
+    return {"available": True, "success": True, "data": data}
 
 
 # ── 开关语义 ─────────────────────────────────────────────────────────────
@@ -80,35 +81,135 @@ def test_disabled_uses_config_creds_without_touching_pool(monkeypatch):
         raise AssertionError("池未启用却尝试建客户端")
 
     monkeypatch.setattr(cb, "_make_client", _boom)
-    creds, source = cb.resolve_credentials_for_account(_cfg(enabled=False))
-    assert creds == (111, "localhash")
-    assert source == "config"
+    alloc = cb.resolve_for_account(_cfg(enabled=False))
+    assert (alloc.api_id, alloc.api_hash) == (111, "localhash")
+    assert alloc.source == "config"
+    assert alloc.proxy is None and alloc.tier == "free"
 
 
 # ── 正常分配 ─────────────────────────────────────────────────────────────
 
 def test_allocate_returns_pool_creds(monkeypatch):
     fake = _install_fake(monkeypatch, _FakeClient(_ok_payload()))
-    creds, source = cb.resolve_credentials_for_account(
-        _cfg(), pool_key="chatx:abc")
-    assert creds == (222, "poolhash")
-    assert source == "credpool"
+    alloc = cb.resolve_for_account(_cfg(), pool_key="chatx:abc")
+    assert (alloc.api_id, alloc.api_hash) == (222, "poolhash")
+    assert alloc.source == "credpool"
     assert fake.calls[0][:2] == ("allocate", "chatx:abc")
 
 
 def test_pool_creds_take_priority_over_local(monkeypatch):
     """本地也配了凭据时仍优先用池——否则所有号共用一组，会被聚类连坐。"""
     _install_fake(monkeypatch, _FakeClient(_ok_payload()))
-    creds, source = cb.resolve_credentials_for_account(_cfg(), pool_key="k")
-    assert source == "credpool" and creds[0] == 222
+    alloc = cb.resolve_for_account(_cfg(), pool_key="k")
+    assert alloc.source == "credpool" and alloc.api_id == 222
 
 
 def test_sticky_key_read_from_account_meta(monkeypatch):
     fake = _install_fake(monkeypatch, _FakeClient(_ok_payload()))
     account = {"account_id": "acc1", "meta": {cb.META_KEY: "chatx:sticky"}}
-    creds, source = cb.resolve_credentials_for_account(_cfg(), account=account)
-    assert source == "credpool"
-    assert fake.calls[0] == ("allocate", "chatx:sticky", "acc1")
+    alloc = cb.resolve_for_account(_cfg(), account=account)
+    assert alloc.source == "credpool"
+    assert fake.calls[0][:3] == ("allocate", "chatx:sticky", "acc1")
+
+
+def test_tier_is_carried_through(monkeypatch):
+    _install_fake(monkeypatch, _FakeClient(_ok_payload(member_level="gold")))
+    assert cb.resolve_for_account(_cfg(), pool_key="k").tier == "gold"
+
+
+def test_license_key_is_sent_for_tier_resolution(monkeypatch):
+    fake = _install_fake(monkeypatch, _FakeClient(_ok_payload()))
+    cb.resolve_for_account(_cfg(license_key="KEY-GOLD"), pool_key="k")
+    assert fake.calls[0][3] == "KEY-GOLD"
+
+
+def test_license_key_env_wins_over_config(monkeypatch):
+    monkeypatch.setenv("CREDPOOL_LICENSE_KEY", "ENV-KEY")
+    assert cb.license_key(_cfg(license_key="CFG-KEY")) == "ENV-KEY"
+
+
+# ── 卡密绑机：机器标识必须稳定，且不含可反查身份的信息 ────────────────────
+
+def test_machine_id_is_sent_with_allocation(monkeypatch):
+    monkeypatch.setenv("CREDPOOL_MACHINE_ID", "mid-1")
+    fake = _install_fake(monkeypatch, _FakeClient(_ok_payload()))
+    cb.resolve_for_account(_cfg(), pool_key="k")
+    assert fake.calls[0][4] == "mid-1", "不送 machine_id 服务端会按 free 处理"
+
+
+def test_machine_id_env_wins_and_is_stable(monkeypatch):
+    monkeypatch.setenv("CREDPOOL_MACHINE_ID", "mid-x")
+    assert cb.machine_id() == "mid-x" == cb.machine_id()
+
+
+def test_machine_id_persists_across_calls(monkeypatch, tmp_path):
+    monkeypatch.delenv("CREDPOOL_MACHINE_ID", raising=False)
+    monkeypatch.setattr(cb, "_MACHINE_ID", "")
+
+    class _FakeCM:
+        config_path = tmp_path / "config.yaml"
+
+    import src.utils.config_manager as cm
+
+    monkeypatch.setattr(cm, "ConfigManager", lambda *a, **kw: _FakeCM())
+    first = cb.machine_id()
+    monkeypatch.setattr(cb, "_MACHINE_ID", "")  # 模拟重启（进程缓存清空）
+    assert cb.machine_id() == first, "重启后必须读回同一个 id，否则卡密要反复绑机"
+    assert (tmp_path / ".credpool_machine_id").is_file()
+
+
+def test_machine_id_carries_no_identifying_info(monkeypatch, tmp_path):
+    monkeypatch.delenv("CREDPOOL_MACHINE_ID", raising=False)
+    monkeypatch.setattr(cb, "_MACHINE_ID", "")
+
+    class _FakeCM:
+        config_path = tmp_path / "config.yaml"
+
+    import platform as _plat
+    import src.utils.config_manager as cm
+
+    monkeypatch.setattr(cm, "ConfigManager", lambda *a, **kw: _FakeCM())
+    mid = cb.machine_id()
+    assert mid.startswith("chatx-") and len(mid) > 20
+    assert _plat.node().lower() not in mid.lower(), "不得含主机名"
+
+
+# ── 三隔离第三件套：独立出口 ──────────────────────────────────────────────
+
+def test_proxy_is_carried_through(monkeypatch):
+    proxy = {"scheme": "socks5", "host": "1.2.3.4", "port": 1080,
+             "username": "u", "password": "p"}
+    _install_fake(monkeypatch, _FakeClient(_ok_payload(proxy=proxy)))
+    alloc = cb.resolve_for_account(_cfg(), pool_key="k")
+    assert alloc.proxy == proxy
+
+
+def test_proxy_defaults_scheme_and_drops_empty_auth(monkeypatch):
+    _install_fake(monkeypatch, _FakeClient(
+        _ok_payload(proxy={"host": "1.2.3.4", "port": "1080",
+                           "username": "", "password": ""})))
+    alloc = cb.resolve_for_account(_cfg(), pool_key="k")
+    assert alloc.proxy == {"scheme": "socks5", "host": "1.2.3.4", "port": 1080}
+
+
+@pytest.mark.parametrize("bad", [
+    None, "notadict", {}, {"host": "1.2.3.4"}, {"port": 1080},
+    {"host": "1.2.3.4", "port": 0}, {"host": "", "port": 1080},
+    {"host": "1.2.3.4", "port": "abc"},
+])
+def test_incomplete_proxy_is_dropped_not_half_used(monkeypatch, bad):
+    """半个代理会让整条连接起不来；没有代理只是直连，不阻塞登录。"""
+    _install_fake(monkeypatch, _FakeClient(_ok_payload(proxy=bad)))
+    alloc = cb.resolve_for_account(_cfg(), pool_key="k")
+    assert alloc.api_id == 222, "出口有问题不该连凭据一起丢"
+    assert alloc.proxy is None
+
+
+def test_config_fallback_carries_no_proxy(monkeypatch):
+    """自带凭据本就不带隔离能力，如实反映。"""
+    _install_fake(monkeypatch, _FakeClient({"available": False}))
+    alloc = cb.resolve_for_account(_cfg(), pool_key="k")
+    assert alloc.source == "config" and alloc.proxy is None
 
 
 # ── 降级回落（核心安全性）─────────────────────────────────────────────────
@@ -122,40 +223,39 @@ def test_sticky_key_read_from_account_meta(monkeypatch):
 ])
 def test_falls_back_to_config_on_any_pool_problem(monkeypatch, payload, why):
     _install_fake(monkeypatch, _FakeClient(payload))
-    creds, source = cb.resolve_credentials_for_account(_cfg(), pool_key="k")
-    assert creds == (111, "localhash"), why
-    assert source == "config", why
+    alloc = cb.resolve_for_account(_cfg(), pool_key="k")
+    assert (alloc.api_id, alloc.api_hash) == (111, "localhash"), why
+    assert alloc.source == "config", why
 
 
 def test_unconfigured_token_falls_back(monkeypatch):
     """没配服务 token 时不该硬打接口，直接回落。"""
     fake = _install_fake(monkeypatch, _FakeClient(_ok_payload(), configured=False))
-    creds, source = cb.resolve_credentials_for_account(_cfg(), pool_key="k")
-    assert (creds, source) == ((111, "localhash"), "config")
+    alloc = cb.resolve_for_account(_cfg(), pool_key="k")
+    assert (alloc.api_id, alloc.source) == (111, "config")
     assert fake.calls == []
 
 
 def test_client_load_failure_falls_back(monkeypatch):
     monkeypatch.setattr(cb, "_make_client", lambda config: None)
-    creds, source = cb.resolve_credentials_for_account(_cfg(), pool_key="k")
-    assert (creds, source) == ((111, "localhash"), "config")
+    alloc = cb.resolve_for_account(_cfg(), pool_key="k")
+    assert (alloc.api_id, alloc.source) == (111, "config")
 
 
 def test_no_creds_anywhere_returns_none(monkeypatch):
     monkeypatch.setattr(cb, "_make_client", lambda config: None)
     cfg = {"platform_login": {"telegram": {"credpool": {"enabled": True}}}}
-    creds, source = cb.resolve_credentials_for_account(cfg, pool_key="k")
-    assert creds is None and source == "none"
+    assert cb.resolve_for_account(cfg, pool_key="k") is None
 
 
 def test_allocate_exception_does_not_propagate(monkeypatch):
     class _Boom(_FakeClient):
-        def allocate(self, phone, account_id=None, **_kw):
+        def allocate(self, phone, account_id=None, license_key=None, **_kw):
             raise RuntimeError("网络炸了")
 
     _install_fake(monkeypatch, _Boom())
-    creds, source = cb.resolve_credentials_for_account(_cfg(), pool_key="k")
-    assert (creds, source) == ((111, "localhash"), "config")
+    alloc = cb.resolve_for_account(_cfg(), pool_key="k")
+    assert (alloc.api_id, alloc.source) == (111, "config")
 
 
 # ── 回报 / 释放：best-effort，绝不影响调用方 ──────────────────────────────
@@ -201,8 +301,8 @@ def test_pool_key_of_handles_missing():
 
 async def test_async_wrapper_returns_same_result(monkeypatch):
     _install_fake(monkeypatch, _FakeClient(_ok_payload()))
-    creds, source = await cb.aresolve_credentials_for_account(_cfg(), pool_key="k")
-    assert (creds, source) == ((222, "poolhash"), "credpool")
+    alloc = await cb.aresolve_for_account(_cfg(), pool_key="k")
+    assert (alloc.api_id, alloc.source) == (222, "credpool")
 
 
 async def test_async_wrapper_no_thread_when_disabled(monkeypatch):
@@ -213,8 +313,8 @@ async def test_async_wrapper_no_thread_when_disabled(monkeypatch):
         raise AssertionError("关池却切线程")
 
     monkeypatch.setattr(asyncio, "to_thread", _boom)
-    creds, source = await cb.aresolve_credentials_for_account(_cfg(enabled=False))
-    assert (creds, source) == ((111, "localhash"), "config")
+    alloc = await cb.aresolve_for_account(_cfg(enabled=False))
+    assert (alloc.api_id, alloc.source) == (111, "config")
 
 
 async def test_areport_best_effort(monkeypatch):

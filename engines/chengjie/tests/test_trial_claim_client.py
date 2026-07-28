@@ -161,6 +161,55 @@ def test_bind_code_returns_deeplinks(state_file):
     assert r["telegram_url"].startswith("https://t.me/")
 
 
+# ── 漏斗埋点（fire-and-forget） ────────────────────────────────────────────
+
+def test_funnel_posts_track_event_with_fingerprint(state_file):
+    site = FakeSite()
+    res = tc.funnel("welcome", fetch=site)
+    assert res == {"ok": True}
+    method, url, body = site.calls[0]
+    assert method == "POST" and url.endswith("/api/track")
+    assert body["event"] == "trial_wizard_welcome"
+    assert body["sid"] == "A1B2-C3D4-E5F6-0789"
+    assert body["props"]["product"] == "chatx"
+
+
+def test_funnel_rejects_unknown_event(state_file):
+    """事件白名单收口：桌面壳拼错/被塞任意串都不该灌进官网事件流水。"""
+    site = FakeSite()
+    assert tc.funnel("drop table", fetch=site) == {"ok": False, "error": "bad_event"}
+    assert tc.funnel("", fetch=site)["error"] == "bad_event"
+    assert not site.calls
+
+
+def test_funnel_event_names_match_desktop_catalog():
+    """与桌面壳 FR_FUNNEL_EVENTS 同口径（两边各有一张表，靠这条钉住不漂移）。"""
+    assert tc.FUNNEL_EVENTS == {
+        "welcome", "claim_submit", "claim_ok", "claim_skip", "gift_open", "done"}
+
+
+def test_funnel_treats_204_empty_body_as_success(state_file):
+    """官网 /api/track 成功返回 204 无体 → _http 解析成 {}，不能误判为失败。"""
+    def fetch(url, method, body):
+        return {}
+    assert tc.funnel("done", fetch=fetch) == {"ok": True}
+
+
+def test_funnel_without_fingerprint_still_reports(state_file, monkeypatch):
+    """拿不到指纹也照样上报（匿名计数仍有意义），绝不因指纹失败丢事件。"""
+    import src.licensing.machine_bridge as mb
+    monkeypatch.setattr(mb, "machine_fingerprint", lambda: "")
+    site = FakeSite()
+    assert tc.funnel("claim_ok", fetch=site) == {"ok": True}
+    assert site.calls[0][2]["sid"] == ""
+
+
+def test_funnel_network_failure_is_soft(state_file):
+    def fetch(url, method, body):
+        return {"ok": False, "error": "network"}
+    assert tc.funnel("welcome", fetch=fetch) == {"ok": False, "error": "network"}
+
+
 # ── 站点配置 ───────────────────────────────────────────────────────────────
 
 def test_site_url_override():

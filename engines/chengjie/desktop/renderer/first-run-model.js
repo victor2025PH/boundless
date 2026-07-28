@@ -9,6 +9,24 @@
 
 var FR_STRINGS = {
   zh: {
+    // 欢迎步（原先硬编码在 first-run.js::renderBasic，英文用户看不到翻译，故收进这里）
+    welcome_title: "欢迎使用 智聊",
+    welcome_sub: "多平台 AI 客服，装好即用——不用注册账号、也不用自己配 AI 模型。首次启动会自动准备本地服务，稍等片刻即可进入。",
+    welcome_managed_note: "AI 引擎与额度我们已为你配好，直接用就行。",
+    welcome_value_hook: "装好就能聊——不用注册、不用自己配 AI",
+    lang_label: "界面语言",
+    lang_follow: "跟随系统",
+    token_label: "后台访问令牌（默认 admin）",
+    btn_next: "下一步",
+    btn_claim_start: "领取完整版",
+    btn_enter: "进入工作台",
+    celebrate_title: "可以开始了",
+    celebrate_sub_claimed: "7 天完整版已激活。额度随时可在顶栏徽章查看。",
+    celebrate_sub_skipped: "体验额度已就绪。随时可在「会员中心」领取完整版或加客服加量。",
+    celebrate_sub_gift: "绑定码已就绪——发给客服核销后 10 万字符自动到账。",
+    step_welcome: "欢迎",
+    step_claim: "领取",
+    step_celebrate: "就绪",
     ai_title: "配置 AI 大模型（翻译 / 智能回复引擎）",
     ai_sub: "只需一个 OpenAI 兼容 API Key（如 DeepSeek）。跳过则翻译暂不可用，之后可在后台「接入向导」补配。",
     ai_key_label: "AI API Key",
@@ -68,6 +86,23 @@ var FR_STRINGS = {
     gift_done: "已到账 10 万字符",
   },
   en: {
+    welcome_title: "Welcome to ChatX",
+    welcome_sub: "Multi-platform AI customer service, ready right after install — no account, no AI setup on your side. The local service is starting up; you'll be in shortly.",
+    welcome_managed_note: "The AI engine and your quota are already set up for you — just start.",
+    welcome_value_hook: "Ready to chat — no signup, no AI setup on your side",
+    lang_label: "Language",
+    lang_follow: "System default",
+    token_label: "Backend token (default admin)",
+    btn_next: "Next",
+    btn_claim_start: "Claim full version",
+    btn_enter: "Enter workspace",
+    celebrate_title: "You're ready",
+    celebrate_sub_claimed: "Your 7-day full version is active. Check remaining quota anytime from the top-bar badge.",
+    celebrate_sub_skipped: "Your starter allowance is ready. Claim the full version or top up via support anytime from Membership.",
+    celebrate_sub_gift: "Your bind code is ready — send it to support and 100,000 characters credit automatically.",
+    step_welcome: "Welcome",
+    step_claim: "Claim",
+    step_celebrate: "Ready",
     ai_title: "Set up the AI model (translation / smart replies)",
     ai_sub: "One OpenAI-compatible API key (e.g. DeepSeek) is enough. Skip for now and translation stays off until configured in the admin setup wizard.",
     ai_key_label: "AI API Key",
@@ -149,17 +184,50 @@ function frFormatChars(n, lang) {
   return v.toLocaleString("zh-CN");
 }
 
-// 步骤编排：AI 已配置（升级/重装保留数据目录）→ 只走基础步；未配置 → 基础 + AI + 结果。
-// aiStatus = GET /api/setup/ai 响应（或 null/失败 → 视为未配置，让用户有机会填）。
+// 步骤编排。
 //
-// trialStatus = GET /api/workspace/quota 响应。体验额度真的开着时**追加最后一步**，
-// 把「你有多少额度、能用多久」当收尾告知——这份额度现在是默默生效的，用户压根不知道
-// 自己有；不说出来等于白送。拿不到状态 → 不加步骤（宁可不说，也不能凭空承诺额度）。
-function frBuildSteps(aiStatus, trialStatus) {
+// 托管版（客户成品）：固定三屏「欢迎 → 领取 → 就绪」。AI/令牌绝不出场——不靠
+// 「此刻 AI 有没有配好」猜（打包漏 key 就会突然弹配置页）。领取步失败也可跳过，
+// 所以即便 trialStatus 探不到，仍把 claim 放进漏斗（价值钩子 + 转化入口）。
+//
+// 自建/开发态：AI 已配置 → 只走基础步；未配置 → 基础 + AI + 结果。
+// trialStatus 确认体验档可见时再追加旧版 trial 收尾（自建路径保留，托管已并入 welcome/claim）。
+function frBuildSteps(aiStatus, trialStatus, opts) {
+  var managed = !!(opts && opts.managed);
+  if (managed) return ["welcome", "claim", "celebrate"];
   var configured = !!(aiStatus && aiStatus.ok && aiStatus.configured);
   var steps = configured ? ["basic"] : ["basic", "ai", "result"];
   if (frTrialView(trialStatus).show) steps.push("trial");
   return steps;
+}
+
+// 托管欢迎屏：价值钩子前置 + 体验额度（有则展示，无则只讲卖点，绝不凭空承诺数字）。
+function frWelcomeView(trialStatus, lang) {
+  var tv = frTrialView(trialStatus, lang);
+  return {
+    title: frT(lang, "welcome_title"),
+    sub: frT(lang, "welcome_value_hook"),
+    managedNote: frT(lang, "welcome_managed_note"),
+    showQuota: !!tv.show,
+    chars: tv.chars,
+    hours: tv.hours,
+    charsLabel: frT(lang, "trial_chars"),
+    hoursLabel: frT(lang, "trial_hours"),
+    hoursUnit: frT(lang, "trial_hours_unit"),
+    cta: frT(lang, "btn_claim_start"),
+  };
+}
+
+// 就绪庆祝屏：按用户是否领取 / 是否看过赠量码给出不同收尾文案。
+function frCelebrateView(opts, lang) {
+  var o = opts || {};
+  var subKey = o.claimed ? "celebrate_sub_claimed"
+    : (o.giftShown ? "celebrate_sub_gift" : "celebrate_sub_skipped");
+  return {
+    title: frT(lang, "celebrate_title"),
+    sub: frT(lang, subKey),
+    cta: frT(lang, "btn_enter"),
+  };
 }
 
 // 体验额度展示模型。只在「后端确认可见 + 确实是体验档 + 还没用尽」时 show——
@@ -285,22 +353,31 @@ function frResultView(saveView, lang) {
   return { cls: "warn", title: frT(lang, "result_warn_title"), sub: frT(lang, "result_warn_sub") };
 }
 
-// 是否弹向导。默认「只弹一次」（有标记就不弹），但支持强制重看：
-// 带 `--first-run` 启动即无视标记。有它之前，想再看一遍向导只能让人打开
-// DevTools 敲 `localStorage.removeItem('aitr_firstrun_v1')`——这对客服远程
-// 协助和自己验收都太别扭（trial_rig.ps1 的复位提示一直就写着这句话）。
+// 首启漏斗事件白名单（与后端 trial_claim_client.FUNNEL_EVENTS 同口径）。
+// 单列成表：first-run.js 只从这里取名，拼错事件名在单测就会红，而不是数据悄悄丢。
+var FR_FUNNEL_EVENTS = ["welcome", "claim_submit", "claim_ok", "claim_skip", "gift_open", "done"];
+
+// 是否弹向导。默认「只弹一次」。权威完成态有两处：
+//   ① localStorage 旗标（快路径，同步可读）
+//   ② desktop config.json 的 onboarding.completed（卸载重装/清缓存仍在 userData）
+// 任一已完成 → 不弹；`--first-run` 强制重看时两者都无视。
 // 强制态下**仍然照常写标记**：强制是显式的一次性动作，不该顺手改掉常态。
-function frShouldShowWizard(flagPresent, forced) {
-  return !!forced || !flagPresent;
+function frShouldShowWizard(flagPresent, forced, configCompleted) {
+  if (forced) return true;
+  if (flagPresent || configCompleted) return false;
+  return true;
 }
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     FR_STRINGS: FR_STRINGS,
+    FR_FUNNEL_EVENTS: FR_FUNNEL_EVENTS,
     frT: frT,
     frFormatChars: frFormatChars,
     frShouldShowWizard: frShouldShowWizard,
     frBuildSteps: frBuildSteps,
+    frWelcomeView: frWelcomeView,
+    frCelebrateView: frCelebrateView,
     frAiPrefill: frAiPrefill,
     frValidateAiInput: frValidateAiInput,
     frAiTestView: frAiTestView,

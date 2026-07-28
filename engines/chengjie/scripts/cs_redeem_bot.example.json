@@ -1,0 +1,10 @@
+{
+  "_note": "复制到 D:\\chengjie-instances\\vendor\\cs_redeem_bot.json 再填真值（该目录已限 ACL，勿把真值提交进 git）。bot_token 找 @BotFather 建；console_user/pass 建议在官网 console 单独建一个 admin 角色的 bot 账号；allowed_user_ids 是允许触发核销的客服 Telegram 数字 id（找 @userinfobot 查），空数组 = 全拒。",
+  "bot_token": "",
+  "site": "https://bd2026.cc",
+  "console_user": "",
+  "console_pass": "",
+  "allowed_user_ids": [],
+  "daily_cap": 50,
+  "dry_run": false
+}

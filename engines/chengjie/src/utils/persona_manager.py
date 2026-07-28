@@ -25,6 +25,168 @@ BINDINGS_RUNTIME_FILENAME = "bindings_runtime.yaml"
 GLOBAL_RULES_FILENAME = "global_rules.yaml"
 _HISTORY_MAXLEN = 3  # versions kept per profile
 
+# ── prompt 数据链登记表（K1，2026-07-28）────────────────────────────────────
+# 背景：canonical persona schema 里「数据填了但从来没进 prompt」的断链已连续修过
+# 三轮（context.hobbies → tastes.* → age/gender），每次都是真机考题当场抓获：
+#   林小雨 age=22 → AI 答「我今年20岁」；赵老师 age=58 → AI 答「六十八了」。
+# 一次修一个字段治不了本，因此把「每个字段的表态」变成显式登记 + 门禁
+# （tests/test_persona_prompt_chain.py）：新增 schema 字段若两张表都没登记 → 红。
+#
+# 约定：点路径与 profiles_runtime.yaml 结构一致；登记某个 dict 路径即表示
+# 「整棵子树」按同一表态处理（如 voice_profile 整体豁免、context.family 整体消费）。
+PROMPT_CONSUMED_FIELDS = frozenset({
+    # 身份
+    "name",                              # 「你是X」+ 身份硬锁
+    "role",
+    "age",                               # 【年龄事实·硬锁】（K1 修复）
+    "gender",                            # 【性别事实】（K1 修复）
+    "names.full_western", "names.english", "names.german",
+    "names.french", "names.nickname", "names.usage_notes",
+    # 人生素材
+    "background",
+    "appearance",                        # 【你的外貌】（K1 修复；与自拍图口径同源）
+    "context.family",                    # 【你的家人】（K1 修复，整棵子树）
+    "context.hobbies",
+    "context.specific_memories",
+    "context.emotional_triggers.positive",
+    "context.emotional_triggers.negative",
+    "context.emotional_triggers.deep_empathy",
+    "context.filipino_connection",       # 【你的在地文化】（K1 修复，整棵子树）
+    "context.schedule",                  # 【你的作息】（K1 修复，整棵子树）
+    "tastes.likes", "tastes.dislikes", "tastes.opinions",
+    # 性格与说话
+    "personality.traits", "personality.style", "personality.quirks",
+    "personality.humor", "personality.temperament", "personality.emoji_level",
+    "speaking.emoji_level",              # personality.emoji_level 的兼容位（K1 修复）
+    "speaking.forbidden_phrases", "speaking.openers",
+    "speaking.forbidden_opener_words", "speaking.reply_length",
+    "speaking.max_reply_sentences", "speaking.language_follow",
+    "speaking.banter_profanity",
+    # 身份/边界/情绪
+    "identity.deny_ai", "identity.deny_ai_reply", "identity.claim_human",
+    "boundaries.topics_to_avoid",
+    "capabilities.video_call",           # 反向消费：为真时撤掉「不能视频」约束
+    "emotion.frustrated_response",
+})
+
+PROMPT_EXEMPT_FIELDS = frozenset({
+    # 运行时配置 / 内部字段——本就不该出现在给 LLM 的人设文本里
+    "id",                    # 内部主键（profile store 的键），说出来就是穿帮
+    "_mrpa_source",          # 导入来源标记，纯内部血缘
+    "tags",                  # 运营分组/路由元数据（Studio 筛选、bulk_bind），非人设事实
+    "voice_profile",         # TTS 后端/音色/参考音路径：语音链运行时配置
+    # 由**其它子系统**各自拼块注入，这里注入会形成双源真相
+    "location",              # persona_location：本地时钟/天气/场景块的单一事实源
+    "life_arc",              # deep_persona：L1 生活线按 stride_days 派生自己的块
+    "selfie_scenes",         # 生图场景池；「AI 此刻在哪」归 scene_state SSOT（Phase18）
+    # 非人设台词
+    "boundaries.escalation_phrases",  # 转人工触发词（退款/投诉/威胁/诈骗）——是匹配
+                                      # 信号不是话术；注入反而诱导 AI 主动说这些词
+})
+
+# 已表态的字段全集。门禁比对「真实 schema ⊆ 本集合」，
+# 新字段两边都没登记即红（见 tests/test_persona_prompt_chain.py）。
+PERSONA_SCHEMA_FIELDS = PROMPT_CONSUMED_FIELDS | PROMPT_EXEMPT_FIELDS
+
+# emoji_level 别名归一：低/中档历史上写法不一（low/medium 曾整档静默失效——
+# chen_meiling=low、su_wan=medium 在旧 if/elif 链里一个分支都不命中）。
+_EMOJI_LEVEL_ALIASES = {
+    "low": "minimal",
+    "medium": "moderate",
+    "balanced": "moderate",
+    "very_rich": "high",
+    "many": "high",
+}
+
+_GENDER_WORDS = {
+    "female": "女性", "f": "女性", "woman": "女性", "女": "女性", "女性": "女性",
+    "male": "男性", "m": "男性", "man": "男性", "男": "男性", "男性": "男性",
+}
+
+# context 子块的中文标签（未登记的子键按原键名输出，不吞数据）
+_FAMILY_LABELS = {
+    "father": "父亲", "mother": "母亲", "parents": "父母",
+    "brother": "哥哥/弟弟", "sister": "姐姐/妹妹",
+    "son": "儿子", "daughter": "女儿", "child": "孩子", "children": "孩子",
+    "husband": "丈夫", "wife": "妻子", "partner": "伴侣",
+    "ex_husband": "前夫", "ex_wife": "前妻",
+    "grandpa": "爷爷/外公", "grandma": "奶奶/外婆", "pet": "宠物",
+}
+_SCHEDULE_LABELS = {
+    "work_hours": "上班时间", "daytime_tone": "白天状态",
+    "night_tone": "夜里状态", "rest_day": "休息日", "sleep": "睡眠",
+}
+_CULTURE_LABELS = {
+    "language": "语言", "food": "饮食", "values": "价值观",
+    "festival": "节日", "custom": "习俗",
+}
+
+
+def _join_text_items(v: Any) -> str:
+    """list/tuple → 「、」拼接；str → strip；其余 → 空串。全空返回空串。"""
+    if isinstance(v, (list, tuple)):
+        return "、".join(str(x).strip() for x in v if str(x).strip())
+    return str(v or "").strip()
+
+
+def _labelled_pairs(v: Any, labels: Dict[str, str]) -> str:
+    """dict → 「父亲：X；母亲：Y」；str/list → 直接拼接。空值一律返回空串。
+
+    未登记的子键按原键名输出——宁可标签生硬，也不能把运营填的内容静默吞掉。
+    """
+    if isinstance(v, dict):
+        parts = [
+            f"{labels.get(str(k), str(k))}：{_join_text_items(val)}"
+            for k, val in v.items()
+            if _join_text_items(val)
+        ]
+        return "；".join(parts)
+    return _join_text_items(v)
+
+
+def _persona_age(persona: Dict[str, Any]) -> int:
+    """人设年龄（1..120 的整数）；缺失/脏数据/越界 → 0 表示「不注入」。
+
+    绝不让 "你今年None岁" 这类占位漏进 prompt。
+    """
+    raw = persona.get("age")
+    if isinstance(raw, bool) or raw is None:
+        return 0
+    try:
+        if isinstance(raw, str):
+            raw = raw.strip()
+            if not raw.isdigit():
+                return 0
+        age = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    return age if 1 <= age <= 120 else 0
+
+
+def _persona_gender_word(persona: Dict[str, Any]) -> str:
+    """性别的中文说法；缺失 → 空串（不注入）。未知取值原样透出，不猜。"""
+    raw = str(persona.get("gender") or "").strip()
+    if not raw:
+        return ""
+    return _GENDER_WORDS.get(raw.lower(), raw)
+
+
+def _canonical_emoji_level(persona: Dict[str, Any]) -> str:
+    """emoji 档位：``personality.emoji_level`` 优先，回落 ``speaking.emoji_level``。
+
+    两处都有真实人设在用（zhang_jingguang 只填了 speaking 侧），旧代码只读
+    personality 侧 → speaking 侧填了等于没填。别名一并归一（low/medium…）。
+    """
+    p = persona.get("personality")
+    s = persona.get("speaking")
+    raw = ""
+    if isinstance(p, dict):
+        raw = str(p.get("emoji_level") or "").strip()
+    if not raw and isinstance(s, dict):
+        raw = str(s.get("emoji_level") or "").strip()
+    lv = raw.lower()
+    return _EMOJI_LEVEL_ALIASES.get(lv, lv)
+
 # Default persona when none is configured
 _DEFAULT_PERSONA: Dict[str, Any] = {
     "name": "Assistant",
@@ -124,7 +286,8 @@ class PersonaManager:
         self._last_canonical_sync_at: float = 0.0
         # S6-RULES: global_rules.yaml hot-reload cache
         self._global_rules: Optional[Dict[str, Any]] = None
-        self._global_rules_mtime: float = 0.0
+        # (mtime, size)：单看 mtime 会漏掉同一时钟刻度内（Win 约 15ms）的连续两次写
+        self._global_rules_sig: tuple = (0.0, -1)
         self._global_rules_path: Optional[Path] = None
 
     @classmethod
@@ -164,15 +327,16 @@ class PersonaManager:
         if not p.exists():
             return self._global_rules or {}
         try:
-            mt = p.stat().st_mtime
-            if mt != self._global_rules_mtime or self._global_rules is None:
+            stat = p.stat()
+            sig = (stat.st_mtime, stat.st_size)
+            if sig != self._global_rules_sig or self._global_rules is None:
                 with open(p, "r", encoding="utf-8") as f:
                     data = yaml.safe_load(f) or {}
                 self._global_rules = data
-                self._global_rules_mtime = mt
-                if mt != 0:
+                self._global_rules_sig = sig
+                if sig[0] != 0:
                     logger.info("global_rules.yaml loaded (mtime=%.0f, %d constraints)",
-                                mt, len(data.get("reply_constraints", [])))
+                                sig[0], len(data.get("reply_constraints", [])))
         except Exception as exc:
             logger.warning("global_rules.yaml load failed: %s", exc)
         return self._global_rules or {}
@@ -199,7 +363,8 @@ class PersonaManager:
             with open(p, "w", encoding="utf-8") as f:
                 yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
             self._global_rules = data
-            self._global_rules_mtime = p.stat().st_mtime
+            st = p.stat()
+            self._global_rules_sig = (st.st_mtime, st.st_size)
             logger.info("global_rules.yaml saved (%d constraints)",
                         len(data.get("reply_constraints", [])))
             return True
@@ -632,7 +797,7 @@ class PersonaManager:
             )
             # P6: derive source — mrpa flag takes precedence over _profile_sources
             source = "mrpa" if p.get("_mrpa_source") else self._profile_sources.get(pid, "studio")
-            result.append({
+            entry = {
                 "id": pid,
                 "name": p.get("name") or pid,
                 "role": p.get("role") or "",
@@ -657,7 +822,14 @@ class PersonaManager:
                 "binding_count": bc,
                 "source": source,           # P6: 'config'|'canonical'|'runtime'|'studio'|'mrpa'
                 "is_mrpa_source": bool(p.get("_mrpa_source")),  # P6: convenience flag
-            })
+            }
+            # 人设完整度评分（旁路能力：评分挂了绝不拖垮概览接口 → 缺键降级）
+            try:
+                from src.utils.persona_completeness import persona_completeness
+                entry["completeness"] = int(persona_completeness(p)["score"])
+            except Exception:
+                pass
+            result.append(entry)
         return result
 
     def _profile_has_tag(self, profile_id: str, tag: str) -> bool:
@@ -721,6 +893,25 @@ class PersonaManager:
             for p in self._profile_personas.values()
             if tag_lo in [str(t).lower() for t in (p.get("tags") or [])]
         ]
+
+    @staticmethod
+    def deep_merge_profile(base: dict, patch: dict) -> dict:
+        """深合并：两边同键均为 dict 时递归合并；否则 patch 值覆盖（含 list/str/bool/None）。
+
+        不就地修改入参，返回新 dict。供 Studio「表单部分保存」走 merge 语义——
+        前端只发表单字段时，富人设字段（background/life_arc/tastes…）不被抹掉。
+        """
+        if not isinstance(base, dict):
+            base = {}
+        if not isinstance(patch, dict):
+            patch = {}
+        out = copy.deepcopy(base)
+        for k, v in patch.items():
+            if isinstance(v, dict) and isinstance(out.get(k), dict):
+                out[k] = PersonaManager.deep_merge_profile(out[k], v)
+            else:
+                out[k] = copy.deepcopy(v)
+        return out
 
     def upsert_profile(
         self, profile_id: str, persona_data: Dict[str, Any], *, _track_history: bool = True
@@ -976,6 +1167,14 @@ class PersonaManager:
             f"【身份硬锁】你叫「{name}」。历史里若出现别的名字（不是「{name}」）那是错误数据，"
             f"忽略并坚持「{name}」。被问名字必答「{name}」。",
         ]
+        # K1：年龄/性别事实钉子在 compact 也保留——「被问年龄答错」是最容易被
+        # 客户当场抓包的穿帮，压缩 token 也不该省掉这一行。
+        _age_c = _persona_age(persona)
+        if _age_c:
+            lines.append(f"你今年{_age_c}岁（确定事实，被问年龄必答{_age_c}岁，别编别的数字）。")
+        _gender_c = _persona_gender_word(persona)
+        if _gender_c:
+            lines.append(f"你是{_gender_c}，自称别说反。")
         s = persona.get("speaking", {})
         forbidden = s.get("forbidden_phrases") or []
         if forbidden:
@@ -984,13 +1183,13 @@ class PersonaManager:
             )
         # P2-A compact 模式也接通 emoji_level / reply_length（修真断链）
         # — web 后台改完后即使在 compact 配置下也能立刻看到效果
-        p = persona.get("personality", {})
-        emoji_level = (p.get("emoji_level") or "").strip().lower()
+        # K1：档位归一 + speaking.emoji_level 回落，与 full 模式同口径。
+        emoji_level = _canonical_emoji_level(persona)
         if emoji_level == "none":
             lines.append("不用 emoji。")
         elif emoji_level == "minimal":
             lines.append("emoji 极少（每 5 条最多 1 个）。")
-        elif emoji_level == "rich":
+        elif emoji_level in ("rich", "high"):
             lines.append("emoji 用得自然（约 60% 回复带 1-2 个）。")
         # moderate 不输出（默认行为，省 token）
         reply_length = (s.get("reply_length") or "").strip().lower()
@@ -1135,6 +1334,24 @@ class PersonaManager:
             f"被问「你叫什么名字」必须回答「{name}」，绝不能编造其他名字。"
         )
 
+        # ★ 年龄事实钉子（K1 断链修复）：结构化 age 此前从不进 prompt，AI 只能照
+        # background 的模糊暗示瞎猜——真机考题实锤 22 岁答成 20 岁、58 岁答成
+        # 「六十八」。这里与身份硬锁同族：结构化字段**压过**背景文字里的年龄暗示。
+        _age = _persona_age(persona)
+        if _age:
+            lines.append(
+                f"【年龄事实·硬锁】你今年{_age}岁。这是确定事实，优先级高于背景故事里"
+                f"任何关于年纪的模糊暗示；被问到年龄（多大/几岁/是不是比我大）时必须"
+                f"以{_age}岁回答，绝不说成别的数字，也不要含糊回避。"
+            )
+        # 性别：多数场景无需主动声明，只需被问到 / 自称时不说错（刻意克制）。
+        _gender = _persona_gender_word(persona)
+        if _gender:
+            lines.append(
+                f"【性别事实】你是{_gender}。平时不用特意声明，但被问到或需要自称时"
+                f"不能说错，也别用与之矛盾的自称。"
+            )
+
         # Western names / aliases — 让 AI 知道自己的英文名和文化名字
         _names = persona.get("names") or {}
         if isinstance(_names, dict) and any(_names.values()):
@@ -1163,8 +1380,30 @@ class PersonaManager:
         if background:
             lines.append(f"【你的人生背景】{background}")
 
+        # Appearance（K1 断链修复）：此前只喂给生图链（companion_selfie 的英文锚点），
+        # 聊天侧完全看不到 → 被问「你什么发型/高不高」只能现编，还会和刚发出去的
+        # 自拍互相打脸（文图一致性同族问题）。注入时明确要求用对话语言转述，
+        # 不许把英文锚点原样念出来。
+        appearance = str(persona.get("appearance") or "").strip()
+        if appearance:
+            lines.append(
+                f"【你的外貌】{appearance}——这是你真实的长相，被问到外形/发型/穿衣"
+                "风格时以此为准（用对话所用的语言自然描述，不要照搬这段英文原文），"
+                "也要与你发出去的照片保持一致。"
+            )
+
         # Emotional triggers — 正向/负向/共情触发点
         ctx = persona.get("context") or {}
+
+        # Family（K1 断链修复）：context.family 有真实档案（父母/兄弟/女儿的名字与
+        # 职业）却从不进 prompt，被问家里几口人只能编——而家人姓名正是客户会回头
+        # 追问核对的强事实。
+        _family = _labelled_pairs(ctx.get("family"), _FAMILY_LABELS)
+        if _family:
+            lines.append(
+                f"【你的家人】{_family}——这些是你真实的家人，聊到家庭时以此为准，"
+                "绝不临时编造别的家人或改口。"
+            )
         triggers = ctx.get("emotional_triggers") or {}
         if isinstance(triggers, dict):
             pos = str(triggers.get("positive") or "").strip()
@@ -1192,6 +1431,32 @@ class PersonaManager:
                 "聊到或被问到相关话题时自然承接，绝不否认自己有这些兴趣。"
             )
 
+        # Tastes — 好恶与观点（此前断链：tastes.likes/dislikes/opinions 有数据但从不
+        # 进 prompt。2026-07-27 真机考题实锤：档案写喜欢「Barolo红酒」，AI 被问
+        # 喜欢喝什么酒时即兴编了「Rioja」——似是而非的偏好漂移，考题当场抓获）。
+        _tastes = persona.get("tastes") or {}
+        if isinstance(_tastes, dict):
+            def _taste_join(v: Any) -> str:
+                if isinstance(v, (list, tuple)):
+                    return "、".join(str(x).strip() for x in v if str(x).strip())
+                return str(v or "").strip()
+            _lk = _taste_join(_tastes.get("likes"))
+            _dk = _taste_join(_tastes.get("dislikes"))
+            _op = _taste_join(_tastes.get("opinions"))
+            _tp: List[str] = []
+            if _lk:
+                _tp.append(f"你喜欢：{_lk}")
+            if _dk:
+                _tp.append(f"你反感：{_dk}")
+            if _op:
+                _tp.append(f"你的一些观点：{_op}")
+            if _tp:
+                lines.append(
+                    "【你的好恶与观点】" + "；".join(_tp)
+                    + "。被问到个人偏好时以此为准，可自然展开，"
+                    "但不要即兴编造与此矛盾的新偏好。"
+                )
+
         # Specific memories — 预置的具体记忆片段（此前断链：数据里有但从不进 prompt）。
         # 被对方回指追问「你上次说过的那件事」时，AI 有据可依，不至于幻觉编造或否认。
         mems = ctx.get("specific_memories")
@@ -1206,6 +1471,24 @@ class PersonaManager:
                 "当对方回指「你上次提到过…」这类追问时，优先从这里对齐口径，"
                 "不要否认、不要说「你记错了/搞混了」：\n"
                 + "\n".join(f"- {m}" for m in _ms)
+            )
+
+        # 在地文化联结（K1 断链修复）：常用外语惊叹词/家常菜/在地价值观——运营特意
+        # 备的「在地感」素材，之前一句都没进 prompt。
+        _culture = _labelled_pairs(ctx.get("filipino_connection"), _CULTURE_LABELS)
+        if _culture:
+            lines.append(
+                f"【你的在地文化】{_culture}——这些融进你的日常，可自然流露，"
+                "但别刻意堆砌或每句都秀。"
+            )
+
+        # 作息（K1 断链修复）：夜班/白班的真实时间表。之前 AI 被问「你几点下班」
+        # 只能瞎答，还会在人设该睡觉的点说自己在上班。
+        _sched = _labelled_pairs(ctx.get("schedule"), _SCHEDULE_LABELS)
+        if _sched:
+            lines.append(
+                f"【你的作息】{_sched}——被问到几点上班/下班、现在在忙什么时按这个"
+                "作息回答，别说出与它冲突的时间安排。"
             )
 
         # 关系是否已足够熟（intimate/steady）——脾气/口头脏话等「有棱角」行为的闸门。
@@ -1252,7 +1535,9 @@ class PersonaManager:
                 )
         # P2-A：emoji_level 真生效（修真断链）— 旧版仅当数据字段存在不进 prompt
         # web 后台改了 emoji_level 用户感知不到。这里转成自然语言指令。
-        emoji_level = (p.get("emoji_level") or "").strip().lower()
+        # K1：档位归一（low/medium 旧写法此前一个分支都不命中 = 整档静默失效）
+        # + speaking.emoji_level 兼容位回落。
+        emoji_level = _canonical_emoji_level(persona)
         if emoji_level == "none":
             lines.append("不使用任何 emoji 或表情符号。")
         elif emoji_level == "minimal":

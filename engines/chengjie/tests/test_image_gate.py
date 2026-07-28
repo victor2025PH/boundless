@@ -297,3 +297,129 @@ async def test_generate_with_gate_object_kind(monkeypatch):
     assert res.ok and res.image_path == "obj2.png"
     assert seen.get("kind") == "object"
     assert seen.get("subject") == "a bowl of noodles"
+
+
+# ── P2 一致性后验（场景/时段——同一次体检顺带，零额外 VLM 往返）──────────
+
+def test_gate_prompt_scene_tod_fields_opt_in():
+    """不开一致性字段时 prompt 与旧版语义一致（零漂移）；开了才带新字段。"""
+    base = ig.build_gate_prompt()
+    assert '"scene"' not in base and '"time_of_day"' not in base
+    p = ig.build_gate_prompt(scene_check=True, tod_check=True)
+    assert '"scene"' in p and '"time_of_day"' in p
+    assert "beach" in p and "gym" in p    # 分类词表进指令
+    p2 = ig.build_gate_prompt(scene_check=True)
+    assert '"scene"' in p2 and '"time_of_day"' not in p2
+
+
+def test_scenes_equivalent_groups():
+    assert ig.scenes_equivalent("home", "bedroom")     # 室内家居互认
+    assert ig.scenes_equivalent("cafe", "restaurant")  # 餐饮互认
+    assert ig.scenes_equivalent("street", "night_city")
+    assert not ig.scenes_equivalent("beach", "gym")
+    assert ig.scenes_equivalent("", "beach")           # 空=不比较
+
+
+def test_expected_tod_buckets():
+    assert ig.expected_tod(10) == "day"
+    assert ig.expected_tod(23) == "night"
+    assert ig.expected_tod(3) == "night"
+    assert ig.expected_tod(18) == ""      # 黄昏光线两可 → 不校验
+    assert ig.expected_tod(6) == ""       # 清晨两可
+    assert ig.expected_tod(None) == ""
+    assert ig.expected_tod("x") == ""
+
+
+def test_verdict_scene_mismatch_and_equivalence():
+    # 点名海边生成出健身房 → 拒（VLM 明确判了词表内另一类）
+    ok, r = ig.gate_verdict(_p(scene="gym"), expect_scene_class="beach")
+    assert not ok and r == "scene_mismatch(gym)"
+    # 等价组互认（VLM 把卧室说成 home 不算错）
+    assert ig.gate_verdict(_p(scene="home"), expect_scene_class="bedroom")[0]
+    # VLM 没把握（other/词表外/没答）→ 放行不误伤
+    assert ig.gate_verdict(_p(scene="other"), expect_scene_class="beach")[0]
+    assert ig.gate_verdict(_p(scene="spaceship"), expect_scene_class="beach")[0]
+    assert ig.gate_verdict(_p(), expect_scene_class="beach")[0]
+    # 无期望场景 → 不校验
+    assert ig.gate_verdict(_p(scene="gym"), expect_scene_class="")[0]
+
+
+def test_verdict_tod_mismatch():
+    # 深夜要图生成出白天照 → 拒（凌晨两点正午烈日照的最后防线）
+    ok, r = ig.gate_verdict(_p(time_of_day="day"), expect_tod="night")
+    assert not ok and r == "tod_mismatch(day)"
+    # unclear（室内光线两可）/一致/无期望 → 放行
+    assert ig.gate_verdict(_p(time_of_day="unclear"), expect_tod="night")[0]
+    assert ig.gate_verdict(_p(time_of_day="night"), expect_tod="night")[0]
+    assert ig.gate_verdict(_p(time_of_day="day"), expect_tod="")[0]
+
+
+def test_resolve_gate_cfg_scene_tod_defaults():
+    cfg = ig.resolve_gate_cfg({})
+    assert cfg["scene_check"] is True and cfg["tod_check"] is True
+    off = ig.resolve_gate_cfg(
+        {"vision_gate": {"scene_check": False, "tod_check": False}})
+    assert off["scene_check"] is False and off["tod_check"] is False
+
+
+async def test_gate_threads_scene_expectations(monkeypatch):
+    """generate_with_gate：场景短语→场景类、小时→期望时段，透传给体检。"""
+    prov = _FakeProvider([_ok_result()])
+    seen = {}
+
+    async def fake_check(path, persona, cfg, **kw):
+        seen.update(kw)
+        return True, "ok"
+
+    monkeypatch.setattr(ig, "check_image", fake_check)
+    res = await ig.generate_with_gate(
+        prov, "p", persona={}, root_config={},
+        gate_cfg={"enabled": True}, seed=1,
+        expect_scene="walking on the beach at sunset", expect_hour=23)
+    assert res.ok
+    assert seen.get("expect_scene_class") == "beach"
+    assert seen.get("expect_tod") == "night"
+
+
+async def test_gate_scene_tod_checks_can_be_disabled(monkeypatch):
+    prov = _FakeProvider([_ok_result()])
+    seen = {}
+
+    async def fake_check(path, persona, cfg, **kw):
+        seen.update(kw)
+        return True, "ok"
+
+    monkeypatch.setattr(ig, "check_image", fake_check)
+    await ig.generate_with_gate(
+        prov, "p", persona={}, root_config={},
+        gate_cfg={"enabled": True, "scene_check": False, "tod_check": False},
+        seed=1, expect_scene="beach", expect_hour=23)
+    assert seen.get("expect_scene_class") == ""
+    assert seen.get("expect_tod") == ""
+
+
+async def test_check_image_scene_postcheck_e2e(monkeypatch):
+    """端到端：期望海边、假 VLM 判 gym → 拒；prompt 确实带了 scene 字段。"""
+    captured = {}
+
+    class _FakeVC:
+        def __init__(self, cfg):
+            pass
+
+        def initialize(self):
+            return True
+
+        async def describe_image(self, path, prompt=""):
+            captured["prompt"] = prompt
+            return ('{"people_count":1,"gender":"female","apparent_age":22,'
+                    '"is_animal_subject":false,"visible_text_or_watermark":false,'
+                    '"nsfw":false,"explicit":false,"looks_underage":false,'
+                    '"scene":"gym","time_of_day":"day"}')
+
+    import src.vision_client as vcm
+    monkeypatch.setattr(vcm, "VisionClient", _FakeVC)
+    ok, reason = await ig.check_image(
+        "x.png", {"gender": "female", "age": 22}, {"vision": {"provider": "x"}},
+        expect_scene_class="beach", expect_tod="night")
+    assert '"scene"' in captured["prompt"]
+    assert not ok and reason == "scene_mismatch(gym)"

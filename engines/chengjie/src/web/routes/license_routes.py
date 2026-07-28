@@ -334,3 +334,22 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
         from src.licensing import trial_claim_client as tc
 
         return await asyncio.to_thread(tc.bind_code, config=_cfg_or_none())
+
+    @app.post("/api/admin/license/trial-funnel")
+    async def api_trial_funnel(request: Request):
+        """首启向导漏斗埋点转发（桌面壳 → 官网 /api/track）。
+
+        事件名白名单在 trial_claim_client.FUNNEL_EVENTS 收口；这里与其余 trial
+        端点同款「绝不抛」——埋点是旁路，任何失败都不该在向导侧冒泡。
+        """
+        api_auth(request)
+        import asyncio
+
+        from src.licensing import trial_claim_client as tc
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        event = str((body or {}).get("event") or "")
+        return await asyncio.to_thread(tc.funnel, event, config=_cfg_or_none())

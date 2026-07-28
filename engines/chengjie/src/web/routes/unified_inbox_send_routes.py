@@ -406,9 +406,49 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         except Exception as ex:  # noqa: BLE001
             raise HTTPException(502, tr(request, "err.inbox.tts_failed", err=ex))
         if not result.ok or not result.audio_path:
+            # 坐席链此前只有 debug 日志：合成失败在 app.log 里查不到原因（全天零记录），
+            # 排障只能靠坐席口述。失败/成功各一行 INFO 是后续所有诊断的地基。
+            logger.warning(
+                "[inbox/voice-send] 合成失败 platform=%s acct=%s pid=%s "
+                "len=%d provider=%s err=%s",
+                platform, account_id, voice_ctx.get("persona_id") or "",
+                len(text), getattr(result, "provider", "") or "",
+                getattr(result, "error", "") or "unknown")
             return {"ok": False, "reason": result.error or "tts_failed",
                     "message": tr(request, "err.inbox.tts_failed",
                                   err=result.error or "unknown")}
+
+        # 截断/坏音质量闸门（与 A 线 voice_reply、B 线 autosend 同口径）：时长低于
+        # 该文本的物理最快语速 = 半截杂音，宁缺毋滥不发给客户（坐席可改文案重试）。
+        try:
+            from src.ai.tts_quality import looks_truncated, resolve_quality_gate
+            _qg = resolve_quality_gate(voice_cfg)
+            _dur = float(getattr(result, "duration_sec", 0.0) or 0.0)
+            if _qg["enabled"]:
+                _bad, _why = looks_truncated(
+                    text, _dur,
+                    min_sec_per_unit=_qg["min_sec_per_unit"],
+                    min_units=_qg["min_units"])
+                if _bad:
+                    logger.warning(
+                        "[inbox/voice-send] 疑似截断坏音(%s) provider=%s dur=%.1fs "
+                        "→ 拒发 platform=%s acct=%s",
+                        _why, getattr(result, "provider", "") or "", _dur,
+                        platform, account_id)
+                    try:
+                        from src.ai.avatar_voice_stats import get_avatar_voice_stats
+                        get_avatar_voice_stats().record_truncation_reject()
+                    except Exception:
+                        pass
+                    try:
+                        os.remove(result.audio_path)
+                    except Exception:
+                        pass
+                    return {"ok": False, "reason": "truncated",
+                            "message": tr(request, "err.inbox.tts_failed",
+                                          err=f"truncated:{_why}")}
+        except Exception:
+            logger.debug("[inbox/voice-send] 质量闸门异常（忽略）", exc_info=True)
 
         # 转 OGG/Opus，使其在 Telegram/WhatsApp 呈现为"语音消息"（ffmpeg 缺失则原样发）
         audio_path = result.audio_path
@@ -455,14 +495,25 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         except Exception:
             logger.debug("record_agent_send(voice) 失败", exc_info=True)
         _emotion = voice_ctx.get("emotion")
+        _extra = getattr(result, "extra", {}) or {}
         voice_meta = {
             "persona_id": voice_ctx.get("persona_id") or "",
             "persona_source": voice_ctx.get("persona_source") or "",
             "provider": getattr(result, "provider", ""),
             "voice": getattr(result, "voice", ""),
             "emotion": getattr(_emotion, "emotion", "") if _emotion else "",
-            "fallback_from": (getattr(result, "extra", {}) or {}).get("fallback_from", ""),
+            "fallback_from": _extra.get("fallback_from", ""),
         }
+        # 成功也留一行 INFO：口径对齐 B 线「[autosend voice] 已发语音 …」，
+        # 让坐席这条链在 app.log 里可见（provider/延迟/口语化是否生效一目了然）。
+        logger.info(
+            "[inbox/voice-send] 已发语音 platform=%s acct=%s pid=%s dur=%sms "
+            "provider=%s fallback=%s len=%d colloq=%s/%s prerender=%s",
+            platform, account_id, voice_meta["persona_id"],
+            getattr(result, "latency_ms", 0), voice_meta["provider"] or "-",
+            voice_meta["fallback_from"] or "-", len(text),
+            bool(_extra.get("colloquial")), bool(_extra.get("colloquial_llm")),
+            voice_meta["provider"] == "prerendered")
         return {
             "ok": True, "result": res, "media_ref": url, "media_type": "voice",
             "duration_sec": getattr(result, "duration_sec", -1.0),

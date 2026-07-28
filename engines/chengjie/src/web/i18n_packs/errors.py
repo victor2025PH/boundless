@@ -21,6 +21,9 @@ ZH = {
     "err.acct.profile_no_persona": "该账号未绑定人设或人设缺少可用的名称/头像素材",
     # 授权档位功能闸门（licensing.feature_gate）
     "err.lic.feature_locked": "当前授权档位未包含此功能，请升级套餐后使用",
+    # 营销目标「今日工作清单」查询参数（其余 err.goals.* 词条在 goals pack）
+    "err.goals.bad_scope": "暂不支持该清单范围（当前只有 today）",
+    "err.goals.bad_state": "无效的清单筛选（push/pending/hold/adopted/rejected）",
 }
 
 EN = {
@@ -43,4 +46,7 @@ EN = {
     "err.acct.profile_no_persona": "This account has no bound persona, or the persona has no usable name/avatar material",
     # License feature gate (licensing.feature_gate)
     "err.lic.feature_locked": "This feature is not included in your current plan. Please upgrade to unlock it.",
+    # Marketing-goal "today agenda" query params (other err.goals.* live in the goals pack)
+    "err.goals.bad_scope": "Unsupported agenda scope (only 'today' for now)",
+    "err.goals.bad_state": "Invalid agenda filter (push/pending/hold/adopted/rejected)",
 }

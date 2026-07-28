@@ -875,6 +875,85 @@ def test_the_ledger_write_endpoint_needs_write_permission(client):
     assert r.status_code in (401, 403), "未登录也能写台账"
 
 
+# ── API：排班补位（程序化拉群） ──────────────────────────────────────────────
+
+
+def test_attendance_invite_executes_and_records_the_ledger(auth_client,
+                                                           config_manager,
+                                                           monkeypatch):
+    """补位成功 → 平台真拉 + 顺手记出席台账（source=invite），一步闭环。
+
+    断言必须带 **app 同款 config_manager** 读台账——``configure_group_show_store``
+    是「换路径则重建」语义，``_recorded_memberships(None)`` 会把单例切到默认库
+    读空（既有 /joined 负向断言在错库上恒真才一直没暴露）。
+    """
+    class _Orch:
+        def __init__(self):
+            self.calls = []
+
+        async def invite_to_group(self, platform, inviter, chat_key, user_ref):
+            self.calls.append((platform, inviter, chat_key, user_ref))
+            return {"ok": True, "kind": "invited", "error": ""}
+
+    import src.integrations.account_orchestrator as ao
+    fake = _Orch()
+    monkeypatch.setattr(ao, "_orchestrator", fake)
+
+    r = auth_client.post("/api/group-show/attendance/invite", json={
+        "group": "-100inv", "inviter": "katie",
+        "invitee": "@whigger96", "invitee_account": "8755679833",
+    })
+    assert r.status_code == 200
+    d = r.json()
+    assert d["ok"] is True and d["kind"] == "invited"
+    assert fake.calls == [("telegram", "katie", "-100inv", "@whigger96")]
+
+    from src.web.routes.group_show_routes import _recorded_memberships
+    ms = _recorded_memberships(config_manager)
+    assert "8755679833" in (ms.get("-100inv") or set()), \
+        "邀请成功必须顺手记台账（按 account_id 对账）"
+
+
+def test_attendance_invite_reports_privacy_refusal_honestly(auth_client,
+                                                            config_manager,
+                                                            monkeypatch):
+    """对方隐私禁止被拉 → ok=false + kind=privacy 且**不记台账**——
+    静默装成功会让排班表第二天还是错的。"""
+    class _Orch:
+        async def invite_to_group(self, platform, inviter, chat_key, user_ref):
+            return {"ok": False, "kind": "privacy",
+                    "error": "UserPrivacyRestricted"}
+
+    import src.integrations.account_orchestrator as ao
+    monkeypatch.setattr(ao, "_orchestrator", _Orch())
+
+    r = auth_client.post("/api/group-show/attendance/invite", json={
+        "group": "-100priv", "inviter": "katie", "invitee": "@shy",
+    })
+    assert r.status_code == 200
+    d = r.json()
+    assert d["ok"] is False and d["kind"] == "privacy"
+
+    from src.web.routes.group_show_routes import _recorded_memberships
+    ms = _recorded_memberships(config_manager)
+    assert "shy" not in (ms.get("-100priv") or set())
+
+
+@pytest.mark.parametrize("body", [
+    {}, {"group": "-100x"}, {"group": "-100x", "inviter": "a"},
+    {"inviter": "a", "invitee": "b"},
+])
+def test_attendance_invite_rejects_missing_fields(auth_client, body):
+    r = auth_client.post("/api/group-show/attendance/invite", json=body)
+    assert r.status_code == 400
+
+
+def test_attendance_invite_needs_write_permission(client):
+    r = client.post("/api/group-show/attendance/invite",
+                    json={"group": "g", "inviter": "a", "invitee": "b"})
+    assert r.status_code in (401, 403)
+
+
 # ── API：真发预检 / 开演闸门 ─────────────────────────────────────────────────
 
 
@@ -904,7 +983,40 @@ def test_api_live_check_only_never_sends_and_reports_locks(auth_client, _books,
     assert "config_enabled" in d and "casting" in d
     assert "in_quiet_hours" in d
     assert "quiet_hours" in d  # 灰度夜测：回显生效窗，防「文件 [0,0] / reason=quiet_hours」盲查
+    assert "peer_check" in d  # P3-5：演员对群可达性在体检就点名，别等首拍炸
     assert d["group_key"] == "-100check"
+
+
+def test_check_only_reports_unreachable_actors_by_name(auth_client, _books,
+                                                       monkeypatch):
+    """check_only 的 peer_check 段要把「不在群的号」点名——运营看报告就知道
+    该拉谁进群，而不是开演后从 send_failed 日志里反推。"""
+    import src.web.routes.group_show_routes as mod
+
+    pid = "solo_matrixx" if "solo_matrixx" in _books else sorted(_books)[0]
+    monkeypatch.setattr(mod, "_online_accounts", lambda _cm: [{
+        "account_id": "acc_out", "platform": "telegram",
+        "status": "online", "display_name": "outcast",
+        "meta": {"persona_id": "p1", "fingerprint_group": "fp1"},
+    }])
+    mod._live_inflight.clear()
+
+    class _Orch:
+        async def ensure_peer(self, platform, account_id, chat_key):
+            return {"ok": False, "checked": True}
+
+    import src.integrations.account_orchestrator as ao
+    monkeypatch.setattr(ao, "_orchestrator", _Orch())
+
+    r = auth_client.post("/api/group-show/live", json={
+        "playbook_id": pid, "group_key": "-100peer",
+        "check_only": True, "max_speakers": 1,
+    })
+    assert r.status_code == 200
+    pc = r.json().get("peer_check") or {}
+    if r.json().get("plan_ok"):        # 选角成立才有演员可体检
+        assert pc.get("ok") is False
+        assert "acc_out" in (pc.get("unreachable") or [])
 
 
 def test_api_live_requires_group_and_confirm_for_real_send(auth_client, _books):

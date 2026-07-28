@@ -1,7 +1,9 @@
 """营销目标「模板注册表」门禁（纯函数，零 IO）。
 
 覆盖：
-- 6 模板结构不变量：每模板 4 里程碑、push_curve 全在 PUSH_LEVELS、intents 池键覆盖 0..3；
+- 7 模板结构不变量：里程碑数 4/5、push_curve 与里程碑等长且全在 PUSH_LEVELS、
+  intents 池键覆盖 0..N-1；acquire_and_convert 的 phase_days 相位表严格递增
+  且末位=default_days（时间兑底/封顶的锚）；
 - list_templates 公开形状不泄漏 intents 内部池，且返回副本（改返回值不脏注册表）；
 - pick_intent crc32 确定性轮换（同目标同日恒定、跨日采样至少两种）+ {item}/{note}
   参数代入与缺参留白；
@@ -28,7 +30,8 @@ from src.companion.goals.templates import (
 
 EXPECTED_IDS = {
     "conversion_unlock", "conversion_subscribe", "relationship_stage",
-    "relationship_intimacy", "engagement_reactivate", "custom",
+    "relationship_intimacy", "engagement_reactivate", "acquire_and_convert",
+    "retention_expand", "custom",
 }
 
 # 14 天采样窗：意图池最小 size=2，crc32 确定性下必然轮换出 ≥2 种（已实测）
@@ -37,7 +40,7 @@ _DAYS = [f"2026-07-{d:02d}" for d in range(1, 15)]
 
 # ── 结构不变量 ──────────────────────────────────────────────────────────────
 
-def test_exactly_six_templates():
+def test_exactly_eight_templates():
     assert set(TEMPLATES) == EXPECTED_IDS
     assert set(template_ids()) == EXPECTED_IDS
 
@@ -45,17 +48,23 @@ def test_exactly_six_templates():
 def test_every_template_structural_invariants():
     for tid, t in TEMPLATES.items():
         ms = t["milestones"]
-        assert len(ms) == 4, tid
+        n = len(ms)
+        assert n in (4, 5), tid          # 现有模板 4 段；获客转化漏斗 5 段
         for m in ms:
             assert m.get("id") and m.get("zh") and m.get("en"), tid
         curve = t["push_curve"]
-        assert len(curve) == 4, tid
+        assert len(curve) == n, tid      # 曲线与里程碑一一对应
         assert all(lvl in PUSH_LEVELS for lvl in curve), tid
-        assert set(t["intents"].keys()) == {0, 1, 2, 3}, tid
+        assert set(t["intents"].keys()) == set(range(n)), tid
         for pool in t["intents"].values():
             assert pool and all(isinstance(s, str) and s for s in pool), tid
         assert t["kind"] and t["name_zh"] and t["name_en"], tid
         assert int(t["default_days"]) > 0, tid
+        phase = t.get("phase_days")
+        if phase is not None:            # 相位表：与里程碑等长、严格递增、末位=默认天数
+            assert len(phase) == n, tid
+            assert all(phase[i] < phase[i + 1] for i in range(n - 1)), tid
+            assert int(phase[-1]) == int(t["default_days"]), tid
 
 
 def test_shared_vocabularies():
@@ -77,13 +86,13 @@ def test_get_template_hit_strip_and_miss():
 
 def test_list_templates_public_shape_no_intents_leak():
     out = list_templates()
-    assert len(out) == 6
+    assert len(out) == 8
     assert {e["id"] for e in out} == EXPECTED_IDS
     for e in out:
         assert "intents" not in e, e["id"]
         assert {"id", "name_zh", "name_en", "kind", "default_days",
                 "params", "milestones"} <= set(e)
-        assert len(e["milestones"]) == 4
+        assert len(e["milestones"]) in (4, 5)
 
 
 def test_list_templates_returns_copies_not_registry_refs():

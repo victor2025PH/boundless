@@ -21,7 +21,13 @@ from src.companion.goals.signals import (
     entitlement_tier,
     entitlement_unlocked,
 )
-from src.companion.goals.templates import STAGE_ORDER
+from src.companion.goals.templates import (
+    STAGE_ORDER,
+    milestone_count,
+    phase_cap,
+    phase_floor,
+    scaled_phase_days,
+)
 
 _DAY = 86400.0
 
@@ -157,16 +163,60 @@ def settle_goal(
             frac = max(0.0, min(1.0, _elapsed_days(goal, n) / total))
             mi = max(mi, min(3, int(frac * 4)))
             progress = max(progress, round(frac * 0.8, 3))
+    elif tid == "acquire_and_convert":
+        # 完成：官网成交发生在站外，无自动硬信号——运营手动标记 done；
+        # 若 params.item_id 配了站内权益项则也认 entitlement（兼容口径）。
+        item = str(params.get("item_id") or "").strip()
+        if item and entitlement_unlocked(signals.entitlement, item):
+            done, result = True, f"unlocked:{item}"
+        # 信号推进（单调）：开口 → 画像过半 → 画像够+关系热 → 已开价
+        # bant_fill/relation_fill 由 service 从 customer_profiles 现算注入 extras
+        # （-1 = 画像未知 → 该判据不参与，退回纯关系信号）。
+        bant = float(signals.extras.get("bant_fill", -1.0) or -1.0)
+        if inbound_after_start:
+            mi = max(mi, 1)
+        if bant >= 0.5 or intimacy >= 20:
+            mi = max(mi, 2)
+        if (bant >= 0.75 and (intimacy >= 30 or _stage_index(
+                signals.funnel_stage) >= _stage_index("engaged"))):
+            mi = max(mi, 3)
+        if direct_beat_engaged:
+            mi = max(mi, 4)
+        # progress 在下方相位块统一按封顶后的 mi 计（防「进度条超前于里程碑」）
+    elif tid == "retention_expand":
+        # 留存环（P5）：激活=购后开口；价值确认/深化按相位天窗走（下方通用块）；
+        # 续费拍被接（direct_beat_engaged）→ 收口段。完成信号在站外——续费单经
+        # settle_order_ref 外部结算或坐席标成交，ledger 自身绝不自动 done；
+        # 到期没续走通用 expired（诚实流失记录，供 outcome_report 读流失率）。
+        if inbound_after_start:
+            mi = max(mi, 1)
+        if direct_beat_engaged:
+            mi = max(mi, 3)
     else:  # custom / 未知模板：只按时间显示推进，绝不自动完成
         total = max(1.0, _total_days(goal, template.get("default_days", 14)))
         frac = max(0.0, min(1.0, _elapsed_days(goal, n) / total))
         mi = max(mi, min(3, int(frac * 4)))
         progress = max(progress, round(min(0.95, frac), 3))
 
+    # ── 时间相位（模板声明 phase_days 才生效；存量模板零行为变更）──────────────
+    # 兑底：天窗过了信号还没到 → 按时推进（「1-3 天摸底、7-10 天收口」的硬保证）；
+    # 封顶：信号超热也只允许超前一段（第 1 天不开价——节奏是弧线不是开关）。
+    # 两者都不回退已达成的里程碑（单调不变量优先于封顶）。
+    if not done and status == "active":
+        pdays = scaled_phase_days(
+            template, _total_days(goal, template.get("default_days", 10)))
+        if pdays:
+            elapsed = _elapsed_days(goal, n)
+            floor_i = phase_floor(pdays, elapsed)
+            cap_i = max(phase_cap(pdays, elapsed), old_mi)
+            mi = max(old_mi, min(max(mi, floor_i), cap_i))
+            n_ms = max(1, milestone_count(template))
+            progress = max(progress, round((mi / float(n_ms)) * 0.9, 3))
+
     if done and status == "active":
         status = "done"
         progress = 1.0
-        mi = max(mi, 3)
+        mi = max(mi, milestone_count(template) - 1)
         events.append(("status", f"done:{result}"))
     elif status == "active" and deadline_ts > 0 and n > deadline_ts:
         # 过期：唤回类=failed（对方没回来），其余=expired（到期未达成）

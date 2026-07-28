@@ -10,6 +10,11 @@
   --cp-text-tiny: #94a3b8;
   --cp-accent: #2563eb;
   --cp-accent-weak: rgba(37, 99, 235, .1);
+  /* D8 补齐（此前仅组件内 fallback，暗色宿主会拿到亮色值）：
+     accent-deep=强调深档(直说 pill 文字/色条)；accent-bg=淡强调底；bg-soft=柔和底 */
+  --cp-accent-deep: #3730a3;
+  --cp-accent-bg: #eef2ff;
+  --cp-bg-soft: #f1f5f9;
   --cp-ok: #0f9d75;
   --cp-warn: #d97706;
   --cp-danger: #dc2626;

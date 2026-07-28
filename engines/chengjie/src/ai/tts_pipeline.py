@@ -614,6 +614,8 @@ class TTSPipeline:
         emotion: Any = None,
         colloquial_lead: bool = True,
         pre_colloquialized: bool = False,
+        skip_llm_colloquial: bool = False,
+        total_budget_sec: Optional[float] = None,
     ) -> TTSResult:
         """合成语音。``emotion`` 可为 None / 情绪字符串 / dict / EmotionSpec。
 
@@ -623,6 +625,15 @@ class TTSPipeline:
           传 True，后续条 False——避免连发 2-3 条都以「其实，/话说，」开头的做作。
         - ``pre_colloquialized``：文本已是生成层口语版（Phase G）→ 跳过 TTS 前
           口语化改写（防二次改写叠加/白烧一次本地 LLM），副语言标记照常注入。
+        - ``skip_llm_colloquial``：调用方已用 ``prepass_colloquial_llm`` 对**整段**
+          做过一次 LLM 口语化（分条场景省 N-1 次往返）→ 本条只跑免费的规则档/微特征，
+          不再打 LLM。与 ``pre_colloquialized`` 的区别：后者整段跳过改写链。
+        - ``total_budget_sec``（2026-07-28 试听超时复盘）：**调用方 opt-in 的全链总预算**。
+          交互式端点（tts-test / voice preview）外面套 ``wait_for``，而链内各级预算之和
+          （LLM 口语化 25s + hub 45+15s + 本机克隆 90s×2…）远超外闸 → 外层 TimeoutError
+          把协程掐死，str() 为空、不知道卡在哪级。传入后各级 wait_for 按剩余预算收口：
+          要么在预算内出货，要么带着**具体卡住的级**诚实失败。缺省 None＝生产发送链
+          旧行为完全不变（B 线长文本慢 GPU 需要超预算跑完，见 6af80c3）。
         """
         from src.ai.voice_emotion import NEUTRAL, coerce_emotion, derive_emotion
 
@@ -704,7 +715,9 @@ class TTSPipeline:
         rv = await self._synthesize_uncached(
             text_s, voice=voice, timeout_sec=timeout_sec, spec=spec,
             colloquial_lead=colloquial_lead,
-            pre_colloquialized=pre_colloquialized)
+            pre_colloquialized=pre_colloquialized,
+            skip_llm_colloquial=skip_llm_colloquial,
+            total_budget_sec=total_budget_sec)
 
         # ── RVC 变声（可选）：把克隆输出 WAV 再变成人设选定的 66 音色之一 ──
         rv = await self._maybe_apply_rvc(rv)
@@ -868,8 +881,16 @@ class TTSPipeline:
             # 防串用旧来源/旧格式音频（缓存 replay 按 rv.format 复原后缀）。
             _hf = (self.avatar_voice or {}).get("hub_fish")
             if isinstance(_hf, dict) and _hf.get("enabled"):
+                # 并入解析后的 hub 档名 + 引擎钉：改 profile_map / tts_engine 必须失效
+                # 旧缓存，否则换绑人设后仍会复播上一档音色。
+                _pmap = (_hf.get("profile_map")
+                         if isinstance(_hf.get("profile_map"), dict) else {})
+                _pid = str(self.persona_id or "").strip()
+                _hprof = str(_pmap.get(_pid) or _pid).strip()
+                _heng = str(_hf.get("tts_engine") or "").strip()
                 hub_fp = ("hub:" + str(_hf.get("base_url") or "") + ":"
-                          + (str(_hf.get("response_format") or "wav").strip().lower() or "wav"))
+                          + (str(_hf.get("response_format") or "wav").strip().lower() or "wav")
+                          + ":" + _hprof + ":" + _heng)
             try:
                 from src.ai.voice_emotion import pick_emotion_reference
                 _thr = float((self.avatar_voice or {}).get(
@@ -1044,6 +1065,8 @@ class TTSPipeline:
         spec: Any = None,
         colloquial_lead: bool = True,
         pre_colloquialized: bool = False,
+        skip_llm_colloquial: bool = False,
+        total_budget_sec: Optional[float] = None,
     ) -> TTSResult:
         rv = TTSResult(
             text=str(text or ""),
@@ -1061,6 +1084,15 @@ class TTSPipeline:
         suffix = "wav" if self.backend == "pyttsx3" else self.format
         out = self.out_dir / f"tts-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}.{suffix}"
         t0 = time.monotonic()
+        # 全链截止线（调用方 opt-in）：各级 wait_for 按剩余预算收口，见 synthesize docstring。
+        deadline = (t0 + float(total_budget_sec)
+                    if total_budget_sec and total_budget_sec > 0 else None)
+
+        def _cap(t: float, *, floor: float = 6.0) -> float:
+            """把某级超时压进剩余预算（floor 保底给该级一个起码的尝试窗口）。"""
+            if deadline is None:
+                return t
+            return min(t, max(floor, deadline - time.monotonic()))
         # ── 局域网克隆优先：在线则走 LAN 零样本克隆；不可用/失败按配置回落云端 ──
         if self._should_try_lan():
             lan_rv = await self._try_lan_clone(rv, out, t0, spec=spec)
@@ -1076,7 +1108,9 @@ class TTSPipeline:
             # AvatarHub CosyVoice3（本机 7852）：情感克隆在线主力（2~4s/句）。
             av_rv = await self._try_avatar_clone(
                 rv, out, t0, spec=spec, colloquial_lead=colloquial_lead,
-                pre_colloquialized=pre_colloquialized)
+                pre_colloquialized=pre_colloquialized,
+                skip_llm_colloquial=skip_llm_colloquial,
+                deadline=deadline)
             if av_rv is not None:
                 return av_rv
             err = "avatar_clone_unreachable"
@@ -1087,7 +1121,8 @@ class TTSPipeline:
             err = "minicpm_clone_unreachable"
         else:
             err = await self._run_backend(
-                rv, rv.text, out, rv.voice, primary_backend, rv.format, timeout_sec,
+                rv, rv.text, out, rv.voice, primary_backend, rv.format,
+                _cap(timeout_sec),
                 spec=spec)
             if err is None:
                 rv.latency_ms = int((time.monotonic() - t0) * 1000)
@@ -1107,7 +1142,8 @@ class TTSPipeline:
             fb_fmt = "mp3" if fb == "edge_tts" else self.format
             fb_out = out.with_suffix(f".{fb_fmt}")
             fb_err = await self._run_backend(
-                rv, rv.text, fb_out, self.fallback_voice, fb, fb_fmt, timeout_sec,
+                rv, rv.text, fb_out, self.fallback_voice, fb, fb_fmt,
+                _cap(timeout_sec),
                 spec=spec)
             if fb_err is None:
                 rv.provider = fb
@@ -1377,7 +1413,7 @@ class TTSPipeline:
 
     async def _try_hub_fish(
         self, rv: "TTSResult", out: Path, t0: float, *, spec: Any = None,
-        text: Optional[str] = None,
+        text: Optional[str] = None, budget_cap: Optional[float] = None,
     ) -> Optional["TTSResult"]:
         """幻声 hub IndexTTS-2 高保真克隆（.176:9000 /api/tts_only）。
 
@@ -1388,6 +1424,10 @@ class TTSPipeline:
         内部再经 ``polish_hub_speak_text``——剥 Cosy 副语言标记、书面句号改换气，
         绝不下发 ``[sigh]`` 等 Cosy 专属标签（IndexTTS 会当正文念出）。
 
+        ``budget_cap``：调用方剩余预算（秒）。hub 自身预算（timeout×best_of+15，
+        本机配置下 60s）可能大于交互式调用方的总预算 → 按剩余收口；不足 2s 直接
+        跳过（省一次注定被掐死的往返）。None＝旧行为。
+
         返回：成功 TTSResult(provider=hub_fish)；未启用/不在名单/不可达/失败 → None
         （调用方贯穿回落本地 CosyVoice3，绝不阻塞出站）。
         """
@@ -1395,11 +1435,18 @@ class TTSPipeline:
         hf = cfg.get("hub_fish") if isinstance(cfg.get("hub_fish"), dict) else {}
         if not bool(hf.get("enabled", False)):
             return None
-        profile = str(self.persona_id or "").strip()
-        if not profile:
+        pid = str(self.persona_id or "").strip()
+        if not pid:
             return None
         allow = hf.get("persona_allowlist") or []
-        if allow and profile not in allow:
+        if allow and pid not in allow:
+            return None
+        # 人设 → hub 声纹档映射（2026-07-27 音色一致性）：原先硬编 profile=persona_id，
+        # 于是「同人设在 hub 上有多个档、我们恰好指到质量最差那个」无从纠正。映射表让
+        # 「换角色音色」变成改一行配置，且与幻影共用同一档时音色天然一致。
+        pmap = hf.get("profile_map") if isinstance(hf.get("profile_map"), dict) else {}
+        profile = str(pmap.get(pid) or pid).strip()
+        if not profile:
             return None
         raw = str(text if text is not None else (rv.text or "")).strip()
         text = polish_hub_speak_text(raw)
@@ -1445,19 +1492,37 @@ class TTSPipeline:
         # 落盘后缀按**实际返回格式**起（默认 wav；请求 ogg 而 hub 回退 wav 时仍落 .wav）
         synth: Dict[str, Any] = {"path": out.with_suffix(".wav"), "fmt": "wav"}
 
+        # 引擎显式钉住（空=沿用 hub 档上配置=旧行为）：同一 hub 上智聊与幻影用同一
+        # 引擎，才不会出现「同人设两种音色」。
+        hub_engine = str(hf.get("tts_engine") or "").strip()
+
         def _do_synth() -> None:
             from src.ai.avatar_voice import hub_fish_synthesize
             audio, fmt = hub_fish_synthesize(
                 base_url, profile, text, language=language, emotion=emotion,
                 best_of=best_of, timeout_sec=timeout_sec,
-                audio_format=response_format)
+                audio_format=response_format, tts_engine=hub_engine)
             fmt = str(fmt or "wav").strip().lower() or "wav"
             synth["fmt"] = fmt
             synth["path"] = out.with_suffix(f".{fmt}")
             synth["path"].write_bytes(audio)
 
+        # 音色一致性 strict（2026-07-27）：该人设的音色事实源＝hub 档。hub 挂了就**不许**
+        # 让本机 7852（另一份参考音=另一种音色）顶班——静默换声比不发语音更伤，与
+        # no_edge_fallback「宁缺毋滥」同一方针。调用方据 ok=False 回落文字。
+        # （置于预算跳过之前：没预算尝试 hub ≠ hub 不是音色事实源。）
+        if str(cfg.get("voice_consistency") or "lenient").strip().lower() == "strict":
+            rv.extra["hub_fish_required"] = True
+
+        if budget_cap is not None and budget_cap < 2.0:
+            logger.info(
+                "[tts] hub_fish skipped: 剩余预算不足（%.1fs）", max(budget_cap, 0.0))
+            return None
+
         try:
             budget = timeout_sec * (best_of if best_of > 1 else 1) + 15
+            if budget_cap is not None:
+                budget = min(budget, max(2.0, budget_cap))
             await asyncio.wait_for(asyncio.to_thread(_do_synth), timeout=budget)
         except Exception as ex:
             try:
@@ -1504,11 +1569,68 @@ class TTSPipeline:
             return rv
         return None
 
+    async def prepass_colloquial_llm(
+        self, text: str, *, spec: Any = None, colloquial_lead: bool = True,
+    ) -> Optional[str]:
+        """整段先做一次 LLM 口语化（分条发送前调用）→ 改写后文本，或 None=没改。
+
+        分条语音原本逐条各打一次 LLM 改写（云端一次往返实测 ~5s ×N 条）——2 条就把
+        整链推过 text-first 25s 预算，客户先收到占位文字再收语音。这里把改写提到切条
+        之前只做一次，各条 ``synthesize(skip_llm_colloquial=True)`` 只跑免费的规则档
+        与 C+ 微特征。附带收益：整段一次改写在条间口吻连贯（逐条独立改写各自起头）。
+
+        不满足条件（无情绪档/未开口语化/非 llm 模式/人设 opt-out）、异常、原样返回
+        一律 None —— 调用方照旧逐条改写，行为不劣于旧链。
+        """
+        av = self.avatar_voice if isinstance(self.avatar_voice, dict) else {}
+        col_cfg = (av.get("colloquial")
+                   if isinstance(av.get("colloquial"), dict) else {})
+        vp = self.voice_profile or {}
+        if spec is None or not col_cfg.get("enabled", False):
+            return None
+        if vp.get("colloquial", True) is False:
+            return None
+        if str(col_cfg.get("mode") or "rule").strip().lower() != "llm":
+            return None
+        src = str(text or "")
+        try:
+            import zlib as _zlib
+
+            from src.ai.voice_colloquial import build_voice_style_hint
+            from src.ai.voice_colloquial_llm import llm_colloquialize
+            _catch = str(vp.get("catchphrase") or "").strip()
+            _style = build_voice_style_hint(
+                str(vp.get("instruct_style") or ""), self.persona_quirks,
+                catchphrase=_catch)
+            _every = int(col_cfg.get("disfluency_every", 5) or 5)
+            _every = max(2, min(20, _every))
+            _disf = (bool(col_cfg.get("disfluency", False))
+                     and _zlib.crc32(src.encode("utf-8")) % _every == 0)
+            out = await llm_colloquialize(
+                src, emotion=str(getattr(spec, "emotion", "neutral")),
+                lead=colloquial_lead, style=_style,
+                min_chars=int(col_cfg.get("min_chars", 12) or 12),
+                timeout_sec=float(col_cfg.get("llm_timeout_sec", 8.0) or 8.0),
+                disfluency=_disf,
+                intensity=str(col_cfg.get("rewrite_intensity", "natural")
+                              or "natural"),
+                provider=str(col_cfg.get("provider", "local") or "local"))
+        except Exception:
+            logger.debug("[tts] 整段口语化预处理异常（回落逐条改写）", exc_info=True)
+            return None
+        return out if (out and out != src) else None
+
     async def _try_avatar_clone(
         self, rv: "TTSResult", out: Path, t0: float, *, spec: Any = None,
         colloquial_lead: bool = True, pre_colloquialized: bool = False,
+        skip_llm_colloquial: bool = False,
+        deadline: Optional[float] = None,
     ) -> Optional["TTSResult"]:
         """AvatarHub CosyVoice3 情感克隆（本机 7852，backend=avatar_clone）。
+
+        ``deadline``（monotonic 时刻，None=不限）：来自 synthesize(total_budget_sec=)
+        的全链截止线——LLM 口语化 / hub / 本机克隆三级各自按剩余预算收口，防止
+        「各级预算之和 ≫ 调用方外闸」时被外层 wait_for 掐死在不知道哪一级。
 
         用人设 ``voice_profile.reference_audio_path`` 克隆音色；情绪两条通道：
           - ``voice_profile.instruct`` 显式配置 → 走 /v1/tts/instruct 自由语气
@@ -1533,6 +1655,11 @@ class TTSPipeline:
             rv.error = msg
             rv.latency_ms = int((time.monotonic() - t0) * 1000)
             return rv
+
+        def _remaining() -> Optional[float]:
+            if deadline is None:
+                return None
+            return deadline - time.monotonic()
 
         vp = self.voice_profile or {}
         ref = str(vp.get("reference_audio_path") or "").strip()
@@ -1571,7 +1698,12 @@ class TTSPipeline:
             except Exception:
                 _persona_leads = ()
                 _style = str(vp.get("instruct_style") or "")
-            if str(col_cfg.get("mode") or "rule").strip().lower() == "llm":
+            if skip_llm_colloquial:
+                # 调用方已对整段做过一次 LLM 口语化（分条省 N-1 次往返）：如实记账，
+                # 本条只往下走免费的规则档补刀 + C+ 微特征，不再打 LLM。
+                rv.extra["colloquial"] = True
+                rv.extra["colloquial_llm"] = True
+            elif str(col_cfg.get("mode") or "rule").strip().lower() == "llm":
                 try:
                     import zlib as _zlib
 
@@ -1581,15 +1713,28 @@ class TTSPipeline:
                     _disf = (bool(col_cfg.get("disfluency", False))
                              and _zlib.crc32(
                                  synth_text.encode("utf-8")) % _every == 0)
-                    _col = await llm_colloquialize(
-                        synth_text, emotion=_emo_name, lead=colloquial_lead,
-                        style=_style,
-                        min_chars=int(col_cfg.get("min_chars", 12) or 12),
-                        timeout_sec=float(col_cfg.get("llm_timeout_sec", 8.0) or 8.0),
-                        disfluency=_disf,
-                        intensity=str(
-                            col_cfg.get("rewrite_intensity", "natural")
-                            or "natural"))
+                    # 预算收口：LLM 改写只是锦上添花，剩余预算得先保住合成本体
+                    # （预留 12s）。压缩后窗口 <2s → 直接走免费规则档，不打 LLM。
+                    _llm_t = float(col_cfg.get("llm_timeout_sec", 8.0) or 8.0)
+                    _rem = _remaining()
+                    if _rem is not None:
+                        _llm_t = min(_llm_t, _rem - 12.0)
+                    if _rem is not None and _llm_t < 2.0:
+                        logger.info(
+                            "[tts] 剩余预算不足（%.1fs）→ 跳过 LLM 口语化走规则档",
+                            max(_rem, 0.0))
+                        _col = None
+                    else:
+                        _col = await llm_colloquialize(
+                            synth_text, emotion=_emo_name, lead=colloquial_lead,
+                            style=_style,
+                            min_chars=int(col_cfg.get("min_chars", 12) or 12),
+                            timeout_sec=_llm_t,
+                            disfluency=_disf,
+                            intensity=str(
+                                col_cfg.get("rewrite_intensity", "natural")
+                                or "natural"),
+                            provider=str(col_cfg.get("provider", "local") or "local"))
                     # 原样返回 ≠ 成功：让规则档再救一刀（因此/您/无需 等书面词）
                     if _col and _col != synth_text:
                         rv.extra["colloquial_llm"] = True
@@ -1673,8 +1818,11 @@ class TTSPipeline:
                 rv.extra["thinking_repeat"] = True
 
         # hub IndexTTS-2 优先（口语化后的送稿）；失败贯穿回落本地 CosyVoice3。
+        _rem = _remaining()
         hub_rv = await self._try_hub_fish(
-            rv, out, t0, spec=spec, text=synth_text)
+            rv, out, t0, spec=spec, text=synth_text,
+            # 留 6s 给 hub 失败后的本机克隆回落
+            budget_cap=(None if _rem is None else _rem - 6.0))
         if hub_rv is not None and hub_rv.ok:
             try:
                 from src.ai.avatar_voice_stats import get_avatar_voice_stats
@@ -1689,6 +1837,12 @@ class TTSPipeline:
             except Exception:
                 pass
             return hub_rv
+        if rv.extra.pop("hub_fish_required", False):
+            logger.warning(
+                "[tts] hub 音色源不可用且 voice_consistency=strict "
+                "→ 拒发语音（不用本机不同音色顶班）persona=%s",
+                self.persona_id or "")
+            return _finalize_err("hub_voice_source_unavailable")
 
         if not ref:
             return _finalize_err("voice_profile_missing_reference_audio_path")
@@ -1834,6 +1988,17 @@ class TTSPipeline:
                 _n_chunks = 1
             budget = (client.synth_timeout_sec
                       * (1 + max(0, client.retries)) * _n_chunks + 30)
+            _rem = _remaining()
+            if _rem is not None:
+                if _rem < 3.0:
+                    _record_avatar(False)
+                    logger.warning(
+                        "[tts] avatar_clone 剩余预算不足（%.1fs）→ 放弃本级",
+                        max(_rem, 0.0))
+                    if cloud_fallback:
+                        return None
+                    return _finalize_err("avatar_clone_no_budget")
+                budget = min(budget, max(8.0, _rem))
             await asyncio.wait_for(asyncio.to_thread(_do_synth), timeout=budget)
         except Exception as ex:
             try:

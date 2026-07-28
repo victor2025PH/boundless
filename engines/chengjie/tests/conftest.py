@@ -26,9 +26,33 @@ for _k in [k for k in os.environ if k.startswith("AITR_")]:
 
 from starlette.testclient import TestClient
 
-from src.utils.config_manager import ConfigManager
+from src.utils.config_manager import ConfigManager  # noqa: E402  (env 剥离必须先跑)
 from src.utils.audit_store import AuditStore
 from src.web.admin import create_app
+
+# 字符额度库全局隔离：`license_quota.db` 的默认路径由 __file__ 推出，落在
+# **仓库的 config/ 目录**。只要某个用例造出一份有效授权（试用链的用例就会），
+# record/topup 就会写进那个真库——2026-07-27 实测：一次 pytest 把 10 万字符加量
+# 写到了本机真 lic_id 上，之后本地激活的授权凭空多出 10 万额度。
+# 额度是要拿来对外收钱的数，绝不能被测试污染，故按用例隔离到 tmp。
+@pytest.fixture(autouse=True)
+def _isolate_license_quota_db(tmp_path_factory):
+    try:
+        from src.licensing.quota_store import (
+            configure_license_quota_store,
+            reset_license_quota_store,
+        )
+    except Exception:  # pragma: no cover - 模块缺失时无需隔离
+        yield
+        return
+    reset_license_quota_store()
+    d = tmp_path_factory.mktemp("licquota")
+    configure_license_quota_store(db_path=str(d / "license_quota.db"))
+    try:
+        yield
+    finally:
+        reset_license_quota_store()
+
 
 # ─────────────────────────────────────────────────────────
 # 配置目录 fixture

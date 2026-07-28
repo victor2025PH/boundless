@@ -121,6 +121,40 @@ def normalize_text(text: Any) -> str:
     return str(text or "").strip().lower()
 
 
+# ── 信息性提问守卫（2026-07-27 实锤）───────────────────────────────────────
+# 「你喝什么咖啡」「你是跑了几家咖啡馆」含触发词"咖啡"被关键词池连发多张图、
+# 正文从未正面作答，被测试号骂「已读乱回」；「这是哪里拍的呢」追问上一张也被
+# 当成要图再发一张。疑问句而且**没有求图动词** → 客户在问名词本身，不是在要
+# 媒体——关键词池让路，交正常 LLM 答话（通用池本就要 detect_selfie_request
+# 才开，不受此影响）。宁少发勿乱发：陈述句里带触发词照常命中。
+_QUESTION_RE = re.compile(
+    r"[？?]|什么|什麼|甚麼|啥|哪(?:里|裡|儿|兒|个|個|家|种|種)?|几[家个條条张張次样樣]|幾|"
+    r"怎么|怎麼|怎样|怎樣|为什么|為什麼|为啥|為啥|多少|"
+    r"[吗嗎]|[呢嘛么麼]\s*$|"
+    r"\b(?:what|which|where|when|why|how|who)\b"
+)
+_MEDIA_REQ_RE = re.compile(
+    r"看看|看一?下|给我看|給我看|让我看|讓我看|想看|求(?:图|圖|照)|"
+    r"[来來]一?[张張个個条條]|再[来來发發拍]|"
+    r"[发發](?:一?[张張个個]|[张張]|我|[来來])|"
+    r"拍一?[张張个個]|"
+    r"有[没沒]有.{0,8}(?:照片|相片|图|圖|视频|視頻|影片|自拍)|"
+    r"(?:照片|相片|图片|圖片|视频|視頻|影片|自拍).{0,4}(?:有[吗嗎]|有[没沒])|"
+    r"show\s+me|send\s+(?:me\s+)?(?:a\s+)?(?:pic|photo|video|selfie)|"
+    r"can\s+i\s+see|got\s+any",
+    re.IGNORECASE)
+
+
+def is_info_question(text: Any) -> bool:
+    """客户消息是「信息性提问」（问名词本身而非要图）→ True＝关键词池应让路。"""
+    t = normalize_text(text)
+    if not t:
+        return False
+    if not _QUESTION_RE.search(t):
+        return False
+    return not _MEDIA_REQ_RE.search(t)
+
+
 def _triggers_hit(triggers: Sequence[Any], text_norm: str) -> bool:
     for t in triggers or []:
         ts = str(t or "").strip().lower()
@@ -175,6 +209,24 @@ def series_of(row: Optional[Dict[str, Any]]) -> str:
     return ""
 
 
+def _fold_file_key(v: Any) -> str:
+    """文件名归一（取 basename + casefold）——比对用，不用于落库。"""
+    s = str(v or "").strip().replace("\\", "/")
+    if not s:
+        return ""
+    return s.rsplit("/", 1)[-1].casefold()
+
+
+def row_file_key(row: Optional[Dict[str, Any]]) -> str:
+    """条目的**跨链身份**：文件名（casefold）。无 file_path/url → ""。
+
+    注册相册链按 DB uuid 记账、文件系统相册链按文件名记账；两条链要认出
+    「同一张图刚发过」只能靠文件名（2026-07-28 重复发图事故的收口点）。
+    """
+    r = row or {}
+    return _fold_file_key(r.get("file_path") or r.get("url") or "")
+
+
 def select_media(
     rows: Sequence[Dict[str, Any]], text: str, *,
     generic_ok: bool = False,
@@ -187,6 +239,7 @@ def select_media(
     now_hour: Optional[int] = None,
     required_scene_class: str = "",
     hard_exclude_ids: Optional[Any] = None,
+    hard_exclude_files: Optional[Any] = None,
     prefer_series: str = "",
 ) -> Optional[Dict[str, Any]]:
     """从候选行里挑一个媒体条目；挑不到返回 None。纯函数（rng 可注入以确定性测试）。
@@ -199,6 +252,8 @@ def select_media(
     图文一致性（P0，2026-07-27）：
     - ``hard_exclude_ids``：重发冷却内的条目，**任何层都不放宽**（几分钟内重发
       同图=机器人实锤）；全被冷却排除 → None（交生成/诚实文字）。
+    - ``hard_exclude_files``：同上，但按**文件名**排除——文件系统相册链按文件名
+      记账，只查 id 会漏掉「同一张图刚由另一条链发出去过」（2026-07-28 实录）。
     - ``now_hour``：软时段过滤——剔掉 ``tod:`` 标注与当前小时硬冲突的条目；
       剔空则放行原池（配文层须按「之前拍的」口径兜底诚实）。
     - ``required_scene_class``：客户显式点名场景时，**通用池**只出场景类匹配的
@@ -208,14 +263,23 @@ def select_media(
     """
     keyword, generic = _partition(
         rows, text, media_types=media_types, bond_level=bond_level)
+    # 信息性提问不劫持：疑问句且无求图动词 → 关键词池让路（见 is_info_question）。
+    if keyword and is_info_question(text):
+        keyword = []
     pool = keyword if keyword else (generic if generic_ok else [])
     from_generic = not keyword
     if not pool:
         return None
-    # 重发冷却：硬排除，绝不逐层放宽。
+    # 重发冷却：硬排除，绝不逐层放宽（id 面 + 文件名面，两条链同一张图都算）。
     hx = {str(x) for x in (hard_exclude_ids or ())}
     if hx:
         pool = [r for r in pool if str(r.get("id")) not in hx]
+        if not pool:
+            return None
+    hxf = {_fold_file_key(x) for x in (hard_exclude_files or ())}
+    hxf.discard("")
+    if hxf:
+        pool = [r for r in pool if row_file_key(r) not in hxf]
         if not pool:
             return None
     # 场景硬要求（仅通用池）：点名要海边就只出海边，挑不到交回生成/文字。
@@ -267,6 +331,9 @@ def explain_match(
     """「试触发」用：返回这句话会命中哪个池 + 全部候选（不做加权随机，列全供预览）。"""
     keyword, generic = _partition(
         rows, text, media_types=media_types, bond_level=bond_level)
+    info_q = bool(keyword) and is_info_question(text)
+    if info_q:
+        keyword = []  # 与 select_media 同口径：预览不骗人
     if keyword:
         pool, cands = POOL_KEYWORD, keyword
     elif generic_ok and generic:
@@ -275,6 +342,7 @@ def explain_match(
         pool, cands = POOL_NONE, []
     return {
         "pool": pool,
+        "info_question": info_q,
         "candidates": [
             {"id": c.get("id"), "media_type": c.get("media_type"),
              "url": c.get("url"), "caption": c.get("caption"),
@@ -317,6 +385,7 @@ def pick_media(
         return None
     ex_ids, ex_series = None, None
     hard_ids: Optional[set] = None
+    hard_files: Optional[set] = None
     prefer_series = ""
     if conv_key:
         try:
@@ -332,8 +401,12 @@ def pick_media(
             items = hist.get("items") or []
             if resend_cooldown_hours and resend_cooldown_hours > 0:
                 cutoff = _now - float(resend_cooldown_hours) * 3600.0
-                hard_ids = {str(it.get("id")) for it in items
-                            if float(it.get("ts") or 0) >= cutoff} or None
+                _fresh = [it for it in items
+                          if float(it.get("ts") or 0) >= cutoff]
+                hard_ids = {str(it.get("id")) for it in _fresh} or None
+                # 跨链：另一条链按文件名记的账，只查 id 会漏
+                hard_files = {str(it.get("file_key") or "")
+                              for it in _fresh} - {""} or None
             if continuity_minutes and continuity_minutes > 0 and items:
                 latest = max(items, key=lambda it: float(it.get("ts") or 0))
                 if float(latest.get("ts") or 0) >= _now - float(
@@ -341,14 +414,15 @@ def pick_media(
                     prefer_series = str(latest.get("series") or "")
         except Exception:
             ex_ids = ex_series = None
-            hard_ids = None
+            hard_ids = hard_files = None
             prefer_series = ""
     return select_media(
         rows, text, generic_ok=generic_ok, media_types=media_types,
         avoid_id=avoid_id, bond_level=bond_level, rng=rng,
         exclude_ids=ex_ids, exclude_series=ex_series,
         now_hour=now_hour, required_scene_class=required_scene_class,
-        hard_exclude_ids=hard_ids, prefer_series=prefer_series)
+        hard_exclude_ids=hard_ids, hard_exclude_files=hard_files,
+        prefer_series=prefer_series)
 
 
 def caption_for(row: Optional[Dict[str, Any]], lang: str = "", *, fallback: str = "") -> str:
@@ -366,5 +440,5 @@ __all__ = [
     "POOL_KEYWORD", "POOL_GENERIC", "POOL_NONE",
     "normalize_text", "select_media", "explain_match", "pick_media", "caption_for",
     "scene_class_of", "tod_conflicts_with_hour", "row_tod", "row_scene_class",
-    "series_of",
+    "row_file_key", "series_of", "is_info_question",
 ]

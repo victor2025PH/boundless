@@ -18,7 +18,8 @@ def register_crisis_audit_routes(app, ctx) -> None:
     _api_write = ctx.api_write
 
     def _sm(request):
-        sm = getattr(telegram_client, "skill_manager", None) if telegram_client else None
+        from src.web.web_context import resolve_skill_manager
+        sm = resolve_skill_manager(telegram_client, app)
         if not sm:
             raise HTTPException(status_code=503, detail=tr(request, "err.epi.bot_not_ready_sm"))
         return sm

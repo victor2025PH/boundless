@@ -118,10 +118,41 @@ _META_SPLIT_RE = re.compile(r"(?:\n\s*\n|解释[:：]|说明[:：]|注[:：]|原
 _QUOTE_CHARS = "「」『』“”\"'‘’"
 
 
+_CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
+# 事实锚点：≥2 位数字 与 ≥2 字母的拉丁 token（金额/型号/品牌/套餐名）。
+# 单位数/单字母噪声大（「一」「3点」的 3 常被合法改写成汉字）故不入锚点集。
+_ANCHOR_RE = re.compile(r"\d[\d,.]*\d|[A-Za-z]{2,}")
+
+
+def _anchor_set(text: str) -> set:
+    """文本里的事实锚点（数字串归一去掉千分位/尾点，拉丁统一小写）。"""
+    out = set()
+    for tok in _ANCHOR_RE.findall(str(text or "")):
+        t = tok.strip().lower().rstrip(".")
+        if t and t[0].isdigit():
+            t = t.replace(",", "").replace("，", "")
+        if len(t) >= 2:
+            out.add(t)
+    return out
+
+
+def lost_anchors(original: str, rewritten: str) -> list:
+    """原文有、改写里没了的事实锚点（排序返回；空=红线未破）。
+
+    口语化的书面契约里第一条红线就是「数字/金额/型号原样保留」，但此前**从未校验**
+    ——2026-07-28 实录：本地模型把「团队版198美金」改写成「168美金」这类篡改，
+    只要长度落在 0.6~1.8 倍就一路放行。锚点是确定性的、零误伤的那一半。
+    """
+    o = _anchor_set(original)
+    if not o:
+        return []
+    return sorted(o - _anchor_set(rewritten))
+
+
 def sanitize_llm_output(
-    raw: str, original: str, *, max_expand: float = 1.8,
+    raw: str, original: str, *, max_expand: float = 1.8, min_keep: float = 0.6,
 ) -> Optional[str]:
-    """消毒 + 校验 LLM 口语化输出。异常（空/超长/超短/串语言/元话语）→ None。纯函数。"""
+    """消毒 + 校验 LLM 口语化输出。异常（空/超长/超短/串语言/元话语/丢锚点）→ None。纯函数。"""
     from src.ai.voice_colloquial import _is_chinese_dominant
 
     t = str(raw or "").strip()
@@ -138,13 +169,22 @@ def sanitize_llm_output(
     core = str(original or "").strip()
     if not core:
         return None
-    # 长度守卫：过短=截断/丢信息，过长=发挥过度/夹带解释（+8 给短文本余量）
-    if len(t) < len(core) * 0.3:
+    # 长度守卫：过短=截断/丢信息，过长=发挥过度/夹带解释（+8 给短文本余量）。
+    # 缩水下限 0.3→0.6（2026-07-27 实锤：讲故事回复被口语化 67→33 腰斩，客户听到
+    # 半截故事投诉「怎么说话说一半」——口语化是**改写**不是摘要，砍掉 >40% 必是
+    # 内容丢失；拒了回落规则档＝完整原文照念，永远不劣化）。
+    if len(t) < len(core) * float(min_keep):
         return None
     if len(t) > len(core) * float(max_expand) + 8:
         return None
     # 语言守卫：原文中文而输出串了别的语言 → 拒（防 garble）
     if not _is_chinese_dominant(t):
+        return None
+    # 事实锚点守卫：数字/金额/型号丢了或被改 → 拒（红线，零误伤的那一半；
+    # 语义漂移那一半在 llm_colloquialize 里用嵌入余弦兜，见该函数注释）
+    _lost = lost_anchors(core, t)
+    if _lost:
+        logger.info("[voice_colloquial_llm] 拒改写：事实锚点丢失 %s", _lost[:3])
         return None
     return t
 
@@ -250,6 +290,50 @@ def _get_ai_client(injected: Optional[Any] = None) -> Optional[Any]:
     return _AI_CLIENT
 
 
+# 语义地板：改写与原文的嵌入余弦下限。2026-07-28 实测校准（bge-m3，9 对样本）：
+# 真口语化 0.862~0.986（最低是「因此我们无需担心→所以咱不用担心」这种整句换词），
+# 漂移 0.526~0.696（答非所问 0.684 / 换主题 0.526 / 回答式 0.696）——0.78 落在
+# +0.166 的干净间隔正中。刻意**不**指望余弦抓数字篡改（「198→168」余弦 0.974，
+# 语义几乎不变），那半边由 lost_anchors 确定性兜住，两层各管一半。
+DEFAULT_MIN_SIMILARITY = 0.78
+
+
+async def _semantically_same(
+    client: Any, original: str, rewritten: str, min_similarity: float,
+) -> bool:
+    """改写是否仍在说同一件事（嵌入余弦 ≥ 阈值）。
+
+    **fail-open**：无 embed / 端点抖动 / 返回空 → True（放行）。守卫自身故障不该
+    把口语化整条链拖死；且拒绝的代价很小（回落规则档＝原文照念，永远不劣化），
+    所以宁可在能判时判严、判不了时放过。
+    """
+    if min_similarity <= 0:
+        return True
+    embed = getattr(client, "embed", None)
+    if embed is None:
+        return True
+    try:
+        vecs = await embed([original, rewritten])
+        if not vecs or len(vecs) < 2 or not vecs[0] or not vecs[1]:
+            return True
+        va, vb = vecs[0], vecs[1]
+        num = sum(x * y for x, y in zip(va, vb))
+        na = sum(x * x for x in va) ** 0.5
+        nb = sum(x * x for x in vb) ** 0.5
+        if not na or not nb:
+            return True
+        sim = num / (na * nb)
+    except Exception as exc:
+        logger.debug("[voice_colloquial_llm] 语义校验不可用（放行）: %s", exc)
+        return True
+    if sim < float(min_similarity):
+        logger.info(
+            "[voice_colloquial_llm] 拒改写：语义漂移 cos=%.3f < %.2f | 原=%r 改=%r",
+            sim, min_similarity, original[:30], rewritten[:30])
+        return False
+    return True
+
+
 async def llm_colloquialize(
     text: str,
     *,
@@ -262,6 +346,8 @@ async def llm_colloquialize(
     max_expand: float = 1.8,
     disfluency: bool = False,
     intensity: str = "natural",
+    provider: str = "local",
+    min_similarity: float = DEFAULT_MIN_SIMILARITY,
 ) -> Optional[str]:
     """本地 LLM 口语化。命中缓存直接返回；失败/超时/熔断/校验不过 → None（回落规则档）。
 
@@ -269,6 +355,13 @@ async def llm_colloquialize(
     ``disfluency``＝本条允许一处轻口误自纠（⑥，调用方按 crc 低频开启；进缓存键）。
     ``intensity``＝口语重塑力度 light|natural|vivid（AI Live OS Agent6）：vivid 允许主观
     口吻框架/停顿，输出会比原文长一些 → 自动放宽长度上限（红线仍由 sanitize 守）。
+
+    内容保持双层（2026-07-28 事故：本地模型把「嗨，我在宿务这边刚开完店，你吃饭了吗」
+    改写成「刚忙完啊我吃过了你那边店开起来肯定一堆事吧…」＝**回答**而不是改写，
+    38 字对 18 字刚好卡在 1.8 倍上限内一路放行，人设语音说出的话与要说的话完全无关）：
+      ① ``sanitize_llm_output`` 里的 ``lost_anchors``——数字/金额/型号丢了即拒（确定性）；
+      ② 本函数的 ``_semantically_same``——嵌入余弦 < ``min_similarity`` 即拒（fail-open）。
+    两层都不过就回落规则档（原文照念），永远不劣化。
     """
     core = str(text or "").strip()
     if len(core) < max(1, int(min_chars)):
@@ -290,20 +383,38 @@ async def llm_colloquialize(
         return None                 # 端点冷却期：秒回落，不调 LLM
 
     client = _get_ai_client(ai_client)
-    if client is None or not hasattr(client, "rewrite_local"):
+    if client is None:
         return None
 
+    # provider：local=LAN 本地模型（ai.fallback，零云成本）｜cloud=主云端模型
+    # （ai.base_url/model，质量稳但每条一次调用）｜auto=云端优先、失败回落本地。
+    # 本地节点缺模型/离线时 local 档会静默回落规则档（书面稿直送 TTS＝念稿感），
+    # 运营可用 cloud 换确定的口语质量。
+    prov = str(provider or "local").strip().lower()
+    order = {"cloud": ("cloud",), "auto": ("cloud", "local")}.get(prov, ("local",))
     system = build_colloquial_prompt(emotion, bool(lead), style,
                                      disfluency=bool(disfluency),
                                      intensity=intensity)
-    try:
-        raw = await client.rewrite_local(system, core, timeout_sec=timeout_sec)
-    except Exception as exc:
-        logger.debug("[voice_colloquial_llm] rewrite_local 异常: %s", exc)
-        raw = None
+    raw = None
+    for _p in order:
+        _fn = getattr(
+            client, "rewrite_cloud" if _p == "cloud" else "rewrite_local", None)
+        if _fn is None:
+            continue
+        try:
+            raw = await _fn(system, core, timeout_sec=timeout_sec)
+        except Exception as exc:
+            logger.debug("[voice_colloquial_llm] rewrite_%s 异常: %s", _p, exc)
+            raw = None
+        if raw:
+            break
 
     out = sanitize_llm_output(raw, core, max_expand=max_expand) if raw else None
     if out and out != core:
+        if not await _semantically_same(client, core, out, min_similarity):
+            _record_failure()
+            _cache_put(key, "")
+            return None
         _record_success()
         _cache_put(key, out)
         return out
@@ -342,6 +453,7 @@ def reset_state() -> None:
 
 
 __all__ = [
+    "DEFAULT_MIN_SIMILARITY",
     "llm_colloquialize", "set_ai_client", "build_colloquial_prompt", "sanitize_llm_output",
-    "health_signal", "reset_state",
+    "lost_anchors", "health_signal", "reset_state",
 ]

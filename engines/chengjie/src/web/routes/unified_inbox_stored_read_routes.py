@@ -120,8 +120,51 @@ def register_stored_read_routes(app, *, api_auth) -> None:
         if mode not in AUTOMATION_MODES:
             raise HTTPException(400, tr(request, "err.ws.unsupported_automation_mode", mode=mode))
         cid = _conv_id(platform, account_id, chat_key)
-        _write_automation_mode(request, cid, mode)
-        return {"ok": True, "conversation_id": cid, "mode": mode}
+        cancelled = _write_automation_mode(request, cid, mode)
+        return {
+            "ok": True,
+            "conversation_id": cid,
+            "mode": mode,
+            "cancelled_l2": int(cancelled or 0),
+        }
+
+    @app.post("/api/unified-inbox/automation/bulk-downgrade")
+    async def api_unified_inbox_automation_bulk_downgrade(
+        request: Request, _=Depends(api_auth),
+    ):
+        """主管一键：把所有全自动会话降为「AI草稿我审」，并取消其待投递 L2。
+
+        应急止血（互聊刹不住时），不改全局值守开关。body 可选
+        ``{to_mode:"review"|"manual"}``，默认 review。
+        """
+        from src.web.routes.unified_inbox_auth import _require_supervisor
+        _require_supervisor(request)
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        to_mode = str((body or {}).get("to_mode") or "review").lower()
+        if to_mode not in ("review", "manual"):
+            raise HTTPException(400, tr(request, "err.ws.unsupported_automation_mode", mode=to_mode))
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.ws.inbox_persistence_disabled"))
+        cids = store.bulk_set_automation_mode("auto_ai", to_mode) or []
+        cancelled = 0
+        for cid in cids:
+            try:
+                cancelled += int(store.cancel_pending_l2_drafts(
+                    cid, decided_by="bulk_mode_downgrade") or 0)
+            except Exception:
+                pass
+        return {
+            "ok": True,
+            "from_mode": "auto_ai",
+            "to_mode": to_mode,
+            "changed": len(cids),
+            "cancelled_l2": cancelled,
+        }
 
     @app.get("/api/unified-inbox/automation-stats")
     async def api_unified_inbox_automation_stats(

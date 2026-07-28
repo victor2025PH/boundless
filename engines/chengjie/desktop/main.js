@@ -8,6 +8,7 @@ const { chromeLikeUserAgent, isWhatsappUrl, needsChromeUa, urlNeedsChromeUa } = 
 const { fingerprintArg, accountIdFromPartition } = require("./inject/fingerprint.js");
 const { createBackendManager } = require("./backend-launcher.js");
 const brandUtil = require("./brand-util.js");
+const tokenUtil = require("./token-util.js");
 
 // `--first-run`：无视「只弹一次」标记重看首启向导。写进 env 而不是走 IPC，是为了让
 // shell-preload 能同步读到（向导在 DOM 就绪那一刻就要判断弹不弹，等不起一次往返）。
@@ -60,6 +61,22 @@ function loadConfig() {
 }
 
 let config = loadConfig();
+
+// 托管版（managed edition）：客户拿到的是「我们预置好 AI、按字符卖额度」的成品，
+// 首启向导里绝不该出现「配置 AI 模型」「后台访问令牌」这类自建/开发者概念——客户
+// 不知道 API Key 是什么，看到只会以为买错了东西。开发态（从源码 npm start）反过来
+// 需要这些字段来调试。
+//
+// 判定优先级：env AITR_MANAGED_EDITION（QA 手动覆盖）> config.json 显式 managed 字段
+// （将来若出「自建版」打包，可在其种子里设 false）> 默认 app.isPackaged。
+// 默认取 isPackaged 的好处：现有打包流程零改动——打出来给客户的包天然是托管版，
+// 而 npm start / electron . 开发态天然非托管。与 --first-run 同款：写进 env 让
+// shell-preload 同步读到（向导 DOM 就绪那一刻就要决定显示哪些字段，等不起一次 IPC）。
+let _managedEdition = !!app.isPackaged;
+if (typeof config.managed === "boolean") _managedEdition = config.managed;
+if (process.env.AITR_MANAGED_EDITION === "1") _managedEdition = true;
+else if (process.env.AITR_MANAGED_EDITION === "0") _managedEdition = false;
+process.env.AITR_MANAGED_EDITION = _managedEdition ? "1" : "0";
 
 // 内置默认品牌图标（copy-shared 落地）。窗口创建时用它作原生图标兜底，
 // 白标改回默认时也还原到它。
@@ -151,7 +168,9 @@ async function applyLiveWindowBranding(win, { force = false } = {}) {
 // 后端 sidecar 生命周期：免手动起 Python。拉起前先探活（已在跑→复用），退出回收。
 const backendManager = createBackendManager({ app, spawn, exec, fs, fetch: global.fetch });
 
-/** 浅合并并持久化 config.json（首启向导用）；同步更新内存 config。返回 {ok}。 */
+/** 浅合并并持久化 config.json（首启向导用）；同步更新内存 config。返回 {ok}。
+ *  首启完成会写 onboarding: { completed, completed_at, edition }——与 renderer
+ *  localStorage 旗标双权威，清缓存后仍可不弹向导。managed 布尔见文件顶部判定。 */
 function saveConfigPatch(patch) {
   try {
     const next = Object.assign({}, config);
@@ -339,6 +358,16 @@ ipcMain.handle("desktop:trial-claim-status", async () => {
 ipcMain.handle("desktop:trial-bind-code", async () => {
   try {
     return await backendPost("/api/admin/license/trial-bind-code", {});
+  } catch (e) {
+    return { ok: false, error: "network" };
+  }
+});
+
+// 首启漏斗埋点：向导曝光/领取/跳过等事件经本地后端转发官网 /api/track。
+// 纯 fire-and-forget：失败静默（埋点绝不影响向导），事件名白名单在后端收口。
+ipcMain.handle("desktop:trial-funnel", async (_e, body) => {
+  try {
+    return await backendPost("/api/admin/license/trial-funnel", body || {});
   } catch (e) {
     return { ok: false, error: "network" };
   }
@@ -1349,8 +1378,30 @@ if (!_gotSingleInstanceLock) {
     }
   });
 
-  app.whenReady().then(() => {
+  // 托管版令牌硬化：首次托管启动把出厂默认 "admin" 换成每机随机值（客户全程无感）。
+  // 必须发生在 backendManager.start **之前**——spawn 时经 AITR_WEB_TOKEN 注入新令牌。
+  // 若后端已在跑（升级后热启动/外部自管），它手里还是旧令牌，此刻换会让所有
+  // Bearer 调用当场 401 → 本次跳过，下次冷启动自然完成轮换。
+  async function maybeRotateManagedToken() {
+    try {
+      if (!tokenUtil.shouldRotateToken(_managedEdition, (config.backend || {}).token)) return;
+      const { base_url } = config.backend || {};
+      if (base_url) {
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), 1500);
+        try {
+          await fetch(`${base_url}/login`, { method: "GET", redirect: "manual", signal: ctl.signal });
+          return; // 探活成功 = 已有后端在用旧令牌跑，本次不换
+        } catch (e) { /* 连不上 = 后端没起，安全轮换 */ }
+        finally { clearTimeout(timer); }
+      }
+      saveConfigPatch({ backend: { token: tokenUtil.generateToken() } });
+    } catch (e) { /* 轮换失败不阻断启动：维持默认令牌（行为同旧版） */ }
+  }
+
+  app.whenReady().then(async () => {
     Menu.setApplicationMenu(buildChineseMenu());
+    await maybeRotateManagedToken();
     // 后台自拉起（不阻塞开窗：renderer 已有「正在连接后台→自动重连」遮罩兜底）。
     backendManager.start(config).catch((e) => console.log(`[backend] start error: ${e}`));
     createWindow();

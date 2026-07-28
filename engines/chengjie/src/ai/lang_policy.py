@@ -437,6 +437,40 @@ _EXTRA_SCRIPTS: Tuple[Tuple[str, "re.Pattern"], ...] = (
     ("bn", re.compile(r"[\u0980-\u09ff]")),   # 孟加拉文
 )
 
+# 独有脚本要成为「强证据」的最低占比（占本条语言性字符）。
+# 2026-07-28 实录事故：客户说
+# 「btw do you ship to Thailand? my customers keep asking 🤔 อร่อยมาก 你们那芒果干真的好吃」
+# ——泰文只 8 字符，同句还有 ~10 汉字 + ~40 拉丁字母，但旧口径「独有脚本 ≥2 字符即强」
+# 让这 14% 的碎片切走了整个会话语言，随后连续 7 轮全泰语回复（客户一直在说中文，
+# 当场吐槽「你居然跟着我乱跳语言」）。改为**相对占比**：碎片只能是弱证据（弱永不触发切换）。
+# 刻意不动假名分支——日文汉字与中文汉字天然歧义，相对口径会把汉字密集的真日文误降级，
+# 那是另一个风险面（见 test_lang_policy 里的 kana 用例），本次只修已实锤的这一类。
+_SCRIPT_STRONG_MIN_SHARE = 0.30
+
+
+def _script_share(core: str, own: int) -> float:
+    """某脚本字符数占本条「语言性字符」总量的比例（0..1）。
+
+    分母 = 该脚本字符 + 汉字 + 拉丁字母 + 其它非拉丁脚本字符；
+    标点/数字/emoji 已由 strip_neutral_tokens 与本式一并排除在外。
+    """
+    if own <= 0:
+        return 0.0
+    cjk = len(_CJK_RE.findall(core))
+    latin = len(_LATIN_RE.findall(core))
+    other = len(_NONLATIN_SCRIPT_RE.findall(core))
+    total = max(own, own + cjk + latin + max(0, other - own))
+    return own / float(total) if total else 0.0
+
+
+def _script_strength(core: str, own: int) -> str:
+    """独有脚本命中的强度：占比够 → 强；只是碎片 → 弱（不触发切换）。"""
+    if own < 2:
+        return EvidenceStrength.WEAK
+    return (EvidenceStrength.STRONG
+            if _script_share(core, own) >= _SCRIPT_STRONG_MIN_SHARE
+            else EvidenceStrength.WEAK)
+
 
 def normalize_lang_code(code: str) -> str:
     """归一各产线语言码到策略层标准码（zh-cn/cn→zh、jp→ja、ar_ur→ar…）。
@@ -473,7 +507,7 @@ def classify_evidence(text: str) -> Tuple[str, str]:
     for _xl, _xp in _EXTRA_SCRIPTS:
         n = len(_xp.findall(core))
         if n:
-            return (_xl, EvidenceStrength.STRONG if n >= 2 else EvidenceStrength.WEAK)
+            return (_xl, _script_strength(core, n))
 
     from src.ai.translation_service import detect_language
 
@@ -486,11 +520,9 @@ def classify_evidence(text: str) -> Tuple[str, str]:
         n = len(_KANA_RE.findall(core))
         return ("ja", EvidenceStrength.STRONG) if n >= 2 else ("ja", EvidenceStrength.WEAK)
     if _HANGUL_RE.search(core):
-        n = len(_HANGUL_RE.findall(core))
-        return ("ko", EvidenceStrength.STRONG) if n >= 2 else ("ko", EvidenceStrength.WEAK)
+        return ("ko", _script_strength(core, len(_HANGUL_RE.findall(core))))
     if lang not in ("en", "zh") and _NONLATIN_SCRIPT_RE.search(core):
-        n = len(_NONLATIN_SCRIPT_RE.findall(core))
-        return (lang, EvidenceStrength.STRONG) if n >= 2 else (lang, EvidenceStrength.WEAK)
+        return (lang, _script_strength(core, len(_NONLATIN_SCRIPT_RE.findall(core))))
 
     if lang == "zh":
         n = len(_CJK_RE.findall(core))

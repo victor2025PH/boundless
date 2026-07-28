@@ -388,7 +388,9 @@ function createBackendManager(deps) {
     const pid = child.pid;
     try {
       if (process.platform === "win32") {
-        exec(`taskkill /pid ${pid} /T /F`);
+        // windowsHide：GUI 进程（Electron）无控制台，exec 默认会为 cmd.exe 新建
+        // 可见控制台 → 用户退出应用瞬间闪黑窗；CREATE_NO_WINDOW 消除
+        exec(`taskkill /pid ${pid} /T /F`, { windowsHide: true });
       } else {
         try { process.kill(-pid, "SIGTERM"); } catch (e) { try { child.kill("SIGTERM"); } catch (e2) {} }
         setTimeout(() => { try { process.kill(-pid, "SIGKILL"); } catch (e) {} }, 4000);

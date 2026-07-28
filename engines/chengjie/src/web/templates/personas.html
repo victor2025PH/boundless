@@ -161,6 +161,20 @@
 .json-import-wrap{border-top:1px solid var(--bd);margin-top:.7rem;padding-top:.65rem}
 .json-import-wrap summary{font-size:.74rem;color:var(--t2);cursor:pointer;user-select:none;list-style:none}
 .json-import-wrap summary::-webkit-details-marker{display:none}
+/* ── C 线：结构化 personality 只读区 + 高级字段只读面板 + 卡片完整度徽标 ── */
+#pe-personality-extras{display:none;margin-top:.32rem;padding:.45rem .6rem;background:var(--bg2);border:1px solid var(--bd);border-radius:8px}
+.pe-px-row{font-size:.72rem;color:var(--t2);margin:.14rem 0;line-height:1.55}
+.pe-px-lbl{color:var(--t1);font-weight:600;margin-right:.3rem}
+.pe-px-chip{display:inline-block;font-size:.68rem;padding:.06rem .45rem;border-radius:999px;background:rgba(91,124,246,.1);color:var(--p);margin:.08rem .22rem .08rem 0;border:1px solid rgba(91,124,246,.25)}
+#pe-adv-panel{border-top:1px solid var(--bd);margin-top:.7rem;padding-top:.65rem}
+#pe-adv-panel summary{font-size:.74rem;color:var(--t2);cursor:pointer;user-select:none;list-style:none}
+#pe-adv-panel summary::-webkit-details-marker{display:none}
+#pe-adv-badge{font-size:.64rem;font-weight:700;color:var(--p);background:rgba(91,124,246,.1);border:1px solid rgba(91,124,246,.25);border-radius:999px;padding:.02rem .38rem;margin-left:.25rem}
+#pe-adv-body{font-family:monospace;font-size:.68rem;line-height:1.5;color:var(--t2);background:var(--bg2);border:1px solid var(--bd);border-radius:8px;padding:.5rem .6rem;margin:.45rem 0 0;max-height:220px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+.comp-pill{display:inline-flex;align-items:center;gap:.14rem;font-size:.62rem;font-weight:700;border-radius:10px;padding:.08rem .4rem}
+.comp-pill.comp-hi{background:rgba(16,185,129,.12);color:var(--green);border:1px solid rgba(16,185,129,.3)}
+.comp-pill.comp-mid{background:rgba(245,158,11,.12);color:#d97706;border:1px solid rgba(245,158,11,.3)}
+.comp-pill.comp-lo{background:rgba(239,68,68,.1);color:#ef4444;border:1px solid rgba(239,68,68,.28)}
 /* ── Profile Pool header ─────────────────────────────────────────────────── */
 .pp-content{padding:1.4rem 1.8rem 2rem;max-width:1400px}
 .pp-header{display:flex;align-items:center;gap:.55rem;margin-bottom:.75rem;flex-wrap:wrap}
@@ -345,7 +359,7 @@
 .dtab{padding:.44rem .8rem;font-size:.79rem;font-weight:600;color:var(--t2);border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .15s}
 .dtab.active{color:var(--p);border-bottom-color:var(--p)}
 .dpane{display:none;flex:1;overflow-y:auto;padding:.95rem 1.28rem}.dpane.active{display:block}
-.drawer-foot{padding:.72rem 1.28rem;border-top:1px solid var(--bd);display:flex;gap:.42rem;flex-shrink:0;align-items:center}
+.drawer-foot{padding:.72rem 1.28rem;border-top:1px solid var(--bd);display:flex;flex-wrap:wrap;gap:.42rem;flex-shrink:0;align-items:center}
 .drawer-dirty{font-size:.71rem;color:var(--amber);flex:1;display:none}.drawer-dirty.show{display:block}
 /* ── Option cards ────────────────────────────────────────────────────────── */
 .opt-cards{display:flex;gap:.36rem;flex-wrap:wrap}
@@ -505,6 +519,8 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
 .pp-item-cur{font-size:.66rem;color:var(--accent,#5b7cf6);font-weight:600;flex-shrink:0}
 .pp-modal-empty{padding:1.4rem 0;text-align:center;color:var(--t2);font-size:.82rem}
 .pp-modal-foot{display:flex;justify-content:space-between;gap:.5rem;padding:.7rem 1.1rem;border-top:1px solid var(--bd)}
+.legacy-count-badge{font-size:.68rem;font-weight:700;padding:.08rem .4rem;border-radius:999px;background:rgba(245,158,11,.12);color:#b45309}
+.legacy-auto-plan{margin-top:.45rem;padding:.55rem .7rem;border:1px solid rgba(245,158,11,.35);border-radius:9px;background:rgba(245,158,11,.06)}
 </style>
 
 <div class="topbar">
@@ -656,6 +672,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="16 7 12 3 8 7"/><line x1="12" y1="3" x2="12" y2="15"/><path d="M20 21H4"/></svg>
         {{ (i18n or {}).get('psn_import','导入') }}
       </button>
+      <button class="btn btn-sm" id="doc-import-toolbar-btn" style="display:none" onclick="openNewProfile();openDocImport()" title="{{ (i18n or {}).get('psn_imp_btn_t','上传人设文档（.docx/.txt），AI 自动提取人设字段') }}">📄 {{ (i18n or {}).get('psn_imp_btn','从文档导入') }}</button>
       <button class="btn btn-sm" onclick="_exportFilteredCSV()" title="{{ (i18n or {}).get('psn_export_csv_t','导出当前筛选结果为 CSV') }}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="21" x2="12" y2="9"/><path d="M20 3H4"/></svg>
         {{ (i18n or {}).get('psn_export','导出') }}
@@ -667,6 +684,9 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       </button>
     </div>
   </div>
+
+  <!-- M9 收尾：孤儿传记库存横幅（有库存、无档案；旧后端 404/未启用不显示）-->
+  <div id="bio-orphan-banner" style="display:none;margin:.35rem 0 .5rem;padding:.4rem .6rem;font-size:.72rem;line-height:1.5;border:1px solid var(--th-bd-amber25,rgba(245,158,11,.25));background:var(--th-bg-amber08,rgba(245,158,11,.08));border-radius:8px"></div>
 
   <!-- P8-3 Floating bulk action bar -->
   <div id="bulk-bar" class="bulk-bar">
@@ -849,10 +869,12 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       <div class="card-hd">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
         {{ (i18n or {}).get('psn_legacy_title','遗留 peer 绑定清理') }}
-        <span id="legacy-count" style="font-size:.68rem;font-weight:700;padding:.08rem .4rem;border-radius:999px;background:rgba(245,158,11,.12);color:#b45309"></span>
-        <button class="btn btn-sm" style="margin-left:auto;font-size:.7rem;padding:.14rem .42rem" onclick="loadLegacyBindings(true)">↻ {{ (i18n or {}).get('psn_reload_full','重新加载') }}</button>
+        <span id="legacy-count" class="legacy-count-badge"></span>
+        <button class="btn btn-primary btn-sm" style="margin-left:auto;font-size:.7rem;padding:.14rem .42rem" onclick="_legacyAutoOpen()" title="{{ (i18n or {}).get('psn_legacy_auto_t','行为保真策略：被压制→清除、仍生效→升级为会话级、拿不准→跳过留人工；执行前先出计划确认，任何会话的生效人设都不会改变。') }}">⚡ {{ (i18n or {}).get('psn_legacy_auto','一键安全收官') }}</button>
+        <button class="btn btn-sm" style="font-size:.7rem;padding:.14rem .42rem" onclick="loadLegacyBindings(true)">↻ {{ (i18n or {}).get('psn_reload_full','重新加载') }}</button>
       </div>
       <div class="card-sub">{{ (i18n or {}).get('psn_legacy_sub','旧式绑定按 peer 全局生效，已被账号级/会话级人设压制。可升级为逐会话覆写（语义保真）或直接清除（回到账号/域默认）。') }}</div>
+      <div id="legacy-auto-plan" class="legacy-auto-plan" style="display:none"></div>
       <div id="legacy-list" style="margin-top:.45rem"></div>
     </div>
   </div>
@@ -998,6 +1020,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
   </div>
   <div class="drawer-tabs">
     <button class="dtab active" data-dtab="basic" onclick="switchDTab('basic')">{{ (i18n or {}).get('psn_dtab_basic','基础') }}<span class="ddot" id="ddot-basic"></span></button>
+    <button class="dtab" data-dtab="profile" onclick="switchDTab('profile')">{{ (i18n or {}).get('psn_tab_profile','档案') }}<span class="ddot" id="ddot-profile"></span></button>
     <button class="dtab" data-dtab="style" onclick="switchDTab('style')">{{ (i18n or {}).get('psn_dtab_style','风格') }}<span class="ddot" id="ddot-style"></span></button>
     <button class="dtab" data-dtab="voice" onclick="switchDTab('voice')">{{ (i18n or {}).get('psn_dtab_voice','语音') }}<span class="ddot" id="ddot-voice"></span></button>
     <button class="dtab" data-dtab="album" onclick="switchDTab('album')">{{ (i18n or {}).get('psn_dtab_album','相册') }}<span class="ddot" id="ddot-album"></span></button>
@@ -1013,6 +1036,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
         <button class="btn btn-sm" onclick="_applyTemplate('service')">🎯 {{ (i18n or {}).get('psn_tpl_service','客服型') }}</button>
         <button class="btn btn-sm" onclick="_applyTemplate('sales')">💼 {{ (i18n or {}).get('psn_tpl_sales','销售型') }}</button>
         <button class="btn btn-sm" onclick="_applyTemplate('consultant')">📋 {{ (i18n or {}).get('psn_tpl_consultant','咨询师型') }}</button>
+        <button class="btn btn-sm" id="doc-import-tpl-btn" style="display:none" onclick="openDocImport()" title="{{ (i18n or {}).get('psn_imp_btn_t','上传人设文档（.docx/.txt），AI 自动提取人设字段') }}">📄 {{ (i18n or {}).get('psn_imp_btn','从文档导入') }}</button>
       </div>
     </div>
     <div id="pe-wizard" class="pe-wizard" style="display:none"></div>
@@ -1023,7 +1047,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       <div class="field-row"><label>{{ (i18n or {}).get('psn_th_name','名称') }}</label><input id="pe-name" type="text" placeholder="{{ (i18n or {}).get('psn_name_ph','小灵') }}"></div>
       <div class="field-row"><label>{{ (i18n or {}).get('psn_th_role','角色') }}</label><input id="pe-role" type="text" placeholder="{{ (i18n or {}).get('psn_role_ph','亲密的私聊对象') }}"></div>
     </div>
-    <div class="field-row"><label>{{ (i18n or {}).get('psn_personality_style','性格 / 风格') }}</label><textarea id="pe-personality" rows="5" placeholder="{{ (i18n or {}).get('psn_personality_ph','温柔体贴，喜欢用撒娇语气…') }}"></textarea><span id="pe-pers-notice" class="pers-notice">✓ {{ (i18n or {}).get('psn_pers_notice','已将结构化格式转换为可读文本') }}</span></div>
+    <div class="field-row"><label>{{ (i18n or {}).get('psn_personality_style','性格 / 风格') }}</label><textarea id="pe-personality" rows="5" placeholder="{{ (i18n or {}).get('psn_personality_ph','温柔体贴，喜欢用撒娇语气…') }}"></textarea><span id="pe-pers-notice" class="pers-notice">✓ {{ (i18n or {}).get('psn_pers_structured','结构化人设：此处仅编辑说话风格 style，特质等字段随保存原样保留') }}</span><div id="pe-personality-extras"></div></div>
     <div class="field-row"><label>{{ (i18n or {}).get('psn_tag','标签') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_comma_sep','（逗号分隔）') }}</span></label><input id="pe-tags" type="text" placeholder="holiday, vip, companion"></div>
     <details class="json-import-wrap">
       <summary>&#128203; {{ (i18n or {}).get('psn_json_import_field','从 JSON 导入字段…') }}</summary>
@@ -1032,6 +1056,96 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
         <textarea id="pe-json-import" rows="4" placeholder='{"name":"...","role":"...","personality":"...","tags":["vip"]}'></textarea>
       </div>
       <button class="btn btn-sm" onclick="_importFromJson()" style="margin-top:.28rem">{{ (i18n or {}).get('psn_parse_fill','解析并填充') }}</button>
+    </details>
+    <details id="pe-adv-panel" style="display:none">
+      <summary>&#128230; {{ (i18n or {}).get('psn_adv_title','高级字段（随保存原样保留）') }} <span id="pe-adv-badge"></span></summary>
+      <pre id="pe-adv-body"></pre>
+    </details>
+  </div>
+  <!-- Pane: Profile（C2 线：档案全字段编辑，对应 doc-import 抽取的富字段）-->
+  <div class="dpane" id="dpane-profile">
+    <div class="pf-hd">{{ (i18n or {}).get('psn_pf_g_basic','基本补充') }}</div>
+    <div class="ps-row">
+      <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_age','年龄') }}</label><input id="pe-pf-age" type="number" min="0" max="120" placeholder="—"></div>
+      <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_gender','性别') }}</label>
+        <select id="pe-pf-gender">
+          <option value="">{{ (i18n or {}).get('psn_pf_gender_unset','未设置') }}</option>
+          <option value="female">{{ (i18n or {}).get('psn_pf_gender_f','女') }}</option>
+          <option value="male">{{ (i18n or {}).get('psn_pf_gender_m','男') }}</option>
+        </select>
+      </div>
+    </div>
+    <div class="ps-row">
+      <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_name_western','西文全名') }}</label><input id="pe-pf-name-western" type="text"></div>
+      <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_name_english','英文名') }}</label><input id="pe-pf-name-english" type="text"></div>
+    </div>
+    <div class="ps-row">
+      <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_name_nickname','昵称') }}</label><input id="pe-pf-name-nickname" type="text"></div>
+      <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_name_usage','名字使用说明') }}</label><input id="pe-pf-name-usage-notes" type="text"></div>
+    </div>
+    <div class="pf-hd">{{ (i18n or {}).get('psn_pf_g_background','背景故事') }}</div>
+    <div class="field-row">
+      <label>{{ (i18n or {}).get('psn_pf_g_background','背景故事') }} <span class="pf-cnt" id="pe-pf-bg-count"></span></label>
+      <textarea id="pe-pf-background" rows="7" oninput="_pfUpdateCounts()"></textarea>
+      <div class="pf-hint">{{ (i18n or {}).get('psn_pf_bg_hint','建议 ≤1500 字，超出部分建议放长传记') }}</div>
+    </div>
+    <div class="pf-hd">{{ (i18n or {}).get('psn_pf_g_memories','专属记忆') }}</div>
+    <div class="field-row">
+      <label>{{ (i18n or {}).get('psn_pf_g_memories','专属记忆') }} <span class="pf-cnt" id="pe-pf-mem-count"></span></label>
+      <textarea id="pe-pf-memories" rows="5" oninput="_pfUpdateCounts()"></textarea>
+      <div class="pf-hint">{{ (i18n or {}).get('psn_pf_mem_hint','一行一条，写可被追问验证的具体事实') }}</div>
+    </div>
+    <div class="pf-hd">{{ (i18n or {}).get('psn_pf_g_hobbies','爱好') }}</div>
+    <div class="field-row">
+      <label>{{ (i18n or {}).get('psn_pf_g_hobbies','爱好') }}</label>
+      <textarea id="pe-pf-hobbies" rows="3"></textarea>
+      <div class="pf-hint">{{ (i18n or {}).get('psn_pf_one_per_line','一行一条') }}</div>
+    </div>
+    <div class="pf-hd">{{ (i18n or {}).get('psn_pf_g_triggers','情绪触发') }}</div>
+    <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_trig_pos','积极触发') }}</label><textarea id="pe-pf-trig-pos" rows="2"></textarea></div>
+    <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_trig_neg','消极触发') }}</label><textarea id="pe-pf-trig-neg" rows="2"></textarea></div>
+    <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_trig_emp','深度共情') }}</label><textarea id="pe-pf-trig-emp" rows="2"></textarea></div>
+    <div class="pf-hd">{{ (i18n or {}).get('psn_pf_g_tastes','好恶观点') }}</div>
+    <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_likes','喜欢') }} <span class="pf-cnt">{{ (i18n or {}).get('psn_pf_one_per_line','一行一条') }}</span></label><textarea id="pe-pf-likes" rows="3"></textarea></div>
+    <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_dislikes','不喜欢') }} <span class="pf-cnt">{{ (i18n or {}).get('psn_pf_one_per_line','一行一条') }}</span></label><textarea id="pe-pf-dislikes" rows="3"></textarea></div>
+    <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_opinions','观点') }} <span class="pf-cnt">{{ (i18n or {}).get('psn_pf_one_per_line','一行一条') }}</span></label><textarea id="pe-pf-opinions" rows="3"></textarea></div>
+    <div class="pf-hd">{{ (i18n or {}).get('psn_pf_g_boundaries','边界话题') }}</div>
+    <div class="field-row">
+      <label>{{ (i18n or {}).get('psn_pf_avoid','避谈话题') }}</label>
+      <textarea id="pe-pf-avoid" rows="3"></textarea>
+      <div class="pf-hint">{{ (i18n or {}).get('psn_pf_one_per_line','一行一条') }}</div>
+    </div>
+    <div class="pf-hd">{{ (i18n or {}).get('psn_pf_g_appearance','外观锚点') }}</div>
+    <div class="field-row">
+      <label>{{ (i18n or {}).get('psn_pf_appearance','外观描述') }}</label>
+      <textarea id="pe-pf-appearance" rows="3"></textarea>
+      <div class="pf-hint">{{ (i18n or {}).get('psn_pf_appearance_hint','英文书写，供 AI 生图当外观锚点') }}</div>
+    </div>
+    <div class="field-row">
+      <label>{{ (i18n or {}).get('psn_pf_scenes','自拍场景') }}</label>
+      <textarea id="pe-pf-scenes" rows="3"></textarea>
+      <div class="pf-hint">{{ (i18n or {}).get('psn_pf_scenes_hint','一行一条，英文书写') }}</div>
+    </div>
+    <div class="pf-hd">{{ (i18n or {}).get('psn_pf_g_persona_extra','性格补充') }}</div>
+    <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_quirks','癖好') }}</label><input id="pe-pf-quirks" type="text"></div>
+    <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_humor','幽默感') }}</label><input id="pe-pf-humor" type="text"></div>
+    <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_temperament','性情') }}</label><input id="pe-pf-temperament" type="text"></div>
+    <div id="pe-bio-status" class="pf-bio-row"></div>
+    <!-- I4 线：长传记检索自测（I1 契约 /bio-doc/search；未入库/旧后端 404/403 整块隐藏）-->
+    <details id="pe-bio-probe" style="display:none">
+      <summary class="bpr-sum">🔎 {{ (i18n or {}).get('psn_bio_probe_title','检索自测') }}</summary>
+      <div class="bpr-sub">{{ (i18n or {}).get('psn_bio_probe_sub','输入客户可能问的问题，看看会命中哪些资料片段') }}</div>
+      <div class="bpr-chips" id="pe-bio-probe-chips"></div>
+      <div class="bpr-bar">
+        <input id="pe-bio-probe-q" class="bpr-in" type="text" onkeydown="_bioProbeKey(event)" placeholder="{{ (i18n or {}).get('psn_bio_probe_ph','例：你大学在哪读的？') }}">
+        <select id="pe-bio-probe-k" class="bpr-k" title="{{ (i18n or {}).get('psn_bio_probe_topk','返回片段数') }}">
+          <option value="1">1</option>
+          <option value="3" selected>3</option>
+          <option value="5">5</option>
+        </select>
+        <button type="button" class="btn btn-sm btn-primary" id="pe-bio-probe-btn" onclick="_bioProbeRun()">{{ (i18n or {}).get('psn_bio_probe_btn','试检索') }}</button>
+      </div>
+      <div class="bpr-res" id="pe-bio-probe-result"></div>
     </details>
   </div>
   <!-- Pane: Style -->
@@ -1111,6 +1225,28 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       </summary>
       <div class="pe-panel-body" id="pe-diff-body" style="padding:.5rem 0">{{ (i18n or {}).get('psn_expand','点击展开…') }}</div>
     </details>
+    <!-- C2 线：人设一致性考题（配合 E 线 quiz API；未启用/旧后端整块隐藏）-->
+    <div id="pe-quiz-block" style="display:none;margin-top:.42rem;border:1px solid var(--bd);border-radius:10px;padding:.6rem .75rem;background:var(--bg2)">
+      <div style="display:flex;align-items:center;gap:.55rem;flex-wrap:wrap">
+        <span style="font-size:.78rem;font-weight:600;color:var(--t1)">{{ (i18n or {}).get('psn_quiz_title','人设一致性考题') }}</span>
+        <button class="btn btn-sm btn-primary" id="pe-quiz-btn" onclick="_startQuiz()">🧪 {{ (i18n or {}).get('psn_quiz_btn','一致性考题') }}</button>
+      </div>
+      <div style="font-size:.68rem;color:var(--t2);margin-top:.2rem;line-height:1.45">{{ (i18n or {}).get('psn_quiz_sub','用人设资料出题让 AI 作答，自动判卷检验回答是否贴合设定') }}</div>
+      <div id="pe-quiz-stage" style="display:none;font-size:.72rem;color:var(--t1);margin-top:.45rem;min-height:1.1em"></div>
+      <div id="pe-quiz-bar-wrap" style="display:none;height:7px;background:var(--bg1);border:1px solid var(--bd);border-radius:5px;overflow:hidden;margin-top:.3rem">
+        <div id="pe-quiz-bar" style="height:100%;width:0%;background:var(--p);transition:width .4s"></div>
+      </div>
+      <div id="pe-quiz-result" style="margin-top:.5rem"></div>
+      <!-- H4 线：考题历史回看（H3 契约；404/403 整块隐藏）-->
+      <details id="pe-quiz-hist" style="display:none;margin-top:.55rem;border-top:1px solid var(--bd);padding-top:.45rem">
+        <summary style="cursor:pointer;font-size:.74rem;font-weight:600;color:var(--t1);list-style:none">📜 {{ (i18n or {}).get('psn_quiz_hist_title','历史质检') }}</summary>
+        <!-- I4 线：分数趋势（I3 契约 /quiz/trend；接口不可用则整行不显示）-->
+        <div id="pe-quiz-trend" style="display:none;font-size:.68rem;color:var(--t2);margin:.35rem 0 .1rem;letter-spacing:.04em"></div>
+        <div id="pe-quiz-hist-sum" style="font-size:.68rem;color:var(--t2);margin:.35rem 0 .25rem"></div>
+        <div id="pe-quiz-hist-list"></div>
+        <div id="pe-quiz-hist-view" style="margin-top:.45rem"></div>
+      </details>
+    </div>
   </div>
   <!-- Pane: Album / Media（图/视频 + 触发词，客户说到就自动发）-->
   <div class="dpane" id="dpane-album">
@@ -1150,6 +1286,59 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
     .pma-pool-none{background:rgba(148,163,184,.15);color:var(--t2)}
     .pma-cands{margin-top:.3rem;display:flex;gap:.25rem;align-items:center;flex-wrap:wrap}
     .pma-cand-th{width:40px;height:40px;object-fit:cover;border-radius:4px}
+    /* C2 线：档案页签 */
+    .pf-hd{font-size:.72rem;font-weight:600;color:var(--t2);text-transform:uppercase;letter-spacing:.05em;margin:.95rem 0 .55rem;padding-top:.72rem;border-top:1px solid var(--bd)}
+    #dpane-profile .pf-hd:first-child{margin-top:.1rem;padding-top:0;border-top:none}
+    .pf-hint{font-size:.68rem;color:var(--t2);margin-top:.2rem;line-height:1.45}
+    .pf-cnt{font-size:.66rem;color:var(--t2);font-weight:400}
+    .pf-cnt.warn{color:#f59e0b;font-weight:600}
+    .pf-bio-row{font-size:.72rem;color:var(--t2);margin-top:1rem;padding-top:.7rem;border-top:1px solid var(--bd);min-height:1.1em;display:flex;align-items:center;gap:.45rem;flex-wrap:wrap}
+    /* I4 线：长传记检索自测 */
+    #pe-bio-probe{margin-top:.6rem;border:1px solid var(--bd);border-radius:9px;padding:.5rem .6rem;background:var(--bg2)}
+    #pe-bio-probe summary::-webkit-details-marker{display:none}
+    .bpr-sum{cursor:pointer;font-size:.74rem;font-weight:600;color:var(--t1);list-style:none}
+    .bpr-sub{font-size:.66rem;color:var(--t2);margin:.3rem 0 .42rem;line-height:1.45}
+    .bpr-chips{display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.42rem}
+    .bpr-chip{font-size:.64rem;color:var(--t1);background:var(--bg1);border:1px solid var(--bd);border-radius:999px;padding:.16rem .5rem;cursor:pointer;line-height:1.3}
+    .bpr-chip:hover{border-color:var(--p);color:var(--p)}
+    .bpr-bar{display:flex;gap:.35rem;align-items:center;flex-wrap:wrap}
+    .bpr-in{flex:1;min-width:130px;padding:.28rem .45rem;border:1px solid var(--bd);border-radius:6px;background:var(--bg1);color:var(--t1);font-size:.72rem}
+    .bpr-k{padding:.26rem .3rem;border:1px solid var(--bd);border-radius:6px;background:var(--bg1);color:var(--t1);font-size:.7rem}
+    .bpr-res{margin-top:.45rem}
+    .bpr-head{font-size:.66rem;color:var(--t2);margin-bottom:.28rem}
+    .bpr-hit{border:1px solid var(--bd);border-radius:7px;background:var(--bg1);padding:.35rem .45rem;margin:.25rem 0;word-break:break-word}
+    .bpr-hit-hd{display:flex;align-items:center;gap:.4rem;margin-bottom:.18rem}
+    .bpr-idx{font-size:.64rem;color:var(--t2);font-weight:600}
+    .bpr-score{font-size:.62rem;font-weight:700;color:var(--p);background:rgba(99,102,241,.14);border-radius:5px;padding:.03rem .34rem;cursor:help}
+    .bpr-txt{font-size:.7rem;color:var(--t1);line-height:1.6;white-space:pre-wrap}
+    .bpr-mk{background:rgba(250,204,21,.34);color:inherit;border-radius:3px;padding:0 .06rem}
+    .bpr-none{font-size:.7rem;color:var(--t2);padding:.25rem 0;line-height:1.55}
+    .bpr-alias{font-size:.66rem;color:var(--t2);margin-top:.35rem;line-height:1.6;word-break:break-word}
+    .bpr-alias-hit{color:var(--th-ink-green6,#16a34a);font-weight:600}
+    .bpr-block{margin-top:.42rem}
+    .bpr-block summary{cursor:pointer;font-size:.66rem;color:var(--t2);list-style:none}
+    .bpr-block summary::-webkit-details-marker{display:none}
+    .bpr-pre{margin:.3rem 0 0;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.64rem;line-height:1.55;color:var(--t2);background:var(--bg1);border:1px solid var(--bd);border-radius:6px;padding:.42rem;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+    /* C2 线：一致性考题表格 */
+    .pq-table{width:100%;border-collapse:collapse;font-size:.7rem}
+    .pq-table th{text-align:left;padding:.24rem .35rem;color:var(--t2);font-weight:600;border-bottom:1px solid var(--bd);position:sticky;top:0;background:var(--card)}
+    .pq-table td{padding:.26rem .35rem;border-bottom:1px solid var(--bd);vertical-align:top;color:var(--t1);word-break:break-word}
+    .pq-row-fail{background:rgba(239,68,68,.07)}
+    /* C2 线：向导溯源覆盖层 */
+    .pdi-src-para{padding:.4rem .5rem;border:1px solid var(--bd);border-radius:7px;background:var(--bg2);margin-bottom:.4rem;font-size:.72rem;line-height:1.55;color:var(--t1);white-space:pre-wrap;word-break:break-word}
+    .pdi-src-no{color:var(--p);font-weight:700;margin-right:.25rem}
+    .pdi-src-link{font-size:.66rem;color:var(--p);cursor:pointer;text-decoration:none;white-space:nowrap;margin-left:.3rem}
+    .pdi-src-link:hover{text-decoration:underline}
+    .pdi-mem-list{margin:.25rem 0 0;padding-left:1.2rem;font-size:.72rem;color:var(--t1);line-height:1.55}
+    .pdi-mem-list li{margin:.12rem 0}
+    /* H4 线：考题历史行 */
+    #pe-quiz-hist summary::-webkit-details-marker{display:none}
+    .pq-hist-row{display:flex;align-items:center;gap:.55rem;width:100%;text-align:left;padding:.32rem .4rem;margin:.15rem 0;border:1px solid var(--bd);border-radius:7px;background:var(--bg1);cursor:pointer;font-size:.7rem;color:var(--t1)}
+    .pq-hist-row:hover{border-color:var(--p);background:var(--bg2)}
+    .pq-hist-score{font-weight:700;color:var(--p);min-width:2.2em}
+    .pq-hist-ts{flex:1;color:var(--t2)}
+    .pq-hist-pt{color:var(--t2);white-space:nowrap}
+    .pq-hist-judged{color:var(--th-ink-amber6,#d97706);white-space:nowrap;font-size:.66rem}
   </style>
   <!-- Drawer footer -->
   <div class="drawer-foot">
@@ -1234,6 +1423,74 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       <button class="btn btn-sm btn-danger" id="pp-modal-clear" onclick="_ppPick('')">{{ (i18n or {}).get('psn_clear_binding','清除绑定（回默认人设）') }}</button>
       <button class="btn btn-sm" onclick="closePersonaPicker()">{{ (i18n or {}).get('psn_cancel','取消') }}</button>
     </div>
+  </div>
+</div>
+
+<!-- ══ C 线：文档导入向导（PSDocImport，配合 B 线 import-doc API）═══════════ -->
+<div id="pdi-ov" class="pp-modal-ov" onclick="_pdiOvClick(event)">
+  <div class="pp-modal" style="width:min(640px,94vw)">
+    <div class="pp-modal-hd">
+      <div>
+        <div class="pp-modal-ttl">&#128196; {{ (i18n or {}).get('psn_imp_title','从文档导入人设') }}</div>
+        <div class="pp-modal-sub" id="pdi-step-sub"></div>
+      </div>
+      <button class="pp-modal-x" onclick="closeDocImport()" title="{{ (i18n or {}).get('psn_close','关闭') }}">✕</button>
+    </div>
+    <div style="padding:.85rem 1.05rem;overflow-y:auto;flex:1;min-height:0">
+      <div id="pdi-step1">
+        <div class="field-row">
+          <label>{{ (i18n or {}).get('psn_imp_paste_lbl','粘贴文档文本') }}</label>
+          <textarea id="pdi-text" rows="9" placeholder="{{ (i18n or {}).get('psn_imp_paste_ph','把人设文档全文粘贴到这里…') }}"></textarea>
+        </div>
+        <div class="field-row" style="margin-top:.4rem">
+          <label>{{ (i18n or {}).get('psn_imp_or_file','或选择文件（.docx / .txt）') }}</label>
+          <input type="file" id="pdi-file" accept=".docx,.txt" style="font-size:.74rem;color:var(--t2)">
+        </div>
+        <div id="pdi-parse-info" style="display:none;margin-top:.5rem;font-size:.74rem;color:var(--t2);background:var(--bg2);border:1px solid var(--bd);border-radius:8px;padding:.45rem .6rem"></div>
+        <div style="margin-top:.65rem;display:flex;gap:.4rem;align-items:center">
+          <button class="btn btn-sm btn-primary" id="pdi-parse-btn" onclick="_pdiParse()">{{ (i18n or {}).get('psn_imp_parse','解析') }}</button>
+          <span id="pdi-parse-spin" style="display:none;font-size:.72rem;color:var(--t2)">…</span>
+        </div>
+      </div>
+      <div id="pdi-step2" style="display:none">
+        <div id="pdi-stage" style="font-size:.78rem;color:var(--t1);min-height:1.2em"></div>
+        <div style="height:8px;background:var(--bg2);border:1px solid var(--bd);border-radius:5px;overflow:hidden;margin:.55rem 0">
+          <div id="pdi-progress" style="height:100%;width:0%;background:var(--p);transition:width .4s"></div>
+        </div>
+        <div id="pdi-err" style="display:none;font-size:.74rem;color:var(--th-ink-red5,#ef4444);margin:.4rem 0"></div>
+        <div style="margin-top:.65rem;display:flex;gap:.4rem">
+          <button class="btn btn-sm btn-primary" id="pdi-extract-btn" onclick="_pdiExtract()">{{ (i18n or {}).get('psn_imp_extract','开始 AI 提取') }}</button>
+          <button class="btn btn-sm" id="pdi-back1-btn" onclick="_pdiGoStep(1)">{{ (i18n or {}).get('psn_imp_back','返回上一步') }}</button>
+        </div>
+      </div>
+      <div id="pdi-step3" style="display:none">
+        <div id="pdi-src-hint" style="display:none;font-size:.7rem;color:var(--t2);margin-bottom:.5rem"></div>
+        <div style="display:flex;align-items:center;gap:1rem">
+          <div id="pdi-score" style="font-size:2.2rem;font-weight:800;line-height:1"></div>
+          <div style="flex:1;height:9px;background:var(--bg2);border:1px solid var(--bd);border-radius:5px;overflow:hidden">
+            <div id="pdi-score-bar" style="height:100%;width:0%;background:var(--green);transition:width .4s"></div>
+          </div>
+        </div>
+        <div id="pdi-coverage" style="display:flex;flex-wrap:wrap;gap:.3rem .8rem;margin-top:.6rem;font-size:.74rem;color:var(--t2)"></div>
+        <div id="pdi-warnings" style="display:none;margin-top:.55rem;font-size:.7rem;color:var(--th-ink-amber6,#d97706);background:var(--th-bg-amber08,rgba(245,158,11,.08));border:1px solid var(--th-bd-amber25,rgba(245,158,11,.25));border-radius:8px;padding:.4rem .6rem"></div>
+        <div id="pdi-summary" style="margin-top:.55rem;font-size:.74rem;color:var(--t2);background:var(--bg2);border:1px solid var(--bd);border-radius:8px;padding:.45rem .6rem"></div>
+        <div style="margin-top:.7rem;display:flex;gap:.4rem;flex-wrap:wrap">
+          <button class="btn btn-sm btn-primary" onclick="_pdiApply()">{{ (i18n or {}).get('psn_imp_apply','填入编辑器校对') }}</button>
+          <button class="btn btn-sm" onclick="_pdiGoStep(1)">{{ (i18n or {}).get('psn_imp_back','返回上一步') }}</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ C2 线：向导溯源覆盖层（点「📎 原文」看字段的段落依据）══════════════════ -->
+<div id="pdi-src-ov" class="pp-modal-ov" style="z-index:9100" onclick="_pdiSrcOvClick(event)">
+  <div class="pp-modal" style="width:min(560px,92vw);max-height:70vh">
+    <div class="pp-modal-hd">
+      <div class="pp-modal-ttl" id="pdi-src-ttl" style="font-size:.86rem">{{ (i18n or {}).get('psn_src_ov_title','原文依据') }}</div>
+      <button class="pp-modal-x" onclick="_pdiSrcClose()" title="{{ (i18n or {}).get('psn_close','关闭') }}">✕</button>
+    </div>
+    <div id="pdi-src-body" style="padding:.75rem 1rem;overflow-y:auto;flex:1;min-height:0"></div>
   </div>
 </div>
 
@@ -1615,7 +1872,9 @@ async function loadLegacyBindings(manual) {
     _legacyEnabled = !!d.enabled;
     var items = d.items || [];
     var cnt = document.getElementById('legacy-count');
-    if (cnt) cnt.textContent = String(items.length);
+    // 徽标按「债」口径（RPA 托管键列出但不算债）
+    if (cnt) cnt.textContent = String(
+      (typeof d.debt_total === 'number') ? d.debt_total : items.length);
     if (!items.length) {
       card.style.display = 'none';
       list.innerHTML = '';
@@ -1636,6 +1895,7 @@ function _legacyRowHtml(it) {
     return '<span style="font-size:.62rem;font-weight:700;padding:.05rem .35rem;border-radius:4px;margin-left:.35rem;background:' + bg + ';color:' + fg + '">' + _escHtml(txt) + '</span>';
   };
   var tags = '';
+  if (it.rpa_managed) tags += tag(window.T('psn_legacy_rpa'), 'rgba(59,130,246,.12)', '#2563eb');
   if (it.stale) tags += tag(window.T('psn_legacy_stale'), 'rgba(239,68,68,.1)', '#dc2626');
   if (convs.length && !live) tags += tag(window.T('psn_legacy_suppressed'), 'rgba(148,163,184,.15)', 'var(--t3)');
   else if (live) tags += tag(window.T('psn_legacy_live') + ' ' + live, 'rgba(245,158,11,.12)', '#b45309');
@@ -1648,9 +1908,12 @@ function _legacyRowHtml(it) {
       + '：' + preview + (convs.length > 3 ? ' …' : '')
     : window.T('psn_legacy_no_conv');
   var upWhy = '';
-  if (it.stale) upWhy = window.T('psn_legacy_up_stale');
+  if (it.rpa_managed) upWhy = window.T('psn_legacy_rpa_hint');
+  else if (it.stale) upWhy = window.T('psn_legacy_up_stale');
   else if (!convs.length) upWhy = window.T('psn_legacy_up_noconv');
   else if (!_legacyEnabled) upWhy = window.T('psn_legacy_up_off');
+  // RPA 托管键两个按钮都禁用（SSOT 在 RPA 的 SQLite，这里删了重启会回灌）
+  var rmWhy = it.rpa_managed ? window.T('psn_legacy_rpa_hint') : '';
   var kdisp = it.key.length > 30 ? it.key.slice(0, 30) + '…' : it.key;
   return '<div class="bind-item" data-lgkey="' + _escAttr(it.key) + '" data-lgconvs="' + convs.length + '">'
     + '<div style="flex:1;min-width:0">'
@@ -1658,7 +1921,7 @@ function _legacyRowHtml(it) {
     + '<div style="font-size:.68rem;color:var(--t3);margin-top:.1rem">' + sub + '</div>'
     + '</div>'
     + '<button class="btn btn-sm" data-lgact="upgrade" style="font-size:.7rem;padding:.14rem .42rem"' + (upWhy ? ' disabled title="' + _escAttr(upWhy) + '"' : '') + '>' + window.T('psn_legacy_upgrade') + '</button>'
-    + '<button class="btn btn-sm btn-danger" data-lgact="remove" style="font-size:.7rem;padding:.14rem .42rem">' + window.T('psn_legacy_remove') + '</button>'
+    + '<button class="btn btn-sm btn-danger" data-lgact="remove" style="font-size:.7rem;padding:.14rem .42rem"' + (rmWhy ? ' disabled title="' + _escAttr(rmWhy) + '"' : '') + '>' + window.T('psn_legacy_remove') + '</button>'
     + '</div>';
 }
 
@@ -1696,10 +1959,65 @@ async function _legacyDo(key, action, btn) {
   } catch(e) { _toast(window.T('psn_legacy_fail') + e, 'err'); btn.disabled = false; }
 }
 
+// ── 一键安全收官：dry_run 出计划 → 确认 → 真跑（行为保真，不改任何会话生效人设）──
+function _legacyReasonLabel(reason) {
+  var map = {
+    stale: 'psn_legacy_r_stale', suppressed: 'psn_legacy_r_suppressed',
+    live: 'psn_legacy_r_live', disabled: 'psn_legacy_r_disabled',
+    no_conversations: 'psn_legacy_r_noconv',
+    inline_unresolvable: 'psn_legacy_r_inline',
+    rpa_managed: 'psn_legacy_r_rpa',
+  };
+  return window.T(map[reason] || 'psn_legacy_r_noconv');
+}
+
+async function _legacyAutoOpen() {
+  var panel = document.getElementById('legacy-auto-plan');
+  if (!panel) return;
+  if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
+  try {
+    const r = await apiFetch('/api/persona/legacy-bindings/cleanup-all', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dry_run:true})}, {timeoutMs: 60000});
+    const d = await r.json().catch(function(){ return {}; });
+    if (!r.ok || !d.ok) { _toast(window.T('psn_legacy_fail') + (d.detail || ('HTTP ' + r.status)), 'err'); return; }
+    var s = d.summary || {};
+    if (!d.total) { _toast(window.T('psn_legacy_none'), 'ok'); return; }
+    var actionable = (s.upgrade || 0) + (s.remove || 0);
+    var head = window.Tf('psn_legacy_auto_plan', {u: s.upgrade || 0, r: s.remove || 0, s: s.skip || 0, c: s.conv_bindings || 0});
+    var deciTag = {upgrade: ['↗', '#b45309'], remove: ['✕', '#dc2626'], skip: ['⏸', 'var(--t3)']};
+    var lines = (d.results || []).map(function(it) {
+      var t = deciTag[it.decision] || deciTag.skip;
+      var kdisp = it.key.length > 26 ? it.key.slice(0, 26) + '…' : it.key;
+      return '<div style="font-size:.68rem;margin-top:.14rem;color:var(--t2)"><span style="font-weight:800;color:' + t[1] + '">' + t[0] + '</span> <code title="' + _escAttr(it.key) + '">' + _escHtml(kdisp) + '</code> · ' + _escHtml(_legacyReasonLabel(it.reason)) + (it.decision === 'upgrade' ? '（' + it.live + '）' : '') + '</div>';
+    }).join('');
+    panel.innerHTML = '<div style="font-size:.74rem;font-weight:700">' + _escHtml(head) + '</div>' + lines
+      + '<div style="margin-top:.45rem;display:flex;gap:.4rem">'
+      + (actionable ? '<button class="btn btn-primary btn-sm" style="font-size:.7rem;padding:.14rem .5rem" data-lgauto="run">' + window.T('psn_legacy_auto_run') + '</button>' : '<span style="font-size:.68rem;color:var(--t3)">' + window.T('psn_legacy_auto_none') + '</span>')
+      + '<button class="btn btn-sm" style="font-size:.7rem;padding:.14rem .5rem" data-lgauto="cancel">' + window.T('psn_js_354') + '</button></div>';
+    panel.style.display = '';
+  } catch(e) { _toast(window.T('psn_legacy_fail') + e, 'err'); }
+}
+
+async function _legacyAutoRun(btn) {
+  btn.disabled = true;
+  try {
+    const r = await apiFetch('/api/persona/legacy-bindings/cleanup-all', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dry_run:false})}, {timeoutMs: 120000});
+    const d = await r.json().catch(function(){ return {}; });
+    if (r.ok && d.ok) {
+      var s = d.summary || {};
+      _toast(window.Tf('psn_legacy_auto_ok', {u: s.upgrade || 0, r: s.remove || 0, s: s.skip || 0}), 'ok');
+      var panel = document.getElementById('legacy-auto-plan');
+      if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
+      _reloadBindingsList(); refreshStatus();
+    } else {
+      _toast(window.T('psn_legacy_fail') + (d.detail || ('HTTP ' + r.status)), 'err');
+      btn.disabled = false;
+    }
+  } catch(e) { _toast(window.T('psn_legacy_fail') + e, 'err'); btn.disabled = false; }
+}
+
 (function _wireLegacyPanel() {
   var list = document.getElementById('legacy-list');
-  if (!list) return;
-  list.addEventListener('click', function(ev) {
+  if (list) list.addEventListener('click', function(ev) {
     var actBtn = ev.target.closest('[data-lgact]');
     if (actBtn) {
       var row = actBtn.closest('.bind-item');
@@ -1713,6 +2031,13 @@ async function _legacyDo(key, action, btn) {
       if (doBtn.dataset.lgdo === 'cancel') { conf.remove(); return; }
       _legacyDo(conf.dataset.lgkey || '', doBtn.dataset.lgdo, doBtn);
     }
+  });
+  var plan = document.getElementById('legacy-auto-plan');
+  if (plan) plan.addEventListener('click', function(ev) {
+    var b = ev.target.closest('[data-lgauto]');
+    if (!b) return;
+    if (b.dataset.lgauto === 'cancel') { plan.style.display = 'none'; plan.innerHTML = ''; return; }
+    if (b.dataset.lgauto === 'run') _legacyAutoRun(b);
   });
 })();
 
@@ -2551,15 +2876,96 @@ function _flattenPersonalityObj(obj) {
   if (obj.tone) parts.push(window.T('psn_js_133') + obj.tone);
   return parts.join('\n') || JSON.stringify(obj, null, 2);
 }
+// ── C 线：深合并（保住富字段）。两边同键均为纯对象（非 Array）→ 递归；否则 patch 覆盖。
+//    返回新对象，不改入参。
+function _deepMergePersona(base, patch) {
+  function isPlainObj(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
+  if (!isPlainObj(base) || !isPlainObj(patch)) {
+    return isPlainObj(patch) ? JSON.parse(JSON.stringify(patch)) : patch;
+  }
+  var out = {};
+  Object.keys(base).forEach(function(k){ out[k] = base[k]; });
+  Object.keys(patch).forEach(function(k){
+    if (isPlainObj(out[k]) && isPlainObj(patch[k])) out[k] = _deepMergePersona(out[k], patch[k]);
+    else out[k] = patch[k];
+  });
+  return out;
+}
+
+// ── C 线：结构化 personality 只读区（traits chips + quirks/humor/temperament 行）
+function _renderPersonalityExtras(persObj) {
+  var box = document.getElementById('pe-personality-extras');
+  if (!box) return;
+  box.style.display = 'none'; box.innerHTML = '';
+  if (!persObj || typeof persObj !== 'object' || Array.isArray(persObj)) return;
+  var html = '';
+  if (Array.isArray(persObj.traits) && persObj.traits.length) {
+    html += '<div class="pe-px-row"><span class="pe-px-lbl">' + window.T('psn_px_traits') + '</span>'
+      + persObj.traits.map(function(t){ return '<span class="pe-px-chip">' + _escHtml(String(t)) + '</span>'; }).join('')
+      + '</div>';
+  }
+  [['quirks','psn_px_quirks'],['humor','psn_px_humor'],['temperament','psn_px_temperament']].forEach(function(pair){
+    var v = persObj[pair[0]];
+    if (v == null || v === '' || (Array.isArray(v) && !v.length)) return;
+    var txt = Array.isArray(v) ? v.map(String).join(', ') : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+    html += '<div class="pe-px-row"><span class="pe-px-lbl">' + window.T(pair[1]) + '</span>' + _escHtml(txt) + '</div>';
+  });
+  if (html) { box.innerHTML = html; box.style.display = 'block'; }
+}
+
+// ── C 线：高级字段只读面板 — _loadedProfile 里「表单未管理」的字段可见化 ─────────
+var _ADV_MANAGED_TOP = ['id','name','role','tags','personality','speaking','identity','voice_profile',
+  'age','gender','names','context','tastes','boundaries','appearance','selfie_scenes'];
+var _ADV_MANAGED_SUB = {
+  personality: ['style','quirks','humor','temperament'],
+  speaking: ['reply_length','emoji_level','forbidden_phrases','openers'],
+  identity: ['deny_ai','claim_human'],
+  voice_profile: ['backend','voice'],
+  names: ['full_western','english','nickname','usage_notes'],
+  context: ['hobbies','specific_memories','emotional_triggers'],
+  tastes: ['likes','dislikes','opinions'],
+  boundaries: ['topics_to_avoid'],
+};
+function _refreshAdvPanel() {
+  var panel = document.getElementById('pe-adv-panel');
+  if (!panel) return;
+  var body = document.getElementById('pe-adv-body');
+  var badge = document.getElementById('pe-adv-badge');
+  var extra = {};
+  var src = _loadedProfile;
+  if (src && typeof src === 'object' && !Array.isArray(src)) {
+    Object.keys(src).forEach(function(k){
+      if (_ADV_MANAGED_TOP.indexOf(k) === -1) { extra[k] = src[k]; return; }
+      var managedSub = _ADV_MANAGED_SUB[k];
+      var v = src[k];
+      if (!managedSub || !v || typeof v !== 'object' || Array.isArray(v)) return;
+      var sub = {};
+      Object.keys(v).forEach(function(sk){ if (managedSub.indexOf(sk) === -1) sub[sk] = v[sk]; });
+      if (Object.keys(sub).length) extra[k] = sub;
+    });
+  }
+  var n = Object.keys(extra).length;
+  if (!n) {
+    panel.style.display = 'none'; panel.open = false;
+    if (body) body.textContent = ''; if (badge) badge.textContent = '';
+    return;
+  }
+  if (badge) badge.textContent = String(n);
+  if (body) { try { body.textContent = JSON.stringify(extra, null, 2); } catch (e) { body.textContent = String(e); } }
+  panel.style.display = '';
+}
+
 function _fillDrawerFields(p) {
   var spk = p.speaking || {};
   var ident = p.identity || {};
   var vp = p.voice_profile || {};
   document.getElementById('pe-name').value = p.name || '';
   document.getElementById('pe-role').value = p.role || '';
-  document.getElementById('pe-personality').value = typeof p.personality === 'object'
-    ? _flattenPersonalityObj(p.personality) : _normalizePersonality(p.personality || '');
-  var _pn = document.getElementById('pe-pers-notice'); if (_pn) { _pn.style.display = (p.personality && String(p.personality).includes("'traits'")) ? 'block' : 'none'; }
+  var _persObj = (p.personality && typeof p.personality === 'object' && !Array.isArray(p.personality)) ? p.personality : null;
+  document.getElementById('pe-personality').value = _persObj
+    ? String(_persObj.style || '') : _normalizePersonality(p.personality || '');
+  var _pn = document.getElementById('pe-pers-notice'); if (_pn) { _pn.style.display = _persObj ? 'block' : 'none'; }
+  _renderPersonalityExtras(_persObj);
   document.getElementById('pe-tags').value = (p.tags || []).join(', ');
   _setOptCard('rl-cards', spk.reply_length || 'concise');
   document.getElementById('pe-reply-length').value = spk.reply_length || 'concise';
@@ -2571,7 +2977,172 @@ function _fillDrawerFields(p) {
   document.getElementById('pe-claim-human').checked = !!(ident.claim_human || p.claim_human);
   document.getElementById('pe-vp-backend').value = vp.backend || '';
   document.getElementById('pe-vp-voice').value = vp.voice || '';
+  _fillProfileTabFields(p, _persObj);
   _loadVoiceQuality();
+}
+
+// ── C2 线：「档案」页签 —— 填充 ─────────────────────────────────────────────────
+function _pfScalar(v) {
+  if (v == null || v === '') return '';
+  if (Array.isArray(v)) return v.map(String).join(', ');
+  if (typeof v === 'object') { try { return JSON.stringify(v); } catch (e) { return String(v); } }
+  return String(v);
+}
+function _pfSetVal(id, v) {
+  var el = document.getElementById(id);
+  if (el) el.value = _pfScalar(v);
+}
+function _pfSetLines(id, v) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.value = Array.isArray(v) ? v.map(String).join('\n') : _pfScalar(v);
+}
+// gender 下拉：非标准值（自由文本）动态补 option，防「显示成未设置 → 保存误清」
+function _pfSetGender(gv) {
+  var el = document.getElementById('pe-pf-gender');
+  if (!el) return;
+  gv = (gv == null) ? '' : String(gv);
+  Array.prototype.slice.call(el.querySelectorAll('option[data-pf-dyn]')).forEach(function(o){
+    if (o.value !== gv) o.remove();
+  });
+  if (gv && !Array.prototype.some.call(el.options, function(o){ return o.value === gv; })) {
+    var opt = document.createElement('option');
+    opt.value = gv; opt.textContent = gv; opt.setAttribute('data-pf-dyn', '1');
+    el.appendChild(opt);
+  }
+  el.value = gv;
+}
+function _pfUpdateCounts() {
+  var bg = document.getElementById('pe-pf-background');
+  var bc = document.getElementById('pe-pf-bg-count');
+  if (bg && bc) {
+    var n = (bg.value || '').trim().length;
+    bc.textContent = n ? window.Tf('psn_pf_bg_count', {n: String(n)}) : '';
+    bc.classList.toggle('warn', n > 1500);
+  }
+  var mem = document.getElementById('pe-pf-memories');
+  var mc = document.getElementById('pe-pf-mem-count');
+  if (mem && mc) {
+    var cnt = (mem.value || '').split('\n').map(function(s){ return s.trim(); }).filter(Boolean).length;
+    mc.textContent = cnt ? window.Tf('psn_pf_mem_count', {n: String(cnt)}) : '';
+    mc.classList.toggle('warn', cnt > 16);
+  }
+}
+function _fillProfileTabFields(p, persObj) {
+  var ctx = (p.context && typeof p.context === 'object' && !Array.isArray(p.context)) ? p.context : {};
+  var trig = (ctx.emotional_triggers && typeof ctx.emotional_triggers === 'object' && !Array.isArray(ctx.emotional_triggers)) ? ctx.emotional_triggers : {};
+  var tst = (p.tastes && typeof p.tastes === 'object' && !Array.isArray(p.tastes)) ? p.tastes : {};
+  var bnd = (p.boundaries && typeof p.boundaries === 'object' && !Array.isArray(p.boundaries)) ? p.boundaries : {};
+  var nms = (p.names && typeof p.names === 'object' && !Array.isArray(p.names)) ? p.names : {};
+  _pfSetVal('pe-pf-age', p.age == null ? '' : p.age);
+  _pfSetGender(p.gender || '');
+  _pfSetVal('pe-pf-name-western', nms.full_western);
+  _pfSetVal('pe-pf-name-english', nms.english);
+  _pfSetVal('pe-pf-name-nickname', nms.nickname);
+  _pfSetVal('pe-pf-name-usage-notes', nms.usage_notes);
+  _pfSetVal('pe-pf-background', p.background);
+  _pfSetLines('pe-pf-memories', ctx.specific_memories);
+  _pfSetLines('pe-pf-hobbies', ctx.hobbies);
+  _pfSetVal('pe-pf-trig-pos', trig.positive);
+  _pfSetVal('pe-pf-trig-neg', trig.negative);
+  _pfSetVal('pe-pf-trig-emp', trig.deep_empathy);
+  _pfSetLines('pe-pf-likes', tst.likes);
+  _pfSetLines('pe-pf-dislikes', tst.dislikes);
+  _pfSetLines('pe-pf-opinions', tst.opinions);
+  _pfSetLines('pe-pf-avoid', bnd.topics_to_avoid);
+  _pfSetVal('pe-pf-appearance', p.appearance);
+  _pfSetLines('pe-pf-scenes', p.selfie_scenes);
+  _pfSetVal('pe-pf-quirks', persObj ? persObj.quirks : '');
+  _pfSetVal('pe-pf-humor', persObj ? persObj.humor : '');
+  _pfSetVal('pe-pf-temperament', persObj ? persObj.temperament : '');
+  _pfUpdateCounts();
+}
+
+// ── C2 线：「档案」页签 —— 收集（包含规则：编辑器非空 或 原路径非空 才出键；
+//    清空动作能真正清掉，又不会给从没有该字段的人设塞空键）──────────────────────
+function _pfNonEmpty(v) {
+  if (v == null) return false;
+  if (typeof v === 'string') return v.trim() !== '';
+  if (Array.isArray(v)) return v.length > 0;
+  if (typeof v === 'object') return Object.keys(v).length > 0;
+  return true;   // number / bool
+}
+function _pfOrig() {
+  var cur = _loadedProfile;
+  for (var i = 0; i < arguments.length; i++) {
+    if (!cur || typeof cur !== 'object' || Array.isArray(cur)) return undefined;
+    cur = cur[arguments[i]];
+  }
+  return cur;
+}
+function _pfStr(id) {
+  var el = document.getElementById(id);
+  return ((el && el.value) || '').trim();
+}
+function _pfLines(id) {
+  var el = document.getElementById(id);
+  return ((el && el.value) || '').split('\n').map(function(s){ return s.trim(); }).filter(Boolean);
+}
+function _collectProfileTabPatch() {
+  var patch = {};
+  // age：数字化；空/非法 → 不出键（规格：空→不含）
+  var ageRaw = _pfStr('pe-pf-age');
+  if (ageRaw !== '') {
+    var ageN = parseInt(ageRaw, 10);
+    if (!isNaN(ageN)) patch.age = Math.max(0, Math.min(120, ageN));
+  }
+  // gender：空 → 不含（除非原有，则出空串真正清掉）
+  var g = _pfStr('pe-pf-gender');
+  if (g || _pfNonEmpty(_pfOrig('gender'))) patch.gender = g;
+  // names：任一子键满足包含规则才带 names；带时四子键按各自规则
+  var namesOut = {};
+  [['pe-pf-name-western','full_western'],['pe-pf-name-english','english'],
+   ['pe-pf-name-nickname','nickname'],['pe-pf-name-usage-notes','usage_notes']].forEach(function(pair){
+    var v = _pfStr(pair[0]);
+    if (v || _pfNonEmpty(_pfOrig('names', pair[1]))) namesOut[pair[1]] = v;
+  });
+  if (Object.keys(namesOut).length) patch.names = namesOut;
+  // 顶层字符串
+  var bg = _pfStr('pe-pf-background');
+  if (bg || _pfNonEmpty(_pfOrig('background'))) patch.background = bg;
+  var ap = _pfStr('pe-pf-appearance');
+  if (ap || _pfNonEmpty(_pfOrig('appearance'))) patch.appearance = ap;
+  // 顶层列表
+  var scenes = _pfLines('pe-pf-scenes');
+  if (scenes.length || _pfNonEmpty(_pfOrig('selfie_scenes'))) patch.selfie_scenes = scenes;
+  // context 子树（只管 hobbies / specific_memories / emotional_triggers；其余子键靠深合并保留）
+  var ctxOut = {};
+  var hob = _pfLines('pe-pf-hobbies');
+  if (hob.length || _pfNonEmpty(_pfOrig('context', 'hobbies'))) ctxOut.hobbies = hob;
+  var mems = _pfLines('pe-pf-memories');
+  if (mems.length || _pfNonEmpty(_pfOrig('context', 'specific_memories'))) ctxOut.specific_memories = mems;
+  var trigOut = {};
+  [['pe-pf-trig-pos','positive'],['pe-pf-trig-neg','negative'],['pe-pf-trig-emp','deep_empathy']].forEach(function(pair){
+    var v = _pfStr(pair[0]);
+    if (v || _pfNonEmpty(_pfOrig('context', 'emotional_triggers', pair[1]))) trigOut[pair[1]] = v;
+  });
+  if (Object.keys(trigOut).length) ctxOut.emotional_triggers = trigOut;
+  if (Object.keys(ctxOut).length) patch.context = ctxOut;
+  // tastes 子树
+  var tstOut = {};
+  [['pe-pf-likes','likes'],['pe-pf-dislikes','dislikes'],['pe-pf-opinions','opinions']].forEach(function(pair){
+    var v = _pfLines(pair[0]);
+    if (v.length || _pfNonEmpty(_pfOrig('tastes', pair[1]))) tstOut[pair[1]] = v;
+  });
+  if (Object.keys(tstOut).length) patch.tastes = tstOut;
+  // boundaries 子树
+  var avoid = _pfLines('pe-pf-avoid');
+  if (avoid.length || _pfNonEmpty(_pfOrig('boundaries', 'topics_to_avoid'))) patch.boundaries = {topics_to_avoid: avoid};
+  // personality 三补充：由 saveProfile 做对象/字符串形态特殊融合
+  var persOut = {};
+  [['pe-pf-quirks','quirks'],['pe-pf-humor','humor'],['pe-pf-temperament','temperament']].forEach(function(pair){
+    var v = _pfStr(pair[0]);
+    var orig = _pfOrig('personality');
+    var origSub = (orig && typeof orig === 'object' && !Array.isArray(orig)) ? orig[pair[1]] : undefined;
+    if (v || _pfNonEmpty(origSub)) persOut[pair[1]] = v;
+  });
+  if (Object.keys(persOut).length) patch.personality = persOut;
+  return patch;
 }
 
 // ── 音色体检（只读）：/api/voice/avatar-status 的 voice_quality（夜间探针最新一行）
@@ -2605,6 +3176,7 @@ function openNewProfile() {
   if (idEl) { idEl.value = ''; idEl.readOnly = false; }
   _fillDrawerFields({});
   _loadedProfile = null;
+  _refreshAdvPanel();
   document.getElementById('pe-delete-btn').style.display = 'none';
   document.getElementById('pe-undo-btn').style.display = 'none';
   _toggleP1DrawerBtns(false);
@@ -2616,6 +3188,8 @@ function openNewProfile() {
   var b = document.getElementById('pe-canonical-banner');
   if (b) { b.style.display = 'none'; b.innerHTML = ''; }
   _resetEditorExtras();
+  _resetQuiz();        // C2 线：新建态无 _editingProfileId → 考题区隐藏
+  _loadBioStatus();    // C2 线：新建态清空长传记状态行
   _openDrawer(window.T('psn_js_134'));
   _checkDraft();
 }
@@ -2632,6 +3206,7 @@ async function editProfile(pid) {
     if (idEl) { idEl.value = pid; idEl.readOnly = true; }
     _fillDrawerFields(p);
     _loadedProfile = JSON.parse(JSON.stringify(p));
+    _refreshAdvPanel();
     _updateCompletionWizard(p);
     // P16-2: push old profile to drawer history
     if (!_drawerHistNaving && _prevPid && _prevPid !== pid) {
@@ -2646,6 +3221,9 @@ async function editProfile(pid) {
     _toggleP1DrawerBtns(true);
     document.getElementById('pe-status').textContent = '';
     _resetEditorExtras();
+    _resetQuiz();        // C2 线：清上一个人设的考题结果/轮询，按开关显隐区块
+    if (_quizEnabled) _quizLoadHistory();  // H4 线：预览页签考题历史
+    _loadBioStatus();    // C2 线：异步拉长传记入库状态（旧后端 404 = 未入库）
     _openDrawer(p.name || pid);
     history.replaceState(null, '', '#profile=' + encodeURIComponent(pid));
     _checkUndoAvailable(pid);
@@ -2656,7 +3234,11 @@ async function editProfile(pid) {
 
 function closeProfileEditor() {
   _drawerHistory = []; _drawerHistNaving = false;
-  if (_closeDrawer()) { _editingProfileId = null; if (window.location.hash.startsWith('#profile=')) history.replaceState(null, '', location.pathname + location.search); }
+  if (_closeDrawer()) {
+    _editingProfileId = null;
+    _quizStopPoll();   // C2 线：关抽屉终止考题轮询
+    if (window.location.hash.startsWith('#profile=')) history.replaceState(null, '', location.pathname + location.search);
+  }
 }
 
 // ── ID conflict detection ─────────────────────────────────────────────────────
@@ -2702,27 +3284,46 @@ async function saveProfile() {
   var tags = (document.getElementById('pe-tags').value || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
   var fps = (document.getElementById('pe-forbidden-phrases').value || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
   var openers = (document.getElementById('pe-openers').value || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
-  var payload = {
-    persona: {
-      name: nameVal.trim(),
-      role: document.getElementById('pe-role').value.trim(),
-      personality: document.getElementById('pe-personality').value.trim(),
-      tags: tags,
-      speaking: {
-        reply_length: document.getElementById('pe-reply-length').value,
-        emoji_level: document.getElementById('pe-emoji-level').value,
-        forbidden_phrases: fps,
-        openers: openers,
-      },
-      identity: {
-        deny_ai: document.getElementById('pe-deny-ai').checked,
-        claim_human: document.getElementById('pe-claim-human').checked,
-      },
-      voice_profile: {
-        backend: document.getElementById('pe-vp-backend').value,
-        voice: document.getElementById('pe-vp-voice').value.trim(),
-      },
+  // C 线：表单只产出 patch；有 _loadedProfile（富字段基底）时 client 侧深合并出完整对象，
+  // 请求体再带 merge:true 让新后端二次兜底（旧后端忽略该键也安全——对象已合并完整）。
+  var _persVal = document.getElementById('pe-personality').value.trim();
+  var patch = {
+    name: nameVal.trim(),
+    role: document.getElementById('pe-role').value.trim(),
+    personality: (_loadedProfile && _loadedProfile.personality && typeof _loadedProfile.personality === 'object' && !Array.isArray(_loadedProfile.personality))
+      ? { style: _persVal } : _persVal,
+    tags: tags,
+    speaking: {
+      reply_length: document.getElementById('pe-reply-length').value,
+      emoji_level: document.getElementById('pe-emoji-level').value,
+      forbidden_phrases: fps,
+      openers: openers,
+    },
+    identity: {
+      deny_ai: document.getElementById('pe-deny-ai').checked,
+      claim_human: document.getElementById('pe-claim-human').checked,
+    },
+    voice_profile: {
+      backend: document.getElementById('pe-vp-backend').value,
+      voice: document.getElementById('pe-vp-voice').value.trim(),
+    },
+  };
+  // C2 线：「档案」页签全字段并入 patch；personality 三补充做形态特殊融合——
+  // 对象形态直接并子键；字符串形态且三补充有值时升级为 {style: 原字符串, ...}。
+  var pfPatch = _collectProfileTabPatch();
+  var persExtra = pfPatch.personality;
+  delete pfPatch.personality;
+  Object.assign(patch, pfPatch);
+  if (persExtra && Object.keys(persExtra).length) {
+    if (patch.personality && typeof patch.personality === 'object' && !Array.isArray(patch.personality)) {
+      Object.assign(patch.personality, persExtra);
+    } else {
+      patch.personality = Object.assign({style: String(patch.personality == null ? '' : patch.personality)}, persExtra);
     }
+  }
+  var payload = {
+    persona: _loadedProfile ? _deepMergePersona(JSON.parse(JSON.stringify(_loadedProfile)), patch) : patch,
+    merge: true,
   };
   try {
     const r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid), {
@@ -2732,6 +3333,8 @@ async function saveProfile() {
     if (d.ok) {
       _toast(window.T('psn_js_140') + (payload.persona.name || pid) + window.T('psn_js_141'), 'ok');
       _restoreBtn(true); _clearDrawerDirty(); _clearDraft();
+      _loadedProfile = JSON.parse(JSON.stringify(payload.persona));
+      _refreshAdvPanel();
       _editingProfileId = pid;
       var idEl = document.getElementById('pe-id');
       if (idEl) idEl.readOnly = true;
@@ -2741,6 +3344,8 @@ async function saveProfile() {
       loadProfileList();
       _checkUndoAvailable(pid);
       _loadCanonicalBanner(pid);
+      _refreshQuizBlock();          // C2 线：新建保存后进入「编辑已有」态，考题区可见
+      _stashPendingBioDoc(pid);     // C2 线：向导解析原文入长传记库（无 pending 则只刷状态行）
     } else {
       if (st) { st.textContent = window.T('psn_js_064') + (d.detail || ''); st.className = 'tts-status err'; }
       _restoreBtn(false);
@@ -2963,13 +3568,1120 @@ function _importFromJson() {
   try {
     var p = JSON.parse(raw);
     if (p.persona) p = p.persona;
+    // C 线：导入的富键成为保存基底（否则保存时未映射进表单的字段全部丢失）
+    _loadedProfile = JSON.parse(JSON.stringify(p));
     _fillDrawerFields(p);
+    _refreshAdvPanel();
     var idEl = document.getElementById('pe-id');
     if (idEl && !idEl.readOnly && p.id) idEl.value = p.id;
     if (ta) ta.value = '';
     _markDrawerDirty({target: document.getElementById('pe-name')});
     _toast(window.T('psn_js_156'), 'ok');
   } catch(e) { _toast(window.T('psn_js_157') + e.message, 'err'); }
+}
+
+// ── C 线：文档导入向导（PSDocImport；配合 B 线 /api/personas/import-doc/*）────
+//    三步态：① 粘贴/选文件 → parse ② extract → 轮询 job ③ 结果 → 填入编辑器校对。
+//    功能开关来自 status API；旧后端（404/异常）保持入口隐藏。
+var _pdiParsedText = '';
+var _pdiResult = null;
+var _pdiJobTimer = null;
+var _pdiSrcKeys = [];       // C2 线：结果步可溯源字段键（sources 里数组非空的键，序号即链接参数）
+var _pdiPendingBio = null;  // C2 线：{text, ts} —— apply 时暂存解析原文，saveProfile 成功后入长传记库
+
+async function _initDocImport() {
+  try {
+    const r = await apiFetch('/api/personas/import-doc/status');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d && d.enabled === true) {
+      var b1 = document.getElementById('doc-import-tpl-btn'); if (b1) b1.style.display = '';
+      var b2 = document.getElementById('doc-import-toolbar-btn'); if (b2) b2.style.display = '';
+    }
+  } catch (e) {}
+}
+
+function openDocImport() {
+  _pdiStopPoll();
+  _pdiParsedText = ''; _pdiResult = null;
+  var t = document.getElementById('pdi-text'); if (t) t.value = '';
+  var f = document.getElementById('pdi-file'); if (f) f.value = '';
+  var info = document.getElementById('pdi-parse-info'); if (info) { info.style.display = 'none'; info.textContent = ''; }
+  _pdiGoStep(1);
+  var ov = document.getElementById('pdi-ov'); if (ov) ov.classList.add('open');
+}
+function closeDocImport() {
+  _pdiStopPoll();
+  var ov = document.getElementById('pdi-ov'); if (ov) ov.classList.remove('open');
+}
+function _pdiOvClick(e) {
+  if (e.target === document.getElementById('pdi-ov')) closeDocImport();
+}
+function _pdiStopPoll() {
+  if (_pdiJobTimer) { clearInterval(_pdiJobTimer); _pdiJobTimer = null; }
+}
+function _pdiGoStep(n) {
+  _pdiStopPoll();
+  for (var i = 1; i <= 3; i++) {
+    var el = document.getElementById('pdi-step' + i);
+    if (el) el.style.display = (i === n) ? '' : 'none';
+  }
+  var subs = [window.T('psn_imp_step1'), window.T('psn_imp_step2'), window.T('psn_imp_step3')];
+  var sub = document.getElementById('pdi-step-sub');
+  if (sub) sub.textContent = subs[n - 1] || '';
+  if (n === 2) {
+    var st = document.getElementById('pdi-stage'); if (st) st.textContent = '';
+    var pg = document.getElementById('pdi-progress'); if (pg) pg.style.width = '0%';
+    var er = document.getElementById('pdi-err'); if (er) { er.style.display = 'none'; er.textContent = ''; }
+    var xb = document.getElementById('pdi-extract-btn'); if (xb) xb.disabled = false;
+  }
+}
+// 0..1 与 0..100 两种刻度都归一成 0..100 整数（completeness.score / job.progress 通用）
+function _pdiPct(v) {
+  var n = Number(v);
+  if (isNaN(n)) return 0;
+  if (n > 0 && n <= 1) n = n * 100;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+async function _pdiParse() {
+  var fileEl = document.getElementById('pdi-file');
+  var textEl = document.getElementById('pdi-text');
+  var file = fileEl && fileEl.files && fileEl.files[0];
+  var text = textEl ? textEl.value.trim() : '';
+  if (!file && !text) { _toast(window.T('psn_imp_need_input'), 'err'); return; }
+  var btn = document.getElementById('pdi-parse-btn');
+  var spin = document.getElementById('pdi-parse-spin');
+  if (btn) btn.disabled = true;
+  if (spin) spin.style.display = '';
+  try {
+    var r;
+    if (file) {
+      var fd = new FormData();
+      fd.append('file', file);
+      r = await apiFetch('/api/personas/import-doc/parse', {method: 'POST', body: fd}, {timeoutMs: 60000});
+    } else {
+      r = await apiFetch('/api/personas/import-doc/parse', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: text}),
+      }, {timeoutMs: 60000});
+    }
+    var d = null;
+    try { d = await r.json(); } catch (e2) {}
+    if (!r.ok || !d || !d.ok) {
+      _toast(window.T('psn_imp_parse_fail') + ' ' + ((d && (d.detail || d.error)) || ('HTTP ' + r.status)), 'err');
+      return;
+    }
+    _pdiParsedText = d.text || '';
+    var info = document.getElementById('pdi-parse-info');
+    if (info) {
+      var msg = window.Tf('psn_imp_parsed_info', {
+        chars: (d.text_chars != null ? d.text_chars : _pdiParsedText.length),
+        paras: (d.paragraphs != null ? d.paragraphs : '—'),
+      });
+      if (d.truncated) msg += ' · ' + window.T('psn_imp_truncated');
+      info.textContent = msg;
+      info.style.display = '';
+    }
+    _pdiGoStep(2);
+  } catch (e) {
+    _toast(window.T('psn_imp_parse_fail') + ' ' + e, 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+    if (spin) spin.style.display = 'none';
+  }
+}
+function _pdiShowErr(msg) {
+  var er = document.getElementById('pdi-err');
+  if (er) { er.textContent = msg; er.style.display = ''; }
+  var xb = document.getElementById('pdi-extract-btn'); if (xb) xb.disabled = false;
+  var st = document.getElementById('pdi-stage'); if (st) st.textContent = '';
+}
+async function _pdiExtract() {
+  if (!_pdiParsedText) { _pdiGoStep(1); return; }
+  var xb = document.getElementById('pdi-extract-btn');
+  if (xb) xb.disabled = true;
+  var er = document.getElementById('pdi-err');
+  if (er) { er.style.display = 'none'; er.textContent = ''; }
+  var st = document.getElementById('pdi-stage');
+  if (st) st.textContent = window.T('psn_imp_stage_queued');
+  try {
+    const r = await apiFetch('/api/personas/import-doc/extract', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: _pdiParsedText}),
+    }, {timeoutMs: 30000});
+    var d = null;
+    try { d = await r.json(); } catch (e2) {}
+    if (r.status === 403) { _pdiShowErr(window.T('psn_imp_disabled')); return; }
+    if (r.status === 429) { _pdiShowErr(window.T('psn_imp_busy')); return; }
+    if (!r.ok || !d || !d.ok || !d.job_id) {
+      _pdiShowErr(window.T('psn_imp_fail') + ' ' + ((d && (d.detail || d.error)) || ('HTTP ' + r.status)));
+      return;
+    }
+    _pdiPollJob(d.job_id);
+  } catch (e) {
+    _pdiShowErr(window.T('psn_imp_fail') + ' ' + e);
+  }
+}
+function _pdiPollJob(jobId) {
+  _pdiStopPoll();
+  var tick = async function() {
+    var d = null;
+    try {
+      const r = await apiFetch('/api/personas/import-doc/jobs/' + encodeURIComponent(jobId));
+      try { d = await r.json(); } catch (e2) {}
+      if (!r.ok || !d || !d.ok || !d.job) {
+        if (r.status === 404) { _pdiStopPoll(); _pdiShowErr(window.T('psn_imp_fail') + ' HTTP 404'); }
+        return;   // 其余错误：下一轮重试（网络抖动不终止任务）
+      }
+    } catch (e) { return; }
+    var job = d.job;
+    if (job.status === 'error') {
+      _pdiStopPoll();
+      _pdiShowErr(job.error ? String(job.error) : window.T('psn_imp_fail'));
+      return;
+    }
+    if (job.status === 'done') {
+      _pdiStopPoll();
+      _pdiResult = job.result || {};
+      _pdiRenderResult(_pdiResult);
+      _pdiGoStep(3);
+      return;
+    }
+    var st = document.getElementById('pdi-stage');
+    if (st) st.textContent = job.stage ? String(job.stage)
+      : (job.status === 'running' ? window.T('psn_imp_stage_running') : window.T('psn_imp_stage_queued'));
+    var pg = document.getElementById('pdi-progress');
+    if (pg) pg.style.width = _pdiPct(job.progress) + '%';
+  };
+  _pdiJobTimer = setInterval(tick, 2000);
+  tick();
+}
+function _pdiRenderResult(res) {
+  var persona = res.persona || {};
+  var comp = res.completeness || {};
+  var cov = res.coverage || {};
+  var score = _pdiPct(comp.score);
+  var scoreEl = document.getElementById('pdi-score');
+  var col = score >= 80 ? 'var(--green)' : (score >= 50 ? '#d97706' : '#ef4444');
+  if (scoreEl) { scoreEl.textContent = score + '%'; scoreEl.style.color = col; }
+  var bar = document.getElementById('pdi-score-bar');
+  if (bar) { bar.style.width = score + '%'; bar.style.background = score >= 50 ? (score >= 80 ? 'var(--green)' : '#f59e0b') : '#ef4444'; }
+  var covEl = document.getElementById('pdi-coverage');
+  if (covEl) {
+    var covKeys = [
+      ['identity', 'psn_imp_cov_identity'], ['personality', 'psn_imp_cov_personality'],
+      ['background', 'psn_imp_cov_background'], ['memories', 'psn_imp_cov_memories'],
+      ['tastes', 'psn_imp_cov_tastes'], ['scenes', 'psn_imp_cov_scenes'],
+    ];
+    covEl.innerHTML = covKeys.map(function(pair){
+      var onv = !!cov[pair[0]];
+      return '<span style="color:' + (onv ? 'var(--green)' : 'var(--t3)') + '">' + (onv ? '✓' : '—') + ' ' + window.T(pair[1]) + '</span>';
+    }).join('');
+  }
+  var wEl = document.getElementById('pdi-warnings');
+  if (wEl) {
+    var warns = Array.isArray(res.warnings) ? res.warnings : [];
+    if (warns.length) { wEl.innerHTML = warns.map(function(w){ return '⚠ ' + _escHtml(String(w)); }).join('<br>'); wEl.style.display = ''; }
+    else { wEl.style.display = 'none'; wEl.innerHTML = ''; }
+  }
+  // C2 线：溯源（D1 契约 result.sources；旧后端缺字段 = 零链接零提示，完全兼容）
+  var srcsRaw = (res.sources && typeof res.sources === 'object' && !Array.isArray(res.sources)) ? res.sources : {};
+  _pdiSrcKeys = Object.keys(srcsRaw).filter(function(k){ return Array.isArray(srcsRaw[k]) && srcsRaw[k].length; });
+  var hintEl = document.getElementById('pdi-src-hint');
+  if (hintEl) {
+    if (_pdiSrcKeys.length) {
+      hintEl.textContent = '🔍 ' + window.T('psn_src_hint') + '：' + window.Tf('psn_src_hint_n', {n: String(_pdiSrcKeys.length)});
+      hintEl.style.display = '';
+    } else { hintEl.style.display = 'none'; hintEl.textContent = ''; }
+  }
+  var srcLink = function(fieldKeys) {   // 命中任一键 → 行尾「📎 原文」（传 field key 字符串；旧 idx 调用仍兼容）
+    for (var i = 0; i < fieldKeys.length; i++) {
+      var fk = fieldKeys[i];
+      if (_pdiSrcKeys.indexOf(fk) !== -1) {
+        return '<a href="javascript:void(0)" class="pdi-src-link" onclick="_pdiShowSources(' + JSON.stringify(fk) + ')">📎 ' + _escHtml(window.T('psn_src_link')) + '</a>';
+      }
+    }
+    return '';
+  };
+  var sEl = document.getElementById('pdi-summary');
+  if (sEl) {
+    var bgLen = 0;
+    try {
+      var bg = persona.background;
+      bgLen = (typeof bg === 'string') ? bg.length : (bg ? JSON.stringify(bg).length : 0);
+    } catch (e) {}
+    // H4：优先 context.specific_memories（导入契约）；旧顶层 memories 兼容
+    var mems = [];
+    try {
+      var ctxMem = (persona.context && Array.isArray(persona.context.specific_memories))
+        ? persona.context.specific_memories : null;
+      if (ctxMem) mems = ctxMem;
+      else if (Array.isArray(persona.memories)) mems = persona.memories;
+    } catch (e2) {}
+    if (mems.length > 16) mems = mems.slice(0, 16);
+    var memN = mems.length;
+    var rows = [
+      [window.T('psn_th_name'), String(persona.name || '—'), srcLink(['name', 'names'])],
+      [window.T('psn_th_role'), String(persona.role || '—'), srcLink(['role'])],
+      [window.T('psn_tag'), String((persona.tags || []).length), srcLink(['tags'])],
+      [window.T('psn_imp_sum_bg'), String(bgLen), srcLink(['background'])],
+      [window.T('psn_imp_sum_mem'), String(memN), srcLink(['context.specific_memories', 'memories'])],
+    ];
+    var consumed = ['name', 'names', 'role', 'tags', 'background', 'context.specific_memories', 'memories'];
+    _pdiSrcKeys.forEach(function(k){   // 摘要行没覆盖到的可溯源字段：通用渲染补行（标签映射缺失显示原键名）
+      if (consumed.indexOf(k) !== -1) return;
+      // 逐条记忆键在下方有序列表展示，不进摘要补行
+      if (/^context\.specific_memories\.\d+$/.test(k) || /^memories\.\d+$/.test(k)) return;
+      rows.push([_pdiSrcLabel(k), '', srcLink([k])]);
+    });
+    var html = rows.map(function(rw){
+      return '<div>' + _escHtml(rw[0]) + (rw[1] !== '' ? ': ' + _escHtml(rw[1]) : '') + (rw[2] || '') + '</div>';
+    }).join('');
+    // H4：逐条记忆列表 + 下标溯源（sources['context.specific_memories.'+i]）
+    if (mems.length) {
+      html += '<ol class="pdi-mem-list">';
+      for (var mi = 0; mi < mems.length; mi++) {
+        var mtxt = String(mems[mi] == null ? '' : mems[mi]);
+        var mLink = srcLink(['context.specific_memories.' + mi, 'memories.' + mi]);
+        html += '<li>' + _escHtml(mtxt) + mLink + '</li>';
+      }
+      html += '</ol>';
+    }
+    sEl.innerHTML = html;
+  }
+}
+// C2 线：sources 字段路径 → 人话标签（psn_src_f_*；没映射的键显示原键名）
+function _pdiSrcLabel(key) {
+  var map = {
+    'name': 'psn_src_f_name', 'names': 'psn_src_f_names', 'role': 'psn_src_f_role',
+    'personality': 'psn_src_f_personality', 'background': 'psn_src_f_background',
+    'context.specific_memories': 'psn_src_f_memories', 'memories': 'psn_src_f_memories',
+    'context.emotional_triggers': 'psn_src_f_triggers', 'context.hobbies': 'psn_src_f_hobbies',
+    'tastes': 'psn_src_f_tastes', 'boundaries.topics_to_avoid': 'psn_src_f_avoid',
+    'selfie_scenes': 'psn_src_f_scenes', 'appearance': 'psn_src_f_appearance',
+    'age': 'psn_src_f_age', 'gender': 'psn_src_f_gender', 'tags': 'psn_src_f_tags',
+  };
+  var ks = String(key);
+  var mm = /^context\.specific_memories\.(\d+)$/.exec(ks) || /^memories\.(\d+)$/.exec(ks);
+  if (mm) return window.Tf('psn_src_mem_item', {n: String(Number(mm[1]) + 1)});
+  var k = map[ks];
+  return k ? window.T(k) : ks;
+}
+function _pdiShowSources(idxOrKey) {
+  // H4：支持直接传 field key 字符串；保留旧数字 idx 兼容
+  var key = (typeof idxOrKey === 'string') ? idxOrKey : (_pdiSrcKeys || [])[idxOrKey];
+  if (key == null || key === '' || !_pdiResult) return;
+  var srcs = (_pdiResult.sources || {})[key];
+  if (!Array.isArray(srcs) || !srcs.length) return;
+  var ex = (_pdiResult.source_excerpts && typeof _pdiResult.source_excerpts === 'object') ? _pdiResult.source_excerpts : {};
+  var ttl = document.getElementById('pdi-src-ttl');
+  if (ttl) ttl.textContent = window.T('psn_src_ov_title') + ' · ' + _pdiSrcLabel(key);
+  var body = document.getElementById('pdi-src-body');
+  if (body) {
+    var html = srcs.map(function(n){
+      var t = ex[String(n)];
+      var txt = (t == null || t === '') ? window.T('psn_src_none') : String(t);
+      return '<div class="pdi-src-para"><span class="pdi-src-no">[' + _escHtml(String(n)) + ']</span>' + _escHtml(txt) + '</div>';
+    }).join('');
+    body.innerHTML = html || ('<div class="pdi-src-para">' + _escHtml(window.T('psn_src_none')) + '</div>');
+  }
+  var ov = document.getElementById('pdi-src-ov');
+  if (ov) ov.classList.add('open');
+}
+function _pdiSrcClose() {
+  var ov = document.getElementById('pdi-src-ov');
+  if (ov) ov.classList.remove('open');
+}
+function _pdiSrcOvClick(e) {
+  if (e.target === document.getElementById('pdi-src-ov')) _pdiSrcClose();
+}
+function _pdiApply() {
+  if (!_pdiResult || !_pdiResult.persona) { closeDocImport(); return; }
+  var persona = JSON.parse(JSON.stringify(_pdiResult.persona));
+  var drw = document.getElementById('profile-drawer');
+  if (_editingProfileId || !(drw && drw.classList.contains('open'))) openNewProfile();
+  _loadedProfile = JSON.parse(JSON.stringify(persona));
+  _fillDrawerFields(persona);
+  var idEl = document.getElementById('pe-id');
+  if (idEl && !idEl.readOnly && !idEl.value.trim() && _pdiResult.suggested_id) idEl.value = String(_pdiResult.suggested_id);
+  _refreshAdvPanel();
+  // C2 线：暂存本次解析原文（关闭向导不清，重新解析/再 apply 覆盖），保存成功后入长传记库
+  if (_pdiParsedText) _pdiPendingBio = {text: _pdiParsedText, ts: Date.now()};
+  _markDrawerDirty({target: document.getElementById('pe-name')});
+  closeDocImport();
+  _toast(window.T('psn_imp_applied'), 'ok');
+}
+
+// ── C2 线：长传记入库（D2 契约 /api/personas/{pid}/bio-doc；旧后端 404/403 全静默）─
+// M10：保存后的机械尾巴走 finalize 流水线（传记嵌入+考题验收进后台任务——大文档
+// 同步入库曾要 ~2 分钟，前端 60s 超时报假失败）；旧后端无 finalize → 404 回落
+// 同步路径（重启装载新代码前生产就是旧后端，这个回落是现实路径不是保险丝）。
+function _stashPendingBioDoc(pid) {
+  var pending = _pdiPendingBio;
+  _pdiPendingBio = null;   // 成败都只试一次，避免旧后端反复重试
+  if (!pending || !pending.text || !pid) { _loadBioStatus(); return; }
+  (async function(){
+    try {
+      const r = await apiFetch('/api/personas/import-doc/finalize', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({profile_id: pid, bio_text: pending.text, quiz: _quizEnabled}),
+      }, {timeoutMs: 30000});
+      if (r.status === 404) return _stashBioLegacy(pid, pending);
+      var d = null;
+      try { d = await r.json(); } catch (e2) {}
+      if (!r.ok || !d || !d.ok || !d.job_id) {
+        _toast(window.T('psn_fin_fail') + ' ' + ((d && (d.detail || d.error)) || ('HTTP ' + r.status)), 'err');
+        _loadBioStatus();
+        return;
+      }
+      _toast(window.T('psn_fin_started'), 'ok');
+      _watchFinalizeJob(pid, String(d.job_id));
+    } catch (e) { _stashBioLegacy(pid, pending); }
+  })();
+}
+function _stashBioLegacy(pid, pending) {
+  (async function(){
+    try {
+      const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/bio-doc', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: pending.text}),
+      }, {timeoutMs: 60000});
+      var d = null;
+      try { d = await r.json(); } catch (e2) {}
+      if (r.ok && d && d.ok) {
+        _toast(window.Tf('psn_bio_stashed', {n: String(d.chunks != null ? d.chunks : '—')}), 'ok');
+      }
+    } catch (e) {}
+    _loadBioStatus();
+  })();
+}
+async function _watchFinalizeJob(pid, jobId) {
+  var deadline = Date.now() + 10 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await new Promise(function(res) { setTimeout(res, 2000); });
+    var job = null;
+    try {
+      const r = await apiFetch('/api/personas/import-doc/jobs/' + encodeURIComponent(jobId),
+        {}, {timeoutMs: 15000});
+      if (!r.ok) continue;
+      var d = await r.json();
+      job = (d && d.job) || null;
+    } catch (e) { continue; }
+    if (!job || (job.status !== 'done' && job.status !== 'error')) continue;
+    if (job.status === 'error') {
+      _toast(window.T('psn_fin_fail') + ' ' + (job.error || ''), 'err');
+    } else {
+      var res2 = job.result || {};
+      if (res2.bio && res2.bio.chunks != null) {
+        _toast(window.Tf('psn_bio_stashed', {n: String(res2.bio.chunks)}), 'ok');
+      }
+      if (res2.quiz && res2.quiz.score != null) {
+        _toast(window.Tf('psn_fin_quiz_done', {
+          score: String(res2.quiz.score),
+          passed: String(res2.quiz.passed != null ? res2.quiz.passed : '—'),
+          total: String(res2.quiz.total != null ? res2.quiz.total : '—'),
+        }), Number(res2.quiz.score) >= 80 ? 'ok' : 'err');
+      } else if (res2.quiz_error) {
+        _toast(window.T('psn_fin_quiz_err') + ' ' + res2.quiz_error, 'err');
+      }
+    }
+    if (pid === _editingProfileId) { _loadBioStatus(); _refreshQuizBlock(); }
+    return;
+  }
+}
+async function _loadBioStatus() {
+  _resetBioProbe();   // I4 线：状态未回来前先收起检索自测面板
+  var el = document.getElementById('pe-bio-status');
+  if (!el) return;
+  el.innerHTML = ''; el.title = '';
+  var pid = _editingProfileId;
+  if (!pid) return;   // 新建人设：无状态行
+  try {
+    const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/bio-doc');
+    if (pid !== _editingProfileId) return;   // 拉取期间已切换人设
+    var d = null;
+    try { d = await r.json(); } catch (e2) {}
+    var meta = (r.ok && d && d.ok && d.meta && typeof d.meta === 'object') ? d.meta : null;
+    if (meta) {
+      // M9 收尾：覆盖度三计数（旧后端 meta 无这些键 → 整段不显示，向后兼容）
+      var cov = '';
+      if (meta.emb_chunks != null) {
+        cov = ' · ' + _escHtml(window.Tf('psn_bio_coverage', {
+            emb: String(meta.emb_chunks),
+            chunks: String(meta.chunks != null ? meta.chunks : '—'),
+            sents: String(meta.sents != null ? meta.sents : '—'),
+            aliases: String(meta.alias_keys != null ? meta.alias_keys : '—'),
+          }));
+        if (Number(meta.emb_chunks) < Number(meta.chunks)) {
+          cov += ' <span style="color:var(--th-ink-amber6,#d97706)">'
+            + _escHtml(window.Tf('psn_bio_cov_gap',
+                {miss: String(Number(meta.chunks) - Number(meta.emb_chunks))}))
+            + '</span>';
+        }
+      }
+      el.innerHTML = '📚 ' + _escHtml(window.Tf('psn_bio_meta', {
+          chunks: String(meta.chunks != null ? meta.chunks : '—'),
+          chars: String(meta.chars != null ? meta.chars : '—'),
+        }))
+        + cov
+        + ' <button type="button" class="btn btn-sm btn-xs" id="pe-bio-reembed-btn"'
+        + ' title="' + _escAttr(String(window.T('psn_bio_reembed_tip'))) + '"'
+        + ' onclick="_reembedBioDoc()">🧩 ' + _escHtml(window.T('psn_bio_reembed_btn')) + '</button>'
+        + ' <button class="btn btn-sm btn-danger btn-xs" onclick="_deleteBioDoc()">' + _escHtml(window.T('psn_delete')) + '</button>'
+        + '<span id="pe-bio-reembed-note" class="pf-hint"></span>';
+      if (meta.preview) el.title = String(meta.preview);
+      _bioReembedSyncBusy();    // J1 线：行被重绘后恢复「补齐中」的禁用态
+      _refreshBioProbe(meta);   // I4 线：已入库才露出检索自测
+    } else {
+      el.innerHTML = '<span style="color:var(--t3)">' + _escHtml(window.T('psn_bio_none')) + '</span>';
+    }
+  } catch (e) {}   // 网络异常静默（行留空）
+}
+async function _deleteBioDoc() {
+  var pid = _editingProfileId;
+  if (!pid) return;
+  if (!confirm(window.T('psn_bio_del_confirm'))) return;
+  await _deleteBioDocReq(pid, false);
+}
+async function _deleteBioDocReq(pid, force) {
+  // 绑定护栏（2026-07-28）：pid 被账号绑定时后端 409 拒删（detail 列明账号）。
+  // 前端给一次带上下文的二次确认，确认后 ?force=1 重发——不给出路会把
+  // 明知故删的运维卡死在红 toast 上。
+  try {
+    const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/bio-doc'
+      + (force ? '?force=1' : ''), {method: 'DELETE'}, {timeoutMs: 30000});
+    var d = null;
+    try { d = await r.json(); } catch (e2) {}
+    if (r.ok && d && d.ok) _toast(window.T('psn_bio_deleted'), 'ok');
+    else if (r.status === 409 && !force && d && d.detail) {
+      if (confirm(String(d.detail) + '\n\n' + window.T('psn_bio_del_bound_confirm'))) {
+        return _deleteBioDocReq(pid, true);
+      }
+    }
+    else _toast(window.T('psn_bio_del_fail') + ' ' + ((d && (d.detail || d.error)) || ('HTTP ' + r.status)), 'err');
+  } catch (e) { _toast(window.T('psn_bio_del_fail') + ' ' + e, 'err'); }
+  _loadBioStatus();
+}
+
+// ── J1 线：补齐缺失的块/句向量（POST /bio-doc/reembed → 后台任务，轮询共用
+//    /api/personas/import-doc/jobs/{id}）。向量预计算上线前入库的传记没有句向量，
+//    检索会静默退化成纯关键词——这个按钮就是唯一的自愈口。
+var _bioReembedBusy = false;
+var _BIO_REEMBED_POLL_MS = 1500;
+var _BIO_REEMBED_MAX_POLLS = 320;   // ≈8min：真实文档数百个单元逐个打嵌入端点
+
+function _bioReembedSyncBusy() {
+  var btn = document.getElementById('pe-bio-reembed-btn');
+  if (btn) btn.disabled = !!_bioReembedBusy;
+  var note = document.getElementById('pe-bio-reembed-note');
+  if (note) note.textContent = _bioReembedBusy ? window.T('psn_bio_reembed_running') : '';
+}
+function _bioReembedEnd(msg, kind) {
+  _bioReembedBusy = false;
+  _bioReembedSyncBusy();
+  if (msg) _toast(msg, kind || 'info');
+  _loadBioStatus();
+}
+async function _reembedBioDoc() {
+  if (_bioReembedBusy) return;
+  var pid = _editingProfileId;
+  if (!pid) return;
+  _bioReembedBusy = true;
+  _bioReembedSyncBusy();
+  try {
+    const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/bio-doc/reembed',
+                             {method: 'POST'}, {timeoutMs: 30000});
+    var d = null;
+    try { d = await r.json(); } catch (e2) {}
+    // 409 = 该人设没有传记库存；429 = 后台任务槽满。两者都不是「嵌入端点挂了」。
+    if (r.status === 409) { _bioReembedEnd(window.T('psn_bio_reembed_no_stock'), 'err'); return; }
+    if (r.status === 429) { _bioReembedEnd(window.T('psn_bio_reembed_busy'), 'err'); return; }
+    if (!r.ok || !d || !d.ok || !d.job_id) {
+      _bioReembedEnd(window.T('psn_bio_reembed_fail') + ' '
+        + ((d && (d.detail || d.error)) || ('HTTP ' + r.status)), 'err');
+      return;
+    }
+    await _bioReembedPoll(String(d.job_id));
+  } catch (e) { _bioReembedEnd(window.T('psn_bio_reembed_fail') + ' ' + e, 'err'); }
+}
+async function _bioReembedPoll(jobId) {
+  for (var i = 0; i < _BIO_REEMBED_MAX_POLLS; i++) {
+    await new Promise(function(res) { setTimeout(res, _BIO_REEMBED_POLL_MS); });
+    var job = null;
+    try {
+      const r = await apiFetch('/api/personas/import-doc/jobs/' + encodeURIComponent(jobId));
+      var d = null;
+      try { d = await r.json(); } catch (e2) {}
+      if (!r.ok || !d || !d.job) continue;   // 抖动一次不判死，下一轮重试
+      job = d.job;
+    } catch (e) { continue; }
+    if (job.status === 'done') { _bioReembedDone(job.result || {}); return; }
+    if (job.status === 'error') { _bioReembedFailed(String(job.error || '')); return; }
+  }
+  _bioReembedEnd(window.T('psn_bio_reembed_fail'), 'err');   // 超时：任务仍在后台跑
+}
+function _bioReembedDone(result) {
+  var updated = Number(result.updated || 0);
+  var sents = Number(result.sents_added || 0);
+  if (!updated && !sents) { _bioReembedEnd(window.T('psn_bio_reembed_nothing'), 'info'); return; }
+  _bioReembedEnd(window.Tf('psn_bio_reembed_done',
+    {updated: String(updated), sents: String(sents)}), 'ok');
+}
+// 后端把「补不了」的原因编成机器码，前端翻成运营看得懂的两种不同处置
+function _bioReembedFailed(code) {
+  if (code === 'embed_unavailable') { _bioReembedEnd(window.T('psn_bio_reembed_embed_off'), 'err'); return; }
+  if (code === 'bio_missing') { _bioReembedEnd(window.T('psn_bio_reembed_no_stock'), 'err'); return; }
+  _bioReembedEnd(window.T('psn_bio_reembed_fail') + (code ? ' ' + code : ''), 'err');
+}
+
+// ── I4 线：长传记检索自测（I1 契约 POST /bio-doc/search；旧后端 404/403 整块隐藏）─
+var _bioProbeBusy = false;
+var _bioProbeOff = false;   // 后端不支持：本页不再重试，面板常隐
+
+function _resetBioProbe() {
+  var box = document.getElementById('pe-bio-probe');
+  if (box) { box.style.display = 'none'; box.open = false; }
+  var inp = document.getElementById('pe-bio-probe-q'); if (inp) inp.value = '';
+  var res = document.getElementById('pe-bio-probe-result'); if (res) res.innerHTML = '';
+  var chips = document.getElementById('pe-bio-probe-chips'); if (chips) chips.innerHTML = '';
+}
+// 只在「已入库且有单元」时露出：没资料可检索的面板等于噪音
+function _refreshBioProbe(meta) {
+  if (_bioProbeOff) return;
+  var box = document.getElementById('pe-bio-probe');
+  if (!box) return;
+  var chunks = Number(meta && meta.chunks != null ? meta.chunks : 0);
+  if (!_editingProfileId || isNaN(chunks) || chunks <= 0) { box.style.display = 'none'; return; }
+  box.style.display = '';
+  _bioProbeRenderChips();
+}
+// 预设问题：从档案的专属记忆里抽实体（亲属词 / 年份 / 拉丁专名）造问句，纯前端启发式
+function _bioProbePresets() {
+  var out = [];
+  try {
+    var ctx = (_loadedProfile && _loadedProfile.context) || {};
+    var mems = Array.isArray(ctx.specific_memories) ? ctx.specific_memories.slice(0, 3) : [];
+    // 中文词表用 \u 转义（本页门禁：自有 <script> 内零 CJK 字面量）
+    var kinRe = /(\u7238\u7238|\u5988\u5988|\u7236\u4eb2|\u6bcd\u4eb2|\u54e5\u54e5|\u59d0\u59d0|\u5f1f\u5f1f|\u59b9\u59b9|\u7237\u7237|\u5976\u5976|\u5916\u516c|\u5916\u5a46|\u8205\u8205|\u59d1\u59d1|\u963f\u59e8|\u53d4\u53d4|\u8868\u54e5|\u8868\u59d0|\u513f\u5b50|\u5973\u513f|\u8001\u516c|\u8001\u5a46)/;
+    var yearRe = /((?:19|20)\d{2})\s*\u5e74?/;
+    var nameRe = /([A-Z][A-Za-z]{2,})/;
+    mems.forEach(function(m) {
+      var s = String(m == null ? '' : m);
+      if (!s) return;
+      var hitKin = kinRe.exec(s);
+      if (hitKin) { out.push(window.Tf('psn_bio_probe_q_kin', {w: hitKin[1]})); return; }
+      var hitYear = yearRe.exec(s);
+      if (hitYear) { out.push(window.Tf('psn_bio_probe_q_year', {y: hitYear[1]})); return; }
+      var hitName = nameRe.exec(s);
+      if (hitName) { out.push(window.Tf('psn_bio_probe_q_name', {w: hitName[1]})); return; }
+    });
+  } catch (e) { out = []; }   // 抽取失败只留通用问题
+  out.push(window.T('psn_bio_probe_q_g1'));
+  out.push(window.T('psn_bio_probe_q_g2'));
+  var seen = {}, uniq = [];
+  out.forEach(function(t) {
+    t = String(t == null ? '' : t).trim();
+    if (!t || seen[t] === 1) return;   // === 1：绕开 Object 原型键（constructor 等）
+    seen[t] = 1; uniq.push(t);
+  });
+  return uniq.slice(0, 6);
+}
+function _bioProbeRenderChips() {
+  var wrap = document.getElementById('pe-bio-probe-chips');
+  if (!wrap) return;
+  wrap.innerHTML = _bioProbePresets().map(function(t) {
+    return '<button type="button" class="bpr-chip" data-bpq="' + _escAttr(t) + '">' + _escHtml(t) + '</button>';
+  }).join('');
+  if (wrap.getAttribute('data-bpbound')) return;
+  wrap.setAttribute('data-bpbound', '1');   // 事件委托：动态 chip 不挂内联 handler
+  wrap.addEventListener('click', function(ev) {
+    var btn = (ev.target && ev.target.closest) ? ev.target.closest('.bpr-chip') : null;
+    if (!btn) return;
+    var inp = document.getElementById('pe-bio-probe-q');
+    if (inp) inp.value = btn.getAttribute('data-bpq') || '';
+    _bioProbeRun();
+  });
+}
+function _bioProbeKey(ev) {
+  if (!ev || (ev.key !== 'Enter' && ev.keyCode !== 13)) return;
+  if (ev.preventDefault) ev.preventDefault();
+  _bioProbeRun();
+}
+async function _bioProbeRun() {
+  if (_bioProbeBusy || _bioProbeOff) return;
+  var pid = _editingProfileId;
+  var inp = document.getElementById('pe-bio-probe-q');
+  var res = document.getElementById('pe-bio-probe-result');
+  if (!pid || !inp || !res) return;
+  var query = String(inp.value || '').trim();
+  if (!query) { res.innerHTML = ''; return; }
+  var kEl = document.getElementById('pe-bio-probe-k');
+  var topK = Number((kEl && kEl.value) || 3);
+  if (isNaN(topK) || topK < 1 || topK > 5) topK = 3;
+  _bioProbeBusy = true;
+  var btn = document.getElementById('pe-bio-probe-btn'); if (btn) btn.disabled = true;
+  res.innerHTML = '<div class="bpr-head">' + _escHtml(window.T('psn_bio_probe_running')) + '</div>';
+  try {
+    const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/bio-doc/search', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query: query, top_k: topK}),
+    }, {timeoutMs: 30000});
+    if (pid !== _editingProfileId) { res.innerHTML = ''; return; }   // 拉取期间已切换人设
+    if (r.status === 404 || r.status === 403) {   // 旧后端 / 未启用：静默收摊
+      _bioProbeOff = true;
+      var box = document.getElementById('pe-bio-probe');
+      if (box) { box.style.display = 'none'; box.open = false; }
+      res.innerHTML = '';
+      return;
+    }
+    var d = null;
+    try { d = await r.json(); } catch (e2) {}
+    if (!r.ok || !d || d.ok === false) { res.innerHTML = ''; return; }   // 400 空查询等：静默
+    _bioProbeRender(d, query);
+  } catch (e) { res.innerHTML = ''; }
+  finally {
+    _bioProbeBusy = false;
+    var btn2 = document.getElementById('pe-bio-probe-btn'); if (btn2) btn2.disabled = false;
+  }
+}
+function _bioProbeNum(v) {
+  if (v == null || v === '') return '—';   // Number(null)===0 会把「后端没给」显示成 0
+  var n = Number(v);
+  return isNaN(n) ? '—' : String(Math.round(n * 1000) / 1000);
+}
+function _bpReEsc(s) { return String(s == null ? '' : s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+// 查询词切分：拉丁词 + 中文 2 字滑窗（去停用词），只用于高亮
+var _BPR_STOP = {};
+('\u4ec0\u4e48|\u54ea\u91cc|\u600e\u4e48|\u4e3a\u4ec0|\u4f60\u7684|\u6211\u7684|\u53ef\u4ee5'
+  + '|\u4e00\u4e0b|\u73b0\u5728|\u65f6\u5019|\u77e5\u9053|\u544a\u8bc9|\u8fd8\u6709|\u662f\u4e0d|\u4e0d\u662f'
+  + '|what|where|when|who|your|you|the|and|tell|about|did|does|was|were|with|have'
+).split('|').forEach(function(w) { _BPR_STOP[w] = 1; });
+function _bioProbeTerms(query) {
+  var out = [], seen = {};
+  var push = function(t) {
+    t = String(t == null ? '' : t);
+    if (t.length < 2) return;
+    var key = t.toLowerCase();
+    if (_BPR_STOP[key] === 1 || seen[key] === 1) return;
+    seen[key] = 1; out.push(t);
+  };
+  try {
+    var q = String(query == null ? '' : query);
+    (q.match(/[A-Za-z][A-Za-z0-9]+/g) || []).forEach(push);
+    (q.match(/\d{2,}/g) || []).forEach(push);   // 年份等数字（预设问题会带年份）
+    (q.match(/[\u4e00-\u9fa5]{2,}/g) || []).forEach(function(run) {
+      for (var i = 0; i + 2 <= run.length; i++) push(run.slice(i, i + 2));
+    });
+  } catch (e) { return []; }
+  return out.slice(0, 14);
+}
+// 防 XSS：逐段 escape 后才拼 <mark>——命中词本身也走 escape，任何原文都进不了标签位
+function _bioProbeMark(raw, terms) {
+  raw = String(raw == null ? '' : raw);
+  if (!terms || !terms.length) return _escHtml(raw);
+  var re;
+  try { re = new RegExp(terms.map(_bpReEsc).join('|'), 'gi'); }
+  catch (e) { return _escHtml(raw); }
+  var out = '', last = 0, hit;
+  while ((hit = re.exec(raw)) !== null) {
+    if (!hit[0]) { re.lastIndex++; continue; }   // 零宽匹配防死循环
+    if (hit.index >= last) {
+      out += _escHtml(raw.slice(last, hit.index))
+        + '<mark class="bpr-mk">' + _escHtml(hit[0]) + '</mark>';
+      last = hit.index + hit[0].length;
+    }
+  }
+  return out + _escHtml(raw.slice(last));
+}
+function _bioProbeRender(d, query) {
+  var res = document.getElementById('pe-bio-probe-result');
+  if (!res) return;
+  d = d || {};
+  var hits = Array.isArray(d.hits) ? d.hits : [];
+  var terms = _bioProbeTerms(query);
+  var html = '<div class="bpr-head">' + _escHtml(window.Tf('psn_bio_probe_hits', {
+    n: String(hits.length), m: String(d.chunks != null ? d.chunks : '—'),
+  })) + '</div>';
+  if (!hits.length) {
+    html += '<div class="bpr-none">' + _escHtml(window.T('psn_bio_probe_none'))
+      + '<br>' + _escHtml(window.T('psn_bio_probe_none_sub')) + '</div>';
+  } else {
+    html += hits.map(function(h) {
+      h = h || {};
+      var txt = String(h.text == null ? '' : h.text);
+      if (txt.length > 300) txt = txt.slice(0, 300) + '…';
+      var tip = window.Tf('psn_bio_probe_score_t', {kw: _bioProbeNum(h.kw), sem: _bioProbeNum(h.sem)});
+      return '<div class="bpr-hit"><div class="bpr-hit-hd">'
+        + '<span class="bpr-idx">#' + _escHtml(String(h.idx == null ? '—' : h.idx)) + '</span>'
+        + '<span class="bpr-score" title="' + _escAttr(tip) + '">' + _escHtml(_bioProbeNum(h.score)) + '</span>'
+        + '</div><div class="bpr-txt">' + _bioProbeMark(txt, terms) + '</div></div>';
+    }).join('');
+  }
+  // M9 收尾：别名可见性——这条 query 触发了哪些别名键、哪些值真命中了返回块
+  // （旧后端响应无 aliases 键 → 整行不显示，向后兼容）
+  var als = Array.isArray(d.aliases) ? d.aliases : [];
+  if (als.length) {
+    html += '<div class="bpr-alias">🔗 ' + als.map(function(a) {
+      a = a || {};
+      var hitset = {};
+      (Array.isArray(a.hits) ? a.hits : []).forEach(function(v) { hitset[String(v)] = 1; });
+      var vals = (Array.isArray(a.values) ? a.values : []).map(function(v) {
+        v = String(v);
+        return hitset[v] === 1
+          ? '<b class="bpr-alias-hit">' + _escHtml(v) + '✓</b>' : _escHtml(v);
+      }).join('、');
+      return _escHtml(String(a.key)) + ' → ' + vals;
+    }).join('　') + '</div>';
+  }
+  var block = (d.block == null) ? '' : String(d.block);
+  if (block) {
+    html += '<details class="bpr-block"><summary>▸ ' + _escHtml(window.T('psn_bio_probe_block'))
+      + '</summary><div class="bpr-pre">' + _escHtml(block) + '</div></details>';
+  }
+  res.innerHTML = html;
+}
+
+// ── M9 收尾：孤儿传记库存横幅（bio-inventory 只读盘点；404/403/旧后端全静默）──
+async function _initBioInventory() {
+  var el = document.getElementById('bio-orphan-banner');
+  if (!el) return;
+  try {
+    const r = await apiFetch('/api/personas/bio-inventory', {}, {timeoutMs: 15000});
+    if (!r.ok) return;                       // 未启用/旧后端：保持隐藏
+    var d = null;
+    try { d = await r.json(); } catch (e2) {}
+    var orphans = (d && d.ok && Array.isArray(d.orphans)) ? d.orphans : [];
+    if (!orphans.length) { el.style.display = 'none'; return; }
+    var shown = orphans.slice(0, 5).map(function(p) {
+      return '<code>' + _escHtml(String(p)) + '</code>';
+    }).join('、');
+    el.innerHTML = '⚠️ ' + _escHtml(window.Tf('psn_bio_orphan_banner',
+        {n: String(orphans.length)})) + ' ' + shown
+      + (orphans.length > 5 ? ' …' : '')
+      + ' <span style="color:var(--t2)">'
+      + _escHtml(window.T('psn_bio_orphan_hint')) + '</span>';
+    el.style.display = '';
+  } catch (e) {}   // 网络异常静默
+}
+
+// ── C2 线：一致性考题（E 线契约 /api/personas/quiz/*；未启用/旧后端整块隐藏）────
+var _quizEnabled = false;
+var _quizJobTimer = null;
+async function _initQuizStatus() {
+  try {
+    const r = await apiFetch('/api/personas/quiz/status');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d && d.enabled === true) {
+      _quizEnabled = true;
+      _refreshQuizBlock();
+      if (_editingProfileId) _quizLoadHistory();  // 状态晚到时补拉历史
+    }
+  } catch (e) {}
+}
+function _refreshQuizBlock() {
+  var blk = document.getElementById('pe-quiz-block');
+  if (blk) blk.style.display = (_quizEnabled && _editingProfileId) ? '' : 'none';
+}
+function _quizStopPoll() {
+  if (_quizJobTimer) { clearInterval(_quizJobTimer); _quizJobTimer = null; }
+}
+function _resetQuiz() {
+  _quizStopPoll();
+  var st = document.getElementById('pe-quiz-stage'); if (st) { st.style.display = 'none'; st.textContent = ''; }
+  var bw = document.getElementById('pe-quiz-bar-wrap'); if (bw) bw.style.display = 'none';
+  var bar = document.getElementById('pe-quiz-bar'); if (bar) bar.style.width = '0%';
+  var res = document.getElementById('pe-quiz-result'); if (res) res.innerHTML = '';
+  var btn = document.getElementById('pe-quiz-btn'); if (btn) btn.disabled = false;
+  // H4：切人设时清历史块（随后 _quizLoadHistory 按需再填）
+  var hh = document.getElementById('pe-quiz-hist'); if (hh) { hh.style.display = 'none'; hh.open = false; }
+  var hs = document.getElementById('pe-quiz-hist-sum'); if (hs) hs.textContent = '';
+  var hl = document.getElementById('pe-quiz-hist-list'); if (hl) hl.innerHTML = '';
+  var hv = document.getElementById('pe-quiz-hist-view'); if (hv) hv.innerHTML = '';
+  var ht = document.getElementById('pe-quiz-trend'); if (ht) { ht.style.display = 'none'; ht.textContent = ''; }
+  _refreshQuizBlock();
+}
+function _quizFail(msg) {
+  _quizStopPoll();
+  var st = document.getElementById('pe-quiz-stage'); if (st) { st.style.display = 'none'; st.textContent = ''; }
+  var bw = document.getElementById('pe-quiz-bar-wrap'); if (bw) bw.style.display = 'none';
+  var btn = document.getElementById('pe-quiz-btn'); if (btn) btn.disabled = false;
+  _toast(msg, 'err');
+}
+async function _startQuiz() {
+  var pid = _editingProfileId;
+  if (!pid) return;
+  var btn = document.getElementById('pe-quiz-btn'); if (btn) btn.disabled = true;
+  var st = document.getElementById('pe-quiz-stage'); if (st) { st.style.display = ''; st.textContent = window.T('psn_imp_stage_queued'); }
+  var bw = document.getElementById('pe-quiz-bar-wrap'); if (bw) bw.style.display = '';
+  var bar = document.getElementById('pe-quiz-bar'); if (bar) bar.style.width = '0%';
+  var res = document.getElementById('pe-quiz-result'); if (res) res.innerHTML = '';
+  try {
+    const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/quiz', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({n: 10}),
+    }, {timeoutMs: 30000});
+    var d = null;
+    try { d = await r.json(); } catch (e2) {}
+    if (r.status === 403) { _quizFail(window.T('psn_quiz_off')); return; }
+    if (r.status === 400) { _quizFail(window.T('psn_quiz_thin')); return; }
+    if (r.status === 429) { _quizFail(window.T('psn_imp_busy')); return; }
+    if (!r.ok || !d || !d.ok || !d.job_id) {
+      _quizFail(window.T('psn_quiz_fail') + ' ' + ((d && (d.detail || d.error)) || ('HTTP ' + r.status)));
+      return;
+    }
+    _quizPoll(pid, d.job_id);
+  } catch (e) { _quizFail(window.T('psn_quiz_fail') + ' ' + e); }
+}
+function _quizPoll(pid, jobId) {
+  _quizStopPoll();
+  var tick = async function() {
+    if (pid !== _editingProfileId) { _quizStopPoll(); return; }   // 切人设/关抽屉即终止
+    var d = null;
+    try {
+      const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/quiz/jobs/' + encodeURIComponent(jobId));
+      try { d = await r.json(); } catch (e2) {}
+      if (!r.ok || !d || !d.ok || !d.job) {
+        if (r.status === 404) _quizFail(window.T('psn_quiz_fail') + ' HTTP 404');
+        return;   // 其余错误：下一轮重试（网络抖动不终止任务）
+      }
+    } catch (e) { return; }
+    var job = d.job;
+    if (job.status === 'error') {
+      _quizFail(window.T('psn_quiz_fail') + (job.error ? ' ' + String(job.error) : ''));
+      return;
+    }
+    if (job.status === 'done') {
+      _quizStopPoll();
+      var st = document.getElementById('pe-quiz-stage'); if (st) { st.style.display = 'none'; st.textContent = ''; }
+      var bw = document.getElementById('pe-quiz-bar-wrap'); if (bw) bw.style.display = 'none';
+      var btn = document.getElementById('pe-quiz-btn'); if (btn) btn.disabled = false;
+      _quizRenderResult(job.result || {});
+      _quizLoadHistory();   // H4：刚跑完刷新历史列表（不冲掉上方即时结果）
+      return;
+    }
+    var st2 = document.getElementById('pe-quiz-stage');
+    if (st2) st2.textContent = job.stage ? String(job.stage)
+      : (job.status === 'running' ? window.T('psn_quiz_running') : window.T('psn_imp_stage_queued'));
+    var bar2 = document.getElementById('pe-quiz-bar');
+    if (bar2) bar2.style.width = _pdiPct(job.progress) + '%';
+  };
+  _quizJobTimer = setInterval(tick, 2000);
+  tick();
+}
+function _quizRenderResult(result, intoEl) {
+  // intoEl：历史回看写 pe-quiz-hist-view，避免冲掉「刚刚跑完」的 pe-quiz-result
+  var box = intoEl || document.getElementById('pe-quiz-result');
+  if (!box) return;
+  result = result || {};
+  var items = Array.isArray(result.items) ? result.items : [];
+  var score = Number(result.score);
+  if (isNaN(score)) score = 0;
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  var col = score >= 80 ? 'var(--green)' : (score >= 50 ? '#d97706' : '#ef4444');
+  var passed = result.passed != null ? result.passed : items.filter(function(it){ return it && it.pass; }).length;
+  var total = result.total != null ? result.total : items.length;
+  var html = '<div style="display:flex;align-items:baseline;gap:.6rem">'
+    + '<span style="font-size:1.7rem;font-weight:800;color:' + col + '">' + score
+    + '<span style="font-size:.8rem;font-weight:600;color:var(--t2)">/100</span></span>'
+    + '<span style="font-size:.72rem;color:var(--t2)">' + _escHtml(window.Tf('psn_quiz_passed', {p: String(passed), t: String(total)})) + '</span>'
+    + '</div>';
+  if (items.length) {
+    html += '<div style="max-height:300px;overflow:auto;margin-top:.4rem"><table class="pq-table"><thead><tr>'
+      + '<th>' + _escHtml(window.T('psn_quiz_th_q')) + '</th>'
+      + '<th>' + _escHtml(window.T('psn_quiz_th_a')) + '</th>'
+      + '<th>' + _escHtml(window.T('psn_quiz_th_expect')) + '</th>'
+      + '<th>' + _escHtml(window.T('psn_quiz_th_pass')) + '</th>'
+      + '</tr></thead><tbody>'
+      + items.map(function(it){
+          it = it || {};
+          var full = String(it.answer == null ? '' : it.answer);
+          var short = full.length > 80 ? full.slice(0, 80) + '…' : full;
+          var exp = Array.isArray(it.expect) ? it.expect.map(String).join(' / ') : String(it.expect == null ? '' : it.expect);
+          var ok = !!it.pass;
+          return '<tr' + (ok ? '' : ' class="pq-row-fail"') + '>'
+            + '<td>' + _escHtml(String(it.q == null ? '' : it.q)) + '</td>'
+            + '<td title="' + _escHtml(full) + '">' + _escHtml(short) + '</td>'
+            + '<td>' + _escHtml(exp) + '</td>'
+            + '<td style="color:' + (ok ? 'var(--green)' : 'var(--th-ink-red5,#ef4444)') + ';font-weight:700">' + (ok ? '✓' : '✗') + '</td>'
+            + '</tr>';
+        }).join('')
+      + '</tbody></table></div>';
+  }
+  box.innerHTML = html;
+}
+
+// ── H4 线：考题历史（H3 契约 /quiz/reports；404/403 静默隐藏）──────────────
+function _quizFmtTs(ts) {
+  if (ts == null || ts === '') return '—';
+  var n = Number(ts);
+  var d;
+  if (!isNaN(n) && n > 0) {
+    if (n < 1e12) n = n * 1000;   // 秒级时间戳
+    d = new Date(n);
+  } else {
+    d = new Date(String(ts));
+  }
+  if (isNaN(d.getTime())) return String(ts);
+  try { return d.toLocaleString(); }
+  catch (e) { return d.toISOString().slice(0, 16).replace('T', ' '); }
+}
+async function _quizLoadHistory() {
+  var hist = document.getElementById('pe-quiz-hist');
+  if (!hist) return;
+  var pid = _editingProfileId;
+  if (!_quizEnabled || !pid) { hist.style.display = 'none'; return; }
+  try {
+    const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/quiz/reports');
+    if (pid !== _editingProfileId) return;
+    if (r.status === 404 || r.status === 403) { hist.style.display = 'none'; return; }
+    var d = null;
+    try { d = await r.json(); } catch (e2) {}
+    if (!r.ok || !d || d.ok === false) { hist.style.display = 'none'; return; }
+    var reports = Array.isArray(d.reports) ? d.reports : [];
+    var summary = (d.summary && typeof d.summary === 'object') ? d.summary : {};
+    _quizRenderHistory(reports, summary);
+  } catch (e) { hist.style.display = 'none'; }
+}
+function _quizRenderHistory(reports, summary) {
+  var hist = document.getElementById('pe-quiz-hist');
+  if (!hist) return;
+  hist.style.display = '';
+  _quizLoadTrend();   // I4 线：趋势行（接口不可用则保持隐藏，列表行为不变）
+  var sumEl = document.getElementById('pe-quiz-hist-sum');
+  var listEl = document.getElementById('pe-quiz-hist-list');
+  // 刷新列表时保留已打开的历史详情（仅列表/摘要更新）；切人设时 _resetQuiz 已清空 view
+  summary = summary || {};
+  reports = Array.isArray(reports) ? reports : [];
+  var count = summary.count != null ? summary.count : reports.length;
+  var avg = summary.avg_score;
+  if (avg == null || avg === '' || isNaN(Number(avg))) avg = '—';
+  else avg = String(Math.round(Number(avg) * 10) / 10);
+  var last = summary.last_score;
+  if (last == null || last === '' || isNaN(Number(last))) last = '—';
+  else last = String(Math.round(Number(last)));
+  if (sumEl) {
+    sumEl.textContent = window.Tf('psn_quiz_hist_sum', {n: String(count), avg: String(avg), last: String(last)});
+  }
+  if (!listEl) return;
+  if (!reports.length) {
+    listEl.innerHTML = '<div style="font-size:.7rem;color:var(--t3);padding:.3rem 0">'
+      + _escHtml(window.T('psn_quiz_hist_empty')) + '</div>';
+    return;
+  }
+  var show = reports.slice(0, 8);
+  listEl.innerHTML = show.map(function(rep) {
+    rep = rep || {};
+    var id = String(rep.id == null ? '' : rep.id);
+    if (!id) return '';
+    var sc = Number(rep.score); if (isNaN(sc)) sc = 0;
+    sc = Math.max(0, Math.min(100, Math.round(sc)));
+    var passed = rep.passed != null ? rep.passed : '—';
+    var total = rep.total != null ? rep.total : '—';
+    // 裁判改判数：关键词判错但 LLM 裁判认可 → 走高说明判分越来越靠兜底
+    var judged = Number(rep.judged); if (isNaN(judged) || judged < 0) judged = 0;
+    return '<button type="button" class="pq-hist-row" onclick="_quizOpenHist(' + JSON.stringify(id) + ')">'
+      + '<span class="pq-hist-score">' + sc + '</span>'
+      + '<span class="pq-hist-ts">' + _escHtml(_quizFmtTs(rep.ts)) + '</span>'
+      + '<span class="pq-hist-pt">' + _escHtml(String(passed) + '/' + String(total)) + '</span>'
+      + (judged ? '<span class="pq-hist-judged" title="'
+          + _escHtml(window.T('psn_quiz_hist_judged_tip')) + '">⚖ ' + judged + '</span>' : '')
+      + '</button>';
+  }).join('');
+}
+// ── I4 线：考题分数趋势（I3 契约 /quiz/trend；404 / enabled:false → 整行不显示）──
+var _quizTrendMap = null;
+var _quizTrendTried = false;
+async function _quizLoadTrend() {
+  if (_quizTrendTried) { _quizRenderTrend(); return; }
+  _quizTrendTried = true;   // 旧后端只探一次，别每次开抽屉都打 404
+  try {
+    const r = await apiFetch('/api/personas/quiz/trend?days=14&limit=20');
+    if (!r.ok) return;
+    var d = null;
+    try { d = await r.json(); } catch (e2) {}
+    if (!d || d.ok === false || d.enabled === false) return;
+    var ov = (d.overview && typeof d.overview === 'object') ? d.overview : {};
+    var rows = Array.isArray(ov.personas) ? ov.personas : [];
+    var map = {};
+    rows.forEach(function(row) { if (row && row.persona_id != null) map[String(row.persona_id)] = row; });
+    _quizTrendMap = map;
+    _quizRenderTrend();
+  } catch (e) {}
+}
+function _quizSpark(seq) {
+  var bars = ['▁', '▂', '▃', '▅', '▇'];
+  var vals = [];
+  (Array.isArray(seq) ? seq : []).forEach(function(p) {
+    var n = (p && typeof p === 'object')
+      ? Number(p.score != null ? p.score : p.avg_score)
+      : Number(p);
+    if (!isNaN(n)) vals.push(Math.max(0, Math.min(100, n)));
+  });
+  if (!vals.length) return '';
+  return vals.slice(-20).map(function(v) {
+    return bars[Math.min(bars.length - 1, Math.floor(v / 20.0001))];
+  }).join('');
+}
+function _quizRenderTrend() {
+  var el = document.getElementById('pe-quiz-trend');
+  if (!el) return;
+  el.textContent = ''; el.style.display = 'none'; el.title = '';
+  var pid = _editingProfileId;
+  if (!pid || !_quizTrendMap) return;
+  var row = _quizTrendMap[String(pid)];
+  if (!row) return;
+  var avg = Number(row.avg_score);
+  var line = window.Tf('psn_quiz_trend_sum', {
+    n: String(row.count != null ? row.count : '—'),
+    avg: isNaN(avg) ? '—' : String(Math.round(avg * 10) / 10),
+  });
+  var spark = _quizSpark(row.trend);
+  el.textContent = spark ? (spark + '  ' + line) : line;
+  el.title = window.T('psn_quiz_trend_t');
+  el.style.display = '';
+}
+
+async function _quizOpenHist(rid) {
+  var pid = _editingProfileId;
+  var viewEl = document.getElementById('pe-quiz-hist-view');
+  if (!pid || rid == null || rid === '' || !viewEl) return;
+  viewEl.innerHTML = '<div style="font-size:.7rem;color:var(--t2)">'
+    + _escHtml(window.T('psn_quiz_hist_loading')) + '</div>';
+  try {
+    const r = await apiFetch('/api/personas/' + encodeURIComponent(pid)
+      + '/quiz/reports/' + encodeURIComponent(String(rid)));
+    if (pid !== _editingProfileId) return;
+    if (r.status === 404 || r.status === 403) { viewEl.innerHTML = ''; return; }
+    var d = null;
+    try { d = await r.json(); } catch (e2) {}
+    if (!r.ok || !d || d.ok === false) { viewEl.innerHTML = ''; return; }
+    var report = (d.report && typeof d.report === 'object') ? d.report : d;
+    _quizRenderResult(report, viewEl);
+  } catch (e) { viewEl.innerHTML = ''; }
+}
+
+// ── C 线：卡片完整度徽标（A 线 list API 的数值型 completeness；旧后端无字段=不渲染）
+function _decorateCardCompleteness(profiles) {
+  var list = document.getElementById('profile-list');
+  if (!list) return;
+  var byId = {};
+  (profiles || []).forEach(function(p){ if (p && p.id != null) byId[String(p.id)] = p; });
+  list.querySelectorAll('.pcard[data-pid]').forEach(function(card){
+    var p = byId[card.getAttribute('data-pid') || ''];
+    if (!p || typeof p.completeness !== 'number' || isNaN(p.completeness)) return;
+    var foot = card.querySelector('.pcard-foot');
+    if (!foot || foot.querySelector('.comp-pill')) return;
+    var n = _pdiPct(p.completeness);
+    var span = document.createElement('span');
+    span.className = 'comp-pill ' + (n >= 80 ? 'comp-hi' : (n >= 50 ? 'comp-mid' : 'comp-lo'));
+    span.textContent = window.T('psn_comp_label') + ' ' + n + '%';
+    foot.insertBefore(span, foot.firstChild);
+  });
+}
+function _installCompletenessDecorator() {
+  if (typeof renderProfileList !== 'function') return;
+  var orig = renderProfileList;
+  renderProfileList = function(profiles) {
+    orig(profiles);
+    try { _decorateCardCompleteness(profiles); } catch (e) {}
+  };
 }
 
 // ── Auto-refresh ───────────────────────────────────────────────────
@@ -3236,8 +4948,8 @@ function _renderFieldDiff() {
   var saved = {
     name:       _loadedProfile.name || '',
     role:       _loadedProfile.role || '',
-    personality: typeof _loadedProfile.personality === 'object'
-      ? _flattenPersonalityObj(_loadedProfile.personality)
+    personality: (_loadedProfile.personality && typeof _loadedProfile.personality === 'object' && !Array.isArray(_loadedProfile.personality))
+      ? String(_loadedProfile.personality.style || '')
       : (_loadedProfile.personality || ''),
     tags:       (_loadedProfile.tags || []),
     language:   _loadedProfile.language || '',
@@ -3367,8 +5079,8 @@ function _updateDiffBadge() {
   var id2 = _loadedProfile.identity || {};
   var saved = {
     name: _loadedProfile.name||'', role: _loadedProfile.role||'',
-    personality: typeof _loadedProfile.personality==='object'
-      ? _flattenPersonalityObj(_loadedProfile.personality) : (_loadedProfile.personality||''),
+    personality: (_loadedProfile.personality && typeof _loadedProfile.personality==='object' && !Array.isArray(_loadedProfile.personality))
+      ? String(_loadedProfile.personality.style||'') : (_loadedProfile.personality||''),
     tags: (_loadedProfile.tags||[]),
     language: _loadedProfile.language||'',
     reply_length: sp.reply_length||'', emoji_level: sp.emoji_level||'',
@@ -4283,6 +5995,10 @@ document.addEventListener('DOMContentLoaded', function() {
   try { var _storedOrd = localStorage.getItem('persona_card_order'); if (_storedOrd) _customOrder = JSON.parse(_storedOrd); } catch(e) {}
   var _hashM = window.location.hash.match(/^#profile=(.+)$/);
   if (_hashM) { _pendingHashProfile = decodeURIComponent(_hashM[1]); }
+  _installCompletenessDecorator();   // C 线：卡片完整度徽标（core.js 已加载，装饰其渲染器）
+  _initDocImport();                  // C 线：文档导入功能开关探测（旧后端 404 = 保持隐藏）
+  _initQuizStatus();                 // C2 线：一致性考题开关探测（false/404 = 整块隐藏）
+  _initBioInventory();               // M9 收尾：孤儿传记库存横幅（404/无孤儿 = 隐藏）
   loadProfileList();
   _reloadBindingsList();
   refreshStatus();

@@ -52,6 +52,7 @@ _BASELINE = """
 /api/admin/send-route-trend	GET
 /api/admin/media-promise-trend	GET
 /api/admin/media-consistency	GET
+/api/admin/duel-bench	GET
 /api/admin/workers/{worker_id}/reset-circuit	POST
 /api/admin/reliability	GET
 /api/admin/license	GET
@@ -1109,6 +1110,22 @@ _ADDITIONS_2026_07_28_PERSONA_BIO_REEMBED = """
 /api/personas/{profile_id}/bio-doc/reembed	POST
 """
 _BASELINE += _ADDITIONS_2026_07_28_PERSONA_BIO_REEMBED
+
+# 2026-07-28 M9 收尾：传记库存盘点（只读）——库存×档案×账号绑定三维对齐视图，
+# `orphans`（有库存无档案）供 Studio 顶部横幅消费；误删/平行建档两类错位从翻库
+# 变成一眼可见。
+_ADDITIONS_2026_07_28_PERSONA_BIO_INVENTORY = """
+/api/personas/bio-inventory	GET
+"""
+_BASELINE += _ADDITIONS_2026_07_28_PERSONA_BIO_INVENTORY
+
+# 2026-07-28 M10：导入向导「保存并验收」流水线——人工审核闸后的机械尾巴
+# （建档同步 + 传记入库/考题验收后台任务）收成一次提交；轮询复用
+# /api/personas/import-doc/jobs/{job_id}。账号绑定刻意不在流水线内（运营决策）。
+_ADDITIONS_2026_07_28_PERSONA_FINALIZE = """
+/api/personas/import-doc/finalize	POST
+"""
+_BASELINE += _ADDITIONS_2026_07_28_PERSONA_FINALIZE
 
 
 def _parse_baseline():

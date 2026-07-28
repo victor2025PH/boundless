@@ -18,7 +18,9 @@ select_next_agent / should_request_user_input / should_terminate）同构——*
 
 **① 拍队列而非游标**：剧本 beats 装进队列，导演可临场重排。真人群里几乎没人自己
 接自己的话——若本拍角色恰是上一个发言者，导演会把队列里第一个不同角色的拍提前
-（``_reorder_avoid_self_reply``）。游标模型做不到这件事。
+（``_reorder_avoid_self_reply``）。游标模型做不到这件事。刷屏闸同理：占比超限时
+把**别人的拍**提前（换拍不换嘴），绝不把本拍塞给别人念——拍的意图与角色人格绑定，
+换嘴会产生「advocate 自己泼冷水 / skeptic 自问自答」（2026-07-27 双号灰度实锤）。
 
 **② 响应式选人覆盖**：真人插话且句子里带疑问/产品信号时，优先让 ``advocate``（懂
 产品的）或 ``skeptic`` 接话，而不是机械念下一拍。播放器按顺序播，导演看场子。
@@ -67,7 +69,8 @@ class DirectorConfig:
     human_takeover_lines: int = 3
     #: 单场最多发言条数（预算闸，防失控刷屏）
     max_lines: int = 40
-    #: 单号占本场发言比例上限（超过则本拍换人，防一个号刷屏）
+    #: 单号占本场发言比例上限（超过则把别的号的拍提前，防一个号刷屏；
+    #: 实际生效值随卡司规模自适应抬高，见 ``_share_threshold``）
     max_share_per_account: float = 0.45
     #: 每提及一次产品，后续软广强度衰减多少
     soft_decay_per_mention: int = 1
@@ -182,10 +185,18 @@ class GroupShowDirector:
 
         三层决策，从强到弱：
         ① **响应式覆盖**：有待回应的真人提问 → 让 advocate/skeptic 接（懂产品的
-           人回答问题才自然，让 bystander 去答技术疑问是穿帮点）；
+           人回答问题才自然，让 bystander 去答技术疑问是穿帮点）。选定后把队列里
+           **他自己角色的拍**提前对齐，别让他顶着别人的意图开口；
         ② **自我接话规避**：本拍角色恰是上一个发言者 → 队列里第一个不同角色的拍
            提前（真人群里几乎没人自己接自己）；
-        ③ **刷屏闸**：某号占比超 ``max_share_per_account`` → 本拍换人。
+        ③ **刷屏闸**：某号占比超阈值 → **换拍不换嘴**（把第一个属于别的号的拍
+           提前）。拍的意图与角色人格是绑定的，把 A 的拍塞给 B 念会产生
+           「advocate 自己泼冷水 / skeptic 自问自答洗地」——2026-07-27 双号灰度
+           实锤的水军痕迹。队列剩下全是这个号的拍时照发不换（剧本完整性 > 占比
+           均衡）；阈值随卡司规模自适应，见 :meth:`_share_threshold`。
+
+        **不变量**：正常拍流程（非响应式）里，返回的人永远就是队头拍的角色——
+        「谁在说」与「说什么」由同一次重排一起改，绝不脱钩。
         """
         if not self._queue:
             return None
@@ -193,9 +204,10 @@ class GroupShowDirector:
         if not cast.members:
             return None
 
-        # ① 响应式覆盖
+        # ① 响应式覆盖（对齐拍：让回答的人念自己角色的拍）
         responder = self._responsive_pick()
         if responder is not None:
+            self._align_queue_to_slot(responder.slot)
             return responder
 
         # ② 自我接话规避（重排队列，不丢拍）
@@ -205,11 +217,11 @@ class GroupShowDirector:
         if member is None:
             return None
 
-        # ③ 刷屏闸
+        # ③ 刷屏闸（换拍不换嘴；重排失败＝队列全是他的拍 → 照发）
         if self._over_share(member.account_id):
-            alt = self._least_spoken_other(member.account_id)
-            if alt is not None:
-                return alt
+            if self._reorder_for_share(member.account_id):
+                beat = self._queue[0]
+                member = cast.by_slot(beat.role) or member
         return member
 
     def next_directive(self) -> Optional[BeatDirective]:
@@ -312,19 +324,63 @@ class GroupShowDirector:
                 return m
         return cast.members[0] if cast.members else None
 
+    def _align_queue_to_slot(self, slot: str) -> None:
+        """把队列里第一个属于 ``slot`` 的拍提前到队头（没有就不动）。
+
+        响应式覆盖选了某人答疑后，若队头拍不是他的角色，directive 会带着别人的
+        意图给他念。对齐后他念的是自己角色的拍；队列里没有他的拍时保持队头——
+        此时 ``respond_to_human`` 主导生成，意图错位的影响可接受。
+        """
+        if not self._queue or self._queue[0].role == slot:
+            return
+        for i in range(1, len(self._queue)):
+            if self._queue[i].role == slot:
+                self._queue.insert(0, self._queue.pop(i))
+                return
+
+    def _reorder_for_share(self, hog_account: str) -> bool:
+        """刷屏闸的「换拍不换嘴」：把第一个属于**别的号**的拍提前。
+
+        优先跳过「上一个发言者」的拍——闸门为了压占比反手制造背靠背自我接话，
+        是拆东墙补西墙；只有队列里再无第三人的拍时才接受这个次优解。
+        找不到任何别人的拍（队列剩下全是超占号的）返回 False，调用方照发不换
+        ——宁可占比略超，不可把 A 的台词塞进 B 嘴里。
+        """
+        last = self._last_speaker_account()
+        fallback = -1
+        for i in range(1, len(self._queue)):
+            cand = self.state.casting.by_slot(self._queue[i].role)
+            if cand is None or cand.account_id == hog_account:
+                continue
+            if cand.account_id != last:
+                self._queue.insert(0, self._queue.pop(i))
+                return True
+            if fallback < 0:
+                fallback = i
+        if fallback > 0:
+            self._queue.insert(0, self._queue.pop(fallback))
+            return True
+        return False
+
     def _over_share(self, account_id: str) -> bool:
         spoken = sum(1 for e in self.state.events if e.kind in ("line", "media"))
         if spoken < 4:  # 样本太少谈占比没意义
             return False
         share = self.state.lines_by_account(account_id) / float(spoken)
-        return share > self.cfg.max_share_per_account
+        return share > self._share_threshold()
 
-    def _least_spoken_other(self, exclude: str) -> Optional[CastMember]:
-        cands = [m for m in self.state.casting.members
-                 if m.account_id != exclude]
-        if not cands:
-            return None
-        return min(cands, key=lambda m: self.state.lines_by_account(m.account_id))
+    def _share_threshold(self) -> float:
+        """占比阈值随卡司规模自适应：``max(配置值, 1/卡司号数 + 0.10)``。
+
+        n 个号的天然均分占比是 1/n——两人对话轮流说话占比恒 0.5，固定 0.45 会
+        每拍误触发（2026-07-27 双号灰度事故的扳机：b5 起拍拍换人，角色全乱）。
+        抬到天然占比 +0.10 后，闸门只抓真正的失衡（如双人戏里一个号连说到 2/3），
+        多人卡司下配置值照常生效。
+        """
+        accounts = {m.account_id for m in self.state.casting.members
+                    if m.account_id}
+        natural = 1.0 / max(1, len(accounts))
+        return max(self.cfg.max_share_per_account, natural + 0.10)
 
     def _effective_soft(self, beat: Beat) -> int:
         """软广衰减：本场每提一次产品，后续强度降档（防越聊越像广告）。

@@ -72,10 +72,10 @@ def register_copilot_routes(app, ctx) -> None:
     # H4: 运营 Copilot — 自然语言查询内部数据
     def _copilot_get_ctx_store():
         """统一获取 context_store 实例"""
-        if telegram_client:
-            sm = getattr(telegram_client, "skill_manager", None)
-            if sm:
-                return getattr(sm, "_context_store", None), sm
+        from src.web.web_context import resolve_skill_manager
+        sm = resolve_skill_manager(telegram_client, app)
+        if sm:
+            return getattr(sm, "_context_store", None), sm
         return None, None
 
     @app.post("/api/copilot/query")

@@ -225,6 +225,42 @@ def bind_code(*, config: Optional[dict] = None, fetch: Optional[Fetch] = None) -
     }
 
 
+#: 首启向导漏斗事件白名单（与桌面壳 first-run-model.js 的 FR_FUNNEL_EVENTS 同口径）。
+#: 收口在客户端这层：路由只透传，事件名不在表内直接拒——官网 /api/track 是全站
+#: 通用事件流水，别让任意字符串顺着桌面壳灌进去。
+FUNNEL_EVENTS = {"welcome", "claim_submit", "claim_ok", "claim_skip", "gift_open", "done"}
+
+
+def funnel(event: str, *, config: Optional[dict] = None,
+           fetch: Optional[Fetch] = None) -> Dict[str, Any]:
+    """上报首启向导漏斗事件到官网 /api/track（fire-and-forget 语义）。
+
+    * ``sid`` = 机器指纹 → 官网侧按机去重（与 intro 漏斗按会话去重同构）；
+      拿不到指纹照样上报（匿名计数仍有意义），绝不因指纹失败丢事件。
+    * /api/track 成功返回 204 无体 → ``_http`` 解析为 ``{}``；因此这里按
+      「没有显式 error 即成功」判定，而不是要求 ``ok=True``。
+    * 任何失败只回错误码，绝不抛——埋点是旁路，不许影响向导主流程。
+    """
+    ev = str(event or "").strip().lower()
+    if ev not in FUNNEL_EVENTS:
+        return {"ok": False, "error": "bad_event"}
+    fp = ""
+    try:
+        from src.licensing.machine_bridge import machine_fingerprint
+        fp = machine_fingerprint() or ""
+    except Exception:
+        pass
+    f = fetch or _http
+    resp = f(f"{site_url(config)}/api/track", "POST", {
+        "event": f"trial_wizard_{ev}",
+        "sid": fp,
+        "props": {"product": "chatx"},
+    })
+    if isinstance(resp, dict) and resp.get("ok") is False:
+        return {"ok": False, "error": str(resp.get("error") or "network")}
+    return {"ok": True}
+
+
 def mark_activated(config: Optional[dict] = None) -> None:
     state = load_state(config)
     if state:

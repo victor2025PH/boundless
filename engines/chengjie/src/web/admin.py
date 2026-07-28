@@ -107,9 +107,13 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     domain_web_pages: list = []
     domain_dashboard_widgets: list = []
     _domain_manifest: dict = {}
-    _project_root = Path(config_manager.config_path).parent.parent if hasattr(config_manager, "config_path") else Path(".")
+    # 域包目录经 resolve_domains_dir 统一定位：冻结态 config_path 在用户数据目录，
+    # 其 ../domains 是空的，必须回落到随包的 <_MEIPASS>/domains，否则安装版丢掉
+    # 领域看板挂件与域内模板（与 skill_manager 同一入口，避免两处口径分裂）。
+    from src.utils.domain_loader import resolve_domains_dir as _resolve_domains_dir
+    _domains_dir = _resolve_domains_dir(getattr(config_manager, "config_path", None), domain_name)
     try:
-        _mf = _project_root / "domains" / domain_name / "manifest.yaml"
+        _mf = _domains_dir / domain_name / "manifest.yaml"
         if _mf.exists():
             import yaml as _y
             with open(_mf, "r", encoding="utf-8") as _f:
@@ -122,8 +126,8 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     except Exception:
         pass
     # Add domain template directory to Jinja2 search path
-    if _project_root:
-        _domain_tpl_dir = _project_root / "domains" / domain_name / "web" / "templates"
+    if _domains_dir:
+        _domain_tpl_dir = _domains_dir / domain_name / "web" / "templates"
         if _domain_tpl_dir.is_dir():
             from jinja2 import FileSystemLoader
             templates.env.loader = FileSystemLoader(
@@ -340,6 +344,11 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             return await call_next(request)
         _line_exempt = getattr(request.app.state, "line_webhook_path", None)
         if _line_exempt and request.url.path == _line_exempt:
+            return await call_next(request)
+        # 官网订单回流 webhook（外部服务器→本机，无浏览器无 cookie）：与 LINE
+        # webhook 同类——路由自带共享 token 恒时比较鉴权、完全不认 session，
+        # CSRF 的「ambient 凭证被借用」威胁模型不适用；不豁免则合法回流全 403。
+        if request.url.path == "/api/goals/order-hook":
             return await call_next(request)
         cookie_tok = request.cookies.get("csrf_token", "")
         header_tok = request.headers.get("X-CSRF-Token", "")
@@ -952,7 +961,8 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     try:
         from src.web.routes.license_routes import register_license_routes
 
-        register_license_routes(app, api_auth=_api_auth)
+        register_license_routes(app, api_auth=_api_auth,
+                                config_manager=config_manager)
     except Exception:
         import logging as _log_lic
 
@@ -1248,6 +1258,26 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_pr
         _log_pr.getLogger("admin").debug("Persona API 路由注册跳过", exc_info=True)
 
+    # ── Persona doc import（「从文档创建人设」LLM 抽取）──────
+    try:
+        from src.web.routes.persona_import_routes import register_persona_import_routes
+        register_persona_import_routes(
+            app, auth_dep=_api_auth, audit_store=audit_store, config_manager=config_manager
+        )
+    except Exception:
+        import logging as _log_pi
+        _log_pi.getLogger("admin").debug("Persona 文档导入路由注册跳过", exc_info=True)
+
+    # ── Persona quiz（人设一致性考题：档案出题 → 真人设 prompt 实测 → 判分）──
+    try:
+        from src.web.routes.persona_quiz_routes import register_persona_quiz_routes
+        register_persona_quiz_routes(
+            app, auth_dep=_api_auth, audit_store=audit_store, config_manager=config_manager
+        )
+    except Exception:
+        import logging as _log_pq
+        _log_pq.getLogger("admin").debug("Persona 考题路由注册跳过", exc_info=True)
+
     try:
         from src.web.routes.persona_media_routes import register_persona_media_routes
         register_persona_media_routes(
@@ -1319,7 +1349,8 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         # 情景记忆
         try:
-            sm = getattr(telegram_client, "skill_manager", None) if telegram_client else None
+            from src.web.web_context import resolve_skill_manager
+            sm = resolve_skill_manager(telegram_client, app)
             store = getattr(sm, "_episodic_store", None) if sm else None
             if store and store._conn:
                 row = store._conn.execute(
@@ -1489,12 +1520,10 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     def _get_strategy_tracker():
         # 修复潜伏 bug：strategy_routes 抽出时此闭包未在 admin.py 保留，
         # 导致 data-purge/session-stats/export-strategy/daily-report 调用时 NameError。
-        # 仅依赖 telegram_client，与 strategy_routes 内同名实现一致。
-        if telegram_client:
-            sm = getattr(telegram_client, "skill_manager", None)
-            if sm:
-                return getattr(sm, "strategy_tracker", None)
-        return None
+        # 与 strategy_routes 内同名实现一致（主客户端 → app.state 双通路）。
+        from src.web.web_context import resolve_skill_manager
+        sm = resolve_skill_manager(telegram_client, app)
+        return getattr(sm, "strategy_tracker", None) if sm else None
 
     @app.post("/api/data-purge")
     async def api_data_purge(request: Request, _=Depends(_api_write("import_export"))):
@@ -1542,10 +1571,10 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         ok, msg = config_manager.save_strategies(rs)
         if not ok:
             raise HTTPException(500, msg)
-        if telegram_client:
-            sm = getattr(telegram_client, "skill_manager", None)
-            if sm and hasattr(sm, "_refresh_strategies"):
-                sm._refresh_strategies()
+        from src.web.web_context import resolve_skill_manager
+        _sm_hot = resolve_skill_manager(telegram_client, app)
+        if _sm_hot and hasattr(_sm_hot, "_refresh_strategies"):
+            _sm_hot._refresh_strategies()
         if audit_store:
             audit_store.log(request.session.get("username", "web_admin"),
                             "apply_param_suggestion", f"{sid}.{param}",
@@ -2442,11 +2471,9 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     async def api_users_at_risk(request: Request):
         """K3: 返回满意度 at_risk 的用户列表"""
         _api_auth(request)
-        ctx_store = None
-        if telegram_client:
-            sm = getattr(telegram_client, "skill_manager", None)
-            if sm:
-                ctx_store = getattr(sm, "_context_store", None)
+        from src.web.web_context import resolve_skill_manager
+        sm = resolve_skill_manager(telegram_client, app)
+        ctx_store = getattr(sm, "_context_store", None) if sm else None
         if not ctx_store:
             return {"users": [], "count": 0}
         at_risk = []
@@ -2472,11 +2499,9 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     async def api_active_conversations(request: Request, minutes: int = 30):
         """返回最近 N 分钟内有活动的对话列表（含满意度、意图、at_risk 状态）"""
         _api_auth(request)
-        ctx_store = None
-        if telegram_client:
-            sm = getattr(telegram_client, "skill_manager", None)
-            if sm:
-                ctx_store = getattr(sm, "_context_store", None)
+        from src.web.web_context import resolve_skill_manager
+        sm = resolve_skill_manager(telegram_client, app)
+        ctx_store = getattr(sm, "_context_store", None) if sm else None
         if not ctx_store:
             return {"conversations": [], "count": 0, "at_risk_count": 0}
 

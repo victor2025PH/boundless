@@ -150,6 +150,11 @@ def register_episodic_identity_routes(app, ctx) -> None:
     _api_auth = ctx.api_auth
     _api_write = ctx.api_write
 
+    def _get_sm():
+        """SkillManager：主客户端 → app.state 双通路（protocol 账号实例主客户端为 None）。"""
+        from src.web.web_context import resolve_skill_manager
+        return resolve_skill_manager(telegram_client, app)
+
     # ── 情景记忆 API ──────────────────────────────────────────────────────
 
     @app.get("/api/episodic-memory")
@@ -161,9 +166,9 @@ def register_episodic_identity_routes(app, ctx) -> None:
         R13：可选 ``source`` 筛选（user_stated / ai_inferred）。
         """
         _api_auth(request)
-        if not telegram_client or not getattr(telegram_client, "skill_manager", None):
+        sm = _get_sm()
+        if not sm:
             raise HTTPException(status_code=503, detail=tr(request, "err.epi.bot_not_ready_sm"))
-        sm = telegram_client.skill_manager
         lim = max(1, min(int(limit or 100), 500))
         src = source if source in ("user_stated", "ai_inferred") else ""
         rows = sm.episodic_list_for_admin(prefix=prefix[:120], limit=lim, source=src)
@@ -172,9 +177,10 @@ def register_episodic_identity_routes(app, ctx) -> None:
     @app.delete("/api/episodic-memory/{row_id}")
     async def api_episodic_memory_delete(request: Request, row_id: int):
         _api_write("episodic_memory")(request)
-        if not telegram_client or not getattr(telegram_client, "skill_manager", None):
+        sm = _get_sm()
+        if not sm:
             raise HTTPException(status_code=503, detail=tr(request, "err.epi.bot_not_ready"))
-        ok = telegram_client.skill_manager.episodic_delete_for_admin(int(row_id))
+        ok = sm.episodic_delete_for_admin(int(row_id))
         if not ok:
             raise HTTPException(status_code=404, detail=tr(request, "err.epi.record_not_found"))
         return {"ok": True, "deleted": int(row_id)}
@@ -187,7 +193,7 @@ def register_episodic_identity_routes(app, ctx) -> None:
         让复发可观测（``bare_keys`` 回升即说明某入口又漏传 platform）。
         """
         _api_auth(request)
-        sm = getattr(telegram_client, "skill_manager", None) if telegram_client else None
+        sm = _get_sm()
         if not sm or not hasattr(sm, "episodic_key_health"):
             raise HTTPException(status_code=503, detail=tr(request, "err.epi.bot_not_ready_sm"))
         return {"ok": True, **sm.episodic_key_health(sample=max(0, min(int(sample or 10), 100)))}
@@ -196,7 +202,7 @@ def register_episodic_identity_routes(app, ctx) -> None:
     async def api_episodic_key_migrate_plan(request: Request, platform: str = "telegram"):
         """裸 key → canonical 迁移 dry-run（只读）：预览将并入哪些 key。"""
         _api_auth(request)
-        sm = getattr(telegram_client, "skill_manager", None) if telegram_client else None
+        sm = _get_sm()
         if not sm or not hasattr(sm, "episodic_plan_key_migration"):
             raise HTTPException(status_code=503, detail=tr(request, "err.epi.bot_not_ready_sm"))
         plat = (platform or "telegram").strip()[:32]
@@ -208,7 +214,7 @@ def register_episodic_identity_routes(app, ctx) -> None:
     async def api_episodic_key_migrate_apply(request: Request, platform: str = "telegram"):
         """裸 key → canonical 迁移落地（幂等、按 content_hash 去重）。一键修复漂移。"""
         _api_write("episodic_memory")(request)
-        sm = getattr(telegram_client, "skill_manager", None) if telegram_client else None
+        sm = _get_sm()
         if not sm or not hasattr(sm, "episodic_apply_key_migration"):
             raise HTTPException(status_code=503, detail=tr(request, "err.epi.bot_not_ready_sm"))
         plat = (platform or "telegram").strip()[:32]
@@ -239,7 +245,7 @@ def register_episodic_identity_routes(app, ctx) -> None:
         raw 的 ai_inferred。采纳率为近似：confirmed/(confirmed+pending)。
         """
         _api_auth(request)
-        sm = getattr(telegram_client, "skill_manager", None) if telegram_client else None
+        sm = _get_sm()
         return build_correction_stats(
             getattr(ctx, "audit_store", None), sm, days=int(days or 30),
         )
@@ -248,9 +254,10 @@ def register_episodic_identity_routes(app, ctx) -> None:
     async def api_episodic_memory_confirm(request: Request, row_id: int):
         """R15/R16：确认一条 AI 推断为属实——升格 user_stated 且置 stable，并落审计。"""
         _api_write("episodic_memory")(request)
-        if not telegram_client or not getattr(telegram_client, "skill_manager", None):
+        sm = _get_sm()
+        if not sm:
             raise HTTPException(status_code=503, detail=tr(request, "err.epi.bot_not_ready"))
-        content = telegram_client.skill_manager.episodic_confirm_for_admin(int(row_id))
+        content = sm.episodic_confirm_for_admin(int(row_id))
         if not content:
             raise HTTPException(status_code=404, detail=tr(request, "err.epi.record_not_ai_inferred"))
         # R16：谁在何时把哪条 AI 推断确认成事实——与危机处置审计对称，便于回溯校正质量
@@ -281,9 +288,9 @@ def register_episodic_identity_routes(app, ctx) -> None:
         ``force=1`` 重嵌**所有**行（换 embedding 模型后重建全量向量用），否则只补缺失向量的行。
         """
         _api_write("episodic_memory")(request)
-        if not telegram_client or not getattr(telegram_client, "skill_manager", None):
+        sm = _get_sm()
+        if not sm:
             raise HTTPException(status_code=503, detail=tr(request, "err.epi.bot_not_ready"))
-        sm = telegram_client.skill_manager
         lim = max(1, min(int(limit or 20), 100))
         pre = (prefix or "")[:120]
         out = await sm.episodic_backfill_embeddings(lim, memory_key_prefix=pre, force=bool(force))
@@ -309,7 +316,7 @@ def register_episodic_identity_routes(app, ctx) -> None:
 
     def _get_cpi():
         """Return CPI instance from SkillManager or None."""
-        sm = getattr(telegram_client, "skill_manager", None) if telegram_client else None
+        sm = _get_sm()
         return getattr(sm, "_cpi", None) if sm else None
 
     def _audit_identity(
@@ -358,21 +365,22 @@ def register_episodic_identity_routes(app, ctx) -> None:
         if not all([pa, ua, pb, ub]):
             raise HTTPException(status_code=400, detail=tr(request, "err.epi.need_ab_pairs"))
         from src.utils.cross_platform_identity import link_and_merge_memory
-        _sm = getattr(telegram_client, "skill_manager", None) if telegram_client else None
+        _sm = _get_sm()
         _store = getattr(_sm, "_episodic_store", None) if _sm else None
         out = link_and_merge_memory(cpi, _store, pa, ua, pb, ub)
-        # 合流观测累计（与影子确认同一 totals 文件）
-        try:
-            from src.utils.identity_shadow_actions import record_merge_event
-            _, _cfg_dir = _cfg_and_dir()
-            record_merge_event(
-                _cfg_dir, "manual_link",
-                merged_rows=int(out.get("memory_rows_merged") or 0),
-                cluster_relinked=len(out.get("cluster_relinked") or []),
-                canonical=str(out.get("canonical_id") or ""),
-            )
-        except Exception:
-            pass
+        # 合流观测累计（与影子确认同一 totals 文件）。幂等重关联不计数。
+        if not out.get("already_linked"):
+            try:
+                from src.utils.identity_shadow_actions import record_merge_event
+                _, _cfg_dir = _cfg_and_dir()
+                record_merge_event(
+                    _cfg_dir, "manual_link",
+                    merged_rows=int(out.get("memory_rows_merged") or 0),
+                    cluster_relinked=len(out.get("cluster_relinked") or []),
+                    canonical=str(out.get("canonical_id") or ""),
+                )
+            except Exception:
+                pass
         _audit_identity(
             request, "identity_link", f"{pa}:{ua}|{pb}:{ub}",
             new_val=(
@@ -521,7 +529,7 @@ def register_episodic_identity_routes(app, ctx) -> None:
         inbox_db = resolve_inbox_db(cfg, cfg_dir)
         # 顺带记忆合流：把两侧旧 canonical 下的历史事实并入共享 canonical
         # （store 缺席=纯关联，行为同旧版，绝不阻断）
-        _sm = getattr(telegram_client, "skill_manager", None) if telegram_client else None
+        _sm = _get_sm()
         _store = getattr(_sm, "_episodic_store", None) if _sm else None
         result = confirm_link_pair(
             cpi, inbox_db, pa, ca, pb, cb, episodic_store=_store)
@@ -561,17 +569,19 @@ def register_episodic_identity_routes(app, ctx) -> None:
                     write_state(sp, st)
         except Exception:
             pass
-        # 合流观测累计（best-effort；独立 totals 文件，ops 卡读数）
-        try:
-            from src.utils.identity_shadow_actions import record_merge_event
-            record_merge_event(
-                cfg_dir, "confirm",
-                merged_rows=int(result.get("merged_rows") or 0),
-                cluster_relinked=len(result.get("cluster_relinked") or []),
-                canonical=str(result.get("canonical_id") or ""),
-            )
-        except Exception:
-            pass
+        # 合流观测累计（best-effort；独立 totals 文件，ops 卡读数）。
+        # 幂等重确认（already_linked：验证 ping / 双击）不计数，防 totals 虚胀。
+        if not result.get("already_linked"):
+            try:
+                from src.utils.identity_shadow_actions import record_merge_event
+                record_merge_event(
+                    cfg_dir, "confirm",
+                    merged_rows=int(result.get("merged_rows") or 0),
+                    cluster_relinked=len(result.get("cluster_relinked") or []),
+                    canonical=str(result.get("canonical_id") or ""),
+                )
+            except Exception:
+                pass
         _audit_identity(
             request, "identity_shadow_confirm",
             pk or f"{pa}:{ca}|{pb}:{cb}",

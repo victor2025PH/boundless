@@ -178,18 +178,18 @@ async def run_autoreply(
     if not is_autoreply_enabled(cfg, row):
         return _result("disabled")
 
-    # Phase 3 防双发：会话已由收件箱「全自动」(auto_ai) 托管 → 交给 inbox 草稿/autosend
-    # 链路（带人设+二次风控+L3/L4 审批），本直发链路早退，杜绝同一条消息双生成、双发。
-    # Sprint1 接管即静音：manual = 坐席已接管，本直发链路同样让位（否则接管置 manual 反而
-    # 解除 auto_ai 让位、恢复 protocol 直发，与「停 AI」相悖）。review/multi_choice 不受影响。
-    #
-    # 2026-07-22 真机事故：会话已是 auto_ai，但 inbox.l2_autosend.deliver=false
-    # （AutosendWorker 只批草稿不投递）→ protocol 让位后客户「你还在吗」永静默。
-    # 真发未开时**不让位**，继续走协议直发，避免「让位=吞消息」。
+    # Phase 3 防双发 + 人审闸：与收件箱 UI / A 线同一口径（allows_direct_autosend）。
+    # - auto_ai + l2 deliver 开 → 让位 System Z（防双发）
+    # - auto_ai + deliver 关 → 不让位（2026-07-22：让位=吞消息）
+    # - manual / review / multi_choice → 直发静音（「停 AI / AI草稿我审」必须生效）
     if inbox_mode_fn is not None:
         try:
-            _im = inbox_mode_fn(platform, account_id, chat_key)
-            if _im == "auto_ai":
+            from src.inbox.automation_mode import (
+                allows_direct_autosend,
+                human_gate_skip_reason,
+            )
+            _im = str(inbox_mode_fn(platform, account_id, chat_key) or "")
+            if allows_direct_autosend(_im):
                 _deliver_on = bool(
                     ((((cfg or {}).get("inbox") or {}).get("l2_autosend") or {})
                      .get("deliver"))
@@ -205,8 +205,10 @@ async def run_autoreply(
                     "keep protocol path %s:%s:%s",
                     platform, account_id, chat_key,
                 )
-            if _im == "manual":
-                return _result("inbox_manual", inbound=text)
+            else:
+                _skip = human_gate_skip_reason(_im)
+                if _skip:
+                    return _result(_skip, inbound=text)
         except Exception:
             logger.debug("[protocol-autoreply] inbox_mode_fn 检查失败（忽略）", exc_info=True)
 
@@ -639,15 +641,16 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
         import asyncio
         cfg = _cfg()
 
-        # Phase 3 防双发：用收件箱持久层的 per-conv automation_mode 作为闸门。
+        # Phase 3：per-conv 有效档位（显式 > 全局 auto_draft），与 UI/A 线同源。
         def _inbox_mode(platform: str, account_id: str, chat_key: str) -> str:
             store = getattr(app.state, "inbox_store", None)
             if store is None:
                 return ""
             try:
                 from src.inbox.normalizer import conv_id
-                return store.get_automation_mode(
-                    conv_id(platform, account_id, chat_key)
+                from src.inbox.automation_mode import resolve_automation_mode
+                return resolve_automation_mode(
+                    store, conv_id(platform, account_id, chat_key), cfg,
                 )
             except Exception:
                 return ""

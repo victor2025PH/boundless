@@ -541,12 +541,14 @@ class WebInboxAdapter:
         except Exception:
             logger.debug("WebInboxAdapter list_conversations 失败", exc_info=True)
             return []
+        cfg = self._web_cfg(request)
         for r in rows:
             cid = str(r.get("conversation_id") or "")
             mode = "auto_ai"
             mcount = 0
             try:
-                mode = store.get_automation_mode(cid)
+                from src.inbox.automation_mode import resolve_automation_mode
+                mode = resolve_automation_mode(store, cid, cfg)
                 mcount = store.count_messages(cid)
             except Exception:
                 pass
@@ -680,6 +682,13 @@ class ProtocolInboxAdapter:
         plats = set(active) | (set(readonly_ids) if show_removed else set())
         if not plats:
             return []
+        try:
+            cm = getattr(request.app.state, "config_manager", None)
+            cfg_root = (getattr(cm, "config", None) or {}) if cm is not None else {}
+            if not isinstance(cfg_root, dict):
+                cfg_root = {}
+        except Exception:
+            cfg_root = {}
         out: List[Dict[str, Any]] = []
         for plat in plats:
             active_ids = active.get(plat, set())
@@ -702,7 +711,8 @@ class ProtocolInboxAdapter:
                 mcount = 0
                 cid = str(r.get("conversation_id") or "")
                 try:
-                    mode = store.get_automation_mode(cid)
+                    from src.inbox.automation_mode import resolve_automation_mode
+                    mode = resolve_automation_mode(store, cid, cfg_root)
                     mcount = store.count_messages(cid)
                 except Exception:
                     pass

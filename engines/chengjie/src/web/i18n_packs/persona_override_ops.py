@@ -16,6 +16,7 @@ ZH = {
     "ov2_po_conv": "会话覆写命中",
     "ov2_po_acct": "账号人设命中",
     "ov2_po_legacy_sup": "legacy 被压制",
+    "ov2_po_debt": "遗留债余量",
     "ov2_po_actions": "治理动作",
     "ov2_po_a_bind": "会话换绑",
     "ov2_po_a_unbind": "解除覆写",
@@ -28,8 +29,9 @@ ZH = {
     "ov2_po_actions_bd": "治理动作明细",
     "ov2_po_col_action": "动作",
     "ov2_po_hint": (
-        "计数自实例启动累计（重启清零）。「legacy 被压制」持续增长说明"
-        "仍有旧 peer 绑定躺在账号人设阴影里——去 人设工作室 › 遗留绑定清理 收官。"
+        "计数自实例启动累计（重启清零）；「遗留债余量」是实时盘点的活水位"
+        "（不随重启清零，Messenger RPA 托管键不计入）。债清零后回升＝有路径在"
+        "重新制造旧式绑定——去 人设工作室 › 遗留绑定清理 处置。"
     ),
 }
 
@@ -44,6 +46,7 @@ EN = {
     "ov2_po_conv": "Conv-override wins",
     "ov2_po_acct": "Account-persona wins",
     "ov2_po_legacy_sup": "Legacy suppressed",
+    "ov2_po_debt": "Legacy debt left",
     "ov2_po_actions": "Governance actions",
     "ov2_po_a_bind": "Bind conv override",
     "ov2_po_a_unbind": "Clear conv override",
@@ -56,9 +59,10 @@ EN = {
     "ov2_po_actions_bd": "Action breakdown",
     "ov2_po_col_action": "Action",
     "ov2_po_hint": (
-        "Counters accumulate since instance start (reset on restart). A growing "
-        "\u201clegacy suppressed\u201d count means old peer-global bindings are still "
-        "shadowed by account personas \u2014 finish them in Persona Studio \u203a "
-        "Legacy binding cleanup."
+        "Counters accumulate since instance start (reset on restart); "
+        "\u201cLegacy debt left\u201d is a live gauge (survives restarts; "
+        "Messenger-RPA-managed keys excluded). If it climbs back above zero "
+        "after cleanup, something is creating peer-global bindings again \u2014 "
+        "handle them in Persona Studio \u203a Legacy binding cleanup."
     ),
 }
