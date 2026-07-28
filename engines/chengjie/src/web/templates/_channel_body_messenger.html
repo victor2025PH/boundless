@@ -431,6 +431,9 @@ body:has(.mr-page.monitor-mode) .wrap{padding:.65rem .85rem 1.5rem}
       </div>
       <div class="rpa-hero-sub" id="mr-status-text">{{ (i18n or {}).get('msg_s002', "正在读取运行状态…") }}</div>
     </div>
+    <div class="rpa-hero-actions">
+      <a class="rpa-hero-btn" href="/workspace?drawer=1&amp;connect=messenger" style="text-decoration:none" title="{{ (i18n or {}).get('chc_acct_cta', '去工作台管理账号') }}">{{ (i18n or {}).get('chc_acct_hero_btn', '管理账号') }}</a>
+    </div>
     <div class="rpa-kpi-row">
       <div class="rpa-kpi"><span class="rpa-kpi-n amber" id="kpi-pending">0</span><span class="rpa-kpi-l">{{ (i18n or {}).get('msg_s003', "⚠️ 待审批") }}</span></div>
       <div class="rpa-kpi"><span class="rpa-kpi-n" id="kpi-sent">0</span><span class="rpa-kpi-l">{{ (i18n or {}).get('msg_s004', "📤 24h 已发") }}</span></div>

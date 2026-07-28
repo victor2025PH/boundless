@@ -264,6 +264,12 @@ _NEW_KEYS = (
     "chc_sess_wa_hint", "chc_sess_wa_link",
     "chc_sess_age_sec", "chc_sess_age_min", "chc_sess_age_hour",
     "chc_sess_age_day",
+    # 账号入口轨（与 test_channel_acct_rail 同键；此处只守「模板已消费」）
+    "chc_acct_title", "chc_acct_cta", "chc_acct_inbox",
+    "chc_acct_badge_seat", "chc_acct_badge_main_ok",
+    "chc_acct_badge_main_connecting", "chc_acct_badge_main_off",
+    "chc_acct_body_tg", "chc_acct_body_line", "chc_acct_body_wa", "chc_acct_body_msg",
+    "chc_acct_ops_sum", "chc_acct_ops_1", "chc_acct_ops_2", "chc_acct_ops_3", "chc_acct_ops_4",
 )
 
 
@@ -282,8 +288,8 @@ def test_i18n_new_keys_bilingual_parity():
 def test_i18n_keys_used_by_template_and_no_dead_keys():
     from src.web.i18n_packs import channel_center as cc
     txt = _TPL.read_text(encoding="utf-8")
-    used = set(re.findall(r"'(chc_(?:sess|cap)_[a-z0-9_]+)'", txt))
-    assert used, "模板未消费任何 chc_sess_/chc_cap_ 键（接线丢失？）"
+    used = set(re.findall(r"'(chc_(?:sess|cap|acct)_[a-z0-9_]+)'", txt))
+    assert used, "模板未消费任何 chc_sess_/chc_cap_/chc_acct_ 键（接线丢失？）"
     missing = used - set(cc.ZH)
     assert not missing, f"模板引用了 pack 缺失的键（裸键上屏）：{sorted(missing)}"
     dead = set(_NEW_KEYS) - used
