@@ -23,6 +23,9 @@ node_modules/
 # 隔离验证/历史构建目录（.next-verify* / .next-old / .next-hand-redesign）与截图缓存
 .next-*/
 website/.hand-shots/
+website/.icon-shots/
+# 临时验收脚本（deploy.ps1 的 tar 亦排除 scripts/_*）
+website/scripts/_*
 build/
 dist/
 
@@ -95,3 +98,18 @@ tmp_voice_ab/
 _archive/
 # nested repo (TG ZhiKongWang, independent repo - do not absorb)
 tgkz2026/
+
+# ---- release hygiene (2026-07-29) ----
+# 运行时注册表 DB（root config/ 与 platform/credpool/config/ 各一份；同名 .py 源码不受影响）
+account_registry.db
+xyc2026/trustcheck.db
+.pytest_cache/
+# agent 临时验收/探针产物（根目录 scratch 约定 _tmp_* 前缀）与登录二维码截图
+_tmp_*
+tmp_tg_qr.png
+# QA 截图缓存（与 .hand-shots / .icon-shots 同族；qa-wizard-shots.mjs 脚本本身仍入库）
+website/.wizard-shots/
+website/.wizard-shots-en/
+# 发布物只活在下载服务器（deploy.ps1 [3.5/4] 差量上传通道），不入库
+website/public/downloads/
+website/public/releases/
