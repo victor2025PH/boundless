@@ -84,3 +84,31 @@ def test_telegram_reused_classes_still_defined():
         assert cls in html, f"复用类样式被误删: {cls}"
     assert 'class="tg-stat"' in html      # 账号页统计卡
     assert 'class="tg-hero-refresh"' in html  # 账号/日志/快照刷新钮
+
+
+# ── 卡片层统一（hero 之后第二层骨架）────────────────────────────────────────
+
+def test_shared_styles_define_card_family():
+    css = _read(_SHARED)
+    for cls in (".rpa-card{", ".rpa-card-head{", ".rpa-card-icon{",
+                ".rpa-card-icon.blue{", ".rpa-card-icon.green{",
+                ".rpa-card-icon.purple{", ".rpa-card-title{",
+                ".rpa-sect-div{"):
+        assert cls in css, f"共享卡片族缺规则: {cls}"
+
+
+def test_telegram_private_card_skeleton_is_gone():
+    """`.tg-card` 私有克隆已整体迁到共享 `.rpa-card` 族——标记与 CSS 双清零，
+    防止后续新卡片又照旧模板抄回私有类。"""
+    html = _read(_BODIES["telegram"])
+    assert "tg-card" not in html, "Telegram 私有卡片类残留（标记或 CSS）"
+    assert "tg-sect-div" not in html
+    assert html.count('class="rpa-card"') >= 10
+    assert html.count('class="rpa-card-head"') >= 10
+    assert 'class="rpa-sect-div"' in html
+
+
+def test_whatsapp_stays_on_shared_card_family():
+    """WA 是共享卡片族的存量正统（74×），别被反向"统一"回私有类。"""
+    html = _read(_BODIES["whatsapp"])
+    assert html.count("rpa-card") >= 50

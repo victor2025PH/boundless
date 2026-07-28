@@ -41,16 +41,8 @@
 .st-tab.dirty .tab-dot{display:block}
 .st-pane{display:none}.st-pane.active{display:block}
 
-/* ─── Cards ───────────────────────────────────────────────────── */
-.tg-card{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:1.3rem 1.5rem;margin-bottom:1rem}
-.tg-card-header{display:flex;align-items:center;gap:.7rem;margin-bottom:1rem}
-.tg-card-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0}
-.tg-card-icon.blue{background:rgba(34,158,217,.15)}
-.tg-card-icon.green{background:rgba(34,197,94,.12)}
-.tg-card-icon.purple{background:rgba(139,92,246,.12)}
-.tg-card-title{font-size:.95rem;font-weight:700;color:var(--t)}
-.tg-card-desc{font-size:.78rem;color:var(--t3);margin-left:auto}
-.tg-sect-div{border-top:1px solid var(--bd);margin:1rem 0}
+/* ─── Cards（骨架已统一到 _rpa_shared_styles 的 .rpa-card 族：
+   rpa-card / rpa-card-head / rpa-card-icon / rpa-card-title / rpa-sect-div）─ */
 
 /* ─── Fields ──────────────────────────────────────────────────── */
 .f-row{display:flex;flex-direction:column;gap:.3rem;margin-bottom:.9rem}
@@ -299,11 +291,11 @@ select.f-inp{cursor:pointer}
 <!-- ══════════════════════════ TAB: 消息处理 ═══════════════════ -->
 <div class="st-pane active" id="pane-reply">
 
-  <div class="tg-card">
-    <div class="tg-card-header">
-      <div class="tg-card-icon blue">📨</div>
+  <div class="rpa-card">
+    <div class="rpa-card-head">
+      <div class="rpa-card-icon blue">📨</div>
       <div>
-        <div class="tg-card-title">{{ (i18n or {}).get('tg_s014', "接收范围") }}</div>
+        <div class="rpa-card-title">{{ (i18n or {}).get('tg_s014', "接收范围") }}</div>
       </div>
       <span class="badge b-g" style="margin-left:auto">⚡ {{ (i18n or {}).get('tg_s204', "保存后立即生效") }}</span>
     </div>
@@ -319,10 +311,10 @@ select.f-inp{cursor:pointer}
     </div>
   </div>
 
-  <div class="tg-card">
-    <div class="tg-card-header">
-      <div class="tg-card-icon green">⚙️</div>
-      <div><div class="tg-card-title">{{ (i18n or {}).get('tg_s017', "回复逻辑") }}</div></div>
+  <div class="rpa-card">
+    <div class="rpa-card-head">
+      <div class="rpa-card-icon green">⚙️</div>
+      <div><div class="rpa-card-title">{{ (i18n or {}).get('tg_s017', "回复逻辑") }}</div></div>
     </div>
     <div class="f-grid2">
       <div class="f-row">
@@ -353,10 +345,10 @@ select.f-inp{cursor:pointer}
     </div>
   </div>
 
-  <div class="tg-card">
-    <div class="tg-card-header">
-      <div class="tg-card-icon purple">🚫</div>
-      <div><div class="tg-card-title">{{ (i18n or {}).get('tg_s025', "屏蔽名单") }}</div></div>
+  <div class="rpa-card">
+    <div class="rpa-card-head">
+      <div class="rpa-card-icon purple">🚫</div>
+      <div><div class="rpa-card-title">{{ (i18n or {}).get('tg_s025', "屏蔽名单") }}</div></div>
     </div>
     <div class="f-row">
       <label class="f-lbl">{{ (i18n or {}).get('tg_s026', "不自动回复的用户名（每行一个，不含 @）· 适用于群聊与私聊") }}</label>
@@ -394,11 +386,11 @@ select.f-inp{cursor:pointer}
   <div class="hb-wrap" id="health-banner"></div>
 
   <!-- ── 语音识别（接收）─────────────────────────────────── -->
-  <div class="tg-card">
-    <div class="tg-card-header">
-      <div class="tg-card-icon blue">📥</div>
+  <div class="rpa-card">
+    <div class="rpa-card-head">
+      <div class="rpa-card-icon blue">📥</div>
       <div>
-        <div class="tg-card-title">{{ (i18n or {}).get('tg_s034', "语音识别（接收用户语音）") }}</div>
+        <div class="rpa-card-title">{{ (i18n or {}).get('tg_s034', "语音识别（接收用户语音）") }}</div>
         <div style="font-size:.75rem;color:var(--t3);margin-top:.1rem">{{ (i18n or {}).get('tg_s035', "将用户发来的语音消息转为文字，再由 AI 理解回复") }}</div>
       </div>
       <span class="badge b-a">↻ {{ (i18n or {}).get('tg_s205', "改动需重启实例生效") }}</span>
@@ -504,11 +496,11 @@ select.f-inp{cursor:pointer}
   </div>
 
   <!-- ── 语音回复（发送）─────────────────────────────────── -->
-  <div class="tg-card">
-    <div class="tg-card-header">
-      <div class="tg-card-icon green">📤</div>
+  <div class="rpa-card">
+    <div class="rpa-card-head">
+      <div class="rpa-card-icon green">📤</div>
       <div>
-        <div class="tg-card-title">{{ (i18n or {}).get('tg_s056', "语音回复（向用户发语音）") }}</div>
+        <div class="rpa-card-title">{{ (i18n or {}).get('tg_s056', "语音回复（向用户发语音）") }}</div>
         <div style="font-size:.75rem;color:var(--t3);margin-top:.1rem">AI {{ (i18n or {}).get('tg_s057', "回复通过 TTS 合成语音后发送，替代纯文字") }}</div>
       </div>
       <span class="badge b-g">⚡ {{ (i18n or {}).get('tg_s204', "保存后立即生效") }}</span>
@@ -661,7 +653,7 @@ select.f-inp{cursor:pointer}
     </div>
 
     <!-- 通用参数 -->
-    <div class="tg-sect-div"></div>
+    <div class="rpa-sect-div"></div>
     <div class="f-grid2">
       <div class="f-row">
         <label class="f-lbl">
@@ -686,7 +678,7 @@ select.f-inp{cursor:pointer}
     </label>
 
     <!-- TTS 试听 -->
-    <div class="tg-sect-div"></div>
+    <div class="rpa-sect-div"></div>
     <div class="sub-hd">{{ (i18n or {}).get('wa_s116', "试听") }}</div>
     <div class="preview-row">
       <input class="f-inp" type="text" id="preview-text" placeholder="{{ (i18n or {}).get('tg_s113', '输入测试文字，点击试听…') }}" maxlength="100">
@@ -741,10 +733,10 @@ select.f-inp{cursor:pointer}
 
 <!-- ╔═════════════════════════ TAB: 账号 ╔════════════════════ -->
 <div class="st-pane" id="pane-account">
-  <div class="tg-card">
-    <div class="tg-card-header">
-      <div class="tg-card-icon blue">👤</div>
-      <div><div class="tg-card-title">{{ (i18n or {}).get('tg_s120', "当前账号") }}</div></div>
+  <div class="rpa-card">
+    <div class="rpa-card-head">
+      <div class="rpa-card-icon blue">👤</div>
+      <div><div class="rpa-card-title">{{ (i18n or {}).get('tg_s120', "当前账号") }}</div></div>
       <button class="tg-hero-refresh" onclick="loadAccountInfo()" style="margin-left:auto">↻ {{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
     </div>
     <div style="display:flex;align-items:center;gap:1rem;background:var(--input);border-radius:12px;border:1px solid var(--bd);padding:1rem 1.2rem;margin-bottom:.9rem;flex-wrap:wrap">
@@ -774,10 +766,10 @@ select.f-inp{cursor:pointer}
     </p>
   </div>
 
-  <div class="tg-card">
-    <div class="tg-card-header">
-      <div class="tg-card-icon purple">📊</div>
-      <div><div class="tg-card-title">{{ (i18n or {}).get('tg_s123', "今日统计") }}</div></div>
+  <div class="rpa-card">
+    <div class="rpa-card-head">
+      <div class="rpa-card-icon purple">📊</div>
+      <div><div class="rpa-card-title">{{ (i18n or {}).get('tg_s123', "今日统计") }}</div></div>
     </div>
     <div style="display:flex;gap:1rem;flex-wrap:wrap">
       <div class="tg-stat" style="flex:1"><span class="tg-stat-n" id="acc-st-msg">—</span><span class="tg-stat-l">{{ (i18n or {}).get('tg_s124', "文字消息") }}</span></div>
@@ -793,10 +785,10 @@ select.f-inp{cursor:pointer}
   </div>
 
   <!-- ── 日志实时流 ────────────────────────────────────── -->
-  <div class="tg-card">
-    <div class="tg-card-header">
-      <div class="tg-card-icon blue">📜</div>
-      <div><div class="tg-card-title">{{ (i18n or {}).get('wa_s025', "运行日志") }}</div></div>
+  <div class="rpa-card">
+    <div class="rpa-card-head">
+      <div class="rpa-card-icon blue">📜</div>
+      <div><div class="rpa-card-title">{{ (i18n or {}).get('wa_s025', "运行日志") }}</div></div>
       <div class="log-toolbar" style="margin-left:auto;margin-bottom:0">
         <span class="log-live-dot" id="log-live-dot" style="display:none"></span>
         <span style="font-size:.72rem;color:var(--t3)" id="log-last-updated"></span>
@@ -808,10 +800,10 @@ select.f-inp{cursor:pointer}
     </div>
   </div>
 
-  <div class="tg-card">
-    <div class="tg-card-header">
-      <div class="tg-card-icon green">✅</div>
-      <div><div class="tg-card-title">{{ (i18n or {}).get('tg_s127', "配置摘要") }}</div></div>
+  <div class="rpa-card">
+    <div class="rpa-card-head">
+      <div class="rpa-card-icon green">✅</div>
+      <div><div class="rpa-card-title">{{ (i18n or {}).get('tg_s127', "配置摘要") }}</div></div>
       <button class="btn-sec" onclick="exportConfig()" style="margin-left:auto;font-size:.75rem;padding:.3rem .6rem" title="{{ (i18n or {}).get('tg_s128', '导出 Telegram 配置为') }} JSON">
         ⬇️ {{ (i18n or {}).get('export', "导出") }}
       </button>
@@ -821,10 +813,10 @@ select.f-inp{cursor:pointer}
   </div>
 
   <!-- ── 版本历史 ────────────────────────────────────── -->
-  <div class="tg-card">
-    <div class="tg-card-header">
-      <div class="tg-card-icon" style="background:var(--th-bg-pur12,rgba(168,85,247,.12));color:#9333ea">🗂️</div>
-      <div><div class="tg-card-title">{{ (i18n or {}).get('tg_s129', "版本历史（自动快照）") }}</div><div style="font-size:.72rem;color:var(--t3)">{{ (i18n or {}).get('tg_s130', "每次保存配置时自动建立快照，支持一键恢复") }}</div></div>
+  <div class="rpa-card">
+    <div class="rpa-card-head">
+      <div class="rpa-card-icon" style="background:var(--th-bg-pur12,rgba(168,85,247,.12));color:#9333ea">🗂️</div>
+      <div><div class="rpa-card-title">{{ (i18n or {}).get('tg_s129', "版本历史（自动快照）") }}</div><div style="font-size:.72rem;color:var(--t3)">{{ (i18n or {}).get('tg_s130', "每次保存配置时自动建立快照，支持一键恢复") }}</div></div>
       <button class="tg-hero-refresh" onclick="loadSnapshots()" style="margin-left:auto">↻</button>
     </div>
     <div id="snap-list"><div class="snap-empty">{{ (i18n or {}).get('wa_s148', "点击刷新加载…") }}</div></div>
