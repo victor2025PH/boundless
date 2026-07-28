@@ -7,18 +7,13 @@
 {% include "_rpa_shared_scripts.html" %}
 <!-- ═══════════════════════════════════════════ NEW DESIGN ════ -->
 <style>
-/* ─── Hero Card ───────────────────────────────────────────────── */
-.tg-hero{display:flex;align-items:center;gap:1.2rem;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:1.1rem 1.4rem;margin-bottom:1.3rem;flex-wrap:wrap}
-.tg-hero-avatar{width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,#229ed9,#1a7abf);display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.tg-hero-avatar svg{width:26px;height:26px;stroke:#fff}
-.tg-hero-info{flex:1;min-width:160px}
-.tg-hero-name{font-weight:700;font-size:1rem;color:var(--t);display:flex;align-items:center;gap:.55rem}
-.tg-hero-sub{font-size:.78rem;color:var(--t3);margin-top:.15rem}
+/* ─── Hero（骨架已统一到 _rpa_shared_styles 的 .rpa-hero；此处仅留
+   本页复用类：三态连接点 .tg-online-dot（hero + 账号页共用）与账号页
+   统计卡 .tg-stat / 各卡刷新钮 .tg-hero-refresh）────────────────── */
 .tg-online-dot{width:9px;height:9px;border-radius:50%;background:var(--green);flex-shrink:0;box-shadow:0 0 0 2px rgba(34,197,94,.25)}
 .tg-online-dot.offline{background:var(--t3);box-shadow:none}
 .tg-online-dot.connecting{background:var(--amber);box-shadow:0 0 0 2px var(--as)}
 .tg-online-dot.disconnected{background:var(--red);box-shadow:0 0 0 2px var(--rs)}
-.tg-stats{display:flex;gap:.7rem;flex-wrap:wrap;margin-left:auto}
 .tg-stat{display:flex;flex-direction:column;align-items:center;background:var(--input);border:1px solid var(--bd);border-radius:10px;padding:.45rem .9rem;min-width:64px}
 .tg-stat-n{font-size:1.25rem;font-weight:800;color:var(--p);line-height:1.1}
 .tg-stat-l{font-size:.68rem;color:var(--t3);margin-top:.1rem;white-space:nowrap}
@@ -218,25 +213,25 @@ select.f-inp{cursor:pointer}
 .contact-loading{font-size:.78rem;color:var(--t3)}
 </style>
 
-<!-- ══ HERO ════════════════════════════════════════════════════════ -->
-<div class="tg-hero">
-  <div class="tg-hero-avatar">
+<!-- ══ HERO（统一 4 平台骨架 .rpa-hero；元素 ID 不变=JS 契约不变）══ -->
+<div class="rpa-hero">
+  <div class="rpa-hero-avatar theme-telegram">
     <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22 11 13 2 9l20-7z"/></svg>
   </div>
-  <div class="tg-hero-info">
-    <div class="tg-hero-name">
+  <div class="rpa-hero-info">
+    <div class="rpa-hero-name">
       <span class="tg-online-dot offline" id="h-dot"></span>
       <span id="h-name">{{ (i18n or {}).get('dash.loading', "加载中…") }}</span>
     </div>
-    <div class="tg-hero-sub" id="h-sub">{{ (i18n or {}).get('tg_s001', "正在连接…") }}</div>
+    <div class="rpa-hero-sub" id="h-sub">{{ (i18n or {}).get('tg_s001', "正在连接…") }}</div>
   </div>
-  <div class="tg-stats">
-    <div class="tg-stat"><span class="tg-stat-n" id="st-msg">—</span><span class="tg-stat-l">{{ (i18n or {}).get('tg_s002', "今日消息") }}</span></div>
-    <div class="tg-stat"><span class="tg-stat-n" id="st-vin">—</span><span class="tg-stat-l">{{ (i18n or {}).get('tg_s003', "语音接收") }}</span></div>
-    <div class="tg-stat"><span class="tg-stat-n" id="st-tts">—</span><span class="tg-stat-l">TTS {{ (i18n or {}).get('rpa_js_send', "发送") }}</span></div>
-    <div class="tg-stat"><span class="tg-stat-n" id="st-gate">—</span><span class="tg-stat-l">{{ (i18n or {}).get('tg_gate_blocked', "今日拦截") }}</span></div>
+  <div class="rpa-kpi-row">
+    <div class="rpa-kpi"><span class="rpa-kpi-n" id="st-msg">—</span><span class="rpa-kpi-l">{{ (i18n or {}).get('tg_s002', "今日消息") }}</span></div>
+    <div class="rpa-kpi"><span class="rpa-kpi-n" id="st-vin">—</span><span class="rpa-kpi-l">{{ (i18n or {}).get('tg_s003', "语音接收") }}</span></div>
+    <div class="rpa-kpi"><span class="rpa-kpi-n" id="st-tts">—</span><span class="rpa-kpi-l">TTS {{ (i18n or {}).get('rpa_js_send', "发送") }}</span></div>
+    <div class="rpa-kpi"><span class="rpa-kpi-n" id="st-gate">—</span><span class="rpa-kpi-l">{{ (i18n or {}).get('tg_gate_blocked', "今日拦截") }}</span></div>
   </div>
-  <button class="tg-hero-refresh" onclick="loadAccountInfo()" title="{{ (i18n or {}).get('wa_s017', '刷新状态') }}">↻</button>
+  <div class="rpa-hero-actions">
   <div class="preset-wrap">
     <button class="btn-sec" id="preset-toggle" onclick="togglePresets(event)" style="font-size:.78rem;padding:.38rem .7rem">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:.25rem"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>{{ (i18n or {}).get('wa_s007', "预设") }}
@@ -269,6 +264,9 @@ select.f-inp{cursor:pointer}
         </div>
       </button>
     </div>
+  </div>
+    <a class="rpa-hero-btn" href="/workspace?drawer=1&amp;connect=telegram" style="text-decoration:none" title="{{ (i18n or {}).get('chc_acct_cta', '去工作台管理账号') }}">{{ (i18n or {}).get('chc_acct_hero_btn', '管理账号') }}</a>
+    <button class="rpa-hero-btn" onclick="loadAccountInfo()" title="{{ (i18n or {}).get('wa_s017', '刷新状态') }}">↻</button>
   </div>
   <div style="flex-basis:100%;font-size:.68rem;color:var(--t3)">{{ (i18n or {}).get('tg_s203', "口径：今日日志统计") }}</div>
 </div>

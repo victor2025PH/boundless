@@ -41,12 +41,8 @@ def test_shell_acct_rail_deeplink_and_ops():
 
 
 def test_rpa_heroes_have_manage_account_deeplink():
+    # hero 骨架统一后四页齐平：深链 + 「管理账号」按钮都在 hero 动作区
     for plat, path in _BODIES.items():
-        if plat == "telegram":
-            # TG 深链在正文 CTA + 壳层轨，不强制 hero 按钮
-            html = path.read_text(encoding="utf-8")
-            assert f"/workspace?drawer=1&amp;connect={plat}" in html
-            continue
         html = path.read_text(encoding="utf-8")
         assert f"/workspace?drawer=1&amp;connect={plat}" in html, plat
         assert "chc_acct_hero_btn" in html, plat
