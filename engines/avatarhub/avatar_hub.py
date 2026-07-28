@@ -18562,6 +18562,9 @@ class TtsOnlyRequest(BaseModel):
     fish_params: dict | None = None
     # best-of-N：用多个 seed 合成并取与参考音相似度最高者（非实时场景，如「重新朗读」）
     best_of:  int = 1
+    # 2026-07-27：请求级 TTS 引擎覆写（空=用角色档配置）。智聊/幻影共用同一 hub 档时，
+    # 可钉 moss_ttsd，避免 avatar_profile_sync 把档钉成 fish_speech 后音色漂移。
+    tts_engine: str = ""
 
 @app.post("/api/tts_only")
 async def api_tts_only(req: TtsOnlyRequest):
@@ -18578,6 +18581,10 @@ async def api_tts_only(req: TtsOnlyRequest):
         _merged = dict(profile.get("fish_tts_params", {}))
         _merged.update({k: v for k, v in req.fish_params.items() if v is not None})
         profile["fish_tts_params"] = _merged
+    # 请求级引擎钉住：写入 profile 副本 + prefer_engine，双保险走同一路由
+    _eng_override = str(req.tts_engine or "").strip()
+    if _eng_override:
+        profile["tts_engine"] = _eng_override
     t0 = time.time()
     n = max(1, min(int(req.best_of or 1), 4))
     if n > 1:                       # L4-2 背压：高压时削减候选数，缩短重负载下耗时
@@ -18595,7 +18602,8 @@ async def api_tts_only(req: TtsOnlyRequest):
             _pf = dict(_p.get("fish_tts_params") or {}); _pf["seed"] = sd
             _p["fish_tts_params"] = _pf
             a = await _conv_synthesize(text, _p, language=req.language, emotion=req.emotion,
-                                       vc_engine="", watermark=None, _use_opener_cache=False)
+                                       vc_engine="", watermark=None, _use_opener_cache=False,
+                                       prefer_engine=_eng_override)
             if not a:
                 continue
             cos = 0.0
@@ -18615,15 +18623,18 @@ async def api_tts_only(req: TtsOnlyRequest):
             except Exception:
                 pass
             return {"ok": True, "audio_base64": audio_b64, "profile": req.profile,
+                    "tts_engine": _eng_override or profile.get("tts_engine", ""),
                     "best_of": n, "picked_seed": sd, "picked_cosine": round(cos, 4),
                     "picked_naturalness": _nat,
                     "elapsed_ms": round((time.time() - t0) * 1000)}
     audio_b64 = await _conv_synthesize(
         text, profile, language=req.language, emotion=req.emotion,
-        vc_engine="", watermark=None, _use_opener_cache=False)
+        vc_engine="", watermark=None, _use_opener_cache=False,
+        prefer_engine=_eng_override)
     if not audio_b64:
         return {"ok": False, "detail": "合成失败"}
     return {"ok": True, "audio_base64": audio_b64, "profile": req.profile,
+            "tts_engine": _eng_override or profile.get("tts_engine", ""),
             "elapsed_ms": round((time.time() - t0) * 1000)}
 
 
