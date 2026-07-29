@@ -239,7 +239,10 @@ def ensure_hosted_vision(config_manager: Any, *, fetch: Optional[Fetch] = None) 
     if not token.startswith("cx."):
         return False  # 还没拿到设备令牌（识图与聊天共用），等 ensure_hosted_ai 先成
 
-    model = ((cfg.get("licensing") or {}).get("hosted_ai") or {}).get("vision_model") or "qwen2.5vl:7b"
+    # 规范 VLM：两台中继（176/140）都装 qwen3-vl:8b-instruct → 网关可任意分流。
+    # 网关侧还会统一改写 model，故此值只影响日志/回显，不会造成中继找不到模型。
+    model = (((cfg.get("licensing") or {}).get("hosted_ai") or {}).get("vision_model")
+             or "qwen3-vl:8b-instruct")
     if not isinstance(cfg.get("vision"), dict):
         cfg["vision"] = {}
     cfg["vision"]["enabled"] = True

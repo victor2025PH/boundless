@@ -259,7 +259,8 @@ def test_hosted_vision_injects_gateway(tmp_path, monkeypatch):
     v = cm.config["vision"]
     assert v["enabled"] is True and v["provider"] == "openai_compatible"
     assert v["base_url"] == "https://bd2026.cc/api/ai/v1"
-    assert v["model"] == "qwen2.5vl:7b"
+    # 规范 VLM：176/140 双活都装的那个（网关侧还会统一改写 model）
+    assert v["model"] == "qwen3-vl:8b-instruct"
     assert v["api_key"] == "cx.tok" and v.get("_hosted_vision") is True
 
 

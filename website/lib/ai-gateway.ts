@@ -39,9 +39,34 @@ const MODEL_ALLOWLIST: string[] = (process.env.AI_GATEWAY_MODELS || VENDOR_MODEL
   .filter(Boolean);
 
 // ── 识图中继（我们自己的 GPU VLM，经 117→VPS 反向隧道暴露到 VPS localhost）──
-// VISION_RELAY_URL 形如 http://127.0.0.1:18411/v1（隧道到 192.168.0.176:11434/v1）。
-// 未设 = 识图中继禁用（暗态）；识图模型请求回落报错，客户端自行回落。
-const VISION_RELAY_URL = (process.env.VISION_RELAY_URL || "").trim().replace(/\/+$/, "");
+// VISION_RELAY_URLS 逗号列表 = 多机双活（176/140），按序尝试、失败短冷却降权；
+// 回落单数 VISION_RELAY_URL。未设 = 识图禁用（暗态），客户端自行回落。
+const VISION_RELAY_URLS: string[] = (
+  process.env.VISION_RELAY_URLS || process.env.VISION_RELAY_URL || ""
+)
+  .split(",")
+  .map((s) => s.trim().replace(/\/+$/, ""))
+  .filter(Boolean);
+const VISION_RELAY_URL = VISION_RELAY_URLS[0] || "";
+/** 规范识图模型：两台中继都装的那个。网关统一改写 model —— 已发布客户端
+ *  （0.2.7 注入 qwen2.5vl:7b，仅 176 有）也能被任一中继服务，双活才真互换。 */
+const VISION_MODEL_CANONICAL = (
+  process.env.VISION_MODEL_CANONICAL || "qwen3-vl:8b-instruct"
+).trim();
+/** 中继失败冷却（毫秒）：某机忙/宕 → 短暂降权，不每次都撞它。 */
+const RELAY_COOLDOWN_MS = Number(process.env.VISION_RELAY_COOLDOWN_MS || 60000);
+const _relayCooldown = new Map<string, number>();
+
+function orderedRelays(): string[] {
+  const now = Date.now();
+  const fresh: string[] = [];
+  const cooled: string[] = [];
+  for (const u of VISION_RELAY_URLS) {
+    if ((_relayCooldown.get(u) || 0) > now) cooled.push(u);
+    else fresh.push(u);
+  }
+  return [...fresh, ...cooled]; // 全在冷却也要硬试（比直接失败好）
+}
 const VISION_MODELS: string[] = (process.env.VISION_MODELS || "qwen2.5vl:7b,qwen2.5vl:32b,qwen2.5vl:72b")
   .split(",")
   .map((s) => s.trim().toLowerCase())
@@ -65,15 +90,55 @@ export async function proxyVision(
   body: Record<string, unknown>,
   signal?: AbortSignal
 ): Promise<Response> {
-  if (!VISION_RELAY_URL) throw new Error("no_vision_relay");
-  // 中继是 Ollama /v1（keyless）；model 原样透传（客户端已给具体 VLM 名）
-  const payload = { ...body, stream: false, max_tokens: clampMaxTokens(body.max_tokens) };
-  return fetch(`${VISION_RELAY_URL}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Bearer ollama" },
-    body: JSON.stringify(payload),
-    signal,
-  });
+  const relays = orderedRelays();
+  if (!relays.length) throw new Error("no_vision_relay");
+  // 中继是 Ollama /v1（keyless）；model 统一改写成规范 VLM（两机都装 → 可互换）
+  const payload = {
+    ...body,
+    model: VISION_MODEL_CANONICAL,
+    stream: false,
+    max_tokens: clampMaxTokens(body.max_tokens),
+  };
+  let lastErr: unknown = null;
+  for (const base of relays) {
+    try {
+      const r = await fetch(`${base}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer ollama" },
+        body: JSON.stringify(payload),
+        signal,
+      });
+      // 5xx = 该机有问题（忙/模型缺）→ 冷却降权，试下一台
+      if (r.status >= 500 && relays.length > 1) {
+        _relayCooldown.set(base, Date.now() + RELAY_COOLDOWN_MS);
+        lastErr = new Error(`relay_${r.status}`);
+        continue;
+      }
+      return r;
+    } catch (e) {
+      // 网络级失败（隧道断）→ 冷却降权，试下一台
+      _relayCooldown.set(base, Date.now() + RELAY_COOLDOWN_MS);
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error("all_vision_relays_failed");
+}
+
+/** 观测：识图中继与冷却态（console 卡/排障用；不含任何密钥）。 */
+export function visionRelayStatus(): {
+  enabled: boolean;
+  canonical_model: string;
+  relays: Array<{ url: string; cooling: boolean }>;
+} {
+  const now = Date.now();
+  return {
+    enabled: VISION_RELAY_URLS.length > 0,
+    canonical_model: VISION_MODEL_CANONICAL,
+    relays: VISION_RELAY_URLS.map((u) => ({
+      url: u,
+      cooling: (_relayCooldown.get(u) || 0) > now,
+    })),
+  };
 }
 
 const QUOTA_DB = process.env.AI_GATEWAY_QUOTA_DB || path.join(DATA_DIR, "ai-gateway.db");

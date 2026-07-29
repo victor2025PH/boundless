@@ -71,6 +71,15 @@ async function main() {
   assert.equal(stats.chars, 150);
   assert.equal(stats.machine_budget, 100);
 
+  // ── 识图：模型识别 + 中继状态 ──
+  assert.equal(gw.isVisionModel("qwen3-vl:8b-instruct"), true);
+  assert.equal(gw.isVisionModel("qwen2.5vl:7b"), true);
+  assert.equal(gw.isVisionModel("deepseek-chat"), false);
+  assert.equal(gw.isVisionModel(""), false);
+  const vs = gw.visionRelayStatus();
+  assert.equal(typeof vs.enabled, "boolean");
+  assert.ok(vs.canonical_model.length > 0);
+
   // ── 生产环境缺 AI_GATEWAY_SECRET → 网关整体禁用 ──
   assert.equal(gw.gatewayEnabled(), true);
   const oldEnv = process.env.NODE_ENV;
