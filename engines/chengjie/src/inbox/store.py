@@ -1648,6 +1648,55 @@ class InboxStore:
             out[(str(r["platform"] or ""), str(r["account_id"] or ""))] = int(r["n"] or 0)
         return out
 
+    def conversations_active_since(
+        self, since_ts: float, *, platform: str = "",
+    ) -> List[Dict[str, str]]:
+        """列出 ``last_ts >= since_ts`` 的会话（最小列：conversation_id/platform/account_id）。
+
+        attn 聚合的取数面：只有近窗有动静的会话才可能「现在需要人工」，
+        全库扫会把历史沉睡会话也计成红点（见 read_routes._attn_aggregate_map）。
+        """
+        since = float(since_ts or 0)
+        sql = ("SELECT conversation_id, platform, account_id FROM conversations"
+               " WHERE last_ts >= ?")
+        params: List[Any] = [since]
+        if platform:
+            sql += " AND platform = ?"
+            params.append(platform)
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [{"conversation_id": str(r["conversation_id"]),
+                 "platform": str(r["platform"] or ""),
+                 "account_id": str(r["account_id"] or "")} for r in rows]
+
+    def sum_effective_unread_by_account(
+        self, *, platform: str = "",
+    ) -> Dict[Tuple[str, str], int]:
+        """按 (platform, account_id) 汇总**有效未读**（与 ``effective_unread`` 同口径）。
+
+        供平台导航/账号 rail 徽标脱离客户端 top-N 窗口：未读会话若沉在全局
+        快照之外，客户端求和会漏红点。SQL ``CASE`` 与 Python
+        ``effective_unread`` 对齐——``unread>0 AND last_ts > last_read_ts``。
+        只返回合计 >0 的桶（空/零未读账号省略，调用方按 0 处理）。
+        """
+        sql = (
+            "SELECT platform, account_id, COALESCE(SUM(CASE "
+            "WHEN unread > 0 AND last_ts > COALESCE(last_read_ts, 0) "
+            "THEN unread ELSE 0 END), 0) AS n "
+            "FROM conversations"
+        )
+        params: List[Any] = []
+        if platform:
+            sql += " WHERE platform = ?"
+            params.append(platform)
+        sql += " GROUP BY platform, account_id HAVING n > 0"
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        out: Dict[Tuple[str, str], int] = {}
+        for r in rows:
+            out[(str(r["platform"] or ""), str(r["account_id"] or ""))] = int(r["n"] or 0)
+        return out
+
     def get_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             row = self._conn.execute(

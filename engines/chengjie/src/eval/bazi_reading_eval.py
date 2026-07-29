@@ -142,18 +142,36 @@ def evaluate_reading_quality(
     ``generate_fn(prompt) -> str`` 由调用方注入（run_eval 的 EVAL_LLM 构造器）。
     passed = 全部样本零幻觉零红线，且接地率 = 100%。
     """
-    from src.companion.bazi_context import build_bazi_prompt_block
-    from src.companion.bazi_engine import format_chart_summary
+    from src.companion.bazi_context import build_bazi_prompt_block, extract_target_year
+    from src.companion.bazi_engine import (format_chart_summary, format_liunian_line,
+                                           liunian_detail)
 
     rows = cases if cases is not None else build_reading_cases()
     if not rows:
         return {"available": False, "passed": None,
                 "reason": "缺 lunar_python 或无命例"}
+    now_year = time.localtime().tm_year
     results: List[Dict[str, Any]] = []
     for c in rows:
         chart = c["chart"]
+        summary = format_chart_summary(chart)
+        # 与聊天链同口径：问到具体年份就补该年流年事实（AGENTS.md Phase 2 的
+        # extract_target_year → liunian_detail → format_liunian_line 那条防线）。
+        # 2026-07-29 修评测保真度缺口：此前只喂四柱+大运，于是「我明年运势如何？」
+        # 这类问法**盘面里根本没有所问年份的干支可引用** → LLM 只能泛泛而谈 → 被判
+        # 失地，两次实跑稳定挂。既让评测冤枉了产品（线上有注入），又让这条评测**从没
+        # 覆盖到那道防线**（防编造干支的能力无人回归）。
+        _y = extract_target_year(c["question"], now_year)
+        # 与 skill_manager 同护栏：所问年 == 生年时不注入（那是「你哪年生」不是问流年）
+        if _y and str(_y) == str(chart.get("solar_date") or "")[:4]:
+            _y = None
+        if _y:
+            _dm = str(chart.get("day_master") or "")
+            _line = format_liunian_line(liunian_detail(_dm[0], _y)) if _dm else ""
+            if _line:
+                summary = f"{summary}\n{_line}"
         block = build_bazi_prompt_block(
-            format_chart_summary(chart),
+            summary,
             hour_known=bool(chart.get("hour_known")),
             has_dayun=bool(chart.get("dayun")))
         prompt = (

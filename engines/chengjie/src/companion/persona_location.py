@@ -375,12 +375,18 @@ def persona_now(place: Optional[PersonaPlace], now: Optional[datetime] = None) -
     """人设城市此刻的 **naive** 本地时间（绝不返回 aware）。
 
     place 为 None 或时区无效 -> datetime.now()（与旧行为逐位一致）；
-    now 传入 aware 时按其换算（供测试注入固定时刻），naive 视为服务器本地时刻。
+    now 传入 aware 时按其换算（供测试注入固定时刻）；
+    now 传入 **naive** 时视为**已经是目标墙钟**（place 当地或服务器本地），
+    **不再二次换算**——``persona_now`` 幂等：``persona_now(p, persona_now(p))``
+    保持同一墙钟。生产接线常把当地 naive 再喂给 ``local_time_line``，若按
+    「naive=服务器时刻」再转一次，温哥华深夜会被扭成近似中国/菲律宾正午
+    （2026-07 实录穿帮根因）。
     """
     try:
         base = now
+        # naive = 已是墙钟：有 place 即当地墙钟，无 place 即服务器墙钟；幂等直接回。
         if base is not None and base.tzinfo is None:
-            base = base.astimezone()  # naive 输入视为服务器本地时刻
+            return base.replace(tzinfo=None)
         if place is None:
             if base is None:
                 return datetime.now()
@@ -447,7 +453,11 @@ def daypart_label(hour: int, lang: str = "zh") -> str:
 
 
 def local_time_line(place: PersonaPlace, lang: str = "zh", now: Optional[datetime] = None) -> str:
-    """一行「你人在哪、当地时间几点（时段）」提示，注入 prompt 用；异常回落空串。"""
+    """一行「你人在哪、当地时间几点（时段）」提示，注入 prompt 用；异常回落空串。
+
+    ``now`` 语义与 ``persona_now`` 一致：aware=绝对时刻换算；naive=已是当地墙钟；
+    None=取当前 UTC 再换算。
+    """
     try:
         dt = persona_now(place, now)
         part = daypart_label(dt.hour, lang)
@@ -455,17 +465,24 @@ def local_time_line(place: PersonaPlace, lang: str = "zh", now: Optional[datetim
             return (
                 f"你人在{place.display('zh')}，当地时间 {dt:%Y-%m-%d} "
                 f"{_WEEKDAYS_ZH[dt.weekday()]} {dt:%H:%M}（{part}）。"
+                f"问候与作息必须按这个当地时间，禁止按中国/菲律宾（UTC+8）时间说话。"
             )
         return (
             f"You are in {place.display('en')}. Local time: {dt:%Y-%m-%d} "
-            f"{_WEEKDAYS_EN[dt.weekday()]} {dt:%H:%M} ({part})."
+            f"{_WEEKDAYS_EN[dt.weekday()]} {dt:%H:%M} ({part}). "
+            f"Greetings and daily routine must follow this local clock — "
+            f"do not speak as if you were on China/Philippines (UTC+8) time."
         )
     except Exception:
         return ""
 
 
 def tz_offset_hours(place: Optional[PersonaPlace], now: Optional[datetime] = None) -> float:
-    """人设城市相对服务器本地时区的时差（小时，城市-服务器）；无效/异常 -> 0.0。"""
+    """人设城市相对服务器本地时区的时差（小时，城市-服务器）；无效/异常 -> 0.0。
+
+    naive ``now`` 与 ``persona_now`` 同口径：视为**当地墙钟**，挂上 place 时区后再算
+    绝对偏移（避免把当地深夜当成服务器时刻）。
+    """
     try:
         if place is None:
             return 0.0
@@ -473,7 +490,7 @@ def tz_offset_hours(place: Optional[PersonaPlace], now: Optional[datetime] = Non
         if base is None:
             base = datetime.now(timezone.utc)
         elif base.tzinfo is None:
-            base = base.astimezone()
+            base = base.replace(tzinfo=ZoneInfo(place.tz_name))
         city_off = base.astimezone(ZoneInfo(place.tz_name)).utcoffset()
         server_off = datetime.now().astimezone().utcoffset()
         if city_off is None or server_off is None:

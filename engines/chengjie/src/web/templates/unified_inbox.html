@@ -201,7 +201,7 @@
   border:1px solid var(--border);border-radius:6px;background:var(--bg-soft);
   color:var(--text-tiny);font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all;}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260729b">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260729h">
 <script src="/static/workspace/inbox-messages.js?v=20260720b"></script>
 
 <!-- 主布局 -->
@@ -1206,6 +1206,11 @@ let claimMap={}, claimRenewTimer=null;
 let aiDraftOn=false, infoOn=false;
 let platformStatus={};
 let platUnread={};  // platform -> unread count
+/* P6：全库有效未读聚合（全局 chats 轮询下发；null=尚未抵达/失败 → 回落窗口内求和） */
+let unreadByPlatform=null;   // {telegram: N, ...}
+let unreadByAccount=null;    // {"telegram:aid": N, ...}
+/* P8：近窗「需人工关注」聚合（SLA crit + 需人工标签，排除归档/搁置）；null 同上回落 */
+let attnByAccount=null;      // {"telegram:aid": N, ...}
 let _sseEs=null;   // SSE EventSource
 let _tagLibrary=[];  // Phase 14: 预设标签库
 let _convTagsCache={}; // Phase 14: conv_id -> [tags]
@@ -1361,21 +1366,43 @@ function rebuildAccountMeta(){
 // （已移除/从未配对）paired=false → 切换条弱化显示，回答「为什么账号比我配对的多」。
 function _accountsForPlatform(p){
   const map={};
+  const useSrv=!!unreadByAccount;
+  const useSrvAttn=!!attnByAccount;   // P8：attn 有服务端近窗聚合就不再窗口累加
   Object.values(platformStatus||{}).forEach(a=>{
     if((a.platform||'web')!==p) return;
     const id=a.account_id||'default';
     map[id]=map[id]||{account_id:id,running:!!a.running,unread:0,count:0,paired:true,attn:0};
     map[id].running=map[id].running||!!a.running;
     map[id].paired=true;
+    // platform_status.unread/attn 与 unread/attnByAccount 同源（P6/P8 enrich）；有则先铺底
+    if(useSrv && a.unread!=null) map[id].unread=Number(a.unread)||0;
+    if(useSrvAttn && a.attn!=null) map[id].attn=Number(a.attn)||0;
   });
   (allChats||[]).forEach(c=>{
     if((c.platform||'web')!==p) return;
     const id=c.account_id||'default';
     map[id]=map[id]||{account_id:id,running:false,unread:0,count:0,paired:false,attn:0};
-    map[id].count++; map[id].unread+=(c.unread||0);
+    map[id].count++;
+    // 无服务端聚合时仍按窗口求和；有则保留服务端全库口径（不让窗口内二次叠加）
+    if(!useSrv) map[id].unread+=(c.unread||0);
     // 未读分级依据（rail 徽标红/灰）：SLA 危急 或 命中「需人工」转接标签
-    if(c.sla_level==='crit'||_convNeedsHuman(c)) map[id].attn++;
+    if(!useSrvAttn && (c.sla_level==='crit'||_convNeedsHuman(c))) map[id].attn++;
   });
+  // 窗口外有未读/需关注的幽灵冷号：服务端聚合仍要进 rail（否则红点被 top-N 吃掉）
+  if(useSrv || useSrvAttn){
+    const pref=p+':';
+    const seed=(k)=>{
+      const id=k.slice(pref.length)||'default';
+      map[id]=map[id]||{account_id:id,running:false,unread:0,count:0,paired:false,attn:0};
+      return map[id];
+    };
+    if(useSrv) Object.keys(unreadByAccount).forEach(k=>{
+      if(k.indexOf(pref)===0) seed(k).unread=Number(unreadByAccount[k])||0;
+    });
+    if(useSrvAttn) Object.keys(attnByAccount).forEach(k=>{
+      if(k.indexOf(pref)===0) seed(k).attn=Number(attnByAccount[k])||0;
+    });
+  }
   return Object.values(map).sort((a,b)=>(a.account_id>b.account_id?1:-1));
 }
 // 「需人工」判定与后端 HANDOFF_TAG 对齐（protocol_autoreply.py）；CJK 走 \u 转义过 no-CJK 门禁
@@ -1398,6 +1425,9 @@ function _multiAcctPlatforms(){
 // 管理账号齿轮，常驻不随滚动)；容器注入平台品牌色 --pc 供选中态取色；轮询重绘保滚动位。
 function buildAccountChips(){
   const bar=document.getElementById('account-chips'); if(!bar) return;
+  // 总览下拉打开中：跳过本轮重绘（防下拉被 innerHTML 重建杀掉），下轮轮询再刷——
+  // 与抽屉溢出菜单的重绘防抖护栏同一模式
+  if(document.getElementById('ac-pick-pop')) return;
   if(platFilter==='all'){ bar.style.display='none'; bar.innerHTML=''; return; }
   let accts=_accountsForPlatform(platFilter);
   if(accts.length<2){ bar.style.display='none'; bar.innerHTML=''; return; }
@@ -1454,11 +1484,13 @@ function buildAccountChips(){
   if(hasOffline){
     tools+=`<div class="acct-chip ac-toggle ${accountOnlineOnly?'active':''}" role="button" tabindex="0" onclick="toggleAccountOnlineOnly()" onkeydown="_acChipKey(event)" title="${window.T('inbox.acct.online_only_t')}">${window.T('inbox.acct.online_only')}</div>`;
   }
+  // 账号总览：完整清单下拉（P0 可发现性兜底——横滚藏了几个都能一键看全）
+  tools+=`<button type="button" class="ac-gear ac-pick" id="ac-pick-btn" aria-haspopup="listbox" aria-expanded="false" onclick="toggleAcctPicker(event)" title="${esc(window.Tf('inbox.acct.picker_t',{n:accts.length}))}" aria-label="${esc(window.Tf('inbox.acct.picker_t',{n:accts.length}))}">${uiIcon('users',13)}<span>${accts.length}</span></button>`;
   tools+=`<button type="button" class="ac-gear" onclick="openDrawer()" title="${esc(window.T('inbox.drawer.title'))}" aria-label="${esc(window.T('inbox.drawer.title'))}">${uiIcon('gear',14)}</button>`;
   // 轮询重绘不跳滚动位：rebuild 前记 scrollLeft，rebuild 后还原
   const oldSc=document.getElementById('ac-scroll');
   const keepLeft=oldSc?oldSc.scrollLeft:0;
-  bar.innerHTML=`<div class="ac-scroll" id="ac-scroll">${html}</div><div class="ac-tools">${tools}</div>`;
+  bar.innerHTML=`<button type="button" class="ac-nav left" tabindex="-1" aria-label="${esc(window.T('inbox.acct.scroll_left'))}" onclick="_acNudge(-1)">\u2039</button><div class="ac-scroll" id="ac-scroll">${html}</div><button type="button" class="ac-nav right" tabindex="-1" aria-label="${esc(window.T('inbox.acct.scroll_right'))}" onclick="_acNudge(1)">\u203a</button><div class="ac-tools">${tools}</div>`;
   bar.style.display='flex';
   try{ bar.style.setProperty('--pc', platColor(platFilter)); }catch(_){}
   const sc=document.getElementById('ac-scroll');
@@ -1482,8 +1514,12 @@ function _acUnreadBadge(unread,attn){
   return `<span class="ac-unread">${n}</span>`;
 }
 function _acScrollHint(sc){
-  sc.classList.toggle('has-more',(sc.scrollWidth-sc.clientWidth-sc.scrollLeft)>4);
-  sc.classList.toggle('has-less',sc.scrollLeft>4);
+  const more=(sc.scrollWidth-sc.clientWidth-sc.scrollLeft)>4, less=sc.scrollLeft>4;
+  sc.classList.toggle('has-more',more);
+  sc.classList.toggle('has-less',less);
+  // 同步打到容器上驱动溢出箭头显隐（渐隐遮罩太含蓄，藏起来的账号等于不存在）
+  const bar=sc.closest('.account-chips');
+  if(bar){ bar.classList.toggle('sc-more',more); bar.classList.toggle('sc-less',less); }
 }
 /* rail 键盘导航（2026-07-29 a11y）：Enter/Space 激活 chip；左右方向键在
    全部 chips + 工具区（齿轮）间循环移焦（focus 自动把 chip 滚入可视区） */
@@ -1500,9 +1536,27 @@ function _acChipKey(e){
   if(nxt&&nxt.focus) nxt.focus();
 }
 function setAccountFilter(aid){
+  const prev=accountFilter;
   accountFilter=aid;
-  buildAccountChips();
+  buildAccountChips();            // 注：不在册的 aid 会在 build 内回落 'all'
+  const eff=accountFilter;
+  // P2 账号工作记忆：记住该平台的账号视角选择（切平台/回来时恢复，见 setPlatFilter）
+  try{ if(platFilter!=='all') localStorage.setItem('ws_acct_filter::'+platFilter, eff); }catch(_){}
+  _restoreSortForAccount(eff);    // P7: 账号级排序记忆（无记忆回落平台级）
   applyFilters();
+  if(eff!=='all'){
+    _acEnsureActiveVisible();     // 选中 chip 滚入可视区（横滚区外也能看到选中态）
+    _scopedFetch(platFilter, eff, {force: prev===eff});   // 重复点同号 = 显式刷新
+  } else {
+    _scopedRows=null; _scopedKey=''; _scopedTs=0;
+    _scopedHasMore=false; _scopedOldest=0;
+    _syncLoadMoreBar();           // 恢复全局「加载更多」语义
+  }
+  if(prev===eff){                 // 已选中再点：给「收到」反馈，不再无声
+    _acPulseActive();
+    if(eff==='all'){ loadChats(); _toast(window.T('inbox.acct.already_all'),'#64748b'); }
+  }
+  _syncViewLink();                // P4: 账号视角进地址栏（刷新/分享可直达）
 }
 function toggleAccountOnlineOnly(){
   accountOnlineOnly=!accountOnlineOnly;
@@ -1513,6 +1567,213 @@ function toggleGhostAccounts(){
   _ghostAcctExpanded=!_ghostAcctExpanded;
   buildAccountChips();
 }
+
+/* ── P0 账号视角增强（2026-07-29）：scoped 取数 + rail 可发现性 ──
+   实录痛点：① 抽屉点某账号「查看会话」→ 列表仍是全局视图（账号意图被丢弃）；
+   ② rail 溢出账号藏在横滚区外（无滚动条，多数账号不可见 =「系统里只有 katie」）；
+   ③ 已选中 chip 再点无任何反馈 =「点了没反应」。 */
+
+/* scoped 取数：全局轮询只拿最近 top-100 快照，账号视角改为按 (platform, account_id)
+   直查持久事实源（后端 scoped 端点本就为此而建），把该账号全量会话并入 allChats
+   （convKey 去重；轮询覆盖 allChats 后由 _remergeScopedRows 重新并入），
+   「点开账号看不到老会话」从窗口碰运气变成库里有就看得到。 */
+let _scopedRows=null, _scopedKey='', _scopedTs=0, _scopedLoading=false, _scopedSeq=0;
+let _scopedHasMore=false, _scopedOldest=0;   // P2: 账号视角自己的游标分页状态
+const _SCOPED_TTL_MS=60000;
+/* 死意图/取数失败遥测：复用哑按钮守卫同一后端计数（/api/telemetry/frontend-error，
+   只送消毒后的 {page,fn,type}）——「点了没反应」类问题从等用户报障变成看板可见。 */
+function _beaconUiIssue(fn, type){
+  try{
+    const body=JSON.stringify({page:location.pathname, fn:String(fn||''), type:String(type||'')});
+    navigator.sendBeacon('/api/telemetry/frontend-error', new Blob([body],{type:'application/json'}));
+  }catch(_){}
+}
+function _remergeScopedRows(){
+  // P6：平台/账号红点已改吃服务端 unread_by_* 全库聚合，不再依赖本合并对
+  // platUnread 的副作用；此处只负责账号视角列表完整性。
+  if(!_scopedRows || accountFilter==='all') return;
+  if(_scopedKey!==platFilter+':'+accountFilter) return;   // 已切走的旧数据不并
+  const seen=new Set((allChats||[]).map(c=>convKey(c)));
+  _scopedRows.forEach(c=>{ const k=convKey(c); if(!seen.has(k)){ allChats.push(c); seen.add(k); } });
+}
+async function _scopedFetch(pl, aid, opts){
+  const key=pl+':'+aid;
+  const fresh=(_scopedKey===key && _scopedRows && (Date.now()-_scopedTs)<_SCOPED_TTL_MS);
+  if(fresh && !(opts&&opts.force)){ _remergeScopedRows(); applyFilters(); return; }
+  const seq=++_scopedSeq;
+  _scopedLoading=true; _scopedKey=key; _scopedRows=null;
+  try{
+    const r=await _fetchWithTimeout('/api/unified-inbox/chats?limit=200&platform='+encodeURIComponent(pl)+'&account_id='+encodeURIComponent(aid), 15000);
+    if(!r.ok) throw new Error('http '+r.status);
+    const d=await r.json();
+    if(seq!==_scopedSeq) return;               // 期间已切走 → 丢弃过期回包
+    if(!d.ok) throw new Error('payload');
+    _scopedRows=d.chats||[]; _scopedTs=Date.now();
+    _scopedHasMore=!!d.has_more; _scopedOldest=Number(d.oldest_ts||0);   // P2: 账号视角游标
+    _remergeScopedRows();
+  }catch(e){
+    if(seq===_scopedSeq && accountFilter===aid){
+      _toast(window.T('inbox.acct.scoped_fail'),'#d97706');
+      _beaconUiIssue('scopedFetch','scoped_fail');
+    }
+  }finally{
+    if(seq===_scopedSeq){ _scopedLoading=false; applyFilters(); _syncLoadMoreBar(); }
+  }
+}
+/* P2 账号视角翻页：全局「加载更多」游标是全平台口径，账号视角必须按 scoped 游标翻
+   （后端 before_ts+platform+account_id 组合早已支持）；>200 会话的账号不再被首页截断。 */
+async function _loadMoreScoped(){
+  if(!_scopedHasMore||_chatsLoadingMore||!_scopedOldest) return;
+  const key=_scopedKey, pl=platFilter, aid=accountFilter;
+  if(key!==pl+':'+aid) return;   // scoped 首页尚未就位时不翻页
+  _chatsLoadingMore=true; _syncLoadMoreBar();
+  try{
+    const r=await apiFetch('/api/unified-inbox/chats?limit=100&before_ts='+encodeURIComponent(_scopedOldest)
+      +'&platform='+encodeURIComponent(pl)+'&account_id='+encodeURIComponent(aid));
+    const d=await r.json();
+    if(_scopedKey===key && accountFilter===aid && d && d.ok){
+      _scopedRows=(_scopedRows||[]).concat(d.chats||[]);
+      _scopedHasMore=!!d.has_more;
+      _scopedOldest=Number(d.oldest_ts||0);
+      _remergeScopedRows();
+      applyFilters();
+    }
+  }catch(_){ /* 翻页失败静默，按钮保留可重试 */ }
+  finally{ _chatsLoadingMore=false; _syncLoadMoreBar(); }
+}
+/* 选中 chip 保证可见：仅显式切换时调用（轮询重绘不抢用户滚动位） */
+function _acEnsureActiveVisible(){
+  try{
+    const sc=document.getElementById('ac-scroll'); if(!sc) return;
+    const chip=sc.querySelector('.acct-chip.active');
+    if(chip&&chip.scrollIntoView) chip.scrollIntoView({inline:'nearest',block:'nearest'});
+  }catch(_){}
+}
+/* 已选中再点 → 扩散脉冲（交互层面的「收到」，消灭无声点击） */
+function _acPulseActive(){
+  const bar=document.getElementById('account-chips'); if(!bar) return;
+  const chip=bar.querySelector('.acct-chip.active'); if(!chip) return;
+  chip.classList.remove('ac-ack'); void chip.offsetWidth;
+  chip.classList.add('ac-ack');
+  setTimeout(()=>{ try{ chip.classList.remove('ac-ack'); }catch(_){} },600);
+}
+/* 溢出箭头步进（每次约 0.7 屏，smooth 滚动触发 scroll 事件自动刷新 has-more/less） */
+function _acNudge(dir){
+  const sc=document.getElementById('ac-scroll'); if(!sc) return;
+  try{ sc.scrollBy({left:dir*Math.max(120,Math.round(sc.clientWidth*0.7)),behavior:'smooth'}); }
+  catch(_){ sc.scrollLeft+=dir*160; }
+}
+/* 账号总览下拉：横滚可发现性兜底——不管 rail 藏了几个，一键看全平台账号清单
+   （头像/人设/在线/未读），点击即筛选。宽度无关、零学习成本。 */
+function toggleAcctPicker(e){
+  if(e&&e.stopPropagation) e.stopPropagation();
+  if(document.getElementById('ac-pick-pop')){ closeAcctPicker(); return; }
+  _renderAcctPicker();
+}
+function closeAcctPicker(){
+  const pop=document.getElementById('ac-pick-pop'); if(pop) pop.remove();
+  const b=document.getElementById('ac-pick-btn'); if(b) b.setAttribute('aria-expanded','false');
+  document.removeEventListener('click',_acPickOutside,true);
+  document.removeEventListener('keydown',_acPickEsc,true);
+  document.removeEventListener('scroll',_acPickOnScroll,true);
+  window.removeEventListener('resize',_acPickOnScroll);
+}
+/* 页面任意滚动/改尺寸即关（fixed 弹层不跟随锚点漂移；与抽屉溢出菜单同策略「关闭比重算更稳」） */
+function _acPickOnScroll(e){
+  const pop=document.getElementById('ac-pick-pop');
+  if(!pop) return;
+  if(e&&e.target&&pop.contains(e.target)) return;   // 弹层自身内部滚动不关
+  closeAcctPicker();
+}
+function _acPickOutside(e){
+  const pop=document.getElementById('ac-pick-pop');
+  if(!pop) return;
+  const t=e.target;
+  if(pop.contains(t)) return;
+  if(t&&t.closest&&t.closest('#ac-pick-btn')) return;   // 按钮自身由 toggle 负责开关
+  closeAcctPicker();
+}
+function _acPickEsc(e){ if(e.key==='Escape'){ e.preventDefault(); closeAcctPicker(); } }
+function _acPickChoose(aid){ closeAcctPicker(); setAccountFilter(aid); }
+function _acPickKey(e,aid){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); _acPickChoose(aid); } }
+function _renderAcctPicker(){
+  const bar=document.getElementById('account-chips'); if(!bar) return;
+  let accts=_accountsForPlatform(platFilter);
+  if(!accts.length) return;
+  accts.sort((a,b)=>((b.paired?1:0)-(a.paired?1:0))||(b.unread-a.unread)||(a.account_id>b.account_id?1:-1));
+  const totUnread=accts.reduce((s,a)=>s+a.unread,0);
+  const totAttn=accts.reduce((s,a)=>s+(a.attn||0),0);
+  const gridIc='<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>';
+  let rows=`<div class="ac-pick-row ${accountFilter==='all'?'sel':''}" role="option" tabindex="0" aria-selected="${accountFilter==='all'}" onclick="_acPickChoose('all')" onkeydown="_acPickKey(event,'all')">
+    <span class="apr-av apr-all" aria-hidden="true">${gridIc}</span>
+    <div class="apr-main"><span class="apr-name">${window.T('inbox.acct.all_accounts')}</span></div>${_acUnreadBadge(totUnread,totAttn)}</div>`;
+  // P3 价值信息：今日会话数（platformStatus 的 P4 富集字段）直接进下拉副行——
+  // 总览下拉就是「账号信息面」，比另起一套 chip hover 浮层子系统更省、不重复
+  const _psToday={};
+  Object.values(platformStatus||{}).forEach(v=>{
+    if(v&&(v.platform||'web')===platFilter) _psToday[String(v.account_id||'default')]=Number(v.today_conv_count||0);
+  });
+  accts.forEach(a=>{
+    const aid=String(a.account_id);
+    const nm=_acctLabel(platFilter,aid);
+    const meta=accountMeta[`${platFilter}:${aid}`]||{};
+    let ini=String(nm||'?').trim().charAt(0).toUpperCase();
+    const avInner=meta.self_avatar?`<img src="${esc(meta.self_avatar)}" alt="" onerror="this.remove()">`:esc(ini);
+    const avBg=meta.self_avatar?'var(--bg-soft)':_avatarGrad(platFilter+':'+aid);
+    const ghost=!a.paired;
+    const subBits=[];
+    if(meta.persona_name) subBits.push('🎭 '+esc(meta.persona_name));
+    if(_psToday[aid]>0) subBits.push(esc(window.Tf('inbox.acct.today_convs',{n:_psToday[aid]})));
+    rows+=`<div class="ac-pick-row ${accountFilter===aid?'sel':''}${ghost?' ghost':''}" role="option" tabindex="0" aria-selected="${accountFilter===aid}" title="${esc(String(aid))}" onclick="_acPickChoose('${esc(aid)}')" onkeydown="_acPickKey(event,'${esc(aid)}')">
+      <span class="apr-av" style="background:${avBg};">${avInner}<span class="ac-st ${a.running?'on':'off'}" aria-hidden="true"></span></span>
+      <div class="apr-main"><span class="apr-name">${esc(nm)}${ghost?`<span class="ac-ghost-tag">${window.T('inbox.acct.ghost_tag')}</span>`:''}</span>
+      ${subBits.length?`<span class="apr-sub">${subBits.join(' \u00b7 ')}</span>`:''}</div>
+      ${_acUnreadBadge(a.unread,a.attn)}</div>`;
+  });
+  // P4: 底部「复制视角链接」——总览已是信息面，附带分享出口比另开菜单更贴
+  rows+=`<div class="ac-pick-foot"><button type="button" class="ac-pick-copy" onclick="_copyViewLink(event)" title="${esc(window.T('inbox.acct.copy_link_t'))}">${uiIcon('link',13)}<span>${esc(window.T('inbox.acct.copy_link'))}</span></button></div>`;
+  const pop=document.createElement('div');
+  pop.id='ac-pick-pop'; pop.className='ac-pick-pop'; pop.setAttribute('role','listbox');
+  pop.innerHTML=rows;
+  // 挂 body + fixed 定位锚定按钮：rail 容器带 overflow-x（兜底横滚），absolute 子元素会被裁剪
+  const btn=document.getElementById('ac-pick-btn');
+  const anchor=(btn||bar).getBoundingClientRect();
+  pop.style.top=Math.round(anchor.bottom+4)+'px';
+  pop.style.visibility='hidden';
+  document.body.appendChild(pop);
+  // 水平定位：右缘对齐按钮，但整体钳制在视口内（侧栏很窄时右对齐会把弹层推出左缘）
+  const w=pop.offsetWidth||260;
+  const left=Math.max(8, Math.min(Math.round(anchor.right-w), window.innerWidth-w-8));
+  pop.style.left=left+'px';
+  // 视口下缘防溢出：先量再收 max-height（至少留 120px 可用高度才不至于不可用）
+  const room=window.innerHeight-anchor.bottom-16;
+  if(room>120 && room<330) pop.style.maxHeight=Math.round(room)+'px';
+  pop.style.visibility='';
+  if(btn) btn.setAttribute('aria-expanded','true');
+  setTimeout(()=>{ document.addEventListener('click',_acPickOutside,true); },0);
+  document.addEventListener('keydown',_acPickEsc,true);
+  document.addEventListener('scroll',_acPickOnScroll,true);
+  window.addEventListener('resize',_acPickOnScroll);
+  const first=pop.querySelector('.ac-pick-row.sel')||pop.querySelector('.ac-pick-row');
+  if(first) try{ first.focus(); }catch(_){}
+}
+/* P2 键盘加速：Alt+1..9 按 rail 当前顺序切账号（1=全部账号，2..9=账号 chips）。
+   输入框/富文本内不触发；rail 不可见（单账号平台/全部对话）不触发；
+   选用 Alt 而非 Ctrl（Ctrl+数字被浏览器标签页占用）。 */
+document.addEventListener('keydown', function(e){
+  if(!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  const k=e.key;
+  if(k<'1'||k>'9') return;
+  const t=e.target;
+  if(t && (t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.isContentEditable)) return;
+  const bar=document.getElementById('account-chips');
+  if(!bar || bar.style.display==='none') return;
+  const chips=bar.querySelectorAll('.ac-scroll .acct-chip:not(.ac-toggle)');
+  const idx=parseInt(k,10)-1;
+  if(idx>=chips.length) return;
+  e.preventDefault();
+  chips[idx].click();
+});
 
 /* ===== 平台导航栏 ===== */
 // 判断某平台连接态：'on'(有账号在线) / 'off'(有账号但全断) / 'none'(未配置账号)
@@ -1530,6 +1791,14 @@ function buildNavRail(chats){
     platCounts[p]=(platCounts[p]||0)+1;
     if(c.unread>0) platUnread[p]=(platUnread[p]||0)+c.unread;
   });
+  // P6：有全库聚合时覆盖窗口求和（沉底未读不再丢红点）；平台计数仍用窗口
+  if(unreadByPlatform){
+    platUnread={};
+    Object.keys(unreadByPlatform).forEach(p=>{
+      const n=Number(unreadByPlatform[p])||0;
+      if(n>0) platUnread[p]=n;
+    });
+  }
   // 常驻 4 平台 + 有会话/已配置的 web + 其它意外出现的平台
   const order=[...FIXED_PLATS];
   if(platCounts['web']||platConnState('web')!=='none') order.push('web');
@@ -1560,7 +1829,7 @@ function _renderMobPlatBar(order, counts){
     b.innerHTML=html;
     return b;
   };
-  const tot=(allChats||[]).reduce((s,c)=>s+(c.unread||0),0);
+  const tot=_totalUnread();
   bar.appendChild(mk('all',
     '<span style="font-size:16px;line-height:1;">⊞</span>'+(tot?`<span class="mob-badge">${tot>99?'99+':tot}</span>`:''),
     ''));
@@ -1579,12 +1848,25 @@ function _renderMobPlatBar(order, counts){
   });
 }
 
+function _totalUnread(){
+  // P6：有全库聚合（含全 0）就信服务端；否则回落窗口求和
+  let t=0;
+  if(unreadByPlatform){
+    Object.keys(unreadByPlatform).forEach(p=>{ t+=Number(unreadByPlatform[p])||0; });
+    return t;
+  }
+  if(platUnread){
+    Object.keys(platUnread).forEach(p=>{ t+=Number(platUnread[p])||0; });
+    if(t>0) return t;
+  }
+  return (allChats||[]).reduce((s,c)=>s+(c.unread||0),0);
+}
 function _navIconAll(){
   const div=document.createElement('div');
   div.className='nav-plat'+(platFilter==='all'?' active':'');
   div.dataset.plat='all';
   div.onclick=()=>setPlatFilter('all');
-  const tot=allChats.reduce((s,c)=>s+(c.unread||0),0);
+  const tot=_totalUnread();
   div.innerHTML='<div style="font-size:18px;color:inherit;">⊞</div>'
     +(tot>0?`<div class="nav-badge">${tot>99?'99+':tot}</div>`:'')
     +`<div class="nav-tip"><div class="nav-tip-title"><span>${window.T('inbox.nav.all')}</span></div>`
@@ -1614,9 +1896,21 @@ function _navIconPlat(p, count){
   return div;
 }
 
-function setPlatFilter(p){
+function setPlatFilter(p, opts){
+  opts=opts||{};
   platFilter=p;
   accountFilter='all';   // P0: 切平台时重置账号筛选
+  // P2 账号工作记忆 / P4 深链强制账号：opts.acct 优先于 localStorage
+  // （深链必须压过记忆，否则刷新带 #acct=X 仍可能落到上次点的号）
+  let _savedAcct='';
+  if(Object.prototype.hasOwnProperty.call(opts,'acct')){
+    _savedAcct=String(opts.acct||'');
+    if(_savedAcct && _savedAcct!=='all') accountFilter=_savedAcct;
+  } else {
+    try{ _savedAcct=(p!=='all' && localStorage.getItem('ws_acct_filter::'+p))||''; }catch(_){}
+    if(_savedAcct && _savedAcct!=='all') accountFilter=_savedAcct;
+  }
+  closeAcctPicker();     // 账号总览下拉跟随平台上下文，切平台即关闭
   _updateListTitleVisuals(p);
   document.querySelectorAll('.nav-plat, .mob-plat-item').forEach(el=>{
     const on=el.dataset.plat===p;
@@ -1624,15 +1918,30 @@ function setPlatFilter(p){
     if(el.classList.contains('mob-plat-item')) el.setAttribute('aria-selected', on?'true':'false');
   });
   buildAccountChips();
+  if(_savedAcct && _savedAcct!=='all'){
+    if(accountFilter==='all'){
+      try{ localStorage.removeItem('ws_acct_filter::'+p); }catch(_){}   // 账号已不在册 → 记忆自愈
+    } else {
+      try{ if(p!=='all') localStorage.setItem('ws_acct_filter::'+p, accountFilter); }catch(_){}
+      _acEnsureActiveVisible();
+      _scopedFetch(p, accountFilter, {});
+    }
+  }
   _restoreSortForPlatform(p);
-  const saved=_readChatFilter(p);
-  if(saved) _applyFilterByName(saved);
-  else {
-    chatFilter='all';
-    _syncFtabUI();
-    _syncKpiActive();
+  // 深链启动时跳过「按平台记忆的 chatFilter / 智能默认」——避免盖掉运营明确点开的视角
+  if(!opts.skipChatFilter){
+    const saved=_readChatFilter(p);
+    if(saved) _applyFilterByName(saved);
+    else {
+      chatFilter='all';
+      _syncFtabUI();
+      _syncKpiActive();
+      applyFilters();
+    }
+  } else {
     applyFilters();
   }
+  _syncViewLink();
 }
 
 /* ===== P2/P3: 列表标题 / 滚动折叠 / 按平台记忆筛选 ===== */
@@ -1668,10 +1977,24 @@ function _persistChatFilter(f){
   try{ localStorage.setItem(_chatFilterStorageKey(), String(f||'all')); }catch(_){}
 }
 
-/* P4-d: 按平台记忆排序（与筛选键同模式） */
+/* P4-d: 按平台记忆排序（与筛选键同模式）
+   P7: 账号视角另有独立记忆（ws_sort_acct::plat:aid）——多号运营常在某个爆量号里
+   用「未读优先」，回到平台全量/别的号不应被它带偏；无账号记忆时回落平台级。 */
 const _SORT_LEGACY='ws_sort_mode';
 function _sortStorageKey(plat){
   return 'ws_sort_mode_'+String(plat!=null?plat:(platFilter||'all'));
+}
+function _acctSortKey(plat, aid){ return 'ws_sort_acct::'+String(plat)+':'+String(aid); }
+function _readAcctSort(plat, aid){
+  try{ return localStorage.getItem(_acctSortKey(plat, aid)); }catch(_){ return null; }
+}
+/* 切账号视角时恢复排序：账号记忆 > 平台记忆；不落盘（只有用户显式改排序才写） */
+function _restoreSortForAccount(aid){
+  if(platFilter==='all') return;
+  let m=null;
+  if(aid && aid!=='all') m=_readAcctSort(platFilter, aid);
+  _sortMode=(m!=null?m:_readSortMode(platFilter));
+  const e=document.getElementById('sort-select'); if(e) e.value=_sortMode;
 }
 function _readSortMode(plat){
   try{
@@ -1686,10 +2009,20 @@ function _readSortMode(plat){
   return 'recent';
 }
 function _persistSortMode(m){
-  try{ localStorage.setItem(_sortStorageKey(), m||'recent'); }catch(_){}
+  try{
+    // P7: 账号视角下改排序只写账号级记忆，平台级不动（解耦）
+    if(platFilter!=='all' && accountFilter && accountFilter!=='all'){
+      localStorage.setItem(_acctSortKey(platFilter, accountFilter), m||'recent');
+      return;
+    }
+    localStorage.setItem(_sortStorageKey(), m||'recent');
+  }catch(_){}
 }
 function _restoreSortForPlatform(p){
-  _sortMode=_readSortMode(p);
+  // P7: 切平台若同时恢复了账号视角（工作记忆/深链），排序也按账号记忆优先
+  let m=null;
+  if(accountFilter && accountFilter!=='all') m=_readAcctSort(p, accountFilter);
+  _sortMode=(m!=null?m:_readSortMode(p));
   const e=document.getElementById('sort-select'); if(e) e.value=_sortMode;
 }
 let _sortMode=_readSortMode('all');
@@ -1811,7 +2144,7 @@ function _renderCompactBar(){
   }
   if(funnelFilter){
     items.push({cls:'acct', label:window.Tf('inbox.fs.funnel',{stage:(typeof FUNNEL!=='undefined'&&FUNNEL[funnelFilter])||funnelFilter}), count:0, isCur:true,
-      onBody:_expandListHeader, onClear:()=>{ funnelFilter=''; applyFilters(); }});
+      onBody:_expandListHeader, onClear:_clearFunnelFilter});
   }
   if(searchQ){
     const sq=searchQ.length>12?searchQ.slice(0,11)+'\u2026':searchQ;
@@ -1859,18 +2192,13 @@ function _applyFilterByName(f){
 function _applyInitialFilter(){
   if(_initialFilterApplied) return;
   _initialFilterApplied=true;
-  try{
-    const q=new URLSearchParams(location.search);
-    if(q.get('conv')) return;
-    // P5-2：经营看板深链 ?filter=<name>[&funnel=STAGE] —— 优先于记忆/智能默认
-    const df=q.get('filter');
-    if(df){
-      const fn=(q.get('funnel')||'').trim().toUpperCase();
-      if(fn){ funnelFilter=fn; }
-      _applyFilterByName(df);
-      return;
-    }
-  }catch(_){}
+  let q=null;
+  try{ q=new URLSearchParams(location.search); }catch(_){ q=new URLSearchParams(); }
+  // P4/P5 视角深链：先把遗留 ?plat&acct&filter&funnel 迁进 hash，再一次性应用。
+  // 与 ?conv= 正交（conv 开会话；视角框列表）。有 conv 时仍应用视角，便于 scoped 命中。
+  _migrateQueryViewParams();
+  const hadView=_applyViewLink({boot:true});
+  if((q.get && q.get('conv')) || hadView) return;   // 深链/会话链：不再用智能默认抢筛选
   let saved=null;
   try{ saved=_readChatFilter(platFilter); }catch(_){}
   if(saved){
@@ -1890,6 +2218,154 @@ function _applyInitialFilter(){
   if(pick!=='all') _applyFilterByName(pick);
 }
 
+/* ===== P4/P5 视角深链（2026-07-29）=====
+   格式：#plat=&acct=&filter=&funnel=（hash；不碰 ?conv=/?theme=/?app=）
+   P5：把经营看板遗留的 ?filter=&funnel= 收进同一条 hash 路径（迁入后清 query），
+   刷新/分享一次带走「平台+账号+列表筛选+漏斗阶段」。
+   仅 acct 时反查平台。写回 replaceState，不污染历史。filter 白名单防脏参。 */
+const _VIEW_FILTERS=new Set(['all','unread','sla','claimed','waiting','snoozed','archived','removed','done']);
+let _viewLinkQuiet=false;
+function _parseViewLink(){
+  try{
+    let plat='', acct='', filter='', funnel='';
+    const raw=(location.hash||'').replace(/^#/,'');
+    if(raw && raw.indexOf('=')>=0){
+      const h=new URLSearchParams(raw);
+      plat=String(h.get('plat')||'').trim();
+      acct=String(h.get('acct')||'').trim();
+      filter=String(h.get('filter')||'').trim();
+      funnel=String(h.get('funnel')||'').trim().toUpperCase();
+    }
+    // 兼容尚未迁完的 query（migrate 之后通常已空）
+    if(!plat && !acct && !filter && !funnel){
+      const q=new URLSearchParams(location.search);
+      plat=String(q.get('plat')||'').trim();
+      acct=String(q.get('acct')||'').trim();
+      filter=String(q.get('filter')||'').trim();
+      funnel=String(q.get('funnel')||'').trim().toUpperCase();
+    }
+    if(filter && !_VIEW_FILTERS.has(filter)) filter='';
+    return {plat:plat, acct:acct, filter:filter, funnel:funnel};
+  }catch(_){ return {plat:'', acct:'', filter:'', funnel:''}; }
+}
+function _inferPlatForAcct(aid){
+  const id=String(aid||'');
+  if(!id) return '';
+  try{
+    for(const v of Object.values(platformStatus||{})){
+      if(v && String(v.account_id||'default')===id) return String(v.platform||'web');
+    }
+  }catch(_){}
+  try{
+    for(const c of (allChats||[])){
+      if(c && String(c.account_id||'default')===id) return String(c.platform||'web');
+    }
+  }catch(_){}
+  return '';
+}
+function _syncViewLink(){
+  if(_viewLinkQuiet) return;
+  try{
+    const parts=[];
+    if(platFilter && platFilter!=='all') parts.push('plat='+encodeURIComponent(platFilter));
+    if(accountFilter && accountFilter!=='all') parts.push('acct='+encodeURIComponent(accountFilter));
+    if(chatFilter && chatFilter!=='all' && _VIEW_FILTERS.has(chatFilter)){
+      parts.push('filter='+encodeURIComponent(chatFilter));
+    }
+    if(funnelFilter) parts.push('funnel='+encodeURIComponent(String(funnelFilter).toUpperCase()));
+    const nextHash=parts.length?('#'+parts.join('&')):'';
+    if((location.hash||'')===nextHash) return;
+    history.replaceState(null,'', location.pathname+location.search+nextHash);
+  }catch(_){}
+}
+function _migrateQueryViewParams(){
+  // 把 ?plat&acct&filter&funnel 收进 hash（hash 已有的键不覆盖），避免与业务 query 缠在一起
+  try{
+    const q=new URLSearchParams(location.search);
+    const keys=['plat','acct','filter','funnel'];
+    if(!keys.some(k=>q.has(k))) return;
+    const h=new URLSearchParams(((location.hash||'').replace(/^#/,''))||'');
+    keys.forEach(k=>{
+      if(!q.has(k)) return;
+      const v=String(q.get(k)||'').trim();
+      if(v && !h.get(k)) h.set(k, v);
+      q.delete(k);
+    });
+    const qs=q.toString();
+    const hs=h.toString();
+    history.replaceState(null,'', location.pathname+(qs?('?'+qs):'')+(hs?('#'+hs):''));
+  }catch(_){}
+}
+function _applyViewLink(opts){
+  opts=opts||{};
+  const vl=_parseViewLink();
+  let plat=vl.plat, acct=vl.acct;
+  const hasFilter=!!(vl.filter || vl.funnel);
+  if(!plat && !acct && !hasFilter) return false;
+  if(!plat && acct) plat=_inferPlatForAcct(acct);
+  _viewLinkQuiet=true;
+  try{
+    if(plat){
+      const o={skipChatFilter: !!opts.boot || hasFilter};  // 有明确 filter 时也不让平台记忆盖掉
+      if(acct) o.acct=acct;
+      setPlatFilter(plat, o);
+    } else if(acct){
+      setAccountFilter(acct);
+    }
+    if(vl.funnel) funnelFilter=vl.funnel;
+    if(vl.filter){
+      if(vl.filter!==chatFilter) _applyFilterByName(vl.filter);
+      else { _syncFtabUI(); _syncKpiActive(); applyFilters(); }
+    } else if(hasFilter && vl.funnel){
+      // 只有 funnel、无 filter：保持当前 chatFilter，只刷列表
+      applyFilters();
+    }
+  }finally{
+    _viewLinkQuiet=false;
+    _syncViewLink();
+  }
+  return true;
+}
+function _clearFunnelFilter(){
+  if(!funnelFilter) return;
+  funnelFilter='';
+  applyFilters();
+  _syncViewLink();
+}
+function _copyViewLink(ev){
+  if(ev&&ev.stopPropagation) ev.stopPropagation();
+  _syncViewLink();
+  const url=location.origin+location.pathname+location.search+(location.hash||'');
+  const done=(ok)=>{
+    _toast(window.T(ok?'inbox.acct.link_copied':'inbox.acct.link_copy_fail'), ok?'#0f766e':'#d97706');
+  };
+  try{
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(url).then(()=>done(true)).catch(()=>done(_copyViewLinkFallback(url)));
+      return;
+    }
+  }catch(_){}
+  done(_copyViewLinkFallback(url));
+}
+function _copyViewLinkFallback(url){
+  try{
+    const ta=document.createElement('textarea');
+    ta.value=url; ta.setAttribute('readonly','');
+    ta.style.cssText='position:fixed;left:-9999px;top:0';
+    document.body.appendChild(ta); ta.select();
+    const ok=document.execCommand('copy');
+    ta.remove();
+    return !!ok;
+  }catch(_){ return false; }
+}
+window.addEventListener('hashchange', function(){
+  if(_viewLinkQuiet) return;
+  const vl=_parseViewLink();
+  // 清空 hash 不强迫回到「全部」（防误触）；有任一视角键才应用
+  if(!vl.plat && !vl.acct && !vl.filter && !vl.funnel) return;
+  _applyViewLink({});
+});
+
 /* ===== 过滤 ===== */
 const _FTAB_MORE=new Set(['waiting','snoozed','archived','removed']);
 
@@ -1900,6 +2376,7 @@ function setFilter(f,el){
   _syncKpiActive();
   _closeFtabMore();
   applyFilters();
+  _syncViewLink();   // P5: 列表筛选进视角 hash
 }
 
 function _syncFtabUI(el){
@@ -1970,7 +2447,7 @@ function _renderFilterSummary(){
   if(!bar) return;
   const chips=[];
   if(searchQ) chips.push({label:window.Tf('inbox.fs.search',{q:searchQ}), clear:()=>{ searchQ=''; const si=document.getElementById('search-input'); if(si) si.value=''; applyFilters(); }});
-  if(funnelFilter) chips.push({label:window.Tf('inbox.fs.funnel',{stage:(typeof FUNNEL!=='undefined'&&FUNNEL[funnelFilter])||funnelFilter}), clear:()=>{ funnelFilter=''; applyFilters(); }});
+  if(funnelFilter) chips.push({label:window.Tf('inbox.fs.funnel',{stage:(typeof FUNNEL!=='undefined'&&FUNNEL[funnelFilter])||funnelFilter}), clear:_clearFunnelFilter});
   if(tagFilter) chips.push({label:window.Tf('inbox.fs.tag',{tag:tagFilter}), clear:()=>{ setTagFilter('', document.querySelector('.tfd-item[data-tag=""]')); }});
   if(accountFilter!=='all') chips.push({label:window.Tf('inbox.fs.acct',{label:_acctLabel(platFilter,accountFilter)}), clear:()=>{ setAccountFilter('all'); }});
   const _fLbl={waiting:'inbox.filter.waiting',snoozed:'inbox.filter.snoozed',archived:'inbox.filter.archived',removed:'inbox.filter.removed',done:'inbox.stat.done'};
@@ -2019,6 +2496,7 @@ function resetAllFilters(){
   _syncKpiActive();
   _persistChatFilter('all');
   applyFilters();
+  _syncViewLink();   // P4: 清空筛选同步清掉视角 hash
 }
 function isGroupConv(c){
   const t=String((c&&c.chat_type)||'').toLowerCase();
@@ -2458,8 +2936,11 @@ function _applyAcctVisuals(dom, c){
     if(show){
       if(!badge){ badge=document.createElement('span'); badge.className='conv-acct-badge'; nameEl.appendChild(badge); }
       badge.style.background=clr+'22'; badge.style.color=clr;
-      badge.title=window.Tf('inbox.conv.acct_badge_t',{label:_acctLabel(c.platform,c.account_id)});
+      badge.title=window.Tf('inbox.conv.acct_badge_click_t',{label:_acctLabel(c.platform,c.account_id)});
       badge.innerHTML=`<span class="cab-dot" style="background:${clr};"></span>${esc(_acctShort(c.platform,c.account_id))}`;
+      // P3 最短路径账号导航：点行内账号徽标即切该账号视角（程序化绑定随 diff 更新，
+      // stopPropagation 防触发「打开会话」；跨平台上下文走 viewAcctChats 先立平台）
+      badge.onclick=function(ev){ _convAcctBadgeClick(ev, c.platform, c.account_id||'default'); };
     } else if(badge){ badge.remove(); }
     // 身份可视化：账号徽章后追加人设徽章（多号平台）；运行数据缺人设 → 黄色警示点
     const pmeta=accountMeta[`${c.platform}:${c.account_id||'default'}`]||{};
@@ -2481,6 +2962,22 @@ function _applyAcctVisuals(dom, c){
       if(pb) pb.remove();
       if(nd) nd.remove();
     }
+  }
+}
+/* P3: 行内账号徽标点击 → 账号视角（列表里看到谁的号就能一键只看那个号）。
+   同平台视图只切账号筛选（不动当前 chatFilter/排序）；「全部对话」等跨平台
+   上下文先经 viewAcctChats 立平台上下文（含 toast + chip 高亮滚入）。
+   同号再点：走 setAccountFilter 脉冲+强制刷新（与 chip 重复点击同口径），不再弹 toast。 */
+function _convAcctBadgeClick(ev, pl, aid){
+  if(ev&&ev.stopPropagation) ev.stopPropagation();
+  if(ev&&ev.preventDefault) ev.preventDefault();
+  const id=String(aid||'default');
+  if(platFilter!==pl){ viewAcctChats(pl, id); return; }
+  const prev=accountFilter;
+  setAccountFilter(id);
+  // 同平台首次切到该号：给与抽屉「查看该账号会话」同款 toast（此前徽标路径静默）
+  if(accountFilter===id && prev!==id){
+    _toast(window.Tf('inbox.acct.viewing',{label:_acctLabel(pl,id)}),'#0f766e');
   }
 }
 // 身份可视化：人设短名（≤4 字全显，更长取首字；徽章 title 已带全名）
@@ -2614,8 +3111,23 @@ function renderConvList(){
       icon='✅'; title=window.T('inbox.skel.dm_done');
       hint='<div style="font-size:12px;color:var(--text-tiny);margin-top:6px;line-height:1.6;">'+window.T('inbox.skel.dm_done_hint')+'</div>';
     } else if(hasAny && filtering){
-      icon='🔍'; title=window.T('inbox.skel.no_match');
-      hint='<button class="tiny-btn" style="margin-top:10px;" onclick="resetAllFilters()">'+window.T('inbox.skel.clear_filters')+'</button>';
+      if(accountFilter!=='all' && _scopedLoading){
+        // 账号视角 scoped 取数进行中：诚实的载入态（不闪「无会话」再冒出来）
+        icon='⏳'; title=window.T('inbox.acct.scoped_loading'); hint='';
+      } else if(accountFilter!=='all' && chatFilter==='all' && !searchQ && !tagFilter && !funnelFilter){
+        // 账号视角下确实零会话：给账号专属引导（同步历史 / 回全部），而非普适「清除筛选」
+        icon='📭'; title=window.T('inbox.acct.empty_acct');
+        const _syncBtn=(platFilter==='telegram')
+          ?'<button class="tiny-btn" onclick="syncHistoryAcct(\''+platFilter+'\',\''+esc(accountFilter)+'\',this)">'+window.T('inbox.acct.sync_history')+'</button>'
+          :'';
+        hint='<div style="font-size:12px;color:var(--text-tiny);margin-top:6px;line-height:1.6;">'+window.T('inbox.acct.empty_acct_hint')+'</div>'
+          +'<div style="margin-top:10px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">'
+          +_syncBtn
+          +'<button class="tiny-btn" onclick="setAccountFilter(\'all\')">'+window.T('inbox.acct.back_all')+'</button></div>';
+      } else {
+        icon='🔍'; title=window.T('inbox.skel.no_match');
+        hint='<button class="tiny-btn" style="margin-top:10px;" onclick="resetAllFilters()">'+window.T('inbox.skel.clear_filters')+'</button>';
+      }
     } else {
       icon='🌱'; title=window.T('inbox.skel.empty');
       /* P0 空态即引导：0 会话不再只给一句话，直接给「接入渠道」入口（新装/演示第一眼） */
@@ -2960,8 +3472,19 @@ async function _loadChatsBody(){
     );
     allChats=d.chats||[];
     allChats.forEach(c=>{ if(prevUnreadCleared.has(convKey(c))) c.unread=0; });
+    _remergeScopedRows();   // P0 账号视角：全局快照覆盖 allChats 后把 scoped 行并回（防被轮询洗掉）
     _chatsHasMore=!!d.has_more; _chatsOldestTs=d.oldest_ts||0; _syncLoadMoreBar();
     platformStatus=d.platform_status||{};
+    // P6：全库有效未读（仅全局轮询带；缺字段保持上一轮，避免 scoped 误清）
+    if(d.unread_by_platform && typeof d.unread_by_platform==='object'){
+      unreadByPlatform=d.unread_by_platform;
+    }
+    if(d.unread_by_account && typeof d.unread_by_account==='object'){
+      unreadByAccount=d.unread_by_account;
+    }
+    if(d.attn_by_account && typeof d.attn_by_account==='object'){
+      attnByAccount=d.attn_by_account;   // P8：近窗 attn（旧后端无此字段 → 保持窗口口径）
+    }
     rebuildAccountMeta();          // P0: 刷新账号 label/running 映射
     if(selectedChat) _renderIdentityBar(selectedChat);   // 身份可视化：人设绑定变更即时反映到身份条
     buildNavRail(allChats);
@@ -2985,7 +3508,9 @@ let _chatsHasMore=false, _chatsOldestTs=0, _chatsLoadingMore=false;
 function _syncLoadMoreBar(){
   const bar=document.getElementById('conv-load-more');
   if(!bar) return;
-  bar.style.display=_chatsHasMore?'':'none';
+  // P2: 账号视角下「加载更多」跟 scoped 游标走（全局游标翻出来的行会被账号筛掉=点了没反应）
+  const hasMore=(accountFilter!=='all')?_scopedHasMore:_chatsHasMore;
+  bar.style.display=hasMore?'':'none';
   const btn=document.getElementById('conv-load-more-btn');
   if(btn){
     btn.disabled=_chatsLoadingMore;
@@ -2997,11 +3522,13 @@ function _syncLoadMoreBar(){
   const el=document.getElementById('conv-items');
   if(!el) return;
   el.addEventListener('scroll', ()=>{
-    if(!_chatsHasMore||_chatsLoadingMore) return;
+    const hasMore=(accountFilter!=='all')?_scopedHasMore:_chatsHasMore;   // P2: 账号视角走 scoped 游标
+    if(!hasMore||_chatsLoadingMore) return;
     if(el.scrollHeight - el.scrollTop - el.clientHeight < 120) loadMoreChats();
   }, {passive:true});
 })();
 async function loadMoreChats(){
+  if(accountFilter!=='all') return _loadMoreScoped();   // P2: 账号视角翻自己的页
   if(!_chatsHasMore||_chatsLoadingMore||!_chatsOldestTs) return;
   _chatsLoadingMore=true; _syncLoadMoreBar();
   try{
@@ -3579,11 +4106,33 @@ function _openConvByCid(cid, opts){
     return false;
   };
   if(tryOpen()) return true;
-  // 七期：深链目标刷新后仍不在列表（归档/账号未接入）→ 明确告知
-  Promise.resolve(loadChats()).then(()=>{
-    if(!tryOpen()) _toast(window.T('inbox.toast.not_in_list'), '#b45309');
+  // 七期：刷新一次再试；P7：仍不在（沉在全局 top-N 窗口外）→ 按 conv_id 自带的
+  // platform:account 反解 scoped 直查持久库救援，救不回才如实告知（归档/未接入等）
+  Promise.resolve(loadChats()).then(async ()=>{
+    if(tryOpen()) return;
+    try{ if(await _rescueConvFromStore(cid)){ if(tryOpen()) return; } }catch(_){}
+    _toast(window.T('inbox.toast.not_in_list'), '#b45309');
+    _beaconUiIssue('openConvByCid','conv_not_found');   // 深链落空进看板归因
   });
   return false;
+}
+/* P7: 深链会话不在全局窗口时的救援——conversation_id 形如 platform:account:chat_key，
+   直接反解出账号维度打 scoped 端点（持久库全量），命中则并入 allChats。
+   只翻首页 200 条（深链目标几乎都是该账号近期会话）；解析不出/查不到=false 不吵。 */
+async function _rescueConvFromStore(cid){
+  const parts=String(cid||'').split(':');
+  if(parts.length<3) return false;
+  const pl=parts[0], aid=parts[1]||'default';
+  if(!pl||!aid) return false;
+  const r=await _fetchWithTimeout('/api/unified-inbox/chats?limit=200&platform='
+    +encodeURIComponent(pl)+'&account_id='+encodeURIComponent(aid), 15000);
+  if(!r.ok) return false;
+  const d=await r.json();
+  if(!d||!d.ok) return false;
+  const hit=(d.chats||[]).find(x=>String(x.conversation_id)===cid || convKey(x)===cid);
+  if(!hit) return false;
+  if(!allChats.find(x=>convKey(x)===convKey(hit))) allChats.push(hit);
+  return true;
 }
 
 /* ===== 线程加载 ===== */
@@ -5978,13 +6527,20 @@ function _cancelMedia(){
 }
 
 /* P0 幂等键（2026-07-29 多开/双击防双发）：每次提交生成一次性 id，服务端在 TTL 窗口内
-   对同 (会话,id) 去重；重试（resendFailed/再点击）生成新 id，永不阻塞人工显式重试。 */
+   对同 (会话,id) 去重；重试（resendFailed/再点击）生成新 id，永不阻塞人工显式重试。
+   注意分工：幂等键只防**同一请求被重放**（网络层重试等）；「用户连按两次」是两次独立
+   提交、id 不同，服务端抓不住 → 由下面的 _sendInFlight 闸门在客户端拦住。 */
 function _newClientMsgId(){
   try{ return crypto.randomUUID(); }
   catch(_){ return 'cm-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10); }
 }
+/* 发送 in-flight 闸门：发送按钮在请求期间已 disabled，但 **Enter 键路径直接调 sendMsg()
+   绕过按钮**——快速连按两次 Enter 会发出两条一样的消息（各自 client_msg_id 不同，
+   幂等键不拦）。媒体路径另有 _mediaSending 同款闸门。 */
+var _sendInFlight=false;
 
 async function sendMsg(){
+  if(_sendInFlight) return;          // 连按 Enter / 双击：在途期间直接忽略
   const ta=document.getElementById('reply-ta');
   let text=ta.value.trim();
   // P4-7+ 待发媒体优先：允许空 caption；输入框内容作为 caption 一并发送
@@ -6046,6 +6602,7 @@ async function sendMsg(){
   }
 
   btn.disabled=true;
+  _sendInFlight=true;          // 与 btn.disabled 同生共死；下方 finally 位置统一清
   ta.value='';
   try{ _updateBubbleChip(); }catch(_){}
   document.getElementById('reply-preview').style.display='none';
@@ -6121,6 +6678,7 @@ async function sendMsg(){
     renderMessages(selectedChat, threadMsgs, {silent:true});
     showHint(window.T('inbox.net_err_retry'));
   }
+  _sendInFlight=false;
   btn.disabled=false;
   btn.textContent=window.T('inbox.send');
   ta.focus();
@@ -9220,7 +9778,7 @@ function _acctActionsHtml(pl,aid,a,on){
   // 而非重扫流程——与真实登录方式一致，坐席不必再跳运维页。
   let primary;
   if(on){
-    primary=`<button class="acct-btn primary" aria-label="${esc(L('inbox.acct.view_chats'))}" onclick="viewAcctChats('${pv}')">${uiIcon('msg',15)}<span class="lbl">${esc(L('inbox.acct.view_chats'))}</span></button>`;
+    primary=`<button class="acct-btn primary" aria-label="${esc(L('inbox.acct.view_chats'))}" onclick="viewAcctChats('${pv}','${av}')">${uiIcon('msg',15)}<span class="lbl">${esc(L('inbox.acct.view_chats'))}</span></button>`;
   } else if(pl==='messenger'){
     primary=`<button class="acct-btn reconnect" aria-label="${esc(L('inbox.acct.relogin'))}" onclick="reloginMessengerAcct('${a2}',this)">${uiIcon('refresh',15)}<span class="lbl">${esc(L('inbox.acct.relogin'))}</span></button>`;
   } else {
@@ -9235,7 +9793,7 @@ function _acctActionsHtml(pl,aid,a,on){
   // 溢出菜单：常规项 —— 分隔线 —— 危险项（登出橙 / 删除红，底部隔离降低误触）
   const items=[];
   if(on) items.push(`<button class="acct-menu-item" role="menuitem" onclick="refreshAcct('${pv}','${a2}')">${uiIcon('refresh',15)}<span>${esc(L('inbox.acct.refresh'))}</span></button>`);
-  else   items.push(`<button class="acct-menu-item" role="menuitem" onclick="viewAcctChats('${pv}')">${uiIcon('msg',15)}<span>${esc(L('inbox.acct.view_chats'))}</span></button>`);
+  else   items.push(`<button class="acct-menu-item" role="menuitem" onclick="viewAcctChats('${pv}','${av}')">${uiIcon('msg',15)}<span>${esc(L('inbox.acct.view_chats'))}</span></button>`);
   items.push(`<button class="acct-menu-item" role="menuitem" onclick="renameAcct('${pv}','${a2}')">${uiIcon('edit',15)}<span>${esc(L('inbox.acct.rename'))}</span></button>`);
   const danger=[];
   if(on&&a.removable!==false) danger.push(`<button class="acct-menu-item warn" role="menuitem" onclick="logoutAcct('${pv}','${av}',this)">${uiIcon('logout',15)}<span>${esc(L('inbox.acct.logout'))}</span></button>`);
@@ -9665,9 +10223,16 @@ async function renameAcct(pl,aid){
     renderDrawerAccounts();
   }catch(_){ _toast(window.T('inbox.acct.rename_fail'),'#dc2626'); }
 }
-function viewAcctChats(pl){
+function viewAcctChats(pl, aid){
   closeDrawer();
   setPlatFilter(pl);
+  // P0：带上账号身份直达该账号视角（此前只切平台，「点 jason 看 jason」的意图被静默丢弃）
+  const id=String(aid||'');
+  if(id){
+    setAccountFilter(id);
+    if(accountFilter===id) _toast(window.Tf('inbox.acct.viewing',{label:_acctLabel(pl,id)}),'#0f766e');
+    else _beaconUiIssue('viewAcctChats','dead_intent');   // 目标账号不在册=意图落空，进看板归因
+  }
 }
 /* 账号管理操作专用 fetch：10s 超时兜底 + 解析 JSON。
    背景（2026-07-21 生产实测）：服务重启窗口/编排器锁竞争时 POST 会长挂，
@@ -11695,6 +12260,8 @@ Object.assign(window, {
   acctPersonaAlign,                 // P3：对齐同人设账号（dry-run 预览 → 确认 → 批量推送）
   setAccountFilter, toggleAccountOnlineOnly, toggleGhostAccounts, renameAcct,
   _acChipKey,                       // P3：rail 键盘导航（Enter/Space 激活 + 左右移焦）
+  // P0 账号视角增强（2026-07-29）：溢出箭头 / 账号总览下拉（开关+选择+键盘）
+  _acNudge, toggleAcctPicker, _acPickChoose, _acPickKey, _copyViewLink,
   refreshAcct, reconnectAcct, reloginMessengerAcct, viewAcctChats, logoutAcct, removeAcct, syncHistoryAcct, toggleAcctMenu, dismissTgSyncHint, syncSuggestedAcct,
   openConnect, closeConnect, restartConnect,
   chooseMode, backToModeSelect, backToConfig,

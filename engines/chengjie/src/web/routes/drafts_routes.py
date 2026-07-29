@@ -135,9 +135,26 @@ def register_drafts_routes(app, *, api_auth):
         """AutosendWorker 运行时指标（主管专属）。"""
         if not _is_supervisor(request):
             raise HTTPException(403, tr(request, "err.perm.supervisor_required"))
+        # 人工通过→真投递 接线状态：零流量也能看出链路是否断（配置漂移/注入被吞/
+        # 重构漏接线）。刻意在 worker=None 分支也给——那正是最可能断的形态
+        # （l2_autosend.enabled=false ⇒ worker 不创建 ⇒ 坐席点通过只标记不发）。
+        _hd_wired = None
+        _stale_h = None
+        try:
+            _dsvc = getattr(request.app.state, "draft_service", None)
+            if _dsvc is not None:
+                _hd_wired = bool(getattr(_dsvc, "inbox_deliver_wired", False))
+                # 陈旧护栏阈值（小时，0=关）。不暴露的话这道护栏对运维完全不可见——
+                # 「它在不在、几小时」只能翻代码，而它直接决定坐席能不能发老稿子。
+                _stale_h = float(getattr(_dsvc, "_stale_approve_hours", 0) or 0)
+        except Exception:
+            _hd_wired = None
         worker = getattr(request.app.state, "autosend_worker", None)
         if worker is None:
-            return {"ok": True, "worker": None, "note": tr(request, "err.draft.autosend_worker_off")}
+            return {"ok": True, "worker": None,
+                    "human_deliver_wired": _hd_wired,
+                    "stale_approve_hours": _stale_h,
+                    "note": tr(request, "err.draft.autosend_worker_off")}
         snap = worker.status_snapshot()
         try:
             from src.inbox.voice_autosend import metrics_snapshot as _vms
@@ -236,7 +253,8 @@ def register_drafts_routes(app, *, api_auth):
             snap["draft_pipeline"] = get_metrics_store().get_inbox_draft_metrics()
         except Exception:
             pass
-        return {"ok": True, "worker": snap}
+        return {"ok": True, "worker": snap, "human_deliver_wired": _hd_wired,
+                "stale_approve_hours": _stale_h}
 
     @app.get("/api/drafts/pipeline-metrics")
     async def api_drafts_pipeline_metrics(
@@ -698,7 +716,18 @@ def register_drafts_routes(app, *, api_auth):
         result = svc.resolve_with_audit(draft_id, action, text=text, by=by)
         if not result.get("ok"):
             code = int(result.get("code") or 400)
-            # 409＝撞原子闸门：草稿刚被其他窗口/同事处置（多开防重语义，非故障）
+            # 两种 409 语义不同，别混成一句话（都回 409 但坐席该做的事完全不同）：
+            # too_stale＝这稿太老，原样发会穿帮 → 重新生成或改写后发；
+            # already_resolved＝刚被其他窗口/同事处置 → 刷新即可（多开防重，非故障）。
+            if result.get("too_stale"):
+                # 两种陈旧成因也分开说：已回过（会重复/自相矛盾）vs 单纯过期（脱节）
+                _key = ("err.draft.stale_replied"
+                        if result.get("stale_reason") == "replied"
+                        else "err.draft.too_stale")
+                raise HTTPException(409, tr(
+                    request, _key,
+                    age=int(result.get("age_hours") or 0),
+                    limit=int(result.get("max_age_hours") or 0)))
             if code == 409 or result.get("already_resolved"):
                 raise HTTPException(409, tr(request, "err.draft.already_resolved"))
             raise HTTPException(code, result.get("error") or "处置失败")
@@ -1633,6 +1662,13 @@ def register_telemetry_route(app, *, api_auth):
                     etype=str(body.get("type") or ""),
                     endpoint=str(body.get("endpoint") or ""),
                 )
+            except Exception:
+                pass
+            try:
+                # P9：按日落库（进程计数重启即清零，本机重启频繁——趋势只能靠 DB 口径；
+                # 未开 ops.frontend_error_trend → record 恒 no-op 零 IO）
+                from src.web.frontend_error_trend import record_frontend_error_trend
+                record_frontend_error_trend(str(body.get("type") or ""))
             except Exception:
                 pass
         return {"ok": True}

@@ -35,6 +35,7 @@ _BASELINE = """
 /api/admin/ops-report	GET
 /api/admin/tts-cost-trend	GET
 /api/admin/translation-confidence-trend	GET
+/api/admin/frontend-error-trend	GET
 /api/admin/identity-health-trend	GET
 /api/admin/anti-repeat-advice	GET
 /api/admin/ai-safety-overview	GET

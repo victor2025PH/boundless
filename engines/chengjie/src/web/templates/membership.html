@@ -98,7 +98,8 @@
         var LINE={{ (i18n or {}).get('mb_hosted_line', '今日已用 {used} / {budget} 字符')|tojson }};
         var EXH={{ (i18n or {}).get('mb_hosted_exhausted', '今日已用完，明天自动恢复')|tojson }};
         var BUSY={{ (i18n or {}).get('mb_hosted_busy', '通道繁忙，稍后自动恢复')|tojson }};
-        fetch('/api/workspace/hosted-quota',{credentials:'same-origin'})
+        window.apiFetch('/api/workspace/hosted-quota', {credentials:'same-origin'},
+                        {timeoutMs: 15000})
           .then(function(r){return r.json();})
           .then(function(q){
             if(!q || q.enabled===false || q.error || !q.budget) return;

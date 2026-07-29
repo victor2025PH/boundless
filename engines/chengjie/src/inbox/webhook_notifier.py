@@ -95,6 +95,10 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     "realtime_voice": {"types": {"realtime_voice_alert"}, "levels": None},
     # AvatarHub 语音克隆持续掉线（7852 不可达/未载入超阈值 → 克隆音色静默降级 edge）
     "avatar_voice": {"types": {"avatar_voice_alert"}, "levels": None},
+    # 人工通过投递链静默断裂（坐席点了「发送」，一条都没真投递 → 客户什么也没收到）
+    "human_deliver": {"types": {"human_deliver_alert"}, "levels": None},
+    # 待审草稿长期无人处理（补 SLA 的 L1 盲区：L1 既不自动发也无逐条告警 → 无声烂掉）
+    "draft_backlog": {"types": {"draft_backlog_alert"}, "levels": None},
     # 原生通话主机持续不可用（MiniCPM-o 176:7860 掉线 → 打进来的电话全接不了）
     "tg_call": {"types": {"tg_call_alert"}, "levels": None},
     # 试用履约端停摆（厂商机是签发链单点：它不跑，领了试用的人永远停在「正在签发」）
@@ -563,6 +567,64 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 "但克隆音色/情感语气不可用\n"
                 f"**详情**: {str(data.get('error') or '')[:150]}\n"
                 f"{fix}\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+
+    elif event_type == "draft_backlog_alert":
+        if data.get("recovered"):
+            title = "✅ 待审草稿积压已清空"
+            text = (
+                "**状态**: 超龄待审草稿已全部处理\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+        else:
+            n = int(data.get("stale_count") or 0)
+            oldest = float(data.get("oldest_hours") or 0)
+            min_age = float(data.get("min_age_hours") or 24)
+            uncovered = int(data.get("sla_uncovered") or 0)
+            lv = data.get("by_level") or {}
+            lv_txt = "、".join(f"{k}×{v}" for k, v in sorted(lv.items())) or "—"
+            prefix = "⏰" if data.get("reminder") else "🚨"
+            oldest_txt = (f"{oldest / 24:.1f} 天" if oldest >= 48 else f"{oldest:.0f} 小时")
+            orphan = int(data.get("already_replied") or 0)
+            orphan_txt = (
+                f"**账目残留**: 另有 {orphan} 条已由人工回过、仅草稿行没人处置"
+                "（不算客户在等，清掉即可）\n" if orphan else "")
+            title = f"{prefix} {n} 条待审草稿超过 {min_age:.0f}h 客户仍在等（最老 {oldest_txt}）"
+            text = (
+                f"**分级**: {lv_txt}\n"
+                f"**盲区**: 其中 {uncovered} 条**不在** SLA 逐条告警覆盖内"
+                "（SLA 只看 L3/L4，而 L1＝必须人审那一档既不自动发也不告警）\n"
+                f"{orphan_txt}"
+                "**影响**: 客户的消息一直没被回复；老稿子即便再点「通过」也会被陈旧"
+                "护栏拦下（原样发出会与当下情境脱节）\n"
+                "**处置**: 工作台逐条「改写后发送」或「拒绝」清队列；长期缺人看队列"
+                "考虑开 `inbox.sla_watcher.auto_expire_hours` 自动作废\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+
+    elif event_type == "human_deliver_alert":
+        if data.get("recovered"):
+            title = "✅ 人工通过投递链已恢复"
+            text = (
+                "**状态**: 坐席通过的草稿已能真正投递给客户\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+        else:
+            bad_min = int(data.get("bad_minutes") or 0)
+            bad_txt = (f"{bad_min // 60} 小时 {bad_min % 60} 分钟"
+                       if bad_min >= 60 else f"{bad_min} 分钟")
+            prefix = "⏰" if data.get("reminder") else "🚨"
+            n = int(data.get("human_approved") or 0)
+            title = f"{prefix} 坐席「发送」的草稿一条都没发出去（已 {bad_txt}）"
+            text = (
+                f"**现象**: 本进程内坐席已人工通过 {n} 条草稿，"
+                "但真投递计数恒 0 且零失败＝**一次都没尝试投递**\n"
+                "**影响**: 坐席以为发了、客户什么也没收到（此前曾整条链缺失，"
+                "实测 14 天零人工投递）\n"
+                "**排查**: 确认 `inbox.l2_autosend.deliver=true`，并查启动日志有无"
+                "「人工通过投递回调注入失败」；`/api/drafts/autosend-status` 看 "
+                "`deliver_enabled` 与 `total_human_delivered`\n"
                 "[📊 查看运营总览](/admin/ops)"
             )
 

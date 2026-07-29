@@ -25,7 +25,19 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_AVATAR_DIR = "src/web/static/persona_avatars"
+# 头像落盘目录必须是**绝对**路径，且等于 web 服务真正挂载的那个静态目录
+# （`admin.py`：`app.mount("/static", StaticFiles(Path(__file__).parent/"static"))`
+# ——即**代码根**的 src/web/static，与 CWD 无关）。
+#
+# ⚠️ 2026-07-29 实锤：原值是相对路径 "src/web/static/persona_avatars"，按**进程 CWD**
+# 解析。双实例迁移后进程 CWD 是实例数据根 → 头像被写进
+# `<数据根>/src/web/static/persona_avatars/`，那个目录 web 服务**从不挂载** →
+# 存进注册表的 `/static/persona_avatars/xxx.jpg` 永远 404（坐席看到裂图）。
+# 更糟的是有指纹去重（`avatar_needs_refresh`）：指纹不变就不再重下，**404 永久固化**。
+# 迁移前 CWD 恰好是代码根，所以旧账号的头像在对的位置——故障只在迁移后新登录的号上出现。
+# 解析方式与 `protocol_bridge._STATIC_MEDIA_SUBDIR` 同款（同仓既有先例）。
+_DEFAULT_AVATAR_DIR = str(
+    Path(__file__).resolve().parents[1] / "web" / "static" / "persona_avatars")
 _AVATAR_URL_PREFIX = "/static/persona_avatars"
 # 对外透出键（self_avatar_fid 是内部指纹，用于头像变更检测，不外泄）
 _SELF_KEYS = ("self_name", "self_username", "self_avatar")

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from .draft_models import (
@@ -89,6 +90,8 @@ class DraftService:
         # async (draft_row: dict) -> Any，由 bootstrap 在 AutosendWorker 可投递时注入
         # （deliver 关/未启用 worker 时为 None → 保持旧「仅 DB 标记」语义）。
         self._inbox_deliver_cb: Optional[Any] = None
+        # 陈旧草稿护栏阈值（小时）；随投递回调注入，未接线时不生效。见 _stale_check。
+        self._stale_approve_hours: float = 0.0
 
     # ── 读：跨平台统一列表（read-through）─────────────────────
 
@@ -196,13 +199,132 @@ class DraftService:
 
     # ── 写：统一 resolve 派发 ─────────────────────────────────
 
-    def set_inbox_deliver_callback(self, cb: Any) -> None:
+    def set_inbox_deliver_callback(
+        self, cb: Any, *, stale_approve_hours: float = 24.0
+    ) -> None:
         """注册 inbox 草稿人工通过后的真投递回调（async (draft_row)->Any）。
 
         由 bootstrap 在 AutosendWorker 具备投递能力（send_callback 非 None）时注入；
-        未注入=保持「通过仅 DB 标记」旧语义（deliver 关的部署是刻意选择）。
+        未注入=保持「通过仅 DB 标记」旧语义（由 inbox.auto_draft.human_deliver 决定，
+        默认开——`l2_autosend.deliver` 是「AI 可否自己发」，不该闸住人的明示决定）。
+
+        ``stale_approve_hours``：超此龄的草稿禁止 ``approve``（原样发）——见
+        ``_stale_check``。与回调同参注入，因为「能真发」与「需要陈旧护栏」是同一件事。
         """
         self._inbox_deliver_cb = cb
+        self._stale_approve_hours = float(stale_approve_hours or 0)
+
+    def _stale_check(
+        self,
+        draft: Dict[str, Any],
+        action: str,
+        *,
+        force_override: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """陈旧草稿护栏：太老的稿子**原样发出**＝当场穿帮，拦下让坐席重生成。
+
+        为什么需要（2026-07-29）：「点通过」此前只标记不发送（断链），修好后一键
+        就真发。而生产实测待审队列年龄 5.0h ～ **213.1h（8.9 天）**，5/7 超 24h，
+        内容又极度依赖当下情境——「我刚到家，娃正在客厅拼乐高」「我现在就在
+        Seawall 这边」。8 天后原样发出去不是尴尬，是**穿帮**（人设可信度当场归零）。
+        修好断链等于**激活了这个风险**，所以护栏必须同轮补上。
+
+        规则（刻意只拦最危险的那一种）：
+          - ``approve``（原样发 AI 原稿）+ 超龄 → 拦，回 409 + ``too_stale``；
+          - ``edit_send``（坐席已改写过文本）→ **放行**：终稿是人写的，稿龄不再代表内容陈旧；
+          - ``reject``/``autosend`` 等 → 不介入；
+          - ``force_override``（主管专属）→ 放行（明知故发的逃生门）。
+        阈值随投递回调一起注入（``set_inbox_deliver_callback(stale_approve_hours=)``）：
+        没接线＝压根不会发出去，无需护栏，两者天然同生共死。0 或负 = 关闭。
+        """
+        if action != "approve" or force_override:
+            return None
+        max_h = float(self._stale_approve_hours or 0)
+        if max_h <= 0 or self._inbox_deliver_cb is None:
+            return None
+        if str(draft.get("draft_id") or "").partition(":")[0] != "inbox":
+            return None            # 其余渠道由各自 runner 消费，不走本投递链
+        try:
+            created = float(draft.get("created_ts") or draft.get("created_at") or 0)
+        except (TypeError, ValueError):
+            return None
+        if created <= 0:
+            return None            # 无时间戳 → 无从判断，不阻拦（宁可放过不误拦）
+        age_h = (time.time() - created) / 3600.0
+        reason = self._approve_block_reason(draft, created, max_h)
+        if not reason:
+            return None
+        return {
+            "ok": False,
+            "code": 409,
+            "too_stale": True,
+            "stale_reason": reason,
+            "age_hours": round(age_h, 1),
+            "max_age_hours": max_h,
+            "error": (
+                (f"这条会话在草稿生成后已经回复过了（稿龄 {age_h:.0f}h）："
+                 "再原样发一遍会重复或自相矛盾，请重新生成或改写后发送")
+                if reason == "replied" else
+                (f"草稿已过期 {age_h:.0f} 小时（上限 {max_h:.0f}h）："
+                 "原样发出会与当下情境脱节，请重新生成或改写后发送")),
+        }
+
+    def conversation_replied_after(self, draft: Dict[str, Any]) -> bool:
+        """该草稿生成之后，会话是否已发出过回复（公开入口，供护栏与巡检共用）。
+
+        护栏用它拦「再发一遍」；积压巡检用它把**账目残留**（内容已人工回过、草稿行没人
+        处置）与**客户真的在等**分开计数——两者处置完全不同，混成一个数字会让运维
+        对告警失去信任。``created_ts`` 缺失/非法 → False（宁可算「在等」不误判已回）。
+        """
+        try:
+            created = float(draft.get("created_ts") or draft.get("created_at") or 0)
+        except (TypeError, ValueError):
+            return False
+        if created <= 0:
+            return False
+        return self._replied_after(draft, created)
+
+    def _replied_after(self, draft: Dict[str, Any], created_ts: float) -> bool:
+        """草稿生成之后，这条会话**是否已经发出过回复**（出站消息）。
+
+        为什么单看年龄不够：坐席常走「采用文案 → 改写 → 手动发送」，而**发送路由不处置
+        草稿行**（实测确认），于是那行永远 pending。之后任何窗口点「通过」＝**再发一遍**
+        （多开重复提交的又一个入口）。2026-07-29 抽查生产 7 条待审确认当时 0 例孤儿，
+        但机制活着——投递已接通后这就是实弹，故按「已回过」直接拦。
+
+        刻意**只认出站**：客户连发两条（纯入站推进）只说明回复迟了，原样发仍然合理，
+        拦它只会白挡坐席。取数走既有 ``list_recent_messages``（DESC 取尾），读不到就
+        返回 False（宁可放过不误拦）。
+        """
+        store = getattr(self, "_store", None)
+        cid = str(draft.get("conversation_id") or "")
+        if store is None or not cid or created_ts <= 0:
+            return False
+        try:
+            rows = store.list_recent_messages(cid, limit=30) or []
+        except Exception:
+            logger.debug("陈旧护栏读最近消息失败（放行）", exc_info=True)
+            return False
+        for m in rows:
+            try:
+                if not str(m.get("direction") or "").startswith("out"):
+                    continue
+                if float(m.get("ts") or 0) > created_ts + 1.0:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
+    @property
+    def inbox_deliver_wired(self) -> bool:
+        """人工通过→真投递 是否已接线（可观测化「注入本身是静默的」这个盲区）。
+
+        没有它的话，链路断裂只能**事后**从「有人通过过草稿但投递计数恒 0」反推
+        （见 HealthWatchdog._check_human_deliver_chain）——那要等真有坐席点过通过、
+        且期间客户什么也没收到。有了这个布尔值，配置漂移/注入抛异常被吞/重构漏接线
+        都能在**零流量时**直接看出来。
+        """
+        return self._inbox_deliver_cb is not None
 
     def _schedule_inbox_delivery(self, draft_row: Dict[str, Any]) -> bool:
         """把人工通过的 inbox 草稿排进真投递（事件循环后台任务，不阻塞处置响应）。
@@ -350,6 +472,10 @@ class DraftService:
         draft = self.get_draft(draft_id)
         if draft is None:
             return {"ok": False, "error": "草稿不存在", "code": 404}
+
+        stale = self._stale_check(draft, action, force_override=force_override)
+        if stale is not None:
+            return stale
 
         # 关键词强制升级 risk（peer_text 或 draft_text 命中则升 risk + autopilot）
         kw_risk = keyword_risk_level(

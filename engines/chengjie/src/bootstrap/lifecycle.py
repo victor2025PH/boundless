@@ -158,6 +158,8 @@ async def start_assistant(assistant):
             assistant._maybe_init_send_route_trend_log()
             # ★ F1：会话身份健康（入站 raw% / 头像 empty%）按日落库（默认关）
             assistant._maybe_init_identity_trend_log()
+            # ★ P9：前端错误/意图落空按日落库（scoped_fail/dead_intent/conv_not_found；默认关）
+            assistant._maybe_init_frontend_error_trend_log()
             # ★ Phase22c：出站媒体承诺兑现率按日落库（供看板 sparkline + 阈值校准；默认关）
             assistant._maybe_init_media_promise_trend_log()
 

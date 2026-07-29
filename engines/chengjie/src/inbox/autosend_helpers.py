@@ -123,8 +123,16 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
             "[autosend voice] 判文字 reason=lang_mismatch（出站翻译生效且对方"
             "未发语音）platform=%s acct=%s", platform, account_id)
         return False
+    # 客户点名要语音/唱歌（复用 wants_media 的 voice 轴）→ 强制语音（P0-5）。
+    _peer_req_voice = False
+    try:
+        from src.ai.outbound_promise_guard import wants_media as _wm2
+        _peer_req_voice = (_wm2(_peer_text) == "voice")
+    except Exception:
+        _peer_req_voice = False
     _vdec = decide_voice(
         _vb, text, peer_sent_voice=_peer_voice,
+        peer_requested_voice=_peer_req_voice,
         recent_voice_ratio=_voice_ratio,
         peer_emotion=_peer_emo,
         peer_emotion_intensity=_peer_emo_int,
@@ -547,15 +555,19 @@ async def autosend_image(assistant, platform, account_id, chat_key, text,
         requested_scene=_req_scene,
         on_sent=_on_sent)
 
-async def _depromise_autosend_text(assistant, text: str, kind: str) -> str:
-    """撤回未兑现的媒体承诺（出站前最后修正）：LLM 重写（任意语言可靠）→
+async def _depromise_autosend_text(
+    assistant, text: str, kind: str, *, media_context: bool = False,
+) -> str:
+    """撤回未兑现的媒体承诺/断言（出站前最后修正）：LLM 重写（任意语言可靠）→
     正则句级剥离 → 语言对齐兜底话术。绝不返回空串（空文本没法投递）。
 
-    只在「文本承诺了发照片/语音、且真发失败或未启用」时才被调用——正常文本
-    永远不经过这里（零副作用）。"""
+    只在「文本承诺/声称发了照片语音、且真发失败或未启用」时才被调用——正常文本
+    永远不经过这里（零副作用）。``media_context``＝客户本轮在索要媒体，据此一并
+    剥「已发」断言句（claim；2026-07-29 对练实证：撤回后残留「这不就来了嘛」）。"""
     from src.ai.outbound_promise_guard import (
         build_promise_rewrite_instruction, deflection_line,
-        detect_media_promise, strip_media_promises,
+        detect_media_claim, detect_media_promise,
+        strip_media_claims, strip_media_promises,
     )
     _ai = getattr(assistant, "ai_client", None)
     if _ai is not None:
@@ -563,14 +575,16 @@ async def _depromise_autosend_text(assistant, text: str, kind: str) -> str:
             out = str(await _ai.chat(
                 build_promise_rewrite_instruction(text, kind)) or "")
             out = out.strip().strip('"“”「」').strip()
-            # 重写合格判定：非空、长度不失控、且确实不再含承诺（防 LLM 阳奉阴违）
+            # 重写合格判定：非空、长度不失控、且确实不再含承诺**或断言**（防阳奉阴违）
             if (out and len(out) <= max(200, len(str(text or "")) * 3)
-                    and not detect_media_promise(out)):
+                    and not detect_media_promise(out)
+                    and not detect_media_claim(out, media_context=media_context)):
                 return out
         except Exception:
             assistant.logger.debug(
                 "[promise_guard] LLM 撤回重写失败，回落正则剥离", exc_info=True)
     stripped = strip_media_promises(text)
+    stripped = strip_media_claims(stripped, media_context=media_context)
     return stripped if stripped.strip() else deflection_line(text, kind)
 
 
@@ -871,6 +885,7 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled):
             # （assume_intent 强制自拍链，预算/关系闸门照常）；仍发不出 → **撤回**
             # （重写/剥离），文本、语音（念的就是这段文本）都不再对客户撒谎。
             _promised = ""
+            _mctx = False
             _pg = {}
             try:
                 _pg = (((_assistant_ref.config.config or {}).get(
@@ -878,10 +893,39 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled):
                     "media_promise_guard", {}) or {})
                 if _pg.get("enabled", True):
                     from src.ai.outbound_promise_guard import (
+                        detect_media_claim as _dmc,
                         detect_media_promise as _dmp,
+                        wants_media as _wm,
                     )
+                    # media_context：客户最近入站在**索要**媒体 → 才把「已发」断言
+                    # 当谎判。粘性（扫最近几条入站，非仅当轮——「快点发来睇下」这类
+                    # 无名词追问单看当轮会漏，话题从几轮前就是要图）；但**客户刚发了
+                    # 图**时抑制（那轮 AI 多半在评论对方的图，「这张真好看」不能误剥）。
+                    try:
+                        from src.inbox.normalizer import conv_id as _cidf2
+                        _st2 = getattr(_assistant_ref, "inbox_store", None)
+                        if _st2 is not None:
+                            _rc = _st2.list_recent_messages(
+                                _cidf2(platform, account_id, chat_key),
+                                limit=6) or []
+                            _ins = [m for m in _rc
+                                    if str(m.get("direction") or "in") == "in"]
+                            _last_in = _ins[-1] if _ins else {}
+                            _last_is_img = str(
+                                _last_in.get("media_type") or "") in (
+                                "image", "photo")
+                            _mctx = (not _last_is_img) and any(
+                                _wm(str(m.get("text") or "")) for m in _ins)
+                    except Exception:
+                        _mctx = False
                     _promised = (_dmp(str(original_text or ""))
                                  or _dmp(str(text or "")))
+                    # 「将发」承诺 + 「已发」断言合流（claim 也走兑现优先→撤回兜底）
+                    if not _promised:
+                        _promised = (_dmc(str(original_text or ""),
+                                          media_context=_mctx)
+                                     or _dmc(str(text or ""),
+                                             media_context=_mctx))
             except Exception:
                 _promised = ""
             if _promised == "image":
@@ -917,7 +961,7 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled):
                         _assistant_ref.logger.debug(
                             "[promise_guard] 兑现发图失败", exc_info=True)
                 text = await _depromise_autosend_text(
-                    _assistant_ref, text, "image")
+                    _assistant_ref, text, "image", media_context=_mctx)
                 # 原文含未兑现承诺：语音/视频分支改念撤回后的文本（防克隆声念出谎话）
                 original_text = None
                 _rpe("retracted")
@@ -933,7 +977,7 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled):
                 )
                 _rpe_vc("detected")
                 text = await _depromise_autosend_text(
-                    _assistant_ref, text, "video_call")
+                    _assistant_ref, text, "video_call", media_context=_mctx)
                 original_text = None
                 _rpe_vc("retracted")
                 _assistant_ref.logger.info(
@@ -973,11 +1017,59 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled):
                 )
                 _rpe2("detected")
                 text = await _depromise_autosend_text(
-                    _assistant_ref, text, "voice")
+                    _assistant_ref, text, "voice", media_context=_mctx)
                 _rpe2("retracted")
                 _assistant_ref.logger.info(
                     "[promise_guard] 发语音承诺未兑现 → 已撤回改写文本 "
                     "platform=%s acct=%s", platform, account_id)
+            # 时空接轨（B 线）：当地墙钟 vs 时段问候/错城现居
+            try:
+                _cfg_w = _assistant_ref.config.config or {}
+                _wcfg = ((_cfg_w.get("companion") or {}).get(
+                    "world_clock_guard") or {})
+                if not (isinstance(_wcfg, dict)
+                        and _wcfg.get("enabled") is False):
+                    from src.companion.world_clock_guard import (
+                        apply_world_clock_guard as _wcg,
+                    )
+                    from src.ai.persona_voice import (
+                        resolve_effective_persona_id as _repi_w,
+                    )
+                    from src.utils.persona_manager import (
+                        PersonaManager as _PM_w,
+                    )
+                    _persona = None
+                    try:
+                        _wpid = _repi_w(
+                            _cfg_w, platform, account_id, str(chat_key))
+                        if _wpid:
+                            _persona = (
+                                _PM_w.get_instance()
+                                .get_persona_by_id(str(_wpid)) or None)
+                    except Exception:
+                        _persona = None
+                    _local = None
+                    try:
+                        from src.companion.persona_location import (
+                            resolve_persona_now as _rpn,
+                        )
+                        if isinstance(_persona, dict):
+                            _local = _rpn(_persona)
+                    except Exception:
+                        _local = None
+                    _new, _winfo = _wcg(
+                        text, persona=_persona, local_now=_local)
+                    if _winfo.get("changed") and str(_new or "").strip():
+                        text = _new
+                        _assistant_ref.logger.info(
+                            "[world_clock_guard] daypart=%s wrong_place=%s "
+                            "platform=%s acct=%s",
+                            _winfo.get("daypart_conflict"),
+                            _winfo.get("wrong_place"),
+                            platform, account_id)
+            except Exception:
+                _assistant_ref.logger.debug(
+                    "[world_clock_guard] 跳过", exc_info=True)
             # D4：桌面内嵌账号无服务端 worker，send_via_adapters 发不出去。
             # desktop_bridge 开启时把回复路由到「受控出站队列」——enqueue 内部
             # 先过 send-gate/kill-switch 闸门，通过才落队列，由桌面壳/扩展轮询

@@ -1085,14 +1085,25 @@ class TelegramSenderMixin:
             if trigger == "never":
                 self.logger.debug("[voice_reply] skip: trigger=never")
                 return False
-            if trigger == "when_peer_voice" and not is_peer_voice:
+            # 客户**打字**点名要语音/唱歌（when_peer_voice 只认「对方发了语音」会漏）→
+            # 强制语音（P0-5，2026-07-29 对练补漏：打字要语音得不到语音、AI 打字冒充唱歌）。
+            _peer_req_voice = False
+            try:
+                from src.ai.outbound_promise_guard import wants_media as _wm_v
+                _msg_txt = (getattr(original_message, "text", None)
+                            or getattr(original_message, "caption", None) or "")
+                _peer_req_voice = (_wm_v(str(_msg_txt)) == "voice")
+            except Exception:
+                _peer_req_voice = False
+            if (trigger == "when_peer_voice" and not is_peer_voice
+                    and not _peer_req_voice):
                 self.logger.debug("[voice_reply] skip: trigger=when_peer_voice but msg is not voice")
                 return False
-            if trigger == "random":
+            if trigger == "random" and not _peer_req_voice:
                 prob = float(vr_cfg.get("probability", 0.3) or 0.3)
                 if random.random() >= prob:
                     return False
-            if trigger == "smart":
+            if trigger == "smart" and not _peer_req_voice:
                 # 与 System Z autosend 同源的上下文感知评分（消除重复决策逻辑）。原生 TG
                 # 路径暂只喂「回复情绪 + 对等」信号（频率/客户情绪可后续接入）；内容/长度
                 # 硬否决与 autosend 完全一致。低分/不达标 → 回落文本。
@@ -1109,6 +1120,9 @@ class TelegramSenderMixin:
                     return False
 
             max_chars = int(vr_cfg.get("max_text_chars", 220) or 220)
+            # 客户点名要语音时放宽上限到硬帽（~30s；避免"要了语音却因超长回落文字"）
+            if _peer_req_voice:
+                max_chars = max(max_chars, 300)
             clean_text = (reply_text or "").strip()
             if not clean_text or len(clean_text) > max_chars:
                 self.logger.debug(

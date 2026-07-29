@@ -234,26 +234,16 @@ def _deep_merge(base: Dict[str, Any], over: Dict[str, Any]) -> Dict[str, Any]:
 
 def _load_config(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """读主配置并合并 config.local.yaml overlay（运行态真实配置——
-    ollama_mt 端点等运营开关常只写在 overlay，不合并会漏评）。"""
-    if config is not None:
-        return config
-    try:
-        import yaml
-        with open("config/config.yaml", "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-    except Exception:
-        return {}
-    try:
-        import os
-        overlay_path = "config/config.local.yaml"
-        if os.path.exists(overlay_path):
-            with open(overlay_path, "r", encoding="utf-8") as f:
-                over = yaml.safe_load(f) or {}
-            if isinstance(over, dict) and over:
-                _deep_merge(cfg, over)
-    except Exception:
-        pass
-    return cfg
+    ollama_mt 端点等运营开关常只写在 overlay，不合并会漏评）。
+
+    2026-07-29：落点改由 ``eval_config.load_runtime_config`` 按**数据根契约**解析
+    （自动发现活跃实例）。此前是 CWD 相对读取，从引擎根跑（文档用法 + 周批任务的
+    Set-Location 落点）读到的是迁移时刻遗留的旧副本，与实例在跑的配置 4/9 个关键键
+    不一致（端点拓扑/per_lang_order/嵌入端点）——**报告照样全绿，只是评错了对象**。
+    详见 ``src/eval/eval_config.py`` 的 A/B 实证。
+    """
+    from src.eval.eval_config import load_runtime_config
+    return load_runtime_config(config)
 
 
 def build_deterministic_evaluator(

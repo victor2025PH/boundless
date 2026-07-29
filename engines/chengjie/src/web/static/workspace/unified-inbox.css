@@ -638,11 +638,53 @@
 /* 工具区齿轮（打开账号管理抽屉） */
 .ac-gear{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:999px;border:1px solid var(--border);background:var(--bg-panel);color:var(--text-sub);cursor:pointer;transition:border-color .15s,color .15s;flex:0 0 auto;padding:0;}
 .ac-gear:hover{border-color:var(--pc,var(--accent,#6b8af8));color:var(--pc,var(--accent,#6b8af8));}
+/* P0 可发现性（2026-07-29）：溢出箭头——渐隐遮罩太含蓄，藏在滚动区外的账号等于不存在。
+   JS 在容器上打 sc-less/sc-more（与 has-less/has-more 同步），按需显示左右步进按钮 */
+.account-chips{position:relative;}
+.ac-nav{display:none;align-items:center;justify-content:center;width:20px;height:28px;flex:0 0 auto;border:1px solid var(--border);background:var(--bg-panel);color:var(--text-sub);border-radius:8px;cursor:pointer;padding:0;font-size:14px;line-height:1;}
+.ac-nav:hover{border-color:var(--pc,var(--accent,#6b8af8));color:var(--pc,var(--accent,#6b8af8));}
+.account-chips.sc-less .ac-nav.left{display:inline-flex;}
+.account-chips.sc-more .ac-nav.right{display:inline-flex;}
+/* 点击确认反馈：按压微缩 + 重复点击已选中 chip 时的扩散脉冲（回答「点了没反应」） */
+.acct-chip:active{transform:scale(.96);}
+@keyframes acAck{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 45%,transparent);}100%{box-shadow:0 0 0 9px transparent;}}
+.acct-chip.ac-ack{animation:acAck .5s ease-out 1;}
+@media (prefers-reduced-motion:reduce){.acct-chip.ac-ack{animation:none;}.acct-chip:active{transform:none;}}
+/* 账号总览按钮（人形图标 + 账号数）与下拉：横滚可发现性的兜底——不管藏了几个，
+   一键看到全平台账号清单（头像/人设/在线/未读），点击即筛选 */
+.ac-gear.ac-pick{width:auto;padding:0 9px;gap:3px;font-size:11px;font-weight:700;}
+/* 挂 body 的 fixed 弹层（rail 容器有 overflow-x，内嵌 absolute 会被裁剪；top/right 由 JS 锚定按钮） */
+.ac-pick-pop{position:fixed;z-index:940;min-width:236px;max-width:320px;max-height:330px;overflow:auto;background:var(--bg-panel);border:1px solid var(--border);border-radius:12px;box-shadow:0 12px 32px rgba(2,8,20,.22);padding:6px;}
+.ac-pick-row{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:9px;cursor:pointer;font-size:12.5px;color:var(--text-main);}
+.ac-pick-row:hover{background:color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 10%,transparent);}
+.ac-pick-row.sel{background:color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 14%,transparent);font-weight:600;}
+.ac-pick-row.ghost{opacity:.62;}
+.ac-pick-row:focus-visible{outline:2px solid var(--pc,var(--accent,#6b8af8));outline-offset:-2px;}
+.ac-pick-row .apr-av{position:relative;width:26px;height:26px;border-radius:50%;flex:0 0 auto;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;line-height:1;user-select:none;}
+.ac-pick-row .apr-av img{width:100%;height:100%;object-fit:cover;border-radius:50%;}
+.ac-pick-row .apr-av .ac-st{position:absolute;right:-1px;bottom:-1px;width:8px;height:8px;border-radius:50%;background:var(--text-tiny,#94a3b8);box-shadow:0 0 0 2px var(--bg-panel,#fff);}
+.ac-pick-row .apr-av .ac-st.on{background:var(--green,#22c55e);}
+.ac-pick-row .apr-av.apr-all{background:color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 16%,transparent);color:var(--pc,var(--accent,#6b8af8));}
+.ac-pick-row .apr-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;}
+.ac-pick-row .apr-name{display:flex;align-items:center;gap:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ac-pick-row .apr-sub{font-size:11px;color:var(--text-tiny);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* P4: 总览下拉底部「复制视角链接」 */
+.ac-pick-foot{position:sticky;bottom:0;padding:6px 8px;border-top:1px solid var(--border);background:var(--bg-panel);backdrop-filter:blur(6px);}
+.ac-pick-copy{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;padding:7px 10px;border-radius:8px;border:1px dashed var(--border);background:transparent;color:var(--text-sub);font-size:12px;cursor:pointer;transition:border-color .12s,color .12s,background .12s;}
+.ac-pick-copy:hover{border-color:var(--pc,var(--accent,#6b8af8));color:var(--pc,var(--accent,#6b8af8));background:color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 8%,transparent);}
+.ac-pick-copy:active{transform:scale(.98);}
+/* 下拉行内未读徽标：与 chip 内同视觉（_acUnreadBadge 复用），但选择器作用域独立 */
+.ac-pick-row .ac-unread{background:color-mix(in srgb,var(--text-sub,#64748b) 82%,transparent);color:#fff;border-radius:999px;font-size:10px;padding:0 5px;min-width:16px;text-align:center;line-height:15px;font-variant-numeric:tabular-nums;flex:0 0 auto;}
+.ac-pick-row .ac-unread.attn{background:#ef4444;}
+.ac-pick-row .ac-ghost-tag{font-size:10px;line-height:14px;padding:0 4px;border-radius:4px;background:color-mix(in srgb,var(--text-sub) 14%,transparent);color:var(--text-sub);flex:0 0 auto;}
 /* P0: 会话条上的账号/人格角标 + 左侧人格色条 */
 .conv-item{position:relative;}
 .conv-item .conv-acct-accent{position:absolute;left:0;top:10px;bottom:10px;width:2px;border-radius:0 2px 2px 0;opacity:.55;}
 .conv-item:hover .conv-acct-accent,.conv-item.selected .conv-acct-accent{opacity:.9;}
 .conv-acct-badge{display:inline-flex;align-items:center;gap:3px;font-size:11px;padding:0 6px;line-height:15px;border-radius:999px;font-weight:600;vertical-align:middle;margin-left:4px;}
+/* P3: 行内账号徽标可点（最短路径账号导航）——hover 内描边环示意可交互 */
+.conv-item .conv-acct-badge{cursor:pointer;transition:box-shadow .12s,filter .12s;}
+.conv-item .conv-acct-badge:hover{box-shadow:inset 0 0 0 1.5px currentColor;filter:brightness(1.12);}
 .conv-acct-badge .cab-dot{width:5px;height:5px;border-radius:50%;}
 /* 身份可视化：会话条人设徽章（账号徽章同族更小号）+ 未绑人设黄色警示点（会话条/账号 chip 共用） */
 .conv-persona-badge{display:inline-flex;align-items:center;font-size:10px;padding:0 5px;line-height:14px;border-radius:999px;font-weight:600;vertical-align:middle;margin-left:3px;max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}

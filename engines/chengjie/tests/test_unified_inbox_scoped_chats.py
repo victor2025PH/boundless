@@ -159,8 +159,14 @@ def test_scoped_shape_vs_unscoped_shape(tmp_path):
                                   "oldest_ts", "scope"}
     # 无参数：与现有响应逐字段一致（零回归），含 platform_status、无 scope
     plain = c.get("/api/unified-inbox/chats").json()
-    assert set(plain.keys()) == {"ok", "ts", "chats", "platform_status",
-                                 "has_more", "oldest_ts"}
+    assert set(plain.keys()) == {
+        "ok", "ts", "chats", "platform_status", "has_more", "oldest_ts",
+        "unread_by_platform", "unread_by_account",  # P6 全库有效未读聚合
+        "attn_by_account",                          # P8 近窗需人工聚合
+    }
+    assert isinstance(plain["unread_by_platform"], dict)
+    assert isinstance(plain["unread_by_account"], dict)
+    assert isinstance(plain["attn_by_account"], dict)
     assert plain["ok"] is True
     store.close()
 
@@ -238,6 +244,8 @@ def test_scoped_without_store_falls_back_to_full_path():
     assert d.status_code == 200
     body = d.json()
     assert body["ok"] is True
-    # 回落响应形状与无参数版完全一致（带 platform_status、无 scope）
-    assert set(body.keys()) == {"ok", "ts", "chats", "platform_status",
-                                "has_more", "oldest_ts"}
+    # 回落响应形状与无参数版完全一致（带 platform_status / 聚合字段、无 scope）
+    assert set(body.keys()) == {
+        "ok", "ts", "chats", "platform_status", "has_more", "oldest_ts",
+        "unread_by_platform", "unread_by_account", "attn_by_account",
+    }

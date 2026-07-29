@@ -273,7 +273,10 @@ def test_resolve_persona_now_from_persona_dict():
 
 def test_local_time_line_zh_exact():
     line = local_time_line(_place("vancouver"), "zh", MON_0612_VAN)
-    assert line == "你人在加拿大·温哥华，当地时间 2026-07-27 周一 06:12（清晨）。"
+    assert line.startswith(
+        "你人在加拿大·温哥华，当地时间 2026-07-27 周一 06:12（清晨）。"
+    )
+    assert "UTC+8" in line  # 时空钉：禁按中国/菲律宾时间
 
 
 def test_local_time_line_en_and_bad_place():
@@ -281,7 +284,23 @@ def test_local_time_line_en_and_bad_place():
     assert "Vancouver, Canada" in line
     assert "2026-07-27" in line and "Mon" in line and "06:12" in line
     assert "early morning" in line
+    assert "UTC+8" in line
     assert local_time_line(None) == ""  # type: ignore[arg-type]  # 热路径不 raise
+
+
+def test_local_time_line_naive_local_not_reconverted():
+    """生产接线把 persona_now 的 naive 当地再喂给 local_time_line，不得二次换算。
+
+    旧 bug：温哥华 05:00 PDT 被当成服务器 UTC+8 再转一次 → 伪「中午」穿帮。
+    """
+    van = _place("vancouver")
+    local = persona_now(van, SUMMER_UTC)  # 05:00 naive
+    assert (local.hour, local.minute) == (5, 0)
+    # 幂等：naive 当地再进 persona_now 仍是 05:00
+    assert persona_now(van, local).hour == 5
+    line = local_time_line(van, "zh", local)
+    assert "05:00" in line and "清晨" in line
+    assert "11:" not in line and "中午" not in line
 
 
 def test_daypart_thresholds():

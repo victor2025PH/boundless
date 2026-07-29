@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import sys
+from pathlib import Path
 
 from src.eval.dataset import (
     load_faq_samples, load_intent_samples, load_translation_samples,
@@ -93,15 +94,19 @@ def _try_build_llm_generate_fn():
         return None
     try:
         import asyncio
-        import yaml
         from src.ai.ai_client import AIClient
+        # 2026-07-29：改走数据根契约 + overlay 合并（eval_config）。此前是
+        # `open("config/config.yaml")` 且**不合并 overlay**——双实例迁移后这条链
+        # 读到的是引擎根旧副本里的**另一把旧 key**（实例 base 是 YOUR_API_KEY
+        # 占位、真 key 只在实例 overlay）。后果：EVAL_LLM=1 的真 LLM 评测轨
+        # （--bazi-reading 等）在评另一个账号，或旧 key 已废→建不出 client→静默跳过。
+        from src.eval.eval_config import load_runtime_config, runtime_config_source
 
-        with open("config/config.yaml", "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
+        cfg = load_runtime_config(None)
 
         class _Cfg:
             config = cfg
-            config_path = "config/config.yaml"
+            config_path = str(Path(runtime_config_source()) / "config" / "config.yaml")
 
             def get_ai_config(self):
                 return cfg.get("ai", {})

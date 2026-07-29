@@ -2594,8 +2594,10 @@ class AIClient(LoggerMixin):
                 prompt_parts.append(
                     "【媒体能力边界】需要发照片/语音时由系统自动完成真实发送，"
                     "你专注文字聊天：不要主动写「我发照片给你」「等我拍一张」"
-                    "「我发条语音」这类承诺；对方要照片时自然回应即可（系统会处理），"
-                    "也不要否认你能拍照。")
+                    "「我发条语音」这类承诺；**更不要谎称「已经发了」「发过去了」"
+                    "「发到群里了」「你看看这张」**——你的文字里没有真的附带照片，"
+                    "这样说对方收不到会觉得你在骗人；对方要照片时自然回应即可"
+                    "（系统会处理），也不要否认你能拍照。")
 
         # 语音能力（2026-07-20）：开了自动语音（inbox.l2_autosend.voice.enabled）时，明确告诉
         # AI 它能发语音——系统会把回复转成人设声音发出。否则拟人人设会自作主张编「我发不了语音/
@@ -2612,7 +2614,9 @@ class AIClient(LoggerMixin):
                 "【语音能力·须遵守】你能发语音消息：系统会自动把你要说的话用你的声音发出。"
                 "对方要你发语音时，你就自然地正常回答（内容照说就行），系统会转成语音——"
                 "绝不要说「我发不了语音」「嗓子哑」「不方便发语音」「语音功能坏了」这类借口，"
-                "也不要主动写「我发条语音给你」这种承诺（系统会自动处理）。")
+                "也不要主动写「我发条语音给你」这种承诺（系统会自动处理）。"
+                "对方要你唱歌时，别用打字发歌词冒充唱歌（对方一眼看穿），"
+                "要么就当作真的唱出来说一句（系统转成语音），要么俏皮地婉拒。")
 
         # 当前真实时间（Phase19 时间一致性）：LLM 训练数据里没有"现在几点"，
         # 不注入就会深夜说"下午好"、凌晨发正午场景标记。仅陪伴人设注入
@@ -2651,6 +2655,22 @@ class AIClient(LoggerMixin):
             _loc_line = (context.get("_persona_local_time_line") or "").strip()
             if _loc_line:
                 prompt_parts.append("【人设当地时间】" + _loc_line)
+            # 时空钉（与 local_time_line 互补）：有当地小时则再钉一句，防滑回 UTC+8
+            try:
+                from src.companion.world_clock_guard import world_clock_prompt_nail
+                from src.companion.persona_location import resolve_place_with_fallback
+                _p_nail = context.get("_resolved_persona") or context.get("persona")
+                _pl_nail = resolve_place_with_fallback(_p_nail) if isinstance(
+                    _p_nail, dict) else None
+                _h_nail = (
+                    int(_local_now.hour)
+                    if isinstance(_local_now, __import__("datetime").datetime)
+                    else -1)
+                _nail = world_clock_prompt_nail(_pl_nail, _h_nail) if _h_nail >= 0 else ""
+                if _nail:
+                    prompt_parts.append(_nail)
+            except Exception:
+                pass
             _gap_line_txt = (context.get("_persona_time_gap_line") or "").strip()
             if _gap_line_txt:
                 prompt_parts.append(_gap_line_txt)

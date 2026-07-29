@@ -362,6 +362,19 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                                 build_autosend_typing_cb,
                             )
                             _send_cb, _translate_cb = build_autosend_callbacks(assistant, web_app, _deliver)
+                            # 人工通过专用真发回调：deliver=false 时自动链 _send_cb=None，
+                            # 但坐席点「通过」是人的明示决定（手动发送端点本就不受 deliver
+                            # 约束），必须能真发——否则「AI 拟稿 + 人审后发」这个最谨慎档位
+                            # 里发送按钮空转。deliver=true 时两者是同一个回调，不重复构建。
+                            _human_send_cb = _send_cb
+                            if not _deliver:
+                                try:
+                                    _human_send_cb, _ = build_autosend_callbacks(
+                                        assistant, web_app, True)
+                                except Exception:
+                                    _human_send_cb = None
+                                    assistant.logger.debug(
+                                        "人工通过真发回调构建失败", exc_info=True)
                             # 拟人已读回执 + 打字状态：仅真投递模式需要（DB-only 不碰平台）。
                             _mark_read_cb = (
                                 build_autosend_mark_read_cb(assistant)
@@ -392,6 +405,7 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                                 draft_service=draft_svc,
                                 config=_merged_as_cfg,
                                 send_callback=_send_cb,
+                                human_send_callback=_human_send_cb,
                                 translate_callback=_translate_cb,
                                 mark_read_callback=_mark_read_cb,
                                 typing_callback=_typing_cb,
@@ -403,15 +417,29 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                                 _as_worker.notify_new_l2
                             )
                             # 2026-07-29：人工通过 inbox 草稿 → 经同一投递链真发送
-                            # （修「坐席点发送只标记不发」断链）。仅真投递模式注入；
-                            # deliver=false 部署保持「仅标记」旧语义。
-                            if _deliver:
+                            # （修「坐席点发送只标记不发」断链）。**刻意不受 deliver 闸门**
+                            # ——deliver 管「AI 可否自己发」，人工通过是人的明示决定；
+                            # 想恢复「仅标记」旧语义置 inbox.auto_draft.human_deliver=false。
+                            _human_deliver_on = bool(
+                                ((assistant.config.config or {}).get("inbox", {})
+                                 .get("auto_draft", {}) or {}).get("human_deliver", True))
+                            # 陈旧草稿护栏：太老的稿子原样发＝穿帮（实测队列里有 8.9 天的
+                            # 「我刚到家娃在拼乐高」）。0 = 关闭。见 DraftService._stale_check。
+                            _stale_h = float(
+                                ((assistant.config.config or {}).get("inbox", {})
+                                 .get("auto_draft", {}) or {}).get(
+                                    "stale_approve_hours", 24) or 0)
+                            if _human_deliver_on and _human_send_cb is not None:
                                 try:
                                     draft_svc.set_inbox_deliver_callback(
-                                        _as_worker.deliver_human_approved)
+                                        _as_worker.deliver_human_approved,
+                                        stale_approve_hours=_stale_h)
                                 except Exception:
                                     assistant.logger.debug(
                                         "人工通过投递回调注入失败", exc_info=True)
+                            elif not _human_deliver_on:
+                                assistant.logger.info(
+                                    "人工通过投递已按配置关闭（human_deliver=false，仅 DB 标记）")
                             asyncio.ensure_future(_as_worker.run())
                             assistant.logger.info(
                                 "AutosendWorker 已启动（min=%ss max=%ss deliver=%s）",
@@ -421,6 +449,47 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                             )
                     except Exception:
                         assistant.logger.debug("AutosendWorker 启动跳过", exc_info=True)
+
+                    # ── 人审档兜底：worker 没创建时，仍要有人消费「人工通过」──────
+                    # `l2_autosend.enabled=false`（或授权档位不含 ai_autosend）时上面
+                    # 整块跳过 ⇒ 坐席点「通过」只把 DB 标成 approved，**没有任何消费者
+                    # 真发出去**（客户什么也没收到、坐席以为发了）。而「AI 拟稿 + 人审后发、
+                    # 不要任何自动发送」恰恰是最谨慎客户最可能选的部署形态。
+                    # 这里建一个 deliver_only 实例：**不 run() 自动循环**，只作人工投递载体。
+                    # 放同一 state 键是刻意的（观测链零改动全通，见 AutosendWorker.__init__）。
+                    # 人工发送不属 ai_autosend 授权范畴——手动发送端点本就不受其约束。
+                    try:
+                        if getattr(web_app.state, "autosend_worker", None) is None:
+                            _ib_cfg = (assistant.config.config or {}).get("inbox", {}) or {}
+                            _ad_cfg = _ib_cfg.get("auto_draft", {}) or {}
+                            if (_ad_cfg.get("enabled", True)
+                                    and bool(_ad_cfg.get("human_deliver", True))):
+                                from src.inbox.autosend_worker import (
+                                    AutosendWorker as _AW,
+                                )
+                                from src.inbox.autosend_helpers import (
+                                    build_autosend_callbacks as _bac,
+                                )
+                                _hs_cb, _htr_cb = _bac(assistant, web_app, True)
+                                if _hs_cb is not None:
+                                    _do_worker = _AW(
+                                        draft_service=draft_svc,
+                                        config={"enabled": False},
+                                        send_callback=None,      # 自动链刻意无能力
+                                        human_send_callback=_hs_cb,
+                                        translate_callback=_htr_cb,
+                                        deliver_only=True,
+                                    )
+                                    web_app.state.autosend_worker = _do_worker
+                                    draft_svc.set_inbox_deliver_callback(
+                                        _do_worker.deliver_human_approved,
+                                        stale_approve_hours=float(
+                                            _ad_cfg.get("stale_approve_hours", 24) or 0))
+                                    assistant.logger.info(
+                                        "人工通过投递已接线（deliver_only；自动发送未启用）")
+                    except Exception:
+                        assistant.logger.debug(
+                            "人工投递兜底接线跳过", exc_info=True)
 
                     # ── K1+K2：SLAWatcher 草稿 SLA 预警 + 自动再分配 ──
                     try:

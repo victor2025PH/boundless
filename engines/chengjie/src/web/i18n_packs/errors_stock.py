@@ -22,6 +22,12 @@ ZH = {
     "err.draft.already_resolved": "该草稿刚被其他窗口或同事处理，已刷新最新状态",
     "err.draft.autosend_worker_off": "AutosendWorker 未启用",
     "err.draft.bad_action": "action 须为 approve 或 reject",
+    "err.draft.too_stale": (
+        "这条草稿已过期 {age} 小时（上限 {limit}h），原样发出会与当下情境脱节，"
+        "请重新生成，或改写后再发"),
+    "err.draft.stale_replied": (
+        "这条会话在草稿生成后（{age} 小时前）已经回复过了，再原样发一遍会重复"
+        "或自相矛盾，请重新生成，或改写后再发"),
     "err.draft.eventbus_failed": "EventBus 发布失败: {err}",
     "err.draft.kb_write_failed": "KB 写入失败: {err}",
     "err.draft.not_found": "草稿不存在",
@@ -307,6 +313,13 @@ EN = {
     "err.draft.already_resolved": "This draft was just handled in another window or by a teammate; latest status refreshed",
     "err.draft.autosend_worker_off": "AutosendWorker is not enabled",
     "err.draft.bad_action": "\"action\" must be approve or reject",
+    "err.draft.too_stale": (
+        "This draft is {age}h old (limit {limit}h). Sending it as-is would be out of "
+        "context — regenerate it, or edit the text before sending"),
+    "err.draft.stale_replied": (
+        "This conversation was already replied to after the draft was created "
+        "({age}h ago). Sending it as-is would duplicate or contradict that reply — "
+        "regenerate it, or edit the text before sending"),
     "err.draft.eventbus_failed": "EventBus publish failed: {err}",
     "err.draft.kb_write_failed": "KB write failed: {err}",
     "err.draft.not_found": "Draft not found",

@@ -72,24 +72,13 @@ def _load_config_if_none(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     人设长传记语义检索**静默退化成纯关键词**（实测命中率 93%→68%，且无任何报错）。
     与 ``translation_eval._load_config`` 同语义。
     """
-    if config is not None:
-        return config
-    try:
-        import yaml
-        with open("config/config.yaml", "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-    except Exception:
-        return {}
-    try:
-        overlay_path = "config/config.local.yaml"
-        if os.path.exists(overlay_path):
-            with open(overlay_path, "r", encoding="utf-8") as f:
-                over = yaml.safe_load(f) or {}
-            if isinstance(over, dict) and over:
-                _deep_merge(cfg, over)
-    except Exception:
-        pass
-    return cfg
+    # 2026-07-29：按数据根契约解析（自动发现活跃实例）。此前 CWD 相对读取会在
+    # 「从引擎根跑 run_eval」时读到迁移遗留旧副本——实测 embedding_base_url 都不同
+    # （140 vs 176），评的是没在跑的端点。详见 src/eval/eval_config.py。
+    from src.eval.eval_config import load_runtime_config
+    return load_runtime_config(config)
+
+
 
 
 def _from_openai_compatible(config: Optional[Dict[str, Any]]) -> Optional[EmbedFn]:

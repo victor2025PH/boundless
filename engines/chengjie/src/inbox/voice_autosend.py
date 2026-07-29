@@ -324,11 +324,17 @@ def resolve_voice_autosend_cfg(config: Dict[str, Any]) -> Dict[str, Any]:
         return {}
 
 
+# 客户**明确点名要语音/唱歌**时，放宽长度上限到该硬帽（~30s 语音；避免绝口不发，
+# 也避免几分钟语音）。低于此仍强制走语音——「发条语音/唱首歌」得不到语音是实录事故。
+_REQUEST_HARD_CAP = 300
+
+
 def decide_voice(
     voice_block: Dict[str, Any],
     text: str,
     *,
     peer_sent_voice: bool = False,
+    peer_requested_voice: bool = False,
     recent_voice_ratio: float = 0.0,
     peer_emotion: str = "",
     peer_emotion_intensity: float = -1.0,
@@ -339,6 +345,9 @@ def decide_voice(
 
     统一 4 档 trigger 与 smart 评分的**单一入口**；``should_send_voice`` 是其布尔投影。
     - ``enabled=false`` / 空文本 / 长度越界 → 文字（reason: disabled/empty/too_short/too_long）。
+    - ``peer_requested_voice``（客户点名「发条语音/唱首歌/想听你声音」）→ **强制语音**
+      （2026-07-29 对练补漏：打字要语音永远得不到语音，AI 打字冒充唱歌）；仅 never
+      档 / 空 / 超硬上限(300) 例外，绕过 smart/频率/对等判定。
     - ``trigger``：``never`` / ``always`` / ``when_peer_voice``（默认，对等）/ ``smart``。
     - ``smart``：委托 ``ai.voice_fitness.voice_fitness``——按**回复情绪 + 客户此刻情绪 +
       亲密度 + 频率**综合评分，``score ≥ threshold`` 才语音。调用方采集并传入
@@ -359,11 +368,16 @@ def decide_voice(
         min_chars, max_chars = 1, _DEFAULT_MAX_CHARS
     if n < min_chars:
         return VoiceDecision(False, 0.0, "too_short")
-    if n > max_chars:
-        return VoiceDecision(False, 0.0, "too_long")
     trigger = str(vb.get("trigger", "when_peer_voice") or "when_peer_voice").lower()
     if trigger not in _VALID_TRIGGERS:
         trigger = "when_peer_voice"
+    # 客户点名要语音：强制（never 除外；长度放宽到硬上限）——先于 max_chars/smart 判。
+    if peer_requested_voice and trigger != "never":
+        if n > max(max_chars, _REQUEST_HARD_CAP):
+            return VoiceDecision(False, 0.0, "too_long")
+        return VoiceDecision(True, 1.0, "peer_requested")
+    if n > max_chars:
+        return VoiceDecision(False, 0.0, "too_long")
     if trigger == "never":
         return VoiceDecision(False, 0.0, "trigger_never")
     if trigger == "always":
@@ -390,6 +404,7 @@ def should_send_voice(
     text: str,
     *,
     peer_sent_voice: bool = False,
+    peer_requested_voice: bool = False,
     recent_voice_ratio: float = 0.0,
     peer_emotion: str = "",
     peer_emotion_intensity: float = -1.0,
@@ -399,6 +414,7 @@ def should_send_voice(
     """``decide_voice`` 的布尔投影（向后兼容）。含 reason 的完整决策见 ``decide_voice``。"""
     return decide_voice(
         voice_block, text, peer_sent_voice=peer_sent_voice,
+        peer_requested_voice=peer_requested_voice,
         recent_voice_ratio=recent_voice_ratio, peer_emotion=peer_emotion,
         peer_emotion_intensity=peer_emotion_intensity, intimacy=intimacy,
         crisis_block=crisis_block).send_voice

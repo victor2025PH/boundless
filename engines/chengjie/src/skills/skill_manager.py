@@ -950,6 +950,23 @@ class SkillManager(LoggerMixin):
             # 收图后质疑信号（P0 一致性观测）：最近发过媒体且本条像在质疑图
             # （重复/不像/假图）→ 计数 + 设纠偏 hint（别争辩/别再重发同图）。
             self._maybe_flag_media_complaint(text, user_context)
+            # P1 承诺循环熔断：已连续 ≥2 次答应发图却没发出 + 本条仍在要图 →
+            # 注入「别再答应」hint，打断「每轮说马上拍→撤回→下轮又说」死循环
+            # （对练 T9/T10 实证）。仅当无更高优先的质疑 hint 时设。
+            try:
+                if not user_context.get("_media_coherence_hint"):
+                    from src.ai.outbound_promise_guard import wants_media as _wm3
+                    _streak = int(
+                        user_context.get("_photo_promise_streak", 0) or 0)
+                    if _streak >= 2 and _wm3(text) == "image":
+                        user_context["_media_coherence_hint"] = (
+                            "重要：你已经连续好几次答应发照片却始终没真的发出，"
+                            "对方已经在质疑你说话不算话。这一轮**绝对不要再答应**"
+                            "「等我拍/马上发/而家拍俾你」这类话（再空口承诺只会更"
+                            "像骗子），坦诚说这会儿真的拍不了/暂时没有合适的，"
+                            "然后自然把话题岔开、多聊聊对方。")
+            except Exception:
+                pass
 
             # Stage 0：人设注册相册（DB 预制图/视频，按触发词命中即发）。先于生成，秒发零成本。
             # 返回 ""=媒体已发出不再补文字；None=未命中/未开/发送不可用（交 Stage A/B）。
@@ -2202,6 +2219,12 @@ class SkillManager(LoggerMixin):
                 reply = self._apply_media_promise_guard(
                     reply, user_context, log_prefix=log_prefix,
                     user_id_str=user_id_str, chat_id=_chat_id, user_text=text)
+
+            # 5c2b. 时空接轨守卫：当地墙钟 vs 出站时段问候/错城「我在 X」
+            # （温哥华深夜说下午好 / 说人在宿务 —— 2026-07 穿帮）。
+            if reply:
+                reply = self._apply_world_clock_guard(
+                    reply, user_context, log_prefix=log_prefix)
 
             # 5c3. 带货链接纪律守卫（P4）：soft/hold 日 LLM 从历史复读出官网
             # 下单链 → 按当日 CTA 档确定性剥离（读 _goal_cta 后即焚）。
@@ -6078,16 +6101,21 @@ class SkillManager(LoggerMixin):
         别马上再发一张——那是二次穿帮的标准路径）。纯启发式，软失败零阻断。
         """
         try:
-            log = user_context.get("_media_sent_log")
-            if not isinstance(log, list) or not log:
-                return
-            last_ts = float((log[-1] or {}).get("ts") or 0)
-            if (time.time() - last_ts) > self._MEDIA_COMPLAINT_WINDOW_SEC:
-                return
-            from src.ai.companion_selfie import detect_media_complaint
+            from src.ai.companion_selfie import (
+                detect_apology_spiral, detect_media_complaint,
+            )
             kind = detect_media_complaint(text)
             if not kind:
                 return
+            # 采信闸：图文质疑（repeat/not_you/fake）须最近真发过媒体（压误报）；
+            # lie_caught/distrust（没收到/说话不算话/失望）本就没媒体台账 → 不设该闸。
+            if kind in ("repeat", "not_you", "fake"):
+                log = user_context.get("_media_sent_log")
+                if not isinstance(log, list) or not log:
+                    return
+                last_ts = float((log[-1] or {}).get("ts") or 0)
+                if (time.time() - last_ts) > self._MEDIA_COMPLAINT_WINDOW_SEC:
+                    return
             try:
                 from src.inbox.image_autosend import record_media_complaint
                 record_media_complaint(
@@ -6095,16 +6123,29 @@ class SkillManager(LoggerMixin):
                     persona_id=self._selfie_album_key(user_context))
             except Exception:
                 pass
-            desc = {"repeat": "觉得这张图之前发过/重复了",
-                    "not_you": "觉得图里的人不像你",
-                    "fake": "觉得图是假的/网图/生成的"}.get(kind, "对图有质疑")
-            user_context["_media_coherence_hint"] = (
-                f"注意：对方似乎在质疑你刚发的照片（{desc}）。不要争辩，"
-                "不要赌咒发誓说照片绝对真实，也不要立刻承诺再拍/再发一张；"
-                "用人设口吻自然轻松地回应（可以撒娇带过、坦然一点、把话题"
-                "引回对方身上），绝不要重复发同样的照片。")
-            self.logger.info("[media_complaint] kind=%s text=%r",
-                             kind, str(text or "")[:80])
+            # 上一轮 AI 是否已在道歉/解释 → 升级为「停止解释」纠偏（防连环圆场）。
+            _spiral = detect_apology_spiral(
+                str(user_context.get("last_reply") or ""))
+            if kind in ("lie_caught", "distrust") or _spiral:
+                # 被抓包/失望/已在螺旋：核心是**止损**——认错要短、别讲来龙去脉。
+                user_context["_media_coherence_hint"] = (
+                    "注意：对方在质疑你说话不算话/没收到你说的东西/对你失望。"
+                    "回应铁律：①只回一两句，绝不长篇解释来龙去脉、时间线、找借口"
+                    "（越解释越假）；②别再道歉连篇，最多轻轻认一句（『嗯是我不好啦』）；"
+                    "③绝不做新的承诺（不要再说『这就发/马上拍/明天给你』）；"
+                    "④用人设口吻把话题轻轻带开或反过来关心对方。像真人被戳穿时"
+                    "大方一笑带过，而不是慌张辩解。")
+            else:
+                desc = {"repeat": "觉得这张图之前发过/重复了",
+                        "not_you": "觉得图里的人不像你",
+                        "fake": "觉得图是假的/网图/生成的"}.get(kind, "对图有质疑")
+                user_context["_media_coherence_hint"] = (
+                    f"注意：对方似乎在质疑你刚发的照片（{desc}）。不要争辩，"
+                    "不要赌咒发誓说照片绝对真实，也不要立刻承诺再拍/再发一张；"
+                    "只回一两句，别长篇解释；用人设口吻自然轻松地回应（可以撒娇带过、"
+                    "坦然一点、把话题引回对方身上），绝不要重复发同样的照片。")
+            self.logger.info("[media_complaint] kind=%s spiral=%s text=%r",
+                             kind, _spiral, str(text or "")[:80])
         except Exception:
             self.logger.debug("media complaint check skipped", exc_info=True)
 
@@ -6643,6 +6684,8 @@ class SkillManager(LoggerMixin):
                 "series": str(series or "")[:80],
             })
             user_context["_media_sent_log"] = log[-self._MEDIA_SENT_LOG_MAX:]
+            # 真发出媒体 → 清「连续空头承诺」计数（P1 承诺循环熔断，2026-07-29）。
+            user_context["_photo_promise_streak"] = 0
         except Exception:
             self.logger.debug("record_media_sent skipped", exc_info=True)
 
@@ -6820,14 +6863,28 @@ class SkillManager(LoggerMixin):
                     except Exception:
                         _t = ""
                     _sc = str(row.get("scene") or "").strip()
+                    # series slug（如 white-hat-red-jacket / black-and-white）＝相册图
+                    # 的画面 ground truth——scene 常空串（"不误标"），但 series 携带
+                    # 服装/风格事实，surface 出来防 LLM 现编画面（T3「手冲壶」根因）。
+                    _sr = str(row.get("series") or "").strip().replace("-", " ")
                     _n = str(row.get("note") or "").strip()
+                    _facts = "；".join(
+                        x for x in (f"场景：{_sc}" if _sc else "",
+                                    f"画面：{_sr}" if _sr else "") if x)
                     lines.append(
-                        f"- {_t} {_n}" + (f"（场景：{_sc}）" if _sc else ""))
+                        f"- {_t} {_n}" + (f"（{_facts}）" if _facts else ""))
                 if lines:
                     user_context["_media_sent_note"] = (
                         "【你最近发过的照片（事实）】\n" + "\n".join(lines) + "\n"
-                        "对方提到「你发的照片/上次那张」时按此回应，不要否认发过；"
-                        "场景为英文短语，引用时口语化转述。")
+                        "对方提到「你发的照片/上次那张」时按此回应，不要否认发过。"
+                        "**图文一致铁律**：只能说标注的『场景』里真实有的东西；"
+                        "没标注场景=你也不知道画面细节，就含糊说（『那张呀～』），"
+                        "**绝对不要编造照片里没有的具体物件、地点或动作**"
+                        "（例：没标注却说『手冲壶入镜/在窗边拍的』=编造，一旦对方"
+                        "看图对不上就穿帮）；场景为英文短语，引用时口语化转述。"
+                        "**别把之前发的照片说成『刚拍的/此刻正在发生』**——这些多是"
+                        "相册存货，后续聊到就按发出时的口径（之前拍的），别改口成"
+                        "『而家新鲜/海风正吹』这类此刻进行时（与首次配文自相矛盾=穿帮）。")
         except Exception:
             self.logger.debug("inject_scene_state skipped", exc_info=True)
 
@@ -7163,6 +7220,39 @@ class SkillManager(LoggerMixin):
         except Exception:
             return {}
 
+    def _apply_world_clock_guard(
+        self, reply: str, user_context: Dict[str, Any], log_prefix: str = "",
+    ) -> str:
+        """出站时空接轨：剥与人设当地小时冲突的问候/错城现居断言。默认开。"""
+        try:
+            if not reply:
+                return reply
+            cfg = self.config.config if hasattr(self.config, "config") else {}
+            wcfg = ((cfg.get("companion") or {}).get("world_clock_guard") or {})
+            if isinstance(wcfg, dict) and wcfg.get("enabled") is False:
+                return reply
+            from src.companion.world_clock_guard import apply_world_clock_guard
+            local_now = user_context.get("_persona_local_now")
+            persona = None
+            try:
+                persona = self._selfie_persona_for_prompt(user_context)
+            except Exception:
+                persona = user_context.get("_resolved_persona")
+            out, info = apply_world_clock_guard(
+                reply, persona=persona, local_now=local_now)
+            if info.get("changed"):
+                self.logger.info(
+                    "%s[world_clock_guard] daypart=%s wrong_place=%s",
+                    log_prefix,
+                    info.get("daypart_conflict"),
+                    info.get("wrong_place"),
+                )
+                return out if out.strip() else reply
+            return reply
+        except Exception:
+            self.logger.debug("[world_clock_guard] 跳过", exc_info=True)
+            return reply
+
     def _apply_media_promise_guard(
         self, reply: str, user_context: Dict[str, Any], log_prefix: str = "",
         *, user_id_str: str = "", chat_id: Any = "", user_text: str = "",
@@ -7194,10 +7284,34 @@ class SkillManager(LoggerMixin):
                 return reply
             from src.ai.outbound_promise_guard import (
                 deflection_line,
+                detect_media_claim,
                 detect_media_promise,
+                strip_media_claims,
                 strip_media_promises,
+                wants_media,
             )
-            kind = detect_media_promise(reply)
+            # media_context：客户在**索要**媒体 → 才把「这不就来了嘛/你看看这张」
+            # 当完成断言判（防误伤评论对方图）。粘性（当轮要图 or 上轮 AI offer +
+            # 本轮短肯定 or 上轮 AI 自己在承诺/offer 发图=话题仍开）；但**客户本轮
+            # 发了图**时抑制（此时 AI 多半在评论对方的图，「这张真好看」不能误剥）。
+            _mctx = False
+            try:
+                _cur_is_img = bool(user_context.get("image_ocr_text"))
+                if not _cur_is_img:
+                    from src.ai.outbound_promise_guard import (
+                        detect_media_offer, is_short_affirmative,
+                    )
+                    _lr = str(user_context.get("last_reply") or "")
+                    _mctx = bool(
+                        wants_media(user_text)
+                        or (is_short_affirmative(user_text)
+                            and detect_media_offer(_lr))
+                        or detect_media_promise(_lr)
+                        or detect_media_offer(_lr))
+            except Exception:
+                _mctx = False
+            kind = detect_media_promise(reply) or detect_media_claim(
+                reply, media_context=_mctx)
             if not kind:
                 return reply
             try:
@@ -7231,7 +7345,14 @@ class SkillManager(LoggerMixin):
                     log_prefix)
                 return reply  # 承诺保留：图马上真的会到
             # ── 2) 撤回兜底（原行为）────────────────────────────────────────
+            # 先剥「将发」承诺句，再剥「已发」断言句（claim；本轮无媒体=谎）。
             stripped = strip_media_promises(reply)
+            stripped = strip_media_claims(stripped, media_context=_mctx)
+            # 二次校验：剥完仍残留承诺/断言（跨句拼接漏网）→ 整条兜底话术。
+            if stripped.strip() and (
+                    detect_media_promise(stripped)
+                    or detect_media_claim(stripped, media_context=_mctx)):
+                stripped = ""
             if not stripped.strip():
                 stripped = deflection_line(reply, kind)
             try:
@@ -7239,9 +7360,21 @@ class SkillManager(LoggerMixin):
                 record_promise_event("retracted")
             except Exception:
                 pass
+            # 连续空头承诺计数（P1 熔断）：发图承诺/断言被撤回=又一次「说了没发」→
+            # 累加；下一轮 pre-gen 读到 ≥2 会注入「别再答应」hint，打断
+            # 「每轮都说马上拍→撤回→下轮又说」的死循环（对练 T9/T10 实证）。
+            if kind == "image":
+                try:
+                    user_context["_photo_promise_streak"] = int(
+                        user_context.get("_photo_promise_streak", 0) or 0) + 1
+                except Exception:
+                    pass
             self.logger.info(
-                "%s[promise_guard] 出站%s承诺已撤回（本轮无媒体真发）",
-                log_prefix, "发图" if kind == "image" else "发语音")
+                "%s[promise_guard] 出站%s%s已撤回（本轮无媒体真发，streak=%s）",
+                log_prefix, "发图" if kind == "image" else "发语音",
+                "断言" if detect_media_claim(reply, media_context=_mctx)
+                and not detect_media_promise(reply) else "承诺",
+                user_context.get("_photo_promise_streak", 0))
             return stripped
         except Exception:
             self.logger.debug("media promise guard skipped", exc_info=True)

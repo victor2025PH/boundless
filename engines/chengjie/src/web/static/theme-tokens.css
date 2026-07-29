@@ -13,7 +13,6 @@
   --th-ink-gray3:#d1d5db;
   --th-ink-slate1:#f1f5f9;
   --th-ink-slate6:#475569;
-  --th-bd-slate2:#e2e8f0;
   --th-ink-gray7:#374151;
   --th-ink-slate7:#334155;
   --th-ink-slate8:#1e293b;
@@ -57,6 +56,7 @@
   --th-ink-red9:#7f1d1d;
   --th-ink-blue2d:#2d6cdf;
   --th-ink-purple5:#a855f7;
+  --th-ink-teal1:#ccfbf1;
   --th-bg-surface:#fff;
   --th-bg-slate1:#f1f5f9;
   --th-bg-gray2:#e5e7eb;
@@ -65,6 +65,8 @@
   --th-bg-slate8:#1e293b;
   --th-bg-slate9:#0f172a;
   --th-bg-inkpanel:#1a1f2e;
+  --th-bg-teal8:#0f766e;
+  --th-bg-teal9:#134e4a;
   --th-bg-red6:#dc2626;
   --th-bg-red5:#ef4444;
   --th-bg-red8:#991b1b;
@@ -142,6 +144,7 @@
   --th-bd-gray2:#e5e7eb;
   --th-bd-slate1:#f1f5f9;
   --th-bd-slate3:#cbd5e1;
+  --th-bd-slate2:#e2e8f0;
   --th-bd-slate7:#334155;
   --th-bd-slate8:#1e293b;
   --th-bd-red6:#dc2626;
@@ -183,7 +186,6 @@
   --th-ink-slate7:#d7d9de;
   --th-ink-slate8:#ececf0;
   --th-ink-slate9:#ececf0;
-  --th-bd-slate2:#30313a;
   --th-ink-red6:#f85149;
   --th-ink-red5:#f85149;
   --th-ink-red7:#f26d5f;
@@ -272,6 +274,7 @@
   --th-bd-gray2:#26272e;
   --th-bd-slate1:rgba(236,236,240,.1);
   --th-bd-slate3:#30313a;
+  --th-bd-slate2:#30313a;
   --th-bd-red6:#f85149;
   --th-bd-red2:rgba(248,81,73,.35);
   --th-bd-emerald5:#3fb950;

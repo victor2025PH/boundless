@@ -152,6 +152,7 @@
     <h2>🖱️ {{ (i18n or {}).get('ov2_s_fe', "前端哑按钮错误（运行时 ReferenceError 观测）") }}</h2>
     <div class="grid" id="feErrKpis"></div>
     <div id="feErrDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+    <div id="feErrTrend" style="margin-top:8px;"></div>
   </section>
 
   <section id="personaOvSection" style="display:none;">
@@ -1437,6 +1438,48 @@ async function loadFrontendErrors(){
       + '<div class="muted" style="font-size:12px;margin-top:8px;">'+window.T('ov2_js_fe_hint')+'</div>';
   }catch(e){
     dv.innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
+  }
+}
+
+// 🖱️ P9：近 7 天前端错误/意图落空曲线：读 /api/admin/frontend-error-trend（需开启趋势落库）。
+// 意图落空三类（scoped_fail/dead_intent/conv_not_found）单独一条线——账号视角/深链
+// 修复的效果验收就看这条线是不是在收敛；进程内快照重启即清零，趋势只能靠 DB 口径。
+async function loadFeTrend(){
+  var el = document.getElementById('feErrTrend');
+  if(!el) return;
+  try{
+    const r = await apiFetch('/api/admin/frontend-error-trend?days=7', {credentials:'same-origin'});
+    // 旧后端尚无本端点（模板热更新先行、路由随下次重启装载）→ 404 按「未启用」处理
+    const d = r.ok ? await r.json() : {enabled:false};
+    if(!d.enabled){
+      el.innerHTML = '<div class="muted" style="font-size:12px;">'+
+        window.T('ov2_js_fe_trend_off')+'</div>';
+      return;
+    }
+    var days = d.days || [];
+    if(days.length < 2 || !days.some(function(x){ return (Number(x.total)||0) > 0; })){
+      el.innerHTML = '<div class="muted" style="font-size:12px;">'+window.T('ov2_js_fe_trend_none')+'</div>';
+      return;
+    }
+    var INTENT = ['scoped_fail','dead_intent','conv_not_found'];
+    var intent = days.map(function(x){
+      var bt = x.by_type || {};
+      return INTENT.reduce(function(s,k){ return s + (Number(bt[k])||0); }, 0);
+    });
+    var total = days.map(function(x){ return Number(x.total)||0; });
+    var labels = days.map(function(x, i){
+      var bt = x.by_type || {};
+      var bits = INTENT.filter(function(k){ return bt[k]; })
+        .map(function(k){ return k+' '+bt[k]; }).join(' · ');
+      return (x.day||'')+': '+window.T('ov2_js_fe_trend_intent')+' '+intent[i]+
+        ' / '+window.T('ov2_js_fe_total')+' '+total[i]+(bits?(' ('+bits+')'):'');
+    });
+    el.innerHTML = '<div class="muted" style="font-size:12px;margin-bottom:4px;">'+
+      window.T('ov2_js_fe_trend_title')+'</div>'+
+      sparkline(intent, {labels:labels, color:'#d29922', w:300})+
+      ' '+sparkline(total, {labels:labels, color:'#58a6ff', w:300});
+  }catch(e){
+    el.innerHTML = '<div class="muted" style="font-size:12px;">'+window.T('ln_js_033')+e+'</div>';
   }
 }
 
@@ -4596,7 +4639,7 @@ async function toggleLocalTts(on){
 }
 
 if(CAN_MANAGE_OPS){ var _rb=document.getElementById('recheckBtn'); if(_rb) _rb.style.display=''; }
-function refreshAll(){ loadOverview(); loadIncidents(); loadReport(); loadTTS(); loadTTSTrend(); loadAiSafety(); loadSlaBacklog(); loadTranslationEngines(); loadXlateTrend(); loadVoiceSynthLang(); loadASRDegradation(); loadSpeechEmotion(); loadVisionUsage(); loadDeepPersona(); loadFrontendErrors(); loadCustomerAssets(); loadInstanceRestartStatus(); loadPlatformSessions(); loadChannelReadiness(); loadSendRoutes(); loadSendRouteTrend(); loadPersonaMedia(); loadMediaConsistency(); loadDuelBench(); loadPeerIdentity(); loadIdentityTrend(); loadLocalTts(); loadAutosendMedia(); loadPromiseTrend(); loadAvatarVoice(); loadProactiveEngagement(); loadReplyBubbles(); loadRealWorld(); loadBazi(); loadPersonaImport(); loadCredPool(); loadGoals(); loadIdentityShadow(); loadEpisodicDedup(); loadIsolationHealth(); loadGpuWatermark(); loadProfileAudit(); loadRealtimeVoice(); loadRtvTrend(); refreshRealtimeVoiceAlertBadge(); loadTgCall(); }
+function refreshAll(){ loadOverview(); loadIncidents(); loadReport(); loadTTS(); loadTTSTrend(); loadAiSafety(); loadSlaBacklog(); loadTranslationEngines(); loadXlateTrend(); loadVoiceSynthLang(); loadASRDegradation(); loadSpeechEmotion(); loadVisionUsage(); loadDeepPersona(); loadFrontendErrors(); loadFeTrend(); loadCustomerAssets(); loadInstanceRestartStatus(); loadPlatformSessions(); loadChannelReadiness(); loadSendRoutes(); loadSendRouteTrend(); loadPersonaMedia(); loadMediaConsistency(); loadDuelBench(); loadPeerIdentity(); loadIdentityTrend(); loadLocalTts(); loadAutosendMedia(); loadPromiseTrend(); loadAvatarVoice(); loadProactiveEngagement(); loadReplyBubbles(); loadRealWorld(); loadBazi(); loadPersonaImport(); loadCredPool(); loadGoals(); loadIdentityShadow(); loadEpisodicDedup(); loadIsolationHealth(); loadGpuWatermark(); loadProfileAudit(); loadRealtimeVoice(); loadRtvTrend(); refreshRealtimeVoiceAlertBadge(); loadTgCall(); }
 function _onRtvOpsRefresh(){
   loadRealtimeVoice(); loadRtvTrend(); loadRtvAlertCalibrate(false); refreshRealtimeVoiceAlertBadge();
 }

@@ -87,18 +87,34 @@ class AutosendWorker:
         draft_service: Any,
         config: Optional[Dict[str, Any]] = None,
         send_callback: Optional[SendCallback] = None,
+        human_send_callback: Optional[SendCallback] = None,
         translate_callback: Optional[TranslateCallback] = None,
         mark_read_callback: Optional[MarkReadCallback] = None,
         typing_callback: Optional[TypingCallback] = None,
         persona_resolver: Optional[Callable[[str, str], str]] = None,
         sleep: Optional[Callable[[float], Awaitable[Any]]] = None,
+        deliver_only: bool = False,
     ) -> None:
         cfg = config or {}
+        # deliver_only=True：本实例**只**作「人工通过→真投递」的载体，自动轮询循环
+        # 压根不会 run()。用于 `l2_autosend.enabled=false` 的人审档部署——那种部署
+        # 原本连 worker 都不创建，于是坐席点通过没有任何消费者（只标记不发送）。
+        # 放同一个 `app.state.autosend_worker` 键是刻意的：autosend-status /
+        # metrics 的 Prometheus gauge / 看门狗 / 报表都从那里读，塞这里可让人工投递
+        # 的观测链零改动全通。歧义由本标记 + 快照里的 running/enabled 显式消掉。
+        self._deliver_only: bool = bool(deliver_only)
         self._svc = draft_service
         self._enabled: bool = bool(cfg.get("enabled", True))
         # 真实投递回调（None=仅 DB 标记不发，保持旧行为；非 None=L2 草稿 resolve 后真投递）。
         # 由 main.py 在 inbox.l2_autosend.deliver=true 时注入，gating 在注入处。
         self._send_callback: Optional[SendCallback] = send_callback
+        # 人工通过专用投递回调（2026-07-29）。为什么与自动链分开：`deliver` 开关管的是
+        # **「AI 可否自己发」**，而坐席点「通过」是**人的明示决定**——手动发送端点
+        # (/api/unified-inbox/send) 本就不受 deliver 约束，用它闸住人工通过自相矛盾，
+        # 结果是「AI 拟稿 + 人审后发」这一**最谨慎、最常被推荐的档位**里发送按钮空转
+        # （坐席以为发了、客户什么也没收到）。故 deliver=false 部署也注入真发回调，
+        # 只有自动循环仍受 deliver 约束。None → 回落 _send_callback（deliver=true 时同一个）。
+        self._human_send_callback: Optional[SendCallback] = human_send_callback
         # 出站翻译回调（None=投递原文，保持旧行为；非 None=投递前把 AI 中文译成客户语言）。
         # 由 main.py 在 inbox.l2_autosend.translate.enabled=true 且 translation_service 可用时注入。
         self._translate_callback: Optional[TranslateCallback] = translate_callback
@@ -344,17 +360,31 @@ class AutosendWorker:
             except RuntimeError:
                 pass  # event loop 已停止
 
-    def _send_cb_kwargs(self, original_text: str) -> Dict[str, Any]:
-        """original_text 透传 kwargs（签名探测一次并缓存；旧 4 参回调不受影响）。"""
-        if self._send_cb_accepts_original is None:
+    def _send_cb_kwargs(self, original_text: str, cb: Any = None) -> Dict[str, Any]:
+        """original_text 透传 kwargs（按回调签名探测，旧 4 参回调不受影响）。
+
+        ``cb`` 显式给出实际要调用的回调——人工通过链用的是 ``_human_send_callback``，
+        与自动链可能是不同对象。2026-07-29 修：此前硬探 ``self._send_callback``，
+        在 deliver=false（自动回调为 None）时 ``inspect.signature(None)`` 抛 TypeError
+        → 缓存成 False → 人工链**永久丢掉 original_text**（语音分支据原文合成，
+        丢了就用译文发声=念错语言）。缓存按回调对象分别记，互不串味。
+        """
+        target = cb if cb is not None else self._send_callback
+        if target is None:
+            return {}
+        cached = self._send_cb_accepts_original
+        if not isinstance(cached, dict):
+            cached = {} if cached is None else {id(self._send_callback): bool(cached)}
+            self._send_cb_accepts_original = cached
+        key = id(target)
+        if key not in cached:
             try:
                 import inspect
-                self._send_cb_accepts_original = (
-                    "original_text"
-                    in inspect.signature(self._send_callback).parameters)
+                cached[key] = (
+                    "original_text" in inspect.signature(target).parameters)
             except (ValueError, TypeError):
-                self._send_cb_accepts_original = False
-        return {"original_text": original_text} if self._send_cb_accepts_original else {}
+                cached[key] = False
+        return {"original_text": original_text} if cached[key] else {}
 
     async def deliver_human_approved(self, draft: Dict[str, Any]) -> Dict[str, Any]:
         """把**人工通过**的 inbox 草稿真投递到平台（2026-07-29 修「通过≠发送」断链）。
@@ -374,7 +404,8 @@ class AutosendWorker:
             "chat_key": str(draft.get("chat_key") or ""),
             "text": str(draft.get("final_text") or draft.get("draft_text") or "").strip(),
         }
-        if self._send_callback is None or not item["text"] or not item["chat_key"]:
+        send_cb = self._human_send_callback or self._send_callback
+        if send_cb is None or not item["text"] or not item["chat_key"]:
             return {"ok": False, "error": "no_send_path_or_empty"}
         try:
             send_text = item["text"]
@@ -389,9 +420,9 @@ class AutosendWorker:
                     logger.warning(
                         "[AutosendWorker] 人工通过出站翻译异常，发原文 conv=%s",
                         item["conversation_id"], exc_info=True)
-            res = await self._send_callback(
+            res = await send_cb(
                 item["platform"], item["account_id"], item["chat_key"],
-                send_text, **self._send_cb_kwargs(item["text"]),
+                send_text, **self._send_cb_kwargs(item["text"], send_cb),
             )
             if isinstance(res, dict) and (
                 res.get("ok") is False
@@ -840,7 +871,14 @@ class AutosendWorker:
             "event_triggers": self.event_triggers,  # C3：事件驱动唤醒次数
             "total_cleaned": self.total_cleaned,     # H3：历史清理草稿总数
             "total_sent_session": self.total_sent,   # E3 健康面板兼容字段
-            "deliver_enabled": self._send_callback is not None,  # 是否真正投递到平台
+            "deliver_enabled": self._send_callback is not None,  # 自动链是否真正投递到平台
+            # 本实例只作人工投递载体、自动循环从未 run()（l2_autosend.enabled=false 的
+            # 人审档）。读者据此别把「worker 存在」当成「自动回复在跑」。
+            "deliver_only": self._deliver_only,
+            # 人工通过链是否具备真发能力（与 deliver_enabled 正交——见 human_send_callback）
+            "human_deliver_enabled": (
+                self._human_send_callback is not None
+                or self._send_callback is not None),
             "total_delivered": self.total_delivered,
             "total_deliver_errors": self.total_deliver_errors,
             "translate_enabled": self._translate_callback is not None,  # 是否投递前出站翻译

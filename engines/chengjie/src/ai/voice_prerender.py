@@ -36,6 +36,22 @@ from typing import Dict, Optional
 logger = logging.getLogger(__name__)
 
 PRERENDER_DIRNAME = "prerendered"
+
+# ⚠️ 这是**唯一刻意保留的 CWD 相对路径**（其余静态资产路径必须绝对，见
+# tests/test_static_asset_paths.py）。两侧如何对上，以及为什么这样是安全的：
+#
+#   写入方＝CLI ``scripts/avatar_prerender``：**显式**按 ``resolve_data_roots()``
+#     逐根拼 ``<数据根>/assets/voices``（多实例各落各家），不吃 CWD。
+#   读取方＝引擎进程：用本默认值，按**进程 CWD** 解析；而双实例启动契约下
+#     引擎 CWD 就是实例数据根 → 恰好与写入方同址（实测 112 个 clip 全在数据根、
+#     引擎根 0 个）。
+#
+# 若哪天启动脚本改了 CWD（或 CLI 不再显式传 base_dir），两侧会错开——但失效是
+# **软的**：``find_prerendered`` 返 None → 回落现场合成（~7s vs ~200ms），不报错、
+# 不发错声。且该退化**已被既有观测覆盖**：``prerender_coverage`` 归零 +
+# ``prerender_miss`` 飙升会直接出现在 ops「🎙️ AvatarHub 语音」卡的备货缺口行。
+# 故此处刻意不改成绝对路径（重接管路要动整条在线语音链，风险大于收益）；
+# 真要改，请同时改 CLI 与本值并跑 tests/test_static_asset_paths.py。
 DEFAULT_BASE_DIR = "assets/voices"
 
 

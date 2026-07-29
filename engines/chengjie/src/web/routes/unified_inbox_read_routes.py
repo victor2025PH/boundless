@@ -261,12 +261,112 @@ def _local_day_start_ts(now: Optional[float] = None) -> float:
     return time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0, 0, 0, -1))
 
 
+# P8 attn 聚合近窗（秒）：SLA crit=「末条是对方且等待超阈」，等待无上界——不设近窗
+# 则任何以对方消息收尾的沉睡死会话永远計 crit，红点从「现在要处理」蜕化成「历史欠账」。
+_ATTN_LOOKBACK_SEC = 72 * 3600
+
+
+def _handoff_tag() -> str:
+    """「需人工」转接标签常量（与 protocol_autoreply.HANDOFF_TAG / 前端 _convNeedsHuman 同源）。
+
+    兜底用 unicode 转义：本文件已密封 0 硬编码 CJK 响应文案（ratchet 门禁），
+    字面量会被扫描计数。
+    """
+    try:
+        from src.integrations.protocol_autoreply import HANDOFF_TAG
+        return str(HANDOFF_TAG)
+    except Exception:
+        return "\u9700\u4eba\u5de5"
+
+
+def _attn_aggregate_map(
+    store: Any, *, crit_sec: float,
+    now: Optional[float] = None, lookback_sec: float = _ATTN_LOOKBACK_SEC,
+) -> Dict[str, int]:
+    """按 ``platform:account_id`` 聚合「需人工关注」会话数（rail 红点分级脱离 top-N 窗口）。
+
+    口径与前端窗口版（``sla_level=='crit' 或含「需人工」标签``）一致，外加两点修正：
+    - 只看近 ``lookback_sec`` 内有动静的会话（见 _ATTN_LOOKBACK_SEC 注释）；
+    - 排除已归档 / 搁置未到点——坐席已显式说「不用管/晚点管」的会话计红点属反向噪音
+      （窗口版顺带计入是盲点，此处修正）。
+    失败/空 store → {}（前端回落窗口内求和）。
+    """
+    out: Dict[str, int] = {}
+    if store is None:
+        return out
+    ts_now = float(now if now is not None else time.time())
+    try:
+        convs = store.conversations_active_since(ts_now - float(lookback_sec)) or []
+    except Exception:
+        logger.debug("[chats] attn 聚合取会话失败", exc_info=True)
+        return out
+    if not convs:
+        return out
+    cids = [str(c.get("conversation_id") or "") for c in convs
+            if c.get("conversation_id")]
+    try:
+        dirs = store.last_message_dirs(cids) or {}
+    except Exception:
+        dirs = {}
+    try:
+        meta = store.list_conv_tags_map(cids) or {}
+    except Exception:
+        meta = {}
+    tag = _handoff_tag()
+    for c in convs:
+        cid = str(c.get("conversation_id") or "")
+        m = meta.get(cid) or {}
+        if m.get("archived"):
+            continue
+        if float(m.get("snooze_until") or 0) > ts_now:
+            continue
+        info = dirs.get(cid) or {}
+        crit = (str(info.get("direction") or "") == "in"
+                and (ts_now - float(info.get("ts") or ts_now)) >= float(crit_sec))
+        needs_human = any(tag in str(t) for t in (m.get("tags") or []))
+        if not (crit or needs_human):
+            continue
+        key = f"{c.get('platform') or 'web'}:{c.get('account_id') or 'default'}"
+        out[key] = int(out.get(key) or 0) + 1
+    return out
+
+
+def _unread_aggregate_maps(store: Any) -> tuple[Dict[str, int], Dict[str, int]]:
+    """从 store 取有效未读聚合 → (by_account, by_platform)。
+
+    by_account 键 = ``platform:account_id``；by_platform 为各账号合计。
+    store 不可用/失败 → 两个空 dict（前端回落窗口内求和）。
+    """
+    by_acct: Dict[str, int] = {}
+    by_plat: Dict[str, int] = {}
+    if store is None:
+        return by_acct, by_plat
+    try:
+        raw = store.sum_effective_unread_by_account() or {}
+    except Exception:
+        logger.debug("[chats] 有效未读聚合失败", exc_info=True)
+        return by_acct, by_plat
+    for (plat, aid), n in raw.items():
+        n_i = int(n or 0)
+        if n_i <= 0:
+            continue
+        p = str(plat or "web")
+        a = str(aid or "default")
+        by_acct[f"{p}:{a}"] = n_i
+        by_plat[p] = int(by_plat.get(p) or 0) + n_i
+    return by_acct, by_plat
+
+
 def _enrich_platform_status_value(
     platform_status: Dict[str, Any], store: Any,
+    *, unread_by_account: Optional[Dict[str, int]] = None,
+    attn_by_account: Optional[Dict[str, int]] = None,
 ) -> None:
     """P4：给账号卡注入价值信息字段（best-effort，失败不阻断列表）。
 
     - ``today_conv_count``：该账号今日有活动（last_ts ≥ 今日 0 点）的会话数；
+    - ``unread``（P6）：该账号有效未读合计（全库口径，非 top-N 窗口）；
+    - ``attn``（P8）：该账号「需人工关注」会话数（近窗 SLA crit + 需人工标签）；
     - Telegram 另附：``last_sync_ts``（内存快照 finished_at 与 registry 持久化取较大）、
       ``sync_state`` / ``sync_dialogs_done`` / ``sync_dialogs_total``（进行中进度）。
     """
@@ -279,6 +379,12 @@ def _enrich_platform_status_value(
         except Exception:
             logger.debug("[chats] 今日会话计数失败", exc_info=True)
             counts = {}
+    unread_map = unread_by_account if unread_by_account is not None else {}
+    if store is not None and unread_by_account is None:
+        try:
+            unread_map, _ = _unread_aggregate_maps(store)
+        except Exception:
+            unread_map = {}
 
     # 批量读注册表持久化同步时间（避免每个 TG 账号一次 get）
     persisted: Dict[str, float] = {}
@@ -303,6 +409,9 @@ def _enrich_platform_status_value(
         plat = str(v.get("platform") or "")
         aid = str(v.get("account_id") or "")
         v["today_conv_count"] = int(counts.get((plat, aid), 0) or 0)
+        v["unread"] = int(unread_map.get(f"{plat}:{aid}", 0) or 0)
+        if attn_by_account is not None:
+            v["attn"] = int(attn_by_account.get(f"{plat}:{aid}", 0) or 0)
         if plat != "telegram":
             continue
         snap: Dict[str, Any] = {}
@@ -503,9 +612,23 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
                 has_more = store.count_conversations_older_than(oldest) > 0
             except Exception:
                 has_more = False
-        # P4：账号卡价值信息（今日会话数 / TG 上次同步）——与 has_more 共用 store
+        # P4/P6/P8：账号卡价值信息 + 全库有效未读 + 近窗 attn 聚合（rail/chip 脱离 top-N）
+        unread_by_account: Dict[str, int] = {}
+        unread_by_platform: Dict[str, int] = {}
         try:
-            _enrich_platform_status_value(platform_status, store)
+            unread_by_account, unread_by_platform = _unread_aggregate_maps(store)
+        except Exception:
+            logger.debug("[chats] 未读聚合失败", exc_info=True)
+        attn_by_account: Dict[str, int] = {}
+        try:
+            attn_by_account = _attn_aggregate_map(
+                store, crit_sec=_sla_cfg(request)["crit"])
+        except Exception:
+            logger.debug("[chats] attn 聚合失败", exc_info=True)
+        try:
+            _enrich_platform_status_value(
+                platform_status, store, unread_by_account=unread_by_account,
+                attn_by_account=attn_by_account)
         except Exception:
             logger.debug("[chats] platform_status 价值信息富集失败", exc_info=True)
         return {
@@ -515,6 +638,10 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
             "platform_status": platform_status,
             "has_more": has_more,
             "oldest_ts": oldest or None,
+            # P6/P8：全库聚合（键 plat / plat:aid）；scoped/cursor 响应刻意不带
+            "unread_by_platform": unread_by_platform,
+            "unread_by_account": unread_by_account,
+            "attn_by_account": attn_by_account,
         }
 
     @app.post("/api/unified-inbox/mark-read")

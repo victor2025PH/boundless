@@ -1328,6 +1328,7 @@ async function checkForUpdatesManual(win) {
   }
   try {
     autoUpdater.autoDownload = true;
+    autoUpdater.disableDifferentialDownload = true; // 见 setupAutoUpdate 的原因说明
     const r = await autoUpdater.checkForUpdates();
     const latest = r && r.updateInfo && r.updateInfo.version;
     if (latest && latest !== ver) {
@@ -1349,13 +1350,22 @@ async function checkForUpdatesManual(win) {
   }
 }
 
-/** 自动更新（仅发布态；dev 跳过。失败不阻断启动）。需 package.json::build.publish 指向真实更新源。 */
+/** 自动更新（仅发布态；dev 跳过。失败不阻断启动）。需 package.json::build.publish 指向真实更新源。
+ *
+ * ⚠ disableDifferentialDownload=true（2026-07-29 实机事故）：0.2.6→0.2.7 在测试机上
+ * 差分下载**卡死在 0 字节**——blockmap（235KB）下来了，随后 temp-*.exe 建出来就再无进展，
+ * 用户端表现为「一直不更新，问题还在」。整包 216MB 直下反而稳（LAN/公网都实测过）。
+ * 差分省的那点流量，换不来「更新链路静默失效」的代价。
+ */
 function setupAutoUpdate() {
   if (!app.isPackaged) return;
   try {
     const { autoUpdater } = require("electron-updater");
     autoUpdater.autoDownload = true;
+    autoUpdater.disableDifferentialDownload = true;
     autoUpdater.on("error", (e) => console.log(`[updater] ${String((e && e.message) || e)}`));
+    autoUpdater.on("download-progress", (p) =>
+      console.log(`[updater] 下载中 ${Math.round((p && p.percent) || 0)}%`));
     autoUpdater.on("update-downloaded", () => console.log("[updater] 更新已下载，下次重启生效"));
     autoUpdater.checkForUpdatesAndNotify().catch((e) =>
       console.log(`[updater] check failed: ${String((e && e.message) || e)}`));

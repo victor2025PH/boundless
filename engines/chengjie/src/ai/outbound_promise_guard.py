@@ -95,6 +95,10 @@ _IMG_PROMISE = [re.compile(p, re.IGNORECASE) for p in (
     # pt（"te mando uma foto"、"vou te mandar uma foto/selfie"）
     r"\bte\s+mando\s+uma\s+(?:foto|selfie)",
     r"\bvou\s+te\s+mandar\s+uma\s+(?:foto|selfie)",
+    # 粤语（2026-07-29 对练补漏：俾=给 睇=看 影=拍 而家=现在 即刻=马上）——
+    # 「而家即刻拍俾你睇」「影张相畀你」这类将发承诺此前全漏。
+    r"(?:而家|即刻|等我|待我)\s*(?:即刻|马上|馬上)?\s*(?:影|拍|影返|拍返)\s*(?:张|張|多|翻|返)?\s*(?:相|相片|自拍)?\s*(?:畀|俾|給|给)\s*你",
+    r"(?:影|拍)\s*(?:多)?\s*(?:张|張|翻|返)?\s*(?:相|相片|自拍)?\s*(?:畀|俾)\s*你\s*(?:睇|睇下|睇吓)?",
 )]
 
 # 视频通话承诺/应允（区别于"发你个视频"——那是媒体视频，走 _try_autosend_video 可兑现；
@@ -126,6 +130,94 @@ _VOICE_PROMISE = [re.compile(p, re.IGNORECASE) for p in (
     r"(?:ボイス|音声|ボイスメッセージ)\s*(?:を)?\s*(?:送|おく)(?:る|り|っ)",
     r"(?:음성|보이스)[^\n]{0,6}보낼",
     r"\bte\s+mando\s+un\s+(?:audio|mensaje\s+de\s+voz)",
+)]
+
+# ── 完成/进行「断言」（claim）：声称照片/语音**已发或正在发**───────────────────
+# 与 promise（将发）正交：promise 撤回改「先聊聊」，claim 是「已经发了」的谎——
+# 本轮真发了媒体=真话（放行），没发=谎（撤回）。2026-07-29 对练实证：promise 词表
+# 抓不到「这不就来了嘛/发到群里了/刚发的/你看看这张」这类完成态，是「说发没发」主因。
+# claim 一律 gate 在 media_context（客户本轮在**索要**媒体）——否则「客户发图问好看吗
+# →AI『这张真好看』」会被误判。事故场景全是客户要图/要语音，media_context 全覆盖。
+_IMG_CLAIM_STRONG = [re.compile(p, re.IGNORECASE) for p in (
+    # 照片/自拍/图 + (已经/刚/这就) + 发/传/给 + 你/了/过去/出去
+    r"(?:照片|自拍|相片|美照|靓照|靚照|图片?|圖片?)\s*(?:已经|已經|刚|剛|这就|這就|就)?\s*"
+    r"(?:发|發|传|傳|给|給)\s*(?:给|給)?\s*(?:你了?|过去了?|過去了?|出去了?|了|啦)",
+    r"(?:发|發|传|傳)\s*(?:给|給)?\s*你\s*(?:了|啦|过去了|過去了)",   # 发你了/发给你了
+    r"(?:发|發|传|傳)\s*(?:过去|過去|出去)\s*(?:了|啦)",             # 传过去了
+    r"(?:照片|自拍|相片|图|圖)\s*(?:来|來)\s*(?:啦|了|咯|喽|囉)",     # 照片来啦
+    r"刚\s*(?:才|剛)?\s*(?:拍|发|發|傳|传)\s*(?:的|了|好|完|好啦|好了|过去|過去)",  # 刚拍的/刚发的
+    r"拍\s*好\s*(?:啦|了|咯)",                                       # 拍好啦（独立完成态）
+    # 指示「这/那张」+ 看/怎么样/喜欢（暗示图已在对方手里）
+    r"(?:这|這|那|上|前)\s*(?:一)?[张張][^。！？!?\n]{0,10}"
+    r"(?:看|瞧|怎么样|怎麼樣|好看|喜欢|喜歡|如何|行不行|满意|滿意|中意)",
+    r"(?:再)?\s*(?:仔细|仔細)?\s*看\s*(?:看|下|一下)?\s*(?:这|這|那)\s*(?:一)?[张張]",
+    # en
+    r"\b(?:i\s+)?(?:just\s+)?sent\s+(?:you\s+)?(?:it|a|an|one|the|my|another)?\s*"
+    r"(?:photo|pic(?:ture)?|selfie)?\b",
+    r"\bhere(?:'|’)?s\s+(?:the|a|my|one)?\s*(?:photo|pic(?:ture)?|selfie)",
+    r"\bthere\s+you\s+go\b", r"\bcheck\s+(?:it|this|that)\s+out\b",
+    # ja / ko
+    r"送った(?:よ|ね)?|送りました", r"보냈(?:어|어요|습니다)",
+    # 粤语完成态（啱啱/头先=刚刚 影咗=拍了 嘅=的）——「啱啱拍嘅」「影咗俾你」
+    r"(?:啱啱|头先|頭先|刚先|剛先|头采|頭采)\s*(?:至|先)?\s*(?:影|拍)\s*(?:咗|嘅|好|返)",
+    r"(?:影|拍)\s*咗\s*(?:张|張|返)?\s*(?:相|相片|自拍)?\s*(?:畀|俾)?\s*你?",
+    r"(?:相|相片)\s*(?:已经|已經)?\s*(?:畀|俾)\s*(?:咗)?\s*你",
+    r"(?:而家|啱啱|头先|頭先)\s*(?:先|至)?\s*(?:影|拍)\s*(?:嘅|㗎|架|咗)",
+)]
+
+_VOICE_CLAIM_STRONG = [re.compile(p, re.IGNORECASE) for p in (
+    r"(?:语音|語音)\s*(?:已经|已經|刚|剛|这就|這就|就)?\s*(?:发|發|录|錄|传|傳)\s*(?:给|給)?\s*(?:你了?|过去了?|過去了?|了|啦)",
+    r"(?:发|發|录|錄)\s*(?:给|給)?\s*你\s*(?:一?[条條段])?\s*(?:语音|語音)\s*(?:了|啦)",
+    # 语序无关：录/发/传 (+了/好) (+一条) + 语音（含「录了条语音」「给你录了条语音」）
+    r"(?:发|發|录|錄|传|傳)\s*了?\s*(?:一?[条條段个個])?\s*(?:语音|語音)",
+    r"(?:语音|語音)\s*(?:来|來)\s*(?:啦|了)",
+    r"\b(?:i\s+)?(?:just\s+)?sent\s+(?:you\s+)?(?:a\s+)?voice",
+)]
+
+# claim 专属排除面：只排「否认/疑问/远期/明确旧照」——**不排裸「那张/这张」**
+# （promise 的 _EXCLUDES 把「那[张張]」当过去指涉，会把「刚发的那张」误放行，
+#  正是审计点的核心矛盾）。只有带发送动词的「上次发/之前拍」才算真旧照引用。
+_CLAIM_EXCLUDES = [re.compile(p, re.IGNORECASE) for p in (
+    r"不能|不方便|没法|沒法|无法|無法|发不了|發不了|不发|不發|不给|不給|别发|別發|不会发|不會發|拍不了",
+    r"\bcan(?:'|’)?t\b|\bcannot\b|\bunable\b|\bwon(?:'|’)?t\b",
+    r"改天|下次|以后|以後|回头|回頭|有机会|有機會|哪天|下回|过几天|過幾天|周末|週末|明天|到时候|到時候|见面|見面",
+    r"\bsomeday\b|\bnext\s+time\b|\btomorrow\b|\blater\s+this\b|\bwhen\s+we\s+meet\b",
+    r"上次(?:发|發|拍|传|傳)|之前(?:发|發|拍|传|傳)|昨天(?:发|發|拍)|以前(?:发|發|拍)|前(?:几天|幾天)(?:发|發|拍)",
+)]
+
+# 弱完成态（不带媒体名词）——仅 media_context 时判（否则「消息来了/我来了」会误伤）
+_MEDIA_DONE_WEAK = [re.compile(p, re.IGNORECASE) for p in (
+    r"这不\s*就?\s*(?:来|來)\s*(?:了|啦)",                            # 这不就来了嘛
+    r"(?:发|發|传|傳)\s*(?:到|去|在)\s*(?:群|群里|群裡|群組|群组)",   # 发到群里（私聊错乱强信号）
+    r"你\s*(?:再)?\s*看\s*(?:看|下|一下)?\s*(?:合|喜|中意|满意|滿意|好不好|怎么样|怎麼樣|漂不漂亮|美不美)",
+    r"(?:已经|已經|刚|剛|这就|這就|就)\s*(?:发|發|传|傳)\s*(?:了|啦|出去|过去|過去)(?![什么么问])",
+    r"给\s*你\s*(?:发|發|传|傳)\s*(?:了|啦|过去了|過去了)",
+    r"\b(?:i\s+)?(?:just\s+)?sent\s+it\b|\byou\s+can\s+see\s+it\b|\bit(?:'|’)?s\s+there\b",
+)]
+
+# ── 客户是否在「索要」媒体（media_context 判据；A/B 线共用）────────────────────
+_WANTS_IMG = [re.compile(p, re.IGNORECASE) for p in (
+    r"(?:发|發|传|傳|来|來|給|给|拍)\s*(?:张|個|个|張|条|一下)?\s*(?:你的?)?\s*(?:照片|自拍|相片|真人|靓照|靚照|图|圖|样子|樣子)",
+    r"看\s*(?:看|下|一下)?\s*(?:你|你的?)\s*(?:照片|自拍|真人|样子|樣子|长啥样|長啥樣|长什么样)",
+    # 有没有/想要/给我 + 照片；「店里的照片」「海边的照片」这类点名索要
+    r"(?:有没有|有無|有冇|想要|想看|要看|給我|给我|发我|發我)\s*(?:.{0,10})?(?:照片|自拍|相片|靓照|靚照)",
+    r"(?:照片|自拍|相片)\s*(?:呢|吗|嗎|呀|啊|嘛)?\s*[?？]?\s*$",
+    r"你(?:长|長)\s*(?:啥|什么|甚麼)\s*样",
+    r"是\s*(?:不是|你)\s*本人|真人(?:吗|嗎|吧)|是真人",
+    r"\b(?:send|show|got|have)\s+(?:me\s+)?(?:a\s+|your\s+)?(?:photo|pic(?:ture)?|selfie|face)",
+    r"\bwhat\s+do\s+you\s+look\s+like\b|\breal\s+person\b",
+    # 粤语索要（影相=拍照 睇=看 畀/俾我睇=给我看）
+    r"(?:影|拍)\s*(?:张|張)?\s*(?:真人)?\s*(?:相|相片|自拍)",
+    r"(?:畀|俾)\s*我\s*(?:睇|睇下|睇吓)|睇\s*(?:下|吓)?\s*你\s*(?:嘅)?\s*(?:相|样|樣|真身)",
+    r"真身\s*系?\s*咪|係咪真人|系咪真人",
+)]
+_WANTS_VOICE = [re.compile(p, re.IGNORECASE) for p in (
+    r"(?:发|發|录|錄|来|來)\s*(?:条|個|个|段)?\s*(?:语音|語音)",
+    r"想\s*听\s*(?:听|下)?\s*(?:你的?)?\s*(?:声音|聲音|嗓音)",
+    r"(?:语音|語音)\s*(?:呗|吧|来|來|我听|說|说)",
+    r"唱\s*(?:首|个|個|一|两|兩)?\s*(?:歌|首歌)|唱\s*(?:给|給|来|來).{0,4}(?:听|聽)|给我唱|給我唱|唱两句|唱兩句",
+    r"说\s*句?\s*(?:话|話)\s*(?:我)?\s*听|說\s*句?\s*(?:话|話)",
+    r"\b(?:send|record)\s+(?:me\s+)?(?:a\s+)?voice|\bsing\b|\bhear\s+your\s+voice",
 )]
 
 # ── 排除面（命中任一 → 该句不算承诺）──────────────────────────────────────────
@@ -241,6 +333,99 @@ def strip_media_promises(text: str) -> str:
     return res
 
 
+# ── 完成/进行「断言」检测（claim；本轮无媒体时即谎言）───────────────────────────
+def wants_media(peer_text: str) -> str:
+    """客户本条是否在**索要**照片/语音/唱歌 → 'image'/'voice'/''（纯函数）。
+
+    这是 claim 检测的 media_context 判据（A/B 线共用）：只有客户在要媒体时，
+    才把 AI 的「这不就来了嘛/你看看这张」当完成断言判——否则「客户发图问好看吗
+    →AI『这张真好看』」会被误伤（那是评论对方的图，不是声称自己发了）。
+    """
+    s = str(peer_text or "")
+    if not s.strip():
+        return ""
+    for rx in _WANTS_IMG:
+        if rx.search(s):
+            return KIND_IMAGE
+    for rx in _WANTS_VOICE:
+        if rx.search(s):
+            return KIND_VOICE
+    return ""
+
+
+def _sentence_claim_kind(sent: str, *, media_context: bool) -> str:
+    """单句是否「声称已发/正在发」媒体。返回 'image'/'voice'/''。
+
+    strong（带媒体名词/指示词）：media_context 时判。
+    weak（宽泛完成词）：仅 media_context 时判（无语境时「消息来了」会误伤）。
+    疑问句/远期/否认（EXCLUDES）一律不算——「照片发你了吗？」是问不是断言。
+    """
+    s = str(sent or "").strip()
+    if not s or not media_context:
+        return ""
+    if _QUESTION_TAIL_RE.search(s):
+        return ""
+    for ex in _CLAIM_EXCLUDES:
+        if ex.search(s):
+            return ""
+    # voice 先于 image：「语音发你了」的「发你了」也命中 IMG_STRONG，须先判语音轨
+    for rx in _VOICE_CLAIM_STRONG:
+        if rx.search(s):
+            return KIND_VOICE
+    for rx in _IMG_CLAIM_STRONG:
+        if rx.search(s):
+            return KIND_IMAGE
+    for rx in _MEDIA_DONE_WEAK:
+        if rx.search(s):
+            return KIND_IMAGE  # 弱完成态默认归 image（最常见；语音有独立 strong 轨）
+    return ""
+
+
+def detect_media_claim(text: str, *, media_context: bool = False) -> str:
+    """出站文本是否**声称**媒体已发/正在发（区别于 detect_media_promise 的「将发」）。
+
+    返回 'image'/'voice'/''（image 优先——它有兑现路径可把谎变真）。
+    ``media_context``＝客户本轮在索要媒体（见 ``wants_media``），False 直接返回 ''。
+    """
+    if not media_context:
+        return ""
+    found = ""
+    for sent in _sentences(text):
+        k = _sentence_claim_kind(sent, media_context=True)
+        if k == KIND_IMAGE:
+            return KIND_IMAGE
+        if k and not found:
+            found = k
+    return found
+
+
+def strip_media_claims(text: str, *, media_context: bool = False) -> str:
+    """句级剥离「声称已发」的断言句（与 strip_media_promises 对称）。
+
+    只在「本轮无媒体真发 + 客户在要媒体」时调用；media_context=False 原样返回。
+    """
+    raw = str(text or "")
+    if not raw.strip() or not media_context:
+        return raw
+    parts = _SENT_SPLIT_RE.split(raw)
+    out: List[str] = []
+    i = 0
+    while i < len(parts):
+        seg = parts[i]
+        delim = parts[i + 1] if i + 1 < len(parts) else ""
+        if seg.strip() and _sentence_claim_kind(seg, media_context=True):
+            i += 2
+            continue
+        out.append(seg)
+        if delim:
+            out.append(delim)
+        i += 2
+    res = "".join(out).strip()
+    if res and not re.search(r"[\w\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", res):
+        return ""
+    return res
+
+
 def build_promise_rewrite_instruction(text: str, kind: str = KIND_IMAGE) -> str:
     """LLM 撤回重写指令（首选路径；任意语言可靠）。只输出改写后的消息正文。"""
     t = str(text or "").strip()[:400]
@@ -257,11 +442,13 @@ def build_promise_rewrite_instruction(text: str, kind: str = KIND_IMAGE) -> str:
         )
     what = "语音" if kind == KIND_VOICE else "照片"
     return (
-        f"下面这条聊天消息答应了要发{what}，但{what}这一轮实际发不出去。\n"
-        f"请改写这条消息：删掉所有「要发/正在发/等我拍/来了」这类关于{what}的承诺或暗示，"
+        f"下面这条聊天消息里，答应要发{what}、或声称{what}已经发了/发过去了/"
+        f"让对方查收，但{what}这一轮实际并没有发出去。\n"
+        f"请改写这条消息：删掉所有「要发/正在发/等我拍/来了/已经发了/发过去了/"
+        f"你看看这张/发到群里」这类关于{what}的承诺、暗示或**已发断言**，"
         "其余内容、语言、语气、长度尽量保持原样；"
         "如果整条消息都在说这件事，就用同样的语言和语气写一句自然地岔开话题的话"
-        "（比如先聊聊天、卖个关子），不要道歉、不要解释系统原因。\n"
+        "（比如先聊聊天、卖个关子），不要道歉连篇、不要解释系统原因、不要说自己是 AI。\n"
         "只输出改写后的消息正文，不要引号。\n"
         f"原消息：「{t}」"
     )
@@ -368,6 +555,7 @@ def offer_accepted(peer_text: str, history: Optional[Sequence[Dict[str, Any]]]) 
 __all__ = [
     "KIND_IMAGE", "KIND_VIDEOCALL", "KIND_VOICE",
     "detect_media_promise", "strip_media_promises",
+    "detect_media_claim", "strip_media_claims", "wants_media",
     "build_promise_rewrite_instruction", "deflection_line",
     "detect_media_offer", "is_short_affirmative", "offer_accepted",
 ]

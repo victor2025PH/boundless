@@ -86,7 +86,11 @@ $gates = @(
     'tests/test_copilot_theme_tokens.py',
     'tests/test_admin_route_inventory.py',
     'tests/test_ops_overview.py',
-    'tests/test_duel_bench_status.py'
+    'tests/test_duel_bench_status.py',
+    # CWD 相对路径风险（生产进程 CWD = 实例数据根，非引擎根）：被服务静态资产/
+    # 代码根资源用相对路径 → 本地一切正常、只在真实部署才错位。2026-07-29 实锤：
+    # 自身头像写进 <数据根>/src/web/static/... → 永久 404（且指纹去重不重下）。
+    'tests/test_static_asset_paths.py'
 )
 
 $missing = @($gates | Where-Object { -not (Test-Path (Join-Path $engineRoot $_)) })
@@ -115,6 +119,15 @@ if ($Full) {
     Write-Output ''
     Write-Output '=== -Full: multi-window coordinator, real browser (tools\verify_multiwin_ui.py) ==='
     python (Join-Path $engineRoot 'tools\verify_multiwin_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Account rail scoped view (2026-07-29 incident class): "click account X, see
+    # account X" is a user-level invariant spanning drawer CTA / rail chips / overview
+    # dropdown / scoped fetch. Static gates cannot prove it; hot-reloaded templates
+    # ship straight to production. Read-only; missing playwright / instance => SKIP.
+    Write-Output ''
+    Write-Output '=== -Full: account rail scoped view, real browser (tools\verify_account_rail_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_account_rail_ui.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 }
 

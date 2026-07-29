@@ -30,6 +30,11 @@ _KNOWN_TYPES = {
     # apiFetch 网络层失败的语义类型（非 JS Error.name）：超时 vs 硬网络错分开看
     # ——之前全被折叠成 "Error"，「坐席在超时还是在断网」这层信号被丢掉了。
     "timeout", "neterr",
+    # 账号视角/深链「意图落空」语义类型（2026-07-29 P9 补录）：此前不在白名单，
+    # 全被折叠成 "Error"——by_type 里根本看不见这几类，只能靠 fn 猜。
+    # scoped_fail=账号 scoped 取数失败；dead_intent=查看会话目标账号不在册；
+    # conv_not_found=?conv= 深链经窗口刷新+scoped 救援后仍找不到目标会话。
+    "scoped_fail", "dead_intent", "conv_not_found",
 }
 
 

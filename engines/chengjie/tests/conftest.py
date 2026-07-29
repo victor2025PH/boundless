@@ -54,6 +54,24 @@ except Exception:
     pass
 os.environ["REUNION_PROMPTS_PATH"] = str(_TEST_REUNION)
 
+# 意图字典（``config/intent_tags.yaml``）＝生产在用的跨平台意图词表，且后台有整套
+# 编辑栈会**写**它（``write_intent_tags_yaml`` + 时间戳备份轮转 + restore）。它不走
+# AITR_DATA_DIR，但自带 ``INTENT_TAGS_PATH`` 覆盖钩子 → 与 reunion 同款：指到 tmp 并把
+# 仓库真值拷一份过去（读到的内容与生产一致，只有写落 tmp）。
+# 现状（2026-07-29 探针实测）：既有 intent_tags 用例都自设该变量，唯一触及写端点的
+# ``test_admin_route_inventory`` 只静态列 URL 不真调 → 这颗地雷**当前不可达**。
+# 本兜底是防「以后谁加一个真打 /api/rpa/intent-tags/write 的路由测试」——那一刻
+# 生产词表就会被测试数据覆盖 + 备份轮转把真值挤走（global_rules 已实锤过同样剧本）。
+# 自设该变量的用例晚于本处生效，不受影响。
+_REPO_INTENT_TAGS = Path(__file__).resolve().parent.parent / "config" / "intent_tags.yaml"
+_TEST_INTENT_TAGS = _TEST_DATA_ROOT / "config" / "intent_tags.yaml"
+try:
+    if _REPO_INTENT_TAGS.exists():
+        shutil.copy2(_REPO_INTENT_TAGS, _TEST_INTENT_TAGS)
+except Exception:
+    pass
+os.environ["INTENT_TAGS_PATH"] = str(_TEST_INTENT_TAGS)
+
 from starlette.testclient import TestClient
 
 from src.utils.config_manager import ConfigManager  # noqa: E402  (env 剥离必须先跑)
@@ -480,11 +498,14 @@ def _isolated_global_rules(tmp_path):
     try:
         yield
     finally:
-        # 测试可能自行 reset() 换了单例；恢复到当时那个实例上即可
-        cur = PersonaManager.get_instance()
-        cur._global_rules_path = old_path
-        cur._global_rules = old_cache
-        cur._global_rules_sig = old_sig
+        # 只在**单例还是我改过的那一个**时还原。若用例自己 reset() 了单例
+        # （``test_global_rules_overlay.py`` 那类专测自动解析链的测试就这么做），
+        # 此处绝不能再 get_instance() 把它复活、还盖上一个陈旧的 tmp 覆写——
+        # 那会让下一个依赖自动解析的用例读到上一个用例的 tmp 路径。
+        if PersonaManager._instance is pm:      # noqa: SLF001
+            pm._global_rules_path = old_path
+            pm._global_rules = old_cache
+            pm._global_rules_sig = old_sig
 
 
 @pytest.fixture()

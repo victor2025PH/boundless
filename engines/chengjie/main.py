@@ -742,6 +742,35 @@ class AIChatAssistant:
         except Exception:
             self.logger.warning("FateX 产品库初始化失败（已忽略）", exc_info=True)
 
+    def _maybe_init_frontend_error_trend_log(self) -> None:
+        """P9：按 ``ops.frontend_error_trend`` 装配前端错误/意图落空日聚合落库（默认关）。
+
+        开启后 beacon 路由（/api/telemetry/frontend-error）旁路把消毒后的错误类型
+        （ReferenceError/timeout/scoped_fail/dead_intent/conv_not_found…）按日 upsert
+        进 ``fe_trend.db``，ops 看板经 ``/api/admin/frontend-error-trend`` 读近 N 天
+        ——「意图落空在收敛还是回潮」从进程内瞬时快照变成可回看的时间线。
+        """
+        try:
+            _ops = (self.config.config.get("ops") or {})
+            _fet = (_ops.get("frontend_error_trend") or {})
+            if not _fet.get("enabled", False):
+                self.logger.info(
+                    "前端错误趋势落库未启用（ops.frontend_error_trend.enabled=false）")
+                return
+            from src.web.frontend_error_trend import configure_frontend_error_trend
+            _cfg_dir = Path(self.config.config_path).parent
+            store = configure_frontend_error_trend(
+                enabled=True,
+                db_path=_cfg_dir / "fe_trend.db",
+                retention_days=float(_fet.get("retention_days", 90)),
+            )
+            if store is not None:
+                self.logger.info(
+                    "✅ 前端错误趋势落库已就绪（retention=%sd）",
+                    _fet.get("retention_days", 90))
+        except Exception:
+            self.logger.warning("前端错误趋势落库初始化失败（已忽略）", exc_info=True)
+
     def _maybe_init_identity_trend_log(self) -> None:
         """F1：按 ``inbox.identity.trend_log`` 装配会话身份健康日聚合落库（默认关）。
 

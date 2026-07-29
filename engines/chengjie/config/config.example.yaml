@@ -1797,6 +1797,11 @@ companion:
     # 告警阈值校准提供真实分布。关闭时零 IO。
     trend_log: false
     trend_retention_days: 90
+  # 时空接轨守卫（默认开）：人设当地墙钟 vs 出站时段问候/错城「我在 X」。
+  # 2026-07 实录：温哥华人设时间行被二次换算成近似 UTC+8 正午 → LLM 说「下午好」；
+  # 根因已在 persona_now 幂等修复，本守卫作出站第二道防线（句级剥离，可关）。
+  world_clock_guard:
+    enabled: true
   # 命理技能（八字/运势陪聊，对标 AuraMate「灵体对话」形态）：聊到算命/运势时把命盘
   #   摘要作为**内部参考**注入 prompt，由 LLM 以当前人设口吻自然展开（不切报告腔、不短路）；
   #   缺生辰则顺势自然采集（年/月/日/时辰/公历农历，AI 复述确认后自动落库 episodic user_stated，
@@ -2282,6 +2287,24 @@ inbox:
   # 草稿风险映射：low→L2（自动发送）/ medium→L3（需审批）/ high→L4（拦截）。
   auto_draft:
     enabled: true             # false = 禁用自动草稿生成
+    human_deliver: true       # ⭐ 坐席在工作台点「通过」后是否**真投递**到客户平台。
+                              #   默认 true。注意它**独立于** l2_autosend.deliver：后者管
+                              #   「AI 可否自己发」，点通过是人的明示决定（手动发送端点
+                              #   本就不受 deliver 约束）。曾因把两者混为一谈，导致
+                              #   「AI 拟稿 + 人审后发」这个最谨慎档位里发送按钮空转——
+                              #   坐席以为发了、客户什么也没收到，两端都看不出区别。
+                              #   置 false 恢复「通过仅 DB 标记 + 审计」的旧语义。
+                              #   接线状态可查 /api/drafts/autosend-status.human_deliver_wired。
+    stale_approve_hours: 24   # ⭐ 禁止「通过」（原样发 AI 原稿）的两档判据，拦下回 409：
+                              #   ① 稿龄超过此值——老稿子内容高度依赖当下情境（「我刚到家」
+                              #      「我现在在海边」），隔天原样发出会当场穿帮；
+                              #   ② 草稿生成后该会话**已经回过**（出站消息在后）且稿龄 >2h
+                              #      ——再发一遍＝重复或自相矛盾。因为「采用文案→手动发送」
+                              #      不会处置草稿行，那行会一直 pending，任何窗口点通过即重发。
+                              #      纯入站推进（客户连发两条）不算，那只是回复迟了。
+                              #   「改写后发送」(edit_send) 不受限（终稿是人写的）；
+                              #   「拒绝」永不受限（要能清积压）；主管 force-override 可放行。
+                              #   0 = 关闭该护栏。仅在 human_deliver 真接线时生效。
     min_text_len: 0            # 0=任意长度都回复（含 Hi/表情）；>0 时过滤更短消息
     automation_mode: auto_ai  # review | auto_ai — 决定 L2/L3 分界
                               # review:   low→L1, medium→L3, high→L4（无 L2 自动发）
@@ -2364,6 +2387,9 @@ inbox:
     deliver: false            # ⚠ 关键开关：true 才真正把 L2 草稿发到客户平台；
                               #   false（默认）仅在 DB 标记 approved + 写 autosend 审计，不发客户。
                               #   双重 opt-in：deliver=true 且会话档位=全自动(auto_ai) 才真自动回。
+                              #   ⭐ 只管「**AI 自己发**」：坐席点「通过」的人工投递**不受它约束**
+                              #   （见 inbox.auto_draft.human_deliver）——两者混用曾让人审档
+                              #   的发送按钮空转。
     min_interval_sec: 60      # 有活动时最短轮询间隔
     max_interval_sec: 600     # 静默时最长兜底间隔（指数扩张到此）
     startup_delay_sec: 60     # 首次启动延迟（默认=min_interval）。可被新 L2 草稿事件提前唤醒，
@@ -2718,6 +2744,14 @@ ops:
     enabled: false                     # 默认关；有多台 LAN GPU 时开
     hosts: []                          # [{name: "176-5090", base_url: "http://192.168.0.176:11434", vram_gb: 32}]
 
+  # ── 前端错误/意图落空趋势落库（P9，2026-07-29）─────────────────────
+  # beacon（/api/telemetry/frontend-error）的消毒类型按日 upsert 进 config/fe_trend.db，
+  # ops 看板「前端哑按钮错误」卡出近 7 天曲线——scoped_fail / dead_intent /
+  # conv_not_found 这类「点了没效果」是在收敛还是回潮，重启不丢（进程内计数会清零）。
+  frontend_error_trend:
+    enabled: false                     # 默认关；生产机经 config.local.yaml 打开
+    retention_days: 90                 # 日聚合保留天数（读端点顺手 prune）
+
   # ── 云端凭证健康（2026-07：首期 DeepSeek 余额水位）────────────────
   # 主对话走 DeepSeek 预付费云时，HealthWatchdog 周期探 /user/balance；余额低于
   # 阈值 → 主机弹窗（仅算力机；AITR_DESKTOP_MODE 用户端不弹）+ EventBus host_alert
@@ -2915,6 +2949,16 @@ health_watchdog:
     hang_fail_streak: 3               # 半死判定：真实合成连续失败次数阈值（0=关闭半死检测）
     hang_fresh_min: 20                # 半死判定：最近一次失败须在此窗口内（防陈旧信号误报）
     hang_after_min: 20                # 半死持续多久后首提（先让 EmotionTTSWatchdog 自动重启）
+  # 待审草稿积压无人处理（默认开）：补 SLA 告警的 **L1 盲区**——三档里 L2 由 worker 自动
+  # 发、L3/L4 有逐条 SLA 告警，而 L1（review 档 + low risk）**既不自动发也没有任何告警**，
+  # 偏偏它是唯一「必须人来处理」的一档 → 会无声烂掉（实测生产烂到 214h / 8.9 天才被发现）。
+  # 刻意做聚合信号（L1 是低风险日常稿，逐条告警＝噪音）；告警里单独点名「其中多少条不在
+  # SLA 覆盖内」。订阅：告警渠道加 draft_backlog 别名（webhook_notifier）。
+  draft_backlog_remind:
+    enabled: true
+    min_age_hours: 24                 # 稿龄超过此值才算「积压」
+    min_count: 3                      # 超龄条数达此值才告警（避免把日常波动当事故）
+    interval_min: 240                 # 重提间隔（4h）；队列清空自动补发恢复通知
   # 原生通话主机持续不可用升级提醒（默认开；telegram_calls 未启用/非 s2s 时天然静默）：
   # MiniCPM-o(176:7860) 掉线 → 来电全接不了，「她会接电话」卖点静默失效 → 主动外发。
   # 订阅：告警渠道加 tg_call 别名（webhook_notifier）。

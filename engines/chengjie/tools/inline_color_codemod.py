@@ -100,6 +100,8 @@ _E = [
     ("ink", "#7f1d1d", "--th-ink-red9", "#f26d5f"),
     ("ink", "#2d6cdf", "--th-ink-blue2d", "#79b8ff"),
     ("ink", "#a855f7", "--th-ink-purple5", "#c084fc"),
+    # 陈旧页横幅（ws-uibuild）：深青底上的浅青文字，两主题同值（底恒深）
+    ("ink", "#ccfbf1", "--th-ink-teal1", None),
     # ── bg：表面/软底/实底 ──
     ("bg", "#fff", "--th-bg-surface", "#1e2026"),
     ("bg", "#ffffff", "--th-bg-surface", "#1e2026"),
@@ -110,6 +112,8 @@ _E = [
     ("bg", "#1e293b", "--th-bg-slate8", None),  # 刻意深底部件，常量
     ("bg", "#0f172a", "--th-bg-slate9", None),
     ("bg", "#1a1f2e", "--th-bg-inkpanel", None),
+    ("bg", "#0f766e", "--th-bg-teal8", None),   # 陈旧页横幅渐变（深青，两主题同值）
+    ("bg", "#134e4a", "--th-bg-teal9", None),
     ("bg", "#dc2626", "--th-bg-red6", "#e0524a"),
     ("bg", "#ef4444", "--th-bg-red5", "#e0524a"),
     ("bg", "#991b1b", "--th-bg-red8", None),

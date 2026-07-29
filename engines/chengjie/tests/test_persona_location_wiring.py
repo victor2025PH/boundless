@@ -80,5 +80,10 @@ def test_inject_scene_state_writes_local_time_keys():
     SkillManager._inject_scene_state(sm, ctx)
     assert ctx.get("_persona_place_label") == "加拿大·温哥华"
     assert "_persona_local_now" in ctx
-    assert "温哥华" in (ctx.get("_persona_local_time_line") or "")
+    _lt = ctx.get("_persona_local_time_line") or ""
+    assert "温哥华" in _lt
+    # 当地墙钟与时间行必须同小时（防二次换算把温哥华深夜拧成 UTC+8 正午）
+    _local = ctx["_persona_local_now"]
+    assert f"{_local.hour:02d}:" in _lt
+    assert "UTC+8" in _lt
     assert ctx.get("_current_scene_note")

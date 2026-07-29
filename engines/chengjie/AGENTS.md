@@ -121,10 +121,22 @@ python -m pytest tests/test_draft_resolve_concurrency.py tests/test_multiwin_p2.
 ② **发送幂等** `src/inbox/send_dedup.py`：前端每次提交带 `client_msg_id`，服务端按
  `(会话, id)` TTL 窗去重；**仅首见占坑**（重复命中记 duplicate 不新增 reserved），
  失败释放占位（同 id 显式重试仍可发）。覆盖 send / send-media / send-voice 三路由。
+ **它只防「同一请求被重放」**（网络层重试等 → 同 id）；「用户连按两次」是两次独立提交、
+ id 不同，服务端抓不住 → 客户端 `_sendInFlight` 闸门拦（发送按钮请求期已 disabled，但
+ **Enter 键路径直接调 sendMsg 绕过按钮**，实测缺口；媒体路径另有 `_mediaSending`）。
+ 「两台设备各自输入同一句话分别发出」**刻意不防**——那是两次真实意图，改成内容级去重
+ 会误伤聊天里正常的重复短语（「好」「在吗」）。
 ③ **前端多窗口协调器** `workspace_base.html::__wsMultiWin`：坐席页单主控（localStorage
  主控位 + storage 事件；刻意不用 Web Locks——LAN http 下无安全上下文不可用），第二窗口出
  「在此使用/保持待机」，待机窗口停轮询断 SSE 全静音，主控崩溃 15s 内自动接管；
  全局**提示音领导权**顺带修掉「收件箱+看板两页同时响铃」。
+ **保证边界（别误解成全局互斥）**：localStorage 只在**同一浏览器 profile 内**共享 →
+ 「桌面壳(Electron webview) + 浏览器标签页」「两台电脑」「Chrome + Edge」这些组合
+ 协调器互不感知，仍会各自响铃、各自可操作。跨设备真正兜住的是 ①（**草稿处置**的
+ DB 级原子闸门，与进程/设备数无关）；② 的幂等键是**进程内**表（当前单实例成立，
+ 将来若多进程负载均衡需改共享存储）。③ 只负责同一浏览器内的体验（少噪音、少误操作）。
+ 跨进程互斥若将来真要做，数据地基已在：presence 心跳携窗口指纹 → `AgentCoordinator`
+ 按坐席聚合 `windows/standby_windows`（进程内 TTL 90s）。
 **乐观锁**（防长编辑表单丢更新）：`persona_manager.profile_rev` 通用内容指纹 → 人设档案 /
  全局规则 / 意图关键词三处 `GET 回 rev → PUT 带 expected_rev → 不一致 409 → 前端确认后免键覆盖`。
  判据＝**整文档替换才需要**；字段级 patch 端点（`/api/settings/save`）刻意**不**加，
@@ -140,6 +152,32 @@ python tools/verify_multiwin_ui.py --shots out/      # 双标签页验协调器�
 `verify_multiwin_ui.py` 已挂进 `gate_sweep.ps1 -Full`（协调器是纯前端逻辑，静态门禁只能证
 「函数挂了 window」、证不了「两标签页互斥成立」，而模板热更新直上生产）；缺 playwright
 或实例不可达一律 **SKIP exit 0**，不污染回归信号。
+**周批真发刻意不做**（每周往收藏消息累积杂物），改用**被动观测**：watchdog
+`_check_human_deliver_chain`（webhook 别名 `human_deliver`）——同进程窗口内「有人真的通过过
+草稿」却「投递计数恒 0 且零失败」＝一次都没尝试投递＝链断了。三个前提缺一不告警
+（`deliver_enabled` / 人工通过数 ≥ min_approvals / 零投递且零失败），零成本且比周批更早。
+门禁 `tests/test_human_deliver_watchdog.py`（15 例，重点覆盖「不该告警」的路径）。
+⚠️ 统计人工通过数**必须查 `reply_drafts` 表而非 `draft_audit_log`**：`resolve_with_audit`
+只在 L3/L4 或 autosend 时写审计，**L1/L2 的人工通过根本不落审计行**。
+
+**被服务静态资产的落盘路径不变量**（`tests/test_static_asset_paths.py`，2026-07-29 实锤）：
+凡「写了之后要经 `/static` 被访问」的目录**必须是 `Path(__file__)` 推的绝对路径**，绝不能用
+CWD 相对路径——双实例部署的进程 CWD 是**实例数据根**，相对路径会把文件写进
+`<数据根>/src/web/static/...`（web 服务从不挂载那里）→ URL 永久 404。实锤：
+`account_self_profile._DEFAULT_AVATAR_DIR` 曾是相对路径，LINE 账号自身头像永久裂图，
+且因指纹去重（`avatar_needs_refresh`）**不会重下、404 永久固化**；迁移前 CWD 恰好是代码根，
+所以故障只在迁移后新登录的号上出现。门禁含全站扫描（禁 `"src/web/static/..."` 字面量）。
+
+**相对路径并非一概有害**——落点该在哪取决于那东西是「数据」还是「代码」，用
+`python tools/audit_relative_paths.py [--strict]` 分类审阅（A 被服务静态资产 / B 代码根资源
+＝真缺陷；C 数据类 logs/config/*.db/tmp_* 落**实例数据根恰是想要的**＝无害）。
+当前 A 类 0 处、C 类 32 处、B 类仅 1 处**刻意例外**：
+`voice_prerender.DEFAULT_BASE_DIR = "assets/voices"`——写入方 CLI 显式按
+`resolve_data_roots()` 逐根解析、读取方靠「引擎 CWD == 实例数据根」的启动契约与之同址
+（实测 112 clip 全在数据根、引擎根 0）；两侧错开时失效是**软的**（回落现场合成
+~7s vs ~200ms，不报错）**且已被 `prerender_coverage`/`prerender_miss` 观测覆盖**，
+故刻意不重接管路。该例外由 `test_static_asset_paths.py` 里成对的两条门禁守住
+（写入方必须保持显式 + 该处必须带「为什么刻意如此」的说明），别顺手「修」掉它。
 `live_multiwin_drill` 四道护栏：默认只允许 `chat_key='me'`、真人会话须显式 `--allow-peer`、
 无 `--confirm` 只预检、判定以 prometheus 增量为权威。护栏与判定算式有纯函数门禁
 （`test_live_drill_guards.py`，含首次实施踩过的两个断言坑：reserved 增量算错 / 判定未按
@@ -161,6 +199,34 @@ desktop_selectors / licensing.data_paths / instance_restart_status 整个家族�
 ⚠️ 别做「每个测试前后快照 config/ 目录、变了就点名」的 autouse 守卫：实测 243 个假阳性——
 `-n auto` 并行下 worker A 的窗口会把 worker B 的写入算到 A 头上，`*.db` 被连接即改 mtime，
 且共享工作树上**其他 agent 线**正在编辑 config 文件。精度 > 覆盖：走「按写入口精确重定向」。
+`INTENT_TAGS_PATH` 亦已在 conftest 指向 tmp（拷仓库真值）：意图词表后台有整套写栈+备份轮转，
+当前无测试真调那些端点（`test_admin_route_inventory` 只静态列 URL），这是**防以后**——
+谁加一个真打 `/api/rpa/intent-tags/write` 的路由测试，生产词表就会被覆盖 + 备份轮转挤走真值。
+
+**global_rules 落盘＝overlay 模式**（P7-1，2026-07-29；`test_global_rules_overlay.py` 9 例）：
+旧实现读写同一个 `<repo>/config/global_rules.yaml`——那是**共享只读代码根**且被 git 跟踪，
+于是运营在 UI 改全局规则就把仓库改脏（可能撞 `restart_instance.ps1` 脏树闸门）、打包态那是
+只读安装目录根本存不下，也正是上面那起事故的土壤。现在：
+**读**＝可写数据区（`AITR_CONFIG_PATH` 父 → `AITR_DATA_DIR/config` → 仓内，顺序复用唯一事实源
+`licensing.data_paths.config_dir()`）那份存在就用它，否则回落仓库那份＝**出厂默认**；
+**写**＝只写可写数据区，首次保存把出厂内容迁过去并进 `.bak.1`（运营点「恢复槽位1」＝回出厂）。
+安全底线：读永远有回落，最坏「读到出厂默认」，**绝不读成空**（空＝所有人设丢硬约束）。
+`GET /api/persona/global-rules` 多回 `source`（读/写落点 + `is_instance_override`），
+把「出厂默认 vs 实例覆盖」的分叉对运维显式可见。
+⚠️ 两个坑已踩过并有回归钉住：① `_global_rules_path` 现在**只表示显式覆写**，自动解析每次重算——
+旧实现把解析结果缓存进该字段，首存后读路径仍钉在仓库那份 → 「运营改了却读不到」；
+② 本机 `D:\boundless` 是指向 `D:\workspace\boundless` 的**目录联接**，出厂路径用 `resolve()`
+而 `data_paths` 用 `abspath()` → 同一物理文件被算成两个路径 → 首存种子拷贝对同一文件调
+`shutil.copy2` 抛 `SameFileError` → **保存静默失败**。两边统一 resolve + `os.path.samefile` 兜底。
+
+**防双发防线周批**（P7-3）：`scripts\multiwin_drill_weekly.ps1` 把真发演练接成周期任务
+（**刻意不进 `gate_sweep -Full`**——它真发消息）。实例不在线＝SKIP exit 0（不把「服务当时没起」
+变成红告警），演练断言失败＝非零退出便于外部告警；UTF-8 日志落 `logs/multiwin_drill/` 保留 14 份。
+`-DryRun` 只跑只读预检可验接线。注册（未自动建，需人工决定）：
+```
+schtasks /Create /TN MultiwinDrillWeekly /SC WEEKLY /D SAT /ST 07:10 /F ^
+  /TR "powershell -ExecutionPolicy Bypass -File D:\boundless\engines\chengjie\scripts\multiwin_drill_weekly.ps1"
+```
 
 **陪伴能力「分阶段开启」主线**（看→校→开→观测→纠偏 闭环；纯函数 core 在 `src/companion/`，
 路由 `src/web/routes/companion_capability_routes.py` 挂 `/api/companion/capabilities*`，
@@ -1237,6 +1303,172 @@ config|percentile/population，与规划器同函数同数据）+ ops 卡「回�
   `git worktree add -b feat-xxx ../telegram-mtproto-ai-xxx <base>`（独立工作目录 +
   独立 index、共用 .git refs），冲突只在 merge 时显式解决；收尾 `git worktree remove`。
 
+### CWD 相对路径＝迁移后的静默失真（2026-07-29，双实例迁移遗留病）
+
+生产进程的 **CWD 是实例数据根**（`D:\chengjie-instances\<inst>\data`），不是引擎根。
+于是同一句 `open("config/config.yaml")` 在**服务进程**里恰好正确（落实例配置），在
+**从引擎根跑的 CLI**（`python -m scripts.run_eval`、周批 `Set-Location` 落点）里却读到
+迁移时刻遗留的旧副本。这类缺陷**不报错、不变红**，只是「用的不是在跑的那份」。
+
+- **实锤 A（静态资产）**：自身头像 `_DEFAULT_AVATAR_DIR` 相对 → 写进
+  `<数据根>/src/web/static/…`（**不被服务**）→ 永久 404，且 `avatar_needs_refresh`
+  指纹去重不再重下，问题被永久藏住。改绝对路径 + 迁移错位文件。
+- **实锤 B（评测配置）**：`src/eval/*` 四处 + `scripts/run_eval.py` 各自 CWD 相对读配置。
+  与实例在跑的配置 **4/9 个关键键不一致**（`ollama_mt` 端点拓扑：引擎根 `base_urls=[140,176]`
+  双活 vs 实例 `base_url=176` 单点；`per_lang_order` 引擎根有 hi 覆写 vs 实例已下线；
+  嵌入端点 140 vs 176 优先）。A/B 实证：同命令仅数据根不同 → **38.0s vs 15.1s**（耗时差
+  就是「先打 140」的证据），**两次都 10/10 PASS** ⇒ 光看报告永远发现不了。代价是归因
+  失真：「弱语对该不该进 `per_lang_order`」正是读这些数字决策的。
+  `run_eval` 的 `EVAL_LLM` 链更狠——**完全不合并 overlay**，而真 key 只在实例 overlay
+  （实例 base 是 `YOUR_API_KEY` 占位），它读的是引擎根里的**另一把旧 key**。
+- **收口**：`src/eval/eval_config.py::load_runtime_config`（复用 `scripts/_data_root`
+  的唯一事实源：CLI 值 → `AITR_DATA_ROOT` → 自动发现活跃实例 → 引擎根；软回落不抛）。
+  **注意别用** `licensing.data_paths.config_dir()`：它只认 `AITR_CONFIG_PATH`/`AITR_DATA_DIR`
+  两个 env，CLI 场景两者都没设 → 仍回落仓内。
+- **门禁**：`tests/test_eval_runtime_config.py`（禁 `src/eval` 再出现 CWD 相对读配置）
+  + `tests/test_static_asset_paths.py`（已进 `gate_sweep`；内含 AST 全站扫描，复用
+  `tools/audit_relative_paths` 的分类器当单一事实源，A/B 类零未登记条目）。
+  自查：`python tools/audit_relative_paths.py --strict`。
+- **分类口径**（工具 C 桶的前提）：`config/`、`logs/` 这类相对路径对**服务进程**无害
+  （CWD 就是数据根），只对**从引擎根跑的 CLI** 有害——判风险要先问「谁在什么 CWD 下跑」。
+- **优先级顺序本身就是那个模块的全部价值**（首版踩过，见 `load_runtime_config` docstring）：
+  无条件走数据根解析会让 `monkeypatch.chdir(tmp)` 的单测**静默去读生产实例配置**，
+  于是同一份测试「本机红、CI 绿」——与 global_rules 那次「测试写生产」同一类互串事故
+  （`test_embedding_providers` 两条就是这么红的）。正确序＝显式实参 → **CWD 有 config 且
+  CWD 不是引擎根**（保测试密闭 + 尊重「从某实例数据根直接跑」）→ 数据根契约（修「引擎根
+  读旧副本」）→ CWD 兜底。第 2/3 条的唯一分界就是「CWD 是不是引擎根」。
+- **影响面筛选别按文件名正则挑**（本轮唯一漏网根因）：我用
+  `test_(autosend|draft|inbox|human|bazi|…)` 挑测试，漏掉了**直接测试我改过的模块**的
+  `test_embedding_providers.py`，两条红要等 55 分钟的全量才暴露。改过 `src/X.py` 之后，
+  按**导入关系**找测试（`rg -l "import .*X|from .*X import" tests/`）比按名字猜可靠。
+
+**连带修好的评测保真度缺口**：修完配置解析后 `EVAL_LLM=1 --bazi-reading` 才真跑起来，
+随即暴露「我明年运势如何？」两次稳定不合格（失地）。根因**不是模型退化**，是评测的
+prompt 只喂四柱+大运，**缺聊天链才有的流年注入**（`extract_target_year` →
+`liunian_detail` → `format_liunian_line`，那条防线本就是为「防 LLM 徒手编干支」建的）
+——盘面里没有所问年份的干支可引用，LLM 只能泛泛而谈。既冤枉了产品，又让这条评测
+**从没覆盖到那道防线**。补齐后 **9/9 PASS**（与 7/13 基线一致）。同步了 skill_manager
+的「所问年==生年不注入」护栏与 `chart["day_master"][0]` 取法（别用 `day_gan`，键不存在）。
+
+### 人工通过 ≠ AI 自动发（2026-07-29，错闸门）
+
+`inbox.l2_autosend.deliver` 管的是「**AI 可否自己发**」；坐席点「通过」是**人的明示决定**。
+把后者闸在前者上会让「AI 拟稿 + 人审后发」这个**最谨慎、最常被推荐的档位**里发送按钮
+空转（`approveDraft` 只调 `/api/drafts/{id}/resolve`，**不走** send 端点；坐席以为发了、
+客户什么也没收到，两端都看不出区别）。**决定性论据**：手动发送端点
+`/api/unified-inbox/send` 本就不受 `deliver` 约束，用它闸人工通过自相矛盾。
+
+- 缺陷面＝**出货默认档**：`config/config.example.yaml:2369` 就是
+  `l2_autosend.enabled: true` + `deliver: false`（示例为安全起见默认不让 AI 自己发）
+  ⇒ **worker 在跑、人工投递却没有发送能力**。换句话说「示例文件为安全而推荐的那个
+  默认档，恰恰是坏的那个」，照抄示例部署的客户点通过全是空转。本机 zhiliao overlay
+  置了 `deliver=true` 故一直正常，掩盖了这个默认档缺陷（通译实例已退役，不构成证据）。
+- 修法：`AutosendWorker(human_send_callback=…)` 与自动链分开——deliver=false 时自动链
+  `send_callback=None`（语义不变），人工链仍拿到真发回调（bootstrap 以
+  `deliver_enabled=True` 另建一份）。注入改由 `inbox.auto_draft.human_deliver`
+  控制（**默认开**；置 false 恢复「仅标记」旧语义）。
+- 附带修真 bug：`_send_cb_kwargs` 原硬探 `self._send_callback`，deliver=false 时它是
+  `None` → `inspect.signature(None)` 抛 TypeError → 缓存 `False` → 人工链**永久丢
+  `original_text`**（语音分支据原文合成，丢了就用译文发声＝念错语言）。改为按**实际
+  调用的回调**分别探测缓存。
+- **接线状态可观测**（解掉「注入本身是静默的」这个盲区）：`DraftService.inbox_deliver_wired`
+  → `/api/drafts/autosend-status.human_deliver_wired`（**worker=None 分支也给**——那正是
+  最可能断的形态）。零流量即可判「链路在不在」，不必等真有坐席点过通过。重启后实测
+  zhiliao=`True`。
+- **看门狗判据同步升级为两档**（`_check_human_deliver_chain`）：接线状态**已知**时按它判
+  （**不再看 `deliver_enabled`**——旧闸门会恰好在新能力所在的人审档闭嘴，这是本次改动
+  带来的连带不一致，一起修了）；未接线＝确定性根因（告警带 `not_wired:true`，文案直接
+  指路配置与 bootstrap 注入）；接线状态**未知**（读不到 draft_service，多见于测试/异常态）
+  → 退回旧的保守闸门，信息不足宁可漏报不误报。运营显式 `human_deliver=false` 时全程静默。
+- **`l2_autosend.enabled=false` 的人审档已闭环**：worker 整体不创建时，bootstrap 兜底建一个
+  `deliver_only=True` 实例（**不 run() 自动循环**，只作人工投递载体）。刻意仍放
+  `app.state.autosend_worker` 键——autosend-status / Prometheus gauge / 看门狗 / 报表都从
+  那里读，塞同一键可让人工投递观测链**零改动全通**（比另起键+到处加回落更省更一致）；
+  语义歧义由快照里的 `deliver_only` + `running/enabled` 显式消掉，另加正交字段
+  `human_deliver_enabled`（人工链能力，与 `deliver_enabled` 互不代表）。
+  人工发送不属 `ai_autosend` 授权范畴（手动发送端点本就不受其约束）。
+
+**「已经回过了」是比年龄更准的判据**（同一护栏第二档）：坐席常走「采用文案 → 改写 →
+手动发送」，而**发送路由不处置草稿行**（实测确认 `unified_inbox_send_routes.py` 里没有任何
+resolve），那行于是永远 pending；投递接通后任何窗口点「通过」＝**再发一遍**（多开重复提交
+的又一个入口）。故 `_replied_after` 走既有 `list_recent_messages`（DESC 取尾，不必改
+他线在编辑的 store.py）判「草稿生成后是否已发出过回复」，命中且稿龄 >2h(grace) 即拦，
+文案与「单纯过期」分开（`err.draft.stale_replied` vs `err.draft.too_stale`——一个是会重复、
+一个是会脱节，坐席该做的事不同）。**刻意只认出站**：客户连发两条（纯入站推进）只说明
+回复迟了，原样发仍合理，拦它只会白挡坐席；读消息异常一律放行。
+2026-07-29 抽查生产 7 条待审：**0 例孤儿**（假设被证伪，没去修不存在的问题），但机制活着
+且投递已接通，故按「已回过」直接拦。
+
+**同轮必须配的陈旧护栏**（`inbox.auto_draft.stale_approve_hours`，默认 24h）：修好断链＝
+把队列里的老稿子**变成实弹**。生产实测待审年龄 **5.0h ～ 213.1h（8.9 天）**、5/7 超 24h，
+内容又极度依赖当下情境（「我刚到家，娃正在客厅拼乐高」「我现在就在 Seawall 这边」）——
+隔周原样发出不是尴尬，是**当场穿帮**。故 `DraftService._stale_check` 在**处置之前**拦
+（拦在 resolve 之后就又变成「标记了没发」）：只拦 `approve`（原样发）；`edit_send` 放行
+（终稿是人写的）、`reject` 永不拦（要能清积压）、无 `created_ts` 不拦（宁可放过不误拦）、
+未接线不拦（压根不会发）、`force_override` 是主管逃生门。阈值随投递回调同参注入
+（`set_inbox_deliver_callback(stale_approve_hours=)`）——「能真发」与「需要护栏」是同一件事。
+路由把**两种 409 分开**：`too_stale`（重新生成）vs `already_resolved`（刷新即可），坐席该做的
+事完全不同，混成一句话等于误导。门禁 `tests/test_draft_stale_guard.py`（12 例，重点是
+那些**不该误拦**的边界）。
+- 门禁 `tests/test_human_deliver_independent_of_autosend.py`（deliver 关仍真发 / 无路径
+  如实失败不静默成功 / 签名探测跟随实际回调且两回调缓存不串味 / 构造契约 / 静态接线
+  不得再被 `if _deliver:` 包住 / 看门狗四档语义：已接线忽略 deliver、未接线带确定性根因、
+  运营选择只标记则静默、接线未知退保守）。
+
+### 草稿告警的 L1 盲区（2026-07-29，214 小时积压的真因）
+
+生产待审队列实测 7 条、最老 **214h（8.9 天）**，其中 **6 条是 L1**。翻代码才发现三档
+各有归宿、唯独 L1 掉在缝里：
+
+| 档位 | 归宿 | 没人管会怎样 |
+|---|---|---|
+| L2（auto_ai + low） | AutosendWorker 自动发 | 照样发出去 |
+| L3 / L4（medium/high） | `SLAWatcher` 逐条 `draft_sla_breach` | 会响 |
+| **L1（review + low）** | **无自动发、无任何告警** | **无声烂掉** |
+
+`SLAWatcher._check_sla_breach` 明确 `autopilot_level not in ("L3","L4") → continue`，
+而 L1 恰恰是**唯一「必须人来处理」**的一档——告警洞正好开在最需要人的地方。
+（那条 L3 也烂了 167h，说明还有第二层：SLA 只推工作台铃铛，`notify_webhooks.json`
+默认 `enabled:false`，没人盯铃铛就等于没告警。）
+
+修法＝`HealthWatchdog._check_draft_backlog`（**不动 SLA 那个较复杂的状态机**；
+「没人在处理队列」是排班/注意力问题，属 ops 告警而非逐条草稿事件）：
+- 聚合信号而非逐条（L1 是低风险日常稿，逐条＝噪音）：默认 ≥3 条超 24h 触发，4h 重提，
+  队列**清空**才补恢复通知（部分消化不发，否则谎报「已处理完」）；
+- 告警里单独点名 `sla_uncovered`＝其中多少条**不在** SLA 逐条覆盖内（本检查的存在理由）；
+- 零误报前提：无 `created_ts` 的行不参与、取数异常静默、拿不到 draft_service 不猜；
+- webhook 别名 `draft_backlog`，文案带分级分布 + 最老稿龄 + 处置建议（含
+  `inbox.sla_watcher.auto_expire_hours` 这个长期缺人时的自动作废开关）。
+配置 `health_watchdog.draft_backlog_remind.{enabled,min_age_hours,min_count,interval_min}`。
+门禁 `tests/test_draft_backlog_watchdog.py` + `test_alert_delivery_e2e` 两个新 payload。
+
+**精度：数「客户在等」而不是「草稿行还挂着」**。坐席走「采用文案→手动发送」时发送路由
+不处置草稿行 → 那行一直 pending；把它算进「无人处理」就是**虚报**，运维开工作台一看
+「其实已经回过了」就再也不信这个告警了。故 `DraftService.conversation_replied_after`
+（护栏与巡检共用的公开入口）把两者分开：告警按「在等」触发，孤儿数走
+`already_replied` 另报（清账即可，不是客户在等）；`by_level`/`oldest_hours` 同样只算
+在等那批（否则孤儿会把最老稿龄撑大）。逐条要查一次会话消息 → `_BACKLOG_REPLY_PROBE_CAP`
+（50）封顶，**预算外与判定异常一律算在等**（宁可多报不漏报，漏报＝客户真的没人回）。
+旧 DraftService 无该方法时自动退化为纯年龄口径。
+
+**线上实弹验证**（2026-07-29 19:52:55，搭他线重启的便车装载后 73 秒）：
+`待审草稿积压：6 条超过 24h 无人处理（最老 215h，分级 {'L1': 5, 'L3': 1}；
+其中 5 条不在 SLA 逐条告警覆盖内）`——与独立探针数据完全吻合，整条链端到端跑通。
+
+### ⚠️ 告警出口当前为零（2026-07-29 实测，需运营决策）
+
+启动日志实证：`WebhookNotifier 已启动（**0 个 webhook**）`。`config/notify_webhooks.json`
+在**引擎根与实例数据根都不存在**，`config.yaml::notify.webhooks` 也是空、`webhook.enabled=False`。
+即：本仓所有 EventBus 告警（SLA 越线、草稿积压、人工投递断链、host_alert、avatar_voice…）
+**只进日志 + 工作台铃铛，没有任何外发通道**。那条 L3 草稿在 SLA 覆盖内却烂了 167h，
+根因就是「报进了虚空」——**告警链的最后一公里从未接通**。
+
+开通道需要 Telegram bot token + chat_id（属运营凭据，代码侧无法自造）。推荐路径：
+后台「告警渠道」面板（`GET/POST /api/accounts/auto-reply/webhooks` + `.../webhooks/test`）
+→ 写 `notify_webhooks.json` 覆盖层 + **热更 notifier 免重启**，不必碰 YAML。
+建议先只订阅高价值别名（`draft_backlog` / `human_deliver` / `host_alert`）再逐步放开，
+避免一次性把所有订阅事件推成告警风暴。
+
 ### 多 agent 共享工作树并发协议（2026-07-28，当日三线并发实录教训）
 
 worktree 隔离是理想态（见上），但实践中多条 agent 线常共用主工作树（生产实例共享
@@ -1264,6 +1496,12 @@ FLAP、内联按钮写了函数没挂 window 暴露块经热更新**直接上生
    `-Full` 追加全量回归）。当日两例跨线 bug（哑按钮、暗色 token 缺口）都是甲改
    乙扫出来的——门禁互验是共享树上唯一可靠的「代码评审」。别人文件红了先报告，
    别在对方活跃编辑窗内默默替改。
+5. **前端批次双戳**（2026-07-29 账号 rail 事故沉淀）：模板/CSS/i18n 热更新后，
+   **开着的旧标签页仍跑旧 JS**。每批前端落地必须同时改两处——
+   `src/web/static/workspace/ui-build.txt` 首行（陈旧页横幅轮询此文件）+ 相关
+   CSS 的 `?v=` 缓存戳（如 `unified-inbox.css?v=`）。只改功能不 bump =
+   「修好了坐席还在踩」。`-Full` 含 `tools/verify_account_rail_ui.py`（账号视角
+   真浏览器不变量）。
 
 ### 崩溃恢复提示
 

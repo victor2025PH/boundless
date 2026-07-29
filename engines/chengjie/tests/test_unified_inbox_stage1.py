@@ -2464,6 +2464,44 @@ def test_unified_inbox_template_contains_drafts_panel():
     assert "draft-card-mini" in html or "draft-panel-items" in html
 
 
+def test_send_has_inflight_guard_and_idempotency_key():
+    """防双发（2026-07-29）：``sendMsg`` 必须带 in-flight 闸门 + 幂等键。
+
+    两条缺一不可、各防一半：
+      - **in-flight 闸门**防「用户连按两次」。发送按钮在请求期间会 disabled，但
+        **Enter 键路径直接调 sendMsg 绕过按钮**（实测缺口：连按两次 Enter 发出两条
+        一样的消息）。两次是独立提交、``client_msg_id`` 不同，服务端幂等键抓不住。
+      - **幂等键**防「同一请求被重放」（网络层重试等 → 同 id 命中 TTL 窗被拒）。
+    顺带钉住加锁/解锁的**顺序**：早退在前、置位与 btn.disabled 同处、收尾清零，
+    否则闸门会把发送按钮永久卡死（比双发更糟）。
+    """
+    path = (Path(__file__).resolve().parent.parent / "src" / "web"
+            / "templates" / "unified_inbox.html")
+    html = path.read_text(encoding="utf-8")
+
+    start = html.index("async function sendMsg(){")
+    end = html.index("async function resendFailed(", start)
+    body = html[start:end]
+
+    i_guard = body.index("if(_sendInFlight) return;")
+    i_set = body.index("_sendInFlight=true;")
+    i_clear = body.index("_sendInFlight=false;")
+    assert i_guard < i_set < i_clear, (
+        "顺序必须是「早退闸门 → 置位 → 收尾清零」，否则会把发送按钮卡死")
+    # 置位须与「提交点」那处 btn.disabled=true 紧邻（sendMsg 内另有一处 disabled 属
+    # 翻译预览分支，不能被当成提交点 → 断言**结构相邻**而非距离启发式）
+    import re as _re
+    assert _re.search(r"btn\.disabled=true;\s*\n\s*_sendInFlight=true;", body), (
+        "_sendInFlight=true 必须紧跟提交点的 btn.disabled=true，别落到预览分支")
+    # 收尾清零须在 try/catch **之后**（异常路径也要解锁）
+    assert i_clear > body.index("}catch(e){")
+    # 幂等键随请求体提交
+    assert "client_msg_id: _newClientMsgId()" in body
+
+    # 媒体路径有自己的同款闸门（_mediaSending），不靠 _sendInFlight
+    assert "if(_mediaSending) return;" in html
+
+
 def test_unified_inbox_template_contains_assign_suggestion():
     """自动派单：会话列表「建议你接管」徽章 + 判定逻辑入模板。"""
     path = Path(__file__).resolve().parent.parent / "src" / "web" / "templates" / "unified_inbox.html"

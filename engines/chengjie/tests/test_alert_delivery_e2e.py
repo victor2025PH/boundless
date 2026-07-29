@@ -184,6 +184,13 @@ _EMITTED_ALERTS = [
      {"kind": "unreachable", "never": False, "heartbeat_min": -1, "pending": -1,
       "backlog_min": -1, "site": "https://bd2026.cc", "down_minutes": 18,
       "reminder": False, "rate_key": "trial_fulfiller:remind"}),
+    # 待审草稿积压（补 SLA 的 L1 盲区）：告警态 + 恢复态各过一遍
+    ("draft_backlog", "draft_backlog_alert",
+     {"stale_count": 6, "min_age_hours": 24, "oldest_hours": 214.1,
+      "by_level": {"L1": 5, "L3": 1}, "sla_uncovered": 5,
+      "reminder": False, "rate_key": "draft_backlog:remind"}),
+    ("draft_backlog", "draft_backlog_alert",
+     {"recovered": True, "rate_key": "draft_backlog:recovered"}),
 ]
 
 

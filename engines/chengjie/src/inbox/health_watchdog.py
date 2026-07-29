@@ -367,6 +367,18 @@ class HealthWatchdog:
         self._last_media_restock_ts: float = 0.0
         self._media_restock_day: str = ""
         self._media_restock_added_today: int = 0
+        # 人工通过投递链静默断裂巡检（2026-07-29）：观测窗起点 = 本进程起来的时刻
+        # （worker 计数器是进程内的，必须与之同窗口才可比），+ 首提/重提去抖。
+        self._hd_since_ts: float = time.time()
+        self._hd_bad_since: float = 0.0
+        self._hd_alerted: bool = False
+        self._hd_last_remind: float = 0.0
+        self.total_human_deliver_alerts: int = 0
+        # 草稿积压无人处理巡检（2026-07-29）：SLA watcher 只盯 L3/L4，**L1 是盲区**
+        # （见 _check_draft_backlog），而 L1 恰恰是「必须人来处理」的那一档。
+        self._db_alerted: bool = False
+        self._db_last_remind: float = 0.0
+        self.total_draft_backlog_alerts: int = 0
         # 出站媒体承诺未兑现升级提醒（Phase21a）：delta 口径累加净撤回数 + 首提/重提去抖
         self._promise_last_ret: Optional[int] = None
         self._promise_last_ful: Optional[int] = None
@@ -520,6 +532,19 @@ class HealthWatchdog:
             self._check_avatar_voice()
         except Exception:
             logger.debug("AvatarHub 语音巡检异常（已忽略）", exc_info=True)
+
+        # 人工通过投递链静默断裂（坐席点了「发送」但一条都没真发出去）——
+        # 这条链曾整条不存在过（实测 14 天零人工投递），且注入是静默的，值得主动探。
+        try:
+            self._check_human_deliver_chain()
+        except Exception:
+            logger.debug("人工投递链巡检异常（已忽略）", exc_info=True)
+
+        # 草稿积压：L1（必须人审那一档）在 SLA 告警里是盲区，实测烂到 214h 无人知
+        try:
+            self._check_draft_backlog()
+        except Exception:
+            logger.debug("草稿积压巡检异常（已忽略）", exc_info=True)
 
         # 试用履约端（厂商机）停摆：客服台心跳卡是被动的，得有人去看；这里升级为主动外发。
         try:
@@ -1136,6 +1161,304 @@ class HealthWatchdog:
                 "rate_key": f"{key}:remind",
             })
             self.total_platform_session_reminders += 1
+
+    #: `decided_by` 里属「系统自动」的值——统计人工通过时必须排除
+    _HD_SYSTEM_DECIDERS = frozenset({
+        "autosend_worker", "mode_downgraded", "send_blocked", "stale_peer",
+        "system", "composer_adopt", "",
+    })
+
+    def human_approved_since(self, since_ts: float, *, limit: int = 500) -> int:
+        """统计 ``since_ts`` 之后**由人**通过的 inbox 草稿数（纯读，异常返回 0）。
+
+        为什么不查 ``draft_audit_log``：``resolve_with_audit`` 只在 L3/L4 或 autosend
+        动作时写审计行——**L1/L2 的人工通过根本不落审计**（实测：试聊草稿是 L1，
+        人工 approve 后审计里查不到）。而 ``reply_drafts`` 行每次 resolve 都会更新
+        ``status``/``decided_by``/``decided_at``，是唯一完整的人工处置事实源。
+        """
+        inbox = self._inbox()
+        if inbox is None or not hasattr(inbox, "list_drafts"):
+            return 0
+        try:
+            rows = inbox.list_drafts(
+                source_kind="inbox", status="approved", limit=limit) or []
+        except Exception:
+            logger.debug("human_approved_since 读草稿失败（忽略）", exc_info=True)
+            return 0
+        n = 0
+        for r in rows:
+            try:
+                if float(r.get("decided_at") or 0) < since_ts:
+                    continue
+                if str(r.get("decided_by") or "").strip() in self._HD_SYSTEM_DECIDERS:
+                    continue
+                n += 1
+            except Exception:
+                continue
+        return n
+
+    #: 每 tick 最多为多少条超龄草稿查「是否已回过」（各查一次会话消息）。超出部分
+    #: 保守算作「客户在等」——宁可多报不漏报。积压通常个位数，够用且不压 DB。
+    _BACKLOG_REPLY_PROBE_CAP = 50
+
+    def _check_draft_backlog(self, *, now: Optional[float] = None) -> None:
+        """待审草稿长期无人处理 → 主动轰人（补 SLA 告警的 **L1 盲区**）。
+
+        为什么需要它（2026-07-29 实测）：生产待审队列 7 条，年龄最老 **214h（8.9 天）**，
+        其中 **6 条是 L1**。而 `SLAWatcher._check_sla_breach` 明确只看 L3/L4
+        （`autopilot_level not in ("L3","L4") → continue`）——于是三档里：
+
+          L2（auto_ai+low）→ worker 自动发，没人管也会发出去；
+          L3/L4（medium/high）→ 有逐条 SLA 告警；
+          **L1（review+low）→ 既不自动发、也没有任何告警** ⇒ 无声烂掉。
+
+        偏偏 L1 是**唯一「必须人来处理」**的那一档，告警洞正好开在最需要人的地方。
+        （那条 L3 也烂了 167h，说明还有第二层问题：告警只进工作台铃铛、webhook 默认关。
+        本检查走 ops 告警出口，与铃铛互补。）
+
+        刻意做成**聚合**信号而非逐条：L1 是低风险日常稿，逐条告警＝噪音；
+        「N 条超过 X 小时无人处理」才是运维该看的（排班/注意力问题，非单条草稿问题）。
+        配置 ``health_watchdog.draft_backlog_remind.{enabled,min_age_hours,min_count,
+        interval_min}``（默认开：≥3 条超 24h 触发，每 4h 重提，清空自动补恢复通知）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        br = (((cfg.get("health_watchdog") or {}).get("draft_backlog_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not br.get("enabled", True):
+            return
+        svc = getattr(getattr(self._app, "state", self._app), "draft_service", None)
+        if svc is None or not hasattr(svc, "list_drafts"):
+            return
+        min_age_h = max(1.0, float(br.get("min_age_hours", 24) or 24))
+        min_count = max(1, int(br.get("min_count", 3) or 3))
+        ts = float(now if now is not None else time.time())
+        cutoff = ts - min_age_h * 3600.0
+        try:
+            rows = svc.list_drafts(status="pending", limit=500) or []
+        except Exception:
+            logger.debug("草稿积压巡检取数失败（忽略）", exc_info=True)
+            return
+
+        aged: List[Dict[str, Any]] = []
+        for d in rows:
+            try:
+                created = float(d.get("created_ts") or 0)
+            except (TypeError, ValueError):
+                continue
+            if created > 0 and created < cutoff:
+                aged.append(d)
+
+        # 把「账目残留」与「客户真的在等」分开：坐席走「采用文案→手动发送」时
+        # 发送路由不处置草稿行，那行会一直 pending。两者处置完全不同（前者清账、
+        # 后者要回客户），混成一个数字会让运维对告警失去信任 → 告警按「真的在等」
+        # 触发，孤儿数另报。逐条要查一次会话消息，故按 _BACKLOG_REPLY_PROBE_CAP 封顶
+        # （超出部分保守算作在等，宁可多报不漏报）。
+        stale: List[Dict[str, Any]] = []
+        already_replied = 0
+        probe_budget = self._BACKLOG_REPLY_PROBE_CAP
+        for d in aged:
+            if probe_budget > 0 and hasattr(svc, "conversation_replied_after"):
+                probe_budget -= 1
+                try:
+                    if svc.conversation_replied_after(d):
+                        already_replied += 1
+                        continue
+                except Exception:
+                    logger.debug("积压巡检判「已回过」失败（按在等计）", exc_info=True)
+            stale.append(d)
+
+        if len(stale) < min_count:
+            if self._db_alerted and not stale:
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("draft_backlog_alert", {
+                        "recovered": True,
+                        "rate_key": "draft_backlog:recovered",
+                    })
+                    logger.info("HealthWatchdog 发出草稿积压恢复通知")
+                except Exception:
+                    logger.debug("draft_backlog recovery 发布失败（忽略）", exc_info=True)
+                self._db_alerted = False
+                self._db_last_remind = 0.0
+            return
+
+        interval_sec = max(600.0, float(br.get("interval_min", 240) or 240) * 60.0)
+        if self._db_alerted and ts - self._db_last_remind < interval_sec:
+            return
+
+        by_level: Dict[str, int] = {}
+        for d in stale:
+            lvl = str(d.get("autopilot_level") or "?") or "?"
+            by_level[lvl] = by_level.get(lvl, 0) + 1
+        oldest_h = 0.0
+        for d in stale:
+            try:
+                oldest_h = max(oldest_h, (ts - float(d.get("created_ts") or ts)) / 3600.0)
+            except (TypeError, ValueError):
+                continue
+        # SLA 逐条告警覆盖不到的那部分（L1 等），单独点名——这才是本检查的存在理由
+        uncovered = sum(n for lvl, n in by_level.items() if lvl not in ("L3", "L4"))
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("draft_backlog_alert", {
+                "stale_count": len(stale),
+                "min_age_hours": min_age_h,
+                "oldest_hours": round(oldest_h, 1),
+                "by_level": by_level,
+                "sla_uncovered": uncovered,
+                # 账目残留（内容已人工回过、草稿行没人处置）——与「客户在等」分开报
+                "already_replied": already_replied,
+                "reminder": bool(self._db_alerted),
+                "rate_key": "draft_backlog:remind",
+            })
+        except Exception:
+            logger.debug("draft_backlog alert 发布失败（忽略）", exc_info=True)
+            return
+        self._db_alerted = True
+        self._db_last_remind = ts
+        self.total_draft_backlog_alerts += 1
+        logger.warning(
+            "待审草稿积压：%d 条超过 %.0fh 客户仍在等（最老 %.0fh，分级 %s；"
+            "其中 %d 条不在 SLA 逐条告警覆盖内；另有 %d 条已人工回过仅账目残留）",
+            len(stale), min_age_h, oldest_h, by_level, uncovered, already_replied)
+
+    def _check_human_deliver_chain(self, *, now: Optional[float] = None) -> None:
+        """坐席「通过」了草稿却一条都没真投递出去 → 投递链静默断裂，主动轰人。
+
+        为什么需要它（2026-07-29）：「人工通过 inbox 草稿」这条链曾**整条不存在**——
+        坐席点「发送」只把 DB 标成 approved，全库没有任何消费者真发出去，实测 14 天
+        零人工投递、坐席以为发了、客户什么也没收到。修复靠 bootstrap 注入
+        ``DraftService.set_inbox_deliver_callback``；但**注入本身是静默的**：配置漂移、
+        注入抛异常被吞、将来重构漏接线，都会让它悄悄回到「只标记不发送」——
+        而坐席端和客户端都看不出区别。
+
+        本检查是那条链的**被动活体探针**（零成本、比周批真发演练更早）：
+        同一进程窗口内「有人真的通过过草稿」却「投递计数恒 0 且零失败」＝一次投递
+        都没被尝试过 → 链断了。刻意用「零尝试」而非「有失败」：失败已有
+        ``autosend_deliver_failed`` 事件覆盖，这里专抓**静默不作为**。
+
+        判据（2026-07-29 升级为两档，接线状态优先）：
+          - **未接线**（``DraftService.inbox_deliver_wired`` 为 False）＝确定性根因，
+            零流量即可判，且 worker 压根不存在时（``l2_autosend.enabled=false`` ⇒
+            worker 不创建）同样成立——这正是最容易断的形态；
+          - **已接线但计数恒 0**＝推断性根因（真尝试过会留下成功或失败痕迹）。
+        刻意**不再按 ``deliver_enabled`` 静默**：人工投递已与 `l2_autosend.deliver`
+        解耦（后者管「AI 可否自己发」），旧闸门会恰好在新能力所在的人审档闭嘴。
+
+        零误报前提（缺一不告警）：
+          - ``inbox.auto_draft.human_deliver`` 未被显式关掉（关=运营刻意只标记）；
+          - 人工通过数 ≥ ``min_approvals``（默认 3，避免单条巧合）；
+          - ``total_human_delivered == 0`` **且** ``total_human_deliver_errors == 0``。
+        配置 ``health_watchdog.human_deliver_remind.{enabled,after_min,interval_min,
+        min_approvals}``（默认开，30min 首提 / 240min 重提，恢复补发通知）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        hr = (((cfg.get("health_watchdog") or {}).get("human_deliver_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not hr.get("enabled", True):
+            return
+        # 运营显式选择「通过仅 DB 标记」时接线本就不存在 → 不是故障，绝不告警
+        _ad = ((cfg.get("inbox") or {}).get("auto_draft") or {}) if isinstance(cfg, dict) else {}
+        if not bool(_ad.get("human_deliver", True)):
+            return
+        # 与 _inbox() 同款访问：self._app 可能是 app 或已是 state（测试常直接给 state）
+        _state = getattr(self._app, "state", self._app)
+        worker = getattr(_state, "autosend_worker", None)
+        # 接线状态是**比计数器更早**的信号（零流量也能判）。2026-07-29 起人工投递
+        # 与 `l2_autosend.deliver` 解耦（deliver 管「AI 可否自己发」，不闸人的决定），
+        # 所以这里**不能再按 deliver_enabled 静默**——否则恰好在新能力所在的配置
+        # （deliver=false 的人审档）闭嘴。未接线时 worker 可能压根不存在
+        # （l2_autosend.enabled=false ⇒ worker 不创建），故 worker=None 也要继续查。
+        wired = None
+        try:
+            _dsvc = getattr(_state, "draft_service", None)
+            if _dsvc is not None and hasattr(_dsvc, "inbox_deliver_wired"):
+                wired = bool(_dsvc.inbox_deliver_wired)
+        except Exception:
+            wired = None
+        snap: Dict[str, Any] = {}
+        if worker is not None and hasattr(worker, "status_snapshot"):
+            try:
+                snap = worker.status_snapshot() or {}
+            except Exception:
+                snap = {}
+        if wired is None:
+            # 接线状态未知（读不到 draft_service，多见于测试/异常态）→ 退回旧的保守
+            # 闸门：只有配置本就真发时才据计数推断，宁可漏报不误报。
+            if not snap or not snap.get("deliver_enabled"):
+                return
+        elif wired is False:
+            pass            # 明确未接线：下面只要有足够人工通过就是「链断」
+        elif not snap:
+            return          # 已接线但拿不到计数（worker 形态异常）→ 交由别的巡检
+        ts = float(now if now is not None else time.time())
+        delivered = int(snap.get("total_human_delivered") or 0)
+        errors = int(snap.get("total_human_deliver_errors") or 0)
+
+        if delivered > 0 or errors > 0:
+            # 链路已被证明活着（投递成功过，或至少真尝试过并失败——失败另有告警）
+            if self._hd_alerted:
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("human_deliver_alert", {
+                        "recovered": True,
+                        "rate_key": "human_deliver:recovered",
+                    })
+                    logger.info("HealthWatchdog 发出人工投递链恢复通知")
+                except Exception:
+                    logger.debug("human_deliver recovery 发布失败（忽略）", exc_info=True)
+            self._hd_bad_since = 0.0
+            self._hd_alerted = False
+            self._hd_last_remind = 0.0
+            return
+
+        min_appr = max(1, int(hr.get("min_approvals", 3) or 3))
+        approved = self.human_approved_since(self._hd_since_ts)
+        if approved < min_appr:
+            self._hd_bad_since = 0.0    # 还没有足够人工处置 → 不构成证据
+            return
+
+        if not self._hd_bad_since:
+            self._hd_bad_since = ts
+            return
+        bad_sec = ts - self._hd_bad_since
+        after_sec = max(60.0, float(hr.get("after_min", 30) or 30) * 60.0)
+        interval_sec = max(600.0, float(hr.get("interval_min", 240) or 240) * 60.0)
+        due = (
+            (not self._hd_alerted and bad_sec >= after_sec)
+            or (self._hd_alerted and ts - self._hd_last_remind >= interval_sec)
+        )
+        if not due:
+            return
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("human_deliver_alert", {
+                "human_approved": approved,
+                "delivered": delivered,
+                "deliver_errors": errors,
+                "bad_minutes": int(bad_sec // 60),
+                "reminder": bool(self._hd_alerted),
+                # 未接线=确定性根因（可直接指路配置/接线），计数恒 0=推断性
+                "not_wired": (wired is False),
+                "rate_key": "human_deliver:remind",
+            })
+        except Exception:
+            logger.debug("human_deliver alert 发布失败（忽略）", exc_info=True)
+            return
+        self._hd_alerted = True
+        self._hd_last_remind = ts
+        self.total_human_deliver_alerts += 1
+        if wired is False:
+            logger.warning(
+                "坐席已人工通过 %d 条草稿，但人工投递回调**未接线**"
+                "（DraftService.inbox_deliver_wired=False）——只标记不发送，"
+                "客户一条都没收到；查 inbox.auto_draft.human_deliver 与 bootstrap 注入",
+                approved)
+        else:
+            logger.warning(
+                "坐席已人工通过 %d 条草稿，但本进程人工投递计数恒 0（零尝试）"
+                "——投递回调疑似未接线，客户可能一条都没收到",
+                approved)
 
     def _check_avatar_voice(self, *, now: Optional[float] = None) -> None:
         """AvatarHub 7852（在线语音克隆主力）持续掉线/半死的升级式提醒。

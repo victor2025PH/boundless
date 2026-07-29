@@ -215,6 +215,17 @@ _DEFAULT_PERSONA: Dict[str, Any] = {
 }
 
 
+def _same_file(a: Path, b: Path) -> bool:
+    """两个路径是否指向同一物理文件（联接/符号链接安全）。任一不存在 → 比较路径。"""
+    try:
+        if a.exists() and b.exists():
+            import os as _os
+            return _os.path.samefile(str(a), str(b))
+    except OSError:
+        pass
+    return a == b
+
+
 def profile_rev(profile: Optional[Dict[str, Any]]) -> str:
     """**通用**内容指纹（乐观锁 rev，多开治理 2026-07-29）。
 
@@ -371,10 +382,17 @@ class PersonaManager:
         return Path(__file__).resolve().parents[2] / "config" / GLOBAL_RULES_FILENAME
 
     def _global_rules_data_path(self) -> Path:
-        """可写数据区那份（AITR_CONFIG_PATH 父 → AITR_DATA_DIR/config → 仓内 config）。"""
+        """可写数据区那份（AITR_CONFIG_PATH 父 → AITR_DATA_DIR/config → 仓内 config）。
+
+        必须与 ``_global_rules_factory_path`` **同口径 resolve**：本机 ``D:\\boundless``
+        是指向 ``D:\\workspace\\boundless`` 的目录联接，而 ``data_paths`` 用 abspath（不跟随
+        联接）、出厂路径用 resolve（跟随）→ 同一物理文件被算成两个不同路径。实测后果：
+        无 ``AITR_DATA_DIR`` 时 ``factory != p`` 误判为真，首存的种子拷贝对同一文件调
+        ``shutil.copy2`` 抛 ``SameFileError`` → **保存直接失败**。故两边都 resolve。
+        """
         try:
             from src.licensing.data_paths import config_dir  # 无内部依赖，无循环导入
-            return config_dir() / GLOBAL_RULES_FILENAME
+            return (config_dir() / GLOBAL_RULES_FILENAME).resolve()
         except Exception:  # noqa: BLE001 - helper 不可用时退回出厂位置（行为同旧版）
             return self._global_rules_factory_path()
 
@@ -448,7 +466,9 @@ class PersonaManager:
             p.parent.mkdir(parents=True, exist_ok=True)
             if not p.exists():
                 factory = self._global_rules_factory_path()
-                if factory.exists() and factory != p:
+                # 双重防同文件：路径不等 + os.path.samefile 兜底（联接/符号链接下
+                # 路径字符串可能不同但指向同一物理文件，copy2 会抛 SameFileError）
+                if factory.exists() and not _same_file(factory, p):
                     import shutil
                     shutil.copy2(factory, p)   # 迁移种子：让 .bak.1 拿到出厂默认
             # S6-RULES P2-c: rotate backups before overwrite

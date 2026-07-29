@@ -705,7 +705,8 @@ function _wsAiTrialDismiss(){
     if(later) later.addEventListener('click',function(){ if(modal) modal.style.display='none'; });
     if(cta) cta.addEventListener('click',function(){
       cta.disabled=true;
-      fetch('/api/admin/license/trial-bind-code',{method:'POST',credentials:'same-origin'})
+      apiFetch('/api/admin/license/trial-bind-code',
+               {method:'POST',credentials:'same-origin'}, {timeoutMs: 20000})
         .then(function(r){return r.json();})
         .then(function(j){
           var url=(j&&(j.telegram_url||j.whatsapp_url))||'';
@@ -746,7 +747,8 @@ function _wsAiTrialDismiss(){
     }
   }
   function _pollQuota(){
-    fetch('/api/workspace/hosted-quota',{credentials:'same-origin'})
+    apiFetch('/api/workspace/hosted-quota', {credentials:'same-origin'},
+             {timeoutMs: 15000})
       .then(function(r){return r.json();})
       .then(_renderQuota)
       .catch(function(){});
@@ -790,6 +792,61 @@ function _wsAiTrialDismiss(){
     <span id="ws-restartcool-detail" style="opacity:.85"></span>
   </span>
 </div>
+<!-- 前端版本陈旧提醒（P2-1，2026-07-29）：坐席工作台常开数天，模板热更新只对刷新后的页面
+     生效——旧标签页跑旧 JS 是「已修复的问题坐席还在踩」的根因（当日实录：账号切换条修复后
+     旧标签页仍显示旧行为）。静态 /static/workspace/ui-build.txt 首行 token 为单一版本源：
+     页面加载首查即基线，此后每 5 分钟（+回前台时）复查，变了出条子请坐席刷新。 -->
+<div id="ws-uibuild" style="display:none;align-items:center;gap:10px;padding:6px 14px;
+     background:linear-gradient(90deg,var(--th-bg-teal9,#134e4a),var(--th-bg-teal8,#0f766e));color:var(--th-ink-teal1,#ccfbf1);font-size:12.5px;">
+  <span style="flex:0 0 auto;">🔁</span>
+  <span style="flex:1 1 auto;line-height:1.5;" data-i18n="ws.uibuild.text">{{ i18n.get('ws.uibuild.text', '工作台界面已更新到新版本，刷新页面即可加载（建议先发出/保存手头输入）。') }}</span>
+  <button type="button" id="ws-uibuild-go" style="flex:0 0 auto;border:1px solid color-mix(in srgb,var(--th-ink-teal1,#ccfbf1) 50%,transparent);background:color-mix(in srgb,var(--th-ink-teal1,#ccfbf1) 14%,transparent);color:var(--th-ink-teal1,#ccfbf1);border-radius:7px;padding:3px 12px;font-size:12px;font-weight:600;cursor:pointer;">{{ i18n.get('ws.uibuild.btn', '立即刷新') }}</button>
+  <button type="button" id="ws-uibuild-x" title="{{ i18n.get('ws.uibuild.dismiss', '暂不（2 小时内不再提醒）') }}" aria-label="{{ i18n.get('ws.uibuild.dismiss', '暂不（2 小时内不再提醒）') }}" style="flex:0 0 auto;border:none;background:transparent;color:var(--th-ink-teal1,#ccfbf1);opacity:.7;cursor:pointer;font-size:14px;padding:2px 6px;">✕</button>
+</div>
+<script>
+(function(){
+  /* 陈旧前端探针：以标签页加载后的首次读取为基线（无需模板内嵌常量=零双源），
+     首行 token 变化 → wsBanner 出条（优先级 30，让位于连接/通道/降级/冷却类事故条）。
+     探针失败一律静默（老部署没有该文件 / 网络抖动都不该打扰坐席）。 */
+  var URL='/static/workspace/ui-build.txt';
+  var SNOOZE_KEY='ws_uibuild_snooze';
+  var baseline='';
+  var shown=false;
+  function _snoozed(){
+    try{ return (Number(sessionStorage.getItem(SNOOZE_KEY)||0) > Date.now()); }catch(_){ return false; }
+  }
+  async function _tick(){
+    if(shown) return;
+    try{
+      var r=await fetch(URL+'?_='+Date.now(), {cache:'no-store', credentials:'same-origin'});
+      if(!r.ok) return;
+      var t=await r.text();
+      var cur=String((t||'').split(/\r?\n/)[0]||'').trim();
+      if(!cur) return;
+      if(!baseline){ baseline=cur; return; }   // 首查=基线（即本标签页所载版本）
+      if(cur!==baseline && !_snoozed()){
+        window.wsBanner.set('ws-uibuild', true);
+        shown=true;                            // 已提醒；贪睡按钮会复位继续盯
+      }
+    }catch(_){}
+  }
+  var el=document.getElementById('ws-uibuild');
+  if(!el) return;
+  var go=document.getElementById('ws-uibuild-go');
+  if(go) go.addEventListener('click', function(){ location.reload(); });
+  var x=document.getElementById('ws-uibuild-x');
+  if(x) x.addEventListener('click', function(){
+    try{ sessionStorage.setItem(SNOOZE_KEY, String(Date.now()+2*3600*1000)); }catch(_){}
+    window.wsBanner.set('ws-uibuild', false);
+    shown=false;                               // 贪睡到期后若仍是新版会再次提醒
+  });
+  _tick();
+  setInterval(_tick, 300000);
+  document.addEventListener('visibilitychange', function(){
+    if(document.visibilityState==='visible') _tick();
+  });
+})();
+</script>
 <script>
 (function(){
   var failStreak = 0;
