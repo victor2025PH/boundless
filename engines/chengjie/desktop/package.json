@@ -1,6 +1,6 @@
 {
   "name": "telegram-ai-desktop",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "private": true,
   "description": "桌面壳：嵌官方 web 客户端 + 注入点击翻译/智能回复（对接本仓库 FastAPI 后端）",
   "main": "main.js",
