@@ -131,15 +131,43 @@ def get_channel(channel_id: str) -> Optional[Channel]:
     return _CHANNEL_BY_ID.get(str(channel_id or "").lower())
 
 
+#: 托管版「凭据由官网自动派发」的渠道 → 需要隐藏的字段（用户不该看见这些黑话）。
+#: 判据是配置里的托管标记（由 hosted_gateway.ensure_hosted_telegram 注入），
+#: **不是**光看 managed env——没真拿到凭据时必须保留手填路径，否则砸掉唯一出路。
+_AUTO_PROVISIONED: Dict[str, Dict[str, Any]] = {
+    "telegram": {
+        "flag": "telegram._hosted_cred",
+        "hide": ("telegram.api_id", "telegram.api_hash"),
+        "intro": "凭据已由官网自动配置（无需申请 API ID / Hash）——直接去登录你的账号即可。",
+    },
+}
+
+
+def _auto_provisioned(config: Dict[str, Any], channel_id: str) -> Optional[Dict[str, Any]]:
+    """该渠道是否已由官网托管派发凭据（真拿到了才算）。"""
+    spec = _AUTO_PROVISIONED.get(channel_id)
+    if not spec:
+        return None
+    return spec if bool(_dig(config, str(spec["flag"]))) else None
+
+
 def channel_status(config: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """每渠道接入现状：是否启用 / 必填是否齐 / 各字段填写状态（密钥打码）。"""
+    """每渠道接入现状：是否启用 / 必填是否齐 / 各字段填写状态（密钥打码）。
+
+    托管派发（``_AUTO_PROVISIONED``）命中时：隐藏已自动配置的凭据字段并换成人话 intro
+    ——前端「无字段则渲染 intro + 登录入口」的既有逻辑会自动呈现正确形态，零前端改动。
+    """
     config = config or {}
     out: List[Dict[str, Any]] = []
     for ch in CHANNELS:
         enabled = bool(_dig(config, ch.enable_key))
+        auto = _auto_provisioned(config, ch.id)
+        hidden = set(auto["hide"]) if auto else set()
         fields_status = []
         missing: List[str] = []
         for fld in ch.fields:
+            if fld.key in hidden:
+                continue  # 官网已派发，不向用户暴露这些字段
             raw = _dig(config, fld.key)
             filled = not _is_placeholder(raw)
             if fld.required and not filled:
@@ -152,13 +180,16 @@ def channel_status(config: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "secret": fld.secret, "type": fld.type, "help": fld.help,
                 "filled": filled, "display": disp,
             })
-        configured = (not missing) and (bool(ch.fields) or enabled)
+        # 托管派发：凭据已就绪 → 视为已配置（不因隐藏了字段而误判「未配置」）
+        configured = True if auto else ((not missing) and (bool(ch.fields) or enabled))
         out.append({
             "id": ch.id, "name": ch.name, "enable_key": ch.enable_key,
-            "enabled": enabled, "intro": ch.intro,
+            "enabled": enabled,
+            "intro": (auto["intro"] if auto else ch.intro),
             "login_required": ch.login_required,
             "fields": fields_status, "missing": missing,
             "configured": configured,
+            "auto_provisioned": bool(auto),
             "ready": configured and enabled,
         })
     return out

@@ -8,7 +8,42 @@ platform_login.orchestrator_enabled），这两个键此前没有任何产品入
 """
 from __future__ import annotations
 
-from src.utils.channel_setup import apply_channel_values, get_channel
+from src.utils.channel_setup import apply_channel_values, channel_status, get_channel
+
+
+def _tg(config):
+    return next(c for c in channel_status(config) if c["id"] == "telegram")
+
+
+# ── 托管派发：凭据由官网自动配置时隐藏 api_id/hash 黑话（2026-07-29）──────
+
+
+def test_hosted_cred_hides_api_fields_and_shows_plain_intro():
+    cfg = {"telegram": {"api_id": 12345, "api_hash": "a" * 32,
+                        "_hosted_cred": True, "enabled": True}}
+    tg = _tg(cfg)
+    keys = [f["key"] for f in tg["fields"]]
+    assert "telegram.api_id" not in keys and "telegram.api_hash" not in keys
+    assert tg["auto_provisioned"] is True
+    assert tg["configured"] is True and tg["ready"] is True
+    # 人话 intro，不含 yaml/API 黑话
+    assert "API ID" not in tg["intro"] or "无需" in tg["intro"]
+    assert "登录" in tg["intro"]
+
+
+def test_without_hosted_cred_manual_fields_stay():
+    """没真拿到托管凭据 → 必须保留手填路径（否则砸掉唯一出路）。"""
+    tg = _tg({"telegram": {"api_id": "", "api_hash": ""}})
+    keys = [f["key"] for f in tg["fields"]]
+    assert "telegram.api_id" in keys and "telegram.api_hash" in keys
+    assert tg.get("auto_provisioned") is False
+    assert tg["configured"] is False
+
+
+def test_phone_field_survives_hosted_cred():
+    """手机号是登录要用的，不该被一起藏掉。"""
+    tg = _tg({"telegram": {"api_id": 1, "api_hash": "b" * 32, "_hosted_cred": True}})
+    assert "telegram.phone_number" in [f["key"] for f in tg["fields"]]
 
 
 def _pl(overlay):
