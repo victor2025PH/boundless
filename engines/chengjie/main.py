@@ -164,6 +164,14 @@ class AIChatAssistant:
             except Exception:
                 self.logger.debug("退出可观测安装失败（已忽略）", exc_info=True)
 
+            # 3c. 客户端错误回传（桌面版默认开；telemetry.client_errors.enabled: false 可关）：
+            # 公网安装版的 ERROR 摘要回官网归集，装在别人机器上的故障不再失明。
+            try:
+                from src.utils.telemetry_beacon import install_beacon
+                install_beacon(self.config.config)
+            except Exception:
+                self.logger.debug("错误回传 beacon 安装失败（已忽略）", exc_info=True)
+
             self._boot_mark("logging")
 
             # 3. 初始化AI客户端
