@@ -37,8 +37,12 @@ function limited(key: string, max: number): boolean {
   return arr.length > max;
 }
 
+// eslint-disable-next-line no-control-regex
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
 function clean(s: unknown, max: number): string {
-  return String(s ?? "").replace(/[\r\n\t]/g, " ").slice(0, max);
+  // 服务端也剥 ANSI：已发布的 0.2.6 客户端消毒器不剥色码，落盘前清一道，
+  // 让错误聚类不被 "\x1b[31mERROR" 这类污染切碎（老客户端立即受益）。
+  return String(s ?? "").replace(ANSI_RE, "").replace(/[\r\n\t]/g, " ").slice(0, max);
 }
 
 export async function POST(req: NextRequest) {

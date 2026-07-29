@@ -158,17 +158,21 @@ class AIChatAssistant:
             # 3b. 进程退出可观测（2026-07-12 无痕死亡排障配套）：哨兵残留检测上次
             # 非正常死亡（taskkill /F / OOM 等任何死法）+ atexit/signal 记退出原因 +
             # faulthandler 落致命 traceback。失败绝不挡启动。
+            _prev_exit = None
             try:
                 from src.utils.exit_sentinel import install as _install_exit_obs
-                _install_exit_obs()
+                _prev_exit = _install_exit_obs()
             except Exception:
                 self.logger.debug("退出可观测安装失败（已忽略）", exc_info=True)
 
             # 3c. 客户端错误回传（桌面版默认开；telemetry.client_errors.enabled: false 可关）：
             # 公网安装版的 ERROR 摘要回官网归集，装在别人机器上的故障不再失明。
+            # 上次崩溃/OOM（哨兵残留，日志里无 ERROR）也一并回传——远程可发现崩溃。
             try:
                 from src.utils.telemetry_beacon import install_beacon
-                install_beacon(self.config.config)
+                _beacon = install_beacon(self.config.config)
+                if _beacon is not None and _prev_exit:
+                    _beacon.note_prev_exit(_prev_exit)
             except Exception:
                 self.logger.debug("错误回传 beacon 安装失败（已忽略）", exc_info=True)
 

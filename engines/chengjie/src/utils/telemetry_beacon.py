@@ -38,6 +38,9 @@ DEDUP_WINDOW_SEC = 300.0
 
 _USER_PATH_RE = re.compile(r"[A-Za-z]:\\Users\\[^\\\s]+", re.IGNORECASE)
 _SECRET_RE = re.compile(r"\b(sk-[A-Za-z0-9_\-]{6,}|cx\.[A-Za-z0-9_\-\.]{10,})")
+# 日志里的 ANSI 颜色码（logger 彩色输出漏进 record.getMessage()）——实测 0.2.6
+# 回传数据里出现 "\x1b[31mERROR"/"...\x1b[0m"，污染分析聚类，必须剥掉。
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 _installed_lock = threading.Lock()
 _installed: Optional["_Beacon"] = None
@@ -47,9 +50,15 @@ logger = logging.getLogger(__name__)
 
 def sanitize_message(msg: str) -> str:
     s = str(msg or "")[:MSG_MAX * 2]
+    s = _ANSI_RE.sub("", s)
     s = _USER_PATH_RE.sub(r"~", s)
     s = _SECRET_RE.sub("***", s)
     return s[:MSG_MAX]
+
+
+def sanitize_level(level: str) -> str:
+    """级别也可能带 ANSI（record.levelname 被彩色化）→ 只留字母。"""
+    return _ANSI_RE.sub("", str(level or "")).strip()[:10]
 
 
 def _env_truthy(name: str) -> bool:
@@ -111,7 +120,7 @@ class _Beacon(logging.Handler):
                     "ev": {
                         "ts": int(now),
                         "logger": record.name[:80],
-                        "level": record.levelname,
+                        "level": sanitize_level(record.levelname),
                         "msg": msg,
                     },
                 }
@@ -135,14 +144,28 @@ class _Beacon(logging.Handler):
         self._thread.start()
 
     def note_event(self, logger_name: str, level: str, msg: str) -> None:
-        """非日志路径的手工事件（boot 等）。"""
+        """非日志路径的手工事件（boot / 上次崩溃等）。"""
         with self._lock:
             key = (logger_name, msg[:80])
             self._pending[key] = {
                 "first": time.time(), "n": 1,
                 "ev": {"ts": int(time.time()), "logger": logger_name,
-                       "level": level, "msg": sanitize_message(msg)},
+                       "level": sanitize_level(level), "msg": sanitize_message(msg)},
             }
+
+    def note_prev_exit(self, prev: Optional[dict]) -> None:
+        """上次会话非正常死亡（exit_sentinel 残留）→ 作为 WARNING 事件回传。
+
+        崩溃/OOM/taskkill 这类死法**日志里没有 ERROR**（进程直接没了），只有哨兵
+        残留能证明——把它接进 beacon，公网机器的崩溃才可远程发现。"""
+        if not prev:
+            return
+        pid = prev.get("pid")
+        lived = int(prev.get("lived_sec") or 0)
+        self.note_event(
+            "exit_sentinel", "WARNING",
+            f"prev session abnormal exit pid={pid} lived={lived}s "
+            f"(crash/OOM/taskkill — no ERROR in log)")
 
     def _loop(self) -> None:
         while not self._stop.wait(FLUSH_INTERVAL_SEC):

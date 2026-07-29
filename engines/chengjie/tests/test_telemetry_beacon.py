@@ -98,3 +98,28 @@ def test_own_logs_never_loop():
     b = _mk()
     b.emit(logging.LogRecord(tb.__name__, logging.ERROR, "f", 1, "self", None, None))
     assert not b._pending
+
+
+def test_ansi_stripped_from_msg_and_level():
+    # 实测 0.2.6 回传里出现的 ANSI 污染样本
+    assert tb.sanitize_message("\x1b[31mAI API 失败\x1b[0m") == "AI API 失败"
+    assert tb.sanitize_level("\x1b[31mERROR") == "ERROR"
+    b = _mk()
+    rec = logging.LogRecord("x", logging.ERROR, "f", 1, "\x1b[31mboom\x1b[0m", None, None)
+    b.emit(rec)
+    ev = next(iter(b._pending.values()))["ev"]
+    assert ev["msg"] == "boom"
+    assert "\x1b" not in ev["level"]
+
+
+def test_note_prev_exit_enqueues_crash():
+    b = _mk()
+    b.note_prev_exit({"pid": 4321, "lived_sec": 630})
+    assert len(b._pending) == 1
+    ev = next(iter(b._pending.values()))["ev"]
+    assert ev["logger"] == "exit_sentinel" and ev["level"] == "WARNING"
+    assert "4321" in ev["msg"] and "630" in ev["msg"]
+    # None / 空 → 不入队
+    b2 = _mk()
+    b2.note_prev_exit(None)
+    assert not b2._pending

@@ -10,6 +10,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   Activity,
   BarChart3,
+  Bug,
   Crown,
   Gift,
   Inbox,
@@ -295,6 +296,7 @@ const NAV = [
   { href: "/console/channels", label: "渠道", Icon: Radio },
   { href: "/console/kpi", label: "KPI", Icon: BarChart3 },
   { href: "/console/audit", label: "审计", Icon: ScrollText },
+  { href: "/console/errors", label: "错误", Icon: Bug },
   { href: "/console/health", label: "健康", Icon: Activity },
 ] as const;
 
