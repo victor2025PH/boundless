@@ -178,12 +178,16 @@ class AIChatAssistant:
             # 托管版：向官网换设备令牌（用户零配 Key；真云 Key 只在服务端）。
             # 守护线程每小时续期/补领（首启无网或未领试用时条件满足自动接入）。
             try:
-                from src.ai.hosted_gateway import ensure_hosted_ai, start_refresh_daemon
+                from src.ai.hosted_gateway import (
+                    ensure_hosted_ai, ensure_hosted_telegram, start_refresh_daemon)
                 if await asyncio.to_thread(ensure_hosted_ai, self.config):
                     self.logger.info("托管 AI 网关已就绪（设备令牌）")
+                # 托管 Telegram 凭据：用户只登录、不填 api_id/hash（池未配则静默跳过）
+                if await asyncio.to_thread(ensure_hosted_telegram, self.config):
+                    self.logger.info("托管 Telegram 凭据已就绪（用户无需申请 api_id）")
                 start_refresh_daemon(self.config)
             except Exception as _hg:
-                self.logger.debug("托管 AI 网关跳过: %s", _hg)
+                self.logger.debug("托管网关跳过: %s", _hg)
             self.ai_client = AIClient(self.config)
             await self.ai_client.initialize()
             self.logger.info("AI客户端初始化成功")

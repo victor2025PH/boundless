@@ -164,6 +164,55 @@ def fetch_device_token(
     }
 
 
+def ensure_hosted_telegram(config_manager: Any, *, fetch: Optional[Fetch] = None) -> bool:
+    """托管版：向官网凭据池领一组 Telegram api_id/api_hash 注入 ``telegram.*``。
+
+    「用户只登录、不填 ID/Hash」的公网解——集团 LAN 凭据池只绑 localhost 够不着，
+    改由 bd2026.cc 网关按设备令牌粘定派发（同机恒定同 api_id，与 pyrogram session
+    绑定不变量一致）。仅托管态 + 本地 api_id 为空时注入；用户自填的凭据永不覆盖。
+
+    池未配（服务端 503 pool_disabled）/ 网络失败 → 静默不注入，向导回落「自备凭据」
+    旧流程，零副作用。返回是否注入成功。
+    """
+    cfg = getattr(config_manager, "config", None) or {}
+    if not _wants_hosted(cfg):
+        return False
+    tg = cfg.get("telegram") if isinstance(cfg.get("telegram"), dict) else {}
+    # 用户已自填（或此前已注入过）→ 不动
+    if str(tg.get("api_id") or "").strip() and str(tg.get("api_hash") or "").strip():
+        return True
+
+    f = fetch or _http
+    from src.licensing.machine_bridge import machine_fingerprint
+
+    fp = machine_fingerprint()
+    if not fp:
+        return False
+    # 复用已缓存的设备令牌做鉴权（没有也行，服务端可凭指纹+台账放行）
+    path = _state_path(config_manager)
+    cached = _load_cached(path) if path is not None else {}
+    token = str(cached.get("token") or (cfg.get("ai") or {}).get("api_key") or "")
+    bearer = token if str(token).startswith("cx.") else ""
+    resp = f(f"{_site_url(cfg)}/api/pool/telegram-cred", "POST",
+             {"fingerprint": fp}, bearer) if bearer else f(
+        f"{_site_url(cfg)}/api/pool/telegram-cred", "POST", {"fingerprint": fp})
+    if not resp.get("ok") or not resp.get("api_id") or not resp.get("api_hash"):
+        err = str(resp.get("error") or "")
+        if err and err not in ("pool_disabled", "network"):
+            logger.info("[hosted-tg] 凭据派发未成功：%s（回落自备凭据流程）", err)
+        return False
+
+    if not isinstance(cfg.get("telegram"), dict):
+        cfg["telegram"] = {}
+    cfg["telegram"]["api_id"] = str(resp["api_id"])
+    cfg["telegram"]["api_hash"] = str(resp["api_hash"])
+    cfg["telegram"]["_hosted_cred"] = True
+    # 🔒 只记 api_id 与来源，绝不记 api_hash（与 LAN 池同口径）
+    logger.info("[hosted-tg] 已注入托管 Telegram 凭据 api_id=%s name=%s（用户无需申请）",
+                resp["api_id"], resp.get("name") or "?")
+    return True
+
+
 def ensure_hosted_ai(config_manager: Any, *, fetch: Optional[Fetch] = None) -> bool:
     """若适用则把设备令牌注入 ``ai.*`` + 进程 env。返回是否已接入托管网关。
 

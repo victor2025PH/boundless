@@ -302,11 +302,19 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
         try:
             import asyncio
 
+            from src.ai.hosted_gateway import ensure_hosted_ai, ensure_hosted_telegram
             from src.utils.golive import _is_placeholder
+
+            # Telegram 托管凭据独立于 AI Key 状态尝试（池未配则静默跳过）——
+            # 即便 AI 已配好也要补领凭据，别被 AI 的早返挡掉。
+            try:
+                await asyncio.to_thread(ensure_hosted_telegram, _CONFIG_MANAGER)
+            except Exception:
+                logger.debug("[hosted-tg] claim 后领取凭据失败（忽略）", exc_info=True)
+
             ai = (_cfg_or_none().get("ai") or {})
             if not _is_placeholder(ai.get("api_key")):
-                return  # 已有可用 Key（自有或令牌），别反复 reload
-            from src.ai.hosted_gateway import ensure_hosted_ai
+                return  # AI 已有可用 Key（自有或令牌），别反复 reload
             if not await asyncio.to_thread(ensure_hosted_ai, _CONFIG_MANAGER):
                 return
             from src.web.routes.unified_inbox_setup_routes import reload_ai_runtime

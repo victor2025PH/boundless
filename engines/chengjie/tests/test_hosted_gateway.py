@@ -181,3 +181,59 @@ def test_schedule_forced_refresh_noop_when_not_hosted(tmp_path, monkeypatch):
     monkeypatch.setattr(hg, "_last_forced_ts", 0.0)
     cm = _CM(tmp_path, {"api_key": "sk-user-own"})
     assert hg.schedule_forced_refresh(cm) is False
+
+
+# ── 托管 Telegram 凭据注入 ──────────────────────────────────────────────
+
+class _CMT:
+    def __init__(self, tmp_path, telegram: dict):
+        self.config_path = str(tmp_path / "config" / "config.yaml")
+        Path(self.config_path).parent.mkdir(parents=True, exist_ok=True)
+        self.config = {
+            "telegram": dict(telegram),
+            "licensing": {"hosted_ai": {"enabled": True}},
+            "ai": {"api_key": "cx.tok"},
+        }
+
+
+def test_hosted_telegram_injects_when_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    _fp(monkeypatch)
+    cm = _CMT(tmp_path, {"api_id": "", "api_hash": ""})
+
+    def fake(u, m, b, bearer=""):
+        assert u.endswith("/api/pool/telegram-cred") and m == "POST"
+        return {"ok": True, "api_id": "1001", "api_hash": "a" * 32, "name": "grp-A"}
+
+    assert hg.ensure_hosted_telegram(cm, fetch=fake) is True
+    assert cm.config["telegram"]["api_id"] == "1001"
+    assert cm.config["telegram"]["api_hash"] == "a" * 32
+    assert cm.config["telegram"].get("_hosted_cred") is True
+
+
+def test_hosted_telegram_never_overrides_user_creds(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    _fp(monkeypatch)
+    cm = _CMT(tmp_path, {"api_id": "999", "api_hash": "f" * 32})
+
+    def boom(*a, **k):
+        raise AssertionError("用户已自填凭据时不应请求池")
+
+    assert hg.ensure_hosted_telegram(cm, fetch=boom) is True
+    assert cm.config["telegram"]["api_id"] == "999"
+
+
+def test_hosted_telegram_pool_disabled_silent(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    _fp(monkeypatch)
+    cm = _CMT(tmp_path, {"api_id": "", "api_hash": ""})
+    assert hg.ensure_hosted_telegram(
+        cm, fetch=lambda *a, **k: {"ok": False, "error": "pool_disabled"}) is False
+    assert cm.config["telegram"].get("api_id", "") == ""
+
+
+def test_hosted_telegram_noop_when_not_hosted(tmp_path, monkeypatch):
+    monkeypatch.delenv("AITR_DESKTOP_MODE", raising=False)
+    cm = _CMT(tmp_path, {"api_id": "", "api_hash": ""})
+    cm.config["licensing"]["hosted_ai"]["enabled"] = False
+    assert hg.ensure_hosted_telegram(cm, fetch=lambda *a, **k: {"ok": True}) is False

@@ -2,9 +2,10 @@
 //
 // 客服在这里做的唯一一件事：把用户报来的绑定码贴进去，点核销。真凭证由厂商机
 // （私钥离线）签发后回填，用户端后台轮询自动入账——客服不接触任何密钥。
-import { Cloud, Gift, HeartPulse } from "lucide-react";
+import { Cloud, Gift, HeartPulse, KeyRound } from "lucide-react";
 import { hasConsoleSession } from "@/lib/console-auth";
 import { gatewayDayStats } from "@/lib/ai-gateway";
+import { poolStats as tgPoolStats } from "@/lib/tg-cred-pool";
 import { claimStats, listClaims } from "@/lib/trial-claim-store";
 import { readTrialFunnel } from "@/lib/trial-funnel";
 import { Card, DataTable, EmptyState, PageHeader, Td, fmtDateTime } from "../parts";
@@ -45,6 +46,12 @@ export default async function TrialPage() {
     readTrialFunnel(7),
     gatewayDayStats().catch(() => null),
   ]);
+  let tgPool: ReturnType<typeof tgPoolStats> | null = null;
+  try {
+    tgPool = tgPoolStats();
+  } catch {
+    tgPool = null;
+  }
   const recent = rows.slice().reverse();
   const health = fulfillerHealth(stats.fulfillerLastSeen, stats.oldestPendingMin);
   const waiting = recent.filter((c) => c.bindRedeemedAt && !c.topupVoucher).length;
@@ -105,6 +112,29 @@ export default async function TrialPage() {
           <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
             设备令牌只发给本页台账里的指纹（领取试用=接入前置）；云 Key 只在服务端。
             全局水位到 100% 时所有试用机收到「通道繁忙」，不影响已购授权用户。
+          </p>
+        </Card>
+      )}
+
+      {tgPool && tgPool.enabled && (
+        <Card className="mb-4 border-slate-800 bg-slate-900/40 !py-3">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+            <span className="inline-flex items-center gap-1.5">
+              <KeyRound className="h-4 w-4 text-emerald-400" />
+              <span className="text-slate-400">Telegram 凭据池：</span>
+              <span className="font-medium text-white">
+                {tgPool.total_used}/{tgPool.total_cap} 号位
+              </span>
+            </span>
+            {tgPool.groups.map((g) => (
+              <span key={g.api_id_tail} className="text-slate-500">
+                {g.name}(…{g.api_id_tail}) {g.used}/{g.max}
+              </span>
+            ))}
+          </div>
+          <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+            公网用户登录 Telegram 时按机器指纹粘定分到一组集团 api_id（同机恒定），
+            无需自己去 my.telegram.org 申请。某组占满前自动优先空闲组；全满则新用户回落自备凭据。
           </p>
         </Card>
       )}

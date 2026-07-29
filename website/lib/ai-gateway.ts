@@ -64,6 +64,12 @@ function db(): Database.Database {
     " day TEXT NOT NULL, mid TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0," +
     " PRIMARY KEY (day, mid))"
   );
+  // Telegram 凭据粘定表：机器指纹 → 分到的 api_id（同机永远同 api_id，
+  // 因 pyrogram session 与 api_id 绑定，换组会触发 Telegram 风控——与 LAN 池同不变量）。
+  _db.exec(
+    "CREATE TABLE IF NOT EXISTS tg_cred_assign (" +
+    " mid TEXT PRIMARY KEY, api_id TEXT NOT NULL, assigned_at INTEGER NOT NULL)"
+  );
   return _db;
 }
 
