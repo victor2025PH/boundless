@@ -276,13 +276,24 @@ def ensure_hosted_ai(config_manager: Any, *, fetch: Optional[Fetch] = None) -> b
         return True
 
     ai = cfg.get("ai") if isinstance(cfg.get("ai"), dict) else {}
+    cur_key = str(ai.get("api_key") or "")
     user_has_own_key = (
         not _is_placeholder(ai.get("api_key"))
         and not ai.get("_hosted_trial")
-        and str(ai.get("api_key") or "") != str(cached.get("token") or "")
+        and cur_key != str(cached.get("token") or "")
     )
-    if user_has_own_key:
+    # 升级坑修复（2026-07-29）：托管版**严格态**（AITR_MANAGED_EDITION=1，非仅桌面模式）
+    # 下，用户从不自配 Key——此时残留的非占位 Key 几乎必是旧版首启写坏的（如
+    # "ollama"/坏 DeepSeek key），会让本函数误判「用户自有 Key」而跳过注入，
+    # 老 401 原样保留（今早 ****lama invalid + 「更新了还是老问题」的根因）。
+    # 故严格托管态忽略该护栏，往下真正领到令牌**成功后才覆盖**（fetch 失败绝不动旧值）。
+    strict_managed = str(os.environ.get("AITR_MANAGED_EDITION") or "").strip().lower() in (
+        "1", "true", "yes", "on")
+    if user_has_own_key and not strict_managed:
         return False
+    override_stale = user_has_own_key and strict_managed  # 覆盖仅在成功领令牌后发生
+    if override_stale:
+        logger.info("[hosted-ai] 托管版检测到疑似旧版残留 Key（非托管令牌），领到新令牌后将覆盖")
 
     now = int(time.time())
     exp = int(cached.get("exp") or 0)

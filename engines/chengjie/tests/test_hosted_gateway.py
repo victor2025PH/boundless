@@ -107,6 +107,45 @@ def test_ensure_network_fail_falls_back_to_valid_cache(tmp_path, monkeypatch):
     assert cm.config["ai"]["api_key"] == "cx.stale-but-valid"
 
 
+def test_managed_overrides_stale_bad_key_on_success(tmp_path, monkeypatch):
+    """升级坑：严格托管态下旧版残留坏 Key（如 ollama）→ 领到新令牌后覆盖。"""
+    monkeypatch.setenv("AITR_MANAGED_EDITION", "1")
+    monkeypatch.delenv("AITR_HOSTED_AI_KEY", raising=False)
+    _fp(monkeypatch)
+    cm = _CM(tmp_path, {"api_key": "ollama", "base_url": "http://127.0.0.1:11434"})
+
+    def fake(u, m, b, bearer=""):
+        return {"ok": True, "token": "cx.fresh", "exp": int(time.time()) + 30 * 86400}
+
+    assert hg.ensure_hosted_ai(cm, fetch=fake) is True
+    assert cm.config["ai"]["api_key"] == "cx.fresh"
+    assert cm.config["ai"].get("_hosted_trial") is True
+
+
+def test_managed_stale_key_kept_on_fetch_fail(tmp_path, monkeypatch):
+    """覆盖只在成功领令牌后发生：领取失败（无有效缓存）→ 旧值不动，绝不破坏。"""
+    monkeypatch.setenv("AITR_MANAGED_EDITION", "1")
+    monkeypatch.delenv("AITR_HOSTED_AI_KEY", raising=False)
+    _fp(monkeypatch)
+    cm = _CM(tmp_path, {"api_key": "ollama"})
+    assert hg.ensure_hosted_ai(
+        cm, fetch=lambda *a, **k: {"ok": False, "error": "no_claim"}) is False
+    assert cm.config["ai"]["api_key"] == "ollama"  # 未被清空/破坏
+
+
+def test_desktop_nonmanaged_keeps_user_key(tmp_path, monkeypatch):
+    """仅桌面模式（非严格托管）→ 用户自有 Key 仍受保护，不覆盖。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    monkeypatch.delenv("AITR_MANAGED_EDITION", raising=False)
+    cm = _CM(tmp_path, {"api_key": "sk-user-real-key"})
+
+    def boom(*a, **k):
+        raise AssertionError("非严格托管不应覆盖用户 Key")
+
+    assert hg.ensure_hosted_ai(cm, fetch=boom) is False
+    assert cm.config["ai"]["api_key"] == "sk-user-real-key"
+
+
 def test_ensure_operator_env_not_taken_over(tmp_path, monkeypatch):
     """运维直注的 env Key（≠缓存令牌）→ 本模块不接管不覆盖。"""
     monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
