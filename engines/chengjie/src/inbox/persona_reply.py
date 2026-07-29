@@ -317,6 +317,7 @@ async def generate_persona_reply(
     reply = None
     used_persona = ""
     used_intent = ""
+    kb_refs: list = []    # P2 证据链：本稿引用的 KB 条目（前端知识 chip / 工坊 chips 用）
     used_unified = False  # 统一引擎已自带记忆写回 → 避免文末重复写
 
     # ★ 统一规则引擎（单一事实源·彻底对齐）：优先走 SkillManager.generate_inbox_draft，
@@ -358,6 +359,7 @@ async def generate_persona_reply(
                     used_intent = _res.get("intent") or ""
                     used_persona = persona_id or "domain"
                     used_unified = True
+                    kb_refs = list(_res.get("kb_refs") or [])
             except Exception:
                 logger.debug("[persona_reply] 统一引擎失败，回落直连", exc_info=True)
                 reply = None
@@ -378,6 +380,11 @@ async def generate_persona_reply(
                 try:
                     _res = kb.search(last_inbound, top_k=3, lang="zh")
                     kb_context = kb.build_ai_context_from_result(_res, lang="zh")
+                    try:
+                        from src.utils.kb_refs import extract_kb_refs
+                        kb_refs = extract_kb_refs(_res)
+                    except Exception:
+                        kb_refs = []
                 except Exception:
                     kb_context = ""
             ctx: Dict[str, Any] = {
@@ -478,6 +485,7 @@ async def generate_persona_reply(
         "persona": used_persona,
         "persona_tier": persona_tier,
         "intent": used_intent,
+        "kb_refs": kb_refs,
     }
     translated = await _translate_reply(app, reply, target_lang)
     if translated:

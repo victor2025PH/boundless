@@ -33,6 +33,22 @@ WARN_PCT = 75.0
 HIGH_PCT = 90.0
 
 
+def config_state(config: Dict[str, Any]) -> str:
+    """配置三态（纯函数）：``off`` / ``misconfigured`` / ``ready``。
+
+    动机（2026-07-29 实测事故）：overlay 里 ``enabled: true`` 但漏配 ``hosts`` →
+    ``parse_hosts`` 返回空 → ``probe_hosts`` 返回 None → API 报 ``enabled:false``
+    → 前端整卡隐藏，**全程零提示**。运营以为开了、文档也写着开了，实际静默无效
+    （同类病：flag 开启缺少「是否真生效」的反馈）。区分出 ``misconfigured`` 后，
+    「开了但配置不全」不再与「没开」混为一谈。
+    """
+    ops = (config.get("ops") or {}) if isinstance(config, dict) else {}
+    gw = ops.get("gpu_watermark") or {}
+    if not gw.get("enabled", False):
+        return "off"
+    return "ready" if parse_hosts(config) else "misconfigured"
+
+
 def parse_hosts(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     """从 config 取启用的主机列表（enabled + 至少一台合法主机才非空）。"""
     ops = (config.get("ops") or {}) if isinstance(config, dict) else {}

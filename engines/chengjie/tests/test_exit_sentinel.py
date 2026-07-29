@@ -50,7 +50,43 @@ def test_corrupt_sentinel_does_not_raise(tmp_path):
 def test_install_idempotent(tmp_path):
     _reset()
     s = tmp_path / "run_sentinel.json"
-    ES.install(sentinel_path=str(s), fatal_log_path=str(tmp_path / "fatal.log"))
+    ES.install(sentinel_path=str(s), fatal_log_path=str(tmp_path / "fatal.log"),
+               heartbeat_sec=0)
     first = s.read_text(encoding="utf-8")
     assert ES.install(sentinel_path=str(s)) is None   # 幂等：第二次 no-op
     assert s.read_text(encoding="utf-8") == first     # 哨兵未被重写
+
+
+def test_lived_prefers_heartbeat_over_mtime(tmp_path):
+    """心跳字段 beat_at 是存活时长的第一事实源（mtime 可被外部工具改写）。"""
+    _reset()
+    s = tmp_path / "run_sentinel.json"
+    now = time.time()
+    s.write_text(json.dumps({
+        "pid": 1, "started_at": now - 3600, "beat_at": now - 60,
+    }), encoding="utf-8")
+    prev = ES.check_previous_exit(s)
+    assert prev is not None
+    assert not prev["ts_anomaly"]
+    assert 3500 < prev["lived_sec"] < 3600    # ≈59 分钟，来自心跳而非 mtime(≈now)
+
+
+def test_negative_lived_clamped_as_anomaly(tmp_path):
+    """时间戳倒挂（started_at 在未来）→ 判异常并钳 0，不再报「-N 分钟」。"""
+    _reset()
+    s = tmp_path / "run_sentinel.json"
+    s.write_text(json.dumps({
+        "pid": 2, "started_at": time.time() + 86400,
+    }), encoding="utf-8")
+    prev = ES.check_previous_exit(s)
+    assert prev is not None
+    assert prev["ts_anomaly"] is True
+    assert prev["lived_sec"] == 0
+
+
+def test_write_sentinel_carries_beat(tmp_path):
+    _reset()
+    s = tmp_path / "run_sentinel.json"
+    ES._write_sentinel(s, time.time() - 10)
+    data = json.loads(s.read_text(encoding="utf-8"))
+    assert data["beat_at"] >= data["started_at"]

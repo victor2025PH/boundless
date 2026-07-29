@@ -201,7 +201,7 @@
   border:1px solid var(--border);border-radius:6px;background:var(--bg-soft);
   color:var(--text-tiny);font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all;}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260727">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260729b">
 <script src="/static/workspace/inbox-messages.js?v=20260720b"></script>
 
 <!-- 主布局 -->
@@ -361,7 +361,13 @@
     <!-- 连接状态横幅：轮询 loadChats 失败点亮、成功熄灭（列表数据保留，不清屏） -->
     <div id="conn-banner" style="display:none;padding:6px 10px;font-size:12px;background:rgba(217,119,6,.14);color:var(--tk-amber-ink,#b45309);border-bottom:1px solid var(--line-soft,#eee);" data-i18n="inbox.conn.reconnecting">⚠ 连接中断，自动重连中…</div>
     <div class="conv-items" id="conv-items">
-      <div class="empty-list"><span class="spin"></span><span style="margin-top:8px;font-size:13px;" data-i18n="inbox.skel.loading">加载中…</span></div>
+      <div class="conv-skel-list" aria-busy="true" aria-label="loading">
+        <div class="conv-skel"><div class="conv-skel-av"></div><div class="conv-skel-lines"><div class="conv-skel-line w60"></div><div class="conv-skel-line w90"></div></div></div>
+        <div class="conv-skel"><div class="conv-skel-av"></div><div class="conv-skel-lines"><div class="conv-skel-line w45"></div><div class="conv-skel-line w75"></div></div></div>
+        <div class="conv-skel"><div class="conv-skel-av"></div><div class="conv-skel-lines"><div class="conv-skel-line w70"></div><div class="conv-skel-line w55"></div></div></div>
+        <div class="conv-skel"><div class="conv-skel-av"></div><div class="conv-skel-lines"><div class="conv-skel-line w50"></div><div class="conv-skel-line w80"></div></div></div>
+        <div class="conv-skel"><div class="conv-skel-av"></div><div class="conv-skel-lines"><div class="conv-skel-line w65"></div><div class="conv-skel-line w40"></div></div></div>
+      </div>
     </div>
     <!-- 十期：游标分页（store 有更旧会话时可见；独立于 conv-items 的 diff 渲染体系） -->
     <div id="conv-load-more" style="display:none;padding:7px 12px;text-align:center;border-top:1px dashed var(--border);">
@@ -531,6 +537,8 @@
             <div class="reply-bar">
               <textarea class="reply-textarea" id="reply-ta" placeholder="输入消息… 或输入 / 选择快捷指令" data-i18n-placeholder="inbox.reply.ph" rows="2"
                 onkeydown="onTextareaKey(event)" oninput="_onReplyInput(this.value)"></textarea>
+              <!-- P1.5 多句分条 chip：≥2 行且会话支持时出现；点击切 分条/整段（记本机） -->
+              <button type="button" class="bubble-chip" id="bubble-chip" style="display:none;" onclick="_toggleBubblePref()" title="多句分条发送：换行会拆成几条短消息像真人连发（点击切换 分条/整段，记在本机）" data-i18n-title="inbox.rt.bubble_t"><span id="bubble-chip-n"></span></button>
               <button class="send-btn" id="send-btn" onclick="sendMsg()" data-i18n="inbox.send">发送</button>
             </div>
             <!-- P55: 发送前译文预览 -->
@@ -541,7 +549,7 @@
             <div class="reply-tools" id="reply-tools">
               <!-- 写作组 -->
               <div class="rt-group">
-                <button class="tiny-btn rt-primary" id="ai-reply-btn" onclick="genAiReply()" title="AI 生成人设化回复草稿（右侧业务助手可深度编辑/多语言）" data-i18n-title="inbox.rt.ai_reply_t"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 3l1.7 4.6L17 9l-4.3 1.4L11 15l-1.7-4.6L5 9l4.3-1.4L11 3z"/><path d="M18 13l.8 2.2L21 16l-2.2.8L18 19l-.8-2.2L15 16l2.2-.8L18 13z"/></svg><span data-i18n="inbox.rt.ai_reply">AI回复</span></button>
+                <button class="tiny-btn rt-primary" id="ai-reply-btn" onclick="genAiReply()" title="AI 生成人设化草稿并填入输入框（右栏「回复工坊」可深度编辑 / 改语言）" data-i18n-title="inbox.rt.ai_reply_t"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 3l1.7 4.6L17 9l-4.3 1.4L11 15l-1.7-4.6L5 9l4.3-1.4L11 3z"/><path d="M18 13l.8 2.2L21 16l-2.2.8L18 19l-.8-2.2L15 16l2.2-.8L18 13z"/></svg><span data-i18n="inbox.rt.ai_reply">AI回复</span></button>
                 <div class="rt-pop-wrap">
                   <button class="tiny-btn" id="voice-cfg-btn" onclick="toggleVoiceCfg()" title="发送语音 / 音色选择 / 克隆 / 录入 / 对账" data-i18n-title="inbox.rt.voice_t"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg><span data-i18n="inbox.rt.voice">语音 ▾</span></button>
                   <div class="rt-pop" id="voice-cfg-pop">
@@ -566,6 +574,8 @@
                   </div>
                 </div>
                 <button class="tiny-btn" onclick="_openSlash()" title="调用模板 / 知识库（也可在输入框直接输入 /）" data-i18n-title="inbox.rt.slash_t"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 8 9 12 5 16"/><line x1="12" y1="16" x2="19" y2="16"/></svg><span data-i18n="inbox.rt.slash">指令</span></button>
+                <!-- KB 智能推荐常驻入口：有推荐才显示，角标=条数，高置信高亮（浮层展开零布局位移）-->
+                <button class="tiny-btn kb-chip" id="kb-chip" style="display:none;" onclick="toggleKbSuggest()" title="相关知识推荐（点击展开 / 再点收起）" data-i18n-title="inbox.kb.chip_t"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg><span data-i18n="inbox.kb.chip">知识</span><span class="kb-chip-n" id="kb-chip-n"></span></button>
                 <button class="tiny-btn" id="send-media-btn" title="发送图片/语音/文件（协议多开账号）" data-i18n-title="inbox.rt.media_t"
                   onclick="document.getElementById('send-media-file').click()"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2.5"/><circle cx="8.5" cy="9" r="1.6"/><path d="M21 15l-5-5L5 21"/></svg><span data-i18n="inbox.rt.media">媒体</span></button>
                 <input type="file" id="send-media-file" style="display:none;"
@@ -683,11 +693,18 @@
               </div>
             </div>
             <div id="qr-panel" class="qr-panel"></div>
-            <!-- Phase 17: KB 自动推送（会话打开时自动触发）-->
+            <!-- KB 智能推荐浮层（P0 收敛：absolute 锚在 composer 上方零布局位移；常驻入口=工具条「知识」chip，高置信才自动展开）-->
             <div class="kb-autosuggest" id="kb-autosuggest">
               <div class="kb-autosuggest-hdr">
                 <span data-i18n="inbox.kb.suggest_hdr">📚 相关知识推荐</span>
-                <button class="tiny-btn" onclick="dismissKbSuggest()" style="font-size:11px;" data-i18n="inbox.collapse">收起</button>
+                <span class="kb-as-hdr-acts">
+                  <select id="kb-suggest-pref" class="tiny-btn" onchange="_setKbPref(this.value)" title="推荐展开方式（记在本机，对所有会话生效）" data-i18n-title="inbox.kb.pref_t">
+                    <option value="auto" data-i18n="inbox.kb.pref_auto">高置信自动展开</option>
+                    <option value="chip" data-i18n="inbox.kb.pref_chip">仅提示不弹出</option>
+                    <option value="off" data-i18n="inbox.kb.pref_off">关闭推荐</option>
+                  </select>
+                  <button class="tiny-btn" onclick="dismissKbSuggest()" style="font-size:11px;" data-i18n="inbox.collapse">收起</button>
+                </span>
               </div>
               <div id="kb-autosuggest-items"></div>
             </div>
@@ -728,7 +745,7 @@
             <div class="ws-cp-sec active" data-tab="reply">
               <section class="cp-card" data-cp-card="draft">
                 <button type="button" class="cp-card-hd" data-cp-toggle="draft">
-                  <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="spark"></span><span data-i18n="inbox.cp.h.ai_reply">AI 回复</span></span>
+                  <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="spark"></span><span data-i18n="inbox.cp.h.ai_reply">回复工坊</span></span>
                   <span class="cp-card-pill" id="cpp-draft"></span>
                   <span class="cp-card-chev" aria-hidden="true"></span>
                 </button>
@@ -909,12 +926,13 @@
       <div class="drawer-section-title" data-i18n="inbox.drawer.conn_center">平台连接中心</div>
       <!-- P0 舰队摘要 + 账号搜索：固定容器，renderDrawerAccounts 只更新数字/显隐，不重建 input（保住输入焦点） -->
       <div id="acct-toolbar" style="display:none;">
+        <!-- 图标化（2026-07-29）：icon 置于 data-i18n span 外侧，i18n 刷新只改文字不冲掉 SVG -->
         <div class="fleet-summary" id="fleet-summary">
-          <div class="fleet-cell"><span class="fleet-num" id="fleet-n-plat">-</span><span class="fleet-lbl" data-i18n="inbox.acct.sum_plats">平台</span></div>
-          <div class="fleet-cell"><span class="fleet-num" id="fleet-n-total">-</span><span class="fleet-lbl" data-i18n="inbox.acct.sum_total">账号</span></div>
-          <div class="fleet-cell ok"><span class="fleet-num" id="fleet-n-on">-</span><span class="fleet-lbl" data-i18n="inbox.acct.sum_online">在线</span></div>
+          <div class="fleet-cell"><span class="fleet-num" id="fleet-n-plat">-</span><span class="fleet-lbl"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg><span data-i18n="inbox.acct.sum_plats">平台</span></span></div>
+          <div class="fleet-cell"><span class="fleet-num" id="fleet-n-total">-</span><span class="fleet-lbl"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span data-i18n="inbox.acct.sum_total">账号</span></span></div>
+          <div class="fleet-cell ok"><span class="fleet-num" id="fleet-n-on">-</span><span class="fleet-lbl"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg><span data-i18n="inbox.acct.sum_online">在线</span></span></div>
           <button type="button" class="fleet-cell abn" id="fleet-abn-cell" onclick="toggleAcctAbnFilter()" title="点击只看异常（离线）账号" data-i18n-title="inbox.acct.sum_abn_t" disabled>
-            <span class="fleet-num" id="fleet-n-abn">-</span><span class="fleet-lbl" data-i18n="inbox.acct.sum_abn">异常</span>
+            <span class="fleet-num" id="fleet-n-abn">-</span><span class="fleet-lbl"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><span data-i18n="inbox.acct.sum_abn">异常</span></span>
           </button>
         </div>
         <div class="acct-abn-tip" id="acct-abn-tip" role="status" style="display:none;">
@@ -1049,6 +1067,8 @@
       <div class="connect-qr-wrap">
         <img id="connect-qr-img" alt="" style="display:none;">
         <div class="connect-qr-mask" id="connect-qr-mask"><span class="spin"></span><span data-i18n="inbox.connect.qr_gen">正在生成二维码…</span></div>
+        <!-- 授权成功画勾覆盖层（.ok 时显示；状态文字由下方状态行承载）+ 刚接入账号的身份预览 -->
+        <div class="connect-qr-okov" aria-hidden="true"><svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="24"/><path d="M15 27l7 7 15-16"/></svg><div class="connect-qr-okid" id="connect-qr-okid"></div></div>
       </div>
       <div class="connect-steps" id="connect-steps" aria-hidden="true">
         <span class="cs-step" data-step="1"><span class="cs-dot">1</span><span data-i18n="inbox.connect.step_scan">扫码</span></span>
@@ -1344,17 +1364,26 @@ function _accountsForPlatform(p){
   Object.values(platformStatus||{}).forEach(a=>{
     if((a.platform||'web')!==p) return;
     const id=a.account_id||'default';
-    map[id]=map[id]||{account_id:id,running:!!a.running,unread:0,count:0,paired:true};
+    map[id]=map[id]||{account_id:id,running:!!a.running,unread:0,count:0,paired:true,attn:0};
     map[id].running=map[id].running||!!a.running;
     map[id].paired=true;
   });
   (allChats||[]).forEach(c=>{
     if((c.platform||'web')!==p) return;
     const id=c.account_id||'default';
-    map[id]=map[id]||{account_id:id,running:false,unread:0,count:0,paired:false};
+    map[id]=map[id]||{account_id:id,running:false,unread:0,count:0,paired:false,attn:0};
     map[id].count++; map[id].unread+=(c.unread||0);
+    // 未读分级依据（rail 徽标红/灰）：SLA 危急 或 命中「需人工」转接标签
+    if(c.sla_level==='crit'||_convNeedsHuman(c)) map[id].attn++;
   });
   return Object.values(map).sort((a,b)=>(a.account_id>b.account_id?1:-1));
+}
+// 「需人工」判定与后端 HANDOFF_TAG 对齐（protocol_autoreply.py）；CJK 走 \u 转义过 no-CJK 门禁
+var _NEEDS_HUMAN_TAG='\u9700\u4eba\u5de5';
+function _convNeedsHuman(c){
+  const tags=(c&&c.conv_tags)||[];
+  for(var i=0;i<tags.length;i++){ if(String(tags[i]).indexOf(_NEEDS_HUMAN_TAG)>=0) return true; }
+  return false;
 }
 // 哪些平台是多账号（≥2 号）→ 决定是否在会话条显示账号角标
 function _multiAcctPlatforms(){
@@ -1364,7 +1393,9 @@ function _multiAcctPlatforms(){
   const s=new Set(); Object.keys(cnt).forEach(pl=>{ if(cnt[pl].size>=2) s.add(pl); });
   return s;
 }
-// 渲染账号切换条：仅当选中某具体平台且该平台 ≥2 账号
+// 渲染账号切换条（2026-07-29 rail 化）：仅当选中某具体平台且该平台 ≥2 账号。
+// 结构 = 左「滚动区」(全部/账号/历史折叠 chip，单行横滚) + 右「工具区」(仅在线开关 +
+// 管理账号齿轮，常驻不随滚动)；容器注入平台品牌色 --pc 供选中态取色；轮询重绘保滚动位。
 function buildAccountChips(){
   const bar=document.getElementById('account-chips'); if(!bar) return;
   if(platFilter==='all'){ bar.style.display='none'; bar.innerHTML=''; return; }
@@ -1385,8 +1416,12 @@ function buildAccountChips(){
   }
   if(accountFilter!=='all' && !shown.some(a=>a.account_id===accountFilter)) accountFilter='all';
   const totUnread=accts.reduce((s,a)=>s+a.unread,0);
-  let html=`<div class="acct-chip ${accountFilter==='all'?'active':''}" onclick="setAccountFilter('all')">
-      <span class="ac-name">${window.T('inbox.acct.all_accounts')}</span>${totUnread?`<span class="ac-unread">${totUnread>99?'99+':totUnread}</span>`:''}</div>`;
+  const totAttn=accts.reduce((s,a)=>s+(a.attn||0),0);
+  const onCount=accts.filter(a=>a.running).length;
+  // 「全部账号」聚合 chip：宫格图标入族（与头像 chip 同视觉家族）+ 分级未读徽标
+  let html=`<div class="acct-chip ac-all ${accountFilter==='all'?'active':''}" role="button" tabindex="0" onclick="setAccountFilter('all')" onkeydown="_acChipKey(event)" title="${esc(window.Tf('inbox.acct.n_online',{n:accts.length,on:onCount}))}">
+      <span class="ac-all-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span>
+      <span class="ac-name">${window.T('inbox.acct.all_accounts')}</span>${_acUnreadBadge(totUnread,totAttn)}</div>`;
   shown.forEach(a=>{
     const nm=_acctLabel(platFilter,a.account_id);   // 已优先 label > 真实身份 > 序号
     const ord=_acctOrdinal[`${platFilter}:${a.account_id}`];
@@ -1403,22 +1438,66 @@ function buildAccountChips(){
     const noPersona=!ghost&&a.running&&!meta.persona_id;
     let tip=ghost?`${a.account_id} · ${window.T('inbox.acct.ghost_t')}`:String(a.account_id);
     if(!ghost&&meta.persona_id) tip+=` · ${window.Tf('inbox.ident.persona_t',{persona:meta.persona_name||meta.persona_id})}`;
-    html+=`<div class="acct-chip ${accountFilter===a.account_id?'active':''}${ghost?' ac-ghost':''}" onclick="setAccountFilter('${esc(a.account_id)}')" title="${esc(tip)}">
-      <span class="ac-av ${a.running?'on':'off'}" style="background:${avBg};">${avInner}</span>
+    html+=`<div class="acct-chip ${accountFilter===a.account_id?'active':''}${ghost?' ac-ghost':''}" role="button" tabindex="0" onclick="setAccountFilter('${esc(a.account_id)}')" onkeydown="_acChipKey(event)" title="${esc(tip)}">
+      <span class="ac-av ${a.running?'on':'off'}" style="background:${avBg};">${avInner}<span class="ac-st ${a.running?'on':'off'}" aria-hidden="true"></span></span>
       <span class="ac-name">${esc(nm)}</span>
       ${noPersona?`<span class="conv-nopersona-dot" title="${esc(window.T('inbox.ident.no_persona_t'))}"></span>`:''}
       ${ghost?`<span class="ac-ghost-tag">${window.T('inbox.acct.ghost_tag')}</span>`:''}
-      ${a.unread?`<span class="ac-unread">${a.unread>99?'99+':a.unread}</span>`:''}</div>`;
+      ${_acUnreadBadge(a.unread,a.attn)}</div>`;
   });
-  // 「仅历史」账号折叠开关（有历史账号且未开「仅在线」时展示）
+  // 「仅历史」账号折叠开关（有历史账号且未开「仅在线」时展示）——留在滚动区（就地展开语义）
   if(ghosts.length && !accountOnlineOnly){
-    html+=`<div class="acct-chip ac-toggle ${_ghostAcctExpanded?'active':''}" onclick="toggleGhostAccounts()" title="${esc(window.T('inbox.acct.ghost_t'))}">${window.Tf('inbox.acct.ghost_n',{n:ghosts.length})}</div>`;
+    html+=`<div class="acct-chip ac-toggle ${_ghostAcctExpanded?'active':''}" role="button" tabindex="0" onclick="toggleGhostAccounts()" onkeydown="_acChipKey(event)" title="${esc(window.T('inbox.acct.ghost_t'))}">${window.Tf('inbox.acct.ghost_n',{n:ghosts.length})}</div>`;
   }
-  // 仅当确有离线号时才给「仅在线」开关（否则无意义）
+  // 工具区：视图开关（仅当确有离线号）+ 管理账号齿轮（打开抽屉）
+  let tools='';
   if(hasOffline){
-    html+=`<div class="acct-chip ac-toggle ${accountOnlineOnly?'active':''}" onclick="toggleAccountOnlineOnly()" title="${window.T('inbox.acct.online_only_t')}">${window.T('inbox.acct.online_only')}</div>`;
+    tools+=`<div class="acct-chip ac-toggle ${accountOnlineOnly?'active':''}" role="button" tabindex="0" onclick="toggleAccountOnlineOnly()" onkeydown="_acChipKey(event)" title="${window.T('inbox.acct.online_only_t')}">${window.T('inbox.acct.online_only')}</div>`;
   }
-  bar.innerHTML=html; bar.style.display='flex';
+  tools+=`<button type="button" class="ac-gear" onclick="openDrawer()" title="${esc(window.T('inbox.drawer.title'))}" aria-label="${esc(window.T('inbox.drawer.title'))}">${uiIcon('gear',14)}</button>`;
+  // 轮询重绘不跳滚动位：rebuild 前记 scrollLeft，rebuild 后还原
+  const oldSc=document.getElementById('ac-scroll');
+  const keepLeft=oldSc?oldSc.scrollLeft:0;
+  bar.innerHTML=`<div class="ac-scroll" id="ac-scroll">${html}</div><div class="ac-tools">${tools}</div>`;
+  bar.style.display='flex';
+  try{ bar.style.setProperty('--pc', platColor(platFilter)); }catch(_){}
+  const sc=document.getElementById('ac-scroll');
+  if(sc){
+    if(keepLeft) sc.scrollLeft=keepLeft;
+    // 滚轮纵向滚动转横滚（rail 单行）；渐隐提示按需打 class
+    sc.addEventListener('wheel',function(e){
+      if(Math.abs(e.deltaY)>Math.abs(e.deltaX) && sc.scrollWidth>sc.clientWidth){
+        sc.scrollLeft+=e.deltaY; e.preventDefault();
+      }
+    },{passive:false});
+    sc.addEventListener('scroll',function(){ _acScrollHint(sc); },{passive:true});
+    _acScrollHint(sc);
+  }
+}
+// 未读徽标分级：attn（需人工/SLA 危急会话数）>0 → 警报红 + 说明悬浮；常规未读 → 中性灰
+function _acUnreadBadge(unread,attn){
+  if(!unread) return '';
+  const n=unread>99?'99+':unread;
+  if(attn>0) return `<span class="ac-unread attn" title="${esc(window.Tf('inbox.acct.attn_t',{n:attn}))}">${n}</span>`;
+  return `<span class="ac-unread">${n}</span>`;
+}
+function _acScrollHint(sc){
+  sc.classList.toggle('has-more',(sc.scrollWidth-sc.clientWidth-sc.scrollLeft)>4);
+  sc.classList.toggle('has-less',sc.scrollLeft>4);
+}
+/* rail 键盘导航（2026-07-29 a11y）：Enter/Space 激活 chip；左右方向键在
+   全部 chips + 工具区（齿轮）间循环移焦（focus 自动把 chip 滚入可视区） */
+function _acChipKey(e){
+  const k=e.key;
+  if(k==='Enter'||k===' '){ e.preventDefault(); e.currentTarget.click(); return; }
+  if(k!=='ArrowLeft'&&k!=='ArrowRight') return;
+  e.preventDefault();
+  const bar=document.getElementById('account-chips'); if(!bar) return;
+  const items=Array.prototype.slice.call(bar.querySelectorAll('.acct-chip,.ac-gear'));
+  const idx=items.indexOf(e.currentTarget);
+  if(idx<0||items.length<2) return;
+  const nxt=items[(idx+(k==='ArrowRight'?1:items.length-1))%items.length];
+  if(nxt&&nxt.focus) nxt.focus();
 }
 function setAccountFilter(aid){
   accountFilter=aid;
@@ -2260,7 +2339,8 @@ var _UIIC={
   logout:'<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
   trash:'<polyline points="3 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>',
   more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
-  target:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/>'
+  target:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/>',
+  gear:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33 1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82 1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'
 };
 function uiIcon(name,size,cls){
   var p=_UIIC[name]; if(!p) return '';
@@ -2558,8 +2638,9 @@ function renderConvList(){
     }
   });
 
-  // 如果容器里只有 empty-list 占位，先清掉
-  if(el.firstElementChild && el.firstElementChild.classList.contains('empty-list')){
+  // 如果容器里只有空态/骨架占位，先清掉
+  var _fc=el.firstElementChild;
+  if(_fc && (_fc.classList.contains('empty-list') || _fc.classList.contains('conv-skel-list'))){
     el.innerHTML='';
   }
 
@@ -3131,10 +3212,8 @@ function selectChat(key){
   // Mobile: open chat panel（隐藏底栏把纵向空间还给气泡）
   document.getElementById('chat-panel').classList.add('mobile-open');
   try{ document.body.classList.add('mob-chat-open'); }catch(_){}
-  // Phase 17: 切换会话时重置 KB 自动推送状态
-  _kbSuggestDismissed=false;
-  document.getElementById('kb-autosuggest').classList.remove('show');
-  clearTimeout(_kbAutoTimer);
+  // 切换会话时重置 KB 推荐状态（收起态/条目/chip 一并清，单一入口）
+  _kbResetForChat();
 
   // 清除该会话的未读气泡（打开即视为已读）
   _clearUnread(c);
@@ -3194,7 +3273,40 @@ function _applyReadOnly(c){
 /* 媒体/语音直发能力：仅 protocol 多开且在线账号支持；其它平台事先置灰按钮 + 说明，
    把「点了才撞 501」改为「事先可知」。乐观默认支持，查得能力后再按需置灰，
    避免协议账号被误禁；网络异常则保持乐观（点击仍有 501 兜底）。 */
+/* ===== P1.5 多句分条发送 chip（输入区 ≥2 行 → 显示「N 条」，点击切 分条/整段）=====
+   服务端 /send 是拆分真相源（同一 reply_split 纯函数 + 群聊/编排器守卫）；
+   chip 只做可视与 opt-in/out（localStorage 坐席级），能力位来自 send-caps.bubbles。 */
+let _sendCapsLast=null;
+const _BUBBLE_PREF_KEY='ws_send_bubbles_v1';
+function _bubblePref(){
+  try{ return localStorage.getItem(_BUBBLE_PREF_KEY)!=='0'; }catch(_){ return true; }
+}
+function _toggleBubblePref(){
+  try{ localStorage.setItem(_BUBBLE_PREF_KEY, _bubblePref()?'0':'1'); }catch(_){}
+  _updateBubbleChip();
+}
+function _updateBubbleChip(){
+  const chip=document.getElementById('bubble-chip');
+  if(!chip) return;
+  const ta=document.getElementById('reply-ta');
+  const caps=_sendCapsLast;
+  const c=selectedChat;
+  const lines=ta?ta.value.split('\n').map(s=>s.trim()).filter(Boolean).length:0;
+  const isGroup=!!(c&&((c.chat_type&&c.chat_type!=='private')
+    ||(c.platform==='telegram'&&String(c.chat_key||'').charAt(0)==='-')));
+  if(!caps||!caps.bubbles||isGroup||lines<2){ chip.style.display='none'; return; }
+  chip.style.display='';
+  const maxP=Math.max(1,parseInt(caps.bubbles_max_parts,10)||3);
+  const n=Math.min(lines,maxP);
+  const on=_bubblePref();
+  chip.classList.toggle('off',!on);
+  const t=document.getElementById('bubble-chip-n');
+  if(t) t.textContent=on?window.Tf('inbox.rt.bubble_n',{n:n}):window.T('inbox.rt.bubble_single');
+}
+
 function _applySendCaps(caps){
+  _sendCapsLast=caps;
+  try{ _updateBubbleChip(); }catch(_){}
   const set=(id, ok, okTitle, noTitle)=>{
     const b=document.getElementById(id);
     if(!b) return;
@@ -4458,67 +4570,141 @@ function _renderTagStrip(){
 }
 
 
-/* ===== Phase 17: KB 自动推送 ===== */
-let _kbSuggestDismissed=false; // 当前会话是否手动收起过
+/* ===== KB 智能推荐（P0 收敛：常驻 chip + 浮层；高置信且输入框为空才自动展开）=====
+   偏好三档（坐席级 localStorage）：auto=高置信自动展开 / chip=仅工具条角标 / off=不请求不展示。
+   置信口径服务端优先（entry.confidence，见 kb-search auto 阈值）；旧字段缺失时按分数兜底。 */
+const _KB_PREF_KEY='ws_kb_suggest_pref_v1';
+let _kbSuggestDismissed=false; // 会话级：手动收起后本会话不再自动展开（chip 仍可手动打开）
 let _kbAutoTimer=null;
+let _kbEntries=[];             // 当前会话推荐条目（chip 角标与浮层共用同一份数据）
 
+function _kbPref(){
+  try{ const v=localStorage.getItem(_KB_PREF_KEY); if(v==='chip'||v==='off') return v; }catch(_){}
+  return 'auto';
+}
+function _setKbPref(v){
+  try{ localStorage.setItem(_KB_PREF_KEY, (v==='chip'||v==='off')?v:'auto'); }catch(_){}
+  if(v==='off'){ _kbEntries=[]; dismissKbSuggest(); }
+  else if(selectedChat && !_kbEntries.length){
+    clearTimeout(_kbAutoTimer);
+    _kbAutoTimer=setTimeout(()=>_autoKbSuggest(selectedChat), 50);
+  }
+  _renderKbChip();
+}
 function dismissKbSuggest(){
   _kbSuggestDismissed=true;
   document.getElementById('kb-autosuggest').classList.remove('show');
 }
-
+function toggleKbSuggest(){
+  const el=document.getElementById('kb-autosuggest');
+  if(el.classList.contains('show')){ el.classList.remove('show'); return; }
+  if(_kbEntries.length) _renderKbAutoSuggest(_kbEntries);
+}
+function _kbResetForChat(){
+  _kbSuggestDismissed=false;
+  _kbEntries=[];
+  clearTimeout(_kbAutoTimer);
+  document.getElementById('kb-autosuggest').classList.remove('show');
+  _renderKbChip();
+}
+function _kbConfidence(e){
+  if(e && (e.confidence==='high'||e.confidence==='mid')) return e.confidence;
+  const s=Number((e&&e.score)||0), m=String((e&&e.search_mode)||'');
+  if(m==='hybrid') return s>=0.03?'high':'mid';   // RRF 刻度（排名共识，与 BM25 分带不同）
+  return s>=15?'high':'mid';                      // BM25 原始分兜底带（服务端阈值未启用时）
+}
 async function _autoKbSuggest(c){
-  if(_kbSuggestDismissed) return;
+  if(_kbPref()==='off') return;
   // 取最近一条入站消息作为查询词
   const lastIn=threadMsgs.filter(m=>m.direction==='in').slice(-1)[0];
   const q=(lastIn?.text||c.last_text||c.name||'').trim();
-  if(!q||q.length<3) return;
+  if(!q||q.length<3){ _kbEntries=[]; _renderKbChip(); return; }
   // 限制查询长度，避免过长
   const query=q.slice(0,80);
   const params=new URLSearchParams({
     q:query, limit:'3', auto:'1',
     platform: c.platform||'',
     intent: c.last_intent||'',
+    conv: c.conversation_id||convKey(c),   // P3 漏斗归因：推荐落库带会话 id
   });
   try{
     const r=await apiFetch('/api/unified-inbox/kb-search?'+params.toString());
     const d=await r.json();
-    if(!d.ok||!d.entries?.length) return;
-    _renderKbAutoSuggest(d.entries);
+    if(!selectedChat || convKey(selectedChat)!==convKey(c)) return;   // 会话已切走，丢弃过期响应
+    _kbEntries=(d.ok&&d.entries)||[];
+    _renderKbChip();
+    if(!_kbEntries.length) return;
+    // 自动展开仅限：偏好 auto + 顶条高置信 + 输入框为空 + 本会话没收起过（浮层零布局位移）
+    const ta=document.getElementById('reply-ta');
+    if(_kbPref()==='auto' && !_kbSuggestDismissed
+       && _kbConfidence(_kbEntries[0])==='high' && !(ta&&ta.value.trim())){
+      _renderKbAutoSuggest(_kbEntries);
+    }
   }catch(e){ console.warn('kb auto-suggest error',e); }
 }
-
+function _renderKbChip(){
+  const chip=document.getElementById('kb-chip');
+  if(!chip) return;
+  const n=_kbEntries.length;
+  if(!n || _kbPref()==='off'){ chip.style.display='none'; return; }
+  chip.style.display='';
+  const nEl=document.getElementById('kb-chip-n');
+  if(nEl) nEl.textContent=String(n);
+  chip.classList.toggle('hi', _kbConfidence(_kbEntries[0])==='high');
+}
 function _renderKbAutoSuggest(entries){
   const el=document.getElementById('kb-autosuggest');
   const items=document.getElementById('kb-autosuggest-items');
   if(!entries.length){ el.classList.remove('show'); return; }
+  const sel=document.getElementById('kb-suggest-pref');
+  if(sel) sel.value=_kbPref();
   items.innerHTML=entries.map(e=>`
     <div class="kb-as-item" onclick="_useKbEntry('${esc(JSON.stringify(e).replace(/'/g,"\\'").replace(/"/g,"&quot;"))}')">
       <div class="kb-as-title">${esc(e.title||window.T('inbox.kb.entry_default'))}</div>
       <div class="kb-as-answer">${esc(e.answer||'')}</div>
       <div class="kb-as-footer">
-        ${e.category?`<span style="font-size:11px;color:var(--tk-text-muted);">${esc(e.category)}</span>`:''}
-        <span style="margin-left:auto;font-size:11px;color:var(--th-ink-slate4,#94a3b8);">score:${e.score||''}</span>
-        <button class="tiny-btn" onclick="event.stopPropagation();_quoteKbEntry('${esc(e.answer||'')}')">${window.T('inbox.act.quote')}</button>
+        ${e.category?`<span class="kb-as-cat">${esc(e.category)}</span>`:''}
+        <span class="kb-as-conf ${_kbConfidence(e)==='high'?'high':''}">${_kbConfidence(e)==='high'?window.T('inbox.kb.conf_high'):window.T('inbox.kb.conf_mid')}</span>
+        <button class="tiny-btn" onclick="event.stopPropagation();_quoteKbEntry('${esc(e.answer||'')}','${esc(e.rec_id||'')}')">${window.T('inbox.act.quote')}</button>
       </div>
     </div>
   `).join('');
   el.classList.add('show');
 }
 
+function _kbClickBeacon(recId){
+  // P3 漏斗：引用动作回调既有 /api/workspace/kb-click（推荐→引用转化，
+  // 供 /api/workspace/kb-stats 命中率排行）；fire-and-forget 不阻塞输入。
+  if(!recId) return;   // 草稿证据链 chips（无 rec_id）不计——它们走 copilot_meta 归因
+  try{
+    apiFetch('/api/workspace/kb-click',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({rec_id:String(recId), used_in_draft:true})});
+  }catch(_){}
+}
+
 function _useKbEntry(entryJson){
   try{
     const e=JSON.parse(entryJson.replace(/&quot;/g,'"'));
     const ta=document.getElementById('reply-ta');
-    ta.value=(ta.value?ta.value+'\n':'')+( e.answer||'').slice(0,400);
+    const _q=(e.answer||'').slice(0,400);
+    ta.value=(ta.value?ta.value+'\n':'')+_q;
+    // P2 采纳归因：知识引用经既有 copilot_meta 链路落审计（source=kb_suggest），
+    // /api/workspace/agent-copilot-stats 的 by_source 直接可读，零新端点。
+    if(_q) _copilotApplyMeta={text:_q, source:'kb_suggest'};
+    _kbClickBeacon(e.rec_id||'');
+    try{ _updateBubbleChip(); }catch(_){}
     ta.focus();
     dismissKbSuggest();
   }catch(_){}
 }
 
-function _quoteKbEntry(text){
+function _quoteKbEntry(text, recId){
   const ta=document.getElementById('reply-ta');
-  ta.value=(ta.value?ta.value+'\n':'')+text.slice(0,400);
+  const _q=String(text||'').slice(0,400);
+  ta.value=(ta.value?ta.value+'\n':'')+_q;
+  if(_q) _copilotApplyMeta={text:_q, source:'kb_suggest'};
+  _kbClickBeacon(recId||'');
+  try{ _updateBubbleChip(); }catch(_){}
   ta.focus();
 }
 
@@ -5110,6 +5296,7 @@ let _slashIdx = 0;
 let _slashItems = [];
 
 async function _onReplyInput(val){
+  try{ _updateBubbleChip(); }catch(_){}   // P1.5 多行时亮「N 条」分条 chip
   // 检测 / 开头触发命令面板
   if(val.startsWith('/')){
     const q = val.slice(1).toLowerCase();
@@ -5753,6 +5940,7 @@ async function _doSendMedia(caption){
   fd.append('account_id', selectedChat.account_id||'default');
   fd.append('chat_key', selectedChat.chat_key);
   fd.append('caption', caption||'');
+  fd.append('client_msg_id', _newClientMsgId());   // P0 幂等键
   fd.append('file', f);
   const bar=document.getElementById('media-preview-bar');
   if(bar){ bar.classList.remove('failed'); bar.classList.add('sending'); }
@@ -5787,6 +5975,13 @@ function _cancelMedia(){
   if(thumb){ thumb.style.display='none'; thumb.removeAttribute('src'); }
   var icon=document.getElementById('mpb-icon'); if(icon) icon.style.display='none';
   var fi=document.getElementById('send-media-file'); if(fi) fi.value='';
+}
+
+/* P0 幂等键（2026-07-29 多开/双击防双发）：每次提交生成一次性 id，服务端在 TTL 窗口内
+   对同 (会话,id) 去重；重试（resendFailed/再点击）生成新 id，永不阻塞人工显式重试。 */
+function _newClientMsgId(){
+  try{ return crypto.randomUUID(); }
+  catch(_){ return 'cm-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10); }
 }
 
 async function sendMsg(){
@@ -5852,6 +6047,7 @@ async function sendMsg(){
 
   btn.disabled=true;
   ta.value='';
+  try{ _updateBubbleChip(); }catch(_){}
   document.getElementById('reply-preview').style.display='none';
   document.getElementById('reply-hint').textContent='';
 
@@ -5873,6 +6069,8 @@ async function sendMsg(){
       account_id: selectedChat.account_id||'default',
       chat_key: selectedChat.chat_key,
       text: text,
+      client_msg_id: _newClientMsgId(),   // P0 幂等键：双窗口/双击重复提交服务端拒重
+      bubbles: _bubblePref()?1:0,         // P1.5 多句分条 opt-in（服务端配置/群聊守卫仍生效）
     };
     if(_serverXlate) body.target_lang=_outLang;   // P0：一击直发让后端翻译（含 'auto'）
     // P4-5B 引用回复：携带被引用消息上下文（发送后清除引用条）
@@ -5934,6 +6132,7 @@ async function resendFailed(optId){
   if(idx<0) return;
   const body=threadMsgs[idx]._retryBody;
   if(!body || !selectedChat){ return; }
+  body.client_msg_id=_newClientMsgId();   // 重发换新幂等键：显式重试永不被去重拦截
   threadMsgs[idx]._failed=false; threadMsgs[idx]._optimistic=true;
   renderMessages(selectedChat, threadMsgs, {silent:true});
   try{
@@ -6329,8 +6528,15 @@ async function _loadDraftsBody(c){
 async function approveDraft(id,btn){
   btn.disabled=true; if(btn.nextElementSibling) btn.nextElementSibling.disabled=true;
   try{
-    await apiFetch(`/api/drafts/${enc(id)}/resolve`,{method:'POST',headers:{'Content-Type':'application/json'},
+    const r=await apiFetch(`/api/drafts/${enc(id)}/resolve`,{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({action:'approve'})}, {timeoutMs: 60000});
+    const d=await r.json().catch(()=>({}));
+    if(r.status===409){
+      // 撞防重闸门：这条草稿刚被其他窗口/同事处理（多开保护，非故障）
+      _toast(d.detail||window.T('inbox.draft.raced'),'#b45309');
+    }else if(r.ok && d.ok && d.delivery==='scheduled'){
+      _toast(window.T('inbox.draft.deliver_scheduled'),'#0f9d75');
+    }
     if(selectedChat){ await loadThread(selectedChat,true); loadDrafts(selectedChat);
       _refreshComposerDraft(selectedChat);
       if(document.getElementById('mode-select')?.value==='auto_ai') _loadAutoStats(selectedChat); }
@@ -6339,8 +6545,12 @@ async function approveDraft(id,btn){
 async function rejectDraft(id,btn){
   btn.disabled=true; if(btn.previousElementSibling) btn.previousElementSibling.disabled=true;
   try{
-    await apiFetch(`/api/drafts/${enc(id)}/resolve`,{method:'POST',headers:{'Content-Type':'application/json'},
+    const r=await apiFetch(`/api/drafts/${enc(id)}/resolve`,{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({action:'reject'})}, {timeoutMs: 60000});
+    if(r.status===409){
+      const d=await r.json().catch(()=>({}));
+      _toast(d.detail||window.T('inbox.draft.raced'),'#b45309');
+    }
     if(selectedChat){ loadDrafts(selectedChat); _refreshComposerDraft(selectedChat); }
   }catch(_){ btn.disabled=false; }
 }
@@ -6415,6 +6625,7 @@ function acceptComposerDraft(){
   const cur=ta.value.trim();
   if(cur && cur!==txt && !confirm(window.T('inbox.cdraft.overwrite_confirm'))) return;
   ta.value=txt;
+  try{ _updateBubbleChip(); }catch(_){}   // 采用的多行草稿 → 分条 chip 立即可见
   _cdraft.adoptedId=String(d.draft_id||'');
   _cdraft.draft=null;
   _cdraftRender();
@@ -7497,22 +7708,55 @@ async function takeClaim(cid){
 }
 
 /* ===== AI 建议 ===== */
-/* 底部「AI回复」=右栏业务助手「生成草稿」的快捷入口（同一引擎，去重复）：
-   打开助手 → 回复页 → 触发 cp-draft 生成。避免两套 AI 引擎并存且点击无响应。 */
-function genAiReply(){
+/* 底部「AI回复」（P0 去重）：直接调 smart-reply 产线并把草稿填入输入框——
+   与右栏「回复工坊」同一后端（generate_persona_reply）、同一 cp_replylang 会话语言记忆；
+   不再「打开右栏遥控生成」（视线不横跳；WS_USE_APP iframe 模式同样可用）。填入带覆盖确认。 */
+async function genAiReply(){
   if(!selectedChat){ _toast(window.T('inbox.toast.select_first'),'#b45309'); return; }
-  var sb=document.getElementById('info-sidebar');
-  if(sb && !sb.classList.contains('show') && typeof toggleInfoSidebar==='function') toggleInfoSidebar();
-  if(WS_USE_APP){ _wsEnableApp(); _wsPostCtx({type:'cp-cmd',cmd:'focus-draft'}); _toast(window.T('inbox.draft.generating_unified'),'#0f9d75'); return; }
-  if(typeof setWsCpTab==='function') setWsCpTab('reply');
-  var el=document.getElementById('ws-cp-draft');
-  var btn=el && el.shadowRoot ? el.shadowRoot.querySelector('button[data-act="gen"]') : null;
-  if(btn){
-    try{ el.scrollIntoView({behavior:'smooth',block:'nearest'}); }catch(_){}
-    btn.click();
-    _toast(window.T('inbox.draft.generating_rail'),'#0f9d75');
-  } else {
-    _toast(window.T('inbox.draft.generate_hint'),'#b45309');
+  var btn=document.getElementById('ai-reply-btn');
+  if(btn && btn.disabled) return;                 // 防连点重复生成
+  var c=selectedChat;
+  var msgs=(threadMsgs||[]).slice(-30)
+    .map(function(m){ return {direction:m.direction, text:m.text}; })
+    .filter(function(m){ return m.text; });
+  if(!msgs.length){ _toast(window.T('inbox.rt.ai_reply_noctx'),'#b45309'); return; }
+  var cid=c.conversation_id||convKey(c);
+  var lang=''; try{ lang=localStorage.getItem('cp_replylang:'+cid)||''; }catch(_){}
+  if(btn) btn.disabled=true;
+  _toast(window.T('inbox.rt.ai_reply_busy'),'#0f9d75');
+  try{
+    var r=await apiFetch('/api/desktop/smart-reply',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({messages:msgs, platform:c.platform||'', chat_key:c.chat_key||'', target_lang:lang, conversation_id:cid})},
+      {timeoutMs:60000});
+    var d=await r.json().catch(function(){ return {}; });
+    if(!selectedChat || convKey(selectedChat)!==convKey(c)) return;    // 会话已切走，丢弃过期结果
+    if(!d.ok || !d.reply){ _toast((d&&d.detail)||window.T('inbox.rt.ai_reply_fail'),'#b45309'); return; }
+    var text=d.translated||d.reply;               // 与右栏同口径：有译文用译文（客户可读文本）
+    var ta=document.getElementById('reply-ta');
+    if(!ta) return;
+    var cur=ta.value.trim();
+    if(cur && cur!==text && !confirm(window.T('inbox.cdraft.overwrite_confirm'))) return;
+    ta.value=text;
+    try{ _onReplyInput(ta.value); }catch(_){}
+    ta.focus();
+    try{ ta.setSelectionRange(ta.value.length, ta.value.length); }catch(_){}
+    // P2 证据链：这条草稿引用的 KB 条目 → 点亮「知识」chip（点开浮层可核验/引用），
+    // 复用 P0 的 chip+浮层，零新增 UI；无引用则清空 chip 防串会话残留。
+    try{
+      if(Array.isArray(d.kb_refs) && d.kb_refs.length){
+        _kbEntries=d.kb_refs.map(function(r){ return {
+          entry_id:String(r.entry_id||''), title:String(r.title||''),
+          category:String(r.category||''), answer:String(r.snippet||''),
+          confidence:'high'}; });
+        _kbSuggestDismissed=false;
+        _renderKbChip();
+      }
+    }catch(_){}
+    if(d.persona) _toast(window.Tf('inbox.rt.ai_reply_by',{name:d.persona}),'#0f9d75');
+  }catch(_){
+    _toast(window.T('inbox.rt.ai_reply_fail'),'#b45309');
+  }finally{
+    if(btn) btn.disabled=false;
   }
 }
 
@@ -7635,6 +7879,7 @@ async function sendVoiceReply(){
       chat_key: selectedChat.chat_key,
       text: text,
       persona_id: currentVoicePersona()||undefined,
+      client_msg_id: _newClientMsgId(),   // P0 幂等键：语音双发还烧双份 TTS，更要拦
     };
     const r=await apiFetch('/api/unified-inbox/send-voice',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}, {timeoutMs: 60000});
@@ -9216,7 +9461,7 @@ function renderDrawerAccounts(){
     if(_acctAbnOnly) shown=shown.filter(a=>!a.running);
     if(_acctAbnOnly && !shown.length) return;   // 异常过滤下无异常号的平台组整组隐藏
     const onCount=accts.filter(a=>a.running).length;
-    html+=`<div class="acct-plat-group">
+    html+=`<div class="acct-plat-group" style="--pc:${platColor(pl)};">
       <div class="acct-plat-header">
         <div class="acct-plat-icon">${platIcon(pl,32)}</div>
         <div class="acct-plat-meta">
@@ -9246,7 +9491,9 @@ function renderDrawerAccounts(){
     } else {
       shown.forEach(a=>{
         const on=a.running;
-        const statusText=on?window.T('inbox.acct.connected'):window.T('inbox.acct.disconnected');
+        // 三态胶囊：starting 并入胶囊本体（琥珀+旋转点），不再另挂补丁 chip；error 仍走独立 chip
+        const connecting=!on && String(a.state||'')==='starting';
+        const statusText=on?window.T('inbox.acct.connected'):(connecting?window.T('inbox.acct.state_starting'):window.T('inbox.acct.disconnected'));
         const aid=a.account_id||'default';
         const ord=_acctOrdinal[`${pl}:${aid}`];
         // P1 真实身份：自身昵称/用户名（后端 self_*）；仍以用户显式起的 label 为最高优先
@@ -9271,10 +9518,10 @@ function renderDrawerAccounts(){
               <div class="acct-name" title="${esc(pName)}">${esc(pName)}${unnamed?`<span class="acct-unnamed" title="${esc(window.T('inbox.acct.unnamed_t'))}" onclick="event.stopPropagation();renameAcct('${esc(pl)}','${esc(aid)}')">${window.T('inbox.acct.name_it')}</span>`:''}</div>
               <div class="acct-id" title="${esc(a.account_id||'-')}">${esc(subLine)}</div>
             </div>
-            <div class="acct-pill ${on?'on':'off'}" title="${esc(srcTip)}">
-              <span class="status-dot ${on?'on':'off'}"></span>${statusText}
+            <div class="acct-pill ${on?'on':(connecting?'connecting':'off')}" title="${esc(srcTip)}">
+              ${connecting?'<span class="acct-chip-spin"></span>':`<span class="status-dot ${on?'on':'off'}"></span>`}${statusText}
             </div>
-            ${_acctStateChip(a,on)}
+            ${connecting?'':_acctStateChip(a,on)}
           </div>
           ${_acctValueMetaHtml(pl,a,on)}
           ${_acctOfflineHint(pl,a,on)}
@@ -10073,6 +10320,7 @@ async function acctPersonaAlign(pl,aid,btn){
 
 /* ===== 扫码连接（多方式并存 · 无限扫码：每平台可重复打开新增账号） ===== */
 let _connectPlat=null, _connectAcct='', _connectMode='', _connectLoginId=null, _connectPollTimer=null;
+let _connectBaseline=null;   // 打开弹窗时该平台已有账号集合（授权成功后差集=刚接入的号）
 // 登录已授权成功标志：授权后关闭弹窗/返回不得再 cancel（cancel 在协议侧=logout，会把刚扫的号登出）
 let _connectAuthorized=false;
 // 二维码过期自动换码（对齐独立扫码门户 tg_scan_portal 体验）：过期即自动重开一轮，
@@ -10143,10 +10391,18 @@ function _refreshAfterAuthorize(){
 }
 function openConnect(pl, acctId){
   _connectPlat=pl; _connectAcct=acctId||''; _connectMode=''; _connectAuthorized=false; _connectAutoRefresh=0;
+  _connectBaseline=_connectAcctIds(pl);   // 身份预览基线：此刻该平台已有的账号集合
+  const _okid=document.getElementById('connect-qr-okid'); if(_okid) _okid.innerHTML='';
   _showConnectPin(false); _showConnectErrDetail('');
   const modal=document.getElementById('connect-modal');
-  document.getElementById('connect-plat-icon').innerHTML=platIcon(pl,40);
-  document.getElementById('connect-plat-icon').style.background='transparent';
+  // 品牌化头部（2026-07-29）：图标块品牌色淡底 + 弹窗注入 --pc（供二维码描边/方式卡取色）
+  const _cpIc=document.getElementById('connect-plat-icon');
+  _cpIc.innerHTML=platIcon(pl,40);
+  try{
+    _cpIc.style.background='color-mix(in srgb, '+platColor(pl)+' 13%, transparent)';
+    const _cbox=modal.querySelector('.connect-box');
+    if(_cbox) _cbox.style.setProperty('--pc', platColor(pl));
+  }catch(_){ _cpIc.style.background='transparent'; }
   document.getElementById('connect-title').textContent=window.Tf(acctId?'inbox.connect.reconnect_t':'inbox.connect.connect_t',{plat:platName(pl)});
   document.getElementById('connect-sub').textContent=PLAT_DESC[pl]||window.T('inbox.connect.sub');
   modal.classList.add('show');
@@ -10488,6 +10744,12 @@ function _setConnectState(cls, stateText, hint){
   const s=document.getElementById('connect-state');
   s.className='connect-state '+cls; s.textContent=stateText;
   if(hint!=null) document.getElementById('connect-hint').textContent=hint;
+  // 状态映射到二维码容器：scanned=变暗+品牌描边（手机已扫、等确认）；ok=画勾覆盖层
+  const _qw=document.querySelector('#connect-qr-view .connect-qr-wrap');
+  if(_qw){
+    _qw.classList.toggle('scanned', cls==='scanned');
+    _qw.classList.toggle('ok', cls==='ok');
+  }
 }
 // 登录步骤指示器（W2 #8）：cur=当前所处步骤(1 扫码/2 确认/3 完成)。cur 之前=done、当前=active。
 // err/warn 态不改步骤（保留用户所处进度），只有正向流转才推进。
@@ -10503,8 +10765,17 @@ function _setConnectStep(cur){
 function _setConnectQr(dataOrUrl){
   const img=document.getElementById('connect-qr-img');
   const mask=document.getElementById('connect-qr-mask');
-  if(dataOrUrl){ img.src=dataOrUrl; img.style.display='block'; mask.style.display='none'; }
-  else { img.style.display='none'; mask.style.display='flex'; }
+  if(dataOrUrl){
+    // 新码到达（含过期自动换码）轻脉冲提示——真实事件驱动，不做假倒计时
+    const fresh=img.src!==dataOrUrl;
+    img.src=dataOrUrl; img.style.display='block'; mask.style.display='none';
+    if(fresh){
+      img.classList.remove('qr-fresh');
+      void img.offsetWidth;   // 重启 CSS 动画
+      img.classList.add('qr-fresh');
+    }
+  }
+  else { img.style.display='none'; mask.style.display='flex'; img.classList.remove('qr-fresh'); }
 }
 // 两步验证密码区显隐 + 重置（扫码开始/返回/关闭时清空，避免残留上次输入）
 function _showConnectPassword(show, hint){
@@ -10693,6 +10964,50 @@ async function startConnect(){
     document.getElementById('connect-qr-mask').innerHTML='<span style="font-size:26px;">⚠️</span><span>'+window.T('inbox.toast.net_err')+'</span>';
   }
 }
+/* 授权成功统一收口（2026-07-29）：扫码轮询与两步验证两条路径同走此处。
+   身份预览＝与后端 sess.baseline 同思路的纯前端方案：打开弹窗时快照该平台账号集合，
+   授权后 loadChats 刷新 platformStatus，差集即「刚接入的号」→ 成功层展示其头像/昵称
+   （重连场景无新号则回落 _connectAcct 自身）；查不到身份保持通用成功态，绝不阻塞收尾。 */
+async function _connectOnAuthorized(){
+  _connectAuthorized=true; // 标记已授权：关闭弹窗时绝不 cancel/logout 这个已上线的号
+  _connectAutoRefresh=0;
+  _showConnectPassword(false);
+  _showConnectPin(false);
+  _showConnectErrDetail('');
+  _setConnectStep(3);
+  _setConnectState('ok',window.T('inbox.connect.st_ok'),window.T('inbox.connect.hint_ok'));
+  if(_connectPollTimer){ clearInterval(_connectPollTimer); _connectPollTimer=null; }
+  await loadChats(); renderDrawerAccounts();
+  let idShown=false;
+  try{ idShown=_connectShowAuthorizedIdentity(); }catch(_){}
+  _refreshAfterAuthorize();
+  setTimeout(closeConnect, idShown?2100:1200);   // 有身份预览时多留一眼的时间
+}
+function _connectAcctIds(pl){
+  const s=new Set();
+  Object.values(platformStatus||{}).forEach(a=>{ if((a.platform||'web')===pl) s.add(a.account_id||'default'); });
+  return s;
+}
+function _connectShowAuthorizedIdentity(){
+  const box=document.getElementById('connect-qr-okid');
+  if(!box) return false;
+  box.innerHTML='';
+  const pl=_connectPlat;
+  const now=_connectAcctIds(pl);
+  let aid='';
+  now.forEach(id=>{ if(!_connectBaseline||!_connectBaseline.has(id)){ if(!aid) aid=id; } });
+  if(!aid) aid=_connectAcct||'';   // 重连场景：没有新号，就是它自己
+  if(!aid) return false;
+  const meta=accountMeta[`${pl}:${aid}`]||{};
+  const nm=(meta.label&&meta.label!==platName(pl))?meta.label:(_acctSelfName(meta)||_maskAcctId(aid));
+  if(!nm) return false;
+  let ini=String(nm).trim().charAt(0)||'?'; ini=ini.toUpperCase();
+  const av=meta.self_avatar
+    ? `<img src="${esc(meta.self_avatar)}" alt="" onerror="this.remove()">`
+    : esc(ini);
+  box.innerHTML=`<span class="okid-av" style="background:${meta.self_avatar?'var(--bg-soft)':_avatarGrad(pl+':'+aid)};">${av}</span><span class="okid-nm">${esc(nm)}</span>`;
+  return true;
+}
 async function pollConnect(){
   if(!_connectLoginId) return;
   try{
@@ -10718,17 +11033,7 @@ async function pollConnect(){
       _showConnectPassword(true, d.detail||'');
     }
     else if(st==='authorized'){
-      _connectAuthorized=true; // 标记已授权：关闭弹窗时绝不 cancel/logout 这个已上线的号
-      _connectAutoRefresh=0;
-      _showConnectPassword(false);
-      _showConnectPin(false);
-      _showConnectErrDetail('');
-      _setConnectStep(3);
-      _setConnectState('ok',window.T('inbox.connect.st_ok'),window.T('inbox.connect.hint_ok'));
-      if(_connectPollTimer){ clearInterval(_connectPollTimer); _connectPollTimer=null; }
-      await loadChats(); renderDrawerAccounts();
-      _refreshAfterAuthorize();
-      setTimeout(closeConnect, 1200);
+      await _connectOnAuthorized();
     }
     else if(st==='expired'){
       if(_connectPollTimer){clearInterval(_connectPollTimer);_connectPollTimer=null;}
@@ -10787,15 +11092,7 @@ async function submitConnectPassword(){
     }, {timeoutMs: 60000});
     const d=await r.json();
     if(d.status==='authorized'){
-      _connectAuthorized=true;
-      _showConnectPassword(false);
-      _showConnectPin(false);
-      _showConnectErrDetail('');
-      _setConnectStep(3);
-      _setConnectState('ok',window.T('inbox.connect.st_ok'),window.T('inbox.connect.hint_ok'));
-      await loadChats(); renderDrawerAccounts();
-      _refreshAfterAuthorize();
-      setTimeout(closeConnect, 1200);
+      await _connectOnAuthorized();
     } else {
       // 密码错误等：保持密码区可重试
       _setConnectState('err',window.T('inbox.connect.pwd_rejected'),(d.detail||window.T('inbox.connect.pwd_wrong')));
@@ -10850,6 +11147,7 @@ function _pollIntervalMs(){
     var g=window.__wsRestartCool;
     if(g && (g.quiet || g.flapping || g.active)) iv=Math.max(iv, sel?15000:45000);
     if(document.hidden) iv=Math.max(iv, sel?60000:90000);
+    if(window.__wsStandby) iv=Math.max(iv, 600000);   // 多窗口待机：兜底降到 10min（主停在事件里）
   }catch(_){}
   return iv;
 }
@@ -10866,6 +11164,23 @@ function startAdaptivePoll(){
 try{
   window.addEventListener('ws-restart-cool-change', function(){
     try{ startAdaptivePoll(); }catch(_){}
+  });
+}catch(_){}
+/* 多窗口待机（__wsMultiWin）：待机=停轮询+断 SSE（零后台负载）；恢复=重建 SSE+立即补一轮数据 */
+try{
+  window.addEventListener('ws-standby-change', function(e){
+    try{
+      var standby=!!(e && e.detail && e.detail.standby);
+      if(standby){
+        if(pollTimer){ clearInterval(pollTimer); pollTimer=null; }
+        try{ if(_sseEs){ _sseEs.close(); } }catch(_){}
+      }else{
+        try{ if(!_sseEs || _sseEs.readyState===2) initSSE(); }catch(_){}
+        if(selectedChat) loadThread(selectedChat, true);
+        loadChats();
+        startAdaptivePoll();
+      }
+    }catch(_){}
   });
 }catch(_){}
 try{
@@ -11349,7 +11664,7 @@ Object.assign(window, {
   _openDefaultLangMgr, _clearDefaultLangItem,
   useTemplate, useKbText, useDraftText, quoteMsg,
   // 知识库 / 模板
-  dismissKbSuggest, _useKbEntry,
+  dismissKbSuggest, toggleKbSuggest, _setKbPref, _toggleBubblePref, _useKbEntry,
   // 标签
   _removeConvTag, _addConvTag,
   // 保存视图
@@ -11379,6 +11694,7 @@ Object.assign(window, {
   _acctOpenHist, _acctRetryAlign,   // churn 徽标点击滚到历史 / 失败对齐重试此号
   acctPersonaAlign,                 // P3：对齐同人设账号（dry-run 预览 → 确认 → 批量推送）
   setAccountFilter, toggleAccountOnlineOnly, toggleGhostAccounts, renameAcct,
+  _acChipKey,                       // P3：rail 键盘导航（Enter/Space 激活 + 左右移焦）
   refreshAcct, reconnectAcct, reloginMessengerAcct, viewAcctChats, logoutAcct, removeAcct, syncHistoryAcct, toggleAcctMenu, dismissTgSyncHint, syncSuggestedAcct,
   openConnect, closeConnect, restartConnect,
   chooseMode, backToModeSelect, backToConfig,

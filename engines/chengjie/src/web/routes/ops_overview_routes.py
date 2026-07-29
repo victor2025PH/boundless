@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 _ISOLATION_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
 _ISOLATION_TTL_SEC = 60.0
 
+# gpu_watermark「开了但没配 hosts」只记一条 WARNING（看板每 60s 轮询，不能刷屏）
+_GW_MISCONFIG_WARNED = False
+
 
 def _reliability_payload(request: Request, hours: int):
     """复刻 /api/admin/reliability 的装配逻辑（复用其 helper）。"""
@@ -443,11 +446,32 @@ def register_ops_overview_routes(app, ctx) -> None:
 
         「140 兼任嵌入+视觉备点，被同时压上会挤爆」的提前预警。未启用
         （ops.gpu_watermark.enabled=false）→ enabled:false，前端隐藏卡。
+
+        ``misconfigured:true``＝**开关开了但没配 hosts**（2026-07-29 实测：overlay
+        只有 enabled:true、hosts 缺失 → 卡片静默隐藏数周，运营与文档都以为已生效）。
+        这种「开了却无效」必须与「没开」区分开，否则永远查不出来；前端行为保持不变
+        （仍隐藏卡），但 API 带 detail、且进程内首次命中记一条 WARNING 留痕。
         """
         api_auth(request)
         try:
-            from src.utils.gpu_watermark import probe_hosts
+            from src.utils.gpu_watermark import config_state, probe_hosts
             cfg = getattr(config_manager, "config", None) or {}
+            _state = config_state(cfg)
+            if _state == "misconfigured":
+                global _GW_MISCONFIG_WARNED
+                if not _GW_MISCONFIG_WARNED:
+                    _GW_MISCONFIG_WARNED = True
+                    logger.warning(
+                        "[gpu_watermark] ops.gpu_watermark.enabled=true 但未配置有效 "
+                        "hosts（需含 base_url 形如 http://ip:11434）→ 看板卡片不会显示。"
+                        "补 hosts 后即生效（config 热更新，无需重启）。")
+                return {
+                    "ok": True, "enabled": False, "misconfigured": True, "hosts": [],
+                    "detail": ("ops.gpu_watermark.enabled=true 但未配置有效 hosts"
+                               "（需含 base_url）"),
+                }
+            if _state == "off":
+                return {"ok": True, "enabled": False, "hosts": []}
             data = await probe_hosts(cfg, force=bool(force))
             if data is None:
                 return {"ok": True, "enabled": False, "hosts": []}

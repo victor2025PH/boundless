@@ -47,28 +47,26 @@ TypingCallback = Callable[[str, str, str, str], Awaitable[Any]]
 # 打字续挂间隔：单一来源在 humanize（chat action ~5s 过期，续挂须短于之）。
 from src.inbox.humanize import DEFAULT_TYPING_REFRESH_SEC as _TYPING_REFRESH_SEC
 
-# 「永久性」发送错误标记：命中即判定该会话短期内无法投递（无群发言权/被拉黑/会话失效），
-# 会话进封禁冷却——避免每条新入站都再拟稿→resolve→投递→失败→刷 WARNING 的空转。
-# 仅收窄到确定性的平台硬错误（不含网络超时/限流等瞬时错误，那些应照常重试）。
-_PERMANENT_SEND_ERROR_MARKERS = (
-    "CHAT_WRITE_FORBIDDEN",       # 群/频道无发言权
-    "USER_IS_BLOCKED",           # 被对方拉黑
-    "INPUT_USER_DEACTIVATED",    # 对方账号注销
-    "USER_DEACTIVATED",
-    "PEER_ID_INVALID",           # 会话/对端失效
-    "CHAT_ADMIN_REQUIRED",
-    "CHANNEL_PRIVATE",
-    "USER_BANNED_IN_CHANNEL",
-    "HAVE RIGHTS TO SEND",       # "You don't have rights to send messages in this chat"
-)
-
-
 def _is_permanent_send_error(err: str) -> bool:
-    """判定投递错误是否为「短期内无法恢复」的平台硬错误（→ 会话封禁冷却）。"""
+    """判定投递错误是否为「短期内无法恢复」的平台硬错误（→ 会话封禁冷却）。
+
+    2026-07-29 收敛：原本这里维护第三份永久错误词表（sender / proactive / 本处各一份，
+    彼此漂移且无人察觉）。现委托 ``dead_peer_registry.classify_send_error`` 单一事实源，
+    本处独有的四项（CHAT_ADMIN_REQUIRED / CHANNEL_PRIVATE / USER_BANNED_IN_CHANNEL /
+    HAVE RIGHTS TO SEND）已并入该词表，故覆盖面只增不减。
+
+    判据取「classify 命中任意 reason」而非仅 permanent：本处语义是「短期内发不出 →
+    会话进**带 TTL 的**封禁冷却」，peer 失效（peer_unresolved）同样该进冷却
+    （否则每条新入站都再拟稿→resolve→投递→失败空转，正是本机制要避免的）。
+    写永久黑名单时才只认 permanent——见投递失败处的 registry 登记。
+    """
     if not err:
         return False
-    up = err.upper()
-    return any(marker in up for marker in _PERMANENT_SEND_ERROR_MARKERS)
+    try:
+        from src.ops.dead_peer_registry import classify_send_error
+        return classify_send_error(err) is not None
+    except Exception:
+        return False
 
 
 class AutosendWorker:
@@ -188,14 +186,76 @@ class AutosendWorker:
         self.total_retry_scheduled: int = 0  # 瞬时投递失败重排重试次数（recoverable）
         self.total_retry_recovered: int = 0  # 重试后成功投递条数
         self.total_retry_exhausted: int = 0  # 重试耗尽最终放弃条数
+        self.total_skipped_raced: int = 0    # resolve 撞闸门（已被人工/他方处置）跳过数
+        self.total_human_delivered: int = 0      # 人工通过草稿经本 worker 真投递成功数
+        self.total_human_deliver_errors: int = 0  # 人工通过草稿投递失败数
 
     # ── 生命周期 ──────────────────────────────────────────────
 
     def stop(self) -> None:
         self._running = False
 
+    @staticmethod
+    def _dead_peer_shared():
+        """共享死 peer 登记表（只 **peek** 不创建）。
+
+        刻意**不自己读 flag**：本 worker 收到的 config 只是 ``inbox.l2_autosend`` 子段，
+        拿不到全局 ``ops.dead_peer_registry``；而这也不必要——registry 单例**只在 flag
+        开启时**由持 ConfigManager 的 A 线 sender / proactive 建立，故「单例已存在」本身
+        就是「flag 已开」的证据。同理不能自建：本 worker 拿不到落盘路径，自建会得到一个
+        无路径纯内存实例、共享当场失效。未建立 → None（本地会话冷却照常，零破坏）。
+        """
+        try:
+            from src.ops.dead_peer_registry import peek_dead_peer_registry
+            return peek_dead_peer_registry()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _platform_of_conv(conv: str) -> str:
+        """从 conversation_id（``inbox:<platform>:<account>:<peer>``）取平台名。
+
+        取不到 → telegram（registry 的默认命名空间，与 A 线口径一致）。
+        """
+        parts = str(conv or "").split(":")
+        return parts[1] if len(parts) >= 3 and parts[1] else "telegram"
+
+    def _dead_peer_blocked(self, conv: str) -> bool:
+        """该对端是否已被**任一发送链**确证为永久不可达（跨链共享的读侧）。"""
+        reg = self._dead_peer_shared()
+        if reg is None or not conv:
+            return False
+        try:
+            # peer 归一化在 registry 内部（conversation_id 取末段），与 A 线裸 chat_id 同 key
+            return bool(reg.is_blocked(self._platform_of_conv(conv), conv))
+        except Exception:
+            return False
+
+    def _dead_peer_record(self, conv: str, err: str) -> None:
+        """把**永久**不可达登记进共享表（可自愈类由 registry 内部忽略）。"""
+        reg = self._dead_peer_shared()
+        if reg is None or not conv or conv == "?":
+            return
+        try:
+            from src.ops.dead_peer_registry import classify_send_error
+            reason = classify_send_error(err)
+            if reason and reg.record(self._platform_of_conv(conv), conv, reason):
+                logger.info(
+                    "[AutosendWorker] 已登记死 peer conv=%s（%s，跨链共享不再重发）",
+                    conv, reason)
+        except Exception:
+            logger.debug("[AutosendWorker] 死 peer 登记失败（已忽略）", exc_info=True)
+
     def _conv_send_blocked(self, conv: str) -> bool:
-        """该会话是否处于发送封禁冷却窗口内（到期自动清理并允许重探）。"""
+        """该会话是否处于发送封禁冷却窗口内（到期自动清理并允许重探）。
+
+        2026-07-29 起叠加**共享死 peer 登记表**（gated，默认关）：A 线 sender /
+        proactive 已确证永久不可达的对端，本线也不再投递——此前三条链各持一份黑名单，
+        一条链拉黑的死号另两条还在打（实录：已注销号 2h 内被重试 17 次）。
+        共享查询独立于 ``_send_block_cooldown_sec``（后者=0 也要拦已确证的死 peer）。
+        """
+        if self._dead_peer_blocked(conv):
+            return True
         if not conv or self._send_block_cooldown_sec <= 0:
             return False
         until = self._blocked_conv_until.get(conv, 0.0)
@@ -283,6 +343,88 @@ class AutosendWorker:
                 self._loop.call_soon_threadsafe(self._l2_event.set)
             except RuntimeError:
                 pass  # event loop 已停止
+
+    def _send_cb_kwargs(self, original_text: str) -> Dict[str, Any]:
+        """original_text 透传 kwargs（签名探测一次并缓存；旧 4 参回调不受影响）。"""
+        if self._send_cb_accepts_original is None:
+            try:
+                import inspect
+                self._send_cb_accepts_original = (
+                    "original_text"
+                    in inspect.signature(self._send_callback).parameters)
+            except (ValueError, TypeError):
+                self._send_cb_accepts_original = False
+        return {"original_text": original_text} if self._send_cb_accepts_original else {}
+
+    async def deliver_human_approved(self, draft: Dict[str, Any]) -> Dict[str, Any]:
+        """把**人工通过**的 inbox 草稿真投递到平台（2026-07-29 修「通过≠发送」断链）。
+
+        由 DraftService._schedule_inbox_delivery 经事件循环任务调用。与 L2 自动链共用
+        send/translate 回调（出站翻译、发图指令、桌面受控出站路由全部一致），差异：
+          - 不走拟人已读/打字/延迟（坐席刚刚人为决策，立即发送才符合预期）；
+          - 不进 recoverable 重试队列（失败即审计 + autosend_deliver_failed 事件提醒
+            坐席补发——人在场，显式失败优于静默重试）。
+        自吞一切异常（后台任务，无人 await）。
+        """
+        item = {
+            "draft_id": str(draft.get("draft_id") or ""),
+            "conversation_id": str(draft.get("conversation_id") or ""),
+            "platform": str(draft.get("platform") or ""),
+            "account_id": str(draft.get("account_id") or "default"),
+            "chat_key": str(draft.get("chat_key") or ""),
+            "text": str(draft.get("final_text") or draft.get("draft_text") or "").strip(),
+        }
+        if self._send_callback is None or not item["text"] or not item["chat_key"]:
+            return {"ok": False, "error": "no_send_path_or_empty"}
+        try:
+            send_text = item["text"]
+            if self._translate_callback is not None:
+                try:
+                    _tx = await self._translate_callback(item)
+                    if _tx:
+                        if _tx != send_text:
+                            self.total_translated += 1
+                        send_text = _tx
+                except Exception:
+                    logger.warning(
+                        "[AutosendWorker] 人工通过出站翻译异常，发原文 conv=%s",
+                        item["conversation_id"], exc_info=True)
+            res = await self._send_callback(
+                item["platform"], item["account_id"], item["chat_key"],
+                send_text, **self._send_cb_kwargs(item["text"]),
+            )
+            if isinstance(res, dict) and (
+                res.get("ok") is False
+                or res.get("delivered") is False
+                or res.get("blocked")
+            ):
+                raise RuntimeError(str(
+                    res.get("error") or res.get("blocked") or "send not ok"))
+            self.total_human_delivered += 1
+            logger.info(
+                "[AutosendWorker] 人工通过草稿已投递 draft=%s conv=%s",
+                item["draft_id"], item["conversation_id"])
+            return {"ok": True}
+        except Exception as exc:  # noqa: BLE001
+            self.total_human_deliver_errors += 1
+            self.last_error = f"human_deliver: {exc}"
+            logger.warning(
+                "[AutosendWorker] 人工通过草稿投递失败 draft=%s conv=%s: %s",
+                item["draft_id"], item["conversation_id"], exc)
+            try:
+                rec = getattr(self._svc, "record_autosend_failure", None)
+                if rec is not None:
+                    rec(
+                        item["draft_id"],
+                        conversation_id=item["conversation_id"],
+                        reason=f"人工通过投递失败: {exc}",
+                    )
+            except Exception:
+                logger.debug("human_deliver 失败审计写入失败", exc_info=True)
+            # 复用坐席铃铛/webhook 的投递失败提醒（工作台已订阅该事件）
+            self._publish_deliver_failed(
+                item, str(exc), permanent=_is_permanent_send_error(str(exc)))
+            return {"ok": False, "error": str(exc)}
 
     async def run(self) -> None:
         if not self._enabled:
@@ -396,17 +538,8 @@ class AutosendWorker:
                         _plat, _acc, _ck, text=send_text, elapsed_sec=_elapsed)
                     # original_text 透传（签名探测一次并缓存）：语音分支须用翻译前原文
                     # 判定+合成；旧 4 参回调（含测试桩）不受影响。
-                    if self._send_cb_accepts_original is None:
-                        try:
-                            import inspect
-                            self._send_cb_accepts_original = (
-                                "original_text"
-                                in inspect.signature(self._send_callback).parameters)
-                        except (ValueError, TypeError):
-                            self._send_cb_accepts_original = False
-                    _send_kw: Dict[str, Any] = {}
-                    if self._send_cb_accepts_original:
-                        _send_kw["original_text"] = str(item.get("text", ""))
+                    _send_kw: Dict[str, Any] = self._send_cb_kwargs(
+                        str(item.get("text", "")))
                     res = await self._send_callback(
                         item.get("platform", ""), item.get("account_id", "default"),
                         item.get("chat_key", ""), send_text, **_send_kw,
@@ -438,6 +571,11 @@ class AutosendWorker:
                     _conv = str(item.get("conversation_id", "") or "?")
                     _plat = item.get("platform", "?")
                     _permanent = _is_permanent_send_error(str(exc))
+                    # 跨链共享登记（gated）：注销/被拉黑/无权限这类**永久**不可达写进
+                    # 共享表，A 线 sender 与 proactive 立即同步受益；peer 失效等可自愈类
+                    # 由 registry 按「非永久」忽略，仍只走下面的本地会话冷却。
+                    if _permanent:
+                        self._dead_peer_record(_conv, str(exc))
                     # 永久性错误（无发言权/被拉黑/会话失效）→ 会话进封禁冷却；仅「首次进入
                     # 封禁」打一条 WARNING，冷却窗口内的后续同类失败降级 debug（防刷屏）。
                     if (self._send_block_cooldown_sec > 0
@@ -640,6 +778,12 @@ class AutosendWorker:
                             "created_ts": float(
                                 d.get("created_at") or d.get("created_ts") or 0),
                         })
+                elif int(result.get("code") or 0) == 409:
+                    # 撞状态闸门＝该草稿刚被人工窗口处置（含人工通过后自带投递）。
+                    # 属正常竞态而非故障：不计 error（防喂熔断器）、不投递（防双发）。
+                    self.total_skipped_raced += 1
+                    logger.debug(
+                        "[AutosendWorker] draft_id=%s 已被他方处置，跳过（409）", draft_id)
                 else:
                     errors += 1
                     logger.debug(
@@ -711,6 +855,9 @@ class AutosendWorker:
             "total_retry_scheduled": self.total_retry_scheduled,
             "total_retry_recovered": self.total_retry_recovered,
             "total_retry_exhausted": self.total_retry_exhausted,
+            "total_skipped_raced": self.total_skipped_raced,  # resolve 撞闸门（他方已处置）
+            "total_human_delivered": self.total_human_delivered,  # 人工通过经 worker 投递成功
+            "total_human_deliver_errors": self.total_human_deliver_errors,
             "blocked_conversations": sum(
                 1 for c in list(self._blocked_conv_until) if self._conv_send_blocked(c)
             ),  # 当前处于发送封禁冷却的会话数

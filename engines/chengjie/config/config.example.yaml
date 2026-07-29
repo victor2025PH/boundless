@@ -1245,6 +1245,9 @@ persona_persistence:
 ai:
   provider: "openai_compatible"   # gemini | openai_compatible（DeepSeek/Ollama/vLLM 走这条）
   api_key: "YOUR_API_KEY"         # 对应 provider 的 API 密钥
+  # 无 Key 免费试用（厂商侧）：实例/桌面进程注入环境变量，永不写进本文件或 overlay——
+  #   AITR_HOSTED_AI_KEY / AITR_HOSTED_AI_BASE_URL / AITR_HOSTED_AI_MODEL
+  # 仅当 api_key 为空/占位时生效；用户保存自有 Key 后永远优先自有。
   base_url: "https://api.deepseek.com"  # openai_compatible 时必填（如 DeepSeek）
   model: "deepseek-v4-flash"      # 使用的模型（DeepSeek 已废弃 deepseek-chat 旧名）
   temperature: 0.7                # 温度参数 (0.0-1.0)
@@ -1464,6 +1467,79 @@ companion:
     max_per_tick: 3          # 每轮最多主动开场会话数
     quiet_start_hour: 23     # 安静时段起（不打扰），24h 制
     quiet_end_hour: 8        # 安静时段止
+    # 未回退避（P0 2026-07-29，默认开）：上一条主动开场没得到任何回应 → 下一次
+    # 冷却按 multiplier^streak 拉长（如 48h→6天→18天→封顶月频），对方一开口立即
+    # 复位正常节奏。修实锤事故：冷却只看时间不看响应 → 对从不回复的联系人每到
+    # 冷却点就再发一条「好久没联系」（近 14 天 45% 的主动发送是对空气连发）。
+    # 只会让发送更少更克制，不新增任何发送；enabled: false 回旧行为。
+    no_reply_backoff:
+      enabled: true
+      multiplier: 3.0          # 每多一次未回，冷却翻的倍数
+      max_backoff_hours: 720   # 退避封顶（30 天＝死联系人渐进降到月频）
+      stop_after: 0            # 连续 N 次未回后彻底停发（0=不硬停，靠封顶月频）
+      # P1：从未开口（last_in_ts=0）的联系人连续 N 条主动没回 → 彻底出圈。
+      # 0 互动不属于陪伴回访语义；比普通月频保底更严。对方一开口即自动恢复。0=关。
+      stop_after_never_replied: 2
+    # 开场变体守卫（P0，默认开）：生成文案与「上次主动开场 / 末尾连续未回的出站
+    # 消息」相似度 ≥ 阈值 → 换写一次，仍雷同则本轮放弃（宁可不发也不做复读机；
+    # 生产实锤同句式「好久没联系啦，最近怎么样」x3/x2/x2 连发）。
+    variety:
+      enabled: true
+      # 归一化比率（去标点/emoji/中文语气助词后 difflib）。0.6 按生产语料校准：
+      # 近重复问候对 0.667~1.0、真换切入点的开场 ≤0.242，落干净分隔带中。
+      similarity_threshold: 0.6
+    # P1 opt-out：对方明说「别再发了/stop messaging me」→ 静默 mute_days 天不再主动
+    # （只拦主动触达，对方再来消息照常回）。对方开口即提前解除。词表保守，宁漏勿误伤。
+    optout:
+      enabled: true
+      mute_days: 30
+    # P2 回复率反哺节奏（默认开）：账本半衰滑窗累计「主动→是否得到回应」长期观察。
+    # streak 退避是急性信号（这一轮连着没回），回复率是慢性信号（TA 历来回不回）——
+    # 慢性低回复冷却×stretch（在退避之外再拉长记性，封顶仍 720h）；慢性高回复可配
+    # relax<1 略提频（提频=增加发送，运营决策，默认 1.0 不提）。样本 < min_obs 不判。
+    response_pacing:
+      enabled: true
+      min_obs: 4               # 至少攒几次「发送→结局」观察才启用比率信号
+      low_rate: 0.15           # 长期回复率 ≤ 此值 → 冷却×stretch
+      stretch: 1.5
+      high_rate: 0.6           # 长期回复率 ≥ 此值 → 冷却×relax（仅 relax<1 时生效）
+      relax: 1.0               # 夹在 [0.5, 1.0]；1.0=不提频
+      # P6 分位阈值自适应（默认关）：low/high 不用上面的冷启动固定值，改按账本
+      # 各会话长期回复率分布的分位数校准——人群整体回复率高（0.15 永不触发）或
+      # 低（0.6 永不触发）的部署各得其所。合格人群 < min_population 或分布同质
+      # （P75-P25 < min_separation，分层=追噪声）自动回落固定值；看板出生效值。
+      auto_thresholds:
+        enabled: false
+        low_percentile: 25
+        high_percentile: 75
+        min_population: 12
+        min_separation: 0.15
+    # P3 媒体形态反哺（默认关）：voice/photo 发送概率按 outreach_log 分形态回复率
+    # 相对 text 基线自校准——factor=clamp(sqrt(kind率/text率), max_cut, max_boost)，
+    # 有效概率=配置概率×factor 夹 [0.02,0.95]。**只换形态不换总量**（消息数由
+    # pacing 层决定）；min_intimacy/modes/daily_cap 护栏全不动；双臂各 ≥
+    # min_sent_per_arm 才动，冷启动照配置值探索攒样本。已知偏差：photo 只发熟客
+    # 回复率天然偏高，boost 后仍要过亲密度闸，风险有界。
+    media_feedback:
+      enabled: false
+      min_sent_per_arm: 8      # 该形态与 text 基线各至少发过几条才启用
+      lookback_days: 14        # 只看近 N 天的触达（新鲜度）
+      response_window_days: 3  # 触达后几天内有入站算「回复」
+      max_boost: 1.5           # 概率上调封顶
+      max_cut: 0.5             # 概率下调保底
+    # P5 checkin 效能门控（默认关）：数据证明「什么钩子都没有」的温和问候回复率
+    # 远低于富开场（记忆回访/生活分享/天气/剧情）时，按差距比例本日跳过部分裸
+    # checkin——skip=clamp(1-checkin率/富开场率, 0, max_skip)。只减发送不增；
+    # crc32(会话#日期) 确定性跳过（tick 重掷会把「跳过」磨成「延迟」）；两臂样本
+    # 不足恒 0（机制先上线，数据到位自动激活）；max_skip 封顶保留探索量，
+    # checkin 回复率永远可被重新测量。
+    mode_gate:
+      enabled: false
+      min_checkin_sent: 30     # checkin 臂近 lookback 天至少发过几条
+      min_rich_sent: 15        # 富开场臂合计至少发过几条
+      max_skip: 0.5            # 跳过概率封顶
+      lookback_days: 14
+      response_window_days: 3
     crisis_guard_days: 14    # 情绪护栏回看窗（天）：近 N 天内有危机事件则抑制主动打扰——
     #   severe（自伤/轻生）→ 完全不主动（交人工/关怀）；elevated（深度绝望）→ 抑制剧情邀约、
     #   仅保留温和问候。避免在情绪低谷期推「播放性」内容（如约会剧情邀约）。常驻安全护栏。
@@ -2275,6 +2351,13 @@ inbox:
     high_risk_min: 5          # 高危量绝对下限（低于此不看环比）
     high_risk_spike: 5        # 高危量环比增量 ≥ 此 → warn(yellow)
 
+  # 文本短句分条（bubble）：投递侧把换行/短句拆成 1-3 条发出（翻译后拆；orch_only
+  # 防与 RPA human_pacing 双重切碎）。默认关。详见 config.yaml::inbox.reply_style.bubbles。
+  # reply_style:
+  #   bubbles:
+  #     enabled: true
+  #     max_parts: 3
+  #     orch_only: true
   # L2 草稿自动发送 worker（全自动回复的「发送」环节）。
   l2_autosend:
     enabled: true             # false = 不启动 worker（L2 草稿不会被自动处置）

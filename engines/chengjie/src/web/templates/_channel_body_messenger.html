@@ -439,9 +439,7 @@ body:has(.mr-page.monitor-mode) .wrap{padding:.65rem .85rem 1.5rem}
       <div class="rpa-kpi"><span class="rpa-kpi-n" id="kpi-runs">0</span><span class="rpa-kpi-l">{{ (i18n or {}).get('msg_s007', "🔄 最近运行") }}</span></div>
       <div class="rpa-kpi"><span class="rpa-kpi-n" id="kpi-line">--</span><span class="rpa-kpi-l">{{ (i18n or {}).get('msg_s008', "💚 LINE 转化") }}</span></div>
     </div>
-    <div class="rpa-hero-actions">
-      <a class="rpa-hero-btn" href="/workspace?drawer=1&amp;connect=messenger" style="text-decoration:none" title="{{ (i18n or {}).get('chc_acct_cta', '去工作台管理账号') }}">{{ (i18n or {}).get('chc_acct_hero_btn', '管理账号') }}</a>
-    </div>
+    {# 「管理账号」入口收敛到上方平台连接卡（2026-07-29） #}
   </div>
 
   <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:.7rem;flex-wrap:wrap">

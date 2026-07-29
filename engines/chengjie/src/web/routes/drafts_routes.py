@@ -173,6 +173,11 @@ def register_drafts_routes(app, *, api_auth):
         except Exception:
             pass
         try:
+            from src.inbox.reply_split import bubbles_metrics_snapshot as _bms
+            snap["bubbles"] = _bms()  # P1.5 文本分条：sends_by_source/parts_sent/partial
+        except Exception:
+            pass
+        try:
             from src.ai.face_swap import metrics_snapshot as _fss
             snap["face_swap"] = _fss()  # 换脸：swapped/passthrough/failed/last_reason
         except Exception:
@@ -204,6 +209,25 @@ def register_drafts_routes(app, *, api_auth):
                         }
                 if _ab:
                     snap["proactive_kind_ab"] = _ab
+        except Exception:
+            pass
+        try:
+            # P2：分条 A/B——全自动文本投递（bubbles vs single）3 天窗回复率对比。
+            # 观察性对比（非随机分组，受消息长短/类型混杂影响），趋势参考用。
+            _ibx_b = getattr(request.app.state, "inbox_store", None)
+            if _ibx_b is not None and hasattr(_ibx_b, "outreach_response_stats"):
+                _bab = {}
+                for _kind in ("bubbles", "single", "holdout"):
+                    _r = _ibx_b.outreach_response_stats(
+                        f"autosend_text:{_kind}", response_window_days=3.0)
+                    if int(_r.get("sent") or 0) > 0:
+                        _bab[_kind] = {
+                            "sent": int(_r.get("sent") or 0),
+                            "responded": int(_r.get("responded") or 0),
+                            "response_rate": _r.get("response_rate"),
+                        }
+                if _bab:
+                    snap["bubbles_ab"] = _bab
         except Exception:
             pass
         try:
@@ -674,6 +698,9 @@ def register_drafts_routes(app, *, api_auth):
         result = svc.resolve_with_audit(draft_id, action, text=text, by=by)
         if not result.get("ok"):
             code = int(result.get("code") or 400)
+            # 409＝撞原子闸门：草稿刚被其他窗口/同事处置（多开防重语义，非故障）
+            if code == 409 or result.get("already_resolved"):
+                raise HTTPException(409, tr(request, "err.draft.already_resolved"))
             raise HTTPException(code, result.get("error") or "处置失败")
         return result
 
@@ -716,8 +743,10 @@ def register_drafts_routes(app, *, api_auth):
         for d in drafts:
             if d.get("autopilot_level") != "L2":
                 continue
+            # deliver=True：人工触发的批量 autosend 也要真投递（AutosendWorker 只投递
+            # 自己 resolve 的批次；此前该路由只标记 approved，客户实际收不到）。
             result = svc.resolve_with_audit(
-                d["draft_id"], "autosend", by=by,
+                d["draft_id"], "autosend", by=by, deliver=True,
             )
             if result.get("ok"):
                 sent += 1
@@ -901,6 +930,13 @@ def register_metrics_route(app, *, api_auth):
         try:
             from src.ai.outbound_translation_stats import get_outbound_translation_stats
             metrics["outbound_translation"] = get_outbound_translation_stats().dump()
+        except Exception:
+            pass
+
+        # P0 多开治理：发送幂等去重（双窗口/双击重复提交拦截量；entries=当前占位窗口）
+        try:
+            from src.inbox.send_dedup import get_send_dedup
+            metrics["send_dedup"] = get_send_dedup().snapshot()
         except Exception:
             pass
 
@@ -1283,6 +1319,23 @@ def register_metrics_route(app, *, api_auth):
             _gauge("ws_autosend_circuit_open",
                    1 if metrics["autosend"].get("circuit_open") else 0,
                    "AutosendWorker circuit breaker open")
+            # P0/P2 多开治理：人工通过投递 + 竞态拦截 + 发送幂等去重
+            _gauge("ws_autosend_human_delivered_total",
+                   metrics["autosend"].get("total_human_delivered", 0),
+                   "Human-approved inbox drafts delivered via worker send chain")
+            _gauge("ws_autosend_human_deliver_errors_total",
+                   metrics["autosend"].get("total_human_deliver_errors", 0),
+                   "Human-approved inbox draft delivery failures")
+            _gauge("ws_autosend_raced_skips_total",
+                   metrics["autosend"].get("total_skipped_raced", 0),
+                   "Draft resolves skipped because another window/agent won the race")
+            _sd = metrics.get("send_dedup") or {}
+            _gauge("ws_send_dedup_duplicates_total",
+                   _sd.get("total_duplicates", 0),
+                   "Duplicate manual sends blocked by client_msg_id dedup")
+            _gauge("ws_send_dedup_reserved_total",
+                   _sd.get("total_reserved", 0),
+                   "Manual sends carrying a client_msg_id (dedup-protected)")
 
             _gauge("ws_sla_watcher_running",
                    1 if metrics["sla_watcher"].get("running") else 0,
@@ -1552,10 +1605,12 @@ def register_metrics_route(app, *, api_auth):
 def register_telemetry_route(app, *, api_auth):
     """前端遥测上报（任意登录用户可写，不限主管）。
 
-    POST /api/telemetry/frontend-error  body: {page, fn, type}
+    POST /api/telemetry/frontend-error  body: {page, fn, type[, endpoint]}
     dead-click 守卫（unified_inbox + _rpa_shared_scripts）捕获 ReferenceError 后 beacon 到此，
     经 FrontendErrorStats 累计，读出走 /api/workspace/metrics.frontend_errors（主管专属）。
-    只收计数用的三个消毒字段，绝不落原文/堆栈；任何异常都吞掉返回 ok，绝不影响前端。
+    ``endpoint``（可选）＝apiFetch 网络层失败附带的请求 path（消毒：丢查询串、
+    数字段掩码 <n>）——修「哪个接口在坏」无从归因的观测盲区（2026-07-29）。
+    只收计数用的消毒字段，绝不落原文/堆栈；任何异常都吞掉返回 ok，绝不影响前端。
 
     POST /api/telemetry/ui-event  body: {page, action}
     UI 交互埋点（空态引导按钮点击/群区显示模式切换等），经 UiEventStats 累计，
@@ -1576,6 +1631,7 @@ def register_telemetry_route(app, *, api_auth):
                     page=str(body.get("page") or ""),
                     fn=str(body.get("fn") or ""),
                     etype=str(body.get("type") or ""),
+                    endpoint=str(body.get("endpoint") or ""),
                 )
             except Exception:
                 pass

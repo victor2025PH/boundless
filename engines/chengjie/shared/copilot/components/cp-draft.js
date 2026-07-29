@@ -54,6 +54,7 @@
       .bdg { font-size:var(--cp-fs-tiny,11px); padding:1px 7px; border-radius:99px;
              background:var(--cp-accent-weak,rgba(79,70,229,.1)); color:var(--cp-accent,#4f46e5); }
       .bdg.intent { background:var(--cp-surface,#eef2ff); color:var(--cp-text-dim,#64748b); }
+      .bdg.kb { background:var(--cp-surface-2,#f8fafc); color:var(--cp-text-dim,#64748b); border:1px solid var(--cp-border,#e2e8f0); cursor:help; }
       .reply { font-size:var(--cp-fs,13px); color:var(--cp-text,#1e293b); line-height:1.5; white-space:pre-wrap; }
       .tr { margin-top:5px; padding-top:5px; border-top:1px dashed var(--cp-border,#e2e8f0);
             font-size:var(--cp-fs-sm,12px); color:var(--cp-text-dim,#475569); white-space:pre-wrap; }
@@ -380,6 +381,13 @@
       const badges =
         (r.persona ? `<span class="bdg">🎭 ${esc(r.persona)}${tierLbl ? " · " + esc(tierLbl) : ""}</span>` : "") +
         (r.intent ? `<span class="bdg intent">${esc(this.t("cp.draft.intent"))} ${esc(r.intent)}</span>` : "");
+      // P2 证据链：草稿引用的 KB 条目（display-only chips，悬停看片段——引用注入不再黑盒）
+      const kbRefs = Array.isArray(r.kb_refs) ? r.kb_refs.slice(0, 3) : [];
+      const kbChips = kbRefs.length
+        ? `<div class="badges">` + kbRefs.map((k) =>
+            `<span class="bdg kb" title="${esc(String(k.snippet || "").slice(0, 200))}">📚 ${esc(String(k.title || k.category || "").slice(0, 24))}</span>`
+          ).join("") + `</div>`
+        : "";
       // —— 对比语言路径(桌面：reply/contrast 双块可编辑 + send-pick) ——
       const wantContrast = this.hasAttribute("contrast");
       const contrastSel = this.shadowRoot.querySelector('select[data-role="contrast"]');
@@ -392,7 +400,7 @@
         const nm = "cppick" + this._pickSeq;
         slot.innerHTML =
           `<div class="draft">` +
-          (badges ? `<div class="badges">${badges}</div>` : "") +
+          (badges ? `<div class="badges">${badges}</div>` : "") + kbChips +
           `<div class="lblock active" data-block="reply">` +
             `<div class="lhead"><input type="radio" name="${nm}" data-pick="reply" checked><span>${esc(this._langLabel(replyLang))}</span></div>` +
             `<textarea data-role="reply-ta" rows="4">${esc(replyText)}</textarea></div>` +
@@ -415,7 +423,7 @@
       const sendWhich = r.translated ? "translated" : "reply";
       slot.innerHTML =
         `<div class="draft">` +
-        (badges ? `<div class="badges">${badges}</div>` : "") +
+        (badges ? `<div class="badges">${badges}</div>` : "") + kbChips +
         `<div class="reply">${esc(r.reply)}</div>` +
         `<div class="acts">` +
         `<button class="primary" data-act="fill" data-which="reply">${esc(this.t("cp.draft.fill"))}</button>` +

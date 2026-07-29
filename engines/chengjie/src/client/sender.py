@@ -776,6 +776,39 @@ class TelegramSenderMixin:
                 self._handle_send_exc(e2)
             return None
 
+    def _dead_peer_guard(self):
+        """死 peer 登记表守卫（gated on ``ops.dead_peer_registry.enabled``，默认关）。
+
+        返回 ``(enabled, registry)``——**全程吞异常**，任何解析失败 → ``(False, None)``
+        恒放行（守卫自身绝不阻断发送，与 ``_presend_blocked`` 同承诺）。落盘位与
+        proactive 的 bad_peers 同目录（实例 ``config/dead_peers.json``）。
+        """
+        try:
+            from pathlib import Path as _P
+
+            from src.ops.dead_peer_registry import (
+                dead_peer_enabled, get_dead_peer_registry,
+            )
+            cfgobj = getattr(self, "config", None)
+            if not dead_peer_enabled(cfgobj):
+                return False, None
+            path = None
+            cp = getattr(cfgobj, "config_path", None)
+            if cp:
+                path = str(_P(cp).parent / "dead_peers.json")
+            cfg = getattr(cfgobj, "config", None)
+            if not isinstance(cfg, dict):
+                cfg = cfgobj if isinstance(cfgobj, dict) else {}
+            _dpc = ((cfg.get("ops") or {}).get("dead_peer_registry") or {})
+            ttl = float((_dpc.get("ttl_sec") or 0) or 0)
+            # reason 级 TTL（可选）：注销恒永久；被拉黑/群禁言配 TTL 到期可探路重试
+            _tbr = _dpc.get("ttl_by_reason")
+            ttl_by_reason = _tbr if isinstance(_tbr, dict) else None
+            return True, get_dead_peer_registry(
+                path=path, ttl_sec=ttl, ttl_by_reason=ttl_by_reason)
+        except Exception:
+            return False, None
+
     async def _send_text_guarded(self, chat_id: int, text: str):
         """A 线外发文本核心：过发送前护栏 + 节流 + 记账，返回 ``(ok, sent_message)``。
 
@@ -785,6 +818,14 @@ class TelegramSenderMixin:
 
         **不**做出站镜像（避免与编排器中心化收件箱回写重复镜像）。
         """
+        # 死 peer 闸（gated 默认关）：对已确证永久不可达的 peer（账号注销/被拉黑）
+        # 直接跳过——修「同一死号每 15min 重发、2h ×17 次累积风控」（2026-07-27 实锤）。
+        _dp_on, _dp_reg = self._dead_peer_guard()
+        if _dp_on and _dp_reg is not None and _dp_reg.is_blocked("telegram", chat_id):
+            self.logger.info(
+                "[dead-peer] 跳过已拉黑 peer %s（%s，避免无效重发累积风控）",
+                chat_id, _dp_reg.reason_of("telegram", chat_id) or "permanent")
+            return False, None
         try:
             # 统一发送前护栏：G1 Kill-Switch + N 线反封号闸门（与 _send_reply/send_photo 共用）
             if self._presend_blocked():
@@ -813,6 +854,18 @@ class TelegramSenderMixin:
                 self.logger.error("发送消息失败（peer 预热后仍不可达）: %s", e)
                 return False, None
             self.logger.error("发送消息失败: %s", e)
+            # 死 peer 登记（gated）：永久不可达（账号注销/被拉黑/写禁止）落共享黑名单
+            # → 下次本方法开头的闸直接拦截。可自愈类（peer_invalid，上面已走预热分支）
+            # classify 归 peer_unresolved，record 内部按「非永久」忽略，双重保险不误拉黑。
+            if _dp_on and _dp_reg is not None:
+                try:
+                    from src.ops.dead_peer_registry import classify_send_error
+                    _rsn = classify_send_error(e)
+                    if _rsn and _dp_reg.record("telegram", chat_id, _rsn):
+                        self.logger.info(
+                            "[dead-peer] 已拉黑 %s（%s，永久不可达不再重发）", chat_id, _rsn)
+                except Exception:
+                    pass
             self._handle_send_exc(e)   # G2 分级急停 + 实施31 TG 告警（best-effort）
             return False, None
 

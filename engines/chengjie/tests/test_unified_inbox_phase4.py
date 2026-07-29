@@ -114,6 +114,116 @@ def test_kb_search_unavailable():
     assert resp.json()["ok"] is False
 
 
+# ── P0 推荐降噪：auto 置信闸 + confidence 标签（unified_inbox_aux_read_routes）──
+
+
+def _kb_two_scores():
+    class _Kb:
+        def search(self, query, top_k=5, lang="zh", query_vec=None):
+            return {
+                "entries": [
+                    {"id": "hi", "title": "高分条目", "example_reply_zh": "答A",
+                     "_score": 20.0, "_mode": "bm25"},
+                    {"id": "lo", "title": "低分条目", "example_reply_zh": "答B",
+                     "_score": 2.0, "_mode": "bm25"},
+                ],
+                "search_mode": "bm25",
+            }
+    return _Kb()
+
+
+def test_kb_search_auto_gates_low_confidence():
+    """auto=1（会话打开自动推送）：低于噪声闸的条目不返回，高分条目带 high 置信。"""
+    c = _client(kb_store=_kb_two_scores())
+    data = c.get("/api/unified-inbox/kb-search?q=test&auto=1").json()
+    ids = [e["entry_id"] for e in data["entries"]]
+    assert "hi" in ids and "lo" not in ids
+    assert data["entries"][0]["confidence"] == "high"
+
+
+def test_kb_search_manual_keeps_low_scores():
+    """手动检索（无 auto）不做噪声过滤——坐席主动搜就该什么都能看到（回归钉）。"""
+    c = _client(kb_store=_kb_two_scores())
+    data = c.get("/api/unified-inbox/kb-search?q=test").json()
+    by_id = {e["entry_id"]: e for e in data["entries"]}
+    assert set(by_id) == {"hi", "lo"}
+    assert by_id["hi"]["confidence"] == "high"
+    assert by_id["lo"]["confidence"] == "mid"
+
+
+def test_kb_search_auto_all_low_returns_empty():
+    class _Kb:
+        def search(self, query, top_k=5, lang="zh", query_vec=None):
+            return {"entries": [
+                {"id": "j1", "title": "杂讯", "example_reply_zh": "x",
+                 "_score": 1.2, "_mode": "bm25"},
+            ], "search_mode": "bm25"}
+    c = _client(kb_store=_Kb())
+    data = c.get("/api/unified-inbox/kb-search?q=test&auto=1").json()
+    assert data["ok"] is True
+    assert data["entries"] == []
+
+
+def test_kb_search_hybrid_scale_skips_min_gate():
+    """hybrid(RRF) 分数是排名共识刻度（~0.016-0.033），不套 BM25 噪声闸；0.03+ 记 high。"""
+    class _Kb:
+        def search(self, query, top_k=5, lang="zh", query_vec=None):
+            return {"entries": [
+                {"id": "h1", "title": "双路共识", "example_reply_zh": "a",
+                 "_score": 0.032, "_mode": "hybrid"},
+                {"id": "h2", "title": "单路", "example_reply_zh": "b",
+                 "_score": 0.016, "_mode": "hybrid"},
+            ], "search_mode": "hybrid"}
+    c = _client(kb_store=_Kb())
+    data = c.get("/api/unified-inbox/kb-search?q=test&auto=1").json()
+    by_id = {e["entry_id"]: e for e in data["entries"]}
+    assert set(by_id) == {"h1", "h2"}
+    assert by_id["h1"]["confidence"] == "high"
+    assert by_id["h2"]["confidence"] == "mid"
+
+
+def test_kb_search_thresholds_configurable():
+    """阈值经 config inbox.kb_suggest 覆写（与 config 热更新同一读取路径）。"""
+    cfg = _CfgMgr({"inbox": {"kb_suggest": {"auto_min_score": 25, "auto_high_score": 30}}})
+    c = _client(config_manager=cfg, kb_store=_kb_two_scores())
+    data = c.get("/api/unified-inbox/kb-search?q=test&auto=1").json()
+    assert data["entries"] == []
+
+
+class _FunnelStore:
+    def __init__(self):
+        self.recorded = []
+
+    def record_kb_recommendation(self, **kw):
+        self.recorded.append(kw)
+
+
+def test_kb_search_auto_logs_funnel_and_returns_rec_id():
+    """P3 漏斗：auto 模式把推荐落 kb_recommendation_log 并给每条带 rec_id
+    （前端引用时回调既有 /api/workspace/kb-click 完成 推荐→引用 转化归因）。"""
+    st = _FunnelStore()
+    c = _client(kb_store=_kb_two_scores())
+    c.app.state.inbox_store = st
+    d = c.get(
+        "/api/unified-inbox/kb-search?q=test&auto=1&conv=telegram:default:u1").json()
+    assert d["ok"] is True and d["entries"]
+    assert all(e.get("rec_id") for e in d["entries"])
+    assert len(st.recorded) == len(d["entries"])
+    assert st.recorded[0]["conversation_id"] == "telegram:default:u1"
+    assert st.recorded[0]["entry_id"] == d["entries"][0]["entry_id"]
+
+
+def test_kb_search_manual_does_not_log_funnel():
+    """手动检索不落漏斗（坐席主动搜不是"系统推荐"，混进来会稀释命中率口径）。"""
+    st = _FunnelStore()
+    c = _client(kb_store=_kb_two_scores())
+    c.app.state.inbox_store = st
+    d = c.get("/api/unified-inbox/kb-search?q=test").json()
+    assert d["entries"]
+    assert st.recorded == []
+    assert all("rec_id" not in e for e in d["entries"])
+
+
 def test_profile_enriched_with_contacts_journey(tmp_path):
     from src.contacts import ContactGateway, GatewayContactHooks, HandoffTokenService, MergeService
 

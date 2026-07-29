@@ -278,6 +278,12 @@
     <div id="proactiveEngDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
+  <section id="bubblesSection" style="display:none;">
+    <h2>🫧 {{ (i18n or {}).get('ov2_s_bubbles', "短句分条回复（像真人连发 · autosend/坐席/A线 三链）") }}</h2>
+    <div class="grid" id="bubblesKpis"></div>
+    <div id="bubblesDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
   <section id="realWorldSection" style="display:none;">
     <h2>🌍 {{ (i18n or {}).get('ov2_s_rw', "真实世界接轨（人设当地时钟 / 天气 / 客户时区 / 双侧节日）") }}</h2>
     <div class="grid" id="realWorldKpis"></div>
@@ -4179,6 +4185,45 @@ async function addPrerenderLine(idx){
     if(hint) hint.textContent = window.T('ln_js_033')+e;
   }
 }
+async function loadReplyBubbles(){
+  var sec = document.getElementById('bubblesSection');
+  var kp = document.getElementById('bubblesKpis');
+  var det = document.getElementById('bubblesDetail');
+  if(!sec || !kp || !det) return;
+  try{
+    const r = await apiFetch('/api/drafts/autosend-status', {credentials:'same-origin'});
+    if(r.status === 403){ sec.style.display='none'; return; }
+    const d = await r.json();
+    var w = (d && d.worker) || {};
+    var bub = w.bubbles || {};
+    var ab = w.bubbles_ab || {};
+    var sends = bub.sends || 0;
+    if(!sends && !Object.keys(ab).length){ sec.style.display='none'; return; }
+    sec.style.display='';
+    var bySrc = bub.sends_by_source || {};
+    var srcParts = Object.keys(bySrc).sort(function(a,b){ return (bySrc[b]||0)-(bySrc[a]||0); })
+      .map(function(k){ return k+' '+fmt(bySrc[k]); });
+    var avgParts = sends>0 ? Math.round((bub.parts_sent||0)/sends*10)/10 : 0;
+    function _abv(k){
+      var a = ab[k];
+      if(!a || !a.sent) return '—';
+      return Math.round((a.response_rate||0)*100)+'% ('+fmt(a.responded)+'/'+fmt(a.sent)+')';
+    }
+    var kpis = [
+      {label:window.T('ov2_bb_sends'), value:fmt(sends)},
+      {label:window.T('ov2_bb_by_src'), value:srcParts.length?srcParts.join(' · '):'—'},
+      {label:window.T('ov2_bb_avg_parts'), value:fmt(avgParts)+' · '+window.T('ov2_bb_partial')+' '+fmt(bub.partial||0)},
+      {label:window.T('ov2_bb_ab_bubbles'), value:_abv('bubbles')},
+      {label:window.T('ov2_bb_ab_holdout'), value:_abv('holdout')},
+      {label:window.T('ov2_bb_ab_single'), value:_abv('single')},
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    det.innerHTML = '<div class="muted" style="font-size:12px;">'+window.T('ov2_bb_note')+'</div>';
+  }catch(_){ sec.style.display='none'; }
+}
 async function loadProactiveEngagement(){
   var sec = document.getElementById('proactiveEngSection');
   var kp = document.getElementById('proactiveEngKpis');
@@ -4196,13 +4241,20 @@ async function loadProactiveEngagement(){
     var bs = d.automation_bootstrap || {};
     var pv = d.preview || {};
     var ap = cfg.adaptive_pacing || {};
+    // P2：mode 分布优先读落库 14 天口径（重启不清零），进程计数兜底
+    var modes = d.sent_modes_14d || {};
+    if(!Object.keys(modes).length) modes = pr.sent_modes || {};
+    var modeParts = Object.keys(modes).sort(function(a,b){ return (modes[b]||0)-(modes[a]||0); })
+      .slice(0,4).map(function(k){ return k+' '+fmt(modes[k]); });
+    var bl = d.backoff_ledger || {};
+    var oo = d.optout || {};
     var kpis = [
       {label:window.T('ov2_pe_tick'), value:fmt(pr.sent_sum)+' / '+fmt(pr.planned_sum)+' '+window.T('ov2_pe_planned')},
-      {label:window.T('ov2_pe_voice'), value:fmt(pr.voice_sent||0)+' · '+window.T('ov2_pe_foreign')+' '+fmt(pr.voice_foreign_sent||0)},
-      {label:window.T('ov2_pe_bootstrap'), value:fmt(bs.bootstrap_total||0)},
+      {label:window.T('ov2_pe_voice'), value:fmt(pr.voice_sent||0)+' · '+window.T('ov2_pe_foreign')+' '+fmt(pr.voice_foreign_sent||0)+' · 📷 '+fmt(pr.photo_sent||0)},
+      {label:window.T('ov2_pe_modes'), value:modeParts.length?modeParts.join(' · '):'—'},
+      {label:window.T('ov2_pe_backoff'), value:fmt(bl.streak1||0)+'/'+fmt(bl.streak2||0)+'/'+fmt(bl.streak3plus||0)+' · '+window.T('ov2_pe_optout')+' '+fmt(oo.muted||pr.optout_mutes||0)},
       {label:window.T('ov2_pe_candidates'), value:fmt(pv.candidates||0)+' / '+window.T('ov2_pe_scanned')+' '+fmt(pv.scanned||0)},
       {label:window.T('ov2_pe_pacing'), value:(ap.enabled?window.T('ov2_pe_pacing_on'):window.T('ov2_pe_pacing_off'))+' · '+fmt(cfg.min_silent_hours)+'h'},
-      {label:window.T('ov2_pe_foreign_on'), value:(cfg.foreign_voice?window.T('yes'):window.T('no'))},
     ];
     kp.innerHTML = kpis.map(function(c){
       return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
@@ -4219,7 +4271,9 @@ async function loadProactiveEngagement(){
         +'<th>'+window.T('ov2_pe_col_intimacy')+'</th>'
         +'<th>'+window.T('ov2_pe_col_silent')+'</th>'
         +'<th>'+window.T('ov2_pe_col_eff')+'</th>'
-        +'<th>'+window.T('ov2_pe_col_mode')+'</th></tr>'
+        +'<th>'+window.T('ov2_pe_col_mode')+'</th>'
+        +'<th>'+window.T('ov2_pe_col_streak')+'</th>'
+        +'<th>'+window.T('ov2_pe_col_gap')+'</th></tr>'
         +sample.map(function(s){
           var cid = String(s.conversation_id||'');
           var short = cid.length>28 ? cid.slice(0,25)+'…' : cid;
@@ -4228,16 +4282,86 @@ async function loadProactiveEngagement(){
             +'<td>'+fmt(s.intimacy)+'</td>'
             +'<td>'+fmt(s.silent_hours)+'</td>'
             +'<td>'+fmt(s.effective_min_silent_hours)+'</td>'
-            +'<td>'+fmt(s.mode)+'</td></tr>';
+            +'<td>'+fmt(s.mode)+'</td>'
+            +'<td>'+fmt(s.unanswered_streak)+'</td>'
+            +'<td>'+fmt(s.gap_bucket)+'</td></tr>';
         }).join('')+'</table></div>';
     } else if((pv.candidates||0) === 0 && pv.enabled !== false){
       sampleHtml = '<div class="muted" style="font-size:12px;margin-top:8px;">'+window.T('ov2_pe_no_sample')+'</div>';
+    }
+    // P1：媒体跳过原因 Top（修「配置 50%/25% 实际 6%/0%」盲区）
+    var skips = pr.media_skips || {};
+    var skipHtml = '';
+    var skipParts = [];
+    ['voice','photo'].forEach(function(kind){
+      var bucket = skips[kind] || {};
+      Object.keys(bucket).sort(function(a,b){ return (bucket[b]||0)-(bucket[a]||0); })
+        .slice(0,4).forEach(function(r){
+          skipParts.push(kind+':'+r+' '+fmt(bucket[r]));
+        });
+    });
+    if(skipParts.length || (pr.variety_blocks||0) > 0){
+      skipHtml = '<div class="muted" style="font-size:12px;margin-top:8px;">'
+        +window.T('ov2_pe_skips')+': '+(skipParts.length?skipParts.join(' · '):'—')
+        +' · '+window.T('ov2_pe_variety_blocks')+' '+fmt(pr.variety_blocks||0)
+        +'</div>';
+    }
+    // P3：媒体形态反哺（voice/photo 回复率 vs text 基线 → 概率倍率）
+    var mfb = d.media_feedback || {};
+    if(Object.keys(mfb).length){
+      var fbParts2 = [];
+      ['text','voice','photo'].forEach(function(k){
+        var a = mfb[k]; if(!a) return;
+        fbParts2.push(k+' '+fmt(a.sent)+'·'+Math.round((a.rate||0)*100)+'%'
+          +(k==='text'?'':(' ×'+fmt(a.factor))));
+      });
+      skipHtml += '<div class="muted" style="font-size:12px;margin-top:4px;">'
+        +window.T('ov2_pe_media_fb')+': '+fbParts2.join(' · ')+'</div>';
+    }
+    // P4：mode 级回复率（哪种开场客户真的会回）
+    var mab = d.mode_ab || {};
+    var mabKeys = Object.keys(mab).filter(function(k){ return (mab[k]||{}).sent > 0; });
+    if(mabKeys.length){
+      mabKeys.sort(function(a,b){ return (mab[b].response_rate||0)-(mab[a].response_rate||0); });
+      var mabParts = mabKeys.slice(0,5).map(function(k){
+        return k+' '+Math.round((mab[k].response_rate||0)*100)+'%('+fmt(mab[k].sent)+')';
+      });
+      skipHtml += '<div class="muted" style="font-size:12px;margin-top:4px;">'
+        +window.T('ov2_pe_mode_ab')+': '+mabParts.join(' · ')+'</div>';
+    }
+    // P4：few_shot 就绪提示（评分攒够前开开关是空转）
+    var fsr = d.few_shot || {};
+    if(fsr.ready_threshold){
+      var fsTxt = fmt(fsr.rated||0)+'/'+fmt(fsr.ready_threshold)
+        +(fsr.enabled?(' · '+window.T('ov2_pe_fs_on')):'');
+      skipHtml += '<div class="muted" style="font-size:12px;margin-top:4px;">'
+        +window.T('ov2_pe_fs_hint')+': '+fsTxt+'</div>';
+    }
+    // P5：checkin 效能门控（两臂回复率 → 本日跳过概率；样本不足=0 待激活）
+    var mg = d.mode_gate || {};
+    if(mg.reason){
+      var mgc = mg.checkin || {}, mgr = mg.rich || {};
+      skipHtml += '<div class="muted" style="font-size:12px;margin-top:4px;">'
+        +window.T('ov2_pe_checkin_gate')+': checkin '+fmt(mgc.sent)+'·'
+        +Math.round((mgc.rate||0)*100)+'% vs rich '+fmt(mgr.sent)+'·'
+        +Math.round((mgr.rate||0)*100)+'% → skip '
+        +Math.round((mg.skip_prob||0)*100)+'% ('+mg.reason+')'
+        +' · '+window.T('ov2_pe_checkin_gate_hits')+' '+fmt(pr.checkin_gate_skips||0)
+        +'</div>';
+    }
+    // P6：回复率阈值生效值（percentile=分位自适应已激活 / config=冷启动固定值）
+    var rth = d.response_thresholds || {};
+    if(rth.source){
+      skipHtml += '<div class="muted" style="font-size:12px;margin-top:4px;">'
+        +window.T('ov2_pe_resp_thr')+': low '+Math.round((rth.low_rate||0)*100)
+        +'% / high '+Math.round((rth.high_rate||0)*100)+'% ('+rth.source
+        +', n='+fmt(rth.population||0)+')</div>';
     }
     det.innerHTML = '<div class="muted" style="font-size:12px;">'+window.T('ov2_pe_last')+
       ' planned='+fmt(lt.planned)+' sent='+fmt(lt.sent)+
       (lt.dry_run?' ('+window.T('ov2_pe_dry')+')':'')+
       ' · <a href="/api/companion/proactive/preview" target="_blank">'+window.T('ov2_pe_preview_link')+'</a></div>'
-      +sampleHtml;
+      +sampleHtml+skipHtml;
   }catch(e){
     det.innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
   }
@@ -4251,8 +4375,11 @@ async function loadAutosendMedia(){
     const r = await apiFetch('/api/drafts/autosend-status', {credentials:'same-origin'});
     if(r.status === 403){ sec.style.display='none'; return; }
     const d = await r.json();
-    var vo = d.voice || {};
-    var im = d.image || {};
+    // 形状兼容修复（2026-07-29）：端点返回 {ok, worker:{voice,image,…}}，旧代码直读
+    // d.voice/d.image 恒 undefined → 本卡 KPI 一直渲染 0（休眠显示 bug）。两形状都认。
+    var w = d.worker || {};
+    var vo = w.voice || d.voice || {};
+    var im = w.image || d.image || {};
     var active = (Number(vo.sent||0)+Number(vo.fallback||0)+Number(im.sent||0)+Number(im.fallback||0)) > 0;
     if(!active && !d.worker){ sec.style.display='none'; return; }
     sec.style.display='';
@@ -4298,6 +4425,12 @@ async function loadAutosendMedia(){
         return tot? (Math.round(vc/tot*1000)/10+'% ('+vc+'/'+tot+')'):'—';
       })()},
       {label:window.T('ov2_asm_noedge'), value:'<span style="color:'+(noEdgeDown>0?'var(--th-ink-amber5,#f59e0b)':'inherit')+'">'+fmt(noEdgeDown)+'</span>'},
+      // P2 多开治理观测：人工通过草稿真投递（成功/失败）+ 撞防重闸门被拦的竞态处置数
+      {label:window.T('ov2_asm_human_deliver'), value:(function(){
+        var okN=Number(w.total_human_delivered||0), erN=Number(w.total_human_deliver_errors||0);
+        return '<span style="color:'+(erN>0?'var(--th-ink-amber5,#f59e0b)':'inherit')+'">'+fmt(okN)+(erN>0?(' / ✗'+fmt(erN)):'')+'</span>';
+      })()},
+      {label:window.T('ov2_asm_raced'), value:fmt(w.total_skipped_raced||0)},
     ];
     kp.innerHTML = kpis.map(function(c){
       return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
@@ -4463,7 +4596,7 @@ async function toggleLocalTts(on){
 }
 
 if(CAN_MANAGE_OPS){ var _rb=document.getElementById('recheckBtn'); if(_rb) _rb.style.display=''; }
-function refreshAll(){ loadOverview(); loadIncidents(); loadReport(); loadTTS(); loadTTSTrend(); loadAiSafety(); loadSlaBacklog(); loadTranslationEngines(); loadXlateTrend(); loadVoiceSynthLang(); loadASRDegradation(); loadSpeechEmotion(); loadVisionUsage(); loadDeepPersona(); loadFrontendErrors(); loadCustomerAssets(); loadInstanceRestartStatus(); loadPlatformSessions(); loadChannelReadiness(); loadSendRoutes(); loadSendRouteTrend(); loadPersonaMedia(); loadMediaConsistency(); loadDuelBench(); loadPeerIdentity(); loadIdentityTrend(); loadLocalTts(); loadAutosendMedia(); loadPromiseTrend(); loadAvatarVoice(); loadProactiveEngagement(); loadRealWorld(); loadBazi(); loadPersonaImport(); loadCredPool(); loadGoals(); loadIdentityShadow(); loadEpisodicDedup(); loadIsolationHealth(); loadGpuWatermark(); loadProfileAudit(); loadRealtimeVoice(); loadRtvTrend(); refreshRealtimeVoiceAlertBadge(); loadTgCall(); }
+function refreshAll(){ loadOverview(); loadIncidents(); loadReport(); loadTTS(); loadTTSTrend(); loadAiSafety(); loadSlaBacklog(); loadTranslationEngines(); loadXlateTrend(); loadVoiceSynthLang(); loadASRDegradation(); loadSpeechEmotion(); loadVisionUsage(); loadDeepPersona(); loadFrontendErrors(); loadCustomerAssets(); loadInstanceRestartStatus(); loadPlatformSessions(); loadChannelReadiness(); loadSendRoutes(); loadSendRouteTrend(); loadPersonaMedia(); loadMediaConsistency(); loadDuelBench(); loadPeerIdentity(); loadIdentityTrend(); loadLocalTts(); loadAutosendMedia(); loadPromiseTrend(); loadAvatarVoice(); loadProactiveEngagement(); loadReplyBubbles(); loadRealWorld(); loadBazi(); loadPersonaImport(); loadCredPool(); loadGoals(); loadIdentityShadow(); loadEpisodicDedup(); loadIsolationHealth(); loadGpuWatermark(); loadProfileAudit(); loadRealtimeVoice(); loadRtvTrend(); refreshRealtimeVoiceAlertBadge(); loadTgCall(); }
 function _onRtvOpsRefresh(){
   loadRealtimeVoice(); loadRtvTrend(); loadRtvAlertCalibrate(false); refreshRealtimeVoiceAlertBadge();
 }

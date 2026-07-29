@@ -116,6 +116,12 @@ class TestL2EventAliases:
         assert "orchestrator_worker_alert" in rule["types"]
         assert rule["levels"] is None
 
+    def test_sla_escalated_alias(self):
+        """2026-07-29：二级升级事件必须有 webhook 订阅别名（否则严重无主积压外发不出去）。"""
+        rule = _EVENT_ALIASES["sla_escalated"]
+        assert "draft_sla_escalated" in rule["types"]
+        assert rule["levels"] is None
+
 
 class TestL2BuildMessage:
     def test_draft_created_l4(self):
@@ -141,6 +147,23 @@ class TestL2BuildMessage:
         })
         assert "再分配" in title
         assert "alice" in text
+
+    def test_sla_escalated_unclaimed_message(self):
+        """升级消息必须把「无主」这个关键信息带进外发文案（运营一眼看到严重度）。"""
+        title, text = _build_message("draft_sla_escalated", {
+            "autopilot_level": "L3", "wait_min": 9112, "escalate_hours": 24,
+            "unclaimed": True, "platform": "whatsapp", "peer_text_preview": "在吗",
+        })
+        assert "无人认领" in title or "无人认领" in text
+        assert "9112" in text
+
+    def test_sla_escalated_claimed_message(self):
+        title, text = _build_message("draft_sla_escalated", {
+            "autopilot_level": "L4", "wait_min": 300, "escalate_hours": 12,
+            "unclaimed": False, "platform": "line",
+        })
+        assert "已认领" in text
+        assert "无人认领" not in title
 
     def test_backlog_summary(self):
         title, text = _build_message("draft_backlog_summary", {

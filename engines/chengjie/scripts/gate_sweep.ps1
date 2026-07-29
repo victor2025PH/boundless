@@ -78,6 +78,8 @@ $gates = @(
     'tests/test_template_orphan_refs.py',
     'tests/test_template_dynamic_dot_access.py',
     'tests/test_template_inline_js_syntax.py',
+    'tests/test_template_jinja_comment_trap.py',
+    'tests/test_channel_page_render_integrity.py',
     'tests/test_template_inline_color_ratchet.py',
     'tests/test_i18n_coverage.py',
     'tests/test_copilot_shared_sync.py',
@@ -102,6 +104,17 @@ if ($Full) {
     Write-Output ''
     Write-Output '=== -Full: whole-suite regression (scripts\regression.ps1) ==='
     powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'regression.ps1')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Multi-window coordinator is PURE FRONTEND logic (localStorage primary slot +
+    # storage events + overlay). The static gates above can only prove "the handler
+    # is exposed on window", NOT "mutual exclusion between two tabs actually holds",
+    # and template edits are hot-reloaded straight to production. So verify it in a
+    # real browser (read-only: opens two /workspace tabs, clicks the overlay button,
+    # sends nothing). Missing playwright or an unreachable instance => SKIP, exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: multi-window coordinator, real browser (tools\verify_multiwin_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_multiwin_ui.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 }
 

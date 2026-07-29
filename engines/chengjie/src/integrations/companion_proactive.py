@@ -83,10 +83,52 @@ def should_skip_recent_active(
     return (float(now) - lt) < msh * 3600.0
 
 
+def _ledger_entry(value: Any) -> Dict[str, Any]:
+    """冷却表条目多格式解析：旧 ``float ts`` / v2 ``{ts, streak, last_text}`` /
+    v3 增 ``sent_ts``（上次**真实发送**时间）与 ``obs_n/obs_replied``（回应观察）。
+
+    - 旧格式（升级前的存量文件）没有回应信息 → streak 按 1 保守处理：那批正是
+      被反复问候过的会话，若对方其实回过话，规划器会用 last_in_ts 把 streak 归零。
+    - ``sent_ts`` 与 ``ts`` 分离（P2）：``mark_attempt``（变体守卫拦下）只推 ``ts``
+      防重烧 LLM，但**响应语义**（streak/回复率）必须对照真实发送时刻——否则对方
+      明明回过话，也会因我们自己一次被拦的尝试被误判「未回」继续退避。
+      缺失时回落 ``ts``（v2 存量语义不变）。
+    """
+    if isinstance(value, dict):
+        def _f(key: str) -> float:
+            try:
+                return float(value.get(key) or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        def _i(key: str) -> int:
+            try:
+                return max(0, int(value.get(key) or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        ts = _f("ts")
+        # 键**缺失**（v2 存量）才回落 ts（那时 ts 就是真实发送）；显式 0（只
+        # attempt 过、从未真发）必须保 0——否则重载后 attempt 时间被当成真实
+        # 发送，幻影观察污染回复率。
+        sent_ts = _f("sent_ts") if "sent_ts" in value else ts
+        return {
+            "ts": ts, "sent_ts": sent_ts, "streak": _i("streak"),
+            "last_text": str(value.get("last_text") or ""),
+            "obs_n": _i("obs_n"), "obs_replied": _i("obs_replied"),
+        }
+    try:
+        ts = float(value or 0.0)
+    except (TypeError, ValueError):
+        ts = 0.0
+    return {"ts": ts, "sent_ts": ts, "streak": 1 if ts > 0 else 0,
+            "last_text": "", "obs_n": 0, "obs_replied": 0}
+
+
 def plan_proactive_sends(
     conversations: List[Dict[str, Any]],
     *,
-    cooldown_map: Dict[str, float],
+    cooldown_map: Dict[str, Any],
     opener_fn: Callable[..., Dict[str, Any]],
     now: Optional[float] = None,
     min_silent_hours: float = 24.0,
@@ -99,6 +141,8 @@ def plan_proactive_sends(
     pacing_cfg: Optional[Dict[str, Any]] = None,
     priority_fn: Optional[Callable[[Dict[str, Any]], float]] = None,
     user_clock_provider: Optional[Callable[[str], Optional[Any]]] = None,
+    backoff_cfg: Optional[Dict[str, Any]] = None,
+    response_pacing_cfg: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """决定本轮该主动开场的会话清单（确定性纯函数）。
 
@@ -135,14 +179,44 @@ def plan_proactive_sends(
             安静」只收窄绝不新开窗口、弱信号（advisory）完全不参与调度。解析排在
             沉默/冷却等便宜过滤**之后**；provider 异常按无时钟处理。
             ``silent_hours`` / pacing / 冷却均为纯时长差，与时区无关，故一律不动。
+        backoff_cfg: 可选，``parse_no_reply_backoff_cfg`` 产出。**未回退避**（P0
+            2026-07-29）：上一条主动开场后对方没回过话（按快照 ``last_in_ts`` 与
+            冷却条目 streak 判定）→ 冷却按 multiplier^streak 拉长、封顶
+            max_backoff_hours；``stop_after>0`` 且达到 → 该会话彻底停发直到对方
+            先开口。None＝不退避（旧行为）。``cooldown_map`` 兼容旧 float 与新
+            ledger dict 两种条目格式。
+        response_pacing_cfg: 可选，``parse_response_pacing_cfg`` 产出。**回复率
+            反哺**（P2）：账本 obs_n/obs_replied 的长期回复率 → 冷却×stretch
+            （慢性低回复，与 streak 急性退避正交叠加、封顶仍 720h）或 ×relax
+            （慢性高回复，≤1 且 ≥0.5）；样本 < min_obs 不判。None＝不反哺。
     """
     from src.companion.user_clock import in_quiet_hours as _user_in_quiet_hours
     from src.companion.user_clock import schedule_clock as _schedule_clock
     from src.utils.proactive_pacing import (
+        backoff_cooldown_hours,
+        backoff_exhausted,
+        calibrate_response_thresholds,
         effective_cooldown_hours,
         effective_min_silent_hours,
+        never_replied_exhausted,
+        response_rate_factor,
+        unanswered_streak,
     )
     now = now if now is not None else time.time()
+    # P6 分位阈值自适应：auto_thresholds 开启且账本人群够大时，low/high 按本库
+    # 各会话长期回复率分布的分位数校准（每次规划从 cooldown_map 现算——账本在
+    # 长大，阈值随之漂移；人群不足/同质自动回落配置值）。纯函数，预览同口径。
+    _resp_cfg_eff = response_pacing_cfg
+    if response_pacing_cfg is not None and (
+            response_pacing_cfg.get("auto_thresholds") or {}).get("enabled"):
+        _obs_pairs = []
+        for _v in (cooldown_map or {}).values():
+            _e = _ledger_entry(_v)
+            _obs_pairs.append((_e.get("obs_n", 0), _e.get("obs_replied", 0)))
+        _cal = calibrate_response_thresholds(_obs_pairs, response_pacing_cfg)
+        _resp_cfg_eff = dict(
+            response_pacing_cfg,
+            low_rate=_cal["low_rate"], high_rate=_cal["high_rate"])
     local_hour = time.localtime(now).tm_hour
     if (user_clock_provider is None
             and _in_quiet_hours(local_hour, int(quiet_start_hour),
@@ -184,10 +258,32 @@ def plan_proactive_sends(
             _intim, stage=_stage, base_hours=cooldown_hours, pacing_cfg=pacing_cfg)
         if silent_hours < _eff_silent:
             continue
+        entry = _ledger_entry(cooldown_map.get(cid))
+        # 冷却窗看 ts（含 attempt 推时，防每 tick 重烧 LLM）；响应语义（streak/
+        # 回复率）只对照 sent_ts（真实发送）——被守卫拦下的尝试绝不算「又一次未回」。
+        last_pro = entry["ts"]
+        last_sent = float(entry.get("sent_ts") or 0.0)
         try:
-            last_pro = float(cooldown_map.get(cid, 0) or 0)
+            _last_in = float(c.get("last_in_ts") or 0.0)
         except (TypeError, ValueError):
-            last_pro = 0.0
+            _last_in = 0.0
+        # 未回退避：上次真实发送后对方没回过话 → streak 生效，冷却按倍数拉长
+        _streak = unanswered_streak(last_sent, entry["streak"], _last_in)
+        # P2 回复率反哺：慢性信号先缩放基础冷却（stretch≥1 / relax∈[0.5,1]），
+        # 急性 streak 退避随后在其上翻倍并封顶——两信号正交叠加。
+        _resp_factor = 1.0
+        if _resp_cfg_eff is not None:
+            _resp_factor = response_rate_factor(
+                entry.get("obs_n", 0), entry.get("obs_replied", 0),
+                _resp_cfg_eff)
+            _eff_cool *= _resp_factor
+        if backoff_cfg is not None:
+            if backoff_exhausted(_streak, backoff_cfg):
+                continue  # 连续未回达到上限：彻底停发，等对方先开口
+            # P1：从未开口的联系人给足 N 次尝试后出圈（0 互动不属陪伴回访语义）
+            if never_replied_exhausted(_streak, _last_in, backoff_cfg):
+                continue
+            _eff_cool = backoff_cooldown_hours(_eff_cool, _streak, backoff_cfg)
         if last_pro and (now - last_pro) < _eff_cool * 3600.0:
             continue
         # 用户时钟安静时段（逐会话）：解析故意排在沉默/冷却等便宜过滤之后，且在
@@ -243,8 +339,16 @@ def plan_proactive_sends(
             "scenario_id": str(opener.get("scenario_id") or ""),
             "feature": str(opener.get("feature") or ""),
             "silent_hours": round(silent_hours, 1),
+            # 措辞档位（P0：好久没联系只许 ≥14 天档说）——prompt 框定层消费
+            "gap_bucket": str(opener.get("gap_bucket") or ""),
             "effective_min_silent_hours": round(_eff_silent, 2),
             "effective_cooldown_hours": round(_eff_cool, 2),
+            # 未回退避观测：连续几条主动没得到回应、对方最后开口时间
+            "unanswered_streak": _streak,
+            "last_in_ts": _last_in,
+            # P2 回复率反哺观测：长期观察数与本次冷却倍率（1.0=未生效）
+            "response_obs": int(entry.get("obs_n") or 0),
+            "response_factor": round(_resp_factor, 2),
             "intimacy": round(_intim, 1),
             "stage": _stage,
             # 观测/排障：安静时段按谁的钟判的（server=服务器钟）、时钟偏移、本地小时
@@ -296,6 +400,98 @@ class JsonCooldownStore:
             logger.debug("[proactive] 冷却表落盘失败", exc_info=True)
 
 
+# 回应观察滑窗：obs_n 达到窗口即双双减半（整数半衰遗忘）——早期行为不永久
+# 主导比率，近期回应习惯权重更高；纯整数无时间戳，账本体积恒定。
+_OBS_HALVING_WINDOW = 20
+
+
+class JsonProactiveLedger:
+    """主动开场账本（冷却表 v3，P0 未回退避 + P2 回复率反哺的数据面）。
+
+    条目 ``{conversation_id: {"ts": 冷却时间戳, "sent_ts": 上次真实发送,
+    "streak": 连续未回次数, "last_text": 上次主动文案(截断),
+    "obs_n"/"obs_replied": 「主动→是否得到回应」长期观察（半衰滑窗）}}``。
+    旧 ``{cid: float}`` / v2 dict 读取时透明升级；写盘一律新格式。
+
+    - ``mark_send``：真发成功后登记——对方在**上次真实发送**（sent_ts，而非可能
+      被 attempt 推高的 ts）之后回过话 → streak 重置为 1，否则 +1；同时把上一条
+      发送的「结局」记进 obs 观察（回了/没回），并记本次文案给「禁止相似」用。
+    - ``mark_attempt``：尝试过但没发出（如变体守卫拦下复读文案）→ 只推 ``ts``
+      防每 tick 重烧 LLM；**不动** sent_ts / streak / last_text / obs
+      （没发出去不算打扰，更不能算「又一次未回」）。
+    """
+
+    def __init__(self, path: Any) -> None:
+        self.path = Path(path)
+        self._data: Dict[str, Dict[str, Any]] = {}
+        try:
+            if self.path.exists():
+                raw = json.loads(self.path.read_text("utf-8")) or {}
+                self._data = {
+                    str(k): _ledger_entry(v) for k, v in raw.items()
+                }
+        except Exception:
+            self._data = {}
+
+    def snapshot(self) -> Dict[str, Dict[str, Any]]:
+        return {k: dict(v) for k, v in self._data.items()}
+
+    def entry(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+        e = self._data.get(str(conversation_id))
+        return dict(e) if e else None
+
+    def _persist(self) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps(self._data, ensure_ascii=False), "utf-8")
+        except Exception:
+            logger.debug("[proactive] 主动账本落盘失败", exc_info=True)
+
+    def mark_send(
+        self, conversation_id: str, ts: float,
+        *, last_in_ts: float = 0.0, text: str = "",
+    ) -> None:
+        cid = str(conversation_id)
+        prev = self._data.get(cid)
+        # 只认 sent_ts（内存条目一律经 _ledger_entry 规范化，legacy 已在装载时
+        # 回落）——「只 attempt 过」的条目 sent_ts=0，不产生幻影回应观察。
+        prev_sent = float(prev.get("sent_ts") or 0.0) if prev else 0.0
+        try:
+            _li = float(last_in_ts or 0.0)
+        except (TypeError, ValueError):
+            _li = 0.0
+        replied_since = prev_sent > 0 and _li >= prev_sent
+        streak = 1 if (prev is None or replied_since) else int(
+            prev.get("streak") or 0) + 1
+        # P2：上一条真实发送的结局此刻已知 → 记入长期回应观察（半衰滑窗）
+        obs_n = int(prev.get("obs_n") or 0) if prev else 0
+        obs_replied = int(prev.get("obs_replied") or 0) if prev else 0
+        if prev_sent > 0:
+            obs_n += 1
+            if replied_since:
+                obs_replied += 1
+            if obs_n >= _OBS_HALVING_WINDOW:
+                obs_n //= 2
+                obs_replied = min(obs_n, (obs_replied + 1) // 2)
+        self._data[cid] = {
+            "ts": float(ts), "sent_ts": float(ts), "streak": streak,
+            "last_text": str(text or "")[:80],
+            "obs_n": obs_n, "obs_replied": obs_replied,
+        }
+        self._persist()
+
+    def mark_attempt(self, conversation_id: str, ts: float) -> None:
+        cid = str(conversation_id)
+        e = self._data.get(cid) or _ledger_entry(None)
+        e["ts"] = float(ts)
+        self._data[cid] = e
+        self._persist()
+
+    def mark(self, conversation_id: str, ts: float) -> None:
+        """旧接口兼容：无响应信息的登记，按未回 +1 保守处理。"""
+        self.mark_send(conversation_id, ts, last_in_ts=0.0, text="")
+
+
 class CompanionProactiveLoop:
     """陪伴主动话题派发循环（薄监督；机制与时钟解耦，可单测）。"""
 
@@ -323,6 +519,8 @@ class CompanionProactiveLoop:
         pacing_cfg: Optional[Dict[str, Any]] = None,
         priority_fn: Optional[Callable[[Dict[str, Any]], float]] = None,
         user_clock_provider: Optional[Callable[[str], Optional[Any]]] = None,
+        backoff_cfg: Optional[Dict[str, Any]] = None,
+        response_pacing_cfg: Optional[Dict[str, Any]] = None,
         now: Callable[[], float] = time.time,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -334,6 +532,10 @@ class CompanionProactiveLoop:
         self._fresh_activity_provider = fresh_activity_provider
         self._pacing_cfg = pacing_cfg
         self._priority_fn = priority_fn
+        # 未回退避（None=不退避旧行为）：对「主动了但没回」的会话按倍数拉长冷却
+        self._backoff_cfg = backoff_cfg
+        # 回复率反哺（None=不反哺）：长期回复率缩放冷却（慢性信号，正交于 streak）
+        self._response_pacing_cfg = response_pacing_cfg
         # 用户时钟（None=服务器钟旧行为）：安静时段逐会话判，别把「对方的凌晨」当白天
         self._user_clock_provider = user_clock_provider
         self._cooldown = cooldown_store
@@ -377,6 +579,8 @@ class CompanionProactiveLoop:
             pacing_cfg=self._pacing_cfg,
             priority_fn=self._priority_fn,
             user_clock_provider=self._user_clock_provider,
+            backoff_cfg=self._backoff_cfg,
+            response_pacing_cfg=self._response_pacing_cfg,
         )
         # 每日仪式问候（晨 / 晚安）：时段驱动、独立每日每档去重；与沉默回访互补。
         # 同一会话本 tick 既到仪式点又够沉默时，仪式优先（不重复打扰一人）。
@@ -426,7 +630,14 @@ class CompanionProactiveLoop:
                 if rk and self._ritual_cooldown is not None:
                     self._ritual_cooldown.mark(rk, self._now())
                 elif self._cooldown:
-                    self._cooldown.mark(p["conversation_id"], self._now())
+                    if hasattr(self._cooldown, "mark_send"):
+                        # 账本 v2：登记响应状态（未回 streak）与本次文案（反复读用）
+                        self._cooldown.mark_send(
+                            p["conversation_id"], self._now(),
+                            last_in_ts=float(p.get("last_in_ts") or 0.0),
+                            text=str(p.get("_sent_text") or ""))
+                    else:
+                        self._cooldown.mark(p["conversation_id"], self._now())
                 sent += 1
                 # Stage 3：发送成功钩子（转化漏斗埋点等）。best-effort，绝不影响派发。
                 if self._on_sent is not None:
@@ -483,5 +694,6 @@ class CompanionProactiveLoop:
 __all__ = [
     "plan_proactive_sends",
     "JsonCooldownStore",
+    "JsonProactiveLedger",
     "CompanionProactiveLoop",
 ]

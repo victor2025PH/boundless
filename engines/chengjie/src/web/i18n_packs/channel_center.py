@@ -51,7 +51,12 @@ ZH = {
     "chc_acct_ops_2": "若提示要验证码：把验证码写入实例 config 旁的 code.txt，等待主进程读取。",
     "chc_acct_ops_3": "仍不通：用 deploy/instances/restart_instance.ps1 -Instance zhiliao（先 -Advise），勿裸起 main.py。",
     "chc_acct_ops_4": "扫码只能加坐席多开号，不能替代上述主会话恢复。",
-    "chc_acct_hero_btn": "管理账号",
+    # chc_acct_hero_btn 已回收（2026-07-29）：hero 重复入口删除，管理入口单源在连接卡
+    # 平台连接卡（2026-07-29 UI 统一）：账号摘要 + 非 TG 平台连接态徽章
+    "chc_acct_sum_total": "账号",
+    "chc_acct_sum_on": "在线",
+    "chc_acct_badge_on": "在线 {on}/{n}",
+    "chc_acct_badge_all_off": "全部离线",
 }
 
 EN = {
@@ -95,5 +100,8 @@ EN = {
     "chc_acct_ops_2": "If a verification code is required: write it to code.txt next to the instance config and wait for the main process to read it.",
     "chc_acct_ops_3": "Still down: use deploy/instances/restart_instance.ps1 -Instance zhiliao (try -Advise first); do not bare-start main.py.",
     "chc_acct_ops_4": "QR only adds seat multi-accounts; it cannot replace the main-session recovery steps above.",
-    "chc_acct_hero_btn": "Manage accounts",
+    "chc_acct_sum_total": "accounts",
+    "chc_acct_sum_on": "online",
+    "chc_acct_badge_on": "Online {on}/{n}",
+    "chc_acct_badge_all_off": "All offline",
 }

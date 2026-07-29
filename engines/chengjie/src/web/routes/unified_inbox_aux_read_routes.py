@@ -28,6 +28,21 @@ from src.web.web_i18n import tr
 logger = logging.getLogger(__name__)
 
 
+_HYBRID_HIGH_SCORE = 0.03  # RRF scale (rank consensus) — unrelated to BM25 score bands
+
+
+def _kb_confidence(raw_score: float, mode: str, high_score: float) -> str:
+    """Map a raw retrieval score to a coarse confidence label (high|mid).
+
+    BM25 raw scores and hybrid RRF scores live on different scales, so each
+    mode gets its own band. The workspace client only auto-expands the
+    suggestion popover on "high".
+    """
+    if mode == "hybrid":
+        return "high" if raw_score >= _HYBRID_HIGH_SCORE else "mid"
+    return "high" if raw_score >= high_score else "mid"
+
+
 def _rerank_kb_entries(
     raw_entries: List[Dict[str, Any]],
     *,
@@ -36,8 +51,18 @@ def _rerank_kb_entries(
     limit: int,
     result: Dict[str, Any],
     is_auto: bool,
+    min_score: float | None = None,
+    high_score: float = 15.0,
 ) -> List[Dict[str, Any]]:
-    """Phase 17 context re-ranking：平台/意图加权 + 截取 top-k。"""
+    """Phase 17 context re-ranking：平台/意图加权 + 截取 top-k。
+
+    P0 noise gate: in auto mode, entries whose raw BM25 ``_score`` falls below
+    ``min_score`` are dropped entirely — this makes the long-standing
+    ``auto=1`` docstring promise ("high-confidence only") actually true.
+    Every entry also carries a ``confidence`` label (high|mid) so the client
+    can gate auto-expansion without duplicating score-scale knowledge.
+    Hybrid (RRF) scores use a different scale and skip the ``min_score`` gate.
+    """
     plat_ctx = str(platform or "").lower()
     intent_ctx = str(intent or "").lower()
     scored: List[tuple] = []
@@ -61,7 +86,18 @@ def _rerank_kb_entries(
 
     scored.sort(key=lambda x: -x[0])
     entries: List[Dict[str, Any]] = []
-    for score, row in scored[:limit]:
+    for score, row in scored:
+        if len(entries) >= limit:
+            break
+        raw_score = float(row.get("_score") or 0.5)
+        mode = str(row.get("_mode") or result.get("search_mode") or "")
+        if (
+            is_auto
+            and min_score is not None
+            and mode != "hybrid"
+            and raw_score < float(min_score)
+        ):
+            continue
         answer = (
             row.get("example_reply_zh")
             or row.get("example_reply")
@@ -76,6 +112,7 @@ def _rerank_kb_entries(
             "score": round(score, 3),
             "search_mode": row.get("_mode") or result.get("search_mode"),
             "auto": is_auto,
+            "confidence": _kb_confidence(raw_score, mode, float(high_score)),
         })
     return entries
 
@@ -138,6 +175,7 @@ def register_aux_read_routes(app, *, api_auth, config_manager=None) -> None:
         platform: str = "",
         intent: str = "",
         auto: str = "",
+        conv: str = "",
     ):
         """KB 内联检索：坐席在工作台快速查话术/知识条目。
 
@@ -167,6 +205,17 @@ def register_aux_read_routes(app, *, api_auth, config_manager=None) -> None:
         raw_entries: List[Dict[str, Any]] = result.get("entries") or []
         plat_ctx = str(platform or "").lower()
         intent_ctx = str(intent or "").lower()
+        # Confidence thresholds (config-tunable, hot-reloaded): the min gate only
+        # applies to auto mode so manual searches keep returning everything.
+        kb_cfg = ((getattr(config_manager, "config", None) or {}).get("inbox") or {}).get("kb_suggest") or {}
+        try:
+            auto_min_score = float(kb_cfg.get("auto_min_score", 6.0))
+        except (TypeError, ValueError):
+            auto_min_score = 6.0
+        try:
+            auto_high_score = float(kb_cfg.get("auto_high_score", 15.0))
+        except (TypeError, ValueError):
+            auto_high_score = 15.0
         entries = _rerank_kb_entries(
             raw_entries,
             platform=platform,
@@ -174,7 +223,36 @@ def register_aux_read_routes(app, *, api_auth, config_manager=None) -> None:
             limit=limit,
             result=result,
             is_auto=is_auto,
+            min_score=auto_min_score if is_auto else None,
+            high_score=auto_high_score,
         )
+        if is_auto and entries:
+            # P3 KB funnel: log served recommendations into kb_recommendation_log
+            # (retrieval -> engage -> quote funnel; read via /api/workspace/kb-stats).
+            # rec_id is echoed per entry so the workspace quote actions can call the
+            # existing POST /api/workspace/kb-click. Best-effort, never blocks search.
+            try:
+                store = _inbox_store(request)
+                if store is not None and hasattr(store, "record_kb_recommendation"):
+                    import uuid as _uuid
+                    _agent = ""
+                    try:
+                        from src.web.routes.unified_inbox_auth import _session_agent
+                        _agent = _session_agent(request).get("agent_id", "")
+                    except Exception:
+                        _agent = ""
+                    for _e in entries:
+                        _rid = _uuid.uuid4().hex[:12]
+                        _e["rec_id"] = _rid
+                        store.record_kb_recommendation(
+                            rec_id=_rid,
+                            entry_id=str(_e.get("entry_id") or ""),
+                            entry_title=str(_e.get("title") or ""),
+                            conversation_id=str(conv or ""),
+                            agent_id=str(_agent or ""),
+                        )
+            except Exception:
+                logger.debug("kb-search funnel logging skipped", exc_info=True)
         return {
             "ok": True,
             "entries": entries,

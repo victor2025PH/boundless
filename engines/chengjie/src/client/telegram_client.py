@@ -2585,7 +2585,56 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     self.logger.debug("[prereply_humanize] 调度失败（忽略）", exc_info=True)
                 sent_text_for_context = reply_final
                 split_cfg = self.config.get("reply", {}).get("split_send", {})
-                if split_cfg.get("enabled", False):
+                # P1.5 多句分条（inbox.reply_style.bubbles）：陪伴域 prompt 要求
+                # 「每行会被拆成独立消息」，A 线此前只有 >max_chars 的段落级拆分，
+                # 换行合同没兑现。开关开 + 私聊 + 拆得出 ≥2 条 → 按行连发（条间
+                # 思考+打字延迟）；否则回落原 split_send/整段路径（行为不变）。
+                _bubble_chunks = None
+                try:
+                    from src.inbox.reply_split import (
+                        inter_part_delay_sec as _ipd_bub,
+                        looks_like_group_chat as _lgc_bub,
+                        parse_bubbles_cfg as _pbc_bub,
+                        split_reply_parts as _srp_bub,
+                    )
+                    _bcfg_bub = _pbc_bub(
+                        self.config if isinstance(self.config, dict) else {})
+                    if (_bcfg_bub["enabled"]
+                            and not _lgc_bub("telegram", str(message.chat.id))):
+                        _cand_bub = _srp_bub(
+                            reply_final,
+                            max_parts=int(_bcfg_bub["max_parts"]),
+                            max_chars=int(_bcfg_bub["max_chars"]),
+                            min_tail_chars=int(_bcfg_bub["min_tail_chars"]),
+                            min_total_chars=int(_bcfg_bub["min_total_chars"]),
+                        )
+                        if len(_cand_bub) >= 2:
+                            _bubble_chunks = _cand_bub
+                except Exception:
+                    self.logger.debug(
+                        "[reply_bubbles] A线分条判定失败，回落原路径", exc_info=True)
+                    _bubble_chunks = None
+                if _bubble_chunks:
+                    chunks = _apply_suffix_chunks(_bubble_chunks)
+                    sent_text_for_context = "\n\n".join(chunks)
+                    for i, chunk in enumerate(chunks):
+                        if i > 0:
+                            try:
+                                await asyncio.sleep(_ipd_bub(
+                                    chunk,
+                                    gap_sec_lo=float(_bcfg_bub["gap_sec_lo"]),
+                                    gap_sec_hi=float(_bcfg_bub["gap_sec_hi"]),
+                                    per_char_sec=float(_bcfg_bub["per_char_sec"]),
+                                ))
+                            except Exception:
+                                await asyncio.sleep(0.8)
+                        await self._send_reply(message, chunk, parse_mode=_parse_mode)
+                    try:
+                        from src.inbox.reply_split import record_bubble_send
+                        record_bubble_send("aline", len(chunks))
+                    except Exception:
+                        pass
+                elif split_cfg.get("enabled", False):
                     max_chars = int(split_cfg.get("max_chars_per_message", 120))
                     min_seg = int(split_cfg.get("min_segments_to_split", 2))
                     delay = float(split_cfg.get("delay_between_seconds", 0.35))

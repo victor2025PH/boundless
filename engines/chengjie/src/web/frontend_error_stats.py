@@ -25,7 +25,12 @@ _MAX_KEYS = 100  # by_page / by_fn 各自最多保留的 distinct key 数
 _IDENT_RE = re.compile(r"^[A-Za-z_$][\w$]*$")
 # page 路径只保留合法 URL path 字符（丢查询串/hash/异常内容），截断防超长
 _PATH_SAFE = re.compile(r"[^A-Za-z0-9/_\-.:]")
-_KNOWN_TYPES = {"ReferenceError", "TypeError", "SyntaxError", "RangeError", "Error"}
+_KNOWN_TYPES = {
+    "ReferenceError", "TypeError", "SyntaxError", "RangeError", "Error",
+    # apiFetch 网络层失败的语义类型（非 JS Error.name）：超时 vs 硬网络错分开看
+    # ——之前全被折叠成 "Error"，「坐席在超时还是在断网」这层信号被丢掉了。
+    "timeout", "neterr",
+}
 
 
 def _san_page(page: str) -> str:
@@ -41,6 +46,22 @@ def _san_fn(fn: str) -> str:
     return f[:64] if _IDENT_RE.match(f) else "unknown"
 
 
+_DIGITS_RE = re.compile(r"\d{2,}")
+
+
+def _san_endpoint(ep: str) -> str:
+    """请求端点消毒：只留 path（丢查询串/hash），数字串掩码 ``<n>``（控基数：
+    /api/inbox/threads/12345 与 /54321 归并为一键），非法/空 → ""（可选维度）。"""
+    p = str(ep or "").split("?", 1)[0].split("#", 1)[0].strip()
+    # 绝对 URL → 摘 path（beacon 侧已尽量只送 path，此处兜底）
+    if "://" in p:
+        p = "/" + p.split("://", 1)[1].split("/", 1)[-1] if "/" in p.split("://", 1)[1] else "/"
+    p = _PATH_SAFE.sub("", p)
+    if not p or not p.startswith("/"):
+        return ""
+    return _DIGITS_RE.sub("<n>", p)[:100]
+
+
 def _san_type(etype: str) -> str:
     t = str(etype or "").strip()
     return t if t in _KNOWN_TYPES else "Error"
@@ -51,7 +72,7 @@ class FrontendErrorStats:
 
     __slots__ = (
         "_lock", "_started_at", "_last_ts",
-        "total", "overflow", "_by_fn", "_by_page", "_by_type",
+        "total", "overflow", "_by_fn", "_by_page", "_by_type", "_by_endpoint",
     )
 
     def __init__(self) -> None:
@@ -63,6 +84,10 @@ class FrontendErrorStats:
         self._by_fn: Dict[str, int] = {}
         self._by_page: Dict[str, int] = {}
         self._by_type: Dict[str, int] = {}
+        # 网络层失败（apiFetch beacon）附带的**已消毒**请求端点——2026-07-29 事故
+        # 教训：单次会话 136 次 apiFetch 错误只有 page/fn/type 三维，坏的是哪个
+        # 接口完全无从归因。可选维度：dead-click 守卫（无端点语义）不送即不计。
+        self._by_endpoint: Dict[str, int] = {}
 
     @staticmethod
     def _bump(d: Dict[str, int], key: str) -> bool:
@@ -73,13 +98,17 @@ class FrontendErrorStats:
         d["__other__"] = d.get("__other__", 0) + 1
         return True
 
-    def record(self, *, page: str = "", fn: str = "", etype: str = "") -> None:
+    def record(self, *, page: str = "", fn: str = "", etype: str = "",
+               endpoint: str = "") -> None:
         p, f, t = _san_page(page), _san_fn(fn), _san_type(etype)
+        ep = _san_endpoint(endpoint)
         with self._lock:
             self.total += 1
             self._last_ts = time.time()
             of = self._bump(self._by_page, p)
             of = self._bump(self._by_fn, f) or of
+            if ep:
+                of = self._bump(self._by_endpoint, ep) or of
             self._by_type[t] = self._by_type.get(t, 0) + 1  # type 是小枚举，不设上限
             if of:
                 self.overflow += 1
@@ -94,6 +123,8 @@ class FrontendErrorStats:
                 "by_type": dict(sorted(self._by_type.items())),
                 "by_fn": dict(sorted(self._by_fn.items(), key=lambda kv: (-kv[1], kv[0]))),
                 "by_page": dict(sorted(self._by_page.items(), key=lambda kv: (-kv[1], kv[0]))),
+                "by_endpoint": dict(sorted(
+                    self._by_endpoint.items(), key=lambda kv: (-kv[1], kv[0]))),
             }
 
     def dump_prom(self) -> str:
@@ -119,6 +150,13 @@ class FrontendErrorStats:
             ]
             for f, n in sorted(self._by_fn.items()):
                 lines.append(f'frontend_errors_by_fn_total{{fn="{_esc(f)}"}} {int(n)}')
+            lines += [
+                "# HELP frontend_errors_by_endpoint_total Frontend network errors by sanitized endpoint",
+                "# TYPE frontend_errors_by_endpoint_total counter",
+            ]
+            for e, n in sorted(self._by_endpoint.items()):
+                lines.append(
+                    f'frontend_errors_by_endpoint_total{{endpoint="{_esc(e)}"}} {int(n)}')
         return "\n".join(lines) + "\n"
 
     def reset(self) -> None:
@@ -128,6 +166,7 @@ class FrontendErrorStats:
             self._by_fn.clear()
             self._by_page.clear()
             self._by_type.clear()
+            self._by_endpoint.clear()
             self._last_ts = 0.0
 
 

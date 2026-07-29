@@ -48,6 +48,24 @@ def _collect_workers(state) -> List[Dict[str, Any]]:
     return out
 
 
+def _sla_backlog(state) -> Optional[Dict[str, Any]]:
+    """SLAWatcher 越线快照（供健康灯的「严重超时」组件）。未挂载/取不到 → None。"""
+    sw = getattr(state, "sla_watcher", None)
+    if sw is None or not hasattr(sw, "status_snapshot"):
+        return None
+    try:
+        snap = sw.status_snapshot() or {}
+    except Exception:
+        logger.debug("SLAWatcher 快照失败（已忽略）", exc_info=True)
+        return None
+    return {
+        "breaching_now": snap.get("breaching_now"),
+        "max_wait_min": snap.get("max_wait_min"),
+        "escalating_now": snap.get("escalating_now"),
+        "unclaimed_escalating": snap.get("unclaimed_escalating"),
+    }
+
+
 def _pending_drafts(state) -> Optional[int]:
     svc = getattr(state, "draft_service", None)
     if svc is None or not hasattr(svc, "list_drafts"):
@@ -232,6 +250,7 @@ def collect_health(app, config_manager=None, *, pending_threshold: int = 200) ->
         pending_threshold=pending_threshold,
         audio_service=audio,
         avatar_voice=avatar,
+        sla_backlog=_sla_backlog(state),
     )
 
 

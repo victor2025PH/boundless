@@ -70,7 +70,7 @@ _INLINE_COLOR_CEILINGS = {
     "unified_inbox.html": 11,
     "_channel_body_whatsapp.html": 13,
     "workflows.html": 1,
-    "workspace_base.html": 6,
+    "workspace_base.html": 4,   # 2026-07-29：AI 引导/试用横幅+升级弹窗色彩层已抽类（ws-aiguide-*/ws-aitrial-*/ws-upsell-*）
     "workspace_dashboard.html": 5,
     "workspace_usage.html": 1,
 }

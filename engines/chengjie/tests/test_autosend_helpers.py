@@ -372,6 +372,245 @@ class TestBuildMarkReadCb:
         assert calls == [("telegram", "acct", "12345")]
 
 
+class TestReplyBubblesDeliver:
+    """inbox.reply_style.bubbles：编排器路径按行分条；RPA/群聊不拆。"""
+
+    def _patch_media_off(self, monkeypatch):
+        async def _false(*a, **k):
+            return False
+        monkeypatch.setattr(autosend_helpers, "autosend_image", _false)
+        monkeypatch.setattr(autosend_helpers, "autosend_voice", _false)
+        monkeypatch.setattr(autosend_helpers, "autosend_bazi_kline", _false)
+        monkeypatch.setattr(autosend_helpers, "autosend_video", _false)
+
+    def test_orch_splits_newlines_into_parts(self, monkeypatch):
+        sent = []
+
+        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters):
+            sent.append(text)
+            return {"ok": True, "delivered_as": "text", "echo": text}
+
+        import src.inbox.channel_adapters as _ca
+        monkeypatch.setattr(_ca, "send_via_adapters", _fake_send_via)
+
+        class _Orch:
+            def owns(self, platform, account_id):
+                return True
+        import src.integrations.account_orchestrator as _ao
+        monkeypatch.setattr(_ao, "get_orchestrator", lambda *a, **k: _Orch())
+
+        async def _no_sleep(_s):
+            return None
+        monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+        self._patch_media_off(monkeypatch)
+
+        cfg = {"inbox": {"reply_style": {"bubbles": {
+            "enabled": True, "min_total_chars": 0, "min_tail_chars": 0,
+            "gap_sec_lo": 0, "gap_sec_hi": 0, "per_char_sec": 0,
+        }}}}
+        send_cb, _ = build_autosend_callbacks(_assistant_full(cfg), _web_app(), True)
+        res = asyncio.run(send_cb(
+            "telegram", "acct", "12345",
+            "哈哈真的假的\n我还以为你忘了呢\n今天天气不错呀"))
+        assert res.get("delivered_as") == "text_bubbles"
+        assert res.get("parts_sent") == 3
+        assert sent == ["哈哈真的假的", "我还以为你忘了呢", "今天天气不错呀"]
+
+    def test_rpa_path_does_not_double_split(self, monkeypatch):
+        """orch_only：RPA 不拥有账号 → 整段单发，留给 human_pacing。"""
+        sent = []
+
+        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters):
+            sent.append(text)
+            return {"ok": True, "delivered_as": "text", "echo": text}
+
+        import src.inbox.channel_adapters as _ca
+        monkeypatch.setattr(_ca, "send_via_adapters", _fake_send_via)
+
+        class _Orch:
+            def owns(self, platform, account_id):
+                return False
+        import src.integrations.account_orchestrator as _ao
+        monkeypatch.setattr(_ao, "get_orchestrator", lambda *a, **k: _Orch())
+        self._patch_media_off(monkeypatch)
+
+        cfg = {"inbox": {"reply_style": {"bubbles": {"enabled": True}}}}
+        send_cb, _ = build_autosend_callbacks(_assistant_full(cfg), _web_app(), True)
+        text = "哈哈真的假的\n我还以为你忘了呢"
+        res = asyncio.run(send_cb("line", "acct", "u1", text))
+        assert res.get("delivered_as") == "text"
+        assert sent == [text]
+
+    def test_group_chat_skipped(self, monkeypatch):
+        sent = []
+
+        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters):
+            sent.append(text)
+            return {"ok": True, "delivered_as": "text", "echo": text}
+
+        import src.inbox.channel_adapters as _ca
+        monkeypatch.setattr(_ca, "send_via_adapters", _fake_send_via)
+
+        class _Orch:
+            def owns(self, platform, account_id):
+                return True
+        import src.integrations.account_orchestrator as _ao
+        monkeypatch.setattr(_ao, "get_orchestrator", lambda *a, **k: _Orch())
+        self._patch_media_off(monkeypatch)
+
+        cfg = {"inbox": {"reply_style": {"bubbles": {"enabled": True}}}}
+        send_cb, _ = build_autosend_callbacks(_assistant_full(cfg), _web_app(), True)
+        text = "一\n二\n三"
+        res = asyncio.run(send_cb("telegram", "acct", "-1001234567890", text))
+        assert res.get("delivered_as") == "text"
+        assert sent == [text]
+
+    def test_outreach_ab_recorded_bubbles_and_single(self, monkeypatch):
+        """P2 A/B 归因：分条投递记 autosend_text:bubbles、整段记 :single（outreach_log）。"""
+        rows = []
+
+        class _St:
+            def record_outreach(self, cid, **kw):
+                rows.append(dict(kw, cid=cid))
+                return 1
+
+        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters):
+            return {"ok": True, "delivered_as": "text", "echo": text}
+        import src.inbox.channel_adapters as _ca
+        monkeypatch.setattr(_ca, "send_via_adapters", _fake_send_via)
+
+        class _Orch:
+            def owns(self, platform, account_id):
+                return True
+        import src.integrations.account_orchestrator as _ao
+        monkeypatch.setattr(_ao, "get_orchestrator", lambda *a, **k: _Orch())
+
+        async def _no_sleep(_s):
+            return None
+        monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+        self._patch_media_off(monkeypatch)
+
+        cfg = {"inbox": {"reply_style": {"bubbles": {
+            "enabled": True, "min_total_chars": 0, "min_tail_chars": 0,
+            "gap_sec_lo": 0, "gap_sec_hi": 0, "per_char_sec": 0,
+        }}}}
+        a = _assistant_full(cfg)
+        a.inbox_store = _St()
+        send_cb, _ = build_autosend_callbacks(a, _web_app(), True)
+        asyncio.run(send_cb("telegram", "acct", "123", "第一句呀呀\n第二句呀呀"))
+        asyncio.run(send_cb("telegram", "acct", "123", "短句"))
+        batches = [r.get("batch_id") for r in rows]
+        assert "autosend_text:bubbles" in batches
+        assert "autosend_text:single" in batches
+        b = [r for r in rows if r["batch_id"] == "autosend_text:bubbles"][0]
+        assert b["cid"] == "telegram:acct:123"
+        assert b["status"] == "sent"
+        assert "parts=2" in str(b.get("note") or "")
+
+    def test_holdout_forces_single_and_records(self, monkeypatch):
+        """P3 随机保留组：抽中 → 本可分条的消息整段发 + 记 autosend_text:holdout。"""
+        rows = []
+        sent = []
+
+        class _St:
+            def record_outreach(self, cid, **kw):
+                rows.append(dict(kw, cid=cid))
+                return 1
+
+        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters):
+            sent.append(text)
+            return {"ok": True, "delivered_as": "text", "echo": text}
+        import src.inbox.channel_adapters as _ca
+        monkeypatch.setattr(_ca, "send_via_adapters", _fake_send_via)
+
+        class _Orch:
+            def owns(self, platform, account_id):
+                return True
+        import src.integrations.account_orchestrator as _ao
+        monkeypatch.setattr(_ao, "get_orchestrator", lambda *a, **k: _Orch())
+        monkeypatch.setattr("random.random", lambda: 0.0)   # 必中保留组
+        self._patch_media_off(monkeypatch)
+
+        cfg = {"inbox": {"reply_style": {"bubbles": {
+            "enabled": True, "holdout_pct": 0.1, "min_total_chars": 0,
+            "min_tail_chars": 0, "gap_sec_lo": 0, "gap_sec_hi": 0, "per_char_sec": 0,
+        }}}}
+        a = _assistant_full(cfg)
+        a.inbox_store = _St()
+        send_cb, _ = build_autosend_callbacks(a, _web_app(), True)
+        text = "第一句呀呀\n第二句呀呀"
+        res = asyncio.run(send_cb("telegram", "acct", "123", text))
+        assert res.get("delivered_as") == "text"
+        assert sent == [text]                       # 整段单发，未拆
+        assert [r["batch_id"] for r in rows] == ["autosend_text:holdout"]
+        assert "parts=2" in str(rows[0].get("note") or "")
+
+    def test_holdout_zero_never_triggers(self, monkeypatch):
+        """holdout_pct=0（基线默认）：random 再小也不进保留组，正常分条。"""
+        sent = []
+
+        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters):
+            sent.append(text)
+            return {"ok": True, "delivered_as": "text", "echo": text}
+        import src.inbox.channel_adapters as _ca
+        monkeypatch.setattr(_ca, "send_via_adapters", _fake_send_via)
+
+        class _Orch:
+            def owns(self, platform, account_id):
+                return True
+        import src.integrations.account_orchestrator as _ao
+        monkeypatch.setattr(_ao, "get_orchestrator", lambda *a, **k: _Orch())
+        monkeypatch.setattr("random.random", lambda: 0.0)
+
+        async def _no_sleep(_s):
+            return None
+        monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+        self._patch_media_off(monkeypatch)
+
+        cfg = {"inbox": {"reply_style": {"bubbles": {
+            "enabled": True, "min_total_chars": 0, "min_tail_chars": 0,
+            "gap_sec_lo": 0, "gap_sec_hi": 0, "per_char_sec": 0,
+        }}}}
+        send_cb, _ = build_autosend_callbacks(_assistant_full(cfg), _web_app(), True)
+        res = asyncio.run(send_cb("telegram", "acct", "123", "第一句呀呀\n第二句呀呀"))
+        assert res.get("delivered_as") == "text_bubbles"
+        assert len(sent) == 2
+
+    def test_partial_failure_keeps_sent(self, monkeypatch):
+        sent = []
+
+        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters):
+            sent.append(text)
+            if len(sent) >= 2:
+                return {"ok": False, "error": "boom"}
+            return {"ok": True, "delivered_as": "text", "echo": text}
+
+        import src.inbox.channel_adapters as _ca
+        monkeypatch.setattr(_ca, "send_via_adapters", _fake_send_via)
+
+        class _Orch:
+            def owns(self, platform, account_id):
+                return True
+        import src.integrations.account_orchestrator as _ao
+        monkeypatch.setattr(_ao, "get_orchestrator", lambda *a, **k: _Orch())
+
+        async def _no_sleep(_s):
+            return None
+        monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+        self._patch_media_off(monkeypatch)
+
+        cfg = {"inbox": {"reply_style": {"bubbles": {
+            "enabled": True, "min_total_chars": 0, "gap_sec_lo": 0, "gap_sec_hi": 0,
+            "per_char_sec": 0, "min_tail_chars": 0,
+        }}}}
+        send_cb, _ = build_autosend_callbacks(_assistant_full(cfg), _web_app(), True)
+        res = asyncio.run(send_cb(
+            "telegram", "acct", "123", "第一句呀呀呀\n第二句呀呀呀\n第三句呀呀呀"))
+        assert res.get("ok") is True and res.get("partial") is True
+        assert res.get("parts_sent") == 1
+        assert len(sent) == 2  # 第 2 条尝试失败
+
+
 class TestBuildTypingCb:
     def test_default_enabled_returns_coroutine_fn(self):
         cb = build_autosend_typing_cb(_assistant_full({}))

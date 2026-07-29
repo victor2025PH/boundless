@@ -609,7 +609,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       {{ (i18n or {}).get('psn_new_profile','新建人设') }}
     </button>
   </div>
-  <div id="dashboard-platforms"><div style="color:var(--t2);font-size:.84rem;padding:2.2rem 0;text-align:center">{{ (i18n or {}).get('psn_loading','加载中…') }}</div></div>
+  <div id="dashboard-platforms"><div class="pcard-skel" style="margin:0.6rem 0"></div><div class="pcard-skel" style="margin:0.6rem 0"></div><div class="pcard-skel" style="margin:0.6rem 0"></div></div>
   <!-- P7-4 Onboarding guide (shown when 0 profiles) -->
   <div id="onboarding-guide">
     <div class="ob-banner">
@@ -3176,6 +3176,7 @@ function openNewProfile() {
   if (idEl) { idEl.value = ''; idEl.readOnly = false; }
   _fillDrawerFields({});
   _loadedProfile = null;
+  _loadedRev = '';
   _refreshAdvPanel();
   document.getElementById('pe-delete-btn').style.display = 'none';
   document.getElementById('pe-undo-btn').style.display = 'none';
@@ -3206,6 +3207,7 @@ async function editProfile(pid) {
     if (idEl) { idEl.value = pid; idEl.readOnly = true; }
     _fillDrawerFields(p);
     _loadedProfile = JSON.parse(JSON.stringify(p));
+    _loadedRev = d.rev || '';   // P2 乐观锁：记住加载时指纹（老后端无 rev → 空=不启用校验）
     _refreshAdvPanel();
     _updateCompletionWizard(p);
     // P16-2: push old profile to drawer history
@@ -3325,15 +3327,26 @@ async function saveProfile() {
     persona: _loadedProfile ? _deepMergePersona(JSON.parse(JSON.stringify(_loadedProfile)), patch) : patch,
     merge: true,
   };
+  // P2 乐观锁：编辑已有人设时带上加载时的内容指纹——保存前被其他窗口/同事改过 → 409
+  if (_editingProfileId && _loadedRev) payload.expected_rev = _loadedRev;
   try {
-    const r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid), {
+    let r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid), {
       method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload),
     }, {timeoutMs: 60000});
+    if (r.status === 409 && payload.expected_rev) {
+      // 撞乐观锁：他人在你编辑期间改过。表单内容原样保留，显式确认后免锁覆盖重发。
+      if (!confirm(window.T('psn.save.stale_confirm'))) { _restoreBtn(false); return; }
+      delete payload.expected_rev;
+      r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid), {
+        method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload),
+      }, {timeoutMs: 60000});
+    }
     const d = await r.json();
     if (d.ok) {
       _toast(window.T('psn_js_140') + (payload.persona.name || pid) + window.T('psn_js_141'), 'ok');
       _restoreBtn(true); _clearDrawerDirty(); _clearDraft();
       _loadedProfile = JSON.parse(JSON.stringify(payload.persona));
+      _loadedRev = d.rev || '';   // 落库后的新指纹作为下次保存的基线
       _refreshAdvPanel();
       _editingProfileId = pid;
       var idEl = document.getElementById('pe-id');
@@ -3482,6 +3495,7 @@ var _undoStack = [];     // single-level undo: pre-save profile snapshot
 var _draggedId = null;   // currently dragged profile ID
 var _bindingCache = {};  // chat_id -> {profile_id, profile_name, platform}
 var _loadedProfile = null;  // last-loaded profile data for diff
+var _loadedRev = '';        // P2 乐观锁：加载时的服务端内容指纹（保存带 expected_rev）
 var _pendingHashProfile = null;  // hash deep-link: #profile=xxx
 function _draftKey() {
   return _editingProfileId ? 'persona_draft_' + _editingProfileId : 'persona_draft__new';
@@ -6093,11 +6107,13 @@ document.addEventListener('DOMContentLoaded', function() {
 var _grData = null;
 var _grDirty = false;
 var _grOrigJson = '';
+var _grRev = '';   // P2 乐观锁：加载时的服务端内容指纹（保存带 expected_rev）
 
 function grLoadRules() {
   apiFetch('/api/persona/global-rules').then(r => r.json()).then(d => {
     if (!d.ok) { _grStatus(window.T('psn_js_040'), true); return; }
     _grData = d.rules || {};
+    _grRev = d.rev || '';
     _grOrigJson = JSON.stringify(_grData);
     _grDirty = false;
     _grRenderAll();
@@ -6149,24 +6165,41 @@ function grSaveRules() {
   _grCollectFromUI();
   var btn = document.getElementById('gr-save-btn');
   if (btn) { btn.disabled = true; btn.textContent = window.T('psn_js_061'); }
-  apiFetch('/api/persona/global-rules', {
-    method: 'PUT',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ rules: _grData })
-  }, {timeoutMs: 60000}).then(r => r.json()).then(d => {
-    if (btn) { btn.disabled = false; btn.textContent = window.T('psn_js_297'); }
-    if (d.ok) {
-      _grOrigJson = JSON.stringify(_grData);
-      _grDirty = false;
-      _grUpdateSaveBtn();
-      _grStatus(window.T('psn_js_298'), false);
-      _grLoadBackups();
-      setTimeout(function() { _grStatus(''); }, 3000);
-    } else {
-      _grStatus(window.T('psn_js_064') + (d.detail || ''), true);
+  var _restore = function(){ if (btn) { btn.disabled = false; btn.textContent = window.T('psn_js_297'); } };
+  // P2 乐观锁：带加载时指纹；撞 409（他人在你编辑期间改过全局规则）→ 表单原样保留，
+  // 显式确认后免键重发（与人设编辑器同一交互模式）。
+  var _put = function(withRev) {
+    var body = { rules: _grData };
+    if (withRev && _grRev) body.expected_rev = _grRev;
+    return apiFetch('/api/persona/global-rules', {
+      method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    }, {timeoutMs: 60000});
+  };
+  _put(true).then(function(r) {
+    if (r.status === 409) {
+      if (!confirm(window.T('psn.save.stale_confirm'))) { _restore(); return null; }
+      return _put(false);
     }
-  }).catch(e => {
-    if (btn) { btn.disabled = false; btn.textContent = window.T('psn_js_297'); }
+    return r;
+  }).then(function(r) {
+    if (!r) return;
+    return r.json().then(function(d) {
+      _restore();
+      if (d.ok) {
+        _grOrigJson = JSON.stringify(_grData);
+        _grRev = d.rev || '';
+        _grDirty = false;
+        _grUpdateSaveBtn();
+        _grStatus(window.T('psn_js_298'), false);
+        _grLoadBackups();
+        setTimeout(function() { _grStatus(''); }, 3000);
+      } else {
+        _grStatus(window.T('psn_js_064') + (d.detail || ''), true);
+      }
+    });
+  }).catch(function(e) {
+    _restore();
     _grStatus(window.T('psn_js_064') + e, true);
   });
 }
@@ -6240,6 +6273,10 @@ function _grRestore(slot) {
     .then(r => r.json()).then(d => {
       if (d.ok) {
         _grData = d.rules || {};
+        // 回滚已改服务端内容 → 指纹失效；重取一次让后续保存不误撞 409
+        _grRev = '';
+        apiFetch('/api/persona/global-rules').then(r2 => r2.json())
+          .then(d2 => { if (d2 && d2.ok) _grRev = d2.rev || ''; }).catch(() => {});
         _grOrigJson = JSON.stringify(_grData);
         _grDirty = false;
         _grRenderAll();

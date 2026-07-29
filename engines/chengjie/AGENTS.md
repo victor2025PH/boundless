@@ -105,6 +105,63 @@ personas 的 `previewTTS` 死代码（从不被调用、引用不存在的 `vp-*
 改**事件委托 + `data-rpa-ck` 属性**（结果容器一次绑定处理所有动态行，彻底去掉「每输入框全局函数+dot 访问」脆弱模式）。
 `_ALLOWLIST`（良性命中，如字面量以 `.ext` 结尾再拼变量的文件名串）当前为空，`test_allowlist_not_stale` 防过期。
 
+**多开治理 / 防双发主线**（2026-07-29，修「同一坐席开两个窗口 → 客户收到两条一样的话」）：
+```bash
+python -m pytest tests/test_draft_resolve_concurrency.py tests/test_multiwin_p2.py \
+ tests/test_live_drill_guards.py tests/test_settings_overlay_persistence.py -q --tb=line
+```
+预期：全绿。三层防线（服务端兜底优先——前端协调只管同一浏览器，管不了第二台电脑）：
+① **草稿处置原子闸门**：`update_draft_status` 带 `WHERE status IN ('pending','enriching')`，
+ 双窗口/人工×AutosendWorker 竞态只有一方成功，另一方拿 **409**（`already_resolved`）；
+ worker 撞 409 计 `total_skipped_raced` **不计 error**（竞态非故障，不喂熔断器）。
+ 同批修掉两个休眠断链：`list_drafts(platform=X)` 此前排除 inbox 源草稿（坐席**看不见**待审草稿，
+ 实测积压 199h）；人工点「发送」此前**只标记不发送**（全库无人消费 approved 的 inbox 草稿）→
+ 现经 `DraftService.set_inbox_deliver_callback` → `AutosendWorker.deliver_human_approved`
+ 复用出站翻译/发图指令/桌面受控出站同一条投递链（bootstrap 仅在 `deliver=true` 时注入）。
+② **发送幂等** `src/inbox/send_dedup.py`：前端每次提交带 `client_msg_id`，服务端按
+ `(会话, id)` TTL 窗去重；**仅首见占坑**（重复命中记 duplicate 不新增 reserved），
+ 失败释放占位（同 id 显式重试仍可发）。覆盖 send / send-media / send-voice 三路由。
+③ **前端多窗口协调器** `workspace_base.html::__wsMultiWin`：坐席页单主控（localStorage
+ 主控位 + storage 事件；刻意不用 Web Locks——LAN http 下无安全上下文不可用），第二窗口出
+ 「在此使用/保持待机」，待机窗口停轮询断 SSE 全静音，主控崩溃 15s 内自动接管；
+ 全局**提示音领导权**顺带修掉「收件箱+看板两页同时响铃」。
+**乐观锁**（防长编辑表单丢更新）：`persona_manager.profile_rev` 通用内容指纹 → 人设档案 /
+ 全局规则 / 意图关键词三处 `GET 回 rev → PUT 带 expected_rev → 不一致 409 → 前端确认后免键覆盖`。
+ 判据＝**整文档替换才需要**；字段级 patch 端点（`/api/settings/save`）刻意**不**加，
+ 否则「A 改 temperature、B 改 max_tokens」这类合法并发会被误判冲突（有反向门禁钉住）。
+**观测**：`autosend-status` / `/api/workspace/metrics` 出 `total_human_delivered` /
+ `total_skipped_raced` / `send_dedup`；Prom 5 个 gauge；ops「全自动媒体」卡两行 KPI。
+**真机演练（运维显式跑，非 pytest）**：
+```bash
+python tools/live_multiwin_drill.py                 # 只读预检，不发消息
+python tools/live_multiwin_drill.py --confirm        # 真发（目标=账号自己的 Saved Messages）
+python tools/verify_multiwin_ui.py --shots out/      # 双标签页验协调器（只读，21 项）
+```
+`verify_multiwin_ui.py` 已挂进 `gate_sweep.ps1 -Full`（协调器是纯前端逻辑，静态门禁只能证
+「函数挂了 window」、证不了「两标签页互斥成立」，而模板热更新直上生产）；缺 playwright
+或实例不可达一律 **SKIP exit 0**，不污染回归信号。
+`live_multiwin_drill` 四道护栏：默认只允许 `chat_key='me'`、真人会话须显式 `--allow-peer`、
+无 `--confirm` 只预检、判定以 prometheus 增量为权威。护栏与判定算式有纯函数门禁
+（`test_live_drill_guards.py`，含首次实施踩过的两个断言坑：reserved 增量算错 / 判定未按
+本轮 TAG 限定导致误判双发）。真发落**生产账号的收藏消息**是刻意选择——隔离 dev 实例禁了
+telegram 就发不出去（send 返 503），真发必须有真账号。
+⚠️ **测试绝不能写仓库 `config/`**（该类事故已三次咬到生产，conftest 现有四层 autouse 隔离）：
+`_isolated_account_registry`（假账号写进注册表 → 编排器当真账号无限重启 + 告警刷屏）、
+`_isolated_global_rules`（路由测试把 13 条回复硬约束清成 `[]`，含「不要自称AI」这类安全项）、
+`_isolated_audit_stores`（`autoreply_audit` / `ops_events` / `vision_metrics` 三个台账被掺测试
+数据——运维靠 ops_events 判断「这号这周被风控几次」，掺假比没有更糟）、以及 import 期把
+**`AITR_DATA_DIR` 指向进程级 tmp**（只剥不设会让所有按该约定定位数据的模块回落
+`Path.cwd()/config`＝引擎根仓库目录；一次设定即隔离 persona_usage / telemetry /
+desktop_selectors / licensing.data_paths / instance_restart_status 整个家族）+
+`REUNION_PROMPTS_PATH` 指向 tmp（拷仓库真值过去，读到的内容与生产一致、只有写落 tmp）。
+**新增测试若要写配置，一律重定向到 `tmp_path`，别改仓库文件、别加豁免。**
+
+**怎么审计「有没有测试在写生产文件」**（比写通用守卫可靠）：跑一轮全量，然后按**回归时间窗**
+比对 `config/` 的文件 mtime/size——落在窗口内的就是违规清单，精确且零假阳性。
+⚠️ 别做「每个测试前后快照 config/ 目录、变了就点名」的 autouse 守卫：实测 243 个假阳性——
+`-n auto` 并行下 worker A 的窗口会把 worker B 的写入算到 A 头上，`*.db` 被连接即改 mtime，
+且共享工作树上**其他 agent 线**正在编辑 config 文件。精度 > 覆盖：走「按写入口精确重定向」。
+
 **陪伴能力「分阶段开启」主线**（看→校→开→观测→纠偏 闭环；纯函数 core 在 `src/companion/`，
 路由 `src/web/routes/companion_capability_routes.py` 挂 `/api/companion/capabilities*`，
 看板卡片在 `rpa_overview.html`，配置体检接进 `ops-overview`）：
@@ -926,6 +983,175 @@ steady=52、intimate=78…）→ 聊很多轮但 intimacy 分低也能更早主�
 **LINE friend_welcome**（`friend_welcome.py` + `find_friend_accept_rows`）：
 接受好友 → 入队 companion 问候（send_queue 投递）；`line_rpa.auto_accept.welcome.enabled`；
 幂等 `line_rpa_meta friend_welcome:{peer}`；接受后 `_trigger_evt` 加速投递。
+
+### 主动触达 Phase19-P0（2026-07-29，「好久没联系」连发复读事故三修）
+
+生产实锤（智聊近 14 天出站探针）：42 条「好久没联系/还好吗」问候、**100% gentle_checkin**
+（outreach_log 48/48，富开场全没触发）、**45% 是「上条没回又发下一条」**（中位间隔 10.6h≈
+冷却下限）、同句式 x3/x2/x2 近逐字复读、48h 回复率 36%。三修（全默认开，只减发送不增）：
+① **未回退避** `no_reply_backoff`（`proactive_pacing.parse_no_reply_backoff_cfg/
+unanswered_streak/backoff_cooldown_hours/backoff_exhausted` 纯函数 + 规划器接线）——
+上条主动没回 → 冷却 ×multiplier^streak（3^n）封顶 720h 月频，对方一开口即复位；判据=
+快照新增 `last_in_ts`（store 新批量口 `last_inbound_ts_map`，fail→0=保守退避）；
+冷却表升级 **JsonProactiveLedger**（`{ts,streak,last_text}`，旧 float 文件透明升级、
+streak 保守按 1；`mark_send` 记响应语义与文案 / `mark_attempt` 只推时间防重烧 LLM）。
+② **措辞对齐事实**：`silence_gap_bucket`（<24h/1-3天/3-14天/≥14天四档）——gentle_checkin
+指令按档发（`_CHECKIN_DIRECTIVES`，**「好久没联系」只许 ≥14 天档说**，短档明令禁 +
+要求带具体小事替代「最近怎么样」模板壳）；`build_proactive_prompt` 框定层同步分档
+（`_silence_header` 按 plan.gap_bucket/silent_hours，无档位信息保守按「几天没聊」，
+真实间隔 `silence_gap_phrase` 进 prompt）；profile_collect ask 指令去掉「好久没聊了」硬前缀。
+③ **变体守卫** `variety`（`src/utils/proactive_variety.py` 纯函数）：生成文案 vs
+「账本 last_text + 末尾未回连发尾 `trailing_unanswered_texts`」相似度 ≥0.6 → 带负样本
+重写一次，仍雷同 → `mark_attempt` 后放弃本轮（宁可不发不做复读机）。相似度=归一化
+（去标点/emoji/**中文语气助词**——「换个语气词」是实锤伪多样性）difflib；阈值 0.6 按
+生产语料校准（近重复对 0.667~1.0 / 真新开场 ≤0.242，落干净分隔带）。顺带：
+`_gen_text` 上下文改 `format_recent_context`（方向「你/TA」+相对时间——LLM 此前分不清
+「上条是我发的且没被回」）+ 人设风格注入 `_persona_style`（personality.style+style_hint，
+修「七个人设同一句问候」）。观测：plan/preview 带 `unanswered_streak/gap_bucket`、
+preview 顶层带 `no_reply_backoff/variety_guard` 配置回显。频控 overlay 同步收紧
+（24h/48h、at0=48h/96h、max_per_tick 2）。门禁 `tests/test_proactive_no_reply_backoff.py`
+（纯函数/账本双格式/规划器接线/store 判据）+ `test_proactive_variety.py`（生产金标）+
+`test_proactive_topic.py`/`test_proactive_prompt.py` 分档段。
+### 主动触达 Phase19-P1（2026-07-29，富开场复活 + 出圈 + 可观测）
+
+承接 P0「只减发送」：P1 让**还能发的那几条**更像真人、并把观测盲区关掉。六项（默认开）：
+① **life_beat 死路径修复**——`select_proactive_topic` 沉默达标时必返 `gentle_checkin`
+（mode 恒非空），旧 `if not mode` 永假 → 生活分享/天气开场从未触发（outreach 48/48
+全 checkin 根因）。改为 gentle_checkin 先试 `_life_beat_opener(record=False)` →
+`_weather_opener`，都无货再落回问候；**规划不扣周配额**，真发成功经
+`mark_life_share_sent` 落账（防规划器扫候选烧光每周 2 次配额）。
+② **切入点轮换池** `_CHECKIN_ANGLES`/`checkin_angle(variety_key=contact)`——同用户
+同天恒定、隔天换（天气/吃的/路上小事…），附进 gentle_checkin directive。
+③ **从未回复出圈** `stop_after_never_replied`（默认 2）——`last_in_ts==0` + streak≥N
+→ `never_replied_exhausted` 彻底停；0 互动不属陪伴回访语义，对方开口即恢复。
+④ **opt-out** `src/utils/proactive_optout.py`——保守词表识「别再发了/stop messaging me」
+→ 静默 `mute_days`（默认 30）只拦主动；对方回归（last_in > 静默 ts）自动解除；
+落盘 `companion_optout_mute.json`。
+⑤ **媒体透传归因** `voice_gate_verdict`/`photo_share_verdict` + `record_media_skip`
+——每个早退口记 reason（probability/min_intimacy/length…），修「配置 50%/25% 实际
+6%/0% 无人知晓」；照片 0 张经归因坐实多为生客 `min_intimacy` 正确拦截。
+⑥ **ops 卡**——mode 分布 / 未回退避 streak 直方图 / opt-out 静默数 / 媒体跳过 Top /
+候选表带 `unanswered_streak`+`gap_bucket`；status API 回显 backoff/variety/optout 配置。
+门禁 `tests/test_proactive_p1.py`。
+
+### 主动触达 Phase19-P2（2026-07-29，回复率反哺 + 事实轮换 + attempt 误伤修复）
+
+四项（默认开；relax 提频档默认 1.0=关，overlay 0.85）：
+① **账本 v3**（`JsonProactiveLedger`）：`sent_ts`（真实发送）与 `ts`（冷却戳）分离
+——**修 P0 真 bug**：`mark_attempt`（变体守卫/opt-out 拦下）推高 ts 后，旧实现拿它判
+「回没回」，用户明明回过话也会被自己一次被拦的尝试误判「未回」继续退避；v3 响应
+语义（streak/回复率）只对照 sent_ts，冷却窗仍看 ts（防每 tick 重烧 LLM）。「只
+attempt 过」条目 sent_ts 显式 0，重载不回落（防幻影观察）。新增 `obs_n/obs_replied`
+半衰滑窗（窗口 20 即双双减半——近期回应习惯权重更高，账本体积恒定）累计
+「发送→是否得到回应」长期观察。
+② **回复率反哺** `response_pacing`（`parse_response_pacing_cfg`/`response_rate_factor`
+纯函数 + 规划器 `response_pacing_cfg` 接线）：streak 是急性信号，长期回复率是慢性
+信号——rate≤low_rate(0.15) 冷却×stretch(1.5)；rate≥high_rate(0.6) ×relax（夹
+[0.5,1]，默认 1.0 不提频=只减不增）；样本 <min_obs(4) 不判。先缩放基础冷却，
+streak 退避在其上翻倍并封顶 720h（两信号正交叠加）。plan 带
+`response_obs/response_factor` 观测。
+③ **follow_up 事实轮换**：`select_proactive_topic` 旧 argmax 恒 top-1（「上次你说
+在备考」问八遍）→ 有 `variety_key` 时在得分 Top-K(≤3) 内 crc32(key#日期) 当日恒定
+轮换（今天问备考明天问旅行，都是真事实不降置信门槛）；无 key=旧行为；选中事实
+不进 context_facts。
+④ **mode 分布落库口径**：`store.outreach_mode_histogram(batch_prefix, days)`（
+outreach_log note=mode，仅 sent + 时间窗）→ status API `sent_modes_14d` → ops 卡
+优先消费（进程计数重启即清零——本机重启频繁，DB 口径重启后照样能回看「checkin
+是否还占 100%」）；status config 回显 `response_pacing`。
+门禁 `tests/test_proactive_p2.py`（17 例：账本 v3 语义/幻影观察/半衰/规划器接线/
+attempt 误伤回归钉/轮换确定性/直方图）。
+
+### 主动触达 Phase19-P3（2026-07-29，媒体形态反哺 + 语料实证收尾）
+
+① **媒体形态反哺** `src/companion/proactive_media_feedback.py`（纯函数核心）：
+voice/photo 发送概率不再拍脑袋——`factor=clamp(sqrt(kind回复率/text回复率),
+max_cut(0.5), max_boost(1.5))`，有效概率=配置×factor 夹 [0.02,0.95]（下限保探索
+形态永不死、上限防每条都发语音的机械感）。**只换形态不换总量**（消息数由 pacing
+层定）；min_intimacy/modes/daily_cap/length 护栏全不动（P3 门禁复核）；双臂各≥
+min_sent_per_arm(8) 才动，冷启动照配置探索无死锁；只看近 lookback_days(14) 触达
+（store `outreach_response_stats` 增量 `lookback_days` 参数，默认 0=全历史旧行为）。
+已知偏差如实记录：photo 只发熟客回复率天然偏高，boost 后仍过亲密度闸，风险有界。
+接线＝编排器 30min TTL 缓存 `_media_fb_snapshot`/`_fb_probability` → `_try_send_voice`
+/`_plan_photo` 的 probability；`collect_media_feedback` 编排器与 status 路由同口径
+（看板读数即真值）→ status `media_feedback` 段 + ops 卡「媒体反哺」行
+（`ov2_pe_media_fb`）。配置 `media_feedback`（example 默认关守新子系统约定，
+zhiliao overlay 开）。门禁 `tests/test_proactive_p3.py`（10 例）。
+② **opt-out 词表语料实证**（不改代码的结论也是交付物）：30 天 839 条入站 0 命中
+0 误判，4 条近似词全是刻意排除的场景（「滚珠的」语音转录/「好的闭嘴吧」打趣/
+「滚犊子」宣泄）——保守词表校准正确，**不扩表**；扩表在本语料上只会新增误伤。
+③ **few_shot 判定**：接线已齐（真发/试发都落 `companion_samples.db`，
+`build_few_shot_block` 注入已挂 `_gen_text`），生产样本 0 条评分 → 开关继续关，
+是「运营去评分」不是「缺代码」。
+
+### 主动触达 Phase19-P4（2026-07-29，mode 级回复率观测 + 验收工具化，零新旋钮）
+
+刻意**只观测不动作**（mode 门控/选型反哺等 14 天数据说话——P1 后 life_share 才
+开始流动，拿修复前 100% checkin 的混杂数据做门控判据是伪科学）：
+① **mode 级回复率** `store.outreach_note_response_stats(batch_prefix,
+response_window_days, lookback_days)`——与 outreach_response_stats 同判定口径
+（触达后窗口内有入站=回复、仅 sent、lookback 截窗），按 note(=mode) 分桶 →
+status API `mode_ab` + ops 卡「开场 mode 回复率（14天）」行（`ov2_pe_mode_ab`）。
+② **few_shot 就绪度**：status `few_shot`（enabled/total/rated/up/down/
+ready_threshold=15）+ ops 卡「已评 n/15」提示行（`ov2_pe_fs_hint`）——评分攒够
+前开开关是空转，看板告诉运营差多少。
+③ **验收周报 CLI** `python -m scripts.proactive_review [--data-root] [--days 14]
+[--json] [--out-jsonl]`（只读：inbox.db 走 mode=ro URI 零写风险；多实例自动逐根，
+`scripts/_data_root.py` 契约）：mode/形态发送与回复率 + **事故原话指标**（出站
+「好久没/还好吗/最近怎么样」模板句本窗 vs 上一窗）+ 退避账本直方图 + opt-out 数。
+计划任务 **ProactiveReviewWeekly**（周六 07:10，`scripts/proactive_review_weekly.ps1`，
+趋势行落 `logs/eval/proactive_trend.jsonl`）。CLI 与 store 口径由 P4 门禁用同一批
+种子数据双向钉住。门禁 `tests/test_proactive_p4.py`。
+**2026-07-29 首跑基线**（修复当天，含修复前存量）：48 发 100% gentle_checkin
+35.4% 回、text45/voice3/photo0、模板句本窗 44 vs 前窗 9（事故爆发段）、账本 24 条
+全 streak1、opt-out 0——下周批读数应看到：模板句坍缩、life_share/follow_up 出现、
+streak 分布右移。
+
+### 主动触达 Phase19-P5（2026-07-29，checkin 效能门控 + 趋势判词）
+
+「等两周数据再做 mode 门控」升级为「**机制先上线，样本门槛就是等待期**」（与
+media_feedback 同哲学，全程无需人回来拍参数）：
+① **checkin 效能门控** `src/companion/proactive_mode_gate.py`（纯函数核心）：
+数据证明裸 checkin（升级链 life_share/weather/画像采集都没接住的「什么钩子都
+没有」开场）回复率远低于富开场 → `skip=clamp(1-checkin率/富开场率, 0, max_skip
+(0.5))` 按比例本日跳过——没话找话不如今天不说。**只减发送不增**；富开场基线=
+follow_up/life_share/weather_hook/story_invite/story_teaser 合计（仪式/纪念日
+时点驱动、ask_* 采集意图，回复动力学不同不入基线）；两臂样本不足（checkin≥30
+且富臂≥15）恒 0——修复初期富开场未流动时机制在场但不动作，等数据到位自动激活；
+max_skip 封顶保探索（checkin 回复率永远可被重新测量）；富臂 0 回复不迁怒
+（no_signal）。**确定性掷签** `should_skip_checkin`＝crc32(cid#日期)——同会话
+同日恒定（15min tick 重掷会把「跳过」磨成「延迟 15 分钟」，必须日级确定才是
+真降频），明日自动重掷。接线在 `_opener` 尾（画像采集升级之后）返回空 opener
+→ 规划器自然跳过（**LLM 生成之前**零成本；预览走同一 _opener 与真发口径一致）。
+观测：stats `checkin_gate_skips` + status `mode_gate` 段（两臂+skip_prob+reason，
+`collect_mode_gate` 引擎/看板同口径）+ ops 卡「checkin 效能门控」行
+（`ov2_pe_checkin_gate*`）。配置 `mode_gate`（example 默认关，zhiliao overlay 开）。
+② **趋势判词** `proactive_review --trend [FILE]`：周批 JSONL → 周环比表（模板句/
+总发/checkin 占比/富开场/streak3+/text·voice 回复率）+ 自动判词（「模板句收敛/
+⚠回潮查变体守卫」「⚠streak3+ 增多=死联系人仍被触达」）——验收从看数变成读结论。
+门禁 `tests/test_proactive_p5.py`（8 例）。
+**共享树并发实录教训**（当日）：conftest 的 repo-config 写入守卫会把**另一条
+agent 线并发跑测试/等值重写 config**（mtime 变内容不变）误归因到本会话正在跑的
+测试——teardown ERROR 而测试本体全过 + `git diff` 零变化 = 并发噪声，重跑即清；
+判定前先查 `git diff` 与 agent_probe，别对着幻影修自己的代码。
+### 主动触达 Phase19-P6（2026-07-29，分位阈值自适应——最后一批拍脑袋数字交给数据）
+
+**response_pacing 阈值自适应** `auto_thresholds`（example 默认关，zhiliao overlay 开）：
+low/high 不再用冷启动固定值 0.15/0.6，改按**账本人群**（obs_n≥min_obs 的会话，
+与 response_rate_factor 同一适用人群）长期回复率分布的分位数校准——
+`calibrate_response_thresholds(observations, cfg)` 纯函数（`proactive_pacing.py`，
+自带零依赖 `_percentile` 线性插值）：low=P25 / high=P75（分位可配并夹紧
+[5,45]/[55,95]），三重回落守卫＝合格人群 < min_population(12) → 配置值（冷启动期）、
+分布同质（P75-P25 < min_separation(0.15)）→ 配置值（**同质人群上分层=追噪声**）、
+分位塌缩强制间隔保底。**接线在规划器内部**（`plan_proactive_sends` 每次从
+`cooldown_map` 现算——账本在长大，阈值随之漂移；零 loop 构造改动、零编排器缓存、
+预览天然同口径）。观测：status `response_thresholds`（low/high/source=
+config|percentile/population，与规划器同函数同数据）+ ops 卡「回复率阈值（生效值）」
+行（`ov2_pe_resp_thr`）+ 周报 CLI「长期回复率分布 n/P25/P50/P75」行（判据可见化，
+趋势行自动携带看阈值周漂移）。门禁 `tests/test_proactive_p6.py`（8 例：夹紧/
+人群-同质-塌缩三守卫/合格筛选/规划器用校准值分层的判别样本/周报分布段）。
+**backlog（P7，全部数据/时间闸口，无需新代码）**：8/1 首次周批读数复核（--trend
+四判词）、photo 熟客档位（media_feedback photo 臂 ≥8 自动接管）、few_shot 开闸
+（评分 ≥15，看板倒计时）、mode_gate 首周激活复核（富臂 ≥15 后 skip_prob 应 >0）。
 
 ### i18n 施工约定（后台路由 CJK 收口 + 前端裸键）
 

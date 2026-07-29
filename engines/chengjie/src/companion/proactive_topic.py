@@ -18,6 +18,31 @@ from pathlib import Path
 from typing import Any, Dict
 
 
+def voice_gate_verdict(
+    voice_cfg: Dict[str, Any], text: str, rand01: float,
+) -> tuple:
+    """主动消息语音闸带原因判定（P1 透传归因）：``(ok, reason)``。
+
+    reason ∈ disabled / bad_cfg / length / probability / ok——生产实锤配置 50%
+    实际透传 6%，没有原因计数就永远不知道卡在哪一层。
+    """
+    v = voice_cfg or {}
+    if not v.get("enabled", False):
+        return (False, "disabled")
+    t = str(text or "").strip()
+    try:
+        min_chars = int(v.get("min_chars", 4) or 4)
+        max_chars = int(v.get("max_chars", 80) or 80)
+        prob = float(v.get("probability", 0.5))
+    except (TypeError, ValueError):
+        return (False, "bad_cfg")
+    if not (min_chars <= len(t) <= max_chars):
+        return (False, "length")
+    if float(rand01) < max(0.0, min(1.0, prob)):
+        return (True, "ok")
+    return (False, "probability")
+
+
 def voice_gate(
     voice_cfg: Dict[str, Any], text: str, rand01: float,
 ) -> bool:
@@ -29,19 +54,7 @@ def voice_gate(
     - ``rand01 < probability``（默认 0.5）→ True——全语音太机械，文本/语音
       混发更像真人（有时打字有时懒得打字直接说）。
     """
-    v = voice_cfg or {}
-    if not v.get("enabled", False):
-        return False
-    t = str(text or "").strip()
-    try:
-        min_chars = int(v.get("min_chars", 4) or 4)
-        max_chars = int(v.get("max_chars", 80) or 80)
-        prob = float(v.get("probability", 0.5))
-    except (TypeError, ValueError):
-        return False
-    if not (min_chars <= len(t) <= max_chars):
-        return False
-    return float(rand01) < max(0.0, min(1.0, prob))
+    return bool(voice_gate_verdict(voice_cfg, text, rand01)[0])
 
 
 # 主动生活照默认只在这两类开场里发：回访/问候顺手带一张"我现在的样子"最自然；
@@ -63,6 +76,39 @@ def is_translation_account(platform: str, account_id: str) -> bool:
         return False
 
 
+def photo_share_verdict(
+    photo_cfg: Dict[str, Any], *, mode: str, intimacy: float, rand01: float,
+) -> tuple:
+    """主动生活照闸带原因判定（P1 透传归因）：``(ok, reason)``。
+
+    reason ∈ disabled / mode / bad_cfg / min_intimacy / probability / ok。
+    生产实锤：配置 25% 实际 0 张——候选全是 intimacy≈0 的生客，被 min_intimacy
+    正确拦下（这是设计行为不是 bug），但没有计数就没法把「0 张」解释清楚。
+    """
+    p = photo_cfg or {}
+    if not p.get("enabled", False):
+        return (False, "disabled")
+    allow = p.get("modes")
+    allow_set = {str(x).strip() for x in allow} if isinstance(
+        allow, (list, tuple)) and allow else set(_PHOTO_DEFAULT_MODES)
+    if str(mode or "").strip() not in allow_set:
+        return (False, "mode")
+    try:
+        min_intim = float(p.get("min_intimacy", 20))
+        prob = float(p.get("probability", 0.25))
+    except (TypeError, ValueError):
+        return (False, "bad_cfg")
+    try:
+        _intim = float(intimacy)
+    except (TypeError, ValueError):
+        _intim = 0.0
+    if _intim < min_intim:
+        return (False, "min_intimacy")
+    if float(rand01) < max(0.0, min(1.0, prob)):
+        return (True, "ok")
+    return (False, "probability")
+
+
 def photo_share_gate(
     photo_cfg: Dict[str, Any], *, mode: str, intimacy: float, rand01: float,
 ) -> bool:
@@ -73,26 +119,8 @@ def photo_share_gate(
     - ``intimacy < min_intimacy``（默认 20）→ False——生人阶段发自拍既轻浮又像营销号；
     - ``rand01 < probability``（默认 0.25）→ True——偶尔一张才有惊喜感，每条都带就假了。
     """
-    p = photo_cfg or {}
-    if not p.get("enabled", False):
-        return False
-    allow = p.get("modes")
-    allow_set = {str(x).strip() for x in allow} if isinstance(
-        allow, (list, tuple)) and allow else set(_PHOTO_DEFAULT_MODES)
-    if str(mode or "").strip() not in allow_set:
-        return False
-    try:
-        min_intim = float(p.get("min_intimacy", 20))
-        prob = float(p.get("probability", 0.25))
-    except (TypeError, ValueError):
-        return False
-    try:
-        _intim = float(intimacy)
-    except (TypeError, ValueError):
-        _intim = 0.0
-    if _intim < min_intim:
-        return False
-    return float(rand01) < max(0.0, min(1.0, prob))
+    return bool(photo_share_verdict(
+        photo_cfg, mode=mode, intimacy=intimacy, rand01=rand01)[0])
 
 
 async def maybe_start_companion_proactive(assistant) -> None:
@@ -126,13 +154,99 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 "companion proactive_topic 跳过（inbox_store/skill_manager 未就绪，预览亦不可用）")
             return
         from src.integrations.companion_proactive import (
-            CompanionProactiveLoop, JsonCooldownStore, plan_proactive_sends,
+            CompanionProactiveLoop,
+            JsonCooldownStore,
+            JsonProactiveLedger,
+            plan_proactive_sends,
         )
 
         scan_limit = int(cfg.get("scan_limit", 200))
         min_silent_hours = float(cfg.get("min_silent_hours", 24))
-        from src.utils.proactive_pacing import parse_adaptive_pacing_cfg
+        from src.utils.proactive_pacing import (
+            parse_adaptive_pacing_cfg,
+            parse_no_reply_backoff_cfg,
+            parse_response_pacing_cfg,
+        )
         _pacing_cfg = parse_adaptive_pacing_cfg(cfg)
+        # P0 未回退避（默认开）：上一条主动没得到回应 → 冷却×3^streak 封顶月频。
+        # 修实锤事故：近 14 天 45% 的主动发送是「上一条没回又发下一条」。
+        _backoff_cfg = parse_no_reply_backoff_cfg(cfg)
+        if not _backoff_cfg.get("enabled"):
+            _backoff_cfg = None
+        # P2 回复率反哺（默认开，relax 默认 1.0=只减不增）：账本长期回复率缩放冷却
+        _response_cfg = parse_response_pacing_cfg(cfg)
+        if not _response_cfg.get("enabled"):
+            _response_cfg = None
+        # P3 媒体形态反哺（默认关，overlay 开）：voice/photo 概率按分形态回复率
+        # 相对 text 基线自校准（只换形态不换总量；min_intimacy 等护栏全不动）。
+        from src.companion.proactive_media_feedback import (
+            collect_media_feedback,
+            effective_media_probability,
+            parse_media_feedback_cfg,
+        )
+        _mfb_cfg = parse_media_feedback_cfg(cfg)
+        _mfb_on = bool(_mfb_cfg.get("enabled"))
+        _mfb_cache: Dict[str, Any] = {"ts": 0.0, "data": {}}
+
+        def _media_fb_snapshot() -> Dict[str, Any]:
+            """三臂回复率+倍率快照（30min TTL；查询异常回空=全走配置值）。"""
+            if not _mfb_on:
+                return {}
+            _now_fb = time.time()
+            if _now_fb - float(_mfb_cache["ts"] or 0.0) > 1800.0:
+                try:
+                    _mfb_cache["data"] = collect_media_feedback(
+                        assistant.inbox_store, _mfb_cfg, now=_now_fb) or {}
+                except Exception:
+                    _mfb_cache["data"] = {}
+                _mfb_cache["ts"] = _now_fb
+            return _mfb_cache["data"]
+
+        def _fb_probability(kind: str, base_prob: float) -> float:
+            """某形态的有效发送概率 = 配置值 × 反哺倍率（未启用/无数据=配置值）。"""
+            snap = _media_fb_snapshot()
+            arm = snap.get(kind) if isinstance(snap, dict) else None
+            if not isinstance(arm, dict):
+                return float(base_prob or 0.0)
+            return effective_media_probability(
+                base_prob, float(arm.get("factor") or 1.0))
+
+        # P5 checkin 效能门控（默认关，overlay 开）：数据证明 checkin 回复率
+        # 远低于富开场时，按比例跳过「什么钩子都没有」的兜底问候——没话找话
+        # 不如今天不说。样本不足恒 0（机制先上线，数据到位自动激活）。
+        from src.companion.proactive_mode_gate import (
+            collect_mode_gate,
+            parse_mode_gate_cfg,
+            should_skip_checkin,
+        )
+        _mg_cfg = parse_mode_gate_cfg(cfg)
+        _mg_on = bool(_mg_cfg.get("enabled"))
+        _mg_cache: Dict[str, Any] = {"ts": 0.0, "data": {}}
+
+        def _mode_gate_snapshot() -> Dict[str, Any]:
+            """两臂回复率+跳过概率快照（30min TTL；异常回空=不跳过）。"""
+            if not _mg_on:
+                return {}
+            _now_mg = time.time()
+            if _now_mg - float(_mg_cache["ts"] or 0.0) > 1800.0:
+                try:
+                    _mg_cache["data"] = collect_mode_gate(
+                        assistant.inbox_store, _mg_cfg, now=_now_mg) or {}
+                except Exception:
+                    _mg_cache["data"] = {}
+                _mg_cache["ts"] = _now_mg
+            return _mg_cache["data"]
+
+        # P0 变体守卫（默认开）：新开场与「上次主动/末尾未回连发」文案雷同 →
+        # 换写一次，仍雷同则本轮放弃（宁可不发也不复读「好久没联系」x3）。
+        _v_cfg = cfg.get("variety") if isinstance(cfg.get("variety"), dict) else {}
+        _variety_on = bool(_v_cfg.get("enabled", True))
+        from src.utils.proactive_variety import DEFAULT_SIMILARITY_THRESHOLD
+        try:
+            _sim_threshold = float(_v_cfg.get(
+                "similarity_threshold", DEFAULT_SIMILARITY_THRESHOLD))
+        except (TypeError, ValueError):
+            _sim_threshold = DEFAULT_SIMILARITY_THRESHOLD
 
         # ── 用户时钟（companion.user_clock，默认关）────────────────────────────
         # 主动触达此前全锚定服务器本地钟（UTC+8），客户却遍布十几个时区 →「早安」发到
@@ -218,20 +332,119 @@ async def maybe_start_companion_proactive(assistant) -> None:
             except Exception:
                 assistant.logger.debug("[proactive] bad_peers 落盘失败", exc_info=True)
 
+        # ── 死 peer 共享登记表收敛（2026-07-29）────────────────────────────
+        # 收敛前：A 线 sender 与本模块各维护一份黑名单 → 一条链拉黑的死号另一条链
+        # 还在打（实录：已注销用户被每 15min 重试、2h ×17 次 INPUT_USER_DEACTIVATED，
+        # 无效重发累积风控信号）。现共用 src/ops/dead_peer_registry：
+        #   · 分类走同一纯函数 classify_send_error（单一事实源，杜绝两处词表漂移）；
+        #   · 黑名单双写（本地 json 保留＝可回退不丢历史 + registry 跨链共享）、
+        #     双读（任一命中即跳过）；
+        #   · reason 级 TTL 自动生效（注销恒永久 / 被拉黑可配 TTL 到期探路重试）。
+        # gated on ops.dead_peer_registry.enabled（默认关 → 纯本地旧行为，零破坏）。
+        # 惰性缓存**只存成功值**：曾把 None 也缓存 → flag 从关到开（config 热重载）
+        # 后永不重读（2026-07-29 灰度实测：重启到配置热重载之间有数分钟窗口，
+        # 本函数在窗口内被调用一次即把 None 钉死，灰度开关看似生效实则无效）。
+        # flag 关时的重读成本＝几层 dict 取值，可忽略。
+        _dp_reg_cache: list = []      # [registry]，仅缓存成功解析
+
+        def _dp_registry():
+            if _dp_reg_cache:
+                return _dp_reg_cache[0]
+            reg = None
+            try:
+                from src.ops.dead_peer_registry import (
+                    dead_peer_enabled, get_dead_peer_registry,
+                )
+                if dead_peer_enabled(assistant.config):
+                    _dpc = ((assistant.config.config.get("ops") or {}).get(
+                        "dead_peer_registry") or {})
+                    _tbr = _dpc.get("ttl_by_reason")
+                    reg = get_dead_peer_registry(
+                        path=str(_bad_peers_path.parent / "dead_peers.json"),
+                        ttl_sec=float(_dpc.get("ttl_sec") or 0),
+                        ttl_by_reason=_tbr if isinstance(_tbr, dict) else None,
+                        # 历史黑名单一次性迁入共享表（新表为空时）
+                        legacy_paths=[str(_bad_peers_path)])
+            except Exception:
+                assistant.logger.debug("[proactive] 死 peer 登记表不可用", exc_info=True)
+                reg = None
+            if reg is not None:
+                _dp_reg_cache.append(reg)
+            return reg
+
+        def _is_bad_peer(cid: str, platform: str = "telegram") -> bool:
+            """本地集 or 共享登记表任一命中 → 视为死 peer（跨链共享的读侧）。"""
+            if not cid:
+                return False
+            if cid in _bad_peers:
+                return True
+            reg = _dp_registry()
+            try:
+                return bool(reg is not None and reg.is_blocked(platform, cid))
+            except Exception:
+                return False
+
+        def _mark_bad_peer(cid: str, *, platform: str = "telegram",
+                           reason: str = "blocked") -> None:
+            """拉黑（写侧双写）。``reason`` 须是 registry 的永久类，否则它按非永久忽略。"""
+            if not cid:
+                return
+            _bad_peers.add(cid)
+            _persist_bad_peers()
+            reg = _dp_registry()
+            if reg is not None:
+                try:
+                    reg.record(platform, cid, reason)
+                except Exception:
+                    assistant.logger.debug("[proactive] 死 peer 登记失败", exc_info=True)
+
+        # P1 opt-out 静默注册表（2026-07-29）：用户明说「别再发了」→ 静默 mute_days
+        # 天（默认 30），只拦主动触达不拦正常回复；对方 opt-out 后又主动开口 → 自动
+        # 解除（optout_active 判定）。落盘防重启丢失；过期条目装载时懒清理。
+        _oo_cfg = cfg.get("optout") if isinstance(cfg.get("optout"), dict) else {}
+        _optout_on = bool(_oo_cfg.get("enabled", True))
+        try:
+            _optout_days = float(_oo_cfg.get("mute_days", 30) or 30)
+        except (TypeError, ValueError):
+            _optout_days = 30.0
+        _optout_mutes: Dict[str, Dict[str, Any]] = {}
+        _optout_path = (
+            Path(assistant.config.config_path).parent / "companion_optout_mute.json")
+        try:
+            if _optout_path.exists():
+                _raw_oo = json.loads(_optout_path.read_text("utf-8")) or {}
+                _now0 = time.time()
+                _optout_mutes.update({
+                    str(k): dict(v) for k, v in _raw_oo.items()
+                    if isinstance(v, dict)
+                    and float(v.get("until") or 0) > _now0})
+        except Exception:
+            assistant.logger.debug("[proactive] optout 注册表装载失败", exc_info=True)
+
+        def _persist_optout() -> None:
+            try:
+                _optout_path.parent.mkdir(parents=True, exist_ok=True)
+                _optout_path.write_text(
+                    json.dumps(_optout_mutes, ensure_ascii=False), "utf-8")
+            except Exception:
+                assistant.logger.debug("[proactive] optout 注册表落盘失败", exc_info=True)
+
         # 主客户端回落路径吞异常只回 False（拿不到错误类型）→ 按连败计数拉黑：
         # 连败 2 次进 _bad_peers（2026-07-27 实锤：INPUT_USER_DEACTIVATED 会话
         # 每 tick 烧掉一个名额；单败不拉防网络抖动误伤）。
         _send_fail_streak: dict = {}
 
-        def _note_send_result(cid: str, ok: bool) -> None:
+        def _note_send_result(cid: str, ok: bool,
+                              platform: str = "telegram") -> None:
             if ok:
                 _send_fail_streak.pop(cid, None)
                 return
             n = _send_fail_streak.get(cid, 0) + 1
             _send_fail_streak[cid] = n
             if n >= 2:
-                _bad_peers.add(cid)
-                _persist_bad_peers()
+                # 连败拉黑是**推测性**的（这条路径拿不到错误类型）→ 记可解除的
+                # blocked 而非不可逆的 deactivated，将来配了 reason TTL 能探路恢复。
+                _mark_bad_peer(cid, platform=platform, reason="blocked")
                 assistant.logger.info(
                     "[proactive] 发送连败 ×%d 已拉黑 %s（已落盘，重启不再重试）", n, cid)
 
@@ -305,8 +518,8 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 _pf = str(r.get("platform") or "telegram")
                 if _plat_allow is not None and _pf.lower() not in _plat_allow:
                     continue
-                if str(r.get("conversation_id") or "") in _bad_peers:
-                    continue  # session 解析不了的 peer（PEER_ID_INVALID 拉黑）
+                if _is_bad_peer(str(r.get("conversation_id") or ""), _pf):
+                    continue  # 死 peer（本地集 or 共享登记表：含 A 线 sender 拉黑的）
                 if _pf == "telegram":
                     if _is_system_peer(
                             _pf, str(r.get("account_id") or ""), _ck):
@@ -333,6 +546,12 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 dirs_ok = False
                 assistant.logger.warning(
                     "[proactive] 末条方向查询失败 → 本轮不主动发送（无法核实是否真交谈过）")
+            # P0 未回退避判据：对方最后一次开口时间（查失败 → 全 0 = 按存量 streak
+            # 保守退避，方向是「更少打扰」，安全）。
+            try:
+                last_in_map = assistant.inbox_store.last_inbound_ts_map(cids)
+            except Exception:
+                last_in_map = {}
             try:
                 tags_map = assistant.inbox_store.list_conv_tags_map(cids)
             except Exception:
@@ -411,6 +630,18 @@ async def maybe_start_companion_proactive(assistant) -> None:
                             account_id, chat_key, channel=platform) or ""
                     except Exception:
                         _intim, _stage = 0.0, ""
+                _last_in_ts = float(last_in_map.get(cid) or 0.0)
+                # P1 opt-out：静默期内不进候选（对方 opt-out 后又开口 → 自动解除）。
+                # 放在快照层 = 沉默回访/仪式/节点问候共用同一道闸。
+                if _optout_on and cid in _optout_mutes:
+                    try:
+                        from src.utils.proactive_optout import optout_active
+                        if optout_active(
+                                _optout_mutes.get(cid), now=time.time(),
+                                last_in_ts=_last_in_ts):
+                            continue
+                    except Exception:
+                        pass
                 out.append({
                     "conversation_id": cid,
                     "platform": platform,
@@ -420,6 +651,8 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     # 会话首次建立时间 ≈ 首次接触 → 供「认识 N 天」纪念日计算（Stage P）
                     "first_seen_ts": r.get("created_at") or 0,
                     "last_direction": (dirs.get(cid) or {}).get("direction") or "",
+                    # 对方最后一次开口（未回退避判据；从未入站 = 0）
+                    "last_in_ts": _last_in_ts,
                     "archived": bool(meta.get("archived")),
                     # 私聊：episodic 记忆 key 与写入侧同源（账号分桶 + CPI canonical）
                     "memory_key": _mem_key,
@@ -558,9 +791,35 @@ async def maybe_start_companion_proactive(assistant) -> None:
                             return ask
                 except Exception:
                     assistant.logger.debug("[proactive] 画像采集升级跳过", exc_info=True)
+            # P5 checkin 效能门控：升级链（生活分享/天气/画像采集）都没接住、
+            # 最终仍是裸 checkin → 按两臂回复率差距的比例本日跳过（crc32(cid#日)
+            # 确定性——15min tick 重掷会把「跳过」磨成「延迟」）。预览走同一
+            # _opener，看板与真发口径天然一致。
+            if _mg_on and str((op or {}).get("mode") or "") == "gentle_checkin":
+                try:
+                    _sp = float(
+                        (_mode_gate_snapshot() or {}).get("skip_prob") or 0.0)
+                    if _sp > 0 and should_skip_checkin(
+                            str(contact_key or memory_key or ""), _sp):
+                        try:
+                            from src.companion.proactive_stats import (
+                                record_checkin_gate,
+                            )
+                            record_checkin_gate()
+                        except Exception:
+                            pass
+                        return {"mode": "", "directive": "", "fact": "",
+                                "silent_hours": (op or {}).get(
+                                    "silent_hours", 0.0)}
+                except Exception:
+                    assistant.logger.debug(
+                        "[proactive] checkin 门控异常（放行）", exc_info=True)
             return op
 
         cd_path = Path(assistant.config.config_path).parent / "companion_proactive_cooldown.json"
+        # 账本 v2（P0）：除冷却时间外记「连续未回 streak + 上次主动文案」；
+        # 旧 float 格式文件透明升级，读写同一路径。
+        _cd_store = JsonProactiveLedger(cd_path)
 
         # 与 proactive_care(Phase O) 去重：已排关怀的会话让路（best-effort）。
         # 仅在 care 子系统已就绪（store 已挂 web_app.state）时生效，否则不去重、无害。
@@ -661,7 +920,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
             except Exception:
                 convs = []
             try:
-                cooldown_map = JsonCooldownStore(cd_path).snapshot()
+                cooldown_map = JsonProactiveLedger(cd_path).snapshot()
             except Exception:
                 cooldown_map = {}
             # 预览展示全部候选（最多 lim 条），不受 max_per_tick 截断；
@@ -671,6 +930,8 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 convs, cooldown_map=cooldown_map, opener_fn=_opener,
                 has_pending_care=_has_pending_care, max_per_tick=lim, **_pp_params,
                 pacing_cfg=_pacing_cfg, priority_fn=_goal_priority,
+                backoff_cfg=_backoff_cfg,
+                response_pacing_cfg=_response_cfg,
                 # 预览与真发同口径：安静时段按用户钟判，预览才不骗人
                 user_clock_provider=_user_clock if _uc_enabled else None)
             for i, p in enumerate(plans):
@@ -684,6 +945,10 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 "min_silent_hours": min_silent_hours,
                 "cooldown_hours": _pp_params["cooldown_hours"],
                 "adaptive_pacing": _pacing_cfg,
+                "no_reply_backoff": _backoff_cfg or {"enabled": False},
+                "variety_guard": {
+                    "enabled": _variety_on,
+                    "similarity_threshold": _sim_threshold},
                 "quiet_hours": [_pp_params["quiet_start_hour"], _pp_params["quiet_end_hour"]],
                 "care_dedup_active": care_store is not None,
                 "plans": plans,
@@ -704,23 +969,77 @@ async def maybe_start_companion_proactive(assistant) -> None:
             except Exception:
                 return ""
 
-        async def _gen_text(plan, scene_note: str = ""):
+        def _persona_style(plan) -> str:
+            """人设说话风格一行（personality.style + style_hint，截断）。
+
+            P0 修「千人一面」：此前主动 prompt 只带人设名字，七个人设写出同一句
+            「好久没联系啦」——被动回复链有完整人设，主动消息也该是同一个「人」。
+            解析失败返回 ""（prompt 层零行为变化）。"""
+            try:
+                from src.ai.persona_voice import resolve_effective_persona_id
+                from src.utils.persona_manager import PersonaManager
+                pid = resolve_effective_persona_id(
+                    assistant.config.config or {},
+                    str(plan.get("platform") or ""),
+                    str(plan.get("account_id") or ""),
+                    str(plan.get("chat_key") or ""))
+                if not pid:
+                    return ""
+                p = PersonaManager.get_instance().get_persona_by_id(pid) or {}
+                pers = p.get("personality")
+                style = str(pers.get("style") or "") if isinstance(pers, dict) else ""
+                hint = " ".join(str(p.get("style_hint") or "").split())
+                seg = "；".join(s for s in (style, hint) if s)
+                return seg[:160]
+            except Exception:
+                return ""
+
+        def _avoid_texts(plan) -> list:
+            """「禁止相似」负样本：账本里上次主动的文案 + 末尾连续未回的出站消息。
+
+            这些就是「发过、没得到回应」的开场——新文案与其雷同＝复读机实锤
+            （生产数据：同句式 x3/x2/x2）。取不到任何一项都软失败返回 []。"""
+            out: list = []
+            cid = str(plan.get("conversation_id") or "")
+            try:
+                e = _cd_store.entry(cid)
+                if e and e.get("last_text"):
+                    out.append(str(e["last_text"]))
+            except Exception:
+                pass
+            try:
+                from src.utils.proactive_variety import trailing_unanswered_texts
+                msgs = assistant.inbox_store.list_recent_messages(
+                    cid, limit=12) or []
+                out.extend(trailing_unanswered_texts(msgs, max_texts=3))
+            except Exception:
+                pass
+            seen: set = set()
+            dedup: list = []
+            for t in out:
+                k = str(t).strip()
+                if k and k not in seen:
+                    seen.add(k)
+                    dedup.append(k)
+            return dedup[:4]
+
+        async def _gen_text(plan, scene_note: str = "", avoid_texts=None):
             """按 plan 生成"要发出去的那一句"（directive + 背景记忆 + 最近上下文）。
             只生成、不发送；ai 未就绪或空回复 → 返回 ""。真发 _send 与试发预览共用。
 
             Phase13 修：带 ``peer_language`` 进 prompt——给说英语的客户必须发英语
             开场（此前给全程英文会话发了中文开场+中文语音，一眼机器人）。
             Phase17：``scene_note`` 非空 = 本条会附生活照，文案须自然带到该场景
-            （文案-场景对齐，图文一体）。"""
-            ctx_lines = []
+            （文案-场景对齐，图文一体）。
+            P0（2026-07-29）：上下文带方向+相对时间（LLM 此前分不清「上一条是我
+            自己发的问候且没被回」）；注入人设风格；``avoid_texts`` 作反复读负样本。"""
             try:
                 msgs = assistant.inbox_store.list_recent_messages(
-                    plan["conversation_id"], limit=6) or []
-                ctx_lines = [str(m.get("text") or "").strip()
-                             for m in msgs if str(m.get("text") or "").strip()]
+                    plan["conversation_id"], limit=10) or []
             except Exception:
-                ctx_lines = []
-            ctx = "\n".join(ctx_lines[-6:])[:600]
+                msgs = []
+            from src.utils.proactive_variety import format_recent_context
+            ctx = format_recent_context(msgs, now=time.time())
             # few-shot 风格示范（默认关）：人工认可样本作口吻示范，反哺生成。
             # 按当前 plan 的 mode 分桶取示范（follow_up/gentle_checkin/ritual_* 各用各的口吻）。
             fs_block = ""
@@ -740,7 +1059,9 @@ async def maybe_start_companion_proactive(assistant) -> None:
             from src.utils.proactive_prompt import build_proactive_prompt
             prompt = build_proactive_prompt(
                 ai_name, plan, recent_context=ctx, few_shot_block=fs_block,
-                peer_language=_peer_language(plan), scene_note=scene_note)
+                peer_language=_peer_language(plan), scene_note=scene_note,
+                persona_style=_persona_style(plan),
+                avoid_texts=list(avoid_texts or []))
             try:
                 text = await assistant.ai_client.chat(prompt)
             except Exception:
@@ -800,11 +1121,17 @@ async def maybe_start_companion_proactive(assistant) -> None:
                                     else "该会话当前不构成主动开场（沉默不足/无可回访记忆）")}
             plan = {
                 "conversation_id": cid,
+                "platform": str(conv.get("platform") or ""),
+                "account_id": str(conv.get("account_id") or ""),
+                "chat_key": str(conv.get("chat_key") or ""),
                 "directive": str(opener.get("directive") or ""),
                 "context_facts": list(opener.get("context_facts") or []),
                 "mode": str(opener.get("mode") or ""),
+                "gap_bucket": str(opener.get("gap_bucket") or ""),
+                "silent_hours": round(silent_hours, 1),
             }
-            text = await _gen_text(plan)
+            text = await _gen_text(
+                plan, avoid_texts=_avoid_texts(plan) if _variety_on else [])
             # 采样落库（质量闭环）：供运营 👍/👎 评分回流；失败不影响返回文案。
             sample_id = None
             if sample_store is not None and text:
@@ -854,14 +1181,29 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 return await asyncio.wrap_future(fut)
             return await coro_factory()
 
+        def _media_skip(kind: str, reason: str) -> None:
+            """语音/照片分支跳过原因计数（P1 透传归因）。best-effort 绝不抛。"""
+            try:
+                from src.companion.proactive_stats import record_media_skip
+                record_media_skip(kind, reason)
+            except Exception:
+                pass
+
         async def _try_send_voice(plan, text) -> bool:
             """主动开场语音分支：中文→克隆声(7852/预渲染)；外语→edge 多语(Phase15)。
-            失败 False=回落文本。
+            失败 False=回落文本。P1：每个早退/失败口记原因（修「配置 50% 实际
+            6% 无人知晓」的观测盲区）。
             """
             import random as _rnd
 
             v_cfg = cfg.get("voice") if isinstance(cfg.get("voice"), dict) else {}
-            if not voice_gate(v_cfg, text, _rnd.random()):
+            if _mfb_on and v_cfg.get("enabled", False):
+                # P3 反哺：概率按分形态回复率自校准（其余闸门原样过）
+                v_cfg = dict(v_cfg, probability=_fb_probability(
+                    "voice", float(v_cfg.get("probability", 0.5) or 0.5)))
+            _ok, _why = voice_gate_verdict(v_cfg, text, _rnd.random())
+            if not _ok:
+                _media_skip("voice", _why)
                 return False
             _plang = _peer_language(plan)
             platform = plan["platform"]
@@ -896,22 +1238,29 @@ async def maybe_start_companion_proactive(assistant) -> None:
             if _plang and not is_chinese_peer_language(_plang):
                 try:
                     _fb = resolve_foreign_voice_cfg(_cfg_root)
-                    if foreign_voice_allowed(_fb, _plang):
-                        staged = await stage_foreign_voice_file(
-                            _cfg_root, platform, account_id, text,
-                            peer_language=_plang)
-                        if await _deliver_staged(staged):
-                            assistant.logger.info(
-                                "[proactive] 外语语音开场已发 %s:%s chat=%s lang=%s mode=%s",
-                                platform, account_id, chat_key, _plang,
-                                plan.get("mode"))
-                            try:
-                                from src.companion.proactive_stats import record_voice
-                                record_voice(foreign=True)
-                            except Exception:
-                                pass
-                            return True
+                    if not foreign_voice_allowed(_fb, _plang):
+                        _media_skip("voice", "foreign_disabled")
+                        return False
+                    staged = await stage_foreign_voice_file(
+                        _cfg_root, platform, account_id, text,
+                        peer_language=_plang)
+                    if not staged:
+                        _media_skip("voice", "foreign_stage_failed")
+                        return False
+                    if await _deliver_staged(staged):
+                        assistant.logger.info(
+                            "[proactive] 外语语音开场已发 %s:%s chat=%s lang=%s mode=%s",
+                            platform, account_id, chat_key, _plang,
+                            plan.get("mode"))
+                        try:
+                            from src.companion.proactive_stats import record_voice
+                            record_voice(foreign=True)
+                        except Exception:
+                            pass
+                        return True
+                    _media_skip("voice", "foreign_deliver_failed")
                 except Exception:
+                    _media_skip("voice", "foreign_error")
                     assistant.logger.info(
                         "[proactive] 外语语音开场失败，回落文本", exc_info=True)
                 return False
@@ -921,6 +1270,9 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 from src.integrations.account_orchestrator import get_orchestrator
                 orch = get_orchestrator(_cfg_root)
                 if not orch.owns(platform, account_id):
+                    # A 线 default 账号会话无 worker 语音通道——若此原因占大头，
+                    # 说明值得给 A 线补语音发送能力（P2 候选，先让数据说话）
+                    _media_skip("voice", "not_owned")
                     return False
                 from src.ai.persona_voice import resolve_effective_persona_id
                 from src.inbox.voice_autosend import (
@@ -933,10 +1285,14 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 _l2_voice = (((_cfg_root.get("inbox") or {})
                              .get("l2_autosend") or {}).get("voice") or {})
                 if not persona_allowed_for_voice(_l2_voice, pid):
+                    _media_skip("voice", "persona_denied")
                     return False
                 staged = await stage_voice_file(
                     _cfg_root, platform, account_id,
                     pid, text, contact_key=chat_key)
+                if not staged:
+                    _media_skip("voice", "stage_failed")
+                    return False
                 if await _deliver_staged(staged):
                     assistant.logger.info(
                         "[proactive] 语音开场已发 %s:%s chat=%s mode=%s",
@@ -947,7 +1303,9 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     except Exception:
                         pass
                     return True
+                _media_skip("voice", "deliver_failed")
             except Exception:
+                _media_skip("voice", "error")
                 assistant.logger.info("[proactive] 语音开场失败，回落文本", exc_info=True)
             return False
 
@@ -973,22 +1331,31 @@ async def maybe_start_companion_proactive(assistant) -> None:
             import random as _rnd
 
             p_cfg = cfg.get("photo") if isinstance(cfg.get("photo"), dict) else {}
-            if not photo_share_gate(
-                    p_cfg, mode=str(plan.get("mode") or ""),
-                    intimacy=float(plan.get("intimacy") or 0.0),
-                    rand01=_rnd.random()):
+            if _mfb_on and p_cfg.get("enabled", False):
+                # P3 反哺：只动概率，min_intimacy/modes/daily_cap 护栏全不动
+                p_cfg = dict(p_cfg, probability=_fb_probability(
+                    "photo", float(p_cfg.get("probability", 0.25) or 0.25)))
+            _pok, _pwhy = photo_share_verdict(
+                p_cfg, mode=str(plan.get("mode") or ""),
+                intimacy=float(plan.get("intimacy") or 0.0),
+                rand01=_rnd.random())
+            if not _pok:
+                _media_skip("photo", _pwhy)
                 return None
             if _photo_cap is not None and _photo_cap.would_exceed(1):
+                _media_skip("photo", "daily_cap")
                 return None
             _cfg_root = assistant.config.config or {}
             try:
                 from src.inbox.image_autosend import resolve_image_autosend_cfg
                 scfg = resolve_image_autosend_cfg(_cfg_root)
                 if not scfg.get("enabled", False):
+                    _media_skip("photo", "selfie_disabled")
                     return None  # 依赖发图能力总开关（companion.selfie.enabled）
                 from src.integrations.account_orchestrator import get_orchestrator
                 if not get_orchestrator(_cfg_root).owns_media(
                         plan["platform"], plan["account_id"]):
+                    _media_skip("photo", "not_owned")
                     return None
                 from src.ai.persona_voice import resolve_effective_persona_id
                 # 含会话覆写：主动生活照的人设/场景池与该会话生效人设一致
@@ -996,6 +1363,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     _cfg_root, plan["platform"], plan["account_id"],
                     str(plan.get("chat_key") or ""))
                 if not pid:
+                    _media_skip("photo", "no_persona")
                     return None
                 from src.ai.companion_selfie import pick_scene_hint, scene_pool
                 from src.utils.persona_manager import PersonaManager
@@ -1030,6 +1398,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                         fallback_scenes=scfg.get("scene_rotation"))
                 return (pid, scene)
             except Exception:
+                _media_skip("photo", "error")
                 assistant.logger.debug("[proactive] 生活照预决策异常", exc_info=True)
                 return None
 
@@ -1047,6 +1416,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     _cfg_root, platform, account_id, pid,
                     {"kind": "selfie", "scene": scene})
                 if not staged:
+                    _media_skip("photo", "stage_failed")
                     return False
                 local, url, _kind = staged[:3]
                 from src.integrations.account_orchestrator import get_orchestrator
@@ -1067,7 +1437,9 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     except Exception:
                         pass
                     return True
+                _media_skip("photo", "deliver_failed")
             except Exception:
+                _media_skip("photo", "error")
                 assistant.logger.info(
                     "[proactive] 生活照开场失败，回落语音/文本", exc_info=True)
             return False
@@ -1133,6 +1505,46 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 assistant.logger.debug("[proactive] outreach 落库失败", exc_info=True)
 
         async def _send(plan):
+            # -2) P1 opt-out 检测（发送前、生成前——省 LLM/GPU）：对方在我们上次
+            # 静默记录之后的入站里说过「别再发了」→ 静默 mute_days 天并放弃本次。
+            # 检测窗口限定「上次静默记录之后的入站」防循环：静默因对方回归解除后，
+            # 旧的那句退订不会再次触发静默。
+            if _optout_on:
+                try:
+                    from src.utils.proactive_optout import detect_optout
+                    _cid_oo = str(plan.get("conversation_id") or "")
+                    _prev_oo = _optout_mutes.get(_cid_oo) or {}
+                    _min_ts = float(_prev_oo.get("ts") or 0.0)
+                    _msgs_oo = assistant.inbox_store.list_recent_messages(
+                        _cid_oo, limit=20) or []
+                    _in_texts = [
+                        str(m.get("text") or "") for m in _msgs_oo
+                        if str(m.get("direction") or "") == "in"
+                        and float(m.get("ts") or 0.0) > _min_ts][-3:]
+                    _hit = detect_optout(_in_texts)
+                    if _hit:
+                        _now_oo = time.time()
+                        _optout_mutes[_cid_oo] = {
+                            "ts": _now_oo,
+                            "until": _now_oo + _optout_days * 86400.0,
+                            "hit": _hit,
+                        }
+                        _persist_optout()
+                        _cd_store.mark_attempt(_cid_oo, _now_oo)
+                        try:
+                            from src.companion.proactive_stats import (
+                                record_optout_mute,
+                            )
+                            record_optout_mute()
+                        except Exception:
+                            pass
+                        assistant.logger.info(
+                            "[proactive] opt-out 静默 cid=%s %.0f 天（命中：%r）",
+                            _cid_oo, _optout_days, _hit[:40])
+                        return False
+                except Exception:
+                    assistant.logger.debug(
+                        "[proactive] opt-out 检测异常（忽略）", exc_info=True)
             # -1) 营销目标桥（companion.goals.bridge，默认关）：auto 档目标 + auto_ai
             # 会话 → 把「今日拍」意图并进开场 directive（顺风车，不新增发送）。
             # best-effort：桥内部异常绝不影响开场本身。
@@ -1147,16 +1559,49 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 assistant.logger.debug("[proactive] 目标桥跳过", exc_info=True)
             # 0) 生活照预决策（Phase17/18）：先定"要不要配图 + 什么场景"，场景注入文案
             _photo_plan = await _plan_photo(plan)
-            # 1) 生成开场文案（directive + 背景记忆 + 最近上下文 ± 场景叙事）
-            text = await _gen_text(
-                plan, scene_note=_photo_plan[1] if _photo_plan else "")
+            _scene = _photo_plan[1] if _photo_plan else ""
+            # 1) 生成开场文案（directive + 背景记忆 + 最近上下文 ± 场景叙事），
+            #    带「禁止相似」负样本（上次主动文案 + 末尾未回连发）。
+            _avoid = _avoid_texts(plan) if _variety_on else []
+            text = await _gen_text(plan, scene_note=_scene, avoid_texts=_avoid)
             if not text:
                 return False
+            # 1.05) 变体守卫（P0）：新文案与未回开场雷同 → 换写一次；仍雷同 →
+            # 本轮放弃并推时间戳（不推 streak——没发出去不算打扰；推时间防每
+            # 15min 重烧 LLM）。宁可不发也不做复读机。
+            if _variety_on and _avoid:
+                from src.utils.proactive_variety import most_similar
+                _dup = most_similar(text, _avoid, threshold=_sim_threshold)
+                if _dup is not None:
+                    retry = await _gen_text(
+                        plan, scene_note=_scene, avoid_texts=_avoid + [text])
+                    if retry and most_similar(
+                            retry, _avoid + [text],
+                            threshold=_sim_threshold) is None:
+                        text = retry
+                    else:
+                        _cd_store.mark_attempt(
+                            plan["conversation_id"], time.time())
+                        try:
+                            from src.companion.proactive_stats import (
+                                record_variety_block,
+                            )
+                            record_variety_block()
+                        except Exception:
+                            pass
+                        assistant.logger.info(
+                            "[proactive] 变体守卫拦截 cid=%s：文案与未回开场雷同"
+                            "（新=%r ≈ 旧=%r），本轮放弃",
+                            plan.get("conversation_id"),
+                            (retry or text)[:36], _dup[:36])
+                        return False
             # 1.1) 出站优惠守卫（P14）：目标桥带来的开场也可能被 LLM 加一句
             # 「给你打个折」。只守目标驱动的开场（普通陪伴开场不碰），文案/
             # 配图配文/语音稿三条分支同源，所以放在这里一次搞定。
             if (plan or {}).get("_goal_action_id"):
                 text = _guard_offer_text(text, plan)
+            # 账本记录用：最终要发出的文案（成功后 mark_send 写入，供下次反复读）
+            plan["_sent_text"] = text
             platform = plan["platform"]
             account_id = plan["account_id"]
             chat_key = plan["chat_key"]
@@ -1182,25 +1627,32 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     _ok = bool((res or {}).get("delivered", True))
                     if _ok:
                         _log_outreach(plan, "text")
-                    _note_send_result(plan["conversation_id"], _ok)
+                    _note_send_result(plan["conversation_id"], _ok, platform)
                     return _ok
             except Exception as e:
                 # PEER_ID_INVALID = session 不认识对方（无 access_hash，多为
                 # 对方已注销/换号或迁移遗留会话）→ 拉黑不再重试，且升 info 可见
                 # （debug 级曾把"每 tick 全军覆没"藏了一上午）。
-                _es = (type(e).__name__ + " " + str(e)).upper().replace(" ", "_")
-                # 永久性发送错误 → 拉黑：peer 解析不了 / 对方已注销 / 被对方拉黑
-                _permanent = any(k in _es for k in (
-                    "PEERIDINVALID", "PEER_ID_INVALID",
-                    "INPUT_USER_DEACTIVATED", "USERDEACTIVATED",
-                    "USER_IS_BLOCKED", "USERISBLOCKED",
-                    "YOU_BLOCKED_USER", "CHAT_WRITE_FORBIDDEN"))
-                if _permanent:
-                    _bad_peers.add(plan["conversation_id"])
-                    _persist_bad_peers()
+                # 分类走共享纯函数（单一事实源，与 A 线 sender 同一词表）。
+                # ⚠ 场景差异（刻意）：peer_unresolved（PEER_ID_INVALID/CHANNEL_INVALID）
+                # 在 A 线是「本地缓存缺 access_hash」→ dialogs 预热能救，故不拉黑；
+                # 但本模块是**私聊主动触达**，没有预热自愈路径，且这里解析不了基本就是
+                # 死号/迁移遗留会话——保持既有「立即拉黑」语义（改成走连败计数会让
+                # 编排器账号的坏 peer 永不拉黑：本 except 不计连败、非 default 账号也
+                # 不回落主客户端 → 退回「每 tick 重烧坏 peer」老问题）。
+                # 记 registry 时映射成可解除的 blocked（registry 只收永久类 reason）。
+                from src.ops.dead_peer_registry import (
+                    classify_send_error as _dp_classify,
+                    is_permanent_reason as _dp_permanent,
+                )
+                _rsn = _dp_classify(e)
+                if _rsn:
+                    _mark_bad_peer(
+                        plan["conversation_id"], platform=platform,
+                        reason=_rsn if _dp_permanent(_rsn) else "blocked")
                     assistant.logger.info(
-                        "[proactive] peer 不可达已拉黑 %s（%s）",
-                        plan["conversation_id"], e)
+                        "[proactive] peer 不可达已拉黑 %s（%s: %s）",
+                        plan["conversation_id"], _rsn, e)
                 else:
                     assistant.logger.info(
                         "[proactive] 编排器发送失败 %s: %s",
@@ -1220,11 +1672,11 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     ok = await assistant.telegram_client.send_message(target, text)
                     if ok:
                         _log_outreach(plan, "text")
-                    _note_send_result(plan["conversation_id"], bool(ok))
+                    _note_send_result(plan["conversation_id"], bool(ok), platform)
                     return bool(ok)
                 except Exception:
                     assistant.logger.debug("[proactive] 主客户端发送失败", exc_info=True)
-                    _note_send_result(plan["conversation_id"], False)
+                    _note_send_result(plan["conversation_id"], False, platform)
                     return False
             return False
 
@@ -1237,6 +1689,35 @@ async def maybe_start_companion_proactive(assistant) -> None:
             except Exception:
                 assistant.logger.debug("[proactive] 目标拍回执失败", exc_info=True)
             _mode = str((plan or {}).get("mode") or "")
+            # P1 观测：真发成功的 mode 分布（「兜底占 100%」这种退化在看板一眼可见）。
+            try:
+                from src.companion.proactive_stats import record_sent_mode
+                record_sent_mode(_mode)
+            except Exception:
+                pass
+            # P1：生活分享真发成功才扣周配额（规划/生成失败/被守卫拦下都不扣）。
+            if _mode == "life_share":
+                try:
+                    assistant.skill_manager.mark_life_share_sent(
+                        str((plan or {}).get("conversation_id") or ""))
+                except Exception:
+                    assistant.logger.debug(
+                        "[proactive] life_share 配额落账失败", exc_info=True)
+            # P1 质量闭环：真发文案落样本库（此前只记「试发」采样，真发的文案
+            # 反而无处评分）——运营在采样面板 👍/👎 的就是真实发出的开场。
+            if sample_store is not None and (plan or {}).get("_sent_text"):
+                try:
+                    sample_store.record_sample(
+                        conversation_id=str(plan.get("conversation_id") or ""),
+                        account_id=str(plan.get("account_id") or ""),
+                        mode=_mode,
+                        fact=str(plan.get("fact") or ""),
+                        context_facts_n=len(plan.get("context_facts") or []),
+                        silent_hours=float(plan.get("silent_hours") or 0.0),
+                        text=str(plan.get("_sent_text") or ""))
+                except Exception:
+                    assistant.logger.debug(
+                        "[proactive] 真发采样落库失败", exc_info=True)
             # Stage T：画像采集发出 → 记对应槽位冷却（cooldown_days 内不再问同一人，避免反复打听）。
             _collect_cd = _collect_cd_by_mode.get(_mode)
             if _collect_cd is not None:
@@ -1421,7 +1902,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
             opener_fn=_opener,
             send_fn=_send,
             fresh_activity_provider=_fresh_last_ts,
-            cooldown_store=JsonCooldownStore(cd_path),
+            cooldown_store=_cd_store,
             interval_sec=float(cfg.get("interval_sec", 900)),
             # 首 tick 前等 worker 拉起（编排器监督循环 15s 起步 + 连接耗时）
             first_delay_sec=float(cfg.get("first_delay_sec", 90)),
@@ -1439,6 +1920,8 @@ async def maybe_start_companion_proactive(assistant) -> None:
             pacing_cfg=_pacing_cfg,
             priority_fn=_goal_priority,
             user_clock_provider=_user_clock if _uc_enabled else None,
+            backoff_cfg=_backoff_cfg,
+            response_pacing_cfg=_response_cfg,
         )
         await loop.start()
         assistant._companion_proactive_loop = loop

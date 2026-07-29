@@ -924,12 +924,14 @@ const _intentLabels = {
   enhanced_quota_config:window.T('dv_js017'), quota_config:window.T('dv_js018'),
 };
 
+var _intentKwRev='';   // 乐观锁：加载时的服务端内容指纹（保存带 expected_rev）
 async function loadIntentKeywords(){
   const el=document.getElementById('intent-kw-editor');
   try{
     const r=await apiFetch('/api/settings/intent-keywords');
     const d=await r.json();
     _intentKeywords=d.keywords||{};
+    _intentKwRev=d.rev||'';   // 老后端无 rev → 空=不启用校验（零破坏）
     renderIntentEditor();
   }catch(e){
     el.innerHTML='<div style="color:var(--red)">'+window.T('rpa_load_failed')+'</div>';
@@ -967,15 +969,29 @@ async function saveIntentKeywords(){
     const lines=area.value.split('\n').map(l=>l.trim()).filter(l=>l);
     updated[intent]=lines;
   });
-  try{
-    const r=await apiFetch('/api/settings/intent-keywords',{
+  // 乐观锁：本表是整字典替换，两窗口先后保存会整体抹掉对方新增/删除的意图 →
+  // 带加载时指纹；撞 409 时表单原样保留，显式确认后免键重发（与人设编辑器同款）。
+  const _put=function(withRev){
+    const body={keywords:updated};
+    if(withRev && _intentKwRev) body.expected_rev=_intentKwRev;
+    return apiFetch('/api/settings/intent-keywords',{
       method:'PUT',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({keywords:updated}),
+      body:JSON.stringify(body),
     }, {timeoutMs: 60000});
+  };
+  try{
+    let r=await _put(true);
+    if(r.status===409){
+      if(!confirm(window.T('psn.save.stale_confirm'))){
+        resEl.textContent=''; resEl.className='save-result'; return;
+      }
+      r=await _put(false);
+    }
     const d=await r.json();
     if(d.ok){
       _intentKeywords=updated;
+      _intentKwRev=d.rev||'';
       resEl.textContent='✓ '+window.T('dv_js020'); resEl.className='save-result ok';
     }else{
       resEl.textContent=window.T('ov_js_save_fail'); resEl.className='save-result err';

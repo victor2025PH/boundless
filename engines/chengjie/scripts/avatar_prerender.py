@@ -39,40 +39,40 @@ except Exception:
     pass
 
 
-def _load_config() -> dict:
-    """读合并后的项目配置（config.yaml + config.local.yaml overlay）。"""
-    import yaml
+def _load_config(root: Path = None) -> dict:
+    """读合并后的项目配置（config.yaml + config.local.yaml overlay）。
 
-    cfg_path = _ROOT / "config" / "config.yaml"
-    data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-    local = _ROOT / "config" / "config.local.yaml"
-    if local.is_file():
-        overlay = yaml.safe_load(local.read_text(encoding="utf-8")) or {}
+    ``root``：数据根（实例 data 目录或引擎根）。默认引擎根＝旧行为。
+    """
+    from scripts._data_root import load_merged_config
 
-        def _deep_merge(dst: dict, src: dict) -> dict:
-            for k, v in src.items():
-                if isinstance(v, dict) and isinstance(dst.get(k), dict):
-                    _deep_merge(dst[k], v)
-                else:
-                    dst[k] = v
-            return dst
-
-        _deep_merge(data, overlay)
-    return data
+    return load_merged_config(root or _ROOT)
 
 
-def _resolve_ref(persona: str, cfg: dict) -> str:
+def _abs_ref(ref: str, root: Path) -> str:
+    """参考音路径锚定数据根：相对路径（如 ``config/voice_refs/x.wav``）按 app 语义
+    相对**实例数据根**解析（app CWD=数据根），绝对路径原样返回。"""
+    if not ref:
+        return ""
+    p = Path(ref)
+    return str(p if p.is_absolute() else (Path(root) / p))
+
+
+def _resolve_ref(persona: str, cfg: dict, *, root: Path = None) -> str:
     """人设参考音路径：profiles_runtime / config personas / telegram.voice_reply 逐层找。"""
+    from scripts._data_root import profiles_runtime_path
+
+    base = root or _ROOT
     try:
         import yaml
-        rt = _ROOT / "config" / "profiles_runtime.yaml"
+        rt = profiles_runtime_path(base)
         if rt.is_file():
             profiles = (yaml.safe_load(rt.read_text(encoding="utf-8")) or {}).get(
                 "profiles") or {}
             vp = (profiles.get(persona) or {}).get("voice_profile") or {}
             ref = str(vp.get("reference_audio_path") or "").strip()
             if ref:
-                return ref
+                return _abs_ref(ref, base)
     except Exception:
         pass
     for p in (cfg.get("personas") or {}).get("profiles") or []:
@@ -80,17 +80,20 @@ def _resolve_ref(persona: str, cfg: dict) -> str:
             ref = str((p.get("voice_profile") or {}).get(
                 "reference_audio_path") or "").strip()
             if ref:
-                return ref
-    return str((((cfg.get("telegram") or {}).get("voice_reply") or {}).get(
-        "voice_profile") or {}).get("reference_audio_path") or "").strip()
+                return _abs_ref(ref, base)
+    return _abs_ref(str((((cfg.get("telegram") or {}).get("voice_reply") or {}).get(
+        "voice_profile") or {}).get("reference_audio_path") or "").strip(), base)
 
 
-def _collect_avatar_personas(cfg: dict) -> list:
+def _collect_avatar_personas(cfg: dict, *, root: Path = None) -> list:
     """--all-personas 的目标收集：voice_profile.backend=avatar_clone 且参考音在盘的人设。
 
     来源＝profiles_runtime.yaml（运行时人设，权威）∪ config personas.profiles。
     返回 [(persona_id, ref_path)]，按 id 去重（runtime 优先）。
     """
+    from scripts._data_root import profiles_runtime_path
+
+    base = root or _ROOT
     out: list = []
     seen: set = set()
 
@@ -99,14 +102,14 @@ def _collect_avatar_personas(cfg: dict) -> list:
             return
         if str(vp.get("backend") or "").strip().lower() != "avatar_clone":
             return
-        ref = str(vp.get("reference_audio_path") or "").strip()
+        ref = _abs_ref(str(vp.get("reference_audio_path") or "").strip(), base)
         if ref and Path(ref).is_file():
             seen.add(pid)
             out.append((pid, ref))
 
     try:
         import yaml
-        rt = _ROOT / "config" / "profiles_runtime.yaml"
+        rt = profiles_runtime_path(root or _ROOT)
         if rt.is_file():
             profiles = (yaml.safe_load(rt.read_text(encoding="utf-8")) or {}).get(
                 "profiles") or {}
@@ -237,7 +240,7 @@ def render_persona(
     return done, skipped, failed
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="AvatarHub Qwen3-TTS 批量预渲染")
     ap.add_argument("--persona", default="", help="人设 id（决定参考音与输出目录）")
     ap.add_argument("--all-personas", action="store_true",
@@ -245,21 +248,24 @@ def main() -> int:
                          "（_common.txt 共用 + <persona>.txt 专属；夜间计划任务用）")
     ap.add_argument("--lines", nargs="*", default=[], help="台词（可多条）")
     ap.add_argument("--lines-file", default="", help="台词文件（每行一条，# 开头忽略）")
-    ap.add_argument("--lines-dir", default="", help="台词库目录（默认 config/prerender_lines）")
+    ap.add_argument("--lines-dir", default="", help="台词库目录（默认 <数据根>/config/prerender_lines）")
     ap.add_argument("--ref", default="", help="参考音 WAV 路径（默认从配置解析）")
     ap.add_argument("--ref-text", default="", help="参考音逐字稿（默认读参考音旁 .txt）")
     ap.add_argument("--language", default="zh")
-    ap.add_argument("--base-dir", default="", help="预渲染根目录（默认 assets/voices）")
+    ap.add_argument("--base-dir", default="", help="预渲染根目录（默认 <数据根>/assets/voices）")
+    ap.add_argument("--data-root", default="",
+                    help="实例数据根（含 config/ 与 assets/）。缺省按契约解析："
+                         "env AITR_DATA_ROOT → D:\\chengjie-instances 活跃实例自动发现 → 引擎根")
     ap.add_argument("--batch-size", type=int, default=8, help="单请求台词条数上限")
     ap.add_argument("--force", action="store_true",
                     help="已存在也重渲（人设换参考音后旧音色过期时用）")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     if not args.all_personas and not args.persona:
         print("[!] 需要 --persona <id> 或 --all-personas")
         return 2
 
-    cfg = _load_config()
+    from scripts._data_root import resolve_data_roots
     from src.ai.avatar_voice import AvatarVoiceClient
     from src.ai.voice_prerender import (
         DEFAULT_BASE_DIR,
@@ -267,57 +273,78 @@ def main() -> int:
         read_prerender_lines,
     )
 
-    client = AvatarVoiceClient.from_config(cfg)
-    base_dir = args.base_dir or str(_ROOT / DEFAULT_BASE_DIR)
-    lines_dir = args.lines_dir or str(_ROOT / DEFAULT_LINES_DIR)
+    roots = resolve_data_roots(args.data_root)
+    print(f"[*] 数据根 ×{len(roots)}: " + " | ".join(str(r) for r in roots))
 
-    # 目标集：--all-personas 自动收集；否则单人设（台词=CLI 指定 ∪ 台词库）
-    if args.all_personas:
-        targets = _collect_avatar_personas(cfg)
-        if not targets:
-            print("[!] 没有 avatar_clone 人设可渲染（检查 profiles_runtime voice_profile）")
-            return 2
-        plan = []
-        for pid, ref in targets:
-            lines = read_prerender_lines(pid, lines_dir=lines_dir)
-            if lines:
-                plan.append((pid, ref, lines))
-            else:
-                print(f"[-] [{pid}] 无台词（{lines_dir} 下无 _common.txt/{pid}.txt），跳过")
-    else:
-        lines = [x.strip() for x in args.lines if x.strip()]
-        if args.lines_file:
-            for raw in Path(args.lines_file).read_text(encoding="utf-8").splitlines():
-                s = raw.strip()
-                if s and not s.startswith("#"):
-                    lines.append(s)
-        if not lines:
-            lines = read_prerender_lines(args.persona, lines_dir=lines_dir)
-        if not lines:
-            print("[!] 没有台词可渲染（--lines / --lines-file / 台词库均空）")
-            return 2
-        ref = args.ref or _resolve_ref(args.persona, cfg)
-        if not ref or not Path(ref).is_file():
-            print(f"[!] 参考音不存在: {ref!r}（--ref 显式指定或先给人设配 voice_profile）")
-            return 2
-        plan = [(args.persona, ref, lines)]
+    # 逐根建计划：配置/人设/台词库/产物目录全部按该根解析（多实例各落各家）。
+    # plan 条目：(client, root, pid, ref, lines, base_dir)
+    plan: list = []
+    empty_roots = 0
+    first_client = None
+    for root in roots:
+        cfg = _load_config(root)
+        client = AvatarVoiceClient.from_config(cfg)
+        if first_client is None:
+            first_client = client
+        base_dir = args.base_dir or str(Path(root) / DEFAULT_BASE_DIR)
+        lines_dir = args.lines_dir or str(Path(root) / DEFAULT_LINES_DIR)
+
+        if args.all_personas:
+            targets = _collect_avatar_personas(cfg, root=root)
+            if not targets:
+                print(f"[!] [{root}] 没有 avatar_clone 人设可渲染"
+                      "（检查该根 config/profiles_runtime.yaml voice_profile）")
+                empty_roots += 1
+                continue
+            got = 0
+            for pid, ref in targets:
+                lines = read_prerender_lines(pid, lines_dir=lines_dir)
+                if lines:
+                    plan.append((client, root, pid, ref, lines, base_dir))
+                    got += 1
+                else:
+                    print(f"[-] [{pid}] 无台词（{lines_dir} 下无 _common.txt/{pid}.txt），跳过")
+            if not got:
+                empty_roots += 1
+        else:
+            lines = [x.strip() for x in args.lines if x.strip()]
+            if args.lines_file:
+                for raw in Path(args.lines_file).read_text(encoding="utf-8").splitlines():
+                    s = raw.strip()
+                    if s and not s.startswith("#"):
+                        lines.append(s)
+            if not lines:
+                lines = read_prerender_lines(args.persona, lines_dir=lines_dir)
+            if not lines:
+                print(f"[!] [{root}] 没有台词可渲染（--lines / --lines-file / 台词库均空）")
+                empty_roots += 1
+                continue
+            ref = args.ref or _resolve_ref(args.persona, cfg, root=root)
+            if not ref or not Path(ref).is_file():
+                print(f"[!] [{root}] 参考音不存在: {ref!r}"
+                      "（--ref 显式指定或先给人设配 voice_profile）")
+                empty_roots += 1
+                continue
+            plan.append((client, root, args.persona, ref, lines, base_dir))
 
     if not plan:
+        # 所有根都无目标：配置类问题按旧语义 exit 2（夜间日志醒目），
+        # 让「空转」在计划任务侧就能被看见而不是静默 0。
         print("[!] 计划为空，无事可做")
-        return 0
+        return 2 if empty_roots else 0
 
     # 就绪等待给足 600s：7858 懒加载冷载实测可达 3-4 分钟（显存紧张时更久），
     # 300s 曾在首跑时踩超时。夜间无人等待，宁可多等。
     print(f"[*] 检查 Qwen3-TTS(7858) 就绪…")
-    if not client.ensure_ready(wait_sec=600.0, service="7858"):
+    if not first_client.ensure_ready(wait_sec=600.0, service="7858"):
         print("[!] 7858 未就绪（计划任务拉起失败或超时），退出")
         return 1
 
     t0 = time.monotonic()
     total_done = total_skip = total_fail = 0
-    ref_cache: dict = {}   # 跨人设同音色复用（同台词只烧一次 GPU）
-    for pid, ref, lines in plan:
-        print(f"[*] ── {pid}：{len(lines)} 条台词 ──")
+    ref_cache: dict = {}   # 跨人设/跨根同音色复用（同台词只烧一次 GPU）
+    for client, root, pid, ref, lines, base_dir in plan:
+        print(f"[*] ── [{Path(root).name or root}] {pid}：{len(lines)} 条台词 ──")
         d, s, f = render_persona(
             client, pid, ref, lines, ref_text=args.ref_text,
             language=args.language, base_dir=base_dir,

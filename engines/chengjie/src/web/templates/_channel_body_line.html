@@ -172,7 +172,7 @@
         </button>
       </div>
     </div>
-    <a class="rpa-hero-btn" href="/workspace?drawer=1&amp;connect=line" style="text-decoration:none" title="{{ (i18n or {}).get('chc_acct_cta', '去工作台管理账号') }}">{{ (i18n or {}).get('chc_acct_hero_btn', '管理账号') }}</a>
+    {# 「管理账号」入口收敛到上方平台连接卡（2026-07-29），Hero 只留刷新 #}
     <button class="rpa-hero-btn" onclick="loadLineRpa()" title="{{ (i18n or {}).get('wa_s017', '刷新状态') }}">↻</button>
   </div>
 </div>

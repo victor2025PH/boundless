@@ -36,25 +36,31 @@ def test_shared_styles_define_all_four_themes():
 
 
 def test_all_four_bodies_use_shared_hero_skeleton():
+    """hero 骨架四页齐平。2026-07-29 起「管理账号」入口收敛到壳层平台连接卡
+    （单一事实源，见 test_channel_acct_rail.test_manage_account_entry_is_single_source），
+    hero 动作区只留页内刷新等轻操作；Messenger hero 无独立动作钮（刷新走 25s 轻刷 +
+    设备池自刷新），不再强挂空动作区。"""
     for plat, path in _BODIES.items():
         html = _read(path)
         assert 'class="rpa-hero"' in html, plat
         assert f"rpa-hero-avatar theme-{plat}" in html, plat
-        assert "rpa-hero-actions" in html, plat
-        # 「管理账号」深链四页齐平（hero 级入口）
-        assert f"/workspace?drawer=1&amp;connect={plat}" in html, plat
-        assert "chc_acct_hero_btn" in html, plat
+        if plat != "messenger":
+            assert "rpa-hero-actions" in html, plat
 
 
 def test_hero_section_order_is_uniform():
-    """信息 → KPI → 动作，四页一致（首个 hero 即页顶 hero，首次出现序即块内序）。"""
+    """信息 → KPI →（动作），顺序一致（首个 hero 即页顶 hero，首次出现序即块内序）；
+    Messenger 无 hero 动作区（见上），只校验 信息 → KPI。"""
     for plat, path in _BODIES.items():
         html = _read(path)
         i_info = html.index("rpa-hero-info")
         i_kpi = html.index("rpa-kpi-row")
+        assert i_info < i_kpi, f"{plat}: hero 区块顺序漂移 info={i_info} kpi={i_kpi}"
+        if plat == "messenger":
+            continue
         i_act = html.index("rpa-hero-actions")
-        assert i_info < i_kpi < i_act, (
-            f"{plat}: hero 区块顺序漂移 info={i_info} kpi={i_kpi} actions={i_act}")
+        assert i_kpi < i_act, (
+            f"{plat}: hero 区块顺序漂移 kpi={i_kpi} actions={i_act}")
 
 
 def test_telegram_private_hero_skeleton_is_gone():

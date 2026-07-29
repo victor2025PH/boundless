@@ -2141,6 +2141,32 @@ class InboxStore:
         return {str(r["cid"]): {"direction": str(r["direction"] or "in"),
                                 "ts": float(r["ts"] or 0)} for r in rows}
 
+    def last_inbound_ts_map(
+        self, conversation_ids: Optional[List[str]] = None,
+    ) -> Dict[str, float]:
+        """每个会话最后一条**入站**消息时间戳（主动触达「未回退避」判据）。
+
+        与 ``last_message_dirs`` 互补：那个给末条方向，这个回答「对方最后一次
+        开口是什么时候」——上次主动开场之后对方没有任何入站 = 未回，冷却退避。
+        从未入站的会话不在返回里（调用方按 0 处理）。
+        """
+        where = "WHERE direction='in'"
+        params: List[Any] = []
+        if conversation_ids is not None:
+            ids = list({c for c in conversation_ids if c})
+            if not ids:
+                return {}
+            ph = ",".join("?" * len(ids))
+            where += f" AND conversation_id IN ({ph})"
+            params = ids
+        sql = (
+            "SELECT conversation_id AS cid, MAX(ts) AS mts FROM messages "
+            f"{where} GROUP BY conversation_id"
+        )
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return {str(r["cid"]): float(r["mts"] or 0) for r in rows}
+
     def first_response_rows(
         self, since_ts: float = 0.0,
     ) -> List[Dict[str, Any]]:
@@ -2920,17 +2946,29 @@ class InboxStore:
         status: str,
         final_text: str = "",
         decided_by: str = "",
+        expected_statuses: Sequence[str] = ("pending", "enriching"),
     ) -> bool:
         """H1/H2：通过 draft_id 直接更新草稿状态（适用于 inbox 源草稿）。
 
-        返回 True 表示找到并更新了记录。
+        原子状态闸门（多开/双坐席防重，2026-07-29）：仅当当前状态在
+        ``expected_statuses`` 内才更新——已 approved/rejected/cancelled 的终态草稿
+        不允许被二次处置（此前无闸门：两个窗口先后点「通过」都返回 True →
+        双份审计/事件/CSAT 排期，且与 AutosendWorker 的 resolve 竞态时可双投递）。
+        所有既有调用方均为「从活跃态出发」的转换（pending 处置 / enriching 陈旧作废），
+        默认白名单覆盖全部合法路径，行为仅在竞态双写时收紧。
+
+        返回 True 表示找到并更新了记录；False = 不存在或已处置（调用方经
+        ``get_draft`` 区分两者）。
         """
         now = self._now()
+        allowed = tuple(expected_statuses or ())
+        placeholders = ",".join("?" for _ in allowed)
         with self._lock:
             cur = self._conn.execute(
                 "UPDATE reply_drafts SET status=?, final_text=CASE WHEN ?!='' THEN ? ELSE final_text END, "
-                "decided_by=?, decided_at=?, updated_at=? WHERE draft_id=?",
-                (status, final_text, final_text, decided_by, now, now, draft_id),
+                "decided_by=?, decided_at=?, updated_at=? WHERE draft_id=? "
+                f"AND status IN ({placeholders})",
+                (status, final_text, final_text, decided_by, now, now, draft_id, *allowed),
             )
             self._conn.commit()
         return int(cur.rowcount or 0) > 0
@@ -5652,6 +5690,82 @@ class InboxStore:
             ).fetchall()
         return {r["conversation_id"]: float(r["mx"] or 0) for r in rows}
 
+    def outreach_mode_histogram(
+        self, batch_prefix: str, *, days: float = 14.0,
+        now: Optional[float] = None,
+    ) -> Dict[str, int]:
+        """近 N 天某前缀批次已发触达按 note（=开场 mode）直方图（P2 观测）。
+
+        proactive_topic 真发时 ``record_outreach(batch_id="proactive_topic:<kind>",
+        note=<mode>)``——mode 分布从进程计数（重启即清零）升级为落库口径，
+        「gentle_checkin 是否还占 100%」重启后照样能回看。纯查询，无副作用。
+        """
+        prefix = str(batch_prefix or "").strip()
+        if not prefix:
+            return {}
+        t = float(now if now is not None else self._now())
+        since = t - max(0.0, float(days or 0.0)) * 86400.0
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT note, COUNT(*) AS n FROM outreach_log "
+                "WHERE batch_id LIKE ? AND status='sent' AND ts >= ? "
+                "GROUP BY note",
+                (prefix + "%", since),
+            ).fetchall()
+        return {
+            str(r["note"] or "unknown"): int(r["n"])
+            for r in rows
+        }
+
+    def outreach_note_response_stats(
+        self, batch_prefix: str, *,
+        response_window_days: float = 3.0,
+        lookback_days: float = 14.0,
+        now: Optional[float] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """近 N 天某前缀批次按 note（=开场 mode）分组的回复率（P4 观测）。
+
+        与 ``outreach_response_stats`` 同一判定口径（触达后 window 内该会话有
+        入站=已回复），只是按 note 分桶——「哪种开场客户真的会回」从拍脑袋
+        变成读数。纯查询，无副作用。返回 ``{note: {sent, responded,
+        response_rate}}``。
+        """
+        prefix = str(batch_prefix or "").strip()
+        if not prefix:
+            return {}
+        t = float(now if now is not None else self._now())
+        window_s = (float(response_window_days) * 86400.0
+                    if response_window_days and response_window_days > 0 else 0.0)
+        sql = (
+            "SELECT o.note AS note, o.ts AS sent_ts, "
+            "(SELECT MIN(m.ts) FROM messages m "
+            " WHERE m.conversation_id = o.conversation_id "
+            "   AND m.direction = 'in' AND m.ts > o.ts) AS reply_ts "
+            "FROM outreach_log o WHERE o.batch_id LIKE ? AND o.status='sent'"
+        )
+        params: List[Any] = [prefix + "%"]
+        if lookback_days and float(lookback_days) > 0:
+            sql += " AND o.ts >= ?"
+            params.append(t - float(lookback_days) * 86400.0)
+        with self._lock:
+            rows = self._conn.execute(sql, tuple(params)).fetchall()
+        out: Dict[str, Dict[str, Any]] = {}
+        for r in rows:
+            note = str(r["note"] or "unknown")
+            b = out.setdefault(note, {"sent": 0, "responded": 0})
+            b["sent"] += 1
+            reply_ts = r["reply_ts"]
+            if reply_ts is None:
+                continue
+            delta = float(reply_ts) - float(r["sent_ts"])
+            if delta <= 0 or (window_s > 0 and delta > window_s):
+                continue
+            b["responded"] += 1
+        for b in out.values():
+            b["response_rate"] = (
+                round(b["responded"] / b["sent"], 4) if b["sent"] else 0.0)
+        return out
+
     def outreach_batch_stats(self, batch_id: str) -> Dict[str, Any]:
         """某批次的回执统计：按 status 计数 + 总数。"""
         bid = str(batch_id or "").strip()
@@ -5668,12 +5782,15 @@ class InboxStore:
     def outreach_response_stats(
         self, batch_id: str, *,
         response_window_days: float = 7.0,
+        lookback_days: float = 0.0,
         now: Optional[float] = None,
     ) -> Dict[str, Any]:
         """P61-5：触达效果回流——某批次"已发送"消息的回复率。
 
         判定：对每条 status='sent' 的触达，看其会话在触达 ts 之后（且在
         response_window_days 窗口内，<=0 表示不限窗）是否收到**入站**消息。
+        ``lookback_days>0`` 只统计近 N 天发出的触达（P3 媒体反哺要新鲜度——
+        三个月前的回复习惯不该决定今天的形态选择；0=全历史，旧行为）。
         返回 sent / responded / response_rate / avg_response_minutes。
         纯查询、无副作用，可随时回看（回复是异步累积的）。
         """
@@ -5690,8 +5807,13 @@ class InboxStore:
             "   AND m.direction = 'in' AND m.ts > o.ts) AS reply_ts "
             "FROM outreach_log o WHERE o.batch_id = ? AND o.status = 'sent'"
         )
+        params: List[Any] = [bid]
+        if lookback_days and float(lookback_days) > 0:
+            t = float(now if now is not None else self._now())
+            sql += " AND o.ts >= ?"
+            params.append(t - float(lookback_days) * 86400.0)
         with self._lock:
-            rows = self._conn.execute(sql, (bid,)).fetchall()
+            rows = self._conn.execute(sql, tuple(params)).fetchall()
         sent = len(rows)
         responded = 0
         latencies: List[float] = []

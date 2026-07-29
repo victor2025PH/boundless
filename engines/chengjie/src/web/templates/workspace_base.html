@@ -390,6 +390,17 @@
   .wp-row{display:flex;justify-content:space-between;align-items:center;margin:8px 0;color:var(--tk-text-muted);}
   .wp-btn-ghost{padding:6px 12px;border:1px solid var(--tk-border);border-radius:var(--tk-radius-sm);background:var(--tk-surface);color:var(--tk-text-muted);cursor:pointer;font-size:13px;}
   .wp-btn-ghost:hover{background:var(--tk-surface-2);border-color:var(--tk-text-muted);}
+  /* ── AI 引导/试用横幅 + 升级弹窗的「色彩层」（2026-07-29 inline-color ratchet 收口）：
+        颜色声明出 style 属性进类；布局/显隐仍留内联由 wsBanner/JS 驱动。
+        色值与原内联逐字一致，视觉零变化。 ── */
+  .ws-aiguide-tone{background:linear-gradient(90deg,#7c2d12,#9a3412);color:#ffedd5;}
+  .ws-aiguide-cta{color:#9a3412;}
+  .ws-aitrial-tone{background:linear-gradient(90deg,#14532d,#166534);color:#dcfce7;}
+  .ws-aitrial-meter{background:rgba(255,255,255,.25);}
+  .ws-aitrial-cta{color:#166534;}
+  .ws-upsell-mask{background:rgba(0,0,0,.55);}
+  .ws-upsell-card{box-shadow:0 8px 40px rgba(0,0,0,.3);}
+  .ws-upsell-go{background:linear-gradient(90deg,#166534,#15803d);color:#fff;}
 </style>
 <!-- 平台原生图标库(单一事实来源)：window.platformIconSVG / platformBrandColor -->
 <script src="/static/platform_icons.js?v=20260701"></script>
@@ -599,12 +610,11 @@
 </header>
 {% if ai_key_missing %}
 <!-- P0-1 A3：AI Key 未配置引导条（仅主管渲染；关闭记 localStorage，配好后服务端不再渲染） -->
-<div id="ws-aiguide" style="display:none;align-items:center;gap:10px;padding:8px 14px;
-     background:linear-gradient(90deg,#7c2d12,#9a3412);color:#ffedd5;font-size:13px;">
+<div id="ws-aiguide" class="ws-aiguide-tone" style="display:none;align-items:center;gap:10px;padding:8px 14px;font-size:13px;">
   <span style="flex:0 0 auto;">🔑</span>
   <span style="flex:1 1 auto;line-height:1.5;" data-i18n="ws.aiguide.text">{{ i18n.get('ws.aiguide.text', 'AI 大模型还没配置：填好 API Key 后，翻译和智能回复才能用。') }}</span>
-  <a href="/workspace/setup#ai" data-i18n="ws.aiguide.cta" style="flex:0 0 auto;padding:5px 14px;border-radius:8px;
-     background:var(--th-bg-surface,#fff);color:#9a3412;font-weight:600;text-decoration:none;">{{ i18n.get('ws.aiguide.cta', '去配置') }}</a>
+  <a href="/workspace/setup#ai" data-i18n="ws.aiguide.cta" class="ws-aiguide-cta" style="flex:0 0 auto;padding:5px 14px;border-radius:8px;
+     background:var(--th-bg-surface,#fff);font-weight:600;text-decoration:none;">{{ i18n.get('ws.aiguide.cta', '去配置') }}</a>
   <span onclick="_wsAiGuideDismiss()" data-i18n="ws.aiguide.dismiss" style="flex:0 0 auto;cursor:pointer;opacity:.75;
      padding:5px 8px;text-decoration:underline;">{{ i18n.get('ws.aiguide.dismiss', '先不管') }}</span>
 </div>
@@ -623,37 +633,36 @@ function _wsAiGuideDismiss(){
 </script>
 {% elif ai_trial_mode %}
 <!-- 托管试用：经官网网关调云端 AI（Key 只在服务端）；额度徽章 60s 轮询，用尽自动切文案 -->
-<div id="ws-aitrial" style="display:none;align-items:center;gap:10px;padding:8px 14px;
-     background:linear-gradient(90deg,#14532d,#166534);color:#dcfce7;font-size:13px;">
+<div id="ws-aitrial" class="ws-aitrial-tone" style="display:none;align-items:center;gap:10px;padding:8px 14px;font-size:13px;">
   <span style="flex:0 0 auto;">✨</span>
   <span id="ws-aitrial-text" style="flex:1 1 auto;line-height:1.5;" data-i18n="ws.aitrial.text">{{ i18n.get('ws.aitrial.text', '免费试用中：已通过官网安全通道调用云端 AI，无需也不必填写 API Key；额度用尽请联系客服续期。') }}</span>
   <span id="ws-aitrial-quota" style="display:none;flex:0 0 auto;align-items:center;gap:6px;font-size:12px;opacity:.92;">
     <span id="ws-aitrial-quota-txt"></span>
-    <span style="width:64px;height:6px;border-radius:999px;background:rgba(255,255,255,.25);overflow:hidden;display:inline-block;vertical-align:middle;">
+    <span class="ws-aitrial-meter" style="width:64px;height:6px;border-radius:999px;overflow:hidden;display:inline-block;vertical-align:middle;">
       <i id="ws-aitrial-quota-bar" style="display:block;height:100%;width:0%;background:var(--th-bg-surface,#fff);border-radius:999px;transition:width .4s ease;"></i>
     </span>
   </span>
-  <a href="/membership" data-i18n="ws.aitrial.cta" style="flex:0 0 auto;padding:5px 14px;border-radius:8px;
-     background:var(--th-bg-surface,#fff);color:#166534;font-weight:600;text-decoration:none;">{{ i18n.get('ws.aitrial.cta', '查看额度') }}</a>
+  <a href="/membership" data-i18n="ws.aitrial.cta" class="ws-aitrial-cta" style="flex:0 0 auto;padding:5px 14px;border-radius:8px;
+     background:var(--th-bg-surface,#fff);font-weight:600;text-decoration:none;">{{ i18n.get('ws.aitrial.cta', '查看额度') }}</a>
   <span onclick="_wsAiTrialDismiss()" data-i18n="ws.aitrial.dismiss" style="flex:0 0 auto;cursor:pointer;opacity:.75;
      padding:5px 8px;text-decoration:underline;">{{ i18n.get('ws.aitrial.dismiss', '知道了') }}</span>
 </div>
 <!-- 额度用尽升级弹窗：最高转化意向时刻——一天最多弹一次，CTA 带绑定码深链跳客服 -->
-<div id="ws-aitrial-upsell" style="display:none;position:fixed;inset:0;z-index:10000;
-     background:rgba(0,0,0,.55);backdrop-filter:blur(3px);align-items:center;justify-content:center;">
-  <div style="background:var(--th-bg-surface,#fff);color:var(--th-ink-strong,#0f172a);border-radius:16px;
-       max-width:420px;width:92vw;padding:1.7rem 1.6rem;box-shadow:0 8px 40px rgba(0,0,0,.3);text-align:center;">
+<div id="ws-aitrial-upsell" class="ws-upsell-mask" style="display:none;position:fixed;inset:0;z-index:10000;
+     backdrop-filter:blur(3px);align-items:center;justify-content:center;">
+  <div class="ws-upsell-card" style="background:var(--th-bg-surface,#fff);color:var(--th-ink-slate9,#0f172a);border-radius:16px;
+       max-width:420px;width:92vw;padding:1.7rem 1.6rem;text-align:center;">
     <div style="font-size:2.2rem;margin-bottom:.5rem;">⏳</div>
     <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 .5rem;">{{ i18n.get('ws.aitrial.up_title', '今日试用额度已用完') }}</h3>
-    <p style="font-size:.85rem;line-height:1.7;color:var(--th-ink-sub,#475569);margin:0 0 1.1rem;">
+    <p style="font-size:.85rem;line-height:1.7;color:var(--th-ink-slate6,#475569);margin:0 0 1.1rem;">
       {{ i18n.get('ws.aitrial.up_body', '明天会自动恢复。想现在继续用？联系客服领取字符包或开通正式版，报上你的绑定码即可秒到账。') }}
       <span id="ws-aitrial-up-code" style="display:none;font-family:monospace;font-weight:700;"></span>
     </p>
     <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-      <button id="ws-aitrial-up-cta" type="button" style="border:0;border-radius:10px;padding:.6rem 1.4rem;cursor:pointer;
-              background:linear-gradient(90deg,#166534,#15803d);color:#fff;font-size:.88rem;font-weight:600;">{{ i18n.get('ws.aitrial.up_cta', '联系客服续期') }}</button>
-      <button id="ws-aitrial-up-later" type="button" style="border:1px solid var(--th-line,#e2e8f0);border-radius:10px;padding:.6rem 1.2rem;
-              cursor:pointer;background:transparent;color:var(--th-ink-sub,#475569);font-size:.88rem;">{{ i18n.get('ws.aitrial.up_later', '明天再说') }}</button>
+      <button id="ws-aitrial-up-cta" type="button" class="ws-upsell-go" style="border:0;border-radius:10px;padding:.6rem 1.4rem;cursor:pointer;
+              font-size:.88rem;font-weight:600;">{{ i18n.get('ws.aitrial.up_cta', '联系客服续期') }}</button>
+      <button id="ws-aitrial-up-later" type="button" style="border:1px solid var(--th-bd-slate2,#e2e8f0);border-radius:10px;padding:.6rem 1.2rem;
+              cursor:pointer;background:transparent;color:var(--th-ink-slate6,#475569);font-size:.88rem;">{{ i18n.get('ws.aitrial.up_later', '明天再说') }}</button>
     </div>
   </div>
 </div>
@@ -919,8 +928,14 @@ document.addEventListener('click',function(e){
   }
   function heartbeat(){
     var sel=document.getElementById('ws-presence');
+    var body={status:sel?sel.value:'online',display_name:window.__wsAgent.name};
+    // P2 多开观测：携带本窗口指纹（id/路径/是否待机），服务端聚合出每人窗口数
+    try{
+      var mw=window.__wsMultiWin;
+      if(mw&&mw.winId) body.window={id:mw.winId,path:(location.pathname||'/'),standby:!!(mw.isStandby&&mw.isStandby())};
+    }catch(_){}
     apiFetch('/api/workspace/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({status:sel?sel.value:'online',display_name:window.__wsAgent.name})}, {timeoutMs: 60000}).catch(function(){});
+      body:JSON.stringify(body)}, {timeoutMs: 60000}).catch(function(){});
   }
   function loadFunnel(){
     apiFetch('/api/workspace/metrics/web-funnel').then(function(r){return r.json();}).then(function(d){
@@ -939,7 +954,9 @@ document.addEventListener('click',function(e){
       if(!agents.length){ el.textContent=''; return; }
       el.textContent = window.Tf('base.um.agents_online',{list:agents.map(function(a){
         var dot=a.status==='busy'?'🟡':(a.status==='online'?'🟢':'⚫');
-        return dot+(a.display_name||a.agent_id);
+        // P2 多开观测：同一坐席开着 >1 个窗口时缀 ×N（含待机窗口），主管一眼可见
+        var wn=(a.windows>1)?('×'+a.windows):'';
+        return dot+(a.display_name||a.agent_id)+wn;
       }).join(' · ')});
     }).catch(function(){});
   }
@@ -1981,6 +1998,8 @@ window.__wsNotify = (function(){
   document.addEventListener('keydown', _unlock);
   function _beep(urgent, force){
     if(prefs.sound===false && !force) return;
+    /* 多窗口去重：只有「提示音领导」窗口出声（试听 force 不受限）；见 __wsMultiWin */
+    if(!force && window.__wsMultiWin && !window.__wsMultiWin.canSound()) return;
     var c=_audioCtx(); if(!c) return;
     var vol=Math.max(0, Math.min(1, prefs.volume==null?0.6:prefs.volume));
     if(vol<=0 && !force) return;
@@ -2008,6 +2027,8 @@ window.__wsNotify = (function(){
   }
   // 系统/桌面通知：优先 Electron 壳原生（shell.notify），否则浏览器 Notification。
   function _desktop(title, body, onclick){
+    /* 多窗口去重：非领导窗口不弹系统通知（N 个窗口弹 N 条同内容是最扎眼的多开噪音） */
+    if(window.__wsMultiWin && !window.__wsMultiWin.canSound()) return false;
     try{
       if(window.shell && typeof window.shell.notify==='function'){
         window.shell.notify({title:title, body:body}); return true;
@@ -2032,6 +2053,8 @@ window.__wsNotify = (function(){
   }
   function onInboxMessage(d){
     d=d||{};
+    /* 待机窗口全静默（遮罩态，另一窗口在正常提醒） */
+    if(window.__wsMultiWin && window.__wsMultiWin.isStandby()) return;
     if(String(d.direction||'in')==='out') return;
     var ct=String(d.chat_type||'private').toLowerCase();
     var isGroup=(ct==='group'||ct==='channel');
@@ -2071,6 +2094,174 @@ window.__wsNotify = (function(){
       }catch(_){ cb&&cb(false); }
     },
     onInboxMessage:onInboxMessage,
+  };
+})();
+
+/* ── 多窗口协调器（P1 多开治理，2026-07-29）─────────────────────────────
+   同一浏览器 profile 内（localStorage + storage 事件，无需安全上下文——LAN http 下
+   Web Locks/部分 API 不可用，这是兼容性最好的方案）：
+   · 坐席工作台(/workspace)「单主控」：重复打开 → 新窗口出接管提示（在此使用/保持
+     待机）；被接管的旧窗口进待机（遮罩 + 停轮询停提示音，防双份负载与误操作）；
+     主控窗口关闭/崩溃 → 待机窗口自动接管（心跳过期判定）。
+   · 其余工作台页面放行多开（多屏看板是合法工作流），仅参与「提示音领导权」：
+     全局同一时刻只有一个窗口响铃/弹系统通知（顺带修「收件箱+看板两页同时响」）。
+   跨浏览器/跨设备的双发风险由服务端幂等键+草稿状态闸门兜底（P0），此处只是体验层。 */
+window.__wsMultiWin = (function(){
+  var PATH=(location.pathname||'/').replace(/\/+$/,'')||'/';
+  var SEAT=(PATH==='/workspace');
+  var WIN_ID=(function(){ try{ return crypto.randomUUID(); }catch(_){ return 'w-'+Date.now().toString(36)+Math.random().toString(36).slice(2,8); } })();
+  var K_PRIMARY='aitr.mw.primary::'+PATH;   /* 坐席页主控位（每路径一位） */
+  var K_SOUND='aitr.mw.soundlead';          /* 全局提示音领导位 */
+  var STALE_MS=15000, HB_MS=5000;
+  var state=SEAT?'pending':'active';        /* pending → active | standby（仅坐席页有 standby） */
+  var _ov=null;
+
+  function _read(k){ try{ return JSON.parse(localStorage.getItem(k)||'null'); }catch(_){ return null; } }
+  function _write(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(_){} }
+  function _del(k){ try{ localStorage.removeItem(k); }catch(_){} }
+  function _fresh(rec){ return !!(rec && rec.id && (Date.now()-(rec.ts||0))<STALE_MS); }
+  function _mine(rec){ return !!(rec && rec.id===WIN_ID); }
+
+  /* ── 提示音领导权 ── */
+  function _claimSound(force){
+    var rec=_read(K_SOUND);
+    if(force || _mine(rec) || !_fresh(rec)) _write(K_SOUND,{id:WIN_ID,ts:Date.now()});
+  }
+  function canSound(){
+    if(state==='standby') return false;
+    var rec=_read(K_SOUND);
+    if(!_fresh(rec)){ _claimSound(); return true; }  /* 无人领唱 → 接过并出声 */
+    return _mine(rec);
+  }
+
+  /* ── 待机遮罩（仅坐席页） ── */
+  function _ensureOverlay(){
+    if(_ov) return _ov;
+    var css=document.createElement('style');
+    css.textContent='.mw-mask{position:fixed;inset:0;z-index:99990;display:flex;align-items:center;justify-content:center;background:rgba(10,14,22,.58);backdrop-filter:blur(3px);}'
+      +'.mw-card{background:var(--tk-surface,#fff);color:var(--tk-text,#0f1b2d);border:1px solid var(--tk-border,#e5e6ea);border-radius:14px;box-shadow:var(--tk-shadow-md,0 8px 28px rgba(15,27,45,.2));max-width:400px;width:calc(100% - 48px);padding:26px 26px 22px;text-align:center;}'
+      +'.mw-ic{line-height:0;margin-bottom:12px;color:var(--tk-brand,#2563eb);}'
+      +'.mw-title{font-size:16px;font-weight:700;margin-bottom:8px;}'
+      +'.mw-body{font-size:12.5px;color:var(--tk-text-muted,#5b6b85);line-height:1.65;margin-bottom:18px;}'
+      +'.mw-btn{display:inline-block;border:1px solid var(--tk-border,#e5e6ea);background:var(--tk-surface-2,#f4f5f8);color:var(--tk-text,#0f1b2d);border-radius:9px;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer;margin:0 5px;}'
+      +'.mw-btn.pri{background:var(--tk-brand,#2563eb);border-color:var(--tk-brand,#2563eb);color:#fff;}';
+    document.head.appendChild(css);
+    _ov=document.createElement('div');
+    _ov.className='mw-mask'; _ov.id='mw-mask'; _ov.style.display='none';
+    // 图标用线性 SVG（currentColor 随主题）而非 emoji：缺 emoji 字体的环境会把
+    // 🪟 渲染成豆腐块（headless Chromium 实测），且与本仓「面板 emoji → 线性 SVG」
+    // 的既有方向一致。两个错位窗格 = 多窗口语义。
+    _ov.innerHTML='<div class="mw-card"><div class="mw-ic">'
+      +'<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+      +' stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+      +'<rect x="2.5" y="4" width="12" height="10" rx="1.6"/>'
+      +'<path d="M9.5 17.5V19a1.5 1.5 0 0 0 1.5 1.5h8A1.5 1.5 0 0 0 20.5 19v-8A1.5 1.5 0 0 0 19 9.5h-1.5"/>'
+      +'</svg></div>'
+      +'<div class="mw-title" id="mw-title"></div>'
+      +'<div class="mw-body" id="mw-body"></div>'
+      +'<div><button type="button" class="mw-btn pri" id="mw-use">'+window.T('base.multiwin.use_here')+'</button>'
+      +'<button type="button" class="mw-btn" id="mw-standby">'+window.T('base.multiwin.standby')+'</button></div></div>';
+    (document.body||document.documentElement).appendChild(_ov);
+    _ov.querySelector('#mw-use').addEventListener('click', takeover);
+    _ov.querySelector('#mw-standby').addEventListener('click', function(){ _render(); });
+    return _ov;
+  }
+  function _render(choice){
+    if(!SEAT) return;
+    var ov=_ensureOverlay();
+    if(state!=='standby'){ ov.style.display='none'; return; }
+    ov.style.display='flex';
+    ov.querySelector('#mw-title').textContent=window.T(choice?'base.multiwin.title':'base.multiwin.standby_title');
+    ov.querySelector('#mw-body').textContent=window.T(choice?'base.multiwin.body':'base.multiwin.standby_body');
+    ov.querySelector('#mw-use').textContent=window.T(choice?'base.multiwin.use_here':'base.multiwin.resume');
+    ov.querySelector('#mw-standby').style.display=choice?'':'none';
+  }
+
+  function _setState(next, opts){
+    if(state===next) return;
+    state=next;
+    window.__wsStandby=(next==='standby');
+    if(next==='standby'){
+      var s=_read(K_SOUND); if(_mine(s)) _del(K_SOUND);   /* 待机让出声音领导 */
+    } else if(SEAT){
+      _write(K_PRIMARY,{id:WIN_ID,ts:Date.now()});
+      _claimSound(true);                                   /* 坐席主控优先领唱 */
+    }
+    _render(opts && opts.choice);
+    try{ window.dispatchEvent(new CustomEvent('ws-standby-change',{detail:{standby:(next==='standby')}})); }catch(_){}
+  }
+
+  /* 在此使用：抢主控（旧主控经 storage 事件自动退待机） */
+  function takeover(){
+    _write(K_PRIMARY,{id:WIN_ID,ts:Date.now()});
+    _setState('active');
+    try{ CRMW.toast(window.T('base.multiwin.taken'),'#0f766e'); }catch(_){}
+  }
+
+  /* ── 坐席页竞选 ── */
+  function _boot(){
+    if(!SEAT){ _claimSound(false); return; }
+    var rec=_read(K_PRIMARY);
+    if(_fresh(rec) && !_mine(rec)){
+      state='standby'; window.__wsStandby=true;
+      _render(true);   /* 首见重复：出「在此使用/保持待机」选择 */
+      try{ window.dispatchEvent(new CustomEvent('ws-standby-change',{detail:{standby:true}})); }catch(_){}
+      return;
+    }
+    _write(K_PRIMARY,{id:WIN_ID,ts:Date.now()});
+    setTimeout(function(){
+      if(_mine(_read(K_PRIMARY))) _setState('active');
+      else { _setState('standby',{choice:true}); }
+    },150);
+  }
+
+  /* 心跳：主控续租 + 声音领导续租 */
+  setInterval(function(){
+    if(state!=='active') return;
+    if(SEAT) _write(K_PRIMARY,{id:WIN_ID,ts:Date.now()});
+    var s=_read(K_SOUND);
+    if(_mine(s) || !_fresh(s)) _claimSound(SEAT);
+  }, HB_MS);
+
+  /* 待机哨兵：主控失联（关窗/崩溃心跳过期）→ 随机抖动后自动接管，保联系不中断 */
+  setInterval(function(){
+    if(!SEAT || state!=='standby') return;
+    if(_fresh(_read(K_PRIMARY))) return;
+    setTimeout(function(){
+      if(_fresh(_read(K_PRIMARY))) return;    /* 另一待机窗口已接管 */
+      _write(K_PRIMARY,{id:WIN_ID,ts:Date.now()});
+      setTimeout(function(){
+        if(_mine(_read(K_PRIMARY))){
+          _setState('active');
+          try{ CRMW.toast(window.T('base.multiwin.promoted'),'#0f766e'); }catch(_){}
+        }
+      },150);
+    }, Math.floor(Math.random()*400));
+  }, 10000);
+
+  /* 被抢主控：storage 事件即时退待机（无需轮询） */
+  window.addEventListener('storage', function(e){
+    if(!e || !SEAT || e.key!==K_PRIMARY) return;
+    var rec=_read(K_PRIMARY);
+    if(state==='active' && _fresh(rec) && !_mine(rec)) _setState('standby');
+  });
+
+  /* 退出释放（正常关窗即时让位；崩溃由 STALE_MS 兜底） */
+  window.addEventListener('pagehide', function(){
+    try{
+      if(SEAT && _mine(_read(K_PRIMARY))) _del(K_PRIMARY);
+      if(_mine(_read(K_SOUND))) _del(K_SOUND);
+    }catch(_){}
+  });
+
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', _boot);
+  else _boot();
+
+  return {
+    isStandby:function(){ return state==='standby'; },
+    canSound:canSound,
+    takeover:takeover,
+    winId:WIN_ID,
   };
 })();
 

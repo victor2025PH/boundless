@@ -215,6 +215,38 @@ _DEFAULT_PERSONA: Dict[str, Any] = {
 }
 
 
+def profile_rev(profile: Optional[Dict[str, Any]]) -> str:
+    """**通用**内容指纹（乐观锁 rev，多开治理 2026-07-29）。
+
+    canonical JSON（键排序）→ sha1 前 12 位；空/None → ""。纯函数：同内容恒同 rev、
+    任一字段变化即变。用于「加载时取 rev → 保存时带 expected_rev → 不一致 409」的
+    丢更新防线（两个窗口/两坐席同编一份文档，后保存方被拦下确认再覆盖）。
+
+    现有消费方（都是**整文档替换**语义的长编辑表单）：
+      - 人设档案 ``/api/personas/profiles/{id}``（首个落地点，函数名由此而来）
+      - 全局规则 ``/api/persona/global-rules``（影响所有人设，覆盖破坏面最大）
+      - 意图关键词 ``/api/settings/intent-keywords``（整字典替换，删除意图必须生效）
+
+    ⚠️ **不要**给字段级 patch 语义的端点加 rev（如 ``/api/settings/save`` 的
+    ``{section, fields}``）：那类端点两窗口改不同字段本就能正确合并，加 rev 只会制造
+    假冲突（A 改 temperature、B 改 max_tokens 本该都成功）。判据＝**整文档替换才需要**。
+
+    ``None``（文档不存在）→ ``""``；``{}``（存在但为空）→ 真指纹。二者刻意分开：
+    若空文档也返回 ""，前端就不会带 expected_rev，「两个窗口都从空表开始各加一批
+    内容」这种最典型的丢更新场景反而**毫无保护**（意图关键词表实测踩到）。
+    而 ``""`` 保留给「档案已被删除」——此时任何 expected_rev 都对不上，正确地 409。
+    """
+    if profile is None:
+        return ""
+    import hashlib
+    import json as _json
+    try:
+        blob = _json.dumps(profile, ensure_ascii=False, sort_keys=True, default=str)
+    except Exception:
+        blob = repr(sorted((str(k), str(v)) for k, v in profile.items()))
+    return hashlib.sha1(blob.encode("utf-8", "replace")).hexdigest()[:12]
+
+
 class PersonaManager:
     """Manages persona lifecycle, multi-group binding, and prompt assembly."""
 
@@ -286,8 +318,10 @@ class PersonaManager:
         self._last_canonical_sync_at: float = 0.0
         # S6-RULES: global_rules.yaml hot-reload cache
         self._global_rules: Optional[Dict[str, Any]] = None
-        # (mtime, size)：单看 mtime 会漏掉同一时钟刻度内（Win 约 15ms）的连续两次写
-        self._global_rules_sig: tuple = (0.0, -1)
+        # (路径, mtime, size)：单看 mtime 会漏掉同一时钟刻度内（Win 约 15ms）的连续两次写；
+        # 带路径是为了让「读取落点从出厂默认翻到数据区那份」也判为缓存失效（见下方 overlay 说明）
+        self._global_rules_sig: tuple = ("", 0.0, -1)
+        #: **显式覆写**读写落点（测试/调用方指定）；None = 按 overlay 顺序每次重算
         self._global_rules_path: Optional[Path] = None
 
     @classmethod
@@ -310,33 +344,89 @@ class PersonaManager:
                 persona_data.get("role", "?"),
             )
 
-    # ── S6-RULES: global_rules.yaml hot-reload ──────────────────────────────
+    # ── S6-RULES: global_rules.yaml hot-reload（overlay 落盘，2026-07-29）────────
+    #
+    # 为什么分「出厂默认」与「可写数据区」两个位置：
+    #   旧实现读写同一个 ``<repo>/config/global_rules.yaml``——那是**共享代码根**
+    #   （``deploy/instances/start_zhiliao.ps1`` 明写「代码：共享，只读；改代码走 git」），
+    #   且被 git 跟踪。后果：① 运营每次在 UI 改全局规则都把仓库改脏，可能撞
+    #   ``restart_instance.ps1`` 的脏树闸门；② 打包态那是只读安装目录，改根本存不下；
+    #   ③ 这也是「测试写到生产配置」那类事故的土壤（2026-07-29 实锤，13 条回复硬约束
+    #   被一个路由测试清空）。
+    #
+    # 新语义（与本仓 ``config.yaml`` + ``config.local.yaml`` 的 overlay 约定同构，
+    # 路径顺序复用唯一事实源 ``licensing.data_paths.config_dir()``）：
+    #   读：可写数据区那份存在就用它，否则回落仓库那份（**出厂默认**）。
+    #   写：只写可写数据区；首次保存自动把出厂默认迁过去（并进 .bak.1 供「恢复出厂」）。
+    #
+    # 安全底线：读永远有回落，最坏情况是「读到出厂默认」，**绝不会读成空**
+    # （空 = 所有人设丢掉硬约束，含「不要自称AI」这类安全项）。
+    #
+    # ⚠️ ``self._global_rules_path`` 现在只表示**显式覆写**（测试/调用方指定），
+    #   ``None`` = 每次按上面顺序重算。刻意不再把自动解析结果缓存进该字段——旧实现
+    #   缓存后，首次保存把内容写到数据区、读路径却仍钉在仓库那份 → 「运营改了却读不到」。
+
+    def _global_rules_factory_path(self) -> Path:
+        """出厂默认（仓库内，随 git 分发；只读语义）。"""
+        return Path(__file__).resolve().parents[2] / "config" / GLOBAL_RULES_FILENAME
+
+    def _global_rules_data_path(self) -> Path:
+        """可写数据区那份（AITR_CONFIG_PATH 父 → AITR_DATA_DIR/config → 仓内 config）。"""
+        try:
+            from src.licensing.data_paths import config_dir  # 无内部依赖，无循环导入
+            return config_dir() / GLOBAL_RULES_FILENAME
+        except Exception:  # noqa: BLE001 - helper 不可用时退回出厂位置（行为同旧版）
+            return self._global_rules_factory_path()
+
+    def global_rules_write_path(self) -> Path:
+        """保存/备份的落点：显式覆写优先，否则可写数据区。"""
+        if self._global_rules_path is not None:
+            return self._global_rules_path
+        return self._global_rules_data_path()
+
+    def global_rules_read_path(self) -> Optional[Path]:
+        """读取落点：显式覆写 > 数据区（存在即用）> 出厂默认；都没有返回 None。"""
+        if self._global_rules_path is not None:
+            return self._global_rules_path
+        d = self._global_rules_data_path()
+        if d.exists():
+            return d
+        f = self._global_rules_factory_path()
+        return f if f.exists() else None
+
+    def global_rules_source(self) -> Dict[str, Any]:
+        """当前生效来源（供 API/运维回答「我改的存哪了、是否已覆盖出厂默认」）。"""
+        read_p = self.global_rules_read_path()
+        write_p = self.global_rules_write_path()
+        return {
+            "read_path": str(read_p) if read_p else "",
+            "write_path": str(write_p),
+            # True＝正在读实例自己那份（出厂默认已被本实例覆盖）
+            "is_instance_override": bool(read_p and read_p == write_p and read_p.exists()),
+            "factory_path": str(self._global_rules_factory_path()),
+        }
+
     def _load_global_rules(self) -> Dict[str, Any]:
         """Load global_rules.yaml with mtime-based hot-reload. Returns cached dict."""
-        if self._global_rules_path is None:
-            # auto-discover: same dir as persona_runtime or config/
-            for candidate in [
-                Path(__file__).resolve().parents[2] / "config" / GLOBAL_RULES_FILENAME,
-            ]:
-                if candidate.exists():
-                    self._global_rules_path = candidate
-                    break
-            if self._global_rules_path is None:
-                return {}
-        p = self._global_rules_path
+        p = self.global_rules_read_path()
+        if p is None:
+            return self._global_rules or {}
         if not p.exists():
             return self._global_rules or {}
         try:
             stat = p.stat()
-            sig = (stat.st_mtime, stat.st_size)
+            # 签名带路径：读取落点从「出厂默认」翻到「数据区那份」时（首次保存后）
+            # 必须判为缓存失效，否则会继续端出旧内容。
+            sig = (str(p), stat.st_mtime, stat.st_size)
             if sig != self._global_rules_sig or self._global_rules is None:
                 with open(p, "r", encoding="utf-8") as f:
                     data = yaml.safe_load(f) or {}
                 self._global_rules = data
                 self._global_rules_sig = sig
-                if sig[0] != 0:
-                    logger.info("global_rules.yaml loaded (mtime=%.0f, %d constraints)",
-                                sig[0], len(data.get("reply_constraints", [])))
+                if stat.st_mtime != 0:
+                    logger.info(
+                        "global_rules.yaml loaded from %s (mtime=%.0f, %d constraints)",
+                        p, stat.st_mtime, len(data.get("reply_constraints", [])))
         except Exception as exc:
             logger.warning("global_rules.yaml load failed: %s", exc)
         return self._global_rules or {}
@@ -348,15 +438,19 @@ class PersonaManager:
     _BACKUP_MAX = 3  # S6-RULES P2-c: keep last N backups
 
     def save_global_rules(self, data: Dict[str, Any]) -> bool:
-        """Save global_rules.yaml with backup rotation. Returns True on success."""
-        if self._global_rules_path is None:
-            self._load_global_rules()  # discover path
-        if self._global_rules_path is None:
-            self._global_rules_path = (
-                Path(__file__).resolve().parents[2] / "config" / GLOBAL_RULES_FILENAME
-            )
+        """Save global_rules.yaml（落**可写数据区**）with backup rotation。
+
+        首次保存（数据区还没有那份）且出厂默认存在 → 先把出厂内容拷过去再走轮转，
+        于是 ``.bak.1`` = 出厂默认，运营点「恢复槽位1」即可回到出厂状态。
+        """
         try:
-            p = self._global_rules_path
+            p = self.global_rules_write_path()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            if not p.exists():
+                factory = self._global_rules_factory_path()
+                if factory.exists() and factory != p:
+                    import shutil
+                    shutil.copy2(factory, p)   # 迁移种子：让 .bak.1 拿到出厂默认
             # S6-RULES P2-c: rotate backups before overwrite
             if p.exists():
                 self._rotate_backups(p)
@@ -364,9 +458,9 @@ class PersonaManager:
                 yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
             self._global_rules = data
             st = p.stat()
-            self._global_rules_sig = (st.st_mtime, st.st_size)
-            logger.info("global_rules.yaml saved (%d constraints)",
-                        len(data.get("reply_constraints", [])))
+            self._global_rules_sig = (str(p), st.st_mtime, st.st_size)
+            logger.info("global_rules.yaml saved to %s (%d constraints)",
+                        p, len(data.get("reply_constraints", [])))
             return True
         except Exception as exc:
             logger.error("global_rules.yaml save failed: %s", exc)
@@ -391,15 +485,15 @@ class PersonaManager:
             logger.warning("global_rules backup rotation failed: %s", exc)
 
     def list_backups(self) -> list:
-        """Return list of backup dicts [{slot, mtime_iso, path}, …]."""
-        if self._global_rules_path is None:
-            self._load_global_rules()
-        if self._global_rules_path is None:
-            return []
+        """Return list of backup dicts [{slot, mtime_iso, path}, …]。
+
+        备份与**写入落点**同目录（可写数据区）——全新实例还没保存过 → 无备份 → 空表。
+        """
         import datetime
+        target = self.global_rules_write_path()
         result = []
         for i in range(1, self._BACKUP_MAX + 1):
-            bp = self._global_rules_path.with_suffix(f".yaml.bak.{i}")
+            bp = target.with_suffix(f".yaml.bak.{i}")
             if bp.exists():
                 mt = bp.stat().st_mtime
                 result.append({
@@ -411,11 +505,7 @@ class PersonaManager:
 
     def restore_backup(self, slot: int) -> bool:
         """Restore a backup by slot number. Returns True on success."""
-        if self._global_rules_path is None:
-            self._load_global_rules()
-        if self._global_rules_path is None:
-            return False
-        bp = self._global_rules_path.with_suffix(f".yaml.bak.{slot}")
+        bp = self.global_rules_write_path().with_suffix(f".yaml.bak.{slot}")
         if not bp.exists():
             return False
         try:

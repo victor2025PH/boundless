@@ -485,21 +485,35 @@ def register_settings_routes(app, ctx):
     async def api_get_intent_keywords(request: Request):
         """获取所有意图关键词配置"""
         _api_auth(request)
+        from src.utils.persona_manager import profile_rev
         cfg = config_manager.config or {}
         intent_cfg = cfg.get("intent", {})
+        _kw = intent_cfg.get("keywords", {})
         return {
-            "keywords": intent_cfg.get("keywords", {}),
+            "keywords": _kw,
             "patterns": intent_cfg.get("patterns", {}),
+            # rev＝乐观锁指纹（多开治理）：本表是**整字典替换**语义，两窗口先后保存
+            # 会让后者整体抹掉前者新增/删除的意图 → 编辑器带 expected_rev 回传
+            "rev": profile_rev(_kw),
         }
 
     @app.put("/api/settings/intent-keywords")
     async def api_update_intent_keywords(request: Request):
         """更新意图关键词配置 + 热更新 SkillManager"""
         _api_auth(request)
+        from src.utils.persona_manager import profile_rev
         body = await request.json()
         new_kw = body.get("keywords")
         if not isinstance(new_kw, dict):
             raise HTTPException(400, tr(request, "err.set.keywords_format"))
+
+        # 乐观锁：带 expected_rev 且当前指纹已变 → 409 拒写（他人在你编辑期间改过
+        # 意图表）。不带 expected_rev＝旧契约零破坏；前端 409 后确认可免键覆盖。
+        expected_rev = str(body.get("expected_rev") or "")
+        if expected_rev:
+            _cur = ((config_manager.config or {}).get("intent") or {}).get("keywords", {})
+            if profile_rev(_cur) != expected_rev:
+                raise HTTPException(409, tr(request, "err.persona.stale_rev"))
 
         cfg = config_manager.config
         if "intent" not in cfg:
@@ -519,7 +533,9 @@ def register_settings_routes(app, ctx):
         if audit_store:
             audit_store.log(actor, "update_intent_keywords", "",
                             "", f"intents={list(new_kw.keys())}")
-        return {"ok": True, "intents": list(new_kw.keys())}
+        # 回传落库后的新指纹，编辑器就地更新基线（免一次重取）
+        return {"ok": True, "intents": list(new_kw.keys()),
+                "rev": profile_rev(new_kw)}
 
     @app.post("/api/settings/test-intent")
     async def api_test_intent(request: Request):

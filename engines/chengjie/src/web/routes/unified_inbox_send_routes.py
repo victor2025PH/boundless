@@ -107,6 +107,62 @@ def _rpa_auto_voice_enabled(request: Request, platform: str, account_id: str) ->
         return False
 
 
+async def _deliver_bubble_parts(
+    request: Request, platform: str, account_id: str, chat_key: str,
+    parts, adapters, *, reply_to, bcfg,
+):
+    """把多条气泡按拟人节奏逐条发出（P1.5 手动路径分条）。
+
+    语义对齐语音 split_send / autosend 分条：仅首条带 reply_to；条间
+    typing + 思考/打字延迟；首条失败原样抛出（外层释放幂等键），中途失败
+    已发算数、剩余丢弃。返回 (首条 result, 实发条数)。
+    """
+    from src.inbox.reply_split import inter_part_delay_sec
+    _orch = None
+    try:
+        from src.integrations.account_orchestrator import get_orchestrator
+        _o = get_orchestrator()
+        if _o.owns(platform, account_id):
+            _orch = _o
+    except Exception:
+        _orch = None
+    first_result = None
+    sent = 0
+    for i, part in enumerate(parts):
+        if i > 0:
+            if _orch is not None:
+                try:
+                    await _orch.send_chat_action(
+                        platform, account_id, str(chat_key), "typing")
+                except Exception:
+                    pass
+            try:
+                await asyncio.sleep(inter_part_delay_sec(
+                    part,
+                    gap_sec_lo=float(bcfg["gap_sec_lo"]),
+                    gap_sec_hi=float(bcfg["gap_sec_hi"]),
+                    per_char_sec=float(bcfg["per_char_sec"]),
+                ))
+            except Exception:
+                await asyncio.sleep(0.8)
+        try:
+            res = await send_via_adapters(
+                request, platform, account_id, chat_key, part, adapters,
+                reply_to=(reply_to if i == 0 else None), mentions=None,
+            )
+        except Exception:
+            if sent == 0:
+                raise
+            logger.warning(
+                "[send] 气泡分条中途失败，已发 %d/%d platform=%s",
+                sent, len(parts), platform)
+            break
+        if i == 0:
+            first_result = res
+        sent += 1
+    return first_result, sent
+
+
 def register_send_routes(app, *, api_auth, page_auth) -> None:
     """挂载文本/媒体/语音发送 + 直发能力探测端点。"""
 
@@ -133,6 +189,23 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             raise HTTPException(400, tr(request, "err.inbox.chat_text_empty"))
         if _account_removed(platform, account_id):
             raise HTTPException(409, tr(request, "err.inbox.account_removed"))
+
+        # P0 幂等键（2026-07-29 多开/双击防双发）：前端每次提交带 client_msg_id，
+        # 同 (会话, id) 在 TTL 窗口内重复提交按「已发送」应答但不再真发；
+        # 发送失败会释放占位（同 id 显式重试仍可通过）。不带 id=旧行为。
+        from src.inbox.send_dedup import get_send_dedup
+        _client_msg_id = str(body.get("client_msg_id") or "").strip()
+        _dedup = get_send_dedup()
+        _dedup_scope = f"{platform}:{account_id}:{chat_key}"
+        if not _dedup.reserve(_dedup_scope, _client_msg_id):
+            logger.info(
+                "[send] 幂等去重命中，拒绝重复发送 scope=%s id=%s",
+                _dedup_scope, _client_msg_id[:16])
+            return {
+                "ok": True, "duplicate": True,
+                "result": {"duplicate": True},
+                "original_text": text, "sent_text": text, "translation": None,
+            }
 
         # —— 发送前翻译（outbound 闭环）：默认关闭，显式 target_lang / "auto" 才触发 ——
         original_text = text
@@ -210,30 +283,97 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             _mentions = None
         else:
             _mentions = [str(x) for x in _mentions if x]
+        # —— P1.5 多句分条（inbox.reply_style.bubbles）：翻译后的 text 已是客户可读文本。
+        #    前端显式 opt-in（body.bubbles，气泡 chip 可切）+ 配置总闸 + 编排器/私聊守卫；
+        #    带 @提及的发送不拆（提及只在群里有意义，群本就不拆——双保险）。
+        _bubble_parts: list = []
+        _bubble_cfg: Dict[str, Any] = {}
+        if bool(body.get("bubbles")) and _mentions is None:
+            try:
+                from src.inbox.reply_split import (
+                    parse_bubbles_cfg,
+                    should_split_for_delivery,
+                    split_reply_parts,
+                )
+                _cfg_root = getattr(
+                    getattr(request.app.state, "config_manager", None),
+                    "config", None) or {}
+                _bubble_cfg = parse_bubbles_cfg(_cfg_root)
+                _orch_owns = False
+                try:
+                    from src.integrations.account_orchestrator import get_orchestrator
+                    _orch_owns = get_orchestrator().owns(platform, account_id)
+                except Exception:
+                    _orch_owns = False
+                if should_split_for_delivery(
+                    cfg=_bubble_cfg, platform=platform, chat_key=chat_key,
+                    orch_owns=_orch_owns,
+                ):
+                    _cand = split_reply_parts(
+                        text,
+                        max_parts=int(_bubble_cfg["max_parts"]),
+                        max_chars=int(_bubble_cfg["max_chars"]),
+                        min_tail_chars=int(_bubble_cfg["min_tail_chars"]),
+                        min_total_chars=int(_bubble_cfg["min_total_chars"]),
+                    )
+                    if len(_cand) >= 2:
+                        _bubble_parts = _cand
+            except Exception:
+                logger.debug("[send] 气泡分条判定失败，整段发送", exc_info=True)
+        _bubbles_info: Optional[Dict[str, Any]] = None
         try:
-            result = await send_via_adapters(
-                request, platform, account_id, chat_key, text, _INBOX_ADAPTERS,
-                reply_to=_reply_to, mentions=_mentions,
-            )
+            if _bubble_parts:
+                result, _bub_sent = await _deliver_bubble_parts(
+                    request, platform, account_id, chat_key,
+                    _bubble_parts, _INBOX_ADAPTERS,
+                    reply_to=_reply_to, bcfg=_bubble_cfg,
+                )
+                _bubbles_info = {
+                    "parts_total": len(_bubble_parts),
+                    "parts_sent": _bub_sent,
+                }
+                try:
+                    from src.inbox.reply_split import record_bubble_send
+                    record_bubble_send(
+                        "manual", _bub_sent,
+                        partial=_bub_sent < len(_bubble_parts))
+                except Exception:
+                    pass
+            else:
+                result = await send_via_adapters(
+                    request, platform, account_id, chat_key, text, _INBOX_ADAPTERS,
+                    reply_to=_reply_to, mentions=_mentions,
+                )
         except ChannelSendError as ex:
+            _dedup.release(_dedup_scope, _client_msg_id)  # 失败释放：同 id 重试可再发
             raise HTTPException(ex.status_code, ex.detail)
+        except Exception:
+            _dedup.release(_dedup_scope, _client_msg_id)
+            raise
         cid = (result.get("conversation_id") if isinstance(result, dict) else None) \
             or _conv_id(platform, account_id, chat_key)
         _mark_send(cid)
         # P1：发生发送前翻译时，旁路记录「实发译文 → 中文原文/质量」，供 /thread 富集出向双行
         # （跨刷新/重启/设备持久；不触碰 messages 去重）。best-effort，失败不影响发送。
+        # 分条发送时逐条记录（thread 富集按每条消息文本精确匹配，整段键匹配不上分条行）。
         if translation_info and cid:
             _ibx_xl = _inbox_store(request)
             if _ibx_xl is not None:
-                try:
-                    _ibx_xl.record_outbound_translation(
-                        cid, sent_text=text, original_text=original_text,
-                        source_lang=source_lang, target_lang=target_lang,
-                        provider=str(translation_info.get("provider") or ""),
-                        error=str(translation_info.get("error") or ""),
-                    )
-                except Exception:
-                    logger.debug("record_outbound_translation 失败（已忽略）", exc_info=True)
+                _sent_rows = (
+                    _bubble_parts[: (_bubbles_info or {}).get("parts_sent", 0)]
+                    if _bubble_parts else [text]
+                )
+                for _row_text in _sent_rows:
+                    try:
+                        _ibx_xl.record_outbound_translation(
+                            cid, sent_text=_row_text, original_text=original_text,
+                            source_lang=source_lang, target_lang=target_lang,
+                            provider=str(translation_info.get("provider") or ""),
+                            error=str(translation_info.get("error") or ""),
+                        )
+                    except Exception:
+                        logger.debug(
+                            "record_outbound_translation 失败（已忽略）", exc_info=True)
         copilot_meta = body.get("copilot_meta")
         if copilot_meta and cid:
             ibx = _inbox_store(request)
@@ -273,6 +413,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             "original_text": original_text,
             "sent_text": text,
             "translation": translation_info,
+            "bubbles": _bubbles_info,
         }
 
     @app.post("/api/unified-inbox/send-media")
@@ -305,6 +446,17 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         if len(data) > 25 * 1024 * 1024:
             raise HTTPException(413, tr(request, "err.inbox.file_too_large"))
 
+        # P0 幂等键（与文本 send 同口径；置于全部校验之后、真发送之前）
+        from src.inbox.send_dedup import get_send_dedup
+        _client_msg_id = str(form.get("client_msg_id") or "").strip()
+        _dedup = get_send_dedup()
+        _dedup_scope = f"media:{platform}:{account_id}:{chat_key}"
+        if not _dedup.reserve(_dedup_scope, _client_msg_id):
+            logger.info(
+                "[send-media] 幂等去重命中，拒绝重复发送 scope=%s id=%s",
+                _dedup_scope, _client_msg_id[:16])
+            return {"ok": True, "duplicate": True}
+
         from src.integrations.protocol_bridge import save_outbound_media
         local, url, mtype = save_outbound_media(
             platform, account_id, upload.filename, data)
@@ -314,6 +466,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 platform, account_id, chat_key,
                 media_path=local, media_url=url, media_type=mtype, caption=caption)
         except Exception as ex:  # noqa: BLE001
+            _dedup.release(_dedup_scope, _client_msg_id)  # 失败释放：同 id 重试可再发
             raise HTTPException(502, tr(request, "err.inbox.media_send_failed", err=ex))
         cid = _conv_id(platform, account_id, chat_key)
         try:
@@ -352,9 +505,21 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         if _account_removed(platform, account_id):
             raise HTTPException(409, tr(request, "err.inbox.account_removed"))
 
+        # P0 幂等键（与文本 send 同口径；语音双发还烧双份 TTS/GPU，更值得拦）
+        from src.inbox.send_dedup import get_send_dedup
+        _client_msg_id = str(body.get("client_msg_id") or "").strip()
+        _dedup = get_send_dedup()
+        _dedup_scope = f"voice:{platform}:{account_id}:{chat_key}"
+        if not _dedup.reserve(_dedup_scope, _client_msg_id):
+            logger.info(
+                "[send-voice] 幂等去重命中，拒绝重复发送 scope=%s id=%s",
+                _dedup_scope, _client_msg_id[:16])
+            return {"ok": True, "duplicate": True}
+
         from src.integrations.account_orchestrator import get_orchestrator
         orch = get_orchestrator()
         if not orch.owns_media(platform, account_id):
+            _dedup.release(_dedup_scope, _client_msg_id)
             raise HTTPException(501, tr(request, "err.inbox.voice_unsupported"))
 
         # P0-4/C3：字符额度用尽且 licensing.enforce 开 → 402 + i18n（明确错误码，
@@ -404,8 +569,10 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             result = await tts.synthesize(
                 text, timeout_sec=45.0, emotion=voice_ctx.get("emotion"))
         except Exception as ex:  # noqa: BLE001
+            _dedup.release(_dedup_scope, _client_msg_id)
             raise HTTPException(502, tr(request, "err.inbox.tts_failed", err=ex))
         if not result.ok or not result.audio_path:
+            _dedup.release(_dedup_scope, _client_msg_id)
             # 坐席链此前只有 debug 日志：合成失败在 app.log 里查不到原因（全天零记录），
             # 排障只能靠坐席口述。失败/成功各一行 INFO 是后续所有诊断的地基。
             logger.warning(
@@ -482,6 +649,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 media_path=local, media_url=url, media_type="voice", caption=caption,
                 inbox_text=text)
         except Exception as ex:  # noqa: BLE001
+            _dedup.release(_dedup_scope, _client_msg_id)  # 失败释放：重试可再发
             raise HTTPException(502, tr(request, "err.inbox.voice_send_failed", err=ex))
         cid = _conv_id(platform, account_id, chat_key)
         try:
@@ -552,8 +720,29 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         voice_mode = "composer" if can_voice else "none"
         if not can_voice and _rpa_auto_voice_enabled(request, plat, acc):
             voice_mode = "auto_only"
+        # P1.5 分条能力探测：配置开 + （非 orch_only 或编排器拥有）才亮气泡 chip。
+        # 群聊判定在发送时按 chat_key 再守一道（caps 无 chat_key 维度）。
+        _bubbles_on = False
+        _bubbles_max = 3
+        try:
+            from src.inbox.reply_split import parse_bubbles_cfg
+            _bc = parse_bubbles_cfg(getattr(
+                getattr(request.app.state, "config_manager", None),
+                "config", None) or {})
+            _bubbles_max = int(_bc["max_parts"])
+            _owns = False
+            try:
+                from src.integrations.account_orchestrator import get_orchestrator
+                _owns = get_orchestrator().owns(plat, acc)
+            except Exception:
+                _owns = False
+            _bubbles_on = bool(
+                _bc["enabled"] and (not _bc["orch_only"] or _owns))
+        except Exception:
+            _bubbles_on = False
         return {
             "ok": True, "platform": plat, "account_id": acc,
             "can_media": can_media, "can_voice": can_voice,
             "voice_mode": voice_mode,
+            "bubbles": _bubbles_on, "bubbles_max_parts": _bubbles_max,
         }

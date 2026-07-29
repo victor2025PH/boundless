@@ -85,6 +85,10 @@ class DraftService:
             MessengerApprovalAdapter(messenger_service),
         ]
         self._by_kind = {a.source_kind: a for a in self._adapters}
+        # inbox 草稿人工通过后的真投递回调（2026-07-29 修「通过≠发送」断链）：
+        # async (draft_row: dict) -> Any，由 bootstrap 在 AutosendWorker 可投递时注入
+        # （deliver 关/未启用 worker 时为 None → 保持旧「仅 DB 标记」语义）。
+        self._inbox_deliver_cb: Optional[Any] = None
 
     # ── 读：跨平台统一列表（read-through）─────────────────────
 
@@ -99,10 +103,17 @@ class DraftService:
                 drafts.extend(adapter.list_drafts(status=status, limit=limit))
             except Exception:
                 logger.debug("source adapter %s 列举失败", adapter.source_kind, exc_info=True)
-        # inbox 自发草稿（无平台表，存在 reply_drafts）
-        if (not platform or platform == "inbox") and self._store is not None:
+        # inbox 自发草稿（无平台表，存在 reply_drafts）。
+        # 2026-07-29 修可见性断链：inbox 草稿行自带真实 platform（telegram/whatsapp…），
+        # 此前仅在 platform 为空或字面 "inbox" 时列出 → 工作台按会话平台过滤
+        # （/api/drafts?platform=telegram）永远看不到它们（生产实测 pending 积压 199h
+        # 无人处理的根因之一）。现按行内 platform 匹配；platform 空/"inbox" 保持旧行为。
+        if self._store is not None:
             try:
                 for row in self._store.list_drafts(source_kind="inbox", status=status, limit=limit):
+                    if platform and platform != "inbox" and str(
+                            row.get("platform") or "") != platform:
+                        continue
                     drafts.append(_row_to_unified(row))
             except Exception:
                 logger.debug("inbox 自发草稿列举失败", exc_info=True)
@@ -185,6 +196,42 @@ class DraftService:
 
     # ── 写：统一 resolve 派发 ─────────────────────────────────
 
+    def set_inbox_deliver_callback(self, cb: Any) -> None:
+        """注册 inbox 草稿人工通过后的真投递回调（async (draft_row)->Any）。
+
+        由 bootstrap 在 AutosendWorker 具备投递能力（send_callback 非 None）时注入；
+        未注入=保持「通过仅 DB 标记」旧语义（deliver 关的部署是刻意选择）。
+        """
+        self._inbox_deliver_cb = cb
+
+    def _schedule_inbox_delivery(self, draft_row: Dict[str, Any]) -> bool:
+        """把人工通过的 inbox 草稿排进真投递（事件循环后台任务，不阻塞处置响应）。
+
+        返回是否成功排入。无回调 / 无运行中事件循环（纯同步测试、离线脚本）→ False，
+        行为退回「仅标记」。回调（AutosendWorker.deliver_human_approved）自吞异常并
+        负责失败审计 + 事件提醒，这里绝不抛。
+        """
+        cb = self._inbox_deliver_cb
+        if cb is None:
+            return False
+        text = str(draft_row.get("final_text") or draft_row.get("draft_text") or "").strip()
+        if not text or not str(draft_row.get("chat_key") or ""):
+            return False
+        try:
+            import asyncio
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.debug("人工通过投递跳过：当前线程无事件循环 draft=%s",
+                         draft_row.get("draft_id"))
+            return False
+        try:
+            loop.create_task(cb(dict(draft_row)))
+            return True
+        except Exception:
+            logger.warning("人工通过投递任务排入失败 draft=%s",
+                           draft_row.get("draft_id"), exc_info=True)
+            return False
+
     def resolve(self, draft_id: str, action: str, *, text: str = "", by: str = "") -> Dict[str, Any]:
         kind, _, sid = str(draft_id or "").partition(":")
         action = str(action or "").strip().lower()
@@ -192,7 +239,9 @@ class DraftService:
             return {"ok": False, "error": f"不支持的动作: {action}", "code": 400}
 
         # "inbox" source 草稿（auto_generate_draft 生成）：直接按 draft_id 更新状态，
-        # 无需渠道适配器。实际发送由下游渠道适配器（LINE/WA）异步处理。
+        # 无需渠道适配器。update_draft_status 自带「仅 pending/enriching 可转换」的
+        # 原子闸门——两个窗口/坐席同时处置同一草稿，只有一个成功，另一个拿 409
+        # （already_resolved），审计/事件/投递都只发生一次。
         if kind == "inbox" and self._store is not None:
             status = _action_to_status(action)
             try:
@@ -200,7 +249,16 @@ class DraftService:
                     draft_id, status=status, final_text=text or "", decided_by=by
                 )
                 if not updated:
-                    return {"ok": False, "error": "草稿不存在或已处理", "code": 404}
+                    row = self._store.get_draft(draft_id)
+                    if row is None:
+                        return {"ok": False, "error": "草稿不存在", "code": 404}
+                    return {
+                        "ok": False,
+                        "error": "草稿已被处理（其他窗口或同事）",
+                        "code": 409,
+                        "already_resolved": True,
+                        "current_status": str(row.get("status") or ""),
+                    }
                 return {"ok": True, "draft_id": draft_id, "status": status, "source": "inbox"}
             except Exception as e:
                 logger.debug("inbox draft resolve 失败: %s", e)
@@ -268,6 +326,7 @@ class DraftService:
         text: str = "",
         by: str = "",
         force_override: bool = False,
+        deliver: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """带 L4 强制拦截 + 审计的统一处置入口（替代裸 resolve）。
 
@@ -277,6 +336,14 @@ class DraftService:
           - L2（auto_ai + low）：autosend 动作直接走 approve，写 autosend 审计。
           - L3/L4 的所有正常审批也写审计，保证不漏记。
           - 关键词强制升级：peer_text/draft_text 命中敏感词时 risk 升级（不降级）。
+
+        deliver（2026-07-29 修「通过≠发送」断链）：
+          - None（默认）＝自动判定：人工 approve/edit_send 的 inbox 草稿在处置成功后
+            排入真投递（经注入的 AutosendWorker 回调，复用出站翻译/发图指令/桌面
+            受控出站同一条链）；autosend 动作不排（AutosendWorker 自己投递，防双发）。
+          - True＝显式排投递（bulk-autosend 路由等「人工触发的 autosend」用）。
+          - False＝显式只标记。
+          LINE/WA/Messenger 渠道草稿不经此路径——各渠道 runner 消费 approved 行。
         """
         action = str(action or "").strip().lower()
         # 获取当前草稿（含 overlay 风险数据）
@@ -350,6 +417,25 @@ class DraftService:
         real_action = "approve" if action == "autosend" else action
 
         result = self.resolve(draft_id, real_action, text=text, by=by)
+
+        # 人工通过 → 真投递（inbox 草稿此前只标记不发送：坐席点「发送」客户收不到，
+        # 生产实测 14 天零人工投递皆因此断链）。仅在处置成功后排入；闸门保证同一草稿
+        # 全局只会被排入一次（另一窗口/worker 的竞态方拿 409 不会走到这里）。
+        _kind = str(draft_id or "").partition(":")[0]
+        _should_deliver = (
+            deliver if deliver is not None
+            else action in ("approve", "edit_send")
+        )
+        if (result.get("ok") and _kind == "inbox" and _should_deliver
+                and self._store is not None):
+            try:
+                _fresh = self._store.get_draft(draft_id)
+                if _fresh:
+                    result["delivery"] = (
+                        "scheduled" if self._schedule_inbox_delivery(_fresh)
+                        else "skipped")
+            except Exception:
+                logger.debug("人工通过投递调度失败（忽略）", exc_info=True)
 
         # P1: 草稿成功批准后，发布 draft_resolved 事件（供 CRM 同步/外部集成订阅）
         if result.get("ok") and action in ("approve", "edit_send", "autosend"):

@@ -25,8 +25,8 @@ $rc = $LASTEXITCODE
 "[nightly] prerender exit=$rc" | Out-File $log -Append -Encoding utf8
 
 # 顺手对 7852 预热一轮 register_spk（夜间服务若重启过，speaker 缓存已丢；
-# 便宜且幂等，白天首句延迟更稳）
-python -c "import sys; sys.path.insert(0,'.'); import yaml; from pathlib import Path; d=yaml.safe_load(Path('config/config.yaml').read_text(encoding='utf-8')) or {}; o=yaml.safe_load(Path('config/config.local.yaml').read_text(encoding='utf-8')) or {}; f=lambda a,b:[a.__setitem__(k,(f(a[k],v) or v) if isinstance(v,dict) and isinstance(a.get(k),dict) else v) for k,v in b.items()] and a or a; f(d,o); from src.ai.avatar_voice import warmup_personas; print('warmed:', warmup_personas(d))" 2>&1 | Out-File $log -Append -Encoding utf8
+# 便宜且幂等，白天首句延迟更稳）。配置按「运行根契约」解析（实例数据根优先）。
+python -c "import sys; sys.path.insert(0,'.'); from scripts._data_root import resolve_data_roots, load_merged_config; from src.ai.avatar_voice import warmup_personas; [print(r, 'warmed:', warmup_personas(load_merged_config(r))) for r in resolve_data_roots()]" 2>&1 | Out-File $log -Append -Encoding utf8
 "[nightly] warmup exit=$LASTEXITCODE" | Out-File $log -Append -Encoding utf8
 
 # 音色相似度周期抽检（campplus CPU 声纹比对；灾难级漂移=exit 1 写进日志）

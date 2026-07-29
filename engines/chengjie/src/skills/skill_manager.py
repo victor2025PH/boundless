@@ -2655,6 +2655,7 @@ class SkillManager(LoggerMixin):
             user_context["_reply_strategy_id"] = strategy_id
 
             # 6. KB 混合检索（与 smart-reply 一致）
+            _kb_refs: list = []
             try:
                 _kb = self._kb_store_if_exists()
                 if _kb:
@@ -2663,6 +2664,13 @@ class SkillManager(LoggerMixin):
                     _kbc = _kb.build_ai_context_from_result(_res, lang=_lang)
                     if _kbc:
                         user_context["kb_context"] = _kbc
+                        # P2 证据链：留住本稿引用的条目（title/snippet），随返回
+                        # 透传给前端做「知识依据」chips——注入 prompt 的知识不再黑盒。
+                        try:
+                            from src.utils.kb_refs import extract_kb_refs
+                            _kb_refs = extract_kb_refs(_res)
+                        except Exception:
+                            _kb_refs = []
             except Exception:
                 self.logger.debug("%sKB 检索跳过", log_prefix, exc_info=True)
 
@@ -2794,7 +2802,7 @@ class SkillManager(LoggerMixin):
                 )
             except Exception:
                 pass
-            return {"reply": reply, "intent": intent}
+            return {"reply": reply, "intent": intent, "kb_refs": _kb_refs}
         except Exception:
             self.logger.warning("%s生成失败，回落上层兜底", log_prefix, exc_info=True)
             return None
@@ -4399,22 +4407,31 @@ class SkillManager(LoggerMixin):
                 facts, silent_hours=silent_hours, stage=stage,
                 intimacy=intimacy, min_silent_hours=min_silent_hours,
                 prefer_category=_pref,
+                variety_key=str(contact_key or key),
             )
             # C2：无记忆话题可回访时，用人设自己的生活片段主动分享近况（更像真人在过日子）。
-            if not str((_topic or {}).get("mode") or ""):
-                _life = self._life_beat_opener(contact_key or key, gate=_gate)
+            # P1 修死路径（2026-07-29）：select 在沉默达标时**必返回** gentle_checkin
+            # （mode 恒非空），旧判断 `if not mode` 永假 → 生活分享/天气开场从未触发
+            # （生产 outreach_log 48/48 全是 gentle_checkin 的根因之一）。改为：
+            # 无记忆钩子（gentle_checkin）先试 生活分享 → 天气强信号，都无货再落回
+            # 温和问候；有记忆钩子（follow_up）优先级不变。
+            # 配额语义同步修正：opener 构建不再扣生活分享周配额（record=False——
+            # 规划器对每个过闸候选都会构建 opener，构建即扣会把每周 2 次的配额
+            # 烧在从未发出的计划上），真发成功后经 mark_life_share_sent 落账。
+            from src.utils.proactive_topic import MODE_GENTLE_CHECKIN as _GC
+            if str((_topic or {}).get("mode") or "") == _GC:
+                _gapb = str((_topic or {}).get("gap_bucket") or "")
+                _life = self._life_beat_opener(
+                    contact_key or key, gate=_gate, record=False)
                 if _life:
                     _life["silent_hours"] = round(float(silent_hours or 0.0), 1)
-                    try:
-                        from src.companion.deep_persona_stats import get_deep_persona_stats
-                        get_deep_persona_stats().incr("life_shares")
-                    except Exception:
-                        pass
+                    _life["gap_bucket"] = _gapb
                     return _life
                 # 天气强信号开场（暴雨/雷暴/极端气温）：记忆与生活线都空时的轻量钩子
                 _wx = self._weather_opener(contact_key or key, gate=_gate)
                 if _wx:
                     _wx["silent_hours"] = round(float(silent_hours or 0.0), 1)
+                    _wx["gap_bucket"] = _gapb
                     return _wx
             return _topic
         except Exception:
@@ -4462,8 +4479,13 @@ class SkillManager(LoggerMixin):
             self.logger.debug("weather opener skipped", exc_info=True)
             return {}
 
-    def _life_beat_opener(self, contact_key: str, *, gate: str = "") -> Dict[str, Any]:
-        """C2：解析当前人设 → 生成"生活线主动分享"开场（deep_persona.life_line 开才生效）。"""
+    def _life_beat_opener(
+        self, contact_key: str, *, gate: str = "", record: bool = True,
+    ) -> Dict[str, Any]:
+        """C2：解析当前人设 → 生成"生活线主动分享"开场（deep_persona.life_line 开才生效）。
+
+        ``record=False``（P1 规划路径）：只构建不扣周配额——真发成功后由
+        ``mark_life_share_sent`` 落账；默认 True 保持旧调用方行为。"""
         try:
             _cfg = self.config.config if hasattr(self.config, "config") else (
                 self.config if isinstance(self.config, dict) else {})
@@ -4503,7 +4525,7 @@ class SkillManager(LoggerMixin):
                     ):
                         return {}
                     _op = build_life_beat_opener(persona, _now, gate=gate)
-                    if _op:
+                    if _op and record:
                         _st.record_life_share(_cid)
                     return _op
             except Exception:
@@ -4512,6 +4534,22 @@ class SkillManager(LoggerMixin):
         except Exception:
             self.logger.debug("life_beat opener 解析失败（忽略）", exc_info=True)
             return {}
+
+    def mark_life_share_sent(self, contact_key: str) -> None:
+        """生活分享开场**真发成功**后落账（P1：规划不扣配额、发出才扣）。绝不抛。"""
+        try:
+            from src.companion.deep_persona_store import get_deep_persona_store
+            _st = get_deep_persona_store()
+            _cid = str(contact_key or "")
+            if _st is not None and _cid:
+                _st.record_life_share(_cid)
+            try:
+                from src.companion.deep_persona_stats import get_deep_persona_stats
+                get_deep_persona_stats().incr("life_shares")
+            except Exception:
+                pass
+        except Exception:
+            self.logger.debug("life_share sent 落账失败（忽略）", exc_info=True)
 
     def build_ritual_opener(
         self,

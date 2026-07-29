@@ -105,7 +105,8 @@ def test_prefers_recent_on_tie():
 def test_no_facts_gentle_checkin():
     out = select_proactive_topic([], silent_hours=72)
     assert out["mode"] == MODE_GENTLE_CHECKIN
-    assert "最近" in out["directive"]
+    assert out["gap_bucket"] == "week"
+    assert "好几天没聊" in out["directive"]
 
 
 def test_long_absence_flag_and_soft_directive():
@@ -118,6 +119,66 @@ def test_short_silence_followup_not_long_absence():
     out = select_proactive_topic([_fact("在备考")], silent_hours=48)
     assert out["long_absence"] is False
     assert "久违" not in out["directive"]
+
+
+# ── P0 沉默分档：措辞对齐事实（「好久没联系」只许 ≥14 天档说）───────────
+
+def test_gap_bucket_boundaries():
+    from src.utils.proactive_topic import silence_gap_bucket
+    assert silence_gap_bucket(6) == "same_day"
+    assert silence_gap_bucket(23.9) == "same_day"
+    assert silence_gap_bucket(24) == "few_days"
+    assert silence_gap_bucket(71.9) == "few_days"
+    assert silence_gap_bucket(72) == "week"
+    assert silence_gap_bucket(14 * 24 - 1) == "week"
+    assert silence_gap_bucket(14 * 24) == "long"
+    assert silence_gap_bucket("bad") == "same_day"  # 非法输入取最保守档
+
+
+def test_checkin_same_day_forbids_long_absence_tone():
+    """沉默几小时（自适应节奏下常见）→ 指令必须禁止「好久没联系」并给替代打法。"""
+    out = select_proactive_topic([], silent_hours=6, min_silent_hours=4)
+    assert out["mode"] == MODE_GENTLE_CHECKIN
+    assert out["gap_bucket"] == "same_day"
+    assert "今天早些时候" in out["directive"]
+    assert "绝不要说「好久没联系" in out["directive"]
+    assert "最近怎么样" in out["directive"]  # 作为禁止项被点名
+
+
+def test_checkin_few_days_wording():
+    out = select_proactive_topic([], silent_hours=40)
+    assert out["gap_bucket"] == "few_days"
+    assert "一两天" in out["directive"]
+    assert "不要说「好久没联系」" in out["directive"]
+
+
+def test_checkin_long_gap_allows_reconnect_tone():
+    out = select_proactive_topic([], silent_hours=20 * 24)
+    assert out["gap_bucket"] == "long"
+    assert "很久没联系" in out["directive"]  # 事实确实如此，允许说
+    assert "久违" in out["directive"]
+
+
+def test_followup_short_gap_gets_anti_phrase_suffix():
+    out = select_proactive_topic(
+        [_fact("在备考")], silent_hours=6, min_silent_hours=4)
+    assert out["mode"] == MODE_FOLLOW_UP
+    assert out["gap_bucket"] == "same_day"
+    assert "别用「好久没联系" in out["directive"]
+
+
+def test_followup_week_gap_no_suffix():
+    out = select_proactive_topic([_fact("在备考")], silent_hours=100)
+    assert out["mode"] == MODE_FOLLOW_UP
+    assert out["gap_bucket"] == "week"
+    assert "别用「好久没联系" not in out["directive"]
+
+
+def test_silence_gap_phrase_humanizes():
+    from src.utils.proactive_topic import silence_gap_phrase
+    assert silence_gap_phrase(6) == "大约 6 小时"
+    assert silence_gap_phrase(30) == "大约 30 小时"
+    assert silence_gap_phrase(96) == "大约 4 天"
 
 
 def test_new_relationship_restraint_note():

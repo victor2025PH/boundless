@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import src.utils.gpu_watermark as gw
 from src.utils.gpu_watermark import (
+    config_state,
     parse_hosts,
     probe_hosts,
     summarize_fleet,
@@ -37,6 +38,28 @@ def test_parse_hosts_happy_and_gating():
     assert parse_hosts({}) == []
     # 非法条目被剔除
     assert parse_hosts(_cfg(hosts=[{"name": "x"}, "junk", {"base_url": "notaurl"}])) == []
+
+
+# ---------- config_state：区分「没开」与「开了但没配」----------
+# 2026-07-29 实测事故：overlay 只有 enabled:true、hosts 缺失 → 卡片静默隐藏数周，
+# 运营与文档都以为已生效。这两种状态必须可区分，否则永远查不出来。
+
+def test_config_state_three_way():
+    assert config_state(_cfg()) == "ready"
+    assert config_state(_cfg(enabled=False)) == "off"
+    assert config_state({}) == "off"                       # 整段缺失=没开
+    assert config_state({"ops": {"gpu_watermark": {}}}) == "off"
+
+
+def test_config_state_misconfigured_when_hosts_missing():
+    """开关开了但 hosts 缺失/全非法 → misconfigured（正是那次事故的形态）。"""
+    assert config_state({"ops": {"gpu_watermark": {"enabled": True}}}) == "misconfigured"
+    assert config_state(_cfg(hosts=[])) == "misconfigured"
+    assert config_state(_cfg(hosts=[{"name": "x"}, "junk"])) == "misconfigured"
+    # 至少一台合法即 ready（部分非法不算 misconfigured）
+    assert config_state(_cfg(hosts=[
+        "junk", {"name": "ok", "base_url": "http://1.2.3.4:11434", "vram_gb": 8},
+    ])) == "ready"
 
 
 # ---------- summarize_host ----------
@@ -147,3 +170,59 @@ async def test_probe_hosts_disabled_returns_none():
     _reset_cache()
     assert await probe_hosts(_cfg(enabled=False)) is None
     assert await probe_hosts({}) is None
+
+
+# ---------- 路由三态：misconfigured 必须可辨识 ----------
+
+def _route_client(cfg):
+    """挂 /api/admin/gpu-watermark 的最小 app（注册器取 ctx 属性，见 register 签名）。"""
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.web.routes import ops_overview_routes as R
+
+    R._GW_MISCONFIG_WARNED = False          # 复位一次性告警旗标
+    app = FastAPI()
+    ctx = SimpleNamespace(
+        api_auth=lambda request: True,
+        api_write=lambda perm: (lambda: True),   # 依赖工厂（见其他 ops 路由测试）
+        page_auth=lambda request: True,
+        templates=None,
+        config_manager=SimpleNamespace(config=cfg),
+        audit_store=None,
+        user_store=None,
+        token=None,
+        telegram_client=None,
+    )
+    R.register_ops_overview_routes(app, ctx)
+    return TestClient(app, raise_server_exceptions=True)
+
+
+def test_route_reports_misconfigured(monkeypatch):
+    """开了但没配 hosts → enabled:false（前端仍隐藏，行为不变）+ misconfigured:true。"""
+    c = _route_client({"ops": {"gpu_watermark": {"enabled": True}}})
+    d = c.get("/api/admin/gpu-watermark").json()
+    assert d["enabled"] is False
+    assert d["misconfigured"] is True
+    assert "hosts" in d["detail"]
+
+
+def test_route_off_has_no_misconfigured_flag():
+    c = _route_client({"ops": {"gpu_watermark": {"enabled": False}}})
+    d = c.get("/api/admin/gpu-watermark").json()
+    assert d["enabled"] is False
+    assert d.get("misconfigured") is None     # 没开就是没开，不误报配置错
+
+
+def test_route_ready_returns_hosts(monkeypatch):
+    _reset_cache()
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
+    c = _route_client(_cfg())
+    d = c.get("/api/admin/gpu-watermark?force=1").json()
+    assert d["enabled"] is True
+    assert d.get("misconfigured") is None
+    assert len(d["hosts"]) == 2
+    _reset_cache()

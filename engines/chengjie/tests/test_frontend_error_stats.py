@@ -82,6 +82,32 @@ def test_prom_label_escaping():
     assert "frontend_errors_by_page_total" in txt
 
 
+def test_endpoint_dimension_sanitize_and_mask():
+    """endpoint（apiFetch 网络错附带）：剥查询串、数字段掩码 <n>、非法丢弃。"""
+    s = FrontendErrorStats()
+    s.record(page="/workspace", fn="apiFetch", etype="timeout",
+             endpoint="/api/inbox/threads/12345?limit=50")
+    s.record(page="/workspace", fn="apiFetch", etype="timeout",
+             endpoint="/api/inbox/threads/54321")
+    s.record(page="/workspace", fn="apiFetch", etype="neterr",
+             endpoint="javascript:alert(1)")            # 非法 → 丢弃不计
+    s.record(page="/workspace", fn="setMode", etype="ReferenceError")  # 无端点 → 不计
+    d = s.dump()
+    assert d["by_endpoint"] == {"/api/inbox/threads/<n>": 2}   # 数字掩码归并同键
+    assert d["by_type"]["timeout"] == 2                        # 语义类型不再折叠成 Error
+    assert d["by_type"]["neterr"] == 1
+    txt = s.dump_prom()
+    assert 'frontend_errors_by_endpoint_total{endpoint="/api/inbox/threads/<n>"} 2' in txt
+
+
+def test_endpoint_absolute_url_reduced_to_path():
+    s = FrontendErrorStats()
+    s.record(page="/", fn="apiFetch", etype="neterr",
+             endpoint="http://127.0.0.1:18799/api/workspace/metrics?x=1")
+    d = s.dump()
+    assert d["by_endpoint"] == {"/api/workspace/metrics": 1}
+
+
 # ── 端到端：beacon 写入 → metrics 读出 ───────────────────────────────
 
 def _make_app(role="admin"):
@@ -108,13 +134,20 @@ def test_beacon_then_metrics_roundtrip():
     r = c.post("/api/telemetry/frontend-error",
                json={"page": "/line-rpa", "fn": "lrRefresh", "type": "ReferenceError"})
     assert r.status_code == 200 and r.json().get("ok") is True
+    # apiFetch 网络错带 endpoint（新维度经路由端到端）
+    r = c.post("/api/telemetry/frontend-error",
+               json={"page": "/workspace", "fn": "apiFetch", "type": "timeout",
+                     "endpoint": "/api/drafts/list/778899?x=1"})
+    assert r.status_code == 200
 
     m = c.get("/api/workspace/metrics").json()
     fe = m.get("frontend_errors")
     assert fe is not None
-    assert fe["total"] >= 1
+    assert fe["total"] >= 2
     assert fe["by_fn"].get("lrRefresh") == 1
     assert fe["by_page"].get("/line-rpa") == 1
+    assert fe["by_endpoint"].get("/api/drafts/list/<n>") == 1
+    assert fe["by_type"].get("timeout") == 1
 
 
 def test_malformed_beacon_is_ok():

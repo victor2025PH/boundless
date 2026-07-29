@@ -731,6 +731,29 @@ def build_autosend_mark_read_cb(assistant):
     return _mark_read
 
 
+def record_text_outreach(assistant, platform, account_id, chat_key, kind,
+                         note=""):
+    """P2 A/B 归因：全自动文本投递落 outreach_log（batch=autosend_text:<kind>）。
+
+    kind ∈ bubbles|single。与 proactive_topic:{kind} 同机制——之后经
+    ``outreach_response_stats`` 读「投递后 N 天内对方是否回话」，autosend-status
+    的 ``bubbles_ab`` 段直读对比。best-effort：任何异常不影响投递结果。
+    """
+    try:
+        st = getattr(assistant, "inbox_store", None)
+        if st is None or not hasattr(st, "record_outreach"):
+            return
+        from src.inbox.normalizer import conv_id
+        st.record_outreach(
+            conv_id(platform, account_id, str(chat_key)),
+            batch_id=f"autosend_text:{kind}",
+            platform=platform, account_id=account_id,
+            status="sent", note=str(note or ""),
+        )
+    except Exception:
+        pass
+
+
 def build_autosend_typing_cb(assistant):
     """构造 AutosendWorker 投递延迟期「正在输入」状态回调（拟人打字气泡）。
 
@@ -999,11 +1022,6 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled):
             # await orch.send → client.send_message 会触发
             # "Future attached to a different loop"。故：编排器拥有
             # 该账号时，把整次投递调度到 web_loop 执行再跨线程取回。
-            def _make_coro():
-                return _send_via(
-                    _send_shim, platform, account_id,
-                    chat_key, text, _send_adapters,
-                )
             _wl = getattr(_assistant_ref, "_web_loop", None)
             _orch_owns = False
             try:
@@ -1015,13 +1033,163 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled):
                 ).owns(platform, account_id)
             except Exception:
                 _orch_owns = False
-            if (_orch_owns and _wl is not None
-                    and _wl.is_running()):
-                _fut = asyncio.run_coroutine_threadsafe(
-                    _make_coro(), _wl
+
+            async def _send_one(_txt: str):
+                def _make_coro():
+                    return _send_via(
+                        _send_shim, platform, account_id,
+                        chat_key, _txt, _send_adapters,
+                    )
+                if (_orch_owns and _wl is not None
+                        and _wl.is_running()):
+                    _fut = asyncio.run_coroutine_threadsafe(
+                        _make_coro(), _wl
+                    )
+                    return await asyncio.wrap_future(_fut)
+                return await _make_coro()
+
+            # 文本短句分条（inbox.reply_style.bubbles）：翻译后的 text 已是客户
+            # 可读文本。仅编排器路径拆——RPA runner 自有 human_pacing，再拆会
+            # 双重切碎。失败语义对齐语音 split_send：已发算数、剩余丢弃。
+            _parts = [str(text or "")]
+            _holdout_parts = 0   # P3 随机保留组：>0=本可拆 N 条但被抽中强制整段
+            try:
+                from src.inbox.reply_split import (
+                    inter_part_delay_sec as _ipd,
+                    parse_bubbles_cfg as _pbc,
+                    record_bubble_send as _rbs,
+                    should_split_for_delivery as _ssd,
+                    split_reply_parts as _srp,
                 )
-                return await asyncio.wrap_future(_fut)
-            return await _make_coro()
+                _bcfg = _pbc(_assistant_ref.config.config or {})
+                if _ssd(
+                    cfg=_bcfg, platform=platform, chat_key=chat_key,
+                    orch_owns=_orch_owns,
+                ):
+                    _split = _srp(
+                        str(text or ""),
+                        max_parts=int(_bcfg["max_parts"]),
+                        max_chars=int(_bcfg["max_chars"]),
+                        min_tail_chars=int(_bcfg["min_tail_chars"]),
+                        min_total_chars=int(_bcfg["min_total_chars"]),
+                    )
+                    if len(_split) >= 2:
+                        _hp = float(_bcfg.get("holdout_pct") or 0.0)
+                        if _hp > 0:
+                            import random as _rnd
+                            if _rnd.random() < _hp:
+                                _holdout_parts = len(_split)
+                        if _holdout_parts:
+                            _assistant_ref.logger.info(
+                                "[reply_bubbles] 保留组抽中，整段发送 "
+                                "parts=%d platform=%s", _holdout_parts, platform)
+                        else:
+                            _parts = _split
+            except Exception:
+                _assistant_ref.logger.debug(
+                    "[reply_bubbles] 拆条失败，回落单条", exc_info=True)
+                _parts = [str(text or "")]
+                _holdout_parts = 0
+
+            if len(_parts) <= 1:
+                _res_single = await _send_one(str(text or ""))
+                if not (isinstance(_res_single, dict) and (
+                        _res_single.get("ok") is False
+                        or _res_single.get("delivered") is False
+                        or _res_single.get("blocked"))):
+                    if _holdout_parts:
+                        record_text_outreach(
+                            _assistant_ref, platform, account_id, chat_key,
+                            "holdout", note=f"parts={_holdout_parts}")
+                    else:
+                        record_text_outreach(
+                            _assistant_ref, platform, account_id, chat_key,
+                            "single")
+                return _res_single
+
+            _typing = None
+            try:
+                _typing = build_autosend_typing_cb(_assistant_ref)
+            except Exception:
+                _typing = None
+            _sent_n = 0
+            _last_res: dict = {}
+            for _i, _part in enumerate(_parts):
+                if _i > 0:
+                    if _typing is not None:
+                        try:
+                            await _typing(platform, account_id, chat_key)
+                        except Exception:
+                            pass
+                    try:
+                        await asyncio.sleep(_ipd(
+                            _part,
+                            gap_sec_lo=float(_bcfg["gap_sec_lo"]),
+                            gap_sec_hi=float(_bcfg["gap_sec_hi"]),
+                            per_char_sec=float(_bcfg["per_char_sec"]),
+                        ))
+                    except Exception:
+                        await asyncio.sleep(0.8)
+                try:
+                    _last_res = await _send_one(_part) or {}
+                except Exception as _ex:
+                    if _sent_n > 0:
+                        _assistant_ref.logger.warning(
+                            "[reply_bubbles] 中途失败，已发 %d/%d platform=%s: %s",
+                            _sent_n, len(_parts), platform, _ex)
+                        try:
+                            _rbs("autosend", _sent_n, partial=True)
+                        except Exception:
+                            pass
+                        record_text_outreach(
+                            _assistant_ref, platform, account_id, chat_key,
+                            "bubbles", note=f"parts={_sent_n}/{len(_parts)}")
+                        return {
+                            "ok": True,
+                            "delivered_as": "text_bubbles",
+                            "parts_sent": _sent_n,
+                            "parts_total": len(_parts),
+                            "partial": True,
+                        }
+                    raise
+                if isinstance(_last_res, dict) and (
+                    _last_res.get("ok") is False
+                    or _last_res.get("delivered") is False
+                    or _last_res.get("blocked")
+                ):
+                    if _sent_n > 0:
+                        try:
+                            _rbs("autosend", _sent_n, partial=True)
+                        except Exception:
+                            pass
+                        record_text_outreach(
+                            _assistant_ref, platform, account_id, chat_key,
+                            "bubbles", note=f"parts={_sent_n}/{len(_parts)}")
+                        return {
+                            "ok": True,
+                            "delivered_as": "text_bubbles",
+                            "parts_sent": _sent_n,
+                            "parts_total": len(_parts),
+                            "partial": True,
+                        }
+                    return _last_res
+                _sent_n += 1
+            _assistant_ref.logger.info(
+                "[reply_bubbles] 分条已发 %d platform=%s acct=%s",
+                _sent_n, platform, account_id)
+            try:
+                _rbs("autosend", _sent_n)
+            except Exception:
+                pass
+            record_text_outreach(
+                _assistant_ref, platform, account_id, chat_key,
+                "bubbles", note=f"parts={_sent_n}")
+            return {
+                "ok": True,
+                "delivered_as": "text_bubbles",
+                "parts_sent": _sent_n,
+                "parts_total": len(_parts),
+            }
 
         send_cb = _autosend_deliver
     translate_cb = build_autosend_translate_cb(assistant, web_app)

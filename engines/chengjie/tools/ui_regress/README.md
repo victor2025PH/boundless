@@ -90,10 +90,23 @@ dark / light × [收件箱空态 inbox_empty, 收件箱列表 inbox_list(mock),
 
 ## 已知局限
 
-- **依赖 dev 实例在线**：实例宕机/该页 500 时对应场景被跳过（capture 退出码
-  2/3，输出点名哪张被跳过），工具本身不崩；实例恢复后重跑即可。18901 实例是
-  开发用临时进程（`AITR_WEB_PORT=18901 AITR_WEB_TOKEN=dev-ui-check python
-  main.py`），不在 watchdog 自愈范围内，死了要手动拉。
+- **依赖某个实例在线**：实例宕机/该页 500 时对应场景被跳过（capture 退出码
+  2/3，输出点名哪张被跳过），工具本身不崩；实例恢复后重跑即可。
+
+  ⛔ **不要再照抄「引擎根裸起 `python main.py` + AITR_WEB_PORT=18901」**（本文档
+  2026-07-29 前的旧写法）。本机已迁**双实例部署**，该做法会让第二个进程加载引擎根
+  配置 → **抢生产在用的 Telegram session**（多个在线协议号）、并起第二个
+  AutosendWorker **真发消息给客户**；`AGENTS.md` 已把「裸起 main.py」列为禁令。
+
+  当前两种正确用法：
+  1. **直接打生产实例**（推荐，只读截图无副作用）：
+     `python capture.py --base-url http://127.0.0.1:18799 --token <实例 auth_token>`
+     （token 见实例数据根 `config/config.local.yaml::web_admin.auth_token`）。
+  2. **要真正隔离的 dev 实例**：必须给它**独立 `AITR_DATA_DIR`** + 一份
+     **禁用 telegram/RPA、`inbox.l2_autosend.deliver:false`** 的 config，
+     参照 `deploy/instances/start_zhiliao.ps1` 的环境注入方式起（勿裸起）。
+     这样的实例可做 UI 回归，但**做不了真发演练**（无 telegram → send 返 503）；
+     真发演练走 `tools/live_multiwin_drill.py`（打生产账号的 Saved Messages）。
 - **跨机器/跨环境基线不可迁移**：整图像素对比，字体库、浏览器（Chromium）
   版本、DPI 变化都会全局假阳——换环境后先 `make_baseline.py` 重建。
 - **相对时间文案依赖冻结时钟**：若未来页面改用服务端渲染时间（Jinja 注入），

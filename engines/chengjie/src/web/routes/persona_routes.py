@@ -903,12 +903,13 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
 
     @app.get("/api/personas/profiles/{profile_id}")
     async def api_profile_get(profile_id: str, request: Request, _=Depends(auth_dep)):
-        from src.utils.persona_manager import PersonaManager
+        from src.utils.persona_manager import PersonaManager, profile_rev
         pm = PersonaManager.get_instance()
         p = pm.get_persona_by_id(profile_id)
         if p is None:
             raise HTTPException(404, f"Profile '{profile_id}' not found")
-        return {"profile_id": profile_id, "persona": p}
+        # rev＝乐观锁指纹：编辑器加载时记住，保存时带 expected_rev（P2 多开治理）
+        return {"profile_id": profile_id, "persona": p, "rev": profile_rev(p)}
 
     @app.put("/api/personas/profiles/{profile_id}")
     async def api_profile_upsert(profile_id: str, request: Request, _=Depends(auth_dep)):
@@ -917,8 +918,18 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         persona_data = data.get("persona")
         if not persona_data or not isinstance(persona_data, dict):
             raise HTTPException(400, "persona dict required")
-        from src.utils.persona_manager import PersonaManager
+        from src.utils.persona_manager import PersonaManager, profile_rev
         pm = PersonaManager.get_instance()
+        # 乐观锁（P2 多开治理 2026-07-29）：编辑器保存带 expected_rev（加载时的内容
+        # 指纹）——当前指纹不一致＝该人设在你编辑期间被其他窗口/同事改过（或删除），
+        # 409 拒写防「几分钟的编辑静默覆盖别人的改动」。不带 expected_rev（老客户端/
+        # 批量工具/导入）＝旧行为零破坏；前端 409 后可显式确认「仍要覆盖」再免键重发。
+        expected_rev = str(data.get("expected_rev") or "")
+        if expected_rev:
+            _cur = pm.get_persona_by_id(profile_id)
+            if _cur is None or profile_rev(_cur) != expected_rev:
+                raise HTTPException(
+                    409, tr(request, "err.persona.stale_rev"))
         # merge 语义（2026-07-27）：Studio 表单只重建部分字段 → merge=true 时与
         # 既有人设深合并落库，富人设字段（background/life_arc/tastes…）不再被
         # 整体替换抹掉；不带 merge 或人设不存在 → 维持整体替换旧契约。
@@ -939,7 +950,14 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         if audit_store:
             audit_store.log(actor, "profile_upsert",
                           f"id={profile_id} name={persona_data.get('name','?')}")
-        return {"ok": True, "profile_id": profile_id, "merged": did_merge}
+        # 回传落库后的最新 rev，编辑器就地更新基线（免一次重取）
+        _new_rev = ""
+        try:
+            _new_rev = profile_rev(pm.get_persona_by_id(profile_id))
+        except Exception:
+            pass
+        return {"ok": True, "profile_id": profile_id, "merged": did_merge,
+                "rev": _new_rev}
 
     @app.delete("/api/personas/profiles/{profile_id}")
     async def api_profile_delete(profile_id: str, request: Request, _=Depends(auth_dep)):
@@ -1709,10 +1727,18 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
 
     @app.get("/api/persona/global-rules")
     async def api_global_rules_get(request: Request, _=Depends(auth_dep)):
-        from src.utils.persona_manager import PersonaManager
+        from src.utils.persona_manager import PersonaManager, profile_rev
         pm = PersonaManager.get_instance()
         rules = pm.get_global_rules()
-        return {"ok": True, "rules": rules}
+        # rev＝乐观锁指纹（与人设档案同款；P2 多开治理）：编辑器加载时记住，保存回传
+        # source＝落盘位置全景（P7-1 overlay 化）：读的是实例自己那份还是出厂默认、
+        # 保存会写到哪——把「仓库出厂默认 vs 实例覆盖」的分叉对运维显式可见。
+        out = {"ok": True, "rules": rules, "rev": profile_rev(rules)}
+        try:
+            out["source"] = pm.global_rules_source()
+        except Exception:
+            pass
+        return out
 
     @app.put("/api/persona/global-rules")
     async def api_global_rules_save(request: Request, _=Depends(auth_dep)):
@@ -1721,8 +1747,14 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         rules = data.get("rules")
         if not rules or not isinstance(rules, dict):
             raise HTTPException(400, "rules dict required")
-        from src.utils.persona_manager import PersonaManager
+        from src.utils.persona_manager import PersonaManager, profile_rev
         pm = PersonaManager.get_instance()
+        # 乐观锁（2026-07-29）：全局规则影响**所有人设**，被静默覆盖的破坏面比单个
+        # 档案更大 → 带 expected_rev 时校验当前指纹，不一致即 409 拒写（前端确认后
+        # 免键重发＝显式覆盖）。不带 expected_rev＝旧契约零破坏。
+        expected_rev = str(data.get("expected_rev") or "")
+        if expected_rev and profile_rev(pm.get_global_rules()) != expected_rev:
+            raise HTTPException(409, tr(request, "err.persona.stale_rev"))
         ok = pm.save_global_rules(rules)
         if not ok:
             raise HTTPException(500, "Failed to save global_rules.yaml")
@@ -1730,7 +1762,7 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         if audit_store:
             audit_store.log(actor, "global_rules_save",
                           f"constraints={len(rules.get('reply_constraints', []))}")
-        return {"ok": True}
+        return {"ok": True, "rev": profile_rev(pm.get_global_rules())}
 
     @app.get("/api/persona/global-rules/backups")
     async def api_global_rules_backups(request: Request, _=Depends(auth_dep)):

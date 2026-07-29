@@ -99,6 +99,63 @@ personas 的 `previewTTS` 死代码（从不被调用、引用不存在的 `vp-*
 改**事件委托 + `data-rpa-ck` 属性**（结果容器一次绑定处理所有动态行，彻底去掉「每输入框全局函数+dot 访问」脆弱模式）。
 `_ALLOWLIST`（良性命中，如字面量以 `.ext` 结尾再拼变量的文件名串）当前为空，`test_allowlist_not_stale` 防过期。
 
+**多开治理 / 防双发主线**（2026-07-29，修「同一坐席开两个窗口 → 客户收到两条一样的话」）：
+```bash
+python -m pytest tests/test_draft_resolve_concurrency.py tests/test_multiwin_p2.py \
+ tests/test_live_drill_guards.py tests/test_settings_overlay_persistence.py -q --tb=line
+```
+预期：全绿。三层防线（服务端兜底优先——前端协调只管同一浏览器，管不了第二台电脑）：
+① **草稿处置原子闸门**：`update_draft_status` 带 `WHERE status IN ('pending','enriching')`，
+ 双窗口/人工×AutosendWorker 竞态只有一方成功，另一方拿 **409**（`already_resolved`）；
+ worker 撞 409 计 `total_skipped_raced` **不计 error**（竞态非故障，不喂熔断器）。
+ 同批修掉两个休眠断链：`list_drafts(platform=X)` 此前排除 inbox 源草稿（坐席**看不见**待审草稿，
+ 实测积压 199h）；人工点「发送」此前**只标记不发送**（全库无人消费 approved 的 inbox 草稿）→
+ 现经 `DraftService.set_inbox_deliver_callback` → `AutosendWorker.deliver_human_approved`
+ 复用出站翻译/发图指令/桌面受控出站同一条投递链（bootstrap 仅在 `deliver=true` 时注入）。
+② **发送幂等** `src/inbox/send_dedup.py`：前端每次提交带 `client_msg_id`，服务端按
+ `(会话, id)` TTL 窗去重；**仅首见占坑**（重复命中记 duplicate 不新增 reserved），
+ 失败释放占位（同 id 显式重试仍可发）。覆盖 send / send-media / send-voice 三路由。
+③ **前端多窗口协调器** `workspace_base.html::__wsMultiWin`：坐席页单主控（localStorage
+ 主控位 + storage 事件；刻意不用 Web Locks——LAN http 下无安全上下文不可用），第二窗口出
+ 「在此使用/保持待机」，待机窗口停轮询断 SSE 全静音，主控崩溃 15s 内自动接管；
+ 全局**提示音领导权**顺带修掉「收件箱+看板两页同时响铃」。
+**乐观锁**（防长编辑表单丢更新）：`persona_manager.profile_rev` 通用内容指纹 → 人设档案 /
+ 全局规则 / 意图关键词三处 `GET 回 rev → PUT 带 expected_rev → 不一致 409 → 前端确认后免键覆盖`。
+ 判据＝**整文档替换才需要**；字段级 patch 端点（`/api/settings/save`）刻意**不**加，
+ 否则「A 改 temperature、B 改 max_tokens」这类合法并发会被误判冲突（有反向门禁钉住）。
+**观测**：`autosend-status` / `/api/workspace/metrics` 出 `total_human_delivered` /
+ `total_skipped_raced` / `send_dedup`；Prom 5 个 gauge；ops「全自动媒体」卡两行 KPI。
+**真机演练（运维显式跑，非 pytest）**：
+```bash
+python tools/live_multiwin_drill.py                 # 只读预检，不发消息
+python tools/live_multiwin_drill.py --confirm        # 真发（目标=账号自己的 Saved Messages）
+python tools/verify_multiwin_ui.py --shots out/      # 双标签页验协调器（只读，21 项）
+```
+`verify_multiwin_ui.py` 已挂进 `gate_sweep.ps1 -Full`（协调器是纯前端逻辑，静态门禁只能证
+「函数挂了 window」、证不了「两标签页互斥成立」，而模板热更新直上生产）；缺 playwright
+或实例不可达一律 **SKIP exit 0**，不污染回归信号。
+`live_multiwin_drill` 四道护栏：默认只允许 `chat_key='me'`、真人会话须显式 `--allow-peer`、
+无 `--confirm` 只预检、判定以 prometheus 增量为权威。护栏与判定算式有纯函数门禁
+（`test_live_drill_guards.py`，含首次实施踩过的两个断言坑：reserved 增量算错 / 判定未按
+本轮 TAG 限定导致误判双发）。真发落**生产账号的收藏消息**是刻意选择——隔离 dev 实例禁了
+telegram 就发不出去（send 返 503），真发必须有真账号。
+⚠️ **测试绝不能写仓库 `config/`**（该类事故已三次咬到生产，conftest 现有四层 autouse 隔离）：
+`_isolated_account_registry`（假账号写进注册表 → 编排器当真账号无限重启 + 告警刷屏）、
+`_isolated_global_rules`（路由测试把 13 条回复硬约束清成 `[]`，含「不要自称AI」这类安全项）、
+`_isolated_audit_stores`（`autoreply_audit` / `ops_events` / `vision_metrics` 三个台账被掺测试
+数据——运维靠 ops_events 判断「这号这周被风控几次」，掺假比没有更糟）、以及 import 期把
+**`AITR_DATA_DIR` 指向进程级 tmp**（只剥不设会让所有按该约定定位数据的模块回落
+`Path.cwd()/config`＝引擎根仓库目录；一次设定即隔离 persona_usage / telemetry /
+desktop_selectors / licensing.data_paths / instance_restart_status 整个家族）+
+`REUNION_PROMPTS_PATH` 指向 tmp（拷仓库真值过去，读到的内容与生产一致、只有写落 tmp）。
+**新增测试若要写配置，一律重定向到 `tmp_path`，别改仓库文件、别加豁免。**
+
+**怎么审计「有没有测试在写生产文件」**（比写通用守卫可靠）：跑一轮全量，然后按**回归时间窗**
+比对 `config/` 的文件 mtime/size——落在窗口内的就是违规清单，精确且零假阳性。
+⚠️ 别做「每个测试前后快照 config/ 目录、变了就点名」的 autouse 守卫：实测 243 个假阳性——
+`-n auto` 并行下 worker A 的窗口会把 worker B 的写入算到 A 头上，`*.db` 被连接即改 mtime，
+且共享工作树上**其他 agent 线**正在编辑 config 文件。精度 > 覆盖：走「按写入口精确重定向」。
+
 **陪伴能力「分阶段开启」主线**（看→校→开→观测→纠偏 闭环；纯函数 core 在 `src/companion/`，
 路由 `src/web/routes/companion_capability_routes.py` 挂 `/api/companion/capabilities*`，
 看板卡片在 `rpa_overview.html`，配置体检接进 `ops-overview`）：

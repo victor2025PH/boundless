@@ -58,7 +58,19 @@ def register_workspace_presence_routes(app, *, api_auth, config_manager=None) ->
     async def api_workspace_presence_list(request: Request):
         api_auth(request)
         coord = AgentCoordinator.from_request(request, config_manager)
-        return {"ok": True, "agents": coord.list_presence()}
+        agents = coord.list_presence()
+        # P2 多开观测：把窗口计数并进坐席行（windows/standby_windows），
+        # 「谁开了几个窗口」在工作台在线名单一眼可见。best-effort，绝不影响名单本体。
+        try:
+            wins = coord.windows_snapshot()
+            for a in agents:
+                w = wins.get(str(a.get("agent_id") or ""))
+                if w:
+                    a["windows"] = int(w.get("windows") or 0)
+                    a["standby_windows"] = int(w.get("standby") or 0)
+        except Exception:
+            logger.debug("presence 窗口计数并入失败（忽略）", exc_info=True)
+        return {"ok": True, "agents": agents}
 
     @app.post("/api/workspace/presence")
     async def api_workspace_presence_set(request: Request, _=Depends(api_auth)):
@@ -96,6 +108,18 @@ def register_workspace_presence_routes(app, *, api_auth, config_manager=None) ->
             display_name=str(body.get("display_name") or agent["display_name"]),
             status=str(body.get("status") or ""),
         )
+        # P2 多开观测：心跳可携带窗口指纹 {id, path, standby}（__wsMultiWin 生成），
+        # 服务端按坐席聚合窗口数。老客户端不带该字段＝零变化。
+        try:
+            win = body.get("window")
+            if isinstance(win, dict) and win.get("id"):
+                coord.record_window(
+                    agent["agent_id"], str(win.get("id") or ""),
+                    path=str(win.get("path") or ""),
+                    standby=bool(win.get("standby")),
+                )
+        except Exception:
+            logger.debug("窗口心跳登记失败（忽略）", exc_info=True)
         return {"ok": True, "presence": row}
 
     @app.get("/api/workspace/claims")

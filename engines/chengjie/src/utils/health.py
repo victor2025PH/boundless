@@ -44,6 +44,7 @@ def build_health(
     pending_threshold: int = 200,
     audio_service: Optional[Dict[str, Any]] = None,
     avatar_voice: Optional[Dict[str, Any]] = None,
+    sla_backlog: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """聚合运行时健康（纯函数）。返回 {ok, light, components, summary, ts}。"""
     comps: List[Dict[str, Any]] = []
@@ -151,6 +152,33 @@ def build_health(
         else:
             comps.append(_comp("queue", "草稿队列", "ok",
                                f"待处理 {pending_drafts} 条"))
+
+    # 6.5) 草稿 SLA 严重超时——与 6) 的「数量」维度互补的「等待时长」维度。
+    # 动机（2026-07-29 实测）：一条 L3 草稿无人认领躺了 6.7 天，队列总数远低于阈值
+    # 故 6) 全绿，而 K2 自动再分配只处理「已认领+坐席断线」的、永远跳过无主草稿
+    # → 没有任何一盏灯会亮。把 SLAWatcher 的越线快照接进健康灯后，此类积压经
+    # health_watchdog 既有的 health_alert 告警链**主动外发**（复用已接通的通道，
+    # 而不是指望运营去订阅新事件别名）。None = watcher 未挂载（不出该组件）。
+    if sla_backlog is not None:
+        _unclaimed = int(sla_backlog.get("unclaimed_escalating") or 0)
+        _esc = int(sla_backlog.get("escalating_now") or 0)
+        _maxw = int(sla_backlog.get("max_wait_min") or 0)
+        _wait_txt = f"最长等待 {_maxw / 60:.0f}h" if _maxw >= 60 else f"最长等待 {_maxw}min"
+        if _unclaimed > 0:
+            comps.append(_comp(
+                "sla_backlog", "草稿 SLA 严重超时", "warn",
+                f"{_unclaimed} 条严重超时且**无人认领**（{_wait_txt}）——"
+                "自动再分配不覆盖无主草稿，需人工认领处置"))
+        elif _esc > 0:
+            comps.append(_comp(
+                "sla_backlog", "草稿 SLA 严重超时", "warn",
+                f"{_esc} 条严重超时（已认领，{_wait_txt}）"))
+        else:
+            _br = int(sla_backlog.get("breaching_now") or 0)
+            comps.append(_comp(
+                "sla_backlog", "草稿 SLA 严重超时", "ok",
+                f"无严重超时（越线 {_br} 条，{_wait_txt}）" if _br
+                else "无越线草稿"))
 
     fails = sum(1 for c in comps if c["status"] == "fail")
     warns = sum(1 for c in comps if c["status"] == "warn")

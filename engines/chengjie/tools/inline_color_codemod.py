@@ -191,6 +191,7 @@ _E = [
     ("bd", "#e5e7eb", "--th-bd-gray2", "#26272e"),
     ("bd", "#f1f5f9", "--th-bd-slate1", "rgba(236,236,240,.1)"),
     ("bd", "#cbd5e1", "--th-bd-slate3", "#30313a"),
+    ("bd", "#e2e8f0", "--th-bd-slate2", "#30313a"),
     ("bd", "#334155", "--th-bd-slate7", None),
     ("bd", "#1e293b", "--th-bd-slate8", None),
     ("bd", "#dc2626", "--th-bd-red6", "#f85149"),

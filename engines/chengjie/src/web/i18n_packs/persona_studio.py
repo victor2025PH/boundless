@@ -2,6 +2,8 @@
 """persona_studio 域词条(由 tools/i18n_migrate_domain.py 从单体迁移)。结构见包 docstring。"""
 
 ZH = {
+    # P2 乐观锁（多开治理 2026-07-29）：保存撞 409 后的显式覆盖确认
+    "psn.save.stale_confirm": "该人设在你编辑期间被其他窗口或同事修改过。\n\n点「确定」用你当前表单内容覆盖对方的改动；点「取消」保留表单不动（可先另开窗口对比后再保存）。",
     "psn_add_constraint": "新增约束规则",
     "psn_add_update_binding": "新增 / 更新绑定",
     "psn_adv_title": "高级字段（随保存原样保留）",
@@ -898,6 +900,8 @@ ZH = {
 }
 
 EN = {
+    # P2 optimistic lock (multi-window governance, 2026-07-29)
+    "psn.save.stale_confirm": "This persona was modified in another window or by a teammate while you were editing.\n\nOK = overwrite their changes with your current form; Cancel = keep your form untouched (compare in another window first if unsure).",
     "psn_add_constraint": "Add constraint rule",
     "psn_add_update_binding": "Add / update binding",
     "psn_adv_title": "Advanced fields (preserved on save)",

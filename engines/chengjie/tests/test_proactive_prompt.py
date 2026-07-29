@@ -57,11 +57,77 @@ def test_scene_note_weaves_photo_context():
     assert "自拍" not in p2  # 不配图时无场景块（零行为变更）
 
 
-def test_silence_mode_keeps_long_absence_framing():
-    p = build_proactive_prompt("小柔", {"mode": "follow_up", "directive": "回访备考"})
+def test_silence_mode_long_gap_keeps_long_absence_framing():
+    """真隔了 ≥14 天 → 才允许「许久未联系」框定。"""
+    p = build_proactive_prompt(
+        "小柔", {"mode": "follow_up", "directive": "回访备考",
+                 "silent_hours": 500, "gap_bucket": "long"})
     assert "许久未联系" in p
     assert "不超过40字" in p
     assert "回访备考" in p
+
+
+def test_silence_mode_same_day_forbids_long_absence(caplog):
+    """P0 修：沉默几小时的开场绝不能再被框成「许久未联系」（实锤根因）。"""
+    p = build_proactive_prompt(
+        "小柔", {"mode": "gentle_checkin", "directive": "随口问候",
+                 "silent_hours": 6.0, "gap_bucket": "same_day"})
+    assert "许久未联系" not in p
+    assert "今天才和TA聊过" in p
+    assert "绝不要用「好久没联系" in p
+    assert "大约 6 小时" in p  # 真实间隔进 prompt
+
+
+def test_silence_mode_few_days_framing():
+    p = build_proactive_prompt(
+        "小柔", {"mode": "gentle_checkin", "directive": "x",
+                 "silent_hours": 40.0, "gap_bucket": "few_days"})
+    assert "一两天没聊" in p
+    assert "许久未联系" not in p
+
+
+def test_silence_mode_bucket_derived_from_hours_when_missing():
+    """旧调用方/ask_* opener 不带 gap_bucket → 按 silent_hours 现算档位。"""
+    p = build_proactive_prompt(
+        "小柔", {"mode": "ask_birthday", "directive": "顺势问生日",
+                 "silent_hours": 6.0})
+    assert "今天才和TA聊过" in p
+    assert "许久未联系" not in p
+
+
+def test_silence_mode_no_gap_info_defaults_conservative():
+    """连 silent_hours 都没有的兜底：按「几天没聊」框定，绝不默认久别重逢。"""
+    p = build_proactive_prompt("小柔", {"mode": "follow_up", "directive": "回访备考"})
+    assert "许久未联系" not in p
+    assert "几天没聊" in p
+
+
+def test_persona_style_injected():
+    p = build_proactive_prompt(
+        "小柔", {"mode": "gentle_checkin", "directive": "x", "silent_hours": 40},
+        persona_style="温柔碎碎念，偶尔用波浪号，喜欢叫人「小笨蛋」")
+    assert "你的说话风格" in p and "小笨蛋" in p
+    p2 = build_proactive_prompt(
+        "小柔", {"mode": "gentle_checkin", "directive": "x", "silent_hours": 40})
+    assert "你的说话风格" not in p2
+
+
+def test_avoid_texts_block_lists_unanswered_openers():
+    p = build_proactive_prompt(
+        "小柔", {"mode": "gentle_checkin", "directive": "x", "silent_hours": 40},
+        avoid_texts=["好久没联系啦，你最近过得怎么样呀？", "  ", "嘿，在忙吗"])
+    assert "TA 还没有回应" in p
+    assert "好久没联系啦，你最近过得怎么样呀？" in p
+    assert "嘿，在忙吗" in p
+    assert "完全不同的切入点" in p
+
+
+def test_avoid_texts_capped_at_four():
+    p = build_proactive_prompt(
+        "小柔", {"mode": "gentle_checkin", "directive": "x", "silent_hours": 40},
+        avoid_texts=[f"第{i}条旧开场" for i in range(1, 7)])
+    assert "第4条旧开场" in p
+    assert "第5条旧开场" not in p
 
 
 def test_context_facts_block_included():

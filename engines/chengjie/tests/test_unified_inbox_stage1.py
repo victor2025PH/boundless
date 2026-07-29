@@ -377,6 +377,109 @@ def test_send_skip_translate_sends_original():
     assert data["translation"] is None
 
 
+# ── P1.5 多句分条（inbox.reply_style.bubbles）：/send 手动路径 ──────────────
+
+
+def _bubbles_client(monkeypatch, sent_log, *, owns=True):
+    from types import SimpleNamespace
+    import src.web.routes.unified_inbox_send_routes as sr
+
+    async def _fake_send_via(request, platform, account_id, chat_key, text,
+                             adapters, *, reply_to=None, mentions=None):
+        sent_log.append({"text": text, "reply_to": reply_to})
+        return {"delivered": True,
+                "conversation_id": f"{platform}:{account_id}:{chat_key}"}
+
+    monkeypatch.setattr(sr, "send_via_adapters", _fake_send_via)
+
+    class _Orch:
+        def owns(self, platform, account_id):
+            return owns
+
+    import src.integrations.account_orchestrator as _ao
+    monkeypatch.setattr(_ao, "get_orchestrator", lambda *a, **k: _Orch())
+
+    c = _client()
+    c.app.state.config_manager = SimpleNamespace(config={
+        "inbox": {"reply_style": {"bubbles": {
+            "enabled": True, "min_total_chars": 0, "min_tail_chars": 0,
+            "gap_sec_lo": 0, "gap_sec_hi": 0, "per_char_sec": 0,
+        }}}})
+    return c
+
+
+def test_send_bubbles_splits_newlines_first_part_carries_reply_to(monkeypatch):
+    sent = []
+    c = _bubbles_client(monkeypatch, sent)
+    r = c.post("/api/unified-inbox/send", json={
+        "platform": "telegram", "account_id": "default", "chat_key": "123",
+        "text": "第一句\n第二句\n第三句", "bubbles": 1,
+        "reply_to": {"id": "m1", "text": "hi"},
+    })
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["ok"] is True
+    assert d["bubbles"] == {"parts_total": 3, "parts_sent": 3}
+    assert [s["text"] for s in sent] == ["第一句", "第二句", "第三句"]
+    assert sent[0]["reply_to"] and sent[1]["reply_to"] is None \
+        and sent[2]["reply_to"] is None
+
+
+def test_send_bubbles_requires_client_opt_in(monkeypatch):
+    """无 bubbles 标志（旧前端/脚本调用方）→ 整段单发，严格向后兼容。"""
+    sent = []
+    c = _bubbles_client(monkeypatch, sent)
+    r = c.post("/api/unified-inbox/send", json={
+        "platform": "telegram", "account_id": "default", "chat_key": "123",
+        "text": "第一句\n第二句"})
+    assert r.status_code == 200
+    assert r.json()["bubbles"] is None
+    assert len(sent) == 1
+
+
+def test_send_bubbles_group_not_split(monkeypatch):
+    sent = []
+    c = _bubbles_client(monkeypatch, sent)
+    r = c.post("/api/unified-inbox/send", json={
+        "platform": "telegram", "account_id": "default", "chat_key": "-100888",
+        "text": "第一句\n第二句", "bubbles": 1})
+    assert r.status_code == 200
+    assert r.json()["bubbles"] is None
+    assert len(sent) == 1
+
+
+def test_send_bubbles_rpa_not_split(monkeypatch):
+    """orch_only：编排器不拥有（RPA runner 自有 human_pacing 分条）→ 整段。"""
+    sent = []
+    c = _bubbles_client(monkeypatch, sent, owns=False)
+    r = c.post("/api/unified-inbox/send", json={
+        "platform": "line", "account_id": "line-a", "chat_key": "line-room",
+        "text": "第一句\n第二句", "bubbles": 1})
+    assert r.status_code == 200
+    assert r.json()["bubbles"] is None
+    assert len(sent) == 1
+
+
+def test_send_caps_exposes_bubbles(monkeypatch):
+    from types import SimpleNamespace
+
+    class _Orch:
+        def owns_media(self, platform, account_id):
+            return True
+
+        def owns(self, platform, account_id):
+            return True
+
+    import src.integrations.account_orchestrator as _ao
+    monkeypatch.setattr(_ao, "get_orchestrator", lambda *a, **k: _Orch())
+    c = _client()
+    c.app.state.config_manager = SimpleNamespace(config={
+        "inbox": {"reply_style": {"bubbles": {"enabled": True, "max_parts": 3}}}})
+    d = c.get(
+        "/api/unified-inbox/send-caps?platform=telegram&account_id=default").json()
+    assert d["bubbles"] is True and d["bubbles_max_parts"] == 3
+
+
 def test_send_target_auto_infers_conversation_language():
     c = _client()
     c.app.state.inbox_store = _LangStore(language="zh")

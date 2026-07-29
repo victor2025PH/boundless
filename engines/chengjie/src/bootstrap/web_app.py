@@ -402,6 +402,16 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                             assistant.inbox_store.register_l2_callback(
                                 _as_worker.notify_new_l2
                             )
+                            # 2026-07-29：人工通过 inbox 草稿 → 经同一投递链真发送
+                            # （修「坐席点发送只标记不发」断链）。仅真投递模式注入；
+                            # deliver=false 部署保持「仅标记」旧语义。
+                            if _deliver:
+                                try:
+                                    draft_svc.set_inbox_deliver_callback(
+                                        _as_worker.deliver_human_approved)
+                                except Exception:
+                                    assistant.logger.debug(
+                                        "人工通过投递回调注入失败", exc_info=True)
                             asyncio.ensure_future(_as_worker.run())
                             assistant.logger.info(
                                 "AutosendWorker 已启动（min=%ss max=%ss deliver=%s）",

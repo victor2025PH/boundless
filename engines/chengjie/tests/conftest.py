@@ -1,8 +1,11 @@
 """pytest 共享 fixtures — Web 管理面板集成测试"""
 
 import asyncio
+import atexit
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -23,6 +26,33 @@ os.environ.setdefault("HOST_ALERT_SILENT", "1")
 # 需要这些变量的用例（test_config_manager / test_host_alert）自行 monkeypatch.setenv。
 for _k in [k for k in os.environ if k.startswith("AITR_")]:
     os.environ.pop(_k, None)
+
+# 剥离之后**再指一个进程级临时数据根**（2026-07-29）：只剥不设会让所有按
+# ``AITR_DATA_DIR`` 定位数据的模块回落 ``Path.cwd()/config``＝**引擎根仓库目录**，
+# 于是测试真的写进仓库里那份生产配置。实测（用回归时间窗比对 config/ 文件 mtime）
+# 被写脏的有 persona_usage.db / vision_metrics.db / ops_events.db / autoreply_audit.db /
+# fatex.db / events/spool/*.jsonl —— 计数、审计台账、事件 spool 全被测试数据污染。
+# 指到 tmp 后，凡遵循该部署约定的模块（persona_usage / telemetry / desktop_selectors /
+# licensing.data_paths / instance_restart_status / config_manager 的无参定位）一次性全隔离。
+# 需要真值的用例（test_config_manager / test_licensing_data_paths / test_instance_restart_status）
+# 自行 monkeypatch.setenv，晚于本处生效、不受影响。
+_TEST_DATA_ROOT = Path(tempfile.mkdtemp(prefix="aitr-test-dataroot-"))
+(_TEST_DATA_ROOT / "config").mkdir(parents=True, exist_ok=True)
+os.environ["AITR_DATA_DIR"] = str(_TEST_DATA_ROOT)
+atexit.register(lambda: shutil.rmtree(_TEST_DATA_ROOT, ignore_errors=True))
+
+# reunion 草稿 prompt 配置（``config/reunion_prompts.yaml``）＝真实生产配置，
+# 且 ``POST /api/reunion-prompts/set-default`` 会**写**它。它不走 AITR_DATA_DIR，
+# 但自带 ``REUNION_PROMPTS_PATH`` 覆盖钩子 → 指到 tmp，并把仓库真值**拷一份**过去，
+# 使读到的内容与生产一致（只有写落在 tmp）。
+_REPO_REUNION = Path(__file__).resolve().parent.parent / "config" / "reunion_prompts.yaml"
+_TEST_REUNION = _TEST_DATA_ROOT / "config" / "reunion_prompts.yaml"
+try:
+    if _REPO_REUNION.exists():
+        shutil.copy2(_REPO_REUNION, _TEST_REUNION)
+except Exception:
+    pass
+os.environ["REUNION_PROMPTS_PATH"] = str(_TEST_REUNION)
 
 from starlette.testclient import TestClient
 
@@ -376,6 +406,85 @@ def _reset_process_singletons():
     _reset_process_singletons_now()
     yield
     _reset_process_singletons_now()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_audit_stores(tmp_path):
+    """把三个「审计/事件/指标」单例库重定向到 tmp（否则写进仓库 config/）。
+
+    这三个不走 ``AITR_DATA_DIR``，各自用相对 cwd 或 ``__file__`` 推导默认路径 →
+    pytest 的 cwd＝引擎根，于是测试数据直接进**生产台账**：
+      - ``config/autoreply_audit.db``  自动回复决策流（后台/桌面壳「实时流」面板读它）
+      - ``config/ops_events.db``       反封号运维事件（「这号这周被风控几次」的唯一史料）
+      - ``config/vision_metrics.db``   messenger VLM 调用指标
+
+    污染这些库不改变系统行为，但会**把假数据混进给人看的审计与健康史**——运维据此
+    判断「号是不是要炸」，掺了测试数据的台账比没有台账更糟。与
+    ``_isolated_account_registry`` 同款：重定向单例，用完还原。
+    """
+    import src.integrations.messenger_rpa.vision_metrics as vm
+    import src.integrations.protocol_autoreply_audit as ara
+    import src.ops.ops_events as oe
+
+    old_audit, old_ops = ara._audit, oe._store
+    old_vm_path, old_vm_init = vm._db_path, vm._initialized
+    ara._audit = ara.AutoReplyAudit(tmp_path / "_t_autoreply_audit.db")
+    oe._store = None                     # 下次 getter 用下面的默认路径重建
+    vm._db_path = tmp_path / "_t_vision_metrics.db"
+    vm._initialized = False
+    try:
+        # ops_events 的 getter 首次调用才定路径 → 预热到 tmp，防测试传默认值
+        try:
+            oe.get_ops_event_store(str(tmp_path / "_t_ops_events.db"))
+        except Exception:
+            pass
+        yield
+    finally:
+        ara._audit, oe._store = old_audit, old_ops
+        vm._db_path, vm._initialized = old_vm_path, old_vm_init
+
+
+@pytest.fixture(autouse=True)
+def _isolated_global_rules(tmp_path):
+    """把 ``PersonaManager`` 的 global_rules 落盘路径重定向到每测试独立临时文件。
+
+    背景（2026-07-29 实锤事故）：``save_global_rules`` 的路径由
+    ``Path(__file__).resolve().parents[2] / "config" / "global_rules.yaml"`` 推导——
+    **完全无视 tmp_path**，直接写**仓库里那份生产在用的**文件（引擎按 mtime 热加载）。
+    一个路由级测试因此把生产的 13 条回复硬约束（含「不要自称AI」这类安全项）清成
+    ``[]``，并经备份轮转把测试数据推进 ``.bak.1`` 槽位（运维点「恢复槽位1」会二次
+    清空）。事后从 git HEAD 还原。
+
+    与 ``_isolated_account_registry`` 同族、同理由：产品代码里按 ``__file__`` 推导
+    config 路径的**写**操作都是同一颗地雷，而单靠「测试自己记得隔离」不可靠。
+
+    ⚠️ 曾试过「快照 config/ 目录、变了就点名」的通用探测器，在本机不可用：
+    ``-n auto`` 并行下 worker A 的快照窗口会把 worker B 的写入算到 A 头上，
+    且共享工作树上**其他 agent 线**正在编辑 config 文件、``*.db`` 被连接即改 mtime
+    → 实测 243 个假阳性。故回到「按写入口精确重定向」这条本仓已验证的路子。
+
+    2026-07-29 后续（P7-1 overlay 化）：产品侧写入已改落「可写数据区」
+    （``AITR_DATA_DIR/config``，本 conftest 顶部已把它指向进程级 tmp），所以本 fixture
+    已非唯一防线；但它把落点收到**每测试独立** tmp（而非全进程共享那个），
+    仍在防「用例之间经同一份 global_rules 串味」，且显式覆写同时钉住读与写落点。
+    """
+    from src.utils.persona_manager import PersonaManager
+
+    pm = PersonaManager.get_instance()
+    old_path = pm._global_rules_path        # noqa: SLF001 — 正是要拦的那个字段
+    old_cache = pm._global_rules
+    old_sig = pm._global_rules_sig
+    pm._global_rules_path = tmp_path / "global_rules.yaml"
+    pm._global_rules = None
+    pm._global_rules_sig = ("", 0.0, -1)
+    try:
+        yield
+    finally:
+        # 测试可能自行 reset() 换了单例；恢复到当时那个实例上即可
+        cur = PersonaManager.get_instance()
+        cur._global_rules_path = old_path
+        cur._global_rules = old_cache
+        cur._global_rules_sig = old_sig
 
 
 @pytest.fixture()

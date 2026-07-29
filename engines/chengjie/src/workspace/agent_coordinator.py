@@ -18,6 +18,9 @@ VALID_STATUS = {"online", "busy", "offline"}
 class AgentCoordinator:
     """坐席协作状态机（薄封装 InboxStore 或内存）。"""
 
+    #: 窗口条目视为存活的窗口期（前端心跳 30s；3 倍冗余容忍丢拍）
+    WINDOW_TTL_SEC = 90.0
+
     def __init__(
         self,
         *,
@@ -31,6 +34,9 @@ class AgentCoordinator:
         # 内存回落
         self._presence: Dict[str, Dict[str, Any]] = {}
         self._claims: Dict[str, Dict[str, Any]] = {}
+        # P2 多开观测（2026-07-29）：agent_id → {win_id: {ts, path, standby}}。
+        # 刻意进程内不落库：窗口是秒级易逝状态，心跳丢失 TTL 自清；重启清零无妨。
+        self._windows: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
     @classmethod
     def from_request(cls, request, config_manager=None) -> "AgentCoordinator":
@@ -124,6 +130,57 @@ class AgentCoordinator:
             if float(v.get("last_seen_at") or 0) >= cutoff
             and str(v.get("status") or "offline") != "offline"
         ]
+
+    # ── P2 多开观测：坐席窗口注册表（进程内，TTL 自清）───────────
+
+    def record_window(
+        self,
+        agent_id: str,
+        win_id: str,
+        *,
+        path: str = "",
+        standby: bool = False,
+    ) -> None:
+        """记录一次窗口心跳（workspace_base 每 30s 随 presence heartbeat 上报）。
+
+        win_id 来自前端 __wsMultiWin（每窗口一次性 uuid）；同坐席多窗口各自上报，
+        据此可见「谁开了几个窗口、几个在待机」——多开治理的读数面 + 席位模型的数据地基。
+        """
+        aid = str(agent_id or "").strip()
+        wid = str(win_id or "").strip()
+        if not aid or not wid:
+            return
+        wins = self._windows.setdefault(aid, {})
+        wins[wid] = {
+            "ts": self._now(),
+            "path": str(path or "")[:80],
+            "standby": bool(standby),
+        }
+        self._purge_windows()
+
+    def _purge_windows(self) -> None:
+        cutoff = self._now() - self.WINDOW_TTL_SEC
+        for aid in list(self._windows):
+            wins = self._windows[aid]
+            for wid in [w for w, rec in wins.items()
+                        if float(rec.get("ts") or 0) < cutoff]:
+                wins.pop(wid, None)
+            if not wins:
+                self._windows.pop(aid, None)
+
+    def windows_snapshot(self) -> Dict[str, Dict[str, Any]]:
+        """{agent_id: {windows, standby, paths}}——仅统计 TTL 内存活窗口。"""
+        self._purge_windows()
+        out: Dict[str, Dict[str, Any]] = {}
+        for aid, wins in self._windows.items():
+            if not wins:
+                continue
+            out[aid] = {
+                "windows": len(wins),
+                "standby": sum(1 for r in wins.values() if r.get("standby")),
+                "paths": sorted({str(r.get("path") or "") for r in wins.values()}),
+            }
+        return out
 
     # ── claims ───────────────────────────────────────────────
 

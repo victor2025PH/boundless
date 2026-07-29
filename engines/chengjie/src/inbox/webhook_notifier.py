@@ -66,6 +66,9 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     "L4_created": {"types": {"draft_created"}, "levels": {"L4"}},
     "draft_created": {"types": {"draft_created"}, "levels": None},
     "sla_breach": {"types": {"draft_sla_breach"}, "levels": None},
+    # 二级升级（越过 escalate_hours）：比 breach 更高优先级，含 K2 永不处理的无主草稿
+    # ——严重积压该主动外发（不等主管登录看铃铛），这是「响了有人听」的最后一公里。
+    "sla_escalated": {"types": {"draft_sla_escalated"}, "levels": None},
     "backlog_summary": {"types": {"draft_backlog_summary"}, "levels": None},  # 积压聚合汇总
     "reassigned": {"types": {"draft_reassigned"}, "levels": None},
     "escalation": {"types": {"escalation"}, "levels": None},
@@ -281,6 +284,20 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
             f"**客户消息**: {peer or '（无）'}\n"
             f"**平台**: {data.get('platform', '?')}\n"
             "[📋 前往审批](/workspace/drafts)"
+        )
+
+    elif event_type == "draft_sla_escalated":
+        lv = data.get("autopilot_level", "?")
+        wait = data.get("wait_min", "?")
+        peer = str(data.get("peer_text_preview") or "")[:60]
+        _owner = "🅾️ 无人认领" if data.get("unclaimed") else "已认领"
+        title = f"🆘 草稿严重超时[{lv}]（{_owner}）"
+        text = (
+            f"**已等待**: {wait} 分钟（升级线={data.get('escalate_hours','?')}h）\n"
+            f"**认领状态**: {_owner}\n"
+            f"**客户消息**: {peer or '（无）'}\n"
+            f"**平台**: {data.get('platform', '?')}\n"
+            "[📋 立即处理](/workspace/drafts)"
         )
 
     elif event_type == "draft_backlog_summary":

@@ -97,6 +97,23 @@ class SLAWatcher:
             str(x) for x in (cfg.get("auto_expire_levels") or []) if str(x)
         ]
 
+        # 二级升级阈值（默认 0=关）：草稿越线超过此更高阈值 → 发 draft_sla_escalated
+        # 事件（比 breach 更高优先级），**并特别标记无主草稿**——K2 只再分配「已认领+
+        # 坐席断线」的草稿，从没被认领的无主草稿它永远跳过（`claim is None → continue`），
+        # 正是「L3 草稿 6.3 天没人碰」的类型（2026-07-29 实测）。escalate 只发信号不改
+        # 数据（处置权留人），把这类严重积压从瞬时事件变成可查、刺眼的升级告警。
+        self._escalate_hours: float = float(cfg.get("escalate_hours", 0.0))
+        # 已升级过的 draft_id（一次性，不随退避刷屏；草稿处置后随 alert 态一并清）
+        self._escalated_ids: Set[str] = set()
+
+        # 当前 tick 越线快照（观测扩展，零额外 DB）：让「最惨一条等了多久 / 有几条
+        # 无主严重超时」从「翻 metrics 累计计数」变成看板可见的当前值——修「响了没人听」
+        # 里「累计数在涨但看不到此刻多严重」的盲区。
+        self._breaching_now: int = 0
+        self._max_wait_min: int = 0
+        self._escalating_now: int = 0
+        self._unclaimed_escalating: int = 0
+
         # 积压汇总（默认关）：把逐草稿越线聚合成一条 draft_backlog_summary
         self._backlog_summary: bool = bool(cfg.get("backlog_summary", False))
         self._backlog_summary_min: int = int(cfg.get("backlog_summary_min", 1))
@@ -221,6 +238,12 @@ class SLAWatcher:
         still_breaching: Set[str] = set()
         by_level: Dict[str, int] = {"L3": 0, "L4": 0}
         stale_cutoff_ts = (now - self._stale_hours * 3600) if self._stale_hours > 0 else None
+        escalate_cutoff_ts = (
+            now - self._escalate_hours * 3600) if self._escalate_hours > 0 else None
+        # 本 tick 越线快照聚合（观测扩展）：max_wait 对**所有**越线草稿算，不只发告警的那些
+        max_wait_local = 0.0
+        escalating_local = 0
+        unclaimed_local = 0
 
         for d in drafts:
             level = d.get("autopilot_level")
@@ -235,6 +258,34 @@ class SLAWatcher:
                 continue
             still_breaching.add(draft_id)
             by_level[level] = by_level.get(level, 0) + 1
+
+            wait_all = (now - ca) / 60.0
+            if wait_all > max_wait_local:
+                max_wait_local = wait_all
+
+            # 二级升级（默认关）：越过 escalate_hours 的草稿——含 K2 永不处理的无主草稿
+            if escalate_cutoff_ts is not None and ca < escalate_cutoff_ts:
+                escalating_local += 1
+                _unclaimed = self._is_unclaimed(str(d.get("conversation_id") or ""))
+                if _unclaimed:
+                    unclaimed_local += 1
+                if draft_id not in self._escalated_ids:
+                    self._escalated_ids.add(draft_id)
+                    bus.publish("draft_sla_escalated", {
+                        "draft_id": draft_id,
+                        "conversation_id": str(d.get("conversation_id") or ""),
+                        "platform": str(d.get("platform") or ""),
+                        "autopilot_level": str(d.get("autopilot_level") or ""),
+                        "risk_level": str(d.get("risk_level") or ""),
+                        "wait_min": round(wait_all),
+                        "escalate_hours": self._escalate_hours,
+                        "unclaimed": _unclaimed,
+                        "peer_text_preview": str(d.get("peer_text") or "")[:80],
+                    })
+                    logger.warning(
+                        "K1 draft_sla_escalated: %s (level=%s wait=%dm%s)",
+                        draft_id, d.get("autopilot_level"), round(wait_all),
+                        " UNCLAIMED-无主" if _unclaimed else "")
 
             st = self._alert_state.get(draft_id)
             if st is None:
@@ -280,9 +331,27 @@ class SLAWatcher:
         # 已恢复（不再超时）的从告警态移除，允许后续重新越线时再次告警
         for gone in [k for k in self._alert_state if k not in still_breaching]:
             self._alert_state.pop(gone, None)
+        # escalate 去重集同步收敛（草稿被处置/恢复 → 允许将来重新升级）
+        self._escalated_ids.intersection_update(still_breaching)
+
+        # 越线快照存实例（供 status_snapshot → metrics 常驻可见「此刻最惨状况」）
+        self._breaching_now = len(still_breaching)
+        self._max_wait_min = int(round(max_wait_local))
+        self._escalating_now = escalating_local
+        self._unclaimed_escalating = unclaimed_local
 
         # 积压汇总（默认关）：把逐草稿越线聚合成一条滚动摘要
         self._maybe_emit_backlog_summary(bus, len(still_breaching), by_level, now)
+
+    def _is_unclaimed(self, conv_id: str) -> bool:
+        """会话是否无人认领（get_conversation_claim → None）。绝不抛（失败按已认领处理，
+        宁可漏报无主也不误标——escalate 只是提醒，保守一侧不制造噪声）。"""
+        if not conv_id:
+            return False
+        try:
+            return self._store.get_conversation_claim(conv_id) is None
+        except Exception:
+            return False
 
     def _maybe_emit_backlog_summary(
         self, bus: Any, count: int, by_level: Dict[str, int], now: float,
@@ -440,6 +509,7 @@ class SLAWatcher:
             "realert_max_sec": self._realert_max_sec,
             "stale_hours": self._stale_hours,
             "auto_expire_hours": self._auto_expire_hours,
+            "escalate_hours": self._escalate_hours,
             "backlog_summary": self._backlog_summary,
             "total_breach_events": self.total_breach_events,
             "total_reassigned": self.total_reassigned,
@@ -447,5 +517,10 @@ class SLAWatcher:
             "quiesced_count": self.quiesced_count,
             "total_summary_events": self.total_summary_events,
             "alerted_count": len(self._alert_state),
+            # 当前 tick 越线快照（此刻最惨状况，供健康看板/metrics 直读）
+            "breaching_now": self._breaching_now,
+            "max_wait_min": self._max_wait_min,
+            "escalating_now": self._escalating_now,
+            "unclaimed_escalating": self._unclaimed_escalating,
             "last_tick_ts": self.last_tick_ts,
         }

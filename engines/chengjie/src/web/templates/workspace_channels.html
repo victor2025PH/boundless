@@ -1,6 +1,7 @@
 {% extends "workspace_base.html" %}
 {% block title %}{{ (i18n or {}).get('chc_title', '渠道中心') }}{% endblock %}
 {% block head %}
+<link rel="stylesheet" href="/static/workspace/account-kit.css?v=20260729">
 <style>
   /* ============================================================
      渠道中心（P0 融合）：四个旧后台渠道页（telegram / line-rpa /
@@ -36,8 +37,7 @@
   .chc-cap-badge + .chc-cap-badge{margin-left:8px;}
   .chc-cap-badge.chc-cap-amber{background:rgba(245,158,11,.12);color:var(--tk-amber);border:1px solid rgba(245,158,11,.35);}
   .chc-cap-badge.chc-cap-red{background:rgba(225,29,72,.10);color:var(--tk-danger);border:1px solid rgba(225,29,72,.35);}
-  /* ── 网页会话健康条（P0）：messenger/whatsapp 外部 worker 会话状态 ── */
-  #chc-session-strip{margin:-6px 0 16px;}
+  /* ── 网页会话健康行（P0，2026-07-29 起内嵌进平台连接卡）── */
   .chc-sess{display:flex;flex-direction:column;gap:6px;padding:8px 12px;border:1px solid var(--tk-border);border-left:3px solid var(--tk-emerald);border-radius:9px;background:var(--tk-surface);font-size:12.5px;color:var(--tk-text-muted);line-height:1.7;}
   .chc-sess .chc-sess-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;flex-shrink:0;background:var(--tk-emerald);}
   .chc-sess.chc-sess-ok{flex-direction:row;align-items:center;}
@@ -54,19 +54,51 @@
   .chc-sess .chc-sess-btn[disabled]{opacity:.55;cursor:default;}
   .chc-sess a.chc-sess-link{color:var(--tk-brand);font-weight:600;text-decoration:none;white-space:nowrap;}
   .chc-sess a.chc-sess-link:hover{text-decoration:underline;}
-  /* ── 统一账号入口轨（四渠道）：深链工作台扫码 + TG A 线运维步骤 ── */
+  /* ── 平台连接卡（2026-07-29 UI 统一）：品牌图标 + 连接态徽章 + 账号摘要
+        + 深链 CTA + 内嵌会话健康行 + TG A 线运维步骤。
+        data-plat 注入品牌色 --pc（与收件箱 PC 映射同值）。 ── */
   #chc-acct-rail{margin:-6px 0 16px;}
-  .chc-acct-rail{padding:10px 12px;border:1px solid var(--tk-border);border-left:3px solid var(--tk-brand);border-radius:9px;background:var(--tk-surface);font-size:12.5px;color:var(--tk-text-muted);line-height:1.65;}
-  .chc-acct-rail[data-status="offline"]{border-left-color:var(--tk-danger);background:rgba(225,29,72,.05);}
-  .chc-acct-rail[data-status="connecting"]{border-left-color:var(--tk-amber);background:rgba(245,158,11,.06);}
-  .chc-acct-rail[data-status="connected"]{border-left-color:var(--tk-emerald);}
-  .chc-acct-rail-title{font-weight:700;color:var(--tk-text);font-size:13px;margin:0 0 4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
-  .chc-acct-rail-badge{display:inline-flex;align-items:center;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;border:1px solid var(--tk-border);background:var(--tk-surface-2);color:var(--tk-text-muted);}
+  .chc-acct-rail{position:relative;overflow:hidden;padding:13px 16px 12px;border:1px solid var(--tk-border);border-radius:13px;background:var(--tk-surface);font-size:12.5px;color:var(--tk-text-muted);line-height:1.65;box-shadow:var(--tk-shadow);}
+  .chc-acct-rail::before{content:'';position:absolute;top:0;left:0;right:0;height:2.5px;background:linear-gradient(90deg,var(--pc,var(--tk-brand)),color-mix(in srgb,var(--pc,var(--tk-brand)) 30%,transparent) 60%,transparent);}
+  .chc-acct-rail[data-plat="telegram"]{--pc:#2BA5E0;}
+  .chc-acct-rail[data-plat="line"]{--pc:#06C755;}
+  .chc-acct-rail[data-plat="messenger"]{--pc:#0084FF;}
+  .chc-acct-rail[data-plat="whatsapp"]{--pc:#25D366;}
+  .chc-acct-rail[data-status="offline"]{background:linear-gradient(180deg,rgba(225,29,72,.055),transparent 58%) var(--tk-surface);}
+  .chc-acct-rail[data-status="connecting"]{background:linear-gradient(180deg,rgba(245,158,11,.06),transparent 58%) var(--tk-surface);}
+  .chc-acct-head{display:flex;gap:12px;align-items:flex-start;}
+  .chc-acct-ic{width:38px;height:38px;border-radius:11px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--pc,var(--tk-brand)) 13%,transparent);line-height:0;}
+  .chc-acct-head-main{flex:1;min-width:0;}
+  .chc-acct-rail-title{font-weight:700;color:var(--tk-text);font-size:13.5px;margin:0 0 2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .chc-acct-rail-badge{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;border:1px solid var(--tk-border);background:var(--tk-surface-2);color:var(--tk-text-muted);}
+  .chc-acct-rail-badge::before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor;flex:0 0 auto;opacity:.85;}
   .chc-acct-rail[data-status="offline"] .chc-acct-rail-badge{border-color:rgba(225,29,72,.35);color:var(--tk-danger);background:rgba(225,29,72,.08);}
   .chc-acct-rail[data-status="connecting"] .chc-acct-rail-badge{border-color:rgba(245,158,11,.4);color:var(--tk-amber);background:rgba(245,158,11,.1);}
   .chc-acct-rail[data-status="connected"] .chc-acct-rail-badge{border-color:rgba(16,185,129,.35);color:var(--tk-emerald);background:rgba(16,185,129,.1);}
-  .chc-acct-rail-body{margin:0 0 8px;}
-  .chc-acct-rail-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
+  .chc-acct-rail-body{margin:0 0 9px;}
+  /* 账号摘要（头像叠放 + 账号/在线计数）：整块可点，深链工作台账号抽屉 */
+  a.chc-acct-sum{margin-left:auto;flex:0 0 auto;display:flex;align-items:center;gap:7px;padding:6px 11px;border:1px solid var(--tk-border);border-radius:11px;background:var(--tk-surface-2);text-decoration:none;transition:border-color .15s,box-shadow .15s;}
+  a.chc-acct-sum:hover{border-color:var(--pc,var(--tk-brand));box-shadow:var(--tk-shadow);}
+  a.chc-acct-sum[hidden]{display:none;}
+  .chc-acct-sum-num{font-size:15px;font-weight:800;color:var(--tk-text);line-height:1;}
+  .chc-acct-sum-num.ok{color:var(--tk-emerald);}
+  .chc-acct-sum-lbl{font-size:10.5px;color:var(--tk-text-muted);line-height:1.1;}
+  .chc-acct-sum-sep{width:1px;height:16px;background:var(--tk-border);flex:0 0 auto;}
+  .chc-acct-rail-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding-left:50px;}
+  @media(max-width:640px){.chc-acct-rail-actions{padding-left:0;}}
+  /* 零账号空态（获客面）：能力卖点 chips，CTA 复用上方主按钮不另设第二入口。
+     模板内 CSS 铁律：花括号后绝不能紧贴井号（那两个字符连写=Jinja 注释开始符，
+     会把后续内容整段吞进注释——2026-07-29 实锤：渠道页正文被吞进 head，壳布局全塌；
+     media query 里的 id 选择器一律在花括号后加空格）。 */
+  #chc-acct-empty{display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:9px 0 0 50px;}
+  #chc-acct-empty[hidden]{display:none;}
+  .chc-acct-empty-lead{font-size:12.5px;font-weight:600;color:var(--tk-text);}
+  .chc-acct-cap{display:inline-flex;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid color-mix(in srgb,var(--pc,var(--tk-brand)) 35%,transparent);color:var(--pc,var(--tk-brand));background:color-mix(in srgb,var(--pc,var(--tk-brand)) 8%,transparent);}
+  @media(max-width:640px){ #chc-acct-empty{padding-left:0;} }
+  /* 会话健康行内嵌进连接卡：由横幅降格为卡内分区（虚线分隔，无独立边框底色） */
+  #chc-acct-rail #chc-session-strip{margin:10px 0 0;}
+  #chc-acct-rail .chc-sess{border:none;border-top:1px dashed var(--tk-border);border-radius:0;background:transparent;padding:9px 0 0;}
+  #chc-acct-rail .chc-acct-ops{margin-top:10px;}
   .chc-acct-rail-actions a.chc-acct-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:8px;background:var(--tk-grad);color:#fff;text-decoration:none;font-weight:700;font-size:12.5px;}
   .chc-acct-rail-actions a.chc-acct-btn:hover{filter:brightness(1.05);}
   .chc-acct-rail-actions a.chc-acct-btn-sec{display:inline-flex;align-items:center;padding:6px 12px;border-radius:8px;border:1px solid var(--tk-border);background:var(--tk-surface-2);color:var(--tk-brand);text-decoration:none;font-weight:600;font-size:12.5px;}
@@ -223,25 +255,41 @@
     {% if _chc_cap %}<span class="chc-cap-badge chc-cap-amber">{{ ((i18n or {}).get('chc_cap_capped', '本渠道已被收件箱封顶为 {mode} · 全自动不生效')).replace('{mode}', _chc_cap) }}</span>{% endif %}
     {% if channel in (platform_draft_skips or []) %}<span class="chc-cap-badge chc-cap-red">{{ (i18n or {}).get('chc_cap_skipped', '本渠道已被收件箱跳过自动拟稿') }}</span>{% endif %}
   </div>
-  {# 统一账号入口轨：四渠道深链工作台；Telegram 另附 A 线主会话运维步骤 #}
+  {# 平台连接卡（2026-07-29 UI 统一）：品牌图标 + 连接态徽章 + 账号摘要（点击深链
+     工作台账号抽屉）+ CTA + 内嵌会话健康行；Telegram 另附 A 线主会话运维步骤 #}
   <div id="chc-acct-rail" class="chc-acct-rail" data-plat="{{ channel }}" data-status="unknown">
-    <div class="chc-acct-rail-title">
-      <span>{{ (i18n or {}).get('chc_acct_title', '账号入口') }}</span>
-      <span class="chc-acct-rail-badge" id="chc-acct-badge">{{ (i18n or {}).get('chc_acct_badge_seat', '坐席多开 · 工作台扫码') }}</span>
+    <div class="chc-acct-head">
+      <span class="chc-acct-ic" data-pf="{{ channel }}" data-size="22" aria-hidden="true"></span>
+      <div class="chc-acct-head-main">
+        <div class="chc-acct-rail-title">
+          <span>{{ (i18n or {}).get('chc_acct_title', '账号入口') }}</span>
+          <span class="chc-acct-rail-badge" id="chc-acct-badge">{{ (i18n or {}).get('chc_acct_badge_seat', '坐席多开 · 工作台扫码') }}</span>
+        </div>
+        {% if channel == 'telegram' %}
+        <p class="chc-acct-rail-body">{{ (i18n or {}).get('chc_acct_body_tg', '本页上方状态是 Telegram 主会话（A 线）。工作台扫码管理的是坐席多开号（B 线），两者互不替代。') }}</p>
+        {% elif channel == 'line' %}
+        <p class="chc-acct-rail-body">{{ (i18n or {}).get('chc_acct_body_line', 'LINE 账号接入与重连在聊天坐席账号抽屉完成（真机 / 协议扫码）。本页只管自动化节奏与语音链路。') }}</p>
+        {% elif channel == 'whatsapp' %}
+        <p class="chc-acct-rail-body">{{ (i18n or {}).get('chc_acct_body_wa', 'WhatsApp 扫码登录在聊天坐席账号抽屉完成（需本机连接服务）。下方会话健康条只观测网页会话。') }}</p>
+        {% else %}
+        <p class="chc-acct-rail-body">{{ (i18n or {}).get('chc_acct_body_msg', 'Messenger 登录在聊天坐席账号抽屉发起（服务器托管浏览器）。掉线可走下方健康条「重新登录」。') }}</p>
+        {% endif %}
+      </div>
+      <a class="chc-acct-sum" id="chc-acct-sum" hidden href="/workspace?drawer=1&amp;connect={{ channel }}" title="{{ (i18n or {}).get('chc_acct_cta', '去工作台管理账号') }}">
+        <span class="kit-av-stack" id="chc-acct-sum-avs"></span>
+        <span class="chc-acct-sum-num" id="chc-acct-sum-n">-</span><span class="chc-acct-sum-lbl">{{ (i18n or {}).get('chc_acct_sum_total', '账号') }}</span>
+        <span class="chc-acct-sum-sep"></span>
+        <span class="chc-acct-sum-num ok" id="chc-acct-sum-on">-</span><span class="chc-acct-sum-lbl">{{ (i18n or {}).get('chc_acct_sum_on', '在线') }}</span>
+      </a>
     </div>
-    {% if channel == 'telegram' %}
-    <p class="chc-acct-rail-body">{{ (i18n or {}).get('chc_acct_body_tg', '本页上方状态是 Telegram 主会话（A 线）。工作台扫码管理的是坐席多开号（B 线），两者互不替代。') }}</p>
-    {% elif channel == 'line' %}
-    <p class="chc-acct-rail-body">{{ (i18n or {}).get('chc_acct_body_line', 'LINE 账号接入与重连在聊天坐席账号抽屉完成（真机 / 协议扫码）。本页只管自动化节奏与语音链路。') }}</p>
-    {% elif channel == 'whatsapp' %}
-    <p class="chc-acct-rail-body">{{ (i18n or {}).get('chc_acct_body_wa', 'WhatsApp 扫码登录在聊天坐席账号抽屉完成（需本机连接服务）。下方会话健康条只观测网页会话。') }}</p>
-    {% else %}
-    <p class="chc-acct-rail-body">{{ (i18n or {}).get('chc_acct_body_msg', 'Messenger 登录在聊天坐席账号抽屉发起（服务器托管浏览器）。掉线可走下方健康条「重新登录」。') }}</p>
-    {% endif %}
     <div class="chc-acct-rail-actions">
       <a class="chc-acct-btn" id="chc-acct-connect" href="/workspace?drawer=1&amp;connect={{ channel }}">{{ (i18n or {}).get('chc_acct_cta', '去工作台管理账号') }}</a>
       <a class="chc-acct-btn-sec" href="/workspace">{{ (i18n or {}).get('chc_acct_inbox', '打开聊天坐席') }}</a>
     </div>
+    {# 零账号空态（chcLoadAcctSummary 填充）：能力卖点 chips，词条复用收件箱 inbox.acct.* 单一词源 #}
+    <div id="chc-acct-empty" hidden></div>
+    {# 网页会话健康行（messenger/whatsapp 才拉数据；空/失败静默隐藏）——内嵌卡内 #}
+    <div id="chc-session-strip" style="display:none"></div>
     {% if channel == 'telegram' %}
     <details class="chc-acct-ops" id="chc-acct-ops">
       <summary>{{ (i18n or {}).get('chc_acct_ops_sum', '主会话（A 线）离线怎么办') }}</summary>
@@ -254,8 +302,6 @@
     </details>
     {% endif %}
   </div>
-  {# 网页会话健康条（P0）：messenger/whatsapp 才拉数据；空/失败静默隐藏 #}
-  <div id="chc-session-strip" style="display:none"></div>
   {# 壳层契约：收件箱平台封顶表，供各渠道正文 script 消费（名字勿改） #}
   <script>window.__chcPlatformCaps = {{ (platform_mode_caps or {})|tojson }};</script>
   <div class="chc-scope">
@@ -263,11 +309,12 @@
   </div>
 </div></div>
 <script>
-/* tab 品牌图标（platform_icons.js 已由工作台壳加载） */
+/* tab / 连接卡品牌图标（platform_icons.js 已由工作台壳加载；尺寸读 data-size，默认 18） */
 (function(){
   try{
-    document.querySelectorAll('#chc-tabs [data-pf]').forEach(function(el){
-      if(window.platformIconSVG) el.innerHTML = window.platformIconSVG(el.getAttribute('data-pf'), {size:18});
+    document.querySelectorAll('#chc-tabs [data-pf], .chc-acct-ic[data-pf]').forEach(function(el){
+      var sz = parseInt(el.getAttribute('data-size'), 10) || 18;
+      if(window.platformIconSVG) el.innerHTML = window.platformIconSVG(el.getAttribute('data-pf'), {size:sz});
     });
   }catch(_){}
 })();
@@ -329,10 +376,12 @@ async function chcLoadSessions(){
       el.innerHTML = '<div class="chc-sess chc-sess-ok"><span class="chc-sess-dot"></span>'+
         chcSessEsc(window.Tf('chc_sess_ok_line',{n:list.length}))+'</div>';
       el.style.display='';
+      chcSetRailStatus('connected');   /* 会话健康 = MSG/WA 连接态权威信号 */
       return;
     }
-    /* 部分掉线=琥珀条；全军覆没=红条 */
+    /* 部分掉线=琥珀条；全军覆没=红条（连接卡随之变色） */
     var cls = (bad.length >= list.length) ? 'chc-sess-down' : 'chc-sess-warn';
+    chcSetRailStatus(bad.length >= list.length ? 'offline' : 'connecting');
     var h = '<div class="chc-sess '+cls+'">';
     h += '<div class="chc-sess-title"><span class="chc-sess-dot"></span>'+
       chcSessEsc(window.Tf('chc_sess_bad_title',{bad:bad.length,total:list.length}))+'</div>';
@@ -414,5 +463,77 @@ async function chcLoadTgMainStatus(){
   }catch(_e){ /* 旁路 */ }
 }
 if(CHC_CHANNEL === 'telegram'){ chcLoadTgMainStatus(); }
+/* ============================================================
+   平台连接卡（2026-07-29 UI 统一）：
+   · chcSetRailStatus —— data-status 单一写入口（TG=主会话状态专管；
+     MSG/WA=会话健康行专管；LINE 及无更权威写者时由账号摘要兜底）
+   · chcLoadAcctSummary —— GET /api/accounts 过滤本渠道 → 头像叠放（≤3）
+     + 账号/在线计数；非 TG 平台把徽章从静态说明升级为真实计数。
+     接口失败/无账号 → 静默保持静态文案（观测旁路，不打扰配置工作）。
+   ============================================================ */
+function chcSetRailStatus(st){
+  var rail = document.getElementById('chc-acct-rail');
+  if(rail) rail.setAttribute('data-status', st);
+}
+var CHC_AV_GRAD = [['#60a5fa','#2563eb'],['#34d399','#059669'],['#a78bfa','#7c3aed'],['#f472b6','#db2777'],['#fbbf24','#d97706'],['#22d3ee','#0891b2'],['#818cf8','#4f46e5'],['#2dd4bf','#0d9488']];
+function chcAcctGrad(seed){
+  var s = String(seed||'?'), h = 0;
+  for(var i=0;i<s.length;i++){ h = (h*31 + s.charCodeAt(i)) >>> 0; }
+  var g = CHC_AV_GRAD[h % CHC_AV_GRAD.length];
+  return 'linear-gradient(135deg,'+g[0]+','+g[1]+')';
+}
+async function chcLoadAcctSummary(){
+  var sum = document.getElementById('chc-acct-sum');
+  if(!sum) return;
+  try{
+    var r = await window.apiFetch('/api/accounts', {credentials:'same-origin'});
+    if(!r.ok) throw new Error('http '+r.status);
+    var d = await r.json();
+    var rows = ((d && d.accounts)||[]).filter(function(a){ return String(a.platform||'') === CHC_CHANNEL; });
+    var emptyBox = document.getElementById('chc-acct-empty');
+    if(!rows.length){
+      sum.hidden = true;
+      /* 零账号 → 获客空态：能力卖点 chips（词条复用收件箱 inbox.acct.*，单一词源；
+         CTA 不重复——上方主按钮就是接入入口） */
+      if(emptyBox){
+        var pn = {telegram:'Telegram', line:'LINE', messenger:'Messenger', whatsapp:'WhatsApp'}[CHC_CHANNEL] || CHC_CHANNEL;
+        emptyBox.innerHTML = '<span class="chc-acct-empty-lead">'+chcSessEsc(window.Tf('inbox.acct.empty_lead',{plat:pn}))+'</span>'+
+          ['inbox.acct.cap_autoreply','inbox.acct.cap_xlate','inbox.acct.cap_multi'].map(function(k){
+            return '<span class="chc-acct-cap">'+chcSessEsc(window.T(k))+'</span>';
+          }).join('');
+        emptyBox.hidden = false;
+      }
+      return;
+    }
+    if(emptyBox) emptyBox.hidden = true;
+    var on = rows.filter(function(a){ return a.running; }).length;
+    var elN = document.getElementById('chc-acct-sum-n');
+    var elOn = document.getElementById('chc-acct-sum-on');
+    if(elN) elN.textContent = String(rows.length);
+    if(elOn) elOn.textContent = String(on);
+    var avs = document.getElementById('chc-acct-sum-avs');
+    if(avs){
+      var top = rows.slice().sort(function(x,y){ return (y.running?1:0)-(x.running?1:0); }).slice(0,3);
+      avs.innerHTML = top.map(function(a){
+        var nm = String(a.label||a.self_name||a.account_id||'?').trim();
+        var ini = chcSessEsc((nm.charAt(0)||'?').toUpperCase());
+        var img = a.self_avatar ? '<img src="'+chcSessEsc(String(a.self_avatar))+'" alt="" onerror="this.remove()">' : '';
+        return '<span class="kit-stk-av" style="background:'+chcAcctGrad(CHC_CHANNEL+':'+String(a.account_id||''))+'">'+ini+img+'</span>';
+      }).join('');
+    }
+    sum.hidden = false;
+    if(CHC_CHANNEL !== 'telegram'){
+      var badge = document.getElementById('chc-acct-badge');
+      if(badge) badge.textContent = on > 0
+        ? window.Tf('chc_acct_badge_on', {on:on, n:rows.length})
+        : window.T('chc_acct_badge_all_off');
+      var rail = document.getElementById('chc-acct-rail');
+      if(rail && rail.getAttribute('data-status') === 'unknown'){
+        rail.setAttribute('data-status', on > 0 ? 'connected' : 'offline');
+      }
+    }
+  }catch(_e){ /* 旁路 */ }
+}
+chcLoadAcctSummary();
 </script>
 {% endblock %}

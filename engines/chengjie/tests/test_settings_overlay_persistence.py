@@ -171,6 +171,59 @@ def test_intent_keywords_put_replaces_whole_table(auth_client, config_dir, confi
     assert config_manager.config["intent"]["keywords"] == {"order": ["下单", "购买"]}
 
 
+def test_intent_keywords_optimistic_lock(auth_client, config_manager):
+    """整字典替换 → 需乐观锁：两窗口先后保存，后者会整体抹掉前者的意图增删。
+
+    判据（见 persona_manager.profile_rev 文档）：**整文档替换**语义才加 rev；
+    字段级 patch 端点加 rev 只会制造假冲突（见下一个用例）。
+    """
+    r = auth_client.get("/api/settings/intent-keywords")
+    assert r.status_code == 200
+    rev = r.json().get("rev")
+    assert rev, "GET 必须回 rev（编辑器据此带 expected_rev）"
+
+    # 窗口A：用正确 rev 保存 → 通过，拿到新 rev
+    r = auth_client.put("/api/settings/intent-keywords", json={
+        "keywords": {"order": ["下单"]}, "expected_rev": rev})
+    assert r.status_code == 200, r.text
+    new_rev = r.json().get("rev")
+    assert new_rev and new_rev != rev
+
+    # 窗口B：仍拿旧 rev（它加载时的） → 409，且**未写入**（A 的改动不被抹掉）
+    r = auth_client.put("/api/settings/intent-keywords", json={
+        "keywords": {"refund": ["退款"]}, "expected_rev": rev})
+    assert r.status_code == 409
+    assert config_manager.config["intent"]["keywords"] == {"order": ["下单"]}
+
+    # 窗口B 显式确认覆盖（不带 rev）→ 旧契约放行
+    r = auth_client.put("/api/settings/intent-keywords", json={
+        "keywords": {"refund": ["退款"]}})
+    assert r.status_code == 200
+    assert config_manager.config["intent"]["keywords"] == {"refund": ["退款"]}
+
+
+def test_settings_save_is_field_patch_and_takes_no_rev(auth_client, config_manager):
+    """反向不变量：``/api/settings/save`` 是**字段级 patch**，刻意**不**加乐观锁。
+
+    两窗口改同一 section 的不同字段本就能各自落地（最小 diff 合并）——给它加 rev
+    会把「A 改 temperature、B 改 max_tokens」这类合法并发误判成冲突。本例把该判据
+    钉住：谁哪天顺手给它加了 rev 校验，这里会红。
+    """
+    r1 = auth_client.post("/api/settings/save", json={
+        "section": "ai", "fields": {"temperature": 0.7}})
+    assert r1.status_code == 200, r1.text
+    # 不回 rev（无乐观锁语义）
+    assert "rev" not in r1.json()
+
+    # 另一窗口改同 section 的**另一个**字段：不带 rev 也必须成功，且不覆盖前者
+    r2 = auth_client.post("/api/settings/save", json={
+        "section": "ai", "fields": {"max_tokens": 512}})
+    assert r2.status_code == 200, r2.text
+    ai_cfg = config_manager.config.get("ai") or {}
+    assert ai_cfg.get("temperature") == 0.7, "字段级 patch 不应互相抹掉"
+    assert ai_cfg.get("max_tokens") == 512
+
+
 # ── ③ persona 绑定：扁平键走 overlay；accounts 列表内保持整文件 ─────────────
 
 def test_tg_assign_profile_flat_goes_overlay(auth_client, config_dir):

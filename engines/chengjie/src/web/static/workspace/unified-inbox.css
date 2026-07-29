@@ -597,27 +597,47 @@
 .imgxl-seg .val.tr{color:var(--xl-tr-text);font-weight:500;}
 .imgxl-act{display:flex;gap:6px;margin-top:4px;}
 
-/* P0: 账号/人格切换条 */
-.account-chips{display:flex;gap:6px;padding:6px 10px;flex-wrap:wrap;border-bottom:1px solid var(--border);background:var(--bg-soft);}
-.acct-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;border:1px solid var(--border);background:var(--bg-panel);cursor:pointer;font-size:12px;color:var(--text-sub);transition:all .15s;white-space:nowrap;max-width:160px;}
-.acct-chip:hover{border-color:var(--accent,#6b8af8);}
-.acct-chip.active{background:var(--accent,#6b8af8);color:#fff;border-color:var(--accent,#6b8af8);}
-.acct-chip .ac-dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;}
-.acct-chip .ac-dot.on{box-shadow:0 0 0 2px rgba(34,197,94,.25);}
-/* P0 身份化：切换条也用与抽屉一致的账号头像（渐变+字首），在线态用绿环，离线灰化 */
-.acct-chip .ac-av{position:relative;width:18px;height:18px;border-radius:50%;flex:0 0 auto;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:10px;line-height:1;user-select:none;}
-.acct-chip .ac-av.off{filter:grayscale(.45);opacity:.7;}
-.acct-chip .ac-av.on{box-shadow:0 0 0 2px color-mix(in srgb,var(--green) 45%,transparent);}
-.acct-chip.active .ac-av.on{box-shadow:0 0 0 2px rgba(255,255,255,.6);}
-.acct-chip .ac-name{overflow:hidden;text-overflow:ellipsis;}
-.acct-chip .ac-unread{background:#ef4444;color:#fff;border-radius:999px;font-size:10px;padding:0 5px;min-width:16px;text-align:center;line-height:15px;}
-.acct-chip.active .ac-unread{background:rgba(255,255,255,.3);}
-.acct-chip.ac-toggle{margin-left:auto;border-style:dashed;}
+/* P0: 账号/人格切换条（2026-07-29 rail 化）：单行横滚不换行 + 头像状态点 +
+   未读分级（常规=中性灰 / 需人工·超时=警报红）+ 品牌色选中态（--pc 由 JS 按平台注入）。
+   容器兜底 overflow-x（对旧结构直出 chip 也可横滚，任何中间态不破版）。 */
+.account-chips{display:flex;align-items:center;gap:4px;padding:6px 8px 6px 10px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;border-bottom:1px solid var(--border);background:var(--bg-soft);}
+.account-chips::-webkit-scrollbar{display:none;}
+.account-chips .ac-scroll{display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;padding:2px 2px;}
+.account-chips .ac-scroll::-webkit-scrollbar{display:none;}
+/* 溢出渐隐提示：JS 按 scrollLeft 打 has-more / has-less，两端按需渐隐 */
+.account-chips .ac-scroll.has-more{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 22px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 22px),transparent);}
+.account-chips .ac-scroll.has-less{-webkit-mask-image:linear-gradient(90deg,transparent,#000 22px);mask-image:linear-gradient(90deg,transparent,#000 22px);}
+.account-chips .ac-scroll.has-more.has-less{-webkit-mask-image:linear-gradient(90deg,transparent,#000 22px,#000 calc(100% - 22px),transparent);mask-image:linear-gradient(90deg,transparent,#000 22px,#000 calc(100% - 22px),transparent);}
+/* 右端工具区：视图开关（仅在线）与管理入口，常驻不随滚动 */
+.account-chips .ac-tools{display:flex;align-items:center;gap:4px;flex:0 0 auto;padding-left:7px;border-left:1px solid var(--border);}
+.acct-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 10px 3px 4px;min-height:28px;box-sizing:border-box;border-radius:999px;border:1px solid var(--border);background:var(--bg-panel);cursor:pointer;font-size:12px;color:var(--text-sub);transition:border-color .15s,background .15s,color .15s,box-shadow .15s;white-space:nowrap;max-width:180px;flex:0 0 auto;}
+.acct-chip:hover{border-color:color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 55%,transparent);}
+/* 选中态：品牌色淡底 + 描边 + 着色文字（不实心填充，保住头像与徽标对比度） */
+.acct-chip.active{background:color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 13%,transparent);border-color:var(--pc,var(--accent,#6b8af8));color:color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 72%,var(--text-main));font-weight:600;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 30%,transparent);}
+.acct-chip.ac-all{padding-left:9px;}
+.acct-chip .ac-all-ic{display:inline-flex;line-height:0;opacity:.8;flex:0 0 auto;}
+/* P0 身份化：切换条与抽屉一致的账号头像（渐变+字首/真头像）；
+   在线态改由右下角状态点表达（2px 表面描边），离线头像轻度去饱和 */
+.acct-chip .ac-av{position:relative;width:22px;height:22px;border-radius:50%;flex:0 0 auto;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:11px;line-height:1;user-select:none;}
+.acct-chip .ac-av.off{filter:grayscale(.55);opacity:.8;}
+.acct-chip .ac-av .ac-st{position:absolute;right:-1px;bottom:-1px;width:8px;height:8px;border-radius:50%;background:var(--text-tiny,#94a3b8);box-shadow:0 0 0 2px var(--bg-soft,#f8fafc);}
+.acct-chip .ac-av .ac-st.on{background:var(--green,#22c55e);}
+.acct-chip.active .ac-av .ac-st{box-shadow:0 0 0 2px color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 13%,var(--bg-soft,#f8fafc));}
+.acct-chip .ac-name{overflow:hidden;text-overflow:ellipsis;max-width:104px;}
+/* 未读分级：常规未读=中性深灰（不再全员红色轰炸）；attn=需人工/SLA 危急，红色回归警报语义 */
+.acct-chip .ac-unread{background:color-mix(in srgb,var(--text-sub,#64748b) 82%,transparent);color:#fff;border-radius:999px;font-size:10px;padding:0 5px;min-width:16px;text-align:center;line-height:15px;font-variant-numeric:tabular-nums;}
+.acct-chip .ac-unread.attn{background:#ef4444;}
+.acct-chip.active .ac-unread{background:color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 78%,#334155);}
+.acct-chip.active .ac-unread.attn{background:#ef4444;}
+.acct-chip.ac-toggle{border-style:dashed;padding-left:10px;}
 /* P1 治理：「仅历史」（未配对）账号 chip 弱化——虚线框 + 降透明度，与真账号一眼区分 */
-.acct-chip.ac-ghost{opacity:.6;border-style:dashed;}
-.acct-chip.ac-ghost.active{opacity:.9;}
+.acct-chip.ac-ghost{opacity:.62;border-style:dashed;}
+.acct-chip.ac-ghost.active{opacity:.92;}
 .acct-chip .ac-ghost-tag{font-size:10px;line-height:14px;padding:0 4px;border-radius:4px;background:color-mix(in srgb,var(--text-sub) 14%,transparent);color:var(--text-sub);flex:0 0 auto;}
-.acct-chip.active .ac-ghost-tag{background:rgba(255,255,255,.25);color:#fff;}
+.acct-chip.active .ac-ghost-tag{background:color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 20%,transparent);color:inherit;}
+/* 工具区齿轮（打开账号管理抽屉） */
+.ac-gear{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:999px;border:1px solid var(--border);background:var(--bg-panel);color:var(--text-sub);cursor:pointer;transition:border-color .15s,color .15s;flex:0 0 auto;padding:0;}
+.ac-gear:hover{border-color:var(--pc,var(--accent,#6b8af8));color:var(--pc,var(--accent,#6b8af8));}
 /* P0: 会话条上的账号/人格角标 + 左侧人格色条 */
 .conv-item{position:relative;}
 .conv-item .conv-acct-accent{position:absolute;left:0;top:10px;bottom:10px;width:2px;border-radius:0 2px 2px 0;opacity:.55;}
@@ -1002,6 +1022,23 @@ button.fleet-cell:disabled{cursor:default;}
 .acct-skel-av,.acct-skel-line{background:linear-gradient(90deg,var(--bg-soft) 25%,color-mix(in srgb,var(--text-tiny) 14%,var(--bg-soft)) 37%,var(--bg-soft) 63%);background-size:400% 100%;animation:acctSkelShimmer 1.4s ease infinite;}
 @keyframes acctSkelShimmer{0%{background-position:100% 0;}100%{background-position:0 0;}}
 @media (prefers-reduced-motion:reduce){.acct-skel-av,.acct-skel-line{animation:none;}}
+
+/* ===== 会话列表骨架屏（初载替代裸「加载中…」） ===== */
+.conv-skel-list{padding:6px 0;display:flex;flex-direction:column;gap:2px;}
+.conv-skel{display:flex;align-items:center;gap:10px;padding:10px 12px;}
+.conv-skel-av{width:40px;height:40px;border-radius:50%;flex-shrink:0;}
+.conv-skel-lines{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px;}
+.conv-skel-line{height:10px;border-radius:5px;}
+.conv-skel-line.w40{width:40%;}.conv-skel-line.w45{width:45%;}.conv-skel-line.w50{width:50%;}
+.conv-skel-line.w55{width:55%;}.conv-skel-line.w60{width:60%;}.conv-skel-line.w65{width:65%;}
+.conv-skel-line.w70{width:70%;}.conv-skel-line.w75{width:75%;}.conv-skel-line.w80{width:80%;}
+.conv-skel-line.w90{width:90%;}
+.conv-skel-av,.conv-skel-line{background:linear-gradient(90deg,var(--bg-soft) 25%,color-mix(in srgb,var(--text-tiny) 14%,var(--bg-soft)) 37%,var(--bg-soft) 63%);background-size:400% 100%;animation:acctSkelShimmer 1.4s ease infinite;}
+.conv-skel:nth-child(2) .conv-skel-av,.conv-skel:nth-child(2) .conv-skel-line{animation-delay:.08s;}
+.conv-skel:nth-child(3) .conv-skel-av,.conv-skel:nth-child(3) .conv-skel-line{animation-delay:.16s;}
+.conv-skel:nth-child(4) .conv-skel-av,.conv-skel:nth-child(4) .conv-skel-line{animation-delay:.24s;}
+.conv-skel:nth-child(5) .conv-skel-av,.conv-skel:nth-child(5) .conv-skel-line{animation-delay:.32s;}
+@media (prefers-reduced-motion:reduce){.conv-skel-av,.conv-skel-line{animation:none;}}
 
 /* ===== 空状态升级（P0：品牌色渐变底由 JS 内联注入 + 能力 chips + 主 CTA） ===== */
 .acct-empty-rich{border-style:solid;padding:14px;display:flex;flex-direction:column;gap:9px;align-items:flex-start;}
@@ -1453,15 +1490,27 @@ button.fleet-cell:disabled{cursor:default;}
 .tag-strip-chip .t-cnt{background:rgba(0,0,0,.12);border-radius:8px;padding:0 4px;font-size:10px;}
 .tag-strip-chip .t-unread{background:#ef4444;color:#fff;border-radius:8px;padding:0 4px;font-size:11px;font-variant-numeric:tabular-nums;font-weight:700;}
 
-/* ===== Phase 17: KB 自动推送面板 ===== */
-.kb-autosuggest{border-top:1px solid var(--border);background:var(--bg-soft);padding:8px 12px;display:none;}
+/* ===== KB 智能推荐（P0 收敛）：composer 上方浮层（对齐 .copilot-panel 定位，不挤占版面）+ 工具条常驻 chip =====
+   主题 token 化：原 #0369a1/#bae6fd/#38bdf8 硬编码蓝在暗色主题违和，统一换 var(--accent)/var(--border)。 */
+.kb-autosuggest{position:absolute;bottom:100%;left:0;right:0;background:var(--bg-elev);border:1px solid var(--border);border-radius:10px 10px 0 0;box-shadow:0 -6px 20px rgba(0,0,0,.1);z-index:48;padding:8px 12px;display:none;}
 .kb-autosuggest.show{display:block;}
-.kb-autosuggest-hdr{display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:600;color:#0369a1;margin-bottom:5px;}
-.kb-as-item{border:1px solid #bae6fd;border-radius:7px;padding:6px 9px;margin-bottom:4px;background:var(--bg-elev);cursor:pointer;font-size:12px;transition:border-color .1s;}
-.kb-as-item:hover{border-color:#38bdf8;}
+.kb-autosuggest-hdr{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;font-weight:600;color:var(--text-sub);margin-bottom:5px;}
+.kb-as-hdr-acts{display:flex;align-items:center;gap:6px;font-weight:400;}
+.kb-as-hdr-acts select{font-size:11px;padding:2px 4px;}
+.kb-as-item{border:1px solid var(--border);border-radius:7px;padding:6px 9px;margin-bottom:4px;background:var(--bg-panel);cursor:pointer;font-size:12px;transition:border-color .1s;}
+.kb-as-item:hover{border-color:var(--accent);}
 .kb-as-title{font-weight:600;color:var(--text-main);margin-bottom:2px;}
 .kb-as-answer{color:var(--text-sub);line-height:1.4;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
-.kb-as-footer{display:flex;gap:5px;margin-top:4px;}
+.kb-as-footer{display:flex;gap:5px;margin-top:4px;align-items:center;}
+.kb-as-cat{font-size:11px;color:var(--text-tiny);}
+.kb-as-conf{margin-left:auto;font-size:10px;line-height:16px;padding:0 6px;border-radius:99px;border:1px solid var(--border);color:var(--text-sub);flex:0 0 auto;}
+.kb-as-conf.high{border-color:transparent;background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent);}
+.kb-chip .kb-chip-n{font-size:10px;line-height:14px;padding:0 5px;border-radius:99px;background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);margin-left:3px;}
+.kb-chip.hi .kb-chip-n{background:var(--accent);color:#fff;}
+/* P1.5 多句分条发送 chip：输入区多行时出现，点击切换 分条/整段（仅提示，不占常驻版面） */
+.bubble-chip{align-self:flex-end;margin:0 6px 4px 0;font-size:11px;line-height:18px;padding:2px 8px;border-radius:99px;border:1px solid var(--border);background:color-mix(in srgb,var(--accent) 10%,var(--bg-panel));color:var(--accent);cursor:pointer;white-space:nowrap;flex:0 0 auto;display:inline-flex;align-items:center;gap:4px;}
+.bubble-chip.off{background:var(--bg-panel);color:var(--text-sub);opacity:.75;}
+.bubble-chip:hover{border-color:var(--accent);}
 
 /* ===== Phase 21: 消息全文检索结果 ===== */
 .msg-search-overlay{position:absolute;top:100%;left:0;right:0;background:var(--bg-elev);border:1px solid var(--border);border-top:none;border-radius:0 0 10px 10px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:40;max-height:320px;overflow-y:auto;display:none;}
@@ -1733,3 +1782,71 @@ button.fleet-cell:disabled{cursor:default;}
   .contact-badge,.contact-unread{line-height:19px;height:auto;min-height:19px;}
   .contact-go{opacity:1;}
 }
+
+/* ============================================================
+   账号 UI 统一（2026-07-29）：标签 strip 入 chip 家族 / 抽屉美化 /
+   连接弹窗动效。集中追加于文件末（覆盖靠源序，不动前文块）。
+   ============================================================ */
+/* ── 标签 strip 与账号 rail 同族：同圆角/近似字号与高度 ── */
+.tag-strip-chip{border-radius:999px;font-size:11.5px;min-height:24px;box-sizing:border-box;padding:3px 10px;}
+/* ── 抽屉：平台分组头品牌渐变底 + 品牌图标块 + tinted 新增按钮（--pc 由 JS 注入组容器）── */
+.acct-plat-header{padding:7px 9px;border-radius:11px;background:linear-gradient(90deg,color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 9%,transparent),transparent 72%);}
+.acct-plat-icon{width:34px;height:34px;border-radius:10px;background:color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 12%,transparent);}
+.acct-add-btn{border-color:color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 42%,transparent);color:var(--pc,var(--accent,#6b8af8));background:color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 8%,transparent);}
+.acct-add-btn:hover{border-color:var(--pc,var(--accent,#6b8af8));color:var(--pc,var(--accent,#6b8af8));background:color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 16%,transparent);}
+/* ── 抽屉：状态胶囊三态（connecting=琥珀+旋转点，renderDrawerAccounts 打）── */
+.acct-pill.connecting{color:var(--warn,#d97706);background:color-mix(in srgb,var(--warn,#f59e0b) 15%,transparent);}
+.acct-pill.connecting .acct-chip-spin{width:9px;height:9px;}
+/* ── 抽屉：视觉焦点让给「需处理」——在线主按钮降为品牌 tinted，重连升为暖色实心 ── */
+.acct-btn.primary{background:color-mix(in srgb,var(--accent,#6b8af8) 11%,transparent);border-color:color-mix(in srgb,var(--accent,#6b8af8) 38%,transparent);color:var(--accent,#6b8af8);}
+.acct-btn.primary:hover{background:color-mix(in srgb,var(--accent,#6b8af8) 19%,transparent);border-color:var(--accent,#6b8af8);color:var(--accent,#6b8af8);filter:none;}
+.acct-btn.reconnect{background:var(--red,#ef4444);border-color:var(--red,#ef4444);color:#fff;}
+.acct-btn.reconnect:hover{background:color-mix(in srgb,var(--red,#ef4444) 86%,#000);border-color:var(--red,#ef4444);color:#fff;}
+/* ── 抽屉：离线卡红调淡渍强调（在线卡维持品牌左线，异常一眼浮出）── */
+.acct-card.off{background:linear-gradient(180deg,color-mix(in srgb,var(--red,#ef4444) 4%,transparent),transparent 46%) var(--bg-elev);}
+/* ── 连接弹窗：方式卡 hover 抬升 + 品牌描边推荐 ── */
+.connect-mode-opt{transition:border-color .15s,background .15s,box-shadow .15s,transform .15s;}
+.connect-mode-opt:hover{transform:translateY(-1px);border-color:var(--pc,var(--accent,#6b8af8));box-shadow:0 3px 10px color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 14%,transparent);}
+.connect-mode-opt.recommended{border-color:color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 45%,transparent);box-shadow:0 1px 6px color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 10%,transparent);}
+/* ── 连接弹窗：二维码状态可视化（真实事件驱动）──
+   scanned=手机已扫等确认（变暗+品牌描边）；ok=授权成功画勾；新码到达轻脉冲 */
+.connect-qr-wrap{border-radius:14px;}
+.connect-qr-wrap img{transition:filter .2s,opacity .2s;}
+.connect-qr-wrap.scanned{border-color:var(--pc,var(--accent,#6b8af8));box-shadow:0 0 0 3px color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 16%,transparent);}
+.connect-qr-wrap.scanned img{filter:blur(2px) brightness(.82);}
+.connect-qr-wrap.ok{border-color:var(--green,#22c55e);}
+.connect-qr-okov{position:absolute;inset:0;display:none;flex-direction:column;gap:10px;align-items:center;justify-content:center;background:color-mix(in srgb,var(--green,#22c55e) 9%,rgba(255,255,255,.85));}
+.connect-qr-wrap.ok .connect-qr-okov{display:flex;}
+/* 刚接入账号的身份预览（授权成功层）：头像 + 昵称 */
+.connect-qr-okid{display:flex;align-items:center;justify-content:center;gap:8px;max-width:88%;}
+.connect-qr-okid:empty{display:none;}
+.connect-qr-okid .okid-av{width:28px;height:28px;border-radius:50%;overflow:hidden;flex:0 0 auto;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:13px;box-shadow:0 0 0 2px rgba(255,255,255,.9);}
+.connect-qr-okid .okid-av img{width:100%;height:100%;object-fit:cover;display:block;}
+.connect-qr-okid .okid-nm{font-size:13px;font-weight:700;color:var(--th-ink-green7,#15803d);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.connect-qr-okov svg{width:64px;height:64px;stroke:var(--green,#16a34a);stroke-width:3;fill:none;stroke-linecap:round;stroke-linejoin:round;}
+.connect-qr-okov circle{stroke-dasharray:151;stroke-dashoffset:151;animation:qrOkCircle .5s ease-out forwards;}
+.connect-qr-okov path{stroke-dasharray:36;stroke-dashoffset:36;animation:qrOkCheck .3s .35s ease-out forwards;}
+@keyframes qrOkCircle{to{stroke-dashoffset:0;}}
+@keyframes qrOkCheck{to{stroke-dashoffset:0;}}
+.connect-qr-wrap img.qr-fresh{animation:qrSwap .4s ease;}
+@keyframes qrSwap{0%{opacity:.3;transform:scale(.965);}100%{opacity:1;transform:scale(1);}}
+@media (prefers-reduced-motion:reduce){
+  .connect-qr-okov circle,.connect-qr-okov path{animation:none;stroke-dashoffset:0;}
+  .connect-qr-wrap img.qr-fresh{animation:none;}
+  .connect-mode-opt:hover{transform:none;}
+}
+/* ── 舰队摘要图标化 + 异常脉冲（2026-07-29）── */
+.fleet-lbl{display:inline-flex;align-items:center;gap:3px;}
+.fleet-lbl svg{opacity:.65;flex:0 0 auto;}
+@keyframes fleetAbnPulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--warn,#f59e0b) 45%,transparent);}100%{box-shadow:0 0 0 9px transparent;}}
+.fleet-cell.abn.has-abn{animation:fleetAbnPulse .9s ease-out 2;}
+/* ── rail 键盘可达性：焦点圈用品牌色，键盘用户看得见自己在哪 ── */
+.acct-chip:focus-visible,.ac-gear:focus-visible{outline:2px solid var(--pc,var(--accent,#6b8af8));outline-offset:1px;}
+@media (prefers-reduced-motion:reduce){
+  .fleet-cell.abn.has-abn{animation:none;}
+}
+/* ── 暗色主题适配：rail 状态点表面描边 / 未读中性徽标 / 抽屉离线渍底 ── */
+:root[data-cp-theme="dark"] .acct-chip .ac-av .ac-st{box-shadow:0 0 0 2px var(--bg-soft,#111a2e);}
+:root[data-cp-theme="dark"] .acct-chip .ac-unread{background:color-mix(in srgb,var(--text-sub,#94a3b8) 55%,transparent);}
+:root[data-cp-theme="dark"] .acct-chip .ac-unread.attn{background:#ef4444;}
+:root[data-cp-theme="dark"] .connect-qr-okov{background:color-mix(in srgb,var(--green,#22c55e) 14%,rgba(15,23,42,.82));}

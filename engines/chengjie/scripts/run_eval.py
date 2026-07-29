@@ -215,9 +215,13 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     if args.duel_semantic:
+        # 注意：此处若不用别名，局部 import 会把模块级 `format_report`（意图评测
+        # 报告器）遮蔽成 main() 函数级局部名 → 裸跑意图评测在 585 行抛
+        # UnboundLocalError（2026-07-29 实测事故，勿回退）。
         from src.eval.duel_semantic_eval import (
-            append_trend, check_corpus, format_report, load_samples, run_llm,
+            append_trend, check_corpus, load_samples, run_llm,
         )
+        from src.eval.duel_semantic_eval import format_report as format_duel_report
         samples = load_samples()
         report = check_corpus(samples)
         _mode = "corpus"
@@ -254,7 +258,7 @@ def main(argv=None) -> int:
         if args.json:
             print(json.dumps(report, ensure_ascii=False, indent=2))
         else:
-            print(format_report(report))
+            print(format_duel_report(report))
         if not report.get("available"):
             return 0          # 缺金标优雅跳过（与其他 eval 同约定）
         return 0 if report["passed"] else 1

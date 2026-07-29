@@ -282,7 +282,12 @@ async def test_route_merge_preserves_rich_fields(app_on):
         r = await c.put("/api/personas/profiles/su_wan", headers=_HDRS,
                         json=_FORM_PATCH)
         assert r.status_code == 200
-        assert r.json() == {"ok": True, "profile_id": "su_wan", "merged": True}
+        _body = r.json()
+        # P2 乐观锁起响应新增 rev（落库后内容指纹）；核心契约字段仍逐一断言
+        assert _body["ok"] is True
+        assert _body["profile_id"] == "su_wan"
+        assert _body["merged"] is True
+        assert _body.get("rev")  # 非空指纹
 
         r = await c.get("/api/personas/profiles/su_wan", headers=_HDRS)
         assert r.status_code == 200
