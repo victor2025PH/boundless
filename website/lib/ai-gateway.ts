@@ -38,6 +38,44 @@ const MODEL_ALLOWLIST: string[] = (process.env.AI_GATEWAY_MODELS || VENDOR_MODEL
   .map((s) => s.trim())
   .filter(Boolean);
 
+// ── 识图中继（我们自己的 GPU VLM，经 117→VPS 反向隧道暴露到 VPS localhost）──
+// VISION_RELAY_URL 形如 http://127.0.0.1:18411/v1（隧道到 192.168.0.176:11434/v1）。
+// 未设 = 识图中继禁用（暗态）；识图模型请求回落报错，客户端自行回落。
+const VISION_RELAY_URL = (process.env.VISION_RELAY_URL || "").trim().replace(/\/+$/, "");
+const VISION_MODELS: string[] = (process.env.VISION_MODELS || "qwen2.5vl:7b,qwen2.5vl:32b,qwen2.5vl:72b")
+  .split(",")
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+// 识图一次调用的额度折算（图片 token 远多于纯文本，按固定成本计，防按字符低估）
+export const VISION_CHAR_COST = Number(process.env.AI_GATEWAY_VISION_CHARS || 1500);
+
+export function visionRelayEnabled(): boolean {
+  return Boolean(VISION_RELAY_URL);
+}
+
+export function isVisionModel(model: unknown): boolean {
+  const m = String(model || "").trim().toLowerCase();
+  if (!m) return false;
+  if (VISION_MODELS.includes(m)) return true;
+  // 兜底特征：常见 VLM 名含 vl / llava / -v（glm-4v）
+  return /(\bvl\b|vl:|llava|-v\b|4v)/.test(m);
+}
+
+export async function proxyVision(
+  body: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<Response> {
+  if (!VISION_RELAY_URL) throw new Error("no_vision_relay");
+  // 中继是 Ollama /v1（keyless）；model 原样透传（客户端已给具体 VLM 名）
+  const payload = { ...body, stream: false, max_tokens: clampMaxTokens(body.max_tokens) };
+  return fetch(`${VISION_RELAY_URL}/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer ollama" },
+    body: JSON.stringify(payload),
+    signal,
+  });
+}
+
 const QUOTA_DB = process.env.AI_GATEWAY_QUOTA_DB || path.join(DATA_DIR, "ai-gateway.db");
 const GW_LOG = process.env.AI_GATEWAY_LOG || path.join(DATA_DIR, "ai-gateway.jsonl");
 const GW_LOG_MAX_BYTES = 10 * 1024 * 1024; // 超过即轮转一份 .1（保一代，观测数据非审计）

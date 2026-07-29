@@ -19,7 +19,7 @@
  */
 import crypto from "crypto";
 import Database from "better-sqlite3";
-import { mkdirSync } from "fs";
+import { mkdirSync, readFileSync, statSync } from "fs";
 import path from "path";
 import { DATA_DIR } from "./data-dir";
 
@@ -40,10 +40,42 @@ function db(): Database.Database {
   return _db;
 }
 
-/** 解析 env 凭据组。非法条目跳过（宁缺勿错）。空数组 = 池禁用。 */
+// 文件源缓存：86 组凭据每请求重读+解析太费；按 mtime 失效缓存。
+let _fileCache: { mtimeMs: number; creds: TgCred[] } | null = null;
+
+function readPoolRaw(): string {
+  // 优先文件（POOL_TG_CREDS_FILE，600 权限、不进 env dump，适合几十上百组）；
+  // 回落 env（POOL_TG_CREDS，少量组时方便）。
+  const file = (process.env.POOL_TG_CREDS_FILE || "").trim();
+  if (file) {
+    try {
+      return readFileSync(file, "utf8");
+    } catch {
+      return "";
+    }
+  }
+  return (process.env.POOL_TG_CREDS || "").trim();
+}
+
+/** 解析凭据组（文件或 env）。非法条目跳过（宁缺勿错）。空数组 = 池禁用。 */
 export function loadPoolCreds(): TgCred[] {
-  const raw = (process.env.POOL_TG_CREDS || "").trim();
-  if (!raw) return [];
+  const file = (process.env.POOL_TG_CREDS_FILE || "").trim();
+  if (file) {
+    try {
+      const m = statSync(file).mtimeMs;
+      if (_fileCache && _fileCache.mtimeMs === m) return _fileCache.creds;
+      const parsed = parseCreds(readFileSync(file, "utf8"));
+      _fileCache = { mtimeMs: m, creds: parsed };
+      return parsed;
+    } catch {
+      return [];
+    }
+  }
+  return parseCreds(readPoolRaw());
+}
+
+function parseCreds(raw: string): TgCred[] {
+  if (!raw || !raw.trim()) return [];
   let arr: unknown;
   try {
     arr = JSON.parse(raw);

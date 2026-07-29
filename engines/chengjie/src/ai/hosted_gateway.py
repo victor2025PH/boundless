@@ -213,6 +213,45 @@ def ensure_hosted_telegram(config_manager: Any, *, fetch: Optional[Fetch] = None
     return True
 
 
+def ensure_hosted_vision(config_manager: Any, *, fetch: Optional[Fetch] = None) -> bool:
+    """托管版：把识图（VLM）指向官网网关（我们自己的 GPU 识图模型，非云端大模型）。
+
+    问题 #2 的公网解——集团识图 GPU（176/140）在内网，公网够不着；改由 bd2026.cc 网关
+    经 117→VPS 反向隧道转发到 176。注入 ``vision.*``：base_url=网关 /api/ai/v1，
+    provider=openai_compatible，model=qwen2.5vl:7b，api_key=设备令牌，enabled=true。
+
+    仅托管态 + 用户未自配识图后端时注入（自建/已配 base_url 的不覆盖）。
+    需已持有设备令牌（ai.api_key=cx.…）——识图与聊天共用同一枚令牌鉴权。
+    """
+    cfg = getattr(config_manager, "config", None) or {}
+    if not _wants_hosted(cfg):
+        return False
+    v = cfg.get("vision") if isinstance(cfg.get("vision"), dict) else {}
+    # 用户已自配识图后端（base_url/base_urls/智谱 key）→ 不动
+    if (str(v.get("base_url") or "").strip() or v.get("base_urls")
+            or str(v.get("api_key") or "").strip()):
+        # 但若是本模块此前注入的（_hosted_vision）则允许续期刷新
+        if not v.get("_hosted_vision"):
+            return False
+
+    ai = cfg.get("ai") if isinstance(cfg.get("ai"), dict) else {}
+    token = str(ai.get("api_key") or "")
+    if not token.startswith("cx."):
+        return False  # 还没拿到设备令牌（识图与聊天共用），等 ensure_hosted_ai 先成
+
+    model = ((cfg.get("licensing") or {}).get("hosted_ai") or {}).get("vision_model") or "qwen2.5vl:7b"
+    if not isinstance(cfg.get("vision"), dict):
+        cfg["vision"] = {}
+    cfg["vision"]["enabled"] = True
+    cfg["vision"]["provider"] = "openai_compatible"
+    cfg["vision"]["base_url"] = _gateway_base(cfg)  # https://bd2026.cc/api/ai/v1
+    cfg["vision"]["model"] = str(model)
+    cfg["vision"]["api_key"] = token
+    cfg["vision"]["_hosted_vision"] = True
+    logger.info("[hosted-vision] 识图已指向官网网关（我们的 GPU 模型 %s，用户无需配置）", model)
+    return True
+
+
 def ensure_hosted_ai(config_manager: Any, *, fetch: Optional[Fetch] = None) -> bool:
     """若适用则把设备令牌注入 ``ai.*`` + 进程 env。返回是否已接入托管网关。
 

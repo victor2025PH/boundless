@@ -237,3 +237,48 @@ def test_hosted_telegram_noop_when_not_hosted(tmp_path, monkeypatch):
     cm = _CMT(tmp_path, {"api_id": "", "api_hash": ""})
     cm.config["licensing"]["hosted_ai"]["enabled"] = False
     assert hg.ensure_hosted_telegram(cm, fetch=lambda *a, **k: {"ok": True}) is False
+
+
+# ── 托管识图注入（问题 #2 公网解）──────────────────────────────────────
+
+class _CMV:
+    def __init__(self, tmp_path, ai_key="cx.tok", vision=None):
+        self.config_path = str(tmp_path / "config" / "config.yaml")
+        Path(self.config_path).parent.mkdir(parents=True, exist_ok=True)
+        self.config = {
+            "ai": {"api_key": ai_key},
+            "vision": dict(vision or {}),
+            "licensing": {"hosted_ai": {"enabled": True, "site_url": "https://bd2026.cc"}},
+        }
+
+
+def test_hosted_vision_injects_gateway(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMV(tmp_path)
+    assert hg.ensure_hosted_vision(cm) is True
+    v = cm.config["vision"]
+    assert v["enabled"] is True and v["provider"] == "openai_compatible"
+    assert v["base_url"] == "https://bd2026.cc/api/ai/v1"
+    assert v["model"] == "qwen2.5vl:7b"
+    assert v["api_key"] == "cx.tok" and v.get("_hosted_vision") is True
+
+
+def test_hosted_vision_skips_without_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMV(tmp_path, ai_key="")  # 还没设备令牌
+    assert hg.ensure_hosted_vision(cm) is False
+    assert not cm.config["vision"].get("base_url")
+
+
+def test_hosted_vision_never_overrides_user_backend(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMV(tmp_path, vision={"base_url": "http://192.168.1.9:11434", "provider": "openai_compatible"})
+    assert hg.ensure_hosted_vision(cm) is False
+    assert cm.config["vision"]["base_url"] == "http://192.168.1.9:11434"
+
+
+def test_hosted_vision_noop_when_not_hosted(tmp_path, monkeypatch):
+    monkeypatch.delenv("AITR_DESKTOP_MODE", raising=False)
+    cm = _CMV(tmp_path)
+    cm.config["licensing"]["hosted_ai"]["enabled"] = False
+    assert hg.ensure_hosted_vision(cm) is False

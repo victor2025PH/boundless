@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  VISION_CHAR_COST,
   consumeQuota,
   estimateRequestChars,
   gatewayEnabled,
+  isVisionModel,
   logGateway,
   proxyChatCompletions,
+  proxyVision,
   quotaSnapshot,
   verifyDeviceToken,
+  visionRelayEnabled,
 } from "@/lib/ai-gateway";
 
 export const runtime = "nodejs";
@@ -47,7 +51,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: { message: "bad_request" } }, { status: 400 });
     }
 
-    const inChars = estimateRequestChars(body);
+    // 识图模型 → 路由到我们自己的 GPU VLM 中继（隧道），而非 DeepSeek（不做视觉）。
+    const vision = isVisionModel(body.model);
+    if (vision && !visionRelayEnabled()) {
+      return NextResponse.json({ error: { message: "vision_unavailable" } }, { status: 503 });
+    }
+    // 识图按固定成本计额（图片 token 远超字符估算）；文本按 in+out 实计。
+    const inChars = vision ? VISION_CHAR_COST : estimateRequestChars(body);
     const snap = await quotaSnapshot(claims.mid);
     if (snap.busy) {
       void logGateway({ ev: "reject", mid: claims.mid, why: "global" });
@@ -65,12 +75,13 @@ export async function POST(req: NextRequest) {
     }
 
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 55000);
+    // 识图冷载/大图更慢，给更宽超时
+    const timer = setTimeout(() => ac.abort(), vision ? 120000 : 55000);
     let upstream: Response;
     try {
-      upstream = await proxyChatCompletions(body, ac.signal);
+      upstream = vision ? await proxyVision(body, ac.signal) : await proxyChatCompletions(body, ac.signal);
     } catch {
-      void logGateway({ ev: "upstream_fail", mid: claims.mid, ms: Date.now() - started });
+      void logGateway({ ev: vision ? "vision_fail" : "upstream_fail", mid: claims.mid, ms: Date.now() - started });
       return NextResponse.json({ error: { message: "upstream_error" } }, { status: 502 });
     } finally {
       clearTimeout(timer);
