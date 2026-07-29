@@ -843,13 +843,35 @@ class AIClient(LoggerMixin):
             return str(getattr(self, "_provider", "") or "AI")
 
     def _alert_key_failure_if_matches(self, err: Any) -> None:
-        """err 像 key 失效则弹主机告警；占位/未配置 key（桌面首启等预期态）不弹。绝不抛。"""
+        """err 像 key 失效则弹主机告警；占位/未配置 key（桌面首启等预期态）不弹。绝不抛。
+
+        托管试用态（ai._hosted_trial）额外触发**设备令牌强制换新**：令牌过期/被吊销时
+        不等守护线程的小时级刷新——后台线程重领 + 热替换运行中 client 的 api_key，
+        下一条消息即恢复（本条消息仍走池/本地兜底，不阻塞）。
+        """
         try:
             if err is None or getattr(self, "_key_is_placeholder", False):
                 return
             from src.utils.host_alert import looks_like_key_failure, notify_key_failure
             if looks_like_key_failure(err):
+                self._maybe_refresh_hosted_token()
                 notify_key_failure(self._alert_label(), str(err)[:200])
+        except Exception:
+            pass
+
+    def _maybe_refresh_hosted_token(self) -> None:
+        """托管令牌 401 自愈（非托管态零开销直返）。绝不抛、绝不阻塞事件循环。"""
+        try:
+            cfg = getattr(self.config, "config", None) or {}
+            if not ((cfg.get("ai") or {}).get("_hosted_trial")):
+                return
+            from src.ai.hosted_gateway import schedule_forced_refresh
+
+            def _swap(tok: str) -> None:
+                cli = getattr(self, "_oa_client", None)
+                if cli is not None:
+                    cli.api_key = tok  # AsyncOpenAI 每请求读取 api_key，热替换即生效
+            schedule_forced_refresh(self.config, on_token=_swap)
         except Exception:
             pass
 
@@ -2897,14 +2919,24 @@ class AIClient(LoggerMixin):
             )
 
         # ★ 回复格式优化：教 AI 像真人聊天一样分短句回复
+        # 投递侧 ``inbox.reply_style.bubbles`` 开时按行拆成独立消息（见 reply_split）；
+        # 此处合同必须与 max_parts 对齐，否则 LLM 写 5 行会被并成 3 条、听感不自然。
         _channel = (context.get("channel") or "").lower()
         if _is_companion or _channel in ("whatsapp_rpa", "messenger_rpa", "line_rpa"):
+            _max_lines = 3
+            try:
+                from src.inbox.reply_split import parse_bubbles_cfg as _pbc_fmt
+                _bc = _pbc_fmt(_cfg_ctx if isinstance(_cfg_ctx, dict) else {})
+                if _bc.get("enabled"):
+                    _max_lines = max(2, min(5, int(_bc.get("max_parts") or 3)))
+            except Exception:
+                _max_lines = 3
             prompt_parts.append(
                 "【回复格式——像真人发消息（最高优先级）】\n"
                 "你在用手机聊天，不是写文章。每行会被拆成独立消息发出去。\n"
                 "规则：\n"
                 "- 每行 1 句话，10-30 字。用真正的换行隔开（不是写 \\n 字符）。\n"
-                "- 一次回复 2-4 行就够了，不要超过 5 行。\n"
+                f"- 一次回复 1-{_max_lines} 行就够了，不要超过 {_max_lines} 行。\n"
                 "- emoji 最多 1/3 的行带 emoji，每行最多 1 个。\n"
                 "- 想单独发表情就独占一行，放 1-3 个相同 emoji。\n"
                 "- 语气词（嗯、哈哈、诶）可以单独一行。\n"

@@ -308,6 +308,25 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
             out["pool"]["stats"] = {}
         return out
 
+    @app.get("/api/workspace/hosted-quota")
+    async def api_workspace_hosted_quota(request: Request):
+        """托管 AI 试用当日额度（绿条徽章数据源；任意登录用户，60s 进程缓存）。
+
+        非托管部署（自建 Key / 未接网关）→ ``{enabled: false}``，前端不渲染徽章。
+        探针软失败也不抛——徽章缺席即可，绝不给工作台添新报错面。
+        """
+        api_auth(request)
+        if config_manager is None:
+            return {"ok": True, "enabled": False}
+        import asyncio
+
+        try:
+            from src.ai.hosted_gateway import quota_probe
+            out = await asyncio.to_thread(quota_probe, config_manager)
+            return {"ok": True, **out}
+        except Exception:
+            return {"ok": True, "enabled": False}
+
     @app.get("/api/workspace/ai-runtime-status")
     async def api_workspace_ai_runtime_status(request: Request):
         """云端 AI 降级态 + 平台通道离线态（坐席工作台状态条轮询用，任意登录用户可读，

@@ -277,3 +277,46 @@ class TestWebAdminEnvOverride:
         asyncio.run(mgr.load())
         web = mgr.config["web_admin"]
         assert web["port"] == 18787 and web["auth_token"] == "KEEP"
+
+
+class TestHostedAiEnvOverride:
+    """AITR_HOSTED_AI_*：厂商托管试用 Key（仅占位/空 Key 时注入）。"""
+
+    def _make(self, tmp_path, api_key=""):
+        cfg = {
+            "telegram": {"api_id": "111", "api_hash": "abc", "phone_number": "+1"},
+            "ai": {
+                "api_key": api_key,
+                "base_url": "https://api.deepseek.com",
+                "model": "deepseek-v4-flash",
+            },
+            "skills": {"enabled": []},
+            "web_admin": {"enabled": True, "port": 18787},
+        }
+        p = tmp_path / "config.yaml"
+        p.write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
+        return p
+
+    def test_hosted_fills_empty_key(self, tmp_path, monkeypatch):
+        p = self._make(tmp_path, "")
+        monkeypatch.setenv("AITR_HOSTED_AI_KEY", "sk-hosted-trial")
+        monkeypatch.setenv("AITR_HOSTED_AI_BASE_URL", "https://trial.example/v1")
+        monkeypatch.setenv("AITR_HOSTED_AI_MODEL", "trial-model")
+        mgr = ConfigManager(str(p))
+        asyncio.run(mgr.load())
+        ai = mgr.config["ai"]
+        assert ai["api_key"] == "sk-hosted-trial"
+        assert ai["base_url"] == "https://trial.example/v1"
+        assert ai["model"] == "trial-model"
+        assert ai.get("_hosted_trial") is True
+
+    def test_hosted_does_not_override_user_key(self, tmp_path, monkeypatch):
+        p = self._make(tmp_path, "sk-user-own")
+        monkeypatch.setenv("AITR_HOSTED_AI_KEY", "sk-hosted-trial")
+        monkeypatch.setenv("AITR_HOSTED_AI_MODEL", "trial-model")
+        mgr = ConfigManager(str(p))
+        asyncio.run(mgr.load())
+        ai = mgr.config["ai"]
+        assert ai["api_key"] == "sk-user-own"
+        assert ai["model"] == "deepseek-v4-flash"
+        assert not ai.get("_hosted_trial")

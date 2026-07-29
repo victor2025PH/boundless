@@ -80,6 +80,41 @@
         {% endif %}
       </div>
       {% endif %}
+      {#- 托管 AI 试用通道（云端网关按日计量）：与上面的授权字符额度是两套水表。
+          绿条 CTA「查看额度」跳到本页——这里必须能看到同一个数字，否则数字对不上会被当 bug。
+          客户端 fetch，非托管部署接口回 enabled:false 整块隐藏。 -#}
+      <div id="mb-hosted-quota" style="display:none;font-size:.72rem;margin-top:.45rem;padding-top:.45rem;border-top:1px dashed var(--bd,#e5e7eb)">
+        <span style="color:var(--t2)">{{ (i18n or {}).get('mb_hosted_title', 'AI 试用通道（云端）') }}</span>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:.25rem">
+          <span id="mb-hosted-line" style="font-weight:600"></span>
+          <span style="flex:0 0 72px;height:6px;border-radius:999px;background:var(--bg2,#f1f5f9);overflow:hidden;display:inline-block">
+            <i id="mb-hosted-bar" style="display:block;height:100%;width:0%;background:var(--green,#16a34a);border-radius:999px;transition:width .4s ease"></i>
+          </span>
+        </div>
+        <div id="mb-hosted-note" style="display:none;color:var(--red);margin-top:.2rem"></div>
+      </div>
+      <script>
+      (function(){
+        var LINE={{ (i18n or {}).get('mb_hosted_line', '今日已用 {used} / {budget} 字符')|tojson }};
+        var EXH={{ (i18n or {}).get('mb_hosted_exhausted', '今日已用完，明天自动恢复')|tojson }};
+        var BUSY={{ (i18n or {}).get('mb_hosted_busy', '通道繁忙，稍后自动恢复')|tojson }};
+        fetch('/api/workspace/hosted-quota',{credentials:'same-origin'})
+          .then(function(r){return r.json();})
+          .then(function(q){
+            if(!q || q.enabled===false || q.error || !q.budget) return;
+            var box=document.getElementById('mb-hosted-quota');
+            var line=document.getElementById('mb-hosted-line');
+            var bar=document.getElementById('mb-hosted-bar');
+            var note=document.getElementById('mb-hosted-note');
+            if(!box) return;
+            box.style.display='block';
+            if(line) line.textContent=LINE.replace('{used}', (q.used||0).toLocaleString()).replace('{budget}', (q.budget||0).toLocaleString());
+            var pct=q.budget>0?Math.max(0,Math.min(100,Math.round((q.used||0)*100/q.budget))):0;
+            if(bar){ bar.style.width=pct+'%'; if(pct>=100) bar.style.background='var(--red,#dc2626)'; }
+            if(note && (q.exhausted||q.busy)){ note.textContent=q.busy?BUSY:EXH; note.style.display='block'; }
+          }).catch(function(){});
+      })();
+      </script>
       <div style="font-size:.72rem;color:var(--t2);margin-top:.3rem">
         {{ (i18n or {}).get('mb_channels', '允许渠道') }}:
         {% if lic.channels %}{{ lic.channels|join(' · ') }}{% else %}{{ (i18n or {}).get('mb_channels_all', '全渠道') }}{% endif %}

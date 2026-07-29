@@ -19,26 +19,32 @@
           （30s 节流，仅 {page, fn, type} 消毒字段，与哑按钮守卫同一后端计数）。
 
    2) window.wsBanner —— 横幅仲裁器
-      背景：工作台同时存在 5 条状态横幅（AI 未配置引导 / AI 降级 / 通道离线 /
+      背景：工作台同时存在多条状态横幅（AI 未配置 / AI 试用 / AI 降级 / 通道离线 /
       重启冷却 + 收件箱连接条），此前各自 show/hide，可同时出现叠罗汉挤压工作区。
       语义：register(id, prio, display) 登记；set(id, want) 声明「想显示」；
       仲裁器保证**同一时刻最多渲染一条**（prio 最高者），其余保持 want 状态，
       高优先级消失后自动回显。优先级约定：
         conn-banner(100 页面连接) > ws-chandown(80 通道离线) >
         ws-aidegrade(60 AI 降级) > ws-restartcool(40 重启冷却) >
-        ws-aiguide(20 配置引导)。
+        ws-aiguide(20 配置引导) > ws-aitrial(18 托管试用)。
    ============================================================================ */
 (function(){
   'use strict';
-  /* ── 遥测限流：网络级失败才上报，30s 一条，绝不阻塞/抛错 ── */
+  /* ── 遥测限流：网络级失败才上报，30s 一条，绝不阻塞/抛错 ──
+     endpoint＝失败请求的 path（本地先剥查询串/hash，后端再消毒+数字掩码）：
+     没有它，「哪个接口在坏」完全无从归因（2026-07-29 事故：单会话 136 次
+     apiFetch 错误只知道页面不知道接口）。 */
   var _lastBeacon = 0;
-  function _beacon(type){
+  function _beacon(type, url){
     try{
       var now = Date.now();
       if(now - _lastBeacon < 30000) return;
       _lastBeacon = now;
       if(!navigator.sendBeacon) return;
-      var body = JSON.stringify({page: location.pathname, fn: 'apiFetch', type: String(type||'neterr')});
+      var ep = '';
+      try{ ep = String(url || '').split('?')[0].split('#')[0].slice(0, 200); }catch(_u){}
+      var body = JSON.stringify({page: location.pathname, fn: 'apiFetch',
+                                 type: String(type||'neterr'), endpoint: ep});
       navigator.sendBeacon('/api/telemetry/frontend-error', new Blob([body], {type:'application/json'}));
     }catch(_e){}
   }
@@ -84,7 +90,7 @@
     function run(){
       return _oneAttempt(url, init, timeoutMs).catch(function(err){
         var isAbortByCaller = err && err.name === 'AbortError' && init && init.signal && init.signal.aborted;
-        if(!isAbortByCaller) _beacon(err && err.name === 'TimeoutError' ? 'timeout' : (err && err.name === 'AbortError' ? 'timeout' : 'neterr'));
+        if(!isAbortByCaller) _beacon(err && err.name === 'TimeoutError' ? 'timeout' : (err && err.name === 'AbortError' ? 'timeout' : 'neterr'), url);
         if(isAbortByCaller || attempt >= retries) throw err;
         attempt += 1;
         return _sleep(retryDelay * attempt).then(run);
@@ -118,7 +124,8 @@
     'ws-chandown':   function(){ return window.T ? window.T('ws.banner.name.chandown')   : 'channel'; },
     'ws-aidegrade':  function(){ return window.T ? window.T('ws.banner.name.aidegrade')  : 'ai'; },
     'ws-restartcool':function(){ return window.T ? window.T('ws.banner.name.restartcool'): 'maintenance'; },
-    'ws-aiguide':    function(){ return window.T ? window.T('ws.banner.name.aiguide')    : 'setup'; }
+    'ws-aiguide':    function(){ return window.T ? window.T('ws.banner.name.aiguide')    : 'setup'; },
+    'ws-aitrial':    function(){ return window.T ? window.T('ws.banner.name.aitrial')    : 'trial'; }
   };
   function _renderStackChip(topId, suppressed){
     var chip = document.getElementById('ws-banner-stack');
@@ -176,5 +183,6 @@
   window.wsBanner.register('ws-aidegrade',    60, 'flex');
   window.wsBanner.register('ws-restartcool',  40, 'flex');
   window.wsBanner.register('ws-aiguide',      20, 'flex');
+  window.wsBanner.register('ws-aitrial',      18, 'flex');
 })();
 </script>

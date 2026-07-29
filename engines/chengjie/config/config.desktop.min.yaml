@@ -19,7 +19,10 @@ telegram:
   phone_number: ""
   session_name: "desktop"
 
-# AI 大模型（桌面首启向导收集 api_key 后写 overlay，本文件保持留空）
+# AI 大模型（桌面托管版默认走官网网关，用户无需填 Key）
+# 启动时 ensure_hosted_ai → POST bd2026.cc/api/ai/device-token → 设备令牌写入内存；
+# 真云 Key 只在官网 DEEPSEEK_API_KEY。运维也可直注 AITR_HOSTED_AI_*（永不入库）。
+# 用户保存自有 Key 后永远优先自有。licensing.hosted_ai.enabled: false 可关网关。
 ai:
   provider: "openai_compatible"     # gemini | openai_compatible（DeepSeek/Ollama/vLLM 走这条）
   api_key: ""                       # ← 首启向导写 config.local.yaml overlay，勿手改本文件

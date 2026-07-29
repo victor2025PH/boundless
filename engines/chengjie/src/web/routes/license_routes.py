@@ -292,6 +292,29 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
     # 三个端点都**绝不抛**：领试用失败不该让首启向导卡死，用户随时能退回
     # 「粘贴授权码」那条老路。网络调用走 to_thread，别把 web loop 堵在外网上。
 
+    async def _maybe_enable_hosted_ai(app_) -> None:
+        """领取试用成功后立即接入托管 AI 网关（设备令牌）并热重建 AIClient。
+
+        网关只对台账里的指纹发令牌 → 首启「领试用」是接入前置；此钩子把
+        「领完 → AI 能用」压缩到同一次交互，无需重启/等守护线程下一轮。
+        已配置（用户自有 Key 或已持有令牌）时零开销跳过；全程 best-effort 绝不抛。
+        """
+        try:
+            import asyncio
+
+            from src.utils.golive import _is_placeholder
+            ai = (_cfg_or_none().get("ai") or {})
+            if not _is_placeholder(ai.get("api_key")):
+                return  # 已有可用 Key（自有或令牌），别反复 reload
+            from src.ai.hosted_gateway import ensure_hosted_ai
+            if not await asyncio.to_thread(ensure_hosted_ai, _CONFIG_MANAGER):
+                return
+            from src.web.routes.unified_inbox_setup_routes import reload_ai_runtime
+            await reload_ai_runtime(app_, _CONFIG_MANAGER)
+            logger.info("[hosted-ai] 领取试用后已自动接入 AI 网关并热生效")
+        except Exception:
+            logger.debug("[hosted-ai] claim 后接入网关失败（守护线程会重试）", exc_info=True)
+
     @app.post("/api/admin/license/trial-claim")
     async def api_trial_claim(request: Request):
         """向官网领取 7 天试用（按本机机器码去重，同一台机器重复领拿回同一单）。"""
@@ -309,6 +332,8 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
         # 去重命中已签发的单子 → 授权当场就在响应里，直接激活，省掉一轮轮询。
         if res.get("ok") and res.get("license"):
             res = _consume_trial_payload(res, res.pop("license", ""), "")
+        if res.get("ok"):
+            await _maybe_enable_hosted_ai(request.app)
         return res
 
     @app.get("/api/admin/license/trial-claim")
@@ -323,6 +348,8 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
         if res.get("ok"):
             res = _consume_trial_payload(
                 res, res.pop("license", ""), res.pop("topup_voucher", ""))
+        if res.get("ok") and res.get("claimed"):
+            await _maybe_enable_hosted_ai(request.app)
         return res
 
     @app.post("/api/admin/license/trial-bind-code")

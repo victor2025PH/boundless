@@ -10,9 +10,11 @@ import {
   Download,
   HardDrive,
   HelpCircle,
+  KeyRound,
   MessageCircle,
   Monitor,
   RefreshCw,
+  ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
 import { useLang } from "./LanguageContext";
@@ -100,11 +102,17 @@ export default function ChatxDownloadSection({ lang: forced }: { lang?: BrandLan
       <div className="relative mx-auto max-w-5xl px-5">
         {/* 头部 */}
         <Reveal eager className="text-center">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-neon-cyan/30 bg-neon-cyan/10 px-3 py-1 text-xs text-neon-cyan">
-            <ShieldCheck className="h-3.5 w-3.5" />
-            {zh
-              ? "数据本地保存 · 免显卡 · 内置自动更新 · SHA-256 可校验"
-              : "Local-first data · no GPU · auto-update built in · SHA-256 verifiable"}
+          <span className="inline-flex flex-wrap items-center justify-center gap-x-3 gap-y-1 rounded-full border border-neon-cyan/30 bg-neon-cyan/10 px-4 py-1 text-xs text-neon-cyan">
+            <span className="inline-flex items-center gap-1.5 font-medium">
+              <KeyRound className="h-3.5 w-3.5" />
+              {zh ? "无需 API Key，装完即用" : "No API key — works out of the box"}
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              {zh
+                ? "数据本地保存 · 免显卡 · 自动更新 · SHA-256 可校验"
+                : "Local-first data · no GPU · auto-update · SHA-256 verifiable"}
+            </span>
           </span>
           <div className="mt-5 flex items-center justify-center gap-3">
             <ProductIcon product="chatx" size={48} alt="智聊 ChatX" className="h-12 w-12 object-contain" />
@@ -261,6 +269,14 @@ export default function ChatxDownloadSection({ lang: forced }: { lang?: BrandLan
                         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
                         <span>
                           <RichText text={s.warn[lang]} />
+                        </span>
+                      </div>
+                    )}
+                    {"blocker" in s && s.blocker && (
+                      <div className="mt-2 flex items-start gap-2 rounded-lg border border-rose-400/30 bg-rose-400/[0.07] px-3 py-2.5 text-xs leading-relaxed text-slate-300">
+                        <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-400" />
+                        <span>
+                          <RichText text={s.blocker[lang]} />
                         </span>
                       </div>
                     )}

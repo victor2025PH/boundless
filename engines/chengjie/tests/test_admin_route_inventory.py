@@ -656,6 +656,7 @@ _BASELINE = """
 /api/setup/cloud-credentials	GET
 /api/setup/key-pool	POST
 /api/workspace/ai-runtime-status	GET
+/api/workspace/hosted-quota	GET
 /api/companion/proactive/preview	GET
 /api/companion/capabilities	GET
 /api/companion/capabilities/delivery-calibration	GET

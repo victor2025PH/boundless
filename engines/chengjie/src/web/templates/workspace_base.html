@@ -621,6 +621,132 @@ function _wsAiGuideDismiss(){
   if(b && !dismissed) window.wsBanner.set('ws-aiguide', true);
 })();
 </script>
+{% elif ai_trial_mode %}
+<!-- 托管试用：经官网网关调云端 AI（Key 只在服务端）；额度徽章 60s 轮询，用尽自动切文案 -->
+<div id="ws-aitrial" style="display:none;align-items:center;gap:10px;padding:8px 14px;
+     background:linear-gradient(90deg,#14532d,#166534);color:#dcfce7;font-size:13px;">
+  <span style="flex:0 0 auto;">✨</span>
+  <span id="ws-aitrial-text" style="flex:1 1 auto;line-height:1.5;" data-i18n="ws.aitrial.text">{{ i18n.get('ws.aitrial.text', '免费试用中：已通过官网安全通道调用云端 AI，无需也不必填写 API Key；额度用尽请联系客服续期。') }}</span>
+  <span id="ws-aitrial-quota" style="display:none;flex:0 0 auto;align-items:center;gap:6px;font-size:12px;opacity:.92;">
+    <span id="ws-aitrial-quota-txt"></span>
+    <span style="width:64px;height:6px;border-radius:999px;background:rgba(255,255,255,.25);overflow:hidden;display:inline-block;vertical-align:middle;">
+      <i id="ws-aitrial-quota-bar" style="display:block;height:100%;width:0%;background:var(--th-bg-surface,#fff);border-radius:999px;transition:width .4s ease;"></i>
+    </span>
+  </span>
+  <a href="/membership" data-i18n="ws.aitrial.cta" style="flex:0 0 auto;padding:5px 14px;border-radius:8px;
+     background:var(--th-bg-surface,#fff);color:#166534;font-weight:600;text-decoration:none;">{{ i18n.get('ws.aitrial.cta', '查看额度') }}</a>
+  <span onclick="_wsAiTrialDismiss()" data-i18n="ws.aitrial.dismiss" style="flex:0 0 auto;cursor:pointer;opacity:.75;
+     padding:5px 8px;text-decoration:underline;">{{ i18n.get('ws.aitrial.dismiss', '知道了') }}</span>
+</div>
+<!-- 额度用尽升级弹窗：最高转化意向时刻——一天最多弹一次，CTA 带绑定码深链跳客服 -->
+<div id="ws-aitrial-upsell" style="display:none;position:fixed;inset:0;z-index:10000;
+     background:rgba(0,0,0,.55);backdrop-filter:blur(3px);align-items:center;justify-content:center;">
+  <div style="background:var(--th-bg-surface,#fff);color:var(--th-ink-strong,#0f172a);border-radius:16px;
+       max-width:420px;width:92vw;padding:1.7rem 1.6rem;box-shadow:0 8px 40px rgba(0,0,0,.3);text-align:center;">
+    <div style="font-size:2.2rem;margin-bottom:.5rem;">⏳</div>
+    <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 .5rem;">{{ i18n.get('ws.aitrial.up_title', '今日试用额度已用完') }}</h3>
+    <p style="font-size:.85rem;line-height:1.7;color:var(--th-ink-sub,#475569);margin:0 0 1.1rem;">
+      {{ i18n.get('ws.aitrial.up_body', '明天会自动恢复。想现在继续用？联系客服领取字符包或开通正式版，报上你的绑定码即可秒到账。') }}
+      <span id="ws-aitrial-up-code" style="display:none;font-family:monospace;font-weight:700;"></span>
+    </p>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+      <button id="ws-aitrial-up-cta" type="button" style="border:0;border-radius:10px;padding:.6rem 1.4rem;cursor:pointer;
+              background:linear-gradient(90deg,#166534,#15803d);color:#fff;font-size:.88rem;font-weight:600;">{{ i18n.get('ws.aitrial.up_cta', '联系客服续期') }}</button>
+      <button id="ws-aitrial-up-later" type="button" style="border:1px solid var(--th-line,#e2e8f0);border-radius:10px;padding:.6rem 1.2rem;
+              cursor:pointer;background:transparent;color:var(--th-ink-sub,#475569);font-size:.88rem;">{{ i18n.get('ws.aitrial.up_later', '明天再说') }}</button>
+    </div>
+  </div>
+</div>
+<script>
+function _wsAiTrialDismiss(){
+  try{ localStorage.setItem('ws_aitrial_dismissed','1'); }catch(_){ }
+  window.wsBanner.set('ws-aitrial', false);
+}
+(function(){
+  var dismissed=false;
+  try{ dismissed=localStorage.getItem('ws_aitrial_dismissed')==='1'; }catch(_){ }
+  var b=document.getElementById('ws-aitrial');
+  if(!b) return;
+  var TXT_EXHAUSTED={{ i18n.get('ws.aitrial.exhausted', '今日试用额度已用完，明天自动恢复；如需加量请联系客服。')|tojson }};
+  var TXT_BUSY={{ i18n.get('ws.aitrial.busy', '试用通道繁忙，请稍后再试；您的额度不受影响。')|tojson }};
+  var TXT_QUOTA={{ i18n.get('ws.aitrial.quota', '今日额度')|tojson }};
+  var TXT_COPIED={{ i18n.get('ws.aitrial.up_copied', '绑定码已复制，请发给客服')|tojson }};
+  var _resurfacedOnce=false;
+  var _lastQuota=null;
+  function _upsellShownKey(){
+    var d=new Date();
+    return 'ws_aitrial_upsell_'+d.getFullYear()+('0'+(d.getMonth()+1)).slice(-2)+('0'+d.getDate()).slice(-2);
+  }
+  function _maybeShowUpsell(q){
+    if(!q.exhausted || q.busy) return;   /* 全局繁忙不是用户的额度问题，不推销 */
+    var k=_upsellShownKey();
+    try{ if(localStorage.getItem(k)==='1') return; localStorage.setItem(k,'1'); }catch(_){ return; }
+    var m=document.getElementById('ws-aitrial-upsell');
+    if(!m) return;
+    if(q.bind_code){
+      var c=document.getElementById('ws-aitrial-up-code');
+      if(c){ c.textContent=' '+q.bind_code; c.style.display='inline'; }
+    }
+    m.style.display='flex';
+  }
+  (function(){
+    var cta=document.getElementById('ws-aitrial-up-cta');
+    var later=document.getElementById('ws-aitrial-up-later');
+    var modal=document.getElementById('ws-aitrial-upsell');
+    if(later) later.addEventListener('click',function(){ if(modal) modal.style.display='none'; });
+    if(cta) cta.addEventListener('click',function(){
+      cta.disabled=true;
+      fetch('/api/admin/license/trial-bind-code',{method:'POST',credentials:'same-origin'})
+        .then(function(r){return r.json();})
+        .then(function(j){
+          var url=(j&&(j.telegram_url||j.whatsapp_url))||'';
+          if(url){ window.open(url,'_blank'); if(modal) modal.style.display='none'; return; }
+          var code=(j&&j.bind_code)||(_lastQuota&&_lastQuota.bind_code)||'';
+          if(code&&navigator.clipboard){ navigator.clipboard.writeText(code).catch(function(){}); }
+          cta.textContent=TXT_COPIED;
+        })
+        .catch(function(){
+          var code=(_lastQuota&&_lastQuota.bind_code)||'';
+          if(code&&navigator.clipboard){ navigator.clipboard.writeText(code).catch(function(){}); }
+          cta.textContent=TXT_COPIED;
+        })
+        .finally(function(){ cta.disabled=false; });
+    });
+  })();
+  function _renderQuota(q){
+    if(!q || q.enabled===false || q.error) return;
+    _lastQuota=q;
+    _maybeShowUpsell(q);
+    var pct=q.budget>0?Math.max(0,Math.min(100,Math.round(q.remaining*100/q.budget))):0;
+    var wrap=document.getElementById('ws-aitrial-quota');
+    var txt=document.getElementById('ws-aitrial-quota-txt');
+    var bar=document.getElementById('ws-aitrial-quota-bar');
+    if(wrap){wrap.style.display='inline-flex';}
+    if(txt){txt.textContent=TXT_QUOTA+' '+pct+'%';}
+    if(bar){bar.style.width=pct+'%';}
+    var t=document.getElementById('ws-aitrial-text');
+    if(t){
+      if(q.busy){t.textContent=TXT_BUSY;}
+      else if(q.exhausted){t.textContent=TXT_EXHAUSTED;}
+    }
+    /* 额度用尽即便被 dismiss 过也要浮出来（信息从「可关的告知」升级为「须知的状态」）；
+       但每次页面加载至多回弹一次——用户再次手动关掉后本页不再纠缠 */
+    if((q.exhausted||q.busy)&&dismissed&&!_resurfacedOnce){
+      _resurfacedOnce=true;
+      window.wsBanner.set('ws-aitrial', true);
+    }
+  }
+  function _pollQuota(){
+    fetch('/api/workspace/hosted-quota',{credentials:'same-origin'})
+      .then(function(r){return r.json();})
+      .then(_renderQuota)
+      .catch(function(){});
+  }
+  if(!dismissed) window.wsBanner.set('ws-aitrial', true);
+  _pollQuota();
+  setInterval(_pollQuota, 60000);
+})();
+</script>
 {% endif %}
 <!-- 云端 AI 降级状态条（P-KeyPool D，2026-07-12）：熔断/备用 Key/本地兜底顶班期间，
      给坐席一条温和预期管理（回复稍慢），恢复自动消失。60s 轮询零开销内存快照；

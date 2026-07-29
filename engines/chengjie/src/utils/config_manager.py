@@ -182,36 +182,58 @@ class ConfigManager:
             "1", "true", "yes", "on")
 
     def _apply_env_overrides(self) -> None:
-        """以 ``AITR_WEB_*`` 环境变量覆盖 ``web_admin.{host,port,auth_token}``（仅当设置时）。
+        """以环境变量覆盖运行时配置（仅当设置时；不写回磁盘）。
 
-        桌面/打包态由 launcher（``backend-launcher.js``）注入，保证后端 serve 与 renderer
-        调用的 host/port/token 一致；server/开发态不设这些 env，行为不变。
-
-        另：``AITR_DESKTOP_MODE`` 为真时**强制** ``web_admin.enabled=true``——统一收件箱 /
-        翻译 / D1 选择器热更新 / D4 受控外发等路由都挂在 web 后台下，桌面壳没有它即不可用，
-        故不依赖随包 example 是否显式写了 ``enabled``。
+        - ``AITR_WEB_*``：桌面壳 launcher 注入，保证后端 serve 与 renderer talk 一致。
+        - ``AITR_DESKTOP_MODE``：强制 ``web_admin.enabled=true``。
+        - ``AITR_HOSTED_AI_*``：厂商托管试用 Key（打包/实例注入，**永不入库**）。仅当
+          配置里 ``ai.api_key`` 仍为空/占位时填入——用户自己保存的 Key 永远优先。
         """
         desktop = self._env_truthy("AITR_DESKTOP_MODE")
         host = os.environ.get("AITR_WEB_HOST")
         port = os.environ.get("AITR_WEB_PORT")
         token = os.environ.get("AITR_WEB_TOKEN")
-        if not (desktop or host or port or token):
+        hosted_key = (os.environ.get("AITR_HOSTED_AI_KEY") or "").strip()
+        if desktop or host or port or token:
+            web = self.config.get("web_admin")
+            if not isinstance(web, dict):
+                web = {}
+                self.config["web_admin"] = web
+            if host:
+                web["host"] = host
+            if port:
+                try:
+                    web["port"] = int(str(port).strip())
+                except (TypeError, ValueError):
+                    self.logger.warning("AITR_WEB_PORT 非法（忽略）: %r", port)
+            if token:
+                web["auth_token"] = token
+            if desktop:
+                web["enabled"] = True
+        if hosted_key:
+            self._apply_hosted_ai_env(hosted_key)
+
+    def _apply_hosted_ai_env(self, hosted_key: str) -> None:
+        """把 ``AITR_HOSTED_AI_*`` 注入内存中的 ``ai.*``（用户自有 Key 不覆盖）。"""
+        from src.utils.golive import _is_placeholder
+
+        ai = self.config.get("ai")
+        if not isinstance(ai, dict):
+            ai = {}
+            self.config["ai"] = ai
+        if not _is_placeholder(ai.get("api_key")):
             return
-        web = self.config.get("web_admin")
-        if not isinstance(web, dict):
-            web = {}
-            self.config["web_admin"] = web
-        if host:
-            web["host"] = host
-        if port:
-            try:
-                web["port"] = int(str(port).strip())
-            except (TypeError, ValueError):
-                self.logger.warning("AITR_WEB_PORT 非法（忽略）: %r", port)
-        if token:
-            web["auth_token"] = token
-        if desktop:
-            web["enabled"] = True
+        ai["api_key"] = hosted_key
+        base = (os.environ.get("AITR_HOSTED_AI_BASE_URL") or "").strip()
+        model = (os.environ.get("AITR_HOSTED_AI_MODEL") or "").strip()
+        if base:
+            ai["base_url"] = base
+        if model:
+            ai["model"] = model
+        # 内存标记：供工作台试用条 / 观测；不进 save_ai_credentials 写入路径
+        ai["_hosted_trial"] = True
+        self.logger.info(
+            "已启用托管 AI 试用（AITR_HOSTED_AI_KEY；用户未配置自有 Key）")
 
     def _overlay_path(self) -> Path:
         """凭证 overlay 路径：主配置同目录下的 config.local.yaml。"""

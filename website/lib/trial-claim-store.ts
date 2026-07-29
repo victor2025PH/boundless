@@ -160,6 +160,15 @@ export function normalizeBindCode(raw: unknown): string {
   return /^BC-[0-9A-Z]{4}-[0-9A-Z]{4}$/.test(s) ? s : "";
 }
 
+/** 按机器指纹查 claim（AI 网关发设备令牌前的资格闸：无 claim 记录不发令牌）。 */
+export async function getClaimByFingerprint(raw: string): Promise<TrialClaim | null> {
+  const fp = normalizeFingerprint(raw);
+  if (!fp) return null;
+  const db = await readDb();
+  const id = db.byFingerprint[fp];
+  return id ? db.byId[id] || null : null;
+}
+
 export type CreateClaimInput = {
   fingerprint: string;
   contact: string;

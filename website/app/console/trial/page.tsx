@@ -2,8 +2,9 @@
 //
 // 客服在这里做的唯一一件事：把用户报来的绑定码贴进去，点核销。真凭证由厂商机
 // （私钥离线）签发后回填，用户端后台轮询自动入账——客服不接触任何密钥。
-import { Gift, HeartPulse } from "lucide-react";
+import { Cloud, Gift, HeartPulse } from "lucide-react";
 import { hasConsoleSession } from "@/lib/console-auth";
+import { gatewayDayStats } from "@/lib/ai-gateway";
 import { claimStats, listClaims } from "@/lib/trial-claim-store";
 import { readTrialFunnel } from "@/lib/trial-funnel";
 import { Card, DataTable, EmptyState, PageHeader, Td, fmtDateTime } from "../parts";
@@ -38,10 +39,11 @@ function fulfillerHealth(lastSeen: string, oldestPendingMin: number) {
 export default async function TrialPage() {
   if (!hasConsoleSession()) return null;
 
-  const [stats, rows, funnel] = await Promise.all([
+  const [stats, rows, funnel, gw] = await Promise.all([
     claimStats(),
     listClaims({ limit: 200 }),
     readTrialFunnel(7),
+    gatewayDayStats().catch(() => null),
   ]);
   const recent = rows.slice().reverse();
   const health = fulfillerHealth(stats.fulfillerLastSeen, stats.oldestPendingMin);
@@ -80,6 +82,32 @@ export default async function TrialPage() {
           点了领取会一直停在「正在签发」——先去厂商机确认 fulfill_trial.py 还在跑。
         </p>
       </Card>
+
+      {gw && (
+        <Card className="mb-4 border-slate-800 bg-slate-900/40 !py-3">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+            <span className="inline-flex items-center gap-1.5">
+              <Cloud className={`h-4 w-4 ${gw.enabled ? "text-emerald-400" : "text-slate-500"}`} />
+              <span className="text-slate-400">AI 试用网关：</span>
+              <span className={`font-medium ${gw.enabled ? "text-emerald-400" : "text-slate-500"}`}>
+                {gw.enabled ? "运行中" : "未启用（缺 DEEPSEEK_API_KEY / AI_GATEWAY_SECRET）"}
+              </span>
+            </span>
+            <span className="text-slate-400">
+              今日 <span className="font-medium text-white">{gw.machines}</span> 台机器 ·{" "}
+              <span className="font-medium text-white">{gw.chars.toLocaleString()}</span> 字符
+            </span>
+            <span className="text-slate-500">
+              全局水位 {gw.global_budget > 0 ? Math.round((gw.chars * 100) / gw.global_budget) : 0}%
+              （预算 {gw.global_budget.toLocaleString()} / 单机 {gw.machine_budget.toLocaleString()}）
+            </span>
+          </div>
+          <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+            设备令牌只发给本页台账里的指纹（领取试用=接入前置）；云 Key 只在服务端。
+            全局水位到 100% 时所有试用机收到「通道繁忙」，不影响已购授权用户。
+          </p>
+        </Card>
+      )}
 
       {funnel.machines.welcome > 0 && (
         <Card className="mb-4 border-slate-800 bg-slate-900/40 !py-3">

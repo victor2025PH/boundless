@@ -206,7 +206,10 @@ def _isolated_web_env(monkeypatch):
     **所有需登录的 HTML 渲染断言集体假失败**（曾误判为 40 个存量回归）。
     需要这些变量的用例（test_config_manager 等）自行 setenv，晚于本清理生效。
     """
-    for k in ("AITR_WEB_TOKEN", "AITR_WEB_HOST", "AITR_WEB_PORT", "AITR_DESKTOP_MODE"):
+    for k in (
+        "AITR_WEB_TOKEN", "AITR_WEB_HOST", "AITR_WEB_PORT", "AITR_DESKTOP_MODE",
+        "AITR_HOSTED_AI_KEY", "AITR_HOSTED_AI_BASE_URL", "AITR_HOSTED_AI_MODEL",
+    ):
         monkeypatch.delenv(k, raising=False)
 
 

@@ -9,10 +9,7 @@
 <link rel="stylesheet" href="/static/theme-tokens.css?v=20260723c">
 {% include "_i18n_bootstrap.html" %}
 {% include "_api_fetch.html" %}
-<link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
-<noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
+<link rel="stylesheet" href="/static/fonts/inter.css"><!-- 自托管 Inter；离线可用，替代原 Google Fonts 外链（国内/桌面端加载不到） -->
 <style>
 /* ── Embedded mode (iframe inside AI Studio etc.) — hide chrome ── */
 [data-embedded="1"] .sidebar,
@@ -1069,11 +1066,13 @@ function endTour(){
   clearTourHighlight();
   localStorage.setItem('tour_done','1');
 }
-/* Auto start on first visit */
+/* Auto start on first visit — 首启引导收敛：简洁模式「欢迎弹窗」未看过时不自动拉起引导，
+   避免「欢迎弹窗 + 引导浮层」同屏叠加；改由 dismissOnboard() 在用户点「开始使用」后顺次拉起。 */
 (function(){
-  if(localStorage.getItem('tour_done')!=='1'){
-    setTimeout(function(){try{startTour()}catch(e){}},1200);
-  }
+  if(localStorage.getItem('tour_done')==='1')return;
+  var pendingWelcome={{ 'true' if ui_mode == 'simple' else 'false' }} && !localStorage.getItem('_onboard_shown_simple');
+  if(pendingWelcome)return;
+  setTimeout(function(){try{startTour()}catch(e){}},1200);
 })();
 /* CountUp */
 function countUp(el,target,dur=1200){
@@ -1375,6 +1374,8 @@ function _diffLines(oldL, newL){
     localStorage.setItem(k,'1');
     var m=document.getElementById('onboard-modal');
     if(m) m.style.display='none';
+    /* 简洁模式：欢迎弹窗已覆盖主入口，不再叠 4 步侧栏 tour（完整模式仍自动引导） */
+    try{ localStorage.setItem('tour_done','1'); }catch(e){}
   };
 })();
 </script>

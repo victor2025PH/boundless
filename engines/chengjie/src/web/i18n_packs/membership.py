@@ -67,6 +67,11 @@ ZH = {
     "mb_trial_line": "首启体验档 · 还剩 {h} 小时",
     "mb_trial_expired": "首启体验档已到期",
     "mb_trial_used_up": "首启体验档额度已用完",
+    # 托管 AI 试用通道（云端网关按日计量，与授权字符额度是两套水表）
+    "mb_hosted_title": "AI 试用通道（云端）",
+    "mb_hosted_line": "今日已用 {used} / {budget} 字符",
+    "mb_hosted_exhausted": "今日已用完，明天自动恢复",
+    "mb_hosted_busy": "通道繁忙，稍后自动恢复",
     # 坐席工作台顶栏徽章 title（data-i18n-title 消费）
     "base.plan_badge_t": "当前授权档位 · 点击进入会员中心",
     "base.plan_badge_ro_t": "当前系统授权档位",
@@ -152,6 +157,11 @@ EN = {
     "mb_trial_line": "Starter allowance · {h}h left",
     "mb_trial_expired": "Starter allowance has expired",
     "mb_trial_used_up": "Starter allowance is used up",
+    # Hosted AI trial channel (cloud gateway, daily metering — separate meter from license chars)
+    "mb_hosted_title": "AI trial channel (cloud)",
+    "mb_hosted_line": "{used} / {budget} chars used today",
+    "mb_hosted_exhausted": "Used up for today — resets tomorrow",
+    "mb_hosted_busy": "Channel busy — recovers shortly",
     "base.plan_badge_t": "Current plan · open membership center",
     "base.plan_badge_ro_t": "Current system plan",
     "err.lic.topup_not_licensed": "No active license — nothing to top up",

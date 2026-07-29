@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -133,12 +134,23 @@ def register_workspace_pages_routes(
             pass
         # P0-1 A3：token 直登（桌面默认 admin）绕过 /setup 时 AI Key 仍为空/占位 →
         # 工作台顶部出可关闭引导条（深链 /workspace/setup#ai）。仅主管可见（能修的人才看到）。
+        # 托管试用（AITR_HOSTED_AI_KEY）或备用池有真 Key → 不算缺失；试用条单独提示额度。
         ctx["ai_key_missing"] = False
+        ctx["ai_trial_mode"] = False
         try:
             if config_manager is not None and _is_supervisor(request):
                 from src.utils.golive import _is_placeholder
                 _ai = (config_manager.config or {}).get("ai") or {}
-                ctx["ai_key_missing"] = _is_placeholder(_ai.get("api_key"))
+                _pool = _ai.get("key_pool") if isinstance(_ai.get("key_pool"), dict) else {}
+                _pool_keys = [
+                    k for k in (_pool.get("keys") or [])
+                    if isinstance(k, dict) and not _is_placeholder(k.get("api_key"))
+                ]
+                _hosted = bool(_ai.get("_hosted_trial")) or bool(
+                    (os.environ.get("AITR_HOSTED_AI_KEY") or "").strip())
+                _missing = _is_placeholder(_ai.get("api_key")) and not _pool_keys
+                ctx["ai_key_missing"] = _missing
+                ctx["ai_trial_mode"] = (not _missing) and _hosted
         except Exception:
             pass
         return ctx

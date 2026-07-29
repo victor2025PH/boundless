@@ -61,8 +61,12 @@ export const CHATX = {
           en: "Double-click the installer and click **Next** through the wizard; choose an install folder if you like. A ChatX icon appears on the desktop and Start menu.",
         },
         warn: {
-          zh: "最常见卡点：**SmartScreen** 提示「Windows 已保护你的电脑」——这是 Windows 对新发布、尚未建立签名信誉的程序的例行提醒，不是病毒报警。点 **更多信息 → 仍要运行** 即可。可在下方核对安装包 SHA-256 后再安装。",
-          en: "Most common bump: **SmartScreen** shows \"Windows protected your PC\" — a routine notice for newly published apps without established signing reputation, not a virus alert. Click **More info → Run anyway**. You can verify the SHA-256 below before installing.",
+          zh: "**蓝底 SmartScreen**「Windows 已保护你的电脑」：这是对新发布程序的例行信誉提醒，不是病毒报警。点 **更多信息 → 仍要运行** 即可继续（安装向导首页也会再次提示）。建议先用本页 **SHA-256** 核对安装包。",
+          en: "**Blue SmartScreen** \"Windows protected your PC\" is a routine reputation notice for newly published apps — not a virus alert. Click **More info → Run anyway** to continue (the installer repeats this tip). Verify the **SHA-256** on this page first.",
+        },
+        blocker: {
+          zh: "红底 **「已被应用程序控制策略阻止」**（Smart App Control 强制模式）：属系统策略硬拦截，安装界面**无法跳过**。请换一台未强制开启 SAC 的电脑安装，或联系客服获取已签名安装包 / 远程协助。",
+          en: "Red **\"Application Control policy has blocked this file\"** (Smart App Control enforced) is a hard OS policy block — it **cannot be skipped** in the installer. Install on a PC without SAC enforced, or contact support for a signed build / remote assistance.",
         },
       },
       {
@@ -77,8 +81,8 @@ export const CHATX = {
         title: { zh: "登录工作台并接入渠道", en: "Sign in and connect channels" },
         time: { zh: "约 5–10 分钟", en: "~5–10 min" },
         detail: {
-          zh: "用默认管理员账号登录后，在「渠道中心」接入你的聊天账号（Telegram / WhatsApp / Messenger / LINE 等），并在设置里填入 AI 服务凭据。",
-          en: "Sign in with the default admin account, connect your chat accounts in Channel Center (Telegram / WhatsApp / Messenger / LINE and more), and add your AI service credentials in Settings.",
+          zh: "用默认管理员账号登录后，在「渠道中心」接入你的聊天账号（Telegram / WhatsApp / Messenger / LINE 等）。**无需填写任何云 API Key**——翻译与智能回复经官网安全通道自动可用。",
+          en: "Sign in with the default admin account and connect chat accounts in Channel Center (Telegram / WhatsApp / Messenger / LINE and more). **No cloud API key to enter** — translation and smart replies work via our secure gateway.",
         },
       },
       {
@@ -94,8 +98,15 @@ export const CHATX = {
       {
         q: { zh: "SmartScreen / 杀毒软件提示风险，安全吗？", en: "SmartScreen / antivirus flags the installer — is it safe?" },
         a: {
-          zh: "安装包为新发布的未签名构建，Windows 与部分杀软会对「首次见到的程序」例行提示，属于信誉机制而非病毒检出。请只从本官网下载，并用页面公布的 **SHA-256** 校验（PowerShell：`Get-FileHash 安装包路径`），哈希一致即为官方原版。代码签名证书接入后此提示会逐步消失。",
-          en: "The installer is a newly published, unsigned build. Windows and some antivirus tools routinely warn about first-seen programs — it's a reputation mechanism, not a virus detection. Download only from this site and verify the published **SHA-256** (PowerShell: `Get-FileHash <installer>`). A matching hash confirms the official build. Once code signing lands, the warning fades out.",
+          zh: "安装包为新发布的未签名构建，Windows 与部分杀软会对「首次见到的程序」例行提示，属于信誉机制而非病毒检出。请只从本官网下载，并用页面公布的 **SHA-256** 校验（PowerShell：`Get-FileHash 安装包路径`），哈希一致即为官方原版。**蓝底**可点「更多信息 → 仍要运行」继续；**红底 Smart App Control 强制拦截**无法在安装时跳过，需签名包或调整系统策略。代码签名证书接入后此类提示会逐步消失。",
+          en: "The installer is a newly published, unsigned build. Windows and antivirus tools routinely warn about first-seen programs — reputation, not a virus hit. Download only here and verify **SHA-256**. **Blue SmartScreen**: More info → Run anyway. **Red Smart App Control block** cannot be skipped at install time — need a signed build or a PC without SAC enforced. Signing will phase these warnings out.",
+        },
+      },
+      {
+        q: { zh: "需要自己配置 AI 的 API Key 吗？", en: "Do I need my own AI API key?" },
+        a: {
+          zh: "不需要。智聊托管版启动后会经官网验证本机并走我们的云端 AI 通道，**Key 只在服务端**，工作台里看不到、也无需填写。按字符额度计费；额度用尽联系客服续期即可。",
+          en: "No. Managed ChatX verifies this PC with our site and routes AI through our cloud gateway — **the vendor key never leaves the server**. You don't enter or manage keys. Usage is metered by character quota; contact support to top up.",
         },
       },
       {
