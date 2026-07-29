@@ -6,7 +6,27 @@ from src.companion.media_capability import (
     MEDIA_CAPS, MEDIA_PRESETS, build_media_preset, collect_media_status,
     evaluate_media_cap, media_runtime_signals, preset_backend_warnings,
     asr_backend_ready, selfie_backend_ready, vision_backend_ready,
+    _backend_hint,
 )
+
+
+# ── 托管版提示去黑话（2026-07-29）：不向用户暴露 yaml 键/密钥 ──────────────
+
+def test_backend_hint_selfhost_keeps_actionable_keys():
+    h = _backend_hint("vision", managed=False)
+    assert "vision.base_url" in h  # 自建版保留可操作键名
+
+def test_backend_hint_managed_hides_yaml_jargon():
+    for be in ("vision", "asr", "selfie"):
+        h = _backend_hint(be, managed=True)
+        assert "base_url" not in h and "api_key" not in h and "." not in h.split("：")[0]
+        assert "服务端" in h  # 说人话：由服务端统一提供
+
+def test_backend_hint_managed_autodetect_env(monkeypatch):
+    monkeypatch.setenv("AITR_MANAGED_EDITION", "1")
+    assert "服务端" in _backend_hint("vision")
+    monkeypatch.setenv("AITR_MANAGED_EDITION", "0")
+    assert "vision.base_url" in _backend_hint("vision")
 
 
 def _status(rep, key):

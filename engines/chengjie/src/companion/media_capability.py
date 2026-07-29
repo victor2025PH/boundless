@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import os as _os
 from typing import Any, Dict, List, Optional
 
 
@@ -113,7 +114,26 @@ def evaluate_media_cap(cap: Dict[str, str], config: Any) -> Dict[str, Any]:
     }
 
 
-def _backend_hint(backend: str) -> str:
+def _is_managed_edition() -> bool:
+    """托管版（成品，客户不配后端）——env 标记由桌面壳/实例注入。"""
+    return str(_os.environ.get("AITR_MANAGED_EDITION") or "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _backend_hint(backend: str, managed: Optional[bool] = None) -> str:
+    """就绪度提示。**托管版**不向用户暴露 yaml 键/密钥概念——那是集团/服务端的事；
+    自建版保留可操作的具体键名。managed 缺省自动探测 env。"""
+    if managed is None:
+        managed = _is_managed_edition()
+    if managed:
+        # 托管版：不是用户的活，也没有「填密钥」这回事——说人话，不吓人、不甩黑话
+        if backend == "vision":
+            return "识图能力由服务端统一提供，无需在本机配置；如未生效请联系客服开启"
+        if backend == "asr":
+            return "语音识别由服务端统一提供，无需在本机配置；如未生效请联系客服开启"
+        if backend == "selfie":
+            return "发图能力由服务端统一提供，无需在本机配置；如未生效请联系客服开启"
+        return "该能力由服务端统一提供，无需在本机配置"
     if backend == "vision":
         return "开关已开但未配识图后端：填 vision.base_url(Ollama) 或 vision.api_key(智谱)"
     if backend == "asr":

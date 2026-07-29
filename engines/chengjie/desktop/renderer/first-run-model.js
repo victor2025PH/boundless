@@ -67,8 +67,8 @@ var FR_STRINGS = {
     btn_skip_claim: "先不领，直接开始",
     claim_need_contact: "填一下联系方式，客服才能找到你",
     claim_sending: "正在提交…",
-    claim_waiting: "已提交，正在签发…",
-    claim_slow: "已提交。签发通常几十秒，好了会自动生效——你可以先开始使用。",
+    claim_waiting: "已提交，正在签发…（通常 1 分钟内完成，好了自动生效，可先开始使用）",
+    claim_slow: "已提交。签发通常 1 分钟内，好了会自动生效——你可以先开始使用，稍后在「会员中心」查看额度。",
     claim_ok: "已激活：7 天完整版 · 25000 字符",
     claim_fail: "领取失败",
     claim_no_fp: "读不到本机标识，无法绑定授权。可先直接开始使用，稍后在「会员中心」重试。",
@@ -142,9 +142,9 @@ var FR_STRINGS = {
     btn_skip_claim: "Skip, just start",
     claim_need_contact: "Add a contact so support can reach you",
     claim_sending: "Submitting…",
-    claim_waiting: "Submitted, issuing…",
-    claim_slow: "Submitted. Issuing usually takes under a minute and activates itself — "
-      + "feel free to start using the app.",
+    claim_waiting: "Submitted, issuing… (usually within a minute, activates itself — you can start now)",
+    claim_slow: "Submitted. Issuing usually finishes within a minute and activates itself — "
+      + "start using the app now; check your quota later in Membership.",
     claim_ok: "Activated: 7-day full version · 25,000 characters",
     claim_fail: "Claim failed",
     claim_no_fp: "Can't read this machine's ID, so the licence can't be bound. "
