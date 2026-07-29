@@ -5,7 +5,7 @@ const assert = require("assert");
 const path = require("path");
 const {
   resolveBackendSpawn, healthUrl, identityUrl, webEnvFromBackend,
-  createBackendManager, classifyBackendIdentity,
+  createBackendManager, classifyBackendIdentity, sentinelPathFor,
 } = require("../backend-launcher.js");
 
 let pass = 0;
@@ -77,6 +77,13 @@ ok("webEnv port", we.AITR_WEB_PORT === "9000");
 ok("webEnv token", we.AITR_WEB_TOKEN === "t");
 ok("webEnv 非法 base_url 容错", Object.keys(webEnvFromBackend({ base_url: "::::" })).length === 0);
 ok("webEnv 空 backend → 空", Object.keys(webEnvFromBackend({})).length === 0);
+
+// 退出哨兵路径（正常关闭清哨兵，防 taskkill /F 把正常关误报成崩溃）
+ok("sentinelPathFor 拼 logs/run_sentinel.json",
+  sentinelPathFor("/data/root") === path.join("/data/root", "logs", "run_sentinel.json"));
+ok("sentinelPathFor 空 dataDir → null（开发态不清哨兵，真崩溃仍侦测）",
+  sentinelPathFor("") === null && sentinelPathFor(null) === null);
+
 // 默认端口（无显式端口）→ 不注入 AITR_WEB_PORT，后端用 config 默认
 ok("webEnv 无端口不注入", webEnvFromBackend({ base_url: "https://example.com" }).AITR_WEB_PORT === undefined);
 

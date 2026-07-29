@@ -53,6 +53,13 @@ function webEnvFromBackend(backend) {
   return env;
 }
 
+/** 后端退出哨兵路径（纯函数，便于单测）。dataDir 空 → null（不清哨兵）。 */
+function sentinelPathFor(dataDir) {
+  const dir = String(dataDir || "").trim();
+  if (!dir) return null;
+  return require("path").join(dir, "logs", "run_sentinel.json");
+}
+
 function resolveBackendSpawn(o) {
   const cfg = (o && o.config) || {};
   const backend = cfg.backend || {};
@@ -186,6 +193,7 @@ function createBackendManager(deps) {
   let status = "idle";
   let lastError = "";
   let logStream = null;
+  let backendDataDir = ""; // 本次拉起的后端数据根（stop() 清哨兵用，见 markCleanShutdown）
   let identity = null;        // 最近一次身份探针结果（null=未探到/老后端）
   let versionMismatch = false;
 
@@ -280,6 +288,7 @@ function createBackendManager(deps) {
         dataDir = "";
       }
     }
+    backendDataDir = dataDir; // 供 stop() 定位哨兵
 
     const resolved = resolveBackendSpawn({
       config,
@@ -380,11 +389,29 @@ function createBackendManager(deps) {
     }
   }
 
+  /**
+   * 壳主动关闭前，把后端的退出哨兵删掉——标记「这是预期内的关闭，不是崩溃」。
+   *
+   * 背景：Windows 上 stop() 走 taskkill /F（强杀），后端来不及跑 atexit 清哨兵，
+   * exit_sentinel 下次启动就把「用户正常关 App」误报成「异常退出/崩溃」，污染
+   * 错误看板 + 触发误告警。壳知道 dataDir（=后端 CWD），退出前删掉
+   * `<dataDir>/logs/run_sentinel.json` 即可：壳主动关=清哨兵（不报），真崩溃=
+   * 哨兵留存（照常报）。best-effort，任何失败不影响退出。
+   */
+  function markCleanShutdown() {
+    try {
+      const sp = sentinelPathFor(backendDataDir);
+      if (!sp) return; // 开发态/外部自管后端无 dataDir → 不动（其崩溃仍应被侦测）
+      fs.unlinkSync(sp);
+    } catch (e) { /* 哨兵不存在/删不掉都无妨 */ }
+  }
+
   /** 回收后端进程（win→taskkill /T /F；posix→杀进程组）。退出时调用。 */
   function stop() {
     quitting = true;
     if (logStream) { try { logStream.end(); } catch (e) {} logStream = null; }
     if (!child || !child.pid) { status = "stopped"; return; }
+    markCleanShutdown(); // 强杀前先清哨兵，避免正常关闭被误报为崩溃
     const pid = child.pid;
     try {
       if (process.platform === "win32") {
@@ -408,5 +435,5 @@ function createBackendManager(deps) {
 module.exports = {
   resolveBackendSpawn, healthUrl, identityUrl, createBackendManager,
   classifyBackendIdentity, FP_HEALTH_PATH, FP_IDENTITY_PATH, EXPECTED_APP_ID,
-  webEnvFromBackend,
+  webEnvFromBackend, sentinelPathFor,
 };
