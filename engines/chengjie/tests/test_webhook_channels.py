@@ -26,33 +26,6 @@ def test_plainify_keeps_absolute_links():
     assert "https://example.com/d" in out
 
 
-def test_feishu_formatter_plainifies_markdown():
-    """飞书 text 渠道不渲染 Markdown → formatter 必须先 _plainify（2026-07-31 事故：
-    此前直接塞原始 md，飞书里显示字面 **粗体** + 相对链接死链）。飞书是用户首选的
-    「贴 URL 即用」渠道，这条可读性回归影响面最大。"""
-    import json as _json
-
-    from src.inbox.webhook_notifier import _fmt_feishu
-    raw = _fmt_feishu("🚨 **待审积压**",
-                      "**账号**: a1\n[📊 查看运营总览](/admin/ops)", {})
-    body = _json.loads(raw.decode("utf-8"))
-    txt = body["content"]["text"]
-    assert body["msg_type"] == "text"
-    assert "**" not in txt, f"飞书残留 markdown 粗体符号: {txt!r}"
-    assert "](/" not in txt, f"飞书残留相对链接死链: {txt!r}"
-    # 内容文字保留（去符号不丢信息）
-    assert "待审积压" in txt and "账号" in txt and "查看运营总览" in txt
-
-
-def test_feishu_absolute_link_survives():
-    """带 base_url 语义的绝对链接不该被吞（此处直接给 http 链接验证保留）。"""
-    import json as _json
-
-    from src.inbox.webhook_notifier import _fmt_feishu
-    body = _json.loads(_fmt_feishu("t", "详情 [看这里](https://x.cc/ops)", {}).decode("utf-8"))
-    assert "https://x.cc/ops" in body["content"]["text"]
-
-
 def test_resolve_endpoint_telegram_from_token():
     url = _resolve_chat_endpoint("telegram", "", "123:ABC")
     assert url == "https://api.telegram.org/bot123:ABC/sendMessage"
@@ -121,30 +94,6 @@ async def test_send_test_missing_target_returns_error():
         "events": ["autoreply_alert"],
     })
     assert res["ok"] is False  # 缺 target → 计为错误
-
-
-def test_merge_preserve_secrets_keeps_real_token_on_masked_resave():
-    """运营接通告警的安全关键点：面板保存回传脱敏/空 token 时,不覆盖旧真实密钥。
-
-    坏掉的后果：真 token 被 'abc***' 字面量覆盖 → 所有告警投递用错密钥静默失败
-    （保存成功、告警发不出）。这是「接通告警出口」这条链上唯一有真逻辑的薄弱点,
-    抽成纯函数在此钉住(此前内联在路由里不可测)。
-    """
-    from src.integrations.notify_webhooks_store import merge_preserve_secrets
-    old = {"tg": {"name": "tg", "token": "REAL-123", "secret": "S-REAL"}}
-    # 脱敏 token 回传 + 空 secret → 都保留旧真值
-    out = merge_preserve_secrets(
-        [{"name": "tg", "token": "REA***", "secret": ""}], old)
-    assert out[0]["token"] == "REAL-123"
-    assert out[0]["secret"] == "S-REAL"
-    # 真新值 → 正常覆盖（改密钥要能生效）
-    out2 = merge_preserve_secrets(
-        [{"name": "tg", "token": "NEW-456", "secret": ""}], old)
-    assert out2[0]["token"] == "NEW-456"
-    assert out2[0]["secret"] == "S-REAL"   # secret 仍空 → 保留
-    # 无同名旧条目 + 脱敏值 → 清空(绝不把 *** 当密钥存)
-    out3 = merge_preserve_secrets([{"name": "new", "token": "abc***", "secret": ""}], {})
-    assert out3[0]["token"] == ""
 
 
 def test_store_sanitize_and_effective(tmp_path):

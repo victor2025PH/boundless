@@ -155,13 +155,6 @@
     <div id="feErrTrend" style="margin-top:8px;"></div>
   </section>
 
-  <section id="csrfRejectSection" style="display:none;">
-    <h2>🛡️ {{ (i18n or {}).get('ov2_s_csrf', "安全拦截（CSRF 写请求 403 观测）") }}</h2>
-    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_csrf_hint', "形态即诊断：cookie_no_header＝某个前端宿主没带 CSRF 凭证；origin/referer_mismatch＝反代改写 Host 或跨站；bare＝脚本/隐私浏览器。有量就该查，别等坐席截图。") }}</div>
-    <div class="grid" id="csrfRejectKpis"></div>
-    <div id="csrfRejectDetail"></div>
-  </section>
-
   <section id="personaOvSection" style="display:none;">
     <h2>🎭 {{ (i18n or {}).get('ov2_s_po', "人设覆写（会话级换绑用量与 legacy 债）") }}</h2>
     <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_po_sub', "出站解析按档位分布 + 治理动作累计。决策「conv_override 要不要默认开」与「legacy 清理收官时点」都看这里。") }}</div>
@@ -1409,12 +1402,11 @@ async function loadFrontendErrors(){
   if(!kp || !dv) return;
   try{
     const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
-    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; try{ renderProfilePush(null); }catch(_pp){} try{ renderUiEvents(null); }catch(_ue){} try{ renderPersonaOverride(null); }catch(_po){} try{ renderCsrfRejects(null); }catch(_cs){} return; }
+    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; try{ renderProfilePush(null); }catch(_pp){} try{ renderUiEvents(null); }catch(_ue){} try{ renderPersonaOverride(null); }catch(_po){} return; }
     const d = await r.json();
     try{ renderProfilePush(d); }catch(_pp){}
     try{ renderUiEvents(d); }catch(_ue){}
     try{ renderPersonaOverride(d); }catch(_po){}
-    try{ renderCsrfRejects(d); }catch(_cs){}
     var fe = d.frontend_errors || null;
     if(!fe || !(Number(fe.total)||0)){
       kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js_fe_none')+'</div>'; return;
@@ -1491,41 +1483,6 @@ async function loadFeTrend(){
   }
 }
 
-// 🛡️ CSRF 写请求拦截卡：与 loadFrontendErrors 共享同一次 /api/workspace/metrics 响应，
-// 读 csrf_rejects 段（中间件 403 计数，2026-07-31 起拒绝必留痕）。零拦截 → 整卡隐藏。
-// kind/path 键由后端消毒（枚举 / path 安全字符 + 数字掩码），可直接拼 HTML。
-function renderCsrfRejects(d){
-  var sec = document.getElementById('csrfRejectSection');
-  var kp = document.getElementById('csrfRejectKpis');
-  var dv = document.getElementById('csrfRejectDetail');
-  if(!sec || !kp || !dv) return;
-  var cs = (d && d.csrf_rejects) || null;
-  if(!cs || !(Number(cs.total)||0)){ sec.style.display='none'; return; }
-  sec.style.display = '';
-  var lastTs = Number(cs.last_reject_ts)||0;
-  var kpis = [
-    {label:window.T('ov2_js_csrf_total'), value:fmt(Number(cs.total)||0), color:'var(--red)'},
-    {label:window.T('ov2_js_csrf_last'), value:(lastTs?window.wsFmtDateTime(lastTs):'—')},
-  ];
-  kp.innerHTML = kpis.map(function(c){
-    return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
-      '</div><div style="font-size:20px;font-weight:600;margin-top:4px;'+(c.color?('color:'+c.color+';'):'')+'">'+c.value+'</div></div>';
-  }).join('');
-  function topRows(obj, n){
-    return Object.keys(obj).slice(0, n||8).map(function(k){
-      return '<tr><td>'+k+'</td><td>'+obj[k]+'</td></tr>';
-    }).join('') || '<tr><td colspan="2" class="muted">—</td></tr>';
-  }
-  var byKind = cs.by_kind || {}, byPath = cs.by_path || {};
-  dv.innerHTML =
-    '<div style="display:flex;gap:16px;flex-wrap:wrap;">'
-    + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_js_csrf_by_kind')+'</div>'
-    +   '<table><tr><th>'+window.T('ov2_js_csrf_col_kind')+'</th><th>'+window.T('ov2_js_csrf_col_count')+'</th></tr>'+topRows(byKind, 8)+'</table></div>'
-    + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_js_csrf_by_path')+'</div>'
-    +   '<table><tr><th>'+window.T('ov2_js_csrf_col_path')+'</th><th>'+window.T('ov2_js_csrf_col_count')+'</th></tr>'+topRows(byPath, 8)+'</table></div>'
-    + '</div>';
-}
-
 // 🎭 人设覆写卡：与 loadFrontendErrors 共享同一次 /api/workspace/metrics 响应（不单独发请求），
 // 读 persona_override 段（出站解析档位分布 + 换绑/整号/legacy 清理动作累计）。
 // 零解析且零动作 → 整卡隐藏（该机器没用人设覆写就不占版面）。
@@ -1536,32 +1493,24 @@ function renderPersonaOverride(d){
   if(!sec || !kp || !dv) return;
   var po = (d && d.persona_override) || null;
   var debt = (po && typeof po.legacy_debt === 'number') ? po.legacy_debt : null;
-  var fails = (po && Number(po.fails_total)) || 0;
-  // 债>0 / 失败>0 时即使零流量也要露卡（被挡住的尝试正是要在没人看时被看见的信号）
-  if(!po || (!(Number(po.resolves)||0) && !(Number(po.actions_total)||0) && !debt && !fails)){ sec.style.display='none'; return; }
+  // 债>0 时即使零流量也要露卡（债回升正是要在没人看时被看见的信号）
+  if(!po || (!(Number(po.resolves)||0) && !(Number(po.actions_total)||0) && !debt)){ sec.style.display='none'; return; }
   sec.style.display = '';
   var resolves = Number(po.resolves)||0;
   var conv = Number(po.conv_hits)||0;
   var acct = Number(po.account_hits)||0;
   var pct = function(n){ return resolves ? ' ('+Math.round(n*100/resolves)+'%)' : ''; };
-  // 换绑漏斗（P1）：成功=actions，业务层拒绝=fails，安全层拦截=csrf_rejects 里
-  // 打到 /api/persona/* 的那部分（中间件拒绝不进路由，得从隔壁段交叉引用）。
-  var csrfPaths = ((d && d.csrf_rejects) || {}).by_path || {};
-  var csrfBlocked = 0;
-  Object.keys(csrfPaths).forEach(function(p){ if(p.indexOf('/api/persona/')===0) csrfBlocked += Number(csrfPaths[p])||0; });
   var kpis = [
     {label:window.T('ov2_po_resolves'), value:fmt(resolves)},
     {label:window.T('ov2_po_conv'), value:fmt(conv)+pct(conv)},
     {label:window.T('ov2_po_acct'), value:fmt(acct)+pct(acct)},
     {label:window.T('ov2_po_legacy_sup'), value:fmt(Number(po.legacy_suppressed)||0)},
     {label:window.T('ov2_po_debt'), value:(debt === null ? '—' : fmt(debt))},
-    {label:window.T('ov2_po_actions'), value:fmt(Number(po.actions_total)||0)},
-    {label:window.T('ov2_po_fails'), value:fmt(fails), color:(fails>0?'var(--warn)':'')},
-    {label:window.T('ov2_po_csrf_blocked'), value:fmt(csrfBlocked), color:(csrfBlocked>0?'var(--red)':'')}
+    {label:window.T('ov2_po_actions'), value:fmt(Number(po.actions_total)||0)}
   ];
   kp.innerHTML = kpis.map(function(c){
     return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
-      '</div><div style="font-size:20px;font-weight:600;margin-top:4px;'+(c.color?('color:'+c.color+';'):'')+'">'+c.value+'</div></div>';
+      '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
   }).join('');
   // 平台键经后端 _san_platform 消毒（小写截断），动作键为固定白名单——可直接拼 HTML。
   var byPlat = po.conv_by_platform || {};
@@ -1579,25 +1528,12 @@ function renderPersonaOverride(d){
   var actRows = Object.keys(acts).map(function(k){
     return '<tr><td>'+(actLabel[k]||k)+'</td><td>'+acts[k]+'</td></tr>';
   }).join('') || '<tr><td colspan="2" class="muted">—</td></tr>';
-  // 失败分解（op:reason 白名单键，可直接拼 HTML）；零失败时整块不渲染
-  var failsBd = po.fails || {};
-  var failKeys = Object.keys(failsBd);
-  var failBlock = '';
-  if(failKeys.length){
-    var failRows = failKeys.map(function(k){
-      return '<tr><td>'+k+'</td><td>'+failsBd[k]+'</td></tr>';
-    }).join('');
-    failBlock =
-      '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_po_fails_bd')+'</div>'
-      + '<table><tr><th>'+window.T('ov2_po_col_fail')+'</th><th>'+window.T('ov2_po_col_count')+'</th></tr>'+failRows+'</table></div>';
-  }
   dv.innerHTML =
     '<div style="display:flex;gap:16px;flex-wrap:wrap;">'
     + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_po_by_platform')+'</div>'
     +   '<table><tr><th>'+window.T('ov2_po_col_platform')+'</th><th>'+window.T('ov2_po_col_count')+'</th></tr>'+platRows+'</table></div>'
     + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_po_actions_bd')+'</div>'
     +   '<table><tr><th>'+window.T('ov2_po_col_action')+'</th><th>'+window.T('ov2_po_col_count')+'</th></tr>'+actRows+'</table></div>'
-    + failBlock
     + '</div>'
     + '<div class="muted" style="font-size:12px;margin-top:8px;">'+window.T('ov2_po_hint')+'</div>';
 }

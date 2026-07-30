@@ -99,8 +99,6 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     "human_deliver": {"types": {"human_deliver_alert"}, "levels": None},
     # 待审草稿长期无人处理（补 SLA 的 L1 盲区：L1 既不自动发也无逐条告警 → 无声烂掉）
     "draft_backlog": {"types": {"draft_backlog_alert"}, "levels": None},
-    # CSRF 写请求拦截激增（前端宿主写通道断裂 / 反代漂移 / 跨站探测；2026-07-31 事故沉淀）
-    "csrf_reject": {"types": {"csrf_reject_alert"}, "levels": None},
     # 原生通话主机持续不可用（MiniCPM-o 176:7860 掉线 → 打进来的电话全接不了）
     "tg_call": {"types": {"tg_call_alert"}, "levels": None},
     # 试用履约端停摆（厂商机是签发链单点：它不跑，领了试用的人永远停在「正在签发」）
@@ -121,67 +119,6 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     # 出站语音连发异常（2026-07-15 三连发事故指纹：同会话短窗多条语音=重复处理回归）
     "voice_burst": {"types": {"voice_burst_alert"}, "levels": None},
 }
-
-# ─── 告警受众分层（2026-07-31，产品化：终端客户能自己绑、看得懂）─────────────
-# 事故教训：这套告警此前只有一张「手打逗号分隔别名」的订阅框——终端客户（买 AI 客服
-# 系统的老板/客服主管）既不知道有哪些别名、也看不懂 csrf_reject/memory_key_drift 这类
-# 技术黑话。按**受众**劈两层：
-#   business  = 终端运营该收、大白话、能行动（客户在等、账号掉线、满意度跌…）；
-#   technical = 开发者/技术支持向，终端不懂也不该处理（放面板「高级」折叠里）。
-# label_key 是**大白话** i18n 键（cp-i18n.js，前端 T() 取词）。凡列进目录的别名都必须
-# 在 _EVENT_ALIASES 内（门禁 test_alert_audience_catalog 钉住，防笔误/改名漂移）。
-_BUSINESS_ALERTS: Dict[str, str] = {
-    "platform_session": "cp.alert.platform_session",   # 账号掉线，需要重新登录
-    "escalation":       "cp.alert.escalation",         # 客户等太久没人接
-    "sla_breach":       "cp.alert.sla_breach",         # 回复超时
-    "sla_escalated":    "cp.alert.sla_escalated",       # 严重超时升级
-    "draft_backlog":    "cp.alert.draft_backlog",       # 待回复积压，客户在等
-    "queue_alert":      "cp.alert.queue_alert",         # 会话排队超时
-    "csat_alert":       "cp.alert.csat_alert",          # 客户满意度跌破
-    "reply_risk":       "cp.alert.reply_risk",          # 高危回复预警
-    "billing_alert":    "cp.alert.billing_alert",       # 席位/用量异常
-}
-_TECHNICAL_ALERTS: Dict[str, str] = {
-    "csrf_reject":         "cp.alert.csrf_reject",
-    "host_alert":          "cp.alert.host_alert",
-    "health_alert":        "cp.alert.health_alert",
-    "autoreply_alert":     "cp.alert.autoreply_alert",
-    "draft_quality":       "cp.alert.draft_quality",
-    "ai_quality":          "cp.alert.ai_quality",
-    "realtime_voice":      "cp.alert.realtime_voice",
-    "avatar_voice":        "cp.alert.avatar_voice",
-    "human_deliver":       "cp.alert.human_deliver",
-    "tg_call":             "cp.alert.tg_call",
-    "orchestrator_worker": "cp.alert.orchestrator_worker",
-    "memory_key_drift":    "cp.alert.memory_key_drift",
-    "media_promise":       "cp.alert.media_promise",
-    "colloquial_llm":      "cp.alert.colloquial_llm",
-    "voice_burst":         "cp.alert.voice_burst",
-    "anomaly":             "cp.alert.anomaly",
-    "trial_fulfiller":     "cp.alert.trial_fulfiller",
-}
-
-
-def alert_catalog() -> Dict[str, List[Dict[str, str]]]:
-    """按受众分组的告警目录（供「告警渠道」面板渲染大白话订阅清单）。
-
-    返回 ``{"business":[{alias,label_key}], "technical":[...]}``。面板据此把订阅项
-    分两组：业务默认展开、每条用大白话；技术折叠进「高级」。纯数据、无副作用。
-    """
-    return {
-        "business": [{"alias": a, "label_key": k} for a, k in _BUSINESS_ALERTS.items()],
-        "technical": [{"alias": a, "label_key": k} for a, k in _TECHNICAL_ALERTS.items()],
-    }
-
-
-def alert_audience(alias: str) -> str:
-    """单个别名的受众（business/technical/other）。other=数据流/集成用，不进面板。"""
-    if alias in _BUSINESS_ALERTS:
-        return "business"
-    if alias in _TECHNICAL_ALERTS:
-        return "technical"
-    return "other"
-
 
 # ─── 速率限制 ────────────────────────────────────────────────────────────────
 
@@ -224,12 +161,9 @@ def _fmt_dingtalk(title: str, text: str, data: Dict[str, Any]) -> bytes:
 
 
 def _fmt_feishu(title: str, text: str, data: Dict[str, Any]) -> bytes:
-    # 飞书自定义机器人 text 类型**不渲染 Markdown** → 必须先 _plainify，否则
-    # 正文的 **粗体** / [文字](/admin/ops) 会原样显示成字面符号 + 相对链接死链
-    # （2026-07-31 修：飞书是用户首选的「贴 URL 即用」渠道，此前直接塞原始 md）。
     payload = {
         "msg_type": "text",
-        "content": {"text": f"{_plainify(title)}\n{_plainify(text)}".strip()},
+        "content": {"text": f"{title}\n{text}"},
     }
     return json.dumps(payload, ensure_ascii=False).encode()
 
@@ -669,34 +603,6 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 "[📊 查看运营总览](/admin/ops)"
             )
 
-    elif event_type == "csrf_reject_alert":
-        if data.get("recovered"):
-            title = "✅ CSRF 写请求拦截已平息"
-            text = (
-                "**状态**: 观察窗内不再出现新的 CSRF 拦截\n"
-                "[📊 查看运营总览](/admin/ops)"
-            )
-        else:
-            n = int(data.get("count") or 0)
-            win = int(data.get("window_min") or 60)
-            kinds = data.get("by_kind") or {}
-            kinds_txt = "、".join(f"{k}×{v}" for k, v in sorted(kinds.items())) or "—"
-            tops = data.get("top_paths") or {}
-            tops_txt = "、".join(f"{p}×{v}" for p, v in sorted(
-                tops.items(), key=lambda kv: -kv[1])) or "—"
-            prefix = "⏰" if data.get("reminder") else "🚨"
-            title = f"{prefix} CSRF 写请求拦截激增：{win} 分钟内 {n} 次"
-            text = (
-                f"**形态**: {kinds_txt}\n"
-                f"**接口 Top**: {tops_txt}\n"
-                "**读法**: `cookie_no_header`＝某前端宿主没带凭证（写通道断裂，"
-                "2026-07 人设切换事故形态）；`origin/referer_mismatch`＝反代改写 "
-                "Host 或跨站请求；`bare`＝脚本/隐私浏览器\n"
-                "**处置**: 功能形态→查最近前端改动是否漏带 X-CSRF-Token；"
-                "安全形态→核对访问入口与反代配置\n"
-                "[📊 查看运营总览](/admin/ops)"
-            )
-
     elif event_type == "human_deliver_alert":
         if data.get("recovered"):
             title = "✅ 人工通过投递链已恢复"
@@ -1046,8 +952,7 @@ class WebhookNotifier:
                 logger.warning("Webhook 跳过 [%s]：%s 渠道缺少 target",
                                matcher["name"], fmt)
                 return
-            # title 也过 _plainify（防标题偶含 markdown；海外 IM 均为纯文本渠道）
-            msg = f"{_plainify(title)}\n{_plainify(text)}".strip()
+            msg = f"{title}\n{_plainify(text)}".strip()
             body, headers = _build_chat_body(fmt, msg, target, token)
         else:
             url = matcher["url"]

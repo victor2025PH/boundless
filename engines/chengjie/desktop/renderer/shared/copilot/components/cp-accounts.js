@@ -512,35 +512,14 @@
       if (!form || !this._client || !this._client.autoReplyWebhooks) return;
       form.innerHTML = `<div class="add"><div class="sub">${this._esc(T("cp.acct.wh_loading"))}</div></div>`;
       let list = [];
-      let denied = "";
       try {
         const d = await this._client.autoReplyWebhooks();
-        if (d && d.webhooks) list = d.webhooks;
-        // 非主管（坐席/观察员）读渠道明细被后端拒 → 只回 {detail} 无 webhooks 字段。
-        // 优雅降级：显示「仅主管可配置」而非空白/报错（后端 detail 已 i18n，优先用它）。
-        else if (d && (d.detail || d.error)) denied = String(d.detail || d.error);
+        list = (d && d.webhooks) || [];
       } catch (e) { /* 空列表 */ }
-      if (denied) {
-        form.innerHTML = `<div class="add"><div class="sub">` +
-          `${this._esc(denied || T("cp.acct.wh_no_perm"))}</div></div>`;
-        return;
-      }
-      // 大白话告警目录（分组复选框的数据源）：拿到则订阅项渲染成分组勾选，
-      // 拿不到（旧后端/旧壳）→ this._alertCat 保持 null → _whEventsHtml 回落文本框。
-      this._alertCat = null;
-      if (this._client.alertCatalog) {
-        try {
-          const c = await this._client.alertCatalog();
-          if (c && (c.business || c.technical)) {
-            this._alertCat = { business: c.business || [], technical: c.technical || [] };
-          }
-        } catch (e) { /* 回落文本框 */ }
-      }
       const rows = list.map((w, i) => this._whRowHtml(w, i)).join("");
       form.innerHTML =
         `<div class="add">` +
         `<div class="sub">${this._esc(T("cp.acct.wh_desc"))}</div>` +
-        this._whChannelGuide() +
         `<div class="wh-list">${rows || `<div class="empty">${this._esc(T("cp.acct.wh_empty"))}</div>`}</div>` +
         `<div class="field" style="justify-content:space-between;gap:8px">` +
         `<button data-act="wh-add">${this._esc(T("cp.acct.wh_add"))}</button>` +
@@ -555,56 +534,18 @@
       const e = (s) => this._esc(s == null ? "" : s);
       const fmt = w.format || "telegram";
       const fopt = (v, label) => `<option value="${v}"${fmt === v ? " selected" : ""}>${label}</option>`;
+      const evs = (w.events || ["autoreply_alert"]).join(",");
       const tokenPh = w.token_set ? T("cp.acct.token_set") : T("cp.acct.token_ph");
       return `<div class="wh-it" data-i="${i}" style="border:1px solid var(--cp-border,#eef2f7);border-radius:8px;padding:6px;margin-bottom:6px">` +
         `<div class="field"><input class="w-name" placeholder="${e(T("cp.acct.wh_name_ph"))}" value="${e(w.name)}" style="max-width:120px"/>` +
-        `<select class="w-fmt">${fopt("telegram", "Telegram")}${fopt("whatsapp", "WhatsApp")}${fopt("messenger", "Messenger")}${fopt("feishu", T("cp.acct.wh_fmt_feishu"))}${fopt("wecom", T("cp.acct.wh_fmt_wecom"))}${fopt("dingtalk", T("cp.acct.wh_fmt_dingtalk"))}${fopt("json", T("cp.acct.wh_json"))}</select>` +
+        `<select class="w-fmt">${fopt("telegram", "Telegram")}${fopt("whatsapp", "WhatsApp")}${fopt("messenger", "Messenger")}${fopt("json", T("cp.acct.wh_json"))}</select>` +
         `<label style="flex:0"><input type="checkbox" class="w-en" ${w.enabled === false ? "" : "checked"}/>${e(T("cp.common.enable"))}</label>` +
         `<span style="flex:1"></span><button data-act="wh-test">${e(T("cp.common.test"))}</button><button data-act="wh-del">${e(T("cp.common.delete"))}</button></div>` +
         `<div class="field"><input class="w-token" placeholder="${e(tokenPh)}" value="" style="flex:1"/></div>` +
         `<div class="field"><input class="w-target" placeholder="${e(T("cp.acct.wh_target_ph"))}" value="${e(w.target)}" style="flex:1"/></div>` +
         `<div class="field"><input class="w-url" placeholder="${e(T("cp.acct.wh_url_ph"))}" value="${e(w.url)}" style="flex:1"/></div>` +
-        this._whEventsHtml(w) +
+        `<div class="field"><input class="w-events" placeholder="${e(T("cp.acct.wh_events_ph"))}" value="${e(evs)}" style="flex:1"/></div>` +
         `</div>`;
-    }
-
-    /* 订阅哪些告警（2026-07-31 分层）：拿到大白话目录 → 分组复选框（业务默认展开、
-       技术折叠进「高级」）；拿不到（旧后端/旧壳未暴露 alertCatalog）→ 回落原「手打
-       逗号别名」文本框，保证新旧环境都自洽、不半残。 */
-    _whEventsHtml(w) {
-      const e = (s) => this._esc(s == null ? "" : s);
-      if (!this._alertCat) {
-        const evs = (w.events || ["autoreply_alert"]).join(",");
-        return `<div class="field"><input class="w-events" placeholder="${e(T("cp.acct.wh_events_ph"))}" value="${e(evs)}" style="flex:1"/></div>`;
-      }
-      const sel = {};
-      (w.events || []).forEach((a) => { sel[a] = true; });
-      const cb = (it) =>
-        `<label class="w-ev" style="display:inline-flex;align-items:center;gap:3px;margin:2px 10px 2px 0;font-size:11px;cursor:pointer">` +
-        `<input type="checkbox" class="w-ev-cb" value="${e(it.alias)}"${sel[it.alias] ? " checked" : ""}/>` +
-        `${e(T(it.label_key))}</label>`;
-      const biz = (this._alertCat.business || []).map(cb).join("");
-      const tech = (this._alertCat.technical || []).map(cb).join("");
-      return `<div class="w-evs" style="margin-top:4px">` +
-        `<div class="sub" style="margin:2px 0">${e(T("cp.acct.wh_events_title"))}</div>` +
-        `<div class="wh-grp-biz" style="margin-bottom:2px">${biz}</div>` +
-        `<details class="wh-grp-tech-wrap"><summary style="cursor:pointer;font-size:11px;color:var(--cp-text-dim,#64748b)">${e(T("cp.acct.wh_grp_tech"))}</summary>` +
-        `<div class="sub" style="font-size:10px;margin:2px 0">${e(T("cp.acct.wh_grp_tech_hint"))}</div>` +
-        `<div class="wh-grp-tech">${tech}</div></details>` +
-        `</div>`;
-    }
-
-    /* 各渠道怎么填的速查（折叠；飞书/企微/钉钉最省事——只贴 Webhook URL）。 */
-    _whChannelGuide() {
-      const e = (s) => this._esc(s == null ? "" : s);
-      return `<details class="wh-guide" style="margin:2px 0 8px">` +
-        `<summary style="cursor:pointer;font-size:11px;color:var(--cp-accent,#4f46e5)">${e(T("cp.acct.wh_guide_title"))}</summary>` +
-        `<div style="padding:4px 0 0;font-size:11px;line-height:1.7;color:var(--cp-text-dim,#64748b)">` +
-        `• ${e(T("cp.acct.wh_ch_feishu"))}<br>` +
-        `• ${e(T("cp.acct.wh_ch_wecom"))}<br>` +
-        `• ${e(T("cp.acct.wh_ch_dingtalk"))}<br>` +
-        `• ${e(T("cp.acct.wh_ch_telegram"))}` +
-        `</div></details>`;
     }
 
     _whAddRow() {
@@ -629,11 +570,7 @@
       if (!list) return [];
       return Array.from(list.querySelectorAll(".wh-it")).map((it) => {
         const g = (s) => { const n = it.querySelector(s); return n ? n.value.trim() : ""; };
-        // 分组复选框（新）优先；无则回落逗号文本框（旧后端/旧壳）
-        const cbs = it.querySelectorAll(".w-ev-cb");
-        const events = cbs.length
-          ? Array.from(cbs).filter((c) => c.checked).map((c) => c.value)
-          : g(".w-events").split(",").map((x) => x.trim()).filter(Boolean);
+        const events = g(".w-events").split(",").map((x) => x.trim()).filter(Boolean);
         return {
           name: g(".w-name") || "webhook",
           format: it.querySelector(".w-fmt").value,

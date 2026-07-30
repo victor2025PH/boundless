@@ -65,19 +65,19 @@
 <!-- Copilot 组件 i18n：宿主语言(WS_LANG)在组件加载前注入 CP_LANG，cp-i18n.js 据此解析 zh/en。
      语言切换走整页刷新(wsToggleLang→/set_lang)，组件随新 LANG 重渲，无需热切换。 -->
 <script>window.CP_LANG = (window.WS_LANG === 'zh') ? 'zh' : 'en';</script>
-<script src="/copilot/i18n/cp-i18n.js?v=20260731f"></script>
-<script src="/copilot/client/copilot-client.js?v=20260731e"></script>
+<script src="/copilot/i18n/cp-i18n.js?v=20260701"></script>
+<script src="/copilot/client/copilot-client.js?v=20260611b"></script>
 <script src="/copilot/sidebar-chrome.js?v=20260723"></script>
 <script src="/copilot/components/cp-panel-base.js?v=20260702"></script>
 <script src="/copilot/components/cp-rel-stage.js?v=20260723"></script>
 <script src="/copilot/components/cp-next-actions.js?v=20260611"></script>
 <script src="/copilot/components/cp-script.js?v=20260611"></script>
-<script src="/copilot/components/cp-persona.js?v=20260731e"></script>
-<script src="/copilot/components/cp-collab.js?v=20260731a"></script>
+<script src="/copilot/components/cp-persona.js?v=20260611"></script>
+<script src="/copilot/components/cp-collab.js?v=20260611"></script>
 <script src="/copilot/components/cp-chain-exec.js?v=20260611"></script>
 <script src="/copilot/components/cp-draft.js?v=20260704"></script>
 <script src="/copilot/components/cp-voice.js?v=20260611b"></script>
-<script src="/copilot/components/cp-goal.js?v=20260731b"></script>
+<script src="/copilot/components/cp-goal.js?v=20260728b"></script>
 {% endblock %}
 {% block content %}
 <style>
@@ -201,7 +201,7 @@
   border:1px solid var(--border);border-radius:6px;background:var(--bg-soft);
   color:var(--text-tiny);font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all;}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260731b">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260730d">
 <script src="/static/workspace/inbox-messages.js?v=20260720b"></script>
 
 <!-- 主布局 -->
@@ -342,8 +342,6 @@
         <button type="button" class="goal-af-chip" data-gaf="push" data-i18n="inbox.goal.filter.push">今日有推进</button>
         <button type="button" class="goal-af-chip" data-gaf="pending" data-i18n="inbox.goal.filter.pending">待反馈</button>
         <button type="button" class="goal-af-chip" data-gaf="hold" data-i18n="inbox.goal.filter.hold">让路中</button>
-        <!-- P19: 本周成果（成就感面）——只在有正向数据时出现，0 不示众 -->
-        <span class="goal-af-wins" id="goal-af-wins" hidden></span>
       </div>
       </div><!-- /.list-header-body -->
     </div><!-- /.list-header -->
@@ -721,7 +719,7 @@
         <!-- 业务助手侧栏（与桌面右栏同源 shared/copilot 组件） -->
         <div class="info-sidebar" id="info-sidebar">
           <div class="ws-sidebar-resize" id="ws-sidebar-resize" title="拖动调节宽度" data-i18n-title="inbox.sidebar.resize_t"></div>
-          <div class="ws-cp-head" style="display:flex;align-items:center;gap:6px;"><span data-i18n="inbox.cp.title">业务助手</span><span id="ws-cp-tour-btn" title="重看新手引导" data-i18n-title="inbox.cptour.replay_t" onclick="_cpTourStart(true)" style="cursor:pointer;margin-left:auto;font-size:12px;opacity:.65;user-select:none;">❓</span><span id="ws-cp-app-toggle" title="切换统一 App（与桌面 🧪 同源 /copilot/app.html，单一前端 App）" data-i18n-title="inbox.cp.app_toggle_t" onclick="wsToggleApp()" style="cursor:pointer;font-size:13px;opacity:.6;user-select:none;">🧪</span></div>
+          <div class="ws-cp-head" style="display:flex;align-items:center;gap:6px;"><span data-i18n="inbox.cp.title">业务助手</span><span id="ws-cp-app-toggle" title="切换统一 App（与桌面 🧪 同源 /copilot/app.html，单一前端 App）" data-i18n-title="inbox.cp.app_toggle_t" onclick="wsToggleApp()" style="cursor:pointer;margin-left:auto;font-size:13px;opacity:.6;user-select:none;">🧪</span></div>
           <div class="ws-cp-tabs" id="ws-cp-tabs">
             <button type="button" class="ws-cp-tab active" data-tab="reply"><span class="ws-cp-tab-ic" data-cp-ic="msg"></span><span data-i18n="inbox.cp.tab.reply">回复台</span><span class="ws-cp-tab-badge" id="ws-cp-tab-badge-reply"></span></button>
             <button type="button" class="ws-cp-tab" data-tab="customer"><span class="ws-cp-tab-ic" data-cp-ic="heart"></span><span data-i18n="inbox.cp.tab.customer">客户&关系</span><span class="ws-cp-tab-badge" id="ws-cp-tab-badge-customer"></span></button>
@@ -6875,7 +6873,7 @@ function _showTypingIndicator(agentName){
   const div=document.createElement('div');
   div.id='typing-banner';
   div.style.cssText='padding:5px 18px;background:#f0f9ff;border-bottom:1px solid #bae6fd;font-size:11px;color:#0369a1;display:flex;align-items:center;gap:5px;';
-  div.innerHTML=`<span style="display:inline-flex;gap:2px;">${'<span class="typing-dot" style="background:#0369a1;"></span>'.repeat(3)}</span> ${window.Tf('inbox.typing',{name:esc(agentName)})}`;
+  div.innerHTML=`<span style="display:inline-flex;gap:2px;">${'<span style="width:4px;height:4px;border-radius:50%;background:#0369a1;animation:typingDot .8s infinite;"></span>'.repeat(3)}</span> ${window.Tf('inbox.typing',{name:esc(agentName)})}`;
   el.insertAdjacentElement('afterend', div);
   clearTimeout(_typingDisplayTimer);
   _typingDisplayTimer=setTimeout(()=>{ const d=document.getElementById('typing-banner'); if(d) d.remove(); }, 4000);
@@ -6893,7 +6891,7 @@ function _showPeerTyping(recording){
     div.style.cssText='padding:5px 18px;background:#f0fdf4;border-bottom:1px solid #bbf7d0;font-size:11px;color:#15803d;display:flex;align-items:center;gap:5px;';
     el.insertAdjacentElement('afterend', div);
   }
-  const dots='<span style="display:inline-flex;gap:2px;">'+'<span class="typing-dot" style="background:var(--th-bg-green7,#15803d);"></span>'.repeat(3)+'</span>';
+  const dots='<span style="display:inline-flex;gap:2px;">'+'<span style="width:4px;height:4px;border-radius:50%;background:var(--th-bg-green7,#15803d);animation:typingDot .8s infinite;"></span>'.repeat(3)+'</span>';
   div.innerHTML=dots+' '+(recording?window.T('inbox.peer_recording'):window.T('inbox.peer_typing'));
   clearTimeout(_peerTypingTimer);
   // composing 会周期性重发；对端停止后 WhatsApp 发 paused/available（→_clearPeerTyping）；
@@ -7781,32 +7779,6 @@ function _startGoalAgendaPoll(){
   _refreshGoalAgenda(true);
   if(_goalAgendaTimer) clearInterval(_goalAgendaTimer);
   _goalAgendaTimer=setInterval(function(){ _refreshGoalAgenda(false); }, 60000);
-  _refreshGoalWins();
-  if(_goalWinsTimer) clearInterval(_goalWinsTimer);
-  _goalWinsTimer=setInterval(_refreshGoalWins, 600000);   // 成果面 10min 一刷足够
-}
-/* P19: 本周成果 chip（坐席成就感面）——读 /api/goals/report?days=7 的
-   totals.done + active_now。正向数据才显示（0 成交 0 推进=整条隐藏，不示众）；
-   403/异常一律静默隐藏。 */
-var _goalWinsTimer=0;
-async function _refreshGoalWins(){
-  var el=document.getElementById('goal-af-wins'); if(!el) return;
-  try{
-    var r=await apiFetch('/api/goals/report?days=7', undefined, {timeoutMs:15000});
-    if(!r.ok){ el.hidden=true; return; }
-    var d=await r.json();
-    var done=(d&&d.totals&&parseInt(d.totals.done,10))||0;
-    var act=(d&&parseInt(d.active_now,10))||0;
-    if(done>0){
-      el.textContent='🎉 '+_goalTf('inbox.goal.wins.week',{done:done,n:act},'Won {done} this week · AI advancing {n}');
-      el.classList.add('win');
-    } else if(act>0){
-      el.textContent=_goalTf('inbox.goal.wins.active_only',{n:act},'AI advancing {n} goal(s)');
-      el.classList.remove('win');
-    } else { el.hidden=true; return; }
-    el.title=_goalT('inbox.goal.wins.t','Work-goal outcomes over the last 7 days');
-    el.hidden=false;
-  }catch(_){ el.hidden=true; }
 }
 /* Phase2: 切到「客户&关系」tab 且今日拍待反馈 → 每会话一次自动展开目标卡（软引导，不反复打扰） */
 var _goalAutoExposed={};
@@ -7917,118 +7889,6 @@ function setWsCpTab(tab){
   if(_wsCpTab==='customer'&&typeof _maybeAutoExposeGoal==='function') _maybeAutoExposeGoal();
 }
 
-/* ===== P18: 业务助手三步上手引导（coach marks）=====
-   解决「找到了也不会用」：首次（localStorage ws_cp_tour_done_v1 未置）在右栏
-   出现时自动放一遍；右栏头部 ❓ 随时重看。纯前端零后端；锚点缺失（如目标卡
-   403 隐藏）自动回落到备选锚点或居中弹层，绝不卡死。 */
-var _CP_TOUR_DONE_KEY='ws_cp_tour_done_v1';
-var _cpTourIdx=0,_cpTourOn=false;
-function _cpTourSteps(){
-  return [
-    {sel:'#cp-hero', tab:null,
-     t:window.T('inbox.cptour.step1_t'), b:window.T('inbox.cptour.step1_b')},
-    {sel:'[data-cp-card="goal"]', alt:'.ws-cp-tab[data-tab="customer"]', tab:'customer',
-     t:window.T('inbox.cptour.step2_t'), b:window.T('inbox.cptour.step2_b')},
-    {sel:'#reply-ta', alt:'.ws-cp-tab[data-tab="reply"]', tab:'reply',
-     t:window.T('inbox.cptour.step3_t'), b:window.T('inbox.cptour.step3_b')}
-  ];
-}
-function _cpTourEl(st){
-  var el=null;
-  try{ el=st.sel?document.querySelector(st.sel):null; }catch(_){}
-  if(el&&el.offsetParent===null) el=null;      // hidden（如 403 整卡隐藏）→ 备选锚点
-  if(!el&&st.alt){ try{ el=document.querySelector(st.alt); }catch(_){} }
-  if(el&&el.offsetParent===null) el=null;
-  return el;
-}
-function _cpTourStart(manual){
-  if(_cpTourOn) return;
-  if(typeof WS_USE_APP!=='undefined'&&WS_USE_APP) return;  // App 模式无这些锚点
-  _cpTourOn=true; _cpTourIdx=0;
-  try{ _uiBeacon(manual?'goal_tour_replay':'goal_tour_show'); }catch(_){}
-  _cpTourRender();
-}
-function _cpTourNext(d){ _cpTourIdx+=(d||1); _cpTourRender(); }
-function _cpTourEnd(done){
-  _cpTourOn=false;
-  try{ localStorage.setItem(_CP_TOUR_DONE_KEY,'1'); }catch(_){}
-  try{ _uiBeacon(done?'goal_tour_done':'goal_tour_skip'); }catch(_){}
-  ['cp-tour-veil','cp-tour-hl','cp-tour-pop'].forEach(function(id){
-    var n=document.getElementById(id); if(n) n.remove();
-  });
-}
-function _cpTourRender(){
-  var steps=_cpTourSteps();
-  if(_cpTourIdx<0) _cpTourIdx=0;
-  if(_cpTourIdx>=steps.length){ _cpTourEnd(true); return; }
-  var st=steps[_cpTourIdx];
-  try{
-    if(_cpTourIdx===1&&typeof _cpExpandAndScroll==='function') _cpExpandAndScroll('goal','customer');
-    else if(st.tab&&typeof setWsCpTab==='function') setWsCpTab(st.tab);
-  }catch(_){}
-  setTimeout(function(){ _cpTourPlace(st,steps.length); },120);
-}
-function _cpTourPlace(st,total){
-  if(!_cpTourOn) return;
-  var veil=document.getElementById('cp-tour-veil');
-  if(!veil){
-    veil=document.createElement('div'); veil.id='cp-tour-veil'; veil.className='cp-tour-veil';
-    veil.addEventListener('click',function(){ _cpTourNext(1); });
-    document.body.appendChild(veil);
-  }
-  var hl=document.getElementById('cp-tour-hl');
-  if(!hl){ hl=document.createElement('div'); hl.id='cp-tour-hl'; hl.className='cp-tour-hl'; document.body.appendChild(hl); }
-  var pop=document.getElementById('cp-tour-pop');
-  if(!pop){
-    pop=document.createElement('div'); pop.id='cp-tour-pop'; pop.className='cp-tour-pop';
-    pop.addEventListener('click',function(ev){
-      var b=ev.target.closest('[data-tour]'); if(!b) return;
-      ev.stopPropagation();
-      var a=b.getAttribute('data-tour');
-      if(a==='next') _cpTourNext(1);
-      else if(a==='prev') _cpTourNext(-1);
-      else if(a==='skip') _cpTourEnd(false);
-    });
-    document.body.appendChild(pop);
-  }
-  var el=_cpTourEl(st);
-  var r=el?el.getBoundingClientRect():null;
-  if(r){
-    hl.style.display='block';
-    hl.style.left=(r.left-4)+'px'; hl.style.top=(r.top-4)+'px';
-    hl.style.width=(r.width+8)+'px'; hl.style.height=(r.height+8)+'px';
-  } else hl.style.display='none';
-  var last=_cpTourIdx===total-1;
-  pop.innerHTML='<div class="cp-tour-t">'+esc(st.t)+'</div>'
-    +'<div class="cp-tour-b">'+esc(st.b)+'</div>'
-    +'<div class="cp-tour-ft"><span class="cp-tour-dots">'+(_cpTourIdx+1)+'/'+total+'</span>'
-    +'<button type="button" class="tiny-btn" data-tour="skip">'+esc(window.T('inbox.cptour.skip'))+'</button>'
-    +(_cpTourIdx>0?'<button type="button" class="tiny-btn" data-tour="prev">'+esc(window.T('inbox.cptour.prev'))+'</button>':'')
-    +'<button type="button" class="tiny-btn cp-tour-next" data-tour="next">'+esc(window.T(last?'inbox.cptour.done':'inbox.cptour.next'))+'</button></div>';
-  pop.style.visibility='hidden'; pop.style.display='block';
-  var pw=pop.offsetWidth||300, ph=pop.offsetHeight||150, left, top;
-  if(r){
-    left=r.left-pw-14;
-    if(left<8){
-      left=Math.min(Math.max(8,r.left), window.innerWidth-pw-8);
-      top=r.bottom+12;
-    }
-    if(top===undefined) top=Math.min(Math.max(8,r.top), window.innerHeight-ph-8);
-    if(top+ph>window.innerHeight-8) top=Math.max(8,window.innerHeight-ph-8);
-  } else { left=(window.innerWidth-pw)/2; top=(window.innerHeight-ph)/2; }
-  pop.style.left=left+'px'; pop.style.top=top+'px';
-  pop.style.visibility='visible';
-}
-function _cpTourMaybeAuto(){
-  try{
-    if(_cpTourOn) return;
-    if(window.innerWidth<900) return;                          // 窄屏布局不自动打扰
-    if(typeof WS_USE_APP!=='undefined'&&WS_USE_APP) return;
-    if(localStorage.getItem(_CP_TOUR_DONE_KEY)==='1') return;
-    setTimeout(function(){ if(!_cpTourOn) _cpTourStart(false); },800);
-  }catch(_){}
-}
-
 function initWsCopilot(){
   if(!window.CopilotShared) return;
   _wsCpClient=window.CopilotShared.createCopilotClient();
@@ -8099,9 +7959,7 @@ function initWsCopilot(){
   if(_perEl){
     _perEl.addEventListener('cp-persona-changed', function(ev){
       var d=(ev&&ev.detail)||{};
-      // d.error = 组件按 status/code 分型后的人话文案（401 过期/403 CSRF/404 已删除…），
-      // 有则替代笼统的「切换失败」——确定性失败不再误导坐席去「重试」。
-      if(!d.ok){ _toast(d.error||window.T('inbox.persona.switch_failed'),'#dc2626'); return; }
+      if(!d.ok){ _toast(window.T('inbox.persona.switch_failed'),'#dc2626'); return; }
       if(d.scope==='account'){
         _toast(window.Tf('inbox.persona.account_switched_to',
                          {name:d.personaName||'?', acct:d.accountId||'?'}),'#0f9d75');
@@ -8120,9 +7978,6 @@ function initWsCopilot(){
     if(!text) return;
     var ta=document.getElementById('reply-ta');
     if(ta){ ta.value=text; ta.focus(); }
-    // 回填是「点了没反馈」重灾区：明确告诉坐席内容去哪了 + 按来源计采纳埋点
-    _toast(window.T('inbox.cp.fill_toast'),'#0f9d75');
-    try{ _uiBeacon('cp_fill_'+String((e.detail&&e.detail.source)||'x').slice(0,16)); }catch(_){}
   });
   document.addEventListener('cp-send', function(e){
     var det=(e&&e.detail)||{};
@@ -8131,12 +7986,7 @@ function initWsCopilot(){
     if(ta) ta.value=det.text;
     sendMsg();
   });
-  document.addEventListener('cp-action-done', function(e){
-    var d=(e&&e.detail)||{};
-    // 执行类动作（任务/标签/升级/注解/工作链）此前完全无用户可见反馈
-    if(d.ok) _toast(window.T('inbox.cp.exec_ok'),'#0f9d75');
-    else _toast(window.T('inbox.cp.exec_fail'),'#dc2626');
-    try{ _uiBeacon('nba_exec_'+(d.ok?'ok':'fail')); }catch(_){}
+  document.addEventListener('cp-action-done', function(){
     _refreshWsCpComponent('relstage');
     _refreshWsCpComponent('chain');
     _renderHeroRel();
@@ -8200,8 +8050,6 @@ function syncWsCopilot(c){
     chatKey:c.chat_key,
     platform:c.platform,
     accountId:c.account_id,
-    // 目标卡情境推荐用：会话沉默时长（小时）。取会话最后一条消息距今，够用的近似。
-    goalHint:{ silentHours:(c.last_ts>0?Math.max(0,(Date.now()/1000-c.last_ts)/3600):0) },
   };
   _wsCpCtx=ctx;   // 记住当前会话上下文，供折叠卡展开时补喂 / 联动刷新时按需取数
   _clearCpPills();
@@ -8223,7 +8071,6 @@ function syncWsCopilot(c){
   if(sb) sb.classList.add('show');
   if(btn) btn.classList.add('active');
   if(typeof _syncGoalQuickBtn==='function') _syncGoalQuickBtn();
-  _cpTourMaybeAuto();   // P18：首次可见时自动放一遍三步引导（看过即静默）
   if(_wsCpTab==='tools'&&!_cpCardCollapsed('analysis')) _loadAiAnalysis(c);
 }
 
@@ -12574,8 +12421,6 @@ Object.assign(window, {
   _onImgXlatePick, _onVoiceXlatePick, _onDocFilePick, _onDocxFilePick,
   // P17 Phase2: 右栏收起时的「工作目标」快捷入口（窄屏可达性）
   _openGoalQuick,
-  // P18: 业务助手三步引导（右栏 ❓ 内联 onclick）
-  _cpTourStart,
 });
 
 /* 兜底：内联 onclick 调到未暴露函数会抛 ReferenceError，过去表现为「点击无响应」

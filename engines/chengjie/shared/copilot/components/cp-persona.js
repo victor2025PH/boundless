@@ -30,7 +30,6 @@
     constructor() {
       super();
       this._pending = null;   // 待确认的换绑 {pid, toName}
-      this._lastAttempt = null;   // 最近一次换绑尝试 {kind:'conv'|'acct', pid}（失败重试用）
       this._busy = false;
       // select 变更非点击,基类只委托 click,这里补 change 委托(legacy 模式用)
       this.shadowRoot.addEventListener("change", (e) => {
@@ -89,9 +88,7 @@
       .pcard .pacct { flex:none; font-size:10px; padding:1px 6px; border-radius:999px;
                       border:1px solid var(--cp-border,#e2e8f0); color:var(--cp-text-dim,#64748b);
                       background:var(--cp-surface,#fff); cursor:pointer; visibility:hidden; }
-      .pcard:hover .pacct, .pcard:focus-within .pacct { visibility:visible; }
-      /* 触屏设备没有 hover——「整号」入口常显（P1：hover-only 在平板/手机上等于不存在） */
-      @media (hover: none) { .pcard .pacct { visibility:visible; } }
+      .pcard:hover .pacct { visibility:visible; }
       .pcard .pacct:hover { border-color:var(--cp-accent,#4f46e5); color:var(--cp-accent,#4f46e5); }
       .pcard.hide { display:none; }
       .nomatch { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-tiny,#94a3b8); padding:4px 2px; }
@@ -109,14 +106,7 @@
                  border:1px solid #fde68a; border-radius:var(--cp-radius-sm,6px);
                  padding:4px 6px; margin-top:6px; }
       .cfm .cacts { display:flex; gap:6px; justify-content:flex-end; margin-top:10px; }
-      .failtip { font-size:var(--cp-fs-tiny,11px); color:var(--cp-danger,#dc2626); margin-top:4px; }
-      .failtip .fstill { color:var(--cp-text-dim,#64748b); margin-top:2px; }
-      .failtip .facts { display:flex; gap:6px; margin-top:4px; }
-      .failtip .facts button { font:inherit; font-size:var(--cp-fs-tiny,11px); padding:2px 8px;
-                               cursor:pointer; border:1px solid var(--cp-border,#e2e8f0);
-                               border-radius:var(--cp-radius-sm,6px); background:var(--cp-surface,#fff);
-                               color:var(--cp-text,#1e293b); }
-      .failtip .facts button:hover { border-color:var(--cp-accent,#4f46e5); }`;
+      .failtip { font-size:var(--cp-fs-tiny,11px); color:var(--cp-danger,#dc2626); margin-top:4px; }`;
     }
 
     async fetchData(ctx) {
@@ -255,127 +245,6 @@
       else if (act === "cfm-ok") { const p = this._pending; this._pending = null; this._closeConfirm(); if (p) this._doBindConv(p.pid); }
       else if (act === "cfm-acct") { const p = this._pending; this._pending = null; this._closeConfirm(); if (p) this._doBindAccount(p.pid); }
       else if (act === "cfm-cancel") { this._pending = null; this._closeConfirm(); }
-      // —— 失败出路（P1）——
-      else if (act === "fail-refresh") this.refresh();
-      else if (act === "fail-reload") {
-        // 刷新宿主页（401 过期 → 会被带去登录页；csrf → 重载拿全新凭证链）。
-        // 桌面 iframe 的 top 是壳页面（跨源访问会抛）→ 回落刷新 iframe 自身。
-        try { (window.top || window).location.reload(); }
-        catch (_e) { location.reload(); }
-      }
-      else if (act === "fail-retry") {
-        const a = this._lastAttempt;
-        if (!a) { this.refresh(); return; }
-        if (a.kind === "acct") this._doBindAccount(a.pid);
-        else this._doBindConv(a.pid);
-      }
-    }
-
-    /* —— 失败分型「纯核心」（2026-07-31 P3 抽出常驻门禁）——
-       这四个方法**只吃参数、不碰 this / DOM / i18n**，是「所有失败一律『请重试』」
-       误导的正解所在，也是最容易随手改错的地方（改一个 status 分支，坐席看到的
-       文案/出路/上报口径就变了）。抽成纯函数后由 desktop/test/cp-persona-failtype.test.js
-       常驻钉死每个分支；_failText/_showFail/_reportFail 只做「取词 + 拼 DOM」。 */
-
-    /* 失败文案 i18n key（""=未分型，调用方回落通用「切换失败」）。
-       客户端已把非 2xx 归一化为 {status, code, error/detail}；code=csrf 是后端结构化
-       标记，detail 正则是旧后端（无 code 字段）的兜底识别路径。 */
-    _failKey(status, code, detail) {
-      if (status === 0) return "cp.persona.fail_net";
-      if (status === 401) return "cp.persona.fail_auth";
-      if (code === "csrf" || (status === 403 && /csrf/i.test(String(detail || ""))))
-        return "cp.persona.fail_csrf";
-      if (status === 403) return "cp.persona.fail_denied";
-      if (status === 404) return "cp.persona.fail_gone";
-      if (status === 409) return "cp.persona.fail_conflict";
-      return "";
-    }
-
-    /* beacon 上报的错误类型（须在 frontend_error_stats._KNOWN_TYPES 白名单内，
-       否则后端折叠成 "Error" → by_type 里看不见这几类 HTTP 失败）。 */
-    _failEtype(status, code) {
-      if (status === 0) return "neterr";
-      if (status === 401) return "http_401";
-      if (status === 403) return code === "csrf" ? "http_403_csrf" : "http_403";
-      if (status === 404) return "http_404";
-      if (status === 409) return "http_409";
-      if (status >= 500) return "http_5xx";
-      return "Error";
-    }
-
-    /* 出路按钮（{act,label} 数组，label 为 i18n key）：确定性拒绝绝不给「重试」
-       （4xx 重试必然复现），网络/5xx 才给「重试」+「刷新面板」。 */
-    _failActions(status, code) {
-      if (status === 401)
-        return [{ act: "fail-reload", label: "cp.persona.act_relogin" }];
-      if (code === "csrf" || status === 403)
-        return [{ act: "fail-reload", label: "cp.persona.act_reload" }];
-      if (status === 404 || status === 409)
-        return [{ act: "fail-refresh", label: "cp.persona.act_refresh" }];
-      return [
-        { act: "fail-retry", label: "cp.persona.act_retry" },
-        { act: "fail-refresh", label: "cp.persona.act_refresh" },
-      ];
-    }
-
-    /* 能否断言「本次操作未生效」：仅 4xx（服务端确定性拒绝、肯定没执行）才断言；
-       网络类/5xx 请求可能已落地（响应丢失≠没执行）→ 绝不谎报状态。 */
-    _failAssertsUnchanged(status) {
-      return status >= 400 && status < 500;
-    }
-
-    /* —— 失败分型（2026-07-31，修「所有失败一律『请重试』」的误导）——
-       服务端 detail 已按请求语言翻好 → 有则并入展示（verbatim 直显是本仓 i18n 约定）。 */
-    _failText(r) {
-      const status = Number(r && r.status);
-      const code = String((r && r.code) || "");
-      const detail = String((r && (r.error || r.detail)) || "").slice(0, 140);
-      const key = this._failKey(status, code, detail);
-      const base = key ? this.t(key) : this.t("cp.persona.switch_fail");
-      // 已分型的类别文案自带出路；未分型时若有后端 detail，附上帮助定位
-      return (!key && detail) ? `${base} · ${detail}` : base;
-    }
-
-    /* 失败提示（P1 升级）：分型文案 + **出路按钮** + 状态重申。
-       - 确定性拒绝（4xx）：服务端肯定没执行 → 可以放心断言「当前仍生效：X」，
-         消除坐席「到底切没切成」的悬置；按钮给对应出路（重新登录/刷新页面/刷新面板），
-         绝不再让人对确定性失败干「重试」。
-       - 网络类/5xx：请求可能已落地（响应丢失≠没执行）→ **不断言状态**，
-         给「重试」+「刷新面板」（刷新拉回服务端真相，本身就是最诚实的答案）。 */
-    _showFail(r) {
-      const tip = this.shadowRoot.querySelector('[data-role="failtip"]');
-      if (!tip) return;
-      const esc = (s) => this.esc(s);
-      const status = Number((r && r.status) || 0);
-      const code = String((r && r.code) || "");
-      const acts = this._failActions(status, code)
-        .map((a) => `<button data-act="${a.act}">${esc(this.t(a.label))}</button>`)
-        .join("");
-      let still = "";
-      if (this._failAssertsUnchanged(status)) {
-        const e = (this._d && this._d.eff && this._d.eff.effective) || {};
-        const effName = e.name || e.id || "";
-        if (effName) {
-          still = `<div class="fstill">${esc(this.t("cp.persona.still_effective", { name: effName }))}</div>`;
-        }
-      }
-      tip.innerHTML = `<div>${esc(this._failText(r))}</div>${still}<div class="facts">${acts}</div>`;
-      const detail = String((r && (r.error || r.detail)) || "");
-      tip.title = [status ? `HTTP ${status}` : "", detail].filter(Boolean).join(" · ");
-      tip.classList.remove("hide");
-    }
-
-    /* 失败自动上报（fire-and-forget）：接入既有 dead-click 遥测通道，
-       按 (page, fn, http 分型) 计数进 ops 概览——用户不再是唯一的传感器。 */
-    _reportFail(fn, r) {
-      try {
-        if (typeof navigator === "undefined" || !navigator.sendBeacon) return;
-        const etype = this._failEtype(Number(r && r.status), String((r && r.code) || ""));
-        const page = (typeof location !== "undefined" && location.pathname) || "copilot";
-        navigator.sendBeacon("/api/telemetry/frontend-error", new Blob([JSON.stringify({
-          page, fn, type: etype, endpoint: "/api/persona/bind",
-        })], { type: "application/json" }));
-      } catch (_e) { /* 观测通道绝不影响主流程 */ }
     }
 
     /* 账号定位（整号切换用）:优先 ctx 显式字段，缺则拆 3 段 conversationId。*/
@@ -504,18 +373,16 @@
       const ctx = this._ctx || {};
       const cid = String(ctx.conversationId || "");
       if (!cid) return;
-      this._lastAttempt = { kind: "conv", pid };   // 失败提示里「重试」按钮的重放依据
       this._busy = true;
       const wrap = this._wrap();
       if (wrap) wrap.classList.add("busy");
       let ok = false;
-      let res = null;
       try {
-        res = pid
+        const r = pid
           ? await this._client.bindConvPersona({ conversationId: cid, profileId: pid })
           : await this._client.unbindConvPersona({ conversationId: cid });
-        ok = !!(res && res.ok);
-      } catch (e) { ok = false; res = { ok: false, status: 0, error: String((e && e.message) || e) }; }
+        ok = !!(r && r.ok);
+      } catch (e) { ok = false; }
       this._busy = false;
       if (wrap) wrap.classList.remove("busy");
       // personaName:换绑目标显示名;解除覆写时=回落的账号人设名(宿主 toast 用)
@@ -530,12 +397,10 @@
       this.emit("cp-persona-changed", {
         scope: "conversation", personaId: pid, personaName: pname, ok,
         conversationId: cid, chatKey: ctx.chatKey || "",
-        status: (res && res.status), code: (res && res.code) || "",
-        error: ok ? "" : this._failText(res),
       });
       if (!ok) {
-        this._showFail(res);
-        this._reportFail("persona_bind_conv", res);
+        const tip = this.shadowRoot.querySelector('[data-role="failtip"]');
+        if (tip) tip.classList.remove("hide");
         return;
       }
       this.refresh();
@@ -545,18 +410,16 @@
     async _doBindAccount(pid) {
       const ref = this._acctRef();
       if (!pid || !ref || !this._client.setAccountPersona) return;
-      this._lastAttempt = { kind: "acct", pid };
       this._busy = true;
       const wrap = this._wrap();
       if (wrap) wrap.classList.add("busy");
       let ok = false;
-      let res = null;
       try {
-        res = await this._client.setAccountPersona({
+        const r = await this._client.setAccountPersona({
           platform: ref.platform, accountId: ref.accountId, profileId: pid,
         });
-        ok = !!(res && res.ok);
-      } catch (e) { ok = false; res = { ok: false, status: 0, error: String((e && e.message) || e) }; }
+        ok = !!(r && r.ok);
+      } catch (e) { ok = false; }
       this._busy = false;
       if (wrap) wrap.classList.remove("busy");
       const p = ((this._d && this._d.profiles) || {})[pid] || {};
@@ -565,12 +428,10 @@
         platform: ref.platform, accountId: ref.accountId,
         conversationId: (this._ctx && this._ctx.conversationId) || "",
         chatKey: (this._ctx && this._ctx.chatKey) || "",
-        status: (res && res.status), code: (res && res.code) || "",
-        error: ok ? "" : this._failText(res),
       });
       if (!ok) {
-        this._showFail(res);
-        this._reportFail("persona_bind_acct", res);
+        const tip = this.shadowRoot.querySelector('[data-role="failtip"]');
+        if (tip) tip.classList.remove("hide");
         return;
       }
       this.refresh();
@@ -583,24 +444,18 @@
       const sel = this.shadowRoot.querySelector('select[data-role="persona"]');
       if (sel) sel.disabled = true;
       let ok = false;
-      let res = null;
       try {
         if (pid) {
           const persona = (this._d && this._d.profiles || {})[pid];
           if (!persona) { if (sel) sel.disabled = false; return; }
-          res = await this._client.bindPersona({ chatKey, persona });
-          ok = !!(res && res.ok);
+          const r = await this._client.bindPersona({ chatKey, persona });
+          ok = !!(r && r.ok);
         } else {
-          res = await this._client.unbindPersona({ chatKey });
-          ok = !!(res && res.ok);
+          const r = await this._client.unbindPersona({ chatKey });
+          ok = !!(r && r.ok);
         }
-      } catch (e) { ok = false; res = { ok: false, status: 0, error: String((e && e.message) || e) }; }
-      if (!ok) this._reportFail("persona_bind_legacy", res);
-      this.emit("cp-persona-changed", {
-        personaId: pid, chatKey, ok,
-        status: (res && res.status), code: (res && res.code) || "",
-        error: ok ? "" : this._failText(res),
-      });
+      } catch (e) { ok = false; }
+      this.emit("cp-persona-changed", { personaId: pid, chatKey, ok });
       this.refresh();
     }
   }

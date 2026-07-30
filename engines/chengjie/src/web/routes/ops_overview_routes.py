@@ -394,31 +394,6 @@ def register_ops_overview_routes(app, ctx) -> None:
             logger.debug("frontend-error-trend 读取失败（已忽略）", exc_info=True)
             return {"ok": True, "enabled": False, "days": []}
 
-    @app.get("/api/admin/csrf-trend")
-    async def api_csrf_trend(request: Request, days: int = 14):
-        """P2：近 N 天 CSRF 准入/拒绝按日聚合（收口决策数据面）。
-
-        读法：``admit:origin`` / ``admit:referer`` 持续归零 N 天＝没有合法流量还
-        依赖同源回落 → 可以安全地把回落降级为纯观测；``reject:*`` 出现即异常
-        （某前端宿主写通道断裂 / 跨站探测）。未开启落库（ops.csrf_trend.enabled
-        =false）→ enabled:false + 空序列。
-        """
-        api_auth(request)
-        try:
-            from src.web.csrf_trend import get_csrf_trend_store
-            store = get_csrf_trend_store()
-            if store is None:
-                return {"ok": True, "enabled": False, "days": []}
-            span = max(1, min(int(days or 14), 90))
-            try:
-                store.prune()
-            except Exception:
-                logger.debug("csrf_trend prune 失败（已忽略）", exc_info=True)
-            return {"ok": True, "enabled": True, "days": store.daily(days=span)}
-        except Exception:
-            logger.debug("csrf-trend 读取失败（已忽略）", exc_info=True)
-            return {"ok": True, "enabled": False, "days": []}
-
     @app.get("/api/admin/identity-health-trend")
     async def api_identity_health_trend(request: Request, days: int = 7):
         """F1：近 N 天会话身份健康（入站 raw% / 头像 empty%·hit%）按日聚合（供看板 sparkline）。

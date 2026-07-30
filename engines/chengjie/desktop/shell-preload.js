@@ -77,7 +77,6 @@ contextBridge.exposeInMainWorld("shell", {
   autoReplyConfig: () => ipcRenderer.invoke("desktop:auto-reply-config-get"),
   autoReplyHealth: () => ipcRenderer.invoke("desktop:auto-reply-health"),
   autoReplyWebhooks: () => ipcRenderer.invoke("desktop:auto-reply-webhooks-get"),
-  alertCatalog: () => ipcRenderer.invoke("desktop:alert-catalog"),
   setAutoReplyWebhooks: (list) => ipcRenderer.invoke("desktop:auto-reply-webhooks-set", list),
   testAutoReplyWebhook: (payload) => ipcRenderer.invoke("desktop:auto-reply-webhooks-test", payload),
   setAutoReplyConfig: (args) => ipcRenderer.invoke("desktop:auto-reply-config-set", args),

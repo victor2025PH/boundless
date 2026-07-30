@@ -55,32 +55,6 @@ templates.env.filters["display_model"] = _display_model
 templates.env.globals["site_name"] = "无界科技 · 智聊"
 templates.env.globals["site_name_short"] = "无界科技"
 
-# ── static_v：mtime 自动版号静态 URL（消灭手动 ?v= 缓存戳）────────────────
-# 手动双戳（CSS ?v= + ui-build.txt）是「改了功能忘 bump → 坐席踩旧 JS」事故的
-# 根因（2026-07-29 账号 rail 事故）。本仓坐席端没有构建期（模板热更新直达生产），
-# 故版号取文件 mtime：保存即换号，下一次页面渲染自动带新 ?v=，无需人工记忆。
-# ⚠️ 两阶段落地：本全局随下次实例重启装载；模板在重启**之前**不得引用
-# static_v（未定义全局 → Jinja 渲染 500）。切换模板引用属重启后的后续批次。
-_STATIC_V_ROOT = Path(__file__).parent / "static"
-_static_v_cache: dict = {}
-
-
-def _static_v(rel_path: str) -> str:
-    """/static/<rel>?v=<mtime 十六进制>；文件缺失回落无版号（不阻断渲染）。"""
-    try:
-        mt = (_STATIC_V_ROOT / rel_path).stat().st_mtime
-    except OSError:
-        return f"/static/{rel_path}"
-    cached = _static_v_cache.get(rel_path)
-    if cached and cached[0] == mt:
-        return cached[1]
-    url = f"/static/{rel_path}?v={int(mt):x}"
-    _static_v_cache[rel_path] = (mt, url)
-    return url
-
-
-templates.env.globals["static_v"] = _static_v
-
 # ── /api/human-escalation/schedule-status 短时缓存（减轻 is_within + 粗估重复计算）──
 _SCHEDULE_STATUS_LOCK = threading.Lock()
 _SCHEDULE_STATUS_CACHE: Optional[Tuple[tuple, float, Dict[str, Any]]] = None
@@ -356,32 +330,6 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     # ── CSRF 防护 ─────────────────────────────────────────────
     import secrets as _secrets
     _CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
-    # 豁免口清单（每条都要能回答「为什么 CSRF 威胁模型不适用」）：
-    # - /login /logout /setup：未认证引导入口，无 ambient 会话权限可被借用（S3）；
-    # - /api/goals/order-hook：外部服务器回流 webhook，路由自带共享 token 恒时比较（2026-07-27 实锤）；
-    # - /api/telemetry/*：navigator.sendBeacon 无法自定义头，端点只累计**消毒后的计数**
-    #   （page/fn/type 白名单化、distinct 封顶），无状态权限可借用；鉴权仍在路由层
-    #   ——不豁免则「Referer 被隐私设置剥掉」的环境里观测通道先于业务瞎掉（2026-07-31）。
-    _CSRF_EXEMPT_PATHS = {
-        "/login", "/logout", "/setup", "/api/goals/order-hook",
-        "/api/telemetry/frontend-error", "/api/telemetry/ui-event",
-    }
-
-    def _csrf_admit(request: Request, ticket: str) -> None:
-        """写请求放行留痕（P2 收口决策数据面）：
-        - ``request.state.csrf_ticket``＝单一事实源（/api/preflight/echo 回显「靠哪张证」）；
-        - 进程计数 csrf_stats.admitted_by（看「当下分布」）；
-        - origin/referer 放行另落日趋势（跨重启看「同源回落还有没有人在用」——
-          两周归零才能安全地把回落降级为纯观测）。全程 best-effort 零阻断。"""
-        try:
-            request.state.csrf_ticket = ticket
-            from src.web.csrf_stats import get_csrf_reject_stats
-            get_csrf_reject_stats().record_admit(ticket)
-            if ticket in ("origin", "referer"):
-                from src.web.csrf_trend import record_csrf_admit_trend
-                record_csrf_admit_trend(ticket)
-        except Exception:
-            pass
 
     @app.middleware("http")
     async def csrf_middleware(request: Request, call_next):
@@ -393,20 +341,25 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             return response
         auth_h = request.headers.get("Authorization", "")
         if auth_h.startswith("Bearer "):
-            _csrf_admit(request, "bearer")
             return await call_next(request)
         # 公网网页聊天 Widget：访客用 HMAC token 鉴权（非 session cookie），CSRF 不适用
         if request.url.path.startswith("/chat/"):
             return await call_next(request)
-        if request.url.path in _CSRF_EXEMPT_PATHS:
+        # S3：未认证引导入口（登录/登出/首次设置）无 ambient 会话权限可被 CSRF 滥用，
+        # 且真实浏览器从对应页面提交本就同源；豁免以免误伤登录流程与首装向导。
+        if request.url.path in ("/login", "/logout", "/setup"):
             return await call_next(request)
         _line_exempt = getattr(request.app.state, "line_webhook_path", None)
         if _line_exempt and request.url.path == _line_exempt:
             return await call_next(request)
+        # 官网订单回流 webhook（外部服务器→本机，无浏览器无 cookie）：与 LINE
+        # webhook 同类——路由自带共享 token 恒时比较鉴权、完全不认 session，
+        # CSRF 的「ambient 凭证被借用」威胁模型不适用；不豁免则合法回流全 403。
+        if request.url.path == "/api/goals/order-hook":
+            return await call_next(request)
         cookie_tok = request.cookies.get("csrf_token", "")
         header_tok = request.headers.get("X-CSRF-Token", "")
         if cookie_tok and header_tok and hmac.compare_digest(cookie_tok, header_tok):
-            _csrf_admit(request, "csrf_pair")
             return await call_next(request)
         origin = request.headers.get("origin", "")
         referer = request.headers.get("referer", "")
@@ -414,45 +367,14 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         if host:
             expected = {f"http://{host}", f"https://{host}"}
             if origin and origin in expected:
-                _csrf_admit(request, "origin")
                 return await call_next(request)
             if referer:
                 for exp in expected:
                     if referer.startswith(exp + "/") or referer == exp:
-                        _csrf_admit(request, "referer")
                         return await call_next(request)
         # S3：CSRF token / 同源校验均失败 → 一律拒绝（含表单/multipart），
         # 关闭原「非 JSON 写请求直接放行」的旁路（登录等引导入口已在上方豁免）。
-        # 2026-07-31 起拒绝**必留痕**：计数进 csrf_stats（metrics/Prometheus/ops 卡）+
-        # 节流 WARNING——「人设切换失败」事故里这里静默吞了两周的 403，谁也不知道。
-        # 响应带机器可读 code：前端据此分型提示/自愈重试（重放安全：拒绝发生在业务逻辑之前）。
-        _kind = "bare"
-        try:
-            from src.web.csrf_stats import get_csrf_reject_stats
-            _stats = get_csrf_reject_stats()
-            _kind = _stats.record(
-                path=request.url.path,
-                had_cookie=bool(cookie_tok), had_header=bool(header_tok),
-                origin=origin, referer=referer,
-            )
-            try:
-                from src.web.csrf_trend import record_csrf_reject_trend
-                record_csrf_reject_trend(_kind)
-            except Exception:
-                pass
-            _ip = request.client.host if request.client else "?"
-            if _stats.should_log(f"{_ip}|{request.url.path}"):
-                logger.warning(
-                    "[CSRF] 拒绝写请求 %s %s kind=%s ip=%s ua=%.40s",
-                    request.method, request.url.path, _kind, _ip,
-                    request.headers.get("user-agent", ""),
-                )
-        except Exception:
-            pass
-        return JSONResponse(
-            status_code=403,
-            content={"detail": "CSRF token missing or invalid", "code": "csrf"},
-        )
+        return JSONResponse(status_code=403, content={"detail": "CSRF token missing or invalid"})
 
     # ── HTML 页面禁缓存（防止浏览器缓存旧版模板） ──────────────
     @app.middleware("http")
@@ -1333,14 +1255,6 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         merged.update(getattr(app.state, "intent_display_names_extra", {}))
         return merged
 
-    # ── 浏览器环境体检（P2：写通道/时钟/构建戳零副作用探针，golive 页消费）──
-    try:
-        from src.web.routes.preflight_routes import register_preflight_routes
-        register_preflight_routes(app, auth_dep=_api_auth)
-    except Exception:
-        import logging as _log_pf
-        _log_pf.getLogger("admin").warning("preflight 路由注册失败", exc_info=True)
-
     # ── Persona Studio (/personas) ───────────────────────────
     try:
         from src.web.routes.persona_routes import register_persona_routes
@@ -1388,15 +1302,6 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     except Exception:
         import logging as _log_goal
         _log_goal.getLogger("admin").warning("营销目标路由注册失败", exc_info=True)
-
-    # ── 功能总览（feature center）：交付注册表驱动的能力清单 + overlay 开关 ──
-    try:
-        from src.web.routes.feature_center_routes import register_feature_center_routes
-        register_feature_center_routes(
-            app, auth_dep=_api_auth, config_manager=config_manager)
-    except Exception:
-        import logging as _log_fc
-        _log_fc.getLogger("admin").warning("功能总览路由注册失败", exc_info=True)
 
     @app.get("/personas", response_class=HTMLResponse)
     async def personas_page(request: Request, _=Depends(_page_auth)):

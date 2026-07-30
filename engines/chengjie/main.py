@@ -771,35 +771,6 @@ class AIChatAssistant:
         except Exception:
             self.logger.warning("前端错误趋势落库初始化失败（已忽略）", exc_info=True)
 
-    def _maybe_init_csrf_trend_log(self) -> None:
-        """P2（2026-07-31）：按 ``ops.csrf_trend`` 装配 CSRF 准入/拒绝日聚合落库（默认关）。
-
-        进程计数器重启即清零，而「同源 Origin/Referer 回落能不能收口」要看**跨两周**
-        的通行侧证据（admit:origin/referer 是否持续归零）。开启后中间件旁路把
-        拒绝（全量）与 origin/referer 放行按日 upsert 进 ``csrf_trend.db``，
-        经 ``/api/admin/csrf-trend`` 读近 N 天。csrf_pair/bearer 放行刻意不落库
-        （绝对主流，每请求一次 SQLite 写不值得；进程内 admitted_by 可见当下分布）。
-        """
-        try:
-            _ops = (self.config.config.get("ops") or {})
-            _ct = (_ops.get("csrf_trend") or {})
-            if not _ct.get("enabled", False):
-                self.logger.info("CSRF 趋势落库未启用（ops.csrf_trend.enabled=false）")
-                return
-            from src.web.csrf_trend import configure_csrf_trend
-            _cfg_dir = Path(self.config.config_path).parent
-            store = configure_csrf_trend(
-                enabled=True,
-                db_path=_cfg_dir / "csrf_trend.db",
-                retention_days=float(_ct.get("retention_days", 90)),
-            )
-            if store is not None:
-                self.logger.info(
-                    "✅ CSRF 准入/拒绝趋势落库已就绪（retention=%sd）",
-                    _ct.get("retention_days", 90))
-        except Exception:
-            self.logger.warning("CSRF 趋势落库初始化失败（已忽略）", exc_info=True)
-
     def _maybe_init_identity_trend_log(self) -> None:
         """F1：按 ``inbox.identity.trend_log`` 装配会话身份健康日聚合落库（默认关）。
 

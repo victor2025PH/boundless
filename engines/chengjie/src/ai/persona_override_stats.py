@@ -29,13 +29,6 @@ _TIERS = ("conv_override", "account_profile", "none")
 _ACTIONS = ("bind_conv", "unbind_conv", "account_set",
             "legacy_upgrade", "legacy_remove")
 
-# ── 换绑漏斗失败侧（P1，2026-07-31）──────────────────────────────────────
-# 市场侧要回答「多少人想用被挡住」：成功侧已有 _ACTIONS，这里补业务层拒绝
-# （CSRF 中间件层拒绝另在 csrf_stats——两层相加才是完整漏斗，ops 卡做交叉引用）。
-_FAIL_OPS = ("bind_conv", "unbind_conv", "account_set")
-_FAIL_REASONS = ("disabled", "badref", "profile_missing",
-                 "registry_unavailable", "error")
-
 
 def _san_platform(platform: str) -> str:
     p = str(platform or "").strip().lower()
@@ -48,7 +41,7 @@ class PersonaOverrideStats:
     __slots__ = (
         "_lock", "_started_at", "_last_ts",
         "resolves", "legacy_suppressed", "_by_tier", "_conv_by_platform",
-        "_actions", "_fails",
+        "_actions",
     )
 
     def __init__(self) -> None:
@@ -60,7 +53,6 @@ class PersonaOverrideStats:
         self._by_tier: Dict[str, int] = {}
         self._conv_by_platform: Dict[str, int] = {}
         self._actions: Dict[str, int] = {}
-        self._fails: Dict[str, int] = {}   # "op:reason" → n（两侧均为白名单枚举，基数有界）
 
     def record_resolve(self, tier: str, platform: str = "",
                        legacy_present: bool = False) -> None:
@@ -97,23 +89,6 @@ class PersonaOverrideStats:
             self._last_ts = time.time()
             self._actions[k] = self._actions.get(k, 0) + 1
 
-    def record_fail(self, op: str, reason: str) -> None:
-        """一次治理动作**业务层拒绝**（路由 4xx/5xx；CSRF 层拒绝不经此处）。
-
-        op/reason 均白名单化——不在枚举内归 error（宁可粗归类不丢计数），
-        与 record_action 同为 best-effort：观测绝不影响路由本体。
-        """
-        o = str(op or "").strip()
-        if o not in _FAIL_OPS:
-            return
-        r = str(reason or "").strip()
-        if r not in _FAIL_REASONS:
-            r = "error"
-        with self._lock:
-            self._last_ts = time.time()
-            key = f"{o}:{r}"
-            self._fails[key] = self._fails.get(key, 0) + 1
-
     def dump(self) -> Dict[str, Any]:
         with self._lock:
             return {
@@ -129,9 +104,6 @@ class PersonaOverrideStats:
                     key=lambda kv: (-kv[1], kv[0]))),
                 "actions": {k: self._actions.get(k, 0) for k in _ACTIONS},
                 "actions_total": sum(self._actions.values()),
-                "fails": dict(sorted(self._fails.items(),
-                                     key=lambda kv: (-kv[1], kv[0]))),
-                "fails_total": sum(self._fails.values()),
             }
 
     def dump_prom(self) -> str:
@@ -164,14 +136,6 @@ class PersonaOverrideStats:
             for k in _ACTIONS:
                 lines.append(
                     f'persona_override_actions_total{{action="{k}"}} {int(self._actions.get(k, 0))}')
-            lines += [
-                "# HELP persona_override_fails_total Persona governance actions rejected at route level",
-                "# TYPE persona_override_fails_total counter",
-            ]
-            for key, n in sorted(self._fails.items()):
-                op, _, reason = key.partition(":")
-                lines.append(
-                    f'persona_override_fails_total{{op="{_esc(op)}",reason="{_esc(reason)}"}} {int(n)}')
         return "\n".join(lines) + "\n"
 
     def reset(self) -> None:
@@ -181,7 +145,6 @@ class PersonaOverrideStats:
             self._by_tier.clear()
             self._conv_by_platform.clear()
             self._actions.clear()
-            self._fails.clear()
             self._last_ts = 0.0
 
 
