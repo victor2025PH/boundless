@@ -148,6 +148,44 @@ async def _understand_video(path: str, cfg: Dict[str, Any], voice_transcriber: A
     return (out or "").strip()
 
 
+def _miss_reason(media_type: str, cfg: Dict[str, Any]) -> str:
+    """这条媒体为什么没被看懂——把三种同形不同因的处境分开（见 media_enrich_stats）。
+
+    ``disabled``＝开关没开（运营信号，不是故障）；``no_backend``＝开了但后端没接上
+    （可自助修）；``failed``＝后端在但识别失败/返空（看日志）。
+    """
+    try:
+        from src.companion.media_capability import asr_backend_ready, vision_backend_ready
+
+        if media_type in _IMAGE_KINDS or media_type in _VIDEO_KINDS:
+            if not ((cfg.get("vision") or {}).get("enabled", False)):
+                return "disabled"
+            return "failed" if vision_backend_ready(cfg) else "no_backend"
+        if media_type in _VOICE_KINDS:
+            if not ((cfg.get("voice_recognition") or {}).get("enabled", False)):
+                return "disabled"
+            return "failed" if asr_backend_ready(cfg) else "no_backend"
+    except Exception:
+        logger.debug("[media_enrich] 归因失败（忽略）", exc_info=True)
+        return "unknown"
+    return "unsupported"
+
+
+def _record_enrich(media_type: str, cfg: Dict[str, Any], *,
+                   understood: bool, reason: str = "") -> None:
+    """识别结果计数（best-effort，绝不影响主链）。"""
+    try:
+        from src.inbox.media_enrich_stats import get_media_enrich_stats
+
+        st = get_media_enrich_stats()
+        if understood:
+            st.record_understood(media_type)
+        else:
+            st.record_miss(media_type, reason or _miss_reason(media_type, cfg))
+    except Exception:
+        logger.debug("[media_enrich] 计数失败（忽略）", exc_info=True)
+
+
 async def enrich_inbound_media_text(
     *,
     media_type: str,
@@ -174,6 +212,8 @@ async def enrich_inbound_media_text(
     local = _resolve_local_path(media_ref)
     if not local:
         # 远程 URL 或文件不存在 → 无法识别，保留 caption 或占位
+        if mt:
+            _record_enrich(mt, cfg, understood=False, reason="unresolved")
         return (cap or media_placeholder(mt)), ""
 
     # 宿主（TelegramClient）启动时未建 transcriber、但配置已（热）启用 → 懒建兜底
@@ -193,6 +233,7 @@ async def enrich_inbound_media_text(
         desc = ""
 
     desc = (desc or "").strip()
+    _record_enrich(mt, cfg, understood=bool(desc))
     if not desc:
         return (cap or media_placeholder(mt)), ""
 

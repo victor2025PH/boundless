@@ -30,6 +30,39 @@ _RUNTIME_STATE_ATTRS = {
 }
 
 
+async def _provision_media_backends(cm, flags) -> dict:
+    """开启类预设的**供给**步骤：托管版把识图指向官网网关（幂等）。
+
+    2026-07-31 修「按钮只对开关负责、不对结果负责」：此前本接口只写 ``vision.enabled``，
+    而托管版的识图后端是启动时的一次性内存注入——令牌后到、或写 overlay 触发的热重载，
+    都会让它缺席。于是用户点完「一键开齐入站识别」拿到的是一盏「开了但后端未就绪」的
+    黄灯加一句「联系客服」。现在开启前先补供给，让按钮对**能不能用**负责。
+
+    非托管态 / 用户自配后端 → ``ensure_hosted_vision`` 内部自行早返（单一事实源在
+    hosted_gateway，此处不复制判断）。绝不抛：供给失败仍照常写开关（保留「先开开关
+    后补后端」的既有语义），只把结果如实回给前端。走线程池——领令牌可能真发 HTTP。
+    """
+    out: dict = {}
+    if not (flags or {}).get("vision.enabled"):
+        return out
+    import asyncio
+
+    try:
+        from src.ai.hosted_gateway import (
+            ensure_hosted_ai, ensure_hosted_vision, vision_provision_reason)
+
+        def _run() -> bool:
+            ensure_hosted_ai(cm)  # 识图与聊天共用设备令牌：没令牌先补令牌
+            return bool(ensure_hosted_vision(cm))
+
+        out["vision"] = await asyncio.to_thread(_run)
+        out["vision_reason"] = vision_provision_reason(getattr(cm, "config", None))
+    except Exception:
+        logger.debug("托管识图供给失败（忽略，仍写开关）", exc_info=True)
+        out["vision"] = False
+    return out
+
+
 def _audit_path(cm):
     base = getattr(cm, "config_path", None)
     return (Path(base).parent / "companion_capability_audit.jsonl") if base else None
@@ -460,6 +493,8 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
             return {"ok": False, "message": f"未知媒体预设: {name}",
                     "presets": {k: v["label"] for k, v in MEDIA_PRESETS.items()}}
 
+        # 供给先于开关：warnings 必须在供给之后算，否则报的是「修好之前」的旧账
+        provisioned = await _provision_media_backends(cm, spec.get("flags") or {})
         warnings = preset_backend_warnings(name, config)
         applied, failed = [], []
         for path, value in (spec.get("flags") or {}).items():
@@ -477,6 +512,32 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
             logger.debug("回算媒体能力状态失败", exc_info=True)
         return {"ok": True, "preset": name, "label": spec["label"],
                 "applied": applied, "failed": failed, "warnings": warnings,
+                "provisioned": provisioned, "status": status}
+
+    @app.post("/api/companion/media-capabilities/provision")
+    async def api_media_capabilities_provision(request: Request, _=Depends(api_auth)):
+        """「重试接入」：重跑一次托管识图供给，回结构化原因码 + 最新自检状态。
+
+        存在理由＝把托管态那句死路文案（「如未生效请联系客服开启」）换成用户点得动的
+        动作：绝大多数「后端未就绪」只是供给没发生（令牌后到 / 热重载抹掉），重跑即好，
+        根本不该开工单。真需要人工介入时也给出确定性原因码（``no_token`` 等），
+        客服不必从零猜。
+        """
+        from src.ai.hosted_gateway import vision_provision_reason
+        from src.companion.media_capability import collect_media_status
+
+        cm = getattr(request.app.state, "config_manager", None)
+        config = getattr(cm, "config", None) if cm is not None else None
+        if cm is None or not isinstance(config, dict):
+            return {"ok": False, "available": False, "message": "config 未就绪"}
+        provisioned = await _provision_media_backends(cm, {"vision.enabled": True})
+        reason = vision_provision_reason(config)
+        status = None
+        try:
+            status = collect_media_status(config)
+        except Exception:
+            logger.debug("回算媒体能力状态失败", exc_info=True)
+        return {"ok": True, "provisioned": provisioned, "reason": reason,
                 "status": status}
 
     @app.get("/api/companion/capabilities/toggle-audit")

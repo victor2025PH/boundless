@@ -39,14 +39,68 @@ def vision_backend_ready(config: Any) -> bool:
         return False
 
 
+# provider → 本地推理需要的 python 包（与 VoiceTranscriberFactory._create_one 同口径）
+_LOCAL_ASR_MODULES = {
+    "faster_whisper": "faster_whisper",
+    "whisper_local": "whisper",
+    "whisper": "whisper",
+    "sensevoice": "funasr",
+    "sense_voice": "funasr",
+    "funasr": "funasr",
+}
+#: 走 HTTP 的 provider（OpenAI 契约 / AvatarHub）——要 key 或 base_url，不要本地包
+_REMOTE_ASR_PROVIDERS = ("openai", "openai_compatible", "qwen3_asr", "funasr_api",
+                         "avatar_whisper", "avatarhub")
+
+_MODULE_CACHE: Dict[str, bool] = {}
+
+
+def _module_installed(name: str) -> bool:
+    """依赖装没装。用 find_spec 不真 import——torch 系冷加载要好几秒，这里是热路径。"""
+    if name in _MODULE_CACHE:
+        return _MODULE_CACHE[name]
+    ok = False
+    try:
+        from importlib.util import find_spec
+        ok = find_spec(name) is not None
+    except Exception:
+        ok = False
+    _MODULE_CACHE[name] = ok
+    return ok
+
+
+def _asr_level_ready(cfg: Any) -> bool:
+    """单级转录器可用性（不含级联）。"""
+    cfg = cfg if isinstance(cfg, dict) else {}
+    provider = str(cfg.get("provider") or "faster_whisper").strip().lower()
+    if provider in _REMOTE_ASR_PROVIDERS:
+        oai = cfg.get("openai") if isinstance(cfg.get("openai"), dict) else {}
+        # 云端要 key；本机/局域网 OpenAI 兼容端点有 base_url 即可（无 key 也能打）
+        return bool(str(oai.get("api_key") or "").strip()
+                    or str(oai.get("base_url") or cfg.get("base_url") or "").strip())
+    mod = _LOCAL_ASR_MODULES.get(provider)
+    return _module_installed(mod) if mod else False
+
+
 def asr_backend_ready(config: Any) -> bool:
-    """语音转写后端：本地 whisper 系无需 key（视为可用）；openai 需 api_key。"""
+    """语音转写后端是否**真的**可用（含 fallback 级联，任一级可用即真）。
+
+    2026-07-31 修假绿：旧实现对所有非 openai provider 无条件 ``return True``，注释
+    写着「本地推理，视为可用」。可安装包的 PyInstaller 配置（``desktop/build/
+    backend.spec``）显式 excludes 掉 whisper / faster_whisper / ctranslate2 / torch
+    ——成品里根本没有本地 ASR。于是自检常亮绿灯「已开启且后端就绪」，客户发来的语音
+    被 ``media_enrich`` 静默降级成「[语音]」占位，没有任何人会怀疑到这盏灯。
+    黄灯只是难看，假绿是骗人：宁可报保守。
+    """
     vr = (config or {}).get("voice_recognition") or {}
-    provider = str(vr.get("provider") or "faster_whisper").strip().lower()
-    if provider == "openai":
-        return bool(str((vr.get("openai") or {}).get("api_key") or "").strip())
-    # faster_whisper / whisper_local / whisper / 其它本地 → 本地推理，视为可用
-    return True
+    if _asr_level_ready(vr):
+        return True
+    fb = vr.get("fallback")
+    levels = fb if isinstance(fb, list) else ([fb] if isinstance(fb, dict) else [])
+    for lvl in levels:
+        if isinstance(lvl, dict) and _asr_level_ready({**vr, **lvl}):
+            return True
+    return False
 
 
 def selfie_backend_ready(config: Any) -> bool:
@@ -92,17 +146,41 @@ MEDIA_CAPS: List[Dict[str, str]] = [
 CAP_BY_KEY = {c["key"]: c for c in MEDIA_CAPS}
 
 
+def _backend_reason(backend: str, config: Any) -> str:
+    """后端为何没就绪（机器可读）。UI 据此给「点得动的下一步」，而不是一句联系客服。
+
+    vision 复用 ``hosted_gateway.vision_provision_reason``（供给状态的单一事实源）；
+    asr/selfie 就地判：``no_local_module`` 本机没装识别模型 / ``no_endpoint`` 没配
+    远端端点 / ``not_configured`` 出图后端没配。
+    """
+    if backend == "vision":
+        try:
+            from src.ai.hosted_gateway import vision_provision_reason
+            return vision_provision_reason(config) or "not_provisioned"
+        except Exception:
+            return "not_provisioned"
+    if backend == "asr":
+        vr = (config or {}).get("voice_recognition") or {}
+        provider = str(vr.get("provider") or "faster_whisper").strip().lower()
+        return "no_endpoint" if provider in _REMOTE_ASR_PROVIDERS else "no_local_module"
+    if backend == "selfie":
+        return "not_configured"
+    return ""
+
+
 def evaluate_media_cap(cap: Dict[str, str], config: Any) -> Dict[str, Any]:
     """单个媒体能力就绪度（纯函数）。stage: off | needs_backend | active。"""
     enabled = bool(_dig(config, cap["flag"], False))
     probe = _BACKEND_PROBES.get(cap["backend"])
     backend_ready = bool(probe(config)) if probe else False
+    reason = ""
     if not enabled:
         stage = "off"
         hint = "未开启（默认关）——一键预设可开齐入站识别"
     elif not backend_ready:
         stage = "needs_backend"
-        hint = _backend_hint(cap["backend"])
+        reason = _backend_reason(cap["backend"], config)
+        hint = _backend_hint(cap["backend"], reason=reason)
     else:
         stage = "active"
         hint = "已开启且后端就绪"
@@ -110,7 +188,9 @@ def evaluate_media_cap(cap: Dict[str, str], config: Any) -> Dict[str, Any]:
         "key": cap["key"], "label": cap["label"], "flag": cap["flag"],
         "risk": cap["risk"], "desc": cap["desc"],
         "enabled": enabled, "backend_ready": backend_ready,
-        "stage": stage, "hint": hint,
+        "stage": stage, "hint": hint, "reason": reason,
+        # 可自助修复的（重跑一次供给就好）→ 前端出「重试接入」而非「联系客服」
+        "retryable": reason in ("not_provisioned", "no_token"),
     }
 
 
@@ -120,24 +200,40 @@ def _is_managed_edition() -> bool:
         "1", "true", "yes", "on")
 
 
-def _backend_hint(backend: str, managed: Optional[bool] = None) -> str:
+def _backend_hint(backend: str, managed: Optional[bool] = None,
+                  reason: str = "") -> str:
     """就绪度提示。**托管版**不向用户暴露 yaml 键/密钥概念——那是集团/服务端的事；
-    自建版保留可操作的具体键名。managed 缺省自动探测 env。"""
+    自建版保留可操作的具体键名。managed 缺省自动探测 env。
+
+    2026-07-31：托管版文案按 ``reason`` 分型，不再一律「由服务端统一提供，如未生效请
+    联系客服」——那句话在两种最常见的情形下都是错的：识图多半只是**供给没发生**
+    （令牌后到 / 热重载抹掉），点一下重试就好，根本不该开工单；而语音识别与出图在当前
+    安装包里**压根没随包**（backend.spec 排除了 whisper/torch 系；出图属 C 类不进种子），
+    说「由服务端统一提供」是承诺一个不存在的东西。诚实 > 好听。
+    """
     if managed is None:
         managed = _is_managed_edition()
     if managed:
         # 托管版：不是用户的活，也没有「填密钥」这回事——说人话，不吓人、不甩黑话
         if backend == "vision":
-            return "识图能力由服务端统一提供，无需在本机配置；如未生效请联系客服开启"
+            if reason == "no_token":
+                return "识图还没激活：先在设置里领取或填写授权，领完会自动接上"
+            if reason == "user_backend":
+                return "检测到你自己配置的识图服务；未生效请确认该服务是否可达"
+            # not_provisioned / 未知：供给没发生，重试即可，无需重启
+            return "识图服务尚未接入——点「重试接入」即可恢复，无需重启"
         if backend == "asr":
-            return "语音识别由服务端统一提供，无需在本机配置；如未生效请联系客服开启"
+            return "语音识别未接入：当前版本不含本机识别模型，可接入云端识别服务或联系客服开通"
         if backend == "selfie":
-            return "发图能力由服务端统一提供，无需在本机配置；如未生效请联系客服开启"
-        return "该能力由服务端统一提供，无需在本机配置"
+            return "当前版本未包含自动发图能力（如需开通请联系客服）"
+        return "该能力尚未接入"
     if backend == "vision":
         return "开关已开但未配识图后端：填 vision.base_url(Ollama) 或 vision.api_key(智谱)"
     if backend == "asr":
-        return "开关已开但语音后端不可用：faster_whisper 本地即可，或给 voice_recognition.openai.api_key"
+        if reason == "no_endpoint":
+            return "开关已开但 ASR 端点没填：给 voice_recognition.openai.base_url 或 api_key"
+        return ("开关已开但本机没装识别模型：pip install faster-whisper，"
+                "或改用 voice_recognition.openai(.base_url/api_key) 走远端")
     if backend == "selfie":
         return "开关已开但未配出图后端：companion.selfie.provider.backend 需为 album/openai/command"
     return "开关已开但后端未就绪"
@@ -178,6 +274,15 @@ def media_runtime_signals() -> Dict[str, Any]:
                 "success_rate": round(ok / att, 4) if att else 0.0,
                 "fallback_rate": float(a.get("fallback_rate") or 0.0),
             }
+    except Exception:
+        pass
+    # 入站识别「没看懂」计数（2026-07-31）：config 就绪度回答不了「真流量里漏了多少」
+    # ——识别失败是静默降级成占位符的，此前只有 debug 日志。有尝试才带。
+    try:
+        from src.inbox.media_enrich_stats import get_media_enrich_stats
+        e = get_media_enrich_stats().dump()
+        if int(e.get("attempts") or 0) > 0:
+            out["enrich"] = e
     except Exception:
         pass
     try:
@@ -232,6 +337,11 @@ def collect_media_status(config: Any) -> Dict[str, Any]:
             "by_stage": by_stage,
             "understand_active": all(
                 c["stage"] == "active" for c in caps if c["key"] != "selfie_outbound"),
+            # 托管版：前端据此隐藏「本机去配后端」类出口（那不是用户的活），
+            # 并把未随包的能力如实标成「当前版本未包含」而不是画饼。
+            "managed": _is_managed_edition(),
+            # 有能力只是「供给没发生」→ 前端出「重试接入」按钮（而不是让人开工单）
+            "retryable": any(c.get("retryable") for c in caps),
         },
     }
     # 近期真流量识别质量（有流量才有；空则不加，前端零流量不渲染健康行）
@@ -283,7 +393,7 @@ def preset_backend_warnings(name: str, config: Any) -> List[str]:
         backend = _flag_backend.get(path)
         probe = _BACKEND_PROBES.get(backend or "")
         if probe and not probe(config):
-            warns.append(_backend_hint(backend))
+            warns.append(_backend_hint(backend, reason=_backend_reason(backend, config)))
     return warns
 
 

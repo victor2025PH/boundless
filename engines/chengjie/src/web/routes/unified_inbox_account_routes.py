@@ -39,6 +39,25 @@ from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
 
+# 告警渠道 = 整个实例的运营配置：配错/删渠道 → 全实例告警瞎，且渠道明细含明文群
+# webhook 地址（泄露即他人可往群里发东西）。故「读明细 + 写」收敛到运营角色。
+# 用**排除法**（拒 agent/viewer，放行 master/admin 与 Bearer 桌面壳＝装机主人、
+# session 无 role）而非严格白名单 `_require_supervisor`——后者会拦掉桌面壳纯 Bearer
+# 请求（session 无 role → 判非主管），而桌面壳正是客户主力界面，拦了就违背「每个
+# 安装的都能各绑各的」这一诉求。与生产验证过的 persona bind `_check_write_role`
+# 同哲学：绝不误伤「主人」，只拦明确的低权限坐席/观察员。alert-catalog（纯告警
+# 类型目录、无实例信息）不受此限，任意登录可读。门禁 test_alert_channel_authz。
+_ALERT_CFG_DENY_ROLES = {"agent", "viewer"}
+
+
+def _require_alert_channel_admin(request: Request) -> None:
+    try:
+        role = str(request.session.get("role", "") or "")
+    except Exception:
+        role = ""
+    if role in _ALERT_CFG_DENY_ROLES:
+        raise HTTPException(403, tr(request, "err.perm.supervisor_required"))
+
 
 def _record_profile_ops_event(
     platform: str, account_id: str, *, kind: str, ok: bool,
@@ -2972,8 +2991,9 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
 
     @app.get("/api/accounts/auto-reply/webhooks")
     async def api_account_auto_reply_webhooks_get(request: Request):
-        """读有效告警渠道列表（脱敏 token/secret）。"""
+        """读有效告警渠道列表（脱敏 token/secret；含明文群地址 → 限运营角色）。"""
         api_auth(request)
+        _require_alert_channel_admin(request)
         cfg = (config_manager.config if config_manager is not None else {}) or {}
         from src.integrations.notify_webhooks_store import (
             effective_webhooks, mask,
@@ -2981,11 +3001,29 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         items = effective_webhooks(cfg)
         return {"ok": True, "webhooks": mask(items), "count": len(items)}
 
+    @app.get("/api/accounts/auto-reply/alert-catalog")
+    async def api_account_alert_catalog(request: Request):
+        """按受众分组的告警目录（2026-07-31 产品化：终端能大白话勾选、不再手打别名）。
+
+        返回 ``{business:[{alias,label_key}], technical:[...]}``——面板把业务告警默认
+        展开（大白话标签，终端运营看得懂能行动），技术告警折叠进「高级」（开发者/技术
+        支持向）。label_key 走 cp-i18n（前端 T() 取词）。绑定谁的渠道就发到谁那里
+        （per-instance，各配各的），故任意登录用户可读此目录。
+        """
+        api_auth(request)
+        try:
+            from src.inbox.webhook_notifier import alert_catalog
+            return {"ok": True, **alert_catalog()}
+        except Exception:
+            return {"ok": True, "business": [], "technical": []}
+
     @app.post("/api/accounts/auto-reply/webhooks")
     async def api_account_auto_reply_webhooks_set(request: Request):
         """整段保存告警渠道列表（白名单校验落盘 + 热更 WebhookNotifier，免重启）。
-        token/secret 留空 → 沿用同名旧值（前端展示是脱敏的，避免覆盖真实密钥）。"""
+        token/secret 留空 → 沿用同名旧值（前端展示是脱敏的，避免覆盖真实密钥）。
+        写＝运营配置，限运营角色（拒坐席/观察员，防误删主管配的渠道）。"""
         api_auth(request)
+        _require_alert_channel_admin(request)
         try:
             body = await request.json()
         except Exception:
@@ -2993,17 +3031,13 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         incoming = body.get("webhooks") if isinstance(body, dict) else body
         cfg = (config_manager.config if config_manager is not None else {}) or {}
         from src.integrations.notify_webhooks_store import (
-            effective_webhooks, mask, sanitize_list, save_list,
+            effective_webhooks, mask, merge_preserve_secrets, sanitize_list,
+            save_list,
         )
-        # 按 name 保留旧密钥（前端回传脱敏值或空时不覆盖真实 token/secret）
+        # 按 name 保留旧密钥（前端回传脱敏值或空时不覆盖真实 token/secret）——
+        # 纯函数 merge_preserve_secrets 单一实现,门禁 test_webhook_channels 钉住。
         old_by_name = {w.get("name"): w for w in effective_webhooks(cfg)}
-        cleaned = sanitize_list(incoming)
-        for w in cleaned:
-            old = old_by_name.get(w.get("name")) or {}
-            for k in ("token", "secret"):
-                nv = str(w.get(k) or "")
-                if (not nv) or nv.endswith("***"):
-                    w[k] = str(old.get(k) or "")
+        cleaned = merge_preserve_secrets(sanitize_list(incoming), old_by_name)
         saved = save_list(cleaned)
         # 热更运行中的 notifier
         try:
@@ -3017,8 +3051,10 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
     @app.post("/api/accounts/auto-reply/webhooks/test")
     async def api_account_auto_reply_webhooks_test(request: Request):
         """对单条渠道即时发一条测试告警（连通性检查）。
-        body: {index} 走有效列表第 index 条；或直接传 {webhook:{...}}。"""
+        body: {index} 走有效列表第 index 条；或直接传 {webhook:{...}}。
+        测试发送＝会真往渠道投递，限运营角色（防坐席乱发骚扰群）。"""
         api_auth(request)
+        _require_alert_channel_admin(request)
         try:
             body = await request.json()
         except Exception:

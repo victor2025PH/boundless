@@ -20,11 +20,25 @@ def test_backend_hint_managed_hides_yaml_jargon():
     for be in ("vision", "asr", "selfie"):
         h = _backend_hint(be, managed=True)
         assert "base_url" not in h and "api_key" not in h and "." not in h.split("：")[0]
-        assert "服务端" in h  # 说人话：由服务端统一提供
+
+def test_backend_hint_managed_is_honest_and_actionable():
+    """托管版文案不得再一律「由服务端统一提供，如未生效请联系客服」（2026-07-31）。
+
+    那句话在两种最常见情形下都是错的：识图多半只是**供给没发生**（令牌后到 / 热重载
+    抹掉），点一下重试就好、不该开工单；而语音识别与出图**压根没随安装包**
+    （backend.spec 排除 whisper/torch 系；出图属交付分级 C 类），说「服务端统一提供」
+    是承诺一个不存在的东西。
+    """
+    assert "重试接入" in _backend_hint("vision", managed=True)
+    assert "重试接入" not in _backend_hint("vision", managed=True, reason="no_token")
+    for be in ("asr", "selfie"):
+        h = _backend_hint(be, managed=True)
+        assert "服务端统一提供" not in h
+        assert "未" in h  # 如实说「未接入 / 未包含」
 
 def test_backend_hint_managed_autodetect_env(monkeypatch):
     monkeypatch.setenv("AITR_MANAGED_EDITION", "1")
-    assert "服务端" in _backend_hint("vision")
+    assert "vision.base_url" not in _backend_hint("vision")  # 托管版不甩 yaml 键
     monkeypatch.setenv("AITR_MANAGED_EDITION", "0")
     assert "vision.base_url" in _backend_hint("vision")
 
@@ -49,15 +63,47 @@ def test_vision_backend_ready():
     assert not vision_backend_ready({})
 
 
-def test_asr_backend_ready():
-    # 本地 whisper 系 → 视为可用
+def _asr_module(monkeypatch, installed: bool):
+    """本地 ASR 包装没装（安装包里没装、开发机上装了）——探针结果不能看运行环境的脸色。"""
+    monkeypatch.setattr(
+        "src.companion.media_capability._module_installed", lambda _n: installed)
+
+
+def test_asr_backend_ready_requires_real_local_module(monkeypatch):
+    """修假绿（2026-07-31）：本地 provider 不再无条件算就绪。
+
+    旧实现对任何非 openai provider 直接 return True。而安装包的 PyInstaller 配置
+    显式 excludes 掉 whisper/faster_whisper/ctranslate2/torch —— 成品里根本没有本地
+    ASR，自检却常亮绿灯，客户的语音被静默降级成「[语音]」占位，没人会怀疑到这里。
+    """
+    _asr_module(monkeypatch, False)
+    assert not asr_backend_ready({"voice_recognition": {"provider": "faster_whisper"}})
+    assert not asr_backend_ready({})  # 缺省 faster_whisper，同样要真装了才算
+    _asr_module(monkeypatch, True)
     assert asr_backend_ready({"voice_recognition": {"provider": "faster_whisper"}})
-    assert asr_backend_ready({})  # 缺省 faster_whisper
-    # openai 需 key
+
+
+def test_asr_backend_ready_remote_endpoints(monkeypatch):
+    _asr_module(monkeypatch, False)
+    # 云端 openai 需 key
     assert not asr_backend_ready(
         {"voice_recognition": {"provider": "openai", "openai": {"api_key": ""}}})
     assert asr_backend_ready(
         {"voice_recognition": {"provider": "openai", "openai": {"api_key": "sk"}}})
+    # 本机/局域网 OpenAI 兼容端点无需 key，有地址即可（与 OpenAITranscriber 同口径）
+    assert asr_backend_ready(
+        {"voice_recognition": {"provider": "qwen3_asr",
+                               "openai": {"base_url": "http://192.168.0.176:8000/v1"}}})
+
+
+def test_asr_backend_ready_counts_fallback_cascade(monkeypatch):
+    """级联任一级可用即算就绪（create_transcriber 就是这么建的，探针不能只看主级）。"""
+    _asr_module(monkeypatch, False)
+    cfg = {"voice_recognition": {
+        "provider": "faster_whisper",  # 主级不可用（本机没装）
+        "fallback": [{"provider": "openai", "openai": {"api_key": "sk"}}],
+    }}
+    assert asr_backend_ready(cfg)
 
 
 def test_selfie_backend_ready():
@@ -96,7 +142,27 @@ def test_enabled_but_no_backend_is_needs_backend():
     assert "未配识图后端" in st["hint"]
 
 
-def test_enabled_with_backend_is_active():
+def test_needs_backend_carries_reason_and_retryable(monkeypatch):
+    """状态要带机器可读原因码：UI 据此决定出「重试接入」还是出真话，而不是一律甩客服。"""
+    monkeypatch.setenv("AITR_MANAGED_EDITION", "1")
+    _asr_module(monkeypatch, False)
+    cfg = {"licensing": {"hosted_ai": {"enabled": True}},
+           "ai": {"api_key": "cx.tok"},
+           "vision": {"enabled": True},
+           "voice_recognition": {"enabled": True, "provider": "faster_whisper"}}
+    rep = collect_media_status(cfg)
+    vis = _status(rep, "vision_inbound")
+    # 托管态 + 有令牌 + 没注入 → 供给没发生，可自助重试
+    assert vis["reason"] == "not_provisioned" and vis["retryable"] is True
+    asr = _status(rep, "asr_inbound")
+    # 本机没装识别模型：这不是重试能解决的，别给假希望
+    assert asr["reason"] == "no_local_module" and asr["retryable"] is False
+    assert rep["summary"]["retryable"] is True
+    assert rep["summary"]["managed"] is True
+
+
+def test_enabled_with_backend_is_active(monkeypatch):
+    _asr_module(monkeypatch, True)
     cfg = {"vision": {"enabled": True, "provider": "zhipu", "api_key": "k"},
            "voice_recognition": {"enabled": True, "provider": "faster_whisper"}}
     rep = collect_media_status(cfg)
@@ -136,7 +202,8 @@ def test_preset_backend_warnings_when_backend_missing():
     assert preset_backend_warnings("media_off", {}) == []
 
 
-def test_preset_backend_warnings_none_when_ready():
+def test_preset_backend_warnings_none_when_ready(monkeypatch):
+    _asr_module(monkeypatch, True)
     cfg = {"vision": {"provider": "zhipu", "api_key": "k"},
            "voice_recognition": {"provider": "faster_whisper"}}
     assert preset_backend_warnings("understand_all", cfg) == []

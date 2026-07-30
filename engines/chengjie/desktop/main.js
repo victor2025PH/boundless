@@ -771,7 +771,20 @@ async function backendPost(pathname, body) {
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(body || {}),
   });
-  return await r.json();
+  // 错误形状与 web 客户端对齐（2026-07-31）：非 2xx 归一化补 ok/status/error，
+  // 组件的失败分型（401 过期/403 权限/404 已删除…）在桌面 IPC 链路同样可用。
+  let d = null;
+  try { d = await r.json(); } catch (_e) { d = null; }
+  if (d === null || typeof d !== "object") {
+    return { ok: false, status: r.status, code: r.ok ? "badjson" : "",
+             error: r.ok ? "invalid JSON response" : `HTTP ${r.status}` };
+  }
+  if (!r.ok) {
+    if (d.ok === undefined) d.ok = false;
+    if (d.status === undefined) d.status = r.status;
+    if (!d.error && d.detail) d.error = String(d.detail);
+  }
+  return d;
 }
 
 ipcMain.handle("desktop:persona-bindings", async () => {
@@ -1089,6 +1102,14 @@ ipcMain.handle("desktop:auto-reply-health", async () => {
 ipcMain.handle("desktop:auto-reply-webhooks-get", async () => {
   try {
     return await backendGet("/api/accounts/auto-reply/webhooks");
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+});
+
+ipcMain.handle("desktop:alert-catalog", async () => {
+  try {
+    return await backendGet("/api/accounts/auto-reply/alert-catalog");
   } catch (e) {
     return { ok: false, error: String(e) };
   }

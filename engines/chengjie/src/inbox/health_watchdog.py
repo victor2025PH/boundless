@@ -379,6 +379,12 @@ class HealthWatchdog:
         self._db_alerted: bool = False
         self._db_last_remind: float = 0.0
         self.total_draft_backlog_alerts: int = 0
+        # CSRF 写请求拦截激增巡检（P1 2026-07-31）：中间件拒绝已进 csrf_stats 看板，
+        # 但看板要有人开才有用——窗口增量达阈值主动外发。样本=(ts,total,by_kind,by_path)。
+        self._csrf_samples: List[tuple] = []
+        self._csrf_alerted: bool = False
+        self._csrf_last_remind: float = 0.0
+        self.total_csrf_reject_alerts: int = 0
         # 出站媒体承诺未兑现升级提醒（Phase21a）：delta 口径累加净撤回数 + 首提/重提去抖
         self._promise_last_ret: Optional[int] = None
         self._promise_last_ful: Optional[int] = None
@@ -545,6 +551,13 @@ class HealthWatchdog:
             self._check_draft_backlog()
         except Exception:
             logger.debug("草稿积压巡检异常（已忽略）", exc_info=True)
+
+        # CSRF 写请求拦截激增：某前端宿主写通道断了（cookie_no_header）或有人在
+        # 跨站探测——2026-07 人设切换事故静默烂了两周，这类信号必须主动轰人
+        try:
+            self._check_csrf_rejects()
+        except Exception:
+            logger.debug("CSRF 拦截巡检异常（已忽略）", exc_info=True)
 
         # 试用履约端（厂商机）停摆：客服台心跳卡是被动的，得有人去看；这里升级为主动外发。
         try:
@@ -1345,6 +1358,91 @@ class HealthWatchdog:
             "待审草稿积压：%d 条超过 %.0fh 客户仍在等（最老 %.0fh，分级 %s；"
             "其中 %d 条不在 SLA 逐条告警覆盖内；另有 %d 条已人工回过仅账目残留）",
             len(stale), min_age_h, oldest_h, by_level, uncovered, already_replied)
+
+    def _check_csrf_rejects(self, *, now: Optional[float] = None) -> None:
+        """CSRF 写请求拦截在观察窗内激增 → 主动轰人（P1，2026-07-31 事故沉淀）。
+
+        为什么需要它：中间件拒绝已进 csrf_stats（metrics/Prometheus/ops 卡），但
+        「人设切换失败」事故的教训正是**看板要有人开才有用**——坐席撞墙两周，
+        后台数据全有、没人被通知。两类形态都值得轰人：
+          - ``cookie_no_header`` 激增 ＝ 某个前端宿主的写通道又断了（新页面没带凭证/
+            补丁被删/客户端回归）——功能事故；
+          - ``origin/referer_mismatch``/``bare`` 激增 ＝ 反代配置漂移或有人跨站探测
+            ——安全信号。
+        判据＝滚动窗增量（样本=(ts,total,by_kind,by_path) 逐 tick 采样）：
+        窗口内新增 ≥ ``min_count`` → 首提 + ``interval_min`` 重提；窗口内增量归零
+        → 补发恢复通知。基线取窗口内最老样本 → 增量只会**低估不会高估**（不误报）。
+        配置 ``health_watchdog.csrf_reject_remind.{enabled,min_count,window_min,
+        interval_min}``（默认开：60 分钟窗内 ≥5 次触发，4h 重提）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        cr = (((cfg.get("health_watchdog") or {}).get("csrf_reject_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not cr.get("enabled", True):
+            return
+        try:
+            from src.web.csrf_stats import get_csrf_reject_stats
+            d = get_csrf_reject_stats().dump()
+        except Exception:
+            return
+        ts = float(now if now is not None else time.time())
+        window_sec = max(300.0, float(cr.get("window_min", 60) or 60) * 60.0)
+        min_count = max(1, int(cr.get("min_count", 5) or 5))
+        total = int(d.get("total") or 0)
+        kinds = dict(d.get("by_kind") or {})
+        paths = dict(d.get("by_path") or {})
+        self._csrf_samples.append((ts, total, kinds, paths))
+        self._csrf_samples = [s for s in self._csrf_samples
+                              if ts - s[0] <= window_sec]
+        _, base_total, base_kinds, base_paths = self._csrf_samples[0]
+        delta = total - base_total
+
+        if delta < min_count:
+            if self._csrf_alerted and delta == 0:
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("csrf_reject_alert", {
+                        "recovered": True,
+                        "rate_key": "csrf_reject:recovered",
+                    })
+                    logger.info("HealthWatchdog 发出 CSRF 拦截恢复通知")
+                except Exception:
+                    logger.debug("csrf_reject recovery 发布失败（忽略）", exc_info=True)
+                self._csrf_alerted = False
+                self._csrf_last_remind = 0.0
+            return
+
+        interval_sec = max(600.0, float(cr.get("interval_min", 240) or 240) * 60.0)
+        if self._csrf_alerted and ts - self._csrf_last_remind < interval_sec:
+            return
+
+        # 窗口内的形态/接口增量（负值理论不出现——计数只增；防御性夹 0）
+        kind_delta = {k: v - int(base_kinds.get(k, 0))
+                      for k, v in kinds.items() if v - int(base_kinds.get(k, 0)) > 0}
+        path_delta = {p: v - int(base_paths.get(p, 0))
+                      for p, v in paths.items() if v - int(base_paths.get(p, 0)) > 0}
+        top_paths = dict(sorted(path_delta.items(),
+                                key=lambda kv: (-kv[1], kv[0]))[:3])
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("csrf_reject_alert", {
+                "count": delta,
+                "window_min": round(window_sec / 60.0),
+                "total": total,
+                "by_kind": kind_delta,
+                "top_paths": top_paths,
+                "reminder": bool(self._csrf_alerted),
+                "rate_key": "csrf_reject:remind",
+            })
+        except Exception:
+            logger.debug("csrf_reject alert 发布失败（忽略）", exc_info=True)
+            return
+        self._csrf_alerted = True
+        self._csrf_last_remind = ts
+        self.total_csrf_reject_alerts += 1
+        logger.warning(
+            "CSRF 写请求拦截激增：%d 分钟窗内 %d 次（形态 %s；接口 Top %s）",
+            round(window_sec / 60.0), delta, kind_delta, top_paths)
 
     def _check_human_deliver_chain(self, *, now: Optional[float] = None) -> None:
         """坐席「通过」了草稿却一条都没真投递出去 → 投递链静默断裂，主动轰人。

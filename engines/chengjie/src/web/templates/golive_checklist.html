@@ -17,8 +17,8 @@
   .gl-body{flex:1;min-width:0;}
   .gl-name{font-size:14px;font-weight:600;color:var(--tk-text);}
   .gl-detail{font-size:12px;color:var(--tk-text-muted);margin-top:2px;}
-  .gl-act{font-size:12px;font-weight:600;color:var(--tk-brand);text-decoration:none;border:1px solid rgba(59,130,246,.35);border-radius:8px;padding:6px 12px;background:rgba(59,130,246,.12);white-space:nowrap;}
-  .gl-act:hover{background:rgba(59,130,246,.2);}
+  .gl-act{font-size:12px;font-weight:600;color:var(--tk-brand);text-decoration:none;border:1px solid color-mix(in srgb, var(--tk-brand,#1e8cf2) 35%, transparent);border-radius:8px;padding:6px 12px;background:color-mix(in srgb, var(--tk-brand,#1e8cf2) 12%, transparent);white-space:nowrap;}
+  .gl-act:hover{background:color-mix(in srgb, var(--tk-brand,#1e8cf2) 20%, transparent);}
   .gl-refresh{font-size:12px;color:var(--tk-brand);cursor:pointer;border:1px solid var(--tk-border);border-radius:8px;padding:6px 12px;background:var(--tk-surface);}
   .gl-refresh:hover{background:var(--tk-surface-2);}
 </style>
@@ -35,6 +35,16 @@
     <span class="gl-refresh" onclick="load()">↻ {{ (i18n or {}).get('db_s050', "重新检测") }}</span>
   </div>
   <div id="gl-list"></div>
+
+  <!-- 本机浏览器环境体检（P2，2026-07-31 人设切换事故产品化）：上面查服务端配置，
+       这里查「当前这台浏览器 + 这条访问路径」——写通道过不过 CSRF 闸、SSE 通不通、
+       时钟偏不偏。售前演示 / 私有化交付进场先跑，红灯先处置。 -->
+  <h3 style="margin:26px 0 4px;font-size:16px;color:var(--tk-text);">🧪 {{ (i18n or {}).get('pf_title', "本机浏览器环境体检") }}</h3>
+  <p style="margin:0 0 10px;font-size:12px;color:var(--tk-text-muted);">{{ (i18n or {}).get('pf_sub', "检查的是「当前这台浏览器 + 这条访问路径」——服务端全绿不代表这里能用。") }}</p>
+  <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
+    <span class="gl-refresh" onclick="envCheck()">🧪 {{ (i18n or {}).get('pf_rerun', "重新体检") }}</span>
+  </div>
+  <div id="gl-env"><div style="font-size:12px;color:var(--tk-text-muted);">{{ (i18n or {}).get('pf_running', "体检中…") }}</div></div>
 </div>
 
 <script>
@@ -68,5 +78,83 @@ function load(){
   }).catch(function(){});
 }
 load();
+
+/* ===== 本机浏览器环境体检（P2）=====
+   逐项独立跑、逐行渲染（一项挂不影响其余）；全部只读/零副作用——
+   写通道探针打的是 /api/preflight/echo（专用 no-op 写端点，过完整中间件链）。 */
+function _envRow(st, name, detail){
+  return '<div class="gl-item">'+icon(st)
+    +'<div class="gl-body"><div class="gl-name">'+esc(name)+'</div>'
+    +'<div class="gl-detail">'+esc(detail)+'</div></div></div>';
+}
+async function envCheck(){
+  var box=document.getElementById('gl-env');
+  if(!box) return;
+  box.innerHTML='<div style="font-size:12px;color:var(--tk-text-muted);">'+esc(window.T('pf_running'))+'</div>';
+  var rows=[];
+  var t0=Date.now();
+
+  // 1) 服务器侧一览：会话身份 / 时钟偏移 / 构建戳 / AI 降级态
+  var sum=null;
+  try{ var r=await apiFetch('/api/preflight/summary'); if(r.ok) sum=await r.json(); }catch(_e){}
+  if(sum&&sum.ok){
+    rows.push(_envRow('ok', window.T('pf_session'),
+      window.Tf('pf_session_d',{name:sum.username||'—',role:sum.role||'—'})));
+    // 时钟偏移按「请求往返中点」估算，扣掉网络延迟的一半
+    var rtt=(Date.now()-t0)/1000;
+    var skew=Math.abs((t0/1000+rtt/2)-(Number(sum.server_ts)||0));
+    var skewTxt=skew.toFixed(1);
+    rows.push(_envRow(skew>120?'warn':'ok', window.T('pf_clock'),
+      skew>120?window.Tf('pf_clock_skew',{sec:skewTxt}):window.Tf('pf_clock_ok',{sec:skewTxt})));
+    rows.push(_envRow('ok', window.T('pf_build'), sum.build||'—'));
+    if(sum.ai_degraded===true) rows.push(_envRow('warn', window.T('pf_ai'), window.T('pf_ai_degraded')));
+    else if(sum.ai_degraded===false) rows.push(_envRow('ok', window.T('pf_ai'), window.T('pf_ai_ok')));
+    else rows.push(_envRow('warn', window.T('pf_ai'), window.T('pf_ai_unknown')));
+  }else{
+    rows.push(_envRow('fail', window.T('pf_session'), 'GET /api/preflight/summary '+(sum?JSON.stringify(sum).slice(0,60):'unreachable')));
+  }
+
+  // 2) 安全凭证 cookie（写请求自带通行证的前提；缺失时客户端会自动补种）
+  var hasCsrf=/(?:^|;\s*)csrf_token=/.test(document.cookie||'');
+  rows.push(_envRow(hasCsrf?'ok':'warn', window.T('pf_csrf_cookie'),
+    hasCsrf?window.T('pf_csrf_cookie_ok'):window.T('pf_csrf_cookie_miss')));
+
+  // 3) 写通道真探针：no-op 写端点过完整中间件链，回显靠哪张「通行证」放行。
+  //    referer/origin 回落放行 = 事故形态前夜 → warn 并建议刷新页面。
+  try{
+    var er=await apiFetch('/api/preflight/echo',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    if(er.ok){
+      var ed=await er.json();
+      var tk=String(ed.ticket||'unknown');
+      var tkKey={csrf_pair:'pf_tk_csrf_pair',bearer:'pf_tk_bearer',origin:'pf_tk_origin',referer:'pf_tk_referer'}[tk]||'pf_tk_unknown';
+      var tkSt=(tk==='csrf_pair'||tk==='bearer')?'ok':'warn';
+      rows.push(_envRow(tkSt, window.T('pf_write'), window.T(tkKey)));
+    }else{
+      rows.push(_envRow('fail', window.T('pf_write'), window.Tf('pf_write_fail',{status:er.status})));
+    }
+  }catch(_e){
+    rows.push(_envRow('fail', window.T('pf_write'), window.Tf('pf_write_fail',{status:0})));
+  }
+
+  // 4) SSE：真开一条事件流，6s 内 open 即通过（开后立即关，零负担）
+  var sseOk=await new Promise(function(resolve){
+    var es=null, done=false;
+    var fin=function(v){ if(done) return; done=true; try{ if(es) es.close(); }catch(_c){} resolve(v); };
+    try{ es=new EventSource('/api/accounts/auto-reply/stream'); }
+    catch(_e){ fin(false); return; }
+    es.onopen=function(){ fin(true); };
+    es.onerror=function(){ fin(false); };
+    setTimeout(function(){ fin(false); }, 6000);
+  });
+  rows.push(_envRow(sseOk?'ok':'warn', window.T('pf_sse'),
+    sseOk?window.T('pf_sse_ok'):window.T('pf_sse_fail')));
+
+  // 5) Service Worker（信息行：不接管也正常，别把首访标红）
+  var swOn=!!(navigator.serviceWorker&&navigator.serviceWorker.controller);
+  rows.push(_envRow('ok', window.T('pf_sw'), swOn?window.T('pf_sw_on'):window.T('pf_sw_off')));
+
+  box.innerHTML=rows.join('');
+}
+envCheck();
 </script>
 {% endblock %}

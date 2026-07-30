@@ -302,7 +302,8 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
         try:
             import asyncio
 
-            from src.ai.hosted_gateway import ensure_hosted_ai, ensure_hosted_telegram
+            from src.ai.hosted_gateway import (
+                ensure_hosted_ai, ensure_hosted_telegram, ensure_hosted_vision)
             from src.utils.golive import _is_placeholder
 
             # Telegram 托管凭据独立于 AI Key 状态尝试（池未配则静默跳过）——
@@ -312,11 +313,24 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
             except Exception:
                 logger.debug("[hosted-tg] claim 后领取凭据失败（忽略）", exc_info=True)
 
+            async def _link_vision() -> None:
+                """识图与聊天共用设备令牌：令牌一到就顺手把识图也接上。
+
+                否则识图供给只在 main.py 启动时跑过那一次——首启「未领试用」时它必然
+                失败，而领完试用后没人再喊它，用户要等到下次重启才有识图（2026-07-31）。
+                """
+                try:
+                    await asyncio.to_thread(ensure_hosted_vision, _CONFIG_MANAGER)
+                except Exception:
+                    logger.debug("[hosted-vision] claim 后接入识图失败（忽略）", exc_info=True)
+
             ai = (_cfg_or_none().get("ai") or {})
             if not _is_placeholder(ai.get("api_key")):
+                await _link_vision()
                 return  # AI 已有可用 Key（自有或令牌），别反复 reload
             if not await asyncio.to_thread(ensure_hosted_ai, _CONFIG_MANAGER):
                 return
+            await _link_vision()
             from src.web.routes.unified_inbox_setup_routes import reload_ai_runtime
             await reload_ai_runtime(app_, _CONFIG_MANAGER)
             logger.info("[hosted-ai] 领取试用后已自动接入 AI 网关并热生效")

@@ -35,6 +35,10 @@ _KNOWN_TYPES = {
     # scoped_fail=账号 scoped 取数失败；dead_intent=查看会话目标账号不在册；
     # conv_not_found=?conv= 深链经窗口刷新+scoped 救援后仍找不到目标会话。
     "scoped_fail", "dead_intent", "conv_not_found",
+    # 共享组件写请求失败分型（2026-07-31 人设切换事故补录）：copilot 组件把
+    # 换绑等写操作的 HTTP 失败按状态码上报——http_403_csrf 一旦出现即「某个
+    # 宿主环境的写通道又断了」，比等用户截图早两周。
+    "http_401", "http_403", "http_403_csrf", "http_404", "http_409", "http_5xx",
 }
 
 

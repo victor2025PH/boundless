@@ -28,6 +28,10 @@ ZH = {
     "ov2_po_col_count": "次数",
     "ov2_po_actions_bd": "治理动作明细",
     "ov2_po_col_action": "动作",
+    "ov2_po_fails": "换绑被拒（业务层）",
+    "ov2_po_csrf_blocked": "换绑被拦（安全层）",
+    "ov2_po_fails_bd": "被拒原因明细",
+    "ov2_po_col_fail": "操作:原因",
     "ov2_po_hint": (
         "计数自实例启动累计（重启清零）；「遗留债余量」是实时盘点的活水位"
         "（不随重启清零，Messenger RPA 托管键不计入）。债清零后回升＝有路径在"
@@ -58,6 +62,10 @@ EN = {
     "ov2_po_col_count": "Count",
     "ov2_po_actions_bd": "Action breakdown",
     "ov2_po_col_action": "Action",
+    "ov2_po_fails": "Switches rejected (business)",
+    "ov2_po_csrf_blocked": "Switches blocked (security)",
+    "ov2_po_fails_bd": "Rejection breakdown",
+    "ov2_po_col_fail": "Op:reason",
     "ov2_po_hint": (
         "Counters accumulate since instance start (reset on restart); "
         "\u201cLegacy debt left\u201d is a live gauge (survives restarts; "

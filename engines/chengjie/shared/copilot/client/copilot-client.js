@@ -18,19 +18,74 @@
     return h;
   }
 
+  /* —— CSRF 自带通行证（2026-07-31，修「切换失败，请重试」403 事故）——
+     全站写请求须过 CSRF 中间件（X-CSRF-Token / Bearer / 同源 Origin·Referer 三选一）。
+     此前该头只由 workspace_base 的页面级 fetch 补丁注入——共享组件在 iframe App /
+     其他宿主里一张证都不带，实测 Chromium 同源 POST 不发 Origin，整条写通道只挂在
+     Referer 一根线上（隐私扩展/企业策略/反代改写 Host 即全灭）。传输层自带凭证 =
+     显式契约：任何宿主引入本客户端即获得完整写能力，不再依赖宿主补丁。 */
+  function _readCsrfCookie() {
+    if (typeof document === "undefined") return "";
+    const m = String(document.cookie || "").match(/(?:^|;\s*)csrf_token=([^;]*)/);
+    return m ? m[1] : "";
+  }
+  let _csrfSeeding = null;
+  function _seedCsrfCookie() {
+    // cookie 缺失（浏览器重启后会话级 cookie 消失等）→ 打一发任意安全方法请求，
+    // 中间件会在响应上补种 csrf_token。共享在途 Promise 防并发写时重复播种。
+    if (typeof document === "undefined") return Promise.resolve(false);
+    if (!_csrfSeeding) {
+      _csrfSeeding = fetch("/manifest.webmanifest", {
+        method: "HEAD", cache: "no-store", credentials: "same-origin",
+      }).catch(() => null).then(() => { _csrfSeeding = null; return !!_readCsrfCookie(); });
+    }
+    return _csrfSeeding;
+  }
+  function _writeHeaders(base) {
+    const h = _authHeaders(base);
+    const tok = _readCsrfCookie();
+    if (tok) h["X-CSRF-Token"] = tok;
+    return h;
+  }
+
   // —— 网页适配器:同源 fetch ——
   class WebCopilotClient {
     async _get(url) {
       const r = await fetch(url, { headers: _authHeaders() });
       return await r.json();
     }
-    async _post(url, body) {
-      const r = await fetch(url, {
-        method: "POST",
-        headers: _authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify(body || {}),
-      });
-      return await r.json();
+    /* 写请求统一出口：自带 CSRF 头；非 2xx 归一化为 {ok:false, status, code, error}
+       （error 取后端已 i18n 的 detail，组件据此分型提示，不再一律「请重试」）。
+       403+code=csrf 且未带 Bearer → 补种 cookie 后重试一次（中间件拒绝发生在业务
+       逻辑之前，服务端零副作用，安全可重放）；网络层异常不再向上抛，统一 status:0。 */
+    async _post(url, body, _retried) {
+      if (!_authToken && !_readCsrfCookie()) await _seedCsrfCookie();
+      let r;
+      try {
+        r = await fetch(url, {
+          method: "POST",
+          headers: _writeHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify(body || {}),
+        });
+      } catch (e) {
+        return { ok: false, status: 0, code: "network",
+                 error: String((e && e.message) || e || "network error") };
+      }
+      let d = null;
+      try { d = await r.json(); } catch (_e) { d = null; }
+      if (r.ok) {
+        if (d === null) return { ok: false, status: r.status, code: "badjson", error: "invalid JSON response" };
+        return d;
+      }
+      if (r.status === 403 && d && d.code === "csrf" && !_retried && !_authToken) {
+        const seeded = await _seedCsrfCookie();
+        if (seeded) return this._post(url, body, true);
+      }
+      const out = (d && typeof d === "object") ? d : {};
+      if (out.ok === undefined) out.ok = false;
+      if (out.status === undefined) out.status = r.status;
+      if (!out.error) out.error = String(out.detail || r.statusText || ("HTTP " + r.status));
+      return out;
     }
     async getRelStage({ conversationId: cid }) {
       if (!cid) return { ok: false, error: "missing conversationId" };
@@ -180,6 +235,9 @@
     async autoReplyWebhooks() {
       return this._get(`/api/accounts/auto-reply/webhooks`);
     }
+    async alertCatalog() {
+      return this._get(`/api/accounts/auto-reply/alert-catalog`);
+    }
     async setAutoReplyWebhooks(list) {
       return this._post(`/api/accounts/auto-reply/webhooks`, { webhooks: list || [] });
     }
@@ -212,8 +270,9 @@
     async voicePurgeOrphans() { return this._post("/api/voice/purge-orphans", {}); }
     async voiceUnbind({ persona_id, purge_cloud }) {
       const q = purge_cloud ? "?purge_cloud=1" : "";
+      // DELETE 同属写方法，走 CSRF 头（与 _post 同一通行证）
       const r = await fetch(`/api/voice/profiles/${encodeURIComponent(persona_id || "")}${q}`, {
-        method: "DELETE", headers: _authHeaders(),
+        method: "DELETE", headers: _writeHeaders(),
       });
       return await r.json();
     }
@@ -226,7 +285,8 @@
       fd.append("preferred_name", String(p.preferred_name || ""));
       fd.append("language_type", String(p.language_type || "Japanese"));
       if (p.reference_text) fd.append("reference_text", String(p.reference_text));
-      const r = await fetch("/api/voice/enroll", { method: "POST", headers: _authHeaders(), body: fd });
+      // multipart 写请求同样要过 CSRF（S3 起非 JSON 写也强校验）；Content-Type 由浏览器带 boundary
+      const r = await fetch("/api/voice/enroll", { method: "POST", headers: _writeHeaders(), body: fd });
       return await r.json();
     }
   }
@@ -406,6 +466,10 @@
     async autoReplyWebhooks() {
       const s = this._shell();
       return s.autoReplyWebhooks ? s.autoReplyWebhooks() : { ok: false, error: "shell.autoReplyWebhooks 未暴露" };
+    }
+    async alertCatalog() {
+      const s = this._shell();
+      return s.alertCatalog ? s.alertCatalog() : { ok: false, error: "shell.alertCatalog 未暴露" };
     }
     async setAutoReplyWebhooks(list) {
       const s = this._shell();

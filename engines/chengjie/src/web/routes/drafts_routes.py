@@ -1220,6 +1220,14 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # CSRF 写请求拒绝观测（中间件 403 计数；kind=cookie_no_header 即「宿主缺
+        # fetch 补丁/客户端未带凭证」签名——2026-07-31 人设切换事故的形态）
+        try:
+            from src.web.csrf_stats import get_csrf_reject_stats
+            metrics["csrf_rejects"] = get_csrf_reject_stats().dump()
+        except Exception:
+            pass
+
         # 人设文档导入/考题观测（解析→抽取→传记入库→一致性考题 漏斗计数与均值）
         try:
             from src.utils.persona_import_stats import get_persona_import_stats
@@ -1491,6 +1499,13 @@ def register_metrics_route(app, *, api_auth):
             try:
                 from src.web.frontend_error_stats import get_frontend_error_stats
                 buf.write(get_frontend_error_stats().dump_prom())
+            except Exception:
+                pass
+
+            # CSRF 写请求拒绝（total / by kind / by path，中间件静默 403 可观测化）
+            try:
+                from src.web.csrf_stats import get_csrf_reject_stats
+                buf.write(get_csrf_reject_stats().dump_prom())
             except Exception:
                 pass
 

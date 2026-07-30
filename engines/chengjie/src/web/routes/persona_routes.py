@@ -218,6 +218,18 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         except Exception:
             pass
 
+    def _record_override_fail(op: str, reason: str) -> None:
+        """治理动作业务层拒绝观测（P1 换绑漏斗失败侧；best-effort 不抛）。
+
+        与成功侧 record_action 合成「尝试→成功/失败按原因」漏斗，回答市场侧
+        「多少人想用被挡住」。CSRF 中间件层拒绝不经路由，由 csrf_stats 另计。
+        """
+        try:
+            from src.ai.persona_override_stats import get_persona_override_stats
+            get_persona_override_stats().record_fail(op, reason)
+        except Exception:
+            pass
+
     def _parse_conv_ref(data: dict) -> tuple:
         """从请求体取 (platform, account_id, chat_key)。
 
@@ -369,16 +381,19 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
             cfg = _live_config(request)
             from src.ai.persona_voice import conv_binding_key, conv_override_enabled
             if not conv_override_enabled(cfg):
+                _record_override_fail("bind_conv", "disabled")
                 raise HTTPException(
                     400, tr(request, "err.persona.conv_override_disabled"))
             plat, acct, ck = _parse_conv_ref(data)
             if not (plat and acct and ck):
+                _record_override_fail("bind_conv", "badref")
                 raise HTTPException(400, tr(request, "err.persona.conv_ref_required"))
             _pid = str(
                 data.get("profile_id")
                 or (data.get("persona") or {}).get("id") or ""
             ).strip()
             if not _pid or pm.get_persona_by_id(_pid) is None:
+                _record_override_fail("bind_conv", "profile_missing")
                 raise HTTPException(
                     404, tr(request, "err.persona.profile_not_found", name=_pid or "?"))
             key = conv_binding_key(plat, acct, ck)
@@ -434,6 +449,7 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         if scope == "conversation":
             plat, acct, ck = _parse_conv_ref(data)
             if not (plat and acct and ck):
+                _record_override_fail("unbind_conv", "badref")
                 raise HTTPException(400, tr(request, "err.persona.conv_ref_required"))
             from src.ai.persona_voice import conv_binding_key
             key = conv_binding_key(plat, acct, ck)
@@ -486,10 +502,12 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         acct = str(data.get("account_id") or "").strip()
         profile_id = str(data.get("profile_id") or "").strip()
         if not plat or not acct:
+            _record_override_fail("account_set", "badref")
             raise HTTPException(400, tr(request, "err.persona.account_ref_required"))
         from src.utils.persona_manager import PersonaManager
         pm = PersonaManager.get_instance()
         if profile_id and pm.get_persona_by_id(profile_id) is None:
+            _record_override_fail("account_set", "profile_missing")
             raise HTTPException(
                 404, tr(request, "err.persona.profile_not_found", name=profile_id))
         try:
@@ -498,6 +516,7 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         except Exception:
             registry = None
         if registry is None:
+            _record_override_fail("account_set", "registry_unavailable")
             raise HTTPException(503, tr(request, "err.persona.registry_unavailable"))
         _prev = ""
         try:

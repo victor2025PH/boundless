@@ -13,13 +13,14 @@
     "dev": "electron . --dev",
     "build:backend": "python build/build_backend.py && python build/smoke_backend.py",
     "smoke:backend": "python build/smoke_backend.py",
+    "smoke:upgrade": "python build/smoke_upgrade.py",
     "predist": "node copy-shared.js && python build/smoke_backend.py",
     "dist": "electron-builder",
     "predist:win": "node copy-shared.js && python build/smoke_backend.py",
     "dist:win": "electron-builder --win",
     "predist:mac": "node copy-shared.js",
     "dist:mac": "electron-builder --mac",
-    "test": "node test/inject-status.test.js && node test/account-utils.test.js && node test/media-format.test.js && node test/webview-ua.test.js && node test/profiles.test.js && node test/fingerprint.test.js && node test/backend-launcher.test.js && node test/sidecar-launcher.test.js && node test/health-panel.test.js && node test/brand-util.test.js && node test/sidebar-chrome.test.js && node test/first-run-model.test.js && node test/token-util.test.js"
+    "test": "node test/inject-status.test.js && node test/account-utils.test.js && node test/media-format.test.js && node test/webview-ua.test.js && node test/profiles.test.js && node test/fingerprint.test.js && node test/backend-launcher.test.js && node test/sidecar-launcher.test.js && node test/health-panel.test.js && node test/brand-util.test.js && node test/sidebar-chrome.test.js && node test/first-run-model.test.js && node test/token-util.test.js && node test/copilot-client-csrf.test.js && node test/cp-persona-failtype.test.js"
   },
   "devDependencies": {
     "electron": "^31.0.0",

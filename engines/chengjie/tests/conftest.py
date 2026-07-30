@@ -257,6 +257,9 @@ def _isolated_web_env(monkeypatch):
     for k in (
         "AITR_WEB_TOKEN", "AITR_WEB_HOST", "AITR_WEB_PORT", "AITR_DESKTOP_MODE",
         "AITR_HOSTED_AI_KEY", "AITR_HOSTED_AI_BASE_URL", "AITR_HOSTED_AI_MODEL",
+        # 托管识图注入也走 env 回放（hosted_gateway.ensure_hosted_vision），同样
+        # 会被 ensure_* 写进本进程 → 不剥掉就会串进后续用例的 ConfigManager
+        "AITR_HOSTED_VISION_BASE_URL", "AITR_HOSTED_VISION_MODEL",
     ):
         monkeypatch.delenv(k, raising=False)
 
@@ -408,6 +411,12 @@ def _reset_process_singletons_now():
     try:
         from src.integrations.shared import event_bus as _eb
         _eb._bus = None
+    except Exception:
+        pass
+    try:
+        # 入站媒体识别计数（进程内累积，自检接口按「有尝试才带」判断是否输出段）
+        from src.inbox.media_enrich_stats import get_media_enrich_stats
+        get_media_enrich_stats().reset()
     except Exception:
         pass
 

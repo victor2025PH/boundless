@@ -10,6 +10,10 @@
 - **热重载存活**：令牌同时写进程 env ``AITR_HOSTED_AI_*`` ——
   ``ConfigManager._apply_env_overrides`` 每次 load()/热重载都会重放注入，
   否则任何 config 热重载都会把内存令牌抹回空 Key（实测风险）。
+  **识图同理**（``AITR_HOSTED_VISION_*``，2026-07-31 补）：它此前只有内存注入、
+  没有 env 重放，于是任何一次写 overlay 触发的热重载都会把网关地址抹掉——
+  连「一键开齐入站识别」自己都算（它写 overlay → 30s 内热重载 → 后端消失 →
+  自检黄灯「开了但后端未就绪」，到下次重启前无法自愈）。
 - **base_url 不信服务端回传**：一律用本地配置的 site_url 拼 ``/api/ai/v1``，
   防反代环境下服务端 origin 解析成 127.0.0.1 把客户端指去打不通的地址。
 - **资格闸**：服务端只对试用台账里的指纹发令牌（error=no_claim）——
@@ -36,6 +40,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_SITE = "https://bd2026.cc"
 HTTP_TIMEOUT = 8
 STATE_FILENAME = "hosted_ai_token.json"
+#: 托管识图注入的 env 回放键（令牌本身复用 AITR_HOSTED_AI_KEY，避免两处各存一份会漂移）
+VISION_ENV_BASE = "AITR_HOSTED_VISION_BASE_URL"
+VISION_ENV_MODEL = "AITR_HOSTED_VISION_MODEL"
 #: 距过期不足此秒数即主动换新（服务端 TTL 30 天，留 7 天余量）
 REFRESH_MARGIN_SEC = 7 * 24 * 3600
 #: 令牌至少还有这么久才算「仍可用」（网络失败时的回落判据）
@@ -222,6 +229,13 @@ def ensure_hosted_vision(config_manager: Any, *, fetch: Optional[Fetch] = None) 
 
     仅托管态 + 用户未自配识图后端时注入（自建/已配 base_url 的不覆盖）。
     需已持有设备令牌（ai.api_key=cx.…）——识图与聊天共用同一枚令牌鉴权。
+
+    **热重载存活**（2026-07-31）：注入同时写进程 env ``AITR_HOSTED_VISION_*``，由
+    ``ConfigManager._apply_env_overrides`` 在每次 load()/热重载后重放（与托管 AI 同款
+    机制、同款理由，见模块头）。缺了它，写 overlay 就等于把识图后端删掉。
+
+    ``enabled`` 只在**从未表达过**时置 true（与 ``channel_setup.enable_on_ready`` 同
+    口径）：显式 false 是运营用「全部关闭」表达过的意图，重启不该把它扳回来。
     """
     cfg = getattr(config_manager, "config", None) or {}
     if not _wants_hosted(cfg):
@@ -245,14 +259,39 @@ def ensure_hosted_vision(config_manager: Any, *, fetch: Optional[Fetch] = None) 
              or "qwen3-vl:8b-instruct")
     if not isinstance(cfg.get("vision"), dict):
         cfg["vision"] = {}
-    cfg["vision"]["enabled"] = True
-    cfg["vision"]["provider"] = "openai_compatible"
-    cfg["vision"]["base_url"] = _gateway_base(cfg)  # https://bd2026.cc/api/ai/v1
-    cfg["vision"]["model"] = str(model)
-    cfg["vision"]["api_key"] = token
-    cfg["vision"]["_hosted_vision"] = True
+    vision = cfg["vision"]
+    vision["provider"] = "openai_compatible"
+    vision["base_url"] = _gateway_base(cfg)  # https://bd2026.cc/api/ai/v1
+    vision["model"] = str(model)
+    vision["api_key"] = token
+    vision["_hosted_vision"] = True
+    vision.setdefault("enabled", True)  # 显式 false = 运营关过，不扳回
+    os.environ[VISION_ENV_BASE] = str(vision["base_url"])
+    os.environ[VISION_ENV_MODEL] = str(model)
     logger.info("[hosted-vision] 识图已指向官网网关（我们的 GPU 模型 %s，用户无需配置）", model)
     return True
+
+
+def vision_provision_reason(config: Optional[dict]) -> str:
+    """托管识图供给现在处于什么状态（机器可读，供 UI 讲「该做什么」而非「联系客服」）。
+
+    ``""``＝已供给；``self_hosted``＝非托管态（自建自己配后端，本模块不该插手）；
+    ``user_backend``＝用户已自配后端（尊重，不覆盖）；``no_token``＝还没拿到设备令牌
+    （多半没领试用或没网，领完会自动接上）；``not_provisioned``＝托管态但注入没发生
+    （可以直接重试，无需重启）。
+    """
+    cfg = config or {}
+    v = cfg.get("vision") if isinstance(cfg.get("vision"), dict) else {}
+    if v.get("_hosted_vision") and str(v.get("base_url") or "").strip():
+        return ""
+    if not _wants_hosted(cfg):
+        return "self_hosted"
+    if (str(v.get("base_url") or "").strip() or v.get("base_urls")
+            or str(v.get("api_key") or "").strip()):
+        return "user_backend"
+    if not str((cfg.get("ai") or {}).get("api_key") or "").startswith("cx."):
+        return "no_token"
+    return "not_provisioned"
 
 
 def ensure_hosted_ai(config_manager: Any, *, fetch: Optional[Fetch] = None) -> bool:
@@ -357,6 +396,22 @@ def _apply(config_manager: Any, data: Dict[str, Any]) -> None:
     if model:
         os.environ["AITR_HOSTED_AI_MODEL"] = model
 
+    _sync_hosted_vision_token(cfg, token)
+
+
+def _sync_hosted_vision_token(cfg: Dict[str, Any], token: str) -> None:
+    """令牌换新 → 同步刷进已注入的托管识图（只动本模块注入过的那份）。
+
+    识图与聊天共用同一枚设备令牌，但换新只走 AI 这条路（守护线程 / 401 强制换新）。
+    不同步的话识图会攥着旧令牌一路 401，而识图失败是静默降级（`media_enrich` 返空串），
+    没人会发现。
+    """
+    if not token:
+        return
+    v = cfg.get("vision")
+    if isinstance(v, dict) and v.get("_hosted_vision"):
+        v["api_key"] = token
+
 
 def schedule_forced_refresh(
     config_manager: Any,
@@ -413,11 +468,26 @@ def schedule_forced_refresh(
     return True
 
 
-def start_refresh_daemon(config_manager: Any, *, interval_sec: int = 3600) -> bool:
-    """后台每小时跑一次 ``ensure_hosted_ai``：续期临期令牌 + 补领
-    （首启无网 / 未领试用时，条件满足后自动接入，无需重启）。
+def refresh_once(config_manager: Any) -> None:
+    """守护线程每轮做的事（抽成函数＝可被门禁直接调用，不必等一小时的 sleep）。
 
-    缓存新鲜时零 HTTP（cache_fresh 短路），代价可忽略。进程内幂等单例。
+    令牌与识图**必须成对刷**：供给是两步，令牌后到（首启无网 / 未领试用 / 领完试用
+    才签发）时若只补 AI，识图就会一直缺后端直到下次重启——这正是「一键开齐入站识别
+    点了没用」的成因之一。已注入时识图那步是纯内存赋值，零 HTTP。
+    """
+    try:
+        ensure_hosted_ai(config_manager)
+        ensure_hosted_vision(config_manager)
+    except Exception:
+        logger.debug("[hosted-ai] 刷新守护异常（忽略）", exc_info=True)
+
+
+def start_refresh_daemon(config_manager: Any, *, interval_sec: int = 3600) -> bool:
+    """后台每小时跑一次 ``ensure_hosted_ai`` + ``ensure_hosted_vision``：续期临期令牌 +
+    补领（首启无网 / 未领试用时，条件满足后自动接入，无需重启）。
+
+    缓存新鲜时零 HTTP（cache_fresh 短路 + 识图注入本就不发 HTTP），代价可忽略。
+    进程内幂等单例。
     """
     global _daemon_started
     cfg = getattr(config_manager, "config", None) or {}
@@ -431,10 +501,7 @@ def start_refresh_daemon(config_manager: Any, *, interval_sec: int = 3600) -> bo
     def _loop() -> None:
         while True:
             time.sleep(max(300, int(interval_sec)))
-            try:
-                ensure_hosted_ai(config_manager)
-            except Exception:
-                logger.debug("[hosted-ai] 刷新守护异常（忽略）", exc_info=True)
+            refresh_once(config_manager)
 
     t = threading.Thread(target=_loop, name="hosted-ai-refresh", daemon=True)
     t.start()

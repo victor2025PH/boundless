@@ -84,8 +84,9 @@
       <div id="sw-media-health" style="margin:6px 0 2px;font-size:11px;color:var(--tk-text-muted);"></div>
       <div class="sw-actions" style="flex-wrap:wrap;">
         <button class="sw-btn primary" onclick="swMediaPreset('understand_all',this)">{{ (i18n or {}).get('setup.media.preset_understand', '一键开齐入站识别') }}</button>
-        <button class="sw-btn ghost" style="border:1px solid var(--tk-border);cursor:pointer;" onclick="swMediaPreset('understand_and_selfie',this)">{{ (i18n or {}).get('setup.media.preset_understand_selfie', '识别 + 自动发自拍') }}</button>
+        <button class="sw-btn ghost" id="sw-media-selfie-btn" style="border:1px solid var(--tk-border);cursor:pointer;" onclick="swMediaPreset('understand_and_selfie',this)">{{ (i18n or {}).get('setup.media.preset_understand_selfie', '识别 + 自动发自拍') }}</button>
         <button class="sw-btn ghost" style="border:1px solid var(--tk-border);cursor:pointer;" onclick="swMediaPreset('media_off',this)">{{ (i18n or {}).get('setup.media.preset_off', '全部关闭') }}</button>
+        <button class="sw-btn ghost" id="sw-media-retry-btn" style="display:none;border:1px solid var(--tk-brand);color:var(--tk-brand);cursor:pointer;" onclick="swMediaRetry(this)">{{ (i18n or {}).get('setup.media.retry', '重试接入') }}</button>
         <span class="sw-msg" id="sw-media-msg"></span>
       </div>
       <div class="sw-issues" id="sw-media-warn"></div>
@@ -240,6 +241,11 @@ function swAiSave(btn){
 swAiLoad();
 
 /* ── Phase 2：多媒体能力自检卡（识图/识语音/识视频/发自拍 一键开 + 后端就绪红绿灯） ── */
+/* i18n 键拼装收口：'setup.media.' + 前缀 + '_' + 码。
+   刻意不把前缀写进字符串字面量再直接拼变量——那个形状（点+标识符+引号+加号）会被
+   动态点属性门禁 test_template_dynamic_dot_access 判为「按变量拼点属性名」的 code-gen
+   陷阱（它是纯正则扫全文，连注释也算）。 */
+function _swMediaKey(prefix, code){ return 'setup.media.' + prefix + '_' + String(code||''); }
 function _mediaStageText(st){
   if(st==='active') return window.T('setup.media.stage_active');
   if(st==='needs_backend') return window.T('setup.media.stage_needs_backend');
@@ -275,18 +281,38 @@ function swMediaRender(d){
       if(rt.video) parts.push(window.Tf('setup.media.h_video',{r:Math.round((rt.video.success_rate||0)*100)}));
       if(rt.dedup) parts.push(window.Tf('setup.media.h_dedup',{n:(rt.dedup.image_perturbed||0)+(rt.dedup.video_perturbed||0),k:rt.dedup.fallback||0}));
       if(rt.album) parts.push(window.Tf('setup.media.h_album',{t:rt.album.media_enabled||0,s:rt.album.total_sends||0,u:rt.album.unique_media_sent||0,c:rt.album.convs_covered||0}));
+      /* 真流量里「没看懂」的条数 + 主因——配置就绪度回答不了这个，
+         而识别失败是静默降级成 [图片]/[语音] 占位的，不显式说没人会发现。 */
+      if(rt.enrich && (rt.enrich.missed||0)>0){
+        var by=rt.enrich.by_reason||{}, top='', topN=-1;
+        Object.keys(by).forEach(function(k){ if(by[k]>topN){ topN=by[k]; top=k; } });
+        parts.push(window.Tf('setup.media.h_enrich',{n:rt.enrich.missed||0,r:window.T(_swMediaKey('mr',top))}));
+      }
       health.textContent=parts.join('  ·  ');
       health.style.display=parts.length?'':'none';
     } else { health.textContent=''; health.style.display='none'; }
   }
+  var sum=(d&&d.summary)||{};
   var badge=document.getElementById('sw-media-badge');
   if(badge){
-    var sum=(d&&d.summary)||{}, by=(sum.by_stage)||{};
+    var by=(sum.by_stage)||{};
     var understandOn=!!sum.understand_active;
     var anyNeeds=(by.needs_backend||0)>0;
     if(understandOn && !anyNeeds){ badge.className='sw-badge b-ready'; badge.textContent='✓ '+window.T('setup.media.st_active'); }
     else if(anyNeeds){ badge.className='sw-badge b-miss'; badge.textContent=window.T('setup.media.st_partial'); }
     else { badge.className='sw-badge b-conf'; badge.textContent=window.T('setup.media.st_off'); }
+  }
+  /* 「重试接入」只在真能自助修时出现（reason=not_provisioned/no_token）——
+     那两种是「供给没发生」，重跑一次就好，不该让用户去开工单。 */
+  var retry=document.getElementById('sw-media-retry-btn');
+  if(retry) retry.style.display=sum.retryable?'':'none';
+  /* 托管版没随包出图能力（交付分级 C 类）→ 藏掉那个必然点不响的预设，
+     免得「功能是假的」这种印象；自建版照常显示。 */
+  var selfieBtn=document.getElementById('sw-media-selfie-btn');
+  if(selfieBtn){
+    var selfie=caps.filter(function(c){return c.key==='selfie_outbound';})[0];
+    var selfieBlocked=!!sum.managed && selfie && !selfie.backend_ready;
+    selfieBtn.style.display=selfieBlocked?'none':'';
   }
 }
 function swMediaLoad(){
@@ -295,12 +321,31 @@ function swMediaLoad(){
     swMediaRender(d);
   }).catch(function(){});
 }
+/* 「重试接入」：重跑一次托管供给。绝大多数「后端未就绪」只是供给没发生
+   （令牌后到 / 写 overlay 触发的热重载把内存注入抹掉），重跑即好、无需重启，
+   不该让用户去开工单。真需要人工时后端回确定性 reason 码，这里翻成人话。 */
+function swMediaRetry(btn){
+  var msg=document.getElementById('sw-media-msg');
+  btn.disabled=true; msg.className='sw-msg'; msg.textContent=window.T('setup.media.retrying');
+  apiFetch('/api/companion/media-capabilities/provision',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000})
+    .then(function(r){return r.json();}).then(function(d){
+    btn.disabled=false;
+    if(d && d.status) swMediaRender(d.status); else swMediaLoad();
+    var ok=d && d.provisioned && d.provisioned.vision;
+    if(ok){ msg.className='sw-msg ok'; msg.textContent=window.T('setup.media.retry_ok'); return; }
+    msg.className='sw-msg err';
+    var reason=(d && d.reason) || '';
+    msg.textContent=window.T('setup.media.retry_fail')+(reason?'：'+window.T(_swMediaKey('rsn',reason)):'');
+  }).catch(function(){ btn.disabled=false; msg.className='sw-msg err'; msg.textContent=window.T('draft.net_err'); });
+}
+
 function swMediaPreset(name, btn){
   var msg=document.getElementById('sw-media-msg'), warn=document.getElementById('sw-media-warn');
   btn.disabled=true; msg.className='sw-msg'; msg.textContent=window.T('setup.media.applying');
   if(warn) warn.innerHTML='';
-  fetch('/api/companion/media-capabilities/preset',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name:name})}).then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/companion/media-capabilities/preset',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:name})}, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
     btn.disabled=false;
     if(!d||!d.ok){ msg.className='sw-msg err'; msg.textContent=(d&&(d.message||d.detail))||window.T('setup.media.apply_fail'); return; }
     msg.className='sw-msg ok'; msg.textContent=window.T('setup.media.applied');

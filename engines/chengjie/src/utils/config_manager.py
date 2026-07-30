@@ -188,12 +188,14 @@ class ConfigManager:
         - ``AITR_DESKTOP_MODE``：强制 ``web_admin.enabled=true``。
         - ``AITR_HOSTED_AI_*``：厂商托管试用 Key（打包/实例注入，**永不入库**）。仅当
           配置里 ``ai.api_key`` 仍为空/占位时填入——用户自己保存的 Key 永远优先。
+        - ``AITR_HOSTED_VISION_*``：厂商托管识图网关（同上，**永不入库**）。
         """
         desktop = self._env_truthy("AITR_DESKTOP_MODE")
         host = os.environ.get("AITR_WEB_HOST")
         port = os.environ.get("AITR_WEB_PORT")
         token = os.environ.get("AITR_WEB_TOKEN")
         hosted_key = (os.environ.get("AITR_HOSTED_AI_KEY") or "").strip()
+        hosted_vision = (os.environ.get("AITR_HOSTED_VISION_BASE_URL") or "").strip()
         if desktop or host or port or token:
             web = self.config.get("web_admin")
             if not isinstance(web, dict):
@@ -212,6 +214,8 @@ class ConfigManager:
                 web["enabled"] = True
         if hosted_key:
             self._apply_hosted_ai_env(hosted_key)
+        if hosted_vision:
+            self._apply_hosted_vision_env(hosted_vision)
 
     def _apply_hosted_ai_env(self, hosted_key: str) -> None:
         """把 ``AITR_HOSTED_AI_*`` 注入内存中的 ``ai.*``（用户自有 Key 不覆盖）。"""
@@ -234,6 +238,41 @@ class ConfigManager:
         ai["_hosted_trial"] = True
         self.logger.info(
             "已启用托管 AI 试用（AITR_HOSTED_AI_KEY；用户未配置自有 Key）")
+
+    def _apply_hosted_vision_env(self, base_url: str) -> None:
+        """把 ``AITR_HOSTED_VISION_*`` 回放进内存 ``vision.*``（用户自配后端不覆盖）。
+
+        与 :meth:`_apply_hosted_ai_env` 同款理由（2026-07-31 实锤）：托管识图的网关
+        地址与设备令牌是启动时的**内存注入**，刻意不落盘（令牌不入库）。没有这次回放，
+        任何一次配置热重载都会把它抹掉——而写 ``config.local.yaml`` 就会触发热重载，
+        于是「一键开齐入站识别」按钮把自己刚要用的后端弄没了，只剩 overlay 里的
+        ``vision.enabled=true`` 配一盏「开了但后端未就绪」的黄灯，重启前无法自愈。
+
+        令牌复用 ``AITR_HOSTED_AI_KEY``（识图与聊天同一枚，不另存一份免得换新后漂移）。
+        ``enabled`` 用 setdefault：那是运营意图，归 overlay 管，回放只补**供给**。
+        """
+        vision = self.config.get("vision")
+        if not isinstance(vision, dict):
+            vision = {}
+            self.config["vision"] = vision
+        # 用户/运维自配的识图后端（无托管标记）→ 尊重，绝不覆盖
+        if not vision.get("_hosted_vision") and (
+            str(vision.get("base_url") or "").strip()
+            or vision.get("base_urls")
+            or str(vision.get("api_key") or "").strip()
+        ):
+            return
+        token = (os.environ.get("AITR_HOSTED_AI_KEY") or "").strip()
+        if not token:
+            return
+        model = (os.environ.get("AITR_HOSTED_VISION_MODEL") or "").strip()
+        vision["provider"] = "openai_compatible"
+        vision["base_url"] = base_url
+        vision["api_key"] = token
+        if model:
+            vision["model"] = model
+        vision["_hosted_vision"] = True
+        vision.setdefault("enabled", True)
 
     def _overlay_path(self) -> Path:
         """凭证 overlay 路径：主配置同目录下的 config.local.yaml。"""
