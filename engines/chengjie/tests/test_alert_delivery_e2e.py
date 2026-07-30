@@ -191,6 +191,38 @@ _EMITTED_ALERTS = [
       "reminder": False, "rate_key": "draft_backlog:remind"}),
     ("draft_backlog", "draft_backlog_alert",
      {"recovered": True, "rate_key": "draft_backlog:recovered"}),
+    # CSRF 写请求拦截激增（P1 2026-07-31：前端宿主写通道断裂/跨站探测）：告警+恢复
+    ("csrf_reject", "csrf_reject_alert",
+     {"count": 7, "window_min": 60, "total": 12,
+      "by_kind": {"cookie_no_header": 6, "bare": 1},
+      "top_paths": {"/api/persona/bind": 5, "/api/unified-inbox/send": 2},
+      "reminder": False, "rate_key": "csrf_reject:remind"}),
+    ("csrf_reject", "csrf_reject_alert",
+     {"recovered": True, "rate_key": "csrf_reject:recovered"}),
+    # 2026-07-30：补齐此前漂移出表的 9 个真实发布点（health_watchdog / voice_burst_guard
+    # 都真会 publish，却从没在这张 e2e 投递表里）。payload 触发各自「告警态」分支
+    # （非 recovered），_build_message 全程 .get 兜底故最小字段即可送达+出标题。
+    # 完整性由 test_source_alerts_all_have_e2e_payload 钉死（源码 *_alert == 本表 *_alert）。
+    ("draft_quality", "draft_quality_alert",
+     {"light": "yellow", "problems": [{"name": "记忆命中率", "detail": "偏低"}]}),
+    ("ai_quality", "ai_quality_alert",
+     {"light": "yellow", "problems": [{"name": "草稿采纳率", "detail": "偏低"}]}),
+    ("realtime_voice", "realtime_voice_alert",
+     {"light": "yellow", "problems": [{"name": "接通率", "detail": "偏低"}]}),
+    ("human_deliver", "human_deliver_alert",
+     {"human_approved": 3, "bad_minutes": 45, "reminder": False,
+      "rate_key": "human_deliver:remind"}),
+    ("avatar_voice", "avatar_voice_alert",
+     {"down_minutes": 45, "reminder": False, "rate_key": "avatar_voice:remind"}),
+    ("colloquial_llm", "colloquial_llm_alert",
+     {"down_minutes": 45, "fail_streak": 5, "reminder": False,
+      "rate_key": "colloquial_llm:remind"}),
+    ("orchestrator_worker", "orchestrator_worker_alert",
+     {"light": "yellow", "problems": [{"name": "worker", "detail": "掉线"}]}),
+    ("memory_key_drift", "memory_key_drift_alert",
+     {"light": "yellow", "problems": [{"name": "key 漂移", "detail": "检测到"}]}),
+    ("voice_burst", "voice_burst_alert",
+     {"chat_id": "123456", "count": 3, "window_sec": 10}),
 ]
 
 
@@ -227,6 +259,28 @@ def test_emitted_alerts_have_readable_messages():
         assert rule["types"] is None or etype in rule["types"], \
             f"别名 {alias} 未映射到 {etype}"
     assert not missing, f"以下告警落通用兜底、缺 _build_message 分支: {missing}"
+
+
+def test_source_alerts_all_have_e2e_payload():
+    """完整性门禁：源码每个 publish("*_alert") 都必须在本表有 e2e 投递用例，反向防死条目。
+
+    背景：``_EMITTED_ALERTS`` 曾是纯手工表，2026-07-30 实测漂移 9 个（真发布却没 e2e
+    用例）。本门禁复用 ``test_alert_alias_coverage._emitted_alerts`` 作**单一源码扫描器**
+    自动跟源码——从此漏登记立刻红，无需人记得同步。非 ``_alert`` 后缀的告警
+    （draft_sla_breach/escalation/human_reply_risk 等）发布点不带该后缀、不在扫描器口径内，
+    故双向只对 ``*_alert`` 子集（csat/anomaly/queue 恰以 _alert 结尾，纳入）。
+    """
+    from tests.test_alert_alias_coverage import _emitted_alerts
+    source = _emitted_alerts()
+    table = {e for _, e, _ in _EMITTED_ALERTS if e.endswith("_alert")}
+    missing = sorted(source - table)
+    dead = sorted(table - source)
+    assert not missing, (
+        "以下告警在源码 publish 但没有 e2e 投递用例（手工表漂移）——补进 _EMITTED_ALERTS:"
+        "\n  " + "\n  ".join(missing))
+    assert not dead, (
+        "以下 _EMITTED_ALERTS 条目在源码已无 *_alert 发布点（死条目）——删掉:"
+        "\n  " + "\n  ".join(dead))
 
 
 async def test_unsubscribed_alert_not_delivered(monkeypatch):

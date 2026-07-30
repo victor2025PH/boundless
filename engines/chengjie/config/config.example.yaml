@@ -2752,6 +2752,16 @@ ops:
     enabled: false                     # 默认关；生产机经 config.local.yaml 打开
     retention_days: 90                 # 日聚合保留天数（读端点顺手 prune）
 
+  # ── CSRF 准入/拒绝趋势落库（P2，2026-07-31 人设切换事故沉淀）──────────
+  # 中间件旁路把「拒绝（全量）+ 同源 Origin/Referer 放行」按日 upsert 进
+  # config/csrf_trend.db，经 /api/admin/csrf-trend 读近 N 天。用途＝收口决策：
+  # admit:origin/referer 持续归零两周 → 才能安全地把同源回落降级为纯观测
+  # （唯一正路 = X-CSRF-Token / Bearer）。csrf_pair/bearer 放行刻意不落库
+  # （绝对主流，每请求一次 SQLite 写不值得；进程内 admitted_by 可见当下分布）。
+  csrf_trend:
+    enabled: false                     # 默认关；生产机经 config.local.yaml 打开
+    retention_days: 90                 # 日聚合保留天数（读端点顺手 prune）
+
   # ── 云端凭证健康（2026-07：首期 DeepSeek 余额水位）────────────────
   # 主对话走 DeepSeek 预付费云时，HealthWatchdog 周期探 /user/balance；余额低于
   # 阈值 → 主机弹窗（仅算力机；AITR_DESKTOP_MODE 用户端不弹）+ EventBus host_alert
@@ -2959,6 +2969,15 @@ health_watchdog:
     min_age_hours: 24                 # 稿龄超过此值才算「积压」
     min_count: 3                      # 超龄条数达此值才告警（避免把日常波动当事故）
     interval_min: 240                 # 重提间隔（4h）；队列清空自动补发恢复通知
+  # CSRF 写请求拦截激增提醒（默认开；2026-07 人设切换事故沉淀）：中间件 403 已进
+  # csrf_stats 看板，但看板要有人开才有用——cookie_no_header 激增＝某前端宿主写通道
+  # 断裂（功能事故）；origin/referer_mismatch/bare 激增＝反代漂移或跨站探测（安全信号）。
+  # 订阅：告警渠道加 csrf_reject 别名（webhook_notifier）。
+  csrf_reject_remind:
+    enabled: true
+    min_count: 5                      # 观察窗内新增拦截达此值才告警
+    window_min: 60                    # 滚动观察窗（分钟）
+    interval_min: 240                 # 重提间隔（4h)；窗口增量归零自动补发恢复通知
   # 原生通话主机持续不可用升级提醒（默认开；telegram_calls 未启用/非 s2s 时天然静默）：
   # MiniCPM-o(176:7860) 掉线 → 来电全接不了，「她会接电话」卖点静默失效 → 主动外发。
   # 订阅：告警渠道加 tg_call 别名（webhook_notifier）。

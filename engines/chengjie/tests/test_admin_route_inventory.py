@@ -656,6 +656,8 @@ _BASELINE = """
 /api/setup/ai-key	POST
 /api/setup/cloud-credentials	GET
 /api/setup/key-pool	POST
+/api/setup/features	GET
+/api/setup/features/toggle	POST
 /api/workspace/ai-runtime-status	GET
 /api/workspace/hosted-quota	GET
 /api/companion/proactive/preview	GET
@@ -1129,6 +1131,22 @@ _ADDITIONS_2026_07_28_PERSONA_FINALIZE = """
 /api/personas/import-doc/finalize	POST
 """
 _BASELINE += _ADDITIONS_2026_07_28_PERSONA_FINALIZE
+
+# 2026-07-31 P2：浏览器环境体检（人设切换事故产品化）——echo=写通道零副作用探针
+# （过完整鉴权+CSRF 链，回显放行通行证）；summary=时钟/构建戳/身份/AI 降级态；
+# csrf-trend=准入/拒绝日趋势（同源回落收口决策的数据面）。
+_ADDITIONS_2026_07_31_PREFLIGHT_CSRF_TREND = """
+/api/preflight/echo	POST
+/api/preflight/summary	GET
+/api/admin/csrf-trend	GET
+"""
+_BASELINE += _ADDITIONS_2026_07_31_PREFLIGHT_CSRF_TREND
+
+# 2026-07-31 告警分层产品化：按受众分组的告警目录（终端大白话勾选、不再手打别名）。
+_ADDITIONS_2026_07_31_ALERT_CATALOG = """
+/api/accounts/auto-reply/alert-catalog	GET
+"""
+_BASELINE += _ADDITIONS_2026_07_31_ALERT_CATALOG
 
 
 def _parse_baseline():
