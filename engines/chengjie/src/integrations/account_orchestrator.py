@@ -1256,10 +1256,19 @@ class LineProtocolWorker:
 
     async def start(self) -> None:
         from src.integrations.line_protocol_login import (
-            is_okline_available, tokens_path as _tp,
+            ensure_node_runtime, is_okline_available, tokens_path as _tp,
         )
         if not is_okline_available():
             raise RuntimeError("okline 未安装")
+        # okline 每个请求都要 Node 桥算 X-Hmac：worker 走 OkLine.from_tokens_file()（不带
+        # config），只能靠 LINE_NODE env 拿到运行时。必须在建 client 之前调，**为的是那个
+        # 副作用**——把随包 Electron 钉进 env，否则没装系统 Node 的机器上这个号收发条条失败。
+        # 刻意**不**在这里 raise：探不到 node 就拒绝启动等于让一次环境探测否决一个也许能跑的
+        # worker，而真缺 node 时 okline 自己会抛 "Node.js not found (...)" —— 那条消息本就
+        # 准确可照做，worker 照常进 failed 态带上它，比我们提前拦下更不容易误判。
+        if not ensure_node_runtime(self.config):
+            logger.warning("[line-worker] 未探到 Node 运行时，okline 的 X-Hmac 桥可能起不来 account=%s",
+                           self.account_id)
         path = self.tokens_path or _tp(self.config, self.account_id)
         if not path or not os.path.exists(path):
             raise RuntimeError(f"缺少 LINE session tokens: {path}")

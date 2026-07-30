@@ -48,9 +48,10 @@ lunar_python>=1.4.0
 
 # LINE 协议模式（okline 逆向库，经 LINE Chrome 扩展网关直连）。随桌面包分发，
 # 供 platform_login.line.protocol_enabled=true 的扫码登录。
-# ⚠️ 运行时依赖 Node.js 18+ 在 PATH 上：okline 用持久 Node 桥跑 LTSM WASM 计算 X-Hmac
-#    签名（见 okline/hmac_signer.py），客户机须自装 Node.js（https://nodejs.org），
-#    否则 LINE 扫码报「Node.js not found」。可用 LINE_NODE 指定 node 绝对路径。
+# 运行时还需要一个 Node 18+ 运行时：okline 用持久 Node 桥跑 LTSM WASM 算 X-Hmac 签名
+#    （见 okline/hmac_signer.py）。桌面装机版**无需客户装 Node** —— 没有系统 node 时自动
+#    回落随包 Electron（见 src/integrations/line_protocol_login.resolve_node_runtime）；
+#    源码 / 服务器部署请装 Node 18+，或设 LINE_NODE 指向 node 绝对路径。
 # ⚠️ 非官方库、违反 LINE ToS、有封号风险；务必配套一号一指纹一代理 + 养号（防关联）。
 okline>=2.7.0
 

@@ -6,23 +6,23 @@
 > 本文只写**运维要做什么**与**出问题怎么判**。为什么这么设计写在代码注释里
 > （`config/config.desktop.min.yaml` 的 `platform_login` 段、`desktop/sidecar-launcher.js`）。
 
-## 1. 当前交付边界（0.2.10 起）
+## 1. 当前交付边界（0.2.11 起）
 
 | 平台 · 方式 | 装完即用？ | 依赖什么 |
 |---|---|---|
 | WhatsApp · 协议多开 | ✅ 是 | baileys 边车随包，桌面壳自动拉起 |
 | Messenger · 服务器托管登录 | ✅ 是 | messenger-web 边车 + 兜底 Chromium 随包 |
 | Telegram · 协议多开 | ⚠️ 需一次性运维（见 §2） | pyrogram 随包；api_id 由官网派发 |
-| LINE · 协议扫码 | ⚠️ 需客户装 Node.js（见 §2.4） | okline 随包；运行时依赖 Node.js 18+ 在 PATH 上 |
+| LINE · 协议扫码 | ✅ 是 | okline 随包；Node 运行时由随包 Electron 兜底（见 §2.4） |
 | 任意平台 · 真机 / 模拟器 | ⚠️ 需客户自备安卓设备 | 无法代配，属客户侧前提 |
 | Telegram/WhatsApp · 网页扫码 | ❌ 不提供 | 本系统未实现，已从方式清单摘除 |
 
 「不提供」那一项是**从弹窗里摘掉**，不是灰着显示——一个点了没反应的灰选项比没有更糟。
 
 ⚠️ **LINE 是刻意反转的产品/法务决策**（2026-07-30）：okline 是逆向库、违反 LINE ToS、
-有封号风险，此前刻意不随包。现按产品要求随包分发，代价明示给客户承担：① 客户机须自装
-Node.js（okline 用持久 Node 桥算 X-Hmac 签名，没有 node 扫码必失败，见 §2.4）；② 务必
-配套**一号一指纹一代理 + 养号**防关联，封号风险由客户接受。
+有封号风险，此前刻意不随包。现按产品要求随包分发，**封号风险由客户接受**，务必配套
+**一号一指纹一代理 + 养号**防关联。技术前提（Node 运行时）已由随包 Electron 兜住，
+客户端不需要客户装任何东西——见 §2.4。
 
 ## 2. Telegram 免申请 api_id：唯一的一次性运维动作
 
@@ -85,20 +85,33 @@ python scripts/hosted_chain_doctor.py --json     # 接监控
 打包客户的自查走界面：AI 未激活看顶栏橙条；Telegram 缺凭据看接入弹窗（会直接给
 「填 API ID / Hash 保存即启用」表单）；额度与领取状态看「会员中心」。
 
-## 2.4 LINE 扫码：客户机必须装 Node.js（唯一的客户侧前提）
+## 2.4 LINE 的 Node 运行时：随包 Electron 兜底（客户无需装 Node）
 
-LINE 协议登录（okline）随包了，但**运行时**需要 Node.js 18+ 在 PATH 上——okline 用一个
-持久 Node 子进程加载 `ltsm.wasm` 计算 X-Hmac 签名（网关强制），没有 node 扫码必报
-「Node.js not found」。okline 本体 + WASM 桥资产已由 `--collect-all okline` 打进后端包，
-唯独 node 运行时刻意不随包（体积 + 版本维护成本，且 node 是客户机常备）。
+okline 不是纯 Python：它起一个**持久 Node 子进程**加载 `ltsm.wasm` 算 X-Hmac 签名，
+网关对每个请求强制校验——没有可用 node 就扫不了码，**且登录后每一次收发也会失败**
+（这点最容易漏：只修登录链会得到「能登录但发不出」的最难排查形态）。
 
-- 客户处置：装 Node.js（https://nodejs.org，LTS 即可），`node --version` 能出版本即可；
-  装 node 时 App 在跑要**重开一次**（PATH 在进程启动时读取）。
-- node 装在非标准路径：设环境变量 `LINE_NODE=C:\full\path\to\node.exe` 指定绝对路径
-  （okline 优先读它，见 `okline/hmac_signer.py`）。**别设成坏值**——它会覆盖 PATH 上的
-  node，设错等于把 LINE 扫码整条打死。
-- ⚠️ okline 违反 LINE ToS、有封号风险：务必**一号一指纹一代理 + 养号**（防关联），
-  风险由客户接受（见 §1 决策说明）。
+我们**不随包第二份 node.exe**，而是把 Electron 自己当 Node 20 用（`process.execPath` +
+`ELECTRON_RUN_AS_NODE=1`），与 WhatsApp/Messenger 边车同款做法。已实测：随包 Electron 下
+okline 的 LTSM 桥能正常 `curvekey_generate` 并算出 44 字节 X-Hmac，与真 node 无差别
+（1.0s vs 0.7s）。
+
+解析顺序（`line_protocol_login.resolve_node_runtime`，前者优先）：
+
+1. `platform_login.line.node_path`（运维显式指定）
+2. 已设好的 `LINE_NODE`
+3. **PATH 上的真 node**——正统运行时、行为最可预期，故优先于 Electron
+4. **随包 Electron**（壳注入 `AITR_ELECTRON_NODE`）——没装 Node 的机器靠它
+
+于是：装了 Node 的机器行为完全不变；没装的机器自动用随包 Electron。两者都不需要客户动手。
+钉的是 `LINE_NODE` 环境变量（而非给 OkLine 传 `node_path`）——因为 worker 收发、存量同步、
+peer 身份解析各自另建 okline 实例且都不带 config，只有 env 这层能一次覆盖全部。
+
+- 四条都不成立（典型：**非桌面部署**、从源码跑且机器没装 node）：接入弹窗如实显示
+  「缺组件 Node.js 18+」并给安装指引，而不是挂着绿色「推荐」骗点击。
+- ⚠️ `LINE_NODE` **别设成坏值**：它优先于 PATH 上的 node。后端检测到它指不到文件时会自动
+  纠正回真 node，但一个**存在却不是 node** 的文件仍会被尊重并导致失败。
+- ⚠️ okline 违反 LINE ToS、有封号风险：务必**一号一指纹一代理 + 养号**（见 §1）。
 
 ## 3. 出包前置（构建机上，漏了会出「装了也用不了」的包）
 
@@ -124,9 +137,9 @@ npm run dist:win          # electron-builder；afterPack 会核对随包交付�
 - `desktop/build/after-pack.js`（产物侧）：装包打完核对 `resources/` 真有边车与 Chromium，
   缺件即**打包失败**；同时拦住把本机生产号的 `sessions/`、`logs/` 打进公开安装包。
 
-体积参考（0.2.10）：安装包 ~382 MB。其中 messenger-web 436 MB（含 headed Chromium 415 MB）、
-whatsapp-baileys 82 MB；okline + ltsm WASM 桥体积可忽略（<1 MB）。headless shell（269 MB）
-与 ffmpeg 已排除出包——桌面登录是人工交互，用不到无头版。
+体积参考（0.2.11）：安装包 ~382 MB。其中 messenger-web 436 MB（含 headed Chromium 415 MB）、
+whatsapp-baileys 82 MB；okline + ltsm WASM 桥体积可忽略（<1 MB），Node 运行时复用 Electron
+故**零增量**。headless shell（269 MB）与 ffmpeg 已排除出包——桌面登录是人工交互，用不到无头版。
 
 ## 4. 故障字典
 
@@ -137,7 +150,7 @@ whatsapp-baileys 82 MB；okline + ltsm WASM 桥体积可忽略（<1 MB）。head
 | 未启用 | 开关没开，或该方式本系统未实现 | 查种子 `platform_login`；未实现的应从 `modes` 摘掉 |
 | 缺凭据 | 开关开了但没有 api_id/api_hash | 弹窗内自助表单可直接填；要免申请就跑 §2.3 自检 |
 | 缺组件 | LINE 的 okline 没打进后端包 | 构建机 `pip install -r requirements.txt` 后重打（含 okline + WASM 桥） |
-| Node.js not found（LINE） | 客户机没装 Node.js（okline 桥要它） | 让客户装 Node.js 18+；非标路径设 `LINE_NODE`（见 §2.4） |
+| 缺组件 Node.js 18+（LINE） | 四条 node 解析路径全不成立（多为非桌面部署） | 装机版应由随包 Electron 兜住；源码部署装 Node 18+ 或设 `LINE_NODE`（见 §2.4） |
 | 服务未运行 | 开关开了、边车没起来 | 看 `<数据根>/logs/wa-sidecar.log` / `msg-sidecar.log` |
 | 需运维配置 | Messenger 未启用 | 查种子 `messenger.web_enabled` |
 | 不会常驻在线 | `orchestrator_enabled` 关着 | 扫上了也不托管，重启要重扫；种子里应为 true |

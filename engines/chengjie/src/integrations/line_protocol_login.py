@@ -27,9 +27,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from src.integrations.account_registry import get_account_registry
 from src.integrations.platform_login import register_login_provider
@@ -52,6 +53,124 @@ def protocol_enabled(config: Dict[str, Any]) -> bool:
     pl = (config or {}).get("platform_login", {}) or {}
     ln = pl.get("line", {}) or {}
     return bool(ln.get("protocol_enabled", False))
+
+
+# ── Node 运行时解析（okline 的 LTSM 桥要 node 才能算 X-Hmac）────────────────────
+#
+# okline 不是纯 Python：它起一个**持久 Node 子进程**加载 ltsm.wasm 算 X-Hmac 签名，
+# 而网关对每个请求强制校验该签名。没有可用 node ⇒ 扫码失败，且登录后每一次收发也失败。
+#
+# 为什么钉 `LINE_NODE` 环境变量、而不是给 OkLine 传 node_path：okline 的消费方**不止
+# 登录一处** —— `LineProtocolWorker.start` 用 `OkLine.from_tokens_file()` 起收发、
+# 存量同步 `_sync_bootstrap_blocking` 与 peer 身份解析又各自另建实例，全都不带 config。
+# 只有 env 这一层能一次覆盖全部（okline 自身取值序＝node_path → LINE_NODE → "node"）。
+# 走 LineConfig 只能修好登录，之后条条消息仍会失败——那种"能登录但发不出"最难排查。
+_NODE_ENV_KEY = "LINE_NODE"
+_ELECTRON_AS_NODE_KEY = "ELECTRON_RUN_AS_NODE"
+_node_runtime_cache: Optional[str] = None
+_node_missing_logged = False
+
+
+def reset_node_runtime_cache() -> None:
+    """清进程内解析缓存（仅测试用）。"""
+    global _node_runtime_cache, _node_missing_logged
+    _node_runtime_cache = None
+    _node_missing_logged = False
+
+
+def _valid_node_candidate(path: str) -> str:
+    """候选可用则回其绝对/可执行路径，否则空串。
+
+    带路径分隔符的按文件存在判断；裸名（如 ``node``）走 PATH 查找。**坏值不致命**：
+    调用方会跳过它继续找下一个候选——比把坏路径交给 okline 必败要好。
+    """
+    p = str(path or "").strip().strip('"')
+    if not p:
+        return ""
+    if os.path.sep in p or (os.altsep and os.altsep in p):
+        return p if os.path.isfile(p) else ""
+    return shutil.which(p) or ""
+
+
+def electron_node_candidate() -> str:
+    """桌面壳注入的 Electron 可执行路径（配 ``ELECTRON_RUN_AS_NODE=1`` 即 Node 20 运行时）。"""
+    return _valid_node_candidate(os.environ.get("AITR_ELECTRON_NODE") or "")
+
+
+def configured_node_path(config: Dict[str, Any]) -> str:
+    pl = (config or {}).get("platform_login", {}) or {}
+    ln = pl.get("line", {}) or {}
+    return str(ln.get("node_path") or "").strip()
+
+
+def resolve_node_runtime(config: Dict[str, Any]) -> Tuple[str, str]:
+    """解析该用哪个 node → ``(path, source)``；``path`` 空＝这台机器跑不了 LINE 协议。
+
+    ``source`` ∈ ``config`` / ``env`` / ``path`` / ``electron`` / ``""``。顺序前者优先：
+
+    1. ``platform_login.line.node_path``（运维显式指定，最高优先）
+    2. 已设好的 ``LINE_NODE``（okline 自己的约定，尊重人的意图）
+    3. PATH 上的**真 node** —— 正统运行时、行为最可预期，故优先于 Electron
+    4. 随包 **Electron**（``AITR_ELECTRON_NODE``）—— 让没装 Node 的客户机也能用的回落，
+       与 WhatsApp/Messenger 边车同款做法（见 desktop/backend-launcher.js）
+    """
+    explicit = _valid_node_candidate(configured_node_path(config))
+    if explicit:
+        return explicit, "config"
+    env_node = _valid_node_candidate(os.environ.get(_NODE_ENV_KEY) or "")
+    if env_node:
+        return env_node, "env"
+    real_node = shutil.which("node")
+    if real_node:
+        return real_node, "path"
+    electron = electron_node_candidate()
+    if electron:
+        return electron, "electron"
+    return "", ""
+
+
+def ensure_node_runtime(config: Dict[str, Any]) -> str:
+    """解析 node 运行时并**按需**钉进 ``os.environ``，返回可用路径（``""``＝没有）。
+
+    只在必须时写 env（最小干预）：
+    · PATH 上有真 node → 一个字都不写（okline 默认的 ``"node"`` 本来就对）；
+    · 选中 Electron → 写 ``LINE_NODE`` + ``ELECTRON_RUN_AS_NODE``。后者是 Electron
+      「变身纯 Node」的开关，**漏了它 Electron 会去开 GUI 窗口而不是跑桥**；okline 的
+      ``Popen`` 用 ``env=dict(os.environ)``，所以设在本进程即可传下去；
+    · 显式配置 / 修正坏 ``LINE_NODE`` → 写 ``LINE_NODE``。
+
+    **只缓存成功**：命中后不再重复解析（免重复写 env / 刷日志）；失败**不缓存**——
+    解析本身只是一次 ``which`` + 几次 ``isfile``，很便宜，而不缓存能让「事后把 node 装进
+    一个已在 PATH 里的目录」这种情形被下一次探测直接捡到，不必重开应用。
+    """
+    global _node_runtime_cache, _node_missing_logged
+    if _node_runtime_cache:
+        return _node_runtime_cache
+    path, source = resolve_node_runtime(config)
+    if path and source == "electron":
+        os.environ[_NODE_ENV_KEY] = path
+        os.environ[_ELECTRON_AS_NODE_KEY] = "1"
+        logger.info("[line_protocol] 无系统 Node，改用随包 Electron 作 LINE 的 Node 运行时: %s", path)
+    elif path and source == "config":
+        os.environ[_NODE_ENV_KEY] = path
+    elif path and source == "path":
+        # env 里残留一个**坏** LINE_NODE 时 okline 会优先用它而必败 → 用真 node 纠正。
+        stale = os.environ.get(_NODE_ENV_KEY)
+        if stale and not _valid_node_candidate(stale):
+            logger.warning("[line_protocol] LINE_NODE 指向不存在的路径（%s），改用 PATH 上的 node", stale)
+            os.environ[_NODE_ENV_KEY] = path
+    if not path:
+        if not _node_missing_logged:  # 只喊一次，别把每次就绪轮询都刷成 WARNING
+            logger.warning("[line_protocol] 找不到可用的 Node 运行时 —— LINE 协议扫码/收发将不可用")
+            _node_missing_logged = True
+        return ""
+    _node_runtime_cache = path
+    return path
+
+
+def is_node_available(config: Dict[str, Any]) -> bool:
+    """这台机器能否跑 okline 的 LTSM 桥（就绪诊断用）。"""
+    return bool(ensure_node_runtime(config))
 
 
 def sessions_dir(config: Dict[str, Any]) -> str:
@@ -454,6 +573,10 @@ def maybe_register(config: Dict[str, Any]) -> bool:
     if not is_okline_available():
         logger.warning("[line_protocol] protocol_enabled=true 但未安装 okline，跳过注册")
         return False
+    # 先把 Node 运行时钉好（登录链与 worker 共用同一 env）。**缺 node 也照样注册**：
+    # 不注册会让界面显示笼统的「未启用」，而就绪诊断能给出「缺组件 Node.js 18+ / 去装」
+    # 这种可照做的话——把可用性判断交给诊断层，别在这里把原因抹平。
+    ensure_node_runtime(config)
     register_login_provider("line", "protocol", make_provider(config))
     _registered = True
     logger.info("[line_protocol] LINE protocol 登录 provider 已注册")

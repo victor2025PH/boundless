@@ -6,6 +6,7 @@ const path = require("path");
 const {
   resolveBackendSpawn, healthUrl, identityUrl, webEnvFromBackend,
   createBackendManager, classifyBackendIdentity, sentinelPathFor,
+  electronNodeEnv,
 } = require("../backend-launcher.js");
 
 let pass = 0;
@@ -86,6 +87,35 @@ ok("sentinelPathFor 空 dataDir → null（开发态不清哨兵，真崩溃仍�
 
 // 默认端口（无显式端口）→ 不注入 AITR_WEB_PORT，后端用 config 默认
 ok("webEnv 无端口不注入", webEnvFromBackend({ base_url: "https://example.com" }).AITR_WEB_PORT === undefined);
+
+// ── Electron-as-Node：LINE 扫码的 Node 运行时（okline 的 X-Hmac 桥要它）──────────
+// 后端只在 PATH 上没有真 node 时才回落到它，所以这里只负责"把路径告诉后端"。
+// 刻意**不**在壳里设 ELECTRON_RUN_AS_NODE：那会传染后端的所有子进程，
+// 由后端在真正选中 Electron 时按需设（见 line_protocol_login.ensure_node_runtime）。
+ok("electronNodeEnv 注入 execPath",
+  electronNodeEnv("C:\\app\\ChatX.exe").AITR_ELECTRON_NODE === "C:\\app\\ChatX.exe");
+ok("electronNodeEnv 空值不注入",
+  Object.keys(electronNodeEnv("")).length === 0 && Object.keys(electronNodeEnv(null)).length === 0);
+ok("electronNodeEnv 不设 RUN_AS_NODE（避免传染子进程）",
+  electronNodeEnv("C:\\app\\ChatX.exe").ELECTRON_RUN_AS_NODE === undefined);
+{
+  // 发布态：随包后端必须拿到 Electron 路径，否则没装 Node 的客户机 LINE 扫不了码
+  const withElectron = resolveBackendSpawn({
+    config: {}, isPackaged: true, resourcesPath: "/Resources",
+    appDir: APP_DIR, platform: "win32", execPath: "C:\\app\\ChatX.exe",
+    exists: (p) => p === binPath,
+  });
+  ok("发布态注入 AITR_ELECTRON_NODE",
+    withElectron && withElectron.env.AITR_ELECTRON_NODE === "C:\\app\\ChatX.exe");
+  // 没给 execPath（老调用方）→ 不注入，且不得崩
+  const noElectron = resolveBackendSpawn({
+    config: {}, isPackaged: true, resourcesPath: "/Resources",
+    appDir: APP_DIR, platform: "win32",
+    exists: (p) => p === binPath,
+  });
+  ok("无 execPath 不注入且不崩",
+    noElectron && noElectron.env.AITR_ELECTRON_NODE === undefined);
+}
 
 // 发布态但二进制缺失 → 回退（有 main.py 则 python）
 const fallbackMain = path.join(REPO, "main.py");

@@ -124,9 +124,12 @@ platform_login:
     protocol_enabled: true
     modes: ["protocol", "device"]
     default: "protocol"
-    # LINE 协议扫码（okline 逆向库）随包分发。⚠️ 运行时依赖 Node.js 18+ 在 PATH 上——
-    # okline 用持久 Node 桥跑 LTSM WASM 签名，客户机须自装 Node.js（https://nodejs.org），
-    # 否则扫码点下去报 dep/桥失败。⚠️ 违反 LINE ToS、有封号风险；务必一号一指纹一代理 + 养号。
+    # LINE 协议扫码（okline 逆向库）随包分发。okline 靠持久 Node 桥跑 LTSM WASM 算 X-Hmac：
+    # 客户**无需装 Node** —— PATH 上没有真 node 时自动回落随包 Electron（壳注入
+    # AITR_ELECTRON_NODE，见 desktop/backend-launcher.js + line_protocol_login.
+    # resolve_node_runtime）。非桌面部署且缺 node 时接入弹窗如实报「缺组件 Node.js 18+」。
+    # 可用 node_path 显式指定 node 绝对路径（优先级最高）。
+    # ⚠️ 违反 LINE ToS、有封号风险；务必一号一指纹一代理 + 养号。
   messenger:
     web_enabled: true
     modes: ["web", "device"]

@@ -53,6 +53,28 @@ function webEnvFromBackend(backend) {
   return env;
 }
 
+/**
+ * 把 Electron 自身作为「Node 运行时」暴露给后端（LINE 协议扫码要用）。
+ *
+ * okline（LINE 扫码 + 之后每一次收发的 X-Hmac 签名）靠一个**持久 Node 子进程**加载
+ * ltsm.wasm 算签名，没有 node 就扫不了码、也发不出消息。这里沿用 sidecar-launcher 里
+ * 已实测的同款做法：不随包第二份 node.exe，直接把 `process.execPath` +
+ * `ELECTRON_RUN_AS_NODE=1` 当 Node 20 用（Electron 31）。已实测 okline 的 LTSM 桥在该
+ * 运行时下能正常 curvekey_generate + 算出 44 字节 X-Hmac，与真 node 无差别。
+ *
+ * 只是**回落**：后端仅在 PATH 上没有真 node 时才用它（见
+ * line_protocol_login.resolve_node_runtime），装了 Node 的机器行为完全不变。
+ * `ELECTRON_RUN_AS_NODE` 刻意**不**在这里设 —— 那会让后端的所有子进程都带上它；
+ * 由后端在真正选中 Electron 时按需设（okline 的 Popen 继承 os.environ）。
+ *
+ * @param {string} execPath process.execPath
+ * @returns {{AITR_ELECTRON_NODE?:string}}
+ */
+function electronNodeEnv(execPath) {
+  const p = String(execPath || "").trim();
+  return p ? { AITR_ELECTRON_NODE: p } : {};
+}
+
 /** 后端退出哨兵路径（纯函数，便于单测）。dataDir 空 → null（不清哨兵）。 */
 function sentinelPathFor(dataDir) {
   const dir = String(dataDir || "").trim();
@@ -99,6 +121,7 @@ function resolveBackendSpawn(o) {
       const env = Object.assign(
         { AITR_DESKTOP_MODE: "1" },
         o.appVersion ? { AITR_APP_VERSION: String(o.appVersion) } : {},
+        electronNodeEnv(o.execPath),
         webEnvFromBackend(backend));
       if (dataDir) {
         env.AITR_DATA_DIR = dataDir;
@@ -119,7 +142,12 @@ function resolveBackendSpawn(o) {
   const mainPy = path.join(repoRoot, "main.py");
   if (exists(mainPy)) {
     const python = spawnCfg.python ? String(spawnCfg.python) : (isWin ? "python" : "python3");
-    return { command: python, args: ["main.py"], cwd: repoRoot, kind: "python", env: {} };
+    // 开发态也给 Electron-as-Node：让 LINE 扫码在 dev 与发布态走同一条回落路径
+    // （否则「dev 能扫、装机不能」这类差异只会在客户机上才暴露）。
+    return {
+      command: python, args: ["main.py"], cwd: repoRoot, kind: "python",
+      env: electronNodeEnv(o.execPath),
+    };
   }
 
   return null;
@@ -298,6 +326,7 @@ function createBackendManager(deps) {
       platform: process.platform,
       dataDir,
       appVersion: shellVersion(),
+      execPath: process.execPath,
       exists: (p) => { try { return fs.existsSync(p); } catch (e) { return false; } },
     });
 
@@ -435,5 +464,5 @@ function createBackendManager(deps) {
 module.exports = {
   resolveBackendSpawn, healthUrl, identityUrl, createBackendManager,
   classifyBackendIdentity, FP_HEALTH_PATH, FP_IDENTITY_PATH, EXPECTED_APP_ID,
-  webEnvFromBackend, sentinelPathFor,
+  webEnvFromBackend, sentinelPathFor, electronNodeEnv,
 };

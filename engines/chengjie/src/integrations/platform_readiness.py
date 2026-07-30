@@ -130,13 +130,21 @@ def _telegram_protocol_blockers(config: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def _line_protocol_blockers(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     from src.integrations.line_protocol_login import (
-        is_okline_available, protocol_enabled,
+        is_node_available, is_okline_available, protocol_enabled,
     )
     out: List[Dict[str, Any]] = []
     if not protocol_enabled(config):
         out.append(_blocker(BLOCK_NOT_ENABLED))
     if not is_okline_available():
         out.append(_blocker(BLOCK_DEP_MISSING, dep="okline", install="pip install okline"))
+    elif not is_node_available(config):
+        # okline 靠一个 Node 子进程加载 ltsm.wasm 算 X-Hmac，没有 node 扫码必失败——
+        # 而失败发生在协议层，界面上看起来只是「扫了没反应」。如实拦下并给可照做的指引，
+        # 而不是挂着绿色「推荐」骗点击（Messenger 的 web·推荐但 service_down 就是这个教训）。
+        # 装了 App 的机器通常已由随包 Electron 兜住，走到这一档多是非桌面部署。
+        out.append(_blocker(
+            BLOCK_DEP_MISSING, dep="Node.js 18+",
+            install="安装 Node.js 18+（https://nodejs.org）并确保 node 在 PATH 上，然后重开应用"))
     return out
 
 
