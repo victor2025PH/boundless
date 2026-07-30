@@ -44,7 +44,12 @@ fail() { echo "[deploy ERROR] $*" >&2; }
 [ -d "$APP_DIR" ] || { fail "app dir not found: $APP_DIR"; exit 1; }
 
 log "1/7 backup current -> $(basename "$BAK")"
-tar -czf "$BAK" -C "$APP_DIR" --exclude=node_modules --exclude=.next .
+# 排除 public/downloads·public/releases：与下面 rsync 的排除口径一致。发布物是几百 MB 的
+# 安装包，不属应用代码；把它们打进每份备份会让 tar 从 ~300MB 涨到 1.5GB+，累计十几份直接
+# 撑爆磁盘（2026-07-31 实测 backups 占 ~8GB、根分区 87%）。回滚 extract 不删现存文件，故
+# 安装包目录在回滚时原样保留、无需备份内也存一份。
+tar -czf "$BAK" -C "$APP_DIR" --exclude=node_modules --exclude=.next \
+    --exclude=public/downloads --exclude=public/releases .
 
 # 备份轮转（替代「仅留最近 5 份」）：
 #   · 始终保留最新 KEEP_BACKUP_RECENT 份（默认 5）——与旧策略同日回滚深度对齐，覆盖当日连打；
