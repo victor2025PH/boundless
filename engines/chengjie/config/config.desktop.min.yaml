@@ -6,8 +6,10 @@
 #   · 不带任何占位假值（api_id / api_key 等一律留空）——留空字段由「桌面首启向导」写
 #     overlay（config.local.yaml）补齐，本文件播种后即不再被程序改写（注释永续）。
 #   · 只保留「装好→填 AI Key→翻译生效」必需的最小集；未列出的键一律走代码默认，
-#     所有危险/RPA/协议子系统开关（line_rpa / messenger_rpa / whatsapp_rpa / contacts /
-#     platform_login / monetization / realtime_voice …）保持代码默认 = 关。
+#     危险/RPA 子系统开关（line_rpa / messenger_rpa / whatsapp_rpa / contacts /
+#     monetization / realtime_voice …）保持代码默认 = 关。
+#   · 例外是 platform_login（见文件末尾）：账号接入是**用户装完第一件要做的事**，
+#     开关留在代码默认就等于「接入弹窗里每条路都灰着」，故随包显式配好。
 #   · web_admin 的 host/port/auth_token 会被桌面壳 launcher 注入的 AITR_WEB_HOST /
 #     AITR_WEB_PORT / AITR_WEB_TOKEN 环境变量覆盖（serve↔talk 强一致）；此处的静态默认
 #     与桌面壳 config.json 缺省（127.0.0.1:18799 / admin）对齐，无 env 时也能直连。
@@ -60,6 +62,83 @@ translation:
 inbox:
   enabled: true
   read_from_store: true
+
+# ── 账号接入（「下载即可用」的关键开关）──────────────────────────────────────
+# 为什么必须在种子里显式打开：代码默认全关，而桌面用户装完不会去改 YAML —— 于是
+# 「接入 Telegram / WhatsApp / LINE / Messenger」弹窗里每一种方式都灰着显示「未启用」，
+# 只剩一个要求用户自备安卓手机的「真机 / 模拟器」。开关随包配好，能力才算真交付。
+#
+# 判据＝**只开这个安装包真带得动的方式**，并把带不动的从 modes 清单里摘掉：
+# 一个点了没反应的灰选项比没有这个选项更糟（用户会一直以为是自己没配对）。
+#   开：whatsapp.protocol —— baileys 边车随包 + 桌面壳自动拉起（sidecar-launcher.js），
+#       装完即可扫码，**不需要**用户另装 Node，也不需要运维
+#   开：messenger.web —— messenger-web 边车随包（含兜底 Chromium），桌面壳自动拉起；
+#       它不是扫码，而是在本机隔离浏览器里人工完成一次 Facebook 账密/2FA 登录
+#   开：telegram.protocol —— pyrogram 已随包；api_id/api_hash 由官网按设备令牌粘定
+#       派发（用户无需申请，详见下方 telegram 段的注释），未派发到则回落自助填一次
+#   摘：telegram.web / whatsapp.web —— 本系统未实现（见 platform_readiness._IMPLEMENTED_MODES）
+#   摘：line.protocol —— 需 okline（逆向库、违反 LINE ToS 且有封号风险，产品决策为不随包）
+# 「开关开了但交付物没进包」这种静默空转由两道门禁钉住（源码侧 + 产物侧）：
+#   tests/test_desktop_seed_deliverable.py（改本段必看：新方式进 modes 要同时补判据）
+#   desktop/build/after-pack.js（装包打完核对 resources/ 真有边车，缺件即打包失败）
+platform_login:
+  enabled: true
+  # 登录后把账号托管为常驻在线。关着的话扫码能成、但重启就得重扫（诊断会出
+  # orchestrator_off「不会常驻在线」警告），对桌面用户等于功能只交付了一半。
+  orchestrator_enabled: true
+  telegram:
+    protocol_enabled: true
+    modes: ["protocol", "device"]
+    default: "protocol"
+    # ── 用户为什么不用自己申请 api_id ──────────────────────────────────────
+    # 走的是**官网设备令牌**那条链，不是下面这个 LAN 池，且它已经全线接好、无需配置：
+    #   启动时 main.py → hosted_gateway.ensure_hosted_telegram()
+    #   → POST {site}/api/pool/telegram-cred（Bearer 设备令牌，与 AI 网关同一枚）
+    #   → 服务端按机器指纹**粘定**派发一组 api_id/api_hash（同机恒定，与 pyrogram
+    #     session 绑 api_id 的不变量一致）→ 注入内存 telegram.*（不落盘、不回显）
+    # 桌面态自动生效（AITR_DESKTOP_MODE=1 → hosted_gateway._wants_hosted 默认真）；
+    # 用户自填的凭据永远优先，绝不覆盖。
+    # ⚠️ 唯一的运维前提（代码侧无法自造）：VPS 上要给官网配 `POOL_TG_CREDS`
+    # （或 POOL_TG_CREDS_FILE）——即几组真实的 api_id/api_hash。没配＝服务端回
+    # 503 pool_disabled，客户端**静默**回落自助流程（诊断报 creds_missing，弹窗直接
+    # 给「填 API ID / Hash 保存即启用」表单，见 unified_inbox.html::_canOneClickEnable），
+    # 不报错也不阻断——但那就不是「下载即可用」了。
+    #
+    # 下面这个 credpool 是**另一套**：集团 LAN 内网的中央池（智控 :8000），鉴权用一个
+    # 共享的 X-Service-Token。桌面版刻意**不用**它，两个原因：① 内网地址公网够不着；
+    # ② 安装包公开可下载，明文令牌写进来等于把池子交给任何人刷。
+    # 还有一个更隐蔽的坑：**开着它而没有令牌时诊断会判 protocol「可用」**
+    # （credpool_enabled 为真就不再报缺凭据），用户点下去要到分配阶段才失败——
+    # 比灰着更糟。所以这里必须保持 false。
+    credpool:
+      enabled: false
+      base_url: ""
+      service_token: ""
+  whatsapp:
+    protocol_enabled: true
+    modes: ["protocol", "device"]
+    default: "protocol"
+    # 桌面壳把边车起在这个端口（须与 desktop/sidecar-launcher.js 的 SIDECAR_PORT 一致）
+    baileys_url: http://127.0.0.1:8790
+  line:
+    protocol_enabled: true
+    modes: ["protocol", "device"]
+    default: "protocol"
+    # LINE 协议扫码（okline 逆向库）随包分发。⚠️ 运行时依赖 Node.js 18+ 在 PATH 上——
+    # okline 用持久 Node 桥跑 LTSM WASM 签名，客户机须自装 Node.js（https://nodejs.org），
+    # 否则扫码点下去报 dep/桥失败。⚠️ 违反 LINE ToS、有封号风险；务必一号一指纹一代理 + 养号。
+  messenger:
+    web_enabled: true
+    modes: ["web", "device"]
+    default: "web"
+    # 桌面壳把边车起在这个端口（须与 sidecar-launcher.js 的 SPECS.messenger.port 一致）
+    web_url: http://127.0.0.1:8791
+    # ⚠️ 刻意**不**配 MSG_BROWSER_CHANNEL：服务默认优先系统真 Chrome，没装才回落随包
+    # Chromium。别为了「反正随包了」把它钉成捆绑版——捆绑版 UA 与自身 Sec-CH-UA 自相
+    # 矛盾（品牌报 Chromium、内核版本落后），是 Facebook 最容易抓的自动化信号，正是
+    # 「账密验证码都对却被弹回登录页、cookie 只剩 datr」的成因（见 services/
+    # messenger-web/server.js 的 BROWSER_CHANNEL 注释）。随包 Chromium 的定位是**兜底**：
+    # 让没装 Chrome 的机器也能用，装了 Chrome 的机器仍走成功率更高的那条路。
 
 # 首启体验档：桌面装完直接能用（1 万字符 / 48 小时），不要求注册。
 # 只在没有授权文件时生效；有正式授权即整段失效（见 config.example.yaml 的详细说明）。

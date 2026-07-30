@@ -269,6 +269,48 @@ class DraftService:
                  "原样发出会与当下情境脱节，请重新生成或改写后发送")),
         }
 
+    #: 「已回过」判定的宽限窗（小时）：坐席分两条说（先「在的~」再发正文）是正常节奏，
+    #: 不该被当成重复。超过它才认为「上一条回复已自成一轮」。
+    _REPLIED_GRACE_H = 2.0
+
+    def _approve_block_reason(
+        self, draft: Dict[str, Any], created_ts: float, max_age_h: float,
+    ) -> str:
+        """「原样通过」会不会被拦，以及为什么。``""``＝放行。
+
+        **护栏与工作台徽标共用同一入口**（这是本方法存在的唯一理由）：若徽标另算一套，
+        坐席会看到「没标记」却被 409 拦下——比没有徽标更糟（他会以为系统坏了）。
+        两档：`age`＝单纯超龄（内容与当下情境脱节）；`replied`＝草稿生成后**已经回过**
+        （再原样发一遍＝重复或自相矛盾，比过时更糟，故哪怕未超龄也拦）。
+        """
+        if max_age_h <= 0 or created_ts <= 0:
+            return ""
+        age_h = (time.time() - created_ts) / 3600.0
+        if age_h > max_age_h:
+            return "age"
+        # 未超龄时才需要查会话（省一次 DB：超龄已成定局）
+        if age_h > min(self._REPLIED_GRACE_H, max_age_h) and self._replied_after(
+                draft, created_ts):
+            return "replied"
+        return ""
+
+    def approve_block_reason(self, draft: Dict[str, Any]) -> str:
+        """公开入口：这条草稿现在点「通过」会被拦吗（``""``/``"age"``/``"replied"``）。
+
+        供 `/api/drafts` 列表给工作台出**预判徽标**——让坐席在点之前就知道，
+        而不是撞到 409 才发现。未接线（压根不会发）时恒放行，与护栏同口径。
+        """
+        if self._inbox_deliver_cb is None:
+            return ""
+        if str(draft.get("draft_id") or "").partition(":")[0] != "inbox":
+            return ""
+        try:
+            created = float(draft.get("created_ts") or draft.get("created_at") or 0)
+        except (TypeError, ValueError):
+            return ""
+        return self._approve_block_reason(
+            draft, created, float(self._stale_approve_hours or 0))
+
     def conversation_replied_after(self, draft: Dict[str, Any]) -> bool:
         """该草稿生成之后，会话是否已发出过回复（公开入口，供护栏与巡检共用）。
 

@@ -5,27 +5,35 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{ (i18n or {}).get('lg_s000', "登录") }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}</title>
 {% include "_brand_head.html" %}
+<!-- 无界品牌令牌 SSOT（--bl-*，由 platform/brand/brand.css 同步而来）：认证表面的
+     主色/渐变全部派生自它，与工作台 --tk-brand 同源，消掉「登录页紫、进去变蓝」。 -->
+<link rel="stylesheet" href="/static/brand/brand.css?v=20260730a">
+<link rel="stylesheet" href="/static/brand/brand-fonts.css?v=20260730a"><!-- 品牌拉丁字 Montserrat（CJK 自动回落系统字），与工作台同一字形 -->
 <link rel="stylesheet" href="/static/brand/brand-lockup.css">
-<link rel="stylesheet" href="/static/brand/auth-surface.css">
+<link rel="stylesheet" href="/static/brand/auth-surface.css?v=20260730a"><!-- 认证表面品牌层（单一源）；勿在下方内联 <style> 重复定义 --p/--ps/--g、body 字体、orb 底色 -->
 <link rel="stylesheet" href="/static/fonts/inter.css"><!-- 自托管 Inter；离线可用，替代原 Google Fonts 外链 -->
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+/* 只放**中性表面**变量。主色 --p/--ps/--g、body 字体、orb 底色由
+   /static/brand/auth-surface.css 独占 —— 内联 <style> 排在那个 <link> 之后、
+   特异性相同，在这里重复定义会把品牌层整份覆盖掉（历史上它就是这么失效的）。 */
 :root{
   --bg:#eef1f8;--card:#fff;--t:#111827;--t2:#6b7280;--bd:rgba(0,0,0,.09);
-  --p:#5b7cf6;--ps:rgba(91,124,246,.12);--g:linear-gradient(135deg,#5b7cf6,#8b5cf6);
   --input:#f4f6fc;--red:#ef4444;--rs:rgba(239,68,68,.1);
 }
 [data-theme="dark"]{
   --bg:#080c14;--card:rgba(15,21,36,.9);--t:#e2e8f0;--t2:#94a3b8;--bd:rgba(255,255,255,.07);
-  --p:#6b8af8;--ps:rgba(107,138,248,.15);--input:rgba(20,28,46,.8);
+  --input:rgba(20,28,46,.8);
 }
-body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t);min-height:100vh;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden;transition:background .3s}
+body{background:var(--bg);color:var(--t);min-height:100vh;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden;transition:background .3s}
 [data-theme="dark"] body{background:#080c14}
 /* animated orbs */
 .orb{position:fixed;border-radius:50%;filter:blur(80px);opacity:.35;pointer-events:none;animation:float linear infinite}
-.orb1{width:520px;height:520px;background:radial-gradient(circle,#5b7cf6,transparent 70%);top:-180px;left:-180px;animation-duration:22s}
-.orb2{width:440px;height:440px;background:radial-gradient(circle,#8b5cf6,transparent 70%);bottom:-160px;right:-140px;animation-duration:18s;animation-direction:reverse}
-.orb3{width:300px;height:300px;background:radial-gradient(circle,#10b981,transparent 70%);top:50%;left:60%;animation-duration:26s;opacity:.2}
+/* orb 底色见 auth-surface.css（品牌三系光环：智连蓝 / brand cyan / 幻境紫）；
+   这里只留几何与动画，别把 background 写回来。 */
+.orb1{width:520px;height:520px;top:-180px;left:-180px;animation-duration:22s}
+.orb2{width:440px;height:440px;bottom:-160px;right:-140px;animation-duration:18s;animation-direction:reverse}
+.orb3{width:300px;height:300px;top:50%;left:60%;animation-duration:26s;opacity:.2}
 @keyframes float{0%{transform:translate(0,0) rotate(0)}33%{transform:translate(30px,-20px) rotate(120deg)}66%{transform:translate(-20px,25px) rotate(240deg)}100%{transform:translate(0,0) rotate(360deg)}}
 /* card */
 .login-card{position:relative;z-index:10;background:var(--card);border:1px solid var(--bd);border-radius:20px;padding:2.6rem 2.4rem 2.4rem;width:380px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,.15),0 0 0 1px var(--bd);animation:up .5s cubic-bezier(.4,0,.2,1)}
@@ -41,8 +49,9 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 .eye-btn{position:absolute;right:.8rem;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--t2);display:flex;align-items:center;padding:.2rem}
 .eye-btn svg{width:16px;height:16px}
 /* submit */
-.btn-login{width:100%;padding:.7rem;background:var(--g);color:#fff;border:none;border-radius:10px;font-size:.95rem;font-weight:700;font-family:inherit;cursor:pointer;transition:all .2s;box-shadow:0 4px 14px rgba(91,124,246,.3);position:relative;overflow:hidden}
-.btn-login:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(91,124,246,.45)}
+/* 按钮光晕见 auth-surface.css（--bl-shadow-primary）；此处不再硬编码 periwinkle 光 */
+.btn-login{width:100%;padding:.7rem;background:var(--g);color:#fff;border:none;border-radius:10px;font-size:.95rem;font-weight:700;font-family:inherit;cursor:pointer;transition:all .2s;position:relative;overflow:hidden}
+.btn-login:hover{transform:translateY(-1px)}
 .btn-login:active{transform:translateY(0)}
 /* error */
 .err{background:rgba(239,68,68,.1);color:#ef4444;border:1px solid rgba(239,68,68,.2);border-radius:9px;padding:.6rem .9rem;font-size:.83rem;font-weight:500;margin-bottom:1rem;display:flex;align-items:center;gap:.5rem}
@@ -117,8 +126,19 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 </div>
 
 <script>
-(function(){const s=localStorage.getItem('theme');if(s)document.documentElement.setAttribute('data-theme',s);else if(window.matchMedia?.('(prefers-color-scheme:dark)').matches)document.documentElement.setAttribute('data-theme','dark')})();
-function toggleTheme(){const h=document.documentElement,n=h.getAttribute('data-theme')==='dark'?'light':'dark';h.setAttribute('data-theme',n);localStorage.setItem('theme',n)}
+/* 主题偏好与工作台同源：工作台读 localStorage('cp_theme')（auto|light|dark），
+   而本页原先只认另一把键 'theme' —— 于是「坐席在工作台设了暗色，登录页仍刷成白的」。
+   读：cp_theme 优先（auto=跟随系统），回落旧键 theme；写：两把键都写，双向生效。 */
+(function(){
+  function sysDark(){try{return window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches}catch(_){return false}}
+  var p=null;try{p=localStorage.getItem('cp_theme')||localStorage.getItem('theme')}catch(_){}
+  document.documentElement.setAttribute('data-theme',(!p||p==='auto')?(sysDark()?'dark':'light'):p);
+})();
+function toggleTheme(){
+  var h=document.documentElement,n=h.getAttribute('data-theme')==='dark'?'light':'dark';
+  h.setAttribute('data-theme',n);
+  try{localStorage.setItem('cp_theme',n);localStorage.setItem('theme',n)}catch(_){}
+}
 function togglePwd(){
   const i=document.getElementById('pwd-inp')||document.getElementById('pwd-inp2');
   if(!i)return;

@@ -81,6 +81,16 @@ $gates = @(
     'tests/test_template_jinja_comment_trap.py',
     'tests/test_channel_page_render_integrity.py',
     'tests/test_template_inline_color_ratchet.py',
+    # 品牌令牌桥的两个静默失效面（都不报错、不变红，只是颜色/交互悄悄不对）：
+    # ① th-brand-bridge.css 靠「排在 theme-tokens.css 之后、同特异性后者胜」才能把
+    #    --th-*-brand* 覆盖成品牌智连蓝，<head> 一被重排就退回旧紫蓝 #5b7cf6；
+    # ② base.html 若漏定义 --accent，派生页（personas 等）无 fallback 的
+    #    var(--accent) 整条声明失效 → 选中态没有强调色、.pcard-focused 的 outline
+    #    不显示（键盘焦点框看不见，可访问性缺陷）。
+    'tests/test_brand_token_bridge.py',
+    # 裸 periwinkle 旧品牌蓝清零（2026-07-30 117 处收口为 color-mix(var(--p|--tk-brand|--bl-growth))；
+    # 分类器单一事实源 tools/audit_legacy_blues.py，var() fallback / 生成物 / 注释豁免）
+    'tests/test_legacy_blue_ratchet.py',
     'tests/test_i18n_coverage.py',
     'tests/test_copilot_shared_sync.py',
     'tests/test_copilot_theme_tokens.py',
@@ -128,6 +138,34 @@ if ($Full) {
     Write-Output ''
     Write-Output '=== -Full: account rail scoped view, real browser (tools\verify_account_rail_ui.py) ==='
     python (Join-Path $engineRoot 'tools\verify_account_rail_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Inbox density budget (2026-07-30). The agent stares at a 300px-wide list;
+    # every extra chrome row above it hides one more conversation. Such regressions
+    # are SILENT - nothing errors, nothing turns red, a screenshot still "looks
+    # fine", there is simply one less conversation visible. Two real defects were
+    # found that way the same day (saved-views bar 32px while holding zero views,
+    # filter-summary 25px merely restating the already-highlighted tab), each only
+    # because someone measured by hand. This pins the heights AND the "hide it only
+    # when it adds nothing" invariants so the next added row gets named by a gate.
+    # Read-only; opens one ALREADY-READ conversation so no unread state is touched.
+    # Missing playwright / unreachable instance => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: inbox density budget, real browser (tools\verify_inbox_density.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_inbox_density.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Inbox identity bar (2026-07-30). Persona outreach: the last glance before send
+    # must name the effective persona. Conversation-level override already lived in
+    # /api/persona/effective + cp-persona, but #identity-bar used to read account-level
+    # accountMeta only - leaving inbox.ident.bar_conv an orphan i18n key. Async upgrade
+    # + TTL cache closed that gap; this gate pins it. Override path is route-mocked
+    # (never writes production bindings). Read-only otherwise (already-read rows only).
+    # Missing playwright / unreachable instance => still runs static source wiring,
+    # SKIP-equivalent exit 0 when wiring is intact.
+    Write-Output ''
+    Write-Output '=== -Full: inbox identity bar, real browser (tools\verify_inbox_identity.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_inbox_identity.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 }
 

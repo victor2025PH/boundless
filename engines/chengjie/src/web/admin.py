@@ -230,6 +230,13 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
     _static_dir = Path(__file__).parent / "static"
     if _static_dir.is_dir():
+        # Windows 的 MIME 注册表常缺 .woff2（或被装成 text/plain），Starlette 静态
+        # 服务按 mimetypes 猜类型会把品牌字体标错——浏览器多半仍加载但控制台告警、
+        # 且严格代理/CDN 可能拒缓存。显式登记一次（幂等，进程级）。
+        import mimetypes as _mimetypes
+
+        _mimetypes.add_type("font/woff2", ".woff2")
+        _mimetypes.add_type("font/woff", ".woff")
         app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
     # 两端共享 copilot 组件库(单一事实来源 repo 根 shared/copilot);独立前缀避开 /static 匹配顺序
     _shared_copilot_dir = Path(__file__).resolve().parents[2] / "shared" / "copilot"

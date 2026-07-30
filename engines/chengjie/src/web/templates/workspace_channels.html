@@ -24,7 +24,7 @@
   .chc-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 18px;}
   .chc-tab{display:inline-flex;align-items:center;gap:8px;padding:9px 16px;border-radius:12px;border:1px solid var(--tk-border);background:var(--tk-surface);color:var(--tk-text);text-decoration:none;font-weight:600;font-size:13.5px;transition:all .15s;position:relative;}
   .chc-tab:hover{border-color:var(--tk-brand);transform:translateY(-1px);box-shadow:var(--tk-shadow);}
-  .chc-tab.active{border-color:var(--tk-brand);background:linear-gradient(135deg,rgba(59,130,246,.14),rgba(34,211,238,.10));box-shadow:0 0 0 3px var(--tk-ring) inset;}
+  .chc-tab.active{border-color:var(--tk-brand);background:linear-gradient(135deg,color-mix(in srgb, var(--tk-brand,#1e8cf2) 14%, transparent),rgba(34,211,238,.10));box-shadow:0 0 0 3px var(--tk-ring) inset;}
   .chc-tab .chc-tab-ic{display:inline-flex;width:18px;height:18px;flex-shrink:0;}
   .chc-tab .chc-tab-ic svg{width:18px;height:18px;display:block;}
   /* ── 职责边界引导条（P1-5）：本页管什么 / 其他设置去哪改 ── */
@@ -123,7 +123,7 @@
     --t:var(--tk-text); --t2:var(--tk-text-muted); --t3:var(--tk-text-muted);
     --bd:var(--tk-border); --bd2:var(--tk-border);
     --p:var(--tk-brand); --pd:var(--tk-brand);
-    --ps:rgba(37,99,235,.10);
+    --ps:color-mix(in srgb, var(--tk-brand,#1e8cf2) 10%, transparent);
     --g:var(--tk-grad); --g-g:linear-gradient(135deg,#10b981,#059669);
     --g-r:linear-gradient(135deg,#ef4444,#dc2626); --g-a:linear-gradient(135deg,#f59e0b,#d97706);
     --green:var(--tk-emerald); --gs:rgba(16,185,129,.12);
@@ -131,11 +131,11 @@
     --amber:var(--tk-amber);   --as:rgba(245,158,11,.12);
     --purple:var(--tk-violet); --prs:rgba(139,92,246,.13);
     --s0:var(--tk-shadow); --s1:var(--tk-shadow); --s2:var(--tk-shadow-md);
-    --sp:0 4px 14px rgba(59,130,246,.35);
+    --sp:0 4px 14px color-mix(in srgb, var(--tk-brand,#1e8cf2) 35%, transparent);
     color:var(--t);
   }
   [data-cp-theme="dark"] .chc-scope{
-    --ps:rgba(59,130,246,.16);
+    --ps:color-mix(in srgb, var(--tk-brand,#1e8cf2) 16%, transparent);
     --gs:rgba(52,211,153,.13); --rs:rgba(251,113,133,.13);
     --as:rgba(251,191,36,.13); --prs:rgba(168,85,247,.16);
   }
@@ -185,7 +185,7 @@
   /* buttons */
   .chc-scope .btn{display:inline-flex;align-items:center;gap:.4rem;padding:.5rem 1.1rem;border:none;border-radius:9px;font-size:.85rem;font-weight:600;cursor:pointer;transition:all .2s;text-decoration:none;font-family:inherit;position:relative;overflow:hidden;white-space:nowrap}
   .chc-scope .btn svg{width:15px;height:15px;flex-shrink:0}
-  .chc-scope .btn-p{background:var(--g);color:#fff;box-shadow:0 2px 8px rgba(91,124,246,.22)}
+  .chc-scope .btn-p{background:var(--g);color:#fff;box-shadow:0 2px 8px color-mix(in srgb, var(--tk-brand,#1e8cf2) 22%, transparent)}
   .chc-scope .btn-p:hover{box-shadow:var(--sp);transform:translateY(-1px)}
   .chc-scope .btn-s{background:var(--input);color:var(--t2);border:1px solid var(--bd)}
   .chc-scope .btn-s:hover{background:var(--bd2);color:var(--t)}

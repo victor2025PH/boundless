@@ -101,6 +101,15 @@ def register_drafts_routes(app, *, api_auth):
         svc = _get_draft_service(request)
         limit = max(1, min(200, int(limit or 50)))
         drafts = svc.list_drafts(status=status or "", platform=platform or "", limit=limit)
+        # 「点通过会不会被拦」的**预判**（与护栏同一入口 approve_block_reason，
+        # 否则徽标与实际行为不一致＝比没徽标更糟）。让坐席在点之前就看见「这稿太老 /
+        # 已经回过」，而不是撞 409 才知道。判定内部按稿龄短路，只有可能被拦的才查会话。
+        if hasattr(svc, "approve_block_reason"):
+            for d in drafts:
+                try:
+                    d["approve_blocked"] = svc.approve_block_reason(d)
+                except Exception:
+                    d["approve_blocked"] = ""
         return {"ok": True, "count": len(drafts), "drafts": drafts}
 
     @app.get("/api/drafts/stats")

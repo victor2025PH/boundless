@@ -1113,6 +1113,25 @@ class HealthWatchdog:
         except Exception:
             logger.debug("realtime_voice recovery 发布失败（已忽略）", exc_info=True)
 
+    @staticmethod
+    def _session_expected_online(key: str) -> bool:
+        """会话键（``platform:account_id``）对应的账号是否仍被期望在线。
+
+        判据取注册表 ``status``（持久事实——不受 Node push 与本地登出操作的到达顺序
+        影响）：只有 ``online`` 才是「编排器会去拉起、掉了就该有人修」的号。已登出
+        （offline）/已删除（无记录）的号编排器根本不会拉起（``desired_accounts`` 只收
+        online），催也无从下手。注册表读不出来 → 返回 True，不因巡检自身故障漏报真掉线。
+        """
+        plat, _, acct = key.partition(":")
+        if not plat or not acct:
+            return True
+        try:
+            from src.integrations.account_registry import get_account_registry
+            row = get_account_registry().get(plat, acct)
+        except Exception:
+            return True
+        return bool(row) and str(row.get("status") or "") == "online"
+
     def _check_platform_sessions(self, *, now: Optional[float] = None) -> None:
         """平台会话「持续不健康」提醒（P4，闭环 P0-2 的告警时效性）。
 
@@ -1121,6 +1140,10 @@ class HealthWatchdog:
         节流状态在 ``PlatformSessionHealth`` 内（恢复自动清零），本方法无自有状态。
         配置：``health_watchdog.session_stale_remind.{enabled,after_min,interval_min}``
         （默认开，30min 首提 / 4h 重提；notifier 每小时限流是第二层兜底）。
+
+        只催**期望在线**的号（``_session_expected_online``）：运营在坐席里主动登出/
+        删除后，Node 微服务会 push 一条 ``logged_out``——那是不健康态（发送前快速失败
+        要用），但**不是故障**，催人去「修」一个自己刚下线的账号只会让人不再信这个告警。
         """
         cfg = getattr(self._config_manager, "config", None) or {}
         sr = (((cfg.get("health_watchdog") or {}).get("session_stale_remind"))
@@ -1138,6 +1161,7 @@ class HealthWatchdog:
         interval_sec = max(600.0, float(sr.get("interval_min", 240) or 240) * 60.0)
         due = store.due_reminders(min_age_sec=after_sec, interval_sec=interval_sec,
                                   now=now)
+        due = {k: v for k, v in due.items() if self._session_expected_online(k)}
         if not due:
             return
         try:

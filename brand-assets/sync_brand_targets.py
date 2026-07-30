@@ -168,11 +168,30 @@ def main():
             save(mark_256, os.path.join(prop_dir, "boundless-mark-256.png"))
 
     # 坐席工作台 / 桌面端
+    import shutil
     chatx_256 = boxed(icons["chatx"], 256, 0.08)
+    brand_css_src = os.path.join(WS, "boundless", "platform", "brand", "brand.css")
     for d in BRAND_STATIC:
         os.makedirs(d, exist_ok=True)
         save(mark_256, os.path.join(d, "boundless-mark-256.png"))
         save(chatx_256, os.path.join(d, "chatx.png"))
+        # 品牌令牌 SSOT（--bl-*）：坐席端/桌面端令牌桥基础层，随图标一并分发
+        # （platform/brand/brand.css 改后跑本脚本即同步，消除手动副本同步债）
+        if os.path.isfile(brand_css_src):
+            shutil.copyfile(brand_css_src, os.path.join(d, "brand.css"))
+            LOG.append(os.path.join(d, "brand.css"))
+            print("[ok] " + os.path.relpath(os.path.join(d, "brand.css"), WS))
+
+    # 桌面壳打包图标（NSIS 安装包 / exe / 快捷方式）：用 ChatX 产品标生成 .ico，
+    # 与 main.js 的 DEFAULT_BRAND_ICON（窗口/任务栏）保持同一枚产品标。
+    # package.json build.win.icon = build/icon.ico；目录存在才写，不新建。
+    for _dbuild in (
+        os.path.join(WS, "boundless", "engines", "chengjie", "desktop", "build"),
+        os.path.join(WS, "telegram-mtproto-ai", "desktop", "build"),
+        os.path.join(WS, "ai-p0-integration", "desktop", "build"),
+    ):
+        if os.path.isdir(_dbuild):
+            build_ico(icons["chatx"], os.path.join(_dbuild, "icon.ico"))
 
     print("DONE. %d files → sites=%d static=%d" % (len(LOG), len(SITES), len(BRAND_STATIC)))
 

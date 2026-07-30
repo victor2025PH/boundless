@@ -117,7 +117,11 @@ def _staged_datas() -> list:
 
 # 动态 import 的包，PyInstaller 静态分析抓不全 → 显式 collect。
 COLLECT_SUBMODULES = ["src", "uvicorn", "pyrogram", "fastapi"]
-COLLECT_ALL = ["uvicorn"]  # uvicorn 的 lifespan/loops/protocols 子模块按字符串加载
+# uvicorn 的 lifespan/loops/protocols 子模块按字符串加载；
+# okline（LINE 协议登录）除子模块外还须连 ltsm/*.wasm + *.js（Node 桥资产）一并收进包，
+# 否则冻结后 hmac_signer 找不到 ltsm_bridge.js → LINE 扫码在安装版恒失败（--collect-all
+# 会把 collect_data_files 抓到的非 .py 数据一起打进 <_MEIPASS>/okline/ltsm/）。
+COLLECT_ALL = ["uvicorn", "okline"]
 
 # 重量级可选软依赖：默认排除以控包体（缺失时后端对应能力软降级）。
 #

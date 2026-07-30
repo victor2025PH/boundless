@@ -1497,7 +1497,10 @@ function findByAccount(accountId) {
 const app = express();
 app.use(express.json());
 
-app.get("/health", (_req, res) => res.json({ ok: true }));
+// `svc` 是**身份**字段（与 wa-baileys 同款）：桌面壳据它区分「自家边车」与「占了同一
+// 端口的别家服务」。只看 ok:true 会把外来服务当自己的用 —— 后端 sidecar 正是踩过这个
+// 坑才加了 /api/desktop/ping。旧版本没有该字段 → 壳按「旧版」放行，不影响升级。
+app.get("/health", (_req, res) => res.json({ ok: true, svc: "messenger-web" }));
 
 // 联调用：查看轮询最近检测到的入站消息（核验入站链路，不依赖主程序）。
 app.get("/debug/inbound", (_req, res) => res.json({ recent: RECENT_INBOUND }));

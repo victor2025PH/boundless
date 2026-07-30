@@ -36,10 +36,10 @@
 .hm-grid{display:inline-grid;grid-template-rows:repeat(7,12px);grid-auto-flow:column;gap:2px;min-width:max-content}
 .hm-cell{width:12px;height:12px;border-radius:2px;background:var(--bd);position:relative;cursor:default;transition:transform .1s}
 .hm-cell:hover{transform:scale(1.3);z-index:2}
-.hm-cell.l1{background:rgba(91,124,246,.25)}
-.hm-cell.l2{background:rgba(91,124,246,.45)}
-.hm-cell.l3{background:rgba(91,124,246,.7)}
-.hm-cell.l4{background:#5b7cf6}
+.hm-cell.l1{background:color-mix(in srgb, var(--p,#1e8cf2) 25%, transparent)}
+.hm-cell.l2{background:color-mix(in srgb, var(--p,#1e8cf2) 45%, transparent)}
+.hm-cell.l3{background:color-mix(in srgb, var(--p,#1e8cf2) 70%, transparent)}
+.hm-cell.l4{background:var(--p,#1e8cf2)}
 [data-theme="dark"] .hm-cell.l1{background:rgba(107,138,248,.3)}
 [data-theme="dark"] .hm-cell.l4{background:#6b8af8}
 .hm-month-labels{display:flex;gap:0;font-size:.66rem;color:var(--t3);margin-bottom:3px;margin-left:0;padding-left:0}

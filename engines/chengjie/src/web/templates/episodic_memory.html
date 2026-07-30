@@ -9,7 +9,7 @@
 .em-table{width:100%;border-collapse:collapse;font-size:.82rem}
 .em-table th,.em-table td{padding:.55rem .65rem;border-bottom:1px solid var(--bd);text-align:left;vertical-align:top}
 .em-table th{color:var(--t3);font-weight:600;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em}
-.em-table tr:hover td{background:rgba(91,124,246,.04)}
+.em-table tr:hover td{background:color-mix(in srgb, var(--p,#1e8cf2) 4%, transparent)}
 .badge-emb{display:inline-block;padding:.1rem .4rem;border-radius:4px;font-size:.65rem;font-weight:600}
 .badge-emb.on{background:rgba(16,185,129,.15);color:var(--green)}
 .badge-emb.off{background:var(--input);color:var(--t3)}
@@ -17,7 +17,7 @@
 .badge-src.stated{background:rgba(16,185,129,.15);color:var(--green)}
 .badge-src.inferred{background:rgba(245,158,11,.15);color:var(--amber)}
 .badge-tier{display:inline-block;padding:.1rem .35rem;border-radius:4px;font-size:.6rem;font-weight:700;margin-left:.25rem;text-transform:uppercase}
-.badge-tier.stable{background:rgba(91,124,246,.15);color:var(--p)}
+.badge-tier.stable{background:color-mix(in srgb, var(--p,#1e8cf2) 15%, transparent);color:var(--p)}
 .badge-tier.stale{background:var(--input);color:var(--t3);text-decoration:line-through}
 .mono{font-family:Consolas,monospace;font-size:.76rem;word-break:break-all}
 .btn-del{background:none;border:none;color:var(--red);cursor:pointer;font-size:.78rem;font-weight:600;padding:.2rem .4rem;border-radius:6px}
@@ -26,7 +26,7 @@
 .cs-stat{flex:1;min-width:120px;background:var(--input);border-radius:10px;padding:.7rem .9rem}
 .cs-stat .num{font-size:1.4rem;font-weight:700;color:var(--p)}
 .cs-stat .lb{font-size:.7rem;color:var(--t3);margin-top:.15rem}
-.cs-actor{display:inline-block;padding:.15rem .5rem;border-radius:6px;background:rgba(91,124,246,.1);color:var(--p);font-size:.72rem;margin:.15rem .25rem .15rem 0}
+.cs-actor{display:inline-block;padding:.15rem .5rem;border-radius:6px;background:color-mix(in srgb, var(--p,#1e8cf2) 10%, transparent);color:var(--p);font-size:.72rem;margin:.15rem .25rem .15rem 0}
 </style>
 {% endblock %}
 {% block content %}

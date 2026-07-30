@@ -5,9 +5,9 @@
   .ug-wrap{height:100%;overflow-y:auto;background:#f7f8fa;padding:18px;max-width:900px;margin:0 auto;}
   .ug-head{display:flex;justify-content:space-between;align-items:center;margin:6px 0 16px;}
   .ug-head h2{margin:0;font-size:19px;}
-  .ug-back{font-size:12px;color:#2563eb;text-decoration:none;}
+  .ug-back{font-size:12px;color:var(--bl-growth-600,#0d76d9);text-decoration:none;}
   .ug-pill{font-size:12px;padding:4px 10px;border:1px solid #d1d5db;border-radius:14px;background:#fff;cursor:pointer;}
-  .ug-pill.active{background:#2563eb;color:#fff;border-color:#2563eb;}
+  .ug-pill.active{background:var(--bl-growth-600,#0d76d9);color:#fff;border-color:var(--bl-growth-600,#0d76d9);}
   .ug-lic{display:flex;align-items:center;gap:12px;border-radius:12px;padding:12px 16px;margin-bottom:16px;
     border:1px solid #e5e7eb;background:#fff;font-size:13px;}
   .ug-lic .badge{padding:3px 10px;border-radius:14px;font-size:12px;font-weight:700;}
@@ -24,8 +24,8 @@
   .ug-sec h3{margin:0 0 12px;font-size:14px;color:#374151;}
   .ug-spark{display:flex;align-items:flex-end;gap:3px;height:90px;margin-top:6px;}
   .ug-spark .col{flex:1;min-width:3px;display:flex;flex-direction:column;justify-content:flex-end;gap:1px;}
-  .ug-spark .col .m{background:#93c5fd;border-radius:1px;}
-  .ug-spark .col .a{background:#2563eb;border-radius:1px;}
+  .ug-spark .col .m{background:var(--bl-growth-300,#8bc4f8);border-radius:1px;}
+  .ug-spark .col .a{background:var(--bl-growth-600,#0d76d9);border-radius:1px;}
   .ug-legend{display:flex;gap:14px;font-size:12px;color:#475569;margin-top:10px;}
   .ug-dot{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;}
 </style>
@@ -60,7 +60,7 @@
       <h3>{{ (i18n or {}).get('wu_s003', "每日用量趋势") }}</h3>
       <div class="ug-spark" id="ug-spark"></div>
       <div class="ug-legend">
-        <span><span class="ug-dot" style="background:#93c5fd;"></span>{{ (i18n or {}).get('wu_s004', "消息量") }}</span>
+        <span><span class="ug-dot" style="background:var(--bl-growth-300,#8bc4f8);"></span>{{ (i18n or {}).get('wu_s004', "消息量") }}</span>
         <span><span class="ug-dot" style="background:var(--th-bg-blue6,#2563eb);"></span>AI {{ (i18n or {}).get('wu_s005', "调用数") }}</span>
       </div>
     </div>

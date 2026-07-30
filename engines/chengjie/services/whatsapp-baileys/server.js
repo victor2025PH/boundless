@@ -1201,7 +1201,11 @@ async function restoreAll() {
 const app = express();
 app.use(express.json());
 
-app.get("/health", (_req, res) => res.json({ ok: true }));
+// `svc` 是**身份**字段，不是装饰：桌面壳拉起边车前先探这个端口，只看 ok:true 的话，
+// 端口被别的程序占着时会把它当自家边车「复用」，症状是能登录却收不到消息、极难排查
+// （后端 sidecar 正是踩过这个坑才加了 /api/desktop/ping，见 backend-launcher
+// classifyBackendIdentity）。旧版本没有该字段 → 壳按「旧版」放行，不影响升级。
+app.get("/health", (_req, res) => res.json({ ok: true, svc: "wa-baileys" }));
 
 app.post("/accounts/restore", async (_req, res) => {
   const restored = await restoreAll();

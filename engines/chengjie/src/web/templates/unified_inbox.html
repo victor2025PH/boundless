@@ -6,7 +6,7 @@
 <link rel="stylesheet" href="/copilot/tokens.css?v=20260611">
 <!-- P2 主题：auto 跟随系统 / 手动 light / 手动 dark，持久化到 localStorage('cp_theme')。
      在 <head> 内联尽早执行，避免首屏闪烁；theme-*.css 动态切换，data-cp-theme 同时驱动 cp-* 组件与本页暗色变量。 -->
-<link rel="stylesheet" id="cp-theme-css" href="/copilot/theme-light.css?v=20260728a">
+<link rel="stylesheet" id="cp-theme-css" href="/copilot/theme-light.css?v=20260730b">
 <script>
 (function(){
   var KEY='cp_theme';
@@ -87,7 +87,7 @@
   --list-w:300px;
   /* 令牌合一：品牌色单一来源（继承 workspace_base 的 --tk-brand），全站同一蓝。 */
   --accent:var(--tk-brand);
-  --accent-dark:#1d4ed8;
+  --accent-dark:var(--bl-growth-600,#0d76d9);  /* 品牌智连蓝深一档（hover/active），与 --accent 同源色阶 */
   /* 令牌合一：语义色继承全站 --tk-*（emerald/danger/amber），全站同一套绿/红/橙。 */
   --green:var(--tk-emerald);
   --red:var(--tk-danger);
@@ -129,7 +129,7 @@
   --bdg-danger-bg:rgba(220,38,38,.12);  --bdg-danger-ink:var(--tk-danger-ink,#b91c1c);
   --bdg-warn-bg:rgba(217,119,6,.14);    --bdg-warn-ink:var(--tk-warn-ink,#b45309);
   --bdg-ok-bg:rgba(22,163,74,.13);      --bdg-ok-ink:var(--tk-ok-ink,#15803d);
-  --bdg-info-bg:rgba(37,99,235,.11);    --bdg-info-ink:#1d4ed8;
+  --bdg-info-bg:rgba(30,140,242,.11);   --bdg-info-ink:var(--bl-growth-700,#0b64b7);
   --bdg-neutral-bg:var(--bg-soft);      --bdg-neutral-ink:var(--text-sub);
 }
 /* P2 暗色：仅覆盖结构变量，亮色为默认（零视觉回归）。蓝色发出气泡/强调按钮保持白字。 */
@@ -201,7 +201,7 @@
   border:1px solid var(--border);border-radius:6px;background:var(--bg-soft);
   color:var(--text-tiny);font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all;}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260729h">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260730d">
 <script src="/static/workspace/inbox-messages.js?v=20260720b"></script>
 
 <!-- 主布局 -->
@@ -326,6 +326,10 @@
               <div class="ftab-more-item" data-f="archived" onclick="setFilter('archived',this)" data-i18n="inbox.filter.archived">归档</div>
               <div class="ftab-more-item" data-f="removed" id="removed-more-item" onclick="setFilter('removed',this)" style="display:none;" title="已从系统移除账号的历史会话（只读，仅可查看）" data-i18n-title="inbox.filter.removed_t"><svg class="ui-ic" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span class="rm-txt" data-i18n="inbox.filter.removed">已移除</span></div>
               <div class="ftab-more-item" id="tag-filter-btn" onclick="toggleTagFilterDropdown(event)"><svg class="ui-ic" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.6 13.4 12 22l-9-9V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.6" cy="7.6" r="1.3"/></svg><span class="tfb-txt" data-i18n="inbox.tag.btn">标签 ▾</span></div>
+              <!-- 二期降噪：「保存视图」从常驻整条 saved-views-bar 迁到此处（低频列表操作）。
+                   用 <button> 而非 div：原生键盘可达，无需扩 _a11yUpgrade 选择器。
+                   菜单关闭由打开时注册的 document once 监听兜底，无需显式调 _closeFtabMore。 -->
+              <button type="button" class="ftab-more-item" onclick="saveCurrentView()" data-i18n="inbox.view.save" data-i18n-title="inbox.view.save_t">保存视图</button>
             </div>
             <div class="tag-filter-dropdown" id="tag-filter-dropdown">
               <div class="tfd-item active" data-tag="" onclick="setTagFilter('',this)" data-i18n="inbox.tag.all">全部标签</div>
@@ -2092,6 +2096,8 @@ function _expandListHeader(){
   const el=document.getElementById('conv-items');
   _listHdrCompact=false;
   if(hdr) hdr.classList.remove('compact');
+  // 保存视图栏是 .list-header 的**兄弟节点**，不会被 hdr 的 class 带动，需显式同步
+  document.getElementById('saved-views-bar')?.classList.remove('compact');
   if(el) el.scrollTop=0;
 }
 
@@ -2115,6 +2121,8 @@ function _bindListHeaderScroll(){
       if(compact!==_listHdrCompact){
         _listHdrCompact=compact;
         hdr.classList.toggle('compact',compact);
+        // 兄弟节点，不随 hdr class 联动：不同步的话滚动后它仍会独占一条
+        document.getElementById('saved-views-bar')?.classList.toggle('compact',compact);
         if(compact) _renderCompactBar();
       }
     });
@@ -2451,9 +2459,15 @@ function _renderFilterSummary(){
   if(tagFilter) chips.push({label:window.Tf('inbox.fs.tag',{tag:tagFilter}), clear:()=>{ setTagFilter('', document.querySelector('.tfd-item[data-tag=""]')); }});
   if(accountFilter!=='all') chips.push({label:window.Tf('inbox.fs.acct',{label:_acctLabel(platFilter,accountFilter)}), clear:()=>{ setAccountFilter('all'); }});
   const _fLbl={waiting:'inbox.filter.waiting',snoozed:'inbox.filter.snoozed',archived:'inbox.filter.archived',removed:'inbox.filter.removed',done:'inbox.stat.done'};
-  if(chatFilter==='claimed') chips.push({label:window.T('inbox.filter.claimed'), clear:()=>{ setFilter('all', document.querySelector('.ftab[data-f="all"]')); }});
+  /* tabEcho：这枚 chip 只是复述「上方 tab 行里已经高亮的那个主 tab」。
+     unread/sla/claimed 三个是 .filter-tabs-primary 里常驻可见的 tab，激活态本就有高亮，
+     而 chip 的 clear 动作（setFilter('all')）与点旁边那枚「全部」tab 完全等价 ——
+     单独一枚这种 chip 等于花 25px 把屏幕上已有的信息再说一遍。末尾据此整行不渲染。
+     刻意**不**打标的：done（由 KPI 点击进入，不在 tab 行）、更多菜单里的
+     待回复/搁置中/归档/已移除（折叠在菜单里，chip 是它们唯一的在屏指示）。 */
+  if(chatFilter==='claimed') chips.push({label:window.T('inbox.filter.claimed'), tabEcho:true, clear:()=>{ setFilter('all', document.querySelector('.ftab[data-f="all"]')); }});
   else if(chatFilter==='done') chips.push({label:window.T('inbox.stat.done'), clear:()=>{ setFilter('all', document.querySelector('.ftab[data-f="all"]')); }});
-  else if(chatFilter==='unread'||chatFilter==='sla') chips.push({label:window.T(_fLbl[chatFilter]||('inbox.filter.'+chatFilter)), clear:()=>{ setFilter('all', document.querySelector('.ftab[data-f="all"]')); }});
+  else if(chatFilter==='unread'||chatFilter==='sla') chips.push({label:window.T(_fLbl[chatFilter]||('inbox.filter.'+chatFilter)), tabEcho:true, clear:()=>{ setFilter('all', document.querySelector('.ftab[data-f="all"]')); }});
   else if(_FTAB_MORE.has(chatFilter)&&chatFilter!=='removed'){
     chips.push({label:window.T(_fLbl[chatFilter]||chatFilter), clear:()=>{ setFilter('all', document.querySelector('.ftab[data-f="all"]')); }});
   }
@@ -2463,6 +2477,10 @@ function _renderFilterSummary(){
     chips.push({label:window.Tf('inbox.fs.sort',{mode:window.T(sk)}), clear:()=>{ setSortMode('recent'); }});
   }
   if(!chips.length){ bar.innerHTML=''; return; }
+  /* 二期降噪：唯一一枚 chip 且只是复述可见 tab → 整行不渲染（.filter-summary:empty
+     已是 display:none，故省下整整一行 25px）。多维度并存时照常渲染 —— 那时逐维度 ✕
+     和「清空筛选」才真的比 tab 行多给能力（tab 行清不掉 tag/账号/搜索/排序）。 */
+  if(chips.length===1 && chips[0].tabEcho){ bar.innerHTML=''; return; }
   bar.innerHTML=chips.map((c,i)=>`<span class="fs-chip">${esc(c.label)}<span class="fs-x" data-fs-i="${i}">\u2715</span></span>`).join('')
     +`<span class="fs-clear" id="fs-clear-all">${esc(window.T('inbox.filter.summary_clear'))}</span>`;
   bar.querySelectorAll('.fs-x').forEach(el=>{
@@ -2702,6 +2720,7 @@ function _convItemSig(c, isSel){
     _convSuggestMine(c)?1:0,
     c.account_id||'default', _multiAcctSet.has(c.platform)?1:0,  // P0: 账号维度变化触发重绘
     (accountMeta[`${c.platform}:${c.account_id||'default'}`]||{}).persona_id||'',  // 身份可视化：人设绑定变化触发徽章更新
+    ((c.eff_persona||{}).id||'')+((c.eff_persona||{}).tier||''),  // 行级生效人设（会话覆写）出现/切换/解除触发徽章更新
     c.last_direction||'',   // P2: 方向变化（我方/对方）触发预览前缀更新
     Number(c.risk_blocked||0),   // B-2: 风控拦截数变化触发重绘（chip 出现/消失）
     _handlerSig(c),   // 二期：谁在处理（AI/我/同事）变化触发徽章更新
@@ -2942,19 +2961,26 @@ function _applyAcctVisuals(dom, c){
       // stopPropagation 防触发「打开会话」；跨平台上下文走 viewAcctChats 先立平台）
       badge.onclick=function(ev){ _convAcctBadgeClick(ev, c.platform, c.account_id||'default'); };
     } else if(badge){ badge.remove(); }
-    // 身份可视化：账号徽章后追加人设徽章（多号平台）；运行数据缺人设 → 黄色警示点
+    // 身份可视化：账号徽章后追加人设徽章（多号平台）；运行数据缺人设 → 黄色警示点。
+    // 行级 eff_persona（会话覆写，_enrich_chat_list 附带）优先于账号级 accountMeta
+    // ——覆写会话在列表里必须显示真正出站的人设（与回复区身份条同一真相）；
+    // 字段缺失（老后端/开关关/无覆写）= 账号级回落，零回归。
     const pmeta=accountMeta[`${c.platform}:${c.account_id||'default'}`]||{};
+    const eff=(c.eff_persona&&c.eff_persona.id)?c.eff_persona:null;
+    const pbId=eff?String(eff.id):(pmeta.persona_id||'');
+    const pbName=eff?String(eff.name||eff.id):(pmeta.persona_name||pmeta.persona_id||'');
+    const pbOv=!!(eff&&eff.tier==='conv_override');
     let pb=nameEl.querySelector('.conv-persona-badge');
     let nd=nameEl.querySelector('.conv-nopersona-dot');
-    if(show && pmeta.persona_id){
+    if(show && pbId){
       if(nd) nd.remove();
       if(!pb){ pb=document.createElement('span'); pb.className='conv-persona-badge'; nameEl.appendChild(pb); }
-      const pn=pmeta.persona_name||pmeta.persona_id;
-      const pclr=_acctColor('persona:'+pmeta.persona_id);
+      const pclr=_acctColor('persona:'+pbId);
       pb.style.background=pclr+'22'; pb.style.color=pclr;
-      pb.title=window.Tf('inbox.ident.persona_t',{persona:pn});
-      pb.textContent=_personaShort(pn);
-    } else if(show && !pmeta.persona_id && pmeta.running){
+      pb.title=pbOv?window.Tf('inbox.ident.row_override_t',{persona:pbName})
+                   :window.Tf('inbox.ident.persona_t',{persona:pbName});
+      pb.textContent=_personaShort(pbName);
+    } else if(show && !pbId && pmeta.running){
       if(pb) pb.remove();
       if(!nd){ nd=document.createElement('span'); nd.className='conv-nopersona-dot'; nameEl.appendChild(nd); }
       nd.title=window.T('inbox.ident.no_persona_t');
@@ -2988,6 +3014,73 @@ function _personaShort(name){
 }
 // 身份可视化：回复区身份条——发送前一眼确认「以哪个人设 · 哪个号」在回；
 // accountMeta 尚无数据/人设缺失 → 黄色「未绑人设」警示（null 安全，绝不抛错）。
+/* 身份条的「人设已知」态标记（账号级 / 会话级覆写共用同一版式，只换文案键）。 */
+function _identBarPersonaHtml(pid, pname, acct, isOverride){
+  const key=isOverride?'inbox.ident.bar_conv':'inbox.ident.bar';
+  return `<span class="ib-dot" style="background:${_acctColor('persona:'+(pid||''))};"></span>`
+        +`<span class="ib-txt">${esc(window.Tf(key,{persona:pname,account:acct}))}</span>`;
+}
+/* 生效人设缓存（key=convKey → {ts,eff}）。_renderIdentityBar 也被每轮轮询的
+   loadChats 路径调用（realtime_poll_sec 默认 3s），不缓存就是每 3 秒一次请求。 */
+let _identEffCache={};
+let _identEffGen=0;   // 失效代数：换绑后 ++，在途旧响应据此作废（防旧人设写回缓存）
+const _IDENT_EFF_TTL=30000;
+/* 换绑成功后的即时校正入口（cp-persona-changed 监听器调用）：不清缓存的话
+   toast 说「已切换为 X」、发送区身份条却还从 TTL 30s 的缓存里读旧人设——
+   两套真相并存半分钟，正是这条链要消灭的事故形态。整表清空（换绑是坐席手动
+   低频事件，重建代价=每会话一次请求）比按 key 删更稳：conversation/account/
+   legacy 三种 scope 全覆盖，且不依赖 key 格式。 */
+function _identEffInvalidate(){
+  _identEffCache={};
+  _identEffGen++;
+  try{ if(selectedChat) _renderIdentityBar(selectedChat); }catch(_){}
+}
+/* 异步校正身份条到**出站链的读侧真相**（GET /api/persona/effective）。
+   为什么需要：同步那段只读 accountMeta 的**账号级**绑定，而「会话级人设覆写」
+   （inbox.persona_conv_override，本实例已开启）会让这条会话实际以另一个人设发出。
+   右栏 cp-persona 早就按 effective API 渲染「当前生效」横幅，而**发送前最后看的那一眼**
+   ——回复区身份条——一直只认账号级，i18n 里为此备好的 `inbox.ident.bar_conv`
+   （「以 X（本会话覆写） · Y 回复」，中英都有）从来没人用过。该接口的 docstring 写明它
+   存在的目的就是「彻底消灭『面板绑了陈默、出站却是林小雨』的两套真相」。
+   设计取向（只增不减，绝不比现状更差）：
+     · 同步那段先画（零闪烁、零回归），本函数只做「更准」的升级；
+     · 竞态守卫：请求前记 selectedKey，回来后不一致就丢弃（异步身份显示错会话
+       比少报信息更危险）；
+     · 任何失败/400（RPA 两段键会话无法解析三元组）→ 保留同步结果，不动。 */
+async function _identBarUpgrade(c, keyAtCall){
+  const bar=document.getElementById('identity-bar');
+  if(!bar || !c) return;
+  const plat=c.platform||'web', aid=String(c.account_id||'default'), ck=c.chat_key||'';
+  if(!plat || !aid || !ck) return;            // 三元组不全 → 接口必 400，省一次往返
+  const cached=_identEffCache[keyAtCall];
+  const genAtCall=_identEffGen;
+  let eff=(cached && (Date.now()-cached.ts)<_IDENT_EFF_TTL) ? cached.eff : null;
+  if(!eff){
+    try{
+      const r=await apiFetch('/api/persona/effective?platform='+encodeURIComponent(plat)
+        +'&account_id='+encodeURIComponent(aid)+'&chat_key='+encodeURIComponent(ck),
+        undefined, {timeoutMs:8000});
+      if(!r.ok) return;                        // 400/403/5xx 一律保留同步结果
+      const d=await r.json();
+      eff=(d&&d.effective)||null;
+      if(!eff) return;
+      if(genAtCall!==_identEffGen) return;     // 请求期间发生换绑：这份是旧世界的，作废
+      // distinct key 上限：长会话班次里切过的会话数不设限会一直涨（本仓对
+      // 「distinct key 无上限」有明确纪律）。超限直接清空重来，缓存丢了只是多打一次接口。
+      if(Object.keys(_identEffCache).length>200) _identEffCache={};
+      _identEffCache[keyAtCall]={ts:Date.now(), eff:eff};
+    }catch(_){ return; }
+  }
+  if(selectedKey!==keyAtCall) return;          // 竞态：已切走，丢弃这次结果
+  const pid=String(eff.id||''), pname=String(eff.name||eff.id||'');
+  if(!pid || !pname) return;                   // 生效层也没人设 → 同步那段的黄色警示是对的
+  const acct=_acctLabel(plat, aid);
+  const isOv=String(eff.tier||'')==='conv_override';
+  bar.classList.remove('warn');
+  bar.title=isOv?window.Tf('inbox.ident.persona_t',{persona:pname}):'';
+  bar.innerHTML=_identBarPersonaHtml(pid, pname, acct, isOv);
+  bar.style.display='flex';
+}
 function _renderIdentityBar(c){
   const bar=document.getElementById('identity-bar');
   if(!bar) return;
@@ -2999,7 +3092,7 @@ function _renderIdentityBar(c){
     if(pn){
       bar.classList.remove('warn');
       bar.title='';
-      bar.innerHTML=`<span class="ib-dot" style="background:${_acctColor('persona:'+(pmeta.persona_id||''))};"></span><span class="ib-txt">${esc(window.Tf('inbox.ident.bar',{persona:pn,account:acct}))}</span>`;
+      bar.innerHTML=_identBarPersonaHtml(pmeta.persona_id||'', pn, acct, false);
     }else{
       bar.classList.add('warn');
       bar.title=window.T('inbox.ident.no_persona_t');
@@ -3007,6 +3100,8 @@ function _renderIdentityBar(c){
     }
     bar.style.display='flex';
   }catch(_){ bar.style.display='none'; }
+  // 同步画完再异步校正到出站链真相（会话级覆写）；失败/切走一律不动上面的结果
+  try{ _identBarUpgrade(c, convKey(c)); }catch(_){}
 }
 
 /* ===== P2: 会话条悬浮快捷操作（按 key 取实时对象，避免闭包过期） ===== */
@@ -5270,17 +5365,22 @@ function _loadSavedViews(){
 function _renderSavedViews(){
   const bar=document.getElementById('saved-views-bar');
   if(!bar) return;
-  let html=`<button class="sv-add-btn" onclick="saveCurrentView()" data-i18n="inbox.view.save" data-i18n-title="inbox.view.save_t">${esc(window.T('inbox.view.save'))}</button>`;
+  /* 二期降噪：零视图＝整条隐藏，创建入口在筛选「更多」菜单里。
+     理由见 unified-inbox.css 的 .saved-views-bar.is-empty —— 这条不参与列表头的滚动
+     折叠，空着也要吃掉 300px 窄栏约 60% 个会话行的高度。 */
   if(!_savedViews.length){
-    html+=`<span class="saved-views-hint" data-i18n="inbox.view.empty_hint">${esc(window.T('inbox.view.empty_hint'))}</span>`;
-  } else {
-    html+=_savedViews.map((v,i)=>`
+    bar.classList.add('is-empty');
+    bar.innerHTML='';
+    return;
+  }
+  bar.classList.remove('is-empty');
+  let html=`<button class="sv-add-btn" onclick="saveCurrentView()" data-i18n="inbox.view.save" data-i18n-title="inbox.view.save_t">${esc(window.T('inbox.view.save'))}</button>`;
+  html+=_savedViews.map((v,i)=>`
     <span class="sv-chip ${_isActiveView(v)?'active':''}" onclick="_applyView(${i})">
       ${esc(v.name)}
       <span class="sv-del" onclick="event.stopPropagation();_deleteView(${i})">\u2715</span>
     </span>
   `).join('');
-  }
   bar.innerHTML=html;
   _a11yUpgrade(bar);
 }
@@ -7039,6 +7139,17 @@ async function loadDrafts(c){
   const key='drafts:'+String(c.platform||'')+':'+String(c.chat_key||c.conversation_id||'');
   return _coalesceAsync(key, function(){ return _loadDraftsBody(c); });
 }
+/* 稿龄短文本（<1h 显示分钟，<48h 显示小时，再久显示天）。created_ts 缺失→空串不显示。 */
+function _draftAgeText(ts){
+  const t=Number(ts||0); if(!t) return '';
+  const h=(Date.now()/1000-t)/3600;
+  if(!isFinite(h)||h<0) return '';
+  if(h<1) return Math.max(1,Math.round(h*60))+'m';
+  if(h<48) return Math.round(h)+'h';
+  return (h/24).toFixed(1)+'d';
+}
+window._draftAgeText=_draftAgeText;
+
 async function _loadDraftsBody(c){
   try{
     // 超时兜底：同 chats——悬死请求会卡死该会话的 drafts coalesce 槽位
@@ -7065,18 +7176,30 @@ async function _loadDraftsBody(c){
     items.innerHTML=drafts.map(dr=>{
       const risk=(dr.autopilot_level||dr.risk_level||'').replace(/^L/,'').replace('unknown','?')||'?';
       const riskClass=dr.autopilot_level==='L4'?'risk-high':dr.autopilot_level==='L3'?'risk-medium':dr.autopilot_level==='L2'?'risk-low':'risk-unknown';
+      /* 稿龄 + 「点通过会被拦」预判（后端 approve_blocked 与护栏同一判定入口）。
+         没有它坐席要撞到 409 才知道，而生产实测队列里有 8.9 天的老稿子。 */
+      const ageTxt=_draftAgeText(dr.created_ts);
+      const blocked=String(dr.approve_blocked||'');
+      const blockTip=blocked==='replied'?window.T('inbox.draft_mini.blocked_replied')
+        :blocked==='age'?window.T('inbox.draft_mini.blocked_age'):'';
+      const sendBtn=blocked
+        ? `<button class="btn-approve" disabled title="${esc(blockTip)}" style="opacity:.45;cursor:not-allowed;">${window.T('inbox.draft_mini.send')}</button>`
+        : `<button class="btn-approve" onclick="approveDraft('${esc(dr.draft_id)}',this)">${window.T('inbox.draft_mini.send')}</button>`;
       return `<div class="draft-card-mini">
-        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap;">
           <span class="risk ${riskClass}">${esc(dr.autopilot_level||'?')}</span>
           <span class="unsent-badge" title="${esc(window.T('inbox.draft_mini.unsent_t'))}">${esc(window.T('inbox.draft_mini.unsent'))}</span>
+          ${ageTxt?`<span class="draft-age-chip${blocked?' is-stale':''}" title="${esc(window.T('inbox.draft_mini.age_t'))}">${esc(ageTxt)}</span>`:''}
+          ${blocked?`<span class="draft-block-chip" title="${esc(blockTip)}">${esc(blocked==='replied'?window.T('inbox.draft_mini.chip_replied'):window.T('inbox.draft_mini.chip_stale'))}</span>`:''}
           <span style="font-size:11px;color:var(--text-sub);">${esc(dr.peer_name||dr.chat_name||'')}</span>
         </div>
         ${dr.peer_last_text?`<div class="draft-peer-mini">${esc(dr.peer_last_text)}</div>`:''}
         <div class="draft-text-mini">${esc(dr.draft_text||dr.text||'')}</div>
+        ${blocked?`<div class="draft-block-hint">${esc(blockTip)}</div>`:''}
         <div class="draft-acts">
-          <button class="btn-approve" onclick="approveDraft('${esc(dr.draft_id)}',this)">${window.T('inbox.draft_mini.send')}</button>
+          ${sendBtn}
           <button class="btn-reject" onclick="rejectDraft('${esc(dr.draft_id)}',this)">${window.T('inbox.draft_mini.reject')}</button>
-          <button class="tiny-btn" onclick="useDraftText('${esc(dr.draft_text||dr.text||'')}')">${window.T('inbox.edit')}</button>
+          <button class="tiny-btn${blocked?' is-suggested':''}" onclick="useDraftText('${esc(dr.draft_text||dr.text||'')}')">${window.T('inbox.edit')}</button>
         </div>
       </div>`;
     }).join('');
@@ -7844,6 +7967,8 @@ function initWsCopilot(){
         _toast(d.personaName?window.Tf('inbox.persona.switched_to',{name:d.personaName})
                             :window.T('inbox.persona.switched'),'#0f9d75');
       }
+      // 身份条即时校正：清生效人设缓存并重画，否则 toast 与发送区在 TTL 窗内两套真相
+      try{ _identEffInvalidate(); }catch(_){}
       var _dr=document.getElementById('ws-cp-draft');
       if(_dr&&typeof _dr.regenerate==='function') _dr.regenerate();
     });
@@ -8106,7 +8231,7 @@ function renderInfoSidebarAI(ai){
   // P33：语种标签
   const LANG_LABELS=(function(){var o={};['zh','en','id','th','ja','ko','ar','ru'].forEach(function(c){o[c]=window.T('dash.lang.'+c);});return o;})();
   const langHtml=ai.detected_lang&&ai.detected_lang!=='zh'?`
-    <div style="margin-top:4px;"><span style="font-size:11px;background:rgba(59,130,246,.14);color:var(--tk-brand);border-radius:5px;padding:2px 7px;font-weight:600;display:inline-flex;align-items:center;gap:3px;">${uiIcon('globe',10)}${esc(LANG_LABELS[ai.detected_lang]||ai.detected_lang)}</span>
+    <div style="margin-top:4px;"><span style="font-size:11px;background:color-mix(in srgb, var(--tk-brand,#1e8cf2) 14%, transparent);color:var(--tk-brand);border-radius:5px;padding:2px 7px;font-weight:600;display:inline-flex;align-items:center;gap:3px;">${uiIcon('globe',10)}${esc(LANG_LABELS[ai.detected_lang]||ai.detected_lang)}</span>
     <span style="font-size:11px;color:var(--th-ink-slate4,#94a3b8);margin-left:4px;">${window.T('inbox.ai.lang_switched')}</span></div>`:
     (ai.detected_lang==='zh'?'':'');
 
@@ -11157,9 +11282,16 @@ function proceedAnyway(){
   hideModeUnavailable();
   chooseMode(m);
 }
+// 哪些原因码配得上「在这里直接启用」这块自助面板：两者都由「填 api_id/api_hash 并保存」
+// 直接解决（面板 POST /api/setup/channels/telegram，正是写这两个键）。
+//   not_enabled   —— 开关没开（保存凭据的同时后端会把 protocol 一并启用）
+//   creds_missing —— 开关开了、缺凭据（桌面随包种子就是这一档）
+// 漏掉 creds_missing 曾是个死胡同：rc_creds_missing_how 的文案明写「在下方『在这里直接
+// 启用』填入并保存即可」，而面板恰恰在这一档被隐藏 —— 用户照着指引找一个不存在的表单。
+const _ENABLE_PANEL_REASONS = ['not_enabled', 'creds_missing'];
 function _canOneClickEnable(m){
   return _connectPlat==='telegram' && m && String(m.mode)==='protocol'
-    && String(m.reason_code||'not_enabled')==='not_enabled';
+    && _ENABLE_PANEL_REASONS.includes(String(m.reason_code||'not_enabled'));
 }
 function _setEnableFormMode(hasCreds){
   const ready=document.getElementById('connect-enable-ready');

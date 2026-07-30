@@ -1388,6 +1388,16 @@ prompt 只喂四柱+大运，**缺聊天链才有的流年注入**（`extract_ta
   `human_deliver_enabled`（人工链能力，与 `deliver_enabled` 互不代表）。
   人工发送不属 `ai_autosend` 授权范畴（手动发送端点本就不受其约束）。
 
+**工作台预判徽标**（2026-07-30）：护栏只在**点下去之后**才说话，坐席撞 409 才知道
+「这稿不能原样发」。故把判定收成 `DraftService._approve_block_reason` **单一入口**，
+`/api/drafts` 每行带 `approve_blocked`（`""`/`age`/`replied`）→ 草稿卡显示**稿龄 chip**
+（`_draftAgeText`：<1h 分钟 / <48h 小时 / 更久按天）+ 拦截 chip + 一句人话解释，
+并把「发送」置灰、把「编辑」标成建议出路。**核心不变量＝预判必须与护栏行为完全一致**
+（徽标另算一套 → 坐席看到「没标记」却被拦，比没徽标更糟），门禁用 8 组
+(稿龄×是否回过) 交叉断言 `approve_block_reason == _stale_check 的 stale_reason`。
+判定内部按稿龄短路（≤grace 不查会话、超龄直接定案），列表接口零 N+1 压力。
+线上实测（重启后）：7 条待审里 6 条超龄被正确置灰、17.1h 那条正常可发。
+
 **「已经回过了」是比年龄更准的判据**（同一护栏第二档）：坐席常走「采用文案 → 改写 →
 手动发送」，而**发送路由不处置草稿行**（实测确认 `unified_inbox_send_routes.py` 里没有任何
 resolve），那行于是永远 pending；投递接通后任何窗口点「通过」＝**再发一遍**（多开重复提交
@@ -1500,8 +1510,11 @@ FLAP、内联按钮写了函数没挂 window 暴露块经热更新**直接上生
    **开着的旧标签页仍跑旧 JS**。每批前端落地必须同时改两处——
    `src/web/static/workspace/ui-build.txt` 首行（陈旧页横幅轮询此文件）+ 相关
    CSS 的 `?v=` 缓存戳（如 `unified-inbox.css?v=`）。只改功能不 bump =
-   「修好了坐席还在踩」。`-Full` 含 `tools/verify_account_rail_ui.py`（账号视角
-   真浏览器不变量）。
+   「修好了坐席还在踩」。`-Full` 含三个收件箱真浏览器门禁：
+   `tools/verify_account_rail_ui.py`（账号视角不变量）、`verify_inbox_density.py`
+   （会话面板密度预算 + 「可见但空」扫描，2026-07-30）、`verify_inbox_identity.py`
+   （人设身份真相：回复区身份条会话覆写/TTL 缓存/换绑即时校正 + 行徽章行级
+   eff_persona，route mock 零生产写入，2026-07-30）。三者环境缺失一律 SKIP exit 0。
 
 ### 崩溃恢复提示
 

@@ -59,7 +59,7 @@ _INLINE_COLOR_CEILINGS = {
     "ops/contacts.html": 1,
     "ops/mobile_handoffs.html": 1,
     "ops_overview.html": 2,
-    "personas.html": 1,
+    # personas.html：2026-07-30 品牌收口把最后一个内联硬编码色转成 color-mix(var(--p)) → 0，除名
     "queue_monitor.html": 3,
     "relations_health.html": 3,
     "rpa_overview.html": 11,
@@ -67,12 +67,12 @@ _INLINE_COLOR_CEILINGS = {
     "setup_wizard.html": 1,
     "strategies.html": 2,
     "_channel_body_telegram.html": 2,
-    "unified_inbox.html": 11,
+    "unified_inbox.html": 10,  # 2026-07-30 品牌收口：检测语言 chip tint → color-mix(var(--tk-brand))
     "_channel_body_whatsapp.html": 13,
     "workflows.html": 1,
     "workspace_base.html": 4,   # 2026-07-29：AI 引导/试用横幅+升级弹窗色彩层已抽类（ws-aiguide-*/ws-aitrial-*/ws-upsell-*）
     "workspace_dashboard.html": 5,
-    "workspace_usage.html": 1,
+    # workspace_usage.html：2026-07-30 品牌收口把图例点 #93c5fd → var(--bl-growth-300) → 0，除名
 }
 
 # theme-tokens.css 必须挂载的根布局（覆盖全部 43 个欠账页的 extends 链）

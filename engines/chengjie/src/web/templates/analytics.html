@@ -219,7 +219,7 @@ if (hourlyData.length > 0) {
       labels,
       datasets: [{
         label: window.T('analytics_event_vol'), data: counts,
-        borderColor: '#5b7cf6', backgroundColor: 'rgba(91,124,246,.12)',
+        borderColor: '#1e8cf2', backgroundColor: 'rgba(30,140,242,.12)',
         tension: .4, fill: true, pointRadius: 3, borderWidth: 2
       }]
     },
@@ -244,7 +244,7 @@ if (respDist && respDist.count > 0) {
       labels: ['P50', 'P90', 'P99', window.T('analytics_avg')],
       datasets: [{
         label: 'ms', data: [respDist.p50, respDist.p90, respDist.p99, respDist.avg],
-        backgroundColor: ['rgba(91,124,246,.7)','rgba(139,92,246,.7)','rgba(239,68,68,.7)','rgba(16,185,129,.7)'],
+        backgroundColor: ['rgba(30,140,242,.7)','rgba(139,92,246,.7)','rgba(239,68,68,.7)','rgba(16,185,129,.7)'],
         borderRadius: 5, borderWidth: 0
       }]
     },

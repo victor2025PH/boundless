@@ -1,6 +1,6 @@
 {
   "name": "telegram-ai-desktop",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "private": true,
   "description": "桌面壳：嵌官方 web 客户端 + 注入点击翻译/智能回复（对接本仓库 FastAPI 后端）",
   "main": "main.js",
@@ -19,7 +19,7 @@
     "dist:win": "electron-builder --win",
     "predist:mac": "node copy-shared.js",
     "dist:mac": "electron-builder --mac",
-    "test": "node test/inject-status.test.js && node test/account-utils.test.js && node test/media-format.test.js && node test/webview-ua.test.js && node test/profiles.test.js && node test/fingerprint.test.js && node test/backend-launcher.test.js && node test/health-panel.test.js && node test/brand-util.test.js && node test/sidebar-chrome.test.js && node test/first-run-model.test.js && node test/token-util.test.js"
+    "test": "node test/inject-status.test.js && node test/account-utils.test.js && node test/media-format.test.js && node test/webview-ua.test.js && node test/profiles.test.js && node test/fingerprint.test.js && node test/backend-launcher.test.js && node test/sidecar-launcher.test.js && node test/health-panel.test.js && node test/brand-util.test.js && node test/sidebar-chrome.test.js && node test/first-run-model.test.js && node test/token-util.test.js"
   },
   "devDependencies": {
     "electron": "^31.0.0",
@@ -35,6 +35,7 @@
       "output": "dist",
       "buildResources": "build"
     },
+    "afterPack": "build/after-pack.js",
     "files": [
       "**/*",
       "!dist/**",
@@ -47,6 +48,31 @@
         "to": "backend",
         "filter": [
           "**/*"
+        ]
+      },
+      {
+        "from": "../services/whatsapp-baileys",
+        "to": "services/whatsapp-baileys",
+        "filter": [
+          "**/*",
+          "!sessions/**",
+          "!logs/**",
+          "!temp/**",
+          "!test/**",
+          "!*.ps1"
+        ]
+      },
+      {
+        "from": "../services/messenger-web",
+        "to": "services/messenger-web",
+        "filter": [
+          "**/*",
+          "!sessions/**",
+          "!logs/**",
+          "!*.ps1",
+          "!_state_shot.png",
+          "!node_modules/playwright-core/.local-browsers/chromium_headless_shell-*/**",
+          "!node_modules/playwright-core/.local-browsers/ffmpeg-*/**"
         ]
       }
     ],

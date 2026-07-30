@@ -38,7 +38,7 @@
 .sys-refresh{background:none;border:none;cursor:pointer;color:var(--t3);font-size:.85rem;padding:.1rem .3rem;border-radius:4px;transition:.15s}
 .sys-refresh:hover{color:var(--p);background:var(--ps)}
 /* stat icon colors */
-.ico-p{background:linear-gradient(135deg,#5b7cf6,#8b5cf6)}
+.ico-p{background:linear-gradient(135deg,var(--p,#1e8cf2),#8b5cf6)}
 .ico-g{background:linear-gradient(135deg,#10b981,#059669)}
 .ico-a{background:linear-gradient(135deg,#f59e0b,#d97706)}
 .ico-r{background:linear-gradient(135deg,#ef4444,#dc2626)}
@@ -103,7 +103,7 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
 .hc-issue{display:flex;align-items:flex-start;gap:.7rem;padding:.65rem .8rem;border-radius:10px;margin-bottom:.45rem;border:1px solid transparent}
 .hc-issue.critical{background:var(--rs);border-color:rgba(239,68,68,.2)}
 .hc-issue.warn{background:var(--as);border-color:rgba(245,158,11,.2)}
-.hc-issue.info{background:var(--ps);border-color:rgba(91,124,246,.15)}
+.hc-issue.info{background:var(--ps);border-color:color-mix(in srgb, var(--p,#1e8cf2) 15%, transparent)}
 .hc-issue.ok{background:var(--gs);border-color:rgba(16,185,129,.2)}
 .hc-icon{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1rem}
 .hc-content{flex:1;min-width:0}
@@ -751,7 +751,7 @@ loadAlerts();
 setInterval(loadAlerts,60000);
 
 /* ── G2: Activity Stats ──────────────────────────── */
-const ACT_COLORS=['#5b7cf6','#10b981','#ef4444','#f59e0b','#8b5cf6','#06b6d4','#ec4899'];
+const ACT_COLORS=['#1e8cf2','#10b981','#ef4444','#f59e0b','#8b5cf6','#06b6d4','#ec4899'];
 
 async function loadActivityStats(){
   try{

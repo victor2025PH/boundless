@@ -508,6 +508,61 @@ def _enrich_chat_list(request: Request, chats: List[Dict[str, Any]], *, config_m
         logger.debug("会话列表风控拦截标记失败（已忽略）", exc_info=True)
 
     try:
+        # 身份可视化（2026-07-30）：行级「生效人设」。会话级覆写
+        # （inbox.persona_conv_override）让一条会话以另一个人设出站，但列表行徽章
+        # 只读 accountMeta 的账号级绑定 → 覆写会话在列表里显示错人设（与回复区
+        # 身份条同一盲区，那边已由 _identBarUpgrade 修掉）。这里在每行附
+        # eff_persona{id,name,tier}，前端徽章优先消费；字段缺失＝按账号级回落
+        # （老前端/关开关/无覆写 全部零回归）。
+        # 刻意只附 conv_override 档：account_profile 与前端 accountMeta 同源（附了
+        # 是冗余）；domain/default 兜底档附上去会把「账号未绑人设」的黄点警示吞掉
+        # （那是运营要看的配置缺口信号）。legacy peer 绑定（chat_binding）在
+        # 「账号人设优先」修复后只对未绑账号生效、且属清理中旧债——known boundary，
+        # 行徽章暂不表达（打开会话后身份条会说真话）。
+        # 成本：PersonaManager 单例内存 dict，每行 1 次 get；开关关＝整块零开销。
+        if chats:
+            from src.ai.persona_voice import (
+                conv_binding_key,
+                conv_override_enabled,
+            )
+            cfg_full = (config_manager.config
+                        if config_manager is not None else {}) or {}
+            if conv_override_enabled(cfg_full):
+                from src.utils.persona_manager import PersonaManager
+                pm = PersonaManager.get_instance()
+                brief_cache: Dict[str, Any] = {}
+
+                def _eff_brief(pid: str):
+                    """id→{id,name} 摘要（进程内按本次请求 memo）；profile 已删
+                    → None（与 resolve_effective_persona「悬空引用视同未覆写」同语义）。"""
+                    if pid not in brief_cache:
+                        p = pm.get_persona_by_id(pid)
+                        brief_cache[pid] = (
+                            {"id": str(p.get("id") or pid),
+                             "name": str(p.get("name") or pid)}
+                            if isinstance(p, dict) else None)
+                    return brief_cache[pid]
+
+                for c in chats:
+                    try:
+                        plat = str(c.get("platform") or "")
+                        acct = str(c.get("account_id") or "")
+                        ck = str(c.get("chat_key") or "")
+                        if not (plat and acct and ck):
+                            continue
+                        ref = pm.get_chat_binding_ref(
+                            conv_binding_key(plat, acct, ck))
+                        if not ref:
+                            continue
+                        b = _eff_brief(ref)
+                        if b:
+                            c["eff_persona"] = dict(b, tier="conv_override")
+                    except Exception:
+                        continue
+    except Exception:
+        logger.debug("会话列表生效人设富集失败（已忽略）", exc_info=True)
+
+    try:
         from src.workspace.assignment import AssignmentService
         asvc = AssignmentService.from_config(
             (config_manager.config if config_manager is not None else {}) or {}

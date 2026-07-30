@@ -10,7 +10,7 @@
 /* ── 视图切换分段控件 ──────────────────────────────────────────── */
 .wa-view-seg{display:flex;gap:.3rem;background:rgba(255,255,255,.04);border:1px solid var(--bd);border-radius:8px;padding:.25rem;margin-bottom:.85rem}
 .wa-vseg-btn{flex:1;padding:.38rem .7rem;border-radius:6px;border:none;background:transparent;color:var(--t2);font-size:.79rem;cursor:pointer;transition:all .15s;font-family:inherit;white-space:nowrap}
-.wa-vseg-btn.active{background:var(--p);color:#fff;font-weight:600;box-shadow:0 1px 4px rgba(91,124,246,.35)}
+.wa-vseg-btn.active{background:var(--p);color:#fff;font-weight:600;box-shadow:0 1px 4px color-mix(in srgb, var(--p,#1e8cf2) 35%, transparent)}
 .wa-vseg-btn:not(.active):hover{background:rgba(255,255,255,.06);color:var(--t1)}
 
 /* ── 对话卡片 ─────────────────────────────────────────────────── */
@@ -46,11 +46,11 @@
 /* ── 搜索 / 过滤栏 ──────────────────────────────────────────── */
 .wa-conv-searchbar{padding:.45rem 1rem .4rem;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:.45rem;flex-wrap:wrap}
 .wa-search-inp{flex:1;min-width:90px;background:rgba(255,255,255,.05);border:1px solid var(--bd);border-radius:6px;padding:.28rem .6rem;font-size:.79rem;color:var(--t1);outline:none;font-family:inherit;transition:border-color .15s}
-.wa-search-inp:focus{border-color:var(--p);background:rgba(91,124,246,.06)}
+.wa-search-inp:focus{border-color:var(--p);background:color-mix(in srgb, var(--p,#1e8cf2) 6%, transparent)}
 .wa-search-inp::placeholder{color:var(--t3)}
 .wa-filter-chips{display:flex;gap:.2rem;flex-shrink:0}
 .wa-chip{padding:.2rem .48rem;font-size:.7rem;border:1px solid var(--bd);border-radius:20px;background:transparent;color:var(--t3);cursor:pointer;transition:all .15s;white-space:nowrap;font-family:inherit}
-.wa-chip.active{background:rgba(91,124,246,.15);border-color:rgba(91,124,246,.35);color:#a5b4fc}
+.wa-chip.active{background:color-mix(in srgb, var(--p,#1e8cf2) 15%, transparent);border-color:color-mix(in srgb, var(--p,#1e8cf2) 35%, transparent);color:#a5b4fc}
 .wa-chip:not(.active):hover{background:rgba(255,255,255,.05);color:var(--t2)}
 .wa-conv-count{font-size:.7rem;color:var(--t3);white-space:nowrap;flex-shrink:0}
 
@@ -2558,7 +2558,7 @@ Object.assign(window, {
 <style>
 /* P3-A / P4-A: 语言徽章 */
 .wa-lang-badge{display:inline-block;font-size:11px;padding:1px 6px;border-radius:10px;
-  background:#e8f4fd;color:#2563eb;border:1px solid #bfdbfe;margin-right:4px;letter-spacing:.3px;user-select:none;}
+  background:#e8f4fd;color:var(--bl-growth-600,#0d76d9);border:1px solid var(--bl-growth-200,#bcdcfb);margin-right:4px;letter-spacing:.3px;user-select:none;}
 .wa-lang-badge.wa-lang-locked{background:#fef3c7;color:#92400e;border-color:#fcd34d;}
 .wa-lang-locked-pill{display:inline-block;font-size:11px;padding:1px 8px;border-radius:10px;
   background:#fef3c7;color:#92400e;border:1px solid #fcd34d;margin-left:8px;vertical-align:middle;}

@@ -46,10 +46,13 @@ pdfminer.six>=20221105
 # 纯 Python 零依赖：干支历/四柱/十神/五行/大运流年（MIT，6tail/lunar-python）
 lunar_python>=1.4.0
 
-# 可选：LINE 协议模式（okline 逆向库，经 LINE Chrome 扩展网关直连；默认关，
-# 仅当 platform_login.line.protocol_enabled=true 时需要）。非官方库、违反 LINE ToS、
-# 有封号风险；请配套一号一指纹一代理 + 养号。缺失时 LINE「协议」方式灰显、主进程零影响。
-# okline>=2.7.0
+# LINE 协议模式（okline 逆向库，经 LINE Chrome 扩展网关直连）。随桌面包分发，
+# 供 platform_login.line.protocol_enabled=true 的扫码登录。
+# ⚠️ 运行时依赖 Node.js 18+ 在 PATH 上：okline 用持久 Node 桥跑 LTSM WASM 计算 X-Hmac
+#    签名（见 okline/hmac_signer.py），客户机须自装 Node.js（https://nodejs.org），
+#    否则 LINE 扫码报「Node.js not found」。可用 LINE_NODE 指定 node 绝对路径。
+# ⚠️ 非官方库、违反 LINE ToS、有封号风险；务必配套一号一指纹一代理 + 养号（防关联）。
+okline>=2.7.0
 
 # 可选：本地数据库支持
 # aiosqlite>=0.19.0

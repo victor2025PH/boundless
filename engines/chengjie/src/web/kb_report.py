@@ -14,7 +14,7 @@ def _esc(s) -> str:
 
 
 def _svg_bar_chart(data: list, width: int = 520, height: int = 100,
-                   color: str = "#5b7cf6") -> str:
+                   color: str = "#1e8cf2") -> str:
     """将 (label, value) 列表渲染为 SVG 横向柱状图"""
     if not data:
         return "<p style='color:#999;font-size:.8rem'>暂无数据</p>"
@@ -33,7 +33,7 @@ def _svg_bar_chart(data: list, width: int = 520, height: int = 100,
     return f'<svg width="{width}" height="{total_h}" xmlns="http://www.w3.org/2000/svg">{"".join(bars)}</svg>'
 
 
-def _svg_donut(value: int, max_value: int, color: str = "#5b7cf6",
+def _svg_donut(value: int, max_value: int, color: str = "#1e8cf2",
                size: int = 80) -> str:
     """渲染一个简单的环形进度图"""
     pct = min(1.0, value / max_value) if max_value else 0
@@ -195,7 +195,7 @@ def build_kb_report(kb_store, audit_store=None) -> str:
             f'<tr><td>{i+1}</td>'
             f'<td><span class="cat-badge">{_esc(e["category"])}</span></td>'
             f'<td>{_esc(e["title"])}</td>'
-            f'<td style="font-weight:700;color:#5b7cf6">{e["use_count"]}</td></tr>'
+            f'<td style="font-weight:700;color:#1e8cf2">{e["use_count"]}</td></tr>'
             for i, e in enumerate(top_entries)
         )
         top_html = (
@@ -225,7 +225,7 @@ def build_kb_report(kb_store, audit_store=None) -> str:
     # ── 命中率趋势图（SVG）───────────────────────────────────
     if day_rates:
         trend_svg = _svg_bar_chart(
-            [(d, v) for d, v in day_rates], width=460, height=min(200, len(day_rates) * 28), color="#5b7cf6"
+            [(d, v) for d, v in day_rates], width=460, height=min(200, len(day_rates) * 28), color="#1e8cf2"
         )
     else:
         trend_svg = "<p style='color:#999;font-size:.85rem'>暂无足够数据</p>"
@@ -259,7 +259,7 @@ body{{font-family:'Inter','PingFang SC','Microsoft YaHei',system-ui,sans-serif;
 .page{{max-width:900px;margin:0 auto;padding:2rem 1.5rem 4rem}}
 h1{{font-size:1.6rem;font-weight:800;margin-bottom:.2rem}}
 h2{{font-size:1.05rem;font-weight:700;margin-bottom:.8rem;padding-bottom:.4rem;
-  border-bottom:2px solid #5b7cf6;color:#1e293b;display:flex;align-items:center;gap:.4rem}}
+  border-bottom:2px solid #1e8cf2;color:#1e293b;display:flex;align-items:center;gap:.4rem}}
 h2 svg{{width:16px;height:16px;flex-shrink:0}}
 .meta{{color:#6b7280;font-size:.8rem;margin-bottom:2rem}}
 .section{{background:#fff;border:1px solid #e5e7eb;border-radius:12px;
@@ -267,7 +267,7 @@ h2 svg{{width:16px;height:16px;flex-shrink:0}}
 /* KPI cards */
 .kpi-row{{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.8rem;margin-bottom:1.2rem}}
 .kpi{{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:.9rem 1rem;text-align:center}}
-.kpi-val{{font-size:1.6rem;font-weight:800;color:#5b7cf6;line-height:1}}
+.kpi-val{{font-size:1.6rem;font-weight:800;color:#1e8cf2;line-height:1}}
 .kpi-lbl{{font-size:.72rem;color:#6b7280;margin-top:.25rem}}
 .kpi.ok .kpi-val{{color:#10b981}}.kpi.warn .kpi-val{{color:#f59e0b}}.kpi.err .kpi-val{{color:#ef4444}}
 /* table */
@@ -284,9 +284,9 @@ h2 svg{{width:16px;height:16px;flex-shrink:0}}
 .health-score .score-num{{font-size:2rem;font-weight:800;color:{score_color};line-height:1}}
 .score-grade{{font-size:1rem;font-weight:700;color:{score_color}}}
 .trans-row{{display:flex;gap:.5rem;flex-wrap:wrap}}
-.print-btn{{position:fixed;bottom:1.5rem;right:1.5rem;padding:.6rem 1.2rem;background:#5b7cf6;
+.print-btn{{position:fixed;bottom:1.5rem;right:1.5rem;padding:.6rem 1.2rem;background:#1e8cf2;
   color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:.85rem;font-weight:600;
-  box-shadow:0 4px 12px rgba(91,124,246,.4);transition:.2s;z-index:100}}
+  box-shadow:0 4px 12px rgba(30,140,242,.4);transition:.2s;z-index:100}}
 .print-btn:hover{{background:#4366e0;transform:translateY(-1px)}}
 @media print{{.print-btn{{display:none}};body{{background:#fff}};.section{{box-shadow:none}}}}
 </style>

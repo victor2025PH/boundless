@@ -1,6 +1,11 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body, #app { height: 100%; width: 100%; }
-body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; color: #e6edf3; }
+/* 品牌拉丁字（Montserrat，brand-fonts.css）+ 系统 CJK；主色一律走 --cp-accent*
+   （theme-dark 已接 --bl-growth），禁止再写死旧 Tailwind 蓝字面量。 */
+body {
+  font-family: Montserrat, Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  background: #17212b; color: #e6edf3;
+}
 
 #app { display: flex; height: 100vh; }
 
@@ -76,7 +81,7 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
 #inject-status.is-ok:hover { opacity: 1; }
 
 /* ── 统一收件箱连接遮罩（loading / error），盖在后台 webview 上 ──────────────
-   配色对齐后台 /workspace 浅色内容区（--bg-page #f3f4f6 / --accent #3b82f6），
+   配色对齐后台 /workspace 浅色内容区（--bg-page #f3f4f6 / --cp-accent 智连蓝），
    避免深色壳遮罩盖在浅色页上造成跳变。 */
 .inbox-overlay {
   position: absolute; inset: 0; z-index: 5; display: none;
@@ -90,17 +95,16 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
 .inbox-overlay.err .inbox-msg { color: #b91c1c; }
 .inbox-spinner {
   width: 30px; height: 30px; border-radius: 50%;
-  border: 3px solid #d1d5db; border-top-color: #3b82f6; animation: inbox-spin .8s linear infinite;
+  border: 3px solid #d1d5db; border-top-color: var(--cp-accent); animation: inbox-spin .8s linear infinite;
 }
 @keyframes inbox-spin { to { transform: rotate(360deg); } }
 .inbox-retry {
-  padding: 8px 18px; border: 0; border-radius: 8px; background: #3b82f6; color: #fff;
+  padding: 8px 18px; border: 0; border-radius: 8px; background: var(--cp-accent); color: #fff;
   font-size: 13px; cursor: pointer;
 }
-.inbox-retry:hover { background: #2563eb; }
+.inbox-retry:hover { background: var(--cp-accent-hover); }
 
-/* ── P2 业务右栏（浅色，与后台 /workspace 统一）──────────────────────
-   配色对齐后台：面板 #fff · 边框 #e5e7eb · 文字 #111827/#6b7280 · 主色 #3b82f6。 */
+/* ── P2 业务右栏（浅色基线 + 文末深色覆盖；主色走 --cp-accent）──────── */
 #copilot {
   width: 320px; min-width: 280px; max-width: 480px; flex-shrink: 0; background: #ffffff; border-left: 1px solid #e5e7eb;
   display: flex; flex-direction: column; transition: width .15s ease; position: relative;
@@ -109,7 +113,7 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
 .cp-sidebar-resize {
   position: absolute; left: 0; top: 0; bottom: 0; width: 5px; cursor: col-resize; z-index: 3; touch-action: none;
 }
-.cp-sidebar-resize:hover, .cp-sidebar-resize.dragging { background: rgba(59, 130, 246, .28); }
+.cp-sidebar-resize:hover, .cp-sidebar-resize.dragging { background: var(--cp-accent-weak); }
 #copilot.collapsed .cp-sidebar-resize { display: none; }
 #copilot.collapsed .cp-body, #copilot.collapsed #cp-title { display: none; }
 /* 保留 cp-hidden 类供特殊场景手动折叠整栏；默认始终显示业务助手 */
@@ -136,7 +140,7 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
   border-bottom: 2px solid transparent; transition: color .15s, border-color .15s;
 }
 .cp-tab:hover { color: #111827; }
-.cp-tab.active { color: #3b82f6; border-bottom-color: #3b82f6; font-weight: 600; }
+.cp-tab.active { color: var(--cp-accent); border-bottom-color: var(--cp-accent); font-weight: 600; }
 /* 注意力圆点角标（文案挂 title）：文本徽章会撑爆 tab 压住相邻按钮，故只点不字 */
 .cp-tab-badge { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #ef4444; font-size: 0; line-height: 0; padding: 0; margin-left: 4px; vertical-align: middle; overflow: hidden; }
 .cp-tab-badge:empty { display: none; }
@@ -154,7 +158,7 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
 }
 .cp-box .tag {
   display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px;
-  background: #eff6ff; color: #2563eb; margin: 0 4px 4px 0;
+  background: var(--cp-accent-bg); color: var(--cp-accent-deep); margin: 0 4px 4px 0;
 }
 /* ===== 可折叠卡片（与网页 unified_inbox 同款：卡头图标+标题+状态 pill+chevron） ===== */
 .cp-card { border: 1px solid #e5e7eb; border-radius: 10px; background: #fff; margin-bottom: 10px; overflow: hidden; }
@@ -168,9 +172,9 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: inline-flex; align-items: center;
 }
 .cp-card-ic { display: inline-flex; align-items: center; vertical-align: middle; margin-right: 5px; color: #6b7280; opacity: .88; flex-shrink: 0; }
-.cp-card-pill { flex-shrink: 0; font-size: 10px; font-weight: 600; color: #3b82f6; background: rgba(59,130,246,.12); border-radius: 999px; padding: 1px 8px; line-height: 1.6; }
+.cp-card-pill { flex-shrink: 0; font-size: 10px; font-weight: 600; color: var(--cp-accent); background: var(--cp-accent-weak); border-radius: 999px; padding: 1px 8px; line-height: 1.6; }
 .cp-card-pill:empty { display: none; }
-.cp-card-pill.pill-accent { color: #3b82f6; background: rgba(59,130,246,.12); }
+.cp-card-pill.pill-accent { color: var(--cp-accent); background: var(--cp-accent-weak); }
 .cp-card-pill.pill-ok { color: #16a34a; background: rgba(22,163,74,.14); }
 .cp-card-pill.pill-warn { color: #d97706; background: rgba(217,119,6,.16); }
 .cp-card-pill.pill-danger { color: #dc2626; background: rgba(220,38,38,.14); }
@@ -188,14 +192,14 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
   flex: 0 0 auto; padding: 5px 8px; border: 1px solid #e5e7eb; border-radius: 6px;
   background: #fff; color: #6b7280; font-size: 13px; cursor: pointer; line-height: 1;
 }
-.cp-pin:hover { border-color: #3b82f6; color: #3b82f6; }
-.cp-pin.pinned { background: #eff6ff; color: #2563eb; border-color: #3b82f6; }
+.cp-pin:hover { border-color: var(--cp-accent); color: var(--cp-accent); }
+.cp-pin.pinned { background: var(--cp-accent-bg); color: var(--cp-accent-deep); border-color: var(--cp-accent); }
 .cp-persona-src { font-size: 11px; color: #9ca3af; margin: 0 0 8px 2px; }
 .cp-btn-primary {
-  width: 100%; padding: 8px; border: 0; border-radius: 8px; background: #3b82f6; color: #fff;
+  width: 100%; padding: 8px; border: 0; border-radius: 8px; background: var(--cp-accent); color: #fff;
   font-size: 13px; font-weight: 600; cursor: pointer; transition: background .15s;
 }
-.cp-btn-primary:hover { background: #2563eb; }
+.cp-btn-primary:hover { background: var(--cp-accent-hover); }
 .cp-btn-primary:disabled { opacity: .6; cursor: default; }
 .cp-search { display: flex; gap: 6px; margin-bottom: 8px; }
 .cp-search input {
@@ -203,14 +207,14 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
   background: #fff; color: #111827; font-size: 13px;
 }
 .cp-search button {
-  padding: 0 12px; border: 0; border-radius: 6px; background: #3b82f6; color: #fff; cursor: pointer;
+  padding: 0 12px; border: 0; border-radius: 6px; background: var(--cp-accent); color: #fff; cursor: pointer;
 }
 .cp-list { display: flex; flex-direction: column; gap: 6px; }
 .cp-item {
   background: #f8fafc; border-radius: 8px; padding: 7px 9px; font-size: 12.5px; line-height: 1.45;
   color: #374151; cursor: pointer; border: 1px solid #e5e7eb;
 }
-.cp-item:hover { border-color: #3b82f6; background: #eff6ff; }
+.cp-item:hover { border-color: var(--cp-accent); background: var(--cp-accent-bg); }
 .cp-item .it-title { color: #111827; font-weight: 600; font-size: 12px; margin-bottom: 2px; }
 .cp-hint { color: #9ca3af; font-size: 11.5px; padding: 4px 2px; }
 
@@ -221,8 +225,8 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
   line-height: 1.2; transition: background .12s ease, transform .06s ease; user-select: none;
 }
 .cp-act:active { transform: translateY(1px); }
-.cp-act.primary { background: #3b82f6; color: #fff; }
-.cp-act.primary:hover { background: #2563eb; }
+.cp-act.primary { background: var(--cp-accent); color: #fff; }
+.cp-act.primary:hover { background: var(--cp-accent-hover); }
 .cp-act.send { background: #16a34a; color: #fff; }
 .cp-act.send:hover { background: #15803d; }
 .cp-act.ghost { background: #fff; color: #6b7280; border: 1px solid #e5e7eb; }
@@ -240,7 +244,7 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
   background: #fff; color: #111827; border: 1px solid #e5e7eb; border-radius: 6px;
   padding: 7px 9px; font-size: 13px; line-height: 1.5; font-family: inherit;
 }
-.cp-edit:focus { outline: none; border-color: #3b82f6; }
+.cp-edit:focus { outline: none; border-color: var(--cp-accent); }
 
 /* 账号管理:头部 👥 入口 + 覆盖面板 */
 #cp-accounts-toggle { cursor: pointer; opacity: .8; }
@@ -271,13 +275,13 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
 
 /* 草稿多语言块：每条一个块（单选「发这条」+ 可编辑文本框），只发选中那条 */
 .cp-lang-block { margin-top: 8px; padding: 6px 8px; border-radius: 7px; border: 1px solid transparent; }
-.cp-lang-block.active { border-color: #3b82f6; background: #eff6ff; }
+.cp-lang-block.active { border-color: var(--cp-accent); background: var(--cp-accent-bg); }
 .cp-lang-head {
   display: flex; align-items: center; gap: 6px; margin-bottom: 4px;
   font-size: 12px; color: #6b7280; cursor: pointer; user-select: none;
 }
-.cp-lang-head input[type="radio"] { accent-color: #3b82f6; cursor: pointer; }
-.cp-lang-block.active .cp-lang-name { color: #1d4ed8; }
+.cp-lang-head input[type="radio"] { accent-color: var(--cp-accent); cursor: pointer; }
+.cp-lang-block.active .cp-lang-name { color: var(--cp-accent-deep); }
 .cp-lang-name { flex: 1; min-width: 0; }
 
 /* 分析：摘要块 + 语义 chip */
@@ -319,7 +323,7 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
 .cp-edit { background: #222c3a; border-color: #2b3947; color: #e6edf3; }
 .cp-pin { background: #222c3a; border-color: #2b3947; color: #8a9bb0; }
 .cp-item { background: #222c3a; border-color: #2b3947; color: #cdd9e5; }
-.cp-item:hover { background: #1c2733; border-color: #3b82f6; }
+.cp-item:hover { background: #1c2733; border-color: var(--cp-accent); }
 .cp-item .it-title { color: #e6edf3; }
 .cp-act.ghost { background: #222c3a; border-color: #2b3947; color: #cdd9e5; }
 .cp-act.ghost:hover { color: #e6edf3; border-color: #5a8bc0; }
@@ -328,5 +332,5 @@ body { font-family: "Segoe UI", system-ui, sans-serif; background: #17212b; colo
 #cp-auto-bar { background: #222c3a; border-color: #2b3947; }
 .cp-auto-label { color: #e6edf3; }
 .cp-summary { color: #cdd9e5; }
-.cp-lang-block.active { background: rgba(59,130,246,.16); }
-.cp-pin.pinned { background: rgba(59,130,246,.18); color: #93c5fd; border-color: #3b82f6; }
+.cp-lang-block.active { background: var(--cp-accent-bg); }
+.cp-pin.pinned { background: var(--cp-accent-weak); color: var(--cp-accent-deep); border-color: var(--cp-accent); }

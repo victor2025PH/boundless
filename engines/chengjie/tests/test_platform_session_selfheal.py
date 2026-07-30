@@ -115,8 +115,16 @@ def _watchdog(config=None):
                           interval_sec=60)
 
 
+def _registered(platform="messenger", account_id="100", status="online"):
+    """把账号登记成注册表在册号（提醒只针对**期望在线**的号）。"""
+    from src.integrations.account_registry import get_account_registry
+    get_account_registry().upsert(platform, account_id, mode="web",
+                                  status=status)
+
+
 def test_watchdog_emits_reminder_with_rate_key():
     s = _store()
+    _registered()
     s.record("messenger", "100", "expired", detail="crash-loop give-up",
              login_id="msg_x")
     t0 = s.dump()["sessions"]["messenger:100"]["unhealthy_since"]
@@ -137,12 +145,55 @@ def test_watchdog_emits_reminder_with_rate_key():
 
 def test_watchdog_reminder_respects_disable_flag():
     s = _store()
+    _registered()
     s.record("messenger", "100", "expired")
     t0 = s.dump()["sessions"]["messenger:100"]["unhealthy_since"]
     wd = _watchdog({"health_watchdog": {
         "session_stale_remind": {"enabled": False}}})
     wd._check_platform_sessions(now=t0 + 86400)
     assert _events() == []
+
+
+@pytest.mark.parametrize("status", ["offline", "removed"])
+def test_watchdog_no_reminder_for_deliberately_offline_account(status):
+    """运营主动登出/删除 → Node push logged_out，但那不是「没人修的故障」。
+
+    坐席登出会把注册表置 offline（删除是软删 status=removed），编排器不会再拉起它
+    → 催人去修只会污染告警信号。该 push 仍留在健康表里（发送前快速失败要用）。
+    """
+    s = _store()
+    _registered(status=status)
+    s.record("messenger", "100", "logged_out", detail="logout requested via API")
+    t0 = s.dump()["sessions"]["messenger:100"]["unhealthy_since"]
+    wd = _watchdog()
+    wd._check_platform_sessions(now=t0 + 86400)
+    assert _events() == []
+    assert s.is_unhealthy("messenger", "100") is True
+
+
+def test_watchdog_no_reminder_for_unknown_account():
+    """注册表里没有的号（已彻底清掉 / 键其实是个 login_id）：编排器拉不起来，不催。"""
+    s = _store()
+    s.record("messenger", "msg_orphan", "expired")
+    t0 = s.dump()["sessions"]["messenger:msg_orphan"]["unhealthy_since"]
+    wd = _watchdog()
+    wd._check_platform_sessions(now=t0 + 86400)
+    assert _events() == []
+
+
+def test_watchdog_reminds_when_registry_unreadable(monkeypatch):
+    """注册表读失败 → 保守按「期望在线」处理，不因巡检自身故障漏报真掉线。"""
+    import src.integrations.account_registry as ar
+
+    def _boom():
+        raise RuntimeError("db locked")
+
+    s = _store()
+    s.record("messenger", "100", "expired")
+    t0 = s.dump()["sessions"]["messenger:100"]["unhealthy_since"]
+    monkeypatch.setattr(ar, "get_account_registry", _boom)
+    _watchdog()._check_platform_sessions(now=t0 + 86400)
+    assert len(_events()) == 1
 
 
 def test_watchdog_no_reminder_when_all_healthy():

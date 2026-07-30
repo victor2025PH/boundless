@@ -442,7 +442,7 @@
 /* Hourly trend line chart */
 (function(){
   var sids=[{% for s in summary %}'{{ s.strategy_id }}'{% if not loop.last %},{% endif %}{% endfor %}];
-  var palette=['#5b7cf6','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4'];
+  var palette=['#1e8cf2','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4'];
   var tctx=document.getElementById('trend-chart');
   if(!tctx||!sids.length)return;
   var hours={{ hours }};

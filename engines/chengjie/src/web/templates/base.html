@@ -5,8 +5,13 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{% block title %}{{ site_name|default((i18n or {}).get('brand', '无界科技 · 智聊')) }}{% endblock %}</title>
 {% include "_brand_head.html" %}
+<!-- 无界品牌令牌 SSOT（--bl-*，派生自 platform/brand/brand.css）+ 品牌拉丁字 @font-face：
+     与坐席工作台（workspace_base）、登录/初始化页（auth-surface）同源，三壳同一套品牌。 -->
+<link rel="stylesheet" href="/static/brand/brand.css?v=20260730a">
+<link rel="stylesheet" href="/static/brand/brand-fonts.css?v=20260730a">
 <link rel="stylesheet" href="/static/brand/brand-lockup.css">
 <link rel="stylesheet" href="/static/theme-tokens.css?v=20260723c">
+<link rel="stylesheet" href="/static/brand/th-brand-bridge.css?v=20260730a"><!-- 必须排在 theme-tokens 之后：把 --th-*-brand* 后置覆盖为品牌智连蓝 -->
 {% include "_i18n_bootstrap.html" %}
 {% include "_api_fetch.html" %}
 <link rel="stylesheet" href="/static/fonts/inter.css"><!-- 自托管 Inter；离线可用，替代原 Google Fonts 外链（国内/桌面端加载不到） -->
@@ -27,8 +32,20 @@
   --bg:#f4f5f7; --card:#fff; --nav:#17181d; --input:#f4f6fc;
   --t:#111827; --t2:#4b5563; --t3:#9ca3af;
   --bd:rgba(0,0,0,.07); --bd2:rgba(0,0,0,.13);
-  --p:#5b7cf6; --pd:#4a6aee; --ps:rgba(91,124,246,.12);
-  --g:linear-gradient(135deg,#5b7cf6,#8b5cf6);
+  /* 主色接品牌 SSOT：智连蓝（原 #5b7cf6 偏紫蓝是本壳独有的第 4 套蓝，
+     与工作台/登录页不一致，现统一到 --bl-growth）。--pd = 深一档（hover/active）。 */
+  --p:var(--bl-growth,#1e8cf2); --pd:var(--bl-growth-600,#0d76d9); --ps:rgba(30,140,242,.12);
+  /* 补齐派生页在用但本壳从未定义的三个变量。personas 等页大量写
+     var(--accent)/var(--blue)/var(--violet)，其中**无 fallback**的那些
+     （如 .pcard-focused 的 outline、.btchip.selected 的 color/border、
+     .health-card.hc-active 的 box-shadow）因变量未定义而整条属性失效
+     —— 选中态没有强调色、键盘焦点框看不见（可访问性缺陷）。
+     --accent = 主色别名（随品牌与日夜主题自动跟随）；
+     --blue/--violet 保持语义标准色（信息/装饰，刻意不接品牌主色，
+     否则「信息蓝」与「品牌强调蓝」撞色、失去语义区分）。 */
+  --accent:var(--p); --blue:#3b82f6; --violet:#8b5cf6;
+  /* 主渐变用官方 growth 光环，与登录页主按钮同一渐变 */
+  --g:var(--bl-growth-ring,linear-gradient(135deg,#0070f0 0%,#00c2ff 100%));
   --g-g:linear-gradient(135deg,#10b981,#059669);
   --g-r:linear-gradient(135deg,#ef4444,#dc2626);
   --g-a:linear-gradient(135deg,#f59e0b,#d97706);
@@ -39,16 +56,18 @@
   --s0:0 1px 3px rgba(0,0,0,.05),0 1px 2px rgba(0,0,0,.03);
   --s1:0 4px 12px rgba(0,0,0,.08);
   --s2:0 12px 32px rgba(0,0,0,.12);
-  --sp:0 4px 14px rgba(91,124,246,.35);
+  --sp:var(--bl-shadow-primary,0 4px 14px 0 rgba(30,140,242,.25));  /* 品牌主色投影 token，同登录页按钮 */
 }
 /* 暗色为默认主题（渠道中心融合 P0）：调色与工作台 --tk-* 暗版逐值对齐
-   （bg/surface/border/text 同工作台，强调色统一 #3b82f6 系），两壳同观感。 */
+   （bg/surface/border/text 同工作台，强调色统一到品牌智连蓝 --bl-growth 系），两壳同观感。 */
 [data-theme="dark"]{
   --bg:#0f1014; --card:#17181d; --nav:rgba(15,16,20,.98); --input:#1e2026;
   --t:#ececf0; --t2:#a0a3ab; --t3:#85888f;
   --bd:#26272e; --bd2:#30313a;
-  --p:#3b82f6; --pd:#60a5fa; --ps:rgba(59,130,246,.16);
-  --g:linear-gradient(135deg,#22d3ee,#3b82f6);
+  /* 暗底提亮一档（同工作台暗色 --tk-brand → --bl-growth-400）；--pd 再亮一档 */
+  --p:var(--bl-growth-400,#54a7f5); --pd:var(--bl-growth-300,#8bc4f8); --ps:rgba(84,167,245,.16);
+  --blue:#58a6ff; --violet:#a78bfa;  /* 暗底提亮，对齐 theme-tokens 暗色号；--accent 随 --p 自动跟随无需重声明 */
+  --g:linear-gradient(135deg,#22d3ee,var(--bl-growth-400,#54a7f5));
   --green:#34d399; --gs:rgba(52,211,153,.13);
   --red:#fb7185;   --rs:rgba(251,113,133,.13);
   --amber:#fbbf24; --as:rgba(251,191,36,.13);
@@ -58,7 +77,9 @@
 /* ── Reset ─────────────────────────────────────── */
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
 html{scroll-behavior:smooth}
-body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t);min-height:100vh;display:flex;font-size:14px;line-height:1.5;transition:background .3s,color .3s}
+/* 字体栈与 workspace_base / auth-surface.css 逐项一致（品牌拉丁字 + Inter 兜底 + CJK 系统字）；
+   原栈缺 CJK 显式声明，中文只能靠 system-ui 回落。后续可统一收口到 brand.css 的 --bl-font-sans。 */
+body{font-family:'Montserrat','Inter','PingFang SC','Microsoft YaHei',system-ui,sans-serif;background:var(--bg);color:var(--t);min-height:100vh;display:flex;font-size:14px;line-height:1.5;transition:background .3s,color .3s}
 [data-theme="dark"] body{background:radial-gradient(ellipse at 20% 50%,rgba(156,156,156,.05) 0%,transparent 50%),radial-gradient(ellipse at 80% 10%,rgba(63,185,80,.04) 0%,transparent 45%),#0f1014}
 /* ── Sidebar ─────────────────────────────────── */
 .sidebar{width:var(--sw);position:fixed;top:0;left:0;bottom:0;background:var(--nav);display:flex;flex-direction:column;z-index:100;border-right:1px solid var(--bd);transition:transform .3s cubic-bezier(.4,0,.2,1)}
@@ -70,12 +91,12 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 .sb-sec:first-child{border-top:none;margin-top:0;padding-top:.75rem}
 .sb-nav a{display:flex;align-items:center;gap:.55rem;padding:.58rem .75rem;border-radius:9px;color:rgba(255,255,255,.5);text-decoration:none;font-size:.86rem;font-weight:500;transition:all .18s;margin-bottom:2px}
 .sb-nav a:hover{background:rgba(255,255,255,.07);color:rgba(255,255,255,.85)}
-.sb-nav a.active{background:linear-gradient(135deg,rgba(91,124,246,.28),rgba(139,92,246,.18));color:#fff;box-shadow:inset 3px 0 0 var(--p)}
+.sb-nav a.active{background:linear-gradient(135deg,rgba(30,140,242,.28),rgba(139,92,246,.18));color:#fff;box-shadow:inset 3px 0 0 var(--p)}
 .sb-nav a svg{width:16px;height:16px;flex-shrink:0;opacity:.65}
 .sb-nav a:hover svg,.sb-nav a.active svg{opacity:1}
 /* Featured nav item (hub entrances) — design token, replaces one-off inline styles */
-.sb-nav a.nav-featured{background:linear-gradient(135deg,rgba(91,124,246,.12),rgba(139,92,246,.08))}
-.sb-nav a.nav-featured:hover{background:linear-gradient(135deg,rgba(91,124,246,.2),rgba(139,92,246,.14))}
+.sb-nav a.nav-featured{background:linear-gradient(135deg,rgba(30,140,242,.12),rgba(139,92,246,.08))}
+.sb-nav a.nav-featured:hover{background:linear-gradient(135deg,rgba(30,140,242,.2),rgba(139,92,246,.14))}
 /* Channel online dot — filled by /api/rpa-overview/status poll */
 .nav-dot{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.16);margin-left:auto;flex-shrink:0;transition:background .3s;cursor:pointer}
 /* P3 档位锁定项：压暗 + 锁标（点击进会员中心升级引导） */
@@ -110,11 +131,11 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 .sb-more-toggle svg{transition:transform .2s;flex-shrink:0;opacity:.5}
 .sb-more a{display:flex;align-items:center;gap:.55rem;padding:.48rem .75rem .48rem 1.1rem;border-radius:9px;color:rgba(255,255,255,.4);text-decoration:none;font-size:.82rem;font-weight:500;transition:all .18s;margin-bottom:1px}
 .sb-more a:hover{background:rgba(255,255,255,.06);color:rgba(255,255,255,.75)}
-.sb-more a.active{background:linear-gradient(135deg,rgba(91,124,246,.2),rgba(139,92,246,.12));color:#fff}
+.sb-more a.active{background:linear-gradient(135deg,rgba(30,140,242,.2),rgba(139,92,246,.12));color:#fff}
 .sb-more a svg{width:15px;height:15px;flex-shrink:0;opacity:.55}
 /* Mode switch — prominent button in footer */
-.sb-mode-btn{display:flex;align-items:center;justify-content:center;gap:.45rem;width:100%;padding:.5rem .7rem;border-radius:8px;background:rgba(91,124,246,.12);color:rgba(160,180,255,.9);font-size:.78rem;font-weight:600;text-decoration:none;transition:all .2s;border:1px solid rgba(91,124,246,.15);margin-top:.4rem}
-.sb-mode-btn:hover{background:rgba(91,124,246,.25);color:#fff;border-color:rgba(91,124,246,.35)}
+.sb-mode-btn{display:flex;align-items:center;justify-content:center;gap:.45rem;width:100%;padding:.5rem .7rem;border-radius:8px;background:rgba(30,140,242,.12);color:rgba(139,196,248,.9);font-size:.78rem;font-weight:600;text-decoration:none;transition:all .2s;border:1px solid rgba(30,140,242,.15);margin-top:.4rem}
+.sb-mode-btn:hover{background:rgba(30,140,242,.25);color:#fff;border-color:rgba(30,140,242,.35)}
 .sb-mode-btn svg{flex-shrink:0;opacity:.8}
 .sidebar.collapsed .sb-mode-btn span{display:none}
 .sidebar.collapsed .sb-mode-btn{padding:.45rem;justify-content:center}
@@ -239,7 +260,7 @@ tbody tr:hover td{background:var(--ps)}
 /* ── Buttons ─────────────────────────────── */
 .btn{display:inline-flex;align-items:center;gap:.4rem;padding:.5rem 1.1rem;border:none;border-radius:9px;font-size:.85rem;font-weight:600;cursor:pointer;transition:all .2s;text-decoration:none;font-family:inherit;position:relative;overflow:hidden;white-space:nowrap}
 .btn svg{width:15px;height:15px;flex-shrink:0}
-.btn-p{background:var(--g);color:#fff;box-shadow:0 2px 8px rgba(91,124,246,.22)}
+.btn-p{background:var(--g);color:#fff;box-shadow:0 2px 8px rgba(30,140,242,.22)}
 .btn-p:hover{box-shadow:var(--sp);transform:translateY(-1px)}
 .btn-s{background:var(--input);color:var(--t2);border:1px solid var(--bd)}
 .btn-s:hover{background:var(--bd2);color:var(--t)}
@@ -276,7 +297,7 @@ textarea{min-height:90px;resize:vertical;line-height:1.6}
 .toast.show{transform:translateX(0)}
 .t-ok{background:rgba(16,185,129,.15);color:var(--green);border:1px solid rgba(16,185,129,.2)}
 .t-err{background:rgba(239,68,68,.15);color:var(--red);border:1px solid rgba(239,68,68,.2)}
-.t-info{background:rgba(91,124,246,.15);color:var(--p);border:1px solid rgba(91,124,246,.2)}
+.t-info{background:rgba(30,140,242,.15);color:var(--p);border:1px solid rgba(30,140,242,.2)}
 /* ── Empty state ────────────────────────── */
 .empty{text-align:center;padding:3rem 1rem;color:var(--t3)}
 .empty svg{width:52px;height:52px;margin-bottom:.8rem;opacity:.25}

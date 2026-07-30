@@ -38,7 +38,7 @@
 .trans-pill.pending{background:var(--bd2);color:var(--t3)}
 .trans-pill.auto{background:var(--amber);color:#fff}
 /* AI 回复面板 */
-.ai-reply-panel{background:linear-gradient(135deg,rgba(91,124,246,.06),rgba(139,92,246,.06));border:1px solid rgba(91,124,246,.2);border-radius:var(--r);padding:1rem;margin-top:1rem}
+.ai-reply-panel{background:linear-gradient(135deg,color-mix(in srgb, var(--p,#1e8cf2) 6%, transparent),rgba(139,92,246,.06));border:1px solid color-mix(in srgb, var(--p,#1e8cf2) 20%, transparent);border-radius:var(--r);padding:1rem;margin-top:1rem}
 .ai-reply-panel h4{font-size:.82rem;font-weight:600;color:var(--p);margin-bottom:.6rem;display:flex;align-items:center;gap:.4rem}
 .ai-reply-bubble{background:var(--card);border-radius:var(--r-sm);padding:.8rem 1rem;font-size:.87rem;line-height:1.6;white-space:pre-wrap;min-height:60px}
 .ai-thinking{display:flex;gap:.3rem;align-items:center;padding:.5rem 0;color:var(--t3);font-size:.82rem}
@@ -1484,7 +1484,7 @@ async function loadCategoryStats(){
     const cats=d.categories||[];
     if(!cats.length){ el.innerHTML='<span style="color:var(--t3)">'+window.T('rpa_js_no_data')+'</span>'; return; }
     const maxUse=cats.reduce((m,c)=>Math.max(m,c.total_use||0),1);
-    const palette=['#5b7cf6','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#84cc16','#f97316'];
+    const palette=['#1e8cf2','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#84cc16','#f97316'];
     el.innerHTML=cats.map((c,i)=>{
       const pct=maxUse>0?Math.max(2,Math.round((c.total_use||0)/maxUse*100)):2;
       const color=palette[i%palette.length];

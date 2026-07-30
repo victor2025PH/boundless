@@ -2096,14 +2096,29 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
 
     async def _remote_logout(platform: str, account_id: str,
                              cfg: Dict[str, Any]) -> None:
-        """Best-effort 通知平台侧解除设备关联（目前 WhatsApp Baileys 需要）。绝不抛。"""
-        if str(platform or "").lower() != "whatsapp":
-            return
+        """Best-effort 通知平台侧 Node 微服务真正登出（WhatsApp / Messenger）。绝不抛。
+
+        两家微服务端点同形（``POST /accounts/{id}/logout``），但后果不同：
+        - WhatsApp：解除设备关联，否则手机端仍留着一个「已登录的网页设备」。
+        - Messenger：关浏览器上下文 + 删持久化 profile。**漏掉这一步会无限弹窗**——
+          Node 把 context ``close`` 当崩溃自愈（3s 后回灌 ``<login_id>.cookies.json``
+          快照重登，且每次登录成功都清零退避计数 → 永远到不了放弃点），只有它自己的
+          cancel/logout 会打「主动关闭」免疫标记。于是坐席登出后那个 headed 窗口关一次
+          弹一次（2026-07-30 实测三分钟 6 轮），在网页里手动退出登录也会被快照回灌撤销。
+        """
+        plat = str(platform or "").lower()
         try:
-            from src.integrations.whatsapp_baileys_login import (
-                protocol_enabled as wa_enabled, service_base_url, _post_json,
-            )
-            if not wa_enabled(cfg):
+            if plat == "whatsapp":
+                from src.integrations.whatsapp_baileys_login import (
+                    protocol_enabled, service_base_url, _post_json,
+                )
+            elif plat == "messenger":
+                from src.integrations.messenger_web_login import (
+                    web_enabled as protocol_enabled, service_base_url, _post_json,
+                )
+            else:
+                return
+            if not protocol_enabled(cfg):
                 return
             await _post_json(
                 f"{service_base_url(cfg)}/accounts/{account_id}/logout", {})

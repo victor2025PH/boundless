@@ -84,3 +84,28 @@ def test_semantic_tokens_not_in_scale_file():
     leaked = [t for t in leaked if not t.startswith("--cp-shadow")]
     assert not leaked, (
         f"tokens.css 混入语义色 {leaked}——移到 theme-light/theme-dark 双表")
+
+
+def test_accent_wires_to_brand_growth():
+    """副驾强调色必须接到 --bl-growth（网页收件箱 + 桌面壳同一套语义）。
+
+    未接线时组件仍显示某种蓝（旧 Tailwind #2563eb），肉眼「差不多对」，
+    但改 platform/brand 智连蓝不会跟——静默漂移。fallback 字面量也须是
+    #1e8cf2（品牌色本身），禁止回落到 #2563eb。
+    """
+    light = _LIGHT.read_text(encoding="utf-8")
+    dark = _DARK.read_text(encoding="utf-8")
+    assert "--cp-accent:" in light and "--bl-growth" in light, (
+        "theme-light.css 的 --cp-accent 须引用 --bl-growth"
+    )
+    assert "--cp-accent-hover:" in light and "--cp-accent-hover:" in dark, (
+        "明暗主题都须定义 --cp-accent-hover（桌面 style.css 主按钮 hover 依赖）"
+    )
+    assert "--bl-growth" in dark, (
+        "theme-dark.css 的 accent 阶也须引用 --bl-growth*（暗底取亮档）"
+    )
+    for label, css in (("light", light), ("dark", dark)):
+        assert "#2563eb" not in css and "#3b82f6" not in css, (
+            f"theme-{label}.css 仍含旧 Tailwind 蓝字面量——应改为 "
+            f"var(--bl-growth…) + 品牌色 fallback"
+        )

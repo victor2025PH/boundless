@@ -1,0 +1,124 @@
+"use strict";
+
+// electron-builder afterPack 钩子：装包**打完之后**核对「该随包的东西真在里面」。
+//
+// 为什么非要在这一步再验一次：`extraResources` 的 filter 写错、`from` 路径写歪、
+// 或者构建机上 services/*/node_modules 压根没装，electron-builder 都**不会报错**——
+// 它安安静静产出一个少了边车的安装包。而缺什么在客户机上才暴露：
+// 「接入 WhatsApp → 协议多开」点下去等来 service_down（甚至在 0.2.9 之前是直接灰着
+// 显示「未启用」）。这类静默漏包本仓已吃过三次（platform/licensing、shared/copilot、
+// domains，见 build_backend.py 的注释），每次都是发版后才由客户发现。
+//
+// 判据与「种子里开了哪些方式」一致，两端由 tests/test_desktop_seed_deliverable.py
+// 从源码侧钉住；这里补的是「产物侧」那一半。缺件即抛错 → 打包失败，绝不出坏包。
+
+const fs = require("fs");
+const path = require("path");
+
+/** 产物内 resources 目录（mac 在 .app 内，其余在 appOutDir 下）。 */
+function resourcesDir(context) {
+  const out = context.appOutDir;
+  if (context.electronPlatformName === "darwin") {
+    const appName = `${context.packager.appInfo.productFilename}.app`;
+    return path.join(out, appName, "Contents", "Resources");
+  }
+  return path.join(out, "resources");
+}
+
+// [包内相对路径, 人话说明, 缺了会怎样]
+const REQUIRED = [
+  ["backend", "后端 sidecar 目录", "桌面壳没有后端可拉起，整个 App 打不开工作台"],
+  [
+    path.join("services", "whatsapp-baileys", "server.js"),
+    "WhatsApp(Baileys) 协议边车入口",
+    "「接入 WhatsApp → 协议多开」在客户机上永远 service_down",
+  ],
+  [
+    path.join("services", "whatsapp-baileys", "node_modules"),
+    "WhatsApp 边车依赖",
+    "边车一起来就 MODULE_NOT_FOUND（构建机漏跑 npm ci）",
+  ],
+  [
+    path.join("services", "whatsapp-baileys", "package.json"),
+    "WhatsApp 边车 package.json",
+    'ESM 解析失败（server.js 依赖其中的 "type":"module"）',
+  ],
+  [
+    path.join("services", "messenger-web", "server.js"),
+    "Messenger 托管登录边车入口",
+    "「接入 Messenger」在客户机上永远 service_down",
+  ],
+  [
+    path.join("services", "messenger-web", "node_modules"),
+    "Messenger 边车依赖",
+    "边车一起来就 MODULE_NOT_FOUND（构建机漏跑 npm ci）",
+  ],
+  [
+    path.join("services", "messenger-web", "package.json"),
+    "Messenger 边车 package.json",
+    'ESM 解析失败（server.js 依赖其中的 "type":"module"）',
+  ],
+];
+
+// 通配判据（目录名带版本号，不能写死）：[所在目录, glob 前缀, 说明, 影响]
+const REQUIRED_GLOB = [
+  [
+    path.join("services", "messenger-web", "node_modules", "playwright-core",
+      ".local-browsers"),
+    "chromium-",
+    "Messenger 的兜底 Chromium",
+    "没装 Chrome 的客户机点登录后浏览器起不来（我们自己开发机装了 Chrome，永远复现不出）",
+  ],
+];
+
+// 绝不能随包的东西：本机生产号的登录凭据 / 日志。随包＝把自己的 WhatsApp 账号
+// 连同会话密钥发给每一个下载用户（同 protocol_media 那次隐私事故）。
+const FORBIDDEN = [
+  [path.join("services", "whatsapp-baileys", "sessions"), "本机 WhatsApp 登录凭据"],
+  [path.join("services", "whatsapp-baileys", "logs"), "本机运行日志"],
+  [
+    path.join("services", "messenger-web", "sessions"),
+    "本机 Messenger 浏览器 profile 与 cookie（含已登录的 Facebook 会话）",
+  ],
+  [path.join("services", "messenger-web", "logs"), "本机运行日志"],
+];
+
+exports.default = async function afterPack(context) {
+  const res = resourcesDir(context);
+  const missing = [];
+  for (const [rel, what, impact] of REQUIRED) {
+    if (!fs.existsSync(path.join(res, rel))) {
+      missing.push(`  · 缺 ${rel}（${what}）→ ${impact}`);
+    }
+  }
+  for (const [dir, prefix, what, impact] of REQUIRED_GLOB) {
+    const abs = path.join(res, dir);
+    let hit = false;
+    try {
+      hit = fs.readdirSync(abs).some((n) => n.startsWith(prefix));
+    } catch (e) { hit = false; }
+    if (!hit) {
+      missing.push(`  · 缺 ${dir}/${prefix}*（${what}）→ ${impact}`);
+    }
+  }
+  const leaked = [];
+  for (const [rel, what] of FORBIDDEN) {
+    if (fs.existsSync(path.join(res, rel))) {
+      leaked.push(`  · ${rel}（${what}）`);
+    }
+  }
+
+  if (leaked.length) {
+    throw new Error(
+      `[after-pack] 安装包里含**绝不能分发**的内容（打包中止防泄漏）：\n${leaked.join("\n")}\n` +
+      "请检查 package.json 的 extraResources filter"
+    );
+  }
+  if (missing.length) {
+    throw new Error(
+      `[after-pack] 安装包缺件（打包中止，避免出一个「装了也用不了」的包）：\n${missing.join("\n")}\n` +
+      `resources=${res}`
+    );
+  }
+  console.log(`[after-pack] ✓ 随包交付物齐备（${REQUIRED.length} 项）：${res}`);
+};

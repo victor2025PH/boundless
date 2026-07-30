@@ -7,6 +7,7 @@ const { spawn, exec } = require("child_process");
 const { chromeLikeUserAgent, isWhatsappUrl, needsChromeUa, urlNeedsChromeUa } = require("./webview-ua.js");
 const { fingerprintArg, accountIdFromPartition } = require("./inject/fingerprint.js");
 const { createBackendManager } = require("./backend-launcher.js");
+const { createAllSidecarManagers } = require("./sidecar-launcher.js");
 const brandUtil = require("./brand-util.js");
 const tokenUtil = require("./token-util.js");
 
@@ -78,9 +79,11 @@ if (process.env.AITR_MANAGED_EDITION === "1") _managedEdition = true;
 else if (process.env.AITR_MANAGED_EDITION === "0") _managedEdition = false;
 process.env.AITR_MANAGED_EDITION = _managedEdition ? "1" : "0";
 
-// 内置默认品牌图标（copy-shared 落地）。窗口创建时用它作原生图标兜底，
-// 白标改回默认时也还原到它。
-const DEFAULT_BRAND_ICON = path.join(__dirname, "renderer", "brand", "boundless-mark-256.png");
+// 内置默认产品图标（copy-shared 落地）。窗口创建时用它作原生图标兜底，
+// 白标改回默认时也还原到它。用 ChatX 产品标而非母标：任务栏 / Alt-Tab 里能直接
+// 认出「这是智聊」，多个无界产品并存时可区分；白标客户仍由自定义 logo 覆盖
+// （isDefaultMark 判定的是后端返回的 mark URL，与本地图标路径无关，故切换零副作用）。
+const DEFAULT_BRAND_ICON = path.join(__dirname, "renderer", "brand", "chatx.png");
 
 // 品牌信息统一形状：{ product, company, website, mark }（纯逻辑见 brand-util.js）。
 // 离线兜底：config.brand → copy-shared 落地的 renderer/brand/brand.json → 硬编码默认。
@@ -167,6 +170,11 @@ async function applyLiveWindowBranding(win, { force = false } = {}) {
 
 // 后端 sidecar 生命周期：免手动起 Python。拉起前先探活（已在跑→复用），退出回收。
 const backendManager = createBackendManager({ app, spawn, exec, fs, fetch: global.fetch });
+
+// 协议边车（WhatsApp/Baileys + Messenger/Web）：随包 + 自动拉起，使这两条接入路
+// 装完即可用，而不是灰着显示「未启用 / 需运维配置」。缺包或起不来一律软降级
+// （后端诊断报 service_down，弹窗如实说「服务未运行」），绝不阻断桌面启动。
+const sidecars = createAllSidecarManagers({ app, spawn, exec, fs, fetch: global.fetch });
 
 /** 浅合并并持久化 config.json（首启向导用）；同步更新内存 config。返回 {ok}。
  *  首启完成会写 onboarding: { completed, completed_at, edition }——与 renderer
@@ -279,6 +287,9 @@ ipcMain.handle("desktop:config", () => ({
 // 后端拉起状态（idle/probing/starting/ready/running-external/failed/disabled/stopped）。
 // renderer 可据此把「正在连接后台」细化为「正在启动后台服务…」并在 failed 时给指引。
 ipcMain.handle("desktop:backend-spawn-status", () => backendManager.getStatus());
+
+// 边车拉起状态：接入弹窗排障用（absent=没随包 / failed=起不来 / running-external=用户自管）。
+ipcMain.handle("desktop:sidecar-status", () => sidecars.getStatus());
 
 ipcMain.handle("desktop:backend-health", async () => {
   const { base_url } = config.backend || {};
@@ -1414,6 +1425,9 @@ if (!_gotSingleInstanceLock) {
     await maybeRotateManagedToken();
     // 后台自拉起（不阻塞开窗：renderer 已有「正在连接后台→自动重连」遮罩兜底）。
     backendManager.start(config).catch((e) => console.log(`[backend] start error: ${e}`));
+    // 边车在后端之后拉起：它们要用 config.backend.token 回推入站消息，而该令牌可能刚被
+    // maybeRotateManagedToken 换过。同样不阻塞开窗（登录成功前没有任何回推流量）。
+    sidecars.startAll(config).catch((e) => console.log(`[sidecar] start error: ${e}`));
     createWindow();
     setupAutoUpdate();
   });
@@ -1425,6 +1439,7 @@ app.on("before-quit", () => {
   if (_backendStopped) return;
   _backendStopped = true;
   try { backendManager.stop(); } catch (e) { /* 回收失败不阻断退出 */ }
+  try { sidecars.stopAll(); } catch (e) { /* 同上：边车残留不该阻断退出 */ }
 });
 
 app.on("window-all-closed", () => {

@@ -170,6 +170,56 @@ def test_message_read_failure_falls_back_to_allow():
     assert _check(_svc(6.0, messages=RuntimeError("db down")), "approve") is None
 
 
+def test_badge_prediction_always_agrees_with_the_guard():
+    """**核心不变量**：列表徽标的预判必须与 resolve 时护栏的实际行为完全一致。
+
+    若徽标另算一套，坐席会看到「没标记」却被 409 拦下——比没有徽标更糟（他会以为
+    系统坏了、反复点）。这正是把判定收成 `_approve_block_reason` 单一入口的理由。
+    """
+    cases = [
+        # (稿龄h, 是否已回过, 阈值h)
+        (0.5, False, 24.0), (0.5, True, 24.0),      # 新鲜；grace 内即便回过也放行
+        (3.0, False, 24.0), (3.0, True, 24.0),      # grace 外：回过才拦
+        (23.9, True, 24.0), (23.9, False, 24.0),
+        (24.5, False, 24.0), (213.1, True, 24.0),   # 超龄
+    ]
+    for age_h, replied, max_h in cases:
+        msgs = [_msg("out", max(0.0, age_h - 1.0))] if replied else []
+        svc = _svc(age_h, stale_h=max_h, messages=msgs)
+        draft = svc.get_draft("inbox:42") or {}
+        predicted = svc.approve_block_reason(draft)
+        actual = svc._stale_check(draft, "approve")
+        actual_reason = (actual or {}).get("stale_reason", "") if actual else ""
+        assert predicted == actual_reason, (
+            f"预判与护栏不一致：age={age_h}h replied={replied} "
+            f"预判={predicted!r} 实际={actual_reason!r}")
+
+
+def test_badge_is_empty_when_delivery_not_wired():
+    """没接线＝根本不会发出去，护栏不拦 → 徽标也不能吓唬人。"""
+    svc = _svc(500.0, wired=False)
+    assert svc.approve_block_reason(svc.get_draft("inbox:42") or {}) == ""
+
+
+def test_badge_ignores_non_inbox_kinds():
+    svc = _svc(500.0, draft_id="line:7")
+    assert svc.approve_block_reason(svc.get_draft("line:7") or {}) == ""
+
+
+def test_badge_handles_missing_timestamp():
+    svc = _svc(0, created=0)
+    assert svc.approve_block_reason(svc.get_draft("inbox:42") or {}) == ""
+
+
+def test_list_route_attaches_prediction():
+    """契约：/api/drafts 必须给每行带 approve_blocked（前端据此渲染徽标）。"""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1]
+           / "src" / "web" / "routes" / "drafts_routes.py").read_text(encoding="utf-8")
+    assert "approve_block_reason" in src and "approve_blocked" in src
+
+
 def test_i18n_keys_present_and_bilingual():
     """错误文案必须中英齐备，且占位符不与 tr() 形参撞名（request/key/default 禁用）。"""
     from src.web.i18n_packs.errors_stock import EN, ZH

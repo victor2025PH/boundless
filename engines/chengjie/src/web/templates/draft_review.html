@@ -6,9 +6,9 @@
   .dr-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;}
   .dr-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;}
   .dr-tab{padding:5px 14px;border:1px solid #d1d5db;border-radius:16px;font-size:13px;cursor:pointer;background:#fff;color:#374151;}
-  .dr-tab.active{background:#2563eb;color:#fff;border-color:#2563eb;}
+  .dr-tab.active{background:var(--bl-growth-600,#0d76d9);color:#fff;border-color:var(--bl-growth-600,#0d76d9);}
   .dr-card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:12px;transition:box-shadow .15s;}
-  .dr-card:hover{box-shadow:0 2px 12px rgba(37,99,235,.12);}
+  .dr-card:hover{box-shadow:0 2px 12px color-mix(in srgb, var(--tk-brand,#1e8cf2) 12%, transparent);}
   .dr-card.l4{border-left:4px solid #dc2626;}
   .dr-card.l3{border-left:4px solid #d97706;}
   .dr-card.l2{border-left:4px solid #16a34a;}
@@ -22,14 +22,14 @@
   .badge-l0{background:#f3f4f6;color:#6b7280;}
   .dr-platform{font-size:11px;color:#94a3b8;}
   .dr-peer{background:#f1f5f9;border-radius:8px;padding:10px;font-size:13px;color:#334155;margin:8px 0;}
-  .dr-draft{background:#eff6ff;border-radius:8px;padding:10px;font-size:13px;color:#1e3a5f;margin:8px 0;}
+  .dr-draft{background:var(--bl-growth-50,#eef6fe);border-radius:8px;padding:10px;font-size:13px;color:#1e3a5f;margin:8px 0;}
   .dr-reasons{font-size:11px;color:#dc2626;margin:4px 0;}
   .dr-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
   .dr-btn{padding:6px 14px;border-radius:6px;font-size:13px;cursor:pointer;border:1px solid;transition:opacity .15s;}
   .dr-btn:disabled{opacity:.45;cursor:default;}
   .btn-approve{background:#16a34a;color:#fff;border-color:#16a34a;}
   .btn-reject{background:#fff;color:#dc2626;border-color:#dc2626;}
-  .btn-edit{background:#fff;color:#2563eb;border-color:#2563eb;}
+  .btn-edit{background:#fff;color:var(--bl-growth-600,#0d76d9);border-color:var(--bl-growth-600,#0d76d9);}
   .btn-override{background:#991b1b;color:#fff;border-color:#991b1b;}
   .btn-autosend{background:#059669;color:#fff;border-color:#059669;}
   .dr-empty{text-align:center;padding:40px 0;color:#94a3b8;font-size:14px;}
@@ -49,7 +49,7 @@
   .dr-copilot-risk-medium{background:#fef3c7;color:#92400e;}
   .dr-copilot-risk-high{background:#fee2e2;color:#991b1b;}
   .dr-copilot-kb{background:#f1f5f9;border-radius:6px;padding:6px 10px;margin:3px 0;font-size:11px;}
-  .dr-copilot-kb strong{color:#2563eb;}
+  .dr-copilot-kb strong{color:var(--bl-growth-600,#0d76d9);}
   .dr-copilot-loading{color:#94a3b8;font-style:italic;}
   /* I1 对话智能元数据徽章 */
   .dr-intel{display:flex;flex-wrap:wrap;gap:5px;margin:6px 0;align-items:center;}
@@ -75,10 +75,10 @@
   .dr-tpl-body.open{display:block;}
   .dr-tpl-filters{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;}
   .dr-tpl-filter{padding:3px 8px;border-radius:6px;font-size:11px;cursor:pointer;border:1px solid #cbd5e1;background:#fff;color:#475569;}
-  .dr-tpl-filter.active{background:#3b82f6;color:#fff;border-color:#3b82f6;}
+  .dr-tpl-filter.active{background:var(--tk-brand,#1e8cf2);color:#fff;border-color:var(--tk-brand,#1e8cf2);}
   .dr-tpl-list{max-height:200px;overflow-y:auto;}
   .dr-tpl-item{padding:8px 10px;border-radius:6px;cursor:pointer;margin:3px 0;transition:background .15s;border-left:3px solid transparent;}
-  .dr-tpl-item:hover{background:#eff6ff;border-left-color:#3b82f6;}
+  .dr-tpl-item:hover{background:var(--bl-growth-50,#eef6fe);border-left-color:var(--tk-brand,#1e8cf2);}
   .dr-tpl-item-title{font-weight:600;color:#1e293b;font-size:12px;}
   .dr-tpl-item-content{color:#64748b;font-size:11px;margin-top:2px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:300px;}
   .dr-tpl-search{width:100%;padding:5px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;margin-bottom:6px;}
