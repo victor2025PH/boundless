@@ -102,10 +102,20 @@
 
   // 探针打 /login：sw.js 明确不拦截 /login，所以这是一次真实网络请求，
   // 不会被 Service Worker 的缓存层骗过。任何 HTTP 响应都代表后台已可达。
+  // 必须带超时（2026-07-31 实锤）：服务端重启窗口内端口无监听时，Windows 防火墙
+  // 对局域网来的 SYN 是静默丢弃（不回 RST）——无超时的 fetch 会挂起数分钟，
+  // busy 一直为 true：退避循环停摆、重试按钮锁死在「探测中…」、回前台补探被
+  // busy 挡掉——服务器早已恢复，页面却钉死在「正在探测…」（实录：重启窗口 31s，
+  // 页面卡了 4 分钟+）。超时一到按失败处理，退避循环立刻接管。
+  var PROBE_TIMEOUT_MS = 6000;
   function probe() {
-    return fetch("/login", { method: "GET", cache: "no-store", redirect: "manual" })
+    var ctl = (typeof AbortController === "function") ? new AbortController() : null;
+    var kill = ctl ? setTimeout(function () { try { ctl.abort(); } catch (e) {} }, PROBE_TIMEOUT_MS) : null;
+    return fetch("/login", { method: "GET", cache: "no-store", redirect: "manual",
+                             signal: ctl ? ctl.signal : undefined })
       .then(function () { return true; })
-      .catch(function () { return false; });
+      .catch(function () { return false; })
+      .then(function (ok) { if (kill) clearTimeout(kill); return ok; });
   }
 
   function schedule() {

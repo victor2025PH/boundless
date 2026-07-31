@@ -14,6 +14,7 @@ quiet_poll（宣告与停机之间的轮询须确认而非清除）· 内部路�
 from __future__ import annotations
 
 import pathlib
+import re
 import time
 import types
 
@@ -214,3 +215,20 @@ def test_static_wiring_frontend_and_restart_script():
     assert ps.index("/api/internal/ops/maintenance-notice") < ps.index(
         "stopping instance..."
     )
+
+
+def test_offline_page_probe_has_timeout_and_sw_version_bumped():
+    """PWA 离线页探针必须带超时中止（2026-07-31 实锤：重启窗口内端口无监听时
+    Windows 防火墙对局域网 SYN 静默丢弃，无超时的 fetch 挂起数分钟 → busy 钉死，
+    退避循环/手动重试/回前台补探全部停摆——服务器早已恢复，页面却永远停在
+    「正在探测…」）。改 offline.html 必须同步递增 sw.js VERSION，否则老客户端
+    继续吃 SHELL_CACHE 里预缓存的旧壳，修了等于没修。"""
+    repo = pathlib.Path(__file__).resolve().parent.parent
+    pwa = repo / "src" / "web" / "static" / "pwa"
+    offline = (pwa / "offline.html").read_text(encoding="utf-8")
+    assert "AbortController" in offline
+    assert "PROBE_TIMEOUT_MS" in offline
+    assert "signal" in offline
+    sw = (pwa / "sw.js").read_text(encoding="utf-8")
+    m = re.search(r'VERSION\s*=\s*"v(\d+)-', sw)
+    assert m and int(m.group(1)) >= 5, "sw.js VERSION 须随 offline.html 改动递增（>=v5）"

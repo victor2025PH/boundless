@@ -9,7 +9,8 @@
 "use strict";
 
 // 改 offline.html / 预缓存清单后必须递增 VERSION，否则老客户端继续吃 SHELL_CACHE 里的旧壳。
-const VERSION = "v4-2026-07-27";
+// v5：offline 探针加 6s 超时中止（防火墙静默丢包会把无超时 fetch 挂起数分钟 → 页面钉死）。
+const VERSION = "v5-2026-07-31";
 const SHELL_CACHE = "ws-shell-" + VERSION;
 const ASSET_CACHE = "ws-assets-" + VERSION;
 const OFFLINE_URL = "/static/pwa/offline.html";
