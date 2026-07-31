@@ -1866,6 +1866,14 @@ class AIClient(LoggerMixin):
         """将主系统提示词 + 快速设置 + 上下文提示合并为单一 system_instruction"""
         parts = []
         context = context or {}
+        # 裸 system 通道（P0-198，2026-07-31）：工具型调用（翻译引擎等）传
+        # ``_bare_system`` = 完整 system 文本，跳过全局 system_prompt / 人设块 /
+        # 深度人设注入。实锤事故：AIEngine.translate 经 chat() 走完整聊天管线，
+        # 入站「So you married ?」被 conversion 域人设按 bio 答成「离过婚，现在
+        # 是单身」写进译文槽——翻译调用绝不能带人设身份。
+        _bare = str(context.get("_bare_system") or "").strip()
+        if _bare:
+            return _bare
         _suppress_global_identity = bool(context.get("suppress_global_ai_identity"))
         # 单一身份源（2026-07-20）：会话/账号被显式绑定了人设时（chat_binding / account_profile
         # 两个 tier），只用该人设身份，压制全局 ai.system_prompt（否则如 顾嘉(system_prompt) 与
@@ -2237,9 +2245,12 @@ class AIClient(LoggerMixin):
         return contents
 
     def _media_capability_hint_enabled(self) -> bool:
-        """媒体能力边界声明是否注入：selfie 子系统启用（说明本部署真会自动发图）
-        且未被 ``companion.media_promise_guard.capability_hint`` 显式关闭。
-        selfie 未启用的部署不注入——没有发图能力时这段说明只是噪声。"""
+        """「发图协议/边界声明」的**全局前置**：selfie 子系统启用（本部署真会
+        自动发图）且未被 ``companion.media_promise_guard.capability_hint`` 显式
+        关闭。注意（2026-07-31 语义修正）：这只是能力**开**态的注入前置——
+        能力**关**态（selfie 关/人设 capabilities.photos 关）不再是「什么都不注入」，
+        而是经 ``_capability_hint_allowed`` 注入「无发图能力」硬约束
+        （photo_capability SSOT），修「发不了图却放任 LLM 承诺发图」的倒挂。"""
         try:
             cfg = (self.config.config or {}) if self.config else {}
             comp = (cfg.get("companion") or {}) if isinstance(cfg, dict) else {}
@@ -2249,6 +2260,19 @@ class AIClient(LoggerMixin):
             return bool(pg.get("capability_hint", True))
         except Exception:
             return False
+
+    def _capability_hint_allowed(self) -> bool:
+        """媒体能力边界**文本**是否允许注入（``companion.media_promise_guard.
+        capability_hint``，默认开）。与能力开不开正交：本开关管「说不说」，
+        能力判定管「说哪种」（开=发图协议；关=无发图硬约束）。异常按开处理——
+        默认姿态是「无能力须约束」，宁多说一句不放任承诺。"""
+        try:
+            cfg = (self.config.config or {}) if self.config else {}
+            comp = (cfg.get("companion") or {}) if isinstance(cfg, dict) else {}
+            pg = (comp.get("media_promise_guard") or {})
+            return bool(pg.get("capability_hint", True))
+        except Exception:
+            return True
 
     def _photo_intent_mode(self) -> str:
         """发图意图模式（companion.selfie.intent.mode）：keyword|llm|hybrid（默认）。
@@ -2582,22 +2606,40 @@ class AIClient(LoggerMixin):
                 from src.ai.photo_directive import build_photo_deny_line
                 _deny = build_photo_deny_line()
             prompt_parts.append("【发图协同——重要】\n" + _media_hint + _deny)
-        elif _is_companion and self._media_capability_hint_enabled():
-            if self._photo_intent_mode() != "keyword":
-                # 主动决策协议（2026-07-14 决策权上移）：LLM 读完整上下文自行判断
-                # 要不要发图 + 发什么场景，正文末行 [PHOTO …] 标记声明；系统解析后
-                # 真出图（PuLID 锁脸）。根治关键词打地鼠（"发一遍新照片"类漏报）。
-                from src.ai.photo_directive import build_photo_protocol_prompt
-                prompt_parts.append(build_photo_protocol_prompt())
-            else:
-                # keyword 回退模式：旧式被动声明（发图判定完全依赖入站关键词）。
-                prompt_parts.append(
-                    "【媒体能力边界】需要发照片/语音时由系统自动完成真实发送，"
-                    "你专注文字聊天：不要主动写「我发照片给你」「等我拍一张」"
-                    "「我发条语音」这类承诺；**更不要谎称「已经发了」「发过去了」"
-                    "「发到群里了」「你看看这张」**——你的文字里没有真的附带照片，"
-                    "这样说对方收不到会觉得你在骗人；对方要照片时自然回应即可"
-                    "（系统会处理），也不要否认你能拍照。")
+        elif _is_companion:
+            # 发图能力有效性（photo_capability SSOT，2026-07-31）：全局 selfie 开
+            # **且当前人设 capabilities.photos 开（默认关）** 才注入发图协议/边界
+            # 声明；能力关 → 注入「无发图能力」硬约束。修旧逻辑倒挂——旧代码在
+            # selfie 未启用时什么都不注入，而最需要「别承诺发图」约束的恰是发不了
+            # 图的形态（试聊实录：「我翻翻手机相册哈」连环空头支票）。
+            from src.companion.photo_capability import (
+                no_photo_constraint,
+                persona_photos_enabled,
+                resolve_prompt_persona,
+            )
+            _persona_photos_on = persona_photos_enabled(
+                resolve_prompt_persona(context))
+            if self._media_capability_hint_enabled() and _persona_photos_on:
+                if self._photo_intent_mode() != "keyword":
+                    # 主动决策协议（2026-07-14 决策权上移）：LLM 读完整上下文自行判断
+                    # 要不要发图 + 发什么场景，正文末行 [PHOTO …] 标记声明；系统解析后
+                    # 真出图（PuLID 锁脸）。根治关键词打地鼠（"发一遍新照片"类漏报）。
+                    from src.ai.photo_directive import build_photo_protocol_prompt
+                    prompt_parts.append(build_photo_protocol_prompt())
+                else:
+                    # keyword 回退模式：旧式被动声明（发图判定完全依赖入站关键词）。
+                    prompt_parts.append(
+                        "【媒体能力边界】需要发照片/语音时由系统自动完成真实发送，"
+                        "你专注文字聊天：不要主动写「我发照片给你」「等我拍一张」"
+                        "「我发条语音」这类承诺；**更不要谎称「已经发了」「发过去了」"
+                        "「发到群里了」「你看看这张」**——你的文字里没有真的附带照片，"
+                        "这样说对方收不到会觉得你在骗人；对方要照片时自然回应即可"
+                        "（系统会处理），也不要否认你能拍照。")
+            elif self._capability_hint_allowed():
+                # 能力关闭（全局 selfie 关 或 人设开关关/无人设）：注入硬边界。
+                # 人设关时人设块已带一句短约束（persona_manager 反向消费），这里的
+                # 详细版并存＝防御纵深（persona_block_detail=none 的部署也有兜底）。
+                prompt_parts.append(no_photo_constraint())
 
         # 语音能力（2026-07-20）：开了自动语音（inbox.l2_autosend.voice.enabled）时，明确告诉
         # AI 它能发语音——系统会把回复转成人设声音发出。否则拟人人设会自作主张编「我发不了语音/

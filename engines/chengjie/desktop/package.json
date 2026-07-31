@@ -1,6 +1,7 @@
 {
   "name": "telegram-ai-desktop",
-  "version": "0.2.11",
+  "version": "1.0.4",
+  "displayVersion": "1.004",
   "private": true,
   "description": "桌面壳：嵌官方 web 客户端 + 注入点击翻译/智能回复（对接本仓库 FastAPI 后端）",
   "main": "main.js",
@@ -14,6 +15,8 @@
     "build:backend": "python build/build_backend.py && python build/smoke_backend.py",
     "smoke:backend": "python build/smoke_backend.py",
     "smoke:upgrade": "python build/smoke_upgrade.py",
+    "stage:internal": "python build/stage_internal_assets.py",
+    "smoke:internal": "python build/smoke_internal.py",
     "predist": "node copy-shared.js && python build/smoke_backend.py",
     "dist": "electron-builder",
     "predist:win": "node copy-shared.js && python build/smoke_backend.py",
@@ -47,6 +50,13 @@
       {
         "from": "build/backend-dist",
         "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "build/seed-data",
+        "to": "seed-data",
         "filter": [
           "**/*"
         ]

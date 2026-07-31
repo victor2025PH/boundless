@@ -32,7 +32,12 @@ class ConfigManager:
         """
         # logger 必须先于 _get_default_config_path()，后者在回退到 example 配置时
         # 会用 self.logger.warning（纯净 checkout 无 config.yaml 时即触发）。
-        self.logger = logging.getLogger(__name__)
+        # P2-198（2026-07-31 探针实锤）：logger 名必须挂进 ai_chat_assistant 树——
+        # 旧名 `src.utils.config_manager` 无 handler 也不属于该树，INFO（含
+        # 「配置热重载完成」）全部静默丢弃、WARNING 经 logging.lastResort 漏进
+        # stderr（198 的 err 日志乱码行就是它）。热重载**功能一直是好的**，
+        # 只是完全不可见——排障时被误判成「热重载没跑」，浪费一轮复现。
+        self.logger = logging.getLogger("ai_chat_assistant.ConfigManager")
         self.config_path = Path(config_path) if config_path else self._get_default_config_path()
         self.config: Dict[str, Any] = {}
         self._quota_rules_cache: Optional[Dict[str, Any]] = None
@@ -65,12 +70,14 @@ class ConfigManager:
         if env_path:
             target = Path(env_path).expanduser()
             self._ensure_seeded(target)
+            self._ensure_seeded_extras(target)
             return target
 
         env_dir = os.environ.get("AITR_DATA_DIR")
         if env_dir:
             target = Path(env_dir).expanduser() / "config" / "config.yaml"
             self._ensure_seeded(target)
+            self._ensure_seeded_extras(target)
             return target
 
         # 优先使用仓库 config/config.yaml
@@ -137,6 +144,144 @@ class ConfigManager:
         except Exception as exc:
             self.logger.warning("配置播种失败（忽略）: %s", exc)
 
+    # ── 随包数据种子（内测/定制包：人设/语音/相册/KB + 功能 overlay）──────────
+    # 内测包（v1.001 起）把生产机资产暂存进 resources/seed-data/（见
+    # desktop/build/stage_internal_assets.py），首启播种到用户数据区。标准包没有
+    # 该目录、服务器部署没有 AITR_SEED_DATA_DIR → 整条链 no-op，行为零变化。
+    _SEED_ASSET_ITEMS = (
+        "config/profiles_runtime.yaml",
+        "config/voice_refs",
+        "config/prerender_lines",
+        "config/persona_albums",
+        "config/knowledge_base.db",
+        "config/persona_bio.db",
+        "config/persona_media.db",
+        "assets/voices",
+    )
+
+    def _seed_extras_dir(self) -> Optional[Path]:
+        """随包种子目录：env 显式指定优先；冻结产物自动发现 resources/seed-data。"""
+        env = (os.environ.get("AITR_SEED_DATA_DIR") or "").strip()
+        if env:
+            p = Path(env).expanduser()
+            return p if p.is_dir() else None
+        try:
+            import sys
+            if getattr(sys, "frozen", False):
+                # resources/backend/backend.exe → resources/seed-data
+                p = Path(sys.executable).resolve().parent.parent / "seed-data"
+                return p if p.is_dir() else None
+        except Exception:
+            pass
+        return None
+
+    def _ensure_seeded_extras(self, target: Path) -> None:
+        """把随包种子（若有）播种进用户数据区——覆盖「全新安装」与「升级安装」两态。
+
+        与 ``_ensure_seeded``（config 主文件）同哲学，但每一项独立「缺才补」：
+        目标已存在的文件/目录一概不动（用户改过的人设、追加的参考音不会被覆盖）；
+        功能 overlay 已存在时只补**缺失键**（显式 true/false 都尊重——与
+        ``_ensure_baseline`` 同一条三态语义）。无种子目录 = 全程 no-op。永不抛。
+        """
+        try:
+            seed = self._seed_extras_dir()
+            if not seed:
+                return
+            import shutil
+            config_dir = target.parent
+            data_root = config_dir.parent
+            self._seed_overlay_from(
+                seed / "config.local.internal.yaml",
+                config_dir / "config.local.yaml")
+            for rel in self._SEED_ASSET_ITEMS:
+                src = seed / rel
+                dst = data_root / rel
+                try:
+                    if not src.exists() or dst.exists():
+                        continue
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    if src.is_dir():
+                        shutil.copytree(str(src), str(dst))
+                    else:
+                        shutil.copyfile(str(src), str(dst))
+                    if dst.name == "persona_media.db":
+                        self._absolutize_media_db(dst, data_root)
+                    self.logger.warning("已播种随包资产: %s", rel)
+                except Exception as exc:
+                    self.logger.warning("随包资产播种失败（忽略 %s）: %s", rel, exc)
+        except Exception as exc:
+            self.logger.warning("随包资产播种异常（忽略）: %s", exc)
+
+    def _seed_overlay_from(self, src: Path, dst: Path) -> None:
+        """功能 overlay 种子 → config.local.yaml：缺则整份拷；有则只补缺失键。"""
+        try:
+            if not src.exists():
+                return
+            import shutil
+            if not dst.exists():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(str(src), str(dst))
+                self.logger.warning(
+                    "已播种功能 overlay: %s ← %s", dst, src.name)
+                return
+            with open(src, "r", encoding="utf-8") as f:
+                seed = yaml.safe_load(f) or {}
+            with open(dst, "r", encoding="utf-8") as f:
+                cur = yaml.safe_load(f) or {}
+            if not isinstance(seed, dict) or not isinstance(cur, dict):
+                return
+            added = self._merge_missing(cur, seed)
+            if not added:
+                return
+            tmp = dst.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write("# 运行时设置 + 随包种子补齐的 overlay（深合并覆盖 config.yaml）。\n")
+                yaml.safe_dump(cur, f, allow_unicode=True, sort_keys=False)
+            os.replace(tmp, dst)
+            self.logger.warning("功能 overlay 已按种子补齐 %d 个缺失键", added)
+        except Exception as exc:
+            self.logger.warning("功能 overlay 播种失败（忽略）: %s", exc)
+
+    @staticmethod
+    def _merge_missing(base: Dict[str, Any], seed: Dict[str, Any]) -> int:
+        """把 seed 里 base 缺失的键补进 base（就地）；已有键（含显式 false/None）不动。
+
+        返回补入的键数（叶/子树都按 1 计）。与 ``_deep_merge`` 的区别＝方向相反：
+        _deep_merge 用 over 覆盖，本方法只填空位。
+        """
+        added = 0
+        for k, v in (seed or {}).items():
+            if k not in base:
+                base[k] = v
+                added += 1
+            elif isinstance(v, dict) and isinstance(base.get(k), dict):
+                added += ConfigManager._merge_missing(base[k], v)
+        return added
+
+    @staticmethod
+    def _absolutize_media_db(db: Path, data_root: Path) -> None:
+        """相册注册表 file_path：种子=「相对数据根」→ 落地改写为本机绝对路径。
+
+        生产实例登记的就是绝对路径（viewer/发送链不依赖 CWD）；种子为了跨机分发
+        在暂存时归一成相对（见 stage_internal_assets._rewrite_media_db），播种落地
+        这一刻才知道目标数据根，在此收口。
+        """
+        import sqlite3
+        con = sqlite3.connect(str(db))
+        try:
+            rows = con.execute(
+                "SELECT id, file_path FROM persona_media").fetchall()
+            for mid, fp in rows:
+                p = str(fp or "")
+                if not p or Path(p).is_absolute():
+                    continue
+                con.execute(
+                    "UPDATE persona_media SET file_path = ? WHERE id = ?",
+                    (str((data_root / p).resolve()), mid))
+            con.commit()
+        finally:
+            con.close()
+
     async def load(self) -> bool:
         """加载配置文件"""
         try:
@@ -151,6 +296,12 @@ class ConfigManager:
             # 接入向导只写这个小文件 → 主 config.yaml 的注释/结构永不被改写，
             # 且密钥与 git 跟踪文件分离（overlay 应进 .gitignore）。
             self._merge_overlay()
+
+            # 桌面态产品基线增量补齐（feature_registry A 类）。必须在
+            # _validate_config **之前**：桌面首启 telegram/ai 凭据为空时本方法
+            # 下方会 validation-fail 提前 return False（main.py 忽略返回值继续跑），
+            # 挂在成功路径末尾等于桌面态永不执行。
+            self._ensure_baseline()
 
             # 打包/自包含部署：用 AITR_WEB_* 覆盖 web_admin.{host,port,auth_token}，
             # 使后端「serve 的端口/令牌」与桌面壳 renderer「talk 的 base_url/token」强一致，
@@ -273,6 +424,37 @@ class ConfigManager:
             vision["model"] = model
         vision["_hosted_vision"] = True
         vision.setdefault("enabled", True)
+
+    def _ensure_baseline(self) -> None:
+        """桌面态（AITR_DESKTOP_MODE）产品基线增量补齐——修「种子只影响新装」缺口。
+
+        ``_ensure_seeded`` 只在 config.yaml 缺失时播种，存量安装的 config 是旧种子
+        快照，永远不会自己长出新加入基线的功能开关（实锤：工作目标进种子后，已装
+        用户仍看不见）。本方法按 ``feature_registry.baseline_patch`` 补齐：
+
+        - 判据＝合并视图（config+overlay）里**键缺失**。缺失=用户从未表达过意见，
+          补齐零冲突；显式 true/false 都尊重不动——不需要三方合并那套复杂度。
+        - 写入面＝overlay（``save_overlay_patch``：原子落盘 + 即时深合并进内存 +
+          刷新热重载基线），主 config.yaml 注释/结构永不被改写。
+        - 幂等：补过即存在，下次启动 patch 为空、零写盘。
+        - 仅桌面态：服务器实例（zhiliao 等）无此 env，行为零变化；
+          example/自建档的保守默认不受影响。
+        - 永不抛：基线补不上=功能保持关闭，绝不拖垮启动。
+        """
+        try:
+            if not self._env_truthy("AITR_DESKTOP_MODE"):
+                return
+            from src.utils.feature_registry import as_nested, baseline_patch
+            patch = baseline_patch(self.config)
+            if not patch:
+                return
+            if self.save_overlay_patch(as_nested(patch)):
+                self.logger.info(
+                    "产品基线已补齐进 overlay: %s", ", ".join(sorted(patch)))
+            else:
+                self.logger.warning("产品基线补齐写入失败（忽略，功能保持关闭）")
+        except Exception as exc:
+            self.logger.warning("产品基线补齐异常（忽略）: %s", exc)
 
     def _overlay_path(self) -> Path:
         """凭证 overlay 路径：主配置同目录下的 config.local.yaml。"""

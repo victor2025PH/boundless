@@ -116,12 +116,44 @@ def _check_trial_claim_state(d: dict) -> str:
     return ""
 
 
+def _check_feature_baseline(d: dict) -> str:
+    """产品基线功能在**装出来的产物**里必须可见且已开启（P3，2026-07-31）。
+
+    配置层已有种子门禁（tests/test_desktop_seed_visibility.py），但它验的是仓库
+    里的种子文件；这里验的是冻结产物「首启播种 → 基线补齐 → 路由注册」整条链
+    跑完后的真实状态——工作目标当初就是「代码全在包里、开关不可见」的静默形态，
+    只有装出来真打一发才算闭环。基线清单直接读注册表（构建机与产物同一棵树，
+    零漂移）；注册表读不到时回落最低保障（goals）。
+    """
+    if d.get("ok") is not True:
+        return f"ok={d.get('ok')}"
+    if not d.get("version"):
+        return "缺 version 指纹（app_identity 未接上）"
+    try:
+        sys.path.insert(0, str(HERE.parent.parent))
+        from src.utils.feature_registry import product_baseline_map
+        baseline = tuple(product_baseline_map())
+    except Exception:
+        baseline = ("companion.goals.enabled",)
+    feats = {f.get("key"): f for f in d.get("features") or []
+             if isinstance(f, dict)}
+    for key in baseline:
+        it = feats.get(key)
+        if not it:
+            return f"清单缺基线功能 {key}"
+        if it.get("state") != "on":
+            return (f"{key} 未开启（state={it.get('state')}）"
+                    "——种子/播种/基线补齐链断了")
+    return ""
+
+
 # (路径, 说明, 校验器) —— 校验器返回空串=通过，否则返回失败原因
 JSON_CHECKS = [
     ("/api/platforms/telegram/modes", "登录方式带诊断字段", _check_modes_carry_blockers),
     ("/api/platforms/line/modes", "登录方式带诊断字段", _check_modes_carry_blockers),
     ("/api/accounts/protocol/readiness", "四平台就绪矩阵", _check_readiness_matrix),
     ("/api/admin/license/trial-claim", "试用领取口在冻结态可用", _check_trial_claim_state),
+    ("/api/setup/features", "产品基线功能可见且已开启", _check_feature_baseline),
 ]
 
 

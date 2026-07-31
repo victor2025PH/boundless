@@ -87,6 +87,9 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
 #body-he.he-view-simple .he-agents-wrap{display:none!important}
 #body-he.he-view-full .he-subcard.he-advanced{display:block}
 #body-he.he-view-full .he-inline-advanced{display:block}
+/* P0-198 问题8：切「完整」的可见反馈——新增区块全在折叠线下，无反馈像开关坏了 */
+@keyframes heRevealPulse{0%{outline-color:var(--p);box-shadow:0 0 0 4px var(--ps)}100%{outline-color:transparent;box-shadow:none}}
+.he-reveal-flash{outline:2px solid transparent;outline-offset:3px;border-radius:12px;animation:heRevealPulse 2.2s ease-out 1}
 .he-he-details{margin:.5rem 0;border:1px solid var(--bd);border-radius:10px;padding:.5rem .65rem;background:var(--input)}
 .he-he-details > summary{cursor:pointer;font-size:.8rem;font-weight:600;color:var(--t);user-select:none}
 .he-he-details[open] > summary{margin-bottom:.5rem}
@@ -122,6 +125,109 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
 
 <div class="settings-grid">
 
+  <!-- ══ P1 功能总览（feature center）：src/utils/feature_registry 驱动。
+       旧后端无 /api/setup/features（未重启/旧安装包）→ 整卡保持隐藏，模板热更新自洽 ══ -->
+  <div class="acc" id="fc-card" style="display:none">
+    <div class="acc-hd" onclick="toggleAcc(this)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-blue6,#2563eb),var(--th-bg-blue8,#1e40af))">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      </div>
+      <div>
+        <div class="acc-title">{{ (i18n or {}).get('fc_title', "功能总览") }}</div>
+        <div class="acc-sub">{{ (i18n or {}).get('fc_sub', "全部能力一张表：已开启 / 可开启 / 缺依赖 / 未开放") }}</div>
+      </div>
+      <svg class="acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+    <div class="acc-body" id="body-fc">
+      <div id="fc-list" style="display:flex;flex-direction:column;gap:.55rem"></div>
+      <div id="fc-meta" class="f-hint" style="margin-top:.55rem"></div>
+      <p class="f-hint" style="margin-top:.35rem">{{ (i18n or {}).get('fc_hint', "开关写入 config.local.yaml 并即时生效；「未开放」能力的交付形态由部署方决定。") }}</p>
+    </div>
+  </div>
+  <script>
+  (function(){
+    var card=document.getElementById('fc-card'), list=document.getElementById('fc-list');
+    if(!card||!list) return;
+    function esc(s){var d=document.createElement('div');d.textContent=String(s==null?'':s);return d.innerHTML;}
+    function chip(it){
+      var bg=it.state==='on'?'rgba(22,163,74,.12)':(it.state==='available'?'var(--ps)':(it.state==='needs_dep'?'rgba(217,119,6,.12)':(it.state==='needs_upgrade'?'rgba(139,92,246,.14)':'var(--input)')));
+      var fg=it.state==='on'?'var(--green,#16a34a)':(it.state==='available'?'var(--p)':(it.state==='needs_dep'?'var(--th-ink-amber7,#b45309)':(it.state==='needs_upgrade'?'var(--th-bg-violet6,#7c3aed)':'var(--t3)')));
+      return '<span style="font-size:.68rem;font-weight:600;padding:.14rem .5rem;border-radius:10px;background:'+bg+';color:'+fg+';white-space:nowrap">'+esc(it.state_label)+'</span>';
+    }
+    function row(it){
+      var btn='';
+      if(it.toggleable&&(it.state==='on'||it.state==='available')){
+        var lbl=it.enabled?window.T('fc_js_disable'):window.T('fc_js_enable');
+        btn='<button class="btn-s" data-fc-key="'+esc(it.key)+'" data-fc-en="'+(it.enabled?'0':'1')+'" style="padding:.3rem .8rem;border:1.5px solid var(--bd);border-radius:8px;background:'+(it.enabled?'var(--input)':'var(--p)')+';color:'+(it.enabled?'var(--t2)':'var(--th-ink-inverse,#fff)')+';font-size:.75rem;font-weight:600;cursor:pointer;white-space:nowrap">'+esc(lbl)+'</button>';
+      }
+      return '<div style="display:flex;align-items:flex-start;gap:.7rem;border:1px solid var(--bd);border-radius:10px;padding:.6rem .8rem;background:var(--input)">'
+        +'<div style="flex:1;min-width:0">'
+        +'<div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap"><span style="font-size:.84rem;font-weight:700">'+esc(it.name)+'</span>'+chip(it)+'</div>'
+        +'<div style="font-size:.74rem;color:var(--t2);margin-top:.2rem;line-height:1.5">'+esc(it.desc)+'</div>'
+        +(it.extra?'<div style="font-size:.72rem;color:var(--t3);margin-top:.15rem">'+esc(it.extra)+'</div>':'')
+        +'</div>'+btn+'</div>';
+    }
+    function load(){
+      apiFetch('/api/setup/features').then(function(r){
+        if(!r.ok) throw 0;
+        return r.json();
+      }).then(function(d){
+        if(!d||!d.ok||!Array.isArray(d.features)||!d.features.length) return;
+        list.innerHTML=d.features.map(row).join('');
+        var meta=document.getElementById('fc-meta');
+        if(meta){
+          var parts=[];
+          if(d.version) parts.push(window.T('fc_meta_version')+': '+d.version);
+          if(d.gate_enabled&&d.plan) parts.push(window.T('fc_meta_plan')+': '+d.plan);
+          meta.textContent=parts.join(' · ');
+        }
+        card.style.display='';
+      }).catch(function(){ /* 后端无此路由（旧版本/未重启）→ 整卡隐藏 */ });
+    }
+    list.addEventListener('click',function(ev){
+      var btn=ev.target&&ev.target.closest?ev.target.closest('[data-fc-key]'):null;
+      if(!btn) return;
+      btn.disabled=true;
+      apiFetch('/api/setup/features/toggle',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({key:btn.getAttribute('data-fc-key'),enabled:btn.getAttribute('data-fc-en')==='1'})})
+        .then(function(r){return r.json().then(function(d){return {st:r.status,d:d};});})
+        .then(function(x){
+          if(x.d&&x.d.ok){ load(); }
+          else { alert(window.T('fc_js_fail')+((x.d&&x.d.detail)||x.st)); btn.disabled=false; }
+        }).catch(function(){ alert(window.T('fc_js_fail')); btn.disabled=false; });
+    });
+    load();
+  })();
+  </script>
+
+  <!-- ══ P2-198 一键诊断包：版本+打码配置+日志尾部 zip 下载。旧后端无该路由
+       （未重启/旧安装包）→ probe 404 整卡隐藏，模板热更新自洽 ══ -->
+  <div class="acc" id="diag-card" style="display:none">
+    <div class="acc-hd" onclick="toggleAcc(this)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-teal6),var(--th-bg-teal8))">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><polyline points="7 10 12 15 17 10"/><path d="M5 21h14"/></svg>
+      </div>
+      <div>
+        <div class="acc-title">{{ (i18n or {}).get('diag_title', "诊断包") }}</div>
+        <div class="acc-sub">{{ (i18n or {}).get('diag_sub', "一键导出版本 + 配置（密钥已打码）+ 日志尾部，发给支持即可远程定位") }}</div>
+      </div>
+      <svg class="acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+    <div class="acc-body" id="body-diag">
+      <a class="btn-s" href="/api/admin/diagnostic-bundle" style="display:inline-block;padding:.45rem 1rem;border:1.5px solid var(--bd);border-radius:8px;background:var(--p);color:var(--th-ink-inverse);font-size:.8rem;font-weight:600;text-decoration:none">{{ (i18n or {}).get('diag_btn', "下载诊断包") }}</a>
+      <p class="f-hint" style="margin-top:.55rem">{{ (i18n or {}).get('diag_hint', "不含聊天记录数据库；配置里的 API Key / Token 等已全部打码。") }}</p>
+    </div>
+  </div>
+  <script>
+  (function(){
+    var card=document.getElementById('diag-card');
+    if(!card||typeof apiFetch!=='function') return;
+    apiFetch('/api/admin/diagnostic-bundle?probe=1').then(function(r){
+      if(r&&r.ok) card.style.display='';
+    }).catch(function(){});
+  })();
+  </script>
+
   <!-- ══ C1-1 品牌 / 白标 ═══════════════════════════════════════ -->
   <div class="acc">
     <div class="acc-hd" onclick="toggleAcc(this)">
@@ -154,7 +260,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
         </div>
         <div>
           <label class="f-lbl">{{ (i18n or {}).get('set_s022', "主题色") }}</label>
-          <input class="f-inp" type="text" id="br-primary_color" placeholder="#2563eb">
+          <input class="f-inp" type="text" id="br-primary_color" placeholder="#1e8cf2">
         </div>
         <div>
           <label class="f-lbl">Logo {{ (i18n or {}).get('set_s023', "链接（URL）") }}</label>
@@ -1060,10 +1166,11 @@ function hePrepareHumanEscalationSave(){
 }
 
 /* ── 人工转接：精简 / 完整视图（localStorage + ?he=full|simple） ─ */
-function heApplyViewMode(mode){
+function heApplyViewMode(mode, opts){
   const root = document.getElementById('body-he');
   if(!root) return;
   const full = mode === 'full';
+  const wasFull = root.classList.contains('he-view-full');
   root.classList.toggle('he-view-simple', !full);
   root.classList.toggle('he-view-full', full);
   try{
@@ -1073,6 +1180,21 @@ function heApplyViewMode(mode){
   const rFull = document.getElementById('he-view-full');
   if(rSimple) rSimple.checked = !full;
   if(rFull) rFull.checked = full;
+  // P0-198 问题8：点「完整」后新增的③~⑧全在首屏之下，切换毫无可见变化，
+  // 坐席实测以为选项是坏的。用户主动切换（opts.reveal）时滚动定位到第一块
+  // 高级区并高亮 2 秒；页面初始化恢复记忆时不滚（防每次进页乱跳）。
+  if(opts && opts.reveal && full && !wasFull){
+    try{
+      const target = root.querySelector('.he-agents-wrap, .he-subcard.he-advanced');
+      if(target){
+        target.scrollIntoView({behavior:'smooth', block:'start'});
+        target.classList.remove('he-reveal-flash');
+        void target.offsetWidth; // 重触发动画
+        target.classList.add('he-reveal-flash');
+        setTimeout(function(){ target.classList.remove('he-reveal-flash'); }, 2400);
+      }
+    }catch(e){}
+  }
 }
 function heInitViewMode(){
   try{
@@ -1094,7 +1216,7 @@ function heInitViewMode(){
     if(el){
       el.addEventListener('change', function(){
         if(this.checked){
-          heApplyViewMode(this.value);
+          heApplyViewMode(this.value, {reveal:true});
           if(typeof heSyncPrimaryFromAgentsAndHint === 'function') heSyncPrimaryFromAgentsAndHint();
         }
       });

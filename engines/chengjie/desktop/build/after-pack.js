@@ -83,12 +83,35 @@ const FORBIDDEN = [
   [path.join("services", "messenger-web", "logs"), "本机运行日志"],
 ];
 
+// 内测/定制包随包数据种子（build/seed-data 暂存了才要求；标准包无此目录=跳过）。
+// 判据与 stage_internal_assets.py 的产出一一对应：种子缺一半（比如只有 overlay
+// 没有语音）装出来就是「人设在、声音哑」的半残包，比不带更难排查。
+const SEED_REQUIRED = [
+  ["config.local.internal.yaml", "功能 overlay 种子"],
+  ["seed-manifest.json", "种子清单"],
+  [path.join("config", "profiles_runtime.yaml"), "人设 runtime"],
+  [path.join("config", "voice_refs"), "克隆参考音"],
+  [path.join("config", "persona_albums"), "人设相册"],
+  [path.join("config", "persona_media.db"), "相册注册表"],
+  [path.join("config", "knowledge_base.db"), "知识库"],
+  [path.join("config", "persona_bio.db"), "人设资料库"],
+  [path.join("config", "prerender_lines"), "预渲染台词库"],
+  [path.join("assets", "voices"), "预渲染语音成品"],
+];
+
 exports.default = async function afterPack(context) {
   const res = resourcesDir(context);
   const missing = [];
   for (const [rel, what, impact] of REQUIRED) {
     if (!fs.existsSync(path.join(res, rel))) {
       missing.push(`  · 缺 ${rel}（${what}）→ ${impact}`);
+    }
+  }
+  if (fs.existsSync(path.join(__dirname, "seed-data"))) {
+    for (const [rel, what] of SEED_REQUIRED) {
+      if (!fs.existsSync(path.join(res, "seed-data", rel))) {
+        missing.push(`  · 缺 seed-data/${rel}（${what}）→ 内测包装出来是半残形态`);
+      }
     }
   }
   for (const [dir, prefix, what, impact] of REQUIRED_GLOB) {

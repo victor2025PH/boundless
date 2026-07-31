@@ -1155,6 +1155,48 @@ function _ovPpEsc(s){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];
   });
 }
+/* P1-198 候选诊断：谁被哪个闸口拦下、离能发还差多少（skip_summary/skipped 来自
+   preview API 的 plan_proactive_sends(diagnostics=)）。折叠展示，不挤占正文。 */
+function _ovPpSkipBlock(d){
+  var sum = (d && d.skip_summary) || {};
+  var keys = Object.keys(sum);
+  if(!keys.length) return '';
+  var labels = {
+    min_silent: window.T('ov_ppskip_min_silent'),
+    cooldown: window.T('ov_ppskip_cooldown'),
+    awaiting_reply: window.T('ov_ppskip_awaiting_reply'),
+    care_pending: window.T('ov_ppskip_care_pending'),
+    backoff_exhausted: window.T('ov_ppskip_backoff'),
+    never_replied_stop: window.T('ov_ppskip_never_replied'),
+    user_quiet_hours: window.T('ov_ppskip_user_quiet'),
+    quiet_hours_global: window.T('ov_ppskip_quiet_global'),
+    no_opener: window.T('ov_ppskip_no_opener'),
+    opener_error: window.T('ov_ppskip_opener_error'),
+    opener_blocked: window.T('ov_ppskip_opener_blocked'),
+    crisis_block: window.T('ov_ppskip_crisis'),
+    archived: window.T('ov_ppskip_archived'),
+    no_activity_ts: window.T('ov_ppskip_no_ts')
+  };
+  var total = 0;
+  keys.forEach(function(k){ total += (sum[k]|0); });
+  var chips = keys.sort(function(a,b){ return (sum[b]|0)-(sum[a]|0); }).map(function(k){
+    return '<span style="display:inline-block;margin:.1rem .25rem .1rem 0;padding:.08rem .5rem;'
+      + 'border:1px solid var(--bd);border-radius:10px;font-size:.7rem;color:var(--muted)">'
+      + _ovPpEsc(labels[k]||k) + ' × ' + (sum[k]|0) + '</span>';
+  }).join('');
+  var rows = ((d && d.skipped) || []).slice(0, 8).map(function(s){
+    var cid = String(s.conversation_id||'');
+    var tail = cid ? cid.split(':').pop() : '';
+    return '<div style="margin-top:.2rem;font-size:.71rem;color:var(--muted)">'
+      + (tail ? ('<b style="color:inherit">' + _ovPpEsc(tail) + '</b> · ') : '')
+      + _ovPpEsc(labels[s.reason]||s.reason||'') 
+      + (s.detail ? ('：' + _ovPpEsc(s.detail)) : '') + '</div>';
+  }).join('');
+  return '<details style="margin-top:.45rem"><summary style="cursor:pointer;font-size:.72rem;color:var(--muted)">'
+    + '🚦 ' + window.T('ov_ppskip_hd') + '（' + total + '）</summary>'
+    + '<div style="margin-top:.3rem" title="' + window.T('ov_ppskip_hint') + '">' + chips
+    + (rows ? ('<div style="margin-top:.25rem">' + rows + '</div>') : '') + '</div></details>';
+}
 async function ovRefreshProactivePreview(){
   var body = document.getElementById('ov-pp-body');
   var st = document.getElementById('ov-pp-status');
@@ -1177,7 +1219,8 @@ async function ovRefreshProactivePreview(){
       st.textContent = line;
     }
     var plans = d.plans || [];
-    if(!plans.length){ if(body){ body.innerHTML = '<span style="color:var(--muted)">'+window.T('ov_js_no_candidates')+'</span>'; } return; }
+    var skipBlock = _ovPpSkipBlock(d);
+    if(!plans.length){ if(body){ body.innerHTML = '<span style="color:var(--muted)">'+window.T('ov_js_no_candidates')+'</span>'+skipBlock; } return; }
     var rows = plans.map(function(p){
       var send = p.would_send_this_tick ? '🟢' : '⏸';
       var facts = (p.context_facts||[]).join('、');
@@ -1197,7 +1240,7 @@ async function ovRefreshProactivePreview(){
     }).join('');
     body.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:.73rem">'
       + '<thead><tr style="text-align:left;color:var(--muted)"><th>'+window.T('ov_js_th_round')+'</th><th>'+window.T('ov_js_th_account')+'</th><th>'+window.T('ov_js_th_peer')+'</th><th>'+window.T('ov_js_th_silent')+'</th><th>'+window.T('ov_js_th_mode')+'</th><th>'+window.T('ov_js_th_topic')+'</th><th></th></tr></thead>'
-      + '<tbody>'+rows+'</tbody></table>';
+      + '<tbody>'+rows+'</tbody></table>'+skipBlock;
     Array.prototype.forEach.call(document.querySelectorAll('#ov-pp-body .ov-pp-sample'), function(b){
       b.addEventListener('click', function(){ ovProactiveSample(b.getAttribute('data-cid'), b); });
     });

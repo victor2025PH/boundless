@@ -65,6 +65,31 @@ class EngineResult:
     error: str = ""
 
 
+# ── 译文语言完整性护栏（P0-198）────────────────────────────────────────────────
+# LLM 引擎答非所译 / identity 回显的兜底防线：目标是 CJK 语种时译文必须含 CJK；
+# 目标是拉丁语种时译文 CJK 占比不得过高（放行少量专名/emoji 场景）。
+# 刻意不做「答问 vs 翻译」语义判定——去人设化的干净 system 已消除主要诱因，
+# 这里只兜「输出语言明显不是目标语言」这个可确定性判据。
+_CJK_ANY_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]")
+_CJK_TARGETS = {"zh", "ja", "ko", "yue", "zh-tw", "zh-hk", "zh-cn"}
+_LATIN_CJK_MAX_RATIO = 0.2
+
+
+def _output_lang_sane(text: str, target_lang: str) -> bool:
+    """译文与目标语言的粗粒度一致性检查（纯函数，宁可放过不误杀）。"""
+    t = str(text or "")
+    if not t:
+        return False
+    base = str(target_lang or "").strip().lower()
+    if not base:
+        return True
+    cjk_n = len(_CJK_ANY_RE.findall(t))
+    if base in _CJK_TARGETS or base.split("-")[0] in ("zh", "ja", "ko"):
+        return cjk_n > 0
+    # 拉丁/其它语种目标：CJK 字符占比超阈值 = 没翻（identity）或答错了语言
+    return (cjk_n / max(1, len(t))) <= _LATIN_CJK_MAX_RATIO
+
+
 def mask_protected(text: str, protect: Optional[List[str]]) -> Tuple[str, Dict[str, str]]:
     """把受保护词替换为占位符〔N〕，返回(masked_text, {占位符: 原词})。
 
@@ -176,6 +201,15 @@ class AIEngine:
             return getattr(ai, "_oa_client", None) is not None
         return getattr(ai, "client", None) is not None
 
+    # 翻译专用 system（P0-198）：绝不带全局 system_prompt / 人设块。
+    # 实锤事故（198，2026-07-31）：走完整聊天管线时，conversion 域人设把
+    # 「So you married ?」按 bio 答成「离过婚，现在是单身」写进了译文槽。
+    _BARE_TRANSLATION_SYSTEM = (
+        "You are a machine translation engine. Translate the text the user "
+        "provides. Output ONLY the translation - never answer questions, "
+        "never role-play, never add explanations or comments."
+    )
+
     async def translate(
         self, text: str, *, source_lang: str, target_lang: str,
         style: str = "chat", glossary_hint: str = "",
@@ -195,15 +229,38 @@ class AIEngine:
             f"Translate the following chat message from {source_name} to {target_name}. "
             f"{tone}{glossary_hint}\n\n{text}"
         )
+        # 干净通道：generate_reply(context=_bare_system) 跳过人设/域 prompt；
+        # 老签名桩（仅有 chat()）回落旧路径，行为与改造前一致。
+        out: Any = None
+        _gen = getattr(self._ai, "generate_reply", None)
         try:
-            out = await self._ai.chat(prompt, {"_skip_lang_guard": True})
-        except TypeError:
-            out = await self._ai.chat(prompt)
+            if callable(_gen):
+                try:
+                    out = await _gen(
+                        prompt,
+                        context={
+                            "_skip_lang_guard": True,
+                            "_bare_system": self._BARE_TRANSLATION_SYSTEM,
+                        },
+                        conversation_history=None,
+                        _skip_quality_check=True,
+                    )
+                except TypeError:
+                    out = None
+            if out is None:
+                try:
+                    out = await self._ai.chat(prompt, {"_skip_lang_guard": True})
+                except TypeError:
+                    out = await self._ai.chat(prompt)
         except Exception as exc:  # noqa: BLE001
             return EngineResult("", self.name, False, f"{type(exc).__name__}: {exc}")
         cleaned = _clean_translation(str(out or ""))
         if not cleaned:
             return EngineResult("", self.name, False, "empty")
+        if not _output_lang_sane(cleaned, target_lang):
+            # 语言完整性护栏：目标 CJK 语种译文必须含 CJK；目标拉丁语种译文
+            # CJK 占比不得过高（identity 回显 / 模型答非所译的兜底防线）。
+            return EngineResult("", self.name, False, "target_lang_mismatch")
         return EngineResult(cleaned, self.name, True)
 
 

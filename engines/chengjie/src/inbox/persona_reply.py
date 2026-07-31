@@ -80,7 +80,7 @@ def trim_stale_history(
 
 def normalize_history(
     messages: List[Dict[str, Any]],
-) -> Tuple[List[Dict[str, str]], str]:
+) -> Tuple[List[Dict[str, Any]], str]:
     """把渠道消息列表归一为 OpenAI 风格 history，并取最后一条入站文本。
 
     入参 ``messages`` 每项形如 ``{"direction": "in"|"out"|..., "text": "..."}``
@@ -106,7 +106,18 @@ def normalize_history(
         if not t:
             continue
         is_in = m.get("direction") in ("in", "inbound")
-        history.append({"role": "user" if is_in else "assistant", "content": t})
+        row: Dict[str, Any] = {"role": "user" if is_in else "assistant", "content": t}
+        # P2-198：可选透传 ts——草稿链的时间断层提示（build_time_gap_hint）
+        # 需要「上一条入站是什么时候」，Phase8 只在 process_message 链写
+        # _turn_gap_sec，草稿链恒缺 → 提示休眠。LLM 组装只读 role/content，
+        # 多带 ts 零影响；无 ts 来源（工作台 DOM 抓取）不带 = 行为不变。
+        try:
+            _ts = float(m.get("ts") or 0)
+            if _ts > 0:
+                row["ts"] = _ts
+        except (TypeError, ValueError):
+            pass
+        history.append(row)
         if is_in:
             last_inbound = t
     if not last_inbound and history:
@@ -208,19 +219,34 @@ def _resolve_persona_badge(
 
 
 async def _translate_reply(app: Any, reply: str, target_lang: str) -> str:
-    """把回复译成 target_lang（chat 风格）。失败/无服务返回空串。"""
+    """把回复译成 target_lang（chat 风格）。失败/无服务返回空串。
+
+    P0-198（2026-07-31）：中文草稿含拉丁名（『哈哈，我叫Steven啦』）时 detect 会误判
+    en → identity 把**中文原文**当「译文」返回 → 工坊「填入并发送」按已译直发 → 中文
+    直达外语客户。修法：① 草稿含 CJK 而目标语非 CJK → 显式钉源语言 zh（绕开检测）；
+    ② 译文仍含 CJK（identity 回显/引擎失败）→ 按「无译文」返回空串，UI 不再给假译文。
+    """
     if not (reply and target_lang):
         return ""
     try:
         from src.ai.translation_service import TranslationService
+        from src.inbox.outbound_translate import contains_cjk, lang_is_cjk
         svc = getattr(getattr(app, "state", None), "translation_service", None)
         if not isinstance(svc, TranslationService):
             ai_client = getattr(getattr(app, "state", None), "ai_client", None)
             svc = TranslationService(ai_client=ai_client)
-        res = await svc.translate(reply, target_lang=target_lang, style="chat")
+        _conflict = contains_cjk(reply) and not lang_is_cjk(target_lang)
+        _kw = {"source_lang": "zh"} if _conflict else {}
+        res = await svc.translate(reply, target_lang=target_lang, style="chat", **_kw)
         if res.ok:
             rd = res.to_dict()
-            return rd.get("translated_text") or rd.get("text") or ""
+            out = rd.get("translated_text") or rd.get("text") or ""
+            if _conflict and contains_cjk(out):
+                logger.warning(
+                    "[persona_reply] 译文仍含中文（provider=%s）→ 按无译文返回，防假译文直发",
+                    rd.get("provider") or "-")
+                return ""
+            return out
     except Exception:
         logger.debug("[persona_reply] 译文失败", exc_info=True)
     return ""
@@ -243,6 +269,7 @@ async def generate_persona_reply(
     conversation_id: str = "",
     peer_audio_emotion: Optional[Dict[str, Any]] = None,
     account_id: str = "",
+    gloss_lang: str = "",
 ) -> Dict[str, Any]:
     """人设化智能回复（单一事实源）。
 
@@ -260,8 +287,13 @@ async def generate_persona_reply(
         （含短消息防误切护栏）。
       - target_lang: 坐席手动选定的目标语；既作正文语言回落，又触发**额外译文**
         （``translated`` 字段）。
+      - gloss_lang: 坐席 UI 语言（P2-198「直出模式」）。正文按客户语言直出时，
+        额外产出一份该语言的**对照译文**（``gloss`` 字段，仅供坐席阅读、不用于发送）
+        ——中文坐席从此不必把工坊切到「中文」生成再翻回去（那条链 = LLM 生成 →
+        语言守卫改写 → 出站再翻译，一条回复烧 3 次 LLM 且质量经两次转译损耗）。
+        已有跨语言 ``translated``（如坐席显式选中文正文 + 英文译文）时不再叠加。
 
-    返回：``{ok, reply, reply_lang, persona, persona_tier, intent, translated?}``
+    返回：``{ok, reply, reply_lang, persona, persona_tier, intent, translated?, gloss?}``
       - reply_lang: 本次实际采用的正文语言（决策结果，供调用方落库 draft_lang，
         无需再各自重复检测——语言决策在此收敛为单一事实源）。
     """
@@ -490,4 +522,224 @@ async def generate_persona_reply(
     translated = await _translate_reply(app, reply, target_lang)
     if translated:
         out["translated"] = translated
+    await _attach_gloss(app, out, reply, resolved_lang, gloss_lang)
+    return out
+
+
+async def _attach_gloss(
+    app: Any, out: Dict[str, Any], reply: str,
+    resolved_lang: str, gloss_lang: str,
+) -> None:
+    """P2-198 直出模式：正文是客户语言时，附一份坐席 UI 语言的对照译文（只读）。
+
+    条件：有正文 + 请求了 gloss + 正文语言 ≠ gloss 语言 + 尚无「真的跨语言」
+    translated（translated==reply 是「指定语言直出」的回显，不算）。
+    对照走 MT/翻译栈而非再烧一次 LLM；失败静默（对照缺失不阻断草稿）。
+    """
+    g_lang = str(gloss_lang or "").strip().lower()
+    if not (reply and g_lang):
+        return
+    if g_lang.split("-")[0] == str(resolved_lang or "").strip().lower().split("-")[0]:
+        return
+    _t = str(out.get("translated") or "")
+    if _t and _t != reply:
+        return  # 已有跨语言译文可读，不再叠第二份对照
+    try:
+        g = await _translate_reply(app, reply, g_lang)
+    except Exception:
+        logger.debug("[persona_reply] gloss 生成失败（忽略）", exc_info=True)
+        return
+    if g and g.strip() and g != reply:
+        out["gloss"] = g
+        out["gloss_lang"] = g_lang
+
+
+# ── P1-198：工坊「开启新话题」模式（2026-07-31）─────────────────────────────────
+# 客户实测诉求：回复工坊只会「承接上文」，坐席想主动推进节奏（暖场/换话题）没有工具。
+# 刻意**不走** SkillManager.generate_inbox_draft 统一引擎——那是「回复客户消息」的
+# 语义（意图识别/记忆写回都按客户消息设计），把系统指令喂进去会污染意图统计与记忆。
+# 这里独立组装：人设解析与回复链同一 resolver、语言与回复链同一决策器、切入点复用
+# proactive 子系统的轮换词表（同一套「防模板壳」纪律），生成后走同一 persona 徽标
+# 与译文护栏。**不写记忆**（没有新的客户事实）。
+
+def build_opener_directive(
+    *,
+    angle: str,
+    reply_lang: str,
+    recent_out: Optional[List[str]] = None,
+) -> str:
+    """主动开场生成指令（纯函数，可单测）。
+
+    纪律与 proactive P19 同源：禁「好久没联系/最近怎么样/在吗」模板壳；优先跟进
+    记忆/历史里的具体事实；给出当日轮换的切入点参考；列出最近已发内容防复读。
+    """
+    lang_line = (
+        f"必须完全用客户的语言（{reply_lang}）来写正文。"
+        if reply_lang and reply_lang != "zh" else "用中文来写正文。"
+    )
+    avoid = ""
+    rec = [str(t or "").strip() for t in (recent_out or []) if str(t or "").strip()]
+    if rec:
+        joined = "\n".join(f"- {t[:60]}" for t in rec[-3:])
+        avoid = (
+            "你最近已经发过下面这些消息，新话题的内容、开头和句式都不要与之雷同：\n"
+            + joined + "\n"
+        )
+    return (
+        "请你主动开启一个新话题，给对方发一条 1-2 句的消息（不是回答对方上一条，"
+        "而是自然地把对话推进到新的方向）。\n"
+        f"今天的切入点参考：{angle}。\n"
+        "如果历史或记忆里有对方提过的具体事（爱好/计划/工作/家人/上次聊到的事），"
+        "优先自然地跟进那件事。\n"
+        "绝不要用「好久没联系」「最近怎么样」「在吗」这类模板问候；"
+        "最多问一个问题，不要连环发问。\n"
+        + avoid + lang_line + "只输出这条消息的正文。"
+    )
+
+
+async def generate_topic_opener(
+    *,
+    app: Any,
+    platform: str,
+    chat_key: str,
+    history: List[Dict[str, str]],
+    persona_id: str = "",
+    target_lang: str = "",
+    conversation_id: str = "",
+    account_id: str = "",
+    gloss_lang: str = "",
+) -> Dict[str, Any]:
+    """生成「主动开启新话题」的开场消息（工坊 opener 模式）。
+
+    与 ``generate_persona_reply`` 的关系：同一套人设解析 / 语言决策 / 译文护栏，
+    但**不需要** last_inbound（没人说话也能主动开场），不走统一拟稿引擎、不写记忆。
+    返回结构与回复链一致（{ok, reply, reply_lang, persona, persona_tier, intent,
+    translated?}），前端零分叉。
+    """
+    history = list(history or [])
+    resolved_lang = (
+        str(target_lang or "").strip()
+        or resolve_reply_language(
+            "", history,
+            default=_initial_lang_default(app, platform, chat_key, conversation_id),
+        )
+    )
+
+    _acct = str(account_id or "").strip()
+    if (not _acct or _acct == "default") and conversation_id:
+        _parts = str(conversation_id).split(":", 2)
+        if len(_parts) >= 3 and _parts[1]:
+            _acct = str(_parts[1]).strip()
+
+    _eff_tier = ""
+    if not str(persona_id or "").strip():
+        try:
+            from src.ai.persona_voice import resolve_effective_persona
+            _cm = getattr(getattr(app, "state", None), "config_manager", None)
+            _pid_r, _tier_r = resolve_effective_persona(
+                getattr(_cm, "config", None) or {},
+                platform, _acct, str(chat_key or ""),
+            )
+            if _pid_r:
+                persona_id, _eff_tier = _pid_r, _tier_r
+        except Exception:
+            logger.debug("[persona_reply] opener persona 解析跳过", exc_info=True)
+
+    # 切入点：与 proactive 子系统同一轮换词表（同用户同日恒定、隔天自动换）
+    try:
+        from src.utils.proactive_topic import checkin_angle
+        angle = checkin_angle(f"{platform}:{chat_key}")
+    except Exception:
+        angle = "分享你此刻正在做的一件小事，或轻轻问一句TA这会儿在忙什么"
+
+    recent_out = [
+        str(m.get("content") or "") for m in history
+        if isinstance(m, dict) and m.get("role") == "assistant"
+    ][-3:]
+    directive = build_opener_directive(
+        angle=angle, reply_lang=resolved_lang, recent_out=recent_out)
+
+    state = getattr(app, "state", None)
+    sm = getattr(state, "skill_manager", None)
+    if sm is None:
+        tc = getattr(state, "telegram_client", None)
+        sm = getattr(tc, "skill_manager", None) if tc is not None else None
+    ai = getattr(state, "ai_client", None)
+
+    reply = None
+    if sm is not None and getattr(sm, "ai_client", None) is not None:
+        try:
+            user_id = f"desktop:{platform}:{chat_key}" or "__desktop__"
+            ctx: Dict[str, Any] = {
+                "user_id": user_id,
+                "chat_id": chat_key or user_id,
+                "channel": "desktop",
+                "platform": platform,
+                "intent": "proactive_opener",
+                "current_intent": "proactive_opener",
+                "reply_lang": resolved_lang,
+            }
+            if persona_id:
+                ctx["account_persona_id"] = persona_id
+            if history:
+                ctx["_conversation_history"] = history[-20:]
+            # 情景记忆注入：开场跟进「对方提过的具体事」正需要长期事实
+            if chat_key and hasattr(sm, "_inject_episodic_into_context"):
+                try:
+                    sm._inject_episodic_into_context(
+                        ctx, str(chat_key), "",
+                        current_user_text="", platform=platform,
+                    )
+                except Exception:
+                    logger.debug("[persona_reply] opener 记忆注入跳过", exc_info=True)
+            reply = await sm.ai_client.generate_reply_with_intent(
+                user_message=directive,
+                intent="proactive_opener",
+                user_context=ctx,
+            )
+        except Exception:
+            logger.debug("[persona_reply] opener 主路径失败，回落通用", exc_info=True)
+            reply = None
+
+    if not reply and ai is not None:
+        lines = []
+        for m in history[-12:]:
+            who = "客户：" if m.get("role") == "user" else "我："
+            lines.append(who + str(m.get("content") or ""))
+        prompt = (
+            "你是温暖、自然、像真人一样的线上陪伴。"
+            + directive
+            + ("\n\n最近的对话（供参考）：\n" + "\n".join(lines) if lines else "")
+        )
+        try:
+            reply = await ai.chat(prompt)
+        except Exception:
+            logger.debug("[persona_reply] opener 兜底失败", exc_info=True)
+            reply = None
+
+    reply = (reply or "").strip()
+    used_persona, persona_tier = "", ""
+    if reply:
+        if persona_id and _eff_tier:
+            used_persona, persona_tier = persona_id, _eff_tier
+        else:
+            used_persona, persona_tier = _resolve_persona_badge(
+                chat_key, persona_id, persona_id or "domain")
+
+    out: Dict[str, Any] = {
+        "ok": bool(reply),
+        "reply": reply,
+        "reply_lang": resolved_lang,
+        "persona": used_persona,
+        "persona_tier": persona_tier,
+        "intent": "proactive_opener",
+        "kb_refs": [],
+        "mode": "opener",
+    }
+    if not reply:
+        out["detail"] = "开场生成失败"
+    translated = await _translate_reply(app, reply, target_lang)
+    if translated:
+        out["translated"] = translated
+    await _attach_gloss(app, out, reply, resolved_lang, gloss_lang)
     return out

@@ -132,7 +132,8 @@
         <select name="action">
           <option value="">{{ (i18n or {}).get('rpa_all', "全部") }}</option>
           {% for a in all_actions|default([]) %}
-          <option value="{{ a }}" {% if filters and filters.action == a %}selected{% endif %}>{{ a }}</option>
+          {# P0-198 问题9：枚举 → 人话标签（aud_act_* pack），未登记回落原值；title 恒带原值便于与导出 CSV 对账 #}
+          <option value="{{ a }}" title="{{ a }}" {% if filters and filters.action == a %}selected{% endif %}>{{ (i18n or {}).get('aud_act_' ~ a, a) }}</option>
           {% endfor %}
         </select>
       </div>
@@ -200,7 +201,7 @@
       </div>
       <div class="tl-body">
         <div class="tl-top">
-          <span class="tl-action">{{ act }}</span>
+          <span class="tl-action" title="{{ act }}">{{ (i18n or {}).get('aud_act_' ~ act, act) }}</span>
           {% if r.target %}<span class="badge b-p">{{ r.target }}</span>{% endif %}
           {% if r.user_id %}<span class="badge b-n">{{ r.user_id }}</span>{% endif %}
           <span class="tl-time">{{ r.ts }}</span>

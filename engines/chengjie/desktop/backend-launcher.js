@@ -118,9 +118,18 @@ function resolveBackendSpawn(o) {
       // 并把 web host/port/token 对齐桌面壳，保证 renderer 连得上后端。
       // 把壳版本注入后端：/api/desktop/ping 据此自报版本，壳复用时才能发现
       // 「装了新版却连着旧后端」这种错配（见 app_identity.py）。
+      // 随包数据种子（内测/定制包）：resources/seed-data 存在才注入。后端在冻结态
+      // 也会按 exe 位置自动发现同一目录（config_manager._seed_extras_dir），env 是
+      // 显式契约 + 开发/冒烟态可覆写的那一半。标准包没有该目录 → 不注入，零变化。
+      const seedDir = path.join(o.resourcesPath, "seed-data");
+      // PYTHONUNBUFFERED（P1-198 可观测性实锤）：PyInstaller 后端 stdout 接进壳的
+      // 管道后是**块缓冲**——启动猛刷一波后，零星日志攒不满 8KB 就不落
+      // backend.log（198 排障时日志"断流"100 分钟，热重载完成行全憋在缓冲里）。
+      // 行缓冲让 backend.log 实时可读，代价可忽略（日志量本就不大）。
       const env = Object.assign(
-        { AITR_DESKTOP_MODE: "1" },
+        { AITR_DESKTOP_MODE: "1", PYTHONUNBUFFERED: "1" },
         o.appVersion ? { AITR_APP_VERSION: String(o.appVersion) } : {},
+        exists(seedDir) ? { AITR_SEED_DATA_DIR: seedDir } : {},
         electronNodeEnv(o.execPath),
         webEnvFromBackend(backend));
       if (dataDir) {
@@ -226,6 +235,13 @@ function createBackendManager(deps) {
   let versionMismatch = false;
 
   function shellVersion() {
+    // displayVersion（内测 1.001 展示号）优先：它同时喂给 AITR_APP_VERSION（后端
+    // /api/desktop/ping 自报）与 classifyBackendIdentity 的壳侧比对——两侧同源
+    // 才不会自己报自己「版本不一致」。缺字段回落 semver。
+    try {
+      const dv = require("./package.json").displayVersion;
+      if (dv) return String(dv);
+    } catch (e) { /* 回落 semver */ }
     try { return String(app && app.getVersion ? app.getVersion() : ""); } catch (e) { return ""; }
   }
 

@@ -200,9 +200,36 @@ def build_time_gap_hint(gap_sec: float) -> str:
 
 
 _LANG_COMMENT_RE = re.compile(
-    r"换.{0,4}(日文|日语|英文|英语|中文|语言)|日本語に|英語で|switch.{0,12}lang",
+    r"换.{0,4}(日文|日语|英文|英语|中文|语言)|(讲|说|飙)起?英[文语]"
+    r"|突然.{0,6}(英文|英语|日语|韩语|中文)|日本語に|英語で"
+    r"|switch.{0,12}lang|switch(?:ed|ing)?[^.!?\n]{0,24}(english|chinese|japanese|korean|spanish)"
+    r"|speaking\s+(english|chinese|japanese|korean)\s+now",
     re.IGNORECASE,
 )
+
+_LANG_DISPLAY_NAMES = {
+    "en": "英语", "ja": "日语", "ko": "韩语", "zh": "中文",
+    "es": "西语", "pt": "葡语", "vi": "越南语", "th": "泰语",
+    "id": "印尼语", "ru": "俄语", "fr": "法语", "de": "德语",
+}
+
+
+def _dominant_recent_user_lang(
+    history: List[Dict[str, Any]], *, exclude_text: str = "",
+) -> str:
+    """近 3 条用户消息的主导语种（与 switch hint 同口径）；取不到返回 ""。"""
+    from src.ai.translation_service import detect_language
+
+    for m in reversed(list(history or [])):
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        c = str(m.get("content") or "").strip()
+        if not c or c == (exclude_text or "").strip():
+            continue
+        lg = detect_language(c)
+        if lg and lg != "unknown":
+            return lg
+    return ""
 
 
 def build_language_anchor_hint(
@@ -210,38 +237,98 @@ def build_language_anchor_hint(
 ) -> str:
     """语言事实钉子（治「无中生有说对方换了语言」的幻觉）。
 
-    真实事故：历史里有旧日语轮次 + AI 自己点评过语言切换，用户发中文「好呀好呀」，
-    AI 幻觉「突然换日文了，好可爱！那我也用日文回你！」——幻觉回复进历史后还会
-    自我强化。本钉子在「本条是中文 && 历史存在非中文轮次或语言点评痕迹」时注入，
-    明确锚定语言事实。条件克制（纯中文历史不注入，防 prompt 膨胀）。纯函数。
+    正向事故（2026-07-13，tg）：历史里有旧日语轮次 + AI 自己点评过语言切换，
+    用户发中文「好呀好呀」，AI 幻觉「突然换日文了！那我也用日文回你」。
+    反向事故（2026-07-31，198 WhatsApp）：客户**全程英文**，AI 草稿反复出现
+    「哈哈，突然跟我讲起英文来了😅」——历史里自己的语言点评进上下文后自我强化，
+    旧钉子只认「本条是中文」，反向场景零覆盖。
+
+    现语义：本条语种可判定时——
+    - 中文：历史含外语轮次或语言点评痕迹 → 锚定「对方用中文，没换语言」（原行为）；
+    - 非中文：与近几条用户消息主导语一致（即根本没发生切换）且历史里出现过
+      语言点评痕迹 → 锚定「对方一直用 X 语，没换语言，禁止评论语言切换」。
+    条件克制（无风险语境不注入，防 prompt 膨胀）。纯函数。
     """
     from src.ai.translation_service import detect_language
 
     t = str(current_text or "").strip()
     if not t:
         return ""
-    if (detect_language(t) or "") != "zh":
+    cur = (detect_language(t) or "").strip()
+    if not cur or cur == "unknown":
         return ""
-    risky = False
-    for m in list(history or [])[-12:]:
-        if not isinstance(m, dict):
-            continue
-        c = str(m.get("content") or "")
-        if not c:
-            continue
-        if m.get("role") == "assistant" and _LANG_COMMENT_RE.search(c):
-            risky = True
-            break
-        # 历史轮次里有日文假名/韩文/明显外语 → 也算风险语境
-        if re.search(r"[\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF]", c):
-            risky = True
-            break
-    if not risky:
+
+    def _assistant_commented() -> bool:
+        for m in list(history or [])[-12:]:
+            if (isinstance(m, dict) and m.get("role") == "assistant"
+                    and _LANG_COMMENT_RE.search(str(m.get("content") or ""))):
+                return True
+        return False
+
+    if cur == "zh":
+        risky = _assistant_commented()
+        if not risky:
+            for m in list(history or [])[-12:]:
+                if not isinstance(m, dict):
+                    continue
+                c = str(m.get("content") or "")
+                # 历史轮次里有日文假名/韩文/明显外语 → 也算风险语境
+                if c and re.search(r"[\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF]", c):
+                    risky = True
+                    break
+        if not risky:
+            return ""
+        return (
+            "【语言事实——锚定】对方**本条消息用的是中文**，并没有切换语言。"
+            "不要提「换日文/换英文/换语言」之类的话（哪怕历史里聊过语言切换），"
+            "直接用中文自然回应内容本身。"
+        )
+
+    # 非中文：只有「语言确实没变（正面证据：近几条用户消息主导语==本条）
+    # + AI 点评过语言」的自我强化语境才注入。无用户历史证据时宁缺勿错——
+    # 断言「对方一直用 X 语」必须有据（防对新会话说瞎话）。
+    dominant = _dominant_recent_user_lang(history, exclude_text=t)
+    if not dominant or dominant != cur:
+        return ""  # 无证据 / 真的切换了 → 不锚定（后者交给 switch hint）
+    if not _assistant_commented():
         return ""
+    name = _LANG_DISPLAY_NAMES.get(cur, cur)
     return (
-        "【语言事实——锚定】对方**本条消息用的是中文**，并没有切换语言。"
-        "不要提「换日文/换英文/换语言」之类的话（哪怕历史里聊过语言切换），"
-        "直接用中文自然回应内容本身。"
+        f"【语言事实——锚定】对方**一直在用「{name}」交流**，本条也是「{name}」，"
+        "并没有切换语言。不要再提「突然讲英文/换语言/switched to English」之类的话"
+        "（历史里那类点评是误判），直接回应对方消息的内容本身。"
+    )
+
+
+def build_reply_lang_mismatch_hint(
+    *, reply_lang: str, current_text: str,
+) -> str:
+    """草稿语言 ≠ 客户消息语言时的「工作语言说明」（治 198 实锤幻觉）。
+
+    场景：坐席把回复工坊钉在「中文」（或运营 forced_lang），客户全程说英文。
+    模型收到「用中文回复」的指令 + 英文消息，会自行脑补「对话本该是中文的，
+    对方突然讲英文了」→ 产出「哈哈，突然跟我讲起英文来了😅」这类答非所问
+    （198 后端日志 10:18–10:35 至少 8 次）。本提示把「为什么草稿语言与客户
+    语言不同」显式讲给模型听，消除脑补空间。纯函数，语种判不出时不注入。
+    """
+    from src.ai.translation_service import detect_language
+
+    target = str(reply_lang or "").strip().lower()
+    t = str(current_text or "").strip()
+    if not target or not t:
+        return ""
+    cur = (detect_language(t) or "").strip().lower()
+    if not cur or cur == "unknown":
+        return ""
+    if cur.split("-")[0] == target.split("-")[0]:
+        return ""
+    cur_n = _LANG_DISPLAY_NAMES.get(cur, cur)
+    tgt_n = _LANG_DISPLAY_NAMES.get(target, target)
+    return (
+        f"【工作语言说明】对方本条消息用的是「{cur_n}」，这是对方一贯的正常用语，"
+        f"**不是**对方切换了语言；你的回复按当前设定用「{tgt_n}」撰写，"
+        "语言面向对方的适配由系统/坐席负责，不用你操心。请直接回答对方消息的"
+        "内容本身，禁止评论语言（不要说「你讲英文了/换语言了/我用某语回你」）。"
     )
 
 
@@ -451,20 +538,48 @@ def apply_inbound_enrichments(
     )
     user_context.update(media_patch)
 
-    # 三类语境提示汇入 _topic_switch_hint（ai_client 同一消费口）：
-    # 语言切换承接 / 语言事实钉子（互斥：本条非中文才可能有前者、是中文才可能有后者）
-    # / 时间断层提示（可与前两者叠加）。
+    # 四类语境提示汇入 _topic_switch_hint（ai_client 同一消费口）：
+    # 工作语言说明（草稿语言≠客户语言，P0-198）/ 语言切换承接 / 语言事实钉子
+    # / 时间断层提示（可与前面叠加）。
+    # 工作语言说明命中时**压制**切换承接提示——后者会指示「改用对方语言回复
+    # 并点一下切换」，与锁定的草稿语言直接矛盾（正是 198「突然讲英文」幻觉的
+    # 温床）；语言锚点仍可叠加（内容不冲突，防历史点评自我强化）。
     hints: List[str] = []
-    hint = build_language_switch_hint(
-        list(history or []),
-        current_lang=reply_lang,
-        current_text=t,
-    )
-    if hint:
-        hints.append(hint)
+    mismatch = build_reply_lang_mismatch_hint(reply_lang=reply_lang, current_text=t)
+    if mismatch:
+        hints.append(mismatch)
+    else:
+        hint = build_language_switch_hint(
+            list(history or []),
+            current_lang=reply_lang,
+            current_text=t,
+        )
+        if hint:
+            hints.append(hint)
     anchor = build_language_anchor_hint(list(history or []), current_text=t)
     if anchor:
         hints.append(anchor)
+    # 时间断层（P2-198 复活）：Phase8 只在 process_message 链写 _turn_gap_sec，
+    # 草稿链恒缺 → 该提示从未生效。键**缺席**时从历史行的可选 ts 推导
+    # （normalize_history 已透传）：取「最后一条 != 当前文本的用户消息」时间。
+    # A 线显式写过（含 0）→ 不覆盖；无 ts 来源（工作台 DOM）→ 行为不变。
+    if "_turn_gap_sec" not in user_context:
+        try:
+            import time as _t
+            prev_ts = 0.0
+            for m in reversed(list(history or [])):
+                if not isinstance(m, dict) or m.get("role") != "user":
+                    continue
+                if str(m.get("content") or "").strip() == t:
+                    continue
+                _mts = float(m.get("ts") or 0)
+                if _mts > 0:
+                    prev_ts = _mts
+                    break
+            if prev_ts > 0:
+                user_context["_turn_gap_sec"] = max(0.0, _t.time() - prev_ts)
+        except Exception:
+            pass
     gap_hint = build_time_gap_hint(user_context.get("_turn_gap_sec") or 0)
     if gap_hint:
         hints.append(gap_hint)
@@ -478,6 +593,16 @@ def apply_inbound_enrichments(
     )
     if premise:
         hints.append(premise)
+    # 自述一致性锚点（P1-198 问题6）：AI 在本会话亲口说过的个人事实（年龄/
+    # 婚姻/家庭/职业/居住）原句引用回注——情景记忆刻意不记 AI 侧（Phase8
+    # 反幻觉），bio 检索漏检时自述就漂移（实锤：说过 Divorced 隔几十条又变卦）。
+    try:
+        from src.inbox.self_claims import build_self_claims_hint
+        sc_hint = build_self_claims_hint(list(history or []))
+        if sc_hint:
+            hints.append(sc_hint)
+    except Exception:
+        pass
     if hints:
         user_context["_topic_switch_hint"] = "\n".join(hints)
 
@@ -491,6 +616,7 @@ __all__ = [
     "apply_inbound_enrichments",
     "build_language_switch_hint",
     "build_language_anchor_hint",
+    "build_reply_lang_mismatch_hint",
     "build_time_gap_hint",
     "build_false_premise_hint",
     "claim_support_ratio",

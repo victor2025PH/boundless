@@ -140,3 +140,67 @@ def test_merge_short_tail_emoji_line():
     # emoji 单行长度 1 < 4 → 应并入
     assert len(parts) == 1
     assert "😂" in parts[0]
+
+
+# ── 2026-07-31（198 实锤）：英文不得再被中文刻度拦腰切开 ────────────────────────
+
+def test_weighted_len_latin_discounted():
+    from src.inbox.reply_split import weighted_len
+    assert weighted_len("你好呀") == 3.0
+    assert weighted_len("abcd") == 1.0          # 4 个拉丁字符 ≈ 1 个汉字
+    assert weighted_len("你好ab") == 2.5
+
+
+def test_english_sentence_never_cut_mid_sentence():
+    """事故原句：默认 max_chars=60 曾在 58 字符空格处硬切
+    （'…kind of an old man' + 'now haha 😄'）。新语义：单句无句界绝不切。"""
+    text = "Nice, 35 is a great age. I'm 41 myself, kind of an old man now haha 😄"
+    parts = split_reply_parts(text, max_parts=3, max_chars=60,
+                              min_total_chars=24, min_tail_chars=4)
+    assert parts == [text]              # 加权长度 ~18 单位 < 60 → 整条单发
+
+    text2 = "Flattering me really does get you everywhere with me, you know that?😄"
+    parts2 = split_reply_parts(text2, max_parts=3, max_chars=60,
+                               min_total_chars=24, min_tail_chars=4)
+    assert parts2 == [text2]
+
+
+def test_english_long_multi_sentence_splits_only_at_sentence_end():
+    """超预算英文多句 → 只在句末标点处断，每段都是完整句。"""
+    text = ("I only learned to cook after I moved out on my own and honestly it "
+            "was not a big deal at all. I love making fusion dishes like black "
+            "truffle rice cakes with an Asian twist. What about you, do you "
+            "usually cook or order takeout?")
+    parts = split_reply_parts(text, max_parts=3, max_chars=30,
+                              min_total_chars=0, min_tail_chars=4)
+    assert len(parts) >= 2
+    for p in parts:
+        # 每段必须以句末标点（可带 emoji）收尾——绝无句中断裂
+        assert p.rstrip()[-1] in ".!?😄", p
+    assert " ".join(parts).split() == text.split()   # 内容零丢失
+
+
+def test_english_newline_contract_lines_stay_whole():
+    """LLM 换行合同：英文行 60-240 字符属正常长度，不得再被句级重切。"""
+    l1 = "I'm doing well, thanks for asking and today was quite a busy day! 😊"
+    l2 = "Just wrapped up a busy day in New York, finally relaxing right now."
+    parts = split_reply_parts(f"{l1}\n{l2}", max_parts=3, max_chars=60,
+                              min_total_chars=0, min_tail_chars=4)
+    assert parts == [l1, l2]
+
+
+def test_cjk_overlong_single_sentence_soft_comma_fallback():
+    """CJK 主导的超长单句（>1.6×预算）才放开逗号级软切；英文永不逗号切。"""
+    text = "今天我们去了很多地方玩得特别开心，先是去了海边看日出，然后又去山上野餐，最后还在老街吃了好多小吃真的太满足了"
+    parts = split_reply_parts(text, max_parts=3, max_chars=20,
+                              min_total_chars=0, min_tail_chars=4)
+    assert len(parts) >= 2
+    assert "".join(parts) == text
+
+
+def test_short_english_reply_stays_single():
+    """min_total 门槛按加权长度：英文短回复不再装样子拆条。"""
+    text = "Sounds good!\nSee you then 😄"
+    parts = split_reply_parts(text, max_parts=3, max_chars=60,
+                              min_total_chars=24, min_tail_chars=4)
+    assert parts == [text.strip()] or parts == ["Sounds good!\nSee you then 😄"]

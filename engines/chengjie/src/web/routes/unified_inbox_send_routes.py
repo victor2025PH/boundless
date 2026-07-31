@@ -29,6 +29,7 @@ from fastapi import Depends, HTTPException, Request
 from src.ai.translation_service import normalize_lang
 from src.inbox.channel_adapters import ChannelSendError, send_via_adapters
 from src.inbox.normalizer import conv_id as _conv_id
+from src.inbox.outbound_translate import contains_cjk, lang_is_cjk
 from src.web.routes.unified_inbox_aggregate import _INBOX_ADAPTERS
 from src.web.routes.unified_inbox_auth import _session_agent
 from src.web.routes.unified_inbox_context import _record_copilot_adopt_from_send
@@ -223,6 +224,18 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             # 显式语种也归一（zh-cn→zh 等），避免前端/集成方传入非规范码导致守卫误判。
             target_lang = normalize_lang(target_lang)
         source_lang = normalize_lang(source_lang)
+        # ── P0-198 语言错配护栏（前半）：待发文本含 CJK 而目标语是非 CJK 语种时，
+        #    强制钉源语言（坐席语言=zh），绕开「detect 把『是Steven，别担心。😊』这类
+        #    混排短句判成 en → source==target → identity 跳过 → 中文原样发出」的泄漏
+        #    机制（2026-07-31 客户机实锤，09:51:56 中文直达英文客户手机）。
+        _cjk_conflict = bool(
+            target_lang and not skip_translate
+            and target_lang.lower() != "unknown"
+            and contains_cjk(text) and not lang_is_cjk(target_lang)
+        )
+        if _cjk_conflict and (not source_lang
+                              or source_lang.lower() == target_lang.lower()):
+            source_lang = "zh"
         if (
             target_lang
             and not skip_translate
@@ -244,6 +257,78 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             except Exception:
                 _xlate_failed = True
                 logger.debug("[send] 发送前翻译失败，按原文发送", exc_info=True)
+
+        # 观察期读数：坐席对守卫弹窗选了「强发」——高强发率=守卫在扰民（阈值该松），
+        # 低强发率=拦得对。持久进日志供 chatx_readout 远程统计。
+        if body.get("force_lang") or body.get("force_dup"):
+            logger.info(
+                "[send] guard=force kind=%s conv=%s",
+                "lang" if body.get("force_lang") else "dup",
+                _conv_id(platform, account_id, chat_key))
+
+        # ── P0-198 语言错配护栏（后半，通用兜底）：无论翻译是否被请求/是否成功，
+        #    只要**即将发出的文本**仍含 CJK 而客户会话语言是非 CJK → 409 交坐席确认
+        #    （body.force_lang=1 显式强发）。覆盖三条泄漏路径：identity 跳过、引擎
+        #    失败回落原文、坐席把中文草稿直接填入发送。发中文给外语客户=人设当场
+        #    穿帮，宁可多一次确认。
+        if contains_cjk(text) and not bool(body.get("force_lang")):
+            _guard_lang = normalize_lang(
+                target_lang
+                or _resolve_conv_language(request, platform, account_id, chat_key)
+                or "")
+            if (_guard_lang and _guard_lang.lower() != "unknown"
+                    and not lang_is_cjk(_guard_lang)):
+                _dedup.release(_dedup_scope, _client_msg_id)
+                logger.warning(
+                    "[send] guard=lang_mismatch 语言错配拦截（待坐席确认）conv=%s lang=%s len=%d",
+                    _conv_id(platform, account_id, chat_key), _guard_lang, len(text))
+                raise HTTPException(409, {
+                    "code": "lang_mismatch",
+                    "message": tr(request, "err.inbox.lang_mismatch",
+                                  lang=_guard_lang),
+                })
+
+        # ── P0-198 近重复守卫：与最近 3 分钟内本会话已发出站消息比对，命中 → 409
+        #    交坐席确认（body.force_dup=1 强发）。实锤：「生成草稿→填入并发送」对同一
+        #    条入站连点三次，三条同义改写全部发出；以及把客户已答过的问题隔分钟再问。
+        #    幂等键只防「同一请求重放」，防不了「每次重生都是新请求」——这道守卫补位。
+        if not bool(body.get("force_dup")):
+            try:
+                from src.inbox.outbound_dup_guard import (
+                    near_duplicate_of_recent,
+                    record_dup_check,
+                )
+                _ibx_dup = _inbox_store(request)
+                _dup_hit = None
+                if _ibx_dup is not None:
+                    _dup_hit = near_duplicate_of_recent(
+                        text,
+                        _ibx_dup.list_recent_messages(
+                            _conv_id(platform, account_id, chat_key), limit=8),
+                    )
+                record_dup_check((_dup_hit or {}).get("level", ""))
+                if _dup_hit:
+                    _dedup.release(_dedup_scope, _client_msg_id)
+                    logger.warning(
+                        "[send] guard=near_duplicate 近重复拦截（待坐席确认）conv=%s level=%s sim=%.2f age=%.0fs",
+                        _conv_id(platform, account_id, chat_key),
+                        _dup_hit["level"], _dup_hit["similarity"],
+                        _dup_hit["age_sec"])
+                    raise HTTPException(409, {
+                        "code": "near_duplicate",
+                        "message": tr(request, "err.inbox.near_duplicate",
+                                      age=int(_dup_hit["age_sec"])),
+                    })
+            except HTTPException:
+                raise
+            except Exception:
+                logger.debug("[send] 近重复守卫异常（放行）", exc_info=True)
+        else:
+            try:
+                from src.inbox.outbound_dup_guard import record_dup_check
+                record_dup_check("", forced=True)
+            except Exception:
+                pass
 
         _send_agent = _session_agent(request)
 
@@ -355,7 +440,9 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         _mark_send(cid)
         # P1：发生发送前翻译时，旁路记录「实发译文 → 中文原文/质量」，供 /thread 富集出向双行
         # （跨刷新/重启/设备持久；不触碰 messages 去重）。best-effort，失败不影响发送。
-        # 分条发送时逐条记录（thread 富集按每条消息文本精确匹配，整段键匹配不上分条行）。
+        # 分条发送时只给**首段**挂完整原文（P1-198 问题1实锤：旧逻辑把整段中文原文
+        # 复制到每一条分段下，坐席看到两条气泡挂着同一大段中文，误以为重复双发）。
+        # 其余分段不记映射 → thread 富集查无原文 → 不渲染副行；完整原文在相邻首段。
         if translation_info and cid:
             _ibx_xl = _inbox_store(request)
             if _ibx_xl is not None:
@@ -363,7 +450,9 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                     _bubble_parts[: (_bubbles_info or {}).get("parts_sent", 0)]
                     if _bubble_parts else [text]
                 )
-                for _row_text in _sent_rows:
+                for _row_idx, _row_text in enumerate(_sent_rows):
+                    if _row_idx > 0:
+                        break  # 仅首段挂原文，防每条分段重复整段中文
                     try:
                         _ibx_xl.record_outbound_translation(
                             cid, sent_text=_row_text, original_text=original_text,

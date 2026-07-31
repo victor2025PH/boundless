@@ -177,6 +177,33 @@ async def maybe_start_companion_proactive(assistant) -> None:
         _response_cfg = parse_response_pacing_cfg(cfg)
         if not _response_cfg.get("enabled"):
             _response_cfg = None
+
+        def _live_pacing_cfg():
+            """每次调用现读 pacing（P1-198）：ConfigManager 热重载后，主动触达的
+            节奏参数（min_silent/cooldown/max_per_tick/安静时段/自适应/退避/反哺/
+            dry_run）立即跟进，不必重启——198 实锤：演示档 24h→4h 改完热重载对
+            循环无效，因为旧实现把参数固化进循环实例属性。预览与真发循环共用本
+            闭包（同口径，预览不骗人）。读不到/异常 → 空 dict＝各消费方用启动值。"""
+            try:
+                _c = getattr(assistant.config, "config", None) or {}
+                _pt = ((_c.get("companion") or {}).get("proactive_topic") or {})
+                if not isinstance(_pt, dict):
+                    return {}
+                _bo = parse_no_reply_backoff_cfg(_pt)
+                _rp = parse_response_pacing_cfg(_pt)
+                return {
+                    "min_silent_hours": float(_pt.get("min_silent_hours", 24)),
+                    "cooldown_hours": float(_pt.get("cooldown_hours", 72)),
+                    "max_per_tick": int(_pt.get("max_per_tick", 3)),
+                    "quiet_start_hour": float(_pt.get("quiet_start_hour", 23)),
+                    "quiet_end_hour": float(_pt.get("quiet_end_hour", 8)),
+                    "dry_run": bool(_pt.get("dry_run", False)),
+                    "pacing_cfg": parse_adaptive_pacing_cfg(_pt),
+                    "backoff_cfg": _bo if _bo.get("enabled") else None,
+                    "response_pacing_cfg": _rp if _rp.get("enabled") else None,
+                }
+            except Exception:
+                return {}
         # P3 媒体形态反哺（默认关，overlay 开）：voice/photo 概率按分形态回复率
         # 相对 text 基线自校准（只换形态不换总量；min_intimacy 等护栏全不动）。
         from src.companion.proactive_media_feedback import (
@@ -925,33 +952,59 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 cooldown_map = {}
             # 预览展示全部候选（最多 lim 条），不受 max_per_tick 截断；
             # 另标出本 tick 实际会发的前 N 条（目标优先级 + 沉默时长同真发口径，
-            # 预览才不骗人）。
+            # 预览才不骗人）。P1-198：pacing 改为现读（与真发循环同一闭包），
+            # 运营改完 overlay 刷新预览立即看到新节奏，不再显示启动时的旧值。
+            _lv = _live_pacing_cfg()
+            _pp_live = dict(_pp_params)
+            for _k in ("min_silent_hours", "cooldown_hours",
+                       "quiet_start_hour", "quiet_end_hour"):
+                if _k in _lv:
+                    _pp_live[_k] = _lv[_k]
+            _max_tick_live = int(_lv.get("max_per_tick", _real_max_per_tick))
+            _pacing_live = _lv.get("pacing_cfg", _pacing_cfg)
+            _backoff_live = _lv.get("backoff_cfg", _backoff_cfg)
+            _response_live = _lv.get("response_pacing_cfg", _response_cfg)
+            # P1-198 候选诊断：闸口原因收集（「为什么今天不发」从翻代码变成看板可读）
+            _skips: list = []
             plans = plan_proactive_sends(
                 convs, cooldown_map=cooldown_map, opener_fn=_opener,
-                has_pending_care=_has_pending_care, max_per_tick=lim, **_pp_params,
-                pacing_cfg=_pacing_cfg, priority_fn=_goal_priority,
-                backoff_cfg=_backoff_cfg,
-                response_pacing_cfg=_response_cfg,
+                has_pending_care=_has_pending_care, max_per_tick=lim, **_pp_live,
+                pacing_cfg=_pacing_live, priority_fn=_goal_priority,
+                backoff_cfg=_backoff_live,
+                response_pacing_cfg=_response_live,
+                diagnostics=_skips,
                 # 预览与真发同口径：安静时段按用户钟判，预览才不骗人
                 user_clock_provider=_user_clock if _uc_enabled else None)
             for i, p in enumerate(plans):
-                p["would_send_this_tick"] = i < _real_max_per_tick
+                p["would_send_this_tick"] = i < _max_tick_live
+            _skip_counts: dict = {}
+            for _s in _skips:
+                _r = str(_s.get("reason") or "other")
+                _skip_counts[_r] = int(_skip_counts.get(_r, 0)) + 1
+            # 样本按「离能发最近」排（min_silent 的沉默降序最有行动价值）
+            _skip_samples = sorted(
+                _skips, key=lambda s: float(s.get("silent_hours") or -1.0),
+                reverse=True)[:12]
             return {
                 "enabled": enabled,
-                "dry_run": bool(cfg.get("dry_run", False)),
+                "dry_run": bool(_lv.get("dry_run", cfg.get("dry_run", False))),
                 "scanned": len(convs),
                 "candidates": len(plans),
-                "max_per_tick": _real_max_per_tick,
-                "min_silent_hours": min_silent_hours,
-                "cooldown_hours": _pp_params["cooldown_hours"],
-                "adaptive_pacing": _pacing_cfg,
-                "no_reply_backoff": _backoff_cfg or {"enabled": False},
+                "max_per_tick": _max_tick_live,
+                "min_silent_hours": _pp_live["min_silent_hours"],
+                "cooldown_hours": _pp_live["cooldown_hours"],
+                "adaptive_pacing": _pacing_live,
+                "no_reply_backoff": _backoff_live or {"enabled": False},
                 "variety_guard": {
                     "enabled": _variety_on,
                     "similarity_threshold": _sim_threshold},
-                "quiet_hours": [_pp_params["quiet_start_hour"], _pp_params["quiet_end_hour"]],
+                "quiet_hours": [_pp_live["quiet_start_hour"], _pp_live["quiet_end_hour"]],
                 "care_dedup_active": care_store is not None,
                 "plans": plans,
+                # P1-198 候选诊断：谁被哪个闸口拦下、离能发还差多少——
+                # 「主动队列看起来没动」从猜测变成一屏可读原因。
+                "skip_summary": _skip_counts,
+                "skipped": _skip_samples,
             }
 
         ai_name = "她"
@@ -1364,6 +1417,15 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     str(plan.get("chat_key") or ""))
                 if not pid:
                     _media_skip("photo", "no_persona")
+                    return None
+                # 人设级发图闸（2026-07-31，默认关；photo_capability SSOT）：
+                # 主动生活照与被动要图同一门——人设没开相册，主动触达也不发图
+                # （否则聊天里说「发不了照片」、主动消息却带图，自相矛盾）。
+                from src.companion.photo_capability import (
+                    persona_photos_enabled_by_id,
+                )
+                if not persona_photos_enabled_by_id(pid):
+                    _media_skip("photo", "persona_photos_off")
                     return None
                 from src.ai.companion_selfie import pick_scene_hint, scene_pool
                 from src.utils.persona_manager import PersonaManager
@@ -1922,6 +1984,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
             user_clock_provider=_user_clock if _uc_enabled else None,
             backoff_cfg=_backoff_cfg,
             response_pacing_cfg=_response_cfg,
+            live_cfg_provider=_live_pacing_cfg,
         )
         await loop.start()
         assistant._companion_proactive_loop = loop

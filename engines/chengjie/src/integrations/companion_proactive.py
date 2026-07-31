@@ -143,6 +143,7 @@ def plan_proactive_sends(
     user_clock_provider: Optional[Callable[[str], Optional[Any]]] = None,
     backoff_cfg: Optional[Dict[str, Any]] = None,
     response_pacing_cfg: Optional[Dict[str, Any]] = None,
+    diagnostics: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """决定本轮该主动开场的会话清单（确定性纯函数）。
 
@@ -189,6 +190,13 @@ def plan_proactive_sends(
             反哺**（P2）：账本 obs_n/obs_replied 的长期回复率 → 冷却×stretch
             （慢性低回复，与 streak 急性退避正交叠加、封顶仍 720h）或 ×relax
             （慢性高回复，≤1 且 ≥0.5）；样本 < min_obs 不判。None＝不反哺。
+        diagnostics: 可选**候选诊断收集器**（P1-198 问题7：闸口全是静默 continue，
+            「为什么今天不发」只能翻代码猜）。传 list 进来则每个被跳过的会话追加
+            ``{conversation_id, reason, detail, silent_hours}``（capped 200 条），
+            reason ∈ awaiting_reply/care_pending/no_activity_ts/min_silent/
+            backoff_exhausted/never_replied_stop/cooldown/user_quiet_hours/
+            opener_error/crisis_block/no_opener/quiet_hours_global/archived。
+            None＝零开销旧行为。收集不影响返回值。
     """
     from src.companion.user_clock import in_quiet_hours as _user_in_quiet_hours
     from src.companion.user_clock import schedule_clock as _schedule_clock
@@ -217,26 +225,46 @@ def plan_proactive_sends(
         _resp_cfg_eff = dict(
             response_pacing_cfg,
             low_rate=_cal["low_rate"], high_rate=_cal["high_rate"])
+    def _diag(cid: str, reason: str, detail: str = "",
+              silent_hours: float = -1.0) -> None:
+        """候选诊断（P1-198）：把静默跳过变成可读原因；无收集器=零开销。"""
+        if diagnostics is None or len(diagnostics) >= 200:
+            return
+        rec: Dict[str, Any] = {"conversation_id": cid, "reason": reason}
+        if detail:
+            rec["detail"] = detail
+        if silent_hours >= 0:
+            rec["silent_hours"] = round(silent_hours, 1)
+        diagnostics.append(rec)
+
     local_hour = time.localtime(now).tm_hour
     if (user_clock_provider is None
             and _in_quiet_hours(local_hour, int(quiet_start_hour),
                                 int(quiet_end_hour))):
+        _diag("", "quiet_hours_global",
+              f"服务器时间 {local_hour} 点在安静时段 "
+              f"{int(quiet_start_hour)}-{int(quiet_end_hour)}，本轮整体不发")
         return []  # 安静时段不打扰（有用户时钟时下沉到每会话判定，见循环内）
 
     plans: List[Dict[str, Any]] = []
     for c in conversations or []:
-        if not isinstance(c, dict) or c.get("archived"):
+        if not isinstance(c, dict):
             continue
         cid = str(c.get("conversation_id") or "")
+        if c.get("archived"):
+            _diag(cid, "archived", "会话已归档")
+            continue
         if not cid:
             continue
         # 对方最后发言 = 我欠回复，不在此主动开场
         if str(c.get("last_direction") or "") == "in":
+            _diag(cid, "awaiting_reply", "对方最后发言（欠回复，属 SLA 范畴不属主动回访）")
             continue
         # 与 proactive_care 去重：已排关怀的会话让路（care 引用具体约定，优先）
         if has_pending_care is not None:
             try:
                 if has_pending_care(cid):
+                    _diag(cid, "care_pending", "已排关怀消息（care 优先，让路）")
                     continue
             except Exception:
                 logger.debug("[proactive] has_pending_care 失败 cid=%s", cid, exc_info=True)
@@ -245,6 +273,7 @@ def plan_proactive_sends(
         except (TypeError, ValueError):
             last_ts = 0.0
         if last_ts <= 0:
+            _diag(cid, "no_activity_ts", "无最近消息时间（占位会话）")
             continue
         silent_hours = (now - last_ts) / 3600.0
         try:
@@ -257,6 +286,10 @@ def plan_proactive_sends(
         _eff_cool = effective_cooldown_hours(
             _intim, stage=_stage, base_hours=cooldown_hours, pacing_cfg=pacing_cfg)
         if silent_hours < _eff_silent:
+            _diag(cid, "min_silent",
+                  f"沉默 {silent_hours:.1f}h，未达阈值 {_eff_silent:.1f}h"
+                  f"（还差 {max(0.0, _eff_silent - silent_hours):.1f}h）",
+                  silent_hours)
             continue
         entry = _ledger_entry(cooldown_map.get(cid))
         # 冷却窗看 ts（含 attempt 推时，防每 tick 重烧 LLM）；响应语义（streak/
@@ -279,12 +312,23 @@ def plan_proactive_sends(
             _eff_cool *= _resp_factor
         if backoff_cfg is not None:
             if backoff_exhausted(_streak, backoff_cfg):
+                _diag(cid, "backoff_exhausted",
+                      f"连续 {_streak} 条主动未获回应，已停发（等对方先开口）",
+                      silent_hours)
                 continue  # 连续未回达到上限：彻底停发，等对方先开口
             # P1：从未开口的联系人给足 N 次尝试后出圈（0 互动不属陪伴回访语义）
             if never_replied_exhausted(_streak, _last_in, backoff_cfg):
+                _diag(cid, "never_replied_stop",
+                      f"对方从未回过话且已尝试 {_streak} 次，出圈", silent_hours)
                 continue
             _eff_cool = backoff_cooldown_hours(_eff_cool, _streak, backoff_cfg)
         if last_pro and (now - last_pro) < _eff_cool * 3600.0:
+            _diag(cid, "cooldown",
+                  f"距上次主动 {(now - last_pro) / 3600.0:.1f}h，冷却窗 "
+                  f"{_eff_cool:.1f}h（还需 "
+                  f"{max(0.0, _eff_cool - (now - last_pro) / 3600.0):.1f}h"
+                  + (f"；未回退避 streak={_streak}" if _streak else "") + "）",
+                  silent_hours)
             continue
         # 用户时钟安静时段（逐会话）：解析故意排在沉默/冷却等便宜过滤之后，且在
         # opener_fn（读记忆，本循环最贵的一步）之前——半夜的人连开场都不必生成。
@@ -295,6 +339,8 @@ def plan_proactive_sends(
             if _user_in_quiet_hours(
                     clock, now, quiet_start=int(quiet_start_hour),
                     quiet_end=int(quiet_end_hour), server_hour=local_hour):
+                _diag(cid, "user_quiet_hours",
+                      "对方当地时间在安静时段", silent_hours)
                 continue
             conv_hour = _schedule_clock(clock, now)[0]
         try:
@@ -310,6 +356,7 @@ def plan_proactive_sends(
             ) or {}
         except Exception:
             logger.debug("[proactive] opener_fn 失败 cid=%s", cid, exc_info=True)
+            _diag(cid, "opener_error", "开场生成器异常（见 debug 日志）", silent_hours)
             continue
         # 危机关怀升级：被情绪护栏拦下的 severe 会话 → 排进 care 队列（best-effort），
         # 再正常跳过（mode 为空，不会作普通主动文案发出）。
@@ -321,6 +368,14 @@ def plan_proactive_sends(
         mode = str(opener.get("mode") or "")
         directive = str(opener.get("directive") or "")
         if not mode or not directive:
+            _blocked = str(opener.get("blocked") or "")
+            if _blocked:
+                _diag(cid, "crisis_block" if "crisis" in _blocked else "opener_blocked",
+                      f"开场被护栏拦下（{_blocked}）", silent_hours)
+            else:
+                _diag(cid, "no_opener",
+                      "无可用开场（无高置信记忆可回访 / checkin 效能门控跳过）",
+                      silent_hours)
             continue
         plans.append({
             "conversation_id": cid,
@@ -521,6 +576,7 @@ class CompanionProactiveLoop:
         user_clock_provider: Optional[Callable[[str], Optional[Any]]] = None,
         backoff_cfg: Optional[Dict[str, Any]] = None,
         response_pacing_cfg: Optional[Dict[str, Any]] = None,
+        live_cfg_provider: Optional[Callable[[], Dict[str, Any]]] = None,
         now: Callable[[], float] = time.time,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -552,10 +608,28 @@ class CompanionProactiveLoop:
         self._quiet_start = float(quiet_start_hour)
         self._quiet_end = float(quiet_end_hour)
         self._dry_run = bool(dry_run)
+        # 配置现读（P1-198）：pacing 参数原本在构造时固化——运营改
+        # config.local.yaml 热重载后主动触达节奏纹丝不动，必须重启才生效
+        # （198 实锤：min_silent 24h→4h 改完热重载生效不了）。provider 每 tick
+        # 返回 proactive_topic 段的**已解析**覆盖值（解析留在 proactive_topic 侧，
+        # 本循环保持机制纯粹）；None/缺键 → 用构造值（测试与旧调用方零影响）。
+        self._live_cfg_provider = live_cfg_provider
         self._now = now
         self._sleep = sleep
         self._task: Optional[asyncio.Task] = None
         self._running = False
+
+    def _live_overrides(self) -> Dict[str, Any]:
+        """取本 tick 的现读配置（异常/无 provider → 空 dict = 全用构造值）。"""
+        if self._live_cfg_provider is None:
+            return {}
+        try:
+            live = self._live_cfg_provider()
+            return live if isinstance(live, dict) else {}
+        except Exception:
+            logger.debug("[proactive] live cfg provider 异常（用构造值）",
+                         exc_info=True)
+            return {}
 
     async def run_once(self) -> Dict[str, int]:
         """一次幂等派发步：扫描 → 计划 → 发送 → 记冷却。返回 {planned, sent}。"""
@@ -564,23 +638,42 @@ class CompanionProactiveLoop:
         except Exception:
             logger.debug("[proactive] 会话快照获取失败", exc_info=True)
             return {"planned": 0, "sent": 0}
+        live = self._live_overrides()
+
+        def _lv(key: str, cur, cast):
+            if key not in live:
+                return cur
+            try:
+                return cast(live[key])
+            except (TypeError, ValueError):
+                return cur
+
+        eff_min_silent = _lv("min_silent_hours", self._min_silent_hours, float)
+        eff_cooldown = _lv("cooldown_hours", self._cooldown_hours, float)
+        eff_max_tick = _lv("max_per_tick", self._max_per_tick, int)
+        eff_quiet_s = _lv("quiet_start_hour", self._quiet_start, float)
+        eff_quiet_e = _lv("quiet_end_hour", self._quiet_end, float)
+        eff_dry_run = bool(live.get("dry_run", self._dry_run))
+        eff_pacing = live.get("pacing_cfg", self._pacing_cfg)
+        eff_backoff = live.get("backoff_cfg", self._backoff_cfg)
+        eff_response = live.get("response_pacing_cfg", self._response_pacing_cfg)
         plans = plan_proactive_sends(
             convs,
             cooldown_map=(self._cooldown.snapshot() if self._cooldown else {}),
             opener_fn=self._opener_fn,
             now=self._now(),
-            min_silent_hours=self._min_silent_hours,
-            cooldown_hours=self._cooldown_hours,
-            max_per_tick=self._max_per_tick,
-            quiet_start_hour=self._quiet_start,
-            quiet_end_hour=self._quiet_end,
+            min_silent_hours=eff_min_silent,
+            cooldown_hours=eff_cooldown,
+            max_per_tick=eff_max_tick,
+            quiet_start_hour=eff_quiet_s,
+            quiet_end_hour=eff_quiet_e,
             has_pending_care=self._has_pending_care,
             on_crisis_block=self._on_crisis_block,
-            pacing_cfg=self._pacing_cfg,
+            pacing_cfg=eff_pacing,
             priority_fn=self._priority_fn,
             user_clock_provider=self._user_clock_provider,
-            backoff_cfg=self._backoff_cfg,
-            response_pacing_cfg=self._response_pacing_cfg,
+            backoff_cfg=eff_backoff,
+            response_pacing_cfg=eff_response,
         )
         # 每日仪式问候（晨 / 晚安）：时段驱动、独立每日每档去重；与沉默回访互补。
         # 同一会话本 tick 既到仪式点又够沉默时，仪式优先（不重复打扰一人）。
@@ -606,7 +699,7 @@ class CompanionProactiveLoop:
                     _fresh_ts = float(self._fresh_activity_provider(_cid) or 0.0)
                     _msh = float(
                         p.get("effective_min_silent_hours")
-                        or self._min_silent_hours)
+                        or eff_min_silent)
                     if should_skip_recent_active(
                             _fresh_ts, now=self._now(),
                             min_silent_hours=_msh):
@@ -619,7 +712,7 @@ class CompanionProactiveLoop:
                                  p.get("conversation_id"), exc_info=True)
             ok = False
             try:
-                ok = True if self._dry_run else bool(await self._send_fn(p))
+                ok = True if eff_dry_run else bool(await self._send_fn(p))
             except Exception:
                 logger.debug("[proactive] send_fn 失败 cid=%s",
                              p.get("conversation_id"), exc_info=True)
@@ -648,10 +741,10 @@ class CompanionProactiveLoop:
                                      p.get("conversation_id"), exc_info=True)
         if plans:
             logger.info("[proactive] tick: planned=%d sent=%d dry_run=%s",
-                        len(plans), sent, self._dry_run)
+                        len(plans), sent, eff_dry_run)
         try:
             from src.companion.proactive_stats import record_tick
-            record_tick(planned=len(plans), sent=sent, dry_run=self._dry_run)
+            record_tick(planned=len(plans), sent=sent, dry_run=eff_dry_run)
         except Exception:
             pass
         return {"planned": len(plans), "sent": sent}

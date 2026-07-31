@@ -21,6 +21,109 @@ from typing import Any, Dict, List, Optional
 _URL_RE = re.compile(r"(?i)https?://\S+|www\.\S+")
 _LONG_DIGIT_RE = re.compile(r"\d{8,}")
 
+# ── 长度语义（2026-07-31，198 实锤修正）───────────────────────────────────────
+# max_chars=60 是按**中文字符**校准的（60 个汉字≈一大段话）；同一个 60 落在英文上
+# 只有 ~10 个词，翻译后的英文必然被拦腰切开（实测断点全落在 57-60 字符的空格处，
+# 例：'Nice, 35 is a great age. I'm 41 myself, kind of an old man' + 'now haha 😄'）。
+# 修法＝按「信息量」计长：CJK 字符权重 1.0，其它字符（拉丁/数字/空格/emoji）0.25
+# ——同一个 max_chars 预算对英文自动放大 ~4 倍，中文行为保持不变。
+_CJK_CHAR_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]")
+_LATIN_CHAR_WEIGHT = 0.25
+
+# 句子边界：CJK 句末标点后天然可断；拉丁 .!? 只在后随空白时算句界
+# （防 3.5 / example.com / U.S. 之类被误切）。句中逗号/空格**绝不**再作硬切点
+# ——切不出句界就整句保留，宁可长一条也不把一句话说一半。
+_SENT_BOUNDARY_RE = re.compile(r"(?:(?<=[。！？；…])|(?<=[.!?])(?=\s))")
+# CJK 主导的超长单句兜底切点（软逗号级，仅 CJK 文本放开——中文逗号处断句仍然成话，
+# 英文逗号处断句就是半句话）
+_CJK_SOFT_BOUNDARY_RE = re.compile(r"(?<=[。！？；…，、：])")
+# 片段是否以「词」开头（字母/数字/CJK）；不是 → 该片段（emoji/引号/括号尾）并回前句
+_LEAD_WORD_RE = re.compile(r"^[0-9A-Za-z\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]")
+
+
+def weighted_len(text: str) -> float:
+    """信息量长度：CJK 记 1.0、其它字符记 0.25（含空格/emoji）。
+
+    用它替代 ``len()`` 做分条预算判定，使 ``max_chars`` 的「中文刻度」对
+    拉丁文本自动等效放大，而中文行为逐字不变。
+    """
+    s = str(text or "")
+    cjk = len(_CJK_CHAR_RE.findall(s))
+    return cjk + (len(s) - cjk) * _LATIN_CHAR_WEIGHT
+
+
+def _sentence_fragments(text: str, *, soft_cjk: bool = False) -> List[str]:
+    """把文本按句界切成原文切片（零字符丢失：切片拼接 == 原文）。
+
+    ``soft_cjk=True`` 时对 CJK 文本额外放开逗号级切点（仅超长单句兜底用）。
+    末尾 emoji/引号等非词首片段自动并回前句（防 'okay?' 与 '😄' 被拆两条）。
+    """
+    s = str(text or "")
+    if not s:
+        return []
+    rx = _CJK_SOFT_BOUNDARY_RE if soft_cjk else _SENT_BOUNDARY_RE
+    cuts = sorted({m.start() for m in rx.finditer(s) if 0 < m.start() < len(s)})
+    frags: List[str] = []
+    prev = 0
+    for i in cuts:
+        frags.append(s[prev:i])
+        prev = i
+    frags.append(s[prev:])
+    frags = [f for f in frags if f and f.strip()]
+    merged: List[str] = []
+    for f in frags:
+        if merged and not _LEAD_WORD_RE.match(f.strip()):
+            merged[-1] = merged[-1] + f
+        else:
+            merged.append(f)
+    return merged
+
+
+def _pack_text_parts(
+    text: str,
+    *,
+    max_chars: int,
+    max_parts: int,
+    min_tail_chars: int,
+) -> List[str]:
+    """句界打包（文本出站专用，2026-07-31 起替代语音侧 ``pack_voice_parts``）。
+
+    不变量：**只在句末标点处断**；单句超预算=整句独占一条（绝不句中硬切）；
+    切不出第二条 → 整段单条。CJK 主导的超长单句（>1.6×预算）才放开逗号级
+    软切点——中文逗号断句仍成话，英文逗号断句是半句话，故仅 CJK 放开。
+    """
+    t = str(text or "").strip()
+    if not t:
+        return []
+    budget = max(1.0, float(max_chars))
+    frags = _sentence_fragments(t)
+    if len(frags) <= 1 and weighted_len(t) > budget * 1.6:
+        cjk_n = len(_CJK_CHAR_RE.findall(t))
+        if cjk_n >= len(t) * 0.5:  # CJK 主导才放开逗号级软切
+            frags = _sentence_fragments(t, soft_cjk=True)
+    if len(frags) <= 1:
+        return [t]
+    keep = max(1, int(max_parts))
+    parts: List[str] = []
+    cur = ""
+    for f in frags:
+        if not cur:
+            cur = f
+            continue
+        room_for_new = len(parts) < keep - 1
+        if room_for_new and weighted_len(cur.strip()) + weighted_len(f.strip()) > budget:
+            parts.append(cur)
+            cur = f
+        else:
+            cur = cur + f
+    if cur:
+        parts.append(cur)
+    parts = [p.strip() for p in parts if p and str(p).strip()]
+    parts = _merge_short_tail(parts, min_tail_chars)
+    if len(parts) < 2:
+        return [t]
+    return parts
+
 
 def parse_bubbles_cfg(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """读 ``inbox.reply_style.bubbles``，返回归一化配置（全有默认值，永不抛）。"""
@@ -139,20 +242,23 @@ def _cap_part_count(parts: List[str], max_parts: int) -> List[str]:
 
 def _from_newlines(text: str, max_parts: int, max_chars: int,
                    min_tail_chars: int) -> Optional[List[str]]:
-    """LLM 换行合同路径：≥2 非空行 → 按行成条；超长行再句级打包。"""
+    """LLM 换行合同路径：≥2 非空行 → 按行成条；超长行再**句界**打包。
+
+    2026-07-31 起超长行不再走语音侧 ``pack_voice_parts``（那是 TTS 切块逻辑，
+    会在逗号/空格处硬切凑长度）；改 ``_pack_text_parts``（句界打包 + 加权长度），
+    英文行不会再被拦腰切开。
+    """
     lines = [ln.strip() for ln in str(text or "").splitlines() if ln.strip()]
     if len(lines) < 2:
         return None
     expanded: List[str] = []
     for ln in lines:
-        if len(ln) <= max_chars or _is_atomic_chunk(ln):
+        if weighted_len(ln) <= max_chars or _is_atomic_chunk(ln):
             expanded.append(ln)
             continue
-        # 超长且可切：复用语音侧句级打包（单一切句事实源）
         try:
-            from src.ai.voice_clone_client import pack_voice_parts
-            sub = pack_voice_parts(
-                ln, part_max_chars=max_chars, max_parts=max_parts,
+            sub = _pack_text_parts(
+                ln, max_chars=max_chars, max_parts=max_parts,
                 min_tail_chars=min_tail_chars,
             )
             expanded.extend(sub or [ln])
@@ -175,11 +281,15 @@ def split_reply_parts(
 
     优先级：
       1. 空 → ``[]``
-      2. 总长 < min_total_chars → 单条（短回复不装样子拆）
+      2. 总长（加权）< min_total_chars → 单条（短回复不装样子拆）
       3. LLM 换行合同（≥2 行）→ 按行
-      4. 否则 ``pack_voice_parts`` 句级打包兜底
+      4. 否则 ``_pack_text_parts`` 句界打包兜底（只在句末标点断，绝不句中硬切）
       5. 异常 / 切不出第二条 → ``[原文]``
     纯函数、防御式。
+
+    2026-07-31（198 实锤）：长度判定全部改**加权长度**（CJK=1.0/其它=0.25），
+    英文文本不再套用中文刻度被 60 字符拦腰切开；兜底打包从语音侧
+    ``pack_voice_parts``（逗号/空格硬切）换成句界打包。
     """
     t = str(text or "").strip()
     if not t:
@@ -188,7 +298,7 @@ def split_reply_parts(
     max_chars = max(20, int(max_chars))
     min_tail_chars = max(0, int(min_tail_chars))
     min_total_chars = max(0, int(min_total_chars))
-    if min_total_chars and len(t) < min_total_chars:
+    if min_total_chars and weighted_len(t) < min_total_chars:
         return [t]
     if max_parts <= 1:
         return [t]
@@ -202,9 +312,8 @@ def split_reply_parts(
         return [t]
 
     try:
-        from src.ai.voice_clone_client import pack_voice_parts
-        parts = pack_voice_parts(
-            t, part_max_chars=max_chars, max_parts=max_parts,
+        parts = _pack_text_parts(
+            t, max_chars=max_chars, max_parts=max_parts,
             min_tail_chars=min_tail_chars,
         )
     except Exception:
