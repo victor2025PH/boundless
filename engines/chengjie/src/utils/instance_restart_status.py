@@ -63,6 +63,11 @@ def seat_restart_banner(*, now: Optional[float] = None) -> Dict[str, Any]:
                 break
     active = bool(mine and mine.get("cooldown_active"))
     flap = (mine or {}).get("flap") or {}
+    # 2026-07-31: pre-restart maintenance notice folds into quiet_poll so any
+    # ai-runtime-status poll landing between "announce" and "stop" CONFIRMS the
+    # SSE-set maintenance flag instead of clearing it (else the 60s poll would
+    # flip the workbench banner back to the scary red "connection lost").
+    maintenance = full.get("maintenance") or {"active": False}
     return {
         "instance_id": cur,
         "cooldown_active": active,
@@ -73,7 +78,10 @@ def seat_restart_banner(*, now: Optional[float] = None) -> Dict[str, Any]:
         # Phase7: seat poll throttle signals (no paths)
         "flapping": bool(flap.get("flapping")),
         "http_phase": (mine or {}).get("http_phase"),
-        "quiet_poll": bool(active or flap.get("flapping")),
+        "maintenance": maintenance,
+        "quiet_poll": bool(
+            active or flap.get("flapping") or maintenance.get("active")
+        ),
     }
 
 
@@ -540,6 +548,15 @@ def collect_restart_status(
             any_sla_breach = True
         items.append(summary)
     bt = boot_timing_snapshot()
+    # 2026-07-31: THIS process's planned-maintenance notice (restart script
+    # announces before stopping; process-local by design — a fresh process after
+    # the restart starts clean, so the notice cannot outlive its own outage).
+    try:
+        from src.utils.maintenance_notice import snapshot as _mnt_snapshot
+
+        maintenance = _mnt_snapshot(now=now)
+    except Exception:
+        maintenance = {"active": False, "left_sec": 0}
     return {
         "ok": True,
         "cooldown_active_any": any_active,
@@ -549,6 +566,7 @@ def collect_restart_status(
         "window_sla_sec": _window_sla_sec(),
         "status_snapshot_age_sec": int(snap_age) if snap_age is not None else None,
         "dirs": [str(p) for p in cooldown_dirs()],
+        "maintenance": maintenance,
         "instances": items,
         # Phase 12b: THIS process's boot phase timing (None until first boot on
         # Phase11+ code; other instance's boot lives in its own process/API).

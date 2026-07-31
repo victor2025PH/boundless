@@ -11,11 +11,11 @@ alwaysApply: true
 ## 重启
 
 - **唯一入口**：`deploy\instances\restart_instance.ps1 -Instance zhiliao|tongyi`
-  - 自带：只动一台、机器级 10 分钟冷却（与 watchdog 共用）、脏树闸门（仅模板/i18n 脏则拒）、清哨兵、等 `/login` 200、可选 ops 告警
-  - 先判断：`-Advise`；演练：`-DryRun`；应急：`-Force`；热更新文件仍要硬重启：`-AllowHotOnly`
+  - 自带：只动一台、机器级 10 分钟冷却（与 watchdog 共用）、**手动重启间隔 ≥30 分钟**（2026-07-31 起；watchdog 自愈不受限）、配置重复键门禁、脏树闸门（仅模板/i18n 脏则拒）、**停机前维护预告播**（SSE 广播 → 坐席看蓝色「维护窗口」而非红色「连接中断」）、清哨兵、等 `/login` 200、可选 ops 告警
+  - 先判断：`-Advise`；演练：`-DryRun`；应急：`-Force`（**穿越冷却/间隔会在事件账本打 `[forced]` 标记**）；热更新文件仍要硬重启：`-AllowHotOnly`
 - **禁止**：`scripts\restart_main.ps1`、`start_main.ps1`、`taskkill` 杀光 python、在引擎根裸起 `python main.py`
 - **能不重启就不重启**：模板 HTML/JS、`web_i18n`/i18n_packs、多数 `config.local.yaml` 热更新；pytest 自建 app，别用重启生产当测试
-- **攒批**：多项 `.py` 改完再重启一次；连环重启 = 坐席「加载超时」根因（前端 10s abort + 自动重连）
+- **攒批**：多项 `.py` 改完再重启一次；连环重启 = 坐席「加载超时」根因（前端 10s abort + 自动重连）。实测 2026-07-28..31 每天 14-16 次重启＝坐席每天吃十几次 15-30s 断站窗口——30 分钟手动间隔就是为压住这个（`-Reason` 请写清楚改了什么，方便别的线判断能不能搭你的车）
 
 ## 探活 / 自愈
 

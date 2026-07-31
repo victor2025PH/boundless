@@ -174,12 +174,44 @@ if ($Advise) {
     Write-Host '  Forbidden: scripts\restart_main.ps1 , mass taskkill , bare python main.py at engine root'
     Write-Host ("  Now: port={0} listening={1} login_ready={2}" -f $effPort, $listenTxt, $loginTxt)
     Write-Host ("  Dirty gate: kind={0} py={1} hot={2} other={3}" -f $dirty.kind, $dirty.py.Count, $dirty.hot.Count, $dirty.other.Count)
+    $adviseDupTool = Join-Path $EngineDir 'tools\check_config_duplicates.py'
+    if (Test-Path $adviseDupTool) {
+        $adviseDup = & python $adviseDupTool --data-root $root 2>&1
+        if ($LASTEXITCODE -eq 1) {
+            Say ("config duplicate keys - restart WILL be refused (fix first):`n{0}" -f (($adviseDup | Out-String).Trim())) 'Red'
+        } else {
+            Write-Host '  Config keys: no duplicates'
+        }
+    }
     if ($gate.active) {
         Say ("cooldown ACTIVE left~{0}m reason={1}" -f $gate.left_min, $gate.record.reason) 'DarkYellow'
     } elseif ($gate.record) {
         Say ("last restart: {0} reason={1}" -f $gate.record.ts, $gate.record.reason) 'DarkYellow'
     }
     exit 0
+}
+
+# Config duplicate-key gate (2026-07-31, after a real incident): PyYAML takes the
+# LAST of duplicate keys silently, so hand-inserting a second `telegram:` under
+# `platform_login:` discarded the original block (protocol_enabled /
+# companion_runtime / credpool token / device fingerprint) -> after restart the
+# orchestrator registered no Telegram worker -> 5 accounts offline. Nothing errors,
+# nothing logs; only a restart makes it real. So check BEFORE we stop anything.
+# Fail-open on tooling problems: a guard must never be more dangerous than the
+# thing it guards. Only an actual duplicate blocks (override: -Force).
+$dupTool = Join-Path $EngineDir 'tools\check_config_duplicates.py'
+if (Test-Path $dupTool) {
+    $dupOut = & python $dupTool --data-root $root 2>&1
+    $dupRc = $LASTEXITCODE
+    if ($dupRc -eq 1) {
+        $dupTxt = ($dupOut | Out-String).Trim()
+        if (-not $Force) {
+            Fail ("Duplicate keys in this instance's config - PyYAML silently keeps the LAST one, so an entire earlier block is being discarded. Fix the config first (restarting would make it real). Override: -Force.`n{0}" -f $dupTxt)
+        }
+        Say ("config duplicate keys present but -Force given:`n{0}" -f $dupTxt) 'DarkYellow'
+    } elseif ($dupRc -ne 0) {
+        Say ("config duplicate-key check could not run (rc={0}) - continuing" -f $dupRc) 'DarkYellow'
+    }
 }
 
 # Dirty-tree gate: only hot-reloadable dirt → refuse (unless Force / AllowHotOnly)
@@ -192,8 +224,39 @@ if ($gate.active -and -not $Force) {
     Fail ("Cooldown: last restart {0} min ago (reason={1}). Wait ~{2} min more, or -Force for emergency. Workbench load-timeout loops are usually restart flaps." -f $gate.elapsed_min, $gate.record.reason, $gate.left_min)
 }
 
+# Manual restart spacing (2026-07-31, root-cause fix for the workbench "connection
+# lost" banner storms): the 10min machine cooldown still allowed 14-16 restarts/day
+# (measured 07-28..07-31 in restart_events.jsonl), and EVERY restart burns a
+# 15-30s all-site outage window on the seats. Manual callers now need >=30min
+# since the LAST restart of this instance - BATCH your .py changes with the other
+# agent lines and restart once. Watchdog self-heal keeps its own semantics
+# (-FromWatchdog implies -Force and never reaches this gate). Note: the seat
+# quiet_poll window still follows the 10min cooldown record - this gate only
+# spaces HUMAN/agent restarts, it does not slow the workbench for 30min.
+$ManualSpacingMin = 30
+$SpacingBlocked = $false
+$SpacingElapsedMin = -1
+if (-not $FromWatchdog -and $gate.record -and $gate.record.ts) {
+    try {
+        $lastRestartTs = [datetime]::Parse([string]$gate.record.ts, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
+        $SpacingElapsedMin = [int](((Get-Date) - $lastRestartTs).TotalMinutes)
+        if ($SpacingElapsedMin -ge 0 -and $SpacingElapsedMin -lt $ManualSpacingMin) { $SpacingBlocked = $true }
+    } catch {}
+}
+if ($SpacingBlocked -and -not $Force) {
+    Fail ("Restart spacing: last restart was {0} min ago (reason={1}); manual restarts need >={2} min apart - every restart shows every seat a 15-30s outage banner. BATCH your changes (scripts\agent_probe.ps1 lists other lines' pending work) and restart once. Real emergency: -Force (event log will carry a [forced] flag)." -f $SpacingElapsedMin, $gate.record.reason, $ManualSpacingMin)
+}
+if ($Force -and -not $FromWatchdog -and ($gate.active -or $SpacingBlocked)) {
+    # Forced through an active gate: make it auditable in the cooldown record +
+    # restart_events.jsonl + ops alert text. The 12:30/12:32 double restart FLAP
+    # of 2026-07-31 was exactly this path and was invisible until now.
+    $Reason = "$Reason [forced]"
+    Say ("FORCED through restart gate (cooldown/spacing) - event log flagged: {0}" -f $Reason) 'Yellow'
+}
+
 if ($DryRun) {
     Say 'DryRun - would run:' 'Yellow'
+    Write-Host ("  0) POST 127.0.0.1:{0}/api/internal/ops/maintenance-notice (blue maintenance banner on open workbenches)" -f $effPort)
     Write-Host ("  1) stop_instance.ps1 -Instance {0}" -f $Instance)
     Write-Host ("  2) clear {0}\logs\run_sentinel.json" -f $root)
     Write-Host ("  3) {0} -DataDir {1}" -f $meta.start, $root)
@@ -217,6 +280,32 @@ if ($inflight.active -and -not $Force) {
 # client still runs = session-fighting ghost).
 $null = Write-RestartInflight -Instance $Instance -Reason $Reason -TtlSec ($ReadyWaitSec + 120)
 $script:InflightMarked = $true
+
+# Pre-stop maintenance broadcast (2026-07-31): tell every OPEN workbench page the
+# coming connection failures are a PLANNED window BEFORE the port dies - the inbox
+# banner shows the blue "maintenance window" text instead of the red "connection
+# lost" one, and polling backs off. Old behavior: the cooldown record was written
+# AFTER the restart and the status API is unreachable during the outage, so seats
+# could never learn "this is maintenance" in time (red banner every restart).
+# Best-effort by design: a hung/dead instance cannot be told (the banner then
+# honestly shows red), and the restart must never be blocked by its own announce.
+if ($listenPids.Count) {
+    $noticeSec = [Math]::Min(900, [Math]::Max(60, $ReadyWaitSec + 30))
+    try {
+        $noticeBody = @{ window_sec = $noticeSec; reason = $Reason } | ConvertTo-Json -Compress
+        # Bearer header = "programmatic client" marker so the CSRF middleware admits the
+        # POST (it rightly rejects bare cross-site-shaped writes). Authorization itself
+        # is enforced by the route's loopback check - this value is an identifier, not
+        # a secret.
+        Invoke-RestMethod -Uri ("http://127.0.0.1:{0}/api/internal/ops/maintenance-notice" -f $effPort) `
+            -Method Post -ContentType 'application/json' -Body $noticeBody -TimeoutSec 3 `
+            -Headers @{ Authorization = 'Bearer restart-orchestrator' } | Out-Null
+        Say ("maintenance notice broadcast to open workbenches (window<={0}s)" -f $noticeSec)
+        Start-Sleep -Seconds 2   # let SSE flush before the stop cuts the streams
+    } catch {
+        Say ("maintenance notice skipped ({0})" -f $_.Exception.Message) 'DarkYellow'
+    }
+}
 
 $t0 = Get-Date
 

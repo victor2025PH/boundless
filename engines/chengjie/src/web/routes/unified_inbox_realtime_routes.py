@@ -45,6 +45,9 @@ _SSE_EVENT_TYPES = frozenset({
     # P2-2：出站镜像事件（autosend/主动触达/坐席手发经编排器回写收件箱时发布）——
     # 前端据此「刷新线程/列表预览但不加未读」，选中会话轮询得以 10s→30s。
     "outbound_message",
+    # 2026-07-31 计划维护预告：restart_instance.ps1 停机前经内部路由广播，前端把
+    # 接下来的连接失败渲染成蓝色「维护窗口」而非红色「连接中断」（横幅根因治理）。
+    "maintenance_notice",
     "agent_presence",
     "conversation_claim", "conversation_assigned", "follow_up",
     "draft_created",
@@ -94,8 +97,55 @@ _COALESCE_NOTIF_TYPES = frozenset({
 })
 
 
+def _is_loopback_client(request: Any) -> bool:
+    """maintenance-notice 的本机直通判定。
+
+    重启编排脚本没有 session/Bearer，且「宣告本进程即将停机」天然只该来自
+    同一台机器 —— loopback 即放行；其余来源回退 ``api_auth``。
+    """
+    try:
+        host = request.client.host if request.client else ""
+    except Exception:
+        host = ""
+    return host in ("127.0.0.1", "::1", "localhost")
+
+
 def register_realtime_routes(app, *, api_auth) -> None:
     """挂载 SSE 实时推送 + typing 协同端点。"""
+
+    @app.post("/api/internal/ops/maintenance-notice")
+    async def api_maintenance_notice(request: Request):
+        """内部桥（2026-07-31「连接中断」横幅根因治理）：停机前宣告计划维护窗口。
+
+        ``restart_instance.ps1`` 在 stop 之前 POST（body ``{window_sec, reason}``）：
+        登记 ``maintenance_notice`` 进程内状态（→ ``seat_restart_banner.quiet_poll``
+        折叠，见 instance_restart_status）并经 EventBus → SSE 即时广播 —— 已打开的
+        工作台把接下来的连接失败渲染为蓝色「服务维护窗口」而非红色「连接中断」，
+        轮询/SSE 重连借 ``__wsRestartCool.quiet`` 的既有消费口自动降速。
+        鉴权：loopback 直通（脚本无 session；同机才可宣告本进程维护），
+        非本机回退 ``api_auth``（Bearer/主管 session，供将来 UI 触发）。
+        """
+        if not _is_loopback_client(request):
+            api_auth(request)
+        from src.utils.maintenance_notice import set_notice
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        snap = set_notice(
+            (body or {}).get("window_sec"),
+            reason=str((body or {}).get("reason") or ""),
+        )
+        try:
+            get_event_bus().publish("maintenance_notice", {
+                "left_sec": snap["left_sec"],
+                "until_ts": snap["until_ts"],
+                "reason": snap["reason"],
+            })
+        except Exception:
+            logger.debug("maintenance_notice 事件发布失败（已忽略）", exc_info=True)
+        return {"ok": True, "maintenance": snap}
 
     @app.get("/api/workspace/stream")
     async def api_workspace_stream(request: Request):

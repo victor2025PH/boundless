@@ -3501,7 +3501,11 @@ function _renderConnBanner(state){
     if(window.wsBanner) wsBanner.set('conn-banner', false); else b.style.display='none';
     return;
   }
-  const cooling = window.__wsRestartCool && (window.__wsRestartCool.active || window.__wsRestartCool.quiet);
+  /* until 过期检查（2026-07-31 维护预告配套）：预告的窗口是有限的——实例迟迟
+     没回来（启动失败/真故障）时横幅必须转回红色如实报警，不能一直挂「维护中」
+     安抚。until=0（flapping 等无明确期限的 quiet，每 60s 轮询自会刷新）保持旧语义。 */
+  const _rc = window.__wsRestartCool;
+  const cooling = _rc && (_rc.active || _rc.quiet) && (!_rc.until || Date.now() < _rc.until);
   let txt, bg, ink;
   if(state==='restored'){ txt=window.T('inbox.conn.restored'); bg='rgba(22,163,74,.14)'; ink='var(--bdg-ok-ink,#15803d)'; }
   else if(cooling){ txt=window.T('inbox.conn.cooling'); bg='rgba(37,99,235,.12)'; ink='var(--bdg-info-ink,#1d4ed8)'; }
@@ -3902,8 +3906,12 @@ function _applyReadOnly(c){
    chip 只做可视与 opt-in/out（localStorage 坐席级），能力位来自 send-caps.bubbles。 */
 let _sendCapsLast=null;
 const _BUBBLE_PREF_KEY='ws_send_bubbles_v1';
+/* P0-198（2026-07-31）：默认改为**关**（存 '1' 才开）。交付分级拍板的语义就是
+   「坐席逐条 opt-in」，旧实现 !== '0' 等于默认开——客户机上人工发送被默认按
+   60 字符分条，英文句子被拦腰切开（'…kind of an old man' / 'now haha 😄'）。
+   显式开过（'1'）/关过（'0'）的坐席偏好不受影响。 */
 function _bubblePref(){
-  try{ return localStorage.getItem(_BUBBLE_PREF_KEY)!=='0'; }catch(_){ return true; }
+  try{ return localStorage.getItem(_BUBBLE_PREF_KEY)==='1'; }catch(_){ return false; }
 }
 function _toggleBubblePref(){
   try{ localStorage.setItem(_BUBBLE_PREF_KEY, _bubblePref()?'0':'1'); }catch(_){}
@@ -6722,6 +6730,7 @@ async function sendMsg(){
   threadMsgs.push(optMsg);
   renderMessages(selectedChat, threadMsgs, {silent:false}); // 强制滚到底
 
+  let _guard409=null;   // P0-198：服务端护栏 409 详情（收尾解锁后再弹确认）
   try{
     const body={
       platform: selectedChat.platform,
@@ -6768,11 +6777,21 @@ async function sendMsg(){
       await loadThread(selectedChat,true);
       await loadChats();
     } else {
+      // P0-198：服务端护栏 409（语言错配 / 近重复）→ 记下守卫详情，待收尾解锁后
+      // 弹确认框（保持「置位→清零」单点收尾结构，异常路径也能解锁发送按钮）。
+      const det=d&&d.detail;
+      if(r.status===409 && det && typeof det==='object'
+         && (det.code==='lang_mismatch'||det.code==='near_duplicate')){
+        _guard409={det:det, body:body};   // body 是 try 块内 const，须一并捕获
+        threadMsgs=threadMsgs.filter(m=>m.message_id!==optId);
+        renderMessages(selectedChat, threadMsgs, {silent:true});
+      } else {
       // 失败：把乐观消息标为"发送失败"（保留 _retryBody，气泡上出「重发」按钮，不再回灌输入框避免重复发）
       const idx=threadMsgs.findIndex(m=>m.message_id===optId);
       if(idx>=0){ threadMsgs[idx]._optimistic=false; threadMsgs[idx]._failed=true; }
       renderMessages(selectedChat, threadMsgs, {silent:true});
-      showHint(window.Tf('inbox.toast.send_fail',{msg:(d.detail||d.error||window.T('dash.unknown'))}));
+      showHint(window.Tf('inbox.toast.send_fail',{msg:((det&&det.message)||d.detail||d.error||window.T('dash.unknown'))}));
+      }
     }
   }catch(e){
     const idx=threadMsgs.findIndex(m=>m.message_id===optId);
@@ -6784,6 +6803,21 @@ async function sendMsg(){
   btn.disabled=false;
   btn.textContent=window.T('inbox.send');
   ta.focus();
+  // P0-198：护栏确认放在收尾解锁之后——坐席确认后带 force 标志重发，取消则原文回填输入框
+  if(_guard409){
+    const det=_guard409.det, gbody=_guard409.body;
+    if(confirm(String(det.message||'')+'\n\n'+window.T('inbox.send.force_confirm'))){
+      gbody.client_msg_id=_newClientMsgId();
+      if(det.code==='lang_mismatch') gbody.force_lang=1; else gbody.force_dup=1;
+      const opt2={message_id:'_opt_'+(++_sendSeq), text:text, direction:'out',
+                  ts:Date.now()/1000, _optimistic:true, _retryBody:gbody};
+      threadMsgs.push(opt2);
+      renderMessages(selectedChat, threadMsgs, {silent:false});
+      await resendFailed(opt2.message_id);
+    } else {
+      ta.value=text; ta.focus();
+    }
+  }
 }
 
 // P4-9：失败气泡一键重发——原样重放当初的发送 body（含引用/翻译参数），成功即并入真实线程。
@@ -6806,7 +6840,8 @@ async function resendFailed(optId){
       const i2=threadMsgs.findIndex(m=>m.message_id===optId);
       if(i2>=0){ threadMsgs[i2]._optimistic=false; threadMsgs[i2]._failed=true; }
       renderMessages(selectedChat, threadMsgs, {silent:true});
-      showHint(window.Tf('inbox.toast.send_fail',{msg:(d.detail||d.error||window.T('dash.unknown'))}));
+      const _det2=d&&d.detail;
+      showHint(window.Tf('inbox.toast.send_fail',{msg:((_det2&&_det2.message)||d.detail||d.error||window.T('dash.unknown'))}));
     }
   }catch(e){
     const i2=threadMsgs.findIndex(m=>m.message_id===optId);
@@ -7913,8 +7948,18 @@ function setWsCpTab(tab){
   document.querySelectorAll('.ws-cp-tab').forEach(function(b){ b.classList.toggle('active', b.dataset.tab===_wsCpTab); });
   document.querySelectorAll('.ws-cp-sec').forEach(function(sec){ sec.classList.toggle('active', sec.dataset.tab===_wsCpTab); });
   if(sc&&sc.storeTab) sc.storeTab(_wsCpTab);
+  _syncHeroVisibility();
   _maybeLoadAiAnalysis();
   if(_wsCpTab==='customer'&&typeof _maybeAutoExposeGoal==='function') _maybeAutoExposeGoal();
+}
+
+/* P1-198 英雄卡去重：「AI 下一步」原为跨 tab 常驻——切到回复台/客户&关系都看到
+   同一块，被坐席感知为「内容重复」（198 实测投诉）。收敛为只在语义归属地
+   「客户&关系」tab 显示；App 模式下 _wsEnableApp 已整体隐藏，不在此重复处理。 */
+function _syncHeroVisibility(){
+  var hero=document.getElementById('cp-hero'); if(!hero) return;
+  if(typeof WS_USE_APP!=='undefined'&&WS_USE_APP) return;
+  hero.style.display=(_wsCpTab==='customer')?'':'none';
 }
 
 /* ===== P18: 业务助手三步上手引导（coach marks）=====
@@ -7925,7 +7970,7 @@ var _CP_TOUR_DONE_KEY='ws_cp_tour_done_v1';
 var _cpTourIdx=0,_cpTourOn=false;
 function _cpTourSteps(){
   return [
-    {sel:'#cp-hero', tab:null,
+    {sel:'#cp-hero', tab:'customer',
      t:window.T('inbox.cptour.step1_t'), b:window.T('inbox.cptour.step1_b')},
     {sel:'[data-cp-card="goal"]', alt:'.ws-cp-tab[data-tab="customer"]', tab:'customer',
      t:window.T('inbox.cptour.step2_t'), b:window.T('inbox.cptour.step2_b')},
@@ -8051,16 +8096,18 @@ function initWsCopilot(){
     _wsCpTabCtrl=sc.createTabController({
       tabSelector:'.ws-cp-tab',
       sectionSelector:'.ws-cp-sec',
-      onChange:function(t){ _wsCpTab=t; _maybeLoadAiAnalysis(); }
+      onChange:function(t){ _wsCpTab=t; _syncHeroVisibility(); _maybeLoadAiAnalysis(); }
     });
     _wsCpTabCtrl.bindClick();
     _wsCpTab=_wsCpTabCtrl.restore();
+    _syncHeroVisibility();
     sc.createResizeController({ panel:'info-sidebar', handle:'ws-sidebar-resize', defaultWidth:300 }).init();
     sc.bindTabHotkeys({ setTab:setWsCpTab, isEnabled:function(){ return !!infoOn; } });
   }else{
     document.querySelectorAll('.ws-cp-tab').forEach(function(btn){
       btn.addEventListener('click', function(){ setWsCpTab(btn.dataset.tab); });
     });
+    _syncHeroVisibility();   // 降级路径也要按初始 tab 收敛英雄卡
   }
   // 方案1：可折叠卡片——事件委托挂在侧栏（静态父节点），点卡头即切换并记忆，无内联 handler（门禁安全）。
   var _sb=document.getElementById('info-sidebar');
@@ -8134,8 +8181,10 @@ function initWsCopilot(){
   document.addEventListener('cp-action-done', function(e){
     var d=(e&&e.detail)||{};
     // 执行类动作（任务/标签/升级/注解/工作链）此前完全无用户可见反馈
+    // P1-198：失败时优先显示服务端如实报的原因（如「会话未关联客户档案」），
+    // 而不是笼统的「执行失败」——「点了不知道为什么不行」是工单制造机。
     if(d.ok) _toast(window.T('inbox.cp.exec_ok'),'#0f9d75');
-    else _toast(window.T('inbox.cp.exec_fail'),'#dc2626');
+    else _toast(d.error?String(d.error):window.T('inbox.cp.exec_fail'),'#dc2626');
     try{ _uiBeacon('nba_exec_'+(d.ok?'ok':'fail')); }catch(_){}
     _refreshWsCpComponent('relstage');
     _refreshWsCpComponent('chain');
@@ -12245,6 +12294,27 @@ function initSSE(){
           : (_aaWho+' '+(data.detail||_aaKind));
         var _aaEl=_toast('⛔ '+_aaMsg,'#dc2626');
         if(_aaEl){ _aaEl.style.fontWeight='600'; }
+      } else if(t==='maintenance_notice'){
+        // 重启预告（restart_instance.ps1 停机前经 /api/internal/ops/maintenance-notice
+        // 广播，2026-07-31 横幅根因治理）：接下来 ~N 秒的连接失败是计划内维护——
+        // 连接横幅走蓝色「服务维护窗口」而非红色「连接中断」，轮询与 SSE 重连借
+        // __wsRestartCool.quiet 的既有消费口同步降速。left_sec 与 until_ts 取更小者：
+        // until_ts 兜 SSE replay 的陈旧事件（宣告后才连上的页面拿到的 left_sec 是
+        // 宣告时刻的旧值），left_sec 兜服务器时钟偏移；窗口到期由 _renderConnBanner
+        // 的 until 过期检查转回红色如实报警。
+        try{
+          var _mtLeft=(Number(data.left_sec)||0)*1000;
+          if(Number(data.until_ts)>0) _mtLeft=Math.min(_mtLeft, Number(data.until_ts)*1000-Date.now());
+          _mtLeft=Math.min(_mtLeft, 900000);
+          if(_mtLeft>3000){
+            window.__wsRestartCool=Object.assign({}, window.__wsRestartCool||{}, {
+              active:true, quiet:true, maintenance:true,
+              leftSec:Math.round(_mtLeft/1000), until:Date.now()+_mtLeft, at:Date.now()
+            });
+            try{ window.dispatchEvent(new CustomEvent('ws-restart-cool-change',{detail:window.__wsRestartCool})); }catch(_){}
+            _renderConnBanner('soft');   // 立即亮蓝条预告；恢复后首轮 loadChats 成功自动转绿隐去
+          }
+        }catch(_){}
       } else if(t==='workflow_execution_cancelled'||t==='workflow_execution_failed'||t==='workflow_execution_completed'){
         if(selectedChat && data.conversation_id===selectedChat.conversation_id){
           _loadChainExecutions(selectedChat.conversation_id);

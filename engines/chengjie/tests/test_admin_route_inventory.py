@@ -53,6 +53,7 @@ _BASELINE = """
 /api/admin/send-route-trend	GET
 /api/admin/media-promise-trend	GET
 /api/admin/media-consistency	GET
+/api/admin/diagnostic-bundle	GET
 /api/admin/duel-bench	GET
 /api/admin/workers/{worker_id}/reset-circuit	POST
 /api/admin/reliability	GET
@@ -489,6 +490,7 @@ _BASELINE = """
 /api/accounts/auto-reply/webhooks/test	POST
 /api/accounts/auto-reply/stream	GET
 /api/accounts/protocol/readiness	GET
+/api/internal/ops/maintenance-notice	POST
 /api/internal/protocol/ingest	POST
 /api/internal/protocol/session-status	POST
 /api/internal/protocol/contacts	POST

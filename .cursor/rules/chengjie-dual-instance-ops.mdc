@@ -11,6 +11,9 @@ alwaysApply: false
 - 重启唯一入口：`deploy\instances\restart_instance.ps1 -Instance zhiliao|tongyi`
 - 先 `-Advise`；禁止 `scripts\restart_main.ps1` / 引擎根裸起 / 乱 `taskkill`
 - 机器级冷却目录：`D:\chengjie-instances\.ops\restart_cooldown\`（与 watchdog 共用）
+- **手动重启间隔 ≥30 分钟**（2026-07-31 起，脚本强制；`-Force` 穿越会在事件账本打
+  `[forced]` 标记）。停机前脚本会自动向在线工作台广播「维护窗口」蓝条（SSE），
+  这条链的前提是**走脚本重启**——直接杀进程坐席就只能看到红色「连接中断」。
 - 看门狗自愈也走同一入口（`-FromWatchdog`）；`http_phase=warming|ready` 与冷却窗不计假活 strike
 - 模板与 i18n、多数 overlay **免重启**；发布前 `publish_gate.ps1`；只读冒烟 `smoke_restart_resilience.ps1`
 - ops 卡含 phase/warming/flap；30min 内同实例 ≥2 次重启会 🚨 FLAP 告警
