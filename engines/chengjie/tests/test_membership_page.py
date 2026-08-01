@@ -68,8 +68,9 @@ def test_topbar_badge_and_nav_lock_render(auth_client, config_manager):
     _set_gate(config_manager, override="basic")
     html = auth_client.get("/").text
     assert 'class="plan-badge plan-badge-basic"' in html
-    # basic 档：知识库(kb=pro) 应以锁标形式指向会员中心
-    assert 'href="/membership" class="nav-locked"' in html
+    # basic 档：知识库(kb=pro) 应以锁标形式指向会员中心（E4 起带 ?from=<族> 来源参数）
+    assert 'href="/membership?from=' in html
+    assert 'class="nav-locked"' in html
 
 
 def test_topbar_badge_absent_when_gate_off(auth_client, config_manager):

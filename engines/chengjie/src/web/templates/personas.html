@@ -2398,7 +2398,16 @@ async function pmaLoad() {
     const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/media');
     if (!r.ok) { body.textContent = window.T('pma_load_fail') + r.status; return; }
     const d = await r.json();
-    _pmaRender(body, d.items || [], d.stats || {});
+    // 发图能力开关状态（capabilities.photos，默认关）：读档案；读不到按关显示
+    let photosOn = false;
+    try {
+      const pr = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid));
+      if (pr.ok) {
+        const pd = await pr.json();
+        photosOn = !!(((pd.persona || {}).capabilities || {}).photos);
+      }
+    } catch (e) { /* 按关显示，开关操作时如实报错 */ }
+    _pmaRender(body, d.items || [], d.stats || {}, photosOn);
     pmaFaceLoad();
     const badge = document.getElementById('pe-album-badge');
     if (badge) { const t = (d.stats || {}).total || 0; badge.textContent = t ? '(' + t + ')' : ''; }
@@ -2465,18 +2474,73 @@ async function pmaFaceDelete() {
   } catch (e) { /* 忽略，下次加载自纠 */ }
 }
 
-function _pmaRender(body, items, stats) {
+// ── 相册/发图能力总开关（2026-07-31，capabilities.photos 默认关）────────────────
+// 关 = 该人设整条发图能力关闭（注册相册+AI生成），对话中绝不承诺/暗示发照片；
+// 开 = 恢复相册/发图行为（还需全局 companion.selfie.enabled）。存进人设档案，
+// 走 PUT profiles/{id} merge 语义（只动 capabilities.photos，其余字段不碰）。
+function _pmaCapBar(photosOn, stockTotal) {
+  let warn = '';
+  if (!photosOn && (stockTotal || 0) > 0) {
+    // 已备货但开关关：显式点破「素材不会发出」，防「上传了图忘开开关」
+    warn = '<span style="font-size:.72rem;color:var(--warn,#d97706)">'
+      + _pmaEsc(window.T('pma_cap_off_stocked').replace('{n}', String(stockTotal))) + '</span>';
+  }
+  return '<div class="pma-cap" style="display:flex;align-items:center;flex-wrap:wrap;gap:.55rem;'
+    + 'padding:.55rem .6rem;margin-bottom:.55rem;border:1px solid var(--bd);border-radius:10px">'
+    + '<label style="display:flex;align-items:center;gap:.4rem;font-weight:600;font-size:.78rem;cursor:pointer;margin:0">'
+    + '<input type="checkbox" id="pma-cap-photos"' + (photosOn ? ' checked' : '') + ' onchange="pmaTogglePhotos()">'
+    + _pmaEsc(window.T('pma_cap_label')) + '</label>'
+    + '<span id="pma-cap-state" style="font-size:.72rem;color:var(--t2)">'
+    + _pmaEsc(window.T(photosOn ? 'pma_cap_on' : 'pma_cap_off')) + '</span>'
+    + warn
+    + '</div>';
+}
+
+async function pmaTogglePhotos() {
+  const pid = _pmaPid();
+  const cb = document.getElementById('pma-cap-photos');
+  const st = document.getElementById('pma-cap-state');
+  if (!pid || !cb) return;
+  const on = !!cb.checked;
+  cb.disabled = true;
+  try {
+    const r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ persona: { capabilities: { photos: on } }, merge: true }),
+    });
+    if (!r.ok) {
+      cb.checked = !on;
+      _toast(window.T('pma_cap_save_fail') + ' ' + r.status, 'err');
+      return;
+    }
+    if (st) st.textContent = window.T(on ? 'pma_cap_on' : 'pma_cap_off');
+    _toast(window.T('pma_cap_saved'), 'info');
+    // 重渲：同步素材区 dim/警示条（关=半透明「不会发出」；开=恢复）
+    try { await pmaLoad(); } catch (e2) { /* 状态文字已对，列表下次切 tab 自刷 */ }
+  } catch (e) {
+    cb.checked = !on;
+    _toast(window.T('pma_cap_save_fail') + ' ' + e, 'err');
+  } finally { cb.disabled = false; }
+}
+
+function _pmaRender(body, items, stats, photosOn) {
+  const on = !!photosOn;
+  const capbar = _pmaCapBar(on, (stats && stats.total) || items.length || 0);
   const faceref = '<div id="pma-faceref" style="display:none;padding:.55rem .6rem;margin-bottom:.55rem;'
     + 'border:1px dashed var(--bd);border-radius:10px;background:var(--bg2,transparent)"></div>';
+  // 开关关时上传/测触发词仍可备货与自检，但用 opacity 标「当前不会发出」——
+  // 备货与开闸是两步，关掉不等于删素材（与 pma_cap_off_stocked 警示同语义）。
+  const dim = on ? '' : ' opacity:.55';
   const uploader =
-    '<div class="pma-up">'
+    '<div class="pma-up" style="' + dim + '">'
     + '<input type="file" id="pma-file" multiple accept="image/*,video/*" style="display:none" onchange="pmaUpload()">'
     + '<input type="text" id="pma-up-trg" class="pma-in" placeholder="' + window.T('pma_triggers_ph') + '">'
     + '<button class="btn btn-sm btn-primary" onclick="_pmaPick()">＋ ' + window.T('pma_upload_label') + '</button>'
     + '<span id="pma-up-status" class="pma-status"></span>'
     + '</div>';
   const test =
-    '<div class="pma-test">'
+    '<div class="pma-test" style="' + dim + '">'
     + '<input type="text" id="pma-test-in" class="pma-in" placeholder="' + window.T('pma_test_ph') + '">'
     + '<button class="btn btn-sm" onclick="pmaTest()">' + window.T('pma_test_btn') + '</button>'
     + '<div id="pma-test-out" class="pma-test-out"></div>'
@@ -2485,13 +2549,13 @@ function _pmaRender(body, items, stats) {
   if (!items.length) {
     grid = '<div class="pma-empty">' + window.T('pma_empty') + '</div>';
   } else {
-    grid = '<div class="pma-grid">' + items.map(_pmaCard).join('') + '</div>';
+    grid = '<div class="pma-grid" style="' + dim + '">' + items.map(_pmaCard).join('') + '</div>';
     const totalHits = items.reduce((a, it) => a + (it.hits || 0), 0);
-    summary = '<div class="pma-summary"><span>🖼 ' + (stats.photo || 0) + '</span>'
+    summary = '<div class="pma-summary" style="' + dim + '"><span>🖼 ' + (stats.photo || 0) + '</span>'
       + '<span>🎬 ' + (stats.video || 0) + '</span>'
       + '<span>▶ ' + totalHits + ' ' + window.T('pma_hits') + '</span></div>';
   }
-  body.innerHTML = faceref + uploader + summary + grid + test;
+  body.innerHTML = capbar + faceref + uploader + summary + grid + test;
 }
 
 function _pmaDur(ms) {
@@ -6693,9 +6757,9 @@ function openCreateFlow() {
 }
 </script>
 {# ── P1/P2 功能模块(独立静态文件,personas.html 拆分的起点)─────────────────── #}
-<script src="/static/js/persona_studio_core.js?v=p2"></script>
+<script src="/static/js/persona_studio_core.js?v=20260730a"></script>
 <script src="/static/js/persona_apply_modal.js?v=p1"></script>
 <script src="/static/js/persona_create_wizard.js?v=p1"></script>
-<script src="/static/js/persona_chat_test.js?v=p1"></script>
+<script src="/static/js/persona_chat_test.js?v=20260731b"></script>
 <script src="/static/js/persona_health_panel.js?v=p2"></script>
 {% endblock %}

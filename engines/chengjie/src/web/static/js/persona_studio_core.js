@@ -460,7 +460,7 @@ function _renderDashboard(d) {
       var initials = (a.label || a.account_id || '?').slice(0,2).toUpperCase();
       var curPid = (a.persona_ids && a.persona_ids[0]) || '';
       var assignBtn = platform
-        ? '<button class="btn btn-sm" style="font-size:.67rem;padding:.15rem .42rem' + (!hasP ? ';background:rgba(59,130,246,.1);border-color:rgba(59,130,246,.3);color:#3b82f6' : '') + '" onclick="openPersonaPicker(\'' + platform + '\',\'' + String(a.account_id).replace(/'/g,"\\'") + '\',\'' + String(curPid).replace(/'/g,"\\'") + '\')">' + (hasP ? window.T('psn_js_013') : window.T('psn_js_014')) + '</button>'
+        ? '<button class="btn btn-sm" style="font-size:.67rem;padding:.15rem .42rem' + (!hasP ? ';background:color-mix(in srgb, var(--p,#1e8cf2) 10%, transparent);border-color:color-mix(in srgb, var(--p,#1e8cf2) 30%, transparent);color:var(--p,#1e8cf2)' : '') + '" onclick="openPersonaPicker(\'' + platform + '\',\'' + String(a.account_id).replace(/'/g,"\\'") + '\',\'' + String(curPid).replace(/'/g,"\\'") + '\')">' + (hasP ? window.T('psn_js_013') : window.T('psn_js_014')) + '</button>'
         : '';
       var statusClass = a.status === 'active' ? 'online' : (a.status === 'error' ? 'error' : 'offline');
       h += '<div class="acc-card' + (!hasP ? ' no-pf' : '') + '">';

@@ -10,41 +10,59 @@ from pathlib import Path
 
 
 async def maybe_start_proactive_care(assistant, web_app=None) -> None:
-    """Phase O：主动关怀引擎（默认关，companion.proactive_care.enabled 开）。
+    """Phase O：主动关怀引擎——常备接线 + 配置热闸（P0 2026-08-01 改造）。
 
-    捕获：入站新消息回调 → 抽取约定入 care_schedule（gated）。
-    派发：到期由 CareDispatcher 经 messenger deferred 队列发出（复用 reactivation 护栏）。
+    旧行为：``companion.proactive_care.enabled=false`` 时整段早退——运营在 overlay
+    开了开关也要**再吃一次重启**才真生效（捕获回调没注册、派发循环没启动），
+    「一键开启」名存实亡。新行为：
+
+    - **捕获**：回调无条件注册（``make_care_inbound_cb`` 内部本就逐条消息读实时
+      配置判断 enabled/capture，关闸时每条入站只多一次 dict 查找，零副作用）。
+    - **派发**：循环无条件启动，经 ``cfg_provider`` 每 tick 读实时配置——关闸时
+      空转（不碰 store 不烧 LLM）。开/关经 config.local.yaml 热重载 ~30s 生效，
+      免重启。``interval_sec`` 仍为启动期绑定（改它需重启，看板有注明）。
+    - 依赖缺失（ai_client 为 None）才真跳过派发循环，原因落
+      ``web_app.state.care_engine.dispatcher_skip`` 供 /api/care/health 展示。
+      messenger runner 缺失不再挡整个循环（telegram/line/whatsapp 走多平台
+      deferred 队列，与 messenger 无关）——send 回调内部对 messenger 分支判空。
+
+    「新子系统默认 enabled:false」约定不变：默认仍不捕获、不派发，变的只是
+    **机制常备、开关热生效**。
     """
     try:
         cfg = ((assistant.config.config.get("companion") or {}).get("proactive_care") or {})
-        if not cfg.get("enabled", False):
-            assistant.logger.info("proactive_care 未启用（companion.proactive_care.enabled=false）")
-            return
         from src.contacts.care_schedule import get_care_schedule_store
 
         _cfg_dir = Path(assistant.config.config_path).parent
         care_store = get_care_schedule_store(_cfg_dir / "care_schedule.db")
+        engine_state = {"capture_wired": False, "dispatcher_skip": "",
+                        "messenger_rpa": assistant.messenger_rpa_service is not None}
         if web_app is not None:
             web_app.state.care_schedule_store = care_store
-        # 启动时清理逾期太久的待办（错过时机不补发）
-        try:
-            care_store.expire_overdue(grace_days=float(cfg.get("grace_days", 1)))
-        except Exception:
-            pass
+            web_app.state.care_engine = engine_state
+        # 启动清理只在已开闸时做（关闸期保持对库零写入）
+        if cfg.get("enabled", False):
+            try:
+                care_store.expire_overdue(grace_days=float(cfg.get("grace_days", 1)))
+            except Exception:
+                pass
 
-        # 捕获接线：入站新消息 → 抽取入库（gated，复用 inbox 既有回调钩子）
-        if assistant.inbox_store is not None and cfg.get("capture", True):
+        # 捕获接线：无条件注册（回调内部按实时配置逐条闸门）
+        if assistant.inbox_store is not None:
             try:
                 from src.contacts.care_capture import make_care_inbound_cb
                 assistant.inbox_store.register_new_inbound_cb(
                     make_care_inbound_cb(care_store, assistant.config))
-                assistant.logger.info("✅ proactive_care 入站捕获已接线")
+                engine_state["capture_wired"] = True
+                assistant.logger.info("✅ proactive_care 捕获已常备接线（配置热闸，enabled=%s）",
+                                      bool(cfg.get("enabled", False)))
             except Exception:
                 assistant.logger.warning("proactive_care 捕获接线跳过", exc_info=True)
 
-        # 派发循环：需 messenger deferred 队列（与 reactivation 同款发送）
-        if assistant.messenger_rpa_service is None or assistant.ai_client is None:
-            assistant.logger.info("proactive_care 派发循环跳过（messenger_rpa/ai 未就绪），仅捕获")
+        # 派发循环：仅 ai_client 缺失才跳过（messenger runner 缺失不挡非 messenger 平台）
+        if assistant.ai_client is None:
+            engine_state["dispatcher_skip"] = "ai_missing"
+            assistant.logger.info("proactive_care 派发循环跳过（ai 未就绪），仅捕获")
             return
         from src.contacts.care_dispatcher import CareDispatcher
 
@@ -55,15 +73,19 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
                 return assistant._enqueue_deferred_outbox(
                     channel, account_id, chat_name, reply, defer_until,
                     reason, staleness_sec, extra)
+            if assistant.messenger_rpa_service is None:
+                return 0  # messenger runner 未起 → 留 pending 待自愈/过期，不误标已发
             return await assistant.messenger_rpa_service.enqueue_reactivation_deferred(
                 account_id=account_id, chat_name=chat_name, reply_text=reply,
                 defer_until=defer_until, defer_reason=reason,
                 staleness_sec=staleness_sec, extra=extra)
 
         def _care_context(contact_key: str) -> str:
-            # 最近若干条消息文本作 prompt 可引用要点（best-effort）
+            # 最近若干条消息文本作 prompt 可引用要点（best-effort）。
+            # P2 修：原用 list_messages（取**最旧** limit 条）——「最近对话要点」
+            # 实际喂的是几个月前的开场白；改 list_recent_messages（最近 8 条，ts 升序）。
             try:
-                msgs = assistant.inbox_store.list_messages(contact_key, limit=8) \
+                msgs = assistant.inbox_store.list_recent_messages(contact_key, limit=8) \
                     if assistant.inbox_store else []
                 lines = [str(m.get("text") or "").strip() for m in (msgs or [])]
                 return "\n".join(t for t in lines if t)[:800]
@@ -79,6 +101,56 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
         # K2b：变现配额门控回调（仅当变现 gate 开启才注入；否则 None=不拦，零破坏）
         proactive_paywall = assistant._build_care_paywall(care_store)
 
+        def _live_care_cfg() -> dict:
+            """实时 proactive_care 配置（enabled/dry_run/max_per_tick 每 tick 消费）。"""
+            try:
+                return dict((assistant.config.config.get("companion") or {})
+                            .get("proactive_care") or {})
+            except Exception:
+                return {}
+
+        # P3：每联系人主动预算——读侧=既有 outreach_log 共享账本（proactive_topic
+        # 真发本就落账），写侧=下方 _care_sent_hook。判定纯函数在 care_budget，
+        # 阈值每次实时读（热闸）。inbox_store 缺失 → 恒放行（fail-open）。
+        def _care_budget_gate(contact_key: str) -> bool:
+            import time as _t
+
+            from src.contacts.care_budget import (
+                budget_allows, local_midnight_ts, parse_contact_budget_cfg,
+            )
+            store = assistant.inbox_store
+            if store is None:
+                return True
+            bcfg = parse_contact_budget_cfg(_live_care_cfg())
+            if not bcfg.enabled:
+                return True
+            now = _t.time()
+            try:
+                last = float(store.last_outreach_ts(contact_key) or 0)
+                today = int(store.count_outreach_since(
+                    contact_key, local_midnight_ts(now)))
+            except Exception:
+                return True
+            return budget_allows(cfg=bcfg, last_touch_ts=last,
+                                 touches_today=today, now=now)
+
+        def _care_sent_hook(item: dict) -> None:
+            """care 真发成功 → outreach_log 落账（batch_id=care:<topic>，note=care）。
+
+            让 care 触达对「预算读侧 / proactive_review 周报 / 将来任何消费方」可见。
+            """
+            store = assistant.inbox_store
+            if store is None:
+                return
+            topic = str(item.get("topic") or "")[:24]
+            store.record_outreach(
+                str(item.get("contact_key") or ""),
+                batch_id=f"care:{topic}",
+                platform=str(item.get("platform") or ""),
+                account_id=str(item.get("account_id") or "default"),
+                note="care",
+            )
+
         dispatcher = CareDispatcher(
             store=care_store, ai_client=assistant.ai_client, send_callback=_care_send,
             context_provider=_care_context, proactive_allowed=proactive_paywall,
@@ -89,11 +161,47 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
             quiet_start_hour=float(cfg.get("quiet_start_hour", 23)),
             quiet_end_hour=float(cfg.get("quiet_end_hour", 8)),
             dry_run=bool(cfg.get("dry_run", False)),
+            cfg_provider=_live_care_cfg,
+            budget_gate=_care_budget_gate,
+            sent_hook=_care_sent_hook,
         )
         await dispatcher.start()
         assistant._care_dispatcher = dispatcher
-        assistant.logger.info("✅ proactive_care 派发循环已启动（interval=%ss）",
-                         cfg.get("interval_sec", 600))
+        if web_app is not None:
+            engine_state["dispatcher"] = dispatcher
+        assistant.logger.info(
+            "✅ proactive_care 派发循环已常备（interval=%ss, enabled=%s, dry_run=%s）",
+            cfg.get("interval_sec", 600), bool(cfg.get("enabled", False)),
+            bool(cfg.get("dry_run", False)))
+
+        # P2 2026-08-01：LLM 抽取影子扫描——与真实捕获同一入站事件源（第二个
+        # inbound 回调，内部自带配置闸+廉价门），LLM 对照在异步 drain 循环限批限
+        # 预算地跑，产物只有 JSONL + 计数（绝不入库不发送）。默认关
+        # （proactive_care.llm_extract.shadow），常备接线 + 热闸同派发器哲学。
+        try:
+            from src.contacts.care_shadow_scan import CareShadowScanner
+            _shadow_log_dir = (Path(assistant.config.config_path).parent.parent
+                               / "logs" / "care_shadow")
+            shadow_scanner = CareShadowScanner(
+                ai_client=assistant.ai_client,
+                cfg_provider=_live_care_cfg,
+                log_dir=_shadow_log_dir,
+                interval_sec=float(cfg.get("interval_sec", 600)),
+                # P4：真实捕获模式的写侧（llm_extract.enabled=true 才会写；
+                # 纯影子期注入无副作用）
+                care_store=care_store,
+            )
+            if assistant.inbox_store is not None:
+                assistant.inbox_store.register_new_inbound_cb(shadow_scanner.inbound_cb)
+            await shadow_scanner.start()
+            assistant._care_shadow_scanner = shadow_scanner
+            if web_app is not None:
+                engine_state["shadow_scanner"] = shadow_scanner
+            assistant.logger.info(
+                "✅ care LLM 影子扫描已常备（shadow=%s）",
+                bool((cfg.get("llm_extract") or {}).get("shadow", False)))
+        except Exception:
+            assistant.logger.warning("care 影子扫描启动跳过", exc_info=True)
     except Exception as ex:
         assistant.logger.warning("proactive_care 启动跳过: %s", ex)
         assistant.logger.debug("proactive_care 启动异常", exc_info=True)

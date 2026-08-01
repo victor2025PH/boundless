@@ -20,5 +20,7 @@
   --cp-ok: #38d39f;
   --cp-warn: #f5b945;
   --cp-danger: #f06a6a;
+  /* violet 暗色取亮档（深紫贴深底不可读） */
+  --cp-violet: #a78bfa;
   --cp-track: #26272e;
 }

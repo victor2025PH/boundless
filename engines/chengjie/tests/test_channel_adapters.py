@@ -547,11 +547,23 @@ def test_line_send_fake_send_to_chat_still_works(monkeypatch):
 # ── 已移除账号：只读历史展示（看不到之前聊天记录的修复） ──────────────
 
 class _FakeRegistry:
+    """镜像真实 AccountRegistry.list 的签名与语义。
+
+    ⚠ 教训（2026-07-31）：旧版 fake 的 ``list()`` 无 include_removed 参数且返回全部行
+    ——与真实注册表「默认排除 removed」行为不符，导致 ``_protocol_ids`` 的
+    include_removed 死代码 bug 被这套测试**假阳性掩盖**（真实环境 removed 桶恒空，
+    测试环境却有数据）。fake 必须忠实还原默认排除语义。
+    """
+
     def __init__(self, rows):
         self._rows = rows
 
-    def list(self):
-        return self._rows
+    def list(self, platform=None, *, include_removed=False):
+        out = [r for r in self._rows
+               if platform is None or r.get("platform") == platform]
+        if not include_removed:
+            out = [r for r in out if r.get("status") != "removed"]
+        return out
 
 
 class _FakeProtoStore:

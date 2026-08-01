@@ -1,42 +1,8 @@
-"""P40/P41/P42 — 剧本引擎 + 互动积分 + AI 副驾 单元测试。"""
+"""P41/P42 — 互动积分 + AI 副驾 单元测试（P40 剧本引擎已于 2026-08 下线）。"""
 import time
 
-from src.inbox.conversation_script import ConversationScriptEngine
 from src.inbox.engagement_scorer import EngagementScorer
 from src.inbox.reply_copilot import ReplyCopilot
-
-
-class TestConversationScript:
-    def test_initial_stage_topics(self):
-        r = ConversationScriptEngine().suggest_topics("initial", limit=5)
-        assert r["stage"] == "initial"
-        assert r["stage_label"] == "初识"
-        assert len(r["topics"]) >= 2
-        assert all(t.get("opener") for t in r["topics"])
-
-    def test_custom_topics_merged(self):
-        custom = [{
-            "topic_id": "c1", "stage": "warming", "title": "自定义",
-            "opener": "聊聊你最近的生活？", "hint": "测试", "tags": ["日常"],
-            "enabled": True,
-        }]
-        r = ConversationScriptEngine().suggest_topics("warming", custom_topics=custom)
-        ids = [t["topic_id"] for t in r["topics"]]
-        assert "c1" in ids
-
-    def test_reunion_uses_steady_greeting(self):
-        r = ConversationScriptEngine().suggest_topics(
-            "intimate", reunion=True, limit=5,
-        )
-        # reunion 时 stage 切换为 steady
-        assert r["stage"] == "steady"
-        assert r["reunion"] is True
-
-    def test_derive_stage_from_intimacy(self):
-        eng = ConversationScriptEngine()
-        assert eng.derive_stage_from_signals(exchange_count=0, intimacy_score=10) == "initial"
-        assert eng.derive_stage_from_signals(exchange_count=0, intimacy_score=60) == "intimate"
-        assert eng.derive_stage_from_signals(exchange_count=20, intimacy_score=None) == "intimate"
 
 
 class TestEngagementScorer:

@@ -118,6 +118,45 @@ def save_outbound_media(
     return str(dest), url, media_type
 
 
+def publish_outbound_media(
+    platform: str, account_id: str, local_path: str,
+) -> Tuple[str, str]:
+    """把一个**已存在的本地媒体文件**变成可经 ``/static`` 访问的 URL。
+
+    返回 ``(url, media_type)``；失败一律 ``('', '')``（调用方据此退回纯文本镜像＝旧行为）。
+
+    为什么需要它：A 线（Telegram 原生 pyrogram 直发）的图/语音文件在**别处**生成，
+    发完就镜像一条纯文字 ``[图片] 配文`` 进收件箱——坐席在工作台看不到自家人设发出去
+    的图，且任何按 ``media_type`` 统计出站媒体的口径都会把 A 线整条漏掉
+    （2026-07-31 实测：Telegram 868 条出站里按 media_type 只数出 1 条，而同期文本占位
+    有 166 条）。B 线走 ``save_outbound_media`` 天生有 URL，这里给 A 线补上同一能力。
+
+    已经落在 ``protocol_media`` 根下的文件**直接推 URL、不重复拷贝**；其余拷进去
+    （与坐席上传出站媒体同一目录，生命周期一致）。
+    """
+    p = str(local_path or "")
+    if not p or not os.path.isfile(p):
+        return "", ""
+    try:
+        root = protocol_media_root().resolve()
+        src = Path(p).resolve()
+        if src.is_relative_to(root):
+            rel = src.relative_to(root).as_posix()
+            return f"/static/{_STATIC_MEDIA_SUBDIR}/{rel}", media_type_from_ext(
+                src.suffix)
+    except (OSError, ValueError):
+        logger.debug("[protocol_bridge] 媒体路径归属判定失败 path=%s", p, exc_info=True)
+    try:
+        with open(p, "rb") as fh:
+            data = fh.read()
+        _local, url, mt = save_outbound_media(
+            platform, account_id, os.path.basename(p), data)
+        return url, mt
+    except Exception:
+        logger.debug("[protocol_bridge] 出站媒体发布失败 path=%s", p, exc_info=True)
+        return "", ""
+
+
 def tg_media_meta(message: Any) -> Optional[Tuple[str, str]]:
     """识别 pyrogram Message 的媒体类型，返回 (kind, ext)；无媒体返回 None。"""
     if getattr(message, "photo", None):

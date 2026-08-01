@@ -25,7 +25,10 @@ def test_hosted_cred_hides_api_fields_and_shows_plain_intro():
     keys = [f["key"] for f in tg["fields"]]
     assert "telegram.api_id" not in keys and "telegram.api_hash" not in keys
     assert tg["auto_provisioned"] is True
-    assert tg["configured"] is True and tg["ready"] is True
+    assert tg["configured"] is True
+    # 凭据齐 ≠ 能收发消息：Telegram 还得真登录一个号。旧口径在这里报 ready=True，
+    # 是「已就绪 N/4」失真的另一半（另一半是登录进来的号根本不写 yaml 键）。
+    assert tg["ready"] is False
     # 人话 intro，不含 yaml/API 黑话
     assert "API ID" not in tg["intro"] or "无需" in tg["intro"]
     assert "登录" in tg["intro"]
@@ -149,3 +152,72 @@ def test_bridge_only_on_declaring_channels():
         "channel_access_token": "tok123", "channel_secret": "sec456"})
     assert ok is True
     assert "platform_login" not in overlay
+
+
+# ── 「能不能收发消息」口径（2026-07-31）────────────────────────────────
+#
+# 旧口径 = configured and enabled，两头都不准：正在收发消息的 Telegram 被报成
+# 「已就绪 0/4」（登录进来的账号不写 yaml 键），而只填了凭据没登录号的反被算就绪。
+
+
+def _by_id(config, cid, **kw):
+    return next(c for c in channel_status(config, **kw) if c["id"] == cid)
+
+
+def test_linked_account_makes_channel_ready_without_any_yaml():
+    """实机反馈的那一幕：号在跑、消息在收，向导却说 0/4。"""
+    tg = _by_id({}, "telegram", accounts_by_platform={"telegram": 2})
+    assert tg["linked_accounts"] == 2
+    assert tg["ready"] is True and tg["ready_by"] == "login"
+
+
+def test_official_api_credentials_alone_make_line_ready():
+    """LINE 官方账号是「填完就能收 webhook」的形态 → 无需登录也算就绪。"""
+    cfg = {"line": {"enabled": True, "channel_access_token": "t",
+                    "channel_secret": "s"}}
+    line = _by_id(cfg, "line")
+    assert line["ready"] is True and line["ready_by"] == "api"
+
+
+def test_telegram_credentials_alone_are_not_transport():
+    """Telegram 的 api_id/hash 只是登录前置，本身不通消息。"""
+    cfg = {"telegram": {"enabled": True, "api_id": 1, "api_hash": "h" * 32}}
+    tg = _by_id(cfg, "telegram")
+    assert tg["paths"]["api"]["is_transport"] is False
+    assert tg["ready"] is False
+
+
+def test_web_widget_ready_when_enabled():
+    assert _by_id({"web_chat": {"enabled": True}}, "web")["ready"] is True
+    assert _by_id({}, "web")["ready"] is False
+
+
+# ── 两条接入路径 ──────────────────────────────────────────────────────
+
+
+def test_every_account_channel_exposes_a_login_path():
+    """四个平台都得有「用自己的账号登录」这条路——它才是多数客户真正走的那条。"""
+    for cid in ("telegram", "line", "whatsapp", "messenger"):
+        ch = _by_id({}, cid)
+        p = ch["paths"]["login"]
+        assert p is not None, cid
+        assert p["platform"] == cid
+        assert p["deeplink"] == f"/workspace?drawer=1&connect={cid}"
+
+
+def test_whatsapp_is_present_and_scan_only():
+    """WhatsApp 此前整个缺席，客户据此以为不支持；且它只有扫码一条真实路径。"""
+    wa = _by_id({}, "whatsapp")
+    assert wa["paths"]["login"] is not None
+    assert wa["paths"]["api"] is None       # 不摆一个填了也不通的半成品表单
+    assert wa["fields"] == []
+
+
+def test_login_path_unavailable_is_reported():
+    wa = _by_id({}, "whatsapp", login_ready={"whatsapp": False})
+    assert wa["paths"]["login"]["available"] is False
+
+
+def test_login_path_defaults_to_available_without_signal():
+    """拿不到诊断信号时别凭空画灰——让用户点进去看真实原因。"""
+    assert _by_id({}, "line")["paths"]["login"]["available"] is True

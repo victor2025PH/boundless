@@ -50,9 +50,28 @@
 
   // —— 网页适配器:同源 fetch ——
   class WebCopilotClient {
+    /* 读请求：非 2xx 归一化为 {ok:false, status, code, error}（与 _post 同口径）。
+       此前 4xx/5xx 只回裸 {detail} → 组件拿不到 status，「模块关闭(403) → 整卡隐藏」
+       与「普通错误 → 可重试」无法区分。2xx 仍原样透传后端 JSON（零行为变化）。 */
     async _get(url) {
-      const r = await fetch(url, { headers: _authHeaders() });
-      return await r.json();
+      let r;
+      try {
+        r = await fetch(url, { headers: _authHeaders() });
+      } catch (e) {
+        return { ok: false, status: 0, code: "network",
+                 error: String((e && e.message) || e || "network error") };
+      }
+      let d = null;
+      try { d = await r.json(); } catch (_e) { d = null; }
+      if (r.ok) {
+        if (d === null) return { ok: false, status: r.status, code: "badjson", error: "invalid JSON response" };
+        return d;
+      }
+      const out = (d && typeof d === "object") ? d : {};
+      if (out.ok === undefined) out.ok = false;
+      if (out.status === undefined) out.status = r.status;
+      if (!out.error) out.error = String(out.detail || r.statusText || ("HTTP " + r.status));
+      return out;
     }
     /* 写请求统一出口：自带 CSRF 头；非 2xx 归一化为 {ok:false, status, code, error}
        （error 取后端已 i18n 的 detail，组件据此分型提示，不再一律「请重试」）。
@@ -110,13 +129,6 @@
     async executeAction({ conversationId: cid, action_id, action_type, config }) {
       return this._post(`/api/workspace/conv/${encodeURIComponent(cid)}/execute-action`, { action_id, action_type, config: config || {} });
     }
-    async getScriptTopics({ conversationId: cid }) {
-      if (!cid) return { ok: false, error: "missing conversationId" };
-      return this._get(`/api/workspace/conv/${encodeURIComponent(cid)}/script-suggestions`);
-    }
-    async startChain({ conversationId: cid, chainId }) {
-      return this._post(`/api/workspace/conv/${encodeURIComponent(cid)}/start-chain`, { chain_id: chainId });
-    }
     async listPersonas() {
       return this._get(`/api/personas/profiles`);
     }
@@ -160,6 +172,18 @@
     }
     async cancelChainExecution({ execId }) {
       return this._post(`/api/workspace/chain-executions/${encodeURIComponent(execId)}/cancel`, {});
+    }
+    async listWorkflowChains() {
+      return this._get(`/api/workspace/workflow-chains`);
+    }
+    async seedStarterChains() {
+      return this._post(`/api/workspace/workflow-chains/seed`, {});
+    }
+    async startChain({ conversationId: cid, chainId, goalId }) {
+      if (!cid || !chainId) return { ok: false, error: "missing conversationId/chainId" };
+      const body = { chain_id: chainId };
+      if (goalId) body.goal_id = goalId;   // C2：目标归因（可选，无则零变化）
+      return this._post(`/api/workspace/conv/${encodeURIComponent(cid)}/start-chain`, body);
     }
     async getHistory({ conversationId: cid, limit }) {
       if (!cid) return { ok: false, error: "missing conversationId" };
@@ -324,15 +348,6 @@
       const s = this._shell();
       return s.nbaExec ? s.nbaExec({ conversation_id: cid, action_id, action_type, config: config || {} }) : { ok: false };
     }
-    async getScriptTopics({ conversationId: cid }) {
-      if (!cid) return { ok: false, error: "missing conversationId" };
-      const s = this._shell();
-      return s.scriptList ? s.scriptList({ conversation_id: cid }) : { ok: false, error: "shell.scriptList 未暴露" };
-    }
-    async startChain({ conversationId: cid, chainId }) {
-      const s = this._shell();
-      return s.startChain ? s.startChain({ conversation_id: cid, chain_id: chainId }) : { ok: false };
-    }
     async listPersonas() {
       const s = this._shell();
       return s.personas ? s.personas() : { ok: false, error: "shell.personas 未暴露" };
@@ -387,6 +402,22 @@
     async cancelChainExecution({ execId }) {
       const s = this._shell();
       return s.chainCancel ? s.chainCancel({ exec_id: execId }) : { ok: false };
+    }
+    async listWorkflowChains() {
+      const s = this._shell();
+      return s.workflowChains ? s.workflowChains({}) : { ok: false, error: "shell.workflowChains 未暴露" };
+    }
+    async seedStarterChains() {
+      const s = this._shell();
+      return s.seedStarterChains ? s.seedStarterChains({}) : { ok: false, error: "shell.seedStarterChains 未暴露" };
+    }
+    async startChain({ conversationId: cid, chainId, goalId }) {
+      const s = this._shell();
+      const payload = { conversation_id: cid, chain_id: chainId };
+      if (goalId) payload.goal_id = goalId;   // 壳未识别时多余键被忽略，无害
+      return s.startChain
+        ? s.startChain(payload)
+        : { ok: false, error: "shell.startChain 未暴露" };
     }
     async getHistory({ conversationId: cid, limit }) {
       // 桌面壳按 platform/account/chat_key 取 live thread;按 conversation_id 自取留待 iframe 同源态用 Web 适配器
@@ -528,6 +559,9 @@
   root.CopilotShared = Object.assign(root.CopilotShared || {}, {
     conversationId,
     setAuthToken,
+    // 供裸 fetch 组件（cp-goal 等直连 /api 的面板）与宿主 fetch 补丁取鉴权头：
+    // 浏览器同源 cookie 场景返回空对象（零行为变化），桌面 iframe token 场景带 Bearer。
+    authHeaders: _authHeaders,
     WebCopilotClient,
     DesktopCopilotClient,
     createCopilotClient,

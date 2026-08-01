@@ -140,6 +140,8 @@ VI = {
     "inbox.nav.all_desc": "Tổng hợp hội thoại mọi nền tảng",
     "inbox.nav.acct": "Quản lý tài khoản",
     "inbox.nav.acct_desc": "Trạng thái kết nối · thêm tài khoản QR · kết nối lại",
+    "inbox.nav.admin": "Quản trị hệ thống",
+    "inbox.nav.admin_desc": "Mở trang quản trị (thẻ mới): bảng điều khiển / persona / kiến thức / cấu hình",
     "inbox.nav.draft": "Hàng đợi bản nháp",
     "inbox.nav.draft_desc": "Xem bản nháp AI chờ bạn duyệt",
     "inbox.nav.kb": "Cơ sở kiến thức",

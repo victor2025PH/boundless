@@ -235,6 +235,12 @@ class _FakeSender:
     def _reply_to_message_id_for_send(self, msg):
         return 42
 
+    # 语音镜像文案（2026-07-31 起分条镜像带念稿）——借真实实现，别在假对象里
+    # 另写一份，否则「镜像里到底写了什么」的断言就测不到真代码。
+    _voice_mirror_preview = staticmethod(
+        __import__("src.client.sender", fromlist=["TelegramSenderMixin"])
+        .TelegramSenderMixin._voice_mirror_preview)
+
     # 直接借用真实实现
     async def _voice_recording_action(self, chat_id):
         from src.client.sender import TelegramSenderMixin
@@ -304,7 +310,9 @@ async def test_split_send_happy_path(tmp_path, monkeypatch):
     assert len(sends) == 3          # 三条全发出
     assert sends[0]["reply_to"] == 42 and sends[1]["reply_to"] is None
     assert s.recorded == 3          # 每条各记一次外发
-    assert s.mirrored == ["[语音]×3"]
+    # 镜像一行、带念稿（2026-07-31）：此前只写「[语音]×3」，坐席根本不知道 AI 说了
+    # 什么、防复读读历史时也只看到占位。客户那边仍是纯语音，不受影响。
+    assert s.mirrored == ["[语音]×3 第一条。 第二条。 第三条。"]
     assert no_sleep.total > 0       # 条间确实等待过（拟人间隔）
     assert s.client.send_chat_action.await_count >= 2   # 录音状态挂过
 
@@ -352,7 +360,10 @@ async def test_split_send_mid_send_failure_keeps_sent(tmp_path, monkeypatch):
         {"gap_factor": 1.0, "gap_jitter_sec": [0, 0], "max_gap_sec": 20})
     assert ok is True
     assert s.recorded == 1
-    assert s.mirrored == ["[语音]"]
+    # 念稿只带**已发出的那几条**：第 2 条投递失败 → 镜像里不能出现「二。/三。」，
+    # 否则坐席会以为那两句也送到了客户手上。
+    assert s.mirrored == ["[语音] 一。"]
+    assert "二。" not in s.mirrored[0] and "三。" not in s.mirrored[0]
     assert not (tmp_path / "part2.ogg").exists()   # 未发的清理掉
 
 

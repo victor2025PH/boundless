@@ -3156,6 +3156,74 @@ class TestAuthorizedOffers:
         assert row["funnel"]["offer_claims_stripped"] == 2
         assert row["stats_since"] == NOW - 3600
 
+    def test_review_p23_winrate_and_instruction_funnel(self):
+        """P23：win-rate 表（含小样本标注）+ 指令拟稿/画像填充漏斗 + 抽检样本。"""
+        from scripts.growth_review import render, trend_row
+        snap = {
+            "base": "http://127.0.0.1:18799", "days": 7, "ts": NOW,
+            "readiness": {"status": "ready", "blockers": [],
+                          "checks": {"bound_count": 1},
+                          "calibration": {"priority": "healthy", "hints": []}},
+            "report": {
+                "totals": {"n": 8, "done": 5, "done_rate": 0.625,
+                           "won": 3, "won_rate": 0.375,
+                           "avg_days_to_done": 4.0},
+                "by_template": {
+                    "acquire_and_convert": {
+                        "n": 6, "done": 4, "failed": 1, "expired": 1,
+                        "cancelled": 0, "done_rate": 0.667,
+                        "won": 3, "won_rate": 0.5},
+                    "winback": {
+                        "n": 2, "done": 1, "failed": 1, "expired": 0,
+                        "cancelled": 0, "done_rate": 0.5,
+                        "won": 0, "won_rate": 0.0},
+                },
+                "drive_draft": {"total": 7,
+                                "by_source": {"beat": 4, "slot": 2, "hero": 1}},
+                "profile_fills": {"total": 5,
+                                  "by_src": {"agent": 3, "auto": 2},
+                                  "by_track": {"relation": 3, "bant": 2}},
+            },
+            "samples": {"ok": True, "n": 1, "samples": [{
+                "ts": NOW - 60, "source": "beat", "mode": "reply",
+                "instruction": "今日工作意图：摸痛点",
+                "reply": "老板最近店里忙不忙呀？"}]},
+        }
+        text = render(snap)
+        assert "won=3" in text and "won_rate=38%" in text
+        assert "acquire_and_convert" in text and "won_rate=50%" in text
+        assert "⚠样本不足" in text            # winback organic=2 < 5
+        assert "指令生成：7" in text and "beat×4" in text
+        assert "画像槽填充：5" in text and "bant×2" in text
+        assert "指令遵循抽检" in text and "摸痛点" in text
+        row = trend_row(snap)
+        assert row["won"] == 3 and row["drive_draft"] == 7
+        assert row["profile_fills"] == 5
+
+    def test_review_p23_zero_usage_judgment(self):
+        """指令拟稿 0 使用要给判词（新链路无人用=发现性问题，不是没数据）；
+        有拟稿但 bant 零填充也要点名（问了没采到）。"""
+        from scripts.growth_review import render
+        base = {
+            "base": "http://127.0.0.1:18799", "days": 7, "ts": NOW,
+            "readiness": {"status": "ready", "blockers": [],
+                          "checks": {"bound_count": 1},
+                          "calibration": {"priority": "healthy", "hints": []}},
+        }
+        snap0 = dict(base, report={
+            "totals": {"n": 0},
+            "drive_draft": {"total": 0, "by_source": {}},
+            "profile_fills": {"total": 0, "by_src": {}, "by_track": {}}})
+        text0 = render(snap0)
+        assert "指令生成：0" in text0 and "查坐席是否知道" in text0
+        snap1 = dict(base, report={
+            "totals": {"n": 0},
+            "drive_draft": {"total": 3, "by_source": {"slot": 3}},
+            "profile_fills": {"total": 2, "by_src": {"agent": 2},
+                              "by_track": {"relation": 2}}})
+        text1 = render(snap1)
+        assert "bant 轨零填充" in text1
+
     def test_readiness_route_exposes_stats(self, monkeypatch):
         """路由契约：/api/goals/readiness 响应带 stats 段（周审 CLI 的数据源）。"""
         from pathlib import Path

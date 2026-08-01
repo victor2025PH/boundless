@@ -20,6 +20,105 @@ def _path_str(p: Any) -> str:
     return as_posix() if callable(as_posix) else str(p)
 
 
+def _nested_patch(keys, value) -> Dict[str, Any]:
+    """['a','b','c'], v → {'a': {'b': {'c': v}}}（内存深合并用的最小 patch）。"""
+    out: Dict[str, Any] = {}
+    node = out
+    for k in keys[:-1]:
+        node[k] = {}
+        node = node[k]
+    node[keys[-1]] = value
+    return out
+
+
+def merge_yaml_patch_preserving(p: Path, patch: Dict[str, Any], replace: set,
+                                merge_fn) -> bool:
+    """P3 2026-08-01：对 YAML 文件做 replace 感知的 patch 深合并，**保留注释**。
+
+    ``merge_fn(dst, patch, replace)``＝调用方的合并算法（ConfigManager.
+    ``_merge_patch_replace_aware``，对 CommentedMap 同样成立——它只用 dict 接口）。
+    任何一步不满足 → False，调用方回落旧 yaml.dump 路径（写入永不丢失）。
+    """
+    try:
+        from ruamel.yaml import YAML
+        from ruamel.yaml.comments import CommentedMap
+    except Exception:
+        return False
+    try:
+        if not isinstance(patch, dict) or not patch:
+            return False
+        y = YAML()
+        y.preserve_quotes = True
+        y.width = 4096
+        data = None
+        if p.exists():
+            with open(p, "r", encoding="utf-8") as f:
+                data = y.load(f)
+        if data is None:
+            data = CommentedMap()
+        if not isinstance(data, dict):
+            return False
+        merge_fn(data, patch, replace)
+        tmp = p.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            y.dump(data, f)
+        os.replace(tmp, p)
+        return True
+    except Exception:
+        logging.getLogger("ai_chat_assistant.ConfigManager").debug(
+            "merge_yaml_patch_preserving 失败（回落旧路径）", exc_info=True)
+        return False
+
+
+def set_yaml_key_preserving(p: Path, keys, value) -> bool:
+    """P2 2026-08-01：对 YAML 文件做单键深写，**保留全部注释/引号/顺序**。
+
+    动机（当日实锤）：`set_overlay_flag` 旧实现用 `yaml.safe_load` + `yaml.dump`
+    整文件重写——config.local.yaml 里约 30 行人工运维注释被一次 enable_dry 全部
+    剃光。本函数走 ruamel.yaml round-trip（本机已装 0.18.x），任何一步不满足
+    （无 ruamel / 文件根不是映射 / 解析失败）→ 返回 False，调用方回落旧路径，
+    **绝不因保注释尝试而丢一次写入**。纯函数级（除文件 I/O），可直接单测。
+    """
+    try:
+        from ruamel.yaml import YAML
+    except Exception:
+        return False
+    try:
+        keys = [str(k) for k in (keys or []) if str(k)]
+        if not keys:
+            return False
+        y = YAML()
+        y.preserve_quotes = True
+        y.width = 4096
+        data = None
+        if p.exists():
+            with open(p, "r", encoding="utf-8") as f:
+                data = y.load(f)
+        if data is None:
+            from ruamel.yaml.comments import CommentedMap
+            data = CommentedMap()
+        if not isinstance(data, dict):
+            return False
+        node = data
+        for k in keys[:-1]:
+            nxt = node.get(k)
+            if not isinstance(nxt, dict):
+                from ruamel.yaml.comments import CommentedMap
+                nxt = CommentedMap()
+                node[k] = nxt
+            node = nxt
+        node[keys[-1]] = value
+        tmp = p.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            y.dump(data, f)
+        tmp.replace(p)
+        return True
+    except Exception:
+        logging.getLogger("ai_chat_assistant.ConfigManager").debug(
+            "set_yaml_key_preserving 失败（回落旧路径）", exc_info=True)
+        return False
+
+
 class ConfigManager:
     """配置管理器类"""
 
@@ -622,11 +721,23 @@ class ConfigManager:
         走 overlay 而非改写 config.yaml：保住主配置注释/结构、与凭证/白标同机制，重启后
         load() 再次深合并。``path`` 为点分隔嵌套键（如 ``companion.proactive_topic.enabled``）。
         返回 (成功?, 说明)。调用方（看板路由）已用能力注册表白名单约束 path，避免任意键注入。
+
+        P2 2026-08-01 保注释化：优先走 ruamel round-trip（``set_yaml_key_preserving``）——
+        旧实现 ``yaml.dump`` 整文件重写会把 overlay 里的人工运维注释全部剃光
+        （2026-08-01 上午实锤：一次 enable_dry 冲掉 config.local.yaml 约 30 行注释）。
+        ruamel 缺失/任何异常 → 回落旧 yaml.dump 路径（行为与历史完全一致，零回归）。
         """
         keys = [k for k in str(path or "").split(".") if k]
         if not keys:
             return False, "空配置路径"
         p = self._overlay_path()
+        if set_yaml_key_preserving(p, keys, value):
+            try:
+                self._deep_merge(self.config, _nested_patch(keys, value))
+            except Exception:
+                self.logger.debug("overlay 内存合并异常（下次热重载兜底）", exc_info=True)
+            self.logger.info("运营开关已更新(保注释): %s = %r", ".".join(keys), value)
+            return True, "已保存"
         try:
             overlay: Dict[str, Any] = {}
             if p.exists():
@@ -684,6 +795,22 @@ class ConfigManager:
             return False
         replace = {str(p) for p in (replace_paths or ())}
         path = self._overlay_path()
+        # P3 2026-08-01 保注释化：优先 ruamel round-trip（与 set_overlay_flag 同待遇；
+        # 渠道路由等运行时设置保存同样不该剃光 overlay 注释）。失败回落旧 yaml.dump。
+        if merge_yaml_patch_preserving(path, patch, replace,
+                                       self._merge_patch_replace_aware):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    merged = yaml.safe_load(f) or {}
+                if isinstance(merged, dict):
+                    self._merge_patch_replace_aware(self.config, merged, replace)
+                self._overlay_loaded_mtime = self._overlay_mtime()
+            except Exception:
+                self.logger.debug("overlay 内存合并异常（下次热重载兜底）", exc_info=True)
+            self.logger.info(
+                "运行时设置已写入 overlay(保注释)（顶层键: %s）",
+                ", ".join(sorted(map(str, patch))))
+            return True
         try:
             overlay: Dict[str, Any] = {}
             if path.exists():

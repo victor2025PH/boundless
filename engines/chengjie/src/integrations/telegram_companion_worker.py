@@ -70,6 +70,30 @@ def companion_runtime_enabled(config: Optional[Dict[str, Any]]) -> bool:
     return bool(tg.get("companion_runtime", False))
 
 
+def companion_media_enabled(config: Optional[Dict[str, Any]]) -> bool:
+    """companion 号是否对编排器暴露发媒体能力（``companion_media``，默认关）。
+
+    **缺陷背景**（2026-07-31 实测）：开着 ``companion_runtime`` 的部署里，
+    ``owns_media("telegram", *)`` 恒 False——因为本 worker 从没实现 ``send_media``
+    （类 docstring 里却一直写着「可选 send_media(...)」，即本就是设计意图）。
+    直接后果是生产接口自己报出来的：
+
+        telegram  can_media=False can_voice=False voice_mode=none
+        whatsapp  can_media=True  can_voice=True  voice_mode=composer
+        line      can_media=True  can_voice=True  voice_mode=composer
+
+    即**流量最大的 Telegram 是唯一一个坐席不能手动发图/发语音的平台**（按钮置灰、
+    硬点 501）。AI 反而能发——它走 A 线 pyrogram 原生路径，绕开了编排器。
+
+    **默认关而不是直接开**：``owns_media`` 是单一布尔，同时管着三条消费链，其中
+    「主动触达语音」那条会把 Telegram 的沉默回访按 ``voice.probability`` 变成语音条
+    ——属运营决策，不该由一次缺陷修复顺带决定。开＝一行 overlay + 重启。
+    """
+    pl = (config or {}).get("platform_login", {}) or {}
+    tg = pl.get("telegram", {}) or {}
+    return bool(tg.get("companion_media", False))
+
+
 # ── worker ───────────────────────────────────────────────────────────────────
 
 class TelegramCompanionWorker:
@@ -96,6 +120,18 @@ class TelegramCompanionWorker:
         self.client: Any = None  # A 线 TelegramClient 实例
         self.state = "stopped"
         self.detail = ""
+        # 出站媒体能力**按开关条件绑定**（与 LineProtocolWorker 同款做法，理由同源）：
+        # 编排器 `owns_media()` 的判据就是 `hasattr(worker,"send_media")`，而这一个
+        # 布尔同时管着三条消费链——坐席手动发图/发语音（`/api/unified-inbox/send-media`
+        # 与 send-voice，不支持就 501 且按钮置灰）、B 线 System Z 自动发媒体、以及
+        # 主动触达的语音/照片投递。写成普通方法＝三条一次性全开，其中主动触达那条
+        # 会让 Telegram 的沉默回访按 `voice.probability` 变成语音条，属运营决策。
+        # ⚠ 别顺手「简化」成 `async def send_media`，那会静默改变生产行为。
+        try:
+            if companion_media_enabled(config):
+                self.send_media = self._send_media_impl  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            logger.debug("[tg-companion] 出站媒体开关解析失败（按关处理）", exc_info=True)
 
     def _account_cfg(self) -> Dict[str, Any]:
         """组装 A 线 TelegramClient 的 account_cfg overlay（session/代理/人设）。
@@ -237,6 +273,37 @@ class TelegramCompanionWorker:
             return {"delivered": bool(ok), "message_id": str(mid or "")}
         ok = await self.client.send_message(target, text)
         return {"delivered": bool(ok), "message_id": ""}
+
+    async def _send_media_impl(self, chat_key: str, *, media_path: str,
+                               media_type: str = "",
+                               caption: str = "") -> Dict[str, Any]:
+        """发媒体（图/语音/视频/文件）。只在 ``companion_media`` 开时才被绑成
+        ``send_media`` —— 见 ``__init__`` 里那段说明，别改成普通方法。
+
+        走**内层 pyrogram**（``self.client.client``）而不是 A 线包装
+        ``TelegramClient.send_photo``：后者自带收件箱出站镜像，而
+        ``AccountOrchestrator.send_media`` 也会镜像一次 —— 委派过去会让一次发送在
+        坐席台出现**两行**。护栏面与兄弟 worker ``TelegramProtocolWorker.send_media``
+        一致（Kill-Switch / 反封号闸门 / 去重微扰都在编排器那一层统一做）。
+        """
+        inner = getattr(self.client, "client", None) if self.client is not None else None
+        if inner is None:
+            raise RuntimeError("A 线 client 未连接")
+        target: Any = chat_key
+        try:
+            target = int(chat_key)
+        except (TypeError, ValueError):
+            target = chat_key
+        kind = str(media_type or "").lower()
+        if kind == "image":
+            msg = await inner.send_photo(target, media_path, caption=caption)
+        elif kind == "voice":
+            msg = await inner.send_voice(target, media_path, caption=caption)
+        elif kind == "video":
+            msg = await inner.send_video(target, media_path, caption=caption)
+        else:
+            msg = await inner.send_document(target, media_path, caption=caption)
+        return {"delivered": True, "message_id": str(getattr(msg, "id", "") or "")}
 
     async def ensure_peer(self, chat_key: str) -> bool:
         """群 peer 可达性体检（开演前 preflight）：True=此号能对该群发言。

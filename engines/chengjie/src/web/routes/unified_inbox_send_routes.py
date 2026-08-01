@@ -44,21 +44,45 @@ from src.web.web_i18n import tr
 logger = logging.getLogger(__name__)
 
 
-def _account_removed(platform: str, account_id: str) -> bool:
-    """该 (platform, account_id) 是否为注册表里 status=removed 的账号。
+def _account_send_block(platform: str, account_id: str) -> str:
+    """该 (platform, account_id) 的发送拦截原因：``""``（放行）/ ``removed`` / ``offline``。
 
-    已移除账号在收件箱里只读展示历史（见 ProtocolInboxAdapter）；其会话禁止发送。
-    注意：实时 Telegram A 线用 account_id='default'（不在注册表），故不会被误拦；
-    仅明确指向 removed 账号 id（如 8118214990/tg-desktop）的发送被拒。查不到一律放行。
+    - ``removed``：软删账号只读展示历史（见 ProtocolInboxAdapter），禁止发送。
+    - ``offline``：已登出账号（聊天页已隐藏其会话；深链/旧标签页仍可能点发送）——
+      给 409「请先重新登录」，避免打到不存在的 worker 冒笼统 5xx。防误拦：注册表说
+      offline 但编排器实际有在跑的 worker（状态陈旧/刚重连）→ 放行，以运行时为准。
+    注意：实时 Telegram A 线用 account_id='default'（不在注册表），不会被误拦；
+    查不到/异常一律放行（宁可让下游如实失败，不做假拦截）。
     """
     if not platform or not account_id or account_id == "default":
-        return False
+        return ""
     try:
         from src.integrations.account_registry import get_account_registry
         row = get_account_registry().get(platform, account_id)
-        return bool(row and row.get("status") == "removed")
+        st = str((row or {}).get("status") or "")
+        if st == "removed":
+            return "removed"
+        if st == "offline":
+            try:
+                from src.integrations.account_orchestrator import get_orchestrator
+                if get_orchestrator().owns(platform, account_id):
+                    return ""
+            except Exception:
+                pass
+            return "offline"
+        return ""
     except Exception:
-        return False
+        return ""
+
+
+def _raise_if_account_blocked(request: Request, platform: str, account_id: str) -> None:
+    """发送前账号态闸门：removed/offline 各给对应 409 文案（坐席该做的事不同——
+    removed=只能看历史；offline=去重新登录）。"""
+    blk = _account_send_block(platform, account_id)
+    if blk == "removed":
+        raise HTTPException(409, tr(request, "err.inbox.account_removed"))
+    if blk == "offline":
+        raise HTTPException(409, tr(request, "err.inbox.account_offline"))
 
 
 def _rpa_auto_voice_enabled(request: Request, platform: str, account_id: str) -> bool:
@@ -188,8 +212,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         text = str(body.get("text") or "").strip()
         if not chat_key or not text:
             raise HTTPException(400, tr(request, "err.inbox.chat_text_empty"))
-        if _account_removed(platform, account_id):
-            raise HTTPException(409, tr(request, "err.inbox.account_removed"))
+        _raise_if_account_blocked(request, platform, account_id)
 
         # P0 幂等键（2026-07-29 多开/双击防双发）：前端每次提交带 client_msg_id，
         # 同 (会话, id) 在 TTL 窗口内重复提交按「已发送」应答但不再真发；
@@ -521,8 +544,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         upload = form.get("file")
         if not chat_key or upload is None or not getattr(upload, "filename", ""):
             raise HTTPException(400, tr(request, "err.inbox.file_chat_empty"))
-        if _account_removed(platform, account_id):
-            raise HTTPException(409, tr(request, "err.inbox.account_removed"))
+        _raise_if_account_blocked(request, platform, account_id)
 
         from src.integrations.account_orchestrator import get_orchestrator
         orch = get_orchestrator()
@@ -591,8 +613,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             raise HTTPException(400, tr(request, "err.inbox.chat_text_empty"))
         if len(text) > 1000:
             raise HTTPException(400, tr(request, "err.inbox.text_too_long_voice"))
-        if _account_removed(platform, account_id):
-            raise HTTPException(409, tr(request, "err.inbox.account_removed"))
+        _raise_if_account_blocked(request, platform, account_id)
 
         # P0 幂等键（与文本 send 同口径；语音双发还烧双份 TTS/GPU，更值得拦）
         from src.inbox.send_dedup import get_send_dedup

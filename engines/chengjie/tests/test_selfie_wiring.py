@@ -60,6 +60,17 @@ _ON = {"enabled": True, "free_daily": 1, "min_bond_level": 2,
        "provider": {"enabled": False}}
 
 
+@pytest.fixture(autouse=True)
+def _persona_photos_on(monkeypatch):
+    """2026-07-31 人设级发图闸（capabilities.photos）默认关；本文件全部场景
+    假定「人设已开相册/发图」，统一在此打开。关态行为（默认关/一张不发）
+    由 tests/test_photo_capability.py 专门覆盖。"""
+    import src.companion.photo_capability as pc
+    monkeypatch.setattr(pc, "resolve_prompt_persona",
+                        lambda _ctx: {"capabilities": {"photos": True}})
+    monkeypatch.setattr(pc, "persona_photos_enabled_by_id", lambda _pid: True)
+
+
 @pytest.fixture()
 def media_store():
     """隔离的内存版 persona_media store（绝不写 config/persona_media.db）。"""

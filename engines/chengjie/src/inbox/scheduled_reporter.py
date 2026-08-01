@@ -507,10 +507,19 @@ class ScheduledReporter:
         try:
             from src.inbox.workflow_runner import WorkflowRunner
             contacts = None
+            goal_hook = None
             if self._app_state is not None:
                 cs = getattr(getattr(self._app_state, "contacts", None), "store", None)
                 contacts = cs
-            runner = WorkflowRunner(self._store, contacts_store=contacts)
+                try:
+                    cm = getattr(self._app_state, "config_manager", None)
+                    if cm is not None:
+                        from src.companion.goals.service import chain_event_recorder
+                        goal_hook = chain_event_recorder(cm)
+                except Exception:
+                    goal_hook = None
+            runner = WorkflowRunner(
+                self._store, contacts_store=contacts, goal_event_hook=goal_hook)
             n = runner.process_due_executions()
             # 自动启动：每 60 tick（约 1h）扫描一次，避免每 tick 全表扫
             if not hasattr(self, "_wf_auto_tick"):

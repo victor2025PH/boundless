@@ -124,6 +124,23 @@ def invalidate_schedule_status_cache() -> None:
         _SCHEDULE_STATUS_CACHE = None
 
 
+class RevalidateStaticFiles(StaticFiles):
+    """强制回源校验的静态服务（``Cache-Control: no-cache``）。
+
+    为什么需要（2026-07-31「切换失败」事故收尾）：``/copilot`` 的 iframe 入口
+    ``app.html`` 没有 ``?v=`` 缓存戳可用（iframe src 只带 ?theme=），而 Starlette
+    静态响应默认不带 Cache-Control → Chromium 启发式缓存可把旧 app.html 连同其
+    引用的旧组件 URL 一起复用数小时——坐席「刷新了还是旧的」。no-cache ≠ 不缓存：
+    浏览器仍缓存，只是每次使用前必须带 ETag 回源验证（未变=304，极廉价）。
+    200 与 304（NotModifiedResponse）两种返回都补头。
+    """
+
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                telegram_client=None, event_tracker=None, log_buffer=None) -> FastAPI:
     # Load domain pack manifest for web integration（支付域在插件关闭时映射为 conversion）
@@ -241,6 +258,11 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
                     from src.web.web_i18n import tr as _tr
 
+                    try:  # E6 锁触达观测（定价信号），失败绝不影响拦截语义
+                        from src.web.feature_lock_stats import get_feature_lock_stats
+                        get_feature_lock_stats().record(_feat, "api")
+                    except Exception:
+                        pass
                     return JSONResponse(
                         status_code=403,
                         content={
@@ -250,6 +272,28 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                             "detail": _tr(request, "err.lic.feature_locked"),
                         },
                     )
+                # E3：页面族守卫——nav 对锁定功能渲染锁标跳 /membership，但直连
+                # URL（书签/分享链）仍能打开半残页（渲染成功、API 全 403）。此处
+                # 与 nav 同源判定（nav_schema.feature_for_page_path），锁定页面
+                # GET 一律 302 升级引导。仅 GET（页面导航语义）；/membership 自身
+                # 无 feature 标注，天然无环。
+                if request.method == "GET" and not request.url.path.startswith("/api/"):
+                    from src.web.nav_schema import feature_for_page_path
+
+                    _pfeat = feature_for_page_path(request.url.path)
+                    if _pfeat and not feature_enabled(_pfeat, _cfg):
+                        from fastapi.responses import RedirectResponse
+
+                        try:  # E6 锁触达观测
+                            from src.web.feature_lock_stats import (
+                                get_feature_lock_stats,
+                            )
+                            get_feature_lock_stats().record(_pfeat, "page")
+                        except Exception:
+                            pass
+                        # ?from=<族> → 会员页高亮对应矩阵行 + 来源引导语（E4）
+                        return RedirectResponse(
+                            "/membership?from=" + _pfeat, status_code=302)
         except Exception:  # pragma: no cover - 守卫自身异常绝不阻断请求
             pass
         return await call_next(request)
@@ -265,11 +309,12 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         _mimetypes.add_type("font/woff", ".woff")
         app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
     # 两端共享 copilot 组件库(单一事实来源 repo 根 shared/copilot);独立前缀避开 /static 匹配顺序
+    # no-cache：iframe 入口 app.html 无 ?v= 戳，必须逐次回源校验防启发式缓存钉住旧版
     _shared_copilot_dir = Path(__file__).resolve().parents[2] / "shared" / "copilot"
     if _shared_copilot_dir.is_dir():
         app.mount(
             "/copilot",
-            StaticFiles(directory=str(_shared_copilot_dir)),
+            RevalidateStaticFiles(directory=str(_shared_copilot_dir)),
             name="copilot_shared",
         )
 
@@ -1388,6 +1433,14 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     except Exception:
         import logging as _log_goal
         _log_goal.getLogger("admin").warning("营销目标路由注册失败", exc_info=True)
+
+    # ── 静态壳 i18n bundle（D1）：/copilot/app.html 等无 Jinja 宿主按前缀拉词典切片 ──
+    try:
+        from src.web.routes.i18n_bundle_routes import register_i18n_bundle_routes
+        register_i18n_bundle_routes(app, api_auth=_api_auth)
+    except Exception:
+        import logging as _log_i18nb
+        _log_i18nb.getLogger("admin").warning("i18n bundle 路由注册失败", exc_info=True)
 
     # ── 功能总览（feature center）：交付注册表驱动的能力清单 + overlay 开关 ──
     try:
@@ -3148,9 +3201,38 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
     # ── P37/P38: 工作流 + 路由规则管理页面 ───────────────────────────
 
+    @app.get("/workflows")
+    async def _ws_workflows_alias(request: Request):
+        """E1：短链别名。工作台组件（cp-chain-exec「管理工作链」）、ops 漏斗卡
+        与两批文档一直深链 ``/workflows``，而真实页面在 ``/workspace/workflows``
+        ——上线以来 404（种子选择器让人不用离开会话，没人点过才没暴露）。
+        别名一处修复全部历史链接；鉴权/锁定判定统一交给目标路由。"""
+        from fastapi.responses import RedirectResponse as _RR
+        return _RR("/workspace/workflows", status_code=302)
+
     @app.get("/workspace/workflows")
     async def _ws_workflows(request: Request):
         _unified_inbox_page_auth(request)
+        # E1 页面级锁定态（判定与 API 闸门同源，防「API 拦了页面没拦」）：
+        # license 锁 → 升级引导（nav-locked 同款去处）；运营关闭 → 404
+        # （模块不存在于此部署；API 侧对应 403，页面语义按「无此页」处理）。
+        try:
+            from src.web.routes.unified_inbox_workflow_routes import (
+                workflows_disabled_reason_cfg,
+            )
+            _wf_reason = workflows_disabled_reason_cfg(config_manager.config or {})
+        except Exception:
+            _wf_reason = ""
+        if _wf_reason == "license":
+            from fastapi.responses import RedirectResponse as _RR
+            try:  # E6 锁触达观测
+                from src.web.feature_lock_stats import get_feature_lock_stats
+                get_feature_lock_stats().record("workflows", "page")
+            except Exception:
+                pass
+            return _RR("/membership?from=workflows", status_code=302)
+        if _wf_reason == "config":
+            raise HTTPException(404)
         sess = request.session
         ctx = {
             "request": request,

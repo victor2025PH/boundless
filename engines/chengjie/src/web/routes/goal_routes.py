@@ -141,10 +141,22 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             GOAL_STATUSES,
             list_templates,
         )
+        # caps：让前端把 auto 档说明对齐真实行为——bridge 关着时「自动推进」
+        # 不会主动发消息，表单如实注明（文案与行为一致是硬原则）。
+        cfg = _cfg_root()
+        companion = cfg.get("companion") if isinstance(cfg.get("companion"), dict) else {}
+        goals_cfg = companion.get("goals") if isinstance(companion.get("goals"), dict) else {}
+        bridge_cfg = goals_cfg.get("bridge") if isinstance(goals_cfg.get("bridge"), dict) else {}
+        proactive_cfg = (companion.get("proactive_topic")
+                         if isinstance(companion.get("proactive_topic"), dict) else {})
         return {
             "templates": list_templates(),
             "autonomy_levels": list(AUTONOMY_LEVELS),
             "statuses": list(GOAL_STATUSES),
+            "caps": {
+                "bridge_enabled": bool(bridge_cfg.get("enabled", False)),
+                "proactive_enabled": bool(proactive_cfg.get("enabled", False)),
+            },
         }
 
     @app.get("/api/goals/for-conversation")
@@ -187,6 +199,19 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         report = store.outcome_report(_t.time() - d * 86400.0)
         report["window_days"] = d
         return report
+
+    @app.get("/api/goals/instr-samples")
+    async def goals_instr_samples(
+        request: Request, limit: int = 20, _auth=Depends(auth_dep)
+    ):
+        """P23 质量抽检：坐席指令 → 拟稿产出 留样尾窗（新→旧，无客户原文）。
+
+        「模型有没有照指令做」没法当门禁断言，周审用这 20 条人耳抽检替代
+        拍脑袋。样本由回复台指令链产生（desktop smart-reply 落盘），不依赖
+        goals 开关 → 与 readiness 同豁免，**不走** ``_require_enabled``。"""
+        from src.inbox.instr_samples import read_instr_samples
+        rows = read_instr_samples(limit=max(1, min(int(limit or 20), 100)))
+        return {"ok": True, "n": len(rows), "samples": rows}
 
     @app.get("/api/goals/readiness")
     async def goals_readiness(request: Request, _auth=Depends(auth_dep)):

@@ -21,6 +21,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+# 情绪状态标签词表（单一事实源：__add_mood_tag 的 tag_options 与「当前情绪」读取
+# 共用同一张表——P1-198 情绪标记状态化，路由据此从 conv_tags 反查当前生效情绪）。
+MOOD_TAGS = ("情绪低落", "积极开朗", "需要关注", "进展顺利")
+
 
 # ── 内置场景动作库（情感陪伴场景） ─────────────────────────────────────────
 
@@ -100,7 +104,7 @@ _BUILTIN_ACTIONS: List[Dict[str, Any]] = [
         "priority": 55,
         "config": {
             "hint": "为当前情绪状态打标签，便于后续个性化",
-            "tag_options": ["情绪低落", "积极开朗", "需要关注", "进展顺利"],
+            "tag_options": list(MOOD_TAGS),
         },
         "trigger_conditions": ["any"],
     },
@@ -155,8 +159,13 @@ class NextActionRecommender:
         qa_score: int = -1,
         custom_actions: Optional[List[Dict[str, Any]]] = None,
         limit: int = 5,
+        followup_task_enabled: bool = True,
     ) -> List[Dict[str, Any]]:
         """推荐最适合的下一步动作（内置 + 自定义合并）。
+
+        followup_task_enabled=False（config ``inbox.next_actions.follow_up_task``）
+        时不再推荐「创建回访任务」——P1-198：客户反馈该动作与工作目标计划语义重叠，
+        且无 contact_id 时点了什么都建不了，允许部署级关闭。
 
         Returns:
             [{action_id, name, icon, action_type, config, reason, priority}]
@@ -178,6 +187,8 @@ class NextActionRecommender:
         # 内置动作评分
         candidates: List[Dict[str, Any]] = []
         for act in _BUILTIN_ACTIONS:
+            if not followup_task_enabled and act["action_id"] == "__schedule_followup":
+                continue
             matched = self._match_triggers(act["trigger_conditions"], signals)
             if matched:
                 candidates.append({

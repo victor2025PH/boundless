@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from src.integrations.account_registry import get_account_registry
-from src.integrations.platform_login import register_login_provider
+from src.integrations.platform_login import register_login_provider, resolve_login_switch
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +68,10 @@ def resolve_credentials(config: Dict[str, Any]) -> Optional[Tuple[int, str]]:
 
 
 def protocol_enabled(config: Dict[str, Any]) -> bool:
-    pl = (config or {}).get("platform_login", {}) or {}
-    tg = pl.get("telegram", {}) or {}
-    return bool(tg.get("protocol_enabled", False))
+    # 三态：显式配置优先（含 false）；未写过时桌面版默认开（见 resolve_login_switch）。
+    # 注册仍另需凭据（``maybe_register`` 里 resolve_credentials / credpool 前置），故本处
+    # 放开不会在无 api_id 时硬注册——那种情况诊断如实报 creds_missing，不是 not_enabled。
+    return resolve_login_switch(config, "platform_login.telegram.protocol_enabled")
 
 
 def _is_password_needed(ex: Exception) -> bool:

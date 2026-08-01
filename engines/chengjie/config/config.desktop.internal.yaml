@@ -1,0 +1,593 @@
+# ── ChatX 内测版 overlay 种子（v1.002，2026-08-01）────────────────────────────
+# 目标：安装包开箱 = 与 117 生产机（zhiliao 实例）同一形态——12 个人设、克隆语音、
+# 人设相册、主动触达、全自动回复（人审档）、本地 MT 翻译、LAN 视觉/嵌入/LLM 兜底全部点亮。
+#
+# ⚑ 内测口径（2026-08-01 拍板）：内测期**唯一打包形态就是本形态**——`npm run dist*`
+#   一律先 stage:internal（见 desktop/package.json predist* + after-pack.js 硬闸），
+#   不存在「标准包/内测包」两种产物。A/B/C 交付分级与 config.desktop.min.yaml
+#   语义保留（服务将来正式售卖），但内测期不投产标准形态。
+#
+# 用法：随内测包放进 resources/seed-data/config.local.internal.yaml；后端首启由
+# ConfigManager._ensure_seeded_extras 拷成 <数据区>/config/config.local.yaml
+# （已有 overlay 时只补缺失键——用户显式写过的值永远尊重；存量内测机升级后
+# 下次启动自动获得本文件新增的键）。
+#
+# 铁律：
+#   · 本文件是**公开分发物**：绝不写任何密钥/token/生产账号数据（AI Key 走官网托管
+#     网关 ensure_hosted_ai；Telegram api_id 走设备令牌粘定派发；均不落盘）。
+#   · 仅供内测（办公室同一局域网）：192.168.0.x / 117 端点出了 LAN 即不可达，相关能力
+#     自动软降级（克隆语音回落文字、视觉/MT 回落云链、ASR 报听不清），聊天主链不受影响。
+#   · 与生产 zhiliao 合并视图（config.yaml ⊕ config.local.yaml）的差异只有四类
+#     （2026-08-01 用 config.yaml⊕overlay 三方净差分逐键核对过）：
+#     ①密钥/凭据/生产账号数据剔除——ai.api_key、telegram.api_id/api_hash、
+#       web_admin.auth_token/secret_key、credpool.*（LAN 中央池+共享令牌，公网不可达
+#       且明文令牌不可进公开分发物）、goals.order_hook.token / order_pull.admin_key、
+#       licensing.trial.fulfiller_watch.*（发货机运维，客户机无 admin key 可用）、
+#       group_show.linkage_overrides / companion_send_gate.exempt_peers /
+#       telegram.group_reply.allowlist_chat_ids（生产账号/群 id）；
+#     ②127.0.0.1:7852（本机 TTS）改写为 192.168.0.117:7852（LAN 可达）；
+#     ③本机进程内 ASR（sensevoice cuda）与 faster_whisper 本地回落改为
+#       176 GPU ASR + 140 AvatarHub 远程端点（冻结包无 torch，本地模型跑不动）；
+#     ④companion.selfie.provider.command_args（ComfyUI 现场生图）不随包——
+#       它要 python 解释器 + 仓库 tools/comfy_infer.py，冻结包两者皆无，
+#       相册档（backend=album）已全量可用，生成档属生产机专属能力。
+
+domain: conversion
+
+brand:
+  company_name: 无界科技
+  product_name: 智聊 ChatX
+  site_name: 无界科技 · 智聊
+  site_name_short: 智聊 ChatX
+  sidebar_name: 无界 · 智聊
+  login_subtitle: 管理控制台
+
+web_admin:
+  site_name: 无界科技 · 智聊
+
+inbox:
+  enabled: true
+  realtime_poll_sec: 3
+  persona_conv_override:
+    enabled: true
+  auto_draft:
+    enabled: true
+    automation_mode: review
+    skip_group_chats: true
+  l2_autosend:
+    enabled: true
+    deliver: true
+    voice:
+      enabled: true
+      trigger: always
+      no_edge_fallback: true
+      max_chars: 110
+  sla_watcher:
+    escalate_hours: 24
+  # 覆盖 config.desktop.min.yaml 的桌面默认关（P1-198）：内测口径=与生产机对齐，
+  # 生产机该入口是开的（代码默认 true、overlay 未动）。
+  next_actions:
+    follow_up_task: true
+
+voice_lang_route:
+  enabled: true
+  cantonese:
+    voice: zh-HK-HiuMaanNeural
+  follow_text:
+    enabled: true
+    reject_unmapped: true
+
+lang_prior:
+  enabled: true
+  phone_platforms:
+  - whatsapp
+
+# ── 克隆语音（AvatarHub CosyVoice3 @117 + 备点 140；hub_fish 高保真 @176）────
+avatar_voice:
+  enabled: true
+  policy:
+    no_edge_fallback: true
+  synth_timeout_sec: 75
+  retries: 0
+  emotion_channel_threshold: 2
+  paralinguistic:
+    enabled: true
+    max_marks: 2
+  synth_verify:
+    enabled: true
+    cer_threshold: 0.3
+    max_retries: 1
+  colloquial:
+    enabled: true
+    mode: llm
+    rewrite_intensity: vivid
+    generated: true
+    disfluency: true
+    disfluency_every: 5
+    human_ticks: true
+    think_prob: 0.28
+    laugh_prob: 0.08
+    provider: cloud
+    llm_timeout_sec: 12.0
+    min_chars: 12
+    lead_prob: 0.5
+    fillers: true
+    lexical: true
+    sentence_final: false
+  prosody:
+    enabled: true
+    flow_temperature: 1.08
+  base_urls:
+  - http://192.168.0.117:7852
+  - http://192.168.0.140:7852
+  voice_consistency: strict
+  hub_fish:
+    enabled: true
+    base_url: http://192.168.0.176:9000
+    timeout_sec: 75.0
+    best_of: 2
+    persona_allowlist:
+    - lin_xiaoyu
+    - lin_jiaxin
+    - marcus_wei
+    - chen_mo
+    - mizuki
+    - su_wan
+    profile_map:
+      lin_xiaoyu: chengjie_lin_xiaoyu
+      lin_jiaxin: 林小玲
+      mizuki: Mizuki
+      su_wan: Mizuki
+    response_format: ogg
+
+voice_clone_lan:
+  enabled: false
+
+# ── AI（Key 不随包：托管网关派发；这里只带行为参数 + LAN 嵌入/兜底）──────────
+ai:
+  ai_name: 顾嘉
+  system_prompt: "你是「顾嘉」（英文名 Gary），无界科技（BOUNDLESS）的资深方案顾问，8 年 AI 产品方案经验，\n既懂技术也懂生意。你正在在线聊天窗口接待访客。\n\
+    \n【公司与产品】无界科技主打七款 AI 产品（按商业主线）：\n· 通译 LingoX：多平台实时聊天翻译（文字+语音双向互译）\n· 通传 VoxX：会议/直播实时语音同传（克隆音同传+双语字幕）\n\
+    · 智拓 ReachX：真机多号自动获客（自动加友/打招呼/群提取）\n· 智聊 ChatX：聚合 AI 聊天客服，全程自动开发客户、推进成交\n· 幻声\
+    \ VoiceX：AI 声音克隆配音与语音合成\n· 幻颜 FaceX：图片/视频 AI 换脸\n· 幻影 LiveX：实时直播换脸换声分身\n一套私有化底座，产品可单选也可组合成获客到成交的完整闭环。\n\
+    \n【说话方式】\n- 专业、热情、简洁：每次回复 1-3 句说到点子上，先正面回答再延伸，绝不长篇大论。\n- 像真人顾问在打字：自然口语、少用感叹号堆砌、不用「亲」、不油腻、不客服腔。\n\
+    - 主动引导：搞清访客的行业、场景、痛点，把话题引向匹配的产品与下一步\n  （预约演示 / 领试用 / 留联系方式），一次只推进一小步，不硬塞。\n- 绝不过度承诺：不编造效果数据、不承诺做不到的事；拿不准的说「这个我和技术同事确认后给您准信」。\n\
+    - 客户用什么语言提问就用什么语言回答。\n\n【身份底线（必须遵守）】\n- 平时以顾问顾嘉的身份自然交流，不主动强调自己是 AI，也绝不谎称是人类。\n\
+    - 当客户直接问「你是不是机器人/AI/真人吗」这类问题时，诚实但弱化地回答，比如：\n  「我是无界的智能顾问，日常咨询我直接处理，复杂问题会请人工同事跟进」——绝不欺骗、绝不否认。\n"
+  max_tokens: 2048
+  timeout: 40
+  max_conversation_history: 8
+  persona_block_detail: compact
+  num_ctx: 8192
+  embedding_base_url: http://192.168.0.176:11434
+  embedding_base_urls:
+  - http://192.168.0.176:11434
+  - http://192.168.0.140:11434
+  embedding_model: bge-m3
+  fallback:
+    enabled: true
+    base_url: http://192.168.0.176:11434
+    model: qwen3:30b-a3b-instruct-2507-q4_K_M
+    api_key: ollama
+    timeout: 90
+    keep_alive: 30m
+    num_ctx: 8192
+    think: false
+
+memory:
+  extract:
+    match_all: true
+  vector:
+    enabled: true
+    backfill_periodic:
+      enabled: true
+      interval_hours: 6
+      limit: 100
+  consolidation:
+    enabled: true
+    semantic_dedup: true
+
+skills:
+  cooldown:
+    global: 0
+    per_user: 5
+    per_content: 120
+
+# ── Telegram 行为参数（凭据不随包：api_id/api_hash 走官网设备令牌派发）────────
+telegram:
+  login_method: qr
+  process_private: true
+  process_groups: true
+  process_channels: false
+  poll_fallback:
+    mirror_outgoing: true
+  group_reply:
+    mode: mention_or_keyword
+    follow_window_minutes: 3
+  reply_humanize:
+    thinking_delay:
+      min_sec: 2
+      max_sec: 9
+      adaptive: true
+  voice_reply:
+    enabled: true
+    trigger: when_peer_voice
+    backend: avatar_clone
+    voice: zh-CN-XiaoxiaoNeural
+    voice_profile:
+      enabled: true
+      owner_consent: true
+      backend: avatar_clone
+      reference_audio_path: config/voice_refs/lin_xiaoyu.wav
+      emotion_default: neutral
+    emotion:
+      enabled: true
+      default: warm
+    split_send:
+      enabled: true
+  reply_logic:
+    follow_up:
+      lookback_count: 10
+
+protocol_autoreply:
+  enabled: true
+  rate:
+    hourly: 0
+    daily: 0
+    persist: true
+  breaker:
+    threshold: 5
+    cooldown_sec: 300
+  hours:
+    enabled: false
+    start: 08:00
+    end: 01:00
+    tz_offset: 8
+
+platform_login:
+  default_persona_id: lin_xiaoyu
+  telegram:
+    backfill_dialogs: 0
+    companion_runtime: true
+    companion_media: true
+    sync:
+      enabled: true
+      interval_seconds: 21600
+      max_contacts: 3000
+      max_dialogs: 200
+      seed_chats_max: 0
+    device_fingerprint:
+      enabled: true
+  line:
+    media:
+      outbound: true
+
+# ── 视觉（LAN 双活：176 5090 主 / 140 4070 备）──────────────────────────────
+vision:
+  enabled: true
+  provider: openai_compatible
+  base_url: http://192.168.0.176:11434/v1
+  model: qwen3-vl:8b-instruct
+  api_key: ollama
+  base_urls:
+  - http://192.168.0.176:11434/v1
+  - http://192.168.0.140:11434/v1
+  timeout: 150
+  prompt: 请仔细观察图片：1) 列出画面中所有可见的物体、人物、食物、商品（含角落和背景的）；2) 若是票据/订单/证件/表单/聊天记录类截图，把画面里的文字字段逐字抄录（尤其姓名/Name、日期、单号、金额、座位、电话等小字，不要总结省略；看不清的字段标注「不清晰」，不要猜）；3)
+    一句话总结场景（票面/单据类型以画面文字为准，不要臆测交通工具或商家）。回答用中文，简洁分条。
+  max_tokens: 700
+  max_image_dim: 1536
+
+companion:
+  enabled: true
+  proactive_topic:
+    enabled: true
+    dry_run: false
+    min_silent_hours: 24
+    cooldown_hours: 48
+    max_per_tick: 2
+    quiet_start_hour: 23
+    quiet_end_hour: 8
+    adaptive_pacing:
+      enabled: true
+      min_silent_hours:
+        base: 24
+        at_intimacy_0: 48
+        at_intimacy_100: 12
+      cooldown_hours:
+        base: 48
+        at_intimacy_0: 96
+        at_intimacy_100: 24
+    no_reply_backoff:
+      enabled: true
+      multiplier: 3.0
+      max_backoff_hours: 720
+      stop_after: 0
+      stop_after_never_replied: 2
+    variety:
+      enabled: true
+      similarity_threshold: 0.6
+    optout:
+      enabled: true
+      mute_days: 30
+    response_pacing:
+      enabled: true
+      min_obs: 4
+      low_rate: 0.15
+      stretch: 1.5
+      high_rate: 0.6
+      relax: 0.85
+      auto_thresholds:
+        enabled: true
+        low_percentile: 25
+        high_percentile: 75
+        min_population: 12
+        min_separation: 0.15
+    media_feedback:
+      enabled: true
+      min_sent_per_arm: 8
+      lookback_days: 14
+      response_window_days: 3
+      max_boost: 1.5
+      max_cut: 0.5
+    mode_gate:
+      enabled: true
+      min_checkin_sent: 30
+      min_rich_sent: 15
+      max_skip: 0.5
+      lookback_days: 14
+      response_window_days: 3
+    voice:
+      enabled: true
+      probability: 0.5
+      foreign:
+        enabled: true
+        languages:
+        - en
+        - ja
+        - ko
+        - th
+        - vi
+        - id
+        - es
+        - hi
+    daily_ritual:
+      enabled: true
+      min_intimacy: 10
+  deep_persona:
+    enabled: true
+    life_line: true
+    tastes: true
+    texture: true
+    relationship: true
+  goals:
+    enabled: true
+    profile_llm:
+      enabled: true
+      daily_budget: 100
+    # 与生产机对齐（2026-08-01）：su_wan 会话自动建目标。order_hook/order_pull
+    # 刻意不随包——两者都要官网侧密钥（token/admin_key），无密钥=空转刷错误日志。
+    auto_create:
+      enabled: true
+      max_per_day: 20
+      personas:
+      - su_wan
+    retention:
+      enabled: true
+      winback:
+        enabled: true
+        reconvert:
+          enabled: true
+  group_show:
+    live:
+      enabled: true
+      quiet_hours:
+      - 0
+      - 0
+  selfie:
+    enabled: true
+    min_bond_level: 0
+    free_daily: 5
+    daily_global_cap: 50
+    register_generated: true
+    default_album_key: lin_xiaoyu
+    provider:
+      enabled: true
+      backend: album
+      album_dir: config/persona_albums
+      album_fallback: true
+      default_album_key: lin_xiaoyu
+
+# ── 语音识别（冻结包无本地模型：主走 176 GPU ASR，备走 140 AvatarHub Whisper）─
+voice_recognition:
+  enabled: true
+  provider: openai_compatible
+  language: auto
+  base_url: http://192.168.0.176:8765/v1
+  api_key: local
+  model: large-v3-turbo
+  timeout: 20
+  max_retries: 0
+  fallback:
+  - provider: avatar_whisper
+    base_url: http://192.168.0.140:7854
+    timeout: 30
+  hotwords: 智聊ChatX、通译LingoX、通传VoxX、智拓ReachX、幻声VoiceX、幻颜FaceX、幻影LiveX、无界科技、WhatsApp、Telegram
+
+speech_emotion:
+  enabled: true
+  backend: funasr
+  device: cpu
+  min_confidence: 0.5
+  cb_cooldown_sec: 300
+  remote:
+    base_url: http://192.168.0.176:8765
+    timeout_sec: 10
+    cb_cooldown_sec: 120
+
+accounts:
+  self_profile:
+    enabled: true
+    avatar: true
+  profile_push:
+    enabled: true
+    cooldown_hours: 24
+    max_avatar_mb: 5
+    fresh_account_days: 7
+
+health_watchdog:
+  log_triage:
+    enabled: true
+    interval_min: 360
+    window_hours: 6
+
+translation:
+  engines:
+    order:
+    - ollama_mt
+    - ai
+    timeout_sec: 8
+    ollama_mt:
+      base_url: http://192.168.0.176:11434
+      model: hy-mt2-7b-official:latest
+
+workspace:
+  auto_translate_inbound:
+    enabled: true
+
+# ── 网页聊天挂件（在线顾问，与生产机对齐 2026-08-01）────────────────────────
+web_chat:
+  enabled: true
+  title: 无界科技 · 在线顾问
+  greeting: 您好，我是无界科技的方案顾问顾嘉（Gary）。想了解哪款产品？聊聊您的场景，我帮您配个最合适的方案～
+  theme_color: '#0891b2'
+  default_mode: auto_ai
+
+licensing:
+  feature_gate:
+    enabled: true
+    plan_override: flagship
+  shop_url: https://bd2026.cc/order
+
+fatex:
+  enabled: true
+  kline: true
+
+ops:
+  cloud_credentials:
+    enabled: true
+    balance_warn_cny: 20
+  frontend_error_trend:
+    enabled: true
+  csrf_trend:
+    enabled: true
+  gpu_watermark:
+    enabled: true
+    hosts:
+    - {name: "176-5090", base_url: "http://192.168.0.176:11434", vram_gb: 32}
+    - {name: "140-4070", base_url: "http://192.168.0.140:11434", vram_gb: 12}
+  isolation_trend:
+    enabled: true
+  dead_peer_registry:
+    enabled: true
+    ttl_by_reason:
+      blocked: 604800
+      write_forbidden: 259200
+
+contacts:
+  identity_shadow:
+    enabled: true
+    scan_interval_hours: 6
+    max_rows: 2000
+
+line_rpa:
+  media_enrich:
+    enabled: true
+
+reply:
+  ai_fallback_replies:
+  - 来啦来啦，等我一下下～
+  - 收到收到，马上回你！
+  - 嗯嗯我在，稍等哈～
+  - 在的在的，等我组织下语言～
+  - 好嘞，这就来～
+
+personas:
+  doc_import:
+    enabled: true
+  bio_retrieval:
+    enabled: true
+    semantic: true
+    keyword_weight: 0.4
+    semantic_weight: 0.6
+    sem_floor: 0.55
+    sem_floor_kw0: 0.62
+    sem_min_chars: 40
+    chunk_mode: unit
+    unit_target_chars: 240
+    unit_min_chars: 120
+    unit_max_chars: 320
+    unit_overlap_chars: 40
+    top_k: 3
+    sentence_semantic: true
+    neighbor_expand: true
+    sem_veto: 0.45
+    doc_aliases: true
+  quiz:
+    enabled: true
+    llm_judge: true
+
+intent:
+  keywords:
+    greeting:
+    - 你好
+    - 您好
+    - hello
+    - hi
+    - 在吗
+    - 在？
+    - 有人吗
+    order_query:
+    - 订单
+    - 下单
+    - 查单
+    - 单号
+    - 订单号
+    - order
+    - 查询订单
+    price_check:
+    - 价格
+    - 价钱
+    - 多少钱
+    - 费率
+    - rate
+    - 价格表
+    - 报价
+    status_check:
+    - 状态
+    - 情况
+    - 怎么样了
+    - 进度
+    - status
+    - 怎么样
+    channel_info:
+    - 通道
+    - 渠道
+    - channel
+    - 有哪些通道
+    - 通道状态
+    complaint:
+    - 投诉
+    - 抱怨
+    - 问题
+    - 不爽
+    - 不满意
+    - complaint
+    - issue
+    small_talk:
+    - 天气
+    - 聊天
+    - 聊会
+    - 有空吗
+    - 无聊
+    - 干吗呢

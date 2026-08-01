@@ -36,6 +36,7 @@ _BASELINE = """
 /api/admin/tts-cost-trend	GET
 /api/admin/translation-confidence-trend	GET
 /api/admin/frontend-error-trend	GET
+/api/admin/ui-event-trend	GET
 /api/admin/identity-health-trend	GET
 /api/admin/anti-repeat-advice	GET
 /api/admin/ai-safety-overview	GET
@@ -80,8 +81,11 @@ _BASELINE = """
 /api/care/schedule/due	GET
 /api/care/schedule/{sid}/cancel	POST
 /api/care/schedule/{sid}/send-now	POST
+/api/care/schedule/{sid}/preview	POST
 /api/care/dry-run-samples	GET
 /api/care/dry-run-feedback	POST
+/api/care/health	GET
+/api/care/engine	POST
 /api/deferred-outbox/status	GET
 /api/deferred-outbox/retry	POST
 /api/deferred-outbox/cancel	POST
@@ -132,6 +136,7 @@ _BASELINE = """
 /api/human-escalation/shift	GET
 /api/human-escalation/shift	POST
 /api/human-escalation/verify	GET
+/api/i18n/bundle	GET
 /api/identity	GET
 /api/identity/link	POST
 /api/identity/shadow/confirm-link	POST
@@ -602,6 +607,7 @@ _BASELINE = """
 /api/workspace/workflow-actions/{action_id}	DELETE
 /api/workspace/workflow-chains	GET
 /api/workspace/workflow-chains	POST
+/api/workspace/workflow-chains/seed	POST
 /api/workspace/workflow-chains/{chain_id}	PUT
 /api/workspace/workflow-chains/{chain_id}	DELETE
 /api/workspace/routing-rules	GET
@@ -610,11 +616,6 @@ _BASELINE = """
 /api/workspace/routing-rules/{rule_id}	DELETE
 /api/workspace/routing-rules/evaluate	POST
 /api/workspace/search	GET
-/api/workspace/conv/{conversation_id}/script-suggestions	GET
-/api/workspace/script-topics	GET
-/api/workspace/script-topics	POST
-/api/workspace/script-topics/{topic_id}	PUT
-/api/workspace/script-topics/{topic_id}	DELETE
 /api/workspace/contact/{contact_id}/engagement	GET
 /api/workspace/contact/{contact_id}/engagement	POST
 /api/workspace/conv/{conversation_id}/reply-suggest	POST
@@ -627,12 +628,14 @@ _BASELINE = """
 /api/workspace/contact/{contact_id}/relationship-stage/sync	POST
 /api/workspace/contact/{contact_id}/stage-timeline	GET
 /api/workspace/chain-executions	GET
+/api/workspace/chain-funnel	GET
 /api/workspace/conv/{conversation_id}/chain-executions	GET
 /api/workspace/chain-executions/{exec_id}/cancel	POST
 /api/workspace/conv/{conversation_id}/mention-suggestions	GET
 /api/workspace/conv/{conversation_id}/collab-context	GET
 /api/workspace/contact/{contact_id}/collab-context	GET
 /workspace/workflows	GET
+/workflows	GET
 /api/workspace/conv/{conversation_id}/qa-score	GET
 /api/workspace/conv/{conversation_id}/qa-score	POST
 /api/workspace/agent-qa-stats	GET
@@ -1150,6 +1153,14 @@ _ADDITIONS_2026_07_31_ALERT_CATALOG = """
 /api/accounts/auto-reply/alert-catalog	GET
 """
 _BASELINE += _ADDITIONS_2026_07_31_ALERT_CATALOG
+
+# 2026-08-01 P23 质量抽检：坐席指令→拟稿产出留样尾窗（无客户原文；周审
+# growth_review --samples 消费）。样本由回复台指令链产生，不依赖 goals 开关
+# → 与 readiness 同豁免不走 _require_enabled。
+_ADDITIONS_2026_08_01_INSTR_SAMPLES = """
+/api/goals/instr-samples	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_01_INSTR_SAMPLES
 
 
 def _parse_baseline():

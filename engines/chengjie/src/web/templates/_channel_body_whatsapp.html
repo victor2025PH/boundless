@@ -193,7 +193,7 @@
   <div class="rpa-hero-info">
     <div class="rpa-hero-name">
       <span class="rpa-status-dot neutral" id="wa-dot"></span>
-      <span>{{ (i18n or {}).get('whatsapp_rpa', "WhatsApp 自动化") }}</span>
+      <span>{{ (i18n or {}).get('whatsapp_rpa', "WhatsApp 渠道") }}</span>
     </div>
     <div class="rpa-hero-sub" id="wa-hero-sub">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div>
   </div>
@@ -1490,8 +1490,7 @@ async function waLoadPersonaBar(){
     }).join('');
     bar.innerHTML = `<span class="wa-persona-bar-lbl">🎭 ${window.T('wa_s064')}</span>${chips}`
       + `<div class="wa-persona-bar-links">`
-      + `<a href="/personas#${(accts[0]?.persona_ids||[])[0]||''}">${window.T('wa_js_099')}</a>`
-      + `<a href="/ai-studio">AI Studio</a></div>`;
+      + `<a href="/personas#${(accts[0]?.persona_ids||[])[0]||''}">${window.T('wa_js_099')}</a></div>`;
   }catch(e){ /* silent */ }
 }
 

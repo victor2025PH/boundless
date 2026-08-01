@@ -1285,8 +1285,8 @@ def test_relationship_stage_routes_slice18_registers_contract():
 
 
 def test_copilot_routes_slice19_registers_contract():
-    """巨石拆分 slice 19：register_copilot_routes 子注册函数挂载剧本引擎/互动积分/AI 副驾
-    端点（Phase40/41/42），路径/方法与基线一致。"""
+    """巨石拆分 slice 19：register_copilot_routes 子注册函数挂载互动积分/AI 副驾
+    端点（Phase41/42），路径/方法与基线一致（Phase40 剧本话题已于 2026-08 下线）。"""
     from fastapi import FastAPI
     from src.web.routes.unified_inbox_copilot_routes import register_copilot_routes
     app = FastAPI()
@@ -1298,17 +1298,15 @@ def test_copilot_routes_slice19_registers_contract():
                 continue
             live.add((getattr(r, "path", ""), m))
     expected = {
-        ("/api/workspace/conv/{conversation_id}/script-suggestions", "GET"),
-        ("/api/workspace/script-topics", "GET"),
-        ("/api/workspace/script-topics", "POST"),
-        ("/api/workspace/script-topics/{topic_id}", "PUT"),
-        ("/api/workspace/script-topics/{topic_id}", "DELETE"),
         ("/api/workspace/contact/{contact_id}/engagement", "GET"),
         ("/api/workspace/contact/{contact_id}/engagement", "POST"),
         ("/api/workspace/conv/{conversation_id}/copilot-prefill", "GET"),
         ("/api/workspace/conv/{conversation_id}/reply-suggest", "POST"),
     }
     assert expected <= live, f"Copilot 副驾路由域端点缺失：{expected - live}"
+    # 下线的剧本话题端点不得复活（残留路由=幽灵管理面，前端已无任何调用方）
+    retired = {p for p, _ in live if "script-topics" in p or "script-suggestions" in p}
+    assert not retired, f"剧本话题端点已下线，不应再注册：{retired}"
 
 
 def test_workflow_routes_slice20_registers_contract():
@@ -1333,9 +1331,11 @@ def test_workflow_routes_slice20_registers_contract():
         ("/api/workspace/workflow-actions/{action_id}", "DELETE"),
         ("/api/workspace/workflow-chains", "GET"),
         ("/api/workspace/workflow-chains", "POST"),
+        ("/api/workspace/workflow-chains/seed", "POST"),
         ("/api/workspace/workflow-chains/{chain_id}", "PUT"),
         ("/api/workspace/workflow-chains/{chain_id}", "DELETE"),
         ("/api/workspace/chain-executions", "GET"),
+        ("/api/workspace/chain-funnel", "GET"),
         ("/api/workspace/conv/{conversation_id}/chain-executions", "GET"),
         ("/api/workspace/chain-executions/{exec_id}/cancel", "POST"),
         ("/api/workspace/conv/{conversation_id}/start-chain", "POST"),

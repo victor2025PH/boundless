@@ -160,6 +160,8 @@ async def start_assistant(assistant):
             assistant._maybe_init_identity_trend_log()
             # ★ P9：前端错误/意图落空按日落库（scoped_fail/dead_intent/conv_not_found；默认关）
             assistant._maybe_init_frontend_error_trend_log()
+            # ★ UI 事件按日落库（AI 回复漏斗 dpick.* 取消率/采纳率的耐久口径；默认关）
+            assistant._maybe_init_ui_event_trend_log()
             # ★ P2（2026-07-31）：CSRF 准入/拒绝按日落库（同源回落收口决策的数据面；默认关）
             assistant._maybe_init_csrf_trend_log()
             # ★ Phase22c：出站媒体承诺兑现率按日落库（供看板 sparkline + 阈值校准；默认关）
@@ -292,6 +294,14 @@ async def stop_assistant(assistant):
                 assistant.logger.info("care_dispatcher 已停止")
             except Exception as ex:
                 assistant.logger.warning("care_dispatcher 停止异常: %s", ex)
+
+        # P2：care LLM 影子扫描优雅停止
+        if getattr(assistant, "_care_shadow_scanner", None) is not None:
+            try:
+                await assistant._care_shadow_scanner.stop()
+                assistant.logger.info("care_shadow_scanner 已停止")
+            except Exception as ex:
+                assistant.logger.warning("care_shadow_scanner 停止异常: %s", ex)
 
         # 多平台 deferred 队列优雅停止
         if assistant._deferred_outbox_dispatcher is not None:

@@ -20,5 +20,7 @@
   --cp-ok: #0f9d75;
   --cp-warn: #d97706;
   --cp-danger: #dc2626;
+  /* violet=协作/@提及/关系阶段(暧昧档)强调色（cp-collab 阶段 chip 用） */
+  --cp-violet: #7c3aed;
   --cp-track: #e2e8f0;
 }

@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -270,6 +271,7 @@ async def generate_persona_reply(
     peer_audio_emotion: Optional[Dict[str, Any]] = None,
     account_id: str = "",
     gloss_lang: str = "",
+    agent_instruction: str = "",
 ) -> Dict[str, Any]:
     """人设化智能回复（单一事实源）。
 
@@ -292,6 +294,8 @@ async def generate_persona_reply(
         ——中文坐席从此不必把工坊切到「中文」生成再翻回去（那条链 = LLM 生成 →
         语言守卫改写 → 出站再翻译，一条回复烧 3 次 LLM 且质量经两次转译损耗）。
         已有跨语言 ``translated``（如坐席显式选中文正文 + 英文译文）时不再叠加。
+      - agent_instruction: 坐席显式指令（P22「采纳并拟稿」）。进
+        ``user_context["_agent_instruction"]`` 高权重块；空=旧行为。
 
     返回：``{ok, reply, reply_lang, persona, persona_tier, intent, translated?, gloss?}``
       - reply_lang: 本次实际采用的正文语言（决策结果，供调用方落库 draft_lang，
@@ -300,6 +304,13 @@ async def generate_persona_reply(
     last_inbound = str(last_inbound or "").strip()
     if not last_inbound:
         return {"ok": False, "detail": "无可用对话上下文", "reply": ""}
+
+    # 分段计时（2026-08-01 观测补齐）：总耗时 [smart_reply] ms= 早就有，但「今早那次
+    # 9.5 秒到底慢在生成还是翻译」无从回答——gen/xlate/gloss 三段 + 生成走了哪条路
+    # （unified/direct/fallback）随 out["timings"] 返回，smart-reply 路由并进既有日志行
+    # 后 pop 掉（响应契约不变）；其他调用方拿到即弃，零行为影响。
+    _t_gen0 = time.monotonic()
+    _gen_path = "none"
 
     # 语言决策单一事实源：显式 reply_lang > 坐席 target_lang > 自动决策(含短消息防误切)。
     # 自动决策的最终 default 接 lang_prior 先验（新好友首条中性消息 → 按账号
@@ -385,12 +396,14 @@ async def generate_persona_reply(
                     conversation_id=conversation_id,
                     peer_audio_emotion=peer_audio_emotion,
                     account_id=_acct,
+                    agent_instruction=str(agent_instruction or "").strip()[:400],
                 )
                 if _res and (_res.get("reply") or "").strip():
                     reply = _res["reply"]
                     used_intent = _res.get("intent") or ""
                     used_persona = persona_id or "domain"
                     used_unified = True
+                    _gen_path = "unified"
                     kb_refs = list(_res.get("kb_refs") or [])
             except Exception:
                 logger.debug("[persona_reply] 统一引擎失败，回落直连", exc_info=True)
@@ -436,6 +449,9 @@ async def generate_persona_reply(
                 ctx["_conversation_history"] = hist[-20:]
             if kb_context:
                 ctx["kb_context"] = kb_context
+            _ainst = str(agent_instruction or "").strip()[:400]
+            if _ainst:
+                ctx["_agent_instruction"] = _ainst
             # ★ 情景记忆注入（单一事实源补全）：全自动/手动产线此前不读长期记忆，导致
             # 「跨会话记不住（如名字）」。复用 SkillManager 既有读取逻辑，按 chat_key 命中
             # 该联系人的长期事实，写入 ctx["_episodic_memory_text"]——generate_reply 会把它
@@ -460,6 +476,8 @@ async def generate_persona_reply(
                 strategy_overrides=so or None,
             )
             used_persona = persona_id or "domain"
+            if reply:
+                _gen_path = "direct"
         except Exception:
             logger.debug("[persona_reply] 人设主路径失败，回落通用", exc_info=True)
             reply = None
@@ -476,14 +494,22 @@ async def generate_persona_reply(
             f"必须完全使用客户的语言（{resolved_lang}）回复，不要夹杂其它语言。"
             if resolved_lang and resolved_lang != "zh" else ""
         )
+        _ainst = str(agent_instruction or "").strip()[:400]
+        _inst_block = (
+            f"\n【坐席指令——本条必须完成】\n{_ainst}\n"
+            if _ainst else ""
+        )
         prompt = (
             "你是温暖、自然、像真人一样的线上陪伴/客服。基于以下对话，草拟我的下一条回复。"
             f"{_lang_hint}"
+            f"{_inst_block}"
             "口吻自然口语化，禁止出现「作为AI/作为一个AI/有什么可以帮您」等机器措辞，"
             "只输出回复正文。\n\n对话：\n" + "\n".join(lines) + "\n\n我的回复："
         )
         try:
             reply = await ai.chat(prompt)
+            if reply:
+                _gen_path = "fallback"
         except Exception:
             logger.debug("[persona_reply] 兜底失败", exc_info=True)
             reply = None
@@ -510,6 +536,8 @@ async def generate_persona_reply(
                 chat_key, persona_id, used_persona
             )
 
+    _gen_ms = int((time.monotonic() - _t_gen0) * 1000)
+
     out: Dict[str, Any] = {
         "ok": bool(reply),
         "reply": reply,
@@ -519,10 +547,19 @@ async def generate_persona_reply(
         "intent": used_intent,
         "kb_refs": kb_refs,
     }
+    _t_x0 = time.monotonic()
     translated = await _translate_reply(app, reply, target_lang)
     if translated:
         out["translated"] = translated
+    _t_g0 = time.monotonic()
     await _attach_gloss(app, out, reply, resolved_lang, gloss_lang)
+    _t_end = time.monotonic()
+    out["timings"] = {
+        "gen_ms": _gen_ms,
+        "xlate_ms": int((_t_g0 - _t_x0) * 1000),
+        "gloss_ms": int((_t_end - _t_g0) * 1000),
+        "gen_path": _gen_path,
+    }
     return out
 
 
@@ -608,6 +645,7 @@ async def generate_topic_opener(
     conversation_id: str = "",
     account_id: str = "",
     gloss_lang: str = "",
+    agent_instruction: str = "",
 ) -> Dict[str, Any]:
     """生成「主动开启新话题」的开场消息（工坊 opener 模式）。
 
@@ -615,6 +653,9 @@ async def generate_topic_opener(
     但**不需要** last_inbound（没人说话也能主动开场），不走统一拟稿引擎、不写记忆。
     返回结构与回复链一致（{ok, reply, reply_lang, persona, persona_tier, intent,
     translated?}），前端零分叉。
+
+    ``agent_instruction``（P22.1）：若前端在 opener 态误带指令（正常路径会强制切
+    回 reply），仍注入 ``_agent_instruction``，避免意图静默丢失。
     """
     history = list(history or [])
     resolved_lang = (
@@ -683,6 +724,9 @@ async def generate_topic_opener(
                 ctx["account_persona_id"] = persona_id
             if history:
                 ctx["_conversation_history"] = history[-20:]
+            _ainst = str(agent_instruction or "").strip()[:400]
+            if _ainst:
+                ctx["_agent_instruction"] = _ainst
             # 情景记忆注入：开场跟进「对方提过的具体事」正需要长期事实
             if chat_key and hasattr(sm, "_inject_episodic_into_context"):
                 try:

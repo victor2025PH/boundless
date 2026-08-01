@@ -394,6 +394,31 @@ def register_ops_overview_routes(app, ctx) -> None:
             logger.debug("frontend-error-trend 读取失败（已忽略）", exc_info=True)
             return {"ok": True, "enabled": False, "days": []}
 
+    @app.get("/api/admin/ui-event-trend")
+    async def api_ui_event_trend(request: Request, days: int = 14, prefix: str = ""):
+        """近 N 天 UI 事件按日聚合（``?prefix=dpick.`` 取 AI 回复漏斗命名空间）。
+
+        进程内 ui_events 计数重启即清零（2026-08-01 施工日一天 4 次重启把漏斗首批
+        数据清洗掉）——本端点读的是 beacon 旁路的按日落库口径，重启无损。
+        未开启（ops.ui_event_trend.enabled=false）→ enabled:false + 空序列。
+        """
+        api_auth(request)
+        try:
+            from src.web.ui_event_trend import get_ui_event_trend_store
+            store = get_ui_event_trend_store()
+            if store is None:
+                return {"ok": True, "enabled": False, "days": []}
+            span = int(days or 14)
+            try:
+                store.prune()
+            except Exception:
+                logger.debug("uiev_trend prune 失败（已忽略）", exc_info=True)
+            return {"ok": True, "enabled": True,
+                    "days": store.daily(days=span, prefix=str(prefix or ""))}
+        except Exception:
+            logger.debug("ui-event-trend 读取失败（已忽略）", exc_info=True)
+            return {"ok": True, "enabled": False, "days": []}
+
     @app.get("/api/admin/csrf-trend")
     async def api_csrf_trend(request: Request, days: int = 14):
         """P2：近 N 天 CSRF 准入/拒绝按日聚合（收口决策数据面）。
@@ -547,6 +572,49 @@ def register_ops_overview_routes(app, ctx) -> None:
                     "last_run": None, "over_budget": False,
                     "nightly": {"rows": [], "direction": "unknown", "points": 0},
                     "semantic": {"rows": [], "points": 0, "last_passed": None}}
+
+    @app.get("/api/admin/diagnostic-bundle")
+    async def api_diagnostic_bundle(request: Request, probe: int = 0):
+        """P2-198 一键诊断包：版本 + 打码配置 + 日志尾部打成 zip 下载。
+
+        客户报障从「截图猜」变成「传包定位」（198 排障时桌面版日志几乎为零、
+        只能远程拉库反推的教训产品化）。密钥值全部打码（api_key/token/secret 族），
+        绝不带 *.db（体积 + 客户消息原文）。``?probe=1`` 只回 {ok}——settings 页
+        据此判断后端是否支持（旧后端 404 → 整卡隐藏，模板热更新自洽）。
+        """
+        api_auth(request)
+        if probe:
+            return {"ok": True}
+        import asyncio as _aio
+        from pathlib import Path as _P
+
+        from fastapi.responses import Response as _Resp
+
+        from src.utils.diagnostic_bundle import build_diagnostic_bundle
+        cfg_dir = None
+        logs_dir = None
+        try:
+            cfg_path = getattr(config_manager, "config_path", "") or ""
+            if cfg_path:
+                cfg_dir = _P(cfg_path).parent
+                logs_dir = cfg_dir.parent / "logs"
+        except Exception:
+            logger.debug("diagnostic-bundle 目录解析失败", exc_info=True)
+        meta: Dict[str, Any] = {}
+        try:
+            from src.utils.app_identity import identity_payload
+            meta["app"] = identity_payload()
+        except Exception:
+            pass
+        meta["config_dir"] = str(cfg_dir or "")
+        meta["logs_dir"] = str(logs_dir or "")
+        blob = await _aio.to_thread(
+            build_diagnostic_bundle,
+            config_dir=cfg_dir, logs_dir=logs_dir, meta=meta)
+        fname = time.strftime("chatx-diag-%Y%m%d-%H%M%S.zip")
+        return _Resp(
+            content=blob, media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
     @app.get("/api/admin/media-consistency")
     async def api_media_consistency(request: Request, force: int = 0):

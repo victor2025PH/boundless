@@ -42,8 +42,14 @@ class TestDesktopMinSeed:
 
     def test_dangerous_subsystems_not_enabled(self):
         data = yaml.safe_load(MIN_SEED.read_text(encoding="utf-8"))
+        # platform_login 自 2026-07 起是**刻意**随包开启的（「下载即可用」，账号接入
+        # 是用户装完第一件事）；它「开关开了但交付物没进包」的风险由专门门禁
+        # test_desktop_seed_deliverable.py 钉住，故移出本清单。
+        # companion 保留：只防顶层 companion.enabled 之类的粗暴全开；其嵌套功能键
+        # （goals 基线该开 / selfie·proactive·bazi 等禁入）由
+        # test_desktop_seed_visibility.py 的 PRODUCT_BASELINE / MUST_STAY_OFF 管辖。
         for key in ("line_rpa", "messenger_rpa", "whatsapp_rpa", "contacts",
-                    "platform_login", "monetization", "companion", "protocol"):
+                    "monetization", "companion", "protocol"):
             sub = data.get(key)
             if sub is None:
                 continue  # 未列出 = 走代码默认（关）

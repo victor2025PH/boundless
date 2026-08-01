@@ -58,21 +58,29 @@ def _channel_health_snapshot() -> Dict[str, Any]:
     把 ``platform:acct`` key 拆成结构化条目并按已离线时长降序（最久的排最前 =
     横幅首条明细）。任何异常吞掉返回空快照——本函数挂在坐席状态条轮询接口上，
     绝不能反过来把它拖垮（坐席端全靠该接口）。
+
+    ``logged_out``（运营主动登出 / 启动自注册表种子）**不进横幅**——那不是故障，
+    收件箱账号 chip 已有「已退出」语义；横幅只催 ``needs_login`` / ``expired`` /
+    ``failed`` 这类「该有人去修」的意外掉线。
     """
     try:
         from src.integrations.platform_session_health import (
-            get_platform_session_health,
+            ensure_seeded_from_registry, get_platform_session_health,
         )
+        ensure_seeded_from_registry()
         now = time.time()
         items = []
         for key, sess in get_platform_session_health().unhealthy_sessions().items():
+            st = str(sess.get("status") or "")
+            if st == "logged_out":
+                continue
             platform, _, account_id = str(key).partition(":")
             since = (float(sess.get("unhealthy_since") or 0.0)
                      or float(sess.get("ts") or 0.0) or now)
             items.append({
                 "platform": platform,
                 "account_id": account_id,
-                "status": str(sess.get("status") or ""),
+                "status": st,
                 "down_min": int(max(0.0, now - since) // 60),
             })
         items.sort(key=lambda it: -it["down_min"])
@@ -130,17 +138,63 @@ async def reload_ai_runtime(app, config_manager) -> bool:
         return False
 
 
+def _accounts_by_platform() -> dict:
+    """各平台已接入的账号数（账号注册表，不含 removed）。
+
+    向导「就绪」判定的第一手信号：扫码/协议登录进来的账号**不写任何渠道 yaml 键**，
+    只看配置就会把一台正在收发消息的机器报成「已就绪 0/4」（实机反馈）。
+    取数失败一律返回空 → 判定退回纯配置口径，绝不让向导因此报错。
+    """
+    try:
+        from src.integrations.account_registry import get_account_registry
+        out: dict = {}
+        for row in get_account_registry().list():
+            p = str(row.get("platform") or "").lower()
+            if p:
+                out[p] = out.get(p, 0) + 1
+        return out
+    except Exception:
+        logger.debug("读取账号注册表失败（向导退回配置口径）", exc_info=True)
+        return {}
+
+
+def _login_ready(config: dict) -> dict:
+    """各平台「扫码/协议登录这条路今天通不通」（复用登录弹窗那套诊断，单一事实源）。"""
+    try:
+        from src.integrations.platform_login import (
+            DEFAULT_PLATFORM_MODES, mode_available)
+        from src.integrations.platform_readiness import diagnose_platform
+        pl_cfg = (config or {}).get("platform_login") or {}
+        out: dict = {}
+        for platform, pdef in DEFAULT_PLATFORM_MODES.items():
+            modes = ((pl_cfg.get(platform) or {}).get("modes")) or pdef["modes"]
+            if not modes:
+                continue
+            rep = diagnose_platform(
+                platform, modes, config or {},
+                provider_registered_fn=mode_available)
+            out[platform] = bool(rep.get("ready"))
+        return out
+    except Exception:
+        logger.debug("平台登录就绪诊断失败（向导按可用呈现）", exc_info=True)
+        return {}
+
+
 def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
     """挂载渠道接入向导端点（/api/setup/channels[/{channel}]）。"""
 
     @app.get("/api/setup/channels")
     async def api_setup_channels(request: Request):
-        """所有渠道的接入现状（启用/缺项/字段填写状态 + 总体完成度）。"""
+        """所有渠道的接入现状（两条接入路径各自状态 + 「能不能收发消息」完成度）。"""
         api_auth(request)
         _require_supervisor(request)
         from src.utils.channel_setup import channel_status
         config = getattr(config_manager, "config", None) or {}
-        channels = channel_status(config)
+        channels = channel_status(
+            config,
+            accounts_by_platform=_accounts_by_platform(),
+            login_ready=_login_ready(config),
+        )
         ready = sum(1 for c in channels if c["ready"])
         return {"ok": True, "channels": channels,
                 "ready_count": ready, "total": len(channels)}

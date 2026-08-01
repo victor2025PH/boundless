@@ -1033,7 +1033,18 @@ async function pollInbound(entry) {
     // 每 ~15 轮(≈60s)做一次 pageLoggedIn 复检，避免每轮都跑 DOM 查询。
     try {
       if ((entry._pollCount || 0) % 15 === 0) {
+        const wasLoggedIn = entry._loggedIn !== false;
         entry._loggedIn = await pageLoggedIn(entry.page);
+        // 软退出闭环（2026-07-31）：页面掉回登录表单（context 活着但会话没了——被踢/
+        // 网页端手动退出）此前只改内部标志，session-status 停留在 authorized，Python
+        // 要等健康轮询才后知后觉且注册表不落 offline。true→false 边沿主动 push 一次
+        // needs_login（仅边沿、不逐轮重发，防唠叨）；恢复登录由 promoteIfLoggedIn 的
+        // authorized push 归位。
+        if (wasLoggedIn && entry._loggedIn === false) {
+          postStatus(entry._loginId || "", entry, "needs_login",
+            "page fell back to login form (soft logout detected by poll)")
+            .catch(() => {});
+        }
       }
     } catch (_) { /* 复检失败不改判定，保守留旧值 */ }
     entry._lastPollOkTs = Date.now();

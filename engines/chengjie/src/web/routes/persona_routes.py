@@ -959,6 +959,17 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
             if existing:
                 store_data = pm.deep_merge_profile(existing, persona_data)
                 did_merge = True
+        # P2-E（reply_profiles 迁移收尾）：Studio 保存＝显式接管。
+        # 导入态（_mrpa_source）profile 走 merge 保存时标记会被深合并原样带回 →
+        # source 仍判 mrpa → persist_profiles 不落盘 → 重启被 config 再导入覆盖，
+        # 运营的编辑**静默丢失**。保存即摘标记（与 service.py P2-A 注释
+        # 「operator explicitly edits via /personas」语义对齐）；promote 端点保留为
+        # 「不改内容、只接管」的显式入口。
+        took_over_mrpa = False
+        if isinstance(store_data, dict) and store_data.get("_mrpa_source"):
+            store_data = dict(store_data)
+            store_data.pop("_mrpa_source", None)
+            took_over_mrpa = True
         pm.upsert_profile(profile_id, store_data)
         try:
             cm = getattr(request.app.state, "config_manager", None) or config_manager
@@ -968,7 +979,8 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         actor = request.session.get("username", "web_admin")
         if audit_store:
             audit_store.log(actor, "profile_upsert",
-                          f"id={profile_id} name={persona_data.get('name','?')}")
+                          f"id={profile_id} name={persona_data.get('name','?')}"
+                          + (" took_over_mrpa=1" if took_over_mrpa else ""))
         # 回传落库后的最新 rev，编辑器就地更新基线（免一次重取）
         _new_rev = ""
         try:

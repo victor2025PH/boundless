@@ -93,6 +93,10 @@
       /* 触屏设备没有 hover——「整号」入口常显（P1：hover-only 在平板/手机上等于不存在） */
       @media (hover: none) { .pcard .pacct { visibility:visible; } }
       .pcard .pacct:hover { border-color:var(--cp-accent,#4f46e5); color:var(--cp-accent,#4f46e5); }
+      /* 通用 hide：failtip/nomatch 初始即带 hide class。shadow DOM 不继承页面样式，
+         此前只有 .pcard.hide 一条规则 → 「切换失败，请重试」「没有匹配的人设」两个
+         本应隐藏的元素**常显**，被误读成真实换绑失败（2026-08-01 实锤）。 */
+      .hide { display:none; }
       .pcard.hide { display:none; }
       .nomatch { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-tiny,#94a3b8); padding:4px 2px; }
       .clr { margin-top:6px; }
@@ -226,7 +230,18 @@
       const src = boundId
         ? `<div class="src bound">${esc(this.t("cp.persona.bound", { name: d.boundName || boundId }))}</div>`
         : `<div class="src unbound">${esc(this.t("cp.persona.unbound"))}</div>`;
-      return `<select data-role="persona">${opts.join("")}</select>` + src;
+      /* P1-198 账号级默认升为主操作：客户实测按 peer 逐个绑（每接一个新客户都要
+         重新绑一次）不符合「绑一次跟账号走」的预期。legacy 模式此前只有 peer 下拉，
+         账号级入口仅存在于 conv_override 开启后的卡片 UI——这里补上（API 早已存在）。 */
+      let acctRow = "";
+      if (this._acctRef() && this._client && this._client.setAccountPersona) {
+        acctRow =
+          `<div class="clr"><button class="primary" data-act="legacy-acct">${esc(this.t("cp.persona.legacy_acct_btn"))}</button></div>` +
+          `<div class="hint">${esc(this.t("cp.persona.legacy_acct_hint"))}</div>`;
+      }
+      return `<select data-role="persona">${opts.join("")}</select>` + src + acctRow +
+        `<div class="failtip hide" data-role="failtip">${esc(this.t("cp.persona.switch_fail"))}</div>` +
+        `<div data-role="cfm-slot"></div>`;
     }
 
     _renderLegacy(d) {
@@ -251,6 +266,7 @@
       if (this._busy) return;
       if (act === "pick") this._onPickConv(el.getAttribute("data-pid") || "");
       else if (act === "pick-acct") this._onPickAccount(el.getAttribute("data-pid") || "");
+      else if (act === "legacy-acct") this._onLegacyAccount();
       else if (act === "clear") this._onPickConv("");
       else if (act === "cfm-ok") { const p = this._pending; this._pending = null; this._closeConfirm(); if (p) this._doBindConv(p.pid); }
       else if (act === "cfm-acct") { const p = this._pending; this._pending = null; this._closeConfirm(); if (p) this._doBindAccount(p.pid); }
@@ -449,6 +465,29 @@
       this._pending = { pid };
       this._openConfirm({
         pid, fromName, toName: p.name || pid,
+        hasOutbound: false, scopes: ["account"],
+      });
+    }
+
+    /* P1-198 legacy 模式「设为账号默认」：取下拉当前选中人设 → 恒弹确认后整号换绑。
+       未选人设时如实提示（绝不静默无反应）。 */
+    _onLegacyAccount() {
+      const sel = this.shadowRoot.querySelector('select[data-role="persona"]');
+      const pid = sel ? sel.value : "";
+      const tip = this.shadowRoot.querySelector('[data-role="failtip"]');
+      if (!pid) {
+        if (tip) {
+          tip.textContent = this.t("cp.persona.legacy_acct_pick_first");
+          tip.classList.remove("hide");
+        }
+        return;
+      }
+      if (tip) tip.classList.add("hide");
+      if (!this._acctRef()) return;
+      const p = ((this._d && this._d.profiles) || {})[pid] || {};
+      this._pending = { pid };
+      this._openConfirm({
+        pid, fromName: "—", toName: p.name || pid,
         hasOutbound: false, scopes: ["account"],
       });
     }

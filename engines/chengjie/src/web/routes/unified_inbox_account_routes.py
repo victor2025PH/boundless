@@ -636,7 +636,10 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         )
         _plat = str((body or {}).get("platform") or "")
         _acct = str((body or {}).get("account_id") or "")
-        _ck = str((body or {}).get("chat_key") or "")
+        # P3-198 身份归一：WA 设备后缀键（'num:0'）并入规范身份 'num'——否则同一
+        # 客户裂成两个会话（陈旧边车/回放消息仍可能携带后缀，服务端边界必须兜住）
+        from src.inbox.normalizer import normalize_chat_key
+        _ck = normalize_chat_key(_plat, str((body or {}).get("chat_key") or ""))
         if not _ck:
             raise HTTPException(400, tr(request, "err.ws.field_required", field="chat_key"))
         # 空 account_id 回填护栏（2026-07 事故）：Baileys Node 断线后离线队列回放存在
@@ -805,6 +808,28 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         )
         trans = get_platform_session_health().record(
             plat, acct or login_id, status, detail=detail, login_id=login_id)
+        # P1 被动退出闭环（2026-07-31）：运营点「登出」走 /logout 会写 registry
+        # status=offline；但「FB/平台侧把号踢下线」（cookie 失效/风控/手机端解绑）
+        # 只有这条 push——此前注册表停留在 online，而健康表是**进程内存态**，服务一
+        # 重启系统就对「号早退了」彻底失忆。把「需要人重新登录」的确定性转移落回
+        # 持久层：仅 online→offline（绝不动 removed/pending，防复活软删行/干扰登录
+        # 中态）；authorized 反向把 offline 恢复 online（重登成功自动归位）。
+        # ``failed``（崩溃循环放弃）刻意不落——那是可自愈故障，worker/看门狗另有
+        # 处置，标成「已退出」会误导运营去手动重登。best-effort 绝不影响 push 应答。
+        if acct:
+            try:
+                from src.integrations.account_registry import get_account_registry
+                _reg = get_account_registry()
+                _row = _reg.get(plat, acct)
+                _rst = str((_row or {}).get("status") or "")
+                if (status in ("logged_out", "needs_login", "expired")
+                        and _rst == "online"):
+                    _reg.upsert(plat, acct, status="offline")
+                elif status == "authorized" and _rst == "offline":
+                    _reg.upsert(plat, acct, status="online")
+            except Exception:
+                logger.debug("[protocol] session-status 注册表状态同步失败",
+                             exc_info=True)
         if trans.get("went_unhealthy") or trans.get("recovered"):
             try:
                 from src.integrations.shared.event_bus import get_event_bus
@@ -860,10 +885,24 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         if store is None:
             raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
         rows = (body or {}).get("chats") or []
+        _plat_chats = str((body or {}).get("platform") or "")
+        # P3-198：会话列表占位同样过身份归一（jid 字段可能带设备后缀）；
+        # jid='0'＝WhatsApp 系统伪 jid（服务通知），不是客户 → 整行丢弃
+        # （陈旧边车防御——新边车已在源头过滤）
+        if _plat_chats.lower() == "whatsapp" and isinstance(rows, list):
+            from src.inbox.normalizer import normalize_chat_key
+            _clean_rows = []
+            for _r in rows:
+                if isinstance(_r, dict) and _r.get("jid"):
+                    _r["jid"] = normalize_chat_key("whatsapp", str(_r["jid"]))
+                    if _r["jid"] == "0" and not _r.get("is_group"):
+                        continue
+                _clean_rows.append(_r)
+            rows = _clean_rows
         n = 0
         try:
             n = store.upsert_protocol_chats(
-                str((body or {}).get("platform") or ""),
+                _plat_chats,
                 str((body or {}).get("account_id") or ""),
                 rows if isinstance(rows, list) else [],
             )
@@ -888,7 +927,8 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
         plat = str((body or {}).get("platform") or "").lower()
         acct = str((body or {}).get("account_id") or "")
-        ck = str((body or {}).get("chat_key") or "")
+        from src.inbox.normalizer import normalize_chat_key
+        ck = normalize_chat_key(plat, str((body or {}).get("chat_key") or ""))
         target_id = str((body or {}).get("target_id") or "")
         emoji = str((body or {}).get("emoji") or "")
         sender = str((body or {}).get("sender") or "me")
@@ -945,7 +985,8 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
         plat = str((body or {}).get("platform") or "").lower()
         acct = str((body or {}).get("account_id") or "")
-        ck = str((body or {}).get("chat_key") or "")
+        from src.inbox.normalizer import normalize_chat_key
+        ck = normalize_chat_key(plat, str((body or {}).get("chat_key") or ""))
         target_id = str((body or {}).get("target_id") or "")
         status = str((body or {}).get("status") or "")
         if not plat or not ck or not target_id or not status:
@@ -975,7 +1016,8 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
         plat = str((body or {}).get("platform") or "").lower()
         acct = str((body or {}).get("account_id") or "")
-        ck = str((body or {}).get("chat_key") or "")
+        from src.inbox.normalizer import normalize_chat_key
+        ck = normalize_chat_key(plat, str((body or {}).get("chat_key") or ""))
         target_id = str((body or {}).get("target_id") or "")
         op = str((body or {}).get("op") or "").lower()
         if not plat or not ck or not target_id or op not in ("revoke", "edit"):
@@ -1016,7 +1058,8 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             body = {}
         plat = str((body or {}).get("platform") or "").lower()
         acct = str((body or {}).get("account_id") or "")
-        ck = str((body or {}).get("chat_key") or "")
+        from src.inbox.normalizer import normalize_chat_key
+        ck = normalize_chat_key(plat, str((body or {}).get("chat_key") or ""))
         state = str((body or {}).get("state") or "").lower()
         if not plat or not ck or not state:
             return {"ok": False, "reason": "missing_field"}
@@ -3134,6 +3177,17 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
 
     @app.on_event("startup")
     async def _orchestrator_autostart():
+        # P0+：健康表跨重启接续——注册表 offline 号种子化进内存健康表
+        # （幂等；即便编排器未启用也要做，坐席横幅/ops 卡靠它）。
+        try:
+            from src.integrations.platform_session_health import (
+                ensure_seeded_from_registry,
+            )
+            n = ensure_seeded_from_registry()
+            if n:
+                logger.info("平台会话健康表已自注册表种子化 %d 个已退出账号", n)
+        except Exception:
+            logger.debug("平台会话健康表种子化失败（已忽略）", exc_info=True)
         cfg = (config_manager.config if config_manager is not None else {}) or {}
         if not orchestrator_enabled(cfg):
             return

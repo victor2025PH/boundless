@@ -9,6 +9,19 @@
 .ov-summary .rpa-kpi{padding:.85rem 1rem;align-items:flex-start;min-width:0}
 .ov-summary .rpa-kpi-n{font-size:1.6rem}
 .ov-summary .rpa-kpi-l{font-size:.75rem;text-transform:none;letter-spacing:.02em}
+/* 区块分组标题：左侧竖色条 + 标题 + 一句人话说明，把「业务概况」与「账号安全」两组 KPI 分开 */
+.ov-sec-head{display:flex;align-items:baseline;gap:.55rem;margin:.2rem 0 .55rem;padding-left:.6rem;border-left:3px solid var(--p);flex-wrap:wrap}
+.ov-sec-head .t{font-size:.82rem;font-weight:700;color:var(--t)}
+.ov-sec-head .s{font-size:.7rem;color:var(--t3)}
+/* 状态灯 chip：圆点 + 短词，取代「把状态词塞进大数字」的错觉（数字归数字、状态归状态） */
+.ov-summary .rpa-kpi-n.lamp{font-size:.98rem;display:inline-flex;align-items:center;gap:.4rem;justify-content:center}
+.ov-summary .rpa-kpi-n.lamp::before{content:'';width:9px;height:9px;border-radius:50%;background:currentColor;box-shadow:0 0 6px currentColor;flex-shrink:0}
+/* 一句话健康摘要条：把顶部 8 个 KPI 数字翻译成一句人话结论（先结论后明细），颜色随最高优先级状态 */
+.ov-health-bar{margin-bottom:.8rem;padding:.55rem .85rem;border-radius:var(--r);border-left:3px solid var(--p);background:var(--ps);font-size:.82rem;line-height:1.5;color:var(--t2)}
+.ov-health-bar.green{border-left-color:#3fb950;background:rgba(63,185,80,.08);color:var(--t)}
+.ov-health-bar.amber{border-left-color:#e3b341;background:rgba(227,179,65,.08)}
+.ov-health-bar.red{border-left-color:#f85149;background:rgba(248,81,73,.08)}
+.ov-health-bar.muted{border-left-color:var(--bd2);background:var(--input)}
 
 .ov-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;margin-bottom:1.4rem}
 @media(max-width:780px){.ov-grid{grid-template-columns:1fr}}
@@ -25,6 +38,10 @@
 .ov-card-title{flex:1;min-width:0}
 .ov-card-name{font-size:1.02rem;font-weight:700;color:var(--t);display:flex;align-items:center;gap:.55rem}
 .ov-card-sub{font-size:.74rem;color:var(--t3);margin-top:.2rem}
+/* 接入方式徽章：协议直连（云端协议）vs 真机 App（ADB 驱动手机）——消除「是不是真机」的猜测 */
+.ov-link-badge{font-size:.62rem;font-weight:600;padding:.12rem .45rem;border-radius:5px;letter-spacing:.02em;flex-shrink:0;cursor:help}
+.ov-link-badge.protocol{background:rgba(56,139,253,.13);color:var(--th-ink-blue3,#79c0ff);border:1px solid rgba(56,139,253,.3)}
+.ov-link-badge.device{background:rgba(245,158,11,.12);color:var(--th-ink-amber3,#e3b341);border:1px solid rgba(227,179,65,.3)}
 .ov-card-link{font-size:.75rem;color:var(--p);text-decoration:none;padding:.3rem .65rem;border:1px solid var(--bd2);border-radius:6px;transition:all .15s;white-space:nowrap}
 .ov-card-link:hover{background:var(--ps);border-color:var(--p)}
 
@@ -187,7 +204,7 @@
 <!-- P10-B: 全平台聊天历史检索 -->
 <div style="background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.9rem 1.1rem;margin-bottom:1rem">
   <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.5rem">
-    <strong style="font-size:.92rem;color:var(--t)">🌐 {{ (i18n or {}).get('ov_search_title','跨平台聊天检索') }}</strong>
+    <strong style="font-size:.92rem;color:var(--t)">🌐 {{ (i18n or {}).get('ov_search_title','全渠道聊天搜索') }}</strong>
     <span style="font-size:.7rem;color:var(--t3)">{{ (i18n or {}).get('ov_search_sub','同时检索 LINE / Messenger / WhatsApp 历史') }}</span>
   </div>
   <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
@@ -227,47 +244,34 @@
   <button class="btn-sec" type="button" onclick="ovRefresh()">{{ (i18n or {}).get('ov_refresh_now','立即刷新') }}</button>
 </div>
 
-<!-- P16-A: 意图关键词字典 — 内联编辑器（可折叠） -->
-<details id="ov-intent-admin" style="background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.5rem 1rem;margin-bottom:1rem">
-  <summary style="cursor:pointer;font-size:.88rem;color:var(--t);display:flex;align-items:center;gap:.5rem;padding:.3rem 0">
-    <strong>🏷️ {{ (i18n or {}).get('ov_it_title','意图关键词字典') }}</strong>
-    <span style="font-size:.7rem;color:var(--t3)" id="ov-it-summary">{{ (i18n or {}).get('ov_it_summary','点击展开 · 编辑 config/intent_tags.yaml') }}</span>
-  </summary>
-  <div style="padding:.6rem 0">
-    <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;flex-wrap:wrap">
-      <span style="font-size:.7rem;color:var(--t3)" id="ov-it-meta">{{ (i18n or {}).get('rpa_loading','载入中…') }}</span>
-      <span style="flex:1"></span>
-      <button class="btn-sec" type="button" id="ov-it-load" style="font-size:.75rem;padding:.3rem .65rem">↻ {{ (i18n or {}).get('ov_it_reload_file','重新加载文件') }}</button>
-      <button class="btn-sec" type="button" id="ov-it-reload" style="font-size:.75rem;padding:.3rem .65rem" title="{{ (i18n or {}).get('ov_it_reload_title','不写文件，仅重读硬盘上现有 yaml') }}">⚡ {{ (i18n or {}).get('ov_it_reload_only','仅 reload') }}</button>
-      <button class="btn-sec" type="button" id="ov-it-restore" style="font-size:.75rem;padding:.3rem .65rem" title="{{ (i18n or {}).get('ov_it_restore_title','查看备份并选择恢复') }}">⏪ {{ (i18n or {}).get('ov_it_restore','恢复备份') }}</button>
-      <button class="btn-sec" type="button" id="ov-it-diff" style="font-size:.75rem;padding:.3rem .65rem" title="{{ (i18n or {}).get('ov_it_diff_title','保存前预览将增加/删除的关键词') }}">👁 {{ (i18n or {}).get('ov_it_diff','预览改动') }}</button>
-      <button class="btn" type="button" id="ov-it-save" style="font-size:.75rem;padding:.3rem .85rem;background:var(--p);color:var(--th-ink-inverse,#fff);border:0;border-radius:6px;cursor:pointer">💾 {{ (i18n or {}).get('ov_it_save','保存并 reload') }}</button>
-    </div>
-    <textarea id="ov-it-yaml" rows="14" spellcheck="false"
-      style="width:100%;font-family:'SF Mono',Consolas,monospace;font-size:.78rem;padding:.6rem .8rem;background:var(--input);border:1px solid var(--bd2);border-radius:6px;color:var(--t);resize:vertical;line-height:1.45"></textarea>
-    <div id="ov-it-diff-pane" style="display:none;margin-top:.5rem;padding:.55rem .7rem;background:var(--input);border:1px solid var(--bd2);border-radius:6px;font-size:.75rem;line-height:1.5"></div>
-    <div id="ov-it-bak-pane" style="display:none;margin-top:.5rem;padding:.55rem .7rem;background:var(--input);border:1px solid var(--bd2);border-radius:6px;font-size:.75rem"></div>
-    <div id="ov-it-msg" style="font-size:.72rem;color:var(--t3);margin-top:.4rem;min-height:1em"></div>
-  </div>
-</details>
+<!-- 零态引导：无可用服务/全部停机时告诉用户下一步（随 ovApplyAggregate 更新，有运行中自动隐藏） -->
+<div id="ov-zero-hint" class="ov-health-bar" style="display:none"></div>
 
+<div class="ov-sec-head">
+  <span class="t">{{ (i18n or {}).get('ov_sec_biz','业务概况') }}</span>
+  <span class="s">{{ (i18n or {}).get('ov_sec_biz_sub','各渠道当前的收发与待办') }}</span>
+</div>
 <div class="ov-summary">
-  <div class="rpa-kpi"><div class="rpa-kpi-n green" id="ov-agg-running">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_kpi_running','运行中平台') }}</div></div>
+  <div class="rpa-kpi"><div class="rpa-kpi-n green" id="ov-agg-running">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_kpi_running','在线渠道') }}</div></div>
   <div class="rpa-kpi"><div class="rpa-kpi-n" id="ov-agg-sent">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_kpi_total_sent','24h 总发送') }}</div></div>
-  <div class="rpa-kpi"><div class="rpa-kpi-n amber" id="ov-agg-pending">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_kpi_total_pending','待审总数') }}</div></div>
-  <div class="rpa-kpi"><div class="rpa-kpi-n red" id="ov-agg-alerts">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_kpi_unacked','未确认告警') }}</div></div>
+  <div class="rpa-kpi" onclick="ovGotoTab('ov-tab-pending')" style="cursor:pointer" title="{{ (i18n or {}).get('ov_kpi_goto_pending','点击查看待审列表') }}"><div class="rpa-kpi-n amber" id="ov-agg-pending">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_kpi_total_pending','等待人工审核') }}</div></div>
+  <div class="rpa-kpi" onclick="ovGotoTab('ov-tab-alerts')" style="cursor:pointer" title="{{ (i18n or {}).get('ov_kpi_goto_alerts','点击查看告警列表') }}"><div class="rpa-kpi-n red" id="ov-agg-alerts">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_kpi_unacked','未处理告警') }}</div></div>
 </div>
 
 <!-- N 线 N6：账号反封号机群健康（统一信号源：注册表天龄/代理 + 限额今日发送 → M7 健康灯） -->
-<div class="ov-summary" id="ov-fleet" style="margin-top:.6rem" title="{{ (i18n or {}).get('ov_fleet_title','协议号反封号机群健康：总体灯色取最差账号；按生命周期统计') }}">
-  <div class="rpa-kpi"><div class="rpa-kpi-n" id="ov-fleet-light">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_fleet_light','机群健康灯') }}</div></div>
-  <div class="rpa-kpi"><div class="rpa-kpi-n green" id="ov-fleet-active">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_fleet_active','活跃号') }}</div></div>
-  <div class="rpa-kpi"><div class="rpa-kpi-n amber" id="ov-fleet-warming">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_fleet_warming','预热中') }}</div></div>
+<div class="ov-sec-head" style="border-left-color:var(--amber);margin-top:1rem">
+  <span class="t">{{ (i18n or {}).get('ov_sec_fleet','账号安全（协议号）') }}</span>
+  <span class="s">{{ (i18n or {}).get('ov_sec_fleet_sub','云端协议号账号的养号与风控状态；真机设备见下方「真机设备」标签页') }}</span>
+</div>
+<div class="ov-summary" id="ov-fleet" title="{{ (i18n or {}).get('ov_fleet_title','协议号账号的健康总览：灯色取最差账号，按生命周期统计（此行统计云端协议号，不含真机设备）') }}">
+  <div class="rpa-kpi"><div class="rpa-kpi-n lamp" id="ov-fleet-light">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_fleet_light','账号总体健康') }}</div></div>
+  <div class="rpa-kpi"><div class="rpa-kpi-n green" id="ov-fleet-active">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_fleet_active','正常在用') }}</div></div>
+  <div class="rpa-kpi"><div class="rpa-kpi-n amber" id="ov-fleet-warming">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_fleet_warming','养号预热中') }}</div></div>
   <div class="rpa-kpi"><div class="rpa-kpi-n red" id="ov-fleet-risk">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_fleet_risk','受限/封禁') }}</div></div>
-  <div class="rpa-kpi" id="ov-fleet-selfprof-cell" style="display:none;cursor:help"><div class="rpa-kpi-n" id="ov-fleet-selfprof">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_fleet_selfprof','身份采集') }}</div></div>
+  <div class="rpa-kpi" id="ov-fleet-selfprof-cell" style="display:none;cursor:help"><div class="rpa-kpi-n" id="ov-fleet-selfprof">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_fleet_selfprof','账号资料同步') }}</div></div>
   <div class="rpa-kpi" id="ov-fleet-ppush-cell" style="display:none;cursor:help" title="{{ (i18n or {}).get('ov_fleet_ppush_title','本进程官方资料推送漏斗（与 ops 卡同源）') }}"><div class="rpa-kpi-n" id="ov-fleet-ppush">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_fleet_ppush','资料推送') }}</div></div>
   <div class="rpa-kpi" id="ov-fleet-churn-cell" style="display:none;cursor:help" title="{{ (i18n or {}).get('ov_fleet_churn_title','近 7 天成功改资料 ≥3 次的账号数（机群热点）') }}"><div class="rpa-kpi-n amber" id="ov-fleet-churn">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_fleet_churn','改资料热点') }}</div></div>
-  <div class="rpa-kpi" id="ov-preflight-cell" title="{{ (i18n or {}).get('ov_preflight_title','真号扫码陪聊上线前自检：开关一致性 + 反封号护栏就绪（点查看明细）') }}" style="cursor:pointer"><div class="rpa-kpi-n" id="ov-preflight-light">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_preflight_label','扫码陪聊就绪') }}</div></div>
+  <div class="rpa-kpi" id="ov-preflight-cell" title="{{ (i18n or {}).get('ov_preflight_title','真号扫码陪聊上线前自检：开关一致性 + 反封号护栏就绪（点查看明细）') }}" style="cursor:pointer"><div class="rpa-kpi-n lamp" id="ov-preflight-light">—</div><div class="rpa-kpi-l">{{ (i18n or {}).get('ov_preflight_label','上线前自检') }}</div></div>
 </div>
 <div id="ov-fleet-churn-detail" style="display:none;margin-top:.4rem;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.5rem .85rem;font-size:.76rem;line-height:1.55"></div>
 <div id="ov-preflight-detail" style="display:none;margin-top:.4rem;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.5rem .85rem;font-size:.76rem;line-height:1.6"></div>
@@ -275,20 +279,29 @@
 <!-- 主动话题预览（dry-run 可观测：本轮会主动联系谁、引用哪条记忆、是否被关怀去重让路；只读不发送） -->
 <div id="ov-proactive-card" style="margin-top:.6rem;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.6rem .85rem">
   <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
-    <div style="font-weight:600;font-size:.82rem">💬 {{ (i18n or {}).get('ov_pp_title','主动话题预览') }} <span id="ov-pp-status" style="font-weight:400;color:var(--muted);font-size:.72rem"></span></div>
+    <div style="font-weight:600;font-size:.82rem">💬 {{ (i18n or {}).get('ov_pp_title','主动触达预演') }} <span id="ov-pp-status" style="font-weight:400;color:var(--muted);font-size:.72rem"></span></div>
     <span>
       <button id="ov-pp-advice" style="font-size:.72rem;padding:.18rem .6rem;border:1px solid var(--bd);border-radius:6px;background:transparent;color:inherit;cursor:pointer" title="{{ (i18n or {}).get('ov_pp_advice_title','基于采样评分给调参建议（只读，不改配置）') }}">{{ (i18n or {}).get('ov_pp_advice','调参建议') }}</button>
       <button id="ov-pp-refresh" style="font-size:.72rem;padding:.18rem .6rem;border:1px solid var(--bd);border-radius:6px;background:transparent;color:inherit;cursor:pointer">{{ (i18n or {}).get('ov_pp_refresh','刷新预览') }}</button>
     </span>
   </div>
-  <div id="ov-pp-body" style="margin-top:.45rem;font-size:.76rem;line-height:1.5;color:var(--muted)">{{ (i18n or {}).get('ov_pp_body','点「刷新预览」查看本轮候选（沉默/冷却/安静时段/关怀去重过滤后，不发送）。') }}</div>
+  <div id="ov-pp-body" style="margin-top:.45rem;font-size:.76rem;line-height:1.5;color:var(--muted)">{{ (i18n or {}).get('ov_pp_body','点「刷新预览」看这一轮 AI 会主动联系哪些客户（已过滤掉冷却期、安静时段、以及已被关怀触达的人；仅预览，不真发）。') }}</div>
   <div id="ov-pp-sample-out" style="margin-top:.45rem"></div>
 </div>
+
+<!-- 高级管理区：能力开关 / 风控防护 / 意图词库 / 桌面桥 —— 默认折叠降低首屏噪音；
+     非管理员整区隐藏（写操作 API 层另有 manage_ops 权限闸，这里只是 UX 收纳） -->
+<details id="ov-admin-zone" style="margin-top:.6rem;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.5rem 1rem{% if user_role not in ('master', 'admin') %};display:none{% endif %}">
+  <summary style="cursor:pointer;display:flex;align-items:center;gap:.6rem;padding:.35rem 0;font-size:.88rem;color:var(--t);flex-wrap:wrap">
+    <strong>⚙️ {{ (i18n or {}).get('ov_admin_zone','高级管理') }}</strong>
+    <span style="font-size:.7rem;color:var(--t3)">{{ (i18n or {}).get('ov_admin_zone_sub','能力开关 · 风控防护 · 意图词库 · 桌面桥 —— 这些操作会影响真实发送，仅管理员可用') }}</span>
+  </summary>
+  <div style="display:flex;flex-direction:column;gap:.15rem;padding:.3rem 0 .4rem">
 
 <!-- 陪伴能力就绪度看板（/api/companion/capabilities）：分阶段开启「看→校→开」第一步 -->
 <div id="ov-cap-card" style="margin-top:.6rem;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.6rem .85rem">
   <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
-    <div style="font-weight:600;font-size:.82rem">🧩 {{ (i18n or {}).get('ov_cap_title','陪伴能力就绪度') }} <span id="ov-cap-status" style="font-weight:400;color:var(--muted);font-size:.72rem"></span></div>
+    <div style="font-weight:600;font-size:.82rem">🧩 {{ (i18n or {}).get('ov_cap_title','AI 能力开关台') }} <span id="ov-cap-status" style="font-weight:400;color:var(--muted);font-size:.72rem"></span></div>
     <button id="ov-cap-refresh" style="font-size:.72rem;padding:.18rem .6rem;border:1px solid var(--bd);border-radius:6px;background:transparent;color:inherit;cursor:pointer" title="{{ (i18n or {}).get('ov_cap_refresh_title','陪伴能力的开/关/灰度/受阻状态，按风险分档=分阶段开启顺序') }}">{{ (i18n or {}).get('refresh','刷新') }}</button>
   </div>
   <div style="margin-top:.4rem;display:flex;flex-wrap:wrap;gap:.3rem;align-items:center">
@@ -312,12 +325,12 @@
 <!-- P0-5 D8：反封号护栏运营面板（G1 Kill-Switch 三级急停 + G3 金丝雀放量；调既有 /api/ops/* 管理路由，写操作需 manage_ops 权限） -->
 <div id="ov-og-card" style="margin-top:.6rem;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.6rem .85rem">
   <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
-    <div style="font-weight:600;font-size:.82rem">🛡 {{ (i18n or {}).get('ov_og_title','反封号护栏（急停 / 金丝雀）') }} <span id="ov-og-status" style="font-weight:400;color:var(--muted);font-size:.72rem"></span></div>
+    <div style="font-weight:600;font-size:.82rem">🛡 {{ (i18n or {}).get('ov_og_title','风控防护（一键停发 / 小流量试发）') }} <span id="ov-og-status" style="font-weight:400;color:var(--muted);font-size:.72rem"></span></div>
     <button id="ov-og-refresh" style="font-size:.72rem;padding:.18rem .6rem;border:1px solid var(--bd);border-radius:6px;background:transparent;color:inherit;cursor:pointer" title="{{ (i18n or {}).get('ov_og_refresh_title','Kill-Switch：黑名单命中即停（global/platform/account 三级）；Canary：启用后白名单外账号一律 hold') }}">{{ (i18n or {}).get('refresh','刷新') }}</button>
   </div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:.7rem;margin-top:.45rem;font-size:.74rem;line-height:1.5">
     <div>
-      <div style="font-weight:600">🛑 {{ (i18n or {}).get('ov_og_ks_head','紧急停发 Kill-Switch') }}</div>
+      <div style="font-weight:600">🛑 {{ (i18n or {}).get('ov_og_ks_head','紧急停发') }}</div>
       <div id="ov-og-ks-list" style="margin-top:.25rem;color:var(--muted)">{{ (i18n or {}).get('rpa_loading','载入中…') }}</div>
       <div style="display:flex;flex-wrap:wrap;gap:.3rem;margin-top:.4rem;align-items:center">
         <input id="ov-og-ks-scope" placeholder="{{ (i18n or {}).get('ov_og_ks_scope_ph','global / platform:telegram / account:telegram:123') }}" style="flex:2 1 180px;font-size:.72rem;padding:.22rem .45rem;background:var(--input);border:1px solid var(--bd2);border-radius:6px;color:var(--t)">
@@ -332,12 +345,12 @@
       </div>
     </div>
     <div>
-      <div style="font-weight:600">🐤 {{ (i18n or {}).get('ov_og_cn_head','金丝雀放量 Canary') }}</div>
+      <div style="font-weight:600">🐤 {{ (i18n or {}).get('ov_og_cn_head','小流量试发') }}</div>
       <div id="ov-og-cn-body" style="margin-top:.25rem;color:var(--muted)">{{ (i18n or {}).get('rpa_loading','载入中…') }}</div>
       <div style="display:flex;flex-wrap:wrap;gap:.3rem;margin-top:.4rem;align-items:center">
         <input id="ov-og-cn-members" placeholder="{{ (i18n or {}).get('ov_og_cn_members_ph','telegram:123, whatsapp:456…（裸 id 视为 telegram）') }}" style="flex:2 1 200px;font-size:.72rem;padding:.22rem .45rem;background:var(--input);border:1px solid var(--bd2);border-radius:6px;color:var(--t)">
-        <button id="ov-og-cn-add" style="font-size:.72rem;padding:.22rem .6rem;border:1px solid var(--bd);border-radius:6px;background:transparent;color:inherit;cursor:pointer">＋ {{ (i18n or {}).get('ov_og_cn_add','扩面') }}</button>
-        <button id="ov-og-cn-clear" style="font-size:.72rem;padding:.22rem .6rem;border:1px solid var(--bd);border-radius:6px;background:transparent;color:inherit;cursor:pointer" title="{{ (i18n or {}).get('ov_og_cn_clear_title','清空自动/手动扩面集（不动 config 里的 pinned_accounts）') }}">🧹 {{ (i18n or {}).get('ov_og_cn_clear','清空扩面集') }}</button>
+        <button id="ov-og-cn-add" style="font-size:.72rem;padding:.22rem .6rem;border:1px solid var(--bd);border-radius:6px;background:transparent;color:inherit;cursor:pointer">＋ {{ (i18n or {}).get('ov_og_cn_add','加入白名单') }}</button>
+        <button id="ov-og-cn-clear" style="font-size:.72rem;padding:.22rem .6rem;border:1px solid var(--bd);border-radius:6px;background:transparent;color:inherit;cursor:pointer" title="{{ (i18n or {}).get('ov_og_cn_clear_title','清空自动/手动加入的白名单（不动 config 里的 pinned_accounts）') }}">🧹 {{ (i18n or {}).get('ov_og_cn_clear','清空白名单') }}</button>
       </div>
     </div>
   </div>
@@ -346,7 +359,7 @@
 <!-- D1c：桌面壳内嵌注入健康（逐选择器失配可观测，数据来自 /api/desktop/inject-health 信标）-->
 <div id="ov-desktop-health-card" style="margin-top:.6rem;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.6rem .85rem">
   <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
-    <div style="font-weight:600;font-size:.82rem">🖥 {{ (i18n or {}).get('ov_dh_title','桌面注入健康') }} <span id="ov-dh-summary" style="font-weight:400;color:var(--muted);font-size:.72rem"></span></div>
+    <div style="font-weight:600;font-size:.82rem">🖥 {{ (i18n or {}).get('ov_dh_title','桌面端适配体检') }} <span id="ov-dh-summary" style="font-weight:400;color:var(--muted);font-size:.72rem"></span></div>
     <button id="ov-dh-refresh" style="font-size:.72rem;padding:.18rem .6rem;border:1px solid var(--bd);border-radius:6px;background:transparent;color:inherit;cursor:pointer" title="{{ (i18n or {}).get('ov_dh_refresh_title','内嵌平台注入逐选择器命中；失配多为官方网页改版，可改 config/desktop_selector_profiles.json 热修') }}">{{ (i18n or {}).get('refresh','刷新') }}</button>
   </div>
   <div id="ov-dh-body" style="margin-top:.45rem;font-size:.76rem;line-height:1.5;color:var(--muted)">{{ (i18n or {}).get('rpa_loading','载入中…') }}</div>
@@ -355,11 +368,46 @@
 <!-- D4b：受控桌面出站队列（autopilot 发给内嵌账号的回复，已过 send-gate/kill-switch 闸门）-->
 <div id="ov-desktop-outbound-card" style="margin-top:.6rem;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.6rem .85rem">
   <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
-    <div style="font-weight:600;font-size:.82rem">📤 {{ (i18n or {}).get('ov_dob_title','桌面出站队列') }} <span id="ov-dob-summary" style="font-weight:400;color:var(--muted);font-size:.72rem"></span></div>
+    <div style="font-weight:600;font-size:.82rem">📤 {{ (i18n or {}).get('ov_dob_title','桌面端待发队列') }} <span id="ov-dob-summary" style="font-weight:400;color:var(--muted);font-size:.72rem"></span></div>
     <button id="ov-dob-refresh" style="font-size:.72rem;padding:.18rem .6rem;border:1px solid var(--bd);border-radius:6px;background:transparent;color:inherit;cursor:pointer" title="{{ (i18n or {}).get('ov_dob_refresh_title','全自动回复发给内嵌(桌面/扩展)账号前已过 send-gate/kill-switch 闸门；命令入队后由桌面壳/扩展轮询 DOM 发送。默认关，需 inbox.l2_autosend.desktop_bridge.enabled') }}">{{ (i18n or {}).get('refresh','刷新') }}</button>
   </div>
   <div id="ov-dob-body" style="margin-top:.45rem;font-size:.76rem;line-height:1.5;color:var(--muted)">{{ (i18n or {}).get('rpa_loading','载入中…') }}</div>
 </div>
+
+<!-- P16-A: 意图关键词字典 — 内联编辑器（可折叠） -->
+<details id="ov-intent-admin" style="margin-top:.6rem;background:var(--input);border:1px solid var(--bd);border-radius:var(--r);padding:.5rem 1rem">
+  <summary style="cursor:pointer;font-size:.88rem;color:var(--t);display:flex;align-items:center;gap:.5rem;padding:.3rem 0">
+    <strong>🏷️ {{ (i18n or {}).get('ov_it_title','意图识别词库') }}</strong>
+    <span style="font-size:.7rem;color:var(--t3)" id="ov-it-summary">{{ (i18n or {}).get('ov_it_summary','点击展开 · 编辑 config/intent_tags.yaml') }}</span>
+  </summary>
+  <div style="padding:.6rem 0">
+    <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;flex-wrap:wrap">
+      <span style="font-size:.7rem;color:var(--t3)" id="ov-it-meta">{{ (i18n or {}).get('rpa_loading','载入中…') }}</span>
+      <span style="flex:1"></span>
+      <button class="btn-sec" type="button" id="ov-it-load" style="font-size:.75rem;padding:.3rem .65rem">↻ {{ (i18n or {}).get('ov_it_reload_file','重新加载文件') }}</button>
+      <button class="btn-sec" type="button" id="ov-it-reload" style="font-size:.75rem;padding:.3rem .65rem" title="{{ (i18n or {}).get('ov_it_reload_title','不写文件，仅重读硬盘上现有 yaml') }}">⚡ {{ (i18n or {}).get('ov_it_reload_only','仅 reload') }}</button>
+      <button class="btn-sec" type="button" id="ov-it-restore" style="font-size:.75rem;padding:.3rem .65rem" title="{{ (i18n or {}).get('ov_it_restore_title','查看备份并选择恢复') }}">⏪ {{ (i18n or {}).get('ov_it_restore','恢复备份') }}</button>
+      <button class="btn-sec" type="button" id="ov-it-diff" style="font-size:.75rem;padding:.3rem .65rem" title="{{ (i18n or {}).get('ov_it_diff_title','保存前预览将增加/删除的关键词') }}">👁 {{ (i18n or {}).get('ov_it_diff','预览改动') }}</button>
+      <button class="btn" type="button" id="ov-it-save" style="font-size:.75rem;padding:.3rem .85rem;background:var(--p);color:var(--th-ink-inverse,#fff);border:0;border-radius:6px;cursor:pointer">💾 {{ (i18n or {}).get('ov_it_save','保存并 reload') }}</button>
+    </div>
+    <textarea id="ov-it-yaml" rows="14" spellcheck="false"
+      style="width:100%;font-family:'SF Mono',Consolas,monospace;font-size:.78rem;padding:.6rem .8rem;background:var(--input);border:1px solid var(--bd2);border-radius:6px;color:var(--t);resize:vertical;line-height:1.45"></textarea>
+    <div id="ov-it-diff-pane" style="display:none;margin-top:.5rem;padding:.55rem .7rem;background:var(--input);border:1px solid var(--bd2);border-radius:6px;font-size:.75rem;line-height:1.5"></div>
+    <div id="ov-it-bak-pane" style="display:none;margin-top:.5rem;padding:.55rem .7rem;background:var(--input);border:1px solid var(--bd2);border-radius:6px;font-size:.75rem"></div>
+    <div id="ov-it-msg" style="font-size:.72rem;color:var(--t3);margin-top:.4rem;min-height:1em"></div>
+  </div>
+</details>
+
+  </div>
+</details>
+<script>
+(function(){
+  var z = document.getElementById('ov-admin-zone');
+  if(!z) return;
+  try{ if(localStorage.getItem('ov_admin_zone_open') === '1') z.open = true; }catch(e){}
+  z.addEventListener('toggle', function(){ try{ localStorage.setItem('ov_admin_zone_open', z.open ? '1' : '0'); }catch(e){} });
+})();
+</script>
 
 <!-- 4 平台卡片 -->
 <div class="ov-grid" id="ov-grid">
@@ -370,10 +418,10 @@
         <svg viewBox="0 0 24 24"><path d="M22 2L11 13"/><path d="M22 2L15 22 11 13 2 9l20-7z"/></svg>
       </div>
       <div class="ov-card-title">
-        <div class="ov-card-name">Telegram <span class="rpa-status-dot neutral" id="ov-dot-telegram"></span></div>
+        <div class="ov-card-name">Telegram <span class="ov-link-badge protocol" title="{{ (i18n or {}).get('ov_link_protocol_title','通过官方协议云端登录的账号，无需手机在线') }}">{{ (i18n or {}).get('ov_link_protocol','协议直连') }}</span> <span class="rpa-status-dot neutral" id="ov-dot-telegram"></span></div>
         <div class="ov-card-sub" id="ov-sub-telegram">{{ (i18n or {}).get('rpa_loading','载入中…') }}</div>
       </div>
-      <a class="ov-card-link" href="/telegram">{{ (i18n or {}).get('ov_settings','设置 ›') }}</a>
+      <a class="ov-card-link" href="/workspace/channels/telegram">{{ (i18n or {}).get('ov_settings','设置 ›') }}</a>
     </div>
     <div class="ov-kpis">
       <div class="ov-kpi"><div class="ov-kpi-n" id="ov-telegram-sent">—</div><div class="ov-kpi-l">{{ (i18n or {}).get('ov_kpi_24h_sent','24h 发送') }}</div></div>
@@ -394,7 +442,7 @@
         <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/><circle cx="9" cy="10" r="1" fill="currentColor"/><circle cx="13" cy="10" r="1" fill="currentColor"/><circle cx="17" cy="10" r="1" fill="currentColor"/></svg>
       </div>
       <div class="ov-card-title">
-        <div class="ov-card-name">LINE <span class="rpa-status-dot neutral" id="ov-dot-line"></span></div>
+        <div class="ov-card-name">LINE <span class="ov-link-badge device" title="{{ (i18n or {}).get('ov_link_device_title','由连接的真实手机自动操作 App 完成收发；手机在下方「真机设备」标签页管理') }}">{{ (i18n or {}).get('ov_link_device','真机 App') }}</span> <span class="rpa-status-dot neutral" id="ov-dot-line"></span></div>
         <div class="ov-card-sub" id="ov-sub-line">{{ (i18n or {}).get('rpa_loading','载入中…') }}</div>
       </div>
       <div class="ov-ctrl" id="ov-ctrl-line">
@@ -404,7 +452,7 @@
         <button class="ov-ctrl-btn ok ov-resume-btn" title="{{ (i18n or {}).get('ov_ctrl_resume_title','立即恢复') }}" onclick="ovControl('line','resume')" style="display:none">⏵ {{ (i18n or {}).get('ov_ctrl_resume','恢复') }}</button>
         <button class="ov-ctrl-btn ov-trigger-btn" title="{{ (i18n or {}).get('ov_ctrl_trigger_title','立即触发一次扫描') }}" onclick="ovControl('line','trigger')">⚡</button>
       </div>
-      <a class="ov-card-link" href="/line-rpa">{{ (i18n or {}).get('ov_settings','设置 ›') }}</a>
+      <a class="ov-card-link" href="/workspace/channels/line">{{ (i18n or {}).get('ov_settings','设置 ›') }}</a>
     </div>
     <div class="ov-kpis">
       <div class="ov-kpi"><div class="ov-kpi-n" id="ov-line-sent">—</div><div class="ov-kpi-l">{{ (i18n or {}).get('ov_kpi_24h_sent','24h 发送') }}</div></div>
@@ -426,7 +474,7 @@
         <svg viewBox="0 0 24 24" fill="#fff" stroke="none"><path d="M12 2C6.477 2 2 6.145 2 11.259c0 2.913 1.454 5.512 3.726 7.21V22l3.405-1.869c.91.252 1.872.388 2.869.388 5.523 0 10-4.145 10-9.259S17.523 2 12 2zm.997 12.467l-2.546-2.715-4.97 2.715 5.467-5.804 2.61 2.715 4.905-2.715-5.466 5.804z"/></svg>
       </div>
       <div class="ov-card-title">
-        <div class="ov-card-name">Messenger <span class="rpa-status-dot neutral" id="ov-dot-messenger"></span></div>
+        <div class="ov-card-name">Messenger <span class="ov-link-badge device" title="{{ (i18n or {}).get('ov_link_device_title','由连接的真实手机自动操作 App 完成收发；手机在下方「真机设备」标签页管理') }}">{{ (i18n or {}).get('ov_link_device','真机 App') }}</span> <span class="rpa-status-dot neutral" id="ov-dot-messenger"></span></div>
         <div class="ov-card-sub" id="ov-sub-messenger">{{ (i18n or {}).get('rpa_loading','载入中…') }}</div>
       </div>
       <div class="ov-ctrl" id="ov-ctrl-messenger">
@@ -436,7 +484,7 @@
         <button class="ov-ctrl-btn ok ov-resume-btn" title="{{ (i18n or {}).get('ov_ctrl_resume_title','立即恢复') }}" onclick="ovControl('messenger','resume')" style="display:none">⏵ {{ (i18n or {}).get('ov_ctrl_resume','恢复') }}</button>
         <button class="ov-ctrl-btn ov-trigger-btn" title="{{ (i18n or {}).get('ov_ctrl_trigger_title','立即触发一次扫描') }}" onclick="ovControl('messenger','trigger')">⚡</button>
       </div>
-      <a class="ov-card-link" href="/messenger-rpa">{{ (i18n or {}).get('ov_settings','设置 ›') }}</a>
+      <a class="ov-card-link" href="/workspace/channels/messenger">{{ (i18n or {}).get('ov_settings','设置 ›') }}</a>
     </div>
     <div class="ov-kpis">
       <div class="ov-kpi"><div class="ov-kpi-n" id="ov-messenger-sent">—</div><div class="ov-kpi-l">{{ (i18n or {}).get('ov_kpi_24h_sent','24h 发送') }}</div></div>
@@ -458,7 +506,7 @@
         <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884"/></svg>
       </div>
       <div class="ov-card-title">
-        <div class="ov-card-name">WhatsApp <span class="rpa-status-dot neutral" id="ov-dot-whatsapp"></span></div>
+        <div class="ov-card-name">WhatsApp <span class="ov-link-badge device" title="{{ (i18n or {}).get('ov_link_device_title','由连接的真实手机自动操作 App 完成收发；手机在下方「真机设备」标签页管理') }}">{{ (i18n or {}).get('ov_link_device','真机 App') }}</span> <span class="rpa-status-dot neutral" id="ov-dot-whatsapp"></span></div>
         <div class="ov-card-sub" id="ov-sub-whatsapp">{{ (i18n or {}).get('rpa_loading','载入中…') }}</div>
       </div>
       <div class="ov-ctrl" id="ov-ctrl-whatsapp">
@@ -468,7 +516,7 @@
         <button class="ov-ctrl-btn ok ov-resume-btn" title="{{ (i18n or {}).get('ov_ctrl_resume_title','立即恢复') }}" onclick="ovControl('whatsapp','resume')" style="display:none">⏵ {{ (i18n or {}).get('ov_ctrl_resume','恢复') }}</button>
         <button class="ov-ctrl-btn ov-trigger-btn" title="{{ (i18n or {}).get('ov_ctrl_trigger_title','立即触发一次扫描') }}" onclick="ovControl('whatsapp','trigger')">⚡</button>
       </div>
-      <a class="ov-card-link" href="/whatsapp-rpa">{{ (i18n or {}).get('ov_settings','设置 ›') }}</a>
+      <a class="ov-card-link" href="/workspace/channels/whatsapp">{{ (i18n or {}).get('ov_settings','设置 ›') }}</a>
     </div>
     <div class="ov-kpis">
       <div class="ov-kpi"><div class="ov-kpi-n" id="ov-whatsapp-sent">—</div><div class="ov-kpi-l">{{ (i18n or {}).get('ov_kpi_24h_sent','24h 发送') }}</div></div>
@@ -485,15 +533,15 @@
 </div>
 
 <div style="font-size:.68rem;color:var(--t3);padding:.3rem .6rem;margin-top:-.3rem;margin-bottom:.5rem">
-  {{ (i18n or {}).get('ov_ctrl_hint','ℹ️ 以上按钮控制全局服务。设备级平台/人设编排请在下方「📱 设备管理」中操作。') }}
+  {{ (i18n or {}).get('ov_ctrl_hint','ℹ️ 以上按钮控制全局服务。设备级平台/人设编排请在下方「📱 真机设备」中操作。') }}
 </div>
 
 <!-- 跨平台事件 tab -->
 <div class="st-bar">
   <button class="st-tab active" type="button" data-pane="ov-tab-pending" onclick="rpa.switchTab(this)">{{ (i18n or {}).get('ov_tab_pending','跨平台待审') }} <span id="ov-pending-count" class="cfg-badge warn" style="display:none;margin-left:.4rem"></span></button>
-  <button class="st-tab" type="button" data-pane="ov-tab-alerts" onclick="rpa.switchTab(this)">{{ (i18n or {}).get('ov_kpi_unacked','未确认告警') }} <span id="ov-alerts-count" class="cfg-badge err" style="display:none;margin-left:.4rem"></span></button>
-  <button class="st-tab" type="button" data-pane="ov-tab-devices" onclick="rpa.switchTab(this);devRefresh()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:.25rem"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>{{ (i18n or {}).get('ov_devices','设备管理') }} <span id="ov-devices-count" class="cfg-badge" style="display:none;margin-left:.4rem"></span></button>
-  <button class="st-tab" type="button" data-pane="ov-tab-device-stats" onclick="rpa.switchTab(this);devStatsRefresh()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:.25rem"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>{{ (i18n or {}).get('ov_devstats','设备统计') }}</button>
+  <button class="st-tab" type="button" data-pane="ov-tab-alerts" onclick="rpa.switchTab(this)">{{ (i18n or {}).get('ov_kpi_unacked','未处理告警') }} <span id="ov-alerts-count" class="cfg-badge err" style="display:none;margin-left:.4rem"></span></button>
+  <button class="st-tab" type="button" data-pane="ov-tab-devices" onclick="rpa.switchTab(this);devRefresh()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:.25rem"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>{{ (i18n or {}).get('ov_devices','真机设备') }} <span id="ov-devices-count" class="cfg-badge" style="display:none;margin-left:.4rem"></span></button>
+  <button class="st-tab" type="button" data-pane="ov-tab-device-stats" onclick="rpa.switchTab(this);devStatsRefresh()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:.25rem"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>{{ (i18n or {}).get('ov_devstats','真机设备统计') }}</button>
   <button class="st-tab" type="button" data-pane="ov-tab-funnel" onclick="rpa.switchTab(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:.25rem"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>{{ (i18n or {}).get('rpa_fn_title','运营漏斗') }}</button>
   <button class="st-tab" type="button" data-pane="ov-tab-lang" onclick="rpa.switchTab(this);ovLangLoad()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:.25rem"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>{{ (i18n or {}).get('ov_lang','语言分布') }}</button>
 </div>
@@ -525,7 +573,7 @@
   <div class="rpa-card">
     <div class="rpa-card-head">
       <div class="rpa-card-icon" style="background:linear-gradient(135deg,var(--th-bg-indigo5,#6366f1),#4f46e5)">📱</div>
-      <div class="rpa-card-title">{{ (i18n or {}).get('ov_devices','设备管理') }}</div>
+      <div class="rpa-card-title">{{ (i18n or {}).get('ov_devices','真机设备') }}</div>
       <span class="rpa-card-desc" id="dev-host-label">{{ (i18n or {}).get('ov_host_label','主机:') }} —</span>
       <button class="btn-sec" type="button" onclick="devRefresh()" style="font-size:.75rem;padding:.3rem .65rem;margin-left:auto">↻ {{ (i18n or {}).get('refresh','刷新') }}</button>
     </div>
@@ -541,7 +589,7 @@
   <div class="rpa-card">
     <div class="rpa-card-head">
       <div class="rpa-card-icon" style="background:linear-gradient(135deg,var(--th-bg-violet5,#8b5cf6),var(--th-bg-violet7,#6d28d9))">📊</div>
-      <div class="rpa-card-title">{{ (i18n or {}).get('ov_devstats_24h','设备统计 (24h)') }}</div>
+      <div class="rpa-card-title">{{ (i18n or {}).get('ov_devstats_24h','真机设备统计 (24h)') }}</div>
       <span class="rpa-card-desc" id="ds-summary-label">{{ (i18n or {}).get('rpa_loading','加载中…') }}</span>
       <select id="ds-hours" onchange="devStatsRefresh()" style="margin-left:auto;padding:.25rem .4rem;font-size:.72rem;border:1px solid var(--bd2);border-radius:4px;background:var(--input);color:var(--t)">
         <option value="24">{{ (i18n or {}).get('ov_hours24','24 小时') }}</option>
@@ -761,8 +809,28 @@ function ovApplyCard(p){
 function ovApplyAggregate(agg){
   document.getElementById('ov-agg-running').textContent = String(agg.platforms_running||0) + ' / ' + String(agg.platforms_total||0);
   document.getElementById('ov-agg-sent').textContent = String(agg.sent_24h||0);
-  document.getElementById('ov-agg-pending').textContent = String(agg.pending_total||0);
-  document.getElementById('ov-agg-alerts').textContent = String(agg.alerts_unacked_total||0);
+  // 颜色跟随数值：0（无待办/无告警）= 绿色健康，>0 才亮警示色，消除「红色 0 像出事」的零态焦虑
+  var _pn = agg.pending_total||0, _an = agg.alerts_unacked_total||0;
+  var _pe = document.getElementById('ov-agg-pending'); _pe.textContent = String(_pn); _pe.className = 'rpa-kpi-n ' + (_pn>0 ? 'amber' : 'green');
+  var _ae = document.getElementById('ov-agg-alerts'); _ae.textContent = String(_an); _ae.className = 'rpa-kpi-n ' + (_an>0 ? 'red' : 'green');
+  // 一句话健康摘要：把 8 个 KPI 数字翻译成一句结论。优先级 告警>待审>健康；无服务/全停退回引导。
+  var zh = document.getElementById('ov-zero-hint');
+  if(zh){
+    var total = agg.platforms_total||0, running = agg.platforms_running||0;
+    var msg, tone;
+    if(total <= 0){ msg = 'ℹ️ ' + window.T('ov_zero_none_avail'); tone = 'muted'; }
+    else if(running <= 0){ msg = 'ℹ️ ' + window.Tf('ov_zero_none_running', {n: total}); tone = 'muted'; }
+    else if(_an > 0){ msg = window.Tf('ov_sum_alerts', {n:_an, r:running, t:total}); tone = 'red'; }
+    else if(_pn > 0){ msg = window.Tf('ov_sum_pending', {n:_pn, r:running, t:total}); tone = 'amber'; }
+    else { msg = window.Tf('ov_sum_healthy', {r:running, t:total, s:(agg.sent_24h||0)}); tone = 'green'; }
+    zh.textContent = msg; zh.className = 'ov-health-bar ' + tone; zh.style.display = '';
+  }
+}
+
+// KPI 快捷跳转：点「等待人工审核 / 未处理告警」直达对应 tab（先切换再滚动到位）
+function ovGotoTab(paneId){
+  var btn = document.querySelector('.st-tab[data-pane="' + paneId + '"]');
+  if(btn){ btn.click(); btn.scrollIntoView({behavior:'smooth', block:'center'}); }
 }
 
 function ovRenderPending(items){
@@ -1050,12 +1118,14 @@ async function ovRefreshFleet(){
     const el = document.getElementById('ov-fleet-light');
     if(el){
       el.textContent = lightMap[fl.fleet_light] || '—';
-      el.className = 'rpa-kpi-n ' + (fl.fleet_light==='green'?'green':fl.fleet_light==='amber'?'amber':fl.fleet_light==='red'?'red':'');
+      el.className = 'rpa-kpi-n lamp ' + (fl.fleet_light==='green'?'green':fl.fleet_light==='amber'?'amber':fl.fleet_light==='red'?'red':'');
     }
     const setN = (id,v)=>{ const e=document.getElementById(id); if(e) e.textContent=String(v||0); };
     setN('ov-fleet-active', lc.active);
     setN('ov-fleet-warming', lc.warming);
-    setN('ov-fleet-risk', (lc.restricted||0)+(lc.banned||0));
+    // 受限/封禁 0 = 绿色（无风险），>0 才红，与顶部 KPI 同口径
+    var _rn = (lc.restricted||0)+(lc.banned||0);
+    var _re = document.getElementById('ov-fleet-risk'); if(_re){ _re.textContent = String(_rn); _re.className = 'rpa-kpi-n ' + (_rn>0 ? 'red' : 'green'); }
     // P3：身份采集计数（仅当开启且本次运行有采集才显示，避免功能关时占位）
     const sp = d.self_profile || null;
     const spCell = document.getElementById('ov-fleet-selfprof-cell');
@@ -1137,7 +1207,7 @@ async function ovRefreshPreflight(){
     if(el){
       const map = {green:window.T('ov_js_pf_green'), yellow:window.T('ov_js_pf_yellow'), red:window.T('ov_js_pf_red')};
       el.textContent = d.applicable ? (map[d.light]||'—') : window.T('ov_js_not_enabled');
-      el.className = 'rpa-kpi-n ' + (d.light==='green'?'green':d.light==='yellow'?'amber':d.light==='red'?'red':'');
+      el.className = 'rpa-kpi-n lamp ' + (d.light==='green'?'green':d.light==='yellow'?'amber':d.light==='red'?'red':'');
     }
     const det = document.getElementById('ov-preflight-detail');
     if(det){

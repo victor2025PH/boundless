@@ -897,6 +897,20 @@ ZH = {
     "psn_wiz_tpl_sales_d": "懂产品会推荐，热情但不油腻",
     "psn_wiz_tpl_support": "专业客服",
     "psn_wiz_tpl_support_d": "售后排查，先共情再解决，不争执",
+    # ── 相册/发图能力开关（2026-07-31，capabilities.photos 默认关）──
+    "pma_cap_label": "相册 / 发图功能",
+    "pma_cap_off": "已关闭（默认）：本人设不发任何照片，对话中也不会承诺或暗示发照片。",
+    "pma_cap_on": "已开启：对方要图/命中触发词时自动发相册素材（还需全局相册功能开启才真发）。",
+    "pma_cap_saved": "发图开关已保存，立即生效",
+    "pma_cap_save_fail": "开关保存失败",
+    "pma_cap_off_stocked": "⚠ 已备 {n} 个素材，但开关关闭中——不会发出",
+    # ── 试聊抽屉「相册」状态 chip ──
+    "psc_cap_on": "相册：开",
+    "psc_cap_off": "相册：关",
+    "psc_pp_title": "此处将真实发出一张：",
+    "psc_pp_selfie": "自拍",
+    "psc_pp_object": "物体图",
+    "psc_pp_hint": "试聊不烧 GPU；生产环境会随本条回复自动发送",
 }
 
 EN = {
@@ -1797,4 +1811,18 @@ EN = {
     "psn_wiz_tpl_sales_d": "Knows the products; warm but never pushy",
     "psn_wiz_tpl_support": "Support agent",
     "psn_wiz_tpl_support_d": "After-sales triage; empathize first, never argue",
+    # ── Album / photo capability toggle (2026-07-31, capabilities.photos default off) ──
+    "pma_cap_label": "Album / photo sending",
+    "pma_cap_off": "Off (default): this persona never sends photos and never promises or implies sending one in chat.",
+    "pma_cap_on": "On: sends album media when the customer asks for photos or hits a trigger word (the global album feature must also be enabled).",
+    "pma_cap_saved": "Photo capability saved; effective immediately",
+    "pma_cap_save_fail": "Failed to save the toggle",
+    "pma_cap_off_stocked": "⚠ {n} media items stocked, but the toggle is off — nothing will be sent",
+    # ── Trial-chat drawer album status chip ──
+    "psc_cap_on": "Album: on",
+    "psc_cap_off": "Album: off",
+    "psc_pp_title": "A real photo would be sent here: ",
+    "psc_pp_selfie": "selfie",
+    "psc_pp_object": "object",
+    "psc_pp_hint": "Trial chat does not burn GPU; production sends with this reply",
 }

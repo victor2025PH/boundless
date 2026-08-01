@@ -107,6 +107,53 @@ _TAILWIND_CEILINGS = {
     # 5 转 0 留 5（全语义）：待发状态 sent=蓝 1 + 语言锁徽章 2 + 时间线 run=蓝 1 +
     # 发送队列五态 processing=蓝 1
     "src/web/templates/_channel_body_line.html": 5,
+    # ── 2026-07-30 尾批（22 文件 46 处审毕，转 21 留 25）───────────────
+    # 3 转 1 留 2：质量档 A绿/B蓝 1 + 分数刻度（≥90绿/≥75蓝/≥60琥珀/红）1
+    "src/web/templates/agent_perf.html": 2,
+    # 3 转 0 留 3（既定决策不动）：--blue/--violet 命名语义变量 1 +
+    # 套餐阶梯徽章 .plan-badge-basic（蓝/紫/金）2
+    "src/web/templates/base.html": 3,
+    # 3 转 0 留 3：审计动作 .act-approved 蓝（多态族）2 + L 档 .lv-L1 1
+    "src/web/templates/draft_audit_page.html": 3,
+    # 3 转 3 留 0：.gl-act 行动 chip（文字已 var(--tk-brand)，tint 收口）
+    "src/web/templates/golive_checklist.html": 0,
+    # 3 转 3 留 0：置信值强调 + 导航链接/active（与 ops/contacts 同构）
+    "src/web/templates/ops/merge_reviews.html": 0,
+    # 3 转 3 留 0：坐席头像底 + 查看/确认重分配按钮
+    "src/web/templates/queue_monitor.html": 0,
+    # 3 转 1 留 2：品牌色输入 placeholder 示例改 #1e8cf2（诚实示例）；
+    # 留 = 伴随 --th-ink-blue6 语义蓝族的 chip tint（--th 蓝族非品牌桥辖区）
+    "src/web/templates/settings.html": 2,
+    # 3 转 2 留 1：L0-L4 等级色表 1；sparkline 默认色/当前行高亮已收口
+    "src/web/templates/workspace_dashboard.html": 1,
+    # 3 转 3 留 0：「未指派人设」提示 chip（JS 注入 style，var 可解析）
+    "src/web/static/js/persona_studio_core.js": 0,
+    # 3 转 0 留 3：toast 语义调色板表 info:[...]（success/warn/error 并列）
+    "src/web/static/workspace/crm-widgets.js": 3,
+    # 2 转 2 留 0：badge/login 框 tint（文字已 var(--tk-brand)）
+    "src/web/templates/setup_wizard.html": 0,
+    # 2 转 0 留 2：策略卡身份渐变 + 分层卡 moderate=蓝青（tier 族）
+    "src/web/templates/strategy_analytics.html": 2,
+    # 2 转 0 留 2：平台色表 web=蓝（wechat绿/viber紫 并列）+ web 图标底
+    "src/web/static/platform_icons.js": 2,
+    # 2 转 0 留 2：头像渐变池（多组渐变 categorical）；shared 双树勿单边改
+    "shared/copilot/components/cp-accounts.js": 2,
+    # 1 转 0 留 1：漏斗系列色 handoff_rate=蓝（多系列并列）
+    "src/web/templates/_rpa_shared_funnel.html": 1,
+    # 1 转 0 留 1：意图调色板 inquiry=蓝
+    "src/web/templates/_rpa_shared_scripts.html": 1,
+    # 各 1 转 0 留 1：渠道章 .ch-web 蓝（与 contact360 同构）
+    "src/web/templates/contacts_list.html": 1,
+    "src/web/templates/tasks.html": 1,
+    # 1 转 0 留 1：状态对 bad=琥珀/ok=浅蓝
+    "src/web/templates/dashboard.html": 1,
+    # 1 转 1 留 0：下一步引导框 tint（文字已 var(--tk-brand)）
+    "src/web/templates/kb_cold_start.html": 0,
+    # 1 转 1 留 0：当前套餐列高亮 → color-mix(var(--blue))（留在页面 --blue
+    # 语义族内、变量驱动）
+    "src/web/templates/membership.html": 0,
+    # 1 转 0 留 1：动作调色板 enable=蓝（advance绿/downgrade红 并列）
+    "src/web/templates/rpa_overview.html": 1,
 }
 
 
@@ -140,6 +187,24 @@ def test_judged_files_tailwind_ceiling():
     assert not stale, (
         "台账虚高会吞掉倒退空间（与 inline_color_ratchet 同规则）：\n  "
         + "\n  ".join(stale)
+    )
+
+
+def test_no_unledgered_tailwind_files():
+    """全量台账制（2026-07-30 尾批收口后升格）：任何文件出现裸 Tailwind 蓝都必须在台账里。
+
+    39 个存量文件已全部逐点审毕（品牌→令牌化，语义→带理由入账）。新文件裸写
+    Tailwind 蓝只有两条正路：品牌用途写 var(--tk-brand)/var(--p)/growth 阶 +
+    color-mix；真语义调色板（状态/类型/平台/档位）则在 _TAILWIND_CEILINGS 加一行
+    并注明理由。没有第三种「先裸写再说」。
+    """
+    counts = classify()["tailwind_bare"]
+    unlisted = {rel: n for rel, n in counts.items() if rel not in _TAILWIND_CEILINGS}
+    assert not unlisted, (
+        "台账外文件出现裸 Tailwind 蓝（#3b82f6/#2563eb/#dbeafe…）。品牌强调请写 "
+        "var(--tk-brand,#1e8cf2)/growth 阶/color-mix；确属语义调色板（多色家族的"
+        "一臂）则在 _TAILWIND_CEILINGS 登记并写明理由：\n  "
+        + "\n  ".join(f"{k}: {v} 处" for k, v in sorted(unlisted.items()))
     )
 
 

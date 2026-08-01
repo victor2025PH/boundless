@@ -10,6 +10,8 @@
     python -m scripts.growth_review --base http://127.0.0.1:18899
     python -m scripts.growth_review --days 7 --json
     python -m scripts.growth_review --out-jsonl logs/goals/growth_trend.jsonl
+    python -m scripts.growth_review --days 7 --samples 20  # P23 周审口径：
+        win-rate 表 + 指令拟稿/画像填充漏斗 + 指令遵循人耳抽检样本
 
 令牌取 ``--token`` 或 env ``AITR_WEB_TOKEN``（桌面壳默认 ``admin``）。
 实例没起 / 接口 403 时如实报错，不编数字。
@@ -38,15 +40,21 @@ def _get(url: str, token: str, timeout: float = 8.0) -> Dict[str, Any]:
         return {"_error": str(e)}
 
 
-def collect(base: str, token: str, days: int) -> Dict[str, Any]:
+def collect(
+    base: str, token: str, days: int, *, samples: int = 0
+) -> Dict[str, Any]:
     b = base.rstrip("/")
-    return {
+    snap = {
         "base": b,
         "days": days,
         "ts": time.time(),
         "readiness": _get(f"{b}/api/goals/readiness", token),
         "report": _get(f"{b}/api/goals/report?days={int(days)}", token),
     }
+    if samples > 0:
+        snap["samples"] = _get(
+            f"{b}/api/goals/instr-samples?limit={int(samples)}", token)
+    return snap
 
 
 def _pct(v: Any) -> str:
@@ -134,13 +142,83 @@ def render(snap: Dict[str, Any]) -> str:
         out.append(f"终态目标：n={totals.get('n', 0)} "
                    f"done={totals.get('done', 0)} "
                    f"done_rate={_pct(totals.get('done_rate'))} "
+                   f"won={totals.get('won', 0)} "
+                   f"won_rate={_pct(totals.get('won_rate'))} "
                    f"avg_days_to_done={totals.get('avg_days_to_done')}")
+
+        # P23 win-rate 表（won=order:/manual: 真成交，winback「回话」不算；
+        # organic<5 标注样本不足——小样本读数只看不判，防按噪声调模板）
+        byt = rep.get("by_template") or {}
+        if byt:
+            out.append("模板 win-rate（organic 分母排除 cancelled）：")
+            ranked_t = sorted(
+                ((k, v) for k, v in byt.items() if isinstance(v, dict)),
+                key=lambda kv: -int(kv[1].get("n") or 0))
+            for tmpl, bt in ranked_t:
+                organic = (int(bt.get("done") or 0) + int(bt.get("failed") or 0)
+                           + int(bt.get("expired") or 0))
+                mark = "" if organic >= 5 else "  ⚠样本不足只读不判"
+                out.append(
+                    f"  {tmpl:<22} n={int(bt.get('n') or 0):<3} "
+                    f"done_rate={_pct(bt.get('done_rate'))} "
+                    f"won={int(bt.get('won') or 0)} "
+                    f"won_rate={_pct(bt.get('won_rate'))}{mark}")
+
+        # P23 「采纳并拟稿」使用面（DB 口径，重启免疫）+ 画像填充漏斗
+        dd = rep.get("drive_draft") or {}
+        dd_total = int(dd.get("total") or 0)
+        if dd_total:
+            by_s = dd.get("by_source") or {}
+            frag = " ".join(f"{k}×{v}" for k, v in sorted(
+                by_s.items(), key=lambda kv: -int(kv[1] or 0)))
+            out.append(f"「采纳并拟稿」指令生成：{dd_total} 次（{frag}）")
+        else:
+            out.append("「采纳并拟稿」指令生成：0 —— P22 链路无人用，"
+                       "查坐席是否知道目标卡/英雄行入口")
+        pf = rep.get("profile_fills") or {}
+        if int(pf.get("total") or 0):
+            by_src = pf.get("by_src") or {}
+            by_trk = pf.get("by_track") or {}
+            out.append(
+                f"画像槽填充：{pf.get('total')}"
+                f"（src " + " ".join(f"{k}×{v}" for k, v in sorted(
+                    by_src.items(), key=lambda kv: -int(kv[1] or 0)))
+                + " · 轨 " + " ".join(f"{k}×{v}" for k, v in sorted(
+                    by_trk.items(), key=lambda kv: -int(kv[1] or 0))) + "）")
+            # 判词：追问在发、商机轨没进账 = 问了没记/客户没答，查抽取或话术
+            if dd_total and not int(by_trk.get("bant") or 0):
+                out.append("  ⚠ 有指令拟稿但 bant 轨零填充——「问了没采到」，"
+                           "查采集正则/坐席有没有把答案补录进画像")
+        elif dd_total:
+            out.append("画像槽填充：0 —— 拟稿在用但画像没进账，同上排查")
+
         outcomes = rep.get("churn_outcomes") or {}
         if outcomes:
             out.append("流失原因 × 转化：")
             out.extend(_funnel_rows(outcomes))
         else:
             out.append("流失原因 × 转化：暂无终态生命周期目标（样本 0）")
+
+    # P23 指令遵循抽检（人耳判「有没有照做」，无客户原文）
+    smp = snap.get("samples")
+    if isinstance(smp, dict):
+        if smp.get("_error"):
+            out.append(f"[samples] 读取失败：{smp['_error']}")
+        else:
+            rows = smp.get("samples") or []
+            if rows:
+                out.append(f"指令遵循抽检（最近 {len(rows)} 条，"
+                           "逐条人耳判：产出是否执行了指令）：")
+                for r in rows:
+                    d8 = time.strftime("%m-%d %H:%M",
+                                       time.localtime(float(r.get("ts") or 0)))
+                    out.append(
+                        f"  [{d8}]({r.get('source') or '-'}) "
+                        f"指令: {str(r.get('instruction') or '')[:60]}")
+                    out.append(
+                        f"      产出: {str(r.get('reply') or '')[:90]}")
+            else:
+                out.append("指令遵循抽检：暂无样本（坐席还没用过指令拟稿）")
     return "\n".join(out)
 
 
@@ -165,6 +243,12 @@ def trend_row(snap: Dict[str, Any]) -> Dict[str, Any]:
         "n": int(totals.get("n") or 0),
         "done": int(totals.get("done") or 0),
         "done_rate": totals.get("done_rate"),
+        # P23：win-rate / 指令拟稿 / 画像填充（DB 口径，跨重启可比）
+        "won": int(totals.get("won") or 0),
+        "won_rate": totals.get("won_rate"),
+        "drive_draft": int((rep.get("drive_draft") or {}).get("total") or 0),
+        "profile_fills": int(
+            (rep.get("profile_fills") or {}).get("total") or 0),
         "churn": {k: {"n": int((v or {}).get("n") or 0),
                       "won": int((v or {}).get("won") or 0),
                       "won_rate": (v or {}).get("won_rate")}
@@ -204,9 +288,12 @@ def main() -> int:
     ap.add_argument("--days", type=int, default=30)
     ap.add_argument("--json", action="store_true", help="输出原始 JSON")
     ap.add_argument("--out-jsonl", default="", help="追加趋势行到 JSONL")
+    ap.add_argument("--samples", type=int, default=0,
+                    help="附最近 N 条「指令→产出」抽检样本（0=不取）")
     args = ap.parse_args()
 
-    snap = collect(args.base, args.token, max(1, int(args.days)))
+    snap = collect(args.base, args.token, max(1, int(args.days)),
+                   samples=max(0, int(args.samples)))
     if args.out_jsonl:
         err = append_jsonl(args.out_jsonl, trend_row(snap))
         if err:

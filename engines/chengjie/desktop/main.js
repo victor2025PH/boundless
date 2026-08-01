@@ -11,6 +11,17 @@ const { createAllSidecarManagers } = require("./sidecar-launcher.js");
 const brandUtil = require("./brand-util.js");
 const tokenUtil = require("./token-util.js");
 
+// 面向用户的版本串：package.json 的 displayVersion 优先（内测「1.001」这类展示号
+// 不是合法 semver，进不了 version 字段——那是 electron-builder/updater 的机器版本），
+// 缺字段回落 app.getVersion()。更新比对仍用 semver，勿拿本函数结果参与版本比较。
+function displayVersion() {
+  try {
+    const dv = require("./package.json").displayVersion;
+    if (dv) return String(dv);
+  } catch (e) { /* 读不到 package.json → 回落 semver */ }
+  try { return app.getVersion(); } catch (e) { return "dev"; }
+}
+
 // `--first-run`：无视「只弹一次」标记重看首启向导。写进 env 而不是走 IPC，是为了让
 // shell-preload 能同步读到（向导在 DOM 就绪那一刻就要判断弹不弹，等不起一次往返）。
 // 在这里而非 ready 里设置：preload 可能先于任何 ready 回调求值。
@@ -912,7 +923,7 @@ ipcMain.handle("desktop:rel-sync", async (_e, { contact_id, mode }) => {
   }
 });
 
-// P2 共享组件:NBA / 剧本话题(conv 级端点)
+// P2 共享组件:NBA(conv 级端点)
 ipcMain.handle("desktop:nba-list", async (_e, { conversation_id }) => {
   try {
     const cid = String(conversation_id || "");
@@ -928,24 +939,6 @@ ipcMain.handle("desktop:nba-exec", async (_e, { conversation_id, action_id, acti
     return await backendPost(`/api/workspace/conv/${encodeURIComponent(String(conversation_id || ""))}/execute-action`, {
       action_id: action_id || "", action_type: action_type || "", config: config || {},
     });
-  } catch (e) {
-    return { ok: false, error: String(e) };
-  }
-});
-
-ipcMain.handle("desktop:script-list", async (_e, { conversation_id }) => {
-  try {
-    const cid = String(conversation_id || "");
-    if (!cid) return { ok: false, error: "missing conversation_id" };
-    return await backendGet(`/api/workspace/conv/${encodeURIComponent(cid)}/script-suggestions`);
-  } catch (e) {
-    return { ok: false, error: String(e) };
-  }
-});
-
-ipcMain.handle("desktop:start-chain", async (_e, { conversation_id, chain_id }) => {
-  try {
-    return await backendPost(`/api/workspace/conv/${encodeURIComponent(String(conversation_id || ""))}/start-chain`, { chain_id: chain_id || "" });
   } catch (e) {
     return { ok: false, error: String(e) };
   }
@@ -1305,7 +1298,7 @@ function buildChineseMenu() {
           click: async () => {
             const w = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
             const bi = await resolveBrand();
-            const ver = app.getVersion();
+            const ver = displayVersion();
             const detail =
               `Telegram / WhatsApp / Messenger / LINE · 统一收件箱 + 业务助手\n\n` +
               `版本 v${ver}  ·  Electron ${process.versions.electron}  ·  Chromium ${process.versions.chrome}\n` +
@@ -1339,11 +1332,12 @@ function buildChineseMenu() {
 /** 手动「检查更新」：dev 说明不检查；发布态调 electron-updater 并给出可读反馈。
  *  与后台自动更新共用 autoDownload=true——发现新版即后台下载、下次重启生效。 */
 async function checkForUpdatesManual(win) {
-  const ver = app.getVersion();
+  const ver = app.getVersion(); // semver：仅用于与更新源比对
+  const shown = displayVersion(); // 展示串（内测 1.001）
   if (!app.isPackaged) {
     await dialog.showMessageBox(win, {
       type: "info", title: "检查更新",
-      message: "当前为开发版", detail: `版本 v${ver}（开发模式不检查更新）`,
+      message: "当前为开发版", detail: `版本 v${shown}（开发模式不检查更新）`,
       buttons: ["好的"], noLink: true,
     });
     return;
@@ -1371,7 +1365,7 @@ async function checkForUpdatesManual(win) {
     } else {
       await dialog.showMessageBox(win, {
         type: "info", title: "检查更新", message: "已是最新版本",
-        detail: `当前 v${ver}`, buttons: ["好的"], noLink: true,
+        detail: `当前 v${shown}`, buttons: ["好的"], noLink: true,
       });
     }
   } catch (e) {

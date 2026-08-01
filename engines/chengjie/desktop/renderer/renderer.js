@@ -636,8 +636,8 @@ let _desktopTabBadges = null;
 
 // 可折叠卡片：与网页 unified_inbox 同源（sidebar-chrome.createCardController）。
 // 默认折叠集（draft/nba/profile 默认展开）；组件 id → 所属卡（懒取数按卡展开态决定是否喂 context）。
-const _CP_CARD_DEF_COLLAPSED = { voice: 1, script: 1, kb: 1, tpl: 1, relstage: 1, collab: 1, chain: 1, analysis: 1 };
-const _CP_CARD_OF = { "cp-relstage": "relstage", "cp-nba": "nba", "cp-script": "script", "cp-collab": "collab", "cp-chain": "chain", "cp-voice": "voice" };
+const _CP_CARD_DEF_COLLAPSED = { voice: 1, kb: 1, tpl: 1, relstage: 1, collab: 1, chain: 1, analysis: 1 };
+const _CP_CARD_OF = { "cp-relstage": "relstage", "cp-nba": "nba", "cp-collab": "collab", "cp-chain": "chain", "cp-voice": "voice" };
 let _cpCardCtrl = null;
 function _cpCardCollapsed(name) {
   return _cpCardCtrl ? _cpCardCtrl.isCollapsed(name) : !!_CP_CARD_DEF_COLLAPSED[name];
@@ -660,12 +660,12 @@ function _feedCardComponent(id, ctx) {
   else el.context = ctx;
 }
 // 卡头状态 pill：组件 cp-data-loaded → 折叠态也能一眼读懂面板内容（复用共享 pillMetaFromCpLoaded）
-const _CP_PILL_BY_PANEL = { "cp-draft": "cpp-draft", "cp-relstage": "cpp-relstage", "cp-collab": "cpp-collab", "cp-chain": "cpp-chain", "cp-script": "cpp-script", "cp-nba": "cpp-nba" };
+const _CP_PILL_BY_PANEL = { "cp-draft": "cpp-draft", "cp-relstage": "cpp-relstage", "cp-collab": "cpp-collab", "cp-chain": "cpp-chain", "cp-nba": "cpp-nba" };
 const _CP_PILL_TONES = ["pill-accent", "pill-ok", "pill-warn", "pill-danger"];
 function _deskPillT(key, vars) {
   const m = {
     "inbox.pill.guard_high": "高风险", "inbox.pill.guard_medium": "中风险", "inbox.pill.draft_ready": "已生成",
-    "inbox.pill.chain_failed": "{n} 失败", "inbox.pill.chain_running": "{n} 运行中", "inbox.pill.topics": "{n} 话题",
+    "inbox.pill.chain_failed": "{n} 失败", "inbox.pill.chain_running": "{n} 运行中",
   };
   let s = m[key] || key;
   if (vars) Object.keys(vars).forEach((p) => { s = s.split("{" + p + "}").join(String(vars[p])); });
@@ -770,8 +770,8 @@ function initCopilot() {
   if (relEl) {
     relEl.addEventListener("cp-rel-changed", () => {
       loadProfile();
-      const nba = $("cp-nba"), sc = $("cp-script");
-      if (nba) nba.refresh(); if (sc) sc.refresh();
+      const nba = $("cp-nba");
+      if (nba) nba.refresh();
     });
   }
   // 共享组件 cp-fill:回填输入框(桥到 webview composer);cp-action-done:刷新关系阶段
@@ -1601,7 +1601,7 @@ async function loadRelStage() {
       c.platform, currentAccountId(c), c.chat_key
     );
     const client = copilotClient();
-    ["cp-relstage", "cp-nba", "cp-script", "cp-collab", "cp-chain"].forEach((id) => {
+    ["cp-relstage", "cp-nba", "cp-collab", "cp-chain"].forEach((id) => {
       const el = $(id);
       if (!el) return;
       el.client = client;

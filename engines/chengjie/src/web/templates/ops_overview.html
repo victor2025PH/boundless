@@ -176,6 +176,13 @@
     <div id="uiEventsDetail"></div>
   </section>
 
+  <section id="dpickFunnelSection" style="display:none;">
+    <h2>🤖 {{ (i18n or {}).get('ov2_s_dpick', "AI 回复漏斗（思考面板体验读数）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_dpick_sub', "坐席点「AI回复」后的等待体验与草稿去向：取消率高＝等待仍不达标；采纳率低＝草稿质量该查 [smart_reply] 分段日志。进程级计数，重启清零。") }}</div>
+    <div class="grid" id="dpickFunnelKpis"></div>
+    <div id="dpickFunnelDetail"></div>
+  </section>
+
   <section>
     <h2>📤 {{ (i18n or {}).get('ov2_s_sr', "出站路由（编排器接管 vs 回落适配器）") }}</h2>
     <div class="grid" id="sendRouteKpis"></div>
@@ -227,6 +234,13 @@
     <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_pp_sub', "后台直改平台官方昵称/签名/头像的使用观测") }}</div>
     <div class="grid" id="profilePushKpis"></div>
     <div id="profilePushDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <section id="photoCapSection" style="display:none;">
+    <h2>📷 {{ (i18n or {}).get('ov2_s_photocap', "发图承诺消毒（相册默认关的出站守卫）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_pc_sub', "发图能力关闭的人设仍写出「翻相册/发照片」时被守卫剥掉的次数——拦截率高=提示层约束不够，需检查人设块注入") }}</div>
+    <div class="grid" id="photoCapKpis"></div>
+    <div id="photoCapDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
   <section id="custAssetsSection" style="display:none;">
@@ -302,6 +316,20 @@
     <h2>🔮 {{ (i18n or {}).get('ov2_s_bazi', "命理技能（话题触达 → 生辰采集 → 灵签/命盘 → 详批变现）") }}</h2>
     <div class="grid" id="baziKpis"></div>
     <div id="baziDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <section id="careSection" style="display:none;">
+    <h2>💗 {{ (i18n or {}).get('ov2_s_care', "主动关怀（约定捕获 → 到点拟稿 → 真发回访）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_care_sub', "记住客户随口说的事、到点像朋友回访；人工排卡/样本审核/开闸在「主动关怀」页。零记录且未开启时整卡隐藏") }}</div>
+    <div class="grid" id="careKpis"></div>
+    <div id="careDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <section id="chainFunnelSection" style="display:none;">
+    <h2>⚡ {{ (i18n or {}).get('ov2_s_chainfun', "跟进 SOP／工作链（启动 → 执行 → 72h 回复）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_cf_sub', "近 14 天链启动/完成/失败与启动后 72h 回复率——SOP 值不值、哪条链在带来回话，看这里；零流量整卡隐藏") }}</div>
+    <div class="grid" id="chainFunnelKpis"></div>
+    <div id="chainFunnelDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
   <section id="personaImportSection" style="display:none;">
@@ -1409,12 +1437,14 @@ async function loadFrontendErrors(){
   if(!kp || !dv) return;
   try{
     const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
-    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; try{ renderProfilePush(null); }catch(_pp){} try{ renderUiEvents(null); }catch(_ue){} try{ renderPersonaOverride(null); }catch(_po){} try{ renderCsrfRejects(null); }catch(_cs){} return; }
+    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; try{ renderProfilePush(null); }catch(_pp){} try{ renderUiEvents(null); }catch(_ue){} try{ renderDpickFunnel(null); }catch(_df){} try{ renderPersonaOverride(null); }catch(_po){} try{ renderCsrfRejects(null); }catch(_cs){} try{ renderPhotoCapability(null); }catch(_pc){} return; }
     const d = await r.json();
     try{ renderProfilePush(d); }catch(_pp){}
     try{ renderUiEvents(d); }catch(_ue){}
+    try{ renderDpickFunnel(d); }catch(_df){}
     try{ renderPersonaOverride(d); }catch(_po){}
     try{ renderCsrfRejects(d); }catch(_cs){}
+    try{ renderPhotoCapability(d); }catch(_pc){}
     var fe = d.frontend_errors || null;
     if(!fe || !(Number(fe.total)||0)){
       kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js_fe_none')+'</div>'; return;
@@ -1606,6 +1636,47 @@ function renderPersonaOverride(d){
 // 读 ui_events 段（工作台空态引导按钮/群区模式切换的 beacon 累计）。零流量/段缺失/403 → 整卡隐藏。
 // action 键是前端埋点写死的标识符（如 empty.show_all），这里映射成人话标签便于运营读数；
 // 未登记的新 action 原样显示（不丢数据）。键由后端消毒（仅安全字符），可直接拼 HTML。
+// 🤖 AI 回复漏斗：ui_events.by_action 里 dpick.* 事件的衍生读数（取消率/采纳率）。
+// 通用「UI 交互引导」卡保留原始计数；这里回答两个决策问题——「等待体验达不达标
+// （取消率 >15% 该考虑备稿常态化/真提速）」「草稿被用了没（采纳率低查草稿质量）」。
+function renderDpickFunnel(d){
+  var sec=document.getElementById('dpickFunnelSection');
+  var kp=document.getElementById('dpickFunnelKpis');
+  var dv=document.getElementById('dpickFunnelDetail');
+  if(!sec||!kp||!dv) return;
+  var by=(d && d.ui_events && d.ui_events.by_action)||{};
+  var n=function(k){ return Number(by['dpick.'+k])||0; };
+  var opens=n('open')+n('regen');
+  if(!opens){ sec.style.display='none'; return; }
+  sec.style.display='';
+  var ready=n('ready'), adopt=n('send')+n('fill')+n('backup_use');
+  var pct=function(a,b){ return b>0 ? (100*a/b).toFixed(1)+'%' : '—'; };
+  var kpis=[
+    {label:window.T('ov2_dpick_gens'), value:fmt(opens)},
+    {label:window.T('ov2_dpick_cancel_rate'), value:pct(n('cancel'),opens)},
+    {label:window.T('ov2_dpick_adopt_rate'), value:pct(adopt,ready)},
+    {label:window.T('ov2_dpick_errors'), value:fmt(n('error'))}
+  ];
+  kp.innerHTML=kpis.map(function(c){
+    return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+      '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+  }).join('');
+  // 步骤标签查表（字面键，勿字符串拼键名——拼接键会脱出 i18n 静态门禁覆盖）
+  var stepLabels={
+    open:window.T('ov2_dpick_a_open'), regen:window.T('ov2_dpick_a_regen'),
+    ready:window.T('ov2_dpick_a_ready'), error:window.T('ov2_dpick_a_error'),
+    cancel:window.T('ov2_dpick_a_cancel'), cancel_switch:window.T('ov2_dpick_a_cancel_switch'),
+    minimize:window.T('ov2_dpick_a_minimize'), backup_use:window.T('ov2_dpick_a_backup_use'),
+    retry:window.T('ov2_dpick_a_retry'), send:window.T('ov2_dpick_a_send'),
+    fill:window.T('ov2_dpick_a_fill'), studio:window.T('ov2_dpick_a_studio')
+  };
+  var rows=Object.keys(stepLabels).map(function(k){
+    return '<tr><td>'+stepLabels[k]+' <span class="muted" style="font-size:11px;">dpick.'+k+'</span></td><td>'+n(k)+'</td></tr>';
+  }).join('');
+  dv.innerHTML='<table><tr><th>'+window.T('ov2_dpick_col_step')+'</th><th>'+window.T('ov2_dpick_col_count')+'</th></tr>'+rows+'</table>'
+    +'<div class="muted" style="font-size:12px;margin-top:8px;">'+window.T('ov2_dpick_hint')+'</div>';
+}
+
 function renderUiEvents(d){
   var sec = document.getElementById('uiEventsSection');
   var kp = document.getElementById('uiEventsKpis');
@@ -1701,6 +1772,39 @@ function renderProfilePush(d){
       + '<table><tr><th>'+window.T('ov2_pp_col_plat')+'</th><th>'+window.T('ov2_pp_col_as')+'</th></tr>'+rows+'</table>');
   }
   dv.innerHTML = lines.join('') || '<div class="muted" style="font-size:12px;">—</div>';
+}
+
+// 📷 发图承诺消毒卡：读 metrics.photo_capability（photo_capability.dump_sanitize_stats）。
+// 语义：capabilities.photos 关（默认）的人设，LLM 仍写出「翻相册/这张是…」被出站守卫
+// 剥掉的计数。strip_rate 高 = 提示层（人设块反向约束 + ai_client 硬边界）没管住、
+// 全靠守卫兜底 → 该查约束注入是否断链。零流量 active=false → 整卡隐藏（bazi 惯例）。
+// 段缺失（旧后端未重启）同样隐藏，模板热更新先行不报错。
+function renderPhotoCapability(d){
+  var sec = document.getElementById('photoCapSection');
+  var kp = document.getElementById('photoCapKpis');
+  var dv = document.getElementById('photoCapDetail');
+  if(!sec || !kp || !dv) return;
+  var pc = (d && d.photo_capability) || null;
+  if(!pc || !pc.active){ sec.style.display='none'; return; }
+  sec.style.display = '';
+  var calls = Number(pc.sanitize_calls)||0;
+  var stripped = Number(pc.sanitize_stripped)||0;
+  var rate = Math.round((Number(pc.strip_rate)||0)*100);
+  var kpis = [
+    {label:window.T('ov2_pc_calls'), value:fmt(calls)},
+    {label:window.T('ov2_pc_stripped'), value:fmt(stripped), color:(stripped>0?'var(--amber,#d29922)':'')},
+    {label:window.T('ov2_pc_rate'), value:rate+'%', color:(rate>=50?'var(--red)':(rate>0?'var(--amber,#d29922)':''))},
+  ];
+  kp.innerHTML = kpis.map(function(c){
+    return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+      '</div><div style="font-size:20px;font-weight:600;margin-top:4px;'+(c.color?('color:'+c.color+';'):'')+'">'+c.value+'</div></div>';
+  }).join('');
+  var srcBits = [];
+  if((Number(pc.chat_test_stripped)||0) > 0) srcBits.push(window.T('ov2_pc_src_chat')+' '+fmt(Number(pc.chat_test_stripped)||0));
+  if((Number(pc.inbox_draft_stripped)||0) > 0) srcBits.push(window.T('ov2_pc_src_draft')+' '+fmt(Number(pc.inbox_draft_stripped)||0));
+  dv.innerHTML =
+    (srcBits.length ? '<div class="muted" style="font-size:12px;">'+window.T('ov2_pc_src')+': '+srcBits.join(' · ')+'</div>' : '')
+    + '<div class="muted" style="font-size:12px;margin-top:4px;">'+window.T('ov2_pc_hint')+'</div>';
 }
 
 // 👥 客户资产（目录同步）卡：私域资产盘点——各账号已同步的好友名单里，有多少是「加了好友
@@ -2545,6 +2649,64 @@ async function loadBazi(){
   }
 }
 
+// 💗 主动关怀卡（P5 2026-08-01）：读 /api/care/health（四灯+计数+回复率+LLM影子，
+// 零新后端）。隐藏判据=接口不可读(403/异常) 或 引擎未开启且全状态计数为 0（零足迹）。
+async function loadCare(){
+  var sec = document.getElementById('careSection');
+  var kp = document.getElementById('careKpis');
+  var dv = document.getElementById('careDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    // 首轮 refreshAll 并发 ~50 个接口，health 的 effect 首算可能挤到默认超时——
+    // 显式放宽；失败也**不武断隐藏**（对齐 loadBazi 容错惯例，只有 403/未启用才藏卡）
+    const r = await apiFetch('/api/care/health', {credentials:'same-origin'}, {timeoutMs: 30000});
+    if(r.status === 403){ sec.style.display='none'; return; }
+    if(!r.ok){ throw new Error('http '+r.status); }
+    const h = await r.json();
+    var su = (h.activity && h.activity.summary) || {};
+    var total = (su.pending||0)+(su.sent||0)+(su.skipped||0)+(su.expired||0)+(su.cancelled||0);
+    if(!h.enabled && total === 0){ sec.style.display='none'; return; }
+    sec.style.display = '';
+    var state = !h.enabled ? window.T('ov2_care_state_off')
+      : (h.dry_run ? window.T('ov2_care_state_dry') : window.T('ov2_care_state_live'));
+    var stColor = !h.enabled ? 'var(--tk-text-muted,#64748b)'
+      : (h.dry_run ? 'var(--tk-amber-ink,#d97706)' : 'var(--tk-emerald-ink,#059669)');
+    var ef = h.effect || {};
+    var rate = (ef.rate === null || ef.rate === undefined)
+      ? ((ef.sent_7d||0) > 0 ? window.T('ov2_care_win_open') : '—')
+      : Math.round(Number(ef.rate)*100) + '%';
+    var sh = h.shadow || {};
+    var kpis = [
+      {label:window.T('ov2_care_state'), value:'<span style="color:'+stColor+';">'+state+'</span>'},
+      {label:window.T('ov2_care_pending'), value:fmt(Number(su.pending)||0)},
+      {label:window.T('ov2_care_cap24'), value:fmt(Number((h.activity||{}).captured_24h)||0)},
+      {label:window.T('ov2_care_sent'), value:fmt(Number(su.sent)||0)},
+      {label:window.T('ov2_care_rate'), value:rate},
+      {label:window.T('ov2_care_shadow'), value:fmt(Number(sh.budget_used_today)||0)},
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    var ok = function(b){ return b ? '✓' : '✗'; };
+    var parts = [];
+    parts.push(window.T('ov2_care_lights')+': '+
+      window.T('ov2_care_l_cap')+' '+ok(h.capture && h.capture.wired)+' · '+
+      window.T('ov2_care_l_disp')+' '+ok(h.dispatch && h.dispatch.running)+' · '+
+      window.T('ov2_care_l_dlv')+' '+ok(h.delivery && h.delivery.multiplatform_deferred));
+    if((Number(sh.captured)||0) > 0) parts.push(window.T('ov2_care_llmcap')+': '+fmt(Number(sh.captured)||0));
+    if((Number(su.skipped)||0) > 0) parts.push(window.T('ov2_care_skipped')+': '+fmt(Number(su.skipped)||0));
+    if((Number(su.expired)||0) > 0) parts.push(window.T('ov2_care_expired')+': '+fmt(Number(su.expired)||0));
+    dv.innerHTML = '<div class="muted" style="font-size:12px;">'+parts.join(' · ')+
+      ' · <a href="/care-schedule">'+window.T('ov2_s_care').split('（')[0]+' →</a></div>';
+  }catch(e){
+    // 已在显示 → 留卡出错误行（下轮 60s 轮询自愈）；从未显示过 → 保持隐藏（零足迹）
+    if(sec.style.display !== 'none'){
+      dv.innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
+    }
+  }
+}
+
 // 📄 人设导入卡：进程漏斗计数（/api/workspace/metrics.persona_import，重启清零）
 // + 考题跨进程趋势（/api/personas/quiz/trend，读 quiz.db 真实历史）。
 // 两路各自软失败：趋势未启用/取不到 → 只显进程计数；进程计数归零但库里有报告 →
@@ -2949,6 +3111,27 @@ async function loadGoals(){
       var avgD = report.totals.avg_days_to_done;
       parts.push(window.T('ov2_goal_done_rate')+': '+rate+'%'
         + (avgD != null ? ' · '+(Math.round(Number(avgD)*10)/10)+'d' : ''));
+      // P23：真成交（won=order:/manual:，winback「回话」不算）——有才显
+      if(Number(report.totals.won) > 0){
+        parts.push(window.T('ov2_goal_won')+': '+fmt(Number(report.totals.won)||0)
+          + ' ('+Math.round(Math.max(0, Math.min(1, Number(report.totals.won_rate)||0))*100)+'%)');
+      }
+    }
+    // P23：win-rate Top 模板——organic ≥5 才呈现（小样本读数会误导调模板，
+    // 宁缺毋滥；全量明细在周审 CLI growth_review）
+    var byT=(report && report.by_template) || {};
+    var wrRows=Object.keys(byT).map(function(k){
+        var b=byT[k]||{};
+        var org=(Number(b.done)||0)+(Number(b.failed)||0)+(Number(b.expired)||0);
+        return {k:k, org:org, won:Number(b.won)||0, wr:Number(b.won_rate)||0};
+      }).filter(function(x){ return x.org>=5; })
+      .sort(function(a,c){ return c.org-a.org; }).slice(0,2);
+    if(wrRows.length){
+      parts.push('<span title="'+esc(window.T('ov2_goal_winrate_tip'))+'">'
+        + window.T('ov2_goal_winrate')+': '
+        + wrRows.map(function(x){
+            return esc(x.k)+' '+Math.round(Math.max(0,Math.min(1,x.wr))*100)+'%（n='+x.org+'）';
+          }).join(' · ')+'</span>');
     }
     var fb = (report && report.feedback) || g.feedback || null;
     if(fb && ((Number(fb.adopt)||0) + (Number(fb.reject)||0)) > 0){
@@ -4331,6 +4514,59 @@ async function loadReplyBubbles(){
     det.innerHTML = '<div class="muted" style="font-size:12px;">'+window.T('ov2_bb_note')+'</div>';
   }catch(_){ sec.style.display='none'; }
 }
+async function loadChainFunnel(){
+  var sec = document.getElementById('chainFunnelSection');
+  var kp = document.getElementById('chainFunnelKpis');
+  var dv = document.getElementById('chainFunnelDetail');
+  if(!sec || !kp || !dv) return;
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  try{
+    const r = await apiFetch('/api/workspace/chain-funnel?days=14', {credentials:'same-origin'});
+    if(r.status === 403){ sec.style.display='none'; return; }
+    const d = await r.json();
+    var t = (d && d.total) || {};
+    if(!d.ok || !Number(t.started)){ sec.style.display='none'; return; }
+    sec.style.display = '';
+    function rate(x){ return (x && x.reply_rate != null)
+      ? (Math.round(Number(x.reply_rate)*100)+'% ('+fmt(Number(x.replied_n)||0)+'/'+fmt(Number(x.mature_n)||0)+')') : '—'; }
+    var kpis = [
+      {label:window.T('ov2_cf_started'), value:fmt(Number(t.started)||0)},
+      {label:window.T('ov2_cf_running'), value:fmt(Number(t.running)||0)},
+      {label:window.T('ov2_cf_completed'), value:fmt(Number(t.completed)||0)},
+      {label:window.T('ov2_cf_failed'), value:fmt(Number(t.failed)||0)},
+      {label:window.T('ov2_cf_reply'), value:rate(t)},
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    var rows = (d.chains || []).slice(0, 8).map(function(c){
+      return '<tr><td>'+esc(c.chain_name||c.chain_id||'')+'</td><td>'+fmt(Number(c.started)||0)+'</td>'
+        +'<td>'+fmt(Number(c.completed)||0)+'</td><td>'+fmt(Number(c.failed)||0)+'</td><td>'+rate(c)+'</td></tr>';
+    }).join('');
+    var table = rows ? ('<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+      +'<thead><tr style="text-align:left;color:var(--tk-text-muted,#64748b);">'
+      +'<th style="padding:3px 6px;">'+window.T('ov2_cf_col_chain')+'</th>'
+      +'<th style="padding:3px 6px;">'+window.T('ov2_cf_started')+'</th>'
+      +'<th style="padding:3px 6px;">'+window.T('ov2_cf_completed')+'</th>'
+      +'<th style="padding:3px 6px;">'+window.T('ov2_cf_failed')+'</th>'
+      +'<th style="padding:3px 6px;">'+window.T('ov2_cf_reply')+'</th></tr></thead>'
+      +'<tbody>'+rows+'</tbody></table>') : '';
+    var attrLine = '';
+    if(Number(t.attributed) > 0){
+      attrLine = '<div class="muted" style="font-size:12px;margin-top:6px;">'
+        + window.T('ov2_cf_attr')+': '+fmt(Number(t.attributed)||0)
+        + (t.attr_reply_rate != null
+            ? (' · '+window.T('ov2_cf_attr_reply')+': '+Math.round(Number(t.attr_reply_rate)*100)
+               +'% ('+fmt(Number(t.attr_replied_n)||0)+'/'+fmt(Number(t.attr_mature_n)||0)+')')
+            : '')
+        + '</div>';
+    }
+    dv.innerHTML = table + attrLine
+      + '<div class="muted" style="font-size:12px;margin-top:6px;">'+window.T('ov2_cf_reply_hint')
+      + ' · <a href="/workflows">'+window.T('ov2_cf_manage')+'</a></div>';
+  }catch(_e){ sec.style.display='none'; }
+}
 async function loadProactiveEngagement(){
   var sec = document.getElementById('proactiveEngSection');
   var kp = document.getElementById('proactiveEngKpis');
@@ -4703,7 +4939,7 @@ async function toggleLocalTts(on){
 }
 
 if(CAN_MANAGE_OPS){ var _rb=document.getElementById('recheckBtn'); if(_rb) _rb.style.display=''; }
-function refreshAll(){ loadOverview(); loadIncidents(); loadReport(); loadTTS(); loadTTSTrend(); loadAiSafety(); loadSlaBacklog(); loadTranslationEngines(); loadXlateTrend(); loadVoiceSynthLang(); loadASRDegradation(); loadSpeechEmotion(); loadVisionUsage(); loadDeepPersona(); loadFrontendErrors(); loadFeTrend(); loadCustomerAssets(); loadInstanceRestartStatus(); loadPlatformSessions(); loadChannelReadiness(); loadSendRoutes(); loadSendRouteTrend(); loadPersonaMedia(); loadMediaConsistency(); loadDuelBench(); loadPeerIdentity(); loadIdentityTrend(); loadLocalTts(); loadAutosendMedia(); loadPromiseTrend(); loadAvatarVoice(); loadProactiveEngagement(); loadReplyBubbles(); loadRealWorld(); loadBazi(); loadPersonaImport(); loadCredPool(); loadGoals(); loadIdentityShadow(); loadEpisodicDedup(); loadIsolationHealth(); loadGpuWatermark(); loadProfileAudit(); loadRealtimeVoice(); loadRtvTrend(); refreshRealtimeVoiceAlertBadge(); loadTgCall(); }
+function refreshAll(){ loadOverview(); loadIncidents(); loadReport(); loadTTS(); loadTTSTrend(); loadAiSafety(); loadSlaBacklog(); loadTranslationEngines(); loadXlateTrend(); loadVoiceSynthLang(); loadASRDegradation(); loadSpeechEmotion(); loadVisionUsage(); loadDeepPersona(); loadFrontendErrors(); loadFeTrend(); loadCustomerAssets(); loadInstanceRestartStatus(); loadPlatformSessions(); loadChannelReadiness(); loadSendRoutes(); loadSendRouteTrend(); loadPersonaMedia(); loadMediaConsistency(); loadDuelBench(); loadPeerIdentity(); loadIdentityTrend(); loadLocalTts(); loadAutosendMedia(); loadPromiseTrend(); loadAvatarVoice(); loadProactiveEngagement(); loadReplyBubbles(); loadRealWorld(); loadBazi(); loadCare(); loadChainFunnel(); loadPersonaImport(); loadCredPool(); loadGoals(); loadIdentityShadow(); loadEpisodicDedup(); loadIsolationHealth(); loadGpuWatermark(); loadProfileAudit(); loadRealtimeVoice(); loadRtvTrend(); refreshRealtimeVoiceAlertBadge(); loadTgCall(); }
 function _onRtvOpsRefresh(){
   loadRealtimeVoice(); loadRtvTrend(); loadRtvAlertCalibrate(false); refreshRealtimeVoiceAlertBadge();
 }

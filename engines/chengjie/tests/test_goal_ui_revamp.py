@@ -70,7 +70,7 @@ def test_inbox_host_discoverability(inbox_html: str):
     assert "accent" in inbox_html
     assert "card" in inbox_html and "_handleGoalDeepLink" in inbox_html
     assert "cp-goal-drive-draft" in inbox_html
-    assert "cp-goal.js?v=20260728" in inbox_html
+    assert "cp-goal.js?v=20260801" in inbox_html
 
 
 def test_target_icon_registered():
@@ -106,12 +106,291 @@ def test_goal_auto_expose_on_customer_tab(inbox_html: str):
     assert "goal_auto_expand" in inbox_html
 
 
-def test_goal_drive_draft_no_clobber(inbox_html: str):
-    """驱动草稿：坐席已手打内容时不覆盖 composer（意图仅在空 composer 时预填）。"""
-    assert "!ta.value.trim()" in inbox_html
+def test_goal_drive_draft_uses_set_directive(inbox_html: str):
+    """P22：驱动草稿走 setDirective，绝不写 composer（旧版空输入框预填意图原文
+    → 误发风险 + 生成引擎根本收不到指令）。"""
+    assert "setDirective" in inbox_html
+    assert "ta.value=String(intent)" not in inbox_html
+    assert "!ta.value.trim()" not in inbox_html
 
 
 def test_goal_deep_link_defers_when_conv_param(inbox_html: str):
     """?conv=&card=goal 同行时不许先弹「请先选择会话」——消费延后到会话打开。"""
     assert "hasConv" in inbox_html
     assert "if(!hasConv) _tryConsumeGoalDeepLink()" in inbox_html
+
+
+# ── P18（2026-07-31）：「会用」层——场景化表单 / 三步引导 / 反馈闭环 ──────────
+
+
+def test_goal_form_scenario_cards(goal_js: str):
+    """表单从「模板下拉」升级为场景卡片：每模板一句人话说明；custom 收进
+    「进阶」入口且不参与默认预选（实锤：新手停在自定义模板写不出推进方向）。"""
+    assert "pick_tmpl" in goal_js and "pick_custom" in goal_js
+    assert "inbox.goal.tmpl_desc." in goal_js
+    assert 'prefs.template !== "custom"' in goal_js
+    assert "goal_form_pick_scenario" in goal_js and "goal_form_pick_custom" in goal_js
+
+
+def test_goal_form_situational_recommend(goal_js: str):
+    """沉默 ≥72h 推荐「沉默唤回」——宿主经 ctx.goalHint.silentHours 喂数，
+    组件只在高置信时贴推荐标（拿不准不猜）。"""
+    assert "goalHint" in goal_js
+    assert "engagement_reactivate" in goal_js
+    assert "inbox.goal.form.rec_silent" in goal_js
+
+
+def test_goal_autonomy_copy_honest(goal_js: str):
+    """auto 档诚实注解：caps.bridge_enabled=false 时如实注明「不会自己主动发
+    消息」；caps 缺失（旧后端未重启）不注解不猜——文案与行为一致是硬原则。"""
+    assert "_autonomyNote" in goal_js
+    assert "bridge_enabled" in goal_js
+    assert "inbox.goal.autonomy.auto_note_off" in goal_js
+
+
+def test_goal_created_next_hint(goal_js: str):
+    """建目标后一次性「接下来会发生什么」提示（按自治档取文案，可手动关掉）。"""
+    assert "_createdHintAutonomy" in goal_js
+    assert "inbox.goal.created_next." in goal_js
+    assert "hint_dismiss" in goal_js
+
+
+def test_goal_progress_timeline(goal_js: str):
+    """「AI 做了什么」进展时间线：懒取 /api/goals/{id} 拍史（后端接口 P3 起就有，
+    坐席端首次消费——修「建完目标 AI 做了什么完全不可见」）。"""
+    assert "prog_toggle" in goal_js
+    assert "goal_progress_open" in goal_js
+    assert "_loadProgress" in goal_js
+    assert "inbox.goal.beat." in goal_js
+
+
+def test_goal_templates_endpoint_exposes_caps():
+    routes = (_REPO / "src" / "web" / "routes" / "goal_routes.py").read_text(encoding="utf-8")
+    assert "bridge_enabled" in routes
+    assert "proactive_enabled" in routes
+
+
+def test_goal_i18n_dynamic_keys_bilingual():
+    """动态拼键（tmpl_desc.<id> / created_next.<lvl> / beat.<status>）静态键门禁
+    扫不到，这里显式钉双语齐备——模板注册表加新模板时此测试会点名补文案。"""
+    import importlib
+
+    goals_pack = importlib.import_module("src.web.i18n_packs.goals")
+    from src.companion.goals.templates import AUTONOMY_LEVELS, TEMPLATES
+
+    for tid in TEMPLATES:
+        for lang in (goals_pack.ZH, goals_pack.EN):
+            assert f"inbox.goal.tmpl_desc.{tid}" in lang, f"missing tmpl_desc {tid}"
+    for lvl in AUTONOMY_LEVELS:
+        for lang in (goals_pack.ZH, goals_pack.EN):
+            assert f"inbox.goal.created_next.{lvl}" in lang, f"missing created_next {lvl}"
+    for st in ("planned", "consumed", "sent", "skipped", "blocked"):
+        for lang in (goals_pack.ZH, goals_pack.EN):
+            assert f"inbox.goal.beat.{st}" in lang, f"missing beat {st}"
+
+
+def test_inbox_host_tour_and_feedback(inbox_html: str):
+    """宿主：三步引导接线 + ❓ 重看入口挂 window + cp-fill/cp-action-done 出
+    用户可见反馈（修「点了没反馈」）+ goalHint 喂沉默时长。"""
+    assert "_cpTourStart" in inbox_html
+    assert "ws_cp_tour_done_v1" in inbox_html
+    assert "_cpTourMaybeAuto" in inbox_html
+    assert "\n  _cpTourStart," in inbox_html
+    assert "inbox.cp.fill_toast" in inbox_html
+    assert "inbox.cp.exec_ok" in inbox_html
+    assert "goalHint" in inbox_html
+
+
+def test_tour_css_tokens_present():
+    css = _CSS.read_text(encoding="utf-8")
+    for sel in (".cp-tour-veil", ".cp-tour-hl", ".cp-tour-pop"):
+        assert sel in css, f"missing CSS {sel}"
+
+
+# ── P19（2026-07-31 深夜）：反馈率 0% 实锤后的复合按钮 + 本周成果面 ──────────
+
+
+def test_goal_adopt_and_draft_composite(goal_js: str):
+    """「采纳并拟稿」合并坐席最常见两连击（上线基线实锤：30 拍 0 反馈）；
+    采纳成功（服务端权威落账）才驱动草稿；已采纳态保留拟稿入口不断路。"""
+    assert "beat_adopt_draft" in goal_js
+    assert "goal_feedback_adopt_draft" in goal_js
+    assert "inbox.goal.act.adopt_only" in goal_js
+    assert "return true" in goal_js and "return false" in goal_js
+
+
+def test_inbox_host_weekly_wins_chip(inbox_html: str):
+    """本周成果 chip：正向数据才显示（0 不示众——空数字是反激励），
+    10min 轮询；403/异常一律静默隐藏。"""
+    assert 'id="goal-af-wins"' in inbox_html
+    assert "_refreshGoalWins" in inbox_html
+    assert "/api/goals/report?days=7" in inbox_html
+    assert "inbox.goal.wins.week" in inbox_html
+
+
+def test_weekly_wins_css_present():
+    css = _CSS.read_text(encoding="utf-8")
+    assert ".goal-af-wins" in css
+
+
+def test_goal_wins_i18n_bilingual():
+    import importlib
+
+    goals_pack = importlib.import_module("src.web.i18n_packs.goals")
+    for key in ("inbox.goal.wins.week", "inbox.goal.wins.active_only",
+                "inbox.goal.wins.t", "inbox.goal.act.adopt_only",
+                "inbox.goal.act.adopt_draft", "inbox.goal.act.adopt_draft_t"):
+        assert key in goals_pack.ZH and key in goals_pack.EN, key
+
+
+# ── P20（2026-08-01）：画像区排版收口 + 缺口 chips 动作化 + 产品行升级 ────────
+
+
+def test_profile_header_layout_no_squeeze(goal_js: str):
+    """P0-1 竖排根因回归钉：旧版画像头部单行 flex 硬塞「标题+双固定宽 bar+按钮」
+    ≈304px，默认 300px 侧栏内容区只有 ~236px → 溢出后 CJK 逐字换行成竖排。
+    收口不变量：bar 不许回到固定宽、头部容器必须可换行、完成度独立成行。"""
+    assert "width:52px" not in goal_js          # bar 固定宽是挤压根因
+    assert ".gl-fillrow" in goal_js             # 完成度独立行
+    hd = goal_js.split(".gl-prof-hd {", 1)[1].split("}", 1)[0]
+    assert "flex-wrap:wrap" in hd
+    bar = goal_js.split(".gl-fillbar .bar {", 1)[1].split("}", 1)[0]
+    assert "flex:1 1" in bar                    # bar 弹性伸缩
+    btn = goal_js.split(".gl-prof-hd button {", 1)[1].split("}", 1)[0]
+    assert "white-space:nowrap" in btn          # 「补录」按钮不许竖排
+
+
+def test_profile_zero_state_hides_bars(goal_js: str):
+    """P0-3：关系/商机双零时不渲染 0% 完成度条（空数字是反激励——与 P19
+    本周成果 chip「双零整条隐藏」同哲学）；冷启动由空态文案+缺口 chips 承担。"""
+    assert "hasFill" in goal_js
+
+
+def test_profile_gap_chips_actionable(goal_js: str):
+    """P0-2：缺口 chip 从死 span 变 button（旧版无 data-act 点了没反应，可供性
+    错位）——点击展开「拟稿去问/我来补录」；拟稿经 cp-goal-drive-draft →
+    setDirective → smart-reply.instruction。"""
+    assert '<span class="gl-chip miss">' not in goal_js
+    assert 'data-act="slot_menu"' in goal_js
+    assert 'data-act="slot_ask"' in goal_js
+    assert 'data-act="slot_fill"' in goal_js
+    for beacon in ("goal_slot_menu", "goal_slot_ask",
+                   "goal_slot_fill", "goal_slot_edit"):
+        assert beacon in goal_js, f"missing funnel action {beacon}"
+    assert "inbox.goal.profile.ask_intent" in goal_js
+
+
+# ── P22（2026-08-01）：采纳并拟稿语义接通 + 目标管理入口 ──────────────────
+
+
+def test_p22_drive_emits_instruction_with_push(goal_js: str):
+    """采纳并拟稿必须带 instruction + pushLevel（力度规则进坐席指令，防陪伴日硬推销）。"""
+    assert "_emitDriveDraft" in goal_js
+    assert "inbox.goal.drive_instruction" in goal_js
+    assert "inbox.goal.drive_rule." in goal_js   # 动态拼键 drive_rule.{none|soft|direct}
+    assert "instruction:" in goal_js
+    assert "pushLevel:" in goal_js
+
+
+def test_p22_goal_management_surface(goal_js: str):
+    """有目标时「设定目标」不再失踪：⋯ 菜单有换方向；AI 自建徽标；自治档可点切。"""
+    assert 'data-act="redirect"' in goal_js
+    assert "inbox.goal.act.redirect" in goal_js
+    assert "AUTO_ORIGIN" in goal_js
+    assert "inbox.goal.origin.auto" in goal_js
+    assert 'data-act="autonomy_cycle"' in goal_js
+    assert "inbox.goal.push.none_tip" in goal_js
+
+
+def test_p22_draft_directive_api():
+    draft = (_REPO / "shared" / "copilot" / "components" / "cp-draft.js").read_text(
+        encoding="utf-8")
+    assert "setDirective" in draft
+    assert "clearDirective" in draft
+    assert "payload.instruction" in draft
+    assert "dirchip" in draft
+    assert "cp.draft.directive_label" in draft
+    # P22.1：opener 态强制切回 reply，避免 instruction 静默丢失
+    assert 'this._mode === "opener"' in draft
+    assert 'this._setMode("reply")' in draft
+    assert "summary" in draft
+    # P23：目标/来源随 payload 走（服务端落 drive_draft 耐久事件 + 样本归属）
+    assert "payload.goal_id" in draft
+    assert "payload.instruction_source" in draft
+
+
+def test_p23_host_forwards_source(inbox_html: str):
+    """宿主把 drive-draft 的 source（beat/hero/slot）透传给 setDirective——
+    断了它 drive_draft 事件全归 '-'，周审看不出哪个入口在被用。"""
+    assert "source:String(det.source||'')" in inbox_html
+
+
+def test_p22_1_hero_one_click_draft(goal_js: str, inbox_html: str):
+    """英雄卡一键拟稿：降发现成本；与卡内「采纳并拟稿」同指令拼装。"""
+    assert "driveDraftFromToday" in goal_js
+    assert "goal_hero_draft" in goal_js
+    assert "hg-draft" in inbox_html
+    assert "data-hg-draft" in inbox_html
+    assert "driveDraftFromToday" in inbox_html
+    # 宿主缺 instruction 时用 intent+push 回拼（旧事件/英雄卡容错）
+    assert "drive_instruction" in inbox_html
+    assert "summary:intent" in inbox_html
+
+
+def test_p22_drive_i18n_bilingual():
+    import importlib
+    goals_pack = importlib.import_module("src.web.i18n_packs.goals")
+    for key in (
+        "inbox.goal.drive_instruction",
+        "inbox.goal.drive_rule.none",
+        "inbox.goal.drive_rule.soft",
+        "inbox.goal.drive_rule.direct",
+        "inbox.goal.push.none_tip",
+        "inbox.goal.origin.auto",
+        "inbox.goal.act.redirect",
+        "inbox.goal.redirect_confirm",
+        "inbox.goal.autonomy_cycle_t",
+        "inbox.goal.autonomy_saved",
+        "inbox.goal.drive_switched",
+        "inbox.goal.hero.draft",
+        "inbox.goal.hero.draft_t",
+        "inbox.goal.profile.ask_draft_label",
+    ):
+        assert key in goals_pack.ZH and key in goals_pack.EN, key
+
+
+def test_profile_filled_chips_editable_and_form_grouped(goal_js: str):
+    """P1：已填 chip 点击进补录并聚焦对应字段（来源标注收进 tooltip 省宽度）；
+    补录表单按轨分组 + 建议问法当 placeholder（空输入框不再让人猜该填什么）。"""
+    assert 'data-act="slot_edit"' in goal_js
+    assert "gl-pf-group" in goal_js
+    assert "placeholder=" in goal_js
+    assert "inbox.goal.profile.src." in goal_js   # 来源仍可见（tooltip）
+    assert "focus()" in goal_js
+
+
+def test_products_pitch_visible_price_aligned(goal_js: str):
+    """P1：产品 pitch 从 hover title 提为常显副行（触屏/桌面壳无 hover 也可达
+    ——那是坐席的现成话术）；价格右对齐独立列；外链带 ↗ 线稿 + noopener。"""
+    assert "gl-prod-pitch" in goal_js
+    assert "gl-prod-price" in goal_js
+    assert 'rel="noopener"' in goal_js
+
+
+def test_profile_ask_i18n_bilingual():
+    """ask.<slot key> 是动态拼键（静态键门禁扫不到）——显式钉：profile_slots
+    注册表每个槽位的建议问法 zh+en 齐备；registry 增槽时此测试点名补文案。"""
+    import importlib
+
+    goals_pack = importlib.import_module("src.web.i18n_packs.goals")
+    from src.companion.goals.profile_slots import SLOTS
+
+    for s in SLOTS:
+        for lang in (goals_pack.ZH, goals_pack.EN):
+            assert f"inbox.goal.profile.ask.{s['key']}" in lang, \
+                f"missing ask.{s['key']}"
+    for key in ("inbox.goal.profile.ask_lead", "inbox.goal.profile.ask_intent",
+                "inbox.goal.profile.ask_btn", "inbox.goal.profile.fill_btn",
+                "inbox.goal.profile.miss_t", "inbox.goal.profile.edit_t"):
+        for lang in (goals_pack.ZH, goals_pack.EN):
+            assert key in lang, key

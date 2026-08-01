@@ -717,7 +717,8 @@ class GoalStore:
         out: Dict[str, Any] = {
             "since_ts": s, "now": n,
             "totals": {"done": 0, "failed": 0, "expired": 0, "cancelled": 0,
-                       "n": 0, "done_rate": 0.0, "avg_days_to_done": None},
+                       "n": 0, "done_rate": 0.0, "avg_days_to_done": None,
+                       "won": 0, "won_rate": 0.0},
             "by_template": {},
             "beats": {"planned": 0, "consumed": 0, "sent": 0, "skipped": 0},
             "feedback": {"adopt": 0, "reject": 0},
@@ -728,6 +729,11 @@ class GoalStore:
             "churn_reasons": {},
             # P12：生命周期终态 × 主流失原因（won=真金白银/手动成交）
             "churn_outcomes": {},
+            # P23：「采纳并拟稿」耐久使用面（goal_events kind=drive_draft，
+            # 进程 ui-event 计数重启即清零，周审只能信 DB 口径）
+            "drive_draft": {"total": 0, "by_source": {}},
+            # P23：画像槽位填充漏斗（按槽位自身 ts 落窗；src=auto/agent/llm）
+            "profile_fills": {"total": 0, "by_src": {}, "by_track": {}},
         }
         try:
             rows = self._conn.execute(
@@ -767,16 +773,40 @@ class GoalStore:
                     (prev + float(r["avg_progress"] or 0.0) * cnt) / bt["n"], 3)
                 out["totals"][st] = out["totals"].get(st, 0) + cnt
                 out["totals"]["n"] += cnt
+            # P23：win-rate（won=真金白银——result 前缀 order:/manual:，与
+            # churn_outcomes 同判定；winback done=回话≠成交刻意不进 won）。
+            # 分母与 done_rate 同（organic，排除 cancelled），两率可直接横比。
+            try:
+                rows = self._conn.execute(
+                    "SELECT template, COUNT(*) AS n FROM goals"
+                    " WHERE status = 'done' AND done_at >= ?"
+                    " AND (result LIKE 'order:%' OR result LIKE 'manual:%')"
+                    " GROUP BY template", (s,),
+                ).fetchall()
+                for r in rows:
+                    bt = out["by_template"].setdefault(str(r["template"]), {
+                        "done": 0, "failed": 0, "expired": 0, "cancelled": 0,
+                        "n": 0, "done_rate": 0.0,
+                        "avg_days_to_done": None, "avg_progress": 0.0})
+                    bt["won"] = int(r["n"])
+                    out["totals"]["won"] += int(r["n"])
+            except Exception:
+                pass
             # done_rate 分母刻意排除 cancelled（运营手动叫停≠客户结果，
             # 混进来会让批量清目标把成功率砸穿）
             for bt in out["by_template"].values():
                 organic = bt["done"] + bt["failed"] + bt["expired"]
+                bt.setdefault("won", 0)
                 if organic:
                     bt["done_rate"] = round(bt["done"] / organic, 3)
+                    bt["won_rate"] = round(int(bt["won"]) / organic, 3)
+                else:
+                    bt.setdefault("won_rate", 0.0)
             t = out["totals"]
             organic = t["done"] + t["failed"] + t["expired"]
             if organic:
                 t["done_rate"] = round(t["done"] / organic, 3)
+                t["won_rate"] = round(int(t["won"]) / organic, 3)
 
             # 终态时的里程碑分布（获客漏斗「死在哪一段」读数；cancelled 不计——
             # 运营叫停不代表客户走到哪）
@@ -808,6 +838,24 @@ class GoalStore:
             for r in rows:
                 key = "adopt" if str(r["kind"]) == "beat_adopted" else "reject"
                 out["feedback"][key] = int(r["n"])
+
+            # P23：「采纳并拟稿」使用面（desktop smart-reply 带 goal_id 时落
+            # kind=drive_draft，detail=来源 beat/hero/slot）。计的是「指令
+            # 驱动的生成次数」——同一稿重生成算多次，命名如实。
+            try:
+                rows = self._conn.execute(
+                    "SELECT COALESCE(NULLIF(TRIM(detail),''),'-') AS src,"
+                    " COUNT(*) AS n FROM goal_events"
+                    " WHERE kind = 'drive_draft' AND ts >= ? GROUP BY src",
+                    (s,),
+                ).fetchall()
+                by_src: Dict[str, int] = {}
+                for r in rows:
+                    by_src[str(r["src"])] = int(r["n"])
+                out["drive_draft"] = {
+                    "total": sum(by_src.values()), "by_source": by_src}
+            except Exception:
+                pass
 
             rows = self._conn.execute(
                 "SELECT goal_id, template, title, status, progress, start_ts,"
@@ -865,6 +913,42 @@ class GoalStore:
                         reasons[lab] = reasons.get(lab, 0) + 1
             out["churn_reasons"] = dict(sorted(
                 reasons.items(), key=lambda kv: -kv[1]))
+
+            # P23：画像槽位填充漏斗（ask→fill 的 fill 段）。窗口按**槽位自身
+            # ts**（行级 updated_at 会被别的槽刷新，同 churn_reasons 的理由）；
+            # src 分桶 auto（正则采集）/agent（坐席补录）/llm（LLM 轨），
+            # track 分桶 relation/bant（lifecycle 等注册表外的归 other）。
+            try:
+                from src.companion.goals.profile_slots import get_slot
+                rows = self._conn.execute(
+                    "SELECT fields FROM customer_profiles").fetchall()
+                pf_total = 0
+                pf_src: Dict[str, int] = {}
+                pf_track: Dict[str, int] = {}
+                for r in rows:
+                    try:
+                        cells = json.loads(r["fields"] or "{}")
+                    except Exception:
+                        continue
+                    if not isinstance(cells, dict):
+                        continue
+                    for key, cell in cells.items():
+                        if not isinstance(cell, dict):
+                            continue
+                        if float(cell.get("ts") or 0.0) < s:
+                            continue
+                        pf_total += 1
+                        src = str(cell.get("src") or "-").strip() or "-"
+                        pf_src[src] = pf_src.get(src, 0) + 1
+                        slot = get_slot(str(key))
+                        track = str((slot or {}).get("track") or "other")
+                        if track not in ("relation", "bant"):
+                            track = "other"
+                        pf_track[track] = pf_track.get(track, 0) + 1
+                out["profile_fills"] = {
+                    "total": pf_total, "by_src": pf_src, "by_track": pf_track}
+            except Exception:
+                pass
 
             # P12 流失×转化：生命周期终态目标 JOIN 画像主因——看「嫌贵的
             # 有没有买回来 / 没用起来的有没有续上」。won 只认 order:/manual:

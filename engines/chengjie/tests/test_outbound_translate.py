@@ -129,24 +129,27 @@ async def test_skip_when_language_unknown():
 
 
 @pytest.mark.asyncio
-async def test_fallback_on_translation_failure():
+async def test_hold_on_translation_failure_when_cjk_conflict():
+    """2026-07-31 契约变更（198 实锤）：中文→非 CJK 目标语的翻译失败不再回落原文
+    ——回落＝把中文原样发给外语客户＝人设穿帮。返回 None（HOLD），worker 转投递失败。"""
     ts = _FakeTS(_FakeRes("", ok=False, error="provider_unavailable"))
     store = _FakeStore(language="en")
     out = await translate_outbound_text(
         {"conversation_id": "x1", "text": "你好"},
         translation_service=ts, store=store, source_lang="zh")
-    assert out == "你好"               # 回落原文
+    assert out is None                 # HOLD：别发
     assert store.recorded == []        # 失败不记录
 
 
 @pytest.mark.asyncio
-async def test_fallback_when_identity_translation():
-    ts = _FakeTS(_FakeRes("你好", provider="identity"))  # 译文==原文
+async def test_hold_when_identity_translation_cjk_conflict():
+    """identity 回显正是 198 泄漏机制（『是Steven，别担心。😊』被判 en → 原样发出）。"""
+    ts = _FakeTS(_FakeRes("你好", provider="identity"))  # 译文==原文（仍是中文）
     store = _FakeStore(language="en")
     out = await translate_outbound_text(
         {"conversation_id": "x1", "text": "你好"},
         translation_service=ts, store=store, source_lang="zh")
-    assert out == "你好"
+    assert out is None
     assert store.recorded == []
 
 
@@ -160,7 +163,18 @@ async def test_never_raises_on_engine_exception():
     out = await translate_outbound_text(
         {"conversation_id": "x1", "text": "你好"},
         translation_service=_Boom(), store=store, source_lang="zh")
-    assert out == "你好"               # 异常被吞，发原文
+    assert out is None                 # 异常被吞不外抛；CJK 冲突 → HOLD 不发原文
+
+
+@pytest.mark.asyncio
+async def test_fallback_kept_when_no_cjk_conflict():
+    """非 CJK 冲突（英文文本→法语目标）保持旧回落语义：失败发原文，绝不阻塞。"""
+    ts = _FakeTS(_FakeRes("", ok=False, error="provider_unavailable"), detect="en")
+    store = _FakeStore(language="fr")
+    out = await translate_outbound_text(
+        {"conversation_id": "x1", "text": "Hello there my friend"},
+        translation_service=ts, store=store, source_lang="zh")
+    assert out == "Hello there my friend"
 
 
 @pytest.mark.asyncio
@@ -209,6 +223,57 @@ async def test_detection_unknown_falls_back_to_config_source():
         translation_service=ts, store=store, source_lang="zh")
     assert out == "Hello"
     assert ts.calls[0][2] == "zh"
+
+
+# ── CJK 冲突硬护栏（2026-07-31，198 实锤『是Steven，别担心。😊』原样发出） ────────
+
+@pytest.mark.asyncio
+async def test_mixed_cjk_text_must_translate_even_if_detected_as_target():
+    """事故复刻：中英混排短句被 detect 判成 en（==目标语）→ 旧逻辑跳过翻译原样发出。
+    新逻辑：文本含 CJK 而目标非 CJK → 跳过护栏失效，强制以 zh 为源真翻。"""
+    ts = _FakeTS(_FakeRes("It's Steven, don't worry. 😊"), detect="en")
+    store = _FakeStore(language="en")
+    out = await translate_outbound_text(
+        {"conversation_id": "x1", "text": "是Steven，别担心。😊"},
+        translation_service=ts, store=store, source_lang="zh")
+    assert out == "It's Steven, don't worry. 😊"
+    assert ts.calls, "冲突态必须真调引擎（不得跳过）"
+    assert ts.calls[0][2] == "zh"      # 源语言钉 zh（不信混排检测）
+    assert len(store.recorded) == 1
+
+
+@pytest.mark.asyncio
+async def test_conflict_detected_cjk_lang_keeps_detected_source():
+    """冲突态源语言优先信「检测到的 CJK 语种」：日文文本不被误按 zh 翻。"""
+    ts = _FakeTS(_FakeRes("Hello"), detect="ja")
+    store = _FakeStore(language="en")
+    out = await translate_outbound_text(
+        {"conversation_id": "x1", "text": "こんにちは"},
+        translation_service=ts, store=store, source_lang="zh")
+    assert out == "Hello"
+    assert ts.calls[0][2] == "ja"
+
+
+@pytest.mark.asyncio
+async def test_hold_when_translation_echoes_cjk():
+    """引擎返回 ok 但译文仍含中文（半吊子回显）→ 冲突态按不可用处理，HOLD。"""
+    ts = _FakeTS(_FakeRes("Okay 别担心 friend"), detect="en")
+    store = _FakeStore(language="en")
+    out = await translate_outbound_text(
+        {"conversation_id": "x1", "text": "好的，别担心朋友"},
+        translation_service=ts, store=store, source_lang="zh")
+    assert out is None
+    assert store.recorded == []
+
+
+def test_contains_cjk_and_lang_is_cjk_helpers():
+    from src.inbox.outbound_translate import contains_cjk, lang_is_cjk
+    assert contains_cjk("是Steven，别担心。😊") is True
+    assert contains_cjk("Hello 😊 world") is False
+    assert contains_cjk("こんにちは") is True      # 假名
+    assert contains_cjk("안녕하세요") is True       # 谚文
+    assert lang_is_cjk("zh") and lang_is_cjk("zh-CN") and lang_is_cjk("ja") and lang_is_cjk("ko")
+    assert not lang_is_cjk("en") and not lang_is_cjk("") and not lang_is_cjk("unknown")
 
 
 # ── 会话语言加权多数决（vote_language 纯函数） ──────────────────────────

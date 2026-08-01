@@ -56,6 +56,8 @@ class _Ctx:
     config: Dict[str, Any]
     config_dir: Optional[Path] = None
     issues: List[Issue] = field(default_factory=list)
+    # 实际加载的那个配置文件（重复键检查要读**原文**，解析后的 dict 里已经看不出来了）
+    config_file: Optional[Path] = None
 
     def add(self, severity: str, path: str, message: str, hint: str = "") -> None:
         self.issues.append(Issue(severity, path, message, hint))
@@ -364,7 +366,50 @@ def _check_inbox(ctx: _Ctx) -> None:
         pass
 
 
+def _check_duplicate_keys(ctx: _Ctx) -> None:
+    """配置文件里有没有重复键（2026-07-31 事故后补）。
+
+    **必须读原文**：PyYAML 静默取最后一个同名键，等 config 变成 dict 时，被丢弃的
+    那一整块已经无迹可寻——所以任何基于 ``ctx.config`` 的检查都发现不了。实测后果：
+    手插一个 ``platform_login.telegram`` 把原块清空，重启后 5 个 TG 号没有 worker，
+    而解析成功、启动正常、日志无异常。
+
+    覆盖**实际加载的主配置 + 同目录 overlay**（``config.local.yaml``，运营改开关都
+    落那儿，也正是事故现场）。判 ERROR：这是静默丢配置，不是风格问题。
+    读文件失败一律跳过（自检不该因为 IO 抖动误报）。
+    """
+    if ctx.config_dir is None:
+        return
+    try:
+        from src.utils.yaml_duplicates import find_duplicate_keys
+    except Exception:
+        return
+    seen: set = set()
+    files = []
+    if ctx.config_file is not None:
+        files.append(ctx.config_file)
+    files.append(ctx.config_dir / "config.local.yaml")
+    for path in files:
+        try:
+            if path in seen or not path.is_file():
+                continue
+            seen.add(path)
+            dups = find_duplicate_keys(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for dotted in dups:
+            if dotted == "<parse-error>":
+                continue  # YAML 本身坏了是另一类问题，加载阶段已经会报
+            ctx.add(
+                ERROR, dotted,
+                f"{path.name} 里这个键出现了不止一次",
+                "PyYAML 静默取最后一个 → 前面同名块被**整段丢弃**（曾因此让 5 个 "
+                "Telegram 号重启后无 worker）。把两块合并成一块。",
+            )
+
+
 _CHECKS: List[Callable[[_Ctx], None]] = [
+    _check_duplicate_keys,
     _check_ai,
     _check_telegram,
     _check_line,
@@ -388,12 +433,15 @@ _CHECKS: List[Callable[[_Ctx], None]] = [
 def check_config(config: Dict[str, Any], *, config_path: Any = None) -> List[Issue]:
     """对配置 dict 跑全部规则，返回 issue 列表（按严重度排序）。"""
     config_dir: Optional[Path] = None
+    config_file: Optional[Path] = None
     if config_path:
         try:
-            config_dir = Path(config_path).parent
+            config_file = Path(config_path)
+            config_dir = config_file.parent
         except Exception:
-            config_dir = None
-    ctx = _Ctx(config=config if isinstance(config, dict) else {}, config_dir=config_dir)
+            config_dir = config_file = None
+    ctx = _Ctx(config=config if isinstance(config, dict) else {},
+               config_dir=config_dir, config_file=config_file)
     if not isinstance(config, dict):
         ctx.add(ERROR, "<root>", "配置不是有效的 YAML 字典")
         return ctx.issues

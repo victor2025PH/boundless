@@ -93,6 +93,32 @@ def build_shop_url(
                        urlencode(q), parts.fragment))
 
 
+def resolve_upgrade_offer(
+    *,
+    sku_id: str = "",
+    product_id: str = "",
+    target_plan: str = "",
+) -> str:
+    """升级 CTA（会员页来源横幅，E5）：按**目标档位**挑 offer。
+
+    与 ``resolve_shop_offer`` 的「续费当前档」语义相对——用户刚撞上「需要 pro」
+    的功能锁，CTA 该预选 pro 对应的 offer，而不是他现在那档。
+
+    保守边界：只在产品族**可确证为 chatx**（sku ``chatx-*`` 或 product_id
+    ``zhiliao``——autochat 线三档与 basic/pro/flagship 一一对应）时返回目标档
+    offer；lingox/tongyi（升档语义不同）与族不可知（无 sku 无 product_id）一律
+    返回空串，调用方回落既有「按当前授权」的 shop.url——家族永远不指错，
+    跨族升档是产品决策，代码不猜。
+    """
+    sku = str(sku_id or "").strip().lower()
+    pid = str(product_id or "").strip().lower()
+    if sku.startswith("lingox") or pid == "tongyi":
+        return ""
+    if sku.startswith("chatx") or pid == "zhiliao":
+        return _PLAN_OFFER.get(str(target_plan or "").strip().lower(), "")
+    return ""
+
+
 def shop_cta_from_license(
     base: str,
     lic: Optional[dict] = None,
@@ -113,5 +139,6 @@ def shop_cta_from_license(
 __all__ = [
     "build_shop_url",
     "resolve_shop_offer",
+    "resolve_upgrade_offer",
     "shop_cta_from_license",
 ]

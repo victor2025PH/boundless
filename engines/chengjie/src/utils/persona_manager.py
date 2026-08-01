@@ -66,6 +66,9 @@ PROMPT_CONSUMED_FIELDS = frozenset({
     "identity.deny_ai", "identity.deny_ai_reply", "identity.claim_human",
     "boundaries.topics_to_avoid",
     "capabilities.video_call",           # 反向消费：为真时撤掉「不能视频」约束
+    "capabilities.photos",               # 反向消费：为真时撤掉「不能发照片」约束
+                                         # （人设级发图总闸，默认关；SSOT=
+                                         #  src/companion/photo_capability.py）
     "emotion.frustrated_response",
 })
 
@@ -1332,6 +1335,12 @@ class PersonaManager:
             lines.append(
                 "不能视频/语音通话：被邀请时自然婉拒（这边不方便），绝不答应。"
             )
+        # 发图能力反向消费（2026-07-31，与 video_call 同款）：capabilities.photos
+        # 显式 true 才解除。默认约束＝修「翻翻相册/我找找图」空头支票的第一防线，
+        # 随人设块走 → 全域（含试聊）覆盖。文案 SSOT 在 photo_capability。
+        if not (isinstance(_caps_c, dict) and _caps_c.get("photos")):
+            from src.companion.photo_capability import NO_PHOTO_PERSONA_LINE
+            lines.append(NO_PHOTO_PERSONA_LINE)
         lines.append(
             "绝不编造联系方式（微信/QQ/手机号等，对方会验证）：资料里没有就说"
             "「先在这聊嘛」带过。"
@@ -1737,6 +1746,12 @@ class PersonaManager:
                 "通话时，自然婉拒（如「这边不方便开视频，先这样聊嘛」），"
                 "绝不答应「可以视频/开视频/回头拨给你」这类承诺。"
             )
+        # 发图能力反向消费（2026-07-31，与 video_call 同款先例）：
+        # capabilities.photos 显式 true 才解除「不能发照片」约束——修
+        # 「我翻翻手机相册哈」式空头支票（试聊实录）。文案 SSOT 在 photo_capability。
+        if not (isinstance(_caps, dict) and _caps.get("photos")):
+            from src.companion.photo_capability import NO_PHOTO_PERSONA_LINE
+            lines.append(NO_PHOTO_PERSONA_LINE)
         # 2026-07-22 真机事故：AI 被要微信时**编造**了一个微信号，客户搜索不到
         # 当场穿帮（"哪有这个微信号，你编的吗"）。联系方式是可验证事实，绝不许编。
         lines.append(

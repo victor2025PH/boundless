@@ -74,8 +74,13 @@ def _login_enabled(config: Dict[str, Any]) -> bool:
 
 
 def _orchestrator_on(config: Dict[str, Any]) -> bool:
-    pl = (config or {}).get("platform_login", {}) or {}
-    return bool(pl.get("orchestrator_enabled", False))
+    # 与运行时 account_orchestrator.orchestrator_enabled 同口径（三态，见
+    # platform_login.resolve_login_switch）：桌面升级安装未写过时默认开，故连接弹窗
+    # 不再对「其实会 7×24 常驻」的号误报 orchestrator_off。诊断类读取
+    # （config_check / companion_preflight / protocol_diagnostics）刻意仍读字面值——
+    # 那是「配置里到底写没写」的运维审计视角，与本处「实际会不会常驻」正交。
+    from src.integrations.platform_login import resolve_login_switch
+    return resolve_login_switch(config, "platform_login.orchestrator_enabled")
 
 
 def service_probe_targets(config: Dict[str, Any]) -> Dict[str, str]:

@@ -357,6 +357,30 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
   </div>
 </div>
 
+{# AI 资产一览（原 /ai-studio 聚合统计迁入 2026-08-01）— 默认隐藏，
+   /api/ai-studio/summary 可用才展示；四段各自深链权威页 #}
+<div class="card fa fa2 pro-only" id="dash-ai-assets" style="display:none;margin-bottom:1rem;padding:.85rem 1.2rem">
+  <div style="display:flex;gap:1.4rem;flex-wrap:wrap;align-items:center">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18" style="color:var(--p);flex-shrink:0"><path d="M12 4.5a2.5 2.5 0 00-2.5 2.5v.5A3.5 3.5 0 006 11v.5a3.5 3.5 0 00.5 6.9A2.6 2.6 0 009 21h6a2.6 2.6 0 002.5-2.6 3.5 3.5 0 00.5-6.9V11a3.5 3.5 0 00-3.5-3.5V7A2.5 2.5 0 0012 4.5z"/><path d="M12 4.5V21"/></svg>
+    <a href="/personas" style="text-decoration:none;color:inherit">
+      <span style="font-size:.72rem;color:var(--t3);font-weight:700;text-transform:uppercase">{{ (i18n or {}).get('psn_tab_profiles', "人设池") }}</span><br>
+      <b id="daa-personas" style="font-size:1.05rem">—</b> <span id="daa-personas-sub" style="font-size:.72rem;color:var(--t2)"></span>
+    </a>
+    <a href="/episodic-memory" style="text-decoration:none;color:inherit">
+      <span style="font-size:.72rem;color:var(--t3);font-weight:700;text-transform:uppercase">{{ (i18n or {}).get('episodic', "情景记忆") }}</span><br>
+      <b id="daa-memory" style="font-size:1.05rem">—</b> <span id="daa-memory-sub" style="font-size:.72rem;color:var(--t2)"></span>
+    </a>
+    <a href="/learner" style="text-decoration:none;color:inherit">
+      <span style="font-size:.72rem;color:var(--t3);font-weight:700;text-transform:uppercase">{{ (i18n or {}).get('db_s006', "学习审核") }}</span><br>
+      <b id="daa-drafts" style="font-size:1.05rem">—</b> <span id="daa-drafts-sub" style="font-size:.72rem;color:var(--t2)"></span>
+    </a>
+    <a href="/relations-health" style="text-decoration:none;color:inherit">
+      <span style="font-size:.72rem;color:var(--t3);font-weight:700;text-transform:uppercase">{{ (i18n or {}).get('as_s005', "关系档案") }}</span><br>
+      <b id="daa-rel" style="font-size:1.05rem">—</b> <span id="daa-rel-sub" style="font-size:.72rem;color:var(--t2)"></span>
+    </a>
+  </div>
+</div>
+
 {% if user_role in ('master', 'admin') %}
 <div class="card fa fa2 pro-only" id="dash-first-deploy-card" style="margin-bottom:1rem;border-left:3px solid var(--p)">
   <h2 style="font-size:.95rem;margin:0 0 .4rem;display:flex;align-items:center;justify-content:space-between;gap:.4rem;flex-wrap:wrap">
@@ -1585,6 +1609,27 @@ apiFetch('/api/monetize/kpi?days=30',{credentials:'same-origin'}).then(function(
   document.getElementById('dash-kpi-rev').textContent=(d.currency||'')+' '+(d.revenue_total||0);
   document.getElementById('dash-kpi-tx').textContent=d.tx_count||0;
   document.getElementById('dash-kpi-subs').textContent=d.active_subscriptions||0;
+  card.style.display='';
+}).catch(function(){});
+
+/* AI 资产一览（原 /ai-studio 聚合统计迁入 2026-08-01）：接口不可用保持隐藏 */
+apiFetch('/api/ai-studio/summary',{credentials:'same-origin'}).then(function(r){
+  if(!r.ok) return null;
+  return r.json();
+}).then(function(d){
+  if(!d) return;
+  var card=document.getElementById('dash-ai-assets');
+  if(!card) return;
+  document.getElementById('daa-personas').textContent=(d.personas||{}).profile_count??0;
+  document.getElementById('daa-personas-sub').textContent=window.Tf('as_ps_sub',{p:(d.personas||{}).profile_count??0,b:(d.personas||{}).binding_count??0});
+  document.getElementById('daa-memory').textContent=(d.memory||{}).total_facts??0;
+  document.getElementById('daa-memory-sub').textContent=window.Tf('as_mem_sub',{u:(d.memory||{}).unique_users??0,v:(d.memory||{}).with_embedding??0});
+  var dr=d.drafts||{};
+  document.getElementById('daa-drafts').textContent=dr.pending??0;
+  document.getElementById('daa-drafts-sub').textContent=window.Tf('as_dr_sub',{p:dr.pending??0,a:dr.approved??0});
+  var rel=d.relations||{};
+  document.getElementById('daa-rel').textContent=rel.intimate_count??0;
+  document.getElementById('daa-rel-sub').textContent=window.Tf('as_rel_sub',{t:rel.total??0,i:rel.intimate_count??0});
   card.style.display='';
 }).catch(function(){});
 </script>

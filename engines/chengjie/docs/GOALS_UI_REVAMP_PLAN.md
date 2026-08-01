@@ -223,3 +223,235 @@ agenda / routes / ops_agenda_ui / ops_overview + 哑按钮 / 重复 id / 孤儿�
 3. **移动端目标卡体验**：快捷芯片打开的是全宽侧栏，目标卡表单在窄屏的可用性（输入框/日期选择）值得实机过一遍。
 4. **反馈率强化（看数据再做）**：若 7 天后反馈率仍低，考虑在今日拍 push 行加「一键采纳并生成草稿」复合按钮（合并两次点击）。
 5. **agenda 分页**：settle cap 100/请求对当前规模足够；会话规模上千时再考虑游标分页。
+
+---
+
+## 7. P18（2026-07-31）：「会用」层——P17 修「找不到」，本轮修「找到了也不会用」
+
+> 触发：运营实测反馈「用户在使用上不会，需要引导」+ 截图实锤（新手停在
+> 「自定义目标」模板上写不出「给 AI 看的推进方向」，而 7 个场景模板藏在下拉里；
+> 「已预填上次偏好」还会把一次错误选择永久固化）。
+
+### 已落地（模板/i18n/共享组件热更即生效；.py 两处随下次攒批重启）
+
+| # | 项 | 落点 |
+|---|----|------|
+| 1 | **目标表单场景化**：模板下拉 → 场景卡片（每模板一句人话适用场景，i18n `inbox.goal.tmpl_desc.<id>` 8 键双语）；custom 收进「进阶」入口且**不参与默认预选**（偏好里存了 custom 也只回放期限/自治档）；沉默 ≥72h 自动标「推荐」沉默唤回（宿主 ctx.goalHint.silentHours 喂数，高置信才推荐） | `cp-goal.js`（双树）+ `goals.py` pack |
+| 2 | **自治档诚实文案**：auto 档 hint 改为「若系统开启了主动触达才会主动发起」；`/api/goals/templates` 增 `caps:{bridge_enabled,proactive_enabled}`（.py，待重启），bridge 关着时表单灰字如实注明「不会自己主动发消息」——修「文案过度承诺 vs 默认配置不出门」的预期错位；caps 缺失（旧后端）不猜不注解 | `cp-goal.js` + `goal_routes.py` |
+| 3 | **三步上手引导**：右栏首次可见自动放一遍 coach marks（①AI 下一步 ②设工作目标 ③你来把关发送），❓ 随时重看；锚点缺失（403 整卡隐藏）自动回落备选锚点；窄屏(<900px)不自动打扰；App 模式跳过 | `unified_inbox.html`（`_cpTour*` 全套 + window 暴露）+ `unified-inbox.css` + `inbox_workspace.py` pack（`inbox.cptour.*`） |
+| 4 | **建目标后「接下来会发生什么」**：按所选自治档出一次性提示（observe/suggest/auto 三套文案，`inbox.goal.created_next.*`），修「建完然后呢」断崖 | `cp-goal.js` |
+| 5 | **「AI 做了什么」进展时间线**：目标卡内懒取 `GET /api/goals/{id}` 拍史（接口 P3 起就有、坐席端首次消费），行=日期+状态（已计划/已带入回复/已发出/已跳过/已让路）+意图，修「AI 推进过程完全不可见」 | `cp-goal.js` |
+| 6 | **「点了没反馈」收口**：宿主 `cp-fill` 统一 toast「已填入输入框」+按来源埋点；`cp-action-done` 出「已执行/执行失败」toast；协作卡推荐话题从下划线文字改按钮式 chip（带 tooltip），无 opener 的话题不再渲染（静默哑点击清零） | `unified_inbox.html` + `cp-collab.js`（双树） |
+| 7 | **术语人话化**：剧本内置话题「共同梗 callback」→「回访上次话题」（.py 待重启）；「自治档」标签加括注「AI 参与度」 | `conversation_script.py` + `goals.py` pack |
+| 8 | **新埋点**（复用 ui-event 通道）：`goal_tour_show/replay/done/skip`、`goal_form_pick_scenario/custom`、`goal_progress_open`、`cp_fill_<source>`、`nba_exec_ok/fail` | 组件+宿主 |
+| 9 | 坐席一页纸 SOP + 30 秒演示脚本 + 常见问题（培训物料） | `docs/坐席上手_业务助手三步SOP.md` |
+
+门禁：`test_goal_ui_revamp.py` 新增 P18 段 10 例（场景卡/推荐/诚实注解/建后提示/时间线/
+caps/动态键双语/宿主接线/tour CSS）；版本戳断言更新至 `?v=20260731`。缓存戳已 bump：
+cp-goal/cp-collab/cp-i18n `?v=20260731a` + unified-inbox.css + ui-build.txt。
+
+### 刻意不做 / 避让
+
+- **help_terms 词条不加**：调研实锤工作台 `workspace_base.html` 没有 TERM_DICT 悬浮词典
+  （只在管理后台 base.html 生效），加词条对坐席零收益——术语解释改由 tour + 卡内 hint 承担。
+- **功能中心「使用指南」链接**：settings 功能总览卡是另一条线当日活跃工作面（feature_registry
+  P1/P2），避让不动；建议对方收口后加一行 goals 行动作链接指向 `?card=goal` 深链或 SOP 文档。
+- **NBA 采纳率后端表**：暂用 ui-event 埋点口径（nba_exec_*、cp_fill_nba），若 7 天读数
+  证明需要更准的会话级归因再上库。
+
+### 验收口径（上线 7 天读 ops goals 卡「UI 漏斗」行）
+
+- `goal_tour_done / goal_tour_show` ≥ 60%（引导完成率）；
+- `goal_form_pick_custom` 占比显著低于 `goal_form_pick_scenario`（场景卡片起效）；
+- 今日拍反馈率 ≥30%（P17 目标沿用）；
+- 「不会用」类反馈清零。
+
+### 冻结基线（2026-07-31 02:15 实测，`/api/workspace/metrics?format=prometheus`）
+
+> ⚠️ 进程级计数，随实例重启清零；本快照窗口=上次重启起 ~10.3h。8/7 复盘用增量口径对比。
+
+- `ui_events_by_action_total`：goal_card_expose=11 / goal_set_click=2 / goal_create_ok=1
+  （**表单放弃率 1/2**；tour/scenario 事件尚未产生——P18 刚上线）；
+- `goals_created_total`=1；`goals_beats_total{planned}`=30；
+  **`goals_beat_feedback_total` adopt/reject/undo = 0/0/0 → 反馈率 0%**；
+- `goals_injected_total` reply=4 / draft=1（注入链活着）；`goals_terminal_total{done}`=0。
+
+## 8. P19（2026-07-31 深夜）：基线数据驱动的两项加强
+
+反馈率 0% 当场坐实（30 拍 0 反馈）→ 原「7 天后看数据再做」的复合按钮**提前落地**：
+
+| # | 项 | 落点 |
+|---|----|------|
+| 1 | **「采纳并拟稿」复合按钮**：今日拍主动作合并「采纳 → 按意图生成草稿」两连击（先服务端落账采纳，成功才驱动草稿）；👍 降级为「只采纳」；已采纳态保留拟稿入口。埋点 `goal_feedback_adopt_draft` | `cp-goal.js`（双树，`?v=20260731b`） |
+| 2 | **本周成果 chip**（坐席成就感面）：会话列表 agenda 行右侧读 `/api/goals/report?days=7`（totals.done + active_now），有成交=庆祝色、仅推进中=中性、**双零=整条隐藏**（空数字是反激励）；10min 轮询、403/异常静默 | `unified_inbox.html` + `unified-inbox.css`（`?v=20260731b`）+ `goals.py` pack |
+
+门禁：`test_goal_ui_revamp.py` P19 段 4 例。刻意不做：功能中心「使用指南」链接继续避让
+（交付分级线 27min 前仍在动文档，收益低风险中，等对方收口）；移动端窄屏表单需实机，
+列入下阶段。
+
+## 9. P20（2026-08-01）：画像区排版收口 + 缺口 chips 动作化（截图实锤两 bug）
+
+> 触发：运营截图实锤——「AI 做了什么」下方画像区文字**逐字竖排**（客户画像/关系/
+> 商机/补录全部竖着长）+「业务痛点?/在用平台?/团队规模?」**点不动**。
+
+**根因（都在 cp-goal.js）**：① 画像头部单行 flex 硬塞「标题+双固定宽(52px) bar+补录
+按钮」≈304px，右栏默认 300px（内容区 ~236px）必然溢出 → 文本被压到 min-content →
+CJK 逐字换行成竖排；侧栏可拖到 480px，开发态宽栏不复现所以漏网。② 缺口 chip 是纯
+`<span>` 无 `data-act`（基类点击委托只认 `[data-act]`），但样式与可点的产品 chip 同族
+——可供性错位，坐席必然以为能点。
+
+| # | 项 | 说明 |
+|---|----|------|
+| 1 | **头部两行化**（P0-1） | 行1=标题+补录（全 nowrap）；行2=`gl-fillrow` 关系/商机双 bar（bar 从固定 52px 改 `flex:1 1`，标签/百分比 nowrap+tabular-nums，容器可 wrap——280px 最窄档亦不竖排） |
+| 2 | **双零不渲染 0% 条**（P0-3） | `hasFill` 守卫——空数字是反激励（与 P19 wins chip 同哲学）；冷启动由 empty 文案+缺口 chips 承担 |
+| 3 | **缺口 chip 动作化**（P0-2） | span→button+data-act：点击展开追问行「可以这样问：<建议问法>」+ 双出口——**拟稿去问**（`ask_intent` 包装成自然追问指令，复用 `cp-goal-drive-draft` 既有宿主链=切回复台+意图作生成种子，**零宿主 JS 改动**）/ **我来补录**（开表单+聚焦该字段）。建议问法走前端 i18n 键 `inbox.goal.profile.ask.<slot key>`（11 槽位 zh+en，热更零重启；键缺失回落 label 绝不裸奔键名） |
+| 4 | **已填 chip 可编辑**（P1） | 点击开补录聚焦该字段；来源标注（自动/手录）收进 tooltip 省宽度 |
+| 5 | **补录表单分组+placeholder**（P1） | 按轨分组（关系/商机小节头，lifecycle 随商机组尾）；建议问法当 placeholder |
+| 6 | **产品行升级**（P1） | chip→两行 mini 卡：名称+↗外链线稿 / 价格右对齐 / pitch 从 hover title 提为常显副行（触屏可达——那是坐席的现成话术） |
+| 7 | **新埋点** | `goal_slot_menu/ask/fill/edit`（复用 ui-event 通道）——读「追问点击→BANT 填充率」是否联动 |
+
+落点：`cp-goal.js`（双树，`?v=20260801a`）+ `goals.py` pack（+28 键）+ ui-build.txt。
+门禁：`test_goal_ui_revamp.py` P20 段 6 例（含竖排根因回归钉：禁 `width:52px` 回潮、
+`.gl-prof-hd` 必须 wrap、bar 必须弹性；`ask.<key>` 双语与 profile_slots 注册表联动钉）。
+本轮 375 例全绿（唯一红灯=sibling 线 copilot-client/cp-i18n 双树中间态漂移，非本工作面）。
+
+**下一阶段（P21 候选）**：① 280px 窄宽真浏览器回归探针（verify_* 家族，环境缺失 SKIP）；
+② 7 天读 `goal_slot_ask` 漏斗（追问点击→填充率→成交联动）；③ 模板级 win-rate 报表 +
+per-goal LLM 成本行（.py，攒批）；④ 成交前置「发试用」接 chatx_fulfillment（产品拍板）。
+→ 实施见 §10（③ 经调研改判为数据闸口项，理由在 §10.2）。
+
+## 10. P21（2026-08-01 上午）：窄宽/交互真浏览器门禁 + 数据闸口改判
+
+### 10.1 已落地：`tools/verify_goal_card_ui.py`（29 项，全绿；挂 gate_sweep -Full）
+
+P20 竖排事故能上生产的根因是**没有任何门禁在默认宽度下渲染过组件**（静态门禁钉
+CSS 源码文本，钉不住 shadow DOM 计算布局）。本探针与 verify_* 家族刻意不同——
+**file:// 自包含夹具页**（真组件文件 + 假 fetch + 假 sendBeacon + goals.py pack
+真实 zh 词条内嵌替身），三个理由都来自当天现场：
+1. **零实例依赖**：实例宕/重启冷却/忙时照样跑，CI 可跑；仅缺 playwright 才 SKIP。
+2. **零遥测污染**：探针要点「拟稿去问」——在真工作台跑会给 `goal_slot_ask` 灌水，
+   恰好污染 7 天复盘要读的数。实测：探针 29 项跑完，生产 `goal_slot_*` 计数仍为 0。
+3. **免疫 sibling 中间态**：不加载 cp-i18n.js（当日它正被另一条线编辑）。
+覆盖：216/236/276px 三档布局（标题/按钮单行、零横向溢出、双 bar）+ 双零冷启动
+（不渲染 0% 条、空态文案、缺口 chips 仍在）+ 交互链（缺口 chip→追问行→drive-draft
+事件带已替换 intent / 补录聚焦对位 / 已填 chip 编辑聚焦 / 表单分组+placeholder / 产品
+pitch 常显+价格）。踩坑记录：夹具模板占位符 `__ZH__` 与变量名 `window.__ZH__` 自撞
+→ str.replace 连变量名一起换成 JSON → 内联脚本语法崩溃；占位符一律用 `@@..@@` 形。
+
+### 10.2 改判（实施中的再优化，都有依据）
+
+- **模板级 win-rate 呈现 → 数据闸口项**：调研发现后端 `store.outcome_report` 的
+  by_template（成功率/均天数）P2 起就有、`/api/goals/report` 一直在出，ops 卡也已
+  展示总体 done_rate——真正缺的不是代码是**终态样本**（7 天窗 0 终态、历史 done=0）。
+  现在加模板级表格=给全零数据造 UI（「空数字是反激励」）。判据：`report.totals.n
+  ≥ 10` 或任一模板 organic ≥5 时再把 by_template 表进 ops goals 卡。
+- **per-goal LLM 成本 → 设计后置**：精确归因要在回复链打 goal 标签（skill_manager
+  热区、跨切面大）；粗估口径（全量成本÷成交数）会误导定价决策。等成交样本 >0 后
+  用「goals_injected 次数 × 注入块均 token × 单价」的**边际成本**口径做报表行。
+- **基线快照（2026-08-01 09:20，进程窗口≈上次重启起 1.4h）**：ui_events goal_* =
+  expose 14 / auto_expand 4 / drive_draft 3 / **adopt_draft 1（P19 复合按钮首次被真实
+  使用）** / tour_show 4；`goal_slot_*` = 0（P20 刚上线，干净基线）；report(7d) 终态
+  0、**active_now=31**（自动建目标链在跑，对比 P18 冻结时 created=1 大幅增长）。
+  8/8 复盘对比此快照 + outreach 口径的 DB 数据。
+
+### 10.3 决策件（需产品/运营拍板，代码侧已就绪）
+
+**成交前置「发 7 天试用」**：链路件齐全——SKU→license payload 权威映射
+（`chatx_fulfillment.py`，签名只在厂商机）+ 试用 claim/履约守护（trial_claim/
+fulfill_trial_service）+ 兑换码交付（cs_redeem_bot）。缺的只是目标卡入口（direct 档
+出「发试用」按钮 → 建 claim 带 ref=conversation_id → 现有守护出码 → 坐席发送）。
+拍板点：试用 SKU/期限、每 contact 限一次的幂等口径、是否计入 funnel。**在拍板前
+刻意不动代码**（发放真实授权=真金白银的运营动作）。
+
+### P22 候选（已落地，见 §11）
+
+原候选里「采纳并拟稿语义断链 / 设定目标失踪」因坐席新截图升级为 P0，先行实施。
+数据闸口项（8/8 复盘 / win-rate / 试用）顺延 P23。
+
+---
+
+## 11. P22（2026-08-01）：采纳并拟稿语义接通 + 目标管理入口
+
+### 11.1 坐席实锤根因
+
+1. **「采纳并拟稿」产出闲聊**：宿主把今日意图写进 `#reply-ta`，但 `cp-draft._generate`
+   的 payload **没有 instruction**；后端 `_goal_block` 在 push=none 时写「今天只陪伴」
+   → 模型「正确」地闲聊，坐席以为按钮坏了。
+2. **「设定目标」消失**：按钮只在空态；`auto_create` 人设开闸后几乎永有目标；无「换方向」。
+
+### 11.2 已实施（相对原方案的再优化标 ★）
+
+| 项 | 内容 |
+|---|---|
+| A1 | `smart-reply.instruction` → `persona_reply.agent_instruction` → `generate_inbox_draft` → `user_context["_agent_instruction"]` → prompt【坐席指令】；finally 清掉防落库 |
+| A2 | `cp-draft.setDirective` + 可关 chip「按今日意图拟稿」；gen 带 `instruction` |
+| A3 | 宿主**停写 composer**，改 `setDirective`；toast「已切到回复台…」 |
+| B | ⋯「换个方向」；`created_by`→「AI 自建」徽标；点自治档循环切换；陪伴日 tip |
+| ★ | 指令拼进**力度规则**（none/soft/direct），陪伴日不会被硬拧成推销 |
+| ★ | 指令封顶 400 字；自治档 update 保留本地 `today`（端点 goal_view 不带拍） |
+| ★ | `app.html` 同文档也接 drive-draft（iframe 模式不依赖父页） |
+| 门禁 | `test_goal_ui_revamp` P22 段 + `test_agent_instruction_prompt`；探针查 instruction+pushLevel |
+| 双树 | cp-goal / cp-draft / cp-i18n / app.html；`?v=20260801c`；ui-build `20260801-1045` |
+
+### 11.3 P22.1（同日再优化，相对 P22 的二次加深）
+
+复查发现五处缺口并落地（★＝相对「只接 instruction」的再优化）：
+
+| 缺口 | 修复 |
+|---|---|
+| opener 模式不吃 instruction →「采纳」静默丢意图 | ★ `setDirective` 强制 `_mode=reply`；opener 产线仍透传 `agent_instruction` 双保险 |
+| chip 展示整段多行指令挤版 | ★ chip 只显 `summary`（意图首行），全文进 title tooltip，payload 仍发完整 instruction |
+| SkillManager 挂掉走 `ai.chat` 兜底时无指令 | ★ 兜底 prompt 拼【坐席指令——本条必须完成】 |
+| 英雄卡有今日拍却要再点「采纳并拟稿」才发现 | ★ 英雄卡「拟稿」→ `driveDraftFromToday`（与卡内同指令拼装）；宿主缺 instruction 时用 intent+push 回拼 |
+| 线上看不见指令是否真进了产线 | ★ `[smart_reply] … instr=0/1` 日志锚点 |
+
+P23 候选里「英雄卡一键拟稿」已前移到 P22.1（发现成本优先于数据闸口）。
+
+### 11.4 生效说明
+
+- JS / i18n / 模板 / CSS：**热更新**（刷新工作台；旧标签看 ui-build 横幅）。
+- `.py`（desktop 路由 opener 透传 / persona_reply 兜底+opener）：需
+  **攒批重启**一次 `restart_instance.ps1 -Instance zhiliao`（注意冷却，勿连环 `-Force`）。
+
+### 11.5 P23（2026-08-01 下午）：复盘工具化——8/8 读数面全部 DB/文件口径
+
+原则：**复盘本身要等一周数据，但读数面必须先就位**（8/8 当天是「读结论」不是
+「翻日志」）。进程计数（GoalStats/UiEventStats）重启即清零、本机重启频繁 →
+全部读数下沉到耐久口径（goals.db / JSONL），跨重启可比。
+
+| 项 | 内容 |
+|---|---|
+| win-rate 底座 | `outcome_report.by_template/totals` 增 `won/won_rate`（won=result 前缀 `order:`/`manual:`，与 churn_outcomes 同判定；winback「回话」done 刻意不进 won；分母与 done_rate 同=organic 排除 cancelled，两率可横比） |
+| 指令拟稿耐久漏斗 | cp-draft payload 随行 `goal_id`+`instruction_source`（beat/hero/slot，cp-goal 早已 emit source，host/app.html 透传）→ smart-reply 落 `goal_events kind=drive_draft`（`peek_goal_store` 只取既有单例，goals 关=零成本）→ `outcome_report.drive_draft{total,by_source}` |
+| 画像填充漏斗 | `outcome_report.profile_fills{total,by_src,by_track}`——按**槽位自身 ts** 落窗（行级 updated_at 会被别的槽刷新），src=auto/agent/llm、轨=relation/bant。ask→fill→won 三段齐 |
+| 指令遵循抽检 | `src/inbox/instr_samples.py` JSONL 留样 ring（≤512KB 保尾 300；指令≤200/产出≤240；**不存客户原文**）；读出 `GET /api/goals/instr-samples`（与 readiness 同豁免，goals 关也 200；路由台账已登记） |
+| 周审 CLI | `growth_review --days 7 --samples 20`：win-rate 表（organic<5 标「样本不足只读不判」）+ 指令生成 by_source + 填充漏斗 + 抽检样本；判词：指令 0 使用=发现性问题、有拟稿但 bant 零填充=「问了没采到」；趋势行增 won/drive_draft/profile_fills |
+| ops 卡 | 「真成交」行（won>0 才显）+「模板 win-rate」Top2（**organic ≥5 才呈现**——小样本读数会误导调模板，宁缺毋滥）；i18n `ov2_goal_won/winrate/winrate_tip` zh+en |
+| 门禁 | `test_goal_store`（won 口径/drive_draft 分桶/fills 窗口）+ `test_instr_samples`（ring/截断/best-effort/接线契约）+ `test_goal_growth_loop` P23 渲染判词 + 路由台账 + `test_goal_ui_revamp` payload 契约 |
+
+**8/8 复盘操作**：`python -m scripts.growth_review --days 7 --samples 20`
+一屏读完；照判词行动（模板句/入口发现性/采集断链），有样本再谈 win-rate。
+
+**生效与验证实录（2026-08-01 中午）**：
+- `.py` 经他线 11:34 重启**搭车装载**（共享代码根，未额外吃重启窗口）；曾备
+  `scripts/ensure_restart_once.ps1` 低峰兜底任务（搭车检测+编译闸门+唯一入口），
+  搭车确认后任务已删、脚本留档休眠。装载前对全树 106 个脏 `.py` 跑过编译闸门
+  （唯一「FAIL」是他线刻意删除的 conversation_script.py，无活引用）。
+- 端到端冒烟：带指令真调 smart-reply → 回复精确执行指令（只问团队规模一个
+  问题+软性提产品）→ 样本落 `<数据根>/logs/instr_samples.jsonl` → API 可读 →
+  app.log `instr=1` 锚点在。首拉真数据：7 天画像填充 53 槽（bant 33 / llm 23）。
+- **周批已挂**：计划任务 `GrowthReviewWeekly`（周六 07:20，
+  `scripts/growth_review_weekly.ps1`，token 从实例配置自取不进任务定义；趋势行
+  追加 `logs/goals/growth_trend.jsonl`，2026-08-01 基线行已种：profile_fills=53 /
+  drive_draft=0 / won=0）。
+
+### 11.6 P24 候选（下一阶段）
+
+① **意图文案 i18n**（设计已验证可零迁移：`pick_intent` 是 crc(goal_id,day) 确定性
+   挑池，视图层同参重算英文池即可，存量 DB 不动；代价=全模板×里程碑英文案打磨，
+   等有英文坐席再做，别为空需求写百句文案）；
+② 试用发放 CTA（产品拍板后接 `trial_claim` 既有路由）；
+③ 8/8 读数后的动作项：win-rate 样本 ≥5 的模板调参、mode_gate 类比的「低效模板
+   降频」（有数据地基后再谈机制）；
+④ 抽检样本 ≥20 条后：若「指令遵循」人耳不合格率 >20%，把【坐席指令】块升权重
+   或改 few-shot 注入（质量闸决策，读数说话）。

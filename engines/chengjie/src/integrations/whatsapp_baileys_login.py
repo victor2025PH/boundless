@@ -18,7 +18,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from src.integrations.account_registry import get_account_registry
-from src.integrations.platform_login import register_login_provider
+from src.integrations.platform_login import register_login_provider, resolve_login_switch
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +33,8 @@ def service_base_url(config: Dict[str, Any]) -> str:
 
 
 def protocol_enabled(config: Dict[str, Any]) -> bool:
-    pl = (config or {}).get("platform_login", {}) or {}
-    wa = pl.get("whatsapp", {}) or {}
-    return bool(wa.get("protocol_enabled", False))
+    # 三态：显式配置优先（含 false）；未写过时桌面版默认开（见 resolve_login_switch 注释）。
+    return resolve_login_switch(config, "platform_login.whatsapp.protocol_enabled")
 
 
 # ── HTTP 薄封装（测试可 monkeypatch） ────────────────────────────────────────

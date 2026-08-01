@@ -240,20 +240,29 @@ class DraftService:
         if action != "approve" or force_override:
             return None
         max_h = float(self._stale_approve_hours or 0)
-        if max_h <= 0 or self._inbox_deliver_cb is None:
-            return None
+        if self._inbox_deliver_cb is None:
+            return None            # 未接线＝压根不会发出去，无需任何护栏
         if str(draft.get("draft_id") or "").partition(":")[0] != "inbox":
             return None            # 其余渠道由各自 runner 消费，不走本投递链
         try:
             created = float(draft.get("created_ts") or draft.get("created_at") or 0)
         except (TypeError, ValueError):
-            return None
-        if created <= 0:
-            return None            # 无时间戳 → 无从判断，不阻拦（宁可放过不误拦）
-        age_h = (time.time() - created) / 3600.0
+            created = 0.0
+        # created<=0（无时间戳）时 age/replied 无从判断不拦（宁可放过不误拦），
+        # 但 account_offline 与稿龄无关，仍要查——判定统一收在 _approve_block_reason。
         reason = self._approve_block_reason(draft, created, max_h)
         if not reason:
             return None
+        age_h = (time.time() - created) / 3600.0 if created > 0 else 0.0
+        if reason == "account_offline":
+            return {
+                "ok": False,
+                "code": 409,
+                "account_offline": True,
+                "stale_reason": reason,
+                "error": ("该账号已退出登录，通过了也发不出去："
+                          "请先在账号管理中重新登录，或改写后待账号恢复再发"),
+            }
         return {
             "ok": False,
             "code": 409,
@@ -280,9 +289,12 @@ class DraftService:
 
         **护栏与工作台徽标共用同一入口**（这是本方法存在的唯一理由）：若徽标另算一套，
         坐席会看到「没标记」却被 409 拦下——比没有徽标更糟（他会以为系统坏了）。
-        两档：`age`＝单纯超龄（内容与当下情境脱节）；`replied`＝草稿生成后**已经回过**
-        （再原样发一遍＝重复或自相矛盾，比过时更糟，故哪怕未超龄也拦）。
+        三档：`account_offline`＝所属账号已退出登录（通过了也发不出去，先于稿龄判定，
+        与 stale 配置无关）；`age`＝单纯超龄（内容与当下情境脱节）；`replied`＝草稿
+        生成后**已经回过**（再原样发一遍＝重复或自相矛盾，比过时更糟，故未超龄也拦）。
         """
+        if self._account_offline_block(draft):
+            return "account_offline"
         if max_age_h <= 0 or created_ts <= 0:
             return ""
         age_h = (time.time() - created_ts) / 3600.0
@@ -293,6 +305,38 @@ class DraftService:
                 draft, created_ts):
             return "replied"
         return ""
+
+    @staticmethod
+    def _account_offline_block(draft: Dict[str, Any]) -> bool:
+        """草稿所属账号是否「已退出登录且无在跑 worker」——通过＝必然投递失败。
+
+        P0 真相化（2026-07-31）配套：已退出账号的会话在收件箱保留可见，其待审草稿
+        也仍在队列里；不拦的话坐席点「通过」只会撞投递失败的事后报错。判定与发送
+        路由 ``_account_send_block`` 同口径：注册表 offline + 编排器无在跑 worker
+        （运行时为准，防状态陈旧误拦）。conversation_id 形如
+        ``{platform}:{account_id}:{chat_key}``，取前两段；解析不出/查不到一律放行。
+        """
+        cid = str(draft.get("conversation_id") or "")
+        parts = cid.split(":", 2)
+        if len(parts) < 3:
+            return False
+        plat, acct = parts[0], parts[1]
+        if not plat or not acct or acct == "default":
+            return False
+        try:
+            from src.integrations.account_registry import get_account_registry
+            row = get_account_registry().get(plat, acct)
+            if not row or str(row.get("status") or "") != "offline":
+                return False
+            try:
+                from src.integrations.account_orchestrator import get_orchestrator
+                if get_orchestrator().owns(plat, acct):
+                    return False
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
 
     def approve_block_reason(self, draft: Dict[str, Any]) -> str:
         """公开入口：这条草稿现在点「通过」会被拦吗（``""``/``"age"``/``"replied"``）。
@@ -307,7 +351,7 @@ class DraftService:
         try:
             created = float(draft.get("created_ts") or draft.get("created_at") or 0)
         except (TypeError, ValueError):
-            return ""
+            created = 0.0   # 时间戳坏≠可跳过 account_offline（与 _stale_check 同口径）
         return self._approve_block_reason(
             draft, created, float(self._stale_approve_hours or 0))
 

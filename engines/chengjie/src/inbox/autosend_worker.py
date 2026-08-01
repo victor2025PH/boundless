@@ -410,16 +410,23 @@ class AutosendWorker:
         try:
             send_text = item["text"]
             if self._translate_callback is not None:
+                _tx = send_text
                 try:
                     _tx = await self._translate_callback(item)
-                    if _tx:
-                        if _tx != send_text:
-                            self.total_translated += 1
-                        send_text = _tx
                 except Exception:
                     logger.warning(
                         "[AutosendWorker] 人工通过出站翻译异常，发原文 conv=%s",
                         item["conversation_id"], exc_info=True)
+                # None = 翻译回调的 HOLD 信号（文本含 CJK 而客户语言非 CJK 且翻译
+                # 不可用，见 outbound_translate.translate_outbound_text）——发中文
+                # 给外语客户=人设穿帮，走投递失败链（审计+坐席铃铛），别发原文。
+                if _tx is None:
+                    raise RuntimeError(
+                        "translate_hold: 出站翻译不可用且文本语言与客户语言冲突，已拦截")
+                if _tx:
+                    if _tx != send_text:
+                        self.total_translated += 1
+                    send_text = _tx
             res = await send_cb(
                 item["platform"], item["account_id"], item["chat_key"],
                 send_text, **self._send_cb_kwargs(item["text"], send_cb),
@@ -542,19 +549,26 @@ class AutosendWorker:
             for item in deliver_now:
                 try:
                     # 出站翻译：投递前把 AI 中文回复译成客户语言（补「全自动聊天翻译」闭环）。
-                    # 绝不阻塞投递——回调内部已保证异常/不可译时回落原文。
+                    # 一般不阻塞投递（回调内部异常/不可译回落原文）；唯一例外＝回调返回
+                    # None（HOLD：文本含 CJK 而客户语言非 CJK 且翻译不可用）→ 按投递失败
+                    # 处理（进重试队列，翻译引擎恢复后自动补投）——发中文给外语客户是
+                    # 人设事故，比这条消息迟到更糟（2026-07-31 198 实锤）。
                     send_text = str(item.get("text", ""))
                     if self._translate_callback is not None:
+                        _tx = send_text
                         try:
                             _tx = await self._translate_callback(item)
-                            if _tx:
-                                if _tx != send_text:
-                                    self.total_translated += 1
-                                send_text = _tx
                         except Exception:
                             logger.warning(
                                 "[AutosendWorker] 出站翻译异常，发原文 conv=%s",
                                 item.get("conversation_id", "?"), exc_info=True)
+                        if _tx is None:
+                            raise RuntimeError(
+                                "translate_hold: 出站翻译不可用且文本语言与客户语言冲突，已拦截")
+                        if _tx:
+                            if _tx != send_text:
+                                self.total_translated += 1
+                            send_text = _tx
                     # 拟人序列（已读 → 打字续挂 → 延迟）：统一走 humanize 协作器，
                     # 与 L3 缓冲话术共用同一节奏。对端视角：已读 → 正在输入 → 收到回复。
                     # best-effort：mark_read/typing 失败不阻断投递（协作器内部吞异常）。

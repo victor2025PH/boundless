@@ -1,6 +1,28 @@
 """P37 — NextActionRecommender 情感陪伴场景单元测试。"""
 import pytest
-from src.inbox.next_action_recommender import NextActionRecommender
+from src.inbox.next_action_recommender import MOOD_TAGS, NextActionRecommender
+
+
+class TestFollowupTaskFlag:
+    """P1-198：回访任务可部署级关闭（与工作目标计划重叠 + 无 contact_id 时空转）。"""
+
+    def test_flag_off_hides_schedule_followup_only(self):
+        rec = NextActionRecommender()
+        kw = dict(last_msg_direction="out", silence_hours=100.0)
+        on = rec.recommend(**kw)
+        assert any(a["action_id"] == "__schedule_followup" for a in on)
+        off = rec.recommend(followup_task_enabled=False, **kw)
+        assert not any(a["action_id"] == "__schedule_followup" for a in off)
+        # 其它动作（情绪标记等）不受影响
+        assert any(a["action_id"] == "__add_mood_tag" for a in off)
+
+    def test_mood_tags_single_source(self):
+        """情绪词表单一事实源：动作里的 tag_options 必须与 MOOD_TAGS 完全一致
+        （路由读「当前情绪」按 MOOD_TAGS 反查，两边漂移=高亮永远对不上）。"""
+        rec = NextActionRecommender()
+        acts = rec.recommend(last_msg_direction="in", last_msg_text="hello")
+        mood = next(a for a in acts if a["action_id"] == "__add_mood_tag")
+        assert mood["config"]["tag_options"] == list(MOOD_TAGS)
 
 
 class TestNextActionRecommender:

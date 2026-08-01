@@ -120,6 +120,10 @@
       '.psc-ai .psc-bubble{background:var(--card);border:1px solid var(--bd);color:var(--t1,var(--t));border-bottom-left-radius:4px}',
       '.psc-bubble.psc-pending{color:var(--t2);font-style:italic}',
       '.psc-bubble.psc-errb{color:var(--red);border-color:var(--red)}',
+      /* P1：能力开时 [PHOTO] 占位（不烧 GPU；示意生产会真发） */
+      '.psc-photo-prev{margin-top:.35rem;padding:.55rem .7rem;border:1px dashed var(--bd);border-radius:10px;background:var(--bg2,var(--bg));font-size:.72rem;line-height:1.5;color:var(--t2);max-width:100%;align-self:stretch}',
+      '.psc-photo-prev b{color:var(--t1,var(--t));font-weight:600}',
+      '.psc-photo-prev .psc-pp-scene{display:block;margin-top:.2rem;color:var(--t1,var(--t));font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.68rem}',
       '.psc-meta{font-size:.66rem;color:var(--t2);margin-top:.25rem;display:flex;flex-wrap:wrap;gap:.2rem .6rem}',
       /* trace 折叠区 */
       '.psc-trace{margin-top:.3rem;font-size:.66rem;color:var(--t2);max-width:100%;align-self:stretch}',
@@ -369,9 +373,42 @@
     if (data.total_ms != null) part(t('psn_ct_meta_ms', '耗时'), data.total_ms + 'ms');
     var pu = data.persona_used;
     if (pu && pu.name) part(t('psn_ct_meta_persona', '人设'), pu.name);
+    // 相册/发图能力状态（2026-07-31）：后端每次回带 photo_capability（仅
+    // persona 试聊时有）——运营在试聊现场直接看到「这个人设发不发图」，
+    // 关=不发图也绝不承诺（与生产同一判定与守卫）。
+    if (pu && typeof data.photo_capability !== 'undefined') {
+      var capS = document.createElement('span');
+      capS.textContent = t(data.photo_capability ? 'psc_cap_on' : 'psc_cap_off',
+        data.photo_capability ? '相册：开' : '相册：关');
+      meta.appendChild(capS);
+    }
     meta.appendChild(_draftBtn(replyText, userText));
     meta.appendChild(_listenBtn(ph.bubble, replyText));
     ph.wrap.appendChild(meta);
+
+    // P1：能力开 + LLM 打了 [PHOTO] → 占位卡（不烧 GPU；生产会真发）
+    var pp = data.photo_preview;
+    if (pp && (pp.kind || pp.scene)) {
+      var card = document.createElement('div');
+      card.className = 'psc-photo-prev';
+      var title = document.createElement('b');
+      var kindLabel = (pp.kind === 'object')
+        ? t('psc_pp_object', '物体图')
+        : t('psc_pp_selfie', '自拍');
+      title.textContent = t('psc_pp_title', '此处将真实发出一张：') + kindLabel;
+      card.appendChild(title);
+      if (pp.scene) {
+        var sc = document.createElement('span');
+        sc.className = 'psc-pp-scene';
+        sc.textContent = String(pp.scene);
+        card.appendChild(sc);
+      }
+      var hint = document.createElement('div');
+      hint.style.marginTop = '.2rem';
+      hint.textContent = t('psc_pp_hint', '试聊不烧 GPU；生产环境会随本条回复自动发送');
+      card.appendChild(hint);
+      ph.wrap.appendChild(card);
+    }
 
     // 可折叠链路 trace：step 名 + detail JSON 摘要（截断 300 字符）
     var steps = data.trace && data.trace.steps;

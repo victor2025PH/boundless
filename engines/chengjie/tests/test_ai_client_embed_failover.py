@@ -145,3 +145,52 @@ def test_init_parses_embedding_base_urls(monkeypatch):
     assert [u for u, _ in c._oa_embed_clients] == [
         "http://e1:11434/v1", "http://e2:11434/v1"]
     assert c._oa_embed_client is c._oa_embed_clients[0][1]
+
+
+def test_embed_clients_fast_fail_construction(monkeypatch):
+    """嵌入客户端必须「连接快败 + 关 SDK 内建重试」（2026-08-01 生产实锤钉住）。
+
+    旧构造缺 connect 超时且吃 SDK 默认 2 重试：176 宕机时一次 embed = 3 次 TCP
+    连接尝试 × Windows ~21s ≈ 65s（[smart_reply] gen=68269 实测），端点 60s 冷却
+    过期后每分钟再吃一轮。主/兜底客户端 2026-07 已修同款，嵌入是第三处遗漏——
+    本门禁按构造参数钉死：max_retries=0 + connect 短超时 + 读超时有界。"""
+    import asyncio
+
+    built = []
+
+    class _FakeAsyncOpenAI:
+        def __init__(self, *, api_key, base_url, timeout, max_retries=2, **kw):
+            built.append({"base_url": base_url, "timeout": timeout,
+                          "max_retries": max_retries})
+
+    import src.ai.ai_client as mod
+    monkeypatch.setattr(mod, "AsyncOpenAI", _FakeAsyncOpenAI)
+    monkeypatch.setattr(mod, "OPENAI_SDK_AVAILABLE", True)
+
+    c = AIClient(_Cfg())
+    c.timeout = 60
+    c.model = "m"
+
+    async def _ok():
+        return True
+    monkeypatch.setattr(c, "_test_openai_connection", _ok)
+
+    ok = asyncio.run(c._initialize_openai_compatible(
+        {"base_url": "http://chat:1/v1",
+         "embedding_base_urls": ["http://e1:11434", "http://e2:11434"]},
+        "k"))
+    assert ok is True
+    emb = [b for b in built if "e1" in b["base_url"] or "e2" in b["base_url"]]
+    assert len(emb) == 2
+    for b in emb:
+        assert b["max_retries"] == 0, "嵌入客户端必须关 SDK 内建重试（调用方自有端点轮询）"
+        to = b["timeout"]
+        try:
+            import httpx
+            assert isinstance(to, httpx.Timeout), "应为 httpx.Timeout（带 connect 分量）"
+            assert to.connect is not None and float(to.connect) <= 5.0, \
+                "connect 必须 ≤5s 快败（死端点代价从 ~65s 收到 ~5s）"
+            assert to.read is not None and float(to.read) <= 30.0, \
+                "读超时须有界（bge-m3 热态亚秒级，别继承 60s 大读超时）"
+        except ImportError:
+            assert float(to) <= 30.0

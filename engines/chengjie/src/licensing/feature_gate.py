@@ -54,6 +54,10 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
     "personas": "pro",
     "care": "pro",
     "analytics": "pro",
+    # workflows 的强制在模块自身闸门（unified_inbox_workflow_routes._require_workflows，
+    # 链域含 conv 级路径无法用前缀表表达且该闸已覆盖全部 10 端点 + NBA 链分支）；
+    # 这里登记供档位判定与会员中心矩阵展示（同 white_label 的「登记+异地强制」先例）。
+    "workflows": "pro",
     # flagship：陪伴全家桶 / 语音克隆 / RPA 真机 / 命理 / 变现 / 白标
     "companion": "flagship",
     "voice_clone": "flagship",

@@ -717,9 +717,12 @@ def build_autosend_mark_read_cb(assistant):
 
     真人一定是先看到消息（对端出现已读）、想一会儿、再回——此前全自动直接投递，
     客户端上「消息还是未读却收到了回复」是最扎眼的机器人破绽。回调经编排器
-    ``orch.mark_read`` 分发到受管 worker（当前 Telegram 协议号 pyrogram
-    read_chat_history；WA/LINE/Messenger worker 暂不支持 → 静默 False；RPA 设备号
-    由 RPA 打开会话时天然已读，不经此路径）。
+    ``orch.mark_read`` 分发到受管 worker（TG 协议号 pyrogram read_chat_history、
+    WA Baileys ``/read``、LINE ``sendChatChecked``；Messenger web worker 暂不支持
+    → 静默 False；RPA 设备号由 RPA 打开会话时天然已读，不经此路径）。
+
+    ⚠ 时机很要紧：本回调在**投递前一刻**调用，所以是「已读→紧接着回复」。LINE 文化里
+    「已讀不回」格外扎人，若哪天把它挪到入站阶段就会造出那个效果。
 
     ``inbox.l2_autosend.mark_read_before_reply``（默认 true）置 false 可关闭。
     与发送同口径：编排器 client 活在 web 线程 loop 上 → 跨线程调度执行。

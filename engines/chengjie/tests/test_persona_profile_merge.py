@@ -342,6 +342,53 @@ async def test_route_merge_on_missing_profile_falls_back(app_on):
         assert r.json()["persona"]["name"] == "新人"
 
 
+@pytest.mark.asyncio
+async def test_route_save_takes_over_mrpa_profile(app_on):
+    """P2-E（reply_profiles 迁移收尾）：导入态 profile 的 Studio 保存＝显式接管。
+
+    旧缺口：merge 保存把 ``_mrpa_source`` 深合并原样带回 → source 仍判 mrpa →
+    persist_profiles 不落盘 → 重启被 config 再导入覆盖，运营的编辑**静默丢失**。
+    保存后：标记消失、source=studio、P2-A 启动导入不再覆盖。
+    """
+    pm = PersonaManager.get_instance()
+    pm.upsert_profile("mrpa_p", {"id": "mrpa_p", "name": "Auto Import",
+                                 "_mrpa_source": True}, _track_history=False)
+    async with _client(app_on) as c:
+        r = await c.put("/api/personas/profiles/mrpa_p", headers=_HDRS,
+                        json={"persona": {"name": "运营改过", "role": "陪伴"},
+                              "merge": True})
+        assert r.status_code == 200
+        r = await c.get("/api/personas/profiles/mrpa_p", headers=_HDRS)
+        p = r.json()["persona"]
+
+    assert p["name"] == "运营改过"
+    assert "_mrpa_source" not in p            # 保存即接管：标记被摘掉
+    summary = {s["id"]: s for s in pm.list_profiles_summary()}
+    assert summary["mrpa_p"]["source"] == "studio"
+    assert not summary["mrpa_p"]["is_mrpa_source"]
+
+
+@pytest.mark.asyncio
+async def test_route_save_strips_mrpa_flag_on_verbatim_roundtrip(app_on):
+    """GET→原样 PUT（不带 merge、body 携带 _mrpa_source）也视为接管，不留标记。"""
+    pm = PersonaManager.get_instance()
+    pm.upsert_profile("mrpa_rt", {"id": "mrpa_rt", "name": "Roundtrip",
+                                  "_mrpa_source": True}, _track_history=False)
+    async with _client(app_on) as c:
+        r = await c.get("/api/personas/profiles/mrpa_rt", headers=_HDRS)
+        persona = r.json()["persona"]
+        assert persona.get("_mrpa_source") is True
+        r = await c.put("/api/personas/profiles/mrpa_rt", headers=_HDRS,
+                        json={"persona": persona})
+        assert r.status_code == 200
+        r = await c.get("/api/personas/profiles/mrpa_rt", headers=_HDRS)
+        p = r.json()["persona"]
+
+    assert "_mrpa_source" not in p
+    summary = {s["id"]: s for s in pm.list_profiles_summary()}
+    assert summary["mrpa_rt"]["source"] == "studio"
+
+
 # ── 5. list_profiles_summary 完整度评分 ──────────────────────────────────────
 
 def test_list_profiles_summary_has_completeness():

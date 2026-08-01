@@ -3,8 +3,29 @@
 from src.licensing.shop_link import (
     build_shop_url,
     resolve_shop_offer,
+    resolve_upgrade_offer,
     shop_cta_from_license,
 )
+
+
+# ── E5：升级 CTA 按目标档挑 offer（与「续费当前档」语义相对） ────────────────
+
+def test_upgrade_offer_chatx_targets_by_plan():
+    assert resolve_upgrade_offer(
+        sku_id="chatx-entry-AH-1", target_plan="pro") == "autochat-team"
+    assert resolve_upgrade_offer(
+        sku_id="chatx-team-ORD", target_plan="flagship") == "autochat-flagship"
+    assert resolve_upgrade_offer(
+        product_id="zhiliao", target_plan="basic") == "autochat-entry"
+
+
+def test_upgrade_offer_conservative_blanks():
+    """通译族升档语义不同、族不可知、目标档非法 → 一律空串（调用方回落
+    按当前授权的 shop.url，家族永远不指错）。"""
+    assert resolve_upgrade_offer(sku_id="lingox-pro-1", target_plan="pro") == ""
+    assert resolve_upgrade_offer(product_id="tongyi", target_plan="pro") == ""
+    assert resolve_upgrade_offer(target_plan="pro") == ""
+    assert resolve_upgrade_offer(sku_id="chatx-entry", target_plan="galaxy") == ""
 
 
 def test_resolve_offer_by_sku_prefix():

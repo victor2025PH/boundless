@@ -482,7 +482,7 @@
   // ─── O1/O3 共用 SVG Sparkline ───────────────────────────────────────────
   function _sparkline(values, opts){
     opts = opts||{};
-    var w=opts.w||160, h=opts.h||36, color=opts.color||'#2563eb', fillColor=opts.fill||'';
+    var w=opts.w||160, h=opts.h||36, color=opts.color||'#0d76d9', fillColor=opts.fill||'';
     if(!values||!values.length) return '<span style="color:var(--tk-text-muted);font-size:11px;">'+T('dash.no_data')+'</span>';
     var min=Math.min.apply(null,values), max=Math.max.apply(null,values);
     var range=max-min||1;
@@ -796,7 +796,7 @@
           var st=ws.stats||{};
           var csat=st.avg_csat!=null?st.avg_csat.toFixed(1)+' '+uiIcon('star',12):'—';
           var isCur=ws.workspace_id===current;
-          html+='<tr style="border-bottom:1px solid var(--tk-border);'+(isCur?'background:rgba(59,130,246,.1);':'')+'">'
+          html+='<tr style="border-bottom:1px solid var(--tk-border);'+(isCur?'background:color-mix(in srgb, var(--tk-brand,#1e8cf2) 10%, transparent);':'')+'">'
             +'<td style="padding:5px 6px;font-family:monospace;font-weight:'+(isCur?'700':'400')+';">'
             +esc(ws.workspace_id)+(isCur?' '+uiIcon('pin',12):'')+'</td>'
             +'<td style="padding:5px 6px;">'+esc(ws.display_name||'—')+'</td>'

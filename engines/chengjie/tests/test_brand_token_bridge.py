@@ -63,8 +63,17 @@ THEME_CSS = _STATIC / "theme-tokens.css"
 BRIDGE_CSS = _STATIC / "brand" / "th-brand-bridge.css"
 FONTS_CSS = _STATIC / "brand" / "brand-fonts.css"
 
-# 四个根壳：管理台 / 坐席工作台 / 登录 / 初始化。都需要品牌令牌与品牌字。
-SHELLS = ("base.html", "workspace_base.html", "login.html", "setup.html")
+# 根壳：管理台 / 坐席工作台 / 登录 / 初始化 + 三个 ops 独立根（2026-07-30 起
+# 引用 --bl-growth-* 令牌，挂 brand.css 才是变量驱动而非永远走 fallback）。
+SHELLS = (
+    "base.html",
+    "workspace_base.html",
+    "login.html",
+    "setup.html",
+    "ops/contacts.html",
+    "ops/mobile_handoffs.html",
+    "ops/merge_reviews.html",
+)
 # 只有这两个壳引入 theme-tokens.css，故只有它们需要 bridge 的顺序保证。
 SHELLS_WITH_THEME_TOKENS = ("base.html", "workspace_base.html")
 
@@ -207,6 +216,39 @@ def test_brand_fonts_use_relative_url():
         "brand-fonts.css 禁止绝对 /static/brand/fonts/…——"
         "桌面壳 Electron 宿主不是站点根，绝对路径会静默 404、落回系统字"
     )
+
+
+def test_font_stack_single_source():
+    """字体栈单一源：brand.css 定义 --bl-font-sans，各壳 font-family 引用它。
+
+    2026-07-30 前 Montserrat 栈在 base / workspace_base / auth-surface / 桌面
+    style.css 四处逐字硬编码——改字体要改四处且极易漂移（历史上 base.html 就曾
+    漏 CJK 声明）。现在单一真相在 tokens.json → platform/brand/brand.css →
+    sync 到引擎；消费端一律 `font-family:var(--bl-font-sans, <旧本地栈兜底>)`。
+    本门禁双向钉：① 引擎拷贝的 brand.css 必须仍导出该令牌（防将来重新生成时
+    丢键——丢了所有壳静默落回各自 fallback，又回到四处漂移的老路）；
+    ② 每个消费点必须引用变量（防新代码把字面量栈写回去）。
+    """
+    brand_css = _read(_STATIC / "brand" / "brand.css")
+    assert "--bl-font-sans" in brand_css, (
+        "engines 侧 brand.css 拷贝缺 --bl-font-sans——若 platform/brand 重新生成"
+        "后丢了 typography 导出，请补回并重跑 brand-assets/sync_brand_targets.py"
+    )
+
+    consumers = (
+        _TPL / "base.html",
+        _TPL / "workspace_base.html",
+        _TPL / "ops" / "contacts.html",
+        _TPL / "ops" / "mobile_handoffs.html",
+        _TPL / "ops" / "merge_reviews.html",
+        _STATIC / "brand" / "auth-surface.css",
+        _REPO / "desktop" / "renderer" / "style.css",
+    )
+    for p in consumers:
+        assert "var(--bl-font-sans" in _read(p), (
+            f"{p.name} 的 font-family 未引用 var(--bl-font-sans …)——"
+            f"字体栈应走品牌单一源 + 本地栈兜底，勿写回字面量"
+        )
 
 
 def test_desktop_shell_links_brand_before_copilot_theme():

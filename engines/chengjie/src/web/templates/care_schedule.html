@@ -25,8 +25,88 @@
 .cs-act{background:none;border:1px solid var(--bd);color:var(--t2);cursor:pointer;font-size:.72rem;font-weight:600;padding:.2rem .5rem;border-radius:6px;margin-right:.3rem}
 .cs-act.p{border-color:var(--p);color:var(--p)}
 .cs-act:hover{background:color-mix(in srgb, var(--p,#1e8cf2) 8%, transparent)}
-.cs-add{display:flex;flex-wrap:wrap;gap:.5rem;align-items:flex-end;margin-bottom:1rem;padding:.75rem;background:var(--input);border-radius:10px}
+.cs-add{display:flex;flex-wrap:wrap;gap:.5rem;align-items:flex-end;margin:.6rem 0 .4rem;padding:.75rem;background:var(--input);border-radius:10px}
 .cs-add input{min-width:120px}
+/* ── P0：链路自检灯条 ── */
+.cs-health{display:flex;flex-wrap:wrap;gap:1rem;align-items:center;padding:.55rem .8rem;background:var(--input);border-radius:10px;margin-bottom:.9rem;font-size:.78rem}
+.cs-light{display:flex;gap:.4rem;align-items:center;color:var(--t2)}
+.cs-dot{width:9px;height:9px;border-radius:99px;flex-shrink:0;background:var(--t3)}
+.cs-dot.g{background:var(--green)}
+.cs-dot.r{background:var(--red)}
+.cs-dot.a{background:var(--amber)}
+.cs-light b{color:var(--t1);font-weight:600}
+.cs-health-meta{margin-left:auto;color:var(--t3);font-size:.72rem}
+/* ── P0：未开启 hero 空态 ── */
+.cs-hero{text-align:center;padding:1.6rem 1rem 1.2rem}
+.cs-hero h3{font-size:1.15rem;margin:0 0 .5rem;color:var(--t1)}
+.cs-hero p{margin:.2rem auto;max-width:560px;color:var(--t2);font-size:.85rem;line-height:1.6}
+.cs-hero .note{color:var(--t3);font-size:.76rem}
+.cs-hero-cta{margin:1rem 0 1.2rem}
+.cs-ghost{opacity:.45;pointer-events:none;max-width:620px;margin:0 auto;text-align:left}
+.cs-ghost-card{border:1px solid var(--bd);border-radius:10px;padding:.7rem .9rem;margin-bottom:.55rem;background:var(--input)}
+.cs-ghost-card .q{font-style:italic;color:var(--t3);border-left:2px solid var(--bd);padding-left:.6rem;font-size:.78rem}
+.cs-ghost-card .a{margin-top:.45rem;font-size:.8rem;color:var(--t2)}
+.cs-ghost-card .a b{color:var(--p);font-weight:600;font-size:.68rem;margin-right:.4rem}
+.cs-ghost-card .w{float:right;color:var(--t3);font-size:.7rem}
+.cs-ghost-label{text-align:center;color:var(--t3);font-size:.72rem;margin:.3rem 0 .5rem}
+/* ── P0：运行横幅 + 样本审核 ── */
+.cs-banner{display:flex;gap:.7rem;align-items:center;flex-wrap:wrap;padding:.6rem .85rem;border-radius:10px;margin-bottom:.9rem;font-size:.8rem}
+.cs-banner.dry{background:color-mix(in srgb, var(--p,#1e8cf2) 10%, transparent);color:var(--t1)}
+.cs-banner.live{background:rgba(16,185,129,.12);color:var(--t1)}
+.cs-banner .sp{margin-left:auto;display:flex;gap:.45rem}
+.cs-activity{color:var(--t3);font-size:.76rem;margin-bottom:.8rem}
+.cs-samples{margin:0 0 1.1rem}
+.cs-samples h4{font-size:.86rem;margin:0 0 .15rem;color:var(--t1)}
+.cs-samples .sub{color:var(--t3);font-size:.72rem;margin-bottom:.55rem}
+.cs-sample{padding:.5rem .6rem;background:var(--input);border-radius:8px;border-left:3px solid var(--t3);margin-bottom:.45rem}
+.cs-sample .hd{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.7rem;color:var(--t3)}
+.cs-sample .hd b{color:var(--t1)}
+.cs-sample .tx{margin-top:.35rem;font-size:.8rem;line-height:1.5;color:var(--t1)}
+.cs-sub-time{color:var(--t3);font-size:.68rem;margin-top:.15rem}
+details.cs-adv{margin-top:1rem}
+details.cs-adv summary{cursor:pointer;color:var(--t3);font-size:.78rem}
+/* ── P1：排一条关怀（联系人选择器 + 快捷片）── */
+.cs-addp{background:var(--input);border-radius:10px;padding:.8rem .9rem;margin:0 0 1.1rem}
+.cs-addp h4{font-size:.86rem;margin:0 0 .1rem;color:var(--t1)}
+.cs-addp .sub{color:var(--t3);font-size:.72rem;margin-bottom:.6rem}
+.cs-p-row{display:flex;gap:.6rem;align-items:flex-start;margin-bottom:.55rem;flex-wrap:wrap}
+.cs-p-lb{width:56px;flex-shrink:0;color:var(--t3);font-size:.76rem;line-height:1.9}
+.cs-p-main{flex:1;min-width:240px}
+#cs-p-search{width:100%;max-width:420px}
+#cs-p-list{max-width:420px;margin-top:.3rem;border:1px solid var(--bd);border-radius:8px;overflow:hidden;max-height:262px;overflow-y:auto;background:var(--card,var(--input))}
+#cs-p-list:empty{display:none}
+.cs-p-item{display:flex;gap:.55rem;align-items:center;padding:.42rem .6rem;cursor:pointer;border-bottom:1px solid var(--bd)}
+.cs-p-item:last-child{border-bottom:none}
+.cs-p-item:hover{background:color-mix(in srgb, var(--p,#1e8cf2) 8%, transparent)}
+.cs-p-item .nm{color:var(--t1);font-size:.8rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}
+.cs-p-item .pf{margin-left:auto;color:var(--t3);font-size:.68rem;border:1px solid var(--bd);border-radius:4px;padding:0 .35rem;flex-shrink:0}
+.cs-p-empty{padding:.5rem .6rem;color:var(--t3);font-size:.74rem}
+.cs-p-ava{width:22px;height:22px;border-radius:99px;flex-shrink:0;object-fit:cover}
+span.cs-p-ava{display:inline-flex;align-items:center;justify-content:center;background:color-mix(in srgb, var(--p,#1e8cf2) 18%, transparent);color:var(--p);font-size:.72rem;font-weight:700}
+#cs-p-sel{display:flex;gap:.55rem;align-items:center;background:var(--card,var(--input));border:1px solid var(--p);border-radius:8px;padding:.4rem .6rem;max-width:420px}
+#cs-p-sel .nm{color:var(--t1);font-weight:600;font-size:.82rem}
+#cs-p-sel .pf{color:var(--t3);font-size:.7rem}
+#cs-p-sel .x{margin-left:auto}
+.cs-chips{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center}
+.cs-chip{border:1px solid var(--bd);border-radius:99px;background:none;color:var(--t2);font-size:.75rem;padding:.22rem .7rem;cursor:pointer}
+.cs-chip:hover{border-color:var(--p);color:var(--p)}
+.cs-chip.on{background:color-mix(in srgb, var(--p,#1e8cf2) 14%, transparent);border-color:var(--p);color:var(--p);font-weight:600}
+#cs-p-topic{max-width:260px}
+#cs-p-msg{font-size:.75rem;margin-left:.6rem}
+/* ── P1：待关怀时间轴卡片 ── */
+.cs-group-h{color:var(--t3);font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin:.9rem 0 .45rem}
+.cs-card{border:1px solid var(--bd);border-radius:10px;padding:.65rem .85rem;margin-bottom:.5rem;background:var(--card,var(--input))}
+.cs-card .hd{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+.cs-card .nm{color:var(--t1);font-weight:600;font-size:.84rem}
+.cs-card .pf{color:var(--t3);font-size:.68rem;border:1px solid var(--bd);border-radius:4px;padding:0 .35rem}
+.cs-card .tp{font-size:.68rem;font-weight:600;color:var(--amber);background:rgba(245,158,11,.12);border-radius:4px;padding:.08rem .4rem}
+.cs-card .due{margin-left:auto;color:var(--t1);font-size:.76rem;font-weight:600}
+.cs-card .due small{display:block;color:var(--t3);font-weight:400;font-size:.66rem;text-align:right}
+.cs-card .q{font-style:italic;color:var(--t3);border-left:2px solid var(--bd);padding-left:.6rem;font-size:.76rem;margin:.45rem 0}
+.cs-card .ops{margin-top:.45rem}
+.cs-card .pv{margin-top:.4rem;font-size:.78rem;color:var(--t1);line-height:1.5}
+.cs-card .pv:empty{display:none}
+.cs-card .pv .pvl{color:var(--p);font-weight:600;font-size:.68rem;margin-right:.4rem}
 </style>
 {% endblock %}
 {% block content %}
@@ -36,52 +116,145 @@
   <h2>
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
     {{ (i18n or {}).get('cs_s002', "主动关怀待办") }}
-    <span style="font-size:.75rem;font-weight:400;color:var(--t2);margin-left:.4rem">{{ (i18n or {}).get('cs_s003', "记住对方说的事，到点主动关心 · 需开启") }} companion.proactive_care.enabled</span>
+    <span style="font-size:.75rem;font-weight:400;color:var(--t2);margin-left:.4rem">{{ (i18n or {}).get('cs2_subtitle', "记住对方说的事，到点主动关心") }}</span>
   </h2>
-  <div class="cs-summary" id="cs-summary"></div>
 
-  <div class="cs-add">
-    <div class="f-grp"><label class="f-lb">{{ (i18n or {}).get('msg_js_1034', "联系人") }} key</label><input type="text" id="cs-a-contact" class="f-input" placeholder="conversation_id"></div>
-    <div class="f-grp"><label class="f-lb">{{ (i18n or {}).get('inbox.info.platform', "平台") }}</label><input type="text" id="cs-a-platform" class="f-input" placeholder="messenger" style="width:110px"></div>
-    <div class="f-grp"><label class="f-lb">chat_key</label><input type="text" id="cs-a-chat" class="f-input" placeholder="fb:123" style="width:130px"></div>
-    <div class="f-grp"><label class="f-lb">{{ (i18n or {}).get('cs_s004', "关怀主题") }}</label><input type="text" id="cs-a-topic" class="f-input" placeholder="{{ (i18n or {}).get('cs_s005', '面试 / 复查 …') }}"></div>
-    <div class="f-grp"><label class="f-lb">{{ (i18n or {}).get('cs_s006', "多少小时后") }}</label><input type="number" id="cs-a-hours" class="f-input" value="24" min="1" style="width:90px"></div>
-    <button type="button" class="btn btn-p" onclick="csAdd()">{{ (i18n or {}).get('cs_s007', "手动加一条") }}</button>
+  <div class="cs-health" id="cs-health">
+    <span style="color:var(--t3)">{{ (i18n or {}).get('cs2_health_title', "链路状态") }}</span>
+    <span id="cs-health-lights" style="display:flex;flex-wrap:wrap;gap:1rem"></span>
+    <span class="cs-health-meta" id="cs-health-meta"></span>
   </div>
 
-  <div class="cs-filters">
-    <div class="f-grp">
-      <label class="f-lb">{{ (i18n or {}).get('ov_js_th_status', "状态") }}</label>
-      <select id="cs-status" class="f-input" style="width:130px">
-        <option value="">{{ (i18n or {}).get('rpa_all', "全部") }}</option>
-        <option value="pending" selected>{{ (i18n or {}).get('cs_s008', "待关怀") }}</option>
-        <option value="sent">{{ (i18n or {}).get('ov_js_dob_sent', "已发") }}</option>
-        <option value="skipped">{{ (i18n or {}).get('msg_js_1224', "已跳过") }}</option>
-        <option value="expired">{{ (i18n or {}).get('db_js_003', "已过期") }}</option>
-        <option value="cancelled">{{ (i18n or {}).get('rpa_js_st_cancelled', "已取消") }}</option>
-      </select>
+  <div class="cs-hero" id="cs-hero" style="display:none">
+    <h3>{{ (i18n or {}).get('cs2_hero_title', "让 AI 替你惦记每一位客户") }}</h3>
+    <p>{{ (i18n or {}).get('cs2_hero_sub', "客户随口说「周五要面试」，AI 会记住，到点像朋友一样问一句结果。") }}</p>
+    <p class="note">{{ (i18n or {}).get('cs2_hero_note', "开启后先进入试运行：AI 只拟稿、不发送，话术你先过目，随时可停。") }}</p>
+    <div class="cs-hero-cta">
+      <button type="button" class="btn btn-p" onclick="csEngine('enable_dry')">{{ (i18n or {}).get('cs2_hero_cta', "开启主动关怀（试运行）") }}</button>
     </div>
-    <div class="f-grp"><label class="f-lb">{{ (i18n or {}).get('em_s014', "条数") }}</label><input type="number" id="cs-limit" value="100" min="1" max="500" class="f-input" style="width:90px"></div>
-    <button type="button" class="btn btn-p" onclick="csLoad()">{{ (i18n or {}).get('db_s027', "加载") }}</button>
+    <div class="cs-ghost-label">{{ (i18n or {}).get('cs2_ghost_demo', "示例效果") }}</div>
+    <div class="cs-ghost" aria-hidden="true">
+      <div class="cs-ghost-card">
+        <span class="w">{{ (i18n or {}).get('cs2_ghost_when1', "面试当晚 20:00") }}</span>
+        <div class="q">{{ (i18n or {}).get('cs2_ghost_quote', "TA 说过") }}：「{{ (i18n or {}).get('cs2_ghost_q1', "明天下午终面，说实话有点慌") }}」</div>
+        <div class="a"><b>{{ (i18n or {}).get('cs2_ghost_ai', "AI 将说") }}</b>{{ (i18n or {}).get('cs2_ghost_a1', "终面结束了吧？一直惦记着这事，感觉怎么样呀") }}</div>
+      </div>
+      <div class="cs-ghost-card">
+        <span class="w">{{ (i18n or {}).get('cs2_ghost_when2', "复查前一晚 20:00") }}</span>
+        <div class="q">{{ (i18n or {}).get('cs2_ghost_quote', "TA 说过") }}：「{{ (i18n or {}).get('cs2_ghost_q2', "下周一要去医院复查") }}」</div>
+        <div class="a"><b>{{ (i18n or {}).get('cs2_ghost_ai', "AI 将说") }}</b>{{ (i18n or {}).get('cs2_ghost_a2', "明天复查记得早点休息，结果出来跟我说一声，我在的") }}</div>
+      </div>
+    </div>
   </div>
-  <p id="cs-status-line" style="font-size:.8rem;color:var(--t2);margin-bottom:.6rem"></p>
-  <div class="table-wrap">
-    <table class="cs-table">
-      <thead>
-        <tr>
-          <th style="width:50px">ID</th>
-          <th style="min-width:110px">{{ (i18n or {}).get('msg_js_1034', "联系人") }}</th>
-          <th style="width:90px">{{ (i18n or {}).get('inbox.info.platform', "平台") }}</th>
-          <th style="min-width:90px">{{ (i18n or {}).get('cs_s009', "主题") }}</th>
-          <th>{{ (i18n or {}).get('cs_s010', "原话摘要") }}</th>
-          <th style="width:150px">{{ (i18n or {}).get('cs_s011', "到期") }}</th>
-          <th style="width:80px">{{ (i18n or {}).get('ov_js_th_status', "状态") }}</th>
-          <th style="min-width:120px">{{ (i18n or {}).get('cases_note', "备注") }}</th>
-          <th style="width:130px">{{ (i18n or {}).get('ov_js_th_action', "操作") }}</th>
-        </tr>
-      </thead>
-      <tbody id="cs-body"><tr><td colspan="9" style="padding:2rem;color:var(--t3)">{{ (i18n or {}).get('dash.loading', "加载中…") }}</td></tr></tbody>
-    </table>
+
+  <div id="cs-run" style="display:none">
+    <div id="cs-banner"></div>
+    <div class="cs-summary" id="cs-summary"></div>
+    <div class="cs-activity" id="cs-activity"></div>
+
+    <div class="cs-samples" id="cs-samples-card" style="display:none">
+      <h4>{{ (i18n or {}).get('cs2_samples_title', "试运行样本审核") }}</h4>
+      <div class="sub">{{ (i18n or {}).get('cs2_samples_sub', "AI 到点会这么说——👎 的话术会进全局黑名单，避免以后出现雷同表达") }}</div>
+      <div id="cs-samples-list"></div>
+    </div>
+
+    <div class="cs-addp" id="cs-add-panel">
+      <h4>{{ (i18n or {}).get('cs2_add_title', "排一条关怀") }}</h4>
+      <div class="sub">{{ (i18n or {}).get('cs2_add_sub', "AI 没抽到的约定，20 秒手动排上——选人、点主题、点时间") }}</div>
+      <div class="cs-p-row">
+        <span class="cs-p-lb">{{ (i18n or {}).get('cs2_add_who', "给谁") }}</span>
+        <div class="cs-p-main">
+          <div id="cs-p-pick">
+            <input type="text" id="cs-p-search" class="f-input" placeholder="{{ (i18n or {}).get('cs2_add_search_ph', '搜索联系人（姓名 / 用户名 / 号码）…') }}" autocomplete="off">
+            <div id="cs-p-list"></div>
+          </div>
+          <div id="cs-p-sel" style="display:none">
+            <span id="cs-p-sel-ava"></span>
+            <span class="nm" id="cs-p-sel-name"></span>
+            <span class="pf" id="cs-p-sel-pf"></span>
+            <button type="button" class="cs-act x" onclick="csPickClear()">{{ (i18n or {}).get('cs2_sel_clear', "重新选人") }}</button>
+          </div>
+        </div>
+      </div>
+      <div class="cs-p-row">
+        <span class="cs-p-lb">{{ (i18n or {}).get('cs2_add_what', "什么事") }}</span>
+        <div class="cs-p-main cs-chips" id="cs-p-topics">
+          <button type="button" class="cs-chip" onclick="csTopicChip(this)">{{ (i18n or {}).get('cs2_topic_interview', "面试") }}</button>
+          <button type="button" class="cs-chip" onclick="csTopicChip(this)">{{ (i18n or {}).get('cs2_topic_followup', "复查") }}</button>
+          <button type="button" class="cs-chip" onclick="csTopicChip(this)">{{ (i18n or {}).get('cs2_topic_checkup', "体检") }}</button>
+          <button type="button" class="cs-chip" onclick="csTopicChip(this)">{{ (i18n or {}).get('cs2_topic_birthday', "生日") }}</button>
+          <button type="button" class="cs-chip" onclick="csTopicChip(this)">{{ (i18n or {}).get('cs2_topic_trip', "旅行") }}</button>
+          <button type="button" class="cs-chip" onclick="csTopicChip(this)">{{ (i18n or {}).get('cs2_topic_move', "搬家") }}</button>
+          <input type="text" id="cs-p-topic" class="f-input" placeholder="{{ (i18n or {}).get('cs2_add_topic_ph', '或自己填：面试 / 复查 / 提车 …') }}">
+        </div>
+      </div>
+      <div class="cs-p-row">
+        <span class="cs-p-lb">{{ (i18n or {}).get('cs2_add_when', "什么时候") }}</span>
+        <div class="cs-p-main cs-chips" id="cs-p-whens">
+          <button type="button" class="cs-chip on" data-when="tonight" onclick="csWhenChip(this)">{{ (i18n or {}).get('cs2_when_tonight', "今晚 8 点") }}</button>
+          <button type="button" class="cs-chip" data-when="tmr" onclick="csWhenChip(this)">{{ (i18n or {}).get('cs2_when_tmr', "明晚 8 点") }}</button>
+          <button type="button" class="cs-chip" data-when="friday" onclick="csWhenChip(this)">{{ (i18n or {}).get('cs2_when_friday', "周五晚 8 点") }}</button>
+          <button type="button" class="cs-chip" data-when="h24" onclick="csWhenChip(this)">{{ (i18n or {}).get('cs2_when_24h', "24 小时后") }}</button>
+          <button type="button" class="cs-chip" data-when="custom" onclick="csWhenChip(this)">{{ (i18n or {}).get('cs2_when_custom', "自定义") }}</button>
+          <span id="cs-p-hours-wrap" style="display:none">
+            <input type="number" id="cs-p-hours" class="f-input" value="24" min="0.05" step="0.05" style="width:86px"> <span style="color:var(--t3);font-size:.74rem">{{ (i18n or {}).get('cs2_when_custom_h', "小时后") }}</span>
+          </span>
+          <button type="button" class="btn btn-p" style="margin-left:.4rem" onclick="csAdd2()">{{ (i18n or {}).get('cs2_add_submit', "排上") }}</button>
+          <span id="cs-p-msg"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="cs-filters">
+      <div class="f-grp">
+        <label class="f-lb">{{ (i18n or {}).get('ov_js_th_status', "状态") }}</label>
+        <select id="cs-status" class="f-input" style="width:130px" onchange="csLoad()">
+          <option value="">{{ (i18n or {}).get('rpa_all', "全部") }}</option>
+          <option value="pending" selected>{{ (i18n or {}).get('cs_s008', "待关怀") }}</option>
+          <option value="sent">{{ (i18n or {}).get('ov_js_dob_sent', "已发") }}</option>
+          <option value="skipped">{{ (i18n or {}).get('msg_js_1224', "已跳过") }}</option>
+          <option value="expired">{{ (i18n or {}).get('db_js_003', "已过期") }}</option>
+          <option value="cancelled">{{ (i18n or {}).get('rpa_js_st_cancelled', "已取消") }}</option>
+        </select>
+      </div>
+      <div class="f-grp"><label class="f-lb">{{ (i18n or {}).get('em_s014', "条数") }}</label><input type="number" id="cs-limit" value="100" min="1" max="500" class="f-input" style="width:90px"></div>
+      <button type="button" class="btn btn-p" onclick="csLoad()">{{ (i18n or {}).get('db_s027', "加载") }}</button>
+    </div>
+    <p id="cs-status-line" style="font-size:.8rem;color:var(--t2);margin-bottom:.6rem"></p>
+
+    <div id="cs-cards" style="display:none"></div>
+
+    <div class="table-wrap" id="cs-table-wrap">
+      <table class="cs-table">
+        <thead>
+          <tr>
+            <th style="width:50px">ID</th>
+            <th style="min-width:110px">{{ (i18n or {}).get('msg_js_1034', "联系人") }}</th>
+            <th style="width:90px">{{ (i18n or {}).get('inbox.info.platform', "平台") }}</th>
+            <th style="min-width:90px">{{ (i18n or {}).get('cs_s009', "主题") }}</th>
+            <th>{{ (i18n or {}).get('cs_s010', "原话摘要") }}</th>
+            <th style="width:150px">{{ (i18n or {}).get('cs_s011', "到期") }}</th>
+            <th style="width:80px">{{ (i18n or {}).get('ov_js_th_status', "状态") }}</th>
+            <th style="min-width:120px">{{ (i18n or {}).get('cases_note', "备注") }}</th>
+            <th style="width:130px">{{ (i18n or {}).get('ov_js_th_action', "操作") }}</th>
+          </tr>
+        </thead>
+        <tbody id="cs-body"><tr><td colspan="9" style="padding:2rem;color:var(--t3)">{{ (i18n or {}).get('dash.loading', "加载中…") }}</td></tr></tbody>
+      </table>
+    </div>
+
+    <details class="cs-adv">
+      <summary>{{ (i18n or {}).get('cs2_adv_add', "手动补一条（高级）") }}</summary>
+      <div class="cs-add">
+        <div class="f-grp"><label class="f-lb">{{ (i18n or {}).get('msg_js_1034', "联系人") }} key</label><input type="text" id="cs-a-contact" class="f-input" placeholder="conversation_id"></div>
+        <div class="f-grp"><label class="f-lb">{{ (i18n or {}).get('inbox.info.platform', "平台") }}</label><input type="text" id="cs-a-platform" class="f-input" placeholder="telegram" style="width:110px"></div>
+        <div class="f-grp"><label class="f-lb">chat_key</label><input type="text" id="cs-a-chat" class="f-input" placeholder="12345" style="width:130px"></div>
+        <div class="f-grp"><label class="f-lb">{{ (i18n or {}).get('cs_s004', "关怀主题") }}</label><input type="text" id="cs-a-topic" class="f-input" placeholder="{{ (i18n or {}).get('cs_s005', '面试 / 复查 …') }}"></div>
+        <div class="f-grp"><label class="f-lb">{{ (i18n or {}).get('cs_s006', "多少小时后") }}</label><input type="number" id="cs-a-hours" class="f-input" value="24" min="0.05" step="0.05" style="width:90px"></div>
+        <button type="button" class="btn btn-p" onclick="csAdd()">{{ (i18n or {}).get('cs_s007', "手动加一条") }}</button>
+      </div>
+      <p style="font-size:.72rem;color:var(--t3);margin:.2rem 0 0">{{ (i18n or {}).get('cs2_adv_hint', "联系人 key 填统一收件箱的 conversation_id；正常请用上方「排一条关怀」选择器。") }}</p>
+    </details>
   </div>
 </div>
 
@@ -89,14 +262,419 @@
 function esc(s){return String(s||'').replace(/</g,'&lt;').replace(/"/g,'&quot;');}
 function stBadge(s){return '<span class="badge-st '+esc(s)+'">'+esc(s||'—')+'</span>';}
 
+/* ── 人话时间：ts → 「3 小时后 / 12 分钟前」 ── */
+function _csRel(ts){
+  if(!ts)return '—';
+  var diff=ts*1000-Date.now(), abs=Math.abs(diff)/1000;
+  if(abs<60)return window.T('cs2_rel_now');
+  var t;
+  if(abs<3600)t=Math.round(abs/60)+' '+window.T('cs2_unit_min');
+  else if(abs<172800)t=(Math.round(abs/360)/10)+' '+window.T('cs2_unit_hour');
+  else t=(Math.round(abs/8640)/10)+' '+window.T('cs2_unit_day');
+  return diff>=0?window.Tf('cs2_rel_in',{t:t}):window.Tf('cs2_rel_ago',{t:t});
+}
+
+/* ── 跳过原因/备注 人话化 ── */
+function _csNote(note){
+  var n=String(note||'');
+  if(!n)return '';
+  if(n==='dry_run')return window.T('cs2_note_dry');
+  if(n.indexOf('deferred:')===0)return window.T('cs2_note_deferred');
+  var map={no_context:'cs2_skip_no_context',already_discussed:'cs2_skip_already',
+    paywall_quota:'cs2_skip_paywall',identity_leak:'cs2_skip_identity',
+    disliked_similarity:'cs2_skip_disliked',llm_empty:'cs2_skip_llm_empty',
+    contact_budget:'cs2_skip_budget'};
+  if(map[n])return window.T(map[n]);
+  if(n.indexOf('missing')===0)return window.T('cs2_skip_missing');
+  return n;
+}
+
+/* ── 链路自检 ── */
+var _csHealth=null;
+function _csLight(cls,label,state){
+  return '<span class="cs-light"><span class="cs-dot '+cls+'"></span><b>'+label+'</b> '+state+'</span>';
+}
+async function csHealth(){
+  var lights=document.getElementById('cs-health-lights');
+  var meta=document.getElementById('cs-health-meta');
+  try{
+    var res=await apiFetch('/api/care/health');
+    if(!res.ok){meta.textContent=window.T('cs2_health_fail')+' '+res.status;_csApplyMode(null);return;}
+    var h=await res.json();
+    _csHealth=h;
+    var L=[];
+    L.push(_csLight(h.enabled?'g':'', window.T('cs2_light_engine'), h.enabled?window.T('cs2_on'):window.T('cs2_off')));
+    var cap=h.capture||{};
+    L.push(_csLight(cap.wired?(cap.config_on?'g':''):'r', window.T('cs2_light_capture'),
+      cap.wired?(cap.config_on?window.T('cs2_ok'):window.T('cs2_standby')):window.T('cs2_broken')));
+    var dp=h.dispatch||{};
+    var dpCls=dp.running?(h.enabled?'g':''):'r';
+    var dpTxt=dp.running?(h.enabled?window.T('cs2_ok'):window.T('cs2_standby'))
+      :(dp.skip==='ai_missing'?window.T('cs2_ai_missing'):window.T('cs2_broken'));
+    if(dp.running&&dp.last_tick_ts){dpTxt+=' · '+window.T('cs2_last_tick')+' '+_csRel(dp.last_tick_ts);}
+    L.push(_csLight(dpCls, window.T('cs2_light_dispatch'), dpTxt));
+    var dv=h.delivery||{};
+    var dvCls,dvTxt;
+    if(h.enabled&&h.dry_run){dvCls='a';dvTxt=window.T('cs2_delivery_dry');}
+    else if(dv.multiplatform_deferred){dvCls='g';dvTxt=window.T('cs2_delivery_ready');}
+    else{dvCls=h.enabled?'r':'';dvTxt=window.T('cs2_delivery_off');}
+    L.push(_csLight(dvCls, window.T('cs2_light_delivery'), dvTxt));
+    lights.innerHTML=L.join('');
+    meta.textContent='';
+    _csApplyMode(h);
+  }catch(e){meta.textContent=window.T('cs2_health_fail');_csApplyMode(null);}
+}
+
+/* 按健康态切页面形态：未开启=hero；开启=运行区（dry/live 横幅） */
+function _csApplyMode(h){
+  var hero=document.getElementById('cs-hero');
+  var run=document.getElementById('cs-run');
+  var banner=document.getElementById('cs-banner');
+  var samples=document.getElementById('cs-samples-card');
+  if(!h){hero.style.display='none';run.style.display='';banner.innerHTML='';return;}
+  var su=(h.activity&&h.activity.summary)||{};
+  var total=(su.pending||0)+(su.sent||0)+(su.skipped||0)+(su.expired||0)+(su.cancelled||0);
+  if(!h.enabled){
+    hero.style.display='';
+    run.style.display=total>0?'':'none';
+    banner.innerHTML='';
+    samples.style.display='none';
+    return;
+  }
+  hero.style.display='none';
+  run.style.display='';
+  samples.style.display='';
+  _csEnsureChats();
+  if(h.dry_run){
+    banner.innerHTML='<div class="cs-banner dry">'+window.T('cs2_banner_dry')+
+      '<span class="sp"><button type="button" class="btn btn-p" onclick="csEngine(\'go_live\')">'+window.T('cs2_go_live')+'</button>'+
+      '<button type="button" class="cs-act" onclick="csEngine(\'pause\')">'+window.T('cs2_pause')+'</button></span></div>';
+  }else{
+    banner.innerHTML='<div class="cs-banner live">'+window.T('cs2_banner_live')+
+      '<span class="sp"><button type="button" class="cs-act" onclick="csEngine(\'pause\')">'+window.T('cs2_pause')+'</button></span></div>';
+  }
+  var act=document.getElementById('cs-activity');
+  var a=h.activity||{};
+  var parts=[];
+  if(a.captured_24h>0||a.last_captured_ts>0){
+    parts.push(window.T('cs2_activity_cap24')+' <b>'+(a.captured_24h||0)+'</b>');
+    if(a.last_captured_ts)parts.push(window.T('cs2_activity_last')+' '+_csRel(a.last_captured_ts));
+  }
+  /* P2：效果回流（真发后 48h 回复率）——仅真发过才显示 */
+  var ef=h.effect||{};
+  if(ef.sent_7d>0){
+    var rate=(ef.rate===null||ef.rate===undefined)
+      ? window.T('cs2_eff_pending')
+      : Math.round(ef.rate*100)+'% ('+ef.replied+'/'+ef.matured+')';
+    parts.push(window.T('cs2_eff_line')+' <b>'+ef.sent_7d+'</b> · '+window.T('cs2_eff_rate')+' <b>'+rate+'</b>');
+  }
+  /* P2：LLM 影子抽取读数——跑过才显示 */
+  var sh=h.shadow||{};
+  if(sh.llm_calls>0){
+    var shLine=window.Tf('cs2_shadow_line',{n:(sh.budget_used_today!==undefined?sh.budget_used_today:sh.llm_calls),k:(sh.llm_only||0)});
+    if(sh.captured>0)shLine+=' · '+window.Tf('cs2_shadow_cap',{c:sh.captured});
+    parts.push(shLine);
+  }
+  if(parts.length){act.innerHTML=parts.join(' · ');}
+  else{act.textContent=window.T('cs2_listening');}
+}
+
+/* ── 一键开闸 ── */
+async function csEngine(action){
+  if(action==='go_live'&&!confirm(window.T('cs2_go_live_confirm')))return;
+  if(action==='pause'&&!confirm(window.T('cs2_pause_confirm')))return;
+  try{
+    var res=await apiFetch('/api/care/engine',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:action})},{timeoutMs:60000});
+    var d=await res.json();
+    if(!d.ok){alert(window.T('cs2_op_fail')+(d.reason||res.status));return;}
+    await csHealth();
+    csLoad();
+    csLoadSamples();
+  }catch(e){alert(window.T('cs2_op_fail')+e);}
+}
+
+/* ── 试运行样本审核 ── */
+var _csSamples=[];
+function _csSampleRow(s){
+  var ts=s.ts||0;
+  var when=s.ts_iso?window.wsFmtDateTime(ts,{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'—';
+  return '<div class="cs-sample" data-ts="'+ts+'">'+
+    '<div class="hd"><b>'+esc(s.topic||'?')+'</b><span>· '+when+'</span><span>· '+esc(s.platform||'')+'</span><span>· '+esc(s.chat_key||s.contact_key||'')+'</span>'+
+    '<span style="margin-left:auto" class="fb"><button type="button" class="cs-act" onclick="csSampleFb(this,'+ts+',\'like\')">👍</button>'+
+    '<button type="button" class="cs-act" onclick="csSampleFb(this,'+ts+',\'dislike\')">👎</button></span></div>'+
+    '<div class="tx">'+esc(s.reply_text||'')+'</div></div>';
+}
+function _csRenderSamples(){
+  var list=document.getElementById('cs-samples-list');
+  if(!list)return;
+  if(!_csSamples.length){
+    list.innerHTML='<div style="color:var(--t3);font-size:.76rem">'+window.T('cs2_samples_empty')+'</div>';
+    return;
+  }
+  list.innerHTML=_csSamples.map(_csSampleRow).join('')+
+    '<button type="button" class="cs-act" onclick="csMoreSamples()">'+window.T('cs2_samples_more')+'</button>';
+}
+async function csLoadSamples(){
+  var list=document.getElementById('cs-samples-list');
+  if(!list)return;
+  try{
+    var r=await apiFetch('/api/care/dry-run-samples?limit=20');
+    if(!r.ok)return;
+    var d=await r.json();
+    _csSamples=d.samples||[];
+    _csRenderSamples();
+  }catch(_){}
+}
+async function csMoreSamples(){
+  if(!_csSamples.length)return;
+  var earliest=_csSamples[_csSamples.length-1].ts;
+  try{
+    var r=await apiFetch('/api/care/dry-run-samples?limit=20&before_ts='+earliest);
+    if(!r.ok)return;
+    var d=await r.json();
+    var more=d.samples||[];
+    if(more.length){_csSamples=_csSamples.concat(more);_csRenderSamples();}
+  }catch(_){}
+}
+async function csSampleFb(btn,ts,verdict){
+  var box=btn.parentElement;
+  if(box){box.querySelectorAll('button').forEach(function(b){b.disabled=true;});}
+  try{
+    var r=await apiFetch('/api/care/dry-run-feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sample_ts:ts,verdict:verdict})},{timeoutMs:60000});
+    if(r.ok&&box){
+      var note=verdict==='dislike'?(window.T('cs2_fb_done')+' · '+window.T('cs2_fb_dislike_note')):window.T('cs2_fb_done');
+      box.innerHTML='<span style="color:'+(verdict==='like'?'var(--green)':'var(--amber)')+';font-size:.68rem">'+note+'</span>';
+    }else if(box){box.querySelectorAll('button').forEach(function(b){b.disabled=false;});}
+  }catch(_){
+    if(box){box.querySelectorAll('button').forEach(function(b){b.disabled=false;});}
+  }
+}
+
+/* ── P1：联系人选择器（复用统一收件箱最近会话，客户端过滤，零新后端） ── */
+var _csChats=[], _csChatsState='idle', _csSel=null, _csWhen='tonight', _csLastItems=[];
+async function _csEnsureChats(){
+  if(_csChatsState==='ready'||_csChatsState==='loading')return;
+  _csChatsState='loading';
+  _csRenderPickList();
+  try{
+    var r=await apiFetch('/api/unified-inbox/chats?limit=100');
+    if(r.ok){
+      var d=await r.json();
+      _csChats=(d.chats||[]).filter(function(c){
+        var t=String(c.chat_type||'');
+        return t===''||t==='private';
+      });
+      _csChatsState='ready';
+    }else{_csChatsState='fail';}
+  }catch(_){_csChatsState='fail';}
+  _csRenderPickList();
+  if(document.getElementById('cs-cards').style.display!=='none')_csRenderCards(_csLastItems);
+}
+function _csChatByCid(cid){
+  for(var i=0;i<_csChats.length;i++){if(_csChats[i].conversation_id===cid)return _csChats[i];}
+  return null;
+}
+function _csAvaHtml(c){
+  var n=String((c&&c.name)||'?');
+  if(c&&c.avatar_url)return '<img class="cs-p-ava" src="'+esc(c.avatar_url)+'" alt="">';
+  return '<span class="cs-p-ava">'+esc(n.charAt(0).toUpperCase())+'</span>';
+}
+function _csRenderPickList(){
+  var list=document.getElementById('cs-p-list');
+  if(!list)return;
+  if(_csChatsState==='loading'){list.innerHTML='<div class="cs-p-empty">'+window.T('cs2_add_loading')+'</div>';return;}
+  var q=(document.getElementById('cs-p-search').value||'').trim().toLowerCase();
+  var arr=_csChats;
+  if(q){
+    arr=arr.filter(function(c){
+      return String(c.name||'').toLowerCase().indexOf(q)>=0
+        ||String(c.username||'').toLowerCase().indexOf(q)>=0
+        ||String(c.phone||'').toLowerCase().indexOf(q)>=0
+        ||String(c.chat_key||'').toLowerCase().indexOf(q)>=0;
+    });
+  }
+  arr=arr.slice(0,12);
+  if(!arr.length){list.innerHTML='<div class="cs-p-empty">'+window.T('cs2_add_nores')+'</div>';return;}
+  list.innerHTML=arr.map(function(c){
+    return '<div class="cs-p-item" data-cid="'+esc(c.conversation_id)+'">'+_csAvaHtml(c)+
+      '<span class="nm">'+esc(c.name||c.chat_key)+'</span>'+
+      '<span class="pf">'+esc(c.platform_name||c.platform||'')+'</span></div>';
+  }).join('');
+}
+function _csSelect(c){
+  _csSel=c;
+  document.getElementById('cs-p-pick').style.display='none';
+  var sel=document.getElementById('cs-p-sel');
+  sel.style.display='';
+  document.getElementById('cs-p-sel-ava').innerHTML=_csAvaHtml(c);
+  document.getElementById('cs-p-sel-name').textContent=c.name||c.chat_key||'';
+  document.getElementById('cs-p-sel-pf').textContent=(c.platform_name||c.platform||'')+(c.account_label?' · '+c.account_label:'');
+}
+function csPickClear(){
+  _csSel=null;
+  document.getElementById('cs-p-sel').style.display='none';
+  document.getElementById('cs-p-pick').style.display='';
+  var s=document.getElementById('cs-p-search');
+  s.focus();
+}
+function _csWirePicker(){
+  var list=document.getElementById('cs-p-list');
+  if(list){
+    list.addEventListener('click',function(e){
+      var row=(e.target&&e.target.closest)?e.target.closest('[data-cid]'):null;
+      if(!row)return;
+      var c=_csChatByCid(row.getAttribute('data-cid'));
+      if(c)_csSelect(c);
+    });
+  }
+  var s=document.getElementById('cs-p-search');
+  if(s){
+    s.addEventListener('input',function(){_csRenderPickList();});
+    s.addEventListener('focus',function(){_csEnsureChats();});
+  }
+}
+function csTopicChip(el){
+  var box=document.getElementById('cs-p-topics');
+  box.querySelectorAll('.cs-chip').forEach(function(b){b.classList.remove('on');});
+  el.classList.add('on');
+  document.getElementById('cs-p-topic').value=el.textContent.trim();
+}
+function csWhenChip(el){
+  _csWhen=el.getAttribute('data-when')||'tonight';
+  var box=document.getElementById('cs-p-whens');
+  box.querySelectorAll('.cs-chip').forEach(function(b){b.classList.remove('on');});
+  el.classList.add('on');
+  document.getElementById('cs-p-hours-wrap').style.display=(_csWhen==='custom')?'':'none';
+}
+function _csDueAt(kind){
+  var d=new Date();
+  if(kind==='tonight'){
+    d.setHours(20,0,0,0);
+    if(d.getTime()<=Date.now())d.setDate(d.getDate()+1);
+  }else if(kind==='tmr'){
+    d.setDate(d.getDate()+1);d.setHours(20,0,0,0);
+  }else if(kind==='friday'){
+    var delta=(5-d.getDay()+7)%7;
+    d.setDate(d.getDate()+delta);d.setHours(20,0,0,0);
+    if(d.getTime()<=Date.now())d.setDate(d.getDate()+7);
+  }
+  return d.getTime()/1000;
+}
+async function csAdd2(){
+  var msg=document.getElementById('cs-p-msg');
+  var topic=(document.getElementById('cs-p-topic').value||'').trim();
+  if(!_csSel||!topic){
+    msg.style.color='var(--amber)';msg.textContent=window.T('cs2_add_need');
+    return;
+  }
+  var payload={
+    contact_key:_csSel.conversation_id,
+    platform:_csSel.platform||'',
+    account_id:_csSel.account_id||'default',
+    chat_key:_csSel.chat_key||'',
+    topic:topic
+  };
+  if(_csWhen==='custom'){payload.due_in_hours=parseFloat(document.getElementById('cs-p-hours').value||'24');}
+  else if(_csWhen==='h24'){payload.due_in_hours=24;}
+  else{payload.due_at=_csDueAt(_csWhen);}
+  msg.style.color='var(--t3)';msg.textContent='…';
+  try{
+    var res=await apiFetch('/api/care/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)},{timeoutMs:60000});
+    var d=await res.json();
+    if(!d.ok){msg.style.color='var(--red)';msg.textContent=window.T('cs2_add_fail')+(d.message||d.reason||'');return;}
+    msg.style.color='var(--green)';msg.textContent=window.T('cs2_add_ok');
+    document.getElementById('cs-p-topic').value='';
+    document.getElementById('cs-p-topics').querySelectorAll('.cs-chip').forEach(function(b){b.classList.remove('on');});
+    csLoad();
+  }catch(e){msg.style.color='var(--red)';msg.textContent=window.T('cs2_add_fail')+e;}
+}
+
+/* ── P2：草稿预览（与派发同一 prompt 口径，只生成不落状态） ── */
+async function csPreview(id){
+  var box=document.getElementById('cs-pv-'+id);
+  if(!box)return;
+  box.textContent='…';
+  try{
+    var r=await apiFetch('/api/care/schedule/'+id+'/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'},{timeoutMs:60000});
+    var d=await r.json();
+    if(!d.ok){box.textContent=window.T('cs2_preview_fail')+(d.reason||r.status);return;}
+    box.innerHTML='<span class="pvl">'+window.T('cs2_ghost_ai')+'</span>'+esc(d.preview);
+  }catch(e){box.textContent=window.T('cs2_preview_fail')+e;}
+}
+
+/* ── P1：待关怀时间轴卡片 ── */
+function _csDisplayName(it){
+  var c=_csChatByCid(String(it.contact_key||''));
+  if(c&&c.name)return {name:c.name,pf:(c.platform_name||c.platform||it.platform||''),chat:c};
+  var ck=String(it.chat_key||it.contact_key||'');
+  if(ck.length>20)ck=ck.slice(0,20)+'…';
+  return {name:ck,pf:String(it.platform||''),chat:null};
+}
+function _csBucket(it,nowSec){
+  var d=it.due_at||0;
+  if(d<=nowSec)return 'due';
+  var dt=new Date(d*1000),n=new Date(nowSec*1000);
+  if(dt.toDateString()===n.toDateString())return 'today';
+  var tm=new Date(nowSec*1000);tm.setDate(tm.getDate()+1);
+  if(dt.toDateString()===tm.toDateString())return 'tmr';
+  if(d-nowSec<7*86400)return 'week';
+  return 'later';
+}
+function _csCardHtml(it){
+  var who=_csDisplayName(it);
+  var ava=who.chat?_csAvaHtml(who.chat):'<span class="cs-p-ava">'+esc(String(who.name).charAt(0).toUpperCase())+'</span>';
+  var q=it.source_text
+    ? '<div class="q">'+window.T('cs2_card_quote')+'：「'+esc(it.source_text)+'」</div>'
+    : '';
+  return '<div class="cs-card">'+
+    '<div class="hd">'+ava+
+      '<span class="nm">'+esc(who.name)+'</span>'+
+      '<span class="pf">'+esc(who.pf)+'</span>'+
+      '<span class="tp">'+esc(it.topic||'—')+'</span>'+
+      '<span class="due">'+_csRel(it.due_at)+'<small>'+(it.due_at?window.wsFmtDateTime(it.due_at):'')+'</small></span>'+
+    '</div>'+q+
+    '<div class="ops">'+
+      '<button type="button" class="cs-act p" onclick="csSendNow('+it.id+')">'+window.T('cs_js001')+'</button>'+
+      '<button type="button" class="cs-act" onclick="csPreview('+it.id+')">'+window.T('cs2_preview_btn')+'</button>'+
+      '<button type="button" class="cs-act" onclick="csCancel('+it.id+')">'+window.T('ov_js_cancel')+'</button>'+
+    '</div>'+
+    '<div class="pv" id="cs-pv-'+it.id+'"></div></div>';
+}
+function _csRenderCards(items){
+  var box=document.getElementById('cs-cards');
+  if(!box)return;
+  _csLastItems=items||[];
+  if(!items||!items.length){
+    box.innerHTML='<div style="color:var(--t3);font-size:.8rem;padding:1.2rem 0">'+window.T('cs2_no_pending')+'</div>';
+    return;
+  }
+  var now=Date.now()/1000;
+  var groups={due:[],today:[],tmr:[],week:[],later:[]};
+  items.forEach(function(it){groups[_csBucket(it,now)].push(it);});
+  var labels={due:'cs2_group_due',today:'cs2_group_today',tmr:'cs2_group_tmr',week:'cs2_group_week',later:'cs2_group_later'};
+  var html='';
+  ['due','today','tmr','week','later'].forEach(function(k){
+    if(!groups[k].length)return;
+    html+='<div class="cs-group-h">'+window.T(labels[k])+' · '+groups[k].length+'</div>';
+    html+=groups[k].map(_csCardHtml).join('');
+  });
+  box.innerHTML=html;
+}
+
+/* ── 待办列表（pending=卡片视图，其余=表格审计视图） ── */
 async function csLoad(){
   const status=document.getElementById('cs-status').value;
   const limit=document.getElementById('cs-limit').value||100;
   const body=document.getElementById('cs-body');
   const sl=document.getElementById('cs-status-line');
   const sum=document.getElementById('cs-summary');
+  const cards=document.getElementById('cs-cards');
+  const twrap=document.getElementById('cs-table-wrap');
+  const cardView=(status==='pending');
+  cards.style.display=cardView?'':'none';
+  twrap.style.display=cardView?'none':'';
   sl.textContent=window.T('dash.loading');
-  body.innerHTML='<tr><td colspan="9" style="padding:2rem">…</td></tr>';
+  if(!cardView)body.innerHTML='<tr><td colspan="9" style="padding:2rem">…</td></tr>';
   try{
     const q=new URLSearchParams({limit:String(limit)});
     if(status)q.set('status',status);
@@ -112,9 +690,17 @@ async function csLoad(){
       '<div class="cs-pill expired">'+window.T('db_js_003')+' <strong>'+(su.expired||0)+'</strong></div>'+
       '<div class="cs-pill">'+window.T('rpa_js_st_cancelled')+' <strong>'+(su.cancelled||0)+'</strong></div>';
     sl.textContent=window.Tf('cs_tf_count', {n: (d.count||items.length)});
+    if(cardView){
+      _csEnsureChats();
+      _csRenderCards(items);
+      return;
+    }
     if(!items.length){body.innerHTML='<tr><td colspan="9" style="padding:2rem;color:var(--t3)">'+window.T('em_js001')+'</td></tr>';return;}
     body.innerHTML=items.map(function(it){
-      var due=it.due_at?window.wsFmtDateTime(it.due_at):'—';
+      var dueAbs=it.due_at?window.wsFmtDateTime(it.due_at):'—';
+      var due=it.status==='pending'
+        ? '<b style="color:var(--t1)">'+_csRel(it.due_at)+'</b><div class="cs-sub-time">'+dueAbs+'</div>'
+        : dueAbs;
       var op='';
       if(it.status==='pending'){
         op='<button type="button" class="cs-act p" onclick="csSendNow('+it.id+')">'+window.T('cs_js001')+'</button>'+
@@ -125,9 +711,9 @@ async function csLoad(){
         '<td class="mono">'+esc(it.platform||'—')+'</td>'+
         '<td>'+esc(it.topic||'—')+'</td>'+
         '<td>'+esc(it.source_text||'')+'</td>'+
-        '<td class="mono">'+due+'</td>'+
+        '<td>'+due+'</td>'+
         '<td>'+stBadge(it.status)+'</td>'+
-        '<td style="color:var(--t3);font-size:.74rem">'+esc(it.note||'')+'</td>'+
+        '<td style="color:var(--t3);font-size:.74rem">'+esc(_csNote(it.note))+'</td>'+
         '<td>'+op+'</td></tr>';
     }).join('');
   }catch(e){sl.textContent=window.T('ov_js_req_fail')+': '+e;}
@@ -171,6 +757,37 @@ async function csCancel(id){
   }catch(e){alert(e);}
 }
 
-document.addEventListener('DOMContentLoaded',csLoad);
+/* ── P6：深链 ?contact=<conversation_id> ——工作台等任意页面「带上下文直达排卡」。
+   选择器数据就绪后自动选中该联系人并滚到添加面板；找不到（不在最近会话窗口）
+   → 静默回落普通打开（搜索框仍可手选），绝不报错挡路。 ── */
+function _csDeepLink(){
+  var cid='';
+  try{cid=new URLSearchParams(location.search).get('contact')||'';}catch(_){cid='';}
+  if(!cid)return;
+  var tries=0;
+  var timer=setInterval(function(){
+    tries++;
+    if(_csChatsState==='ready'){
+      clearInterval(timer);
+      var c=_csChatByCid(cid);
+      if(c){
+        _csSelect(c);
+        var panel=document.getElementById('cs-add-panel');
+        if(panel&&panel.scrollIntoView)panel.scrollIntoView({behavior:'smooth',block:'center'});
+      }
+    }else if(_csChatsState==='fail'||tries>40){
+      clearInterval(timer);
+    }
+  },250);
+  _csEnsureChats();
+}
+
+document.addEventListener('DOMContentLoaded',function(){
+  _csWirePicker();
+  csHealth();
+  csLoad();
+  csLoadSamples();
+  _csDeepLink();
+});
 </script>
 {% endblock %}

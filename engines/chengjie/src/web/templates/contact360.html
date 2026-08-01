@@ -517,14 +517,9 @@
     location.href='/workspace';
   };
 
-  loadAgents();
-  loadEngagement();
-  loadStlSide();
-  load();
-})();
-
-// P41: 互动积分
-function loadEngagement(){
+  // P41: 互动积分（引用闭包内 CONTACT_ID / esc，必须定义在 IIFE 内；
+  // 曾定义在 IIFE 外 → 启动即 ReferenceError，整页卡「加载中」）
+  function loadEngagement(){
   var box=document.getElementById('eng-box'); if(!box) return;
   apiFetch('/api/workspace/contact/'+encodeURIComponent(CONTACT_ID)+'/engagement')
     .then(function(r){return r.json();}).then(function(d){
@@ -554,5 +549,11 @@ function computeEngagement(){
     });
 }
 window.computeEngagement=computeEngagement;
+
+  loadAgents();
+  loadEngagement();
+  loadStlSide();
+  load();
+})();
 </script>
 {% endblock %}

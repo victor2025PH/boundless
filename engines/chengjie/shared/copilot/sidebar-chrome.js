@@ -296,12 +296,6 @@
         text = tf("inbox.pill.chain_failed", { n: fail });
         tone = "danger";
       } else text = ex.length ? String(ex.length) : "";
-    } else if (suf === "script") {
-      if (d.stage_label || d.stage) text = d.stage_label || d.stage;
-      else {
-        var tn = (d.topics || []).length;
-        text = tn ? tf("inbox.pill.topics", { n: tn }) : "";
-      }
     } else if (suf === "collab") {
       var rel = d.relationship || {};
       text = d.contact_stage_label || rel.display_stage_label || rel.stage_label || "";
@@ -323,8 +317,9 @@
       return null;
     }
     if (suf === "chain") {
-      if (meta.tone === "danger") return { tab: "tools", text: meta.text, tone: meta.tone };
-      if (meta.tone === "ok") return { tab: "tools", text: meta.text, tone: meta.tone };
+      // 2026-08-01 链卡随目标卡迁入「客户&关系」tab（web/app 两端同布局），徽章跟卡走
+      if (meta.tone === "danger") return { tab: "customer", text: meta.text, tone: meta.tone };
+      if (meta.tone === "ok") return { tab: "customer", text: meta.text, tone: meta.tone };
       return null;
     }
     return null;
@@ -409,7 +404,6 @@
     link: '<path d="M10 13a5 5 0 0 0 7.5 0l2-2a5 5 0 0 0-7.1-7.1l-1.3 1.3"/><path d="M14 11a5 5 0 0 0-7.5 0l-2 2a5 5 0 0 0 7.1 7.1l1.3-1.3"/>',
     brain: '<path d="M9.5 2A5.5 5.5 0 0 0 4 7.5c0 1.9.9 3.6 2.3 4.7L6 22h12l-.3-9.8A5.5 5.5 0 0 0 14.5 2 5.5 5.5 0 0 0 9.5 2z"/>',
     folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
-    film: '<rect x="2" y="2" width="20" height="20" rx="2.5"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/>',
     edit: '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>',
     route: '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7H11a3.5 3.5 0 0 1 0-7H4"/>',
     book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
@@ -511,7 +505,23 @@
     };
   }
 
+  /* 目标模板 → 配套跟进 SOP（种子链）映射——**单一事实源**（C 弱联动）。
+     消费方：cp-goal（建目标后一键挂上）+ cp-chain-exec（选择器「推荐」徽标），
+     两组件各自 IIFE 经 CopilotShared 读本表，勿再各写本地副本。
+     只映射高置信场景，relationship_ 系与 custom 刻意不映射；链 id 对应
+     src/inbox/workflow_starter.py 的 STARTER_CHAINS（改种子 id 两处同改）。
+     ⚠ 块注释里绝不能出现「星号+斜杠」相邻（如通配写法 x*&#47;y）——会提前终结注释，
+     本文件 2026-08-01 因此炸过一次语法（node --check 门禁由此而来）。 */
+  var GOAL_CHAIN_REC = {
+    engagement_reactivate: "starter_reactivate_3step",   // 沉默唤回 ↔ 唤回链
+    acquire_and_convert: "starter_icebreak_7d",          // 获客转化 ↔ 新客破冰
+    conversion_unlock: "starter_quote_followup",         // 付费解锁 ↔ 报价跟单
+    conversion_subscribe: "starter_quote_followup",      // 会员订阅 ↔ 报价跟单
+    retention_expand: "starter_postsale_care",           // 留存增购 ↔ 成交后关怀
+  };
+
   root.CopilotShared = Object.assign(root.CopilotShared || {}, {
+    GOAL_CHAIN_REC: GOAL_CHAIN_REC,
     sidebarChrome: {
       TAB_KEY: TAB_KEY,
       TAB_ALIASES: TAB_ALIASES,

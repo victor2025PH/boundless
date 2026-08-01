@@ -70,6 +70,23 @@ process.on("uncaughtException", (err) => {
     "uncaughtException swallowed (service stays up)");
 });
 
+// 安全脱敏（2026-07-31，198 客户机日志实锤）：libsignal 关闭会话时会把整个
+// SessionEntry（含 privKey/rootKey 原文 Buffer）console.log 到 stdout——桌面版
+// stdout 由壳层落到客户机日志文件，等于把 Signal 会话私钥写进明文日志。
+// 这里把 console 的该类输出整体截断为一行脱敏标记（pino 走自己的流，不受影响）。
+for (const _cfn of ["log", "info", "warn", "error"]) {
+  const _orig = console[_cfn].bind(console);
+  console[_cfn] = (...args) => {
+    try {
+      const leaky = args.some((a) =>
+        (typeof a === "string" && a.indexOf("Closing session") !== -1) ||
+        (a && typeof a === "object" && (a.currentRatchet || a.indexInfo)));
+      if (leaky) { _orig("[signal] session closed (key material redacted)"); return; }
+    } catch (_) { /* 脱敏自身绝不能把日志搞崩 */ }
+    _orig(...args);
+  };
+}
+
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
 /** login_id -> { sock, status, qrImage, accountId, createdAt } */
@@ -278,9 +295,15 @@ function scheduleReconnect(loginId, proxyUrl) {
 
 /** 归一 jid：仅保留 1:1 个人号（跳过群/广播/状态）。返回裸号码或 null。 */
 function personalNumber(jid) {
-  const s = String(jid || "");
+  // P3-198：先归一设备后缀（'num:0@s.whatsapp.net'→'num@…'），否则会话列表/通讯录
+  // 同步会把同一客户按 'num:0' 建出第二个会话（与消息流的 'num' 裂开）
+  const s = normalizeUserJid(String(jid || ""));
   if (!s || !s.endsWith("@s.whatsapp.net")) return null;
-  return s.split("@")[0];
+  const num = s.split("@")[0];
+  // '0@s.whatsapp.net' 是 WhatsApp 官方系统伪 jid（服务通知）——不是客户，
+  // 放进去每次同步都会造出一条 chat_key='0' 的幽灵会话（生产实录：每账号一条）
+  if (num === "0") return null;
+  return num;
 }
 
 /** 同步平台通讯录（好友名单）到 Python。contacts 可能是数组或 {contacts:[]}。 */
@@ -454,12 +477,12 @@ async function postReaction(entry, r) {
   if (!jid || !targetId) return;
   const isGroup = typeof jid === "string" && jid.endsWith("@g.us");
   if (isGroup && !WA_SYNC_GROUPS) return;
-  const chatKey = jid.split("@")[0];
+  const chatKey = normalizeUserJid(jid).split("@")[0]; // P3-198 设备后缀归一
   const emoji = (r && r.reaction && r.reaction.text) || ""; // 空=撤销
   // 发言人：群里用 participant，私聊/自己用 fromMe→me、否则对端号码
   let sender = "me";
   if (!key.fromMe) {
-    sender = String(key.participant || "").split("@")[0] || chatKey;
+    sender = normalizeUserJid(String(key.participant || "")).split("@")[0] || chatKey;
   }
   await postJson(PY_REACTION_URL, {
     platform: "whatsapp", account_id: entry.accountId, chat_key: chatKey,
@@ -489,7 +512,7 @@ async function postReceipt(entry, u) {
   if (!jid || !targetId) return;
   const isGroup = typeof jid === "string" && jid.endsWith("@g.us");
   if (isGroup && !WA_SYNC_GROUPS) return;
-  const chatKey = jid.split("@")[0];
+  const chatKey = normalizeUserJid(jid).split("@")[0]; // P3-198 设备后缀归一
   await postJson(PY_RECEIPT_URL, {
     platform: "whatsapp", account_id: entry.accountId, chat_key: chatKey,
     target_id: String(targetId), status,
@@ -503,7 +526,7 @@ async function postPresence(entry, update) {
   const jid = (update && update.id) || "";
   if (!jid || typeof jid !== "string") return;
   if (jid.endsWith("@g.us")) return; // 群 presence 无意义
-  const chatKey = jid.split("@")[0];
+  const chatKey = normalizeUserJid(jid).split("@")[0]; // P3-198 设备后缀归一
   const presences = (update && update.presences) || {};
   // 私聊里 participant key 通常就是对端 jid；取任一条的 lastKnownPresence
   let state = "";
@@ -523,7 +546,7 @@ async function postMessageOp(entry, jid, info) {
   if (!jid || typeof jid !== "string") return;
   const isGroup = jid.endsWith("@g.us");
   if (isGroup && !WA_SYNC_GROUPS) return;
-  const chatKey = jid.split("@")[0];
+  const chatKey = normalizeUserJid(jid).split("@")[0]; // P3-198 设备后缀归一
   await postJson(PY_MSGOP_URL, {
     platform: "whatsapp", account_id: entry.accountId, chat_key: chatKey,
     target_id: info.targetId, op: info.op, text: info.text || "",
@@ -540,13 +563,27 @@ function findByAccount(accountId) {
 
 /** chat_key 归一为 WhatsApp jid（裸号码 → <num>@s.whatsapp.net）。 */
 function toJid(chatKey) {
-  const s = String(chatKey || "");
+  let s = String(chatKey || "");
   if (s.includes("@")) return s;
+  // P3-198 错收件人修复（2026-07-31 实锤）：历史同步来的会话 chat_key 可能带
+  // 设备后缀（'639531765880:0'）。旧实现直接 digits 拼接 → '6395317658800'
+  // ——把设备号并进电话号码，消息发给一个不存在/错误的号码（真客户零感知）。
+  // 规范身份 = 冒号前的用户部分（与 selfIds/mentionDetails 同口径）。
+  if (/^\d+:\d+$/.test(s)) s = s.split(":")[0];
   const digits = s.replace(/[^0-9]/g, "");
   // 群 jid 判定：合法个人号是 E.164（≤15 位）；群 id 为 18 位长串，或旧式 <号>-<时间戳> 含连字符。
   // ≥16 位或带连字符 → @g.us，否则个人 @s.whatsapp.net（发送/媒体路径原只会拼个人后缀，漏群）。
   if (s.includes("-") || digits.length >= 16) return `${digits}@g.us`;
   return `${digits}@s.whatsapp.net`;
+}
+
+/** P3-198：个人 jid 去设备后缀（'num:dev@s.whatsapp.net' → 'num@s.whatsapp.net'）。
+ * 入站镜像用它归一 remoteJid——否则同一客户被拆成 'num:0' 与 'num' 两个会话
+ * （分裂线程 + 主动触达按错误 key 发送）。群/@lid 原样保留（各自有独立语义）。 */
+function normalizeUserJid(jid) {
+  const s = String(jid || "");
+  const m = s.match(/^(\d+):\d+@(s\.whatsapp\.net)$/);
+  return m ? `${m[1]}@${m[2]}` : s;
 }
 
 // 首连历史回填条数（messaging-history.set）；0 关闭
@@ -558,9 +595,11 @@ const WA_MEDIA_URL_BASE = (
   process.env.WA_MEDIA_URL_BASE || "/static/protocol_media/whatsapp"
 ).replace(/\/$/, "");
 
-/** 抽取一条 Baileys 消息的文本（conversation / extendedText / caption / 位置 / 名片）。 */
+/** 抽取一条 Baileys 消息的文本（conversation / extendedText / caption / 位置 / 名片）。
+ * P0-198：先剥 ephemeral/viewOnce 包装层——开了消息时限的聊天，部分入站内容包在
+ * ephemeralMessage.message 里，不剥会被当空消息丢弃。 */
 function extractText(msg) {
-  const m = (msg && msg.message) || {};
+  const m = unwrapWaMessage((msg && msg.message) || {});
   // 位置：转成可点击的地图链接 + 可选地名
   const loc = m.locationMessage;
   if (loc && (loc.degreesLatitude != null || loc.degreesLongitude != null)) {
@@ -743,17 +782,96 @@ async function lidToPnLocal(entry, lidJid, altJid) {
   return null;
 }
 
+// ── P0-198 「灰色感叹号」修复：默认消息时限（disappearing messages）兼容 ─────────
+// 事故：客户聊天开了 24h 消息时限，我方 sendMessage 不带 ephemeralExpiration →
+// 官方客户端给每条消息打灰色 (i)「此消息不会自动消失，发送者使用的可能是旧版
+// WhatsApp」——观感差且是自动化指纹。修法：按 jid 缓存会话时限（入站消息的
+// contextInfo.expiration + 对端改时限的 EPHEMERAL_SETTING 协议消息 + 冷启动主动
+// 查询），文本/媒体/编辑三条出站路径统一带上。
+function _ephMap(entry) {
+  if (!entry._ephemeralByJid) entry._ephemeralByJid = Object.create(null);
+  return entry._ephemeralByJid;
+}
+
+/** 剥掉 ephemeral/viewOnce 包装层，拿到真实内容容器（最多剥 3 层，防循环）。 */
+function unwrapWaMessage(message) {
+  let m = message || {};
+  for (let i = 0; i < 3; i++) {
+    const inner = (m.ephemeralMessage && m.ephemeralMessage.message)
+      || (m.viewOnceMessage && m.viewOnceMessage.message)
+      || (m.viewOnceMessageV2 && m.viewOnceMessageV2.message);
+    if (!inner) break;
+    m = inner;
+  }
+  return m;
+}
+
+/** 从一条入站消息里学习该会话当前的消息时限（秒），写入 per-jid 缓存。 */
+function rememberEphemeral(entry, jid, msg) {
+  try {
+    if (!jid || !msg || !msg.message) return;
+    // 对端修改「默认消息时限」设置（0=关闭）→ 权威覆盖
+    const pm = msg.message.protocolMessage;
+    const T = proto.Message.ProtocolMessage.Type;
+    if (pm && T && pm.type === T.EPHEMERAL_SETTING) {
+      _ephMap(entry)[jid] = Number(pm.ephemeralExpiration || 0) || 0;
+      return;
+    }
+    // 常规消息：任一内容容器的 contextInfo.expiration 即当前会话时限
+    const m = unwrapWaMessage(msg.message);
+    for (const k of Object.keys(m || {})) {
+      const v = m[k];
+      if (v && typeof v === "object" && v.contextInfo
+          && Number(v.contextInfo.expiration) > 0) {
+        _ephMap(entry)[jid] = Number(v.contextInfo.expiration);
+        return;
+      }
+    }
+  } catch (_) { /* 学习失败不影响消息处理 */ }
+}
+
+/** 冷启动兜底：缓存里没有该 jid 时向服务端查一次时限（best-effort，失败按 0）。 */
+async function ensureEphemeralKnown(entry, jid) {
+  const map = _ephMap(entry);
+  if (jid in map) return;
+  map[jid] = 0; // 先占位：查询失败/不支持时不重复探测
+  try {
+    const fn = entry.sock && entry.sock.fetchDisappearingDuration;
+    if (typeof fn !== "function") return;
+    // USync 返回 [{ id, disappearing_mode: { duration, setAt } }]（协议名即键名）
+    const rows = await fn.call(entry.sock, jid);
+    const row = Array.isArray(rows) ? rows[0] : rows;
+    const dm = row && (row.disappearing_mode || row.disappearingMode);
+    const dur = (dm && Number(dm.duration))
+      || Number(row && row.duration) || 0;
+    if (dur > 0) map[jid] = dur;
+  } catch (_) { /* 查询不可用 → 维持 0（不带 ephemeral 发送，行为同旧） */ }
+}
+
+/** 出站 options 合并器：会话有时限 → 附 ephemeralExpiration（消息按对方时限消失）。 */
+function ephemeralOpts(entry, jid, extra) {
+  const exp = Number(_ephMap(entry)[jid] || 0);
+  if (!(exp > 0)) return extra;
+  return Object.assign({ ephemeralExpiration: exp }, extra || {});
+}
+
 /** 把一条 Baileys 入站消息 push 到 Python（skipEmpty=true 时跳过无文本无媒体，用于历史回填降噪）。 */
 async function pushWaMessage(entry, msg, skipEmpty) {
   if (!msg || !msg.message) return false;
-  const jid = (msg.key && msg.key.remoteJid) || "";
+  // P3-198：remoteJid 去设备后缀再入镜像——否则同一客户裂成 'num:0'/'num' 两个会话
+  const jid = normalizeUserJid((msg.key && msg.key.remoteJid) || "");
   if (!jid) return false;
+  // P0-198：每条入站顺手学习该会话的消息时限（含历史回填），供出站带 ephemeral
+  rememberEphemeral(entry, jid, msg);
   const isGroup = jid.endsWith("@g.us");
   if (isGroup && !WA_SYNC_GROUPS) return false; // 群聊接入关闭 → 回到只私聊
   // Baileys 7.x LID：私聊 remoteJid 可能是 @lid（WhatsApp 隐藏号标识）或 @s.whatsapp.net，两者都收；
   // 旧代码只认 @s.whatsapp.net → @lid 私聊被整条丢弃（正是升级前「连着却收不到消息」的病根）。
   // 仍跳过广播/状态（@broadcast、status@broadcast 等）。
   if (!isGroup && !jid.endsWith("@s.whatsapp.net") && !jid.endsWith("@lid")) return false;
+  // '0@s.whatsapp.net'（WhatsApp 官方系统通知伪 jid）不是客户会话，跳过——
+  // 否则收件箱出现 chat_key='0' 的幽灵会话
+  if (!isGroup && jid.split("@")[0] === "0") return false;
   // fromMe：手机端/其他关联设备自己发的消息 → 镜像为出站，使会话线程两头一致。
   // 与 Python 编排器发送后的出站回写用同一 wamid 去重（INSERT OR IGNORE），不会重复。
   const fromMe = !!(msg.key && msg.key.fromMe);
@@ -1463,7 +1581,11 @@ app.post("/accounts/:id/send", async (req, res) => {
   }
   // P4-5B 引用回复：body.quoted={id,from_me,participant,text} → 带原生引用发送
   const quotedMsg = buildQuoted(jid, req.body && req.body.quoted);
-  const sendOpts = quotedMsg ? { quoted: quotedMsg } : undefined;
+  // P0-198：会话开了消息时限则出站必须带 ephemeralExpiration，
+  // 否则官方客户端标灰色 (i)「发送者可能是旧版 WhatsApp」
+  await ensureEphemeralKnown(entry, jid);
+  const sendOpts = ephemeralOpts(
+    entry, jid, quotedMsg ? { quoted: quotedMsg } : undefined);
   // P4-11 群 @提及：群会话里从正文的 @<号码> token 自动派生 mentionedJid（+ 合并显式 mentions）；
   // WhatsApp 约定正文须含 @号码、mentions 列全 jid，收方客户端据此把号码渲染成联系人名。
   const content = { text };
@@ -1529,7 +1651,9 @@ app.post("/accounts/:id/message-op", async (req, res) => {
     } else if (op === "edit") {
       const text = String((req.body && req.body.text) || "");
       if (!text) return res.status(400).json({ ok: false, error: "text required for edit" });
-      await entry.sock.sendMessage(jid, { text, edit: key });
+      // P0-198：编辑同聊天内消息也要带时限，防编辑后被标「旧版 WhatsApp」
+      await ensureEphemeralKnown(entry, jid);
+      await entry.sock.sendMessage(jid, { text, edit: key }, ephemeralOpts(entry, jid));
     } else {
       return res.status(400).json({ ok: false, error: "unknown op" });
     }
@@ -1591,7 +1715,9 @@ app.post("/accounts/:id/send-media", async (req, res) => {
         caption,
       };
     }
-    const sent = await entry.sock.sendMessage(jid, content);
+    // P0-198：媒体/语音同样带会话时限，防灰色 (i) 标记
+    await ensureEphemeralKnown(entry, jid);
+    const sent = await entry.sock.sendMessage(jid, content, ephemeralOpts(entry, jid));
     res.json({ ok: true, message_id: (sent && sent.key && sent.key.id) || "" });
   } catch (e) {
     logger.error({ e }, "send-media failed");

@@ -182,9 +182,69 @@ class PlatformSessionHealth:
             self._by_status.clear()
             self._sessions.clear()
 
+    def seed_offline_from_registry(
+        self, rows: Any, *, detail: str = "seeded from registry offline",
+    ) -> int:
+        """用注册表 ``status=offline`` 行种子化健康表（跨重启接续「已退出」真相）。
+
+        健康表是进程内存态——服务一重启，登出时 Node 推过的 ``logged_out`` 全丢，
+        坐席顶栏「通道离线」/ ops 卡/发送闸的健康判据都会对死号失明（注册表仍记着
+        offline，但读健康表的消费方看不见）。启动时把在册 offline 号灌成
+        ``logged_out``，``unhealthy_since`` 取注册表 ``updated_at``（登出落库时刻）。
+
+        不变量：
+        - **只补不覆盖**：该 key 已有事件（Node 真 push / 先前种子）则跳过——
+          运行时真相优先于启动快照；
+        - **不发 EventBus**：种子不是状态转移，催人修「自己刚下的号」是噪音
+          （看门狗另有 ``_session_expected_online`` 过滤）；
+        - 非法/空 account_id 跳过；超 ``_MAX_KEYS`` 与 ``record`` 同语义拒收。
+
+        返回新种子条数。
+        """
+        n = 0
+        if not rows:
+            return 0
+        with self._lock:
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                if str(row.get("status") or "") != "offline":
+                    continue
+                plat = str(row.get("platform") or "")
+                acct = str(row.get("account_id") or "")
+                if not plat or not acct:
+                    continue
+                key = self._key(plat, acct)
+                if key in self._sessions:
+                    continue
+                if len(self._sessions) >= _MAX_KEYS:
+                    break
+                try:
+                    since = float(row.get("updated_at") or 0.0)
+                except (TypeError, ValueError):
+                    since = 0.0
+                now = time.time()
+                if since <= 0:
+                    since = now
+                self._sessions[key] = {
+                    "status": "logged_out",
+                    "detail": str(detail or "")[:300],
+                    "login_id": "",
+                    "ts": now,
+                    "changes": 0,
+                    "unhealthy_since": since,
+                    "last_remind_ts": 0.0,
+                    "seeded": True,
+                }
+                self._by_status["logged_out"] = (
+                    self._by_status.get("logged_out", 0) + 1)
+                n += 1
+        return n
+
 
 _SINGLETON: Optional[PlatformSessionHealth] = None
 _LOCK = threading.Lock()
+_SEEDED = False
 
 
 def get_platform_session_health() -> PlatformSessionHealth:
@@ -196,7 +256,37 @@ def get_platform_session_health() -> PlatformSessionHealth:
     return _SINGLETON
 
 
+def ensure_seeded_from_registry() -> int:
+    """幂等：进程内只种子化一次（启动后首次有人读健康表时懒加载）。
+
+    放在 getter 旁而非强绑 main.py——测试/CLI 场景也能拿到正确种子，且编排器/
+    看门狗/chats 任一先触达即生效。返回新种子条数（已种子过 → 0）。
+
+    注意：singleton 必须在 ``_LOCK`` 外取——``get_platform_session_health`` 同锁
+    且非 RLock，持锁再取会自死锁（门禁曾实锤卡死）。
+    """
+    global _SEEDED
+    if _SEEDED:
+        return 0
+    health = get_platform_session_health()
+    with _LOCK:
+        if _SEEDED:
+            return 0
+        try:
+            from src.integrations.account_registry import get_account_registry
+            rows = [
+                r for r in (get_account_registry().list() or [])
+                if str(r.get("status") or "") == "offline"
+            ]
+        except Exception:
+            rows = []
+        n = health.seed_offline_from_registry(rows)
+        _SEEDED = True
+        return n
+
+
 __all__ = [
     "PlatformSessionHealth", "get_platform_session_health",
+    "ensure_seeded_from_registry",
     "UNHEALTHY_STATUSES", "HEALTHY_STATUSES",
 ]

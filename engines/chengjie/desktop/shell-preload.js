@@ -59,8 +59,6 @@ contextBridge.exposeInMainWorld("shell", {
   relSync: (args) => ipcRenderer.invoke("desktop:rel-sync", args),
   nbaList: (args) => ipcRenderer.invoke("desktop:nba-list", args),
   nbaExec: (args) => ipcRenderer.invoke("desktop:nba-exec", args),
-  scriptList: (args) => ipcRenderer.invoke("desktop:script-list", args),
-  startChain: (args) => ipcRenderer.invoke("desktop:start-chain", args),
   collabContext: (args) => ipcRenderer.invoke("desktop:collab-context", args),
   chainExecutions: (args) => ipcRenderer.invoke("desktop:chain-executions", args),
   chainCancel: (args) => ipcRenderer.invoke("desktop:chain-cancel", args),

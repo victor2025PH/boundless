@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 from src.ai.translation_service import detect_language
@@ -30,6 +31,27 @@ PLATFORM_DISPLAY = {
 def conv_id(platform: str, account_id: str, chat_key: str) -> str:
     """会话唯一 id：platform:account_id:chat_key。"""
     return f"{platform}:{account_id}:{chat_key}"
+
+
+# P3-198：WhatsApp 设备后缀键（'639531765880:0'，Baileys 设备寻址/历史同步产物）。
+# 同一客户的规范身份=冒号前的号码；不归一会裂成两个会话（线程分叉），且旧版边车
+# toJid 曾把后缀并进号码 → 消息发到不存在的号码（2026-07-31 实锤）。
+_WA_DEVICE_KEY_RE = re.compile(r"^(\d+):\d+$")
+
+
+def normalize_chat_key(platform: str, chat_key: str) -> str:
+    """平台级 chat_key 归一（内桥 ingest 边界统一调用）。
+
+    当前只有 WhatsApp 有设备后缀语义；其它平台原样返回——LINE 官方键
+    （``line:group:<id>``）等含冒号形态不匹配 ``^\\d+:\\d+$``，天然不受影响。
+    纯函数、绝不抛。
+    """
+    key = str(chat_key or "")
+    if str(platform or "").lower() == "whatsapp":
+        m = _WA_DEVICE_KEY_RE.match(key.strip())
+        if m:
+            return m.group(1)
+    return key
 
 
 def name_is_real(name: Any, chat_key: Any) -> bool:
@@ -303,6 +325,7 @@ def store_row_to_chat(
     account_label: Optional[str] = None,
     read_only: bool = False,
     account_status: str = "",
+    can_send: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """把 InboxStore.list_conversations 的一行映射回 unified_inbox 的 chat dict 形状。
 
@@ -367,8 +390,10 @@ def store_row_to_chat(
         "last_message": last_msg_obj,
         "messages": [last_msg_obj] if last_msg_obj else [],
         "message_count": int(message_count or 0),
-        # read_only：账号已从注册表移除（如 status=removed），仅可查看历史、不可发送。
-        "can_send": not read_only,
+        # read_only：账号已从注册表移除（status=removed），仅可查看历史（前端归「已移除」tab）。
+        # can_send 可被显式覆写（account_status=offline 的「已登出」账号：不隐藏、只禁发）；
+        # 缺省沿用旧语义 = not read_only。
+        "can_send": (not read_only) if can_send is None else bool(can_send),
         "read_only": bool(read_only),
         "account_status": str(account_status or ""),
         "send_modes": list(SEND_MODES),

@@ -186,16 +186,23 @@ class _FakeSM:
 class _FakeRes:
     ok = True
 
+    def __init__(self, text="<translated-en>"):
+        self._text = text
+
     def to_dict(self):
-        return {"translated_text": "<译文>"}
+        return {"translated_text": self._text}
 
 
 class _FakeTranslation(TranslationService):
-    def __init__(self):  # 不调父类，避免真实依赖
-        pass
+    """P0-198 起 _translate_reply 会在 CJK→非 CJK 冲突时显式传 source_lang，
+    替身签名须兼容；占位译文用英文——中文占位会被新的「译文仍含 CJK=假译文」
+    守卫正确拒掉（那个守卫有专属用例）。"""
 
-    async def translate(self, text, target_lang="", style=""):
-        return _FakeRes()
+    def __init__(self, out="<translated-en>"):  # 不调父类，避免真实依赖
+        self._out = out
+
+    async def translate(self, text, target_lang="", style="", source_lang="", **kw):
+        return _FakeRes(self._out)
 
 
 def _app(**state):
@@ -258,7 +265,112 @@ async def test_generate_persona_reply_appends_translation():
         last_inbound=last, history=history, target_lang="en",
     )
     assert out["ok"] is True
-    assert out["translated"] == "<译文>"
+    assert out["translated"] == "<translated-en>"
+
+
+@pytest.mark.asyncio
+async def test_generate_persona_reply_rejects_cjk_echo_translation():
+    """P0-198：中文草稿→en 目标，引擎回显中文（identity/半吊子）→ 不给假译文。
+
+    198 实锤链路：『哈哈，我叫Steven啦』被判 en → identity 把中文当译文 →
+    工坊「填入并发送」按已译直发 → 中文直达外语客户。译文仍含 CJK 必须按
+    「无译文」处理，UI 不再出现可一键发送的假译文。"""
+    ai = _FakeAI()
+    app = _app(skill_manager=_FakeSM(ai), ai_client=ai, kb_store=None,
+               telegram_client=None,
+               translation_service=_FakeTranslation(out="哈哈，我叫Steven啦"))
+    history, last = normalize_history([{"direction": "in", "text": "hi"}])
+    out = await generate_persona_reply(
+        app=app, platform="telegram", chat_key="r4b",
+        last_inbound=last, history=history, target_lang="en",
+    )
+    assert out["ok"] is True
+    assert "translated" not in out
+
+
+# ── P2-198 直出模式：客户语言正文 + 坐席 UI 语言对照（gloss，只读）──────────
+
+@pytest.mark.asyncio
+async def test_gloss_attached_when_reply_lang_differs_from_ui_lang():
+    """正文中文直出（FakeAI 回显含 CJK）+ 坐席 UI=en → 附 en 对照。"""
+    ai = _FakeAI()
+    app = _app(skill_manager=_FakeSM(ai), ai_client=ai, kb_store=None,
+               telegram_client=None, translation_service=_FakeTranslation())
+    history, last = normalize_history([{"direction": "in", "text": "怎么下单"}])
+    out = await generate_persona_reply(
+        app=app, platform="telegram", chat_key="g1",
+        last_inbound=last, history=history, gloss_lang="en",
+    )
+    assert out["ok"] is True
+    assert out["gloss"] == "<translated-en>"
+    assert out["gloss_lang"] == "en"
+
+
+@pytest.mark.asyncio
+async def test_gloss_skipped_when_same_language_or_real_translation():
+    ai = _FakeAI()
+    app = _app(skill_manager=_FakeSM(ai), ai_client=ai, kb_store=None,
+               telegram_client=None, translation_service=_FakeTranslation())
+    history, last = normalize_history([{"direction": "in", "text": "怎么下单"}])
+    # 正文语言 == UI 语言 → 不产对照
+    out_same = await generate_persona_reply(
+        app=app, platform="telegram", chat_key="g2",
+        last_inbound=last, history=history, gloss_lang="zh",
+    )
+    assert "gloss" not in out_same
+    # 已有真的跨语言 translated（坐席显式选目标语）→ 不叠第二份对照
+    out_t = await generate_persona_reply(
+        app=app, platform="telegram", chat_key="g3",
+        last_inbound=last, history=history, target_lang="en", gloss_lang="en",
+    )
+    assert out_t.get("translated") == "<translated-en>"
+    assert "gloss" not in out_t
+
+
+# ── generate_topic_opener（P1-198 工坊「开启新话题」模式）─────────────────
+
+@pytest.mark.asyncio
+async def test_topic_opener_works_without_inbound():
+    """开新话题不依赖入站消息（没人说话也能主动开场），指令注入产线主路径。"""
+    from src.inbox.persona_reply import generate_topic_opener
+    ai = _FakeAI()
+    app = _app(skill_manager=_FakeSM(ai), ai_client=ai, kb_store=None,
+               telegram_client=None, translation_service=None)
+    out = await generate_topic_opener(
+        app=app, platform="whatsapp", chat_key="c1", history=[])
+    assert out["ok"] is True
+    assert out["intent"] == "proactive_opener"
+    assert out["mode"] == "opener"
+    # FakeAI 回显 directive → 指令核心要素可见
+    assert "主动开启一个新话题" in out["reply"]
+    assert ai.last_ctx["intent"] == "proactive_opener"
+    assert ai.last_ctx["reply_lang"]      # 语言决策必须给出结果
+
+
+def test_opener_directive_language_avoid_and_no_template():
+    """指令纯函数：目标语言钉入 + 最近已发内容列入反例 + 模板壳出现在禁令里。"""
+    from src.inbox.persona_reply import build_opener_directive
+    d = build_opener_directive(
+        angle="聊聊窗外的天气", reply_lang="en",
+        recent_out=["Hi there my friend, how was your day"])
+    assert "（en）" in d
+    assert "聊聊窗外的天气" in d
+    assert "好久没联系" in d                     # 作为禁令出现
+    assert "Hi there my friend" in d             # 防复读反例
+
+
+@pytest.mark.asyncio
+async def test_topic_opener_fallback_without_skill_manager():
+    """无 SkillManager → ai.chat 兜底，仍能出开场。"""
+    from src.inbox.persona_reply import generate_topic_opener
+    ai = _FakeAI()
+    app = _app(skill_manager=None, ai_client=ai, telegram_client=None,
+               translation_service=None)
+    out = await generate_topic_opener(
+        app=app, platform="telegram", chat_key="c2",
+        history=[{"role": "user", "content": "hello"}])
+    assert out["ok"] is True
+    assert out["reply"] == "[兜底]回复"
 
 
 @pytest.mark.asyncio
@@ -362,12 +474,16 @@ class _FakeSMUnified(_FakeSM):
                                    risk_level="", media_type="", media_ref="",
                                    media_desc="", channel="inbox",
                                    conversation_id="", peer_audio_emotion=None,
-                                   account_id=""):
+                                   account_id="", agent_instruction=""):
+        # ⚠ 签名必须与真 SkillManager.generate_inbox_draft 同步：漂移会让
+        # persona_reply 的统一引擎调用 TypeError 被吞、静默回落直连——本替身
+        # 曾漏 agent_instruction（P22 加参后），本文件两例红到 2026-08-01 才被发现。
         self.inbox_draft_calls.append({
             "text": text, "chat_key": chat_key, "platform": platform,
             "persona_id": persona_id, "reply_lang": reply_lang,
             "risk_level": risk_level,
             "history_len": len(history or []),
+            "agent_instruction": agent_instruction,
         })
         return {"reply": f"[统一]{text}", "intent": "unified_intent"}
 
@@ -419,3 +535,84 @@ async def test_persona_reply_unified_flag_off_falls_back_to_direct():
     assert out["reply"] == "[人设]在吗"        # 直连路径产物
     assert sm.inbox_draft_calls == []           # 未走统一引擎
     assert ai.last_ctx is not None              # 直连 ai_client 被调用
+
+
+# ── 分段计时（2026-08-01 观测补齐）────────────────────────────
+# 「尖峰慢在生成还是翻译」的归因数据面：out["timings"] 带 gen/xlate/gloss_ms +
+# gen_path（unified/direct/fallback），smart-reply 路由并进日志后 pop 掉。
+
+def _assert_timings_shape(out):
+    tm = out.get("timings")
+    assert isinstance(tm, dict), "成功产出必须带 timings"
+    for k in ("gen_ms", "xlate_ms", "gloss_ms"):
+        assert isinstance(tm[k], int) and tm[k] >= 0, f"{k} 须为非负整数毫秒"
+    return tm
+
+
+@pytest.mark.asyncio
+async def test_persona_reply_timings_direct_path():
+    ai = _FakeAI()
+    app = _app(skill_manager=_FakeSM(ai), ai_client=ai, kb_store=None,
+               telegram_client=None, translation_service=None)
+    history, last = normalize_history([{"direction": "in", "text": "怎么下单"}])
+    out = await generate_persona_reply(
+        app=app, platform="telegram", chat_key="t1",
+        last_inbound=last, history=history,
+    )
+    tm = _assert_timings_shape(out)
+    assert tm["gen_path"] == "direct"
+
+
+@pytest.mark.asyncio
+async def test_persona_reply_timings_fallback_path():
+    ai = _FakeAI()
+    app = _app(skill_manager=None, ai_client=ai, kb_store=None,
+               telegram_client=None, translation_service=None)
+    history, last = normalize_history([{"direction": "in", "text": "在吗"}])
+    out = await generate_persona_reply(
+        app=app, platform="telegram", chat_key="t2",
+        last_inbound=last, history=history,
+    )
+    tm = _assert_timings_shape(out)
+    assert tm["gen_path"] == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_persona_reply_timings_unified_path():
+    ai = _FakeAI()
+    sm = _FakeSMUnified(ai)
+    app = _app(skill_manager=sm, ai_client=ai, kb_store=None,
+               telegram_client=None, translation_service=None)
+    history, last = normalize_history([{"direction": "in", "text": "你好"}])
+    out = await generate_persona_reply(
+        app=app, platform="telegram", chat_key="t3",
+        last_inbound=last, history=history,
+    )
+    tm = _assert_timings_shape(out)
+    assert tm["gen_path"] == "unified"
+
+
+def test_fake_unified_signature_in_sync_with_real():
+    """替身签名同步门禁：persona_reply 会把全部具名参数喂给真
+    SkillManager.generate_inbox_draft——真引擎加参而替身不跟，统一引擎调用在测试里
+    TypeError 被吞、静默回落直连，「统一路径」从此失测（agent_instruction 实锤）。"""
+    import inspect
+    from src.skills.skill_manager import SkillManager
+    real = set(inspect.signature(SkillManager.generate_inbox_draft).parameters) - {"self"}
+    fake = set(inspect.signature(_FakeSMUnified.generate_inbox_draft).parameters) - {"self"}
+    missing = real - fake
+    assert not missing, (
+        f"_FakeSMUnified.generate_inbox_draft 缺参：{sorted(missing)}"
+        "（真引擎加参后替身必须同步，否则统一路径静默失测）")
+
+
+@pytest.mark.asyncio
+async def test_persona_reply_no_context_has_no_timings():
+    """早退路径（无上下文）不产出 timings——没生成过任何东西，计时是噪声。"""
+    app = _app(skill_manager=None, ai_client=_FakeAI())
+    out = await generate_persona_reply(
+        app=app, platform="telegram", chat_key="t4",
+        last_inbound="", history=[],
+    )
+    assert out["ok"] is False
+    assert "timings" not in out

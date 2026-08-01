@@ -101,6 +101,22 @@ _IMG_PROMISE = [re.compile(p, re.IGNORECASE) for p in (
     r"(?:影|拍)\s*(?:多)?\s*(?:张|張|翻|返)?\s*(?:相|相片|自拍)?\s*(?:畀|俾)\s*你\s*(?:睇|睇下|睇吓)?",
 )]
 
+# 翻找式软承诺（2026-07-31 人设试聊实录三连：「等我找找看有没有存图」「我翻翻
+# 手机相册哈」——无「拍/发」动词、无「给你」结构，_IMG_PROMISE 全漏）。
+# 独立成表的原因：这类承诺是**即时**动作，对 _EXCLUDES_PAST_REF（过去指涉）
+# **免疫**——「我以前画过一套明信片，等我找找看有没有存图」前半句的「以前」
+# 不该豁免后半句的翻找承诺；否认/远期/疑问排除（_EXCLUDES）照常适用。
+# 同句必须带照片语境词（相册/存图/照片/图…）防误伤「我找找那家店在哪」；
+# 单字「图」带负向前瞻防「图书馆/图纸」。
+_IMG_PROMISE_BROWSE = [re.compile(p, re.IGNORECASE) for p in (
+    r"(?:等|让|讓)?\s*(?:我|人家)\s*(?:去)?\s*(?:找找|翻翻|找一?下|翻一?下)"
+    r"[^。！？!?\n]{0,15}(?:相册|相簿|存图|存圖|照片|相片|自拍|"
+    r"(?:图|圖)(?![书書纸紙标標案表鉴鑒]))",
+    # en：browse-my-album 软承诺
+    r"\blet\s+me\s+(?:look|dig|go)\s+through\s+my\s+(?:photos?|albums?|gallery|camera\s+roll)",
+    r"\blet\s+me\s+(?:find|look\s+for|check\s+for)\s+(?:a|an|the|that|some)?\s*(?:photos?|pic(?:ture)?s?|selfies?)\b",
+)]
+
 # 视频通话承诺/应允（区别于"发你个视频"——那是媒体视频，走 _try_autosend_video 可兑现；
 # 这里抓的是**通话**：可以视频/开视频/同你视频/视频聊/接你视频。宁漏勿误：
 # 单说"视频"名词不算，必须带"可以/开/来/接/同你"等应允动词结构。
@@ -151,6 +167,10 @@ _IMG_CLAIM_STRONG = [re.compile(p, re.IGNORECASE) for p in (
     r"(?:这|這|那|上|前)\s*(?:一)?[张張][^。！？!?\n]{0,10}"
     r"(?:看|瞧|怎么样|怎麼樣|好看|喜欢|喜歡|如何|行不行|满意|滿意|中意)",
     r"(?:再)?\s*(?:仔细|仔細)?\s*看\s*(?:看|下|一下)?\s*(?:这|這|那)\s*(?:一)?[张張]",
+    # 指示「这/那张」+ 系动词（2026-07-31 试聊实录：「这张是它刚来我家那天拍的」
+    # 「那张是阿橘蹲在阳台晒太阳的侧影」——把不存在的图当作正在给对方看地描述。
+    # media_context 门控下不误伤评论对方图（对方发图轮 media_context 被抑制）。
+    r"(?:这|這|那)\s*(?:一)?[张張]\s*(?:是|就是|係)",
     # en
     r"\b(?:i\s+)?(?:just\s+)?sent\s+(?:you\s+)?(?:it|a|an|one|the|my|another)?\s*"
     r"(?:photo|pic(?:ture)?|selfie)?\b",
@@ -188,6 +208,9 @@ _CLAIM_EXCLUDES = [re.compile(p, re.IGNORECASE) for p in (
 # 弱完成态（不带媒体名词）——仅 media_context 时判（否则「消息来了/我来了」会误伤）
 _MEDIA_DONE_WEAK = [re.compile(p, re.IGNORECASE) for p in (
     r"这不\s*就?\s*(?:来|來)\s*(?:了|啦)",                            # 这不就来了嘛
+    # 光杆翻找承诺（2026-07-31 试聊实录：「哈哈那我找找看～」——句内无照片词，
+    # 只有媒体语境才能定性；句尾锚定防吃掉「我找找看那家餐厅」这类带宾语的句子）
+    r"(?:我|人家)\s*(?:就)?\s*(?:去)?\s*(?:找找|翻翻)\s*(?:看|下|一下)?\s*[哈啦哦呀嘛]?\s*$",
     r"(?:发|發|传|傳)\s*(?:到|去|在)\s*(?:群|群里|群裡|群組|群组)",   # 发到群里（私聊错乱强信号）
     r"你\s*(?:再)?\s*看\s*(?:看|下|一下)?\s*(?:合|喜|中意|满意|滿意|好不好|怎么样|怎麼樣|漂不漂亮|美不美)",
     r"(?:已经|已經|刚|剛|这就|這就|就)\s*(?:发|發|传|傳)\s*(?:了|啦|出去|过去|過去)(?![什么么问])",
@@ -202,6 +225,10 @@ _WANTS_IMG = [re.compile(p, re.IGNORECASE) for p in (
     # 有没有/想要/给我 + 照片；「店里的照片」「海边的照片」这类点名索要
     r"(?:有没有|有無|有冇|想要|想看|要看|給我|给我|发我|發我)\s*(?:.{0,10})?(?:照片|自拍|相片|靓照|靚照)",
     r"(?:照片|自拍|相片)\s*(?:呢|吗|嗎|呀|啊|嘛)?\s*[?？]?\s*$",
+    # 裸「图」索要（2026-07-31 试聊实录：「有图嘛」——上面各条都要求
+    # 照片/自拍全词，「图」单字只在句式收口时认，防「地图/图书馆」误伤）
+    r"(?:有没有|有沒有|有冇|有無|有)\s*(?:图|圖)\s*(?:吗|嗎|嘛|呀|啊|呢)?\s*[?？]?\s*$",
+    r"^\s*(?:图|圖)\s*(?:呢|咧|勒)\s*[?？]?\s*$",
     r"你(?:长|長)\s*(?:啥|什么|甚麼)\s*样",
     r"是\s*(?:不是|你)\s*本人|真人(?:吗|嗎|吧)|是真人",
     r"\b(?:send|show|got|have)\s+(?:me\s+)?(?:a\s+|your\s+)?(?:photo|pic(?:ture)?|selfie|face)",
@@ -237,7 +264,12 @@ _EXCLUDES = [re.compile(p, re.IGNORECASE) for p in (
     # 疑问/offer（要不要我拍）——不是断言；由 offer-accept 桥接管
     r"要不要|要嗎|要吗|想不想|好不好|可以吗|可以嗎|行不行|\bwant\s+me\s+to\b|\bshould\s+i\b|\bdo\s+you\s+want\b",
     r"送ろうか|送りましょうか|보내줄까|\bquieres\s+que\b|\bveux-tu\s+que\b|\bquer\s+que\b",
-    # 过去指涉——谈论已发生的照片
+)]
+
+# 过去指涉排除（独立组，2026-07-31 拆分）：保护「上次发你的那张」类**描述**不被
+# 当承诺剥掉。只豁免 _IMG_PROMISE/_VOICE_PROMISE（拍/发类），**不豁免**
+# _IMG_PROMISE_BROWSE（翻找类是即时动作，混合句「以前画过…等我找找」照抓）。
+_EXCLUDES_PAST_REF = [re.compile(p, re.IGNORECASE) for p in (
     r"上次|之前|那[张張]|昨天|前几天|前幾天|以前|刚才发|剛才發|\blast\s+time\b|\bearlier\b|\bthat\s+(?:photo|pic)\b",
     r"この前|さっき送|昨日|아까\s*보낸|지난번",
 )]
@@ -246,13 +278,25 @@ _QUESTION_TAIL_RE = re.compile(r"[?？]\s*$")
 
 
 def _sentence_is_promise(sent: str) -> str:
-    """单句判定：返回 'image'/'voice'/'video_call'/''。疑问句/排除面命中一律不算。"""
+    """单句判定：返回 'image'/'voice'/'video_call'/''。疑问句/排除面命中一律不算。
+
+    排除面分两组：否认/远期/疑问（_EXCLUDES）对一切承诺模式适用；过去指涉
+    （_EXCLUDES_PAST_REF）只豁免「拍/发」类——翻找式（_IMG_PROMISE_BROWSE）
+    是即时动作，混合句「我以前画过明信片，等我找找看有没有存图」里的「以前」
+    不该连带豁免后半句的翻找承诺（2026-07-31 试聊实录漏网根因）。
+    """
     s = str(sent or "").strip()
     if not s:
         return ""
     if _QUESTION_TAIL_RE.search(s):
         return ""
     for ex in _EXCLUDES:
+        if ex.search(s):
+            return ""
+    for rx in _IMG_PROMISE_BROWSE:
+        if rx.search(s):
+            return KIND_IMAGE
+    for ex in _EXCLUDES_PAST_REF:
         if ex.search(s):
             return ""
     for rx in _IMG_PROMISE:

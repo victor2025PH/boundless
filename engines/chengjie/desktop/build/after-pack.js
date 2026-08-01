@@ -83,9 +83,14 @@ const FORBIDDEN = [
   [path.join("services", "messenger-web", "logs"), "本机运行日志"],
 ];
 
-// 内测/定制包随包数据种子（build/seed-data 暂存了才要求；标准包无此目录=跳过）。
-// 判据与 stage_internal_assets.py 的产出一一对应：种子缺一半（比如只有 overlay
-// 没有语音）装出来就是「人设在、声音哑」的半残包，比不带更难排查。
+// 内测/定制包随包数据种子。判据与 stage_internal_assets.py 的产出一一对应：
+// 种子缺一半（比如只有 overlay 没有语音）装出来就是「人设在、声音哑」的半残包，
+// 比不带更难排查。
+//
+// ⚑ 内测口径（2026-08-01 拍板）：内测期唯一打包形态=内测包（与生产机对齐），
+// build/seed-data **必须存在**——漏跑 stage:internal 直接打包失败，绝不静默产出
+// 「功能全关的标准形态」（正是「装到别的电脑功能全消失」事故的成因之一）。
+// 将来要出标准包：显式设 env CHATX_ALLOW_STANDARD=1（一次性逃生门，勿常开）。
 const SEED_REQUIRED = [
   ["config.local.internal.yaml", "功能 overlay 种子"],
   ["seed-manifest.json", "种子清单"],
@@ -107,7 +112,15 @@ exports.default = async function afterPack(context) {
       missing.push(`  · 缺 ${rel}（${what}）→ ${impact}`);
     }
   }
-  if (fs.existsSync(path.join(__dirname, "seed-data"))) {
+  const seedStaged = fs.existsSync(path.join(__dirname, "seed-data"));
+  const allowStandard = process.env.CHATX_ALLOW_STANDARD === "1";
+  if (!seedStaged && !allowStandard) {
+    missing.push(
+      "  · 缺 build/seed-data（内测数据种子）→ 内测期唯一形态=内测包；" +
+      "先跑 npm run stage:internal（要出标准包需显式 CHATX_ALLOW_STANDARD=1）"
+    );
+  }
+  if (seedStaged) {
     for (const [rel, what] of SEED_REQUIRED) {
       if (!fs.existsSync(path.join(res, "seed-data", rel))) {
         missing.push(`  · 缺 seed-data/${rel}（${what}）→ 内测包装出来是半残形态`);

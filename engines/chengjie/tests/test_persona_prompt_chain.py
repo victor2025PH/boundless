@@ -131,6 +131,8 @@ _PROBES: Dict[str, _Probe] = {
     "boundaries.topics_to_avoid": _Probe(["探针雷区话题"], "探针雷区话题"),
     # 反向消费：声明会视频 → 「不能视频通话」的默认约束必须消失
     "capabilities.video_call": _Probe(True, "你不能进行视频通话", mode="absent"),
+    # 反向消费（2026-07-31）：人设级发图开关开 → 「没有发照片功能」默认约束必须消失
+    "capabilities.photos": _Probe(True, "你没有发照片/图片的功能", mode="absent"),
     "emotion.frustrated_response": _Probe("探针安抚先道歉", "探针安抚先道歉"),
 }
 

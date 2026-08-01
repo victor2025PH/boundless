@@ -466,9 +466,17 @@ class OllamaMTEngine:
             base = url.rstrip("/")
             if not base.endswith("/v1"):
                 base = base + "/v1"
+            # 连接 5s 快败（2026-08-01 随 embed 同批补齐）：标量 timeout 会把 connect
+            # 一并抬到 20s——176 宕机时出站翻译要干等 ~20s 才轮到下一端点；拆开后
+            # 死端点代价 ≤5s，读超时保持不变（HY-MT 长句真需要 20s）。
+            try:
+                import httpx
+                _to: Any = httpx.Timeout(self._timeout, connect=5.0)
+            except Exception:
+                _to = self._timeout
             cli = AsyncOpenAI(
                 api_key=self._key, base_url=base,
-                timeout=self._timeout, max_retries=0,
+                timeout=_to, max_retries=0,
             )
             self._clients[url] = cli
         return cli

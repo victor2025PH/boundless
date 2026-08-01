@@ -38,9 +38,9 @@
   --ps:rgba(30,140,242,.12);          /* 主色淡底：focus ring / hover 底 */
   /* 官方 growth 光环渐变，替代原先自造的 indigo→violet→cyan */
   --g:var(--bl-growth-ring,linear-gradient(135deg,#0070f0 0%,#00c2ff 100%));
-  /* 与 workspace_base 的 html,body 字体栈逐项一致：品牌拉丁字 + Inter 兜底 +
-     CJK 系统字。@font-face 由 brand-fonts.css 提供（需一并 <link>）。 */
-  --auth-font:'Montserrat','Inter','PingFang SC','Microsoft YaHei',system-ui,sans-serif;
+  /* 字体栈单一源＝brand.css 的 --bl-font-sans（tokens.json 派生）；此处 fallback
+     保留旧本地栈，brand.css 缺席时零视觉变化。@font-face 由 brand-fonts.css 提供。 */
+  --auth-font:var(--bl-font-sans,'Montserrat','Inter','PingFang SC','Microsoft YaHei',system-ui,sans-serif);
 }
 
 [data-theme="dark"]{

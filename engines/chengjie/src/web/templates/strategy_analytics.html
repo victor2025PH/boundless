@@ -429,6 +429,27 @@
 
 {% endif %}
 
+<!-- 重逢开场 Prompt A/B（自 /ai-studio 迁入 2026-08-01；数据源=contacts 子系统的
+     reunion 草稿评估。/api/drafts/quality 未注册（contacts 关闭）时整块自动隐藏。 -->
+<div class="sa-section" id="reunion-ab-section" style="display:none">
+  <h3>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+    {{ (i18n or {}).get('rh_s018', "重逢开场草稿") }} · Prompt A/B
+    <span style="font-size:.7rem;font-weight:400;color:var(--t3)" id="reunion-ab-days-label"></span>
+    <span style="margin-left:auto;display:flex;gap:.4rem;align-items:center">
+      <select id="reunion-ab-days" onchange="loadReunionAB()" style="padding:.25rem .5rem;border:1px solid var(--bd2);border-radius:var(--r-sm);font-size:.78rem;background:var(--input);color:var(--t);cursor:pointer">
+        <option value="7">7 {{ (i18n or {}).get('wa_s158', "天") }}</option>
+        <option value="14">14 {{ (i18n or {}).get('wa_s158', "天") }}</option>
+        <option value="30">30 {{ (i18n or {}).get('wa_s158', "天") }}</option>
+      </select>
+      <button onclick="loadReunionAB()" style="padding:.25rem .6rem;border:1px solid var(--bd2);border-radius:var(--r-sm);font-size:.78rem;background:var(--input);color:var(--t);cursor:pointer">{{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
+    </span>
+  </h3>
+  <div id="reunion-ab-winner" style="display:none;margin-bottom:.6rem;padding:.5rem .8rem;border-radius:var(--r-sm);background:var(--th-bg-grn10,rgba(16,185,129,.1));border:1px solid var(--th-bd-grn35,rgba(16,185,129,.35));font-size:.82rem;color:var(--th-ink-emerald6,#059669);align-items:center;gap:.5rem"></div>
+  <div class="sa-table-wrap"><div id="reunion-ab-body" style="padding:.6rem .8rem;font-size:.82rem;color:var(--t3)">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  <div id="reunion-ab-eval-status" style="font-size:.72rem;color:var(--t3);margin-top:.35rem;padding:0 .2rem"></div>
+</div>
+
 <script src="/static/js/chart.umd.min.js"></script>
 <script>
 /* Quality score bar chart */
@@ -514,5 +535,101 @@ async function toggleCompare(){
     grid.innerHTML=html;_cmpLoaded=true;
   }catch(e){grid.innerHTML='<div style="color:var(--red);padding:1rem">'+window.T('rpa_load_failed')+'</div>'}
 }
+
+// ── 重逢开场 Prompt A/B（自 /ai-studio 迁入 2026-08-01）───────────────────
+// 数据链：reunion 草稿按 variant 分桶的 sent/evaluated/success_rate（W3-3J）。
+// contacts 子系统未启用时 /api/drafts/quality 未注册 → 整块保持隐藏，不打扰。
+function _rabEsc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+async function _loadReunionEvalStatus(){
+  try{
+    var r=await apiFetch('/api/drafts/eval-scheduler/status',{credentials:'same-origin'});
+    if(!r.ok)return;
+    var s=await r.json();
+    var el=document.getElementById('reunion-ab-eval-status');
+    if(!el)return;
+    if(!s.available){el.textContent='';return;}
+    var ago=s.last_run_ago_secs,nextIn=s.next_run_in_secs;
+    var agoStr=ago==null?window.T('wa_js_012')
+      :ago<120?window.Tf('as_secs_ago',{n:ago})
+      :ago<7200?window.Tf('as_mins_ago',{n:Math.round(ago/60)})
+      :window.Tf('as_hours_ago',{n:Math.round(ago/3600)});
+    var nextStr=nextIn==null?'':window.Tf('as_next_in',{n:Math.round(nextIn/60)});
+    var res=s.last_result;
+    var resStr=res?window.Tf('as_eval_res',{e:res.evaluated,s:res.success}):'';
+    el.textContent=window.Tf('as_auto_eval',{a:agoStr,r:resStr,n:nextStr});
+    el.title=window.Tf('as_total_runs',{n:s.total_runs,m:Math.round(s.current_interval_secs/60)});
+  }catch(e){}
+}
+
+async function loadReunionAB(){
+  var section=document.getElementById('reunion-ab-section');
+  var body=document.getElementById('reunion-ab-body');
+  var banner=document.getElementById('reunion-ab-winner');
+  var days=parseInt(document.getElementById('reunion-ab-days')?.value||'7',10);
+  if(!section||!body)return;
+  document.getElementById('reunion-ab-days-label').textContent=window.Tf('as_last_days',{n:days});
+  if(banner)banner.style.display='none';
+  try{
+    var r=await apiFetch('/api/drafts/quality?days='+days,{credentials:'same-origin'});
+    if(!r.ok){section.style.display='none';return;}  // contacts 未启用/接口异常 → 整块隐藏
+    section.style.display='';
+    _loadReunionEvalStatus();
+    var q=await r.json();
+    var bv=q.by_variant||{};
+    var winner=q.winning_variant;
+    var variants=Object.keys(bv);
+    if(!variants.length){body.innerHTML='<div style="padding:.4rem 0;color:var(--t3)">'+window.T('as_js016')+'</div>';return;}
+    if(winner&&banner){
+      banner.style.display='flex';
+      banner.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;flex-shrink:0"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>'
+        +'<span><strong>'+_rabEsc(winner.winner)+'</strong> '+window.T('as_js051')+' <strong>'+_rabEsc(winner.runner_up)+'</strong>: '
+        +Math.round(winner.winner_rate*100)+'% vs '+Math.round(winner.runner_up_rate*100)+'% (+'+winner.gap_pct+'pct, '
+        +window.T('db_js_049')+' '+winner.winner_evaluated+'/'+winner.runner_up_evaluated+') &nbsp;'
+        +'<button onclick="promoteReunionVariant(\''+_rabEsc(winner.winner)+'\')" style="font-size:.75rem;padding:.1rem .5rem;border-radius:4px;border:1px solid var(--th-bd-emerald5,#10b981);background:transparent;color:var(--th-ink-emerald6,#059669);cursor:pointer">↑ '+window.T('inbox.xl.set_default')+'</button></span>';
+    }
+    var rows=variants.sort().map(function(vid){
+      var b=bv[vid];
+      var isWinner=winner&&winner.winner===vid;
+      var isLoser=winner&&winner.runner_up===vid;
+      var badge=isWinner?' <span style="font-size:.65rem;padding:.1rem .35rem;border-radius:4px;background:var(--th-bg-emerald100,#d1fae5);color:var(--th-ink-emerald8,#065f46);font-weight:700">🏆 '+window.T('as_js017')+'</span>'
+        :isLoser?' <span style="font-size:.65rem;padding:.1rem .35rem;border-radius:4px;background:var(--th-bg-red1,#fee2e2);color:var(--th-ink-red8,#991b1b)">'+window.T('as_js018')+'</span>':'';
+      var rateStr=b.success_rate!=null?Math.round(b.success_rate*100)+'%':'-';
+      var lowerStr=b.success_rate_lower!=null?'≥'+Math.round(b.success_rate_lower*100)+'%':'-';
+      return '<tr'+(isWinner?' style="background:var(--th-bg-grn05,rgba(16,185,129,.05))"':'')+'>'
+        +'<td><strong>'+_rabEsc(vid)+'</strong>'+badge+'</td>'
+        +'<td style="text-align:center">'+(b.sent??0)+'</td>'
+        +'<td style="text-align:center">'+(b.evaluated??0)+'</td>'
+        +'<td style="text-align:center;font-weight:600">'+rateStr+'</td>'
+        +'<td style="text-align:center;color:var(--t3)">'+lowerStr+'</td></tr>';
+    }).join('');
+    body.style.padding='0';
+    body.innerHTML='<table class="sa-table"><thead><tr>'
+      +'<th>Variant</th><th style="text-align:center">'+window.T('ov_js_dob_sent')+'</th>'
+      +'<th style="text-align:center">'+window.T('as_js047')+'</th>'
+      +'<th style="text-align:center">'+window.T('ov_kpi_rate')+'</th>'
+      +'<th style="text-align:center">CI '+window.T('as_js052')+'</th>'
+      +'</tr></thead><tbody>'+rows+'</tbody></table>'
+      +'<div style="font-size:.73rem;color:var(--t3);padding:.4rem .75rem .5rem">'
+      +window.T('as_js053')+' '+q.generated+' / '+window.T('ov_js_dob_sent')+' '+q.sent+' / '+window.T('as_js054')+' '+q.evaluated+' / '
+      +window.T('ov_kpi_rate')+' '+(q.success_rate!=null?Math.round(q.success_rate*100)+'%':'-')+'</div>';
+  }catch(e){section.style.display='none';}
+}
+
+async function promoteReunionVariant(variantId){
+  if(!await confirmAction(window.Tf('as_confirm_promote',{v:variantId}),{okText:window.T('inbox.xl.set_default')}))return;
+  try{
+    var r=await apiFetch('/api/reunion-prompts/set-default',{
+      method:'POST',credentials:'same-origin',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({variant:variantId}),
+    },{timeoutMs:60000});
+    var d=await r.json();
+    if(r.ok){showToast(window.Tf('as_set_default_ok',{v:d.default_variant}),'ok');loadReunionAB();}
+    else showToast(window.Tf('as_fail_detail',{d:d.detail||JSON.stringify(d)}),'err');
+  }catch(e){showToast(window.Tf('as_req_fail',{msg:e.message}),'err');}
+}
+
+document.addEventListener('DOMContentLoaded',loadReunionAB);
 </script>
 {% endblock %}

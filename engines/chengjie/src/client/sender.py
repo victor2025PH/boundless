@@ -498,7 +498,9 @@ class TelegramSenderMixin:
             pass
 
     def _postsend_mirror_and_record(self, chat_id: Any, preview: str,
-                                    msg_id: Any = "") -> None:
+                                    msg_id: Any = "",
+                                    media_type: str = "",
+                                    media_ref: str = "") -> None:
         """发送成功后：出站镜像到坐席台（N4b）+ 记入 contacts 的外发互动（Q3）。
 
         文本回复与富媒体（照片/语音）共用——富媒体传带标记的 preview（如「[图片] 配文」/「[语音]」），
@@ -507,12 +509,19 @@ class TelegramSenderMixin:
 
         ``msg_id``：发送 API 返回的真实 message.id（治本幂等键）。带上它后乐观出站镜像行与
         「自身已发消息被回显」共用同一 platform_msg_id → 主键级精确去重，不再依赖时间窗近似。
+
+        ``media_type`` / ``media_ref``：富媒体镜像成**媒体行**而不只是文字占位
+        （2026-07-31 补）。此前 A 线只写 ``[图片] 配文`` 这种纯文本，后果两条：坐席在
+        工作台看不到自家人设发出去的图；按 ``media_type`` 统计出站媒体的口径把 A 线
+        整条漏掉（实测 Telegram 868 条出站只数出 1 条，实际文本占位有 166 条）。
+        两者都是**可选**的——取不到 URL 就退回纯文本镜像，与改动前逐字一致。
         """
         try:
             _emit = getattr(self, "_emit_inbox", None)
             if _emit is not None:
                 _emit(chat_id=chat_id, text=preview, direction="out",
-                      msg_id=str(msg_id or ""))
+                      msg_id=str(msg_id or ""),
+                      media_type=media_type or "", media_ref=media_ref or "")
                 # P4-4：镜像出站即置「已发送」（单勾）；对端读后由 UpdateReadHistoryOutbox
                 # 回执升级为「已读」（蓝色双勾）。仅 companion 镜像开启且带真实 id 时生效。
                 if getattr(self, "_mirror_inbox", False) and msg_id:
@@ -532,6 +541,32 @@ class TelegramSenderMixin:
             )
         except Exception:
             pass
+
+    @staticmethod
+    def _voice_mirror_preview(spoken: str, parts_sent: int = 1) -> str:
+        """语音出站镜像的文案：``[语音] 念稿``（多条则 ``[语音]×N 念稿``）。
+
+        与 ``[图片] 配文`` 同构，也与 B 线 ``send_media(inbox_text=念稿)`` 同口径。
+        念稿为空时退回裸标记（就是改动前的样子）。客户收到的仍是纯语音，这里只影响
+        坐席台可读性与「AI 上次说了什么」的历史可见性。
+        """
+        tag = "[语音]" if parts_sent <= 1 else "[语音]×%d" % parts_sent
+        text = " ".join(str(spoken or "").split())
+        return f"{tag} {text}".strip() if text else tag
+
+    def _publish_media_ref(self, local_path: str) -> tuple:
+        """本地媒体文件 → ``(media_type, /static URL)``，供出站镜像成媒体行。
+
+        best-effort：任何失败返回 ``("", "")``，调用方退回纯文本镜像（＝旧行为）。
+        ⚠ 语音路径必须在 ``os.unlink`` **之前**调它——音频发完即删。
+        """
+        try:
+            from src.integrations.protocol_bridge import publish_outbound_media
+            url, mt = publish_outbound_media(
+                "telegram", getattr(self, "account_id", "default"), local_path)
+            return (mt, url) if url else ("", "")
+        except Exception:
+            return "", ""
 
     def _persona_display_name(self) -> str:
         """本账号人设显示名（B2 自称改写用）；拿不到 → 空串=过检自动跳过。"""
@@ -930,10 +965,14 @@ class TelegramSenderMixin:
             # 统一记账：刷新墙钟 + 记入共用计数器（照片也计入今日外发量，反封号不漏算）。
             self._postsend_record_count()
             # 出站镜像 + contacts 记账：坐席台看见「AI 发了图」、亲密度计入这次外发。
+            # 带 media_ref → 工作台渲染成**真图**而不只是一行「[图片] 配文」；
+            # 发布用 canonical 原图（不是去重微扰出的临时副本，那个已被删掉）。
             _cap = (caption or "").strip()
+            _mt, _mref = self._publish_media_ref(photo_path)
             self._postsend_mirror_and_record(
                 chat_id, f"[图片] {_cap}".strip() if _cap else "[图片]",
-                msg_id=getattr(_sent, "id", "") or "")
+                msg_id=getattr(_sent, "id", "") or "",
+                media_type=_mt or "image", media_ref=_mref)
             self.logger.info("已发送照片到 %s（%s）", chat_id, photo_path)
             return True
         except Exception as e:
@@ -1372,6 +1411,10 @@ class TelegramSenderMixin:
                     reply_to_message_id=_rt,
                     opus_application=_opus_app,
                 )
+                # 发布到 /static **必须在 unlink 之前**（音频发完即删）；
+                # 失败返回空 → 镜像退回纯文本，与改动前一致。
+                _vmt, _vref = (self._publish_media_ref(result.audio_path)
+                               if sent else ("", ""))
                 try:
                     os.unlink(result.audio_path)
                 except Exception:
@@ -1397,8 +1440,13 @@ class TelegramSenderMixin:
                         await self._send_reply(original_message, reply_text)
                     else:
                         # 仅发语音时也要镜像/记账，否则坐席台/亲密度看不到这次外发。
+                        # 镜像**带上念稿**（与 B 线 send_media 的 inbox_text 同口径）：
+                        # 此前只写一个「[语音]」，坐席根本不知道 AI 说了什么，防复读
+                        # 逻辑读历史时看到的也只是占位。客户那边仍是纯语音，不受影响。
                         self._postsend_mirror_and_record(
-                            original_message.chat.id, "[语音]")
+                            original_message.chat.id,
+                            self._voice_mirror_preview(reply_text),
+                            media_type=_vmt, media_ref=_vref)
                     return True
                 return False
 
@@ -1717,8 +1765,12 @@ class TelegramSenderMixin:
                 sent_n, len(results), chat_id,
                 voice_ctx.get("persona_id") or "", total_dur)
             daily_stats.bump("tts_sent")
+            # 分条只镜像一行，故把**已发出的那几条**的念稿拼进去（后续条失败时不带）。
+            # 不附音频：N 个文件对一行镜像无从表达，可读性由念稿本身解决。
             self._postsend_mirror_and_record(
-                chat_id, f"[语音]×{sent_n}" if sent_n > 1 else "[语音]")
+                chat_id,
+                self._voice_mirror_preview(
+                    " ".join(str(p) for p in list(parts)[:sent_n]), sent_n))
         return sent_n > 0
 
     async def _forward_escalation_user_to_agents(self, spec) -> None:

@@ -36,6 +36,41 @@ def _deny_viewer_write(request: Request) -> None:
         raise HTTPException(403, tr(request, "err.perm.viewer_readonly"))
 
 
+def _session_identities(request: Request) -> set:
+    """会话身份候选集（user_id / user_name / username / display_name 全并入）。
+
+    历史包袱：注解作者走 ``user_name||username``、presence/@ 建议走
+    ``user_id||username`` 两套口径并存（unified_inbox_auth 两个取身份函数）。
+    定向通知过滤按「任一命中」判，避免口径分叉漏发；空 session 返回空集。
+    """
+    sess = {}
+    try:
+        if "session" in request.scope:
+            sess = dict(request.session)
+    except Exception:
+        sess = {}
+    return {
+        str(v).strip()
+        for v in (
+            sess.get("user_id"), sess.get("user_name"),
+            sess.get("username"), sess.get("display_name"),
+        )
+        if v is not None and str(v).strip()
+    }
+
+
+def _mention_targets_me(evt: dict, identities: set) -> bool:
+    """conv_note 通知是否 @ 到当前坐席（mentions 任一命中身份候选集）。"""
+    if not identities:
+        return False
+    data = evt.get("data") or {}
+    mentions = data.get("mentions") or evt.get("mentions") or []
+    try:
+        return any(str(m).strip() in identities for m in mentions)
+    except Exception:
+        return False
+
+
 def register_batch_notif_routes(app, *, api_auth) -> None:
     """挂载批量操作（归档/标签/分配）+ 通知中心（历史/已读）端点。"""
 
@@ -190,6 +225,13 @@ def register_batch_notif_routes(app, *, api_auth) -> None:
         # 通知队列挂在 app.state.notif_queue（由 SSE 推送时顺带写入）
         queue: list = getattr(request.app.state, "notif_queue", [])
         limit = max(1, min(200, int(limit or 50)))
+        # P0-协作闭环：@提及是定向通知——队列全员共享，读取侧按人过滤，
+        # conv_note 只回「@ 了当前坐席」的条目（别人的提及不进我的铃铛历史）。
+        me = _session_identities(request)
+        queue = [
+            n for n in queue
+            if (n or {}).get("type") != "conv_note" or _mention_targets_me(n, me)
+        ]
         # P8：随历史一并回传该坐席「已读水位线」，前端据此跨设备恢复已读状态
         read_at = 0
         try:

@@ -3580,3 +3580,93 @@ flag on(store) 对每个会话逐字段相等（`name`/`last_msg`/`last_ts`/`acc
 **Stage A1 收口**：统一收件箱读路径以 store 为默认事实源，`/chats`+/thread 经「先 live 旁路 ingest 再读 store」
 对当前数据**逐字段等价于实时聚合**，并解锁实时窗口外的历史会话/SLA；等价由强测试守门。路线图 Tier1 #5 完成。
 **下一步**：① 观察生产后决定是否翻代码缺省；② Tier1 #6 稳定平台 message id 收尾。
+
+## 94. 主动关怀 P0-P3：开闸自愈 + 选择器改版 + LLM 影子抽取 + 每联系人主动预算（2026-08-01）
+
+**背景**：「主动关怀」页自 Phase O 建成后一直空转——引擎默认关、生产 overlay 未开闸、
+手动补录要求 conversation_id/platform/chat_key 三个内部字段、页面对断链只字不提。
+当日两条 agent 线接力完成 P0-P3（前线做常备接线+四灯+一键开闸+hero 空态+样本审核，
+本线做选择器/卡片/LLM 影子/预算/保注释，diff 交织在同批文件，详见 git log 本日提交）。
+
+**P0 常备接线 + 配置热闸**：捕获回调无条件注册（内部逐条读实时配置）、派发循环常驻
+（cfg_provider 每 tick 读 enabled/dry_run/max_per_tick）→ 开/关经 overlay 热重载 ~30s
+生效免重启；/api/care/health 四灯自检（引擎/捕获/派发/发送通道+activity）+
+/api/care/engine 三档开闸（enable_dry→go_live 强制先灰度→pause）。messenger runner
+缺失不再挡整循环（telegram/line/whatsapp 走 multiplatform_deferred）。
+
+**P1 人话化**：联系人搜索选择器（复用 /api/unified-inbox/chats，选中自动带全四个内部
+字段，过滤群聊）+ 主题/时间快捷片 + pending 默认卡片时间轴（到点/今天/明天/本周分组、
+TA 的原话引用、人话倒计时）+ 跳过原因人话映射；旧 ID 表单降级「高级」折叠区。
+
+**P2 智能化**：① LLM 抽取影子模式（care_extract_llm 纯函数三件套：八语种廉价门
+time_like / 严格 JSON prompt / 容错解析；care_shadow_scan 与真实捕获共挂同一
+register_new_inbound_cb 事件源，异步 drain 限批限预算，产物只有 logs/care_shadow/
+*.jsonl 对照日志——绝不入库不发送；切主判据=llm_only 条目人工复核正确率）。
+② 效果回流：health.effect=近 7 天真发 48h 回复率（dry_run 不计、未满窗不进分母）。
+③ 草稿预览：build_care_prompt 公共化，/api/care/schedule/{sid}/preview 与派发同一
+prompt 口径（先看后发=真发同源）。④ 真 bug：_care_context 原用 list_messages 取的是
+**最旧** 8 条（AI 引用的「最近对话」是几个月前的开场白）→ 改 list_recent_messages；
+预览实测对粤语会话自动粤语拟稿即此修复的直接证据。
+
+**P3 每联系人主动预算**（真发开闸前置守卫，默认开）：**不新建预算库，把既有
+outreach_log 升格为共享账本**——读侧 last_outreach_ts + count_outreach_since(新增)
+判「距上次主动触达 <min_gap_hours(4h) 或 今日触达数+本次 >max_daily_touches(2)」→
+skip note=contact_budget；写侧 care 真发成功 record_outreach(batch_id=care:<topic>)，
+对 proactive_review 周报与将来消费方可见。纯判定在 care_budget.py；dry_run 不拦
+（样本要流动）、危机关怀豁免（伦理优先）、gate 异常 fail-open（预算是体验优化不是
+安全红线）。方向对齐：proactive_topic/daily_ritual/milestone 本就给 pending care
+让路（has_pending_care），本件补上反向。
+
+**overlay 保注释化**（当日实锤修复）：set_overlay_flag 与 save_overlay_patch 旧实现
+yaml.dump 整文件重写，一次 enable_dry 剃光 config.local.yaml ~30 行运维注释。新增
+set_yaml_key_preserving / merge_yaml_patch_preserving（ruamel round-trip，本机 0.18.x），
+任何失败回落旧路径（写入永不丢）；生产 overlay 实测注释存活、值零失真。
+
+**工具**：tools/verify_care_ui.py（Playwright 只读六不变量：四灯/形态切换/面板齐件/
+选择器选中-恢复/筛选切视图/i18n 无裸键；缺环境 SKIP exit 0）——gate_sweep.ps1 挂接
+待其空闲（当日由另一线活跃编辑）。i18n 全部进 packs/care_page.py（cs2_* 约 90 键
+zh+en）。测试新增 test_care_engine_hot_gate / test_care_extract_llm / test_care_shadow_scan /
+test_care_p2 / test_care_budget / test_overlay_comment_preserve，care 相关合计 ~200 例。
+
+**生产状态（2026-08-01 12:00）**：zhiliao 引擎 enabled+dry_run（试运行：只拟稿不发送），
+LLM 影子 shadow=true budget=150/日，等 3-7 天数据：①样本审核满意→页面「开始真发」；
+②影子 JSONL llm_only 复核→决定 LLM 抽取切主。**踩坑记录**：①测试助手 def _auth(*a,**k)
+作 FastAPI 依赖会被解析成必填 query 参数→全路由 422（改零参）；②本仓陈旧字节码 flaky
+在 care 上再现（生产进程刚编译的 .pyc 抢先），regression.ps1 清缓存是正解。
+
+**P4 增量**（同日午后，切主基建就绪——数据闸口到点后翻 flag 即生效）：① **LLM 真实
+捕获模式**（`llm_extract.enabled`，默认关）：影子扫描器 drain 时 llm_only（LLM 抓到
+且正则漏掉）的约定经 commitment_from_llm 确定性换算后写入 care_schedule 真实排程。
+防双写三层——正则优先（正则命中的消息 ingest 已入库，扫描器只收 llm_only）/ 同联系人
+同事件日已有 pending 跳过（「一天一件事一条关怀」，面试 vs 终面 跨措辞重复从日历维度
+收口，绕开语义嵌入依赖）/ store 同主题邻近去重兜底。计数 captured /
+capture_skipped_pending / capture_invalid 进 health.shadow 与页面影子行。
+② **影子对照周审 CLI** `python -m scripts.care_shadow_report`（数据根走 _data_root
+契约，多实例逐根）：JSONL 聚合出 一致率 / llm_only·regex_only 桶 + 人工复核样本 /
+书写系统分布（cjk/kana/hangul/thai/latin，验证多语种召回真的发生在小语种上）/ 判词
+（llm_only 复核正确率 ≥80% 且样本 ≥20 → 可切主）。计数器随重启清零、JSONL 才是持久
+口径，CLI 只读。③ verify_care_ui 挂进 gate_sweep -Full。④ **刻意不重启**：本批全部
+默认关，装载搭下一次自然重启的便车（当日已 4 次重启窗口，克制；切主前置判据=
+health.shadow 快照出现 captured 字段）。测试 +13（捕获模式六场景 + CLI 聚合/分类/渲染）。
+
+**P5 增量**（同日午后，可见性收口）：① **ops-overview「💗 主动关怀」卡**——零新后端
+（loadCare 直读 /api/care/health），六 KPI（状态/待关怀/24h捕获/已发/48h回复率/LLM影子）
++ 链路灯行 + 直达链接；隐藏判据=403 或 未开启且零记录；catch 不武断隐藏（对齐 loadBazi
+容错惯例——首轮 refreshAll 并发 ~50 接口曾把 health 挤超时、卡被误藏，Playwright 一次性
+验证抓出后改 30s 超时 + 已显示则留错误行）。ops 页真实路径=/admin/ops（不是 /ops-overview）。
+② **CLAUDE.md / AGENTS.md 落「主动关怀主线」段**（回归命令 + 六组不变量 + 三个踩坑），
+后续 agent 免考古。③ 工作台「排个关怀」入口连续第四轮避让（unified_inbox 全天被另一线
+占用）——仍欠。
+
+**P6 增量**（同日午后，工作台入口闭环+提交清单）：① **深链** care 页支持
+`?contact=<conversation_id>`（选择器就绪后自动选中+滚到添加面板；不在最近会话窗
+静默回落手选）——把「工作台入口」拆成两半后，收件箱侧只剩一行链接。② 抓住
+unified_inbox 全天唯一空闲窗（44 分钟）落那一行：客户信息卡 CRM 行下方
+「主动关怀 → 排一条关怀」（纯 <a> 零 handler；词条 `cs2_inbox_entry_*` 刻意放
+care_page 包避开对方活跃的 inbox 词条包——packs 合并视图本就支持跨包引用）。
+③ verify_care_ui 加第 7 组不变量「深链自动选中」，现网 13/13 PASS。④ 提交清单
+分类完成：**纯 care 可独立提交 ~24 文件**（新模块/测试/工具/词条包 + care 四核心），
+**交织文件 ~15 个**（gate_sweep/ops 模板+词条包/unified_inbox/config.example/
+inventory/main/lifecycle/store/config_manager/记忆文件/DEVLOG——每个都混着
+goals/workflows/membership 线当日未提交改动，单方 stage 会打包别人的工作，
+等各线收尾或明确指示后再动）。

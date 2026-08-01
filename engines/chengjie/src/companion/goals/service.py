@@ -73,6 +73,62 @@ def get_configured_store(cfg_root: Any, config_path: Any = None) -> GoalStore:
     return get_goal_store(resolve_db_path(cfg_root, config_path))
 
 
+# ── C：工作链 × 目标弱联动（链生命周期回写目标事件台账）──────────────────────
+
+def record_chain_event(
+    cfg_root: Any,
+    config_path: Any,
+    conversation_id: str,
+    kind: str,
+    detail: str = "",
+) -> bool:
+    """把工作链生命周期（chain_started/completed/failed/cancelled）记到当前会话
+    **活跃目标**的事件台账（goal_events）——目标详情 ``/api/goals/{id}`` 的
+    ``events`` 即刻可见「这个目标进行期间 SOP 干了什么」。
+
+    弱联动边界（刻意）：只写台账、不改目标状态/进度/拍——链完成≠目标推进，
+    两套调度语义不合并。无活跃目标 / goals 未启用 / 任何异常 → False 静默，
+    绝不影响链主流程。**取库必须经 get_configured_store**：裸调 get_goal_store()
+    会在 goals 未初始化时把进程单例毒化成 :memory:（后续真数据全进内存）。
+    """
+    try:
+        cfg = cfg_root or {}
+        if not goals_enabled(cfg):
+            return False
+        store = get_configured_store(cfg, config_path)
+        ref = str(conversation_id or "").strip()
+        if not ref:
+            return False
+        goal = store.find_active_goal(conversation_id=ref)
+        if goal is None:
+            parts = ref.split(":", 2)
+            if len(parts) == 3 and parts[0].strip() and parts[1].strip():
+                goal = store.find_active_goal(
+                    platform=parts[0].strip(), chat_key=parts[2].strip(),
+                    account_id=parts[1].strip())
+        if not goal:
+            return False
+        store.add_event(str(goal.get("goal_id") or ""), str(kind or "chain"),
+                        str(detail or "")[:200])
+        return True
+    except Exception:
+        return False
+
+
+def chain_event_recorder(config_manager: Any):
+    """从 config_manager 构造 ``(conversation_id, kind, detail) -> bool`` 钩子
+    （WorkflowRunner / 路由注入用；配置在调用时刻现读，热更新自然生效）。"""
+    def _hook(conversation_id: str, kind: str, detail: str = "") -> bool:
+        try:
+            return record_chain_event(
+                getattr(config_manager, "config", None) or {},
+                getattr(config_manager, "config_path", None),
+                conversation_id, kind, detail)
+        except Exception:
+            return False
+    return _hook
+
+
 # P4 成交反哺选品：近窗 plan 成交计数的进程级 TTL 缓存（注入在每条消息热路上，
 # 别每轮打 SQL；5min 陈旧度对「近 90 天销量做同分裁决」毫无影响）。
 _SOLD_CACHE: Dict[int, tuple] = {}
@@ -272,6 +328,9 @@ def goal_view(
         "params": goal.get("params") or {},
         "status": str(goal.get("status") or "active"),
         "autonomy": str(goal.get("autonomy") or "suggest"),
+        # P22：来源标识（auto_create / winback_auto / retention_auto / agent / …）
+        # UI「AI 自建」徽标据此显隐；缺省空串=旧库兼容。
+        "created_by": str(goal.get("created_by") or ""),
         "priority": int(goal.get("priority") or 1),
         "milestone_idx": mi,
         "milestone_label": milestone_label(template, mi, lang),

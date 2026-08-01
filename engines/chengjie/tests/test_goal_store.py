@@ -307,7 +307,8 @@ class TestOutcomeReport:
         rep = store.outcome_report(now - 30 * 86400.0, now=now)
         assert rep["totals"] == {"done": 1, "failed": 1, "expired": 0,
                                  "cancelled": 1, "n": 3, "done_rate": 0.5,
-                                 "avg_days_to_done": 8.0}
+                                 "avg_days_to_done": 8.0,
+                                 "won": 0, "won_rate": 0.0}
         bt = rep["by_template"]["conversion_unlock"]
         assert bt["done"] == 1 and bt["failed"] == 1 and bt["n"] == 2
         assert bt["done_rate"] == 0.5
@@ -329,6 +330,68 @@ class TestOutcomeReport:
         assert rep["totals"]["n"] == 0 and rep["totals"]["done_rate"] == 0.0
         assert rep["by_template"] == {} and rep["recent"] == []
         assert rep["feedback"] == {"adopt": 0, "reject": 0}
+        # P23 新键在空库也保持骨架形状（消费方免判空分叉）
+        assert rep["totals"]["won"] == 0 and rep["totals"]["won_rate"] == 0.0
+        assert rep["drive_draft"] == {"total": 0, "by_source": {}}
+        assert rep["profile_fills"] == {
+            "total": 0, "by_src": {}, "by_track": {}}
+
+    # ── P23：win-rate / 指令拟稿耐久事件 / 画像填充漏斗 ─────────────────────
+
+    def test_outcome_report_won_rate_by_template(self, store):
+        """won 只认 order:/manual:（winback done=回话≠成交不进 won）；
+        分母与 done_rate 同（organic，排除 cancelled）。"""
+        now = time.time()
+        g1 = _mk(store, conv="c1", chat_key="1", now=now - 86400)
+        store.update_goal_fields(g1["goal_id"], status="done",
+                                 done_at=now - 60, result="order:pro:x1")
+        g2 = _mk(store, conv="c2", chat_key="2", now=now - 86400)
+        store.update_goal_fields(g2["goal_id"], status="done",
+                                 done_at=now - 50, result="manual:agent")
+        g3 = _mk(store, conv="c3", chat_key="3", now=now - 86400)
+        store.update_goal_fields(g3["goal_id"], status="done",
+                                 done_at=now - 40, result="replied")   # 回话≠成交
+        g4 = _mk(store, conv="c4", chat_key="4", now=now - 86400)
+        store.update_goal_fields(g4["goal_id"], status="failed",
+                                 done_at=now - 30)
+        rep = store.outcome_report(now - 7 * 86400.0, now=now)
+        bt = rep["by_template"]["conversion_unlock"]
+        assert bt["won"] == 2
+        assert bt["won_rate"] == 0.5          # 2 won / 4 organic
+        assert bt["done_rate"] == 0.75        # 3 done / 4 organic
+        assert rep["totals"]["won"] == 2
+        assert rep["totals"]["won_rate"] == 0.5
+
+    def test_outcome_report_drive_draft_by_source(self, store):
+        gid = _mk(store)["goal_id"]
+        store.add_event(gid, "drive_draft", "beat")
+        store.add_event(gid, "drive_draft", "beat")
+        store.add_event(gid, "drive_draft", "hero")
+        store.add_event(gid, "drive_draft", "")       # 空 detail 归 "-"
+        store.add_event(gid, "beat_adopted", "")      # 别的 kind 不串
+        rep = store.outcome_report(0)
+        assert rep["drive_draft"]["total"] == 4
+        assert rep["drive_draft"]["by_source"] == {
+            "beat": 2, "hero": 1, "-": 1}
+        # 窗口外不计
+        rep2 = store.outcome_report(time.time() + 10)
+        assert rep2["drive_draft"]["total"] == 0
+
+    def test_outcome_report_profile_fills_window_and_buckets(self, store):
+        now = time.time()
+        # 窗口内：agent 手录 relation+bant 各一
+        store.upsert_customer_profile(
+            "telegram", "1", {"name": "阿龙", "need": "人手不够"},
+            source="agent", overwrite=True, now=now - 60)
+        # 窗口外：auto 采集（槽位自身 ts 判窗，不看行级 updated_at）
+        store.upsert_customer_profile(
+            "telegram", "2", {"location": "曼谷"},
+            source="auto", now=now - 30 * 86400.0)
+        rep = store.outcome_report(now - 7 * 86400.0, now=now)
+        pf = rep["profile_fills"]
+        assert pf["total"] == 2
+        assert pf["by_src"] == {"agent": 2}
+        assert pf["by_track"] == {"relation": 1, "bant": 1}
 
 
 # ── 单例三件套 ──────────────────────────────────────────────────────────────

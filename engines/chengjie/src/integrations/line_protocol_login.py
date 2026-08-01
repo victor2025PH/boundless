@@ -33,7 +33,7 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 from src.integrations.account_registry import get_account_registry
-from src.integrations.platform_login import register_login_provider
+from src.integrations.platform_login import register_login_provider, resolve_login_switch
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +50,8 @@ def is_okline_available() -> bool:
 
 
 def protocol_enabled(config: Dict[str, Any]) -> bool:
-    pl = (config or {}).get("platform_login", {}) or {}
-    ln = pl.get("line", {}) or {}
-    return bool(ln.get("protocol_enabled", False))
+    # 三态：显式配置优先（含 false）；未写过时桌面版默认开（见 resolve_login_switch 注释）。
+    return resolve_login_switch(config, "platform_login.line.protocol_enabled")
 
 
 # ── Node 运行时解析（okline 的 LTSM 桥要 node 才能算 X-Hmac）────────────────────

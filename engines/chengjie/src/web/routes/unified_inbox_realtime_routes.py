@@ -80,6 +80,10 @@ _SSE_EVENT_TYPES = frozenset({
 _NOTIF_EVENT_TYPES = frozenset({
     "inbox_message", "draft_sla_breach", "draft_reassigned",
     "conversation_assigned",
+    # P0-协作闭环（2026-08-01）：@提及注解进通知历史——此前被 @ 的坐席只有
+    # 「正开着同一会话」才收到 toast，跨班次/离线的提及等于丢失。读取侧按
+    # 会话坐席过滤（batch_notif_routes），非被 @ 者的铃铛历史不出现别人的提及。
+    "conv_note",
     "anomaly_alert", "sla_alert", "escalation", "queue_alert",
     "stage_advance", "stage_advance_pending", "stage_downgrade",
     "stage_reunion", "stage_sync", "workflow_step",
@@ -295,6 +299,18 @@ def register_realtime_routes(app, *, api_auth) -> None:
                                     or (n.get("data") or {}).get("id") or "") == key
                         )
                     ]
+            elif etype == "conv_note":
+                # 注解按 note_id 幂等：SSE 重连会重放 recent_events 并再次经过本函数，
+                # 同一条注解若刷新 _notif_ts 会把已读的提及顶回未读——首写胜出，重放丢弃。
+                nid = str((evt.get("data") or {}).get("note_id")
+                          or evt.get("note_id") or "")
+                if nid and any(
+                    n.get("type") == "conv_note"
+                    and str((n.get("data") or {}).get("note_id")
+                            or n.get("note_id") or "") == nid
+                    for n in nq
+                ):
+                    return
             nq.append({**evt, "_notif_ts": int(time.time() * 1000)})
             if len(nq) > 200:
                 del nq[:-200]

@@ -90,3 +90,129 @@ def enrich_execution(row: Dict[str, Any], *, now: Optional[float] = None) -> Dic
 
 def enrich_executions(rows: List[Dict[str, Any]], *, now: Optional[float] = None) -> List[Dict[str, Any]]:
     return [enrich_execution(r, now=now) for r in rows]
+
+
+# ── B2：链效果漏斗 ───────────────────────────────────────────────────────────
+
+_FUNNEL_EXEC_CAP = 500  # 窗口内最多统计条数（监控页刷新预算，防大库拖垮）
+
+
+def chain_funnel(
+    store: Any,
+    *,
+    days: int = 14,
+    reply_window_hours: int = 72,
+    now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """窗口内按链聚合执行漏斗 + 「启动后 N 小时内客户有入站」回复率。
+
+    口径（诚实标注，勿夸大）：
+    - 一切以 ``executions.started_at`` 落在窗口内为准，最多取 ``_FUNNEL_EXEC_CAP`` 条；
+    - 回复＝启动后 ``reply_window_hours`` 内该会话有任意 ``direction='in'`` 消息，
+      属**近似归因**（无法证明客户是因为链才回的）；
+    - 回复率分母只算**已满窗口期**的执行（mature）——刚启动的链还没来得及被回复，
+      混进分母会人为压低指标。
+    异常整体软失败：返回空结构而不是把监控页打红。
+    """
+    ts_now = float(now if now is not None else time.time())
+    window_sec = max(1, int(reply_window_hours)) * 3600
+    since = ts_now - max(1, int(days)) * 86400
+
+    try:
+        rows = store._conn.execute(
+            """SELECT e.exec_id, e.chain_id, e.conversation_id, e.status, e.started_at,
+                      e.context_json, COALESCE(c.name, '') AS chain_name
+               FROM workflow_executions e
+               LEFT JOIN workflow_chains c ON c.chain_id = e.chain_id
+               WHERE e.started_at >= ?
+               ORDER BY e.started_at DESC LIMIT ?""",
+            (since, _FUNNEL_EXEC_CAP),
+        ).fetchall()
+    except Exception:
+        return {"ok": True, "days": days, "reply_window_hours": reply_window_hours,
+                "total": {}, "chains": [], "goal_chain_starts": {}}
+
+    def _bucket() -> Dict[str, Any]:
+        return {"started": 0, "completed": 0, "failed": 0, "cancelled": 0,
+                "running": 0, "mature_n": 0, "replied_n": 0, "attributed": 0}
+
+    total = _bucket()
+    # 归因组回复率拆分（总量级；per-chain 只出 attributed 计数防表过宽）：
+    # 「挂在目标下启动的链 vs 散开的链，谁更能带来回话」——goal_id 随启动落
+    # context_json（C1/C2 归因地基），此处消费。
+    attr_mature = 0
+    attr_replied = 0
+    by_chain: Dict[str, Dict[str, Any]] = {}
+    # J 推荐跟随原料：goal_id → {chain_id: 启动数}（纯 store 数据，不解析目标——
+    # 模板归属/推荐比对属 goals 域，由路由层带护栏做，本函数保持零跨域）。
+    goal_chain_starts: Dict[str, Dict[str, int]] = {}
+
+    for r in rows:
+        row = dict(r)
+        cid = str(row.get("chain_id") or "")
+        b = by_chain.setdefault(cid, {**_bucket(), "chain_id": cid,
+                                      "chain_name": row.get("chain_name") or cid})
+        status = str(row.get("status") or "pending")
+        attributed = False
+        gid = ""
+        try:
+            gid = str(
+                (json.loads(row.get("context_json") or "{}") or {}).get("goal_id") or ""
+            ).strip()
+            attributed = bool(gid)
+        except Exception:
+            attributed, gid = False, ""
+        if gid:
+            gc = goal_chain_starts.setdefault(gid, {})
+            gc[cid] = gc.get(cid, 0) + 1
+        for bk in (total, b):
+            bk["started"] += 1
+            if attributed:
+                bk["attributed"] += 1
+            if status in ("completed", "failed", "cancelled", "running"):
+                bk[status] += 1
+
+        started_at = float(row.get("started_at") or 0)
+        mature = started_at > 0 and (ts_now - started_at) >= window_sec
+        replied = False
+        if started_at > 0:
+            try:
+                hit = store._conn.execute(
+                    """SELECT 1 FROM messages
+                       WHERE conversation_id = ? AND direction = 'in'
+                         AND ts > ? AND ts <= ? LIMIT 1""",
+                    (row.get("conversation_id"), started_at, started_at + window_sec),
+                ).fetchone()
+                replied = hit is not None
+            except Exception:
+                replied = False
+        if mature:
+            for bk in (total, b):
+                bk["mature_n"] += 1
+                if replied:
+                    bk["replied_n"] += 1
+            if attributed:
+                attr_mature += 1
+                if replied:
+                    attr_replied += 1
+
+    def _rate(b: Dict[str, Any]) -> Optional[float]:
+        return round(b["replied_n"] / b["mature_n"], 3) if b["mature_n"] else None
+
+    total["reply_rate"] = _rate(total)
+    total["attr_mature_n"] = attr_mature
+    total["attr_replied_n"] = attr_replied
+    total["attr_reply_rate"] = round(attr_replied / attr_mature, 3) if attr_mature else None
+    chains = sorted(by_chain.values(), key=lambda x: -x["started"])
+    for b in chains:
+        b["reply_rate"] = _rate(b)
+
+    return {
+        "ok": True,
+        "days": days,
+        "reply_window_hours": reply_window_hours,
+        "total": total,
+        "chains": chains,
+        # J：推荐跟随原料（路由层消费后从 API 响应中剔除，不对外暴露 goal_id 明细）
+        "goal_chain_starts": goal_chain_starts,
+    }

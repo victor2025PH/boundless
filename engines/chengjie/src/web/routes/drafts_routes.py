@@ -1024,6 +1024,16 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # LINE 媒体收发：出站默认关，放量与否看这里的读数（尤其 orphan_recalled=
+        # 「先发占位、传字节失败后撤回」的次数，它是那条两步链在真实网络下的稳定度）。
+        # JSON 侧**不按 active 过滤**：零流量时的 active:false 本身就是「接线在、只是没
+        # 用上」的确认；Prometheus 侧才过滤，免得没有 LINE 号的部署长期挂一串零序列。
+        try:
+            from src.integrations.line_media_stats import get_line_media_stats
+            metrics["line_media"] = get_line_media_stats().dump()
+        except Exception:
+            pass
+
         # B 线 autosend 媒体出站：语音 provider/截断 + 发图失败原因分布
         try:
             from src.inbox.voice_autosend import metrics_snapshot as _vms
@@ -1228,6 +1238,14 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 功能锁触达（E6：档位闸门 API 403 / 页面 302 按族计数——「哪个锁被撞
+        # 得最多」＝下一个该降档/该重点卖的功能的定价信号）
+        try:
+            from src.web.feature_lock_stats import get_feature_lock_stats
+            metrics["feature_lock"] = get_feature_lock_stats().dump()
+        except Exception:
+            pass
+
         # 人设文档导入/考题观测（解析→抽取→传记入库→一致性考题 漏斗计数与均值）
         try:
             from src.utils.persona_import_stats import get_persona_import_stats
@@ -1283,6 +1301,14 @@ def register_metrics_route(app, *, api_auth):
             _pms = get_persona_media_store()
             if _pms is not None:
                 metrics["persona_media"] = _pms.analytics()
+        except Exception:
+            pass
+
+        # 发图能力关闭时的出站消毒观测（P1，2026-07-31）：strip_rate 高=
+        # 提示层约束不够、靠守卫兜底；运营据此决定要不要加人设级禁令措辞。
+        try:
+            from src.companion.photo_capability import dump_sanitize_stats
+            metrics["photo_capability"] = dump_sanitize_stats()
         except Exception:
             pass
 
@@ -1473,11 +1499,26 @@ def register_metrics_route(app, *, api_auth):
             except Exception:
                 pass
 
+            # LINE 媒体收发（入站下载/出站两步链；仅有流量时输出，同 credpool 口径）
+            try:
+                from src.integrations.line_media_stats import get_line_media_stats
+                if get_line_media_stats().dump().get("active"):
+                    buf.write(get_line_media_stats().dump_prom())
+            except Exception:
+                pass
+
             # 中央凭据池（分配来源/生效档位/回落原因/池承载比例）
             try:
                 from src.integrations.credpool_stats import get_credpool_stats
                 if get_credpool_stats().dump().get("active"):
                     buf.write(get_credpool_stats().dump_prom())
+            except Exception:
+                pass
+
+            # 功能锁触达（档位闸门拦截按族计数；零流量时只出 total=0 行，极轻）
+            try:
+                from src.web.feature_lock_stats import get_feature_lock_stats
+                buf.write(get_feature_lock_stats().dump_prom())
             except Exception:
                 pass
 
@@ -1715,6 +1756,13 @@ def register_telemetry_route(app, *, api_auth):
                     page=str(body.get("page") or ""),
                     action=str(body.get("action") or ""),
                 )
+            except Exception:
+                pass
+            try:
+                # 按日落库（进程计数重启即清零，2026-08-01 施工日实测一天 4 次重启把
+                # AI 回复漏斗首批数据清洗掉；未开 ops.ui_event_trend → record 恒 no-op）
+                from src.web.ui_event_trend import record_ui_event_trend
+                record_ui_event_trend(str(body.get("action") or ""))
             except Exception:
                 pass
         return {"ok": True}

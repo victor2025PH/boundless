@@ -80,43 +80,72 @@
     .cp-card-bd { padding: 10px 12px; }
     .cp-card.collapsed .cp-card-bd { display: none; }
   </style>
-  <script src="/copilot/i18n/cp-i18n.js?v=20260731f"></script>
-  <script src="/copilot/client/copilot-client.js?v=20260731e"></script>
+  <script src="/copilot/i18n/cp-i18n.js?v=20260801g"></script>
+  <script src="/copilot/client/copilot-client.js?v=20260801g"></script>
   <script>
-  /* 宿主级 CSRF 兜底（与 workspace_base 同款补丁，2026-07-31）：copilot-client 的写方法
-     已自带 X-CSRF-Token，但个别组件（如 cp-goal 的 _api）直接裸 fetch 写接口——iframe App
-     宿主没有 workspace_base 的页面补丁，那些写请求在 Referer 被抑制的环境必 403。
-     在客户端脚本之后、组件脚本之前装上同款补丁，罩住存量与未来的裸 fetch。 */
+  /* 宿主级 CSRF + Bearer 兜底（与 workspace_base 同款补丁思路，2026-07-31/08-01）：
+     copilot-client 的方法已自带鉴权，但个别组件（如 cp-goal 的 _api）直接裸 fetch
+     /api——iframe App 宿主没有 workspace_base 的页面补丁：① 写请求在 Referer 被
+     抑制的环境缺 CSRF 必 403；② 桌面 token 模式（壳放 #token=，无 session cookie）
+     裸 fetch 全部 401。在客户端脚本之后、组件脚本之前装补丁，罩住存量与未来的
+     裸 fetch。Authorization 只补**同源相对路径**（"/" 开头），绝不把 token 带给
+     任何绝对 URL 第三方。 */
   (function(){
     var _f = window.fetch;
     window.fetch = function(url, opts){
       opts = opts || {};
       var m = (opts.method || 'GET').toUpperCase();
+      function setH(name, val){
+        opts.headers = opts.headers || {};
+        if (opts.headers instanceof Headers) { if (!opts.headers.get(name)) opts.headers.set(name, val); }
+        else if (!opts.headers[name]) { opts.headers[name] = val; }
+      }
       if (m !== 'GET' && m !== 'HEAD' && m !== 'OPTIONS') {
         var t = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]*)/);
-        if (t) {
-          opts.headers = opts.headers || {};
-          if (opts.headers instanceof Headers) { if (!opts.headers.get('X-CSRF-Token')) opts.headers.set('X-CSRF-Token', t[1]); }
-          else if (!opts.headers['X-CSRF-Token']) { opts.headers['X-CSRF-Token'] = t[1]; }
-        }
+        if (t) setH('X-CSRF-Token', t[1]);
+      }
+      if (typeof url === 'string' && url.charAt(0) === '/' &&
+          window.CopilotShared && typeof window.CopilotShared.authHeaders === 'function') {
+        try {
+          var ah = window.CopilotShared.authHeaders();
+          if (ah && ah.Authorization) setH('Authorization', ah.Authorization);
+        } catch (_e) { /* 鉴权头缺失时按原样发出，由服务端如实 401 */ }
       }
       return _f.call(this, url, opts);
     };
   })();
   </script>
-  <script src="/copilot/sidebar-chrome.js?v=20260731c"></script>
+  <script src="/copilot/sidebar-chrome.js?v=20260801h"></script>
   <script src="/copilot/components/cp-panel-base.js?v=20260731c"></script>
   <script src="/copilot/components/cp-rel-stage.js?v=20260731c"></script>
   <script src="/copilot/components/cp-next-actions.js?v=20260731c"></script>
-  <script src="/copilot/components/cp-script.js?v=20260731c"></script>
-  <script src="/copilot/components/cp-persona.js?v=20260731e"></script>
-  <script src="/copilot/components/cp-collab.js?v=20260731c"></script>
-  <script src="/copilot/components/cp-chain-exec.js?v=20260731c"></script>
-  <script src="/copilot/components/cp-draft.js?v=20260731c"></script>
+  <script src="/copilot/components/cp-persona.js?v=20260801i"></script>
+  <script src="/copilot/components/cp-collab.js?v=20260801a"></script>
+  <script src="/copilot/components/cp-goal.js?v=20260801g"></script>
+  <script src="/copilot/components/cp-chain-exec.js?v=20260801f"></script>
+  <script src="/copilot/components/cp-draft.js?v=20260801d"></script>
   <script src="/copilot/components/cp-accounts.js?v=20260731f"></script>
   <script src="/copilot/components/cp-voice.js?v=20260731c"></script>
 </head>
 <body>
+  <!-- 陈旧前端提醒（2026-07-31「切换失败」事故收尾）：iframe App 不在 workspace_base
+       的 ui-build 横幅覆盖面里——桌面壳/长开 iframe 的旧组件可以无限期活着，
+       「修好了坐席还在踩」由此复发。探针见 body 尾部脚本。 -->
+  <div id="cp-stale" style="display:none;flex-wrap:wrap;align-items:center;gap:8px;
+       padding:6px 10px;font-size:12px;line-height:1.5;
+       background:var(--cp-accent-bg,#eef2ff);color:var(--cp-accent,#4f46e5);
+       border-bottom:1px solid var(--cp-border,#e2e8f0);">
+    <span style="flex:0 0 auto;">🔁</span>
+    <span style="flex:1 1 160px;" data-cp-i18n="cp.app.stale_text">副驾界面已更新，刷新此面板即可加载新版（建议先发出/保存手头输入）。</span>
+    <button type="button" id="cp-stale-go" data-cp-i18n="cp.app.stale_btn"
+            style="flex:0 0 auto;font:inherit;font-size:12px;font-weight:600;cursor:pointer;
+                   padding:3px 12px;border-radius:7px;border:1px solid var(--cp-accent,#4f46e5);
+                   background:var(--cp-accent,#4f46e5);color:#fff;">立即刷新</button>
+    <button type="button" id="cp-stale-x" data-cp-i18n-title="cp.app.stale_dismiss"
+            title="暂不（2 小时内不再提醒）" aria-label="暂不"
+            style="flex:0 0 auto;border:none;background:transparent;color:inherit;opacity:.65;
+                   cursor:pointer;font-size:14px;padding:2px 6px;">✕</button>
+  </div>
   <div class="cp-tabs" id="cp-tabs" hidden>
     <button type="button" class="cp-tab active" data-tab="reply" data-cp-i18n="cp.app.tab_reply">回复台</button>
     <button type="button" class="cp-tab" data-tab="customer" data-cp-i18n="cp.app.tab_customer">客户&关系</button>
@@ -157,13 +186,6 @@
         </button>
         <div class="cp-card-bd"><cp-persona id="persona"></cp-persona></div>
       </section>
-      <section class="cp-card collapsed" data-cp-card="script">
-        <button type="button" class="cp-card-hd" data-cp-toggle="script">
-          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="film"></span><span data-cp-i18n="cp.app.h_script">剧本话题</span></span>
-          <span class="cp-card-pill" id="cpp-script"></span><span class="cp-card-chev" aria-hidden="true"></span>
-        </button>
-        <div class="cp-card-bd"><cp-script id="script"></cp-script></div>
-      </section>
     </div>
 
     <!-- 客户&关系 -->
@@ -181,6 +203,24 @@
           <span class="cp-card-pill" id="cpp-relstage"></span><span class="cp-card-chev" aria-hidden="true"></span>
         </button>
         <div class="cp-card-bd"><cp-rel-stage id="relstage"></cp-rel-stage></div>
+      </section>
+      <!-- D1 工作目标（与网页收件箱同布局：关系之后、SOP 之前）。默认 hidden：
+           inbox.goal.* 文案靠 /api/i18n/bundle 切片（静态壳无 Jinja 词典），
+           bundle 就绪才显示——端点未上线/未登录/旧后端 → 保持隐藏零回归。 -->
+      <section class="cp-card" data-cp-card="goal" id="goal-card-sec" hidden>
+        <button type="button" class="cp-card-hd" data-cp-toggle="goal">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="target"></span><span data-cp-i18n="cp.app.h_goal">工作目标</span></span>
+          <span class="cp-card-chev" aria-hidden="true"></span>
+        </button>
+        <div class="cp-card-bd"><cp-goal id="goal"></cp-goal></div>
+      </section>
+      <!-- 跟进 SOP（工作链）随目标卡迁入本 tab（2026-08-01，与网页端同布局：目标定方向 → SOP 保执行） -->
+      <section class="cp-card collapsed" data-cp-card="chain">
+        <button type="button" class="cp-card-hd" data-cp-toggle="chain">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="link"></span><span data-cp-i18n="cp.app.h_chain">跟进 SOP（工作链）</span></span>
+          <span class="cp-card-pill" id="cpp-chain"></span><span class="cp-card-chev" aria-hidden="true"></span>
+        </button>
+        <div class="cp-card-bd"><cp-chain-exec id="chain"></cp-chain-exec></div>
       </section>
       <section class="cp-card collapsed" data-cp-card="collab">
         <button type="button" class="cp-card-hd" data-cp-toggle="collab">
@@ -200,14 +240,9 @@
         </button>
         <div class="cp-card-bd"><cp-next-actions id="nba"></cp-next-actions></div>
       </section>
-      <section class="cp-card collapsed" data-cp-card="chain">
-        <button type="button" class="cp-card-hd" data-cp-toggle="chain">
-          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="link"></span><span data-cp-i18n="cp.app.h_chain">工作链执行</span></span>
-          <span class="cp-card-pill" id="cpp-chain"></span><span class="cp-card-chev" aria-hidden="true"></span>
-        </button>
-        <div class="cp-card-bd"><cp-chain-exec id="chain"></cp-chain-exec></div>
-      </section>
-      <section class="cp-card" data-cp-card="analysis">
+      <!-- 2026-08-01 运营决策：「AI 对话分析」卡下线隐藏（与网页收件箱同批）——切到工具页签就自动烧一次 LLM，
+           产出与回复工坊/消息流重复。恢复＝去掉 hidden 属性（runAnalyze 入口守卫按 hidden 联动）。保留 DOM 防接线断裂。 -->
+      <section class="cp-card" data-cp-card="analysis" hidden>
         <button type="button" class="cp-card-hd" data-cp-toggle="analysis">
           <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="brain"></span><span data-cp-i18n="cp.app.h_analyze">AI 对话分析</span></span>
           <span class="cp-card-chev" aria-hidden="true"></span>
@@ -243,12 +278,35 @@
       var accEl = document.getElementById("accounts");
       if (accEl && client) accEl.client = client;
       // 业务面板登记
-      var panels = ["draft", "persona", "collab", "relstage", "nba", "script", "chain", "voice"]
+      var panels = ["draft", "persona", "collab", "relstage", "nba", "chain", "voice", "goal"]
         .map(function (id) {
           var el = document.getElementById(id);
           if (el) el.client = client;
           return el;
         });
+
+      // ── D1 静态壳 i18n bundle：目标卡的 inbox.goal.* 文案按需拉取 ──
+      // 单一事实源仍是服务端合并词典；端点未上线/未登录/goals 关 → 卡保持 hidden，
+      // 桌面维持旧布局零回归。shim 防御式安装（宿主已有 window.T 则不覆盖）。
+      var _goalDict = null;
+      if (!window.T) window.T = function (k) { return (_goalDict && _goalDict[k]) || k; };
+      if (!window.Tf) window.Tf = function (k, vars) {
+        var s = (_goalDict && _goalDict[k]) || k;
+        if (vars) Object.keys(vars).forEach(function (p) { s = s.split("{" + p + "}").join(String(vars[p])); });
+        return s;
+      };
+      fetch("/api/i18n/bundle?prefix=inbox.goal.&lang=" + encodeURIComponent(LANG),
+            { credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          if (!d || !d.ok || !d.keys || !d.keys["inbox.goal.title"]) return;
+          _goalDict = d.keys;
+          var sec = document.getElementById("goal-card-sec");
+          if (sec) sec.hidden = false;
+          var g = document.getElementById("goal");
+          if (g && g.context && g.refresh) g.refresh();   // 文案就绪后重渲（防先渲出裸键）
+        })
+        .catch(function () { /* 静默：无 bundle = 无目标卡 */ });
 
       var CURRENT = null; // 当前会话上下文
       var sc = (window.CopilotShared && window.CopilotShared.sidebarChrome) || {};
@@ -278,15 +336,15 @@
       // ── 可折叠卡片：折叠态记忆 + 卡头图标/pill（与网页 unified_inbox 同源 sidebar-chrome.createCardController）──
       var cardCtrl = sc.createCardController ? sc.createCardController({
         storageKey: "cp_app_cards_v1",
-        defaultCollapsed: { voice: 1, persona: 1, script: 1, relstage: 1, collab: 1, chain: 1 },
+        defaultCollapsed: { voice: 1, persona: 1, relstage: 1, collab: 1, chain: 1 },
       }) : null;
       if (cardCtrl) { cardCtrl.bindClicks(document.getElementById("cp-app")); cardCtrl.apply(); }
       if (sc.decorateCardIcons) sc.decorateCardIcons(document, 14);
-      var PILL_BY_PANEL = { draft: "cpp-draft", relstage: "cpp-relstage", collab: "cpp-collab", nba: "cpp-nba", chain: "cpp-chain", script: "cpp-script", persona: "cpp-persona" };
+      var PILL_BY_PANEL = { draft: "cpp-draft", relstage: "cpp-relstage", collab: "cpp-collab", nba: "cpp-nba", chain: "cpp-chain", persona: "cpp-persona" };
       var PILL_TONES = ["pill-accent", "pill-ok", "pill-warn", "pill-danger"];
       function pillT(key, vars) {
-        var zh = { guard_high: "高风险", guard_medium: "中风险", draft_ready: "已生成", chain_failed: "{n} 失败", chain_running: "{n} 运行中", topics: "{n} 话题" };
-        var en = { guard_high: "High risk", guard_medium: "Med risk", draft_ready: "Ready", chain_failed: "{n} failed", chain_running: "{n} running", topics: "{n} topics" };
+        var zh = { guard_high: "高风险", guard_medium: "中风险", draft_ready: "已生成", chain_failed: "{n} 失败", chain_running: "{n} 运行中" };
+        var en = { guard_high: "High risk", guard_medium: "Med risk", draft_ready: "Ready", chain_failed: "{n} failed", chain_running: "{n} running" };
         var k = String(key).replace("inbox.pill.", "");
         var s = (LANG === "en" ? en : zh)[k] || key;
         if (vars) Object.keys(vars).forEach(function (p) { s = s.split("{" + p + "}").join(String(vars[p])); });
@@ -331,15 +389,40 @@
         var det = (e && e.detail) || {};
         if (det.text) post("cp-send", { text: det.text, which: det.which, risk: det.risk });
       });
+      // P22：目标卡（若同文档）驱动拟稿 → setDirective，不写宿主 composer
+      document.addEventListener("cp-goal-drive-draft", function (e) {
+        var det = (e && e.detail) || {};
+        var intent = String(det.intent || "").trim();
+        var text = String(det.instruction || intent || "").trim();
+        setTab("reply");
+        var dr = document.getElementById("draft");
+        try {
+          if (dr && typeof dr.setDirective === "function") {
+            dr.setDirective({
+              text: text,
+              summary: intent,
+              label: String(det.label || ""),
+              pushLevel: String(det.pushLevel || ""),
+              goalId: String(det.goalId || ""),
+              source: String(det.source || ""),
+              autoGen: true
+            });
+          }
+        } catch (_) {}
+        try {
+          var card = document.querySelector('[data-cp-card="draft"]');
+          if (card) card.classList.remove("collapsed");
+          if (dr) dr.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        } catch (_) {}
+      });
       // 跨面板联动刷新(沿用原协议)
       document.addEventListener("cp-action-done", function () {
         var rel = document.getElementById("relstage"); if (rel && rel.context) rel.refresh && rel.refresh();
         var chain = document.getElementById("chain"); if (chain && chain.context) chain.refresh && chain.refresh();
       });
       document.addEventListener("cp-rel-changed", function () {
-        var nba = document.getElementById("nba"), sc = document.getElementById("script");
+        var nba = document.getElementById("nba");
         if (nba && nba.context) nba.refresh && nba.refresh();
-        if (sc && sc.context) sc.refresh && sc.refresh();
       });
       document.addEventListener("cp-persona-changed", function () {
         var rel = document.getElementById("relstage"); if (rel && rel.context) rel.refresh && rel.refresh();
@@ -367,6 +450,9 @@
       var _analyzing = false;
       if (analyzeBtn) analyzeBtn.addEventListener("click", function () { runAnalyze(true); });
       async function runAnalyze(force) {
+        // 分析卡带 hidden＝已下线：tools 页签切换/上下文变更仍会路由到这里，必须在入口拦掉 LLM 调用
+        var _sec = document.querySelector('[data-cp-card="analysis"]');
+        if (_sec && _sec.hidden) return;
         if (!CURRENT || !client || _analyzing) return;
         _analyzing = true;
         if (analyzeBtn) analyzeBtn.disabled = true;
@@ -519,6 +605,54 @@
       if (tabCtrl) tabCtrl.restore();
       else setTab("reply");
       post("cp-ready");
+    })();
+  </script>
+  <script>
+    (function () {
+      /* 陈旧副驾探针（与 workspace_base 的 ui-build 横幅同口径，2026-07-31）：
+         首查 /static/workspace/ui-build.txt 首行为基线（即本页所载版本），此后每
+         5 分钟（+回前台时）复查，token 变化 → 出条请坐席刷新。location.reload()
+         保留 ?theme= 与 #token=，桌面 iframe 重载后自动重新鉴权。
+         探针失败一律静默（老后端没有该文件 / 网络抖动都不该打扰坐席）。 */
+      var BUILD_URL = "/static/workspace/ui-build.txt";
+      var SNOOZE_KEY = "cp_stale_snooze";
+      var baseline = "";
+      var shown = false;
+      var bar = document.getElementById("cp-stale");
+      if (!bar) return;
+      function snoozed() {
+        try { return Number(sessionStorage.getItem(SNOOZE_KEY) || 0) > Date.now(); }
+        catch (_) { return false; }
+      }
+      async function tick() {
+        if (shown) return;
+        try {
+          var r = await fetch(BUILD_URL + "?_=" + Date.now(),
+            { cache: "no-store", credentials: "same-origin" });
+          if (!r.ok) return;
+          var t = await r.text();
+          var cur = String((t || "").split(/\r?\n/)[0] || "").trim();
+          if (!cur) return;
+          if (!baseline) { baseline = cur; return; }   // 首查=基线
+          if (cur !== baseline && !snoozed()) {
+            bar.style.display = "flex";
+            shown = true;                              // 已提醒；贪睡按钮会复位继续盯
+          }
+        } catch (_) { /* 静默 */ }
+      }
+      var go = document.getElementById("cp-stale-go");
+      if (go) go.addEventListener("click", function () { location.reload(); });
+      var x = document.getElementById("cp-stale-x");
+      if (x) x.addEventListener("click", function () {
+        try { sessionStorage.setItem(SNOOZE_KEY, String(Date.now() + 2 * 3600 * 1000)); } catch (_) {}
+        bar.style.display = "none";
+        shown = false;                                 // 贪睡到期后若仍是新版会再次提醒
+      });
+      tick();
+      setInterval(tick, 300000);
+      document.addEventListener("visibilitychange", function () {
+        if (document.visibilityState === "visible") tick();
+      });
     })();
   </script>
 </body>

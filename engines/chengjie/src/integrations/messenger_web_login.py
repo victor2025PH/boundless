@@ -20,7 +20,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from src.integrations.account_registry import get_account_registry
-from src.integrations.platform_login import register_login_provider
+from src.integrations.platform_login import register_login_provider, resolve_login_switch
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +35,11 @@ def service_base_url(config: Dict[str, Any]) -> str:
 
 
 def web_enabled(config: Dict[str, Any]) -> bool:
-    pl = (config or {}).get("platform_login", {}) or {}
-    mg = pl.get("messenger", {}) or {}
-    return bool(mg.get("web_enabled", False))
+    # 三态：显式配置优先（含 false）；未写过时桌面版默认开（见 resolve_login_switch 注释）。
+    # 单一事实源——全部消费方（orchestrator / readiness / channel_adapters /
+    # protocol_diagnostics / account 路由）都经本函数，故升级安装的 Messenger 扫码
+    # 灰卡在此一处收口（104 事故的「另一半」：line/wa 已接、messenger 曾漏接）。
+    return resolve_login_switch(config, "platform_login.messenger.web_enabled")
 
 
 # ── HTTP 薄封装（测试可 monkeypatch） ────────────────────────────────────────

@@ -23,11 +23,31 @@ MAX_STEP_RETRIES = 1
 
 
 class WorkflowRunner:
-    """P44：工作链步骤执行器。"""
+    """P44：工作链步骤执行器。
 
-    def __init__(self, inbox_store: Any, contacts_store: Any = None) -> None:
+    ``goal_event_hook``（可选，C 弱联动）：``(conversation_id, kind, detail) -> bool``
+    ——链终态/自动启动回写目标事件台账；由构造方（ScheduledReporter）用
+    ``goals.service.chain_event_recorder(config_manager)`` 注入。缺省 None＝零行为。
+    """
+
+    def __init__(
+        self,
+        inbox_store: Any,
+        contacts_store: Any = None,
+        goal_event_hook: Any = None,
+    ) -> None:
         self._store = inbox_store
         self._contacts = contacts_store
+        self._goal_hook = goal_event_hook
+
+    def _record_goal_event(self, conv_id: str, kind: str, detail: str) -> None:
+        """best-effort 回写，绝不影响链主流程。"""
+        if not self._goal_hook:
+            return
+        try:
+            self._goal_hook(conv_id, kind, detail)
+        except Exception:
+            logger.debug("goal_event_hook 调用失败（已忽略）", exc_info=True)
 
     # ── 公开接口 ─────────────────────────────────────────────────────────────
 
@@ -79,6 +99,9 @@ class WorkflowRunner:
                     schedule_first_step=True,
                 )
                 started += 1
+                self._record_goal_event(
+                    cid, "chain_started",
+                    str(chain.get("name") or chain.get("chain_id") or ""))
         return started
 
     # ── 单条执行推进 ─────────────────────────────────────────────────────────
@@ -285,6 +308,10 @@ class WorkflowRunner:
         reason: str = "",
         result: Optional[Dict[str, Any]] = None,
     ) -> None:
+        if status in ("completed", "failed"):
+            self._record_goal_event(
+                conv_id, "chain_" + status,
+                str(ex.get("chain_name") or ex.get("chain_id") or ""))
         try:
             from src.integrations.shared.event_bus import get_event_bus
             get_event_bus().publish("workflow_execution_" + status, {

@@ -195,6 +195,82 @@ def probe_avatar_voice(config: Dict[str, Any], *, force: bool = False) -> Option
     return result
 
 
+def _is_private_host(host: str) -> bool:
+    """RFC1918 私网/本机判定（探活只认自建 LAN 算力，公网云端点不探防误报）。"""
+    import re as _re
+    return (host in ("localhost", "127.0.0.1")
+            or host.startswith("192.168.") or host.startswith("10.")
+            or bool(_re.match(r"^172\.(1[6-9]|2\d|3[01])\.", host)))
+
+
+def lan_gpu_probe_targets(config: Dict[str, Any]) -> List[str]:
+    """收集要巡检的 LAN GPU 主机根地址（纯函数：按主机去重、只认私网）。
+
+    口径＝「聊天主链之外、挂了会**静默降级**的 LAN 算力依赖」：嵌入双活
+    （ai.embedding_base_urls/embedding_base_url）、本地兜底 LLM（ai.fallback，
+    enabled 才算）、视觉双活（vision.base_urls/base_url）、本地 MT
+    （translation.engines.ollama_mt.base_urls/base_url）。多个子系统常指向同一台
+    主机（176/140）——按 ``scheme://host:port`` 去重后逐台探 Ollama ``/api/version``
+    （零模型加载、毫秒级）。公网端点（云 API）不收：无该契约且自有告警面；
+    云端部署无 LAN 端点 → 空清单 → 巡检天然静默。
+    """
+    if not isinstance(config, dict):
+        return []
+    bases: List[str] = []
+    ai = config.get("ai") or {}
+    emb = ai.get("embedding_base_urls") or ai.get("embedding_base_url") or []
+    if isinstance(emb, str):
+        emb = [u.strip() for u in emb.split(",")]
+    bases += [str(u or "") for u in (emb if isinstance(emb, (list, tuple)) else [])]
+    fb = ai.get("fallback") or {}
+    if isinstance(fb, dict) and fb.get("enabled"):
+        bases.append(str(fb.get("base_url") or ""))
+    vis = config.get("vision") or {}
+    vb = vis.get("base_urls") or vis.get("base_url") or []
+    if isinstance(vb, str):
+        vb = [vb]
+    bases += [str(u or "") for u in (vb if isinstance(vb, (list, tuple)) else [])]
+    mt = (((config.get("translation") or {}).get("engines") or {})
+          .get("ollama_mt") or {})
+    if isinstance(mt, dict):
+        mb = mt.get("base_urls") or mt.get("base_url") or []
+        if isinstance(mb, str):
+            mb = [u.strip() for u in mb.split(",")]
+        bases += [str(u or "") for u in (mb if isinstance(mb, (list, tuple)) else [])]
+
+    out: List[str] = []
+    seen = set()
+    for b in bases:
+        b = b.strip().rstrip("/")
+        if not b or "://" not in b:
+            continue
+        if b.endswith("/v1"):
+            b = b[:-3].rstrip("/")
+        hostport = b.split("://", 1)[1].split("/", 1)[0]
+        if not _is_private_host(hostport.split(":", 1)[0]):
+            continue
+        root = b.split("://", 1)[0] + "://" + hostport
+        if root not in seen:
+            seen.add(root)
+            out.append(root)
+    return out
+
+
+def probe_lan_gpu_host(root: str, *, timeout: float = 3.0) -> Dict[str, Any]:
+    """探一台 LAN GPU 主机的 Ollama ``/api/version``（无缓存，调用方自控频率）。"""
+    result: Dict[str, Any] = {"url": root, "reachable": False}
+    try:
+        import urllib.request
+        t0 = time.time()
+        with urllib.request.urlopen(root + "/api/version", timeout=timeout) as resp:
+            resp.read()
+        result.update({"reachable": True,
+                       "latency_ms": int((time.time() - t0) * 1000)})
+    except Exception as e:
+        result["error"] = str(e)[:120]
+    return result
+
+
 def collect_health(app, config_manager=None, *, pending_threshold: int = 200) -> Dict[str, Any]:
     """采集运行时健康（route 与 watchdog 共用）。返回 build_health 的结果。"""
     from src.utils.health import build_health, is_placeholder
@@ -355,6 +431,11 @@ class HealthWatchdog:
         # 告警种类：down=不可达/未载入（health 探测红）；hang=半死（health 绿但合成连败，
         # 2026-07-14 事故形态）。恢复语义不同：hang 需要「失败后真的又成过一次」的正面证据。
         self._avatar_alert_kind: str = ""
+        # LAN GPU 主机宕机升级提醒（2026-08-01 176 整机静默下线两小时事故）：
+        # 每主机独立状态 {down_since, alerted, last_remind}——故障转移网兜住了业务，
+        # 但运维必须知道冗余已经归零。
+        self._lan_gpu_state: Dict[str, Dict[str, float]] = {}
+        self.total_lan_gpu_reminders: int = 0
         # 口语化 LLM 持续连败升级提醒（2026-07-15 九连败静默事故）：状态镜像 avatar hang
         self._colloquial_down_since: float = 0.0
         self._colloquial_alerted: bool = False
@@ -538,6 +619,12 @@ class HealthWatchdog:
             self._check_avatar_voice()
         except Exception:
             logger.debug("AvatarHub 语音巡检异常（已忽略）", exc_info=True)
+        # LAN GPU 主机宕机升级提醒（嵌入/视觉/兜底 LLM/本地 MT 所在主机整机下线时，
+        # 各链路静默转移备点——业务不断，但冗余归零必须有人知道）。
+        try:
+            self._check_lan_gpu_hosts()
+        except Exception:
+            logger.debug("LAN GPU 主机巡检异常（已忽略）", exc_info=True)
 
         # 人工通过投递链静默断裂（坐席点了「发送」但一条都没真发出去）——
         # 这条链曾整条不存在过（实测 14 天零人工投递），且注入是静默的，值得主动探。
@@ -1701,6 +1788,86 @@ class HealthWatchdog:
         self._avatar_alerted = True
         self._avatar_last_remind = ts
         self.total_avatar_voice_reminders += 1
+
+    def _check_lan_gpu_hosts(self, *, now: Optional[float] = None) -> None:
+        """LAN GPU 主机（嵌入/视觉/兜底 LLM/本地 MT 所在）宕机的升级式提醒。
+
+        2026-08-01 实锤：176（5090 主力）整机下线约两小时——嵌入/视觉/MT 全部静默
+        转移备点、坐席只感到偶尔慢一拍，**零告警**。故障转移网太称职反而掩盖了
+        单点损失：此时本地兜底冗余已归零，DeepSeek 再出问题就没有第二道防线。
+        本巡检把「主机持续不可达」升级为主动外发：
+          - 不可达 ≥ ``after_min``（默认 30min）→ 首提（EventBus ``lan_gpu_alert``）；
+          - 仍未恢复 → 每 ``interval_min``（默认 240min）重提；
+          - 恢复 → 补发恢复通知 + 状态清零（未告警过的抖动恢复不发，防噪）。
+        目标清单派生自配置（``lan_gpu_probe_targets``），按主机去重、只认私网；
+        云端部署无 LAN 端点 → 空清单天然静默。探针 ``/api/version`` 零模型加载
+        毫秒级；宕机主机 3s 超时封顶（每 tick 最多 3s×N，与音频探针同量级）。
+        配置 ``health_watchdog.lan_gpu_remind.{enabled,after_min,interval_min}``（默认开）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        lr = (((cfg.get("health_watchdog") or {}).get("lan_gpu_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not lr.get("enabled", True):
+            return
+        targets = lan_gpu_probe_targets(cfg if isinstance(cfg, dict) else {})
+        if not targets:
+            return
+        ts = float(now if now is not None else time.time())
+        after_sec = max(60.0, float(lr.get("after_min", 30) or 30) * 60.0)
+        interval_sec = max(600.0, float(lr.get("interval_min", 240) or 240) * 60.0)
+        for root in targets:
+            st = self._lan_gpu_state.setdefault(
+                root, {"down_since": 0.0, "alerted": 0.0, "last_remind": 0.0})
+            probe = probe_lan_gpu_host(root)
+            host = root.split("://", 1)[1]
+            if probe.get("reachable"):
+                if st["alerted"]:
+                    # 从「已告警」恢复 → 补发恢复通知（抖动恢复不发，防噪）
+                    try:
+                        from src.integrations.shared.event_bus import get_event_bus
+                        get_event_bus().publish("lan_gpu_alert", {
+                            "recovered": True, "host": host, "url": root,
+                            "rate_key": f"lan_gpu:{host}:recovered",
+                        })
+                        logger.info("HealthWatchdog 发出 LAN GPU 主机恢复通知 %s", host)
+                    except Exception:
+                        logger.debug("lan_gpu recovery 发布失败（已忽略）", exc_info=True)
+                st["down_since"] = 0.0
+                st["alerted"] = 0.0
+                st["last_remind"] = 0.0
+                continue
+            if not st["down_since"]:
+                st["down_since"] = ts    # 首见不可达：只记时点，给抖动一个窗口
+                continue
+            down_sec = ts - st["down_since"]
+            due = ((not st["alerted"] and down_sec >= after_sec)
+                   or (st["alerted"] and ts - st["last_remind"] >= interval_sec))
+            if not due:
+                continue
+            was_reminder = bool(st["alerted"])
+            try:
+                from src.integrations.shared.event_bus import get_event_bus
+                get_event_bus().publish("lan_gpu_alert", {
+                    "host": host, "url": root,
+                    "error": str(probe.get("error") or ""),
+                    "down_minutes": int(down_sec // 60),
+                    "reminder": was_reminder,
+                    # 每主机独立限流键：176 与 140 同时出事要各自能报
+                    "rate_key": f"lan_gpu:{host}",
+                })
+            except Exception:
+                logger.debug("lan_gpu alert 发布失败（已忽略）", exc_info=True)
+                continue
+            st["alerted"] = 1.0
+            st["last_remind"] = ts
+            self.total_lan_gpu_reminders += 1
+            # 日志=本机唯一保证在的持久告警通道（webhook 可能 0 通道、SSE 有白名单
+            # 且只对在线页面直播）——与 draft_backlog 同款落一行，实弹验证/事后
+            # 追溯都靠它（2026-08-01 首次验收时发现只发总线没落日志的盲区）。
+            logger.warning(
+                "LAN GPU 主机不可达：%s 已 %d 分钟（嵌入/视觉/兜底 LLM/本地 MT "
+                "已静默转移备点，本地冗余归零）%s",
+                host, int(down_sec // 60), "（重提）" if was_reminder else "")
 
     def _check_trial_fulfiller(self, *, now: Optional[float] = None) -> None:
         """试用履约端（厂商机）停摆的升级式提醒。

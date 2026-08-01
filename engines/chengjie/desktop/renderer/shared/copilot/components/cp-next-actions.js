@@ -22,7 +22,12 @@
     styles() {
       return `
       .card.escalate { border-left-color:var(--cp-danger,#dc2626); }
-      .card.template { border-left-color:#0d9488; }`;
+      .card.template { border-left-color:#0d9488; }
+      .moodline { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b);
+                  padding:3px 2px 5px; }
+      .moodline .mv { color:var(--cp-ok,#0f9d75); font-weight:600; }
+      .moodline .mnone { color:var(--cp-text-tiny,#94a3b8); }
+      .acts button.on { background:var(--cp-ok,#0f9d75); color:#fff; border-color:transparent; }`;
     }
     async fetchData(ctx) {
       return this._client.getNextActions({ conversationId: ctx.conversationId });
@@ -31,7 +36,15 @@
       const acts = Array.isArray(d.actions) ? d.actions : [];
       if (!acts.length) return `<div class="empty">${this.esc(this.emptyDataText())}</div>`;
       const esc = (s) => this.esc(s);
-      return acts.map((a, i) => {
+      /* P1-198 情绪标记状态化：顶部常驻「当前情绪」行（服务端 conv_tags∩情绪词表的
+         单一事实源），当前生效的情绪 chip 高亮——点完不再「毫无反应」。 */
+      const mood = String(d.current_mood || "");
+      const moodLine =
+        `<div class="moodline">${esc(this.t("cp.nba.mood_current"))}: ` +
+        (mood ? `<span class="mv">🏷 ${esc(mood)}</span>`
+              : `<span class="mnone">${esc(this.t("cp.nba.mood_none"))}</span>`) +
+        `</div>`;
+      return moodLine + acts.map((a, i) => {
         const t = a.action_type;
         const cls = t === "escalate" ? "card escalate" : t === "template" ? "card template" : "card";
         const btns = [];
@@ -42,7 +55,8 @@
         if (t === "tag" && a.config && (a.config.tag || a.config.tag_options)) {
           const opts = (a.config.tag_options || [a.config.tag]).filter(Boolean);
           opts.forEach((tag) => {
-            btns.push(`<button data-act="exec" data-idx="${i}" data-kind="tag" data-tag="${esc(tag)}">🏷 ${esc(tag)}</button>`);
+            const on = mood && tag === mood ? " class=\"on\"" : "";
+            btns.push(`<button${on} data-act="exec" data-idx="${i}" data-kind="tag" data-tag="${esc(tag)}">🏷 ${esc(tag)}</button>`);
           });
         }
         if (t === "escalate") btns.push(`<button class="danger" data-act="exec" data-idx="${i}" data-kind="escalate">${esc(this.t("cp.nba.escalate"))}</button>`);
@@ -81,11 +95,15 @@
       if (!cid) return;
       this.shadowRoot.querySelectorAll("[data-act]").forEach((b) => (b.disabled = true));
       let ok = false;
+      let err = "";
       try {
         const r = await this._client.executeAction({ conversationId: cid, action_id, action_type, config });
         ok = !!(r && r.ok);
+        // P1-198 诚实化：服务端如实报「没建成」的原因（如会话未关联客户档案），
+        // 透传给宿主 toast——「点了没反应」变成「点了知道为什么不行」。
+        if (!ok) err = String((r && (r.error || r.detail)) || "");
       } catch (e) { ok = false; }
-      this.emit("cp-action-done", { action_type, ok, conversationId: cid });
+      this.emit("cp-action-done", { action_type, ok, error: err, conversationId: cid });
       this.refresh();
     }
   }

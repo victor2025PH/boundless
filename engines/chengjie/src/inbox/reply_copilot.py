@@ -24,7 +24,6 @@ _SOURCE_LABELS = {
     "reunion": "久别重逢",
     "churn_recovery": "流失挽回",
     "stage_advance": "关系进阶",
-    "script_topic": "剧本话题",
 }
 
 # 阶段语气补全后缀
@@ -203,16 +202,6 @@ class ReplyCopilot:
                     "stage_advance",
                     f"关系进阶至「{nxt}」的过渡话术",
                     0.88,
-                ))
-
-        for topic in (ctx.get("script_topics") or [])[:2]:
-            opener = str(topic.get("opener") or "").strip()
-            if opener:
-                out.append(self._item(
-                    opener,
-                    "script_topic",
-                    f"剧本：{topic.get('title') or '话题'}",
-                    0.86,
                 ))
 
         if is_negative and not any(r.get("source") == "empathy" for r in out):

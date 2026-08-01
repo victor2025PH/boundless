@@ -103,21 +103,6 @@ def _build_copilot_context(
         except Exception:
             pass
 
-    script_topics: List[Dict[str, Any]] = []
-    if store is not None:
-        try:
-            from src.inbox.conversation_script import ConversationScriptEngine
-            engine = ConversationScriptEngine()
-            stage = str(rel.get("display_stage") or rel.get("stage") or "initial")
-            script_topics = engine.suggest_topics(
-                stage,
-                custom_topics=store.list_script_topics(),
-                reunion=bool(rel.get("reunion")),
-                limit=3,
-            ).get("topics", [])
-        except Exception:
-            pass
-
     if not trigger and mention_note:
         trigger = "mention"
     elif not trigger and mctx.get("churn_level") == "high":
@@ -160,7 +145,6 @@ def _build_copilot_context(
         "workflow_step": int(workflow_step or 0),
         "mention_note": mention_note,
         "mention_from": mention_agent,
-        "script_topics": script_topics,
     }
 
 

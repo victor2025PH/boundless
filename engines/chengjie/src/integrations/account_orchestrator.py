@@ -336,8 +336,9 @@ class AccountOrchestrator:
     async def mark_read(self, platform: str, account_id: str, chat_key: str) -> bool:
         """把该会话标记已读（向平台发「已读」回执，拟人「先看后回」）。
 
-        best-effort：无运行中 worker / worker 不支持 mark_read（WA/LINE/Messenger 暂无）
-        / 平台异常 → 一律 False 且绝不抛——已读只是拟人增强，失败不得阻断投递主流程。
+        best-effort：无运行中 worker / worker 不支持 mark_read（当前 Messenger web 暂无；
+        TG/WA/LINE 均已实现）/ 平台异常 → 一律 False 且绝不抛——已读只是拟人增强，
+        失败不得阻断投递主流程。
         不过 send_blocked 护栏：读消息不是外发行为，冻结期也应照常已读（真人被限制发言
         仍会看消息）。
         """
@@ -364,7 +365,8 @@ class AccountOrchestrator:
         """挂会话「正在输入 / 正在录音」状态（拟人：回复前对方看到打字/录音气泡）。
 
         ``action``：``typing`` | ``record_audio``（其余按 typing）。best-effort：无运行中
-        worker / worker 不支持（WA/LINE/Messenger worker 暂无）/ 异常 → False 且绝不抛。
+        worker / worker 不支持 / 异常 → False 且绝不抛。当前 TG+WA 有；**LINE 是协议层
+        硬限制**（okline 无 typing/presence 端点，不是我们没接）；Messenger web 亦无。
         与 mark_read 同——状态提示不是外发消息，不过 send_blocked 护栏。
         """
         from src.integrations.humanize_metrics import record_typing
@@ -1253,6 +1255,29 @@ class LineProtocolWorker:
         self.detail = ""
         # peer mid → (显示名, 头像 URL) 缓存（含 ("","")=已查过无，避免每条消息重复打 getContactsV2）
         self._peer_ident_cache: Dict[str, tuple] = {}
+        # chat_key → 该会话末条**入站** msg id（LINE 的已读回执要带「读到哪条」）
+        self._last_in_msg_id: Dict[str, str] = {}
+        # 账号级 API 串行锁：okline 的 ``next_req_seq()`` 是裸 ``self._reqseq += 1``
+        # （无锁的读-改-写）→ 两个线程并发调用可能拿到**同一个 reqSeq**。
+        # 2026-07-31 真机实测的服务端去重键是 **(reqSeq, 消息内容)** 二者兼具：
+        # 故撞号且内容相同（同一句自动回复并发投同一会话）才会被判重丢掉，内容不同
+        # 时两条都会送达。也就是说这把锁修的是一个**窄但真实**的丢消息面，外加
+        # 保住「reqSeq 单调」这个协议基本假设——别据此以为不加锁就会大面积丢消息。
+        # 发文本/发媒体/已读都从线程池打同一个 client，故在这里串起来。长轮询
+        # （Bot.run）不取 reqSeq、存量同步另建 client，都不参与竞争。
+        # 每账号一把（不是模块级）：两个 LINE 号各有自己的 _reqseq，不该互相等。
+        self._api_lock = threading.Lock()
+        # 出站媒体能力**按开关绑定**，而不是写成普通方法——因为 owns_media() 的判据就是
+        # ``hasattr(worker, "send_media")``。写成普通方法即等于「LINE 恒有发媒体能力」，
+        # 会把自拍/相册/克隆语音/命理 K 线在 LINE 上一次性全部放开（逆向协议发媒体有
+        # 账号风险，且开关关时应当维持「编排器判定 LINE 不支持媒体」的旧语义）。
+        # ⚠ 别顺手「简化」成 `async def send_media`，那会静默改变生产行为。
+        try:
+            from src.integrations.line_media import resolve_line_media_cfg
+            if resolve_line_media_cfg(config).get("outbound"):
+                self.send_media = self._send_media_impl  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            logger.debug("[line-worker] 出站媒体开关解析失败（按关处理）", exc_info=True)
 
     async def start(self) -> None:
         from src.integrations.line_protocol_login import (
@@ -1441,10 +1466,25 @@ class LineProtocolWorker:
                 # per-peer 缓存）——修「LINE 私聊只显示裸 mid + 无头像」。查的是**对方** mid，
                 # 天然规避「误标成本账号名」。obs 直链稳定 → 直接落库 avatar_url 由前端渲染。
                 peer_name, peer_avatar = ("", "") if is_group else self._resolve_peer_identity(chat_key)
+                msg_id = str((ctx.message or {}).get("id") or "")
+                if msg_id:
+                    # 记在下载之前：下载可能耗时甚至失败，但已读回执只需要这个 id。
+                    # 上界＝账号真实会话数（每条 ~40B）；仍设个天花板防异常膨胀。
+                    if len(self._last_in_msg_id) > 2000:
+                        self._last_in_msg_id.clear()
+                    self._last_in_msg_id[chat_key] = msg_id
+                media_type, media_ref = self._inbound_media(ctx, is_group=is_group)
+                if media_type == "sticker" and not media_ref and not str(text).strip():
+                    # 贴纸图没下来（CDN 变更/动图/网络）→ 退到贴纸自带文字。用 A 线同款
+                    # ``[表情] 语义`` 口径，inbound_enrich 的表情块解析可直接吃。
+                    from src.integrations.line_media import sticker_text_hint
+                    _hint = sticker_text_hint(ctx.message or {})
+                    text = f"[表情] {_hint}" if _hint else "[表情]"
                 payload = make_message(
                     platform="line", account_id=account_id, chat_key=chat_key,
                     name=peer_name, avatar_url=peer_avatar, text=str(text),
-                    msg_id=str((ctx.message or {}).get("id") or ""),
+                    msg_id=msg_id,
+                    media_type=media_type, media_ref=media_ref,
                     direction="in")
                 if is_group:
                     payload["chat_type"] = "group"
@@ -1506,11 +1546,99 @@ class LineProtocolWorker:
         """向后兼容薄封装：仅取显示名（内部走 ``_resolve_peer_identity``，头像一并缓存）。"""
         return self._resolve_peer_identity(mid)[0]
 
-    async def send(self, chat_key: str, text: str,
-                   *, reply_to: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def _api_call(self, fn: Any, *args: Any, **kw: Any) -> Any:
+        """在线程池里串行调用 okline（同步库）。锁在**线程内**取，见 ``_api_lock`` 说明。"""
+        def _locked() -> Any:
+            with self._api_lock:
+                return fn(*args, **kw)
+
+        return await asyncio.to_thread(_locked)
+
+    async def mark_read(self, chat_key: str) -> bool:
+        """把会话标记已读（``sendChatChecked``），拟人「先看后回」。
+
+        LINE 的已读要带「读到哪条」→ 用 ``_on_msg`` 记下的该会话末条入站 msg id；
+        没记到（重启后该会话还没来过消息）就返回 False，不猜。
+
+        调用时机是**投递前一刻**（``build_autosend_mark_read_cb``），所以不会造成
+        LINE 文化里最忌讳的「已讀不回」——已读之后紧跟着就是回复。
+        """
+        if self.client is None:
+            return False
+        mid = self._last_in_msg_id.get(str(chat_key or ""))
+        if not mid:
+            return False
+        try:
+            await self._api_call(
+                self.client.send_chat_checked, str(chat_key), str(mid))
+            return True
+        except Exception:
+            logger.debug("[line-worker] 已读回执失败 chat=%s", chat_key, exc_info=True)
+            return False
+
+    # ── 媒体（2026-07-31 补齐：此前 LINE 号只能收发文字）─────────────────────────
+
+    def _inbound_media(self, ctx: Any, *, is_group: bool) -> tuple:
+        """入站媒体下载 → ``(媒体大类, /static URL)``；非媒体/关闭/失败均软回落。
+
+        **群聊默认不下载**：群与私聊共用同一条 okline 接收线程，热闹的群会把下载耗时
+        叠到私聊 AI 回复的延迟上——而私聊才是 AI 与营收所在。要看群里的图，开
+        ``platform_login.line.media.groups``。
+        """
+        try:
+            from src.integrations.line_media import (
+                download_line_media, resolve_line_media_cfg,
+            )
+            mcfg = resolve_line_media_cfg(self.config)
+            if is_group and not mcfg.get("groups", False):
+                return "", ""
+            return download_line_media(
+                self.client, ctx.message or {}, self.account_id, cfg=mcfg)
+        except Exception:
+            logger.debug("[line-worker] 入站媒体处理失败（回落纯文本）", exc_info=True)
+            return "", ""
+
+    async def _send_media_impl(
+        self, chat_key: str, *, media_path: str, media_type: str = "",
+        caption: str = "",
+    ) -> Dict[str, Any]:
+        """发媒体（okline 同步库 → 丢线程，与 ``send`` 同范式）。
+
+        只在 ``platform_login.line.media.outbound`` 打开时才被绑成 ``send_media``
+        —— 见 ``__init__`` 里那段说明，别把它改成普通方法。
+        """
         if self.client is None:
             raise RuntimeError("line client 未连接")
-        res = await asyncio.to_thread(self.client.send_text, chat_key, text)
+        from src.integrations.line_media import resolve_line_media_cfg, send_line_media
+        # 整段（占位→上传→配文）持锁：中途被另一次发送插入会打乱 reqSeq，
+        # 也会让「占位」与「上传」之间夹进别人的请求。
+        return await self._api_call(
+            send_line_media, self.client, chat_key,
+            media_path=media_path, media_type=media_type, caption=caption,
+            cfg=resolve_line_media_cfg(self.config),
+        )
+
+    async def send(self, chat_key: str, text: str,
+                   *, reply_to: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """发文本；带 ``reply_to`` 时走 LINE 原生引用回复（``related_message_id``）。
+
+        引用**失败必须回落普通发送**：被引用的消息可能太旧/已撤回/不在本会话，
+        引用只是气泡上的装饰，不该因为它整条消息发不出去。
+        """
+        if self.client is None:
+            raise RuntimeError("line client 未连接")
+        ref_id = str((reply_to or {}).get("id") or "")
+        res = None
+        if ref_id:
+            try:
+                res = await self._api_call(
+                    self.client.reply_text, chat_key, text, ref_id)
+            except Exception:
+                logger.debug("[line-worker] 引用回复失败，回落普通发送 ref=%s",
+                             ref_id, exc_info=True)
+                res = None
+        if res is None:
+            res = await self._api_call(self.client.send_text, chat_key, text)
         mid = ""
         try:
             if isinstance(res, dict):
@@ -1561,5 +1689,9 @@ def get_orchestrator_if_running() -> Optional[AccountOrchestrator]:
 
 
 def orchestrator_enabled(config: Dict[str, Any]) -> bool:
-    pl = (config or {}).get("platform_login", {}) or {}
-    return bool(pl.get("orchestrator_enabled", False))
+    # 三态（单一事实源见 platform_login.resolve_login_switch）：显式配置优先（含
+    # false）；桌面升级安装未写过该键时默认开——否则扫上的号一重启就掉线（种子注释
+    # 警告的「功能只交付一半」）。服务器部署无 AITR_DESKTOP_MODE → 保持默认关，零行为
+    # 变化。与 line/wa/messenger 登录开关同机制，补齐 orchestrator 这最后一环。
+    from src.integrations.platform_login import resolve_login_switch
+    return resolve_login_switch(config, "platform_login.orchestrator_enabled")

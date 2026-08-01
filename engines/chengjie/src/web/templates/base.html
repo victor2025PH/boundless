@@ -77,9 +77,9 @@
 /* ── Reset ─────────────────────────────────────── */
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
 html{scroll-behavior:smooth}
-/* 字体栈与 workspace_base / auth-surface.css 逐项一致（品牌拉丁字 + Inter 兜底 + CJK 系统字）；
-   原栈缺 CJK 显式声明，中文只能靠 system-ui 回落。后续可统一收口到 brand.css 的 --bl-font-sans。 */
-body{font-family:'Montserrat','Inter','PingFang SC','Microsoft YaHei',system-ui,sans-serif;background:var(--bg);color:var(--t);min-height:100vh;display:flex;font-size:14px;line-height:1.5;transition:background .3s,color .3s}
+/* 字体栈单一源＝brand.css 的 --bl-font-sans（tokens.json 派生，2026-07-30 收口）；
+   fallback 保留旧本地栈（品牌拉丁字 + Inter 兜底 + CJK 系统字），brand.css 缺席时零视觉变化。 */
+body{font-family:var(--bl-font-sans,'Montserrat','Inter','PingFang SC','Microsoft YaHei',system-ui,sans-serif);background:var(--bg);color:var(--t);min-height:100vh;display:flex;font-size:14px;line-height:1.5;transition:background .3s,color .3s}
 [data-theme="dark"] body{background:radial-gradient(ellipse at 20% 50%,rgba(156,156,156,.05) 0%,transparent 50%),radial-gradient(ellipse at 80% 10%,rgba(63,185,80,.04) 0%,transparent 45%),#0f1014}
 /* ── Sidebar ─────────────────────────────────── */
 .sidebar{width:var(--sw);position:fixed;top:0;left:0;bottom:0;background:var(--nav);display:flex;flex-direction:column;z-index:100;border-right:1px solid var(--bd);transition:transform .3s cubic-bezier(.4,0,.2,1)}
@@ -490,7 +490,7 @@ code{background:var(--input);padding:.15rem .45rem;border-radius:5px;font-size:.
   {%- macro nav_item(it) %}
     {%- if it.locked %}
     {#- 档位锁定项(P3)：不消失,渲染锁标并跳会员中心升级引导(点被锁页面只会撞 403) -#}
-    <a href="/membership" class="nav-locked" title="{{ (i18n or {}).get('mb_locked_tip', '当前套餐未包含，点击查看升级') }}">
+    <a href="/membership{% if it.feature %}?from={{ it.feature }}{% endif %}" class="nav-locked" title="{{ (i18n or {}).get('mb_locked_tip', '当前套餐未包含，点击查看升级') }}">
       {{ nav_icons[it.icon]|safe }}
       <span>{{ (i18n or {}).get(it.label_key, it.label_zh) }}</span>
       <svg class="nav-lock-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>

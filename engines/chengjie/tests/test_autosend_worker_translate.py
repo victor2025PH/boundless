@@ -91,6 +91,56 @@ async def test_translate_same_text_no_counter_bump():
 
 
 @pytest.mark.asyncio
+async def test_translate_hold_none_blocks_delivery():
+    """P0-198：回调返回 None（文本含 CJK 而客户语言非 CJK 且翻译不可用的 HOLD 信号）
+    → 绝不发原文（发中文给外语客户=人设穿帮），按投递失败走审计/重试链。"""
+    sent = []
+
+    async def _translate_cb(item):
+        return None
+
+    async def _send_cb(p, a, c, text):
+        sent.append(text)
+        return {"ok": True}
+
+    w = AutosendWorker(
+        draft_service=_FakeSvc(),
+        send_callback=_send_cb,
+        translate_callback=_translate_cb,
+    )
+    await w._tick()
+    assert sent == []                       # 一个字都没发出去
+    assert w.total_delivered == 0
+    assert w.total_deliver_errors == 1
+    assert "translate_hold" in str(w.last_error)
+
+
+@pytest.mark.asyncio
+async def test_human_deliver_translate_hold_returns_error():
+    """人工通过链同口径：HOLD → 返回失败（坐席铃铛可见），绝不静默发原文。"""
+    async def _translate_cb(item):
+        return None
+
+    async def _send_cb(p, a, c, text):
+        return {"ok": True}
+
+    w = AutosendWorker(
+        draft_service=_FakeSvc(),
+        send_callback=None,
+        human_send_callback=_send_cb,
+        translate_callback=_translate_cb,
+        deliver_only=True,
+    )
+    res = await w.deliver_human_approved({
+        "draft_id": "d1", "conversation_id": "x1", "platform": "telegram",
+        "account_id": "a1", "chat_key": "c1", "final_text": "你好呀~",
+    })
+    assert res["ok"] is False
+    assert "translate_hold" in str(res.get("error") or "")
+    assert w.total_human_deliver_errors == 1
+
+
+@pytest.mark.asyncio
 async def test_translate_exception_falls_back_to_original():
     sent = []
 

@@ -23,7 +23,12 @@ from typing import Any, Dict, List
 
 from fastapi import Depends, HTTPException, Request
 
-from src.web.routes.unified_inbox_auth import _session_agent, _user_store_from_config
+from src.web.routes.unified_inbox_auth import (
+    _agent_from_request,
+    _is_supervisor,
+    _session_agent,
+    _user_store_from_config,
+)
 from src.web.routes.unified_inbox_context import (
     _conv_relationship_context,
     _mention_context_for_conv,
@@ -173,11 +178,38 @@ def register_collab_mention_routes(app, *, api_auth, config_manager) -> None:
             pass
         return {"ok": True, "note": note, "auto_cc": auto_cc_applied}
 
+    def _note_write_guard(request: Request, store, conversation_id: str, note_id: str) -> dict:
+        """P0-协作闭环：编辑/删除注解的权限闸——仅作者本人或主管（master/admin）。
+
+        此前任何登录坐席可改删任何人的注解且无留痕；协作工具没有归属就没有
+        可信度。附带收紧两处：① 身份取 ``_agent_from_request``（旧代码读
+        ``session.user_name``——登录从不写该键，实际恒为空串）；② note 必须
+        属于路径里的 conversation（旧 store 层只按 note_id 全库删）。
+        """
+        note = next(
+            (n for n in store.list_conv_notes(conversation_id, limit=1000)
+             if str(n.get("note_id")) == str(note_id)),
+            None,
+        )
+        if note is None:
+            raise HTTPException(404, tr(request, "err.ws.annotation_not_found"))
+        actor_id, actor_name = _agent_from_request(request)
+        author = str(note.get("agent_id") or "")
+        if (not author or author != actor_id) and not _is_supervisor(request):
+            raise HTTPException(403, tr(request, "err.ws.note_forbidden"))
+        if author and author != actor_id:
+            # 主管代删/代改留审计痕（协作纠纷可追责）
+            logger.info(
+                "conv_note 主管代操作: actor=%s(%s) author=%s note=%s conv=%s",
+                actor_id, actor_name, author, note_id, conversation_id,
+            )
+        return note
+
     @app.patch("/api/workspace/conv/{conversation_id}/notes/{note_id}")
     async def api_conv_notes_edit(
         conversation_id: str, note_id: str, request: Request, _=Depends(api_auth),
     ):
-        """V1：编辑注解内容。"""
+        """V1：编辑注解内容（仅作者/主管）。"""
         body_data = await request.json()
         text = str(body_data.get("body", "")).strip()
         if not text:
@@ -185,7 +217,8 @@ def register_collab_mention_routes(app, *, api_auth, config_manager) -> None:
         store = _inbox_store(request)
         if store is None:
             raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
-        agent_id = str(request.session.get("user_name") or "")
+        _note_write_guard(request, store, conversation_id, note_id)
+        agent_id, _ = _agent_from_request(request)
         ok = store.edit_conv_note(note_id, text, agent_id=agent_id)
         if not ok:
             raise HTTPException(404, tr(request, "err.ws.annotation_not_found"))
@@ -195,11 +228,12 @@ def register_collab_mention_routes(app, *, api_auth, config_manager) -> None:
     async def api_conv_notes_delete(
         conversation_id: str, note_id: str, request: Request, _=Depends(api_auth),
     ):
-        """V1：删除注解。"""
+        """V1：删除注解（仅作者/主管）。"""
         store = _inbox_store(request)
         if store is None:
             raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
-        agent_id = str(request.session.get("user_name") or "")
+        _note_write_guard(request, store, conversation_id, note_id)
+        agent_id, _ = _agent_from_request(request)
         ok = store.delete_conv_note(note_id, agent_id=agent_id)
         if not ok:
             raise HTTPException(404, tr(request, "err.ws.annotation_not_found"))

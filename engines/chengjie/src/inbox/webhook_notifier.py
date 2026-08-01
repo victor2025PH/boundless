@@ -95,6 +95,9 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     "realtime_voice": {"types": {"realtime_voice_alert"}, "levels": None},
     # AvatarHub 语音克隆持续掉线（7852 不可达/未载入超阈值 → 克隆音色静默降级 edge）
     "avatar_voice": {"types": {"avatar_voice_alert"}, "levels": None},
+    # LAN GPU 主机整机下线（嵌入/视觉/兜底 LLM/本地 MT 静默转移备点 → 冗余归零无人知，
+    # 2026-08-01 176 两小时静默宕机实锤）
+    "lan_gpu": {"types": {"lan_gpu_alert"}, "levels": None},
     # 人工通过投递链静默断裂（坐席点了「发送」，一条都没真投递 → 客户什么也没收到）
     "human_deliver": {"types": {"human_deliver_alert"}, "levels": None},
     # 待审草稿长期无人处理（补 SLA 的 L1 盲区：L1 既不自动发也无逐条告警 → 无声烂掉）
@@ -633,6 +636,29 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 "但克隆音色/情感语气不可用\n"
                 f"**详情**: {str(data.get('error') or '')[:150]}\n"
                 f"{fix}\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+
+    elif event_type == "lan_gpu_alert":
+        host = str(data.get("host") or data.get("url") or "-")
+        if data.get("recovered"):
+            title = f"✅ LAN GPU 主机已恢复（{host}）"
+            text = (
+                "**状态**: 主机重新可达，嵌入/视觉/兜底 LLM/本地 MT 将自动回主路\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+        else:
+            down_min = int(data.get("down_minutes") or 0)
+            down_txt = (f"{down_min // 60} 小时 {down_min % 60} 分钟"
+                        if down_min >= 60 else f"{down_min} 分钟")
+            prefix = "⏰" if data.get("reminder") else "🖥️"
+            title = f"{prefix} LAN GPU 主机不可达（{host}，已 {down_txt}）"
+            text = (
+                f"**状态**: Ollama /api/version 探测失败（{str(data.get('url') or '')}）\n"
+                "**影响**: 各链路已静默转移备点，业务不中断——但本地算力冗余归零，"
+                "云端再出问题将没有第二道防线\n"
+                f"**详情**: {str(data.get('error') or '')[:150]}\n"
+                "请到现场检查主机电源/系统/Ollama 服务\n"
                 "[📊 查看运营总览](/admin/ops)"
             )
 

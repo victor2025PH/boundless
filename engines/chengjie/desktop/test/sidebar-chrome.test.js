@@ -15,7 +15,6 @@ const tf = (k, v) => {
   const m = {
     "inbox.pill.chain_failed": "{n} failed",
     "inbox.pill.chain_running": "{n} running",
-    "inbox.pill.topics": "{n} topics",
   };
   let s = m[k] || t(k);
   if (v) Object.keys(v).forEach((p) => { s = s.split("{" + p + "}").join(String(v[p])); });
@@ -65,7 +64,8 @@ ok("nba empty", sc.pillMetaFromCpLoaded(
 ok("tab badge draft warn→reply", sc.tabBadgeFromPillMeta({ text: "x", tone: "warn" }, "ws-cp-draft").tab === "reply");
 ok("tab badge relstage danger→customer", sc.tabBadgeFromPillMeta({ text: "x", tone: "danger" }, "cp-relstage").tab === "customer");
 ok("tab badge relstage accent→null", sc.tabBadgeFromPillMeta({ text: "x", tone: "accent" }, "cp-relstage") === null);
-ok("tab badge chain fail→tools", sc.tabBadgeFromPillMeta({ text: "2 fail", tone: "danger" }, "ws-cp-chain").tab === "tools");
+// 2026-08-01：链卡随目标卡迁入「客户&关系」tab（web/app 两端同布局），徽章跟卡走
+ok("tab badge chain fail→customer", sc.tabBadgeFromPillMeta({ text: "2 fail", tone: "danger" }, "ws-cp-chain").tab === "customer");
 
 // ── badgeMetaFromLoaded ──────────────────────────────────────────────────────
 ok("badgeMeta draft high", sc.badgeMetaFromLoaded(

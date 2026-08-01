@@ -862,6 +862,12 @@ async def run_autosend_image(
     scfg = resolve_image_autosend_cfg(config)
     if not scfg.get("enabled", False):
         return False
+    # 人设级发图闸（2026-07-31，默认关；photo_capability SSOT）：人设没开相册/
+    # 发图 → 注册相册、生成、[PHOTO] 指令直通全部不放行（承诺由调用方 promise
+    # 链撤回，文字兜底照常）。放在 0a 之前＝指令直通也过闸。
+    from src.companion.photo_capability import persona_photos_enabled_by_id
+    if not persona_photos_enabled_by_id(persona_id):
+        return False
     ck = conv_key or f"{platform}:{account_id}:{chat_key}"
 
     def _notify_sent(note: str, scene: str, series: str = "") -> None:

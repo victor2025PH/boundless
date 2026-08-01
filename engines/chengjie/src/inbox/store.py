@@ -385,6 +385,12 @@ CREATE INDEX IF NOT EXISTS idx_escalations_ts       ON escalations(ts);
 CREATE INDEX IF NOT EXISTS idx_escalations_assigned ON escalations(assigned_to, ts);
 """
 
+# P3-198 过程式一次性迁移的保留 marker id（与 _MIGRATIONS 列表索引空间隔离：
+# 列表用 0..n 小整数，过程式迁移从 900001 起编号，永不冲突）
+_WA_KEY_MERGE_MIG_ID = 900001
+# 结构性无效 WA 占位会话（chat_key='0'，历史 chats 同步坏 jid 产物）清理
+_WA_ZERO_KEY_MIG_ID = 900002
+
 # 对存量 escalations 表补列（新安装已由 DDL 建好，旧库通过 migration 追加）
 _MIGRATIONS = [
     "ALTER TABLE escalations ADD COLUMN assigned_to TEXT NOT NULL DEFAULT ''",
@@ -624,21 +630,7 @@ _MIGRATIONS = [
          updated_at REAL NOT NULL DEFAULT 0
        )""",
     "CREATE INDEX IF NOT EXISTS idx_routing_rules_priority ON routing_rules(priority DESC, enabled)",
-    # CC1: 剧本话题 + 互动积分（Phase 40/41）
-    """CREATE TABLE IF NOT EXISTS script_topics (
-         topic_id    TEXT PRIMARY KEY,
-         stage       TEXT NOT NULL DEFAULT 'initial',
-         title       TEXT NOT NULL DEFAULT '',
-         opener      TEXT NOT NULL DEFAULT '',
-         hint        TEXT NOT NULL DEFAULT '',
-         tags_json   TEXT NOT NULL DEFAULT '[]',
-         chain_id    TEXT NOT NULL DEFAULT '',
-         enabled     INTEGER NOT NULL DEFAULT 1,
-         sort_order  INTEGER NOT NULL DEFAULT 0,
-         created_at  REAL NOT NULL DEFAULT 0,
-         updated_at  REAL NOT NULL DEFAULT 0
-       )""",
-    "CREATE INDEX IF NOT EXISTS idx_script_topics_stage ON script_topics(stage, enabled, sort_order)",
+    # CC1: 互动积分（Phase 41；Phase 40 剧本话题已下线，存量 script_topics 表留而不用）
     """CREATE TABLE IF NOT EXISTS contact_engagement (
          contact_id       TEXT PRIMARY KEY,
          points           INTEGER NOT NULL DEFAULT 0,
@@ -913,6 +905,157 @@ class InboxStore:
                 logger.error(
                     "[InboxStore] migration #%d 非预期失败（已跳过）: %s",
                     _idx, exc, exc_info=True)
+        # P3-198 一次性数据合并（过程式，无法表达为单条 SQL 故不进 _MIGRATIONS 列表；
+        # 用**保留高位 id** 做 marker，与列表索引空间永不冲突）：WhatsApp 设备后缀
+        # 会话（chat_key='num:0'）并入规范会话（'num'）。
+        if _WA_KEY_MERGE_MIG_ID not in applied:
+            try:
+                _n = self._merge_wa_device_suffix_convs(conn)
+                self._record_migration(_WA_KEY_MERGE_MIG_ID)
+                if _n:
+                    logger.info(
+                        "[InboxStore] WhatsApp 设备后缀会话合并完成：%d 个会话并入规范身份", _n)
+            except Exception:
+                self.migration_errors += 1
+                logger.error("[InboxStore] WA 设备后缀会话合并失败（已跳过）", exc_info=True)
+        # 900002：chat_key='0' 的 WA 会话＝历史 chats 同步坏 jid 的空占位（'0' 不可能是
+        # 合法 MSISDN/群 id）。只删**零消息**的——万一有消息，宁可留着可见也不删数据。
+        if _WA_ZERO_KEY_MIG_ID not in applied:
+            try:
+                cur = conn.execute(
+                    "DELETE FROM conversations WHERE platform='whatsapp' "
+                    "AND chat_key='0' AND conversation_id NOT IN "
+                    "(SELECT DISTINCT conversation_id FROM messages)")
+                self._record_migration(_WA_ZERO_KEY_MIG_ID)
+                if cur.rowcount:
+                    conn.commit()
+                    logger.info(
+                        "[InboxStore] 清理结构性无效 WA 占位会话（chat_key='0'）：%d 行",
+                        cur.rowcount)
+            except Exception:
+                self.migration_errors += 1
+                logger.error("[InboxStore] WA 无效占位清理失败（已跳过）", exc_info=True)
+
+    def _merge_wa_device_suffix_convs(self, conn) -> int:
+        """P3-198：把 'whatsapp:acct:num:dev' 会话整树迁并进 'whatsapp:acct:num'。
+
+        事故背景（2026-07-31 实锤）：历史同步产生的设备后缀 chat_key（'639531765880:0'）
+        与规范身份（'639531765880'）把同一客户裂成两个会话——线程分叉、主动触达按
+        错误 key 发送（边车旧 toJid 把后缀并进号码 → 发到不存在的号码）。入口归一
+        （sidecar + 内桥 handler）修的是**增量**；本迁移收**存量**。
+
+        策略（调用方已持锁；逐会话处理，绝不抛）：
+          - 含 conversation_id 列的表统一迁移：``UPDATE OR IGNORE`` 改写
+            conversation_id（+同表 message_id/draft_id 前缀替换、chat_key 覆写），
+            与目标会话撞唯一键的残留行 DELETE（目标行=真身，幻影行=同一平台消息的
+            重复镜像，丢弃即去重）；
+          - messages_fts 是独立 FTS5 表且触发器只挂 text 更新 → 显式同步改写；
+          - conversations：目标已存在 → 按 last_ts 新者刷新预览后删幻影行；
+            不存在 → 原行改名为规范身份。
+        返回合并的会话数。
+        """
+        import re as _re
+        try:
+            rows = conn.execute(
+                "SELECT conversation_id, account_id, chat_key FROM conversations "
+                "WHERE platform = 'whatsapp' AND chat_key GLOB '*:*'"
+            ).fetchall()
+        except Exception:
+            return 0
+        merged = 0
+        for r in rows:
+            old_cid = str(r["conversation_id"])
+            acct = str(r["account_id"] or "")
+            key = str(r["chat_key"] or "")
+            m = _re.fullmatch(r"(\d+):\d+", key)
+            if not m:
+                continue  # 非设备后缀形态（如 LINE 风格键误入）不动
+            bare = m.group(1)
+            new_cid = f"whatsapp:{acct}:{bare}"
+            # 1) messages：改写 conversation_id + message_id 前缀；撞键残留=重复镜像，删
+            #    （DELETE 触发 messages_fts_ad 按旧 message_id 清掉对应 FTS 行）
+            conn.execute(
+                "UPDATE OR IGNORE messages SET conversation_id = ?, "
+                "message_id = replace(message_id, ?, ?) WHERE conversation_id = ?",
+                (new_cid, old_cid, new_cid, old_cid))
+            conn.execute(
+                "DELETE FROM messages WHERE conversation_id = ?", (old_cid,))
+            # 2) FTS 显式同步（触发器只挂 UPDATE OF text，迁移改 id 不触发）
+            try:
+                conn.execute(
+                    "UPDATE messages_fts SET conversation_id = ?, "
+                    "message_id = replace(message_id, ?, ?) WHERE conversation_id = ?",
+                    (new_cid, old_cid, new_cid, old_cid))
+            except Exception:
+                logger.debug("[InboxStore] WA 合并 FTS 同步跳过", exc_info=True)
+            # 3) 其余含 conversation_id 列的表（结构发现式，防新表漏迁）
+            try:
+                tables = [
+                    str(t[0]) for t in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                    if not str(t[0]).startswith(("messages_fts", "sqlite_", "schema_migrations"))
+                    and str(t[0]) not in ("messages", "conversations")
+                ]
+            except Exception:
+                tables = []
+            for t in tables:
+                try:
+                    cols = {str(c[1]) for c in conn.execute(f"PRAGMA table_info({t})")}
+                except Exception:
+                    continue
+                if "conversation_id" not in cols:
+                    continue
+                sets = ["conversation_id = ?"]
+                params: list = [new_cid]
+                if "message_id" in cols:
+                    sets.append("message_id = replace(message_id, ?, ?)")
+                    params += [old_cid, new_cid]
+                if "draft_id" in cols:
+                    sets.append("draft_id = replace(draft_id, ?, ?)")
+                    params += [old_cid, new_cid]
+                if "chat_key" in cols:
+                    sets.append("chat_key = ?")
+                    params.append(bare)
+                params.append(old_cid)
+                try:
+                    conn.execute(
+                        f"UPDATE OR IGNORE {t} SET {', '.join(sets)} "
+                        "WHERE conversation_id = ?", params)
+                    conn.execute(
+                        f"DELETE FROM {t} WHERE conversation_id = ?", (old_cid,))
+                except Exception:
+                    logger.debug("[InboxStore] WA 合并表 %s 跳过", t, exc_info=True)
+            # 4) conversations 本体：目标存在则保真身、按新者刷新预览；否则原行转正
+            try:
+                tgt = conn.execute(
+                    "SELECT conversation_id, last_ts FROM conversations "
+                    "WHERE conversation_id = ?", (new_cid,)).fetchone()
+                if tgt is None:
+                    conn.execute(
+                        "UPDATE conversations SET conversation_id = ?, chat_key = ? "
+                        "WHERE conversation_id = ?", (new_cid, bare, old_cid))
+                else:
+                    src_row = conn.execute(
+                        "SELECT last_text, last_ts FROM conversations "
+                        "WHERE conversation_id = ?", (old_cid,)).fetchone()
+                    if src_row and float(src_row["last_ts"] or 0) > float(tgt["last_ts"] or 0):
+                        conn.execute(
+                            "UPDATE conversations SET last_text = ?, last_ts = ? "
+                            "WHERE conversation_id = ?",
+                            (src_row["last_text"], src_row["last_ts"], new_cid))
+                    conn.execute(
+                        "DELETE FROM conversations WHERE conversation_id = ?", (old_cid,))
+                merged += 1
+            except Exception:
+                logger.debug("[InboxStore] WA 合并 conversations 行失败 %s", old_cid,
+                             exc_info=True)
+        if merged:
+            try:
+                conn.commit()
+            except Exception:
+                pass
+        return merged
 
     def _rebuild_fts5_if_empty(self) -> bool:
         """U1：检查 FTS5 表是否可用且已填充；若空则从存量 messages 批量导入。
@@ -5725,6 +5868,23 @@ class InboxStore:
             ).fetchone()
         return float(row["ts"]) if row else 0.0
 
+    def count_outreach_since(self, conversation_id: str, since_ts: float) -> int:
+        """该会话自 ``since_ts`` 起的触达条数（P3 每联系人主动预算的读侧；
+        走 idx_outreach_conv 索引，轻量）。异常返回 0（预算 fail-open）。"""
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return 0
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) AS n FROM outreach_log "
+                    "WHERE conversation_id=? AND ts >= ?",
+                    (cid, float(since_ts)),
+                ).fetchone()
+            return int(row["n"] or 0) if row else 0
+        except Exception:
+            return 0
+
     def last_outreach_ts_bulk(self, conversation_ids: List[str]) -> Dict[str, float]:
         """批量取多会话最近触达 ts（避免 N+1 查询）。"""
         ids = [str(c or "").strip() for c in (conversation_ids or []) if str(c or "").strip()]
@@ -7619,71 +7779,6 @@ class InboxStore:
         with self._lock:
             cur = self._conn.execute(
                 "DELETE FROM routing_rules WHERE rule_id = ?", (rule_id,)
-            )
-            self._conn.commit()
-        return cur.rowcount > 0
-
-    # ── CC1: 剧本话题 CRUD（Phase 40） ────────────────────────────────────
-
-    def list_script_topics(self, stage: str = "") -> List[Dict[str, Any]]:
-        with self._lock:
-            if stage:
-                rows = self._conn.execute(
-                    """SELECT * FROM script_topics WHERE stage = ? AND enabled = 1
-                       ORDER BY sort_order ASC, created_at ASC""",
-                    (stage,),
-                ).fetchall()
-            else:
-                rows = self._conn.execute(
-                    "SELECT * FROM script_topics ORDER BY stage, sort_order ASC"
-                ).fetchall()
-        result = []
-        for r in rows:
-            d = dict(r)
-            try:
-                d["tags"] = json.loads(d.pop("tags_json", "[]") or "[]")
-            except Exception:
-                d["tags"] = []
-            result.append(d)
-        return result
-
-    def upsert_script_topic(self, data: Dict[str, Any]) -> str:
-        import uuid as _uuid
-        topic_id = str(data.get("topic_id") or _uuid.uuid4())
-        now = time.time()
-        tags = data.get("tags") or []
-        with self._lock:
-            self._conn.execute(
-                """INSERT INTO script_topics
-                   (topic_id, stage, title, opener, hint, tags_json, chain_id,
-                    enabled, sort_order, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)
-                   ON CONFLICT(topic_id) DO UPDATE SET
-                     stage=excluded.stage, title=excluded.title, opener=excluded.opener,
-                     hint=excluded.hint, tags_json=excluded.tags_json, chain_id=excluded.chain_id,
-                     enabled=excluded.enabled, sort_order=excluded.sort_order,
-                     updated_at=excluded.updated_at""",
-                (
-                    topic_id,
-                    str(data.get("stage") or "initial"),
-                    str(data.get("title") or ""),
-                    str(data.get("opener") or ""),
-                    str(data.get("hint") or ""),
-                    json.dumps(tags, ensure_ascii=False),
-                    str(data.get("chain_id") or ""),
-                    1 if data.get("enabled", True) else 0,
-                    int(data.get("sort_order") or 0),
-                    float(data.get("created_at") or now),
-                    now,
-                ),
-            )
-            self._conn.commit()
-        return topic_id
-
-    def delete_script_topic(self, topic_id: str) -> bool:
-        with self._lock:
-            cur = self._conn.execute(
-                "DELETE FROM script_topics WHERE topic_id = ?", (topic_id,)
             )
             self._conn.commit()
         return cur.rowcount > 0

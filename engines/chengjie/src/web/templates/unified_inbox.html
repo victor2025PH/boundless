@@ -22,7 +22,7 @@
     var l=document.getElementById('cp-theme-css');
     if(l){ var want='/copilot/theme-'+eff+'.css?v=20260728a'; if(l.getAttribute('href')!==want) l.setAttribute('href',want); }
     // 注意：按钮内含 .nav-tip 子节点，不能用 btn.textContent（会清掉悬浮提示）。
-    // 图标固定 🎨（调色板＝改配色，语义明确），仅更新标题与提示里的当前模式。
+    // 图标固定为日/月轮换 SVG（亮暗切换语义），仅更新标题与提示里的当前模式。
     var p=pref();
     var lbl=(p==='auto'?window.T('inbox.theme.auto'):(p==='dark'?window.T('inbox.theme.dark'):window.T('inbox.theme.light')));
     var btn=document.getElementById('cp-theme-btn');
@@ -44,7 +44,7 @@
 <script>
 /* 左栏图标悬浮卡片：改用 fixed 定位并按图标实时坐标计算摆放，脱离 .inbox-root(overflow:hidden) 的裁剪，
    使卡片永远浮在顶层、贴着图标右侧居中，而不会被挤到聊天面板底部。事件委托挂在 #nav-rail 上，
-   同时覆盖底部 4 个工具图标(.nav-icon-btn)与动态渲染的平台图标(.nav-plat)。 */
+   同时覆盖底部工具图标(.nav-icon-btn)与动态渲染的平台图标(.nav-plat)。 */
 (function(){
   function place(host){
     var tip=host.querySelector('.nav-tip'); if(!tip) return;
@@ -65,19 +65,18 @@
 <!-- Copilot 组件 i18n：宿主语言(WS_LANG)在组件加载前注入 CP_LANG，cp-i18n.js 据此解析 zh/en。
      语言切换走整页刷新(wsToggleLang→/set_lang)，组件随新 LANG 重渲，无需热切换。 -->
 <script>window.CP_LANG = (window.WS_LANG === 'zh') ? 'zh' : 'en';</script>
-<script src="/copilot/i18n/cp-i18n.js?v=20260731f"></script>
-<script src="/copilot/client/copilot-client.js?v=20260731e"></script>
-<script src="/copilot/sidebar-chrome.js?v=20260723"></script>
+<script src="/copilot/i18n/cp-i18n.js?v=20260801g"></script>
+<script src="/copilot/client/copilot-client.js?v=20260801g"></script>
+<script src="/copilot/sidebar-chrome.js?v=20260801h"></script>
 <script src="/copilot/components/cp-panel-base.js?v=20260702"></script>
 <script src="/copilot/components/cp-rel-stage.js?v=20260723"></script>
 <script src="/copilot/components/cp-next-actions.js?v=20260611"></script>
-<script src="/copilot/components/cp-script.js?v=20260611"></script>
-<script src="/copilot/components/cp-persona.js?v=20260731e"></script>
-<script src="/copilot/components/cp-collab.js?v=20260731a"></script>
-<script src="/copilot/components/cp-chain-exec.js?v=20260611"></script>
-<script src="/copilot/components/cp-draft.js?v=20260704"></script>
+<script src="/copilot/components/cp-persona.js?v=20260801i"></script>
+<script src="/copilot/components/cp-collab.js?v=20260801b"></script>
+<script src="/copilot/components/cp-chain-exec.js?v=20260801f"></script>
+<script src="/copilot/components/cp-draft.js?v=20260801d"></script>
 <script src="/copilot/components/cp-voice.js?v=20260611b"></script>
-<script src="/copilot/components/cp-goal.js?v=20260731b"></script>
+<script src="/copilot/components/cp-goal.js?v=20260801f"></script>
 {% endblock %}
 {% block content %}
 <style>
@@ -201,7 +200,7 @@
   border:1px solid var(--border);border-radius:6px;background:var(--bg-soft);
   color:var(--text-tiny);font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all;}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260731b">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260801i">
 <script src="/static/workspace/inbox-messages.js?v=20260720b"></script>
 
 <!-- 主布局 -->
@@ -217,19 +216,17 @@
     <div class="nav-sep"></div>
 
     <div class="nav-bottom">
-      <div class="nav-icon-btn" onclick="toggleKbMode()" id="kb-nav-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
-        <div class="nav-tip"><div class="nav-tip-title"><span data-i18n="inbox.nav.kb">知识库</span></div>
-          <div class="nav-tip-desc" data-i18n="inbox.nav.kb_desc">搜索话术 / 知识片段，一键引用到回复（快捷键 Ctrl+K）</div></div>
-      </div>
-      <div class="nav-icon-btn" onclick="toggleDraftQueue()" id="draft-nav-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6"/><polyline points="14 3 14 8 19 8"/><path d="M18.4 13.4a1.7 1.7 0 0 1 2.4 2.4L17 19.6l-3.2.8.8-3.2z"/></svg>
-        <div class="nav-tip"><div class="nav-tip-title"><span data-i18n="inbox.nav.draft">草稿队列</span></div>
-          <div class="nav-tip-desc" data-i18n="inbox.nav.draft_desc">查看待你审核的 AI 自动回复草稿</div></div>
-      </div>
-      <div class="nav-icon-btn" onclick="openDrawer()" id="acct-nav-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <div class="nav-icon-btn" onclick="openDrawer()" id="acct-nav-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
         <div class="nav-tip"><div class="nav-tip-title"><span data-i18n="inbox.nav.acct">账号管理</span></div>
           <div class="nav-tip-desc" data-i18n="inbox.nav.acct_desc">查看各平台连接状态 · 扫码新增账号 · 断线重连</div></div>
       </div>
-      <div class="nav-icon-btn" onclick="cpCycleTheme()" id="cp-theme-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10a2 2 0 0 0 2-2 1.9 1.9 0 0 0-.5-1.3 1.9 1.9 0 0 1-.5-1.2 2 2 0 0 1 2-2h1.6A4.4 4.4 0 0 0 21 11c0-4.97-4.03-9-9-9z"/><circle cx="7.5" cy="11.5" r="1.2" fill="#38bdf8" stroke="none"/><circle cx="12" cy="8" r="1.2" fill="#fbbf24" stroke="none"/><circle cx="16" cy="11" r="1.2" fill="#f472b6" stroke="none"/></svg>
+      {% if is_supervisor %}
+      <a class="nav-icon-btn" id="admin-nav-btn" href="/" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
+        <div class="nav-tip"><div class="nav-tip-title"><span data-i18n="inbox.nav.admin">后台管理</span></div>
+          <div class="nav-tip-desc" data-i18n="inbox.nav.admin_desc">打开管理后台（新标签页）：数据看板 / 人设 / 知识库 / 系统配置</div></div>
+      </a>
+      {% endif %}
+      <div class="nav-icon-btn" onclick="cpCycleTheme()" id="cp-theme-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8a2.83 2.83 0 0 0 4 4 4 4 0 1 1-4-4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.9 4.9 1.4 1.4"/><path d="m17.7 17.7 1.4 1.4"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.3 17.7-1.4 1.4"/><path d="m19.1 4.9-1.4 1.4"/></svg>
         <div class="nav-tip"><div class="nav-tip-title"><span data-i18n="inbox.nav.theme">主题配色</span></div>
           <div class="nav-tip-desc" id="cp-theme-desc" data-i18n="inbox.nav.theme_desc">跟随系统 / 亮色 / 暗色 三态切换（自动持久化，同步右侧业务助手）</div></div>
       </div>
@@ -540,6 +537,8 @@
             </div>
             <!-- 身份可视化：回复区身份条（以哪个人设 · 哪个号回复；未绑人设=黄色警示） -->
             <div id="identity-bar" class="identity-bar" style="display:none"></div>
+            <!-- P0 真相化：账号已退出/已移除横幅（_applyReadOnly 填充；已退出带重登 CTA） -->
+            <div id="acct-out-banner" class="acct-out-banner" style="display:none"></div>
             <div class="reply-bar">
               <textarea class="reply-textarea" id="reply-ta" placeholder="输入消息… 或输入 / 选择快捷指令" data-i18n-placeholder="inbox.reply.ph" rows="2"
                 onkeydown="onTextareaKey(event)" oninput="_onReplyInput(this.value)"></textarea>
@@ -555,7 +554,7 @@
             <div class="reply-tools" id="reply-tools">
               <!-- 写作组 -->
               <div class="rt-group">
-                <button class="tiny-btn rt-primary" id="ai-reply-btn" onclick="genAiReply()" title="AI 生成人设化草稿并填入输入框（右栏「回复工坊」可深度编辑 / 改语言）" data-i18n-title="inbox.rt.ai_reply_t"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 3l1.7 4.6L17 9l-4.3 1.4L11 15l-1.7-4.6L5 9l4.3-1.4L11 3z"/><path d="M18 13l.8 2.2L21 16l-2.2.8L18 19l-.8-2.2L15 16l2.2-.8L18 13z"/></svg><span data-i18n="inbox.rt.ai_reply">AI回复</span></button>
+                <button class="tiny-btn rt-primary" id="ai-reply-btn" onclick="genAiReply()" title="AI 生成人设化草稿并拆成聊天短句，勾选后逐条发送（右栏「回复工坊」可深度编辑 / 改语言）" data-i18n-title="inbox.rt.ai_reply_t"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 3l1.7 4.6L17 9l-4.3 1.4L11 15l-1.7-4.6L5 9l4.3-1.4L11 3z"/><path d="M18 13l.8 2.2L21 16l-2.2.8L18 19l-.8-2.2L15 16l2.2-.8L18 13z"/></svg><span data-i18n="inbox.rt.ai_reply">AI回复</span></button>
                 <div class="rt-pop-wrap">
                   <button class="tiny-btn" id="voice-cfg-btn" onclick="toggleVoiceCfg()" title="发送语音 / 音色选择 / 克隆 / 录入 / 对账" data-i18n-title="inbox.rt.voice_t"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg><span data-i18n="inbox.rt.voice">语音 ▾</span></button>
                   <div class="rt-pop" id="voice-cfg-pop">
@@ -579,7 +578,7 @@
                     </div>
                   </div>
                 </div>
-                <button class="tiny-btn" onclick="_openSlash()" title="调用模板 / 知识库（也可在输入框直接输入 /）" data-i18n-title="inbox.rt.slash_t"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 8 9 12 5 16"/><line x1="12" y1="16" x2="19" y2="16"/></svg><span data-i18n="inbox.rt.slash">指令</span></button>
+                <!-- 「指令」按钮已按运营要求移除（2026-08-01）；slash 面板仍可用：输入框敲 / 或 Ctrl+K（_openSlash 仍被左栏/快捷键引用） -->
                 <!-- KB 智能推荐常驻入口：有推荐才显示，角标=条数，高置信高亮（浮层展开零布局位移）-->
                 <button class="tiny-btn kb-chip" id="kb-chip" style="display:none;" onclick="toggleKbSuggest()" title="相关知识推荐（点击展开 / 再点收起）" data-i18n-title="inbox.kb.chip_t"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg><span data-i18n="inbox.kb.chip">知识</span><span class="kb-chip-n" id="kb-chip-n"></span></button>
                 <button class="tiny-btn" id="send-media-btn" title="发送图片/语音/文件（协议多开账号）" data-i18n-title="inbox.rt.media_t"
@@ -772,14 +771,6 @@
                 </button>
                 <div class="cp-card-bd"><cp-persona id="ws-cp-persona"></cp-persona></div>
               </section>
-              <section class="cp-card collapsed" data-cp-card="script">
-                <button type="button" class="cp-card-hd" data-cp-toggle="script">
-                  <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="film"></span><span data-i18n="inbox.cp.h.script">剧本话题</span></span>
-                  <span class="cp-card-pill" id="cpp-script"></span>
-                  <span class="cp-card-chev" aria-hidden="true"></span>
-                </button>
-                <div class="cp-card-bd"><cp-script id="ws-cp-script"></cp-script></div>
-              </section>
             </div>
             <div class="ws-cp-sec" data-tab="customer">
               <section class="cp-card" data-cp-card="custinfo">
@@ -813,6 +804,16 @@
                 </button>
                 <div class="cp-card-bd"><cp-goal id="ws-cp-goal"></cp-goal></div>
               </section>
+              <!-- 2026-08-01 移自工具箱 tab：跟进 SOP（工作链）紧贴工作目标——「目标定方向（策略层）
+                   → SOP 保执行（步骤层）」同屏成一条推进动线；空态自带启动/管理入口（cp-chain-exec 内）。 -->
+              <section class="cp-card collapsed" data-cp-card="chain">
+                <button type="button" class="cp-card-hd" data-cp-toggle="chain">
+                  <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="link"></span><span data-i18n="inbox.cp.h.chain">跟进 SOP（工作链）</span></span>
+                  <span class="cp-card-pill" id="cpp-chain"></span>
+                  <span class="cp-card-chev" aria-hidden="true"></span>
+                </button>
+                <div class="cp-card-bd"><cp-chain-exec id="ws-cp-chain"></cp-chain-exec></div>
+              </section>
               <!-- 三层重组第 3 层「团队协作」：协作上下文 + 内部注解合一卡（同为「同事间怎么接力」语义） -->
               <section class="cp-card collapsed" data-cp-card="collab">
                 <button type="button" class="cp-card-hd" data-cp-toggle="collab">
@@ -830,9 +831,12 @@
                         <div class="mention-suggest-panel" id="mention-suggest-panel"></div>
                         <div class="mention-suggest-hint" id="mention-suggest-hint" style="display:none;"></div>
                         <textarea class="note-input" id="note-input" placeholder="添加内部注解…输入 @ 提及同事" data-i18n-placeholder="inbox.cp.note_ph" rows="2"
-                          onkeydown="_noteKey(event)" oninput="_onNoteInput()" onblur="setTimeout(function(){_hideMentionSuggest();},200)"></textarea>
+                          onkeydown="_noteKey(event)" oninput="_onNoteInput();_noteAutoGrow(this)" onblur="setTimeout(function(){_hideMentionSuggest();},200)"></textarea>
                       </div>
-                      <div style="display:flex;justify-content:flex-end;margin-top:4px;">
+                      <div class="note-toolbar">
+                        <button type="button" class="note-tool-btn" onclick="_noteInsertAt()" title="提及同事（@）" data-i18n-title="inbox.notes.at_btn_t">@</button>
+                        <button type="button" class="note-tool-btn" onclick="_noteTpl('handover')" title="插入交接模板" data-i18n-title="inbox.notes.tpl_btn_t">📋</button>
+                        <span class="note-key-hint" data-i18n="inbox.notes.ctrl_enter">Ctrl+Enter 发送</span>
                         <button class="note-send-btn" onclick="_submitNote()" data-i18n="inbox.cp.note_add">添加注解</button>
                       </div>
                     </div>
@@ -868,15 +872,10 @@
                   </div>
                 </div>
               </section>
-              <section class="cp-card collapsed" data-cp-card="chain">
-                <button type="button" class="cp-card-hd" data-cp-toggle="chain">
-                  <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="link"></span><span data-i18n="inbox.cp.h.chain">工作链执行</span></span>
-                  <span class="cp-card-pill" id="cpp-chain"></span>
-                  <span class="cp-card-chev" aria-hidden="true"></span>
-                </button>
-                <div class="cp-card-bd"><cp-chain-exec id="ws-cp-chain"></cp-chain-exec></div>
-              </section>
-              <section class="cp-card collapsed" data-cp-card="analysis">
+              <!-- 2026-08-01 运营决策：「AI 对话分析」卡下线隐藏（意图/风险/摘要与回复工坊、消息流重复，
+                   且每次展开烧一次 LLM）。恢复＝去掉下方 hidden 属性即可（_loadAiAnalysis 的守卫按 hidden 联动）。
+                   刻意保留 DOM（cpp-analysis / ai-analysis-rows）：孤儿引用门禁与缓存/徽章接线依赖这些 id。 -->
+              <section class="cp-card collapsed" data-cp-card="analysis" hidden>
                 <button type="button" class="cp-card-hd" data-cp-toggle="analysis">
                   <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="brain"></span><span data-i18n="inbox.cp.h.ai_analysis">AI 对话分析</span></span>
                   <span class="cp-card-pill" id="cpp-analysis"></span>
@@ -889,8 +888,6 @@
           <!-- 兼容旧版内联处理器（隐藏，由共享组件接管展示） -->
           <div hidden aria-hidden="true">
             <div id="rel-stage-box"></div>
-            <div id="script-stage-badge"></div>
-            <div id="script-topics-box"></div>
             <div id="nba-box"></div>
             <div id="collab-box"></div>
             <div id="chain-exec-box"></div>
@@ -907,9 +904,7 @@
 <nav class="mob-plat-bar" id="mob-plat-bar" aria-label="platforms" data-i18n-title="inbox.mob.bar" title="平台与常用工具">
   <div class="mob-plat-scroll" id="mob-plat-icons" role="tablist"></div>
   <div class="mob-plat-acts">
-    <button type="button" class="mob-plat-act" onclick="toggleKbMode()" title="知识库" data-i18n-title="inbox.nav.kb" aria-label="kb"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></button>
-    <button type="button" class="mob-plat-act" onclick="toggleDraftQueue()" title="草稿队列" data-i18n-title="inbox.nav.draft" aria-label="drafts"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6"/><polyline points="14 3 14 8 19 8"/><path d="M18.4 13.4a1.7 1.7 0 0 1 2.4 2.4L17 19.6l-3.2.8.8-3.2z"/></svg></button>
-    <button type="button" class="mob-plat-act" onclick="openDrawer()" title="账号管理" data-i18n-title="inbox.nav.acct" aria-label="accounts"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+    <button type="button" class="mob-plat-act" onclick="openDrawer()" title="账号管理" data-i18n-title="inbox.nav.acct" aria-label="accounts"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></button>
   </div>
 </nav>
 
@@ -1122,6 +1117,65 @@
       </div>
     </div>
   </div>
+</div>
+
+<!-- AI 草稿「思考面板」（三态 data-st=loading/ready/error）：点「AI回复」**立即**弹出
+     生成中态（骨架条+相位文案+计秒，可取消/可收起后台等）；生成完原地切就绪态——草稿按
+     人聊天习惯拆成短句（每句一条消息），坐席勾选/点句改字后逐条发送（条间带打字节奏），
+     不整段轰炸；失败原地重试。纯前端拆句+逐条调 /send，不依赖服务端 bubbles 配置总闸。 -->
+<div class="dpick-modal" id="dpick-modal" role="dialog" aria-modal="true" aria-labelledby="dpick-title" onclick="_dpickMaskClick(event)">
+  <div class="dpick-box">
+    <div class="dpick-prog" aria-hidden="true"><i></i></div>
+    <div class="dpick-head">
+      <div class="dpick-head-row">
+        <span class="dpick-ava" id="dpick-ava" aria-hidden="true">✦</span>
+        <div class="dpick-head-main">
+          <div class="dpick-title" id="dpick-title" data-i18n="inbox.dpick.title">AI 草稿 · 逐条发送</div>
+          <div class="dpick-sub" id="dpick-sub" data-i18n="inbox.dpick.sub">已拆成聊天短句：勾选要发的，点句子可直接改字；按顺序逐条发出，更像真人</div>
+        </div>
+      </div>
+      <button type="button" class="dpick-close" onclick="closeDraftPick()" aria-label="Close">✕</button>
+    </div>
+    <div class="dpick-quote" id="dpick-quote"></div>
+    <div class="dpick-loading" aria-live="polite">
+      <div class="dpick-think">
+        <span class="ai-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="dpick-phase" id="dpick-phase"></span>
+        <span class="dpick-elapsed" id="dpick-elapsed"></span>
+      </div>
+      <div class="dpick-skel" aria-hidden="true"><i style="width:78%"></i><i style="width:62%"></i><i style="width:70%"></i></div>
+      <div class="dpick-hintline" id="dpick-hintline" data-i18n="inbox.dpick.hint_eta">通常需要 3~8 秒</div>
+      <div class="dpick-backup" id="dpick-backup" style="display:none">
+        <div class="dpick-backup-hd" data-i18n="inbox.dpick.backup_lead">已有一份现成 AI 备稿（同产线，稍早生成）：</div>
+        <div class="dpick-backup-txt" id="dpick-backup-txt"></div>
+        <button type="button" class="tiny-btn dpick-backup-use" onclick="draftPickUseBackup()" data-i18n="inbox.dpick.backup_use">不等了，直接用备稿</button>
+      </div>
+    </div>
+    <div class="dpick-error">
+      <svg class="dpick-error-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <div class="dpick-error-msg" id="dpick-error-msg"></div>
+      <div class="dpick-error-sub" data-i18n="inbox.dpick.err_sub">可以重试一次，或直接手动输入回复</div>
+    </div>
+    <div class="dpick-list" id="dpick-list"></div>
+    <div class="dpick-actions">
+      <button type="button" class="tiny-btn dpick-act-ready" onclick="draftPickRegen()" data-i18n="inbox.dpick.regen">↻ 换一稿</button>
+      <button type="button" class="tiny-btn dpick-act-ready" onclick="draftPickToStudio()" title="把勾选的短句填入输入框，并打开右栏「回复工坊」做改语言/改语气等深度编辑" data-i18n="inbox.dpick.studio" data-i18n-title="inbox.dpick.studio_t">去工坊深编</button>
+      <span style="flex:1"></span>
+      <button type="button" class="tiny-btn dpick-act-loading" onclick="draftPickMinimize()" title="收起弹窗，后台继续生成；就绪后右下角提醒，不打断你看聊天记录" data-i18n="inbox.dpick.minimize" data-i18n-title="inbox.dpick.minimize_t">收起后台等</button>
+      <button type="button" class="tiny-btn dpick-act-loading" onclick="draftPickCancel()" data-i18n="inbox.dpick.cancel">取消生成</button>
+      <button type="button" class="tiny-btn dpick-act-error" onclick="draftPickManual()" data-i18n="inbox.dpick.manual">手动输入</button>
+      <button type="button" class="tiny-btn rt-primary dpick-act-error" onclick="draftPickRetry()" data-i18n="inbox.dpick.retry">重试</button>
+      <button type="button" class="tiny-btn dpick-act-ready" onclick="draftPickFill()" title="不直接发送：把勾选的短句按行填入输入框自己编辑" data-i18n="inbox.dpick.fill" data-i18n-title="inbox.dpick.fill_t">填入输入框</button>
+      <button type="button" class="tiny-btn rt-primary dpick-act-ready" id="dpick-send-btn" onclick="draftPickSend()" data-i18n="inbox.dpick.send">逐条发送</button>
+    </div>
+  </div>
+</div>
+<!-- 「收起后台等」胶囊：生成中最小化到右下角；就绪变绿提醒（点击回弹面板，不抢焦点） -->
+<div class="dpick-pill" id="dpick-pill" role="button" tabindex="0" onclick="draftPickPillClick()" onkeydown="draftPickPillKey(event)">
+  <span class="ai-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+  <span class="dpick-pill-ok" aria-hidden="true">✓</span>
+  <span id="dpick-pill-txt"></span>
+  <span class="dpick-pill-x" onclick="draftPickPillCancel(event)" title="取消生成" data-i18n-title="inbox.dpick.cancel">✕</span>
 </div>
 
 <script>
@@ -1380,6 +1434,8 @@ function _accountsForPlatform(p){
     map[id]=map[id]||{account_id:id,running:!!a.running,unread:0,count:0,paired:true,attn:0};
     map[id].running=map[id].running||!!a.running;
     map[id].paired=true;
+    // 已登出号服务端不应进 platform_status；若残留则标上供 chip 层再滤
+    if(a.account_status) map[id].acct_status=String(a.account_status);
     // platform_status.unread/attn 与 unread/attnByAccount 同源（P6/P8 enrich）；有则先铺底
     if(useSrv && a.unread!=null) map[id].unread=Number(a.unread)||0;
     if(useSrvAttn && a.attn!=null) map[id].attn=Number(a.attn)||0;
@@ -1435,7 +1491,7 @@ function buildAccountChips(){
   // 与抽屉溢出菜单的重绘防抖护栏同一模式
   if(document.getElementById('ac-pick-pop')) return;
   if(platFilter==='all'){ bar.style.display='none'; bar.innerHTML=''; return; }
-  let accts=_accountsForPlatform(platFilter);
+  let accts=_accountsForPlatform(platFilter).filter(a=>a.acct_status!=='offline');
   if(accts.length<2){ bar.style.display='none'; bar.innerHTML=''; return; }
   const hasOffline=accts.some(a=>a.paired&&!a.running);
   // P2：未读多的人格排前面（需关注的浮左），同未读按号稳定排序；
@@ -1470,15 +1526,17 @@ function buildAccountChips(){
       : esc(ini);
     const avBg=meta.self_avatar?'var(--bg-soft)':_avatarGrad(platFilter+':'+a.account_id);
     const ghost=!a.paired;
+    const loggedOut=(a.acct_status==='offline');   // P0 真相化：已退出账号（注册表 offline）
     // 身份可视化：有人设的 chip 提示带人设名；运行中却未绑人设 → 黄色警示点
     const noPersona=!ghost&&a.running&&!meta.persona_id;
     let tip=ghost?`${a.account_id} · ${window.T('inbox.acct.ghost_t')}`:String(a.account_id);
+    if(loggedOut) tip+=` · ${window.T('inbox.acct.out_tag_t')}`;
     if(!ghost&&meta.persona_id) tip+=` · ${window.Tf('inbox.ident.persona_t',{persona:meta.persona_name||meta.persona_id})}`;
-    html+=`<div class="acct-chip ${accountFilter===a.account_id?'active':''}${ghost?' ac-ghost':''}" role="button" tabindex="0" onclick="setAccountFilter('${esc(a.account_id)}')" onkeydown="_acChipKey(event)" title="${esc(tip)}">
+    html+=`<div class="acct-chip ${accountFilter===a.account_id?'active':''}${ghost?' ac-ghost':''}${loggedOut?' ac-loggedout':''}" role="button" tabindex="0" onclick="setAccountFilter('${esc(a.account_id)}')" onkeydown="_acChipKey(event)" title="${esc(tip)}">
       <span class="ac-av ${a.running?'on':'off'}" style="background:${avBg};">${avInner}<span class="ac-st ${a.running?'on':'off'}" aria-hidden="true"></span></span>
       <span class="ac-name">${esc(nm)}</span>
       ${noPersona?`<span class="conv-nopersona-dot" title="${esc(window.T('inbox.ident.no_persona_t'))}"></span>`:''}
-      ${ghost?`<span class="ac-ghost-tag">${window.T('inbox.acct.ghost_tag')}</span>`:''}
+      ${loggedOut?`<span class="ac-ghost-tag ac-out-tag">${window.T('inbox.acct.out_tag')}</span>`:(ghost?`<span class="ac-ghost-tag">${window.T('inbox.acct.ghost_tag')}</span>`:'')}
       ${_acUnreadBadge(a.unread,a.attn)}</div>`;
   });
   // 「仅历史」账号折叠开关（有历史账号且未开「仅在线」时展示）——留在滚动区（就地展开语义）
@@ -2037,7 +2095,7 @@ function _filterCountBase(){
   return (allChats||[]).filter(c=>{
     if(platFilter!=='all' && c.platform!==platFilter) return false;
     if(accountFilter!=='all' && (c.account_id||'default')!==accountFilter) return false;
-    if(c.read_only||c.can_send===false||c.archived) return false;
+    if(_isRemovedRow(c)||_isLoggedOutRow(c)||c.archived) return false;
     if(isGroupConv(c)) return false;
     return true;
   });
@@ -2216,7 +2274,7 @@ function _applyInitialFilter(){
     return;
   }
   const base=(allChats||[]).filter(c=>{
-    if(c.read_only||c.can_send===false||c.archived) return false;
+    if(_isRemovedRow(c)||c.archived) return false;
     if(isGroupConv(c)) return false;
     return true;
   });
@@ -2630,14 +2688,25 @@ document.addEventListener('keydown',function(e){
 });
 (function(){ if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',function(){_a11yUpgrade();}); else _a11yUpgrade(); })();
 
+/* 账号态分流（2026-08-01）：
+   removed（软删）= 只读历史 → 藏进「已移除」tab；
+   offline（已登出）= **聊天页不展示**（服务端已过滤；此处再挡一层）。历史留本机，
+   同号在账号管理重登后自动回显。重登入口在连接中心/账号抽屉，不在会话列表。 */
+function _isRemovedRow(c){
+  return !!(c.read_only||c.can_send===false) && c.account_status!=='offline';
+}
+function _isLoggedOutRow(c){
+  return !!(c && c.account_status==='offline');
+}
 function applyFilters(){
   // 公共过滤（平台/账号/归档/未读/标签/搜索）——群与私聊同享
   const base = allChats.filter(c=>{
+    if(_isLoggedOutRow(c)) return false;  // 已登出：聊天页永不显示
     if(platFilter!=='all' && c.platform!==platFilter) return false;
     if(accountFilter!=='all' && (c.account_id||'default')!==accountFilter) return false; // P0
     // 已移除账号会话（只读历史）：默认隐藏，仅「已移除」tab 显示——避免旧号历史污染活跃列表，
     // 又保留可达性（点 Pill 即可查看）。removed tab 不再叠加归档过滤，确保历史全可见。
-    const isRemoved = !!(c.read_only||c.can_send===false);
+    const isRemoved = _isRemovedRow(c);
     if(chatFilter==='removed'){
       if(!isRemoved) return false;
     } else {
@@ -2680,7 +2749,7 @@ function applyFilters(){
 function _updateRemovedTab(){
   const tab=document.getElementById('removed-more-item');
   if(!tab) return;
-  const n=allChats.filter(c=>c.read_only||c.can_send===false).length;
+  const n=allChats.filter(_isRemovedRow).length;
   if(n>0){
     tab.style.display='';
     var rt=tab.querySelector('.rm-txt'); if(rt){ rt.textContent=window.Tf('inbox.filter.removed_n',{n:n}); }
@@ -2877,6 +2946,9 @@ function _buildConvItemDom(c, isSel){
   const archiveIcon=c.archived?`<span style="color:var(--th-ink-slate4,#94a3b8);display:inline-flex;vertical-align:-2px;" title="${window.T('inbox.conv.archived_t')}">${uiIcon('archive',11)}</span>`:'';
   const _ctype=String(c.chat_type||'').toLowerCase();
   const groupTag=(_ctype==='group'||_ctype==='channel')?`<span class="conv-group-tag" title="${window.T('inbox.conv.group_tag_t')}">${_ctype==='channel'?window.T('inbox.conv.channel'):window.T('inbox.conv.group')}</span>`:'';
+  // P0 真相化：已退出账号的会话留在列表但整行灰化 + 「已退出」chip（点开有横幅+重登入口）
+  const acctOut=(c.account_status==='offline');
+  const outTag=acctOut?`<span class="conv-out-chip" title="${esc(window.T('inbox.acct.out_tag_t'))}">${esc(window.T('inbox.acct.out_tag'))}</span>`:'';
   const suggestHtml=_convSuggestMine(c)?`<div class="conv-suggest-row"><span class="conv-suggest-chip" title="${window.T('inbox.conv.suggest_t')}">${window.T('inbox.conv.suggest')}</span></div>`:'';
   // B-2：今日命中风控转人工的会话，列表挂琥珀风险 chip（点开即处理）
   const riskN=Number(c.risk_blocked||0);
@@ -2885,7 +2957,7 @@ function _buildConvItemDom(c, isSel){
   const claimedMine = !!(c.conversation_id && claimMap[c.conversation_id]
                          && claimMap[c.conversation_id].agent_id===MY_AGENT().id);
   const div=document.createElement('div');
-  div.className=`conv-item ${isSel?'selected':''} ${slaClass} ${c.unread>0?'has-unread':''} ${riskN>0?'risk-blocked':''}`.replace(/\s+/g,' ').trim();
+  div.className=`conv-item ${isSel?'selected':''} ${slaClass} ${c.unread>0?'has-unread':''} ${riskN>0?'risk-blocked':''} ${acctOut?'acct-out':''}`.replace(/\s+/g,' ').trim();
   div.dataset.key=key;
   div.dataset.cid=cid;
   // P3 a11y: 会话条可 Tab 聚焦 + Enter/Space 打开（读屏播报联系人名）
@@ -2919,7 +2991,7 @@ function _buildConvItemDom(c, isSel){
       <div class="conv-avatar-badge">${platIcon(c.platform,16)}</div>
     </div>
     <div class="conv-body">
-      <div class="conv-name">${esc(c.name||c.chat_key||window.T('dash.unknown'))} ${groupTag}${archiveIcon}${_goalMarkHtml(c)}</div>
+      <div class="conv-name">${esc(c.name||c.chat_key||window.T('dash.unknown'))} ${groupTag}${outTag}${archiveIcon}${_goalMarkHtml(c)}</div>
       <div class="conv-preview">${_previewHtml(c)}</div>
       ${tagsHtml}
       ${suggestHtml}
@@ -3571,11 +3643,15 @@ async function _loadChatsBody(){
     const prevUnreadCleared = new Set(
       allChats.filter(c=>c.unread===0).map(c=>convKey(c))
     );
-    allChats=d.chats||[];
+    allChats=(d.chats||[]).filter(c=>c.account_status!=='offline');
     allChats.forEach(c=>{ if(prevUnreadCleared.has(convKey(c))) c.unread=0; });
     _remergeScopedRows();   // P0 账号视角：全局快照覆盖 allChats 后把 scoped 行并回（防被轮询洗掉）
     _chatsHasMore=!!d.has_more; _chatsOldestTs=d.oldest_ts||0; _syncLoadMoreBar();
     platformStatus=d.platform_status||{};
+    // 已登出号不应出现在聊天 chip（账号管理抽屉走 /api/accounts）
+    Object.keys(platformStatus).forEach(k=>{
+      if(platformStatus[k]&&platformStatus[k].account_status==='offline') delete platformStatus[k];
+    });
     // P6：全库有效未读（仅全局轮询带；缺字段保持上一轮，避免 scoped 误清）
     if(d.unread_by_platform && typeof d.unread_by_platform==='object'){
       unreadByPlatform=d.unread_by_platform;
@@ -3587,7 +3663,22 @@ async function _loadChatsBody(){
       attnByAccount=d.attn_by_account;   // P8：近窗 attn（旧后端无此字段 → 保持窗口口径）
     }
     rebuildAccountMeta();          // P0: 刷新账号 label/running 映射
-    if(selectedChat) _renderIdentityBar(selectedChat);   // 身份可视化：人设绑定变更即时反映到身份条
+    // 当前打开的会话所属账号已退出 → 收起详情（历史仍在本机，重登后可再开）
+    if(selectedChat){
+      const still=allChats.some(c=>convKey(c)===convKey(selectedChat));
+      if(!still||_isLoggedOutRow(selectedChat)){
+        try{
+          document.getElementById('chat-empty').style.display='';
+          document.getElementById('chat-content').style.display='none';
+          document.getElementById('chat-panel').classList.remove('mobile-open');
+          document.body.classList.remove('mob-chat-open');
+        }catch(_){}
+        selectedChat=null; selectedKey=null;
+        try{ window.__wsActiveConvId=null; }catch(_){}
+      } else {
+        _renderIdentityBar(selectedChat);
+      }
+    }
     buildNavRail(allChats);
     buildAccountChips();           // P0: 刷新账号切换条
     _updateListTitleVisuals(platFilter);
@@ -3881,21 +3972,40 @@ function _subscribePresence(c){
   }catch(_){}
 }
 
-/* 只读会话（账号已从系统移除）：禁用发送框/按钮/工具条，给出明确说明；
-   非只读则恢复可发送态（切换回正常会话时复位）。纯前端守卫，叠加后端 read_only 标记。 */
+/* 只读会话（账号已移除 removed / 已退出 offline）：禁用发送框/按钮/工具条 + 顶部横幅说明；
+   offline 额外给「重新登录/管理账号」CTA（Messenger 直连 relogin，其它平台开账号抽屉）。
+   非只读则恢复可发送态（切换回正常会话时复位）。纯前端守卫，叠加后端 409 兜底。 */
 function _applyReadOnly(c){
   const ro=!!(c && (c.read_only || c.can_send===false));
+  const out=!!(c && c.account_status==='offline');
   const ta=document.getElementById('reply-ta');
   const btn=document.getElementById('send-btn');
   const tools=document.getElementById('reply-tools');
   if(ta){
     ta.disabled=ro;
-    ta.placeholder=ro?window.T('inbox.ro.placeholder')
+    ta.placeholder=ro?(out?window.T('inbox.ro.placeholder_offline'):window.T('inbox.ro.placeholder'))
                      :window.T('inbox.reply.ph');
     ta.style.opacity=ro?'.6':'';
   }
   if(btn){ btn.disabled=ro; btn.style.opacity=ro?'.45':''; btn.style.cursor=ro?'not-allowed':''; }
   if(tools){ tools.style.opacity=ro?'.45':''; tools.style.pointerEvents=ro?'none':''; }
+  const banner=document.getElementById('acct-out-banner');
+  if(banner){
+    if(ro){
+      let cta='';
+      if(out){
+        cta=(c.platform==='messenger')
+          ?`<button type="button" class="aob-btn" onclick="reloginMessengerAcct('${esc(c.account_id||'')}',this)">${esc(window.T('inbox.ro.relogin_btn'))}</button>`
+          :`<button type="button" class="aob-btn" onclick="openDrawer()">${esc(window.T('inbox.ro.manage_btn'))}</button>`;
+      }
+      banner.className='acct-out-banner'+(out?' warn':' removed');
+      banner.innerHTML=`<span class="aob-txt">${esc(out?window.T('inbox.ro.banner_offline'):window.T('inbox.ro.banner_removed'))}</span>${cta}`;
+      banner.style.display='flex';
+    } else {
+      banner.style.display='none';
+      banner.innerHTML='';
+    }
+  }
 }
 
 /* 媒体/语音直发能力：仅 protocol 多开且在线账号支持；其它平台事先置灰按钮 + 说明，
@@ -4101,9 +4211,11 @@ function renderChatHeader(c){
   hdrAva.style.background=avbg;
   hdrAva.innerHTML=esc(avatarInitial(c.name))+_waAvatarImg(c);
   document.getElementById('hdr-name').textContent=c.name||c.chat_key||window.T('dash.unknown');
-  const roBadge=(c.read_only||c.can_send===false)
-    ? ` <span style="font-size:11px;color:var(--th-ink-red7,#b91c1c);background:var(--th-bg-red1,#fee2e2);border-radius:4px;padding:1px 5px;" title="${window.T('inbox.hdr.removed_t')}">${window.T('inbox.hdr.removed')}</span>`
-    : '';
+  const roBadge=(c.account_status==='offline')
+    ? ` <span style="font-size:11px;color:var(--th-ink-amber7,#b45309);background:var(--th-bg-amber15,rgba(245,158,11,.15));border-radius:4px;padding:1px 5px;" title="${window.T('inbox.hdr.loggedout_t')}">${window.T('inbox.hdr.loggedout')}</span>`
+    : ((c.read_only||c.can_send===false)
+      ? ` <span style="font-size:11px;color:var(--th-ink-red7,#b91c1c);background:var(--th-bg-red1,#fee2e2);border-radius:4px;padding:1px 5px;" title="${window.T('inbox.hdr.removed_t')}">${window.T('inbox.hdr.removed')}</span>`
+      : '');
   const unameH=c.username?` <span class="hdr-uname">@${esc(c.username)}</span>`:'';
   document.getElementById('hdr-sub').innerHTML=
     `<span class="plat-hdr-badge">${platIcon(c.platform,15)}<span>${platName(c.platform)}</span></span>`+
@@ -5786,29 +5898,68 @@ async function loadNotes(conversationId){
     const r = await apiFetch(`/api/workspace/conv/${encodeURIComponent(conversationId)}/notes?limit=50`);
     const d = await r.json();
     if(!d.ok){ listEl.innerHTML=''; return; }
-    if(cntEl) cntEl.textContent = d.count ? `(${d.count})` : '';
+    if(cntEl){
+      // P0-协作美化：pill 带「M @我」段——折叠态也能感知有人点名
+      const mineCnt=(d.notes||[]).filter(_noteMentionsMe).length;
+      cntEl.textContent = d.count ? (mineCnt?`(${d.count} · ${window.Tf('inbox.notes.pill_mention',{m:mineCnt})})`:`(${d.count})`) : '';
+      cntEl.classList.toggle('has-mention', mineCnt>0);
+    }
     _renderNotes(d.notes || []);
   }catch(_){ listEl.innerHTML=''; }
+}
+
+/* 是否 @ 到我：id 与显示名双口径（历史上 presence 与注解作者两套身份约定并存） */
+function _noteMentionsMe(n){
+  const me=MY_AGENT()||{};
+  const ids=[me.id,me.name].filter(Boolean).map(String);
+  return ((n&&n.mentions)||[]).some(m=>ids.indexOf(String(m))>=0);
+}
+/* 坐席名 → 稳定色相（同名恒同色，头像可辨识不同同事） */
+function _noteHue(s){
+  s=String(s||'?'); let h=0;
+  for(let i=0;i<s.length;i++){ h=(h*31+s.charCodeAt(i))>>>0; }
+  return h%360;
+}
+/* 注解相对时间（ts 秒）：5 分钟前 / 3 小时前，超过一天回落短日期 */
+function _noteAgo(tsSec){
+  if(!tsSec) return '';
+  const diff=Date.now()-tsSec*1000;
+  if(diff<60000) return window.T('base.notif.just_now');
+  if(diff<3600000) return window.Tf('base.notif.min_ago',{n:Math.floor(diff/60000)});
+  if(diff<86400000) return window.Tf('base.notif.hour_ago',{n:Math.floor(diff/3600000)});
+  return window.wsFmtDateTime(tsSec,{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
 }
 
 function _renderNotes(notes){
   const el = document.getElementById('notes-list');
   if(!el) return;
   if(!notes.length){
-    el.innerHTML = `<div style="font-size:11px;color:var(--text-tiny);text-align:center;padding:6px;">${window.T('inbox.notes.empty')}</div>`;
+    // 空态＝新手引导：一行价值说明 + 两个模板 chip（点击预填输入框）
+    el.innerHTML = `<div class="notes-empty">
+      <div class="ne-hint">${window.T('inbox.notes.empty_hint')}</div>
+      <div class="ne-tpls">
+        <button type="button" class="ne-tpl" onclick="_noteTpl('handover')">${window.T('inbox.notes.tpl_handover')}</button>
+        <button type="button" class="ne-tpl" onclick="_noteTpl('risk')">${window.T('inbox.notes.tpl_risk')}</button>
+      </div>
+    </div>`;
     return;
   }
+  const meIds=(function(){ const me=MY_AGENT()||{}; return [me.id,me.name].filter(Boolean).map(String); })();
   el.innerHTML = notes.map(n=>{
-    const ts = n.ts ? window.wsFmtDateTime(n.ts,{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
+    const ago = n.ts ? _noteAgo(n.ts) : '';
+    const full = n.ts ? window.wsFmtDateTime(n.ts,{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
     // 解析 @提及高亮
     const bodyHtml = esc(n.body).replace(/@(\S+)/g,'<span class="mention">@$1</span>');
-    const init = (n.agent_name||n.agent_id||'?').charAt(0).toUpperCase();
-    const edited = n.edited_ts > 0 ? `<span style="color:var(--th-ink-slate4,#94a3b8);">${window.T('inbox.notes.edited')}</span>` : '';
-    return `<div class="note-item" id="note-${esc(n.note_id)}">
+    const who = n.agent_name||n.agent_id||window.T('inbox.notes.agent_default');
+    const init = String(who).charAt(0).toUpperCase();
+    const mine = (n.agent_id&&meIds.indexOf(String(n.agent_id))>=0)||(n.agent_name&&meIds.indexOf(String(n.agent_name))>=0);
+    const toMe = _noteMentionsMe(n);
+    const edited = n.edited_ts > 0 ? `<span class="note-edited">${window.T('inbox.notes.edited')}</span>` : '';
+    return `<div class="note-item${mine?' mine':''}${toMe?' to-me':''}" id="note-${esc(n.note_id)}">
       <div class="note-item-meta">
-        <div class="note-item-avatar">${esc(init)}</div>
-        <span style="font-weight:600;">${esc(n.agent_name||n.agent_id||window.T('inbox.notes.agent_default'))}</span>
-        <span>${ts}</span>${edited}
+        <div class="note-item-avatar" style="background:hsl(${_noteHue(who)},45%,45%)">${esc(init)}</div>
+        <span class="note-who">${esc(who)}</span>
+        <span class="note-ago" title="${esc(full)}">${esc(ago)}</span>${edited}
       </div>
       <div class="note-item-body">${bodyHtml}</div>
       <div class="note-item-acts">
@@ -5819,6 +5970,34 @@ function _renderNotes(notes){
   }).join('');
   el.scrollTop = el.scrollHeight;
 }
+
+/* 模板 chip → 预填输入框（交接班 / 风险提醒） */
+function _noteTpl(kind){
+  const inp=document.getElementById('note-input'); if(!inp) return;
+  const body=window.T(kind==='risk'?'inbox.notes.tpl_risk_body':'inbox.notes.tpl_handover_body');
+  inp.value=(inp.value?inp.value.replace(/\s+$/,'')+'\n':'')+body;
+  inp.focus();
+  try{ inp.selectionStart=inp.selectionEnd=inp.value.length; }catch(_){}
+  _noteAutoGrow(inp);
+}
+window._noteTpl=_noteTpl;
+/* @ 快捷按钮：插入 @ 并立即拉推荐 */
+function _noteInsertAt(){
+  const inp=document.getElementById('note-input'); if(!inp) return;
+  const v=inp.value;
+  inp.value=v+((v&&!/\s$/.test(v))?' ':'')+'@';
+  inp.focus();
+  _onNoteInput();
+  _noteAutoGrow(inp);
+}
+window._noteInsertAt=_noteInsertAt;
+/* 输入框随内容自增高（36–120px） */
+function _noteAutoGrow(inp){
+  inp=inp||document.getElementById('note-input'); if(!inp) return;
+  inp.style.height='auto';
+  inp.style.height=Math.min(120, Math.max(36, inp.scrollHeight))+'px';
+}
+window._noteAutoGrow=_noteAutoGrow;
 
 var _mentionSuggestItems=[], _mentionSuggestIdx=0, _mentionFetchTimer=null;
 
@@ -5849,10 +6028,17 @@ function _renderMentionSuggest(){
   if(!panel) return;
   if(!_mentionSuggestItems.length){ panel.classList.remove('show'); return; }
   panel.innerHTML=_mentionSuggestItems.map(function(s,i){
+    // P0-协作美化：推荐理由徽章化——在线圆点 / 主管 / 负荷 / QA 分一眼可比
+    var st=String(s.status||'offline');
+    var stT=(st==='online')?window.T('inbox.collab.st_online'):((st==='busy')?window.T('inbox.collab.st_busy'):window.T('inbox.collab.st_offline'));
+    var badges=''
+      +(s.is_supervisor?'<span class="ms-badge sup">'+esc(window.T('inbox.collab.sug_sup'))+'</span>':'')
+      +((s.active_convs!=null)?'<span class="ms-badge">'+esc(window.Tf('inbox.collab.sug_load',{n:s.active_convs}))+'</span>':'')
+      +((s.avg_qa_score!=null)?'<span class="ms-badge qa">'+esc(window.Tf('inbox.collab.sug_qa',{s:Math.round(s.avg_qa_score)}))+'</span>':'');
     return '<div class="mention-suggest-item'+(i===_mentionSuggestIdx?' active':'')+'" '
-      +'onmousedown="event.preventDefault();_pickMention('+i+')">'
-      +'<div class="ms-name">@'+esc(s.display_name||s.agent_id)+' <span style="font-weight:400;color:var(--th-ink-slate4,#94a3b8);">'+esc(s.agent_id)+'</span></div>'
-      +'<div class="ms-reason">'+(s.reasons||[]).join(' · ')+'</div></div>';
+      +'onmousedown="event.preventDefault();_pickNoteMention('+i+')">'
+      +'<div class="ms-name"><span class="ms-dot '+esc(st)+'" title="'+esc(stT)+'"></span>@'+esc(s.display_name||s.agent_id)+' <span class="ms-id">'+esc(s.agent_id)+'</span>'+badges+'</div>'
+      +'<div class="ms-reason">'+(s.reasons||[]).map(esc).join(' · ')+'</div></div>';
   }).join('');
   panel.classList.add('show');
 }
@@ -5860,7 +6046,10 @@ function _hideMentionSuggest(){
   var panel=document.getElementById('mention-suggest-panel');
   if(panel) panel.classList.remove('show');
 }
-function _pickMention(idx){
+/* 注解 @ 推荐选人。⚠ 曾名 _pickMention——与下方 WhatsApp 群 @ 成员选择器同名，
+   后者声明在后覆盖全局绑定 → 本函数点选/回车全部静默失效（坐席只能手敲完整
+   agent_id）。改独立名根治；同名双定义由 test_template_duplicate_toplevel_functions 门禁看住。 */
+function _pickNoteMention(idx){
   var s=_mentionSuggestItems[idx||0];
   if(!s) return;
   var inp=document.getElementById('note-input');
@@ -5871,8 +6060,9 @@ function _pickMention(idx){
   inp.value=val.slice(0,at)+'@'+s.agent_id+' ';
   _hideMentionSuggest();
   inp.focus();
+  try{ _noteAutoGrow(inp); }catch(_){}
 }
-window._pickMention=_pickMention;
+window._pickNoteMention=_pickNoteMention;
 function _onNoteInput(){
   var inp=document.getElementById('note-input');
   if(!inp||!_notesConvId) return;
@@ -5917,7 +6107,7 @@ function _noteKey(e){
   if(panel&&panel.classList.contains('show')&&_mentionSuggestItems.length){
     if(e.key==='ArrowDown'){ e.preventDefault(); _mentionSuggestIdx=(_mentionSuggestIdx+1)%_mentionSuggestItems.length; _renderMentionSuggest(); return; }
     if(e.key==='ArrowUp'){ e.preventDefault(); _mentionSuggestIdx=(_mentionSuggestIdx-1+_mentionSuggestItems.length)%_mentionSuggestItems.length; _renderMentionSuggest(); return; }
-    if(e.key==='Enter'&&!e.ctrlKey&&!e.metaKey){ e.preventDefault(); _pickMention(_mentionSuggestIdx); return; }
+    if(e.key==='Enter'&&!e.ctrlKey&&!e.metaKey){ e.preventDefault(); _pickNoteMention(_mentionSuggestIdx); return; }
     if(e.key==='Escape'){ _hideMentionSuggest(); return; }
   }
   if(e.key==='Enter' && (e.ctrlKey||e.metaKey)){ e.preventDefault(); _submitNote(); }
@@ -6053,6 +6243,11 @@ function _pickMention(i){
   _hideMentionPanel();
   ta.focus();
 }
+/* ⚠ 本函数处于非全局作用域，而群成员面板的行 onclick 走全局查找——此前全局
+   `_pickMention` 一直被注解 @ 推荐的同名函数占着（见 _pickNoteMention 注释），
+   群成员**鼠标点选**实际调到注解选择器上静默无效（键盘路径走词法作用域不受影响）。
+   注解侧改名 + 这里显式挂 window，两条 @ 链路各自归位。 */
+window._pickMention=_pickMention;
 
 // P42/P49: AI 副驾（阶段 / 工作链 / @mention 联动）
 var _copilotTimer=null,_copilotItems=[],_copilotIdx=0,_copilotTrigger='',_copilotHeader='';
@@ -6163,7 +6358,7 @@ function _confirmRelStage(cid){
   }, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
     if(d.ok){
       _toast(window.Tf('inbox.rel.advance_confirmed_to',{label:esc(d.display_stage_label||d.stage_label||'')}),'#7c3aed');
-      _loadRelationshipStage(cid); _loadScriptTopics(cid); _loadCollabContext(cid);
+      _loadRelationshipStage(cid); _loadCollabContext(cid);
       _prefillCopilot('stage_advance');
     } else _toast(window.T('inbox.rel.confirm_fail'),'#ef4444');
   });
@@ -6187,7 +6382,7 @@ function _ackRelReunion(cid){
   }, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
     if(d.ok){
       _toast(window.T('inbox.rel.reunion_confirmed'),'#be185d');
-      _loadRelationshipStage(cid); _loadScriptTopics(cid); _loadCollabContext(cid);
+      _loadRelationshipStage(cid); _loadCollabContext(cid);
     } else _toast(window.T('inbox.toast.op_fail'),'#ef4444');
   });
 }
@@ -6224,21 +6419,6 @@ function _cancelChainExec(eid){
     method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'
   }, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
     if(d.ok&&selectedChat){ _loadChainExecutions(selectedChat.conversation_id); _toast(window.T('inbox.chain.cancelled'),'#64748b'); }
-  });
-}
-
-// P40: 剧本话题 — 由右栏 <cp-script> 展示
-function _loadScriptTopics(cid){
-  if(!cid) return;
-  _refreshWsCpComponent('script');
-}
-function _startTopicChain(chainId){
-  if(!selectedChat||!chainId) return;
-  apiFetch('/api/workspace/conv/'+encodeURIComponent(selectedChat.conversation_id)+'/start-chain',{
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({chain_id:chainId})
-  }, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
-    if(d.ok) _toast(window.T('inbox.chain.started'),'#7c3aed'); else _toast(window.T('inbox.chain.start_fail'),'#ef4444');
   });
 }
 
@@ -6657,15 +6837,15 @@ async function sendMsg(){
   if(_pendingMedia && _pendingMedia.file){
     if(!selectedChat) return;
     if(selectedChat.read_only || selectedChat.can_send===false){
-      _toast(window.T('inbox.acct.removed_readonly'),'#dc2626'); return;
+      _toast(window.T(selectedChat.account_status==='offline'?'inbox.acct.offline_readonly':'inbox.acct.removed_readonly'),'#dc2626'); return;
     }
     await _doSendMedia(text);
     return;
   }
   if(!text||!selectedChat) return;
-  // 只读会话（账号已从系统移除）：仅可查看历史，禁止发送
+  // 只读会话（账号已移除=removed / 已退出=offline）：禁止发送，文案分开（该做的事不同）
   if(selectedChat.read_only || selectedChat.can_send===false){
-    _toast(window.T('inbox.acct.removed_readonly'),'#dc2626'); return;
+    _toast(window.T(selectedChat.account_status==='offline'?'inbox.acct.offline_readonly':'inbox.acct.removed_readonly'),'#dc2626'); return;
   }
   // P4-6C 编辑态：走「保存编辑」而非新发（对端同步「已编辑」）
   if(_editTarget && _editTarget.id){
@@ -7218,7 +7398,8 @@ async function _loadDraftsBody(c){
       const ageTxt=_draftAgeText(dr.created_ts);
       const blocked=String(dr.approve_blocked||'');
       const blockTip=blocked==='replied'?window.T('inbox.draft_mini.blocked_replied')
-        :blocked==='age'?window.T('inbox.draft_mini.blocked_age'):'';
+        :blocked==='age'?window.T('inbox.draft_mini.blocked_age')
+        :blocked==='account_offline'?window.T('inbox.draft_mini.blocked_acct_out'):'';
       const sendBtn=blocked
         ? `<button class="btn-approve" disabled title="${esc(blockTip)}" style="opacity:.45;cursor:not-allowed;">${window.T('inbox.draft_mini.send')}</button>`
         : `<button class="btn-approve" onclick="approveDraft('${esc(dr.draft_id)}',this)">${window.T('inbox.draft_mini.send')}</button>`;
@@ -7382,7 +7563,7 @@ function _cdraftResolveAdopted(){
 /* ===== 业务助手右栏（与桌面 copilot 同源 shared/copilot） ===== */
 var _wsCpClient=null, _wsCpTab='reply', _wsCpCid='', _wsCpCtx=null;
 var _wsCpTabCtrl=null;
-var _WS_CP_IDS=['draft','voice','persona','script','relstage','collab','nba','chain','goal'];
+var _WS_CP_IDS=['draft','voice','persona','relstage','collab','nba','chain','goal'];
 
 /* ===== 方案1：可折叠卡片（默认态 + localStorage 记忆 + 懒加载） =====
    默认展开：hero(英雄卡) / draft(AI回复) / custinfo(客户信息)；其余默认折叠。
@@ -7399,9 +7580,9 @@ try{
     localStorage.setItem('ws_cp_cards_mig1','1');
   }
 }catch(_){}
-var _CP_CARD_DEF_COLLAPSED={convops:1,voice:1,persona:1,script:1,collab:1,chain:1,analysis:1};
+var _CP_CARD_DEF_COLLAPSED={convops:1,voice:1,persona:1,collab:1,chain:1,analysis:1};
 /* 组件 suffix → 所属折叠卡（NBA 承载于英雄卡 hero）。用于「懒加载」按卡展开态决定是否取数。 */
-var _CP_ID_CARD={draft:'draft',voice:'voice',persona:'persona',script:'script',relstage:'relstage',collab:'collab',nba:'hero',chain:'chain',goal:'goal'};
+var _CP_ID_CARD={draft:'draft',voice:'voice',persona:'persona',relstage:'relstage',collab:'collab',nba:'hero',chain:'chain',goal:'goal'};
 /* 展开某卡时：把折叠期暂存的会话上下文补喂给其组件（触发取数），
    并触发该卡的非组件取数（hero 关系摘要 / analysis 的 AI 分析 LLM 调用）。 */
 function _cpOnCardExpand(cardName){
@@ -7444,13 +7625,14 @@ function _toggleCpCard(name){
   if(!nowCollapsed) _cpOnCardExpand(name);
 }
 /* 卡头状态 pill：组件 cp-data-loaded → 折叠态也能一眼读懂面板内容 */
-var _CP_PILL_BY_PANEL={'ws-cp-draft':'cpp-draft','ws-cp-persona':'cpp-persona','ws-cp-script':'cpp-script',
+var _CP_PILL_BY_PANEL={'ws-cp-draft':'cpp-draft','ws-cp-persona':'cpp-persona',
   'ws-cp-relstage':'cpp-relstage','ws-cp-collab':'cpp-collab','ws-cp-chain':'cpp-chain','ws-cp-nba':'cpp-hero'};
-var _CP_PILL_IDS=['cpp-hero','cpp-draft','cpp-persona','cpp-script','cpp-relstage','cpp-collab','cpp-chain','cpp-analysis','cpp-journey'];
+var _CP_PILL_IDS=['cpp-hero','cpp-draft','cpp-persona','cpp-relstage','cpp-collab','cpp-chain','cpp-analysis','cpp-journey'];
 var _CP_PILL_TONES=['pill-accent','pill-ok','pill-warn','pill-danger'];
 /* 可点击 pill → 展开目标卡（折叠态快速跳转） */
 var _CP_PILL_JUMPS={'cpp-hero':{card:'relstage',tab:'customer',titleKey:'inbox.pill.jump_rel_t'},
-  'cpp-analysis':{card:'analysis',tab:'tools',titleKey:'inbox.pill.jump_analysis_t'}};
+  'cpp-analysis':{card:'analysis',tab:'tools',titleKey:'inbox.pill.jump_analysis_t'},
+  'cpp-chain':{card:'chain',tab:'customer',titleKey:'inbox.pill.jump_chain_t'}};
 function _setCpPill(pillId, text, tone, jumpOverride){
   var el=document.getElementById(pillId); if(!el) return;
   el.textContent=text||'';
@@ -7467,8 +7649,8 @@ function _setCpPill(pillId, text, tone, jumpOverride){
     el.setAttribute('data-cp-tab', jmp.tab||'');
     if(jmp.titleKey) el.title=window.T(jmp.titleKey);
   }
-  if(pillId==='cpp-analysis'||pillId==='cpp-chain'||pillId==='convops-pill') _updateToolsTabBadge();
-  if(pillId==='cpp-relstage') _updateCustomerTabBadge();
+  if(pillId==='cpp-analysis'||pillId==='convops-pill') _updateToolsTabBadge();
+  if(pillId==='cpp-relstage'||pillId==='cpp-chain') _updateCustomerTabBadge();
   if(pillId==='cpp-draft') _updateReplyTabBadge();
 }
 function _updateReplyTabBadge(){
@@ -7484,9 +7666,11 @@ function _updateReplyTabBadge(){
 function _updateCustomerTabBadge(){
   var el=document.getElementById('ws-cp-tab-badge-customer'); if(!el) return;
   var rs=document.getElementById('cpp-relstage');
+  var ch=document.getElementById('cpp-chain');
   var text='', tone='';
   if(rs&&rs.textContent&&rs.classList.contains('pill-danger')) text=rs.textContent;
   else if(rs&&rs.textContent&&rs.classList.contains('pill-warn')){ text=rs.textContent; tone='warn'; }
+  else if(ch&&ch.textContent&&ch.classList.contains('pill-danger')) text=ch.textContent;
   else if(_goalTabSignal.active||_goalTabSignal.pendingFeedback){
     text=_goalT('inbox.goal.tab_badge','Push planned today');
     tone='accent';
@@ -7498,12 +7682,10 @@ function _updateCustomerTabBadge(){
 function _updateToolsTabBadge(){
   var el=document.getElementById('ws-cp-tab-badge-tools'); if(!el) return;
   var ap=document.getElementById('cpp-analysis');
-  var cp=document.getElementById('cpp-chain');
   var cop=document.getElementById('convops-pill');
   var text='', tone='';
   if(ap&&ap.textContent&&ap.classList.contains('pill-danger')) text=ap.textContent;
   else if(ap&&ap.textContent&&ap.classList.contains('pill-warn')){ text=ap.textContent; tone='warn'; }
-  else if(cp&&cp.textContent&&cp.classList.contains('pill-danger')) text=cp.textContent;
   else if(cop&&cop.textContent&&cop.classList.contains('pill-warn')){ text=window.T('inbox.pill.snoozed'); tone='warn'; }
   var sc=window.CopilotShared&&window.CopilotShared.sidebarChrome;
   if(sc&&sc.applyTabBadge) sc.applyTabBadge(el,text,tone);
@@ -7661,8 +7843,30 @@ function _paintHeroGoal(el, mode, opts){
   var fbHtml=opts.showFeedback
     ?(' <span class="hg-fb">('+esc(_goalT('inbox.goal.hero.feedback','Give feedback'))+')</span>')
     :'';
-  el.innerHTML='<span class="hg-ic">'+uiIcon('target',12)+'</span><span class="hg-main">'+esc(main)+'</span>'+fbHtml;
-  el.onclick=function(){ _uiBeacon('goal_hero_click'); _cpExpandAndScroll('goal','customer'); };
+  // P22.1：回复台英雄行一键拟稿（有真实今日意图才出钮；点钮不跳客户 tab）
+  var draftBtn=opts.canDraft
+    ?(' <button type="button" class="hg-draft" data-hg-draft="1" title="'+esc(_goalT('inbox.goal.hero.draft_t','Draft from today\'s beat'))+'">'+esc(_goalT('inbox.goal.hero.draft','Draft'))+'</button>')
+    :'';
+  el.innerHTML='<span class="hg-ic">'+uiIcon('target',12)+'</span><span class="hg-main">'+esc(main)+'</span>'+fbHtml+draftBtn;
+  el.onclick=function(ev){
+    var t=ev&&ev.target;
+    if(t&&t.closest&&t.closest('[data-hg-draft]')){
+      try{ ev.stopPropagation(); ev.preventDefault(); }catch(_){}
+      _uiBeacon('goal_hero_draft');
+      var ge=document.getElementById('ws-cp-goal');
+      try{
+        if(ge&&typeof ge.driveDraftFromToday==='function'&&ge.driveDraftFromToday()) return;
+      }catch(_){}
+      document.dispatchEvent(new CustomEvent('cp-goal-drive-draft',{
+        bubbles:true, composed:true,
+        detail:{intent:String(opts.intent||''), pushLevel:String(opts.pushLevel||'soft'),
+                goalId:String(opts.goalId||''), source:'hero'}
+      }));
+      return;
+    }
+    _uiBeacon('goal_hero_click');
+    _cpExpandAndScroll('goal','customer');
+  };
 }
 async function _renderHeroGoal(fromData){
   var el=document.getElementById('cp-hero-goal'); if(!el) return;
@@ -7701,13 +7905,16 @@ async function _renderHeroGoal(fromData){
       if(det==='adopted') fb='adopted';
       else if(String(today.status||'')==='skipped'||String(today.status||'')==='blocked'||det.indexOf('rejected')===0) fb='rejected';
     }
-    _paintHeroGoal(el,'active',{day:day,total:total,intent:intent,showFeedback:!fb});
+    _paintHeroGoal(el,'active',{
+      day:day, total:total, intent:intent, showFeedback:!fb, canDraft:true,
+      pushLevel:String((today&&today.push_level)||'soft'), goalId:String(g.goal_id||'')
+    });
     return;
   }
   _paintHeroGoal(el,'active',{
     day:day, total:total,
     intent:_goalT('inbox.goal.push.none','Companion day'),
-    showFeedback:false
+    showFeedback:false, canDraft:false
   });
 }
 function _onGoalHostEvent(ev){
@@ -8133,7 +8340,6 @@ function initWsCopilot(){
       else if(a==='reunion'){ _toast(window.T('inbox.rel.reunion_confirmed'),'#be185d'); }
       else if(a==='downgrade'){ _toast(window.T('inbox.rel.downgraded_manual'),'#b45309'); }
       else if(a){ _toast(window.T('inbox.rel.aligned_stage'),'#7c3aed'); }
-      _refreshWsCpComponent('script');
       _refreshWsCpComponent('collab');
       _refreshWsCpComponent('nba');
       _renderHeroRel();
@@ -8197,19 +8403,41 @@ function initWsCopilot(){
     document.addEventListener('cp-goal-loaded', _onGoalHostEvent);
     document.addEventListener('cp-data-loaded', _onGoalHostEvent);
     document.addEventListener('cp-goal-drive-draft', function(e){
-      var intent=e&&e.detail&&e.detail.intent;
+      // P22：意图进草稿卡 setDirective（smart-reply.instruction），绝不写 composer。
+      // 英雄卡/旧事件可能只带 intent+pushLevel → 宿主用 i18n 拼完整 instruction。
+      var det=(e&&e.detail)||{};
+      var intent=String(det.intent||'').trim();
+      var pl=String(det.pushLevel||'soft');
+      var instruction=String(det.instruction||'').trim();
+      if(!instruction && intent){
+        try{
+          var pushLab=window.T('inbox.goal.push.'+pl)||pl;
+          var pushRule=window.T('inbox.goal.drive_rule.'+pl)||'';
+          var built=window.Tf('inbox.goal.drive_instruction',{intent:intent,push:pushLab,push_rule:pushRule});
+          if(built && String(built).indexOf('inbox.goal.')!==0) instruction=built;
+        }catch(_){}
+        if(!instruction) instruction=intent;
+      }
       _uiBeacon('goal_drive_draft');
       if(typeof setWsCpTab==='function') setWsCpTab('reply');
       _cpExpandAndScroll('draft','reply');
-      var ta=document.getElementById('reply-ta');
-      // 防覆盖：坐席已手打内容时不清空（意图只作生成种子；生成产物在草稿卡不动 composer）
-      if(ta && intent && !ta.value.trim()) ta.value=String(intent);
-      if(ta) ta.focus();
       var dr=document.getElementById('ws-cp-draft');
       try{
-        if(dr && typeof dr.onAction==='function') dr.onAction('gen', null);
-        else if(dr && typeof dr.regenerate==='function'){ dr._draft=dr._draft||{ok:1}; dr.regenerate(); }
+        if(dr && typeof dr.setDirective==='function'){
+          dr.setDirective({
+            text:String(instruction||''),
+            summary:intent,
+            label:String(det.label||''),
+            pushLevel:pl,
+            goalId:String(det.goalId||''),
+            source:String(det.source||''),
+            autoGen:true
+          });
+        }else if(dr && typeof dr.onAction==='function'){
+          dr.onAction('gen', null);
+        }
       }catch(_){}
+      try{ _toast(window.T('inbox.goal.drive_switched')||window.T('inbox.cp.fill_toast'),'#0f9d75'); }catch(__){}
     });
   }
   /* 卡头 pill：组件取数/生成完成后刷新折叠态摘要（事件委托，无内联 handler） */
@@ -8343,6 +8571,7 @@ async function loadInfoSidebar(c){
     ${_phone}
     ${c.unanswered_sec>60?`<div class="info-row"><span class="info-label">${window.T('inbox.info.waiting')}</span><span class="info-val" style="color:var(--warn);">${fmtWait(c.unanswered_sec)}</span></div>`:''}
     ${c.contact_id?`<div class="info-row"><span class="info-label">CRM</span><a class="info-val" href="/workspace/contact/${enc(c.contact_id)}" style="color:var(--accent);" target="_blank">${window.T('inbox.info.view_profile')}</a></div>`:''}
+    ${c.conversation_id?`<div class="info-row"><span class="info-label">${window.T('cs2_inbox_entry_label')}</span><a class="info-val" href="/care-schedule?contact=${enc(c.conversation_id)}" style="color:var(--accent);" target="_blank">${window.T('cs2_inbox_entry_go')}</a></div>`:''}
     ${c._summary?`<div style="margin-top:4px;"><div class="info-section-title" style="color:#38bdf8;">${window.T('inbox.info.ai_summary')}</div><div style="font-size:11px;color:var(--text-main);line-height:1.5;background:rgba(56,189,248,.14);border-left:3px solid #38bdf8;padding:5px 7px;border-radius:4px;">${esc(c._summary)}</div></div>`:''}
     <details class="cp-more">
       <summary>${window.T('inbox.info.more')}</summary>
@@ -8398,6 +8627,9 @@ async function markConversion(stage){
 async function _loadAiAnalysis(c){
   var rows=document.getElementById('ai-analysis-rows');
   if(!rows) return;
+  // 卡片带 hidden＝已下线：不发 LLM 分析请求（旧标签页 localStorage 可能记着展开态，必须在入口拦）
+  var _sec=rows.closest('[data-cp-card="analysis"]');
+  if(_sec&&_sec.hidden) return;
   var cid=(c&&c.conversation_id)||'';
   var inKey=_aiAnalysisInKey();
   if(cid && _aiAnalysisCache.cid===cid && _aiAnalysisCache.inKey===inKey && _aiAnalysisCache.html){
@@ -8593,55 +8825,611 @@ async function takeClaim(cid){
 }
 
 /* ===== AI 建议 ===== */
-/* 底部「AI回复」（P0 去重）：直接调 smart-reply 产线并把草稿填入输入框——
-   与右栏「回复工坊」同一后端（generate_persona_reply）、同一 cp_replylang 会话语言记忆；
-   不再「打开右栏遥控生成」（视线不横跳；WS_USE_APP iframe 模式同样可用）。填入带覆盖确认。 */
+/* 底部「AI回复」（P0 去重 → 2026-08-01 弹窗化 → 同日「思考面板」三态化）：
+   点击**立即**弹出生成中面板（骨架条+相位文案+计秒，可取消/可收起后台等），
+   smart-reply 返回后原地切换为「勾选逐条发送」就绪态，失败原地重试。
+   动机（生产实测）：P50≈4s / P90≈9s / 尖峰 18s，旧实现唯一反馈是 2.8s 自动消失的
+   toast——长尾等待全程静默、不可取消。状态外化 + 可中断是本面板的存在理由。
+   与右栏「回复工坊」同一后端（generate_persona_reply）、同一 cp_replylang 会话语言记忆。 */
 async function genAiReply(){
   if(!selectedChat){ _toast(window.T('inbox.toast.select_first'),'#b45309'); return; }
-  var btn=document.getElementById('ai-reply-btn');
-  if(btn && btn.disabled) return;                 // 防连点重复生成
+  if(_dpickState==='loading') return;             // 已有一轮在生成（防连点）
   var c=selectedChat;
-  var msgs=(threadMsgs||[]).slice(-30)
+  var msgs=_dpickCollectMsgs();
+  if(!msgs.length){ _toast(window.T('inbox.rt.ai_reply_noctx'),'#b45309'); return; }
+  await _dpickGenerate(c, msgs, {regen:false});
+}
+
+/* ===== AI 草稿「思考面板」＋分条选择弹窗（2026-08-01）=====
+   状态机：idle → loading（点击即弹：骨架屏/相位/计秒/可取消/可收起）→ ready（勾选
+   逐条发送）↘ error（面板内重试）；「换一稿」面板内原地重生成，失败保留上一稿。
+   拆句口径对齐服务端 reply_split（src/inbox/reply_split.py）：先按换行（LLM 换行
+   合同），行内再按句界——CJK 句末标点（。！？；…）必断；拉丁 .!? 仅后随空白才断
+   （防 3.5 / example.com 被误切）；emoji/引号等非词首碎片并回前句。
+   发送为纯前端逐条调 /api/unified-inbox/send（各自 client_msg_id + 条间打字节奏），
+   不走服务端 bubbles 总闸——分条与否由坐席在弹窗里当场决定，对所有平台/账号可用。 */
+var _dpickPersona='';
+var _dpickState='idle';          // idle|loading|ready|error（镜像到 modal 的 data-st，CSS 按态显隐）
+var _dpickAbort=null;            // 在途生成的 AbortController
+var _dpickReqSeq=0;              // 请求代际：取消/备稿接管后，晚到的旧响应不得覆盖新状态
+var _dpickConv=null;             // 本轮生成所属会话（结果只属于它；切走即取消/作废）
+var _dpickT0=0;                  // loading 起点（计秒/相位/慢路径）
+var _dpickTick=null;             // 250ms 心跳：计秒+相位推进+慢提示+切会话看门狗
+var _dpickPhaseN=0;
+var _dpickMinimized=false;       // 「收起后台等」胶囊态
+var _dpickMeta=null;             // 采纳归因 {text,source}：发送/填入时随既有 copilot_meta 链落审计
+var _DPICK_PHASE_KEYS=['inbox.dpick.phase1','inbox.dpick.phase2','inbox.dpick.phase3'];   // 相位文案（查表，勿字符串拼键名）
+var _DPICK_MAX_ROWS=10;          // 再多合并进末条：一次连发 10+ 条像刷屏机器人
+var _DPICK_WORD_LEAD_RE=/^[0-9A-Za-z\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]/;
+
+function _dpickCollectMsgs(){
+  return (threadMsgs||[]).slice(-30)
     .map(function(m){ return {direction:m.direction, text:m.text}; })
     .filter(function(m){ return m.text; });
-  if(!msgs.length){ _toast(window.T('inbox.rt.ai_reply_noctx'),'#b45309'); return; }
+}
+
+function _draftSplitSentences(text){
+  var items=[];
+  String(text||'').split(/\n+/).forEach(function(line){
+    line=line.trim();
+    if(!line) return;
+    var frags=[], cur='';
+    for(var i=0;i<line.length;i++){
+      var ch=line.charAt(i); cur+=ch;
+      if('。！？；…'.indexOf(ch)>=0){ frags.push(cur); cur=''; }
+      else if('.!?'.indexOf(ch)>=0){
+        var nxt=(i+1<line.length)?line.charAt(i+1):'';
+        if(!nxt||/\s/.test(nxt)){ frags.push(cur); cur=''; }
+      }
+    }
+    if(cur.trim()) frags.push(cur);
+    frags.forEach(function(f){
+      var t=f.trim(); if(!t) return;
+      if(items.length && !_DPICK_WORD_LEAD_RE.test(t)) items[items.length-1]+=t;   // 尾巴并回前句
+      else items.push(t);
+    });
+  });
+  if(items.length>_DPICK_MAX_ROWS){
+    var head=items.slice(0,_DPICK_MAX_ROWS-1);
+    head.push(items.slice(_DPICK_MAX_ROWS-1).join(' '));
+    items=head;
+  }
+  return items;
+}
+
+/* ---- 状态机基元 ---- */
+function _dpickSetState(st){
+  _dpickState=st;
+  var m=document.getElementById('dpick-modal');
+  if(m){ m.setAttribute('data-st',st); m.setAttribute('aria-busy', st==='loading'?'true':'false'); }
+}
+function _dpickStopTick(){ if(_dpickTick){ clearInterval(_dpickTick); _dpickTick=null; } }
+function _dpickAiBtn(busy){
+  var btn=document.getElementById('ai-reply-btn');
+  if(!btn) return;
+  btn.disabled=!!busy;
+  btn.classList.toggle('busy',!!busy);
+}
+function _dpickQuoteText(){
+  // 最后一条客户入站消息（截 90 字）：等待时给坐席核对「在回的是哪句」
+  var t='', arr=threadMsgs||[];
+  for(var i=arr.length-1;i>=0;i--){
+    var m=arr[i];
+    if(m && m.direction!=='out' && m.text){ t=String(m.text); break; }
+  }
+  t=t.replace(/\s+/g,' ').trim();
+  return t.length>90 ? t.slice(0,90)+'…' : t;
+}
+/* ---- 动态 ETA：用本机最近几次真实生成耗时替代写死的「通常 3~8 秒」——慢网/慢模型
+   环境预期管理更诚实。取中位数（对 18s 尖峰稳健，均值会被拉飘），样本 <3 用静态文案。
+   ⚠ 本块被共享树并发保存吃掉过一次（调用点在、定义没了 → 生产 ReferenceError），
+   verify_dpick_panel 静态段有钉；改动本区先跑 agent_probe。 ---- */
+var _DPICK_LAT_KEY='ws_dpick_lat_v1';
+function _dpickLatPush(ms){
+  try{
+    var a=JSON.parse(localStorage.getItem(_DPICK_LAT_KEY)||'[]');
+    if(!Array.isArray(a)) a=[];
+    a.push(Math.round(ms));
+    localStorage.setItem(_DPICK_LAT_KEY, JSON.stringify(a.slice(-8)));
+  }catch(_){}
+}
+function _dpickEtaText(){
+  try{
+    var a=JSON.parse(localStorage.getItem(_DPICK_LAT_KEY)||'[]');
+    if(Array.isArray(a)) a=a.filter(function(v){ return typeof v==='number' && v>0; });
+    if(Array.isArray(a) && a.length>=3){
+      var s=a.slice().sort(function(x,y){ return x-y; });
+      var med=s[Math.floor(s.length/2)];
+      var sec=Math.min(60, Math.max(2, Math.ceil(med/1000)));
+      return window.Tf('inbox.dpick.hint_eta_dyn',{s:sec});
+    }
+  }catch(_){}
+  return window.T('inbox.dpick.hint_eta');
+}
+
+/* ---- 生成核心（genAiReply 首次生成 / draftPickRegen 换一稿 共用） ---- */
+async function _dpickGenerate(c, msgs, opts){
+  opts=opts||{};
   var cid=c.conversation_id||convKey(c);
   var lang=''; try{ lang=localStorage.getItem('cp_replylang:'+cid)||''; }catch(_){}
-  if(btn) btn.disabled=true;
-  _toast(window.T('inbox.rt.ai_reply_busy'),'#0f9d75');
+  if(!_dpickOpenLoading(c,opts)) _toast(window.T('inbox.rt.ai_reply_busy'),'#0f9d75');   // 容器缺失兜底：至少保留旧 toast
+  _dpickAiBtn(true);
+  _uiBeacon(opts.regen?'dpick.regen':'dpick.open');   // 漏斗分母：取消率 = cancel/(open+regen)
+  var seq=++_dpickReqSeq;
+  var ctrl=(typeof AbortController!=='undefined')?new AbortController():null;
+  _dpickAbort=ctrl;
   try{
-    var r=await apiFetch('/api/desktop/smart-reply',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({messages:msgs, platform:c.platform||'', chat_key:c.chat_key||'', target_lang:lang, conversation_id:cid})},
-      {timeoutMs:60000});
+    var init={method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({messages:msgs, platform:c.platform||'', chat_key:c.chat_key||'', target_lang:lang, conversation_id:cid})};
+    if(ctrl) init.signal=ctrl.signal;
+    var r=await apiFetch('/api/desktop/smart-reply', init, {timeoutMs:60000});
     var d=await r.json().catch(function(){ return {}; });
-    if(!selectedChat || convKey(selectedChat)!==convKey(c)) return;    // 会话已切走，丢弃过期结果
-    if(!d.ok || !d.reply){ _toast((d&&d.detail)||window.T('inbox.rt.ai_reply_fail'),'#b45309'); return; }
+    if(seq!==_dpickReqSeq || _dpickState!=='loading') return;          // 已取消/备稿接管：旧响应作废
+    if(!selectedChat || convKey(selectedChat)!==convKey(c)){ draftPickCancel('switched'); return; }
+    if(!d.ok || !d.reply){ _dpickShowError((d&&d.detail)||'',opts); return; }
     var text=d.translated||d.reply;               // 与右栏同口径：有译文用译文（客户可读文本）
-    var ta=document.getElementById('reply-ta');
-    if(!ta) return;
-    var cur=ta.value.trim();
-    if(cur && cur!==text && !confirm(window.T('inbox.cdraft.overwrite_confirm'))) return;
-    ta.value=text;
-    try{ _onReplyInput(ta.value); }catch(_){}
-    ta.focus();
-    try{ ta.setSelectionRange(ta.value.length, ta.value.length); }catch(_){}
     // P2 证据链：这条草稿引用的 KB 条目 → 点亮「知识」chip（点开浮层可核验/引用），
     // 复用 P0 的 chip+浮层，零新增 UI；无引用则清空 chip 防串会话残留。
     try{
       if(Array.isArray(d.kb_refs) && d.kb_refs.length){
-        _kbEntries=d.kb_refs.map(function(r){ return {
-          entry_id:String(r.entry_id||''), title:String(r.title||''),
-          category:String(r.category||''), answer:String(r.snippet||''),
+        _kbEntries=d.kb_refs.map(function(r2){ return {
+          entry_id:String(r2.entry_id||''), title:String(r2.title||''),
+          category:String(r2.category||''), answer:String(r2.snippet||''),
           confidence:'high'}; });
         _kbSuggestDismissed=false;
         _renderKbChip();
       }
     }catch(_){}
-    if(d.persona) _toast(window.Tf('inbox.rt.ai_reply_by',{name:d.persona}),'#0f9d75');
-  }catch(_){
-    _toast(window.T('inbox.rt.ai_reply_fail'),'#b45309');
+    _dpickMeta={text:text, source:'ai_reply_split'};   // 采纳归因基准（发送/填入时上报）
+    if(openDraftPick(text, d.persona||'')){
+      _dpickLatPush(Date.now()-_dpickT0);           // 动态 ETA 样本（只记成功轮的真实耗时）
+      _uiBeacon('dpick.ready');
+    }else _dpickShowError('',opts);
+  }catch(e){
+    if(seq!==_dpickReqSeq || _dpickState!=='loading') return;          // 主动取消路径已各自收尾
+    if(e && e.name==='AbortError') return;
+    if(ctrl){ try{ ctrl.abort(); }catch(_){} }      // 超时（race 不会替我们中止）/网络错：释放底层连接
+    _dpickShowError((e && e.name==='TimeoutError')?window.T('inbox.dpick.err_timeout'):'',opts);
   }finally{
+    // 收尾只属于本代请求：取消后立即发起的新一轮正在 busy，旧代的 finally 不得
+    // 清掉它的 spinner/禁用态（取消/备稿接管路径已各自恢复过按钮）。
+    if(seq===_dpickReqSeq){ _dpickAbort=null; _dpickAiBtn(false); }
+  }
+}
+
+/* ---- loading 态：点击瞬间弹出（感知延迟≈0），骨架屏+相位+计秒+备稿捷径 ---- */
+function _dpickOpenLoading(c,opts){
+  opts=opts||{};
+  var modal=document.getElementById('dpick-modal');
+  if(!modal) return false;
+  _dpickConv=c;
+  _dpickMinimized=false;
+  _dpickHidePill();
+  _dpickSetState('loading');
+  var ttl=document.getElementById('dpick-title');
+  if(ttl) ttl.textContent=window.T(opts.regen?'inbox.dpick.loading_regen_title':'inbox.dpick.loading_title');
+  var sub=document.getElementById('dpick-sub');
+  if(sub) sub.textContent=window.T('inbox.dpick.loading_sub');
+  var ava=document.getElementById('dpick-ava');
+  if(ava) ava.textContent='✦';
+  var q=document.getElementById('dpick-quote');
+  if(q){
+    var qt=_dpickQuoteText();
+    if(qt){ q.innerHTML='<b>'+esc(window.T('inbox.dpick.quote_lead'))+'</b>'+esc(qt); q.classList.add('show'); }
+    else q.classList.remove('show');
+  }
+  var ph=document.getElementById('dpick-phase');
+  if(ph) ph.textContent=window.T('inbox.dpick.phase1');
+  var eel=document.getElementById('dpick-elapsed');
+  if(eel) eel.textContent='';
+  var hint=document.getElementById('dpick-hintline');
+  if(hint){ hint.textContent=_dpickEtaText(); hint.classList.remove('slow'); }
+  _dpickRenderBackup(!!opts.regen);
+  _dpickPhaseN=0;
+  _dpickT0=Date.now();
+  _dpickStopTick();
+  _dpickTick=setInterval(_dpickOnTick,250);
+  modal.classList.add('show');
+  return true;
+}
+function _dpickOnTick(){
+  if(_dpickState==='loading'){
+    var s=(Date.now()-_dpickT0)/1000;
+    var eel=document.getElementById('dpick-elapsed');
+    if(eel && s>=1) eel.textContent=window.Tf('inbox.dpick.elapsed',{s:Math.floor(s)});
+    var idx=Math.min(Math.floor(s/2.6),2);          // 相位只前进不回绕（回绕像卡死重来）
+    if(idx!==_dpickPhaseN){
+      _dpickPhaseN=idx;
+      var ph=document.getElementById('dpick-phase');
+      if(ph) ph.textContent=window.T(_DPICK_PHASE_KEYS[idx]);
+    }
+    if(s>10){
+      var hint=document.getElementById('dpick-hintline');
+      if(hint && !hint.classList.contains('slow')){ hint.textContent=window.T('inbox.dpick.hint_slow'); hint.classList.add('slow'); }
+    }
+    // 切会话看门狗：结果只属于原会话——切走立即取消并告知（替代旧的静默丢弃）
+    if(_dpickConv && (!selectedChat || convKey(selectedChat)!==convKey(_dpickConv))) draftPickCancel('switched');
+    return;
+  }
+  if((_dpickState==='ready'||_dpickState==='error') && _dpickMinimized){
+    // 收起后台等 → 就绪/报错胶囊仍挂着：切会话即作废（防点开后把 A 会话草稿发进
+    // B 会话，或对着 B 会话重试 A 会话的报错）
+    if(_dpickConv && (!selectedChat || convKey(selectedChat)!==convKey(_dpickConv))){
+      _dpickStopTick(); _dpickHidePill(); _dpickSetState('idle'); _dpickMinimized=false;
+      _toast(window.T('inbox.dpick.cancelled_switch'),'#64748b');
+    }
+    return;
+  }
+  _dpickStopTick();
+}
+
+/* ---- 秒出备稿：收件箱自动草稿产线（同 generate_persona_reply 单一事实源）已有
+   pending 草稿时，等待期给「直接用备稿」捷径——内容即刻可用、零额外 LLM 成本；
+   采用即挂既有 composer_adopt 生命周期（发送成功后 resolve 掉那行草稿）。 ---- */
+function _dpickRenderBackup(isRegen){
+  var box=document.getElementById('dpick-backup');
+  if(!box) return;
+  var d=(!isRegen && _cdraft && _cdraft.draft)?_cdraft.draft:null;
+  // 新鲜度闸门（与草稿陈旧护栏同一事实源，勿另立口径）：
+  // ① approve_blocked（后端 approve_block_reason 判过期/已回过）→ 不配当捷径；
+  // ② 备稿必须晚于最后一条入站消息——早于它=答的是上一句，「不等了直接用」会答非所问。
+  if(d && d.approve_blocked) d=null;
+  if(d && d.created_ts){
+    var lastIn=0, arr=threadMsgs||[];
+    for(var i=arr.length-1;i>=0;i--){
+      var m=arr[i];
+      if(m && m.direction!=='out' && m.text){ lastIn=+m.ts||0; break; }
+    }
+    if(lastIn && (+d.created_ts||0)<lastIn) d=null;
+  }
+  var txt=d?String(d.draft_text||d.text||'').trim():'';
+  if(!txt){ box.style.display='none'; box._draft=null; return; }
+  var body=document.getElementById('dpick-backup-txt');
+  if(body) body.textContent=txt;
+  box._draft=d;
+  box.style.display='block';
+}
+function draftPickUseBackup(){
+  var box=document.getElementById('dpick-backup');
+  var d=box?box._draft:null;
+  var txt=d?String(d.draft_text||d.text||'').trim():'';
+  if(!txt || _dpickState!=='loading') return;
+  _uiBeacon('dpick.backup_use');
+  _dpickReqSeq++;                                   // 在途响应作废（后端本轮照常完成，客户端不再等）
+  if(_dpickAbort){ try{ _dpickAbort.abort(); }catch(_){} _dpickAbort=null; }
+  _dpickAiBtn(false);
+  try{ _cdraft.adoptedId=String(d.draft_id||''); }catch(_){}
+  _dpickMeta={text:txt, source:'ai_reply_backup'};
+  if(!openDraftPick(txt, String(d.persona_id||d.persona||''))){
+    _toast(window.T('inbox.rt.ai_reply_fail'),'#b45309');
+    closeDraftPick();
+  }
+}
+
+/* ---- ready 态 ---- */
+function openDraftPick(text, persona){
+  var parts=_draftSplitSentences(text);
+  if(!parts.length) return false;
+  var list=document.getElementById('dpick-list');
+  var modal=document.getElementById('dpick-modal');
+  if(!list||!modal) return false;
+  _dpickPersona=persona||'';
+  var lbl=esc(window.T('inbox.dpick.edited'));
+  var h='';
+  for(var i=0;i<parts.length;i++){
+    h+='<div class="dpick-row" style="animation-delay:'+Math.min(i*45,360)+'ms">'
+      +'<label class="dpick-ck"><input type="checkbox" checked onchange="_dpickToggle(this)"></label>'
+      +'<div class="dpick-txt" contenteditable="true" spellcheck="false" data-edited-label="'+lbl+'" oninput="_dpickEdited(this)">'+esc(parts[i])+'</div>'
+      +'</div>';
+  }
+  list.innerHTML=h;
+  list.querySelectorAll('.dpick-txt').forEach(function(el){ el._orig=el.textContent||''; });
+  _dpickApplyReadyChrome();
+  _dpickCount();
+  if(_dpickMinimized){
+    _dpickPillReady();                              // 收起等待中：不抢屏，胶囊亮「已就绪」
+    if(!_dpickTick) _dpickTick=setInterval(_dpickOnTick,250);   // 切会话看门狗继续跑
+  }else{
+    _dpickStopTick();
+    modal.classList.add('show');
+  }
+  _dpickSetState('ready');
+  return true;
+}
+function _dpickApplyReadyChrome(){
+  var ttl=document.getElementById('dpick-title');
+  if(ttl) ttl.textContent=window.T('inbox.dpick.title');
+  var sub=document.getElementById('dpick-sub');
+  if(sub) sub.textContent=_dpickPersona
+    ? window.Tf('inbox.dpick.sub_by',{name:_dpickPersona})
+    : window.T('inbox.dpick.sub');
+  var ava=document.getElementById('dpick-ava');
+  if(ava) ava.textContent=_dpickPersona?String(_dpickPersona).charAt(0).toUpperCase():'✦';
+}
+function _dpickEdited(el){
+  if(!el) return;
+  var row=el.closest?el.closest('.dpick-row'):null;
+  if(row) row.classList.toggle('edited',(el.textContent||'')!==(el._orig!==undefined?el._orig:(el.textContent||'')));
+}
+
+/* ---- error 态 ---- */
+function _dpickShowError(detail,opts){
+  _dpickStopTick();
+  _uiBeacon('dpick.error');   // 含「换一稿失败保留旧稿」路径：错误率按 error/(open+regen) 读
+  // 「换一稿」失败且上一稿还在 → 回就绪态保留旧稿（比一屏报错有用）
+  if(opts && opts.regen && document.querySelectorAll('#dpick-list .dpick-row').length){
+    _dpickApplyReadyChrome();
+    _dpickCount();
+    _dpickSetState('ready');
+    if(_dpickMinimized){ _dpickPillReady(); if(!_dpickTick) _dpickTick=setInterval(_dpickOnTick,250); }
+    _toast(window.T('inbox.dpick.regen_fail_kept'),'#b45309');
+    return;
+  }
+  _dpickSetState('error');
+  var ttl=document.getElementById('dpick-title');
+  if(ttl) ttl.textContent=window.T('inbox.dpick.err_title');
+  var sub=document.getElementById('dpick-sub');
+  if(sub) sub.textContent='';
+  var msg=document.getElementById('dpick-error-msg');
+  if(msg) msg.textContent=detail||window.T('inbox.rt.ai_reply_fail');
+  if(_dpickMinimized){
+    _dpickPillError();
+    if(!_dpickTick) _dpickTick=setInterval(_dpickOnTick,250);   // 报错胶囊也只属于原会话：切走看门狗作废它
+  }
+}
+
+/* ---- 关闭 / 取消 / 重试 / 手动 ---- */
+function closeDraftPick(){
+  if(_dpickState==='loading'){ draftPickCancel(); return; }   // 生成中点 ✕ = 取消（含中止请求）
+  var m=document.getElementById('dpick-modal');
+  if(m) m.classList.remove('show');
+  _dpickStopTick();
+  _dpickHidePill();
+  _dpickMinimized=false;
+  _dpickSetState('idle');
+}
+function draftPickCancel(reason){
+  _uiBeacon(reason==='switched'?'dpick.cancel_switch':'dpick.cancel');
+  _dpickReqSeq++;                                   // 晚到的响应作废
+  if(_dpickAbort){ try{ _dpickAbort.abort(); }catch(_){} _dpickAbort=null; }
+  _dpickStopTick();
+  var m=document.getElementById('dpick-modal');
+  if(m) m.classList.remove('show');
+  _dpickHidePill();
+  _dpickMinimized=false;
+  _dpickSetState('idle');
+  _dpickAiBtn(false);
+  _toast(window.T(reason==='switched'?'inbox.dpick.cancelled_switch':'inbox.dpick.cancelled'),'#64748b');
+}
+function draftPickRetry(){
+  if(_dpickState==='loading') return;
+  _uiBeacon('dpick.retry');
+  genAiReply();
+}
+function draftPickManual(){
+  closeDraftPick();
+  var ta=document.getElementById('reply-ta');
+  if(ta) ta.focus();
+}
+
+/* ---- 收起后台等（胶囊）---- */
+function draftPickMinimize(){
+  if(_dpickState!=='loading') return;
+  _uiBeacon('dpick.minimize');
+  _dpickMinimized=true;
+  var m=document.getElementById('dpick-modal');
+  if(m) m.classList.remove('show');
+  _dpickPillGen();
+}
+function _dpickPillEl(){ return document.getElementById('dpick-pill'); }
+function _dpickHidePill(){ var p=_dpickPillEl(); if(p) p.classList.remove('show','ready','err'); }
+function _dpickPillSet(txtKey,cls){
+  var p=_dpickPillEl(); if(!p) return;
+  p.classList.remove('ready','err');
+  var t=document.getElementById('dpick-pill-txt');
+  if(t) t.textContent=window.T(txtKey);
+  if(cls) p.classList.add(cls);
+  p.classList.add('show');
+}
+function _dpickPillGen(){ _dpickPillSet('inbox.dpick.pill_gen',''); }
+function _dpickPillReady(){ _dpickPillSet('inbox.dpick.pill_ready','ready'); }
+function _dpickPillError(){ _dpickPillSet('inbox.dpick.pill_err','err'); }
+function draftPickPillClick(){
+  if(_dpickState==='idle'){ _dpickHidePill(); return; }
+  _dpickMinimized=false;
+  _dpickHidePill();
+  var m=document.getElementById('dpick-modal');
+  if(m) m.classList.add('show');
+}
+function draftPickPillKey(e){
+  // role="button" 的键盘契约：Enter/Space 等价点击（div 不自带这个行为）
+  if(e && (e.key==='Enter'||e.key===' ')){ e.preventDefault(); draftPickPillClick(); }
+}
+function draftPickPillCancel(ev){
+  if(ev && ev.stopPropagation) ev.stopPropagation();
+  draftPickCancel();
+}
+function _dpickMaskClick(e){
+  if(e && e.target!==e.currentTarget) return;       // 只认遮罩本体（点内容不关）
+  if(_dpickState==='loading') draftPickMinimize();  // 生成中点遮罩 = 收起后台等
+  // 就绪/失败态点遮罩刻意不关闭：防误点丢掉已编辑内容（用 ✕ / Esc）
+}
+/* Esc：生成中=取消；其余=关闭。capture 期拦截，防与灯箱等全局 Esc 冲突。
+   isComposing 守卫：IME 组合中的 Esc 是取消候选词，不是关弹窗——没有它，
+   坐席用拼音改句子时按 Esc 会连人带弹窗一起关掉、行内编辑全丢。 */
+document.addEventListener('keydown', function(e){
+  if(e.key!=='Escape' || e.isComposing) return;
+  var m=document.getElementById('dpick-modal');
+  if(!m || !m.classList.contains('show')) return;
+  e.preventDefault(); e.stopPropagation();
+  if(_dpickState==='loading') draftPickCancel(); else closeDraftPick();
+}, true);
+
+function _dpickToggle(ck){
+  var row=ck.closest('.dpick-row');
+  if(row) row.classList.toggle('off',!ck.checked);
+  _dpickCount();
+}
+function _dpickSelected(){
+  var out=[];
+  document.querySelectorAll('#dpick-list .dpick-row').forEach(function(row){
+    var ck=row.querySelector('input[type=checkbox]');
+    if(!ck||!ck.checked) return;
+    var el=row.querySelector('.dpick-txt');
+    var t=el?(el.textContent||'').trim():'';
+    if(t) out.push(t);
+  });
+  return out;
+}
+function _dpickCount(){
+  var n=_dpickSelected().length;
+  var btn=document.getElementById('dpick-send-btn');
+  if(btn){ btn.textContent=window.Tf('inbox.dpick.send_n',{n:n}); btn.disabled=(n===0); }
+}
+function draftPickRegen(){
+  if(_dpickState==='loading') return;
+  if(!selectedChat){ _toast(window.T('inbox.toast.select_first'),'#b45309'); return; }
+  var c=selectedChat;
+  var msgs=_dpickCollectMsgs();
+  if(!msgs.length){ _toast(window.T('inbox.rt.ai_reply_noctx'),'#b45309'); return; }
+  _dpickGenerate(c, msgs, {regen:true});            // 面板内原地重生成；失败保留上一稿
+}
+/* 次选出路：勾选短句按行填入输入框（不发送）；≥2 行时既有 bubble chip 逻辑自然接管 */
+function draftPickFill(){
+  var parts=_dpickSelected();
+  if(!parts.length){ _toast(window.T('inbox.dpick.none_sel'),'#b45309'); return false; }
+  var ta=document.getElementById('reply-ta');
+  if(!ta) return false;
+  var text=parts.join('\n');
+  var cur=ta.value.trim();
+  if(cur && cur!==text && !confirm(window.T('inbox.cdraft.overwrite_confirm'))) return false;
+  // 采纳归因：填入后经 sendMsg 发送时随既有 copilot_meta 链路落审计（by_source 可读）
+  if(_dpickMeta && _dpickMeta.text) _copilotApplyMeta={text:text, source:'ai_reply_fill'};
+  _uiBeacon('dpick.fill');
+  closeDraftPick();
+  ta.value=text;
+  try{ _onReplyInput(ta.value); }catch(_){}
+  ta.focus();
+  try{ ta.setSelectionRange(ta.value.length, ta.value.length); }catch(_){}
+  return true;   // 调用方（去工坊深编）据此判断「真的填进去了」再跳卡
+}
+/* 工坊联动：勾选短句填入输入框后，打开右栏「回复工坊」做改语言/改语气等深度编辑。
+   复用 draftPickFill 的确认/归因/关弹窗；被 confirm 取消 → 留在面板不跳。 */
+function draftPickToStudio(){
+  if(!draftPickFill()) return;
+  _uiBeacon('dpick.studio');
+  if(typeof infoOn!=='undefined' && !infoOn && typeof toggleInfoSidebar==='function') toggleInfoSidebar();
+  if(typeof WS_USE_APP!=='undefined' && WS_USE_APP){ _wsEnableApp(); _wsPostCtx({type:'cp-cmd',cmd:'focus-draft'}); return; }
+  try{ _cpExpandAndScroll('draft','reply'); }catch(_){}
+}
+async function draftPickSend(){
+  if(_sendInFlight) return;                       // 与 sendMsg 互斥，防交错乱序
+  var parts=_dpickSelected();
+  if(!parts.length){ _toast(window.T('inbox.dpick.none_sel'),'#b45309'); return; }
+  _uiBeacon('dpick.send');
+  closeDraftPick();
+  await _sendDraftParts(parts);
+}
+/* 条间延迟 ≈ 服务端 inter_part_delay_sec 简化版：思考抖动 + 下一条长度×打字速率 */
+function _dpickDelayMs(nextText){
+  var think=700+Math.random()*1400;
+  var typing=Math.min(2600, String(nextText||'').length*30);
+  return Math.min(4500, think+typing);
+}
+function _dpickSleep(ms){ return new Promise(function(res){ setTimeout(res,ms); }); }
+/* 逐条发送核心：每条各自乐观气泡 + 独立 client_msg_id；服务端护栏 409
+   （语言错配/近重复）整批只确认一次；某条失败即停（保顺序），剩余回填输入框。 */
+async function _sendDraftParts(parts){
+  if(!selectedChat) return;
+  if(selectedChat.read_only || selectedChat.can_send===false){
+    _toast(window.T(selectedChat.account_status==='offline'?'inbox.acct.offline_readonly':'inbox.acct.removed_readonly'),'#dc2626'); return;
+  }
+  var c=selectedChat;
+  var btn=document.getElementById('send-btn');
+  var _sameConv=function(){ return selectedChat && convKey(selectedChat)===convKey(c); };
+  _sendInFlight=true;
+  if(btn) btn.disabled=true;
+  showHint(window.Tf('inbox.dpick.sending',{n:parts.length}));
+  var sent=0, forceLang=false, forceDup=false, stopped=-1;
+  try{
+    for(var i=0;i<parts.length;i++){
+      if(!_sameConv()){ stopped=i; break; }       // 会话切走即停
+      var text=parts[i];
+      var optId='_opt_'+(++_sendSeq);
+      var optMsg={message_id:optId, text:text, direction:'out', ts:Date.now()/1000, _optimistic:true};
+      threadMsgs.push(optMsg);
+      renderMessages(c, threadMsgs, {silent:false});
+      var body={
+        platform:c.platform, account_id:c.account_id||'default', chat_key:c.chat_key,
+        text:text, client_msg_id:_newClientMsgId(), bubbles:0,   // 已经是短句，禁二次拆
+      };
+      if(_xlateOut) body.target_lang=_xlateOut;   // 出向翻译沿用会话设置（直发口径，逐条预览会把人逼疯）
+      if(forceLang) body.force_lang=1;
+      if(forceDup) body.force_dup=1;
+      if(i===0 && _dpickMeta && _dpickMeta.text){
+        // 采纳归因（只记首条防多算）：AI 弹窗草稿 → 实发，经既有 copilot_meta 审计链
+        // 落 /api/workspace/agent-copilot-stats 的 by_source。exact=原样发，edit=坐席改过。
+        body.copilot_meta={suggested_text:String(_dpickMeta.text).slice(0,2000),
+          source:_dpickMeta.source||'ai_reply_split',
+          match:(parts.join('\n')===_dpickMeta.text)?'exact':'edit'};
+        _dpickMeta=null;
+      }
+      optMsg._retryBody=body;
+      var ok=false;
+      try{
+        var r=await apiFetch('/api/unified-inbox/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)},{timeoutMs:60000});
+        var d=await r.json().catch(function(){ return {}; });
+        if(d&&d.ok){ ok=true; }
+        else{
+          var det=d&&d.detail;
+          if(r.status===409 && det && typeof det==='object'
+             && (det.code==='lang_mismatch'||det.code==='near_duplicate')){
+            // 护栏确认一次整批沿用；拒绝则本条按失败收尾
+            if(confirm(String(det.message||'')+'\n\n'+window.T('inbox.send.force_confirm'))){
+              if(det.code==='lang_mismatch'){ forceLang=true; body.force_lang=1; }
+              else{ forceDup=true; body.force_dup=1; }
+              body.client_msg_id=_newClientMsgId();
+              var r2=await apiFetch('/api/unified-inbox/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)},{timeoutMs:60000});
+              var d2=await r2.json().catch(function(){ return {}; });
+              ok=!!(d2&&d2.ok);
+            }
+          }
+        }
+      }catch(_){}
+      if(ok){
+        sent++;
+        optMsg._optimistic=false;                 // 已确认送达：转正常气泡，收尾统一对账
+        if(_sameConv()) renderMessages(c, threadMsgs, {silent:true});
+      }else{
+        optMsg._optimistic=false; optMsg._failed=true;   // 保留「重发」入口
+        if(_sameConv()) renderMessages(c, threadMsgs, {silent:true});
+        stopped=i+1;                              // 本条已有失败气泡，回填从下一条起
+        break;                                    // 中断后续：跳条发送会乱顺序
+      }
+      if(i<parts.length-1) await _dpickSleep(_dpickDelayMs(parts[i+1]));
+    }
+  }finally{
+    _sendInFlight=false;
     if(btn) btn.disabled=false;
+  }
+  if(sent>0){
+    try{ _cdraftResolveAdopted(); }catch(_){}     // 人工发送成功 → 采用中的 pending 草稿闭环
+    if(selectedChat && convKey(selectedChat)===convKey(c)){
+      try{ await loadThread(c,true); }catch(_){}
+    }
+    try{ await loadChats(); }catch(_){}
+  }
+  if(stopped>=0 && stopped<parts.length){
+    // 剩余未发内容回填输入框（不丢字），坐席可改后再发
+    var rest=parts.slice(stopped).join('\n');
+    var ta=document.getElementById('reply-ta');
+    if(rest && ta && selectedChat && convKey(selectedChat)===convKey(c)){
+      ta.value=(ta.value.trim()?ta.value+'\n':'')+rest;
+      try{ _onReplyInput(ta.value); }catch(_){}
+    }
+    _toast(window.Tf('inbox.dpick.sent_partial',{sent:sent,total:parts.length}),'#b45309');
+  }else if(sent>0){
+    _toast(window.Tf('inbox.dpick.sent_ok',{n:sent}),'#16a34a');
   }
 }
 
@@ -12201,14 +12989,14 @@ function initSSE(){
           loadThread(selectedChat, true);
         }
       } else if(t==='conv_note'){
-        // P25/P45：协作注解 + 阶段上下文
+        // P25/P45：协作注解 + 阶段上下文。
+        // P0-协作闭环：被 @ 的 toast 改由 workspace_base 全局负责（不再要求
+        // 正开着同一会话才看得见，且点击可跳转）；本页只负责刷新 + 副驾预填。
         if(selectedChat && data.conversation_id===selectedChat.conversation_id){
           loadNotes(selectedChat.conversation_id);
           _loadCollabContext(selectedChat.conversation_id);
           const me = MY_AGENT()?.id;
           if(me && (data.mentions||[]).includes(me)){
-            var _stg=data.stage_label?window.Tf('inbox.collab.mention_stage',{s:data.stage_label}):'';
-            _toast(window.Tf('inbox.collab.mention_toast',{name:(data.agent_name||window.T('inbox.notes.agent_default')),stg:_stg}),'#7c3aed');
             _prefillCopilot('mention',{
               mention_body:data.body||'',
               mention_from:data.agent_name||data.agent_id||window.T('inbox.collab.coworker')
@@ -12224,7 +13012,6 @@ function initSSE(){
         // P43/P46/P49：坐席确认后的关系进阶
         if(selectedChat && data.conversation_id===selectedChat.conversation_id){
           _loadRelationshipStage(selectedChat.conversation_id);
-          _loadScriptTopics(selectedChat.conversation_id);
           _prefillCopilot('stage_advance');
         }
         var _who=data.agent_name?(' · '+data.agent_name):'';
@@ -12238,7 +13025,6 @@ function initSSE(){
       } else if(t==='stage_reunion'){
         if(selectedChat && data.conversation_id===selectedChat.conversation_id){
           _loadRelationshipStage(selectedChat.conversation_id);
-          _loadScriptTopics(selectedChat.conversation_id);
           _prefillCopilot('reunion');
         }
         _toast(window.Tf('inbox.rel.reunion_live',{label:(data.stage_label||'')}),'#be185d');
@@ -12578,6 +13364,11 @@ Object.assign(window, {
 
   // 发送 / 回复区
   sendMsg, resendFailed, sendMediaFile, _cancelMedia, genAiReply, genVoiceReply, sendVoiceReply, _onVoicePersonaChange,
+  // AI 草稿分条选择弹窗（2026-08-01：AI回复 → 拆短句勾选 → 逐条发送）
+  closeDraftPick, draftPickRegen, draftPickFill, draftPickSend, _dpickToggle,
+  // 思考面板三态（同日：生成中可取消/收起胶囊/失败重试/备稿捷径/编辑标记）
+  draftPickCancel, draftPickRetry, draftPickManual, draftPickMinimize,
+  draftPickPillClick, draftPickPillCancel, draftPickPillKey, draftPickUseBackup, draftPickToStudio, _dpickMaskClick, _dpickEdited,
   unbindVoice, toggleQrPanel,
   toggleVoiceCfg, toggleXlatePop, _xlateQuickOn, _xlateOff, _openSlash, _focusRightVoice,
   _onXlateChange, _onXlatePreviewToggle, _onTopLangChange, _onToggleShowXlate, _saveDefaultLang,
@@ -12594,7 +13385,7 @@ Object.assign(window, {
   // 关系阶段
   _confirmRelStage, _ackRelReunion, _downgradeRelStage,
   // 工作链 / slash / NBA
-  _cancelChainExec, _startTopicChain, _applySlashItem,
+  _cancelChainExec, _applySlashItem,
   _nbaSend, _nbaExec, _nbaNotePrompt,
   // 消息翻译 / 媒体
   xlateMsg, xlateMsgMedia, openLightbox, closeLightbox,

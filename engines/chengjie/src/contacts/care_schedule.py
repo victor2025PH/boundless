@@ -319,6 +319,35 @@ class CareScheduleStore:
         except Exception:
             return 0
 
+    # ── 健康读数（P0 2026-08-01：/api/care/health「AI 正在听」证据）────────
+    def get(self, sid: int) -> Optional[Dict[str, Any]]:
+        """按 id 取单条（预览端点用）；不存在/异常 → None。"""
+        try:
+            rows = self._rows(" WHERE id = ?", [int(sid)], 1)
+            return rows[0] if rows else None
+        except Exception:
+            return None
+
+    def last_created_at(self) -> float:
+        """最近一条待办的创建时刻（0=库空/异常）。"""
+        try:
+            row = self._conn.execute(
+                "SELECT MAX(created_at) FROM care_schedule").fetchone()
+            return float(row[0]) if row and row[0] else 0.0
+        except Exception:
+            return 0.0
+
+    def count_created_since(self, since: float) -> int:
+        """``since`` 之后新捕获的待办数（含所有状态；证明捕获链活着）。"""
+        try:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM care_schedule WHERE created_at >= ?",
+                (float(since),),
+            ).fetchone()
+            return int(row[0]) if row else 0
+        except Exception:
+            return 0
+
 
 _singleton: Optional["CareScheduleStore"] = None
 _singleton_lock = threading.Lock()

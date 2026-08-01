@@ -24,6 +24,17 @@ def _reset_provider():
     reset_persona_media_store()
 
 
+@pytest.fixture(autouse=True)
+def _persona_photos_on(monkeypatch):
+    """2026-07-31 人设级发图闸（capabilities.photos）默认关；本文件全部场景
+    假定「人设已开相册/发图」，统一打开（关态由 tests/test_photo_capability.py
+    的 B 线行为用例覆盖）。"""
+    import src.companion.photo_capability as pc
+    monkeypatch.setattr(pc, "persona_photos_enabled_by_id", lambda _pid: True)
+    monkeypatch.setattr(pc, "resolve_prompt_persona",
+                        lambda _ctx: {"capabilities": {"photos": True}})
+
+
 def _cfg(**selfie):
     return {"companion": {"selfie": selfie}}
 

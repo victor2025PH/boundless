@@ -100,7 +100,7 @@
   *{box-sizing:border-box;}
   .ws-top a:focus-visible,.ws-top button:focus-visible,button:focus-visible,[role="button"]:focus-visible,a.ws-nav-item:focus-visible{outline:2px solid var(--tk-brand);outline-offset:2px;border-radius:6px;}
   input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--tk-ring);outline-offset:1px;}
-  html,body{margin:0;padding:0;height:100%;font-family:'Montserrat','Inter','PingFang SC','Microsoft YaHei',system-ui,sans-serif;color:var(--tk-text);background:var(--tk-bg);}
+  html,body{margin:0;padding:0;height:100%;font-family:var(--bl-font-sans,'Montserrat','Inter','PingFang SC','Microsoft YaHei',system-ui,sans-serif);color:var(--tk-text);background:var(--tk-bg);}
   /* 全站细节：科技感滚动条 + 选区色（一处生效，所有继承页统一观感）*/
   *::-webkit-scrollbar{width:10px;height:10px;}
   *::-webkit-scrollbar-thumb{background:rgba(100,116,139,.45);border-radius:6px;border:2px solid transparent;background-clip:padding-box;}
@@ -146,6 +146,8 @@
   .tk-toast .ui-ic{flex:0 0 auto;margin-top:1px;opacity:.95;}
   .tk-toast.ok{background:rgba(16,185,129,.93);}.tk-toast.err{background:rgba(225,29,72,.93);}
   .tk-toast.warn{background:rgba(245,158,11,.93);}.tk-toast.info{background:rgba(37,99,235,.93);}
+  /* 壳层仅有的两个装饰性入场动画：随 OS 减弱动效偏好直落终态（收件箱 CSS 同一模式） */
+  @media (prefers-reduced-motion:reduce){.tk-toast{animation:none;}.ws-cfm-ov{animation:none;}}
   .tk-toast.muted{background:rgba(91,107,133,.92);}.tk-toast.vio{background:rgba(139,92,246,.93);}
   .ws-top{height:52px;display:flex;align-items:center;gap:10px;padding:0 16px;color:#fff;flex-wrap:nowrap;overflow:visible;
     background:linear-gradient(100deg,#131418 0%,#191b21 60%,#1c1f26 100%);
@@ -826,7 +828,7 @@ function _wsAiTrialDismiss(){
   async function _tick(){
     if(shown) return;
     try{
-      var r=await fetch(URL+'?_='+Date.now(), {cache:'no-store', credentials:'same-origin'});
+      var r=await window.apiFetch(URL+'?_='+Date.now(), {cache:'no-store', credentials:'same-origin'}, {timeoutMs:8000});
       if(!r.ok) return;
       var t=await r.text();
       var cur=String((t||'').split(/\r?\n/)[0]||'').trim();
@@ -1649,6 +1651,29 @@ document.addEventListener('click',function(e){
       if(msg && ['inbox_message','draft_sla_breach','draft_backlog_summary','draft_reassigned','conversation_assigned','anomaly_alert','sla_alert','escalation','queue_alert','stage_advance','stage_advance_pending','stage_downgrade','stage_reunion','stage_sync','workflow_step','workflow_execution_completed','workflow_execution_failed','workflow_execution_cancelled'].indexOf(msg.type)>=0){
         if(window.__wsNotif) window.__wsNotif.add(msg);
       }
+      // P0-协作闭环：同事 @ 提及 —— 定向通知（仅被 @ 的坐席收）：铃铛 + 提示音 +
+      // 全局 toast（点击跳转会话）。此前 toast 只在「正开着同一会话」时出现，
+      // 跨班次/跨页面的提及等于丢进虚空；收进铃铛后未读角标与离线补看自然生效。
+      if(msg && msg.type==='conv_note' && msg.data){
+        var _cn=msg.data;
+        var _cnMine=MY_AGENT_ID && (_cn.mentions||[]).map(String).indexOf(String(MY_AGENT_ID))>=0;
+        if(_cnMine){
+          if(window.__wsNotif) window.__wsNotif.add(msg);
+          if(!_sseSettling()){
+            try{ if(window.__wsNotify && window.__wsNotify.beep) window.__wsNotify.beep(false); }catch(_){}
+            var _cnStg=_cn.stage_label?window.Tf('inbox.collab.mention_stage',{s:_cn.stage_label}):'';
+            var _cnEl=CRMW.toast(window.Tf('inbox.collab.mention_toast',{name:(_cn.agent_name||_cn.agent_id||'?'),stg:_cnStg}),'#7c3aed','users');
+            if(_cnEl && _cn.conversation_id){
+              _cnEl.style.cursor='pointer';
+              _cnEl.onclick=function(){
+                if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(_cn.conversation_id); return; }
+                try{ sessionStorage.setItem('ws_focus_conv',_cn.conversation_id); }catch(_){}
+                if(location.pathname!=='/workspace') location.href='/workspace';
+              };
+            }
+          }
+        }
+      }
       // 私聊新消息：提示音 + 弹窗（群组改走「群组动态」，由引擎按本地偏好决定）
       // 连接缓冲期内（重载重放）不响铃不弹窗，避免一次刷新弹一堆历史消息。
       if(msg && msg.type==='inbox_message' && window.__wsNotify && !_sseSettling()){
@@ -1805,6 +1830,15 @@ document.addEventListener('click',function(e){
     var d=n.data||{};
     return n.type+'|'+(d.conversation_id||d.draft_id||d.id||'');
   }
+  // P0-协作闭环：@提及按 note_id 幂等去重（SSE 重连重放同一条注解不堆重复条目，
+  // 且沿用旧时戳不复活未读）；与 _COALESCE_TYPES 分开——提及**计入**角标未读。
+  function _dedupeKey(n){
+    if(n&&n.type==='conv_note'){
+      var dd=n.data||{};
+      return 'conv_note|'+(dd.note_id||'');
+    }
+    return _coalesceKey(n);
+  }
   // 已读水位线持久化到本机 → 刷新后不再「全部又变未读」
   var _readAt = (function(){ try{ return parseInt(localStorage.getItem('ws_notif_read_at')||'0',10)||0; }catch(_){ return 0; } })();
   var _open = false;
@@ -1827,6 +1861,7 @@ document.addEventListener('click',function(e){
     anomaly_alert:  { iconName:'chart', bg:'#fef3c7', label:window.T('base.notif.type_anomaly_alert'), accent:'#d97706' },
     sla_alert:      { iconName:'alert', bg:'#fee2e2', label:window.T('base.notif.type_sla_alert'), accent:'#dc2626' },
     escalation:     { iconName:'bell', bg:'#ede9fe', label:window.T('base.notif.type_escalation'), accent:'#7c3aed' },
+    conv_note:      { iconName:'users', bg:'#ede9fe', label:window.T('base.notif.type_conv_note'), accent:'#7c3aed' },
   };
   // 群组动态：inbox_message 且会话类型为群组/频道 → 折叠展示、不计未读、不打扰
   function _isGroup(n){
@@ -1869,6 +1904,8 @@ document.addEventListener('click',function(e){
       sub = window.Tf('base.notif.reassigned_sub',{name:(d.to_agent_name||d.to_agent||'?')});
     } else if(n.type==='conversation_assigned'){
       sub = window.Tf('base.notif.assigned_sub',{by:(d.by_name||d.by||'?'),n:(d.count||1)});
+    } else if(n.type==='conv_note'){
+      sub = window.Tf('base.notif.mention_sub',{name:(d.agent_name||d.agent_id||'?'),text:(d.body||'').slice(0,40)});
     }
     return '<div class="ws-notif-item'+(unread?' unread':'')+'" style="border-left-color:'+(meta.accent||'transparent')+';" onclick="window.__wsNotif.click(\''+esc(JSON.stringify(n).replace(/'/g,'\\'+"'"))+'\')">'
       +'<div class="ws-notif-icon" style="background:'+meta.bg+'">'+(typeof uiIcon==='function'?uiIcon(meta.iconName||'pin',14):'')+'</div>'
@@ -1930,8 +1967,8 @@ document.addEventListener('click',function(e){
     // 否则 (_notif_ts||0) > _readAt 永远为 false，未读统计失灵、「全部已读」无视觉反馈。
     // 复发告警合并：同一会话已有同类告警 → 移除旧的、仅留最新；
     // 并「沿用旧时戳」，使其重发不会被当作新未读（否则重连重发会把已读重新顶成未读）。
-    var ck=_coalesceKey(evt), keepTs=null;
-    if(ck){ for(var i=_notifications.length-1;i>=0;i--){ if(_coalesceKey(_notifications[i])===ck){ keepTs=_notifications[i]._notif_ts||null; _notifications.splice(i,1); break; } } }
+    var ck=_dedupeKey(evt), keepTs=null;
+    if(ck){ for(var i=_notifications.length-1;i>=0;i--){ if(_dedupeKey(_notifications[i])===ck){ keepTs=_notifications[i]._notif_ts||null; _notifications.splice(i,1); break; } } }
     if(evt) evt._notif_ts = keepTs || evt._notif_ts || Date.now();
     _notifications.push(evt);
     if(_notifications.length > 200) _notifications.splice(0, _notifications.length - 200);
@@ -1995,7 +2032,7 @@ document.addEventListener('click',function(e){
       // 历史里同一会话的复发告警去重：从新到旧扫，每个 coalesce key 只留最新一条
       var seen={}, out=[];
       for(var i=hist.length-1;i>=0;i--){
-        var ck=_coalesceKey(hist[i]);
+        var ck=_dedupeKey(hist[i]);
         if(ck){ if(seen[ck]) continue; seen[ck]=1; }
         out.unshift(hist[i]);
       }
@@ -2027,8 +2064,8 @@ document.addEventListener('click',function(e){
       try{
         var n = JSON.parse(jsonStr);
         var d = n.data || {};
-        // 新消息/升级/SLA/转派 → 定位会话：已在收件箱直接选中，否则跳回工作台
-        if((n.type==='inbox_message'||n.type==='escalation'||n.type==='sla_alert'||n.type==='conversation_assigned') && d.conversation_id){
+        // 新消息/升级/SLA/转派/@提及 → 定位会话：已在收件箱直接选中，否则跳回工作台
+        if((n.type==='inbox_message'||n.type==='escalation'||n.type==='sla_alert'||n.type==='conversation_assigned'||n.type==='conv_note') && d.conversation_id){
           if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(d.conversation_id); _toggle(); return; }
           try{ sessionStorage.setItem('ws_focus_conv', d.conversation_id); }catch(_){}
           location.href='/workspace';

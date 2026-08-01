@@ -66,6 +66,16 @@ class _SM:
         self._context_store = _Store()
 
 
+@pytest.fixture(autouse=True)
+def _persona_photos_on(monkeypatch):
+    """2026-07-31 人设级发图闸默认关；本文件场景假定「人设已开相册/发图」，
+    统一打开（关态由 tests/test_photo_capability.py 覆盖）。"""
+    import src.companion.photo_capability as pc
+    monkeypatch.setattr(pc, "resolve_prompt_persona",
+                        lambda _ctx: {"capabilities": {"photos": True}})
+    monkeypatch.setattr(pc, "persona_photos_enabled_by_id", lambda _pid: True)
+
+
 # ── ① 场景单一事实源 ─────────────────────────────────────────────────────────
 
 def test_resolve_current_scene_uses_persona_pool_then_config():

@@ -7,6 +7,23 @@
 
 `main.py` 启 FastAPI，内嵌：contacts/handoff 子系统 + Telegram/LINE/Messenger 三端 RPA runner + skill_manager / KB / 回复生成 / 语言守卫 + Web 后台 + observability。
 
+## 四平台能力差异（别再通读四个 worker 源码）
+
+被问「telegram / whatsapp / line / messenger 的聊天逻辑和能力一不一样」时，答案在
+[`docs/平台能力矩阵.md`](docs/平台能力矩阵.md)——由 `scripts/platform_matrix.py` **从代码
+生成**，门禁 `tests/test_platform_matrix.py` 钉住与代码一致，**勿手改**（改了 worker 就重跑
+`python -m scripts.platform_matrix --out docs/平台能力矩阵.md`）。
+
+- **回复生成逻辑四平台共用**（A 线 `process_message` / B 线 `generate_inbox_draft`，按会话
+  automation_mode 互斥切换，与平台无关）；差异只在**收发管道能力**。
+- 看本机实况 + 核对「代码说支持的、实际到货了吗」：
+  `python -m scripts.platform_matrix --with-live-data`
+- 出站记账口径专项（媒体发了却只记成文字占位）：`python tools/check_outbound_media_mirror.py`
+- LINE 媒体链路真机探针（默认只读，`--confirm` 才发且只发给自己）：`python tools/probe_line_media.py`
+
+⚠ **别信散落在 worker 里的能力注释**：2026-07-31 实测有三处是错的或已过期（`mark_read`
+的 docstring 写「WA 暂无」而 WhatsApp 早就实现了）。以矩阵为准。
+
 ## Codex 在本 repo 工作时的约定
 
 ### 回归命令
@@ -418,6 +435,39 @@ LLM 出站文本却可能自己承诺「等我拍一张给你」，两边从不�
   发出（改自洽搪塞 + `record_image_fallback("a_line_send_failed")`）；免费额度只在**真送达**时消耗；
   Stage 短路搪塞/兜底/配文全套 zh/en 双语（`selfie_stage_text`，按会话语言取——英文会话不再蹦中文）。
 观测：`metrics_snapshot()` 增 `promise_detected/fulfilled/retracted/offer_accept`（autosend-status image 段）。
+
+**主动关怀（proactive_care）主线**（2026-08-01 当日 P0-P5 闭环，两条 agent 线接力；详版 DEVLOG §94）：
+```bash
+python -m pytest tests/test_care_routes.py tests/test_care_schedule.py \
+ tests/test_care_dispatcher.py tests/test_care_commitment.py \
+ tests/test_care_engine_hot_gate.py tests/test_care_extract_llm.py \
+ tests/test_care_shadow_scan.py tests/test_care_shadow_report.py \
+ tests/test_care_p2.py tests/test_care_budget.py \
+ tests/test_overlay_comment_preserve.py -q --tb=line
+```
+预期全绿。关键不变量（改 care 前先读）：
+- **常备接线 + 配置热闸**：捕获回调/派发循环/LLM 影子扫描无条件启动、内部按实时配置
+ 自闸——开关经 overlay 热重载 ~30s 生效**免重启**；`/api/care/engine` 三档
+ `enable_dry→go_live`（强制先灰度）`→pause`；`/api/care/health` 四灯=唯一状态入口。
+- **预览=派发同源**：`build_care_prompt` 单一入口，`/preview` 与真发一句 prompt 口径；
+ dry_run 只拟稿不发送、样本进 `/api/care/dry-run-samples` 审核（👎 进全局黑名单）。
+- **每联系人主动预算**（`contact_budget` 默认开，只拦真发）：**outreach_log 即共享账本**
+ （proactive_topic 真发本就落账、care 真发经 sent_hook 落 `batch_id=care:*`），
+ min_gap 4h + 本地日 2 次含本次；dry_run 不拦、危机关怀豁免、fail-open。
+ 反向让路（topic/ritual/milestone → pending care）由既有 `has_pending_care` 承担。
+- **LLM 抽取双闸**（`llm_extract`）：`shadow`=影子对照只写 `logs/care_shadow/*.jsonl`
+ （计数器随重启清零，JSONL 才是持久口径）；`enabled`=真实捕获**只收 llm_only**（正则
+ 优先）+ 同联系人**同事件日**日历去重（刻意不用语义嵌入——「一天一件事一条关怀」）。
+ 周审 `python -m scripts.care_shadow_report`；切主判据=llm_only 复核正确率 ≥80% 且
+ 样本 ≥20，且 health.shadow 快照含 `captured` 字段（=捕获代码已装载）。
+- **overlay 写入必须保注释**：`set_overlay_flag`/`save_overlay_patch` 已走 ruamel
+ round-trip（`set_yaml_key_preserving`/`merge_yaml_patch_preserving`，失败回落旧 dump）；
+ **别再新增裸 yaml.dump 整写 overlay 的路径**（2026-08-01 实锤：一次 enable_dry 剃光
+ config.local.yaml ~30 行运维注释，值无损但注释史没了）。
+- 前端：页面词条全在 `i18n_packs/care_page.py`（`cs2_*`）；浏览器只读门禁
+ `tools/verify_care_ui.py`（gate_sweep -Full 已挂，首跑即抓到 onboard-modal 拦点击）；
+ ops 卡 `loadCare()` 读 health 零新后端。派发上下文用 `list_recent_messages`
+ （**别改回 list_messages**——那是取最旧 N 条，「最近对话要点」喂成开场白的历史 bug）。
 
 **外部 worker 会话健康 + Messenger 受控降级主线**（2026-07：网页链路不稳的止血与自愈闭环）：
 ```bash

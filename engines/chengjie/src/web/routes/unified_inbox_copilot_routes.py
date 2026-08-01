@@ -1,23 +1,25 @@
-"""统一收件箱——情感陪伴剧本引擎 / 客户互动积分 / 坐席 AI 副驾路由域（巨石拆分 slice 19）。
+"""统一收件箱——客户互动积分 / 坐席 AI 副驾路由域（巨石拆分 slice 19）。
 
-把三段连续且共享依赖面的子域，从 ``register_unified_inbox_routes`` 巨型闭包中整体外移为
+把两段连续且共享依赖面的子域，从 ``register_unified_inbox_routes`` 巨型闭包中整体外移为
 ``register_copilot_routes(app, *, api_auth)``，由主 register 在**原位置**顺序调用：
 
-- Phase 40 情感陪伴剧本引擎：``conv/{id}/script-suggestions`` + ``script-topics`` CRUD
 - Phase 41 客户互动积分与成就：``contact/{id}/engagement`` (GET/POST)
 - Phase 42 坐席 AI 副驾（打字辅助）：``conv/{id}/copilot-prefill`` + ``conv/{id}/reply-suggest``
+
+（Phase 40 剧本话题引擎已于 2026-08 整体下线：script-suggestions + script-topics CRUD 路由、
+``src/inbox/conversation_script.py`` 引擎与 ``script_topics`` 表一并移除。）
 
 端点路径/方法/响应零变化（admin_route_inventory URL 契约守卫 + copilot 链路专项断言）。
 
 依赖全部朝下：context Copilot 族（slice 4 已成模块：_build_copilot_context /
 _maybe_polish_copilot / _record_copilot_impression_if_prefill）、auth._agent_from_request、
-services 存储；剧本/积分/副驾引擎均为 handler 内局部 import。只收 api_auth 一个参数。
+services 存储；积分/副驾引擎均为 handler 内局部 import。只收 api_auth 一个参数。
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from fastapi import Depends, Request
 
@@ -27,110 +29,14 @@ from src.web.routes.unified_inbox_context import (
     _maybe_polish_copilot,
     _record_copilot_impression_if_prefill,
 )
-from src.web.routes.unified_inbox_services import _contacts_store, _inbox_store
+from src.web.routes.unified_inbox_services import _inbox_store
 from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
 
 
 def register_copilot_routes(app, *, api_auth) -> None:
-    """挂载剧本引擎 / 互动积分 / AI 副驾端点（script-suggestions、script-topics*、engagement、copilot-prefill、reply-suggest）。"""
-
-    # ─── Phase 40: 情感陪伴剧本引擎 ─────────────────────────────────────
-
-    @app.get("/api/workspace/conv/{conversation_id}/script-suggestions")
-    async def api_conv_script_suggestions(conversation_id: str, request: Request):
-        """CC1：按关系阶段推荐话题切入点（内置 + 自定义）。"""
-        api_auth(request)
-        store = _inbox_store(request)
-        from src.inbox.conversation_script import ConversationScriptEngine
-
-        message_count = 0
-        last_msg_text = ""
-        intimacy_score: Optional[float] = None
-        exchange_count = 0
-        reunion = False
-
-        if store is not None:
-            try:
-                rows = store._conn.execute(
-                    """SELECT direction, text, ts FROM messages
-                       WHERE conversation_id = ? ORDER BY ts DESC LIMIT 30""",
-                    (conversation_id,),
-                ).fetchall()
-                message_count = store._conn.execute(
-                    "SELECT COUNT(*) as c FROM messages WHERE conversation_id = ?",
-                    (conversation_id,),
-                ).fetchone()["c"]
-                if rows:
-                    for r in rows:
-                        if r["direction"] in ("in", "inbound"):
-                            last_msg_text = str(r["text"] or "")
-                            break
-                meta = store.get_conv_meta(conversation_id) or {}
-                contact_id = str(meta.get("contact_id") or "")
-                if contact_id:
-                    cs = _contacts_store(request)
-                    if cs is not None:
-                        try:
-                            journey = cs.get_journey_by_contact(contact_id)
-                            if journey is not None:
-                                intimacy_score = float(journey.intimacy_score or 0)
-                        except Exception:
-                            pass
-                exchange_count = max(0, message_count // 2)
-            except Exception:
-                logger.debug("script-suggestions 上下文失败", exc_info=True)
-
-        custom = store.list_script_topics() if store else []
-        engine = ConversationScriptEngine()
-        stage = engine.derive_stage_from_signals(
-            exchange_count=exchange_count, intimacy_score=intimacy_score,
-        )
-        result = engine.suggest_topics(
-            stage,
-            custom_topics=custom,
-            last_msg_text=last_msg_text,
-            message_count=message_count,
-            reunion=reunion,
-            limit=6,
-        )
-        return {"ok": True, "conversation_id": conversation_id, **result}
-
-    @app.get("/api/workspace/script-topics")
-    async def api_script_topics_list(request: Request, stage: str = ""):
-        api_auth(request)
-        store = _inbox_store(request)
-        if store is None:
-            return {"ok": True, "topics": []}
-        return {"ok": True, "topics": store.list_script_topics(stage=stage)}
-
-    @app.post("/api/workspace/script-topics")
-    async def api_script_topics_create(request: Request, _=Depends(api_auth)):
-        body = await request.json()
-        store = _inbox_store(request)
-        if store is None:
-            return {"ok": False, "error": tr(request, "err.svc.inbox_not_ready")}
-        topic_id = store.upsert_script_topic(body)
-        return {"ok": True, "topic_id": topic_id}
-
-    @app.put("/api/workspace/script-topics/{topic_id}")
-    async def api_script_topics_update(topic_id: str, request: Request, _=Depends(api_auth)):
-        body = await request.json()
-        body["topic_id"] = topic_id
-        store = _inbox_store(request)
-        if store is None:
-            return {"ok": False}
-        store.upsert_script_topic(body)
-        return {"ok": True, "topic_id": topic_id}
-
-    @app.delete("/api/workspace/script-topics/{topic_id}")
-    async def api_script_topics_delete(topic_id: str, request: Request, _=Depends(api_auth)):
-        store = _inbox_store(request)
-        if store is None:
-            return {"ok": False}
-        ok = store.delete_script_topic(topic_id)
-        return {"ok": ok}
+    """挂载互动积分 / AI 副驾端点（engagement、copilot-prefill、reply-suggest）。"""
 
     # ─── Phase 41: 客户互动积分与成就 ───────────────────────────────────
 

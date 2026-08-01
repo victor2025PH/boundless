@@ -1413,6 +1413,26 @@ companion:
     quiet_end_hour: 8        # 安静时段结束
     dry_run: false           # 灰度：只生成+log 不真发
     grace_days: 1            # 逾期超此天数的待办标记 expired（错过时机不补发）
+    # P2 2026-08-01：LLM 抽取影子模式（多语种召回升级的对照期）。shadow=true 时
+    # LLM 与正则对同一入站流并跑，只写对照日志 logs/care_shadow/*.jsonl + 计数
+    # （绝不入库、绝不发送）；enabled 为未来「LLM 真实捕获」预留，当前版本不消费。
+    # 廉价门（time_like 多语种时间词）不过门的消息不烧 LLM；每日预算封顶防失控。
+    llm_extract:
+      shadow: false          # 影子对照开关（需 proactive_care.enabled=true 才生效）
+      daily_budget: 150      # 每日 LLM 抽取次数上限
+      # P4：LLM 真实捕获——llm_only（LLM 抓到、正则漏掉）的约定真实写入排程。
+      # 切主流程：影子跑数日 → python -m scripts.care_shadow_report 复核 llm_only
+      # 正确率达标 → 翻 true（overlay 热生效；前提=实例已装载 P4 代码，判据=
+      # /api/care/health 的 shadow 快照含 captured 字段）。防双写三层见模块注释。
+      enabled: false
+    # P3 2026-08-01：每联系人主动预算（真发防打扰闸，默认开——只减发送不增）。
+    # 读写共用 outreach_log 共享账本：proactive_topic 真发本就落账、care 真发也落账；
+    # 该联系人今天已被主动摸够（max_daily_touches 含本次）或距上次太近（min_gap_hours）
+    # → 本条 care 跳过（note=contact_budget）。dry_run 不拦（样本要流动），危机关怀豁免。
+    contact_budget:
+      enabled: true
+      min_gap_hours: 4       # 距该联系人上次任何主动触达的最小间隔
+      max_daily_touches: 2   # 本地自然日内主动触达上限（含本次 care）
   # 多平台 deferred 发送队列：care/reactivation 的**非 messenger** 主动消息发送闭环。
   # messenger 仍走既有 RPA runner deferred 路径；本队列服务 telegram/line/whatsapp 等
   # 可编程发送平台——经编排器 worker 统一投递，复用 kill-switch/quiet_hours/pacing/
@@ -1631,6 +1651,10 @@ companion:
   #   见 src/inbox/image_autosend.py，指标在 /api/drafts/autosend-status 的 image 段）。两条都受本块开关约束。
   selfie:
     enabled: false
+    # ↑ 全局总闸。2026-07-31 起为**两级开关**：总闸开了还需要**每个人设**在
+    #   人设工作室「相册」页打开「相册/发图功能」（persona capabilities.photos，
+    #   默认关）才会真发图；人设级关闭时对话中会注入「不承诺发照片」硬约束
+    #   （SSOT：src/companion/photo_capability.py）。
     free_daily: 1              # gate 开时每日免费张数（勾引），超额走 exclusive_album 付费引导；gate 关则不限
     #   ↑ 按端用户计、已持久化（bot.db ContextStore，重启不清零）；限单人滥用
     daily_global_cap: 0        # 全局每日出图总次数硬上限（跨所有端用户），0=不限——护出图 API 账单：
@@ -2282,6 +2306,20 @@ inbox:
   alerts:
     exclude_groups: true
 
+  # ── C3 工作流（跟进 SOP 工作链）模块开关 ──────────────────────
+  # false = 链管理/执行/漏斗 API 全部返回 403，工作台「工作链执行」卡自动隐藏，
+  # /workspace/workflows 管理页返回 404（模块不存在于此部署）。授权档位另有一道闸
+  # （licensing.feature_gate 登记 workflows=pro；档位不够时 API 403「升级解锁」、
+  # 管理页 302 跳 /membership），两闸独立：本开关是运营 kill-switch。语义边界：
+  #   • 只拦「新动作」（列链/建链/导种子/启动/取消/看漏斗）；**在途执行不中断**——
+  #     WorkflowRunner 刻意不受此闸（运行中的客户跟进不因打包开关被悄悄掐断；
+  #     要停用先在 /workflows 逐条取消再关）；
+  #   • NBA 下一步动作推荐/自定义动作不受影响（独立能力面），仅其中「启动工作链」
+  #     动作分支同步拦截；
+  #   • 配置读取失败按启用处理（不是安全闸门，异常时不应打死已出货模块）。
+  workflows:
+    enabled: true
+
   # ── E2 自动草稿生成（Auto-Draft Pipeline）──────────────────────
   # 当新入站消息到达时，自动分析风险并生成 AI 回复草稿，供坐席审批。
   # 草稿风险映射：low→L2（自动发送）/ medium→L3（需审批）/ high→L4（拦截）。
@@ -2661,6 +2699,15 @@ platform_login:
     # （会话建成后忽然换设备型号反而可疑）。建议与 credpool 一同开启（三隔离）。
     device_fingerprint:
       enabled: false
+    # companion 号是否对编排器暴露「发媒体」能力（2026-07-31 补的缺陷，默认关）。
+    # 关着时 owns_media("telegram",*) 恒 False，后果是**坐席在工作台不能手动发图/
+    # 发语音**（按钮置灰、硬点 501）——实测这是四个平台里唯一一个有此限制的，
+    # 而 AI 反而能发（A 线 pyrogram 原生路径绕开了编排器）。
+    # ⚠ 默认关是因为 owns_media 是单一布尔、同时管三条链：坐席手动发送、B 线
+    #   System Z 自动发媒体（TG 上因双轨互斥实际不会触发）、**主动触达的语音/照片
+    #   投递**。第三条会让沉默回访按 companion.proactive_topic.voice.probability
+    #   变成语音条——属运营决策，故要显式 opt-in。开启需重启（能力在构造期绑定）。
+    companion_media: false
     # N4 统一运行时：开 → 协议号（扫码 session）跑 A 线 TelegramClient
     #   （记忆/人设/情绪/语音图片/四层触发/人工转接全在线 + N4b 收发镜像进收件箱，坐席可见）；
     # 关 → 用 B 线薄连接 worker（仅收消息→收件箱 + 简单 autoreply）。
@@ -2690,6 +2737,30 @@ platform_login:
       seed_chats_max: 200      # 好友数超过此值只同步名单、不建会话占位（防列表噪音）
       pace_seconds: 0.35       # 会话每翻一页歇一下，温和拉取
       first_delay_seconds: 45  # A 线首轮延迟（避开启动风暴，但不必等满一个周期）
+  line:
+    # ── LINE 协议号媒体收发（2026-07-31 补齐「LINE 只能收发文字」的缺口）────────
+    # ⚠ 本节改动**须重启实例**才生效（worker 持有构造时的 config 引用，且出站能力在
+    #   构造期按开关绑定）——不属于 config 热重载能覆盖的那类开关。
+    # 两个开关默认值刻意不同，因为性质不同：
+    media:
+      # 【收】默认开＝在修一个缺陷：此前入站只取 text，客户发的图/语音/视频连
+      # media_ref 都没有 → 主管道判 incomplete 早退，**AI 一声不响**。开启后下载到
+      # /static，复用与 TG/WA 同一套识别（VLM 识图 / ASR 转写）与收件箱回写。
+      # 全程只读（一次 OBS GET，官方客户端打开聊天时本就会做）；失败回落「[图片]」占位。
+      inbound: true
+      # 【发】默认关＝新增能力，且**开启即级联**：编排器 owns_media() 会翻成 true，
+      # 自拍/相册/克隆语音/命理 K 线在 LINE 上的投递一并放开。逆向协议发媒体另有账号
+      # 风险，故必须显式 opt-in。开启需重启实例（能力在 worker 构造时绑定）。
+      # 内部实现：占位消息 → OBS 上传字节；上传失败会撤回占位，绝不给客户留破图。
+      outbound: false
+      # 贴纸图走公开贴纸商店 CDN（不在 OBS 消息对象里）。取不到则回落贴纸自带文字
+      # 「[表情] 開心」。CDN 路径万一失效时可单独关掉，不影响图/语音。
+      stickers: true
+      # 群聊媒体默认不下载：群与私聊共用同一条 okline 接收线程，热闹的群会把下载耗时
+      # 叠到私聊 AI 回复的延迟上（私聊才是 AI 与营收所在）。关＝群维持占位行为。
+      groups: false
+      inbound_max_bytes: 20971520   # 20MB：自报超限不下载；自报缺失则下完超限即丢
+      outbound_max_bytes: 20971520  # 20MB
   # 官方 API 出站 worker（mode=official）：让 companion/autoreply 主管道经官方通道发
   # （LINE Messaging / Messenger Send / WhatsApp Cloud），与 RPA/Baileys 按账号并存。
   # 凭证优先读账号 meta，回退到对应通道块（line / facebook_messenger / whatsapp_cloud）。
@@ -2749,6 +2820,15 @@ ops:
   # ops 看板「前端哑按钮错误」卡出近 7 天曲线——scoped_fail / dead_intent /
   # conv_not_found 这类「点了没效果」是在收敛还是回潮，重启不丢（进程内计数会清零）。
   frontend_error_trend:
+    enabled: false                     # 默认关；生产机经 config.local.yaml 打开
+    retention_days: 90                 # 日聚合保留天数（读端点顺手 prune）
+
+  # ── UI 事件趋势落库（2026-08-01）──────────────────────────────────────
+  # beacon（/api/telemetry/ui-event）的消毒动作按日 upsert 进 config/ui_event_trend.db，
+  # 经 /api/admin/ui-event-trend 读近 N 天（?prefix=dpick. 取 AI 回复漏斗命名空间）。
+  # 动机：进程内 ui_events 计数重启即清零，重启频繁的机器上「AI 回复取消率/采纳率」
+  # 这类决策读数会被切得七零八落（2026-08-01 施工日一天 4 次重启把首批漏斗数据洗掉）。
+  ui_event_trend:
     enabled: false                     # 默认关；生产机经 config.local.yaml 打开
     retention_days: 90                 # 日聚合保留天数（读端点顺手 prune）
 
@@ -2959,6 +3039,15 @@ health_watchdog:
     hang_fail_streak: 3               # 半死判定：真实合成连续失败次数阈值（0=关闭半死检测）
     hang_fresh_min: 20                # 半死判定：最近一次失败须在此窗口内（防陈旧信号误报）
     hang_after_min: 20                # 半死持续多久后首提（先让 EmotionTTSWatchdog 自动重启）
+  # LAN GPU 主机宕机升级提醒（2026-08-01 176 整机静默下线两小时实锤）：嵌入/视觉/
+  # 兜底 LLM/本地 MT 所在主机不可达时各链路会静默转移备点——业务不断，但本地算力
+  # 冗余归零必须有人知道。目标清单自动派生自配置（嵌入双活/兜底/视觉/MT 端点，
+  # 按主机去重、只认私网）；纯云部署无 LAN 端点＝自动静默，无需关闭。
+  # 告警经 EventBus lan_gpu_alert，webhook 订阅别名 lan_gpu。
+  lan_gpu_remind:
+    enabled: true
+    after_min: 30                     # 不可达多久后首提
+    interval_min: 240                 # 重提间隔（4h）
   # 待审草稿积压无人处理（默认开）：补 SLA 告警的 **L1 盲区**——三档里 L2 由 worker 自动
   # 发、L3/L4 有逐条 SLA 告警，而 L1（review 档 + low risk）**既不自动发也没有任何告警**，
   # 偏偏它是唯一「必须人来处理」的一档 → 会无声烂掉（实测生产烂到 214h / 8.9 天才被发现）。

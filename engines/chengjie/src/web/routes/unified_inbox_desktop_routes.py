@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -112,7 +113,11 @@ def register_desktop_routes(app, *, api_auth) -> None:
         因此回复带人设口吻、禁用「作为AI」等机器措辞、并融合知识库——而非通用提示词。
 
         body: {messages:[{direction,text}], persona_id?, platform?, chat_key?,
-               target_lang?, conversation_id?, account_id?}
+               target_lang?, conversation_id?, account_id?, mode?, instruction?}
+        mode: "reply"(默认)=承接客户最后一条；"opener"=主动开启新话题
+              （P1-198：无入站消息也可生成，走 generate_topic_opener 开场产线）。
+        instruction: 坐席显式指令（P22「采纳并拟稿」/缺口追问）。进 prompt 高权重
+              【坐席指令】块；空=旧行为。绝不写入客户消息历史。
         返回: {ok, reply, persona?, persona_tier?, intent?, translated?}
         """
         body = await request.json()
@@ -123,6 +128,14 @@ def register_desktop_routes(app, *, api_auth) -> None:
         chat_key = str(body.get("chat_key") or "").strip()
         conversation_id = str(body.get("conversation_id") or "").strip()
         account_id = str(body.get("account_id") or "").strip()
+        mode = str(body.get("mode") or "reply").strip().lower()
+        # P2-198 直出模式：坐席 UI 语言（正文按客户语言直出时附对照译文，只读）
+        gloss_lang = str(body.get("gloss_lang") or "").strip().lower()
+        # P22：坐席显式指令（目标今日拍 / 画像缺口追问）。封顶防 prompt 灌水。
+        instruction = str(body.get("instruction") or "").strip()[:400]
+        # P23：指令来源归属（beat/hero/slot）+ 所属目标——耐久漏斗与抽检样本用。
+        instr_source = str(body.get("instruction_source") or "").strip()[:16]
+        instr_goal_id = str(body.get("goal_id") or "").strip()[:64]
         # 兼容旧前端：只给 conversation_id 时反解 platform/account/chat_key
         if conversation_id and conversation_id.count(":") >= 2 and not chat_key:
             _p3 = conversation_id.split(":", 2)
@@ -132,6 +145,82 @@ def register_desktop_routes(app, *, api_auth) -> None:
 
         # 归一对话历史（OpenAI 风格）+ 取最后一条入站消息作为「待回复」
         history, last_inbound = normalize_history(msgs)
+        _t0 = time.monotonic()
+
+        def _log_usage(out_: dict) -> None:
+            # 观察期读数（chatx_readout 远程统计）：模式用量 / 直出注解命中 / 耗时。
+            # 单行 ASCII 锚点，随日志持久，重启不清零。
+            # 2026-08-01 分段补齐：gen/xlate/gloss_ms + path（unified/direct/fallback）
+            # ——「尖峰慢在生成还是翻译」从猜变成读日志。timings 在 try 外 pop：
+            # 只进日志不回客户端（响应契约不变），日志失败也不泄漏。
+            tm = out_.pop("timings", None)
+            tm = tm if isinstance(tm, dict) else {}
+            try:
+                logger.info(
+                    "[smart_reply] mode=%s ok=%s gloss=%s instr=%s ms=%d "
+                    "gen=%s xlate=%s gloss_ms=%s path=%s conv=%s",
+                    mode, "1" if out_.get("ok") else "0",
+                    "1" if out_.get("gloss") else "0",
+                    "1" if instruction else "0",
+                    int((time.monotonic() - _t0) * 1000),
+                    tm.get("gen_ms", "-"), tm.get("xlate_ms", "-"),
+                    tm.get("gloss_ms", "-"), tm.get("gen_path", "-"),
+                    conversation_id or f"{platform}:{account_id}:{chat_key}")
+            except Exception:
+                pass
+            _track_instruction_use(out_)
+
+        def _track_instruction_use(out_: dict) -> None:
+            """P23：坐席指令使用的**耐久**观测（进程 ui-event 计数重启即清零，
+            8/8 周审只能信 DB/文件口径）。两路都 best-effort，绝不影响主链：
+            - goal_id 在 → goal_events 落 ``drive_draft``（detail=beat/hero/slot），
+              peek_goal_store 只取既有单例（goals 关 = None = 零成本跳过）；
+            - 生成成功 → (指令, 产出) 进 JSONL 留样 ring（人耳抽检「照做没有」，
+              刻意不含客户原文）。
+            """
+            if not instruction:
+                return
+            try:
+                if instr_goal_id:
+                    from src.companion.goals.store import peek_goal_store
+                    _gs = peek_goal_store()
+                    if _gs is not None:
+                        _gs.add_event(
+                            instr_goal_id, "drive_draft", instr_source or "-")
+            except Exception:
+                pass
+            try:
+                _reply_txt = str(out_.get("reply") or "").strip()
+                if out_.get("ok") and _reply_txt:
+                    from src.inbox.instr_samples import record_instr_sample
+                    record_instr_sample(
+                        instruction=instruction, reply=_reply_txt,
+                        conv=conversation_id
+                        or f"{platform}:{account_id}:{chat_key}",
+                        source=instr_source, mode=mode,
+                        persona=str(out_.get("persona") or ""),
+                    )
+            except Exception:
+                pass
+
+        if mode == "opener":
+            from src.inbox.persona_reply import generate_topic_opener
+            out = await generate_topic_opener(
+                app=request.app,
+                platform=platform,
+                chat_key=chat_key,
+                history=history,
+                persona_id=persona_id,
+                target_lang=target_lang,
+                conversation_id=conversation_id,
+                account_id=account_id,
+                gloss_lang=gloss_lang,
+                agent_instruction=instruction,
+            )
+            out.pop("detail", None)
+            _log_usage(out)
+            return out
+
         if not last_inbound:
             return {"ok": False, "detail": tr(request, "err.ws.no_conversation_context")}
 
@@ -149,8 +238,11 @@ def register_desktop_routes(app, *, api_auth) -> None:
             target_lang=target_lang,
             conversation_id=conversation_id,
             account_id=account_id,
+            gloss_lang=gloss_lang,
+            agent_instruction=instruction,
         )
         out.pop("detail", None)
+        _log_usage(out)
         return out
 
     @app.post("/api/desktop/guard-check")

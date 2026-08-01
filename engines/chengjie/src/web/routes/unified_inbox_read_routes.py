@@ -32,6 +32,7 @@ from src.inbox.normalizer import (
 )
 from src.web.routes.unified_inbox_aggregate import (
     _INBOX_ADAPTERS,
+    _account_status_map,
     _chats_for_listing,
     _collect_all_chats,
     _collect_chats_from_store,
@@ -110,6 +111,10 @@ def _merge_orchestrator_status(
         # （前端按可删处理，行为回落旧版）。
         registry_keys: Optional[set] = None
         registry_obj = None   # 身份可视化：留给下方 persona 解析复用（不逐号重建）
+        # 产品口径（2026-08-01）：已登出(offline)账号**不进**聊天页 platform_status
+        # （无 chip / 无会话）；历史留本机 store，同号重登后自然回显。账号管理走
+        # /api/accounts（仍列 offline 供重登）。此处只收集 label/self_profile。
+        offline_keys: set = set()
         try:
             from src.integrations.account_self_profile import (
                 read_self_profile_from_meta,
@@ -118,6 +123,9 @@ def _merge_orchestrator_status(
             registry_keys = set()
             for row in registry_obj.list():
                 key = f"{row.get('platform')}:{row.get('account_id')}"
+                if str(row.get("status") or "") == "offline":
+                    offline_keys.add(key)
+                    continue  # 聊天页视角：当不存在
                 registry_keys.add(key)
                 lbl = str(row.get("label") or "")
                 if lbl:
@@ -165,17 +173,24 @@ def _merge_orchestrator_status(
                 if label_map.get(key):
                     existing["label"] = label_map[key]
 
+        # 编排器/适配器残留的已登出号：聊天页强制摘掉（账号管理另路可见）
+        for _ok in offline_keys:
+            platform_status.pop(_ok, None)
+
         # 掉线时长透传：外部 worker push 的会话健康表（platform_session_health）——
         # 条目当前不健康且有 unhealthy_since 起点 → 注入，前端 _acctOfflineHint
         # 据此显示「已掉线多久」。查找键必须与登记表 _key 同构（platform/account
         # 经 _san 消毒），故直接用其 staticmethod 构造。best-effort，异常静默。
+        # ensure_seeded：重启后把注册表 offline 灌回健康表（供 ops/告警，不进聊天 chip）。
         sess_map: Dict[str, Any] = {}
         _sess_key = None
         _unhealthy = frozenset()
         try:
             from src.integrations.platform_session_health import (
-                UNHEALTHY_STATUSES, get_platform_session_health,
+                UNHEALTHY_STATUSES, ensure_seeded_from_registry,
+                get_platform_session_health,
             )
+            ensure_seeded_from_registry()
             hp = get_platform_session_health()
             sess_map = (hp.dump() or {}).get("sessions") or {}
             _sess_key = hp._key
@@ -459,16 +474,32 @@ def _enrich_chat_list(request: Request, chats: List[Dict[str, Any]], *, config_m
             cids = [str(c.get("conversation_id") or "") for c in chats]
             dirs = ibx.last_message_dirs([x for x in cids if x])
             now = time.time()
+            # P0+：已退出/已移除账号无法回复——再亮 SLA 红 chip 只会逼坐席去点
+            # 打不开的发送框。行上缺 account_status 时回查注册表映射（live 路径兜底）。
+            try:
+                status_map = _account_status_map(request) or {}
+            except Exception:
+                status_map = {}
             for c in chats:
                 info = dirs.get(str(c.get("conversation_id") or ""))
                 # P2：顺手挂最后一条消息方向（in=对方/out=我方），供列表预览前缀，零额外查询
                 c["last_direction"] = (info.get("direction") or "") if info else ""
+                st = str(c.get("account_status") or "")
+                if not st:
+                    st = status_map.get(
+                        (str(c.get("platform") or ""),
+                         str(c.get("account_id") or "default")), "") or ""
                 if info and info.get("direction") == "in":
                     wait = max(0, int(now - (info.get("ts") or now)))
                     c["unanswered_sec"] = wait
-                    c["sla_breach"] = wait >= sla["warn"]
-                    c["sla_level"] = ("crit" if wait >= sla["crit"]
-                                      else "warn" if wait >= sla["warn"] else "")
+                    if st in ("offline", "removed"):
+                        c["sla_breach"] = False
+                        c["sla_level"] = ""
+                    else:
+                        c["sla_breach"] = wait >= sla["warn"]
+                        c["sla_level"] = ("crit" if wait >= sla["crit"]
+                                          else "warn" if wait >= sla["warn"]
+                                          else "")
                 else:
                     c["unanswered_sec"] = 0
                     c["sla_breach"] = False
@@ -680,6 +711,26 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
                 store, crit_sec=_sla_cfg(request)["crit"])
         except Exception:
             logger.debug("[chats] attn 聚合失败", exc_info=True)
+        # 已退出/已移除：聊天页完全不展示 → 平台徽章 + 账号级未读/attn 一并剔除
+        # （历史未读仍在 store，同号重登后自然回显）。
+        try:
+            _dead = {f"{p}:{a}" for (p, a) in _account_status_map(request)}
+            if _dead:
+                for _k in list(unread_by_account):
+                    if _k not in _dead:
+                        continue
+                    _p = _k.split(":", 1)[0]
+                    _left = int(unread_by_platform.get(_p) or 0) \
+                        - int(unread_by_account[_k] or 0)
+                    if _left > 0:
+                        unread_by_platform[_p] = _left
+                    else:
+                        unread_by_platform.pop(_p, None)
+                    unread_by_account.pop(_k, None)
+                attn_by_account = {k: v for k, v in attn_by_account.items()
+                                   if k not in _dead}
+        except Exception:
+            logger.debug("[chats] 已退出账号聚合剔除失败", exc_info=True)
         try:
             _enrich_platform_status_value(
                 platform_status, store, unread_by_account=unread_by_account,
@@ -760,6 +811,17 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
         before = float(before_ts or 0) or None
 
         cid = conv_id(platform, account_id, chat_key)
+        # 已登出：聊天页不开放线程（历史在 store，同号重登后同一 cid 可读）
+        try:
+            _st = (_account_status_map(request) or {}).get(
+                (platform, account_id), "")
+            if _st == "offline":
+                raise HTTPException(
+                    409, tr(request, "err.inbox.account_offline"))
+        except HTTPException:
+            raise
+        except Exception:
+            pass
         # 性能修复（根治「加载超时」）：**无条件先按 cid 直读持久层**——只要库里有该会话
         # 历史，就走这条快路(毫秒级)，**跳过**昂贵的全平台 live 聚合（_collect_all_chats
         # 遍历所有适配器 + telegram get_dialogs(100) + 写库，机器负载高时会拖到十几秒→前端

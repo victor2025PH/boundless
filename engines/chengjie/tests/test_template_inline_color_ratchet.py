@@ -61,7 +61,7 @@ _INLINE_COLOR_CEILINGS = {
     "ops_overview.html": 2,
     # personas.html：2026-07-30 品牌收口把最后一个内联硬编码色转成 color-mix(var(--p)) → 0，除名
     "queue_monitor.html": 3,
-    "relations_health.html": 3,
+    # relations_health.html：2026-08-01 任务台改版把仅剩内联色恢复 --th-* token → 0，除名
     "rpa_overview.html": 11,
     "settings.html": 9,
     "setup_wizard.html": 1,
@@ -71,7 +71,7 @@ _INLINE_COLOR_CEILINGS = {
     "_channel_body_whatsapp.html": 13,
     "workflows.html": 1,
     "workspace_base.html": 4,   # 2026-07-29：AI 引导/试用横幅+升级弹窗色彩层已抽类（ws-aiguide-*/ws-aitrial-*/ws-upsell-*）
-    "workspace_dashboard.html": 5,
+    "workspace_dashboard.html": 4,  # 2026-07-30 品牌收口：当前行高亮 → color-mix(var(--tk-brand))
     # workspace_usage.html：2026-07-30 品牌收口把图例点 #93c5fd → var(--bl-growth-300) → 0，除名
 }
 

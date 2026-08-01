@@ -262,14 +262,29 @@ def _mk_ai(cfg):
     return c
 
 
-def test_context_prompt_media_hint_and_capability_boundary():
+def test_context_prompt_media_hint_and_capability_boundary(monkeypatch):
+    """2026-07-31 语义升级：发图协议注入要求「全局 selfie 开 **且** 当前人设
+    capabilities.photos 开（默认关）」；能力关不再是「什么都不注入」而是注入
+    「无发图能力」硬约束（photo_capability SSOT，修倒挂——发不了图的形态恰恰
+    最需要「别承诺发图」）。"""
+    import src.companion.photo_capability as pc
+
     base_ctx = {"last_message": "在吗"}
-    # ① 上游 hint 注入 → 进 prompt（发图协同块）
+
+    def _persona_on():
+        monkeypatch.setattr(pc, "resolve_prompt_persona",
+                            lambda _ctx: {"capabilities": {"photos": True}})
+
+    def _persona_off():
+        monkeypatch.setattr(pc, "resolve_prompt_persona", lambda _ctx: None)
+
+    # ① 上游 hint 注入 → 进 prompt（发图协同块），与人设开关无关
+    _persona_on()
     p = _mk_ai({"companion": {"selfie": {"enabled": True}}})._build_context_prompt(
         dict(base_ctx, _media_coherence_hint="对方在要照片，本轮发不出，别承诺。"))
     assert "发图协同" in p and "别承诺" in p
-    # ② conversion 域 + selfie 开：默认 hybrid 模式 → LLM 主动决策协议块
-    #   （photo_directive 决策权上移）；intent.mode=keyword 回退 → 旧被动声明。
+    # ② conversion 域 + selfie 开 + 人设开：默认 hybrid → LLM 主动决策协议块；
+    #   intent.mode=keyword 回退 → 旧被动声明。
     p2 = _mk_ai({"domain": "conversion", "companion": {
         "selfie": {"enabled": True}}})._build_context_prompt(dict(base_ctx))
     assert "发照片能力" in p2 and "[PHOTO" in p2
@@ -278,17 +293,31 @@ def test_context_prompt_media_hint_and_capability_boundary():
                    "intent": {"mode": "keyword"}}}})._build_context_prompt(
         dict(base_ctx))
     assert "媒体能力边界" in p2k
-    # ③ selfie 关 → 无声明/无协议（没有发图能力时这段是噪声）
+    # ②x 全局开但**人设关（默认）**：不注协议，注「无发图能力」硬约束
+    _persona_off()
+    p2x = _mk_ai({"domain": "conversion", "companion": {
+        "selfie": {"enabled": True}}})._build_context_prompt(dict(base_ctx))
+    assert "[PHOTO" not in p2x and "发照片能力" not in p2x
+    assert "发图能力·硬边界" in p2x
+    # ③ selfie 全局关 → 同样注入硬约束（旧行为=什么都不注入，正是倒挂缺陷）
     p3 = _mk_ai({"domain": "conversion", "companion": {
         "selfie": {"enabled": False}}})._build_context_prompt(dict(base_ctx))
-    assert "媒体能力边界" not in p3 and "发照片能力" not in p3
-    # ④ capability_hint 配置可关
+    assert "发图能力·硬边界" in p3 and "发照片能力" not in p3
+    # ④ capability_hint 配置可整体关（协议与硬约束都不注入）
+    _persona_on()
     p4 = _mk_ai({"domain": "conversion", "companion": {
         "selfie": {"enabled": True},
         "media_promise_guard": {"capability_hint": False}}})._build_context_prompt(
         dict(base_ctx))
     assert "媒体能力边界" not in p4 and "发照片能力" not in p4
+    _persona_off()
+    p4x = _mk_ai({"domain": "conversion", "companion": {
+        "selfie": {"enabled": False},
+        "media_promise_guard": {"capability_hint": False}}})._build_context_prompt(
+        dict(base_ctx))
+    assert "发图能力·硬边界" not in p4x
     # ⑤ 有具体 hint 时不叠加常驻声明（hint 更具体，避免指令冗余）
+    _persona_on()
     p5 = _mk_ai({"domain": "conversion", "companion": {
         "selfie": {"enabled": True}}})._build_context_prompt(
         dict(base_ctx, _media_coherence_hint="X提示X"))

@@ -27,6 +27,12 @@
       super();
       this._genToken = 0;
       this._pickSeq = 0;
+      /* P1-198：生成模式——reply=承接客户最后一条(旧行为)；opener=主动开启新话题
+         （无入站消息也可生成，走 /api/desktop/smart-reply {mode:"opener"} 开场产线） */
+      this._mode = "reply";
+      /* P22：坐席显式指令（目标今日拍 / 画像缺口追问）。进 smart-reply.instruction，
+         不写 composer——防误发意图原文。{text, label?, pushLevel?, goalId?} */
+      this._directive = null;
       this.shadowRoot.addEventListener("change", (e) => {
         const s = e.target.closest('select[data-role="lang"]');
         if (s) { this._saveLang(s.value); this.emit("cp-lang-changed", { lang: s.value }); }
@@ -40,6 +46,9 @@
     styles() {
       return `
       .ctl { display:flex; flex-direction:column; gap:var(--cp-gap-sm,6px); align-items:stretch; }
+      .mrow { display:flex; gap:4px; }
+      button.mode { flex:1; padding:4px 6px; font-size:var(--cp-fs-tiny,11px); opacity:.78; }
+      button.mode.on { background:var(--cp-accent,#4f46e5); color:#fff; border-color:transparent; opacity:1; font-weight:600; }
       select { font:inherit; font-size:var(--cp-fs-sm,12px); padding:5px 8px; width:100%;
                border:1px solid var(--cp-border,#e2e8f0); border-radius:var(--cp-radius-sm,6px);
                background:var(--cp-surface,#fff); color:var(--cp-text,#1e293b); }
@@ -74,6 +83,17 @@
       button.pin { flex:0 0 auto; padding:5px 8px; }
       button.pin.on { background:var(--cp-accent,#4f46e5); color:#fff; border-color:transparent; }
       .psrc { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-tiny,#94a3b8); margin:-2px 0 6px; }
+      .dirchip { display:flex; align-items:flex-start; gap:6px; margin:0 0 6px;
+                 padding:6px 8px; border-radius:var(--cp-radius-sm,6px);
+                 background:rgba(79,70,229,.08); border:1px solid rgba(79,70,229,.22);
+                 font-size:var(--cp-fs-tiny,11px); color:var(--cp-accent,#4f46e5); line-height:1.4; }
+      .dirchip .dirbody { flex:1; min-width:0; }
+      .dirchip .dirlab { font-weight:600; margin-right:4px; }
+      .dirchip .dirtxt { color:var(--cp-text,#1e293b); display:block; margin-top:2px;
+                         white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+                         max-width:100%; }
+      .dirchip button.dirx { flex:0 0 auto; padding:0 6px; font-size:14px; line-height:1.2;
+                             background:transparent; border:0; color:var(--cp-text-dim,#64748b); cursor:pointer; }
       .lblock { border:1px solid var(--cp-border,#e2e8f0); border-radius:var(--cp-radius-sm,6px); padding:6px 8px; margin-top:6px; }
       .lblock.active { border-color:var(--cp-accent,#4f46e5); box-shadow:0 0 0 1px var(--cp-accent,#4f46e5) inset; }
       .lblock .lhead { display:flex; align-items:center; gap:6px; font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); margin-bottom:4px; }
@@ -89,6 +109,8 @@
         return;
       }
       this._draft = null;
+      // 切会话清指令，避免上一条会话的今日拍串到下一条
+      this._directive = null;
       const lang = this._loadLang();
       const opts = LANGS.map(([v, k]) =>
         `<option value="${v}"${v === lang ? " selected" : ""}>${this.esc(this.t(k))}</option>`).join("");
@@ -109,13 +131,20 @@
           .map(([v, k]) => `<option value="${v}"${v === cl ? " selected" : ""}>${this.esc(this.t(k))}</option>`).join("");
         contrastRow = `<select data-role="contrast"><option value="">${this.esc(this.t("cp.draft.no_contrast"))}</option>${copts}</select>`;
       }
+      const modeRow =
+        `<div class="mrow">` +
+        `<button class="mode${this._mode !== "opener" ? " on" : ""}" data-act="mode-reply">${this.esc(this.t("cp.draft.mode_reply"))}</button>` +
+        `<button class="mode${this._mode === "opener" ? " on" : ""}" data-act="mode-opener" title="${this.esc(this.t("cp.draft.mode_opener_t"))}">${this.esc(this.t("cp.draft.mode_opener"))}</button>` +
+        `</div>`;
       this._render(
         personaRow +
-        `<div class="ctl"><select data-role="lang">${opts}</select>` +
+        `<div data-role="dirhost"></div>` +
+        `<div class="ctl">` + modeRow + `<select data-role="lang">${opts}</select>` +
         contrastRow +
         `<button class="gen" data-act="gen">${this.esc(this.t("cp.draft.gen_btn"))}</button></div>` +
         `<div class="slot"></div>`
       );
+      this._paintDirective();
       if (wantPersona) this._loadPersonas();
       // P4-C：无会话级记忆时，回落服务端「默认回复语言」（账号>平台>全局）。不写本地（仅默认，非用户选择）。
       if (!lang) this._applyServerReplyDefault(this._ctx && this._ctx.conversationId);
@@ -201,6 +230,11 @@
 
     onAction(act, el) {
       if (act === "gen") { this._generate(); return; }
+      if (act === "dir-clear") { this.clearDirective(); return; }
+      if (act === "mode-reply" || act === "mode-opener") {
+        this._setMode(act === "mode-opener" ? "opener" : "reply");
+        return;
+      }
       if (act === "pin") { this._pinPersona(); return; }
       if (act === "fill-pick") {
         const t = this._pickedText();
@@ -338,7 +372,9 @@
         .map((m) => ({ direction: m.direction, text: m.text }))
         .filter((m) => m.text);
       if (token !== this._genToken) return;
-      if (!messages.length) {
+      const opener = this._mode === "opener";
+      // P1-198：开新话题模式不依赖入站消息（没人说话也能主动开场）；续聊模式保持旧检查
+      if (!messages.length && !opener) {
         if (slot) slot.innerHTML = `<div class="err">${this.esc(this.t("cp.draft.no_context"))}</div>`;
         return;
       }
@@ -348,7 +384,19 @@
       // conversation_id 必带：服务端由它反解 account → 会话覆写/账号人设才解析得准
       // （只给 platform+chat_key 时多账号下会落到 config 默认人设 → 口径与出站链分裂）。
       const payload = { messages, platform, chat_key: chatKey, target_lang: lang, conversation_id: cid };
+      if (opener) payload.mode = "opener";
+      // P2-198 直出模式：带上坐席 UI 语言——正文按客户语言直出时，服务端附一份
+      // 该语言的对照译文（gloss，只读），中文坐席不必再切「中文」生成 + 发送再翻。
+      payload.gloss_lang = (root.CopilotShared && root.CopilotShared.lang) || "zh";
       if (personaId) payload.persona_id = personaId;
+      // P22：坐席指令进 prompt【坐席指令】——绝不写进 messages / composer
+      const dirText = this._directive && String(this._directive.text || "").trim();
+      if (dirText) {
+        payload.instruction = dirText.slice(0, 400);
+        // P23：目标/来源随行（服务端落 drive_draft 耐久事件 + 抽检样本归属）
+        if (this._directive.goalId) payload.goal_id = this._directive.goalId;
+        if (this._directive.source) payload.instruction_source = this._directive.source;
+      }
       let r;
       try {
         r = await this._client.smartReply(payload);
@@ -366,10 +414,67 @@
       this._paintDraft(r);
     }
 
+    /* P22：宿主（目标卡「采纳并拟稿」）注入坐席指令。
+       opts: {text, summary?, label?, pushLevel?, goalId?, source?, autoGen?}
+       text=送进 smart-reply.instruction 的完整指令；summary=chip 短展示（默认取首行）。
+       autoGen 默认 true。设指令时强制切回「续聊」模式——opener 产线不吃 instruction，
+       否则「采纳并拟稿」在 opener 态会静默丢掉意图（P22.1 实锤）。 */
+    setDirective(opts) {
+      const o = opts || {};
+      const text = String(o.text || o.intent || "").trim().slice(0, 400);
+      if (!text) return;
+      if (this._mode === "opener") this._setMode("reply");
+      const summary = String(o.summary || o.intent || "").trim()
+        || text.split(/\n/)[0].slice(0, 80);
+      this._directive = {
+        text,
+        summary,
+        label: String(o.label || "").trim(),
+        pushLevel: String(o.pushLevel || "").trim(),
+        goalId: String(o.goalId || "").trim(),
+        source: String(o.source || "").trim(),
+      };
+      this._paintDirective();
+      if (o.autoGen !== false) this._generate();
+    }
+    clearDirective() {
+      this._directive = null;
+      this._paintDirective();
+    }
+    _paintDirective() {
+      const host = this.shadowRoot && this.shadowRoot.querySelector('[data-role="dirhost"]');
+      if (!host) return;
+      const d = this._directive;
+      if (!d || !d.text) { host.innerHTML = ""; return; }
+      const lab = d.label || this.t("cp.draft.directive_label");
+      const tipParts = [this.t("cp.draft.directive_tip")];
+      if (d.pushLevel === "none") tipParts.push(this.t("cp.draft.directive_companion_tip"));
+      if (d.text) tipParts.push(d.text);
+      const tip = tipParts.filter(Boolean).join("\n");
+      const shown = d.summary || d.text.split(/\n/)[0];
+      host.innerHTML =
+        `<div class="dirchip" title="${this.esc(tip)}">` +
+        `<div class="dirbody"><span class="dirlab">${this.esc(lab)}</span>` +
+        (d.pushLevel === "none"
+          ? `<span class="dirlab" style="font-weight:400;opacity:.85">${this.esc(this.t("cp.draft.directive_companion_tip"))}</span>`
+          : "") +
+        `<span class="dirtxt">${this.esc(shown)}</span></div>` +
+        `<button type="button" class="dirx" data-act="dir-clear" aria-label="${this.esc(this.t("cp.draft.directive_clear"))}">\u00d7</button></div>`;
+    }
+
     /* 宿主联动（cp-persona-changed 后调用）：人设换绑使已展示的草稿口吻过期 ——
        仅当面板里已有草稿时才重生成（闲置面板不烧 LLM；下次手动生成天然用新人设）。 */
     regenerate() {
       if (this._draft) this._generate();
+    }
+
+    /* P1-198：切换生成模式（只改按钮态，不清已生成草稿、不烧 LLM）。 */
+    _setMode(m) {
+      this._mode = m === "opener" ? "opener" : "reply";
+      this.shadowRoot.querySelectorAll("button.mode").forEach((b) => {
+        const isOpener = b.getAttribute("data-act") === "mode-opener";
+        b.classList.toggle("on", isOpener === (this._mode === "opener"));
+      });
     }
 
     _paintDraft(r) {
@@ -395,6 +500,11 @@
       const replyLang = this._draftLang || "zh";
       // 指定回复语言时后端已用该语言生成(translated≈reply)，取可读文本
       const replyText = (this._reqLang && r.translated) ? r.translated : r.reply;
+      // P2-198 对照译文（只读）：正文按客户语言直出时给坐席看的母语对照。
+      // 刻意**没有**「填入」按钮——把对照填进输入框发出去=把中文发给外语客户
+      // （正是 P0 修掉的泄漏路径），对照只服务于「读得懂」。
+      const gloss = r.gloss
+        ? `<div class="tr gloss"><div class="tl">${esc(this.t("cp.draft.gloss"))}</div>${esc(r.gloss)}</div>` : "";
       if (wantContrast && contrastLang && contrastLang !== replyLang) {
         this._pickSeq += 1;
         const nm = "cppick" + this._pickSeq;
@@ -407,6 +517,7 @@
           `<div class="lblock" data-block="contrast">` +
             `<div class="lhead"><input type="radio" name="${nm}" data-pick="contrast"><span>${esc(this._langLabel(contrastLang))}</span></div>` +
             `<textarea data-role="contrast-ta" rows="4">${esc(this.t("cp.draft.translating"))}</textarea></div>` +
+          gloss +
           `<div class="acts">` +
             `<button class="primary" data-act="fill-pick">${esc(this.t("cp.draft.fill"))}</button>` +
             `<button class="send" data-act="send-pick">${esc(this.t("cp.draft.fill_send"))}</button>` +
@@ -429,7 +540,7 @@
         `<button class="primary" data-act="fill" data-which="reply">${esc(this.t("cp.draft.fill"))}</button>` +
         `<button class="send" data-act="send" data-which="${sendWhich}">${esc(this.t("cp.draft.fill_send"))}</button>` +
         `</div>` +
-        translated +
+        translated + gloss +
         `<div class="guardbox"></div>` +
         `</div>`;
       this._preflightGuardForPill(r);

@@ -146,7 +146,49 @@ $gates = @(
     # 起打包后端，一次验读时解析 + 启动补齐）。
     'tests/test_platform_login_defaults.py',
     'tests/test_platform_login_upgrade.py',
-    'tests/test_seed_switch_upgrade_coverage.py'
+    'tests/test_seed_switch_upgrade_coverage.py',
+    # LINE 媒体能力契约（2026-07-31）：编排器判「该号能不能发媒体」用的是
+    # `hasattr(worker,"send_media")`，所以 LineProtocolWorker 是**按开关条件绑定**
+    # 那个属性、而不是写成普通方法。谁顺手「简化」成 `async def send_media`，就等于
+    # 把自拍/相册/克隆语音/命理 K 线在 LINE 上一次性全部放开（默认关的意义没了）。
+    # 这类「读代码看不出、改了也不报错」的契约正是要靠门禁互验的东西。
+    'tests/test_line_media.py',
+    # 平台能力矩阵（2026-07-31）：docs/平台能力矩阵.md 由代码结构生成，这条钉住
+    # 「生成物 == 代码」+「矩阵判据 == 编排器运行时那套 hasattr」+「开关说明是活的」
+    # +「新 worker 不会漏进矩阵」。缘起＝当时代码里有三处能力注释是错的/已过期，
+    # 手写能力清单必然漂移，所以改成生成 + 门禁钉。
+    'tests/test_platform_matrix.py',
+    # A 线出站富媒体镜像（2026-07-31）：pyrogram 直发的图/语音此前只往收件箱写一行
+    # 纯文字占位 → 坐席看不到自家人设发出去的图，按 media_type 统计出站媒体的口径
+    # 把整条 A 线漏掉（实测 TG 868 条出站只数出 1 条，实际文本占位 166 条）。
+    # 这条钉住三个接线不变量：发图发布 canonical 原图（不是发完即删的去重副本）、
+    # 语音发布夹在「发送→删文件」窗口内、两条语音路径共用同一文案函数。
+    'tests/test_outbound_media_mirror.py',
+    # P0-198 出站保真三防线接线（2026-07-31，客户机实录：中文原样发给英文客户 /
+    # 同义改写三连发 / WhatsApp 灰色感叹号 / Signal 私钥进日志）：语言错配 409、
+    # 近重复 409、Baileys ephemeral 三出站口、libsignal 脱敏、worker HOLD——
+    # 全是「写了守卫没挂线」高发区，行为单测盖不住接线层。纯静态扫描。
+    'tests/test_outbound_leak_guard_wiring.py',
+    # P1-198 副驾体验收口接线（2026-07-31）：工坊 opener 模式分发、情绪状态行、
+    # 回访任务诚实化 + 可关闭 flag、英雄卡收敛到客户&关系 tab、人设账号级默认
+    # legacy 入口——双树（shared ↔ desktop/renderer/shared）关键锚点都断言，
+    # 防「只改一棵树」的半吊子同步。纯静态扫描。
+    'tests/test_p1_copilot_wiring.py',
+    # companion 号发媒体能力（2026-07-31）：与 LINE 那条同型的「按开关条件绑定
+    # send_media」契约——写成普通方法就一次性放开坐席手动发送 + B 线自动发媒体 +
+    # 主动触达语音三条链（最后一条属运营决策）。另钉「走内层 pyrogram、不委派会
+    # 二次镜像的 A 线 send_photo」，否则一次发送在坐席台留两行。
+    'tests/test_companion_media_capability.py',
+    # P2-198 直出模式 + 诊断包接线（2026-07-31）：gloss 双产线挂点、路由透传、
+    # 对照区块**必须只读**（带填入按钮=复活 P0 修掉的中文泄漏）、诊断包路由/
+    # 清单/settings 卡探活自洽、i18n 双语。纯静态扫描。
+    'tests/test_p2_direct_output_wiring.py',
+    # 配置重复键（2026-07-31 事故后补）：PyYAML 对重复键静默取最后一个，手插一个
+    # 同名块会把前面整块丢掉——实测把 platform_login.telegram 整段清空，重启后
+    # 5 个 TG 号无 worker 离线约 2 分钟。解析成功、启动正常、日志无异常，只有这条
+    # 查得出。含「本机实例配置必须无重复键」（无实例部署的机器自动跳过）。
+    # 同一检查已接进 restart_instance.ps1 前置闸门（真拦，见 -Advise 输出）。
+    'tests/test_config_duplicate_keys.py'
 )
 
 $missing = @($gates | Where-Object { -not (Test-Path (Join-Path $engineRoot $_)) })
@@ -184,18 +226,6 @@ if ($Full) {
     Write-Output ''
     Write-Output '=== -Full: account rail scoped view, real browser (tools\verify_account_rail_ui.py) ==='
     python (Join-Path $engineRoot 'tools\verify_account_rail_ui.py')
-    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
-
-    # Churn Alerts board (2026-08-01 RH revamp close-out). Capability probe ->
-    # tri-state render -> dual-source tabs -> save-first queue -> in-page send:
-    # all pure frontend + conditionally-registered endpoints, hot-reloaded straight
-    # to production. This gate's FIRST run caught a 2-month-old phantom-column 500
-    # (conversation_meta.claimed_by) that every static gate missed. Read-only:
-    # never clicks generate/send/mark-sent (no LLM burn, no reactivation ledger
-    # writes). Missing playwright / unreachable instance / no token => SKIP exit 0.
-    Write-Output ''
-    Write-Output '=== -Full: churn alerts board, real browser (tools\verify_relations_ui.py) ==='
-    python (Join-Path $engineRoot 'tools\verify_relations_ui.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
     # Inbox density budget (2026-07-30). The agent stares at a 300px-wide list;
@@ -239,6 +269,41 @@ if ($Full) {
     python (Join-Path $engineRoot 'tools\verify_inbox_draft_review.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
+    # AI thinking panel three-state machine (2026-08-01). Click "AI reply" must pop
+    # loading INSTANTLY (skeleton/phase/elapsed/cancel), swap to ready in place, fail
+    # to in-place retry; cancel must release the button; minimize pill must survive.
+    # Pure frontend hot-reloaded to production; static gates cannot prove state flow.
+    # Fully route-mocked (thread msgs / held smart-reply / beacon sink / empty drafts)
+    # - burns no LLM, writes nothing, pollutes no funnel counters.
+    Write-Output ''
+    Write-Output '=== -Full: AI thinking panel three-state, real browser (tools\verify_dpick_panel.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_dpick_panel.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Churn Alerts board (2026-08-01 RH revamp close-out). Capability probe ->
+    # tri-state render -> dual-source tabs -> save-first queue -> in-page send:
+    # all pure frontend + conditionally-registered endpoints, hot-reloaded straight
+    # to production. This gate's FIRST run caught a 2-month-old phantom-column 500
+    # (conversation_meta.claimed_by) that every static gate missed. Read-only:
+    # never clicks generate/send/mark-sent (no LLM burn, no reactivation ledger
+    # writes). Missing playwright / unreachable instance / no token => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: churn alerts board, real browser (tools\verify_relations_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_relations_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Proactive-care page (2026-08-01 P0-P3 revamp). Health lights -> hero/run mode
+    # switch -> contact picker (load/filter/select/restore) -> topic+time chips ->
+    # pending cards vs audit table view switch -> no raw cs2_ i18n keys. All pure
+    # frontend grown 176->700+ lines in one day, hot-reloaded straight to production;
+    # its FIRST run caught the onboarding modal intercepting every click. Read-only:
+    # never clicks schedule/send-now/cancel/preview (no LLM burn, no state writes).
+    # Missing playwright / unreachable instance / no token => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: proactive care page, real browser (tools\verify_care_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_care_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
     # Brand token RENDERED values (2026-07-30 brand unification close-out). Static
     # gates prove links/literals; they cannot prove the browser computes growth-blue
     # accents or actually fetches the Montserrat woff2 (lazy @font-face + the
@@ -276,6 +341,19 @@ if ($Full) {
     Write-Output ''
     Write-Output '=== -Full: persona failtip recovery paths, real browser (tools\verify_persona_failtip.py) ==='
     python (Join-Path $engineRoot 'tools\verify_persona_failtip.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Goal-card narrow-width layout + profile interaction chain (2026-08-01 P21).
+    # The P20 vertical-stacking incident shipped precisely because no gate rendered
+    # the component at the default 300px rail - static gates pin CSS source text,
+    # not computed shadow-DOM layout. Deliberately NOT the login-to-instance style:
+    # a self-contained file:// fixture page loads the real component files with a
+    # fake fetch + fake sendBeacon, so it runs with the instance down, cannot
+    # inflate the goal_slot_* ui-event funnel under review, and is immune to a
+    # sibling mid-save on cp-i18n.js. Only missing playwright => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: goal card narrow-width + interaction, fixture browser (tools\verify_goal_card_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_goal_card_ui.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 }
 

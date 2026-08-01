@@ -151,36 +151,61 @@ def _is_protocol_account(request: Request, platform: str, account_id: str) -> bo
         return False
 
 
-def _removed_account_keys(request: Request) -> set:
-    """注册表里 status=removed 的 (platform, account_id) 集合（A1 直读路径只读标记用）。
+def _account_status_map(request: Request) -> Dict[tuple, str]:
+    """注册表非活跃账号 → ``{(platform, account_id): "removed" | "offline"}``（打标/过滤用）。
 
-    与 ProtocolInboxAdapter 的实时聚合口径一致：``inbox.show_removed_history`` 关闭则返回
-    空集（直读路径仍会列出这些会话，但不打只读标记——与适配器隐藏行为略有差异，A1 直读
-    本就是「全量列出」的灰度路径，发送侧已有 409 兜底，视觉上保持可达即可）。查不到一律空集。
+    - ``removed``（软删）：历史只读展示、默认藏进「已移除」tab；``inbox.show_removed_history``
+      关闭则不标（与 ProtocolInboxAdapter 隐藏行为对齐，发送侧另有 409 兜底）。
+      ⚠ 修复（2026-07-31）：旧实现 ``_removed_account_keys`` 调 ``list()``——该方法默认
+      ``include_removed=False`` 在 SQL 层就排除了 removed 行，再筛 ``status=='removed'``
+      **恒得空集**，「已移除只读标记」自上线从未生效过。必须 ``include_removed=True``。
+    - ``offline``（已登出）：**聊天页不展示**（会话/chip/未读全隐），消息仍留本机 store；
+      同号 ``status→online``（重登）后列表自然回显，无需迁库。账号管理 ``/api/accounts``
+      仍列出以便重登。
+    查不到一律空 map（不拦不标，回落旧行为）。
     """
+    out: Dict[tuple, str] = {}
     try:
-        cm = getattr(request.app.state, "config_manager", None)
-        cfg = (getattr(cm, "config", None) or {}) if cm is not None else {}
-        if not bool(((cfg.get("inbox") or {}) if isinstance(cfg, dict) else {})
-                    .get("show_removed_history", True)):
-            return set()
+        show_removed = True
+        try:
+            cm = getattr(request.app.state, "config_manager", None)
+            cfg = (getattr(cm, "config", None) or {}) if cm is not None else {}
+            show_removed = bool(((cfg.get("inbox") or {}) if isinstance(cfg, dict) else {})
+                                .get("show_removed_history", True))
+        except Exception:
+            show_removed = True
         from src.integrations.account_registry import get_account_registry
-        rows = get_account_registry().list() or []
-        return {
-            (str(a.get("platform") or ""), str(a.get("account_id") or ""))
-            for a in rows if a.get("status") == "removed"
-        }
+        rows = get_account_registry().list(include_removed=True) or []
+        for a in rows:
+            st = str(a.get("status") or "")
+            key = (str(a.get("platform") or ""), str(a.get("account_id") or ""))
+            if st == "removed" and show_removed:
+                out[key] = "removed"
+            elif st == "offline":
+                out[key] = "offline"
     except Exception:
-        return set()
+        return {}
+    return out
 
 
 def _read_from_store_enabled(request: Request) -> bool:
-    """A1 读路径灰度开关：config.inbox.read_from_store（默认 false=实时聚合）。"""
+    """A1 读路径开关：``config.inbox.read_from_store``。
+
+    **默认 True**（2026-07-31 改，原为 False）：灰度早已完成——``config.example.yaml``、
+    桌面种子 ``config.desktop.min.yaml`` 与生产实例配置都显式 ``true``，于是 ``False``
+    这条默认分支实际**只有陈旧升级配置**（该键出现之前装的）才会走到，造成「全新安装
+    读 store / 升级安装读实时聚合」的静默分叉——后者身份贫乏，要靠 peer_identity 回读
+    补齐裸号/空头像。把默认与既有部署对齐即消除分叉；显式 ``false`` 仍回实时聚合。
+    （门禁：tests/test_seed_switch_upgrade_coverage.py 的 _EXEMPT 登记本处判据。）
+
+    拿不到 config（测试/退化态）仍返回 False：那不是部署形态，保守回落实时聚合，
+    不依赖 store 是否已有数据。
+    """
     cm = getattr(request.app.state, "config_manager", None)
     cfg = getattr(cm, "config", None) if cm is not None else None
     if not isinstance(cfg, dict):
         return False
-    return bool((cfg.get("inbox") or {}).get("read_from_store", False))
+    return bool((cfg.get("inbox") or {}).get("read_from_store", True))
 
 
 def _collect_chats_from_store(
@@ -205,7 +230,8 @@ def _collect_chats_from_store(
     if store is None:
         return None  # type: ignore[return-value]
     lmap = label_map or {}
-    removed = _removed_account_keys(request)  # 与实时聚合一致：removed 账号会话只读展示
+    # removed=只读历史（进「已移除」tab）；offline=已登出 → 聊天页跳过（库内保留）。
+    acct_status = _account_status_map(request)
     convs = store.list_conversations(
         limit=min(200, max(1, limit * 4)), before_ts=before_ts,
         platform=platform, account_id=account_id)
@@ -218,12 +244,16 @@ def _collect_chats_from_store(
         except Exception:
             mc = 0
         key = (str(c.get("platform") or ""), str(c.get("account_id") or "default"))
-        is_ro = key in removed
+        st = acct_status.get(key, "")
+        if st == "offline":
+            continue  # 历史在 store，重登后同路径自动回显
         out.append(store_row_to_chat(
             c, automation_mode=mode, message_count=mc,
             account_label=lmap.get(key),
-            read_only=is_ro,
-            account_status="removed" if is_ro else "",
+            # read_only 专指「软删只读历史」语义（前端据此归入已移除 tab）
+            read_only=(st == "removed"),
+            account_status=st,
+            can_send=(False if st else None),
         ))
     return out
 
@@ -305,6 +335,28 @@ def _overlay_store_identity(
     return chats
 
 
+def _exclude_logged_out_chats(
+    request: Request, chats: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """聊天页过滤：已登出(offline)账号的会话不进列表（全平台；历史留库）。"""
+    if not chats:
+        return chats
+    try:
+        sm = _account_status_map(request) or {}
+    except Exception:
+        return chats
+    if not sm:
+        return chats
+    out: List[Dict[str, Any]] = []
+    for c in chats:
+        key = (str(c.get("platform") or ""),
+               str(c.get("account_id") or "default"))
+        if sm.get(key) == "offline":
+            continue
+        out.append(c)
+    return out
+
+
 def _chats_for_listing(request: Request, limit: int = 30) -> List[Dict[str, Any]]:
     """收件箱列表数据源（A1 灰度）：
 
@@ -312,6 +364,7 @@ def _chats_for_listing(request: Request, limit: int = 30) -> List[Dict[str, Any]
     - flag 开 + store 可用：列表改用 store-backed 视图（跨平台/跨重启持久），
       实时聚合的副作用（ingest）已经发生；
     - 否则：返回实时聚合结果，并用 store 已持久身份「仅补空」富集（F4，闭合 live 模式身份缺口）。
+    - 末尾统一剔除已登出账号会话（live / store 双路径同口径）。
     """
     live = _collect_all_chats(request, limit=limit)
     if _read_from_store_enabled(request):
@@ -323,8 +376,9 @@ def _chats_for_listing(request: Request, limit: int = 30) -> List[Dict[str, Any]
         }
         stored = _collect_chats_from_store(request, limit=limit, label_map=label_map)
         if stored is not None:
-            return stored
-    return _overlay_store_identity(request, live)
+            return _exclude_logged_out_chats(request, stored)
+    return _exclude_logged_out_chats(
+        request, _overlay_store_identity(request, live))
 
 
 def _thread_messages_from_store(
@@ -364,7 +418,23 @@ def _store_conv_as_chat(request: Request, conversation_id: str) -> Optional[Dict
         mc = store.count_messages(conversation_id)
     except Exception:
         mc = 0
-    return store_row_to_chat(row, automation_mode=mode, message_count=mc)
+    # 已登出：聊天页不开放会话头/历史（同号重登后走同一路径再可见）。
+    # 已移除：仍可只读打开（「已移除」tab）。
+    st = ""
+    try:
+        st = (_account_status_map(request) or {}).get(
+            (str(row.get("platform") or ""),
+             str(row.get("account_id") or "default")), "") or ""
+    except Exception:
+        st = ""
+    if st == "offline":
+        return None
+    return store_row_to_chat(
+        row, automation_mode=mode, message_count=mc,
+        read_only=(st == "removed"),
+        account_status=st,
+        can_send=(False if st else None),
+    )
 
 
 def _enrich_outbound_originals(

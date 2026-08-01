@@ -34,6 +34,17 @@ ContextProvider = Callable[[str], str]
 AlreadyDiscussed = Callable[[str, str], bool]
 # proactive_allowed：(contact_key) -> bool（变现配额门控；False=免费用户超额不主动）
 ProactiveAllowed = Callable[[str], bool]
+# cfg_provider：() -> 实时 companion.proactive_care 配置 dict（P0 2026-08-01 配置热闸）。
+# 注入后 enabled/dry_run/max_per_tick 每 tick 从这里读——overlay 热重载即生效，无需重启；
+# enabled 缺省按 False（与配置 schema 默认一致）→ 关闸时 run_once 空转零副作用。
+CfgProvider = Callable[[], dict]
+# budget_gate：(contact_key) -> bool（P3 每联系人主动预算；False=今日已被摸够/间隔太近，
+# 本条跳过 note=contact_budget）。只在**真发**路径生效（dry_run 不拦——样本要流动），
+# 危机关怀豁免（伦理优先），gate 异常按放行（预算 fail-open，不因账本抖动漏发关怀）。
+BudgetGate = Callable[[str], bool]
+# sent_hook：(item dict) -> None（真发 enqueue 成功后回调；background 侧用它把 care
+# 触达落 outreach_log 共享账本，对周报/其它预算消费方可见）。异常绝不影响已完成的发送。
+SentHook = Callable[[dict], None]
 
 _IDENTITY_LEAK = ("作为AI", "作为一个AI", "AI助手", "as an AI", "i'm an ai", "i am an ai")
 
@@ -93,6 +104,34 @@ def shift_out_of_quiet_hours(ts: float, *, start_hour: float, end_hour: float) -
     return target.timestamp()
 
 
+def build_care_prompt(
+    item: dict,
+    *,
+    context_block: str = "",
+    ai_name: str = "她",
+    lang: str = "zh",
+    now: Optional[float] = None,
+) -> str:
+    """由一条 care_schedule 行构造派发 prompt（危机主题自动切「克制陪伴」专线）。
+
+    P2 2026-08-01 抽出为公共函数：派发器与 ``/api/care/schedule/{sid}/preview``
+    预览端点共用——「先看后发」看到的就是真发同一句 prompt 口径，预判与行为
+    永远一致（与草稿预判徽标同一设计纪律）。
+    """
+    n = float(now if now is not None else time.time())
+    topic = str(item.get("topic") or "").strip()
+    if topic == CRISIS_CARE_TOPIC:
+        return _CRISIS_CARE_PROMPT.format(ai_name=ai_name, lang=lang)
+    return _CARE_PROMPT.format(
+        ai_name=ai_name,
+        topic=topic or "那件事",
+        when_desc=_when_desc(float(item.get("event_at") or n), n),
+        source_text=(str(item.get("source_text") or "") or "(无)")[:200],
+        context_block=context_block or "(无具体要点)",
+        lang=lang,
+    )
+
+
 def _when_desc(event_at: float, now: float) -> str:
     """事件相对 now 的口语化描述（供 prompt：今天/昨天/这两天/即将）。"""
     try:
@@ -133,6 +172,9 @@ class CareDispatcher:
         staleness_sec: float = 86400.0,
         dry_run: bool = False,
         expire_grace_days: float = 1.0,
+        cfg_provider: Optional[CfgProvider] = None,
+        budget_gate: Optional[BudgetGate] = None,
+        sent_hook: Optional[SentHook] = None,
     ) -> None:
         self._store = store
         self._ai = ai_client
@@ -151,8 +193,45 @@ class CareDispatcher:
         self._staleness = float(staleness_sec)
         self._dry_run = bool(dry_run)
         self._expire_grace_days = float(expire_grace_days)
+        # 配置热闸（P0 2026-08-01）：注入后 enabled/dry_run/max_per_tick 每 tick 实时读，
+        # 常备循环 + overlay 热重载 = 开关免重启。未注入（单测/旧调用方）保持构造参语义。
+        self._cfg_provider = cfg_provider
+        # P3：每联系人主动预算闸 + 真发落账回调（均可选，None=旧行为）
+        self._budget_gate = budget_gate
+        self._sent_hook = sent_hook
+        # 健康自检读数（/api/care/health 消费）：最近一次 tick 的时刻/结果/是否被闸
+        self.last_tick_ts: float = 0.0
+        self.last_tick_scheduled: int = 0
+        self.last_tick_gated: bool = False
         self._stop_evt: Optional[asyncio.Event] = None
         self._task: Optional[asyncio.Task] = None
+
+    def _live_cfg(self) -> Optional[dict]:
+        """实时配置快照；无 provider 或读取异常 → None（沿用构造参数）。"""
+        if self._cfg_provider is None:
+            return None
+        try:
+            cfg = self._cfg_provider()
+            return cfg if isinstance(cfg, dict) else None
+        except Exception:
+            logger.debug("care cfg_provider 读取异常（沿用构造参数）", exc_info=True)
+            return None
+
+    def is_running(self) -> bool:
+        return bool(self._task and not self._task.done())
+
+    def health_snapshot(self) -> dict:
+        """链路自检用只读快照（无敏感字段）。"""
+        cfg = self._live_cfg()
+        dry = self._dry_run if cfg is None else bool(cfg.get("dry_run", False))
+        return {
+            "running": self.is_running(),
+            "interval_sec": self._interval,
+            "last_tick_ts": self.last_tick_ts,
+            "last_tick_scheduled": self.last_tick_scheduled,
+            "last_tick_gated": self.last_tick_gated,
+            "dry_run_effective": dry,
+        }
 
     async def start(self) -> None:
         if self._task and not self._task.done():
@@ -191,8 +270,26 @@ class CareDispatcher:
             logger.exception("care_dispatcher 退出")
 
     async def run_once(self, *, now: Optional[float] = None) -> int:
-        """一次派发：返回成功 enqueue（或 dry_run 计数）的条数。"""
+        """一次派发：返回成功 enqueue（或 dry_run 计数）的条数。
+
+        配置热闸：注入 cfg_provider 时每 tick 先读实时配置——enabled=false 直接空转
+        （**不碰 store、零副作用**，「默认关」语义与旧的不启动等价）；dry_run/max_per_tick
+        同步跟随实时值，overlay 热重载后下一 tick 即生效。
+        """
         n = float(now if now is not None else time.time())
+        self.last_tick_ts = n
+        cfg = self._live_cfg()
+        if cfg is not None:
+            if not cfg.get("enabled", False):
+                self.last_tick_gated = True
+                self.last_tick_scheduled = 0
+                return 0
+            self._dry_run = bool(cfg.get("dry_run", False))
+            try:
+                self._max_per_tick = max(1, int(cfg.get("max_per_tick", self._max_per_tick)))
+            except Exception:
+                pass
+        self.last_tick_gated = False
         # 每轮先清理逾期太久仍 pending 的待办（错过关怀时机不补发），best-effort
         try:
             expired = self._store.expire_overdue(now=n, grace_days=self._expire_grace_days)
@@ -202,6 +299,7 @@ class CareDispatcher:
             logger.debug("care_dispatcher expire_overdue 异常", exc_info=True)
         due = self._store.list_due(now=n, limit=self._max_per_tick * 4)
         if not due:
+            self.last_tick_scheduled = 0
             return 0
         scheduled = 0
         for item in due:
@@ -212,6 +310,7 @@ class CareDispatcher:
                     scheduled += 1
             except Exception:
                 logger.debug("care dispatch_one 异常 id=%s", item.get("id"), exc_info=True)
+        self.last_tick_scheduled = scheduled
         return scheduled
 
     def _mark_skipped(self, sid: int, reason: str) -> None:
@@ -259,6 +358,21 @@ class CareDispatcher:
             except Exception:
                 logger.debug("already_discussed 异常（忽略）", exc_info=True)
 
+        # P3：每联系人主动预算——该联系人今天已被主动摸过太多/太近 → 本条让路。
+        # 放 LLM 之前（省 token）；只拦真发（dry_run 样本要流动）；危机关怀豁免；
+        # gate 自身异常按放行（fail-open：预算是体验优化，不是安全红线）。
+        if (self._budget_gate is not None and not is_crisis_care
+                and not self._dry_run):
+            allowed = True
+            try:
+                allowed = bool(self._budget_gate(contact_key))
+            except Exception:
+                logger.debug("budget_gate 异常（放行）", exc_info=True)
+                allowed = True
+            if not allowed:
+                self._mark_skipped(sid, "contact_budget")
+                return False
+
         context_block = ""
         if self._context_provider is not None and not is_crisis_care:
             try:
@@ -270,18 +384,9 @@ class CareDispatcher:
             self._mark_skipped(sid, "no_context")
             return False
 
-        if is_crisis_care:
-            prompt = _CRISIS_CARE_PROMPT.format(
-                ai_name=self._ai_name, lang=self._default_lang)
-        else:
-            prompt = _CARE_PROMPT.format(
-                ai_name=self._ai_name,
-                topic=topic or "那件事",
-                when_desc=_when_desc(float(item.get("event_at") or now), now),
-                source_text=(str(item.get("source_text") or "") or "(无)")[:200],
-                context_block=context_block or "(无具体要点)",
-                lang=self._default_lang,
-            )
+        prompt = build_care_prompt(
+            item, context_block=context_block,
+            ai_name=self._ai_name, lang=self._default_lang, now=now)
         try:
             reply = (await self._ai.chat(prompt) or "").strip()
         except Exception:
@@ -340,6 +445,13 @@ class CareDispatcher:
             return False  # 留 pending 重试
         if not row_id:
             return False  # enqueue 失败（如 gate 拦）→ 留 pending
+        # P3：真发成功 → 触达落共享账本（outreach_log），对预算/周报可见。
+        # 绝不影响已完成的发送（best-effort）。
+        if self._sent_hook is not None:
+            try:
+                self._sent_hook(dict(item))
+            except Exception:
+                logger.debug("care sent_hook 异常（忽略）", exc_info=True)
         self._store.mark_sent(sid, note=f"deferred:{int(row_id)}")
         return True
 
@@ -384,4 +496,4 @@ class CareDispatcher:
         return ""
 
 
-__all__ = ["CareDispatcher", "shift_out_of_quiet_hours"]
+__all__ = ["CareDispatcher", "build_care_prompt", "shift_out_of_quiet_hours"]

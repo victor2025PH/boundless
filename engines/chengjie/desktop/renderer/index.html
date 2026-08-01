@@ -72,15 +72,6 @@
           </div>
         </section>
 
-        <section class="cp-sec cp-card" id="cp-script-sec" data-tab="reply" data-cp-card="script" hidden>
-          <button type="button" class="cp-card-hd" data-cp-toggle="script">
-            <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="film"></span>剧本话题</span>
-            <span class="cp-card-pill" id="cpp-script"></span>
-            <span class="cp-card-chev" aria-hidden="true"></span>
-          </button>
-          <div class="cp-card-bd"><cp-script id="cp-script"></cp-script></div>
-        </section>
-
         <section class="cp-sec cp-card" id="cp-kb-sec" data-tab="reply" data-cp-card="kb" hidden>
           <button type="button" class="cp-card-hd" data-cp-toggle="kb">
             <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="book"></span>知识库</span>
@@ -140,14 +131,17 @@
 
         <section class="cp-sec cp-card" id="cp-chain-sec" data-tab="tools" data-cp-card="chain" hidden>
           <button type="button" class="cp-card-hd" data-cp-toggle="chain">
-            <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="link"></span>工作链执行</span>
+            <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="link"></span>跟进 SOP（工作链）</span>
             <span class="cp-card-pill" id="cpp-chain"></span>
             <span class="cp-card-chev" aria-hidden="true"></span>
           </button>
           <div class="cp-card-bd"><cp-chain-exec id="cp-chain"></cp-chain-exec></div>
         </section>
 
-        <section class="cp-sec cp-card" id="cp-analyze-sec" data-tab="tools" data-cp-card="analysis" hidden>
+        <!-- 2026-08-01 运营决策：AI 对话分析下线（与网页/统一App同批）。用内联 display:none 常驻隐藏——
+             renderSections() 按页签翻转 hidden，内联 display 不受影响；runAnalyze 仅由本节内按钮触发，
+             按钮不可见即零 LLM 调用。恢复＝删掉 style 属性。保留 DOM：renderer.js 1321 行等处直接解引用。 -->
+        <section class="cp-sec cp-card" id="cp-analyze-sec" data-tab="tools" data-cp-card="analysis" hidden style="display:none">
           <button type="button" class="cp-card-hd" data-cp-toggle="analysis">
             <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="brain"></span>AI 对话分析</span>
             <span class="cp-card-pill" id="cpp-analysis"></span>
@@ -177,7 +171,6 @@
   <script src="shared/copilot/components/cp-draft.js"></script>
   <script src="shared/copilot/components/cp-rel-stage.js"></script>
   <script src="shared/copilot/components/cp-next-actions.js"></script>
-  <script src="shared/copilot/components/cp-script.js"></script>
   <script src="shared/copilot/components/cp-collab.js"></script>
   <script src="shared/copilot/components/cp-chain-exec.js"></script>
   <script src="shared/copilot/components/cp-accounts.js"></script>

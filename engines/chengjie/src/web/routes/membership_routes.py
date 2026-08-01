@@ -192,6 +192,45 @@ def register_membership_routes(app, *, templates, page_auth, api_auth,
     @app.get("/membership", response_class=HTMLResponse)
     async def membership_page(request: Request, _=Depends(page_auth)):
         snap = build_membership_snapshot(_cfg(), user_store)
-        return templates.TemplateResponse(request, "membership.html", {
-            "mb": snap,
-        })
+        ctx: dict = {"mb": snap}
+        # E4 来源引导：锁定页守卫 / nav 锁标 302 带 ?from=<族> → 顶部一句人话 +
+        # 矩阵对应行高亮，把「被拦」变成「被引导」。只认 FEATURE_MIN_PLAN 注册的
+        # 族名（防垃圾参数反射进页面）；任何异常静默回落无横幅。
+        try:
+            frm = str(request.query_params.get("from") or "").strip()
+            if frm:
+                from src.licensing.feature_gate import FEATURE_MIN_PLAN
+                from src.web.web_i18n import tr
+                if frm in FEATURE_MIN_PLAN:
+                    min_plan = FEATURE_MIN_PLAN[frm]
+                    ctx["from_feature"] = frm
+                    ctx["from_hint"] = tr(
+                        request, "mb_from_hint",
+                        feat=tr(request, f"mb_feat_{frm}", frm),
+                        plan=tr(request, f"mb_plan_{min_plan}", min_plan),
+                    )
+                    # E5 购买 CTA：chatx 族可确证 → 深链**目标档** offer；
+                    # 否则回落快照里按当前授权拼好的 shop.url（家族永远正确）。
+                    # 未配置 shop_url → 空串，模板不渲染按钮。
+                    try:
+                        from src.licensing.shop_link import (
+                            build_shop_url, resolve_upgrade_offer,
+                        )
+                        base = str(((
+                            _cfg().get("licensing") or {}).get("shop_url")) or "")
+                        licd = snap.get("license") or {}
+                        offer = resolve_upgrade_offer(
+                            sku_id=str(licd.get("sku_id")
+                                       or licd.get("lic_id") or ""),
+                            product_id=str(licd.get("product_id") or ""),
+                            target_plan=min_plan,
+                        )
+                        cta = build_shop_url(base, offer) if offer else ""
+                        ctx["from_cta_url"] = cta or str(
+                            (snap.get("shop") or {}).get("url") or "")
+                    except Exception:
+                        ctx["from_cta_url"] = str(
+                            (snap.get("shop") or {}).get("url") or "")
+        except Exception:
+            pass
+        return templates.TemplateResponse(request, "membership.html", ctx)

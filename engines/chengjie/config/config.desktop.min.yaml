@@ -62,6 +62,34 @@ translation:
 inbox:
   enabled: true
   read_from_store: true
+  # 产品基线（A 类，2026-07-31 拍板）：多句分条回复总闸。真发仍逐条由坐席在
+  # 发送框 opt-in（气泡 chip），默认开只是让这个选项存在，零风险。
+  reply_style:
+    bubbles:
+      enabled: true
+  # 「AI 下一步」的创建回访任务入口（P1-198 客户拍板，2026-07-31）：与「工作目标」
+  # 的每日行动语义重叠，且会话未关联客户档案时点了建不了任务——桌面版默认关。
+  # 服务器/自建部署代码默认仍开（true）；重新打开删本段或置 true 即可（热重载生效）。
+  next_actions:
+    follow_up_task: false
+
+# ── 产品基线功能（A 类：零外部依赖，装完即应可见）────────────────────────────
+# 背景（2026-07-31）：演示机上的功能靠 config.local.yaml overlay 打开，而 overlay
+# 刻意不随包 → 安装包里这些功能「代码全在、开关全关」；又因「关闭 = API 403 =
+# 前端整卡隐藏」且首启向导/能力面板都没有开启入口，客户会认定功能不存在。
+# 判据＝纯软件（本地 DB + 随包 AI 链即可跑）、无 LAN/GPU 依赖、无封号/合规风险；
+# 满足判据的才允许进本段。LAN 依赖/风险功能（avatar_voice / selfie / proactive /
+# RPA / monetization …）禁入种子——「开关开了但依赖没随包」比隐藏更糟（同
+# platform_login 一节的教训）。两侧不变量由 tests/test_desktop_seed_visibility.py
+# 双向钉住：基线键必须开、C 类键必须保持关/缺失。
+companion:
+  # 工作目标（坐席右栏卡 + prompt 注入 + /api/goals*）：目标库落用户数据区
+  # （<config 目录>/marketing_goals.db），规划走随包 AI 链，无任何本机集群依赖。
+  goals:
+    enabled: true
+  # 深度人设分层注入（2026-07-31 拍板升 A）：纯 prompt 层增强，各层软降级。
+  deep_persona:
+    enabled: true
 
 # ── 账号接入（「下载即可用」的关键开关）──────────────────────────────────────
 # 为什么必须在种子里显式打开：代码默认全关，而桌面用户装完不会去改 YAML —— 于是

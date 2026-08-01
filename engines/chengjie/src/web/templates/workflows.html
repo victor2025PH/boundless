@@ -51,11 +51,21 @@
 <div class="wf-wrap">
   <h2 style="margin:0 0 16px;font-size:18px;">⚡ {{ (i18n or {}).get('wf_s001', "工作流管理") }}</h2>
 
+  <!-- 一分钟上手（首次可见，「知道了」后本机不再显示；JS 按 localStorage 控显防闪） -->
+  <div id="wf-onboard" style="display:none;align-items:flex-start;gap:10px;background:var(--th-bg-blue0,#eff6ff);border:1px solid var(--th-bd-blue2,#bfdbfe);border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:12px;line-height:1.7;color:var(--th-ink-gray7,#374151);">
+    <div style="flex:1;">
+      <strong style="font-size:13px;">🚀 {{ (i18n or {}).get('wf_onboard_title', "一分钟上手") }}</strong>
+      <div>{{ (i18n or {}).get('wf_onboard_s1', "① 点「导入示例链」拿到 4 条现成跟进 SOP") }}</div>
+      <div>{{ (i18n or {}).get('wf_onboard_s2', "② 到收件箱会话右栏「跟进 SOP（工作链）」卡挂到客户") }}</div>
+      <div>{{ (i18n or {}).get('wf_onboard_s3', "③ 回「执行监控」看漏斗与 72h 回复率") }}</div>
+    </div>
+    <button class="btn-sm" onclick="WF.dismissOnboard()">{{ (i18n or {}).get('wf_onboard_dismiss', "知道了") }}</button>
+  </div>
+
   <div class="wf-tabs">
     <div class="wf-tab active" onclick="WF.tab('actions')">💡 {{ (i18n or {}).get('wf_s002', "自定义动作") }}</div>
     <div class="wf-tab" onclick="WF.tab('chains')">🔗 {{ (i18n or {}).get('wf_s003', "工作链") }}</div>
     <div class="wf-tab" onclick="WF.tab('routing')">🔀 {{ (i18n or {}).get('wf_s004', "分流路由") }}</div>
-    <div class="wf-tab" onclick="WF.tab('scripts')">🎭 {{ (i18n or {}).get('wf_s005', "剧本话题") }}</div>
     <div class="wf-tab" onclick="WF.tab('monitor')">📊 {{ (i18n or {}).get('wf_s006', "执行监控") }}</div>
   </div>
 
@@ -153,7 +163,11 @@
   <div id="panel-chains" class="wf-panel">
     <div class="wf-section">
       <h3>🔗 {{ (i18n or {}).get('wf_s049', "工作链配置") }}
-        <button class="btn-sm btn-primary" onclick="WF.showChainForm()">+ {{ (i18n or {}).get('wf_s050', "新建工作链") }}</button>
+        <span style="display:flex;gap:8px;align-items:center;">
+          <span id="seed-msg" style="font-size:12px;font-weight:400;"></span>
+          <button class="btn-sm" onclick="WF.seedChains(this)">📦 {{ (i18n or {}).get('wf_seed_btn', "导入示例链") }}</button>
+          <button class="btn-sm btn-primary" onclick="WF.showChainForm()">+ {{ (i18n or {}).get('wf_s050', "新建工作链") }}</button>
+        </span>
       </h3>
       <div id="chains-list"><div class="wf-empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
     </div>
@@ -271,48 +285,11 @@
           <option value="cancelled">{{ (i18n or {}).get('rpa_js_st_cancelled', "已取消") }}</option>
         </select>
       </div>
+      <div id="funnel-box" style="margin-bottom:12px;"></div>
       <div id="monitor-list"><div class="wf-empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
     </div>
   </div>
 
-  <!-- ── 剧本话题（P40） ── -->
-  <div id="panel-scripts" class="wf-panel">
-    <div class="wf-section">
-      <h3>🎭 {{ (i18n or {}).get('wf_s079', "剧本话题库（按关系阶段）") }}
-        <button class="btn-sm btn-primary" onclick="WF.showScriptForm()">+ {{ (i18n or {}).get('wf_s080', "新建话题") }}</button>
-      </h3>
-      <p style="font-size:12px;color:var(--th-ink-slate5,#64748b);margin:0 0 10px;">{{ (i18n or {}).get('wf_s081', "阶段与关系亲密度对齐") }} (companion_relationship): initial={{ (i18n or {}).get('wf_s082', "初识") }} → warming={{ (i18n or {}).get('wf_s083', "熟悉") }} → intimate={{ (i18n or {}).get('wf_s084', "深入") }} → steady={{ (i18n or {}).get('rpa_js_intimacy', "亲密") }}</p>
-      <table class="wf-table">
-        <thead><tr><th>{{ (i18n or {}).get('msg_js_1039', "阶段") }}</th><th>{{ (i18n or {}).get('kb_s106', "标题") }}</th><th>{{ (i18n or {}).get('wf_s085', "开场话术") }}</th><th>{{ (i18n or {}).get('psn_tag', "标签") }}</th><th>{{ (i18n or {}).get('ov_js_th_action', "操作") }}</th></tr></thead>
-        <tbody id="scripts-tbody"><tr><td colspan="5" class="wf-empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</td></tr></tbody>
-      </table>
-    </div>
-    <div class="wf-section" id="script-form-wrap" style="display:none;">
-      <h3 id="script-form-title">{{ (i18n or {}).get('wf_s086', "新建剧本话题") }}</h3>
-      <div class="form-row">
-        <div class="form-col" style="flex:0 0 130px;"><label>{{ (i18n or {}).get('msg_js_1948', "关系阶段") }}</label>
-          <select id="sf-stage">
-            <option value="initial">{{ (i18n or {}).get('c3_js028', "初识") }} initial</option>
-            <option value="warming">{{ (i18n or {}).get('wf_s083', "熟悉") }} warming</option>
-            <option value="intimate">{{ (i18n or {}).get('wf_s084', "深入") }} intimate</option>
-            <option value="steady">{{ (i18n or {}).get('rpa_js_intimacy', "亲密") }} steady</option>
-          </select>
-        </div>
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s087', "话题标题") }} *</label><input id="sf-title" placeholder="{{ (i18n or {}).get('wf_s088', '例：深夜心事') }}"></div>
-      </div>
-      <div class="form-row"><div class="form-col"><label>{{ (i18n or {}).get('wf_s085', "开场话术") }} *</label><textarea id="sf-opener" rows="3" placeholder="{{ (i18n or {}).get('wf_s089', '坐席可直接使用的话题切入点…') }}"></textarea></div></div>
-      <div class="form-row">
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s090', "使用提示") }}</label><input id="sf-hint" placeholder="{{ (i18n or {}).get('wf_s091', '什么场景下推荐使用') }}"></div>
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s092', "标签（逗号分隔）") }}</label><input id="sf-tags" placeholder="{{ (i18n or {}).get('inbox.ai.sentiment', '情绪') }},{{ (i18n or {}).get('wf_s093', '倾听') }},reunion"></div>
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s094', "关联工作链") }} ID</label><input id="sf-chain" placeholder="{{ (i18n or {}).get('msg_s416', '可选') }}"></div>
-      </div>
-      <input type="hidden" id="sf-id">
-      <div style="display:flex;gap:8px;margin-top:8px;">
-        <button class="btn-sm btn-primary" onclick="WF.saveScript()">{{ (i18n or {}).get('save', "保存") }}</button>
-        <button class="btn-sm" onclick="WF.cancelScriptForm()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
-      </div>
-    </div>
-  </div>
 </div>
 
 <script>
@@ -325,7 +302,7 @@ var _monTimer=null;
 window.WF={
   tab:function(name){
     document.querySelectorAll('.wf-tab').forEach(function(el,i){
-      el.classList.toggle('active',['actions','chains','routing','scripts','monitor'][i]===name);
+      el.classList.toggle('active',['actions','chains','routing','monitor'][i]===name);
     });
     document.querySelectorAll('.wf-panel').forEach(function(el){el.classList.remove('active');});
     document.getElementById('panel-'+name).classList.add('active');
@@ -446,7 +423,8 @@ WF.loadChains=function(){
   apiFetch('/api/workspace/workflow-chains').then(function(r){return r.json();}).then(function(d){
     var box=document.getElementById('chains-list');
     var chains=d.chains||[];
-    if(!chains.length){box.innerHTML='<div class="wf-empty">'+window.T('wf_js006')+' — '+window.T('wf_js007')+'</div>';return;}
+    if(!chains.length){box.innerHTML='<div class="wf-empty">'+window.T('wf_js006')+' — '+window.T('wf_js007')
+      +'<div style="margin-top:10px;"><button class="btn-sm btn-primary" onclick="WF.seedChains(this)">📦 '+window.T('wf_seed_btn')+'</button></div></div>';return;}
     box.innerHTML=chains.map(function(c){
       var steps=c.steps||[];
       return '<div style="background:var(--th-bg-surface,#fff);border:1px solid var(--th-bd-gray2,#e5e7eb);border-radius:8px;padding:12px 14px;margin-bottom:10px;">'
@@ -537,6 +515,20 @@ WF.delChain=function(id){
   if(!confirm(window.T('wf_js014')))return;
   apiFetch('/api/workspace/workflow-chains/'+encodeURIComponent(id),{method:'DELETE'}, {timeoutMs: 60000}).then(function(){WF.loadChains();});
 };
+// ── B1：出厂模板链一键导入（幂等；已存在同 id 链一律跳过不覆盖）──
+WF.seedChains=function(btn){
+  if(btn)btn.disabled=true;
+  var msg=document.getElementById('seed-msg');
+  function _say(text,color){ if(!msg)return; msg.textContent=text; msg.style.color=color; setTimeout(function(){msg.textContent='';},5000); }
+  apiFetch('/api/workspace/workflow-chains/seed',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000})
+    .then(function(r){return r.json();}).then(function(d){
+      if(btn)btn.disabled=false;
+      if(!d||!d.ok){_say(window.T('wf_seed_fail'),'#dc2626');return;}
+      var n=(d.imported||[]).length;
+      _say(n?window.Tf('wf_seed_done',{n:n}):window.T('wf_seed_none'), n?'#10b981':'#94a3b8');
+      WF.loadChains();
+    }).catch(function(){ if(btn)btn.disabled=false; _say(window.T('wf_seed_fail'),'#dc2626'); });
+};
 
 // ── 分流路由 ──────────────────────────────────────────────────────────────
 WF.loadRouting=function(){
@@ -615,64 +607,53 @@ WF.testRouting=function(){
     });
 };
 
-// ── 剧本话题（P40） ──────────────────────────────────────────────────────
-var _STAGE_ZH={initial:window.T('c3_js028'),warming:window.T('wf_s083'),intimate:window.T('wf_s084'),steady:window.T('rpa_js_intimacy')};
-WF.loadScripts=function(){
-  apiFetch('/api/workspace/script-topics').then(function(r){return r.json();}).then(function(d){
-    var tbody=document.getElementById('scripts-tbody');
-    var topics=d.topics||[];
-    if(!topics.length){tbody.innerHTML='<tr><td colspan="5" class="wf-empty">'+window.T('wf_js022')+'</td></tr>';return;}
-    tbody.innerHTML=topics.map(function(t){
-      return '<tr><td>'+esc(_STAGE_ZH[t.stage]||t.stage)+'</td><td><strong>'+esc(t.title)+'</strong></td>'
-        +'<td style="font-size:12px;max-width:280px;">'+esc((t.opener||'').slice(0,80))+'</td>'
-        +'<td style="font-size:11px;">'+(t.tags||[]).map(function(x){return '<span class="cond-tag">'+esc(x)+'</span>';}).join('')+'</td>'
-        +'<td><button class="btn-sm" onclick="WF.editScript(\''+esc(t.topic_id)+'\')">'+window.T('edit')+'</button> '
-        +'<button class="btn-sm btn-danger" onclick="WF.delScript(\''+esc(t.topic_id)+'\')">'+window.T('delete')+'</button></td></tr>';
-    }).join('');
-  });
-};
-WF.showScriptForm=function(t){
-  document.getElementById('sf-id').value=t?t.topic_id:'';
-  document.getElementById('sf-stage').value=t?t.stage:'initial';
-  document.getElementById('sf-title').value=t?t.title:'';
-  document.getElementById('sf-opener').value=t?t.opener:'';
-  document.getElementById('sf-hint').value=t?t.hint:'';
-  document.getElementById('sf-tags').value=(t&&t.tags)?t.tags.join(','):'';
-  document.getElementById('sf-chain').value=t?t.chain_id:'';
-  document.getElementById('script-form-title').textContent=t?window.T('wf_js023'):window.T('wf_s086');
-  document.getElementById('script-form-wrap').style.display='block';
-};
-WF.editScript=function(id){
-  apiFetch('/api/workspace/script-topics').then(function(r){return r.json();}).then(function(d){
-    var t=(d.topics||[]).find(function(x){return x.topic_id===id;});
-    if(t) WF.showScriptForm(t);
-  });
-};
-WF.cancelScriptForm=function(){document.getElementById('script-form-wrap').style.display='none';};
-WF.saveScript=function(){
-  var data={
-    topic_id:document.getElementById('sf-id').value||undefined,
-    stage:document.getElementById('sf-stage').value,
-    title:document.getElementById('sf-title').value.trim(),
-    opener:document.getElementById('sf-opener').value.trim(),
-    hint:document.getElementById('sf-hint').value.trim(),
-    tags:document.getElementById('sf-tags').value.split(',').map(function(x){return x.trim();}).filter(Boolean),
-    chain_id:document.getElementById('sf-chain').value.trim(),
-  };
-  if(!data.title||!data.opener){alert(window.T('wf_js024'));return;}
-  var url=data.topic_id?'/api/workspace/script-topics/'+encodeURIComponent(data.topic_id):'/api/workspace/script-topics';
-  apiFetch(url,{method:data.topic_id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}, {timeoutMs: 60000})
-    .then(function(r){return r.json();}).then(function(d){
-      if(d.ok){WF.loadScripts();WF.cancelScriptForm();}
-    });
-};
-WF.delScript=function(id){
-  if(!confirm(window.T('kb_js_047')))return;
-  apiFetch('/api/workspace/script-topics/'+encodeURIComponent(id),{method:'DELETE'}, {timeoutMs: 60000}).then(function(){WF.loadScripts();});
-};
-
 // ── 执行监控（P47） ──────────────────────────────────────────────────────────
+function _fmtDur(sec){
+  sec=Math.max(0,Math.floor(Number(sec)||0));
+  if(sec>=3600){var h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60);return h+'h'+(m?m+'m':'');}
+  if(sec>=60)return Math.floor(sec/60)+'m';
+  return sec+'s';
+}
+// ── B2：链效果漏斗（近 14 天 + 启动后 72h 回复率，分母只算已满窗口期的执行）──
+WF.loadFunnel=function(){
+  apiFetch('/api/workspace/chain-funnel?days=14').then(function(r){return r.json();}).then(function(d){
+    var box=document.getElementById('funnel-box'); if(!box) return;
+    var t=(d&&d.total)||{};
+    if(!t.started){ box.innerHTML='<div class="wf-empty" style="padding:10px;">'+window.T('wf_funnel_empty')+'</div>'; return; }
+    function rate(x){ return (x&&x.reply_rate!=null)?(Math.round(x.reply_rate*100)+'% ('+x.replied_n+'/'+x.mature_n+')'):'—'; }
+    var chips='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">'
+      +'<strong style="font-size:13px;margin-right:4px;">'+window.Tf('wf_funnel_title',{d:d.days||14})+'</strong>'
+      +'<span class="badge badge-template">'+window.T('wf_funnel_started')+' '+t.started+'</span>'
+      +'<span class="badge badge-running">'+window.T('ov_js_running')+' '+(t.running||0)+'</span>'
+      +'<span class="badge badge-completed">'+window.T('ops.ct.st_completed')+' '+(t.completed||0)+'</span>'
+      +'<span class="badge badge-failed">'+window.T('rpa_js_st_failed')+' '+(t.failed||0)+'</span>'
+      +'<span class="badge badge-cancelled">'+window.T('rpa_js_st_cancelled')+' '+(t.cancelled||0)+'</span>'
+      +'<span class="badge badge-chain" title="'+window.T('wf_funnel_reply_hint')+'">'+window.T('wf_funnel_reply')+' '+rate(t)+'</span>'
+      +(Number(t.attributed)>0
+        ? ('<span class="badge badge-chain">'+window.Tf('wf_funnel_attr',{n:t.attributed})
+           +(t.attr_reply_rate!=null?(' · '+Math.round(Number(t.attr_reply_rate)*100)+'%'):'')+'</span>')
+        : '')
+      // J 推荐跟随：目标归因启动里「启动的正是推荐链」的占比（分母只算模板有推荐的；零数据隐藏）
+      +((d.rec_follow&&Number(d.rec_follow.eligible)>0)
+        ? ('<span class="badge badge-template" title="'+window.T('wf_funnel_recf_hint')+'">'
+           +window.T('wf_funnel_recf')+' '+d.rec_follow.followed+'/'+d.rec_follow.eligible
+           +(d.rec_follow.rate!=null?(' ('+Math.round(Number(d.rec_follow.rate)*100)+'%)'):'')+'</span>')
+        : '')
+      +'</div>';
+    var rows=(d.chains||[]).map(function(c){
+      return '<tr><td>'+esc(c.chain_name||c.chain_id)+'</td><td>'+c.started+'</td><td>'+(c.completed||0)+'</td>'
+        +'<td>'+(c.failed||0)+'</td><td title="'+window.T('wf_funnel_reply_hint')+'">'+rate(c)+'</td></tr>';
+    }).join('');
+    var table=rows?('<table class="wf-table"><thead><tr>'
+      +'<th>'+window.T('wf_funnel_col_chain')+'</th><th>'+window.T('wf_funnel_started')+'</th>'
+      +'<th>'+window.T('ops.ct.st_completed')+'</th><th>'+window.T('rpa_js_st_failed')+'</th>'
+      +'<th>'+window.T('wf_funnel_col_reply')+'</th>'
+      +'</tr></thead><tbody>'+rows+'</tbody></table>'):'';
+    box.innerHTML=chips+table;
+  }).catch(function(){});
+};
 WF.loadMonitor=function(){
+  WF.loadFunnel();
   var st=document.getElementById('mon-filter').value;
   var url='/api/workspace/chain-executions?limit=60'+(st?'&status='+encodeURIComponent(st):'');
   apiFetch(url).then(function(r){return r.json();}).then(function(d){
@@ -688,7 +669,7 @@ WF.loadMonitor=function(){
         if(s.done)c+=' done'; else if(s.active)c+=' active';
         return '<div class="'+c+'" title="'+(s.action_label||'')+'"></div>';
       }).join('');
-      var cd=ex.countdown_sec>0?('<span style="color:var(--th-ink-amber7,#b45309);">⏱ '+ex.countdown_sec+'s</span>'):'';
+      var cd=ex.countdown_sec>0?('<span style="color:var(--th-ink-amber7,#b45309);">⏱ '+_fmtDur(ex.countdown_sec)+'</span>'):'';
       var lr=ex.last_result&&ex.last_result.text?('<div style="font-size:11px;color:var(--th-ink-slate5,#64748b);margin-top:3px;">'+window.T('wf_js027')+esc(ex.last_result.text).slice(0,60)+'</div>'):'';
       return '<div style="background:var(--th-bg-surface,#fff);border:1px solid var(--th-bd-gray2,#e5e7eb);border-radius:8px;padding:10px 12px;margin-bottom:8px;">'
         +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">'
@@ -716,6 +697,17 @@ WF.cancelExec=function(id){
     if(d.ok) WF.loadMonitor(); else alert(window.T('msg_js_2058'));
   });
 };
+// ── 一分钟上手条（localStorage 控显；默认 display:none 防「已读用户闪一下」）──
+WF.dismissOnboard=function(){
+  try{ localStorage.setItem('wf_onboard_v1','1'); }catch(_){}
+  var el=document.getElementById('wf-onboard'); if(el) el.style.display='none';
+};
+try{
+  if(!localStorage.getItem('wf_onboard_v1')){
+    var _ob=document.getElementById('wf-onboard'); if(_ob) _ob.style.display='flex';
+  }
+}catch(_){}
+
 // ── 初始加载 ─────────────────────────────────────────────────────────────────
 WF.loadActions();
 _loaded.actions=true;

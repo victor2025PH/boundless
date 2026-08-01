@@ -44,6 +44,13 @@ class Channel:
     fields: List[Field] = field(default_factory=list)
     login_required: bool = False   # 填完后是否还需扫码/登录（交棒现有登录流程）
     intro: str = ""
+    #: 「用自己的账号登录」那条路对应的平台键（扫码 / 协议 / 网页登录，走收件箱接入抽屉）。
+    #: 空＝该渠道没有账号形态（网页客服是服务端原生渠道，开启即用）。
+    #: 这条路是绝大多数客户真正会走的——官方 API 那条要开发者账号与回调域名，
+    #: 向导此前只呈现后者，等于把劝退项摆在首屏、把卖点藏进二级页面。
+    login_platform: str = ""
+    #: 官方 API 那条路的一句话说明（与 intro 分工：intro 描述整个渠道）。
+    api_intro: str = ""
     # 必填字段全部就绪时顺带置 true 的 config 路径（声明式桥接）：修「凭据填了但
     # 登录开关没人开」的断层——如 Telegram 填齐 api_id/api_hash 后若不开
     # platform_login.telegram.protocol_enabled + orchestrator_enabled，接入弹窗的
@@ -58,7 +65,9 @@ CHANNELS: List[Channel] = [
         name="Telegram",
         enable_key="telegram.enabled",
         login_required=True,
-        intro="填入 API 凭证后，回到账号页扫码 / 验证码登录账号。",
+        login_platform="telegram",
+        intro="用你自己的 Telegram 账号登录即可开始收发消息。",
+        api_intro="自备 API 凭证（官网未自动派发时才需要，去 my.telegram.org 申请）。",
         enable_on_ready=[
             "platform_login.telegram.protocol_enabled",
             "platform_login.orchestrator_enabled",
@@ -74,9 +83,11 @@ CHANNELS: List[Channel] = [
     ),
     Channel(
         id="line",
-        name="LINE 官方账号",
+        name="LINE",
         enable_key="line.enabled",
-        intro="LINE Developers 控制台 → Messaging API 频道获取以下凭证。",
+        login_platform="line",
+        intro="用你自己的 LINE 账号扫码登录（手机上输 6 位验证码即可）。",
+        api_intro="改用 LINE 官方账号（Messaging API）：需要 LINE Developers 控制台与回调域名。",
         fields=[
             Field("line.channel_access_token", "Channel Access Token", secret=True,
                   help="Messaging API 设置页签发的长期 token"),
@@ -85,10 +96,25 @@ CHANNELS: List[Channel] = [
         ],
     ),
     Channel(
+        id="whatsapp",
+        name="WhatsApp",
+        # 没有「whatsapp.enabled」这种顶层键：WhatsApp 在本仓只有两个真实形态——
+        # 扫码协议接入（Baileys）与官方 Cloud API。这里挂扫码那条路的开关，
+        # 免得为了凑格式发明一个没人读的配置键。
+        enable_key="platform_login.whatsapp.protocol_enabled",
+        login_platform="whatsapp",
+        intro="用你自己的 WhatsApp 账号扫码登录（手机 → 已关联的设备）。",
+        # 刻意没有凭证字段：WhatsApp Cloud API 在本仓有 webhook 实现但没有产品级
+        # 配置入口，硬塞一个半成品表单只会制造「填了也不通」。扫码是唯一在跑的路。
+        fields=[],
+    ),
+    Channel(
         id="messenger",
         name="Facebook Messenger",
         enable_key="facebook_messenger.enabled",
-        intro="Meta 开发者后台 → 你的 App → Messenger 产品获取以下凭证。",
+        login_platform="messenger",
+        intro="在服务器的隔离浏览器里登录你的 Facebook 账号（账密 / 2FA，不用二维码）。",
+        api_intro="改用 Meta 官方 Page 接入：需要 Meta 开发者后台的 App 与 Webhook 回调。",
         fields=[
             Field("facebook_messenger.page_access_token", "Page Access Token", secret=True,
                   help="绑定主页后签发的 Page token"),
@@ -151,13 +177,31 @@ def _auto_provisioned(config: Dict[str, Any], channel_id: str) -> Optional[Dict[
     return spec if bool(_dig(config, str(spec["flag"]))) else None
 
 
-def channel_status(config: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """每渠道接入现状：是否启用 / 必填是否齐 / 各字段填写状态（密钥打码）。
+def channel_status(
+    config: Dict[str, Any],
+    *,
+    accounts_by_platform: Optional[Dict[str, int]] = None,
+    login_ready: Optional[Dict[str, bool]] = None,
+) -> List[Dict[str, Any]]:
+    """每渠道接入现状：两条接入路径各自的状态 + 「能不能收发消息」。
 
-    托管派发（``_AUTO_PROVISIONED``）命中时：隐藏已自动配置的凭据字段并换成人话 intro
-    ——前端「无字段则渲染 intro + 登录入口」的既有逻辑会自动呈现正确形态，零前端改动。
+    托管派发（``_AUTO_PROVISIONED``）命中时：隐藏已自动配置的凭据字段并换成人话 intro。
+
+    ``accounts_by_platform``：各平台已接入的账号数（``account_registry``，不含 removed）；
+    ``login_ready``：各平台「扫码/协议登录这条路今天通不通」（``platform_readiness``）。
+    两者都可省略——纯函数与离线调用方（CLI、测试）照旧只按配置判断。
+
+    **``ready`` 的口径是「这个渠道现在能不能收发消息」**，不是「yaml 填没填」。
+    旧口径 ``configured and enabled`` 两头都不准：一台挂着在跑的 Telegram 账号、
+    消息正在收发，向导却显示「已就绪 0/4」（登录进来的账号根本不写那些 yaml 键）；
+    反过来，填了 api_id/api_hash 但一个号都没登录，旧口径却算它就绪。
+    现在：**有已接入账号** → 就绪；或者**官方 API 凭据齐且启用**（LINE/Messenger
+    那种填完就能收 webhook 的形态）→ 就绪。``login_required`` 的渠道（Telegram 的
+    凭据只是登录的前置、本身不通消息）不吃第二条。
     """
     config = config or {}
+    accounts_by_platform = accounts_by_platform or {}
+    login_ready = login_ready or {}
     out: List[Dict[str, Any]] = []
     for ch in CHANNELS:
         enabled = bool(_dig(config, ch.enable_key))
@@ -182,6 +226,41 @@ def channel_status(config: Dict[str, Any]) -> List[Dict[str, Any]]:
             })
         # 托管派发：凭据已就绪 → 视为已配置（不因隐藏了字段而误判「未配置」）
         configured = True if auto else ((not missing) and (bool(ch.fields) or enabled))
+
+        # 路径一：用自己的账号登录（扫码 / 协议 / 服务器托管登录）
+        login_path: Optional[Dict[str, Any]] = None
+        linked = 0
+        if ch.login_platform:
+            linked = int(accounts_by_platform.get(ch.login_platform) or 0)
+            login_path = {
+                "platform": ch.login_platform,
+                "accounts": linked,
+                # 缺省 True：拿不到诊断信号时不要凭空把入口画成灰的（宁可让用户
+                # 点进去看到真实原因，也不要在向导里谎报「不可用」）。
+                "available": bool(login_ready.get(ch.login_platform, True)),
+                "deeplink": f"/workspace?drawer=1&connect={ch.login_platform}",
+            }
+        # 路径二：企业官方 API（凭据表单）——只有声明了字段的渠道才有
+        api_path: Optional[Dict[str, Any]] = None
+        if ch.fields:
+            api_path = {
+                "intro": ch.api_intro,
+                "fields": fields_status,
+                "missing": missing,
+                "configured": bool(not missing),
+                # 凭据本身不通消息、只是登录前置（Telegram）→ 前端别把它讲成「另一条路」
+                "is_transport": not ch.login_required,
+            }
+
+        if linked > 0:
+            ready, ready_by = True, "login"
+        elif api_path and api_path["configured"] and enabled and api_path["is_transport"]:
+            ready, ready_by = True, "api"
+        elif not ch.fields and not ch.login_platform:
+            ready, ready_by = bool(enabled), ("native" if enabled else "")
+        else:
+            ready, ready_by = False, ""
+
         out.append({
             "id": ch.id, "name": ch.name, "enable_key": ch.enable_key,
             "enabled": enabled,
@@ -190,7 +269,11 @@ def channel_status(config: Dict[str, Any]) -> List[Dict[str, Any]]:
             "fields": fields_status, "missing": missing,
             "configured": configured,
             "auto_provisioned": bool(auto),
-            "ready": configured and enabled,
+            "login_platform": ch.login_platform,
+            "linked_accounts": linked,
+            "paths": {"login": login_path, "api": api_path},
+            "ready": ready,
+            "ready_by": ready_by,
         })
     return out
 

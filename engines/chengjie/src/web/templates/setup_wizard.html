@@ -16,7 +16,7 @@
   .sw-ch-name{font-size:15px;font-weight:700;color:var(--tk-text);}
   .sw-ch-intro{font-size:12px;color:var(--tk-text-muted);margin-top:2px;}
   .sw-badge{font-size:11px;font-weight:700;padding:3px 9px;border-radius:8px;margin-left:auto;white-space:nowrap;}
-  .b-ready{background:rgba(16,185,129,.14);color:var(--tk-ok-ink);} .b-conf{background:rgba(59,130,246,.14);color:var(--tk-brand);}
+  .b-ready{background:rgba(16,185,129,.14);color:var(--tk-ok-ink);} .b-conf{background:color-mix(in srgb, var(--tk-brand,#1e8cf2) 14%, transparent);color:var(--tk-brand);}
   .b-miss{background:rgba(245,158,11,.16);color:var(--tk-warn-ink);}
   .sw-body{display:none;padding:0 18px 18px;border-top:1px solid var(--tk-border);}
   .sw-body.open{display:block;}
@@ -36,7 +36,16 @@
   .sw-issues{margin-top:10px;}
   .sw-issue{font-size:12px;padding:6px 0;border-bottom:1px solid var(--tk-border);color:var(--tk-text-muted);}
   .sw-issue b{color:var(--tk-warn-ink);} .sw-issue.error b{color:var(--tk-danger-ink);}
-  .sw-login{margin-top:12px;padding:12px;background:rgba(59,130,246,.1);border-radius:10px;font-size:13px;color:var(--tk-brand);}
+  .sw-login{margin-top:12px;padding:12px;background:color-mix(in srgb, var(--tk-brand,#1e8cf2) 10%, transparent);border-radius:10px;font-size:13px;color:var(--tk-brand);}
+  /* 两条接入路径：主路径（自有账号扫码）实心呈现，官方 API 折叠收起 */
+  .sw-path{margin:14px 0;}
+  .sw-path-primary{padding:14px;border:1px solid color-mix(in srgb, var(--tk-brand,#1e8cf2) 35%, transparent);border-radius:12px;background:color-mix(in srgb, var(--tk-brand,#1e8cf2) 7%, transparent);}
+  .sw-path-hd{font-size:13px;font-weight:700;color:var(--tk-brand);}
+  .sw-path-sub{font-size:12px;color:var(--tk-text-muted);margin-top:4px;line-height:1.6;}
+  .sw-path-state{font-size:12px;margin-top:8px;font-weight:600;}
+  .sw-path-adv{border-top:1px solid var(--tk-border);padding-top:12px;}
+  .sw-path-adv>summary{font-size:12px;color:var(--tk-text-muted);cursor:pointer;list-style:revert;}
+  .sw-path-adv>summary:hover{color:var(--tk-text);}
 </style>
 {% endblock %}
 {% block content %}
@@ -50,6 +59,7 @@
     <span id="sw-prog-text">{{ (i18n or {}).get('sw_s006', "已就绪") }} 0 / 0</span>
     <div class="bar"><i id="sw-prog-bar" style="width:0"></i></div>
   </div>
+  <div id="sw-prog-hint" style="font-size:11px;color:var(--tk-text-muted);margin:-12px 0 16px;"></div>
   <!-- P0-1 A3：AI 大模型配置卡（golive AI 项 / workspace 引导条深链 #ai 落点；写 overlay + 热生效） -->
   <div class="sw-card" id="ai">
     <div class="sw-ch-hd" onclick="swToggle('ai')">
@@ -101,11 +111,17 @@
 <script>
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 
+/* 徽章按「现在能不能收发消息」讲话，不按「yaml 填没填」——后者会把一台挂着在跑的
+   账号、消息正在收发的机器显示成「未配置」。 */
 function badge(c){
-  if(c.ready) return '<span class="sw-badge b-ready">✓ '+window.T('sw_js_001')+'</span>';
+  if(c.ready){
+    if(!c.paths) return '<span class="sw-badge b-ready">✓ '+window.T('sw_js_001')+'</span>';  /* 旧后端 */
+    if(c.ready_by==='login') return '<span class="sw-badge b-ready">'+window.Tf('setup.ch.badge_linked',{n:c.linked_accounts||0})+'</span>';
+    if(c.ready_by==='api') return '<span class="sw-badge b-ready">'+window.T('setup.ch.badge_api')+'</span>';
+    return '<span class="sw-badge b-ready">'+window.T('setup.ch.badge_on')+'</span>';
+  }
   if(c.configured) return '<span class="sw-badge b-conf">'+window.T('sw_js_002')+'</span>';
-  if(c.missing&&c.missing.length) return '<span class="sw-badge b-miss">'+window.Tf('sw_tf_miss',{n:c.missing.length})+'</span>';
-  return '<span class="sw-badge b-miss">'+window.T('dash.m.not_configured')+'</span>';
+  return '<span class="sw-badge b-miss">'+window.T('setup.ch.badge_none')+'</span>';
 }
 
 function fieldHtml(ch, f){
@@ -117,22 +133,76 @@ function fieldHtml(ch, f){
     +(f.help?'<div class="hint">'+esc(f.help)+'</div>':'')+cur+'</div>';
 }
 
-function loginHint(ch){
-  if(!ch.login_required) return '';
-  return '<div class="sw-login">'+window.T('sw_js_004')+' <a href="/workspace">'+window.T('inbox.nav.acct')+'</a> '+window.T('sw_js_005')+'</div>';
+/* 路径一：用自己的账号（扫码 / 协议 / 服务器托管登录）。深链到收件箱既有的接入
+   抽屉——那套流程已经跑通并在维护，向导不该另造一个平行入口。 */
+function loginPathHtml(ch){
+  var p = ch.paths && ch.paths.login;
+  if(!p) return '';
+  var n = p.accounts||0;
+  var state = n>0
+    ? '<span style="color:var(--tk-ok-ink);">'+window.Tf('setup.ch.path_login_accounts',{n:n})+'</span>'
+    : '<span style="color:var(--tk-text-muted);">'+window.T('setup.ch.path_login_none')+'</span>';
+  var warn = p.available ? ''
+    : '<div class="hint" style="color:var(--tk-warn-ink);margin-top:4px;">'+window.T('setup.ch.path_login_blocked')+'</div>';
+  /* intro 已在卡头呈现，这里不复述——只讲这条路当前的状态与下一步动作 */
+  return '<div class="sw-path sw-path-primary">'
+    +'<div class="sw-path-hd">'+window.T('setup.ch.path_login_title')+'</div>'
+    +'<div class="sw-path-state">'+state+'</div>'+warn
+    +'<div class="sw-actions"><button class="sw-btn primary" onclick="swConnect(\''+esc(p.platform)+'\')">'
+    +window.T('setup.ch.path_login_cta')+'</button></div>'
+    +'</div>';
 }
 
-function bodyHtml(ch){
+/* 路径二：企业官方 API。折叠——它要开发者账号与回调域名，是少数客户才走的路；
+   摆在首屏就是把劝退项顶到最前面（本次改版的起因）。 */
+function apiPathHtml(ch){
+  var a = ch.paths && ch.paths.api;
+  if(!a) return '';
+  var fields = (a.fields||[]).map(function(f){return fieldHtml(ch,f);}).join('');
+  if(!fields) return '';
+  return '<details class="sw-path sw-path-adv">'
+    +'<summary>'+window.T('setup.ch.path_api_title')+'</summary>'
+    +'<div class="sw-path-sub">'+esc(a.intro||window.T('setup.ch.path_api_prereq'))+'</div>'
+    +fields
+    +'<div class="sw-actions">'
+    +'<button class="sw-btn primary" onclick="swSave(\''+ch.id+'\',this)">'+window.T('sw_js_007')+'</button>'
+    +'<span class="sw-msg" id="sw-msg-'+ch.id+'"></span></div>'
+    +'<div class="sw-issues" id="sw-iss-'+ch.id+'"></div>'
+    +'</details>';
+}
+
+/* 既无账号形态也无凭据的渠道（网页客服）：服务端原生，开启即用。 */
+function nativePathHtml(ch){
+  if((ch.paths&&ch.paths.login) || (ch.paths&&ch.paths.api)) return '';
+  return '<p style="font-size:13px;color:var(--tk-text-muted);margin:14px 0;">'+esc(ch.intro||window.T('sw_js_006'))+'</p>'
+    +'<div class="sw-actions">'
+    +'<button class="sw-btn primary" onclick="swSave(\''+ch.id+'\',this)">'+window.T('setup.ch.enable_cta')+'</button>'
+    +'<span class="sw-msg" id="sw-msg-'+ch.id+'"></span></div>'
+    +'<div class="sw-issues" id="sw-iss-'+ch.id+'"></div>';
+}
+
+/* 旧接口兼容：模板是热更新的（保存即上生产），而 /api/setup/channels 的 paths 字段
+   要等实例重启才有。这段让「新模板 + 旧后端」这个必然存在的中间态照旧渲染老表单，
+   而不是渲染出一片空白。实例重启后自动走上面的两路径形态。 */
+function legacyBodyHtml(ch){
   var fields = (ch.fields||[]).map(function(f){return fieldHtml(ch,f);}).join('');
-  if(!ch.fields||!ch.fields.length){
+  if(!fields){
     fields='<p style="font-size:13px;color:var(--tk-text-muted);margin:14px 0;">'+esc(ch.intro||window.T('sw_js_006'))+'</p>';
   }
   return fields
     +'<div class="sw-actions">'
     +'<button class="sw-btn primary" onclick="swSave(\''+ch.id+'\',this)">'+window.T('sw_js_007')+'</button>'
     +'<span class="sw-msg" id="sw-msg-'+ch.id+'"></span></div>'
-    +'<div class="sw-issues" id="sw-iss-'+ch.id+'"></div>'
-    +loginHint(ch);
+    +'<div class="sw-issues" id="sw-iss-'+ch.id+'"></div>';
+}
+
+function bodyHtml(ch){
+  if(!ch.paths) return legacyBodyHtml(ch);
+  return loginPathHtml(ch) + nativePathHtml(ch) + apiPathHtml(ch);
+}
+
+function swConnect(platform){
+  location.href = '/workspace?drawer=1&connect=' + encodeURIComponent(platform);
 }
 
 function render(data){
@@ -146,8 +216,13 @@ function render(data){
       +'<div class="sw-body" id="sw-body-'+ch.id+'">'+bodyHtml(ch)+'</div></div>';
   }).join('');
   var r=data.ready_count||0, t=data.total||0;
-  document.getElementById('sw-prog-text').textContent=window.Tf('sw_tf_ready',{r:r,t:t});
+  var newApi=(data.channels||[]).some(function(c){return !!c.paths;});
+  document.getElementById('sw-prog-text').textContent=newApi
+    ? window.Tf('setup.ch.prog',{r:r,t:t})
+    : window.Tf('sw_tf_ready',{r:r,t:t});
   document.getElementById('sw-prog-bar').style.width=(t?Math.round(r/t*100):0)+'%';
+  var ph=document.getElementById('sw-prog-hint');
+  if(ph) ph.textContent = newApi ? window.T('setup.ch.prog_hint') : '';
 }
 
 function swToggle(id){

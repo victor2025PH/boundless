@@ -81,7 +81,16 @@ def _build_sync_embedder() -> Optional[Callable[[str], Optional[List[float]]]]:
     except Exception:
         return None
     try:
-        client = OpenAI(api_key=key or "sk-none", base_url=base, timeout=8.0)
+        # 快败（2026-08-01 补完本模块「短超时 best-effort」的既定设计）：embedder 打
+        # ai.embedding_* LAN 端点且在**回复路**上——标量 8s 会把 connect 一并抬到 8s，
+        # 叠加 SDK 默认 2 重试 = 宕机主机同步卡 ~24s。connect=5 + 关重试后 ≤5s 降级。
+        try:
+            import httpx
+            _to: Any = httpx.Timeout(8.0, connect=5.0)
+        except Exception:
+            _to = 8.0
+        client = OpenAI(api_key=key or "sk-none", base_url=base,
+                        timeout=_to, max_retries=0)
     except Exception:
         return None
 
@@ -151,7 +160,14 @@ def _build_sync_llm() -> Optional[Callable[[str], str]]:
         return None
     try:
         from openai import OpenAI  # type: ignore
-        client = OpenAI(api_key=key or "sk-none", base_url=base, timeout=20.0)
+        # connect 有界即可（宕机端点 3×5s 封顶）；**刻意保留** SDK 默认重试——E2 精修
+        # 打云端 chat 端点且 off 热路（后台巩固），瞬时抖动重试有价值、不阻塞坐席。
+        try:
+            import httpx
+            _to: Any = httpx.Timeout(20.0, connect=5.0)
+        except Exception:
+            _to = 20.0
+        client = OpenAI(api_key=key or "sk-none", base_url=base, timeout=_to)
     except Exception:
         return None
 

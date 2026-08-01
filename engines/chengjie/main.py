@@ -85,6 +85,8 @@ class AIChatAssistant:
         self._reactivation_loop = None
         # Phase O: 主动关怀派发器引用（关程序时 stop）
         self._care_dispatcher = None
+        # P2: care LLM 抽取影子扫描器引用（关程序时 stop）
+        self._care_shadow_scanner = None
         # P2: 陪伴主动话题调度循环引用（关程序时 stop）
         self._companion_proactive_loop = None
         self._companion_funnel_store = None
@@ -770,6 +772,35 @@ class AIChatAssistant:
                     _fet.get("retention_days", 90))
         except Exception:
             self.logger.warning("前端错误趋势落库初始化失败（已忽略）", exc_info=True)
+
+    def _maybe_init_ui_event_trend_log(self) -> None:
+        """按 ``ops.ui_event_trend`` 装配 UI 事件日聚合落库（默认关）。
+
+        开启后 beacon 路由（/api/telemetry/ui-event）旁路把消毒后的动作按日 upsert 进
+        ``ui_event_trend.db``，看板/周读经 ``/api/admin/ui-event-trend`` 读近 N 天
+        （``?prefix=dpick.`` 取 AI 回复漏斗命名空间）——取消率/采纳率从进程内瞬时
+        快照（重启即清零）变成可回看的时间线。
+        """
+        try:
+            _ops = (self.config.config.get("ops") or {})
+            _uet = (_ops.get("ui_event_trend") or {})
+            if not _uet.get("enabled", False):
+                self.logger.info(
+                    "UI 事件趋势落库未启用（ops.ui_event_trend.enabled=false）")
+                return
+            from src.web.ui_event_trend import configure_ui_event_trend
+            _cfg_dir = Path(self.config.config_path).parent
+            store = configure_ui_event_trend(
+                enabled=True,
+                db_path=_cfg_dir / "ui_event_trend.db",
+                retention_days=float(_uet.get("retention_days", 90)),
+            )
+            if store is not None:
+                self.logger.info(
+                    "✅ UI 事件趋势落库已就绪（retention=%sd）",
+                    _uet.get("retention_days", 90))
+        except Exception:
+            self.logger.warning("UI 事件趋势落库初始化失败（已忽略）", exc_info=True)
 
     def _maybe_init_csrf_trend_log(self) -> None:
         """P2（2026-07-31）：按 ``ops.csrf_trend`` 装配 CSRF 准入/拒绝日聚合落库（默认关）。

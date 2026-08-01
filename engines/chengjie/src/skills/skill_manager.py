@@ -2358,6 +2358,7 @@ class SkillManager(LoggerMixin):
         conversation_id: str = "",
         peer_audio_emotion: Optional[Dict[str, Any]] = None,
         account_id: str = "",
+        agent_instruction: str = "",
     ) -> Optional[Dict[str, Any]]:
         """收件箱草稿生成的「统一规则引擎」（单一事实源）。
 
@@ -2376,6 +2377,9 @@ class SkillManager(LoggerMixin):
 
         关系/记忆状态按 ``account_id:chat_key`` 分桶持久化（与 A 线 ContextStore
         同口径），同 peer 对不同协议号互不串上下文。
+
+        ``agent_instruction``（P22）：坐席显式指令进 ``_agent_instruction`` 高权重块；
+        空=旧行为（全自动路径不受影响）。
 
         返回 ``{"reply": str, "intent": str}``；无法生成时返回 ``None``（调用方回落）。
         """
@@ -2430,6 +2434,13 @@ class SkillManager(LoggerMixin):
 
         # 双号隔离：与 process_message 同键（account_id:chat_key）
         user_context = self._get_user_context(user_id, account_id=_acct_id)
+        # P22：坐席显式指令（「采纳并拟稿」）。只在本轮 user_context 上挂，不污染持久化
+        # ContextStore——_get_user_context 返回的是可变 dict，但指令是瞬时态，生成后清掉。
+        _ainst = str(agent_instruction or "").strip()[:400]
+        if _ainst:
+            user_context["_agent_instruction"] = _ainst
+        else:
+            user_context.pop("_agent_instruction", None)
         if _acct_id:
             user_context["account_id"] = _acct_id
         if persona_id:
@@ -2784,6 +2795,44 @@ class SkillManager(LoggerMixin):
             )
             if reply != _before_guard:
                 _metric("persona_guard_intercept")
+            # 9b. 发图能力关闭时的出站消毒（2026-07-31 补缺口）：inbox 草稿路径
+            # 刻意零发送副作用、也不走 process_message 的 promise_guard——若能力关
+            # 时 LLM 仍写出「翻翻相册/这张是…」，草稿会进待审/自动发队列变成真
+            # 空头支票。与试聊 sanitize_no_photo_reply 同口径；能力开时只剥
+            # [PHOTO] 协议标记（草稿无执行层，标记直显=穿帮）。
+            if reply:
+                try:
+                    from src.companion.photo_capability import (
+                        prompt_photos_allowed,
+                        sanitize_no_photo_reply,
+                    )
+                    from src.ai.photo_directive import strip_photo_directives
+                    if prompt_photos_allowed(user_context):
+                        reply = strip_photo_directives(reply)
+                    else:
+                        _mctx = False
+                        try:
+                            from src.ai.outbound_promise_guard import (
+                                detect_media_offer,
+                                detect_media_promise,
+                                wants_media,
+                            )
+                            _lr = str(user_context.get("last_reply") or "")
+                            _mctx = bool(
+                                wants_media(text)
+                                or detect_media_promise(_lr)
+                                or detect_media_offer(_lr))
+                        except Exception:
+                            _mctx = False
+                        _before_pc = reply
+                        reply = sanitize_no_photo_reply(
+                            reply, media_context=_mctx, source="inbox_draft")
+                        if reply != _before_pc:
+                            _metric("photo_capability_sanitize")
+                except Exception:
+                    self.logger.debug(
+                        "%sphoto_capability sanitize skipped",
+                        log_prefix, exc_info=True)
             reply = self._apply_goal_link_guard(
                 reply, user_context, log_prefix=log_prefix)
             reply = self._apply_crisis_safety_net(
@@ -2834,6 +2883,8 @@ class SkillManager(LoggerMixin):
             user_context.pop("_media_coherence_hint", None)
             user_context.pop("_current_scene_note", None)
             user_context.pop("_media_sent_note", None)
+            # P22：坐席指令是瞬时态，绝不能随 ContextStore flush 落库污染下轮自动草稿
+            user_context.pop("_agent_instruction", None)
 
     def _run_autopilot(self) -> None:
         """Auto-Pilot：�查策略健康状态，���重映射持���效策略�€?
@@ -5922,6 +5973,11 @@ class SkillManager(LoggerMixin):
         except Exception:
             return {}
 
+    # 人设级发图闸（2026-07-31「默认关闭相册」）：A 线五个媒体入口统一走
+    # photo_capability.prompt_photos_allowed（模块级函数而非方法——测试桩类
+    # 零改动 + monkeypatch 单点控门）。语义：全局 selfie 开着也要**当前人设**
+    # 显式开了 capabilities.photos 才许发（注册相册+生成+指令+异步兑现同门）。
+
     def _monetization_gate_enabled(self) -> bool:
         """变现门控总闸：monetization.enabled 且 gate.enabled。任一关 → False（不计费）。"""
         try:
@@ -5970,6 +6026,10 @@ class SkillManager(LoggerMixin):
         """
         scfg = self._selfie_cfg()
         if not scfg.get("enabled", False):
+            return None
+        # 人设级发图闸（2026-07-31，默认关）：人设没开相册 → 注册相册也不发。
+        from src.companion.photo_capability import prompt_photos_allowed
+        if not prompt_photos_allowed(user_context):
             return None
         try:
             from src.ai.companion_selfie import detect_selfie_request
@@ -6175,6 +6235,11 @@ class SkillManager(LoggerMixin):
         """
         scfg = self._selfie_cfg()
         if not scfg.get("enabled", False):
+            return None
+        # 人设级发图闸（2026-07-31，默认关）：人设没开 → 不搪塞不引导，直接交
+        # 普通文字回复（prompt 层已注入「无发图能力」硬约束，语言自然带过）。
+        from src.companion.photo_capability import prompt_photos_allowed
+        if not prompt_photos_allowed(user_context):
             return None
         from src.ai.companion_selfie import (
             build_selfie_prompt,
@@ -6475,6 +6540,10 @@ class SkillManager(LoggerMixin):
         """
         scfg = self._selfie_cfg()
         if not scfg.get("enabled", False) or not scfg.get("contextual_images", False):
+            return None
+        # 人设级发图闸（2026-07-31，默认关）：人设没开 → 物体图也不生成。
+        from src.companion.photo_capability import prompt_photos_allowed
+        if not prompt_photos_allowed(user_context):
             return None
         # A2 防重复烧卡：Stage A 已在本轮判定「出不了图」并设了协同提示 →
         # 别再走一次昂贵的生成/失败（同一轮两次 ComfyUI 调用 + 两次失败）。
@@ -6972,6 +7041,11 @@ class SkillManager(LoggerMixin):
             build_selfie_prompt, decide_selfie, get_selfie_provider,
             resolve_persona_lora, resolve_variety_salt, stable_selfie_seed,
         )
+        # 人设级发图闸（2026-07-31，默认关）：LLM 打了 [PHOTO] 标记也不放行
+        # （能力关时协议本不该注入，这里是执行层的第二道防线）。
+        from src.companion.photo_capability import prompt_photos_allowed
+        if not prompt_photos_allowed(user_context):
+            return False
         provider = get_selfie_provider(scfg.get("provider") or {})
         will_generate = bool(getattr(provider, "enabled", False)) and \
             str(getattr(provider, "backend", "")).lower() not in ("", "disabled")
@@ -7394,6 +7468,11 @@ class SkillManager(LoggerMixin):
                 return False
             scfg = self._selfie_cfg()
             if not scfg.get("enabled", False):
+                return False
+            # 人设级发图闸（2026-07-31，默认关）：人设没开 → 承诺一律撤回，
+            # 绝不异步兑现（兑现=真发图，能力关时不存在这条路）。
+            from src.companion.photo_capability import prompt_photos_allowed
+            if not prompt_photos_allowed(user_context):
                 return False
             from src.ai.companion_selfie import decide_selfie, get_selfie_provider
             provider = get_selfie_provider(scfg.get("provider") or {})

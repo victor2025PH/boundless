@@ -174,14 +174,6 @@ HELP_TERMS: dict = {
         "usage": "创建/编辑人设 → 设为默认或绑定到指定会话 → 配置全局规则",
         "usage_en": "Create/edit a persona → set as default or bind to sessions → configure global rules"
     },
-    "nav_ai_studio": {
-        "zh": "AI 工作室",
-        "en": "AI Studio",
-        "desc": "AI 能力聚合入口：人设指挥、情景记忆、学习审核、关系与身份绑定一站式管理",
-        "desc_en": "Aggregated AI hub: persona command, episodic memory, learning review, relations and identity binding in one place",
-        "usage": "从各功能卡片进入对应模块，或用顶部标签页切换",
-        "usage_en": "Enter each module from its card, or switch with the top tabs"
-    },
     "nav_rpa_overview": {
         "zh": "渠道总览",
         "en": "Channel Overview",

@@ -637,13 +637,17 @@ class ProtocolInboxAdapter:
     def _protocol_ids(self) -> "tuple[Dict[str, set], Dict[str, set]]":
         """返回 (active, removed) 两组 ``{platform: {account_id}}``。
 
-        active：mode∈(protocol,desktop) 且 status≠removed —— 参与发送/收信展示。
+        active：mode∈(protocol,desktop) 且 status 不在 removed/offline —— 参与收信展示。
         removed：mode∈(protocol,desktop) 且 status==removed —— 仅只读历史展示
         （账号已移除但 store 里的历史会话仍在，供查看；不参与发送）。
+        offline（已登出）两组都不进——聊天页不展示，历史留库，同号重登后回 active。
         """
         try:
             from src.integrations.account_registry import get_account_registry
-            rows = get_account_registry().list() or []
+            # ⚠ 必须 include_removed=True：list() 默认在 SQL 层排除 removed 行，
+            # 旧代码再按 status=='removed' 分桶 → removed 桶恒空，「已移除只读历史」
+            # 在实时聚合路径从未生效（2026-07-31 修，门禁 test_account_status_marks）。
+            rows = get_account_registry().list(include_removed=True) or []
         except Exception:
             return {}, {}
         active: Dict[str, set] = {}
@@ -652,7 +656,10 @@ class ProtocolInboxAdapter:
             # protocol=真 worker push 落库；desktop=桌面壳同步桥落库（均按 store 读出）
             if a.get("mode") not in ("protocol", "desktop"):
                 continue
-            bucket = removed if a.get("status") == "removed" else active
+            st = str(a.get("status") or "")
+            if st == "offline":
+                continue
+            bucket = removed if st == "removed" else active
             bucket.setdefault(str(a.get("platform") or ""), set()).add(
                 str(a.get("account_id") or ""))
         return active, removed

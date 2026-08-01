@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import os
 import secrets
 import threading
 import time
@@ -280,6 +281,68 @@ def get_login_provider(
     platform: str, mode: str = "device",
 ) -> Optional[Callable[..., Optional[Dict[str, Any]]]]:
     return _PROVIDERS.get(_pkey(platform, mode))
+
+
+# ── 接入开关三态解析（P0：产品默认随程序版本走，不随只播一次的种子） ──────────
+#
+# 背景（104 事故）：LINE/WhatsApp/Messenger 的扫码开关写在 config.desktop.min.yaml
+# 种子里，而 ConfigManager._ensure_seeded 只在配置文件不存在时播种一次。于是**升级
+# 安装**（旧 config、缺后加的开关）永远拿不到新平台的默认开启——程序里 okline/边车/
+# Electron-Node 都随包到位了，开关却停在旧配置，接入弹窗里对应方式恒灰「未启用」，
+# 且除 Telegram 外界面上没有别的入口能打开。与 licensing.trial 同类（见
+# local_trial.configure_local_trial 的同款修法）。
+#
+# 修法：把「产品该点亮哪些接入方式」这个**产品决策**从种子回归代码默认——桌面模式下、
+# 且配置**完全没写过**该键时按下表默认开；配置一旦写了就完全以配置为准（含显式 false，
+# 尊重管理员/运营的关闭意愿）。服务器部署无 AITR_DESKTOP_MODE → 一律保持原「默认关」
+# 语义，零行为变化。用户资产（key/账号/overlay）仍只由配置承载，本机制只管产品开关。
+#
+# 表内每一项都必须在 config.desktop.min.yaml 有对应的「随包交付」承诺，且由
+# tests/test_platform_login_defaults.py 双向钉住（种子开的必须在表内、表内的种子必须开），
+# 防「种子加了新平台开关但忘了配代码默认」这条复发路径（正是 104 的成因类）。
+_DESKTOP_LOGIN_DEFAULT_ON = frozenset({
+    "platform_login.telegram.protocol_enabled",
+    "platform_login.line.protocol_enabled",
+    "platform_login.whatsapp.protocol_enabled",
+    "platform_login.messenger.web_enabled",
+    "platform_login.orchestrator_enabled",
+})
+
+_UNSET = object()
+
+
+def _desktop_mode() -> bool:
+    """是否桌面壳部署。与 ``local_trial.configure_local_trial`` 同口径——桌面壳
+    launcher 经 ``AITR_DESKTOP_MODE=1`` 注入（见 desktop/backend-launcher.js）。"""
+    return str(os.environ.get("AITR_DESKTOP_MODE") or "") == "1"
+
+
+def _dotted_get(config: Dict[str, Any], path: str) -> Any:
+    cur: Any = config if isinstance(config, dict) else {}
+    for part in path.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return _UNSET
+        cur = cur[part]
+    return cur
+
+
+def resolve_login_switch(
+    config: Dict[str, Any], path: str, *, desktop: Optional[bool] = None
+) -> bool:
+    """接入开关三态解析（单一事实源）。
+
+    - 配置**显式写过**（含 ``false``）→ 完全以配置为准；
+    - **从未写过** → 桌面模式且命中 ``_DESKTOP_LOGIN_DEFAULT_ON`` 表则 True，否则 False。
+
+    ``path`` 为从 config 根算起的点分路径（如 ``platform_login.line.protocol_enabled``）。
+    ``desktop`` 可注入以便单测；缺省读环境（``AITR_DESKTOP_MODE``）。
+    """
+    val = _dotted_get(config, path)
+    if val is not _UNSET:
+        return bool(val)
+    if desktop is None:
+        desktop = _desktop_mode()
+    return bool(desktop and path in _DESKTOP_LOGIN_DEFAULT_ON)
 
 
 def mode_available(platform: str, mode: str) -> bool:

@@ -112,10 +112,10 @@ NAV_ITEMS = {
     "group_show": dict(key="group_show", path="/group-show", icon="users",
                        label_key="gs_nav", label_zh="群脉导播台",
                        cmd_keys="group show crowdx 群脉 导播 导播台 群戏 剧本 排练 炒群"),
-    "ai_studio": dict(key="ai_studio", path="/ai-studio", icon="plus-circle",
-                      featured=True, strong=True, label_key="ai_studio",
-                      label_zh="AI 工作室", help="nav_ai_studio",
-                      cmd_keys="ai studio 工作室 中枢 hub"),
+    # ai_studio 已解散（2026-08-01）：5 个 tab 中 3 个是兄弟页面套壳，独有能力
+    # 已迁回权威页（Prompt A/B→策略效果、合并批量/扫描→ops/merge-reviews、
+    # 身份映射→ops/contacts、关系分析三卡→运营分析、聚合统计→数据概览）。
+    # /ai-studio 路由 301 → /personas 兜底旧书签。
     "personas": dict(feature="personas", key="personas", path="/personas", icon="persona",
                      label_key="personas", label_zh="人设工作室", help="nav_personas",
                      cmd_keys="personas persona 人设 角色 工作室"),
@@ -206,7 +206,7 @@ NAV_GROUPS_FULL = [
          items=["rpa_overview", "telegram", "line_rpa", "messenger_rpa",
                 "whatsapp_rpa", "group_show", DOMAIN_SENTINEL]),
     dict(label_key="section_ai_kb", label_zh="AI 与知识",
-         items=["ai_studio", "personas", "knowledge", "learner", "episodic",
+         items=["personas", "knowledge", "learner", "episodic",
                 "strategies", "strategy_analytics"]),
     dict(label_key="section_insights", label_zh="数据洞察",
          items=["dash", "analytics", "funnel", "monetization"]),
@@ -290,6 +290,29 @@ def _mark_locked(items, locked):
         else:
             out.append(it)
     return out
+
+
+# ── E3：页面路径 → 授权功能族（中间件页面守卫用） ─────────────────────────────
+# 与 nav 可见性同一事实源（NAV_ITEMS 的 feature 标注）：锁定项侧栏渲染锁标跳
+# /membership，直连 URL 也一致 302 过去——nav 藏了但 URL 仍能打开半残页（API 全
+# 403）的缝隙从此闭合，且两个面永不漂移（新页面挂进 NAV_ITEMS 带 feature 即自动
+# 双面生效）。表按前缀长度降序（最长优先），匹配按整段边界（/knowledge 匹配
+# /knowledge 与 /knowledge/*，不误伤 /knowledgebase）。
+_PAGE_FEATURE_PREFIXES = tuple(sorted(
+    ((str(it["path"]), str(it["feature"]))
+     for it in NAV_ITEMS.values()
+     if isinstance(it, dict) and it.get("feature") and it.get("path")),
+    key=lambda pf: -len(pf[0]),
+))
+
+
+def feature_for_page_path(path: str):
+    """页面路径 → 所属授权功能族；无归属 → None（不守卫）。纯函数零 IO。"""
+    p = str(path or "")
+    for prefix, feat in _PAGE_FEATURE_PREFIXES:
+        if p == prefix or p.startswith(prefix + "/"):
+            return feat
+    return None
 
 
 def get_nav_context(config: dict = None) -> dict:

@@ -123,6 +123,28 @@ def effective_webhooks(base_cfg: Optional[Dict[str, Any]]) -> List[Dict[str, Any
     return list(base)
 
 
+def merge_preserve_secrets(
+    incoming: List[Dict[str, Any]],
+    old_by_name: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """按 name 沿用旧真实密钥：前端回传脱敏(``abc***``)或空 token/secret 时不覆盖。
+
+    **为什么是安全关键**：运营面板展示的 token/secret 是脱敏的（``mask``），保存时
+    前端把脱敏值原样回传。若不还原成旧真值,一次「改个名字再保存」就会把真 token
+    覆盖成 ``abc***`` 字面量 → 之后所有告警投递都用错密钥静默失败（保存成功、告警发
+    不出,正是最难查的形态）。无同名旧条目时脱敏值清空(绝不把 ``***`` 当密钥存)。
+
+    就地改 incoming 并返回（调用方已 sanitize_list 过,每条含 token/secret 键）。
+    """
+    for w in incoming:
+        old = old_by_name.get(w.get("name")) or {}
+        for k in ("token", "secret"):
+            nv = str(w.get(k) or "")
+            if (not nv) or nv.endswith("***"):
+                w[k] = str(old.get(k) or "")
+    return incoming
+
+
 def mask(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """给前端展示用：脱敏 token/secret，只暴露是否已设置。"""
     out: List[Dict[str, Any]] = []

@@ -5,7 +5,16 @@
 {% block content %}
 {#- 服务端全量渲染：无 JS 依赖（i18n 键在 i18n_packs/membership.py，数据装配在
     routes/membership_routes.py::build_membership_snapshot,口径=feature_gate 单源） -#}
-<style>.mb-cur-col{background:rgba(59,130,246,.06)}</style>
+<style>.mb-cur-col{background:color-mix(in srgb, var(--blue,#3b82f6) 6%, transparent)}
+.mb-from-hint{margin:0 0 .7rem;padding:.55rem .8rem;border-radius:8px;font-size:.85rem;
+  background:color-mix(in srgb, var(--blue,#3b82f6) 10%, transparent);color:var(--blue,#3b82f6);
+  display:flex;align-items:center;gap:.8rem;flex-wrap:wrap}
+.mb-from-hint>span{flex:1 1 auto;min-width:200px}
+.mb-from-cta{flex:0 0 auto;padding:.3rem .8rem;border-radius:6px;font-size:.8rem;white-space:nowrap;
+  background:var(--blue,#3b82f6);color:#fff;text-decoration:none}
+.mb-from-cta:hover{opacity:.88}
+.mb-row-hi td{background:color-mix(in srgb, var(--blue,#3b82f6) 10%, transparent)}
+.mb-row-hi td:first-child{font-weight:600}</style>
 {% set gate = mb.gate or {} %}
 {% set lic = mb.license or {} %}
 {% set plan = gate.plan or 'community' %}
@@ -230,6 +239,10 @@
   {#- 功能矩阵 -#}
   <div class="card">
     <div class="card-h"><h3>{{ (i18n or {}).get('mb_matrix_title', '功能矩阵') }}</h3></div>
+    {#- E4/E5 来源引导：锁定页/锁标 302 带 ?from=<族> → 一句人话 + 行高亮 + 购买 CTA -#}
+    {% if from_hint %}<div class="mb-from-hint"><span>💡 {{ from_hint }}</span>
+      {%- if from_cta_url %}<a class="mb-from-cta" href="{{ from_cta_url }}" target="_blank" rel="noopener">{{ (i18n or {}).get('mb_from_cta', '查看升级方案 →') }}</a>{% endif -%}
+    </div>{% endif %}
     <div style="overflow-x:auto">
       <table class="tbl" style="width:100%;min-width:560px">
         <thead>
@@ -244,7 +257,8 @@
         </thead>
         <tbody>
           {% for row in mb.matrix.rows %}
-          <tr{% if gate.enabled and not row.allowed %} style="opacity:.55"{% endif %}>
+          {#- 来源行高亮优先于锁定压暗（用户就是冲这行来的，别让它半透明） -#}
+          <tr{% if from_feature == row.name %} class="mb-row-hi"{% elif gate.enabled and not row.allowed %} style="opacity:.55"{% endif %}>
             <td>
               {{ (i18n or {}).get('mb_feat_' ~ row.name, row.name) }}
               {% if gate.enabled and not row.allowed %}

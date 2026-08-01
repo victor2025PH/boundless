@@ -3,7 +3,7 @@ html, body, #app { height: 100%; width: 100%; }
 /* 品牌拉丁字（Montserrat，brand-fonts.css）+ 系统 CJK；主色一律走 --cp-accent*
    （theme-dark 已接 --bl-growth），禁止再写死旧 Tailwind 蓝字面量。 */
 body {
-  font-family: Montserrat, Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-family: var(--bl-font-sans, Montserrat, Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif);
   background: #17212b; color: #e6edf3;
 }
 

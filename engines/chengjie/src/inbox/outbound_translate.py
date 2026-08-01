@@ -10,12 +10,16 @@
     零副作用、可单测，路由/worker 只做薄适配。
   - ``translate_outbound_text`` 是「译 + 记录 + 降级回落」的可复用闭包体，依赖通过参数注入
     （translation_service / store），单测可塞 fake。
-  - **绝不阻塞投递**：任何异常 / 不可译 / 译文与原文相同 → 回落发原文，保证全自动链路不断。
+  - **一般不阻塞投递**：异常 / 不可译 / 译文与原文相同 → 回落发原文，保证全自动链路不断。
+    **唯一例外（2026-07-31，198 实锤）**：待发文本含 CJK 而客户语言是非 CJK 语种时，
+    「回落发原文」＝把中文原样发给外语客户＝人设当场穿帮——比不发更糟。该冲突下翻译
+    不可用时返回 ``None``（HOLD 信号），由 worker 转成投递失败走既有审计/提醒链。
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -23,6 +27,23 @@ logger = logging.getLogger(__name__)
 _DEFAULT_SOURCE = "zh"
 # 不可作为翻译目标的「空/未知」语言标记（与 translation_service.normalize_lang 对齐）
 _SKIP_TARGETS = {"", "unknown", "und", "auto"}
+
+# CJK 文字（汉字 + 假名 + 谚文）：出站语言错配判定用。
+# 事故背景（2026-07-31，198）：『是Steven，别担心。😊』被 detect_language 判成 en
+# （汉字 4 < 拉丁 6）→「已是客户语言」跳过翻译 → 中文原样发给英文客户。
+# 「文本里有没有 CJK」是确定性信号，不受检测器计票规则影响，作为跳过护栏的硬否决。
+_CJK_TEXT_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]")
+_CJK_LANGS = {"zh", "ja", "ko"}
+
+
+def contains_cjk(text: str) -> bool:
+    """文本是否含任何 CJK 文字（汉字/假名/谚文）。"""
+    return bool(_CJK_TEXT_RE.search(str(text or "")))
+
+
+def lang_is_cjk(lang: str) -> bool:
+    """语言码（归一化后）是否为 CJK 语种。未知/空 → False。"""
+    return normalize_target(lang) in _CJK_LANGS
 
 # 会话语言多数决：取最近 N 条**入站**消息按新近度加权投票的窗口大小与最小样本长度。
 # 单条孤立外语消息（如中文客户偶尔蹦一句英文）不足以翻转整窗多数 → 目标语言稳定，
@@ -154,15 +175,23 @@ async def translate_outbound_text(
     store: Any = None,
     source_lang: str = _DEFAULT_SOURCE,
     style: str = "chat",
-) -> str:
+) -> Optional[str]:
     """把一条待投递文本译成会话客户语言；记录出向译文映射。**自带「已是客户语言则跳过」护栏**。
 
     item: ``{conversation_id, text, ...}``（AutosendWorker 的 to_deliver 载荷 / deferred 主动触达）。
-    返回**应真正发出的文本**：成功译则返回译文，否则一律回落原文（绝不抛、绝不阻塞投递）。
+    返回**应真正发出的文本**：成功译则返回译文，一般情况失败回落原文（绝不抛）。
 
     关键设计——**先检测真实源语言再决定是否翻译**：陪伴回复栈（skill_manager / reactivation）
     多按客户语言直接生成，盲目按 config 源语言（如 zh）翻译会把已是客户语言的文本 garble。
     故：检测文本实际语言，若已等于目标语言 → 跳过；否则用**检测到的源语言**翻译（比 config 假定更准）。
+
+    **CJK 冲突硬护栏（2026-07-31，198 实锤『是Steven，别担心。😊』原样发出）**：
+    文本含 CJK 而目标语言是非 CJK 语种时——
+      - 「检测语言==目标语言」的跳过护栏**失效**（混排短句检测不可信，含 CJK 即必须翻）；
+      - 源语言取「检测到的 CJK 语种」（ja/ko 文本不误按 zh 翻），否则回落配置源（zh）；
+      - 翻译异常/失败/译文仍含 CJK → 返回 ``None``（HOLD，别发）——发中文给外语客户
+        是人设事故，比这条消息不发出去更糟。调用方（AutosendWorker）把 None 转成
+        投递失败，走既有重试/审计/坐席提醒链。
     """
     text = str(item.get("text") or "")
     cid = str(item.get("conversation_id") or "")
@@ -176,17 +205,30 @@ async def translate_outbound_text(
     if not target:
         return text  # 目标语言未知 → 不翻译（发原文）
 
-    # 检测真实源语言；命中目标语言即「文本已是客户语言」→ 跳过（防 garble，覆盖主动触达已 in-lang 的消息）
     detected = _detect_source(translation_service, text)
-    eff_source = detected or normalize_target(source_lang) or source_lang
-    if eff_source == target:
-        return text
+    cjk_conflict = contains_cjk(text) and not lang_is_cjk(target)
+    if cjk_conflict:
+        # 冲突态：跳过护栏失效；源语言优先信「检测到的 CJK 语种」，检测非 CJK
+        # （混排误判）则回落配置源。
+        eff_source = (detected if detected in _CJK_LANGS
+                      else (normalize_target(source_lang) or _DEFAULT_SOURCE))
+    else:
+        # 检测命中目标语言即「文本已是客户语言」→ 跳过（防 garble，
+        # 覆盖主动触达已 in-lang 的消息）
+        eff_source = detected or normalize_target(source_lang) or source_lang
+        if eff_source == target:
+            return text
 
     try:
         res = await translation_service.translate(
             text, target_lang=target, source_lang=eff_source, style=style,
         )
     except Exception:
+        if cjk_conflict:
+            logger.warning(
+                "[outbound_translate] 翻译调用失败且文本含CJK、目标=%s → HOLD 不发 conv=%s",
+                target, cid, exc_info=True)
+            return None
         logger.warning("[outbound_translate] 翻译调用失败，发原文 conv=%s", cid, exc_info=True)
         return text
 
@@ -195,8 +237,17 @@ async def translate_outbound_text(
     err = str(getattr(res, "error", "") or "")
     ok = bool(getattr(res, "ok", False))
 
-    # 失败 / 空 / 与原文相同（provider=identity/none 或未真译）→ 回落原文，不记录无意义副行
-    if not ok or not translated or translated == text:
+    # 失败 / 空 / 与原文相同（provider=identity/none 或未真译）/ 译文仍含 CJK：
+    #   - 冲突态 → HOLD（None）：identity 回显正是 198 泄漏的机制，绝不能当译文发；
+    #   - 非冲突态 → 回落原文（旧行为），不记录无意义副行。
+    degraded = (not ok or not translated or translated == text
+                or (cjk_conflict and contains_cjk(translated)))
+    if degraded:
+        if cjk_conflict:
+            logger.warning(
+                "[outbound_translate] CJK→%s 翻译不可用(provider=%s err=%s) → HOLD 不发 conv=%s",
+                target, provider or "-", err or "-", cid)
+            return None
         if err:
             logger.debug("[outbound_translate] 译文降级 conv=%s provider=%s err=%s",
                          cid, provider, err)
@@ -215,6 +266,8 @@ async def translate_outbound_text(
 
 
 __all__ = [
+    "contains_cjk",
+    "lang_is_cjk",
     "parse_outbound_translate_cfg",
     "normalize_target",
     "should_translate",

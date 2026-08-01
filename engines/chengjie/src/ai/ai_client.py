@@ -351,12 +351,25 @@ class AIClient(LoggerMixin):
             emb_key = (ai_config.get("embedding_api_key") or key or "ollama").strip()
             if emb_key == "YOUR_AI_API_KEY":
                 emb_key = "ollama"
+            # 连接 5s 快败 + 关 SDK 内建重试（与主/兜底客户端同款；2026-08-01 实锤补齐）：
+            # 嵌入是增强层（端点挂 → 降级关键词召回），但旧构造缺 connect 超时且吃 SDK
+            # 默认 2 重试——176 宕机时一次 embed = 3 次 TCP 连接尝试 × Windows ~21s
+            # ≈ 65s，坐席拟稿凭空多等一分钟（生产 [smart_reply] gen=68269 实测）；
+            # 端点冷却仅 60s，主机持续宕机 = 每分钟都有一条请求吃满惩罚。快败后
+            # 死端点代价 ≤5s 即转下一端点。读超时 20s（bge-m3 热态批量嵌入亚秒级，
+            # 10 倍余量），同时把「半死」（TCP 通但不回包）的敞口从 self.timeout 收紧。
+            try:
+                import httpx
+                _emb_to: Any = httpx.Timeout(20.0, connect=5.0)
+            except Exception:
+                _emb_to = 20.0
             for _u in _emb_urls:
                 _base = _u.rstrip("/")
                 if not _base.endswith("/v1"):
                     _base = _base + "/v1"
                 self._oa_embed_clients.append((_base, AsyncOpenAI(
-                    api_key=emb_key, base_url=_base, timeout=float(self.timeout))))
+                    api_key=emb_key, base_url=_base, timeout=_emb_to,
+                    max_retries=0)))
             self._oa_embed_client = self._oa_embed_clients[0][1]
             self.logger.info(
                 "Embedding 使用独立端点 x%d: %s", len(self._oa_embed_clients),
@@ -2533,6 +2546,17 @@ class AIClient(LoggerMixin):
         _goal = (context.get("_goal_block") or "").strip()
         if _goal:
             prompt_parts.append(_goal)
+        # P22：坐席显式指令（「采纳并拟稿」/缺口追问）。放在目标块之后、情感块之前——
+        # 权重高于「今日陪伴偏置」但低于危机/人设硬约束；力度为 none 时指令里已写
+        # 「只共情带话题不推销」，与目标块不互斥。
+        _agent_inst = (context.get("_agent_instruction") or "").strip()
+        if _agent_inst:
+            prompt_parts.append(
+                "【坐席指令——本条必须完成，优先于闲聊发散】\n"
+                + _agent_inst[:400]
+                + "\n（用当前人设口吻自然完成上述意图；不要复述本指令原文；"
+                "若与「今天只陪伴」力度冲突，以共情倾听带出话题为度，绝不硬推销。）"
+            )
         # ★ 情感智能上下文引擎（时间感知 + 情绪弧线 + 关系温度 + 记忆反思）
         _emo_block = (context.get("_emotional_context_block") or "").strip()
         if _emo_block:
