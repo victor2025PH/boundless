@@ -361,10 +361,12 @@ class ScheduledReporter:
                 platform = str(c.get("platform") or "")
                 claimed_by = str(c.get("claimed_by") or "").strip()
 
-                # 获取 claimed_by — 优先从 conv_meta 读（持久化）
+                # 获取 claimed_by — 从认领租约表读（2026-08-01 修：conversation_meta
+                # 从无 claimed_by 列，旧读取恒空 → SLA 告警从来只会广播、
+                # 无法定向到认领坐席；唯一事实源是 conversation_claims）。
                 try:
-                    meta = self._store.get_conv_meta(cid) or {}
-                    claimed_by = str(meta.get("claimed_by") or claimed_by).strip()
+                    claim = self._store.get_conversation_claim(cid) or {}
+                    claimed_by = str(claim.get("agent_id") or claimed_by).strip()
                 except Exception:
                     pass
 

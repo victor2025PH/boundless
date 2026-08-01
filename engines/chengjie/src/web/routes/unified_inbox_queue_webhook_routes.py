@@ -197,7 +197,13 @@ def register_queue_webhook_routes(app, *, api_auth) -> None:
         store = _inbox_store(request)
         if store is None:
             raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
-        store.update_conv_meta(cid, {"claimed_by": to_agent})
+        # ⚠️ P29 双缺陷修复（2026-08-01 幽灵 SQL 排查连带钓出）：旧代码
+        # `update_conv_meta(cid, {"claimed_by": ...})` ①把 dict 当位置参数传给
+        # keyword-only 方法 → TypeError 500，「重新分配」按钮自出厂不可用；
+        # ②conversation_meta 从无 claimed_by 列——认领的唯一事实源是
+        # conversation_claims 租约表。改走正牌入口 force 接管（与坐席自领同一
+        # 张表/同一 TTL 语义，SLA 定向告警与 QA 归属随之立即可用）。
+        store.set_conversation_claim(cid, to_agent, force=True)
         # 事件总线广播（通知目标坐席）
         try:
             from src.integrations.shared.event_bus import get_event_bus

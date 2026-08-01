@@ -71,6 +71,63 @@ def test_batch_agent_qa_stats_sql_executes(store):
     assert isinstance(out, list)
 
 
+def _expire_claim(store, cid):
+    with store._lock:  # noqa: SLF001
+        store._conn.execute(  # noqa: SLF001
+            "UPDATE conversation_claims SET expires_at=? WHERE conversation_id=?",
+            (_t.time() - 10, cid))
+        store._conn.commit()  # noqa: SLF001
+
+
+def test_churn_claimed_by_from_live_lease(store):
+    """认领归属来自 conversation_claims 未过期租约（唯一事实源，无第二列）。"""
+    _conv(store, "telegram:a:4001", last_off_d=20)
+    store.set_conversation_claim("telegram:a:4001", "agent_a", agent_name="A")
+    rows = store.list_churn_risk_conversations(silence_days=7, limit=50)
+    assert rows[0]["claimed_by"] == "agent_a"
+    # 租约过期 → 归属自然消失（TTL 语义如实透传）
+    _expire_claim(store, "telegram:a:4001")
+    rows2 = store.list_churn_risk_conversations(silence_days=7, limit=50)
+    assert rows2[0]["claimed_by"] == ""
+
+
+def test_qa_stats_grouped_by_live_lease(store):
+    """QA 聚合按在管租约归属坐席（占位 '' 时代恒空；接真表后有认领即有分组）。"""
+    _conv(store, "telegram:a:5001", last_off_d=0.5)
+    store.compute_and_store_qa_score("telegram:a:5001")
+    store.set_conversation_claim("telegram:a:5001", "agent_q", agent_name="Q")
+    out = store.batch_agent_qa_stats(days=30)
+    agents = {r["agent_id"] for r in out}
+    assert "agent_q" in agents
+
+
+def test_reassign_route_force_claims(store, monkeypatch):
+    """P29 重新分配端点回归钉：旧实现以错误签名调 update_conv_meta →
+    TypeError 500（按钮自出厂不可用）。现须 200 且强制转租给目标坐席，
+    即便会话已被他人认领（主管接管语义）。"""
+    from fastapi import FastAPI
+    from starlette.testclient import TestClient
+    import src.web.routes.unified_inbox_queue_webhook_routes as mod
+
+    _conv(store, "telegram:a:6001", last_off_d=1)
+    store.set_conversation_claim("telegram:a:6001", "agent_old", agent_name="O")
+
+    app = FastAPI()
+    monkeypatch.setattr(mod, "_is_supervisor", lambda request: True)
+    # 本路由把 api_auth 作 Depends 消费 → 必须零参 callable（带 request 形参会被
+    # FastAPI 当 query 参数要求）
+    mod.register_queue_webhook_routes(app, api_auth=lambda: None)
+    app.state.inbox_store = store
+    tc = TestClient(app)
+    r = tc.post("/api/workspace/queue-monitor/reassign",
+                json={"conversation_id": "telegram:a:6001",
+                      "to_agent_id": "agent_new"})
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True
+    claim = store.get_conversation_claim("telegram:a:6001")
+    assert claim and claim["agent_id"] == "agent_new"
+
+
 def test_churn_risks_route_end_to_end(store):
     """经真路由打一发：/api/workspace/churn-risks 必须 ok 且沉默会话上榜。"""
     from fastapi import FastAPI
