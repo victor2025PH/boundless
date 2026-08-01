@@ -6727,9 +6727,14 @@ class InboxStore:
         返回 [{agent_id, agent_name, avg_score, count, grade_dist}]
         """
         since = time.time() - days * 86400
+        # ⚠️ 幽灵列事故（2026-08-01 真浏览器门禁钓出）：conversation_meta **从未有过**
+        # claimed_by 列（会话认领态只活在进程内 AgentCoordinator，从未落库），旧 SQL 里的
+        # `cm.claimed_by` 让本方法自 Phase 34 起在所有部署上 OperationalError → 路由 500，
+        # 而单测从未真正执行过这条 SQL。占位 '' 保住返回契约；按坐席分组自然为空——
+        # 等认领持久化真正落库后再换真源，别把占位改回幽灵列。
         with self._lock:
             rows = self._conn.execute(
-                """SELECT cm.claimed_by, cm.qa_score, cm.updated_at
+                """SELECT '' AS claimed_by, cm.qa_score, cm.updated_at
                    FROM conversation_meta cm
                    WHERE cm.updated_at >= ? AND cm.qa_score != '' AND cm.qa_score != '{}'
                    ORDER BY cm.updated_at DESC LIMIT 2000""",
@@ -6768,7 +6773,6 @@ class InboxStore:
         return result
 
     # ── Z1: 流失预警（Phase 35）──────────────────────────────────────────────
-
     def list_churn_risk_conversations(
         self,
         *,
@@ -6780,10 +6784,13 @@ class InboxStore:
         辅助 ChurnPredictor 的数据获取层（独立于联系人表）。
         """
         cutoff = time.time() - silence_days * 86400
+        # ⚠️ 幽灵列事故（2026-08-01，同 batch_agent_qa_stats）：`cm.claimed_by` 列不存在，
+        # 旧 SQL 让流失预警轻量榜自 Phase 35 起在所有部署上 500。'' 占位保 ChurnPredictor
+        # 的输入契约（认领态在进程内 AgentCoordinator，未落库）。
         with self._lock:
             rows = self._conn.execute(
                 """SELECT c.conversation_id, c.platform, c.display_name,
-                          c.contact_id, c.last_ts, cm.claimed_by, cm.churn_risk,
+                          c.contact_id, c.last_ts, '' AS claimed_by, cm.churn_risk,
                           cm.qa_score, cm.archived
                    FROM conversations c
                    LEFT JOIN conversation_meta cm
@@ -6793,7 +6800,6 @@ class InboxStore:
                 (cutoff, limit),
             ).fetchall()
         return [dict(r) for r in rows]
-
     def store_churn_risk(self, conversation_id: str, risk_level: str, reasons: List[str]) -> None:
         """Z1：持久化流失风险评估结果。"""
         data = json.dumps({"level": risk_level, "reasons": reasons, "ts": time.time()}, ensure_ascii=False)
