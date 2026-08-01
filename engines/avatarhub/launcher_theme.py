@@ -50,9 +50,9 @@ _DT_HERO = (_DT_DARK.get("hero") or [])[:3] + ["#1a2745", "#141d33", "#0f1626"][
 _DT_HERO_L = (_DT_LIGHT.get("hero") or [])[:3] + ["#dbe6ff", "#e9f0ff", "#f4f7ff"][len(_DT_LIGHT.get("hero") or []):]
 
 # 品牌默认强调色（_norm_color 的回退；与 launcher_qt.BRAND_DEFAULTS / brand.css --bd-acc 同源）
-DEFAULT_ACCENT = _DT.get("accent", "#4F7AFF")
+DEFAULT_ACCENT = _DT.get("accent", "#1e6bf0")
 # 品牌辅助色（蓝→紫渐变的第二停靠点；主 CTA 与 Hero 用，对齐网页 --bd-acc2/--bd-grad）
-ACCENT2 = _DT.get("accent2", "#a855f7")
+ACCENT2 = _DT.get("accent2", "#7a3bf5")
 
 
 def _rgba(hex_color: str, alpha) -> str:
@@ -203,7 +203,7 @@ THEMES = {
         "DISABLED_BG": "#e3e7ef", "DISABLED_TXT": "#a3abba",
         "GUIDE_BG": "rgba(20,30,60,0.04)", "WARN_TXT": "#b3760a",
         "CHIP_BG": "rgba(20,30,60,0.04)", "CHIP_BORDER": "#d3dcec",
-        "TRUST_BG": "rgba(79,122,255,0.10)", "TRUST_BORDER": "rgba(79,122,255,0.24)", "TRUST_TXT": "#2a3a66",
+        "TRUST_BG": "rgba(30,107,240,0.10)", "TRUST_BORDER": "rgba(30,107,240,0.24)", "TRUST_TXT": "#2a3a66",
         "AVATAR_BG": "#e8ecf6",
         "SHADOW": (120, 130, 150, 70),
     },
@@ -218,7 +218,7 @@ def theme_tokens(theme: str = None) -> dict:
     return THEMES.get(theme or _CURRENT_THEME, THEMES["dark"])
 
 
-def _state_palette(state: str, accent: str = "#4F7AFF"):
+def _state_palette(state: str, accent: str = "#1e6bf0"):
     """状态视觉的单一真相：state → (前景色 QColor, 半透明底色, 语义图标)。
 
     全 UI（徽章/能力点/chip/状态条）统一引用，确保「绿=就绪 / 黄=加载 / 蓝=信息 /

@@ -55,9 +55,9 @@ function hub() {
     streamGuideDone: (function(){ try{ return localStorage.getItem('hub_stream_guide_done')==='1'; }catch(_){ return true; } })(),
     startingRestart: false, // [S5 启动仪式] 本次是否为「重新开播」（文案区分）
     demoMode: (function(){ try{ return localStorage.getItem('hub_demo')==='1'; }catch(_){ return false; } })(),  // 演示模式：隐藏运维噪音
-    brand:'79 122 255',   // 当前品牌主色（R G B）= 无界蓝，与 brand.css --bd-acc 同源
+    brand:'30 107 240',   // 当前品牌主色（R G B）= 无界蓝，与 brand.css --bd-acc 同源
     brandPresets:[
-      {name:'无界蓝',rgb:'79 122 255'}, {name:'经典蓝',rgb:'88 166 255'},
+      {name:'无界蓝',rgb:'30 107 240'}, {name:'经典蓝',rgb:'88 166 255'},
       {name:'幻紫',rgb:'168 85 247'},   {name:'靛紫',rgb:'139 122 255'},
       {name:'翠绿',rgb:'63 185 80'},   {name:'青色',rgb:'56 189 248'},
       {name:'暖橙',rgb:'247 129 102'}, {name:'玫红',rgb:'244 114 182'},
@@ -4969,7 +4969,7 @@ function hub() {
           trend.forEach((t,i)=>{
             const h=Math.max(4, Math.round(bh*t.ms/maxMs));
             const x=pad+i*(bw+gap), last=(i===trend.length-1);
-            ctx.fillStyle=last?'#4f7aff':'rgba(255,255,255,.18)';
+            ctx.fillStyle=last?'#1e6bf0':'rgba(255,255,255,.18)';
             ctx.fillRect(x, by+bh-h, bw, h);
             ctx.fillStyle=last?'#e5e9f5':'#8b96b0'; ctx.font=(last?'bold ':'')+'10px sans-serif';
             ctx.fillText(String(t.ms), x, by+bh-h-3);

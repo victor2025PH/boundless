@@ -5928,7 +5928,7 @@ def _render_cover(name: str) -> bytes:
             img.paste(av, (ax, ay), mask)
         except Exception:
             pass
-    dr.rounded_rectangle([ax, ay, ax + asz, ay + asz], radius=40, outline=(79, 122, 255), width=4)
+    dr.rounded_rectangle([ax, ay, ax + asz, ay + asz], radius=40, outline=(30,107,240), width=4)
     tx = 520
     dr.text((tx, 150), name, font=_cover_font(True, 76), fill=(255, 255, 255))
     qa = p.get("quality_axes") or {}
@@ -30604,18 +30604,18 @@ header{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:8px;align
 .brand{display:flex;align-items:center;gap:8px;font-weight:800;margin-right:4px}
 .brand .logo{width:26px;height:26px;border-radius:8px;background:var(--bd-grad);display:grid;place-items:center;color:#fff;font-weight:800;font-size:13px}
 header a{text-decoration:none;color:var(--bd-mut);font-size:13.5px;padding:6px 12px;border-radius:var(--bd-r-pill);border:1px solid var(--bd-border)}
-header a:hover{color:var(--bd-txt);border-color:rgb(var(--bd-acc-rgb,79 122 255))}
+header a:hover{color:var(--bd-txt);border-color:rgb(var(--bd-acc-rgb,30 107 240))}
 header a.cur{color:#fff;background:var(--bd-grad);border-color:transparent}
 header .sp{flex:1}
 main{max-width:900px;margin:0 auto;padding:26px 20px 40px}
 h1{font-size:26px;margin:.2em 0 .6em}
 h2{font-size:20px;margin:1.5em 0 .5em;padding-top:.5em;border-top:1px solid var(--bd-border)}
 h3{font-size:16.5px;margin:1.2em 0 .4em;color:var(--bd-txt2)}
-a{color:rgb(var(--bd-acc-rgb,79 122 255))}
+a{color:rgb(var(--bd-acc-rgb,30 107 240))}
 code{background:var(--bd-surface2);border:1px solid var(--bd-border);border-radius:6px;padding:1px 6px;font-size:13.5px;color:var(--bd-txt)}
 pre{background:rgba(0,0,0,.28);border:1px solid var(--bd-border);border-radius:var(--bd-r-sm);padding:14px 16px;overflow:auto}
 pre code{background:none;border:0;padding:0;color:var(--bd-txt2)}
-blockquote{margin:1em 0;padding:8px 16px;border-left:3px solid rgb(var(--bd-acc-rgb,79 122 255));
+blockquote{margin:1em 0;padding:8px 16px;border-left:3px solid rgb(var(--bd-acc-rgb,30 107 240));
  background:var(--bd-acc-weak);color:var(--bd-mut);border-radius:0 10px 10px 0}
 table{border-collapse:collapse;width:100%;margin:1em 0;font-size:14.5px}
 th,td{border:1px solid var(--bd-border);padding:8px 11px;text-align:left;vertical-align:top}
@@ -30624,7 +30624,7 @@ tr:nth-child(even) td{background:var(--bd-surface)}
 .cards{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));margin-top:18px}
 .hcard{display:flex;flex-direction:column;gap:4px;padding:18px;border:1px solid var(--bd-border);border-radius:var(--bd-r-md);
  background:var(--bd-surface);text-decoration:none;color:var(--bd-txt)}
-.hcard:hover{border-color:rgb(var(--bd-acc-rgb,79 122 255))}.hcard b{font-size:17px}.hcard span{color:var(--bd-mut);font-size:12.5px}
+.hcard:hover{border-color:rgb(var(--bd-acc-rgb,30 107 240))}.hcard b{font-size:17px}.hcard span{color:var(--bd-mut);font-size:12.5px}
 .foot{max-width:900px;margin:0 auto;padding:16px 20px 70px;color:var(--bd-faint);font-size:12.5px;border-top:1px solid var(--bd-border)}
 </style></head><body>
 <header>

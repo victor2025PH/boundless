@@ -108,7 +108,7 @@
 引擎侧已落地共享设计令牌 `static/brand.css`（见本仓库），配色取自现有深色主题，请官网核对并与之统一（若官网线上配色不同，以官网为准，回填到 `brand.css`，让两端同源）：
 
 ```
-品牌色   --bd-acc  #4f7aff（无界蓝）   --bd-acc2 #a855f7（幻紫）   渐变 135°
+品牌色   --bd-acc  #1e6bf0（无界蓝）   --bd-acc2 #7a3bf5（幻紫）   渐变 135°
 背景     --bd-bg   #080b10            文本 #e5e9f5 / 次级 #8b96b0
 语义     成功 #34d399 · 提示 #fbbf24 · 危险 #f87171 · 金标 #fbbf24
 圆角     14/18/30   字体  -apple-system,"PingFang SC","Microsoft YaHei"

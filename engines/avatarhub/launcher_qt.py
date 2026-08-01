@@ -184,7 +184,7 @@ def check_rollback() -> dict:
 # website/contact：官网与客服联系方式（Hero 链接行 / 托盘菜单「官网·联系客服」直达）。
 # 默认即无界官方；OEM 白标可在 data/brand.json 或「设置→白标」覆盖
 BRAND_DEFAULTS = {"name": "无界 BOUNDLESS", "logo": "🎭", "logo_image": "",
-                  "color": "#4F7AFF", "product": "数字人实时对话系统",
+                  "color": "#1e6bf0", "product": "数字人实时对话系统",
                   "website": "https://ai26.sbs",
                   "contact": "官网 https://ai26.sbs · TG频道 t.me/hykj7 · 客服群 t.me/hykjz"}
 

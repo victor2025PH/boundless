@@ -93,11 +93,11 @@
     border:1px solid var(--bd-border);background:var(--bd-surface);text-decoration:none;color:inherit;
     transition:transform var(--bd-dur-fast) var(--bd-ease),border-color var(--bd-dur-fast) var(--bd-ease),
       box-shadow var(--bd-dur-fast) var(--bd-ease)}
-  .role:hover{transform:translateY(-3px);border-color:rgb(var(--line-rgb, 79 122 255));
-    box-shadow:0 8px 22px rgb(var(--line-rgb, 79 122 255) / .18)}
+  .role:hover{transform:translateY(-3px);border-color:rgb(var(--line-rgb, 30 107 240));
+    box-shadow:0 8px 22px rgb(var(--line-rgb, 30 107 240) / .18)}
   .role .ic{display:inline-flex;align-items:center;justify-content:center;width:42px;height:42px;
     border-radius:12px;font-size:22px;line-height:1;
-    background:rgb(var(--line-rgb, 79 122 255) / .13);border:1px solid rgb(var(--line-rgb, 79 122 255) / .20)}
+    background:rgb(var(--line-rgb, 30 107 240) / .13);border:1px solid rgb(var(--line-rgb, 30 107 240) / .20)}
   .role .t{font-weight:700}
   .role .d{font-size:var(--bd-fs-label);color:var(--bd-mut)}
 
@@ -121,8 +121,8 @@
   body.searching .roles,body.searching .quickstart-h{display:none}
   .card.hide,.section.hide{display:none}
   /* 键盘导航高亮：用卡片自持线色描边，与产品线视觉一致 */
-  .card.kbdon{outline:2px solid rgb(var(--line-rgb,79 122 255));outline-offset:2px;
-    box-shadow:0 8px 24px rgb(var(--line-rgb,79 122 255) / .28)}
+  .card.kbdon{outline:2px solid rgb(var(--line-rgb,30 107 240));outline-offset:2px;
+    box-shadow:0 8px 24px rgb(var(--line-rgb,30 107 240) / .28)}
 
   /* ── 首启引导（未就绪才显示）── */
   .onboard{margin:22px 0 0;padding:16px 18px;border-radius:var(--bd-r-md);
@@ -157,8 +157,8 @@
   .section-h{display:flex;align-items:center;gap:10px;margin-bottom:14px}
   /* 分区标题色点：取当前产品线色（--line-rgb 由 hub.js 在 section 上注入）*/
   .section-h .dot{flex-shrink:0;width:10px;height:10px;border-radius:3px;
-    background:rgb(var(--line-rgb, 79 122 255));
-    box-shadow:0 0 0 4px rgb(var(--line-rgb, 79 122 255) / .14)}
+    background:rgb(var(--line-rgb, 30 107 240));
+    box-shadow:0 0 0 4px rgb(var(--line-rgb, 30 107 240) / .14)}
   .section-h .line{font-size:var(--bd-fs-h2);font-weight:800}
   .section-h .count{font-size:var(--bd-fs-label);color:var(--bd-mut);
     border:1px solid var(--bd-border);border-radius:var(--bd-r-pill);padding:2px 9px}
@@ -193,17 +193,17 @@
     transition:transform var(--bd-dur-fast) var(--bd-ease),border-color var(--bd-dur-fast) var(--bd-ease),
       box-shadow var(--bd-dur-fast) var(--bd-ease)}
   /* hover 用当前产品线色描边 + 同色微光（--line-rgb 由 section 继承下来）*/
-  .card:hover{transform:translateY(-3px);border-color:rgb(var(--line-rgb, 79 122 255) / .75);
-    box-shadow:0 14px 34px rgb(var(--line-rgb, 79 122 255) / .18)}
+  .card:hover{transform:translateY(-3px);border-color:rgb(var(--line-rgb, 30 107 240) / .75);
+    box-shadow:0 14px 34px rgb(var(--line-rgb, 30 107 240) / .18)}
   /* 旗舰卡：同尺寸不改结构，仅加线色描边 + 顶部微光渐变，建立视觉主次 */
-  .card.feat{border-color:rgb(var(--line-rgb, 79 122 255) / .4);
-    background:linear-gradient(180deg, rgb(var(--line-rgb, 79 122 255) / .07), transparent 46%), #141a24}
+  .card.feat{border-color:rgb(var(--line-rgb, 30 107 240) / .4);
+    background:linear-gradient(180deg, rgb(var(--line-rgb, 30 107 240) / .07), transparent 46%), #141a24}
   .card .head{display:flex;align-items:center;gap:10px}
   /* 图标 chip：线色半透明底，让 emoji 从"裸字符"变成有设计感的入口标识 */
   .card .ic{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;
     width:40px;height:40px;border-radius:12px;font-size:20px;line-height:1;
-    color:rgb(var(--line-rgb, 79 122 255));  /* 线性图标经 currentColor 吃产品线色 */
-    background:rgb(var(--line-rgb, 79 122 255) / .14);border:1px solid rgb(var(--line-rgb, 79 122 255) / .22)}
+    color:rgb(var(--line-rgb, 30 107 240));  /* 线性图标经 currentColor 吃产品线色 */
+    background:rgb(var(--line-rgb, 30 107 240) / .14);border:1px solid rgb(var(--line-rgb, 30 107 240) / .22)}
   .card .name{font-weight:700;font-size:var(--bd-fs-body);display:flex;align-items:center;gap:7px}
   /* 两行截断保证卡片等高（替代 min-height:38px 魔法数）*/
   .card .desc{color:var(--bd-txt2);font-size:var(--bd-fs-sm);
@@ -261,7 +261,7 @@
     <span class="qs-d">按目标直达常用入口 · 或在下方按产品线浏览全部功能</span>
   </div>
   <nav class="roles" aria-label="快速分流">
-    <a class="role" data-ev="role" data-id="voice"  data-line="VoiceX 音色" style="--line-rgb:79 122 255" href="/ui#voice"><span class="ic" aria-hidden="true">🎙️</span><span class="t">我要创作</span><span class="d">克隆音色·合成语音</span></a>
+    <a class="role" data-ev="role" data-id="voice"  data-line="VoiceX 音色" style="--line-rgb:30 107 240" href="/ui#voice"><span class="ic" aria-hidden="true">🎙️</span><span class="t">我要创作</span><span class="d">克隆音色·合成语音</span></a>
     <a class="role" data-ev="role" data-id="stream" data-line="LiveX 直播"  style="--line-rgb:168 85 247" href="/ui#stream"><span class="ic" aria-hidden="true">📡</span><span class="t">我要直播</span><span class="d">换脸·口型·开播</span></a>
     <a class="role" data-ev="role" data-id="phone"  data-line="ChatX 对话"  style="--line-rgb:45 212 191" href="/phone"><span class="ic" aria-hidden="true">💬</span><span class="t">我要对话</span><span class="d">免提语音数字人</span></a>
     <a class="role" data-ev="role" data-id="interp" data-line="LingoX 同传" style="--line-rgb:56 189 248" href="/ui#interp"><span class="ic" aria-hidden="true">🌐</span><span class="t">我要同传</span><span class="d">多语种实时互译</span></a>
@@ -331,7 +331,7 @@
   // 产品线视觉身份（P0 美化·纯前端单一真相；后续可迁移到 /api/features 注册表字段）。
   // 值为 "R G B" 三元组，供 CSS rgb(var(--line-rgb) / α) 派生描边/底色/微光，与 brand.css 取色方式一致。
   var LINE_RGB = {
-    "VoiceX 音色": "79 122 255",   // 无界蓝（品牌主）
+    "VoiceX 音色": "30 107 240",   // 无界蓝（品牌主）
     "ChatX 对话":  "45 212 191",   // 青（对话气泡）
     "LiveX 直播":  "168 85 247",   // 幻紫
     "LingoX 同传": "56 189 248",   // 天蓝
@@ -456,7 +456,7 @@
                             : (pyIndex(feat.name) + pyIndex(feat.line));     // 兜底：旧缓存/离线/端点未升级时用前端字表
     a.setAttribute("data-search",
       ((feat.name||"")+" "+(feat.desc||"")+" "+(feat.line||"")+" "+(feat.id||"")).toLowerCase() + _py);
-    a.style.setProperty("--line-rgb", LINE_RGB[feat.line] || "79 122 255");   // 卡片自持线色："最近使用"混合分区里各卡仍正确
+    a.style.setProperty("--line-rgb", LINE_RGB[feat.line] || "30 107 240");   // 卡片自持线色："最近使用"混合分区里各卡仍正确
     var head = el("div","head");
     // [图标统一·2026-07-16] 优先注册表 ic（线性图标，与控制台/桌面启动台同一图标库）；
     // 旧缓存/离线注册表无 ic 时回退 emoji。图标经 currentColor 吃产品线色。
@@ -490,7 +490,7 @@
       var items = feats.filter(function(f){ return f.line===line; });
       if(!items.length) return;
       var sec = el("section","section");
-      sec.style.setProperty("--line-rgb", LINE_RGB[line] || "79 122 255");   // 产品线色：卡片/色点经继承共用
+      sec.style.setProperty("--line-rgb", LINE_RGB[line] || "30 107 240");   // 产品线色：卡片/色点经继承共用
       var h = el("div","section-h");
       h.appendChild(el("span","dot"));
       h.appendChild(el("span","line", esc(line)));

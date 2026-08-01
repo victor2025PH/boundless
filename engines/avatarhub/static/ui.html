@@ -26,12 +26,12 @@ tailwind.config = {
     /* 统一接入 brand.css 令牌：accent 走 --hub-blue(=品牌蓝三元组)，语义色对齐 --bd-* */
     hub: { bg:'#080b10', card:'#141a24', border:'#262f42', text:'#e5e9f5',
            blue:'rgb(var(--hub-blue) / <alpha-value>)', green:'#34d399', red:'#f87171', orange:'#f59e0b',
-           purple:'#a855f7', yellow:'#fbbf24', muted:'#8b96b0' }
+           purple:'#7a3bf5', yellow:'#fbbf24', muted:'#8b96b0' }
   }}}
 }
 </script>
 <style>
-:root{--hub-blue:79 122 255}  /* 品牌蓝（无界蓝 #4f7aff 的 R G B），与 brand.css --bd-acc 同源；可被取色器覆盖 */
+:root{--hub-blue:30 107 240}  /* 品牌蓝（无界蓝 #1e6bf0 的 R G B），与 brand.css --bd-acc 同源；可被取色器覆盖 */
 html{background:#080b10}
 [x-cloak]{display:none!important}  /* 防 FOUC/卡死：Alpine 初始化完成前隐藏外壳，避免命令面板/弹窗在未托管时全部露出 */
 body{background:#080b10;color:#e5e9f5;font-family:var(--bd-font,'Segoe UI',system-ui,sans-serif)}
@@ -8509,7 +8509,7 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
     var rs=$('bdReset'); if(rs) rs.onclick=function(){
       window.__brandConfig.reset();
       if(nameI) nameI.value=''; if(logoI) logoI.value=''; if(prodI) prodI.value=''; if(ctI) ctI.value='';
-      try{ document.documentElement.style.setProperty('--hub-blue','79 122 255'); }catch(_){}
+      try{ document.documentElement.style.setProperty('--hub-blue','30 107 240'); }catch(_){}
       msg('已恢复出厂品牌');
     };
   }

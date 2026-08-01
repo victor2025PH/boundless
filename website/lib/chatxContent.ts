@@ -22,14 +22,14 @@ export const CHATX_RELEASE_BASE = "/downloads";
 
 export const CHATX = {
   download: {
-    version: "0.2.11",
-    size: { zh: "384 MB", en: "384 MB" },
-    filename: "ChatX-Setup-0.2.11.exe",
+    version: "1.001",
+    size: { zh: "453 MB", en: "453 MB" },
+    filename: "ChatX-Setup-1.001.exe",
     os: { zh: "Windows 10 / 11（64 位）", en: "Windows 10 / 11 (x64)" },
-    url: `${CHATX_RELEASE_BASE}/ChatX-Setup-0.2.11.exe`,
+    url: `${CHATX_RELEASE_BASE}/ChatX-Setup-1.001.exe`,
     /** 与实际上架 /downloads/ 的安装包一致（scripts/gen-chatx-manifest.ps1 计算）；
      *  运行时会被 manifest.json 的值覆盖。 */
-    sha256: "0b28f42e5d0f7803a9e51ebd9dcabba34934f6fa670736e0174f323bab9bf773",
+    sha256: "6087c377ecbdb2c04cfac8f9e75a9049500c6a1762256521a0549ba9450f1f24",
     /** 运行时清单（打包脚本生成，含 version/size/sha256/signed）。 */
     manifestUrl: `${CHATX_RELEASE_BASE}/manifest.json`,
     macNote: {
@@ -49,8 +49,8 @@ export const CHATX = {
         title: { zh: "下载安装包", en: "Download the installer" },
         time: { zh: "约 2–5 分钟", en: "~2–5 min" },
         detail: {
-          zh: "点击本页下载按钮获取 **ChatX-Setup-0.2.11.exe**（约 384 MB，含桌面壳与本地服务，一次到位无需再下组件）。",
-          en: "Click the download button to get **ChatX-Setup-0.2.11.exe** (~384 MB, desktop shell plus local backend in one package — no extra components).",
+          zh: "点击本页下载按钮获取 **ChatX-Setup-1.001.exe**（约 453 MB，含桌面壳与本地服务，一次到位无需再下组件；内测版含本机人设/声线/相册种子）。",
+          en: "Click the download button to get **ChatX-Setup-1.001.exe** (~453 MB, desktop shell plus local backend in one package — no extra components; internal build includes seeded personas/voices/albums).",
         },
       },
       {
