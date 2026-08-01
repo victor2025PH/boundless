@@ -6,9 +6,10 @@
 发现（页面长期没人点开 + 没有任何测试真正执行那两条 SQL）。共性：**SQL 写错列名
 不会在导入期/测试期报错，只在真实调用时炸**。
 
-机制（V2）：
-1. **自动发现**：AST 扫 ``src/**/*.py`` 全部完整字符串常量，DML（SELECT/INSERT/
-   UPDATE/DELETE/WITH）进受检集——新增 store/路由零登记自动纳管；
+机制（V2；V2.1 扩 ``scripts/``+``tools/``——CLI/运维工具比路由更少被测试执行，
+是幽灵的另一大藏身处，且它们打的是同一批实例库、schema 池零新增成本）：
+1. **自动发现**：AST 扫 ``src|scripts|tools/**/*.py`` 全部完整字符串常量，
+   DML（SELECT/INSERT/UPDATE/DELETE/WITH）进受检集——新文件零登记自动纳管；
 2. **schema 自采**：同一轮扫描顺便收割 DDL 字面量（CREATE TABLE/INDEX/TRIGGER/
    VIRTUAL + ALTER ADD COLUMN）灌进一个 :memory: 联合库——store 的建表语句本身
    就是 schema 的唯一事实源，无需逐个实例化 40+ 个 store 类；
@@ -52,7 +53,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 _REPO = Path(__file__).resolve().parent.parent
-_SRC = _REPO / "src"
+_SCAN_ROOTS = [_REPO / "src", _REPO / "scripts", _REPO / "tools"]
 
 # 已知真缺陷但归属他线/待产品决策的登记簿：{(相对路径, 行号): "说明"}
 # 修好后 test_pending_phantoms_still_broken 会点名要求移除（防过期）。
@@ -157,10 +158,13 @@ def _analyze_file(path: Path) -> Tuple[List[Tuple[int, str]], List[str], Set[str
 
 
 def _iter_src_files() -> Iterable[Path]:
-    for p in sorted(_SRC.rglob("*.py")):
-        if "__pycache__" in p.parts:
+    for root in _SCAN_ROOTS:
+        if not root.is_dir():
             continue
-        yield p
+        for p in sorted(root.rglob("*.py")):
+            if "__pycache__" in p.parts:
+                continue
+            yield p
 
 
 class _Corpus:

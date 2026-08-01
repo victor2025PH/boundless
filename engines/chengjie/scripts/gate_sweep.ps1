@@ -125,6 +125,12 @@ $gates = @(
     # 代码根资源用相对路径 → 本地一切正常、只在真实部署才错位。2026-07-29 实锤：
     # 自身头像写进 <数据根>/src/web/static/... → 永久 404（且指纹去重不重下）。
     'tests/test_static_asset_paths.py',
+    # 幽灵 SQL（2026-08-01 双实锤：conversation_meta.claimed_by 让 churn-risks/
+    # agent-qa-stats 全部署 500 两个月；messenger_rpa_runs.reply_lang 让 Messenger
+    # 语言分布被 except 吞成静默恒空）。列名写错不在导入期/测试期报错，只在真实
+    # 调用时炸——本门禁对 src|scripts|tools 全部完整 SQL 字面量做真 schema EXPLAIN
+    # 预编译（DDL 自采联合库 + 四大 store 真实例），预编译期判定对吞异常免疫。
+    'tests/test_sql_phantom_columns.py',
     # 「升级安装拿不到新功能」类（2026-07-31，104 实机实锤：同一安装包全新装四平台
     # 扫码全可用、升级装 LINE/WA/Messenger 全灰「未启用」，重装也不修——数据目录在
     # %APPDATA%，覆盖安装不动它）。根因＝种子 config.desktop.min.yaml 只在配置文件
