@@ -1668,7 +1668,8 @@ def register_rpa_overview_routes(
 
         Returns:
           platforms.whatsapp  — {lang: chat_count}，来自 wa_rpa_chat_state.detected_lang
-          platforms.messenger — {lang: chat_count}，来自 messenger_rpa_runs.reply_lang (7 天)
+          platforms.messenger — {lang: chat_count}，来自 messenger_rpa_approvals.reply_lang (7 天；
+                        runs 表从未有过该列，见 2026-08-01 幽灵列门禁修复)
                                 + messenger_rpa_chat_state 语言契约聚合
           platforms.line      — {lang: chat_count}，来自 line_rpa_runs.reply_lang (7 天)
                                 + line_rpa_chat_state 语言契约聚合
@@ -1717,12 +1718,18 @@ def register_rpa_overview_routes(
             try:
                 ss = msvc.state_store
                 since = time.time() - 7 * 86400
+                # ⚠️ 幽灵列修复（2026-08-01 全库 SQL 门禁钓出）：messenger_rpa_runs
+                # **从未有过** reply_lang 列（DDL/迁移都没有；LINE 家的 runs 才有），
+                # 旧查询自出生起 OperationalError 被 except 吞掉 → Messenger 语言
+                # 分布静默恒空。回复语言的真实落点是 messenger_rpa_approvals
+                # （enqueue_approval 一直在写 reply_lang），按 created_at 开 7 天窗。
                 with ss._lock, ss._conn() as c:
                     rows = c.execute(
                         """
                         SELECT reply_lang AS lang, COUNT(DISTINCT chat_key) AS cnt
-                        FROM messenger_rpa_runs
-                        WHERE reply_lang != '' AND reply_lang IS NOT NULL AND ts >= ?
+                        FROM messenger_rpa_approvals
+                        WHERE reply_lang != '' AND reply_lang IS NOT NULL
+                          AND created_at >= ?
                         GROUP BY reply_lang
                         """,
                         (since,),

@@ -1,27 +1,42 @@
 # -*- coding: utf-8 -*-
-"""全库「幽灵 SQL」门禁（2026-08-01 幽灵列事故的泛化防线）。
+"""全库「幽灵 SQL」门禁（2026-08-01 幽灵列事故的泛化防线，V2 全库自动发现）。
 
 事故：``conversation_meta`` 从未有过 ``claimed_by`` 列，但 Phase 34/35 的 SQL 直接
 引用它 → `churn-risks` / `agent-qa-stats` 自出生起在**所有部署**上 500，两个月无人
-发现（页面长期没人点开 + 没有任何测试真正执行那两条 SQL）。同类缺陷的共性：
-**SQL 写错列名/表名不会在导入期或测试期报错，只在真实调用时炸**。
+发现（页面长期没人点开 + 没有任何测试真正执行那两条 SQL）。共性：**SQL 写错列名
+不会在导入期/测试期报错，只在真实调用时炸**。
 
-本门禁把这一类整体收口：AST 抽取受检文件里的 SQL 字符串字面量，对**真实 schema**
-（各 store 全套 DDL+迁移后的连接）做 ``EXPLAIN`` 预编译——sqlite 在预编译期即校验
-列/表存在性，无需真实数据、无副作用。
+机制（V2）：
+1. **自动发现**：AST 扫 ``src/**/*.py`` 全部完整字符串常量，DML（SELECT/INSERT/
+   UPDATE/DELETE/WITH）进受检集——新增 store/路由零登记自动纳管；
+2. **schema 自采**：同一轮扫描顺便收割 DDL 字面量（CREATE TABLE/INDEX/TRIGGER/
+   VIRTUAL + ALTER ADD COLUMN）灌进一个 :memory: 联合库——store 的建表语句本身
+   就是 schema 的唯一事实源，无需逐个实例化 40+ 个 store 类；
+   同名异体表（两个模块建了不同结构的同名表）**整表投毒剔除**，宁可漏检不误报；
+3. **真 store 地基**：Inbox/Contacts/Care/Entitlement 四大核心仍真实例化（全套
+   DDL+迁移跑完的活连接），防「DDL 在运行时动态拼」类漏采；
+4. **EXPLAIN 预编译判定**：sqlite prepare 期即校验列/表存在性，零执行零数据。
 
-零假阳性设计（宁漏勿误）：
-- 只扫**完整**字符串常量：f-string 天然跳过（JoinedStr）；参与 ``+`` 拼接的
-  常量整体排除——首跑实锤 `contacts/store.py:954` 的「SELECT 头 + base + 尾」
-  拼接头会被 sqlite 报成 no such column（外层别名悬空）而非语法错，
-  且其子查询自带 FROM，任何「含 FROM 才算完整」的启发式都挡不住，
-  只有 AST 结构（BinOp 成员）能精确识别；docstring 同样排除（示例非运行时语句）；
-- 只把「至少一个 schema 报 no such column，且**没有任何** schema 能预编译通过」
-  判红——查别家 store 表的语句在本池找不到表（no such table）不算证据；
-- 命名参数（:name）语句直接跳过（本仓惯用 ``?``）。
+零假阳性设计（宁漏勿误，每条都有 V2 首跑实锤校准）：
+- f-string（JoinedStr）天然不进受检集；参与 ``+`` 拼接的常量整体排除——
+  实锤 `contacts/store.py:954` 的「SELECT 头 + base + 尾」拼接头会被 sqlite
+  报成 no such column（外层别名悬空）而非语法错，且其子查询自带 FROM，
+  任何「含 FROM 才算完整」启发式都挡不住，只有 AST 结构能精确识别；
+- **子句完备性**：SELECT/DELETE 须含 FROM、UPDATE 须含 SET、INSERT 须含 INTO
+  ——V2 首跑 20 处假阳性全是 i18n 英文文案（"Select a conversation" 被当 SQL
+  解析成 no such column: a）。语义上零漏报代价：无 FROM 的 SELECT 根本引用
+  不到表列，不可能是幽灵列案发现场；
+- **动态迁移表豁免**：``f"ALTER TABLE kb_entries ADD COLUMN {col} …"`` 这类
+  循环加列（kb_store / RPA state_store 家族惯用）静态收割不到列集 → 该表列
+  集不可知 → 凡 SQL 文本涉及这些表的判定一律跳过（表级豁免，不是全局放水）。
+  V2 首跑 5 处「疑似真凶」全属此类（对照生产库核实列真实存在）；
+- docstring 排除（示例 SQL 不是运行时语句）；
+- 判红需要「至少一处 no such column **且** 所有 schema 都编译不过」——
+  表在全池都不存在（no such table）只说明池没覆盖到，不算证据；
+- 命名参数（:name）语句跳过（本仓惯用 ``?``）。
 
-已知漏报（诚实边界）：f-string / ``+`` 拼接构造的 SQL 不在覆盖内——本门禁
-守「完整字面量」这条窄而硬的不变量；动态构造类靠 code review 与运行时测试。
+已知漏报（诚实边界）：f-string / ``+`` 拼接构造的 SQL、动态迁移表上的语句
+不在覆盖内——本门禁只守「完整字面量 × 静态可知 schema」这条窄而硬的不变量。
 """
 from __future__ import annotations
 
@@ -30,39 +45,48 @@ import re
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Iterable, List, Set, Tuple
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 _REPO = Path(__file__).resolve().parent.parent
-
-# 受检文件（SQL 密集 + 跨文件消费 store 内部 schema 的高危区；加文件零成本）
-_SCAN_FILES = [
-    "src/inbox/store.py",
-    "src/contacts/store.py",
-    "src/contacts/care_schedule.py",
-    "src/contacts/winback_stats.py",
-    "src/contacts/journey_seed.py",
-    "src/contacts/contact_backfill.py",
-    "src/contacts/inbox_enrichment.py",
-    "src/skills/intimacy_engine.py",
-    "src/skills/reactivation_scheduler.py",
-    "src/utils/entitlement_store.py",
-    "src/web/routes/contacts_routes.py",
-]
+_SRC = _REPO / "src"
 
 # 已知真缺陷但归属他线/待产品决策的登记簿：{(相对路径, 行号): "说明"}
 # 修好后 test_pending_phantoms_still_broken 会点名要求移除（防过期）。
 _PENDING_PHANTOMS: Dict[Tuple[str, int], str] = {}
 
 _DML_RE = re.compile(r"^\s*(WITH|SELECT|INSERT|UPDATE|DELETE)\b", re.I)
+_DDL_RE = re.compile(r"^\s*(CREATE\s+(TABLE|INDEX|UNIQUE\s+INDEX|TRIGGER|"
+                     r"VIRTUAL\s+TABLE)|ALTER\s+TABLE)\b", re.I)
+_CREATE_TABLE_NAME_RE = re.compile(
+    r"CREATE\s+(?:VIRTUAL\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+    r"[\"'`\[]?(\w+)", re.I)
 _NAMED_PARAM_RE = re.compile(r"(?<!:):[a-zA-Z_]\w*")
+# 动态迁移标记：f-string/拼接片段里的「ALTER TABLE x ADD COLUMN」前缀 →
+# 该表列集静态不可知，整表豁免判定
+_DYN_ALTER_RE = re.compile(r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN", re.I)
+
+# 子句完备性：动词 → 必须同现的关键字（无它则引用不到表列，非幽灵案发现场）
+_CLAUSE_REQ = [
+    (re.compile(r"^\s*SELECT\b", re.I), re.compile(r"\bFROM\b", re.I)),
+    (re.compile(r"^\s*DELETE\b", re.I), re.compile(r"\bFROM\b", re.I)),
+    (re.compile(r"^\s*UPDATE\b", re.I), re.compile(r"\bSET\b", re.I)),
+    (re.compile(r"^\s*INSERT\b", re.I), re.compile(r"\bINTO\b", re.I)),
+    (re.compile(r"^\s*WITH\b", re.I), re.compile(r"\bFROM\b", re.I)),
+]
 
 
-def _docstring_linenos(tree: ast.AST) -> set:
-    """收集 module/class/def 的 docstring 节点行号（示例 SQL 不是运行时语句）。"""
+def _clause_complete(sql: str) -> bool:
+    for verb, need in _CLAUSE_REQ:
+        if verb.match(sql):
+            return bool(need.search(sql))
+    return True
+
+
+def _docstring_linenos(tree: ast.AST) -> Set[int]:
     out = set()
     for node in ast.walk(tree):
         if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
@@ -75,69 +99,170 @@ def _docstring_linenos(tree: ast.AST) -> set:
     return out
 
 
-def _extract_sql_literals(path: Path) -> List[Tuple[int, str]]:
-    src = path.read_text(encoding="utf-8")
-    tree = ast.parse(src)
+def _analyze_file(path: Path) -> Tuple[List[Tuple[int, str]], List[str], Set[str]]:
+    """单文件单次 AST：返回 (DML 字面量[(行,SQL)], DDL 语句列表, 动态迁移表名集)。
+
+    ``+`` 拼接成员整体排除：拼接头/尾是不完整语句，外层别名悬空会被 sqlite
+    报成 no such column（与真幽灵列同 message），只有 AST 结构能精确区分。
+    相邻字面量合并（"a" "b"）发生在解析期、不是 BinOp，完整长 SQL 不受影响。
+
+    动态迁移表：``ALTER TABLE x ADD COLUMN`` 出现在 f-string 片段或 ``+`` 拼接
+    片段里 ⇒ 该表在运行时被动态加列，静态收割不到完整列集 ⇒ 记入豁免集。
+    （完整字面量 ALTER 正常收割，不豁免。）
+    """
+    try:
+        src = path.read_text(encoding="utf-8")
+        tree = ast.parse(src)
+    except Exception:
+        return [], [], set()
     doc_lines = _docstring_linenos(tree)
-    # ``+`` 拼接成员整体排除：拼接头/尾是不完整语句，外层别名悬空会被 sqlite
-    # 报成 no such column（与真幽灵列同 message），只有 AST 结构能精确区分。
-    # 注意：相邻字面量合并（"a" "b"）在解析期完成、不是 BinOp，完整长 SQL 不受影响。
-    frag_ids = set()
+    frag_ids: Set[int] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.BinOp):
             for sub in ast.walk(node):
                 if isinstance(sub, ast.Constant):
                     frag_ids.add(id(sub))
-    out: List[Tuple[int, str]] = []
+    dyn_tables: Set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.JoinedStr):
+            for piece in node.values:
+                if isinstance(piece, ast.Constant) and isinstance(piece.value, str):
+                    m = _DYN_ALTER_RE.search(piece.value)
+                    if m:
+                        dyn_tables.add(m.group(1).lower())
+    dml: List[Tuple[int, str]] = []
+    ddl: List[str] = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
             continue
-        if id(node) in frag_ids or node.lineno in doc_lines:
-            continue
         s = node.value
+        if id(node) in frag_ids:
+            m = _DYN_ALTER_RE.search(s)
+            if m:
+                dyn_tables.add(m.group(1).lower())
+            continue
+        if node.lineno in doc_lines:
+            continue
+        if _DDL_RE.match(s):
+            ddl.append(s)
+            continue
         if not _DML_RE.match(s):
             continue
+        if not _clause_complete(s):
+            continue
         if _NAMED_PARAM_RE.search(s.replace("::", "")):
-            continue  # 命名参数语句（本仓罕见）不猜绑定
-        out.append((node.lineno, s))
-    return out
+            continue
+        dml.append((node.lineno, s))
+    return dml, ddl, dyn_tables
+
+
+def _iter_src_files() -> Iterable[Path]:
+    for p in sorted(_SRC.rglob("*.py")):
+        if "__pycache__" in p.parts:
+            continue
+        yield p
+
+
+class _Corpus:
+    """全库扫描结果 + 联合 schema（session 级构建一次）。"""
+
+    def __init__(self) -> None:
+        self.dml_by_file: Dict[str, List[Tuple[int, str]]] = {}
+        self.dyn_tables: Set[str] = set()
+        all_ddl: List[str] = []
+        for p in _iter_src_files():
+            dml, ddl, dyn = _analyze_file(p)
+            if dml:
+                self.dml_by_file[str(p.relative_to(_REPO)).replace("\\", "/")] = dml
+            all_ddl.extend(ddl)
+            self.dyn_tables |= dyn
+        self._dyn_res = [
+            re.compile(r"\b" + re.escape(t) + r"\b", re.I) for t in self.dyn_tables
+        ]
+
+        # 同名异体表投毒：两个模块建了不同结构的同名表 → 整表剔除（列集合并
+        # 会把「A 店的列」误判给「B 店的表」，宁可该表漏检不误报）。
+        body_by_name: Dict[str, str] = {}
+        self.poisoned: Set[str] = set()
+        for stmt in all_ddl:
+            m = _CREATE_TABLE_NAME_RE.search(stmt)
+            if not m:
+                continue
+            name = m.group(1).lower()
+            norm = " ".join(stmt.lower().split())
+            if name in body_by_name and body_by_name[name] != norm:
+                self.poisoned.add(name)
+            else:
+                body_by_name[name] = norm
+
+        self.union = sqlite3.connect(":memory:")
+        # 先建表/虚表，再补 ALTER/索引/触发器（依赖表存在）
+        def _wanted(stmt: str, phase: int) -> bool:
+            is_create_table = bool(_CREATE_TABLE_NAME_RE.search(stmt))
+            return is_create_table if phase == 0 else not is_create_table
+
+        for phase in (0, 1):
+            for stmt in all_ddl:
+                if not _wanted(stmt, phase):
+                    continue
+                m = _CREATE_TABLE_NAME_RE.search(stmt)
+                if m and m.group(1).lower() in self.poisoned:
+                    continue
+                try:
+                    self.union.executescript(stmt)
+                except Exception:
+                    # 重复列/依赖缺失/方言差异——联合库是 best-effort 补集，
+                    # 判定安全性由「无处编译通过才红」保证，这里绝不抛。
+                    pass
+
+    def mentions_dyn_table(self, sql: str) -> bool:
+        return any(r.search(sql) for r in self._dyn_res)
+
+    def close(self) -> None:
+        try:
+            self.union.close()
+        except Exception:
+            pass
 
 
 @pytest.fixture(scope="module")
-def schema_pool(tmp_path_factory):
-    """真 schema 连接池：各 store 全套 DDL+迁移后的活连接（EXPLAIN 用）。"""
+def corpus():
+    c = _Corpus()
+    yield c
+    c.close()
+
+
+@pytest.fixture(scope="module")
+def schema_pool(tmp_path_factory, corpus):
+    """判定池＝联合自采 schema + 四大核心 store 真实例（DDL+迁移全跑）。"""
     tmp = tmp_path_factory.mktemp("phantom_sql")
     stores = []
-    pool: Dict[str, sqlite3.Connection] = {}
+    pool: List[sqlite3.Connection] = [corpus.union]
 
     from src.inbox.store import InboxStore
     st = InboxStore(tmp / "inbox.db")
     stores.append(st)
-    pool["inbox"] = st._conn  # noqa: SLF001
+    pool.append(st._conn)  # noqa: SLF001
 
     from src.contacts.store import ContactStore
     cs = ContactStore(db_path=tmp / "contacts.db")
     stores.append(cs)
-    pool["contacts"] = cs._conn  # noqa: SLF001
+    pool.append(cs._conn)  # noqa: SLF001
 
-    try:
-        from src.contacts.care_schedule import CareScheduleStore
-        care = CareScheduleStore(":memory:")
-        conn = getattr(care, "_conn", None)
-        if conn is not None:
-            stores.append(care)
-            pool["care"] = conn
-    except Exception:
-        pass
-    try:
-        from src.utils.entitlement_store import EntitlementStore
-        ent = EntitlementStore(":memory:")
-        conn = getattr(ent, "_conn", None)
-        if conn is not None:
-            stores.append(ent)
-            pool["entitlement"] = conn
-    except Exception:
-        pass
+    for factory in (
+        lambda: __import__("src.contacts.care_schedule", fromlist=["x"])
+        .CareScheduleStore(":memory:"),
+        lambda: __import__("src.utils.entitlement_store", fromlist=["x"])
+        .EntitlementStore(":memory:"),
+    ):
+        try:
+            obj = factory()
+            conn = getattr(obj, "_conn", None)
+            if conn is not None:
+                stores.append(obj)
+                pool.append(conn)
+        except Exception:
+            pass
 
     yield pool
     for s in stores:
@@ -147,11 +272,11 @@ def schema_pool(tmp_path_factory):
             pass
 
 
-def _explain_verdict(pool: Dict[str, sqlite3.Connection], sql: str):
+def _explain_verdict(pool: List[sqlite3.Connection], sql: str):
     """返回 (ok_somewhere, no_such_column_msgs)。语法错/缺表不算幽灵证据。"""
     n_params = sql.count("?")
     msgs: List[str] = []
-    for conn in pool.values():
+    for conn in pool:
         try:
             conn.execute("EXPLAIN " + sql, tuple([None] * n_params))
             return True, []
@@ -159,44 +284,38 @@ def _explain_verdict(pool: Dict[str, sqlite3.Connection], sql: str):
             msgs.append(str(e))
         except Exception as e:  # noqa: BLE001 — 绑定数不符等一律不当证据
             msgs.append(f"(skip) {e}")
-    ns_col = [m for m in msgs if "no such column" in m]
-    return False, ns_col
+    return False, [m for m in msgs if "no such column" in m]
 
 
-def test_no_phantom_sql_columns(schema_pool):
-    """受检文件的每条 SQL 字面量必须能在至少一个真 schema 上预编译通过。"""
+def test_no_phantom_sql_columns(corpus, schema_pool):
+    """src 全库每条完整 SQL 字面量必须能在至少一个真 schema 上预编译通过。"""
     failures: List[str] = []
     scanned = 0
-    for rel in _SCAN_FILES:
-        path = _REPO / rel
-        if not path.is_file():
-            continue
-        for lineno, sql in _extract_sql_literals(path):
+    for rel, literals in sorted(corpus.dml_by_file.items()):
+        for lineno, sql in literals:
             scanned += 1
             ok, ns_col = _explain_verdict(schema_pool, sql)
             if ok or not ns_col:
                 continue
+            if corpus.mentions_dyn_table(sql):
+                continue  # 动态迁移表：列集静态不可知，表级豁免（见文件头）
             if (rel, lineno) in _PENDING_PHANTOMS:
                 continue
             head = " ".join(sql.split())[:90]
             failures.append(f"{rel}:{lineno}  {ns_col[0]}  «{head}»")
-    assert scanned >= 100, f"扫描样本异常偏少（{scanned}），抽取器可能失效"
+    assert scanned >= 300, f"扫描样本异常偏少（{scanned}），抽取器可能失效"
     assert not failures, (
-        "发现幽灵 SQL（引用不存在的列——该语句在真实调用时必 OperationalError，"
+        "发现幽灵 SQL（引用不存在的列——真实调用时必 OperationalError，"
         "参见 2026-08-01 claimed_by 事故）：\n  " + "\n  ".join(failures)
     )
 
 
-def test_pending_phantoms_still_broken(schema_pool):
+def test_pending_phantoms_still_broken(corpus, schema_pool):
     """防登记簿过期：已修复的条目必须从 _PENDING_PHANTOMS 移除，恢复门禁强度。"""
     stale = []
     for (rel, lineno), note in _PENDING_PHANTOMS.items():
-        path = _REPO / rel
-        if not path.is_file():
-            stale.append(f"{rel}:{lineno} 文件不存在（{note}）")
-            continue
         hit = None
-        for ln, sql in _extract_sql_literals(path):
+        for ln, sql in corpus.dml_by_file.get(rel, []):
             if ln == lineno:
                 hit = sql
                 break
@@ -217,17 +336,41 @@ def test_detector_catches_planted_phantom(schema_pool, tmp_path):
         'SQL = """SELECT cm.claimed_by_never_exists FROM conversation_meta cm"""\n',
         encoding="utf-8",
     )
-    lits = _extract_sql_literals(planted)
+    lits, _, _ = _analyze_file(planted)
     assert len(lits) == 1
     ok, ns_col = _explain_verdict(schema_pool, lits[0][1])
     assert not ok and ns_col, "植入的幽灵列样本未被判红——探测器失效"
 
 
-def test_docstring_examples_not_scanned(tmp_path):
-    """docstring 里的示例 SQL 不进扫描（文档不是运行时语句，防假阳性）。"""
-    planted = tmp_path / "doc.py"
+def test_false_positive_classes_excluded(tmp_path):
+    """四类实锤假阳性来源全部不进受检集/判定：
+    拼接片段 / docstring / 无 FROM 的 i18n 文案 / 动态迁移表标记提取。"""
+    planted = tmp_path / "frag.py"
     planted.write_text(
-        'def f():\n    """SELECT ghost_col FROM nowhere"""\n    return 1\n',
+        'def f(base, col):\n'
+        '    """SELECT ghost FROM nowhere"""\n'
+        '    q = "SELECT c.x, c.y " + base + " LIMIT 1"\n'
+        '    ui = "Select a conversation"\n'
+        '    mig = f"ALTER TABLE kb_entries ADD COLUMN {col} TEXT"\n'
+        '    return q, ui, mig\n',
         encoding="utf-8",
     )
-    assert _extract_sql_literals(planted) == []
+    lits, _ddl, dyn = _analyze_file(planted)
+    assert lits == []
+    assert dyn == {"kb_entries"}
+
+
+def test_union_schema_harvest_and_poisoning(tmp_path, corpus):
+    """DDL 自采联合库确实建出了非四大 store 的表（覆盖面自证）+ 投毒表被剔除。"""
+    # goals store 只在联合库里（未实例化）——它的表必须可查
+    row = corpus.union.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' LIMIT 1").fetchone()
+    assert row is not None
+    n_tables = corpus.union.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table'").fetchone()[0]
+    assert n_tables >= 40, f"联合库表数异常偏少（{n_tables}），DDL 收割可能失效"
+    for name in corpus.poisoned:
+        r = corpus.union.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND lower(name)=?",
+            (name,)).fetchone()
+        assert r is None, f"投毒表 {name} 不应存在于联合库"
