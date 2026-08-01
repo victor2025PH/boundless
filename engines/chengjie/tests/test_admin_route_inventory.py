@@ -398,6 +398,7 @@ _BASELINE = """
 /api/personas/{pid}/face-ref/image	GET
 /api/reactivation/dry-run-feedback	POST
 /api/reactivation/dry-run-samples	GET
+/api/relations/capability	GET
 /api/registry/apply-template	POST
 /api/registry/batch	POST
 /api/registry/export	GET

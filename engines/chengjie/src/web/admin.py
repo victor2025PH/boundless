@@ -2802,6 +2802,29 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         _require_role(request, "care")
         return templates.TemplateResponse(request, "relations_health.html", {})
 
+    # ── RH-P1：流失预警页能力探测（必须**无条件**注册——它存在的意义就是在
+    # contacts 未启用时也能回答「全量榜为什么不可用、还能用什么」，前端据此
+    # 三态渲染，不再拿裸 404 猜原因）。纯函数核心见 src/web/relations_capability.py。
+    @app.get("/api/relations/capability")
+    async def api_relations_capability(request: Request, _=Depends(_api_auth)):
+        from src.web.relations_capability import build_capability, route_paths_of
+
+        contact_count = None
+        _contacts = getattr(request.app.state, "contacts", None)
+        _cstore = getattr(_contacts, "store", None) if _contacts else None
+        if _cstore is not None:
+            try:
+                contact_count = int(_cstore.count_contacts())
+            except Exception:
+                contact_count = None
+        return build_capability(
+            route_paths=route_paths_of(request.app),
+            config=getattr(config_manager, "config", None) or {},
+            has_inbox_store=getattr(
+                request.app.state, "inbox_store", None) is not None,
+            contact_count=contact_count,
+        )
+
     # ── Phase K2：C 端变现营收页面 ──
     @app.get("/monetization", response_class=HTMLResponse)
     async def monetization_page(request: Request, _=Depends(_page_auth)):
