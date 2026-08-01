@@ -69,6 +69,10 @@ ZH = {
     "rh2_sent_ok": "已发送，冷却已记录",
     "rh2_send_fail": "发送失败",
     "rh2_send_na": "未关联到可发送会话，请复制后到渠道手动发送",
+    # ── RH-P3：必挽工作队列 ──────────────────────────────────────────
+    "rh2_next_one": "下一位",
+    "rh2_queue_pos": "必挽队列 {i}/{n}",
+    "rh2_queue_done": "必挽名单已处理完",
 }
 
 EN = {
@@ -134,4 +138,8 @@ EN = {
     "rh2_sent_ok": "Sent; cooldown recorded",
     "rh2_send_fail": "Send failed",
     "rh2_send_na": "No sendable conversation linked — copy and send manually",
+    # ── RH-P3: save-first work queue ─────────────────────────────────
+    "rh2_next_one": "Next",
+    "rh2_queue_pos": "Queue {i}/{n}",
+    "rh2_queue_done": "Focus list cleared",
 }

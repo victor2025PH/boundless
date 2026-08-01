@@ -203,11 +203,13 @@
 <div class="rh-modal-bg" id="rh-modal-bg" onclick="if(event.target===this)rhCloseModal()">
   <div class="rh-modal" role="dialog">
     <h3>{{ (i18n or {}).get('rh_s018', "重逢开场草稿") }}</h3>
+    <div class="rh-modal-meta" id="rh-modal-queue" style="display:none;color:var(--amber);font-weight:600"></div>
     <div class="rh-modal-meta" id="rh-modal-meta"></div>
     <div class="rh-modal-meta" id="rh-modal-inbox" style="display:none"></div>
     <textarea id="rh-modal-draft" placeholder="{{ (i18n or {}).get('ov_js_generating', '生成中…') }}"></textarea>
     <p class="rh-modal-hint">{{ (i18n or {}).get('rh2_draft_hint', "复制话术后到对应渠道发送；发出后点「标记已发」记录冷却，避免重复打扰。") }}</p>
     <div class="rh-modal-actions">
+      <button type="button" class="btn" id="rh-next-btn" style="display:none;margin-right:auto" onclick="rhNextFocus()">{{ (i18n or {}).get('rh2_next_one', "下一位") }} →</button>
       <button type="button" class="btn" onclick="rhCloseModal()">{{ (i18n or {}).get('close', "关闭") }}</button>
       <button type="button" class="btn" id="rh-copy-btn" onclick="rhCopy()">{{ (i18n or {}).get('wa_js_098', "复制") }}</button>
       <button type="button" class="btn btn-p" id="rh-send-btn" style="display:none" onclick="rhSendDirect()">{{ (i18n or {}).get('rh2_send_direct', "直接发送") }}</button>
@@ -225,6 +227,8 @@ let _rhCap=null;
 let _rhTab='full';
 let _rhFullLoaded=false,_rhLiteLoaded=false;
 const _rhDetailCache={};
+let _rhFocusQueue=[];   /* RH-P3：必挽工作队列 [{jid,name}]（rhRenderFocus 填充） */
+let _rhFocusDone={};    /* 本页会话内已处理 journey → 「下一位」自动跳过 */
 function _rhConvParts(cid){
   var p=String(cid||'').split(':');
   if(p.length<3)return null;
@@ -441,6 +445,10 @@ function rhFullRow(it){
     ops+='<span style="color:var(--t3);font-size:.7rem" title="'+window.T('rh2_draft_na')+'">—</span> ';
   }
   ops+='<button type="button" class="rh-act rh-act-ghost" data-jid="'+esc(it.journey_id)+'" onclick="rhToggleDetail(this)">'+window.T('rh2_detail')+'</button>';
+  if(ib&&ib.conversation_id){
+    /* RH-P3：跨域富集已带 conversation_id → 一键跳到坐席工作台该会话 */
+    ops+=' <button type="button" class="rh-act rh-act-ghost" data-cid="'+esc(ib.conversation_id)+'" onclick="rhOpenConv(this)">'+window.T('rh2_open_conv')+'</button>';
+  }
   return '<tr class="'+rowCls+'">'+
     '<td><div class="rh-score">'+it.score+'</div><div>'+rlBadge(it.risk_level)+' <span class="badge-grade">'+esc(it.grade)+'</span></div></td>'+
     '<td><div class="rh-cname">'+(nm?esc(nm):'<span class="rh-noname">'+window.T('rh2_no_name')+'</span>')+'</div>'+
@@ -463,6 +471,7 @@ function rhRenderFocus(items){
   items.forEach(function(x){if(x.risk_level==='critical')push(x);});
   items.forEach(function(x){if(x.value_at_risk)push(x);});
   cand=cand.slice(0,5);
+  _rhFocusQueue=cand.map(function(x){return {jid:String(x.journey_id),name:x.contact_name||''};});
   if(!cand.length||_rhTab!=='full'){wrap.style.display='none';return;}
   el.innerHTML=cand.map(function(x){
     var m=x.monetization||null;
@@ -570,8 +579,44 @@ function rhDetailHtml(d,jid){
 }
 
 /* ── 重逢话术弹窗 ─────────────────────────────────────── */
-async function rhDraft(el){
-  const jid=el.getAttribute('data-jid');
+/* RH-P3：必挽队列辅助——线性推进（跳过已处理与当前；队尾回补队首一轮，不循环） */
+function rhQueueNext(cur){
+  if(!_rhFocusQueue.length)return null;
+  var idx=-1;
+  for(var j=0;j<_rhFocusQueue.length;j++){if(_rhFocusQueue[j].jid===cur){idx=j;break;}}
+  for(var i=(idx>=0?idx+1:0);i<_rhFocusQueue.length;i++){
+    var c=_rhFocusQueue[i];
+    if(!_rhFocusDone[c.jid]&&c.jid!==cur)return c;
+  }
+  for(var k=0;k<(idx>=0?idx:0);k++){
+    var c2=_rhFocusQueue[k];
+    if(!_rhFocusDone[c2.jid]&&c2.jid!==cur)return c2;
+  }
+  return null;
+}
+function rhUpdateQueueUi(cur){
+  var qm=document.getElementById('rh-modal-queue');
+  var nb=document.getElementById('rh-next-btn');
+  var idx=-1;
+  for(var j=0;j<_rhFocusQueue.length;j++){if(_rhFocusQueue[j].jid===cur){idx=j;break;}}
+  if(qm){
+    if(idx>=0){qm.textContent='🔥 '+window.Tf('rh2_queue_pos',{i:idx+1,n:_rhFocusQueue.length});qm.style.display='';}
+    else{qm.style.display='none';qm.textContent='';}
+  }
+  if(nb)nb.style.display=rhQueueNext(cur)?'':'none';
+}
+function rhNextFocus(){
+  var nxt=rhQueueNext(_rhPendingJid);
+  if(!nxt){
+    if(typeof showToast==='function')showToast(window.T('rh2_queue_done'));
+    var nb=document.getElementById('rh-next-btn');if(nb)nb.style.display='none';
+    return;
+  }
+  rhDraftFor(nxt.jid);
+}
+function rhDraft(el){rhDraftFor(el.getAttribute('data-jid'));}
+async function rhDraftFor(jid){
+  if(!jid)return;
   _rhPendingJid=jid;
   _rhPendingConv=null;
   document.getElementById('rh-modal-meta').textContent='journey '+jid+' · '+window.T('ov_js_generating');
@@ -580,6 +625,7 @@ async function rhDraft(el){
   var sb0=document.getElementById('rh-send-btn');if(sb0){sb0.style.display='none';sb0.disabled=false;sb0.textContent=window.T('rh2_send_direct');}
   var ibx=document.getElementById('rh-modal-inbox');ibx.style.display='none';ibx.textContent='';
   document.getElementById('rh-modal-bg').classList.add('open');
+  rhUpdateQueueUi(jid);
   apiFetch('/api/relations/health/'+encodeURIComponent(jid)).then(function(r){return r.ok?r.json():null;}).then(function(d){
     if(!d)return;
     var html=rhDetailHtml(d,jid);
@@ -650,7 +696,12 @@ async function rhMarkSent(){
   try{
     const res=await apiFetch('/api/reactivation/'+encodeURIComponent(_rhPendingJid)+'/mark-sent',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000});
     if(!res.ok){alert(window.T('inbox.conv.mark_fail')+' '+res.status);return;}
-    rhCloseModal();rhLoad(1);
+    /* RH-P3：记账 + 必挽队列自动接续——发完直接带出下一位，不必回榜单再找 */
+    _rhFocusDone[_rhPendingJid]=1;
+    var nxt=rhQueueNext(_rhPendingJid);
+    rhLoad(1);
+    if(nxt){rhDraftFor(nxt.jid);}
+    else{rhCloseModal();}
   }catch(e){alert(e);}finally{btn.disabled=false;}
 }
 
