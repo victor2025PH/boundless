@@ -180,6 +180,18 @@ if ($Full) {
     python (Join-Path $engineRoot 'tools\verify_account_rail_ui.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
+    # Churn Alerts board (2026-08-01 RH revamp close-out). Capability probe ->
+    # tri-state render -> dual-source tabs -> save-first queue -> in-page send:
+    # all pure frontend + conditionally-registered endpoints, hot-reloaded straight
+    # to production. This gate's FIRST run caught a 2-month-old phantom-column 500
+    # (conversation_meta.claimed_by) that every static gate missed. Read-only:
+    # never clicks generate/send/mark-sent (no LLM burn, no reactivation ledger
+    # writes). Missing playwright / unreachable instance / no token => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: churn alerts board, real browser (tools\verify_relations_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_relations_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
     # Inbox density budget (2026-07-30). The agent stares at a 300px-wide list;
     # every extra chrome row above it hides one more conversation. Such regressions
     # are SILENT - nothing errors, nothing turns red, a screenshot still "looks
