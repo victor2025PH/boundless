@@ -456,6 +456,19 @@ async def maybe_start_companion_proactive(assistant) -> None:
             except Exception:
                 assistant.logger.debug("[proactive] optout 注册表落盘失败", exc_info=True)
 
+        # 冷启动隔离（2026-08-04 智拓机 .198 新号群发事故根因闸）：给每个账号记「接入
+        # 本系统时刻」（自举自「该账号最早会话 created_at」，见 account_connection），
+        # 账号接入不足预热窗内一切主动外呼一律不发。落盘 best-effort；初始化失败也降级
+        # 内存表，绝不让安全闸变成崩溃点。判定逻辑在纯函数 outbound_gate.may_contact。
+        try:
+            from src.inbox.account_connection import AccountConnectionLog
+            _conn_log = AccountConnectionLog(
+                Path(assistant.config.config_path).parent
+                / "account_connection.json")
+        except Exception:
+            _conn_log = None
+            assistant.logger.debug("[proactive] 冷启动接入登记初始化失败", exc_info=True)
+
         # 主客户端回落路径吞异常只回 False（拿不到错误类型）→ 按连败计数拉黑：
         # 连败 2 次进 _bad_peers（2026-07-27 实锤：INPUT_USER_DEACTIVATED 会话
         # 每 tick 烧掉一个名额；单败不拉防网络抖动误伤）。
@@ -532,6 +545,44 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     limit=scan_limit) or []
             except Exception:
                 return []
+            # ── 冷启动隔离预备（2026-08-04 智拓机 .198 新号群发事故根因闸）──────────
+            # 账号「接入时刻」自举：取该账号所有会话里最早的 created_at（目录同步把占位
+            # created_at 落为同步时刻≈账号接入本系统时刻）。用**原始** rows（含群/系统会
+            # 话）估更准的账号年龄。判定在纯函数 outbound_gate.may_contact；全程 fail-open：
+            # 预备/判定任一异常都 _cs_on=False 本轮放行，安全闸绝不变成「静默不发」故障源。
+            _now_ts = time.time()
+            _cs_on = False
+            _cs_cfg: Dict[str, Any] = {}
+            _acct_earliest: Dict[Any, float] = {}
+            _quota_exhausted = False
+            _cs_suppressed: Dict[str, int] = {}
+            _may_contact = None
+            _record_suppression = None
+            try:
+                if _conn_log is not None:
+                    from src.inbox.outbound_gate import (
+                        account_earliest_created as _acct_earliest_fn,
+                        may_contact as _may_contact,
+                        record_suppression as _record_suppression,
+                        resolve_cold_start_cfg as _resolve_cs_cfg,
+                    )
+                    _cs_cfg = _resolve_cs_cfg(
+                        getattr(assistant.config, "config", None) or {})
+                    _cs_on = bool(_cs_cfg.get("enabled", True))
+                    if _cs_on:
+                        # 账号接入时刻自举取数（纯函数，已单测）：用原始 rows（含群/系统
+                        # 会话）估更准的账号年龄。
+                        _acct_earliest = _acct_earliest_fn(rows)
+                    # 授权/试用字符额度耗尽 → 停系统自主外呼（人工不受限）。本批注入
+                    # False 占位（fail-open，对齐现网「未强制」语义）；真实 hosted-trial
+                    # 额度读取接线见下一阶段（gate 已支持 quota_exhausted 入参）。
+                    _quota_exhausted = False
+            except Exception:
+                _cs_on = False
+                # 安全闸「装不上」比「误拦」更该被看见：升 warning，避免静默永久放行。
+                assistant.logger.warning(
+                    "[proactive] 冷启动隔离闸预备失败（本轮放行，安全闸未生效）",
+                    exc_info=True)
             # ⚠ 主动开场只面向「能发的账号 × 私聊」（2026-07-13 真机预览实锤：
             # 不过滤则候选被沉默几个月的群聊/桌面镜像会话占满——给群发
             # "好久没联系啦" / 用错账号发送，都是灾难）。群聊天然不适合
@@ -658,6 +709,26 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     except Exception:
                         _intim, _stage = 0.0, ""
                 _last_in_ts = float(last_in_map.get(cid) or 0.0)
+                # 冷启动隔离闸：账号接入预热窗内 / 仅有导入历史（接入后对方从未开口）→
+                # 不主动冷开场。只压主动外呼，用户手动发送与对入站消息的自动回复不受影响。
+                if _cs_on and _may_contact is not None:
+                    try:
+                        _conn_at = _conn_log.observe(
+                            platform, account_id,
+                            _acct_earliest.get((platform, account_id), 0.0),
+                            now=_now_ts)
+                        _v = _may_contact(
+                            {"last_in_ts": _last_in_ts},
+                            connected_at=_conn_at, now=_now_ts,
+                            cfg=_cs_cfg, quota_exhausted=_quota_exhausted)
+                        if not _v.ok:
+                            _record_suppression(_v.reason)
+                            _cs_suppressed[_v.reason] = (
+                                _cs_suppressed.get(_v.reason, 0) + 1)
+                            continue
+                    except Exception:
+                        assistant.logger.debug(
+                            "[proactive] 冷启动闸判定异常（放行）", exc_info=True)
                 # P1 opt-out：静默期内不进候选（对方 opt-out 后又开口 → 自动解除）。
                 # 放在快照层 = 沉默回访/仪式/节点问候共用同一道闸。
                 if _optout_on and cid in _optout_mutes:
@@ -691,6 +762,9 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     "last_emotion": str(
                         (meta_intel.get(cid) or {}).get("last_emotion") or ""),
                 })
+            if _cs_suppressed:
+                assistant.logger.info(
+                    "[proactive] 冷启动隔离本轮抑制候选 %s", dict(_cs_suppressed))
             _conv_index.clear()
             _conv_index.update({str(c["conversation_id"]): c for c in out})
             return out
