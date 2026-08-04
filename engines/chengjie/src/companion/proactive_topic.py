@@ -469,6 +469,21 @@ async def maybe_start_companion_proactive(assistant) -> None:
             _conn_log = None
             assistant.logger.debug("[proactive] 冷启动接入登记初始化失败", exc_info=True)
 
+        # 冷启动闸的**本轮**观测快照（每次 _conversations() 重建）。安全闸最危险的失败
+        # 形态是「悄悄拦住一切」或「悄悄没生效」，两者在日志里都不显眼 → 挂到预览面板
+        # （GET /api/companion/proactive/preview）供运营直接读：本轮压了谁、按什么理由、
+        # 闸到底有没有生效。best-effort，读写都不影响判定。
+        _cs_last: Dict[str, Any] = {
+            "enabled": False, "suppressed": {}, "quota_exhausted": False, "cfg": {}}
+
+        def _cs_suppression_total() -> Dict[str, int]:
+            """进程累计抑制数（重启清零）。取不到 → 空 dict，绝不让观测拖垮预览。"""
+            try:
+                from src.inbox.outbound_gate import suppression_snapshot
+                return suppression_snapshot()
+            except Exception:
+                return {}
+
         # 主客户端回落路径吞异常只回 False（拿不到错误类型）→ 按连败计数拉黑：
         # 连败 2 次进 _bad_peers（2026-07-27 实锤：INPUT_USER_DEACTIVATED 会话
         # 每 tick 烧掉一个名额；单败不拉防网络抖动误伤）。
@@ -563,6 +578,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     from src.inbox.outbound_gate import (
                         account_earliest_created as _acct_earliest_fn,
                         may_contact as _may_contact,
+                        quota_exhausted_now as _quota_now,
                         record_suppression as _record_suppression,
                         resolve_cold_start_cfg as _resolve_cs_cfg,
                     )
@@ -573,10 +589,12 @@ async def maybe_start_companion_proactive(assistant) -> None:
                         # 账号接入时刻自举取数（纯函数，已单测）：用原始 rows（含群/系统
                         # 会话）估更准的账号年龄。
                         _acct_earliest = _acct_earliest_fn(rows)
-                    # 授权/试用字符额度耗尽 → 停系统自主外呼（人工不受限）。本批注入
-                    # False 占位（fail-open，对齐现网「未强制」语义）；真实 hosted-trial
-                    # 额度读取接线见下一阶段（gate 已支持 quota_exhausted 入参）。
-                    _quota_exhausted = False
+                    # 授权/试用字符额度耗尽 → 停系统自主外呼（人工发送不受限）。每 tick
+                    # 读一次（非每会话），开销＝一次额度快照。关闸时连读都省掉。
+                    # 取「原始耗尽」而非「受 enforce 调节的裁决」的理由见 quota_exhausted_now
+                    # ——.198 正是 exceeded=True 且 enforce=False 才一路烧到 180%。
+                    _quota_exhausted = (
+                        _quota_now() if _cs_cfg.get("quota_gate", True) else False)
             except Exception:
                 _cs_on = False
                 # 安全闸「装不上」比「误拦」更该被看见：升 warning，避免静默永久放行。
@@ -762,6 +780,10 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     "last_emotion": str(
                         (meta_intel.get(cid) or {}).get("last_emotion") or ""),
                 })
+            # 本轮快照（即便零抑制也要刷新，否则预览会显示上一轮的陈旧数字）
+            _cs_last.update({
+                "enabled": _cs_on, "suppressed": dict(_cs_suppressed),
+                "quota_exhausted": _quota_exhausted, "cfg": dict(_cs_cfg)})
             if _cs_suppressed:
                 assistant.logger.info(
                     "[proactive] 冷启动隔离本轮抑制候选 %s", dict(_cs_suppressed))
@@ -1079,6 +1101,16 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 # 「主动队列看起来没动」从猜测变成一屏可读原因。
                 "skip_summary": _skip_counts,
                 "skipped": _skip_samples,
+                # 冷启动隔离闸（.198 事故根因闸）：本轮压了几条、按什么理由，
+                # 外加进程累计。`enabled=false` 一眼看出「闸没生效」——安全闸
+                # 静默失效比误拦更危险，故把它做成面板上读得到的常驻事实。
+                "cold_start": {
+                    "enabled": bool(_cs_last.get("enabled")),
+                    "quota_exhausted": bool(_cs_last.get("quota_exhausted")),
+                    "suppressed_this_tick": dict(_cs_last.get("suppressed") or {}),
+                    "suppressed_total": _cs_suppression_total(),
+                    "config": dict(_cs_last.get("cfg") or {}),
+                },
             }
 
         ai_name = "她"

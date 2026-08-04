@@ -205,6 +205,51 @@ def test_closure_composition_198_scenario():
     assert blocked["c2"] == COLD_START_WARMING
 
 
+# ── quota_exhausted_now：读 licensing 事实源 ────────────────────────────────
+def _patch_quota(monkeypatch, snapshot=None, boom=False):
+    """替换 licensing 事实源。gate 内是函数级 import，故打模块属性即可生效。"""
+    import src.licensing.quota_store as qs
+
+    def _fake(*_a, **_kw):
+        if boom:
+            raise RuntimeError("licensing 模块异常")
+        return snapshot
+
+    monkeypatch.setattr(qs, "check_license_quota", _fake)
+
+
+def test_quota_now_reads_exceeded_not_allowed(monkeypatch):
+    """.198 现场组合：额度真的用尽，但 enforce 关 → allowed=True。
+
+    本闸必须看 exceeded（原始事实）——看 allowed 就等于复现事故：机器无人值守
+    把试用额度烧到 180% 而没有任何东西拦得住。
+    """
+    from src.inbox.outbound_gate import quota_exhausted_now
+    _patch_quota(monkeypatch, {"allowed": True, "exceeded": True,
+                               "enforce": False, "used": 180, "included": 100})
+    assert quota_exhausted_now() is True
+
+
+def test_quota_now_false_when_quota_remains(monkeypatch):
+    from src.inbox.outbound_gate import quota_exhausted_now
+    _patch_quota(monkeypatch, {"allowed": True, "exceeded": False,
+                               "enforce": False, "used": 10, "included": 100})
+    assert quota_exhausted_now() is False
+
+
+def test_quota_now_fail_open_on_error(monkeypatch):
+    """额度读数异常 → False（按未耗尽放行）。绝不因 licensing 抖动变成永久静默。"""
+    from src.inbox.outbound_gate import quota_exhausted_now
+    _patch_quota(monkeypatch, boom=True)
+    assert quota_exhausted_now() is False
+
+
+def test_quota_now_tolerates_odd_snapshot(monkeypatch):
+    from src.inbox.outbound_gate import quota_exhausted_now
+    _patch_quota(monkeypatch, {})          # 缺 exceeded 键
+    assert quota_exhausted_now() is False
+
+
 # ── 观测计数 ─────────────────────────────────────────────────────────────────
 def test_suppression_stats_roundtrip():
     reset_suppression_stats()

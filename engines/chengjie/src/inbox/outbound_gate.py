@@ -9,8 +9,10 @@
 额度烧到 180%。根因之一：系统里**「账号接入多久」这个维度根本不存在**，任何「沉默
 N 小时」判据对一个刚导入一堆老关系的新号都天然成立。
 
-本模块是纯函数，收敛「新号冷启动 / 只有导入历史 / 额度耗尽」这三条**新增**准入判据，
-主动话题 / 仪式 / 关怀 / 沉默回访共用。每个否决带稳定 ``reason`` 码，便于观测与门禁。
+本模块收敛「新号冷启动 / 只有导入历史 / 额度耗尽」这三条**新增**准入判据，主动话题 /
+仪式 / 关怀 / 沉默回访共用。每个否决带稳定 ``reason`` 码，便于观测与门禁。**判定本身
+（``may_contact`` 及其分项）全是纯函数**，便于直接单测；文件末尾另有两个刻意的非纯件：
+抑制计数器与 ``quota_exhausted_now``（读 licensing 事实源），它们不参与判定、只供接线。
 
 与既有护栏的关系（刻意不重复造轮子）
 ------------------------------------
@@ -27,7 +29,7 @@ bot / 舰队自嗨护栏（``peer_bot_guard`` / ``proactive_peer_hygiene``，尚
 - ``imported_no_inbound``：账号接入后对方从未在本系统开口（``last_in_ts`` 早于
   ``connected_at``）→ 只有导入的历史关系，要求对方先开口才允许冷开场。
 - ``quota_exhausted``：授权/试用字符额度用尽 → 停**系统自主外呼**（人工发送不受限）。
-  额度状态由调用方注入；给不出时按「未耗尽」放行（fail-open，对齐现网「未强制」语义）。
+  额度状态由调用方注入（现成读数见 ``quota_exhausted_now``）；给不出时按「未耗尽」放行。
 
 设计取舍
 --------
@@ -168,6 +170,37 @@ def may_contact(
     return Verdict(True, OK)
 
 
+# ── 非纯：额度事实源读数（供接线注入 may_contact 的 quota_exhausted 入参）─────────
+def quota_exhausted_now() -> bool:
+    """当前授权/首启体验档的字符额度是否**已经耗尽**。
+
+    读 ``licensing.quota_store.check_license_quota()``——数字口径的单一事实源（授权额度
+    + charpack 加量 + 首启体验档三条来源都在里面归一），本函数绝不自己算额度，避免
+    「两套水表」。
+
+    刻意取 ``exceeded`` 而非 ``allowed``（这是与隔壁 send 路由的**有意分歧**，不是疏忽）
+    ------------------------------------------------------------------------------
+    ``allowed`` = ``exceeded and enforce``，即「按宽严开关调节后的裁决」。而
+    ``licensing.enforce`` / ``licensing.trial.enforce`` 默认关，其语义是**对人的宽容**：
+    「额度用完了也别把用户卡在半截对话里」——``check_license_quota`` 自己的 docstring 就写明
+    该裁决「不阻断消息投递本身」，作用域是翻译/合成这类子操作。
+
+    但「系统要不要**主动挑起**一段没人要求的对话」是另一个问题：宽容是给人的，不是给机器
+    继续无人值守烧额度的许可。2026-08-04 .198 现场正是这个组合——``exceeded=True`` 且
+    ``enforce=False`` ⇒ ``allowed=True`` ⇒ 没有任何东西拦得住，试用额度被主动群发烧到 180%。
+    故本闸读原始事实 ``exceeded``：**人的操作照旧宽容，机器的自主外呼停下**。
+    （运营若要恢复旧行为：``cold_start.quota_gate: false``。）
+
+    fail-open：读不到 / 抛异常 → False（按未耗尽处理）。额度读数不该把主动触达打挂，
+    更不该在 licensing 模块异常时把系统变成「永久静默」。
+    """
+    try:
+        from src.licensing.quota_store import check_license_quota
+        return bool(check_license_quota().get("exceeded"))
+    except Exception:
+        return False
+
+
 # ── 进程级观测（best-effort，重启清零；与 proactive_stats 解耦，零热区改动）────────
 _LOCK = threading.Lock()
 _SUPPRESSED: Dict[str, int] = {}
@@ -200,6 +233,6 @@ __all__ = [
     "OK", "DISABLED", "COLD_START_WARMING", "IMPORTED_NO_INBOUND",
     "QUOTA_EXHAUSTED", "Verdict",
     "resolve_cold_start_cfg", "account_warming", "imported_no_inbound",
-    "account_earliest_created", "may_contact",
+    "account_earliest_created", "may_contact", "quota_exhausted_now",
     "record_suppression", "suppression_snapshot", "reset_suppression_stats",
 ]
