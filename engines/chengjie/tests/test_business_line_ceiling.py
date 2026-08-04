@@ -22,6 +22,18 @@ def _fresh_bl_cache():
     ar._BL_CACHE.clear()
 
 
+@pytest.fixture(autouse=True)
+def _account_not_in_cold_start(monkeypatch):
+    """把账号年龄钉成「很老」——本文件测业务线封顶，与冷启动预热封顶正交。
+
+    用例都是「当场 upsert 账号」→ 注册表 ``created_at=now`` → 会被预热闸如实判为新号
+    并降级 review（那是它的**正确**行为，专门门禁见 ``test_warmup_review_cap``）。
+    不钉住的话这里的断言就同时反映两档封顶，读起来像业务线逻辑坏了。
+    """
+    import src.inbox.account_connection as ac
+    monkeypatch.setattr(ac, "resolve_account_connected_at", lambda *a, **k: 1.0)
+
+
 # ── 注册表列 + 缓存 ────────────────────────────────────────────────────────
 
 def test_registry_business_line_column_roundtrip():

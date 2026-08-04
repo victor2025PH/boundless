@@ -51,6 +51,20 @@ _EXEMPT: Dict[str, str] = {
     "licensing.trial.enabled":
         "自带同款桌面默认机制（local_trial.configure_local_trial：桌面态且配置"
         "「从未写过」licensing.trial 时按桌面默认开）——本类修法的最早先例",
+    "companion.proactive_topic.cold_start.enabled":
+        "代码默认已 True：outbound_gate._DEFAULTS['enabled']=True，且 "
+        "resolve_cold_start_cfg 在配置整段缺失时（None/{}/无 cold_start 节）一律回落"
+        "该默认——这是刻意设计：冷启动隔离是**安全 floor**，不能取决于某份 overlay "
+        "有没有提到它（.198 事故现场的 config.local 就完全没提主动触达的任何护栏）。"
+        "种子里显式写出只为把交付承诺文档化，升级安装不写也照样生效",
+    "companion.proactive_topic.cold_start.require_inbound_since_connect":
+        "同上，outbound_gate._DEFAULTS['require_inbound_since_connect']=True",
+    "companion.proactive_topic.cold_start.quota_gate":
+        "同上，outbound_gate._DEFAULTS['quota_gate']=True",
+    "companion.proactive_topic.cold_start.warmup_review":
+        "同上，outbound_gate._DEFAULTS['warmup_review']=True。另注：该档只在能"
+        "**判出**账号接入时刻时才封顶（account_registry.created_at 或已有登记），"
+        "判不出一律不封顶 → 存量安装升级后零行为变更，不存在「升级即静默降级」风险",
     "inbox.read_from_store":
         "代码默认已 True（unified_inbox_aggregate._read_from_store_enabled，"
         "2026-07-31 由 False 改齐）：灰度早已完成，example/种子/生产均显式 true，"
