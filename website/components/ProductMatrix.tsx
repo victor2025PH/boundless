@@ -6,10 +6,10 @@ import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
 import { BRAND, CATEGORIES, CATEGORY_ORDER } from "@/lib/brand";
 import { CATEGORY_UI } from "@/lib/categoryUi";
-import { PRODUCT_ANCHOR, PRODUCT_LANDING, PUBLIC_PRODUCT_ORDER, publicProductsInCategory } from "./productMeta";
+import { PRODUCT_ANCHOR, PRODUCT_LANDING, PRODUCT_PRICE_HINT, PUBLIC_PRODUCT_ORDER, publicProductsInCategory } from "./productMeta";
 import ProductIcon from "./ProductIcon";
 import { track } from "@/lib/track";
-import { ArrowRight, ShieldCheck } from "lucide-react";
+import { ArrowRight, ShieldCheck, Tag } from "lucide-react";
 import { localePath } from "@/lib/site";
 
 const COPY = {
@@ -138,6 +138,13 @@ export default function ProductMatrix() {
                           <p className={`mt-3 inline-flex w-fit items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium ${ui.chip}`}>
                             {c.breakLabel} · {p.break[lang]}
                           </p>
+                          {/* 价格锚：拿着产品名找价的人不用再猜「幻影多少钱」（数字由定价单源派生） */}
+                          {PRODUCT_PRICE_HINT[key] && (
+                            <p className="mt-2.5 inline-flex items-center gap-1.5 text-xs font-medium text-neon-cyan/90">
+                              <Tag className="h-3 w-3 shrink-0" />
+                              {PRODUCT_PRICE_HINT[key]![lang]}
+                            </p>
+                          )}
                         </a>
                       </Reveal>
                     );
@@ -166,7 +173,7 @@ export default function ProductMatrix() {
 
         <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
           <a
-            href="#pricing"
+            href={lang === "zh" ? "/order" : "/en/order"}
             onClick={() => track("cta_click", { where: "matrix_primary" })}
             className="group inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-6 py-3 text-sm font-semibold text-ink-950 transition hover:opacity-90"
           >

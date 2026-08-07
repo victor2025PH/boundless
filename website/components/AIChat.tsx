@@ -48,7 +48,7 @@ const COPY = {
     human: "转人工客服",
     replyIn: "顾嘉将用此语言实时回复",
     installGreet:
-      "已进入安装协助模式 🛠 我是顾嘉，一步步带你完成 AvatarHub 的下载与安装：从下载安装包、首次启动向导、组件下载，到激活试用。\n遇到报错把提示原文发给我就行；也可以先点下面的常见问题。",
+      "已进入安装协助模式 🛠 我是顾嘉，一步步带你完成幻境 STUDIO 的下载与安装：从下载安装包、首次启动向导、组件下载，到激活使用。\n遇到报错把提示原文发给我就行；也可以先点下面的常见问题。",
     installSuggestions: ["完整的安装步骤是什么？", "SmartScreen 拦截了安装包怎么办？", "我的显卡能跑哪些功能？", "组件下载中断了怎么办？"],
   },
   en: {
@@ -68,7 +68,7 @@ const COPY = {
     human: "Talk to a human",
     replyIn: "Gary replies live in this language",
     installGreet:
-      "Install-assist mode 🛠 Gary here — I'll walk you through downloading and installing AvatarHub: the installer, the first-run wizard, component downloads and activation.\nHit an error? Paste the exact message here — or start with a common question below.",
+      "Install-assist mode 🛠 Gary here — I'll walk you through downloading and installing STUDIO: the installer, the first-run wizard, component downloads and activation.\nHit an error? Paste the exact message here — or start with a common question below.",
     installSuggestions: ["What are the full install steps?", "SmartScreen blocked the installer — what now?", "What can my GPU run?", "Component download got interrupted?"],
   },
   // 小语种落地页（/ko /ja）专用界面文案；AI 回复语言由后端「语言镜像」指令保证。
@@ -90,7 +90,7 @@ const COPY = {
     human: "상담원 연결",
     replyIn: "Gary가 이 언어로 실시간 답변합니다",
     installGreet:
-      "설치 지원 모드입니다 🛠 Gary입니다. AvatarHub 다운로드와 설치를 단계별로 도와드립니다. 오류 메시지를 그대로 붙여넣어 주세요.",
+      "설치 지원 모드입니다 🛠 Gary입니다. 幻境 STUDIO 다운로드와 설치를 단계별로 도와드립니다. 오류 메시지를 그대로 붙여넣어 주세요.",
     installSuggestions: ["전체 설치 단계는?", "SmartScreen이 설치를 차단했어요", "제 GPU로 어떤 기능을 쓸 수 있나요?"],
   },
   ja: {
@@ -111,7 +111,7 @@ const COPY = {
     human: "担当者に相談",
     replyIn: "Garyがこの言語でリアルタイム回答",
     installGreet:
-      "インストール支援モードです 🛠 Garyです。AvatarHubのダウンロードからインストールまでステップごとにご案内します。エラーはそのまま貼り付けてください。",
+      "インストール支援モードです 🛠 Garyです。幻境 STUDIO のダウンロードからインストールまでステップごとにご案内します。エラーはそのまま貼り付けてください。",
     installSuggestions: ["インストール手順の全体は？", "SmartScreenにブロックされました", "私のGPUで使える機能は？"],
   },
 };

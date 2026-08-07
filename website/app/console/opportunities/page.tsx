@@ -1,5 +1,6 @@
-// /console/opportunities：跨售商机独立页 —— 复用 lib/opportunities + opportunities-ui。
-// 筛选 kind / 跟进 status；空态引导补人设与账本。admin+ 可跟进。
+// /console/opportunities：跨售商机独立页 —— 复用 lib/opportunities + ui.tsx 商机组件。
+// 筛选 kind / 跟进 status / 关键词 q + 分页；空态引导补人设与账本。admin+ 可跟进，
+// 已关闭（won/dismissed）行可「重开」。
 import Link from "next/link";
 import { Sparkles } from "lucide-react";
 import {
@@ -22,13 +23,16 @@ import {
   FilterSubmit,
   OpportunityKindBadge,
   PageHeader,
+  Pager,
   Td,
   filterInputCls,
 } from "../parts";
-import { OpportunityActions, OpportunityLogBadge } from "../opportunities-ui";
+import { OpportunityActions, OpportunityLogBadge } from "../ui";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const LIMIT = 50;
 
 const KIND_OPTIONS = [
   { value: "persona_cross_sell", label: "人设跨售" },
@@ -46,7 +50,7 @@ const STATUS_OPTIONS = [
 export default function OpportunitiesPage({
   searchParams,
 }: {
-  searchParams: { kind?: string; status?: string };
+  searchParams: { kind?: string; status?: string; q?: string; offset?: string };
 }) {
   const me = getConsoleSessionUser();
   if (!me) return null;
@@ -57,6 +61,8 @@ export default function OpportunitiesPage({
   const statusRaw = searchParams.status?.trim() || undefined;
   const status =
     statusRaw && isOpportunityLogStatus(statusRaw) ? (statusRaw as OpportunityLogStatus) : undefined;
+  const q = searchParams.q?.trim() || undefined;
+  const offset = Math.max(0, Number(searchParams.offset) || 0);
 
   // 赢单/忽略默认隐藏，筛这两类时必须 includeClosed
   const includeClosed = status === "won" || status === "dismissed";
@@ -68,6 +74,18 @@ export default function OpportunitiesPage({
   } else if (status === "contacted" || status === "won" || status === "dismissed") {
     rows = rows.filter((o) => o.log?.status === status);
   }
+  if (q) {
+    // 商机是内存推导（无表可查），关键词在输出侧匹配：客户名 / 理由 / 起止产品
+    const needle = q.toLowerCase();
+    rows = rows.filter((o) =>
+      [o.customerName ?? "", o.reason, o.fromProduct, o.toProduct, productLabel(o.fromProduct), productLabel(o.toProduct)]
+        .join("\n")
+        .toLowerCase()
+        .includes(needle)
+    );
+  }
+  const total = rows.length;
+  const pageRows = rows.slice(offset, offset + LIMIT);
 
   return (
     <div>
@@ -111,15 +129,22 @@ export default function OpportunitiesPage({
             </option>
           ))}
         </select>
+        <input
+          type="search"
+          name="q"
+          defaultValue={q ?? ""}
+          placeholder="搜索客户 / 理由 / 产品"
+          className={`${filterInputCls} w-56`}
+        />
         <FilterSubmit />
-        {(kind || status) && (
+        {(kind || status || q) && (
           <Link href="/console/opportunities" className="text-xs text-slate-500 hover:text-slate-300">
             清除
           </Link>
         )}
       </form>
 
-      {rows.length === 0 ? (
+      {pageRows.length === 0 ? (
         <EmptyState
           title="暂无商机信号"
           hints={[
@@ -142,8 +167,8 @@ export default function OpportunitiesPage({
         />
       ) : (
         <DataTable head={["类型", "客户", "从 → 到", "理由", "信号值", "跟进"]}>
-          {rows.map((o) => (
-            <tr key={o.oppKey} className="hover:bg-slate-800/40">
+          {pageRows.map((o) => (
+            <tr key={o.oppKey} className="hover:bg-ink-700/40">
               <Td>
                 <OpportunityKindBadge kind={o.kind} />
               </Td>
@@ -180,8 +205,16 @@ export default function OpportunitiesPage({
         </DataTable>
       )}
 
+      <Pager
+        basePath="/console/opportunities"
+        params={{ kind, status, q }}
+        total={total}
+        limit={LIMIT}
+        offset={offset}
+      />
+
       <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
-        共 {rows.length} 条 · 类型枚举 {OPPORTUNITY_KINDS.join(" / ")} · 跟进状态{" "}
+        共 {total} 条 · 类型枚举 {OPPORTUNITY_KINDS.join(" / ")} · 跟进状态{" "}
         {OPPORTUNITY_LOG_STATUSES.join(" / ")}。证据字段不含联系方式与聊天内容。
       </p>
     </div>

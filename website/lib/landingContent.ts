@@ -276,15 +276,15 @@ export const LANDINGS: Record<LandingKey, LandingDict> = {
 
   interpreting: {
     slug: "/interpreting",
-    productLine: { zh: "通达系 · 通译 LingoX + 通传 VoxX", en: "Lingo · LingoX chat + VoxX interpret" },
+    productLine: { zh: "通达系 · 通传 VoxX + 智聊内置翻译", en: "Lingo · VoxX interpret + ChatX translate" },
     seo: {
       title: {
-        zh: "跨境聊天翻译 + AI 实时同传 | 通译 LingoX · 通传 VoxX — 无界科技",
-        en: "Chat Translation + Real-time Interpreting | LingoX · VoxX — BOUNDLESS",
+        zh: "AI 实时同传 + 跨境聊天翻译 | 通传 VoxX — 无界科技",
+        en: "Real-time Interpreting + Chat Translation | VoxX — BOUNDLESS",
       },
       description: {
-        zh: "通达系双产品：通译做多平台聊天文字/语音互译与客户资产沉淀，生产运行中；通传做克隆音双向同传与 OBS 双语字幕，面向会议 / 直播场景内测中，预约演示后按场景配置交付。术语锁定、本地部署、数据不出网。",
-        en: "Lingo family: LingoX for omni-channel chat translation and customer assets, running in production; VoxX for cloned-voice interpreting and OBS bilingual subtitles, in beta for meeting / live-stream scenarios — demo first, delivery configured per scenario. Glossary-locked, privately deployed.",
+        zh: "通传 VoxX：克隆音双向同传与 OBS 双语字幕，面向会议 / 直播场景内测中，预约演示后按场景配置交付；跨境聊天互译与统一收件箱已内置于智聊 ChatX（原通译，生产运行中）。术语锁定、本地部署、数据不出网。",
+        en: "VoxX: cloned-voice interpreting and OBS bilingual subtitles, in beta for meeting / live-stream scenarios — demo first, delivery configured per scenario. Cross-border chat translation and the unified inbox ship inside ChatX (formerly LingoX, in production). Glossary-locked, privately deployed.",
       },
       keywords: [
         "AI同传",
@@ -303,12 +303,12 @@ export const LANDINGS: Record<LandingKey, LandingDict> = {
       title: { zh: "打破语言之界，", en: "Break the language barrier —" },
       accent: { zh: "聊天翻译 + 同声传译", en: "chat translate + live interpret" },
       subtitle: {
-        zh: "通译 LingoX 承接跨境聊天互译与统一收件箱，已在生产环境稳定运行；通传 VoxX 用你的克隆音做双向同传与 OBS 双语字幕，面向会议 / 直播场景内测中，预约演示后按场景配置交付。两条产品，两种场景，一套通达底座。",
-        en: "LingoX covers cross-border chat translation and a unified inbox, running in production; VoxX does two-way cloned-voice interpreting with OBS bilingual subtitles, in beta for meeting and live-stream scenarios — demo first, delivery configured per scenario. Two products, two scenes, one Lingo core.",
+        zh: "通传 VoxX 用你的克隆音做双向同传与 OBS 双语字幕，面向会议 / 直播场景内测中，预约演示后按场景配置交付；跨境聊天互译与统一收件箱已内置于智聊 ChatX（原通译），在生产环境稳定运行。两种场景，一套通达底座。",
+        en: "VoxX does two-way cloned-voice interpreting with OBS bilingual subtitles, in beta for meeting and live-stream scenarios — demo first, delivery configured per scenario. Cross-border chat translation and the unified inbox ship inside ChatX (formerly LingoX), running in production. Two scenes, one Lingo core.",
       },
       points: [
-        { zh: "通译 · 多平台聊天文字/语音互译", en: "LingoX · omni-channel chat translation" },
         { zh: "通传 · 克隆音同传 + 双语字幕（内测中）", en: "VoxX · cloned-voice interpret + subtitles (beta)" },
+        { zh: "聊天翻译 · 已内置于智聊 ChatX", en: "Chat translate · built into ChatX" },
         { zh: "术语锁定 · 私有部署不出网", en: "Glossary lock · private, off-net" },
       ],
     },

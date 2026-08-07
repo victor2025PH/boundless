@@ -1,9 +1,14 @@
 "use client";
 
+import Link from "next/link";
 import { useLang } from "./LanguageContext";
+import { localePath } from "@/lib/site";
+import { BRAND_FILM } from "@/lib/film";
+import FilmPlayer from "./FilmPlayer";
 import type { FeedVideo } from "@/lib/feed-store";
 
 // 每日视频动态列表：服务端读库后作为 props 传入（页面 force-dynamic，上架即可见）。
+// 顶部固定「精选 · 品牌片」大卡（lib/film.ts 单一真相）——日更流按日期滚动，精选位不随流走。
 export default function VideoFeed({ videos }: { videos: FeedVideo[] }) {
   const { lang } = useLang();
   const zh = lang === "zh";
@@ -22,6 +27,29 @@ export default function VideoFeed({ videos }: { videos: FeedVideo[] }) {
             ? "换脸、克隆声音、数字人直播、克隆音同传——每天更新一条演示。概念演示由 AI 生成，真实效果以引擎实测输出为准。"
             : "Face swap, voice cloning, digital-human streaming and interpreting — one new demo every day. Concept demos are AI-generated; real results come from actual engine output."}
         </p>
+      </div>
+
+      <div className="mx-auto mt-12 max-w-5xl overflow-hidden rounded-2xl border border-emerald-300/25 bg-white/[0.03]">
+        <div className="grid gap-0 lg:grid-cols-[3fr,2fr]">
+          <div className="relative p-4 pb-0 lg:pb-4">
+            <span className="pointer-events-none absolute left-7 top-7 z-10 rounded-full bg-emerald-400/90 px-2.5 py-0.5 text-[11px] font-semibold text-ink-950">
+              {zh ? "精选 · 品牌片" : "FEATURED · BRAND FILM"}
+            </span>
+            <FilmPlayer lang={lang} compact />
+          </div>
+          <div className="flex flex-col justify-center p-6">
+            <h2 className="text-lg font-bold leading-snug text-white">{BRAND_FILM.title[lang]}</h2>
+            <p className="mt-2 text-xs leading-relaxed text-slate-400">{BRAND_FILM.tagline[lang]}</p>
+            <Link
+              href={localePath(lang, "/film")}
+              className="mt-4 inline-block w-fit rounded-full bg-neon-blue px-4 py-2 text-xs font-semibold text-white transition hover:brightness-110"
+            >
+              {zh
+                ? `完整页 · 章节跳转（${BRAND_FILM.durationLabel.zh}）`
+                : `Film page · chapters (${BRAND_FILM.durationLabel.en})`}
+            </Link>
+          </div>
+        </div>
       </div>
 
       {videos.length === 0 ? (

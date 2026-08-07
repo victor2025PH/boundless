@@ -25,6 +25,7 @@ export const SITE_PAGES: SitePage[] = [
   { slug: "/download/chatx", bilingual: true, changeFrequency: "monthly", priority: 0.7, enPriority: 0.6 },
   { slug: "/manual", bilingual: true, changeFrequency: "monthly", priority: 0.6, enPriority: 0.5 },
   { slug: "/videos", bilingual: true, changeFrequency: "weekly", priority: 0.6, enPriority: 0.5 },
+  { slug: "/film", bilingual: true, changeFrequency: "monthly", priority: 0.8, enPriority: 0.7 },
   { slug: "/brand", bilingual: true, changeFrequency: "monthly", priority: 0.5, enPriority: 0.45 },
   { slug: "/privacy", bilingual: true, changeFrequency: "yearly", priority: 0.3 },
   { slug: "/terms", bilingual: true, changeFrequency: "yearly", priority: 0.3 },

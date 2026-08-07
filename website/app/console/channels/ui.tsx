@@ -32,9 +32,9 @@ async function api<T = Record<string, unknown>>(url: string, init?: RequestInit 
 }
 
 const inputCls =
-  "w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-amber-500";
+  "w-full rounded-lg border border-slate-700 bg-ink-950 px-3 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-crown-500";
 const btnPrimary =
-  "rounded-lg bg-amber-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-400 disabled:opacity-50";
+  "rounded-lg bg-crown-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-crown-400 disabled:opacity-50";
 
 // 枚举选项（值与 lib/channels.ts 的 CHECK 约束一致）
 const PLATFORM_OPTIONS = [
@@ -180,9 +180,9 @@ export function NewChannelAccountForm() {
     );
   }
   return (
-    <div className="w-full rounded-xl border border-amber-500/25 bg-slate-900/70 p-4 sm:max-w-md">
+    <div className="w-full rounded-xl border border-crown-500/25 bg-ink-900/70 p-4 sm:max-w-md">
       <div className="mb-3 flex items-center justify-between">
-        <span className="text-sm font-semibold text-amber-300">登记渠道账号</span>
+        <span className="text-sm font-semibold text-crown-300">登记渠道账号</span>
         <button onClick={() => setOpen(false)} className="text-slate-500 hover:text-slate-300" aria-label="关闭">
           <X className="h-4 w-4" />
         </button>
@@ -258,7 +258,7 @@ export function EditChannelAccountControl({ account }: { account: ChannelAccount
     return (
       <button
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1 rounded-lg border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:border-amber-500/60 hover:text-amber-300"
+        className="inline-flex items-center gap-1 rounded-lg border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:border-crown-500/60 hover:text-crown-300"
       >
         <Pencil className="h-3 w-3" />
         编辑
@@ -266,9 +266,9 @@ export function EditChannelAccountControl({ account }: { account: ChannelAccount
     );
   }
   return (
-    <div className="w-80 rounded-xl border border-amber-500/25 bg-slate-900 p-3 text-left shadow-xl">
+    <div className="w-80 rounded-xl border border-crown-500/25 bg-ink-900 p-3 text-left shadow-xl">
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-xs font-semibold text-amber-300">编辑「{account.label}」</span>
+        <span className="text-xs font-semibold text-crown-300">编辑「{account.label}」</span>
         <button onClick={() => setOpen(false)} className="text-slate-500 hover:text-slate-300" aria-label="关闭">
           <X className="h-3.5 w-3.5" />
         </button>

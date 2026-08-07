@@ -725,6 +725,73 @@ export function createCustomer(
   return rowValues as CustomerRow;
 }
 
+export interface UpdateCustomerInput {
+  display_name?: string | null;
+  primary_contact?: string | null;
+  notes?: string | null;
+}
+
+/** 编辑客户主档（display_name / primary_contact / notes 三个人工字段；
+ *  tg_user_id / source 属系统归并字段不在此开放）。只更新显式传入的键，
+ *  空串归 NULL；写 audit（customer.update，detail 只记改动前后）。
+ *  客户不存在返回 false。 */
+export function updateCustomerProfile(
+  customerId: string,
+  input: UpdateCustomerInput,
+  db: Database.Database = getLedgerDb(),
+  actor = "admin"
+): boolean {
+  const sets: string[] = [];
+  const params: Record<string, unknown> = { id: customerId, updated_at: nowIso() };
+  const changed: Record<string, string | null> = {};
+  for (const key of ["display_name", "primary_contact", "notes"] as const) {
+    if (input[key] !== undefined) {
+      sets.push(`${key} = @${key}`);
+      params[key] = s(input[key]);
+      changed[key] = s(input[key]);
+    }
+  }
+  if (!sets.length) return false;
+  const tx = db.transaction((): boolean => {
+    const before = db
+      .prepare("SELECT display_name, primary_contact, notes FROM customers WHERE id = ?")
+      .get(customerId) as Record<string, string | null> | undefined;
+    if (!before) return false;
+    db.prepare(`UPDATE customers SET ${sets.join(", ")}, updated_at = @updated_at WHERE id = @id`).run(params);
+    const beforeChanged: Record<string, string | null> = {};
+    for (const k of Object.keys(changed)) beforeChanged[k] = before[k] ?? null;
+    writeAudit(
+      { actor, action: "customer.update", entity: "customer", entity_id: customerId, detail: { before: beforeChanged, after: changed } },
+      db
+    );
+    return true;
+  });
+  return tx();
+}
+
+/** 解绑身份标识（按 identities.id，须属于该客户）。解绑后该身份不再参与自动归属；
+ *  历史订单/留资上已写的 customer_id 不回滚（归属史实保留）。写 audit（identity.detach）。 */
+export function detachIdentity(
+  customerId: string,
+  identityId: number,
+  db: Database.Database = getLedgerDb(),
+  actor = "admin"
+): boolean {
+  const tx = db.transaction((): boolean => {
+    const row = db
+      .prepare("SELECT id, kind, value FROM identities WHERE id = ? AND customer_id = ?")
+      .get(identityId, customerId) as { id: number; kind: string; value: string } | undefined;
+    if (!row) return false;
+    db.prepare("DELETE FROM identities WHERE id = ?").run(identityId);
+    writeAudit(
+      { actor, action: "identity.detach", entity: "customer", entity_id: customerId, detail: { kind: row.kind, value: row.value } },
+      db
+    );
+    return true;
+  });
+  return tx();
+}
+
 export interface AttachIdentityResult {
   ok: boolean;
   existed: boolean;
@@ -805,6 +872,32 @@ export function assignCustomer(
       { actor, action: "assign_customer", entity, entity_id: key, detail: { customer_id: customerId, rows: changes } },
       db
     );
+    return true;
+  });
+  return tx();
+}
+
+/** 解除订单/留资/授权的客户归属（customer_id 置 NULL，写 audit）。
+ *  用于纠错场景（归错人了先解再绑）；行不存在或本就未归属返回 false。 */
+export function unassignCustomer(
+  entity: LedgerEntity,
+  entityKey: string,
+  db: Database.Database = getLedgerDb(),
+  actor = "admin"
+): boolean {
+  const key = entityKey.trim();
+  if (!key) return false;
+  const tx = db.transaction((): boolean => {
+    let changes = 0;
+    if (entity === "order") {
+      changes = db.prepare("UPDATE orders SET customer_id = NULL WHERE (id = ? OR source_key = ?) AND customer_id IS NOT NULL").run(key, key).changes;
+    } else if (entity === "lead") {
+      changes = db.prepare("UPDATE leads SET customer_id = NULL WHERE source_key = ? AND customer_id IS NOT NULL").run(key).changes;
+    } else if (entity === "license") {
+      changes = db.prepare("UPDATE licenses SET customer_id = NULL WHERE (id = ? OR source_key = ?) AND customer_id IS NOT NULL").run(key, key).changes;
+    }
+    if (!changes) return false;
+    writeAudit({ actor, action: "unassign_customer", entity, entity_id: key, detail: { rows: changes } }, db);
     return true;
   });
   return tx();

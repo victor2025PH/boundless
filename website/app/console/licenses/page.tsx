@@ -1,10 +1,10 @@
-// /console/licenses：授权台账 —— source_system / 状态 / 到期窗口筛选 + 归属客户（viewer 隐藏）。
+// /console/licenses：授权台账 —— source_system / 状态 / 到期窗口筛选 + 行内「归属 / 改绑 / 解绑」（viewer 隐藏）。
 import Link from "next/link";
-import { listCustomers, listLicenses } from "@/lib/ledger";
+import { listLicenses } from "@/lib/ledger";
 import { getConsoleSessionUser } from "@/lib/console-auth";
 import { roleAtLeast } from "@/lib/console-users";
 import { getCustomerById } from "../data";
-import { AssignCustomerControl, type CustomerOption } from "../ui";
+import { AssignCustomerControl } from "../ui";
 import {
   Card,
   Code,
@@ -27,7 +27,16 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const LIMIT = 50;
-const SYSTEMS = ["avatarhub", "chengjie"] as const;
+const SYSTEMS = ["avatarhub", "chengjie", "huoke"] as const;
+// 与 platform/licensing/ledger/ledger_import.schema.json 的 status 枚举一致
+const STATUS_CHOICES = [
+  { value: "", label: "全部状态" },
+  { value: "active", label: "active 生效中" },
+  { value: "trial", label: "trial 试用" },
+  { value: "expired", label: "expired 已过期" },
+  { value: "revoked", label: "revoked 已吊销" },
+  { value: "unknown", label: "unknown 未判定" },
+] as const;
 const EXPIRING_CHOICES = [
   { value: "", label: "全部到期时间" },
   { value: "30", label: "30 天内到期" },
@@ -61,11 +70,6 @@ export default function LicensesPage({
     ? total - listLicenses({ ...baseFilter, limit: 1 }).total
     : listLicenses({ ...baseFilter, limit: 1, includeTest: true }).total - total;
 
-  const customerOptions: CustomerOption[] = listCustomers({ limit: 500 }).rows.map((c) => ({
-    id: c.id,
-    label: `${c.display_name || "（未命名）"}${c.primary_contact ? ` · ${c.primary_contact}` : ""}`,
-  }));
-
   const nameById = new Map<string, string | null>();
   for (const l of rows) {
     if (l.customer_id && !nameById.has(l.customer_id)) {
@@ -98,12 +102,13 @@ export default function LicensesPage({
             </option>
           ))}
         </select>
-        <input
-          name="status"
-          defaultValue={status ?? ""}
-          placeholder="状态（如 active / expired）"
-          className={`${filterInputCls} w-44`}
-        />
+        <select name="status" defaultValue={status ?? ""} className={filterInputCls}>
+          {STATUS_CHOICES.map((c) => (
+            <option key={c.value} value={c.value}>
+              {c.label}
+            </option>
+          ))}
+        </select>
         <select name="expiring_days" defaultValue={expiringRaw ?? ""} className={filterInputCls}>
           {EXPIRING_CHOICES.map((c) => (
             <option key={c.value} value={c.value}>
@@ -147,7 +152,7 @@ export default function LicensesPage({
         <Card className="p-0">
           <DataTable head={["系统", "授权号", "产品 / 方案", "席位", "到期时间", "状态", "同步于", "关联客户"]}>
             {rows.map((l) => (
-              <tr key={l.id} className="hover:bg-slate-800/40">
+              <tr key={l.id} className="hover:bg-ink-700/40">
                 <Td>
                   <SystemBadge system={l.source_system} />
                 </Td>
@@ -168,9 +173,12 @@ export default function LicensesPage({
                 <Td className="text-xs text-slate-600">{fmtDateTime(l.synced_at)}</Td>
                 <Td>
                   {l.customer_id ? (
-                    <CustomerLink customerId={l.customer_id} label={nameById.get(l.customer_id)} />
+                    <span className="inline-flex items-center gap-1.5">
+                      <CustomerLink customerId={l.customer_id} label={nameById.get(l.customer_id)} />
+                      {canWrite && <AssignCustomerControl entity="license" entityKey={l.id} assigned />}
+                    </span>
                   ) : canWrite ? (
-                    <AssignCustomerControl entity="license" entityKey={l.id} customers={customerOptions} />
+                    <AssignCustomerControl entity="license" entityKey={l.id} />
                   ) : (
                     <span className="text-xs text-slate-600">未归属</span>
                   )}

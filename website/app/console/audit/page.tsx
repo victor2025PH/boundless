@@ -1,4 +1,4 @@
-// /console/audit：写操作审计流水（只读）。支持 ?q=&action=；不含聊天内容。
+// /console/audit：写操作审计流水（只读）。支持 ?q=&action=&days= + 分页；不含聊天内容。
 import Link from "next/link";
 import { ScrollText } from "lucide-react";
 import { hasConsoleSession } from "@/lib/console-auth";
@@ -10,6 +10,7 @@ import {
   EmptyState,
   FilterSubmit,
   PageHeader,
+  Pager,
   Td,
   filterInputCls,
   fmtDateTime,
@@ -22,23 +23,33 @@ const LIMIT = 100;
 
 const ACTION_HINTS = [
   "customer.create",
+  "customer.update",
   "identity.attach",
-  "order.assign",
-  "license.assign",
-  "lead.assign",
+  "identity.detach",
+  "assign_customer",
   "opportunity.mark",
+] as const;
+
+const DAYS_CHOICES = [
+  { value: "", label: "全部时间" },
+  { value: "1", label: "近 24 小时" },
+  { value: "7", label: "近 7 天" },
+  { value: "30", label: "近 30 天" },
 ] as const;
 
 export default function AuditPage({
   searchParams,
 }: {
-  searchParams: { q?: string; action?: string };
+  searchParams: { q?: string; action?: string; days?: string; offset?: string };
 }) {
   if (!hasConsoleSession()) return null;
 
   const q = searchParams.q?.trim() || undefined;
   const action = searchParams.action?.trim() || undefined;
-  const { rows, total } = listAudit({ q, action, limit: LIMIT });
+  const daysRaw = searchParams.days?.trim() || undefined;
+  const days = daysRaw ? Number(daysRaw) : undefined;
+  const offset = Math.max(0, Number(searchParams.offset) || 0);
+  const { rows, total } = listAudit({ q, action, days, limit: LIMIT, offset });
 
   return (
     <div>
@@ -54,7 +65,7 @@ export default function AuditPage({
         }
       />
 
-      <Card className="mb-4 border-slate-800 bg-slate-900/40 !py-3">
+      <Card className="mb-4 border-ink-700 bg-ink-900/40 !py-3">
         <p className="text-[11px] leading-relaxed text-slate-500">
           常用 action 示例：
           {ACTION_HINTS.map((a) => (
@@ -83,8 +94,15 @@ export default function AuditPage({
           placeholder="action 精确（如 customer.create）"
           className={`${filterInputCls} w-56 font-mono`}
         />
+        <select name="days" defaultValue={daysRaw ?? ""} className={filterInputCls}>
+          {DAYS_CHOICES.map((c) => (
+            <option key={c.value} value={c.value}>
+              {c.label}
+            </option>
+          ))}
+        </select>
         <FilterSubmit />
-        {(q || action) && (
+        {(q || action || daysRaw) && (
           <Link href="/console/audit" className="text-xs text-slate-500 hover:text-slate-300">
             清除
           </Link>
@@ -105,12 +123,12 @@ export default function AuditPage({
         <>
           <DataTable head={["时间", "操作者", "动作", "实体", "详情"]}>
             {rows.map((a) => (
-              <tr key={a.id} className="hover:bg-slate-800/40">
+              <tr key={a.id} className="hover:bg-ink-700/40">
                 <Td className="whitespace-nowrap font-mono text-xs text-slate-500">
                   {fmtDateTime(a.ts)}
                 </Td>
                 <Td>
-                  <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-amber-300/80">
+                  <span className="rounded bg-ink-700 px-1.5 py-0.5 font-mono text-[10px] text-amber-300/80">
                     {a.actor ?? "system"}
                   </span>
                 </Td>
@@ -139,9 +157,14 @@ export default function AuditPage({
               </tr>
             ))}
           </DataTable>
-          <p className="mt-3 text-[11px] text-slate-500">
-            显示最近 {rows.length} 条{total > rows.length ? `（共 ${total} 条匹配）` : ""} · 只读。
-          </p>
+          <Pager
+            basePath="/console/audit"
+            params={{ q, action, days: daysRaw }}
+            total={total}
+            limit={LIMIT}
+            offset={offset}
+          />
+          <p className="mt-3 text-[11px] text-slate-500">共 {total} 条匹配 · 只读。</p>
         </>
       )}
     </div>

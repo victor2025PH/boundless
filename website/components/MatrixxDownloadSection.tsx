@@ -29,7 +29,7 @@ import { CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
 import type { BrandLang } from "@/lib/brand";
 
 /**
- * 智控 MatrixX 专属下载页主体（与 AvatarHub 的 DownloadSection 隔离，零回归风险）。
+ * 智控 MatrixX 专属下载页主体（与幻境 STUDIO 的 DownloadSection 隔离，零回归风险）。
  * lang 由所属路由（/matrix/download 或 /en/matrix/download）显式传入，保证语言随 URL 正确；
  * 未传时回退到全局语言上下文。
  */

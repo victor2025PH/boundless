@@ -12,7 +12,7 @@ const LANGUAGES = { "zh-CN": "/videos", en: "/en/videos", "x-default": "/videos"
 export const metadata: Metadata = {
   title: "Video Feed · Daily Demos · BOUNDLESS",
   description:
-    "Daily AvatarHub demos: live face swap, voice cloning, digital-human streaming and interpreting. One new demo every day; AI concept demos and real engine output are labeled separately.",
+    "Daily STUDIO demos: live face swap, voice cloning, digital-human streaming and interpreting. One new demo every day; AI concept demos and real engine output are labeled separately.",
   alternates: { canonical: "/en/videos", languages: LANGUAGES },
   openGraph: {
     title: "Video Feed · Daily Demos · BOUNDLESS",

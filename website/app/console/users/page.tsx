@@ -45,7 +45,7 @@ export default function UsersPage() {
             {users.map((u) => {
               const isLastEnabledMaster = u.role === "master" && u.enabled && enabledMasters === 1;
               return (
-                <tr key={u.id} className={`hover:bg-slate-800/40 ${u.enabled ? "" : "opacity-60"}`}>
+                <tr key={u.id} className={`hover:bg-ink-700/40 ${u.enabled ? "" : "opacity-60"}`}>
                   <Td>
                     <span className="font-medium text-slate-200">{u.username}</span>
                     {u.id === me.userId && (
@@ -85,7 +85,7 @@ export default function UsersPage() {
       )}
 
       <p className="mt-4 text-[11px] leading-relaxed text-slate-600">
-        脚本/巡检可继续用 <code className="rounded bg-slate-800 px-1 py-0.5 font-mono text-amber-300/80">x-console-key</code>{" "}
+        脚本/巡检可继续用 <code className="rounded bg-ink-700 px-1 py-0.5 font-mono text-amber-300/80">x-console-key</code>{" "}
         头（CONSOLE_KEY）调 /api/console/**，视为内置 master，不占用户表。所有账号与会话变更均写入审计流水。
       </p>
     </div>

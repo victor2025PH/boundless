@@ -5,15 +5,15 @@ import type { ProductKey } from "@/lib/brand";
 // 改键名会断裂历史数据。对客可见层（tab 标签 / 标题 / 卡片）已全部无界化，键名仅作稳定标识。
 export type View = "home" | "liveavatar" | "soulsync" | "pricing" | "engage";
 
-/** 九产品 → 所属 view 分组：幻颜/幻声/幻影=视觉系(liveavatar)，智拓/智聊/智控/通译/通传=沟通系(soulsync)；
- *  幻缘虽归幻境系，但产品形态是对话式命理陪伴（聊天里排盘/灵签），按功能归沟通系。 */
+/** 八产品 → 所属 view 分组：幻颜/幻声/幻影=视觉系(liveavatar)，智拓/智聊/智控/通传=沟通系(soulsync)；
+ *  幻缘虽归幻境系，但产品形态是对话式命理陪伴（聊天里排盘/灵签），按功能归沟通系。
+ *  （通译已并入智聊；VIEW_ALIASES 里的 lingox/translate 历史别名保留，深链继续可达。） */
 export const PRODUCT_VIEW: Record<ProductKey, View> = {
   reachx: "soulsync",
   chatx: "soulsync",
   facex: "liveavatar",
   voicex: "liveavatar",
   livex: "liveavatar",
-  lingox: "soulsync",
   voxx: "soulsync",
   matrixx: "soulsync",
   fatex: "soulsync",

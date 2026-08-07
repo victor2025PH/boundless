@@ -13,12 +13,16 @@ import { BRAND_FILM } from "@/lib/film";
 import { BOT_HANDLE, CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
 import {
   ACCESSORIES,
+  CAPABILITY_TIERS,
   HARDWARE,
   REMOTE_INSTALL,
   SHOWCASE_VIDEOS,
   TIERS,
   USDT_ADDR,
+  studioTier,
   tierPrice,
+  tierPriceLabel,
+  tierShortName,
   type Period,
 } from "@/lib/avatarhub-pricing";
 import {
@@ -371,6 +375,22 @@ export default function OrderPanel() {
 
         {/* ── 效果演示（真实引擎输出优先；未就绪的显示制作中占位） ── */}
         <ShowcaseGrid zh={zh} />
+
+        {/* ── 能力 → 档位对照：拿着产品名（幻影/幻声/通传…）来找价的人在这里对上号
+              （2026-08-07 实录工单「看不到幻影的价格」；数据源 CAPABILITY_TIERS 与
+              TIERS.feats 同步维护，档位名/价格全派生零手写） ── */}
+        <PricingTable
+          title={zh ? "我要的功能在哪个档？" : "Which tier has what I need?"}
+          subtitle={zh ? "按产品线找价格：能力包含在会员档位里，不单独计价" : "Find pricing by product line — capabilities ship inside membership tiers"}
+          head={zh ? ["我想要的能力", "产品线", "所在档位", "挂牌价 (USD)"] : ["Capability", "Product line", "Tier", "List price (USD)"]}
+          rows={CAPABILITY_TIERS.map((c) => {
+            const t = studioTier(c.tierKey);
+            const tierLabel = `${tierShortName(t, zh ? "zh" : "en")}${zh ? "起" : "+"}`;
+            const price = tierPriceLabel(t, zh ? "zh" : "en") + (c.note ? `（${zh ? c.note.zh : c.note.en}）` : "");
+            return [zh ? c.need.zh : c.need.en, zh ? c.product.zh : c.product.en, tierLabel, price];
+          })}
+          highlightCol={3}
+        />
 
         {/* ── 部署版本 × 最低配置（设备自备，我们协助部署） ── */}
         <PricingTable

@@ -124,7 +124,7 @@ export const KO_VOICE_UI: LandingUi = {
   moreFaqHref: "/en#faq",
   tgCta: "Telegram 1:1 상담",
   pricingLabel: "요금제 보기",
-  pricingHref: "/en#pricing",
+  pricingHref: "/en/order",
   langLabel: "EN",
   langHref: "/en/voice",
   clipLabels: ["중국어", "영어", "일본어", "한국어"],

@@ -30,12 +30,12 @@ export interface PriceOffer {
 }
 
 /** Real-time face & voice swap — private deployment.
+ *  ⚠ 2026-08-04 定价改版：官网对外不再展示私有部署固定价（realtime 版块与 engage 卡
+ *  已改「咨询报价」，与幻境 STUDIO 旗舰版口径一致）；本数组保留仅供台账/offer-map 反查
+ *  历史订单的 skuId 映射，不再进任何页面展示或 JSON-LD。改回挂牌需产品决策。
  *  报价币种已统一 USD（USDT 仅保留为结算方式表述）。skuId 对齐说明：
- *  realtime-basic ↔ registry `facex-live-deploy`（同为"实时换脸部署 980 / one-time"，
- *  registry 计 "from 980" 起价，差异只记录不改价）；realtime-creator ↔ registry
- *  `livex-creator-deploy`（2026-07-18 定价决议新增，5580 USD：基准栈 Synthesia Studio
- *  Avatar $1000/年 + ElevenLabs Pro ≈$1188/年 + HeyGen LiveAvatar ≈$588/年 ≈ $2776/年
- *  ×2=5552 → 尾数 8 惯例 5580）。详见 platform/licensing/SKU_ALIGNMENT_REPORT.md。 */
+ *  realtime-basic ↔ registry `facex-live-deploy`；realtime-creator ↔ registry
+ *  `livex-creator-deploy`。详见 platform/licensing/SKU_ALIGNMENT_REPORT.md。 */
 export const realtimeOffers: PriceOffer[] = [
   {
     id: "realtime-basic",
@@ -61,11 +61,11 @@ export const realtimeOffers: PriceOffer[] = [
   },
 ];
 
-/** Voice cloning & TTS (幻声 VoiceX) — 会员月付三档，public 直售。
- *  2026-07-18 治理收尾（SKU_ALIGNMENT_REPORT.md §4.2 建议落地）：价格/币种/周期
- *  取自 registry（voicex-starter 18 / voicex-std 78 / voicex-pro 198，USD/month）。
- *  registry 的 voicex-usage（10 USD / per-10k-chars）不挂牌：per-usage 单位超出
- *  PriceUnit 类型，扩类型需单独评审。 */
+/** Voice cloning & TTS (幻声 VoiceX) — ⚠ 2026-08-04 定价改版后**仅供台账反查**：
+ *  声音能力已并入幻境 STUDIO 五档会员（lib/avatarhub-pricing.ts::TIERS 为展示/JSON-LD
+ *  单一真相），本数组的 18/78/198 旧价不再进任何页面或结构化数据，保留只为
+ *  findOfferBySkuId 反查历史订单的 skuId 映射。改回挂牌需产品决策。
+ *  （历史口径：2026-07-18 治理收尾，价格取自 registry voicex-*，USD/month。） */
 export const voiceOffers: PriceOffer[] = [
   {
     id: "voice-starter",
@@ -96,10 +96,10 @@ export const voiceOffers: PriceOffer[] = [
   },
 ];
 
-/** Digital human (幻影 LiveX) — mixed 线中可公开挂牌的两个 SKU。
- *  2026-07-18 治理收尾（§4.2 落地）：livex-avatar-buy 798 one-time、
- *  livex-dub-matrix 398/month，价格取自 registry。同产品的 livex-avatar-sub
- *  （"from 198" 起价，非定值）与 livex-dub-min（per-min 计量单位）不挂牌。 */
+/** Digital human (幻影 LiveX) — ⚠ 2026-08-04 定价改版后**仅供台账反查**：
+ *  数字人能力已并入幻境 STUDIO 五档会员（展示/JSON-LD 由 avatarhub-pricing.TIERS 派生），
+ *  798 买断 / 398 月付旧价不再进任何页面展示，保留只为台账/offer-map 反查历史订单。
+ *  （历史口径：2026-07-18 治理收尾，价格取自 registry livex-*。） */
 export const livexOffers: PriceOffer[] = [
   {
     id: "livex-avatar-buy",

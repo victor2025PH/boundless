@@ -1,10 +1,10 @@
 // /console/leads：留资只读镜像 + 客户归并（viewer 隐藏）。日常跟进（改状态/回访）仍在 /admin。
 import Link from "next/link";
-import { listCustomers, listLeads } from "@/lib/ledger";
+import { listLeads } from "@/lib/ledger";
 import { getConsoleSessionUser } from "@/lib/console-auth";
 import { roleAtLeast } from "@/lib/console-users";
 import { getCustomerById } from "../data";
-import { AssignCustomerControl, type CustomerOption } from "../ui";
+import { AssignCustomerControl } from "../ui";
 import {
   Card,
   Code,
@@ -50,11 +50,6 @@ export default function LeadsPage({
   const testCount = showTest
     ? total - listLeads({ status, q, limit: 1 }).total
     : listLeads({ status, q, limit: 1, includeTest: true }).total - total;
-
-  const customerOptions: CustomerOption[] = listCustomers({ limit: 500 }).rows.map((c) => ({
-    id: c.id,
-    label: `${c.display_name || "（未命名）"}${c.primary_contact ? ` · ${c.primary_contact}` : ""}`,
-  }));
 
   const nameById = new Map<string, string | null>();
   for (const l of rows) {
@@ -130,7 +125,7 @@ export default function LeadsPage({
         <Card className="p-0">
           <DataTable head={["来源键", "称呼", "联系方式", "意向", "来源", "状态", "次数", "最近活跃", "关联客户"]}>
             {rows.map((l) => (
-              <tr key={l.source_key} className="hover:bg-slate-800/40">
+              <tr key={l.source_key} className="hover:bg-ink-700/40">
                 <Td>
                   <span className="font-mono text-xs text-slate-200">{l.source_key}</span>
                   {l.is_test === 1 && <TestBadge className="ml-2 align-middle" />}
@@ -150,9 +145,12 @@ export default function LeadsPage({
                 <Td className="text-xs text-slate-500">{fmtDateTime(l.last_seen)}</Td>
                 <Td>
                   {l.customer_id ? (
-                    <CustomerLink customerId={l.customer_id} label={nameById.get(l.customer_id)} />
+                    <span className="inline-flex items-center gap-1.5">
+                      <CustomerLink customerId={l.customer_id} label={nameById.get(l.customer_id)} />
+                      {canWrite && <AssignCustomerControl entity="lead" entityKey={l.source_key} assigned />}
+                    </span>
                   ) : canWrite ? (
-                    <AssignCustomerControl entity="lead" entityKey={l.source_key} customers={customerOptions} />
+                    <AssignCustomerControl entity="lead" entityKey={l.source_key} />
                   ) : (
                     <span className="text-xs text-slate-600">未归属</span>
                   )}

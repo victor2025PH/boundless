@@ -18,7 +18,8 @@ export type LandingNavFocus = LandingKey | "growth";
 const LANDING_PRODUCT: Record<LandingNavFocus, ProductKey[]> = {
   voice: ["voicex"],
   face: ["facex", "livex"],
-  interpreting: ["lingox", "voxx"],
+  // 通译并入智聊后 /interpreting 仅通传一轨（聊天翻译指路卡跳智聊落地页）
+  interpreting: ["voxx"],
   growth: ["reachx", "chatx"],
   // fatex 在 PUBLIC_LIST_HIDDEN 内：/fate 页正常渲染家族导航，但幻缘 chip 本身
   // 不出现在互链条（含本页）——刻意保持「不进销售陈列位」现状，本页无高亮属预期。

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useLang } from "./LanguageContext";
 import BrandMark from "./BrandMark";
 import { BRAND } from "@/lib/brand";
+import { NAV_PRICING, navLabel } from "@/lib/nav";
 
 export default function Footer() {
   const { t, lang } = useLang();
@@ -11,18 +12,18 @@ export default function Footer() {
   const zh = lang === "zh";
   // 锚点带上首页前缀：Footer 也出现在 /voice 等落地页，纯 #hash 在那里会失效
   const home = zh ? "/" : "/en";
-  // 主导航（标签来自 content.ts footer.links，顺序固定）：#showcase/#about section
-  // 已随首页收敛下线，改指仍存在的 #products/#pricing/#contact 与品牌故事页。
+  // 主导航：价格项与顶栏/粘性条同源（lib/nav.ts，「看价格」→ /order），其余标签仍取
+  // content.ts footer.links；#showcase/#about/#pricing section 已随首页收敛下线。
   const mainLinks = [
     { href: `${home}#products`, label: t.footer.links[0] },
-    { href: `${home}#pricing`, label: t.footer.links[1] },
+    { href: zh ? NAV_PRICING.path! : `/en${NAV_PRICING.path!}`, label: navLabel(NAV_PRICING, lang) },
     { href: zh ? "/brand" : "/en/brand", label: t.footer.links[2] },
     { href: `${home}#contact`, label: t.footer.links[3] },
   ];
   // 合规隔离（lib/isolation.ts）：gated 线（幻颜/智控的落地页）不出现在页脚，页面仅供直达。
   const landingLinks = [
     { href: zh ? "/voice" : "/en/voice", label: zh ? "幻声 · 声音克隆" : "VoiceX · Voice cloning" },
-    { href: zh ? "/interpreting" : "/en/interpreting", label: zh ? "通译 · 克隆音同传" : "LingoX · Interpreting" },
+    { href: zh ? "/interpreting" : "/en/interpreting", label: zh ? "通传 · 克隆音同传" : "VoxX · Interpreting" },
     { href: zh ? "/download" : "/en/download", label: zh ? "下载客户端" : "Download client" },
     { href: zh ? "/manual" : "/en/manual", label: zh ? "使用手册" : "User manual" },
     { href: zh ? "/order" : "/en/order", label: zh ? "购买与下单" : "Plans & ordering" },

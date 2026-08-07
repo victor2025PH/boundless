@@ -1,7 +1,7 @@
 /**
  * 智聊 ChatX 桌面客户端下载页内容单一数据源（/download/chatx 与 /en/download/chatx 共用）。
  *
- * 与 AvatarHub（manualContent.ts）/ 智控（matrixxContent.ts）刻意分离：三个客户端的
+ * 与幻境 STUDIO（manualContent.ts，原 AvatarHub）/ 智控（matrixxContent.ts）刻意分离：三个客户端的
  * 上手卡点完全不同——ChatX 是「聚合 AI 聊天工作台」桌面形态：不需要显卡（AI 推理走
  * 云端/内网服务），最大卡点是首启初始化（内嵌本地服务解包）与未签名安装包的
  * SmartScreen 提示，本页重点覆盖这两处。

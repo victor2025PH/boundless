@@ -9,8 +9,13 @@ import { listPersonas } from "@/lib/personas";
 import { getConsoleSessionUser } from "@/lib/console-auth";
 import { roleAtLeast } from "@/lib/console-users";
 import { getCustomerById, listAuditForCustomer, listIdentitiesByCustomer } from "../../data";
-import { AttachIdentityForm } from "../../ui";
-import { OpportunityActions, OpportunityLogBadge } from "../../opportunities-ui";
+import {
+  AttachIdentityForm,
+  DetachIdentityButton,
+  EditCustomerForm,
+  OpportunityActions,
+  OpportunityLogBadge,
+} from "../../ui";
 import {
   Card,
   DataTable,
@@ -56,9 +61,19 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
   const opportunities = listOpportunities({ customerId: customer.id, limit: 50 });
   const audit = listAuditForCustomer(customer.id);
 
-  const paidTotal = orders
-    .filter((o) => o.status === "paid" || o.status === "activated")
-    .reduce((sum, o) => sum + (o.pay_amount ?? o.amount ?? 0), 0);
+  // 成交额按币种分组（挂牌 USD / 结算 USDT 并存，直接求和会把不同币种混在一起）
+  const paidByCurrency = new Map<string, number>();
+  for (const o of orders) {
+    if (o.status !== "paid" && o.status !== "activated") continue;
+    const cur = o.currency ?? "";
+    paidByCurrency.set(cur, (paidByCurrency.get(cur) ?? 0) + (o.pay_amount ?? o.amount ?? 0));
+  }
+  const paidTotalText = paidByCurrency.size
+    ? [...paidByCurrency.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([cur, amt]) => `${Math.round(amt * 100) / 100} ${cur || "(未标币种)"}`)
+        .join(" + ")
+    : "0";
 
   const info: [string, React.ReactNode][] = [
     ["客户 ID", <span key="id" className="font-mono text-xs text-slate-300">{customer.id}</span>],
@@ -87,7 +102,7 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
           </h1>
           <div className="flex gap-4 text-xs text-slate-400">
             <span>
-              成交额 <b className="text-amber-300">{paidTotal ? paidTotal.toFixed(2) : "0"}</b>
+              成交额 <b className="text-amber-300">{paidTotalText}</b>
             </span>
             <span>
               订单 <b className="text-slate-200">{orders.length}</b>
@@ -117,7 +132,19 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
             ))}
           </dl>
           {customer.notes && (
-            <p className="mt-3 rounded-lg bg-slate-800/60 p-3 text-xs leading-relaxed text-slate-300">{customer.notes}</p>
+            <p className="mt-3 rounded-lg bg-ink-700/60 p-3 text-xs leading-relaxed text-slate-300">{customer.notes}</p>
+          )}
+          {canWrite && (
+            <div className="mt-3">
+              <EditCustomerForm
+                customerId={customer.id}
+                initial={{
+                  display_name: customer.display_name,
+                  primary_contact: customer.primary_contact,
+                  notes: customer.notes,
+                }}
+              />
+            </div>
           )}
         </Card>
 
@@ -139,6 +166,11 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
                   </span>
                   <span className="break-all font-mono text-xs text-slate-200">{it.value}</span>
                   <span className="ml-auto shrink-0 text-[11px] text-slate-600">{fmtDateTime(it.created_at)}</span>
+                  {canWrite && (
+                    <span className="shrink-0">
+                      <DetachIdentityButton customerId={customer.id} identityId={it.id} />
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>
@@ -161,7 +193,7 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
         ) : (
           <DataTable head={["来源单号", "产品 / 方案", "金额", "状态", "联系方式", "创建时间"]}>
             {orders.map((o) => (
-              <tr key={o.id} className="hover:bg-slate-800/40">
+              <tr key={o.id} className="hover:bg-ink-700/40">
                 <Td className="font-mono text-xs text-slate-300">
                   {o.source_key}
                   {o.is_test === 1 && <TestBadge className="ml-1.5" />}
@@ -191,7 +223,7 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
         ) : (
           <DataTable head={["系统", "授权号", "产品 / 方案", "席位", "到期", "状态"]}>
             {licenses.map((l) => (
-              <tr key={l.id} className="hover:bg-slate-800/40">
+              <tr key={l.id} className="hover:bg-ink-700/40">
                 <Td>
                   <SystemBadge system={l.source_system} />
                 </Td>
@@ -223,7 +255,7 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
         ) : (
           <DataTable head={["人设", "来源", "槽位", "状态", "创建时间", ""]}>
             {personas.map((p) => (
-              <tr key={p.id} className="hover:bg-slate-800/40">
+              <tr key={p.id} className="hover:bg-ink-700/40">
                 <Td>
                   <Link href={`/console/personas/${p.id}`} className="text-xs font-medium text-amber-300 hover:underline">
                     {p.display_name || "（未命名）"}
@@ -270,7 +302,7 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
           <>
             <DataTable head={["类型", "从 → 到", "理由", "信号值", "跟进"]}>
               {opportunities.map((o) => (
-                <tr key={o.oppKey} className="hover:bg-slate-800/40">
+                <tr key={o.oppKey} className="hover:bg-ink-700/40">
                   <Td>
                     <OpportunityKindBadge kind={o.kind} />
                   </Td>
@@ -318,7 +350,7 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
         ) : (
           <DataTable head={["来源键", "称呼", "联系方式", "意向", "状态", "最近活跃"]}>
             {leads.map((l) => (
-              <tr key={l.source_key} className="hover:bg-slate-800/40">
+              <tr key={l.source_key} className="hover:bg-ink-700/40">
                 <Td className="font-mono text-xs text-slate-300">
                   {l.source_key}
                   {l.is_test === 1 && <TestBadge className="ml-1.5" />}
@@ -351,7 +383,7 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
             {audit.map((a) => (
               <li key={a.id} className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5 text-xs">
                 <span className="shrink-0 font-mono text-slate-600">{fmtDateTime(a.ts)}</span>
-                <span className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-amber-300/80">
+                <span className="shrink-0 rounded bg-ink-700 px-1.5 py-0.5 font-mono text-[10px] text-amber-300/80">
                   {a.actor ?? "system"}
                 </span>
                 <span className="shrink-0 font-medium text-slate-200">{a.action}</span>

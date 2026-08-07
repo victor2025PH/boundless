@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { MessagesSquare, Headphones, ArrowRight, Check } from "lucide-react";
 import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
-import { BRAND } from "@/lib/brand";
+import { BRAND, type ProductKey } from "@/lib/brand";
 import ProductIcon from "./ProductIcon";
 import { track } from "@/lib/track";
 import { TranslateDemoPanel } from "./TranslateDemo";
@@ -12,24 +12,40 @@ import GlossaryLockDemo from "./GlossaryLockDemo";
 
 type Track = "chat" | "interpret";
 
+// 2026-08-04 通译并入智聊：本页从「通译/通传双产品」改为「通传主轨 + 聊天翻译（智聊内置）指路」。
+// 旧深链 #chat/#lingox/#tongyi 仍然可达（readHash 兼容），落到聊天翻译能力段。
 const COPY = {
   zh: {
-    kicker: "通达系 · 两条语言产品",
+    kicker: "通达系 · 语言之界",
     head: "同一语言之界，两种场景解法",
-    sub: "通译做跨境聊天互译，通传做会议/直播同声传译——别再把它们当成同一个产品。",
+    sub: "会议 / 直播同声传译，交给通传 VoxX；跨境聊天互译，已内置在智聊 ChatX 里——一个客户端，翻译与成交一起搞定。",
+    chatTitle: "聊天翻译",
+    chatTag: "已内置于智聊 ChatX",
+    chatDesc: "多平台文字 + 语音双向实时翻译、术语锁定、翻译记忆——随智聊客户端开箱即用，不再需要单独安装。",
     chatCta: "看聊天翻译能力",
     interpretCta: "看同传样片",
     chatPoints: ["多平台文字 + 语音双向互译", "术语表锁定专有名词", "统一收件箱沉淀客户资产"],
     interpretPoints: ["克隆音双向同传", "OBS 实时双语字幕", "抢话打断 · SRT 导出"],
+    mergeNote: "📌 通译 LingoX 已与智聊 ChatX 合并为同一个程序：无独立通译安装包，下载智聊即可；通译授权在智聊会员中心激活，原授权继续有效。",
+    mergeCta: "下载智聊 ChatX →",
+    chatTrackKicker: "智聊 ChatX · 内置聊天翻译",
+    chatTrackDesc: "多平台文字 + 语音双向实时翻译，术语表锁定专有名词、翻译记忆省成本，统一收件箱沉淀客户资产——不会外语的团队也能即时跟全球客户对话。",
   },
   en: {
-    kicker: "Lingo family · two language products",
-    head: "One language barrier, two scene-fit products",
-    sub: "LingoX for cross-border chat translation; VoxX for meeting / live interpreting — not the same product under two names.",
+    kicker: "Lingo family · the language barrier",
+    head: "One language barrier, two scene-fit answers",
+    sub: "Meeting / live-stream interpreting is VoxX; cross-border chat translation ships inside ChatX — one client for translation and closing.",
+    chatTitle: "Chat translation",
+    chatTag: "Built into ChatX",
+    chatDesc: "Two-way real-time text + voice translation across platforms with glossary lock and translation memory — ready out of the box inside the ChatX client, no separate install.",
     chatCta: "Chat translation",
     interpretCta: "Hear interpreting",
     chatPoints: ["Text + voice, both directions", "Glossary-locked terms", "Unified inbox & customer assets"],
     interpretPoints: ["Cloned-voice two-way interpret", "OBS live bilingual subs", "Barge-in · SRT export"],
+    mergeNote: "📌 LingoX is merged into ChatX — one single program: no separate LingoX installer; download ChatX. LingoX licenses activate in ChatX membership; existing licenses remain valid.",
+    mergeCta: "Download ChatX →",
+    chatTrackKicker: "ChatX · built-in chat translation",
+    chatTrackDesc: "Two-way real-time text + voice translation across platforms, glossary-locked terms, cost-saving translation memory and a unified inbox — teams close global deals without speaking the language.",
   },
 } as const;
 
@@ -71,29 +87,42 @@ export default function LingoDualPath() {
     }
     const el = document.getElementById(which === "chat" ? "chat" : "demo");
     el?.scrollIntoView({ behavior: "smooth", block: "start" });
-    track("product_click", { key: which === "chat" ? "lingox" : "voxx", where: "lingo_dual" });
+    track("product_click", { key: which === "chat" ? "chatx_translate" : "voxx", where: "lingo_dual" });
   };
 
+  const voxx = BRAND.products.voxx;
   const cards: {
     id: Track;
-    key: "lingox" | "voxx";
+    iconKey: ProductKey;
     icon: typeof MessagesSquare;
+    title: string;
+    subtitle: string;
+    tag: string;
+    desc: string;
     points: readonly string[];
     cta: string;
   }[] = [
     {
-      id: "chat",
-      key: "lingox",
-      icon: MessagesSquare,
-      points: c.chatPoints,
-      cta: c.chatCta,
-    },
-    {
       id: "interpret",
-      key: "voxx",
+      iconKey: "voxx",
       icon: Headphones,
+      title: voxx.zh,
+      subtitle: voxx.en,
+      tag: voxx.scene[lang],
+      desc: voxx.desc[lang],
       points: c.interpretPoints,
       cta: c.interpretCta,
+    },
+    {
+      id: "chat",
+      iconKey: "chatx",
+      icon: MessagesSquare,
+      title: c.chatTitle,
+      subtitle: "ChatX",
+      tag: c.chatTag,
+      desc: c.chatDesc,
+      points: c.chatPoints,
+      cta: c.chatCta,
     },
   ];
 
@@ -107,7 +136,6 @@ export default function LingoDualPath() {
 
       <div className="mt-7 grid gap-4 md:grid-cols-2">
         {cards.map((card, i) => {
-          const p = BRAND.products[card.key];
           const Icon = card.icon;
           const on = active === card.id;
           return (
@@ -124,17 +152,17 @@ export default function LingoDualPath() {
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3">
                     <ProductIcon
-                      product={card.key}
+                      product={card.iconKey}
                       size={48}
-                      alt={`${p.zh} ${p.en}`}
+                      alt={`${card.title} ${card.subtitle}`}
                       className="h-12 w-12 object-contain"
                     />
                     <div>
                       <div className="flex items-baseline gap-2">
-                        <span className="text-lg font-bold text-white">{p.zh}</span>
-                        <span className="text-sm font-semibold text-amber-300">{p.en}</span>
+                        <span className="text-lg font-bold text-white">{card.title}</span>
+                        <span className="text-sm font-semibold text-amber-300">{card.subtitle}</span>
                       </div>
-                      <p className="mt-0.5 text-xs text-slate-500">{p.scene[lang]}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">{card.tag}</p>
                     </div>
                   </div>
                   <span
@@ -146,7 +174,7 @@ export default function LingoDualPath() {
                   </span>
                 </div>
 
-                <p className="mt-3 text-sm leading-relaxed text-slate-300">{p.desc[lang]}</p>
+                <p className="mt-3 text-sm leading-relaxed text-slate-300">{card.desc}</p>
 
                 <ul className="mt-4 space-y-1.5">
                   {card.points.map((pt) => (
@@ -170,10 +198,10 @@ export default function LingoDualPath() {
   );
 }
 
-/** 通译（聊天翻译）能力段——静态对话样片 + 可交互翻译面板，与同传音频样片对等。 */
+/** 聊天翻译能力段（原通译，2026-08-04 起为智聊内置能力）——静态对话样片 + 可交互翻译面板，与同传音频样片对等。 */
 export function LingoChatTrack() {
   const { lang } = useLang();
-  const p = BRAND.products.lingox;
+  const c = COPY[lang];
   const items =
     lang === "zh"
       ? [
@@ -206,13 +234,20 @@ export function LingoChatTrack() {
     <section id="chat" className="scroll-mt-24 border-y border-white/5 bg-white/[0.015] px-5 py-16">
       <div className="mx-auto max-w-5xl">
         <Reveal className="text-center">
-          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-amber-300">
-            {p.zh} {p.en} · {p.scene[lang]}
-          </p>
+          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-amber-300">{c.chatTrackKicker}</p>
           <h2 className="mt-2 text-2xl font-bold text-white md:text-3xl">
             {lang === "zh" ? "跨境聊天翻译 · 从对话到客户资产" : "Cross-border chat translation → customer assets"}
           </h2>
-          <p className="mx-auto mt-2 max-w-2xl text-sm text-slate-400">{p.desc[lang]}</p>
+          <p className="mx-auto mt-2 max-w-2xl text-sm text-slate-400">{c.chatTrackDesc}</p>
+          <div className="mx-auto mt-4 max-w-2xl rounded-2xl border border-amber-400/30 bg-amber-400/[0.06] px-4 py-3 text-left text-sm leading-relaxed text-slate-300">
+            {c.mergeNote}{" "}
+            <a
+              href={lang === "zh" ? "/download/chatx" : "/en/download/chatx"}
+              className="text-neon-cyan hover:underline"
+            >
+              {c.mergeCta}
+            </a>
+          </div>
         </Reveal>
 
         <div className="mt-9 grid gap-4 sm:grid-cols-3">

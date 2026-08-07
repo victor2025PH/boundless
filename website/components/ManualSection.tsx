@@ -12,7 +12,7 @@ import { CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
 import { track } from "@/lib/track";
 
 /**
- * AvatarHub 在线产品手册（/manual 与 /en/manual 共用）。
+ * 幻境 STUDIO（原 AvatarHub）在线产品手册（/manual 与 /en/manual 共用）。
  * 左侧章节目录（滚动联动高亮），右侧正文；「打印 / 导出 PDF」走浏览器打印，
  * 配合 globals.css 的 @media print 输出白底可读的 PDF。
  */
@@ -58,7 +58,7 @@ export default function ManualSection() {
                 {zh ? `适用版本 v${LATEST_VERSION} · 持续更新` : `For v${LATEST_VERSION} · continuously updated`}
               </span>
               <h1 className="mt-4 text-3xl font-bold text-white md:text-5xl">
-                {zh ? "AvatarHub 使用手册" : "AvatarHub User Manual"}
+                {zh ? "幻境 STUDIO 使用手册" : "STUDIO User Manual"}
               </h1>
               <p className="mt-3 max-w-2xl text-slate-400">
                 {zh

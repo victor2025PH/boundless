@@ -13,11 +13,11 @@ const LANGUAGES = { "zh-CN": "/download", en: "/en/download", "x-default": "/dow
 export const metadata: Metadata = {
   title: "Download Center · BOUNDLESS",
   description:
-    "Every desktop client in one place: ChatX, the omni-channel AI chat workspace, and AvatarHub, the real-time digital human engine (voice cloning, live face swap, streaming, interpreting). Windows installers, SHA-256 verifiable, local-first.",
+    "Every desktop client in one place: ChatX, the omni-channel AI chat workspace (LingoX translation built in), and STUDIO, the real-time digital human engine (AI image gen, photo/video face swap, live swap, voice changer, interpreting). Windows installers, SHA-256 verifiable, local-first.",
   alternates: { canonical: "/en/download", languages: LANGUAGES },
   openGraph: {
     title: "Download Center · BOUNDLESS",
-    description: "All desktop clients in one place: ChatX and AvatarHub. Windows available now.",
+    description: "All desktop clients in one place: ChatX and STUDIO. Windows available now.",
     url: `${SITE_URL}/en/download`,
   },
 };
@@ -25,11 +25,12 @@ export const metadata: Metadata = {
 const appLd = {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
-  name: "AvatarHub",
+  name: "STUDIO",
+  alternateName: "幻境STUDIO",
   applicationCategory: "MultimediaApplication",
   operatingSystem: "Windows 10/11, macOS 12+",
   softwareVersion: LATEST_VERSION,
-  offers: { "@type": "Offer", price: "0", priceCurrency: "USD", description: "14-day free trial" },
+  offers: { "@type": "Offer", price: "0", priceCurrency: "USD", description: "Free plan: face swap with compliance watermark" },
   publisher: { "@type": "Organization", name: "BOUNDLESS", url: SITE_URL },
 };
 
@@ -37,7 +38,7 @@ const appLd = {
 const howToLd = {
   "@context": "https://schema.org",
   "@type": "HowTo",
-  name: "AvatarHub client installation guide",
+  name: "STUDIO client installation guide",
   description: "From download to verified install in about 10–30 minutes, zero command line.",
   totalTime: "PT30M",
   step: INSTALL_GUIDE.steps.map((s, i) => ({

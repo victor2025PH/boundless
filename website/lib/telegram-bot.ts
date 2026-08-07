@@ -503,8 +503,7 @@ export async function setupBot(opts?: { skipWebhook?: boolean }) {
       "🎭 幻颜 FaceX：AI 换脸\n" +
       "🎙 幻声 VoiceX：AI 声音克隆\n" +
       "🎬 幻影 LiveX：实时直播换脸换声\n" +
-      "🌐 通译 LingoX：实时换语言互译\n" +
-      "💬 智聊 ChatX：AI 自动成交聊天\n" +
+      "💬 智聊 ChatX：AI 自动成交聊天 · 内置实时互译\n" +
       "🔐 无界底座：自主可控私有部署，数据不出网\n\n" +
       "全程 USDT 结算。点 /start 打开菜单，或直接发消息问我。",
   });
@@ -514,8 +513,7 @@ export async function setupBot(opts?: { skipWebhook?: boolean }) {
       "🎭 FaceX: AI face swap\n" +
       "🎙 VoiceX: AI voice cloning\n" +
       "🎬 LiveX: real-time live face & voice swap\n" +
-      "🌐 LingoX: real-time language translation\n" +
-      "💬 ChatX: AI auto-closing chat\n" +
+      "💬 ChatX: AI auto-closing chat · built-in live translation\n" +
       "🔐 BOUNDLESS Engine: self-controlled private deployment, data stays off-net\n\n" +
       "Settled in USDT. Tap /start for the menu, or just message me.",
     language_code: "en",

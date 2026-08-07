@@ -20,15 +20,15 @@ export default function ClientAppCTA() {
           <div className="glass overflow-hidden rounded-3xl border border-neon-cyan/20 px-8 py-10 text-center md:px-14">
             <span className="inline-flex items-center gap-1.5 rounded-full border border-neon-cyan/30 bg-neon-cyan/10 px-3 py-1 text-xs text-neon-cyan">
               <Sparkles className="h-3.5 w-3.5" />
-              {zh ? "AvatarHub 客户端 · 14 天免费试用" : "AvatarHub client · 14-day free trial"}
+              {zh ? "幻境 STUDIO 客户端 · 免费换脸" : "STUDIO client · free face swap"}
             </span>
             <h2 className="mt-4 text-2xl font-bold text-white md:text-3xl">
               {zh ? "下载客户端，本地跑通你的第一个数字人" : "Download the client and run your first digital human locally"}
             </h2>
             <p className="mx-auto mt-3 max-w-2xl text-sm text-slate-400">
               {zh
-                ? `声音克隆 · 实时换脸 · 数字人直播 · 克隆音同传，全部本地部署数据不出机房。会员 ${from} USD/月起，年付送 2 个月 + 首年 8 折。`
-                : `Voice cloning, live face swap, digital-human streaming and interpreting — all local, data on-prem. Plans from ${from} USD/mo; annual gets 2 months free + 20% off year one.`}
+                ? `AI 作图 · 图片 / 视频换脸 · 直播换脸 · 变声器 · 克隆音同传，全部本地部署数据不出机房。免费版即可换脸（带水印），会员 ${from} USD/月起，支持月付 / 季付 / 年付。`
+                : `AI image gen, photo/video face swap, live face swap, voice changer and interpreting — all local, data on-prem. Face swap is free (watermarked); plans from ${from} USD/mo with monthly, quarterly or annual billing.`}
             </p>
             <div className="mt-7 flex flex-wrap items-center justify-center gap-4">
               <a

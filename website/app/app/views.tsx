@@ -8,7 +8,7 @@ import { BRAND, FAMILY_PITCH, PRODUCT_ORDER, productLineItems } from "@/lib/bran
 import ProductIcon from "@/components/ProductIcon";
 import { PRODUCT_VIEW, type View } from "./routing";
 
-// 视觉系（liveavatar view）= 幻颜/幻声/幻影；沟通系（soulsync view）= 智拓/智聊/通译/通传。
+// 视觉系（liveavatar view）= 幻颜/幻声/幻影；沟通系（soulsync view）= 智聊/智拓/通传（通译已并入智聊）。
 // 各产品对应的 content.solutions SKU id 收口在 brand.ts::products[].skuIds，这里按 view 派生，
 // 不再散落硬编码 id 列表（改产品↔SKU 映射只动 brand.ts 一处）。
 const skuByView = (v: View): string[] =>
@@ -267,7 +267,7 @@ export function SoulSyncView({ t, zh, onContact }: { t: Dict; zh: boolean; onCon
     <div>
       <SectionTitle
         icon="💬"
-        title={zh ? "智能沟通 · 智拓 / 智聊 / 通译 / 通传" : "Comms · ReachX / ChatX / LingoX / VoxX"}
+        title={zh ? "智能沟通 · 智聊 / 智拓 / 通传" : "Comms · ChatX / ReachX / VoxX"}
         sub={t.autochat.subtitle}
       />
       <ChatTheater t={t} />
@@ -301,8 +301,8 @@ export function SoulSyncView({ t, zh, onContact }: { t: Dict; zh: boolean; onCon
 
       <SectionTitle icon="🌐" title={zh ? "已聚合平台" : "Platforms unified"} />
       <div className="flex flex-wrap gap-1.5">
-        {t.trust.platforms.map((p) => (
-          <span key={p} className="rounded-lg border border-slate-700 bg-slate-900/60 px-2.5 py-1 text-[11px] text-slate-300">{p}</span>
+        {t.trust.platformsLive.map((p) => (
+          <span key={p.name} className="rounded-lg border border-slate-700 bg-slate-900/60 px-2.5 py-1 text-[11px] text-slate-300">{p.label ?? p.name}</span>
         ))}
       </div>
 

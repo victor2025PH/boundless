@@ -11,14 +11,14 @@ import { CLIENT_APPS } from "@/lib/downloads";
 export const metadata: Metadata = {
   title: "下载中心 · 无界科技 BOUNDLESS",
   description:
-    "一处下载全部桌面客户端：智聊 ChatX 聚合 AI 聊天工作台、AvatarHub 实时数字人引擎（声音克隆 / 实时换脸 / 数字人直播 / 克隆音同传）。Windows 安装包 SHA-256 可校验，本地部署数据不出机。",
+    "一处下载全部桌面客户端：智聊 ChatX 聚合 AI 聊天工作台（内置通译翻译）、幻境 STUDIO 实时数字人引擎（AI 作图 / 图片视频换脸 / 直播换脸 / 变声器 / 克隆音同传）。Windows 安装包 SHA-256 可校验，本地部署数据不出机。",
   alternates: {
     canonical: "/download",
     languages: { "zh-CN": "/download", en: "/en/download", "x-default": "/download" },
   },
   openGraph: {
     title: "下载中心 · 无界科技 BOUNDLESS",
-    description: "全部桌面客户端一处下载：智聊 ChatX、AvatarHub 实时数字人引擎。Windows 已上线。",
+    description: "全部桌面客户端一处下载：智聊 ChatX、幻境 STUDIO 实时数字人引擎。Windows 已上线。",
     url: `${SITE_URL}/download`,
   },
 };
@@ -26,11 +26,12 @@ export const metadata: Metadata = {
 const appLd = {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
-  name: "AvatarHub",
+  name: "幻境 STUDIO ",
+  alternateName: "幻境STUDIO",
   applicationCategory: "MultimediaApplication",
   operatingSystem: "Windows 10/11, macOS 12+",
   softwareVersion: LATEST_VERSION,
-  offers: { "@type": "Offer", price: "0", priceCurrency: "USD", description: "14 天免费试用" },
+  offers: { "@type": "Offer", price: "0", priceCurrency: "USD", description: "免费版：换脸免费用，输出带合规水印" },
   publisher: { "@type": "Organization", name: "无界科技 BOUNDLESS", url: SITE_URL },
 };
 
@@ -38,7 +39,7 @@ const appLd = {
 const howToLd = {
   "@context": "https://schema.org",
   "@type": "HowTo",
-  name: "AvatarHub 客户端安装教程",
+  name: "幻境 STUDIO 客户端安装教程",
   description: "从下载安装包到验证安装的完整流程，约 10–30 分钟，零命令行。",
   totalTime: "PT30M",
   step: INSTALL_GUIDE.steps.map((s, i) => ({

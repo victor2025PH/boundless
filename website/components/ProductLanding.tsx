@@ -24,6 +24,7 @@ import LingoDualPath, { LingoChatTrack } from "./LingoDualPath";
 import StudioDualPath from "./StudioDualPath";
 import LandingFamilyNav from "./LandingFamilyNav";
 import { LANDINGS, LANDING_MEDIA, type LandingKey, type LandingDict } from "@/lib/landingContent";
+import { BRAND_FILM } from "@/lib/film";
 import { BRAND } from "@/lib/brand";
 import { CONTACT_URL, localePath } from "@/lib/site";
 import { track } from "@/lib/track";
@@ -245,6 +246,22 @@ function DemoBlock({ product, L, clipLabels }: { product: LandingKey; L: Landing
           </div>
         )}
       </Reveal>
+
+      {/* 品牌片章节深链：从产品演示直达片中对应那一幕（?t= 由 FilmPlayer 定位） */}
+      {BRAND_FILM.productChapter[product] && (
+        <Reveal delay={0.12} className="mt-6 text-center">
+          <Link
+            href={localePath(lang, `/film?t=${BRAND_FILM.productChapter[product].t[lang]}`)}
+            onClick={() => track("film_chip_click", { product, lang })}
+            className="inline-flex items-center gap-2 rounded-full border border-emerald-300/30 px-4 py-2 text-xs font-medium text-emerald-300 transition hover:border-emerald-300/60 hover:bg-emerald-300/5"
+          >
+            <PlayCircle className="h-4 w-4" />
+            {lang === "zh"
+              ? `在 3 分钟品牌片里看这一幕 · ${BRAND_FILM.productChapter[product].label.zh}`
+              : `See it in the film · ${BRAND_FILM.productChapter[product].label.en}`}
+          </Link>
+        </Reveal>
+      )}
     </div>
   );
 }
@@ -346,7 +363,7 @@ export default function ProductLanding({ product, content, ui }: LandingProps) {
         {product === "interpreting" && <LingoDualPath />}
         {product === "face" && !ui && <StudioDualPath />}
 
-        {/* 非通达页：demo 紧跟 hero；通达页 demo 挪到聊天轨之后，避免选「通译」时先撞上同传样片 */}
+        {/* 非通达页：demo 紧跟 hero；通达页 demo 挪到聊天轨之后，避免选「聊天翻译」时先撞上同传样片 */}
         {product !== "interpreting" && (
           <div id="demo" className="scroll-mt-24">
             <DemoBlock product={product} L={L} clipLabels={ui?.clipLabels} />
@@ -479,7 +496,7 @@ export default function ProductLanding({ product, content, ui }: LandingProps) {
               </a>
               {/* 幻缘无对外 SKU（详批付费未开闸）：不给「套餐与价格」入口，改回首页看其他产品线 */}
               <Link
-                href={ui ? ui.pricingHref : product === "fate" ? localePath(lang, "/") : localePath(lang, "/#pricing")}
+                href={ui ? ui.pricingHref : product === "fate" ? localePath(lang, "/") : localePath(lang, "/order")}
                 className="inline-flex items-center gap-2 rounded-full border border-white/15 px-7 py-3 font-medium text-slate-200 transition hover:border-neon-cyan/50 hover:text-white"
               >
                 {ui

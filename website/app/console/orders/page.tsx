@@ -1,10 +1,10 @@
-// /console/orders：订单台账 —— 状态/关键词筛选 + 未归属行内「归属客户」操作（viewer 隐藏）。
+// /console/orders：订单台账 —— 状态/关键词筛选 + 行内「归属客户 / 改绑 / 解绑」（viewer 隐藏）。
 import Link from "next/link";
-import { listCustomers, listOrders } from "@/lib/ledger";
+import { listOrders } from "@/lib/ledger";
 import { getConsoleSessionUser } from "@/lib/console-auth";
 import { roleAtLeast } from "@/lib/console-users";
 import { getCustomerById } from "../data";
-import { AssignCustomerControl, type CustomerOption } from "../ui";
+import { AssignCustomerControl } from "../ui";
 import {
   Card,
   Code,
@@ -52,12 +52,6 @@ export default function OrdersPage({
   const testCount = showTest
     ? total - listOrders({ status, q, limit: 1 }).total
     : listOrders({ status, q, limit: 1, includeTest: true }).total - total;
-
-  // 归属下拉的候选客户（最多 500 位，超出后建议先用搜索建档再归属）
-  const customerOptions: CustomerOption[] = listCustomers({ limit: 500 }).rows.map((c) => ({
-    id: c.id,
-    label: `${c.display_name || "（未命名）"}${c.primary_contact ? ` · ${c.primary_contact}` : ""}`,
-  }));
 
   // 已归属行的客户显示名（仅查本页出现的 id，最多 50 次主键查询）
   const nameById = new Map<string, string | null>();
@@ -126,7 +120,7 @@ export default function OrdersPage({
         <Card className="p-0">
           <DataTable head={["来源单号", "产品 / 方案", "金额", "状态", "联系方式", "创建时间", "关联客户"]}>
             {rows.map((o) => (
-              <tr key={o.id} className="hover:bg-slate-800/40">
+              <tr key={o.id} className="hover:bg-ink-700/40">
                 <Td>
                   <span className="font-mono text-xs text-slate-200">{o.source_key}</span>
                   {o.is_test === 1 && <TestBadge className="ml-2 align-middle" />}
@@ -144,9 +138,12 @@ export default function OrdersPage({
                 <Td className="text-xs text-slate-500">{fmtDateTime(o.created_at)}</Td>
                 <Td>
                   {o.customer_id ? (
-                    <CustomerLink customerId={o.customer_id} label={nameById.get(o.customer_id)} />
+                    <span className="inline-flex items-center gap-1.5">
+                      <CustomerLink customerId={o.customer_id} label={nameById.get(o.customer_id)} />
+                      {canWrite && <AssignCustomerControl entity="order" entityKey={o.id} assigned />}
+                    </span>
                   ) : canWrite ? (
-                    <AssignCustomerControl entity="order" entityKey={o.id} customers={customerOptions} />
+                    <AssignCustomerControl entity="order" entityKey={o.id} />
                   ) : (
                     <span className="text-xs text-slate-600">未归属</span>
                   )}

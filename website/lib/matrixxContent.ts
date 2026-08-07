@@ -1,7 +1,7 @@
 /**
  * 智控 MatrixX 产品内容单一数据源（介绍页 /matrix 与下载页 /matrix/download 共用）。
  *
- * 与 AvatarHub 的差异（刻意区分，勿套用 manualContent.ts）：
+ * 与幻境 STUDIO（原 AvatarHub）的差异（刻意区分，勿套用 manualContent.ts）：
  * - 智控是 Telegram 多账号矩阵运营工具：**不需要显卡**、Windows 全量安装包一次到位；
  * - 最大上手卡点不是硬件，而是 Telegram 官方 API_ID / API_HASH 的获取——下载页单独重点图解；
  * - 登录本地闭环（密码注册即用 / 掃码登录），数据不出本机。

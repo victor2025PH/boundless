@@ -86,7 +86,7 @@ export default function CustomersPage({ searchParams }: { searchParams: { q?: st
         <Card className="p-0">
           <DataTable head={["客户", "主联系方式", "TG", "来源", "备注", "创建时间", ""]}>
             {rows.map((c) => (
-              <tr key={c.id} className="hover:bg-slate-800/40">
+              <tr key={c.id} className="hover:bg-ink-700/40">
                 <Td>
                   <Link href={`/console/customers/${c.id}`} className="font-medium text-amber-300 hover:underline">
                     {c.display_name || "（未命名）"}

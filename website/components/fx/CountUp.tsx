@@ -40,7 +40,9 @@ export default function CountUp({ value, suffix = "", duration = 1.6, className 
     return () => cancelAnimationFrame(raf);
   }, [inView, reduced, target, duration]);
 
-  const rounded = target % 1 === 0 ? Math.round(display) : display.toFixed(1);
+  // 小数位跟随输入精度（"0.939" → 3 位），整数照旧取整；防 0.939 被 toFixed(1) 磨成 0.9
+  const decimals = value.includes(".") ? (value.split(".")[1]?.replace(/[^0-9]/g, "").length ?? 1) : 0;
+  const rounded = target % 1 === 0 && decimals === 0 ? Math.round(display) : display.toFixed(decimals || 1);
 
   return (
     <span ref={ref} className={`count-wrap ${done ? "count-done " : ""}${className ?? ""}`}>

@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   title: "视频动态 · 每日效果演示 · 无界科技 BOUNDLESS",
   description:
-    "AvatarHub 每日效果演示：实时换脸、声音克隆、数字人直播、克隆音同传。每天一条新演示，AI 概念演示与真实引擎输出分开标注。",
+    "幻境 STUDIO 每日效果演示：实时换脸、声音克隆、数字人直播、克隆音同传。每天一条新演示，AI 概念演示与真实引擎输出分开标注。",
   alternates: {
     canonical: "/videos",
     languages: { "zh-CN": "/videos", en: "/en/videos", "x-default": "/videos" },

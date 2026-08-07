@@ -143,7 +143,7 @@ export default function PersonasPage({
         <Card className="p-0">
           <DataTable head={["人设", "来源", "槽位", "状态", "归属客户", "授权产品", "创建时间", ""]}>
             {rows.map((p) => (
-              <tr key={p.id} className="hover:bg-slate-800/40">
+              <tr key={p.id} className="hover:bg-ink-700/40">
                 <Td>
                   <Link href={`/console/personas/${p.id}`} className="font-medium text-amber-300 hover:underline">
                     {p.display_name || "（未命名）"}

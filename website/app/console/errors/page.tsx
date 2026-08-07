@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 function Stat({ label, value, tone }: { label: string; value: number | string; tone?: "amber" | "red" }) {
   const c = tone === "red" ? "text-rose-400" : tone === "amber" ? "text-amber-300" : "text-white";
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-3">
+    <div className="rounded-xl border border-ink-700 bg-ink-900/40 px-4 py-3">
       <div className={`text-xl font-bold ${c}`}>{value}</div>
       <div className="mt-0.5 text-[11px] text-slate-500">{label}</div>
     </div>
@@ -63,7 +63,7 @@ export default async function ErrorsPage({ searchParams }: { searchParams: { h?:
             </SectionTitle>
             <DataTable head={["版本", "机器数", "事件数"]}>
               {s.by_version.map((v) => (
-                <tr key={v.ver} className="hover:bg-slate-800/40">
+                <tr key={v.ver} className="hover:bg-ink-700/40">
                   <Td><span className="font-mono text-xs">{v.ver || "?"}</span></Td>
                   <Td>{v.machines}</Td>
                   <Td>{v.events}</Td>
@@ -79,7 +79,7 @@ export default async function ErrorsPage({ searchParams }: { searchParams: { h?:
               </SectionTitle>
               <DataTable head={["时间", "机器", "版本", "详情"]}>
                 {s.crashes.map((c, i) => (
-                  <tr key={i} className="hover:bg-slate-800/40">
+                  <tr key={i} className="hover:bg-ink-700/40">
                     <Td className="whitespace-nowrap text-xs text-slate-400">{fmtDateTime(c.t)}</Td>
                     <Td><span className="font-mono text-[11px]">{c.fp || "?"}</span></Td>
                     <Td><span className="font-mono text-[11px]">{c.ver}</span></Td>
@@ -99,7 +99,7 @@ export default async function ErrorsPage({ searchParams }: { searchParams: { h?:
             ) : (
               <DataTable head={["次数", "机器", "来源", "消息", "最近"]}>
                 {s.top_errors.map((e, i) => (
-                  <tr key={i} className="hover:bg-slate-800/40">
+                  <tr key={i} className="hover:bg-ink-700/40">
                     <Td><span className="font-semibold text-amber-300">{e.count}</span></Td>
                     <Td>{e.machines}</Td>
                     <Td><span className="font-mono text-[11px] text-slate-400">{e.logger}</span></Td>
@@ -110,8 +110,54 @@ export default async function ErrorsPage({ searchParams }: { searchParams: { h?:
               </DataTable>
             )}
           </Card>
+
+          {/* 逐条明细：Top 是合并计数，排障时要看「同一台机器先后报了什么」的时序——
+              这份 lib 一直在算（summarize.recent），此前页面没消费。滤掉 beacon 心跳只留有信息量的行。 */}
+          <Card>
+            <SectionTitle count={recentMeaningful(s.recent).length}>最近回传明细（心跳已滤）</SectionTitle>
+            {recentMeaningful(s.recent).length === 0 ? (
+              <p className="px-1 py-3 text-xs text-slate-500">窗口内除启动心跳外没有其他回传。</p>
+            ) : (
+              <DataTable head={["时间", "级别", "机器", "版本", "来源", "消息"]}>
+                {recentMeaningful(s.recent).map((r, i) => (
+                  <tr key={i} className="hover:bg-ink-700/40">
+                    <Td className="whitespace-nowrap text-xs text-slate-500">{fmtDateTime(r.t)}</Td>
+                    <Td>
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                          r.logger === "exit_sentinel"
+                            ? "bg-rose-500/15 text-rose-300"
+                            : r.level.toUpperCase() === "ERROR" || r.level.toUpperCase() === "CRITICAL"
+                              ? "bg-rose-500/15 text-rose-300"
+                              : r.level.toUpperCase() === "WARNING"
+                                ? "bg-amber-500/15 text-amber-300"
+                                : "bg-ink-700 text-slate-400"
+                        }`}
+                      >
+                        {r.logger === "exit_sentinel" ? "崩溃哨兵" : r.level || "?"}
+                      </span>
+                    </Td>
+                    <Td><span className="font-mono text-[11px]">{r.fp || "?"}</span></Td>
+                    <Td><span className="font-mono text-[11px]">{r.ver || "?"}</span></Td>
+                    <Td><span className="font-mono text-[11px] text-slate-400">{r.logger}</span></Td>
+                    <Td>
+                      <span className="text-xs text-slate-300">
+                        {r.msg}
+                        {r.n > 1 && <span className="ml-1 text-[10px] text-slate-500">×{r.n}</span>}
+                      </span>
+                    </Td>
+                  </tr>
+                ))}
+              </DataTable>
+            )}
+          </Card>
         </>
       )}
     </div>
   );
+}
+
+/** 明细行过滤：beacon 启动心跳无排障信息量，滤掉；其余（ERROR/WARNING/崩溃哨兵/INFO 摘要）保留。 */
+function recentMeaningful(rows: Awaited<ReturnType<typeof summarizeClientLogs>>["recent"]) {
+  return rows.filter((r) => r.logger !== "beacon").slice(0, 25);
 }

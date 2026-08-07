@@ -32,6 +32,8 @@ export interface ClientApp {
   family: CategoryKey;
   /** 产品图标 key（ProductIcon 渲染）；无对应产品条目（引擎级客户端）则为 null，用公司 ∞ 标 */
   productIcon: ProductKey | null;
+  /** 客户端级专属图标（public 路径）：productIcon 为 null 时优先于公司 ∞ 标（幻境 STUDIO 用） */
+  iconSrc?: string;
   /** 卡片一句话。gated 客户端必须用中性口径（见文件头合规注意） */
   tagline: { zh: string; en: string };
   /** 下载页 zh 路径（en 由 localePath 派生） */
@@ -53,25 +55,26 @@ export const CLIENT_APPS: ClientApp[] = [
     family: "growth",
     productIcon: "chatx",
     tagline: {
-      zh: "聚合 AI 聊天工作台：全渠道收件箱、AI 自动回复、实时互译",
-      en: "Omni-channel AI chat workspace: unified inbox, AI auto-reply, live translation",
+      zh: "聚合 AI 聊天工作台：全渠道收件箱、AI 自动回复、实时互译（原通译能力已内置）",
+      en: "Omni-channel AI chat workspace: unified inbox, AI auto-reply, live translation built in",
     },
     page: "/download/chatx",
     version: CHATX.download.version,
     sizeLabel: CHATX.download.size,
     platforms: { windows: "available", macos: "planned" },
-    covers: ["chatx", "lingox"],
+    covers: ["chatx"],
     gated: isGatedSlug("/download/chatx"),
   },
   {
     key: "avatarhub",
-    name: { zh: "AvatarHub", en: "AvatarHub" },
-    subName: "无界底座",
+    name: { zh: "幻境 STUDIO ", en: "STUDIO" },
+    subName: "实时数字人引擎",
     family: "studio",
     productIcon: null,
+    iconSrc: "/brand/products/studio.png",
     tagline: {
-      zh: "实时数字人引擎：声音克隆、实时换脸、数字人直播、克隆音同传",
-      en: "Real-time digital human engine: voice cloning, live face swap, streaming, interpreting",
+      zh: "实时数字人引擎：AI 作图、图片 / 视频换脸、直播换脸、变声器、克隆音同传",
+      en: "Real-time digital human engine: AI image gen, photo/video face swap, live swap, voice changer, interpreting",
     },
     page: "/download",
     version: LATEST_VERSION,

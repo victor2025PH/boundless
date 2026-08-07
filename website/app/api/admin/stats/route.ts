@@ -213,6 +213,39 @@ export async function GET(req: NextRequest) {
     ctaByWhere[w] = (ctaByWhere[w] ?? 0) + 1;
   }
 
+  // ── 品牌片漏斗（2026-08-07 上线）：film_play → 25/50/75 → film_done，按语言分桶；
+  //    另出章节点击热度（哪一幕最勾人=后续剪辑/投放的证据）。受 ?days= 窗约束。
+  const filmByLang: Record<string, { play: number; p25: number; p50: number; p75: number; done: number }> = {};
+  const filmChapters: Record<string, number> = {};
+  for (const e of winEvents) {
+    const ev = String(e.event ?? "");
+    if (!ev.startsWith("film_")) continue;
+    const lang = propStr(e, "lang") || "?";
+    const f = (filmByLang[lang] ??= { play: 0, p25: 0, p50: 0, p75: 0, done: 0 });
+    if (ev === "film_play") f.play++;
+    else if (ev === "film_progress") {
+      const pv2 = Number((e.props as Record<string, unknown> | null)?.pct ?? 0);
+      if (pv2 === 25) f.p25++;
+      else if (pv2 === 50) f.p50++;
+      else if (pv2 === 75) f.p75++;
+    } else if (ev === "film_done") f.done++;
+    else if (ev === "film_chapter") {
+      const key = `${lang}@${propStr(e, "t") || "?"}s`;
+      filmChapters[key] = (filmChapters[key] ?? 0) + 1;
+    }
+  }
+  const film = {
+    byLang: Object.fromEntries(
+      Object.entries(filmByLang).map(([k, f]) => [
+        k,
+        { ...f, doneRate: pct(f.done, f.play), halfRate: pct(f.p50, f.play) },
+      ])
+    ),
+    chapters: Object.entries(filmChapters)
+      .map(([key, n]) => ({ key, n }))
+      .sort((a, b) => b.n - a.n),
+  };
+
   // ── 机器人 IP（EveBot）互动：会话级漏斗（浏览→互动→点开客服→留资）+ 播报效果 ──
   // 互动 = 悬停/让它飞/点播报/点贴身短句/点机器人；点开客服 = ai_sprite_click 或 ai_chat_open(from=sprite|hologram)。
   // 只统计带 sid 的网站会话（miniapp 有独立漏斗），受 ?days= 时间窗约束。
@@ -769,6 +802,7 @@ export async function GET(req: NextRequest) {
       leads: leads.filter(recent).length,
     },
     ctaByWhere,
+    film,
     sprite,
     downloads: { ...downloads, series: { pv: dlPvSeries, clicks: dlClickSeries } },
     dragon: { events: dragonEvents, store: dragonStore, compare: dragonCompare },

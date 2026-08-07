@@ -64,7 +64,7 @@ const ACCENT: Record<string, { chip: string; icon: string; hover: string }> = {
 
 /**
  * 下载中心首屏：全部桌面客户端一览。
- * 挂在 /download 页顶部（AvatarHub 详情区之上）；AvatarHub 卡片就地锚点下滑，
+ * 挂在 /download 页顶部（幻境 STUDIO 详情区之上）；幻境 STUDIO 卡片就地锚点下滑，
  * 其余客户端跳各自下载页。gated 客户端（isolation.ts 裁定）链接 nofollow，
  * 文案用注册表里的中性口径。
  */
@@ -113,7 +113,7 @@ function ClientCard({ app, zh, live }: { app: ClientApp; zh: boolean; live?: Liv
   const accent = ACCENT[CATEGORIES[app.family].accent] ?? ACCENT.cyan;
   const version = live?.version || app.version;
   const sizeLabel = live?.size || app.sizeLabel[lang];
-  // AvatarHub 的详情就在本页下方：锚点下滑而非跳页，少一次导航。
+  // 幻境 STUDIO 的详情就在本页下方：锚点下滑而非跳页，少一次导航。
   const inPage = app.page === "/download";
   const href = inPage ? "#avatarhub" : localePath(lang, app.page);
 
@@ -127,6 +127,9 @@ function ClientCard({ app, zh, live }: { app: ClientApp; zh: boolean; live?: Liv
       <div className="flex items-center gap-3">
         {app.productIcon ? (
           <ProductIcon product={app.productIcon} size={40} alt="" className="h-10 w-10 object-contain" />
+        ) : app.iconSrc ? (
+          // eslint-disable-next-line @next/next/no-img-element -- 客户端级图标，静态 PNG 即可
+          <img src={app.iconSrc} alt="" width={40} height={40} className="h-10 w-10 object-contain" draggable={false} />
         ) : (
           <BrandMark className="h-10 w-10" />
         )}

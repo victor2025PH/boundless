@@ -4,6 +4,57 @@
 
 :root {
   color-scheme: dark;
+
+  /* ===== z-index 令牌表（2026-08-07 浮动元素归位）=====
+   * 全站浮动元素统一从这里取值，禁止再散写魔法数——星珠徽章 z-60 曾盖在
+   * 移动菜单（header z-50）上遮住菜单项。分层语义：
+   *   easter(35)  彩蛋/吉祥物：永远低于一切功能层
+   *   sticky(40)  移动底部粘性条；backtop(41) 返回顶部
+   *   nav(50)     顶栏 header（含桌面下拉面板）
+   *   chat(55)    AI 客服气泡（AIChat 面板历史值 80，低于抽屉即可）
+   *   cookie(60)  Cookie 同意横幅（法务优先级高于常规浮层）
+   *   drawer(85)  移动全屏菜单抽屉：覆盖除弹窗外的一切
+   * （DragonQuest 奖励弹窗 z-300 / 龙珠 toast z-95 为瞬时顶层，刻意不入表。） */
+  --z-easter: 35;
+  --z-sticky: 40;
+  --z-backtop: 41;
+  --z-nav: 50;
+  --z-chat: 55;
+  --z-cookie: 60;
+  --z-drawer: 85;
+}
+
+/* ===== 移动全屏菜单抽屉（Navbar）===== */
+@keyframes nav-drawer-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes nav-item-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+.nav-drawer {
+  animation: nav-drawer-in 0.22s ease-out both;
+}
+.nav-drawer-item {
+  animation: nav-item-in 0.34s cubic-bezier(0.22, 0.7, 0.3, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nav-drawer,
+  .nav-drawer-item {
+    animation: none;
+  }
+}
+/* 抽屉打开时底部浮动元素让位（抽屉本身 z-85 已覆盖，此处防未来 z 漂移） */
+html[data-nav-open] .sticky-cta,
+html[data-nav-open] .ai-teaser-bubble {
+  display: none;
+}
+
+/* 白天模式下粘性条次按钮：深字深边，白玻璃底上仍可读 */
+html[data-mode="day"] .sticky-cta-secondary {
+  color: #0f172a;
+  border-color: rgba(15, 23, 42, 0.28);
 }
 
 /* ===== 打印 / 导出 PDF（手册页「打印导出」按钮走浏览器打印对话框）=====

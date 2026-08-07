@@ -127,6 +127,9 @@ function checkAssets() {
           if (pm.index > 0 && PATHISH_CHAR_RE.test(literal[pm.index - 1])) continue; // E6
           if (candidate.startsWith("/api/")) continue; // E4
           if (candidate.startsWith("/_next/")) continue; // E5
+          // E7：/media/* 由服务器 nginx 直出（/var/www/media，部署不覆盖的运行时媒体区），
+          // 按架构设计不进仓库 public/（先例：日更 feed 视频；2026-08-07 品牌片同通道）。
+          if (candidate.startsWith("/media/")) continue;
           refCount++;
           const bare = candidate.split(/[?#]/)[0];
           let decoded = bare;
@@ -244,7 +247,7 @@ function checkBannedClaims() {
 // ---------------------------------------------------------------------------
 // 检查 4：测试数 ratchet（宣传的测试数必须 ≤ 仓内实际测试文件数）
 // ---------------------------------------------------------------------------
-// 事实口径与 docs/claims.md「850+ 自动化回归测试」行同源：实际数 = 双引擎 tests/ 目录
+// 事实口径与 docs/claims.md「N+ 自动化回归测试」行同源（2026-08 起宣传 1100+）：实际数 = 双引擎 tests/ 目录
 // 递归匹配 test_*.py / *_test.py 的文件总数（按 pytest 发现语义大小写敏感）。
 // 宣传数从 lib/content.ts 源码解析：先找含关键词的行，再抽 `N+`（含 stats 的
 // value/suffix 拆写形 `value: "850", suffix: "+"`）。两侧解析/计数策略刻意宽松：
@@ -260,7 +263,7 @@ const TEST_FILE_RE = /^(?:test_.*|.*_test)\.py$/;
 //   zh 主口径「(项)自动化回归测试」+ trustline 变体「自动化测试(护航)」；
 //   en "automated regression tests" + trustline 变体 "automated tests"。
 const CLAIM_KEYWORD_RES = [/自动化回归测试/, /自动化测试/, /automated (?:regression )?tests/i];
-// 数字抽取：`850+`（允许数字与 + 之间有空白），以及 stats 结构的拆写形 `"850", suffix: "+"`。
+// 数字抽取：`1100+`（允许数字与 + 之间有空白），以及 stats 结构的拆写形 `"1100", suffix: "+"`。
 const CLAIM_NUM_RES = [/(\d{3,})\s*\+/g, /(\d{3,})["']\s*,\s*suffix:\s*["']\+/g];
 
 /** 递归统计目录下的测试文件数（防御性跳过 __pycache__ 与隐藏目录）。 */

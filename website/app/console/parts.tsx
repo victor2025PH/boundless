@@ -1,5 +1,10 @@
 // /console 服务端共享展示件：徽章、卡片、表格、空态、分页、格式化。
 // 无 "use client" —— 全部可在服务端组件里直接使用。
+// 配色纪律（2026-08 视觉批，BRAND_TOKENS §6 判定沉淀的 console 版）：
+//   · 暗底一律 ink 深空阶（slate 禁作暗底）；文字冷灰仍可用 slate 文字阶；
+//   · crown-* = 控制台强调色（链接/筛选钮/标题竖条等「独立作强调」的位置）；
+//   · 各状态徽章里的 amber 臂（订单 pending / 到期高亮 / master 角色…）是
+//     多色家族的一员，按判定保留 Tailwind 字面量，勿改成 crown。
 
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -237,7 +242,7 @@ export function PersonaSlotCells({
           key={key}
           title={`${label}：${lit[key] ? "已配置" : "未配置"}`}
           className={`inline-flex h-6 w-6 items-center justify-center rounded-md border ${
-            lit[key] ? litCls : "border-slate-800 bg-slate-900/60 text-slate-700"
+            lit[key] ? litCls : "border-ink-700 bg-ink-900/60 text-slate-700"
           }`}
         >
           <Icon className="h-3.5 w-3.5" />
@@ -330,7 +335,7 @@ export function TestFilterToggle({
       href={qs ? `${basePath}?${qs}` : basePath}
       title="测试/演练数据（e2e / smoke 等）不计入 KPI 与商机；此开关只影响本列表的展示"
       className={`inline-flex items-center gap-1 text-xs underline-offset-2 hover:underline ${
-        showTest ? "text-amber-300" : "text-slate-500 hover:text-slate-300"
+        showTest ? "text-crown-300" : "text-slate-500 hover:text-slate-300"
       } ${className}`}
     >
       <FlaskConical className="h-3.5 w-3.5" />
@@ -340,19 +345,19 @@ export function TestFilterToggle({
 }
 
 // ── 布局件 ──────────────────────────────────────────────────────────
-export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
+export function Card({ children, className = "", id }: { children: ReactNode; className?: string; id?: string }) {
   return (
-    <div className={`rounded-2xl border border-slate-800 bg-slate-900/60 p-5 ${className}`}>{children}</div>
+    <div id={id} className={`rounded-2xl border border-ink-700 bg-ink-900/60 p-5 ${className}`}>{children}</div>
   );
 }
 
 export function SectionTitle({ children, count }: { children: ReactNode; count?: number }) {
   return (
     <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-white">
-      <span className="inline-block h-3.5 w-1 rounded-full bg-amber-400" />
+      <span className="inline-block h-3.5 w-1 rounded-full bg-crown-400" />
       {children}
       {count !== undefined && (
-        <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-400">{count}</span>
+        <span className="rounded-full bg-ink-700 px-2 py-0.5 text-[11px] font-medium text-slate-400">{count}</span>
       )}
     </h2>
   );
@@ -373,10 +378,10 @@ export function PageHeader({ title, desc, actions }: { title: string; desc?: Rea
 /** 表格骨架：th 列表 + tbody 内容。 */
 export function DataTable({ head, children }: { head: string[]; children: ReactNode }) {
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-800">
+    <div className="overflow-x-auto rounded-xl border border-ink-700">
       <table className="w-full min-w-max text-left text-sm">
         <thead>
-          <tr className="border-b border-slate-800 bg-slate-900/80 text-[11px] uppercase tracking-wider text-slate-500">
+          <tr className="border-b border-ink-700 bg-ink-900/80 text-[11px] uppercase tracking-wider text-slate-500">
             {head.map((h) => (
               <th key={h} className="px-3 py-2.5 font-medium">
                 {h}
@@ -384,7 +389,7 @@ export function DataTable({ head, children }: { head: string[]; children: ReactN
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-slate-800/70">{children}</tbody>
+        <tbody className="divide-y divide-ink-700/70">{children}</tbody>
       </table>
     </div>
   );
@@ -397,7 +402,7 @@ export function Td({ children, className = "" }: { children: ReactNode; classNam
 /** 空库/空结果引导。 */
 export function EmptyState({ title, hints }: { title: string; hints: ReactNode[] }) {
   return (
-    <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 px-6 py-10 text-center">
+    <div className="rounded-xl border border-dashed border-slate-700 bg-ink-900/40 px-6 py-10 text-center">
       <p className="text-sm font-medium text-slate-300">{title}</p>
       <ul className="mx-auto mt-3 max-w-xl space-y-1.5 text-xs leading-relaxed text-slate-500">
         {hints.map((h, i) => (
@@ -409,7 +414,7 @@ export function EmptyState({ title, hints }: { title: string; hints: ReactNode[]
 }
 
 export function Code({ children }: { children: ReactNode }) {
-  return <code className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[11px] text-amber-300/90">{children}</code>;
+  return <code className="rounded bg-ink-700 px-1.5 py-0.5 font-mono text-[11px] text-crown-300/90">{children}</code>;
 }
 
 /** 客户列：已归属 → 链到客户 360；未归属由调用方渲染归属控件。 */
@@ -417,7 +422,7 @@ export function CustomerLink({ customerId, label }: { customerId: string; label?
   return (
     <Link
       href={`/console/customers/${customerId}`}
-      className="text-xs font-medium text-amber-300 underline-offset-2 hover:underline"
+      className="text-xs font-medium text-crown-300 underline-offset-2 hover:underline"
       title={customerId}
     >
       {label || `${customerId.slice(0, 5)}…${customerId.slice(-4)}`}
@@ -449,7 +454,7 @@ export function Pager({
   };
   const page = Math.floor(offset / limit) + 1;
   const pages = Math.ceil(total / limit);
-  const linkCls = "rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:border-amber-500/60 hover:text-amber-300";
+  const linkCls = "rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:border-crown-500/60 hover:text-crown-300";
   return (
     <div className="mt-4 flex items-center justify-between text-xs text-slate-500">
       <span>
@@ -473,13 +478,13 @@ export function Pager({
 
 // ── 查询表单（纯 GET 表单，无需客户端 JS）───────────────────────────
 export const filterInputCls =
-  "rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-600 focus:border-amber-500";
+  "rounded-lg border border-slate-700 bg-ink-950 px-3 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-600 focus:border-amber-500";
 
 export function FilterSubmit() {
   return (
     <button
       type="submit"
-      className="rounded-lg border border-amber-500/40 px-3 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-500/10"
+      className="rounded-lg border border-crown-500/40 px-3 py-1.5 text-xs font-medium text-crown-300 hover:bg-crown-500/10"
     >
       筛选
     </button>

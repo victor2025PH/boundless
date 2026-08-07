@@ -21,12 +21,14 @@
 
 | 宣传语 | 分级 | 举证来源 | 复核日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| "850+ 自动化回归测试" | L1 | `engines/chengjie/tests` 直下 707 个 + `engines/huoke/tests`（含子目录）148 个 `test_*.py`，实测计数 2026-07-26；合计 855 | 2026-07-26 | 以**文件数**计非用例计，用例数更大（chengjie 含子目录为 715，为口径稳定按直下 707 计）；数字随仓库增长，复核时重数 |
-| "双实例热备 7×24 生产运行" | L1 | `deploy/instances/README.md`（zhiliao `:18799` / tongyi `:18899`；`watchdog_instances.ps1` 每 5 分钟计划任务探活自愈） | 2026-07-26 | 双实例 = 智聊/通译各一常驻实例 + 看门狗自愈；「热备」指互不影响的双实例与自动拉起，非双机房容灾 |
+| "1100+ 自动化回归测试" | L1 | `engines/chengjie/tests` 直下 995 个 + `engines/huoke/tests`（含子目录）149 个 `test_*.py`，实测计数 2026-08-04；合计 1144 | 2026-08-04 | 以**文件数**计非用例计，用例数更大；数字随仓库增长，复核时重数（历史口径：2026-07-26 计 855，当时宣传 850+） |
+| "7×24 生产运行 · 看门狗 5 分钟自愈巡检" | L1 | `deploy/instances/README.md` + `watchdog_instances.ps1`（每 5 分钟计划任务探活自愈、重启冷却闸门、维护预告播报） | 2026-08-04 | 2026-08 起对外**不再点名实例数量**（通译并入智聊后实例拓扑属部署细节，以 deploy/instances 实况为准）；「自愈」指看门狗自动拉起，非双机房容灾 |
 | "断云演习 22/22 本地接管" | L1 | `engines/chengjie/AGENTS.md`「断云真流量演习」（2026-07-12 凌晨低峰实施）：防火墙封 DeepSeek 出站，22 发含并发全部由本地 LLM 兜底出真话，熔断全周期自动闭合 | 2026-07-26 | 演习为真流量口径（经 `/api/copilot/query` 全链）；对外表述限「演习」，勿说成常态无云运行 |
-| "多语种回译评测 44/44 通过、语义均分 0.939" | L1 | `engines/chengjie/config/eval/translation_samples_hymt.yaml` 宽集（44 样本：zh→xx 32 + xx→zh 12）+ `AGENTS.md` 2026-07-11 基线（HY-MT pass=44/44，语义均分 0.939） | 2026-07-26 | 口径为**回译 + 语义双轨**自动评测，非人工满意度；语料后续扩到 50，重跑后以最新周批数据更新本行 |
+| "多语种回译评测 50/50 通过、语义均分 0.939" | L1 | `engines/chengjie/logs/eval/translation_trend.jsonl` 2026-08-01 周批（`translation_samples_hymt.yaml` 宽集 50 样本：zh→xx + xx→zh 双向；ollama_mt pass=50/50，mean_semantic=0.939） | 2026-08-04 | 口径为**回译 + 语义双轨**自动评测，非人工满意度；周批每周六自动重跑，数字漂移时以最新 JSONL 行为准更新本行 |
 | "30+ 语种拟人互译" | L2 | 底层翻译模型语种覆盖：Hunyuan-MT 系列模型卡 33 语种 + DeepSeek 多语对话；实测评测集覆盖 17 语种（`translation_samples_hymt.yaml` 默认宽集） | 2026-07-26 | 对外用「30+」时以**模型口径**为准，**勿写"实测 30+"**；实测口径只能说 17 语种评测集 |
 | "5 大平台统一接入" | L1 | `engines/chengjie/docs/PROJECT_SCOPE.md`（Telegram / LINE / Messenger 三端 RPA runner + 网页聊天 Widget）；WhatsApp 见 `engines/chengjie/src/integrations/whatsapp_rpa/` 与 `services/whatsapp-baileys/` | 2026-07-26 | 各平台接入方式不同（MTProto 协议 / RPA / 网页），个别平台按部署开启；对外勿承诺"全平台同等功能" |
+| "20+ 专项质量评测门禁" | L1 | `engines/chengjie/scripts/run_eval.py` 评测轨道计数：--faq/--translation/--memory/--semantic-dedup/--memory-extract/--persona/--emotion/--crisis/--crisis-response/--xlate-confidence/--proactive-guard/--emotion-intensity/--crisis-resource/--crisis-overview/--voice-language/--bazi/--bazi-reading/--media-consistency/--offer-guard/--outbound-claims/--duel-semantic 共 21 条（2026-08-04 计数） | 2026-08-04 | 以 run_eval CLI 评测轨道数计；对外表述「专项质量评测」，勿混同 pytest 测试文件数口径 |
+| 平台墙分层口径（已深度对接 / 陆续接入） | L1+L2 | 第一层「已深度对接」＝5 大统一收件箱平台（见上行）+ Facebook（真机获客链路，`engines/huoke`）；第二层「陆续接入」＝规划中平台，UI 以灰阶+角标显式区分 | 2026-08-04 | 第二层 logo 仅表达路线图，**不得**去掉「陆续接入/规划中」标注单独使用；Facebook 注明「真机获客」勿写成收件箱聚合 |
 | "1 人顶 10 人团队" | L3 | 主观夸张，无需举证 | 2026-07-26 | 不得配具体虚构数字（如"实测节省 XX 万"）；可配 L1 事实做支撑但不得混写 |
 | "像跟老乡聊天一样自然" | L3 | 主观夸张，无需举证 | 2026-07-26 | 同上；涉及翻译质量的量化表述必须回落到上面 L1 评测口径 |
 

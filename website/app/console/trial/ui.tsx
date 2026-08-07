@@ -7,9 +7,9 @@ import { useRouter } from "next/navigation";
 import { CheckCircle2, Gift } from "lucide-react";
 
 const inputCls =
-  "rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-amber-500";
+  "rounded-lg border border-slate-700 bg-ink-950 px-3 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-crown-500";
 const btnPrimary =
-  "rounded-lg bg-amber-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-400 disabled:opacity-50";
+  "rounded-lg bg-crown-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-crown-400 disabled:opacity-50";
 
 type Result = { ok: boolean; msg: string };
 
@@ -68,8 +68,8 @@ export function TrialRedeemPanel({ defaultChars }: { defaultChars: number }) {
   }
 
   return (
-    <div className="mb-5 rounded-xl border border-amber-500/25 bg-amber-500/[0.04] p-4">
-      <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-amber-300">
+    <div className="mb-5 rounded-xl border border-crown-500/25 bg-crown-500/[0.04] p-4">
+      <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-crown-300">
         <Gift className="h-4 w-4" />
         核销绑定码
       </div>

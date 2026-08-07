@@ -32,11 +32,9 @@ export const HERO_CTA_COPY: Record<AbVariant, { zh: string; en: string }> = {
   b: { zh: "看 AI 当场成交演示", en: "Watch AI close a deal live" },
 };
 
-/** 导航「购买」入口实验：A=订单页，B=价格锚点（首页定价区）。 */
-export const NAV_BUY: Record<
-  AbVariant,
-  { zhLabel: string; enLabel: string; zhPath: string; enPath: string }
-> = {
-  a: { zhLabel: "购买", enLabel: "Buy", zhPath: "/order", enPath: "/en/order" },
-  b: { zhLabel: "看价格", enLabel: "Pricing", zhPath: "/#pricing", enPath: "/en#pricing" },
-};
+// ⚠️ 导航纪律（2026-08-07 拍板）：导航层菜单永不进 A/B 实验。
+// 旧 NAV_BUY 实验（A=购买 / B=看价格，localStorage 按浏览器 50/50 分桶）导致同一用户
+// 的电脑与手机看到不同菜单文案（分桶单位是设备不是人），被当成「手机版菜单缺失」上报。
+// 两组落点收敛到 /order 后实验只剩纯文案差异，收益低于跨端不一致的体验成本，已结案：
+// 统一文案「看价格」，单一事实源在 lib/nav.ts::NAV_PRICING（Navbar/抽屉/页脚/粘性条同源）。
+// 实验基础设施（abVariant/abExpose）保留给 Hero 文案等**非导航**位继续使用。

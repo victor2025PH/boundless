@@ -36,7 +36,7 @@ interface ChatxManifest {
 }
 
 /**
- * 智聊 ChatX 专属下载页主体（与 AvatarHub / 智控的下载组件隔离，零回归风险——
+ * 智聊 ChatX 专属下载页主体（与幻境 STUDIO / 智控的下载组件隔离，零回归风险——
  * 三个客户端上手卡点不同，内容单源各自维护，骨架风格保持一致）。
  * lang 由路由显式传入（/download/chatx = zh，/en/download/chatx = en）。
  */
@@ -124,6 +124,20 @@ export default function ChatxDownloadSection({ lang: forced }: { lang?: BrandLan
             {zh
               ? "聚合 AI 聊天工作台：全渠道统一收件箱、AI 自动拟稿 / 自动回复、实时互译、语音消息与客户画像，一个桌面客户端全部就位。"
               : "The omni-channel AI chat workspace: unified inbox, AI drafting / auto-reply, live translation, voice messages and customer profiles — all in one desktop client."}
+          </p>
+          {/* 通译并入说明：找「通译客户端」的用户在这里得到确定答案 */}
+          <p className="mx-auto mt-4 max-w-2xl rounded-2xl border border-amber-400/25 bg-amber-400/[0.06] px-4 py-3 text-xs leading-relaxed text-slate-300">
+            {zh ? (
+              <>
+                📌 <b className="text-amber-300">通译 LingoX 已与智聊合并为同一个程序</b>
+                ：本客户端内置通译全部翻译能力，无需单独下载「通译客户端」；通译套餐授权在本程序「会员中心」粘贴激活即可，原有授权继续有效。
+              </>
+            ) : (
+              <>
+                📌 <b className="text-amber-300">LingoX is merged into ChatX — one single program</b>
+                : this client ships with every LingoX translation capability, so there is no separate LingoX download. LingoX licenses activate in this app&apos;s membership center; existing licenses remain valid.
+              </>
+            )}
           </p>
         </Reveal>
 

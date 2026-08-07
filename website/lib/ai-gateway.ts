@@ -330,6 +330,13 @@ function db(): Database.Database {
     " day TEXT NOT NULL, mid TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0," +
     " PRIMARY KEY (day, mid))"
   );
+  // 按主体（机器指纹 / IID:实例）的日额度覆写：给付费/重点客户单独提额，
+  // 不动 env 全局默认（改 env 要重启且影响所有机器）。经 /api/admin/gw-budget 管理。
+  _db.exec(
+    "CREATE TABLE IF NOT EXISTS gw_budget (" +
+    " mid TEXT PRIMARY KEY, budget INTEGER NOT NULL," +
+    " note TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL DEFAULT 0)"
+  );
   // Telegram 凭据粘定表：机器指纹 → 分到的 api_id（同机永远同 api_id，
   // 因 pyrogram session 与 api_id 绑定，换组会触发 Telegram 风控——与 LAN 池同不变量）。
   _db.exec(
@@ -344,6 +351,64 @@ function usedOf(day: string, mid: string): number {
     | { used: number }
     | undefined;
   return row?.used || 0;
+}
+
+/** 主体覆写额度（无覆写返回 null）。 */
+function budgetOverrideOf(mid: string): number | null {
+  const row = db().prepare("SELECT budget FROM gw_budget WHERE mid=?").get(mid) as
+    | { budget: number }
+    | undefined;
+  return row && Number.isFinite(row.budget) && row.budget > 0 ? row.budget : null;
+}
+
+/** 主体生效日额度：覆写优先，否则 env 默认。 */
+export function budgetOf(subject: string | Pick<DeviceClaims, "mid" | "iid">): number {
+  const mid = quotaSubject(subject);
+  return budgetOverrideOf(mid) ?? DAILY_CHAR_BUDGET;
+}
+
+/** 设置/更新主体额度覆写（budget<=0 视为清除）。subject 原样规整为额度键。 */
+export function setBudgetOverride(
+  subject: string,
+  budget: number,
+  note = ""
+): { subject: string; budget: number } {
+  const mid = quotaSubject(String(subject || "").trim());
+  if (!mid || mid === GLOBAL_KEY) throw new Error("bad_subject");
+  const b = Math.floor(Number(budget));
+  if (!Number.isFinite(b) || b <= 0) {
+    db().prepare("DELETE FROM gw_budget WHERE mid=?").run(mid);
+    return { subject: mid, budget: DAILY_CHAR_BUDGET };
+  }
+  db()
+    .prepare(
+      "INSERT INTO gw_budget (mid, budget, note, updated_at) VALUES (?, ?, ?, ?)" +
+      " ON CONFLICT(mid) DO UPDATE SET budget=excluded.budget, note=excluded.note," +
+      " updated_at=excluded.updated_at"
+    )
+    .run(mid, b, String(note || "").slice(0, 200), Math.floor(Date.now() / 1000));
+  return { subject: mid, budget: b };
+}
+
+/** 列出全部覆写（admin 观测）。 */
+export function listBudgetOverrides(): Array<{
+  subject: string;
+  budget: number;
+  note: string;
+  updated_at: number;
+  used_today: number;
+}> {
+  const day = dayKey();
+  const rows = db()
+    .prepare("SELECT mid, budget, note, updated_at FROM gw_budget ORDER BY updated_at DESC")
+    .all() as Array<{ mid: string; budget: number; note: string; updated_at: number }>;
+  return rows.map((r) => ({
+    subject: r.mid,
+    budget: r.budget,
+    note: r.note || "",
+    updated_at: r.updated_at || 0,
+    used_today: usedOf(day, r.mid),
+  }));
 }
 
 function pruneOldDays(): void {
@@ -494,14 +559,17 @@ export async function quotaSnapshot(
   const day = dayKey();
   const used = usedOf(day, mid);
   const gUsed = usedOf(day, GLOBAL_KEY);
+  const budget = budgetOverrideOf(mid) ?? DAILY_CHAR_BUDGET;
+  // 有显式覆写的主体不受全局熔断（管理员授予的额度不该被试用池保险丝掐掉）
+  const overridden = budgetOverrideOf(mid) !== null;
   return {
     used,
-    budget: DAILY_CHAR_BUDGET,
-    remaining: Math.max(0, DAILY_CHAR_BUDGET - used),
+    budget,
+    remaining: Math.max(0, budget - used),
     global_used: gUsed,
     global_budget: GLOBAL_DAILY_CHAR_BUDGET,
     global_remaining: Math.max(0, GLOBAL_DAILY_CHAR_BUDGET - gUsed),
-    busy: gUsed >= GLOBAL_DAILY_CHAR_BUDGET,
+    busy: !overridden && gUsed >= GLOBAL_DAILY_CHAR_BUDGET,
   };
 }
 
@@ -520,11 +588,14 @@ export async function consumeQuota(
   const tx = db().transaction(() => {
     const cur = usedOf(day, mid);
     const gCur = usedOf(day, GLOBAL_KEY);
-    if (n > 0 && cur + n > DAILY_CHAR_BUDGET) {
-      return { ok: false, used: cur, remaining: Math.max(0, DAILY_CHAR_BUDGET - cur), which: "machine" as const };
+    const override = budgetOverrideOf(mid);
+    const budget = override ?? DAILY_CHAR_BUDGET;
+    if (n > 0 && cur + n > budget) {
+      return { ok: false, used: cur, remaining: Math.max(0, budget - cur), which: "machine" as const };
     }
-    if (n > 0 && gCur + n > GLOBAL_DAILY_CHAR_BUDGET) {
-      return { ok: false, used: cur, remaining: Math.max(0, DAILY_CHAR_BUDGET - cur), which: "global" as const };
+    // 显式覆写主体跳过全局熔断拒绝（用量仍计入全局账便于观测/对账）
+    if (n > 0 && override === null && gCur + n > GLOBAL_DAILY_CHAR_BUDGET) {
+      return { ok: false, used: cur, remaining: Math.max(0, budget - cur), which: "global" as const };
     }
     if (n > 0) {
       const up = db().prepare(
@@ -535,7 +606,7 @@ export async function consumeQuota(
       up.run(day, GLOBAL_KEY, n);
     }
     const used = usedOf(day, mid);
-    return { ok: true, used, remaining: Math.max(0, DAILY_CHAR_BUDGET - used) };
+    return { ok: true, used, remaining: Math.max(0, budget - used) };
   });
   const out = tx();
   if (Math.random() < 0.01) pruneOldDays(); // 概率式清理，避免每请求一次 DELETE

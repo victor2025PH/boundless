@@ -7,7 +7,8 @@ import GlobalChrome from "@/components/GlobalChrome";
 import TgRedirect from "@/components/TgRedirect";
 import { SITE_URL, CONTACT_URL } from "@/lib/site";
 import { content } from "@/lib/content";
-import { voiceOffers, autochatOffers, translateOffers, toSchemaOffer } from "@/lib/pricing";
+import { autochatOffers, translateOffers, toSchemaOffer } from "@/lib/pricing";
+import { studioSchemaOffers } from "@/lib/avatarhub-pricing";
 import { BRAND, PRODUCT_ORDER, type ProductKey } from "@/lib/brand";
 
 export const metadata: Metadata = {
@@ -54,12 +55,15 @@ export const metadata: Metadata = {
     description:
       "跨境实时翻译 SCRM · AI 自动成交聊天 · 声音克隆 · 数字人。自主可控私有部署，数据不出网，合规可溯源。",
     siteName: "无界科技 BOUNDLESS",
+    // 全站默认分享图（品牌片主视觉）：此前未配置，TG/社媒链接预览无脸
+    images: [{ url: "/brand/campaign/og-film.jpg", width: 1200, height: 675, alt: "BOUNDLESS AvatarHub" }],
   },
   twitter: {
     card: "summary_large_image",
     title: "无界科技 BOUNDLESS · 让沟通无界",
     description:
       "跨境实时翻译 SCRM · AI 自动成交聊天 · 声音克隆 · 数字人。私有部署，数据不出网，合规可溯源。",
+    images: ["/brand/campaign/og-film.jpg"],
   },
 };
 
@@ -76,21 +80,21 @@ const jsonLd = {
 
 // 产品结构化数据（Service）：名称/描述取自 lib/brand.ts 单一数据源。
 // 已落地定价的产品挂 offers（2026-07-18 起报价币种全线 USD）：LingoX（通译·主推现金流）/
-// ChatX（自动成交三档）/ VoiceX（幻声会员三档）。
+// ChatX（自动成交三档）/ VoiceX（幻声 → 2026-08-04 起随幻境 STUDIO 会员挂牌，offers 由
+// avatarhub-pricing.TIERS 派生——此前挂 voiceOffers 旧价 18/78/198 与页面五档打架）。
 // 不进公开 JSON-LD 的线（2026-07-26 合规收口）：facex / matrixx（gated 合规隔离，
 // 见 lib/isolation.ts）、livex（描述含 face-swap 类目词，随隔离一并撤出结构化数据）、
 // fatex（未上线）；per-usage 计量 SKU 亦不进。锚点均指向仍存在的页面/section，避免坏链。
 const SCHEMA_HIDDEN: ReadonlySet<ProductKey> = new Set(["facex", "livex", "matrixx", "fatex"]);
 const PRODUCT_OFFERS: Partial<Record<ProductKey, Parameters<typeof toSchemaOffer>[0][]>> = {
-  lingox: translateOffers,
-  chatx: autochatOffers,
-  voicex: voiceOffers,
+  // 2026-08-04 通译并入智聊：chatx 同时承接成交三档 + 翻译三档（lingox Service 节点随之下线）。
+  chatx: [...autochatOffers, ...translateOffers],
+  voicex: studioSchemaOffers(),
 };
 const PRODUCT_SCHEMA_ANCHOR: Partial<Record<ProductKey, string>> = {
   reachx: "#autochat",
   chatx: "#autochat",
   voicex: "voice",
-  lingox: "#translate",
   voxx: "interpreting",
 };
 const productServices = PRODUCT_ORDER.filter((key) => !SCHEMA_HIDDEN.has(key)).map((key) => {

@@ -199,7 +199,7 @@ const MINIAPP_VIEW_LABELS: Record<string, string> = {
 // 下载中心的客户端 key → 中文标签（与 lib/downloads.ts 的 CLIENT_APPS.key 对应）。
 const DL_CLIENT_LABELS: Record<string, string> = {
   chatx: "智聊 ChatX",
-  avatarhub: "AvatarHub",
+  avatarhub: "幻境 STUDIO ",
   matrixx: "智控 MatrixX",
   hub: "下载中心入口",
 };

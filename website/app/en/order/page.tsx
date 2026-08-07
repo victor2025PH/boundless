@@ -10,11 +10,11 @@ const LANGUAGES = { "zh-CN": "/order", en: "/en/order", "x-default": "/order" };
 export const metadata: Metadata = {
   title: "Plans & Ordering · BOUNDLESS",
   description:
-    "AvatarHub plans and licensing: voice cloning, live face swap, digital-human streaming and interpreting. Runs on your own hardware — unlimited usage, no per-character or per-minute metering; we assist deployment. Monthly or annual (2 months free + 20% off year one), settled in USDT.",
+    "STUDIO plans and licensing: free face swap (watermarked) to start; paid tiers unlock AI image gen, video face swap, live face swap, voice changer and interpreting. Runs on your own hardware — unlimited usage, no per-character or per-minute metering; we assist deployment. Monthly, quarterly or annual billing, settled in USDT; Flagship private deployment is quoted by sales.",
   alternates: { canonical: "/en/order", languages: LANGUAGES },
   openGraph: {
     title: "Plans & Ordering · BOUNDLESS",
-    description: "Plans from 39 to 699 USD/mo, unlimited usage on your own hardware. Annual gets 2 months free + 20% off year one. Data stays on-prem.",
+    description: "STUDIO starts free (watermarked face swap); paid plans from 39 USD/mo with monthly / quarterly / annual billing, unlimited usage on your own hardware. Flagship private deployment: contact sales. Data stays on-prem.",
     url: `${SITE_URL}/en/order`,
   },
 };
@@ -22,8 +22,8 @@ export const metadata: Metadata = {
 const offersLd = {
   "@context": "https://schema.org",
   "@type": "Product",
-  name: "AvatarHub — BOUNDLESS real-time digital human engine",
-  description: "Locally deployed engine for voice cloning, live face swap, digital-human streaming and interpreting.",
+  name: "STUDIO — BOUNDLESS real-time digital human engine",
+  description: "Locally deployed engine for AI image gen, photo / video face swap, live face swap, voice changer and cloned-voice interpreting.",
   brand: { "@type": "Organization", name: "BOUNDLESS" },
   offers: TIERS.filter((t) => t.monthly > 0).map((t) => ({
     "@type": "Offer",

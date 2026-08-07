@@ -122,7 +122,7 @@ export const JA_VOICE_UI: LandingUi = {
   moreFaqHref: "/en#faq",
   tgCta: "Telegramで1対1相談",
   pricingLabel: "料金プランを見る",
-  pricingHref: "/en#pricing",
+  pricingHref: "/en/order",
   langLabel: "EN",
   langHref: "/en/voice",
   clipLabels: ["中国語", "英語", "日本語", "韓国語"],

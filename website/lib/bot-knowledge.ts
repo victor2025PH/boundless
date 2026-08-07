@@ -1,6 +1,7 @@
 import { content } from "./content";
 import { SITE_URL } from "./site";
 import { BRAND, PRODUCT_COUNT, productLineItems, productLinesText } from "./brand";
+import { TIERS, tierPrice } from "./avatarhub-pricing";
 import productFacts from "./generated/product-facts.json";
 
 export type BotLang = "zh" | "en";
@@ -24,7 +25,7 @@ function t(lang: BotLang) {
 // 上游 = products/*/product.yaml + platform/licensing/sku_registry.json）。
 // bot 语料里的报价数字一律经下面的 sku 工具从事实源取数——官网改价（改上游
 // 后重新 sync:facts）bot 自动跟价，消灭「官网新价、bot 旧价」双源漂移。
-// 报价范围刻意维持现状：只报聊天（智聊 chatx）/ 翻译（通译 lingox）/ 声音
+// 报价范围刻意维持现状：只报聊天（智聊 chatx）/ 翻译（智聊内置，SKU 沿用 lingox）/ 声音
 // （幻声 voicex）三条主推线的定值 SKU；换脸/直播分身等定制交付业务不在线上
 // 报价（合规隔离口径，见 keywordRules / buildKnowledgeContext 的定制交付段）。
 // 查不到 / 非定值（TBD、from N、按规模报价）→ null → 调用处省略该报价行，
@@ -186,7 +187,7 @@ export function buildPricing(lang: BotLang) {
 <b>AI 成交聊天 · 月付</b>
 ${plans}
 
-<b>跨境聊天翻译 · 通译</b>
+<b>跨境聊天翻译 · 智聊内置</b>
 ${xlate}
 
 <b>合作方式</b>
@@ -198,7 +199,7 @@ ${engage}
 <b>AI auto-closing chat · monthly</b>
 ${plans}
 
-<b>Chat translation · LingoX</b>
+<b>Chat translation · built into ChatX</b>
 ${xlate}
 
 <b>Engagement models</b>
@@ -244,11 +245,11 @@ export function buildFaqAnswer(lang: BotLang, index: number) {
 /** 客户端下载/安装的兜底回答（AI 不可用时 KB 路径直接返回） */
 function buildInstallHelp(lang: BotLang) {
   return lang === "zh"
-    ? `🖥 <b>AvatarHub 客户端安装指引</b>
+    ? `🖥 <b>幻境 STUDIO 客户端安装指引</b>
 
 1️⃣ 官网 /download 下载安装包（约 45 MB，免管理员，按用户安装）
 2️⃣ 双击安装 → 首次启动向导自动检测显卡、按档位下载 AI 组件（支持断点续传）
-3️⃣ 「设置 → 授权」输订单号在线激活，或直接用 14 天免费试用
+3️⃣ 「设置 → 授权」输订单号在线激活，或直接用免费版（换脸免费用，输出带水印）
 
 常见问题：
 · SmartScreen 拦截 → 点「更多信息 → 仍要运行」（SHA-256 可在下载页核验）
@@ -256,11 +257,11 @@ function buildInstallHelp(lang: BotLang) {
 · 显卡建议：仅声音克隆 4GB 起；实时换脸/数字人 8GB+；同传全家桶 24GB
 
 详细图文教程与完整手册见官网 /download 与 /manual。搞不定？99 USD 远程代部署（可 USDT 结算），装好即用。`
-    : `🖥 <b>AvatarHub install guide</b>
+    : `🖥 <b>STUDIO install guide</b>
 
 1️⃣ Download the installer from /download (~45 MB, per-user, no admin rights)
 2️⃣ Run it → the first-launch wizard detects your GPU and downloads AI components by tier (resumable)
-3️⃣ Activate with your order number in Settings → License, or start the 14-day free trial
+3️⃣ Activate with your order number in Settings → License, or just use the Free plan (face swap at no cost, watermarked output)
 
 Common issues:
 · SmartScreen warning → More info → Run anyway (verify SHA-256 on the download page)
@@ -270,11 +271,37 @@ Common issues:
 Full tutorial and manual: /download and /manual. Stuck? 99 USD remote install (USDT settlement OK).`;
 }
 
+/** 幻境 STUDIO 五档套餐速览（价格与 /order 同源 avatarhub-pricing.TIERS，改价自动跟随）。 */
+function buildStudioPlans(lang: BotLang) {
+  const zh = lang === "zh";
+  const rows = TIERS.map((t) => {
+    const name = zh ? t.name.zh : t.name.en;
+    if (t.custom) return `· <b>${name}</b> — ${zh ? "私有部署定制，咨询客服获取报价方案" : "private deployment, contact sales for a quote"}`;
+    if (t.monthly === 0) return `· <b>${name}</b> — ${zh ? "免费（换脸免费用，输出带水印）" : "free (face swap, watermarked output)"}`;
+    const q = tierPrice(t, "quarterly");
+    const y = tierPrice(t, "annual");
+    return zh
+      ? `· <b>${name}</b> — ${t.monthly} USD/月 · ${q}/季 · ${y}/年`
+      : `· <b>${name}</b> — ${t.monthly} USD/mo · ${q}/qtr · ${y}/yr`;
+  }).join("\n");
+  return zh
+    ? `🎭 <b>幻境 STUDIO 套餐</b>（本机算力用量不限 · USDT 结算）
+
+${rows}
+
+能力阶梯：免费=换脸+水印 → 入门=AI 作图/视频换脸+去水印 → 标准=+直播换脸+变声器 → 专业=+直播同声传译 → 旗舰=私有部署定制。官网 /order 可自助下单。`
+    : `🎭 <b>STUDIO plans</b> (unlimited usage on your hardware · USDT)
+
+${rows}
+
+Ladder: Free = face swap + watermark → Starter = AI image gen / video swap, no watermark → Standard = + live swap + voice changer → Pro = + live interpreting → Flagship = private deployment. Self-serve at /order.`;
+}
+
 function keywordRules(lang: BotLang) {
   const zh = [
     { keys: ["安装", "下载", "装不上", "装机", "smartscreen", "杀毒", "报毒", "激活", "试用", "显卡", "显存", "配置要求", "客户端"], fn: () => buildInstallHelp(lang) },
-    // 换脸/直播分身属定制交付业务：网页端不做营销式报价，统一引导人工顾问评估（合规隔离口径）。
-    { keys: ["换脸", "换声", "直播", "连麦", "视频通话"], fn: () => "换脸 / 直播分身属于私有定制交付业务，需要人工顾问先评估场景与合规边界再报价交付。点下方「人工客服」或留个联系方式，我们来跟进。" },
+    // 换脸/直播能力已产品化为幻境 STUDIO 套餐（免费换脸起步）；私有部署/企业定制仍走人工评估。
+    { keys: ["换脸", "换声", "变声", "直播", "连麦", "视频通话", "studio", "幻境"], fn: () => buildStudioPlans(lang) },
     { keys: ["成交", "翻译", "聊天", "聚合", "客服", "谷歌"], fn: () => buildAutochat(lang) },
     { keys: ["价格", "多少钱", "费用", "usdt", "套餐", "月付"], fn: () => buildPricing(lang) },
     { keys: ["部署", "私有", "托管", "交钥匙", "投资", "分红", "合作"], fn: () => buildDeploy(lang) },
@@ -291,9 +318,10 @@ function keywordRules(lang: BotLang) {
   ];
   const en = [
     { keys: ["install", "download", "setup", "smartscreen", "antivirus", "activate", "trial", "gpu", "vram", "requirement", "client"], fn: () => buildInstallHelp(lang) },
-    // Face/live-swap is custom-delivery only: no marketing quote on the web widget, route to a human consultant.
-    // ("voice" removed from this rule so voice-clone questions fall through to the dedicated voice rule below.)
-    { keys: ["face", "swap", "live", "stream"], fn: () => "Face swap / live avatar is a custom private-delivery service — a human consultant needs to assess your scenario and compliance boundary before quoting. Tap Human support below or leave your contact and we'll follow up." },
+    // Face / live swap is now productized as STUDIO plans (free face swap to start);
+    // private deployment / enterprise customization still routes to a human consultant.
+    // ("voice" stays out of this rule so voice-clone questions fall through to the dedicated voice rule below.)
+    { keys: ["face", "swap", "live", "stream", "studio"], fn: () => buildStudioPlans(lang) },
     { keys: ["chat", "translat", "clos", "aggregat", "google"], fn: () => buildAutochat(lang) },
     { keys: ["price", "cost", "usdt", "plan", "monthly"], fn: () => buildPricing(lang) },
     { keys: ["deploy", "private", "turnkey", "invest", "partner"], fn: () => buildDeploy(lang) },
@@ -365,11 +393,27 @@ export function buildKnowledgeContext(lang: BotLang): string {
         .join("; ")
   );
 
-  // 换脸/直播分身（定制交付）刻意不进公开知识库：网页顾问不主动报价，统一引导人工评估（合规隔离口径）。
+  // 幻境 STUDIO 套餐：与 /order 同源（avatarhub-pricing.TIERS），改价自动跟随。
+  parts.push(lang === "zh" ? "【幻境 STUDIO 套餐】" : "[STUDIO plans]");
+  parts.push(
+    TIERS.map((t) => {
+      const name = lang === "zh" ? t.name.zh : t.name.en;
+      const feats = (lang === "zh" ? t.feats.zh : t.feats.en).join(lang === "zh" ? "、" : ", ");
+      if (t.custom)
+        return lang === "zh"
+          ? `- ${name}：私有部署定制、所有专业私域服务——不在线报价，咨询客服获取报价方案（${feats}）`
+          : `- ${name}: private deployment & full pro private-domain services — no online quote, contact sales (${feats})`;
+      if (t.monthly === 0)
+        return lang === "zh" ? `- ${name}：免费（${feats}）` : `- ${name}: free (${feats})`;
+      return lang === "zh"
+        ? `- ${name}：${t.monthly} USD/月、${tierPrice(t, "quarterly")}/季、${tierPrice(t, "annual")}/年（${feats}）`
+        : `- ${name}: ${t.monthly} USD/mo, ${tierPrice(t, "quarterly")}/qtr, ${tierPrice(t, "annual")}/yr (${feats})`;
+    }).join("\n")
+  );
   parts.push(
     lang === "zh"
-      ? "【定制交付业务】换脸 / 直播分身等属私有定制交付：不在线上报价，需人工顾问评估场景与合规边界后交付；用户问到时引导添加 Telegram 人工客服。"
-      : "[Custom delivery] Face swap / live avatar are private custom-delivery services: no online quotes — a human consultant assesses scenario and compliance first; route interested users to Telegram human support."
+      ? "【产品合并】通译 LingoX 已与智聊 ChatX 合并为同一个客户端程序：下载智聊 ChatX 即可使用通译全部翻译能力；通译套餐照常销售，授权在同一程序内激活，原有授权继续有效。"
+      : "[Product merge] LingoX is merged into the ChatX client — one program: download ChatX to get every LingoX translation capability; LingoX plans sell as before and licenses activate inside the same app."
   );
 
   parts.push(lang === "zh" ? "【业务能力】" : "[Solutions]");
@@ -385,12 +429,12 @@ export function buildKnowledgeContext(lang: BotLang): string {
   parts.push(lang === "zh" ? "【三种合作方式】" : "[Three engagement models]");
   c.engage.models.forEach((m) => parts.push(`- ${m.name}（${m.badge}）: ${m.tagline} | ${m.you} / ${m.we} | ${m.price}`));
 
-  parts.push(lang === "zh" ? "【AvatarHub 客户端下载与安装】" : "[AvatarHub client download & install]");
+  parts.push(lang === "zh" ? "【幻境 STUDIO 客户端下载与安装】" : "[STUDIO client download & install]");
   parts.push(
     lang === "zh"
       ? [
           "下载：官网 /download 页，Windows 10/11 (x64) 安装包约 45 MB（薄核心，AI 组件按需下载），SHA-256 可校验；macOS 12+ 轻量控制台即将上线（重推理需 Windows/服务器 N 卡）。",
-          "安装 6 步：① 下载安装包 → ② 双击安装（按用户安装、免管理员，可选目录）→ ③ 首启向导自动检测显卡并推荐档位 → ④ 自动下载 AI 组件（SHA-256 校验 + 断点续传，按档位约 10–60 GB，建议预留 80 GB SSD）→ ⑤ 「设置 → 授权」输订单号在线激活或用 14 天免费试用 → ⑥ 启动器「启动全部」+「一键体检」全绿即成功。",
+          "安装 6 步：① 下载安装包 → ② 双击安装（按用户安装、免管理员，可选目录）→ ③ 首启向导自动检测显卡并推荐档位 → ④ 自动下载 AI 组件（SHA-256 校验 + 断点续传，按档位约 10–60 GB，建议预留 80 GB SSD）→ ⑤ 「设置 → 授权」输订单号在线激活，或直接用免费版（换脸免费、带水印）→ ⑥ 启动器「启动全部」+「一键体检」全绿即成功。",
           "配置要求：仅声音克隆 NVIDIA 4 GB 显存起；实时换脸/数字人直播 8 GB+（RTX 3060 起）；同传全家桶推荐 24 GB（RTX 4090/5090）。内存推荐 32 GB。",
           "常见问题：SmartScreen 拦截 → 「更多信息 → 仍要运行」；组件下载中断 → 重开自动断点续传；服务未就绪 → 启动器「一键体检」，多为显存不足或模型加载中；打不开 → 「一键诊断包」生成 6 位诊断码报给客服即可远程定位。",
           "软件更新：产品内一键升级（下载→自动安装→自动重启约 1–3 分钟），组件与角色数据全保留，清单 Ed25519 签名校验，支持一键回滚，直播中自动避让。每版更新内容见 /download 页「版本更新」。",
@@ -398,7 +442,7 @@ export function buildKnowledgeContext(lang: BotLang): string {
         ].join("\n")
       : [
           "Download: /download page. Windows 10/11 (x64) installer is ~45 MB (thin core, AI components download on demand), SHA-256 verifiable. macOS 12+ lightweight console coming soon (heavy inference needs a Windows/server NVIDIA GPU).",
-          "Install in 6 steps: ① download → ② run installer (per-user, no admin) → ③ first-run wizard detects GPU and recommends a tier → ④ components auto-download (SHA-256 verified, resumable; ~10–60 GB by tier, 80 GB SSD recommended) → ⑤ activate with order number in Settings → License or start the 14-day trial → ⑥ Start All + health check all green = done.",
+          "Install in 6 steps: ① download → ② run installer (per-user, no admin) → ③ first-run wizard detects GPU and recommends a tier → ④ components auto-download (SHA-256 verified, resumable; ~10–60 GB by tier, 80 GB SSD recommended) → ⑤ activate with order number in Settings → License, or just use the Free plan (face swap, watermarked) → ⑥ Start All + health check all green = done.",
           "Requirements: voice-only from NVIDIA 4 GB VRAM; live face swap / digital human 8 GB+ (RTX 3060+); interpreting suite 24 GB (RTX 4090/5090). 32 GB RAM recommended.",
           "Common issues: SmartScreen → More info → Run anyway; interrupted downloads resume automatically; service not ready → run the health check (usually low VRAM or models loading); still stuck → one-click diagnostic pack gives a 6-digit code for remote support.",
           "Updates: one-click in-app update (download → install → restart, ~1–3 min), components and character data preserved, Ed25519-signed manifests, one-click rollback, never applies mid-stream. Per-version notes on /download.",
@@ -432,7 +476,7 @@ export function systemPrompt(lang: BotLang): string {
 - 【语言镜像】务必用「用户最新一条消息所用的语言」作答：用户用西班牙语/葡萄牙语/阿拉伯语/泰语/英语等，就用同种语言地道、口语化地回复（像本地母语顾问，不要翻译腔）。用户用中文则用简体中文。
 - 涉及价格只用资料里的真实数字；资料没有的就说"具体可按你的需求报价，留个联系方式我跟进"。
 - 适当推荐主推「AI 自动成交聊天系统」。
-- 换脸、直播分身等定制交付业务不主动推销、不报价：用户问到时说明属私有定制交付、需人工评估合规与场景，引导添加 Telegram 人工客服。
+- 换脸 / 直播换脸 / 变声 / 同传按「幻境 STUDIO 套餐」资料报价（免费换脸带水印起步）；私有化部署与企业定制（旗舰版）不在线报价，引导添加 Telegram 人工客服获取报价方案。
 - 纯文本回复，不要使用 markdown 符号（如 * # 等）。
 - 不讨论违法用途；强调私有部署、数据不出网、USDT 结算。
 - 结尾可引导："想要方案/报价可以留个联系方式，或点菜单打开官网。"
@@ -451,7 +495,7 @@ Rules:
 - [Language mirroring] ALWAYS reply in the SAME language as the user's latest message: if they write Spanish/Portuguese/Arabic/Thai/etc., reply fluently and idiomatically in that exact language (like a native consultant, no translationese). If Chinese, reply in Simplified Chinese.
 - Use only real numbers from the material; if missing, say "I can quote based on your needs — leave your contact and I'll follow up".
 - Promote the flagship "AI Auto-Closing Chat System" when relevant.
-- Never proactively pitch or quote face swap / live avatar: they are custom private-delivery services — explain that a human consultant must assess compliance and scenario first, and route to Telegram human support.
+- Quote face swap / live swap / voice changer / interpreting from the "STUDIO plans" material (free watermarked face swap to start); private deployment & enterprise customization (Flagship) has no online quote — route to Telegram human support for a tailored quote.
 - Plain text only, no markdown symbols (no * # etc).
 - No illegal use; emphasize private deployment, off-net data, USDT.
 - End by guiding: "leave your contact for a plan/quote, or open the site from the menu."
@@ -466,7 +510,7 @@ const APP = `${SITE_URL}/app`;
 export const WEBAPP_SECTIONS = {
   home: APP, // 概览（左下角菜单键默认入口）
   liveavatar: `${APP}?view=liveavatar`, // 视觉系 · 幻颜/幻声/幻影（换脸·克隆声音·直播换脸换声）
-  soulsync: `${APP}?view=soulsync`, // 沟通系 · 通译/智聊（实时换语言·AI 自动成交）
+  soulsync: `${APP}?view=soulsync`, // 沟通系 · 智聊/通传（实时换语言·AI 自动成交）
   pricing: `${APP}?view=pricing`, // 价格 · 套餐对比 + 领码
   engage: `${APP}?view=engage`, // 合作 · 三种模式
   contact: `${APP}?view=home`, // 留资/客服（home 视图含留资表单）

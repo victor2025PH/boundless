@@ -11,7 +11,7 @@ type Tr = { code: string; native: string; flag: string; text: string };
 
 const COPY = {
   zh: {
-    kicker: "通译 LingoX",
+    kicker: "智聊 ChatX · 内置拟人翻译",
     head: "实时翻译，亲手试一下",
     sub: "输入任意一句话，AI 实时翻成多国语言——这正是跨境聊天互译时的底层能力。",
     placeholder: "输入中文或任意语言，例如：这个产品多少钱？",
@@ -23,9 +23,11 @@ const COPY = {
     waiting: "AI 正在翻成多国语言…",
     orderLead: "觉得好用？上线即开",
     orderNote: "在线下单，付款到账自动签发授权；字符额度与用量在会员中心随时可查。",
+    mergeNote: "📌 通译已与智聊 ChatX 合并为同一个客户端程序：下载智聊 ChatX 即可使用通译全部翻译能力，授权在同一程序内激活生效。",
+    mergeCta: "下载智聊 ChatX →",
   },
   en: {
-    kicker: "LingoX Translate",
+    kicker: "ChatX · Built-in Translation",
     head: "Real-time translation — try it yourself",
     sub: "Type any sentence and watch AI translate it into multiple languages live — the same engine behind cross-border chat translation.",
     placeholder: "Type in any language, e.g. How much is this product?",
@@ -37,6 +39,8 @@ const COPY = {
     waiting: "AI is translating into multiple languages…",
     orderLead: "Like it? Go live today",
     orderNote: "Order online — your license is issued automatically once payment lands; track quota and usage in the membership center.",
+    mergeNote: "📌 LingoX is now merged into the ChatX client — one single program: download ChatX to get every LingoX translation capability; licenses activate inside the same app.",
+    mergeCta: "Download ChatX →",
   },
 } as const;
 
@@ -227,6 +231,17 @@ export default function TranslateDemo() {
               })}
             </div>
             <p className="mt-3 text-xs text-slate-500">{c.orderNote}</p>
+            {/* 通译已并入智聊客户端：合并说明（产品程序层面单一入口） */}
+            <p className="mx-auto mt-4 max-w-xl rounded-2xl border border-amber-400/25 bg-amber-400/[0.06] px-4 py-3 text-xs leading-relaxed text-slate-300">
+              {c.mergeNote}{" "}
+              <a
+                href={`${lang === "zh" ? "" : "/en"}/download/chatx`}
+                onClick={() => track("cta_click", { where: "translate_merge_note" })}
+                className="text-neon-cyan hover:underline"
+              >
+                {c.mergeCta}
+              </a>
+            </p>
           </div>
         </Reveal>
       </div>

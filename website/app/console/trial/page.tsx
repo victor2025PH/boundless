@@ -2,19 +2,43 @@
 //
 // 客服在这里做的唯一一件事：把用户报来的绑定码贴进去，点核销。真凭证由厂商机
 // （私钥离线）签发后回填，用户端后台轮询自动入账——客服不接触任何密钥。
+// 台账与客户体系已打通：联系方式自动比对 identities 解析归属（核销时强信号自动
+// 建档，见 /api/console/trial-redeem），并给出「试用→付费」转化读数。
+import Link from "next/link";
 import { Cloud, Gift, HeartPulse, KeyRound } from "lucide-react";
-import { hasConsoleSession } from "@/lib/console-auth";
+import { getConsoleSessionUser } from "@/lib/console-auth";
+import { roleAtLeast } from "@/lib/console-users";
 import { gatewayDayStats } from "@/lib/ai-gateway";
 import { poolStats as tgPoolStats } from "@/lib/tg-cred-pool";
+import { classifyStrongContact, normIdentityValue } from "@/lib/ledger";
 import { claimStats, listClaims } from "@/lib/trial-claim-store";
 import { readTrialFunnel } from "@/lib/trial-funnel";
-import { Card, DataTable, EmptyState, PageHeader, Td, fmtDateTime } from "../parts";
+import { getCustomerById, identityCustomerMap, paidCustomerIdSet } from "../data";
+import {
+  Card,
+  CustomerLink,
+  DataTable,
+  EmptyState,
+  FilterSubmit,
+  PageHeader,
+  Pager,
+  Td,
+  filterInputCls,
+  fmtDateTime,
+} from "../parts";
 import { TrialRedeemPanel } from "./ui";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const DEFAULT_GIFT = Number(process.env.TRIAL_GIFT_CHARS || 100000);
+const LIMIT = 50;
+const STATUS_CHOICES = [
+  { value: "", label: "全部状态" },
+  { value: "pending", label: "待签发" },
+  { value: "issued", label: "已激活" },
+  { value: "rejected", label: "已驳回" },
+] as const;
 
 /** 心跳判读：厂商机是签发链上唯一的人工/单点环节，它停了整条链静默失效。 */
 function fulfillerHealth(lastSeen: string, oldestPendingMin: number) {
@@ -37,12 +61,20 @@ function fulfillerHealth(lastSeen: string, oldestPendingMin: number) {
   return { tone: "text-emerald-400", label: `正常 · ${ago}`, hint: "" };
 }
 
-export default async function TrialPage() {
-  if (!hasConsoleSession()) return null;
+export default async function TrialPage({
+  searchParams,
+}: {
+  searchParams: { q?: string; status?: string; offset?: string };
+}) {
+  // 核销是写操作（API 侧 admin+）：viewer 不渲染核销面板，页里外口径一致，
+  // 不再出现「看得见表单、提交必 401」的裂缝。
+  const me = getConsoleSessionUser();
+  if (!me) return null;
+  const canRedeem = roleAtLeast(me.role, "admin");
 
   const [stats, rows, funnel, gw] = await Promise.all([
     claimStats(),
-    listClaims({ limit: 200 }),
+    listClaims({ limit: 500 }),
     readTrialFunnel(7),
     gatewayDayStats().catch(() => null),
   ]);
@@ -52,9 +84,50 @@ export default async function TrialPage() {
   } catch {
     tgPool = null;
   }
-  const recent = rows.slice().reverse();
+
+  const q = searchParams.q?.trim().toLowerCase() || undefined;
+  const statusFilter = (["pending", "issued", "rejected"] as const).find(
+    (s) => s === searchParams.status?.trim()
+  );
+  const offset = Math.max(0, Number(searchParams.offset) || 0);
+
+  // 领取 → 客户主档解析：联系方式归一成 identities 同款键查映射，再叠成交客户
+  // 集合即得「试用→付费」。全部只读；解析不到按未归并处理，不猜。
+  const idMap = identityCustomerMap();
+  const paidIds = paidCustomerIdSet();
+  const resolved = rows.map((c) => {
+    let customerId: string | null = null;
+    for (const k of contactKeys(c.contact)) {
+      const cid = idMap.get(k);
+      if (cid) {
+        customerId = cid;
+        break;
+      }
+    }
+    return { ...c, customerId, paid: !!customerId && paidIds.has(customerId) };
+  });
+  const converted = resolved.filter((c) => c.paid).length;
+
   const health = fulfillerHealth(stats.fulfillerLastSeen, stats.oldestPendingMin);
-  const waiting = recent.filter((c) => c.bindRedeemedAt && !c.topupVoucher).length;
+  const waiting = resolved.filter((c) => c.bindRedeemedAt && !c.topupVoucher).length;
+
+  let recent = resolved.slice().reverse();
+  if (statusFilter) recent = recent.filter((c) => c.status === statusFilter);
+  if (q) {
+    recent = recent.filter(
+      (c) => c.contact.toLowerCase().includes(q) || (c.bindCode ?? "").toLowerCase().includes(q)
+    );
+  }
+  const total = recent.length;
+  const pageRows = recent.slice(offset, offset + LIMIT);
+
+  // 本页行的客户显示名（≤LIMIT 次主键查询，与订单页同模式）
+  const nameById = new Map<string, string | null>();
+  for (const c of pageRows) {
+    if (c.customerId && !nameById.has(c.customerId)) {
+      nameById.set(c.customerId, getCustomerById(c.customerId)?.display_name ?? null);
+    }
+  }
 
   return (
     <div>
@@ -70,14 +143,20 @@ export default async function TrialPage() {
         }
       />
 
-      <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <Stat label="总领取" value={stats.total} />
         <Stat label="待签发" value={stats.pending} tone={stats.pending > 0 ? "amber" : undefined} />
         <Stat label="已激活" value={stats.issued} />
         <Stat label="待发赠量" value={waiting} tone={waiting > 0 ? "amber" : undefined} />
+        <Stat
+          label="试用→付费"
+          value={converted}
+          tone={converted > 0 ? "emerald" : undefined}
+          sub={stats.total > 0 ? `${Math.round((converted * 100) / stats.total)}%` : undefined}
+        />
       </div>
 
-      <Card className="mb-4 border-slate-800 bg-slate-900/40 !py-3">
+      <Card className="mb-4 border-ink-700 bg-ink-900/40 !py-3">
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <HeartPulse className={`h-4 w-4 ${health.tone}`} />
           <span className="text-slate-400">履约端（厂商机）：</span>
@@ -91,7 +170,7 @@ export default async function TrialPage() {
       </Card>
 
       {gw && (
-        <Card className="mb-4 border-slate-800 bg-slate-900/40 !py-3">
+        <Card className="mb-4 border-ink-700 bg-ink-900/40 !py-3">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
             <span className="inline-flex items-center gap-1.5">
               <Cloud className={`h-4 w-4 ${gw.enabled ? "text-emerald-400" : "text-slate-500"}`} />
@@ -117,7 +196,7 @@ export default async function TrialPage() {
       )}
 
       {tgPool && tgPool.enabled && (
-        <Card className="mb-4 border-slate-800 bg-slate-900/40 !py-3">
+        <Card className="mb-4 border-ink-700 bg-ink-900/40 !py-3">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
             <span className="inline-flex items-center gap-1.5">
               <KeyRound className="h-4 w-4 text-emerald-400" />
@@ -140,7 +219,7 @@ export default async function TrialPage() {
       )}
 
       {funnel.machines.welcome > 0 && (
-        <Card className="mb-4 border-slate-800 bg-slate-900/40 !py-3">
+        <Card className="mb-4 border-ink-700 bg-ink-900/40 !py-3">
           <div className="mb-2 text-[11px] text-slate-500">
             首启向导漏斗（近 {funnel.days} 天 · 按机器去重）
           </div>
@@ -163,18 +242,51 @@ export default async function TrialPage() {
         </Card>
       )}
 
-      <TrialRedeemPanel defaultChars={DEFAULT_GIFT} />
+      {canRedeem ? (
+        <TrialRedeemPanel defaultChars={DEFAULT_GIFT} />
+      ) : (
+        <p className="mb-5 rounded-xl border border-ink-700 bg-ink-900/40 p-3 text-[11px] text-slate-500">
+          viewer 只读：核销绑定码需 admin 及以上角色。
+        </p>
+      )}
 
-      {recent.length === 0 ? (
+      <form method="GET" className="mb-3 flex flex-wrap items-center gap-2">
+        <select name="status" defaultValue={statusFilter ?? ""} className={filterInputCls}>
+          {STATUS_CHOICES.map((c) => (
+            <option key={c.value} value={c.value}>
+              {c.label}
+            </option>
+          ))}
+        </select>
+        <input
+          type="search"
+          name="q"
+          defaultValue={searchParams.q ?? ""}
+          placeholder="搜索联系方式 / 绑定码"
+          className={`${filterInputCls} w-56`}
+        />
+        <FilterSubmit />
+        {(q || statusFilter) && (
+          <Link href="/console/trial" className="text-xs text-slate-500 hover:text-slate-300">
+            清除
+          </Link>
+        )}
+      </form>
+
+      {pageRows.length === 0 ? (
         <EmptyState
-          title="还没有人领取试用"
-          hints={[<>用户在桌面端首启向导点「免费领取」后，这里会出现记录。</>]}
+          title={q || statusFilter ? "没有匹配的领取记录" : "还没有人领取试用"}
+          hints={
+            q || statusFilter
+              ? ["调整搜索或状态筛选试试。"]
+              : [<>用户在桌面端首启向导点「免费领取」后，这里会出现记录。</>]
+          }
         />
       ) : (
         <>
-          <DataTable head={["时间", "联系方式", "状态", "绑定码", "核销", "赠量"]}>
-            {recent.map((c) => (
-              <tr key={c.id} className="hover:bg-slate-800/40">
+          <DataTable head={["时间", "联系方式", "状态", "绑定码", "核销", "赠量", "客户"]}>
+            {pageRows.map((c) => (
+              <tr key={c.id} className="hover:bg-ink-700/40">
                 <Td className="whitespace-nowrap font-mono text-xs text-slate-500">
                   {fmtDateTime(c.createdAt)}
                 </Td>
@@ -200,16 +312,50 @@ export default async function TrialPage() {
                     <span className="text-slate-600">—</span>
                   )}
                 </Td>
+                <Td>
+                  {c.customerId ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <CustomerLink customerId={c.customerId} label={nameById.get(c.customerId)} />
+                      {c.paid && (
+                        <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">
+                          已付费
+                        </span>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-slate-600">—</span>
+                  )}
+                </Td>
               </tr>
             ))}
           </DataTable>
+          <Pager
+            basePath="/console/trial"
+            params={{ q: searchParams.q?.trim() || undefined, status: statusFilter }}
+            total={total}
+            limit={LIMIT}
+            offset={offset}
+          />
           <p className="mt-3 text-[11px] text-slate-500">
-            共 {recent.length} 条 · 机器指纹不在此展示（用户报码即可核销，指纹属排障信息）。
+            共 {total} 条匹配 · 客户列 = 联系方式与客户身份标识自动比对（核销时强信号自动建档）
+            · 机器指纹不在此展示（用户报码即可核销，指纹属排障信息）。
           </p>
         </>
       )}
     </div>
   );
+}
+
+/** 领取联系方式 → identities 查询键（`kind|value`，与 ledger.normIdentityValue 同口径）。
+ *  强信号（@handle / email / 电话）额外补 classifyStrongContact 的规范键——
+ *  ensureCustomer* 建档时两种键都可能挂，这里对称展开才能都命中。 */
+function contactKeys(contact: string): string[] {
+  const t = (contact || "").trim();
+  if (!t) return [];
+  const keys = new Set<string>([`contact|${normIdentityValue("contact", t)}`]);
+  const strong = classifyStrongContact(t);
+  if (strong) keys.add(`${strong.kind}|${strong.value}`);
+  return [...keys];
 }
 
 function FunnelStep({ label, value, rate }: { label: string; value: number; rate?: number }) {
@@ -227,16 +373,27 @@ function FunnelArrow() {
   return <span className="text-slate-600">→</span>;
 }
 
-function Stat({ label, value, tone }: { label: string; value: number; tone?: "amber" }) {
+function Stat({
+  label,
+  value,
+  tone,
+  sub,
+}: {
+  label: string;
+  value: number;
+  tone?: "amber" | "emerald";
+  sub?: string;
+}) {
   return (
-    <Card className="border-slate-800 bg-slate-900/40 !py-3">
+    <Card className="border-ink-700 bg-ink-900/40 !py-3">
       <div className="text-[11px] text-slate-500">{label}</div>
       <div
         className={`mt-1 text-2xl font-semibold ${
-          tone === "amber" ? "text-amber-300" : "text-slate-100"
+          tone === "amber" ? "text-amber-300" : tone === "emerald" ? "text-emerald-300" : "text-slate-100"
         }`}
       >
         {value}
+        {sub && <span className="ml-1.5 text-xs font-normal text-slate-500">{sub}</span>}
       </div>
     </Card>
   );
@@ -250,7 +407,7 @@ function StatusChip({ status }: { status: string }) {
   };
   const zh: Record<string, string> = { pending: "待签发", issued: "已激活", rejected: "已驳回" };
   return (
-    <span className={`rounded px-1.5 py-0.5 text-[10px] ${map[status] || "bg-slate-800 text-slate-400"}`}>
+    <span className={`rounded px-1.5 py-0.5 text-[10px] ${map[status] || "bg-ink-700 text-slate-400"}`}>
       {zh[status] || status}
     </span>
   );

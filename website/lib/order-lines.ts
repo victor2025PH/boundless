@@ -1,14 +1,14 @@
 // /order 面板的多产品线适配层（2026-07-24 P7）：把 ChatX / LingoX 的服务类 SKU
-// （lib/pricing.ts 单一价格真相）适配成 AvatarHub 面板同构的 Tier 卡片，让下单面板
-// 一套交互三条产品线通吃。
+// （lib/pricing.ts 单一价格真相）适配成幻境 STUDIO 面板同构的 Tier 卡片，
+// 让下单面板一套交互三条产品线通吃。
 //
 // 设计约束：
 //  - 价格绝不在本文件复写数字——一律按 offer id 从 pricing.ts 派生（改价只改 pricing.ts）；
 //  - key = offer id（autochat-entry / translate-charpack …）＝ POST /api/order 的 plan 参数，
 //    经 lib/offer-map.ts::resolveOrderSku 映射全域 SKU → 引擎自动履约；
-//  - 年付沿用全站惯例 ×10（送 2 个月，lib/avatarhub-pricing.ANNUAL_MONTHS）；
-//    一次性商品（charpack）标 oneTime，周期切换不影响其价格；
-//  - 首年 8 折促销（FIRST_YEAR_PROMO）是 AvatarHub 专属，本适配层产品线不参与。
+//  - 本适配层产品线无显式季付/年付挂牌价：季付 ×3、年付 ×10（送 2 个月，
+//    lib/avatarhub-pricing.QUARTER_MONTHS / ANNUAL_MONTHS 推导）；
+//    一次性商品（charpack）标 oneTime，周期切换不影响其价格。
 import { autochatOffers, translateOffers, type PriceOffer } from "@/lib/pricing";
 import type { Tier } from "@/lib/avatarhub-pricing";
 
@@ -63,7 +63,7 @@ export const CHATX_TIERS: LineTier[] = [
   },
 ];
 
-// ── 通译 LingoX（多平台聊天翻译；sku_registry tongyi/lingox-*）────────────────
+// ── 智聊翻译套餐（原通译 LingoX，2026-08-04 并入；sku_registry tongyi/lingox-* 不变）──
 export const LINGOX_TIERS: LineTier[] = [
   {
     key: "translate-charpack",
@@ -73,8 +73,8 @@ export const LINGOX_TIERS: LineTier[] = [
     name: { zh: "字符包 Char pack", en: "Char pack" },
     audience: { zh: "一次性 · 按量加购", en: "One-time top-up" },
     feats: {
-      zh: ["150 万翻译字符", "术语锁定 · 翻译记忆", "会员中心粘贴凭证即到账", "需已有通译订阅"],
-      en: ["1.5M translation chars", "Term-lock glossary · translation memory", "Redeem in membership center", "Requires an active LingoX plan"],
+      zh: ["150 万翻译字符", "术语锁定 · 翻译记忆", "会员中心粘贴凭证即到账", "需已有翻译套餐订阅"],
+      en: ["1.5M translation chars", "Term-lock glossary · translation memory", "Redeem in membership center", "Requires an active translate plan"],
     },
   },
   {
@@ -103,7 +103,7 @@ export const LINGOX_TIERS: LineTier[] = [
   },
 ];
 
-/** 产品线元信息：Tab 文案 + 面板首段（AvatarHub 的「不按字符计费」话术只对本机算力
+/** 产品线元信息：Tab 文案 + 面板首段（幻境 STUDIO 的「不按字符计费」话术只对本机算力
  *  产品成立，LingoX 按字符额度计量——文案必须随产品线切换，防承诺错位）。 */
 export interface FamilyMeta {
   key: OrderFamily;
@@ -114,26 +114,28 @@ export interface FamilyMeta {
 export const FAMILIES: FamilyMeta[] = [
   {
     key: "avatarhub",
-    tab: { zh: "幻境数字人", en: "AvatarHub" },
+    tab: { zh: "幻境 STUDIO ", en: "STUDIO" },
     blurb: {
-      zh: "引擎跑在你自己的设备上——我们不卖算力，所以不按字符、张数、时长计费，用量不限。设备自备（下方有配置与配件清单），我们协助部署；到账后按机器指纹签发授权，客户端一键激活。",
-      en: "The engine runs on your own hardware — we don't sell compute, so there's no per-character or per-minute metering. Bring your device (specs below), we help you deploy; licenses are issued against your machine fingerprint after payment.",
+      zh: "幻境 STUDIO ：引擎跑在你自己的设备上——我们不卖算力，所以不按字符、张数、时长计费，用量不限。免费版即可换脸（输出带水印），付费档解锁作图、直播换脸、变声与同传。设备自备（下方有配置与配件清单），我们协助部署；到账后按机器指纹签发授权，客户端一键激活。",
+      en: "STUDIO: the engine runs on your own hardware — we don't sell compute, so there's no per-character or per-minute metering. The Free plan does face swap (watermarked); paid tiers unlock image gen, live swap, voice changer and interpreting. Bring your device (specs below), we help you deploy; licenses are issued against your machine fingerprint after payment.",
     },
   },
   {
     key: "chatx",
     tab: { zh: "智聊 ChatX", en: "ChatX" },
     blurb: {
-      zh: "AI 客服成交引擎：多平台账号统一接管，AI 自动回复、主动跟进、引导成交，人工可随时接管。按账号数与平台授权，到账自动开通，粘贴授权码即激活。",
-      en: "AI closing engine: unify accounts across platforms with AI auto-reply, proactive follow-up and guided closing — humans can take over anytime. Licensed by accounts and platforms; auto-activated after payment.",
+      zh: "AI 客服成交引擎：多平台账号统一接管，AI 自动回复、主动跟进、引导成交，人工可随时接管。已内置通译 LingoX 全部翻译能力（两产品同一个客户端程序）。按账号数与平台授权，到账自动开通，粘贴授权码即激活。",
+      en: "AI closing engine: unify accounts across platforms with AI auto-reply, proactive follow-up and guided closing — humans can take over anytime. Every LingoX translation capability is built into the same client. Licensed by accounts and platforms; auto-activated after payment.",
     },
   },
   {
+    // 2026-08-04 通译并入智聊：tab 改「智聊 · 翻译套餐」（family key 与 translate-* 深链保持
+    // 不变——它们是 /order?plan= 参数与埋点维度，改键会断历史深链与漏斗数据）。
     key: "lingox",
-    tab: { zh: "通译 LingoX", en: "LingoX" },
+    tab: { zh: "智聊 · 翻译套餐", en: "ChatX · Translate" },
     blurb: {
-      zh: "多平台聊天双向翻译：按坐席 + 字符额度授权（专业版不限字符），术语锁定与翻译记忆保持口径一致。字符包一次性加量，会员中心粘贴凭证即到账。",
-      en: "Two-way chat translation across platforms, licensed by seats + character quota (Pro is unlimited). Term-lock glossary and translation memory keep wording consistent; top-up packs credit instantly in the membership center.",
+      zh: "智聊内置的多平台聊天双向翻译，按坐席 + 字符额度授权（专业版不限字符），术语锁定与翻译记忆保持口径一致。字符包一次性加量，会员中心粘贴凭证即到账。下载智聊 ChatX 即可使用，无独立安装包。",
+      en: "ChatX's built-in two-way chat translation, licensed by seats + character quota (Pro is unlimited). Term-lock glossary and translation memory keep wording consistent; top-up packs credit instantly in the membership center. Download ChatX to use it — no separate installer.",
     },
   },
 ];

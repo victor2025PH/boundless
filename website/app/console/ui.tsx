@@ -8,10 +8,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  Activity,
   BarChart3,
   Bug,
-  Crown,
   Gift,
   Inbox,
   KeyRound,
@@ -60,7 +58,7 @@ export function ConsoleToaster() {
   return (
     <div
       className={`fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-xl px-4 py-2.5 text-sm font-medium shadow-2xl ${
-        toast.ok ? "bg-amber-400 text-slate-950" : "bg-rose-500 text-white"
+        toast.ok ? "bg-crown-400 text-slate-950" : "bg-rose-500 text-white"
       }`}
     >
       {toast.msg}
@@ -92,11 +90,11 @@ async function api<T = Record<string, unknown>>(
 }
 
 const inputCls =
-  "w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-amber-500";
+  "w-full rounded-lg border border-slate-700 bg-ink-950 px-3 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-crown-500";
 const btnPrimary =
-  "rounded-lg bg-amber-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-400 disabled:opacity-50";
+  "rounded-lg bg-crown-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-crown-400 disabled:opacity-50";
 const btnGhost =
-  "rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:border-amber-500/60 hover:text-amber-300 disabled:opacity-50";
+  "rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:border-crown-500/60 hover:text-crown-300 disabled:opacity-50";
 
 // ── 登录卡（未登录时由 layout 渲染）────────────────────────────────
 // usersEmpty=true → 「初始化主账号」引导表单（CONSOLE_KEY + 用户名 + 密码，建首个 master）；
@@ -146,8 +144,8 @@ export function LoginCard({ configured, usersEmpty }: { configured: boolean; use
   return (
     // 登录页与官网同品牌：ink 深底 + 霓虹青主色 + ∞ 主标（老板要求与 bd2026.cc 一致）；
     // 登录后的内页仍保留琥珀色系（与营销 /admin 青色区分的皇冠资产视觉）。
-    <div className="relative mx-auto flex min-h-screen max-w-sm flex-col justify-center bg-[#05060f] bg-grid-glow px-6">
-      <div className="rounded-2xl border border-cyan-400/25 bg-[#0a0c1b]/80 p-7 shadow-[0_0_70px_rgba(34,211,238,0.10)] backdrop-blur">
+    <div className="relative mx-auto flex min-h-screen max-w-sm flex-col justify-center bg-ink-950 bg-grid-glow px-6">
+      <div className="rounded-2xl border border-cyan-400/25 bg-ink-900/80 p-7 shadow-[0_0_70px_rgba(34,211,238,0.10)] backdrop-blur">
         <div className="mb-3 flex items-center gap-3">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
@@ -283,47 +281,84 @@ export function LogoutButton() {
   );
 }
 
-// ── 顶部导航（当前路由高亮；用户管理入口仅 master 可见）────────────
-const NAV = [
-  { href: "/console", label: "总览", Icon: LayoutDashboard },
-  { href: "/console/customers", label: "客户", Icon: Users },
-  { href: "/console/personas", label: "人设", Icon: VenetianMask },
-  { href: "/console/opportunities", label: "商机", Icon: Sparkles },
-  { href: "/console/orders", label: "订单", Icon: ReceiptText },
-  { href: "/console/licenses", label: "授权", Icon: KeyRound },
-  { href: "/console/leads", label: "留资", Icon: Inbox },
-  { href: "/console/trial", label: "试用", Icon: Gift },
-  { href: "/console/channels", label: "渠道", Icon: Radio },
-  { href: "/console/kpi", label: "KPI", Icon: BarChart3 },
-  { href: "/console/audit", label: "审计", Icon: ScrollText },
-  { href: "/console/errors", label: "错误", Icon: Bug },
-  { href: "/console/health", label: "健康", Icon: Activity },
-] as const;
+// ── 顶部导航（四组分区：经营 / 增长 / 平台 / 系统；用户管理入口仅 master 可见）──
+// 分组语义：经营 = 每天看的钱与客户；增长 = 获客与转化侧台账；平台 = 集团级
+// 数字资产与遥测；系统 = 审计与运维。当前路由高亮沿用 startsWith（/console 精确）。
+interface NavItem {
+  href: string;
+  label: string;
+  Icon: typeof LayoutDashboard;
+}
 
-const NAV_USERS = { href: "/console/users", label: "用户", Icon: UserCog } as const;
+const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
+  {
+    label: "经营",
+    items: [
+      { href: "/console", label: "总览", Icon: LayoutDashboard },
+      { href: "/console/customers", label: "客户", Icon: Users },
+      { href: "/console/orders", label: "订单", Icon: ReceiptText },
+      { href: "/console/licenses", label: "授权", Icon: KeyRound },
+      { href: "/console/opportunities", label: "商机", Icon: Sparkles },
+    ],
+  },
+  {
+    label: "增长",
+    items: [
+      { href: "/console/leads", label: "留资", Icon: Inbox },
+      { href: "/console/trial", label: "试用", Icon: Gift },
+      { href: "/console/channels", label: "渠道", Icon: Radio },
+    ],
+  },
+  {
+    label: "平台",
+    items: [
+      { href: "/console/personas", label: "人设", Icon: VenetianMask },
+      { href: "/console/kpi", label: "事件流", Icon: BarChart3 },
+    ],
+  },
+  {
+    label: "系统",
+    items: [
+      { href: "/console/audit", label: "审计", Icon: ScrollText },
+      { href: "/console/errors", label: "错误", Icon: Bug },
+    ],
+  },
+];
+
+const NAV_USERS: NavItem = { href: "/console/users", label: "用户", Icon: UserCog };
 
 export function ConsoleNav({ showUsers = false }: { showUsers?: boolean }) {
   const pathname = usePathname();
-  const items = showUsers ? [...NAV, NAV_USERS] : [...NAV];
+  const groups = showUsers
+    ? NAV_GROUPS.map((g) => (g.label === "系统" ? { ...g, items: [...g.items, NAV_USERS] } : g))
+    : NAV_GROUPS;
   return (
-    <nav className="flex gap-1 overflow-x-auto">
-      {items.map(({ href, label, Icon }) => {
-        const active = href === "/console" ? pathname === "/console" : pathname?.startsWith(href);
-        return (
-          <Link
-            key={href}
-            href={href}
-            className={`flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm font-medium transition ${
-              active
-                ? "border-amber-400 text-amber-300"
-                : "border-transparent text-slate-400 hover:text-slate-200"
-            }`}
-          >
-            <Icon className="h-4 w-4" />
-            {label}
-          </Link>
-        );
-      })}
+    <nav className="flex items-center gap-0.5 overflow-x-auto">
+      {groups.map((g, gi) => (
+        <div key={g.label} className="flex shrink-0 items-center gap-0.5">
+          {gi > 0 && <span aria-hidden className="mx-1.5 h-4 w-px shrink-0 bg-ink-700" />}
+          <span className="hidden shrink-0 select-none pr-1 text-[10px] font-semibold uppercase tracking-wider text-slate-600 lg:inline">
+            {g.label}
+          </span>
+          {g.items.map(({ href, label, Icon }) => {
+            const active = href === "/console" ? pathname === "/console" : pathname?.startsWith(href);
+            return (
+              <Link
+                key={href}
+                href={href}
+                className={`flex shrink-0 items-center gap-1.5 border-b-2 px-2.5 py-2.5 text-sm font-medium transition ${
+                  active
+                    ? "border-crown-400 text-crown-300"
+                    : "border-transparent text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+                {label}
+              </Link>
+            );
+          })}
+        </div>
+      ))}
     </nav>
   );
 }
@@ -398,9 +433,9 @@ export function NewCustomerForm() {
     );
   }
   return (
-    <div className="w-full rounded-xl border border-amber-500/25 bg-slate-900/70 p-4 sm:max-w-md">
+    <div className="w-full rounded-xl border border-crown-500/25 bg-ink-900/70 p-4 sm:max-w-md">
       <div className="mb-3 flex items-center justify-between">
-        <span className="text-sm font-semibold text-amber-300">新建客户</span>
+        <span className="text-sm font-semibold text-crown-300">新建客户</span>
         <button onClick={() => setOpen(false)} className="text-slate-500 hover:text-slate-300" aria-label="关闭">
           <X className="h-4 w-4" />
         </button>
@@ -430,42 +465,124 @@ export function NewCustomerForm() {
   );
 }
 
-// ── 归属客户（订单/授权/留资行内控件）──────────────────────────────
+// ── 客户搜索选择器（共享）───────────────────────────────────────────
+// 归属类控件的公共内核：输入即异步搜（250ms 防抖 → GET /api/console/customers?q=）
+// 只取前 20 条候选。替代旧「服务端预灌 500 客户进 <select>」——客户量增长后
+// 预灌既慢又不可用（原生 select 无法搜索）。
 export interface CustomerOption {
   id: string;
   label: string;
 }
 
+interface CustomerApiRow {
+  id: string;
+  display_name: string | null;
+  primary_contact: string | null;
+}
+
+function customerLabel(c: CustomerApiRow): string {
+  return `${c.display_name || "（未命名）"}${c.primary_contact ? ` · ${c.primary_contact}` : ""}`;
+}
+
+export function CustomerPicker({
+  onPick,
+  disabled = false,
+}: {
+  onPick: (customer: CustomerOption) => void | Promise<void>;
+  disabled?: boolean;
+}) {
+  const [q, setQ] = useState("");
+  const [items, setItems] = useState<CustomerOption[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const d = await api<{ rows: CustomerApiRow[] }>(
+          `/api/console/customers?q=${encodeURIComponent(q.trim())}&limit=20`
+        );
+        if (alive) setItems(d.rows.map((c) => ({ id: c.id, label: customerLabel(c) })));
+      } catch {
+        if (alive) setItems([]);
+      } finally {
+        if (alive) setLoading(false);
+      }
+    }, 250);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [q]);
+
+  return (
+    <div className="space-y-1.5">
+      <input
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder="搜索客户名 / 联系方式 / TG ID"
+        className={`${inputCls} px-2 py-1.5 text-xs`}
+        autoFocus
+        disabled={disabled}
+      />
+      <div className="max-h-44 space-y-0.5 overflow-y-auto">
+        {loading ? (
+          <p className="p-1 text-[11px] text-slate-500">搜索中…</p>
+        ) : items.length === 0 ? (
+          <p className="p-1 text-[11px] leading-relaxed text-slate-500">
+            {q.trim() ? "没有匹配的客户，切到「快捷新建」直接建一位。" : "还没有客户，切到「快捷新建」直接建一位。"}
+          </p>
+        ) : (
+          items.map((c) => (
+            <button
+              key={c.id}
+              onClick={() => onPick(c)}
+              disabled={disabled}
+              className="block w-full truncate rounded-md px-2 py-1.5 text-left text-xs text-slate-200 hover:bg-crown-500/10 hover:text-crown-300 disabled:opacity-50"
+              title={c.label}
+            >
+              {c.label}
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── 归属客户（订单/授权/留资行内控件；已归属行用 assigned 出「改绑/解绑」）──
 export function AssignCustomerControl({
   entity,
   entityKey,
-  customers,
+  assigned = false,
 }: {
   entity: "order" | "license" | "lead";
   entityKey: string;
-  customers: CustomerOption[];
+  /** true = 该行已归属：触发钮变低调的「改绑」，面板里追加「解除归属」。 */
+  assigned?: boolean;
 }) {
   const router = useRouter();
   const [mode, setMode] = useState<"closed" | "pick" | "create">("closed");
   const [busy, setBusy] = useState(false);
-  const [selected, setSelected] = useState("");
   const [newName, setNewName] = useState("");
   const [newContact, setNewContact] = useState("");
 
   const endpoint =
     entity === "order" ? "/api/console/orders" : entity === "license" ? "/api/console/licenses" : "/api/console/leads";
 
-  async function assignTo(customerId: string) {
-    const body = entity === "lead" ? { source_key: entityKey, customer_id: customerId } : { id: entityKey, customer_id: customerId };
+  async function patchAssign(customerId: string | null) {
+    const body =
+      entity === "lead" ? { source_key: entityKey, customer_id: customerId } : { id: entityKey, customer_id: customerId };
     await api(endpoint, { method: "PATCH", json: body });
   }
 
-  async function submitPick() {
-    if (!selected || busy) return;
+  async function pick(c: CustomerOption) {
+    if (busy) return;
     setBusy(true);
     try {
-      await assignTo(selected);
-      emitToast("已归属客户");
+      await patchAssign(c.id);
+      emitToast(`已归属 ${c.label}`);
       setMode("closed");
       router.refresh();
     } catch (e) {
@@ -483,7 +600,7 @@ export function AssignCustomerControl({
         display_name: newName.trim(),
         primary_contact: newContact.trim() || undefined,
       });
-      await assignTo(customer.id);
+      await patchAssign(customer.id);
       emitToast(`已创建并归属 ${customer.display_name ?? customer.id}`);
       setMode("closed");
       setNewName("");
@@ -496,11 +613,35 @@ export function AssignCustomerControl({
     }
   }
 
+  async function submitUnassign() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await patchAssign(null);
+      emitToast("已解除归属");
+      setMode("closed");
+      router.refresh();
+    } catch (e) {
+      emitToast(e instanceof Error ? e.message : String(e), false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (mode === "closed") {
-    return (
+    return assigned ? (
       <button
         onClick={() => setMode("pick")}
-        className="inline-flex items-center gap-1 rounded-lg border border-amber-500/40 px-2 py-1 text-xs font-medium text-amber-300 hover:bg-amber-500/10"
+        title="改绑到别的客户，或解除归属"
+        className="inline-flex items-center gap-1 rounded-md border border-slate-700 px-1.5 py-0.5 text-[11px] text-slate-500 hover:border-crown-500/50 hover:text-crown-300"
+      >
+        <Link2 className="h-3 w-3" />
+        改绑
+      </button>
+    ) : (
+      <button
+        onClick={() => setMode("pick")}
+        className="inline-flex items-center gap-1 rounded-lg border border-crown-500/40 px-2 py-1 text-xs font-medium text-crown-300 hover:bg-crown-500/10"
       >
         <Link2 className="h-3 w-3" />
         归属客户
@@ -509,18 +650,18 @@ export function AssignCustomerControl({
   }
 
   return (
-    <div className="w-56 rounded-lg border border-slate-700 bg-slate-900 p-2 text-left shadow-xl">
+    <div className="w-64 rounded-lg border border-slate-700 bg-ink-900 p-2 text-left shadow-xl">
       <div className="mb-1.5 flex items-center justify-between">
         <div className="flex gap-1 text-[11px]">
           <button
             onClick={() => setMode("pick")}
-            className={`rounded px-1.5 py-0.5 ${mode === "pick" ? "bg-amber-500/20 text-amber-300" : "text-slate-400 hover:text-slate-200"}`}
+            className={`rounded px-1.5 py-0.5 ${mode === "pick" ? "bg-crown-500/20 text-crown-300" : "text-slate-400 hover:text-slate-200"}`}
           >
-            选已有
+            搜客户
           </button>
           <button
             onClick={() => setMode("create")}
-            className={`rounded px-1.5 py-0.5 ${mode === "create" ? "bg-amber-500/20 text-amber-300" : "text-slate-400 hover:text-slate-200"}`}
+            className={`rounded px-1.5 py-0.5 ${mode === "create" ? "bg-crown-500/20 text-crown-300" : "text-slate-400 hover:text-slate-200"}`}
           >
             快捷新建
           </button>
@@ -530,21 +671,7 @@ export function AssignCustomerControl({
         </button>
       </div>
       {mode === "pick" ? (
-        customers.length ? (
-          <div className="space-y-1.5">
-            <select value={selected} onChange={(e) => setSelected(e.target.value)} className={`${inputCls} px-2 py-1.5 text-xs`}>
-              <option value="">— 选择客户 —</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>{c.label}</option>
-              ))}
-            </select>
-            <button onClick={submitPick} disabled={busy || !selected} className={`${btnPrimary} w-full px-2 py-1.5 text-xs`}>
-              {busy ? "提交中…" : "确认归属"}
-            </button>
-          </div>
-        ) : (
-          <p className="p-1 text-[11px] leading-relaxed text-slate-500">还没有客户，切到「快捷新建」直接建一位。</p>
-        )
+        <CustomerPicker onPick={pick} disabled={busy} />
       ) : (
         <div className="space-y-1.5">
           <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="客户显示名 *" className={`${inputCls} px-2 py-1.5 text-xs`} />
@@ -554,7 +681,127 @@ export function AssignCustomerControl({
           </button>
         </div>
       )}
+      {assigned && (
+        <button
+          onClick={submitUnassign}
+          disabled={busy}
+          className="mt-1.5 w-full rounded-lg border border-rose-500/40 px-2 py-1.5 text-xs text-rose-300 hover:bg-rose-500/10 disabled:opacity-50"
+        >
+          {busy ? "处理中…" : "解除归属（归错人时用）"}
+        </button>
+      )}
     </div>
+  );
+}
+
+// ── 客户 360：编辑主档（display_name / primary_contact / notes）────────
+export function EditCustomerForm({
+  customerId,
+  initial,
+}: {
+  customerId: string;
+  initial: { display_name: string | null; primary_contact: string | null; notes: string | null };
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [name, setName] = useState(initial.display_name ?? "");
+  const [contact, setContact] = useState(initial.primary_contact ?? "");
+  const [notes, setNotes] = useState(initial.notes ?? "");
+
+  async function submit() {
+    if (!name.trim() || busy) return;
+    setBusy(true);
+    try {
+      await api(`/api/console/customers/${customerId}`, {
+        method: "PATCH",
+        json: { display_name: name.trim(), primary_contact: contact.trim() || null, notes: notes.trim() || null },
+      });
+      emitToast("主档已更新");
+      setOpen(false);
+      router.refresh();
+    } catch (e) {
+      emitToast(e instanceof Error ? e.message : String(e), false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className={`${btnGhost} px-2.5 py-1 text-xs`}>
+        编辑主档
+      </button>
+    );
+  }
+  return (
+    <div className="w-full rounded-xl border border-crown-500/25 bg-ink-900/70 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-xs font-semibold text-crown-300">编辑主档</span>
+        <button onClick={() => setOpen(false)} className="text-slate-500 hover:text-slate-300" aria-label="关闭">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="space-y-2">
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="显示名 *" className={inputCls} />
+        <input value={contact} onChange={(e) => setContact(e.target.value)} placeholder="主联系方式（可空）" className={inputCls} />
+        <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="备注（可空）" className={inputCls} />
+        <button onClick={submit} disabled={busy || !name.trim()} className={`${btnPrimary} w-full`}>
+          {busy ? "保存中…" : "保存"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── 客户 360：解绑身份（两段确认，防误点）──────────────────────────
+export function DetachIdentityButton({ customerId, identityId }: { customerId: string; identityId: number }) {
+  const router = useRouter();
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function doDetach() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api(`/api/console/customers/${customerId}`, {
+        method: "POST",
+        json: { action: "detach_identity", identity_id: identityId },
+      });
+      emitToast("身份已解绑（历史归属不回滚）");
+      router.refresh();
+    } catch (e) {
+      emitToast(e instanceof Error ? e.message : String(e), false);
+      setBusy(false);
+      setArmed(false);
+    }
+  }
+
+  if (!armed) {
+    return (
+      <button
+        onClick={() => setArmed(true)}
+        title="解绑该身份（之后新订单/留资不再按它自动归属；历史归属保留）"
+        className="text-slate-600 hover:text-rose-300"
+        aria-label="解绑身份"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1">
+      <button
+        onClick={doDetach}
+        disabled={busy}
+        className="rounded border border-rose-500/40 px-1.5 py-0.5 text-[10px] font-medium text-rose-300 hover:bg-rose-500/10 disabled:opacity-50"
+      >
+        {busy ? "…" : "确认解绑"}
+      </button>
+      <button onClick={() => setArmed(false)} disabled={busy} className="text-slate-500 hover:text-slate-300" aria-label="取消">
+        <X className="h-3 w-3" />
+      </button>
+    </span>
   );
 }
 
@@ -620,9 +867,9 @@ export function NewUserForm() {
     );
   }
   return (
-    <div className="w-full rounded-xl border border-amber-500/25 bg-slate-900/70 p-4 sm:max-w-md">
+    <div className="w-full rounded-xl border border-crown-500/25 bg-ink-900/70 p-4 sm:max-w-md">
       <div className="mb-3 flex items-center justify-between">
-        <span className="text-sm font-semibold text-amber-300">新建用户</span>
+        <span className="text-sm font-semibold text-crown-300">新建用户</span>
         <button onClick={() => setOpen(false)} className="text-slate-500 hover:text-slate-300" aria-label="关闭">
           <X className="h-4 w-4" />
         </button>
@@ -758,6 +1005,190 @@ export function UserActions({ user, isLastEnabledMaster }: { user: ConsoleUserIt
         </button>
       )}
     </div>
+  );
+}
+
+// ── 商机跟进（schema v4；自 opportunities-ui.tsx 合并进来，api/emitToast 单源）──
+// 状态小徽章 + 「跟进/赢单/忽略」行尾操作（带确认面板与备注小输入）；已关闭
+// （won/dismissed）的行提供「重开」。admin+ 才由服务端页面渲染操作件；提交走
+// POST /api/console/opportunities → markOpportunity，成功后 router.refresh()。
+// 备注隐私纪律：note 只写运营自己的跟进话术/结果，绝不粘贴客户聊天原文。
+export type OppLogStatus = "open" | "contacted" | "won" | "dismissed";
+
+export interface OppLogInfo {
+  status: OppLogStatus;
+  note: string | null;
+  acted_by: string | null;
+  acted_at: string | null;
+}
+
+const OPP_LOG_STATUS_STYLE: Record<OppLogStatus, string> = {
+  open: "bg-slate-500/15 text-slate-300 border-slate-500/30",
+  contacted: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+  won: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+  dismissed: "bg-slate-500/15 text-slate-400 border-slate-500/30",
+};
+const OPP_LOG_STATUS_LABEL: Record<OppLogStatus, string> = {
+  open: "待跟进",
+  contacted: "已联系",
+  won: "已赢单",
+  dismissed: "已忽略",
+};
+
+/** 商机行的跟进状态徽章：未标记（log=null）不占位；title 带经手人/时间/备注。 */
+export function OpportunityLogBadge({ log }: { log: OppLogInfo | null }) {
+  if (!log) return null;
+  const title = [
+    log.acted_by ? `经手：${log.acted_by}` : null,
+    log.acted_at ? `时间：${log.acted_at.slice(0, 16).replace("T", " ")}` : null,
+    log.note ? `备注：${log.note}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return (
+    <span
+      title={title || undefined}
+      className={`inline-block shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium ${OPP_LOG_STATUS_STYLE[log.status]}`}
+    >
+      {OPP_LOG_STATUS_LABEL[log.status]}
+    </span>
+  );
+}
+
+interface OppAction {
+  status: OppLogStatus;
+  label: string;
+  cls: string;
+  confirmLabel: string;
+}
+
+const OPP_ACTIONS: OppAction[] = [
+  {
+    status: "contacted",
+    label: "跟进",
+    cls: "border-sky-500/40 text-sky-300 hover:bg-sky-500/10",
+    confirmLabel: "标记为「已联系」（保留在清单，信号值 −20）",
+  },
+  {
+    status: "won",
+    label: "赢单",
+    cls: "border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10",
+    confirmLabel: "标记为「已赢单」（默认从清单隐藏）",
+  },
+  {
+    status: "dismissed",
+    label: "忽略",
+    cls: "border-slate-600 text-slate-400 hover:border-rose-500/50 hover:text-rose-300",
+    confirmLabel: "标记为「已忽略」（默认从清单隐藏）",
+  },
+];
+
+const OPP_REOPEN: OppAction = {
+  status: "open",
+  label: "重开",
+  cls: "border-crown-500/40 text-crown-300 hover:bg-crown-500/10",
+  confirmLabel: "重新打开（回到「待跟进」清单，信号值恢复）",
+};
+
+export function OpportunityActions({
+  oppKey,
+  kind,
+  customerId,
+  toProduct,
+  log,
+}: {
+  oppKey: string;
+  kind: string;
+  customerId: string;
+  toProduct?: string | null;
+  log: OppLogInfo | null;
+}) {
+  const router = useRouter();
+  const [pending, setPending] = useState<OppLogStatus | null>(null);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // 已关闭（won/dismissed）只出「重开」；进行中出三个跟进动作。
+  const closed = log?.status === "won" || log?.status === "dismissed";
+  const actions = closed ? [OPP_REOPEN] : OPP_ACTIONS;
+
+  async function submit(status: OppLogStatus) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api("/api/console/opportunities", {
+        method: "POST",
+        json: {
+          opp_key: oppKey,
+          kind,
+          customer_id: customerId,
+          to_product: toProduct ?? undefined,
+          status,
+          // 空备注不传 → 保留已有备注（重复标记不冲掉上次跟进语）
+          ...(note.trim() ? { note: note.trim() } : {}),
+        },
+      });
+      emitToast(`已标记：${OPP_LOG_STATUS_LABEL[status]}`);
+      setPending(null);
+      setNote("");
+      router.refresh();
+    } catch (e) {
+      emitToast(e instanceof Error ? e.message : String(e), false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (pending) {
+    const action = actions.find((a) => a.status === pending) ?? OPP_REOPEN;
+    return (
+      <div className="w-60 rounded-lg border border-slate-700 bg-ink-900 p-2 text-left shadow-xl">
+        <div className="mb-1.5 flex items-start justify-between gap-2">
+          <p className="text-[11px] leading-relaxed text-slate-300">{action.confirmLabel}</p>
+          <button
+            onClick={() => {
+              setPending(null);
+              setNote("");
+            }}
+            className="shrink-0 text-slate-500 hover:text-slate-300"
+            aria-label="取消"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        <input
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="备注（可空；只写跟进结果，勿贴聊天原文）"
+          className={`${inputCls} px-2 py-1.5 text-xs`}
+          onKeyDown={(e) => e.key === "Enter" && submit(pending)}
+          autoFocus
+        />
+        <button
+          onClick={() => submit(pending)}
+          disabled={busy}
+          className={`${btnPrimary} mt-1.5 w-full px-2 py-1.5 text-xs`}
+        >
+          {busy ? "提交中…" : "确认"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <span className="inline-flex gap-1">
+      {actions.map((a) => (
+        <button
+          key={a.status}
+          onClick={() => setPending(a.status)}
+          disabled={busy || log?.status === a.status}
+          title={log?.status === a.status ? `当前已是「${OPP_LOG_STATUS_LABEL[a.status]}」` : a.confirmLabel}
+          className={`rounded-md border px-1.5 py-0.5 text-[11px] font-medium disabled:cursor-not-allowed disabled:opacity-40 ${a.cls}`}
+        >
+          {a.label}
+        </button>
+      ))}
+    </span>
   );
 }
 

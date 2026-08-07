@@ -168,7 +168,7 @@ export default function Hero() {
               </a>
             </Magnetic>
             <a
-              href="#pricing"
+              href={lang === "zh" ? "/order" : "/en/order"}
               onClick={() => track("cta_click", { where: "hero_secondary" })}
               className="btn-3d-ghost group relative inline-flex items-center gap-2 rounded-full px-9 py-4 text-base font-semibold text-white"
             >

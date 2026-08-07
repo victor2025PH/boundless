@@ -14,7 +14,6 @@ export default function SectionNav() {
     { id: "autochat", label: t.nav.autochat },
     { id: "translate", label: lang === "zh" ? "实时翻译" : "Translate" },
     { id: "proof", label: lang === "zh" ? "真实案例" : "Proof" },
-    { id: "pricing", label: t.nav.pricing },
     { id: "contact", label: t.nav.contact },
   ];
 
