@@ -108,6 +108,27 @@ def test_fulfillment_payload_none_for_unmappable():
     assert fulfillment_payload_for_order({"id": "Y", "product_id": "zhiliao"}) is None
 
 
+def test_fulfillment_skips_hosted_delivery_anti_double_claim():
+    """托管单归 tenant_fulfill_watch：装机守护必须拒签，防双发。"""
+    from src.ops.tenant_fulfillment import select_hostable
+
+    hosted = {
+        "id": "H1", "sku_id": "chatx-team", "contact": "c@x.com",
+        "period": "monthly", "delivery": "hosted",
+    }
+    installed = {
+        "id": "I1", "sku_id": "chatx-team", "contact": "d@x.com",
+        "period": "monthly", "delivery": "installed",
+    }
+    assert fulfillment_payload_for_order(hosted) is None
+    assert fulfillment_payload_for_order(installed) is not None
+    # 对称：托管守护能认领 hosted，装机守护 select 跳过它
+    hostable = select_hostable([hosted, installed])
+    assert [o["id"] for o, _ in hostable] == ["H1"]
+    picked = select_fulfillable([hosted, installed])
+    assert [o["id"] for o, _ in picked] == ["I1"]
+
+
 def test_select_fulfillable_skips_done_coded_and_foreign():
     orders = [
         {"id": "O1", "sku_id": "chatx-entry", "contact": "a", "period": "monthly"},
@@ -118,6 +139,7 @@ def test_select_fulfillable_skips_done_coded_and_foreign():
         {"id": "", "sku_id": "chatx-team"},                              # 无 id → 跳
         # P4：lingox 入表 → 与 chatx 同批自动履约（详见 test_lingox_fulfillment）
         {"id": "O6", "sku_id": "lingox-team", "product_id": "tongyi"},
+        {"id": "H9", "sku_id": "chatx-team", "delivery": "hosted", "contact": "h"},  # 托管 → 跳
     ]
     picked = select_fulfillable(orders, done_ids={"O1"})  # O1 已 done → 跳
     ids = [o["id"] for o, _ in picked]

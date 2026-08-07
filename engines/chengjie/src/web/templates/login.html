@@ -78,8 +78,9 @@ body{background:var(--bg);color:var(--t);min-height:100vh;display:flex;align-ite
   </div>
   {% endif %}
   {% if has_users %}
-  <!-- Multi-user login -->
+  <!-- Multi-user login；next 透传：托管交付深链 / 会话过期回跳 -->
   <form method="post" action="/login" id="form-user">
+    {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
     <div class="f-inp-wrap" style="margin-bottom:.9rem">
       <label class="f-lbl">{{ (i18n or {}).get('set_js_075', "用户名") }}</label>
       <input class="f-inp" type="text" name="username" placeholder="{{ (i18n or {}).get('set_js_075', '用户名') }}" required autofocus autocomplete="username">
@@ -98,6 +99,7 @@ body{background:var(--bg);color:var(--t);min-height:100vh;display:flex;align-ite
   </form>
   <!-- Token login (hidden by default) -->
   <form method="post" action="/login" id="form-token" style="display:none">
+    {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
     <label class="f-lbl">{{ (i18n or {}).get('lg_s006', '管理密码') }}</label>
     <div class="f-inp-wrap">
       <input class="f-inp" type="password" id="pwd-inp2" name="auth_token" placeholder="{{ (i18n or {}).get('lg_s003', '请输入访问令牌') }}" autocomplete="current-password">
@@ -109,6 +111,7 @@ body{background:var(--bg);color:var(--t);min-height:100vh;display:flex;align-ite
   </form>
   {% else %}
   <form method="post" action="/login">
+    {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
     <label class="f-lbl">{{ (i18n or {}).get('lg_s006', '管理密码') }}</label>
     <div class="f-inp-wrap">
       <input class="f-inp" type="password" id="pwd-inp" name="auth_token" placeholder="{{ (i18n or {}).get('lg_s003', '请输入访问令牌') }}" required autofocus autocomplete="current-password">

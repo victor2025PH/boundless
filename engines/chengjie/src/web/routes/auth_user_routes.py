@@ -19,6 +19,7 @@ from fastapi import Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from src.utils.web_user_store import ROLE_ADMIN, ROLE_AGENT, ROLE_MASTER, ROLE_LABELS
+from src.web.login_redirect import resolve_post_login_dest, safe_next_path
 from src.web.web_i18n import tr
 
 
@@ -35,17 +36,34 @@ def register_auth_user_routes(
     # 复用 admin.py 模块级 templates（与其余页面同一 Jinja 环境）
     from src.web.admin import templates
 
+    def _role_default_dest(role: str) -> str:
+        # 角色化落地：坐席→收件箱；管理员→今日概览（上线自检入口）；
+        # 系统主（含托管 owner）→今日概览（旧默认 `/`=/cases 会让首登看不见自检红灯）。
+        # 运维令牌直登仍走 `/`（见 token 分支），肌肉记忆与应急排查不改。
+        if role == ROLE_AGENT:
+            return "/workspace"
+        if role in (ROLE_ADMIN, ROLE_MASTER):
+            return "/workspace/dash"
+        return "/"
+
+    def _login_ctx(request: Request, *, error: str = "", next_raw: str = ""):
+        nxt = safe_next_path(next_raw) or safe_next_path(request.query_params.get("next"))
+        return {
+            "error": error,
+            "has_users": user_store.user_count() > 0,
+            "next": nxt,
+        }
+
     # ── 登录 / 登出 ───────────────────────────────────────────
     @app.get("/login", response_class=HTMLResponse)
     async def login_page(request: Request):
-        has_users = user_store.user_count() > 0
-        return templates.TemplateResponse(request, "login.html", {
-            "error": "", "has_users": has_users
-        })
+        return templates.TemplateResponse(
+            request, "login.html", _login_ctx(request))
 
     @app.post("/login")
     async def login_submit(request: Request, auth_token: str = Form(None),
-                           username: str = Form(None), password: str = Form(None)):
+                           username: str = Form(None), password: str = Form(None),
+                           next: str = Form("")):
         ip = request.client.host if request.client else ""
         ua = request.headers.get("user-agent", "")[:200]
         # multi-user login
@@ -58,23 +76,16 @@ def register_auth_user_routes(
                 request.session["role"] = user["role"]
                 request.session["display_name"] = user.get("display_name", username)
                 request.session["jti"] = jti
-                # 角色化落地：坐席→收件箱工作台；管理员(主管)→数据看板；系统主/只读→管理后台
-                _role = user["role"]
-                if _role == ROLE_AGENT:
-                    _dest = "/workspace"
-                elif _role == ROLE_ADMIN:
-                    _dest = "/workspace/dash"
-                else:
-                    _dest = "/"
+                _dest = resolve_post_login_dest(
+                    next_raw=next, role_default=_role_default_dest(user["role"]))
                 resp = RedirectResponse(_dest, status_code=303)
                 # 语言跟人走：登录即套用该用户保存的 UI 语言（无偏好则不动，沿用 cookie/默认）
                 _lang = (user.get("lang") or "").strip().lower()
                 if _lang in ("zh", "en"):
                     resp.set_cookie("ui_lang", _lang, max_age=365 * 86400)
                 return resp
-            return templates.TemplateResponse(request, "login.html", {
-                "error": tr(request, "err.auth.bad_credentials"), "has_users": True
-            })
+            return templates.TemplateResponse(request, "login.html", _login_ctx(
+                request, error=tr(request, "err.auth.bad_credentials"), next_raw=next))
         # legacy token login（S6：恒定时间比较，防时序侧信道）
         if auth_token and token and hmac.compare_digest(str(auth_token), str(token)):
             jti = user_store.create_session("admin", ROLE_MASTER, ip, ua)
@@ -82,11 +93,11 @@ def register_auth_user_routes(
             request.session["role"] = ROLE_MASTER
             request.session["username"] = "admin"
             request.session["jti"] = jti
-            return RedirectResponse("/", status_code=303)
-        return templates.TemplateResponse(request, "login.html", {
-            "error": tr(request, "token_error"),
-            "has_users": user_store.user_count() > 0
-        })
+            # 令牌直登：默认仍 `/`；若显式带合法 next（交付深链）则尊重
+            _dest = resolve_post_login_dest(next_raw=next, role_default="/")
+            return RedirectResponse(_dest, status_code=303)
+        return templates.TemplateResponse(request, "login.html", _login_ctx(
+            request, error=tr(request, "token_error"), next_raw=next))
 
     @app.get("/logout")
     async def logout(request: Request):

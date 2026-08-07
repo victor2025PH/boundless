@@ -70,6 +70,38 @@ class TestLoginFlow:
         body = resp.content.decode("utf-8", errors="replace")
         assert "错误" in body or "invalid" in body.lower() or "login" in str(resp.url).lower()
 
+    def test_login_next_deep_link_and_open_redirect_guard(self, client):
+        """托管交付深链：合法 next 登录后直达；外链 next 被拒回角色默认。"""
+        # 登录页透传 next 到隐藏域
+        page = client.get("/login?next=/workspace/dash")
+        assert page.status_code == 200
+        assert 'name="next"' in page.text and "/workspace/dash" in page.text
+
+        ok = client.post(
+            "/login",
+            data={"auth_token": "test-token-123", "next": "/workspace/dash"},
+            follow_redirects=False,
+        )
+        assert ok.status_code in (302, 303)
+        assert ok.headers["location"] == "/workspace/dash"
+
+        evil = client.post(
+            "/login",
+            data={"auth_token": "test-token-123", "next": "https://evil.example"},
+            follow_redirects=False,
+        )
+        assert evil.status_code in (302, 303)
+        assert "evil" not in evil.headers["location"].lower()
+        assert evil.headers["location"] == "/"  # 令牌直登默认仍 /
+
+    def test_unauthenticated_preserves_next(self, client):
+        """会话过期/未登录访问工作台时应带 next 回登录页。"""
+        resp = client.get("/workspace/dash", follow_redirects=False)
+        assert resp.status_code in (302, 303)
+        loc = resp.headers["location"]
+        assert loc.startswith("/login")
+        assert "next=" in loc and "workspace" in loc
+
 
 class TestRBACPages:
     """页面访问的角色控制"""

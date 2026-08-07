@@ -169,7 +169,11 @@ if ($Advise) {
     Write-Host '    - instance config/config.local.yaml (most ops flags, ~30s)'
     Write-Host '  Must restart (business .py / boot path):'
     Write-Host '    - engines/chengjie/src/**/*.py , main.py , bootstrap'
-    Write-Host '  Command:'
+    Write-Host '  Before a real restart (shared-tree GO/NO-GO; never restarts itself):'
+    Write-Host ("    powershell -ExecutionPolicy Bypass -File engines\chengjie\scripts\restart_preflight.ps1 -Instance {0}" -f $Instance)
+    Write-Host '  Declare the batch so siblings can piggyback (and -Done when finished):'
+    Write-Host '    powershell -ExecutionPolicy Bypass -File engines\chengjie\scripts\agent_probe.ps1 -Intent "batch: <what>"'
+    Write-Host '  Command (only after preflight GO):'
     Write-Host ("    powershell -ExecutionPolicy Bypass -File deploy\instances\restart_instance.ps1 -Instance {0}" -f $Instance)
     Write-Host '  Forbidden: scripts\restart_main.ps1 , mass taskkill , bare python main.py at engine root'
     Write-Host ("  Now: port={0} listening={1} login_ready={2}" -f $effPort, $listenTxt, $loginTxt)
@@ -325,7 +329,8 @@ if (Test-Path $sentinel) {
 
 $startScript = Join-Path $PSScriptRoot $meta.start
 Say ("starting {0}..." -f $meta.name) 'Yellow'
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $startScript -DataDir $root
+# 透传 -InstanceId：start_*.ps1 据此注入 AITR_INSTANCE_ID（托管 AI 按实例计量）
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $startScript -DataDir $root -InstanceId $Instance
 if ($LASTEXITCODE -ne 0) {
     Send-RestartAlert ("⛔ {0} restart FAILED at start (rc={1}, {2})" -f $meta.name, $LASTEXITCODE, $env:COMPUTERNAME)
     Fail ("start failed exit={0}" -f $LASTEXITCODE)

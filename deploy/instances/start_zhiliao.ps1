@@ -99,6 +99,8 @@ $lic    = Join-Path $DataRoot 'config\license.key'
 
 $chain = @(
     "set `"AITR_DATA_DIR=$DataRoot`"",
+    # 托管多租户 AI 计量前向键（hosted_gateway.resolve_instance_id 优先读此 env）
+    "set `"AITR_INSTANCE_ID=$InstanceId`"",
     "set `"EVENT_SPOOL_DIR=$spool`"",
     "set `"CHENGJIE_PRODUCT_ID=$ProductId`"",
     "set `"CHENGJIE_LEDGER_OUTBOX=$ledger`"",

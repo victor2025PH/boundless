@@ -12,14 +12,16 @@
 param(
     # 自定义数据根（缺省 = 同目录 tongyi\data）。仓库外部署 / 本机试点用，
     # 初始化步骤同 README §3.1，只是把 $data 换成该目录。
-    [string]$DataDir = ''
+    [string]$DataDir = '',
+    # restart_instance.ps1 透传；通译恒为 tongyi（接受参数以免 -InstanceId 报错）
+    [string]$InstanceId = 'tongyi'
 )
 
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
 
 # ── 实例常量（挪数据根/换端口只改这里，并同步 stack.json 条目与实例 overlay）──
-$InstanceId   = 'tongyi'
+if (-not $InstanceId) { $InstanceId = 'tongyi' }
 $InstanceName = '通译 LingoX'
 $Port         = 18899                                   # = 实例 config.local.yaml 的 web_admin.port
 $RepoRoot     = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -96,6 +98,7 @@ $lic    = Join-Path $DataRoot 'config\license.key'
 
 $chain = @(
     "set `"AITR_DATA_DIR=$DataRoot`"",
+    "set `"AITR_INSTANCE_ID=$InstanceId`"",
     "set `"EVENT_SPOOL_DIR=$spool`"",
     "set `"CHENGJIE_PRODUCT_ID=$InstanceId`"",
     "set `"CHENGJIE_LEDGER_OUTBOX=$ledger`"",

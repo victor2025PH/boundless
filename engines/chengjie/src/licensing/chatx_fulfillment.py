@@ -97,7 +97,7 @@ _ALL_SKU_SPECS: Dict[str, Dict[str, Any]] = {**CHATX_SKU_SPECS, **LINGOX_SKU_SPE
 DEFAULT_PERIOD_DAYS = 32
 
 # 订阅周期 → 授权天数（对齐 avatarhub/fulfill_orders.py 的 PERIOD_DAYS 口径，留缓冲）
-PERIOD_DAYS = {"monthly": 32, "annual": 366}
+PERIOD_DAYS = {"monthly": 32, "quarterly": 92, "annual": 366}
 
 
 def sku_spec(sku_id: str) -> Dict[str, Any]:
@@ -254,8 +254,13 @@ def fulfillment_payload_for_order(order: Dict[str, Any]) -> Optional[Dict[str, A
     """把一笔 paid chatx/lingox 订单映射为可签发 payload；无法自动映射 → None（转人工跟进）。
 
     无法映射的情形：非本引擎订单、老单 sku_id 缺失/未知（Sprint3 前的历史单）、
-    仅人工 SKU（MANUAL_SKUS，如 lingox-charpack 字符加购包）。
+    仅人工 SKU（MANUAL_SKUS，如 lingox-charpack 字符加购包）、
+    **托管交付单**（``delivery==hosted`` / hosted SKU → 归 tenant_fulfill_watch，防双发）。
     """
+    from src.licensing.order_delivery import is_hosted_order
+
+    if is_hosted_order(order):
+        return None
     if not is_chengjie_order(order):
         return None
     sku = str((order or {}).get("sku_id") or "").strip()
@@ -275,7 +280,12 @@ def topup_voucher_args_for_order(order: Dict[str, Any]) -> Optional[Dict[str, An
 
     绑定用 ``customer=contact``（订单没有 lic_id；授权 payload.sub=contact，同一客户
     名下可兑）。contact 缺失 → None（没有绑定面=谁捡到谁兑，宁转人工不裸发）。
+    托管交付单不签装机加购包（归租户实例内计量）。
     """
+    from src.licensing.order_delivery import is_hosted_order
+
+    if is_hosted_order(order):
+        return None
     sku = str((order or {}).get("sku_id") or "").strip()
     chars = TOPUP_SKU_CHARS.get(sku)
     contact = str((order or {}).get("contact") or "").strip()
