@@ -17,12 +17,13 @@ export async function GET(req: NextRequest) {
   }
   const o = await getOrder(id);
   if (!o) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
-  return NextResponse.json({
+    return NextResponse.json({
     ok: true,
     id: o.id,
     status: o.status,
     plan: o.plan,
     period: o.period,
+    delivery: o.delivery || "installed",
     pay_amount: o.pay_amount,
     t: o.t,
     paid_at: o.paid_at ?? null,
@@ -44,6 +45,8 @@ export async function POST(req: NextRequest) {
 
     // 支付方式白名单：usdt（默认）/ card；其余值一律按 usdt 处理。
     const method = clean(data?.method, 10) === "card" ? ("card" as const) : ("usdt" as const);
+    // 交付形态白名单：hosted=托管实例；其余/缺省=装机授权（防任意字符串污染履约分流）。
+    const delivery = clean(data?.delivery, 16) === "hosted" ? ("hosted" as const) : ("installed" as const);
 
     const order = await createOrder({
       plan: clean(data?.plan, 40),
@@ -51,6 +54,7 @@ export async function POST(req: NextRequest) {
       period: clean(data?.period, 10),
       amount: Math.max(0, Number(data?.amount) || 0),
       method,
+      delivery,
       contact,
       fingerprint: clean(data?.fingerprint, 128),
       lang: clean(data?.lang, 8),

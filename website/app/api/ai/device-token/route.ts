@@ -5,6 +5,7 @@ import {
   gatewayEnabled,
   logGateway,
   mintDeviceToken,
+  normalizeInstanceId,
   publicGatewayBase,
   publicModel,
   quotaSnapshot,
@@ -16,13 +17,16 @@ export const dynamic = "force-dynamic";
 
 /**
  * POST /api/ai/device-token
- * body: { fingerprint, product? }
- * → { ok, token, base_url, model, expires_in, exp, quota }
+ * body: { fingerprint, product?, instance_id?, source? }
+ * → { ok, token, base_url, model, expires_in, exp, quota, instance_id? }
  *
  * 资格闸：指纹必须已在试用台账（/api/trial/claim 留过联系方式）——
  * 防脚本刷随机指纹白嫖，同时每个 AI 试用用户都是可触达线索。
  * AI_GATEWAY_REQUIRE_CLAIM=0 可临时关闸（运维逃生口，默认开）。
  * 真云 Key 永不下发。
+ *
+ * ``instance_id``（可选）：托管多租户同机时写入令牌 claims.iid，额度按实例隔离；
+ * 桌面壳不传则保持机器指纹旧口径。旧客户端忽略本字段回传。
  */
 
 const WINDOW_MS = 10 * 60 * 1000;
@@ -76,10 +80,11 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const { token, claims } = mintDeviceToken(fp);
+    const iid = normalizeInstanceId(String(data?.instance_id || ""));
+    const { token, claims } = mintDeviceToken(fp, Math.floor(Date.now() / 1000), iid || undefined);
     const origin = process.env.NEXT_PUBLIC_SITE_URL || new URL(req.url).origin;
-    const quota = await quotaSnapshot(fp);
-    void logGateway({ ev: "mint", mid: fp, ip });
+    const quota = await quotaSnapshot(claims);
+    void logGateway({ ev: "mint", mid: fp, ip, iid: iid || undefined });
 
     return NextResponse.json({
       ok: true,
@@ -89,6 +94,7 @@ export async function POST(req: NextRequest) {
       expires_in: TOKEN_TTL_SEC,
       exp: claims.exp,
       quota,
+      ...(iid ? { instance_id: iid } : {}),
     });
   } catch {
     return NextResponse.json({ ok: false, error: "server_error" }, { status: 500 });

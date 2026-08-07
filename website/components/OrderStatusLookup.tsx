@@ -11,6 +11,8 @@ interface OrderInfo {
   status: "pending" | "paid" | "activated" | "cancelled";
   plan: string;
   period: string;
+  /** 交付形态：installed=装机授权码；hosted=云端托管（code 是「网址+账号+初始密码」）。 */
+  delivery?: "installed" | "hosted";
   pay_amount: number;
   t: string;
   paid_at: string | null;
@@ -143,7 +145,9 @@ export default function OrderStatusLookup() {
               (info.code ? (
                 <div className="mt-4 rounded-xl border border-emerald-400/30 bg-emerald-400/5 p-4">
                   <p className="text-xs font-medium text-emerald-400">
-                    {zh ? "已开通 ✓ 你的专属授权码：" : "Activated ✓ Your license code:"}
+                    {info.delivery === "hosted"
+                      ? zh ? "已开通 ✓ 你的云端工作台登录信息：" : "Activated ✓ Your hosted workspace login:"
+                      : zh ? "已开通 ✓ 你的专属授权码：" : "Activated ✓ Your license code:"}
                   </p>
                   <div className="mt-2 flex flex-wrap items-center gap-3">
                     <code className="max-h-24 max-w-full overflow-y-auto break-all rounded-lg bg-ink-950/70 px-4 py-2 font-mono text-xs font-bold text-neon-cyan">
@@ -158,13 +162,17 @@ export default function OrderStatusLookup() {
                       }}
                       className="rounded-full border border-white/15 px-4 py-1.5 text-xs text-slate-300 transition hover:border-neon-cyan/50 hover:text-white"
                     >
-                      {codeCopied ? (zh ? "已复制 ✓" : "Copied ✓") : zh ? "复制完整授权码" : "Copy full code"}
+                      {codeCopied ? (zh ? "已复制 ✓" : "Copied ✓") : zh ? "复制完整信息" : "Copy full info"}
                     </button>
                   </div>
                   <p className="mt-2 text-xs text-slate-500">
-                    {zh
-                      ? `最快方式：打开客户端 → 「🔑 授权」→ 「订单号」框输入 ${info.id} → 点「在线激活」即刻生效。也可复制上方完整授权码手动粘贴激活。`
-                      : `Fastest: open the client → License → enter ${info.id} in the Order ID field → Activate Online. Or copy the full code above and paste it manually.`}
+                    {info.delivery === "hosted"
+                      ? zh
+                        ? "打开信息中的网址，用账号与初始密码登录即可使用（无需安装）；建议首次登录后在「设置 → 修改密码」自行改密。"
+                        : "Open the URL and sign in with the account and initial password — nothing to install. We recommend changing the password after first login (Settings → Change password)."
+                      : zh
+                        ? `最快方式：打开客户端 → 「🔑 授权」→ 「订单号」框输入 ${info.id} → 点「在线激活」即刻生效。也可复制上方完整授权码手动粘贴激活。`
+                        : `Fastest: open the client → License → enter ${info.id} in the Order ID field → Activate Online. Or copy the full code above and paste it manually.`}
                   </p>
                 </div>
               ) : (

@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
     if (!claims) {
       return NextResponse.json({ ok: false, error: "invalid_token" }, { status: 401 });
     }
-    const q = await quotaSnapshot(claims.mid);
+    const q = await quotaSnapshot(claims);
     return NextResponse.json({ ok: true, ...q });
   } catch {
     return NextResponse.json({ ok: false, error: "server_error" }, { status: 500 });

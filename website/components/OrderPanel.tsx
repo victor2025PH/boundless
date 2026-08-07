@@ -1,19 +1,19 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
 import { QRCodeSVG } from "qrcode.react";
-import { BadgeCheck, Check, Clapperboard, Copy, KeyRound, ShieldCheck, Sparkles, Timer, Wallet, X } from "lucide-react";
+import { BadgeCheck, Check, Copy, KeyRound, ShieldCheck, Sparkles, Timer, Wallet, X } from "lucide-react";
 import { useLang } from "./LanguageContext";
 import OrderStatusLookup from "./OrderStatusLookup";
 import Reveal from "./fx/Reveal";
 import { track } from "@/lib/track";
+import { BRAND_FILM } from "@/lib/film";
 import { BOT_HANDLE, CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
 import {
   ACCESSORIES,
-  FIRST_YEAR_PROMO,
   HARDWARE,
-  LICENSES,
   REMOTE_INSTALL,
   SHOWCASE_VIDEOS,
   TIERS,
@@ -32,6 +32,9 @@ import {
 
 const fmt = (n: number) => n.toLocaleString("en-US");
 
+/** 交付形态（仅智聊 ChatX 主套餐）：installed=装机授权码（默认）；hosted=云端托管实例。 */
+type Delivery = "installed" | "hosted";
+
 /** 家族通用价格：一次性商品（charpack）不随周期变价；其余走 tierPrice（年付 ×10）。 */
 function linePrice(t: LineTier, period: Period): number {
   return t.oneTime ? t.monthly : tierPrice(t, period);
@@ -43,6 +46,9 @@ export default function OrderPanel() {
   const [family, setFamily] = useState<OrderFamily>("avatarhub");
   const [period, setPeriod] = useState<Period>("monthly");
   const [selected, setSelected] = useState("pro");
+  // 交付形态：仅 chatx 产品线可选「云端托管」；切走产品线自动回落装机，绝不让
+  // 非托管 SKU 带 hosted 标提交（履约分流以此字段为准）。
+  const [delivery, setDelivery] = useState<Delivery>("installed");
   const [checkout, setCheckout] = useState(false);
   const [prefillFp, setPrefillFp] = useState("");
   // 会话归因串（AI 坐席聊天里发的下单链接带 ?ref=<会话id>）：静默随单提交，
@@ -58,7 +64,7 @@ export default function OrderPanel() {
   );
   const familyMeta = FAMILIES.find((f) => f.key === family) ?? FAMILIES[0];
 
-  // 深链预填：/order?plan=<档位|offer id>&period=annual&fp=<指纹>——plan 跨三条产品线检索，
+  // 深链预填：/order?plan=<档位|offer id>&period=quarterly|annual&fp=<指纹>——plan 跨三条产品线检索，
   // 命中即自动切到所属产品线（产品页「购买」按钮带参直达，见 config.example.yaml shop_url 注）。
   // useLayoutEffect（非 useEffect）：家族切换必须发生在 framer-motion 注册视口观察器之前，
   // 否则挂载后立刻换掉子树会让全页 whileInView 观察失效 → 面板整段卡在 opacity:0（实测）。
@@ -70,7 +76,10 @@ export default function OrderPanel() {
       setFamily(fam);
       setSelected(plan.trim().toLowerCase());
     }
-    if (q.get("period") === "annual") setPeriod("annual");
+    const p = q.get("period");
+    if (p === "annual" || p === "quarterly") setPeriod(p);
+    // 深链 ?delivery=hosted：产品页「云端托管」入口 / AI 坐席链接直达托管下单
+    if (q.get("delivery") === "hosted" && (!plan || fam === "chatx")) setDelivery("hosted");
     const fp = q.get("fp");
     if (fp) setPrefillFp(fp.slice(0, 128));
     const ref = q.get("ref");
@@ -87,18 +96,25 @@ export default function OrderPanel() {
     urlReady.current = true;
   }, []);
 
-  // 选档/周期 → URL 同步（replaceState，可分享/刷新不丢；保留 fp/check 等其它参数）。
+  // 产品线切走 chatx → 托管选择失效回落装机（hosted 只对 chatx 主套餐有意义）
+  useEffect(() => {
+    if (family !== "chatx" && delivery === "hosted") setDelivery("installed");
+  }, [family, delivery]);
+
+  // 选档/周期/交付 → URL 同步（replaceState，可分享/刷新不丢；保留 fp/check 等其它参数）。
   useEffect(() => {
     if (!urlReady.current || typeof window === "undefined") return;
     const u = new URL(window.location.href);
     u.searchParams.set("plan", selected);
-    if (period === "annual" && !tier.oneTime) u.searchParams.set("period", "annual");
+    if (period !== "monthly" && !tier.oneTime) u.searchParams.set("period", period);
     else u.searchParams.delete("period");
+    if (family === "chatx" && delivery === "hosted") u.searchParams.set("delivery", "hosted");
+    else u.searchParams.delete("delivery");
     const next = u.pathname + u.search + u.hash;
     if (next !== window.location.pathname + window.location.search + window.location.hash) {
       window.history.replaceState(null, "", next);
     }
-  }, [selected, period, tier.oneTime]);
+  }, [selected, period, tier.oneTime, family, delivery]);
 
   return (
     <section className="relative pb-24 pt-32">
@@ -128,7 +144,7 @@ export default function OrderPanel() {
           </p>
         </Reveal>
 
-        {/* ── 产品线切换（幻境数字人 / 智聊 / 通译）——eager：首屏关键交互不依赖滚动显现 ── */}
+        {/* ── 产品线切换（幻境 STUDIO / 智聊 / 通译）——eager：首屏关键交互不依赖滚动显现 ── */}
         <Reveal eager className="mt-8 flex justify-center">
           <div className="glass inline-flex max-w-full flex-wrap justify-center rounded-full border border-white/10 p-1">
             {FAMILIES.map((f) => (
@@ -151,10 +167,36 @@ export default function OrderPanel() {
           </div>
         </Reveal>
 
-        {/* ── 月付 / 年付 ── */}
+        {/* ── 通译已并入智聊：合并说明（通译 tab 专属） ── */}
+        {family === "lingox" && (
+          <Reveal eager className="mx-auto mt-6 max-w-3xl">
+            <div className="glass rounded-2xl border border-amber-400/30 bg-amber-400/[0.06] px-5 py-3.5 text-sm leading-relaxed text-slate-300">
+              <span className="mr-1.5">📌</span>
+              {zh ? (
+                <>
+                  <b className="text-amber-300">通译 LingoX 已与智聊 ChatX 合并为同一个客户端程序</b>
+                  ：下载智聊 ChatX 即可使用通译全部翻译能力；本页通译套餐照常购买，授权码在同一程序内激活生效，原有通译授权继续有效。{" "}
+                  <a href="/download/chatx" className="text-neon-cyan hover:underline">
+                    下载智聊 ChatX →
+                  </a>
+                </>
+              ) : (
+                <>
+                  <b className="text-amber-300">LingoX is now merged into the ChatX client — one single program</b>
+                  : download ChatX to get every LingoX translation capability. LingoX plans on this page work as before; license codes activate inside the same app, and existing LingoX licenses remain valid.{" "}
+                  <a href="/en/download/chatx" className="text-neon-cyan hover:underline">
+                    Download ChatX →
+                  </a>
+                </>
+              )}
+            </div>
+          </Reveal>
+        )}
+
+        {/* ── 月付 / 季付 / 年付 ── */}
         <Reveal eager className="mt-6 flex flex-col items-center gap-3">
           <div className="glass inline-flex rounded-full border border-white/10 p-1">
-            {(["monthly", "annual"] as Period[]).map((p) => (
+            {(["monthly", "quarterly", "annual"] as Period[]).map((p) => (
               <button
                 key={p}
                 onClick={() => {
@@ -167,30 +209,62 @@ export default function OrderPanel() {
                     : "text-slate-300 hover:text-white"
                 }`}
               >
-                {p === "monthly" ? (zh ? "月付" : "Monthly") : zh ? `年付 · 送 2 个月` : "Annual · 2 months free"}
+                {p === "monthly"
+                  ? zh ? "月付" : "Monthly"
+                  : p === "quarterly"
+                    ? zh ? "季付" : "Quarterly"
+                    : family === "avatarhub"
+                      ? zh ? "年付" : "Annual"
+                      : zh ? "年付 · 送 2 个月" : "Annual · 2 months free"}
               </button>
             ))}
           </div>
-          <AnimatePresence>
-            {period === "annual" && family === "avatarhub" && (
-              <motion.span
-                initial={{ opacity: 0, y: -6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className="rounded-full border border-neon-pink/30 bg-neon-pink/10 px-3 py-1 text-xs text-neon-pink"
-              >
-                {zh ? "🎁 限时首年 8 折 · 送 2 个月" : "🎁 First year 20% off · 2 months free"}
-              </motion.span>
-            )}
-          </AnimatePresence>
           {tier.oneTime && (
             <p className="text-xs text-slate-500">
               {zh
-                ? "字符包为一次性加购，价格不受月/年付切换影响"
+                ? "字符包为一次性加购，价格不受月/季/年付切换影响"
                 : "Char pack is one-time — the period toggle does not change its price"}
             </p>
           )}
         </Reveal>
+
+        {/* ── 交付方式（仅智聊 ChatX）：装机授权码 vs 云端托管实例 ── */}
+        {family === "chatx" && (
+          <Reveal eager className="mt-4 flex flex-col items-center gap-2">
+            <div className="glass inline-flex rounded-full border border-white/10 p-1">
+              {(
+                [
+                  { key: "installed", zh: "💻 装机版 · 自己电脑", en: "💻 Self-hosted install" },
+                  { key: "hosted", zh: "☁️ 云端托管 · 开通即用", en: "☁️ Cloud hosted · instant" },
+                ] as const
+              ).map((d) => (
+                <button
+                  key={d.key}
+                  onClick={() => {
+                    setDelivery(d.key);
+                    track("order_delivery", { delivery: d.key });
+                  }}
+                  className={`rounded-full px-5 py-2 text-sm transition ${
+                    delivery === d.key
+                      ? "bg-gradient-to-r from-neon-cyan to-neon-violet font-medium text-ink-950"
+                      : "text-slate-300 hover:text-white"
+                  }`}
+                >
+                  {zh ? d.zh : d.en}
+                </button>
+              ))}
+            </div>
+            <p className="max-w-xl text-center text-xs text-slate-500">
+              {delivery === "hosted"
+                ? zh
+                  ? "我们代管服务器与部署：到账后自动开通你的独立实例，浏览器登录即用，数据按客户隔离；价格与装机版相同。"
+                  : "We run the server for you — an isolated instance is provisioned automatically after payment. Log in from your browser; same price as self-hosted."
+                : zh
+                  ? "授权码激活，部署在你自己的电脑 / 服务器上，数据不出机房。"
+                  : "License-code activation on your own machine — data stays on-prem."}
+            </p>
+          </Reveal>
+        )}
 
         {/* ── 套餐卡片 ── */}
         <div
@@ -204,7 +278,6 @@ export default function OrderPanel() {
               tier={t}
               zh={zh}
               period={period}
-              showPromo={family === "avatarhub"}
               selected={selected === t.key}
               delay={i * 0.05}
               onSelect={() => {
@@ -225,31 +298,77 @@ export default function OrderPanel() {
             <div>
               <div className="text-xs text-slate-500">{zh ? "应付金额" : "Total"}</div>
               <div className="font-semibold text-neon-cyan">
-                {tier.monthly === 0
+                {tier.custom
                   ? zh
-                    ? "免费 · 14 天"
-                    : "Free · 14 days"
-                  : tier.oneTime
-                    ? `${fmt(tier.monthly)} USD${zh ? " · 一次性" : " · one-time"}`
-                    : `${fmt(linePrice(tier, period))} USD / ${period === "monthly" ? (zh ? "月" : "mo") : zh ? "年" : "yr"}`}
+                    ? "定制报价 · 按需方案"
+                    : "Custom quote"
+                  : tier.monthly === 0
+                    ? zh
+                      ? "免费"
+                      : "Free"
+                    : tier.oneTime
+                      ? `${fmt(tier.monthly)} USD${zh ? " · 一次性" : " · one-time"}`
+                      : `${fmt(linePrice(tier, period))} USD / ${
+                          period === "monthly" ? (zh ? "月" : "mo") : period === "quarterly" ? (zh ? "季" : "qtr") : zh ? "年" : "yr"
+                        }`}
               </div>
             </div>
-            <button
-              onClick={() => {
-                setCheckout(true);
-                track("order_open_checkout", { tier: tier.key, period });
-              }}
-              className="ml-auto rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-6 py-2.5 text-sm font-medium text-ink-950 transition hover:opacity-90"
-            >
-              {zh ? "立即下单 · USDT 结算" : "Order now · pay in USDT"}
-            </button>
+            {tier.custom ? (
+              <a
+                href={CONTACT_URL}
+                target="_blank"
+                rel="noreferrer"
+                onClick={() => track("order_contact_sales", { tier: tier.key })}
+                className="ml-auto rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-6 py-2.5 text-sm font-medium text-ink-950 transition hover:opacity-90"
+              >
+                {zh ? "咨询客服 · 获取报价方案" : "Contact sales for a quote"}
+              </a>
+            ) : (
+              <button
+                onClick={() => {
+                  setCheckout(true);
+                  track("order_open_checkout", { tier: tier.key, period });
+                }}
+                className="ml-auto rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-6 py-2.5 text-sm font-medium text-ink-950 transition hover:opacity-90"
+              >
+                {zh ? "立即下单 · USDT 结算" : "Order now · pay in USDT"}
+              </button>
+            )}
           </div>
         </Reveal>
 
-        {/* ── 以下大区块（演示 / 硬件 / 配件 / 私有授权 / 代部署 / 信任卡）均为
-              AvatarHub 本机算力产品专属；ChatX / LingoX 的能力详情走各自产品页 ── */}
+        {/* ── 以下大区块（演示 / 硬件 / 配件 / 代部署 / 信任卡）均为
+              幻境 STUDIO 本机算力产品专属；ChatX / LingoX 的能力详情走各自产品页 ── */}
         {family === "avatarhub" && (
           <>
+        {/* ── 品牌片薄横幅：付款犹豫时的信任压缩包，不挤价格表（点击去 /film） ── */}
+        <Reveal className="mt-14">
+          <Link
+            href={zh ? "/film" : "/en/film"}
+            className="glass group flex items-center gap-4 rounded-2xl border border-emerald-300/25 p-3 pr-5 transition hover:border-emerald-300/50"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={zh ? BRAND_FILM.poster.zh : BRAND_FILM.poster.en}
+              alt=""
+              className="h-20 w-36 shrink-0 rounded-xl object-cover"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-semibold text-white">
+                {zh ? "3 分钟品牌片：六个功能真机实测" : "The 3-minute film: six features, real engine output"}
+              </div>
+              <p className="mt-1 truncate text-xs text-slate-400">
+                {zh
+                  ? "没有摄影师、配音员和翻译——连主持人也是引擎做的"
+                  : "No camera crew, no voice actor, no translator — even the host is engine-made"}
+              </p>
+            </div>
+            <span className="shrink-0 rounded-full bg-neon-blue px-4 py-2 text-xs font-semibold text-white transition group-hover:brightness-110">
+              ▶ {zh ? BRAND_FILM.durationLabel.zh : BRAND_FILM.durationLabel.en}
+            </span>
+          </Link>
+        </Reveal>
+
         {/* ── 效果演示（真实引擎输出优先；未就绪的显示制作中占位） ── */}
         <ShowcaseGrid zh={zh} />
 
@@ -271,20 +390,31 @@ export default function OrderPanel() {
           highlightCol={2}
         />
 
-        {/* ── 私有授权 ── */}
-        <PricingTable
-          title={zh ? "本地私有部署授权" : "Private deployment licenses"}
-          subtitle={zh ? "一次性 / 年费 · USD" : "One-off / yearly · USD"}
-          head={zh ? ["方案", "授权档", "年费", "买断", "说明"] : ["Plan", "Edition", "Yearly", "Buyout", "Details"]}
-          rows={LICENSES.map((l) => [
-            zh ? l.name.zh : l.name.en,
-            l.edition,
-            zh ? l.yearly.zh : l.yearly.en,
-            zh ? l.buyout.zh : l.buyout.en,
-            zh ? l.desc.zh : l.desc.en,
-          ])}
-          highlightCol={2}
-        />
+        {/* ── 私有化部署 / 企业定制：统一走旗舰版咨询客服，不再挂固定价目表 ── */}
+        <Reveal className="mt-14">
+          <div className="glass flex flex-wrap items-center gap-4 rounded-2xl border border-neon-violet/25 px-6 py-5">
+            <KeyRound className="h-8 w-8 shrink-0 text-neon-violet" />
+            <div className="min-w-0 flex-1">
+              <div className="font-semibold text-white">
+                {zh ? "私有化部署 · 企业定制（旗舰版）" : "Private deployment · enterprise customization (Flagship)"}
+              </div>
+              <p className="mt-1 text-sm text-slate-400">
+                {zh
+                  ? "私有部署、定制开发与所有专业私域服务按需组合，方案与报价一对一评估——请咨询客服获取报价方案。"
+                  : "Private deployment, custom development and full pro private-domain services, scoped case by case — contact sales for a tailored quote."}
+              </p>
+            </div>
+            <a
+              href={CONTACT_URL}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => track("cta_click", { where: "order_flagship_quote" })}
+              className="rounded-full border border-neon-violet/40 px-5 py-2 text-sm text-violet-300 transition hover:bg-neon-violet/10"
+            >
+              {zh ? "咨询客服获取报价" : "Contact sales"}
+            </a>
+          </div>
+        </Reveal>
 
         {/* ── 远程代部署 ── */}
         <Reveal className="mt-10">
@@ -318,8 +448,8 @@ export default function OrderPanel() {
                   icon: Timer,
                   title: zh ? "先试后买" : "Try before you buy",
                   desc: zh
-                    ? "14 天免费试用不收一分钱，效果满意再付费；下载即用，无需信用卡。"
-                    : "14-day free trial, no card required. Pay only when you're satisfied.",
+                    ? "免费版换脸直接用（输出带水印），效果满意再升级付费档；下载即用，无需信用卡。"
+                    : "The Free plan does face swap out of the box (watermarked). Upgrade only when you're satisfied — no card required.",
                 },
                 {
                   icon: KeyRound,
@@ -377,6 +507,7 @@ export default function OrderPanel() {
             tier={tier}
             period={period}
             family={family}
+            delivery={family === "chatx" ? delivery : "installed"}
             initialFp={prefillFp}
             attributionRef={prefillRef}
             onClose={() => setCheckout(false)}
@@ -391,7 +522,6 @@ function TierCard({
   tier: t,
   zh,
   period,
-  showPromo,
   selected,
   delay,
   onSelect,
@@ -399,7 +529,6 @@ function TierCard({
   tier: LineTier;
   zh: boolean;
   period: Period;
-  showPromo: boolean;
   selected: boolean;
   delay: number;
   onSelect: () => void;
@@ -413,9 +542,13 @@ function TierCard({
       ? zh
         ? "USD / 月"
         : "USD / mo"
-      : zh
-        ? "USD / 年"
-        : "USD / yr";
+      : period === "quarterly"
+        ? zh
+          ? "USD / 季"
+          : "USD / qtr"
+        : zh
+          ? "USD / 年"
+          : "USD / yr";
   return (
     <Reveal eager delay={delay} className="h-full">
       <button
@@ -436,10 +569,15 @@ function TierCard({
           {zh ? t.audience.zh : t.audience.en} · {t.edition}
         </div>
         <div className="mt-4">
-          {t.monthly === 0 ? (
+          {t.custom ? (
+            <>
+              <span className="text-3xl font-bold text-white">{zh ? "定制报价" : "Custom"}</span>
+              <span className="ml-1.5 text-xs text-slate-500">{zh ? "咨询客服" : "contact sales"}</span>
+            </>
+          ) : t.monthly === 0 ? (
             <>
               <span className="text-3xl font-bold text-white">{zh ? "免费" : "Free"}</span>
-              <span className="ml-1.5 text-xs text-slate-500">{zh ? "14 天" : "14 days"}</span>
+              <span className="ml-1.5 text-xs text-slate-500">{zh ? "带水印" : "watermarked"}</span>
             </>
           ) : (
             <>
@@ -448,12 +586,6 @@ function TierCard({
             </>
           )}
         </div>
-        {period === "annual" && t.monthly > 0 && showPromo && !t.oneTime && (
-          <div className="mt-1 text-xs text-neon-pink">
-            {zh ? "首年 8 折 ≈ " : "1st year ≈ "}
-            {fmt(Math.round(price * FIRST_YEAR_PROMO))} USD
-          </div>
-        )}
         <ul className="mt-4 flex-1 space-y-2">
           {(zh ? t.feats.zh : t.feats.en).map((f) => (
             <li key={f} className="flex items-start gap-2 text-sm text-slate-300">
@@ -476,8 +608,10 @@ function TierCard({
   );
 }
 
-/** 效果演示网格：ready 的视频直接内嵌播放（优先真实引擎输出），未就绪的显示「制作中」占位。 */
+/** 效果演示网格：只渲染 ready=true 的条目（ready=false = 下架，整卡不出现，也不出「制作中」占位）。 */
 function ShowcaseGrid({ zh }: { zh: boolean }) {
+  const live = SHOWCASE_VIDEOS.filter((v) => v.ready);
+  if (live.length === 0) return null;
   return (
     <Reveal className="mt-14">
       <div className="mb-4 flex items-baseline gap-3">
@@ -487,56 +621,46 @@ function ShowcaseGrid({ zh }: { zh: boolean }) {
         </span>
       </div>
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-        {SHOWCASE_VIDEOS.map((v) => {
+        {live.map((v) => {
           const src = !zh && v.srcEn ? v.srcEn : v.src;
           const poster = !zh && v.posterEn ? v.posterEn : v.poster;
           return (
             <div key={v.key} className="glass overflow-hidden rounded-2xl border border-white/10">
-              {v.ready ? (
-                <div className="relative">
-                  <video
-                    controls
-                    preload="none"
-                    poster={poster}
-                    src={src}
-                    className="aspect-video w-full bg-ink-950 object-cover"
-                    onPlay={(e) => {
-                      // 每会话每条只记一次"开播"(暂停续播不重复计数),带语言维度
-                      const el = e.currentTarget;
-                      if (el.dataset.played) return;
-                      el.dataset.played = "1";
-                      track("showcase_play", { key: v.key, lang: zh ? "zh" : "en" });
-                    }}
-                    onTimeUpdate={(e) => {
-                      // 25/50/75 进度里程碑:与 ended 一起可算每条片的观看深度漏斗
-                      const el = e.currentTarget;
-                      if (!el.duration) return;
-                      const q = Math.floor((el.currentTime / el.duration) * 4);
-                      const prev = Number(el.dataset.q || 0);
-                      if (q > prev && q < 4) {
-                        el.dataset.q = String(q);
-                        track("showcase_progress", { key: v.key, pct: q * 25, lang: zh ? "zh" : "en" });
-                      }
-                    }}
-                    onEnded={() => track("showcase_done", { key: v.key, lang: zh ? "zh" : "en" })}
-                  />
-                  <span
-                    className={`pointer-events-none absolute left-3 top-3 rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
-                      v.real ? "bg-emerald-400/90 text-ink-950" : "bg-neon-violet/90 text-white"
-                    }`}
-                  >
-                    {v.real ? (zh ? "✓ 真实引擎输出" : "✓ Real engine output") : zh ? "概念演示" : "Concept demo"}
-                  </span>
-                </div>
-              ) : (
-                <div className="relative grid aspect-video w-full place-items-center bg-gradient-to-br from-ink-900 via-ink-950 to-ink-900">
-                  <div className="flex flex-col items-center gap-2 text-slate-600">
-                    <Clapperboard className="h-8 w-8" />
-                    <span className="text-xs">{zh ? "演示视频制作中" : "Demo video coming soon"}</span>
-                  </div>
-                  <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(34,211,238,0.08),transparent_60%)]" />
-                </div>
-              )}
+              <div className="relative">
+                <video
+                  controls
+                  preload="none"
+                  poster={poster}
+                  src={src}
+                  className="aspect-video w-full bg-ink-950 object-cover"
+                  onPlay={(e) => {
+                    // 每会话每条只记一次"开播"(暂停续播不重复计数),带语言维度
+                    const el = e.currentTarget;
+                    if (el.dataset.played) return;
+                    el.dataset.played = "1";
+                    track("showcase_play", { key: v.key, lang: zh ? "zh" : "en" });
+                  }}
+                  onTimeUpdate={(e) => {
+                    // 25/50/75 进度里程碑:与 ended 一起可算每条片的观看深度漏斗
+                    const el = e.currentTarget;
+                    if (!el.duration) return;
+                    const q = Math.floor((el.currentTime / el.duration) * 4);
+                    const prev = Number(el.dataset.q || 0);
+                    if (q > prev && q < 4) {
+                      el.dataset.q = String(q);
+                      track("showcase_progress", { key: v.key, pct: q * 25, lang: zh ? "zh" : "en" });
+                    }
+                  }}
+                  onEnded={() => track("showcase_done", { key: v.key, lang: zh ? "zh" : "en" })}
+                />
+                <span
+                  className={`pointer-events-none absolute left-3 top-3 rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
+                    v.real ? "bg-emerald-400/90 text-ink-950" : "bg-neon-violet/90 text-white"
+                  }`}
+                >
+                  {v.real ? (zh ? "✓ 真实引擎输出" : "✓ Real engine output") : zh ? "概念演示" : "Concept demo"}
+                </span>
+              </div>
               <div className="p-4">
                 <div className="text-sm font-semibold text-white">{zh ? v.title.zh : v.title.en}</div>
                 <p className="mt-1 text-xs leading-relaxed text-slate-400">{zh ? v.desc.zh : v.desc.en}</p>
@@ -617,6 +741,7 @@ function CheckoutModal({
   tier,
   period,
   family,
+  delivery = "installed",
   initialFp,
   attributionRef = "",
   onClose,
@@ -625,6 +750,8 @@ function CheckoutModal({
   tier: LineTier;
   period: Period;
   family: OrderFamily;
+  /** 交付形态（仅 chatx 可为 hosted）：hosted 单走托管开通守护，不签装机授权码。 */
+  delivery?: Delivery;
   initialFp: string;
   /** 会话归因串（?ref=…，AI 坐席链接带入）：静默随单提交，不渲染任何 UI。 */
   attributionRef?: string;
@@ -711,6 +838,8 @@ function CheckoutModal({
           fingerprint: fp.trim(),
           lang: zh ? "zh" : "en",
           method,
+          // 托管交付标：只在显式选托管时携带（缺省=装机，与历史单同语义）
+          ...(delivery === "hosted" ? { delivery: "hosted" } : {}),
           // 会话归因串（AI 坐席链接 ?ref=…）：有值才带，供营销目标自动结算
           ...(attributionRef ? { ref: attributionRef } : {}),
         }),
@@ -786,13 +915,23 @@ function CheckoutModal({
 
         <div className="mt-4 space-y-1 text-sm">
           <Row k={zh ? "套餐" : "Plan"} v={`${zh ? tier.name.zh : tier.name.en} (${tier.edition})`} />
+          {family === "chatx" && (
+            <Row
+              k={zh ? "交付方式" : "Delivery"}
+              v={
+                delivery === "hosted"
+                  ? zh ? "☁️ 云端托管（开通即用）" : "☁️ Cloud hosted"
+                  : zh ? "💻 装机版（授权码激活）" : "💻 Self-hosted install"
+              }
+            />
+          )}
           <Row
             k={zh ? "计费周期" : "Billing"}
             v={
               tier.monthly === 0
                 ? zh
-                  ? "免费试用 14 天"
-                  : "14-day free trial"
+                  ? "免费版（输出带水印）"
+                  : "Free plan (watermarked output)"
                 : tier.oneTime
                   ? zh
                     ? "一次性加购（不续费）"
@@ -801,9 +940,13 @@ function CheckoutModal({
                     ? zh
                       ? "按月订阅"
                       : "Monthly"
-                    : zh
-                      ? `按年订阅（送 2 个月）`
-                      : "Annual (2 months free)"
+                    : period === "quarterly"
+                      ? zh
+                        ? "按季订阅"
+                        : "Quarterly"
+                      : zh
+                        ? "按年订阅"
+                        : "Annual"
             }
           />
           <Row
@@ -872,9 +1015,13 @@ function CheckoutModal({
               ? zh
                 ? "字符包凭证绑定此联系方式，且需与订阅时填写的一致（同一 Telegram / 邮箱即可，写法不必逐字相同）。"
                 : "The top-up voucher is bound to this contact — use the same Telegram / email as your subscription (formatting may differ)."
-              : zh
-                ? "授权码将按此联系方式送达，激活后绑定到你的实例，无需机器指纹。"
-                : "Your license code is delivered to this contact and binds to your instance — no machine fingerprint needed."}
+              : delivery === "hosted"
+                ? zh
+                  ? "到账后自动开通你的独立云端实例，专属网址与登录账号按此联系方式送达（订单进度页也可自取），浏览器直接使用，无需安装。"
+                  : "After payment your isolated cloud instance is provisioned automatically — the URL and login account are delivered to this contact (also self-serve on the status page). Nothing to install."
+                : zh
+                  ? "授权码将按此联系方式送达，激活后绑定到你的实例，无需机器指纹。"
+                  : "Your license code is delivered to this contact and binds to your instance — no machine fingerprint needed."}
           </p>
         )}
 

@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
     }
     // 识图按固定成本计额（图片 token 远超字符估算）；文本按 in+out 实计。
     const inChars = vision ? VISION_CHAR_COST : estimateRequestChars(body);
-    const snap = await quotaSnapshot(claims.mid);
+    const snap = await quotaSnapshot(claims);
     if (snap.busy) {
       void logGateway({ ev: "reject", mid: claims.mid, why: "global" });
       return NextResponse.json(
@@ -106,7 +106,7 @@ export async function POST(req: NextRequest) {
     // 只对成功响应计费（上游 5xx/超时不该消耗用户额度）
     let remaining = snap.remaining;
     if (upstream.ok) {
-      const billed = await consumeQuota(claims.mid, Math.max(inChars + outChars, 1));
+      const billed = await consumeQuota(claims, Math.max(inChars + outChars, 1));
       remaining = billed.remaining;
     }
     void logGateway({

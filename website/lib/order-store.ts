@@ -14,6 +14,10 @@ const LOG = process.env.ORDERS_LOG || path.join(DATA_DIR, "orders.jsonl");
 export type OrderStatus = "pending" | "paid" | "activated" | "cancelled";
 export const ORDER_STATUSES: OrderStatus[] = ["pending", "paid", "activated", "cancelled"];
 
+/** 交付形态：installed=装机授权码（默认）；hosted=托管实例开通（tenant_fulfill_watch）。 */
+export type OrderDelivery = "installed" | "hosted";
+export const ORDER_DELIVERIES: OrderDelivery[] = ["installed", "hosted"];
+
 export interface OrderEntry {
   id: string;
   t: string;
@@ -21,6 +25,8 @@ export interface OrderEntry {
   plan: string;
   edition: string;
   period: string;
+  /** 交付形态。缺省/历史单视同 installed；hosted 单不进装机 license 守护。 */
+  delivery?: OrderDelivery;
   /** 全域 SKU 关联键，见 platform/licensing/sku_registry.json（下单时经 lib/offer-map.ts
    *  的 resolveOrderSku 推断填充；映射不到则不写，宁缺毋错）。 */
   sku_id?: string;
@@ -114,12 +120,15 @@ export async function createOrder(
     const db = await readDb();
     // usdt：分配唯一小数尾数供链上自动核销；card：Stripe 按 session 对账，金额原样不加尾数。
     const method: "usdt" | "card" = input.method === "card" ? "card" : "usdt";
+    const delivery: OrderDelivery =
+      input.delivery === "hosted" ? "hosted" : "installed";
     const entry: OrderEntry = {
       ...input,
       id: newOrderId(),
       t: new Date().toISOString(),
       status: "pending",
       method,
+      delivery,
       pay_amount: method === "card" ? input.amount : allocPayAmount(db, input.amount),
       currency: method === "card" ? "USD" : "USDT",
     };
@@ -128,6 +137,8 @@ export async function createOrder(
     if (sku.skuId) entry.sku_id = sku.skuId;
     if (sku.productId) entry.product_id = sku.productId;
     if (!entry.ref) delete entry.ref; // 空归因串不落字段（绝大多数自然流量单）
+    // installed 是默认态：历史读库无字段视同 installed；新单也只在 hosted 时强制写出亦可，
+    // 这里显式落 installed，方便运营后台一眼区分两条履约链。
     db.orders[entry.id] = entry;
     await writeDb(db);
     await appendFile(LOG, JSON.stringify(entry) + "\n", "utf-8").catch(() => {});
@@ -220,7 +231,7 @@ export async function listOrders(status?: string): Promise<OrderEntry[]> {
   return status ? all.filter((o) => o.status === status) : all;
 }
 
-const PERIOD_SUB_DAYS: Record<string, number> = { monthly: 30, annual: 365 };
+const PERIOD_SUB_DAYS: Record<string, number> = { monthly: 30, quarterly: 90, annual: 365 };
 
 /** SLA/续费巡检（服务器 cron 每 10 分钟经 /api/admin/order-sla 调用；用官网自身原子存储，无多进程竞态）：
  *  ① 已到账超时未开通 → 疑似履约机离线，告警管理员（带一键开通）；
@@ -307,7 +318,8 @@ export async function notifyAdmins(text: string, inlineKeyboard?: unknown) {
   await Promise.allSettled(chats.map((c) => tgSend(c, text, inlineKeyboard)));
 }
 
-const zhPlan = (o: OrderEntry) => `${o.plan}${o.period === "annual" ? " · 年付" : o.period === "monthly" ? " · 月付" : ""}`;
+const zhPlan = (o: OrderEntry) =>
+  `${o.plan}${o.period === "annual" ? " · 年付" : o.period === "quarterly" ? " · 季付" : o.period === "monthly" ? " · 月付" : ""}`;
 
 /** 到账/开通/临期时自动私信已绑定的客户（notify_chat）。客户没绑定则静默跳过（仍可自助查询）。 */
 export async function notifyCustomerOfStatus(o: OrderEntry, kind: "paid" | "activated" | "expiring", daysLeft?: number) {
@@ -354,6 +366,7 @@ export async function notifyAdminsOfOrder(o: OrderEntry) {
   const text =
     `🧾 新订单 ${o.id}\n` +
     `套餐：${o.plan} (${o.edition}) · ${o.period}\n` +
+    (o.delivery === "hosted" ? `交付：☁️ 云端托管（自动开通实例，勿手发授权码）\n` : "") +
     `应付：${o.pay_amount} USDT（挂牌 ${o.amount} + 识别尾数）\n` +
     `联系：${o.contact}\n` +
     (o.fingerprint ? `指纹：${o.fingerprint}\n` : "") +

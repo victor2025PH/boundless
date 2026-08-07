@@ -124,6 +124,167 @@ export async function proxyVision(
   throw lastErr || new Error("all_vision_relays_failed");
 }
 
+// ── 语音中继（2026-08-03）：克隆 TTS(7852) 与 GPU ASR(8765) 经同一条 117→VPS
+//    反向隧道暴露到 VPS localhost，网关按设备令牌鉴权转发——把「非局域网机器用
+//    集群算力生成语音 / 听懂语音」补齐到与识图同一安全模型。
+//    TTS_RELAY_URLS  逗号列表（117 主 / 140 备）：http://127.0.0.1:18413,http://127.0.0.1:18414
+//    ASR_RELAY_URLS  须含 /v1 后缀（OpenAI 形态）：http://127.0.0.1:18415/v1
+//    AH_SERVICE_TOKEN 集群内部 X-AH-Svc 令牌——只在 VPS env，**永不下发客户端**
+//    （客户端只持 cx.* 设备令牌；集群令牌由网关侧代注）。
+const TTS_RELAY_URLS: string[] = (process.env.TTS_RELAY_URLS || "")
+  .split(",")
+  .map((s) => s.trim().replace(/\/+$/, ""))
+  .filter(Boolean);
+const ASR_RELAY_URLS: string[] = (process.env.ASR_RELAY_URLS || "")
+  .split(",")
+  .map((s) => s.trim().replace(/\/+$/, ""))
+  .filter(Boolean);
+const AH_SERVICE_TOKEN = (process.env.AH_SERVICE_TOKEN || "").trim();
+/** TTS 一次合成的最低计额（字符）：短句也占 GPU 一轮串行合成，纯按字符会低估。 */
+export const TTS_CHAR_MIN_COST = Number(process.env.AI_GATEWAY_TTS_MIN_CHARS || 60);
+/** ASR 一次转写的固定计额（字符）：语音时长网关不可靠可知，按次折算。 */
+export const ASR_CHAR_COST = Number(process.env.AI_GATEWAY_ASR_CHARS || 200);
+
+const _ttsCooldown = new Map<string, number>();
+const _asrCooldown = new Map<string, number>();
+
+function orderedOf(urls: string[], cooldown: Map<string, number>): string[] {
+  const now = Date.now();
+  const fresh: string[] = [];
+  const cooled: string[] = [];
+  for (const u of urls) {
+    if ((cooldown.get(u) || 0) > now) cooled.push(u);
+    else fresh.push(u);
+  }
+  return [...fresh, ...cooled]; // 全在冷却也要硬试（比直接失败好）
+}
+
+export function ttsRelayEnabled(): boolean {
+  return TTS_RELAY_URLS.length > 0;
+}
+
+export function asrRelayEnabled(): boolean {
+  return ASR_RELAY_URLS.length > 0;
+}
+
+/** 中继请求头：代注集群内部令牌（7852@140 等跨机节点要 X-AH-Svc 才放行）。 */
+function relayHeaders(extra: Record<string, string>): Record<string, string> {
+  const h: Record<string, string> = { ...extra };
+  if (AH_SERVICE_TOKEN) h["X-AH-Svc"] = AH_SERVICE_TOKEN;
+  return h;
+}
+
+/** 从请求头取设备令牌：Authorization Bearer 或 X-AH-Svc（avatar_voice 客户端走后者）。 */
+export function extractDeviceToken(headers: Headers): string {
+  const auth = headers.get("authorization") || "";
+  const m = /^Bearer\s+(.+)$/i.exec(auth.trim());
+  if (m && m[1].trim().startsWith("cx.")) return m[1].trim();
+  const svc = (headers.get("x-ah-svc") || "").trim();
+  return svc.startsWith("cx.") ? svc : "";
+}
+
+/** TTS 转发：JSON 原样透传到 7852 中继（117 主 / 140 备），5xx/网络失败冷却降权。 */
+export async function proxyTts(
+  path: string,
+  rawJson: string,
+  signal?: AbortSignal
+): Promise<Response> {
+  const relays = orderedOf(TTS_RELAY_URLS, _ttsCooldown);
+  if (!relays.length) throw new Error("no_tts_relay");
+  let lastErr: unknown = null;
+  for (const base of relays) {
+    try {
+      const r = await fetch(`${base}${path}`, {
+        method: "POST",
+        headers: relayHeaders({ "Content-Type": "application/json" }),
+        body: rawJson,
+        signal,
+      });
+      if (r.status >= 500 && relays.length > 1) {
+        _ttsCooldown.set(base, Date.now() + RELAY_COOLDOWN_MS);
+        lastErr = new Error(`relay_${r.status}`);
+        continue;
+      }
+      return r;
+    } catch (e) {
+      _ttsCooldown.set(base, Date.now() + RELAY_COOLDOWN_MS);
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error("all_tts_relays_failed");
+}
+
+/** ASR 转发：multipart 原样透传（含 boundary 的 Content-Type 一并带过去）。 */
+export async function proxyAsr(
+  body: ArrayBuffer,
+  contentType: string,
+  signal?: AbortSignal
+): Promise<Response> {
+  const relays = orderedOf(ASR_RELAY_URLS, _asrCooldown);
+  if (!relays.length) throw new Error("no_asr_relay");
+  let lastErr: unknown = null;
+  for (const base of relays) {
+    try {
+      const r = await fetch(`${base}/audio/transcriptions`, {
+        method: "POST",
+        headers: relayHeaders(
+          contentType ? { "Content-Type": contentType } : {}
+        ),
+        body,
+        signal,
+      });
+      if (r.status >= 500 && relays.length > 1) {
+        _asrCooldown.set(base, Date.now() + RELAY_COOLDOWN_MS);
+        lastErr = new Error(`relay_${r.status}`);
+        continue;
+      }
+      return r;
+    } catch (e) {
+      _asrCooldown.set(base, Date.now() + RELAY_COOLDOWN_MS);
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error("all_asr_relays_failed");
+}
+
+// TTS /health 透传（15s 缓存）：客户端 AvatarVoiceClient 健康预检据此决定端点
+// 次序——必须真探中继（隧道断/服务半死时如实报不健康，客户端才会回落），
+// 但带缓存防「每台客户机每 30s 一探」打穿隧道。
+let _ttsHealth: { ts: number; ok: boolean } = { ts: 0, ok: false };
+
+export async function ttsRelayHealth(): Promise<{ ok: boolean; models_loaded: boolean }> {
+  if (!TTS_RELAY_URLS.length) return { ok: false, models_loaded: false };
+  const now = Date.now();
+  if (now - _ttsHealth.ts < 15000) {
+    return { ok: _ttsHealth.ok, models_loaded: _ttsHealth.ok };
+  }
+  let ok = false;
+  for (const base of orderedOf(TTS_RELAY_URLS, _ttsCooldown)) {
+    try {
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), 4000);
+      const r = await fetch(`${base}/health`, {
+        headers: relayHeaders({ accept: "application/json" }),
+        signal: ac.signal,
+      });
+      clearTimeout(t);
+      if (r.ok) {
+        const j = (await r.json().catch(() => null)) as
+          | { ok?: unknown; models_loaded?: unknown }
+          | null;
+        if (j && j.ok === true && j.models_loaded !== false) {
+          ok = true;
+          break;
+        }
+      }
+    } catch {
+      /* try next relay */
+    }
+  }
+  _ttsHealth = { ts: now, ok };
+  return { ok, models_loaded: ok };
+}
+
 /** 观测：识图中继与冷却态（console 卡/排障用；不含任何密钥）。 */
 export function visionRelayStatus(): {
   enabled: boolean;
@@ -149,6 +310,8 @@ const GLOBAL_KEY = "__GLOBAL__";
 export type DeviceClaims = {
   v: 1;
   mid: string;
+  /** 托管实例 ID（可选）。有则额度键用实例维度，同机多租户互不挤额度。 */
+  iid?: string;
   iat: number;
   exp: number;
 };
@@ -215,6 +378,29 @@ export function normalizeFingerprint(raw: string): string {
     .slice(0, 64);
 }
 
+/** 托管 instance_id：小写 [a-z0-9_-]，最长 64；非法 → 空（不写入 claims）。 */
+export function normalizeInstanceId(raw: string): string {
+  return String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "")
+    .slice(0, 64);
+}
+
+/**
+ * 额度主体键：有合法 iid → ``IID:<iid>``（按租户实例计量）；
+ * 否则回落机器指纹 mid（桌面试用旧口径，向后兼容）。
+ */
+export function quotaSubject(claims: Pick<DeviceClaims, "mid" | "iid"> | string): string {
+  if (typeof claims === "string") {
+    // 兼容旧调用：consumeQuota(fingerprint, n) 仍可直接传 mid / IID:…
+    return String(claims || "").trim();
+  }
+  const iid = normalizeInstanceId(claims.iid || "");
+  if (iid) return `IID:${iid}`;
+  return claims.mid;
+}
+
 /** model 钳制：白名单外一律回落默认（不拒——改造过的客户端也能用，只是用不了贵模型）。 */
 export function clampModel(m: unknown): string {
   const s = String(m || "").trim();
@@ -242,17 +428,23 @@ function fromB64url(s: string): Buffer {
   return Buffer.from(b64, "base64");
 }
 
-export function mintDeviceToken(fingerprint: string, nowSec = Math.floor(Date.now() / 1000)): {
+export function mintDeviceToken(
+  fingerprint: string,
+  nowSec = Math.floor(Date.now() / 1000),
+  instanceId?: string
+): {
   token: string;
   claims: DeviceClaims;
 } {
   const mid = normalizeFingerprint(fingerprint);
+  const iid = normalizeInstanceId(instanceId || "");
   const claims: DeviceClaims = {
     v: 1,
     mid,
     iat: nowSec,
     exp: nowSec + TOKEN_TTL_SEC,
   };
+  if (iid) claims.iid = iid;
   const body = b64url(JSON.stringify(claims));
   const sig = b64url(crypto.createHmac("sha256", hmacSecret()).update(body).digest());
   return { token: `cx.${body}.${sig}`, claims };
@@ -294,8 +486,11 @@ export type QuotaSnapshot = {
   busy: boolean;
 };
 
-export async function quotaSnapshot(fingerprint: string): Promise<QuotaSnapshot> {
-  const mid = normalizeFingerprint(fingerprint);
+export async function quotaSnapshot(
+  subject: string | Pick<DeviceClaims, "mid" | "iid">
+): Promise<QuotaSnapshot> {
+  // subject 可以是指纹、IID:…、或 claims；库键不再强制指纹格式（托管实例键是 IID:）
+  const mid = quotaSubject(subject);
   const day = dayKey();
   const used = usedOf(day, mid);
   const gUsed = usedOf(day, GLOBAL_KEY);
@@ -311,14 +506,15 @@ export async function quotaSnapshot(fingerprint: string): Promise<QuotaSnapshot>
 }
 
 /**
- * 计费（单机 + 全局同一 sqlite 事务）。chars=0 只做快照式检查不落账。
+ * 计费（主体 + 全局同一 sqlite 事务）。chars=0 只做快照式检查不落账。
+ * subject = 机器指纹 mid，或托管 ``IID:<instance_id>``（经 quotaSubject(claims)）。
  * 返回 which：超的是哪一层（machine|global），前端据此分「明天恢复」vs「通道繁忙」。
  */
 export async function consumeQuota(
-  fingerprint: string,
+  subject: string | Pick<DeviceClaims, "mid" | "iid">,
   chars: number
 ): Promise<{ ok: boolean; used: number; remaining: number; which?: "machine" | "global" }> {
-  const mid = normalizeFingerprint(fingerprint);
+  const mid = quotaSubject(subject);
   const n = Math.max(0, Math.floor(chars));
   const day = dayKey();
   const tx = db().transaction(() => {
