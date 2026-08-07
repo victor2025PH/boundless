@@ -11,7 +11,6 @@ import CountUp from "./fx/CountUp";
 import BorderBeam from "./fx/BorderBeam";
 import MatrixRain from "./fx/MatrixRain";
 import { track } from "@/lib/track";
-import { abVariant, abExpose, HERO_CTA_COPY, type AbVariant } from "@/lib/ab";
 
 function suffixOf(v: string) {
   return v.replace(/[0-9.]/g, "");
@@ -41,15 +40,7 @@ export default function Hero() {
   const { t, lang } = useLang();
   const reduced = useReducedMotion();
   const [idx, setIdx] = useState(0);
-  // SSR/首帧渲染对照组文案，挂载后按本地分桶切换并记曝光（同访客桶恒定，无闪烁感）
-  const [ctaVariant, setCtaVariant] = useState<AbVariant>("a");
   const [handoff, setHandoff] = useState<Handoff>("none");
-
-  useEffect(() => {
-    const v = abVariant("hero_cta");
-    setCtaVariant(v);
-    abExpose("hero_cta", v);
-  }, []);
 
   /* 开场页正在展示时挂起标题,冲越光门瞬间逐字聚焦(与开场退场动画重叠,叙事连续) */
   useEffect(() => {
@@ -157,13 +148,15 @@ export default function Hero() {
             <Magnetic>
               <a
                 href="#autochat"
-                onClick={() => track("cta_click", { where: "hero_primary", ab: ctaVariant })}
+                onClick={() => track("cta_click", { where: "hero_primary" })}
                 className="btn-3d hero-cta group relative inline-flex items-center gap-2 overflow-hidden rounded-full px-9 py-4 text-base font-bold text-ink-950"
               >
                 <BorderBeam />
                 <span className="btn-3d-gloss pointer-events-none absolute inset-0" aria-hidden />
                 <span className="hero-cta-sheen pointer-events-none absolute inset-0" aria-hidden />
-                <span className="relative">{ctaVariant === "a" ? t.hero.ctaPrimary : HERO_CTA_COPY.b[lang]}</span>
+                {/* hero_cta A/B 已结案（2026-08-07，30 天数据 a 组 0 击 / b 组 2 击且文案与
+                    落点 #autochat 演示区语义一致）：定稿 b 组「看演示」钩子，文案回归 content.ts 单源 */}
+                <span className="relative">{t.hero.ctaPrimary}</span>
                 <ArrowRight className="relative h-4 w-4 transition-transform group-hover:translate-x-1" />
               </a>
             </Magnetic>

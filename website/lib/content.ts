@@ -403,7 +403,9 @@ const zh: Dict = {
     subtitle:
       "把 WhatsApp / Telegram / LINE / Messenger 全部接进一个收件箱：客户说什么语言都行，AI 实时拟人互译、按你的人设自动答疑、跟单、促成交，重要节点你随时一键接管。全程支持私有部署，数据不出你的服务器。",
     trustline: "7×24 看门狗自愈生产运行 · 1100+ 自动化测试护航 · 数据不出网",
-    ctaPrimary: "免费咨询 · 拿成交方案",
+    // hero_cta A/B 结案定稿（2026-08-07）：demo 钩子文案胜出（30 天 b 组 2 击 / a 组 0 击），
+    // 且与按钮落点 #autochat 演示区语义一致（旧文案承诺「咨询」落点却是演示，文不对题）。
+    ctaPrimary: "看 AI 当场成交演示",
     ctaSecondary: "查看套餐与价格",
     stats: [
       { value: "24H", label: "看门狗自愈全天候运行" },
@@ -1053,7 +1055,8 @@ const en: Dict = {
     subtitle:
       "Bring WhatsApp / Telegram / LINE / Messenger into one inbox. Customers write in any language — AI translates like a native, answers and follows up in your persona, and you take over with one click when it matters. Deploy privately; data never leaves your servers.",
     trustline: "24/7 self-healing production · 1100+ automated tests · Data stays on-prem",
-    ctaPrimary: "Free consult · get a closing plan",
+    // hero_cta A/B closed 2026-08-07: demo-hook copy won (see zh note above).
+    ctaPrimary: "Watch AI close a deal live",
     ctaSecondary: "View plans & pricing",
     stats: [
       { value: "24H", label: "Watchdog-healed, always on" },
