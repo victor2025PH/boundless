@@ -95,7 +95,11 @@ def register_batch_notif_routes(app, *, api_auth) -> None:
         updated = 0
         for cid in cids[:200]:  # 单次上限 200 条
             try:
-                ok = store.set_conv_archived(cid, archived)
+                ok = store.set_conv_archived(
+                    cid, archived,
+                    source="api:batch_archive",
+                    actor=str(request.session.get("username") or ""),
+                )
                 if ok:
                     updated += 1
             except Exception:

@@ -177,12 +177,13 @@ def _merge_orchestrator_status(
         for _ok in offline_keys:
             platform_status.pop(_ok, None)
 
-        # 掉线时长透传：外部 worker push 的会话健康表（platform_session_health）——
-        # 条目当前不健康且有 unhealthy_since 起点 → 注入，前端 _acctOfflineHint
-        # 据此显示「已掉线多久」。查找键必须与登记表 _key 同构（platform/account
-        # 经 _san 消毒），故直接用其 staticmethod 构造。best-effort，异常静默。
-        # ensure_seeded：重启后把注册表 offline 灌回健康表（供 ops/告警，不进聊天 chip）。
+        # 掉线时长 + 入站半死透传：外部 worker push 的会话健康表——
+        # - unhealthy_since → 前端 _acctOfflineHint「已掉线多久」
+        # - inbox_stalled / inbox_hint / e2ee_ratio → 账号卡半死态（P4：坐席不必
+        #   另轮询 /metrics；与 unhealthy 同一次 dump）
+        # 查找键必须与登记表 _key 同构。ensure_seeded：重启后灌 offline。
         sess_map: Dict[str, Any] = {}
+        inbox_map: Dict[str, Any] = {}
         _sess_key = None
         _unhealthy = frozenset()
         try:
@@ -192,11 +193,14 @@ def _merge_orchestrator_status(
             )
             ensure_seeded_from_registry()
             hp = get_platform_session_health()
-            sess_map = (hp.dump() or {}).get("sessions") or {}
+            _dump = hp.dump() or {}
+            sess_map = _dump.get("sessions") or {}
+            inbox_map = _dump.get("inbox_health") or {}
             _sess_key = hp._key
             _unhealthy = UNHEALTHY_STATUSES
         except Exception:
             sess_map = {}
+            inbox_map = {}
             logger.debug("[chats] 读取平台会话健康表失败", exc_info=True)
 
         # 身份可视化：每号补生效人设 id/显示名（meta.persona_id → persona_ids[0] →
@@ -256,16 +260,36 @@ def _merge_orchestrator_status(
                     v[_sk] = _sv
             if registry_keys is not None:
                 v["removable"] = pkey in registry_keys or k in registry_keys
-            if sess_map and _sess_key is not None:
+            if _sess_key is not None:
                 try:
-                    sess = sess_map.get(_sess_key(
+                    _sk = _sess_key(
                         str(v.get("platform") or ""),
-                        str(v.get("account_id") or ""))) or {}
-                    since = float(sess.get("unhealthy_since") or 0.0)
-                    if str(sess.get("status") or "") in _unhealthy and since > 0:
-                        v["unhealthy_since"] = float(since)
+                        str(v.get("account_id") or ""))
+                    if sess_map:
+                        sess = sess_map.get(_sk) or {}
+                        since = float(sess.get("unhealthy_since") or 0.0)
+                        if str(sess.get("status") or "") in _unhealthy and since > 0:
+                            v["unhealthy_since"] = float(since)
+                    # P4：登录绿但入站半死（E2EE 等）——账号轨直接可见
+                    if inbox_map:
+                        ih = inbox_map.get(_sk) or {}
+                        stall_since = float(ih.get("stall_since") or 0.0)
+                        if stall_since > 0:
+                            v["inbox_stalled"] = True
+                            v["stall_since"] = stall_since
+                            v["stall_kind"] = str(ih.get("stall_kind") or "")
+                            v["inbox_hint"] = str(
+                                ih.get("hint_code")
+                                or ih.get("detail")
+                                or "e2ee_relogin")[:64]
+                            try:
+                                _er = float(ih.get("e2ee_ratio"))
+                                if _er >= 0.0:
+                                    v["e2ee_ratio"] = _er
+                            except (TypeError, ValueError):
+                                pass
                 except Exception:
-                    logger.debug("[chats] unhealthy_since 透传失败", exc_info=True)
+                    logger.debug("[chats] 会话/入站健康透传失败", exc_info=True)
     except Exception:
         logger.debug("[chats] 并入编排器账号状态失败", exc_info=True)
 

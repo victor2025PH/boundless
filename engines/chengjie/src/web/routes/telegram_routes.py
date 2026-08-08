@@ -615,7 +615,8 @@ def register_telegram_routes(
             from src.client.daily_stats import today_counts as _daily_counts
             dc = await _aio.to_thread(_daily_counts)
             if dc is not None:
-                for k in ("messages", "voice_in", "tts_sent"):
+                # replies（AI 已发）仅结构化口径有——日志尾扫数不出，缺席时前端如实显 —
+                for k in ("messages", "voice_in", "tts_sent", "replies"):
                     info["stats"][k] = int(dc.get(k, 0) or 0)
                 info["stats_source"] = "structured"
         except Exception:

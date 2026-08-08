@@ -22,11 +22,11 @@
 .alert-banner-title.critical{color:var(--red)}.alert-banner-title.warn{color:var(--amber)}
 .alert-collapse-btn{background:none;border:none;cursor:pointer;font-size:.75rem;color:var(--t3);padding:.15rem .35rem;border-radius:4px;transition:.15s}
 .alert-collapse-btn:hover{color:var(--t);background:var(--input)}
-/* ── 系统状态条 ──────────────────────────── */
-#sys-bar{display:none;align-items:center;gap:.6rem;padding:.5rem .85rem;background:var(--card);
+/* ── 待办条（原系统状态条改造：假信号徽标 → 可点击待办） ─────── */
+#todo-bar{display:none;align-items:center;gap:.6rem;padding:.5rem .85rem;background:var(--card);
   border:1px solid var(--bd);border-radius:var(--r);margin-bottom:.9rem;flex-wrap:wrap;font-size:.78rem;
   animation:fadeUp .3s ease}
-#sys-bar.show{display:flex}
+#todo-bar.show{display:flex}
 .sys-pills{display:flex;flex-wrap:wrap;gap:.4rem;flex:1}
 .sys-pill{display:inline-flex;align-items:center;gap:.3rem;padding:.2rem .6rem;
   border-radius:20px;background:var(--input);color:var(--t2);font-size:.75rem;white-space:nowrap}
@@ -34,9 +34,21 @@
 .sys-pill.warn{background:var(--as,rgba(245,158,11,.1));color:var(--amber)}
 .sys-pill.err{background:var(--rs);color:var(--red)}
 .sys-pill .dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
-.sys-upd{font-size:.7rem;color:var(--t3,#9ca3af);margin-left:auto;white-space:nowrap}
-.sys-refresh{background:none;border:none;cursor:pointer;color:var(--t3);font-size:.85rem;padding:.1rem .3rem;border-radius:4px;transition:.15s}
-.sys-refresh:hover{color:var(--p);background:var(--ps)}
+a.sys-pill{text-decoration:none;cursor:pointer;transition:.15s}
+a.sys-pill:hover{filter:brightness(1.1);transform:translateY(-1px)}
+a.sys-pill b{margin-left:.15rem}
+/* 健康/可靠性组件 chip：从纯展示 span 升级为可点击链接 */
+.hc-chip{display:inline-flex;align-items:center;gap:.3rem;padding:.18rem .55rem;
+  border:1px solid var(--bd);border-radius:14px;font-size:.72rem;color:var(--t2);
+  text-decoration:none;transition:.15s;max-width:100%}
+.hc-chip i{width:7px;height:7px;border-radius:50%;display:inline-block;flex-shrink:0}
+.hc-chip:hover{border-color:var(--p);color:var(--p)}
+.hc-chip .hc-chip-det{color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px}
+/* 折叠区（可靠性/工程明细/知识库） */
+details.dash-fold>summary{cursor:pointer;user-select:none;list-style:none;display:flex;align-items:center;gap:.6rem}
+details.dash-fold>summary::-webkit-details-marker{display:none}
+details.dash-fold>summary .fold-arrow{transition:transform .18s;font-size:.7rem;color:var(--t3);flex-shrink:0}
+details.dash-fold[open]>summary .fold-arrow{transform:rotate(90deg)}
 /* stat icon colors */
 .ico-p{background:linear-gradient(135deg,var(--p,#1e8cf2),#8b5cf6)}
 .ico-g{background:linear-gradient(135deg,#10b981,#059669)}
@@ -70,6 +82,21 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
 .tl-action{font-weight:600;font-size:.85rem;margin-bottom:.15rem}
 .tl-meta{font-size:.77rem;color:var(--t2);display:flex;gap:.6rem;flex-wrap:wrap}
 .tl-time{margin-left:auto;font-size:.76rem;color:var(--t3);white-space:nowrap;padding-top:.15rem}
+/* 最近操作卡（2026-08-05 人话化改造）：可点击行 / 日期分段 / 高危强调 / 聚合胶囊 */
+a.tl-item,div.tl-item.ro-row{text-decoration:none;color:inherit;border-radius:8px;margin:0 -.4rem;padding:.6rem .4rem;transition:background .15s;cursor:pointer}
+a.tl-item:hover,div.tl-item.ro-row:hover{background:var(--input)}
+.ro-sum{font-size:.72rem;font-weight:400;color:var(--t3);margin-left:.5rem;white-space:nowrap}
+.ro-day{font-size:.7rem;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin:.55rem 0 .15rem}
+.ro-day:first-of-type{margin-top:.1rem}
+.ro-count{display:inline-block;margin-left:.35rem;padding:.02rem .4rem;border-radius:99px;font-size:.7rem;font-weight:700;background:var(--ps);color:var(--p);vertical-align:1px}
+.ro-badge{display:inline-block;margin-left:.35rem;padding:.02rem .4rem;border-radius:5px;font-size:.68rem;font-weight:600;background:var(--gs);color:var(--green);vertical-align:1px;text-decoration:none}
+.ro-badge:hover{filter:brightness(1.08)}
+.ro-av{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;font-size:.6rem;font-weight:700;color:#fff;flex-shrink:0}
+.ro-tgt{color:var(--t2)}
+.ro-tgt.mono{font-family:'Consolas',monospace;font-size:.72rem}
+.ro-brief{margin-top:.2rem;font-size:.73rem;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:min(52ch,100%)}
+.ro-danger .tl-body{border-left:3px solid var(--red);padding-left:.55rem;margin-left:-.55rem;border-radius:2px}
+.ro-danger .tl-action{color:var(--red)}
 /* panel backdrop */
 #panel-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:199;backdrop-filter:blur(3px)}
 #panel-backdrop.open{display:block}
@@ -115,13 +142,107 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
 {% block content %}
 {% set active="dash" %}
 
-<!-- 系统状态条（JS 动态填充） -->
-<div id="sys-bar" class="pro-only">
-  <div class="sys-pills" id="sys-pills">
-    <span class="sys-pill"><span class="dot"></span>{{ (i18n or {}).get('dash.loading', "加载中…") }}</span>
+<!-- 待办条：需要人处理的事排第一屏；数据与侧栏徽标同源（草稿/学习/危机/案例），
+     全部可点击直达处理页。简洁/完整模式都显示（坐席最需要它）。 -->
+<div id="todo-bar">
+  <span style="font-weight:700;font-size:.82rem;display:inline-flex;align-items:center;gap:.35rem" data-help="dash_todo">📋 {{ (i18n or {}).get('db2_todo_title', "待办") }}</span>
+  <div class="sys-pills" id="todo-pills"></div>
+  <a href="/workspace" target="_blank" data-winname="workspace" onclick="return __openUnique(event,this)" class="btn btn-p btn-xs" style="flex-shrink:0">{{ (i18n or {}).get('db2_todo_workspace', "打开工作台") }} ↗</a>
+</div>
+<script>
+(function(){
+  function pill(href,cls,label,n){
+    // 工作台是独立应用：经窗口唯一性 helper 复用/聚焦既有工作台窗口（_blank 仅作
+    // helper 不可用时的降级兜底）；其余管理页同窗跳转
+    var tgt=href.indexOf('/workspace')===0
+      ?' target="_blank" data-winname="workspace" onclick="return __openUnique(event,this)"':'';
+    return '<a class="sys-pill '+cls+'" href="'+href+'"'+tgt+'><span class="dot"></span>'+label+' <b>'+n+'</b></a>';
+  }
+  async function j(u){
+    try{var r=await apiFetch(u,{credentials:'same-origin'});if(!r.ok)return null;return await r.json();}
+    catch(e){return null;}
+  }
+  // SLA 超时数：主管专属端点，非主管首次 403 后记忆化不再轮询（省无谓请求）
+  var _slaDenied=false;
+  async function jSla(){
+    if(_slaDenied)return null;
+    try{
+      var r=await apiFetch('/api/drafts/sla-overdue?hours=4',{credentials:'same-origin'});
+      if(r.status===403){_slaDenied=true;return null;}
+      if(!r.ok)return null;
+      return await r.json();
+    }catch(e){return null;}
+  }
+  // 兜底路径：聚合端点不可用（后端未重启/旧版本）时退回逐接口拉取。
+  // SLA 兜底用主管专属 sla-overdue（403 记忆化）；聚合主路则统一走
+  // SLAWatcher 口径——与同页健康卡「草稿 SLA 严重超时」chip 同一个数。
+  async function _todoFallback(){
+    var res=await Promise.all([
+      j('/api/drafts/stats'),
+      j('/api/learner/drafts?status=pending'),
+      j('/api/crisis-events?only_unhandled=true&limit=1'),
+      j('/api/cases/active'),
+      jSla()
+    ]);
+    var items=[],known=false;
+    if(res[4]&&res[4].count!=null){known=true;var n4=res[4].count||0;
+      if(n4>0)items.push(pill('/workspace','err',window.T('db2_todo_sla'),n4));}
+    if(res[0]&&res[0].stats){known=true;var n0=res[0].stats.total_pending||0;
+      if(n0>0)items.push(pill('/workspace','warn',window.T('db2_todo_drafts'),n0));}
+    if(res[1]&&res[1].drafts){known=true;var n1=(res[1].drafts||[]).length;
+      if(n1>0)items.push(pill('/learner','warn',window.T('db2_todo_learner'),n1));}
+    if(res[2]&&res[2].unhandled_total!=null){known=true;var n2=res[2].unhandled_total||0;
+      if(n2>0)items.push(pill('/crisis-audit','err',window.T('db2_todo_crisis'),n2));}
+    if(res[3]&&res[3].cases){known=true;var n3=0;
+      (res[3].cases||[]).forEach(function(c){if(!c.closed)n3++;});
+      if(n3>0)items.push(pill('/cases','',window.T('db2_todo_cases'),n3));}
+    return {items:items,known:known};
+  }
+  async function loadTodoBar(){
+    var bar=document.getElementById('todo-bar'),box=document.getElementById('todo-pills');
+    if(!bar||!box)return;
+    var items=[],known=false;
+    var s=await j('/api/todo-summary');
+    if(s&&s.ok){
+      // 聚合主路：一次往返 5 个计数（null=该子系统不可用 → 隐藏对应徽标）
+      if(s.sla_overdue!=null&&s.sla_overdue>0){known=true;
+        items.push(pill('/workspace','err',window.T('db2_todo_sla'),s.sla_overdue));}
+      if(s.drafts_pending!=null){known=true;
+        if(s.drafts_pending>0)items.push(pill('/workspace','warn',window.T('db2_todo_drafts'),s.drafts_pending));}
+      if(s.learner_pending!=null){known=true;
+        if(s.learner_pending>0)items.push(pill('/learner','warn',window.T('db2_todo_learner'),s.learner_pending));}
+      if(s.crisis_unhandled!=null){known=true;
+        if(s.crisis_unhandled>0)items.push(pill('/crisis-audit','err',window.T('db2_todo_crisis'),s.crisis_unhandled));}
+      if(s.cases_open!=null){known=true;
+        if(s.cases_open>0)items.push(pill('/cases','',window.T('db2_todo_cases'),s.cases_open));}
+    }else{
+      var fb=await _todoFallback();
+      items=fb.items;known=fb.known;
+    }
+    if(!known){bar.classList.remove('show');return;}
+    box.innerHTML=items.length?items.join('')
+      :'<span class="sys-pill ok"><span class="dot"></span>'+window.T('db2_todo_empty')+'</span>';
+    bar.classList.add('show');
+  }
+  loadTodoBar();
+  var _tbTimer=setInterval(loadTodoBar,60000);
+  document.addEventListener('visibilitychange',function(){
+    if(document.hidden){clearInterval(_tbTimer);}
+    else{loadTodoBar();_tbTimer=setInterval(loadTodoBar,60000);}
+  });
+})();
+</script>
+
+<!-- 紧急告警横幅（JS 动态填充）——紧跟待办条，保证异常永远第一屏可见 -->
+<div id="alert-banner">
+  <div class="alert-banner-header">
+    <span class="alert-banner-title" id="alert-banner-title">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <span id="alert-banner-label">{{ (i18n or {}).get('db_s003', "系统告警") }}</span>
+    </span>
+    <button class="alert-collapse-btn" id="alert-collapse-btn" onclick="toggleAlertBanner()">{{ (i18n or {}).get('inbox.collapse', "收起") }}</button>
   </div>
-  <span class="sys-upd" id="sys-upd-time"></span>
-  <button class="sys-refresh" onclick="loadSysBar()" title="{{ (i18n or {}).get('wa_s017', '刷新状态') }}">↻</button>
+  <div class="alert-wrap" id="alert-wrap"></div>
 </div>
 
 <!-- C0-1 授权状态卡（JS 动态填充） -->
@@ -177,7 +298,7 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
   <div style="display:flex;align-items:center;gap:.9rem;">
     <span id="health-icon" style="font-size:1.3rem;flex-shrink:0;">🩺</span>
     <div style="flex:1;min-width:0;">
-      <div id="health-title" style="font-weight:700;color:var(--t);"></div>
+      <div id="health-title" data-help="dash_health" style="font-weight:700;color:var(--t);"></div>
       <div id="health-sub" style="color:var(--t2);font-size:.76rem;margin-top:.12rem;"></div>
     </div>
     <span id="health-badge" style="flex-shrink:0;padding:.22rem .7rem;border-radius:20px;
@@ -193,6 +314,15 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
     red:{bg:'var(--rs)',fg:'var(--red)',icon:'🔴',label:window.T('msg_js_1245')}
   };
   var SMETA={ok:'var(--green)',warn:'var(--amber)',fail:'var(--red)'};
+  // 组件 id → 处理页映射：chip 点击直达该问题的第一现场
+  var CLINK={db:'/logs',ai:'/settings',license:'/membership',channels:'/rpa-overview',
+    queue:'/workspace',sla_backlog:'/workspace',audio:'/admin/ops',avatar_voice:'/admin/ops'};
+  function _clink(id){
+    if(CLINK[id])return CLINK[id];
+    if(String(id).indexOf('worker_')===0)return '/admin/ops';
+    return '/admin/ops';
+  }
+  function _hesc(s){return String(s||'').replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
   function render(){
     apiFetch('/api/admin/health').then(function(r){return r.json();}).then(function(d){
       if(!d||!d.ok) return;
@@ -208,33 +338,47 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
       b.textContent=m.label; b.style.background=m.bg; b.style.color=m.fg;
       document.getElementById('health-comps').innerHTML=(d.components||[]).map(function(c){
         var col=SMETA[c.status]||'var(--t2)';
-        return '<span title="'+(c.detail||'').replace(/"/g,'&quot;')+'" '
-          +'style="display:inline-flex;align-items:center;gap:.3rem;padding:.18rem .55rem;'
-          +'border:1px solid var(--bd);border-radius:14px;font-size:.72rem;color:var(--t2);">'
-          +'<i style="width:7px;height:7px;border-radius:50%;background:'+col+';display:inline-block;"></i>'
-          +(c.name||c.id)+'</span>';
+        var det=String(c.detail||'');
+        var bad=c.status&&c.status!=='ok';
+        // 异常组件把详情直接亮在行内（不必 hover 才知道坏在哪）；正常组件详情留在 title
+        var inline=bad?('<span class="hc-chip-det">· '+_hesc(det)+'</span>'):'';
+        return '<a class="hc-chip" href="'+_clink(c.id)+'" title="'+_hesc(det)+'">'
+          +'<i style="background:'+col+'"></i>'+_hesc(c.name||c.id)+inline+'</a>';
       }).join('');
+      // 同步填充「系统诊断」统计卡（与健康卡同一份数据，永不打架）
+      var sd=document.getElementById('stat-diag');
+      if(sd){
+        sd.textContent=(s.fail||0)>0?(window.T('msg_js_1245')+' '+s.fail)
+          :((s.warn||0)>0?(window.T('wa_js_008')+' '+s.warn):window.T('db_js_020'));
+        sd.style.color=(s.fail||0)>0?'var(--red)':((s.warn||0)>0?'var(--amber)':'var(--green)');
+      }
+      var sds=document.getElementById('stat-diag-sub');
+      if(sds)sds.textContent=window.T('db_js_020')+' '+(s.ok||0)+' · '+window.T('wa_js_008')+' '+(s.warn||0)+' · '+window.T('msg_js_1245')+' '+(s.fail||0);
     }).catch(function(){});
   }
   render(); setInterval(render, 60000);
 })();
 </script>
 
-<!-- D2 运维可靠性卡（JS 动态填充） -->
-<div id="rel-card" style="display:none;margin-bottom:.9rem;border-radius:var(--r);
+<!-- D2 运维可靠性卡（JS 动态填充）——默认折叠：摘要行足够判断好坏，明细点开看 -->
+<details id="rel-card" class="dash-fold pro-only" style="display:none;margin-bottom:.9rem;border-radius:var(--r);
   border:1px solid var(--bd);background:var(--card);padding:.85rem 1rem;font-size:.82rem;">
-  <div style="display:flex;align-items:center;gap:.9rem;">
+  <summary>
+    <span class="fold-arrow">▶</span>
     <span id="rel-icon" style="font-size:1.3rem;flex-shrink:0;">📈</span>
     <div style="flex:1;min-width:0;">
-      <div style="font-weight:700;color:var(--t);">{{ (i18n or {}).get('db_s002', "运维可靠性（近 24h）") }}</div>
+      <div data-help="dash_reliability" style="font-weight:700;color:var(--t);">{{ (i18n or {}).get('db_s002', "运维可靠性（近 24h）") }}</div>
       <div id="rel-sub" style="color:var(--t2);font-size:.76rem;margin-top:.12rem;"></div>
     </div>
     <span id="rel-score" style="flex-shrink:0;padding:.22rem .7rem;border-radius:20px;
       font-size:.72rem;font-weight:700;white-space:nowrap;"></span>
-  </div>
+  </summary>
   <div id="rel-workers" style="display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.7rem;"></div>
   <div id="rel-spark" style="display:flex;align-items:flex-end;gap:2px;height:42px;margin-top:.7rem;"></div>
-</div>
+  <div style="margin-top:.6rem;text-align:right">
+    <a href="/admin/ops" style="font-size:.75rem;color:var(--p);text-decoration:none">{{ (i18n or {}).get('db2_rel_more', "完整运维卡片看运营总览") }} →</a>
+  </div>
+</details>
 <script>
 (function(){
   var LM={green:{fg:'var(--green)',icon:'📈',label:window.T('wa_js_073')},
@@ -247,6 +391,8 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
       var card=document.getElementById('rel-card'); if(!card) return;
       var m=LM[d.light]||LM.yellow;
       card.style.display='block'; card.style.borderLeft='4px solid '+m.fg;
+      // 有异常（非绿灯）自动展开明细——别让坏消息藏在折叠里
+      if(d.light&&d.light!=='green')card.open=true;
       document.getElementById('rel-icon').textContent=m.icon;
       var t=d.totals||{};
       document.getElementById('rel-sub').textContent=
@@ -258,11 +404,9 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
       document.getElementById('rel-workers').innerHTML=(d.workers||[]).map(function(w){
         var col=SM[w.status]||'var(--t2)';
         var er=Math.round((w.error_rate||0)*100);
-        return '<span title="'+window.T('rpa_js_send')+' '+(w.total_sent||0)+' / '+window.T('ln_js_036')+' '+(w.total_errors||0)+'" '
-          +'style="display:inline-flex;align-items:center;gap:.3rem;padding:.18rem .55rem;'
-          +'border:1px solid var(--bd);border-radius:14px;font-size:.72rem;color:var(--t2);">'
-          +'<i style="width:7px;height:7px;border-radius:50%;background:'+col+';display:inline-block;"></i>'
-          +(w.name||w.id)+(w.total_sent||w.total_errors?(' '+er+'%err'):'')+'</span>';
+        return '<a class="hc-chip" href="/admin/ops" title="'+window.T('rpa_js_send')+' '+(w.total_sent||0)+' / '+window.T('ln_js_036')+' '+(w.total_errors||0)+'">'
+          +'<i style="background:'+col+'"></i>'
+          +(w.name||w.id)+(w.total_sent||w.total_errors?(' '+er+'%err'):'')+'</a>';
       }).join('');
       var tr=d.trend||[]; var max=1; tr.forEach(function(x){max=Math.max(max,x.total||0);});
       document.getElementById('rel-spark').innerHTML=tr.map(function(x){
@@ -277,18 +421,6 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
   render(); setInterval(render, 60000);
 })();
 </script>
-
-<!-- 紧急告警横幅（JS 动态填充） -->
-<div id="alert-banner">
-  <div class="alert-banner-header">
-    <span class="alert-banner-title" id="alert-banner-title">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-      <span id="alert-banner-label">{{ (i18n or {}).get('db_s003', "系统告警") }}</span>
-    </span>
-    <button class="alert-collapse-btn" id="alert-collapse-btn" onclick="toggleAlertBanner()">{{ (i18n or {}).get('inbox.collapse', "收起") }}</button>
-  </div>
-  <div class="alert-wrap" id="alert-wrap"></div>
-</div>
 
 {% if ui_mode == 'simple' %}
 <div class="card" style="margin-bottom:1rem;padding:1.2rem">
@@ -313,36 +445,44 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
 </div>
 {% endif %}
 
-<!-- Stat cards -->
+<!-- Stat cards：全部可点击直达权威页。
+     旧卡清退记录（2026-08-02）：运行时长（boot_ts 挂在未使用的静态协议号上恒 0=假数据）、
+     话术模板（功能已迁移知识库「系统话术」分类）、系统状态→策略效果（错误映射）。 -->
 <div class="g4 fa">
-  <a href="/logs" class="card stat-card fa fa1">
-    <div class="s-icon ico-p"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
-    <div class="s-num" data-count="{{ uptime_hours|default(0) }}">0</div>
-    <div class="s-lbl">{{ (i18n or {}).get('uptime', "运行时长（小时）") }}</div>
-  </a>
-  <a href="/templates" class="card stat-card fa fa2">
-    <div class="s-icon ico-g"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
-    <div class="s-num" data-count="{{ template_count|default(0) }}">0</div>
-    <div class="s-lbl">{{ (i18n or {}).get('templates', "话术模板") }}</div>
+  {# 消息卡默认隐藏：优先今日真实用量（主管），回落主链累计（旧式部署），
+     两头都无数据不显示——绝不出现 0/0 假读数（编排器部署 bot-metrics 恒 0） #}
+  <a href="/analytics" class="card stat-card fa fa1 pro-only" id="stat-msgs-card" style="display:none" data-help="dash_msgs">
+    <div class="s-icon ico-p"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
+    <div class="s-num" id="stat-msgs" style="font-size:1.4rem">—</div>
+    <div class="s-lbl" id="stat-msgs-lbl">{{ (i18n or {}).get('db2_stat_msgs', "消息 收/发") }}</div>
+    <div class="s-lbl" id="stat-msgs-sub" style="color:var(--p)"></div>
   </a>
   {% set _has_channels = domain_web_pages|selectattr('key','equalto','ch')|list|length > 0 %}
   {% if _has_channels %}
-  <a href="/channels" class="card stat-card fa fa3">
+  <a href="/channels" class="card stat-card fa fa2">
     <div class="s-icon ico-a"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg></div>
     <div class="s-num" data-count="{{ channel_count|default(0) }}">0</div>
     <div class="s-lbl">{{ (i18n or {}).get('channel_count', "通道数量") }}</div>
   </a>
   {% else %}
-  <a href="/knowledge" class="card stat-card fa fa3">
+  <a href="/knowledge" class="card stat-card fa fa2">
     <div class="s-icon ico-a"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg></div>
-    <div class="s-num" id="kb-entry-count" data-count="0">0</div>
+    <div class="s-num" id="kb-entry-count">—</div>
     <div class="s-lbl">{{ (i18n or {}).get('db_s007', "知识库条目") }}</div>
   </a>
   {% endif %}
-  <a href="/strategy-analytics" class="card stat-card fa fa4">
-    <div class="s-icon ico-b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
-    <div class="s-num" style="font-size:1.3rem">{{ status|default((i18n or {}).get('status_running', '运行中')) }}</div>
-    <div class="s-lbl">{{ (i18n or {}).get('sys_status', "系统状态") }}</div>
+  <a href="#" onclick="openHealthCheck();return false" class="card stat-card fa fa3" data-help="dash_diag">
+    <div class="s-icon ico-b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div>
+    <div class="s-num" id="stat-diag" style="font-size:1.3rem">{{ (i18n or {}).get('status_running', '运行中') }}</div>
+    <div class="s-lbl">{{ (i18n or {}).get('db2_stat_diag', "系统诊断") }}</div>
+    <div class="s-lbl" id="stat-diag-sub"></div>
+  </a>
+  {# 主动触达卡 — 默认隐藏；近 14 天有真实触达（mode_ab）才显示，深链运营总览 #}
+  <a href="/admin/ops" class="card stat-card fa fa4 pro-only" id="stat-proactive" style="display:none" data-help="dash_proactive">
+    <div class="s-icon ico-r"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg></div>
+    <div class="s-num" id="stat-proactive-num" style="font-size:1.4rem">—</div>
+    <div class="s-lbl">{{ (i18n or {}).get('db2_stat_proactive', "主动触达（14天）") }}</div>
+    <div class="s-lbl" id="stat-proactive-sub" style="color:var(--p)"></div>
   </a>
   {# 变现概览卡 — 默认隐藏;/api/monetize/kpi 返回 enabled 且非 403 时才展示(viewer 拿 403 保持隐藏) #}
   <div class="card stat-card fa" id="dash-kpi-monetize" style="display:none">
@@ -422,6 +562,18 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
 </script>
 {% endif %}
 
+<!-- 工程明细折叠区：Bot 性能/触发器决策是排障调参内容，对运营/坐席是噪音 →
+     默认折叠；打开才启动触发器日志加载与 15s 高频轮询（收起时 bot-metrics 降为
+     60s 慢轮询，只喂顶部「消息 收/发」统计卡）。 -->
+<details id="eng-details" class="dash-fold pro-only" style="margin-bottom:1rem">
+  <summary class="card" style="padding:.7rem 1rem;font-size:.85rem;margin-bottom:0">
+    <span class="fold-arrow">▶</span>
+    <span style="font-weight:700" data-help="dash_eng">🔧 {{ (i18n or {}).get('db2_eng_title', "工程明细（Bot 性能 · 触发器决策）") }}</span>
+    <span id="eng-meta" style="color:var(--t3);font-size:.73rem;font-weight:400"></span>
+    <span style="margin-left:auto;color:var(--t3);font-size:.72rem;font-weight:400">{{ (i18n or {}).get('db2_eng_hint', "排障调参用，点击展开") }}</span>
+  </summary>
+  <div style="margin-top:.8rem">
+
 <!-- Bot 实时性能指标 -->
 <div class="card fa fa2 pro-only" id="bot-metrics-card">
   <h2>
@@ -475,26 +627,16 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
     <div id="bm-anti-repeat" style="display:none;font-size:.73rem;color:var(--t2);margin-top:.35rem;line-height:1.5"></div>
     <!-- ★ W2-D5.6：陪护模式三层 metrics 卡片 -->
     <div id="bm-companion" style="display:none;margin-top:.6rem;padding:.55rem .65rem;background:var(--input);border-radius:8px;border-left:3px solid var(--p);font-size:.73rem;line-height:1.55"></div>
-    <!-- ★ W3-D1.3：reactivation dry_run 样本审核面板 -->
-    <details id="bm-dry-samples" style="margin-top:.5rem;font-size:.73rem">
-      <summary style="cursor:pointer;color:var(--t2);user-select:none">
-        {{ (i18n or {}).get('db_s025', "待审核话术") }} <span id="bm-dry-count" style="color:var(--t3)">(–)</span>
-        <button class="btn btn-s btn-xs" style="margin-left:.6rem;padding:.1rem .5rem;font-size:.65rem" onclick="event.preventDefault();loadDrySamples(true)">{{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
-      </summary>
-      <div id="bm-dry-list" style="margin-top:.5rem;display:flex;flex-direction:column;gap:.4rem">
-        <div style="color:var(--t3)">{{ (i18n or {}).get('db_s026', "点开后按") }}"{{ (i18n or {}).get('dash.refresh', "刷新") }}"{{ (i18n or {}).get('db_s027', "加载") }}</div>
-      </div>
-    </details>
-    <!-- ★ Phase O 质量闭环：care dry_run 关怀话术审核面板 -->
-    <details id="bm-care-dry-samples" style="margin-top:.5rem;font-size:.73rem">
-      <summary style="cursor:pointer;color:var(--t2);user-select:none">
-        {{ (i18n or {}).get('db_s028', "待审核关怀话术") }} <span id="bm-care-dry-count" style="color:var(--t3)">(–)</span>
-        <button class="btn btn-s btn-xs" style="margin-left:.6rem;padding:.1rem .5rem;font-size:.65rem" onclick="event.preventDefault();loadCareDry(true)">{{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
-      </summary>
-      <div id="bm-care-dry-list" style="margin-top:.5rem;display:flex;flex-direction:column;gap:.4rem">
-        <div style="color:var(--t3)">{{ (i18n or {}).get('db_s026', "点开后按") }}"{{ (i18n or {}).get('dash.refresh', "刷新") }}"{{ (i18n or {}).get('db_s027', "加载") }}</div>
-      </div>
-    </details>
+    <!-- 唤醒话术审核已归位流失预警页（rh-dry-card，同 API 权威审核区，
+         2026-08-02 去重）：仪表盘只留入口不留第二套审核 UI，防两处漂移 -->
+    <div style="margin-top:.5rem;font-size:.73rem">
+      <a href="/relations-health" style="color:var(--p);text-decoration:none">{{ (i18n or {}).get('db_s025', "待审核话术") }} → {{ (i18n or {}).get('relations_health', "流失预警") }}</a>
+    </div>
+    <!-- 关怀话术审核已归位主动关怀页（cs-samples-card 同一 API 的权威审核区，
+         2026-08-02 去重）：仪表盘只留入口不留第二套审核 UI，防两处漂移 -->
+    <div style="margin-top:.5rem;font-size:.73rem">
+      <a href="/care-schedule" style="color:var(--p);text-decoration:none">{{ (i18n or {}).get('db_s028', "待审核关怀话术") }} → {{ (i18n or {}).get('care', "主动关怀") }}</a>
+    </div>
     <!-- ★ O·P 联动质量看板 -->
     <!-- 此 details 原用了与上方防复读观测那个 div 相同的元素 id（碰撞，JS getElementById 只命中前者）→ 已改名 -->
     <details id="bm-proactive-quality" style="margin-top:.5rem;font-size:.73rem">
@@ -534,6 +676,9 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
   </div>
   <div id="td-empty" style="display:none;text-align:center;padding:1rem;color:var(--t3);font-size:.82rem">{{ (i18n or {}).get('db_s033', "暂无决策记录") }}</div>
 </div>
+
+  </div>
+</details>
 
 <!-- Quick actions -->
 <div class="card fa fa2 pro-only">
@@ -615,13 +760,15 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
   {% endif %}
 {% endfor %}
 
-<!-- 知识库健康卡片 -->
-<div class="card fa fa3" id="kb-health-card">
-  <h2>
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
-    {{ (i18n or {}).get('db_s038', "知识库状态") }}
-    <div class="actions"><a href="/knowledge" class="btn btn-s btn-xs">{{ (i18n or {}).get('inbox.xl.manage', "管理") }}</a></div>
-  </h2>
+<!-- 知识库健康卡片——折叠卡：条目数/命中率提到摘要行，明细点开看 -->
+<details class="card fa fa3 dash-fold" id="kb-health-card">
+  <summary style="font-size:.9rem">
+    <span class="fold-arrow">▶</span>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="flex-shrink:0"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
+    <span style="font-weight:700" data-help="nav_knowledge">{{ (i18n or {}).get('db_s038', "知识库状态") }}</span>
+    <span id="kb-sum" style="color:var(--t3);font-size:.75rem;font-weight:400"></span>
+    <a href="/knowledge" class="btn btn-s btn-xs" style="margin-left:auto">{{ (i18n or {}).get('inbox.xl.manage', "管理") }}</a>
+  </summary>
   <div id="kb-loading" style="text-align:center;padding:1rem;color:var(--t3);font-size:.82rem">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div>
   <div id="kb-content" style="display:none">
     <!-- 核心指标：4宫格 -->
@@ -666,38 +813,75 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
       <div id="kb-quality-stats" style="font-size:.78rem">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div>
     </div>
   </div>
-</div>
+</details>
 
-<!-- Recent operations -->
+<!-- Recent operations（2026-08-05 人话化：aud_act_* 词典 + 聚合 ×N + 日期分段 + 高危强调；
+     数据组装见 src/web/audit_display.py，词条见 i18n_packs/audit_ui.py） -->
+{% macro _ro_icon(kind) -%}
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+  {%- if kind == 'update' -%}<path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+  {%- elif kind == 'delete' -%}<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+  {%- elif kind == 'add' -%}<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+  {%- else -%}<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+  {%- endif -%}
+</svg>
+{%- endmacro %}
 <div class="card fa fa4 pro-only">
   <h2>
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
     {{ (i18n or {}).get('recent_ops', "最近操作") }}
+    {% if audit_today is defined and audit_today and audit_today.total %}
+    {% set _sumfmt = (i18n or {}).get('aud_ui_today_fmt', "今日 {n} 次操作 · 含 {d} 次删除") if audit_today.danger else (i18n or {}).get('aud_ui_today_fmt0', "今日 {n} 次操作") %}
+    <span class="ro-sum">{{ _sumfmt.replace('{n}', audit_today.total|string).replace('{d}', audit_today.danger|string) }}</span>
+    {% endif %}
     <div class="actions"><a href="/audit" class="btn btn-s btn-xs">{{ (i18n or {}).get('view_all', "查看全部") }}</a></div>
   </h2>
-  {% if recent_ops %}
+
+  {% if recent_op_days is defined and recent_op_days %}
+  {% for day in recent_op_days %}
+  <div class="ro-day">{% if day.kind == 'today' %}{{ (i18n or {}).get('aud_ui_grp_today', "今天") }}{% elif day.kind == 'yesterday' %}{{ (i18n or {}).get('aud_ui_grp_yesterday', "昨天") }}{% else %}{{ day.date }}{% endif %}</div>
   <div class="tl">
-    {% for op in recent_ops %}
-    {% set dc = 'ico-p' if 'update' in op.action else ('ico-g' if 'add' in op.action or 'create' in op.action else ('ico-r' if 'del' in op.action or 'remove' in op.action else 'ico-a')) %}
-    <div class="tl-item">
-      <div class="tl-dot {{ dc }}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          {% if 'update' in op.action %}<path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
-          {% elif 'del' in op.action or 'remove' in op.action %}<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
-          {% else %}<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>{% endif %}
-        </svg>
-      </div>
+    {# day 是 dict：必须下标取 items——day.items 会命中 dict 内置方法（TypeError not iterable），2026-08-05 198 桌面版首页 500 实锤 #}
+    {% for g in day['items'] %}
+    {% set dc = 'ico-p' if g.icon == 'update' else ('ico-g' if g.icon == 'add' else ('ico-r' if g.icon == 'delete' else 'ico-a')) %}
+    {% set _ro_href = "/audit?action=" ~ (g.action|urlencode) ~ (
+      ("&channel=" ~ (g.targets_shown[0]|urlencode))
+      if (g.count == 1 and g.target_kind in ('generic', 'keyword') and g.targets_shown)
+      else ""
+    ) %}
+    <div class="tl-item ro-row{% if g.danger %} ro-danger{% endif %}"
+         role="link" tabindex="0"
+         data-href="{{ _ro_href }}"
+         onclick="if(!event.target.closest('.ro-badge'))location.href=this.dataset.href"
+         onkeydown="if((event.key==='Enter'||event.key===' ')&&!event.target.closest('.ro-badge')){event.preventDefault();location.href=this.dataset.href}"
+         title="{{ g.action }}{% if g.snapshot_id %} · snap:{{ g.snapshot_id }}{% endif %}">
+      <div class="tl-dot {{ dc }}">{{ _ro_icon(g.icon) }}</div>
       <div class="tl-body">
-        <div class="tl-action">{{ op.action }}</div>
-        <div class="tl-meta">
-          {% if op.operator %}<span>{{ op.operator }}</span>{% endif %}
-          {% if op.channel %}<span>{{ (i18n or {}).get('db_s047', "通道") }}: {{ op.channel }}</span>{% endif %}
+        <div class="tl-action">{{ (i18n or {}).get('aud_act_' ~ g.action, g.action) }}
+          {%- if g.count > 1 %} <span class="ro-count">×{{ g.count }}</span>{% endif %}
+          {%- if g.snapshot and g.snapshot_id %} <a class="ro-badge" href="/diff?a={{ g.snapshot_id|urlencode }}&amp;b=__current__" title="{{ (i18n or {}).get('aud_ui_rollback_tip', "该操作留有配置快照，点击对比当前配置并可回滚") }}" onclick="event.stopPropagation()">{{ (i18n or {}).get('aud_ui_rollback', "可回滚") }}</a>
+          {%- elif g.snapshot %} <span class="ro-badge" title="{{ (i18n or {}).get('aud_ui_rollback_tip', "该操作留有配置快照，点击对比当前配置并可回滚") }}">{{ (i18n or {}).get('aud_ui_rollback', "可回滚") }}</span>{% endif %}
         </div>
+        <div class="tl-meta">
+          {% if g.operator %}<span class="ro-av" style="background:hsl({{ g.hue }},52%,46%)">{{ g.operator[:1]|upper }}</span><span>{{ g.operator }}</span>{% endif %}
+          {% if g.target_kind == 'memory' %}
+          <span class="ro-tgt">{{ (i18n or {}).get('aud_ui_tgt_memory', "记忆") }} {% for t in g.targets_shown %}#{{ t }}{% if not loop.last %} {% endif %}{% endfor %}{% if g.targets_more %} +{{ g.targets_more }}{% endif %}</span>
+          {% elif g.target_kind == 'keyword' %}
+          <span class="ro-tgt">{{ (i18n or {}).get('aud_ui_tgt_keyword', "关键词") }}「{{ g.targets_shown[0] }}」</span>
+          {% elif g.target_kind == 'identity' %}
+          <span class="ro-tgt mono" title="{{ (i18n or {}).get('aud_ui_tgt_identity', "身份") }}">{{ g.targets_shown[0] }}</span>
+          {% elif g.targets_shown %}
+          <span class="ro-tgt">{{ g.targets_shown|join('、') }}{% if g.targets_more %} +{{ g.targets_more }}{% endif %}</span>
+          {% endif %}
+        </div>
+        {% if g.brief %}<div class="ro-brief" title="{{ g.brief }}">{{ g.brief }}</div>{% endif %}
       </div>
-      <div class="tl-time">{{ op.ts if op.ts else '' }}</div>
+      <div class="tl-time" data-ts="{{ g.ts }}" title="{{ g.ts }}">{{ g.hm }}</div>
     </div>
     {% endfor %}
   </div>
+  {% endfor %}
+
   {% else %}
   <div class="empty">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
@@ -705,6 +889,23 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
   </div>
   {% endif %}
 </div>
+<script>
+/* 最近操作：24h 内的时间戳升级为相对时间（刚刚/N 分钟前/N 小时前），每分钟刷新；
+   超过 24h 保持 HH:MM，由日期分段标题承担日期语义。hover title 恒为完整时间戳。 */
+(function(){
+  function roRel(el){
+    var ts = el.getAttribute('data-ts'); if(!ts) return;
+    var t = new Date(ts.replace(' ', 'T')); if(isNaN(t.getTime())) return;
+    var s = Math.floor((Date.now() - t.getTime()) / 1000);
+    if(s < 0 || s >= 86400) return;
+    el.textContent = s < 60 ? window.T('aud_js_now')
+      : s < 3600 ? window.Tf('aud_js_min', {n: Math.floor(s / 60)})
+      : window.Tf('aud_js_hour', {n: Math.floor(s / 3600)});
+  }
+  function roTick(){ document.querySelectorAll('.tl-time[data-ts]').forEach(roRel); }
+  roTick(); setInterval(roTick, 60000);
+})();
+</script>
 
 <!-- Health Check Modal -->
 <div class="hc-modal" id="hc-modal" onclick="if(event.target===this)closeHealthCheck()">
@@ -890,11 +1091,69 @@ async function runHealthCheck(){
 }
 
 /* ── Bot 实时性能指标 ─────────────────────── */
+function _fmtDur(s){
+  if(s==null)return '—';s=Math.floor(s);
+  if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';
+  if(s<86400)return Math.floor(s/3600)+'h';return Math.floor(s/86400)+'d';
+}
+let _lastUptime=null,_engMem=null;
+function _renderEngMeta(){
+  var el=document.getElementById('eng-meta');if(!el)return;
+  var parts=[];
+  if(_lastUptime!=null)parts.push('⏱ '+_fmtDur(_lastUptime));
+  if(_engMem!=null)parts.push('💾 '+_engMem+'MB');
+  el.textContent=parts.join(' · ');
+}
+async function _fillEngMeta(){
+  try{
+    const r=await apiFetch('/api/system-info');
+    if(!r.ok)return;
+    const d=await r.json();
+    if(d.memory_mb!=null)_engMem=d.memory_mb;
+    _renderEngMeta();
+  }catch(e){}
+}
+/* 消息卡数据源仲裁：'usage'=统一收件箱今日真实用量（全平台口径，主管专属）
+   优先且独占；bot-metrics 累计只在 usage 不可用且自身有数时兜底。 */
+var _msgCardSource=null;
+async function loadMsgCardUsage(){
+  try{
+    const r=await apiFetch('/api/workspace/usage?days=1',{credentials:'same-origin'});
+    if(!r.ok)return;
+    const d=await r.json();
+    if(!d||!d.ok||!d.available||!d.usage)return;
+    const card=document.getElementById('stat-msgs-card');
+    if(!card)return;
+    const u=d.usage;
+    document.getElementById('stat-msgs').textContent=
+      (u.messages_in||0)+' / '+(u.messages_out||0);
+    var lbl=document.getElementById('stat-msgs-lbl');
+    if(lbl)lbl.textContent=window.T('db2_stat_msgs_today');
+    var sub=document.getElementById('stat-msgs-sub');
+    if(sub)sub.textContent=(u.ai_sent||0)>0?(window.T('db2_stat_ai_sent')+' '+u.ai_sent):'';
+    card.style.display='';
+    _msgCardSource='usage';
+  }catch(e){}
+}
 async function loadBotMetrics(){
   try{
     const r=await apiFetch('/api/bot-metrics');
     if(!r.ok)return;
     const d=await r.json();
+    // 兜底路径：主链累计（仅旧式单客户端部署有数；编排器部署恒 0 → 保持隐藏）
+    var sm=document.getElementById('stat-msgs');
+    if(sm&&_msgCardSource!=='usage'&&((d.messages_received||0)>0||(d.messages_replied||0)>0)){
+      sm.textContent=(d.messages_received||0)+' / '+(d.messages_replied||0);
+      var smSub=document.getElementById('stat-msgs-sub');
+      if(smSub){
+        var rr=(d.messages_received>0)?Math.round((d.messages_replied||0)/d.messages_received*100):null;
+        smSub.textContent=(rr!=null?(window.T('db2_stat_reply_rate')+' '+rr+'%'):'')
+          +((d.uptime_s||0)>0?((rr!=null?' · ':'')+'⏱ '+_fmtDur(d.uptime_s)):'');
+      }
+      var smCard=document.getElementById('stat-msgs-card');
+      if(smCard)smCard.style.display='';
+    }
+    if((d.uptime_s||0)>0){_lastUptime=d.uptime_s;_renderEngMeta();}
     document.getElementById('bm-loading').style.display='none';
     document.getElementById('bm-content').style.display='';
     document.getElementById('bm-received').textContent=d.messages_received||0;
@@ -1030,208 +1289,14 @@ async function loadBotMetrics(){
     document.getElementById('metrics-ts').textContent=window.T('db_js_050')+': '+window.wsFmtTime(null,{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   }catch(e){}
 }
-// ★ W3-D1.3 + D2.3 + D3.5：dry_run 样本审核（增量加载，避免每次重拉）
-const _dryPageSize=20;
-let _dryShown=[];  // 已显示的样本数组（最新在前）
-
+// reactivation dry_run 审核 UI 已归位流失预警页（rh-dry-card，同 API 权威实现，
+// 2026-08-02 去重）——原 _dryShown/loadDrySamples/submitDryFb 整套函数随重复
+// 面板移除；_esc 仍被质量看板/deferred 队列渲染使用，保留。
 function _esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
-function _renderSample(s){
-  const ts=s.ts||0;
-  const tsLabel=s.ts_iso?window.wsFmtDateTime(ts,{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'-';
-  return `<div data-ts="${ts}" style="padding:.5rem .55rem;background:var(--input);border-radius:6px;border-left:3px solid var(--t3)">
-    <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.7rem;color:var(--t3)">
-      <span><b style="color:var(--t)">${_esc(s.chat_name||'?')}</b></span>
-      <span>· ${tsLabel}</span>
-      <span>· ${window.T('ov_js_th_silent')} ${(s.silent_days||0).toFixed(1)}d</span>
-      <span>· ${window.T('rpa_js_intimacy')} ${Math.round(s.intimacy||0)}</span>
-      <span>· ${_esc(s.lang||'')}</span>
-      <span style="margin-left:auto" class="dry-fb-btns">
-        <button class="btn btn-s btn-xs" data-v="like" onclick="submitDryFb(this,${ts},'like')" style="padding:.15rem .5rem">👍</button>
-        <button class="btn btn-s btn-xs" data-v="dislike" onclick="submitDryFb(this,${ts},'dislike')" style="padding:.15rem .5rem">👎</button>
-      </span>
-    </div>
-    <div style="margin-top:.4rem;font-size:.78rem;line-height:1.45;color:var(--t)">${_esc(s.reply_text||'')}</div>
-  </div>`;
-}
-
-function _renderList(){
-  const list=document.getElementById('bm-dry-list');
-  const cnt=document.getElementById('bm-dry-count');
-  if(!list)return;
-  if(cnt)cnt.textContent='('+_dryShown.length+')';
-  if(!_dryShown.length){
-    list.innerHTML='<div style="color:var(--t3)">'+window.T('db_js_051')+' dry_run '+window.T('db_js_049')+'（reactivation.enabled=true && dry_run=true '+window.T('db_js_052')+'</div>';
-    return;
-  }
-  const items=_dryShown.map(_renderSample).join('');
-  const more=`<button class="btn btn-s btn-xs" style="margin-top:.3rem;padding:.2rem .8rem" onclick="event.preventDefault();loadMoreDry()">${window.T('db_js_092')} (+${_dryPageSize})</button>`;
-  list.innerHTML=items+more;
-}
-
-async function loadDrySamples(reset){
-  const list=document.getElementById('bm-dry-list');
-  if(!list)return;
-  if(reset){
-    _dryShown=[];
-    list.innerHTML='<div style="color:var(--t3)">'+window.T('msg_js_1047')+'...</div>';
-  }
-  try{
-    const r=await apiFetch('/api/reactivation/dry-run-samples?limit='+_dryPageSize,{credentials:'same-origin'});
-    if(!r.ok){list.innerHTML='<div style="color:var(--red)">'+window.T('rpa_load_failed')+'</div>';return;}
-    const d=await r.json();
-    _dryShown=d.samples||[];
-    _renderList();
-  }catch(e){
-    list.innerHTML='<div style="color:var(--red)">'+_esc(String(e))+'</div>';
-  }
-}
-
-async function loadMoreDry(){
-  // ★ W3-D3.5：增量加载 — 用最早一条的 ts 作为 before_ts
-  const earliest=_dryShown.length?_dryShown[_dryShown.length-1].ts:0;
-  if(!earliest)return;
-  try{
-    const r=await apiFetch('/api/reactivation/dry-run-samples?limit='+_dryPageSize+'&before_ts='+earliest,{credentials:'same-origin'});
-    if(!r.ok)return;
-    const d=await r.json();
-    const more=d.samples||[];
-    if(!more.length){
-      // 没有更多了，把"加载更早"按钮替换成提示
-      const list=document.getElementById('bm-dry-list');
-      if(list){
-        const btn=list.querySelector('button.btn');
-        if(btn) btn.outerHTML='<div style="color:var(--t3);font-size:.7rem;margin-top:.3rem">'+window.T('db_js_053')+'</div>';
-      }
-      return;
-    }
-    _dryShown=_dryShown.concat(more);
-    _renderList();
-  }catch(_){}
-}
-
-async function submitDryFb(btn,ts,verdict){
-  const wrap=btn.closest('div[data-ts]');
-  const btns=btn.parentElement;
-  if(btns){btns.querySelectorAll('button').forEach(b=>{b.disabled=true;});}
-  const csrf=(document.cookie.match(/csrf_token=([^;]+)/)||[])[1]||'';
-  try{
-    const r=await apiFetch('/api/reactivation/dry-run-feedback',{
-      method:'POST',
-      headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
-      credentials:'same-origin',
-      body:JSON.stringify({sample_ts:ts,verdict:verdict}),
-    }, {timeoutMs: 60000});
-    if(r.ok){
-      if(btns){
-        // ★ W3-D2.3：dislike 时显示"已加入黑名单（重启后清空）"
-        const tip=verdict==='dislike'
-          ? window.T('db_js_054')+' 👎 · '+window.T('db_js_055')
-          : window.T('db_js_054')+' 👍';
-        btns.innerHTML='<span style="color:'+(verdict==='like'?'var(--green)':'var(--amber)')+';font-size:.65rem">'+tip+'</span>';
-      }
-      if(wrap){
-        wrap.style.opacity='.55';
-        if(verdict==='dislike') wrap.style.borderLeftColor='var(--amber)';
-        else wrap.style.borderLeftColor='var(--green)';
-      }
-    }else{
-      if(btns){btns.querySelectorAll('button').forEach(b=>{b.disabled=false;});}
-    }
-  }catch(_){
-    if(btns){btns.querySelectorAll('button').forEach(b=>{b.disabled=false;});}
-  }
-}
-
-// ★ Phase O 质量闭环：care dry_run 关怀话术审核（与 reactivation 同范式，共享黑名单）
-let _careDryShown=[];
-function _renderCareSample(s){
-  const ts=s.ts||0;
-  const tsLabel=s.ts_iso?window.wsFmtDateTime(ts,{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'-';
-  return `<div data-ts="${ts}" style="padding:.5rem .55rem;background:var(--input);border-radius:6px;border-left:3px solid var(--t3)">
-    <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.7rem;color:var(--t3)">
-      <span><b style="color:var(--t)">${_esc(s.topic||'?')}</b></span>
-      <span>· ${tsLabel}</span>
-      <span>· ${_esc(s.platform||'')}</span>
-      <span>· ${_esc(s.chat_key||s.contact_key||'')}</span>
-      <span>· ${_esc(s.lang||'')}</span>
-      <span style="margin-left:auto" class="dry-fb-btns">
-        <button class="btn btn-s btn-xs" data-v="like" onclick="submitCareDryFb(this,${ts},'like')" style="padding:.15rem .5rem">👍</button>
-        <button class="btn btn-s btn-xs" data-v="dislike" onclick="submitCareDryFb(this,${ts},'dislike')" style="padding:.15rem .5rem">👎</button>
-      </span>
-    </div>
-    <div style="margin-top:.4rem;font-size:.78rem;line-height:1.45;color:var(--t)">${_esc(s.reply_text||'')}</div>
-  </div>`;
-}
-function _renderCareList(){
-  const list=document.getElementById('bm-care-dry-list');
-  const cnt=document.getElementById('bm-care-dry-count');
-  if(!list)return;
-  if(cnt)cnt.textContent='('+_careDryShown.length+')';
-  if(!_careDryShown.length){
-    list.innerHTML='<div style="color:var(--t3)">'+window.T('db_js_051')+' care dry_run '+window.T('db_js_049')+'（proactive_care.enabled=true && dry_run=true '+window.T('db_js_052')+'</div>';
-    return;
-  }
-  const items=_careDryShown.map(_renderCareSample).join('');
-  const more=`<button class="btn btn-s btn-xs" style="margin-top:.3rem;padding:.2rem .8rem" onclick="event.preventDefault();loadMoreCareDry()">${window.T('db_js_092')} (+20)</button>`;
-  list.innerHTML=items+more;
-}
-async function loadCareDry(reset){
-  const list=document.getElementById('bm-care-dry-list');
-  if(!list)return;
-  if(reset){_careDryShown=[];list.innerHTML='<div style="color:var(--t3)">'+window.T('msg_js_1047')+'...</div>';}
-  try{
-    const r=await apiFetch('/api/care/dry-run-samples?limit=20',{credentials:'same-origin'});
-    if(!r.ok){list.innerHTML='<div style="color:var(--red)">'+window.T('rpa_load_failed')+'</div>';return;}
-    const d=await r.json();
-    _careDryShown=d.samples||[];
-    _renderCareList();
-  }catch(e){list.innerHTML='<div style="color:var(--red)">'+_esc(String(e))+'</div>';}
-}
-async function loadMoreCareDry(){
-  const earliest=_careDryShown.length?_careDryShown[_careDryShown.length-1].ts:0;
-  if(!earliest)return;
-  try{
-    const r=await apiFetch('/api/care/dry-run-samples?limit=20&before_ts='+earliest,{credentials:'same-origin'});
-    if(!r.ok)return;
-    const d=await r.json();
-    const more=d.samples||[];
-    if(!more.length){
-      const list=document.getElementById('bm-care-dry-list');
-      if(list){const btn=list.querySelector('button.btn');if(btn)btn.outerHTML='<div style="color:var(--t3);font-size:.7rem;margin-top:.3rem">'+window.T('db_js_053')+'</div>';}
-      return;
-    }
-    _careDryShown=_careDryShown.concat(more);
-    _renderCareList();
-  }catch(_){}
-}
-async function submitCareDryFb(btn,ts,verdict){
-  const wrap=btn.closest('div[data-ts]');
-  const btns=btn.parentElement;
-  if(btns){btns.querySelectorAll('button').forEach(b=>{b.disabled=true;});}
-  const csrf=(document.cookie.match(/csrf_token=([^;]+)/)||[])[1]||'';
-  try{
-    const r=await apiFetch('/api/care/dry-run-feedback',{
-      method:'POST',
-      headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
-      credentials:'same-origin',
-      body:JSON.stringify({sample_ts:ts,verdict:verdict}),
-    }, {timeoutMs: 60000});
-    if(r.ok){
-      if(btns){
-        const tip=verdict==='dislike'
-          ? window.T('db_js_054')+' 👎 · '+window.T('db_js_056')
-          : window.T('db_js_054')+' 👍';
-        btns.innerHTML='<span style="color:'+(verdict==='like'?'var(--green)':'var(--amber)')+';font-size:.65rem">'+tip+'</span>';
-      }
-      if(wrap){wrap.style.opacity='.55';wrap.style.borderLeftColor=verdict==='dislike'?'var(--amber)':'var(--green)';}
-    }else{
-      if(btns){btns.querySelectorAll('button').forEach(b=>{b.disabled=false;});}
-    }
-  }catch(_){
-    if(btns){btns.querySelectorAll('button').forEach(b=>{b.disabled=false;});}
-  }
-}
+// care dry_run 审核 UI 已归位主动关怀页（cs-samples-card，同 API 权威实现，
+// 2026-08-02 去重）——此处原有的 _careDryShown/loadCareDry/submitCareDryFb
+// 整套函数随重复面板一并移除，工程明细里只留跳转链接。
 
 // ★ O·P 联动质量看板
 function _qLine(name, b){
@@ -1372,11 +1437,32 @@ function _dobPause(){const p=prompt(window.T('db_js_073'));if(p)_dobPost('/api/d
 function _dobResume(){const p=prompt(window.T('db_js_074'));if(p)_dobPost('/api/deferred-outbox/resume',{platform:p.trim()});}
 
 const _isSimple=document.documentElement.getAttribute('data-ui-mode')==='simple';
-if(!_isSimple){loadBotMetrics();}
-let _bmTimer=_isSimple?null:setInterval(loadBotMetrics,15000);
+/* 轮询调度：工程明细收起时 bot-metrics 降为 60s 慢轮询（只喂顶部统计卡），
+   展开时 15s；触发器决策日志只在展开时加载/轮询。省 ~6 请求/分钟。 */
+let _bmTimer=null,_tdTimer=null;
+function _engOpen(){var d=document.getElementById('eng-details');return !!(d&&d.open);}
+function _bmSchedule(){
+  clearInterval(_bmTimer);
+  if(_isSimple)return;
+  _bmTimer=setInterval(loadBotMetrics,_engOpen()?15000:60000);
+}
+function _tdSchedule(){
+  clearInterval(_tdTimer);
+  if(_isSimple||!_engOpen())return;
+  loadTriggerDecisions();
+  _tdTimer=setInterval(loadTriggerDecisions,30000);
+}
+if(!_isSimple){
+  loadBotMetrics();_bmSchedule();
+  var _engEl=document.getElementById('eng-details');
+  if(_engEl)_engEl.addEventListener('toggle',function(){
+    _bmSchedule();_tdSchedule();
+    if(_engEl.open)_fillEngMeta();
+  });
+}
 document.addEventListener('visibilitychange',()=>{
-  if(document.hidden){clearInterval(_bmTimer);}
-  else{loadBotMetrics();_bmTimer=setInterval(loadBotMetrics,15000);}
+  if(document.hidden){clearInterval(_bmTimer);clearInterval(_tdTimer);}
+  else if(!_isSimple){loadBotMetrics();_bmSchedule();_tdSchedule();}
 });
 
 /* ── 触发器决策日志 ──────────────────────── */
@@ -1418,62 +1504,13 @@ async function loadTriggerDecisions(){
     }).join('');
   }catch(e){}
 }
-if(!_isSimple){loadTriggerDecisions();setInterval(loadTriggerDecisions,30000);}
+/* 触发器决策改为懒加载：工程明细展开时才由 _tdSchedule() 启动（见上方调度器）。
+   旧「系统状态条」已整体移除——Bot 在线/运行时长/向量化三个徽标是挂在未使用的
+   config 静态协议号上的假信号（2026-08-02 清退），真渠道状态看健康卡「消息渠道」
+   chip，运行时长/内存并入工程明细摘要行。 */
 
 /* Init — skip heavy loads in simple mode */
 if(!_isSimple) loadActivityStats();
-
-/* ── 系统状态条 ──────────────────────────────────── */
-let _sysBarTimer = null;
-async function loadSysBar(){
-  try{
-    const r = await apiFetch('/api/system-info');
-    if(!r.ok) return;
-    const d = await r.json();
-    const bar  = document.getElementById('sys-bar');
-    const pills= document.getElementById('sys-pills');
-    const upd  = document.getElementById('sys-upd-time');
-
-    const _fmt = s => {
-      if(s==null) return '—';
-      if(s<60) return s+'s';
-      if(s<3600) return Math.floor(s/60)+'m';
-      if(s<86400) return Math.floor(s/3600)+'h';
-      return Math.floor(s/86400)+'d';
-    };
-    const _mem = mb => mb!=null ? mb+'MB' : '—';
-    const _ago = ts => {
-      if(!ts) return window.T('psn_js_009');
-      const diff = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
-      if(diff<60) return diff+window.T('msg_js_285');
-      if(diff<3600) return Math.floor(diff/60)+window.T('dash.ago.min');
-      if(diff<86400) return Math.floor(diff/3600)+window.T('dash.ago.hour');
-      return Math.floor(diff/86400)+window.T('ln_js_002');
-    };
-
-    const items = [
-      {cls: d.bot_online?'ok':'err', icon: d.bot_online?'●':'●', label: d.bot_online?'Bot '+window.T('dash.pr.online'):'Bot '+window.T('dash.pr.offline')},
-      {cls: 'ok', icon: '📚', label: (d.kb_entries||0)+' '+window.T('db_js_075')},
-      d.memory_mb ? {cls:'', icon:'💾', label: _mem(d.memory_mb)} : null,
-      {cls: '', icon: '⏱', label: window.T('ov_js_stage_active')+' '+_fmt(d.uptime_s)},
-      {cls: '', icon: '👥', label: (d.admin_users||0)+' '+window.T('db_js_076')},
-      d.embedding_ok ? {cls:'ok', icon:'🔮', label:window.T('db_js_077')} : {cls:'warn', icon:'🔮', label:window.T('db_js_078')},
-    ].filter(Boolean);
-
-    pills.innerHTML = items.map(it=>
-      `<span class="sys-pill ${it.cls}"><span class="dot" style="display:${it.icon==='●'?'block':'none'}"></span>${it.icon !== '●' ? it.icon+' ' : ''}${it.label}</span>`
-    ).join('');
-    upd.textContent = window.T('db_js_079')+' '+window.wsFmtTime(null,{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-    bar.classList.add('show');
-  } catch(e){}
-}
-if(!_isSimple) loadSysBar();
-// 每 60 秒自动刷新，页面隐藏时暂停
-document.addEventListener('visibilitychange',()=>{
-  if(document.hidden){ clearInterval(_sysBarTimer); }
-  else { loadSysBar(); _sysBarTimer = setInterval(loadSysBar, 60000); }
-});
-_sysBarTimer = setInterval(loadSysBar, 60000);
 
 /* ── 知识库健康卡片 ───────────────────────────────── */
 async function loadKbHealth(){
@@ -1494,6 +1531,9 @@ async function loadKbHealth(){
     document.getElementById('kb-d-entries').textContent=s.total_entries||0;
     var kbCountEl=document.getElementById('kb-entry-count');
     if(kbCountEl) kbCountEl.textContent=s.total_entries||0;
+    // 折叠摘要行：条目数（命中率在 r3 就绪后追加）
+    var kbSum=document.getElementById('kb-sum');
+    if(kbSum) kbSum.textContent=(s.total_entries||0)+' '+window.T('db2_kb_entries_unit');
     const sat=d.recent_feedback_7d>0 ? d.recent_satisfaction+'%' : '—';
     const satEl=document.getElementById('kb-d-sat');
     satEl.textContent=sat;
@@ -1509,6 +1549,7 @@ async function loadKbHealth(){
       hrEl.textContent=(hr.total>0 ? hr.hit_pct+'%' : '—');
       hrEl.style.color=hr.hit_pct>=70?'var(--green)':hr.hit_pct>=40?'var(--amber)':'var(--red)';
       qEl.textContent=hr.total||0;
+      if(kbSum&&hr.total>0)kbSum.textContent+=' · '+window.T('db2_kb_hit')+' '+hr.hit_pct+'%';
     }
     // 命中率迷你趋势图
     if(r4.ok){
@@ -1597,6 +1638,29 @@ document.addEventListener('visibilitychange', ()=>{
   if(document.hidden){ clearInterval(_kbRefreshTimer); }
   else { _kbRefreshTimer = setInterval(loadKbHealth, 5 * 60 * 1000); loadKbHealth(); }
 });
+
+/* 主动触达统计卡：近 14 天 mode 级回复率汇总（数据源与运营总览主动触达卡同口径
+   mode_ab）；无触达/接口不可用保持隐藏。一次性加载——14 天口径无需轮询。 */
+if(!_isSimple){(async function(){
+  try{
+    const r=await apiFetch('/api/companion/proactive/status',{credentials:'same-origin'});
+    if(!r.ok)return;
+    const d=await r.json();
+    const ab=d.mode_ab||{};
+    let sent=0,resp=0;
+    Object.keys(ab).forEach(function(k){
+      const b=ab[k]||{};
+      sent+=(b.sent||0);resp+=(b.responded||0);
+    });
+    if(sent<=0)return;
+    const card=document.getElementById('stat-proactive');
+    if(!card)return;
+    document.getElementById('stat-proactive-num').textContent=sent;
+    document.getElementById('stat-proactive-sub').textContent=
+      window.T('db2_stat_reply_rate')+' '+Math.round(resp/sent*100)+'%';
+    card.style.display='';
+  }catch(e){}
+})();}
 
 /* Monetize KPI card: hidden unless /api/monetize/kpi is ok + enabled (viewer 403 / disabled / fetch error keep it hidden) */
 apiFetch('/api/monetize/kpi?days=30',{credentials:'same-origin'}).then(function(r){

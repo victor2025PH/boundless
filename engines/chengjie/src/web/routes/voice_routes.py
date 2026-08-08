@@ -106,6 +106,85 @@ def _cleanup_tts_jobs() -> None:
 # 「立即渲染」后台进程句柄（防重复拉起；渲染幂等，丢句柄无害）
 _PRERENDER_PROC: Dict[str, Any] = {"proc": None}
 
+# enroll 后一次性音色体检子进程句柄（同上模式；体检幂等=只追加 jsonl 一行）
+_VQ_PROBE_PROC: Dict[str, Any] = {"proc": None}
+
+# 音色体检最新结果缓存（30s TTL；jsonl 尾读虽轻，profiles 是高频接口）
+_VQ_CACHE: Dict[str, Any] = {"until": 0.0, "map": {}}
+
+
+def _voice_quality_latest() -> Dict[str, Dict[str, Any]]:
+    """每人设最新音色体检行 {persona: {label, score, date}}（best-effort）。
+
+    数据源＝夜间探针 + enroll 即时体检共同追加的
+    ``<数据根>/logs/voice_similarity.jsonl``（与 avatar-status 卡同一文件；
+    ``AITR_DATA_DIR`` 优先=测试隔离，服务进程 CWD=实例数据根两者等价）。
+    A/B 对照的固定噪声行（prosody=off）不算——那是基线数据不代表生产路径。
+    读不到/坏行 → 空表（下拉不出徽标，绝不因体检面阻塞选音色）。
+    """
+    now = time.monotonic()
+    if now < float(_VQ_CACHE.get("until") or 0.0):
+        return dict(_VQ_CACHE.get("map") or {})
+    latest: Dict[str, Dict[str, Any]] = {}
+    try:
+        base = str(os.environ.get("AITR_DATA_DIR") or "").strip()
+        p = (Path(base) if base else Path(".")) / "logs" / "voice_similarity.jsonl"
+        if p.is_file():
+            for line in p.read_text(
+                    encoding="utf-8", errors="replace").splitlines()[-120:]:
+                try:
+                    row = json.loads(line)
+                    if row.get("prosody") == "off":
+                        continue
+                    pid = str(row.get("persona") or "").strip()
+                    if not pid:
+                        continue
+                    latest[pid] = {
+                        "label": str(row.get("label") or ""),
+                        "score": row.get("score"),
+                        "date": str(row.get("date") or ""),
+                    }
+                except Exception:
+                    continue
+    except Exception:
+        latest = {}
+    _VQ_CACHE["map"] = latest
+    _VQ_CACHE["until"] = now + 30.0
+    return dict(latest)
+
+
+def _spawn_voice_quality_probe(persona_id: str) -> bool:
+    """enroll 成功后拉起一次性音色体检（fire-and-forget 子进程，防重复）。
+
+    修「录了但不像要等夜间探针（最长 24h）才可见」：登记即对该人设合成
+    探针句 → campplus 声纹比对 → 追加 voice_similarity.jsonl → profiles 的
+    quality 徽标几分钟内点亮。``--data-root`` 钉当前实例（服务进程 CWD=
+    实例数据根的启动契约）；非 TTS 节点机/评分器缺失时子进程自行 SKIP
+    exit 0 零副作用；``--prosody-ab off``＝交互场景只要生产路径一行，省一半
+    GPU。已有一轮在跑（如夜间任务窗口）→ 不重复拉。
+    """
+    import subprocess
+    import sys as _sys
+
+    pid = str(persona_id or "").strip()
+    if not pid:
+        return False
+    proc = _VQ_PROBE_PROC.get("proc")
+    if proc is not None and proc.poll() is None:
+        return False
+    try:
+        _VQ_PROBE_PROC["proc"] = subprocess.Popen(
+            [_sys.executable, "-m", "scripts.voice_similarity_probe",
+             "--persona", pid, "--prosody-ab", "off",
+             "--data-root", str(Path.cwd())],
+            cwd=str(Path(__file__).resolve().parents[3]),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return True
+    except Exception as ex:  # noqa: BLE001
+        logger.warning("[voice/enroll] 体检子进程拉起失败: %s", ex)
+        return False
+
 
 def _spawn_prerender_render() -> bool:
     """后台拉起一轮 --all-personas 增量预渲染（fire-and-forget，防重复）。
@@ -134,6 +213,26 @@ def _spawn_prerender_render() -> bool:
 def register_voice_routes(app, api_auth, config_manager=None):
     """Register /api/voice/* endpoints on *app*."""
 
+    def _classify_err(err: Any) -> str:
+        """管线错误 → 坐席可行动分类（薄封装；词表单源在 tts_pipeline）。"""
+        try:
+            from src.ai.tts_pipeline import classify_voice_error
+            return classify_voice_error(str(err or ""))
+        except Exception:
+            return ""
+
+    def _voice_fail_message(request: Request, reason: str) -> str:
+        """分类 → 本地化人话（告诉坐席下一步做什么，而非只给错误码）。
+
+        与 ``_run_tts_preview`` 刻意分离：preview 核心段不得引用 request
+        （后台 job 在请求生命周期外跑），i18n 只能在持有 request 的路由层做。
+        """
+        if reason == "hub_source_down":
+            return tr(request, "err.voice.hub_source_down")
+        if reason == "profile_not_ready":
+            return tr(request, "err.voice.profile_not_ready")
+        return ""
+
     async def _run_tts_preview(body: Dict[str, Any], text: str) -> Dict[str, Any]:
         """tts-test 核心段：resolve voice_cfg → override → fast 档 → 合成 → 整形响应。
 
@@ -147,16 +246,40 @@ def register_voice_routes(app, api_auth, config_manager=None):
         fmt_override: Optional[str] = body.get("format") or None
         # Optional: caller passes current UI settings to override saved config
         cfg_override: Optional[Dict[str, Any]] = body.get("voice_cfg_override") or None
+        # 试听=发送 契约（2026-08-05 P0）：前端把当前会话上下文（chat_key/
+        # platform/account_id）一并传来，试听与 send-voice 走**同一组解析入参**
+        # ——修「试听走全局回落、发送走会话绑定，两条链解析出不同音色」的分叉
+        # （坐席试听过了、点发送却失败/换声，是本次事故的放大器）。
+        # 不传（渠道中心/旧标签页）＝旧行为，零破坏。
+        chat_key: str = str(body.get("chat_key") or "").strip()
+        platform: str = str(body.get("platform") or "telegram").strip().lower()
+        account_id: str = str(body.get("account_id") or "").strip()
 
         # Resolve voice config
         raw_cfg: Dict[str, Any] = {}
         if config_manager and hasattr(config_manager, "config"):
             raw_cfg = config_manager.config or {}
 
+        # 账号默认人设（与 A 线 sender / send-voice 同口径）：chat 未绑定人设时
+        # 回落到该账号的人设而非域默认——「默认音色」试听出来的才是真发出去的声音。
+        account_persona_id = ""
+        if account_id:
+            try:
+                from src.ai.persona_voice import resolve_account_persona_id
+                account_persona_id = resolve_account_persona_id(
+                    raw_cfg, platform, account_id) or ""
+            except Exception:
+                account_persona_id = ""
+
         try:
             from src.ai.persona_voice import resolve_effective_voice_context
             voice_ctx = resolve_effective_voice_context(
-                raw_cfg, persona_id=persona_id, text=text)
+                raw_cfg, persona_id=persona_id,
+                chat_key=chat_key or None,
+                account_persona_id=account_persona_id or None,
+                contact_key=chat_key or None,
+                platform=platform, account_id=account_id or None,
+                text=text)
             voice_cfg = voice_ctx.get("voice_cfg") or {}
         except Exception as ex:
             logger.warning("[voice/tts-test] resolve_voice_cfg failed: %s", ex)
@@ -218,14 +341,16 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 "[voice/tts-test] TTS error (persona=%s text_len=%d elapsed=%.1fs): %s",
                 voice_ctx.get("persona_id") or persona_id or "-", len(text),
                 time.monotonic() - _t0, _exs)
-            return {"ok": False, "error": _exs[:200], "fast": fast}
+            return {"ok": False, "error": _exs[:200], "fast": fast,
+                    "reason": _classify_err(_exs)}
 
         if not result.ok:
             logger.warning(
                 "[voice/tts-test] synth not ok (persona=%s provider=%s elapsed=%.1fs): %s",
                 voice_ctx.get("persona_id") or persona_id or "-",
                 result.provider, time.monotonic() - _t0, result.error)
-            return {"ok": False, "error": result.error, "fast": fast}
+            return {"ok": False, "error": result.error, "fast": fast,
+                    "reason": _classify_err(result.error)}
 
         # Rename to our deterministic preview path
         try:
@@ -238,6 +363,31 @@ def register_voice_routes(app, api_auth, config_manager=None):
             _cleanup_old_previews()
         except Exception:
             pass
+
+        # 「所听即所发」复用登记（P1 2026-08-05）：sidecar 记文本指纹+音色键+元数据，
+        # send-voice 带回 filename 且校验通过时直接复用本音频（省一次合成/额度，
+        # 且客户听到的与坐席试听的逐字节一致）。best-effort：失败只丢复用资格。
+        try:
+            from src.integrations.shared.tts_preview import record_preview_meta
+            record_preview_meta(
+                preview_path.name, text=text,
+                persona_key=str(persona_id or ""),
+                meta={
+                    "resolved_persona_id": voice_ctx.get("persona_id") or "",
+                    "persona_source": voice_ctx.get("persona_source") or "",
+                    "provider": result.provider,
+                    "voice": result.voice,
+                    "emotion": (
+                        getattr(voice_ctx.get("emotion"), "emotion", "")
+                        if voice_ctx.get("emotion") else ""
+                    ),
+                    "fallback_from": (result.extra or {}).get("fallback_from", ""),
+                    "duration_sec": result.duration_sec,
+                    "format": result.format,
+                    "fast": bool(fast),
+                })
+        except Exception:
+            logger.debug("[voice/tts-test] 复用 sidecar 登记失败（忽略）", exc_info=True)
 
         file_url = f"/api/voice/tts-test/{preview_path.name}"
         return {
@@ -320,16 +470,24 @@ def register_voice_routes(app, api_auth, config_manager=None):
                     entry["status"] = "done"
                     entry["result"] = rv
                 else:
-                    # 失败文案与同步路径完全一致（rv 的 error 字段原样透出）
+                    # 失败文案与同步路径完全一致（rv 的 error 字段原样透出）；
+                    # reason=可行动分类，轮询路由据此补本地化 message
                     entry["status"] = "error"
                     entry["error"] = str(rv.get("error") or "")
+                    entry["reason"] = str(rv.get("reason") or "")
 
             # create_task 对任务仅弱引用 → Task 存进条目防 GC（任务亦持 entry 引用）
             entry["task"] = asyncio.create_task(
                 _job_runner(), name=f"tts-preview-job-{job_id}")
             return {"ok": True, "job_id": job_id}
 
-        return await _run_tts_preview(body, text)
+        rv = await _run_tts_preview(body, text)
+        # 失败分类 → 本地化人话（additive：error 原样保留，老前端零感知）
+        if not rv.get("ok") and rv.get("reason"):
+            _msg = _voice_fail_message(request, str(rv.get("reason")))
+            if _msg:
+                rv["message"] = _msg
+        return rv
 
     @app.get("/api/voice/tts-test-jobs/{job_id}")
     async def api_voice_tts_test_job(job_id: str, request: Request,
@@ -351,27 +509,56 @@ def register_voice_routes(app, api_auth, config_manager=None):
             return {"ok": True, "status": "running", "age_sec": round(age, 1)}
         if status == "done":
             return {"ok": True, "status": "done", "result": entry.get("result")}
-        return {"ok": True, "status": "error",
-                "error": str(entry.get("error") or "")}
+        out = {"ok": True, "status": "error",
+               "error": str(entry.get("error") or "")}
+        # 可行动分类 → 本地化 message（additive；老前端只读 error 不受影响）
+        _reason = str(entry.get("reason") or "")
+        if _reason:
+            out["reason"] = _reason
+            _msg = _voice_fail_message(request, _reason)
+            if _msg:
+                out["message"] = _msg
+        return out
 
     @app.get("/api/voice/effective-config")
     async def api_voice_effective_config(request: Request, platform: str = "telegram",
-                                         persona_id: str = "", _=Depends(api_auth)):
-        """Read-only effective voice config snapshot (channel-center preview panel).
+                                         persona_id: str = "", chat_key: str = "",
+                                         account_id: str = "", _=Depends(api_auth)):
+        """Read-only effective voice config snapshot (channel-center preview panel
+        + 坐席音色状态条).
 
         Resolves the same voice context as a real send (persona layers merged)
         and reports the backend/voice that would actually be used, plus the raw
         per-channel backend straight from config. Never raises: any resolver
         error returns ``{ok: false}`` so the frontend can silently hide the panel.
+
+        2026-08-05 P1：可选 ``chat_key``/``account_id``（不传=旧行为）——传入后
+        与 send-voice 同一组解析入参（含账号人设回落），「状态条上显示的」与
+        「点发送后实际用的」同源。响应增 ``is_clone/ready/hub_strict/hub_risk``
+        四键：hub_risk 仅在该解析结果处于 hub 严格辖区时探测（TCP 60s 负缓存 +
+        outage 台账事后证据，单边确定性——报了必真，不报不代表健康）。
         """
         try:
             raw_cfg: Dict[str, Any] = {}
             if config_manager and hasattr(config_manager, "config"):
                 raw_cfg = config_manager.config or {}
 
-            from src.ai.persona_voice import resolve_effective_voice_context
+            from src.ai.persona_voice import (
+                resolve_account_persona_id, resolve_effective_voice_context)
+            _acc_pid = ""
+            if account_id:
+                try:
+                    _acc_pid = resolve_account_persona_id(
+                        raw_cfg, platform, account_id) or ""
+                except Exception:
+                    _acc_pid = ""
             ctx = resolve_effective_voice_context(
-                raw_cfg, persona_id=persona_id or None, platform=platform, text="")
+                raw_cfg, persona_id=persona_id or None,
+                chat_key=chat_key or None,
+                account_persona_id=_acc_pid or None,
+                contact_key=chat_key or None,
+                account_id=account_id or None,
+                platform=platform, text="")
             voice_cfg = ctx.get("voice_cfg") or {}
 
             # Raw per-channel backend (config as-written, before persona layering).
@@ -391,6 +578,42 @@ def register_voice_routes(app, api_auth, config_manager=None):
             # basename only — never leak server directory layout to the UI
             vp = voice_cfg.get("voice_profile")
             ref = str(vp.get("reference_audio_path") or "").strip() if isinstance(vp, dict) else ""
+
+            # 就绪度（与 /api/voice/profiles 的 _describe 同语义：克隆类后端须
+            # 授权+参考音齐备；非克隆恒就绪）
+            _clone_backends = {"voice_clone_command", "coqui_http",
+                               "voice_clone_lan", "avatar_clone", "minicpm_clone"}
+            _vp_on = bool(isinstance(vp, dict) and vp.get("enabled"))
+            _eff_backend = str(
+                ((vp.get("backend") if _vp_on else None) if isinstance(vp, dict) else None)
+                or voice_cfg.get("backend") or "edge_tts").lower()
+            is_clone = _vp_on and _eff_backend in _clone_backends
+            ready = True
+            if is_clone:
+                ready = bool(vp.get("owner_consent")) and bool(ref)
+
+            # hub 严格辖区风险预告（仅命中辖区才探测，健康路径零开销）：
+            # unreachable=TCP 确定不可达（必拒发）；recent_failures=台账里 hub 失败
+            # 比最近一次成功更新（hub 活着但音色档 404 类的事后证据）。
+            from src.ai.tts_pipeline import hub_strict_scope, probe_hub_reachable
+            _av_cfg = raw_cfg.get("avatar_voice") or {}
+            hub_strict = hub_strict_scope(_av_cfg, ctx.get("persona_id"))
+            hub_risk = ""
+            if hub_strict:
+                if not probe_hub_reachable(_av_cfg):
+                    hub_risk = "unreachable"
+                else:
+                    try:
+                        from src.ai.voice_outage import get_voice_outage
+                        _snap = get_voice_outage().outage_snapshot()
+                        _hub_fail = any(
+                            "hub_voice_source_unavailable" in str(k)
+                            for k in (_snap.get("fail_reasons") or {}))
+                        if _hub_fail and float(_snap.get("last_fail_ts") or 0.0) > \
+                                float(_snap.get("last_ok_ts") or 0.0):
+                            hub_risk = "recent_failures"
+                    except Exception:
+                        hub_risk = ""
             return {
                 "ok": True,
                 "platform": platform,
@@ -398,6 +621,10 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 "persona_source": ctx.get("persona_source") or "",
                 "backend": str(voice_cfg.get("backend") or ""),
                 "voice": str(voice_cfg.get("voice") or ""),
+                "is_clone": is_clone,
+                "ready": ready,
+                "hub_strict": hub_strict,
+                "hub_risk": hub_risk,
                 "channel_backend": channel_backend,
                 "reference_audio": os.path.basename(ref) if ref else "",
             }
@@ -409,7 +636,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
         """列出可用「语音音色」供收件箱按人设选择：全局默认 + 各人设的克隆/音色。
 
         返回：{ok, default:{backend,voice,is_clone,ready}, profiles:[{persona_id,name,backend,voice,is_clone,ready}]}
-        - is_clone：voice_profile 启用且后端为 voice_clone_command/coqui_http（声音克隆）
+        - is_clone：voice_profile 启用且后端为克隆类（见 clone_backends 集合）
         - ready：克隆音色但缺 owner_consent/参考音频时为 False（前端可标灰/提示）
         """
         raw_cfg: Dict[str, Any] = {}
@@ -417,7 +644,15 @@ def register_voice_routes(app, api_auth, config_manager=None):
             raw_cfg = config_manager.config or {}
         from src.ai.persona_voice import resolve_voice_cfg
 
-        clone_backends = {"voice_clone_command", "coqui_http", "voice_clone_lan"}
+        # 2026-08-05 修：avatar_clone（AvatarHub 7852，enroll 主路产物）与
+        # minicpm_clone 此前不在集合里 → 生产主力克隆音色被标成 is_clone=False
+        # → ready 恒 True、⚠/置灰从不出现——缺授权/缺参考音的音色在下拉里看着
+        # 正常，点发送才撞 voice_profile_requires_owner_consent 硬失败。
+        # 合成链对这两个后端**确实强制** owner_consent+参考音（tts_pipeline
+        # _try_avatar_clone / _try_minicpm），此处只是让下拉的就绪灯与合成行为
+        # 一致（voice_enroll 各 build_*_voice_profile 的 docstring 本就承诺此契约）。
+        clone_backends = {"voice_clone_command", "coqui_http", "voice_clone_lan",
+                          "avatar_clone", "minicpm_clone"}
 
         def _describe(cfg: Dict[str, Any]) -> Dict[str, Any]:
             vp = cfg.get("voice_profile") if isinstance(cfg.get("voice_profile"), dict) else {}
@@ -433,6 +668,11 @@ def register_voice_routes(app, api_auth, config_manager=None):
 
         default_desc = _describe(resolve_voice_cfg(None, raw_cfg))
         profiles = []
+        # 音色体检徽标（P3 2026-08-05）：夜间探针 + enroll 即时体检的最新声纹
+        # 相似度分级进下拉（warn=正常带下方 / critical=疑似换错参考音/文件坏）。
+        # 刻意**不置灰**——体检差的音色仍能出声，是否弃用由人决定（与 P1 状态条
+        # 同哲学：显性化而非代决定）。
+        vq = _voice_quality_latest()
         try:
             from src.utils.persona_manager import PersonaManager
             pm = PersonaManager.get_instance()
@@ -441,7 +681,12 @@ def register_voice_routes(app, api_auth, config_manager=None):
                     continue
                 pid = s.get("id")
                 desc = _describe(resolve_voice_cfg(pid, raw_cfg))
-                profiles.append({"persona_id": pid, "name": s.get("name") or pid, **desc})
+                q = vq.get(str(pid)) or {}
+                profiles.append({
+                    "persona_id": pid, "name": s.get("name") or pid, **desc,
+                    "quality": str(q.get("label") or ""),
+                    "quality_score": q.get("score"),
+                })
         except Exception as ex:  # noqa: BLE001
             logger.warning("[voice/profiles] persona enumerate failed: %s", ex)
         return {"ok": True, "default": default_desc, "profiles": profiles}
@@ -460,7 +705,10 @@ def register_voice_routes(app, api_auth, config_manager=None):
             raw_cfg = config_manager.config or {}
         from src.ai.persona_voice import resolve_effective_voice_context
 
-        clone_backends = {"voice_clone_command", "coqui_http", "voice_clone_lan"}
+        # 与 /api/voice/profiles 同一集合语义（avatar_clone/minicpm_clone 为生产
+        # 主力克隆后端；漏掉它们审计的 clone_ready/bleed 就是对着空气数数）。
+        clone_backends = {"voice_clone_command", "coqui_http", "voice_clone_lan",
+                          "avatar_clone", "minicpm_clone"}
         global_ref = ""
         try:
             _gvp = (((raw_cfg.get("telegram") or {}).get("voice_reply") or {})
@@ -561,25 +809,49 @@ def register_voice_routes(app, api_auth, config_manager=None):
 
     @app.post("/api/voice/enroll")
     async def api_voice_enroll(request: Request, _=Depends(api_auth)):
-        """声纹自助登记闭环：上传参考音频 → DashScope 登记克隆声纹 →
-        写回指定人设的 voice_profile（voice_clone_command/qwen）→ 收件箱音色下拉即可选。
+        """声纹自助登记闭环：参考音频 → 策展/质检 → 登记克隆声纹 →
+        写回指定人设的 voice_profile → 收件箱音色下拉即可选。
 
-        multipart: file（参考音频）+ persona_id + preferred_name + region? + language_type?
-        需 owner_consent 已在登记语义内（仅允许本人/已授权声音）。无 DASHSCOPE_API_KEY 时优雅返回。
+        multipart 两种来源（互斥，file 优先）：
+          - file       — 坐席上传参考音频（旧口径，向后兼容）
+          - media_ref  — 会话语音消息的 /static/protocol_media/... 引用
+                         （P0「从消息一键导入」：服务端直读归档原音，零下载往返）
+        其余字段：persona_id + preferred_name + region? + language_type? +
+          reference_text?（逐字稿；消息导入时前端预填 ASR 转写）+
+          owner_consent?（授权确认：media_ref 必须显式为真；上传缺省视为已确认）+
+          force?（跳过质检门的主管逃生门）+ platform/conversation_id/message_id?（溯源）。
+        登记前统一过「策展 + 质检门」（转单声道 WAV / 自动裁最佳片段 / 过短拒绝），
+        质检回显随响应 quality 字段返回。无 DASHSCOPE_API_KEY 时优雅返回。
         """
         form = await request.form()
         upload = form.get("file")
+        media_ref = str(form.get("media_ref") or "").strip()
         persona_id = str(form.get("persona_id") or "").strip()
         preferred_name = str(form.get("preferred_name") or "").strip()
         region_in = str(form.get("region") or "").strip()
         language_type = str(form.get("language_type") or "Japanese").strip() or "Japanese"
         reference_text = str(form.get("reference_text") or "").strip()
-        if upload is None or not getattr(upload, "filename", ""):
+        force_quality = str(form.get("force") or "").strip().lower() in ("1", "true", "yes", "on")
+        _consent_raw = form.get("owner_consent")
+        consent: Optional[bool] = None
+        if _consent_raw is not None:
+            consent = str(_consent_raw).strip().lower() in ("1", "true", "yes", "on")
+
+        has_upload = upload is not None and bool(getattr(upload, "filename", ""))
+        use_media = bool(media_ref) and not has_upload
+        if not has_upload and not media_ref:
             raise HTTPException(400, tr(request, "err.voice.ref_file_required"))
         if not persona_id:
             raise HTTPException(400, tr(request, "err.ws.field_required", field="persona_id"))
         if not preferred_name:
             raise HTTPException(400, tr(request, "err.ws.field_required", field="preferred_name"))
+        # 授权闸门：消息导入必须显式确认（客户语音≠自动授权）；上传路径显式否认
+        # 同拒；上传且未携带字段＝旧客户端，按既有语义视为已确认（向后兼容）。
+        if use_media and consent is not True:
+            raise HTTPException(400, tr(request, "err.voice.consent_required"))
+        if consent is False:
+            raise HTTPException(400, tr(request, "err.voice.consent_required"))
+        owner_consent = True if consent is None else consent
 
         from src.utils.persona_manager import PersonaManager
         pm = PersonaManager.get_instance()
@@ -587,7 +859,27 @@ def register_voice_routes(app, api_auth, config_manager=None):
         if persona is None:
             raise HTTPException(404, tr(request, "err.voice.persona_not_found", persona_id=persona_id))
 
-        data = await upload.read()
+        if has_upload:
+            data = await upload.read()
+            src_suffix = (os.path.splitext(upload.filename)[1] or ".wav").lower()
+        else:
+            # media_ref → 本地归档文件：只认 protocol_media 白名单目录 + 容纳检查防穿越
+            from src.integrations.protocol_bridge import (
+                protocol_media_root, static_media_ref_to_path)
+            _mp = static_media_ref_to_path(media_ref)
+            if not _mp:
+                raise HTTPException(400, tr(request, "err.voice.media_ref_invalid"))
+            _rp = Path(_mp).resolve()
+            try:
+                _contained = _rp.is_relative_to(protocol_media_root().resolve())
+            except Exception:
+                _contained = False
+            if not _contained:
+                raise HTTPException(400, tr(request, "err.voice.media_ref_invalid"))
+            if not _rp.is_file():
+                raise HTTPException(404, tr(request, "err.voice.media_ref_not_found"))
+            data = _rp.read_bytes()
+            src_suffix = (_rp.suffix or ".ogg").lower()
         if not data:
             raise HTTPException(400, tr(request, "err.inbox.empty_file"))
         if len(data) > 15 * 1024 * 1024:
@@ -596,16 +888,49 @@ def register_voice_routes(app, api_auth, config_manager=None):
         api_key, cfg_region = _dashscope_creds()
         region = region_in or cfg_region or "intl"
 
-        # 保存参考音频到 voice_samples/<safe>.<ext>
+        # 策展 + 质检门：统一转单声道 WAV、自动裁最佳片段，落 voice_samples/<safe>.wav
+        #（独立于 protocol_media 生命周期——媒体目录将来清理不影响已登记音色）
         safe = re.sub(r"[^A-Za-z0-9_-]", "_", preferred_name)[:40] or "voice"
         samples = Path("voice_samples")
-        samples.mkdir(parents=True, exist_ok=True)
-        ext = (os.path.splitext(upload.filename)[1] or ".wav").lower()
-        audio_path = (samples / f"{safe}{ext}").resolve()
+        from src.ai.voice_enroll import build_source_ref, prepare_reference_audio
         try:
-            audio_path.write_bytes(data)
+            prep = await asyncio.to_thread(
+                prepare_reference_audio, data, src_suffix, str(samples), safe,
+                force=force_quality)
         except Exception as ex:  # noqa: BLE001
             raise HTTPException(500, tr(request, "err.voice.ref_save_failed", err=ex))
+        quality = {k: prep.get(k) for k in (
+            "level", "issues", "tips", "curated", "degraded", "duration_sec")}
+        if not prep.get("ok"):
+            code = str(prep.get("reject_code") or "rejected")
+            msg = (tr(request, "err.voice.ref_too_short",
+                      sec=prep.get("duration_sec") or 0)
+                   if code == "too_short"
+                   else tr(request, "err.voice.ref_not_audio"))
+            return {"ok": False, "reason": f"ref_{code}", "message": msg,
+                    "quality": quality}
+        audio_path = Path(prep["audio_path"]).resolve()
+
+        # 音色溯源（voice_profile.source_ref + 审计行）：从哪条消息/谁导入的
+        try:
+            actor = request.session.get("username", "api")
+        except Exception:
+            actor = "api"
+        source_ref = build_source_ref(
+            kind=("inbox_message" if use_media else "upload"),
+            media_ref=(media_ref if use_media else ""),
+            platform=str(form.get("platform") or ""),
+            conversation_id=str(form.get("conversation_id") or ""),
+            message_id=str(form.get("message_id") or ""),
+            imported_by=str(actor or "api"))
+
+        # 逐字稿 sidecar 前置统一写（后端无关；avatar 分支缺稿时仍会 STT 自动补）
+        if reference_text:
+            try:
+                audio_path.with_suffix(".txt").write_text(
+                    reference_text, encoding="utf-8")
+            except Exception:
+                pass
 
         raw_full_cfg: Dict[str, Any] = {}
         if config_manager and hasattr(config_manager, "config"):
@@ -646,7 +971,8 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 from src.ai.voice_enroll import build_avatar_voice_profile
                 vp_av = build_avatar_voice_profile(
                     reference_audio_path=str(audio_path), speaker_id=safe,
-                    reference_text=av_ref_text)
+                    reference_text=av_ref_text,
+                    owner_consent=owner_consent, source_ref=source_ref)
                 new_persona = dict(persona)
                 new_persona["voice_profile"] = vp_av
                 try:
@@ -671,11 +997,18 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 except Exception:
                     pass
                 _audit(request, "voice_enroll",
-                       f"persona={persona_id} mode=avatar_clone name={preferred_name}")
+                       f"persona={persona_id} mode=avatar_clone name={preferred_name}"
+                       f" src={source_ref.get('kind')} consent={owner_consent}"
+                       f" level={quality.get('level')}")
+                # 录入即体检（P3）：合成探针句 → 声纹比对 → jsonl → 下拉徽标
+                # 几分钟内点亮；体检结果缓存失效让 profiles 尽快看到新行
+                if _spawn_voice_quality_probe(persona_id):
+                    _VQ_CACHE["until"] = 0.0
                 return {"ok": True, "mode": "avatar_clone", "persona_id": persona_id,
                         "reference_audio_path": str(audio_path),
                         "reference_text": av_ref_text,
-                        "avatar_base_url": av_client.base_url}
+                        "avatar_base_url": av_client.base_url,
+                        "quality": quality}
             logger.info("[voice/enroll] avatar_voice(7852) 不可用 → 回落 LAN/云端登记")
 
         # ── 局域网次优先：LAN 克隆主机在线则零样本登记（不烧云端配额）──
@@ -695,7 +1028,8 @@ def register_voice_routes(app, api_auth, config_manager=None):
                     reference_audio_path=str(audio_path), speaker_id=safe,
                     base_url=lan.base_url, language=str(lan_cfg.get("language") or "zh"),
                     reference_text=reference_text,
-                    clone_path=str(lan_cfg.get("clone_path") or "/v1/tts/clone"))
+                    clone_path=str(lan_cfg.get("clone_path") or "/v1/tts/clone"),
+                    owner_consent=owner_consent, source_ref=source_ref)
                 new_persona = dict(persona)
                 new_persona["voice_profile"] = vp_lan
                 try:
@@ -707,9 +1041,12 @@ def register_voice_routes(app, api_auth, config_manager=None):
                     logger.warning("[voice/enroll] LAN persist failed: %s", ex)
                     return {"ok": False, "reason": "persist_failed", "message": str(ex)[:300]}
                 _audit(request, "voice_enroll",
-                       f"persona={persona_id} mode=lan_zeroshot name={preferred_name}")
+                       f"persona={persona_id} mode=lan_zeroshot name={preferred_name}"
+                       f" src={source_ref.get('kind')} consent={owner_consent}"
+                       f" level={quality.get('level')}")
                 return {"ok": True, "mode": "lan_zeroshot", "persona_id": persona_id,
-                        "reference_audio_path": str(audio_path), "lan_base_url": lan.base_url}
+                        "reference_audio_path": str(audio_path), "lan_base_url": lan.base_url,
+                        "quality": quality}
             logger.info("[voice/enroll] voice_clone_lan 不可用 → 回落云端 Qwen 登记")
 
         from src.ai.voice_enroll import (
@@ -744,7 +1081,8 @@ def register_voice_routes(app, api_auth, config_manager=None):
         vp = build_qwen_voice_profile(
             voice=voice, reference_audio_path=str(audio_path),
             voice_profile_json_path=str(json_path), speaker_id=safe,
-            region=region, target_model=target_model, language_type=language_type)
+            region=region, target_model=target_model, language_type=language_type,
+            owner_consent=owner_consent, source_ref=source_ref)
         new_persona = dict(persona)
         new_persona["voice_profile"] = vp
         try:
@@ -755,9 +1093,12 @@ def register_voice_routes(app, api_auth, config_manager=None):
             logger.warning("[voice/enroll] persist persona failed: %s", ex)
             return {"ok": False, "reason": "persist_failed", "message": str(ex)[:300],
                     "voice": voice}
-        _audit(request, "voice_enroll", f"persona={persona_id} voice={voice} name={preferred_name}")
+        _audit(request, "voice_enroll",
+               f"persona={persona_id} voice={voice} name={preferred_name}"
+               f" src={source_ref.get('kind')} consent={owner_consent}"
+               f" level={quality.get('level')}")
         return {"ok": True, "voice": voice, "persona_id": persona_id,
-                "reference_audio_path": str(audio_path)}
+                "reference_audio_path": str(audio_path), "quality": quality}
 
     @app.delete("/api/voice/profiles/{persona_id}")
     async def api_voice_unbind(persona_id: str, request: Request,
@@ -1104,6 +1445,28 @@ def register_voice_routes(app, api_auth, config_manager=None):
             out["stats"] = get_avatar_voice_stats().dump()
         except Exception:
             out["stats"] = {}
+        # 语音出站断档台账（P2 2026-08-05）：A 线/B 线/坐席手动三链「已决定发语音」
+        # 的滚动窗成败——ops 卡据此出「出站健康」行（attempts>0 且 ok=0 ＝断档红）。
+        # 刻意不随 avatar_voice.enabled 闸门：台账覆盖全部语音后端，不只 AvatarHub。
+        try:
+            from src.ai.voice_outage import get_voice_outage
+            out["outage"] = get_voice_outage().outage_snapshot()
+        except Exception:
+            out["outage"] = {}
+        # 口语化 LLM 档健康：provider 分布（lan 端点/cloud/fallback 成败）+ 端点
+        # 冷却 + 落盘缓存命中——「176 的逻辑有没有真的在被调用」看板可见（2026-08-01）
+        try:
+            from src.ai.voice_colloquial_llm import health_signal
+            out["colloquial"] = health_signal()
+        except Exception:
+            out["colloquial"] = {}
+        # 所听即所发（P1 2026-08-05）：试听产物复用观测——hit_rate 低时看 misses
+        # 分布定位（expired 多→放宽 TTL；text_mismatch 多→坐席改稿没重生成）
+        try:
+            from src.integrations.shared.tts_preview import reuse_stats_snapshot
+            out["preview_reuse"] = reuse_stats_snapshot()
+        except Exception:
+            out["preview_reuse"] = {}
         # 音色质量最新抽检（夜间探针 jsonl 尾部；声纹+韵律自然度按人设取最新一行）
         try:
             latest: Dict[str, Any] = {}

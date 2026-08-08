@@ -1,0 +1,2114 @@
+{% extends "base.html" %}
+{% block title %}{{ (i18n or {}).get('rps_title', "自动回复设置") }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('rps_title', "自动回复设置") }}{% endblock %}
+{% block head %}
+<style>
+/* ── P0 可读性基线（2026-08-02）：
+   ① 承载决策信息的文案（hint/desc/legend/状态行）统一 --t2 + ≥.78rem；--t3 只留给
+     真元信息（uppercase 小节标/空态/注脚）——暗色 --t3≈5:1 叠 10-12px CJK 实测不可读。
+   ② 交互卡边界 --bd2 + 微底色（--bd 对卡底仅 1.19:1 ≈ 隐形，WCAG 1.4.11 要 ≥3:1）。
+   ③ 本页链接统一 var(--p)——base 无全局 a 色，裸 <a> 会吃浏览器 :visited 紫红。 */
+.rps-wrap{max-width:860px;margin:0 auto;padding-bottom:5.5rem}
+.rps-wrap a{color:var(--p)}
+.rps-sub{color:var(--t2);font-size:.88rem;margin:-.35rem 0 1rem}
+.rps-card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:1.1rem 1.25rem;margin-bottom:1rem}
+.rps-card h3{margin:0 0 .25rem;font-size:.98rem;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.rps-hint{color:var(--t2);font-size:.8rem;margin:0 0 .85rem;line-height:1.55}
+.rps-chip{display:inline-block;padding:.12rem .55rem;border-radius:999px;font-size:.7rem;font-weight:600;letter-spacing:.02em;vertical-align:middle}
+.rps-chip.hot{background:rgba(16,185,129,.12);color:var(--green)}
+.rps-chip.restart{background:rgba(245,158,11,.14);color:var(--amber)}
+/* 上游总闸 */
+.rps-gates{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center}
+.rps-gate{display:flex;align-items:center;gap:.45rem;padding:.4rem .75rem;border-radius:10px;background:var(--input);font-size:.8rem;color:var(--t2)}
+.rps-gate[data-state]::after{content:attr(data-state);font-size:.72rem;color:var(--t3)}
+.rps-gate.off{background:color-mix(in srgb, var(--red) 9%, var(--input))}
+.rps-gate.off::after{color:var(--red);font-weight:600}
+.rps-dot{width:9px;height:9px;border-radius:50%;background:var(--t3);flex:none}
+.rps-dot.on{background:var(--green)}
+.rps-dot.off{background:var(--red)}
+.rps-gate-link{font-size:.8rem;margin-left:auto;font-weight:600}
+/* 档位分段控件——.rps-mode-box 必须显式成块级：旧版是裸 <span>（inline）带边框 +
+   height:100%，内部 flex 子项把 inline 盒切成匿名片段 → 选中态边框碎裂错位（截图实锤） */
+.rps-modes{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:.6rem}
+.rps-mode{position:relative;display:flex;cursor:pointer}
+.rps-mode input{position:absolute;opacity:0;pointer-events:none}
+.rps-mode .rps-mode-box{position:relative;display:flex;flex-direction:column;gap:.3rem;flex:1;border:1.5px solid var(--bd2);border-radius:12px;padding:.7rem 1.7rem .7rem .8rem;background:color-mix(in srgb, var(--input) 45%, transparent);transition:border-color .15s,background .15s}
+.rps-mode:hover .rps-mode-box{border-color:color-mix(in srgb, var(--p) 45%, var(--bd2))}
+.rps-mode input:checked + .rps-mode-box{border-color:var(--p);background:color-mix(in srgb, var(--p,#1e8cf2) 10%, transparent)}
+.rps-mode input:checked + .rps-mode-box::after{content:"✓";position:absolute;top:.55rem;right:.6rem;color:var(--p);font-size:.85rem;font-weight:800;line-height:1}
+.rps-mode input:focus-visible + .rps-mode-box{outline:2px solid var(--p);outline-offset:2px}
+.rps-mode-name{font-weight:700;font-size:.86rem;display:flex;align-items:center;gap:.4rem}
+.rps-mode-desc{display:block;color:var(--t2);font-size:.78rem;line-height:1.5}
+.rps-mode-emoji{font-size:1rem}
+/* 行控件 */
+.rps-row{display:flex;align-items:center;gap:.75rem;padding:.6rem 0;flex-wrap:wrap}
+.rps-row + .rps-row{border-top:1px dashed var(--bd)}
+.rps-row-label{font-size:.85rem;font-weight:600;min-width:210px}
+.rps-row-hint{flex-basis:100%;color:var(--t2);font-size:.78rem;margin-top:-.25rem;line-height:1.5}
+/* 选择器带 element+attr：base.html 全局 input[type=number]{width:100%}（特异度 0,1,1）
+   会压过裸类 .rps-num——截图「最短消息长度」输入框被拉满行即此坑 */
+input[type=number].rps-num,input[type=text].rps-num{width:110px;padding:.35rem .5rem;border:1px solid var(--bd);border-radius:8px;background:var(--input);color:var(--t);font-size:.85rem}
+/* 开关 */
+.rps-switch{position:relative;display:inline-block;width:40px;height:22px;flex:none}
+.rps-switch input{opacity:0;width:0;height:0}
+.rps-slider{position:absolute;cursor:pointer;inset:0;background:var(--bd2);border-radius:999px;transition:.18s}
+.rps-slider:before{content:"";position:absolute;height:16px;width:16px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.18s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.rps-switch input:checked + .rps-slider{background:var(--p)}
+.rps-switch input:checked + .rps-slider:before{transform:translateX(18px)}
+.rps-switch input:focus-visible + .rps-slider{outline:2px solid var(--p);outline-offset:2px}
+/* 速度滑块 */
+.rps-pace-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:.6rem}
+@media (max-width:640px){.rps-pace-grid{grid-template-columns:1fr}}
+.rps-pace-cell label{display:block;font-size:.8rem;color:var(--t2);font-weight:600;margin-bottom:.3rem}
+.rps-pace-cell .rps-pace-val{color:var(--p);font-weight:700}
+.rps-range{width:100%;accent-color:var(--p)}
+.rps-range:focus-visible{outline:2px solid var(--p);outline-offset:2px;border-radius:4px}
+/* 客户视角预览 */
+.rps-preview{border:1px dashed var(--bd2);border-radius:12px;padding:.8rem .95rem;margin-top:.35rem;background:color-mix(in srgb, var(--input) 55%, transparent)}
+.rps-preview-title{font-size:.72rem;color:var(--t3);font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem}
+.rps-pv-line{display:flex;align-items:center;gap:.5rem;font-size:.8rem;color:var(--t2);padding:.18rem 0}
+.rps-pv-badge{font-size:.72rem;color:var(--green);font-weight:700}
+.rps-typing-dots{display:inline-flex;gap:3px}
+.rps-typing-dots i{width:5px;height:5px;border-radius:50%;background:var(--t3);animation:rpsBlink 1.2s infinite}
+.rps-typing-dots i:nth-child(2){animation-delay:.2s}
+.rps-typing-dots i:nth-child(3){animation-delay:.4s}
+@keyframes rpsBlink{0%,60%,100%{opacity:.25}30%{opacity:1}}
+.rps-pv-bubble{background:var(--p);color:#fff;border-radius:12px 12px 12px 3px;padding:.35rem .7rem;font-size:.8rem;display:inline-block}
+.rps-pv-eta{color:var(--t2);font-size:.78rem;margin-left:.25rem}
+.rps-pv-eta.warn{color:var(--amber);font-weight:600}
+/* select：width:auto 覆掉 base 全局 select{width:100%}（本页下拉按内容宽即可） */
+.rps-select{width:auto;max-width:100%;padding:.4rem .55rem;border:1px solid var(--bd);border-radius:8px;background:var(--input);color:var(--t);font-size:.84rem;min-width:230px}
+/* 预设档卡片（P1）：复用 rps-mode 视觉，active=当前表单完全匹配该档 */
+.rps-preset{position:relative;cursor:pointer;border:1.5px solid var(--bd2);border-radius:12px;padding:.7rem 1.7rem .7rem .8rem;background:color-mix(in srgb, var(--input) 45%, transparent);transition:border-color .15s,background .15s}
+.rps-preset:hover{border-color:color-mix(in srgb, var(--p) 45%, var(--bd2))}
+.rps-preset:focus-visible{outline:2px solid var(--p);outline-offset:2px}
+.rps-preset.active{border-color:var(--p);background:color-mix(in srgb, var(--p,#1e8cf2) 10%, transparent)}
+.rps-preset.active::after{content:"✓";position:absolute;top:.55rem;right:.6rem;color:var(--p);font-size:.85rem;font-weight:800;line-height:1}
+.rps-preset .rps-preset-name{font-weight:700;font-size:.86rem;display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
+.rps-preset .rps-preset-badge{font-size:.7rem;font-weight:700;color:var(--green);background:rgba(16,185,129,.12);border-radius:999px;padding:.08rem .45rem}
+.rps-preset .rps-preset-desc{display:block;color:var(--t2);font-size:.78rem;margin-top:.3rem;line-height:1.5}
+.rps-preset .rps-preset-kv{color:var(--t2);font-size:.75rem;margin-top:.4rem}
+.rps-preset-state{font-size:.8rem;color:var(--t2);margin-top:.55rem}
+.rps-preset-state b{color:var(--p)}
+/* 速度推荐带（P1）：0-60s 比例分区条 + 图例；
+   P0 增强：叠加「当前选中区间」高亮块——色带即坐标轴，min/max 落在哪个风险区一眼可见 */
+.rps-zone{position:relative;display:flex;height:8px;border-radius:999px;overflow:hidden;margin:.15rem 0 .35rem}
+.rps-zone-seg{display:block;height:100%}
+.rps-zone-sel{position:absolute;top:0;bottom:0;background:color-mix(in srgb, var(--t) 26%, transparent);outline:1px solid color-mix(in srgb, var(--t) 72%, transparent);outline-offset:-1px;border-radius:999px;pointer-events:none;transition:left .12s,width .12s}
+.rps-zone-seg.z-bot{background:rgba(239,68,68,.55)}
+.rps-zone-seg.z-good{background:rgba(16,185,129,.65)}
+.rps-zone-seg.z-mid{background:color-mix(in srgb, var(--t3) 30%, transparent)}
+.rps-zone-seg.z-slow{background:rgba(245,158,11,.45)}
+.rps-zone-legend{display:flex;flex-wrap:wrap;gap:.9rem;font-size:.75rem;color:var(--t2);align-items:center;margin-bottom:.5rem}
+.rps-zone-legend .zdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:.3rem;vertical-align:middle}
+.rps-zone-legend .zdot.z-bot{background:rgba(239,68,68,.75)}
+.rps-zone-legend .zdot.z-good{background:rgba(16,185,129,.85)}
+.rps-zone-legend .zdot.z-slow{background:rgba(245,158,11,.7)}
+.rps-zone-legend a{color:var(--p);font-weight:600}
+/* 链路生效自检（2026-08-07）：警告态红边、健康态绿边 */
+.rps-cc.warn{border:1px solid color-mix(in srgb, var(--danger,#dc2626) 50%, transparent);border-left:3px solid var(--danger,#dc2626);background:color-mix(in srgb, var(--danger,#dc2626) 8%, transparent)}
+.rps-cc.ok{border:1px solid color-mix(in srgb, var(--emerald,#10b981) 45%, transparent);border-left:3px solid var(--emerald,#10b981);background:color-mix(in srgb, var(--emerald,#10b981) 8%, transparent)}
+.rps-cc-chains{display:flex;flex-wrap:wrap;gap:.55rem;margin-top:.55rem}
+.rps-cc-chain{display:flex;align-items:center;gap:.4rem;background:var(--input);border-radius:8px;padding:.32rem .62rem;font-size:.8rem;color:var(--t)}
+.rps-cc-chain .cdot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+.rps-cc-chain .cdot.c-ok{background:var(--emerald,#10b981)}
+.rps-cc-chain .cdot.c-bad{background:var(--danger,#dc2626)}
+.rps-cc-chain .cdot.c-off{background:var(--t3,#94a3b8)}
+.rps-cc-chain.off{opacity:.55}
+.rps-cc-chain .cval{font-variant-numeric:tabular-nums;font-weight:600}
+.rps-cc-chain .csrc{font-size:.68rem;color:var(--t3)}
+/* 生效值溯源条（P1）：带会话上下文进入时显示 */
+.rps-explain{border:1px solid color-mix(in srgb, var(--p,#1e8cf2) 45%, transparent);border-left:3px solid var(--p);background:color-mix(in srgb, var(--p,#1e8cf2) 9%, transparent)}
+.rps-explain .rps-x-chips{display:flex;flex-wrap:wrap;gap:.45rem;margin-top:.5rem}
+.rps-x-chip{background:var(--input);border-radius:8px;padding:.3rem .6rem;font-size:.8rem;color:var(--t)}
+.rps-x-chip .src{font-size:.7rem;font-weight:700;border-radius:999px;padding:.06rem .42rem;margin-left:.35rem;vertical-align:middle;border:1px solid color-mix(in srgb, currentColor 30%, transparent)}
+.rps-x-chip .src.s-conversation{background:rgba(30,140,242,.14);color:var(--p)}
+.rps-x-chip .src.s-persona{background:color-mix(in srgb, var(--purple) 14%, transparent);color:var(--purple)}
+.rps-x-chip .src.s-global{background:rgba(16,185,129,.12);color:var(--green)}
+.rps-x-chip .src.s-default,.rps-x-chip .src.s-none{background:color-mix(in srgb, var(--t3) 12%, transparent);color:var(--t3)}
+/* 线上生效值回读 */
+.rps-rt{display:flex;align-items:center;gap:.45rem;margin-top:.6rem;font-size:.78rem;color:var(--t2)}
+.rps-rt .rps-rt-ok{color:var(--green);font-weight:700}
+.rps-rt .rps-rt-warn{color:var(--amber)}
+/* 实测观测（P2）：进程内采样的真实节奏 / 已读打字成功率 */
+.rps-obs{border-top:1px dashed var(--bd);margin-top:.7rem;padding-top:.6rem;font-size:.8rem;color:var(--t2)}
+.rps-obs-title{font-size:.7rem;color:var(--t3);font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.35rem}
+.rps-obs-chips{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.4rem}
+.rps-obs-chip{background:var(--input);border-radius:8px;padding:.24rem .55rem;font-size:.76rem;color:var(--t2)}
+.rps-obs-empty{color:var(--t3);font-size:.78rem}
+.rps-obs-note{color:var(--t3);font-size:.74rem;margin-top:.35rem}
+/* 人设节奏覆写表 */
+.rps-po-table{width:100%;border-collapse:collapse;font-size:.8rem}
+.rps-po-table th{font-size:.72rem;color:var(--t3);text-align:left;font-weight:600;padding:.25rem .4rem;border-bottom:1px solid var(--bd)}
+.rps-po-table td{padding:.3rem .4rem;border-bottom:1px dashed var(--bd);vertical-align:middle}
+.rps-po-table input[type=text]{width:150px}
+.rps-po-table input[type=number]{width:86px}
+.rps-po-table input,.rps-po-table select{padding:.3rem .45rem;border:1px solid var(--bd);border-radius:7px;background:var(--input);color:var(--t);font-size:.8rem}
+.rps-po-extra{font-size:.72rem;color:var(--amber);cursor:help}
+.rps-po-del{background:none;border:none;color:var(--red);cursor:pointer;font-size:.8rem;padding:.2rem .4rem;border-radius:6px}
+.rps-po-del:hover{background:rgba(239,68,68,.1)}
+.rps-po-empty{color:var(--t3);font-size:.8rem;padding:.5rem .2rem}
+.rps-po-add{margin-top:.55rem;background:none;border:1px dashed var(--bd2);color:var(--t2);border-radius:8px;padding:.4rem .8rem;font-size:.8rem;cursor:pointer}
+.rps-po-add:hover{border-color:var(--p);color:var(--p)}
+/* ── 工作时间班表（P0-ws，2026-08-04）── */
+.rps-ws-days{display:inline-flex;flex-wrap:wrap;gap:.35rem}
+.rps-ws-day{display:inline-flex;align-items:center;gap:.28rem;padding:.28rem .55rem;border:1px solid var(--bd);border-radius:999px;font-size:.78rem;cursor:pointer;user-select:none;background:var(--input);color:var(--t2)}
+.rps-ws-day input{accent-color:var(--p);margin:0}
+.rps-ws-day:has(input:checked){border-color:var(--p);color:var(--p);background:color-mix(in srgb, var(--p,#1e8cf2) 10%, transparent)}
+.rps-ws-window{display:inline-flex;align-items:center;gap:.4rem}
+.rps-ws-window input[type=time]{padding:.3rem .45rem;border:1px solid var(--bd);border-radius:7px;background:var(--input);color:var(--t);font-size:.8rem}
+.rps-ws-presets{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin-top:.55rem;font-size:.78rem;color:var(--t3)}
+.rps-ws-presets button{background:none;border:1px dashed var(--bd2);color:var(--t2);border-radius:999px;padding:.28rem .7rem;font-size:.76rem;cursor:pointer}
+.rps-ws-presets button:hover{border-color:var(--p);color:var(--p)}
+.rps-ws-acct-table input[type=time]{width:96px}
+.rps-ws-acct-table input[data-ws=workdays]{width:88px}
+.rps-ws-acct-table input[data-ws=timezone]{width:120px}
+/* ── P1（2026-08-02）：行网格 / 锚点导航 / 高级折叠组 / 预览播放 ── */
+/* 行控件桌面端升级为两栏网格：label 左列、控件+提示右列对齐——控件宽度由列约束，
+   从结构上终结与 base 全局 input{width:100%} 的特异度拉锯；<640px 保持原 flex 堆叠 */
+@media (min-width:641px){
+  .rps-row{display:grid;grid-template-columns:minmax(200px,230px) 1fr;align-items:center;column-gap:.9rem;row-gap:.15rem}
+  .rps-row-label{min-width:0}
+  .rps-row-hint{grid-column:2;margin-top:0}
+  .rps-row-hint:first-child{grid-column:1 / -1}
+}
+/* 锚点导航：非 sticky 轻量分组直达（页面 3-4 屏高，跳「高级」最常用） */
+.rps-anchors{display:flex;flex-wrap:wrap;gap:.45rem;margin:0 0 1rem}
+.rps-anchors a{display:inline-block;padding:.32rem .85rem;border:1px solid var(--bd2);border-radius:999px;font-size:.78rem;font-weight:600;color:var(--t2);text-decoration:none;background:color-mix(in srgb, var(--input) 45%, transparent);transition:.15s}
+.rps-anchors a:hover{border-color:var(--p);color:var(--p)}
+.rps-anchors a:focus-visible{outline:2px solid var(--p);outline-offset:2px}
+.rps-card[id],details.rps-adv{scroll-margin-top:74px}
+html{scroll-behavior:smooth}
+/* 高级折叠组：低频精调项（语音/缓冲/人设覆写）收拢；摘要行常显关键状态防「折叠即失明」 */
+details.rps-adv{margin-bottom:1rem}
+details.rps-adv > summary{list-style:none;cursor:pointer;user-select:none;display:flex;align-items:center;gap:.55rem;padding:.9rem 1.25rem;background:var(--card);border:1px solid var(--bd);border-radius:14px;font-size:.95rem;font-weight:700}
+details.rps-adv > summary::-webkit-details-marker{display:none}
+details.rps-adv > summary:hover{border-color:var(--bd2)}
+details.rps-adv > summary:focus-visible{outline:2px solid var(--p);outline-offset:2px}
+details.rps-adv[open] > summary{margin-bottom:1rem}
+.rps-adv-caret{color:var(--t3);font-size:.8rem;transition:transform .15s}
+details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
+.rps-adv-sum{margin-left:auto;font-size:.78rem;font-weight:500;color:var(--t2)}
+/* 预览播放：按当前区间抽真实延迟走一遍 已读→输入中→送达 */
+.rps-preview-head{display:flex;align-items:center;gap:.6rem;margin-bottom:.5rem}
+.rps-preview-head .rps-preview-title{margin-bottom:0}
+.rps-pv-play{margin-left:auto;border:1px solid color-mix(in srgb, var(--p) 40%, transparent);background:color-mix(in srgb, var(--p) 12%, transparent);color:var(--p);border-radius:8px;padding:.28rem .8rem;font-size:.76rem;font-weight:700;cursor:pointer;transition:.15s}
+.rps-pv-play:hover{background:color-mix(in srgb, var(--p) 22%, transparent)}
+.rps-pv-play[disabled]{opacity:.55;cursor:default}
+.rps-pv-play:focus-visible{outline:2px solid var(--p);outline-offset:2px}
+.rps-pv-line{transition:opacity .25s}
+.rps-pv-line.pv-dim{opacity:.28}
+/* ── P2（2026-08-02）：拟人度评分 / 实测均值上轴 / 预设改动闪烁 / 锚点联动 ── */
+.rps-score{display:inline-block;padding:.12rem .6rem;border-radius:999px;font-size:.72rem;font-weight:700;letter-spacing:.02em;cursor:help}
+.rps-score.ok{background:rgba(16,185,129,.12);color:var(--green)}
+.rps-score.mid{background:rgba(245,158,11,.14);color:var(--amber)}
+.rps-score.bad{background:rgba(239,68,68,.14);color:var(--red)}
+.rps-zone-obs-row{position:relative;height:10px;margin:-2px 0 .3rem}
+.rps-zone-obs-dot{position:absolute;top:1px;width:7px;height:7px;border-radius:50%;background:var(--t);opacity:.78;transform:translateX(-50%);box-shadow:0 0 0 1.5px var(--card);cursor:help}
+.rps-zone-legend .zdot.z-obs{background:var(--t);opacity:.78}
+@keyframes rpsFlash{0%{background:color-mix(in srgb, var(--p) 20%, transparent);box-shadow:0 0 0 1px color-mix(in srgb, var(--p) 45%, transparent)}100%{background:transparent;box-shadow:none}}
+.rps-flash{animation:rpsFlash 1.6s ease-out 1;border-radius:10px}
+.rps-anchors a.active{border-color:var(--p);color:var(--p);background:color-mix(in srgb, var(--p) 10%, transparent)}
+/* ── P0-caps（2026-08-03）：平台能力清单 chips / 档位封顶提示 / 保存条改动明细 ── */
+.rps-caps{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center}
+.rps-caps-lbl{font-size:.74rem;color:var(--t3);font-weight:600}
+.rps-cap-chip{display:inline-flex;align-items:center;gap:.3rem;padding:.12rem .5rem;border-radius:999px;font-size:.72rem;font-weight:600;background:color-mix(in srgb, var(--t3) 10%, transparent);color:var(--t3);cursor:help}
+.rps-cap-chip.ok{color:var(--green);background:rgba(16,185,129,.1)}
+.rps-cap-chip.part{color:var(--amber);background:rgba(245,158,11,.12)}
+.rps-mode-capnote{margin-top:.6rem;padding:.5rem .7rem;border-radius:9px;border:1px solid color-mix(in srgb, var(--amber) 35%, transparent);background:rgba(245,158,11,.09);color:var(--t2);font-size:.78rem;line-height:1.55}
+.rps-diff-panel{max-width:860px;width:100%;margin-bottom:.5rem;background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:.45rem .8rem;max-height:180px;overflow:auto;font-size:.78rem;color:var(--t2)}
+.rps-diff-row{display:flex;gap:.5rem;padding:.16rem 0;align-items:baseline;flex-wrap:wrap}
+.rps-diff-row + .rps-diff-row{border-top:1px dashed var(--bd)}
+.rps-diff-name{font-weight:600;color:var(--t)}
+.rps-diff-old{text-decoration:line-through;color:var(--t3)}
+.rps-diff-new{color:var(--p);font-weight:600}
+/* ── P1（2026-08-03）：平台专家覆写矩阵（复用 rps-po-table 基础样式） ── */
+.rps-plat-table input[type=number]{width:70px}
+.rps-plat-table select{max-width:132px}
+.rps-plat-name{font-weight:700;white-space:nowrap}
+.rps-plat-table select[disabled]{opacity:.45;cursor:not-allowed}
+/* 保存条 */
+.rps-savebar{position:fixed;left:0;right:0;bottom:0;z-index:120;display:none;flex-direction:column;align-items:center;justify-content:center;padding:.65rem 1rem;background:color-mix(in srgb, var(--card) 92%, transparent);backdrop-filter:blur(8px);border-top:1px solid var(--bd)}
+.rps-savebar.show{display:flex}
+.rps-savebar-inner{display:flex;align-items:center;gap:.8rem;max-width:860px;width:100%}
+.rps-dirty-txt{font-size:.8rem;color:var(--amber);font-weight:600}
+.rps-btn{border:none;border-radius:9px;padding:.5rem 1.2rem;font-size:.85rem;font-weight:700;cursor:pointer}
+.rps-btn-save{background:var(--p);color:#fff}
+.rps-btn-save[disabled]{opacity:.5;cursor:default}
+.rps-btn-ghost{background:none;border:1px solid var(--bd);color:var(--t2)}
+/* toast */
+.rps-toast{position:fixed;right:1.2rem;bottom:4.6rem;z-index:130;max-width:360px;background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--green);border-radius:10px;padding:.7rem .9rem;font-size:.8rem;color:var(--t);box-shadow:0 8px 28px rgba(0,0,0,.25);display:none}
+.rps-toast.warn{border-left-color:var(--amber)}
+.rps-toast.err{border-left-color:var(--red)}
+.rps-toast.show{display:block}
+.rps-toast ul{margin:.35rem 0 0;padding-left:1.1rem;color:var(--t2)}
+</style>
+{% endblock %}
+{% block content %}
+{% set active="reply_settings" %}
+<div class="rps-wrap">
+  <p class="rps-sub">{{ (i18n or {}).get('rps_subtitle', "全自动回复的档位、速度与拟人细节——集中在这一页调") }}</p>
+
+  <!-- 锚点导航（P1）：分组直达；非 sticky，不抢层级 -->
+  <nav class="rps-anchors" aria-label="{{ (i18n or {}).get('rps_title', "自动回复设置") }}">
+    <a href="#rps-sec-gates">{{ (i18n or {}).get('rps_gate_title', "上游总闸") }}</a>
+    <a href="#rps-preset-card">{{ (i18n or {}).get('rps_nav_preset', "场景预设") }}</a>
+    <a href="#rps-sec-mode">{{ (i18n or {}).get('rps_nav_mode', "自动化档位") }}</a>
+    <a href="#rps-sec-ws" id="rps-anchor-ws" style="display:none">{{ (i18n or {}).get('rps_nav_ws', "工作时间") }}</a>
+    <a href="#rps-sec-pace">{{ (i18n or {}).get('rps_nav_pace', "回复节奏") }}</a>
+    <a href="#rps-sec-plat" id="rps-anchor-plat" style="display:none">{{ (i18n or {}).get('rps_nav_plat', "平台覆写") }}</a>
+    <a href="#rps-sec-style">{{ (i18n or {}).get('rps_nav_style', "内容风格") }}</a>
+    <a href="#rps-adv">{{ (i18n or {}).get('rps_adv_title', "高级设置") }}</a>
+  </nav>
+
+  <!-- 链路生效自检（2026-08-07）：三条发送链的节奏来源/值一眼可见——
+       任何一条「active 且秒回」→ 亮红横幅（修「滑杆只管部分链、其余链
+       0 延迟却在页面上隐形」）。JS 按 API 是否返回 chain_coverage 控显
+       （旧进程无此字段 → 整块隐藏，不摆空架子）。 -->
+  <div class="rps-card rps-cc" id="rps-cc" style="display:none">
+    <h3 id="rps-cc-title"></h3>
+    <p class="rps-hint" id="rps-cc-desc"></p>
+    <div class="rps-cc-chains" id="rps-cc-chains"></div>
+  </div>
+
+  <!-- 生效值溯源（P1）：从收件箱「参数」带会话上下文进入时显示，平时隐藏 -->
+  <div class="rps-card rps-explain" id="rps-explain" style="display:none">
+    <h3>🔎 {{ (i18n or {}).get('rps_x_title', "当前会话生效值") }}</h3>
+    <p class="rps-hint" id="rps-x-sub"></p>
+    <div class="rps-x-chips" id="rps-x-chips"></div>
+  </div>
+
+  <!-- 上游总闸（只读） -->
+  <div class="rps-card" id="rps-sec-gates">
+    <h3>🔌 {{ (i18n or {}).get('rps_gate_title', "上游总闸") }}
+      <span class="rps-chip restart" style="background:var(--input);color:var(--t3)">{{ (i18n or {}).get('rps_gate_readonly', "只读") }}</span></h3>
+    <p class="rps-hint">{{ (i18n or {}).get('rps_gate_hint', "真发主开关有双重护栏（能力看板），本页不提供第二个写入口。") }}</p>
+    <div class="rps-gates">
+      <span class="rps-gate"><span class="rps-dot" id="rps-gate-worker"></span>{{ (i18n or {}).get('rps_gate_worker', "自动发送 Worker") }}</span>
+      <span class="rps-gate"><span class="rps-dot" id="rps-gate-deliver"></span>{{ (i18n or {}).get('rps_gate_deliver', "AI 真发闸门") }}</span>
+      <span class="rps-gate"><span class="rps-dot" id="rps-gate-autodraft"></span>{{ (i18n or {}).get('rps_gate_autodraft', "自动拟稿") }}</span>
+      <span class="rps-gate" id="rps-gate-caps" style="display:none"></span>
+      <a class="rps-gate-link" href="/rpa-overview">{{ (i18n or {}).get('rps_gate_link', "去矩阵总览的能力看板调整 →") }}</a>
+    </div>
+  </div>
+
+  <!-- 场景化预设档（P1）：一键把下方多个参数填成组合值，经保存条确认才落盘。
+       JS 按 API 是否返回 presets 控显（重启装载前旧进程无此字段 → 整卡隐藏不摆空架子） -->
+  <div class="rps-card" id="rps-preset-card" style="display:none">
+    <h3>🎛️ {{ (i18n or {}).get('rps_preset_title', "场景预设档") }}</h3>
+    <p class="rps-hint">{{ (i18n or {}).get('rps_preset_hint', "点选即把速度 / 拟人 / 长度 / 语音触发填成该场景的推荐组合——先填进表单，看清底部改动数再保存；emoji、风格要求等个性化项不受影响。") }}</p>
+    <div class="rps-modes" id="rps-presets"></div>
+    <div class="rps-preset-state" id="rps-preset-state"></div>
+  </div>
+
+  <!-- 默认自动化档位 -->
+  <div class="rps-card" id="rps-sec-mode">
+    <h3>🎚️ {{ (i18n or {}).get('rps_mode_title', "默认自动化档位") }}
+      <span class="rps-chip" data-hot-chip="inbox.auto_draft.automation_mode"></span></h3>
+    <p class="rps-hint">{{ (i18n or {}).get('rps_mode_hint', "新会话的默认档位；单个会话可在收件箱里单独覆写，坐席显式设置优先。") }}</p>
+    <div class="rps-modes" id="rps-modes">
+      <label class="rps-mode">
+        <input type="radio" name="rps-mode" value="manual" onchange="rpsMarkDirty()">
+        <span class="rps-mode-box">
+          <span class="rps-mode-name"><span class="rps-mode-emoji">✍️</span>{{ (i18n or {}).get('rps_mode_manual', "手动") }}</span>
+          <span class="rps-mode-desc">{{ (i18n or {}).get('rps_mode_manual_d', "不生成草稿，完全人工回复") }}</span>
+        </span>
+      </label>
+      <label class="rps-mode">
+        <input type="radio" name="rps-mode" value="review" onchange="rpsMarkDirty()">
+        <span class="rps-mode-box">
+          <span class="rps-mode-name"><span class="rps-mode-emoji">📝</span>{{ (i18n or {}).get('rps_mode_review', "拟稿人审") }}</span>
+          <span class="rps-mode-desc">{{ (i18n or {}).get('rps_mode_review_d', "AI 写草稿，坐席通过后发出") }}</span>
+        </span>
+      </label>
+      <label class="rps-mode">
+        <input type="radio" name="rps-mode" value="multi_choice" onchange="rpsMarkDirty()">
+        <span class="rps-mode-box">
+          <span class="rps-mode-name"><span class="rps-mode-emoji">🔀</span>{{ (i18n or {}).get('rps_mode_multi', "多选一") }}</span>
+          <span class="rps-mode-desc">{{ (i18n or {}).get('rps_mode_multi_d', "AI 给多个候选，坐席挑一条") }}</span>
+        </span>
+      </label>
+      <label class="rps-mode">
+        <input type="radio" name="rps-mode" value="auto_ai" onchange="rpsMarkDirty()">
+        <span class="rps-mode-box">
+          <span class="rps-mode-name"><span class="rps-mode-emoji">🚀</span>{{ (i18n or {}).get('rps_mode_auto', "全自动") }}</span>
+          <span class="rps-mode-desc">{{ (i18n or {}).get('rps_mode_auto_d', "AI 直接回复，低风险草稿自动发出") }}</span>
+        </span>
+      </label>
+    </div>
+    <div class="rps-mode-capnote" id="rps-cap-note" style="display:none"></div>
+    <div class="rps-row" style="margin-top:.6rem">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_bootstrap_label', "新会话自动沿用此档位") }}
+        <span class="rps-chip" data-hot-chip="inbox.auto_draft.bootstrap_automation_mode"></span></span>
+      <label class="rps-switch"><input type="checkbox" id="rps-bootstrap" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_bootstrap_hint', "首条入站时把默认档位持久化到该会话（关闭则新会话按人审口径落地）") }}</span>
+    </div>
+    <div class="rps-row">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_minlen_label', "触发拟稿的最短消息长度") }}
+        <span class="rps-chip" data-hot-chip="inbox.auto_draft.min_text_len"></span></span>
+      <input type="number" class="rps-num" id="rps-minlen" min="0" max="500" step="1" oninput="rpsMarkDirty()">
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_minlen_hint', "短于此字数的入站不生成草稿（0 = 不限制）") }}</span>
+    </div>
+  </div>
+
+  <!-- 工作时间班表（P0-ws，2026-08-04）：非工作时间不自动回复。后端未装载
+       work_schedule 白名单（旧进程）时整卡隐藏——模板热更新先于重启上线，
+       提交旧后端不认的键会连累整次保存被拒。 -->
+  <div class="rps-card" id="rps-sec-ws" style="display:none">
+    <h3>🕘 {{ (i18n or {}).get('rps_ws_title', "工作时间") }}
+      <span class="rps-chip" data-hot-chip="inbox.work_schedule.enabled"></span></h3>
+    <p class="rps-hint">{{ (i18n or {}).get('rps_ws_hint', "账号的「作息表」——非工作时间不自动回复入站消息（危机求助信号除外），复班后自动补觉处理积压。坐席手动发送与人工通过不受限。") }}</p>
+    <div class="rps-row" style="border-top:none">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_ws_enabled', "启用工作时间班表") }}</span>
+      <label class="rps-switch"><input type="checkbox" id="rps-ws-enabled" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_ws_enabled_hint', "开启后，下方默认班表对全部账号生效；个别账号可在覆写表单独配") }}</span>
+    </div>
+    <div class="rps-row">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_ws_days', "工作日") }}</span>
+      <span class="rps-ws-days" id="rps-ws-days">
+        {%- set _wd_names = ((i18n or {}).get('rps_ws_days_short', "一 二 三 四 五 六 日")).split() -%}
+        {%- for _d in range(1, 8) %}
+        <label class="rps-ws-day"><input type="checkbox" data-wd="{{ _d }}" onchange="rpsMarkDirty()">{{ _wd_names[_d - 1] if _wd_names|length >= 7 else _d }}</label>
+        {%- endfor %}
+      </span>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_ws_days_hint', "全不勾 = 每天上班") }}</span>
+    </div>
+    <div class="rps-row">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_ws_window', "上下班时间") }}</span>
+      <span class="rps-ws-window">
+        <input type="time" id="rps-ws-start" onchange="rpsMarkDirty()">
+        <span>–</span>
+        <input type="time" id="rps-ws-end" onchange="rpsMarkDirty()">
+      </span>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_ws_window_hint', "下班早于上班 = 跨午夜班（如 14:00–02:00）；两者相同 = 全天在班；都留空 = 未配置（不闸）") }}</span>
+    </div>
+    <div class="rps-ws-presets">
+      <span>{{ (i18n or {}).get('rps_ws_presets_lbl', "快速填入：") }}</span>
+      <button type="button" onclick="rpsWsPreset('cs')">{{ (i18n or {}).get('rps_ws_preset_cs', "客服朝九晚六") }}</button>
+      <button type="button" onclick="rpsWsPreset('night')">{{ (i18n or {}).get('rps_ws_preset_night', "陪伴夜猫子 14:00–02:00") }}</button>
+      <button type="button" onclick="rpsWsPreset('always')">{{ (i18n or {}).get('rps_ws_preset_always', "全天候") }}</button>
+    </div>
+    <div class="rps-row">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_ws_tz', "班表时区") }}</span>
+      <input type="text" class="rps-num" style="width:min(220px,100%)" id="rps-ws-tz" placeholder="Asia/Shanghai" oninput="rpsMarkDirty()">
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_ws_tz_hint', "IANA 时区名（如 Asia/Shanghai）；留空 = 服务器本地时间") }}</span>
+    </div>
+    <div class="rps-row">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_ws_jitter', "边界抖动（±分钟）") }}</span>
+      <input type="number" class="rps-num" id="rps-ws-jitter" min="0" max="180" step="1" oninput="rpsMarkDirty()">
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_ws_jitter_hint', "上下班时刻每天确定性浮动 ±N 分钟（0 = 关）") }}</span>
+    </div>
+    <div class="rps-row">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_ws_crisis', "危机消息豁免") }}</span>
+      <label class="rps-switch"><input type="checkbox" id="rps-ws-crisis" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_ws_crisis_hint', "入站命中自伤 / 轻生等危机信号时穿透班表照常回复（安全红线，强烈建议保持开启）") }}</span>
+    </div>
+    <div class="rps-row">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_ws_gendrafts', "休息期仍拟稿") }}</span>
+      <label class="rps-switch"><input type="checkbox" id="rps-ws-gendrafts" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_ws_gendrafts_hint', "关闭 = 休息期彻底静默省 LLM，但复班不补这段消息（补觉只处理已拟的稿），慎用") }}</span>
+    </div>
+    <div class="rps-row">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_ws_catchup', "复班补觉回复") }}</span>
+      <span style="display:inline-flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+        <label class="rps-switch"><input type="checkbox" id="rps-ws-catchup" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
+        <span style="font-size:.78rem;color:var(--t3)">{{ (i18n or {}).get('rps_ws_regenh', "重拟阈值（小时）") }}</span>
+        <input type="number" class="rps-num" id="rps-ws-regenh" min="0" max="48" step="0.5" oninput="rpsMarkDirty()">
+      </span>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_ws_catchup_hint', "休息期扣住的稿复班后自动接续投递；稿龄超过阈值的先重新生成再发（防「凌晨拟的稿早上发出」内容穿帮）") }}</span>
+    </div>
+    <div class="rps-row" style="display:block">
+      <span class="rps-row-label" style="display:block;margin-bottom:.35rem">{{ (i18n or {}).get('rps_ws_acct_title', "账号班表覆写") }}</span>
+      <p class="rps-hint" style="margin:.1rem 0 .45rem">{{ (i18n or {}).get('rps_ws_acct_hint', "个别账号用不同作息。留空的格子跟随上方默认班表；勾「豁免」= 该账号全天候不受闸。") }}</p>
+      <table class="rps-po-table rps-ws-acct-table">
+        <thead><tr>
+          <th>{{ (i18n or {}).get('rps_ws_acct_key', "账号（平台:账号ID）") }}</th>
+          <th>{{ (i18n or {}).get('rps_ws_acct_days', "工作日") }}</th>
+          <th>{{ (i18n or {}).get('rps_ws_acct_start', "上班") }}</th>
+          <th>{{ (i18n or {}).get('rps_ws_acct_end', "下班") }}</th>
+          <th>{{ (i18n or {}).get('rps_ws_acct_tz', "时区") }}</th>
+          <th>{{ (i18n or {}).get('rps_ws_acct_exempt', "豁免") }}</th>
+          <th></th>
+        </tr></thead>
+        <tbody id="rps-ws-acct-body"></tbody>
+      </table>
+      <div class="rps-po-empty" id="rps-ws-acct-empty" style="display:none">{{ (i18n or {}).get('rps_ws_acct_empty', "暂无覆写——全部账号使用默认班表") }}</div>
+      <button class="rps-po-add" onclick="rpsWsAcctAdd()">{{ (i18n or {}).get('rps_ws_acct_add', "＋ 添加账号覆写") }}</button>
+    </div>
+  </div>
+
+  <!-- 回复节奏（P1 起并入已读/输入中两项拟人细节——同属等待窗行为） -->
+  <div class="rps-card" id="rps-sec-pace">
+    <h3>⏱️ {{ (i18n or {}).get('rps_pace_title', "回复节奏与拟人细节") }}
+      <span class="rps-score" id="rps-score"></span>
+      <span class="rps-chip" data-hot-chip="inbox.l2_autosend.deliver_delay.min_sec"></span></h3>
+    <p class="rps-hint">{{ (i18n or {}).get('rps_pace_hint', "全自动回复投递前随机等待的秒数区间，模拟真人「看到→想→打字」的节奏。") }}</p>
+    <div class="rps-pace-grid">
+      <div class="rps-pace-cell">
+        <label>{{ (i18n or {}).get('rps_pace_min', "最快（秒）") }} · <span class="rps-pace-val" id="rps-min-val">0</span></label>
+        <input type="range" class="rps-range" id="rps-min" min="0" max="60" step="1" oninput="rpsPaceInput('min')">
+      </div>
+      <div class="rps-pace-cell">
+        <label>{{ (i18n or {}).get('rps_pace_max', "最慢（秒）") }} · <span class="rps-pace-val" id="rps-max-val">0</span></label>
+        <input type="range" class="rps-range" id="rps-max" min="0" max="60" step="1" oninput="rpsPaceInput('max')">
+      </div>
+    </div>
+    <!-- P1 推荐带：0-60s 比例分区（2/10/18/30）+ 图例 + 一键推荐 -->
+    <div class="rps-zone" aria-hidden="true">
+      <span class="rps-zone-sel" id="rps-zone-sel"></span>
+      <span class="rps-zone-seg z-bot" style="flex:2"></span>
+      <span class="rps-zone-seg z-good" style="flex:10"></span>
+      <span class="rps-zone-seg z-mid" style="flex:18"></span>
+      <span class="rps-zone-seg z-slow" style="flex:30"></span>
+    </div>
+    <div class="rps-zone-obs-row" id="rps-zone-obs" style="display:none" aria-hidden="true"></div>
+    <div class="rps-zone-legend">
+      <span><i class="zdot z-bot"></i>{{ (i18n or {}).get('rps_zone_bot', "0-2s 秒回·易显机器") }}</span>
+      <span><i class="zdot z-good"></i>{{ (i18n or {}).get('rps_zone_good', "3-12s 自然区间") }}</span>
+      <span><i class="zdot z-slow"></i>{{ (i18n or {}).get('rps_zone_slow', "30s+ 慢热") }}</span>
+      <span id="rps-zone-obs-legend" style="display:none"><i class="zdot z-obs"></i>{{ (i18n or {}).get('rps_zone_obs', "实测均值（按人设）") }}</span>
+      <a href="#" onclick="rpsUseRecommended(event)">{{ (i18n or {}).get('rps_zone_use', "一键用推荐区间 3–12s") }}</a>
+    </div>
+    <div class="rps-row" style="border-top:none;padding-top:0">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_pace_adaptive', "按内容长度自适应") }}
+        <span class="rps-chip" data-hot-chip="inbox.l2_autosend.deliver_delay.adaptive"></span></span>
+      <label class="rps-switch"><input type="checkbox" id="rps-adaptive" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_pace_adaptive_hint', "长回复等更久、短回复更快，比固定区间更像真人") }}</span>
+    </div>
+    <div class="rps-row">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_markread_label', "回复前先标已读") }}
+        <span class="rps-chip" data-hot-chip="inbox.l2_autosend.mark_read_before_reply"></span></span>
+      <label class="rps-switch"><input type="checkbox" id="rps-markread" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_markread_hint', "对端先看到「已读」、停顿几秒、再收到回复——与真人一致") }}</span>
+      <span class="rps-row-hint rps-caps" id="rps-caps-markread" style="display:none"></span>
+    </div>
+    <div class="rps-row">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_typing_label', "延迟期间显示「正在输入」") }}
+        <span class="rps-chip" data-hot-chip="inbox.l2_autosend.typing_indicator"></span></span>
+      <label class="rps-switch"><input type="checkbox" id="rps-typing" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_typing_hint', "延迟期间挂打字气泡；不支持的平台自动跳过，不影响发送") }}</span>
+      <span class="rps-row-hint rps-caps" id="rps-caps-typing" style="display:none"></span>
+    </div>
+    <div class="rps-preview">
+      <div class="rps-preview-head">
+        <div class="rps-preview-title">{{ (i18n or {}).get('rps_pace_preview', "客户视角预览") }}</div>
+        <button class="rps-pv-play" id="rps-pv-play" type="button" onclick="rpsPlayPreview()">▶ {{ (i18n or {}).get('rps_pv_play', "播放预览") }}</button>
+      </div>
+      <div class="rps-pv-line" id="rps-pv-read"><span class="rps-pv-badge">✓✓</span>{{ (i18n or {}).get('rps_preview_read', "已读") }}</div>
+      <div class="rps-pv-line" id="rps-pv-typing"><span class="rps-typing-dots"><i></i><i></i><i></i></span>{{ (i18n or {}).get('rps_preview_typing', "正在输入…") }}</div>
+      <div class="rps-pv-line" id="rps-pv-sent"><span class="rps-pv-bubble">{{ (i18n or {}).get('rps_preview_sent', "回复送达") }}</span><span class="rps-pv-eta" id="rps-pv-eta"></span></div>
+    </div>
+    <div class="rps-rt" id="rps-rt-line" style="display:none"></div>
+    <div class="rps-obs" id="rps-obs-pace" style="display:none"></div>
+    <div class="rps-obs" id="rps-obs-hum" style="display:none"></div>
+  </div>
+
+  <!-- 平台专家覆写（P1，2026-08-03）：平台 × 旋钮 矩阵。JS 按后端快照是否
+       含平台字段控显（旧进程隐藏整卡，防「前端造出后端不认的键」假脏） -->
+  <div class="rps-card" id="rps-sec-plat" style="display:none">
+    <h3>🧭 {{ (i18n or {}).get('rps_plat_title', "平台专家覆写") }}
+      <span class="rps-chip" data-hot-chip="inbox.auto_draft.platform_modes"></span></h3>
+    <p class="rps-hint">{{ (i18n or {}).get('rps_plat_hint', "按聊天软件微调：留空 / 选「跟随全局」的格子全部继承上方全局值。不支持的能力格已按平台实况禁用。") }}</p>
+    <table class="rps-po-table rps-plat-table">
+      <thead><tr>
+        <th>{{ (i18n or {}).get('rps_plat_col_platform', "平台") }}</th>
+        <th>{{ (i18n or {}).get('rps_plat_col_cap', "档位封顶") }}</th>
+        <th>{{ (i18n or {}).get('rps_po_min', "最快（秒）") }}</th>
+        <th>{{ (i18n or {}).get('rps_po_max', "最慢（秒）") }}</th>
+        <th>{{ (i18n or {}).get('rps_po_adaptive', "自适应") }}</th>
+        <th>{{ (i18n or {}).get('rps_obs_read', "已读") }}</th>
+        <th>{{ (i18n or {}).get('rps_obs_typing', "打字") }}</th>
+        <th>{{ (i18n or {}).get('rps_plat_col_voice', "语音触发") }}</th>
+      </tr></thead>
+      <tbody id="rps-plat-body"></tbody>
+    </table>
+    <p class="rps-hint" style="margin:.6rem 0 0">{{ (i18n or {}).get('rps_plat_prio', "生效优先级：人设覆写 > 平台覆写 > 全局默认。「档位封顶」列是只降不升的上限（会话显式档位仍最优先、只会被压低不会被抬高）；其余列是普通覆写。") }}</p>
+  </div>
+
+  <!-- 内容与风格全局默认（P0-style，2026-08-02）：人设未显式设置时的兜底层 -->
+  <div class="rps-card" id="rps-sec-style">
+    <h3>✍️ {{ (i18n or {}).get('rps_style_title', "内容与风格（全局默认）") }}
+      <span class="rps-chip" data-hot-chip="ai.reply_defaults.length"></span></h3>
+    <p class="rps-hint">{{ (i18n or {}).get('rps_style_hint', "长度与 emoji 只对「没有自己设置」的人设生效——人设工作室里的显式设置永远优先，不会被这里覆盖。") }}</p>
+    <div class="rps-row" style="border-top:none">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_style_length', "回复长度") }}</span>
+      <select class="rps-select" id="rps-style-length" onchange="rpsMarkDirty()">
+        <option value="">{{ (i18n or {}).get('rps_style_follow', "跟随人设（不干预）") }}</option>
+        <option value="concise">{{ (i18n or {}).get('rps_style_len_concise', "简短（1-2 句，像私聊）") }}</option>
+        <option value="moderate">{{ (i18n or {}).get('rps_style_len_moderate', "适中（2-4 句）") }}</option>
+        <option value="detailed">{{ (i18n or {}).get('rps_style_len_detailed', "详细（4-6 句，仍口语）") }}</option>
+      </select>
+    </div>
+    <div class="rps-row">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_style_maxsent', "最多句数") }}</span>
+      <input type="number" class="rps-num" id="rps-style-maxsent" min="0" max="10" step="1" oninput="rpsMarkDirty()">
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_style_maxsent_hint', "0 = 不限制。选了上面的长度档时此项不生效（长度档优先）；只想给个句数上限就把长度留「跟随人设」。") }}</span>
+    </div>
+    <div class="rps-row">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_style_emoji', "emoji 密度") }}</span>
+      <select class="rps-select" id="rps-style-emoji" onchange="rpsMarkDirty()">
+        <option value="">{{ (i18n or {}).get('rps_style_follow', "跟随人设（不干预）") }}</option>
+        <option value="none">{{ (i18n or {}).get('rps_style_emoji_none', "不用 emoji") }}</option>
+        <option value="minimal">{{ (i18n or {}).get('rps_style_emoji_minimal', "极少（情绪强烈处才用）") }}</option>
+        <option value="moderate">{{ (i18n or {}).get('rps_style_emoji_moderate', "适中（约 30% 回复带 1 个）") }}</option>
+        <option value="rich">{{ (i18n or {}).get('rps_style_emoji_rich', "较多（约 60% 回复带 1-2 个）") }}</option>
+      </select>
+    </div>
+    <div class="rps-row">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_style_tone', "一句话风格要求") }}</span>
+      <input type="text" class="rps-num" style="width:min(420px,100%)" id="rps-style-tone" maxlength="120" placeholder="{{ (i18n or {}).get('rps_style_tone_ph', '例：多用短句和口语语气词，别用书面腔') }}" oninput="rpsMarkDirty()">
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_style_tone_hint', "对全部人设追加的统一说话要求（与上面两项的「兜底」语义不同：这条对所有人设都生效）。留空 = 无。") }}</span>
+    </div>
+    <div class="rps-row" id="rps-style-ov-row" style="display:none">
+      <span class="rps-row-hint" id="rps-style-ov" style="margin-top:0"></span>
+    </div>
+    <div class="rps-obs" id="rps-obs-style" style="display:none"></div>
+  </div>
+
+  <!-- 高级折叠组（P1）：低频精调项收拢；summary 常显关键状态，折叠不失明 -->
+  <details class="rps-adv" id="rps-adv">
+    <summary>
+      <span class="rps-adv-caret">▸</span>{{ (i18n or {}).get('rps_adv_title', "高级设置") }}
+      <span class="rps-adv-sum" id="rps-adv-sum"></span>
+    </summary>
+
+    <!-- 语音回复 -->
+    <div class="rps-card">
+      <h3>🎙️ {{ (i18n or {}).get('rps_voice_title', "语音回复") }}
+        <span class="rps-chip" data-hot-chip="inbox.l2_autosend.voice.enabled"></span></h3>
+      <div class="rps-row" style="border-top:none">
+        <span class="rps-row-label">{{ (i18n or {}).get('rps_voice_enabled', "启用语音回复") }}</span>
+        <label class="rps-switch"><input type="checkbox" id="rps-voice" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
+        <span class="rps-row-hint">{{ (i18n or {}).get('rps_voice_enabled_hint', "全自动链路按触发方式把部分回复以克隆声语音发出") }}</span>
+      </div>
+      <div class="rps-row">
+        <span class="rps-row-label">{{ (i18n or {}).get('rps_voice_trigger', "触发方式") }}</span>
+        <select class="rps-select" id="rps-voice-trigger" onchange="rpsMarkDirty()">
+          <option value="never">{{ (i18n or {}).get('rps_vt_never', "从不") }}</option>
+          <option value="always">{{ (i18n or {}).get('rps_vt_always', "总是") }}</option>
+          <option value="when_peer_voice">{{ (i18n or {}).get('rps_vt_when_peer_voice', "对方发语音才回语音") }}</option>
+          <option value="smart">{{ (i18n or {}).get('rps_vt_smart', "智能（按情绪 / 亲密度评分）") }}</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- 缓冲话术 -->
+    <div class="rps-card">
+      <h3>🕊️ {{ (i18n or {}).get('rps_holding_title', "人审期缓冲话术") }}
+        <span class="rps-chip" data-hot-chip="inbox.l2_autosend.holding.enabled"></span></h3>
+      <div class="rps-row" style="border-top:none">
+        <span class="rps-row-label">{{ (i18n or {}).get('rps_holding_label', "待人审消息先发一句缓冲语") }}</span>
+        <label class="rps-switch"><input type="checkbox" id="rps-holding" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
+        <span class="rps-row-hint">{{ (i18n or {}).get('rps_holding_hint', "需人工审批的消息（L3）先回「稍等我看看哈~」，避免客户被已读不回") }}</span>
+      </div>
+    </div>
+
+    <!-- 按人设覆写节奏（P1） -->
+    <div class="rps-card">
+      <h3>🎭 {{ (i18n or {}).get('rps_po_title', "按人设覆写节奏") }}
+        <span class="rps-chip" data-hot-chip="inbox.l2_autosend.deliver_delay.persona_overrides"></span></h3>
+      <p class="rps-hint">{{ (i18n or {}).get('rps_po_hint', "不同人设可以有不同打字节奏（急性子快、慢热型慢）。留空的格子跟随上方全局值；表里没有的人设全按全局。") }}</p>
+      <table class="rps-po-table">
+        <thead><tr>
+          <th>{{ (i18n or {}).get('rps_po_persona', "人设 ID") }}</th>
+          <th>{{ (i18n or {}).get('rps_po_min', "最快（秒）") }}</th>
+          <th>{{ (i18n or {}).get('rps_po_max', "最慢（秒）") }}</th>
+          <th>{{ (i18n or {}).get('rps_po_adaptive', "自适应") }}</th>
+          <th></th>
+        </tr></thead>
+        <tbody id="rps-po-body"></tbody>
+      </table>
+      <div class="rps-po-empty" id="rps-po-empty" style="display:none">{{ (i18n or {}).get('rps_po_empty', "暂无覆写——全部人设使用全局节奏") }}</div>
+      <button class="rps-po-add" onclick="rpsPoAdd()">{{ (i18n or {}).get('rps_po_add', "＋ 添加人设覆写") }}</button>
+      <datalist id="rps-po-personas"></datalist>
+    </div>
+  </details>
+</div>
+
+<!-- 保存条 -->
+<div class="rps-savebar" id="rps-savebar">
+  <div class="rps-diff-panel" id="rps-diff-panel" style="display:none"></div>
+  <div class="rps-savebar-inner">
+    <span class="rps-dirty-txt" id="rps-dirty-txt">● {{ (i18n or {}).get('rps_dirty', "有未保存的修改") }}</span>
+    <button class="rps-btn rps-btn-ghost" id="rps-diff-btn" onclick="rpsToggleDiff()" style="margin-left:auto">📋 {{ (i18n or {}).get('rps_diff_btn', "改动明细") }}</button>
+    <button class="rps-btn rps-btn-ghost" onclick="rpsReset()">{{ (i18n or {}).get('rps_reset', "还原") }}</button>
+    <button class="rps-btn rps-btn-save" id="rps-save-btn" onclick="rpsSave()">{{ (i18n or {}).get('rps_save', "保存修改") }}</button>
+  </div>
+</div>
+<div class="rps-toast" id="rps-toast"></div>
+
+<script>
+var RPS_I18N = {
+  chipHot: {{ (i18n or {}).get('rps_chip_hot', "保存即生效")|tojson }},
+  chipRestart: {{ (i18n or {}).get('rps_chip_restart', "重启后生效")|tojson }},
+  gateOn: {{ (i18n or {}).get('rps_gate_on', "已开启")|tojson }},
+  gateOff: {{ (i18n or {}).get('rps_gate_off', "未开启")|tojson }},
+  platformCaps: {{ (i18n or {}).get('rps_gate_platform_caps', "平台档位上限")|tojson }},
+  previewRange: {{ (i18n or {}).get('rps_preview_range', "约 {min}–{max} 秒后送达")|tojson }},
+  previewZero: {{ (i18n or {}).get('rps_preview_zero', "无延迟（秒回，易显机器人）")|tojson }},
+  ccWarnTitle: {{ (i18n or {}).get('rps_cc_warn_title', "⚠️ 有发送链正在秒回")|tojson }},
+  ccWarnDesc: {{ (i18n or {}).get('rps_cc_warn_desc', "以下自动回复链路当前没有吃到任何节奏配置，回复会即时发出（易显机器人）。")|tojson }},
+  ccOkTitle: {{ (i18n or {}).get('rps_cc_ok_title', "✅ 回复节奏已覆盖全部发送链")|tojson }},
+  ccOkDesc: {{ (i18n or {}).get('rps_cc_ok_desc', "本机会自动外发的每条链路都有生效的拟人延迟。")|tojson }},
+  ccChain: {
+    native_tg: {{ (i18n or {}).get('rps_cc_chain_native', "主号原生回复")|tojson }},
+    autosend: {{ (i18n or {}).get('rps_cc_chain_autosend', "收件箱全自动投递")|tojson }},
+    protocol: {{ (i18n or {}).get('rps_cc_chain_protocol', "协议号 7×24 直发")|tojson }}
+  },
+  ccInactive: {{ (i18n or {}).get('rps_cc_inactive', "未启用")|tojson }},
+  ccZero: {{ (i18n or {}).get('rps_cc_zero', "秒回")|tojson }},
+  ccRange: {{ (i18n or {}).get('rps_cc_range', "{min}–{max} 秒")|tojson }},
+  ccSrcSlider: {{ (i18n or {}).get('rps_cc_src_slider', "跟随本页滑杆")|tojson }},
+  ccSrcOwn: {{ (i18n or {}).get('rps_cc_src_own', "独立配置：{src}")|tojson }},
+  ccSrcDefault: {{ (i18n or {}).get('rps_cc_src_default', "出厂默认拟人节奏（未配置，自动兜底）")|tojson }},
+  savedLive: {{ (i18n or {}).get('rps_saved_live', "已保存并即时生效")|tojson }},
+  savedPartial: {{ (i18n or {}).get('rps_saved_partial', "已保存；以下设置将在下次重启后生效：")|tojson }},
+  saveFailed: {{ (i18n or {}).get('rps_save_failed', "保存失败")|tojson }},
+  loadFailed: {{ (i18n or {}).get('rps_load_failed', "加载失败，请刷新重试")|tojson }},
+  poFollow: {{ (i18n or {}).get('rps_po_follow', "跟随全局")|tojson }},
+  poDup: {{ (i18n or {}).get('rps_po_dup', "人设 ID 重复，请合并后再保存")|tojson }},
+  poDel: {{ (i18n or {}).get('rps_po_del', "删除")|tojson }},
+  poExtraNote: {{ (i18n or {}).get('rps_po_extra_note', "该人设另有本页不管理的高级键（保存不会丢）")|tojson }},
+  wsAllDays: {{ (i18n or {}).get('rps_ws_js_alldays', "每天")|tojson }},
+  wsTzFollow: {{ (i18n or {}).get('rps_ws_js_tzfollow', "跟随全局")|tojson }},
+  wsExempt: {{ (i18n or {}).get('rps_ws_js_exempt', "豁免班表（全天候）")|tojson }},
+  wsDup: {{ (i18n or {}).get('rps_ws_js_dup', "账号键重复，请合并后再保存")|tojson }},
+  wsXLabel: {{ (i18n or {}).get('rps_ws_js_x_label', "工作时间")|tojson }},
+  wsXOn: {{ (i18n or {}).get('rps_ws_js_x_on', "在班")|tojson }},
+  wsXOff: {{ (i18n or {}).get('rps_ws_js_x_off', "休息中")|tojson }},
+  wsXOpenAt: {{ (i18n or {}).get('rps_ws_js_x_openat', "{t} 复班")|tojson }},
+  wsXCloseAt: {{ (i18n or {}).get('rps_ws_js_x_closeat', "{t} 下班")|tojson }},
+  wsXAlways: {{ (i18n or {}).get('rps_ws_js_x_always', "未配置班表（全天候）")|tojson }},
+  rtLive: {{ (i18n or {}).get('rps_rt_live', "线上正在用")|tojson }},
+  rtDelay: {{ (i18n or {}).get('rps_rt_delay', "延迟 {min}–{max} 秒")|tojson }},
+  rtAdaptiveOn: {{ (i18n or {}).get('rps_rt_adaptive_on', "自适应开")|tojson }},
+  rtAdaptiveOff: {{ (i18n or {}).get('rps_rt_adaptive_off', "自适应关")|tojson }},
+  rtOverrides: {{ (i18n or {}).get('rps_rt_overrides', "{n} 个人设覆写")|tojson }},
+  rtNone: {{ (i18n or {}).get('rps_rt_none', "回复通道未接通（worker 未运行）")|tojson }},
+  obsTitle: {{ (i18n or {}).get('rps_obs_title', "实测节奏（进程启动以来）")|tojson }},
+  obsSummary: {{ (i18n or {}).get('rps_obs_summary', "共 {n} 次投递 · 平均 {avg}s · 最长 {max}s · 自适应 {ad}%")|tojson }},
+  obsEmpty: {{ (i18n or {}).get('rps_obs_empty', "尚无实测采样——有全自动投递后这里会显示真实节奏分布")|tojson }},
+  obsNoPersona: {{ (i18n or {}).get('rps_obs_nopersona', "默认人设")|tojson }},
+  obsNative: {{ (i18n or {}).get('rps_obs_native', "另有 A 线原生 TG 思考延迟 {n} 次（平均 {avg}s，由 telegram.reply_humanize 管理，不受本页控制）")|tojson }},
+  obsProtocol: {{ (i18n or {}).get('rps_obs_protocol', "另有协议号 7×24 直发思考延迟 {n} 次（平均 {avg}s；未配 protocol_autoreply.delay 独立覆写时跟随本页节奏）")|tojson }},
+  obsBubbleGap: {{ (i18n or {}).get('rps_obs_bubble_gap', "分条条间实测 {n} 次（平均 {avg}s · 最长 {max}s）——条间＝想＋打字，随下一条长度变化")|tojson }},
+  obsHumTitle: {{ (i18n or {}).get('rps_obs_hum_title', "已读 / 打字实测（按平台，成功/失败）")|tojson }},
+  obsRead: {{ (i18n or {}).get('rps_obs_read', "已读")|tojson }},
+  obsTyping: {{ (i18n or {}).get('rps_obs_typing', "打字")|tojson }},
+  styleOvNote: {{ (i18n or {}).get('rps_style_ov_note', "共 {p} 个人设：{l} 个自定义了长度、{e} 个自定义了 emoji——它们不吃这里的默认值。")|tojson }},
+  styleOvLink: {{ (i18n or {}).get('rps_style_ov_link', "去人设工作室查看 →")|tojson }},
+  dirtyN: {{ (i18n or {}).get('rps_dirty_n', "{n} 项未保存的修改")|tojson }},
+  capsLbl: {{ (i18n or {}).get('rps_caps_lbl', "平台支持")|tojson }},
+  capOk: {{ (i18n or {}).get('rps_cap_ok', "支持")|tojson }},
+  capOff: {{ (i18n or {}).get('rps_cap_off', "该链路不支持，自动跳过")|tojson }},
+  capHard: {{ (i18n or {}).get('rps_cap_hard', "协议层不支持（对方平台没有这个端点），自动跳过")|tojson }},
+  capPartial: {{ (i18n or {}).get('rps_cap_partial', "部分账号模式支持")|tojson }},
+  capUnknown: {{ (i18n or {}).get('rps_cap_unknown', "未知（当前环境无法判定）")|tojson }},
+  capNote: {{ (i18n or {}).get('rps_cap_note', "档位封顶：{list}——这些平台实际执行不超过封顶档（config 键 inbox.auto_draft.platform_modes，改动后需重启）")|tojson }},
+  diffOverrides: {{ (i18n or {}).get('rps_diff_overrides', "{n} 条人设覆写")|tojson }},
+  diffEmpty: {{ (i18n or {}).get('rps_diff_empty', "（空）")|tojson }},
+  diffPlatforms: {{ (i18n or {}).get('rps_diff_platforms', "{n} 个平台")|tojson }},
+  platCapNone: {{ (i18n or {}).get('rps_plat_cap_none', "不封顶")|tojson }},
+  platUnsupported: {{ (i18n or {}).get('rps_plat_unsupported', "该平台协议/链路不支持此能力")|tojson }},
+  presetMeta: {
+    cautious: {name: {{ (i18n or {}).get('rps_preset_cautious', "谨慎养号")|tojson }}, desc: {{ (i18n or {}).get('rps_preset_cautious_d', "新号 / 防风控：慢节奏全拟人，回复简短克制，语音只跟随对方")|tojson }}},
+    natural: {name: {{ (i18n or {}).get('rps_preset_natural', "自然真人")|tojson }}, desc: {{ (i18n or {}).get('rps_preset_natural_d', "日常运营平衡档：3-12 秒自适应节奏，长度适中")|tojson }}, badge: {{ (i18n or {}).get('rps_preset_recommended', "推荐")|tojson }}},
+    rapid: {name: {{ (i18n or {}).get('rps_preset_rapid', "快速响应")|tojson }}, desc: {{ (i18n or {}).get('rps_preset_rapid_d', "客服 / 效率场景：几乎即回，简短直接，不发语音")|tojson }}}
+  },
+  presetKv: {{ (i18n or {}).get('rps_preset_kv', "延迟 {min}–{max}s · 长度 {len} · 语音 {vt}")|tojson }},
+  presetCurrent: {{ (i18n or {}).get('rps_preset_current', "当前匹配：{name}")|tojson }},
+  presetCustom: {{ (i18n or {}).get('rps_preset_custom', "自定义（不匹配任何预设）")|tojson }},
+  presetDiff: {{ (i18n or {}).get('rps_preset_diff', "应用后将改动 {n} 项：{fields}")|tojson }},
+  presetNodiff: {{ (i18n or {}).get('rps_preset_nodiff', "与当前配置一致，应用不产生改动")|tojson }},
+  pvPlay: {{ (i18n or {}).get('rps_pv_play', "播放预览")|tojson }},
+  pvPlaying: {{ (i18n or {}).get('rps_pv_playing', "播放中…")|tojson }},
+  pvResult: {{ (i18n or {}).get('rps_pv_result', "本次抽样 {s} 秒送达")|tojson }},
+  pvSpeedup: {{ (i18n or {}).get('rps_pv_speedup', "{x}× 加速")|tojson }},
+  advSum: {{ (i18n or {}).get('rps_adv_sum', "语音 {v} · 缓冲 {h} · 人设覆写 {n}")|tojson }},
+  scoreLabel: {{ (i18n or {}).get('rps_score_label', "拟人度 {n}")|tojson }},
+  scoreNatural: {{ (i18n or {}).get('rps_score_natural', "自然")|tojson }},
+  scoreMid: {{ (i18n or {}).get('rps_score_mid', "一般")|tojson }},
+  scoreBot: {{ (i18n or {}).get('rps_score_bot', "易显机器")|tojson }},
+  scoreMissing: {{ (i18n or {}).get('rps_score_missing', "可提升：{items}")|tojson }},
+  scoreDelayItem: {{ (i18n or {}).get('rps_score_delay_item', "延迟进 3s+ 自然区间")|tojson }},
+  valShort: {
+    concise: {{ (i18n or {}).get('rps_val_concise', "简短")|tojson }},
+    moderate: {{ (i18n or {}).get('rps_val_moderate', "适中")|tojson }},
+    detailed: {{ (i18n or {}).get('rps_val_detailed', "详细")|tojson }},
+    /* 人设侧旧值别名（short/medium/long）——缺映射时溯源卡直接露裸英文（截图实锤 "short"） */
+    short: {{ (i18n or {}).get('rps_val_concise', "简短")|tojson }},
+    medium: {{ (i18n or {}).get('rps_val_moderate', "适中")|tojson }},
+    long: {{ (i18n or {}).get('rps_val_detailed', "详细")|tojson }}
+  },
+  vtShort: {
+    never: {{ (i18n or {}).get('rps_vt_never', "从不")|tojson }},
+    always: {{ (i18n or {}).get('rps_vt_always', "总是")|tojson }},
+    when_peer_voice: {{ (i18n or {}).get('rps_vt_short_peer', "跟随对方")|tojson }},
+    smart: {{ (i18n or {}).get('rps_vt_smart', "智能（按情绪 / 亲密度评分）")|tojson }}
+  },
+  obsStyleTitle: {{ (i18n or {}).get('rps_obs_style_title', "实测（近 200 条真实回复）")|tojson }},
+  obsStyleLine: {{ (i18n or {}).get('rps_obs_style_line', "实测回复长度（近 {n} 条）：平均 {avg} 字 · 中位 {p50} · P90 {p90}")|tojson }},
+  obsStyleBuckets: {{ (i18n or {}).get('rps_obs_style_buckets', "简短带(≤60字) {s} 条 · 适中带(61-160) {m} 条 · 详细带(>160) {l} 条")|tojson }},
+  xSub: {{ (i18n or {}).get('rps_x_sub', "会话 {chat}（{platform}）· 来源标签＝该参数由哪一层决定；本条仅展示，改动仍在下方各卡片。")|tojson }},
+  xMode: {{ (i18n or {}).get('rps_x_mode', "档位")|tojson }},
+  xPersona: {{ (i18n or {}).get('rps_x_persona', "人设")|tojson }},
+  xPersonaNone: {{ (i18n or {}).get('rps_x_persona_none', "默认（未绑定专属人设）")|tojson }},
+  xDelay: {{ (i18n or {}).get('rps_x_delay', "延迟")|tojson }},
+  xAdaptive: {{ (i18n or {}).get('rps_pace_adaptive', "按内容长度自适应")|tojson }},
+  xOn: {{ (i18n or {}).get('rps_x_on', "开")|tojson }},
+  xOff: {{ (i18n or {}).get('rps_x_off', "关")|tojson }},
+  xLength: {{ (i18n or {}).get('rps_style_length', "回复长度")|tojson }},
+  xMaxSent: {{ (i18n or {}).get('rps_x_maxsent', "句数 ≤{n}")|tojson }},
+  xEmoji: {{ (i18n or {}).get('rps_style_emoji', "emoji 密度")|tojson }},
+  xTone: {{ (i18n or {}).get('rps_style_tone', "一句话风格要求")|tojson }},
+  xUnset: {{ (i18n or {}).get('rps_x_unset', "未约束")|tojson }},
+  xLoadFail: {{ (i18n or {}).get('rps_x_load_fail', "会话生效值读取失败（不影响下方设置）")|tojson }},
+  srcLabels: {
+    conversation: {{ (i18n or {}).get('rps_src_conversation', "会话设置")|tojson }},
+    persona: {{ (i18n or {}).get('rps_src_persona', "人设")|tojson }},
+    platform: {{ (i18n or {}).get('rps_src_platform', "平台")|tojson }},
+    global: {{ (i18n or {}).get('rps_src_global', "全局")|tojson }},
+    "default": {{ (i18n or {}).get('rps_src_default', "缺省")|tojson }}
+  },
+  modeNames: {
+    manual: {{ (i18n or {}).get('rps_mode_manual', "手动")|tojson }},
+    review: {{ (i18n or {}).get('rps_mode_review', "拟稿人审")|tojson }},
+    multi_choice: {{ (i18n or {}).get('rps_mode_multi', "多选一")|tojson }},
+    auto_ai: {{ (i18n or {}).get('rps_mode_auto', "全自动")|tojson }}
+  },
+  emojiShort: {
+    none: {{ (i18n or {}).get('rps_style_emoji_none', "不用 emoji")|tojson }},
+    minimal: {{ (i18n or {}).get('rps_val_emoji_minimal', "极少")|tojson }},
+    moderate: {{ (i18n or {}).get('rps_val_emoji_moderate', "适中")|tojson }},
+    rich: {{ (i18n or {}).get('rps_val_emoji_rich', "较多")|tojson }},
+    high: {{ (i18n or {}).get('rps_val_emoji_rich', "较多")|tojson }}
+  },
+  fieldNames: {
+    "inbox.auto_draft.automation_mode": {{ (i18n or {}).get('rps_mode_title', "默认自动化档位")|tojson }},
+    "inbox.auto_draft.bootstrap_automation_mode": {{ (i18n or {}).get('rps_bootstrap_label', "新会话自动沿用此档位")|tojson }},
+    "inbox.auto_draft.min_text_len": {{ (i18n or {}).get('rps_minlen_label', "触发拟稿的最短消息长度")|tojson }},
+    "inbox.l2_autosend.deliver_delay.min_sec": {{ (i18n or {}).get('rps_pace_min', "最快（秒）")|tojson }},
+    "inbox.l2_autosend.deliver_delay.max_sec": {{ (i18n or {}).get('rps_pace_max', "最慢（秒）")|tojson }},
+    "inbox.l2_autosend.deliver_delay.adaptive": {{ (i18n or {}).get('rps_pace_adaptive', "按内容长度自适应")|tojson }},
+    "inbox.l2_autosend.deliver_delay.persona_overrides": {{ (i18n or {}).get('rps_po_title', "按人设覆写节奏")|tojson }},
+    "inbox.l2_autosend.mark_read_before_reply": {{ (i18n or {}).get('rps_markread_label', "回复前先标已读")|tojson }},
+    "inbox.l2_autosend.typing_indicator": {{ (i18n or {}).get('rps_typing_label', "延迟期间显示「正在输入」")|tojson }},
+    "inbox.l2_autosend.voice.enabled": {{ (i18n or {}).get('rps_voice_enabled', "启用语音回复")|tojson }},
+    "inbox.l2_autosend.voice.trigger": {{ (i18n or {}).get('rps_voice_trigger', "触发方式")|tojson }},
+    "inbox.l2_autosend.holding.enabled": {{ (i18n or {}).get('rps_holding_label', "待人审消息先发一句缓冲语")|tojson }},
+    "ai.reply_defaults.length": {{ (i18n or {}).get('rps_style_length', "回复长度")|tojson }},
+    "ai.reply_defaults.max_sentences": {{ (i18n or {}).get('rps_style_maxsent', "最多句数")|tojson }},
+    "ai.reply_defaults.emoji_level": {{ (i18n or {}).get('rps_style_emoji', "emoji 密度")|tojson }},
+    "ai.reply_defaults.tone_hint": {{ (i18n or {}).get('rps_style_tone', "一句话风格要求")|tojson }},
+    "inbox.auto_draft.platform_modes": {{ (i18n or {}).get('rps_plat_col_cap', "档位封顶")|tojson }},
+    "inbox.l2_autosend.deliver_delay.platform_overrides": {{ (i18n or {}).get('rps_plat_fn_delay', "平台节奏覆写")|tojson }},
+    "inbox.l2_autosend.platform_humanize": {{ (i18n or {}).get('rps_plat_fn_flags', "平台拟人开关")|tojson }},
+    "inbox.l2_autosend.voice.platform_triggers": {{ (i18n or {}).get('rps_plat_col_voice', "语音触发")|tojson }},
+    "inbox.work_schedule.enabled": {{ (i18n or {}).get('rps_ws_enabled', "启用工作时间班表")|tojson }},
+    "inbox.work_schedule.timezone": {{ (i18n or {}).get('rps_ws_tz', "班表时区")|tojson }},
+    "inbox.work_schedule.default.workdays": {{ (i18n or {}).get('rps_ws_days', "工作日")|tojson }},
+    "inbox.work_schedule.default.start": {{ (i18n or {}).get('rps_ws_acct_start', "上班")|tojson }},
+    "inbox.work_schedule.default.end": {{ (i18n or {}).get('rps_ws_acct_end', "下班")|tojson }},
+    "inbox.work_schedule.edge_jitter_min": {{ (i18n or {}).get('rps_ws_jitter', "边界抖动（±分钟）")|tojson }},
+    "inbox.work_schedule.crisis_bypass": {{ (i18n or {}).get('rps_ws_crisis', "危机消息豁免")|tojson }},
+    "inbox.work_schedule.off_hours.generate_drafts": {{ (i18n or {}).get('rps_ws_gendrafts', "休息期仍拟稿")|tojson }},
+    "inbox.work_schedule.off_hours.catch_up": {{ (i18n or {}).get('rps_ws_catchup', "复班补觉回复")|tojson }},
+    "inbox.work_schedule.off_hours.catch_up_regenerate_hours": {{ (i18n or {}).get('rps_ws_regenh', "重拟阈值（小时）")|tojson }},
+    "inbox.work_schedule.accounts": {{ (i18n or {}).get('rps_ws_acct_title', "账号班表覆写")|tojson }}
+  }
+};
+
+var rpsBaseline = {};   // 服务端最近一次快照（还原/脏检测基线）
+var rpsSaving = false;
+var RPS_PO_KEY = "inbox.l2_autosend.deliver_delay.persona_overrides";
+var RPS_PO_EDIT_KEYS = ["min_sec", "max_sec", "adaptive"];
+var rpsPoDupFlag = false;   // 覆写表当前是否有重复人设 ID（保存前拦）
+var RPS_PRESETS = {};       // 服务端预设定义（P1；键集与白名单同源）
+var rpsWsDupFlag = false;   // 账号班表覆写表是否有重复账号键（保存前拦）
+var rpsWsEnabled = false;   // 后端是否已装载 work_schedule 白名单（旧进程隐藏整卡）
+
+/* ── 字段注册表（P0-R，2026-08-03）：控件绑定的单一事实源 ──
+   收集 / 回填 / 预设应用 / 改动明细全部由此驱动。此前同一份「字段→控件」映射在
+   rpsCollect / rpsFill / RPS_PRESET_TARGETS / rpsApplyPreset 手抄了四份，加一个
+   字段要同步改四处，漏一处＝静默失真（改了不脏 / 保存丢字段）。 */
+var RPS_FIELD_DEFS = [
+  {path: "inbox.auto_draft.automation_mode", kind: "radio", name: "rps-mode", dflt: "auto_ai"},
+  {path: "inbox.auto_draft.bootstrap_automation_mode", kind: "check", el: "rps-bootstrap"},
+  {path: "inbox.auto_draft.min_text_len", kind: "int", el: "rps-minlen"},
+  {path: "inbox.l2_autosend.deliver_delay.min_sec", kind: "float", el: "rps-min"},
+  {path: "inbox.l2_autosend.deliver_delay.max_sec", kind: "float", el: "rps-max"},
+  {path: "inbox.l2_autosend.deliver_delay.adaptive", kind: "check", el: "rps-adaptive"},
+  {path: "inbox.l2_autosend.mark_read_before_reply", kind: "check", el: "rps-markread"},
+  {path: "inbox.l2_autosend.typing_indicator", kind: "check", el: "rps-typing"},
+  {path: "inbox.l2_autosend.voice.enabled", kind: "check", el: "rps-voice"},
+  {path: "inbox.l2_autosend.voice.trigger", kind: "select", el: "rps-voice-trigger", dflt: "when_peer_voice"},
+  {path: "inbox.l2_autosend.holding.enabled", kind: "check", el: "rps-holding"},
+  {path: "ai.reply_defaults.length", kind: "select", el: "rps-style-length"},
+  {path: "ai.reply_defaults.max_sentences", kind: "int", el: "rps-style-maxsent"},
+  {path: "ai.reply_defaults.emoji_level", kind: "select", el: "rps-style-emoji"},
+  {path: "ai.reply_defaults.tone_hint", kind: "text", el: "rps-style-tone"}
+];
+var RPS_DEFS_BY_PATH = {};
+RPS_FIELD_DEFS.forEach(function(d){ RPS_DEFS_BY_PATH[d.path] = d; });
+
+function rpsFieldGet(def){
+  if (def.kind === "virtual") return def.vget();
+  if (def.kind === "radio"){
+    var r = document.querySelector('input[name="' + def.name + '"]:checked');
+    return r ? r.value : null;
+  }
+  var el = document.getElementById(def.el);
+  if (!el) return null;
+  if (def.kind === "check") return el.checked;
+  if (def.kind === "int") return parseInt(el.value || "0", 10);
+  if (def.kind === "float") return parseFloat(el.value || "0");
+  if (def.kind === "text") return (el.value || "").trim();
+  return el.value;
+}
+
+function rpsFieldSet(def, v){
+  if (def.kind === "virtual"){ def.vset(v); return; }
+  if (def.kind === "radio"){
+    var val = String(v || def.dflt || "");
+    document.querySelectorAll('input[name="' + def.name + '"]').forEach(function(r){
+      r.checked = (r.value === val);
+    });
+    return;
+  }
+  var el = document.getElementById(def.el);
+  if (!el) return;
+  if (def.kind === "check"){ el.checked = !!v; return; }
+  if (def.kind === "int" || def.kind === "float"){ el.value = v || 0; return; }
+  el.value = v || def.dflt || "";
+}
+
+function rpsFieldHost(def){
+  // 预设闪烁的宿主容器（改动定位）：radio 用选中项所在卡，其余用行/滑块格
+  var el = def.kind === "radio"
+    ? document.querySelector('input[name="' + def.name + '"]:checked')
+    : document.getElementById(def.el);
+  if (!el) return null;
+  return el.closest('.rps-row') || el.closest('.rps-pace-cell')
+    || el.closest('.rps-mode') || el;
+}
+
+/* ── 平台能力清单（P0-caps）：已读/打字按平台三态 chips ──
+   数据 = /api/reply-settings 的 platform_caps（capability_matrix 现算，与编排器
+   运行时 hasattr 判据同源）。字段缺席（旧进程未装载新路由）→ 整块隐藏——
+   宁可少说，绝不再手写平台名（旧 hint「当前 Telegram 协议号支持」已实证烂掉）。 */
+var RPS_PLAT_NAMES = {telegram: "Telegram", whatsapp: "WhatsApp", line: "LINE", messenger: "Messenger"};
+var RPS_PLAT_ORDER = ["telegram", "whatsapp", "line", "messenger"];
+
+function rpsRenderCaps(caps){
+  [["rps-caps-markread", "mark_read"], ["rps-caps-typing", "typing"]].forEach(function(pair){
+    var el = document.getElementById(pair[0]);
+    if (!el) return;
+    var plats = caps ? RPS_PLAT_ORDER.filter(function(p){ return caps[p]; })
+      .concat(Object.keys(caps).filter(function(p){ return RPS_PLAT_ORDER.indexOf(p) < 0; }).sort()) : [];
+    if (!plats.length){ el.style.display = "none"; el.innerHTML = ""; return; }
+    el.innerHTML = '<span class="rps-caps-lbl">' + rpsEsc(RPS_I18N.capsLbl) + '</span>'
+      + plats.map(function(p){
+          var st = (caps[p] || {})[pair[1]] || {};
+          var name = RPS_PLAT_NAMES[p] || p;
+          var cls = "", mark = "✕", tip = st.hard ? RPS_I18N.capHard : RPS_I18N.capOff;
+          if (st.state === "ok"){ cls = "ok"; mark = "✓"; tip = RPS_I18N.capOk; }
+          else if (st.state === "partial"){ cls = "part"; mark = "◐"; tip = RPS_I18N.capPartial; }
+          else if (st.state === "unknown"){ mark = "?"; tip = RPS_I18N.capUnknown; }
+          return '<span class="rps-cap-chip ' + cls + '" title="' + rpsEsc(name + ' · ' + tip) + '">'
+            + mark + ' ' + rpsEsc(name) + '</span>';
+        }).join('');
+    el.style.display = "";
+  });
+}
+
+function rpsPlatformCapsHuman(capsMap){
+  // {messenger: "review"} → "Messenger → 拟稿人审"（总闸 chip 与档位卡提示共用同一句人话）
+  return Object.keys(capsMap).sort().map(function(k){
+    return (RPS_PLAT_NAMES[k] || k) + ' → ' + (RPS_I18N.modeNames[capsMap[k]] || capsMap[k]);
+  }).join(' · ');
+}
+
+/* ── 保存条改动明细（P0-diff）：老值 → 新值逐项列出（枚举走既有短词表） ── */
+function rpsFmtVal(path, v){
+  if (path === RPS_PO_KEY) return RPS_I18N.diffOverrides.replace('{n}', Object.keys(v || {}).length);
+  if (v !== null && typeof v === "object")
+    return RPS_I18N.diffPlatforms.replace('{n}', Object.keys(v || {}).length);
+  if (typeof v === "boolean") return v ? RPS_I18N.xOn : RPS_I18N.xOff;
+  if (v === "" || v === undefined || v === null) return RPS_I18N.diffEmpty;
+  var maps = [RPS_I18N.modeNames, RPS_I18N.valShort, RPS_I18N.vtShort, RPS_I18N.emojiShort];
+  for (var i = 0; i < maps.length; i++){
+    if (maps[i] && Object.prototype.hasOwnProperty.call(maps[i], v)) return maps[i][v];
+  }
+  return String(v);
+}
+
+function rpsRenderDiff(){
+  var panel = document.getElementById('rps-diff-panel');
+  if (!panel || panel.style.display === 'none') return;
+  var changes = rpsDiff(), keys = Object.keys(changes);
+  if (!keys.length){ panel.style.display = 'none'; return; }
+  panel.innerHTML = keys.map(function(k){
+    var proj = RPS_PROJECT_KEYS[k];
+    var base = proj ? rpsProjectTable(rpsBaseline[k] || {}, proj) : rpsBaseline[k];
+    return '<div class="rps-diff-row"><span class="rps-diff-name">' + rpsEsc(RPS_I18N.fieldNames[k] || k)
+      + '</span><span class="rps-diff-old">' + rpsEsc(rpsFmtVal(k, base))
+      + '</span><span>→</span><span class="rps-diff-new">' + rpsEsc(rpsFmtVal(k, changes[k])) + '</span></div>';
+  }).join('');
+}
+
+function rpsToggleDiff(){
+  var panel = document.getElementById('rps-diff-panel');
+  if (!panel) return;
+  if (panel.style.display === 'none'){ panel.style.display = ''; rpsRenderDiff(); }
+  else { panel.style.display = 'none'; }
+}
+
+/* ── 平台专家覆写矩阵（P1，2026-08-03）──────────────────────────
+   一张 平台 × 旋钮 矩阵：档位封顶 / 节奏三键 / 已读 / 打字 / 语音触发。
+   仅当后端快照含平台字段（rpsPlatEnabled，看 meta）才参与收集/回填——旧进程
+   （未装载新白名单）下整卡隐藏，防「前端造出后端不认的键」的假脏与保存被拒。
+   能力不支持的格子按 platform_caps 实况禁用（服务端另有同源写入护栏）。 */
+var RPS_PM_KEY = "inbox.auto_draft.platform_modes";
+var RPS_PLATOV_KEY = "inbox.l2_autosend.deliver_delay.platform_overrides";
+var RPS_PH_KEY = "inbox.l2_autosend.platform_humanize";
+var RPS_PVT_KEY = "inbox.l2_autosend.voice.platform_triggers";
+var rpsPlatEnabled = false;
+var rpsPlatState = {modes: {}, delays: {}, flags: {}, voices: {}, caps: null};
+var RPS_MODE_VALUES = ["manual", "review", "multi_choice", "auto_ai"];
+var RPS_VT_VALUES = ["never", "always", "when_peer_voice", "smart"];
+// 脏检测的条目投影键：基线条目可能带 YAML 手调键（per_char_sec 等），只比 UI 管理键
+var RPS_PROJECT_KEYS = {};
+RPS_PROJECT_KEYS[RPS_PO_KEY] = RPS_PO_EDIT_KEYS;
+RPS_PROJECT_KEYS[RPS_PLATOV_KEY] = RPS_PO_EDIT_KEYS;
+RPS_PROJECT_KEYS[RPS_PH_KEY] = ["mark_read", "typing"];
+
+function rpsPlatSelect(attr, options, cur, followLabel, disabled, title){
+  var h = '<select data-plat="' + rpsEsc(attr) + '"'
+    + (disabled ? ' disabled title="' + rpsEsc(title || '') + '"' : '') + '>'
+    + '<option value=""' + (cur === '' ? ' selected' : '') + '>' + rpsEsc(followLabel) + '</option>';
+  options.forEach(function(o){
+    h += '<option value="' + rpsEsc(o.v) + '"' + (cur === o.v ? ' selected' : '') + '>' + rpsEsc(o.t) + '</option>';
+  });
+  return h + '</select>';
+}
+
+function rpsPlatRow(p){
+  var d = rpsPlatState.delays[p] || {};
+  var f = rpsPlatState.flags[p] || {};
+  var caps = rpsPlatState.caps;
+  var vmin = (d.min_sec === undefined || d.min_sec === null) ? '' : d.min_sec;
+  var vmax = (d.max_sec === undefined || d.max_sec === null) ? '' : d.max_sec;
+  var vad = (d.adaptive === undefined || d.adaptive === null) ? '' : (d.adaptive ? '1' : '0');
+  function flagCell(key){
+    var st = (caps && caps[p]) ? (caps[p][key] || {}) : null;
+    var dis = !!(st && st.state === 'unsupported');
+    var cur = (f[key] === undefined || f[key] === null) ? '' : (f[key] ? '1' : '0');
+    return '<td>' + rpsPlatSelect(key,
+      [{v: '1', t: RPS_I18N.xOn}, {v: '0', t: RPS_I18N.xOff}],
+      cur, RPS_I18N.poFollow, dis, RPS_I18N.platUnsupported) + '</td>';
+  }
+  return '<tr data-plat-row="' + rpsEsc(p) + '">'
+    + '<td class="rps-plat-name">' + rpsEsc(RPS_PLAT_NAMES[p] || p) + '</td>'
+    + '<td>' + rpsPlatSelect('cap',
+        RPS_MODE_VALUES.map(function(m){ return {v: m, t: RPS_I18N.modeNames[m] || m}; }),
+        rpsPlatState.modes[p] || '', RPS_I18N.platCapNone) + '</td>'
+    + '<td><input type="number" min="0" max="600" step="0.5" data-plat="min_sec" value="' + rpsEsc(vmin) + '" placeholder="' + rpsEsc(RPS_I18N.poFollow) + '"></td>'
+    + '<td><input type="number" min="0" max="600" step="0.5" data-plat="max_sec" value="' + rpsEsc(vmax) + '" placeholder="' + rpsEsc(RPS_I18N.poFollow) + '"></td>'
+    + '<td>' + rpsPlatSelect('adaptive', [{v: '1', t: '✓'}, {v: '0', t: '✕'}], vad, RPS_I18N.poFollow) + '</td>'
+    + flagCell('mark_read') + flagCell('typing')
+    + '<td>' + rpsPlatSelect('voice',
+        RPS_VT_VALUES.map(function(t){ return {v: t, t: RPS_I18N.vtShort[t] || t}; }),
+        rpsPlatState.voices[p] || '', RPS_I18N.poFollow) + '</td>'
+    + '</tr>';
+}
+
+function rpsPlatRender(){
+  var body = document.getElementById('rps-plat-body');
+  if (!body || !rpsPlatEnabled) return;
+  body.innerHTML = RPS_PLAT_ORDER.map(rpsPlatRow).join('');
+}
+
+function rpsPlatCollect(){
+  // 表单为权威：从 DOM 逐行收集四张表（空/「跟随全局」格不进提交表=删除语义）
+  var out = {modes: {}, delays: {}, flags: {}, voices: {}};
+  document.querySelectorAll('#rps-plat-body tr').forEach(function(tr){
+    var p = tr.getAttribute('data-plat-row');
+    if (!p) return;
+    var cap = (tr.querySelector('[data-plat="cap"]') || {}).value || '';
+    if (cap) out.modes[p] = cap;
+    var e = {};
+    var vmin = (tr.querySelector('[data-plat="min_sec"]') || {}).value;
+    var vmax = (tr.querySelector('[data-plat="max_sec"]') || {}).value;
+    var vad = (tr.querySelector('[data-plat="adaptive"]') || {}).value;
+    if (vmin !== '' && vmin !== undefined) e.min_sec = parseFloat(vmin);
+    if (vmax !== '' && vmax !== undefined) e.max_sec = parseFloat(vmax);
+    if (vad === '1' || vad === '0') e.adaptive = (vad === '1');
+    if (Object.keys(e).length) out.delays[p] = e;
+    var fl = {};
+    ['mark_read', 'typing'].forEach(function(k){
+      var v = (tr.querySelector('[data-plat="' + k + '"]') || {}).value;
+      if (v === '1' || v === '0') fl[k] = (v === '1');
+    });
+    if (Object.keys(fl).length) out.flags[p] = fl;
+    var vt = (tr.querySelector('[data-plat="voice"]') || {}).value || '';
+    if (vt) out.voices[p] = vt;
+  });
+  return out;
+}
+
+// 四个虚拟字段挂进注册表：收集/回填/diff/明细全走同一条链
+RPS_FIELD_DEFS.push(
+  {path: RPS_PM_KEY, kind: "virtual",
+   vget: function(){ return rpsPlatCollect().modes; },
+   vset: function(v){ rpsPlatState.modes = v || {}; rpsPlatRender(); }},
+  {path: RPS_PLATOV_KEY, kind: "virtual",
+   vget: function(){ return rpsPlatCollect().delays; },
+   vset: function(v){ rpsPlatState.delays = v || {}; rpsPlatRender(); }},
+  {path: RPS_PH_KEY, kind: "virtual",
+   vget: function(){ return rpsPlatCollect().flags; },
+   vset: function(v){ rpsPlatState.flags = v || {}; rpsPlatRender(); }},
+  {path: RPS_PVT_KEY, kind: "virtual",
+   vget: function(){ return rpsPlatCollect().voices; },
+   vset: function(v){ rpsPlatState.voices = v || {}; rpsPlatRender(); }}
+);
+// 工作时间班表（P0-ws）：feat:"ws" 标记 → 旧后端（白名单未装载）时收集/回填
+// 全部跳过——模板热更新先于重启上线，提交旧后端不认的键会连累整次保存被拒
+RPS_FIELD_DEFS.push(
+  {path: "inbox.work_schedule.enabled", kind: "check", el: "rps-ws-enabled", feat: "ws"},
+  {path: "inbox.work_schedule.timezone", kind: "text", el: "rps-ws-tz", feat: "ws"},
+  {path: "inbox.work_schedule.default.workdays", kind: "virtual", feat: "ws",
+   vget: function(){ return rpsWsWdGet(); },
+   vset: function(v){ rpsWsWdSet(v); }},
+  {path: "inbox.work_schedule.default.start", kind: "text", el: "rps-ws-start", feat: "ws"},
+  {path: "inbox.work_schedule.default.end", kind: "text", el: "rps-ws-end", feat: "ws"},
+  {path: "inbox.work_schedule.edge_jitter_min", kind: "int", el: "rps-ws-jitter", feat: "ws"},
+  {path: "inbox.work_schedule.crisis_bypass", kind: "check", el: "rps-ws-crisis", feat: "ws"},
+  {path: "inbox.work_schedule.off_hours.generate_drafts", kind: "check", el: "rps-ws-gendrafts", feat: "ws"},
+  {path: "inbox.work_schedule.off_hours.catch_up", kind: "check", el: "rps-ws-catchup", feat: "ws"},
+  {path: "inbox.work_schedule.off_hours.catch_up_regenerate_hours", kind: "float", el: "rps-ws-regenh", feat: "ws"},
+  {path: "inbox.work_schedule.accounts", kind: "virtual", feat: "ws",
+   vget: function(){ return rpsWsAcctCollect(); },
+   vset: function(v){ rpsWsAcctRender(v || {}); }}
+);
+RPS_DEFS_BY_PATH = {};
+RPS_FIELD_DEFS.forEach(function(d){ RPS_DEFS_BY_PATH[d.path] = d; });
+
+function rpsCollect(){
+  var out = {};
+  RPS_FIELD_DEFS.forEach(function(def){
+    if (def.feat === "ws"){ if (!rpsWsEnabled) return; }        // 旧后端：班表字段不参与
+    else if (def.kind === "virtual" && !rpsPlatEnabled) return; // 旧后端：平台字段不参与
+    out[def.path] = rpsFieldGet(def);
+  });
+  out[RPS_PO_KEY] = rpsPoCollect();
+  return out;
+}
+
+function rpsFill(values){
+  RPS_FIELD_DEFS.forEach(function(def){
+    if (def.feat === "ws"){ if (!rpsWsEnabled) return; }
+    else if (def.kind === "virtual" && !rpsPlatEnabled) return;
+    rpsFieldSet(def, values[def.path]);
+  });
+  rpsPoRender(values[RPS_PO_KEY] || {});
+  rpsPaceRefresh();
+  rpsMarkDirty();
+}
+
+/* ── 工作时间班表（P0-ws）：工作日 chips + 账号覆写表 + 快速填入 ── */
+
+function rpsWsWdGet(){
+  var out = [];
+  document.querySelectorAll('#rps-ws-days input[data-wd]').forEach(function(cb){
+    if (cb.checked) out.push(parseInt(cb.getAttribute('data-wd'), 10));
+  });
+  return out;
+}
+
+function rpsWsWdSet(v){
+  var on = {};
+  (Array.isArray(v) ? v : []).forEach(function(d){ on[String(d)] = true; });
+  document.querySelectorAll('#rps-ws-days input[data-wd]').forEach(function(cb){
+    cb.checked = !!on[cb.getAttribute('data-wd')];
+  });
+}
+
+function rpsWsPreset(kind){
+  var map = {
+    cs: {days: [1, 2, 3, 4, 5], start: '09:00', end: '18:00'},
+    night: {days: [], start: '14:00', end: '02:00'},
+    always: {days: [], start: '00:00', end: '00:00'}
+  };
+  var p = map[kind];
+  if (!p) return;
+  rpsWsWdSet(p.days);
+  var s = document.getElementById('rps-ws-start');
+  var e = document.getElementById('rps-ws-end');
+  if (s) s.value = p.start;
+  if (e) e.value = p.end;
+  rpsMarkDirty();
+}
+
+function rpsWsAcctRow(key, entry){
+  entry = entry || {};
+  var wd = Array.isArray(entry.workdays) ? entry.workdays.join(',') : '';
+  return '<tr>'
+    + '<td><input type="text" data-ws="key" value="' + rpsEsc(key) + '" placeholder="telegram:default"></td>'
+    + '<td><input type="text" data-ws="workdays" value="' + rpsEsc(wd) + '" placeholder="' + rpsEsc(RPS_I18N.wsAllDays) + '"></td>'
+    + '<td><input type="time" data-ws="start" value="' + rpsEsc(entry.start || '') + '"></td>'
+    + '<td><input type="time" data-ws="end" value="' + rpsEsc(entry.end || '') + '"></td>'
+    + '<td><input type="text" data-ws="timezone" value="' + rpsEsc(entry.timezone || '') + '" placeholder="' + rpsEsc(RPS_I18N.wsTzFollow) + '"></td>'
+    + '<td style="text-align:center"><input type="checkbox" data-ws="exempt"' + (entry.enabled === false ? ' checked' : '') + ' title="' + rpsEsc(RPS_I18N.wsExempt) + '"></td>'
+    + '<td><button class="rps-po-del" data-ws-del="1" title="' + rpsEsc(RPS_I18N.poDel) + '">✕</button></td>'
+    + '</tr>';
+}
+
+function rpsWsAcctRender(map){
+  var body = document.getElementById('rps-ws-acct-body');
+  if (!body) return;
+  var keys = Object.keys(map || {}).sort();
+  body.innerHTML = keys.map(function(k){ return rpsWsAcctRow(k, map[k]); }).join('');
+  var empty = document.getElementById('rps-ws-acct-empty');
+  if (empty) empty.style.display = keys.length ? 'none' : '';
+}
+
+function rpsWsAcctCollect(){
+  var out = {};
+  rpsWsDupFlag = false;
+  document.querySelectorAll('#rps-ws-acct-body tr').forEach(function(tr){
+    var key = (tr.querySelector('[data-ws="key"]').value || '').trim();
+    if (!key) return;
+    if (Object.prototype.hasOwnProperty.call(out, key)){ rpsWsDupFlag = true; return; }
+    var e = {};
+    var wd = (tr.querySelector('[data-ws="workdays"]').value || '').trim();
+    if (wd){
+      var days = [];
+      wd.split(/[^0-9]+/).forEach(function(x){
+        var n = parseInt(x, 10);
+        if (n >= 1 && n <= 7 && days.indexOf(n) < 0) days.push(n);
+      });
+      if (days.length) e.workdays = days.sort();
+    }
+    var vs = tr.querySelector('[data-ws="start"]').value;
+    var ve = tr.querySelector('[data-ws="end"]').value;
+    if (vs) e.start = vs;
+    if (ve) e.end = ve;
+    var tz = (tr.querySelector('[data-ws="timezone"]').value || '').trim();
+    if (tz) e.timezone = tz;
+    if (tr.querySelector('[data-ws="exempt"]').checked) e.enabled = false;
+    out[key] = e;
+  });
+  return out;
+}
+
+function rpsWsAcctAdd(){
+  var body = document.getElementById('rps-ws-acct-body');
+  if (!body) return;
+  body.insertAdjacentHTML('beforeend', rpsWsAcctRow('', {}));
+  var empty = document.getElementById('rps-ws-acct-empty');
+  if (empty) empty.style.display = 'none';
+  var last = body.lastElementChild;
+  if (last) last.querySelector('[data-ws="key"]').focus();
+  rpsMarkDirty();
+}
+
+/* ── 人设节奏覆写表 ─────────────────────────────────────────── */
+
+function rpsPoRow(pid, entry){
+  // 值为空串＝跟随全局（提交时不带该键）；extra=条目里本页不管理的高级键提示
+  entry = entry || {};
+  var extraKeys = Object.keys(entry).filter(function(k){
+    return RPS_PO_EDIT_KEYS.indexOf(k) < 0; });
+  var min = (entry.min_sec === undefined || entry.min_sec === null) ? '' : entry.min_sec;
+  var max = (entry.max_sec === undefined || entry.max_sec === null) ? '' : entry.max_sec;
+  var ad = (entry.adaptive === undefined || entry.adaptive === null) ? '' : (entry.adaptive ? '1' : '0');
+  return '<tr>'
+    + '<td><input type="text" list="rps-po-personas" data-po="pid" value="' + rpsEsc(pid) + '">'
+    + (extraKeys.length ? ' <span class="rps-po-extra" title="' + rpsEsc(RPS_I18N.poExtraNote + ': ' + extraKeys.join(', ')) + '">⚙</span>' : '')
+    + '</td>'
+    + '<td><input type="number" min="0" max="600" step="0.5" data-po="min_sec" value="' + rpsEsc(min) + '" placeholder="' + rpsEsc(RPS_I18N.poFollow) + '"></td>'
+    + '<td><input type="number" min="0" max="600" step="0.5" data-po="max_sec" value="' + rpsEsc(max) + '" placeholder="' + rpsEsc(RPS_I18N.poFollow) + '"></td>'
+    + '<td><select data-po="adaptive">'
+    +   '<option value=""' + (ad === '' ? ' selected' : '') + '>' + rpsEsc(RPS_I18N.poFollow) + '</option>'
+    +   '<option value="1"' + (ad === '1' ? ' selected' : '') + '>✓</option>'
+    +   '<option value="0"' + (ad === '0' ? ' selected' : '') + '>✕</option>'
+    + '</select></td>'
+    + '<td><button class="rps-po-del" data-po-del="1" title="' + rpsEsc(RPS_I18N.poDel) + '">✕</button></td>'
+    + '</tr>';
+}
+
+function rpsPoRender(map){
+  var body = document.getElementById('rps-po-body');
+  var pids = Object.keys(map || {}).sort();
+  body.innerHTML = pids.map(function(pid){ return rpsPoRow(pid, map[pid]); }).join('');
+  document.getElementById('rps-po-empty').style.display = pids.length ? 'none' : '';
+}
+
+function rpsPoCollect(){
+  // 空 pid 行忽略；重复 pid 置 dup 标志由保存口拦截
+  var out = {}; rpsPoDupFlag = false;
+  document.querySelectorAll('#rps-po-body tr').forEach(function(tr){
+    var pid = (tr.querySelector('[data-po="pid"]').value || '').trim();
+    if (!pid) return;
+    if (Object.prototype.hasOwnProperty.call(out, pid)){ rpsPoDupFlag = true; return; }
+    var entry = {};
+    var vmin = tr.querySelector('[data-po="min_sec"]').value;
+    var vmax = tr.querySelector('[data-po="max_sec"]').value;
+    var vad = tr.querySelector('[data-po="adaptive"]').value;
+    if (vmin !== '') entry.min_sec = parseFloat(vmin);
+    if (vmax !== '') entry.max_sec = parseFloat(vmax);
+    if (vad !== '') entry.adaptive = (vad === '1');
+    out[pid] = entry;
+  });
+  return out;
+}
+
+function rpsPoAdd(){
+  var body = document.getElementById('rps-po-body');
+  body.insertAdjacentHTML('beforeend', rpsPoRow('', {}));
+  document.getElementById('rps-po-empty').style.display = 'none';
+  var last = body.lastElementChild;
+  if (last) last.querySelector('[data-po="pid"]').focus();
+  rpsMarkDirty();
+}
+
+function rpsProjectTable(map, keys){
+  // 基线条目可能带本页不管理的高级键（per_char_sec 等）——脏检测只比 UI 管理键
+  var out = {};
+  Object.keys(map || {}).sort().forEach(function(pid){
+    var e = map[pid] || {}, slim = {};
+    keys.forEach(function(k){
+      if (e[k] !== undefined && e[k] !== null) slim[k] = e[k]; });
+    out[pid] = slim;
+  });
+  return out;
+}
+
+function rpsPoProject(map){ return rpsProjectTable(map, RPS_PO_EDIT_KEYS); }
+
+function rpsCanon(v){
+  // 对象走键排序 JSON（覆写表比对），标量走 String（与旧口径一致）
+  if (v !== null && typeof v === 'object'){
+    var keys = Object.keys(v).sort();
+    return JSON.stringify(keys.map(function(k){ return [k, rpsCanon(v[k])]; }));
+  }
+  return String(v);
+}
+
+async function rpsPoLoadPersonas(){
+  // 人设 ID 补全 datalist——纯增强，接口失败静默（手输仍可用）
+  try {
+    var r = await apiFetch('/api/personas/list');
+    var d = await r.json();
+    var dl = document.getElementById('rps-po-personas');
+    if (dl && d && d.ok && Array.isArray(d.profiles)){
+      dl.innerHTML = d.profiles.map(function(p){
+        var pid = (p && (p.id || p.profile_id || '')) || '';
+        var nm = (p && (p.display_name || p.name || '')) || '';
+        return pid ? '<option value="' + rpsEsc(pid) + '">' + rpsEsc(nm) + '</option>' : '';
+      }).join('');
+    }
+  } catch (e) { /* 静默：datalist 只是补全增强 */ }
+}
+
+function rpsRenderMeta(meta){
+  // chip 治理：热生效是常态（保存 toast 已明说「已保存并即时生效」），逐字段挂绿 pill
+  // 只制造噪声——只给「重启后生效」的少数字段亮琥珀 chip，其余隐藏。
+  document.querySelectorAll('[data-hot-chip]').forEach(function(el){
+    var m = (meta || {})[el.getAttribute('data-hot-chip')] || {};
+    var hot = m.hot === true || m.hot === "worker";
+    if (hot){ el.style.display = 'none'; el.textContent = ''; return; }
+    el.style.display = '';
+    el.textContent = RPS_I18N.chipRestart;
+    el.className = 'rps-chip restart';
+  });
+}
+
+function rpsRenderGates(g){
+  g = g || {};
+  function dot(id, on){
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.className = 'rps-dot ' + (on ? 'on' : 'off');
+    el.title = on ? RPS_I18N.gateOn : RPS_I18N.gateOff;
+    var g = el.closest('.rps-gate');   // 色弱可辨：状态除圆点色外补显式文字
+    if (g){ g.setAttribute('data-state', on ? RPS_I18N.gateOn : RPS_I18N.gateOff);
+      g.classList.toggle('off', !on); }
+  }
+  dot('rps-gate-worker', g.worker_enabled);
+  dot('rps-gate-deliver', g.deliver);
+  dot('rps-gate-autodraft', g.auto_draft_enabled);
+  var caps = g.platform_modes || {};
+  var keys = Object.keys(caps);
+  var capEl = document.getElementById('rps-gate-caps');
+  if (capEl){
+    if (keys.length){
+      capEl.style.display = '';
+      capEl.textContent = RPS_I18N.platformCaps + ': ' +
+        keys.map(function(k){ return k + '→' + caps[k]; }).join(', ');
+    } else { capEl.style.display = 'none'; }
+  }
+}
+
+function rpsPaceInput(which){
+  // 双滑块约束：min 不越过 max
+  var lo = document.getElementById('rps-min'), hi = document.getElementById('rps-max');
+  var vlo = parseFloat(lo.value || "0"), vhi = parseFloat(hi.value || "0");
+  if (which === 'min' && vlo > vhi) hi.value = vlo;
+  if (which === 'max' && vhi < vlo) lo.value = vhi;
+  rpsPaceRefresh();
+  rpsMarkDirty();
+}
+
+function rpsPaceRefresh(){
+  var vlo = parseFloat(document.getElementById('rps-min').value || "0");
+  var vhi = parseFloat(document.getElementById('rps-max').value || "0");
+  document.getElementById('rps-min-val').textContent = vlo;
+  document.getElementById('rps-max-val').textContent = vhi;
+  var eta = document.getElementById('rps-pv-eta');
+  if (vhi <= 0){ eta.textContent = RPS_I18N.previewZero; }
+  else { eta.textContent = RPS_I18N.previewRange.replace('{min}', vlo).replace('{max}', vhi); }
+  // 整个区间落在 0-2s 机器带 → 琥珀警示：配置风险要在改动当下可见，而不是埋在灰字里
+  eta.classList.toggle('warn', vhi < 3);
+  // 色带上的选中区间高亮（色带 0-60s 与滑块同轴；零宽时留 1.2% 当位置标记）
+  var sel = document.getElementById('rps-zone-sel');
+  if (sel){
+    var lo = Math.max(0, Math.min(60, vlo)), hi = Math.max(lo, Math.min(60, vhi));
+    sel.style.left = (lo / 60 * 100) + '%';
+    sel.style.width = Math.max((hi - lo) / 60 * 100, 1.2) + '%';
+  }
+}
+
+/* ── 客户视角预览播放（P1）：按当前区间抽一次真实延迟，走完 已读→输入中→送达。
+   播放上限 10s（真实体感与演示效率的折中，超出按倍速压缩并如实标注）。纯前端零写操作。 ── */
+var rpsPvTimers = [];
+function rpsPlayPreview(){
+  var btn = document.getElementById('rps-pv-play');
+  if (!btn || btn.disabled) return;
+  var vlo = parseFloat(document.getElementById('rps-min').value || "0");
+  var vhi = parseFloat(document.getElementById('rps-max').value || "0");
+  var d = vlo + Math.random() * Math.max(0, vhi - vlo);
+  var playSec = Math.min(d, 10);
+  var speedup = playSec > 0 ? d / playSec : 1;
+  rpsPvTimers.forEach(clearTimeout); rpsPvTimers = [];
+  btn.disabled = true; btn.textContent = RPS_I18N.pvPlaying;
+  var eta = document.getElementById('rps-pv-eta');
+  if (eta){ eta.textContent = ''; eta.classList.remove('warn'); }
+  ['rps-pv-read', 'rps-pv-typing', 'rps-pv-sent'].forEach(function(id){
+    var el = document.getElementById(id);
+    if (el) el.classList.add('pv-dim');
+  });
+  function lit(id){
+    var el = document.getElementById(id);
+    if (el) el.classList.remove('pv-dim');
+  }
+  rpsPvTimers.push(setTimeout(function(){ lit('rps-pv-read'); }, 350));
+  rpsPvTimers.push(setTimeout(function(){ lit('rps-pv-typing'); }, 900));
+  rpsPvTimers.push(setTimeout(function(){
+    lit('rps-pv-sent');
+    if (eta){
+      var txt = RPS_I18N.pvResult.replace('{s}', d.toFixed(1));
+      if (speedup > 1.01) txt += ' · ' + RPS_I18N.pvSpeedup.replace('{x}', speedup.toFixed(1));
+      eta.textContent = txt;
+      eta.classList.toggle('warn', d < 3);
+    }
+    btn.disabled = false;
+    btn.textContent = '▶ ' + RPS_I18N.pvPlay;
+  }, 900 + Math.max(400, playSec * 1000)));
+}
+
+/* ── 高级折叠组摘要（P1）：折叠不失明——语音/缓冲/覆写关键状态常显在 summary 行 ── */
+function rpsAdvSummary(){
+  var el = document.getElementById('rps-adv-sum');
+  if (!el) return;
+  var v = document.getElementById('rps-voice');
+  var h = document.getElementById('rps-holding');
+  var n = 0;
+  try { n = Object.keys(rpsPoCollect() || {}).length; } catch (e) { n = 0; }
+  el.textContent = RPS_I18N.advSum
+    .replace('{v}', v && v.checked ? RPS_I18N.xOn : RPS_I18N.xOff)
+    .replace('{h}', h && h.checked ? RPS_I18N.xOn : RPS_I18N.xOff)
+    .replace('{n}', n);
+}
+
+/* ── 拟人度评分（P2）：延迟区间/自适应/已读/输入中/语音 五因子加权，随表单实时刷新。
+   自造启发式指标（title 列出提升项），措辞刻意用「拟人度」不作风控承诺。 ── */
+function rpsScoreUpdate(){
+  var el = document.getElementById('rps-score');
+  if (!el) return;
+  var vlo = parseFloat((document.getElementById('rps-min') || {}).value || "0");
+  var vhi = parseFloat((document.getElementById('rps-max') || {}).value || "0");
+  var score = 0, missing = [];
+  if (vlo >= 3 && vhi >= 6){ score += 40; }
+  else if (vlo >= 1 && vhi >= 3){ score += 20; missing.push(RPS_I18N.scoreDelayItem); }
+  else { missing.push(RPS_I18N.scoreDelayItem); }
+  [['rps-adaptive', 'inbox.l2_autosend.deliver_delay.adaptive'],
+   ['rps-markread', 'inbox.l2_autosend.mark_read_before_reply'],
+   ['rps-typing', 'inbox.l2_autosend.typing_indicator']].forEach(function(pair){
+    var box = document.getElementById(pair[0]);
+    if (box && box.checked){ score += 15; }
+    else { missing.push(RPS_I18N.fieldNames[pair[1]] || pair[0]); }
+  });
+  var vc = document.getElementById('rps-voice');
+  var vt = document.getElementById('rps-voice-trigger');
+  if (vc && vc.checked && vt && vt.value !== 'never'){ score += 15; }
+  else { missing.push(RPS_I18N.fieldNames['inbox.l2_autosend.voice.enabled'] || 'voice'); }
+  var cls = score >= 75 ? 'ok' : (score >= 40 ? 'mid' : 'bad');
+  var lvl = score >= 75 ? RPS_I18N.scoreNatural : (score >= 40 ? RPS_I18N.scoreMid : RPS_I18N.scoreBot);
+  el.className = 'rps-score ' + cls;
+  el.textContent = RPS_I18N.scoreLabel.replace('{n}', score) + ' · ' + lvl;
+  el.title = missing.length ? RPS_I18N.scoreMissing.replace('{items}', missing.join(' · ')) : '';
+}
+
+/* ── 实测均值上轴（P2）：各人设实际平均延迟点到 0-60s 色带轴上——「我配的区间」与
+   「客户实际等到的」同轴对比。数据=进程内聚合均值（无分布桶，刻意不画假分布）。 ── */
+function rpsRenderPaceMarkers(perPersona){
+  var row = document.getElementById('rps-zone-obs');
+  var lg = document.getElementById('rps-zone-obs-legend');
+  if (!row) return;
+  var items = (perPersona || []).slice(0, 8);
+  if (!items.length){
+    row.style.display = 'none'; row.innerHTML = '';
+    if (lg) lg.style.display = 'none';
+    return;
+  }
+  row.style.display = '';
+  row.innerHTML = items.map(function(p){
+    var pct = Math.max(0, Math.min(60, Number(p.avg) || 0)) / 60 * 100;
+    var label = (p.pid || RPS_I18N.obsNoPersona) + (p.plat ? ' @' + p.plat : '')
+      + ' · ' + Number(p.avg).toFixed(1) + 's · ' + p.n;
+    return '<span class="rps-zone-obs-dot" style="left:' + pct.toFixed(2) + '%" title="' + rpsEsc(label) + '"></span>';
+  }).join('');
+  if (lg) lg.style.display = '';
+}
+
+function rpsDiff(){
+  var cur = rpsCollect(), out = {};
+  Object.keys(cur).forEach(function(k){
+    if (cur[k] === null) return;
+    var proj = RPS_PROJECT_KEYS[k];
+    var base = proj ? rpsProjectTable(rpsBaseline[k] || {}, proj) : rpsBaseline[k];
+    if (rpsCanon(cur[k]) !== rpsCanon(base)) out[k] = cur[k];
+  });
+  return out;
+}
+
+function rpsRenderCoverage(cc){
+  // 三条发送链的节奏生效自检（2026-08-07）。契约三态：undefined＝旧 API 无此
+  // 字段（服务未重启到新路由）→ 整块隐藏（不摆空架子）；null＝解析异常 → 隐藏；
+  // 对象＝渲染。任何「active 且 !paced」→ 红横幅点名具体链路。
+  var card = document.getElementById('rps-cc');
+  if (!card) return;
+  if (cc === undefined || cc === null){ card.style.display = 'none'; return; }
+  var chains = cc.chains || {};
+  var warn = !cc.ok;
+  card.style.display = '';
+  card.className = 'rps-card rps-cc ' + (warn ? 'warn' : 'ok');
+  document.getElementById('rps-cc-title').textContent =
+    warn ? RPS_I18N.ccWarnTitle : RPS_I18N.ccOkTitle;
+  document.getElementById('rps-cc-desc').textContent =
+    warn ? RPS_I18N.ccWarnDesc : RPS_I18N.ccOkDesc;
+  // 固定展示顺序：秒回的链路排前（一眼看到问题），未启用的排最后。
+  var order = ['native_tg', 'autosend', 'protocol'];
+  var rows = order.filter(function(k){ return chains[k]; }).map(function(k){
+    var c = chains[k];
+    var name = RPS_I18N.ccChain[k] || k;
+    var dotCls, valTxt, srcTxt = '', offCls = '';
+    if (!c.active){
+      dotCls = 'c-off'; offCls = ' off'; valTxt = RPS_I18N.ccInactive;
+    } else if (c.paced){
+      dotCls = 'c-ok';
+      valTxt = RPS_I18N.ccRange
+        .replace('{min}', rpsFmtSec(c.min_sec)).replace('{max}', rpsFmtSec(c.max_sec));
+      srcTxt = (c.source === 'inbox.l2_autosend.deliver_delay')
+        ? RPS_I18N.ccSrcSlider
+        : (c.source === '__protocol_default__')
+          ? RPS_I18N.ccSrcDefault
+          : RPS_I18N.ccSrcOwn.replace('{src}', c.source || '');
+    } else {
+      dotCls = 'c-bad'; valTxt = RPS_I18N.ccZero;
+    }
+    return '<span class="rps-cc-chain' + offCls + '" data-chain="' + k + '">'
+      + '<span class="cdot ' + dotCls + '"></span>'
+      + '<span>' + rpsEsc(name) + '</span>'
+      + '<span class="cval">' + rpsEsc(valTxt) + '</span>'
+      + (srcTxt ? '<span class="csrc">· ' + rpsEsc(srcTxt) + '</span>' : '')
+      + '</span>';
+  });
+  document.getElementById('rps-cc-chains').innerHTML = rows.join('');
+}
+
+function rpsFmtSec(n){
+  var v = Number(n);
+  if (!isFinite(v)) return '?';
+  return (Math.round(v * 10) / 10).toString().replace(/\.0$/, '');
+}
+
+function rpsRenderRuntime(rt){
+  // worker 内存里真在用的值——「保存了」与「线上真变了」是两件事，这行闭合后者。
+  // 契约三态：undefined＝旧 API 无此字段（服务未重启到新路由）→ 整行隐藏；
+  // null＝API 支持但 worker 不存在（读不到活值）→ 亮警示；对象＝直接展示。
+  // （修 P1-c 反转 bug：旧判 rt.worker_running，而快照契约里根本没有该键 →
+  //   worker 活着也永远显示「未运行」警告。）
+  var el = document.getElementById('rps-rt-line');
+  if (!el) return;
+  if (rt === undefined){ el.style.display = 'none'; return; }
+  el.style.display = '';
+  if (!rt){
+    el.innerHTML = '<span class="rps-rt-warn">⚠ ' + rpsEsc(RPS_I18N.rtNone) + '</span>';
+    return;
+  }
+  var dd = rt.deliver_delay || {};
+  var parts = [rpsEsc(RPS_I18N.rtDelay
+      .replace('{min}', dd.min_sec != null ? dd.min_sec : '?')
+      .replace('{max}', dd.max_sec != null ? dd.max_sec : '?'))];
+  parts.push(rpsEsc(dd.adaptive ? RPS_I18N.rtAdaptiveOn : RPS_I18N.rtAdaptiveOff));
+  var nOv = Object.keys(dd.persona_overrides || {}).length;
+  if (nOv) parts.push(rpsEsc(RPS_I18N.rtOverrides.replace('{n}', nOv)));
+  el.innerHTML = '<span class="rps-rt-ok">●</span> ' + rpsEsc(RPS_I18N.rtLive) + '：' + parts.join(' · ');
+}
+
+function rpsRenderObserved(obs){
+  // 进程内实测采样（humanize_metrics）：配置说 3–9 秒，线上实际多少——闭合
+  // 「我配的」与「客户真感受到的」。observed 字段缺席（旧 API / 重启前）→ 整块隐藏。
+  var pe = document.getElementById('rps-obs-pace');
+  var he = document.getElementById('rps-obs-hum');
+  if (!pe || !he) return;
+  if (!obs || !obs.pacing){ pe.style.display = 'none'; he.style.display = 'none'; rpsRenderPaceMarkers([]); return; }
+  var pace = obs.pacing || {};
+  var total = 0, sumDelay = 0, maxDelay = 0, adaptive = 0, natN = 0, natSum = 0;
+  var bgN = 0, bgSum = 0, bgMax = 0, protoN = 0, protoSum = 0;
+  var perPersona = [];
+  Object.keys(pace).forEach(function(path){
+    var row = pace[path] || {};
+    var n = row.count || 0;
+    if (!n) return;
+    if (path.indexOf('native_tg/') === 0){ natN += n; natSum += row.sum_delay || 0; return; }
+    if (path.indexOf('protocol/') === 0){ protoN += n; protoSum += row.sum_delay || 0; return; }
+    if (path.indexOf('bubble_gap/') === 0){
+      bgN += n; bgSum += row.sum_delay || 0;
+      bgMax = Math.max(bgMax, row.max_delay || 0);
+      return;
+    }
+    if (path.indexOf('autosend/') !== 0) return;
+    total += n; sumDelay += row.sum_delay || 0;
+    maxDelay = Math.max(maxDelay, row.max_delay || 0);
+    adaptive += row.adaptive_count || 0;
+    // 路径兼容两代：autosend/{persona}（旧）与 autosend/{platform}/{persona}（P1 起）
+    var rest = path.slice('autosend/'.length);
+    var segs = rest.split('/');
+    var pid = rest, plat = '';
+    if (segs.length >= 2){ plat = (segs[0] === '-' ? '' : segs[0]); pid = segs.slice(1).join('/'); }
+    if (pid === '-') pid = '';
+    perPersona.push({pid: pid, plat: plat, n: n, avg: row.avg_delay || 0});
+  });
+  var html = '<div class="rps-obs-title">' + rpsEsc(RPS_I18N.obsTitle) + '</div>';
+  if (!total){
+    html += '<span class="rps-obs-empty">' + rpsEsc(RPS_I18N.obsEmpty) + '</span>';
+  } else {
+    html += '<div>' + rpsEsc(RPS_I18N.obsSummary
+      .replace('{n}', total)
+      .replace('{avg}', (sumDelay / total).toFixed(1))
+      .replace('{max}', maxDelay.toFixed(1))
+      .replace('{ad}', Math.round(adaptive * 100 / total))) + '</div>';
+    perPersona.sort(function(a, b){ return b.n - a.n; });
+    if (perPersona.length > 1 || (perPersona[0] && perPersona[0].pid)){
+      html += '<div class="rps-obs-chips">' + perPersona.slice(0, 6).map(function(p){
+        return '<span class="rps-obs-chip">' + rpsEsc((p.pid || RPS_I18N.obsNoPersona)
+          + (p.plat ? ' @' + p.plat : ''))
+          + ' · ' + p.n + ' · ' + Number(p.avg).toFixed(1) + 's</span>';
+      }).join('') + '</div>';
+    }
+  }
+  rpsRenderPaceMarkers(total ? perPersona : []);
+  if (natN > 0){
+    html += '<div class="rps-obs-note">' + rpsEsc(RPS_I18N.obsNative
+      .replace('{n}', natN).replace('{avg}', (natSum / natN).toFixed(1))) + '</div>';
+  }
+  if (protoN > 0){
+    html += '<div class="rps-obs-note">' + rpsEsc(RPS_I18N.obsProtocol
+      .replace('{n}', protoN).replace('{avg}', (protoSum / protoN).toFixed(1))) + '</div>';
+  }
+  if (bgN > 0){
+    html += '<div class="rps-obs-note">' + rpsEsc(RPS_I18N.obsBubbleGap
+      .replace('{n}', bgN).replace('{avg}', (bgSum / bgN).toFixed(1))
+      .replace('{max}', bgMax.toFixed(1))) + '</div>';
+  }
+  pe.style.display = '';
+  pe.innerHTML = html;
+
+  var hum = obs.humanize || {};
+  var plats = Object.keys(hum).sort();
+  if (!plats.length){ he.style.display = 'none'; return; }
+  he.style.display = '';
+  he.innerHTML = '<div class="rps-obs-title">' + rpsEsc(RPS_I18N.obsHumTitle) + '</div>'
+    + '<div class="rps-obs-chips">' + plats.map(function(p){
+        var r = hum[p] || {};
+        return '<span class="rps-obs-chip">' + rpsEsc(p)
+          + ' · ' + rpsEsc(RPS_I18N.obsRead) + ' ' + (r.read_ok || 0) + '/' + (r.read_fail || 0)
+          + ' · ' + rpsEsc(RPS_I18N.obsTyping) + ' ' + (r.typing_ok || 0) + '/' + (r.typing_fail || 0)
+          + '</span>';
+      }).join('') + '</div>';
+}
+
+/* ── 场景预设档（P1） ─────────────────────────────────────────── */
+
+function rpsPresetEq(a, b){
+  if (typeof a === 'boolean' || typeof b === 'boolean') return !!a === !!b;
+  if (!isNaN(parseFloat(a)) && !isNaN(parseFloat(b))) return parseFloat(a) === parseFloat(b);
+  return String(a) === String(b);
+}
+
+function rpsPresetMatch(values){
+  var ids = Object.keys(RPS_PRESETS || {});
+  for (var i = 0; i < ids.length; i++){
+    var kv = RPS_PRESETS[ids[i]], hit = true;
+    for (var k in kv){ if (!rpsPresetEq(values[k], kv[k])){ hit = false; break; } }
+    if (hit) return ids[i];
+  }
+  return '';
+}
+
+function rpsRenderPresets(presets){
+  RPS_PRESETS = presets || {};
+  var card = document.getElementById('rps-preset-card');
+  if (card) card.style.display = Object.keys(RPS_PRESETS).length ? '' : 'none';
+  var box = document.getElementById('rps-presets');
+  if (!box) return;
+  box.innerHTML = Object.keys(RPS_PRESETS).map(function(pid){
+    var kv = RPS_PRESETS[pid];
+    var meta = RPS_I18N.presetMeta[pid] || {name: pid, desc: ''};
+    var kvLine = RPS_I18N.presetKv
+      .replace('{min}', kv['inbox.l2_autosend.deliver_delay.min_sec'])
+      .replace('{max}', kv['inbox.l2_autosend.deliver_delay.max_sec'])
+      .replace('{len}', RPS_I18N.valShort[kv['ai.reply_defaults.length']] || kv['ai.reply_defaults.length'] || '-')
+      .replace('{vt}', RPS_I18N.vtShort[kv['inbox.l2_autosend.voice.trigger']] || kv['inbox.l2_autosend.voice.trigger'] || '-');
+    return '<div class="rps-preset" data-preset="' + rpsEsc(pid) + '" role="button" tabindex="0">'
+      + '<span class="rps-preset-name">' + rpsEsc(meta.name)
+      + (meta.badge ? ' <span class="rps-preset-badge">' + rpsEsc(meta.badge) + '</span>' : '')
+      + '</span>'
+      + '<span class="rps-preset-desc">' + rpsEsc(meta.desc) + '</span>'
+      + '<div class="rps-preset-kv">' + rpsEsc(kvLine) + '</div>'
+      + '</div>';
+  }).join('');
+  rpsPresetSync();
+}
+
+function rpsPresetSync(){
+  // active 高亮跟随**表单当前值**（不是已保存基线）——点了预设立刻亮，改动任一格立刻回「自定义」
+  var box = document.getElementById('rps-presets');
+  if (!box || !Object.keys(RPS_PRESETS).length) return;
+  var match = '';
+  try { match = rpsPresetMatch(rpsCollect()); } catch (e) { match = ''; }
+  box.querySelectorAll('[data-preset]').forEach(function(el){
+    el.classList.toggle('active', el.getAttribute('data-preset') === match);
+  });
+  var st = document.getElementById('rps-preset-state');
+  if (st){
+    st.innerHTML = match
+      ? rpsEsc(RPS_I18N.presetCurrent).replace('{name}', '<b>' + rpsEsc((RPS_I18N.presetMeta[match] || {}).name || match) + '</b>')
+      : rpsEsc(RPS_I18N.presetCustom);
+  }
+}
+
+function rpsApplyPreset(pid){
+  var kv = (RPS_PRESETS || {})[pid];
+  if (!kv) return;
+  var before = {};
+  try { before = rpsCollect(); } catch (e) { before = {}; }
+  Object.keys(kv).forEach(function(k){
+    var def = RPS_DEFS_BY_PATH[k];
+    if (def) rpsFieldSet(def, kv[k]);
+  });
+  // P2：只闪真被改动的控件——「点了预设，哪里变了」当场可见（savebar 计数仍是权威）
+  Object.keys(kv).forEach(function(k){
+    if (rpsPresetEq(before[k], kv[k])) return;
+    var host = RPS_DEFS_BY_PATH[k] ? rpsFieldHost(RPS_DEFS_BY_PATH[k]) : null;
+    if (!host) return;
+    host.classList.remove('rps-flash');
+    void host.offsetWidth;   // 重启动画
+    host.classList.add('rps-flash');
+    setTimeout(function(){ host.classList.remove('rps-flash'); }, 1800);
+  });
+  rpsPaceRefresh();
+  rpsMarkDirty();
+}
+
+function rpsUseRecommended(ev){
+  if (ev){ try { ev.preventDefault(); } catch (e) {} }
+  document.getElementById('rps-min').value = 3;
+  document.getElementById('rps-max').value = 12;
+  document.getElementById('rps-adaptive').checked = true;
+  rpsPaceRefresh();
+  rpsMarkDirty();
+}
+
+/* ── 实测回复长度（P1：内容与风格卡回读） ─────────────────────── */
+
+function rpsRenderObsStyle(o){
+  var el = document.getElementById('rps-obs-style');
+  if (!el) return;
+  if (!o || !o.n){ el.style.display = 'none'; return; }
+  el.style.display = '';
+  var b = o.buckets || {};
+  el.innerHTML = '<div class="rps-obs-title">' + rpsEsc(RPS_I18N.obsStyleTitle) + '</div>'
+    + '<div>' + rpsEsc(RPS_I18N.obsStyleLine
+        .replace('{n}', o.n).replace('{avg}', o.avg)
+        .replace('{p50}', o.p50).replace('{p90}', o.p90)) + '</div>'
+    + '<div class="rps-obs-chips"><span class="rps-obs-chip">' + rpsEsc(RPS_I18N.obsStyleBuckets
+        .replace('{s}', b.short || 0).replace('{m}', b.mid || 0).replace('{l}', b.long || 0)) + '</span></div>';
+}
+
+/* ── 生效值溯源（P1：收件箱「参数」带 ctx 进入时显示） ─────────── */
+
+function rpsSrcBadge(src){
+  var lbl = RPS_I18N.srcLabels[src] || RPS_I18N.xUnset;
+  return '<span class="src s-' + rpsEsc(src || 'none') + '">' + rpsEsc(lbl) + '</span>';
+}
+
+function rpsExplainChip(label, valueHtml, src, title){
+  return '<span class="rps-x-chip"' + (title ? ' title="' + rpsEsc(title) + '"' : '') + '>'
+    + (label ? rpsEsc(label) + '：' : '') + valueHtml
+    + (src !== null ? rpsSrcBadge(src) : '') + '</span>';
+}
+
+async function rpsExplainLoad(){
+  var card = document.getElementById('rps-explain');
+  if (!card) return;
+  var qs = new URLSearchParams(location.search);
+  var p = qs.get('ctx_platform'), a = qs.get('ctx_account') || 'default', c = qs.get('ctx_chat');
+  if (!p || !c){ card.style.display = 'none'; return; }
+  try {
+    var r = await apiFetch('/api/reply-settings/explain?platform=' + encodeURIComponent(p)
+      + '&account_id=' + encodeURIComponent(a) + '&chat_key=' + encodeURIComponent(c));
+    var d = await r.json();
+    if (!d || !d.ok) throw new Error('bad');
+    card.style.display = '';
+    document.getElementById('rps-x-sub').textContent =
+      RPS_I18N.xSub.replace('{chat}', c).replace('{platform}', p);
+    var chips = [];
+    if (d.mode && d.mode.value){
+      chips.push(rpsExplainChip(RPS_I18N.xMode,
+        rpsEsc(RPS_I18N.modeNames[d.mode.value] || d.mode.value), d.mode.source));
+    }
+    var pn = (d.persona && (d.persona.name || d.persona.id)) || '';
+    chips.push(rpsExplainChip(RPS_I18N.xPersona,
+      rpsEsc(pn || RPS_I18N.xPersonaNone), null));
+    if (d.pacing){
+      var mn = d.pacing.min_sec || {}, mx = d.pacing.max_sec || {}, ad = d.pacing.adaptive || {};
+      var srcMix = (mn.source === mx.source) ? (mx.source || 'default')
+        : (mn.source + '+' + mx.source);
+      chips.push(rpsExplainChip(RPS_I18N.xDelay,
+        rpsEsc((mn.value != null ? mn.value : '?') + '–' + (mx.value != null ? mx.value : '?') + 's'),
+        (mn.source === mx.source) ? mx.source : 'global',
+        'min=' + mn.source + ' · max=' + mx.source + ' (' + srcMix + ')'));
+      chips.push(rpsExplainChip(RPS_I18N.xAdaptive,
+        rpsEsc(ad.value ? RPS_I18N.xOn : RPS_I18N.xOff), ad.source));
+    }
+    if (d.style){
+      var st = d.style;
+      chips.push(rpsExplainChip(RPS_I18N.xLength,
+        rpsEsc((st.length && st.length.value && (RPS_I18N.valShort[st.length.value] || st.length.value)) || RPS_I18N.xUnset),
+        (st.length && st.length.source) || ''));
+      if (st.max_sentences && st.max_sentences.value){
+        chips.push(rpsExplainChip('', rpsEsc(RPS_I18N.xMaxSent.replace('{n}', st.max_sentences.value)),
+          st.max_sentences.source));
+      }
+      chips.push(rpsExplainChip(RPS_I18N.xEmoji,
+        rpsEsc((st.emoji_level && st.emoji_level.value && (RPS_I18N.emojiShort[st.emoji_level.value] || st.emoji_level.value)) || RPS_I18N.xUnset),
+        (st.emoji_level && st.emoji_level.source) || ''));
+      if (st.tone_hint && st.tone_hint.value){
+        chips.push(rpsExplainChip(RPS_I18N.xTone, rpsEsc('「' + st.tone_hint.value + '」'),
+          st.tone_hint.source));
+      }
+    }
+    // 工作时间班表：在班/休息 + 下次边界（与闸门同一 schedule_state 口径）——
+    // 「这个号为什么现在不自动回」在这一眼看清
+    if (d.work_schedule && d.work_schedule.enabled){
+      var ws = d.work_schedule;
+      if (ws.gated){
+        var when = '';
+        if (ws.next_change_ts){
+          var wdt = new Date(ws.next_change_ts * 1000);
+          var whm = ('0' + wdt.getHours()).slice(-2) + ':' + ('0' + wdt.getMinutes()).slice(-2);
+          when = (ws.next_change_kind === 'open' ? RPS_I18N.wsXOpenAt : RPS_I18N.wsXCloseAt)
+            .replace('{t}', whm);
+        }
+        chips.push(rpsExplainChip(RPS_I18N.wsXLabel,
+          rpsEsc((ws.in_hours ? RPS_I18N.wsXOn : RPS_I18N.wsXOff)
+            + (ws.window ? ' ' + ws.window : '') + (when ? ' · ' + when : '')),
+          null, ws.timezone || ''));
+      } else {
+        chips.push(rpsExplainChip(RPS_I18N.wsXLabel, rpsEsc(RPS_I18N.wsXAlways), null));
+      }
+    }
+    document.getElementById('rps-x-chips').innerHTML = chips.join('');
+  } catch (e) {
+    card.style.display = '';
+    document.getElementById('rps-x-sub').textContent = RPS_I18N.xLoadFail;
+    document.getElementById('rps-x-chips').innerHTML = '';
+  }
+}
+
+function rpsRenderStyleOverrides(ov){
+  // 「N 个人设自定义了说话方式」提示——没有这行，「全局改了个别人设没变」必成工单。
+  // 字段缺席（旧 API）/ 无人设 → 整行隐藏。
+  var row = document.getElementById('rps-style-ov-row');
+  var el = document.getElementById('rps-style-ov');
+  if (!row || !el) return;
+  if (!ov || !ov.profiles){ row.style.display = 'none'; return; }
+  row.style.display = '';
+  el.innerHTML = rpsEsc(RPS_I18N.styleOvNote
+      .replace('{p}', ov.profiles).replace('{l}', ov.length || 0).replace('{e}', ov.emoji || 0))
+    + ' <a href="/personas">' + rpsEsc(RPS_I18N.styleOvLink) + '</a>';
+}
+
+function rpsMarkDirty(){
+  var n = Object.keys(rpsDiff()).length;
+  document.getElementById('rps-savebar').className = 'rps-savebar' + (n ? ' show' : '');
+  var txt = document.getElementById('rps-dirty-txt');
+  if (txt && n) txt.textContent = '● ' + RPS_I18N.dirtyN.replace('{n}', n);
+  rpsPresetSync();
+  rpsAdvSummary();
+  rpsScoreUpdate();
+  rpsRenderDiff();   // 明细面板开着时跟随表单实时刷新（关着零成本）
+}
+
+function rpsReset(){ rpsFill(rpsBaseline); }
+
+function rpsToast(html, kind){
+  var t = document.getElementById('rps-toast');
+  t.innerHTML = html;
+  t.className = 'rps-toast show' + (kind ? ' ' + kind : '');
+  clearTimeout(t._h);
+  t._h = setTimeout(function(){ t.className = 'rps-toast'; }, kind === 'err' ? 8000 : 6000);
+}
+
+function rpsEsc(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+async function rpsLoad(){
+  try {
+    var r = await apiFetch('/api/reply-settings');
+    var d = await r.json();
+    if (!d || !d.ok) throw new Error('bad payload');
+    rpsBaseline = d.values || {};
+    rpsRenderMeta(d.meta);
+    rpsRenderGates(d.gates);
+    rpsRenderCoverage(d.chain_coverage);
+    rpsRenderRuntime(d.runtime);
+    rpsRenderObserved(d.observed);
+    rpsRenderStyleOverrides(d.style_overrides);
+    rpsRenderPresets(d.presets);
+    rpsRenderObsStyle(d.observed_reply_len);
+    rpsRenderCaps(d.platform_caps);
+    // 平台专家矩阵（P1）：后端白名单含平台字段才启用（旧进程整卡隐藏防假脏）
+    rpsPlatEnabled = !!((d.meta || {})[RPS_PM_KEY]);
+    rpsPlatState.caps = d.platform_caps || null;
+    var platCard = document.getElementById('rps-sec-plat');
+    if (platCard) platCard.style.display = rpsPlatEnabled ? '' : 'none';
+    var platAnchor = document.getElementById('rps-anchor-plat');
+    if (platAnchor) platAnchor.style.display = rpsPlatEnabled ? '' : 'none';
+    // 工作时间班表（P0-ws）：同款特性探测（旧进程整卡隐藏防假脏/保存被拒）
+    rpsWsEnabled = !!((d.meta || {})["inbox.work_schedule.enabled"]);
+    var wsCard = document.getElementById('rps-sec-ws');
+    if (wsCard) wsCard.style.display = rpsWsEnabled ? '' : 'none';
+    var wsAnchor = document.getElementById('rps-anchor-ws');
+    if (wsAnchor) wsAnchor.style.display = rpsWsEnabled ? '' : 'none';
+    rpsFill(rpsBaseline);
+  } catch (e) {
+    rpsToast(rpsEsc(RPS_I18N.loadFailed), 'err');
+  }
+}
+
+async function rpsSave(){
+  if (rpsSaving) return;
+  var changes = rpsDiff();
+  if (!Object.keys(changes).length) return;
+  if (rpsPoDupFlag){ rpsToast(rpsEsc(RPS_I18N.poDup), 'err'); return; }
+  if (rpsWsDupFlag){ rpsToast(rpsEsc(RPS_I18N.wsDup), 'err'); return; }
+  rpsSaving = true;
+  var btn = document.getElementById('rps-save-btn');
+  btn.disabled = true;
+  try {
+    var r = await apiFetch('/api/reply-settings', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({changes: changes})
+    });
+    var d = await r.json();
+    if (d && d.ok){
+      rpsBaseline = d.values || rpsBaseline;
+      rpsFill(rpsBaseline);
+      rpsRenderGates(d.gates);
+      rpsRenderCoverage(d.chain_coverage);
+      rpsRenderRuntime(d.runtime);
+      rpsRenderObserved(d.observed);
+      rpsRenderStyleOverrides(d.style_overrides);
+      rpsRenderObsStyle(d.observed_reply_len);
+      rpsRenderCaps(d.platform_caps);
+      var pending = d.needs_restart || [];
+      if (pending.length){
+        var items = pending.map(function(p){
+          return '<li>' + rpsEsc(RPS_I18N.fieldNames[p] || p) + '</li>'; }).join('');
+        rpsToast(rpsEsc(RPS_I18N.savedPartial) + '<ul>' + items + '</ul>', 'warn');
+      } else {
+        rpsToast(rpsEsc(RPS_I18N.savedLive));
+      }
+    } else {
+      var errs = (d && d.errors || []).map(function(e){
+        return '<li>' + rpsEsc(e.message || e.code || '') + '</li>'; }).join('');
+      rpsToast(rpsEsc(RPS_I18N.saveFailed) + (errs ? '<ul>' + errs + '</ul>' : ''), 'err');
+    }
+  } catch (e) {
+    rpsToast(rpsEsc(RPS_I18N.saveFailed), 'err');
+  } finally {
+    rpsSaving = false;
+    btn.disabled = false;
+    rpsMarkDirty();
+  }
+}
+
+window.rpsMarkDirty = rpsMarkDirty;
+window.rpsPaceInput = rpsPaceInput;
+window.rpsReset = rpsReset;
+window.rpsSave = rpsSave;
+window.rpsLoad = rpsLoad;
+window.rpsPoAdd = rpsPoAdd;
+window.rpsUseRecommended = rpsUseRecommended;
+window.rpsPlayPreview = rpsPlayPreview;
+window.rpsToggleDiff = rpsToggleDiff;
+window.rpsWsPreset = rpsWsPreset;
+window.rpsWsAcctAdd = rpsWsAcctAdd;
+
+// 账号班表覆写表动态行：事件委托（动态行禁内联 handler——动态点属性拼接门禁教训）
+(function(){
+  var body = document.getElementById('rps-ws-acct-body');
+  if (!body) return;
+  body.addEventListener('input', function(){ rpsMarkDirty(); });
+  body.addEventListener('change', function(){ rpsMarkDirty(); });
+  body.addEventListener('click', function(ev){
+    var btn = ev.target.closest('[data-ws-del]');
+    if (!btn) return;
+    var tr = btn.closest('tr');
+    if (tr) tr.remove();
+    if (!document.querySelectorAll('#rps-ws-acct-body tr').length){
+      var empty = document.getElementById('rps-ws-acct-empty');
+      if (empty) empty.style.display = '';
+    }
+    rpsMarkDirty();
+  });
+})();
+
+// 平台矩阵动态行：事件委托（同 persona 表；动态行禁内联 handler）
+(function(){
+  var body = document.getElementById('rps-plat-body');
+  if (!body) return;
+  body.addEventListener('input', function(){ rpsMarkDirty(); });
+  body.addEventListener('change', function(){ rpsMarkDirty(); });
+})();
+
+// 覆写表动态行：事件委托（动态行禁内联 handler——见动态点属性拼接门禁教训）
+(function(){
+  var body = document.getElementById('rps-po-body');
+  if (!body) return;
+  body.addEventListener('input', function(){ rpsMarkDirty(); });
+  body.addEventListener('change', function(){ rpsMarkDirty(); });
+  body.addEventListener('click', function(ev){
+    var btn = ev.target.closest('[data-po-del]');
+    if (!btn) return;
+    var tr = btn.closest('tr');
+    if (tr) tr.remove();
+    if (!document.querySelectorAll('#rps-po-body tr').length){
+      document.getElementById('rps-po-empty').style.display = '';
+    }
+    rpsMarkDirty();
+  });
+})();
+
+// 预设卡（动态 innerHTML）：同款事件委托，含键盘可达（Enter/Space）；
+// P1：hover/focus 预告「应用将改动哪几项」——点之前先知道后果
+(function(){
+  var box = document.getElementById('rps-presets');
+  if (!box) return;
+  function apply(ev){
+    var card = ev.target.closest('[data-preset]');
+    if (!card) return;
+    rpsApplyPreset(card.getAttribute('data-preset'));
+  }
+  var hoverPid = '';
+  function showDiff(pid){
+    var st = document.getElementById('rps-preset-state');
+    if (!st) return;
+    var kv = pid ? (RPS_PRESETS || {})[pid] : null;
+    if (!kv){ rpsPresetSync(); return; }   // 离开/无效 → 恢复「当前匹配」态
+    var cur;
+    try { cur = rpsCollect(); } catch (e) { rpsPresetSync(); return; }
+    var fields = [];
+    Object.keys(kv).forEach(function(k){
+      if (!rpsPresetEq(cur[k], kv[k])) fields.push(RPS_I18N.fieldNames[k] || k);
+    });
+    st.innerHTML = fields.length
+      ? rpsEsc(RPS_I18N.presetDiff.replace('{n}', fields.length).replace('{fields}', fields.join(' · ')))
+      : rpsEsc(RPS_I18N.presetNodiff);
+  }
+  box.addEventListener('click', apply);
+  box.addEventListener('keydown', function(ev){
+    if (ev.key === 'Enter' || ev.key === ' '){ ev.preventDefault(); apply(ev); }
+  });
+  box.addEventListener('mouseover', function(ev){
+    var card = ev.target.closest('[data-preset]');
+    var pid = card ? card.getAttribute('data-preset') : '';
+    if (pid !== hoverPid){ hoverPid = pid; showDiff(pid); }
+  });
+  box.addEventListener('mouseleave', function(){ hoverPid = ''; showDiff(''); });
+  box.addEventListener('focusin', function(ev){
+    var card = ev.target.closest('[data-preset]');
+    if (card){ hoverPid = card.getAttribute('data-preset'); showDiff(hoverPid); }
+  });
+  box.addEventListener('focusout', function(){ hoverPid = ''; showDiff(''); });
+})();
+
+// 高级折叠组：展开状态跨刷新记忆（localStorage，best-effort）
+(function(){
+  var adv = document.getElementById('rps-adv');
+  if (!adv) return;
+  try { if (localStorage.getItem('rps_adv_open') === '1') adv.open = true; } catch (e) {}
+  adv.addEventListener('toggle', function(){
+    try { localStorage.setItem('rps_adv_open', adv.open ? '1' : '0'); } catch (e) {}
+  });
+})();
+
+// 锚点导航滚动联动（P2）：IntersectionObserver 高亮当前章节；不支持 IO 的环境静默跳过
+(function(){
+  var nav = document.querySelector('.rps-anchors');
+  if (!nav || typeof IntersectionObserver === 'undefined') return;
+  var links = Array.prototype.slice.call(nav.querySelectorAll('a[href^="#"]'));
+  var map = {}, targets = [];
+  links.forEach(function(a){
+    var id = (a.getAttribute('href') || '').slice(1);
+    var t = id && document.getElementById(id);
+    if (t){ map[id] = a; targets.push(t); }
+  });
+  if (!targets.length) return;
+  var visible = {};
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(en){ visible[en.target.id] = en.isIntersecting; });
+    var current = '';
+    for (var i = 0; i < targets.length; i++){
+      if (visible[targets[i].id]){ current = targets[i].id; break; }
+    }
+    links.forEach(function(a){
+      a.classList.toggle('active', !!current && a === map[current]);
+    });
+  }, {rootMargin: '-80px 0px -55% 0px'});
+  targets.forEach(function(t){ io.observe(t); });
+})();
+
+rpsLoad();
+rpsPoLoadPersonas();
+rpsExplainLoad();
+</script>
+{% endblock %}

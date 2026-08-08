@@ -94,7 +94,7 @@
       <div class="c360-tab" id="tab-itl" onclick="C360.switchTab('itl')">📋 {{ (i18n or {}).get('c3_s004', "互动时间轴") }}</div>
       <div class="c360-tab" id="tab-stl" onclick="C360.switchTab('stl')">💜 {{ (i18n or {}).get('c3_s005', "关系演进") }}</div>
     </div>
-    <div class="c360-tl" id="c360-tl"><span style="color:var(--th-ink-slate4,#94a3b8);">{{ (i18n or {}).get('c3_s006', "加载消息时间线…") }}</span></div>
+    <div class="c360-tl" id="c360-tl"><span style="color:var(--th-ink-slate4,#5b6b85);">{{ (i18n or {}).get('c3_s006', "加载消息时间线…") }}</span></div>
     <!-- P31：360° 互动时间轴面板 -->
     <div class="itl-wrap" id="c360-itl" style="display:none;">
       <div class="itl-empty">{{ (i18n or {}).get('dash.q.clicked', "点击") }} "{{ (i18n or {}).get('c3_s007', "互动时间轴") }}" {{ (i18n or {}).get('c3_s008', "加载客户全部事件记录") }}</div>
@@ -107,16 +107,16 @@
   <aside class="c360-side">
     <div class="c360-sec" id="stl-side-sec">
       <h4>💜 {{ (i18n or {}).get('msg_js_1948', "关系阶段") }}</h4>
-      <div id="stl-side-box"><span style="color:var(--th-ink-slate4,#94a3b8);font-size:12px;">{{ (i18n or {}).get('dash.loading', "加载中…") }}</span></div>
+      <div id="stl-side-box"><span style="color:var(--th-ink-slate4,#5b6b85);font-size:12px;">{{ (i18n or {}).get('dash.loading', "加载中…") }}</span></div>
     </div>
     <!-- P41: 互动积分 -->
     <div class="c360-sec" id="eng-section">
       <h4>🏅 {{ (i18n or {}).get('c3_s011', "互动积分") }}</h4>
-      <div id="eng-box"><span style="color:var(--th-ink-slate4,#94a3b8);font-size:12px;">{{ (i18n or {}).get('dash.loading', "加载中…") }}</span></div>
+      <div id="eng-box"><span style="color:var(--th-ink-slate4,#5b6b85);font-size:12px;">{{ (i18n or {}).get('dash.loading', "加载中…") }}</span></div>
     </div>
     <div class="c360-sec">
       <h4>{{ (i18n or {}).get('c3_s012', "留资信息") }}</h4>
-      <div id="c360-attrs"><span style="color:var(--th-ink-slate4,#94a3b8);font-size:12px;">{{ (i18n or {}).get('dash.none', "无") }}</span></div>
+      <div id="c360-attrs"><span style="color:var(--th-ink-slate4,#5b6b85);font-size:12px;">{{ (i18n or {}).get('dash.none', "无") }}</span></div>
     </div>
     <div class="c360-sec">
       <h4>{{ (i18n or {}).get('c3_s013', "跟进管理") }}</h4>
@@ -127,11 +127,11 @@
       <div style="font-size:12px;color:var(--th-ink-gray5,#6b7280);margin:7px 0 3px;">{{ (i18n or {}).get('cases_note', "备注") }}</div>
       <textarea class="c360-search" id="c360-note" rows="3" style="resize:vertical;" placeholder="{{ (i18n or {}).get('c3_s016', '坐席备注…') }}"></textarea>
       <button class="tiny-btn" style="margin-top:7px;width:100%;" onclick="C360.saveCrm()">{{ (i18n or {}).get('c3_s017', "保存备注/标签") }}</button>
-      <div id="c360-crm-msg" style="font-size:12px;color:var(--th-ink-green6,#16a34a);margin-top:5px;"></div>
+      <div id="c360-crm-msg" style="font-size:12px;color:var(--th-ink-green6,#15803d);margin-top:5px;"></div>
     </div>
     <div class="c360-sec">
       <h4>{{ (i18n or {}).get('c3_s018', "跟进任务") }}</h4>
-      <div id="c360-tasks" style="font-size:12px;color:var(--th-ink-slate4,#94a3b8);">{{ (i18n or {}).get('c3_s019', "无跟进任务") }}</div>
+      <div id="c360-tasks" style="font-size:12px;color:var(--th-ink-slate4,#5b6b85);">{{ (i18n or {}).get('c3_s019', "无跟进任务") }}</div>
       <div style="margin-top:8px;border-top:1px dashed var(--th-bd-gray2,#e5e7eb);padding-top:8px;">
         <div style="font-size:12px;color:var(--th-ink-gray5,#6b7280);margin-bottom:3px;">{{ (i18n or {}).get('c3_s020', "新增任务 · 到期时间") }}</div>
         <input class="c360-search" id="c360-task-due" type="datetime-local">
@@ -167,7 +167,7 @@
     box.innerHTML=head+renderTl(window.__tl||[]);
   }
   function renderTl(tl){
-    if(!tl.length) return '<span style="color:var(--th-ink-slate4,#94a3b8);">'+window.T('rpa_js_no_messages')+'</span>';
+    if(!tl.length) return '<span style="color:var(--th-ink-slate4,#5b6b85);">'+window.T('rpa_js_no_messages')+'</span>';
     return tl.map(function(m){
       var out=(m.direction==='out');
       var xl=m.translated_text?'<div class="tl-xlate">'+esc(m.translated_text)+'</div>':'';
@@ -194,7 +194,7 @@
     var ATTR={phone:window.T('msg_js_1950'),email:window.T('c3_js004'),name:window.T('c3_js005'),wechat:window.T('c3_js006'),line_id:'LINE',note:window.T('cases_note')};
     var attrs=ct.attributes||{};
     var ah=Object.keys(attrs).map(function(k){return '<div class="c360-attr">'+esc(ATTR[k]||k)+': '+esc(attrs[k])+'</div>';}).join('');
-    document.getElementById('c360-attrs').innerHTML = ah || '<span style="color:var(--th-ink-slate4,#94a3b8);font-size:12px;">'+window.T('dash.none')+'</span>';
+    document.getElementById('c360-attrs').innerHTML = ah || '<span style="color:var(--th-ink-slate4,#5b6b85);font-size:12px;">'+window.T('dash.none')+'</span>';
 
     // 渠道身份
     var ids=ct.identities||[];
@@ -216,7 +216,7 @@
     var ev=d.events||[];
     document.getElementById('c360-events').innerHTML = ev.length
       ? ev.map(function(e){return '<div class="c360-evt">'+esc(e.label||e.event_type)+' · '+fmtTs(e.ts)+'</div>';}).join('')
-      : '<span style="color:var(--th-ink-slate4,#94a3b8);font-size:12px;">'+window.T('dash.none')+'</span>';
+      : '<span style="color:var(--th-ink-slate4,#5b6b85);font-size:12px;">'+window.T('dash.none')+'</span>';
 
     // 跟进管理
     window.__tags = (ct.tags||[]).slice();
@@ -242,7 +242,7 @@
     var box=document.getElementById('c360-tagbox');
     box.innerHTML=(window.__tags||[]).map(function(t,i){
       return '<span class="c360-pill" style="cursor:default;'+tagStyle(t)+'">'+esc(t)+' <a style="cursor:pointer;opacity:.7;" onclick="C360.delTag('+i+')">×</a></span>';
-    }).join('') || '<span style="color:var(--th-ink-slate4,#94a3b8);font-size:12px;">'+window.T('c3_js008')+'</span>';
+    }).join('') || '<span style="color:var(--th-ink-slate4,#5b6b85);font-size:12px;">'+window.T('c3_js008')+'</span>';
   }
   window.__agents=[];
   function loadAgents(){
@@ -257,15 +257,15 @@
   }
   function renderTasks(tasks){
     var box=document.getElementById('c360-tasks');
-    if(!tasks||!tasks.length){ box.innerHTML='<span style="color:var(--th-ink-slate4,#94a3b8);font-size:12px;">'+window.T('c3_s019')+'</span>'; return; }
+    if(!tasks||!tasks.length){ box.innerHTML='<span style="color:var(--th-ink-slate4,#5b6b85);font-size:12px;">'+window.T('c3_s019')+'</span>'; return; }
     var now=Date.now()/1000;
     box.innerHTML=tasks.map(function(t){
       if(t.done_at){
-        return '<div style="font-size:12px;color:var(--th-ink-gray4,#9ca3af);margin-top:5px;text-decoration:line-through;">✓ '+fmtTs(t.due_at)+(t.note?(' · '+esc(t.note)):'')+'</div>';
+        return '<div style="font-size:12px;color:var(--th-ink-gray4,#5b6b85);margin-top:5px;text-decoration:line-through;">✓ '+fmtTs(t.due_at)+(t.note?(' · '+esc(t.note)):'')+'</div>';
       }
       var due=t.due_at && t.due_at<=now;
       return '<div style="font-size:12px;margin-top:6px;border-bottom:1px dashed var(--th-bd-slate1,#f1f5f9);padding-bottom:6px;">'
-        +'<div style="color:'+(due?'var(--th-ink-red6,#dc2626)':'var(--th-ink-amber8,#92400e)')+';">'+(due?'⏰ ':'')+fmtTs(t.due_at)+(t.note?(' · '+esc(t.note)):'')+(t.assignee?(' <span style="color:var(--th-ink-slate4,#94a3b8);">@'+esc(t.assignee.slice(0,8))+'</span>'):'')+'</div>'
+        +'<div style="color:'+(due?'var(--th-ink-red6,#b91c1c)':'var(--th-ink-amber8,#92400e)')+';">'+(due?'⏰ ':'')+fmtTs(t.due_at)+(t.note?(' · '+esc(t.note)):'')+(t.assignee?(' <span style="color:var(--th-ink-slate4,#5b6b85);">@'+esc(t.assignee.slice(0,8))+'</span>'):'')+'</div>'
         +'<div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap;">'
         +'<button class="tiny-btn" style="padding:1px 6px;" onclick="C360.snoozeTask(\''+esc(t.task_id)+'\',1)">+1'+window.T('wa_s158')+'</button>'
         +'<button class="tiny-btn" style="padding:1px 6px;" onclick="C360.snoozeTask(\''+esc(t.task_id)+'\',3)">+3'+window.T('wa_s158')+'</button>'
@@ -287,11 +287,11 @@
 
   function renderCands(cands){
     var box=document.getElementById('c360-cands');
-    if(!cands.length){ box.innerHTML='<div style="color:var(--th-ink-slate4,#94a3b8);font-size:12px;margin-top:6px;">'+window.T('c3_js011')+'</div>'; return; }
+    if(!cands.length){ box.innerHTML='<div style="color:var(--th-ink-slate4,#5b6b85);font-size:12px;margin-top:6px;">'+window.T('c3_js011')+'</div>'; return; }
     box.innerHTML = cands.map(function(c){
       if(c.contact_id===CONTACT_ID) return '';
       return '<div class="c360-cand"><div>'+esc(c.primary_name||window.T('base.review.no_name'))+' · '+(c.channels||[]).map(esc).join('/')
-        +(c.match_on?' <span style="color:var(--th-ink-slate4,#94a3b8);">('+window.T('msg_js_499')+':'+esc(c.match_on)+')</span>':'')+'</div>'
+        +(c.match_on?' <span style="color:var(--th-ink-slate4,#5b6b85);">('+window.T('msg_js_499')+':'+esc(c.match_on)+')</span>':'')+'</div>'
         +'<button class="tiny-btn" style="margin-top:5px;" onclick="C360.mergeInto(\''+esc(c.contact_id)+'\')">'+window.T('c3_js012')+' ↑</button></div>';
     }).join('');
   }
@@ -446,7 +446,7 @@
     var box=document.getElementById('stl-side-box'); if(!box) return;
     apiFetch('/api/workspace/contact/'+encodeURIComponent(CONTACT_ID)+'/stage-timeline?limit=1')
       .then(function(r){return r.json();}).then(function(d){
-        if(!d.ok||!d.summary){ box.innerHTML='<span style="color:var(--th-ink-slate4,#94a3b8);font-size:12px;">'+window.T('c3_js027')+'</span>'; return; }
+        if(!d.ok||!d.summary){ box.innerHTML='<span style="color:var(--th-ink-slate4,#5b6b85);font-size:12px;">'+window.T('c3_js027')+'</span>'; return; }
         var s=d.summary;
         box.innerHTML='<div style="font-size:16px;font-weight:700;color:var(--th-ink-violet8,#5b21b6);">'+esc(s.current_stage_label||window.T('c3_js028'))+'</div>'
           +'<div style="font-size:11px;color:var(--th-ink-slate5,#64748b);margin-top:4px;">'
@@ -455,7 +455,7 @@
           +(s.total_downgrades?window.T('c3_js033')+' '+s.total_downgrades+' '+window.T('kb_js_174'):'')
           +'</div>'
           +'<button class="tiny-btn" style="margin-top:6px;width:100%;" onclick="C360.switchTab(\'stl\')">'+window.T('c3_js034')+'</button>';
-      }).catch(function(){ box.innerHTML='<span style="color:var(--th-ink-slate4,#94a3b8);font-size:12px;">'+window.T('rpa_load_failed')+'</span>'; });
+      }).catch(function(){ box.innerHTML='<span style="color:var(--th-ink-slate4,#5b6b85);font-size:12px;">'+window.T('rpa_load_failed')+'</span>'; });
   }
   function loadStl(){
     if(_stlLoaded) return;
@@ -524,7 +524,7 @@
   apiFetch('/api/workspace/contact/'+encodeURIComponent(CONTACT_ID)+'/engagement')
     .then(function(r){return r.json();}).then(function(d){
       if(!d.computed||!d.engagement){
-        box.innerHTML='<div style="font-size:12px;color:var(--th-ink-slate4,#94a3b8);">'+window.T('c3_js039')+'</div>'
+        box.innerHTML='<div style="font-size:12px;color:var(--th-ink-slate4,#5b6b85);">'+window.T('c3_js039')+'</div>'
           +'<button class="tiny-btn" style="margin-top:6px;width:100%;" onclick="computeEngagement()">'+window.T('c3_js040')+'</button>';
         return;
       }
@@ -540,7 +540,7 @@
         }).join('')+'</div>'
         +'<button class="tiny-btn" style="margin-top:8px;width:100%;font-size:11px;" onclick="computeEngagement()">'+window.T('c3_js043')+'</button>'
         +'</div>';
-    }).catch(function(){ box.innerHTML='<span style="color:var(--th-ink-slate4,#94a3b8);font-size:12px;">'+window.T('rpa_load_failed')+'</span>'; });
+    }).catch(function(){ box.innerHTML='<span style="color:var(--th-ink-slate4,#5b6b85);font-size:12px;">'+window.T('rpa_load_failed')+'</span>'; });
 }
 function computeEngagement(){
   apiFetch('/api/workspace/contact/'+encodeURIComponent(CONTACT_ID)+'/engagement',{method:'POST'}, {timeoutMs: 60000})

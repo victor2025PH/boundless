@@ -7,8 +7,12 @@ base.html 的完整/简洁两种模式、命令面板(Ctrl+K)页面项、渠道�
 结构:
 - NAV_ICONS: 图标名 → 内联 SVG(品牌图标仅用于渠道组,其余为线性图标)
 - NAV_ITEMS: 菜单项定义(label_key 指向 web_i18n,label_zh 为兜底文案)
-- NAV_GROUPS_FULL: 完整模式分组(按任务流:工作台/渠道/AI/洞察/合规/系统/支持)
-- SIMPLE_CORE / SIMPLE_MORE: 简洁模式主区与折叠区(引用 item id)
+- NAV_GROUPS_FULL: 完整模式分组(按任务流:工作台/真机矩阵/AI/洞察/合规/系统/支持)
+- SIMPLE_CORE / SIMPLE_MORE: 简洁模式主区与折叠区(引用 item id;定位=值班/看店
+  日常,运维/分析/矩阵类只在完整模式)
+- MATRIX_ITEM_IDS → nav_matrix_items: 真机矩阵五页(总览+四渠道)。简洁模式侧栏
+  不渲染它们;深链进矩阵页时两套侧栏(base.html/_ws_sidebar.html)按当前路径
+  上下文渲染本组,保住组内互切与高亮
 - "__domain_pages__" 哨兵: 模板在该位置内联渲染域动态页(domain_web_pages)
 
 约定:
@@ -69,7 +73,10 @@ NAV_ICONS = {
 
 # ── 菜单项 ───────────────────────────────────────────────────────────────────
 NAV_ITEMS = {
+    # winname：入口走 _win_unique.html 的窗口唯一性 helper——点击复用/聚焦既有
+    # 工作台窗口而非每次 _blank 新开（窗口堆积的头号入口）；target 保留作降级兜底。
     "workspace": dict(key="", path="/workspace", icon="inbox", target="_blank",
+                      winname="workspace",
                       external=True, label_key="workspace_inbox", label_zh="坐席工作台",
                       help="nav_unified_inbox",
                       cmd_keys="unified inbox 统一 收件箱 消息 聊天 多平台 坐席 工作台 workspace"),
@@ -83,31 +90,44 @@ NAV_ITEMS = {
                              label_key="relations_health", label_zh="流失预警",
                              help="nav_relations_health",
                              cmd_keys="churn 流失 预警 关系 健康 relations"),
-    "rpa_overview": dict(key="rpa_overview", path="/rpa-overview", icon="radar",
-                         badge="badge-rpa-ov", label_key="rpa_overview", label_zh="渠道总览",
+    # ── 真机矩阵（2026-08-03 更名迁移）：总览 + 四渠道从简洁模式撤出，只在完整
+    #    模式「真机矩阵」组渲染（运维驾驶舱定位，普通用户日常不碰）。cmd_keys 保留
+    #    旧名（渠道总览/XX 渠道/渠道中心），老用户 Ctrl+K 搜旧名仍命中；五项显式
+    #    simple=True＝侧栏藏、命令面板仍可搜（藏而不废，URL/书签也不封）。简洁模式
+    #    深链进矩阵页时，两套侧栏按当前路径上下文渲染本组（消费 nav_matrix_items）。
+    "rpa_overview": dict(feature="rpa", key="rpa_overview", path="/rpa-overview",
+                         icon="radar", simple=True,
+                         badge="badge-rpa-ov", label_key="rpa_overview", label_zh="矩阵总览",
                          help="nav_rpa_overview",
-                         cmd_keys="rpa overview 总览 跨平台 渠道 渠道总览 RPA跨平台总览 telegram line messenger whatsapp"),
+                         cmd_keys="rpa overview 总览 跨平台 渠道 渠道总览 真机矩阵 矩阵 "
+                                  "matrix RPA跨平台总览 telegram line messenger whatsapp"),
     # 渠道中心融合：四渠道设置页迁入工作台壳（/workspace/channels/*），
     # 旧路径仍 302 兜底；侧栏/命令面板直指新址。
+    # Telegram 刻意不挂 feature="rpa"：主号走 MTProto 协议（基础产品面），API 前缀
+    # 表也不含 telegram；挂档会把核心渠道锁进 flagship（门禁钉在
+    # test_page_feature_mapping_pure：/workspace/channels/telegram 不守卫）。
     "telegram": dict(key="telegram", path="/workspace/channels/telegram",
-                     icon="telegram", dot="telegram",
-                     label_key="telegram_settings", label_zh="Telegram 自动化",
+                     icon="telegram", dot="telegram", simple=True,
+                     label_key="telegram_settings", label_zh="Telegram",
                      help="nav_telegram",
-                     cmd_keys="telegram tg 电报 自动化 设置 主号 telegram设置 渠道中心"),
+                     cmd_keys="telegram tg 电报 自动化 设置 主号 telegram设置 渠道中心 "
+                              "真机矩阵 matrix"),
     "line_rpa": dict(feature="rpa", key="line_rpa", path="/workspace/channels/line", icon="line",
-                     dot="line",
-                     label_key="line_rpa", label_zh="LINE 自动化", help="nav_line_rpa",
-                     cmd_keys="line rpa 自动化 自动聊天 真机 渠道中心"),
+                     dot="line", simple=True,
+                     label_key="line_rpa", label_zh="LINE", help="nav_line_rpa",
+                     cmd_keys="line rpa 自动化 自动聊天 真机 渠道中心 真机矩阵 matrix"),
     "messenger_rpa": dict(feature="rpa", key="messenger_rpa", path="/workspace/channels/messenger",
-                          icon="messenger",
+                          icon="messenger", simple=True,
                           dot="messenger", label_key="messenger_rpa",
-                          label_zh="Messenger 自动化", help="nav_messenger_rpa",
-                          cmd_keys="messenger facebook fb rpa 自动化 线索 渠道中心"),
+                          label_zh="Messenger", help="nav_messenger_rpa",
+                          cmd_keys="messenger facebook fb rpa 自动化 线索 渠道中心 "
+                                   "真机矩阵 matrix"),
     "whatsapp_rpa": dict(feature="rpa", key="whatsapp_rpa", path="/workspace/channels/whatsapp",
-                         icon="whatsapp",
+                         icon="whatsapp", simple=True,
                          dot="whatsapp", label_key="whatsapp_rpa",
-                         label_zh="WhatsApp 自动化", help="nav_whatsapp_rpa",
-                         cmd_keys="whatsapp wa rpa 自动化 自动聊天 模板 渠道中心"),
+                         label_zh="WhatsApp", help="nav_whatsapp_rpa",
+                         cmd_keys="whatsapp wa rpa 自动化 自动聊天 模板 渠道中心 "
+                                  "真机矩阵 matrix"),
     # 群脉 CrowdX 导播台：多号群戏剧本库 + 离线排练（dry-run，不发真消息）
     "group_show": dict(key="group_show", path="/group-show", icon="users",
                        label_key="gs_nav", label_zh="群脉导播台",
@@ -131,6 +151,13 @@ NAV_ITEMS = {
     "strategies": dict(feature="ai_autosend", key="strategies", path="/strategies", icon="sliders",
                        label_key="strategies", label_zh="回复策略", help="nav_strategies",
                        cmd_keys="strategies 策略 配置 策略配置 回复策略 参数"),
+    # 自动回复设置：全自动档位/回复速度/拟人细节的集中入口（2026-08-02 P0）
+    "reply_settings": dict(feature="ai_autosend", key="reply_settings", path="/reply-settings",
+                           icon="clock",
+                           label_key="rps_nav", label_zh="自动回复设置",
+                           cmd_keys="reply settings 自动回复 回复速度 档位 延迟 打字 "
+                                    "拟人 全自动 速度 autosend delay pacing mode "
+                                    "长度 风格 内容 语气 emoji 句数 length style tone"),
     "strategy_analytics": dict(feature="ai_autosend", key="strategy-analytics", path="/strategy-analytics",
                                icon="target", label_key="strategy_analytics",
                                label_zh="策略效果", help="nav_strategy_analytics",
@@ -138,6 +165,14 @@ NAV_ITEMS = {
     "dash": dict(key="dash", path="/", icon="grid", label_key="dashboard",
                  label_zh="数据概览", help="nav_dashboard",
                  cmd_keys="dashboard home 首页 概览 仪表盘"),
+    # 运营总览（/admin/ops）2026-08-02 补入侧栏：此前只有简洁模式仪表盘的快捷
+    # 入口卡能到——信息密度最高的 ops 卡片页没有常驻导航，是历代内容被迫堆进
+    # 仪表盘的根因之一。
+    "ops": dict(key="ops", path="/admin/ops", icon="pulse",
+                label_key="db2_nav_ops", label_zh="运营总览",
+                help="nav_ops_overview",
+                cmd_keys="ops overview 运营 总览 运营总览 运维 事件 roi 计费 "
+                         "可靠性 老板 boss"),
     "analytics": dict(feature="analytics", key="analytics", path="/analytics", icon="bar-chart",
                       label_key="analytics", label_zh="运营分析", help="nav_analytics",
                       cmd_keys="analytics 运营 分析 数据"),
@@ -175,6 +210,15 @@ NAV_ITEMS = {
     "escalation": dict(key="settings", path="/settings#escalation", icon="phone",
                        master_only=True, label_key="escalation", label_zh="人工转接",
                        help="nav_escalation", cmd_keys="escalation 人工 转接 客服 handoff"),
+    # 个人设置(2026-08-04):坐席级外观个性化(主题/壁纸/夜间/字号/圆角/动画)。
+    # 全角色可用;设置经 /api/workspace/prefs.appearance 漫游(本机缓存+服务端),
+    # 收件箱左栏「主题配色」按钮弹出的快捷面板与本页共用同一渲染器(appearance.js)。
+    "personal_settings": dict(key="personal_settings", path="/personal-settings",
+                              icon="sliders",
+                              label_key="nav_personal_settings", label_zh="个人设置",
+                              cmd_keys="personal settings 个人 设置 个人设置 外观 主题 "
+                                       "壁纸 夜间 暗色 字号 圆角 动画 表情 appearance "
+                                       "theme wallpaper night dark emoji"),
 }
 
 # 仅命令面板可达(无侧栏入口)的页面
@@ -200,29 +244,41 @@ DOMAIN_SENTINEL = "__domain_pages__"
 
 # ── 完整模式分组 ─────────────────────────────────────────────────────────────
 NAV_GROUPS_FULL = [
+    # 域动态页哨兵在「工作台」组尾：支付域渠道/汇率等属日常业务面；且哨兵不能
+    # 单独成组——无域包的部署会渲染出空分组标题。
     dict(label_key="section_workbench", label_zh="工作台",
-         items=["workspace", "cases", "care", "relations_health"]),
-    dict(label_key="section_channels", label_zh="渠道自动化",
+         items=["workspace", "cases", "care", "relations_health", DOMAIN_SENTINEL]),
+    # 真机矩阵（原「渠道自动化」，2026-08-03 更名）：矩阵总览 + 四渠道 + 群脉导播
+    # ——群脉指挥的就是同一批矩阵账号，归组随矩阵。
+    dict(label_key="section_channels", label_zh="真机矩阵",
          items=["rpa_overview", "telegram", "line_rpa", "messenger_rpa",
-                "whatsapp_rpa", "group_show", DOMAIN_SENTINEL]),
+                "whatsapp_rpa", "group_show"]),
     dict(label_key="section_ai_kb", label_zh="AI 与知识",
-         items=["personas", "knowledge", "learner", "episodic",
-                "strategies", "strategy_analytics"]),
+         items=["personas", "reply_settings", "knowledge", "learner",
+                "episodic", "strategies", "strategy_analytics"]),
     dict(label_key="section_insights", label_zh="数据洞察",
-         items=["dash", "analytics", "funnel", "monetization"]),
+         items=["dash", "ops", "analytics", "funnel", "monetization"]),
     dict(label_key="section_compliance", label_zh="安全合规",
          items=["crisis_audit", "audit"]),
     dict(label_key="section_system", label_zh="系统管理", master_only=True,
          items=["users", "settings", "membership", "diff", "logs", "developer"]),
-    dict(label_key="section_support", label_zh="支持", items=["help"]),
+    dict(label_key="section_support", label_zh="支持",
+         items=["personal_settings", "help"]),
 ]
 
 # ── 简洁模式 ────────────────────────────────────────────────────────────────
+# 定位（2026-08-03 精简）：简洁模式＝值班/看店视角（坐席+店主每天要碰的），
+# 完整模式＝配置/运维/增长视角。真机矩阵五项、人设工作室与分析/审计/记账类页
+# 只在完整模式渲染；URL 不封（书签/深链仍可达），命令面板按 simple 标注兜底可搜。
+# 危机审计刻意留在折叠区：红色徽标是简洁模式用户唯一的危机可见通道，安全项不藏。
 SIMPLE_CORE = ["workspace", "cases", "care", "knowledge", DOMAIN_SENTINEL,
-               "learner", "personas", "rpa_overview", "telegram", "line_rpa",
-               "messenger_rpa", "whatsapp_rpa", "escalation"]
-SIMPLE_MORE = ["dash", "analytics", "audit", "episodic", "crisis_audit",
-               "relations_health", "monetization", "help"]
+               "reply_settings", "escalation"]
+SIMPLE_MORE = ["dash", "learner", "crisis_audit", "personal_settings", "help"]
+
+# 真机矩阵成员（简洁模式上下文导航用：深链进矩阵页时侧栏就地渲染本组，保住
+# 组内互切与当前页高亮；base.html 与 _ws_sidebar.html 经 nav_matrix_items 消费）。
+MATRIX_ITEM_IDS = ("rpa_overview", "telegram", "line_rpa", "messenger_rpa",
+                   "whatsapp_rpa")
 
 
 def _resolve(ids):
@@ -263,6 +319,7 @@ _NAV_CONTEXT = dict(
     nav_groups=[dict(g, items=_resolve(g["items"])) for g in NAV_GROUPS_FULL],
     nav_simple_core=_resolve(SIMPLE_CORE),
     nav_simple_more=_resolve(SIMPLE_MORE),
+    nav_matrix_items=_resolve(list(MATRIX_ITEM_IDS)),
     nav_cmd_items=_cmd_items(),
 )
 
@@ -341,5 +398,6 @@ def get_nav_context(config: dict = None) -> dict:
         nav_groups=groups,
         nav_simple_core=_mark_locked(_NAV_CONTEXT["nav_simple_core"], locked),
         nav_simple_more=_mark_locked(_NAV_CONTEXT["nav_simple_more"], locked),
+        nav_matrix_items=_mark_locked(_NAV_CONTEXT["nav_matrix_items"], locked),
         nav_cmd_items=_drop_locked(_NAV_CONTEXT["nav_cmd_items"], locked),
     )

@@ -27,6 +27,21 @@ ZH = {
     "setup.ch.enable_cta": "立即启用",
     "setup.ch.prog": "能收发消息的渠道 {r} / {t}",
     "setup.ch.prog_hint": "按「现在能不能收发消息」统计：登录了账号，或官方接入凭据已就绪。",
+    # official 媒体 URL 状态条（IG/LINE 官方通道发图/语音的前置；P1，2026-08-05）
+    "sw_media_probe": "检测可达性",
+    "sw_media_probing": "检测中…",
+    "sw_media_unset": "提示：{chs} 官方通道要发图/语音，需在渠道表单里填「公网媒体 URL」（当前仅能发文字）。",
+    "sw_media_set": "公网媒体 URL：{url}",
+    "sw_media_ok": "本机可达 ✓（注意：平台侧最终以公网可达为准）",
+    "sw_media_fail": "不可达（{why}）——检查域名 / 隧道 / TLS；平台将拉取失败",
+    # 官方 webhook 回调状态条（接入向导内嵌握手反馈；数据源 /api/admin/official-webhook-status）
+    "sw_reach_title": "回调状态",
+    "sw_reach_live": "✓ 回调已通 · 最近事件 {age} 前",
+    "sw_reach_handshake": "✓ 平台握手成功（公网可达）· 还没有消息事件——持续为零请检查开发者后台的订阅字段（messages 等）",
+    "sw_reach_never": "等待平台回调握手… 检查：公网回调 URL 是否指到本机、隧道/反代是否在跑、开发者后台是否已配置回调",
+    "sw_reach_auth": "⚠ 有请求到达但从未通过验证——核对 verify_token / app_secret（也可能只是外部扫描噪声）",
+    "sw_reach_not_mounted": "凭证已保存 · 回调路由将在下次实例重启时装载，装载后此处自动更新",
+    "sw_reach_path": "回调路径：{path}",
 }
 
 EN = {
@@ -44,4 +59,19 @@ EN = {
     "setup.ch.enable_cta": "Enable now",
     "setup.ch.prog": "Channels that can send & receive: {r} / {t}",
     "setup.ch.prog_hint": "Counted by what actually works: an account is logged in, or official API credentials are ready.",
+    # Official media URL status bar (prerequisite for IG/LINE official media sends)
+    "sw_media_probe": "Check reachability",
+    "sw_media_probing": "Checking…",
+    "sw_media_unset": "Note: the official channels for {chs} need a public media URL (form field on the channel card) to send images/voice — text only until then.",
+    "sw_media_set": "Public media URL: {url}",
+    "sw_media_ok": "Reachable from this server ✓ (final say is public reachability from the platform side)",
+    "sw_media_fail": "Unreachable ({why}) — check domain / tunnel / TLS; the platform will fail to fetch",
+    # Official webhook callback status strip (inline handshake feedback in the wizard)
+    "sw_reach_title": "Callback status",
+    "sw_reach_live": "✓ Callback live · last event {age} ago",
+    "sw_reach_handshake": "✓ Platform handshake OK (publicly reachable) · no message events yet — if it stays zero, check the subscription fields (messages etc.) in the developer console",
+    "sw_reach_never": "Waiting for the platform handshake… Check: the public callback URL points at this machine, the tunnel/reverse-proxy is running, and the callback is configured in the developer console",
+    "sw_reach_auth": "⚠ Requests arrive but never pass verification — double-check verify_token / app_secret (could also be external scanner noise)",
+    "sw_reach_not_mounted": "Credentials saved · callback routes mount on the next instance restart; this strip updates automatically once live",
+    "sw_reach_path": "Callback path: {path}",
 }

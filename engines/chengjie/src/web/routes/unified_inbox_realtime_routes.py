@@ -101,6 +101,22 @@ _COALESCE_NOTIF_TYPES = frozenset({
 })
 
 
+def _edge_pick(items: list, seen: set) -> list:
+    """SLA/升级边沿判定的单一口径：返回本轮「新转入」的 items，并原地维护 seen 集
+    （补新边沿 + 剔除已恢复者——恢复后再次越线可再报）。
+
+    存在的理由（2026-08-05 实锤）：连接首轮 seen 为空 → 旧逻辑把**全部在途项**当
+    新边沿逐条发帧（生产积压 ~45 条 SLA + ~45 条升级），前端每帧又各触发一次快照
+    刷新 → 冷启动瞬间 ~90 个并发 GET 把浏览器同源 6 连接吃满，页面上其余请求
+    （含 ?conv= 深链救援）整段饿死。连接期这些帧本就零信息量——工作台开页时
+    已拉过快照接口、收帧后也只是再拉一次快照。故首轮 emit=False 静默 prime
+    （升级审计副作用照跑），只有连接存续期间的**真边沿**才发帧。"""
+    fresh = [it for it in items if it["conversation_id"] not in seen]
+    seen.update(it["conversation_id"] for it in fresh)
+    seen.intersection_update({it["conversation_id"] for it in items})
+    return fresh
+
+
 def _is_loopback_client(request: Any) -> bool:
     """maintenance-notice 的本机直通判定。
 
@@ -162,22 +178,21 @@ def register_realtime_routes(app, *, api_auth) -> None:
 
         _sla_seen: set = set()
 
-        def _sla_pushes():
-            """边沿触发：返回本轮"新转入严重超时"的会话 SSE 帧（去重 + 恢复后可再报）。"""
+        def _sla_pushes(emit: bool = True):
+            """边沿触发：返回本轮"新转入严重超时"的会话 SSE 帧（去重 + 恢复后可再报）。
+
+            emit=False（连接首轮）：只 prime seen 集不发帧——在途存量对新连接零信息量，
+            逐条重放曾把浏览器连接池打满（见 _edge_pick docstring）。"""
             frames: List[str] = []
             try:
                 snap = _sla_alert_snapshot(request)
-                items = snap.get("items", [])
-                cur = {it["conversation_id"] for it in items}
-                for it in items:
-                    cid = it["conversation_id"]
-                    if cid not in _sla_seen:
-                        _sla_seen.add(cid)
+                fresh = _edge_pick(snap.get("items", []), _sla_seen)
+                if emit:
+                    for it in fresh:
                         frames.append(
                             "data: " + _json.dumps(
                                 {"type": "sla_alert", "data": it},
                                 ensure_ascii=False) + "\n\n")
-                _sla_seen.intersection_update(cur)
             except Exception:
                 logger.debug("SLA SSE 推送计算失败（已忽略）", exc_info=True)
             return frames
@@ -211,19 +226,17 @@ def register_realtime_routes(app, *, api_auth) -> None:
                 logger.debug("auto-assign supervisor 失败（已忽略）", exc_info=True)
                 return ""
 
-        def _esc_pushes():
-            """边沿触发：新升级 → 审计落库 + 自动指派主管 + 推定向 SSE 帧。"""
+        def _esc_pushes(emit: bool = True):
+            """边沿触发：新升级 → 审计落库 + 自动指派主管 + 推定向 SSE 帧。
+
+            emit=False（连接首轮）：审计/指派副作用**照跑**（服务重启窗口越线的升级
+            仍要有人记账），但不发帧——存量重放曾把浏览器连接池打满（见 _edge_pick）。"""
             frames: List[str] = []
             try:
                 snap = _escalation_snapshot(request)
-                items = snap.get("items", [])
-                cur = {it["conversation_id"] for it in items}
                 inbox = _inbox_store(request)
-                for it in items:
+                for it in _edge_pick(snap.get("items", []), _esc_seen):
                     cid = it["conversation_id"]
-                    if cid in _esc_seen:
-                        continue
-                    _esc_seen.add(cid)
                     assigned_to = ""
                     if inbox is not None:
                         try:
@@ -261,13 +274,13 @@ def register_realtime_routes(app, *, api_auth) -> None:
                                     pass
                         except Exception:
                             logger.debug("升级审计落库失败（已忽略）", exc_info=True)
-                    payload = dict(it)
-                    payload["assigned_to"] = assigned_to
-                    frames.append(
-                        "data: " + _json.dumps(
-                            {"type": "escalation", "data": payload},
-                            ensure_ascii=False) + "\n\n")
-                _esc_seen.intersection_update(cur)
+                    if emit:
+                        payload = dict(it)
+                        payload["assigned_to"] = assigned_to
+                        frames.append(
+                            "data: " + _json.dumps(
+                                {"type": "escalation", "data": payload},
+                                ensure_ascii=False) + "\n\n")
             except Exception:
                 logger.debug("升级 SSE 推送计算失败（已忽略）", exc_info=True)
             return frames
@@ -321,10 +334,10 @@ def register_realtime_routes(app, *, api_auth) -> None:
                     if evt.get("type") in _SSE_EVENT_TYPES:
                         yield f"data: {_json.dumps(evt, ensure_ascii=False)}\n\n"
                         _maybe_push_notif(evt)
-                for fr in _sla_pushes():
-                    yield fr
-                for fr in _esc_pushes():
-                    yield fr
+                # 连接首轮：静默 prime（升级审计副作用照跑）——在途存量对新连接零信息量，
+                # 逐条重放曾触发前端刷新风暴打满浏览器连接池（见 _edge_pick docstring）。
+                _sla_pushes(emit=False)
+                _esc_pushes(emit=False)
                 while True:
                     try:
                         evt = await asyncio.wait_for(queue.get(), timeout=30.0)

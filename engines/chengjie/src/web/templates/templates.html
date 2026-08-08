@@ -25,7 +25,8 @@
 /* var badges */
 .var-row{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.5rem}
 .var-pill{background:var(--prs);color:var(--purple);padding:.15rem .5rem;border-radius:5px;font-size:.74rem;font-weight:600;font-family:'Consolas',monospace;cursor:pointer;transition:.15s}
-.var-pill:hover{background:var(--purple);color:#fff}
+/* 软底+深字：实底紫+白字在暗色（紫提亮为 300 档后）会跌破 AA，软底公式两主题都达标 */
+.var-pill:hover{background:var(--prs);color:var(--purple)}
 /* char count */
 .char-count{font-size:.75rem;color:var(--t3);text-align:right;margin-top:.25rem}
 /* type column */
@@ -301,7 +302,7 @@ async function _doSaveTemplate(fd){
   var btn=document.getElementById('save-btn');
   btnLoading(btn,true);
   try{
-    var r=await fetch('/templates/update',{method:'POST',body:fd,headers:{'Accept':'application/json'}});
+    var r=await apiFetch('/templates/update',{method:'POST',body:fd,headers:{'Accept':'application/json'}},{timeoutMs:60000});
     var d=await r.json();
     if(d.ok){
       showToast(d.msg||window.T('wa_js_053'),'ok');

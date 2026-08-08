@@ -516,7 +516,7 @@ rpa.analytics = {
           results.innerHTML = '<div class="rpa-search-results">' + rs.map(function(r){
             const ck = r.chat_key || '';
             const intentTag = (r.intent_tag && r.intent_tag !== 'general')
-              ? ' <span style="font-size:.65rem;padding:1px 6px;border-radius:6px;background:var(--th-bg-ind15,rgba(99,102,241,.15));color:var(--th-ink-indigo3,#a5b4fc)">'+rpa.esc(r.intent_tag)+'</span>'
+              ? ' <span style="font-size:.65rem;padding:1px 6px;border-radius:6px;background:var(--th-bg-ind15,rgba(99,102,241,.15));color:var(--th-ink-indigo5,#4338ca)">'+rpa.esc(r.intent_tag)+'</span>'
               : '';
             // 用 data 属性 + 事件委托（见 init 处），不再拼 inline onclick 调
             // window.__rpaPick_<inputId>——inputId 含连字符时 dot 访问会被解析成减法
@@ -531,7 +531,7 @@ rpa.analytics = {
           }).join('') + '</div>';
         })
         .catch(function(){
-          results.innerHTML='<div style="padding:.55rem 1rem;color:var(--th-ink-red4,#f87171);font-size:.78rem">' + window.T('rpa_js_search_failed') + ' <button class="btn-sec" type="button" style="margin-left:.35rem;font-size:.75rem">' + window.T('rpa_retry') + '</button></div>';
+          results.innerHTML='<div style="padding:.55rem 1rem;color:var(--th-ink-red4,#b91c1c);font-size:.78rem">' + window.T('rpa_js_search_failed') + ' <button class="btn-sec" type="button" style="margin-left:.35rem;font-size:.75rem">' + window.T('rpa_retry') + '</button></div>';
           const btn = results.querySelector('.btn-sec');
           if(btn){ btn.addEventListener('click', doSearch); }
         });
@@ -566,14 +566,14 @@ rpa.analytics = {
     const drawer = document.createElement('div');
     drawer.style.cssText = 'width:min(560px,100%);max-width:100%;height:100%;background:var(--bg,#0f172a);border-left:1px solid var(--bd,#1e293b);overflow-y:auto;box-shadow:-12px 0 28px rgba(0,0,0,.4)';
     drawer.innerHTML = '<div style="padding:1rem 1.2rem;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:.6rem;position:sticky;top:0;background:var(--bg,#0f172a);z-index:2">'
-      + '<strong style="font-size:.95rem;color:var(--t1)">💬 '+rpa.esc(peerName)+'</strong>'
+      + '<strong style="font-size:.95rem;color:var(--t)">💬 '+rpa.esc(peerName)+'</strong>'
       + '<span style="font-size:.7rem;color:var(--t3);font-family:monospace">'+rpa.esc(chatKey)+'</span>'
       + '<button id="rpa-detail-close" style="margin-left:auto;background:transparent;border:0;color:var(--t2);font-size:1.3rem;cursor:pointer;padding:0 .3rem" title="' + window.T('rpa_js_detail_close') + '">×</button>'
       + '</div>'
       + '<div id="rpa-detail-profile" style="padding:.6rem 1.2rem;border-bottom:1px dashed var(--bd);font-size:.78rem"></div>'
       + '<div id="rpa-detail-xprofile" style="display:none;padding:.5rem 1.2rem;border-bottom:1px dashed var(--bd);font-size:.75rem;background:rgba(99,102,241,.05)"></div>'
       + '<div style="display:flex;gap:.5rem;padding:.55rem 1.2rem;border-bottom:1px solid var(--bd);background:rgba(148,163,184,.04)">'
-      +   '<button class="rpa-dt-tab" data-mode="summary" style="background:transparent;border:0;color:var(--t1);font-weight:600;font-size:.82rem;cursor:pointer;border-bottom:2px solid var(--th-bd-indigo5,#6366f1);padding:.3rem 0">📋 ' + window.T('rpa_js_summary') + '</button>'
+      +   '<button class="rpa-dt-tab" data-mode="summary" style="background:transparent;border:0;color:var(--t);font-weight:600;font-size:.82rem;cursor:pointer;border-bottom:2px solid var(--th-bd-indigo5,#6366f1);padding:.3rem 0">📋 ' + window.T('rpa_js_summary') + '</button>'
       +   '<button class="rpa-dt-tab" data-mode="full" style="background:transparent;border:0;color:var(--t3);font-size:.82rem;cursor:pointer;border-bottom:2px solid transparent;padding:.3rem 0">💬 ' + window.T('rpa_js_full') + '</button>'
       +   '<span id="rpa-detail-total" style="margin-left:auto;font-size:.7rem;color:var(--t3);align-self:center"></span>'
       + '</div>'
@@ -598,10 +598,10 @@ rpa.analytics = {
           ? '<span style="margin-left:auto;font-size:.7rem;padding:2px 8px;border-radius:8px;background:'+(_INTENT_COLORS[dom]||'var(--th-bg-slate4,#94a3b8)')+';color:var(--th-ink-slate9,#0f172a);font-weight:600">'+(_INTENT_LABELS[dom]||dom)+'</span>'
           : '';
         stripEl.innerHTML = '<div style="display:flex;gap:.8rem;flex-wrap:wrap;align-items:center">'
-          + '<span style="color:var(--t2)">📊 <strong style="color:var(--t1)">'+p.total_turns+'</strong> ' + window.T('rpa_js_turns_unit') + '</span>'
-          + '<span style="color:var(--t2)">✅ <strong style="color:var(--t1)">'+(p.reply_rate||0)+'%</strong></span>'
+          + '<span style="color:var(--t2)">📊 <strong style="color:var(--t)">'+p.total_turns+'</strong> ' + window.T('rpa_js_turns_unit') + '</span>'
+          + '<span style="color:var(--t2)">✅ <strong style="color:var(--t)">'+(p.reply_rate||0)+'%</strong></span>'
           + '<span style="color:var(--t2)">📅 '+firstDate+' → '+lastDate+'</span>'
-          + (p.intimacy_score != null ? '<span style="color:var(--t2)">💜 ' + window.T('rpa_js_intimacy') + ' <strong style="color:var(--t1)">'+Math.round(p.intimacy_score)+'</strong></span>' : '')
+          + (p.intimacy_score != null ? '<span style="color:var(--t2)">💜 ' + window.T('rpa_js_intimacy') + ' <strong style="color:var(--t)">'+Math.round(p.intimacy_score)+'</strong></span>' : '')
           + intentBadge
           + '</div>';
       })
@@ -656,7 +656,7 @@ rpa.analytics = {
         // P13-2: 头部加 ⓘ tooltip 警示同名不等于同一人
         const warnTip = window.Tf('rpa_js_samename_warn', {name: d.name});
         xpEl.innerHTML = '<div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">'
-          + '<span style="color:var(--t3)">🔗 ' + window.T('rpa_js_samename_a') + ' "<strong style="color:var(--t1)">' + rpa.esc(d.name) + '</strong>" ' + window.T('rpa_js_samename_b') + ' <strong style="color:var(--t1)">' + totalOther + '</strong> ' + window.T('rpa_js_turns_unit') + ''
+          + '<span style="color:var(--t3)">🔗 ' + window.T('rpa_js_samename_a') + ' "<strong style="color:var(--t)">' + rpa.esc(d.name) + '</strong>" ' + window.T('rpa_js_samename_b') + ' <strong style="color:var(--t)">' + totalOther + '</strong> ' + window.T('rpa_js_turns_unit') + ''
           + ' <span title="'+rpa.esc(warnTip)+'" style="cursor:help;color:var(--t3);font-size:.7rem;border:1px solid var(--bd);border-radius:50%;width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;margin-left:.15rem">ⓘ</span>：</span>'
           + badges
           + '</div>';
@@ -676,7 +676,7 @@ rpa.analytics = {
       const reply = document.createElement('div');
       reply.style.cssText = 'border-top:1px solid var(--bd);padding:.7rem 1.2rem;background:rgba(148,163,184,.04);position:sticky;bottom:0;background:var(--bg,#0f172a)';
       reply.innerHTML = '<div style="font-size:.75rem;color:var(--t2);margin-bottom:.35rem;display:flex;align-items:center;gap:.4rem"><span>✉️ ' + window.T('rpa_js_quick_reply') + '</span><span style="font-size:.65rem;color:var(--t3)">(WhatsApp send-manual ' + window.T('rpa_js_queue_word') + ')</span></div>'
-        + '<textarea id="rpa-qr-text" rows="2" placeholder="' + window.T('rpa_js_qr_placeholder') + '" style="width:100%;padding:.45rem .6rem;background:var(--card,#1e293b);border:1px solid var(--bd);border-radius:6px;color:var(--t1);font-size:.82rem;resize:vertical;font-family:inherit"></textarea>'
+        + '<textarea id="rpa-qr-text" rows="2" placeholder="' + window.T('rpa_js_qr_placeholder') + '" style="width:100%;padding:.45rem .6rem;background:var(--card,#1e293b);border:1px solid var(--bd);border-radius:6px;color:var(--t);font-size:.82rem;resize:vertical;font-family:inherit"></textarea>'
         + '<div style="display:flex;gap:.4rem;margin-top:.4rem;align-items:center">'
         + '  <span id="rpa-qr-msg" style="flex:1;font-size:.72rem;color:var(--t3)"></span>'
         + '  <button id="rpa-qr-send" class="btn btn-xs" style="padding:.35rem 1rem;background:var(--th-bg-wagreen,#25d366);color:var(--th-ink-inverse,#fff);border:0;border-radius:6px;cursor:pointer;font-weight:600">' + window.T('rpa_js_send') + '</button>'
@@ -715,7 +715,7 @@ rpa.analytics = {
                 const isFail = (statusKey === 'failed' || statusKey === 'error' || statusKey === 'cancelled');
                 if(isDone){ ghost.style.background = 'rgba(34,197,94,.18)'; ghost.style.borderStyle='solid'; }
                 else if(isFail){ ghost.style.background = 'rgba(239,68,68,.12)'; ghost.style.borderColor = 'rgba(239,68,68,.4)'; }
-                ghost.innerHTML = '<div style="font-size:.68rem;color:' + (isFail?'var(--th-ink-red4,#f87171)':'var(--th-ink-green5,#22c55e)') + ';margin-bottom:.2rem">'
+                ghost.innerHTML = '<div style="font-size:.68rem;color:' + (isFail?'var(--th-ink-red4,#b91c1c)':'var(--th-ink-green5,#15803d)') + ';margin-bottom:.2rem">'
                   + window.T('rpa_just_now') + ' · ' + lbl + (itemId ? window.Tf('rpa_js_queue_n', {id: itemId}) : '') + '</div>'
                   + '<div style="font-size:.78rem;color:var(--t2)">🤖 ' + rpa.esc(t) + '</div>';
                 return isDone || isFail;
@@ -786,7 +786,7 @@ rpa.analytics = {
               : '';
             return '<div style="margin-bottom:.7rem;padding:.6rem .8rem;background:var(--th-bg-slt05,rgba(148,163,184,.05));border-radius:8px;border-left:3px solid var(--th-bd-indigo5,#6366f1)">'
               + '<div style="display:flex;gap:.5rem;align-items:center;font-size:.75rem;color:var(--t2);margin-bottom:.3rem">'
-              +   '<strong style="color:var(--t1)">#'+s.session_num+'</strong>'
+              +   '<strong style="color:var(--t)">#'+s.session_num+'</strong>'
               +   '<span>'+dateStr+'</span>'
               +   '<span style="color:var(--t3)">'+s.turn_count+window.T('rpa_js_turns_unit') + ' / '+okPct+'%</span>'
               +   intentBadge
@@ -796,7 +796,7 @@ rpa.analytics = {
               + '</div>';
           }).join('');
         })
-        .catch(function(){ pane.innerHTML = '<div style="color:var(--th-ink-red4,#f87171);font-size:.78rem">' + window.T('rpa_load_failed') + '</div>'; });
+        .catch(function(){ pane.innerHTML = '<div style="color:var(--th-ink-red4,#b91c1c);font-size:.78rem">' + window.T('rpa_load_failed') + '</div>'; });
     };
     const loadFull = function(append){
       if(!append){ offset = 0; pane.innerHTML = '<div style="color:var(--t3);font-size:.78rem">' + window.T('rpa_loading') + '</div>'; }
@@ -810,7 +810,7 @@ rpa.analytics = {
           msgs.forEach(function(m){
             const dom = m.intent_tag || 'general';
             const intentBadge = (dom !== 'general')
-              ? ' <span style="font-size:.6rem;padding:0 5px;border-radius:5px;background:var(--th-bg-ind18,rgba(99,102,241,.18));color:var(--th-ink-indigo3,#a5b4fc)">'+(_INTENT_LABELS[dom]||dom)+'</span>'
+              ? ' <span style="font-size:.6rem;padding:0 5px;border-radius:5px;background:var(--th-bg-ind18,rgba(99,102,241,.18));color:var(--th-ink-indigo5,#4338ca)">'+(_INTENT_LABELS[dom]||dom)+'</span>'
               : '';
             const row = document.createElement('div');
             row.style.cssText = 'margin-bottom:.6rem;padding-bottom:.5rem;border-bottom:1px dashed rgba(148,163,184,.1)';
@@ -831,7 +831,7 @@ rpa.analytics = {
             pane.innerHTML = '<div style="color:var(--t3);font-size:.78rem">' + window.T('rpa_js_no_messages') + '</div>';
           }
         })
-        .catch(function(){ if(!append) pane.innerHTML = '<div style="color:var(--th-ink-red4,#f87171);font-size:.78rem">' + window.T('rpa_load_failed') + '</div>'; });
+        .catch(function(){ if(!append) pane.innerHTML = '<div style="color:var(--th-ink-red4,#b91c1c);font-size:.78rem">' + window.T('rpa_load_failed') + '</div>'; });
     };
     drawer.querySelectorAll('.rpa-dt-tab').forEach(function(b){
       b.addEventListener('click', function(){
@@ -841,7 +841,7 @@ rpa.analytics = {
           x.style.borderBottomColor = 'transparent';
           x.style.fontWeight = 'normal';
         });
-        this.style.color = 'var(--t1)';
+        this.style.color = 'var(--t)';
         this.style.borderBottomColor = '#6366f1';
         this.style.fontWeight = '600';
         if(mode === 'summary') loadSummary(); else loadFull(false);
@@ -877,7 +877,7 @@ rpa.analytics = {
                   + '</div>';
               }).join('');
         })
-        .catch(function(){ body.innerHTML='<div style="padding:.5rem 0;font-size:.78rem;color:var(--th-ink-red4,#f87171)">' + window.T('rpa_load_failed') + '</div>'; });
+        .catch(function(){ body.innerHTML='<div style="padding:.5rem 0;font-size:.78rem;color:var(--th-ink-red4,#b91c1c)">' + window.T('rpa_load_failed') + '</div>'; });
     };
     if(card){
       card.querySelectorAll(btnSel).forEach(function(btn){
@@ -915,6 +915,7 @@ rpa.renderHero = function(spec){
 // 由 innerHTML 动态拼出的 handler 扫不到 → 这里运行时兜底：捕获该类错误给明确红条（附函数名
 // 便于上报），节流 3s 防刷屏。
 (function(){
+  window.__feDeadClickGuard = 1;  // 告知 base 级 _boot_error_guard 让位，防双 toast 双计数
   let _lastDeadToast = 0;
   window.addEventListener('error', function(e){
     const err = e && e.error;

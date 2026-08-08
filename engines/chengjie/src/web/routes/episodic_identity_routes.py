@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 from fastapi import HTTPException, Request
+from src.utils.episodic_identity_display import (
+    find_conversation_keys,
+    resolve_identities,
+)
 from src.utils.identity_shadow_actions import (
     build_pair_evidence,
     confirm_link_pair,
@@ -157,22 +161,65 @@ def register_episodic_identity_routes(app, ctx) -> None:
 
     # ── 情景记忆 API ──────────────────────────────────────────────────────
 
+    def _inbox_db_or_none():
+        """身份富化用的 inbox.db 路径；缺库/异常 → None（富化静默降级）。"""
+        try:
+            cfg, cfg_dir = _cfg_and_dir()
+            p = resolve_inbox_db(cfg, cfg_dir)
+            return p if p.exists() else None
+        except Exception:
+            return None
+
     @app.get("/api/episodic-memory")
     async def api_episodic_memory_list(
         request: Request, prefix: str = "", limit: int = 100, source: str = "",
+        q: str = "", identity: int = 1, offset: int = 0,
     ):
         """情景记忆条目列表（memory_key = 私聊用户 id 或 群id_用户id）。
 
         R13：可选 ``source`` 筛选（user_stated / ai_inferred）。
+        身份化（P0）：``q``＝人类可读联合搜索（昵称/用户名/手机号经会话表译成
+        键集 + 记忆键/内容 LIKE 的并集）；``identity=1``（默认）时每行附
+        ``identity`` 块（昵称/头像/平台，经 conversations 主键点查 + TTL 缓存），
+        inbox 库缺席/异常一律静默降级为旧响应形状，绝不阻断列表。
+        ``offset``＝「加载更多」分页（P1 前端消费）。
+        管理者摘要走独立端点 ``GET /api/episodic-memory/summary``（P3）。
+        新参缺省时对 skill_manager 保持旧三参调用形状（兼容既有 fake/断言）。
         """
         _api_auth(request)
         sm = _get_sm()
         if not sm:
             raise HTTPException(status_code=503, detail=tr(request, "err.epi.bot_not_ready_sm"))
         lim = max(1, min(int(limit or 100), 500))
+        off = max(0, min(int(offset or 0), 100000))
         src = source if source in ("user_stated", "ai_inferred") else ""
-        rows = sm.episodic_list_for_admin(prefix=prefix[:120], limit=lim, source=src)
-        return {"ok": True, "items": rows, "count": len(rows)}
+        qq = (q or "").strip()[:120]
+        pre = (prefix or "")[:120]
+        if qq and pre.strip() == qq:
+            pre = ""  # 过渡期前端 q+prefix 双发同值：按 q 语义接管，防 AND 缩窄
+        inbox_db = _inbox_db_or_none()
+        kwargs: Dict[str, Any] = dict(prefix=pre, limit=lim, source=src)
+        if qq:
+            q_keys: list = []
+            if inbox_db is not None:
+                q_keys = find_conversation_keys(inbox_db, qq)
+            kwargs.update(q=qq, q_keys=q_keys)
+        if off:
+            kwargs["offset"] = off
+        rows = sm.episodic_list_for_admin(**kwargs)
+        if identity and inbox_db is not None and rows:
+            try:
+                idmap = resolve_identities(
+                    inbox_db,
+                    [str(r.get("memory_key") or "") for r in rows],
+                )
+                for r in rows:
+                    ident = idmap.get(str(r.get("memory_key") or ""))
+                    if ident:
+                        r["identity"] = ident
+            except Exception:
+                pass  # 富化失败不阻断主表
+        return {"ok": True, "items": rows, "count": len(rows), "offset": off}
 
     @app.delete("/api/episodic-memory/{row_id}")
     async def api_episodic_memory_delete(request: Request, row_id: int):
@@ -180,10 +227,130 @@ def register_episodic_identity_routes(app, ctx) -> None:
         sm = _get_sm()
         if not sm:
             raise HTTPException(status_code=503, detail=tr(request, "err.epi.bot_not_ready"))
+        # 删除前取行摘要供审计留痕（软失败：老 store 无该方法 → 只记 row_id）
+        brief = None
+        _store = getattr(sm, "_episodic_store", None)
+        if _store is not None and hasattr(_store, "get_row_brief"):
+            try:
+                brief = _store.get_row_brief(int(row_id))
+            except Exception:
+                brief = None
         ok = sm.episodic_delete_for_admin(int(row_id))
         if not ok:
             raise HTTPException(status_code=404, detail=tr(request, "err.epi.record_not_found"))
+        # 与 confirm 审计对称：删除不可逆，留痕「谁删了谁的哪条记忆」
+        audit = getattr(ctx, "audit_store", None)
+        if audit:
+            try:
+                actor = str(
+                    request.session.get("username")
+                    or request.session.get("role") or "web_admin"
+                )
+                old_val = ""
+                if brief:
+                    old_val = (
+                        f"[{brief.get('source', '')}] {brief.get('memory_key', '')}"
+                        f" | {str(brief.get('content', ''))[:160]}"
+                    )
+                audit.log(
+                    actor, "episodic_delete", target=str(row_id),
+                    old_val=old_val,
+                )
+            except Exception:
+                pass
         return {"ok": True, "deleted": int(row_id)}
+
+    @app.post("/api/episodic-memory/bulk-delete")
+    async def api_episodic_memory_bulk_delete(request: Request):
+        """按关键词批量删除情景记忆（人设内容排查的清理配套，2026-08-03）。
+
+        Body: ``{q, prefix?, source?, dry_run?=true, limit?=200}``。
+        安全设计：``q`` 必填（禁止裸 prefix 全清一个客户的记忆——那是另一种
+        破坏性操作，走既有逐条删除）；``dry_run`` 缺省 **true** 只回预览；
+        单次上限 500；真删逐条走既有 ``episodic_delete_for_admin``，
+        汇总一条审计（谁、按什么词、删了几条）。
+        """
+        _api_write("episodic_memory")(request)
+        sm = _get_sm()
+        if not sm:
+            raise HTTPException(status_code=503, detail=tr(request, "err.epi.bot_not_ready"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        qq = str(body.get("q") or "").strip()[:120]
+        if not qq:
+            raise HTTPException(status_code=400, detail=tr(request, "err.epi.bulk_q_required"))
+        prefix = str(body.get("prefix") or "").strip()[:120]
+        source = body.get("source")
+        source = source if source in ("user_stated", "ai_inferred") else ""
+        dry_run = bool(body.get("dry_run", True))
+        lim = max(1, min(int(body.get("limit") or 200), 500))
+        rows = sm.episodic_list_for_admin(
+            prefix=prefix, limit=lim, source=source, q=qq, q_keys=[])
+        matched = [
+            {"row_id": int(r.get("id") or 0),
+             "memory_key": str(r.get("memory_key") or ""),
+             "content": str(r.get("content") or "")[:160]}
+            for r in rows if r.get("id") is not None
+        ]
+        if dry_run:
+            return {"ok": True, "dry_run": True, "matched": len(matched),
+                    "items": matched}
+        deleted = 0
+        for m in matched:
+            try:
+                if sm.episodic_delete_for_admin(int(m["row_id"])):
+                    deleted += 1
+            except Exception:
+                continue
+        audit = getattr(ctx, "audit_store", None)
+        if audit:
+            try:
+                actor = str(
+                    request.session.get("username")
+                    or request.session.get("role") or "web_admin"
+                )
+                audit.log(
+                    actor, "episodic_bulk_delete", target=qq,
+                    old_val=f"matched={len(matched)} deleted={deleted}"
+                            f" prefix={prefix or '-'} source={source or '-'}",
+                )
+            except Exception:
+                pass
+        return {"ok": True, "dry_run": False,
+                "matched": len(matched), "deleted": deleted}
+
+    @app.get("/api/episodic-memory/summary")
+    async def api_episodic_memory_summary(
+        request: Request, days: int = 7, top: int = 3,
+    ):
+        """管理者摘要（P3）：近 N 天新增条数/覆盖用户数 + 记忆最多 Top-N。
+
+        Top 键经 conversations 主键点查附 ``identity`` 块（与列表同一解析器/
+        缓存）；inbox 库缺席时静默省略身份，绝不阻断摘要。前端按「接口是否
+        存在」做能力探测——旧后端 404 即整条摘要行隐藏。
+        """
+        _api_auth(request)
+        sm = _get_sm()
+        store = getattr(sm, "_episodic_store", None) if sm else None
+        if store is None or not hasattr(store, "admin_summary"):
+            raise HTTPException(
+                status_code=503, detail=tr(request, "err.epi.bot_not_ready_sm"))
+        out = store.admin_summary(days=int(days or 7), top_n=int(top or 3))
+        inbox_db = _inbox_db_or_none()
+        if inbox_db is not None and out.get("top"):
+            try:
+                idmap = resolve_identities(
+                    inbox_db, [t["memory_key"] for t in out["top"]])
+                for t in out["top"]:
+                    ident = idmap.get(t["memory_key"])
+                    if ident:
+                        t["identity"] = ident
+            except Exception:
+                pass  # 富化失败不阻断摘要
+        return {"ok": True, **out}
 
     @app.get("/api/episodic-memory/key-health")
     async def api_episodic_key_health(request: Request, sample: int = 10):

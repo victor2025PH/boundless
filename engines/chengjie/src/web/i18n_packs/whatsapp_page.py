@@ -2,7 +2,7 @@
 """whatsapp_page 域词条(由 tools/i18n_migrate_domain.py 从单体迁移)。结构见包 docstring。"""
 
 ZH = {
-    "wa_js_001": "服务未初始化",
+    "wa_js_001": "手机 RPA 服务未初始化（与上方账号在线态无关）",
     "wa_js_002": "服务已禁用",
     "wa_js_003": "后台轮询未运行",
     "wa_js_004": "今日上限已满",
@@ -82,6 +82,7 @@ ZH = {
     "wa_js_078": "尝试清空搜索词或切换过滤",
     "wa_js_079": "小时内无对话",
     "wa_js_080": "运行中，等待第一条消息",
+    "wa_conv_empty_svc_down": "自动化服务未启动 — 启用并运行后，新对话会出现在这里（见「配置」页）",
     "wa_js_081": "互动热度",
     "wa_js_082": "上次失败",
     "wa_js_083": "亲密度",
@@ -293,7 +294,7 @@ ZH = {
 }
 
 EN = {
-    "wa_js_001": "Service not initialized",
+    "wa_js_001": "Phone RPA service not initialized (independent of the account status above)",
     "wa_js_002": "Service disabled",
     "wa_js_003": "Background polling not running",
     "wa_js_004": "Daily cap reached",
@@ -373,6 +374,7 @@ EN = {
     "wa_js_078": "Try clearing the search or switching filters",
     "wa_js_079": "hours with no chats",
     "wa_js_080": "Running, waiting for the first message",
+    "wa_conv_empty_svc_down": "Automation service is not running — new chats will appear here once it is enabled and running (see the Settings tab)",
     "wa_js_081": "Engagement",
     "wa_js_082": "Last failed",
     "wa_js_083": "Intimacy",

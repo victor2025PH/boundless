@@ -101,6 +101,39 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         return svc.goal_view(
             res["goal"], res.get("action"), res.get("hold"), lang=lang)
 
+    def _attach_slots_progress(view, store, *, lang: str):
+        """摸底类目标（params.slots 勾选）→ 视图附逐槽位清单
+        ``slots_progress: [{key,label,filled,value}]``——目标卡「打勾清单」
+        数据源（客户答了职业下轮刷新即打勾）。非摸底目标零改动；
+        best-effort 绝不抛（清单缺失只影响 UI 细节不影响卡片主体）。"""
+        if not isinstance(view, dict):
+            return view
+        try:
+            from src.companion.goals.profile_slots import (
+                parse_selected_slots,
+                slot_label,
+                slot_value,
+            )
+            sel = parse_selected_slots((view.get("params") or {}).get("slots"))
+            if not sel:
+                return view
+            prof = store.get_customer_profile(
+                str(view.get("platform") or ""),
+                str(view.get("chat_key") or ""))
+            fields = dict((prof or {}).get("fields") or {})
+            view["slots_progress"] = [
+                {
+                    "key": k,
+                    "label": slot_label(k, lang),
+                    "filled": bool(slot_value(fields, k)),
+                    "value": slot_value(fields, k)[:20],
+                }
+                for k in sel
+            ]
+        except Exception:
+            logger.debug("slots_progress attach skipped", exc_info=True)
+        return view
+
     def _attach_products(view, store, *, lang: str):
         """catalog 模板的活跃目标 → 附「系统会推什么」预览（坐席人工回复
         对齐口径用；与 prompt 注入同一套选品纯函数，读数零写入）。"""
@@ -132,6 +165,56 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             logger.debug("attach products failed", exc_info=True)
         return view
 
+    def _pickers() -> Dict[str, Any]:
+        """建目标向导第二步的枚举源（P24）：解锁项/会员档（变现价目表）+
+        官网产品（site_catalog）+ 漏斗阶段词表。逐段软失败——哪段挂了就缺
+        哪段，前端对缺失段自动回落通用输入框，绝不 500。"""
+        from src.companion.goals.templates import STAGE_ORDER
+        out: Dict[str, Any] = {"stages": list(STAGE_ORDER)}
+        cfg = _cfg_root()
+        mon = cfg.get("monetization") if isinstance(cfg.get("monetization"), dict) else {}
+        try:
+            from src.utils.monetization import merge_catalog
+            cat = merge_catalog((mon or {}).get("catalog"))
+            out["currency"] = str(cat.get("currency") or "USD")
+            out["unlock_items"] = [
+                {"id": str(k), "label": str((v or {}).get("label") or k),
+                 "price": float((v or {}).get("price") or 0)}
+                for k, v in (cat.get("items") or {}).items()]
+            out["tiers"] = [
+                {"id": str(k), "label": str((v or {}).get("label") or k),
+                 "monthly": float((v or {}).get("monthly") or 0)}
+                for k, v in (cat.get("tiers") or {}).items() if str(k) != "free"]
+        except Exception:
+            logger.debug("pickers: monetize catalog failed", exc_info=True)
+        try:
+            from src.companion.goals import site_catalog as sc
+            scat = sc.load_catalog(sc.catalog_path(_cfg_root(), _config_path()))
+            prods = (scat or {}).get("products")
+            out["site_products"] = [
+                {"id": str(p.get("id") or ""),
+                 "name_zh": str(p.get("name_zh") or p.get("id") or ""),
+                 "name_en": str(p.get("name_en") or p.get("name_zh") or p.get("id") or ""),
+                 "price_from": str(p.get("price_from") or "")}
+                for p in prods if isinstance(p, dict)] if isinstance(prods, list) else []
+        except Exception:
+            logger.debug("pickers: site catalog failed", exc_info=True)
+        # P28：摸底模板 slots chips 枚举（与 profile_slots 登记表同源）
+        try:
+            from src.companion.goals.profile_slots import SLOTS
+            out["discovery_slots"] = [
+                {"key": str(s.get("key") or ""),
+                 "track": str(s.get("track") or ""),
+                 "label_zh": str(s.get("label_zh") or s.get("key") or ""),
+                 "label_en": str(s.get("label_en") or s.get("label_zh") or s.get("key") or "")}
+                for s in SLOTS
+                if str(s.get("track") or "") in ("relation", "bant")
+                and str(s.get("key") or "")
+            ]
+        except Exception:
+            logger.debug("pickers: discovery_slots failed", exc_info=True)
+        return out
+
     # ── 静态路径（先注册）────────────────────────────────────────────────────
     @app.get("/api/goals/templates")
     async def goals_templates(request: Request, _auth=Depends(auth_dep)):
@@ -157,6 +240,8 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 "bridge_enabled": bool(bridge_cfg.get("enabled", False)),
                 "proactive_enabled": bool(proactive_cfg.get("enabled", False)),
             },
+            # P24 建目标向导：参数枚举源（解锁项/会员档/官网产品/阶段词表）
+            "pickers": _pickers(),
         }
 
     @app.get("/api/goals/for-conversation")
@@ -182,8 +267,11 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 "last": svc.goal_view(last, lang=_lang(request)) if last else None,
             }
         lang = _lang(request)
-        view = _attach_products(
-            _refreshed_view(svc, store, goal, lang=lang), store, lang=lang)
+        view = _attach_slots_progress(
+            _attach_products(
+                _refreshed_view(svc, store, goal, lang=lang),
+                store, lang=lang),
+            store, lang=lang)
         return {"goal": view, "last": None}
 
     @app.get("/api/goals/report")
@@ -701,6 +789,19 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         request: Request, goal_id: str, payload: Dict[str, Any],
         _auth=Depends(auth_dep),
     ):
+        """改字段。``deadline_days`` 即「调节奏」（坐席 UI 的改期限入口）：
+
+        - 截止时间恒从 ``start_ts`` 锚定重算（与建目标/「第X/Y天」显示同一坐标系）；
+        - 护栏①：终态目标（done/failed/expired/cancelled）的期限是死数据，改了
+          也不会被结算读到 → 409（静默接受＝让人误以为改了有用）；
+        - 护栏②：新截止时间落在过去（已进行 2 天还改成 1 天）→ 400 并告知
+          最小可改天数——那是「立即判死」不是「加速」，想立即结束该走
+          status 路由的 done/cancel；
+        - 当日拍重排：只对 ``planned`` 且无坐席反馈的今日拍生效（consumed/sent
+          是既成事实、adopted/rejected 是人的决定，均不动）——「加速」当天
+          生效而不是明天；
+        - 事件台账记差值（``deadline_days:3->1``），复盘时间线能看出节奏为何变。
+        active 目标返回 settle-on-read 后的完整视图（带 today），与 detail 同口径。"""
         svc = _require_enabled(request)
         _deny_viewer(request)
         store = _store(svc)
@@ -718,15 +819,42 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 fields["priority"] = int(body.get("priority"))
             except (TypeError, ValueError):
                 pass
+        deadline_detail = ""
+        deadline_direction = ""
         if body.get("deadline_days") is not None:
             try:
                 dd = float(body.get("deadline_days"))
-                if dd > 0:
-                    import time as _t
-                    fields["deadline_ts"] = float(
-                        goal.get("start_ts") or _t.time()) + min(dd, 180.0) * 86400.0
             except (TypeError, ValueError):
-                pass
+                dd = 0.0
+            if dd > 0:
+                if str(goal.get("status") or "") not in ("active", "paused"):
+                    raise HTTPException(
+                        409, tr(request, "err.goals.deadline_terminal"))
+                import time as _t
+                now = _t.time()
+                start = float(goal.get("start_ts") or now)
+                dd = min(dd, 180.0)
+                new_dl = start + dd * 86400.0
+                if new_dl <= now:
+                    day_idx = int((now - start) // 86400.0) + 1
+                    raise HTTPException(400, tr(
+                        request, "err.goals.deadline_past", day=day_idx))
+                fields["deadline_ts"] = new_dl
+                old_dl = float(goal.get("deadline_ts") or 0.0)
+                old_days = ((old_dl - start) / 86400.0
+                            if old_dl > start else 0.0)
+
+                def _fmt_d(x: float) -> str:
+                    r = round(float(x), 1)
+                    return str(int(r)) if float(r).is_integer() else str(r)
+
+                deadline_detail = (
+                    f"deadline_days:{_fmt_d(old_days)}->{_fmt_d(dd)}")
+                # 加急/延期方向（进程脉搏；耐久口径在事件明细）——等值改动不计
+                if dd < old_days - 0.05:
+                    deadline_direction = "shorten"
+                elif dd > old_days + 0.05:
+                    deadline_direction = "extend"
         if isinstance(body.get("params"), dict):
             merged = dict(goal.get("params") or {})
             merged.update(body["params"])
@@ -735,10 +863,26 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             raise HTTPException(400, tr(request, "err.goals.nothing_to_update"))
         if not store.update_goal_fields(goal_id, **fields):
             raise HTTPException(500, tr(request, "err.goals.update_failed"))
-        store.add_event(goal_id, "updated", ",".join(sorted(fields.keys())))
+        parts = sorted(k for k in fields.keys() if k != "deadline_ts")
+        if deadline_detail:
+            parts.append(deadline_detail)
+        store.add_event(goal_id, "updated", ",".join(parts))
+        if deadline_direction:
+            try:
+                from src.companion.goals.stats import get_goal_stats
+                get_goal_stats().record_deadline_edit(deadline_direction)
+            except Exception:
+                pass
         goal = store.get_goal(goal_id)
+        lang = _lang(request)
+        if goal is not None and str(goal.get("status") or "") == "active":
+            if deadline_detail:
+                from src.companion.goals.planner import day_key
+                store.delete_planned_action(goal_id, day_key())
+            return {"ok": True,
+                    "goal": _refreshed_view(svc, store, goal, lang=lang)}
         return {"ok": True,
-                "goal": svc.goal_view(goal, lang=_lang(request))}
+                "goal": svc.goal_view(goal, lang=lang)}
 
     @app.post("/api/goals/{goal_id}/beat/feedback")
     async def goals_beat_feedback(

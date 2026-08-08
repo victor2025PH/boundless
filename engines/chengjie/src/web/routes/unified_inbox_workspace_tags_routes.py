@@ -167,7 +167,11 @@ def register_workspace_tags_routes(app, *, api_auth) -> None:
         store = _inbox_store(request)
         if store is None:
             return {"ok": False, "error": tr(request, "err.svc.inbox_not_ready")}
-        ok = store.set_conv_archived(conversation_id, archived)
+        ok = store.set_conv_archived(
+            conversation_id, archived,
+            source="api:conv_archive",
+            actor=str(request.session.get("username") or ""),
+        )
         if ok:
             # P34：归档时自动触发 QA 评分计算（异步非阻塞）
             if archived:

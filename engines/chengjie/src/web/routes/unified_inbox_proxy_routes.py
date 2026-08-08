@@ -42,6 +42,9 @@ def register_proxy_fingerprint_routes(app, *, api_auth) -> None:
                 username=str((body or {}).get("username") or ""),
                 password=str((body or {}).get("password") or ""),
                 label=str((body or {}).get("label") or ""),
+                kind=str((body or {}).get("kind") or "unknown"),
+                country=str((body or {}).get("country") or ""),
+                region=str((body or {}).get("region") or ""),
             )
             return {"ok": True, "proxy": entry}
         except (ValueError, TypeError) as ex:
@@ -56,9 +59,19 @@ def register_proxy_fingerprint_routes(app, *, api_auth) -> None:
     @app.post("/api/proxies/{proxy_id}/test")
     async def api_proxies_test(proxy_id: str, request: Request):
         api_auth(request)
-        ok = await get_proxy_pool().test(proxy_id)
-        return {"ok": True, "reachable": ok,
-                "status": "ok" if ok else "fail"}
+        pool = get_proxy_pool()
+        ok = await pool.test(proxy_id)
+        entry = pool.get(proxy_id) or {}
+        # 兼容旧响应（reachable/status）+ 补真握手探到的出口画像与冷却态。
+        return {
+            "ok": True,
+            "reachable": ok,
+            "status": entry.get("status") or ("ok" if ok else "fail"),
+            "exit_ip": entry.get("exit_ip") or "",
+            "country": entry.get("country") or "",
+            "latency_ms": entry.get("latency_ms") or 0,
+            "in_cooldown": bool(entry.get("in_cooldown")),
+        }
 
     # ── 指纹（M4：自研，一号一指纹） ────────────────────────────────────────
     @app.get("/api/fingerprints")

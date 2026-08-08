@@ -46,6 +46,7 @@
   .sw-path-adv{border-top:1px solid var(--tk-border);padding-top:12px;}
   .sw-path-adv>summary{font-size:12px;color:var(--tk-text-muted);cursor:pointer;list-style:revert;}
   .sw-path-adv>summary:hover{color:var(--tk-text);}
+  .sw-reach{margin-top:10px;padding:9px 12px;border-left:3px solid var(--tk-border);border-radius:6px;background:var(--tk-surface-2);font-size:12px;line-height:1.6;}
 </style>
 {% endblock %}
 {% block content %}
@@ -60,6 +61,11 @@
     <div class="bar"><i id="sw-prog-bar" style="width:0"></i></div>
   </div>
   <div id="sw-prog-hint" style="font-size:11px;color:var(--tk-text-muted);margin:-12px 0 16px;"></div>
+  <!-- official 媒体 URL 状态（IG/LINE 官方通道发图/语音的前置；后端未升级或无关渠道时整块隐藏） -->
+  <div id="sw-media-hint" style="display:none;font-size:12px;margin:-6px 0 16px;padding:8px 12px;border:1px solid var(--tk-border,#e2e8f0);border-radius:8px;color:var(--tk-text-muted);">
+    <span id="sw-media-text"></span>
+    <button type="button" id="sw-media-probe" onclick="swProbeMedia()" style="margin-left:8px;font-size:11px;padding:2px 10px;border-radius:6px;border:1px solid var(--tk-border,#e2e8f0);background:transparent;cursor:pointer;color:inherit;">{{ (i18n or {}).get('sw_media_probe', '检测可达性') }}</button>
+  </div>
   <!-- P0-1 A3：AI 大模型配置卡（golive AI 项 / workspace 引导条深链 #ai 落点；写 overlay + 热生效） -->
   <div class="sw-card" id="ai">
     <div class="sw-ch-hd" onclick="swToggle('ai')">
@@ -160,6 +166,11 @@ function apiPathHtml(ch){
   if(!a) return '';
   var fields = (a.fields||[]).map(function(f){return fieldHtml(ch,f);}).join('');
   if(!fields) return '';
+  /* 官方 webhook 渠道（IG/Zalo/Messenger/WA Cloud）附回调状态条：
+     配开发者后台时握手一落地立即翻绿（swReachTick 轮询填充；无数据时隐藏） */
+  var reach=REACH_PLATS[ch.id]
+    ? '<div class="sw-reach" data-reach-plat="'+esc(ch.id)+'" style="display:none;"></div>'
+    : '';
   return '<details class="sw-path sw-path-adv">'
     +'<summary>'+window.T('setup.ch.path_api_title')+'</summary>'
     +'<div class="sw-path-sub">'+esc(a.intro||window.T('setup.ch.path_api_prereq'))+'</div>'
@@ -168,6 +179,7 @@ function apiPathHtml(ch){
     +'<button class="sw-btn primary" onclick="swSave(\''+ch.id+'\',this)">'+window.T('sw_js_007')+'</button>'
     +'<span class="sw-msg" id="sw-msg-'+ch.id+'"></span></div>'
     +'<div class="sw-issues" id="sw-iss-'+ch.id+'"></div>'
+    +reach
     +'</details>';
 }
 
@@ -223,12 +235,102 @@ function render(data){
   document.getElementById('sw-prog-bar').style.width=(t?Math.round(r/t*100):0)+'%';
   var ph=document.getElementById('sw-prog-hint');
   if(ph) ph.textContent = newApi ? window.T('setup.ch.prog_hint') : '';
+  renderMediaHint(data.official_media);
+}
+
+/* official 媒体 URL 状态条：仅当「有渠道需要它」或「已填」时显示；后端未升级（无该字段）
+   或探测中出错一律隐藏——本块是提示不是闸门。 */
+function renderMediaHint(om){
+  var box=document.getElementById('sw-media-hint');
+  if(!box) return;
+  if(!om || (!(om.needed_by||[]).length && !om.url)){ box.style.display='none'; return; }
+  var txt;
+  if(!om.url){
+    txt=window.Tf('sw_media_unset',{chs:(om.needed_by||[]).join(' / ')});
+  }else{
+    txt=window.Tf('sw_media_set',{url:om.url});
+    if(om.probe){
+      if(om.probe.state==='ok') txt+=' · '+window.T('sw_media_ok');
+      else if(om.probe.state==='fail') txt+=' · '+window.Tf('sw_media_fail',{why:om.probe.detail||''});
+    }
+  }
+  document.getElementById('sw-media-text').textContent=txt;
+  box.style.display='block';
+}
+
+function swProbeMedia(){
+  var btn=document.getElementById('sw-media-probe');
+  if(btn){ btn.disabled=true; btn.textContent=window.T('sw_media_probing'); }
+  apiFetch('/api/setup/channels?probe_media=1').then(function(r){return r.json();}).then(function(d){
+    if(d&&d.ok) renderMediaHint(d.official_media);
+  }).catch(function(){}).finally(function(){
+    if(btn){ btn.disabled=false; btn.textContent=window.T('sw_media_probe'); }
+  });
 }
 
 function swToggle(id){
   var b=document.getElementById('sw-body-'+id);
   if(b) b.classList.toggle('open');
 }
+
+/* ── 官方 webhook 回调状态条（接入向导内嵌握手反馈，2026-08-07）──────────────
+   配 Meta/Zalo 开发者后台时最大的等待焦虑是「配完不知道通没通」。此条轮询
+   /api/admin/official-webhook-status（5s；仅官方折叠区展开且页面可见时才打接口），
+   平台的 verify 握手一落地立即翻绿。路由未装载（等实例重启）→ 30s 慢轮询静默等，
+   装载后自动恢复；接口不可用绝不报错打扰填表。 */
+var REACH_PLATS={instagram:1,zalo:1,messenger:1,whatsapp:1};
+var _swReachTimer=null, _swReachEvery=5000;
+function _swReachAge(s){
+  if(s==null||s<0) return '';
+  if(s<90) return s+'s';
+  if(s<5400) return Math.round(s/60)+'m';
+  if(s<172800) return Math.round(s/3600)+'h';
+  return Math.round(s/86400)+'d';
+}
+function _swReachHtml(p){
+  var v=p.verdict, txt='', color='var(--tk-text-muted)';
+  if(v==='live'){ color='var(--tk-ok-ink)'; txt=window.Tf('sw_reach_live',{age:_swReachAge(p.last_event_age_sec)}); }
+  else if(v==='handshake_only'){ color='var(--tk-ok-ink)'; txt=window.T('sw_reach_handshake'); }
+  else if(v==='auth_failing'){ color='var(--tk-warn-ink)'; txt=window.T('sw_reach_auth'); }
+  else if(v==='not_mounted'){ color='var(--tk-text-muted)'; txt=window.T('sw_reach_not_mounted'); }
+  else { color='var(--tk-warn-ink)'; txt=window.T('sw_reach_never'); }
+  var path=p.webhook_path?('<div style="margin-top:3px;color:var(--tk-text-muted);">'+esc(window.Tf('sw_reach_path',{path:p.webhook_path}))+'</div>'):'';
+  return '<div style="font-weight:700;color:var(--tk-text);margin-bottom:3px;">'+esc(window.T('sw_reach_title'))+'</div>'
+    +'<div style="color:'+color+';">'+txt+'</div>'+path;
+}
+function _swReachSchedule(){ clearTimeout(_swReachTimer); _swReachTimer=setTimeout(swReachTick, _swReachEvery); }
+async function swReachTick(){
+  try{
+    if(document.hidden) return;
+    var strips=[].slice.call(document.querySelectorAll('[data-reach-plat]'));
+    if(!strips.length) return;
+    var anyOpen=strips.some(function(el){ var d=el.closest('details'); return !d||d.open; });
+    if(!anyOpen) return;
+    var r=await apiFetch('/api/admin/official-webhook-status');
+    if(!r.ok){ _swReachEvery=30000; return; }   // 路由未装载：慢轮询静默等重启
+    var d=await r.json();
+    if(!d||!d.ok) return;
+    _swReachEvery=5000;
+    var by={};
+    (d.platforms||[]).forEach(function(p){ by[p.platform]=p; });
+    strips.forEach(function(el){
+      var p=by[el.getAttribute('data-reach-plat')];
+      if(!p||p.verdict==='disabled'){ el.style.display='none'; return; }
+      el.style.display='';
+      el.innerHTML=_swReachHtml(p);
+    });
+  }catch(_){/* 观测条绝不打扰填表 */}
+  finally{ _swReachSchedule(); }
+}
+/* details 展开瞬间立刻刷一次（toggle 不冒泡，用捕获委托） */
+document.addEventListener('toggle', function(e){
+  try{
+    if(e.target && e.target.querySelector && e.target.querySelector('[data-reach-plat]') && e.target.open){
+      _swReachEvery=5000; swReachTick();
+    }
+  }catch(_){}
+}, true);
+_swReachSchedule();
 
 function swSave(id, btn){
   var body=document.getElementById('sw-body-'+id);

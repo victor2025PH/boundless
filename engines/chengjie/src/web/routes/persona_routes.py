@@ -881,6 +881,32 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
 
     # ── Profile store CRUD ────────────────────────────────────
 
+    def _persist_with_status(pm, request: Request) -> tuple:
+        """persist_profiles + 结果显性化 → ``(persisted, persist_warning)``。
+
+        2026-08-03 实锤：旧实现 ``try: persist Except: pass`` 把落盘失败整个吞掉
+        ——内存已改、磁盘没改、界面报成功，下次重启旧档案还魂（「删了的爱好
+        又回来了」的断点之一）。warning 仅在「持久化开启但失败」时为真：
+        ``persona_persistence.enabled=false`` 是运营显式选择，不吓唬人。
+        """
+        cm = getattr(request.app.state, "config_manager", None) or config_manager
+        enabled = True
+        try:
+            cfg = getattr(cm, "config", None) or {}
+            enabled = bool((cfg.get("persona_persistence") or {}).get("enabled", True))
+        except Exception:
+            pass
+        persisted = False
+        try:
+            persisted = bool(pm.persist_profiles(cm))
+        except Exception:
+            _plog.warning("persist_profiles 异常（内存态已更新、磁盘未写）",
+                          exc_info=True)
+            persisted = False
+        if enabled and not persisted:
+            _plog.warning("人设变更未落盘（重启将回退到磁盘旧值）")
+        return persisted, (enabled and not persisted)
+
     @app.get("/api/personas/profiles")
     async def api_profiles_list(request: Request, tag: str = "",
                                  _=Depends(auth_dep)):
@@ -930,6 +956,174 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         # rev＝乐观锁指纹：编辑器加载时记住，保存时带 expected_rev（P2 多开治理）
         return {"profile_id": profile_id, "persona": p, "rev": profile_rev(p)}
 
+    @app.get("/api/personas/profiles/{profile_id}/content-scan")
+    async def api_profile_content_scan(profile_id: str, request: Request,
+                                       q: str = "", days: int = 14,
+                                       _=Depends(auth_dep)):
+        """「这个词还在哪」全层排查（只读，2026-08-03 删除不干净事故链）。
+
+        一次给出关键词在 ① 档案全字段（含 Studio 表单没暴露的 life_arc/
+        family/schedule，附到达通道与可编辑性）② 长传记库 ③ 情景记忆
+        ④ 会话历史 ⑤ 近 N 天出站消息 的命中清单——运营删设定后自证
+        「删干净没有」，不用再逐库翻。全层软失败（库缺席标 available:false）。
+        """
+        from pathlib import Path as _P
+        from src.utils.persona_manager import PersonaManager
+        from src.utils import persona_content_scan as pcs
+        from src.utils import persona_retired as pr
+        terms = pcs.split_scan_terms(str(q or "")[:200])
+        if not terms:
+            raise HTTPException(400, tr(request, "err.persona.scan_q_required"))
+        pm = PersonaManager.get_instance()
+        p = pm.get_persona_by_id(profile_id)
+        if p is None:
+            raise HTTPException(404, f"Profile '{profile_id}' not found")
+        cm = getattr(request.app.state, "config_manager", None) or config_manager
+        cfg = getattr(cm, "config", None) or {}
+        cfg_dir = None
+        try:
+            _cp = getattr(cm, "config_path", None)
+            cfg_dir = _P(str(_cp)).resolve().parent if _cp else None
+        except Exception:
+            cfg_dir = None
+        # 库路径按服务进程约定解析（bio 库优先取模块实际配置的路径——它与
+        # 服务进程 CWD 契约一致；episodic 尊重 memory.db_path 覆写）
+        try:
+            from src.companion import persona_bio_store as _pbs
+            bio_db = getattr(_pbs, "_DB_PATH", "") or ""
+        except Exception:
+            bio_db = ""
+        if (not bio_db or bio_db == ":memory:") and cfg_dir:
+            bio_db = str(cfg_dir / "persona_bio.db")
+        _mdb = str(((cfg.get("memory") or {}).get("db_path")) or "")
+        bot_db = _mdb or (str(cfg_dir / "bot.db") if cfg_dir else "")
+        inbox_db = ""
+        try:
+            from src.utils.identity_shadow_periodic import resolve_inbox_db
+            if cfg_dir:
+                inbox_db = str(resolve_inbox_db(cfg, cfg_dir))
+        except Exception:
+            inbox_db = ""
+        _unavail = {"available": False, "count": 0, "samples": []}
+
+        def _multi(runner) -> dict:
+            """逐词跑同一层并合并（样本带 term 标签；任一词层不可用=整层不可用）。"""
+            out = {"available": True, "count": 0, "samples": []}
+            for t in terms:
+                r = runner(t)
+                if not r.get("available"):
+                    return dict(_unavail)
+                out["count"] += int(r.get("count") or 0)
+                for s in (r.get("samples") or []):
+                    row = dict(s)
+                    row["term"] = t
+                    out["samples"].append(row)
+                for extra_key in ("days",):
+                    if extra_key in r:
+                        out[extra_key] = r[extra_key]
+            out["samples"] = out["samples"][:8]
+            return out
+
+        profile_hits = []
+        for t in terms:
+            for h in pcs.scan_profile_fields(p, t):
+                h["term"] = t
+                profile_hits.append(h)
+        eff_days = max(1, min(int(days or 14), 90))
+        # 撤销钉子现状随扫描回显（含龄）——「删干净没有」与「钉子还在不在/多老了」
+        # 是同一次排查要回答的两个问题
+        _entries = pr.normalize_retired_entries(p)
+        # 运营自维护同义词组（personas.content_scan.synonym_groups，overlay 热重载）
+        _extra_groups = (((cfg.get("personas") or {}).get("content_scan") or {})
+                         .get("synonym_groups")) if isinstance(cfg, dict) else None
+        return {
+            "ok": True, "profile_id": profile_id,
+            "q": str(q or "").strip()[:200], "terms": terms,
+            "suggestions": pcs.suggest_related_terms(terms, _extra_groups),
+            "retired": {
+                "count": len(_entries),
+                "entries": [
+                    {"text": e["text"], "added": e["added"],
+                     "terms": e["terms"],
+                     "age_days": pr.entry_age_days(e)}
+                    for e in _entries
+                ],
+            },
+            "profile": {"available": True, "hits": profile_hits[:60]},
+            "bio": _multi(lambda t: pcs.scan_bio_chunks(bio_db, profile_id, t))
+                   if bio_db else dict(_unavail),
+            "episodic": _multi(lambda t: pcs.scan_episodic(bot_db, t))
+                        if bot_db else dict(_unavail),
+            "history": _multi(lambda t: pcs.scan_history(bot_db, t))
+                       if bot_db else dict(_unavail),
+            "outbound_recent": _multi(
+                lambda t: pcs.scan_outbound(inbox_db, t, days=eff_days))
+                if inbox_db else dict(_unavail),
+        }
+
+    @app.post("/api/personas/profiles/{profile_id}/retire-verify")
+    async def api_profile_retire_verify(profile_id: str, request: Request,
+                                        _=Depends(auth_dep)):
+        """「变更生效验证」（确定性 prompt 级，2026-08-04 P2 期）。
+
+        对**去掉撤销钉子的人设副本**重建 full/compact 两种真实指令文本，
+        断言锚词零命中（钉子块合法含锚词，用副本重排代替易碎的字符串剥离）；
+        另回钉子在两种格式里的在场证明与条目年龄。刻意不在此内联 LLM 行为
+        探测——那要走考题的后台 job 基建（分钟级），确定性检查已覆盖
+        「prompt 还带不带旧设定」这一层，行为层由试聊/考题按需人工跑。
+        """
+        import copy as _copy
+        from src.utils.persona_manager import PersonaManager
+        from src.utils import persona_content_scan as pcs
+        from src.utils import persona_retired as pr
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        raw_terms = body.get("terms")
+        if isinstance(raw_terms, str):
+            terms = pcs.split_scan_terms(raw_terms)
+        elif isinstance(raw_terms, (list, tuple)):
+            terms = pcs.split_scan_terms(
+                "，".join(str(t) for t in raw_terms))
+        else:
+            terms = []
+        if not terms:
+            raise HTTPException(400, tr(request, "err.persona.scan_q_required"))
+        pm = PersonaManager.get_instance()
+        persona = pm.get_persona_by_id(profile_id)
+        if persona is None:
+            raise HTTPException(404, f"Profile '{profile_id}' not found")
+        p_no_pin = _copy.deepcopy(persona)
+        b = p_no_pin.get("boundaries")
+        if isinstance(b, dict):
+            b.pop("retired_facts", None)
+        full_text = pm._format_persona_instructions(p_no_pin)
+        compact_text = pm._format_persona_compact(p_no_pin)
+        full_leaks = pr.prompt_leaks(full_text, terms)
+        compact_leaks = pr.prompt_leaks(compact_text, terms)
+        entries = pr.normalize_retired_entries(persona)
+        pin_full = bool(entries) and (
+            "已作废的旧设定" in pm._format_persona_instructions(persona))
+        pin_compact = bool(entries) and (
+            "已作废的旧设定" in pm._format_persona_compact(persona))
+        return {
+            "ok": True, "profile_id": profile_id, "terms": terms,
+            "clean": not full_leaks and not compact_leaks,
+            "full_leaks": full_leaks, "compact_leaks": compact_leaks,
+            "pin": {
+                "count": len(entries),
+                "present_full": pin_full,
+                "present_compact": pin_compact,
+                "entries": [
+                    {"text": e["text"], "added": e["added"],
+                     "terms": e["terms"], "age_days": pr.entry_age_days(e)}
+                    for e in entries
+                ],
+            },
+        }
+
     @app.put("/api/personas/profiles/{profile_id}")
     async def api_profile_upsert(profile_id: str, request: Request, _=Depends(auth_dep)):
         _check_write_role(request)
@@ -970,17 +1164,26 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
             store_data = dict(store_data)
             store_data.pop("_mrpa_source", None)
             took_over_mrpa = True
-        pm.upsert_profile(profile_id, store_data)
+        # 复活检测（P2 期，2026-08-04）：落库内容与撤销锚词打架 → **只警不拦**
+        # （响应带清单 + 审计留痕）。这是对「删除管线 × 生成/导入管线互不知情」
+        # （2026-08-02 批量丰富把已删的猫内容再生回档案）的通用写边界契约：
+        # 运营真要恢复设定，正确顺序是先删钉子再加内容——警告文案引导顺序，
+        # 不替运营做决定。
+        _rconf = []
         try:
-            cm = getattr(request.app.state, "config_manager", None) or config_manager
-            pm.persist_profiles(cm)
+            from src.utils.persona_retired import retired_conflicts
+            _rconf = retired_conflicts(store_data)[:10]
         except Exception:
-            pass
+            _rconf = []
+        pm.upsert_profile(profile_id, store_data)
+        _persisted, _persist_warn = _persist_with_status(pm, request)
         actor = request.session.get("username", "web_admin")
         if audit_store:
             audit_store.log(actor, "profile_upsert",
                           f"id={profile_id} name={persona_data.get('name','?')}"
-                          + (" took_over_mrpa=1" if took_over_mrpa else ""))
+                          + (" took_over_mrpa=1" if took_over_mrpa else "")
+                          + ("" if _persisted else " persisted=0")
+                          + (f" retired_conflicts={len(_rconf)}" if _rconf else ""))
         # 回传落库后的最新 rev，编辑器就地更新基线（免一次重取）
         _new_rev = ""
         try:
@@ -988,7 +1191,9 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         except Exception:
             pass
         return {"ok": True, "profile_id": profile_id, "merged": did_merge,
-                "rev": _new_rev}
+                "rev": _new_rev,
+                "persisted": _persisted, "persist_warning": _persist_warn,
+                "retired_conflicts": _rconf}
 
     @app.delete("/api/personas/profiles/{profile_id}")
     async def api_profile_delete(profile_id: str, request: Request, _=Depends(auth_dep)):
@@ -1010,15 +1215,14 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         from src.utils.persona_manager import PersonaManager
         pm = PersonaManager.get_instance()
         existed = pm.delete_profile(profile_id)
-        try:
-            cm = getattr(request.app.state, "config_manager", None) or config_manager
-            pm.persist_profiles(cm)
-        except Exception:
-            pass
+        _persisted, _persist_warn = _persist_with_status(pm, request)
         actor = request.session.get("username", "web_admin")
         if audit_store:
-            audit_store.log(actor, "profile_delete", f"id={profile_id}")
-        return {"ok": existed, "profile_id": profile_id}
+            audit_store.log(actor, "profile_delete",
+                          f"id={profile_id}"
+                          + ("" if _persisted else " persisted=0"))
+        return {"ok": existed, "profile_id": profile_id,
+                "persisted": _persisted, "persist_warning": _persist_warn}
 
     @app.get("/api/personas/profiles/{profile_id}/history")
     async def api_profile_history(profile_id: str, request: Request, _=Depends(auth_dep)):
@@ -1037,15 +1241,15 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         ok = pm.revert_profile(profile_id)
         if not ok:
             raise HTTPException(404, "No history available for this profile")
-        try:
-            cm = getattr(request.app.state, "config_manager", None) or config_manager
-            pm.persist_profiles(cm)
-        except Exception:
-            pass
+        _persisted, _persist_warn = _persist_with_status(pm, request)
         actor = request.session.get("username", "web_admin")
         if audit_store:
-            audit_store.log(actor, "profile_revert", f"profile_id={profile_id}")
-        return {"ok": True, "profile_id": profile_id, "persona": pm.get_persona_by_id(profile_id)}
+            audit_store.log(actor, "profile_revert",
+                          f"profile_id={profile_id}"
+                          + ("" if _persisted else " persisted=0"))
+        return {"ok": True, "profile_id": profile_id,
+                "persona": pm.get_persona_by_id(profile_id),
+                "persisted": _persisted, "persist_warning": _persist_warn}
 
     @app.post("/api/personas/bulk-bind")
     async def api_bulk_bind(request: Request, _=Depends(auth_dep)):

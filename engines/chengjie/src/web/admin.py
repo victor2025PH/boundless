@@ -141,6 +141,41 @@ class RevalidateStaticFiles(StaticFiles):
         return resp
 
 
+class CachedStaticFiles(StaticFiles):
+    """按 ``?v=`` 版本戳分级缓存的静态服务（2026-08-07 感知性能实测后加）。
+
+    背景：``/static`` 此前挂裸 StaticFiles，**不带任何 Cache-Control** → 浏览器每次
+    导航都要对每个资源回源校验。实测一次 ``/workspace`` 导航要拉 14 个资源、
+    占传输 20%（托管形态经反向 SSH 隧道，每次往返都很贵）。
+
+    分级依据＝本仓既有的「改前端就 bump ``?v=``」纪律（见 ui-build.txt 注释）：
+    - 带 ``v=`` 版本戳 → 内容一变 URL 就变，可安全 **immutable 长缓存**
+      （大头如 unified-inbox.css 236KB 正属此类，命中后重复导航零传输）；
+    - 无版本戳（图标/token 等小文件）→ 只给 **300s 短缓存**：既消掉一次会话内
+      的反复回源往返，又把「改了没生效」的窗口钉在 5 分钟内；
+    - ``ui-build.txt`` 例外 **no-cache**：它是「陈旧页提醒」的新鲜度信号源，
+      缓存它等于让坐席晚几分钟才收到「请刷新」，与它存在的目的相悖。
+    """
+
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        scope = kwargs.get("scope")
+        if scope is None and len(args) >= 3:
+            scope = args[2]
+        try:
+            qs = (scope or {}).get("query_string", b"").decode("latin-1")
+            path = (scope or {}).get("path", "") or ""
+        except Exception:  # noqa: BLE001 - 取不到就按最保守的短缓存
+            qs, path = "", ""
+        if path.endswith("ui-build.txt"):
+            resp.headers["Cache-Control"] = "no-cache"
+        elif qs.startswith("v=") or "&v=" in qs:
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            resp.headers["Cache-Control"] = "public, max-age=300"
+        return resp
+
+
 def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                telegram_client=None, event_tracker=None, log_buffer=None) -> FastAPI:
     # Load domain pack manifest for web integration（支付域在插件关闭时映射为 conversion）
@@ -307,7 +342,7 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _mimetypes.add_type("font/woff2", ".woff2")
         _mimetypes.add_type("font/woff", ".woff")
-        app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+        app.mount("/static", CachedStaticFiles(directory=str(_static_dir)), name="static")
     # 两端共享 copilot 组件库(单一事实来源 repo 根 shared/copilot);独立前缀避开 /static 匹配顺序
     # no-cache：iframe 入口 app.html 无 ?v= 戳，必须逐次回源校验防启发式缓存钉住旧版
     _shared_copilot_dir = Path(__file__).resolve().parents[2] / "shared" / "copilot"
@@ -378,6 +413,15 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         same_site="strict",
         https_only=_cookie_secure,
     )
+
+    # ── 响应压缩（2026-08-07 实测定位）：工作台页面 1~2MB 未压缩 HTML 经反向 SSH
+    # 隧道传输时严重拖慢（隧道有效吞吐 ~30-50KB/s，TCP-over-TCP 吞吐坍缩）——直连
+    # localhost 渲染仅 0.03s，走隧道却 20~45s。在**实例侧**先压缩是唯一能在进隧道前
+    # 减小字节的位置（nginx 在隧道下游，压不到隧道那一跳）。对 LAN 坐席顺带受益。
+    # 同日升级：GZipMiddleware → 自带 CompressionMiddleware（brotli 优先再省 ~15-20%，
+    # gzip 兜底语义不变；顺带修 SSE 不该被压缩缓冲的盲区）。minimum_size 跳过小响应。
+    from src.web.compression import CompressionMiddleware
+    app.add_middleware(CompressionMiddleware, minimum_size=1024)
 
     # ── CORS（S5：默认同源；关闭 '*' + allow_credentials 的危险组合）────────
     cors_origins = web_cfg.get("cors_origins", [])
@@ -652,8 +696,7 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     from src.utils.web_user_store import (WebUserStore, ROLE_MASTER, ROLE_ADMIN,
                                            ROLE_VIEWER, ROLE_AGENT, ROLE_LABELS, PAGE_PERMISSIONS,
                                            UI_MODE_SIMPLE, UI_MODE_FULL, UI_MODE_LABELS,
-                                           SIMPLE_MODE_CORE_PAGES, SIMPLE_MODE_MORE_PAGES,
-                                           resolve_ui_mode, is_page_visible_in_simple)
+                                           resolve_ui_mode)
     cfg_dir = config_manager.config_path.parent
     user_store = WebUserStore(cfg_dir / "web_users.db")
     if user_store.user_count() == 0:
@@ -723,6 +766,8 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
     _PATH_TO_ACTIVE = {
         "/": "dash", "/templates": "tpl",
+        # ops_overview P1 挂壳（2026-08-03）：/admin/ops 继承 base.html 后侧栏需高亮
+        "/admin/ops": "ops",
         "/strategies": "strategies", "/strategy-analytics": "strategy-analytics",
         "/audit": "audit", "/diff": "diff", "/logs": "logs",
         "/analytics": "analytics", "/help": "help", "/users": "users",
@@ -740,6 +785,8 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         "/personas": "personas",
         "/ai-studio": "ai_studio",
         "/membership": "membership",
+        "/reply-settings": "reply_settings",
+        "/personal-settings": "personal_settings",
     }
     for _dp in domain_web_pages:
         _PATH_TO_ACTIVE[_dp["path"]] = _dp["key"]
@@ -755,6 +802,13 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             ui_lang = getattr(request.state, "ui_lang", ui_lang)
         context.setdefault("i18n", i18n)
         context.setdefault("ui_lang", ui_lang)
+        # 词典指纹 → _i18n_bootstrap.html 走外链词典包（/i18n/ws-i18n.js?v=fp，
+        # immutable 缓存；P2 传输减重）。异常时不注入 → 模板自动回落内联词典。
+        try:
+            from src.web.web_i18n import get_translations_fingerprint
+            context.setdefault("i18n_fp", get_translations_fingerprint(ui_lang))
+        except Exception:
+            pass
         session_role = ""
         try:
             session_role = request.session.get("role", "")
@@ -791,8 +845,6 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         effective_mode = resolve_ui_mode(cookie_mode, session_role)
         context.setdefault("ui_mode", effective_mode)
         context.setdefault("ui_mode_labels", UI_MODE_LABELS)
-        context.setdefault("simple_core_pages", SIMPLE_MODE_CORE_PAGES)
-        context.setdefault("simple_more_pages", SIMPLE_MODE_MORE_PAGES)
         context.setdefault("domain_name", domain_name)
         context.setdefault("domain_web_pages", domain_web_pages)
         context.setdefault("domain_dashboard_widgets", domain_dashboard_widgets)
@@ -910,6 +962,14 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             redirect_to = "/cases"
         resp = RedirectResponse(redirect_to, status_code=303)
         resp.set_cookie("ui_mode", mode, max_age=365 * 86400)
+        # 观察期读数（2026-08-03 简洁模式精简）：两周内 grep app.log 的 [ui-mode]
+        # 看「切完整模式找功能」的频次，评估精简/兜底是否到位；纯日志零新基建。
+        try:
+            logger.info("[ui-mode] switch -> %s (user=%s role=%s to=%s)",
+                        mode, request.session.get("username", "?"),
+                        request.session.get("role", "?"), redirect_to)
+        except Exception:
+            pass
         return resp
 
     def _check_session_valid(request: Request) -> bool:
@@ -934,16 +994,19 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         # 无用户且无 token → 引导至首次设置向导
         if user_store.user_count() == 0 and not token:
             raise HTTPException(status_code=303, headers={"Location": "/setup"})
+        from src.web.login_redirect import login_redirect_location
+        _login_loc = login_redirect_location(
+            request.url.path or "/", request.url.query or "")
         if request.session.get("user_id"):
             if not _check_session_valid(request):
                 request.session.clear()
-                raise HTTPException(status_code=303, headers={"Location": "/login"})
+                raise HTTPException(status_code=303, headers={"Location": _login_loc})
         elif token and request.session.get("auth") == token:
             if not _check_session_valid(request):
                 request.session.clear()
-                raise HTTPException(status_code=303, headers={"Location": "/login"})
+                raise HTTPException(status_code=303, headers={"Location": _login_loc})
         else:
-            raise HTTPException(status_code=303, headers={"Location": "/login"})
+            raise HTTPException(status_code=303, headers={"Location": _login_loc})
         # 已认证：agent 角色只能停留在工作台，其余页面一律跳回 /workspace
         if request.session.get("role", "") == ROLE_AGENT:
             path = request.url.path.rstrip("/") or "/"
@@ -1010,6 +1073,8 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         "/monetization": "monetization",
         "/line-rpa": "line_rpa",
         "/workspace": "workspace",
+        # 自动回复设置页与「回复策略」同受众（master/admin），共用权限键
+        "/reply-settings": "strategies",
     }
     for _dp in domain_web_pages:
         _PATH_TO_PAGE[_dp["path"]] = _dp["key"]
@@ -1164,6 +1229,9 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_dob.getLogger("admin").warning("deferred-outbox 路由注册失败", exc_info=True)
 
+    # （外链 i18n 词典包 /i18n/ws-i18n.js 与静态壳切片 /api/i18n/bundle 同在
+    #   i18n_bundle_routes 模块，由下方既有的 register_i18n_bundle_routes 一次挂载。）
+
     # ── platform/leadbus 线索接收承接端 API（/api/leadbus/ingest、/status）──
     # 无界融合期新增（2026-07 S1）：上游获客(智控王/huoke)经 platform/leadbus 契约
     # 把线索交给本引擎承接；见 D:\boundless\platform\leadbus\CONTRACT.md。
@@ -1289,9 +1357,10 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             rates_data = config_manager.get_exchange_rates_config() or {}
             channels = rates_data.get("channels", {})
 
+            # 多取一些原始行供展示层聚合（批量操作逐条记账 → 折叠成一行 ×N）
             recent_audit = []
             if audit_store:
-                recent_audit = audit_store.query(limit=10)
+                recent_audit = audit_store.query(limit=60)
 
             _has_ch_widget = any(w.get("key") == "channel_health" for w in domain_dashboard_widgets)
             health = []
@@ -1299,17 +1368,24 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                 from src.utils.channel_health import compute_health_scores
                 health = compute_health_scores(channels, event_tracker)
 
-            recent_ops = []
-            for e in recent_audit:
-                recent_ops.append({
-                    "action": e.get("action", ""),
-                    "operator": e.get("user_id", ""),
-                    "channel": e.get("target", ""),
-                    "ts": e.get("ts", ""),
-                })
-            return tpl_data, channels, recent_ops, health
+            # 聚合 + 按日分段 + 今日摘要（纯函数，见 src/web/audit_display.py）
+            from src.web.audit_display import (
+                build_recent_groups, group_days, summarize_actions,
+            )
+            _today = time.strftime("%Y-%m-%d")
+            _yesterday = time.strftime(
+                "%Y-%m-%d", time.localtime(time.time() - 86400))
+            recent_op_days = group_days(
+                build_recent_groups(recent_audit, max_groups=8),
+                today=_today, yesterday=_yesterday)
+            audit_today = {"total": 0, "danger": 0}
+            if audit_store:
+                audit_today = summarize_actions(
+                    audit_store.actions_since(_today + " 00:00:00"))
+            return tpl_data, channels, recent_op_days, audit_today, health
 
-        tpl_data, channels, recent_ops, health = await _aio.to_thread(_build_dashboard_data)
+        (tpl_data, channels, recent_op_days, audit_today,
+         health) = await _aio.to_thread(_build_dashboard_data)
 
         uptime = int(time.time() - boot_ts) if boot_ts else 0
         hours, remainder = divmod(uptime, 3600)
@@ -1319,7 +1395,8 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         return templates.TemplateResponse(request, "dashboard.html", {
             "templates": tpl_data,
             "channels": channels,
-            "recent_ops": recent_ops,
+            "recent_op_days": recent_op_days,
+            "audit_today": audit_today,
             "uptime": uptime_str,
             "uptime_hours": hours,
             "template_count": len(tpl_data),
@@ -1347,7 +1424,10 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         if ok:
             config_manager.invalidate_templates_cache()
             actor = request.session.get("username", "web_admin")
-            _auto_snapshot("templates", snap_content, actor)
+            snap_id = _auto_snapshot("templates", snap_content, actor) or ""
+            if audit_store:
+                audit_store.log(actor, "update_template", key, "",
+                                (value or "")[:100], snap_id)
             import asyncio as _asyncio
             try:
                 _asyncio.get_running_loop().create_task(_fire_webhook(
@@ -1520,15 +1600,17 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         except Exception:
             pass
 
-        # KB 草稿统计
+        # KB 草稿统计（AI 客户端走回落链且可缺席——统计是纯 DB 读）
         try:
-            from src.utils.daily_learner import DailyLearner as _DL
+            from src.utils.daily_learner import DailyLearner as _DL, resolve_learner_ai as _rla
             learner = getattr(app.state, "_daily_learner", None)
             if learner is None:
-                ai = getattr(telegram_client, "ai_client", None) if telegram_client else None
                 kb = getattr(app.state, "kb_store", None)
-                if ai and kb:
-                    learner = _DL(kb, ai, db_path=getattr(app.state, "kb_db_path", None) or kb._db_path)
+                if kb:
+                    ai = _rla(app, telegram_client)
+                    _kbp = (getattr(app.state, "kb_db_path", None)
+                            or getattr(kb, "_db_path", None) or getattr(kb, "db_path", None))
+                    learner = _DL(kb, ai, db_path=_kbp)
                     app.state._daily_learner = learner
             if learner:
                 out["drafts"] = learner.stats()
@@ -2111,6 +2193,8 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         data = config_manager.get_dynamic_templates_config() or {}
         if key not in data:
             raise HTTPException(404, f"Template '{key}' not found")
+        # 变更前快照（与表单路径 /templates/update 同口径，审计可深链 /diff）
+        snap_content = yaml.dump(data, allow_unicode=True, default_flow_style=False)
         if isinstance(value, list):
             data[key] = value
         else:
@@ -2119,8 +2203,10 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         if not ok:
             raise HTTPException(500, msg)
         config_manager.invalidate_templates_cache()
+        actor = request.session.get("username", "api")
+        snap_id = _auto_snapshot("templates", snap_content, actor) or ""
         if audit_store:
-            audit_store.log("api", "update_template", key, "", str(value)[:100])
+            audit_store.log(actor, "update_template", key, "", str(value)[:100], snap_id)
         return {"ok": True, "key": key}
 
     @app.post("/api/batch-strategies")
@@ -2148,9 +2234,10 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         if not ok:
             raise HTTPException(500, msg)
         actor = request.session.get("username", "api")
-        _auto_snapshot("reply_strategies", snap_content, actor)
+        snap_id = _auto_snapshot("reply_strategies", snap_content, actor) or ""
         if audit_store:
-            audit_store.log(actor, "batch_strategy_enabled", ",".join(updated), "", str(enabled))
+            audit_store.log(actor, "batch_strategy_enabled", ",".join(updated), "",
+                            str(enabled), snap_id)
         return {"ok": True, "updated": updated, "not_found": not_found, "enabled": enabled}
 
     @app.post("/api/batch-templates")
@@ -2182,9 +2269,10 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             raise HTTPException(500, msg)
         config_manager.invalidate_templates_cache()
         actor = request.session.get("username", "api")
-        _auto_snapshot("templates", snap_content, actor)
+        snap_id = _auto_snapshot("templates", snap_content, actor) or ""
         if audit_store:
-            audit_store.log(actor, "batch_delete_templates", ",".join(removed), "", "")
+            audit_store.log(actor, "batch_delete_templates", ",".join(removed), "",
+                            "", snap_id)
         return {"ok": True, "removed": removed, "not_found": not_found}
 
     @app.get("/api/audit")
@@ -2330,6 +2418,7 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         cfg_dir = config_manager.config_path.parent
         content = await file.read()
         restored = []
+        import_snap_stems: list = []
         merge_stats = {}
         try:
             with zipfile.ZipFile(io.BytesIO(content), "r") as zf:
@@ -2351,12 +2440,15 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                         out_content = yaml.dump(merged, allow_unicode=True, default_flow_style=False)
                     else:
                         out_content = raw
-                    # 保存前快照
+                    # 保存前快照（多文件导入时只收集 stem；审计第六参仅在「单文件单快照」时写入，
+                    # 避免一条审计挂多个无法深链的 snap）
                     actor = request.session.get("username", "web_admin")
                     snap_content = target.read_text(encoding="utf-8") if target.exists() else ""
                     if snap_content:
                         prefix = name.replace(".yaml", "")
-                        _auto_snapshot(prefix, snap_content, actor)
+                        stem = _auto_snapshot(prefix, snap_content, actor)
+                        if stem:
+                            import_snap_stems.append(stem)
                     import shutil
                     if target.exists():
                         shutil.copy2(target, target.with_suffix(".yaml.pre_import"))
@@ -2373,7 +2465,11 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             config_manager.invalidate_exchange_rates_cache()
             actor = request.session.get("username", "web_admin")
             if audit_store:
-                audit_store.log(actor, f"import_config_{mode}", ", ".join(restored))
+                snap_id = (import_snap_stems[0]
+                           if len(restored) == 1 and len(import_snap_stems) == 1
+                           else "")
+                audit_store.log(actor, f"import_config_{mode}", ", ".join(restored),
+                                "", "", snap_id)
         if mode == "merge" and merge_stats:
             details = "; ".join(
                 f"{n}: +{v['added']} 新增 / ~{v['updated']} 更新"
@@ -2608,6 +2704,16 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                         f"📊 自动周报: 本周 {tw_total} 次查询, "
                         f"命中率 {tw_rate}%"
                     )
+                    # AI 价值总账行（2026-08-06）：与 /api/report/weekly 同源
+                    # （src/ops/value_report），推送不再只有一句 KB 命中率。
+                    try:
+                        from src.ops.value_report import build_weekly_value
+                        _inbox_st = getattr(app.state, "inbox_store", None)
+                        _val = build_weekly_value(_inbox_st) if _inbox_st is not None else {}
+                        for _vl in (_val or {}).get("text_lines", []):
+                            summary += "\n" + _vl
+                    except Exception:
+                        pass
                     await _fire_webhook("weekly_report", "system", "report", summary)
                     logger.info("F4 周报已推送: %s", summary)
                     await asyncio.sleep(72000)  # 推送后休眠 20h 避免重复
@@ -2848,6 +2954,13 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     async def care_schedule_page(request: Request, _=Depends(_page_auth)):
         _require_role(request, "care")
         return templates.TemplateResponse(request, "care_schedule.html", {})
+
+    # ── 个人设置（2026-08-04）：坐席级外观个性化（主题/壁纸/夜间/字号/圆角/动画）──
+    # 全部登录角色可用（外观是个人偏好而非管理能力），刻意只挂 _page_auth 不加
+    # _require_role；数据经 /api/workspace/prefs 的 appearance 字段按坐席漫游。
+    @app.get("/personal-settings", response_class=HTMLResponse)
+    async def personal_settings_page(request: Request, _=Depends(_page_auth)):
+        return templates.TemplateResponse(request, "personal_settings.html", {})
 
     # ── Phase P4：关系健康 / 流失预警榜页面 ──
     @app.get("/relations-health", response_class=HTMLResponse)
@@ -3312,6 +3425,26 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_tgr
 
         _log_tgr.getLogger("admin").debug("Telegram 路由注册跳过", exc_info=True)
+
+    # ── 自动回复设置页（档位 / 回复速度 / 拟人链 / 语音，P0 2026-08-02）──
+    try:
+        from src.web.routes.reply_settings_routes import register_reply_settings_routes
+
+        def _reply_settings_page_auth(request: Request):
+            # 与「回复策略」同受众：master/admin（见 _PATH_TO_PAGE 权限键）
+            _require_role(request, "strategies")
+
+        register_reply_settings_routes(
+            app,
+            page_auth=_reply_settings_page_auth,
+            api_auth=_api_auth,
+            templates=templates,
+            config_manager=config_manager,
+        )
+    except Exception:
+        import logging as _log_rps
+
+        _log_rps.getLogger("admin").debug("自动回复设置路由注册跳过", exc_info=True)
 
     return app
 

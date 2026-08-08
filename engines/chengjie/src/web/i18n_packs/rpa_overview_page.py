@@ -502,7 +502,7 @@ ZH = {
     "ov_select_template": "选择模板…",
     "ov_settings": "设置 ›",
     "ov_tab_pending": "跨平台待审",
-    "ov_title": "渠道总览",
+    "ov_title": "矩阵总览",
     "ov_zero_none_avail": "还没有接入任何渠道服务。Telegram 请到渠道页配置；LINE / Messenger / WhatsApp 属真机自动化，需在「真机设备」连接手机后启用。",
     "ov_zero_none_running": "有 {n} 个渠道服务可用，但当前都未运行 —— 可在下方渠道卡上点「启动」。",
 }
@@ -1008,7 +1008,7 @@ EN = {
     "ov_select_template": "Select template…",
     "ov_settings": "Settings ›",
     "ov_tab_pending": "Cross-platform pending",
-    "ov_title": "Channel Overview",
+    "ov_title": "Matrix Overview",
     "ov_zero_none_avail": "No channel services connected yet. Configure Telegram on its channel page; LINE / Messenger / WhatsApp are real-device automation — connect a phone under Physical devices first.",
     "ov_zero_none_running": "{n} channel service(s) available but none running — click Start on a channel card below.",
 }

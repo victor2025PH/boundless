@@ -3,13 +3,18 @@
 从 admin.py 抽出，复用 AdminRouteContext。_get_learner 缓存在 app.state._daily_learner，
 与 ai-studio summary 等其它读取点共享同一实例。
 
-端点（与抽出前逐行一致）：
+2026-08-02：AI 客户端改回落链解析（telegram 协议客户端下线的实例此前整族假空），
+学习器降级为"无 AI 也能审"（stats/drafts/审核纯 DB），仅 run/feed 需要 AI。
+新增 POST /api/learner/feed（手动喂料）。
+
+端点：
   GET  /api/learner/stats           POST /api/learner/run
   GET  /api/learner/drafts          GET  /api/learner/drafts/{draft_id}
   PUT  /api/learner/drafts/{draft_id}
   POST /api/learner/drafts/{draft_id}/approve   POST /api/learner/drafts/{draft_id}/reject
   POST /api/learner/drafts/approve-all          POST /api/learner/drafts/batch-action
   POST /api/learner/drafts/{draft_id}/recheck-dup
+  POST /api/learner/feed
 """
 
 from __future__ import annotations
@@ -20,8 +25,9 @@ from typing import Optional
 
 from fastapi import Depends, HTTPException, Query, Request
 
-from src.utils.daily_learner import DailyLearner
+from src.utils.daily_learner import DailyLearner, resolve_learner_ai
 from src.utils.domain_policy import effective_domain_name
+from src.web.web_i18n import tr
 
 
 def register_learner_routes(app, ctx):
@@ -33,38 +39,83 @@ def register_learner_routes(app, ctx):
     _kb_db_path = Path(config_manager.config_path).parent / "knowledge_base.db"
 
     def _get_learner() -> Optional[DailyLearner]:
-        if hasattr(app.state, "_daily_learner"):
-            return app.state._daily_learner
-        ai = getattr(telegram_client, "ai_client", None) if telegram_client else None
-        if not ai:
-            return None
-        learner = DailyLearner(_kb_store, ai, db_path=_kb_db_path)
-        app.state._daily_learner = learner
+        """取共享学习器。AI 缺席不阻塞构造（审核链纯 DB）；AI 恢复后晚绑定。"""
+        learner = getattr(app.state, "_daily_learner", None)
+        ai = resolve_learner_ai(app, telegram_client)
+        if learner is None:
+            if _kb_store is None:
+                return None
+            learner = DailyLearner(_kb_store, ai, db_path=_kb_db_path)
+            app.state._daily_learner = learner
+        elif ai is not None and not learner.ai_ready:
+            learner.attach_ai(ai)
         return learner
+
+    def _learn_params():
+        """域上下文 + 未命中门槛（config kb_learner.min_miss_count，默认 2）。"""
+        cfg_obj = config_manager.config if hasattr(config_manager, 'config') else {}
+        cfg_obj = cfg_obj if isinstance(cfg_obj, dict) else {}
+        domain_name = effective_domain_name(cfg_obj)
+        domain_ctx = f"当前行业: {domain_name}" if domain_name else ""
+        lcfg = cfg_obj.get("kb_learner") or {}
+        try:
+            mmc = int(lcfg.get("min_miss_count", 2))
+        except (TypeError, ValueError):
+            mmc = 2
+        return domain_ctx, max(1, mmc)
 
     @app.get("/api/learner/stats")
     async def api_learner_stats(request: Request, _=Depends(_api_auth)):
         learner = _get_learner()
         if not learner:
-            return {"error": "AI client not available"}
-        return learner.stats()
+            # 旧前端兼容：零值 + error 键；新前端认 available/reason
+            return {"available": False, "reason": "kb_unavailable",
+                    "ai_ready": False, "error": "kb store not available",
+                    "pending": 0, "approved": 0, "rejected": 0, "dup_flagged": 0}
+        out = learner.stats()
+        out["available"] = True
+        out["ai_ready"] = learner.ai_ready
+        return out
 
     @app.post("/api/learner/run")
     async def api_learner_run(request: Request, _=Depends(_api_auth)):
         """手动触发一次学习"""
         learner = _get_learner()
         if not learner:
-            raise HTTPException(503, "AI client not available")
-        domain_ctx = ""
-        cfg_obj = config_manager.config if hasattr(config_manager, 'config') else {}
-        domain_name = effective_domain_name(cfg_obj if isinstance(cfg_obj, dict) else {})
-        if domain_name:
-            domain_ctx = f"当前行业: {domain_name}"
-        result = await learner.run_daily_learn(domain_context=domain_ctx)
+            raise HTTPException(503, tr(request, "err.learner.kb_unavailable"))
+        if not learner.ai_ready:
+            raise HTTPException(503, tr(request, "err.learner.ai_unavailable"))
+        domain_ctx, mmc = _learn_params()
+        result = await learner.run_daily_learn(
+            domain_context=domain_ctx, min_miss_count=mmc, source="manual")
         actor = request.session.get("username", "system")
         if audit_store:
             audit_store.log(actor, "learner_run", json.dumps(result))
         return result
+
+    @app.post("/api/learner/feed")
+    async def api_learner_feed(request: Request, _=Depends(_api_auth)):
+        """手动喂料：运营把没答好的问题直接入队，AI 可用时当场生成草稿。"""
+        learner = _get_learner()
+        if not learner:
+            raise HTTPException(503, tr(request, "err.learner.kb_unavailable"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        query = str((body or {}).get("query", "")).strip()
+        if len(query) < 2:
+            raise HTTPException(400, tr(request, "err.learner.feed_query_required"))
+        if len(query) > 200:
+            raise HTTPException(400, tr(request, "err.learner.feed_query_too_long"))
+        domain_ctx, mmc = _learn_params()
+        result = await learner.feed_and_learn(
+            query, domain_context=domain_ctx, min_miss_count=mmc)
+        actor = request.session.get("username", "web_admin")
+        if audit_store:
+            audit_store.log(actor, "learner_feed",
+                            f"{query[:80]} -> {json.dumps(result, ensure_ascii=False)}")
+        return {"ok": True, **result}
 
     @app.get("/api/learner/drafts")
     async def api_learner_drafts(request: Request, _=Depends(_api_auth),

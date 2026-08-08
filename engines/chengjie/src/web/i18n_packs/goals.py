@@ -26,6 +26,10 @@ ZH = {
     "err.goals.batch_targets_required": "缺少目标会话列表（targets）",
     "err.goals.batch_too_many": "单次批量最多 {n} 个会话",
     "err.goals.profile_fields_required": "缺少画像字段（fields）",
+    "err.goals.deadline_past":
+        "目标已进行到第 {day} 天，期限不能少于 {day} 天；"
+        "想立即结束请用「标成交」或「放弃」",
+    "err.goals.deadline_terminal": "目标已结束，期限不可再改",
 
     # ── 客户画像卡（cp-goal 内嵌画像区；P1 双轨槽位） ─────────────────────
     "inbox.goal.profile.title": "客户画像",
@@ -54,6 +58,7 @@ ZH = {
     "inbox.goal.profile.ask.name": "怎么称呼",
     "inbox.goal.profile.ask.location": "人在哪个城市",
     "inbox.goal.profile.ask.occupation": "做什么生意/工作",
+    "inbox.goal.profile.ask.age": "大概哪个年龄段",
     "inbox.goal.profile.ask.interests": "平时喜欢做什么",
     "inbox.goal.profile.ask.need": "生意上最头疼什么",
     "inbox.goal.profile.ask.channel": "客户主要在哪些平台上",
@@ -85,6 +90,104 @@ ZH = {
     "inbox.goal.form.advanced": "进阶：自定义目标（自己写推进方向）",
     "inbox.goal.form.recommended": "推荐",
     "inbox.goal.form.rec_silent": "TA 已约 {d} 天没说话，建议先唤回",
+    # ── P24 两步向导（第一步分组场景卡 + 第二步场景设置弹层） ─────────────
+    "inbox.goal.form.step1_lead": "先选一个场景，下一步会告诉你 AI 打算怎么推进",
+    "inbox.goal.form.grp.conversion": "转化成交",
+    "inbox.goal.form.grp.relationship": "关系经营",
+    "inbox.goal.form.grp.engagement": "唤回沉默",
+    "inbox.goal.form.grp.discovery": "信息摸底",
+    "inbox.goal.form.grp.other": "其他",
+    "inbox.goal.form.adv_pill": "进阶",
+    # P28：自定义 note 像摸底诉求 → 一键改走客户摸底；进度打勾清单
+    "inbox.goal.form.rec_discovery":
+        "这更像「客户摸底」：勾选年龄/职业等，客户答一项打一项勾，聊全自动达成。",
+    "inbox.goal.form.rec_discovery_btn": "改用客户摸底",
+    "inbox.goal.form.rec_discovery_soft":
+        "若方向是了解年龄、职业等信息，优先用「客户摸底」而不是自定义。",
+    "inbox.goal.param_label.profile_discovery.slots": "要了解的信息",
+    "inbox.goal.param_help.profile_discovery.slots":
+        "点选至少一项；客户把勾选项都说出来后目标自动标「已达成」。",
+    "inbox.goal.param_label.profile_discovery.note": "补充方向（可选，给 AI 看）",
+    "inbox.goal.slots.title": "摸底进度",
+    "inbox.goal.slots.miss_t": "还没聊到「{label}」",
+    "inbox.goal.form.last_used": "上次",
+    "inbox.goal.form.back": "返回",
+    "inbox.goal.form.arc_title": "AI 会怎么推进",
+    "inbox.goal.form.arc_hint": "按这个节奏分天推进；对方冷淡或情绪低落时 AI 会自动放缓、让路",
+    "inbox.goal.form.params_title": "这个目标的设置",
+    "inbox.goal.form.summary": "创建后 AI 按上面的节奏自然推进，你随时可以暂停或换方向",
+    "inbox.goal.form.days_help": "到期未达成会如实记为「未达成」，AI 不会为赶期限硬推",
+    "inbox.goal.form.auto_note_help": "如需开启，请管理员在系统设置里打开「主动触达」。",
+    "inbox.goal.form.adv_params": "高级参数（通常由系统自动带入，一般不用改）",
+    "inbox.goal.form.per_month": "/月",
+    # 付费解锁：卖什么（下拉读价目表）+ 聊天称呼（自动跟随所选项）
+    "inbox.goal.param_label.conversion_unlock.item_id": "卖什么（选一个付费内容）",
+    "inbox.goal.param_help.conversion_unlock.item_id":
+        "清单来自后台价目表；客户真的解锁后，这个目标会自动标成「已达成」",
+    "inbox.goal.param_label.conversion_unlock.item_label": "聊天里怎么称呼它",
+    "inbox.goal.param_help.conversion_unlock.item_label":
+        "AI 会用这个说法自然提到它——写客户听得懂的词，别写编号",
+    "inbox.goal.form.item_label_ph": "例如：深度解读、专属相册",
+    "inbox.goal.form.unlock_custom_opt": "自定义…（高级）",
+    "inbox.goal.form.unlock_custom_id": "解锁项编号（高级）",
+    "inbox.goal.form.unlock_custom_id_ph": "例如 story_ch2（英文小写与下划线）",
+    "inbox.goal.form.unlock_custom_id_help":
+        "需与后台价目表里的编号一致，客户解锁才能被自动记成「已达成」",
+    # 会员订阅
+    "inbox.goal.param_label.conversion_subscribe.tier": "目标会员档",
+    "inbox.goal.param_help.conversion_subscribe.tier":
+        "清单来自后台价目表；客户开通该档会员后，目标自动达成",
+    "inbox.goal.param_label.conversion_subscribe.item_label": "聊天里怎么称呼它",
+    "inbox.goal.param_help.conversion_subscribe.item_label":
+        "AI 聊会员时用这个叫法，写客户熟悉的说法就好",
+    # 关系阶段（下拉中文化；键尾=STAGE_ORDER）
+    "inbox.goal.param_label.relationship_stage.target_stage": "目标阶段",
+    "inbox.goal.param_help.relationship_stage.target_stage":
+        "关系到达所选阶段时，目标自动标「已达成」",
+    "inbox.goal.stage.initial": "初识",
+    "inbox.goal.stage.contacted": "已联系",
+    "inbox.goal.stage.engaged": "互动中",
+    "inbox.goal.stage.qualified": "已摸清需求",
+    "inbox.goal.stage.handoff_ready": "可交接",
+    "inbox.goal.stage.handed_off": "已交接",
+    "inbox.goal.stage.converted": "已成交",
+    # 亲密度滑杆
+    "inbox.goal.param_label.relationship_intimacy.target_score": "目标亲密度",
+    "inbox.goal.param_help.relationship_intimacy.target_score":
+        "亲密度由日常互动自动累积（0-100）；达到目标值即算达成",
+    "inbox.goal.form.intimacy_lo": "30 认识",
+    "inbox.goal.form.intimacy_mid": "55 熟络",
+    "inbox.goal.form.intimacy_hi": "78 亲密",
+    # 沉默唤回 / 获客 / 留存的备注与选品
+    "inbox.goal.param_label.engagement_reactivate.note": "背景备注（给 AI 看）",
+    "inbox.goal.param_help.engagement_reactivate.note":
+        "写一句对方为什么沉默、上次聊到哪，AI 唤回时会用得更自然",
+    "inbox.goal.form.note_ph_reactivate": "例如：上次聊到TA在装修新店，之后就忙断了",
+    "inbox.goal.param_label.acquire_and_convert.product_id": "主推产品（可留空）",
+    "inbox.goal.param_help.acquire_and_convert.product_id":
+        "留空 = AI 按聊出来的客户画像自动选品（推荐）",
+    "inbox.goal.form.product_auto_opt": "不指定（AI 按客户画像自动选品）",
+    "inbox.goal.param_help.acquire_and_convert.note":
+        "写一句客户背景（哪来的、做什么生意），AI 开场更贴",
+    "inbox.goal.param_help.retention_expand.note":
+        "有历史流失原因或特殊情况就写一句，AI 陪跑时会留意",
+    # 自定义目标（进阶面板：一句话方向 + 示例 chips）
+    "inbox.goal.param_label.custom.note": "推进方向（写给 AI 的一句话）",
+    "inbox.goal.param_help.custom.note":
+        "写清对象和结果：希望TA最终做什么。AI 会照此分天自然推进，不会生硬照抄原文",
+    "inbox.goal.form.note_ph_custom": "例如：引导TA本周添加官网客服，下单企业版",
+    "inbox.goal.form.note_ex_t": "不知道怎么写？点一个示例填入再改：",
+    "inbox.goal.form.note_ex1": "引导TA留下联系方式，方便售后跟进",
+    "inbox.goal.form.note_ex2": "约TA这周试用一次我们的新功能",
+    "inbox.goal.form.note_ex3": "让TA把我们推荐给一位同行朋友",
+    # 表单草稿幸存层（P0 2026-08-04：误触/外部刷新不再丢已填内容）
+    "inbox.goal.form.draft_saved_hint": "内容已自动暂存；点「返回」或按 Esc 退出，下次打开可继续写",
+    "inbox.goal.form.draft_restored": "已恢复上次未提交的内容",
+    "inbox.goal.form.draft_clear": "清空重填",
+    "inbox.goal.form.draft_badge": "有草稿",
+    # P1 2026-08-04：×＝关闭整个表单（与「返回」分离）+ 自动暂存常驻微反馈
+    "inbox.goal.form.close": "关闭（内容自动暂存）",
+    "inbox.goal.form.autosave_note": "输入自动暂存中",
     # 场景一句话说明（键尾 = 模板注册表 id；templates.py 增删模板须同步这里）
     "inbox.goal.tmpl_desc.conversion_unlock": "引导 TA 付费解锁单项内容：先铺垫价值，对方兴致好时才顺势开价",
     "inbox.goal.tmpl_desc.conversion_subscribe": "引导 TA 开通会员/订阅：节奏更缓，重在让对方先感到持续价值",
@@ -93,6 +196,7 @@ ZH = {
     "inbox.goal.tmpl_desc.engagement_reactivate": "TA 很久没说话？用回忆和新话题把人唤回来，绝不催促",
     "inbox.goal.tmpl_desc.acquire_and_convert": "新客户从认识到下单的完整节奏：摸底 → 种草 → 报价 → 收口",
     "inbox.goal.tmpl_desc.retention_expand": "已成交客户的售后陪跑与到期续费，像朋友不像客服",
+    "inbox.goal.tmpl_desc.profile_discovery": "自然聊出客户的年龄、职业等关键信息：说出一项记一项，聊全自动达成",
     "inbox.goal.tmpl_desc.custom": "自己用一句话描述推进方向，AI 照此分天推进（进阶用法）",
     "inbox.goal.autonomy.observe": "只观察",
     "inbox.goal.autonomy.suggest": "顺势建议",
@@ -181,6 +285,29 @@ ZH = {
     "inbox.goal.filter.hold": "让路中",
     "inbox.goal.badge_active": "有工作目标",
     "inbox.goal.tab_badge": "今日有推进安排",
+    # ── 调整期限（改节奏）内联表单：入口在「第X/Y天」meta 行 + ⋯菜单 ────────
+    "inbox.goal.deadline.edit_t": "点击调整期限（加快或放缓推进节奏）",
+    "inbox.goal.deadline.title": "调整期限",
+    "inbox.goal.deadline.days_label": "总期限（天）",
+    "inbox.goal.deadline.chip_today": "今天收口",
+    "inbox.goal.deadline.chip_today_t": "把今天设为最后一天，AI 进入收口节奏",
+    "inbox.goal.deadline.chip_days": "{n} 天",
+    "inbox.goal.deadline.hint_today": "今天就是最后一天，AI 将直接进入收口节奏",
+    "inbox.goal.deadline.hint_faster": "比现在快：里程碑时间轴按新期限压缩；情绪护栏与未回退避照常生效",
+    "inbox.goal.deadline.hint_slower": "比现在慢：节奏放缓；已达成的里程碑不会回退",
+    "inbox.goal.deadline.hint_same": "与当前期限相同",
+    "inbox.goal.deadline.err_min": "已进行到第 {day} 天，期限不能少于 {day} 天",
+    "inbox.goal.deadline.save": "保存",
+    "inbox.goal.deadline.saved": "期限已改为 {n} 天",
+    # 历史基准线（P1：改期限时看数据不拍脑袋；同场景终局 ≥3 才显示）
+    "inbox.goal.deadline.bench": "近30天同场景：达成率 {rate}%（n={n}）· 平均 {days} 天达成",
+    "inbox.goal.deadline.bench_no_avg": "近30天同场景：达成率 {rate}%（n={n}）",
+    # 临期显式化（P1：到期前一天从静默变决策点——延长还是今天收口）
+    "inbox.goal.due.today": "今天到期",
+    "inbox.goal.due.today_t": "今天是最后一天：今天收口或延长；到期未达成将自动标「已到期」",
+    "inbox.goal.due.tomorrow": "明天到期",
+    "inbox.goal.due.tomorrow_t": "明天到期：可提前今天收口，或延长给足空间",
+    "inbox.goal.due.extend7": "延长 7 天",
 }
 
 EN = {
@@ -202,6 +329,11 @@ EN = {
     "err.goals.batch_targets_required": "Target conversation list (targets) required",
     "err.goals.batch_too_many": "At most {n} conversations per batch call",
     "err.goals.profile_fields_required": "Profile fields required",
+    "err.goals.deadline_past":
+        "Already on day {day} — the deadline cannot be shorter than {day}"
+        " days. To end the goal now, use Mark won or Abandon.",
+    "err.goals.deadline_terminal":
+        "This goal has ended; its deadline can no longer be changed",
 
     # ── Customer profile card (embedded in cp-goal; P1 dual tracks) ───────
     "inbox.goal.profile.title": "Customer profile",
@@ -228,6 +360,7 @@ EN = {
     "inbox.goal.profile.ask.name": "what to call them",
     "inbox.goal.profile.ask.location": "which city they are in",
     "inbox.goal.profile.ask.occupation": "what business they run",
+    "inbox.goal.profile.ask.age": "roughly their age range",
     "inbox.goal.profile.ask.interests": "what they enjoy",
     "inbox.goal.profile.ask.need": "their biggest operational pain",
     "inbox.goal.profile.ask.channel": "which platforms their customers are on",
@@ -259,6 +392,103 @@ EN = {
     "inbox.goal.form.advanced": "Advanced: custom goal (write your own direction)",
     "inbox.goal.form.recommended": "Suggested",
     "inbox.goal.form.rec_silent": "About {d} day(s) of silence — re-engage first",
+    # ── P24 two-step wizard (grouped scenario cards + per-scenario modal) ──
+    "inbox.goal.form.step1_lead": "Pick a scenario — the next step shows exactly how AI will advance it",
+    "inbox.goal.form.grp.conversion": "Convert & monetize",
+    "inbox.goal.form.grp.relationship": "Relationship",
+    "inbox.goal.form.grp.engagement": "Re-engage",
+    "inbox.goal.form.grp.discovery": "Discovery",
+    "inbox.goal.form.grp.other": "Other",
+    "inbox.goal.form.adv_pill": "Advanced",
+    "inbox.goal.form.rec_discovery":
+        "This looks like profile discovery: tick age/occupation etc. — each answer checks a slot, auto-completes when all are learned.",
+    "inbox.goal.form.rec_discovery_btn": "Use profile discovery",
+    "inbox.goal.form.rec_discovery_soft":
+        "If you want age, occupation and similar facts, prefer Profile discovery over Custom.",
+    "inbox.goal.param_label.profile_discovery.slots": "Facts to learn",
+    "inbox.goal.param_help.profile_discovery.slots":
+        "Pick at least one; the goal auto-completes when all selected slots are filled.",
+    "inbox.goal.param_label.profile_discovery.note": "Extra direction (optional)",
+    "inbox.goal.slots.title": "Discovery progress",
+    "inbox.goal.slots.miss_t": "Not yet learned: {label}",
+    "inbox.goal.form.last_used": "Last used",
+    "inbox.goal.form.back": "Back",
+    "inbox.goal.form.arc_title": "How AI will advance it",
+    "inbox.goal.form.arc_hint": "Advances day by day at this pace; AI slows down or yields when they are cold or upset",
+    "inbox.goal.form.params_title": "Settings for this goal",
+    "inbox.goal.form.summary": "After creation AI advances at the pace above; you can pause or change direction anytime",
+    "inbox.goal.form.days_help": "If not achieved by the deadline it is honestly closed as \u201cmissed\u201d — AI never force-pushes",
+    "inbox.goal.form.auto_note_help": "To enable it, ask an admin to turn on proactive outreach in system settings.",
+    "inbox.goal.form.adv_params": "Advanced (usually auto-filled by the system)",
+    "inbox.goal.form.per_month": "/mo",
+    # Paid unlock: what to sell (catalog dropdown) + chat wording (auto-follows)
+    "inbox.goal.param_label.conversion_unlock.item_id": "What to sell (pick a paid item)",
+    "inbox.goal.param_help.conversion_unlock.item_id":
+        "The list comes from the price catalog; when the customer actually unlocks it, this goal auto-completes",
+    "inbox.goal.param_label.conversion_unlock.item_label": "What to call it in chat",
+    "inbox.goal.param_help.conversion_unlock.item_label":
+        "AI mentions it using this wording — use words the customer understands, never a code",
+    "inbox.goal.form.item_label_ph": "e.g. deep reading, private album",
+    "inbox.goal.form.unlock_custom_opt": "Custom… (advanced)",
+    "inbox.goal.form.unlock_custom_id": "Unlock item id (advanced)",
+    "inbox.goal.form.unlock_custom_id_ph": "e.g. story_ch2 (lowercase + underscore)",
+    "inbox.goal.form.unlock_custom_id_help":
+        "Must match an id in the price catalog, or the unlock cannot be detected automatically",
+    # Subscription
+    "inbox.goal.param_label.conversion_subscribe.tier": "Target tier",
+    "inbox.goal.param_help.conversion_subscribe.tier":
+        "From the price catalog; the goal auto-completes when they subscribe to this tier",
+    "inbox.goal.param_label.conversion_subscribe.item_label": "What to call it in chat",
+    "inbox.goal.param_help.conversion_subscribe.item_label":
+        "AI uses this wording when talking about the membership — keep it familiar to the customer",
+    # Relationship stage (localized dropdown; key tail = STAGE_ORDER)
+    "inbox.goal.param_label.relationship_stage.target_stage": "Target stage",
+    "inbox.goal.param_help.relationship_stage.target_stage":
+        "The goal auto-completes when the relationship reaches this stage",
+    "inbox.goal.stage.initial": "New",
+    "inbox.goal.stage.contacted": "Contacted",
+    "inbox.goal.stage.engaged": "Engaged",
+    "inbox.goal.stage.qualified": "Qualified",
+    "inbox.goal.stage.handoff_ready": "Handoff-ready",
+    "inbox.goal.stage.handed_off": "Handed off",
+    "inbox.goal.stage.converted": "Converted",
+    # Intimacy slider
+    "inbox.goal.param_label.relationship_intimacy.target_score": "Target intimacy",
+    "inbox.goal.param_help.relationship_intimacy.target_score":
+        "Intimacy accrues from daily interaction (0-100); reaching the target completes the goal",
+    "inbox.goal.form.intimacy_lo": "30 acquainted",
+    "inbox.goal.form.intimacy_mid": "55 familiar",
+    "inbox.goal.form.intimacy_hi": "78 close",
+    # Reactivate / acquire / retention notes & product pinning
+    "inbox.goal.param_label.engagement_reactivate.note": "Context note (for AI)",
+    "inbox.goal.param_help.engagement_reactivate.note":
+        "One line on why they went quiet or where you left off — helps AI re-engage naturally",
+    "inbox.goal.form.note_ph_reactivate": "e.g. Last talked about their shop renovation, then they got busy",
+    "inbox.goal.param_label.acquire_and_convert.product_id": "Pinned product (optional)",
+    "inbox.goal.param_help.acquire_and_convert.product_id":
+        "Leave blank and AI auto-picks by the customer profile (recommended)",
+    "inbox.goal.form.product_auto_opt": "No pin (AI auto-picks by profile)",
+    "inbox.goal.param_help.acquire_and_convert.note":
+        "One line of background (source, their business) helps AI open naturally",
+    "inbox.goal.param_help.retention_expand.note":
+        "Note churn history or special context; AI keeps it in mind while accompanying",
+    # Custom goal (advanced panel: one-line direction + example chips)
+    "inbox.goal.param_label.custom.note": "Direction (one line for AI)",
+    "inbox.goal.param_help.custom.note":
+        "State the person and the outcome you want; AI advances toward it day by day, never quoting you verbatim",
+    "inbox.goal.form.note_ph_custom": "e.g. Get them to contact site support and order the business plan this week",
+    "inbox.goal.form.note_ex_t": "Not sure how to word it? Click an example and edit:",
+    "inbox.goal.form.note_ex1": "Get their contact info for after-sales follow-up",
+    "inbox.goal.form.note_ex2": "Invite them to try our new feature this week",
+    "inbox.goal.form.note_ex3": "Ask them to refer us to a peer",
+    # Form draft survival layer (P0 2026-08-04: stray clicks / external refreshes no longer lose input)
+    "inbox.goal.form.draft_saved_hint": "Auto-saved. Use Back or Esc to leave — your input will be restored next time",
+    "inbox.goal.form.draft_restored": "Restored your unsubmitted draft",
+    "inbox.goal.form.draft_clear": "Start over",
+    "inbox.goal.form.draft_badge": "Draft",
+    # P1 2026-08-04: x closes the whole form (split from Back) + persistent autosave note
+    "inbox.goal.form.close": "Close (input auto-saved)",
+    "inbox.goal.form.autosave_note": "Auto-saving as you type",
     # One-line scenario descriptions (key tail = template registry id)
     "inbox.goal.tmpl_desc.conversion_unlock": "Guide them to a paid unlock: seed value first, only offer when they warm up",
     "inbox.goal.tmpl_desc.conversion_subscribe": "Guide them to a membership: slower arc, focus on ongoing value first",
@@ -267,6 +497,7 @@ EN = {
     "inbox.goal.tmpl_desc.engagement_reactivate": "Gone quiet? Win them back with shared memories and fresh topics — never push",
     "inbox.goal.tmpl_desc.acquire_and_convert": "Full arc from stranger to order: qualify, seed, offer, close",
     "inbox.goal.tmpl_desc.retention_expand": "Post-sale companionship and renewal for existing customers — friend, not helpdesk",
+    "inbox.goal.tmpl_desc.profile_discovery": "Learn key facts (age, occupation…) naturally — each answer ticks a slot, auto-completes when all are learned",
     "inbox.goal.tmpl_desc.custom": "Describe the direction in one sentence; AI advances it day by day (advanced)",
     "inbox.goal.autonomy.observe": "Observe only",
     "inbox.goal.autonomy.suggest": "Suggest",
@@ -355,4 +586,27 @@ EN = {
     "inbox.goal.filter.hold": "Yielding",
     "inbox.goal.badge_active": "Has work goal",
     "inbox.goal.tab_badge": "Push planned today",
+    # ── Adjust deadline (pace) inline form: entry on the day meta + ⋯ menu ──
+    "inbox.goal.deadline.edit_t": "Click to adjust the deadline (speed up or slow down)",
+    "inbox.goal.deadline.title": "Adjust deadline",
+    "inbox.goal.deadline.days_label": "Total days",
+    "inbox.goal.deadline.chip_today": "Wrap up today",
+    "inbox.goal.deadline.chip_today_t": "Make today the final day — AI moves to closing pace",
+    "inbox.goal.deadline.chip_days": "{n} days",
+    "inbox.goal.deadline.hint_today": "Today becomes the final day — AI moves straight to closing pace",
+    "inbox.goal.deadline.hint_faster": "Faster: the milestone timeline compresses to the new deadline; emotion guards and no-reply backoff still apply",
+    "inbox.goal.deadline.hint_slower": "Slower: the pace relaxes; milestones already reached never regress",
+    "inbox.goal.deadline.hint_same": "Same as the current deadline",
+    "inbox.goal.deadline.err_min": "Already on day {day} — cannot be shorter than {day} days",
+    "inbox.goal.deadline.save": "Save",
+    "inbox.goal.deadline.saved": "Deadline set to {n} days",
+    # Historical benchmark (P1: data-informed pacing; shown at ≥3 outcomes)
+    "inbox.goal.deadline.bench": "Same scenario, last 30d: {rate}% done (n={n}) · avg {days} days",
+    "inbox.goal.deadline.bench_no_avg": "Same scenario, last 30d: {rate}% done (n={n})",
+    # Near-deadline surfacing (P1: turn silent expiry into an explicit decision)
+    "inbox.goal.due.today": "Due today",
+    "inbox.goal.due.today_t": "Final day — wrap up today or extend; unmet goals auto-expire",
+    "inbox.goal.due.tomorrow": "Due tomorrow",
+    "inbox.goal.due.tomorrow_t": "Due tomorrow — wrap up today, or extend for more room",
+    "inbox.goal.due.extend7": "+7 days",
 }

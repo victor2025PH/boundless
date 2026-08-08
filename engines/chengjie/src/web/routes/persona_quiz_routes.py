@@ -247,6 +247,45 @@ def register_persona_quiz_routes(app, auth_dep, audit_store=None,
             pass
         return {"ok": True, "job_id": job_id}
 
+    @app.post("/api/personas/{profile_id}/retired-quiz")
+    async def api_persona_retired_quiz_run(profile_id: str, request: Request,
+                                           _=Depends(auth_dep)):
+        """撤销设定行为验证（P3 期，2026-08-04）：挑衅题 × 守卫判分。
+
+        确定性验证（retire-verify）只证「prompt 里没有旧设定」；本任务补行为层：
+        真实人设 prompt（含撤销钉子）跑通用日常题（「在干嘛」——原始事故触发面）
+        + 假记忆攻击题（「我记得你上次说过你的X」——生产实录攻击面），答案交给
+        **出站守卫同一判定器**打分。不及格≠客户可见（生产有 sanitize 兜底剥离），
+        而是「钉子没压住模型」的早期信号。轮询复用 ``quiz/jobs/{job_id}`` 端点。
+        """
+        from src.utils import persona_quiz as pq
+
+        _require_enabled(request)
+        from src.utils.persona_manager import PersonaManager
+        pm = PersonaManager.get_instance()
+        persona = pm.get_persona_by_id(profile_id)
+        if persona is None:
+            raise HTTPException(
+                404, tr(request, "err.persona.profile_not_found", name=profile_id))
+        if not pq.build_retired_quiz(persona):
+            raise HTTPException(400, tr(request, "err.persona.no_retired_terms"))
+
+        chat_fn = _build_chat_fn(request)
+
+        def _retired_runner(on_stage):
+            return pq.run_retired_quiz(persona, chat_fn, on_stage=on_stage)
+
+        job_id = _create_job_runner(_retired_runner)
+        if not job_id:
+            raise HTTPException(429, tr(request, "err.psn.jobs_busy"))
+        if audit_store:
+            try:
+                audit_store.log(_actor(request), "profile_retired_quiz_run",
+                                f"profile={profile_id}")
+            except Exception:
+                pass
+        return {"ok": True, "job_id": job_id}
+
     @app.get("/api/personas/{profile_id}/quiz/jobs/{job_id}")
     async def api_persona_quiz_job(profile_id: str, job_id: str, request: Request,
                                    _=Depends(auth_dep)):

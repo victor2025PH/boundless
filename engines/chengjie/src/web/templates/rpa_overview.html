@@ -1,6 +1,6 @@
 {% extends "base.html" %}
-{% block title %}{{ (i18n or {}).get('ov_title','渠道总览') }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
-{% block page_title %}{{ (i18n or {}).get('ov_title','渠道总览') }}{% endblock %}
+{% block title %}{{ (i18n or {}).get('ov_title','矩阵总览') }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('ov_title','矩阵总览') }}{% endblock %}
 {% block head %}
 <style>
 /* ── /rpa-overview 专属布局 ────────────────────────────── */
@@ -40,8 +40,8 @@
 .ov-card-sub{font-size:.74rem;color:var(--t3);margin-top:.2rem}
 /* 接入方式徽章：协议直连（云端协议）vs 真机 App（ADB 驱动手机）——消除「是不是真机」的猜测 */
 .ov-link-badge{font-size:.62rem;font-weight:600;padding:.12rem .45rem;border-radius:5px;letter-spacing:.02em;flex-shrink:0;cursor:help}
-.ov-link-badge.protocol{background:rgba(56,139,253,.13);color:var(--th-ink-blue3,#79c0ff);border:1px solid rgba(56,139,253,.3)}
-.ov-link-badge.device{background:rgba(245,158,11,.12);color:var(--th-ink-amber3,#e3b341);border:1px solid rgba(227,179,65,.3)}
+.ov-link-badge.protocol{background:rgba(56,139,253,.13);color:var(--th-ink-blue5,#1d4ed8);border:1px solid rgba(56,139,253,.3)}
+.ov-link-badge.device{background:rgba(245,158,11,.12);color:var(--th-ink-amber5,#92400e);border:1px solid rgba(227,179,65,.3)}
 .ov-card-link{font-size:.75rem;color:var(--p);text-decoration:none;padding:.3rem .65rem;border:1px solid var(--bd2);border-radius:6px;transition:all .15s;white-space:nowrap}
 .ov-card-link:hover{background:var(--ps);border-color:var(--p)}
 
@@ -113,7 +113,7 @@
 .dev-register-form{margin-top:.6rem;display:flex;gap:.35rem;flex-wrap:wrap}
 .dev-register-form input,.dev-register-form select{padding:.35rem .55rem;font-size:.75rem;border:1px solid var(--bd2);border-radius:6px;background:var(--input);color:var(--t)}
 .dev-register-form button{padding:.35rem .65rem;font-size:.72rem;font-weight:600;border:1px solid var(--p);border-radius:6px;background:var(--ps);color:var(--p);cursor:pointer;transition:all .15s}
-.dev-register-form button:hover{background:var(--p);color:#fff}
+.dev-register-form button:hover{background:var(--p);color:var(--p-ink,#fff)}
 .dev-orch-grid{display:flex;flex-direction:column;gap:.35rem}
 .dev-plat-row{display:grid;grid-template-columns:18px 38px 1fr 1fr;gap:.35rem;align-items:center;font-size:.72rem}
 .dev-plat-cb{width:15px;height:15px;accent-color:var(--p);cursor:pointer}
@@ -136,7 +136,7 @@
 .dev-float-bar .fb-input{padding:.3rem .5rem;font-size:.74rem;border:1px solid var(--bd2);border-radius:6px;background:var(--input);color:var(--t);width:120px}
 .dev-float-bar .fb-input:focus{border-color:var(--p);outline:none;box-shadow:0 0 0 2px var(--ps)}
 .dev-float-bar .fb-btn{padding:.35rem .7rem;font-size:.74rem;font-weight:600;border-radius:6px;cursor:pointer;transition:all .15s;border:1px solid}
-.dev-float-bar .fb-btn.primary{background:var(--p);color:#fff;border-color:var(--p)}
+.dev-float-bar .fb-btn.primary{background:var(--p);color:var(--p-ink,#fff);border-color:var(--p)}
 .dev-float-bar .fb-btn.primary:hover{background:var(--pd)}
 .fb-cb-label{display:inline-flex;align-items:center;gap:3px;font-size:.74rem;font-weight:600;color:var(--t);cursor:pointer;user-select:none}
 .fb-cb-label input{accent-color:var(--p);cursor:pointer}
@@ -201,34 +201,8 @@
 {% set active="rpa_overview" %}
 {% include "_rpa_shared_scripts.html" %}
 
-<!-- P10-B: 全平台聊天历史检索 -->
-<div style="background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.9rem 1.1rem;margin-bottom:1rem">
-  <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.5rem">
-    <strong style="font-size:.92rem;color:var(--t)">🌐 {{ (i18n or {}).get('ov_search_title','全渠道聊天搜索') }}</strong>
-    <span style="font-size:.7rem;color:var(--t3)">{{ (i18n or {}).get('ov_search_sub','同时检索 LINE / Messenger / WhatsApp 历史') }}</span>
-  </div>
-  <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
-    <input id="ov-global-q" type="text" placeholder="{{ (i18n or {}).get('ov_search_ph','🔍 在所有平台历史聊天中检索关键词…') }}"
-           style="flex:1;min-width:240px;padding:.5rem .75rem;background:var(--input);border:1px solid var(--bd2);border-radius:7px;font-size:.85rem;color:var(--t)">
-    <select id="ov-global-q-intent" style="padding:.5rem .65rem;background:var(--input);border:1px solid var(--bd2);border-radius:7px;font-size:.8rem;color:var(--t2)">
-      <option value="">{{ (i18n or {}).get('ov_all_intents','全部意图') }}</option>
-      <option value="purchase">{{ (i18n or {}).get('rpa_intent_purchase','购买') }}</option>
-      <option value="support">{{ (i18n or {}).get('rpa_intent_support','售后') }}</option>
-      <option value="inquiry">{{ (i18n or {}).get('rpa_intent_inquiry','咨询') }}</option>
-      <option value="greeting">{{ (i18n or {}).get('rpa_intent_greeting','问候') }}</option>
-      <option value="general">{{ (i18n or {}).get('rpa_intent_general','通用') }}</option>
-    </select>
-    <select id="ov-global-platforms" style="padding:.5rem .65rem;background:var(--input);border:1px solid var(--bd2);border-radius:7px;font-size:.8rem;color:var(--t2)">
-      <option value="">{{ (i18n or {}).get('rpa_fn_scope_all','全平台') }}</option>
-      <option value="line">{{ (i18n or {}).get('ov_only_line','仅 LINE') }}</option>
-      <option value="messenger">{{ (i18n or {}).get('ov_only_messenger','仅 Messenger') }}</option>
-      <option value="whatsapp">{{ (i18n or {}).get('ov_only_whatsapp','仅 WhatsApp') }}</option>
-    </select>
-  </div>
-  <div id="ov-global-results" style="display:none;max-height:420px;overflow-y:auto;border-top:1px solid var(--bd);margin-top:.6rem;padding-top:.4rem"></div>
-</div>
-
-<!-- 顶部聚合 KPI -->
+<!-- 顶部聚合 KPI（2026-08-03 首屏分层：状态先于工具——KPI/账号健康上移，
+     全渠道搜索卡下移到 KPI 区之后） -->
 <div class="ov-refresh-bar">
   <span class="ov-refresh-dot"></span>
   <span>{{ (i18n or {}).get('ov_realtime_agg','实时聚合 · 上次更新') }} <strong id="ov-last">—</strong></span>
@@ -275,6 +249,33 @@
 </div>
 <div id="ov-fleet-churn-detail" style="display:none;margin-top:.4rem;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.5rem .85rem;font-size:.76rem;line-height:1.55"></div>
 <div id="ov-preflight-detail" style="display:none;margin-top:.4rem;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.5rem .85rem;font-size:.76rem;line-height:1.6"></div>
+
+<!-- P10-B: 全平台聊天历史检索（工具位：置于 KPI 之后） -->
+<div style="background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.9rem 1.1rem;margin:.6rem 0 1rem">
+  <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.5rem">
+    <strong style="font-size:.92rem;color:var(--t)">🌐 {{ (i18n or {}).get('ov_search_title','全渠道聊天搜索') }}</strong>
+    <span style="font-size:.7rem;color:var(--t3)">{{ (i18n or {}).get('ov_search_sub','同时检索 LINE / Messenger / WhatsApp 历史') }}</span>
+  </div>
+  <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+    <input id="ov-global-q" type="text" placeholder="{{ (i18n or {}).get('ov_search_ph','🔍 在所有平台历史聊天中检索关键词…') }}"
+           style="flex:1;min-width:240px;padding:.5rem .75rem;background:var(--input);border:1px solid var(--bd2);border-radius:7px;font-size:.85rem;color:var(--t)">
+    <select id="ov-global-q-intent" style="padding:.5rem .65rem;background:var(--input);border:1px solid var(--bd2);border-radius:7px;font-size:.8rem;color:var(--t2)">
+      <option value="">{{ (i18n or {}).get('ov_all_intents','全部意图') }}</option>
+      <option value="purchase">{{ (i18n or {}).get('rpa_intent_purchase','购买') }}</option>
+      <option value="support">{{ (i18n or {}).get('rpa_intent_support','售后') }}</option>
+      <option value="inquiry">{{ (i18n or {}).get('rpa_intent_inquiry','咨询') }}</option>
+      <option value="greeting">{{ (i18n or {}).get('rpa_intent_greeting','问候') }}</option>
+      <option value="general">{{ (i18n or {}).get('rpa_intent_general','通用') }}</option>
+    </select>
+    <select id="ov-global-platforms" style="padding:.5rem .65rem;background:var(--input);border:1px solid var(--bd2);border-radius:7px;font-size:.8rem;color:var(--t2)">
+      <option value="">{{ (i18n or {}).get('rpa_fn_scope_all','全平台') }}</option>
+      <option value="line">{{ (i18n or {}).get('ov_only_line','仅 LINE') }}</option>
+      <option value="messenger">{{ (i18n or {}).get('ov_only_messenger','仅 Messenger') }}</option>
+      <option value="whatsapp">{{ (i18n or {}).get('ov_only_whatsapp','仅 WhatsApp') }}</option>
+    </select>
+  </div>
+  <div id="ov-global-results" style="display:none;max-height:420px;overflow-y:auto;border-top:1px solid var(--bd);margin-top:.6rem;padding-top:.4rem"></div>
+</div>
 
 <!-- 主动话题预览（dry-run 可观测：本轮会主动联系谁、引用哪条记忆、是否被关怀去重让路；只读不发送） -->
 <div id="ov-proactive-card" style="margin-top:.6rem;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.6rem .85rem">
@@ -341,7 +342,7 @@
           <option value="7200">{{ (i18n or {}).get('ov_og_ks_ttl_2h','TTL：2 小时') }}</option>
           <option value="86400">{{ (i18n or {}).get('ov_og_ks_ttl_24h','TTL：24 小时') }}</option>
         </select>
-        <button id="ov-og-ks-set" style="font-size:.72rem;padding:.22rem .6rem;border:1px solid var(--th-bd-red6,#dc2626);border-radius:6px;background:transparent;color:var(--th-ink-red6,#dc2626);cursor:pointer">🛑 {{ (i18n or {}).get('ov_og_ks_set','置位停发') }}</button>
+        <button id="ov-og-ks-set" style="font-size:.72rem;padding:.22rem .6rem;border:1px solid var(--th-bd-red6,#dc2626);border-radius:6px;background:transparent;color:var(--th-ink-red6,#b91c1c);cursor:pointer">🛑 {{ (i18n or {}).get('ov_og_ks_set','置位停发') }}</button>
       </div>
     </div>
     <div>
@@ -388,7 +389,7 @@
       <button class="btn-sec" type="button" id="ov-it-reload" style="font-size:.75rem;padding:.3rem .65rem" title="{{ (i18n or {}).get('ov_it_reload_title','不写文件，仅重读硬盘上现有 yaml') }}">⚡ {{ (i18n or {}).get('ov_it_reload_only','仅 reload') }}</button>
       <button class="btn-sec" type="button" id="ov-it-restore" style="font-size:.75rem;padding:.3rem .65rem" title="{{ (i18n or {}).get('ov_it_restore_title','查看备份并选择恢复') }}">⏪ {{ (i18n or {}).get('ov_it_restore','恢复备份') }}</button>
       <button class="btn-sec" type="button" id="ov-it-diff" style="font-size:.75rem;padding:.3rem .65rem" title="{{ (i18n or {}).get('ov_it_diff_title','保存前预览将增加/删除的关键词') }}">👁 {{ (i18n or {}).get('ov_it_diff','预览改动') }}</button>
-      <button class="btn" type="button" id="ov-it-save" style="font-size:.75rem;padding:.3rem .85rem;background:var(--p);color:var(--th-ink-inverse,#fff);border:0;border-radius:6px;cursor:pointer">💾 {{ (i18n or {}).get('ov_it_save','保存并 reload') }}</button>
+      <button class="btn" type="button" id="ov-it-save" style="font-size:.75rem;padding:.3rem .85rem;background:var(--p);color:var(--p-ink,#fff);border:0;border-radius:6px;cursor:pointer">💾 {{ (i18n or {}).get('ov_it_save','保存并 reload') }}</button>
     </div>
     <textarea id="ov-it-yaml" rows="14" spellcheck="false"
       style="width:100%;font-family:'SF Mono',Consolas,monospace;font-size:.78rem;padding:.6rem .8rem;background:var(--input);border:1px solid var(--bd2);border-radius:6px;color:var(--t);resize:vertical;line-height:1.45"></textarea>
@@ -670,9 +671,11 @@
     </div>
     <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--bd);display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
       <span style="font-size:.74rem;color:var(--t3)">{{ (i18n or {}).get('ov_lq_pref','明确偏好会话') }}</span>
-      <span style="font-size:.75rem;background:var(--th-bg-ind12,rgba(99,102,241,.12));border:1px solid var(--th-bd-ind30,rgba(99,102,241,.3));border-radius:5px;padding:.1rem .38rem;color:var(--th-ink-indigo3,#a5b4fc)">WhatsApp <b id="ov-lq-pref-whatsapp">0</b></span>
-      <span style="font-size:.75rem;background:var(--th-bg-ind12,rgba(99,102,241,.12));border:1px solid var(--th-bd-ind30,rgba(99,102,241,.3));border-radius:5px;padding:.1rem .38rem;color:var(--th-ink-indigo3,#a5b4fc)">LINE <b id="ov-lq-pref-line">0</b></span>
-      <span style="font-size:.75rem;background:var(--th-bg-ind12,rgba(99,102,241,.12));border:1px solid var(--th-bd-ind30,rgba(99,102,241,.3));border-radius:5px;padding:.1rem .38rem;color:var(--th-ink-indigo3,#a5b4fc)">Messenger <b id="ov-lq-pref-messenger">0</b></span>
+      <!-- 亮靛晕 chips 的文字用 indigo5（亮=700 深靛/暗=300 浅靛）：原 indigo3 是
+           深墨面常量（inkchip 专用），配 12% 浅晕在白天模式只有 1.9:1（2026-08-04 收口） -->
+      <span style="font-size:.75rem;background:var(--th-bg-ind12,rgba(99,102,241,.12));border:1px solid var(--th-bd-ind30,rgba(99,102,241,.3));border-radius:5px;padding:.1rem .38rem;color:var(--th-ink-indigo5,#4338ca)">WhatsApp <b id="ov-lq-pref-whatsapp">0</b></span>
+      <span style="font-size:.75rem;background:var(--th-bg-ind12,rgba(99,102,241,.12));border:1px solid var(--th-bd-ind30,rgba(99,102,241,.3));border-radius:5px;padding:.1rem .38rem;color:var(--th-ink-indigo5,#4338ca)">LINE <b id="ov-lq-pref-line">0</b></span>
+      <span style="font-size:.75rem;background:var(--th-bg-ind12,rgba(99,102,241,.12));border:1px solid var(--th-bd-ind30,rgba(99,102,241,.3));border-radius:5px;padding:.1rem .38rem;color:var(--th-ink-indigo5,#4338ca)">Messenger <b id="ov-lq-pref-messenger">0</b></span>
     </div>
   </div>
 </div>
@@ -994,7 +997,7 @@ async function ovLangLoad(force){
     if(totalLocked > 0){
       const _plIcons = {line:'📱 LINE',whatsapp:'📱 WA',messenger:'💬 MSG'};
       const parts = Object.entries(locked).filter(([,v])=>v>0)
-        .map(([pl,v])=>`<span style="font-size:.75rem;background:var(--th-bg-ind12,rgba(99,102,241,.12));border:1px solid var(--th-bd-ind30,rgba(99,102,241,.3));border-radius:5px;padding:.1rem .38rem;color:var(--th-ink-indigo3,#a5b4fc)">🔒 ${_plIcons[pl]||pl} ${v}</span>`).join(' ');
+        .map(([pl,v])=>`<span style="font-size:.75rem;background:var(--th-bg-ind12,rgba(99,102,241,.12));border:1px solid var(--th-bd-ind30,rgba(99,102,241,.3));border-radius:5px;padding:.1rem .38rem;color:var(--th-ink-indigo5,#4338ca)">🔒 ${_plIcons[pl]||pl} ${v}</span>`).join(' ');
       lockedHtml = `<div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--bd);display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
         <span style="font-size:.74rem;color:var(--t3)">${window.T('ov_js_chat_locked')}</span>${parts}
         <span style="font-size:.72rem;color:var(--t3);margin-left:auto">${window.Tf('ov_js_locked_count',{n:totalLocked})}</span>
@@ -1445,8 +1448,8 @@ async function ovRefreshDesktopHealth(){
     const persist = s.persistent_mismatch||0;  // #4：失配持续超阈值的账号数
     if(sum){
       sum.innerHTML = window.T('ov_js_dh_total_pre')+(s.total||0)+window.T('ov_js_dh_acc_ok')+(s.ok||0)
-        + (mismatch ? ' · <strong style="color:var(--th-ink-ghred,#f85149)">'+window.T('ov_js_dh_mismatch')+mismatch+'</strong>' : '')
-        + (persist ? ' · <strong style="color:var(--th-ink-ghred,#f85149)" title="'+window.T('ov_js_dh_persist_title')+'">'+window.T('ov_js_dh_persist')+persist+'</strong>' : '');
+        + (mismatch ? ' · <strong style="color:var(--th-ink-ghred,#b91c1c)">'+window.T('ov_js_dh_mismatch')+mismatch+'</strong>' : '')
+        + (persist ? ' · <strong style="color:var(--th-ink-ghred,#b91c1c)" title="'+window.T('ov_js_dh_persist_title')+'">'+window.T('ov_js_dh_persist')+persist+'</strong>' : '');
     }
     // #4 告警升级：从「即时失配 0→>0 边沿」升级为「失配持续 N 分钟」——只对**新增持续失配**弹一次，
     // 抖动型一闪而过的失配会自愈、不再打扰运营。
@@ -1467,7 +1470,7 @@ async function ovRefreshDesktopHealth(){
         ? ' <span style="color:var(--muted);font-size:.68rem">'+window.T('ov_js_dh_missing')+bad.join('/')+'</span>' : '';
       // #4：失配持续时长（≥1 分钟标红，提示是「持续」而非「抖动」）
       const ms = a.mismatch_secs||0;
-      const durNote = (ms>0) ? ' <span style="font-size:.68rem;color:'+(ms>=60?'var(--th-ink-ghred,#f85149)':'var(--muted)')+'" title="'+window.T('ov_js_dh_dur_title')+'">'+window.T('ov_js_dh_persist')+_dhDur(ms)+'</span>' : '';
+      const durNote = (ms>0) ? ' <span style="font-size:.68rem;color:'+(ms>=60?'var(--th-ink-ghred,#b91c1c)':'var(--muted)')+'" title="'+window.T('ov_js_dh_dur_title')+'">'+window.T('ov_js_dh_persist')+_dhDur(ms)+'</span>' : '';
       const gen = a.generic ? ' <span style="color:var(--muted);font-size:.68rem">'+window.T('ov_js_dh_generic')+'</span>' : '';
       const ing = a.can_ingest ? '' : ' <span style="color:var(--muted);font-size:.68rem" title="'+window.T('ov_js_dh_ingest_title')+'">'+window.T('ov_js_dh_ingest_off')+'</span>';
       return '<div style="display:flex;justify-content:space-between;gap:.5rem;padding:.2rem 0;border-bottom:1px solid var(--bd)">'
@@ -1497,7 +1500,7 @@ async function ovRefreshDesktopOutbound(){
     const failed = s.failed||0;
     if(sum){
       sum.innerHTML = window.T('ov_js_dob_inflight')+inflight+window.T('ov_js_dob_sent_pre')+(s.sent||0)
-        + (failed ? ' · <strong style="color:var(--th-ink-ghred,#f85149)">'+window.T('ov_js_failed_n')+failed+'</strong>' : '');
+        + (failed ? ' · <strong style="color:var(--th-ink-ghred,#b91c1c)">'+window.T('ov_js_failed_n')+failed+'</strong>' : '');
     }
     // 失败告警：新出现失败时弹一次（去重，避免刷屏）
     if(failed>_dobLastFailed && window.rpa && rpa.toast){
@@ -1643,7 +1646,7 @@ async function ovCapAdvice(forceOpen){
     if(!d || !d.ok){ el.textContent=(d&&d.message)||window.T('ov_js_unavailable'); return; }
     var html='', iss=d.consistency||[];
     html+='<div style="font-weight:600;margin-bottom:.2rem">'+window.T('ov_js_consistency')+'</div>';
-    if(!iss.length){ html+='<div style="color:var(--th-ink-green6,#16a34a)">'+window.T('ov_js_config_ok')+'</div>'; }
+    if(!iss.length){ html+='<div style="color:var(--th-ink-green6,#15803d)">'+window.T('ov_js_config_ok')+'</div>'; }
     else{ html+=iss.map(function(i){var c=i.severity==='error'?'#dc2626':'#d97706';return '<div style="color:'+c+'">'+(i.severity==='error'?'■ ':'▲ ')+_ovCapEsc(i.message)+'</div>';}).join(''); }
     var recs=d.recommendations||[];
     html+='<div style="font-weight:600;margin:.35rem 0 .2rem">'+window.Tf('ov_js_rec_actions',{n:recs.length})+'</div>';
@@ -1695,7 +1698,7 @@ async function ovOgRefresh(){
     var ks=await rpa.get('/api/ops/kill-switch');
     if(!ks || !ks.ok){ ksEl.textContent=window.T('ov_js_og_load_fail'); }
     else if(!(ks.items||[]).length){
-      ksEl.innerHTML='<span style="color:var(--th-ink-green6,#16a34a)">✅ '+window.T('ov_js_og_ks_none')+'</span>';
+      ksEl.innerHTML='<span style="color:var(--th-ink-green6,#15803d)">✅ '+window.T('ov_js_og_ks_none')+'</span>';
     }else{
       ksEl.innerHTML=ks.items.map(function(it){
         var exp=(it.expires_at&&Number(it.expires_at)>0)?(' · TTL→'+_ovCapEsc(window.wsFmtDateTime(it.expires_at))):'';
@@ -1717,13 +1720,13 @@ async function ovOgRefresh(){
     if(!cn || !cn.ok){ cnEl.textContent=window.T('ov_js_og_load_fail'); return; }
     var mode=String(cn.mode||'manual');
     var head=(cn.enabled
-        ? '<span style="color:var(--th-ink-amber6,#d97706)">● '+window.T('ov_js_og_cn_on')+'</span>'
-        : '<span style="color:var(--th-ink-gray4,#9ca3af)">○ '+window.T('ov_js_og_cn_off')+'</span>')
+        ? '<span style="color:var(--th-ink-amber6,#92400e)">● '+window.T('ov_js_og_cn_on')+'</span>'
+        : '<span style="color:var(--th-ink-gray4,#5b6b85)">○ '+window.T('ov_js_og_cn_off')+'</span>')
       +' · '+window.T('ov_js_og_cn_mode')+_ovCapEsc(mode)
       +' · '+window.Tf('ov_js_og_cn_n',{n:(cn.count||0)});
     var removable = mode==='auto_health';   // manual 模式 cohort 来自 config pinned，× 不生效则不画
     var chips=(cn.cohort||[]).map(function(m){
-      var rm=removable?(' <a href="#" class="ov-og-cn-rm" data-m="'+_ovCapEsc(m)+'" style="color:var(--th-ink-red6,#dc2626);text-decoration:none">×</a>'):'';
+      var rm=removable?(' <a href="#" class="ov-og-cn-rm" data-m="'+_ovCapEsc(m)+'" style="color:var(--th-ink-red6,#b91c1c);text-decoration:none">×</a>'):'';
       return '<span style="display:inline-block;border:1px solid var(--bd);border-radius:999px;padding:.02rem .45rem;margin:.12rem .15rem 0 0"><code>'+_ovCapEsc(m)+'</code>'+rm+'</span>';
     }).join('');
     var hints=[];
@@ -1944,7 +1947,7 @@ document.addEventListener('DOMContentLoaded', function(){
           </div>`;
         }).join('');
     }).catch(()=>{
-      gqResults.innerHTML = '<div style="padding:.6rem 1rem;color:var(--th-ink-red6,#dc2626);font-size:.8rem">'+window.T('ov_js_search_fail')+'</div>';
+      gqResults.innerHTML = '<div style="padding:.6rem 1rem;color:var(--th-ink-red6,#b91c1c);font-size:.8rem">'+window.T('ov_js_search_fail')+'</div>';
     });
   }
   window.__ovOpen = function(apiBase, chatKey){
@@ -2027,14 +2030,14 @@ document.addEventListener('DOMContentLoaded', function(){
     function renderDiff(d){
       if(!diffPane) return;
       const esc = (s)=>String(s).replace(/[<>&]/g,(c)=>({'<':'&lt;','>':'&gt;','&':'&amp;'})[c]);
-      const greenSpan = (kw)=>`<span style="background:rgba(34,197,94,.15);color:var(--th-ink-green6,#16a34a);padding:.05rem .35rem;border-radius:4px;margin-right:.2rem;font-family:monospace">+${esc(kw)}</span>`;
-      const redSpan = (kw)=>`<span style="background:rgba(239,68,68,.15);color:var(--th-ink-red6,#dc2626);padding:.05rem .35rem;border-radius:4px;margin-right:.2rem;font-family:monospace">-${esc(kw)}</span>`;
+      const greenSpan = (kw)=>`<span style="background:rgba(34,197,94,.15);color:var(--th-ink-green6,#15803d);padding:.05rem .35rem;border-radius:4px;margin-right:.2rem;font-family:monospace">+${esc(kw)}</span>`;
+      const redSpan = (kw)=>`<span style="background:rgba(239,68,68,.15);color:var(--th-ink-red6,#b91c1c);padding:.05rem .35rem;border-radius:4px;margin-right:.2rem;font-family:monospace">-${esc(kw)}</span>`;
       const lines = [`<div style="margin-bottom:.4rem"><strong>📋 ${esc(d.summary)}</strong></div>`];
       if(d.added_tags && d.added_tags.length){
-        lines.push(`<div style="margin:.25rem 0"><strong style="color:var(--th-ink-green6,#16a34a)">${window.T('ov_js_added_cats')}</strong> ${d.added_tags.map(esc).join(', ')}</div>`);
+        lines.push(`<div style="margin:.25rem 0"><strong style="color:var(--th-ink-green6,#15803d)">${window.T('ov_js_added_cats')}</strong> ${d.added_tags.map(esc).join(', ')}</div>`);
       }
       if(d.removed_tags && d.removed_tags.length){
-        lines.push(`<div style="margin:.25rem 0"><strong style="color:var(--th-ink-red6,#dc2626)">${window.T('ov_js_removed_cats')}</strong> ${d.removed_tags.map(esc).join(', ')}</div>`);
+        lines.push(`<div style="margin:.25rem 0"><strong style="color:var(--th-ink-red6,#b91c1c)">${window.T('ov_js_removed_cats')}</strong> ${d.removed_tags.map(esc).join(', ')}</div>`);
       }
       const changed = d.changed_tags || {};
       const changedKeys = Object.keys(changed);
@@ -2092,7 +2095,7 @@ document.addEventListener('DOMContentLoaded', function(){
         if(lintAbort){ try{ lintAbort.abort(); }catch(_){} }
         lintAbort = new AbortController();
         const signal = lintAbort.signal;
-        fetch('/api/rpa/intent-tags/diff', {
+        apiFetch('/api/rpa/intent-tags/diff', {
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({content: content}), signal: signal
         }).then(r=>r.json().then(d=>({status:r.status, body:d})))
@@ -2603,7 +2606,7 @@ async function devRefresh(){
       _devCountBadge.style.display=totalDevices>0?'inline-flex':'none';
     }
   }catch(e){
-    _devGrid.innerHTML='<div class="rpa-empty" style="color:var(--th-ink-red6,#dc2626)">'+window.T('ov_js_load_fail_e2')+_esc(String(e))+'</div>';
+    _devGrid.innerHTML='<div class="rpa-empty" style="color:var(--th-ink-red6,#b91c1c)">'+window.T('ov_js_load_fail_e2')+_esc(String(e))+'</div>';
   }
 }
 
@@ -3109,7 +3112,7 @@ document.addEventListener('click', function(e){
   <span style="font-size:.72rem;color:var(--t2)">{{ (i18n or {}).get('ov_fb_switch_persona','切换人设:') }}</span>
   <select class="fb-input" id="dev-fb-persona" style="min-width:120px"><option value="">{{ (i18n or {}).get('ov_select_persona','— 选择人设 —') }}</option></select>
   <button class="fb-btn primary" onclick="devBatchApplyPersona()">{{ (i18n or {}).get('ov_apply','应用') }}</button>
-  <button class="fb-btn ghost" onclick="devBatchClearPersona()" style="color:var(--th-ink-red4,#f87171);border-color:var(--th-bd-red4,#f87171)">{{ (i18n or {}).get('ov_fb_clear_persona','清除人设') }}</button>
+  <button class="fb-btn ghost" onclick="devBatchClearPersona()" style="color:var(--th-ink-red4,#b91c1c);border-color:var(--th-bd-red4,#f87171)">{{ (i18n or {}).get('ov_fb_clear_persona','清除人设') }}</button>
   <div class="fb-sep"></div>
   <button class="fb-btn ghost" onclick="devSelectAll()">{{ (i18n or {}).get('ov_select_all','全选') }}</button>
   <button class="fb-btn ghost" onclick="devBatchClear()">{{ (i18n or {}).get('ov_deselect','取消选择') }}</button>

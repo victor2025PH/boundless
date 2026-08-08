@@ -28,6 +28,7 @@ from src.integrations.platform_login import (
     get_login_manager,
     get_login_provider,
     list_modes,
+    login_kind,
     mode_available,
     online_account_keys,
 )
@@ -218,6 +219,12 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
         mode = str((body or {}).get("mode") or "").lower()
         if not mode:
             mode = first_available_mode(modes)
+        # credentials 形态（官方 API 渠道）没有登录会话可开：凭证在接入向导里配置，
+        # 配好即自动上线。这里兜住旧前端/直连 API 的调用，给出结构化指路而非假二维码。
+        if login_kind(platform, mode) == "credentials":
+            return {"ok": False, "reason_code": "credentials_mode",
+                    "setup_url": "/workspace/setup",
+                    "detail": tr(request, "err.login.credentials_mode")}
         if not mode_available(platform, mode):
             return {"ok": False, "detail": tr(request, "err.login.mode_unavailable", platform=platform, mode=mode)}
 
@@ -246,7 +253,7 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
             except Exception:
                 logger.debug("生成指纹失败", exc_info=True)
 
-        qr_url = qr_image = instruction = prov_reason = ""
+        qr_url = qr_image = instruction = instruction_key = prov_reason = ""
         poll_fn = cancel_fn = submit_fn = provider_state = None
         provider = get_login_provider(platform, mode)
         if provider is not None:
@@ -261,6 +268,7 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                 qr_url = str(info.get("qr_url") or "")
                 qr_image = str(info.get("qr_image") or "")
                 instruction = str(info.get("instruction") or "")
+                instruction_key = str(info.get("instruction_key") or "")
                 account_id = str(info.get("account_id") or account_id)
                 poll_fn = info.get("poll")
                 cancel_fn = info.get("cancel")
@@ -274,6 +282,7 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
         sess = get_login_manager().create(
             platform, account_id, baseline, mode=mode,
             qr_url=qr_url, qr_image=qr_image, instruction=instruction,
+            instruction_key=instruction_key,
             label=cfg_label, group=cfg_group,
             proxy_id=cfg_proxy_id, fingerprint_id=fingerprint_id,
             provider_state=provider_state, poll_fn=poll_fn, cancel_fn=cancel_fn,
@@ -303,10 +312,13 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
             "ok": True,
             "login_id": sess.login_id,
             "mode": sess.mode,
+            # 登录形态（qr/hosted/device）：前端整套向导词汇按它切换
+            "login_kind": login_kind(platform, sess.mode),
             "status": sess.status,
             "qr_url": sess.qr_url,
             "qr_image": sess.qr_image or _login_qr_data_url(sess.qr_url),
             "instruction": sess.instruction,
+            "instruction_key": sess.instruction_key,
             "reason_code": sess.reason_code,
         }
 
@@ -324,6 +336,12 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                     "reason_code": sess.reason_code, "detail": sess.detail}
         if sess.is_expired():
             sess.status = "expired"
+            # 会话耗尽 TTL 也是一次失败结局，此前**一次都没记进漏斗**——于是「发起 20 次、
+            # 成功 0 次、失败 0 次」这种自相矛盾的读数才是常态（托管登录尤甚：人工在服务器
+            # 窗口里慢慢登，最可能的非成功结局就是超时）。归因优先用最后观察到的页面分段
+            # （卡在 2FA / 检查点），认不出才记 session_timeout。
+            reason = sess.hint_code or "session_timeout"
+            _funnel(sess, "failed", reason_code=reason)
             return {"ok": True, "status": "expired", "pin": "", "reason_code": ""}
         # provider 事件驱动（protocol/web）：直接问 provider 拿登录结果
         if sess.poll_fn is not None:
@@ -338,6 +356,9 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                 if rc:
                     # 只在非空时落：failed 是终态，原因码不应被后续轮询的空值抹掉
                     sess.reason_code = rc
+                # hint_code 与之相反——它是**可来回变的实时态**（用户从 2FA 页退回登录页
+                # 就该跟着清掉），故空值也照落，绝不粘住旧提示误导坐席。
+                sess.hint_code = str(res.get("hint_code") or "")
                 if res.get("qr_image") or res.get("qr_url"):
                     _funnel(sess, "qr_shown")
                 if st == "pin_needed":
@@ -355,6 +376,7 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                         "detail": str(res.get("detail") or ""),
                         "pin": str(res.get("pin") or ""),
                         "reason_code": sess.reason_code,
+                        "hint_code": sess.hint_code,
                         "qr_url": poll_qr,
                         "qr_image": str(res.get("qr_image") or "")
                         or _login_qr_data_url(poll_qr)}
@@ -377,7 +399,8 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
         except Exception:
             logger.debug("登录状态轮询失败", exc_info=True)
         return {"ok": True, "status": sess.status, "pin": "", "reason_code": "",
-                "instruction": sess.instruction}
+                "instruction": sess.instruction,
+                "instruction_key": sess.instruction_key}
 
     @app.post("/api/platforms/{platform}/login/{login_id}/password")
     async def api_platform_login_password(platform: str, login_id: str, request: Request):

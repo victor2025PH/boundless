@@ -74,8 +74,8 @@ function renderPacks(packs){
 function seed(domain, btn){
   var msg=document.getElementById('ks-msg-'+domain);
   btn.disabled=true; msg.className='ks-msg'; msg.textContent=window.T('ks_js_005');
-  fetch('/api/kb/seed-pack',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({domain:domain})}).then(function(r){return r.json();}).then(function(d){
+  apiFetch('/api/kb/seed-pack',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({domain:domain})},{timeoutMs:60000}).then(function(r){return r.json();}).then(function(d){
     if(!d.ok){ btn.disabled=false; msg.className='ks-msg err'; msg.textContent=d.detail||window.T('ks_js_006'); return; }
     msg.className='ks-msg ok';
     msg.textContent=d.skipped?window.Tf('ks_tf_added_skip',{added:d.added,skipped:d.skipped}):window.Tf('ks_tf_added',{added:d.added});

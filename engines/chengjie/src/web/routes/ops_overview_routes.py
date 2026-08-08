@@ -30,6 +30,49 @@ _ISOLATION_TTL_SEC = 60.0
 _GW_MISCONFIG_WARNED = False
 
 
+def _snap_contacts_assets(app, store, *, accounts=None, cap: int = 12,
+                          now_hint: Optional[float] = None) -> int:
+    """把各账号「好友名单盘点」快照进 trend store（懒快照写侧，返回落账账号数）。
+
+    口径与 ops「客户资产」卡完全同源：不筛平台（LINE/Messenger 没有名单，
+    ``include_chats=False`` 下 total=0 被自然过滤）、账号数封顶、total<=0 不落
+    （没同步过名单的账号记 0 会把聚合线拉出假凹坑）。
+
+    ``accounts``：测试注入口；None = 读 account_registry。``now_hint``：测试时钟。
+    """
+    inbox = getattr(app.state, "inbox_store", None)
+    if inbox is None or store is None:
+        return 0
+    if accounts is None:
+        try:
+            from src.integrations.account_registry import get_account_registry
+            accounts = get_account_registry().list()
+        except Exception:
+            logger.debug("[ca_trend] 读账号注册表失败（已忽略）", exc_info=True)
+            return 0
+    n = 0
+    for r in accounts or []:
+        try:
+            plat = str((r or {}).get("platform") or "").lower()
+            acct = str((r or {}).get("account_id") or "")
+            if not plat or not acct:
+                continue
+            s = inbox.protocol_contacts_summary(plat, acct, include_chats=False)
+            total = int((s or {}).get("total") or 0)
+            if total <= 0:
+                continue
+            store.snap(plat, acct, total=total,
+                       never_spoke=int(s.get("never_spoke") or 0),
+                       silent=int(s.get("silent") or 0), now=now_hint)
+            n += 1
+            if n >= max(1, int(cap)):
+                break
+        except Exception:
+            logger.debug("[ca_trend] 账号快照失败（已忽略）", exc_info=True)
+            continue
+    return n
+
+
 def _reliability_payload(request: Request, hours: int):
     """复刻 /api/admin/reliability 的装配逻辑（复用其 helper）。"""
     from src.utils.reliability import build_reliability
@@ -394,6 +437,29 @@ def register_ops_overview_routes(app, ctx) -> None:
             logger.debug("frontend-error-trend 读取失败（已忽略）", exc_info=True)
             return {"ok": True, "enabled": False, "days": []}
 
+    @app.get("/api/admin/login-funnel-trend")
+    async def api_login_funnel_trend(request: Request, days: int = 7):
+        """近 N 天账号接入漏斗按日聚合（供看板画成功率 / 失败原因 sparkline）。
+
+        未开启（ops.login_funnel_trend.enabled=false）→ enabled:false + 空序列。
+        进程内 login_funnel_stats 重启即清零；本端点是跨重启耐久口径。
+        """
+        api_auth(request)
+        try:
+            from src.integrations.login_funnel_trend import get_login_funnel_trend_store
+            store = get_login_funnel_trend_store()
+            if store is None:
+                return {"ok": True, "enabled": False, "days": []}
+            span = int(days or 7)
+            try:
+                store.prune()
+            except Exception:
+                logger.debug("login_funnel_trend prune 失败（已忽略）", exc_info=True)
+            return {"ok": True, "enabled": True, "days": store.daily(days=span)}
+        except Exception:
+            logger.debug("login-funnel-trend 读取失败（已忽略）", exc_info=True)
+            return {"ok": True, "enabled": False, "days": []}
+
     @app.get("/api/admin/ui-event-trend")
     async def api_ui_event_trend(request: Request, days: int = 14, prefix: str = ""):
         """近 N 天 UI 事件按日聚合（``?prefix=dpick.`` 取 AI 回复漏斗命名空间）。
@@ -417,6 +483,52 @@ def register_ops_overview_routes(app, ctx) -> None:
                     "days": store.daily(days=span, prefix=str(prefix or ""))}
         except Exception:
             logger.debug("ui-event-trend 读取失败（已忽略）", exc_info=True)
+            return {"ok": True, "enabled": False, "days": []}
+
+    @app.get("/api/admin/contacts-asset-trend")
+    async def api_contacts_asset_trend(request: Request, days: int = 14):
+        """客户资产（好友/未开口/沉默）近 N 天日快照序列 + 读时懒快照。
+
+        写侧刻意「读时快照」（当天一次）：打开 ops 看板本身就是每日节奏，无需
+        看门狗/计划任务；口径与「客户资产」卡同源＝纯名单 ``include_chats=False``
+        （并集会把分母扩到全部往来的人，「未开口占比」语义漂移）。
+        未开启（ops.contacts_asset_trend.enabled=false）→ enabled:false + 空序列；
+        进程启动后才在 overlay 开的开关走热启用兜底（免吃一次重启窗口）。
+        """
+        api_auth(request)
+        try:
+            from src.web.contacts_asset_trend import (
+                configure_contacts_asset_trend, get_contacts_asset_trend_store,
+            )
+            store = get_contacts_asset_trend_store()
+            if store is None:
+                # 热启用兜底：bootstrap init 跑在开关之前 → 按当前配置补装配
+                cm = getattr(request.app.state, "config_manager", None)
+                _cat = (((cm.config if cm is not None else {}) or {})
+                        .get("ops") or {}).get("contacts_asset_trend") or {}
+                if not _cat.get("enabled", False):
+                    return {"ok": True, "enabled": False, "days": []}
+                from pathlib import Path as _P
+                store = configure_contacts_asset_trend(
+                    enabled=True,
+                    db_path=_P(cm.config_path).parent / "contacts_asset_trend.db",
+                    retention_days=float(_cat.get("retention_days", 180)),
+                )
+                if store is None:
+                    return {"ok": True, "enabled": False, "days": []}
+            try:
+                store.prune()
+            except Exception:
+                logger.debug("ca_trend prune 失败（已忽略）", exc_info=True)
+            try:
+                if not store.has_day():
+                    _snap_contacts_assets(request.app, store)
+            except Exception:
+                logger.debug("ca_trend 懒快照失败（已忽略）", exc_info=True)
+            return {"ok": True, "enabled": True,
+                    "days": store.series(days=int(days or 14))}
+        except Exception:
+            logger.debug("contacts-asset-trend 读取失败（已忽略）", exc_info=True)
             return {"ok": True, "enabled": False, "days": []}
 
     @app.get("/api/admin/csrf-trend")
@@ -552,6 +664,26 @@ def register_ops_overview_routes(app, ctx) -> None:
         except Exception:
             logger.debug("gpu-watermark 探测失败（已忽略）", exc_info=True)
             return {"ok": True, "enabled": False, "hosts": []}
+
+    @app.get("/api/admin/acquisition-health")
+    async def api_acquisition_health(request: Request):
+        """个人号获客健康（P8）：所有 ``personal_rpa`` 账号的 account_health 聚合。
+
+        收口 P0（发送异常风控计数）/ P6（WA/LINE 屏幕风控）/ P7（leadbus 线索归属
+        设备账号）——把「哪个获客号在被风控、该不该停」从扣分逻辑内部变成看板读数。
+        零 ``personal_rpa`` 账号 → ``applicable:false``，前端隐藏卡（同 gpu-watermark
+        约定）。纯读（注册表 list + 24h 计数），软失败不抛。
+        """
+        api_auth(request)
+        _empty = {"ok": True, "applicable": False, "total": 0, "light": "none",
+                  "counts": {"green": 0, "amber": 0, "red": 0}, "accounts": []}
+        try:
+            from src.integrations.account_registry import get_account_registry
+            from src.ops.acquisition_health import collect_acquisition_health
+            return {"ok": True, **collect_acquisition_health(get_account_registry())}
+        except Exception:
+            logger.debug("acquisition-health 聚合失败（已忽略）", exc_info=True)
+            return _empty
 
     @app.get("/api/admin/duel-bench")
     async def api_duel_bench(request: Request, days: int = 14):
@@ -956,6 +1088,21 @@ def register_ops_overview_routes(app, ctx) -> None:
         from src.utils.instance_restart_status import collect_restart_status
         return collect_restart_status()
 
+    @app.get("/api/admin/tenant-overview")
+    async def api_tenant_overview(request: Request, force: int = 0):
+        """托管租户全景：实例状态 / 持单台账 / 三守护心跳（ops「☁️ 托管租户」卡）。
+
+        收集器纯函数在 src/ops/tenant_overview.py（30s TTL 缓存，force=1 绕过）；
+        全路软失败，`active=false`（零租户零持单）时前端整卡隐藏。
+        """
+        api_auth(request)
+        from src.ops.tenant_overview import collect_tenant_overview_cached
+        try:
+            return {"ok": True, **collect_tenant_overview_cached(force=bool(force))}
+        except Exception as e:  # noqa: BLE001 - 观测面绝不 5xx
+            logger.debug("tenant-overview 采集失败（已忽略）", exc_info=True)
+            return {"ok": False, "error": str(e)[:200]}
+
     @app.get("/api/admin/isolation-health")
     async def api_isolation_health(request: Request, force: int = 0):
         """多协议号「账号隔离健康」快照：记忆键分桶形态 + 在线号人设绑定 + FateX 独立库。
@@ -1161,8 +1308,80 @@ def register_ops_overview_routes(app, ctx) -> None:
             except Exception:
                 logger.debug("platform_session_relogin 审计写入失败（已忽略）",
                              exc_info=True)
+        # P4 漏斗中段：人工重登计数（与 stall went/recovered 同表可观测）
+        try:
+            from src.integrations.platform_session_health import (
+                get_platform_session_health,
+            )
+            acct = str(body.get("account_id") or ident)
+            get_platform_session_health().record_relogin(platform, acct)
+        except Exception:
+            logger.debug("platform_session_relogin 漏斗计数失败（已忽略）",
+                         exc_info=True)
         return {"ok": True, "login_id": str((res or {}).get("login_id") or ident),
                 "status": str((res or {}).get("status") or "pending")}
+
+    @app.post("/api/admin/platform-sessions/e2ee-pin")
+    async def api_platform_session_e2ee_pin(request: Request,
+                                            _=Depends(api_write("manage_ops"))):
+        """P3 入站半死自愈：给某 Messenger 账号托管 E2EE 恢复 PIN。
+
+        转发给 worker（``/accounts/:id/e2ee-pin``），worker 落 sessions 机密 sidecar
+        （不入库、不出网明文）。托管后，进程重启/崩溃自愈撞到「恢复加密聊天」PIN 浮层
+        会自动输入 → 「登录态在、消息读不到」的半死态从「等人重登」变成无人值守自愈。
+        ``pin=""`` 清除托管。当前仅 messenger 网页模式。
+        """
+        from fastapi import HTTPException
+        from src.web.web_i18n import tr
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        platform = str(body.get("platform") or "").strip().lower()
+        ident = (str(body.get("login_id") or "").strip()
+                 or str(body.get("account_id") or "").strip())
+        pin = str(body.get("pin") or "").strip()
+        if not platform:
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="platform"))
+        if not ident:
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="login_id/account_id"))
+        if platform != "messenger":
+            raise HTTPException(400, tr(request, "err.psess.relogin_unsupported",
+                                        platform=platform))
+        # PIN 格式在 worker 侧 normalizePin 权威校验；这里只挡明显非数字，早退省一次往返。
+        digits = "".join(ch for ch in pin if ch.isdigit())
+        if pin and (len(digits) < 4 or len(digits) > 12 or digits != pin):
+            raise HTTPException(400, tr(request, "err.psess.pin_invalid"))
+        from src.integrations.messenger_web_login import (
+            _post_json,
+            service_base_url,
+        )
+        config = getattr(config_manager, "config", None) or {}
+        try:
+            res = await _post_json(
+                f"{service_base_url(config)}/accounts/{ident}/e2ee-pin",
+                {"pin": pin}, timeout=30.0)
+        except Exception as ex:
+            raise HTTPException(502, tr(request, "err.rpa.op_failed",
+                                        op="e2ee-pin", err=str(ex)))
+        if audit_store is not None:
+            try:
+                actor = "api"
+                try:
+                    actor = request.session.get("username", "api")
+                except Exception:
+                    pass
+                # 只记「设置/清除」动作，绝不记 PIN 值
+                audit_store.log(actor, "platform_session_e2ee_pin", "ops", ident,
+                                f"platform={platform};set={bool(pin)}")
+            except Exception:
+                logger.debug("platform_session_e2ee_pin 审计写入失败（已忽略）",
+                             exc_info=True)
+        return {"ok": True, "login_id": str((res or {}).get("login_id") or ident),
+                "pin_set": bool((res or {}).get("pin_set"))}
 
     @app.get("/admin/ops", response_class=HTMLResponse)
     async def ops_overview_page(request: Request, _=Depends(page_auth)):

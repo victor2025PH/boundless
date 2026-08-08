@@ -1,0 +1,198 @@
+{#- 告警链路「最后一公里」接通部件（2026-08-05，共享 partial）。
+
+    背景：本仓所有 EventBus 告警（账号掉线/入站半死/草稿积压/host_alert…）默认只进
+    日志 + 工作台铃铛——`notify_webhooks.json` 出厂 0 通道，「报进虚空」是 L3 草稿烂
+    167h、半死态拖 4 天的共同根因。ops 卡的自检（alert-link-status）只有进 ops 页才
+    看得见；本部件把「未接通」升格为工作台外壳级横幅 + 一键接通弹窗：
+    填 Telegram bot token + chat_id → 先真发测试消息 → 才允许保存（保存=整表 POST，
+    同名保密钥 + notifier 热更，免重启）。默认订阅集 = 状态接口回传的 focus_aliases
+    （业务受众目录 ∪ 三个高价值别名）——与自检「覆盖」判据同源，接通即 healthy。
+
+    复用（零新后端）：GET /api/admin/alert-link-status（零密钥、任意登录可读）、
+    GET/POST /api/accounts/auto-reply/webhooks、POST .../webhooks/test（支持测未保存
+    配置；后端 _require_alert_channel_admin 拒坐席/观察员）。
+
+    引用方式：
+      workspace_base.html：{% raw %}{% set alertlink_banner = true %}{% include ... %}{% endraw %}
+        → 渲染横幅（wsBanner 仲裁，prio 15）+ 弹窗；
+      ops_overview.html：直接 include → 只带弹窗，卡片 CTA 调 window.wsAlertlinkOpen()。
+    权限：master/operator（工作台）或 can_manage_ops（ops 页）才渲染——坐席无法写
+    渠道，对他们弹「接通」只会制造无能为力的焦虑。 -#}
+{% set _al_admin = (user_role|default('') in ('master', 'operator')) or (can_manage_ops|default(false)) %}
+{% if _al_admin %}
+{% if alertlink_banner|default(false) %}
+<div id="ws-alertlink" style="display:none;align-items:center;gap:10px;padding:6px 14px;
+     background:linear-gradient(90deg,#7c2d12,var(--th-bg-amber8,#92400e));color:#ffedd5;font-size:12.5px;">
+  <span style="flex:0 0 auto;">🔕</span>
+  <span style="flex:1 1 auto;line-height:1.5;" data-i18n="ws.alertlink.text">{{ (i18n or {}).get('ws.alertlink.text', '告警通道未接通：账号掉线、消息积压、系统故障不会通知到任何人，只能靠人盯页面。') }}</span>
+  <button type="button" id="ws-alertlink-go" style="flex:0 0 auto;border:1px solid rgba(255,237,213,.5);background:rgba(255,237,213,.14);color:#ffedd5;border-radius:7px;padding:3px 12px;font-size:12px;font-weight:600;cursor:pointer;">{{ (i18n or {}).get('ws.alertlink.connect', '立即接通') }}</button>
+  <button type="button" id="ws-alertlink-x" title="{{ (i18n or {}).get('ws.alertlink.later', '24 小时内不再提醒') }}" aria-label="{{ (i18n or {}).get('ws.alertlink.later', '24 小时内不再提醒') }}" style="flex:0 0 auto;border:none;background:transparent;color:#ffedd5;opacity:.7;cursor:pointer;font-size:14px;padding:2px 6px;">✕</button>
+</div>
+{% endif %}
+<div id="al-connect-mask" style="display:none;position:fixed;inset:0;z-index:10050;background:rgba(15,23,42,.55);align-items:center;justify-content:center;padding:16px;">
+  <div style="background:var(--tk-surface,#fff);color:var(--tk-text,#0f172a);border:1px solid var(--tk-border,#e2e8f0);border-radius:14px;max-width:480px;width:100%;padding:20px 22px;box-shadow:0 20px 50px rgba(2,6,23,.35);">
+    <div style="font-size:16px;font-weight:700;display:flex;align-items:center;gap:8px;">
+      <span>🔔</span><span data-i18n="al.ct.title">{{ (i18n or {}).get('al.ct.title', '接通告警通道') }}</span>
+    </div>
+    <div style="font-size:12.5px;color:var(--tk-text-muted,#64748b);line-height:1.6;margin-top:8px;" data-i18n="al.ct.desc">{{ (i18n or {}).get('al.ct.desc', '接一个 Telegram 机器人：账号掉线、收不到消息、草稿积压等故障会主动推送给你。保存即生效，无需重启。') }}</div>
+    <div style="font-size:12px;color:var(--tk-text-muted,#64748b);line-height:1.7;margin-top:8px;background:var(--tk-surface-2,#f8fafc);border:1px solid var(--tk-border,#e2e8f0);border-radius:8px;padding:8px 10px;" data-i18n="al.ct.how">{{ (i18n or {}).get('al.ct.how', '① Telegram 搜 @BotFather → /newbot 创建机器人，得到 Token；② 用要收告警的账号先给这个机器人发一句话（否则它无法主动私聊你）；③ Chat ID 可发消息给 @userinfobot 查到。') }}</div>
+    <input id="al-ct-token" type="text" autocomplete="off" spellcheck="false" placeholder="{{ (i18n or {}).get('al.ct.token_ph', 'Bot Token（形如 123456:ABC-…）') }}" style="margin-top:12px;width:100%;box-sizing:border-box;border:1px solid var(--tk-border,#e2e8f0);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--tk-bg,#fff);color:var(--tk-text,#0f172a);">
+    <input id="al-ct-chat" type="text" autocomplete="off" spellcheck="false" placeholder="{{ (i18n or {}).get('al.ct.chat_ph', 'Chat ID（个人为正数，群为负数）') }}" style="margin-top:8px;width:100%;box-sizing:border-box;border:1px solid var(--tk-border,#e2e8f0);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--tk-bg,#fff);color:var(--tk-text,#0f172a);">
+    <div id="al-ct-msg" style="min-height:18px;font-size:12px;margin-top:8px;"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;">
+      <button type="button" id="al-ct-close" style="border:1px solid var(--tk-border,#e2e8f0);background:transparent;color:var(--tk-text-muted,#64748b);border-radius:8px;padding:6px 14px;font-size:12.5px;cursor:pointer;" data-i18n="al.ct.close">{{ (i18n or {}).get('al.ct.close', '关闭') }}</button>
+      <button type="button" id="al-ct-test" style="border:1px solid var(--tk-brand,#2563eb);background:transparent;color:var(--tk-brand,#2563eb);border-radius:8px;padding:6px 14px;font-size:12.5px;font-weight:600;cursor:pointer;" data-i18n="al.ct.test">{{ (i18n or {}).get('al.ct.test', '发送测试消息') }}</button>
+      <button type="button" id="al-ct-save" disabled style="border:none;background:var(--tk-brand,#2563eb);color:#fff;border-radius:8px;padding:6px 14px;font-size:12.5px;font-weight:600;cursor:pointer;opacity:.45;" data-i18n="al.ct.save">{{ (i18n or {}).get('al.ct.save', '保存并接通') }}</button>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var mask=document.getElementById('al-connect-mask');
+  if(!mask) return;
+  var tokenEl=document.getElementById('al-ct-token');
+  var chatEl=document.getElementById('al-ct-chat');
+  var msgEl=document.getElementById('al-ct-msg');
+  var testBtn=document.getElementById('al-ct-test');
+  var saveBtn=document.getElementById('al-ct-save');
+  var closeBtn=document.getElementById('al-ct-close');
+  var banner=document.getElementById('ws-alertlink');
+  var SNOOZE='ws_alertlink_snooze';
+  /* 兜底与 alert_link_audit.HIGH_VALUE_ALIASES 同集（门禁钉住），正常路径用
+     状态接口回传的 focus_aliases（业务目录∪高价值），接通即达 healthy 覆盖口径。 */
+  var FALLBACK_EVENTS=['draft_backlog','human_deliver','host_alert'];
+  var focusAliases=[];
+  var tested=false, busy=false;
+  function _f(){ return window.apiFetch||fetch; }
+  function _t(k){ try{ return window.T(k); }catch(_){ return k; } }
+  function _tf(k,vars){
+    var s=_t(k);
+    Object.keys(vars||{}).forEach(function(x){ s=s.replace('{'+x+'}', String(vars[x])); });
+    return s;
+  }
+  function _msg(text,kind){
+    if(!msgEl) return;
+    msgEl.textContent=text||'';
+    msgEl.style.color=(kind==='ok')?'var(--tk-emerald-ink,#059669)'
+      :(kind==='err')?'var(--tk-danger-ink,#dc2626)':'var(--tk-text-muted,#64748b)';
+  }
+  function _setSave(on){
+    if(!saveBtn) return;
+    saveBtn.disabled=!on;
+    saveBtn.style.opacity=on?'1':'.45';
+  }
+  function _entry(){
+    return {
+      name:'boss-telegram', format:'telegram', url:'',
+      token:String((tokenEl&&tokenEl.value)||'').trim(),
+      target:String((chatEl&&chatEl.value)||'').trim(),
+      secret:'',
+      events:(focusAliases&&focusAliases.length)?focusAliases.slice():FALLBACK_EVENTS.slice(),
+      enabled:true
+    };
+  }
+  function _invalidate(){ tested=false; _setSave(false); }
+  if(tokenEl) tokenEl.addEventListener('input', _invalidate);
+  if(chatEl) chatEl.addEventListener('input', _invalidate);
+  function _setBanner(want){
+    if(!banner) return;
+    if(window.wsBanner&&window.wsBanner.set) window.wsBanner.set('ws-alertlink', want);
+    else banner.style.display=want?'flex':'none';
+  }
+  function _snoozed(){
+    try{ return Number(localStorage.getItem(SNOOZE)||0)>Date.now(); }catch(_){ return false; }
+  }
+  async function _tick(){
+    try{
+      var r=await _f()('/api/admin/alert-link-status',{credentials:'same-origin'});
+      if(!r.ok){ _setBanner(false); return; }
+      var d=await r.json();
+      if(!d||!d.ok){ _setBanner(false); return; }
+      var au=d.audit||{};
+      if(Array.isArray(au.focus_aliases)&&au.focus_aliases.length) focusAliases=au.focus_aliases;
+      _setBanner(d.verdict==='no_channel'&&!_snoozed());
+    }catch(_){ /* 探测失败静默——横幅绝不因网络抖动误弹 */ }
+  }
+  function openModal(){
+    mask.style.display='flex';
+    _msg('','');
+    _invalidate();
+    if(tokenEl) setTimeout(function(){ tokenEl.focus(); },50);
+  }
+  function closeModal(){ mask.style.display='none'; }
+  window.wsAlertlinkOpen=openModal;   /* ops 卡「立即接通」按钮共用入口 */
+  window.wsAlertlinkTick=_tick;
+  if(closeBtn) closeBtn.addEventListener('click', closeModal);
+  mask.addEventListener('click', function(e){ if(e.target===mask) closeModal(); });
+  if(testBtn) testBtn.addEventListener('click', async function(){
+    if(busy) return;
+    var w=_entry();
+    if(!w.token||!w.target){ _msg(_t('al.ct.need_both'),'err'); return; }
+    busy=true; _msg(_t('al.ct.testing'),'');
+    try{
+      var r=await _f()('/api/accounts/auto-reply/webhooks/test',{
+        method:'POST',credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({webhook:w})});
+      if(r.status===403){ _msg(_t('al.ct.no_perm'),'err'); busy=false; return; }
+      var d=await r.json().catch(function(){ return {}; });
+      if(r.ok&&d&&d.ok){ tested=true; _setSave(true); _msg(_t('al.ct.test_ok'),'ok'); }
+      else _msg(_tf('al.ct.test_fail',{err:(d&&d.error)||('HTTP '+r.status)}),'err');
+    }catch(e){ _msg(_tf('al.ct.test_fail',{err:String(e&&e.message||e)}),'err'); }
+    busy=false;
+  });
+  if(saveBtn) saveBtn.addEventListener('click', async function(){
+    if(busy) return;
+    if(!tested){ _msg(_t('al.ct.need_test'),'err'); return; }
+    var mine=_entry();
+    if(!mine.token||!mine.target){ _msg(_t('al.ct.need_both'),'err'); return; }
+    busy=true; _msg(_t('al.ct.saving'),'');
+    try{
+      /* 整表替换语义：先取现列表（脱敏），保留其他条目（同名密钥后端 merge 保真），
+         替换/新增本条。绝不清掉别人已配的渠道。 */
+      var list=[];
+      var g=await _f()('/api/accounts/auto-reply/webhooks',{credentials:'same-origin'});
+      if(g.status===403){ _msg(_t('al.ct.no_perm'),'err'); busy=false; return; }
+      if(g.ok){
+        var gd=await g.json().catch(function(){ return {}; });
+        list=(gd&&gd.webhooks)||[];
+      }
+      list=list.filter(function(x){ return String((x||{}).name||'')!=='boss-telegram'; });
+      list.push(mine);
+      var r=await _f()('/api/accounts/auto-reply/webhooks',{
+        method:'POST',credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({webhooks:list})});
+      var d=await r.json().catch(function(){ return {}; });
+      if(r.ok&&d&&d.ok){
+        _msg(_t('al.ct.save_ok'),'ok');
+        _setBanner(false);
+        try{ if(typeof loadAlertLink==='function') loadAlertLink(); }catch(_){}
+        setTimeout(closeModal, 1400);
+        _tick();
+      }else{
+        _msg(_tf('al.ct.save_fail',{err:(d&&d.error)||('HTTP '+r.status)}),'err');
+      }
+    }catch(e){ _msg(_tf('al.ct.save_fail',{err:String(e&&e.message||e)}),'err'); }
+    busy=false;
+  });
+  /* 横幅（仅工作台外壳渲染）：注册进 wsBanner 仲裁（prio 15，让位于事故类横幅）；
+     ✕=24h 贪睡（localStorage，跨标签页共享）；每 5 分钟复查 + 回前台补查。 */
+  if(banner){
+    if(window.wsBanner&&window.wsBanner.register) window.wsBanner.register('ws-alertlink', 15, 'flex');
+    var go=document.getElementById('ws-alertlink-go');
+    if(go) go.addEventListener('click', openModal);
+    var x=document.getElementById('ws-alertlink-x');
+    if(x) x.addEventListener('click', function(){
+      try{ localStorage.setItem(SNOOZE, String(Date.now()+24*3600*1000)); }catch(_){}
+      _setBanner(false);
+    });
+    setTimeout(_tick, 2500);
+    setInterval(_tick, 300000);
+    document.addEventListener('visibilitychange', function(){
+      if(document.visibilityState==='visible') _tick();
+    });
+  }
+})();
+</script>
+{% endif %}

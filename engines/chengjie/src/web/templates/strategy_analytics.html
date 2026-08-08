@@ -445,7 +445,7 @@
       <button onclick="loadReunionAB()" style="padding:.25rem .6rem;border:1px solid var(--bd2);border-radius:var(--r-sm);font-size:.78rem;background:var(--input);color:var(--t);cursor:pointer">{{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
     </span>
   </h3>
-  <div id="reunion-ab-winner" style="display:none;margin-bottom:.6rem;padding:.5rem .8rem;border-radius:var(--r-sm);background:var(--th-bg-grn10,rgba(16,185,129,.1));border:1px solid var(--th-bd-grn35,rgba(16,185,129,.35));font-size:.82rem;color:var(--th-ink-emerald6,#059669);align-items:center;gap:.5rem"></div>
+  <div id="reunion-ab-winner" style="display:none;margin-bottom:.6rem;padding:.5rem .8rem;border-radius:var(--r-sm);background:var(--th-bg-grn10,rgba(16,185,129,.1));border:1px solid var(--th-bd-grn35,rgba(16,185,129,.35));font-size:.82rem;color:var(--th-ink-emerald6,#047857);align-items:center;gap:.5rem"></div>
   <div class="sa-table-wrap"><div id="reunion-ab-body" style="padding:.6rem .8rem;font-size:.82rem;color:var(--t3)">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   <div id="reunion-ab-eval-status" style="font-size:.72rem;color:var(--t3);margin-top:.35rem;padding:0 .2rem"></div>
 </div>
@@ -480,7 +480,7 @@
 
 async function doPurge(){
   if(!await confirmAction(window.T('sa_js002'),{okText:window.T('sa_js003')}))return;
-  const r=await fetch('/api/data-purge',{method:'POST',headers:{'Content-Type':'application/json'}});
+  const r=await apiFetch('/api/data-purge',{method:'POST',headers:{'Content-Type':'application/json'}},{timeoutMs:120000});
   const d=await r.json();
   if(d.ok) showToast(window.Tf('sa_cleanup_done',{s:d.strategy_events_deleted,g:d.general_events_deleted}),'ok');
   else showToast(window.T('sa_js005'),'err');
@@ -586,7 +586,7 @@ async function loadReunionAB(){
         +'<span><strong>'+_rabEsc(winner.winner)+'</strong> '+window.T('as_js051')+' <strong>'+_rabEsc(winner.runner_up)+'</strong>: '
         +Math.round(winner.winner_rate*100)+'% vs '+Math.round(winner.runner_up_rate*100)+'% (+'+winner.gap_pct+'pct, '
         +window.T('db_js_049')+' '+winner.winner_evaluated+'/'+winner.runner_up_evaluated+') &nbsp;'
-        +'<button onclick="promoteReunionVariant(\''+_rabEsc(winner.winner)+'\')" style="font-size:.75rem;padding:.1rem .5rem;border-radius:4px;border:1px solid var(--th-bd-emerald5,#10b981);background:transparent;color:var(--th-ink-emerald6,#059669);cursor:pointer">↑ '+window.T('inbox.xl.set_default')+'</button></span>';
+        +'<button onclick="promoteReunionVariant(\''+_rabEsc(winner.winner)+'\')" style="font-size:.75rem;padding:.1rem .5rem;border-radius:4px;border:1px solid var(--th-bd-emerald5,#10b981);background:transparent;color:var(--th-ink-emerald6,#047857);cursor:pointer">↑ '+window.T('inbox.xl.set_default')+'</button></span>';
     }
     var rows=variants.sort().map(function(vid){
       var b=bv[vid];

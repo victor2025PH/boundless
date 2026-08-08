@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>{{ (i18n or {}).get('rvc.title', '实时语音通话 · 陪伴') }}</title>
 {% include "_i18n_bootstrap.html" %}
+{% include "_boot_error_guard.html" %}
 <style>
   :root { --bg:#0e1014; --card:#171a21; --accent:#7c5cff; --accent2:#23d6a0;
           --text:#e8eaf0; --muted:#8b91a3; --me:#2a3142; --ai:#1f2a3a; }

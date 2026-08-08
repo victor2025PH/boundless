@@ -1,0 +1,61 @@
+<script>
+/* 全局启动/运行时错误守卫（base + workspace_base 两大页面家族共用）。
+   事故背景（contact360，2026-08-01）：启动序列抛 ReferenceError → 整页永远卡「加载中」，
+   坐席与后台**双双无感知**。unified_inbox 与 4 个 RPA 页早有 dead-click 守卫，其余 ~60 页
+   此前裸奔。此处兜底：
+     - ReferenceError（含 unhandledrejection 里的异步版）＝死代码/作用域错位，必是 bug；
+     - SyntaxError＝模板半保存经热更新直上生产（「每步必须自洽」纪律的运行时探测器）；
+     - TypeError 刻意不收——「Failed to fetch」等网络抖动全是它，收了就是狼来了。
+   动作＝顶部红条（点击可关）+ beacon 到 /api/telemetry/frontend-error（只送消毒后的
+   page/fn/type 三字段，绝不送堆栈/原文），节流 3s、每页至多 5 发。
+   页级 dead-click 守卫 wire 时置 window.__feDeadClickGuard=1，本守卫对 'error' 事件让位
+   （防双 toast 双计数）；unhandledrejection 无页级守卫覆盖，恒由本守卫处理。 */
+(function(){
+  var _last = 0, _sent = 0;
+  function _fnFromMsg(msg){
+    var m = String(msg || '').match(/([A-Za-z_$][\w$]*)\s+is not defined/);
+    return m ? m[1] : '';
+  }
+  function _banner(txt){
+    try{
+      var el = document.getElementById('fe-boot-guard-bar');
+      if(!el){
+        el = document.createElement('div');
+        el.id = 'fe-boot-guard-bar';
+        el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;'
+          + 'background:#dc2626;color:#fff;font-size:13px;padding:8px 14px;'
+          + 'text-align:center;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.25);';
+        el.title = 'click to dismiss';
+        el.onclick = function(){ try{ el.remove(); }catch(_){} };
+        (document.body || document.documentElement).appendChild(el);
+      }
+      el.textContent = txt;
+    }catch(_){}
+  }
+  function _report(fn, etype){
+    var now = Date.now();
+    if(now - _last < 3000 || _sent >= 5) return;
+    _last = now; _sent++;
+    var label = (typeof window.T === 'function') ? window.T('fe.guard.page_error') : 'fe.guard.page_error';
+    _banner(label + (fn ? '（' + fn + '）' : ''));
+    try{
+      var body = JSON.stringify({page: location.pathname, fn: fn || '', type: etype});
+      navigator.sendBeacon('/api/telemetry/frontend-error', new Blob([body], {type: 'application/json'}));
+    }catch(_){}
+  }
+  window.addEventListener('error', function(e){
+    if(window.__feDeadClickGuard) return;
+    var err = e && e.error, msg = String((e && e.message) || '');
+    if(msg === 'Script error.' && !(e && e.filename)) return; /* 跨源脚本噪声无细节，不报 */
+    var isRef = (err instanceof ReferenceError) || /is not defined/.test(msg);
+    var isSyn = (err instanceof SyntaxError) || /SyntaxError/.test(msg);
+    if(!isRef && !isSyn) return;
+    _report(_fnFromMsg(msg), isRef ? 'ReferenceError' : 'SyntaxError');
+  });
+  window.addEventListener('unhandledrejection', function(e){
+    var r = e && e.reason;
+    if(!(r instanceof ReferenceError)) return;
+    _report(_fnFromMsg(r && r.message), 'ReferenceError');
+  });
+})();
+</script>

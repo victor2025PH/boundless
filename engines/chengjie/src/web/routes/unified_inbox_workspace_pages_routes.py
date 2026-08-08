@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, Request
@@ -151,6 +152,12 @@ def register_workspace_pages_routes(
                 _missing = _is_placeholder(_ai.get("api_key")) and not _pool_keys
                 ctx["ai_key_missing"] = _missing
                 ctx["ai_trial_mode"] = (not _missing) and _hosted
+                # 付费托管租户（licensing.hosted_ai.enabled）与免费试用走同一条
+                # 网关注入链（_hosted_trial 同为 True），但横幅措辞必须分开——
+                # 付费客户看到「免费试用中」是错误且失礼的（P5，2026-08-08）
+                _lic = (config_manager.config or {}).get("licensing") or {}
+                _hai = _lic.get("hosted_ai") if isinstance(_lic.get("hosted_ai"), dict) else {}
+                ctx["ai_hosted_paid"] = bool(_hai.get("enabled")) and ctx["ai_trial_mode"]
         except Exception:
             pass
         return ctx
@@ -202,6 +209,58 @@ def register_workspace_pages_routes(
     # 的「变量桥」统一；旧路径 302 到这里（书签不断）。
     _CHANNEL_KEYS = ("telegram", "line", "messenger", "whatsapp")
 
+    # ── P3 平台能力速览（SSOT=docs/平台能力矩阵.md，由 scripts/platform_matrix 从代码
+    #    生成、门禁钉住与代码一致；此处只读解析生成物，绝不在请求时构造 worker）。
+    #    路径必须 __file__ 锚定：服务进程 CWD=实例数据根，docs/ 在引擎代码根
+    #    （CWD 相对路径=迁移后静默失真，见 test_static_asset_paths 家族教训）。
+    _MATRIX_DOC = Path(__file__).resolve().parents[3] / "docs" / "平台能力矩阵.md"
+    _MATRIX_ROW_BY_CHANNEL = {
+        "telegram": "Telegram（protocol）",
+        "line": "LINE（protocol）",
+        "messenger": "Messenger（web）",
+        "whatsapp": "WhatsApp（protocol）",
+    }
+    _matrix_cache: Dict[str, Any] = {"mtime": None, "rows": {}}
+
+    def _cap_state(cell: str) -> str:
+        """矩阵格值 → ASCII 状态词（模板只比对状态词，避免 CJK 判定散进模板）。"""
+        v = (cell or "").strip()
+        if v == "Y":
+            return "yes"
+        if v == "-":
+            return "no"
+        if v == "开关":
+            return "toggle"
+        return "unknown"
+
+    def _platform_capability(channel: str) -> Optional[Dict[str, str]]:
+        """渠道页能力速览：{send_text, send_media, read_receipt, typing, inbound_media}，
+        值 ∈ {"yes","no","toggle","unknown"}；文档缺失/解析失败 → None（速览条整体隐藏）。"""
+        try:
+            mt = _MATRIX_DOC.stat().st_mtime
+            if _matrix_cache["mtime"] != mt:
+                rows: Dict[str, Dict[str, str]] = {}
+                for line in _MATRIX_DOC.read_text(encoding="utf-8").splitlines():
+                    s = line.strip()
+                    if not s.startswith("|") or "---" in s:
+                        continue
+                    cells = [c.strip() for c in s.strip("|").split("|")]
+                    if len(cells) >= 6:
+                        rows[cells[0]] = {
+                            "send_text": _cap_state(cells[1]),
+                            "send_media": _cap_state(cells[2]),
+                            "read_receipt": _cap_state(cells[3]),
+                            "typing": _cap_state(cells[4]),
+                            "inbound_media": _cap_state(cells[5]),
+                        }
+                _matrix_cache["mtime"] = mt
+                _matrix_cache["rows"] = rows
+            row = _matrix_cache["rows"].get(
+                _MATRIX_ROW_BY_CHANNEL.get(channel, ""))
+            return dict(row) if row else None
+        except Exception:
+            return None
+
     @app.get("/workspace/channels", response_class=HTMLResponse)
     async def workspace_channels_root(request: Request, _=Depends(page_auth)):
         if not _is_supervisor(request):
@@ -221,6 +280,8 @@ def register_workspace_pages_routes(
             return RedirectResponse("/workspace/dash", status_code=307)
         ctx = _page_ctx(request)
         ctx["channel"] = channel
+        # P3 能力速览（缺席=None → 模板整条隐藏；把「平台限制」显式化防误报故障）
+        ctx["platform_capability"] = _platform_capability(channel)
         return templates.TemplateResponse(request, "workspace_channels.html", ctx)
 
     @app.get("/api/workspace/channel-sessions")

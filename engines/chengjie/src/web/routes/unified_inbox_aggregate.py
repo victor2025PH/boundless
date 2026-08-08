@@ -58,7 +58,8 @@ def _read_automation_mode(request: Request, conversation_id: str) -> str:
 
 
 def _write_automation_mode(request: Request, conversation_id: str, mode: str) -> int:
-    """写入档位；若降出 auto_ai，立即取消该会话待投递 L2 草稿。返回取消条数。"""
+    """写入档位（source=human：UI 下拉是坐席的明示决定）；若降出 auto_ai，
+    立即取消该会话待投递 L2 草稿。返回取消条数。"""
     cancelled = 0
     store = _inbox_store(request)
     if store is not None:
@@ -68,7 +69,10 @@ def _write_automation_mode(request: Request, conversation_id: str, mode: str) ->
                 prev = store.get_automation_mode_if_set(conversation_id)
             except Exception:
                 prev = None
-            store.set_automation_mode(conversation_id, mode)
+            try:
+                store.set_automation_mode(conversation_id, mode, source="human")
+            except TypeError:
+                store.set_automation_mode(conversation_id, mode)
             from src.inbox.automation_mode import allows_direct_autosend
             if allows_direct_autosend(prev or "") and not allows_direct_autosend(mode):
                 if hasattr(store, "cancel_pending_l2_drafts"):

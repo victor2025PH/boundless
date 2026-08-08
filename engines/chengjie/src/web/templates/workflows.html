@@ -52,7 +52,7 @@
   <h2 style="margin:0 0 16px;font-size:18px;">⚡ {{ (i18n or {}).get('wf_s001', "工作流管理") }}</h2>
 
   <!-- 一分钟上手（首次可见，「知道了」后本机不再显示；JS 按 localStorage 控显防闪） -->
-  <div id="wf-onboard" style="display:none;align-items:flex-start;gap:10px;background:var(--th-bg-blue0,#eff6ff);border:1px solid var(--th-bd-blue2,#bfdbfe);border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:12px;line-height:1.7;color:var(--th-ink-gray7,#374151);">
+  <div id="wf-onboard" style="display:none;align-items:flex-start;gap:10px;background:var(--th-bg-blue08,rgba(45,108,223,.08));border:1px solid var(--th-bd-blue30,rgba(59,130,246,.3));border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:12px;line-height:1.7;color:var(--th-ink-gray7,#374151);">
     <div style="flex:1;">
       <strong style="font-size:13px;">🚀 {{ (i18n or {}).get('wf_onboard_title', "一分钟上手") }}</strong>
       <div>{{ (i18n or {}).get('wf_onboard_s1', "① 点「导入示例链」拿到 4 条现成跟进 SOP") }}</div>
@@ -433,7 +433,7 @@ WF.loadChains=function(){
           +'<div><button class="btn-sm" onclick="WF.editChain(\''+esc(c.chain_id)+'\')">'+window.T('edit')+'</button> '
             +'<button class="btn-sm btn-danger" onclick="WF.delChain(\''+esc(c.chain_id)+'\')">'+window.T('delete')+'</button></div>'
         +'</div>'
-        +'<div style="font-size:11px;color:var(--th-ink-slate4,#94a3b8);margin-bottom:6px;">ID: '+esc(c.chain_id)+'</div>'
+        +'<div style="font-size:11px;color:var(--th-ink-slate4,#5b6b85);margin-bottom:6px;">ID: '+esc(c.chain_id)+'</div>'
         +(function(){
           var tc=c.trigger_conditions||{};
           var tags=[];
@@ -447,7 +447,7 @@ WF.loadChains=function(){
               +'<div class="step-num">'+(i+1)+'</div>'
               +'<div style="flex:1;font-size:12px;">'
                 +'<strong>'+esc(_TYPE_LABELS[s.action_type]||s.action_type||window.T('rpa_unknown'))+'</strong>'
-                +(s.delay_hours?'<span style="color:var(--th-ink-slate4,#94a3b8);margin-left:8px;">'+window.T('wf_js009')+' '+s.delay_hours+' '+window.T('msg_js_009')+'</span>':'')
+                +(s.delay_hours?'<span style="color:var(--th-ink-slate4,#5b6b85);margin-left:8px;">'+window.T('wf_js009')+' '+s.delay_hours+' '+window.T('msg_js_009')+'</span>':'')
                 +(s.note?'<div style="color:var(--th-ink-slate5,#64748b);margin-top:2px;">'+esc(s.note)+'</div>':'')
               +'</div></div>';
           }).join('')
@@ -675,14 +675,14 @@ WF.loadMonitor=function(){
         +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">'
           +'<div style="flex:1;">'
             +'<div style="font-size:13px;font-weight:600;">'+esc(ex.chain_name||ex.chain_id)+'</div>'
-            +'<div style="font-size:11px;color:var(--th-ink-slate4,#94a3b8);margin-top:2px;">'
+            +'<div style="font-size:11px;color:var(--th-ink-slate4,#5b6b85);margin-top:2px;">'
               +esc(ex.display_name||ex.conversation_id||'')+' · '+window.T('tour_step')+' '+ex.current_step_display+'/'+ex.total_steps
               +(ex.current_step_label?' · '+esc(ex.current_step_label):'')+'</div>'
             +'<div class="exec-step-mini">'+dots+'</div>'+lr
           +'</div>'
           +'<div style="text-align:right;flex:0 0 auto;">'
             +'<span class="badge '+(_badgeCls[ex.status]||'')+'">'+esc(ex.status_label||ex.status)+'</span>'
-            +'<div style="font-size:10px;color:var(--th-ink-slate4,#94a3b8);margin-top:4px;">'+cd+'</div>'
+            +'<div style="font-size:10px;color:var(--th-ink-slate4,#5b6b85);margin-top:4px;">'+cd+'</div>'
             +(ex.status==='running'?'<button class="btn-sm btn-danger" style="margin-top:6px;" onclick="WF.cancelExec(\''+esc(ex.exec_id)+'\')">'+window.T('ov_js_cancel')+'</button>':'')
           +'</div>'
         +'</div></div>';

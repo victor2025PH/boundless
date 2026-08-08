@@ -2,10 +2,11 @@
 <html lang="{{ 'zh-CN' if (ui_lang|default('zh')) == 'zh' else 'en' }}"><head><meta charset="utf-8">
 <title>{{ (i18n or {}).get('ops.nav.mobile', 'Mobile 交接单') }} · Ops</title>
 {% include "_i18n_bootstrap.html" %}
+{% include "_boot_error_guard.html" %}
 {% include "_api_fetch.html" %}
 <link rel="stylesheet" href="/static/brand/brand.css">
 <link rel="stylesheet" href="/static/brand/brand-fonts.css">
-<link rel="stylesheet" href="/static/theme-tokens.css?v=20260723c">
+<link rel="stylesheet" href="/static/theme-tokens.css?v=20260804b">
 <style>
 *{box-sizing:border-box}
 body{font-family:var(--bl-font-sans,-apple-system,'Segoe UI',sans-serif);max-width:1260px;margin:20px auto;padding:0 20px;background:#f8fafc;color:#222}
@@ -109,7 +110,7 @@ a:hover{text-decoration:underline}
       <th style="padding:5px 8px;text-align:left">{{ (i18n or {}).get('ops.mh.col_last_error', '最后错误') }}</th>
       <th style="padding:5px 8px;text-align:left">{{ (i18n or {}).get('ops.mh.col_force_retry', '强制重试') }}</th>
     </tr></thead>
-    <tbody id="dl-tbody"><tr><td colspan="7" style="text-align:center;color:var(--th-ink-gray4,#9ca3af);padding:10px">{{ (i18n or {}).get('dash.loading', '加载中…') }}</td></tr></tbody>
+    <tbody id="dl-tbody"><tr><td colspan="7" style="text-align:center;color:var(--th-ink-gray4,#5b6b85);padding:10px">{{ (i18n or {}).get('dash.loading', '加载中…') }}</td></tr></tbody>
   </table>
 </div>
 
@@ -365,7 +366,7 @@ async function loadDeadLetters(){
         <td style="padding:4px 8px;font-weight:600">${esc(row.action||'')}</td>
         <td style="padding:4px 8px">${esc(row.by_user||'-')}</td>
         <td style="padding:4px 8px;text-align:center">${row.attempt_count||0}</td>
-        <td style="padding:4px 8px;color:var(--th-ink-red6,#dc2626);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${err}">${err}</td>
+        <td style="padding:4px 8px;color:var(--th-ink-red6,#b91c1c);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${err}">${err}</td>
         <td style="padding:4px 8px">
           <button style="padding:2px 8px;font-size:11px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:3px;cursor:pointer;background:var(--th-bg-surface,#fff)"
             onclick="retryDeadLetter(${row.id},this)">\u25b6 ${window.T('ops.mh.retry')}</button>
@@ -373,7 +374,7 @@ async function loadDeadLetters(){
       </tr>`;
     }).join('');
   }catch(e){
-    tbody.innerHTML=`<tr><td colspan="7" style="color:var(--th-ink-red6,#dc2626);padding:8px">${window.T('dash.load_fail')}: ${e}</td></tr>`;
+    tbody.innerHTML=`<tr><td colspan="7" style="color:var(--th-ink-red6,#b91c1c);padding:8px">${window.T('dash.load_fail')}: ${e}</td></tr>`;
   }
 }
 

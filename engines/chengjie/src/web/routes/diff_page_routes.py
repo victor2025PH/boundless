@@ -16,8 +16,13 @@ from fastapi import Depends, Request
 from fastapi.responses import HTMLResponse
 
 
-def _resolve_current_file(config_manager, prefix: str):
-    """根据快照前缀找到对应的当前配置文件路径。"""
+def _resolve_current_file(config_manager, stem: str):
+    """根据快照 stem 找到对应的当前配置文件路径。
+
+    stem 形如 ``reply_strategies_20260805_120000_admin``——必须按「完整前缀 +
+    下划线」匹配，不能 ``split('_')[0]``（会把 ``reply_strategies`` 截成
+    ``reply``，策略快照对比永远对不上当前文件）。
+    """
     cfg_dir = config_manager.config_path.parent
     _prefix_file_map = {
         "templates": cfg_dir / "templates.yaml",
@@ -25,9 +30,11 @@ def _resolve_current_file(config_manager, prefix: str):
         "reply_strategies": cfg_dir / "reply_strategies.yaml",
         "quota": cfg_dir / "quota_rules.yaml",
     }
-    for key, path in _prefix_file_map.items():
-        if prefix.startswith(key):
-            return path
+    s = stem or ""
+    # 长前缀优先，避免将来加短前缀时误伤
+    for key in sorted(_prefix_file_map, key=len, reverse=True):
+        if s == key or s.startswith(key + "_"):
+            return _prefix_file_map[key]
     return None
 
 
@@ -56,8 +63,7 @@ def register_diff_page_routes(app, ctx) -> None:
                 text_b = file_b.read_text(encoding="utf-8").splitlines() if file_b.exists() else []
                 tofile = snap_b
             else:
-                prefix = snap_a.split("_")[0] if "_" in snap_a else snap_a
-                current_file = _resolve_current_file(config_manager, prefix)
+                current_file = _resolve_current_file(config_manager, snap_a)
                 text_b = (
                     current_file.read_text(encoding="utf-8").splitlines()
                     if current_file and current_file.exists()

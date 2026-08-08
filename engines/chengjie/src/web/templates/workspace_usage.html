@@ -50,7 +50,7 @@
     <span class="badge" id="ug-lic-badge"></span>
   </div>
 
-  <div id="ug-empty" style="display:none;color:var(--th-ink-slate4,#94a3b8);font-size:14px;padding:40px;text-align:center;">
+  <div id="ug-empty" style="display:none;color:var(--th-ink-slate4,#5b6b85);font-size:14px;padding:40px;text-align:center;">
     {{ (i18n or {}).get('wu_s002', "暂无用量数据（接入渠道并开始收发消息后将逐步积累）。") }}
   </div>
 
@@ -64,7 +64,7 @@
         <span><span class="ug-dot" style="background:var(--th-bg-blue6,#2563eb);"></span>AI {{ (i18n or {}).get('wu_s005', "调用数") }}</span>
       </div>
     </div>
-    <div style="font-size:11px;color:var(--th-ink-slate4,#94a3b8);text-align:center;">
+    <div style="font-size:11px;color:var(--th-ink-slate4,#5b6b85);text-align:center;">
       {{ (i18n or {}).get('wu_s006', "口径：消息量") }}={{ (i18n or {}).get('wu_s007', "收发消息条数；AI 调用数") }}={{ (i18n or {}).get('wu_s008', "生成的 AI 草稿数；活跃坐席") }}={{ (i18n or {}).get('wu_s009', "窗口内有处置记录的去重坐席数。") }}
     </div>
   </div>
@@ -92,7 +92,7 @@
       </table>
       <div id="bl-total" style="text-align:right;font-size:16px;font-weight:800;color:var(--th-ink-slate9,#0f172a);margin-top:8px;"></div>
     </div>
-    <div id="bl-empty" style="color:var(--th-ink-slate4,#94a3b8);font-size:13px;padding:14px 4px;display:none;">{{ (i18n or {}).get('wu_s013', "该账期暂无用量数据。") }}</div>
+    <div id="bl-empty" style="color:var(--th-ink-slate4,#5b6b85);font-size:13px;padding:14px 4px;display:none;">{{ (i18n or {}).get('wu_s013', "该账期暂无用量数据。") }}</div>
   </div>
 </div>
 <script>
@@ -146,7 +146,7 @@ function renderCards(u,cmp,mq){
 
 function renderSpark(trend){
   var el=document.getElementById('ug-spark'); if(!el) return;
-  if(!trend||!trend.length){ el.innerHTML='<span style="color:var(--th-ink-slate4,#94a3b8);font-size:12px;">'+window.T('wu_js006')+'</span>'; return; }
+  if(!trend||!trend.length){ el.innerHTML='<span style="color:var(--th-ink-slate4,#5b6b85);font-size:12px;">'+window.T('wu_js006')+'</span>'; return; }
   var max=1;
   trend.forEach(function(t){ max=Math.max(max,t.messages||0,t.ai_calls||0); });
   el.innerHTML=trend.map(function(t){

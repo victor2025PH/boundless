@@ -45,11 +45,11 @@ _TRANSLATIONS = {
         # ── 侧栏导航补全（③-S3：原硬编码 span 收口为 key）──
         "personas": "人设工作室",
         "workspace_inbox": "坐席工作台",
-        "rpa_overview": "渠道总览",
-        "telegram_settings": "Telegram 渠道",
-        "line_rpa": "LINE 渠道",
-        "messenger_rpa": "Messenger 渠道",
-        "whatsapp_rpa": "WhatsApp 渠道",
+        "rpa_overview": "矩阵总览",
+        "telegram_settings": "Telegram",
+        "line_rpa": "LINE",
+        "messenger_rpa": "Messenger",
+        "whatsapp_rpa": "WhatsApp",
         "episodic": "AI 记忆",
         "crisis_audit": "危机审计",
         "care": "主动关怀",
@@ -63,7 +63,7 @@ _TRANSLATIONS = {
         "section_ops": "运营中心",
         "section_ai": "AI 与策略",
         "section_data": "数据分析",
-        "section_data_records": "数据 & 记录",
+        "section_data_records": "更多",
         "section_system": "系统管理",
         # ── 账户 & 权限 ───────────────────────────────
         "logout": "退出",
@@ -685,7 +685,7 @@ _TRANSLATIONS = {
         "base.nav.chat": "聊天",
         "base.nav.contacts": "客户",
         "base.nav.overview": "概览",
-        "base.nav.more": "更多 ▾",
+        "base.nav.more": "更多",
         "base.nav.tasks": "待办",
         "base.nav.drafts": "草稿审批",
         "base.nav.drafts_t": "待你审核的 AI 回复草稿",
@@ -713,7 +713,7 @@ _TRANSLATIONS = {
         "base.grp.quality": "质量",
         "base.grp.biz": "经营",
         "base.grp.boundless": "无界产品族",
-        "base.nav.brand_hub": "了解更多产品 ↗",
+        "base.nav.brand_hub": "了解更多产品",
         "base.grp.config": "配置与上线",
         "base.search_ph": "全局搜索…",
         "base.pill.esc_t": "无人接管的严重超时会话",
@@ -734,7 +734,7 @@ _TRANSLATIONS = {
         "base.um.prefs": "⚙ 告警 / 通知设置",
         "base.um.prefs_t": "告警阈值 / 免打扰 / 消息提示音 / 弹窗",
         "base.um.lang_t": "切换语言 / Switch language",
-        "base.um.admin": "🛠 管理后台",
+        "base.um.admin": "管理后台",
         "base.um.admin_t": "渠道 / 系统 / 配置（系统管理）",
         "base.um.logout": "退出登录",
         "base.pill.followup": "待跟进",
@@ -963,7 +963,7 @@ _TRANSLATIONS = {
         "onb_kb_desc": "浏览和搜索知识条目",
         "onb_review_label": "学习队列",
         "onb_review_desc": "审核 AI 生成的草稿",
-        "onb_footer": "你随时可以在侧边栏底部切换到完整模式",
+        "onb_footer": "进阶功能（真机矩阵、数据分析、人设工作室等）在完整模式——侧边栏底部随时可切换",
         "onb_start": "开始使用",
         # ── 实时日志页正文（③-S6：logs.html 工具栏 + 终端 + SSE 重连）──
         "logs_adv_title": "高级功能",
@@ -3972,11 +3972,11 @@ _TRANSLATIONS = {
         # ── Sidebar nav fill-in (③-S3: ex-hardcoded spans → keys) ──
         "personas": "Persona Studio",
         "workspace_inbox": "Agent Workspace",
-        "rpa_overview": "Channel Overview",
-        "telegram_settings": "Telegram Channel",
-        "line_rpa": "LINE Channel",
-        "messenger_rpa": "Messenger Channel",
-        "whatsapp_rpa": "WhatsApp Channel",
+        "rpa_overview": "Matrix Overview",
+        "telegram_settings": "Telegram",
+        "line_rpa": "LINE",
+        "messenger_rpa": "Messenger",
+        "whatsapp_rpa": "WhatsApp",
         "episodic": "AI Memory",
         "crisis_audit": "Crisis Audit",
         "care": "Proactive Care",
@@ -3990,7 +3990,7 @@ _TRANSLATIONS = {
         "section_ops": "Operations",
         "section_ai": "AI & Strategy",
         "section_data": "Data & Analytics",
-        "section_data_records": "Data & Records",
+        "section_data_records": "More",
         "section_system": "System Admin",
         # ── Account ───────────────────────────────────
         "logout": "Logout",
@@ -4579,7 +4579,7 @@ _TRANSLATIONS = {
         "base.nav.chat": "Chats",
         "base.nav.contacts": "Contacts",
         "base.nav.overview": "Overview",
-        "base.nav.more": "More ▾",
+        "base.nav.more": "More",
         "base.nav.tasks": "To-do",
         "base.nav.drafts": "Draft review",
         "base.nav.drafts_t": "AI reply drafts awaiting your review",
@@ -4607,7 +4607,7 @@ _TRANSLATIONS = {
         "base.grp.quality": "Quality",
         "base.grp.biz": "Business",
         "base.grp.boundless": "Boundless product family",
-        "base.nav.brand_hub": "More products ↗",
+        "base.nav.brand_hub": "More products",
         "base.grp.config": "Config & go-live",
         "base.search_ph": "Global search…",
         "base.pill.esc_t": "Severely overdue conversations with no handler",
@@ -4628,7 +4628,7 @@ _TRANSLATIONS = {
         "base.um.prefs": "⚙ Alert / notification settings",
         "base.um.prefs_t": "Alert thresholds / do-not-disturb / sound / popups",
         "base.um.lang_t": "Switch language / 切换语言",
-        "base.um.admin": "🛠 Admin console",
+        "base.um.admin": "Admin console",
         "base.um.admin_t": "Channels / system / config (system admin)",
         "base.um.logout": "Log out",
         "base.pill.followup": "Follow-up",
@@ -4857,7 +4857,7 @@ _TRANSLATIONS = {
         "onb_kb_desc": "Browse and search knowledge entries",
         "onb_review_label": "Learning Queue",
         "onb_review_desc": "Review AI-generated drafts",
-        "onb_footer": "You can switch to Full Mode anytime from the bottom of the sidebar",
+        "onb_footer": "Advanced features (Device Matrix, analytics, Persona Studio…) live in Full Mode — switch anytime from the bottom of the sidebar",
         "onb_start": "Get started",
         # ── Live logs page body (③-S6: logs.html toolbar + terminal + SSE reconnect) ──
         "logs_adv_title": "Advanced feature",
@@ -7989,3 +7989,31 @@ def tr(request, key: str, default: str = None, /, **fmt) -> str:
         except Exception:
             pass
     return s
+
+
+# ── 词典内容指纹（P2 传输减重，2026-08-07）──────────────────────────────────
+# 供 /i18n/ws-i18n.js 外链词典包的 immutable 缓存戳用：指纹随内容变，热重载
+# （单体 exec / pack 重收集两条路径都会更新对应 mtime）后自动翻新——浏览器端
+# 一年 immutable 缓存 + URL 带指纹 = 改词条即换 URL，永不读到陈旧字典。
+_FP_CACHE: dict = {}
+
+
+def get_translations_fingerprint(lang: str = "zh") -> str:
+    """当前合并词典（单体+packs）的内容指纹（8 位 hex）。
+
+    缓存键 = (lang, 单体已装载 mtime, packs 已装载 mtime)——与热重载判据同源，
+    不重复 hash 560KB；ensure_ascii 序列化避开历史数据里的孤立代理字符。
+    """
+    import hashlib
+    import json
+    _maybe_reload()
+    key = (lang, _loaded_mtime, _packs_loaded_mtime)
+    fp = _FP_CACHE.get(key)
+    if fp is None:
+        d = _MERGED.get(lang, _MERGED[DEFAULT_LANG])
+        blob = json.dumps(d, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        fp = hashlib.sha1(blob.encode("ascii")).hexdigest()[:8]
+        if len(_FP_CACHE) > 12:   # 每语言每代一条，防长生命周期进程缓慢积累
+            _FP_CACHE.clear()
+        _FP_CACHE[key] = fp
+    return fp

@@ -209,6 +209,33 @@
 
       <div style="height:1px;background:var(--bd);margin:1rem 0"></div>
 
+      <!-- 🏠 主对话模型位置（ai.primary）：自托管隐私档；写 overlay + 热重建，免重启。 -->
+      <div class="f-row" id="dv-ai-primary-card">
+        <div class="f-lbl">🏠 {{ (i18n or {}).get('dv_ai_p_title', "主对话模型位置") }}</div>
+        <div class="f-hint">{{ (i18n or {}).get('dv_ai_p_sub', "决定聊天内容走云端还是本机 GPU。local_only＝严格隐私。") }}</div>
+        <div id="dv-ai-primary-status" style="margin:.4rem 0;font-size:.8rem;color:var(--t2)"></div>
+        <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.35rem 0">
+          <label style="font-size:.82rem;display:flex;align-items:center;gap:.3rem">
+            <input type="radio" name="dv-ai-primary" value="cloud">
+            {{ (i18n or {}).get('dv_ai_p_mode_cloud', "云端优先（默认）") }}
+          </label>
+          <label style="font-size:.82rem;display:flex;align-items:center;gap:.3rem">
+            <input type="radio" name="dv-ai-primary" value="local">
+            {{ (i18n or {}).get('dv_ai_p_mode_local', "本地优先（挂了可回落云）") }}
+          </label>
+          <label style="font-size:.82rem;display:flex;align-items:center;gap:.3rem">
+            <input type="radio" name="dv-ai-primary" value="local_only">
+            {{ (i18n or {}).get('dv_ai_p_mode_local_only', "仅本地（绝不上传）") }}
+          </label>
+        </div>
+        <div class="save-bar">
+          <span class="save-result" id="dv-ai-primary-res"></span>
+          <button class="btn btn-p btn-sm" type="button" onclick="dvAiPrimarySave()">{{ (i18n or {}).get('dv_ai_p_btn_save', "切换并生效") }}</button>
+        </div>
+      </div>
+
+      <div style="height:1px;background:var(--bd);margin:1rem 0"></div>
+
       <!-- ☁️ 云端凭证 / 备用 Key 池（P-KeyPool 2026-07-12）：主 Key 挂了自动切备用；
            此卡=余额/探活体检 + 备用 Key 编辑（保存即热生效，无需重启）。 -->
       <div class="f-row">
@@ -767,6 +794,55 @@ async function testApiConn(opts){
 }
 
 // ── ☁️ 云端凭证体检 / 备用 Key 池（P-KeyPool 2026-07-12）──────────
+// 🏠 主对话模式（ai.primary）：读 GET /api/setup/ai 或 cloud-credentials.primary；
+// 写 POST /api/setup/ai-primary → overlay + reload_ai_runtime。
+function _dvAiPrimaryPaint(p){
+  p = p || {};
+  const st = document.getElementById('dv-ai-primary-status');
+  const eff = p.effective || p.configured || 'cloud';
+  document.querySelectorAll('input[name="dv-ai-primary"]').forEach(el=>{
+    el.checked = (el.value === (p.configured || eff));
+  });
+  if(!st) return;
+  const bits = [];
+  bits.push('<b>' + _dvccEsc(eff) + '</b>');
+  if(p.local_model) bits.push(window.T('dv_ai_p_local_model') + ' ' + _dvccEsc(p.local_model));
+  if(!p.local_ready) bits.push('<span style="color:var(--th-ink-red6,#b91c1c)">' + window.T('dv_ai_p_not_ready') + '</span>');
+  if(p.divergent) bits.push('<span style="color:var(--th-ink-amber7,#b45309)">'
+    + window.Tf('dv_ai_p_divergent', {configured: p.configured || '?', effective: eff}) + '</span>');
+  st.innerHTML = bits.join(' · ');
+}
+
+async function dvAiPrimaryLoad(){
+  try{
+    const r = await apiFetch('/api/setup/ai', {credentials:'same-origin'});
+    const d = await r.json();
+    if(d && d.ok && d.primary) _dvAiPrimaryPaint(d.primary);
+  }catch(e){ /* 卡片缺席即可 */ }
+}
+
+async function dvAiPrimarySave(){
+  const res = document.getElementById('dv-ai-primary-res');
+  const picked = document.querySelector('input[name="dv-ai-primary"]:checked');
+  if(!picked){ if(res){ res.textContent = window.T('dv_ai_p_need_pick'); res.className = 'save-result err'; } return; }
+  if(res){ res.textContent = window.T('dv_ai_p_saving'); res.className = 'save-result'; }
+  try{
+    const r = await apiFetch('/api/setup/ai-primary', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({primary: picked.value}),
+    }, {timeoutMs: 60000});
+    const d = await r.json();
+    if(!d.ok){ if(res){ res.textContent = '✗ ' + (d.detail || ''); res.className = 'save-result err'; } return; }
+    if(res){
+      res.textContent = '✓ ' + (d.detail || '') + (d.ai_ready ? '' : (' · ' + window.T('dv_cc_js_reload_warn')));
+      res.className = 'save-result ok';
+    }
+    if(d.primary) _dvAiPrimaryPaint(d.primary);
+  }catch(e){
+    if(res){ res.textContent = '✗ ' + (e.message || window.T('inbox.voice.unknown_err')); res.className = 'save-result err'; }
+  }
+}
+
 // 主 Key 失效自动切备用（ai.key_pool）；此卡读 /api/setup/cloud-credentials 出
 // 余额/探活/顶班现状，编辑走 POST /api/setup/key-pool（掩码回传保真密钥，热生效）。
 let _dvccKeys = [];
@@ -789,7 +865,7 @@ function _dvccRender(rt, pings){
     const r = rt[k.name] || {};
     const p = pings[k.name];
     const chips = [];
-    if(r.cooling) chips.push('<span class="ai-pill" style="color:var(--th-ink-red6,#dc2626)">' + window.Tf('dv_cc_js_cooling', {s: r.cooldown_remaining_sec || 0}) + '</span>');
+    if(r.cooling) chips.push('<span class="ai-pill" style="color:var(--th-ink-red6,#b91c1c)">' + window.Tf('dv_cc_js_cooling', {s: r.cooldown_remaining_sec || 0}) + '</span>');
     if(p) chips.push('<span class="ai-pill">' + window.T('dv_cc_js_ping') + ' ' + (p.ok ? '🟢' : '🔴') + '</span>');
     return '<div style="display:flex;gap:.6rem;align-items:center;font-size:.8rem;border:1px solid var(--bd);border-radius:8px;padding:.35rem .6rem">'
       + '<b style="min-width:90px">' + _dvccEsc(k.name) + '</b>'
@@ -813,27 +889,32 @@ async function dvccLoad(probe){
       const icon = b.status === 'low' ? '🔴' : (b.status === 'auth_failed' ? '⛔' : (b.status === 'ok' ? '🟢' : '⚪'));
       const bad = (b.status === 'low' || b.status === 'auth_failed');
       parts.push('<span style="margin-right:.9rem">' + icon + ' ' + _dvccEsc(b.provider) + ' '
-        + window.T('dv_cc_js_bal') + ' <b style="color:' + (bad ? 'var(--th-ink-red6,#dc2626)' : 'inherit') + '">' + _dvccEsc(bal) + '</b></span>');
+        + window.T('dv_cc_js_bal') + ' <b style="color:' + (bad ? 'var(--th-ink-red6,#b91c1c)' : 'inherit') + '">' + _dvccEsc(bal) + '</b></span>');
     });
     const stats = (d.pool && d.pool.stats) || {};
     if(stats.calls){
       parts.push('<span>🛟 ' + window.Tf('dv_cc_js_takeover', {n: stats.ok || 0})
         + (stats.last_key ? (' · ' + _dvccEsc(stats.last_key)) : '') + '</span>');
     }
-    // 出话分布（进程启动以来）：主链 / 备用池 / 本地兜底 各出了多少话、花了多少钱
+    // 出话分布：云主链 / 备用池 / 本地主链 / 本地兜底（local_primary 独立，防隐私档归因失真）
     const u = d.usage || {};
-    if(u.primary || u.key_pool || u.local_fallback){
+    if(u.primary || u.key_pool || u.local_fallback || u.local_primary){
       const seg = [];
       [['primary', 'dv_cc_js_u_primary'], ['key_pool', 'dv_cc_js_u_pool'],
+       ['local_primary', 'dv_ai_p_js_u_local_primary'],
        ['local_fallback', 'dv_cc_js_u_local']].forEach(pair=>{
         const g = u[pair[0]];
         if(g && g.calls){
+          const lat = Number(g.latency_avg_ms) || 0;
           seg.push(window.T(pair[1]) + ' ' + g.calls
-            + (g.cost_usd ? ('($' + Number(g.cost_usd).toFixed(3) + ')') : ''));
+            + (g.cost_usd ? ('($' + Number(g.cost_usd).toFixed(3) + ')') : '')
+            + (lat > 0 ? (' ' + (lat / 1000).toFixed(1) + 's') : ''));
         }
       });
       if(seg.length) parts.push('<span style="margin-left:.9rem">📊 ' + window.T('dv_cc_js_usage') + ' ' + seg.join(' · ') + '</span>');
     }
+    // 同步主对话模式卡（cloud-credentials 已带回 primary 快照，免二次请求）
+    if(d.primary) _dvAiPrimaryPaint(d.primary);
     st.innerHTML = parts.join('') || window.T('dv_cc_js_no_balance');
     _dvccKeys = ((d.pool && d.pool.keys) || []).map(k=>({
       name: k.name, api_key: k.api_key_masked || '',
@@ -902,6 +983,7 @@ async function dvccProbe(){
     });
   }
   dvccLoad(false);
+  dvAiPrimaryLoad();
 })();
 
 async function testWebhook(){

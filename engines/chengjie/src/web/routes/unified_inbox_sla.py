@@ -296,8 +296,16 @@ def _escalation_snapshot(request: Request) -> Dict[str, Any]:
         today_count = inbox.count_escalations_since(midnight)
     except Exception:
         logger.debug("escalation today_count 失败（已忽略）", exc_info=True)
+    # 永久搁置存量：这些会话被刻意移出一切告警口径（客户回复才回来），升级快照
+    # 作为团队安全网顺带点名存量，防止「永久搁置」沦为无人知晓的沉默坟场。
+    snoozed_forever = 0
+    try:
+        snoozed_forever = int(inbox.snooze_counts().get("permanent") or 0)
+    except Exception:
+        logger.debug("escalation snoozed_forever 读取失败（已忽略）", exc_info=True)
     return {"ok": True, "count": len(items), "items": items[:50],
-            "today_count": today_count, "crit_sec": sla["crit"]}
+            "today_count": today_count, "crit_sec": sla["crit"],
+            "snoozed_forever": snoozed_forever}
 
 
 def _sla_detail(

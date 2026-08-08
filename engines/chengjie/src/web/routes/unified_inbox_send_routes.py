@@ -155,21 +155,36 @@ async def _deliver_bubble_parts(
     sent = 0
     for i, part in enumerate(parts):
         if i > 0:
-            if _orch is not None:
-                try:
-                    await _orch.send_chat_action(
-                        platform, account_id, str(chat_key), "typing")
-                except Exception:
-                    pass
+            # 条间「想（静默）→ 打字（挂正在输入续挂）」：与 autosend/A 线同一
+            # 节奏模型——客户视角是同一个人设在打字，不该因入口不同而两种手感。
             try:
-                await asyncio.sleep(inter_part_delay_sec(
+                _gap = inter_part_delay_sec(
                     part,
                     gap_sec_lo=float(bcfg["gap_sec_lo"]),
                     gap_sec_hi=float(bcfg["gap_sec_hi"]),
                     per_char_sec=float(bcfg["per_char_sec"]),
-                ))
+                    max_gap_sec=float(bcfg.get("max_gap_sec", 6.0)),
+                )
             except Exception:
-                await asyncio.sleep(0.8)
+                _gap = 0.8
+            try:
+                from src.inbox.humanize import (
+                    estimate_typing_lead,
+                    run_presend_humanization,
+                )
+                _tp_part = None
+                if _orch is not None:
+                    async def _tp_part(_action, _p=platform,
+                                       _a=account_id, _c=str(chat_key)):
+                        await _orch.send_chat_action(_p, _a, _c, "typing")
+                await run_presend_humanization(
+                    delay=_gap, action="typing", typing=_tp_part,
+                    sleep=asyncio.sleep,
+                    typing_lead_sec=estimate_typing_lead(
+                        part, per_char_sec=float(bcfg["per_char_sec"])),
+                )
+            except Exception:
+                await asyncio.sleep(_gap)
         try:
             res = await send_via_adapters(
                 request, platform, account_id, chat_key, part, adapters,
@@ -423,6 +438,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                         max_chars=int(_bubble_cfg["max_chars"]),
                         min_tail_chars=int(_bubble_cfg["min_tail_chars"]),
                         min_total_chars=int(_bubble_cfg["min_total_chars"]),
+                        per_sentence=bool(_bubble_cfg.get("per_sentence")),
                     )
                     if len(_cand) >= 2:
                         _bubble_parts = _cand
@@ -632,100 +648,199 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             _dedup.release(_dedup_scope, _client_msg_id)
             raise HTTPException(501, tr(request, "err.inbox.voice_unsupported"))
 
+        # 语音出站断档台账（2026-08-05 P1）：坐席手动链此前不记账 → 手动失败对
+        # watchdog._check_voice_outage 不可见（自动链低流量时，坐席连续手动失败
+        # 本是最早的断档信号却进不了告警窗）。只记「已决定发语音」之后的最终成败；
+        # 能力缺失(501)/配额(402)/幂等重复/语言路由拒发属策略早退，不记。
+        def _vo_record(ok: bool, reason: str = "") -> None:
+            try:
+                from src.ai.voice_outage import get_voice_outage
+                get_voice_outage().record_voice_attempt(ok, "manual", reason)
+            except Exception:
+                pass
+
         # P0-4/C3：字符额度用尽且 licensing.enforce 开 → 402 + i18n（明确错误码，
         # 而非让 TTS 深处报一串英文 code）。闸门在 TTSPipeline 内还有兜底。
         from src.licensing.quota_store import check_license_quota
         if not check_license_quota()["allowed"]:
             raise HTTPException(402, tr(request, "err.lic.chars_exhausted"))
 
-        # 解析语音配置（含声音克隆 voice_profile），允许调用方临时覆盖
-        cm = getattr(request.app.state, "config_manager", None)
-        raw_cfg = (getattr(cm, "config", None) or {}) if cm else {}
-        from src.ai.persona_voice import resolve_effective_voice_context
-        voice_ctx = resolve_effective_voice_context(
-            raw_cfg, persona_id=persona_id, chat_key=chat_key or None,
-            contact_key=chat_key or None, platform=platform,
-            account_id=account_id, text=text)
-        voice_cfg = voice_ctx.get("voice_cfg") or {}
-        _explicit_voice_override = isinstance(cfg_override, dict) and any(
-            cfg_override.get(k) for k in ("voice", "backend", "voice_profile"))
-        if isinstance(cfg_override, dict):
-            voice_cfg.update({k: v for k, v in cfg_override.items() if v not in (None, "")})
-        # 语言路由（与自动语音同口径）：edge 音色对齐文本语种，防止手动语音也踩
-        # 「ja 音色念中文」类错配；坐席显式覆写 voice/backend 时尊重人工选择不路由。
-        # 语种明确但无音色映射 → 明确报错回落（发错语言的语音比不发更糟）。
-        if not _explicit_voice_override:
+        # ── 所听即所发（P1 2026-08-05）：优先复用坐席刚试听过的产物 ──────────
+        # 试听与发送此前是两次独立合成——坐席听到 A 声、客户可能收到 B 声（克隆
+        # 链中途恢复/掉线时 provider 漂移），同一句话还烧两份 TTS/字符额度。
+        # 前端把 tts-test 返回的 filename 随发送带回；校验（同文本指纹/同音色键/
+        # 未过期/sidecar 完整）通过 → 试听音频直接进出站管线：听到什么发什么。
+        # 任何校验不过一律回落现场合成，复用簿记绝不新增发送失败面。
+        # 质量闸门在复用分支刻意跳过：坐席的耳朵在试听时已把关，比时长启发强。
+        _reuse = None
+        _preview_fn = str(body.get("preview_filename") or "").strip()
+        if _preview_fn:
             try:
-                from src.ai.lang_voice_route import (
-                    is_reject_tag, route_voice_cfg_for_text)
-                voice_cfg, _lang_route = route_voice_cfg_for_text(
-                    voice_cfg, text, raw_cfg)
-                if is_reject_tag(_lang_route):
-                    return {"ok": False, "reason": "lang_mismatch",
-                            "message": tr(request, "err.inbox.voice_lang_mismatch",
-                                          lang=_lang_route.split(":", 1)[-1])}
+                from src.integrations.shared.tts_preview import (
+                    resolve_reusable_preview)
+                _reuse, _rwhy = resolve_reusable_preview(
+                    _preview_fn, text=text, persona_key=str(persona_id or ""))
+                if _reuse is None:
+                    logger.info(
+                        "[inbox/voice-send] 试听复用未命中(%s) fn=%s → 现场合成",
+                        _rwhy, _preview_fn[:64])
             except Exception:
-                logger.debug("[inbox/voice-send] 语言路由异常（忽略）", exc_info=True)
-        voice_cfg["enabled"] = True
+                _reuse = None
+                logger.debug("[inbox/voice-send] 试听复用解析异常（回落合成）",
+                             exc_info=True)
+        if _reuse is not None:
+            # 复制后再消费：出站管线会转码并删除源文件；直接喂原件会让「发送
+            # 中途失败 → 重试」时试听产物已被烧掉（回落合成能兜底，但白丢复用）。
+            import shutil
+            import tempfile as _tf
+            import uuid as _uuid
+            from pathlib import Path as _P
+            from types import SimpleNamespace as _NS
+            _meta = dict(_reuse.get("meta") or {})
+            try:
+                _wdir = _P(_tf.gettempdir()) / "unified_voice_send"
+                _wdir.mkdir(parents=True, exist_ok=True)
+                _work = _wdir / (
+                    f"reuse-{_uuid.uuid4().hex[:8]}{_reuse['path'].suffix}")
+                shutil.copy2(_reuse["path"], _work)
+            except Exception:
+                _reuse = None
+                logger.debug("[inbox/voice-send] 试听产物复制失败（回落合成）",
+                             exc_info=True)
+            else:
+                voice_ctx = {
+                    "persona_id": _meta.get("resolved_persona_id") or "",
+                    "persona_source": "preview_reuse",
+                    "emotion": (_NS(emotion=str(_meta.get("emotion") or ""))
+                                if _meta.get("emotion") else None),
+                }
+                result = _NS(
+                    ok=True, audio_path=str(_work), error="",
+                    provider=str(_meta.get("provider") or ""),
+                    voice=str(_meta.get("voice") or ""),
+                    duration_sec=float(_meta.get("duration_sec") or -1.0),
+                    latency_ms=0,
+                    format=str(_meta.get("format") or ""),
+                    extra={"fallback_from": str(_meta.get("fallback_from") or ""),
+                           "reused_preview": True},
+                )
+        if _reuse is None:
+            # 解析语音配置（含声音克隆 voice_profile），允许调用方临时覆盖
+            cm = getattr(request.app.state, "config_manager", None)
+            raw_cfg = (getattr(cm, "config", None) or {}) if cm else {}
+            # 账号默认人设（2026-08-05 P0，与 A 线 sender._acc_pid / tts-test 同口径）：
+            # 此前缺这一参，chat 未绑定人设时回落到域默认而非账号人设——与自动语音
+            # 链解析结果分叉（同一会话，AI 自动发一种声、坐席手动发另一种声）。
+            from src.ai.persona_voice import (
+                resolve_account_persona_id, resolve_effective_voice_context)
+            _acc_pid = ""
+            try:
+                _acc_pid = resolve_account_persona_id(
+                    raw_cfg, platform, account_id) or ""
+            except Exception:
+                _acc_pid = ""
+            voice_ctx = resolve_effective_voice_context(
+                raw_cfg, persona_id=persona_id, chat_key=chat_key or None,
+                account_persona_id=_acc_pid or None,
+                contact_key=chat_key or None, platform=platform,
+                account_id=account_id, text=text)
+            voice_cfg = voice_ctx.get("voice_cfg") or {}
+            _explicit_voice_override = isinstance(cfg_override, dict) and any(
+                cfg_override.get(k) for k in ("voice", "backend", "voice_profile"))
+            if isinstance(cfg_override, dict):
+                voice_cfg.update({k: v for k, v in cfg_override.items() if v not in (None, "")})
+            # 语言路由（与自动语音同口径）：edge 音色对齐文本语种，防止手动语音也踩
+            # 「ja 音色念中文」类错配；坐席显式覆写 voice/backend 时尊重人工选择不路由。
+            # 语种明确但无音色映射 → 明确报错回落（发错语言的语音比不发更糟）。
+            if not _explicit_voice_override:
+                try:
+                    from src.ai.lang_voice_route import (
+                        is_reject_tag, route_voice_cfg_for_text)
+                    voice_cfg, _lang_route = route_voice_cfg_for_text(
+                        voice_cfg, text, raw_cfg)
+                    if is_reject_tag(_lang_route):
+                        return {"ok": False, "reason": "lang_mismatch",
+                                "message": tr(request, "err.inbox.voice_lang_mismatch",
+                                              lang=_lang_route.split(":", 1)[-1])}
+                except Exception:
+                    logger.debug("[inbox/voice-send] 语言路由异常（忽略）", exc_info=True)
+            voice_cfg["enabled"] = True
 
-        # 合成到临时目录
-        import tempfile
-        from pathlib import Path as _Path
-        out_dir = _Path(tempfile.gettempdir()) / "unified_voice_send"
-        voice_cfg["out_dir"] = str(out_dir)
-        from src.ai.tts_pipeline import TTSPipeline
-        try:
-            tts = TTSPipeline(voice_cfg)
-            result = await tts.synthesize(
-                text, timeout_sec=45.0, emotion=voice_ctx.get("emotion"))
-        except Exception as ex:  # noqa: BLE001
-            _dedup.release(_dedup_scope, _client_msg_id)
-            raise HTTPException(502, tr(request, "err.inbox.tts_failed", err=ex))
-        if not result.ok or not result.audio_path:
-            _dedup.release(_dedup_scope, _client_msg_id)
-            # 坐席链此前只有 debug 日志：合成失败在 app.log 里查不到原因（全天零记录），
-            # 排障只能靠坐席口述。失败/成功各一行 INFO 是后续所有诊断的地基。
-            logger.warning(
-                "[inbox/voice-send] 合成失败 platform=%s acct=%s pid=%s "
-                "len=%d provider=%s err=%s",
-                platform, account_id, voice_ctx.get("persona_id") or "",
-                len(text), getattr(result, "provider", "") or "",
-                getattr(result, "error", "") or "unknown")
-            return {"ok": False, "reason": result.error or "tts_failed",
-                    "message": tr(request, "err.inbox.tts_failed",
-                                  err=result.error or "unknown")}
+            # 合成到临时目录
+            import tempfile
+            from pathlib import Path as _Path
+            out_dir = _Path(tempfile.gettempdir()) / "unified_voice_send"
+            voice_cfg["out_dir"] = str(out_dir)
+            from src.ai.tts_pipeline import TTSPipeline
+            try:
+                tts = TTSPipeline(voice_cfg)
+                result = await tts.synthesize(
+                    text, timeout_sec=45.0, emotion=voice_ctx.get("emotion"))
+            except Exception as ex:  # noqa: BLE001
+                _dedup.release(_dedup_scope, _client_msg_id)
+                _vo_record(False, f"tts_exception:{type(ex).__name__}")
+                raise HTTPException(502, tr(request, "err.inbox.tts_failed", err=ex))
+            if not result.ok or not result.audio_path:
+                _dedup.release(_dedup_scope, _client_msg_id)
+                _vo_record(False, str(getattr(result, "error", "") or "tts_failed"))
+                # 坐席链此前只有 debug 日志：合成失败在 app.log 里查不到原因（全天零记录），
+                # 排障只能靠坐席口述。失败/成功各一行 INFO 是后续所有诊断的地基。
+                logger.warning(
+                    "[inbox/voice-send] 合成失败 platform=%s acct=%s pid=%s "
+                    "len=%d provider=%s err=%s",
+                    platform, account_id, voice_ctx.get("persona_id") or "",
+                    len(text), getattr(result, "provider", "") or "",
+                    getattr(result, "error", "") or "unknown")
+                # 可行动分类（2026-08-05 P0）：hub 音色源不可用 / 音色登记不完整
+                # 这两类失败给坐席「下一步做什么」的人话（换系统通用音色/重新登记），
+                # 其余保持原始错误码口径。reason 字段维持机器可读。
+                _err = result.error or "tts_failed"
+                _msg = ""
+                try:
+                    from src.ai.tts_pipeline import classify_voice_error
+                    _cls = classify_voice_error(_err)
+                    if _cls == "hub_source_down":
+                        _msg = tr(request, "err.voice.hub_source_down")
+                    elif _cls == "profile_not_ready":
+                        _msg = tr(request, "err.voice.profile_not_ready")
+                except Exception:
+                    _msg = ""
+                return {"ok": False, "reason": _err,
+                        "message": _msg or tr(request, "err.inbox.tts_failed",
+                                              err=_err)}
 
-        # 截断/坏音质量闸门（与 A 线 voice_reply、B 线 autosend 同口径）：时长低于
-        # 该文本的物理最快语速 = 半截杂音，宁缺毋滥不发给客户（坐席可改文案重试）。
-        try:
-            from src.ai.tts_quality import looks_truncated, resolve_quality_gate
-            _qg = resolve_quality_gate(voice_cfg)
-            _dur = float(getattr(result, "duration_sec", 0.0) or 0.0)
-            if _qg["enabled"]:
-                _bad, _why = looks_truncated(
-                    text, _dur,
-                    min_sec_per_unit=_qg["min_sec_per_unit"],
-                    min_units=_qg["min_units"])
-                if _bad:
-                    logger.warning(
-                        "[inbox/voice-send] 疑似截断坏音(%s) provider=%s dur=%.1fs "
-                        "→ 拒发 platform=%s acct=%s",
-                        _why, getattr(result, "provider", "") or "", _dur,
-                        platform, account_id)
-                    try:
-                        from src.ai.avatar_voice_stats import get_avatar_voice_stats
-                        get_avatar_voice_stats().record_truncation_reject()
-                    except Exception:
-                        pass
-                    try:
-                        os.remove(result.audio_path)
-                    except Exception:
-                        pass
-                    return {"ok": False, "reason": "truncated",
-                            "message": tr(request, "err.inbox.tts_failed",
-                                          err=f"truncated:{_why}")}
-        except Exception:
-            logger.debug("[inbox/voice-send] 质量闸门异常（忽略）", exc_info=True)
+            # 截断/坏音质量闸门（与 A 线 voice_reply、B 线 autosend 同口径）：时长低于
+            # 该文本的物理最快语速 = 半截杂音，宁缺毋滥不发给客户（坐席可改文案重试）。
+            try:
+                from src.ai.tts_quality import looks_truncated, resolve_quality_gate
+                _qg = resolve_quality_gate(voice_cfg)
+                _dur = float(getattr(result, "duration_sec", 0.0) or 0.0)
+                if _qg["enabled"]:
+                    _bad, _why = looks_truncated(
+                        text, _dur,
+                        min_sec_per_unit=_qg["min_sec_per_unit"],
+                        min_units=_qg["min_units"])
+                    if _bad:
+                        logger.warning(
+                            "[inbox/voice-send] 疑似截断坏音(%s) provider=%s dur=%.1fs "
+                            "→ 拒发 platform=%s acct=%s",
+                            _why, getattr(result, "provider", "") or "", _dur,
+                            platform, account_id)
+                        try:
+                            from src.ai.avatar_voice_stats import get_avatar_voice_stats
+                            get_avatar_voice_stats().record_truncation_reject()
+                        except Exception:
+                            pass
+                        try:
+                            os.remove(result.audio_path)
+                        except Exception:
+                            pass
+                        _vo_record(False, f"truncated:{_why}")
+                        return {"ok": False, "reason": "truncated",
+                                "message": tr(request, "err.inbox.tts_failed",
+                                              err=f"truncated:{_why}")}
+            except Exception:
+                logger.debug("[inbox/voice-send] 质量闸门异常（忽略）", exc_info=True)
 
         # 转 OGG/Opus，使其在 Telegram/WhatsApp 呈现为"语音消息"（ffmpeg 缺失则原样发）
         audio_path = result.audio_path
@@ -745,6 +860,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             local, url, _mt = save_outbound_media(
                 platform, account_id, os.path.basename(audio_path), data)
         except Exception as ex:  # noqa: BLE001
+            _vo_record(False, "save_failed")
             raise HTTPException(502, tr(request, "err.inbox.voice_save_failed", err=ex))
         finally:
             try:
@@ -753,14 +869,20 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 pass
 
         _send_agent = _session_agent(request)
+        # P1-3：镜像行带「谁的音色」（人设显示名，best-effort 空串安全）——坐席手动
+        # 选别的人设音色发语音时，气泡徽标能看出「这条不是会话绑定人设的声音」。
+        from src.ai.persona_voice import persona_display_name
+        _voice_sender_name = persona_display_name(voice_ctx.get("persona_id"))
         try:
             res = await orch.send_media(
                 platform, account_id, chat_key,
                 media_path=local, media_url=url, media_type="voice", caption=caption,
-                inbox_text=text)
+                inbox_text=text, sender_name=_voice_sender_name)
         except Exception as ex:  # noqa: BLE001
             _dedup.release(_dedup_scope, _client_msg_id)  # 失败释放：重试可再发
+            _vo_record(False, "deliver_failed")
             raise HTTPException(502, tr(request, "err.inbox.voice_send_failed", err=ex))
+        _vo_record(True)
         cid = _conv_id(platform, account_id, chat_key)
         try:
             ibx = _inbox_store(request)
@@ -786,18 +908,21 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         # 让坐席这条链在 app.log 里可见（provider/延迟/口语化是否生效一目了然）。
         logger.info(
             "[inbox/voice-send] 已发语音 platform=%s acct=%s pid=%s dur=%sms "
-            "provider=%s fallback=%s len=%d colloq=%s/%s prerender=%s",
+            "provider=%s fallback=%s len=%d colloq=%s/%s prerender=%s reuse=%s",
             platform, account_id, voice_meta["persona_id"],
             getattr(result, "latency_ms", 0), voice_meta["provider"] or "-",
             voice_meta["fallback_from"] or "-", len(text),
             bool(_extra.get("colloquial")), bool(_extra.get("colloquial_llm")),
-            voice_meta["provider"] == "prerendered")
+            voice_meta["provider"] == "prerendered",
+            bool(_extra.get("reused_preview")))
         return {
             "ok": True, "result": res, "media_ref": url, "media_type": "voice",
             "duration_sec": getattr(result, "duration_sec", -1.0),
             "provider": getattr(result, "provider", ""),
             "voice": getattr(result, "voice", ""),
             "voice_meta": voice_meta,
+            # 所听即所发：true=客户收到的就是坐席试听的那份音频（零二次合成）
+            "reused_preview": bool(_extra.get("reused_preview")),
         }
 
     @app.get("/api/unified-inbox/send-caps")
@@ -821,12 +946,30 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         acc = str(account_id or "default")
         can_media = False
         can_voice = False
+        caps_reason = ""
         try:
             from src.integrations.account_orchestrator import get_orchestrator
             can_media = bool(get_orchestrator().owns_media(plat, acc))
             can_voice = can_media
         except Exception:
             logger.debug("send-caps 探测失败（按不支持处理）", exc_info=True)
+        # official 账号的诚实能力覆盖：官方 worker 类上恒有 send_media（owns_media
+        # 恒 True），但 Zalo 运行时 not_supported、LINE/IG 未配公网 URL 时 no_public_url
+        # ——能力位若不按平台分支收敛，坐席就会「按钮能点、点了报错」。
+        if can_media:
+            try:
+                from src.integrations.account_registry import get_account_registry
+                row = get_account_registry().get(plat, acc) or {}
+                if str(row.get("mode") or "") == "official":
+                    from src.integrations.official_api_worker import official_send_caps
+                    oc = official_send_caps(plat, getattr(
+                        getattr(request.app.state, "config_manager", None),
+                        "config", None) or {})
+                    can_media = bool(oc.get("can_media"))
+                    can_voice = bool(oc.get("can_voice"))
+                    caps_reason = str(oc.get("reason") or "")
+            except Exception:
+                logger.debug("send-caps official 覆盖失败（保持结构判定）", exc_info=True)
         voice_mode = "composer" if can_voice else "none"
         if not can_voice and _rpa_auto_voice_enabled(request, plat, acc):
             voice_mode = "auto_only"
@@ -854,5 +997,8 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             "ok": True, "platform": plat, "account_id": acc,
             "can_media": can_media, "can_voice": can_voice,
             "voice_mode": voice_mode,
+            # 官方通道能力受限时的机器可读原因（zalo_api_no_media / needs_public_url），
+            # 前端 tooltip 可按码出更具体的解释；空串=无特殊限制
+            "caps_reason": caps_reason,
             "bubbles": _bubbles_on, "bubbles_max_parts": _bubbles_max,
         }

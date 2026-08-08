@@ -39,6 +39,16 @@ from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
 
+# 各平台「边车 worker」的登录 mode——即会主动 POST /session-status 的那些服务所对应的
+# mode（messenger-web=web / whatsapp-baileys=protocol，与各自 login provider 落库口径一致）。
+# session-status 收到 authorized 兜底提升账号时据此钉正 mode：新建/修复的行必须落在
+# 有 worker 工厂的 mode 上（get_worker_factory(platform, mode)），否则账号 online 了却拉不起
+# worker。无映射的平台（不经边车 push）→ None，upsert 时不动既有 mode。
+_EDGE_WORKER_WEB_MODE: Dict[str, str] = {
+    "messenger": "web",
+    "whatsapp": "protocol",
+}
+
 # 告警渠道 = 整个实例的运营配置：配错/删渠道 → 全实例告警瞎，且渠道明细含明文群
 # webhook 地址（泄露即他人可往群里发东西）。故「读明细 + 写」收敛到运营角色。
 # 用**排除法**（拒 agent/viewer，放行 master/admin 与 Bearer 桌面壳＝装机主人、
@@ -151,6 +161,38 @@ _TG_CLIENT_COOLDOWN_SEC = 60.0
 # ——把它降到 8s 缩小「首个牺牲者」的等待，同时仍远大于正常延迟（不误伤慢网）。
 _TG_FETCH_TIMEOUT_SEC = 8.0
 
+# WhatsApp/Messenger 头像上游（Node worker）的账号级熔断——与 _TG_CLIENT_BAD_UNTIL 同哲学。
+# 2026-08-05 实锤：WA socket 半死时 Baileys profilePictureUrl **无限挂起**（Node 层无超时），
+# Python 侧旧默认 20s 超时 → 浏览器里每个头像挂满 20s；列表几行 WA 会话就把同源 6 连接
+# 占死 → 整页请求（含 ?conv= 深链救援）饿死。修法：① 回源短超时 4s（正常 ~百 ms，只有
+# 挂死才吃到）；② 上游**超时**（≠业务快败——那说明服务活着）→ 开 60s 账号冷却窗，窗内
+# 同账号头像秒 404（前端回落首字母头像），只有首个请求付超时成本；成功回源即清除。
+# 刻意不写 per-peer .none 负缓存：挂死 ≠ 无头像，恢复后同一 peer 应立即可重试。
+_PROTO_AVATAR_BAD_UNTIL: Dict[str, float] = {}
+_PROTO_AVATAR_COOLDOWN_SEC = 60.0
+_PROTO_AVATAR_FETCH_TIMEOUT_SEC = 4.0
+
+
+def _proto_avatar_cooling(platform: str, account_id: str) -> bool:
+    """该账号的头像回源是否处于熔断冷却窗（过期自清）。"""
+    key = f"{platform}:{account_id}"
+    until = _PROTO_AVATAR_BAD_UNTIL.get(key)
+    if until is None:
+        return False
+    if time.monotonic() >= until:
+        _PROTO_AVATAR_BAD_UNTIL.pop(key, None)
+        return False
+    return True
+
+
+def _mark_proto_avatar_bad(platform: str, account_id: str) -> None:
+    _PROTO_AVATAR_BAD_UNTIL[f"{platform}:{account_id}"] = (
+        time.monotonic() + _PROTO_AVATAR_COOLDOWN_SEC)
+
+
+def _clear_proto_avatar_bad(platform: str, account_id: str) -> None:
+    _PROTO_AVATAR_BAD_UNTIL.pop(f"{platform}:{account_id}", None)
+
 
 # resolve-peer 端点并发上限：占用的是 starlette 共享线程池（全站 sync 端点共用 ~40 线程），
 # 断网时每个 resolve 挂满 8s，无上限会把池吃空。超限直接快败（best-effort 补名，可重试）。
@@ -248,6 +290,222 @@ def read_tg_history_sync_persisted(account_id: str) -> float:
         return 0.0
 
 
+def start_tg_history_sync(
+    app: Any, store: Any, account_id: str, *,
+    dialogs_limit: int = 100, per_chat: int = 100,
+) -> Dict[str, Any]:
+    """触发一次 Telegram 账号级历史同步（后台跑在该账号 pyrogram 自身 loop）。
+
+    手动路由与看门狗「自动补缺口」共用本入口：同一冷却检查、同一单飞闸
+    （``_tg_hist_try_start``）、同一进度登记表——不会出现自动/手动各跑一份。
+    返回触发结果（ok/reason/started/already_running + 进度快照）。
+    """
+    dialogs_limit = max(1, min(500, int(dialogs_limit or 100)))
+    per_chat = max(1, min(100, int(per_chat or 30)))
+    if _tg_client_cooling(account_id):
+        return {"ok": False, "reason": "client_cooling"}
+    # 全量深同步战役在跑 → 浅同步让路（同账号别叠两份 dialogs/history RPC；
+    # 反方向的互斥在 full-sync 路由里，两头都拦）。
+    try:
+        from src.integrations.tg_full_sync import full_sync_snapshot
+        if full_sync_snapshot(account_id).get("state") == "running":
+            return {"ok": False, "reason": "busy_full_sync"}
+    except Exception:
+        pass
+    pyro = _get_tg_pyro_for_account(app, account_id)
+    loop = getattr(pyro, "loop", None)
+    if pyro is None or loop is None or not loop.is_running():
+        return {"ok": False, "reason": "client_unavailable"}
+    if not _tg_hist_try_start(account_id):
+        return {"ok": True, "already_running": True,
+                **tg_history_sync_snapshot(account_id)}
+    import asyncio
+    from src.inbox.ingest import ingest_thread
+    from src.integrations.protocol_bridge import sync_telegram_history
+
+    def _ingest(chat: Dict[str, Any], msgs: List[Dict[str, Any]]) -> int:
+        return ingest_thread(store, chat, msgs)
+
+    def _progress(done: int, total: int, messages: int) -> None:
+        _tg_hist_update(account_id, dialogs_done=done, dialogs_total=total,
+                        messages=messages)
+
+    async def _run() -> None:
+        try:
+            stats = await sync_telegram_history(
+                pyro, account_id, dialogs_limit=dialogs_limit,
+                per_chat=per_chat, ingest=_ingest, progress=_progress)
+            finished = time.time()
+            dialogs_n = int(stats.get("dialogs") or 0)
+            messages_n = int(stats.get("messages") or 0)
+            _tg_hist_update(
+                account_id, state="done", finished_at=finished,
+                dialogs_done=dialogs_n, messages=messages_n)
+            _persist_tg_history_sync(
+                account_id, finished_at=finished,
+                dialogs=dialogs_n, messages=messages_n)
+        except Exception as exc:
+            logger.debug("[protocol] telegram 历史同步失败", exc_info=True)
+            _tg_hist_update(account_id, state="error",
+                            error=str(exc)[:200], finished_at=time.time())
+
+    asyncio.run_coroutine_threadsafe(_run(), loop)
+    return {"ok": True, "started": True, **tg_history_sync_snapshot(account_id)}
+
+
+def tg_autosync_pick(
+    rows: List[Dict[str, Any]], now: float, interval_hours: float,
+    max_pick: int = 1,
+) -> List[str]:
+    """纯函数：从账号行里挑「到期该自动同步」的 account_id（最久未同步优先）。
+
+    row 契约：``{"account_id": str, "last_sync_ts": float}``（后者=持久化戳与
+    进程内 finished_at 取大；0=从未同步——排最前，新接入账号第一轮就补齐）。
+    interval<=0 / max_pick<=0 → 空列表（等于关闭）。
+    """
+    try:
+        iv = float(interval_hours or 0)
+    except (TypeError, ValueError):
+        iv = 0.0
+    if iv <= 0 or int(max_pick or 0) <= 0:
+        return []
+    due: List[tuple] = []
+    for r in rows or []:
+        aid = str((r or {}).get("account_id") or "")
+        if not aid:
+            continue
+        try:
+            last = float((r or {}).get("last_sync_ts") or 0)
+        except (TypeError, ValueError):
+            last = 0.0
+        if (float(now) - last) >= iv * 3600.0:
+            due.append((last, aid))
+    due.sort(key=lambda t: t[0])
+    return [aid for _, aid in due[: int(max_pick)]]
+
+
+def maybe_autostart_tg_history_sync(app: Any, cfg: Dict[str, Any]) -> List[str]:
+    """看门狗钩子：给到期的 Telegram 账号自动触发历史同步（停机缺口自愈）。
+
+    实时镜像只覆盖服务在线时段——停机窗口丢的消息不会自己回来；本钩子按
+    ``inbox.tg_history_autosync`` 配置周期性补一轮云端同步（按消息 id 去重，
+    重复零成本）。判据 = registry.meta 持久戳与进程内 finished_at 取大。
+
+    **仅动「有自己专属 worker client」的在册账号**：``_get_tg_pyro_for_account``
+    的主 client 回落对自动化是串号风险（登出账号会拿主账号的 client 拉出主账号
+    的会话、按错误 account_id 落库）；手动同步由 UI 只对在线账号出按钮兜住，
+    自动路径必须在这里自己把关。返回本轮真正触发的 account_id 列表。
+    """
+    acfg = ((cfg.get("inbox") or {}).get("tg_history_autosync") or {}) \
+        if isinstance(cfg, dict) else {}
+    if not acfg.get("enabled", False):
+        return []
+    store = getattr(getattr(app, "state", None), "inbox_store", None)
+    if store is None:
+        return []
+    try:
+        from src.integrations.account_registry import get_account_registry
+        accounts = get_account_registry().list("telegram") or []
+    except Exception:
+        logger.debug("[protocol] autosync 读账号注册表失败", exc_info=True)
+        return []
+    orch = None
+    try:
+        from src.integrations.account_orchestrator import get_orchestrator_if_running
+        orch = get_orchestrator_if_running()
+    except Exception:
+        orch = None
+    now = time.time()
+    rows: List[Dict[str, Any]] = []
+    for a in accounts:
+        aid = str((a or {}).get("account_id") or "")
+        if not aid:
+            continue
+        worker = orch.worker_for("telegram", aid) if orch is not None else None
+        if _extract_pyro(getattr(worker, "client", None)) is None:
+            continue   # 无专属 client → 不自动同步（防主 client 回落串号）
+        snap = tg_history_sync_snapshot(aid)
+        if snap.get("state") == "running":
+            continue
+        persisted = 0.0
+        try:
+            persisted = float(
+                ((a or {}).get("meta") or {}).get("last_history_sync_ts") or 0)
+        except (TypeError, ValueError):
+            persisted = 0.0
+        inproc = float(snap.get("finished_at") or 0)
+        rows.append({"account_id": aid,
+                     "last_sync_ts": max(persisted, inproc)})
+    try:
+        interval = float(acfg.get("interval_hours", 12) or 12)
+    except (TypeError, ValueError):
+        interval = 12.0
+    try:
+        max_pick = int(acfg.get("max_accounts_per_tick", 1) or 1)
+    except (TypeError, ValueError):
+        max_pick = 1
+    started: List[str] = []
+    for aid in tg_autosync_pick(rows, now, interval, max_pick):
+        res = start_tg_history_sync(
+            app, store, aid,
+            dialogs_limit=int(acfg.get("dialogs", 100) or 100),
+            per_chat=int(acfg.get("per_chat", 100) or 100))
+        if res.get("started"):
+            started.append(aid)
+            logger.info("[protocol] tg 历史自动同步已触发 acct=%s（缺口自愈）", aid)
+    return started
+
+
+# 单会话深度回填进度：{f"{account_id}:{chat_key}": {state, fetched, inserted,
+# exhausted, error, started_at, finished_at}}。写读经 _TG_DEEP_BF_LOCK；
+# 完成态条目超上限按最旧清（进程内观测表，防长期运行无界膨胀）。
+_TG_DEEP_BF: Dict[str, Dict[str, Any]] = {}
+_TG_DEEP_BF_LOCK = threading.Lock()
+_TG_DEEP_BF_MAX = 200
+
+
+def _deep_bf_key(account_id: str, chat_key: str) -> str:
+    return f"{account_id}:{chat_key}"
+
+
+def tg_deep_backfill_snapshot(account_id: str, chat_key: str) -> Dict[str, Any]:
+    """读取某会话深度回填进度快照（无记录 → state=idle）。"""
+    with _TG_DEEP_BF_LOCK:
+        st = _TG_DEEP_BF.get(_deep_bf_key(account_id, chat_key))
+        return dict(st) if st else {"state": "idle"}
+
+
+def _tg_deep_update(account_id: str, chat_key: str, **kw: Any) -> None:
+    with _TG_DEEP_BF_LOCK:
+        _TG_DEEP_BF.setdefault(
+            _deep_bf_key(account_id, chat_key), {}).update(kw)
+
+
+def _tg_deep_try_start(account_id: str, chat_key: str) -> bool:
+    """原子置 running；**该账号**已有深度回填在跑 → False（按账号串行——
+    两份并发 get_chat_history 会翻倍该账号的 RPC 压力，FloodWait 风险无谓放大）。
+    顺带按上限清最旧完成态条目。"""
+    key = _deep_bf_key(account_id, chat_key)
+    prefix = f"{account_id}:"
+    with _TG_DEEP_BF_LOCK:
+        for k, v in _TG_DEEP_BF.items():
+            if k.startswith(prefix) and v.get("state") == "running":
+                return False
+        if len(_TG_DEEP_BF) >= _TG_DEEP_BF_MAX:
+            done = sorted(
+                (k for k, v in _TG_DEEP_BF.items()
+                 if v.get("state") != "running"),
+                key=lambda k: float(_TG_DEEP_BF[k].get("finished_at") or 0))
+            for k in done[: max(1, len(_TG_DEEP_BF) - _TG_DEEP_BF_MAX + 1)]:
+                _TG_DEEP_BF.pop(k, None)
+        _TG_DEEP_BF[key] = {
+            "state": "running", "fetched": 0, "inserted": 0,
+            "exhausted": False, "error": "",
+            "started_at": time.time(), "finished_at": 0.0,
+        }
+        return True
+
+
 def _tg_client_cooling(account_id: str) -> bool:
     """该账号的 TG client 是否在断网冷却窗内（True=直接快速失败，不发 RPC）。"""
     until = _TG_CLIENT_BAD_UNTIL.get(str(account_id or ""))
@@ -266,6 +524,14 @@ def _mark_tg_client_bad(account_id: str) -> None:
 
 def _clear_tg_client_bad(account_id: str) -> None:
     _TG_CLIENT_BAD_UNTIL.pop(str(account_id or ""), None)
+
+
+# ── 媒体按需拉取（fetch-media）的进程内护栏 ──────────────────────────────
+# 单飞：同一 store 行同时只允许一次拉取（重复点击/双窗口直接拿 busy，不重复烧
+# 下载 RPC）；全局并发上限防「坐席对着长历史狂点」把账号推进 FloodWait。
+# 只在 web 事件循环内增删（协程间安全），无需线程锁。
+_MEDIA_FETCH_INFLIGHT: set = set()
+_MEDIA_FETCH_MAX_CONCURRENT = 3
 
 
 def tg_cooldown_snapshot() -> Dict[str, float]:
@@ -825,8 +1091,17 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                 if (status in ("logged_out", "needs_login", "expired")
                         and _rst == "online"):
                     _reg.upsert(plat, acct, status="offline")
-                elif status == "authorized" and _rst == "offline":
-                    _reg.upsert(plat, acct, status="online")
+                elif status == "authorized" and _rst != "removed":
+                    # Edge worker 确认账号已在线 → 权威兜底：把 pending / offline /
+                    # （self_profile 富集刚按默认值 device/pending 建的）新行统一提升为
+                    # online，并钉正 mode（messenger→web / whatsapp→protocol）。
+                    # 根因（2026-08）：慢登录（>HOSTED_TTL）时负责写 web/online 的登录
+                    # 轮询 _poll 已停，此前这里只认 offline→online，而 enrich_from_fields
+                    # 会先把行建成默认 device/pending → 账号永远卡「未接入」，且 device
+                    # mode 无 worker 工厂（get_worker_factory 返 None）导致即便手改 online
+                    # 也拉不起 worker。removed(软删) 不复活。
+                    _edge_mode = _EDGE_WORKER_WEB_MODE.get(plat)
+                    _reg.upsert(plat, acct, status="online", mode=_edge_mode)
             except Exception:
                 logger.debug("[protocol] session-status 注册表状态同步失败",
                              exc_info=True)
@@ -849,6 +1124,164 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         return {"ok": True, "changed": bool(trans.get("changed")),
                 "went_unhealthy": bool(trans.get("went_unhealthy")),
                 "recovered": bool(trans.get("recovered"))}
+
+    @app.post("/api/internal/protocol/inbox-health")
+    async def api_protocol_inbox_health(request: Request):
+        """内部桥（P0，2026-08-04 半死态解药）：外部 worker 周期 push「入站健康心跳」。
+
+        背景（Messenger 网页会话实测）：账号 status=authorized（登录探测绿：有输入框、有
+        会话列表）不代表能读到消息内容——cookie 快照恢复登录后 E2EE 设备密钥没恢复，消息区
+        永久卡 Loading，坐席看到侧栏未读却零入站，且轮询一路「健康」无任何告警（实测掉进这个
+        黑洞 4 天无人知）。本端点收 worker 的「侧栏未读数 + 进线程读取滚动窗成败」，落
+        ``PlatformSessionHealth.record_inbox_health``；「有未读却读取持续全失败」的确定性背离
+        由 ``HealthWatchdog._check_inbox_read_stall`` 升级式告警（本端点只记录不即时告警）。
+        """
+        api_auth(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        plat = str((body or {}).get("platform") or "").lower()
+        acct = str((body or {}).get("account_id") or "")
+        if not plat or not acct:
+            return {"ok": False, "reason": "missing_field"}
+
+        def _int(v: Any) -> int:
+            try:
+                return int(v or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        def _flt(v: Any) -> float:
+            try:
+                return float(v or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        try:
+            from src.integrations.platform_session_health import (
+                get_platform_session_health,
+            )
+            _ratio = (body or {}).get("e2ee_ratio")
+            res = get_platform_session_health().record_inbox_health(
+                plat, acct,
+                unread=_int((body or {}).get("unread")),
+                read_attempts=_int((body or {}).get("read_attempts")),
+                read_fails=_int((body or {}).get("read_fails")),
+                last_inbound_ts=_flt((body or {}).get("last_inbound_ts")),
+                detail=str((body or {}).get("detail") or ""),
+                # P1：E2EE 占位盲区信号（worker 未带 → -1 表示未知，不参与判定）
+                e2ee_ratio=(_flt(_ratio) if _ratio is not None else -1.0),
+                conv_count=_int((body or {}).get("conv_count")),
+            )
+        except Exception:
+            logger.debug("[protocol] inbox-health 记录失败", exc_info=True)
+            return {"ok": False, "reason": "record_error"}
+        return {"ok": True, "stalled": bool(res.get("stalled"))}
+
+    @app.post("/api/internal/protocol/thread-history")
+    async def api_protocol_thread_history(request: Request):
+        """内部桥（P1，Messenger 对齐 Telegram「首连历史回填」）：worker 推某会话的
+        历史消息批（首次接入时 top-N 会话各回填末尾若干条，坐席接手即有上下文）。
+
+        两条硬护栏：
+        - **只对空会话写入**（store 里该会话尚无任何消息）。即便 worker 已带
+          synth ``msg_id``，跨次回填仍以「空会话才收」为幂等闸——避免半批失败
+          重推时与文本去重口径打架；非空会话如实返回 not_empty。
+        - **历史语义 = ingest_thread**（与 Telegram 历史同步同一入口）：直写 store，
+          不触发 SSE / auto-draft / 自动回复、不改未读——历史绝不惊动 AI 与坐席。
+
+        消息 ts 缺失（DOM 解析不出绝对时间）时按数组序回推（base - n + i 秒），
+        只保证顺序正确；base 取 worker 侧采集时刻。带 ``msg_id`` 时写入
+        ``platform_msg_id``（表情/撤回挂点）。
+        """
+        api_auth(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        plat = str((body or {}).get("platform") or "").lower()
+        acct = str((body or {}).get("account_id") or "")
+        chat_key = str((body or {}).get("chat_key") or "").strip()
+        if not plat or not acct or not chat_key:
+            return {"ok": False, "reason": "missing_field"}
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        cid = f"{plat}:{acct}:{chat_key}"
+        try:
+            # 空会话判定必须用 list_recent_messages 而非 get_oldest_message——
+            # 后者只认「带 platform_msg_id」的消息；旧回填无 id 时用它会恒判「空」
+            # → 幂等护栏形同虚设。新回填虽可带 id，仍走 list_recent 统一口径。
+            if store.list_recent_messages(cid, limit=1):
+                return {"ok": True, "inserted": 0, "reason": "not_empty"}
+        except Exception:
+            logger.debug("[protocol] thread-history 空会话判定失败", exc_info=True)
+            return {"ok": False, "reason": "store_error"}
+        raw = (body or {}).get("messages") or []
+        if not isinstance(raw, list) or not raw:
+            return {"ok": True, "inserted": 0, "reason": "no_messages"}
+        raw = raw[:50]
+        try:
+            base = float((body or {}).get("ts") or 0) or time.time()
+        except (TypeError, ValueError):
+            base = time.time()
+        msgs = []
+        n_raw = len(raw)
+        for i, m in enumerate(raw):
+            if not isinstance(m, dict):
+                continue
+            text = str(m.get("text") or "")
+            media_ref = str(m.get("media_ref") or "")
+            media_type = str(m.get("media_type") or "")
+            if not text and not media_ref:
+                continue
+            if not text:
+                # ingest_thread 只收带 text 的消息——无正文媒体给占位文本
+                # （与 Telegram 历史回填 history_message_obj 同口径），media_ref 照带。
+                from src.integrations.protocol_bridge import media_placeholder
+                text = media_placeholder(media_type)
+            try:
+                ts = float(m.get("ts") or 0)
+            except (TypeError, ValueError):
+                ts = 0.0
+            pmid = str(m.get("msg_id") or m.get("message_id") or "").strip()
+            src = {"sender_name": str(m.get("sender") or "")}
+            if pmid:
+                src["msg_id"] = pmid
+                src["message_id"] = pmid
+            row = {
+                "text": text,
+                "direction": ("out" if str(m.get("direction") or "in") == "out"
+                              else "in"),
+                "ts": ts or (base - n_raw + i),
+                "media_type": media_type,
+                "media_ref": media_ref,
+                "source": src,
+            }
+            if pmid:
+                row["msg_id"] = pmid
+            msgs.append(row)
+        if not msgs:
+            return {"ok": True, "inserted": 0, "reason": "no_messages"}
+        from src.inbox.ingest import ingest_thread
+        chat = {
+            "conversation_id": cid, "platform": plat, "account_id": acct,
+            "chat_key": chat_key,
+            "name": str((body or {}).get("name") or ""),
+            "avatar_url": str((body or {}).get("avatar_url") or ""),
+            # last_ts 用批内最新消息时间（store MAX 语义不会回拉）；unread 恒 0：
+            # 回填是历史，绝不制造「新消息」观感。
+            "last_ts": max(float(m["ts"]) for m in msgs),
+            "last_msg": str(msgs[-1].get("text") or ""),
+            "unread": 0,
+        }
+        try:
+            inserted = int(ingest_thread(store, chat, msgs) or 0)
+        except Exception:
+            logger.debug("[protocol] thread-history 落库失败", exc_info=True)
+            return {"ok": False, "reason": "ingest_error"}
+        return {"ok": True, "inserted": inserted}
 
     @app.post("/api/internal/protocol/contacts")
     async def api_protocol_contacts(request: Request):
@@ -1407,6 +1840,107 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         return {"ok": True, "started": True, "platform": platform,
                 "account_id": account_id}
 
+    async def _messenger_pull_history(request: Request, store: Any, *,
+                                      cid: str, account_id: str,
+                                      chat_key: str, count: int):
+        """Messenger「拉更早」分支（P1 对齐 Telegram）：请求 messenger-web 打开线程
+        向上滚动加载，读取网页端本地能拿到的更早消息并落库。
+
+        去重分层（P3 优化：有 synth id 优先按 id，文本归一仍作无 id 回落）：
+        - **id 去重**＝库内 ``platform_msg_id`` ∩ 本批 ``msg_id``（同条跨拉不重复）；
+        - **文本去重**＝无 id 时仍按 (方向, 归一化文本)；真实重复短语可能折叠一条。
+        只收带文本消息（媒体无可靠指纹，刻意跳过）。
+        时间＝网页端拿不到可靠绝对时间，统一锚定在库内最早消息之前按序回推
+        （每条 -1s），只保序。网页端可加载深度有限（尤其 E2EE），到头如实 no_more。
+        """
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations.messenger_web_login import (
+            _post_json, service_base_url, web_enabled,
+        )
+        if not web_enabled(cfg):
+            return {"ok": False, "reason": "protocol_disabled"}
+        base = service_base_url(cfg)
+        try:
+            data = await _post_json(
+                f"{base}/accounts/{account_id}/thread-history",
+                {"thread": chat_key, "count": count}, timeout=90.0)
+        except Exception as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", 0)
+            if status == 404:
+                return {"ok": False, "reason": "account_offline"}
+            logger.debug("[protocol] messenger 历史拉取失败", exc_info=True)
+            return {"ok": False, "reason": "service_error"}
+        msgs_raw = (data or {}).get("messages") or []
+        if not isinstance(msgs_raw, list) or not msgs_raw:
+            return {"ok": False, "reason": "no_messages", "requested": count}
+
+        def _norm(t: Any) -> str:
+            return " ".join(str(t or "").split()).lower()
+
+        try:
+            existing = store.list_recent_messages(cid, limit=500) or []
+        except Exception:
+            existing = []
+        seen = {f"{m.get('direction')}|{_norm(m.get('text'))}"
+                for m in existing if _norm(m.get("text"))}
+        seen_ids = {str(m.get("platform_msg_id") or "").strip()
+                    for m in existing if str(m.get("platform_msg_id") or "").strip()}
+        try:
+            earliest = min((float(m.get("ts") or 0) for m in existing
+                            if float(m.get("ts") or 0) > 0), default=0.0)
+        except (TypeError, ValueError):
+            earliest = 0.0
+        base_ts = earliest or time.time()
+        fresh: List[Dict[str, Any]] = []
+        for m in msgs_raw[:200]:
+            if not isinstance(m, dict):
+                continue
+            text = str(m.get("text") or "")
+            direction = "out" if str(m.get("direction") or "in") == "out" else "in"
+            pmid = str(m.get("msg_id") or m.get("message_id") or "").strip()
+            if pmid and pmid in seen_ids:
+                continue
+            key = f"{direction}|{_norm(text)}"
+            if not _norm(text) or key in seen:
+                continue
+            seen.add(key)
+            if pmid:
+                seen_ids.add(pmid)
+            src: Dict[str, Any] = {"sender_name": str(m.get("sender") or "")}
+            row: Dict[str, Any] = {
+                "text": text, "direction": direction, "source": src,
+            }
+            if pmid:
+                src["msg_id"] = pmid
+                src["message_id"] = pmid
+                row["msg_id"] = pmid
+            fresh.append(row)
+        if not fresh:
+            return {"ok": False, "reason": "no_more", "requested": count}
+        n = len(fresh)
+        for i, m in enumerate(fresh):
+            m["ts"] = base_ts - (n - i)
+        from src.inbox.ingest import ingest_thread
+        row = None
+        try:
+            row = store.get_conversation(cid)
+        except Exception:
+            row = None
+        chat = {
+            "conversation_id": cid, "platform": "messenger",
+            "account_id": account_id, "chat_key": chat_key,
+            "name": str((row or {}).get("display_name") or ""),
+            # 拉的是旧消息：last_ts 传 0（store MAX 语义不回拉）、未读保持现值
+            "last_ts": 0,
+            "unread": int((row or {}).get("unread") or 0),
+        }
+        try:
+            inserted = int(ingest_thread(store, chat, fresh) or 0)
+        except Exception:
+            logger.debug("[protocol] messenger 历史落库失败", exc_info=True)
+            return {"ok": False, "reason": "ingest_error"}
+        return {"ok": True, "requested": count, "inserted": inserted}
+
     @app.post("/api/platforms/{platform}/{account_id}/history")
     async def api_platform_history(platform: str, account_id: str, request: Request):
         """按需拉更早历史（P1）：以 store 里最旧的带平台消息 id 的消息为锚点向上补拉。
@@ -1419,7 +1953,7 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         """
         api_auth(request)
         platform = str(platform or "").lower()
-        if platform not in ("whatsapp", "telegram"):
+        if platform not in ("whatsapp", "telegram", "messenger"):
             return {"ok": False, "reason": "unsupported_platform"}
         store = getattr(request.app.state, "inbox_store", None)
         if store is None:
@@ -1437,6 +1971,10 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             count = 50
         count = max(1, min(200, count))
         cid = f"{platform}:{account_id}:{chat_key}"
+        if platform == "messenger":
+            return await _messenger_pull_history(
+                request, store, cid=cid, account_id=account_id,
+                chat_key=chat_key, count=count)
         anchor = store.get_oldest_message(cid)
         if platform == "telegram":
             # 云端历史直拉：锚点有 MTProto 消息 id 则取更早（offset_id），否则从最新拉
@@ -1522,6 +2060,181 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             return {"ok": False, "reason": "service_error"}
         return {"ok": bool((res or {}).get("ok", False)), "requested": count}
 
+    @app.post("/api/platforms/telegram/{account_id}/fetch-media")
+    async def api_telegram_fetch_media(account_id: str, request: Request):
+        """按需拉取单条消息的媒体本体并回填归档（P1，2026-08-04）。
+
+        面向三类「看得见形态、看不见内容」的行：历史同步落的结构化媒体行
+        （``media_type`` 有、``media_ref`` 空）、镜像/入站超限或下载失败的行、
+        存量「[图片]」纯文字占位行。坐席点「拉取原件」→ 本端点按行上的
+        ``platform_msg_id`` 经 pyrogram ``get_messages`` 取回消息 →
+        ``download_tg_media`` 归档进 /static → ``update_message_media`` 幂等回填
+        （只在 ref 为空时写，防与镜像/重复点击竞态）→ 前端原地重渲成真图。
+
+        护栏：配置闸 ``telegram.media_fetch``（默认关）+ 行级单飞 + 全局并发上限
+        （防狂点推 FloodWait）+ 账号断网冷却复用 ``_tg_client_cooling`` + 60s 硬超时。
+        Telegram 云端与手机同源，消息未被删就拉得回；已删如实返回 not_found。
+        成败计入 outbound_mirror_stats（kind=``fetch_*``，ops 归档卡可见）。
+        """
+        api_auth(request)
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        message_id = str((body or {}).get("message_id") or "").strip()
+        if not message_id:
+            raise HTTPException(
+                400, tr(request, "err.ws.field_required", field="message_id"))
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        mf = (cfg.get("telegram") or {}).get("media_fetch")
+        if isinstance(mf, bool):
+            mf = {"enabled": mf}
+        if not isinstance(mf, dict) or not bool(mf.get("enabled", False)):
+            return {"ok": False, "reason": "disabled"}
+        try:
+            max_mb = float(mf.get("max_mb", 50))
+        except (TypeError, ValueError):
+            max_mb = 50.0
+        max_bytes = int(max(0.0, max_mb) * 1024 * 1024)
+
+        row = store.get_message(message_id)
+        if not row:
+            return {"ok": False, "reason": "message_not_found"}
+        if str(row.get("media_ref") or "").strip():
+            # 已有归档（并发拉取/镜像先到）：幂等直接返回现值，不重复下载
+            return {"ok": True, "already": True,
+                    "media_type": str(row.get("media_type") or ""),
+                    "media_ref": str(row.get("media_ref") or "")}
+        cid = str(row.get("conversation_id") or "")
+        conv = store.get_conversation(cid) or {}
+        if str(conv.get("platform") or "") != "telegram":
+            return {"ok": False, "reason": "unsupported_platform"}
+        if str(conv.get("account_id") or "") != str(account_id or ""):
+            return {"ok": False, "reason": "account_mismatch"}
+        chat_key = str(conv.get("chat_key") or "")
+        try:
+            pmid = int(str(row.get("platform_msg_id") or ""))
+        except (TypeError, ValueError):
+            # 旧行落库时没有平台消息 id（:h: 哈希兜底键）——云端无从定位
+            return {"ok": False, "reason": "no_platform_msg_id"}
+        if _tg_client_cooling(account_id):
+            return {"ok": False, "reason": "client_cooling"}
+        if message_id in _MEDIA_FETCH_INFLIGHT:
+            return {"ok": False, "reason": "busy"}
+        if len(_MEDIA_FETCH_INFLIGHT) >= _MEDIA_FETCH_MAX_CONCURRENT:
+            return {"ok": False, "reason": "busy"}
+        pyro = _get_tg_pyro_for_account(request.app, account_id)
+        loop = getattr(pyro, "loop", None)
+        if pyro is None or loop is None or not loop.is_running():
+            return {"ok": False, "reason": "client_unavailable"}
+        peer: Any = chat_key
+        try:
+            peer = int(chat_key)
+        except (TypeError, ValueError):
+            peer = chat_key
+
+        async def _fetch_and_archive():
+            from src.integrations.protocol_bridge import (
+                download_tg_media, tg_media_meta,
+            )
+            msg = await pyro.get_messages(peer, pmid)
+            if msg is None or getattr(msg, "empty", False):
+                return "", "", "message_not_found"
+            if tg_media_meta(msg) is None:
+                return "", "", "no_media"
+            mt, mr = await download_tg_media(msg, account_id, max_bytes=max_bytes)
+            if mr:
+                return mt, mr, ""
+            return mt, "", ("oversize" if mt else "download_failed")
+
+        _MEDIA_FETCH_INFLIGHT.add(message_id)
+        try:
+            fut = asyncio.run_coroutine_threadsafe(_fetch_and_archive(), loop)
+            try:
+                mt, mr, fail = await asyncio.wait_for(
+                    asyncio.wrap_future(fut), timeout=60.0)
+            except (TimeoutError, asyncio.TimeoutError):
+                _mark_tg_client_bad(account_id)
+                return {"ok": False, "reason": "timeout"}
+            except Exception:
+                logger.debug("[protocol] telegram 媒体按需拉取失败", exc_info=True)
+                return {"ok": False, "reason": "service_error"}
+        finally:
+            _MEDIA_FETCH_INFLIGHT.discard(message_id)
+        try:
+            from src.integrations.outbound_mirror_stats import (
+                get_outbound_mirror_stats,
+            )
+            get_outbound_mirror_stats().record_publish(
+                "telegram", f"fetch_{mt or 'unknown'}", ok=bool(mr))
+        except Exception:
+            pass
+        if not mr:
+            return {"ok": False, "reason": fail or "download_failed"}
+        store.update_message_media(
+            cid, media_type=mt, media_ref=mr, message_id=message_id)
+        fresh = store.get_message(message_id) or {}
+        return {"ok": True,
+                "media_type": str(fresh.get("media_type") or mt),
+                "media_ref": str(fresh.get("media_ref") or mr)}
+
+    @app.get("/api/platforms/telegram/{account_id}/full-sync")
+    async def api_telegram_full_sync_status(account_id: str, request: Request):
+        """全量深同步进度快照（前端轮询）+ 断点账本摘要（已完成会话数）。"""
+        api_auth(request)
+        from src.integrations.tg_full_sync import (
+            default_state_path, full_sync_snapshot, load_state,
+        )
+        snap = full_sync_snapshot(account_id)
+        try:
+            done_total = len(
+                load_state(default_state_path(account_id)).get("chats") or {})
+        except Exception:
+            done_total = 0
+        return {"ok": True, "account_id": account_id,
+                "done_total": done_total, **snap}
+
+    @app.post("/api/platforms/telegram/{account_id}/full-sync")
+    async def api_telegram_full_sync(account_id: str, request: Request):
+        """一键全量深同步（P2，2026-08-05）：把该账号云端全部会话的深历史吸进工作台。
+
+        与账号级 sync-history（浅铺底：100 会话 × ≤100 条，一次性）不同，这是
+        **战役式**：分页枚举全部 dialogs → 热会话优先（私聊在前、最近活跃降序）→
+        逐会话 ``deep_backfill_tg_history``（每会话/每轮总量双预算，按云端 fetched
+        计）→ 每会话完成即落断点状态。预算耗尽 → ``budget_exhausted``，**再触发一次
+        接着跑**（已完成会话自动跳过）；``body {"restart": true}`` 清账本整役重来。
+        深历史媒体行只落 media_type 结构化形态（本体走 P1「拉取原件」按需回填），
+        磁盘/RPC 压力仅文本行。配置闸 ``telegram.full_sync``（默认关）；引擎与
+        断点语义见 src/integrations/tg_full_sync.py。
+        """
+        api_auth(request)
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        restart = bool((body or {}).get("restart", False))
+        if _tg_client_cooling(account_id):
+            return {"ok": False, "reason": "client_cooling"}
+        # 与账号级浅同步互斥（同账号别叠两份 dialogs/history RPC）；
+        # 反方向的让路在 start_tg_history_sync 里，两头都拦。
+        if tg_history_sync_snapshot(account_id).get("state") == "running":
+            return {"ok": False, "reason": "busy_account_sync"}
+        pyro = _get_tg_pyro_for_account(request.app, account_id)
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations.tg_full_sync import (
+            default_state_path, start_full_sync,
+        )
+        return start_full_sync(
+            pyro, store, account_id,
+            tg_cfg=(cfg.get("telegram") or {}),
+            state_path=default_state_path(account_id), restart=restart)
+
     @app.get("/api/platforms/telegram/{account_id}/sync-history")
     async def api_telegram_sync_history_status(account_id: str, request: Request):
         """Telegram 账号级历史同步的进度快照（前端轮询）。"""
@@ -1552,54 +2265,106 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             dialogs_limit = int((body or {}).get("dialogs") or 100)
         except (TypeError, ValueError):
             dialogs_limit = 100
-        dialogs_limit = max(1, min(500, dialogs_limit))
         try:
             per_chat = int((body or {}).get("per_chat") or 30)
         except (TypeError, ValueError):
             per_chat = 30
-        per_chat = max(1, min(100, per_chat))
+        # 触发核心与看门狗「自动补缺口」共用 start_tg_history_sync（同一冷却/单飞/进度表）
+        return start_tg_history_sync(
+            request.app, store, account_id,
+            dialogs_limit=dialogs_limit, per_chat=per_chat)
+
+    @app.get("/api/platforms/telegram/{account_id}/deep-backfill")
+    async def api_telegram_deep_backfill_status(
+        account_id: str, request: Request, chat_key: str = "",
+    ):
+        """单会话深度回填进度快照（前端轮询）。"""
+        api_auth(request)
+        chat_key = str(chat_key or "").strip()
+        if not chat_key:
+            raise HTTPException(
+                400, tr(request, "err.ws.field_required", field="chat_key"))
+        return {"ok": True, "account_id": account_id, "chat_key": chat_key,
+                **tg_deep_backfill_snapshot(account_id, chat_key)}
+
+    @app.post("/api/platforms/telegram/{account_id}/deep-backfill")
+    async def api_telegram_deep_backfill(account_id: str, request: Request):
+        """Telegram 单会话「深度回填」：从库里最旧锚点向云端连续拉到本轮上限/到头。
+
+        与 ``/history``（单次一页 ≤200 条，点一次补一段）互补：几千条的深历史
+        一键到底。后台跑在该账号 pyrogram 自身 loop，流式分批落库+进度轮询
+        （GET 同路径），不触发 SSE/auto-draft/自动回复；媒体不下载以占位文本
+        入库。同账号同时只跑一份（含与账号级 sync-history 互斥——同一账号别
+        叠两类批量拉取）。
+        """
+        api_auth(request)
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        chat_key = str((body or {}).get("chat_key") or "").strip()
+        if not chat_key:
+            raise HTTPException(
+                400, tr(request, "err.ws.field_required", field="chat_key"))
+        try:
+            max_messages = int((body or {}).get("max_messages") or 2000)
+        except (TypeError, ValueError):
+            max_messages = 2000
+        max_messages = max(100, min(5000, max_messages))
         if _tg_client_cooling(account_id):
             return {"ok": False, "reason": "client_cooling"}
+        if tg_history_sync_snapshot(account_id).get("state") == "running":
+            return {"ok": False, "reason": "account_busy"}
         pyro = _get_tg_pyro_for_account(request.app, account_id)
         loop = getattr(pyro, "loop", None)
         if pyro is None or loop is None or not loop.is_running():
             return {"ok": False, "reason": "client_unavailable"}
-        if not _tg_hist_try_start(account_id):
-            return {"ok": True, "already_running": True,
-                    **tg_history_sync_snapshot(account_id)}
+        if not _tg_deep_try_start(account_id, chat_key):
+            return {"ok": False, "reason": "account_busy",
+                    **tg_deep_backfill_snapshot(account_id, chat_key)}
         import asyncio
         from src.inbox.ingest import ingest_thread
-        from src.integrations.protocol_bridge import sync_telegram_history
+        from src.integrations.protocol_bridge import deep_backfill_tg_history
+
+        cid = f"telegram:{account_id}:{chat_key}"
+        anchor = store.get_oldest_message(cid)
+        offset_id = 0
+        if anchor:
+            try:
+                offset_id = int(str(anchor.get("platform_msg_id") or "0"))
+            except (TypeError, ValueError):
+                offset_id = 0
 
         def _ingest(chat: Dict[str, Any], msgs: List[Dict[str, Any]]) -> int:
             return ingest_thread(store, chat, msgs)
 
-        def _progress(done: int, total: int, messages: int) -> None:
-            _tg_hist_update(account_id, dialogs_done=done, dialogs_total=total,
-                            messages=messages)
+        def _progress(fetched: int, inserted: int) -> None:
+            _tg_deep_update(account_id, chat_key,
+                            fetched=fetched, inserted=inserted)
 
         async def _run() -> None:
             try:
-                stats = await sync_telegram_history(
-                    pyro, account_id, dialogs_limit=dialogs_limit,
-                    per_chat=per_chat, ingest=_ingest, progress=_progress)
-                finished = time.time()
-                dialogs_n = int(stats.get("dialogs") or 0)
-                messages_n = int(stats.get("messages") or 0)
-                _tg_hist_update(
-                    account_id, state="done", finished_at=finished,
-                    dialogs_done=dialogs_n, messages=messages_n)
-                _persist_tg_history_sync(
-                    account_id, finished_at=finished,
-                    dialogs=dialogs_n, messages=messages_n)
+                stats = await deep_backfill_tg_history(
+                    pyro, account_id, chat_key,
+                    max_messages=max_messages, offset_id=offset_id,
+                    ingest=_ingest, progress=_progress)
+                _tg_deep_update(
+                    account_id, chat_key, state="done",
+                    fetched=int(stats.get("fetched") or 0),
+                    inserted=int(stats.get("inserted") or 0),
+                    exhausted=bool(stats.get("exhausted")),
+                    finished_at=time.time())
             except Exception as exc:
-                logger.debug("[protocol] telegram 历史同步失败", exc_info=True)
-                _tg_hist_update(account_id, state="error",
+                logger.debug("[protocol] telegram 深度回填失败", exc_info=True)
+                _tg_deep_update(account_id, chat_key, state="error",
                                 error=str(exc)[:200], finished_at=time.time())
 
         asyncio.run_coroutine_threadsafe(_run(), loop)
-        return {"ok": True, "started": True,
-                **tg_history_sync_snapshot(account_id)}
+        return {"ok": True, "started": True, "offset_id": offset_id,
+                **tg_deep_backfill_snapshot(account_id, chat_key)}
 
     @app.post("/api/platforms/{platform}/{account_id}/sync-groups")
     async def api_platform_sync_groups(platform: str, account_id: str, request: Request):
@@ -1762,6 +2527,11 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         if none_marker.exists() and (now - none_marker.stat().st_mtime) < 86400:
             _record_avatar(platform, "neg_hit")        # 负缓存命中（无头像，未回源）
             raise HTTPException(404, "no avatar")
+        # 账号级熔断窗：上游刚被判定挂死（超时）→ 秒 404，不再逐个头像各吃一次超时
+        # （磁盘缓存命中不受影响——熔断只拦「回源」）。
+        if _proto_avatar_cooling(platform, account_id):
+            _record_avatar(platform, "cooldown")
+            raise HTTPException(404, "no avatar")
         cfg = (config_manager.config if config_manager is not None else {}) or {}
         if platform == "whatsapp":
             # 群头像走 @g.us（否则 @s.whatsapp.net）；jid 由 Python 拼好，Node toJid 原样透传
@@ -1776,8 +2546,12 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             try:
                 res = await _get_json(
                     f"{service_base_url(cfg)}/accounts/{account_id}/avatar"
-                    f"?jid={chat_key}{jid_suffix}")
-            except Exception:
+                    f"?jid={chat_key}{jid_suffix}",
+                    timeout=_PROTO_AVATAR_FETCH_TIMEOUT_SEC)
+            except Exception as e:
+                import httpx
+                if isinstance(e, httpx.TimeoutException):
+                    _mark_proto_avatar_bad(platform, account_id)   # 挂死特征 → 开账号熔断窗
                 _record_avatar(platform, "error")
                 logger.debug("[protocol] profilePictureUrl 取头像失败", exc_info=True)
                 raise HTTPException(404, "no avatar")
@@ -1791,11 +2565,16 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                 raise HTTPException(404, "no avatar")
             try:
                 res = await msgr_get_json(
-                    f"{msgr_base(cfg)}/accounts/{account_id}/avatar?thread={chat_key}")
-            except Exception:
+                    f"{msgr_base(cfg)}/accounts/{account_id}/avatar?thread={chat_key}",
+                    timeout=_PROTO_AVATAR_FETCH_TIMEOUT_SEC)
+            except Exception as e:
+                import httpx
+                if isinstance(e, httpx.TimeoutException):
+                    _mark_proto_avatar_bad(platform, account_id)   # 挂死特征 → 开账号熔断窗
                 _record_avatar(platform, "error")
                 logger.debug("[protocol] messenger 取头像失败", exc_info=True)
                 raise HTTPException(404, "no avatar")
+        _clear_proto_avatar_bad(platform, account_id)   # 上游活着 → 解除熔断（若有）
         remote_url = str((res or {}).get("url") or "").strip()
         # messenger 空 url 多为「轮询尚未缓存」瞬态 → 不写 1 天负缓存，靠重渲染自愈；
         # empty/fetched/error 结局经 on_outcome 回调落观测（DI，不把 helper 直连观测单例）
@@ -3132,6 +3911,95 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
         return res
+
+    @app.get("/api/admin/alert-link-status")
+    async def api_alert_link_status(request: Request):
+        """告警链路自检（只读聚合，零密钥字段）：文件真相 × 进程真相 × 分歧 × 诱饵。
+
+        「配了通道 ≠ 收得到」——真接通 = 关注别名逐个有启用通道订阅（audit.healthy）
+        且运行中的 notifier 装载的就是磁盘这份配置（指纹一致）。verdict 分档：
+        ``no_channel``（0 启用通道，今日生产现状）→ ``not_running``（notifier 存在但
+        事件循环没跑）→ ``divergent``（文件 vs 进程指纹不一致：手改文件未经面板 →
+        没热更）→ ``uncovered``（有通道但关注别名有洞）→ ``healthy``。
+        响应只含计数/别名/通道名/落点路径/指纹——无 token/url/target 明文，故仅
+        ``api_auth`` 不加运营角色闸（坐席能看懂「告警为什么静默」有助自查）；
+        改配置仍走受角色闸的面板路由。CLI 同源文件口径见 tools/alert_link_selfcheck.py，
+        本端点多出进程口径与分歧检测（CLI 在进程外看不到 notifier）。
+        """
+        api_auth(request)
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        # 聚合逻辑收敛在 collect_alert_link_status（健康灯 probe_alert_link 同源消费），
+        # 路由只做鉴权 + 透传——两个读数口永远一个口径。
+        from src.integrations.alert_link_status import collect_alert_link_status
+        return collect_alert_link_status(
+            cfg, getattr(app.state, "webhook_notifier", None))
+
+    @app.get("/api/admin/official-webhook-status")
+    async def api_official_webhook_status(request: Request):
+        """官方渠道 webhook 回调可达性（只读聚合，零密钥字段）。
+
+        「凭证配了、状态绿了、但客户消息永远进不来」——官方 API 渠道是被动 webhook
+        入站，回调打不进来时系统零报错。判词经 ``official_webhook_stats.classify``：
+        ``live``（事件到达过）/ ``handshake_only``（握手成功零事件：冷启动或订阅字段
+        没勾）/ ``auth_failing``（有请求到达但从未通过验证：凭证配错或扫描噪声）/
+        ``never_reached``（路由挂着、外面从没打进来：公网 URL/隧道/开发者后台没配）/
+        ``not_mounted``（启用但路由没挂：凭证缺 或 配完凭证等重启）/ ``disabled``。
+        挂载真相读 ``app.state``（各 webhook 注册时写入的路径），比纯配置推断多抓
+        「启动后才填凭证」这档。响应只含计数/时间年龄/路径——无 token 明文。
+        CLI 同源文件口径见 tools/official_webhook_selfcheck.py（进程外可用，
+        服务挂了/重启窗口内照样能诊断；judgment 共用 official_webhook_stats.classify）。
+        """
+        api_auth(request)
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations.official_webhook_stats import collect_status
+        return collect_status(cfg, app_state=app.state)
+
+    @app.get("/api/admin/buried-conversations")
+    async def api_buried_conversations(request: Request):
+        """被埋会话体检（只读）：归档着、却有未读入站——客户在等而工作台看不见（P0-198）。
+
+        与 ``HealthWatchdog._check_buried_conversations`` / ``tools/audit_buried_
+        conversations.py`` 同一判据（``InboxStore.list_buried_archived`` 是唯一事实源），
+        三个读数口不会各说各话。告警是「会自己响」，这里是「随时能核对 + 点进去处置」。
+
+        **刻意不回 last_text**：定位「谁被埋了」只需要名字与未读数，内容一点进收件箱就有；
+        ops 总览页的可见面比收件箱宽，没必要在这里多摊一份客户原话。
+        ``supported=false`` = 该实例的 store 还没有这个能力（旧版本），前端据此整卡隐藏，
+        而不是显示一个恒为 0 的假绿灯。
+        """
+        api_auth(request)
+        store = getattr(app.state, "inbox_store", None)
+        if store is None or not hasattr(store, "list_buried_archived"):
+            return {"supported": False, "count": 0, "rows": []}
+        try:
+            rows = store.list_buried_archived(min_unread=1, limit=50) or []
+        except Exception as exc:
+            return {"supported": True, "error": str(exc), "count": 0, "rows": []}
+        out = []
+        total_unread = 0
+        for r in rows:
+            try:
+                unread = int(r.get("unread") or 0)
+            except (TypeError, ValueError):
+                unread = 0
+            total_unread += unread
+            auto = float(r.get("auto_archived_at") or 0) > 0
+            out.append({
+                "conversation_id": r.get("conversation_id"),
+                "platform": r.get("platform"),
+                "display_name": r.get("display_name") or "",
+                "unread": unread,
+                "last_ts": r.get("last_ts") or 0,
+                "archived_at": r.get("archived_at") or 0,
+                "auto": auto,
+            })
+        return {
+            "supported": True,
+            "count": len(out),
+            "total_unread": total_unread,
+            "auto_archived": sum(1 for x in out if x["auto"]),
+            "rows": out,
+        }
 
     @app.get("/api/accounts/auto-reply/stream")
     async def api_account_auto_reply_stream(request: Request):

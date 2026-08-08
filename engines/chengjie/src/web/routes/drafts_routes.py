@@ -214,6 +214,27 @@ def register_drafts_routes(app, *, api_auth):
         except Exception:
             pass
         try:
+            # 语言硬闸（P1-198）：held（冲突拦下）/ rescued（gate-only 救回）/
+            # no_target_sent（CJK 盲发）。enabled 随配置回显——闸门在不在岗
+            # 零流量也能看出来。
+            from src.inbox.outbound_lang_stats import get_outbound_lang_stats
+            from src.inbox.outbound_translate import parse_outbound_lang_gate_cfg
+            _lg = get_outbound_lang_stats().dump()
+            _cm = getattr(request.app.state, "config_manager", None)
+            _lg["enabled"] = bool(parse_outbound_lang_gate_cfg(
+                getattr(_cm, "config", None) or {}).get("enabled"))
+            snap["lang_gate"] = _lg
+        except Exception:
+            pass
+        try:
+            from src.inbox.effective_mood import mood_steering_snapshot as _mss
+            # P1-198 续：人工情绪标注转向——marks（按标签计打点）/ consumed
+            # （draft_directive/goal_hold/proactive_gate/voice 各链真用上的次数）。
+            # 「标了却恒 0 消费」＝接线断了，零流量即可判。
+            snap["mood_steering"] = _mss()
+        except Exception:
+            pass
+        try:
             from src.companion.proactive_stats import metrics_snapshot as _ps
             snap["proactive_topic"] = _ps()
         except Exception:
@@ -260,6 +281,34 @@ def register_drafts_routes(app, *, api_auth):
             # 统一草稿引擎规则栈生效观测（记忆/情感/陪伴/慢思考/守卫/重试命中）
             from src.monitoring.metrics_store import get_metrics_store
             snap["draft_pipeline"] = get_metrics_store().get_inbox_draft_metrics()
+        except Exception:
+            pass
+        try:
+            # 工作时间班表（P0-ws，2026-08-04）：配置总闸 + 全局默认班表此刻
+            # 在班态 + 各账号覆写的在班态（含下一次边界）——零流量也能判
+            # 「为什么这个号现在不自动回」。worker 侧计数（skipped_off_hours/
+            # catchup）已在 status_snapshot 本体。
+            from src.inbox.work_hours_gate import (
+                schedule_state as _ws_state,
+                work_schedule_cfg as _ws_cfg_fn,
+            )
+            _cm_ws = getattr(request.app.state, "config_manager", None)
+            _ws = _ws_cfg_fn(getattr(_cm_ws, "config", None) or {})
+            if _ws.get("enabled"):
+                _ws_out: dict = {
+                    "enabled": True,
+                    "default": _ws_state(_ws, "", "default"),
+                    "accounts": {},
+                }
+                _accts = _ws.get("accounts")
+                if isinstance(_accts, dict):
+                    for _k in list(_accts)[:32]:
+                        _plat, _, _aid = str(_k).partition(":")
+                        _ws_out["accounts"][str(_k)] = _ws_state(
+                            _ws, _plat, _aid or "default")
+                snap["work_schedule"] = _ws_out
+            else:
+                snap["work_schedule"] = {"enabled": False}
         except Exception:
             pass
         return {"ok": True, "worker": snap, "human_deliver_wired": _hd_wired,
@@ -978,6 +1027,14 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 所听即所发（P1 2026-08-05）：语音试听产物复用——hits/attempts/hit_rate +
+        # miss 原因分布（expired 多→放宽 TTL；text_mismatch 多→改稿没重生成）
+        try:
+            from src.integrations.shared.tts_preview import reuse_stats_snapshot
+            metrics["voice_preview_reuse"] = reuse_stats_snapshot()
+        except Exception:
+            pass
+
         # 入站自动翻译（同步预算 + 后台补译）：sync/bg 三态、deferred、负缓存拦截 +
         # 瞬时 in-flight（后台积压/引擎宕机的工程观测；按日漏斗另见 dashboard translation_inbound）
         try:
@@ -1230,11 +1287,33 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 出站语言硬闸（P1-198）：held/rescued/no_target_sent + 最近事件
+        try:
+            from src.inbox.outbound_lang_stats import get_outbound_lang_stats
+            metrics["outbound_lang_gate"] = get_outbound_lang_stats().dump()
+        except Exception:
+            pass
+
+        # 对方机器人守卫（P0 2026-08-03 SpamBot 空转实锤）：检出/拦截/降档/预算命中
+        try:
+            from src.inbox.peer_bot_guard import stats_snapshot as _pbg_snapshot
+            metrics["peer_bot_guard"] = _pbg_snapshot()
+        except Exception:
+            pass
+
         # CSRF 写请求拒绝观测（中间件 403 计数；kind=cookie_no_header 即「宿主缺
         # fetch 补丁/客户端未带凭证」签名——2026-07-31 人设切换事故的形态）
         try:
             from src.web.csrf_stats import get_csrf_reject_stats
             metrics["csrf_rejects"] = get_csrf_reject_stats().dump()
+        except Exception:
+            pass
+
+        # 出站媒体归档发布（A 线 publish_outbound_media 成败；失败＝该条媒体在坐席台
+        # 静默退化成纯文本占位——「自己发的语音看不到」的根因计数，2026-08-02）
+        try:
+            from src.integrations.outbound_mirror_stats import get_outbound_mirror_stats
+            metrics["outbound_mirror"] = get_outbound_mirror_stats().dump()
         except Exception:
             pass
 
@@ -1301,6 +1380,21 @@ def register_metrics_route(app, *, api_auth):
             _pms = get_persona_media_store()
             if _pms is not None:
                 metrics["persona_media"] = _pms.analytics()
+        except Exception:
+            pass
+
+        # 案例中心观测（2026-08-03：自启动立案/结案/升级/告警计数 + 平均结案时长；
+        # 当前未结案的 live 口径在 /api/cases/active，两者互补）
+        try:
+            from src.utils.case_stats import get_case_stats
+            metrics["cases"] = get_case_stats().dump()
+            try:
+                from src.utils.case_trend_store import get_case_trend_store
+                _cts = get_case_trend_store()
+                if _cts is not None:
+                    metrics["cases"]["trend"] = _cts.recent(14)
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -1499,11 +1593,27 @@ def register_metrics_route(app, *, api_auth):
             except Exception:
                 pass
 
+            # 语音出站断档台账（三链滚动窗成败；attempts>0 且 ok=0 ＝断档告警面）
+            try:
+                from src.ai.voice_outage import get_voice_outage
+                if get_voice_outage().outage_snapshot().get("attempts_24h"):
+                    buf.write(get_voice_outage().dump_prom())
+            except Exception:
+                pass
+
             # LINE 媒体收发（入站下载/出站两步链；仅有流量时输出，同 credpool 口径）
             try:
                 from src.integrations.line_media_stats import get_line_media_stats
                 if get_line_media_stats().dump().get("active"):
                     buf.write(get_line_media_stats().dump_prom())
+            except Exception:
+                pass
+
+            # 出站媒体归档发布（A 线镜像可回放的前提；失败=静默退化文本占位）
+            try:
+                from src.integrations.outbound_mirror_stats import get_outbound_mirror_stats
+                if get_outbound_mirror_stats().dump().get("total"):
+                    buf.write(get_outbound_mirror_stats().dump_prom())
             except Exception:
                 pass
 
@@ -1540,6 +1650,13 @@ def register_metrics_route(app, *, api_auth):
             try:
                 from src.web.frontend_error_stats import get_frontend_error_stats
                 buf.write(get_frontend_error_stats().dump_prom())
+            except Exception:
+                pass
+
+            # 出站语言硬闸（P1-198：held/rescued/no_target_sent 分桶）
+            try:
+                from src.inbox.outbound_lang_stats import get_outbound_lang_stats
+                buf.write(get_outbound_lang_stats().dump_prom())
             except Exception:
                 pass
 
@@ -1679,6 +1796,23 @@ def register_metrics_route(app, *, api_auth):
                        "Persona album media items by type", labels='type="photo"')
                 _gauge("ws_persona_media_by_type", pm.get("video", 0),
                        labels='type="video"')
+
+            # 案例中心（立案/结案/升级/告警；来源分布走 dump_prom 的 label 行）
+            cs = metrics.get("cases") or {}
+            if cs and (cs.get("opened") or cs.get("closed")):
+                _gauge("ws_cases_opened_total", cs.get("opened", 0),
+                       "Cases opened since boot")
+                _gauge("ws_cases_closed_total", cs.get("closed", 0),
+                       "Cases closed since boot")
+                _gauge("ws_cases_upgraded_total", cs.get("upgraded", 0),
+                       "Case severity upgrades since boot")
+                _gauge("ws_cases_alerts_total", cs.get("alerts_emitted", 0),
+                       "Case alerts emitted since boot")
+                for _src, _n in sorted((cs.get("opened_by_source") or {}).items()):
+                    _safe = "".join(
+                        ch if (ch.isalnum() or ch == "_") else "_" for ch in str(_src))
+                    _gauge("ws_cases_opened_by_source", _n,
+                           "Cases opened by source", labels=f'source="{_safe}"')
 
             # 账号官方资料修改推送（accounts.profile_push 漏斗）
             ppst = metrics.get("profile_push") or {}

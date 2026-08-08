@@ -245,8 +245,20 @@ def register_report_routes(app, ctx) -> None:
         except Exception:
             report["feedback"] = {}
 
+        # AI 价值总账（2026-08-06 P1-3）：拟稿/投递/主动触达回复率/出站量——持久口径
+        # 聚合见 src/ops/value_report.py（F4 原有的 KB 两项是 KB 时代产物，价值面早已
+        # 长到它外面）。拿不到 inbox_store（测试装配/异常态）→ 空段，周报其余部分照出。
+        try:
+            from src.ops.value_report import build_weekly_value
+            _inbox = getattr(request.app.state, "inbox_store", None)
+            report["value"] = build_weekly_value(_inbox) if _inbox is not None else {}
+        except Exception:
+            report["value"] = {}
+
         # 生成可读摘要
         lines = ["📊 运营周报", ""]
+        for vl in (report.get("value") or {}).get("text_lines", []):
+            lines.append(vl)
         kb = report.get("kb", {})
         if kb:
             tw = kb.get("this_week", {})

@@ -63,6 +63,7 @@ ZH = {
     "aud_act_learner_approve": "采纳学习草稿",
     "aud_act_learner_reject": "驳回学习草稿",
     "aud_act_learner_approve_all": "批量采纳学习草稿",
+    "aud_act_learner_feed": "手动喂料学习",
     "aud_act_chat_test_correct": "对话测试纠错",
     # ── 设置 / 策略 / 模板 ──────────────────────────────────────────
     "aud_act_save_settings": "保存系统设置",
@@ -103,8 +104,37 @@ ZH = {
     "aud_act_messenger_rpa_send_queue_cancel": "取消 Messenger 发送任务",
     # ── 其它 ───────────────────────────────────────────────────────
     "aud_act_group_show_rehearse": "群演彩排",
+    "aud_act_group_show_live": "群演正式开演",
     "aud_act_case_note": "工单备注",
     "aud_act_case_close": "关闭工单",
+    "aud_act_case_claim": "认领工单",
+    "aud_act_case_release": "释放工单",
+    "aud_act_config_advisory": "配置体检提醒",
+    # ── 情景记忆 / 跨平台身份（2026-08-05 补，随首页卡人话化）────────
+    "aud_act_episodic_delete": "删除情景记忆",
+    "aud_act_episodic_bulk_delete": "批量删除情景记忆",
+    "aud_act_episodic_confirm_inferred": "确认 AI 推断记忆",
+    "aud_act_episodic_key_migrate": "迁移记忆归属键",
+    "aud_act_identity_link": "关联跨平台身份",
+    "aud_act_identity_unlink": "解除身份关联",
+    "aud_act_identity_shadow_confirm": "确认同人身份",
+    # ── 人设导入 / 测验（同批盘点补漏）──────────────────────────────
+    "aud_act_persona_legacy_auto": "自动升级旧版人设",
+    "aud_act_profile_bio_stash": "暂存人设资料文档",
+    "aud_act_profile_finalize": "人设导入落定",
+    "aud_act_profile_retired_quiz_run": "人设挑衅测验",
+    # ── 动态拼接动作（f"import_config_{mode}"，字面量门禁扫不到，人工登记）──
+    "aud_act_import_config_overwrite": "导入配置（整体替换）",
+    "aud_act_import_config_merge": "导入配置（增量合并）",
+    # ── 门禁首扫补漏（test_audit_action_labels 上线时点名）──────────
+    "aud_act_create_user": "创建用户",
+    "aud_act_update_user": "更新用户",
+    "aud_act_delete_user": "删除用户",
+    "aud_act_update_ab_test": "更新 A/B 测试",
+    "aud_act_update_autopilot": "更新自动驾驶档位",
+    "aud_act_apply_param_suggestion": "采纳参数建议",
+    "aud_act_rollback": "回滚配置快照",
+    "aud_act_data_purge": "清理历史数据",
 }
 
 EN = {
@@ -162,6 +192,7 @@ EN = {
     "aud_act_learner_approve": "Approve learner draft",
     "aud_act_learner_reject": "Reject learner draft",
     "aud_act_learner_approve_all": "Approve all learner drafts",
+    "aud_act_learner_feed": "Feed learner manually",
     "aud_act_chat_test_correct": "Chat-test correction",
     # ── Settings / strategy / templates ────────────────────────────
     "aud_act_save_settings": "Save settings",
@@ -202,6 +233,35 @@ EN = {
     "aud_act_messenger_rpa_send_queue_cancel": "Cancel Messenger send task",
     # ── Misc ───────────────────────────────────────────────────────
     "aud_act_group_show_rehearse": "Group-show rehearsal",
+    "aud_act_group_show_live": "Group-show go live",
     "aud_act_case_note": "Case note",
     "aud_act_case_close": "Close case",
+    "aud_act_case_claim": "Claim case",
+    "aud_act_case_release": "Release case",
+    "aud_act_config_advisory": "Config advisory",
+    # ── Episodic memory / cross-platform identity (2026-08-05) ─────
+    "aud_act_episodic_delete": "Delete episodic memory",
+    "aud_act_episodic_bulk_delete": "Bulk-delete episodic memories",
+    "aud_act_episodic_confirm_inferred": "Confirm inferred memory",
+    "aud_act_episodic_key_migrate": "Migrate memory keys",
+    "aud_act_identity_link": "Link cross-platform identity",
+    "aud_act_identity_unlink": "Unlink identity",
+    "aud_act_identity_shadow_confirm": "Confirm shadow identity",
+    # ── Persona import / quiz (same sweep) ─────────────────────────
+    "aud_act_persona_legacy_auto": "Auto-upgrade legacy persona",
+    "aud_act_profile_bio_stash": "Stash persona bio doc",
+    "aud_act_profile_finalize": "Finalize persona import",
+    "aud_act_profile_retired_quiz_run": "Persona provocation quiz",
+    # ── Dynamic f-string actions (import_config_{mode}; literal gate blind spot) ──
+    "aud_act_import_config_overwrite": "Import config (replace)",
+    "aud_act_import_config_merge": "Import config (merge)",
+    # ── First gate sweep additions (test_audit_action_labels) ──────
+    "aud_act_create_user": "Create user",
+    "aud_act_update_user": "Update user",
+    "aud_act_delete_user": "Delete user",
+    "aud_act_update_ab_test": "Update A/B test",
+    "aud_act_update_autopilot": "Update autopilot level",
+    "aud_act_apply_param_suggestion": "Apply param suggestion",
+    "aud_act_rollback": "Roll back config snapshot",
+    "aud_act_data_purge": "Purge history data",
 }

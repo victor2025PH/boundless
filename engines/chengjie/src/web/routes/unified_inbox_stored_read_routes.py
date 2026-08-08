@@ -106,7 +106,57 @@ def register_stored_read_routes(app, *, api_auth) -> None:
         api_auth(request)
         cid = _conv_id(str(platform or "").lower(), str(account_id or "default"), str(chat_key or ""))
         mode = _read_automation_mode(request, cid)
-        return {"ok": True, "conversation_id": cid, "mode": mode}
+        # peer_bot_guard P2：预算状态搭便车（前端开会话本就调本端点渲染档位
+        # 胶囊，零新增请求）。budget=None＝守卫关/取数失败——前端不显横幅。
+        budget = None
+        try:
+            from src.inbox.peer_bot_guard import budget_state
+            _cm = getattr(request.app.state, "config_manager", None)
+            _cfg_root = (getattr(_cm, "config", None) or {}) if _cm else {}
+            _store = _inbox_store(request)
+            if _store is not None:
+                budget = budget_state(_store, cid, _cfg_root)
+        except Exception:
+            logger.debug("[automation] 预算状态读取失败（忽略）", exc_info=True)
+            budget = None
+        # P1-198（2026-08-05）：账号在线状态搭同一趟便车。198 事故第二课——
+        # 测试者手动停用账号后，会话界面毫无痕迹，此后所有「不回消息」都被
+        # 归因成「产品坏了」。account=None＝注册表无此号/未初始化（主协议号、
+        # 纯 RPA 会话），前端不显横幅。
+        account = None
+        try:
+            from src.integrations.account_registry import peek_account
+            _arow = peek_account(str(platform or "").lower(),
+                                 str(account_id or "default"))
+            if _arow:
+                account = {"status": str(_arow.get("status") or ""),
+                           "mode": str(_arow.get("mode") or "")}
+        except Exception:
+            account = None
+        # 2026-08-07 有效档位（effective_automation）：把「平台/业务线/冷启动
+        # 预热」封顶端给前端胶囊——下拉框的 mode 只是基础值，实际执行档位可能
+        # 被系统封顶（.198「界面亮全自动、实际全进人审」的可见化闭环）。
+        # effective=None＝求值失败 → 前端不渲染（fail-open，与档位闸同方向）；
+        # 求值与 A/B 两线同一实现，保证「胶囊说的」=「护栏做的」。
+        effective = None
+        try:
+            from src.inbox.effective_automation import effective_automation
+            _ea_store = _inbox_store(request)
+            _ea_cm = getattr(request.app.state, "config_manager", None)
+            _ea_cfg = (getattr(_ea_cm, "config", None) or {}) if _ea_cm else {}
+            _ea = effective_automation(
+                _ea_store, _ea_cfg, conversation_id=cid,
+                platform=str(platform or "").lower(),
+                account_id=str(account_id or "default"),
+                base_mode=mode)
+            effective = {"mode": str(_ea.get("effective_mode") or mode),
+                         "caps": _ea.get("caps") or []}
+        except Exception:
+            logger.debug("[automation] effective 档位求值失败（忽略）",
+                         exc_info=True)
+            effective = None
+        return {"ok": True, "conversation_id": cid, "mode": mode,
+                "budget": budget, "account": account, "effective": effective}
 
     @app.post("/api/unified-inbox/automation")
     async def api_unified_inbox_automation_set(request: Request, _=Depends(api_auth)):
@@ -125,6 +175,121 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             "ok": True,
             "conversation_id": cid,
             "mode": mode,
+            "cancelled_l2": int(cancelled or 0),
+        }
+
+    @app.post("/api/unified-inbox/reply-budget/relief")
+    async def api_unified_inbox_reply_budget_relief(
+        request: Request, _=Depends(api_auth),
+    ):
+        """peer_bot_guard P2 坐席救济：本会话**今日**不再受每日预算限制。
+
+        Body: ``{platform, account_id, chat_key}``。写台账 relief_day=今天
+        （跨日自动失效，明天回到正常预算）；不清计数（观测口径保留）。
+        等价于坐席人工接管的显式决定，与切档同权限（api_auth）。
+        """
+        body = await request.json()
+        platform = str(body.get("platform") or "").lower()
+        account_id = str(body.get("account_id") or "default")
+        chat_key = str(body.get("chat_key") or "")
+        if not platform or not chat_key:
+            raise HTTPException(400, tr(request, "err.ws.platform_chatkey_required"))
+        store = _inbox_store(request)
+        if store is None or not hasattr(store, "set_budget_relief"):
+            raise HTTPException(503, tr(request, "err.ws.inbox_persistence_disabled"))
+        cid = _conv_id(platform, account_id, chat_key)
+        from src.inbox.peer_bot_guard import budget_state, today_key
+        try:
+            operator = str(request.session.get("username", "web_admin"))
+        except Exception:
+            operator = "web_admin"
+        store.set_budget_relief(cid, today_key())
+        logger.info("[reply-budget] 救济：今日跳过预算 cid=%s by=%s", cid, operator)
+        _cm = getattr(request.app.state, "config_manager", None)
+        _cfg_root = (getattr(_cm, "config", None) or {}) if _cm else {}
+        return {
+            "ok": True,
+            "conversation_id": cid,
+            "budget": budget_state(store, cid, _cfg_root),
+        }
+
+    @app.get("/api/unified-inbox/bot-flag")
+    async def api_unified_inbox_bot_flag_get(
+        request: Request,
+        platform: str,
+        account_id: str = "default",
+        chat_key: str = "",
+    ):
+        """对方机器人守卫 P1：读会话的 bot 判定（徽章/证据 chips 数据源）。"""
+        api_auth(request)
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.ws.inbox_persistence_disabled"))
+        cid = _conv_id(str(platform or "").lower(),
+                       str(account_id or "default"), str(chat_key or ""))
+        row = store.get_conversation(cid) or {}
+        return {
+            "ok": True,
+            "conversation_id": cid,
+            "peer_is_bot": int(row.get("peer_is_bot") or 0),
+            "bot_score": float(row.get("bot_score") or 0.0),
+            "bot_evidence": str(row.get("bot_evidence") or ""),
+        }
+
+    @app.post("/api/unified-inbox/bot-flag")
+    async def api_unified_inbox_bot_flag_set(request: Request, _=Depends(api_auth)):
+        """对方机器人守卫 P1：一键覆写。
+
+        Body: ``{platform, account_id, chat_key, value: "bot"|"human"|"clear"}``
+        - ``bot``   → peer_is_bot=1 + 会话降 manual（停自动链，语义与 sweep 一致）；
+        - ``human`` → peer_is_bot=-1（启发式疑似对其不再拦截/降档；Tier0 平台
+          真值与复读/预算等行为刹车不受影响）；档位不动，由坐席自行调回；
+        - ``clear`` → 回到未标注（0），评分/证据一并清空，守卫按信号重新判。
+        """
+        body = await request.json()
+        platform = str(body.get("platform") or "").lower()
+        account_id = str(body.get("account_id") or "default")
+        chat_key = str(body.get("chat_key") or "")
+        value = str(body.get("value") or "").strip().lower()
+        if not platform or not chat_key:
+            raise HTTPException(400, tr(request, "err.ws.platform_chatkey_required"))
+        if value not in ("bot", "human", "clear"):
+            raise HTTPException(400, tr(
+                request, "err.ws.unsupported_bot_flag", value=value))
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.ws.inbox_persistence_disabled"))
+        cid = _conv_id(platform, account_id, chat_key)
+        try:
+            operator = str(request.session.get("username", "web_admin"))
+        except Exception:   # 无 SessionMiddleware 的宿主（测试/嵌入部署）
+            operator = "web_admin"
+        # P1.5 覆写反馈环：先取原判定原因再覆写——「human:suspected_bot 有几次」
+        # 就是启发式误判率的分子，下周词表/阈值校准只认这个数。best-effort。
+        try:
+            from src.inbox.peer_bot_guard import evidence_reason, record_override
+            _prev_row = store.get_conversation(cid) or {}
+            record_override(value, evidence_reason(_prev_row.get("bot_evidence")))
+        except Exception:
+            logger.debug("[bot-flag] 覆写计数失败（忽略）", exc_info=True)
+        cancelled = 0
+        if value == "bot":
+            store.set_peer_bot_verdict(
+                cid, is_bot=1, evidence=f"operator:{operator} 手动标记为机器人")
+            cancelled = _write_automation_mode(request, cid, "manual")
+        elif value == "human":
+            store.set_peer_bot_verdict(
+                cid, is_bot=-1, score=0.0,
+                evidence=f"operator:{operator} 确认为真人")
+        else:
+            store.set_peer_bot_verdict(cid, is_bot=0, score=0.0, evidence="")
+        row = store.get_conversation(cid) or {}
+        return {
+            "ok": True,
+            "conversation_id": cid,
+            "peer_is_bot": int(row.get("peer_is_bot") or 0),
+            "bot_score": float(row.get("bot_score") or 0.0),
+            "bot_evidence": str(row.get("bot_evidence") or ""),
             "cancelled_l2": int(cancelled or 0),
         }
 

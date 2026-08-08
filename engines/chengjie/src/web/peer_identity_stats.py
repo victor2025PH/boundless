@@ -61,7 +61,10 @@ _ROUTES = ("worker", "fallback", "none")
 _ROUTE_ACCT_MAX = 200  # per-account 路由 distinct 账号上限，防内存无界（超限只记聚合）
 _INGEST_OUTCOMES = ("named", "backfilled", "raw")
 _INGEST_PLAT_MAX = 32  # 入站身份 distinct 平台上限（平台本就有限，防脏输入撑爆）
-_AVATAR_OUTCOMES = ("cache_hit", "fetched", "empty", "error", "neg_hit")
+#   cooldown（2026-08-05）＝账号级熔断窗内秒拒（上游挂死特征后 60s；见
+#   unified_inbox_account_routes._PROTO_AVATAR_BAD_UNTIL）——它可观测才能回答
+#   「WA 头像端点挂死多频繁、熔断替坐席挡掉了多少次 20s 白等」。
+_AVATAR_OUTCOMES = ("cache_hit", "fetched", "empty", "error", "neg_hit", "cooldown")
 _AVATAR_PLAT_MAX = 32  # 头像代理 distinct 平台上限（同上，防脏输入撑爆）
 _PANEL_FIELDS = ("opens", "name", "username", "phone")
 _PANEL_PLAT_MAX = 32  # 资料面板就绪度 distinct 平台上限（同上，防脏输入撑爆）
@@ -247,6 +250,9 @@ class PeerIdentityStats:
                     "empty": sum(v["empty"] for v in self._av.values()),
                     "error": sum(v["error"] for v in self._av.values()),
                     "neg_hit": sum(v["neg_hit"] for v in self._av.values()),
+                    # 熔断秒拒计数（2026-08-05）：verify_conn_fixes 以本键存在性探测
+                    # 「P1-0 修复是否已装载」，勿删（slot 用 .get 容旧进程内存态）。
+                    "cooldown": sum(v.get("cooldown", 0) for v in self._av.values()),
                     "by_platform": {p: dict(v) for p, v in self._av.items()},
                 },
                 "panel": {

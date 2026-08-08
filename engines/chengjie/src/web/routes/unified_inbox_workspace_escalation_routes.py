@@ -12,11 +12,13 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from typing import Any, Dict, List
 
 from fastapi import HTTPException, Request
 
+from src.inbox.store import SNOOZE_FOREVER_TS, is_permanent_snooze
 from src.web.routes.unified_inbox_auth import (
     _is_supervisor,
     _require_supervisor,
@@ -27,6 +29,81 @@ from src.web.routes.unified_inbox_sla import _escalation_snapshot, _sla_alert_sn
 from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
+
+
+def _record_snooze_ops_event(
+    conversation_id: str, *, by: str, action: str, until_ts: float = 0.0,
+) -> None:
+    """搁置操作落 ops_events 审计（90 天可追溯），best-effort 绝不阻断主流程。
+
+    - ``kind``＝``conv_snooze``；``reason``＝``set``（定时）/``forever``（永久）/``clear``（取消）；
+    - ``detail``＝``conv=<id>;by=<agent>[;until=<epoch>]``——「谁把哪个客户永久搁置了」从
+      不可考变成可查（P0 时 ``set_snooze(by=)`` 只收参不落痕，这里补上最后一米）。
+    platform/account 从 conversation_id（``platform:account:chat_key``）反解，解不出不猜。
+    """
+    try:
+        from src.ops.ops_events import get_ops_event_store
+
+        store = get_ops_event_store()
+        if store is None:
+            return
+        parts = str(conversation_id or "").split(":", 2)
+        platform = parts[0] if len(parts) >= 3 else ""
+        account = parts[1] if len(parts) >= 3 else ""
+        detail = f"conv={conversation_id};by={by}"
+        if action != "clear" and until_ts:
+            detail += f";until={int(until_ts)}"
+        store.record(
+            "conv_snooze", account_id=account,
+            platform=platform or "telegram", reason=str(action or ""),
+            detail=detail,
+        )
+    except Exception:
+        logger.debug("[snooze] ops 事件审计失败（已忽略）", exc_info=True)
+
+
+def _snooze_history(conversation_id: str, *, limit: int = 10) -> List[Dict[str, Any]]:
+    """从 ops_events 反查该会话的 conv_snooze 事件（新→旧），供面板显示搁置来源。
+
+    detail 契约＝``conv=<id>;by=<agent>[;until=<epoch>]``（``_record_snooze_ops_event``
+    唯一写入口）。先按 account_id（conversation_id 第二段）缩小扫描窗，再精确匹配
+    ``conv=`` 段；缺库/解析失败 → 空列表（消费方隐藏该行，绝不报错）。
+    """
+    try:
+        from src.ops.ops_events import get_ops_event_store
+
+        store = get_ops_event_store()
+        if store is None:
+            return []
+        cid = str(conversation_id or "")
+        parts = cid.split(":", 2)
+        account = parts[1] if len(parts) >= 3 else ""
+        out: List[Dict[str, Any]] = []
+        for r in store.recent(account_id=account, limit=200):
+            if str(r.get("kind") or "") != "conv_snooze":
+                continue
+            fields: Dict[str, str] = {}
+            for seg in str(r.get("detail") or "").split(";"):
+                k, _, v = seg.partition("=")
+                fields[k] = v
+            if fields.get("conv") != cid:
+                continue
+            try:
+                until = float(fields.get("until") or 0)
+            except (TypeError, ValueError):
+                until = 0.0
+            out.append({
+                "ts": float(r.get("ts") or 0),
+                "action": str(r.get("reason") or ""),
+                "by": str(fields.get("by") or ""),
+                "until_ts": until,
+            })
+            if len(out) >= limit:
+                break
+        return out
+    except Exception:
+        logger.debug("[snooze] 审计反查失败（已忽略）", exc_info=True)
+        return []
 
 
 def register_workspace_escalation_routes(app, *, api_auth) -> None:
@@ -193,10 +270,13 @@ def register_workspace_escalation_routes(app, *, api_auth) -> None:
     async def api_workspace_conversation_snooze(
         request: Request, conversation_id: str,
     ):
-        """把会话搁置 N 分钟（或到指定 until_ts）——从「待接管/超时告警」队列临时移出。
+        """把会话搁置 N 分钟 / 到指定时刻 / 永久——从「待接管/超时告警」队列移出。
 
-        Body JSON: ``{"minutes": 120}`` 或 ``{"until_ts": <epoch 秒>}``。
-        到点自动重浮；客户期间再来消息则立即重浮。任何已认证坐席可操作自己在看的会话。
+        Body JSON 三选一：``{"minutes": 120}`` / ``{"until_ts": <epoch 秒>}`` /
+        ``{"forever": true}``（＝搁到 ``SNOOZE_FOREVER_TS`` 哨兵，不再按时间重浮）。
+        到点自动重浮；客户期间再来消息则**任何档位都**立即重浮（永久≠静音）。
+        ``until_ts`` 必须是未来的有限时刻（过去→400 而非旧的静默取消，超远期钉到哨兵）。
+        任何已认证坐席可操作自己在看的会话。
         """
         api_auth(request)
         inbox = _inbox_store(request)
@@ -206,11 +286,21 @@ def register_workspace_escalation_routes(app, *, api_auth) -> None:
         if not cid:
             raise HTTPException(400, tr(request, "err.ws.field_required", field="conversation_id"))
         body = await request.json()
-        if body.get("until_ts") is not None:
+        if body.get("forever"):
+            until_ts = SNOOZE_FOREVER_TS
+        elif body.get("until_ts") is not None:
             try:
                 until_ts = float(body.get("until_ts"))
             except (TypeError, ValueError):
                 raise HTTPException(400, tr(request, "err.ws.until_ts_invalid"))
+            if math.isnan(until_ts):
+                raise HTTPException(400, tr(request, "err.ws.until_ts_invalid"))
+            if until_ts > SNOOZE_FOREVER_TS:
+                until_ts = SNOOZE_FOREVER_TS  # +inf / 超远期一律按「永久」哨兵
+            elif until_ts <= time.time():
+                # 旧行为是静默取消（set_snooze 视过去为 cancel）——前端弹「搁置失败」
+                # 却不知为何。自定义时间上线后这条路径会被真实踩到，改为明确 400。
+                raise HTTPException(400, tr(request, "err.ws.until_ts_past"))
         else:
             try:
                 minutes = float(body.get("minutes") or 0)
@@ -221,8 +311,14 @@ def register_workspace_escalation_routes(app, *, api_auth) -> None:
             until_ts = time.time() + minutes * 60.0
         by = _session_agent(request)["agent_id"]
         snoozed = inbox.set_snooze(cid, until_ts, by=by)
+        if snoozed:
+            _record_snooze_ops_event(
+                cid, by=by,
+                action="forever" if is_permanent_snooze(until_ts) else "set",
+                until_ts=until_ts)
         return {"ok": True, "conversation_id": cid, "snoozed": snoozed,
-                "snooze_until": until_ts if snoozed else 0}
+                "snooze_until": until_ts if snoozed else 0,
+                "permanent": bool(snoozed and is_permanent_snooze(until_ts))}
 
     @app.post("/api/workspace/conversation/{conversation_id}/unsnooze")
     async def api_workspace_conversation_unsnooze(
@@ -237,6 +333,7 @@ def register_workspace_escalation_routes(app, *, api_auth) -> None:
         if not cid:
             raise HTTPException(400, tr(request, "err.ws.field_required", field="conversation_id"))
         inbox.clear_snooze(cid)
+        _record_snooze_ops_event(cid, by=_session_agent(request)["agent_id"], action="clear")
         return {"ok": True, "conversation_id": cid, "snoozed": False}
 
     @app.post("/api/workspace/conversation/{conversation_id}/seen-mention")
@@ -270,3 +367,20 @@ def register_workspace_escalation_routes(app, *, api_auth) -> None:
             return {"ok": True, "items": [], "total": 0}
         items = inbox.list_snoozed(limit=200)
         return {"ok": True, "items": items, "total": len(items)}
+
+    @app.get("/api/workspace/conversation/{conversation_id}/snooze-history")
+    async def api_workspace_conversation_snooze_history(
+        request: Request, conversation_id: str,
+    ):
+        """该会话的搁置操作史（审计反查：谁在何时 搁置/永久/取消）。
+
+        供搁置面板显示来源（「由谁设置」——别的坐席搁的一眼可知）。
+        审计缺库/无记录 → 空列表，面板隐藏该行。任何已认证坐席可读。
+        """
+        api_auth(request)
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            raise HTTPException(400, tr(request, "err.ws.field_required", field="conversation_id"))
+        items = _snooze_history(cid, limit=10)
+        return {"ok": True, "conversation_id": cid, "items": items,
+                "total": len(items)}

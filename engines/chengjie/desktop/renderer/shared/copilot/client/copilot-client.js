@@ -285,8 +285,25 @@
     }
     // —— 语音克隆 / TTS（与统一收件箱同源）——
     async voiceProfiles() { return this._get("/api/voice/profiles"); }
-    async voiceTts({ text, persona_id }) {
-      return this._post("/api/voice/tts-test", { text, persona_id: persona_id || undefined });
+    /* 音色状态条数据源（P1 2026-08-05）：带会话上下文的实际解析快照
+       （将用谁的声/后端/就绪/hub 风险），与 send-voice 同源解析。 */
+    async voiceEffectiveConfig({ persona_id, chat_key, platform, account_id }) {
+      const q = new URLSearchParams();
+      if (persona_id) q.set("persona_id", persona_id);
+      if (chat_key) q.set("chat_key", chat_key);
+      if (platform) q.set("platform", platform);
+      if (account_id) q.set("account_id", account_id);
+      return this._get(`/api/voice/effective-config?${q.toString()}`);
+    }
+    async voiceTts({ text, persona_id, chat_key, platform, account_id }) {
+      // 会话上下文（可选）：带上后试听与 send-voice 走同一组解析入参
+      // （试听=发送 契约；不带=旧行为，服务端按全局回落解析）。
+      return this._post("/api/voice/tts-test", {
+        text, persona_id: persona_id || undefined,
+        chat_key: chat_key || undefined,
+        platform: platform || undefined,
+        account_id: account_id || undefined,
+      });
     }
     async sendVoice(body) { return this._post("/api/unified-inbox/send-voice", body || {}); }
     async voiceReconcile() { return this._get("/api/voice/reconcile"); }
@@ -309,6 +326,14 @@
       fd.append("preferred_name", String(p.preferred_name || ""));
       fd.append("language_type", String(p.language_type || "Japanese"));
       if (p.reference_text) fd.append("reference_text", String(p.reference_text));
+      // P0「从消息一键导入」扩展字段（缺省不带＝旧口径零变化）：media_ref 让服务端
+      // 直读会话归档语音；owner_consent/force 过授权与质检门；其余三个是音色溯源。
+      for (const k of ["media_ref", "owner_consent", "force",
+                       "platform", "conversation_id", "message_id"]) {
+        if (p[k] !== undefined && p[k] !== null && String(p[k]) !== "") {
+          fd.append(k, String(p[k]));
+        }
+      }
       // multipart 写请求同样要过 CSRF（S3 起非 JSON 写也强校验）；Content-Type 由浏览器带 boundary
       const r = await fetch("/api/voice/enroll", { method: "POST", headers: _writeHeaders(), body: fd });
       return await r.json();
@@ -517,6 +542,10 @@
     async voiceProfiles() {
       const s = this._shell();
       return s.voiceProfiles ? s.voiceProfiles() : { ok: false };
+    }
+    async voiceEffectiveConfig(args) {
+      const s = this._shell();
+      return s.voiceEffectiveConfig ? s.voiceEffectiveConfig(args || {}) : { ok: false };
     }
     async voiceTts(args) {
       const s = this._shell();

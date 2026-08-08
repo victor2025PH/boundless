@@ -29,7 +29,7 @@
 <div class="da-wrap">
   <div class="da-header">
     <h2 style="margin:0;font-size:18px;">🔍 {{ (i18n or {}).get('da_s001', "草稿审计日志") }}</h2>
-    <a href="/workspace/drafts" style="font-size:13px;color:var(--th-ink-blue6,#2563eb);text-decoration:none;">← {{ (i18n or {}).get('da_s002', "返回草稿工作台") }}</a>
+    <a href="/workspace/drafts" style="font-size:13px;color:var(--th-ink-blue6,#1d4ed8);text-decoration:none;">← {{ (i18n or {}).get('da_s002', "返回草稿工作台") }}</a>
   </div>
   <div class="da-filters">
     <select id="f-days" onchange="load()">
@@ -47,7 +47,7 @@
       <option value="approved">{{ (i18n or {}).get('da_o_approved', "approved（批准）") }}</option>
       <option value="rejected">{{ (i18n or {}).get('da_o_rejected', "rejected（拒绝）") }}</option>
     </select>
-    <span id="da-count" style="font-size:12px;color:var(--th-ink-slate4,#94a3b8);"></span>
+    <span id="da-count" style="font-size:12px;color:var(--th-ink-slate4,#5b6b85);"></span>
   </div>
   <table class="da-table">
     <thead>
@@ -122,7 +122,7 @@ function load(){
         +'<td>'+esc(it.agent_id||'—')+'</td>'
         +'<td style="font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+esc(it.draft_id)+'">'+esc(it.draft_id||'—')+'</td>'
         +'<td style="font-size:11px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+esc(it.conversation_id)+'">'+esc(it.conversation_id||'—')+'</td>'
-        +'<td style="font-size:11px;color:'+(it.risk_level==='high'?'var(--th-ink-red6,#dc2626)':it.risk_level==='medium'?'var(--th-ink-amber6,#d97706)':'var(--th-ink-gray5,#6b7280)')+';">'+esc(it.risk_level||'—')+'</td>'
+        +'<td style="font-size:11px;color:'+(it.risk_level==='high'?'var(--th-ink-red6,#b91c1c)':it.risk_level==='medium'?'var(--th-ink-amber6,#92400e)':'var(--th-ink-gray5,#6b7280)')+';">'+esc(it.risk_level||'—')+'</td>'
         +'<td style="font-size:12px;color:var(--th-ink-slate5,#64748b);max-width:180px;">'+esc(it.reason||'—')+'</td>'
         +'</tr>';
     }).join('');

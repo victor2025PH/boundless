@@ -206,7 +206,7 @@ F.render = function(data){
   if(!bars || !total || !rates) return;
 
   if(data && data.error){
-    bars.innerHTML = '<div class="rpa-funnel-empty" style="color:var(--th-ink-red6,#dc2626)">' + window.T('rpa_load_failed') + ' <button class="btn-sec" type="button" style="margin-left:.4rem;font-size:.75rem" onclick="window.rpa&&rpa.funnel&&rpa.funnel.refresh()">' + window.T('rpa_retry') + '</button></div>';
+    bars.innerHTML = '<div class="rpa-funnel-empty" style="color:var(--th-ink-red6,#b91c1c)">' + window.T('rpa_load_failed') + ' <button class="btn-sec" type="button" style="margin-left:.4rem;font-size:.75rem" onclick="window.rpa&&rpa.funnel&&rpa.funnel.refresh()">' + window.T('rpa_retry') + '</button></div>';
     total.textContent = '';
     rates.innerHTML = '';
     return;
@@ -326,7 +326,7 @@ F._renderTimeseries = function(data){
   const body = document.getElementById('rpa-funnel-ts-body');
   if(!body) return;
   if(data && data.error){
-    body.innerHTML = '<div class="rpa-funnel-ts-empty" style="color:var(--th-ink-red6,#dc2626)">' + window.T('rpa_load_failed') + ' <button class="btn-sec" type="button" style="margin-left:.35rem;font-size:.72rem" onclick="window.rpa&&rpa.funnel&&rpa.funnel._refreshTimeseries()">' + window.T('rpa_retry') + '</button></div>';
+    body.innerHTML = '<div class="rpa-funnel-ts-empty" style="color:var(--th-ink-red6,#b91c1c)">' + window.T('rpa_load_failed') + ' <button class="btn-sec" type="button" style="margin-left:.35rem;font-size:.72rem" onclick="window.rpa&&rpa.funnel&&rpa.funnel._refreshTimeseries()">' + window.T('rpa_retry') + '</button></div>';
     return;
   }
   if(!data || !Array.isArray(data.series) || data.series.length === 0){
@@ -458,7 +458,7 @@ F._renderAlerts = function(data){
   const ackAllBtn = document.getElementById('rpa-kpi-alerts-ack-all');
   if(!body) return;
   if(data && data.error){
-    body.innerHTML = '<div class="rpa-kpi-alerts-empty" style="color:var(--th-ink-red6,#dc2626)">' + window.T('rpa_load_failed') + ' <button class="btn-sec" type="button" style="margin-left:.35rem;font-size:.72rem" onclick="window.rpa&&rpa.funnel&&rpa.funnel._refreshAlerts()">' + window.T('rpa_retry') + '</button></div>';
+    body.innerHTML = '<div class="rpa-kpi-alerts-empty" style="color:var(--th-ink-red6,#b91c1c)">' + window.T('rpa_load_failed') + ' <button class="btn-sec" type="button" style="margin-left:.35rem;font-size:.72rem" onclick="window.rpa&&rpa.funnel&&rpa.funnel._refreshAlerts()">' + window.T('rpa_retry') + '</button></div>';
     if(badge) badge.style.display = 'none';
     if(ackAllBtn) ackAllBtn.style.display = 'none';
     return;

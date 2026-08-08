@@ -1,12 +1,24 @@
+{# 词典载入分两档（P2 传输减重 2026-08-07）：
+   ① 上下文有 i18n_fp（新进程，_enrich_context 注入）→ 外链 /i18n/ws-i18n.js?v=<内容指纹>
+      + immutable 一年缓存——词典 560KB/页 从每次导航里消失，改词条=指纹变=新 URL 即时生效；
+   ② 无 i18n_fp（旧进程 / 测试直渲）→ 原样内联整包。
+   ⚠ 这个分支是 **restart 安全契约**：模板热更新先于进程重启上生产，旧进程没有
+   /i18n/ 路由也没有 i18n_fp，走 ② 行为与历史逐字节一致；勿删除内联分支。 #}
+{% if i18n_fp is defined and i18n_fp %}
+<script src="/i18n/ws-i18n.js?lang={{ ui_lang|default('zh') }}&v={{ i18n_fp }}"></script>
+{% endif %}
 <script>
 /* 工作台 / 管理后台「共享」i18n + 日期 locale 引导（P1 i18n step③-S：抽成单一真源 partial）。
    被 workspace_base.html 与 base.html 同时 include，杜绝两套外壳脚本漂移。
    注意：Jinja 会解析本文件里的 双花括号 / 花括号-百分号 定界符（即便在 JS 注释内），故此处不写这些定界符字面量。
    复用 admin.py inject_i18n 中间件注入的 i18n 整包 + ui_lang（语言源 = ui_lang cookie / set_lang / lang 查询参数）。
    提供：window.T / Tf（文案）、wsFmtDate/Time/DateTime + wsDateLocale（日期本地化）、wsApplyI18n（data-i18n 静态替换）。 */
+{% if not (i18n_fp is defined and i18n_fp) %}
 window.WS_I18N = {{ i18n|default({})|tojson }};
-window.WS_LANG = "{{ ui_lang|default('zh') }}";
-window.WS_LOCALE = "{{ 'zh-CN' if (ui_lang|default('zh')) == 'zh' else ('vi-VN' if (ui_lang|default('zh')) == 'vi' else 'en-US') }}";
+{% endif %}
+window.WS_I18N = window.WS_I18N || {};   /* 外链包意外未达时 T() 回落键名，不抛错 */
+window.WS_LANG = window.WS_LANG || "{{ ui_lang|default('zh') }}";
+window.WS_LOCALE = window.WS_LOCALE || "{{ 'zh-CN' if (ui_lang|default('zh')) == 'zh' else ('vi-VN' if (ui_lang|default('zh')) == 'vi' else 'en-US') }}";
 window.wsDateLocale = function(){ return window.WS_LOCALE || (window.WS_LANG==='en'?'en-US':(window.WS_LANG==='vi'?'vi-VN':'zh-CN')); };
 window.wsFmtDate = function(ts, opts){
   if(ts==null||ts==='') return '';

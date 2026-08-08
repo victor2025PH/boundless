@@ -917,7 +917,8 @@
       var steps=pending.map(function(c){
         var color=c.status==='fail'?'var(--tk-danger)':'var(--tk-amber)';
         var act=c.action_url?'<a href="'+c.action_url+'" style="margin-left:auto;font-size:12px;font-weight:600;color:var(--tk-brand);text-decoration:none;border:1px solid var(--tk-brand);border-radius:7px;padding:5px 11px;background:var(--th-bg-blue10,rgba(59,130,246,.1));white-space:nowrap;">'+(c.action_label||T('dash.ob.go'))+' →</a>':'';
-        return '<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--th-bd-amber25,rgba(245,158,11,.25));">'
+        // data-ob-id：给交互引导（_guided_tour）一个稳定的高亮锚点（清单项 id 即锚）
+        return '<div data-ob-id="'+escHtml(c.id||'')+'" style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--th-bd-amber25,rgba(245,158,11,.25));">'
           +'<span style="width:9px;height:9px;border-radius:50%;background:'+color+';flex-shrink:0;"></span>'
           +'<div style="min-width:0;"><div style="font-size:13px;font-weight:600;color:var(--tk-text);">'+escHtml(c.name)+'</div>'
           +'<div style="font-size:11px;color:var(--tk-warn-ink);">'+escHtml(c.detail)+'</div></div>'+act+'</div>';
@@ -933,10 +934,47 @@
         +'<div><div style="font-size:15px;font-weight:700;color:var(--tk-text);">'+headline+'</div>'
         +'<div style="font-size:12px;color:var(--tk-warn-ink);">'+Tf('dash.ob.progress',{ok:(s.ok||0),total:(s.total||0)})+' · '
         +'<a href="/workspace/golive" style="color:var(--tk-brand);">'+T('dash.ob.full_check')+'</a></div></div>'
-        +'<span style="margin-left:auto;">'+dismissBtn+'</span></div>'
+        +'<span style="margin-left:auto;display:flex;align-items:center;gap:10px;">'
+        +'<button type="button" id="db-ob-tour" style="border:1px solid var(--tk-brand);background:var(--tk-brand);color:var(--th-ink-inverse,#fff);border-radius:8px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;">▶ '+T('gtour_start')+'</button>'
+        +dismissBtn+'</span></div>'
         +steps+'</div>';
       box.style.display='block';
+      // 引导入口用 addEventListener 接线（不新增内联 on*，规避哑按钮门禁面）
+      var _tb=document.getElementById('db-ob-tour');
+      if(_tb) _tb.addEventListener('click',function(){ startOnboardTour(d); });
+      // 首登自动开讲一次（P1 收尾 2026-08-07）：托管新客户第一次进工作台不用自己
+      // 发现「开始引导」按钮。四重闸：①清单非绿（绿灯上面已 return，老实例零打扰）
+      // ②没点过「不再提示」 ③从未完成/跳过过引导（bl_tour_done，Esc/跳过/完成都落）
+      // ④本页仅一次（loadOnboard 重入不重启进行中的引导）。
+      if(!window.__obTourAutoFired && !dismissed && window.blTour && !window.blTour.seen()){
+        window.__obTourAutoFired=1;
+        setTimeout(function(){ startOnboardTour(d); },700);
+      }
     }).catch(function(){});
+  }
+
+  // 交互式新手引导：**步骤由实时清单动态生成**（而不是写死脚本）——
+  // 用户实际缺什么就引导什么，配好一项下次就自动少一步，永远不会和清单漂移。
+  function startOnboardTour(d){
+    if(!window.blTour||!d) return;
+    var pend=(d.checks||[]).filter(function(c){return c.status!=='ok';});
+    var list=[{
+      sel:'#db-onboard',
+      title:T('gtour_welcome_t'),
+      body:T('gtour_welcome_b'),
+      // 「哇时刻」前置：不接真实渠道也能先看 AI 说话；新标签打开，引导不丢
+      html:'<a class="blTour-cta" href="/personas" target="_blank" rel="noopener">'+T('gtour_try_btn')+'</a>'
+    }];
+    pend.forEach(function(c){
+      list.push({sel:'[data-ob-id="'+(c.id||'')+'"]',
+                 title:c.name||'', body:(c.detail||'')+' '+T('gtour_cfg_hint')});
+    });
+    if(!pend.length){
+      list.push({sel:'#db-onboard', title:T('gtour_none_t'), body:T('gtour_none_b')});
+    }
+    list.push({sel:'#db-onboard a[href="/workspace/golive"]',
+               title:T('gtour_final_t'), body:T('gtour_final_b')});
+    window.blTour.start(list);
   }
   function escHtml(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
   function dismissOnboard(){
@@ -1390,7 +1428,8 @@
         qaBtn.onclick=function(e){
           e.preventDefault();
           if(!confirm(T('dash.qa.confirm'))) return;
-          fetch('/api/drafts/bulk-autosend',{method:'POST',headers:{'Content-Type':'application/json'}})
+          // 同步循环批发（≤200 张）可跑分钟级 → 10min 显式预算保证必然 settle
+          apiFetch('/api/drafts/bulk-autosend',{method:'POST',headers:{'Content-Type':'application/json'}},{timeoutMs:600000})
             .then(function(r){return r.json();}).then(function(d){
               alert(Tf('dash.qa.sent',{sent:d.sent})+(d.errors?Tf('dash.qa.errors',{n:d.errors}):''));
             }).catch(function(){ alert(T('dash.qa.fail')); });

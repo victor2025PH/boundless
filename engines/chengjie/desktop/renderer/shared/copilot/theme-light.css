@@ -20,7 +20,14 @@
   --cp-ok: #0f9d75;
   --cp-warn: #d97706;
   --cp-danger: #dc2626;
-  /* violet=协作/@提及/关系阶段(暧昧档)强调色（cp-collab 阶段 chip 用） */
+  /* violet=协作/@提及/关系阶段(暧昧档)强调色（cp-collab 阶段 chip 用；
+     cp-goal 自定义目标高亮卡同色） */
   --cp-violet: #7c3aed;
+  /* goal-*=工作目标场景类别色（cp-goal 建目标向导：卡片色条/图标/弹层色带）
+     转化=琥珀 关系=玫红 唤回=天蓝 摸底=青绿 */
+  --cp-goal-conv: #b45309;
+  --cp-goal-rel: #e11d48;
+  --cp-goal-eng: #0284c7;
+  --cp-goal-disc: #0d9488;
   --cp-track: #e2e8f0;
 }

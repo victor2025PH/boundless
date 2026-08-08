@@ -66,7 +66,7 @@
     <h2><span class="refresh-dot"></span>{{ (i18n or {}).get('qm_s002', "实时运营队列看板") }}</h2>
     <div style="display:flex;align-items:center;gap:12px;">
       <span class="qm-ts" id="qm-ts">{{ (i18n or {}).get('dash.loading', "加载中…") }}</span>
-      <button onclick="loadQM()" style="padding:5px 12px;border:1px solid #475569;border-radius:7px;background:transparent;color:var(--th-ink-slate4,#94a3b8);font-size:12px;cursor:pointer;">{{ (i18n or {}).get('qm_s003', "手动刷新") }}</button>
+      <button onclick="loadQM()" style="padding:5px 12px;border:1px solid #475569;border-radius:7px;background:transparent;color:var(--th-ink-slate4,#5b6b85);font-size:12px;cursor:pointer;">{{ (i18n or {}).get('qm_s003', "手动刷新") }}</button>
     </div>
   </div>
 
@@ -121,7 +121,7 @@
 <div class="reassign-modal" id="reassign-modal">
   <div class="reassign-box">
     <h3>{{ (i18n or {}).get('qm_s012', "重新分配会话") }}</h3>
-    <div style="font-size:13px;color:var(--th-ink-slate4,#94a3b8);margin-bottom:12px;">
+    <div style="font-size:13px;color:var(--th-ink-slate4,#5b6b85);margin-bottom:12px;">
       {{ (i18n or {}).get('qm_s015', "将") }} <strong id="ra-agent-from" style="color:var(--th-ink-slate1,#f1f5f9);"></strong> {{ (i18n or {}).get('qm_s013', "的会话分配给：") }}
     </div>
     <select class="reassign-select" id="ra-agent-to"></select>

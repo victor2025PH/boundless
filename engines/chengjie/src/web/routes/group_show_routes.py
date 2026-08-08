@@ -10,6 +10,7 @@
 - ``GET  /api/group-show/exposure``         —— 成员/演出/角色三读数 + 每场开口人数预算
 - ``POST /api/group-show/schedule``         —— 开演排期 + 节奏体检（时间轴）
 - ``GET  /api/group-show/sessions``         —— 最近场次（``GroupShowStore.recent_sessions``）
+- ``GET  /api/group-show/outcomes``         —— 真发场次的效果读数（群内反响 + 私聊转化）
 - ``POST /api/group-show/live``             —— 真发预检 / 后台开演（双锁 + 同群互斥）
 - ``GET  /group-show``                      —— 导播台页面（同源会话鉴权）
 
@@ -212,6 +213,35 @@ def playbook_dir(config_manager: Any) -> Path:
         if candidate.is_dir():
             return candidate
     return repo_default
+
+
+def _read_samples(config_manager: Any, pb: Any) -> Dict[str, Any]:
+    """某本戏当前有效的台词样例（子系统缺失/无样例 → 空壳，绝不 500）。"""
+    try:
+        from src.companion.group_show.samples import samples_for
+        return samples_for(_config_dir(config_manager), pb)
+    except Exception:  # noqa: BLE001 —— 样例是锦上添花，坏了不该让逐拍表打不开
+        logger.debug("[group_show] 台词样例读取失败（已忽略）", exc_info=True)
+        return {"lines": [], "ts": 0.0, "stale": False}
+
+
+def _save_samples(config_manager: Any, pb: Any, lines: Any) -> bool:
+    """把真 LLM 排练的台词存成样例。
+
+    落点是**实例可写配置区**，绝不写 ``config/playbooks/``——那在多数部署里是共享
+    只读代码根且被 git 跟踪，写进去会把仓库改脏（可能撞重启脚本的脏树闸门），打包态
+    更是根本存不下。解析不出可写位置就不存：少一份样例远好过污染代码根。
+    """
+    try:
+        from src.companion.group_show.samples import build_sample_entry, save_sample
+        entry = build_sample_entry(pb, lines or ())
+        if entry is None:
+            return False
+        return bool(save_sample(_config_dir(config_manager),
+                                str(getattr(pb, "id", "") or ""), entry))
+    except Exception:  # noqa: BLE001 —— 存样例失败绝不能让「排练成功」变成报错
+        logger.debug("[group_show] 台词样例写入失败（已忽略）", exc_info=True)
+        return False
 
 
 def _recorded_memberships(config_manager: Any) -> Dict[str, List[str]]:
@@ -585,14 +615,21 @@ def register_group_show_routes(app, ctx) -> None:
 
     @app.get("/api/group-show/playbooks/{pid}")
     async def api_group_show_playbook_detail(pid: str, request: Request):
-        """单本剧本的逐拍表（拍号 / 角色 / 意图 / 产品 / 软广 / 语速）。"""
+        """单本剧本的逐拍表（拍号 / 角色 / 意图 / 产品 / 软广 / 语速）+ 台词样例。
+
+        ``intent`` 是写给导演看的，不是客户会读到的话。样例来自**上一次真 LLM 排练**
+        （与真发同一条生成路径），按剧本内容指纹登记——剧本改过一个字就判陈旧、停止
+        展示：给市场看一份和当前剧本对不上的文案，比不给坏得多。
+        """
         api_auth(request)
         books, validate = _books(request)
         pb = books.get(str(pid or ""))
         if pb is None:
             raise HTTPException(
                 404, tr(request, "err.gs.playbook_not_found", pid=str(pid or "")))
-        return {"ok": True, "playbook": playbook_detail(pb, validate(pb))}
+        out = {"ok": True, "playbook": playbook_detail(pb, validate(pb))}
+        out["samples"] = _read_samples(config_manager, pb)
+        return out
 
     @app.post("/api/group-show/rehearse")
     async def api_group_show_rehearse(request: Request,
@@ -685,6 +722,11 @@ def register_group_show_routes(app, ctx) -> None:
 
         payload = rehearsal_payload(result, generator)
         payload["speaker_cap"] = cap
+        # 真 LLM 排出来的台词顺手存成样例：与真发同源，谁排一次就给全团队备了货。
+        # 占位台词绝不入库（那是「台词1台词2」，展示它等于骗人）。
+        if generator == "llm":
+            payload["sample_saved"] = _save_samples(
+                config_manager, pb, getattr(result, "lines", None))
         return payload
 
     @app.get("/api/group-show/linkage")
@@ -1022,6 +1064,48 @@ def register_group_show_routes(app, ctx) -> None:
             # casting 是对象（续演用），JSON 只回 cast 字典视图。
             "sessions": [{k: v for k, v in r.items() if k != "casting"}
                          for r in rows],
+        }
+
+    @app.get("/api/group-show/outcomes")
+    async def api_group_show_outcomes(request: Request,
+                                      window_hours: float = 0.0,
+                                      limit: int = 10):
+        """最近**真发**场次的效果读数（排练不算——它一条消息都没发过）。
+
+        口径全在 :mod:`~src.companion.group_show.outcome`，取数全在
+        ``ledgers.read_show_outcomes``：本文件一行业务判断都不自己写，否则效果
+        数字会出现第二套实现，而它会被写进周报当作「这批号还投不投」的依据。
+        """
+        api_auth(request)
+        try:
+            from src.companion.group_show.ledgers import read_show_outcomes
+            from src.companion.group_show.outcome import (
+                DEFAULT_WINDOW_HOURS, by_playbook, clamp_window_hours, rollup,
+            )
+        except Exception:  # noqa: BLE001 —— 子系统缺失是空态不是故障
+            logger.debug("[group_show] outcome 模块不可用", exc_info=True)
+            return {"ok": True, "available": False, "outcomes": []}
+        degraded: List[str] = []
+        win = clamp_window_hours(window_hours or DEFAULT_WINDOW_HOURS)
+        try:
+            items = read_show_outcomes(
+                _store(config_manager), _inbox_store(request),
+                window_hours=win, limit=int(limit or 10), degraded=degraded)
+        except Exception:  # noqa: BLE001 —— 效果卡是旁路能力，挂了别拖垮整页
+            logger.debug("[group_show] 效果读数不可用", exc_info=True)
+            return {"ok": True, "available": False, "outcomes": []}
+        return {
+            "ok": True,
+            "available": True,
+            "window_hours": win,
+            "outcomes": [o.to_dict() for o in items],
+            "rollup": rollup(items),
+            # 按剧本对比：样本不足的行**不给百分比**（两场戏的运气差异会被读成结论，
+            # 运营据此砍掉一本其实没问题的剧本，比没有这张表坏得多）。
+            "by_playbook": by_playbook(items),
+            # 少读一本账 ⇒ 读数偏「没效果」。必须原样透出去：
+            # 「查不到」和「真的没人理」在屏幕上一模一样，该做的事却完全相反。
+            "degraded": degraded,
         }
 
     @app.post("/api/group-show/live")

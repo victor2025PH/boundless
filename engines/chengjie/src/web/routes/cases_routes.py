@@ -1,12 +1,16 @@
-"""运营 case 管理 API 路由（Phase E1 续拆，从 admin.py 抽出）。
+"""运营 case 管理 API 路由（Phase E1 续拆；2026-08-03 案例中心改造）。
 
-端点（与抽出前逐行一致）：
-  GET  /api/cases/active            活跃 case 列表（带 _case_id 的上下文）
-  POST /api/cases/{case_id}/note    为 case 加备注
-  POST /api/cases/{case_id}/close   结案
+端点（路径与抽出前一致，响应向后兼容、只增字段）：
+  GET  /api/cases/active            案例列表（内存缓存 + SQLite 兜底，重启不失明）
+  POST /api/cases/{case_id}/note    为 case 加备注（写后即刷持久化）
+  POST /api/cases/{case_id}/close   结案（写后即刷持久化）
 
-依赖经 AdminRouteContext 注入（telegram_client/api_auth/audit_store）。
-copilot/chat-test 仍留 admin.py（体量大、依赖重），其 _copilot_get_ctx_store 不受影响。
+生命周期/排序/行构建等语义全部收在 ``src/utils/case_center``（纯函数核心，
+skill_manager 立案侧与本路由消费侧共用同一事实源）。
+
+reason 本地化：上下文里只存 i18n 键 + 参数（``_case_reason_code/_params``），
+本路由按请求语言经 ``tr()`` 渲染 ``reason`` 字段——响应文案零硬编码中文
+（``_ROUTE_CJK_CEILINGS`` 本文件密封为 0）。
 """
 
 from __future__ import annotations
@@ -28,77 +32,126 @@ def register_cases_routes(app, ctx) -> None:
         sm = resolve_skill_manager(telegram_client, app)
         return getattr(sm, "_context_store", None) if sm else None
 
+    def _persist(ctx_store, uid: str) -> None:
+        """备注/结案写入后立即落盘——否则该用户不再发消息时改动只活在内存，
+        重启即丢（旧实现的静默丢数据缺陷）。"""
+        try:
+            if hasattr(ctx_store, "mark_dirty"):
+                ctx_store.mark_dirty(uid)
+            if hasattr(ctx_store, "flush"):
+                ctx_store.flush(uid)
+        except Exception:
+            pass
+
+    def _find_case_ctx(ctx_store, case_id: str):
+        """按案号定位 (uid, ctx)：先内存缓存，再 SQLite 兜底（经 get() 载回缓存）。"""
+        for uid, c in list(getattr(ctx_store, "_cache", {}).items()):
+            if isinstance(c, dict) and c.get("_case_id") == case_id:
+                return uid, c
+        iter_db = getattr(ctx_store, "iter_persisted_case_rows", None)
+        if callable(iter_db):
+            try:
+                for uid, c in iter_db():
+                    if c.get("_case_id") == case_id:
+                        return uid, ctx_store.get(uid)
+            except Exception:
+                pass
+        return None, None
+
+    def _localized_reason(request: Request, row: dict) -> str:
+        code = str(row.get("reason_code") or "case.reason.legacy")
+        params = row.get("reason_params")
+        fmt = {}
+        if isinstance(params, dict):
+            fmt = {str(k): v for k, v in params.items()}
+        try:
+            text = tr(request, code, None, **fmt)
+        except Exception:
+            text = code
+        if text == code and row.get("pattern_desc"):
+            # 未登记的键（如域包自定义链模式）→ 退回模式描述，别把键名裸给运营。
+            return str(row.get("pattern_desc"))
+        return text
+
     @app.get("/api/cases/active")
     async def api_cases_active(request: Request):
-        """返回所有有 _case_id 的活跃用户 case"""
+        """全部可见案例（未结案在前；已结案滞留 7 天淡出）。"""
         _api_auth(request)
         ctx_store = _get_ctx_store()
         if not ctx_store:
             return {"cases": [], "count": 0}
 
-        cases = []
-        for uid, c in ctx_store._cache.items():
-            case_id = c.get("_case_id")
-            if not case_id:
-                continue
-            chain = c.get("_intent_chain", [])
-            pattern = c.get("_chain_pattern", {})
-            profile = c.get("_user_profile", {})
-            cases.append({
-                "case_id": case_id,
-                "user_id": uid,
-                "chat_id": c.get("chat_id", ""),
-                "chat_title": c.get("chat_title", ""),
-                "intent_chain": chain[-8:],
-                "pattern": pattern.get("pattern", "") if isinstance(pattern, dict) else "",
-                "pattern_desc": pattern.get("desc", "") if isinstance(pattern, dict) else "",
-                "satisfaction": profile.get("satisfaction", 80) if isinstance(profile, dict) else 80,
-                "at_risk": profile.get("at_risk", False) if isinstance(profile, dict) else False,
-                "consecutive_same": c.get("_consecutive_same_intent", 0),
-                "last_message": (c.get("last_message") or "")[:100],
-                "last_reply": (c.get("last_reply") or "")[:100],
-                "last_active": c.get("last_reply_time", 0),
-                "escalation": bool(c.get("_escalation_ts")),
-                "closed": c.get("_case_closed", False),
-                "note": c.get("_case_note", ""),
-            })
-        cases.sort(key=lambda x: (x["closed"], not x["at_risk"], -x["consecutive_same"]))
-        return {"cases": cases[:100], "count": len(cases)}
+        from src.utils.case_center import collect_case_rows
+        rows = collect_case_rows(ctx_store)
+        for r in rows:
+            r["reason"] = _localized_reason(request, r)
+            r.pop("reason_params", None)
+        return {"cases": rows[:100], "count": len(rows)}
 
     @app.post("/api/cases/{case_id}/note")
     async def api_case_note(request: Request, case_id: str):
-        """运营人员为 case 添加备注"""
+        """运营人员为 case 添加备注。"""
         _api_auth(request)
         data = await request.json()
         note = (data.get("note") or "").strip()
         ctx_store = _get_ctx_store()
         if not ctx_store:
             raise HTTPException(404, tr(request, "err.svc.context_store_not_ready"))
-        for uid, c in ctx_store._cache.items():
-            if c.get("_case_id") == case_id:
-                c["_case_note"] = note[:500]
-                actor = request.session.get("username", "web_admin")
-                if audit_store:
-                    audit_store.log(actor, "case_note", case_id, uid, note[:80])
-                return {"ok": True, "case_id": case_id}
-        raise HTTPException(404, tr(request, "err.case.not_found", case_id=case_id))
+        uid, c = _find_case_ctx(ctx_store, case_id)
+        if c is None:
+            raise HTTPException(404, tr(request, "err.case.not_found", case_id=case_id))
+        c["_case_note"] = note[:500]
+        _persist(ctx_store, uid)
+        actor = request.session.get("username", "web_admin")
+        if audit_store:
+            audit_store.log(actor, "case_note", case_id, uid, note[:80])
+        return {"ok": True, "case_id": case_id}
+
+    @app.post("/api/cases/{case_id}/claim")
+    async def api_case_claim(request: Request, case_id: str):
+        """认领 / 释放案例（body: {"release": bool}；多坐席分工用）。"""
+        _api_auth(request)
+        data = await request.json()
+        release = bool(data.get("release"))
+        ctx_store = _get_ctx_store()
+        if not ctx_store:
+            raise HTTPException(404, tr(request, "err.svc.context_store_not_ready"))
+        uid, c = _find_case_ctx(ctx_store, case_id)
+        if c is None:
+            raise HTTPException(404, tr(request, "err.case.not_found", case_id=case_id))
+        actor = request.session.get("username", "web_admin")
+        from src.utils.case_center import claim_case, release_case
+        if release:
+            release_case(c)
+            _persist(ctx_store, uid)
+            if audit_store:
+                audit_store.log(actor, "case_release", case_id, uid, "")
+            return {"ok": True, "case_id": case_id, "claimed_by": ""}
+        ok, holder = claim_case(c, actor, now=time.time())
+        if not ok:
+            raise HTTPException(
+                409, tr(request, "err.case.claimed_by_other", name=holder or "?"))
+        _persist(ctx_store, uid)
+        if audit_store:
+            audit_store.log(actor, "case_claim", case_id, uid, "")
+        return {"ok": True, "case_id": case_id, "claimed_by": holder}
 
     @app.post("/api/cases/{case_id}/close")
     async def api_case_close(request: Request, case_id: str):
-        """运营人员结案"""
+        """运营人员结案（复发时由 case_center 归档另立新案）。"""
         _api_auth(request)
         data = await request.json()
         resolution = (data.get("resolution") or "").strip()
         ctx_store = _get_ctx_store()
         if not ctx_store:
             raise HTTPException(404, tr(request, "err.svc.context_store_not_ready"))
-        for uid, c in ctx_store._cache.items():
-            if c.get("_case_id") == case_id:
-                c["_case_closed"] = True
-                c["_case_resolution"] = resolution[:500]
-                c["_case_closed_at"] = time.time()
-                actor = request.session.get("username", "web_admin")
-                if audit_store:
-                    audit_store.log(actor, "case_close", case_id, uid, resolution[:80])
-                return {"ok": True, "case_id": case_id}
-        raise HTTPException(404, tr(request, "err.case.not_found", case_id=case_id))
+        uid, c = _find_case_ctx(ctx_store, case_id)
+        if c is None:
+            raise HTTPException(404, tr(request, "err.case.not_found", case_id=case_id))
+        from src.utils.case_center import close_case
+        close_case(c, resolution, now=time.time())
+        _persist(ctx_store, uid)
+        actor = request.session.get("username", "web_admin")
+        if audit_store:
+            audit_store.log(actor, "case_close", case_id, uid, resolution[:80])
+        return {"ok": True, "case_id": case_id}

@@ -2,10 +2,11 @@
 <html lang="{{ 'zh-CN' if (ui_lang|default('zh')) == 'zh' else 'en' }}"><head><meta charset="utf-8">
 <title>Contacts · Ops</title>
 {% include "_i18n_bootstrap.html" %}
+{% include "_boot_error_guard.html" %}
 {% include "_api_fetch.html" %}
 <link rel="stylesheet" href="/static/brand/brand.css">
 <link rel="stylesheet" href="/static/brand/brand-fonts.css">
-<link rel="stylesheet" href="/static/theme-tokens.css?v=20260723c">
+<link rel="stylesheet" href="/static/theme-tokens.css?v=20260804b">
 <style>
 body{font-family:var(--bl-font-sans,-apple-system,'Segoe UI',sans-serif);max-width:1100px;margin:20px auto;padding:0 20px;background:#fafafa;color:#222}
 h1{font-size:20px;margin-bottom:4px}
@@ -352,10 +353,10 @@ async function openDrawer(contactId, name){
       return;
     }
     document.getElementById('drawer-body').innerHTML =
-      `<p style="font-size:11px;color:var(--th-ink-gray4,#9ca3af);margin:0 0 12px">${window.Tf('ops.ct.tl_summary',{n:events.length})}<strong>${d.funnel_stage||'-'}</strong></p>`
+      `<p style="font-size:11px;color:var(--th-ink-gray4,#5b6b85);margin:0 0 12px">${window.Tf('ops.ct.tl_summary',{n:events.length})}<strong>${d.funnel_stage||'-'}</strong></p>`
       + events.map(renderEvent).join('');
   }catch(e){
-    document.getElementById('drawer-body').innerHTML=`<p class="tl-empty" style="color:var(--th-ink-red6,#dc2626)">${window.T('dash.load_fail')}: ${e}</p>`;
+    document.getElementById('drawer-body').innerHTML=`<p class="tl-empty" style="color:var(--th-ink-red6,#b91c1c)">${window.T('dash.load_fail')}: ${e}</p>`;
   }
 }
 

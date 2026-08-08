@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}{{ (i18n or {}).get('ps.title', '个人设置') }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('ps.title', '个人设置') }}{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
+<style>
+/* ── 个人设置页（2026-08-04）──
+   外观区块由 appearance.js 渲染（与收件箱「主题配色」弹层同一渲染器）；
+   .ps-scope 把 base.html 令牌别名成 appearance.css 期望的聊天页变量名。 */
+.ps-scope{
+  --bg-elev:var(--card,var(--input,#fff));
+  --border:var(--bd,#e5e7eb);
+  --btn-border:var(--bd,#d1d5db);
+  --text-main:var(--t,#111827);
+  --text-sub:var(--t2,#6b7280);
+  --text-tiny:var(--t3,#6f7480);
+  --bg-soft:var(--input,#f8fafc);
+  --accent:var(--p,#1e8cf2);
+  max-width:1060px;
+}
+.ps-sub{color:var(--t2);font-size:.85rem;line-height:1.6;margin:0 0 1rem;}
+.ps-grid{display:grid;grid-template-columns:minmax(0,470px) minmax(0,1fr);gap:18px;align-items:start;}
+@media (max-width:900px){.ps-grid{grid-template-columns:1fr;}}
+.ps-card{border:1px solid var(--bd);border-radius:14px;padding:1rem 1.1rem;background:var(--card,var(--input));}
+.ps-card h3{margin:0 0 .6rem;font-size:.95rem;color:var(--t);}
+.ps-hint{color:var(--t3);font-size:.75rem;line-height:1.6;margin:.8rem 0 0;}
+/* 实时预览：吃 appearance.js 写在 <html> 上的同一组 CSS 变量，改哪看哪 */
+.psv-wall{background:var(--chat-wall,#f3f4f6);border:1px solid var(--bd);border-radius:12px;padding:14px 12px;display:flex;flex-direction:column;gap:8px;}
+:root[data-cp-theme="dark"] .psv-wall{background:var(--chat-wall,#131418);}
+.psv-day{text-align:center;}
+.psv-day span{display:inline-block;font-size:11px;padding:2px 10px;border-radius:999px;background:color-mix(in srgb,var(--card,#fff) 76%,transparent);color:var(--t2,#475569);}
+.psv-row{display:flex;}
+.psv-row.out{justify-content:flex-end;}
+.psv-bbl{max-width:86%;padding:9px 13px;border-radius:var(--bbl-radius,16px);font-size:var(--bbl-fs,13px);line-height:1.55;word-break:break-word;}
+.psv-row.in .psv-bbl{background:var(--bbl-in-bg,#ffffff);color:var(--bbl-in-fg,#111827);border:1px solid rgba(100,116,139,.25);border-bottom-left-radius:4px;}
+:root[data-cp-theme="dark"] .psv-row.in .psv-bbl{background:var(--bbl-in-bg,#23252c);color:var(--bbl-in-fg,#ececf0);}
+.psv-row.out .psv-bbl{background:var(--bbl-out-bg,#2563eb);color:var(--bbl-out-fg,#fff);border-bottom-right-radius:4px;}
+.psv-sub{margin-top:6px;padding-top:6px;border-top:1px dashed rgba(127,127,127,.4);opacity:.88;font-size:calc(var(--bbl-fs,13px) - 1px);}
+.psv-ts{text-align:right;font-size:11px;color:var(--t3);}
+</style>
+{% endblock %}
+{% block content %}
+<div class="ps-scope">
+  <p class="ps-sub">{{ (i18n or {}).get('ps.sub', '只影响你自己的账号；保存后自动漫游到你登录的其他设备与浏览器。') }}</p>
+  <div class="ps-grid">
+    <div class="ps-card">
+      <h3>{{ (i18n or {}).get('ps.sec.appearance', '外观与个性化') }}</h3>
+      <div id="ps-appearance" class="wsap-full"></div>
+    </div>
+    <div class="ps-card">
+      <h3>{{ (i18n or {}).get('ap.preview.title', '实时预览') }}</h3>
+      <div class="psv-wall">
+        <div class="psv-day"><span>{{ (i18n or {}).get('ap.preview.today', '今天') }}</span></div>
+        <div class="psv-row in"><div class="psv-bbl">{{ (i18n or {}).get('ap.preview.in1', '你那里今天有什么新闻吗？') }}<div class="psv-sub">{{ (i18n or {}).get('ap.preview.in1_sub', 'Do you have any news over there today?') }}</div></div></div>
+        <div class="psv-row out"><div class="psv-bbl">{{ (i18n or {}).get('ap.preview.out1', '刚看到票房新闻，国漫现在的实力真的不容小觑') }}<div class="psv-sub">{{ (i18n or {}).get('ap.preview.out1_sub', 'Just saw the box-office news — Chinese animation is impressive now') }}</div></div></div>
+        <div class="psv-ts">00:09 ✓✓</div>
+      </div>
+      <p class="ps-hint">{{ (i18n or {}).get('ps.inbox_hint', '聊天工作台左下角「主题配色」按钮可随时快速调整同一组设置。') }}</p>
+    </div>
+  </div>
+</div>
+<script>
+/* appearance.js 的 T() 解析器在无 window.T 的 base.html 页面回落到 __apI18n：
+   这里按渲染器实际用到的键列表内联服务端译文（键表与 appearance.js 同步维护）。 */
+window.__apI18n = {
+{%- set _apk = ['ap.pop.title','ap.pop.roam','ap.sec.theme','ap.sec.wall','ap.sec.custom','ap.sec.night','ap.sec.fs','ap.sec.radius','ap.sec.anim','ap.theme.brand','ap.theme.aurora','ap.theme.starry','ap.theme.sunset','ap.theme.graphite','ap.theme.sakura','ap.wall.flat','ap.wall.mist','ap.wall.night','ap.wall.dusk','ap.wall.dots','ap.night.auto','ap.night.light','ap.night.dark','ap.night.schedule','ap.night.from','ap.night.to','ap.custom.out','ap.custom.in','ap.custom.reset','ap.anim.label','ap.guard.fixed','ap.reset_all','ap.all_settings','ap.saved','ap.fs.hint'] %}
+{%- for k in _apk %}
+  {{ k|tojson }}: {{ ((i18n or {}).get(k, k))|tojson }}{{ "," if not loop.last }}
+{%- endfor %}
+};
+</script>
+<script src="/static/workspace/appearance.js?v=20260804a"></script>
+<script>
+(function(){
+  function go(){
+    var host = document.getElementById('ps-appearance');
+    if (host && window.WSAppearance) window.WSAppearance.mount(host, {header:false, allLink:false});
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', go);
+  else go();
+})();
+</script>
+{% endblock %}

@@ -4,7 +4,17 @@
 {% block head %}
 <style>
 .ca-filters{display:flex;flex-wrap:wrap;gap:.6rem;align-items:flex-end;margin-bottom:1rem}
-.ca-filters input{min-width:180px}
+/* 排版修正（2026-08-04）：min-width 通杀改点名（曾把「条数」写 90 实渲 180、连复选框都被撑宽）；
+   行内表单组清掉 .f-grp 纵向底边距，标签收进 .72 档 */
+#ca-prefix{min-width:180px}
+.ca-filters .f-grp{margin-bottom:0}
+.ca-filters .f-lbl{font-size:.72rem;color:var(--t3);margin-bottom:.3rem;white-space:nowrap}
+#ca-limit{width:90px}
+@media (max-width:640px){
+  .ca-filters{flex-direction:column;align-items:stretch}
+  .ca-filters .f-grp{width:100%}
+  #ca-prefix,#ca-limit{width:100%}
+}
 .table-wrap{overflow-x:auto}
 .ca-table{width:100%;border-collapse:collapse;font-size:.82rem}
 .ca-table th,.ca-table td{padding:.55rem .65rem;border-bottom:1px solid var(--bd);text-align:left;vertical-align:top}
@@ -23,14 +33,14 @@
 .btn-handle:hover{background:color-mix(in srgb, var(--p,#1e8cf2) 8%, transparent)}
 .ca-summary{display:flex;flex-wrap:wrap;gap:.75rem;margin-bottom:.75rem;font-size:.82rem}
 .ca-pill{padding:.35rem .7rem;border-radius:8px;background:var(--input);color:var(--t2)}
-.ca-pill strong{color:var(--t1)}
+.ca-pill strong{color:var(--t)}
 .ca-pill.warn strong{color:var(--amber)}
 .ca-pill.crit strong{color:var(--red)}
 .ca-modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:900;display:none;align-items:center;justify-content:center}
 .ca-modal-bg.open{display:flex}
 .ca-modal{background:var(--card);border-radius:12px;padding:1.25rem;max-width:420px;width:92%;box-shadow:0 8px 32px rgba(0,0,0,.2)}
 .ca-modal h3{margin:0 0 .75rem;font-size:1rem}
-.ca-modal textarea{width:100%;min-height:72px;resize:vertical;font-family:inherit;font-size:.85rem;padding:.5rem;border:1px solid var(--bd);border-radius:8px;background:var(--input);color:var(--t1)}
+.ca-modal textarea{width:100%;min-height:72px;resize:vertical;font-family:inherit;font-size:.85rem;padding:.5rem;border:1px solid var(--bd);border-radius:8px;background:var(--input);color:var(--t)}
 .ca-modal-actions{display:flex;gap:.5rem;justify-content:flex-end;margin-top:.75rem}
 </style>
 {% endblock %}
@@ -46,12 +56,12 @@
   <div class="ca-summary" id="ca-summary"></div>
   <div class="ca-filters">
     <div class="f-grp">
-      <label class="f-lb">{{ (i18n or {}).get('ca_s004', "筛选用户") }} ID</label>
+      <label class="f-lbl">{{ (i18n or {}).get('ca_s004', "筛选用户") }} ID</label>
       <input type="text" id="ca-prefix" placeholder="user_id {{ (i18n or {}).get('ca_s005', '前缀') }}" class="f-input">
     </div>
     <div class="f-grp">
-      <label class="f-lb">{{ (i18n or {}).get('em_s014', "条数") }}</label>
-      <input type="number" id="ca-limit" value="50" min="1" max="500" class="f-input" style="width:90px">
+      <label class="f-lbl">{{ (i18n or {}).get('em_s014', "条数") }}</label>
+      <input type="number" id="ca-limit" value="50" min="1" max="500" class="f-input">
     </div>
     <label class="f-grp" style="display:flex;align-items:center;gap:.35rem;padding-bottom:.35rem">
       <input type="checkbox" id="ca-only-unhandled" checked>

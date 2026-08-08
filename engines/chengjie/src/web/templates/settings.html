@@ -15,6 +15,11 @@
   justify-content:center;flex-shrink:0}
 .acc-hd-icon svg{width:16px;height:16px;color:#fff}
 .acc-title{font-weight:700;font-size:.9rem;flex:1}
+/* 简洁模式（值班/看店视角）只保留「AI 提示词」与「人工转接」两张卡——此前顶部引导
+   文案如此声称、模板却全量渲染（名不符实）；!important 压过 fc/diag 卡的探针内联样式 */
+.set-simple-hide{display:none!important}
+/* hash 深链定位高亮（#license / #escalation …）：短暂描边引导视线 */
+.acc-target-hl{outline:2px solid var(--p);outline-offset:2px;box-shadow:0 0 0 5px var(--ps)}
 .acc-sub{font-size:.75rem;color:var(--t2);margin-top:.1rem}
 .acc-arrow{width:18px;height:18px;transition:transform .2s;flex-shrink:0;color:var(--t3)}
 .acc-hd.open .acc-arrow{transform:rotate(180deg)}
@@ -127,7 +132,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
 
   <!-- ══ P1 功能总览（feature center）：src/utils/feature_registry 驱动。
        旧后端无 /api/setup/features（未重启/旧安装包）→ 整卡保持隐藏，模板热更新自洽 ══ -->
-  <div class="acc" id="fc-card" style="display:none">
+  <div class="acc{% if ui_mode == 'simple' %} set-simple-hide{% endif %}" id="fc-card" style="display:none">
     <div class="acc-hd" onclick="toggleAcc(this)">
       <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-blue6,#2563eb),var(--th-bg-blue8,#1e40af))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
@@ -202,7 +207,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
 
   <!-- ══ P2-198 一键诊断包：版本+打码配置+日志尾部 zip 下载。旧后端无该路由
        （未重启/旧安装包）→ probe 404 整卡隐藏，模板热更新自洽 ══ -->
-  <div class="acc" id="diag-card" style="display:none">
+  <div class="acc{% if ui_mode == 'simple' %} set-simple-hide{% endif %}" id="diag-card" style="display:none">
     <div class="acc-hd" onclick="toggleAcc(this)">
       <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-teal6),var(--th-bg-teal8))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><polyline points="7 10 12 15 17 10"/><path d="M5 21h14"/></svg>
@@ -229,7 +234,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
   </script>
 
   <!-- ══ C1-1 品牌 / 白标 ═══════════════════════════════════════ -->
-  <div class="acc">
+  <div class="acc{% if ui_mode == 'simple' %} set-simple-hide{% endif %}">
     <div class="acc-hd" onclick="toggleAcc(this)">
       <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-violet5,#8b5cf6),var(--th-bg-violet7,#6d28d9))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.4 7.4H22l-6 4.6 2.3 7.4-6.3-4.6L5.7 21l2.3-7.4-6-4.6h7.6z"/></svg>
@@ -332,29 +337,24 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
   })();
   </script>
 
-  <!-- ══ P0-4/C4 授权 / 激活（粘贴已签发 key → 写 config/license.key → reload） ══ -->
-  <div class="acc">
+  <!-- ══ P0-4/C4 授权（P0-IA 起为只读状态卡：激活/续费/加量已整合进会员中心） ══ -->
+  <div class="acc{% if ui_mode == 'simple' %} set-simple-hide{% endif %}">
     <div class="acc-hd" onclick="toggleAcc(this)">
       <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-emerald5,#10b981),var(--th-bg-emerald6,#059669))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
       </div>
       <div>
         <div class="acc-title">{{ (i18n or {}).get('set_s302', "授权 / 激活") }} <span id="lic-state-tag" style="font-size:.68rem;padding:.12rem .45rem;border-radius:5px;background:var(--input);color:var(--t2);font-weight:600;vertical-align:middle;margin-left:.4rem"></span></div>
-        <div class="acc-sub">{{ (i18n or {}).get('set_s303', "粘贴厂商签发的授权码即可激活；试用字符额度用量在此可见") }}</div>
+        <div class="acc-sub">{{ (i18n or {}).get('mb_lic_settings_sub', "授权状态一览；激活 / 续费 / 加量包已整合进会员中心") }}</div>
       </div>
       <svg class="acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
     </div>
     <div class="acc-body" id="body-license">
       <div id="lic-cur" style="font-size:.82rem;color:var(--t2);margin-bottom:.9rem;line-height:1.7"></div>
-      <div class="f-row">
-        <label class="f-lbl">{{ (i18n or {}).get('set_s304', "粘贴授权码（license key）") }}</label>
-        <textarea class="f-inp" id="lic-key-input" rows="3" placeholder="eyJzdWIi…" spellcheck="false" style="font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.74rem;resize:vertical;"></textarea>
-        <p class="f-hint">{{ (i18n or {}).get('set_s305', "激活成功即写入 config/license.key 并立即生效；无效或过期的授权码不会写入。授权码由厂商离线签发，本系统不保存签发私钥。") }}</p>
+      <div class="f-hint" style="margin-bottom:.9rem;padding:.6rem .8rem;background:var(--ps);border-radius:8px;border:1px solid var(--p);line-height:1.6">
+        {{ (i18n or {}).get('mb_lic_moved_hint', "粘贴激活、购买续费、兑换加量包现已统一在「会员中心」办理。") }}
       </div>
-      <div style="display:flex;align-items:center;gap:.8rem;">
-        <button class="btn-primary" onclick="licActivate()" style="padding:.5rem 1.2rem;border:0;border-radius:8px;background:var(--p);color:var(--th-ink-inverse,#fff);font-weight:600;cursor:pointer;">{{ (i18n or {}).get('set_s306', "激活授权") }}</button>
-        <span class="save-result" id="lic-act-res"></span>
-      </div>
+      <a href="/membership#mb-activate" style="display:inline-block;padding:.5rem 1.2rem;border:0;border-radius:8px;background:var(--p);color:var(--th-ink-inverse,#fff);font-weight:600;text-decoration:none;">{{ (i18n or {}).get('mb_open_membership', "前往会员中心") }}</a>
     </div>
   </div>
   <script>
@@ -384,39 +384,18 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
         if(d&&d.ok) render(d);
       }).catch(function(){});
     }
-    window.licActivate=function(){
-      var res=g('lic-act-res');
-      var key=(g('lic-key-input').value||'').trim();
-      if(!key){ res.textContent=window.T('set_js_096'); res.className='save-result err'; return; }
-      res.textContent=window.T('ov_js_saving'); res.className='save-result';
-      apiFetch('/api/admin/license/activate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:key})}, {timeoutMs: 60000})
-        .then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});})
-        .then(function(x){
-          if(x.ok&&x.d&&x.d.ok){
-            res.textContent='✓ '+window.T('set_js_097'); res.className='save-result ok';
-            g('lic-key-input').value='';
-            render(x.d);
-          } else {
-            res.textContent=window.T('set_js_098')+((x.d&&x.d.detail)||window.T('inbox.voice.unknown_err'));
-            res.className='save-result err';
-          }
-        }).catch(function(){
-          res.textContent=window.T('set_js_098')+window.T('inbox.voice.unknown_err');
-          res.className='save-result err';
-        });
-    };
     load();
   })();
   </script>
 
   <!-- ══ C1-2 试用 / 演示数据 ═══════════════════════════════════ -->
-  <div class="acc">
+  <div class="acc{% if ui_mode == 'simple' %} set-simple-hide{% endif %}">
     <div class="acc-hd" onclick="toggleAcc(this)">
       <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-cyan5,#06b6d4),var(--th-bg-cyan6,#0891b2))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
       </div>
       <div>
-        <div class="acc-title">{{ (i18n or {}).get('set_s032', "试用 / 演示数据") }} <span id="demo-tag" style="font-size:.68rem;padding:.12rem .45rem;border-radius:5px;background:rgba(6,182,212,.14);color:var(--th-ink-cyan6,#0891b2);font-weight:600;vertical-align:middle;margin-left:.4rem"></span></div>
+        <div class="acc-title">{{ (i18n or {}).get('set_s032', "试用 / 演示数据") }} <span id="demo-tag" style="font-size:.68rem;padding:.12rem .45rem;border-radius:5px;background:rgba(6,182,212,.14);color:var(--th-ink-cyan6,#0e7490);font-weight:600;vertical-align:middle;margin-left:.4rem"></span></div>
         <div class="acc-sub">{{ (i18n or {}).get('set_s033', "一键铺示例会话/草稿/坐席数据，让 ROI/质量/用量看板当场有效果；可一键清空") }}</div>
       </div>
       <svg class="acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
@@ -481,7 +460,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
       </div>
       <div>
-        <div class="acc-title">AI {{ (i18n or {}).get('set_s003', "提示词") }} & {{ (i18n or {}).get('set_s010', "行为配置") }} <span style="font-size:.68rem;padding:.12rem .45rem;border-radius:5px;background:rgba(59,130,246,.12);color:var(--th-ink-blue6,#2563eb);font-weight:600;vertical-align:middle;margin-left:.4rem">Telegram {{ (i18n or {}).get('set_s040', "专用") }}</span></div>
+        <div class="acc-title">AI {{ (i18n or {}).get('set_s003', "提示词") }} & {{ (i18n or {}).get('set_s010', "行为配置") }} <span style="font-size:.68rem;padding:.12rem .45rem;border-radius:5px;background:rgba(59,130,246,.12);color:var(--th-ink-blue6,#1d4ed8);font-weight:600;vertical-align:middle;margin-left:.4rem">Telegram {{ (i18n or {}).get('set_s040', "专用") }}</span></div>
         <div class="acc-sub">{{ (i18n or {}).get('set_s041', "控制 Telegram 端 AI 的人格、回复风格、SOP 规则") }} — {{ (i18n or {}).get('set_s042', "三端 RPA 使用独立人设") }}</div>
       </div>
       <svg class="acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
@@ -495,8 +474,8 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
           {{ (i18n or {}).get('set_s044', "以下 AI 名称、回复风格、系统提示词") }}<strong>{{ (i18n or {}).get('set_s045', "仅影响 Telegram 端") }}</strong>。<br>
           {{ (i18n or {}).get('set_s046', "三端 RPA（Messenger / LINE / WhatsApp）使用独立人设系统，请前往各自设置页配置：") }}
           <div style="margin-top:.4rem;display:flex;flex-wrap:wrap;gap:.35rem">
-            <a href="/messenger-rpa" style="display:inline-flex;align-items:center;gap:.25rem;padding:.15rem .55rem;border-radius:6px;background:var(--th-bg-blue10,rgba(59,130,246,.1));color:var(--th-ink-blue6,#2563eb);font-weight:600;font-size:.74rem;text-decoration:none;border:1px solid rgba(59,130,246,.2)"><i data-platform-icon="messenger" data-size="15" style="display:inline-flex;line-height:0"></i> Messenger</a>
-            <a href="/line-rpa" style="display:inline-flex;align-items:center;gap:.25rem;padding:.15rem .55rem;border-radius:6px;background:rgba(34,197,94,.1);color:var(--th-ink-green6,#16a34a);font-weight:600;font-size:.74rem;text-decoration:none;border:1px solid rgba(34,197,94,.2)"><i data-platform-icon="line" data-size="15" style="display:inline-flex;line-height:0"></i> LINE</a>
+            <a href="/messenger-rpa" style="display:inline-flex;align-items:center;gap:.25rem;padding:.15rem .55rem;border-radius:6px;background:var(--th-bg-blue10,rgba(59,130,246,.1));color:var(--th-ink-blue6,#1d4ed8);font-weight:600;font-size:.74rem;text-decoration:none;border:1px solid rgba(59,130,246,.2)"><i data-platform-icon="messenger" data-size="15" style="display:inline-flex;line-height:0"></i> Messenger</a>
+            <a href="/line-rpa" style="display:inline-flex;align-items:center;gap:.25rem;padding:.15rem .55rem;border-radius:6px;background:rgba(34,197,94,.1);color:var(--th-ink-green6,#15803d);font-weight:600;font-size:.74rem;text-decoration:none;border:1px solid rgba(34,197,94,.2)"><i data-platform-icon="line" data-size="15" style="display:inline-flex;line-height:0"></i> LINE</a>
             <a href="/whatsapp-rpa" style="display:inline-flex;align-items:center;gap:.25rem;padding:.15rem .55rem;border-radius:6px;background:rgba(37,211,102,.1);color:var(--th-ink-green7,#15803d);font-weight:600;font-size:.74rem;text-decoration:none;border:1px solid rgba(37,211,102,.2)"><i data-platform-icon="whatsapp" data-size="15" style="display:inline-flex;line-height:0"></i> WhatsApp</a>
           </div>
         </div>
@@ -1619,16 +1598,24 @@ document.addEventListener('DOMContentLoaded', function(){
       });
     }
   })();
-  /* ── #escalation 深链：自动展开人工转接卡片并定位 ── */
+  /* ── hash 深链（通用化）：#escalation / #license / #brand / #demo / #prompt / #features / #diag
+        → 自动展开对应卡片 + 定位 + 短暂高亮描边。此前只认 #escalation——会员中心「去激活授权」
+        等旧深链落在页顶、卡片折叠零提示（P0-IA 修复）。简洁模式下被隐藏的卡片静默忽略。 ── */
   (function(){
-    if(location.hash !== '#escalation') return;
-    const body = document.getElementById('body-he');
+    const map = {escalation:'body-he', license:'body-license', brand:'body-brand',
+                 demo:'body-demo', prompt:'body-prompt', features:'body-fc', diag:'body-diag'};
+    const key = String(location.hash || '').replace(/^#/, '');
+    if(!Object.prototype.hasOwnProperty.call(map, key)) return;
+    const body = document.getElementById(map[key]);
     if(!body) return;
     const hd = body.previousElementSibling;
     if(!body.classList.contains('open') && hd && typeof toggleAcc === 'function'){
       toggleAcc(hd);
     }
-    (body.closest('.acc') || body).scrollIntoView({behavior:'smooth', block:'start'});
+    const card = body.closest('.acc') || body;
+    card.scrollIntoView({behavior:'smooth', block:'start'});
+    card.classList.add('acc-target-hl');
+    setTimeout(function(){ card.classList.remove('acc-target-hl'); }, 2600);
   })();
 });
 

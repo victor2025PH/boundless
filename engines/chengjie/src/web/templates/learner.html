@@ -19,6 +19,9 @@
   </div>
 </div>
 
+<!-- 运行状态条：上次学习结果 + 素材漏斗 + AI/服务健康（后端未升级时自动隐藏细节） -->
+<div id="learner-statusbar" style="display:none;margin-bottom:.8rem;padding:.55rem .9rem;border:1px solid var(--bd);border-radius:8px;background:var(--card);font-size:.8rem;color:var(--t2);line-height:1.7"></div>
+
 {% if ui_mode == 'simple' %}
 <div class="simple-guide" style="background:linear-gradient(135deg,var(--th-bg-vio06,rgba(139,92,246,.06)),var(--th-bg-brand06,rgba(91,124,246,.06)));border:1px solid var(--th-bd-vio15,rgba(139,92,246,.15));border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem">
   <span style="font-size:1.1rem;flex-shrink:0;margin-top:.1rem">🧠</span>
@@ -56,6 +59,15 @@
       <div class="text-muted" style="font-size:.82rem">{{ (i18n or {}).get('lr_s012', "疑似重复") }}</div>
     </div>
   </div>
+</div>
+
+<!-- 手动喂料：把没答好的问题直接入队学习 -->
+<div class="card mb-4 pro-only" style="padding:.6rem .9rem;display:flex;gap:.5rem;align-items:center">
+  <span style="font-size:1rem;flex-shrink:0">📥</span>
+  <input id="feed-query" maxlength="200" placeholder="{{ (i18n or {}).get('lr2_feed_ph', "把客户问过而 AI 没答好的问题贴进来，直接生成学习草稿") }}"
+         style="flex:1;font-size:.82rem;padding:.4rem .6rem;border:1px solid var(--bd);border-radius:6px;background:var(--input);color:var(--t)"
+         onkeydown="if(event.key==='Enter')feedQuery()">
+  <button class="btn btn-sm btn-primary" id="btn-feed" onclick="feedQuery()">{{ (i18n or {}).get('lr2_feed_btn', "入队学习") }}</button>
 </div>
 
 <!-- Filter Tabs -->
@@ -136,6 +148,7 @@
 .source-miss{background:var(--rs);color:var(--red)}
 .source-negative_feedback{background:var(--as);color:var(--amber)}
 .source-weak_hit{background:var(--prs);color:var(--purple)}
+.source-manual{background:var(--ps);color:var(--p)}
 .draft-query{font-weight:600;font-size:.92rem;flex:1}
 .draft-count{font-size:.75rem;color:var(--t3)}
 .draft-body{margin:.4rem 0;font-size:.85rem;color:var(--t2)}
@@ -176,18 +189,69 @@
 
 <script>
 let currentFilter='pending';
+window.__learnerStats=null;
+
+function _setStatVals(v){
+  ['stat-pending','stat-approved','stat-rejected','stat-dup'].forEach(id=>{
+    var el=document.getElementById(id);if(el)el.textContent=v;
+  });
+}
+
+function _renderStatusbar(d){
+  // 三态：服务异常（红） / AI 降级（琥珀） / 正常（上次运行摘要）。
+  // 旧后端（无 available/last_run 字段）→ 只在 error 时显示，避免猜。
+  const bar=document.getElementById('learner-statusbar');
+  if(!bar)return;
+  let html='';
+  if(!d||(d.error&&d.available!==true)){
+    html='<span style="color:var(--red);font-weight:600">⚠ '+window.T('lr2_svc_err')+'</span>'
+      +(d&&d.error?' <span style="color:var(--t3)">('+esc(String(d.error))+')</span>':'');
+    bar.innerHTML=html;bar.style.display='';return;
+  }
+  if(d.ai_ready===false){
+    html+='<div style="color:var(--amber);font-weight:600">⚠ '+window.T('lr2_ai_off')+'</div>';
+  }
+  const lr=d.last_run;
+  if(lr&&lr.ts){
+    const src=lr.source==='manual'?window.T('lr2_status_manual'):window.T('lr2_status_scheduled');
+    html+='<div><b>'+window.T('lr2_status_last')+'</b> '+esc(lr.ts).replace('T',' ')+' ('+src+') · '
+      +window.Tf('lr2_status_result',{c:lr.collected||0,g:lr.generated||0,s:lr.saved||0})
+      +(typeof d.miss_rows==='number'?' · '+window.Tf('lr2_status_misspool',{n:d.miss_rows}):'')
+      +'</div>';
+    const f=lr.funnel;
+    if(f&&typeof f.miss_total==='number'){
+      html+='<div style="color:var(--t3);font-size:.76rem">'
+        +window.Tf('lr2_funnel_detail',{q:f.miss_qualified||0,t:f.min_miss_count||2,b:f.miss_below_threshold||0,nq:f.miss_not_question||0,p:f.miss_placeholder||0,d:f.already_drafted||0})
+        +'</div>';
+    }
+  }else if(d.available===true){
+    html+='<div style="color:var(--t3)">'+window.T('lr2_status_never')+'</div>';
+  }
+  if(html){bar.innerHTML=html;bar.style.display='';}
+  else{bar.style.display='none';}
+}
 
 async function loadStats(){
   try{
     const r=await apiFetch('/api/learner/stats');
     const d=await r.json();
+    window.__learnerStats=d;
+    if(d&&d.error&&d.available!==true){
+      _setStatVals('—');
+      _renderStatusbar(d);
+      return;
+    }
     document.getElementById('stat-pending').textContent=d.pending||0;
     document.getElementById('stat-approved').textContent=d.approved||0;
     document.getElementById('stat-rejected').textContent=d.rejected||0;
     var dupEl=document.getElementById('stat-dup');
     if(dupEl)dupEl.textContent=d.dup_flagged||0;
     document.getElementById('btn-approve-all').style.display=(d.pending>0&&currentFilter==='pending')?'':'none';
-  }catch(e){}
+    _renderStatusbar(d);
+  }catch(e){
+    _setStatVals('—');
+    _renderStatusbar(null);
+  }
 }
 
 let currentSort='priority';
@@ -213,10 +277,19 @@ function renderDrafts(drafts){
     var _sm=document.documentElement.getAttribute('data-ui-mode')==='simple';
     const msgs={pending:_sm?window.T('lr_js002'):window.T('lr_js003')+'「'+window.T('lr_js004')+window.T('lr_js005'),
                 approved:window.T('lr_js006'),rejected:window.T('lr_js007'),all:window.T('draft.empty.none')};
-    c.innerHTML='<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg><p>'+(msgs[currentFilter]||msgs.all)+'</p></div>';
+    // 待审空态自解释：有上次运行数据时给出漏斗摘要，区分「素材不足」vs「都审完了」
+    var extra='';
+    var st=window.__learnerStats;
+    if(currentFilter==='pending'&&st&&st.last_run&&st.last_run.funnel){
+      var f=st.last_run.funnel;
+      extra='<p style="font-size:.78rem;color:var(--t3);margin-top:.4rem">'
+        +window.Tf('lr2_funnel_detail',{q:f.miss_qualified||0,t:f.min_miss_count||2,b:f.miss_below_threshold||0,nq:f.miss_not_question||0,p:f.miss_placeholder||0,d:f.already_drafted||0})
+        +'</p>';
+    }
+    c.innerHTML='<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg><p>'+(msgs[currentFilter]||msgs.all)+'</p>'+extra+'</div>';
     return;
   }
-  const srcLabels={miss:window.T('kb_s083'),negative_feedback:window.T('lr_js008'),weak_hit:window.T('lr_js009')};
+  const srcLabels={miss:window.T('kb_s083'),negative_feedback:window.T('lr_js008'),weak_hit:window.T('lr_js009'),manual:window.T('lr2_src_manual')};
   let html='';
   drafts.forEach(d=>{
     const src=srcLabels[d.source]||d.source;
@@ -265,14 +338,53 @@ async function runLearning(){
   const btn=document.getElementById('btn-run');
   btn.disabled=true;btn.textContent=window.T('lr_js012')+'...';
   try{
-    const r=await apiFetch('/api/learner/run',{method:'POST'}, {timeoutMs: 60000});
-    const d=await r.json();
+    const r=await apiFetch('/api/learner/run',{method:'POST'}, {timeoutMs: 120000});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){
+      // 503 带明确原因（AI 不可用/KB 不可用），如实转告而不是「undefined」
+      if(typeof showToast==='function')showToast((d&&d.detail)||window.T('lr2_run_fail_detail'),'error');
+      return;
+    }
     if(typeof showToast==='function')showToast(window.Tf('lr_learn_done', {c: d.collected, g: d.generated, s: d.saved}),'success');
     loadDrafts();
   }catch(e){
     if(typeof showToast==='function')showToast(window.T('lr_js013')+': '+e.message,'error');
   }finally{
     btn.disabled=false;btn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg> '+window.T('lr_s006');
+  }
+}
+
+async function feedQuery(){
+  const inp=document.getElementById('feed-query');
+  const btn=document.getElementById('btn-feed');
+  const q=(inp&&inp.value||'').trim();
+  if(!q)return;
+  if(btn)btn.disabled=true;
+  try{
+    const r=await apiFetch('/api/learner/feed',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({query:q})
+    }, {timeoutMs: 60000});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){
+      if(typeof showToast==='function')showToast((d&&d.detail)||window.T('lr2_feed_fail'),'error');
+      return;
+    }
+    if(d.reason==='duplicate'){
+      if(typeof showToast==='function')showToast(window.T('lr2_feed_dup'),'warning');
+    }else if(d.generated>0){
+      if(typeof showToast==='function')showToast(window.T('lr2_feed_ok_gen'),'success');
+      if(inp)inp.value='';
+      loadDrafts();
+    }else{
+      if(typeof showToast==='function')showToast(window.T('lr2_feed_ok_queued'),'info');
+      if(inp)inp.value='';
+      loadStats();
+    }
+  }catch(e){
+    if(typeof showToast==='function')showToast(window.T('lr2_feed_fail')+': '+e.message,'error');
+  }finally{
+    if(btn)btn.disabled=false;
   }
 }
 

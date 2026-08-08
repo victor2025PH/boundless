@@ -233,7 +233,7 @@
       {% for intent, mapped_sid in intent_map.items() %}
       {% if intent not in cross_platform_intents %}
       <div class="map-item" style="opacity:.7">
-        <span class="map-intent" title="{{ intent }}" style="display:flex;align-items:center;gap:.3rem">{{ (intent_display_names or {}).get(intent, intent) }} <span style="font-size:.6rem;padding:.08rem .3rem;border-radius:4px;background:var(--th-bg-blue10,rgba(59,130,246,.1));color:var(--th-ink-blue5,#3b82f6);font-weight:500">TG</span></span>
+        <span class="map-intent" title="{{ intent }}" style="display:flex;align-items:center;gap:.3rem">{{ (intent_display_names or {}).get(intent, intent) }} <span style="font-size:.6rem;padding:.08rem .3rem;border-radius:4px;background:var(--th-bg-blue10,rgba(59,130,246,.1));color:var(--th-ink-blue5,#1d4ed8);font-weight:500">TG</span></span>
         <select onchange="updateMapping('{{ intent }}', this.value)" data-intent="{{ intent }}">
           {% for sid, s in strategies.items() %}
           <option value="{{ sid }}" {% if sid == mapped_sid %}selected{% endif %}>{{ s.name or sid }}</option>

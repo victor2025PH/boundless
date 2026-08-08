@@ -20,7 +20,11 @@
 .gs-chip.ok{background:rgba(16,185,129,.14);color:var(--green)}
 .gs-chip.hard{background:rgba(239,68,68,.15);color:var(--red)}
 .gs-chip.warn{background:rgba(245,158,11,.16);color:var(--amber)}
-.gs-chip.soft{background:rgba(245,158,11,.14);color:var(--amber)}
+/* 软广＝强度而非告警：走主色梯度，别和琥珀 warn 撞（原来两者几乎同色，语义完全不同） */
+.gs-chip.soft{background:color-mix(in srgb, var(--t3) 14%, transparent);color:var(--t2)}
+.gs-chip.soft.s1{background:color-mix(in srgb, var(--p,#1e8cf2) 13%, transparent);color:var(--p)}
+.gs-chip.soft.s2{background:color-mix(in srgb, var(--p,#1e8cf2) 28%, transparent);color:var(--p)}
+.gs-chip.soft.s3{background:color-mix(in srgb, var(--p,#1e8cf2) 44%, transparent);color:var(--t)}
 .gs-chip.media{background:color-mix(in srgb, var(--p,#1e8cf2) 14%, transparent);color:var(--p)}
 .gs-chip.role{background:var(--input);color:var(--t2)}
 .gs-note{font-size:.72rem;color:var(--t3);margin:.2rem 0 0}
@@ -30,7 +34,7 @@
 .gs-form{display:flex;flex-wrap:wrap;gap:.75rem;align-items:flex-end}
 .gs-form .f-grp{display:flex;flex-direction:column;gap:.25rem}
 .gs-form label{font-size:.72rem;color:var(--t3);font-weight:600}
-.gs-form input[type=number],.gs-form select,.gs-form textarea{background:var(--input);border:1px solid var(--bd);border-radius:6px;color:var(--t1);padding:.35rem .5rem;font:inherit;font-size:.82rem}
+.gs-form input[type=number],.gs-form select,.gs-form textarea{background:var(--input);border:1px solid var(--bd);border-radius:6px;color:var(--t);padding:.35rem .5rem;font:inherit;font-size:.82rem}
 .gs-form textarea{min-width:280px;min-height:52px;resize:vertical;font-family:Consolas,monospace;font-size:.76rem}
 .gs-check{display:flex;align-items:center;gap:.35rem;font-size:.8rem;color:var(--t2);padding-bottom:.4rem}
 .gs-run-status{font-size:.8rem;color:var(--t2);margin:.6rem 0 0;min-height:1.1rem}
@@ -38,7 +42,7 @@
 .gs-spin{display:inline-block;width:.7rem;height:.7rem;margin-right:.4rem;border:2px solid color-mix(in srgb, var(--p,#1e8cf2) 25%, transparent);border-top-color:var(--p);border-radius:50%;animation:gs-spin .8s linear infinite;vertical-align:-1px}
 @keyframes gs-spin{to{transform:rotate(360deg)}}
 /* 舞台：纵向时间线 */
-.gs-stage{background:#141a22;border:1px solid #263040;border-radius:10px;padding:.9rem 1rem;max-height:560px;overflow-y:auto}
+.gs-stage{background:#141a22;border:0;border-radius:0;padding:.9rem 1rem;max-height:560px;overflow-y:auto}
 .gs-line{display:grid;grid-template-columns:52px 1fr;gap:.6rem;padding:.45rem 0;border-left:2px solid #263040;margin-left:.4rem;padding-left:.8rem}
 .gs-line .gs-at{font-family:Consolas,monospace;font-size:.7rem;color:#7d8b9c;padding-top:.15rem}
 .gs-who{font-size:.76rem;font-weight:700;color:#cfe0f5;margin-bottom:.15rem}
@@ -53,17 +57,17 @@
 .gs-lamp.natural{background:var(--green);box-shadow:0 0 10px rgba(16,185,129,.55)}
 .gs-lamp.chaotic{background:var(--amber);box-shadow:0 0 10px rgba(245,158,11,.55)}
 .gs-lamp.robotic{background:var(--red);box-shadow:0 0 10px rgba(239,68,68,.55)}
-.gs-verdict-name{font-size:.95rem;font-weight:700;color:var(--t1)}
-.gs-score{margin-left:auto;font-size:1.35rem;font-weight:700;color:var(--t1)}
-.gs-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem;margin-bottom:.7rem}
+.gs-verdict-name{font-size:.95rem;font-weight:700;color:var(--t)}
+.gs-score{margin-left:auto;font-size:1.35rem;font-weight:700;color:var(--t)}
+.gs-nat-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem;margin-bottom:.7rem}
 .gs-metric{background:var(--input);border-radius:8px;padding:.5rem .6rem}
 .gs-metric .k{font-size:.66rem;color:var(--t3)}
-.gs-metric .v{font-size:1rem;font-weight:600;color:var(--t1);margin-top:.15rem}
+.gs-metric .v{font-size:1rem;font-weight:600;color:var(--t);margin-top:.15rem}
 .gs-issues{margin:0;padding-left:1.1rem;font-size:.76rem;color:var(--amber)}
 .gs-issues li{margin:.15rem 0}
 /* 关联体检：座位数是这张卡的主角，字号刻意比自然度分还大一号 */
 .gs-seats{display:flex;align-items:baseline;gap:.5rem;margin:.5rem 0 .7rem}
-.gs-seats .n{font-size:1.5rem;font-weight:700;color:var(--t1)}
+.gs-seats .n{font-size:1.5rem;font-weight:700;color:var(--t)}
 .gs-seats .n.bad{color:var(--red)}
 .gs-seats .n.warn{color:var(--amber)}
 .gs-seats .lbl{font-size:.76rem;color:var(--t3)}
@@ -74,7 +78,7 @@
 /* 出席矩阵：判词与关键读数并排，运营一眼扫过去只需要看这一行 */
 .gs-metrics{display:flex;flex-wrap:wrap;gap:.4rem .9rem;align-items:center;margin:.7rem 0 .5rem}
 .gs-metrics .m{font-size:.78rem;color:var(--t2)}
-.gs-metrics .m b{color:var(--t1);font-size:.95rem;font-weight:700}
+.gs-metrics .m b{color:var(--t);font-size:.95rem;font-weight:700}
 .gs-metrics .m.bad b{color:var(--red)}
 .gs-metrics .m.warn b{color:var(--amber)}
 .gs-metrics .m.ok b{color:var(--green)}
@@ -82,21 +86,150 @@
 /* 首日任务单的记账按钮：小而不抢戏，点完整行淡出表示这条已经落账 */
 .gs-done{font-size:.68rem;padding:.06rem .38rem;margin-left:.3rem;border-radius:5px;
   border:1px solid var(--bd);background:transparent;color:var(--t3);cursor:pointer}
-.gs-done:hover:not([disabled]){color:var(--t1);border-color:var(--t3)}
+.gs-done:hover:not([disabled]){color:var(--t);border-color:var(--t3)}
 .gs-done[disabled]{cursor:default;opacity:.55}
 .gs-task-done{opacity:.5;text-decoration:line-through}
 /* 演出矩阵的时间窗切换：默认近 30 天，切「全部历史」看累计 */
 .gs-exp-win{display:flex;gap:.35rem;margin:.1rem 0 .6rem}
 .gs-exp-win .mini{font-size:.68rem;padding:.1rem .5rem;border-radius:5px;
   border:1px solid var(--bd);background:transparent;color:var(--t3);cursor:pointer}
-.gs-exp-win .mini:hover{color:var(--t1);border-color:var(--t3)}
-.gs-exp-win .mini.on{color:var(--t1);border-color:var(--t1);font-weight:700}
+.gs-exp-win .mini:hover{color:var(--t);border-color:var(--t3)}
+.gs-exp-win .mini.on{color:var(--t);border-color:var(--t);font-weight:700}
+/* ── P0 可视化引导：引导条 / 步骤条 / 术语表 / 真发说明 ── */
+.card[id^="gs-sec-"]{scroll-margin-top:calc(var(--th,60px) + .8rem)}
+.gs-guide{background:linear-gradient(135deg,color-mix(in srgb,var(--p,#1e8cf2) 8%,var(--card)),var(--card));border:1px solid color-mix(in srgb,var(--p,#1e8cf2) 22%,var(--bd))}
+.gs-guide>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:.5rem;font-size:1.02rem;font-weight:800;color:var(--t)}
+.gs-guide>summary::-webkit-details-marker{display:none}
+.gs-guide>summary::before{content:"🎬";font-size:1.05rem}
+.gs-guide>summary::after{content:"▾";margin-left:auto;color:var(--t3);transition:transform .2s}
+.gs-guide[open]>summary::after{transform:rotate(180deg)}
+.gs-guide-body{margin-top:.85rem}
+.gs-guide-meta{font-size:.86rem;line-height:1.7;color:var(--t2);margin:.2rem 0 .5rem}
+.gs-guide-meta b{color:var(--t)}
+.gs-guide-body h4{font-size:.72rem;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin:.9rem 0 .5rem}
+.gs-glo{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:.45rem .9rem;margin:0}
+.gs-glo div{font-size:.79rem;line-height:1.55;color:var(--t2)}
+.gs-glo b{color:var(--t);font-weight:700}
+.gs-guide-hint{font-size:.72rem;color:var(--t3);margin:.9rem 0 0}
+.gs-stepper .gs-steps-h{font-size:.72rem;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin:0 0 .1rem}
+.gs-steps{display:flex;flex-wrap:wrap;gap:.5rem;margin:.6rem 0 .1rem}
+.gs-step{flex:1 1 148px;min-width:148px;text-decoration:none;border:1px solid var(--bd);border-radius:10px;padding:.55rem .7rem;background:var(--card);transition:.15s}
+.gs-step:hover{border-color:var(--p,#1e8cf2);box-shadow:var(--s1);transform:translateY(-1px)}
+.gs-step .gs-step-n{display:block;font-size:.85rem;font-weight:800;color:var(--p,#1e8cf2)}
+.gs-step .gs-step-d{display:block;font-size:.72rem;color:var(--t3);line-height:1.45;margin-top:.2rem}
+/* 逐拍表：拍号列不断行（gs-mono 默认 break-all 会把 b1_pain 拆成两行） */
+.gs-beats th:first-child,.gs-beats td:first-child{white-space:nowrap;width:1%}
+.gs-beats td:first-child .gs-mono{white-space:nowrap}
+.gs-beats td:nth-child(3){min-width:220px}
+/* 真发说明：琥珀虚线框，和「体检不发消息」的谨慎语气一致 */
+.gs-howto{margin-top:.9rem;padding:.8rem .9rem;border:1px dashed color-mix(in srgb,var(--amber) 42%,var(--bd));border-radius:10px;background:color-mix(in srgb,var(--amber) 6%,transparent)}
+.gs-howto h4{font-size:.82rem;font-weight:700;color:var(--t);margin:0 0 .35rem}
+.gs-howto p{font-size:.78rem;line-height:1.62;color:var(--t2);margin:.28rem 0}
+.gs-howto code{font-family:Consolas,monospace;font-size:.74rem;background:var(--input);padding:.05rem .32rem;border-radius:4px}
+/* 悬浮词典可提示的元素：给个 help 光标与虚线暗示 */
+[data-help]{cursor:help}
+th[data-help]{text-decoration:underline dotted var(--t3);text-underline-offset:3px}
+/* ── P1：吸顶步骤条（替代浮动 TOC —— .card 是 overflow:hidden，浮层会被裁剪） ── */
+.gs-stepper{position:sticky;top:var(--th,58px);z-index:20}
+.gs-stepper.gs-stuck{padding:.5rem .9rem;box-shadow:0 6px 18px rgba(10,14,20,.12);
+  border-color:color-mix(in srgb,var(--p,#1e8cf2) 26%,var(--bd))}
+.gs-stepper.gs-stuck .gs-steps-h{display:none}
+.gs-stepper.gs-stuck .gs-steps{margin:0}
+.gs-stepper.gs-stuck .gs-step{padding:.32rem .6rem;flex:1 1 104px;min-width:104px}
+.gs-stepper.gs-stuck .gs-step-d{display:none}
+.gs-step.gs-on{border-color:var(--p,#1e8cf2);background:color-mix(in srgb,var(--p,#1e8cf2) 10%,var(--card))}
+/* ── P1：把深色对话流框成「导播监视器」，消除「一张深色卡漂在浅色堆里」的割裂 ── */
+.gs-screen{border-radius:12px;overflow:hidden;border:1px solid #263040;background:#141a22;
+  box-shadow:0 8px 24px rgba(10,14,20,.16)}
+.gs-screen-top{display:flex;align-items:center;gap:.32rem;padding:.42rem .7rem;
+  background:#1b222c;border-bottom:1px solid #263040}
+/* 圆点刻意用中性灰：红/黄/绿会和本页 ok/warn/hard 的状态语义撞车 */
+.gs-screen-top i{width:8px;height:8px;border-radius:50%;background:#3d4a5c;display:block}
+.gs-screen-lbl{margin-left:auto;font-size:.66rem;font-weight:700;letter-spacing:.04em;color:#8fa3ba}
+/* ── P1：窄屏宽表横向滚动，别撑破页面 ── */
+.gs-tw{overflow-x:auto;-webkit-overflow-scrolling:touch}
+/* ── P1：骨架屏——「在加载」和「真的没数据」以前长得一样 ── */
+.gs-skel{display:block;height:.72rem;border-radius:5px;
+  background:linear-gradient(90deg,
+    color-mix(in srgb,var(--t3) 11%,transparent) 25%,
+    color-mix(in srgb,var(--t3) 21%,transparent) 37%,
+    color-mix(in srgb,var(--t3) 11%,transparent) 63%);
+  background-size:400% 100%;animation:gs-shimmer 1.4s ease-in-out infinite}
+@keyframes gs-shimmer{0%{background-position:100% 0}100%{background-position:0 0}}
+.gs-skel+.gs-skel{margin-top:.55rem}
+.gs-skel.w80{width:80%}.gs-skel.w60{width:60%}.gs-skel.w40{width:40%}
+/* ── P1：图例（放在引导条内，不再多占一张全宽卡） ── */
+.gs-legend{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:.5rem .9rem}
+.gs-legend-row{font-size:.76rem;color:var(--t3);display:flex;flex-wrap:wrap;align-items:center;gap:.3rem}
+.gs-legend-row b{color:var(--t2);font-weight:700;margin-right:.15rem}
+.gs-legend-row .gs-lamp{width:11px;height:11px;box-shadow:none}
+/* ── P2：台词样例（客户真会读到的话，和写给导演的 intent 区分开） ── */
+.gs-samples{display:flex;flex-direction:column;gap:.4rem;margin:.35rem 0 .5rem}
+.gs-sample-row{display:flex;align-items:flex-start;gap:.4rem;padding:.5rem .6rem;
+  border-left:3px solid color-mix(in srgb,var(--p,#1e8cf2) 45%,transparent);
+  background:color-mix(in srgb,var(--p,#1e8cf2) 5%,transparent);border-radius:0 8px 8px 0}
+.gs-sample-text{font-size:.84rem;line-height:1.6;color:var(--t);white-space:pre-wrap;
+  word-break:break-word}
 </style>
 {% endblock %}
 {% block content %}
 {% set active="group_show" %}
 
-<div class="card fa">
+<details class="card fa gs-guide" id="gs-guide" open>
+  <summary>{{ (i18n or {}).get('gs_guide_title', "第一次用？30 秒看懂这个台子") }}</summary>
+  <div class="gs-guide-body">
+    <p class="gs-guide-meta"><b>{{ (i18n or {}).get('gs_guide_lead', "把它想成一个微缩剧组：") }}</b>{{ (i18n or {}).get('gs_guide_meta', "「导演」（系统）拿着剧本大纲，让几个 AI 账号在同一个真实群里，即兴演一场看起来像真人闲聊的对话，把产品自然地带进去；旁边的「风控体检」卡片盯着别让这批号被看出是一伙机器人。这个页面是它的排练厅——离线彩排 + 风险体检，本页永远不发一条真消息。") }}</p>
+    <h4>{{ (i18n or {}).get('gs_guide_glo_h', "名词速查") }}</h4>
+    <div class="gs-glo">
+      <div><b>{{ (i18n or {}).get('gs_gl_soft', "软广") }}</b> — {{ (i18n or {}).get('gs_gl_soft_d', "把产品带进对话的力度：0＝只闲聊完全不提，数字越大越明示；* 表示这一拍单独调过、覆盖了剧本默认值") }}</div>
+      <div><b>{{ (i18n or {}).get('gs_gl_beat', "拍 / beat") }}</b> — {{ (i18n or {}).get('gs_gl_beat_d', "剧本的一个节拍：第几步、由谁说、想表达什么意图——只写意图不写死台词，台词由该号人设 AI 现场生成，所以每次演都不一样") }}</div>
+      <div><b>{{ (i18n or {}).get('gs_gl_nat', "自然度") }}</b> — {{ (i18n or {}).get('gs_gl_nat_d', "这场戏像不像真人：绿＝像真人，黄＝各说各话不像对话，红＝模板复读一眼假。三个指标——熵（用词多样度）、间隔 CV（发言节奏像真人还是像定时器）、均衡度（是不是一个号包场）") }}</div>
+      <div><b>{{ (i18n or {}).get('gs_gl_cooccur', "共现") }}</b> — {{ (i18n or {}).get('gs_gl_cooccur_d', "两个号一起出现在同一个群、或同一场戏里的次数。次数越高，平台一次成员/消息比对、群主肉眼，都越容易看出这几个号是一伙的") }}</div>
+      <div><b>{{ (i18n or {}).get('gs_gl_pair', "号对") }}</b> — {{ (i18n or {}).get('gs_gl_pair_d', "任意两个账号组成的一对。风控是按「哪两个号老绑在一起」算的，所以读数都以号对为单位") }}</div>
+      <div><b>{{ (i18n or {}).get('gs_gl_egress', "出口 / 座位") }}</b> — {{ (i18n or {}).get('gs_gl_egress_d', "账号上网的独立网络出口数。同一出口下的多个号在一个群里一唱一和，是关联封号最典型的姿势——所以「一个群同时能上几个号」取决于出口数，不是在线号数") }}</div>
+      <div><b>{{ (i18n or {}).get('gs_gl_role', "四种角色") }}</b> — {{ (i18n or {}).get('gs_gl_role_d', "asker 抛痛点 · advocate 种草 · skeptic 质疑 · bystander 附和。关键是必须有人质疑、再被化解——全是好评反而假") }}</div>
+    </div>
+    <h4>{{ (i18n or {}).get('gs_legend_h', "颜色与标记图例") }}</h4>
+    <div class="gs-legend">
+      <div class="gs-legend-row"><b>{{ (i18n or {}).get('gs_lg_check', "剧本校验") }}</b>
+        <span class="gs-chip ok">{{ (i18n or {}).get('gs_js_ok', "通过") }}</span>
+        <span class="gs-chip warn">{{ (i18n or {}).get('gs_js_warn', "警告") }}</span>
+        <span class="gs-chip hard">{{ (i18n or {}).get('gs_js_hard', "硬错") }}</span></div>
+      <div class="gs-legend-row"><b>{{ (i18n or {}).get('gs_lg_risk', "风险判词") }}</b>
+        <span class="gs-chip ok">{{ (i18n or {}).get('gs_att_js_v_safe', "落在真人区间") }}</span>
+        <span class="gs-chip warn">{{ (i18n or {}).get('gs_att_js_v_warn', "略微扎眼") }}</span>
+        <span class="gs-chip hard">{{ (i18n or {}).get('gs_att_js_v_danger', "会被认成一伙") }}</span></div>
+      <div class="gs-legend-row"><b>{{ (i18n or {}).get('gs_lg_soft', "软广强度") }}</b>
+        <span class="gs-chip soft">{{ (i18n or {}).get('gs_soft_t0', "0 不提产品") }}</span>
+        <span class="gs-chip soft s1">{{ (i18n or {}).get('gs_soft_t1', "1–3 轻") }}</span>
+        <span class="gs-chip soft s2">{{ (i18n or {}).get('gs_soft_t2', "4–6 中") }}</span>
+        <span class="gs-chip soft s3">{{ (i18n or {}).get('gs_soft_t3', "7–10 重") }}</span></div>
+      <div class="gs-legend-row"><b>{{ (i18n or {}).get('gs_lg_lamp', "自然度灯") }}</b>
+        <span class="gs-lamp natural"></span>{{ (i18n or {}).get('gs_js_verdict_natural', "像真人") }}
+        <span class="gs-lamp chaotic"></span>{{ (i18n or {}).get('gs_js_verdict_chaotic', "各说各话") }}
+        <span class="gs-lamp robotic"></span>{{ (i18n or {}).get('gs_js_verdict_robotic', "模板复读") }}</div>
+      <div class="gs-legend-row"><b>{{ (i18n or {}).get('gs_lg_misc', "其它标记") }}</b>
+        <span class="gs-chip media">📎 {{ (i18n or {}).get('gs_js_media', "物料") }}</span>
+        <span class="gs-chip warn">{{ (i18n or {}).get('gs_js_human', "真人") }}</span></div>
+    </div>
+    <p class="gs-guide-hint">{{ (i18n or {}).get('gs_guide_hide', "收起后不再自动弹出，随时点右下角「?」或本标题展开。") }}</p>
+  </div>
+</details>
+
+<div class="card fa gs-stepper">
+  <div class="gs-steps-h">{{ (i18n or {}).get('gs_guide_flow_h', "推荐顺序（点下面的步骤可直接跳到对应卡片）") }}</div>
+  <div class="gs-steps">
+    <a class="gs-step" href="#gs-sec-lib"><span class="gs-step-n">{{ (i18n or {}).get('gs_step1', "① 选戏") }}</span><span class="gs-step-d">{{ (i18n or {}).get('gs_step1_d', "挑一个剧本，看它每一拍怎么演，确认校验通过") }}</span></a>
+    <a class="gs-step" href="#gs-sec-console"><span class="gs-step-n">{{ (i18n or {}).get('gs_step2', "② 彩排") }}</span><span class="gs-step-d">{{ (i18n or {}).get('gs_step2_d', "设演员数，先用占位台词秒出看编排") }}</span></a>
+    <a class="gs-step" href="#gs-sec-linkage"><span class="gs-step-n">{{ (i18n or {}).get('gs_step3', "③ 体检真号") }}</span><span class="gs-step-d">{{ (i18n or {}).get('gs_step3_d', "看你真号同一个群能上几个") }}</span></a>
+    <a class="gs-step" href="#gs-sec-att"><span class="gs-step-n">{{ (i18n or {}).get('gs_step4', "④ 排班") }}</span><span class="gs-step-d">{{ (i18n or {}).get('gs_step4_d', "每个群该派哪几个号") }}</span></a>
+    <a class="gs-step" href="#gs-sec-sch"><span class="gs-step-n">{{ (i18n or {}).get('gs_step5', "⑤ 排期") }}</span><span class="gs-step-d">{{ (i18n or {}).get('gs_step5_d', "今天几点演、别扎堆") }}</span></a>
+    <a class="gs-step" href="#gs-sec-live"><span class="gs-step-n">{{ (i18n or {}).get('gs_step6', "⑥ 真发体检") }}</span><span class="gs-step-d">{{ (i18n or {}).get('gs_step6_d', "最后一道体检，只体检不发") }}</span></a>
+    <a class="gs-step" href="#gs-sec-outcome"><span class="gs-step-n">{{ (i18n or {}).get('gs_out_step', "⑦ 看效果") }}</span><span class="gs-step-d">{{ (i18n or {}).get('gs_out_step_d', "真发之后回来看：有没有人接话、有没有人私聊过来") }}</span></a>
+  </div>
+</div>
+
+<div class="card fa" id="gs-sec-lib">
   <h2>
     🎬 {{ (i18n or {}).get('gs_title', "群脉导播台") }}
     <span class="gs-sub">{{ (i18n or {}).get('gs_subtitle', "离线排练 · 一条真消息都不发") }}</span>
@@ -106,43 +239,51 @@
       <h3>📚 {{ (i18n or {}).get('gs_lib', "剧本库") }}
         <span class="gs-sub">{{ (i18n or {}).get('gs_lib_hint', "来自 config/playbooks/*.yaml") }}</span>
       </h3>
+      <div class="gs-tw">
       <table class="gs-table">
         <thead>
           <tr>
             <th>{{ (i18n or {}).get('gs_th_id', "剧本 ID") }}</th>
-            <th>{{ (i18n or {}).get('gs_th_system', "产品线") }}</th>
-            <th>{{ (i18n or {}).get('gs_th_beats', "拍数") }}</th>
-            <th>{{ (i18n or {}).get('gs_th_soft', "软广") }}</th>
+            <th data-help="gs_prodline">{{ (i18n or {}).get('gs_th_system', "产品线") }}</th>
+            <th data-help="gs_beatcount">{{ (i18n or {}).get('gs_th_beats', "拍数") }}</th>
+            <th data-help="gs_softad">{{ (i18n or {}).get('gs_th_soft', "软广") }}</th>
             <th>{{ (i18n or {}).get('gs_th_check', "校验") }}</th>
           </tr>
         </thead>
-        <tbody id="gs-lib-body">
-          <tr><td colspan="5" class="gs-empty">{{ (i18n or {}).get('gs_js_loading', "加载中…") }}</td></tr>
+        <tbody id="gs-lib-body" aria-busy="true">
+          <tr><td colspan="5"><span class="gs-skel w80"></span></td></tr>
+          <tr><td colspan="5"><span class="gs-skel w60"></span></td></tr>
+          <tr><td colspan="5"><span class="gs-skel w80"></span></td></tr>
         </tbody>
       </table>
+      </div>
     </div>
     <div>
       <h3>🎞️ <span id="gs-detail-title">{{ (i18n or {}).get('gs_detail', "剧本逐拍") }}</span></h3>
-      <table class="gs-table">
+      <div class="gs-tw">
+      <table class="gs-table gs-beats">
         <thead>
           <tr>
             <th>{{ (i18n or {}).get('gs_th_beat', "拍号") }}</th>
             <th>{{ (i18n or {}).get('gs_th_role', "角色") }}</th>
             <th>{{ (i18n or {}).get('gs_th_intent', "意图") }}</th>
             <th>{{ (i18n or {}).get('gs_th_product', "产品") }}</th>
-            <th>{{ (i18n or {}).get('gs_th_soft', "软广") }}</th>
-            <th>{{ (i18n or {}).get('gs_th_pace', "语速") }}</th>
+            <th data-help="gs_softad">{{ (i18n or {}).get('gs_th_soft', "软广") }}</th>
+            <th data-help="gs_pace">{{ (i18n or {}).get('gs_th_pace', "语速") }}</th>
           </tr>
         </thead>
         <tbody id="gs-detail-body">
           <tr><td colspan="6" class="gs-empty">{{ (i18n or {}).get('gs_detail_hint', "点左侧剧本查看每一拍的角色与意图") }}</td></tr>
         </tbody>
       </table>
+      </div>
+      <p class="gs-note">{{ (i18n or {}).get('gs_soft_legend', "软广 0–10：0＝只闲聊不提产品，越大越明示；* ＝这一拍单独调过强度（覆盖剧本默认）") }}</p>
+      <div id="gs-sample"></div>
     </div>
   </div>
 </div>
 
-<div class="card fa">
+<div class="card fa" id="gs-sec-console">
   <h2>🎛️ {{ (i18n or {}).get('gs_console', "排练控制台") }}</h2>
   <div class="gs-form">
     <div class="f-grp">
@@ -183,29 +324,34 @@
   <div class="card fa">
     <h2>📺 {{ (i18n or {}).get('gs_flow', "对话流") }}</h2>
     <div class="gs-cast" id="gs-cast"></div>
-    <div class="gs-stage" id="gs-stage">
-      <div class="gs-empty">{{ (i18n or {}).get('gs_flow_empty', "还没排练过，左侧选个剧本点「开始排练」") }}</div>
+    <div class="gs-screen">
+      <div class="gs-screen-top"><i></i><i></i><i></i>
+        <span class="gs-screen-lbl">{{ (i18n or {}).get('gs_screen_lbl', "排练预览 · 不发送") }}</span>
+      </div>
+      <div class="gs-stage" id="gs-stage">
+        <div class="gs-empty">{{ (i18n or {}).get('gs_flow_empty', "还没排练过，左侧选个剧本点「开始排练」") }}</div>
+      </div>
     </div>
   </div>
   <div>
     <div class="card fa">
-      <h2>🚦 {{ (i18n or {}).get('gs_nat', "自然度") }}</h2>
+      <h2 data-help="gs_naturalness">🚦 {{ (i18n or {}).get('gs_nat', "自然度") }}</h2>
       <div id="gs-nat">
         <div class="gs-empty">{{ (i18n or {}).get('gs_nat_empty', "排练后出评分") }}</div>
       </div>
     </div>
-    <div class="card fa">
-      <h2>🔗 {{ (i18n or {}).get('gs_lk', "关联风险体检") }}</h2>
+    <div class="card fa" id="gs-sec-linkage">
+      <h2 data-help="gs_linkage">🔗 {{ (i18n or {}).get('gs_lk', "关联风险体检") }}</h2>
       <p class="gs-note">{{ (i18n or {}).get('gs_lk_hint', "排练用的是占位号；这里说的是你手上真号真发时的上限") }}</p>
-      <div id="gs-lk">
-        <div class="gs-empty">{{ (i18n or {}).get('gs_js_loading', "加载中…") }}</div>
+      <div id="gs-lk" aria-busy="true">
+        <span class="gs-skel w60"></span><span class="gs-skel w80"></span><span class="gs-skel w40"></span>
       </div>
     </div>
   </div>
 </div>
 
-<div class="card fa">
-  <h2>🧭 {{ (i18n or {}).get('gs_att', "出席矩阵（跨群排班）") }}</h2>
+<div class="card fa" id="gs-sec-att">
+  <h2 data-help="gs_attendance">🧭 {{ (i18n or {}).get('gs_att', "出席矩阵（跨群排班）") }}</h2>
   <p class="gs-note">{{ (i18n or {}).get('gs_att_hint', "同一批号同时混在同一批群里，是多号多群模式下最容易被抓的特征——平台一次成员表比对就能算出来，群主肉眼也看得见。这里给出「每个群该派哪几个号」，把任意两个号的共同出席压到真人区间。") }}</p>
   <div class="gs-form" style="margin-top:.7rem">
     <div class="f-grp">
@@ -227,20 +373,20 @@
   </div>
 </div>
 
-<div class="card fa">
-  <h2>🎤 {{ (i18n or {}).get('gs_exp', "演出矩阵（谁开过口）") }}</h2>
+<div class="card fa" id="gs-sec-exp">
+  <h2 data-help="gs_exposure">🎤 {{ (i18n or {}).get('gs_exp', "演出矩阵（谁开过口）") }}</h2>
   <p class="gs-note">{{ (i18n or {}).get('gs_exp_hint', "上面那张表管「谁在群里」——加完就冻结了，退群本身更可疑。这张表管「谁开过口」，每场都能重排，而且平台是靠消息实时统计的。成员面排坏了不等于完蛋，这里才是之后唯一还能动的地方。") }}</p>
   <div class="gs-exp-win">
     <button type="button" class="mini on" data-gs-win="30">{{ (i18n or {}).get('gs_exp_win30', "近 30 天") }}</button>
     <button type="button" class="mini" data-gs-win="0">{{ (i18n or {}).get('gs_exp_winall', "全部历史") }}</button>
   </div>
-  <div id="gs-exp">
-    <div class="gs-empty">{{ (i18n or {}).get('gs_js_loading', "加载中…") }}</div>
+  <div id="gs-exp" aria-busy="true">
+    <span class="gs-skel w60"></span><span class="gs-skel w80"></span><span class="gs-skel w40"></span>
   </div>
 </div>
 
-<div class="card fa">
-  <h2>⏰ {{ (i18n or {}).get('gs_sch', "开演排期（什么时候演）") }}</h2>
+<div class="card fa" id="gs-sec-sch">
+  <h2 data-help="gs_schedule">⏰ {{ (i18n or {}).get('gs_sch', "开演排期（什么时候演）") }}</h2>
   <p class="gs-note">{{ (i18n or {}).get('gs_sch_hint', "静态特征都洗干净之后，节奏是最后一条还会出卖人的轴：一批群挤在同一个小时、精确每 30 分钟一场、每天同一时刻开演。上面那张排班表管加群的时间轴，这张管开演的——两者独立，加群摊得再开，开演全挤在一起照样一眼假。") }}</p>
   <div class="gs-form" style="margin-top:.7rem">
     <div class="f-grp">
@@ -262,8 +408,8 @@
   </div>
 </div>
 
-<div class="card fa">
-  <h2>🛫 {{ (i18n or {}).get('gs_live', "开演前体检") }}</h2>
+<div class="card fa" id="gs-sec-live">
+  <h2 data-help="gs_livecheck">🛫 {{ (i18n or {}).get('gs_live', "开演前体检") }}</h2>
   <p class="gs-note">{{ (i18n or {}).get('gs_live_hint', "只体检，不发一条真消息；配置锁（companion.group_show.live.enabled）就算还关着也能看到体检结果。用的是上面「排练控制台」里选的剧本。") }}</p>
   <div class="gs-form">
     <div class="f-grp">
@@ -284,10 +430,29 @@
   <div id="gs-live">
     <div class="gs-empty">{{ (i18n or {}).get('gs_live_empty', "选好剧本、填好群 key，点「只体检，不发消息」") }}</div>
   </div>
+  <div class="gs-howto">
+    <h4>🔐 {{ (i18n or {}).get('gs_live_howto_h', "体检全绿之后，怎么才真的演起来？") }}</h4>
+    <p>{{ (i18n or {}).get('gs_live_howto_1', "本页只体检、永不发消息。真发需要两把锁同时打开（刻意设计，防一次误操作把广告发进真群）：") }}</p>
+    <p>{{ (i18n or {}).get('gs_live_howto_2', "① 配置锁：把 companion.group_show.live.enabled 打开；② 代码锁：调用真发时显式传 confirm_live=true。缺任一把都不会发。") }}</p>
+    <p>{{ (i18n or {}).get('gs_live_howto_3', "两把锁齐了、且本卡「双锁：已武装」与「真发配置：已开闸」都亮绿，才会真正上台。") }}</p>
+  </div>
+</div>
+
+<div class="card fa" id="gs-sec-outcome">
+  <h2 data-help="gs_outcome">🎯 {{ (i18n or {}).get('gs_out', "演出效果（这场戏换来了什么）") }}</h2>
+  <p class="gs-note">{{ (i18n or {}).get('gs_out_hint', "上面所有卡片回答的都是「会不会被封号」；这张回答「值不值得继续投」。只统计真发过的场次——排练一条消息都没发出去，算它没有意义。") }}</p>
+  <div class="gs-exp-win">
+    <button type="button" class="mini on" data-gs-owin="24">{{ (i18n or {}).get('gs_out_win24', "近 24 小时窗") }}</button>
+    <button type="button" class="mini" data-gs-owin="72">{{ (i18n or {}).get('gs_out_win72', "近 72 小时窗") }}</button>
+  </div>
+  <div id="gs-out" aria-busy="true">
+    <span class="gs-skel w60"></span><span class="gs-skel w80"></span><span class="gs-skel w40"></span>
+  </div>
 </div>
 
 <div class="card fa">
   <h2>🗂️ {{ (i18n or {}).get('gs_hist', "历史场次") }}</h2>
+  <div class="gs-tw">
   <table class="gs-table">
     <thead>
       <tr>
@@ -299,10 +464,12 @@
         <th>{{ (i18n or {}).get('gs_th_started', "开始于") }}</th>
       </tr>
     </thead>
-    <tbody id="gs-hist-body">
-      <tr><td colspan="6" class="gs-empty">{{ (i18n or {}).get('gs_js_loading', "加载中…") }}</td></tr>
+    <tbody id="gs-hist-body" aria-busy="true">
+      <tr><td colspan="6"><span class="gs-skel w60"></span></td></tr>
+      <tr><td colspan="6"><span class="gs-skel w80"></span></td></tr>
     </tbody>
   </table>
+  </div>
 </div>
 
 <script>
@@ -335,9 +502,33 @@ function gsRow(cols, cls) {
     cols.map(function (c) { return '<td>' + c + '</td>'; }).join('') + '</tr>';
 }
 
+/* 骨架屏落幕：容器被真数据/空态填充后必须摘掉 aria-busy，
+   否则读屏用户会一直被告知「还在加载」——视觉上骨架早没了，只有他们收不到收尾信号。 */
+function gsBusyOff(el) {
+  if (el && el.removeAttribute) el.removeAttribute('aria-busy');
+}
+
 function gsFill(id, cols, msg) {
-  document.getElementById(id).innerHTML =
+  var el = document.getElementById(id);
+  if (!el) return;
+  gsBusyOff(el);
+  el.innerHTML =
     '<tr><td colspan="' + cols + '" class="gs-empty">' + gsEsc(msg) + '</td></tr>';
+}
+
+/* 骨架条（加载中）——「在加载」和「真的没数据」以前长得一模一样。 */
+function gsSkelBlock(n) {
+  var w = ['w60', 'w80', 'w40'], out = '';
+  for (var i = 0; i < (n || 3); i++) out += '<span class="gs-skel ' + w[i % 3] + '"></span>';
+  return out;
+}
+
+/* 软广强度分级：0＝纯闲聊（中性灰），越高主色越浓。
+   刻意不用红/琥珀——那两个色在本页已经是 hard/warn 的状态语义，
+   强度高不等于出错，混用会让运营把「重软广」读成「报错」。 */
+function gsSoftTier(n) {
+  var v = Number(n) || 0;
+  return v >= 7 ? ' s3' : (v >= 4 ? ' s2' : (v >= 1 ? ' s1' : ''));
 }
 
 /* ── 剧本库 ───────────────────────────────────────────────────────────── */
@@ -351,6 +542,7 @@ async function gsLoadPlaybooks() {
     var items = d.playbooks || [];
     GS_BOOKS = {};
     if (!items.length) { gsFill('gs-lib-body', 5, window.T('gs_js_empty')); sel.innerHTML = ''; return; }
+    gsBusyOff(document.getElementById('gs-lib-body'));
     document.getElementById('gs-lib-body').innerHTML = items.map(function (pb) {
       GS_BOOKS[pb.id] = pb;
       var chip = pb.errors.length
@@ -398,8 +590,10 @@ async function gsPick(pid) {
     var d = await res.json();
     var beats = (d.playbook || {}).beats || [];
     if (!beats.length) { gsFill('gs-detail-body', 6, window.T('gs_js_empty')); return; }
+    gsRenderSamples(d.samples);
     document.getElementById('gs-detail-body').innerHTML = beats.map(function (b) {
-      var soft = '<span class="gs-chip soft">' + b.soft + (b.soft_override ? '*' : '') + '</span>';
+      var soft = '<span class="gs-chip soft' + gsSoftTier(b.soft) + '">' +
+        b.soft + (b.soft_override ? '*' : '') + '</span>';
       var media = b.media ? ' <span class="gs-chip media">📎 ' + gsEsc(b.media) + '</span>' : '';
       return gsRow([
         '<span class="gs-mono">' + gsEsc(b.id) + '</span>',
@@ -413,6 +607,39 @@ async function gsPick(pid) {
   } catch (e) {
     gsFill('gs-detail-body', 6, window.T('gs_js_req_fail') + ': ' + e);
   }
+}
+
+/* 台词样例：意图是写给导演看的，这里是客户真会读到的话。
+   三种状态必须分开说——「从没排过」要教用户去勾真 LLM；「剧本改过了」只需重排一次；
+   有样例就直接展示。糊成一句「暂无样例」，用户不知道该做什么。 */
+function gsRenderSamples(s) {
+  var box = document.getElementById('gs-sample');
+  if (!box) return;
+  /* 后端 .py 不热更新：模板已上线但接口还没装载时，响应里**根本没有** samples 字段。
+     那和「有字段但还没排过」必须分开——否则会提示用户去跑一次几分钟的真 LLM 排练，
+     而旧路由压根不会存样例，白等一场。 */
+  if (s === undefined || s === null) {
+    box.innerHTML = '<p class="gs-note">' +
+      gsEsc(window.T('gs_out_js_need_restart')) + '</p>';
+    return;
+  }
+  var lines = s.lines || [];
+  if (!lines.length) {
+    box.innerHTML = '<p class="gs-note' + (s.stale ? ' warn' : '') + '">' +
+      gsEsc(window.T(s.stale ? 'gs_sample_stale' : 'gs_sample_none')) + '</p>';
+    return;
+  }
+  var when = s.ts ? ('<span class="gs-note">' + gsEsc(window.T('gs_sample_at')
+    .replace('{t}', window.wsFmtDateTime(s.ts))) + '</span>') : '';
+  box.innerHTML = '<p class="gs-advice-h">' + gsEsc(window.T('gs_sample_h')) +
+    '</p><p class="gs-note">' + gsEsc(window.T('gs_sample_hint')) + '</p>' +
+    '<div class="gs-samples">' + lines.map(function (ln) {
+      return '<div class="gs-sample-row">' +
+        '<span class="gs-chip role">' + gsEsc(ln.role || '—') + '</span>' +
+        '<span class="gs-chip soft' + gsSoftTier(ln.soft) + '">' +
+        (Number(ln.soft) || 0) + '</span>' +
+        '<span class="gs-sample-text">' + gsEsc(ln.text || '') + '</span></div>';
+    }).join('') + '</div>' + when;
 }
 
 /* ── 一键排练 ─────────────────────────────────────────────────────────── */
@@ -516,7 +743,10 @@ function gsRenderRehearsal(d) {
       var tags = '';
       if (!human) {
         tags = ' <span class="gs-chip role">' + gsEsc(ln.role) + '</span>';
-        if (ln.soft_level) tags += ' <span class="gs-chip soft">soft ' + ln.soft_level + '</span>';
+        if (ln.soft_level) {
+          tags += ' <span class="gs-chip soft' + gsSoftTier(ln.soft_level) +
+            '">soft ' + ln.soft_level + '</span>';
+        }
         if (ln.media) tags += ' <span class="gs-chip media">📎 ' + gsEsc(ln.media) + '</span>';
       } else {
         tags = ' <span class="gs-chip warn">' + window.T('gs_js_human') + '</span>';
@@ -546,7 +776,7 @@ function gsRenderNaturalness(nat) {
     '<div class="gs-verdict"><span class="gs-lamp ' + lamp + '"></span>' +
     '<span class="gs-verdict-name">' + gsEsc(name) + '</span>' +
     '<span class="gs-score">' + Number(nat.score || 0).toFixed(2) + '</span></div>' +
-    '<div class="gs-metrics">' +
+    '<div class="gs-nat-metrics">' +
     '<div class="gs-metric"><div class="k">' + window.T('gs_nat_entropy') + '</div><div class="v">' +
     Number(nat.entropy || 0).toFixed(2) + '</div></div>' +
     '<div class="gs-metric"><div class="k">' + window.T('gs_nat_cv') + '</div><div class="v">' +
@@ -673,6 +903,7 @@ async function gsLoadSessions() {
     var d = await res.json();
     var rows = d.sessions || [];
     if (!rows.length) { gsFill('gs-hist-body', 6, window.T('gs_js_empty')); return; }
+    gsBusyOff(document.getElementById('gs-hist-body'));
     document.getElementById('gs-hist-body').innerHTML = rows.map(function (s) {
       return gsRow([
         '<span class="gs-mono">' + gsEsc(s.session_id) + '</span>',
@@ -747,10 +978,14 @@ async function gsLoadLinkage() {
   } catch (e) {
     box.innerHTML = '<div class="gs-empty">' +
       gsEsc(window.T('gs_js_req_fail') + ': ' + e) + '</div>';
+  } finally {
+    /* 骨架屏是服务端渲的（aria-busy=true）：无论走成功/失败/空态哪条路，
+       收尾都必须摘掉 busy，否则读屏用户永远听不到「加载完了」。 */
+    gsBusyOff(box);
   }
 }
 
-/* ── 出席矩阵 ─────────────────────────────────────────────────────────────
+/* ── 出席矩阵 ───────────────────────────────────────────────────────────── 
    体检卡管的是「同一个群里能同时上几个号」（网络出口）；这张卡管的是「跨群的成员
    重合」——多号多群下后者才是头号特征。两条轴正交，都得过。 */
 
@@ -883,10 +1118,11 @@ function gsAttRender(d) {
     return gsRow([gsEsc(gid), cells]);
   }).join('');
 
-  html += '<table class="gs-table" style="margin-top:.6rem"><thead><tr><th>' +
+  html += '<div class="gs-tw"><table class="gs-table" style="margin-top:.6rem">' +
+    '<thead><tr><th>' +
     gsEsc(window.T('gs_att_js_th_group')) + '</th><th>' +
     gsEsc(window.T('gs_att_js_th_cast')) + '</th></tr></thead><tbody>' +
-    rows + '</tbody></table>';
+    rows + '</tbody></table></div>';
   if (gids.length > GS_ATT_ROWS) {
     html += '<p class="gs-note">' +
       gsEsc(window.Tf ? window.Tf('gs_att_js_more', { n: gids.length - GS_ATT_ROWS })
@@ -943,7 +1179,8 @@ async function gsLoadExposure(days) {
   document.querySelectorAll('[data-gs-win]').forEach(function (b) {
     b.classList.toggle('on', Number(b.dataset.gsWin) === gsExpWindow);
   });
-  box.innerHTML = '<div class="gs-empty">' + gsEsc(window.T('gs_js_loading')) + '</div>';
+  box.setAttribute('aria-busy', 'true');
+  box.innerHTML = gsSkelBlock(3);
   try {
     var res = await apiFetch('/api/group-show/exposure?window_days=' + gsExpWindow);
     if (!res.ok) {
@@ -956,6 +1193,8 @@ async function gsLoadExposure(days) {
   } catch (e) {
     box.innerHTML = '<div class="gs-empty">' +
       gsEsc(window.T('gs_js_req_fail') + ': ' + e) + '</div>';
+  } finally {
+    gsBusyOff(box);
   }
 }
 
@@ -1178,7 +1417,7 @@ function gsRoleRender(rr, tone) {
 async function gsPlanSchedule() {
   var box = document.getElementById('gs-sch');
   var d0 = new Date(); d0.setHours(0, 0, 0, 0);
-  box.innerHTML = '<div class="gs-empty">' + gsEsc(window.T('gs_js_loading')) + '</div>';
+  box.innerHTML = gsSkelBlock(3);
   try {
     var res = await apiFetch('/api/group-show/schedule', {
       method: 'POST',
@@ -1272,17 +1511,195 @@ function gsSchRender(d) {
 
 Object.assign(window, {
   gsLoadPlaybooks: gsLoadPlaybooks, gsPick: gsPick, gsRun: gsRun,
-  gsLoadSessions: gsLoadSessions, gsLoadLinkage: gsLoadLinkage,
+  gsLoadSessions: gsLoadSessions,   gsLoadLinkage: gsLoadLinkage,
   gsPlanAttendance: gsPlanAttendance, gsMarkJoined: gsMarkJoined,
   gsLoadExposure: gsLoadExposure, gsPlanSchedule: gsPlanSchedule,
-  gsCheckLive: gsCheckLive,
+  gsCheckLive: gsCheckLive, gsLoadOutcomes: gsLoadOutcomes,
 });
 
+/* 引导条记忆：收起过一次就默认收起（返回用户不再被弹）。走 toggle 事件不挂内联 handler。 */
+function gsInitGuide() {
+  var g = document.getElementById('gs-guide');
+  if (!g) return;
+  try { if (localStorage.getItem('gs_guide_seen') === '1') g.removeAttribute('open'); } catch (e) {}
+  g.addEventListener('toggle', function () {
+    try { if (!g.open) localStorage.setItem('gs_guide_seen', '1'); } catch (e) {}
+  });
+}
+
+/* ── 演出效果 ─────────────────────────────────────────────────────────────
+   全页唯一回答「值不值得继续投」的卡。三条诚实红线（后端 outcome.py 同款，
+   这里只负责如实显示，不做任何二次计算——效果数字有两处实现就一定会漂）：
+   排练不算数 / 窗口没走完不下判词 / 转化是下限（潜水观众无法归因）。 */
+var gsOutWindow = 24;
+
+async function gsLoadOutcomes(hours) {
+  var box = document.getElementById('gs-out');
+  if (!box) return;
+  if (hours !== undefined) gsOutWindow = Number(hours) || 24;
+  document.querySelectorAll('[data-gs-owin]').forEach(function (b) {
+    b.classList.toggle('on', Number(b.dataset.gsOwin) === gsOutWindow);
+  });
+  box.setAttribute('aria-busy', 'true');
+  box.innerHTML = gsSkelBlock(3);
+  try {
+    var res = await apiFetch('/api/group-show/outcomes?window_hours=' + gsOutWindow);
+    /* 后端 .py 不热更新：模板已经上线、接口还没装载的窗口期里，404 是**预期**状态。
+       显示成红色「请求失败 404」会让运营以为出故障去报修，如实说「等重启」才对。 */
+    if (res.status === 404) {
+      box.innerHTML = '<div class="gs-empty">' +
+        gsEsc(window.T('gs_out_js_need_restart')) + '</div>';
+      return;
+    }
+    if (!res.ok) {
+      box.innerHTML = '<div class="gs-empty">' +
+        gsEsc(window.T('gs_js_req_fail') + ' ' + res.status) + '</div>';
+      return;
+    }
+    box.innerHTML = gsOutRender(await res.json());
+  } catch (e) {
+    box.innerHTML = '<div class="gs-empty">' +
+      gsEsc(window.T('gs_js_req_fail') + ': ' + e) + '</div>';
+  } finally {
+    gsBusyOff(box);
+  }
+}
+
+function gsOutRender(d) {
+  if (!d.available || !(d.outcomes || []).length) {
+    return '<div class="gs-empty">' + gsEsc(window.T('gs_out_js_none')) + '</div>';
+  }
+  var r = d.rollup || {};
+  var tone = { hot: 'ok', warm: 'ok', cold: 'bad', pending: '' };
+
+  /* 主数＝有人接话的比例。刻意不用「转化数」当主角：转化是下限、样本小，
+     放大成头条会让运营据一个天然偏低的数去砍剧本。 */
+  var pct = Math.round((Number(r.response_rate) || 0) * 100);
+  var html = '<div class="gs-seats"><span class="n' +
+    (Number(r.judged) ? (pct >= 50 ? '' : (pct > 0 ? ' warn' : ' bad')) : '') +
+    '">' + pct + '%</span><span class="lbl">' +
+    gsEsc(window.T('gs_out_js_rate')) + '　·　' +
+    gsEsc(window.T('gs_out_js_shows')) + ' ' + (Number(r.total) || 0) +
+    '</span></div>';
+
+  var lat = Number(r.avg_first_reply_sec);
+  html += '<div class="gs-metrics">' +
+    '<span class="m"><b>' + (Number(r.conversions) || 0) + '</b> ' +
+    gsEsc(window.T('gs_out_js_conv')) + '</span>' +
+    '<span class="m"><b>' + (Number(r.replies) || 0) + '</b> ' +
+    gsEsc(window.T('gs_out_js_reply')) + '</span>' +
+    '<span class="m">' + gsEsc(window.T('gs_out_js_lat')) + ' <b>' +
+    (lat >= 0 ? gsClock(lat) : '—') + '</b></span>' +
+    (Number(r.pending) ? '<span class="m warn"><b>' + Number(r.pending) + '</b> ' +
+      gsEsc(window.T('gs_out_js_pending')) + '</span>' : '') +
+    '</div>';
+
+  var rows = (d.outcomes || []).map(function (o) {
+    var v = String(o.verdict || '');
+    var chipCls = { hot: 'ok', warm: 'ok', cold: 'hard', pending: 'role' }[v] || 'role';
+    return gsRow([
+      '<span class="gs-mono">' + gsEsc(o.session_id) + '</span><br>' +
+        gsEsc(o.playbook_id || '—'),
+      '<span class="gs-mono">' + gsEsc(o.group_key || '—') + '</span>',
+      (Number(o.responders) || 0) + ' / ' + (Number(o.replies) || 0),
+      String(Number(o.conversions) || 0),
+      '<span class="gs-chip ' + chipCls + '">' +
+        gsEsc(window.T('gs_out_js_v_' + (v || 'pending'))) + '</span>',
+    ]);
+  }).join('');
+  html += '<div class="gs-tw"><table class="gs-table" style="margin-top:.6rem"><thead><tr>' +
+    '<th>' + gsEsc(window.T('gs_out_js_th_show')) + '</th>' +
+    '<th>' + gsEsc(window.T('gs_out_js_th_group')) + '</th>' +
+    '<th>' + gsEsc(window.T('gs_out_js_th_resp')) + '</th>' +
+    '<th>' + gsEsc(window.T('gs_out_js_th_conv')) + '</th>' +
+    '<th>' + gsEsc(window.T('gs_out_js_th_verdict')) + '</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+
+  /* 按剧本对比：样本不足的行只显示「n/5」不给百分比——给了就会被读成结论。 */
+  var pbs = d.by_playbook || [];
+  if (pbs.length) {
+    html += '<p class="gs-advice-h">' + gsEsc(window.T('gs_out_js_bypb')) +
+      '</p><ul class="gs-advice">' + pbs.map(function (p) {
+        var rate = Number(p.response_rate);
+        var head = (rate >= 0)
+          ? '<b>' + Math.round(rate * 100) + '%</b>'
+          : '<span class="gs-chip role">' + gsEsc(window.T('gs_out_js_pb_thin')
+              .replace('{n}', String(Number(p.judged) || 0))
+              .replace('{m}', String(Number(p.min_shows) || 5))) + '</span>';
+        return '<li><span class="gs-mono">' + gsEsc(p.playbook_id) + '</span> ' +
+          head + ' · ' + (Number(p.shows) || 0) +
+          gsEsc(window.T('gs_out_js_pb_shows')) + ' · ' +
+          (Number(p.conversions) || 0) + gsEsc(window.T('gs_out_js_pb_conv')) +
+          '</li>';
+      }).join('') + '</ul>' +
+      '<p class="gs-note">' + gsEsc(window.T('gs_out_js_pb_note')) + '</p>';
+  }
+
+  /* 三条口径声明必须跟着数字走，不能只写在文档里：看板会被截图进周报，
+     而截图不会带上「这个数是下限」这句话。 */
+  html += '<p class="gs-note">' + gsEsc(window.T('gs_out_js_floor')) + '</p>';
+  if (r.truncated) {
+    html += '<p class="gs-note warn">' + gsEsc(window.T('gs_out_js_trunc')) + '</p>';
+  }
+  var blind = d.degraded || [];
+  if (blind.length) {
+    html += '<p class="gs-note hard">' + gsEsc(window.T('gs_out_js_blind')
+      .replace('{src}', gsSrcName(blind))) + '</p>';
+  }
+  return html;
+}
+
+document.addEventListener('click', function (ev) {
+  var b = ev.target.closest && ev.target.closest('[data-gs-owin]');
+  if (b) gsLoadOutcomes(b.dataset.gsOwin);
+});
+
+/* 吸顶步骤条 + 当前区块高亮。
+   刻意不做「右侧浮动 TOC」：base.html 的 .card 是 overflow:hidden，浮层会被裁掉，
+   且右下角 toast、左下角术语按钮都已占位——吸顶复用同一套步骤条，零重叠零新结构。
+   两个 observer 都在缺 IntersectionObserver 的浏览器上整体降级（导航仍是可用的纯锚点）。 */
+function gsInitNav() {
+  var stepper = document.querySelector('.gs-stepper');
+  var steps = document.querySelectorAll('.gs-step');
+  if (!stepper || !steps.length || !('IntersectionObserver' in window)) return;
+  /* 顶栏高度取 CSS 变量而不是写死 58：改主题时这里跟着走，不会悄悄错位。 */
+  var th = parseInt(getComputedStyle(document.documentElement)
+    .getPropertyValue('--th'), 10) || 58;
+
+  new IntersectionObserver(function (es) {
+    stepper.classList.toggle('gs-stuck', es[0].intersectionRatio < 1);
+  }, { rootMargin: '-' + (th + 1) + 'px 0px 0px 0px', threshold: [1] }).observe(stepper);
+
+  var byId = {};
+  steps.forEach(function (a) {
+    var id = (a.getAttribute('href') || '').replace('#', '');
+    if (id) byId[id] = a;
+  });
+  var secs = Object.keys(byId).map(function (id) {
+    return document.getElementById(id);
+  }).filter(Boolean);
+  if (!secs.length) return;
+  /* 只在顶部一条窄带里判定当前区块：带子放宽会让两个区块同时命中、高亮来回跳。 */
+  var io = new IntersectionObserver(function (es) {
+    es.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      var hit = byId[e.target.id];
+      if (!hit) return;
+      steps.forEach(function (x) { x.classList.remove('gs-on'); });
+      hit.classList.add('gs-on');
+    });
+  }, { rootMargin: '-' + (th + 72) + 'px 0px -72% 0px', threshold: 0 });
+  secs.forEach(function (s) { io.observe(s); });
+}
+
 document.addEventListener('DOMContentLoaded', function () {
+  gsInitGuide();
+  gsInitNav();
   gsLoadPlaybooks();
   gsLoadSessions();
   gsLoadLinkage();
   gsLoadExposure();
+  gsLoadOutcomes();
 });
 </script>
 {% endblock %}

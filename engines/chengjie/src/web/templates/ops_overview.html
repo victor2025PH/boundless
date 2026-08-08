@@ -1,62 +1,136 @@
-<!DOCTYPE html>
-<html lang="{{ 'zh-CN' if (ui_lang|default('zh')) == 'zh' else 'en' }}">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ (i18n or {}).get('ov2_s001', "运营总览 · Ops Overview") }}</title>
-  {% include "_i18n_bootstrap.html" %}
-  {% include "_api_fetch.html" %}
-  <link rel="stylesheet" href="/static/theme-tokens.css?v=20260723c">
-  <style>
-    :root { --bg:#0f1419; --card:#1a2029; --line:#2a323d; --fg:#e6edf3; --mut:#8b98a5;
-            --green:#2ea043; --yellow:#d29922; --red:#da3633; --accent:#388bfd; }
-    * { box-sizing: border-box; }
-    body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 -apple-system,Segoe UI,Roboto,"Microsoft YaHei",sans-serif; }
-    .wrap { max-width:1100px; margin:0 auto; padding:24px 16px 64px; }
-    header { display:flex; align-items:center; gap:14px; margin-bottom:18px; }
-    h1 { font-size:20px; margin:0; }
-    .light-dot { width:14px; height:14px; border-radius:50%; display:inline-block; }
-    .green{background:var(--green);} .yellow{background:var(--yellow);} .red{background:var(--red);} .unknown{background:#586069;}
-    .muted { color:var(--mut); }
-    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:12px; margin-bottom:20px; }
-    .kpi { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
-    .kpi .label { color:var(--mut); font-size:12px; }
-    .kpi .val { font-size:24px; font-weight:600; margin-top:6px; }
-    .kpi .sub { color:var(--mut); font-size:12px; margin-top:2px; }
-    section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
-    section h2 { font-size:15px; margin:0 0 12px; display:flex; align-items:center; gap:8px; }
-    table { width:100%; border-collapse:collapse; }
-    th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); font-size:13px; }
-    th { color:var(--mut); font-weight:500; }
-    .badge { padding:2px 8px; border-radius:999px; font-size:12px; }
-    .badge.fail{background:rgba(218,54,51,.18); color:#ff7b72;}
-    .badge.warn{background:rgba(210,153,34,.18); color:#e3b341;}
-    .badge.open{background:rgba(56,139,253,.18); color:#79c0ff;}
-    .badge.acked{background:rgba(210,153,34,.18); color:#e3b341;}
-    .badge.resolved{background:rgba(46,160,67,.18); color:#56d364;}
-    button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:5px 12px; cursor:pointer; font-size:12px; }
-    .win-seg { display:inline-flex; gap:4px; margin-left:10px; vertical-align:middle; }
-    .win-seg button { background:var(--bg); color:var(--mut); border:1px solid var(--line); padding:2px 9px; font-size:11px; }
-    .win-seg button.active { background:var(--accent); color:#fff; border-color:var(--accent); }
-    button:disabled { opacity:.5; cursor:default; }
-    .empty { color:var(--mut); padding:10px; }
-    .refresh { margin-left:auto; }
-    a { color:var(--accent); text-decoration:none; }
-    .mc-warn-row { color:#e5484d; }
-  </style>
-</head>
-<body>
-<div class="wrap">
-  <header>
+{% extends "base.html" %}
+{% block title %}{{ (i18n or {}).get('ov2_s001', "运营总览 · Ops Overview") }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('db_s005', "运营总览") }}{% endblock %}
+{% block head %}
+<style>
+  /* ── 运营总览页内样式（P1 挂壳收口，2026-08-03）──────────────────────────
+     本页历史上是独立壳（自带 doctype + 私有 :root 调色），现改为继承 base.html：
+     · 所有选择器一律以 .ops-wrap 作用域——裸 button/a/table 选择器会污染壳的
+       顶栏/侧栏（base 壳内也有 button 等元素），勿再写全局裸选择器；
+     · 旧私有调色变量（--line/--fg/--mut/--yellow…）不再在 :root 定义，改为
+       .ops-wrap 上的桥接别名 → 壳令牌，5k 行 JS 内联样式零改动即随日/夜主题；
+     · 桥接顺带补齐历史上「引用了却从未定义」的 --danger/--warn/--muted 与
+       工作台系 --tk-*（此前只靠 fallback 字面量、冻结在单一主题色上）。 */
+  .ops-wrap{
+    --line:var(--bd); --fg:var(--t); --mut:var(--t2); --yellow:var(--amber);
+    --muted:var(--t2); --danger:var(--red); --warn:var(--amber);
+    --tk-brand:var(--p); --tk-text:var(--t); --tk-text-muted:var(--t2); --tk-ink-3:var(--t3);
+    --tk-amber-ink:var(--amber); --tk-warn-ink:var(--amber);
+    --tk-danger-ink:var(--red); --tk-red-ink:var(--red);
+    --tk-green-ink:var(--green); --tk-emerald-ink:var(--green); --tk-emerald:var(--green);
+  }
+  .ops-statusbar{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  .ops-wrap .light-dot{width:14px;height:14px;border-radius:50%;display:inline-block;flex-shrink:0}
+  .ops-wrap .green{background:var(--green)}
+  .ops-wrap .yellow{background:var(--amber)}
+  .ops-wrap .red{background:var(--red)}
+  .ops-wrap .unknown{background:var(--t3)}
+  .ops-wrap .muted{color:var(--t2)}
+  .ops-wrap .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:20px}
+  .ops-wrap .kpi{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px 16px}
+  .ops-wrap section .kpi{background:var(--input)}
+  .ops-wrap .kpi .label{color:var(--t2);font-size:12px}
+  .ops-wrap .kpi .val{font-size:24px;font-weight:600;margin-top:6px;font-variant-numeric:tabular-nums}
+  .ops-wrap .kpi .sub{color:var(--t2);font-size:12px;margin-top:2px}
+  .ops-wrap section{background:var(--card);border:1px solid var(--bd);border-radius:var(--r,12px);
+    padding:16px;margin-bottom:16px;box-shadow:var(--s0);scroll-margin-top:calc(var(--th,58px) + 64px)}
+  .ops-wrap section h2{font-size:15px;margin:0 0 12px;display:flex;align-items:center;gap:8px;color:var(--t)}
+  .ops-wrap table{width:100%;border-collapse:collapse;font-size:13px}
+  .ops-wrap th,.ops-wrap td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--bd);font-size:13px}
+  .ops-wrap th{color:var(--t2);font-weight:500;text-transform:none;letter-spacing:normal}
+  .ops-wrap ul{padding-left:1.25em;margin:.3em 0}
+  .ops-wrap .badge{padding:2px 8px;border-radius:999px;font-size:12px;font-weight:500}
+  .ops-wrap .badge.fail{background:var(--rs);color:var(--red)}
+  .ops-wrap .badge.warn{background:var(--as);color:var(--amber)}
+  .ops-wrap .badge.open{background:var(--ps);color:var(--p)}
+  .ops-wrap .badge.acked{background:var(--as);color:var(--amber)}
+  .ops-wrap .badge.resolved{background:var(--gs);color:var(--green)}
+  .ops-wrap button{background:var(--p);color:#fff;border:0;border-radius:6px;padding:5px 12px;
+    cursor:pointer;font-size:12px;font-family:inherit;transition:filter .15s}
+  .ops-wrap button:hover{filter:brightness(1.1)}
+  .ops-wrap button:disabled{opacity:.5;cursor:default;filter:none}
+  .ops-wrap .win-seg{display:inline-flex;gap:4px;margin-left:10px;vertical-align:middle}
+  .ops-wrap .win-seg button{background:var(--input);color:var(--t2);border:1px solid var(--bd);padding:2px 9px;font-size:11px}
+  .ops-wrap .win-seg button.active{background:var(--p);color:#fff;border-color:var(--p)}
+  .ops-wrap .empty{color:var(--t2);padding:10px;text-align:left;font-size:13px}
+  .ops-wrap a{color:var(--p);text-decoration:none}
+  .ops-wrap .mc-warn-row{color:var(--red)}
+  /* ── P2：sticky 工具栏 + 分组目录 + 卡片折叠/筛选 ─────────────────────── */
+  .ops-statusbar{position:sticky;top:calc(var(--th,58px) + 8px);z-index:40;
+    background:var(--card);border:1px solid var(--bd);border-radius:10px;box-shadow:var(--s0);
+    padding:8px 12px;margin-bottom:14px;flex-wrap:wrap}
+  .ops-wrap #opsFilter{background:var(--input);border:1px solid var(--bd);color:var(--t);
+    border-radius:8px;padding:4px 10px;font-size:12px;width:148px;font-family:inherit}
+  .ops-wrap #opsFilter:focus{outline:none;border-color:var(--p)}
+  .ops-toc-chips{display:inline-flex;gap:6px;flex-wrap:wrap}
+  .ops-wrap .ops-toc-chip{background:var(--input);color:var(--t2);border:1px solid var(--bd);
+    border-radius:999px;padding:3px 10px;font-size:12px;display:inline-flex;align-items:center;gap:6px}
+  .ops-wrap .ops-toc-chip:hover{color:var(--t);border-color:var(--p);filter:none}
+  .ops-wrap .ops-ghost-btn{background:var(--input);color:var(--t2);border:1px solid var(--bd)}
+  .ops-wrap .ops-ghost-btn:hover{color:var(--t);filter:none}
+  .ops-group{scroll-margin-top:calc(var(--th,58px) + 64px)}
+  /* ── P4：首屏 KPI 三区（健康/价值/账务）── */
+  .ops-kzones{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px}
+  .ops-kzone{flex:1 1 300px;background:var(--card);border:1px solid var(--bd);
+    border-radius:var(--r,12px);box-shadow:var(--s0);padding:12px 14px;min-width:0}
+  .ops-kzone-h{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;
+    color:var(--t2);margin-bottom:10px;letter-spacing:.02em}
+  .ops-kzone-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .ops-wrap .kzi{background:var(--input);border:1px solid var(--bd);border-radius:8px;
+    padding:8px 10px;min-width:0}
+  .ops-wrap .kzi-l{color:var(--t2);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ops-wrap .kzi-v{font-size:17px;font-weight:600;margin-top:3px;font-variant-numeric:tabular-nums}
+  .ops-wrap .kzi-v.kv-dim{color:var(--t3);font-weight:500}
+  .ops-wrap .kzi-s{color:var(--t3);font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ops-wrap .ops-prob-chip{border-color:var(--as);background:var(--as)}
+  .ops-wrap .ops-prob-chip:hover{border-color:var(--amber)}
+  .ops-wrap .ops-prob-chip .ops-group-dot{opacity:1}
+  .ops-group-head{display:flex;align-items:center;gap:8px;margin:24px 2px 10px;
+    font-weight:700;font-size:13px;color:var(--t2);letter-spacing:.02em}
+  .ops-group:first-child .ops-group-head{margin-top:2px}
+  .ops-group-dot{width:8px;height:8px;border-radius:50%;background:var(--t3);opacity:.35;flex:none}
+  .ops-group-dot.red{background:var(--red);opacity:1}
+  .ops-group-dot.yellow{background:var(--amber);opacity:1}
+  .ops-group-n{font-size:11px}
+  .ops-wrap section h2{cursor:pointer}
+  .ops-wrap .ops-sec-toggle{margin-left:auto;background:transparent;color:var(--t3);
+    border:0;padding:2px 4px;line-height:1;flex:none}
+  .ops-wrap .ops-sec-toggle:hover{color:var(--t);filter:none}
+  .ops-wrap .ops-sec-toggle svg{transition:transform .18s;display:block}
+  .ops-wrap section.ops-collapsed .ops-sec-toggle svg{transform:rotate(-90deg)}
+  .ops-wrap section.ops-collapsed{padding-bottom:12px}
+  .ops-wrap section.ops-collapsed > *:not(h2){display:none!important}
+  .ops-wrap section.ops-collapsed h2{margin-bottom:0}
+  .ops-wrap section[data-ops-fhide]{display:none!important}
+</style>
+{% endblock %}
+{% block content %}
+<div class="ops-wrap">
+  {#- P2 sticky 工具栏：总灯/更新时间 + 卡片筛选 + 分组目录 chips（JS 按注册表填充）
+      + 全部展开/收起 + 手动刷新。分组/目录/折叠/懒刷新的单一数据源是页尾脚本区的
+      OPS_CARDS 注册表——新增卡片去那里登记，别在这里手写 chip。
+      （注意：本注释勿出现字面 script 开标签，i18n/handler 门禁的脚本区提取会被带偏。）-#}
+  <div class="ops-statusbar" id="opsToolbar">
     <span id="overallDot" class="light-dot unknown"></span>
-    <h1>{{ (i18n or {}).get('db_s005', "运营总览") }}</h1>
     <span class="muted" id="updatedAt"></span>
-    <a class="refresh" href="/" >← {{ (i18n or {}).get('ov2_s002', "返回仪表盘") }}</a>
-  </header>
+    <input id="opsFilter" type="search" autocomplete="off" placeholder="{{ (i18n or {}).get('ov2_toc_filter', '筛选卡片…') }}">
+    <span class="ops-toc-chips" id="opsTocChips"></span>
+    <button id="opsFoldAllBtn" class="ops-ghost-btn" type="button" onclick="opsToggleAllCards()"></button>
+    <button id="opsRefreshBtn" type="button" onclick="opsManualRefresh()" style="margin-left:auto;" title="{{ (i18n or {}).get('refresh', '刷新') }}">⟳ {{ (i18n or {}).get('refresh', "刷新") }}</button>
+  </div>
+  <div id="opsNoMatch" class="muted" style="display:none;font-size:12px;padding:2px 2px 8px;"></div>
+  {#- P3 问题卡提示条：结构化/启发式判为红黄的卡点名成 chip，点击直达（红先黄后）。 -#}
+  <div id="opsProbStrip" style="display:none;padding:0 2px 10px;"></div>
 
   <div id="opsAlertBanner" style="display:none;"></div>
 
-  <div class="grid" id="kpis"></div>
+  {#- P4 首屏 KPI 三区化：系统健康 / 业务价值 / 账务与授权（loadOverview 按区渲染，
+      零值降权显示；老板三问「健康吗/值不值/花多少」各占一格）。 -#}
+  <div class="ops-kzones" id="kpis"></div>
+
+  {#- 分组容器：boot 时 JS 把下方全部 <section> 按注册表搬进各组（模板本体零重排，
+      同伴线插卡不受影响；未登记的卡留在原位仍可用）。 -#}
+  <div id="opsGroups"></div>
 
   <section>
     <h2>📈 {{ (i18n or {}).get('db_js_062', "趋势") }}</h2>
@@ -73,8 +147,15 @@
   </section>
 
   <section>
-    <h2>📰 {{ (i18n or {}).get('ov2_s005', "运营周报（近 7 天）") }}</h2>
+    <h2>📰 {{ (i18n or {}).get('ov2_s005', "运营周报（近 7 天）") }}<button id="opsReportCopyBtn" type="button" onclick="opsCopyReport()" style="font-size:11px;padding:2px 10px;">📋 {{ (i18n or {}).get('ov2_report_copy', "复制") }}</button></h2>
     <div id="opsReport"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <section id="valueWeeklySection" style="display:none;">
+    <h2>🧾 {{ (i18n or {}).get('ov2_s_value', "AI 价值周报（拟稿 → 投递 → 触达回复 → 出站量，持久 7 天窗）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_vw_sub', "持久库口径（reply_drafts / outreach_log / messages，重启不清零），与周报推送摘要同源；零流量整卡隐藏") }}</div>
+    <div class="grid" id="valueWeeklyKpis"></div>
+    <div id="valueWeeklyDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
   <section>
@@ -106,7 +187,7 @@
     <div class="grid" id="slaBacklogKpis"></div>
     <div id="slaBacklogDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
     <div style="margin-top:8px;">
-      <button id="slaBacklogCleanBtn" onclick="cleanStaleBacklog()" style="font-size:11px;padding:3px 10px;">🧹 {{ (i18n or {}).get('ov2_js_bk_clean_btn', "清理陈旧群积压") }}</button>
+      <button id="slaBacklogCleanBtn" onclick="cleanStaleBacklog()" style="font-size:11px;padding:3px 10px;">{{ (i18n or {}).get('ov2_js_bk_clean_btn', "🧹 清理陈旧群积压") }}</button>
       <span id="slaBacklogCleanMsg" class="muted" style="font-size:12px;margin-left:8px;"></span>
     </div>
   </section>
@@ -155,11 +236,36 @@
     <div id="feErrTrend" style="margin-top:8px;"></div>
   </section>
 
+  <!-- 账号接入漏斗：login_funnel_stats 的看板消费面（stalled 一眼判读位此前只进 metrics 没人看）。
+       进程内零尝试且趋势也无数据 → 整卡隐藏；有趋势落库时重启后仍可回看曲线 -->
+  <section id="loginFunnelSection" style="display:none;">
+    <h2>🧭 {{ (i18n or {}).get('ov2_s_loginfn', "账号接入漏斗（发起 → 出码 → 授权）") }}</h2>
+    <div class="grid" id="loginFunnelKpis"></div>
+    <div id="loginFunnelDetail"></div>
+    <div id="loginFunnelTrend" style="margin-top:8px;"></div>
+  </section>
+
+  <!-- 对方机器人守卫（P1 2026-08-03）：SpamBot 空转实锤后的四道防线观测。
+       零检出零拦截 → 整卡隐藏；有量即亮（检出的都是真烧钱面）。 -->
+  <section id="peerBotSection" style="display:none;">
+    <h2>🤖 {{ (i18n or {}).get('ov2_s_botpeer', "对方机器人守卫（检出 / 拦截 / 降档）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_bp_hint', "确定级（TG 官方 bot 标志/按钮菜单）降 manual；内容疑似（菜单话术/链接刷屏/索取循环）与复读/秒回熔断降 review；每次拦截＝省一次 LLM 调用。误判在收件箱会话里一键覆写「确认真人」。") }}</div>
+    <div class="grid" id="peerBotKpis"></div>
+    <div id="peerBotDetail"></div>
+  </section>
+
   <section id="csrfRejectSection" style="display:none;">
     <h2>🛡️ {{ (i18n or {}).get('ov2_s_csrf', "安全拦截（CSRF 写请求 403 观测）") }}</h2>
     <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_csrf_hint', "形态即诊断：cookie_no_header＝某个前端宿主没带 CSRF 凭证；origin/referer_mismatch＝反代改写 Host 或跨站；bare＝脚本/隐私浏览器。有量就该查，别等坐席截图。") }}</div>
     <div class="grid" id="csrfRejectKpis"></div>
     <div id="csrfRejectDetail"></div>
+  </section>
+
+  <section id="outMirrorSection" style="display:none;">
+    <h2>📤 {{ (i18n or {}).get('ov2_s_omirror', "出站媒体归档（镜像发布失败观测）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_om_hint', "A 线出站图/语音发完即删，先归档到 /static 坐席台才能回放。归档失败＝那条媒体在聊天记录里退化成「无音频存档」的纯文字占位。有失败就查磁盘、protocol_media 目录可写性与 app.log。") }}</div>
+    <div class="grid" id="outMirrorKpis"></div>
+    <div id="outMirrorDetail"></div>
   </section>
 
   <section id="personaOvSection" style="display:none;">
@@ -230,7 +336,7 @@
   </section>
 
   <section id="profilePushSection" style="display:none;">
-    <h2>🪪 {{ (i18n or {}).get('ov2_s_pp', "账号资料推送") }}</h2>
+    <h2>🆔 {{ (i18n or {}).get('ov2_s_pp', "账号资料推送") }}</h2>
     <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_pp_sub', "后台直改平台官方昵称/签名/头像的使用观测") }}</div>
     <div class="grid" id="profilePushKpis"></div>
     <div id="profilePushDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
@@ -251,7 +357,7 @@
   </section>
 
   <section>
-    <h2>🪪 {{ (i18n or {}).get('ov2_s_pid', "会话身份自愈（数字号自动补真实昵称）") }}</h2>
+    <h2>🆔 {{ (i18n or {}).get('ov2_s_pid', "会话身份自愈（数字号自动补真实昵称）") }}</h2>
     <div class="grid" id="pidKpis"></div>
     <div id="pidDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
     <div id="identityTrend" style="margin-top:10px;"></div>
@@ -264,7 +370,7 @@
   </section>
 
   <section id="pAuditSection" style="display:none;">
-    <h2>🪪 {{ (i18n or {}).get('ov2_s_paudit', "资料变更审计流（官方昵称/头像 推送·对齐）") }}</h2>
+    <h2>🆔 {{ (i18n or {}).get('ov2_s_paudit', "资料变更审计流（官方昵称/头像 推送·对齐）") }}</h2>
     <div class="grid" id="pAuditKpis"></div>
     <div id="pAuditDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
@@ -301,7 +407,7 @@
   </section>
 
   <section id="bubblesSection" style="display:none;">
-    <h2>🫧 {{ (i18n or {}).get('ov2_s_bubbles', "短句分条回复（像真人连发 · autosend/坐席/A线 三链）") }}</h2>
+    <h2>💭 {{ (i18n or {}).get('ov2_s_bubbles', "短句分条回复（像真人连发 · autosend/坐席/A线 三链）") }}</h2>
     <div class="grid" id="bubblesKpis"></div>
     <div id="bubblesDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
@@ -316,6 +422,13 @@
     <h2>🔮 {{ (i18n or {}).get('ov2_s_bazi', "命理技能（话题触达 → 生辰采集 → 灵签/命盘 → 详批变现）") }}</h2>
     <div class="grid" id="baziKpis"></div>
     <div id="baziDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <section id="casesSection" style="display:none;">
+    <h2>🗂 {{ (i18n or {}).get('ov2_s_cases', "案例跟进（AI 立案 → 人工处理 → 结案）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_cs_sub', "AI 判定需要真人跟进的会话：危机 / 要人工 / 怀疑机器人 / 媒体质疑等自动立案；零案例且零流量时整卡隐藏") }}</div>
+    <div class="grid" id="casesKpis"></div>
+    <div id="casesDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
   <section id="careSection" style="display:none;">
@@ -346,6 +459,34 @@
     <div id="credpoolDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
+  <section id="alertlinkSection" style="display:none;">
+    <h2>🔔 {{ (i18n or {}).get('ov2_s_alertlink', "告警链路（最后一公里自检）") }}</h2>
+    <div class="grid" id="alertlinkKpis"></div>
+    <div id="alertlinkDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <section id="officialWhSection" style="display:none;">
+    <h2>📡 {{ (i18n or {}).get('ov2_s_offwh', "官方渠道回调（webhook 可达性）") }}</h2>
+    <div class="grid" id="officialWhKpis"></div>
+    <div id="officialWhDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <!-- ── 托管租户（SaaS）：实例状态 / 持单台账 / 守护心跳。端点未装载（等下次
+       搭批重启）或零租户零持单 → 整卡隐藏。数据源 /api/admin/tenant-overview -->
+  <section id="tenantOvSection" style="display:none;">
+    <h2>☁️ {{ (i18n or {}).get('ov2_s_tenantov', "托管租户（SaaS）") }}</h2>
+    <div class="grid" id="tenantOvKpis"></div>
+    <div id="tenantOvDetail" style="margin-top:8px;"></div>
+  </section>
+
+  {# 被埋会话（P0-198）：归档着却有未读＝客户在等，而工作台所有默认视图都过滤 archived=1。
+     零命中时整卡隐藏——这张卡只在真有人被埋时出现，平时不占版面。 #}
+  <section id="buriedSection" style="display:none;">
+    <h2>🪦 {{ (i18n or {}).get('ov2_s_buried', "被埋会话（已归档 · 客户还在等）") }}</h2>
+    <div class="grid" id="buriedKpis"></div>
+    <div id="buriedDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
   <section id="goalSection" style="display:none;">
     <h2>🎯 {{ (i18n or {}).get('ov2_s_goal', "营销目标（建目标 → 每日拍 → 注入 → 主动桥 → 终态）") }}</h2>
     <div class="grid" id="goalKpis"></div>
@@ -359,7 +500,7 @@
   </section>
 
   <section id="ishadowSection" style="display:none;">
-    <h2>🪪 {{ (i18n or {}).get('ov2_s_ishadow', "跨平台身份影子（只发现 · 不写关联）") }}</h2>
+    <h2>🆔 {{ (i18n or {}).get('ov2_s_ishadow', "跨平台身份影子（只发现 · 不写关联）") }}</h2>
     <div class="grid" id="ishadowKpis"></div>
     <div id="ishadowDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
@@ -398,7 +539,7 @@
     <div style="display:flex; gap:10px; margin-bottom:10px; align-items:center;">
       <select id="fltKind" onchange="loadIncidents()" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 8px;">
         <option value="">{{ (i18n or {}).get('ov2_s012', "全部类型") }}</option>
-        <option value="health">🩺 {{ (i18n or {}).get('db_js_018', "健康") }}</option>
+        <option value="health">🏥 {{ (i18n or {}).get('db_js_018', "健康") }}</option>
         <option value="billing">💸 {{ (i18n or {}).get('ov2_s013', "计费") }}</option>
         <option value="draft_quality">📉 {{ (i18n or {}).get('ov2_s014', "草稿质量") }}</option>
         <option value="ai_quality">🛡️ {{ (i18n or {}).get('ov2_s_ai_quality', "AI 质量") }}</option>
@@ -418,11 +559,23 @@
       <button id="loadMoreBtn" style="display:none;" onclick="loadMoreIncidents()">{{ (i18n or {}).get('ov2_s017', "加载更多历史") }}</button>
     </div>
   </section>
+
+  {#- 条件隐藏卡（loader 判定未启用/无数据 → display:none）的可发现性兜底：
+      不点名列出的话，运营根本不知道这些能力存在。每轮刷新后由 JS 更新。 -#}
+  <div id="opsHiddenNote" class="muted" style="display:none;font-size:12px;padding:4px 2px 0;"></div>
 </div>
 
 <script>
 var CAN_MANAGE_OPS = {{ 'true' if can_manage_ops else 'false' }};
 function fmt(v, suffix){ if(v===null||v===undefined||v==='') return '—'; return v + (suffix||''); }
+// 共享 HTML 转义（P4 收口）：此前 20 个 loader 各自定义局部 esc、且存在两种转义面，
+// 还出过「漏定义 → 卡片一激活渲染即 ReferenceError」的事故（凭据池卡）。顶层函数
+// 声明有提升、全文件可达；转义面取超集（含单双引号），文本/属性两种上下文都安全。
+function esc(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
 function dot(light){ var c=({green:'green',yellow:'yellow',red:'red'})[light]||'unknown'; return '<span class="light-dot '+c+'"></span>'; }
 function tsfmt(ts){ if(!ts) return '—'; try{ return window.wsFmtDateTime(ts); }catch(e){ return '—'; } }
 
@@ -438,7 +591,7 @@ function anomBadge(a){
 // 纯 SVG 迷你折线（无依赖）。values: number[]; opts.labels: 各点标签（hover 提示）。
 function sparkline(values, opts){
   opts = opts || {};
-  var w = opts.w || 220, h = opts.h || 44, pad = 4, color = opts.color || '#388bfd';
+  var w = opts.w || 220, h = opts.h || 44, pad = 4, color = opts.color || 'var(--p)';
   var labels = opts.labels || [];
   var vals = (values || []).map(function(v){ return Number(v) || 0; });
   if(vals.length < 2){ return '<div class="muted" style="font-size:12px;">'+window.T('ov2_js002')+'</div>'; }
@@ -458,9 +611,11 @@ function sparkline(values, opts){
       'fill="transparent" style="cursor:pointer;"><title>'+lbl+vals[i]+'</title></circle>';
   }).join('');
   var last = xy[xy.length-1];
+  // 颜色走 style 而非 SVG presentation attribute：后者不解析 var(--token)，
+  // 前者可以——调用方现在传主题令牌（var(--green) 等），日/夜主题都对。
   return '<svg width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'">' +
-    '<polyline fill="none" stroke="'+color+'" stroke-width="1.8" points="'+poly+'"/>' +
-    '<circle cx="'+last[0].toFixed(1)+'" cy="'+last[1].toFixed(1)+'" r="2.6" fill="'+color+'"/>' +
+    '<polyline fill="none" style="stroke:'+color+'" stroke-width="1.8" points="'+poly+'"/>' +
+    '<circle cx="'+last[0].toFixed(1)+'" cy="'+last[1].toFixed(1)+'" r="2.6" style="fill:'+color+'"/>' +
     hovers +
     '</svg> <span class="muted" style="font-size:12px;">'+window.T('ov2_js003')+' '+max+'</span>';
 }
@@ -473,29 +628,39 @@ async function loadOverview(){
     document.getElementById('overallDot').className = 'light-dot ' + (({green:'green',yellow:'yellow',red:'red'})[d.overall_light]||'unknown');
     document.getElementById('updatedAt').textContent = window.T('db_js_079')+' ' + tsfmt(d.ts);
 
-    const cards = [
-      [window.T('ov2_js004'), '<span class="val">'+dot(k.health_light)+'</span>', window.T('ov2_js005')+' '+dot(k.reliability_light)+' '+window.T('ov2_js006')+' '+fmt(k.reliability_score)],
-      [window.T('ov2_js007'), '<span class="val">'+fmt(k.conversions)+'</span>', window.T('ov2_js008')+' '+fmt(k.leads)+' · '+window.T('mo_s027')+' '+fmt(k.conversion_rate)],
-      ['AI '+window.T('ap_s009'), '<span class="val">'+fmt(k.ai_share_pct,'%')+'</span>', window.T('ov2_js009')+' '+fmt(k.saved_hours)+' '+window.T('msg_js_009')],
-      [window.T('ov2_js010'), '<span class="val">'+fmt(k.saved_money)+'</span>', window.T('ov2_js011')],
-      [window.T('ov2_js012'), '<span class="val">'+fmt(k.billing_total)+'</span>', fmt(k.billing_currency,'')+' · '+window.T('ov2_js013')+' '+fmt(k.plan)],
-      [window.T('ov2_js014'), '<span class="val">'+fmt(k.over_seats)+'</span>', window.T('ov2_s006')+' '+fmt(k.billing_anomaly_count)+' '+window.T('msg_js_296')],
-      [window.T('ov2_js015'), '<span class="val">'+fmt(k.open_incidents)+'</span>', window.T('db_js_024')+' '+fmt(k.open_alerts)],
-    ];
+    // ── P4 首屏三区：老板三问各占一格——健康吗（红黄灯类）/ 值不值（产出类）/
+    //    花多少（账务类）。零值项降权显示（kv-dim），不再和 100% 混排抢视线。
+    var zH = [], zV = [], zB = [];
+    function zcard(zone, label, val, sub, dim){
+      zone.push({label: label, val: val, sub: sub || '', dim: !!dim});
+    }
+    zcard(zH, window.T('ov2_js004'), dot(k.health_light),
+      window.T('ov2_js005')+' '+dot(k.reliability_light)+' '+window.T('ov2_js006')+' '+fmt(k.reliability_score));
+    zcard(zH, window.T('ov2_js015'), fmt(k.open_incidents),
+      window.T('db_js_024')+' '+fmt(k.open_alerts), !(Number(k.open_incidents)||0));
     if(k.companion_config_light){
-      cards.push([window.T('ov2_js016'), '<span class="val">'+dot(k.companion_config_light)+'</span>',
-                  window.T('ov2_js017')+' '+fmt(k.companion_config_errors)+' · '+window.T('ov2_js018')+' '+fmt(k.companion_config_warnings)]);
+      zcard(zH, window.T('ov2_js016'), dot(k.companion_config_light),
+        window.T('ov2_js017')+' '+fmt(k.companion_config_errors)+' · '+window.T('ov2_js018')+' '+fmt(k.companion_config_warnings));
     }
     if(k.orchestrator_worker_light){
       var fbTxt = ((Number(k.send_fallback_rate)||0)*100).toFixed(1)+'%';
-      cards.push([window.T('ov2_js_ow_label'), '<span class="val">'+dot(k.orchestrator_worker_light)+'</span>',
-                  window.T('ov2_js_ow_err')+' '+fmt(k.orchestrator_workers_error)+' · '+window.T('ov2_js_ow_run')+' '+fmt(k.orchestrator_workers_running)+' · '+window.T('ov2_js_ow_fb')+' '+fbTxt]);
+      zcard(zH, window.T('ov2_js_ow_label'), dot(k.orchestrator_worker_light),
+        window.T('ov2_js_ow_err')+' '+fmt(k.orchestrator_workers_error)+' · '+window.T('ov2_js_ow_run')+' '+fmt(k.orchestrator_workers_running)+' · '+window.T('ov2_js_ow_fb')+' '+fbTxt);
     }
+    zcard(zV, 'AI '+window.T('ap_s009'), fmt(k.ai_share_pct,'%'),
+      window.T('ov2_js009')+' '+fmt(k.saved_hours)+' '+window.T('msg_js_009'), !(Number(k.ai_share_pct)||0));
+    zcard(zV, window.T('ov2_js007'), fmt(k.conversions),
+      window.T('ov2_js008')+' '+fmt(k.leads)+' · '+window.T('mo_s027')+' '+fmt(k.conversion_rate), !(Number(k.conversions)||0));
+    zcard(zV, window.T('ov2_js010'), fmt(k.saved_money), window.T('ov2_js011'), !(Number(k.saved_money)||0));
     // P0-3/B9 成本护栏：入站自动译量（默认按引擎可用性开启后，译量/失败随窗口可见）
     if((Number(k.inbound_xlate_translated)||0) || (Number(k.inbound_xlate_failed)||0)){
-      cards.push([window.T('ov2_js_ibx_label'), '<span class="val">'+fmt(k.inbound_xlate_translated)+'</span>',
-                  window.T('ov2_js_ibx_fail')+' '+fmt(k.inbound_xlate_failed)]);
+      zcard(zV, window.T('ov2_js_ibx_label'), fmt(k.inbound_xlate_translated),
+        window.T('ov2_js_ibx_fail')+' '+fmt(k.inbound_xlate_failed));
     }
+    zcard(zB, window.T('ov2_js012'), fmt(k.billing_total),
+      fmt(k.billing_currency,'')+' · '+window.T('ov2_js013')+' '+fmt(k.plan));
+    zcard(zB, window.T('ov2_js014'), fmt(k.over_seats),
+      window.T('ov2_s006')+' '+fmt(k.billing_anomaly_count)+' '+window.T('msg_js_296'), !(Number(k.over_seats)||0));
     // C6 授权/试用运营卡：非社区态才显（有真实授权 or 试用）。纯观测，不进总览灯。
     if(k.license_state && k.license_state!=='unlicensed' && k.license_state!==''){
       var licTitle = k.license_trial ? window.T('ov2_js_lic_trial') : window.T('ov2_js_lic_label');
@@ -510,33 +675,54 @@ async function loadOverview(){
         var inc = (Number(k.license_included_chars)||0).toLocaleString();
         licSub += (licSub?' · ':'')+window.T('ov2_js_lic_chars')+' '+used+' / '+inc;
       }
-      cards.push([licTitle, '<span class="val">'+fmt(licVal)+'</span>', licSub || window.T('ov2_js_lic_nolimit')]);
+      zcard(zB, licTitle, fmt(licVal), licSub || window.T('ov2_js_lic_nolimit'));
     }
-    document.getElementById('kpis').innerHTML = cards.map(function(c){
-      return '<div class="kpi"><div class="label">'+c[0]+'</div><div class="val">'+c[1]+'</div><div class="sub">'+c[2]+'</div></div>';
-    }).join('');
+    function worstL(list){
+      if(list.indexOf('red') >= 0) return 'red';
+      if(list.indexOf('yellow') >= 0) return 'yellow';
+      return '';
+    }
+    var hZoneDot = worstL([k.health_light, k.reliability_light, k.companion_config_light,
+      k.orchestrator_worker_light, (Number(k.open_incidents)||0) > 0 ? 'yellow' : '']);
+    var bZoneDot = (Number(k.over_seats)||0) > 0 ? 'red'
+      : ((Number(k.billing_anomaly_count)||0) > 0 ? 'yellow' : '');
+    function zoneHtml(titleKey, items, zdot){
+      if(!items.length) return '';
+      var cells = items.map(function(c){
+        return '<div class="kzi"><div class="kzi-l">'+c.label+'</div>'+
+          '<div class="kzi-v'+(c.dim ? ' kv-dim' : '')+'">'+c.val+'</div>'+
+          (c.sub ? ('<div class="kzi-s" title="'+String(c.sub).replace(/<[^>]*>/g,'').replace(/"/g,'&quot;')+'">'+c.sub+'</div>') : '')+'</div>';
+      }).join('');
+      return '<div class="ops-kzone"><div class="ops-kzone-h">'+
+        '<span class="ops-group-dot'+(zdot ? ' '+zdot : '')+'"></span>'+window.T(titleKey)+'</div>'+
+        '<div class="ops-kzone-grid">'+cells+'</div></div>';
+    }
+    opsSetHtml(document.getElementById('kpis'),
+      zoneHtml('ov2_zone_health', zH, hZoneDot) +
+      zoneHtml('ov2_zone_value', zV, '') +
+      zoneHtml('ov2_zone_billing', zB, bZoneDot));
 
     var sec = d.sections || {};
     var aiTrend = (((sec.roi||{}).automation)||{}).trend || [];
-    document.getElementById('sparkAI').innerHTML = sparkline(
+    opsSetHtml(document.getElementById('sparkAI'), sparkline(
       aiTrend.map(function(p){ return p.ai; }),
-      {color:'#2ea043', labels: aiTrend.map(function(p){ return p.day; })});
+      {color:'var(--green)', labels: aiTrend.map(function(p){ return p.day; })}));
     var relTrend = ((sec.reliability||{}).trend) || [];
-    document.getElementById('sparkRel').innerHTML = sparkline(
+    opsSetHtml(document.getElementById('sparkRel'), sparkline(
       relTrend.map(function(p){ return p.total; }),
-      {color:'#388bfd', labels: relTrend.map(function(p){
+      {color:'var(--p)', labels: relTrend.map(function(p){
         try{ return window.wsFmtTime(p.ts, {hour:'2-digit',minute:'2-digit'}); }catch(e){ return ''; }
-      })});
+      })}));
     var anom = d.anomalies || {};
-    document.getElementById('anomAI').innerHTML = anomBadge(anom.ai_sent);
-    document.getElementById('anomRel').innerHTML = anomBadge(anom.dispositions);
+    opsSetHtml(document.getElementById('anomAI'), anomBadge(anom.ai_sent));
+    opsSetHtml(document.getElementById('anomRel'), anomBadge(anom.dispositions));
 
     const an = d.billing_anomalies || [];
-    document.getElementById('billingAnomalies').innerHTML = an.length ? (
+    opsSetHtml(document.getElementById('billingAnomalies'), an.length ? (
       '<table><tr><th>'+window.T('ov2_js019')+'</th><th>'+window.T('ov2_js020')+'</th></tr>' + an.map(function(a){
         return '<tr><td><span class="badge '+a.severity+'">'+a.severity+'</span></td><td>'+a.message+'</td></tr>';
       }).join('') + '</table>'
-    ) : '<div class="empty">'+window.T('ov2_js021')+' ✓</div>';
+    ) : '<div class="empty">'+window.T('ov2_js021')+' ✓</div>');
   }catch(e){
     document.getElementById('kpis').innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
   }
@@ -547,17 +733,30 @@ var _incCursor = null;
 var _incPageSize = 30;
 
 function incidentRow(it){
-    var problems = (it.problems||[]).map(function(p){return (p.name||p.id)+': '+(p.detail||'');}).join('; ') || '—';
-  var adviceHtml = (it.advice||[]).map(function(a){
-    var link = a.link ? ' <a href="'+a.link+'" target="_blank">'+window.T('dash.ob.go')+' →</a>' : '';
-    var fix = (a.fix && CAN_MANAGE_OPS)
-      ? ' <button style="padding:2px 8px;" onclick="runFix(\''+a.fix.key+'\',\''+a.fix.target+'\')">'+a.fix.label+'</button>'
-      : '';
-    return '<div class="muted" style="font-size:12px;margin-top:3px;">💡 '+a.action+link+fix+'</div>';
-  }).join('');
-  var canAck = it.status !== 'resolved' && CAN_MANAGE_OPS;
-  var kindLabel = ({billing:'💸 '+window.T('ov2_s013'), draft_quality:'📉 '+window.T('ov2_s014'), ai_quality:'🛡️ '+window.T('ov2_s_ai_quality'), realtime_voice:'📞 '+window.T('ov2_s_rtvoice_alert'), memory_key_drift:'🧭 '+window.T('ov2_s015'), health:'🩺 '+window.T('db_js_018')})[it.kind] || '🩺 '+window.T('db_js_018');
-  return '<tr>'+
+  var problems = (it.problems||[]).map(function(p){return (p.name||p.id)+': '+(p.detail||'');}).join('; ') || '—';
+  var resolved = it.status === 'resolved';
+  // P3 降噪：① advice 按 (文案+链接+fix) 去重——同一事件多 problem 时后端逐条附建议，
+  // 一行里出现 5 条一模一样的「💡 去处理」纯属噪音；② resolved 行是历史，建议早已
+  // 处理过，整段不再渲染，行降透明度让现役事件更醒目。
+  var adviceHtml = '';
+  if(!resolved){
+    var seen = {};
+    adviceHtml = (it.advice||[]).filter(function(a){
+      var k = (a.action||'')+'|'+(a.link||'')+'|'+(a.fix ? a.fix.key : '');
+      if(seen[k]) return false;
+      seen[k] = 1;
+      return true;
+    }).map(function(a){
+      var link = a.link ? ' <a href="'+a.link+'" target="_blank">'+window.T('dash.ob.go')+' →</a>' : '';
+      var fix = (a.fix && CAN_MANAGE_OPS)
+        ? ' <button style="padding:2px 8px;" onclick="runFix(\''+a.fix.key+'\',\''+a.fix.target+'\')">'+a.fix.label+'</button>'
+        : '';
+      return '<div class="muted" style="font-size:12px;margin-top:3px;">💡 '+a.action+link+fix+'</div>';
+    }).join('');
+  }
+  var canAck = !resolved && CAN_MANAGE_OPS;
+  var kindLabel = ({billing:'💸 '+window.T('ov2_s013'), draft_quality:'📉 '+window.T('ov2_s014'), ai_quality:'🛡️ '+window.T('ov2_s_ai_quality'), realtime_voice:'📞 '+window.T('ov2_s_rtvoice_alert'), memory_key_drift:'🧭 '+window.T('ov2_s015'), health:'🏥 '+window.T('db_js_018')})[it.kind] || '🏥 '+window.T('db_js_018');
+  return '<tr'+(resolved?' style="opacity:.55;"':'')+'>'+
     '<td>'+kindLabel+'</td>'+
     '<td><span class="badge '+it.status+'">'+it.status+'</span></td>'+
     '<td>'+dot(it.light)+'</td>'+
@@ -586,10 +785,10 @@ async function loadIncidents(){
     _suggestedAssignee = (sug && sug.agent_id) ? String(sug.agent_id) : '';
     _incCursor = d.next_cursor || null;
     const items = d.incidents || [];
-    if(!items.length){ document.getElementById('incidents').innerHTML = '<div class="empty">'+window.T('ov2_js022')+' ✓</div>'; updateMoreBtn(); return; }
-    document.getElementById('incidents').innerHTML =
+    if(!items.length){ opsSetHtml(document.getElementById('incidents'), '<div class="empty">'+window.T('ov2_js022')+' ✓</div>'); updateMoreBtn(); return; }
+    opsSetHtml(document.getElementById('incidents'),
       '<table id="incTable"><tr><th>'+window.T('msg_js_1042')+'</th><th>'+window.T('ov_js_th_status')+'</th><th>'+window.T('ov2_js023')+'</th><th>'+window.T('ov2_js024')+'</th><th>'+window.T('ov2_js025')+'</th><th>'+window.T('ov2_js026')+'</th><th></th></tr>' +
-      items.map(incidentRow).join('') + '</table>';
+      items.map(incidentRow).join('') + '</table>');
     updateMoreBtn();
   }catch(e){
     document.getElementById('incidents').innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
@@ -603,7 +802,12 @@ async function loadMoreIncidents(){
     const d = await r.json();
     _incCursor = d.next_cursor || null;
     var tbl = document.getElementById('incTable');
-    if(tbl){ tbl.insertAdjacentHTML('beforeend', (d.incidents||[]).map(incidentRow).join('')); }
+    if(tbl){
+      tbl.insertAdjacentHTML('beforeend', (d.incidents||[]).map(incidentRow).join(''));
+      // 追加打破了容器的 opsSetHtml 缓存快照 → 置空，下轮全量渲染不被误判「没变」
+      var cont = document.getElementById('incidents');
+      if(cont) cont._opsHtml = null;
+    }
     updateMoreBtn();
   }catch(e){ /* 静默 */ }
 }
@@ -692,12 +896,70 @@ async function loadReport(){
     var lines = (d.headline||[]).map(function(s){ return '<li>'+s+'</li>'; }).join('');
     var inc = d.incidents||{};
     var byKind = Object.keys(inc.by_kind||{}).map(function(k){ return k+': '+inc.by_kind[k]; }).join(', ') || window.T('dash.none');
-    document.getElementById('opsReport').innerHTML =
+    opsSetHtml(document.getElementById('opsReport'),
       (lines ? '<ul style="margin:0 0 10px 18px;">'+lines+'</ul>' : '') +
       '<div class="muted" style="font-size:13px;">'+window.T('ov2_js035')+byKind+
-      ' · '+window.T('ov2_js036')+(inc.mttr_hours!=null?inc.mttr_hours+'h':'—')+'</div>';
+      ' · '+window.T('ov2_js036')+(inc.mttr_hours!=null?inc.mttr_hours+'h':'—')+'</div>');
   }catch(e){
     document.getElementById('opsReport').innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
+  }
+}
+
+// 🧾 AI 价值周报卡（2026-08-06）：读 /api/report/weekly 的 value 段
+// （src/ops/value_report.py 持久口径：拟稿/草稿链投递/主动触达回复率/出站量 + 环比）。
+// 未授权/端点异常/零流量 → 整卡隐藏（boss 层摘要卡，不摆错误现场）。
+async function loadValueWeekly(){
+  var sec = document.getElementById('valueWeeklySection');
+  var kp = document.getElementById('valueWeeklyKpis');
+  var dv = document.getElementById('valueWeeklyDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/report/weekly', {credentials:'same-origin'}, {timeoutMs: 30000});
+    if(!r.ok){ sec.style.display='none'; return; }
+    const d = await r.json();
+    var v = d.value || {};
+    var tw = v.this_week || {}, lw = v.last_week || {};
+    var dr = tw.drafts || {}, o = tw.outreach || {}, tr = tw.traffic || {};
+    var total = (Number(dr.created)||0) + (Number(o.sent)||0) + (Number(tr.messages_out)||0);
+    if(!v.this_week || total === 0){ sec.style.display='none'; return; }
+    sec.style.display = '';
+    function wow(cur, prev){
+      cur = Number(cur)||0; prev = Number(prev)||0;
+      if(prev <= 0){
+        return cur > 0 ? '<span class="muted" style="font-size:11px;"> ('+window.T('ov2_vw_wow_new')+')</span>' : '';
+      }
+      var pd = Math.round((cur - prev) / prev * 100);
+      var col = pd >= 0 ? 'var(--tk-green-ink,#059669)' : 'var(--tk-amber-ink,#d97706)';
+      return '<span style="font-size:11px;color:'+col+';"> '+(pd>=0?'+':'')+pd+'%</span>';
+    }
+    var ld = lw.drafts||{}, lo = lw.outreach||{}, lt = lw.traffic||{};
+    var kpis = [
+      {label:window.T('ov2_vw_drafts'), value:fmt(Number(dr.created)||0)+wow(dr.created, ld.created)},
+      {label:window.T('ov2_vw_draft_sent'), value:fmt(Number(dr.sent)||0)+wow(dr.sent, ld.sent)},
+      {label:window.T('ov2_vw_outreach'), value:fmt(Number(o.sent)||0)+wow(o.sent, lo.sent)},
+      {label:window.T('ov2_vw_reply'), value:(Number(o.response_rate)||0)+'%'},
+      {label:window.T('ov2_vw_out'), value:fmt(Number(tr.messages_out)||0)+wow(tr.messages_out, lt.messages_out)},
+      {label:window.T('ov2_vw_in'), value:fmt(Number(tr.messages_in)||0)},
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    // 处置/分级/触达来源都是系统枚举值（status/autopilot_level/batch 前缀），非用户输入
+    function dist(obj, cap){
+      return Object.keys(obj||{}).slice(0, cap).map(function(k){ return k+' '+obj[k]; }).join(' / ');
+    }
+    var parts = [];
+    var st = dist(dr.resolved_by_status, 4);
+    if(st) parts.push(window.T('ov2_vw_status')+': '+st);
+    var lv = dist(dr.created_by_level, 4);
+    if(lv) parts.push(window.T('ov2_vw_levels')+': '+lv);
+    var bt = dist(o.by_batch_prefix, 3);
+    if(bt) parts.push(window.T('ov2_vw_batches')+': '+bt);
+    dv.innerHTML = (parts.length ? '<div class="muted" style="font-size:12px;">'+parts.join(' · ')+'</div>' : '')
+      + '<div class="muted" style="font-size:12px;margin-top:6px;">'+window.T('ov2_vw_hint')+'</div>';
+  }catch(e){
+    sec.style.display='none';
   }
 }
 
@@ -783,7 +1045,7 @@ async function loadTTSTrend(){
     });
     el.innerHTML = '<div class="muted" style="font-size:12px;margin-bottom:4px;">'+
       window.T('ov2_js050')+'</div>'+
-      sparkline(costs, {labels:labels, color:'#3fb950', w:300});
+      sparkline(costs, {labels:labels, color:'var(--green)', w:300});
   }catch(e){
     el.innerHTML = '<div class="muted" style="font-size:12px;">'+window.T('ov2_js051')+e+'</div>';
   }
@@ -818,9 +1080,9 @@ async function loadXlateTrend(){
     });
     el.innerHTML = '<div class="muted" style="font-size:12px;margin-bottom:4px;">'+
       window.T('ov2_js055')+'</div>'+
-      sparkline(lowRate, {labels:labels, color:'#f85149', w:300})+
-      ' '+sparkline(swRate, {labels:labels, color:'#58a6ff', w:300})+
-      (hasSem ? ' '+sparkline(semRate, {labels:labels, color:'#d29922', w:300}) : '');
+      sparkline(lowRate, {labels:labels, color:'var(--red)', w:300})+
+      ' '+sparkline(swRate, {labels:labels, color:'var(--blue)', w:300})+
+      (hasSem ? ' '+sparkline(semRate, {labels:labels, color:'var(--amber)', w:300}) : '');
   }catch(e){
     el.innerHTML = '<div class="muted" style="font-size:12px;">'+window.T('ov2_js051')+e+'</div>';
   }
@@ -874,12 +1136,12 @@ async function loadAiSafety(){
       if(Math.abs(n) < (dfmt==='pp'?0.001:0.5)) return '';
       var disp = dfmt==='pp' ? (Math.abs(n)*100).toFixed(1)+'pp' : fmt(Math.round(Math.abs(n)));
       var up = n > 0, good = dir==='neutral' ? null : ((dir==='up') ? up : !up);
-      var col = good===null ? '' : (good ? '#3fb950' : '#f85149');
+      var col = good===null ? '' : (good ? 'var(--green)' : 'var(--red)');
       return '<span title="'+wow+'" style="font-size:11px;margin-left:6px;'+(col?'color:'+col+';':'')+'">'+(up?'▲':'▼')+disp+'</span>';
     }
     // 采纳率健康灯：≥60% 绿 / 40–60% 黄 / <40% 红 / 无样本 灰。
     var ar = Number(d.adopt_rate)||0;
-    var lightCol = reviewed<=0 ? '#8b949e' : (ar>=0.6?'#3fb950':(ar>=0.4?'#d29922':'#f85149'));
+    var lightCol = reviewed<=0 ? '#8b949e' : (ar>=0.6?'var(--green)':(ar>=0.4?'var(--amber)':'var(--red)'));
     var dot = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'+lightCol+';margin-right:5px;"></span>';
     var bt = d.blocked_top || [];
     var kpis = [
@@ -904,7 +1166,7 @@ async function loadAiSafety(){
           '<table>'+bt.map(function(x){
             var when = tsfmt(x.last_ts);
             var reason = x.reason ? (' · '+_esc(x.reason)) : '';
-            return '<tr><td><a href="/workspace?conv='+encodeURIComponent(x.conversation_id)+'&flag=blocked" target="_blank" rel="noopener" data-cid="'+_esc(x.conversation_id)+'" onclick="_logDrill(this)">'+
+            return '<tr><td><a href="/workspace?conv='+encodeURIComponent(x.conversation_id)+'&flag=blocked" target="_blank" rel="noopener" data-cid="'+_esc(x.conversation_id)+'" data-winname="workspace" onclick="_logDrill(this);return __openUnique(event,this)">'+
               _esc(x.name||x.conversation_id)+'</a></td><td>'+_esc(x.platform||'')+'</td><td>'+fmt(x.count||0)+
               '</td><td class="muted">'+_esc(when)+reason+'</td></tr>';
           }).join('')+'</table>';
@@ -919,9 +1181,9 @@ async function loadAiSafety(){
         var autoSeries = t.map(function(x){ return Number(x.autosend)||0; });
         tr.innerHTML =
           '<div class="muted" style="font-size:12px;margin-bottom:2px;">'+window.T('ov2_js_safe_trend_adopt')+'</div>'+
-          sparkline(adoptSeries, {labels:labels, color:'#3fb950', w:300})+
+          sparkline(adoptSeries, {labels:labels, color:'var(--green)', w:300})+
           '<div class="muted" style="font-size:12px;margin:6px 0 2px;">'+window.T('ov2_js_safe_trend_autosend')+'</div>'+
-          sparkline(autoSeries, {labels:labels, color:'#58a6ff', w:300});
+          sparkline(autoSeries, {labels:labels, color:'var(--blue)', w:300});
       } else { tr.innerHTML=''; }
     }
     var dd = d.drilldown || {};
@@ -1064,7 +1326,7 @@ function _calResultHtml(d){
   // 一眼看出告警是聚集还是零星——判断阈值吵不吵的关键（补齐 F2b「都是哪些窗」）。
   var pts = d.points || [], tl = '';
   if(pts.length){
-    var colorOf = {green:'#8b949e', yellow:'#d29922', red:'#f85149'};
+    var colorOf = {green:'#8b949e', yellow:'var(--amber)', red:'var(--red)'};
     var cells = pts.map(function(p){
       var c = colorOf[p.light] || '#8b949e';
       var s = (p.problem_ids && p.problem_ids.length) ? (' ['+p.problem_ids.join(',')+']') : '';
@@ -1120,6 +1382,8 @@ async function loadSlaBacklog(){
     var byLv = dr.by_level || {};
     var pendingHi = (Number(byLv.L3)||0) + (Number(byLv.L4)||0);
     var runOk = !!sw.running;
+    // P3 结构化状态：SLA 监控停跑或有高危待审积压=黄（慢性队列问题，升级由看门狗告警承担）
+    opsSetCardLight('backlog', (!runOk || pendingHi > 0) ? 'yellow' : '');
     var kpis = [
       {label:window.T('ov2_js_bk_mon'), value: runOk ? window.T('ov2_js_bk_running') : window.T('ov2_js_bk_stopped'), color: runOk ? 'var(--tk-emerald)' : 'var(--tk-text-muted)'},
       {label:window.T('ov2_js_bk_pending'), value: fmt(pendingHi), color: pendingHi>0 ? 'var(--tk-warn-ink)' : 'var(--tk-text)'},
@@ -1216,6 +1480,12 @@ async function loadTranslationEngines(){
       {label:window.T('ov2_js059'), value:fmt(switches)},
       {label:window.T('ov2_js060'), value:fmt(fb)},
     ];
+    // 语言硬闸（P2-198）：metrics.outbound_lang_gate（旧后端无此字段 → 整项隐藏）
+    var lg = d.outbound_lang_gate || null;
+    if(lg && ((Number(lg.rescued)||0)+(Number(lg.held)||0)+(Number(lg.no_target_sent)||0))>0){
+      kpis.push({label:window.T('ov2_js_lang_gate'),
+        value:fmt(Number(lg.rescued)||0)+' / '+fmt(Number(lg.held)||0)});
+    }
     kp.innerHTML = kpis.map(function(c){
       return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
         '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
@@ -1248,8 +1518,8 @@ async function loadTranslationEngines(){
           ' · deferred '+(x.deferred||0)+' · '+window.T('rpa_js_st_failed')+' '+(x.failed||0);
       });
       inxHtml += '<div style="margin-top:4px;">'+
-        sparkline(itr.map(function(x){ return Number(x.translated)||0; }), {labels:itLabels, color:'#3fb950', w:300})+
-        ' '+sparkline(itr.map(function(x){ return Number(x.deferred)||0; }), {labels:itLabels, color:'#d29922', w:300})+
+        sparkline(itr.map(function(x){ return Number(x.translated)||0; }), {labels:itLabels, color:'var(--green)', w:300})+
+        ' '+sparkline(itr.map(function(x){ return Number(x.deferred)||0; }), {labels:itLabels, color:'var(--amber)', w:300})+
         '</div>';
     }
     pv.innerHTML = '<table><tr><th>'+window.T('tg_s067')+'</th><th>'+window.T('kb_js_120')+'</th><th>'+window.T('ov_js_succ_label')+'</th><th>'+window.T('rpa_js_st_failed')+'</th>'+
@@ -1338,7 +1608,7 @@ async function loadASRDegradation(){
       html += '<table><tr><th>'+window.T('ov2_js_asr_prov')+'</th><th>'+window.T('mo_s044')+'</th></tr>'+rows+'</table>';
     }
     var degraded = (Number(a.fallback_rate)||0) >= 0.5 || (Number(a.failure_rate)||0) >= 0.2;
-    html += '<div class="muted" style="font-size:12px;margin-top:8px;'+(degraded?'color:#c0392b;':'')+'">'+
+    html += '<div class="muted" style="font-size:12px;margin-top:8px;'+(degraded?'color:var(--danger,#c0392b);':'')+'">'+
       window.T(degraded ? 'ov2_js_asr_warn' : 'ov2_js_asr_hint')+'</div>';
     dv.innerHTML = html;
   }catch(e){
@@ -1430,25 +1700,31 @@ async function loadDeepPersona(){
 }
 
 // 🖱️ 前端哑按钮错误卡片：读 /api/workspace/metrics 的 frontend_errors（dead-click 守卫 beacon 累计）。
-// 同一次响应顺带喂 🪪 账号资料推送卡（renderProfilePush）——共享 metrics 响应，不为它单独再发请求。
+// 同一次响应顺带喂 🆔 账号资料推送卡（renderProfilePush）——共享 metrics 响应，不为它单独再发请求。
 async function loadFrontendErrors(){
   var kp = document.getElementById('feErrKpis');
   var dv = document.getElementById('feErrDetail');
   if(!kp || !dv) return;
   try{
     const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
-    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; try{ renderProfilePush(null); }catch(_pp){} try{ renderUiEvents(null); }catch(_ue){} try{ renderDpickFunnel(null); }catch(_df){} try{ renderPersonaOverride(null); }catch(_po){} try{ renderCsrfRejects(null); }catch(_cs){} try{ renderPhotoCapability(null); }catch(_pc){} return; }
+    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; try{ renderProfilePush(null); }catch(_pp){} try{ renderUiEvents(null); }catch(_ue){} try{ renderDpickFunnel(null); }catch(_df){} try{ renderPersonaOverride(null); }catch(_po){} try{ renderCsrfRejects(null); }catch(_cs){} try{ renderOutboundMirror(null); }catch(_om){} try{ renderPhotoCapability(null); }catch(_pc){} try{ renderLoginFunnel(null); }catch(_lf){} try{ renderPeerBotGuard(null); }catch(_bp){} return; }
     const d = await r.json();
     try{ renderProfilePush(d); }catch(_pp){}
     try{ renderUiEvents(d); }catch(_ue){}
     try{ renderDpickFunnel(d); }catch(_df){}
     try{ renderPersonaOverride(d); }catch(_po){}
     try{ renderCsrfRejects(d); }catch(_cs){}
+    try{ renderOutboundMirror(d); }catch(_om){}
     try{ renderPhotoCapability(d); }catch(_pc){}
+    try{ renderLoginFunnel(d); }catch(_lf){}
+    try{ renderPeerBotGuard(d); }catch(_bp){}
     var fe = d.frontend_errors || null;
     if(!fe || !(Number(fe.total)||0)){
+      opsSetCardLight('fe', '');
       kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js_fe_none')+'</div>'; return;
     }
+    // P4 结构化状态：有运行时前端错误就值得看一眼（哑按钮守卫抓到的都是真崩）
+    opsSetCardLight('fe', 'yellow');
     var byType = fe.by_type || {};
     var typeStr = Object.keys(byType).map(function(k){ return k+' '+byType[k]; }).join(' · ') || '—';
     var kpis = [
@@ -1514,11 +1790,198 @@ async function loadFeTrend(){
     });
     el.innerHTML = '<div class="muted" style="font-size:12px;margin-bottom:4px;">'+
       window.T('ov2_js_fe_trend_title')+'</div>'+
-      sparkline(intent, {labels:labels, color:'#d29922', w:300})+
-      ' '+sparkline(total, {labels:labels, color:'#58a6ff', w:300});
+      sparkline(intent, {labels:labels, color:'var(--amber)', w:300})+
+      ' '+sparkline(total, {labels:labels, color:'var(--blue)', w:300});
   }catch(e){
     el.innerHTML = '<div class="muted" style="font-size:12px;">'+window.T('ln_js_033')+e+'</div>';
   }
+}
+
+// 🧭 账号接入漏斗卡：与 loadFrontendErrors 共享同一次 /api/workspace/metrics 响应，读
+// login_funnel 段（(platform:mode) 分桶 started/qr_shown/pin_issued/authorized/failed +
+// stalled 一眼判读——「发起≥3 次且零成功」＝该方式登录链路事实上不可用，正是 2026-07-25
+// LINE PIN 事故要的那个第一天就能喊出来的数字）。
+// 再优化：进程内零尝试不立刻藏卡——先拉趋势端点；趋势有数据仍展示（重启清零后的耐久口径）。
+// key/reason 均由后端消毒（^[a-z0-9_]{1,24}$ / 枚举），可直接拼 HTML。
+function renderLoginFunnel(d){
+  var sec = document.getElementById('loginFunnelSection');
+  var kp = document.getElementById('loginFunnelKpis');
+  var dv = document.getElementById('loginFunnelDetail');
+  if(!sec || !kp || !dv) return;
+  var lf = (d && d.login_funnel) || null;
+  var rows = (lf && lf.rows) || [];
+  var totStart = rows.reduce(function(s,r){ return s+(Number(r.started)||0); }, 0);
+  var totAuth = rows.reduce(function(s,r){ return s+(Number(r.authorized)||0); }, 0);
+  var totFail = rows.reduce(function(s,r){ return s+(Number(r.failed)||0); }, 0);
+  var stalled = rows.filter(function(r){ return r.stalled; }).length;
+  if(totStart){
+    sec.style.display = '';
+    var kpis = [
+      {label:window.T('ov2_js_lf_started'), value:fmt(totStart)},
+      {label:window.T('ov2_js_lf_auth'), value:fmt(totAuth)+' ('+Math.round(totAuth*100/totStart)+'%)', color:(totAuth?null:'var(--red)')},
+      {label:window.T('ov2_js_lf_failed'), value:fmt(totFail), color:(totFail?'var(--red)':null)},
+    ];
+    if(stalled) kpis.push({label:window.T('ov2_js_lf_stalled_n'), value:fmt(stalled), color:'var(--red)'});
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;'+(c.color?('color:'+c.color+';'):'')+'">'+c.value+'</div></div>';
+    }).join('');
+    function reasonsStr(r){
+      var o = r.reasons || {};
+      return Object.keys(o).map(function(k){ return k+' '+o[k]; }).join(' · ') || '—';
+    }
+    dv.innerHTML =
+      '<table><tr><th>'+window.T('ov2_js_lf_col_key')+'</th><th>'+window.T('ov2_js_lf_started')+'</th>'
+      + '<th>'+window.T('ov2_js_lf_col_qr')+'</th><th>PIN</th><th>'+window.T('ov2_js_lf_auth')+'</th>'
+      + '<th>'+window.T('ov2_js_lf_failed')+'</th><th>'+window.T('ov2_js_lf_col_since')+'</th>'
+      + '<th>'+window.T('ov2_js_lf_col_avg')+'</th>'
+      + '<th>'+window.T('ov2_js_lf_col_reasons')+'</th></tr>'
+      + rows.map(function(r){
+          var warn = r.stalled ? ' style="color:var(--red);font-weight:600;"' : '';
+          var avg = Number(r.avg_authorized_ms)||0;
+          // 「自上次成功」列是 stalled 的判据本身：没有它，一行 started=20/authorized=9
+          // 却标红会像误报（实际是「后 11 次全挂」的回归）。
+          var since = Number(r.started_since_success);
+          return '<tr'+warn+'><td>'+r.key+(r.stalled?(' ⚠ '+window.T('ov2_js_lf_stalled')):'')+'</td>'
+            + '<td>'+(r.started||0)+'</td><td>'+(r.qr_shown||0)+'</td><td>'+(r.pin_issued||0)+'</td>'
+            + '<td>'+(r.authorized||0)+'</td><td>'+(r.failed||0)+'</td>'
+            + '<td>'+(isNaN(since)?'—':since)+'</td>'
+            + '<td>'+(avg?(Math.round(avg/100)/10+'s'):'—')+'</td><td>'+reasonsStr(r)+'</td></tr>';
+        }).join('')
+      + '</table>'
+      + '<div class="muted" style="font-size:12px;margin-top:8px;">'+window.T('ov2_js_lf_hint')+'</div>';
+  } else {
+    // 暂隐；loadLoginFunnelTrend 若发现耐久数据会再打开
+    kp.innerHTML = '';
+    dv.innerHTML = '';
+    sec.style.display = 'none';
+  }
+  try{ loadLoginFunnelTrend(!!totStart); }catch(_t){}
+}
+
+// 近 7 天接入漏斗曲线：读 /api/admin/login-funnel-trend（需 ops.login_funnel_trend.enabled）。
+// 成功率（绿）+ 失败数（红）；有失败时附带 top 原因码文字。进程内零尝试但趋势有量 → 仍开卡。
+async function loadLoginFunnelTrend(hasLive){
+  var el = document.getElementById('loginFunnelTrend');
+  var sec = document.getElementById('loginFunnelSection');
+  if(!el) return;
+  try{
+    const r = await apiFetch('/api/admin/login-funnel-trend?days=7', {credentials:'same-origin'});
+    if(!r || !r.ok){ el.innerHTML=''; return; }
+    const d = await r.json();
+    if(!d || !d.enabled){
+      el.innerHTML = hasLive
+        ? ('<div class="muted" style="font-size:12px;">'+window.T('ov2_js_lf_trend_off')+'</div>')
+        : '';
+      return;
+    }
+    var days = d.days || [];
+    var any = days.some(function(x){ return (Number(x.started)||0) > 0; });
+    if(!any){
+      el.innerHTML = hasLive
+        ? ('<div class="muted" style="font-size:12px;">'+window.T('ov2_js_lf_trend_none')+'</div>')
+        : '';
+      if(!hasLive && sec) sec.style.display='none';
+      return;
+    }
+    if(sec) sec.style.display = '';
+    var labels = days.map(function(x){ return String(x.day||'').slice(5); });
+    var rate = days.map(function(x){
+      var s = Number(x.started)||0, a = Number(x.authorized)||0;
+      return s ? Math.round(a*1000/s)/10 : 0;
+    });
+    var fails = days.map(function(x){ return Number(x.failed)||0; });
+    // 近窗失败原因合计（只展示 Top3，防刷屏）
+    var reasonTot = {};
+    days.forEach(function(x){
+      var br = x.by_reason || {};
+      Object.keys(br).forEach(function(k){ reasonTot[k] = (reasonTot[k]||0) + (Number(br[k])||0); });
+    });
+    var topReasons = Object.keys(reasonTot).sort(function(a,b){ return reasonTot[b]-reasonTot[a]; })
+      .slice(0,3).map(function(k){ return k+' '+reasonTot[k]; }).join(' · ');
+    el.innerHTML =
+      '<div class="muted" style="font-size:12px;margin-bottom:2px;">'+window.T('ov2_js_lf_trend_title')+'</div>'+
+      sparkline(rate, {labels:labels, color:'var(--green)', w:300})+
+      ' '+sparkline(fails, {labels:labels, color:'var(--red)', w:300})+
+      (topReasons
+        ? ('<div class="muted" style="font-size:12px;margin-top:4px;">'+window.T('ov2_js_lf_trend_reasons')+': '+topReasons+'</div>')
+        : '');
+    // 告警出口未接通时，漏斗卡自己喊一声——否则 stalled 告警只进日志，跟 167h 草稿事故同构。
+    // 只读 alert-link-status；失败/未装载静默，绝不挡趋势曲线。
+    try{
+      const ar = await apiFetch('/api/admin/alert-link-status', {credentials:'same-origin'});
+      if(ar && ar.ok){
+        const ad = await ar.json();
+        if(ad && (ad.verdict==='no_channel' || ad.verdict==='not_running')){
+          el.innerHTML += '<div style="color:var(--tk-amber-ink,#d97706);font-size:12px;margin-top:6px;">'
+            + window.T('ov2_js_lf_alert_outlet') + '</div>';
+        } else if(ad && ad.audit && Array.isArray(ad.audit.uncovered)
+                  && ad.audit.uncovered.indexOf('login_funnel')>=0){
+          el.innerHTML += '<div style="color:var(--tk-amber-ink,#d97706);font-size:12px;margin-top:6px;">'
+            + window.T('ov2_js_lf_alert_uncovered') + '</div>';
+        }
+      }
+    }catch(_al){}
+  }catch(_e){ el.innerHTML=''; }
+}
+
+// 🤖 对方机器人守卫卡（P1 2026-08-03）：与 loadFrontendErrors 共享同一次
+// /api/workspace/metrics 响应，读 peer_bot_guard 段（检出 reason 分布 / 三链拦截 /
+// 降档 / 预算命中 / 存量 sweep）。零活动 → 整卡隐藏。
+// reason/line 键是后端内部枚举码（tg_is_bot / suspected_bot / a_line…），可直接拼 HTML。
+function renderPeerBotGuard(d){
+  var sec = document.getElementById('peerBotSection');
+  var kp = document.getElementById('peerBotKpis');
+  var dv = document.getElementById('peerBotDetail');
+  if(!sec || !kp || !dv) return;
+  var bp = (d && d.peer_bot_guard) || null;
+  function sumVals(obj){
+    return Object.keys(obj||{}).reduce(function(s,k){ return s+(Number(obj[k])||0); }, 0);
+  }
+  var detected = sumVals(bp && bp.detected);
+  var suppressed = sumVals(bp && bp.suppressed);
+  var downgrades = (bp && Number(bp.downgrades)) || 0;
+  var sweepN = (bp && Number(bp.sweep_downgraded)) || 0;
+  var overrides = (bp && bp.overrides) || {};
+  var fpN = Object.keys(overrides).reduce(function(s,k){
+    return s + (k.indexOf('human:')===0 ? (Number(overrides[k])||0) : 0); }, 0);
+  if(!bp || (!detected && !suppressed && !downgrades && !sweepN && !sumVals(overrides))){
+    sec.style.display='none'; return;
+  }
+  sec.style.display = '';
+  var kpis = [
+    {label:window.T('ov2_js_bp_detected'), value:fmt(detected)},
+    {label:window.T('ov2_js_bp_suppressed'), value:fmt(suppressed)},
+    {label:window.T('ov2_js_bp_downgrades'), value:fmt(downgrades + sweepN)},
+    {label:window.T('ov2_js_bp_budget'), value:fmt((bp && Number(bp.budget_hits))||0)},
+    // P2：软停（真人触顶转人审拟稿）——budget_hits 的子集；软停多=真人重聊
+    // 常撞预算（考虑调大），硬停多=bot 形态（守卫在干活）
+    {label:window.T('ov2_js_bp_soften'), value:fmt((bp && Number(bp.budget_softened))||0)},
+    {label:window.T('ov2_js_bp_alerts'), value:fmt((bp && Number(bp.alerts))||0)},
+  ];
+  kp.innerHTML = kpis.map(function(c){
+    return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+      '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+  }).join('');
+  function pairRows(obj){
+    return Object.keys(obj||{}).slice(0,8).map(function(k){
+      return '<tr><td>'+k+'</td><td>'+obj[k]+'</td></tr>';
+    }).join('') || '<tr><td colspan="2" class="muted">—</td></tr>';
+  }
+  dv.innerHTML =
+    '<div style="display:flex;gap:16px;flex-wrap:wrap;">'
+    + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_js_bp_by_reason')+'</div>'
+    +   '<table><tr><th>'+window.T('ov2_js_bp_col_reason')+'</th><th>'+window.T('ov2_js_bp_col_count')+'</th></tr>'+pairRows(bp.detected)+'</table></div>'
+    + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_js_bp_by_line')+'</div>'
+    +   '<table><tr><th>'+window.T('ov2_js_bp_col_line')+'</th><th>'+window.T('ov2_js_bp_col_count')+'</th></tr>'+pairRows(bp.suppressed)+'</table></div>'
+    + '</div>'
+    + (sweepN ? '<div class="muted" style="font-size:12px;margin-top:6px;">'+window.T('ov2_js_bp_sweep')+': '+fmt(sweepN)+'</div>' : '')
+    // P1.5 覆写反馈环：human:* = 运营纠正误判（词表/阈值校准的分子）——有误判必须醒目
+    + (sumVals(overrides) ? '<div class="muted" style="font-size:12px;margin-top:4px;'+(fpN?'color:var(--tk-warn-ink);font-weight:600;':'')+'">'
+        + window.T('ov2_js_bp_overrides')+': '
+        + Object.keys(overrides).map(function(k){ return k+' '+overrides[k]; }).join(' · ')
+        + (fpN ? '（'+window.Tf('ov2_js_bp_fp_n',{n:fpN})+'）' : '')
+        + '</div>' : '');
 }
 
 // 🛡️ CSRF 写请求拦截卡：与 loadFrontendErrors 共享同一次 /api/workspace/metrics 响应，
@@ -1530,8 +1993,10 @@ function renderCsrfRejects(d){
   var dv = document.getElementById('csrfRejectDetail');
   if(!sec || !kp || !dv) return;
   var cs = (d && d.csrf_rejects) || null;
-  if(!cs || !(Number(cs.total)||0)){ sec.style.display='none'; return; }
+  if(!cs || !(Number(cs.total)||0)){ opsSetCardLight('csrf', ''); sec.style.display='none'; return; }
   sec.style.display = '';
+  // P4 结构化状态：卡片可见即有拦截量（「有量就该查，别等坐席截图」）
+  opsSetCardLight('csrf', 'yellow');
   var lastTs = Number(cs.last_reject_ts)||0;
   var kpis = [
     {label:window.T('ov2_js_csrf_total'), value:fmt(Number(cs.total)||0), color:'var(--red)'},
@@ -1546,13 +2011,56 @@ function renderCsrfRejects(d){
       return '<tr><td>'+k+'</td><td>'+obj[k]+'</td></tr>';
     }).join('') || '<tr><td colspan="2" class="muted">—</td></tr>';
   }
-  var byKind = cs.by_kind || {}, byPath = cs.by_path || {};
+    var byKind = cs.by_kind || {}, byPath = cs.by_path || {};
   dv.innerHTML =
     '<div style="display:flex;gap:16px;flex-wrap:wrap;">'
     + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_js_csrf_by_kind')+'</div>'
     +   '<table><tr><th>'+window.T('ov2_js_csrf_col_kind')+'</th><th>'+window.T('ov2_js_csrf_col_count')+'</th></tr>'+topRows(byKind, 8)+'</table></div>'
     + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_js_csrf_by_path')+'</div>'
     +   '<table><tr><th>'+window.T('ov2_js_csrf_col_path')+'</th><th>'+window.T('ov2_js_csrf_col_count')+'</th></tr>'+topRows(byPath, 8)+'</table></div>'
+    + '</div>';
+}
+
+// 📤 出站媒体归档卡：与 loadFrontendErrors 共享同一次 /api/workspace/metrics 响应，
+// 读 outbound_mirror 段（A 线 publish_outbound_media 成败累计）。发布失败＝那条媒体
+// 在聊天记录里退化成「无音频存档」文字占位（坐席看不到自己人设发的语音/图）——
+// 这正是要在没人看时被看见的信号；零失败 → 整卡隐藏不占版面。
+function renderOutboundMirror(d){
+  var sec = document.getElementById('outMirrorSection');
+  var kp = document.getElementById('outMirrorKpis');
+  var dv = document.getElementById('outMirrorDetail');
+  if(!sec || !kp || !dv) return;
+  var om = (d && d.outbound_mirror) || null;
+  var fails = (om && Number(om.fail)) || 0;
+  if(!om || !fails){ opsSetCardLight('omirror', ''); sec.style.display='none'; return; }
+  sec.style.display = '';
+  // P4 结构化状态：有归档失败＝坐席台已出现「无音频存档」占位，值得查
+  opsSetCardLight('omirror', 'yellow');
+  var total = Number(om.total)||0;
+  var lastTs = Number(om.last_fail_ts)||0;
+  var kpis = [
+    {label:window.T('ov2_js_om_total'), value:fmt(total)},
+    {label:window.T('ov2_js_om_fail'), value:fmt(fails), color:'var(--red)'},
+    {label:window.T('ov2_js_om_rate'), value:(total?Math.round(fails*100/total)+'%':'—'), color:'var(--red)'},
+    {label:window.T('ov2_js_om_last'), value:(lastTs?window.wsFmtDateTime(lastTs):'—')},
+  ];
+  kp.innerHTML = kpis.map(function(c){
+    return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+      '</div><div style="font-size:20px;font-weight:600;margin-top:4px;'+(c.color?('color:'+c.color+';'):'')+'">'+c.value+'</div></div>';
+  }).join('');
+  function rows(obj, colKey){
+    return Object.keys(obj).slice(0, 8).map(function(k){
+      var v = obj[k]||{};
+      return '<tr><td>'+k+'</td><td>'+(Number(v.total)||0)+'</td><td>'+(Number(v.fail)||0)+'</td></tr>';
+    }).join('') || '<tr><td colspan="3" class="muted">—</td></tr>';
+  }
+  var byKind = om.by_kind || {}, byPlat = om.by_platform || {};
+  dv.innerHTML =
+    '<div style="display:flex;gap:16px;flex-wrap:wrap;">'
+    + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_js_om_by_kind')+'</div>'
+    +   '<table><tr><th>'+window.T('ov2_js_om_col_kind')+'</th><th>'+window.T('ov2_js_om_col_total')+'</th><th>'+window.T('ov2_js_om_col_fail')+'</th></tr>'+rows(byKind)+'</table></div>'
+    + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_js_om_by_plat')+'</div>'
+    +   '<table><tr><th>'+window.T('ov2_js_om_col_plat')+'</th><th>'+window.T('ov2_js_om_col_total')+'</th><th>'+window.T('ov2_js_om_col_fail')+'</th></tr>'+rows(byPlat)+'</table></div>'
     + '</div>';
 }
 
@@ -1689,6 +2197,7 @@ function renderUiEvents(d){
     'empty.show_all':   window.T('ov2_uiev_a_show_all'),
     'empty.go_groups':  window.T('ov2_uiev_a_go_groups'),
     'empty.open_contacts': window.T('ov2_uiev_a_open_contacts'),
+    'icebreak.gen':     window.T('ov2_uiev_a_icebreak'),
     'grp.mode_all':     window.T('ov2_uiev_a_mode_all'),
     'grp.mode_focus':   window.T('ov2_uiev_a_mode_focus'),
     'grp.mode_hidden':  window.T('ov2_uiev_a_mode_hidden'),
@@ -1722,7 +2231,7 @@ function renderUiEvents(d){
     + '<div class="muted" style="font-size:12px;margin-top:8px;">'+window.T('ov2_uiev_hint')+'</div>';
 }
 
-// 🪪 账号资料推送卡：与 loadFrontendErrors 共享同一次 /api/workspace/metrics 响应（不单独发请求），
+// 🆔 账号资料推送卡：与 loadFrontendErrors 共享同一次 /api/workspace/metrics 响应（不单独发请求），
 // 读 profile_push 段（后台直改平台官方昵称/签名/头像）。active=false / 段缺失 / 403 → 整卡隐藏
 // （对齐 bazi/vision 的「零流量整卡隐藏」惯例）。
 function renderProfilePush(d){
@@ -1749,7 +2258,6 @@ function renderProfilePush(d){
     return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
       '</div><div style="font-size:20px;font-weight:600;margin-top:4px;'+(c.color?('color:'+c.color+';'):'')+'">'+c.value+'</div></div>';
   }).join('');
-  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
   var lines = [];
   var blocked = [];
   if((Number(pp.cooldown_blocked)||0) > 0) blocked.push(window.T('ov2_pp_cooldown')+' '+fmt(Number(pp.cooldown_blocked)||0));
@@ -1824,7 +2332,6 @@ async function loadCustomerAssets(){
   var kp = document.getElementById('custAssetsKpis');
   var dv = document.getElementById('custAssetsDetail');
   if(!sec || !kp || !dv) return;
-  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
   // 名单新鲜度：相对时间（updated_at 由目录同步每轮整批刷新，故一行的值即约等于该账号上次同步时刻）
   function ago(ts){
     if(!ts) return '—';
@@ -1903,9 +2410,16 @@ async function loadCustomerAssets(){
     var trs = rows.map(function(x){
       var name = String(x.acct.label || x.acct.account_id || '');
       var pct = x.total ? Math.round(x.never/x.total*100) : 0;
+      // 深链闭环：「看板发现未开口 → 坐席动手开口」——直达工作台联系人页该账号+未开口档
+      var golink = '/workspace?pane=contacts&pacct='
+        + encodeURIComponent(String(x.acct.platform||'')+'|'+String(x.acct.account_id||''))
+        + '&only=never_spoke';
+      var goA = x.never > 0
+        ? ' <a href="'+golink+'" target="_blank" rel="noopener" style="text-decoration:none;font-weight:600;" title="'+esc(window.T('ov2_ca_open_contacts'))+'">→</a>'
+        : '';
       return '<tr><td>'+esc(name)+' <span class="muted" style="font-size:11px;">'+esc(x.acct.platform)+'</span></td>'
         + '<td>'+fmt(x.total)+'</td>'
-        + '<td>'+fmt(x.never)+' <span class="muted" style="font-size:11px;">'+pct+'%</span></td>'
+        + '<td>'+fmt(x.never)+' <span class="muted" style="font-size:11px;">'+pct+'%</span>'+goA+'</td>'
         + '<td>'+fmt(x.silent)+'</td>'
         + '<td>'+ago(syncTsOf(x.acct) || x.fresh)+'</td></tr>';
     }).join('');
@@ -1930,6 +2444,27 @@ async function loadCustomerAssets(){
           + window.T('ov2_ca_sync')+': '+seg.join(' · ')+'</div>');
       }
     }
+    // 未开口趋势（14 天环比）：破冰/主动触达的验收判据。读本身即触发当日懒快照
+    // （ops.contacts_asset_trend.enabled=false → enabled:false，整行不出现）。
+    try{
+      var trr = await apiFetch('/api/admin/contacts-asset-trend?days=14', {credentials:'same-origin'});
+      var trj = trr.ok ? await trr.json() : null;
+      if(trj && trj.enabled){
+        var tds = (trj.days||[]).filter(function(d){ return (d.accounts||0) > 0; });
+        if(tds.length >= 2){
+          var d0 = tds[0], d1 = tds[tds.length-1];
+          var dlt = (Number(d1.never_spoke)||0) - (Number(d0.never_spoke)||0);
+          var arrow = dlt < 0 ? '↓' : (dlt > 0 ? '↑' : '→');
+          lines.push('<div class="muted" style="font-size:12px;margin-top:4px;">'
+            + window.T('ov2_ca_trend') + ': ' + esc(d0.day.slice(5)) + ' ' + fmt(d0.never_spoke)
+            + ' → ' + esc(d1.day.slice(5)) + ' ' + fmt(d1.never_spoke)
+            + ' (' + arrow + fmt(Math.abs(dlt)) + ')</div>');
+        } else {
+          lines.push('<div class="muted" style="font-size:12px;margin-top:4px;">'
+            + window.T('ov2_ca_trend_warm') + '</div>');
+        }
+      }
+    }catch(_tre){}
     lines.push('<div class="muted" style="font-size:12px;margin-top:8px;">'+window.T('ov2_ca_hint')+'</div>');
     dv.innerHTML = lines.join('');
   }catch(e){
@@ -2023,6 +2558,9 @@ async function loadInstanceRestartStatus(){
     var warmN = rows.filter(function(x){ return x && x.http_phase==='warming'; }).length;
     var flapN = rows.filter(function(x){ return x && x.flap && x.flap.flapping; }).length;
     var hasAny = rows.some(function(x){ return x && (x.has_record || x.http_phase); });
+    // P3 结构化状态：FLAP/实例失联=红；冷却/预热中=黄（本卡信号全是 emoji 圆点，启发式扫不到）
+    opsSetCardLight('irst', (flapN || rows.some(function(x){ return x && (x.http_phase==='unresponsive' || x.http_phase==='down'); }))
+      ? 'red' : ((activeN || warmN) ? 'yellow' : ''));
     kp.innerHTML = [
       {label:window.T('ov2_js_irst_active'), value:(activeN ? '🟡 '+activeN : '🟢 0')},
       {label:window.T('ov2_js_irst_warming'), value:(warmN ? '🔵 '+warmN : '0')},
@@ -2037,7 +2575,6 @@ async function loadInstanceRestartStatus(){
         + '<div class="muted" style="font-size:12px;margin-top:8px;">'+window.T('ov2_js_irst_hint')+'</div>';
       return;
     }
-    function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
     function ageTxt(sec){
       if(sec==null) return '—';
       sec = Number(sec)||0;
@@ -2117,26 +2654,41 @@ async function loadPlatformSessions(){
     // TG 断网冷却（web 侧观察态：get_chat 超时→账号级冷却）：{account_id: 剩余秒}
     var tgCd = (ps && ps.tg_cooldown) || {};
     var tgCdKeys = Object.keys(tgCd);
-    if(!ps || (!(Number(ps.total_events)||0) && !tgCdKeys.length)){
+    var stalledN = (ps && Array.isArray(ps.inbox_stalled)) ? ps.inbox_stalled.length : 0;
+    // 有会话事件 / TG 冷却 / 入站半死 任一即有内容可展示（半死可不经 session-status 推送）
+    if(!ps || (!(Number(ps.total_events)||0) && !tgCdKeys.length && !stalledN)){
+      opsSetCardLight('psess', '');
       kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js_ps_none')+'</div>'; return;
     }
     var sess = ps.sessions || {};
     var keys = Object.keys(sess);
     var unhealthy = ps.unhealthy || [];
+    var inboxHealth = ps.inbox_health || {};
+    var inboxStalled = ps.inbox_stalled || [];
+    // 有不健康会话（掉线）=红；入站半死 / TG 断网冷却=黄（半死仍可发但收不到）
+    opsSetCardLight('psess', unhealthy.length ? 'red'
+      : ((inboxStalled.length || tgCdKeys.length) ? 'yellow' : ''));
     var kpis = [
       {label:window.T('ov2_js_ps_total'), value:fmt(Number(ps.total_events)||0)},
       {label:window.T('ov2_js_ps_sessions'), value:fmt(keys.length)},
       {label:window.T('ov2_js_ps_unhealthy'),
        value:(unhealthy.length ? '🔴 ' : '🟢 ') + unhealthy.length},
+      {label:window.T('ov2_js_ps_stalled'),
+       value:(inboxStalled.length ? '🟡 ' : '🟢 ') + inboxStalled.length},
       {label:window.T('ov2_js_ps_tg_cd'),
        value:(tgCdKeys.length ? '🟡 '+tgCdKeys.length : '🟢 0')},
     ];
+    // P4 漏斗 KPI：半死进入 / 重登 / 恢复（进程累计；有流量才追加，免空卡挤位）
+    var funnel = ps.stall_funnel || null;
+    if(funnel && (Number(funnel.went)||Number(funnel.relogin)||Number(funnel.recovered))){
+      kpis.push({label:window.T('ov2_js_ps_funnel'),
+        value:fmt(Number(funnel.went)||0)+'→'+fmt(Number(funnel.relogin)||0)+'→'+fmt(Number(funnel.recovered)||0)});
+    }
     kp.innerHTML = kpis.map(function(c){
       return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
         '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
     }).join('');
     // session 键/status 由后端消毒（仅安全字符），detail 截断后仍可能含任意文本 → 转义。
-    function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
     var rows = keys.map(function(k){
       var o = sess[k]||{};
       var bad = unhealthy.indexOf(k) >= 0;
@@ -2153,6 +2705,27 @@ async function loadPlatformSessions(){
       }
       return '<tr><td>'+esc(k)+'</td><td>'+dot+' '+esc(o.status||'?')+'</td><td>'+
         esc((o.detail||'').slice(0,80))+'</td><td class="muted">'+esc(when)+'</td><td>'+act+'</td></tr>';
+    }).join('');
+    // 入站半死行（黄点）：cookie 看似 online 但未读读不到（E2EE 密钥丢失等）→ 服务器完整重登
+    rows += inboxStalled.map(function(k){
+      var h = inboxHealth[k] || {};
+      var kind = String(h.stall_kind || '');
+      var kindLbl = kind === 'e2ee_placeholder' ? window.T('ov2_js_ps_stall_e2ee')
+        : (kind === 'read_fail' ? window.T('ov2_js_ps_stall_read') : window.T('ov2_js_ps_stalled'));
+      var detail = (h.detail || kindLbl || '').slice(0, 80);
+      var ratio = Number(h.e2ee_ratio);
+      if(Number.isFinite(ratio) && ratio >= 0){
+        detail = detail + (detail ? ' · ' : '') + 'e2ee ' + Math.round(ratio * 100) + '%';
+      }
+      var act = '';
+      if(CAN_MANAGE_OPS && String(k).indexOf('messenger:') === 0){
+        var so = sess[k] || {};
+        act = '<button class="btn" data-psess-relogin="1" data-plat="messenger"'+
+          ' data-lid="'+esc(so.login_id||'')+'" data-acct="'+esc(String(k).split(':')[1]||'')+'"'+
+          ' style="font-size:12px;padding:2px 10px;">'+window.T('ov2_js_ps_relogin')+'</button>';
+      }
+      return '<tr><td>'+esc(k)+'</td><td>🟡 '+esc(kindLbl)+'</td><td>'+
+        esc(detail)+'</td><td class="muted">'+esc(tsfmt(h.ts))+'</td><td>'+act+'</td></tr>';
     }).join('');
     // TG 断网冷却行（黄点，剩余秒数；到期自动消失，无按钮——恢复由下次 RPC 成功自动解除）
     rows += tgCdKeys.map(function(a){
@@ -2181,13 +2754,14 @@ async function loadPlatformSessions(){
     var old = btn.textContent;
     btn.textContent = '…';
     try{
-      const r = await fetch('/api/admin/platform-sessions/relogin', {
+      // Node 侧同 profile 重启浏览器可到分钟级 → 2min 预算
+      const r = await apiFetch('/api/admin/platform-sessions/relogin', {
         method:'POST', credentials:'same-origin',
         headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},
         body: JSON.stringify({ platform: btn.getAttribute('data-plat')||'',
           login_id: btn.getAttribute('data-lid')||'',
           account_id: btn.getAttribute('data-acct')||'' })
-      });
+      }, {timeoutMs:120000});
       const d = await r.json().catch(function(){ return {}; });
       if(r.ok && d && d.ok){
         btn.textContent = window.T('ov2_js_ps_relogin_ok');
@@ -2211,7 +2785,6 @@ async function loadChannelReadiness(){
   var kp = document.getElementById('chrdyKpis');
   var dv = document.getElementById('chrdyDetail');
   if(!kp || !dv) return;
-  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
   // 后端码 → 短标签键。与 unified_inbox.html 的 _CONN_BK_CHIP 同表（跨层门禁守着一致性）。
   var BK = {
     not_enabled:'inbox.connect.bk_not_enabled',
@@ -2238,7 +2811,7 @@ async function loadChannelReadiness(){
     var mtx = (d && d.platforms) || {};
     var plats = Object.keys(mtx).sort();
     if(!plats.length){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js_chrdy_empty')+'</div>'; return; }
-    var readyPlats = 0, blocked = 0, warned = 0, rows = '';
+    var readyPlats = 0, blocked = 0, warned = 0, rows = '', actionable = 0;
     plats.forEach(function(p){
       var pr = mtx[p] || {}; if(pr.ready) readyPlats++;
       var modes = pr.modes || {};
@@ -2248,6 +2821,11 @@ async function loadChannelReadiness(){
         var hard = bs.filter(function(b){ return b.severity === 'block'; });
         var soft = bs.filter(function(b){ return b.severity !== 'block'; });
         blocked += hard.length; warned += soft.length;
+        // 结构化状态口径：not_enabled/login_disabled 是运营的刻意选择，不算「卡点」
+        actionable += hard.filter(function(b){
+          var c = String((b && b.code) || '');
+          return c !== 'not_enabled' && c !== 'login_disabled';
+        }).length;
         // 只列有话可说的行：全绿的 device 行铺满表格只会淹没真正的卡点
         if(!hard.length && !soft.length) return;
         var dot = md.ready ? '🟡' : '🔴';
@@ -2256,6 +2834,8 @@ async function loadChannelReadiness(){
           '</td><td>'+(hard.concat(soft).map(chip).filter(Boolean).join('、')||'—')+'</td></tr>';
       });
     });
+    // P4 结构化状态：存在「非刻意关闭」的硬卡点=黄（配置缺口是慢性态，不点红）
+    opsSetCardLight('chrdy', actionable > 0 ? 'yellow' : '');
     kp.innerHTML = [
       {label:window.T('ov2_js_chrdy_plats'), value:(readyPlats===plats.length?'🟢 ':'🟡 ')+readyPlats+' / '+plats.length},
       {label:window.T('ov2_js_chrdy_blocked'), value:(blocked?'🔴 ':'🟢 ')+blocked},
@@ -2344,7 +2924,7 @@ async function loadSendRouteTrend(){
     });
     el.innerHTML = '<div class="muted" style="font-size:12px;margin-bottom:4px;">'+
       window.T('ov2_js_sr_trend_title')+'</div>'+
-      sparkline(fbRate, {labels:labels, color:'#f85149', w:300});
+      sparkline(fbRate, {labels:labels, color:'var(--red)', w:300});
   }catch(e){
     el.innerHTML = '<div class="muted" style="font-size:12px;">'+window.T('ov2_js051')+e+'</div>';
   }
@@ -2374,8 +2954,7 @@ async function loadPersonaMedia(){
         '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
     }).join('');
     var top = pm.top || [];
-    function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
-    function rowLabel(it){
+      function rowLabel(it){
       var cap = String(it.caption||'').trim();
       if(cap) return esc(cap);
       var tg = (it.triggers||[]).join(', ');
@@ -2424,8 +3003,7 @@ async function loadMediaConsistency(){
       return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
         '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
     }).join('');
-    function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
-    var html = '';
+      var html = '';
     if(rows.length){
       var trs = rows.map(function(g){
         var rate = (g.unmet_rate===null||g.unmet_rate===undefined) ? '—' : Math.round(g.unmet_rate*100)+'%';
@@ -2499,8 +3077,7 @@ async function loadDuelBench(){
         '"><div class="muted" style="font-size:12px;">'+c.label+
         '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
     }).join('');
-    function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
-    var html = '';
+      var html = '';
     var overs = last.over_budget_detail || latest.over_budget || {};
     var overKeys = Object.keys(overs);
     if(overKeys.length){
@@ -2649,6 +3226,80 @@ async function loadBazi(){
   }
 }
 
+// 🗂 案例跟进卡（2026-08-03）：live 未结案读 /api/cases/active，自启动累计读
+// /api/workspace/metrics.cases（进程计数，重启清零如实标注）。双料全零 → 整卡隐藏。
+async function loadCasesCard(){
+  var sec = document.getElementById('casesSection');
+  var kp = document.getElementById('casesKpis');
+  var dv = document.getElementById('casesDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    var live = {count:0, cases:[]};
+    var cum = null;
+    try{
+      const r1 = await apiFetch('/api/cases/active', {credentials:'same-origin'});
+      if(r1.status === 403){ sec.style.display='none'; return; }
+      if(r1.ok) live = await r1.json();
+    }catch(_){}
+    try{
+      const r2 = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
+      if(r2.ok){ cum = (await r2.json()).cases || null; }
+    }catch(_){}
+    var rows = live.cases || [];
+    var open=0, urgent=0, today=0;
+    var d0 = new Date(); d0.setHours(0,0,0,0); d0 = d0.getTime()/1000;
+    rows.forEach(function(c){
+      if(!c.closed){ open++; if(Number(c.severity)>=3) urgent++; }
+      if((c.created_at||0)>=d0) today++;
+    });
+    var opened = cum ? (Number(cum.opened)||0) : 0;
+    if(open===0 && opened===0 && rows.length===0){ sec.style.display='none'; return; }
+    sec.style.display='';
+    var kpis = [
+      {label:window.T('ov2_cs_open'), value:fmt(open)},
+      {label:window.T('ov2_cs_urgent'), value:fmt(urgent)},
+      {label:window.T('ov2_cs_today'), value:fmt(today)},
+      {label:window.T('ov2_cs_opened'), value:cum?fmt(opened):'-'},
+      {label:window.T('ov2_cs_closed'), value:cum?fmt(Number(cum.closed)||0):'-'},
+      {label:window.T('ov2_cs_avg_close'), value:(cum&&cum.avg_close_hours!=null)?(cum.avg_close_hours+' '+window.T('ov2_cs_hours_unit')):'-'},
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    var parts = [];
+    if(cum && cum.opened_by_source){
+      var srcs = Object.keys(cum.opened_by_source).sort(function(a,b){
+        return (cum.opened_by_source[b]||0)-(cum.opened_by_source[a]||0);
+      }).map(function(s){
+        var k='cases.src.'+s;
+        return window.T(k,s)+' '+fmt(Number(cum.opened_by_source[s])||0);
+      });
+      if(srcs.length) parts.push(window.T('ov2_cs_by_src')+': '+srcs.join(' / '));
+    }
+    if(cum){
+      parts.push(window.T('ov2_cs_upgraded')+': '+fmt(Number(cum.upgraded)||0));
+      parts.push(window.T('ov2_cs_alerts')+': '+fmt(Number(cum.alerts_emitted)||0));
+    }
+    /* 近 14 天立案/结案趋势（case_trend_store 按日落库，跨重启）——有数据才画 */
+    var trendHtml='';
+    var tr=(cum&&cum.trend)||[];
+    if(tr.length>=2){
+      var days=tr.map(function(x){return x.day;});
+      trendHtml='<div class="muted" style="font-size:12px;margin-top:6px;">'+window.T('ov2_cs_trend')+'</div>'
+        +'<div style="display:flex;gap:14px;align-items:center;">'
+        +sparkline(tr.map(function(x){return x.opened;}),{labels:days})
+        +sparkline(tr.map(function(x){return x.closed;}),{labels:days,color:'var(--green)'})
+        +'</div>';
+    }
+    dv.innerHTML = '<div class="muted" style="font-size:12px;">'+(parts.join(' · ')||'')+'</div>'
+      + trendHtml
+      + '<div class="muted" style="font-size:12px;margin-top:6px;">'+window.T('ov2_cs_hint')+'</div>';
+  }catch(e){
+    dv.innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
+  }
+}
+
 // 💗 主动关怀卡（P5 2026-08-01）：读 /api/care/health（四灯+计数+回复率+LLM影子，
 // 零新后端）。隐藏判据=接口不可读(403/异常) 或 引擎未开启且全状态计数为 0（零足迹）。
 async function loadCare(){
@@ -2736,7 +3387,6 @@ async function _pqTrendFetch(){
 
 function _pqTrendHtml(tr){
   if(!tr) return '';
-  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
   var ov = tr.overview || {}, tot = ov.totals || {};
   var rows = ov.personas || [], daily = tr.daily || [];
   var head = '<div class="muted" style="font-size:12px;">'
@@ -2759,7 +3409,7 @@ function _pqTrendHtml(tr){
     spark = '<div class="muted" style="font-size:12px;margin-top:6px;">'
       + window.T('ov2_pi_trend_spark') + '</div>'
       + sparkline(daily.map(function(x){ return Number(x.avg_score)||0; }),
-                  {labels:labels, color:'#3fb950', w:300});
+                  {labels:labels, color:'var(--green)', w:300});
   }
   var trs = rows.slice(0, 8).map(function(p){
     return '<tr><td>' + esc(p.persona_name || p.persona_id || '') + '</td>'
@@ -2862,6 +3512,287 @@ async function loadPersonaImport(){
 }
 
 // 🔑 中央凭据池卡：读 /api/workspace/metrics 的 credpool。
+// ── 告警链路（最后一公里自检）────────────────────────────────────────────
+// 「报进了虚空」正是 L3 草稿烂 167h 的根因：EventBus 告警只进日志/工作台铃铛，
+// 无任何外发通道，而这件事此前只在启动日志一行里。这张卡把
+// /api/admin/alert-link-status 的 verdict 常驻可见：未接通/通知器停摆=红、
+// 部分覆盖/文件进程分歧=黄、healthy=绿。端点未装载（新路由等下次搭批重启）
+// 或无权限 → 整卡隐藏，不装死也不误导。
+async function loadAlertLink(){
+  var sec=document.getElementById('alertlinkSection');
+  var kp=document.getElementById('alertlinkKpis');
+  var dv=document.getElementById('alertlinkDetail');
+  if(!sec||!kp||!dv) return;
+  try{
+    const r=await apiFetch('/api/admin/alert-link-status',{credentials:'same-origin'});
+    if(!r.ok){ sec.style.display='none'; return; }
+    const d=await r.json();
+    if(!d||!d.ok){ sec.style.display='none'; return; }
+    sec.style.display='';
+    var a=d.audit||{};
+    var proc=d.process||{};
+    var VMAP={
+      healthy:{txt:window.T('ov2_al_verdict_healthy'), color:'var(--tk-green-ink,#059669)'},
+      no_channel:{txt:window.T('ov2_al_verdict_no_channel'), color:'var(--tk-red-ink,#dc2626)'},
+      uncovered:{txt:window.T('ov2_al_verdict_uncovered'), color:'var(--tk-amber-ink,#d97706)'},
+      divergent:{txt:window.T('ov2_al_verdict_divergent'), color:'var(--tk-amber-ink,#d97706)'},
+      not_running:{txt:window.T('ov2_al_verdict_not_running'), color:'var(--tk-red-ink,#dc2626)'}
+    };
+    var v=VMAP[d.verdict]||VMAP.no_channel;
+    // P3 结构化状态：告警链路断（无渠道/没在跑）=红；覆盖缺口/口径分歧=黄
+    opsSetCardLight('alertlink', (d.verdict==='no_channel' || d.verdict==='not_running')
+      ? 'red' : ((d.verdict==='uncovered' || d.verdict==='divergent') ? 'yellow' : ''));
+    var kpis=[
+      {label:window.T('ov2_al_channels'), value:(a.channels_enabled||0)+'/'+(a.channels_total||0)},
+      {label:window.T('ov2_al_cover'), value:(a.covered_count||0)+'/'+(a.focus_count||0)},
+      {label:window.T('ov2_al_sent'), value:String(proc.total_sent||0)},
+      {label:window.T('ov2_al_errors'), value:String(proc.total_errors||0)}
+    ];
+    kp.innerHTML='<div class="kpi"><div class="muted" style="font-size:12px;">verdict</div>'
+      +'<div style="font-size:16px;font-weight:700;margin-top:4px;color:'+v.color+';">'+esc(v.txt)+'</div></div>'
+      +kpis.map(function(c){
+        return '<div class="kpi"><div class="muted" style="font-size:12px;">'+esc(c.label)
+          +'</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+esc(c.value)+'</div></div>';
+      }).join('');
+    var parts=[];
+    if((d.verdict||'')==='no_channel'){
+      // P4：CTA 从纯文案升级为真按钮（共享接通弹窗 _alertlink_connect.html；
+      // 无写权限/部件未装载时回落纯文案，不给点不动的按钮）。
+      var ctaBtn=(typeof CAN_MANAGE_OPS!=='undefined'&&CAN_MANAGE_OPS&&typeof window.wsAlertlinkOpen==='function')
+        ?' <button type="button" onclick="wsAlertlinkOpen()" style="border:none;background:var(--tk-brand,#2563eb);color:#fff;border-radius:7px;padding:3px 12px;font-size:12px;font-weight:600;cursor:pointer;margin-left:6px;">'+esc(window.T('ov2_al_connect_btn'))+'</button>':'';
+      parts.push('<div style="color:var(--tk-red-ink,#dc2626);font-size:12px;">'+esc(window.T('ov2_al_cta'))+ctaBtn+'</div>');
+    }
+    if(a.uncovered && a.uncovered.length){
+      parts.push('<div style="font-size:12px;margin-top:6px;">'+esc(window.T('ov2_al_uncovered_label'))+': '
+        +a.uncovered.map(function(x){return '<code style="margin-right:6px;">'+esc(x)+'</code>';}).join('')+'</div>');
+    }
+    if(d.divergence){
+      parts.push('<div style="color:var(--tk-amber-ink,#d97706);font-size:12px;margin-top:6px;">'+esc(window.T('ov2_al_divergent_hint'))+'</div>');
+    }
+    if(d.orphan){
+      parts.push('<div style="color:var(--tk-amber-ink,#d97706);font-size:12px;margin-top:6px;">⚠ '+esc(window.T('ov2_al_orphan_warn'))+'<br><code>'+esc(d.orphan.engine_file||'')+'</code></div>');
+    }
+    var st=d.store||{};
+    var srcTxt=st.source==='overlay'?window.T('ov2_al_src_overlay'):(st.source==='config_yaml'?window.T('ov2_al_src_config'):window.T('ov2_al_src_none'));
+    parts.push('<div class="muted" style="font-size:11px;margin-top:8px;">'+esc(window.T('ov2_al_store'))+': <code>'+esc(st.path||'')+'</code> · '+esc(srcTxt)+'</div>');
+    dv.innerHTML=parts.join('');
+  }catch(e){ sec.style.display='none'; }
+}
+
+// ── 📡 官方渠道回调（webhook 可达性）────────────────────────────────────────
+// IG/Zalo/Messenger 官方/WA Cloud 是被动回调入站：回调打不进来时系统零报错、
+// 客户消息静默丢失（与「后端完工面板不亮」同构的断层）。此卡读
+// /api/admin/official-webhook-status 的每渠道判词；端点未装载（等搭批重启）
+// 或无启用渠道且无历史 → 整卡隐藏。灯：启用渠道里有「从未到达/验签失败/
+// 未装载」= 黄（接入未完成，需要人看一眼）；刻意不给红——低流量渠道安静
+// ≠故障，误报毁信任（与 no_traffic 哲学同源）。
+async function loadOfficialWebhooks(){
+  var sec=document.getElementById('officialWhSection');
+  var kp=document.getElementById('officialWhKpis');
+  var dv=document.getElementById('officialWhDetail');
+  if(!sec||!kp||!dv) return;
+  try{
+    const r=await apiFetch('/api/admin/official-webhook-status',{credentials:'same-origin'});
+    if(!r.ok){ sec.style.display='none'; return; }
+    const d=await r.json();
+    if(!d||!d.ok||!d.active){ sec.style.display='none'; return; }
+    sec.style.display='';
+    var VMAP={
+      live:{txt:window.T('ov2_ow_verdict_live'), color:'var(--tk-green-ink,#059669)'},
+      handshake_only:{txt:window.T('ov2_ow_verdict_handshake_only'), color:'var(--tk-amber-ink,#d97706)'},
+      auth_failing:{txt:window.T('ov2_ow_verdict_auth_failing'), color:'var(--tk-amber-ink,#d97706)'},
+      never_reached:{txt:window.T('ov2_ow_verdict_never_reached'), color:'var(--tk-amber-ink,#d97706)'},
+      not_mounted:{txt:window.T('ov2_ow_verdict_not_mounted'), color:'var(--tk-amber-ink,#d97706)'},
+      disabled:{txt:window.T('ov2_ow_verdict_disabled'), color:'var(--tk-text-muted,#64748b)'}
+    };
+    var fmtAge=function(s){
+      if(s==null||s<0) return window.T('ov2_ow_never');
+      if(s<90) return s+'s';
+      if(s<5400) return Math.round(s/60)+'m';
+      if(s<172800) return Math.round(s/3600)+'h';
+      return Math.round(s/86400)+'d';
+    };
+    var plats=(d.platforms||[]);
+    var shown=plats.filter(function(p){ return p.enabled || (p.events_total>0) || (p.last_verify_age_sec>=0); });
+    if(!shown.length){ sec.style.display='none'; return; }
+    var attention=shown.some(function(p){
+      return p.enabled && (p.verdict==='never_reached'||p.verdict==='auth_failing'||p.verdict==='not_mounted');
+    });
+    opsSetCardLight('offwh', attention?'yellow':'');
+    kp.innerHTML=shown.map(function(p){
+      var v=VMAP[p.verdict]||VMAP.disabled;
+      var ic=(window.platformIconSVG)?window.platformIconSVG(p.platform,{size:16}):'';
+      var nm=(window.platformName)?window.platformName(p.platform):p.platform;
+      return '<div class="kpi"><div class="muted" style="font-size:12px;display:flex;align-items:center;gap:5px;">'+ic+esc(nm)
+        +'</div><div style="font-size:14px;font-weight:700;margin-top:4px;color:'+v.color+';">'+esc(v.txt)+'</div>'
+        +'<div class="muted" style="font-size:11px;margin-top:3px;">'+esc(window.T('ov2_ow_events'))+' '+(p.events_total||0)
+        +' · '+esc(window.T('ov2_ow_last_event'))+' '+esc(fmtAge(p.last_event_age_sec))+'</div></div>';
+    }).join('');
+    var parts=['<div class="muted" style="font-size:12px;">'+esc(window.T('ov2_ow_sub'))+'</div>'];
+    shown.forEach(function(p){
+      var bits=[];
+      if(p.has_verify) bits.push(esc(window.T('ov2_ow_last_verify'))+' '+esc(fmtAge(p.last_verify_age_sec)));
+      if(p.verify_fail_total) bits.push(esc(window.T('ov2_ow_verify_fails'))+' '+p.verify_fail_total);
+      if(p.error_total) bits.push(esc(window.T('ov2_ow_errors'))+' '+p.error_total+(p.last_error_kind?(' ('+esc(p.last_error_kind)+')'):''));
+      if(p.webhook_path) bits.push(esc(window.T('ov2_ow_path'))+' <code>'+esc(p.webhook_path)+'</code>');
+      var hintKey={never_reached:'ov2_ow_hint_never_reached', handshake_only:'ov2_ow_hint_handshake_only',
+                   auth_failing:'ov2_ow_hint_auth_failing', not_mounted:'ov2_ow_hint_not_mounted'}[p.verdict];
+      var nm=(window.platformName)?window.platformName(p.platform):p.platform;
+      parts.push('<div style="font-size:12px;margin-top:6px;"><b>'+esc(nm)+'</b>'
+        +(bits.length?(' · '+bits.join(' · ')):'')
+        +(hintKey&&p.enabled?('<div style="color:var(--tk-amber-ink,#d97706);margin-top:2px;">'+esc(window.T(hintKey))+'</div>'):'')
+        +'</div>');
+    });
+    dv.innerHTML=parts.join('');
+  }catch(e){ sec.style.display='none'; }
+}
+
+// ── ☁️ 托管租户（SaaS）────────────────────────────────────────────────────
+// 实例状态 / 持单台账（实例已开通但公网不可达=交付被闸门持住）/ 三守护心跳。
+// 端点未装载（等下次搭批重启）→ 404 → 整卡隐藏；零租户零持单同样隐藏。
+// 灯：有持单或有掉线=红；履约心跳 >15min（5min 任务停摆）或备份 >26h=黄。
+async function loadTenantOverview(){
+  var sec=document.getElementById('tenantOvSection');
+  var kp=document.getElementById('tenantOvKpis');
+  var dv=document.getElementById('tenantOvDetail');
+  if(!sec||!kp||!dv) return;
+  try{
+    const r=await apiFetch('/api/admin/tenant-overview',{credentials:'same-origin'});
+    if(!r.ok){ sec.style.display='none'; return; }
+    const d=await r.json();
+    if(!d||!d.ok||!d.active){ sec.style.display='none'; return; }
+    sec.style.display='';
+    var c=d.counts||{}, f=d.fulfill||{}, g=d.guards||{};
+    var held=(f.held||[]);
+    var fAge=g.fulfill_log_age_min;
+    var guardStale=(fAge==null||fAge>15);
+    var backupStale=(d.tenants||[]).some(function(t){
+      return t.state!=='suspended'&&(t.last_backup_age_h==null||t.last_backup_age_h>26);});
+    // 到期=收入事件：expired 红（该停没停）；expiring 黄（催续费窗口）
+    opsSetCardLight('tenantov', (held.length||c.down||c.expired)?'red'
+      :((guardStale||backupStale||c.expiring)?'yellow':''));
+    var kpis=[
+      {label:window.T('ov2_to_total'), value:String(c.total||0)},
+      {label:window.T('ov2_to_running'), value:String(c.running||0)},
+      {label:window.T('ov2_to_susp'), value:String(c.suspended||0)},
+      {label:window.T('ov2_to_down'), value:String(c.down||0)},
+      {label:window.T('ov2_to_held'), value:String(held.length)},
+      {label:window.T('ov2_to_done'), value:String(f.done_total||0)},
+      {label:window.T('ov2_to_guard'), value:(fAge==null?window.T('ov2_to_guard_never'):(Math.round(fAge)+'m'))}
+    ];
+    kp.innerHTML=kpis.map(function(x){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+esc(x.label)
+        +'</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+esc(x.value)+'</div></div>';
+    }).join('');
+    var parts=[];
+    if(held.length){
+      parts.push('<div style="color:var(--tk-red-ink,#dc2626);font-size:12px;">'
+        +esc(window.T('ov2_to_held_label'))+'</div>'
+        +held.map(function(h){
+          return '<div style="font-size:12px;margin-top:4px;"><code>'+esc(h.order_id)+'</code> → '
+            +esc(h.instance_id)+' · <code>'+esc(h.public_url||'?')+'</code> · '
+            +esc(window.T('ov2_to_held_hours'))+' '+esc(String(h.held_hours))+'h</div>';
+        }).join(''));
+    }
+    if(c.down){
+      parts.push('<div style="color:var(--tk-red-ink,#dc2626);font-size:12px;margin-top:6px;">'
+        +esc(window.T('ov2_to_down_hint'))+'</div>');
+    }
+    if(guardStale){
+      parts.push('<div style="color:var(--tk-amber-ink,#d97706);font-size:12px;margin-top:6px;">'
+        +esc(window.T('ov2_to_guard_stale'))+'</div>');
+    }
+    if(c.expired){
+      parts.push('<div style="color:var(--tk-red-ink,#dc2626);font-size:12px;margin-top:6px;">'
+        +esc(window.T('ov2_to_exp_hint'))+'</div>');
+    }
+    var SMAP={running:window.T('ov2_to_state_running'),suspended:window.T('ov2_to_state_suspended'),down:window.T('ov2_to_state_down')};
+    var SCOL={running:'var(--tk-green-ink,#059669)',suspended:'var(--tk-muted,#6b7280)',down:'var(--tk-red-ink,#dc2626)'};
+    if((d.tenants||[]).length){
+      parts.push('<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;"><thead><tr>'
+        +['ov2_to_tbl_iid','ov2_to_tbl_state','ov2_to_tbl_pub','ov2_to_tbl_expiry','ov2_to_tbl_backup'].map(function(k){
+          return '<th style="text-align:left;padding:3px 8px 3px 0;" class="muted">'+esc(window.T(k))+'</th>';
+        }).join('')+'</tr></thead><tbody>'
+        +d.tenants.map(function(t){
+          var bk=(t.last_backup_age_h==null)?window.T('ov2_to_backup_none'):(t.last_backup_age_h+'h');
+          var expTxt, expCol='inherit';
+          if(t.expiry_state==='expired'){
+            expTxt=window.T('ov2_to_exp_expired'); expCol='var(--tk-red-ink,#dc2626)';
+          }else if(t.expiry_state==='expiring'||t.expiry_state==='ok'){
+            expTxt=(window.Tf?window.Tf('ov2_to_exp_days',{n:t.expiry_days_left}):(t.expiry_days_left+'d'));
+            if(t.expiry_state==='expiring') expCol='var(--tk-amber-ink,#d97706)';
+          }else{ expTxt='—'; expCol='var(--tk-muted,#6b7280)'; }
+          return '<tr><td style="padding:3px 8px 3px 0;"><code>'+esc(t.instance_id)+'</code>'
+            +(t.customer?(' <span class="muted">('+esc(t.customer)+')</span>'):'')+'</td>'
+            +'<td style="padding:3px 8px 3px 0;color:'+(SCOL[t.state]||'inherit')+';font-weight:600;">'+esc(SMAP[t.state]||t.state)+'</td>'
+            +'<td style="padding:3px 8px 3px 0;">'+(t.public_url?('<code>'+esc(t.public_url)+'</code>'):'<span class="muted">—</span>')+'</td>'
+            +'<td style="padding:3px 8px 3px 0;color:'+expCol+';font-weight:600;">'+esc(expTxt)+'</td>'
+            +'<td style="padding:3px 8px 3px 0;">'+esc(bk)+'</td></tr>';
+        }).join('')+'</tbody></table>');
+    }
+    dv.innerHTML=parts.join('');
+  }catch(e){ sec.style.display='none'; }
+}
+
+// ── 🪦 被埋会话（P0-198）─────────────────────────────────────────────────
+// 归档着、却有未读入站 = 客户在等，而工作台所有默认视图都过滤 archived=1 → 没人看得见。
+// 判据与 HealthWatchdog._check_buried_conversations / tools/audit_buried_conversations.py
+// 共用 InboxStore.list_buried_archived 一个事实源（告警会自己响，这张卡是随时能核对）。
+// **零命中整卡隐藏**：它不是常驻 KPI，而是一个「出现即代表有人被埋」的例外面板。
+// supported=false（旧版 store 无此能力）同样隐藏——不显示恒为 0 的假绿灯。
+async function loadBuriedConvs(){
+  var sec=document.getElementById('buriedSection');
+  var kp=document.getElementById('buriedKpis');
+  var dv=document.getElementById('buriedDetail');
+  if(!sec||!kp||!dv) return;
+  try{
+    const r=await apiFetch('/api/admin/buried-conversations',{credentials:'same-origin'});
+    if(!r.ok){ sec.style.display='none'; return; }
+    const d=await r.json();
+    if(!d||!d.supported||!Number(d.count)){ sec.style.display='none'; return; }
+    sec.style.display='';
+    // 红灯而非黄：客户在等且**没有任何默认视图看得见**，属于正在流失而非降级
+    opsSetCardLight('buried','red');
+    var autoN=Number(d.auto_archived)||0;
+    var kpis=[
+      {label:window.T('ov2_bc_count'), value:String(d.count)},
+      {label:window.T('ov2_bc_unread'), value:String(d.total_unread||0)},
+      {label:window.T('ov2_bc_manual'), value:String((Number(d.count)||0)-autoN)},
+      {label:window.T('ov2_bc_auto'), value:String(autoN)}
+    ];
+    kp.innerHTML=kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+esc(c.label)
+        +'</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+esc(c.value)+'</div></div>';
+    }).join('');
+    var now=Date.now()/1000;
+    var rows=(d.rows||[]).slice(0,10).map(function(x){
+      var h=(x.last_ts>0)?Math.round((now-Number(x.last_ts))/3600):0;
+      var age=(h>=48)?((h/24).toFixed(1)+window.T('ov2_bc_days')):(h+window.T('ov2_bc_hours'));
+      // 看得见还不够，得点得进去处置：深链 ?conv= 直达该会话，hash 顺带把列表切到
+      // 「归档」视图（否则落地后人在默认视图里仍然看不到这一行，等于只跳了一半）。
+      // 会话沉在全局 top-N 窗口外也能开——收件箱的 _openConvByCid 有 scoped 直查库救援。
+      var cid=String(x.conversation_id||'');
+      var href='/workspace?conv='+encodeURIComponent(cid)+'#filter=archived';
+      return '<tr><td><a href="'+esc(href)+'" target="_blank" rel="noopener" data-cid="'+esc(cid)
+        +'" data-winname="workspace" onclick="return __openUnique(event,this)">'
+        +esc(x.display_name||cid)+'</a></td>'
+        +'<td>'+esc(x.platform||'')+'</td>'
+        +'<td style="text-align:right;font-weight:600;">'+esc(String(x.unread||0))+'</td>'
+        +'<td>'+esc(age)+'</td>'
+        +'<td>'+esc(x.auto?window.T('ov2_bc_src_auto'):window.T('ov2_bc_src_manual'))+'</td></tr>';
+    }).join('');
+    dv.innerHTML='<div style="color:var(--tk-red-ink,#dc2626);font-size:12px;margin-bottom:6px;">'
+        +esc(window.T('ov2_bc_cta'))+'</div>'
+      +'<table style="width:100%;font-size:12px;border-collapse:collapse;"><thead><tr>'
+      +'<th style="text-align:left;">'+esc(window.T('ov2_bc_th_who'))+'</th>'
+      +'<th style="text-align:left;">'+esc(window.T('ov2_bc_th_platform'))+'</th>'
+      +'<th style="text-align:right;">'+esc(window.T('ov2_bc_th_unread'))+'</th>'
+      +'<th style="text-align:left;">'+esc(window.T('ov2_bc_th_age'))+'</th>'
+      +'<th style="text-align:left;">'+esc(window.T('ov2_bc_th_src'))+'</th>'
+      +'</tr></thead><tbody>'+rows+'</tbody></table>';
+  }catch(e){ sec.style.display='none'; }
+}
+
 // 中央池的失败是**静默降级**（回落自带凭据、用户无感），所以这张卡的核心是
 // 「池承载比例」——它低就说明池没在生效，得看回落原因。零流量则整卡隐藏。
 async function loadCredPool(){
@@ -2869,6 +3800,7 @@ async function loadCredPool(){
   var kp = document.getElementById('credpoolKpis');
   var dv = document.getElementById('credpoolDetail');
   if(!sec || !kp || !dv) return;
+  // esc 已收口为脚本顶部共享版（P4）——这里曾因漏定义局部 esc 导致凭据池一激活就 ReferenceError
   try{
     const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
     if(!r.ok){ sec.style.display='none'; return; }
@@ -2912,6 +3844,9 @@ async function loadCredPool(){
     // 池服务自身的健康（外部看门狗写的状态）。放在最前：客户端指标再漂亮，
     // 池本体挂着就什么都不成立。kind=hang＝health 绿但业务口已死的「半死」。
     var wd = cp.watchdog || null;
+    // P4 结构化状态：池本体非 ok（含「半死」hang）=红；看门狗探针自身失联超 15min=黄
+    opsSetCardLight('credpool', (wd && wd.kind && wd.kind !== 'ok') ? 'red'
+      : ((wd && (Number(wd.probe_age_min)||0) > 15) ? 'yellow' : ''));
     if(wd){
       var wdColor = (wd.kind === 'ok') ? 'var(--tk-ink-3,#64748b)' : 'var(--tk-red-ink,#dc2626)';
       var wdTxt = window.T('ov2_cp_wd')+': '+(window.T('ov2_cp_wd_'+wd.kind, null) || esc(String(wd.kind)));
@@ -3027,7 +3962,6 @@ async function loadGoals(){
     var goalsOn = !!(ready && ready.checks && ready.checks.goals_enabled);
     if(!g.active && (!summary || total === 0) && !goalsOn){ sec.style.display='none'; return; }
     sec.style.display = '';
-    function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
     var by = (summary && summary.by_status) || null;
     var term = g.terminal || {};
     var doneN = by ? (Number(by.done)||0) : (Number(term.done)||0);
@@ -3047,7 +3981,8 @@ async function loadGoals(){
     var beats = g.beats || {};
     var inj = g.injected || {};
     var injTitle = window.T('ov2_goal_inj_split')+': '
-      + fmt(Number(inj.draft)||0)+' / '+fmt(Number(inj.reply)||0)+' / '+fmt(Number(inj.proactive)||0);
+      + fmt(Number(inj.draft)||0)+' / '+fmt(Number(inj.reply)||0)+' / '
+      + fmt(Number(inj.proactive)||0)+' / '+fmt(Number(inj.opener)||0);
     var parts = [];
     // P10 开闸就绪：首行置顶——运营一眼看清「能不能跑 / 卡在哪」
     if(ready && ready.status){
@@ -3136,6 +4071,13 @@ async function loadGoals(){
     var fb = (report && report.feedback) || g.feedback || null;
     if(fb && ((Number(fb.adopt)||0) + (Number(fb.reject)||0)) > 0){
       parts.push(window.T('ov2_goal_fb')+': '+fmt(Number(fb.adopt)||0)+' / '+fmt(Number(fb.reject)||0));
+    }
+    // P25 续：期限调整（加急/延期）——坐席与默认节奏对着干的信号（零流量不占行；
+    // 旧后端 metrics 无 deadline_edits 键 → 自动隐藏）
+    var de = g.deadline_edits || null;
+    if(de && ((Number(de.shorten)||0) + (Number(de.extend)||0)) > 0){
+      parts.push('<span title="'+esc(window.T('ov2_goal_deadline_tip'))+'">'
+        + window.T('ov2_goal_deadline')+': '+fmt(Number(de.shorten)||0)+' / '+fmt(Number(de.extend)||0)+'</span>');
     }
     // P5：获客漏斗读数（画像槽位自动采集 / 产品目录注入；零流量不占行）
     if(Number(g.profile_captured)||0){
@@ -3264,19 +4206,71 @@ async function loadGoals(){
             + esc(k)+':'+fmt(Number(uiActs[k])||0)+'</span>';
         }).join('')
       : '<span class="muted">—</span>';
+    // P2(2026-08-04)：表单体验策划行——P0「草稿幸存层」读数的语义化版本（下方 chips
+    // 行仍是全量生肉）。漏斗=开表单/选场景/创建(转化率)；护栏=防打断/误触拦/续写。
+    // 零流量不占行；14 天持久口径由 _goalFxTrend 异步补进 #goal-fx-14d（趋势未开=静默）。
+    var fxLine = '';
+    (function(){
+      var fxN = function(k){ return Number(uiActs[k])||0; };
+      var fxOpen = fxN('goal_set_click');
+      var fxPick = fxN('goal_form_pick_scenario') + fxN('goal_form_pick_custom');
+      var fxCreate = fxN('goal_create_ok');
+      var fxHold = fxN('goal_ctx_deferred');
+      var fxBd = fxN('goal_form_backdrop_dirty');
+      var fxRes = fxN('goal_form_draft_restore');
+      if(!(fxOpen || fxCreate || fxHold || fxBd || fxRes)) return;
+      var fxConv = fxOpen > 0 ? ' ('+Math.round(fxCreate/fxOpen*100)+'%)' : '';
+      fxLine = '<div class="muted" style="font-size:12px;margin-top:6px;">'
+        + '<span title="'+esc(window.T('ov2_goal_fx_tip'))+'">🛟 '+window.T('ov2_goal_fx')
+        + ' · '+window.T('ov2_goal_fx_funnel')+': '+fmt(fxOpen)+'/'+fmt(fxPick)+'/'+fmt(fxCreate)+fxConv
+        + ' · '+window.T('ov2_goal_fx_guard')+': '+fmt(fxHold)+'/'+fmt(fxBd)+'/'+fmt(fxRes)
+        + '</span><span id="goal-fx-14d"></span></div>';
+    })();
     dv.innerHTML = '<div class="muted" style="font-size:12px;">'+parts.join(' · ')+'</div>'
       + '<div class="muted" style="font-size:12px;margin:8px 0 4px;">'+window.T('ov2_goal_top')+'</div>'
       + '<table><tr><th>'+window.T('ov2_goal_col_title')+'</th><th>'+window.T('ov2_goal_col_platform')+'</th>'
       + '<th>'+window.T('ov2_goal_col_milestone')+'</th><th>'+window.T('ov2_goal_col_day')+'</th>'
       + '<th>'+window.T('ov2_goal_col_progress')+'</th></tr>'+rows+'</table>'
+      + fxLine
       + '<div class="muted" style="font-size:12px;margin-top:6px;">'+window.T('ov2_goal_ag_funnel')+': '+funnelBody+'</div>'
       + '<div class="muted" style="font-size:12px;margin-top:6px;">'+window.T('ov2_goal_hint')+'</div>';
+    if(fxLine) _goalFxTrend();
     // B3：今日清单按钮随功能可用性亮/灭；agenda 探过 403（功能关）则保持隐藏
     var ab = document.getElementById('goalAgendaBtn');
     if(ab && !_goalAgendaOff){ ab.style.display = goalsApiOk ? '' : 'none'; }
   }catch(e){
     dv.innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
   }
+}
+
+// P2(2026-08-04)：表单体验 14 天持久口径——进程计数重启归零（本机施工日一天多次
+// 重启），趋势库（ops.ui_event_trend，beacon 旁路按日 upsert）才回答「修复前后
+// 被打断率有没有降」。未开启/无数据=整段静默；60s 轮询每轮重绘后重新补写。
+async function _goalFxTrend(){
+  var slot = document.getElementById('goal-fx-14d');
+  if(!slot) return;
+  try{
+    var r = await apiFetch('/api/admin/ui-event-trend?days=14&prefix=goal_', {credentials:'same-origin'});
+    if(!r.ok) return;
+    var d = await r.json();
+    if(!d || d.enabled === false || !Array.isArray(d.days)) return;
+    var agg = {};
+    d.days.forEach(function(row){
+      var by = (row && row.by_action) || {};
+      Object.keys(by).forEach(function(a){ agg[a] = (agg[a]||0) + (Number(by[a])||0); });
+    });
+    var n = function(k){ return Number(agg[k])||0; };
+    var open14 = n('goal_set_click'), create14 = n('goal_create_ok');
+    var pick14 = n('goal_form_pick_scenario') + n('goal_form_pick_custom');
+    var hold14 = n('goal_ctx_deferred'), bd14 = n('goal_form_backdrop_dirty');
+    var res14 = n('goal_form_draft_restore');
+    if(!(open14 || create14 || hold14 || bd14 || res14)) return;
+    var conv = open14 > 0 ? ' ('+Math.round(create14/open14*100)+'%)' : '';
+    var el = document.getElementById('goal-fx-14d');   // 轮询窗口内节点可能已被重绘
+    if(el) el.textContent = ' · '+window.T('ov2_goal_fx_14d')+': '
+      + fmt(open14)+'/'+fmt(pick14)+'/'+fmt(create14)+conv
+      + ' · '+fmt(hold14)+'/'+fmt(bd14)+'/'+fmt(res14);
+  }catch(_){ /* 趋势缺席不阻塞卡片 */ }
 }
 
 // B3 今日清单抽屉（P17）：点开才拉 /api/goals/agenda（懒加载；60s 自动轮询不携带），
@@ -3327,6 +4321,14 @@ async function _loadGoalAgenda(wrap){
       var cid = String(it.conversation_id||'');
       var peer = names[cid] || ((it.platform||'')+':'+(it.chat_key || cid.slice(0, 10)));
       var href = '/workspace?conv='+encodeURIComponent(cid)+'&card=goal';
+      // P25 续（临期显式化）：最后一天/倒数第二天在客户名旁挂琥珀徽章——
+      // 纯前端由 day_index/total_days 推导，零后端依赖
+      var dTot = Number(it.total_days)||0, dIdx = Number(it.day_index)||0;
+      var dueBadge = '';
+      if(dTot > 0 && dIdx >= dTot - 1){
+        dueBadge = ' <span style="color:var(--tk-amber-ink,#b45309);font-size:11px;white-space:nowrap;">\u23F3 '
+          + window.T(dIdx >= dTot ? 'inbox.goal.due.today' : 'inbox.goal.due.tomorrow')+'</span>';
+      }
       var hold = String(it.hold||'');
       var intent = hold
         ? '<span class="muted" style="font-style:italic;">'+window.T('ov2_goal_ag_hold')+': '+_esc(hold)+'</span>'
@@ -3340,7 +4342,7 @@ async function _loadGoalAgenda(wrap){
       var pl = String(it.push_level||'none');
       var plTxt = pl === 'none' ? '<span class="muted">none</span>' : _esc(pl);
       return '<tr><td><a href="'+href+'" target="_blank" rel="noopener" title="'+_esc(it.title||'')+'">'
-        + _esc(peer)+' \u2197</a></td><td>'+_esc(it.platform||'—')+'</td><td>'+intent+'</td>'
+        + _esc(peer)+' \u2197</a>'+dueBadge+'</td><td>'+_esc(it.platform||'—')+'</td><td>'+intent+'</td>'
         + '<td>'+plTxt+'</td><td>'+fbTxt+'</td></tr>';
     }).join('');
     wrap.innerHTML = head
@@ -3366,7 +4368,6 @@ async function loadEpisodicDedup(){
     var ed = d.episodic_dedup || null;
     if(!ed){ sec.style.display='none'; return; }
     sec.style.display = '';
-    function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
     var scans = Number(ed.scans)||0;
     if(scans <= 0){
       kp.innerHTML = '';
@@ -3397,7 +4398,7 @@ async function loadEpisodicDedup(){
   }
 }
 
-// 🪪 跨平台身份影子卡：读 /api/workspace/metrics 的 identity_shadow（HealthWatchdog 周期
+// 🆔 跨平台身份影子卡：读 /api/workspace/metrics 的 identity_shadow（HealthWatchdog 周期
 // 只读扫描落的 state 快照）。contacts.identity_shadow.enabled=false → 整卡隐藏（bazi 惯例）。
 async function loadIdentityShadow(){
   var sec = document.getElementById('ishadowSection');
@@ -3411,7 +4412,6 @@ async function loadIdentityShadow(){
     var isd = d.identity_shadow || null;
     if(!isd || !isd.enabled){ sec.style.display='none'; return; }
     sec.style.display = '';
-    function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
     if(!isd.state_available){
       kp.innerHTML = '';
       dv.innerHTML = '<div class="empty">'+window.T('ov2_ish_wait')+'</div>';
@@ -3533,7 +4533,6 @@ async function ishadowEvidence(idx){
     var r = await apiFetch('/api/identity/shadow/evidence?'+q, {credentials:'same-origin'});
     var d = await r.json();
     if(!r.ok || !d.ok){ box.textContent = (d && d.detail) || ('HTTP '+r.status); return; }
-    function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
     function side(lab, s){
       var msgs = (s.messages||[]).map(function(m){
         return '<div style="margin:2px 0;">['+esc(m.direction)+'] '+esc(m.text)+'</div>';
@@ -3606,6 +4605,8 @@ async function loadIsolationHealth(){
     var ps = d.personas || {};
     var fx = d.fatex || {};
     if(dot) dot.style.display = (d.level === 'warn') ? '' : 'none';
+    // P3 结构化状态：存量键/未绑号回升=红（回归性问题）；level warn=黄
+    opsSetCardLight('iso', ((d.regression||{}).regressed) ? 'red' : (d.level === 'warn' ? 'yellow' : ''));
     var legacyKeys = (Number(keys.legacy_platform)||0) + (Number(keys.bare)||0);
     kp.innerHTML = [
       {label:window.T('ov2_iso_online'), value:fmt(Number(ps.online)||0)},
@@ -3616,7 +4617,6 @@ async function loadIsolationHealth(){
       return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
         '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
     }).join('');
-    function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
     var parts = [];
     var unbound = ps.unbound || [];
     if(unbound.length){
@@ -3662,8 +4662,8 @@ async function loadIsolationHealth(){
             +' · '+window.T('ov2_iso_unbound')+' '+(Number(x.unbound_accounts)||0);
         });
         tr.innerHTML = '<div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_iso_trend_title')+'</div>'
-          + sparkline(legacySeries, {labels:tlabels, color:'#d29922', w:300})
-          + ' '+sparkline(unboundSeries, {labels:tlabels, color:'#f85149', w:300});
+          + sparkline(legacySeries, {labels:tlabels, color:'var(--amber)', w:300})
+          + ' '+sparkline(unboundSeries, {labels:tlabels, color:'var(--red)', w:300});
       }
     }
   }catch(e){
@@ -3730,7 +4730,6 @@ async function _tgCallReadiness(sec, kp, dv){
     var head = d.ready
       ? '<div style="color:var(--tk-emerald-ink,#059669);font-size:13px;font-weight:600;">🟢 '+window.T('ov2_tc_ready')+'</div>'
       : '<div style="color:var(--tk-amber-ink,#d97706);font-size:13px;font-weight:600;">🟡 '+window.T('ov2_tc_notready')+'（'+blockers.length+'）</div>';
-    function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(x){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[x]; }); }
     var bl = blockers.map(function(b){ return '<li style="color:var(--tk-danger-ink,#dc2626);">'+esc(b)+'</li>'; }).join('');
     var wl = warns.map(function(w){ return '<li style="color:var(--tk-amber-ink,#d97706);">'+esc(w)+'</li>'; }).join('');
     var body = '';
@@ -3757,6 +4756,9 @@ async function loadGpuWatermark(){
     sec.style.display='';
     var lvIcon = {ok:'🟢', warn:'🟡', high:'🔴', unknown:'⚪'};
     var hosts = d.hosts || [];
+    // P3 结构化状态：任一主机 high=红；warn/探不到=黄（口径同「整队取最差不装绿」）
+    opsSetCardLight('gpuwm', hosts.some(function(h){ return h.level==='high'; })
+      ? 'red' : (hosts.some(function(h){ return h.level==='warn' || h.level==='unknown' || !h.reachable; }) ? 'yellow' : ''));
     kp.innerHTML = hosts.map(function(h){
       var v = h.reachable ? (h.used_gb+' / '+h.total_gb+' GB') : window.T('ov2_js_gpuwm_unreach');
       var pct = (h.used_pct===null||h.used_pct===undefined) ? '' :
@@ -3764,8 +4766,7 @@ async function loadGpuWatermark(){
       return '<div class="kpi"><div class="muted" style="font-size:12px;">'+(lvIcon[h.level]||'⚪')+' '+h.name+
         '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+v+pct+'</div></div>';
     }).join('') || '';
-    function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
-    var rows = [];
+      var rows = [];
     hosts.forEach(function(h){
       (h.models||[]).forEach(function(m){
         rows.push('<tr><td>'+esc(h.name)+'</td><td>'+esc(m.name)+'</td><td>'+m.size_gb+' GB</td></tr>');
@@ -3783,14 +4784,13 @@ async function loadGpuWatermark(){
   }
 }
 
-// 🪪 资料变更审计流卡：读 /api/admin/profile-audit（ops_events 的 profile_push/align）。
+// 🆔 资料变更审计流卡：读 /api/admin/profile-audit（ops_events 的 profile_push/align）。
 // 近 7 天按天聚合 + 最近批次归组 + 明细；无事件/缺库则整卡隐藏。
 async function loadProfileAudit(){
   var sec = document.getElementById('pAuditSection');
   var kp = document.getElementById('pAuditKpis');
   var dv = document.getElementById('pAuditDetail');
   if(!sec || !kp || !dv) return;
-  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
   try{
     const r = await apiFetch('/api/admin/profile-audit?days=7&limit=40', {credentials:'same-origin'});
     const d = await r.json();
@@ -3814,8 +4814,8 @@ async function loadProfileAudit(){
       var rrows = runs.map(function(g){
         var plats = Object.keys(g.platforms||{}).map(function(p){ return esc(p)+'×'+g.platforms[p]; }).join(' · ');
         var warn = Object.keys(g.platforms||{}).some(function(p){ return g.platforms[p]>=2; }) ? ' ⚠' : '';
-        var ok = '<span style="color:var(--th-ink-green6,#16a34a);">'+ (Number(g.ok)||0) +'</span>';
-        var fl = (Number(g.failed)||0) ? ' / <span style="color:var(--th-ink-red6,#dc2626);">'+g.failed+'</span>' : '';
+        var ok = '<span style="color:var(--th-ink-green6,#15803d);">'+ (Number(g.ok)||0) +'</span>';
+        var fl = (Number(g.failed)||0) ? ' / <span style="color:var(--th-ink-red6,#b91c1c);">'+g.failed+'</span>' : '';
         return '<tr><td>'+fmtTs(g.ts)+'</td><td>'+esc(g.persona||'—')+'</td><td>'+(Number(g.count)||0)+'</td><td>'+plats+warn+'</td><td>'+ok+fl+'</td></tr>';
       }).join('');
       html += '<div class="muted" style="font-size:12px;margin:4px 0;">'+window.T('ov2_js_pa_runs_head')+'</div>'
@@ -3826,7 +4826,7 @@ async function loadProfileAudit(){
     if(rec.length){
       var mrows = rec.slice(0,20).map(function(e){
         var k = (e.kind==='profile_align') ? window.T('inbox.acct.evt_align') : window.T('inbox.acct.evt_push');
-        var mark = e.ok ? '<span style="color:var(--th-ink-green6,#16a34a);">✓</span>' : '<span style="color:var(--th-ink-red6,#dc2626);">✗</span>';
+        var mark = e.ok ? '<span style="color:var(--th-ink-green6,#15803d);">✓</span>' : '<span style="color:var(--th-ink-red6,#b91c1c);">✗</span>';
         return '<tr><td>'+fmtTs(e.ts)+'</td><td>'+esc(k)+'</td><td>'+esc(e.platform||'')+':'+esc(e.account_id||'')+'</td><td>'+esc(e.persona||'')+'</td><td>'+esc(e.fields||'')+'</td><td>'+mark+'</td></tr>';
       }).join('');
       html += '<div class="muted" style="font-size:12px;margin:10px 0 4px;">'+window.T('ov2_js_pa_recent_head')+'</div>'
@@ -3838,7 +4838,7 @@ async function loadProfileAudit(){
   }
 }
 
-// 🪪 会话身份自愈卡片：读 /api/workspace/metrics 的 peer_identity（数字号补真实昵称的证据）。
+// 🆔 会话身份自愈卡片：读 /api/workspace/metrics 的 peer_identity（数字号补真实昵称的证据）。
 async function loadPeerIdentity(){
   var kp = document.getElementById('pidKpis');
   var dv = document.getElementById('pidDetail');
@@ -4006,7 +5006,7 @@ async function loadPeerIdentity(){
   }
 }
 
-// 🪪 身份健康趋势：近 7 天 入站 raw% / 头像 empty% sparkline（读 /api/admin/identity-health-trend）。
+// 🆔 身份健康趋势：近 7 天 入站 raw% / 头像 empty% sparkline（读 /api/admin/identity-health-trend）。
 // 默认关（inbox.identity.trend_log）→ 隐藏，仅上面的瞬时快照可见。末日越阈(≥30%) → ⚠️ 提示。
 async function loadIdentityTrend(){
   var el = document.getElementById('identityTrend');
@@ -4038,7 +5038,7 @@ async function loadIdentityTrend(){
 var _rtvPending = null;   // null | "load" | "unload"
 
 function _rtvDot(on){
-  return '<span style="color:'+(on?'var(--th-ink-green5,#22c55e)':'var(--th-ink-red5,#ef4444)')+'">●</span> ';
+  return '<span style="color:'+(on?'var(--th-ink-green5,#15803d)':'var(--th-ink-red5,#b91c1c)')+'">●</span> ';
 }
 function _rtvTokenVal(){
   var el = document.getElementById('rtvToken');
@@ -4243,10 +5243,8 @@ async function rtvEngineAction(which){
   var tok = encodeURIComponent(_rtvTokenVal());
   var ms = which==='load' ? 135000 : 65000;
   try{
-    var ctrl = new AbortController();
-    var tmr = setTimeout(function(){ ctrl.abort(); }, ms);
-    var r = await fetch('/api/voice/engine/'+which+'?token='+tok, {method:'POST', credentials:'same-origin', signal:ctrl.signal});
-    clearTimeout(tmr);
+    // 手写 AbortController+定时器 → apiFetch 显式预算（load 135s / unload 65s 语义不变，超时同为 AbortError）
+    var r = await apiFetch('/api/voice/engine/'+which+'?token='+tok, {method:'POST', credentials:'same-origin'}, {timeoutMs: ms});
     var d = await r.json();
     if(!r.ok || d.error){
       if(hintEl) hintEl.textContent = (d.error||window.T('ov2_rtv_engine_err'))+' ('+r.status+')';
@@ -4329,7 +5327,7 @@ function _rtvCalResultHtml(d){
   var tl = '';
   var pts = d.points || [];
   if(pts.length > 1){
-    var colorOf = {green:'#8b949e', yellow:'#d29922', red:'#f85149'};
+    var colorOf = {green:'#8b949e', yellow:'var(--amber)', red:'var(--red)'};
     var cells = pts.map(function(p){
       var c = colorOf[p.light] || '#8b949e';
       var s = (p.problem_ids && p.problem_ids.length) ? (' ['+p.problem_ids.join(',')+']') : '';
@@ -4420,8 +5418,8 @@ async function loadRtvTrend(){
         ' · '+(x.attempts||0)+window.T('kb_js_174');
     });
     el.innerHTML = '<div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_rtv_trend_title')+'</div>'+
-      sparkline(conn, {labels:labels, color:'#58a6ff', w:300})+
-      ' '+sparkline(health, {labels:labels, color:'#3fb950', w:300});
+      sparkline(conn, {labels:labels, color:'var(--blue)', w:300})+
+      ' '+sparkline(health, {labels:labels, color:'var(--green)', w:300});
   }catch(e){
     el.innerHTML = '<div class="muted" style="font-size:12px;">'+window.T('ov2_js051')+e+'</div>';
   }
@@ -4439,7 +5437,11 @@ async function loadLocalTts(){
     const d = await r.json();
     if(cb) cb.checked = !!d.configured_enabled;
     if(cb && !CAN_MANAGE_OPS) cb.disabled = true;
-    var dot = function(on){ return '<span style="color:'+(on?'var(--th-ink-green5,#22c55e)':'var(--th-ink-red5,#ef4444)')+'">●</span> '; };
+    // P3 结构化状态：托管模式 off＝运营刻意关闭，不点灯（修启发式把红圆点当故障的误报）；
+    // 开着才判：服务不可达=红、模型未载入=黄
+    opsSetCardLight('localtts', (d.mode && d.mode !== 'off')
+      ? (!d.reachable ? 'red' : (!d.model_loaded ? 'yellow' : '')) : '');
+    var dot = function(on){ return '<span style="color:'+(on?'var(--th-ink-green5,#15803d)':'var(--th-ink-red5,#b91c1c)')+'">●</span> '; };
     var kpis = [
       {label:window.T('ov2_localtts_mode'), value:(d.mode||'off')},
       {label:window.T('ov2_localtts_reachable'), value:dot(!!d.reachable)+(d.reachable?window.T('yes'):window.T('no'))},
@@ -4463,11 +5465,11 @@ async function addPrerenderLine(idx){
   if(!m || !m.text) return;
   if(hint) hint.textContent = window.T('ov2_localtts_saving');
   try{
-    const r = await fetch('/api/voice/prerender-lines/add', {
+    const r = await apiFetch('/api/voice/prerender-lines/add', {
       method:'POST', credentials:'same-origin',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({text: m.text, target: '_common', render_now: true}),
-    });
+    }, {timeoutMs:60000});
     const d = await r.json();
     if(!r.ok || !d.ok){ if(hint) hint.textContent = (d && (d.detail||d.reason)) || window.T('ov_js_save_fail'); return; }
     if(hint) hint.textContent = d.added ? window.T('ov2_av_added') : window.T('ov2_av_dup');
@@ -4519,7 +5521,6 @@ async function loadChainFunnel(){
   var kp = document.getElementById('chainFunnelKpis');
   var dv = document.getElementById('chainFunnelDetail');
   if(!sec || !kp || !dv) return;
-  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
   try{
     const r = await apiFetch('/api/workspace/chain-funnel?days=14', {credentials:'same-origin'});
     if(r.status === 403){ sec.style.display='none'; return; }
@@ -4760,18 +5761,18 @@ async function loadAutosendMedia(){
       {label:window.T('ov2_asm_last_provider'), value:'<span style="color:'+(provColor||'inherit')+'">'+lastProv+(lastFb?(' ← '+lastFb):'')+'</span>'},
       {label:window.T('ov2_asm_trunc'), value:'<span style="color:'+(truncColor||'inherit')+'">'+fmt(truncN)+' / '+window.T('ov2_asm_retry')+' '+fmt(vo.truncation_retries||0)+'</span>'},
       {label:window.T('ov2_asm_img_sent'), value:fmt(im.sent||0)+' / '+window.T('ov2_asm_fallback')+' '+fmt(im.fallback||0)+(imgInflight>0?(' · '+window.T('ov2_asm_img_busy')+' '+imgInflight):'')},
-      {label:window.T('ov2_asm_promise'), value:'<span style="color:'+(promiseWarn?'var(--th-ink-amber5,#f59e0b)':'inherit')+'">'
+      {label:window.T('ov2_asm_promise'), value:'<span style="color:'+(promiseWarn?'var(--th-ink-amber5,#92400e)':'inherit')+'">'
         +fmt(promiseDet)+' → '+fmt(promiseFul)+' / '+fmt(promiseRet)
         +(promiseWarn?(' ⚠'):'')+'</span>'},
       {label:window.T('ov2_asm_voice_ratio'), value:(function(){
         var vc=Number(vo.voice_chosen||0), tc=Number(vo.text_chosen||0), tot=vc+tc;
         return tot? (Math.round(vc/tot*1000)/10+'% ('+vc+'/'+tot+')'):'—';
       })()},
-      {label:window.T('ov2_asm_noedge'), value:'<span style="color:'+(noEdgeDown>0?'var(--th-ink-amber5,#f59e0b)':'inherit')+'">'+fmt(noEdgeDown)+'</span>'},
+      {label:window.T('ov2_asm_noedge'), value:'<span style="color:'+(noEdgeDown>0?'var(--th-ink-amber5,#92400e)':'inherit')+'">'+fmt(noEdgeDown)+'</span>'},
       // P2 多开治理观测：人工通过草稿真投递（成功/失败）+ 撞防重闸门被拦的竞态处置数
       {label:window.T('ov2_asm_human_deliver'), value:(function(){
         var okN=Number(w.total_human_delivered||0), erN=Number(w.total_human_deliver_errors||0);
-        return '<span style="color:'+(erN>0?'var(--th-ink-amber5,#f59e0b)':'inherit')+'">'+fmt(okN)+(erN>0?(' / ✗'+fmt(erN)):'')+'</span>';
+        return '<span style="color:'+(erN>0?'var(--th-ink-amber5,#92400e)':'inherit')+'">'+fmt(okN)+(erN>0?(' / ✗'+fmt(erN)):'')+'</span>';
       })()},
       {label:window.T('ov2_asm_raced'), value:fmt(w.total_skipped_raced||0)},
     ];
@@ -4786,7 +5787,7 @@ async function loadAutosendMedia(){
       + (vo.last_duration_ms?(' · '+Math.round(vo.last_duration_ms/100)/10+'s'): '')
       + (im.last_reason?(' &nbsp;|&nbsp; '+window.T('ov2_asm_img_last')+': '+String(im.last_reason).replace(/</g,'&lt;')): '')
       + (im.last_failure_detail?(' ('+String(im.last_failure_detail).replace(/</g,'&lt;')+')'): '')
-      + (promiseWarn?(' &nbsp;|&nbsp; <span style="color:var(--th-ink-amber5,#f59e0b)">'+window.T('ov2_asm_promise_warn')+'</span>'): '')
+      + (promiseWarn?(' &nbsp;|&nbsp; <span style="color:var(--th-ink-amber5,#92400e)">'+window.T('ov2_asm_promise_warn')+'</span>'): '')
       + '</div>'
       + (vFbParts.length? '<div class="muted" style="font-size:12px;margin-top:4px;">'
         + window.T('ov2_asm_voice_fb_dist')+': '+vFbParts.join(' · ')+'</div>' : '')
@@ -4823,7 +5824,7 @@ async function loadPromiseTrend(){
     });
     el.innerHTML = '<div class="muted" style="font-size:12px;margin-bottom:4px;">'+
       window.T('ov2_asm_trend_title')+'</div>'+
-      sparkline(rate, {labels:labels, color:'#3fb950', w:300});
+      sparkline(rate, {labels:labels, color:'var(--green)', w:300});
   }catch(e){ el.innerHTML=''; }
 }
 async function loadAvatarVoice(){
@@ -4837,18 +5838,39 @@ async function loadAvatarVoice(){
     const d = await r.json();
     if(!d || d.enabled === false){ sec.style.display='none'; return; }
     sec.style.display='';
-    var dot = function(on){ return '<span style="color:'+(on?'var(--th-ink-green5,#22c55e)':'var(--th-ink-red5,#ef4444)')+'">●</span> '; };
+    var dot = function(on){ return '<span style="color:'+(on?'var(--th-ink-green5,#15803d)':'var(--th-ink-red5,#b91c1c)')+'">●</span> '; };
     var h = d.health || {};
     var hp = function(x){ return !!(x && x.reachable && x.models_loaded); };
     var st = d.stats || {};
     var total = Number(st.synth_total)||0, okN = Number(st.synth_ok)||0;
+    // P4 结构化状态：7852 主合成通道掉线=红；预渲染备货有陈旧（换声后未重渲）=黄。
+    // 7858 懒加载 / STT 多级兜底掉线属正常态，刻意不进灯（同健康探针口径，防误报）。
+    // P2 2026-08-05：出站台账滚动窗「尝试≥3 且 0 成功」＝断档红（半死形态：探针
+    // 全绿但真实发送全败——2026-08-02 hub 档 404 断 5 天零告警的事故面，阈值与
+    // watchdog voice_outage_remind.min_attempts 默认一致）。
+    var og = d.outage || {};
+    var ogAtt = Number(og.attempts_24h)||0, ogOk = Number(og.ok_24h)||0;
+    var ogRed = ogAtt >= 3 && ogOk === 0;
+    opsSetCardLight('avatar', (!hp(h.cosyvoice) || ogRed) ? 'red'
+      : ((((d.prerender_inventory||{}).stale||0) > 0) ? 'yellow' : ''));
+    var ogVal;
+    if(!ogAtt){ ogVal = '<span class="muted">'+window.T('ov2_av_outage_none')+'</span>'; }
+    else if(ogRed){
+      var ogReasons = Object.keys(og.fail_reasons||{}).slice(0,2).join('/').slice(0,40).replace(/</g,'&lt;');
+      ogVal = '<span style="color:var(--th-ink-red5,#b91c1c)">⛔ '+fmt(ogOk)+' / '+fmt(ogAtt)
+        +' '+window.T('ov2_av_outage_bad')+(ogReasons?(' · '+ogReasons):'')+'</span>';
+    } else {
+      ogVal = dot(ogOk>0)+fmt(ogOk)+' / '+fmt(ogAtt)
+        +((og.consecutive_fails||0)>0?(' <span style="color:var(--th-ink-amber5,#92400e)">⚠×'+fmt(og.consecutive_fails)+'</span>'):'');
+    }
     var kpis = [
       {label:window.T('ov2_av_cosy'), value:dot(hp(h.cosyvoice))+(hp(h.cosyvoice)?window.T('ov2_localtts_ready'):window.T('ov2_js_gpuwm_unreach'))},
       {label:window.T('ov2_av_qwen'), value:dot(hp(h.qwen3))+(hp(h.qwen3)?window.T('ov2_localtts_ready'):window.T('ov2_js_gpuwm_unreach'))},
       {label:window.T('ov2_av_stt'), value:dot(hp(h.stt))+(hp(h.stt)?window.T('ov2_localtts_ready'):window.T('ov2_js_gpuwm_unreach'))},
       {label:window.T('ov2_av_synth'), value:fmt(okN)+' / '+fmt(total)+(total?(' · '+Math.round((st.avg_latency_ms||0))+'ms'):'')},
-      {label:window.T('ov2_av_prerender'), value:fmt(st.prerender_hits||0)+(st.prerender_coverage!==null&&st.prerender_coverage!==undefined?(' · '+Math.round(st.prerender_coverage*100)+'%'):'')+' · '+window.T('ov2_av_stock')+' '+fmt((d.prerender_inventory||{}).clips||0)+(((d.prerender_inventory||{}).stale||0)>0?(' <span style="color:var(--th-ink-amber5,#f59e0b)">⚠'+window.T('ov2_av_stale')+' '+fmt(d.prerender_inventory.stale)+'</span>'):'')},
+      {label:window.T('ov2_av_prerender'), value:fmt(st.prerender_hits||0)+(st.prerender_coverage!==null&&st.prerender_coverage!==undefined?(' · '+Math.round(st.prerender_coverage*100)+'%'):'')+' · '+window.T('ov2_av_stock')+' '+fmt((d.prerender_inventory||{}).clips||0)+(((d.prerender_inventory||{}).stale||0)>0?(' <span style="color:var(--th-ink-amber5,#92400e)">⚠'+window.T('ov2_av_stale')+' '+fmt(d.prerender_inventory.stale)+'</span>'):'')},
       {label:window.T('ov2_av_queue'), value:fmt(st.queue_depth||0)+' · '+window.T('ov2_av_peak')+' '+fmt(st.queue_peak||0)},
+      {label:window.T('ov2_av_outage'), value:ogVal},
     ];
     kp.innerHTML = kpis.map(function(c){
       return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
@@ -4894,6 +5916,22 @@ async function loadAvatarVoice(){
         refqParts.push('<span style="color:'+dotc+'">●</span>'+who+(issue?('（'+issue+'）'):''));
       });
     }
+    // 所听即所发（P1 2026-08-05）：试听产物复用率 + 未命中原因分布（零流量不占版面）
+    var pr = d.preview_reuse || {};
+    var prMiss = Object.keys(pr.misses||{}).map(function(k){
+      return k.replace(/</g,'&lt;')+' ×'+fmt(pr.misses[k]);
+    });
+    var prRow = ((pr.attempts||0)>0 || (pr.recorded||0)>0)
+      ? '<div class="muted" style="font-size:12px;margin-top:4px;" title="'+window.T('ov2_av_reuse_hint')+'">'
+        + window.T('ov2_av_reuse')+': '
+        + ((pr.attempts||0)>0
+            ? (fmt(pr.hits||0)+'/'+fmt(pr.attempts)
+               +(pr.hit_rate!==null&&pr.hit_rate!==undefined?(' ('+Math.round(pr.hit_rate*100)+'%)'):''))
+            : '—')
+        + ' · '+window.T('ov2_av_reuse_recorded')+' '+fmt(pr.recorded||0)
+        + (prMiss.length? (' · '+window.T('ov2_av_reuse_miss')+': '+prMiss.slice(0,4).join(' · ')) : '')
+        + '</div>'
+      : '';
     det.innerHTML = '<div class="muted" style="font-size:12px;">'
       + window.T('ov2_av_channel')+': '+(chParts.join(' · ')||'—')
       + ' &nbsp;|&nbsp; '+window.T('ov2_av_emo_dist')+': '+(emoParts.join(' · ')||'—')
@@ -4914,6 +5952,7 @@ async function loadAvatarVoice(){
       + (refqParts.length? '<div class="muted" style="font-size:12px;margin-top:4px;" title="'
         + window.T('ov2_av_refq_hint')+'">'+window.T('ov2_av_refq')+': '
         + refqParts.join(' · ')+'</div>' : '')
+      + prRow
       + (missParts.length? '<div class="muted" style="font-size:12px;margin-top:4px;">'
         + window.T('ov2_av_miss')+': '+missParts.join(' · ')
         + '</div><div class="muted" id="avAddHint" style="font-size:12px;margin-top:2px;"></div>' : '');
@@ -4939,7 +5978,424 @@ async function toggleLocalTts(on){
 }
 
 if(CAN_MANAGE_OPS){ var _rb=document.getElementById('recheckBtn'); if(_rb) _rb.style.display=''; }
-function refreshAll(){ loadOverview(); loadIncidents(); loadReport(); loadTTS(); loadTTSTrend(); loadAiSafety(); loadSlaBacklog(); loadTranslationEngines(); loadXlateTrend(); loadVoiceSynthLang(); loadASRDegradation(); loadSpeechEmotion(); loadVisionUsage(); loadDeepPersona(); loadFrontendErrors(); loadFeTrend(); loadCustomerAssets(); loadInstanceRestartStatus(); loadPlatformSessions(); loadChannelReadiness(); loadSendRoutes(); loadSendRouteTrend(); loadPersonaMedia(); loadMediaConsistency(); loadDuelBench(); loadPeerIdentity(); loadIdentityTrend(); loadLocalTts(); loadAutosendMedia(); loadPromiseTrend(); loadAvatarVoice(); loadProactiveEngagement(); loadReplyBubbles(); loadRealWorld(); loadBazi(); loadCare(); loadChainFunnel(); loadPersonaImport(); loadCredPool(); loadGoals(); loadIdentityShadow(); loadEpisodicDedup(); loadIsolationHealth(); loadGpuWatermark(); loadProfileAudit(); loadRealtimeVoice(); loadRtvTrend(); refreshRealtimeVoiceAlertBadge(); loadTgCall(); }
+// ═══ P2 卡片注册表（单一数据源）═════════════════════════════════════════
+// 分组、页内目录 chips、状态点、折叠记忆、视口懒刷新、隐藏卡清单全部由本表驱动。
+// 新增卡片在此登记一条：anchor=卡内任一稳定元素 id（用它反查 <section>，模板
+// 零重排、同伴插卡不脆断）；loaders=填充该卡的加载函数（可多个/可与他卡共享，
+// 执行队列会按函数去重）。loadOverview 是页头统一加载器（总灯/KPI/趋势/计费），
+// 每轮必跑，不在表内。
+var OPS_GROUPS = [
+  {key:'boss',    label:window.T('ov2_grp_boss')},
+  {key:'quality', label:window.T('ov2_grp_quality')},
+  {key:'voice',   label:window.T('ov2_grp_voice')},
+  {key:'persona', label:window.T('ov2_grp_persona')},
+  {key:'growth',  label:window.T('ov2_grp_growth')},
+  {key:'infra',   label:window.T('ov2_grp_infra')},
+];
+var OPS_CARDS = [
+  // ── 经营总览（老板层）──
+  {key:'trend',    group:'boss',    anchor:'anomAI',           loaders:[]},
+  {key:'report',   group:'boss',    anchor:'opsReport',        loaders:[loadReport]},
+  {key:'value',    group:'boss',    anchor:'valueWeeklyKpis',  loaders:[loadValueWeekly]},
+  {key:'billing',  group:'boss',    anchor:'billingAnomalies', loaders:[]},
+  {key:'incidents',group:'boss',    anchor:'fltKind',          loaders:[loadIncidents]},
+  // ── 内容质量 ──
+  {key:'aisafety', group:'quality', anchor:'aiSafetyKpis',     loaders:[loadAiSafety]},
+  {key:'backlog',  group:'quality', anchor:'slaBacklogKpis',   loaders:[loadSlaBacklog]},
+  {key:'cases',    group:'quality', anchor:'casesKpis',        loaders:[loadCasesCard]},
+  {key:'xlate',    group:'quality', anchor:'xlateKpis',        loaders:[loadTranslationEngines, loadXlateTrend]},
+  {key:'dpick',    group:'quality', anchor:'dpickFunnelKpis',  loaders:[loadFrontendErrors]},
+  {key:'duel',     group:'quality', anchor:'duelKpis',         loaders:[loadDuelBench]},
+  {key:'ededup',   group:'quality', anchor:'ededupKpis',       loaders:[loadEpisodicDedup]},
+  // ── 语音链路 ──
+  {key:'tts',      group:'voice',   anchor:'ttsKpis',          loaders:[loadTTS, loadTTSTrend]},
+  {key:'voicelang',group:'voice',   anchor:'voiceLangKpis',    loaders:[loadVoiceSynthLang]},
+  {key:'asr',      group:'voice',   anchor:'asrKpis',          loaders:[loadASRDegradation]},
+  {key:'speechemo',group:'voice',   anchor:'speechEmoKpis',    loaders:[loadSpeechEmotion]},
+  {key:'localtts', group:'voice',   anchor:'localTtsKpis',     loaders:[loadLocalTts]},
+  {key:'avatar',   group:'voice',   anchor:'avatarVoiceKpis',  loaders:[loadAvatarVoice]},
+  {key:'asmedia',  group:'voice',   anchor:'autosendMediaKpis',loaders:[loadAutosendMedia, loadPromiseTrend]},
+  {key:'rtv',      group:'voice',   anchor:'rtVoiceKpis',      loaders:[loadRealtimeVoice, loadRtvTrend, refreshRealtimeVoiceAlertBadge]},
+  {key:'tgcall',   group:'voice',   anchor:'tgCallKpis',       loaders:[loadTgCall]},
+  // ── 媒体与人设 ──
+  {key:'vision',   group:'persona', anchor:'visionUsageKpis',  loaders:[loadVisionUsage]},
+  {key:'pma',      group:'persona', anchor:'pmaKpis',          loaders:[loadPersonaMedia]},
+  {key:'mconsist', group:'persona', anchor:'mconsistKpis',     loaders:[loadMediaConsistency]},
+  {key:'photocap', group:'persona', anchor:'photoCapKpis',     loaders:[loadFrontendErrors]},
+  {key:'dp',       group:'persona', anchor:'deepPersonaKpis',  loaders:[loadDeepPersona]},
+  {key:'personaov',group:'persona', anchor:'personaOvKpis',    loaders:[loadFrontendErrors]},
+  {key:'pimp',     group:'persona', anchor:'personaImportKpis',loaders:[loadPersonaImport]},
+  {key:'ppush',    group:'persona', anchor:'profilePushKpis',  loaders:[loadFrontendErrors]},
+  {key:'paudit',   group:'persona', anchor:'pAuditKpis',       loaders:[loadProfileAudit]},
+  {key:'pid',      group:'persona', anchor:'pidKpis',          loaders:[loadPeerIdentity, loadIdentityTrend]},
+  {key:'ishadow',  group:'persona', anchor:'ishadowKpis',      loaders:[loadIdentityShadow]},
+  // ── 增长与触达 ──
+  {key:'proactive',group:'growth',  anchor:'proactiveEngKpis', loaders:[loadProactiveEngagement]},
+  {key:'bubbles',  group:'growth',  anchor:'bubblesKpis',      loaders:[loadReplyBubbles]},
+  {key:'rw',       group:'growth',  anchor:'realWorldKpis',    loaders:[loadRealWorld]},
+  {key:'bazi',     group:'growth',  anchor:'baziKpis',         loaders:[loadBazi]},
+  {key:'care',     group:'growth',  anchor:'careKpis',         loaders:[loadCare]},
+  {key:'chainfun', group:'growth',  anchor:'chainFunnelKpis',  loaders:[loadChainFunnel]},
+  {key:'goal',     group:'growth',  anchor:'goalKpis',         loaders:[loadGoals]},
+  {key:'ca',       group:'growth',  anchor:'custAssetsKpis',   loaders:[loadCustomerAssets]},
+  // ── 平台与基建 ──
+  {key:'sr',       group:'infra',   anchor:'sendRouteKpis',    loaders:[loadSendRoutes, loadSendRouteTrend]},
+  {key:'irst',     group:'infra',   anchor:'irstKpis',         loaders:[loadInstanceRestartStatus]},
+  {key:'psess',    group:'infra',   anchor:'psessKpis',        loaders:[loadPlatformSessions]},
+  {key:'chrdy',    group:'infra',   anchor:'chrdyKpis',        loaders:[loadChannelReadiness]},
+  {key:'loginfn',  group:'infra',   anchor:'loginFunnelKpis',  loaders:[loadFeTrend]},
+  {key:'csrf',     group:'infra',   anchor:'csrfRejectKpis',   loaders:[loadFrontendErrors]},
+  {key:'omirror',  group:'infra',   anchor:'outMirrorKpis',    loaders:[loadFrontendErrors]},
+  {key:'fe',       group:'infra',   anchor:'feErrKpis',        loaders:[loadFrontendErrors, loadFeTrend]},
+  {key:'uiev',     group:'infra',   anchor:'uiEventsKpis',     loaders:[loadFrontendErrors]},
+  {key:'gpuwm',    group:'infra',   anchor:'gpuWmKpis',        loaders:[loadGpuWatermark]},
+  {key:'credpool', group:'infra',   anchor:'credpoolKpis',     loaders:[loadCredPool]},
+  {key:'alertlink',group:'infra',   anchor:'alertlinkKpis',    loaders:[loadAlertLink]},
+  {key:'offwh',    group:'infra',   anchor:'officialWhKpis',   loaders:[loadOfficialWebhooks]},
+  {key:'tenantov', group:'infra',   anchor:'tenantOvKpis',     loaders:[loadTenantOverview]},
+  {key:'buried',   group:'quality', anchor:'buriedKpis',       loaders:[loadBuriedConvs]},
+  {key:'iso',      group:'infra',   anchor:'isoKpis',          loaders:[loadIsolationHealth]},
+];
+var OPS_CARDS_BY_KEY = {};
+OPS_CARDS.forEach(function(c){ OPS_CARDS_BY_KEY[c.key] = c; });
+
+// ── 折叠记忆（localStorage，跨会话）──
+var _opsCollapsed = {};
+try{ _opsCollapsed = JSON.parse(localStorage.getItem('ops.cards.collapsed.v1') || '{}') || {}; }catch(_){ _opsCollapsed = {}; }
+function _saveCollapsed(){ try{ localStorage.setItem('ops.cards.collapsed.v1', JSON.stringify(_opsCollapsed)); }catch(_){ } }
+
+// ── 分发：把模板里平铺的 <section> 按注册表搬进分组容器（DOM move 保留事件/状态；
+//    锚点找不到的卡留在原位继续工作，只是不参与分组/懒刷新）──
+function _opsDistribute(){
+  var root = document.getElementById('opsGroups');
+  if(!root) return;
+  var frag = document.createDocumentFragment();
+  OPS_GROUPS.forEach(function(g){
+    var wrap = document.createElement('div');
+    wrap.className = 'ops-group';
+    wrap.id = 'opsGroup-' + g.key;
+    var head = document.createElement('div');
+    head.className = 'ops-group-head';
+    head.innerHTML = '<span class="ops-group-dot" id="opsGdot-' + g.key + '"></span>' +
+      '<span>' + g.label + '</span><span class="muted ops-group-n" id="opsGn-' + g.key + '"></span>';
+    wrap.appendChild(head);
+    g.el = wrap;
+    frag.appendChild(wrap);
+  });
+  OPS_CARDS.forEach(function(c){
+    var a = document.getElementById(c.anchor);
+    var sec = a ? a.closest('section') : null;
+    if(!sec) return;
+    c.el = sec;
+    sec._opsCard = c;
+    var g = null;
+    OPS_GROUPS.forEach(function(x){ if(x.key === c.group) g = x; });
+    if(g) g.el.appendChild(sec);
+    var h2 = sec.querySelector('h2');
+    if(h2){
+      c.title = (h2.textContent || '').trim().replace(/\s+/g, ' ');
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ops-sec-toggle';
+      btn.title = window.T('ov2_fold_all') + ' / ' + window.T('ov2_unfold_all');
+      btn.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="6 9 12 15 18 9"/></svg>';
+      btn.addEventListener('click', function(ev){ ev.stopPropagation(); opsToggleCard(c.key); });
+      h2.appendChild(btn);
+      h2.addEventListener('click', function(ev){
+        if(ev.target.closest('button,a,select,input,label,[onclick]')) return;
+        opsToggleCard(c.key);
+      });
+    }
+    if(_opsCollapsed[c.key]) sec.classList.add('ops-collapsed');
+  });
+  root.appendChild(frag);
+}
+
+// ── 目录 chips ──
+function _opsBuildToc(){
+  var host = document.getElementById('opsTocChips');
+  if(!host) return;
+  OPS_GROUPS.forEach(function(g){
+    var chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'ops-toc-chip';
+    chip.innerHTML = '<span class="ops-group-dot" id="opsCdot-' + g.key + '"></span>' + g.label +
+      '<span class="muted ops-group-n" id="opsCn-' + g.key + '"></span>';
+    chip.addEventListener('click', function(){
+      if(g.el && g.el.style.display !== 'none') g.el.scrollIntoView({behavior:'smooth', block:'start'});
+    });
+    host.appendChild(chip);
+  });
+}
+
+// 三种隐藏语义分离：loader 条件隐藏＝inline display:none；筛选＝data-ops-fhide 属性；
+// 折叠＝.ops-collapsed 类（只藏卡身留标题）。互不覆写。
+function _condHidden(c){ return !c.el || c.el.style.display === 'none'; }
+function _filtered(c){ return c.el && c.el.hasAttribute('data-ops-fhide'); }
+function _collapsed(c){ return c.el && c.el.classList.contains('ops-collapsed'); }
+
+// ── P3 状态解析：loader 结构化上报优先，未上报的卡回落 DOM 启发式 ──────────
+// 启发式只认 light-dot/badge 的 CSS 类信号；不少运维卡（实例重启/平台会话等）用的是
+// emoji 圆点（🟢🟡🔴）根本没有类可扫——那批卡由 loader 调 opsSetCardLight 显式上报。
+function _heurLight(c){
+  var light = '';
+  var sigs = c.el.querySelectorAll('.light-dot.red, .badge.fail, .light-dot.yellow, .badge.warn');
+  for(var si = 0; si < sigs.length; si++){
+    // 事件历史表的行灯是「事发当时」的颜色（resolved 行也带红/黄），
+    // 不代表当前状态——未关闭事件的信号由顶部 KPI 卡承担，这里排除。
+    if(sigs[si].closest('#incTable')) continue;
+    if(sigs[si].classList.contains('red') || sigs[si].classList.contains('fail')) return 'red';
+    light = 'yellow';
+  }
+  return light;
+}
+function _cardLight(c){
+  if(!c.el) return '';
+  return (c.light !== undefined) ? (c.light || '') : _heurLight(c);
+}
+// 结构化上报口：loader 算出结论时调用。''＝正常或「刻意关闭」——上报过 '' 的卡
+// 不再走启发式（修「托管模式 off 却因红色圆点被点名」的误报）。
+function opsSetCardLight(key, light){
+  var c = OPS_CARDS_BY_KEY[key];
+  if(c) c.light = light || '';
+}
+// 渲染防抖写：内容没变就不碰 DOM——保住用户的划选/hover，也省整卡 reflow。
+// 高频重渲染的卡（KPI 网格/周报/事件表）用它替代直接 innerHTML 赋值。
+function opsSetHtml(el, html){
+  if(!el) return;
+  if(el._opsHtml === html) return;
+  el._opsHtml = html;
+  el.innerHTML = html;
+}
+// ── 每轮刷新后聚合：组状态点 + 组卡数 + 空组隐藏 + 问题卡提示条 +
+//    隐藏卡清单 + 折叠按钮文案 ──
+function _opsUpdateGroups(){
+  var hiddenTitles = [], probs = [];
+  OPS_CARDS.forEach(function(c){ c._light = _cardLight(c); });
+  OPS_GROUPS.forEach(function(g){
+    var shown = 0, light = '';
+    OPS_CARDS.forEach(function(c){
+      if(c.group !== g.key || !c.el) return;
+      if(_condHidden(c) || _filtered(c)) return;
+      shown++;
+      if(c._light === 'red') light = 'red';
+      else if(c._light === 'yellow' && light !== 'red') light = 'yellow';
+    });
+    ['opsGdot-', 'opsCdot-'].forEach(function(prefix){
+      var d = document.getElementById(prefix + g.key);
+      if(d) d.className = 'ops-group-dot' + (light ? ' ' + light : '');
+    });
+    ['opsGn-', 'opsCn-'].forEach(function(prefix){
+      var n = document.getElementById(prefix + g.key);
+      if(n) n.textContent = shown ? String(shown) : '';
+    });
+    if(g.el) g.el.style.display = shown ? '' : 'none';
+  });
+  OPS_CARDS.forEach(function(c){
+    if(!c.el || !c.title) return;
+    if(_condHidden(c)){ hiddenTitles.push(c.title); return; }
+    if(!_filtered(c) && c._light) probs.push(c);
+  });
+  var foot = document.getElementById('opsHiddenNote');
+  if(foot){
+    if(hiddenTitles.length){
+      foot.style.display = '';
+      foot.textContent = '💤 ' + window.T('ov2_hidden_note') + ' (' + hiddenTitles.length + '): ' + hiddenTitles.join(' · ');
+    } else {
+      foot.style.display = 'none';
+    }
+  }
+  // 问题卡提示条：红黄卡点名成 chip，点击展开并跳过去（chip 走容器级事件委托）。
+  var strip = document.getElementById('opsProbStrip');
+  if(strip){
+    if(probs.length){
+      probs.sort(function(a, b){ return (a._light === 'red' ? 0 : 1) - (b._light === 'red' ? 0 : 1); });
+      var chips = probs.slice(0, 8).map(function(c){
+        var short = (c.title.split('（')[0] || c.title).slice(0, 18);
+        return '<button type="button" class="ops-toc-chip ops-prob-chip" data-probkey="' + c.key + '">' +
+          '<span class="ops-group-dot ' + c._light + '"></span>' + short + '</button>';
+      }).join('');
+      opsSetHtml(strip, '<span class="muted" style="font-size:12px;">⚠ ' + window.T('ov2_prob_cards') +
+        ' (' + probs.length + ')</span> ' + chips +
+        (probs.length > 8 ? ' <span class="muted" style="font-size:12px;">+' + (probs.length - 8) + '</span>' : ''));
+      strip.style.display = '';
+    } else {
+      strip.style.display = 'none';
+      opsSetHtml(strip, '');
+    }
+  }
+  _opsFoldBtnLabel();
+}
+// 📰 周报一键复制（老板群转发场景）：优先 Clipboard API（需安全上下文），
+// LAN http 回落 execCommand。文本取渲染后的纯文本＝所见即所得。
+async function opsCopyReport(){
+  var el = document.getElementById('opsReport');
+  var btn = document.getElementById('opsReportCopyBtn');
+  if(!el) return;
+  var txt = window.T('ov2_s005') + ' · ' +
+    ((document.getElementById('updatedAt') || {}).textContent || '') + '\n' +
+    (el.innerText || '').trim();
+  function done(ok){
+    if(!btn) return;
+    var old = btn.textContent;
+    btn.textContent = ok ? window.T('ov2_report_copied') : window.T('ov2_report_copy_fail');
+    setTimeout(function(){ btn.textContent = old; }, 1600);
+  }
+  try{
+    if(navigator.clipboard && window.isSecureContext){
+      await navigator.clipboard.writeText(txt);
+      done(true);
+      return;
+    }
+  }catch(_){ }
+  try{
+    var ta = document.createElement('textarea');
+    ta.value = txt;
+    ta.style.cssText = 'position:fixed;opacity:0;';
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    done(ok);
+  }catch(_){ done(false); }
+}
+
+function _opsFoldBtnLabel(){
+  var b = document.getElementById('opsFoldAllBtn');
+  if(!b) return;
+  var anyOpen = OPS_CARDS.some(function(c){ return c.el && !_collapsed(c); });
+  b.textContent = anyOpen ? window.T('ov2_fold_all') : window.T('ov2_unfold_all');
+}
+
+// ── 折叠 ──
+function opsToggleCard(key){
+  var c = OPS_CARDS_BY_KEY[key];
+  if(!c || !c.el) return;
+  var fold = !c.el.classList.contains('ops-collapsed');
+  c.el.classList.toggle('ops-collapsed', fold);
+  if(fold){ _opsCollapsed[key] = 1; }
+  else {
+    delete _opsCollapsed[key];
+    if(c.loaders.length && Date.now() - (c.lastLoad || 0) > 60000){
+      c.lastLoad = Date.now();
+      _runPool(c.loaders, 4).then(_opsUpdateGroups);
+    }
+  }
+  _saveCollapsed();
+  _opsFoldBtnLabel();
+}
+function opsToggleAllCards(){
+  var anyOpen = OPS_CARDS.some(function(c){ return c.el && !_collapsed(c); });
+  OPS_CARDS.forEach(function(c){
+    if(!c.el) return;
+    c.el.classList.toggle('ops-collapsed', anyOpen);
+    if(anyOpen) _opsCollapsed[c.key] = 1; else delete _opsCollapsed[c.key];
+  });
+  _saveCollapsed();
+  _opsFoldBtnLabel();
+}
+
+// ── 标题筛选 ──
+function opsFilterCards(q){
+  q = String(q || '').trim().toLowerCase();
+  var any = false;
+  OPS_CARDS.forEach(function(c){
+    if(!c.el) return;
+    var hit = !q || (c.title || '').toLowerCase().indexOf(q) >= 0;
+    if(hit){
+      c.el.removeAttribute('data-ops-fhide');
+      if(!_condHidden(c)) any = true;
+    } else {
+      c.el.setAttribute('data-ops-fhide', '1');
+    }
+  });
+  var nm = document.getElementById('opsNoMatch');
+  if(nm){
+    nm.textContent = window.T('ov2_toc_nomatch');
+    nm.style.display = (q && !any) ? '' : 'none';
+  }
+  _opsUpdateGroups();
+}
+
+// ── 执行引擎：并发池（按函数去重 + 限并发，防 85 路突发压垮慢服务器）──
+function _runPool(fns, limit){
+  var uniq = [];
+  fns.forEach(function(f){ if(f && uniq.indexOf(f) < 0) uniq.push(f); });
+  var i = 0;
+  function next(){
+    if(i >= uniq.length) return Promise.resolve();
+    var f = uniq[i++], p;
+    try{ p = Promise.resolve(f()); }catch(e){ p = Promise.resolve(); }
+    return p.catch(function(){}).then(next);
+  }
+  var ws = [];
+  for(var k = 0; k < Math.min(limit || 8, uniq.length); k++) ws.push(next());
+  return Promise.all(ws);
+}
+
+// 全量刷新（进页首轮 / 手动刷新）：跑遍注册表——条件隐藏卡也要跑，
+// 否则「功能刚开启的卡」永远不会现身。
+var _opsBusy = false;
+function refreshAll(){
+  if(_opsBusy) return Promise.resolve();
+  _opsBusy = true;
+  var fns = [loadOverview];
+  OPS_CARDS.forEach(function(c){
+    c.lastLoad = Date.now();
+    fns.push.apply(fns, c.loaders);
+  });
+  // 全量加载期的渐进聚合：52 个 loader 走完约 15-30s，别让状态点/问题条
+  // 等到最后一刻才点亮——3s 节拍把已完成卡片的结论先渐进亮出来。
+  var beat = setInterval(function(){ try{ _opsUpdateGroups(); }catch(_){ } }, 3000);
+  return _runPool(fns, 8)
+    .then(function(){ _opsUpdateGroups(); })
+    .finally(function(){ _opsBusy = false; clearInterval(beat); });
+}
+async function opsManualRefresh(){
+  var b = document.getElementById('opsRefreshBtn');
+  if(b) b.disabled = true;
+  try{ await refreshAll(); } finally { if(b) b.disabled = false; }
+}
+
+// 定时轮 = 视口懒刷新：只刷「页头 + 视口附近的展开卡」；条件隐藏卡每 5 轮
+// 低频重查一次（功能被打开后 ≤5min 自动现身，换取平时 ~85→~15 路的量级下降）；
+// 折叠/被筛掉的卡不刷（展开时如陈旧会立即补拉）。
+var _opsTick = 0;
+function _opsRefreshTick(){
+  if(document.hidden || _opsBusy) return;
+  _opsTick++;
+  var fns = [loadOverview];
+  OPS_CARDS.forEach(function(c){
+    if(!c.el || !c.loaders.length) return;
+    if(_collapsed(c) || _filtered(c)) return;
+    if(_condHidden(c)){
+      if(_opsTick % 5 === 0){ c.lastLoad = Date.now(); fns.push.apply(fns, c.loaders); }
+      return;
+    }
+    var r = c.el.getBoundingClientRect();
+    if(r.bottom > -300 && r.top < window.innerHeight + 600){
+      c.lastLoad = Date.now();
+      fns.push.apply(fns, c.loaders);
+    }
+  });
+  _runPool(fns, 6).then(function(){ _opsUpdateGroups(); });
+}
+
+// 滚进视口且数据已陈旧（>60s 没刷过）→ 立即补拉，保证「滚到哪哪就是新的」。
+var _opsIO = null;
+try{
+  _opsIO = new IntersectionObserver(function(entries){
+    entries.forEach(function(en){
+      if(!en.isIntersecting) return;
+      var c = en.target._opsCard;
+      if(!c || !c.loaders.length || _collapsed(c)) return;
+      if(Date.now() - (c.lastLoad || 0) > 60000){
+        c.lastLoad = Date.now();
+        _runPool(c.loaders, 4).then(_opsUpdateGroups);
+      }
+    });
+  }, {rootMargin: '400px 0px'});
+}catch(_){ _opsIO = null; }
 function _onRtvOpsRefresh(){
   loadRealtimeVoice(); loadRtvTrend(); loadRtvAlertCalibrate(false); refreshRealtimeVoiceAlertBadge();
 }
@@ -4947,8 +6403,38 @@ window.addEventListener("storage", function(e){
   if(e && e.key === "rtv.ops_refresh") _onRtvOpsRefresh();
 });
 window.addEventListener("rtv-ops-refresh", _onRtvOpsRefresh);
+// ── P2 启动序列：分组分发 → 目录 → 筛选接线 → 视口观察 → 首轮全量 ──
+_opsDistribute();
+_opsBuildToc();
+_opsFoldBtnLabel();
+(function(){
+  var f = document.getElementById('opsFilter');
+  if(f){
+    var t = null;
+    f.addEventListener('input', function(){
+      clearTimeout(t);
+      var v = f.value;
+      t = setTimeout(function(){ opsFilterCards(v); }, 150);
+    });
+  }
+  var strip = document.getElementById('opsProbStrip');
+  if(strip){
+    strip.addEventListener('click', function(ev){
+      var b = ev.target.closest('[data-probkey]');
+      if(!b) return;
+      var c = OPS_CARDS_BY_KEY[b.getAttribute('data-probkey')];
+      if(!c || !c.el) return;
+      if(c.el.classList.contains('ops-collapsed')) opsToggleCard(c.key);
+      c.el.scrollIntoView({behavior:'smooth', block:'start'});
+    });
+  }
+})();
+if(_opsIO){ OPS_CARDS.forEach(function(c){ if(c.el) _opsIO.observe(c.el); }); }
 refreshAll();
-setInterval(refreshAll, 60000);
+// 后台标签页不空转（隐藏期跳过，回前台补一轮）；定时轮走视口懒刷新，
+// 不再每分钟全量重打 85 路接口。
+setInterval(_opsRefreshTick, 60000);
+document.addEventListener('visibilitychange', function(){ if(!document.hidden) _opsRefreshTick(); });
 
 // 📡 P9：实时告警条 — 订阅 SSE，编排器 worker 崩溃/恢复即时弹条（无需等 60s 轮询）。
 // 后端 fn/detail 已消毒（platform:account_id + last_error 截断），此处仍转义防御。
@@ -4963,7 +6449,9 @@ function renderOpsWorkerBanner(data){
   }
   var probs = data.problems || [];
   var light = String(data.light || 'yellow');
-  var bg = (light === 'red') ? 'var(--red)' : 'var(--yellow)';
+  // 背景要「白字可读」的深色：桥接后 --red/--yellow 是壳的亮色墨水（暗色主题下偏亮），
+  // 直接当底色白字会糊，改用两主题下都够深的 ink 令牌。
+  var bg = (light === 'red') ? 'var(--th-ink-red6,#b91c1c)' : 'var(--th-ink-amber6,#92400e)';
   var icon = (light === 'red') ? '🔴' : '🟡';
   var rows = probs.slice(0, 6).map(function(p){
     return '<li>'+_opsEsc(p.name || p.id || '?')+'：'+_opsEsc(p.detail || '')+
@@ -4988,5 +6476,6 @@ try{
   };
 }catch(_){}
 </script>
-</body>
-</html>
+{#- 告警链路一键接通弹窗（共享 partial；本页不渲染横幅，卡片 CTA 调 wsAlertlinkOpen） -#}
+{% include "_alertlink_connect.html" %}
+{% endblock %}

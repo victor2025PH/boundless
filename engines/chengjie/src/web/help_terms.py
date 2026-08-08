@@ -22,6 +22,79 @@ HELP_TERMS: dict = {
         "usage": "打开即可查看全局状态，点击各卡片的快捷链接可跳转到对应功能模块",
         "usage_en": "Open it to see global status; click a card's quick link to jump to the matching module"
     },
+    "nav_ops_overview": {
+        "zh": "运营总览",
+        "en": "Ops Overview",
+        "desc": "老板单页：业务 ROI、计费用量、运行时健康、运维可靠性与运维事件的聚合看板，全部运维卡片（语音/翻译/命理/主动触达等）都在这里",
+        "desc_en": "The single-page boss view: business ROI, billing, runtime health, ops reliability and incidents, plus every ops card (voice, translation, bazi, proactive outreach, ...)",
+        "usage": "日常巡检从这里开始；仪表盘上的可靠性摘要与工程 chip 也都深链到本页",
+        "usage_en": "Start daily checks here; the dashboard's reliability summary and engineering chips deep-link into this page"
+    },
+    # ── 仪表盘区块（2026-08 改版：待办条 / 统计卡 / 折叠区） ───
+    "dash_todo": {
+        "zh": "待办",
+        "en": "To-dos",
+        "desc": "需要人处理的事项汇总：待审回复草稿、学习队列、未处理危机事件、进行中案例。数据与侧栏徽标同源",
+        "desc_en": "Everything waiting on a human: reply drafts, learning queue, unhandled crisis events and open cases. Same source as the sidebar badges",
+        "usage": "点击任一徽标直达对应处理页；全部清零时显示「暂无待办」",
+        "usage_en": "Click any pill to jump to its handling page; shows \"All clear\" when empty"
+    },
+    "dash_health": {
+        "zh": "系统运行状态",
+        "en": "Runtime health",
+        "desc": "运行时红绿灯：数据库、AI 大模型、授权、消息渠道、后台 Worker、草稿队列等组件的存活/积压/熔断状况",
+        "desc_en": "Runtime traffic light: liveness, backlog and circuit state of DB, AI model, license, channels, workers and draft queues",
+        "usage": "任一组件 chip 都可点击，直达该问题的处理页；异常组件的原因直接显示在行内",
+        "usage_en": "Every component chip is clickable and jumps to where you fix it; failing chips show their reason inline"
+    },
+    "dash_reliability": {
+        "zh": "运维可靠性",
+        "en": "Ops reliability",
+        "desc": "近 24 小时出站处置量、拦截率、升级率与各 Worker 错误率的汇总评分，用于判断自动化链路是否健康",
+        "desc_en": "24h dispositions, block/reject rates and per-worker error rates rolled into one score for judging automation health",
+        "usage": "摘要行足够判断好坏；点开看各 Worker 明细，完整运维卡片在「运营总览」页",
+        "usage_en": "The summary row tells you good/bad at a glance; expand for per-worker detail, full cards live in Ops Overview"
+    },
+    "dash_eng": {
+        "zh": "工程明细",
+        "en": "Engineering detail",
+        "desc": "Bot 实时性能（响应耗时/并发/队列/熔断）与触发器决策日志，供排障和调参使用，默认折叠",
+        "desc_en": "Bot performance (latency, concurrency, queues, circuit breaker) and trigger decision log for debugging and tuning; collapsed by default",
+        "usage": "展开后才开始加载与高频刷新；日常运营无需展开",
+        "usage_en": "Loads and polls only when expanded; day-to-day operators can leave it closed"
+    },
+    "dash_msgs": {
+        "zh": "消息 收/发",
+        "en": "Messages in/out",
+        "desc": "自本次启动以来收到与回复的消息总量及回复率（⏱ 为统计窗口时长），点击进入运营分析看完整趋势",
+        "desc_en": "Messages received/replied since this process started, with reply rate (⏱ shows the window); click through to Analytics for full trends",
+        "usage": "点击卡片跳转「运营分析」页查看按日趋势与分渠道数据",
+        "usage_en": "Click the card to open Analytics for daily trends and per-channel breakdowns"
+    },
+    "dash_diag": {
+        "zh": "系统诊断",
+        "en": "Diagnostics",
+        "desc": "汇总运行时健康组件的正常/注意/异常计数；点击运行一次全面体检（配置、连通性、策略完整性）",
+        "desc_en": "Rolls up ok/warn/fail counts from runtime health; click to run a full check across config, connectivity and strategies",
+        "usage": "点击卡片弹出诊断面板，逐项列出问题与修复入口",
+        "usage_en": "Click to open the diagnostic modal listing each issue with a fix link"
+    },
+    "dash_proactive": {
+        "zh": "主动触达（14天）",
+        "en": "Proactive outreach (14d)",
+        "desc": "近 14 天主动打招呼/回访的发送总量与回复率（按开场 mode 聚合，与运营总览主动触达卡同口径）",
+        "desc_en": "Proactive greeting/check-in sends and reply rate over the last 14 days (aggregated by opener mode, same source as the Ops Overview card)",
+        "usage": "点击卡片进入运营总览查看 mode 级回复率、退避与媒体形态明细",
+        "usage_en": "Click through to Ops Overview for per-mode reply rates, backoff and media-form detail"
+    },
+    "dash_proactive": {
+        "zh": "主动触达",
+        "en": "Proactive outreach",
+        "desc": "近 14 天主动开场（问候/生活分享/记忆追问等）的发送量与回复率——判断「主动找客户聊」有没有换来回应的核心读数",
+        "desc_en": "Sends and reply rate of proactive openers (check-ins, life shares, memory follow-ups) over the last 14 days — the key read on whether outreach earns replies",
+        "usage": "点击卡片进入运营总览，看分 mode 回复率、未回退避与媒体形态反哺明细",
+        "usage_en": "Click through to Ops Overview for per-mode reply rates, no-reply backoff and media feedback detail"
+    },
     "nav_templates": {
         "zh": "话术模板（已迁移）",
         "en": "Reply Templates (moved)",
@@ -121,10 +194,10 @@ HELP_TERMS: dict = {
     "nav_cases": {
         "zh": "案例跟进",
         "en": "Case Follow-ups",
-        "desc": "追踪用户意图链产生的案例（如咨询→投诉→退款），监控满意度，支持添加备注和结案",
-        "desc_en": "Track cases formed by user intent chains (e.g. inquiry → complaint → refund), monitor satisfaction, add notes and close cases",
-        "usage": "查看活跃 Case 列表 → 关注高风险标记 → 添加备注或结案",
-        "usage_en": "Review the active case list → watch high-risk flags → add notes or close the case"
+        "desc": "AI 自动识别需要人工跟进的会话并立案：客户要求人工、怀疑机器人、质疑照片造假、危机信号、投诉升级等；支持跳转会话、备注、结案",
+        "desc_en": "AI opens cases for conversations that need a human: requests for a real agent, bot suspicion, photo-fake doubts, crisis signals, complaint escalation; jump to the conversation, add notes, close cases",
+        "usage": "按严重度处理案例 → 点「打开会话」直达工作台 → 处理完结案销账",
+        "usage_en": "Work cases by severity → click Open conversation to jump to the workspace → close the case when resolved"
     },
     "nav_escalation": {
         "zh": "人工转接",
@@ -175,40 +248,40 @@ HELP_TERMS: dict = {
         "usage_en": "Create/edit a persona → set as default or bind to sessions → configure global rules"
     },
     "nav_rpa_overview": {
-        "zh": "渠道总览",
-        "en": "Channel Overview",
-        "desc": "Telegram / LINE / Messenger / WhatsApp 四大渠道的运行状态、待审、告警与漏斗聚合看板",
-        "desc_en": "Aggregate board for Telegram / LINE / Messenger / WhatsApp: runtime status, pending reviews, alerts and funnels",
+        "zh": "矩阵总览",
+        "en": "Matrix Overview",
+        "desc": "真机矩阵的聚合看板：Telegram / LINE / Messenger / WhatsApp 全渠道运行状态、账号健康、待审、告警与漏斗",
+        "desc_en": "Aggregate board of the device matrix: runtime status, account health, pending reviews, alerts and funnels across Telegram / LINE / Messenger / WhatsApp",
         "usage": "先看告警和待审数 → 点击渠道卡片跳到对应渠道页处理",
         "usage_en": "Check alerts and pending counts first → click a channel card to jump to that channel's page"
     },
     "nav_telegram": {
-        "zh": "Telegram 自动化",
-        "en": "Telegram Automation",
+        "zh": "Telegram（真机矩阵）",
+        "en": "Telegram (Device Matrix)",
         "desc": "配置 Telegram 主号的 AI 自动回复：接收范围、回复逻辑、屏蔽名单、语音与运营漏斗。坐席扫码登录的账号请在坐席工作台管理，不在此页",
         "desc_en": "Configure the Telegram main account's AI auto-reply: scope, reply logic, block list, voice and funnel. QR-linked agent accounts are managed in the Agent Workspace, not here",
         "usage": "选择消息处理范围 → 调整回复逻辑 → 保存后对主号自动回复生效",
         "usage_en": "Choose the message scope → tune reply logic → save to apply to the main account's auto-replies"
     },
     "nav_line_rpa": {
-        "zh": "LINE 自动化",
-        "en": "LINE Automation",
+        "zh": "LINE（真机矩阵）",
+        "en": "LINE (Device Matrix)",
         "desc": "LINE 真机自动化运营台：设备监控、聊天设置、运维工具与运营漏斗",
         "desc_en": "LINE device-automation console: device monitoring, chat settings, ops tools and funnel",
         "usage": "监控页看设备状态 → 设置页调聊天行为 → 运维页处理异常",
         "usage_en": "Watch device status on Monitor → tune chat behavior in Settings → handle issues in Ops"
     },
     "nav_messenger_rpa": {
-        "zh": "Messenger 自动化",
-        "en": "Messenger Automation",
+        "zh": "Messenger（真机矩阵）",
+        "en": "Messenger (Device Matrix)",
         "desc": "Messenger 网页自动化运营台：客户线索、人设策略、账号设备、审批质检与数据中心",
         "desc_en": "Messenger web-automation console: leads, persona strategy, accounts & devices, review QA and data center",
         "usage": "总览看运行态 → 客户线索跟进 → 审批质检处理待审消息",
         "usage_en": "Check the overview → follow up leads → clear pending items in Review QA"
     },
     "nav_whatsapp_rpa": {
-        "zh": "WhatsApp 自动化",
-        "en": "WhatsApp Automation",
+        "zh": "WhatsApp（真机矩阵）",
+        "en": "WhatsApp (Device Matrix)",
         "desc": "WhatsApp 协议自动化：对话管理、待审队列、模板分析、配置与运维",
         "desc_en": "WhatsApp protocol automation: conversations, review queue, template analytics, config and ops",
         "usage": "对话页看会话 → 待审页处理草稿 → 模板分析优化话术",
@@ -998,6 +1071,75 @@ HELP_TERMS: dict = {
         "en": "Case",
         "desc": "由系统自动识别的用户对话升级事件，需要运营关注和跟进",
         "desc_en": "A user-conversation escalation event auto-detected by the system, needing ops attention and follow-up"
+    },
+    # ── 群脉导播台（group_show）：只经 data-help 显式挂载，不劫持通用词的全局精确匹配 ──
+    "gs_softad": {
+        "zh": "软广强度",
+        "en": "Soft-ad level",
+        "desc": "把产品带进对话的力度，0=只闲聊完全不提，数字越大越明示。剧本里前低后高再回落最像真人；* 表示这一拍单独调过、覆盖了剧本默认值",
+        "desc_en": "How hard the product is woven into the chat: 0 = pure chit-chat, higher = more explicit. Low-then-high-then-ease reads most human; * means this beat overrides the playbook default"
+    },
+    "gs_pace": {
+        "zh": "语速档",
+        "en": "Pace",
+        "desc": "这一拍的发言节奏：chatty=你一言我一语抢着说，normal=常规群聊，slow=有人在思考或刚看到。节奏本身也会出卖机器人，故按拍设定",
+        "desc_en": "This beat's rhythm: chatty = fast back-and-forth, normal = regular chat, slow = someone thinking or just noticing. Rhythm itself can betray a bot, so it's set per beat"
+    },
+    "gs_beatcount": {
+        "zh": "拍数",
+        "en": "Beats",
+        "desc": "这出戏由几拍组成。每一拍是一句节拍（谁说、什么意图），台词不写死、由人设 AI 现场生成",
+        "desc_en": "How many beats the show has. Each beat is one step (who speaks, what intent); lines aren't fixed - the persona AI generates them live"
+    },
+    "gs_prodline": {
+        "zh": "产品线",
+        "en": "Product line",
+        "desc": "这出戏软推的产品系：growth 获客系 / studio 内容陪伴系 / lingo 翻译系。选戏其实就是选产品",
+        "desc_en": "Which product family the show seeds: growth (acquisition), studio (content companion), lingo (translation). Picking a show is picking a product"
+    },
+    "gs_naturalness": {
+        "zh": "自然度",
+        "en": "Naturalness",
+        "desc": "这场戏像不像真人：绿=像真人，黄=各说各话，红=模板复读一眼假。看三个指标——熵（用词多样度）、间隔 CV（节奏像真人还是定时器）、均衡度（是不是一个号包场）",
+        "desc_en": "How human the show looks: green = human, amber = talking past each other, red = robotic. Three metrics: entropy (word variety), interval CV (human rhythm vs timer), balance (does one account hog the floor)"
+    },
+    "gs_linkage": {
+        "zh": "关联风险体检",
+        "en": "Linkage risk check",
+        "desc": "同一个群里同时能上几个号，取决于独立网络出口数——不是在线号数。同一出口下多个号一唱一和，是关联封号最典型的姿势。这里说的是你手上真号真发时的上限",
+        "desc_en": "How many accounts can be in one group at once depends on independent network exits, not how many are online. Several accounts behind one exit is the classic linked-ban pattern. This is the ceiling for your real accounts"
+    },
+    "gs_attendance": {
+        "zh": "出席矩阵",
+        "en": "Attendance matrix",
+        "desc": "管「谁进了哪些群」。同一批号同时混在同一批群里，是多号多群下最容易被抓的特征。给出每个群该派哪几个号，把任意两号的共同出席压到真人区间。加群一旦发生就冻结，退群更可疑",
+        "desc_en": "Governs who is in which groups. The same accounts sharing the same groups is the top giveaway. It tells you which accounts to put in each group, keeping any pair's shared attendance human-like. Once joined it's frozen; leaving looks even more suspicious"
+    },
+    "gs_exposure": {
+        "zh": "演出矩阵",
+        "en": "Performance matrix",
+        "desc": "管「谁开过口」。成员面加完就冻结了，这是之后唯一还能动的暴露面，而且平台是靠消息实时统计的。最强杠杆：每场少让一个号开口，能安全覆盖的群数是二次增长",
+        "desc_en": "Governs who has spoken. Membership freezes once joined; this is the only exposure surface you can still adjust, and platforms count messages in real time. Biggest lever: one fewer speaker per show grows safe group coverage quadratically"
+    },
+    "gs_schedule": {
+        "zh": "开演排期",
+        "en": "Show schedule",
+        "desc": "静态特征洗干净后，节奏是最后一条出卖人的轴：一批群挤在同一小时、精确每 30 分钟一场、每天同一时刻。这张管开演时间，和管加群时间的出席矩阵相互独立",
+        "desc_en": "After static traits are cleaned, rhythm is the last axis that betrays: groups bunched in one hour, exactly every 30 min, the same time daily. This governs show times, independent of the attendance matrix that governs join times"
+    },
+    "gs_outcome": {
+        "zh": "演出效果",
+        "en": "Show outcomes",
+        "desc": "唯一回答「值不值得继续投」的读数：真发场次在归因窗口内的群内反响（多少人接话）与私聊转化（群里发过言的人之后首次私聊我们）。排练不计——它一条消息都没发过",
+        "desc_en": "The only reading that answers \"is this worth continuing\": in-group response (how many people replied) and DM conversions (people who spoke in the group and then DM'd us for the first time) within the attribution window. Rehearsals never count - they send nothing",
+        "usage": "真发之后隔一个窗口回来看；转化数是下限，潜水观众无法归因",
+        "usage_en": "Check back one window after going live; conversions are a floor - lurkers cannot be attributed"
+    },
+    "gs_livecheck": {
+        "zh": "开演前体检",
+        "en": "Pre-live check",
+        "desc": "真发前最后一道体检，只体检不发一条消息。看选角/闸门预检是否通过、双锁是否武装、是否处于禁演时段。真发需另开配置锁 + 代码锁两把锁",
+        "desc_en": "The final check before going live - it checks only, sends nothing. Shows whether casting/gate preflight passes, whether the double lock is armed, and quiet-hours status. Going live needs both the config lock and the code lock"
     }
 }
 

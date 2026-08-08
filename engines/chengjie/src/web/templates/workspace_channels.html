@@ -1,5 +1,8 @@
 {% extends "workspace_base.html" %}
-{% block title %}{{ (i18n or {}).get('chc_title', '渠道中心') }}{% endblock %}
+{#- 本页开工作台左侧导航：四渠道设置从管理后台迁进工作台壳后曾整条丢失侧栏，
+    主管在这里改配置需要就近跳去人设/知识库/总览。顶层 set 对父模板可见。 -#}
+{% set ws_sidebar = true %}
+{% block title %}{{ (i18n or {}).get('chc_title', '真机矩阵') }}{% endblock %}
 {% block head %}
 <link rel="stylesheet" href="/static/workspace/account-kit.css?v=20260729">
 <style>
@@ -95,6 +98,16 @@
   .chc-acct-empty-lead{font-size:12.5px;font-weight:600;color:var(--tk-text);}
   .chc-acct-cap{display:inline-flex;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid color-mix(in srgb,var(--pc,var(--tk-brand)) 35%,transparent);color:var(--pc,var(--tk-brand));background:color-mix(in srgb,var(--pc,var(--tk-brand)) 8%,transparent);}
   @media(max-width:640px){ #chc-acct-empty{padding-left:0;} }
+  /* ── 平台能力速览条（P3，SSOT=平台能力矩阵；ctx 缺席整条不渲染）── */
+  .chc-cap-strip{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:10px;border-top:1px dashed var(--tk-border);padding-top:9px;font-size:11.5px;}
+  .chc-cap-strip .chc-capstrip-lead{color:var(--tk-text-muted);font-weight:700;margin-right:2px;}
+  .chc-cap-chip{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;border-radius:999px;border:1px solid var(--tk-border);color:var(--tk-text-muted);background:var(--tk-surface-2);cursor:default;}
+  .chc-cap-chip.yes{color:var(--tk-emerald);border-color:rgba(16,185,129,.35);}
+  .chc-cap-chip.toggle{color:var(--tk-amber);border-color:rgba(245,158,11,.4);}
+  .chc-cap-chip.no{opacity:.75;}
+  .chc-cap-chip.unknown{opacity:.6;}
+  .chc-cap-strip a.chc-cap-more{margin-left:auto;color:var(--tk-brand);text-decoration:none;font-weight:600;}
+  .chc-cap-strip a.chc-cap-more:hover{text-decoration:underline;}
   /* 会话健康行内嵌进连接卡：由横幅降格为卡内分区（虚线分隔，无独立边框底色） */
   #chc-acct-rail #chc-session-strip{margin:10px 0 0;}
   #chc-acct-rail .chc-sess{border:none;border-top:1px dashed var(--tk-border);border-radius:0;background:transparent;padding:9px 0 0;}
@@ -229,11 +242,11 @@
   <div class="chc-head">
     <div class="chc-head-main">
       <h2><span class="chc-ttl-ic"><span data-ui-icon="share" data-size="16"></span></span>
-        <span data-i18n="chc_title">{{ (i18n or {}).get('chc_title', '渠道中心') }}</span></h2>
+        <span data-i18n="chc_title">{{ (i18n or {}).get('chc_title', '真机矩阵') }}</span></h2>
       <p data-i18n="chc_sub">{{ (i18n or {}).get('chc_sub', '账号 · 自动化 · 语音 · 媒体 · 观测 —— 四个渠道一站式配置') }}</p>
     </div>
     <div class="chc-head-links">
-      <a href="/rpa-overview"><span data-ui-icon="chart" data-size="13"></span><span data-i18n="chc_overview_link">{{ (i18n or {}).get('chc_overview_link', '跨平台总览') }}</span></a>
+      <a href="/rpa-overview"><span data-ui-icon="chart" data-size="13"></span><span data-i18n="chc_overview_link">{{ (i18n or {}).get('chc_overview_link', '矩阵总览') }}</span></a>
       <a href="/"><span data-ui-icon="gear" data-size="13"></span><span data-i18n="chc_admin_link">{{ (i18n or {}).get('chc_admin_link', '管理后台') }}</span></a>
     </div>
   </div>
@@ -290,6 +303,28 @@
     <div id="chc-acct-empty" hidden></div>
     {# 网页会话健康行（messenger/whatsapp 才拉数据；空/失败静默隐藏）——内嵌卡内 #}
     <div id="chc-session-strip" style="display:none"></div>
+    {# P3 平台能力速览（SSOT=docs/平台能力矩阵.md，路由解析生成物注入；ctx 缺席=隐藏）：
+       把「LINE 无正在输入 / Messenger 无已读回执」这类平台限制显式化，防运营当故障上报 #}
+    {% if platform_capability %}
+    {% set _cap_tips = {
+      'yes': (i18n or {}).get('chc_cap_t_ok', '平台支持'),
+      'toggle': (i18n or {}).get('chc_cap_t_toggle', '支持但需在配置中开启（开启后需重启实例）'),
+      'no': (i18n or {}).get('chc_cap_t_no', '平台限制，不支持——这是协议/上游能力边界，不是故障'),
+      'unknown': (i18n or {}).get('chc_cap_t_unknown', '本机未能判定'),
+    } %}
+    {% set _cap_marks = {'yes': '✓', 'toggle': '⚙', 'no': '✕', 'unknown': '?'} %}
+    <div class="chc-cap-strip">
+      <span class="chc-capstrip-lead">{{ (i18n or {}).get('chc_capstrip_lead', '平台能力') }}</span>
+      {% for _k, _lbl_key in [('send_media', 'chc_cap_send_media'),
+                              ('read_receipt', 'chc_cap_read'),
+                              ('typing', 'chc_cap_typing'),
+                              ('inbound_media', 'chc_cap_inbound')] %}
+      {% set _st = platform_capability.get(_k, 'unknown') %}
+      <span class="chc-cap-chip {{ _st }}" title="{{ _cap_tips.get(_st, '') }}">{{ _cap_marks.get(_st, '?') }} {{ (i18n or {}).get(_lbl_key, '') }}</span>
+      {% endfor %}
+      <a class="chc-cap-more" href="/rpa-overview" title="{{ (i18n or {}).get('chc_capstrip_more_t', '完整口径见跨平台总览的平台能力矩阵') }}">{{ (i18n or {}).get('chc_capstrip_more', '详情') }}</a>
+    </div>
+    {% endif %}
     {% if channel == 'telegram' %}
     <details class="chc-acct-ops" id="chc-acct-ops">
       <summary>{{ (i18n or {}).get('chc_acct_ops_sum', '主会话（A 线）离线怎么办') }}</summary>

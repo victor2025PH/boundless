@@ -139,7 +139,7 @@
 const ROLE_MAP={admin:window.T('role_admin'),viewer:window.T('us_s014')};
 async function updateRole(uid,sel){
   var fd=new FormData();fd.append('role',sel.value);
-  try{var r=await fetch('/users/update/'+uid,{method:'POST',body:fd,headers:{'Accept':'application/json'}});
+  try{var r=await apiFetch('/users/update/'+uid,{method:'POST',body:fd,headers:{'Accept':'application/json'}},{timeoutMs:60000});
     var d=await r.json();
     if(d.ok){showToast(window.T('us_js001'),'ok');var c=document.getElementById('user-'+uid);if(c){var lb=c.querySelector('.role-label');if(lb)lb.textContent=ROLE_MAP[sel.value]||sel.value}}
     else showToast(d.detail||window.T('inbox.toast.update_fail'),'err');
@@ -148,7 +148,7 @@ async function updateRole(uid,sel){
 async function toggleEnabled(uid,enable,btn){
   var fd=new FormData();fd.append('enabled',enable?'1':'0');
   btnLoading(btn,true);
-  try{var r=await fetch('/users/update/'+uid,{method:'POST',body:fd,headers:{'Accept':'application/json'}});
+  try{var r=await apiFetch('/users/update/'+uid,{method:'POST',body:fd,headers:{'Accept':'application/json'}},{timeoutMs:60000});
     var d=await r.json();
     if(d.ok){showToast(enable?window.T('ov_js_enabled'):window.T('psn_disabled'),'ok');
       var c=document.getElementById('user-'+uid);
@@ -164,7 +164,7 @@ async function toggleEnabled(uid,enable,btn){
 }
 async function deleteUser(uid,uname){
   if(!await confirmAction(window.T('us_js002')+' '+uname+'?',{okText:window.T('delete')}))return;
-  try{var r=await fetch('/users/delete/'+uid,{method:'POST',body:new FormData(),headers:{'Accept':'application/json'}});
+  try{var r=await apiFetch('/users/delete/'+uid,{method:'POST',body:new FormData(),headers:{'Accept':'application/json'}},{timeoutMs:60000});
     var d=await r.json();
     if(d.ok){showToast(window.T('kb_js_041')+' '+uname,'ok');var c=document.getElementById('user-'+uid);if(c){c.style.transition='all .3s';c.style.opacity='0';c.style.transform='scale(.9)';setTimeout(function(){c.remove()},300)}}
     else showToast(d.detail||window.T('inbox.toast.del_fail'),'err');
@@ -173,7 +173,7 @@ async function deleteUser(uid,uname){
 async function createUser(e){
   e.preventDefault();var form=e.target,fd=new FormData(form);
   var btn=form.querySelector('.btn-p');btnLoading(btn,true);
-  try{var r=await fetch('/users/create',{method:'POST',body:fd,headers:{'Accept':'application/json'}});
+  try{var r=await apiFetch('/users/create',{method:'POST',body:fd,headers:{'Accept':'application/json'}},{timeoutMs:60000});
     var d=await r.json();
     if(d.ok){showToast(window.T('us_js003'),'ok');document.getElementById('create-modal').classList.remove('show');setTimeout(function(){location.reload()},600)}
     else showToast(d.detail||window.T('kb_js_086'),'err');

@@ -30,6 +30,11 @@ from src.web.routes.unified_inbox_sla import (
     _sla_cfg,
     _sla_detail,
 )
+from src.web.appearance_prefs import (
+    dumps_appearance,
+    loads_appearance,
+    sanitize_appearance,
+)
 from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
@@ -49,6 +54,9 @@ def register_workspace_prefs_routes(app, *, api_auth) -> None:
                  if inbox is not None else
                  {"warn_sec": 0, "crit_sec": 0, "muted": 0,
                   "dnd_start": -1, "dnd_end": -1})
+        prefs = dict(prefs)
+        # 外观个性化：落库为 JSON 文本，API 口径统一回解析后的 dict（空/坏数据回 {}）。
+        prefs["appearance"] = loads_appearance(prefs.get("appearance"))
         return {"ok": True, "prefs": prefs,
                 "global_warn_sec": glob["warn"], "global_crit_sec": glob["crit"],
                 "effective": _agent_sla_cfg(request)}
@@ -76,14 +84,21 @@ def register_workspace_prefs_routes(app, *, api_auth) -> None:
             return v if v == -1 else max(0, min(1439, v))
 
         agent = _session_agent(request)
-        prefs = inbox.set_agent_prefs(
-            agent["agent_id"],
-            warn_sec=max(0, _int("warn_sec")),
-            crit_sec=max(0, _int("crit_sec")),
-            muted=1 if body.get("muted") else 0,
-            dnd_start=_clamp_min(_int("dnd_start", -1)),
-            dnd_end=_clamp_min(_int("dnd_end", -1)),
-        )
+        # 局部更新语义（2026-08-04）：外观面板等调用方只带自己的键。告警偏好仅在
+        # 显式携带任一告警键时才整条覆盖——否则「只存外观」的 POST 会把 warn/crit/
+        # 免打扰静默清零（与下方 languages 的按键触发同一模式）。
+        _alert_keys = ("warn_sec", "crit_sec", "muted", "dnd_start", "dnd_end")
+        if any(k in body for k in _alert_keys):
+            prefs = inbox.set_agent_prefs(
+                agent["agent_id"],
+                warn_sec=max(0, _int("warn_sec")),
+                crit_sec=max(0, _int("crit_sec")),
+                muted=1 if body.get("muted") else 0,
+                dnd_start=_clamp_min(_int("dnd_start", -1)),
+                dnd_end=_clamp_min(_int("dnd_end", -1)),
+            )
+        else:
+            prefs = inbox.get_agent_prefs(agent["agent_id"])
         # P3：坐席技能语言声明（供 auto_assign match_language；只在 body 显式带 languages 时更新）。
         if "languages" in body:
             from src.ai.translation_service import normalize_lang
@@ -95,6 +110,15 @@ def register_workspace_prefs_routes(app, *, api_auth) -> None:
                 if code and code not in norm:
                     norm.append(code)
             prefs = inbox.set_agent_languages(agent["agent_id"], ",".join(norm))
+        # 外观个性化：白名单净化通过才整 JSON 覆盖；非法载荷 400，绝不半净化落库。
+        if "appearance" in body:
+            ap = sanitize_appearance(body.get("appearance"))
+            if ap is None:
+                raise HTTPException(400, tr(request, "err.ws.appearance_invalid"))
+            prefs = inbox.set_agent_appearance(
+                agent["agent_id"], dumps_appearance(ap))
+        prefs = dict(prefs)
+        prefs["appearance"] = loads_appearance(prefs.get("appearance"))
         return {"ok": True, "prefs": prefs}
 
     @app.get("/api/workspace/sla-detail")

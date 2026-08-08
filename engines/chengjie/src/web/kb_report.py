@@ -157,13 +157,35 @@ def build_kb_report(kb_store, audit_store=None) -> str:
     except Exception:
         pass
 
-    # 最近操作（审计日志）
-    recent_ops: list = []
+    # 最近知识库操作（审计账本 kb 族 + 人话标签；2026-08-05 补完——此前这里
+    # 取了 5 行审计却从未渲染进报告，现按原始意图接上：报告读者关心
+    # 「最近谁动过知识库」。软失败不阻断报告主体。
+    ops_html = ""
     if audit_store:
         try:
-            recent_ops = audit_store.query(limit=5) or []
+            from src.web.audit_display import family_like_patterns
+            from src.web.i18n_packs.audit_actions import ZH as _aud_zh
+            _ops = audit_store.query(
+                limit=8, action_patterns=family_like_patterns("kb") or None) or []
+            _ops_rows = "".join(
+                f'<tr><td style="white-space:nowrap;color:#6b7280">{_esc(o.get("ts", ""))}</td>'
+                f'<td style="font-weight:600">{_esc(_aud_zh.get("aud_act_" + str(o.get("action", "")), str(o.get("action", ""))))}</td>'
+                f'<td>{_esc(str(o.get("target", ""))[:60])}</td>'
+                f'<td style="color:#555">{_esc(str(o.get("user_id", "")))}</td></tr>'
+                for o in reversed(_ops)
+            )
+            if _ops_rows:
+                ops_html = (
+                    '<div class="section"><h2>'
+                    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
+                    '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'
+                    '最近知识库操作</h2>'
+                    '<table class="data-table">'
+                    '<thead><tr><th>时间</th><th>操作</th><th>对象</th><th>操作人</th></tr></thead>'
+                    '<tbody>' + _ops_rows + '</tbody></table></div>'
+                )
         except Exception:
-            pass
+            ops_html = ""
 
     # ── 维护建议渲染 ─────────────────────────────────────────
     advice_list = advice_data.get("advice", [])
@@ -361,6 +383,8 @@ h2 svg{{width:16px;height:16px;flex-shrink:0}}
     </h2>
     <div class="trans-row">{trans_html}</div>
   </div>
+
+  {ops_html}
 
   <div style="text-align:center;color:#9ca3af;font-size:.75rem;margin-top:2rem;border-top:1px solid #e5e7eb;padding-top:1rem">
     本报告由 AI智能客服系统 自动生成 · {_esc(now_str)}

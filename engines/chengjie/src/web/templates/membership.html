@@ -14,7 +14,8 @@
   background:var(--blue,#3b82f6);color:#fff;text-decoration:none}
 .mb-from-cta:hover{opacity:.88}
 .mb-row-hi td{background:color-mix(in srgb, var(--blue,#3b82f6) 10%, transparent)}
-.mb-row-hi td:first-child{font-weight:600}</style>
+.mb-row-hi td:first-child{font-weight:600}
+#mb-activate:target{outline:2px solid var(--blue,#3b82f6);outline-offset:2px}</style>
 {% set gate = mb.gate or {} %}
 {% set lic = mb.license or {} %}
 {% set plan = gate.plan or 'community' %}
@@ -140,7 +141,7 @@
         <div style="font-weight:700;margin-bottom:.2rem">{{ (i18n or {}).get('mb_upgrade_title', '升级套餐') }}</div>
         <div style="font-size:.82rem;color:var(--t2)">
           {% if gate.locked %}
-            {{ ((i18n or {}).get('mb_upgrade_desc', '有 {n} 项功能未包含在当前档位。联系您的服务商升级套餐，或在系统设置粘贴新的授权密钥激活。')).format(n=gate.locked|length) }}
+            {{ ((i18n or {}).get('mb_upgrade_desc', '有 {n} 项功能未包含在当前档位。联系您的服务商升级套餐，或在下方「激活授权」粘贴新的授权密钥。')).format(n=gate.locked|length) }}
           {% else %}
             {{ (i18n or {}).get('mb_upgrade_all_clear', '当前档位已解锁全部功能。') }}
           {% endif %}
@@ -150,10 +151,72 @@
       <a href="{{ mb.shop.url }}" target="_blank" rel="noopener" class="btn btn-p btn-sm">{{ (i18n or {}).get('mb_buy_cta', '购买 / 续费') }}</a>
       {% endif %}
       {% if user_role == 'master' %}
-      <a href="/settings#license" class="btn {{ 'btn-sm' if mb.shop.url else 'btn-p btn-sm' }}">{{ (i18n or {}).get('mb_goto_activate', '去激活授权') }}</a>
+      {#- P0-IA：激活表单已在本页下方（#mb-activate 页内锚点），不再跳系统设置 -#}
+      <a href="#mb-activate" class="btn {{ 'btn-sm' if mb.shop.url else 'btn-p btn-sm' }}">{{ (i18n or {}).get('mb_goto_activate', '去激活授权') }}</a>
       {% endif %}
     </div>
   </div>
+  {% endif %}
+
+  {#- 激活授权（P0-IA）：粘贴 key → /api/admin/license/activate（验签通过才写
+      config/license.key 并热 reload）。表单自系统设置迁入——本页=授权唯一主场
+      （看档位 / 购买 / 激活 / 兑换），与「去激活授权」CTA 同权限面（master）。 -#}
+  {% if user_role == 'master' %}
+  <div class="card" id="mb-activate" style="margin-bottom:1.2rem">
+    <div class="card-h"><h3>{{ (i18n or {}).get('mb_activate_title', '激活授权') }}</h3></div>
+    <div style="padding:.8rem 1rem">
+      <div style="font-size:.82rem;color:var(--t2);margin-bottom:.6rem">{{ (i18n or {}).get('mb_activate_desc', '粘贴厂商签发的授权码（license key），激活成功立即生效；无效或过期的授权码不会写入。') }}</div>
+      <textarea id="mb-activate-input" rows="3" autocomplete="off" spellcheck="false"
+                placeholder="{{ (i18n or {}).get('mb_activate_ph', 'eyJzdWIi…（粘贴授权码）') }}"
+                style="width:100%;box-sizing:border-box;padding:.45rem .6rem;border:1px solid var(--bd);border-radius:6px;background:var(--input);color:var(--t1);font-family:monospace;font-size:.78rem;resize:vertical"></textarea>
+      <div style="display:flex;align-items:center;gap:.6rem;margin-top:.55rem;flex-wrap:wrap">
+        <button id="mb-activate-btn" class="btn btn-p btn-sm" type="button">{{ (i18n or {}).get('mb_activate_btn', '激活') }}</button>
+        <span id="mb-activate-msg" style="font-size:.8rem;display:none"></span>
+      </div>
+    </div>
+  </div>
+  <script>
+  (function(){
+    var btn = document.getElementById('mb-activate-btn');
+    var inp = document.getElementById('mb-activate-input');
+    var msg = document.getElementById('mb-activate-msg');
+    if (!btn || !inp || !msg) return;
+    /* 经锚点进入（本页「去激活授权」CTA / 系统设置指路 /membership#mb-activate）
+       → 自动聚焦输入框，落地即可粘贴 */
+    if (location.hash === '#mb-activate') { setTimeout(function(){ inp.focus(); }, 150); }
+    var T_EMPTY = {{ (i18n or {}).get('mb_activate_empty', '请先粘贴授权码')|tojson }};
+    var T_OK = {{ (i18n or {}).get('mb_activate_ok', '激活成功，正在刷新…')|tojson }};
+    var T_FAIL = {{ (i18n or {}).get('mb_activate_fail', '激活失败：')|tojson }};
+    function show(text, ok){
+      msg.style.display = 'inline';
+      msg.style.color = ok ? 'var(--green)' : 'var(--red,#ef4444)';
+      msg.textContent = text;
+    }
+    btn.addEventListener('click', function(){
+      var v = (inp.value || '').trim();
+      if (!v) { show(T_EMPTY, false); inp.focus(); return; }
+      btn.disabled = true;
+      window.apiFetch('/api/admin/license/activate', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({key: v})
+      }, {timeoutMs: 30000}).then(function(r){
+        return r.json().then(function(d){ return {ok: r.ok, d: d}; });
+      }).then(function(x){
+        if (x.ok && x.d && x.d.ok) {
+          show(T_OK, true);
+          setTimeout(function(){ location.reload(); }, 1400);
+        } else {
+          show(T_FAIL + ((x.d && (x.d.detail || x.d.error)) || 'error'), false);
+          btn.disabled = false;
+        }
+      }).catch(function(){
+        show(T_FAIL + 'network error', false);
+        btn.disabled = false;
+      });
+    });
+  })();
+  </script>
   {% endif %}
 
   {#- 兑换加量包（P4c）：粘贴厂商签发的 topup 凭证 → 验签+绑定校验+幂等入账。

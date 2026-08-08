@@ -607,6 +607,12 @@ function resolveAccounts(cfg) {
     });
   }
 
+  // 启动首屏对齐：收件箱是首屏时必须走一遍 activate()——buildInboxTab 只置 active class，
+  // 而「隐藏桌面 #copilot」的逻辑只活在 activate() 里。漏掉这步 = 开机即「两个业务助手」
+  // （页面自带右栏 + 桌面空壳侧栏并排；Option C 默认无 rail 可点，activate 永远不会被触发，
+  // 双栏成为常态——2026-08-03 安装版实锤）。
+  if (inboxOn) activate(INBOX_ID);
+
   initCopilot();
   if (inboxOn) {
     const ob = document.getElementById("cp-open-inbox");

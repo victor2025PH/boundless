@@ -67,12 +67,13 @@ def register_strategy_routes(app, ctx):
         if not ok:
             raise HTTPException(500, msg)
         actor = request.session.get("username", "api")
-        _auto_snapshot("reply_strategies", snap_content, actor)
+        snap_id = _auto_snapshot("reply_strategies", snap_content, actor) or ""
         sm = _get_sm()
         if sm and hasattr(sm, "_refresh_strategies"):
             sm._refresh_strategies()
         if audit_store:
-            audit_store.log(actor, "update_strategy", strategy_id, "", str(body)[:100])
+            audit_store.log(actor, "update_strategy", strategy_id, "",
+                            str(body)[:100], snap_id)
         return {"ok": True, "strategy_id": strategy_id}
 
     @app.put("/api/strategies/mapping")

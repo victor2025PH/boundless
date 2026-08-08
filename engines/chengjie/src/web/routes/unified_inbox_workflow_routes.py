@@ -136,6 +136,7 @@ def register_workflow_routes(app, *, api_auth) -> None:
         silence_hours = 0.0
         churn_risk_level = ""
         risk_signals: List[Dict[str, Any]] = []
+        meta: Dict[str, Any] = {}
 
         if store is not None:
             try:
@@ -206,24 +207,111 @@ def register_workflow_routes(app, *, api_auth) -> None:
             limit=6,
             followup_task_enabled=_followup_on,
         )
-        # P1-198 情绪标记状态化：当前生效情绪 = conv_tags ∩ 情绪词表（后打的胜出）。
-        # 单一事实源在 recommender.MOOD_TAGS，前端据此高亮 chip + 显示「当前情绪」行。
+        # P1-198 情绪标记状态化（2026-08-02 拆双维度）：
+        #   current_mood      = conv_tags ∩ emotion 组（后打的胜出）——坐席标注的客户情绪
+        #   current_attention = conv_tags ∩ attention 组——跟进状态（不进 AI 仲裁）
+        #   mood_manual       = 转向信号状态（effective_mood：TTL/在场校验；供卡片显示
+        #                       「x 小时前 / 已失效」，与消费链完全同一判据——预判≠护栏是大忌）
+        #   ai_emotion        = 机器自动分析（last_emotion/intensity/trend）——让坐席看见
+        #                       「AI 自己的判断」，人工标注的覆写语义才立得住
+        # 单一事实源在 recommender.MOOD_TAGS_*，前端据此高亮 chip + 状态行。
         current_mood = ""
+        current_attention = ""
+        mood_manual: Dict[str, Any] = {}
+        ai_emotion: Dict[str, Any] = {}
+        _mood_ms: Dict[str, Any] = {"enabled": True, "ttl_hours": 24.0}
         if store is not None:
             try:
-                from src.inbox.next_action_recommender import MOOD_TAGS
+                from src.inbox.effective_mood import (
+                    manual_mood_state,
+                    resolve_mood_steering_cfg,
+                )
+                from src.inbox.next_action_recommender import (
+                    MOOD_TAGS_ATTENTION,
+                    MOOD_TAGS_EMOTION,
+                )
                 _tags = store.get_conv_tags(conversation_id) or []
                 for _t in reversed(list(_tags)):
-                    if _t in MOOD_TAGS:
+                    if not current_mood and _t in MOOD_TAGS_EMOTION:
                         current_mood = _t
+                    if not current_attention and _t in MOOD_TAGS_ATTENTION:
+                        current_attention = _t
+                    if current_mood and current_attention:
                         break
+                import time as _t2
+                _cfg_root = getattr(
+                    getattr(request.app.state, "config_manager", None),
+                    "config", None) or {}
+                _mood_ms = resolve_mood_steering_cfg(_cfg_root)
+                _st = manual_mood_state(
+                    meta, now=_t2.time(), ttl_hours=_mood_ms["ttl_hours"])
+                _same = bool(current_mood and _st.get("tag") == current_mood)
+                mood_manual = {
+                    "tag": current_mood,
+                    "active": bool(
+                        _mood_ms["enabled"] and _same and _st.get("active")),
+                    "age_hours": (
+                        round(float(_st.get("age_hours") or 0.0), 1)
+                        if (_same and float(_st.get("age_hours") or -1) >= 0)
+                        else None),
+                    "by": _st.get("by") if _same else "",
+                }
+                ai_emotion = {
+                    "label": str((meta or {}).get("last_emotion") or ""),
+                    "intensity": float(
+                        (meta or {}).get("last_emotion_intensity", -1) or -1),
+                    "trend": str((meta or {}).get("emotion_trend") or ""),
+                }
             except Exception:
                 logger.debug("next-actions 读当前情绪失败（已忽略）", exc_info=True)
+        # 情绪卡展示层 i18n（值仍存中文 canonical；EN 界面此前直显中文，P1-198 客户实测点名）
+        try:
+            from src.inbox.next_action_recommender import MOOD_TAG_I18N
+            for _a in actions:
+                if _a.get("action_id") == "__add_internal_note":
+                    _a["name"] = tr(request, "inbox.nba.note_name", _a.get("name"))
+                    _cfg_n = dict(_a.get("config") or {})
+                    _cfg_n["hint"] = tr(
+                        request, "inbox.nba.note_hint", _cfg_n.get("hint"))
+                    _a["config"] = _cfg_n
+                    continue
+                if _a.get("action_id") != "__add_mood_tag":
+                    continue
+                _a["name"] = tr(request, "inbox.nba.mood_name", _a.get("name"))
+                _hint_key = (
+                    "inbox.nba.mood_hint_steer"
+                    if _mood_ms.get("enabled") else "inbox.nba.mood_hint_plain")
+                _cfg_a = dict(_a.get("config") or {})
+                _cfg_a["hint"] = tr(
+                    request, _hint_key, _cfg_a.get("hint"),
+                    ttl=int(_mood_ms.get("ttl_hours") or 24))
+                _grp_label = {
+                    "emotion": tr(request, "inbox.nba.grp_emotion", "客户情绪"),
+                    "attention": tr(request, "inbox.nba.grp_attention", "跟进状态"),
+                }
+                _cfg_a["tag_groups"] = [
+                    {
+                        "key": g.get("key") or "",
+                        "label": _grp_label.get(g.get("key") or "", ""),
+                        "options": [
+                            {"value": v,
+                             "label": tr(request, MOOD_TAG_I18N.get(v, ""), v)}
+                            for v in (g.get("options") or [])
+                        ],
+                    }
+                    for g in (_cfg_a.get("tag_groups") or [])
+                ]
+                _a["config"] = _cfg_a
+        except Exception:
+            logger.debug("next-actions 情绪卡 i18n 失败（已忽略）", exc_info=True)
         return {
             "ok": True,
             "conversation_id": conversation_id,
             "actions": actions,
             "current_mood": current_mood,
+            "current_attention": current_attention,
+            "mood_manual": mood_manual,
+            "ai_emotion": ai_emotion,
             "context": {
                 "message_count": message_count,
                 "silence_hours": round(silence_hours, 1),
@@ -276,19 +364,21 @@ def register_workflow_routes(app, *, api_auth) -> None:
                         result["error"] = tr(request, "err.ws.task_create_failed")
 
         elif action_type == "tag":
-            # 添加标签（情绪状态标签互斥：同词表内旧值被新值替换——「当前情绪」是
-            # 单选状态而非集合，否则「情绪低落」「积极开朗」并存让看板没法读）
+            # 添加标签（情绪/跟进两组组内互斥，见 merge_mood_tag；情绪组同步落
+            # arbitration 列 → AI 语气/主动节奏/让路在 TTL 窗内跟随，effective_mood
+            # 是唯一仲裁口径）。词表单一事实源仍在 recommender.MOOD_TAGS。
             tag = str(config.get("tag") or "")
             if tag and store:
                 try:
-                    from src.inbox.next_action_recommender import MOOD_TAGS
-                    existing_tags = store.get_conv_tags(conversation_id)
-                    if tag in MOOD_TAGS:
-                        existing_tags = [
-                            t for t in existing_tags if t not in MOOD_TAGS]
-                    if tag not in existing_tags:
-                        store.set_conv_tags(conversation_id, existing_tags + [tag])
+                    from src.inbox.effective_mood import apply_mood_tag
+                    _agent = str(
+                        request.session.get("agent_id")
+                        or request.session.get("username") or "")
+                    _r = apply_mood_tag(
+                        store, conversation_id, tag, by=_agent, now=now)
                     result["tag"] = tag
+                    if _r.get("mood_manual"):
+                        result["mood_manual"] = _r["mood_manual"]
                 except Exception:
                     pass
 
