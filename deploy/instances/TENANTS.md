@@ -355,6 +355,11 @@ license exp，托管卡连 expires_at 字段都没有）。三件套：
 → 公网 502 出友好页（含同档续费深链）→ 续费单 → **自动复机+叠期+续费串回填** →
 公网 200。三笔演练订单已标 cancelled（防污染营收台账）、额度覆写已清、实例全拆。
 
+**演练已工具化（P6 收尾）**：`python tools/drill_tenant_lifecycle.py --confirm`
+一键复验六段闭环（下单→交付→自动停→友好页→续费复机→全清；无 --confirm 只打印
+计划零副作用；实测 ~2min PASS）。**刻意不进计划任务/gate_sweep**——每跑真开实例/
+真签 LE 证书/真发告警，改完履约/生命周期代码后按需跑。
+
 **演练抓出的真 bug（已修+回归钉住）**：续费单曾被误判**首开**——把**初始密码再次
 回填**给客户、且暂停旗残留（分裂态）。根因两层：① `cmd_provision` 幂等重入时
 **整卡重写**（`build_tenant_card` 直写）抹掉 `expires_at/expiry_order/public_url` 等
