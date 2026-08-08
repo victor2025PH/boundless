@@ -113,6 +113,49 @@ def _card_write_expiry(instance_id: str, fields: Dict[str, Any]) -> None:
         pass
 
 
+def _usage_trend_sample(site: str, key: str) -> None:
+    """采一轮租户 AI 用量进本地趋势台账 + 判「建议升级套餐」（P7，2026-08-08）。
+
+    网关只留 3 天按日用量 → 趋势只能本地攒。软失败绝不拖履约；30min 节流
+    （tick 5min 一次，日线采样 30min 粒度足够）。提示走 emit_tenant_alert
+    （TG 中继），同一租户 7 天最多一次。
+    """
+    from src.ops import tenant_usage_trend as tut
+    try:
+        now = time.time()
+        ledger = tut.load_ledger()
+        if not tut.sample_due(ledger, now):
+            return
+        req = urllib.request.Request(
+            f"{site.rstrip('/')}/api/admin/gw-budget",
+            headers={"x-setup-key": key}, method="GET")
+        with urllib.request.urlopen(req, timeout=30) as r:
+            resp = json.loads(r.read().decode("utf-8"))
+        if not resp.get("ok"):
+            return
+        day = tut.day_key(now)
+        for row in resp.get("overrides") or []:
+            tut.upsert_sample(ledger, day, str(row.get("subject") or ""),
+                              int(row.get("used_today") or 0),
+                              int(row.get("budget") or 0))
+        tut.prune_ledger(ledger, day)
+        ledger["last_sample_ts"] = int(now)
+        for h in tut.upgrade_hints(ledger, day):
+            if not tut.should_send_hint(ledger, h["subject"], now):
+                continue
+            tl.emit_tenant_alert(
+                "tenant_upgrade_hint",
+                f"⤴️ 租户 {h['subject'][4:]} 近 {h['days_seen']} 天里 {h['hot_days']} 天"
+                f"用到 ≥80% AI 日额度（均值 {h['avg_ratio']:.0%}，现额度 "
+                f"{h['budget']:,}/日）——建议向客户提议升级套餐或提额"
+                f"（POST /api/admin/gw-budget）",
+                account_id=h["subject"][4:], debounce_sec=3600)
+            tut.mark_hint_sent(ledger, h["subject"], now)
+        tut.save_ledger(ledger)
+    except Exception as e:  # noqa: BLE001 - 观测面绝不拖垮履约
+        print(f"[警告] 用量趋势采样失败（忽略）: {e}", file=sys.stderr)
+
+
 def _dns_sentinel(st: dict) -> None:
     """泛解析就绪哨兵：每小时经 VPS（域外视角）探一次 ``*.bd2026.cc``。
 
@@ -684,6 +727,8 @@ def main(argv=None) -> int:
         _dns_sentinel(st)
         if st != before:
             save_state(st)
+        # 用量趋势采样 + 升级提示（30min 节流；台账在 .ops，软失败）
+        _usage_trend_sample(site, key)
     print(f"[托管履约] 完成：开通 {res['handled']} 单，持单 {res.get('held', 0)} 单，"
           f"转人工 {res['manual']} 单{'（dry-run）' if args.dry_run else ''}")
     return 0

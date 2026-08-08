@@ -355,6 +355,14 @@ license exp，托管卡连 expires_at 字段都没有）。三件套：
 → 公网 502 出友好页（含同档续费深链）→ 续费单 → **自动复机+叠期+续费串回填** →
 公网 200。三笔演练订单已标 cancelled（防污染营收台账）、额度覆写已清、实例全拆。
 
+**用量趋势 + 升级建议（2026-08-08 P7）**：网关只留 **3 天**按日用量（pruneOldDays）
+→ 趋势台账本地攒：履约守护 tick 内 30min 节流采 `GET /api/admin/gw-budget`
+（overrides 自带全部主体 used_today）→ `D:\chengjie-instances\.ops\gw_usage_trend.json`
+（(日,主体) 取 max，保 60 天；纯核心 `src/ops/tenant_usage_trend.py`）。判据：近 7 天
+≥3 天用到 ≥80% 日额度（仅 IID: 租户）→ TG 提示「建议升级套餐/提额」（同租户 7 天
+去重）。报表：`python tools/gw_usage_report.py [--days 30] [--fetch]`。
+门禁 `tests/test_tenant_usage_trend.py`（max 归并/prune/判据边界/去重/节流 6 例）。
+
 **演练已工具化（P6 收尾）**：`python tools/drill_tenant_lifecycle.py --confirm`
 一键复验六段闭环（下单→交付→自动停→友好页→续费复机→全清；无 --confirm 只打印
 计划零副作用；实测 ~2min PASS）。**刻意不进计划任务/gate_sweep**——每跑真开实例/
