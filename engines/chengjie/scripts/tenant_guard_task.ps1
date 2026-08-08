@@ -6,6 +6,8 @@
 #            （公网未就绪=持单+告警，绝不给客户发打不开的网址；机密同装机守护目录）
 #   watch    每 10 分钟：租户自愈一轮（DOWN 且应在跑 → 幂等拉起；suspended 旗尊重；
 #            冷却/连败转人工由 tenant_ops watch 内建；生产双实例不在管辖）
+#            + 到期治理：写/清客户侧到期横幅数据 + 逾期超宽限自动停机
+#            （-AutoSuspendGraceDays 3 默认开；0=只告警不停；续费单到账自动复机）
 #   backup   每日 04:40：全租户灾备快照（SQLite backup API，活库安全；保留 7 份）
 #
 # 机密（仅 fulfill 需要，与装机守护共用目录 D:\chengjie-instances\.ops\fulfill\）：
@@ -31,7 +33,10 @@ param(
     [int]$FulfillIntervalMin = 5,
     [int]$WatchIntervalMin = 10,
     [string]$BackupTime = '04:40',
-    [string]$SecretsDir = 'D:\chengjie-instances\.ops\fulfill'
+    [string]$SecretsDir = 'D:\chengjie-instances\.ops\fulfill',
+    # 到期自动停机宽限（天）：0=关。默认 3 = P3/P4（2026-08-08）决议开闸——安全轨
+    # （只停订单驱动卡/受保护绝不停/续费自动复机）全在 tenant_ops，本参数只是开关。
+    [double]$AutoSuspendGraceDays = 3
 )
 
 $ErrorActionPreference = 'Continue'
@@ -116,8 +121,8 @@ switch ($Mode) {
         $env:ADMIN_KEY = ''
     }
     'watch' {
-        & python scripts/tenant_ops.py watch 2>&1 | ForEach-Object { $_.ToString() } |
-            Out-File $log -Append -Encoding utf8
+        & python scripts/tenant_ops.py watch --auto-suspend-grace-days $AutoSuspendGraceDays 2>&1 |
+            ForEach-Object { $_.ToString() } | Out-File $log -Append -Encoding utf8
         $rc = $LASTEXITCODE
     }
     'backup' {

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<!-- tenant_down.html — 托管租户后端不可达时的友好页（P5，2026-08-08）。
+     部署位：VPS /var/www/html/__tenant_down.html（tenant_ops expose 每次幂等推送，本文件为 SSOT）。
+     触发：per-tenant nginx 站点 error_page 502/503/504（实例停机/隧道断都落这里）。
+     措辞必须同时诚实覆盖「订阅到期被暂停」与「我方故障」两种情形——nginx 层不知道
+     具体原因，条件句表述 + 续费 CTA + 60s 自动刷新（故障恢复后客户无需手动重试）。 -->
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta http-equiv="refresh" content="60">
+<title>服务暂时不可用 · Service Unavailable</title>
+<style>
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+       background:#0f172a;color:#e2e8f0;display:flex;min-height:100vh;align-items:center;justify-content:center;}
+  .card{max-width:560px;width:92vw;background:#1e293b;border:1px solid #334155;border-radius:16px;
+        padding:2.2rem 2rem;text-align:center;box-shadow:0 8px 40px rgba(0,0,0,.35);}
+  .emoji{font-size:2.6rem;margin-bottom:.6rem;}
+  h1{font-size:1.15rem;margin:.2rem 0 .9rem;color:#f1f5f9;}
+  p{font-size:.88rem;line-height:1.8;color:#94a3b8;margin:.4rem 0;text-align:left;}
+  .en{border-top:1px dashed #334155;margin-top:1.1rem;padding-top:1rem;}
+  .cta{display:inline-block;margin-top:1.2rem;padding:.65rem 1.6rem;border-radius:10px;background:#2563eb;
+       color:#fff;font-weight:600;text-decoration:none;font-size:.92rem;}
+  .cta:hover{background:#1d4ed8;}
+  .hint{font-size:.78rem;color:#64748b;margin-top:1rem;}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="emoji">⏸️</div>
+  <h1>服务暂时不可用 / Service temporarily unavailable</h1>
+  <p>您的工作台此刻无法访问，可能的原因：</p>
+  <p>① <strong>订阅已到期被暂停</strong>——续费后系统会在几分钟内自动恢复，无需联系我们；<br>
+     ② <strong>系统维护或网络抖动</strong>——通常几分钟内自愈，本页每 60 秒自动重试。</p>
+  <p class="en">Your workspace is unreachable right now. If your subscription has
+     expired, service resumes automatically within minutes after renewal.
+     Otherwise we are likely doing maintenance — this page retries every 60s.</p>
+  <a class="cta" href="https://bd2026.cc/order?delivery=hosted">立即续费 / Renew now</a>
+  <div class="hint">续费后仍无法访问？请通过您的专属客服渠道联系我们。<br>
+       Still unreachable after renewal? Contact us via your support channel.</div>
+</div>
+</body>
+</html>

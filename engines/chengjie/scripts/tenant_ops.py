@@ -12,6 +12,7 @@
   python scripts/tenant_ops.py list                                       # 已登记租户
   python scripts/tenant_ops.py status                                     # 各租户运行态（只读）
   python scripts/tenant_ops.py suspend zhiliao_acme_ltd --reason overdue  # 欠费暂停（停进程+落 flag）
+  python scripts/tenant_ops.py protect zhiliao_acme_ltd --reason "坐席生产入口"  # 标记受保护（危险命令须 --force-protected）
   python scripts/tenant_ops.py resume  zhiliao_acme_ltd                   # 恢复（删 flag+拉起+等就绪）
   python scripts/tenant_ops.py export  zhiliao_acme_ltd                   # 退租数据导出（要求已停；--force 越过）
   python scripts/tenant_ops.py deprovision zhiliao_acme_ltd               # 退租=暂停+导出（数据保留原地，人工删）
@@ -149,17 +150,22 @@ def cmd_provision(args) -> int:
     # 2) domains junction
     print(f"[apply] {tl.ensure_junction(plan.data_dir, str(ENGINE_DOMAINS))}")
 
-    # 2b) AI 预设注入（厂商侧 .ops\tenant_ai_preset.yaml；缺文件即跳过——AI Key 分发是运营决策）
+    # 2b) 租户预设注入（厂商侧 .ops\tenant_ai_preset.yaml；缺文件即跳过）。
+    #     2026-08-08 起支持多段（ai / licensing / platform_login）：托管 AI 网关 +
+    #     渠道凭据池随开通自动接线；credpool.license_key=AUTO 自动签发每租户专属卡密。
     if not args.no_ai_preset:
-        ai_cfg = tl.load_ai_preset(tl.ai_preset_path())
-        if ai_cfg:
+        preset = tl.load_tenant_preset(tl.ai_preset_path())
+        if preset:
+            lic = tl.resolve_preset_license(preset, plan.instance_id)
+            if lic:
+                print(f"[apply] credpool 卡密（本租户专属）：{lic}")
             overlay_path = Path(plan.data_dir) / "config" / "config.local.yaml"
-            keys = tl.inject_ai_preset(overlay_path, ai_cfg)
-            print(f"[apply] AI 预设注入 ai.{{{', '.join(keys)}}}"
-                  f"（api_key={tl.mask_secret(ai_cfg.get('api_key'))}）")
+            keys = tl.inject_tenant_preset(overlay_path, preset)
+            print(f"[apply] 租户预设注入 {len(keys)} 键：{', '.join(keys[:8])}"
+                  + ("…" if len(keys) > 8 else ""))
         else:
-            print("[apply] 无 AI 预设（.ops\\tenant_ai_preset.yaml 未配置）——"
-                  "正式租户开通前用 set-ai 注入，否则 AI 为占位不可用")
+            print("[apply] 无租户预设（.ops\\tenant_ai_preset.yaml 未配置）——"
+                  "正式租户开通前用 set-ai 注入，否则 AI/渠道为占位不可用")
 
     # 3) stack 登记（幂等；enabled=false——租户拉起走本 CLI）
     stack, action = upsert_stack_entry(stack, build_stack_entry(plan))
@@ -214,9 +220,12 @@ def cmd_provision(args) -> int:
     else:
         print("[apply] 实例未就绪，跳过客户账号创建（resume 后重跑 provision 补建）")
 
-    # 6) 交付卡
+    # 6) 交付卡（幂等重入=合并而非整卡重写：到期账本/订单关联/公网暴露状态是
+    #    履约守护与 expose 写入的事实，provision 无权抹除——2026-08-08 P6 真单
+    #    演练实锤：整卡重写导致续费单被误判首开、初始密码被再次回填给客户）
     card = tl.build_tenant_card(plan.to_dict(), token, status=status,
                                 owner_user=owner_user, owner_password=owner_pw)
+    card = tl.merge_preserved_card_fields(card, _read_card(plan.data_dir))
     card_path = tl.tenant_card_path(plan.data_dir)
     card_path.write_text(json.dumps(card, ensure_ascii=False, indent=2) + "\n",
                          encoding="utf-8")
@@ -240,8 +249,9 @@ def cmd_list(_args) -> int:
         return 0
     for svc in tenants:
         iid = tl.instance_id_of(svc)
+        prot = "🔒受保护  " if tl.is_protected(iid) else ""
         print(f"  {iid:28} web={tl.web_port_of_service(svc)}  "
-              f"enabled={svc.get('enabled')}  {svc.get('title', '')}")
+              f"enabled={svc.get('enabled')}  {prot}{svc.get('title', '')}")
     return 0
 
 
@@ -272,9 +282,11 @@ def cmd_status(_args) -> int:
             username=str(card.get("username") or "admin"))
         pw = {True: "初始", False: "已改", None: "?"}[init]
         pub = str(card.get("public_url") or "-")
-        print(f"{iid:28} {port or '-':>6} {code or '-':>5} {state:12} {pw:6} {pub:24} {title}")
+        prot = "🔒 " if tl.is_protected(iid) else ""
+        print(f"{iid:28} {port or '-':>6} {code or '-':>5} {state:12} {pw:6} {pub:24} {prot}{title}")
     print("\n注：租户自愈走本 CLI 的 watch 子命令（建议挂计划任务，见 TENANTS.md；"
-          "生产 watchdog_instances 只管 zhiliao/tongyi）；SUSPENDED 旗在 .ops\\suspended\\。")
+          "生产 watchdog_instances 只管 zhiliao/tongyi）；SUSPENDED 旗在 .ops\\suspended\\；"
+          "🔒=受保护租户（suspend/deprovision/restore/unexpose 须 --force-protected）。")
     print("「密码=初始」表示客户仍在用交付初始密码（未改），可提示其在 设置→修改密码 自改。")
     return 0
 
@@ -296,13 +308,68 @@ def _tenant_ctx(instance_id: str):
     return svc, port, data_dir
 
 
-def cmd_suspend(args) -> int:
-    svc, port, data_dir = _tenant_ctx(args.instance_id)
-    r = tl.stop_tenant(port, data_dir, grace_sec=args.grace)
+def _guard_protected(instance_id: str, action: str, force: bool) -> None:
+    """受保护租户闸（真人在用＝生产资产）：拒绝时推 TG 留痕；--force-protected 破玻璃也留痕。
+
+    2026-08-07 事故沉淀：坐席在 pilot 上工作时它被当演练件 suspend → 全员 502。
+    拦截与破玻璃都要**可见**——机制防误操作，告警防「静默地正确执行了错误的事」。
+    """
+    try:
+        tl.guard_not_protected(instance_id, action, override=force)
+    except ValueError as e:
+        tl.emit_tenant_alert(
+            "tenant_protected_blocked",
+            f"🛡️ 受保护租户 {instance_id} 的 {action} 已被拦截（未加 --force-protected）",
+            account_id=instance_id, debounce_sec=600)
+        raise SystemExit(f"[拒绝] {e}") from None
+    if force and tl.is_protected(instance_id):
+        tl.emit_tenant_alert(
+            "tenant_protected_override",
+            f"⚠️ 受保护租户 {instance_id} 被 --force-protected 强制执行 {action}"
+            f"（保护原因：{tl.protected_reason(instance_id) or '-'}）",
+            account_id=instance_id, debounce_sec=60)
+        print(f"[警告] {instance_id} 受保护：--force-protected 强制执行 {action}（已推 TG 留痕）")
+
+
+def _suspend_core(instance_id: str, port: int, data_dir: str,
+                  reason: str, grace_sec: int = 8) -> None:
+    """停进程 + 落暂停旗 + 卡状态（人工 suspend 与到期自动停共用同一套动作）。"""
+    r = tl.stop_tenant(port, data_dir, grace_sec=grace_sec)
     print(f"[suspend] {r['note']}  stopped={r['stopped']}")
-    flag = tl.write_suspend_flag(args.instance_id, args.reason)
+    flag = tl.write_suspend_flag(instance_id, reason)
     _update_card(data_dir, status="suspended")
     print(f"[suspend] 旗已落: {flag}")
+
+
+def cmd_suspend(args) -> int:
+    svc, port, data_dir = _tenant_ctx(args.instance_id)
+    _guard_protected(args.instance_id, "suspend", args.force_protected)
+    _suspend_core(args.instance_id, port, data_dir, args.reason, grace_sec=args.grace)
+    # 已公网暴露的实例被停＝入口对外变 502，无论是否受保护都要可见
+    # （2026-08-07 事故里 suspend 全程静默，老板比机器先发现）
+    card = _read_card(data_dir)
+    if card.get("exposed"):
+        tl.emit_tenant_alert(
+            "tenant_suspended",
+            f"⏸️ 已暴露租户 {args.instance_id} 被 suspend（reason={args.reason}）"
+            f"——公网入口 {card.get('public_url') or '-'} 将 502，恢复用 "
+            f"tenant_ops resume {args.instance_id}",
+            account_id=args.instance_id, debounce_sec=60)
+    return 0
+
+
+def cmd_protect(args) -> int:
+    _svc, _port, data_dir = _tenant_ctx(args.instance_id)
+    if args.off:
+        removed = tl.clear_protected_flag(args.instance_id)
+        _update_card(data_dir, protected=False)
+        print(f"[protect] {args.instance_id} " + ("保护已解除" if removed else "本就未保护（幂等）"))
+        return 0
+    flag = tl.write_protected_flag(args.instance_id, args.reason)
+    _update_card(data_dir, protected=True)
+    print(f"[protect] {args.instance_id} 已标记受保护: {flag}")
+    print("[protect] 语义：suspend/deprovision/restore/unexpose 须 --force-protected"
+          "（拦截与破玻璃均推 TG 留痕）；resume/backup/watch 自愈不受限")
     return 0
 
 
@@ -363,6 +430,7 @@ def cmd_export(args) -> int:
 
 def cmd_deprovision(args) -> int:
     svc, port, data_dir = _tenant_ctx(args.instance_id)
+    _guard_protected(args.instance_id, "deprovision", args.force_protected)
     r = tl.stop_tenant(port, data_dir, grace_sec=args.grace)
     print(f"[deprovision] 停机: {r['note']}")
     tl.write_suspend_flag(args.instance_id, "deprovisioned")
@@ -376,6 +444,31 @@ def cmd_deprovision(args) -> int:
 
 
 # ────────────────────────── watch（租户自愈，一次一轮）──────────────────────────
+
+def _sync_tenant_notice(iid: str, data_dir: str, card: dict, now: float) -> None:
+    """把到期提醒写/清进租户数据区（客户侧横幅数据源；软失败不拖巡检）。
+
+    expiring/expired → 写 `<data>/config/tenant_notice.json`（含续费深链，
+    实例经 ai-runtime-status 捎带给工作台横幅）；ok/none → 删文件。
+    """
+    try:
+        path = Path(data_dir) / "config" / "tenant_notice.json"
+        notice = tl.build_tenant_notice(card, now)
+        if notice is None:
+            path.unlink(missing_ok=True)
+            return
+        from src.ops import tenant_fulfillment as tf
+        notice.update({
+            "instance_id": iid,
+            "written_at": int(now),
+            "renew_url": tf.renew_order_url(str(card.get("last_order_sku") or "")),
+        })
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(notice, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8")
+    except Exception as e:  # noqa: BLE001 - 提醒文件绝不拖垮巡检本务
+        print(f"[watch] {iid:24} 到期提醒文件同步失败（忽略）: {e}", file=sys.stderr)
+
 
 def cmd_watch(args) -> int:
     """一轮巡检：探活全部租户 → DOWN 且应在跑的经启动器幂等拉起（冷却/连败转人工）。
@@ -440,17 +533,74 @@ def cmd_watch(args) -> int:
                     "tenant_down", f"🏠 托管租户 {iid} 反复拉起失败已转人工：{d['reason']}",
                     account_id=iid, debounce_sec=4 * 3600)
                 worst = 1
-    # ── 到期治理巡检（首版=告警转人工，绝不自动 suspend——续费单与实例的关联
-    #    机制未建，自动停有误伤收入风险；到期账本由履约守护随交付写入 expires_at）──
+    # ── 边缘探针（公网入口整链：DNS→VPS nginx→反向隧道→本机端口）──
+    #    本地绿灯≠坐席可达（2026-08-07 pilot 事故：入口断腿时本地探针全绿，老板比机器
+    #    先发现）。只探「应在跑+未暂停+已暴露+本地健康」的租户；本地不健康归上面自愈路径，
+    #    边缘层不重复计数。决策纯函数 plan_edge_actions；自愈=踢隧道（runner 10s 重连）。
+    if not args.no_edge:
+        local_ok = {f.instance_id: f.http_ok for f in facts}
+        edge_facts = []
+        for iid, (_s2, _p2, _d2, card2) in meta.items():
+            if (tl.suspended_flag_path(iid).exists()
+                    or str(card2.get("status") or "") != "running"
+                    or not card2.get("exposed") or not card2.get("public_url")
+                    or not local_ok.get(iid)):
+                continue
+            url = str(card2["public_url"]).rstrip("/") + "/login"
+            ecode, _t = _probe_public(url, tries=2, interval=2.0)
+            edge_facts.append(tl.EdgeFact(instance_id=iid, edge_ok=(ecode == 200)))
+        if edge_facts:
+            edge_decisions, edge_state = tl.plan_edge_actions(
+                edge_facts, state, time.time(),
+                strike_limit=args.edge_strikes,
+                kick_cooldown_sec=args.edge_kick_cooldown)
+            for d in edge_decisions:
+                iid = d["instance_id"]
+                if d["action"] == "ok":
+                    continue
+                print(f"[watch] {iid:24} edge:{d['action']:11} {d['reason']}")
+                if d["action"] == "kick_tunnel":
+                    print(f"[watch] {iid:24} {tl.kick_tunnel()}")
+                elif d["action"] == "alert":
+                    pub = str((meta[iid][3] or {}).get("public_url") or "")
+                    tl.emit_tenant_alert(
+                        "tenant_edge_down",
+                        f"🌐 托管租户 {iid} 公网入口不可达（本地实例健康 → 隧道/VPS/nginx "
+                        f"腿断，已自动踢隧道仍未恢复）：{pub}",
+                        account_id=iid, debounce_sec=1800)
+                    worst = 1
+            new_state[tl.EDGE_STATE_KEY] = edge_state
+    # ── 到期治理巡检（告警为主；自动停机是 opt-in——`--auto-suspend-grace-days N`
+    #    且只对订单驱动卡生效，安全轨全在 tl.should_auto_suspend 纯函数）──
     now = time.time()
-    for iid, (_svc, _port, _data_dir, card) in meta.items():
+    auto_grace = float(getattr(args, "auto_suspend_grace_days", 0) or 0)
+    for iid, (_svc, port, data_dir, card) in meta.items():
         # 已停机=到期口径已执行（或运营主动停），不再催——否则 suspend 后告警响到永远
         if str(card.get("status") or "") != "running":
             continue
+        _sync_tenant_notice(iid, data_dir, card, now)
         state_name, days = tl.expiry_status(card, now)
         if state_name == "expired":
+            act, why = tl.should_auto_suspend(
+                card, now, grace_days=auto_grace,
+                protected=tl.is_protected(iid),
+                suspended=tl.suspended_flag_path(iid).exists())
+            if act:
+                try:
+                    _suspend_core(iid, port, data_dir,
+                                  reason=f"auto_expired:{card.get('expiry_order')}")
+                    print(f"[watch] {iid:24} AUTO-SUSPENDED  {why}")
+                    tl.emit_tenant_alert(
+                        "tenant_auto_suspended",
+                        f"⏸️ 托管租户 {iid} 到期已自动停机（{why}）——客户续费下单后"
+                        f"履约守护自动复机+叠期；人工恢复 tenant_ops resume {iid}",
+                        account_id=iid, debounce_sec=60)
+                    continue  # 已处置，不再发「转人工」告警
+                except Exception as e:  # noqa: BLE001 - 自动停失败退回告警路径
+                    print(f"[watch] {iid:24} 自动停机失败（退回人工告警）: {e}",
+                          file=sys.stderr)
             print(f"[watch] {iid:24} EXPIRED  逾期 {abs(days):.1f} 天（到期口径=停机，"
-                  f"确认未续费后人工 suspend）")
+                  f"确认未续费后人工 suspend；auto={why}）")
             tl.emit_tenant_alert(
                 "tenant_expired",
                 f"⏰ 托管租户 {iid} 已到期 {abs(days):.1f} 天（expires_at="
@@ -507,6 +657,8 @@ def cmd_backup(args) -> int:
 
 def cmd_restore(args) -> int:
     _svc, port, data_dir = _tenant_ctx(args.instance_id)
+    if not args.dry_run:  # dry-run 只读清单，不闸
+        _guard_protected(args.instance_id, "restore", args.force_protected)
     # 安全闸①：绝不覆盖运行中实例（在线解压 = 腐化正在写的 SQLite）
     code, _ = tl.probe_login(port) if port else (None, "")
     if code == 200 and not args.force:
@@ -546,15 +698,18 @@ def cmd_restore(args) -> int:
 
 def cmd_set_ai(args) -> int:
     _svc, port, data_dir = _tenant_ctx(args.instance_id)
-    preset = Path(args.preset) if args.preset else tl.ai_preset_path()
-    ai_cfg = tl.load_ai_preset(preset)
-    if not ai_cfg:
-        raise SystemExit(f"[错误] 预设无 ai 段或文件缺失: {preset}\n"
+    preset_path = Path(args.preset) if args.preset else tl.ai_preset_path()
+    preset = tl.load_tenant_preset(preset_path)
+    if not preset:
+        raise SystemExit(f"[错误] 预设无可注入段（ai/licensing/platform_login）或文件缺失: {preset_path}\n"
                          f"  样板见 {tl.ai_preset_path().with_suffix('.example.yaml')}")
+    lic = tl.resolve_preset_license(preset, args.instance_id)
+    if lic:
+        print(f"[set-ai] credpool 卡密（本租户专属）：{lic}")
     overlay = Path(data_dir) / "config" / "config.local.yaml"
-    keys = tl.inject_ai_preset(overlay, ai_cfg)
-    print(f"[set-ai] {args.instance_id}: 写入 ai.{{{', '.join(keys)}}}"
-          f"（api_key={tl.mask_secret(ai_cfg.get('api_key'))}，保注释）")
+    keys = tl.inject_tenant_preset(overlay, preset)
+    print(f"[set-ai] {args.instance_id}: 写入 {len(keys)} 键（保注释）：{', '.join(keys[:8])}"
+          + ("…" if len(keys) > 8 else ""))
     code, _ = tl.probe_login(port) if port else (None, "")
     if code == 200:
         print("[set-ai] 实例在跑：overlay 热重载约 30s 生效（保险起见可 suspend/resume 一轮）")
@@ -671,6 +826,21 @@ def cmd_expose(args) -> int:
                 raise SystemExit(f"[错误] VPS 端口 {public_port} 已被他方占用，人工核查")
         conf = tl.render_nginx_site_port(slug, public_port, port)
 
+    # 2.5) 后端不可达友好页（P5）：幂等推送仓库 SSOT → /var/www/html/__tenant_down.html
+    #      （error_page 502/503/504 的落点；推送失败只警告——缺页回落 nginx 默认 502，无害）
+    down_page = REPO_ROOT / "deploy" / "instances" / "tenant_down.html"
+    if down_page.is_file():
+        try:
+            _vps_push(down_page, "/tmp/__tenant_down.html")
+            rc, out = _vps("sudo -n mv /tmp/__tenant_down.html "
+                           "/var/www/html/__tenant_down.html && echo PAGE_OK")
+            print("[expose] 友好页已同步 ✓" if "PAGE_OK" in out
+                  else f"[警告] 友好页落位失败（不阻断）: {out[-200:]}")
+        except SystemExit as e:
+            print(f"[警告] 友好页推送失败（不阻断）: {e}", file=sys.stderr)
+    else:
+        print(f"[警告] 友好页源文件缺失（不阻断）: {down_page}", file=sys.stderr)
+
     # 3) nginx 站点（先落盘 sites-available → 软链 → nginx -t 不过即回滚，绝不带病 reload）
     import tempfile
     with tempfile.NamedTemporaryFile("w", suffix=".conf", delete=False,
@@ -719,6 +889,15 @@ def cmd_expose(args) -> int:
     # 交付卡三 URL 一并改写为公网基址（否则卡上仍是 127.0.0.1，客户打不开）
     pub_fields = tl.apply_public_base(public_url)
     _update_card(data_dir, slug=slug, exposed=True, expose_mode=mode, **pub_fields)
+    # 交付即保护（2026-08-07 事故沉淀）：已暴露＝真人要用的入口，默认自动打保护旗，
+    # 不靠人记得跑 protect；演练件（id/客户名/slug 含 drill）豁免防卡自家演练。
+    card_now = _read_card(data_dir)
+    if tl.is_drill_instance(args.instance_id, str(card_now.get("customer") or ""), slug):
+        print("[expose] 演练实例（drill*）：不自动保护（演练的 suspend/deprovision 需畅通）")
+    elif not tl.is_protected(args.instance_id):
+        tl.write_protected_flag(args.instance_id, f"auto: exposed at {public_url}")
+        _update_card(data_dir, protected=True)
+        print("[expose] 已自动标记受保护（交付即保护；解除用 protect --off）")
     print(f"\n  公网地址 = {public_url}")
     print(f"  客户登录 = {pub_fields['login_url']}   （账号/初始密码见交付卡，勿外发 auth_token）")
     return 0
@@ -726,6 +905,7 @@ def cmd_expose(args) -> int:
 
 def cmd_unexpose(args) -> int:
     _svc, _port, data_dir = _tenant_ctx(args.instance_id)
+    _guard_protected(args.instance_id, "unexpose", args.force_protected)
     card = _read_card(data_dir)
     slug = args.slug or card.get("slug") or tl.default_slug(args.instance_id)
     name = f"tenant-{slug}.conf"
@@ -767,7 +947,15 @@ def main(argv=None) -> int:
     p.add_argument("instance_id")
     p.add_argument("--reason", default="suspended")
     p.add_argument("--grace", type=int, default=8)
+    p.add_argument("--force-protected", action="store_true",
+                   help="受保护租户破玻璃（推 TG 留痕）")
     p.set_defaults(fn=cmd_suspend)
+
+    p = sub.add_parser("protect", help="标记受保护租户（真人在用；危险命令须 --force-protected）")
+    p.add_argument("instance_id")
+    p.add_argument("--off", action="store_true", help="解除保护")
+    p.add_argument("--reason", default="", help="保护原因（如：坐席生产入口）")
+    p.set_defaults(fn=cmd_protect)
 
     p = sub.add_parser("resume", help="恢复（删旗+拉起+等就绪）")
     p.add_argument("instance_id")
@@ -784,6 +972,8 @@ def main(argv=None) -> int:
     p.add_argument("instance_id")
     p.add_argument("--include-sessions", action="store_true")
     p.add_argument("--grace", type=int, default=8)
+    p.add_argument("--force-protected", action="store_true",
+                   help="受保护租户破玻璃（推 TG 留痕）")
     p.set_defaults(fn=cmd_deprovision)
 
     p = sub.add_parser("watch", help="租户自愈一轮（计划任务节拍调用；生产双实例不在内）")
@@ -791,6 +981,15 @@ def main(argv=None) -> int:
     p.add_argument("--max-fail-streak", type=int, default=3)
     p.add_argument("--ready-timeout", type=int, default=90)
     p.add_argument("--reset", default="", help="重置某租户的失败计数后退出")
+    p.add_argument("--no-edge", action="store_true",
+                   help="跳过公网边缘探针（默认开：探已暴露租户的 public_url 整链）")
+    p.add_argument("--edge-strikes", type=int, default=2,
+                   help="边缘连败几轮才动作（防公网抖动误伤）")
+    p.add_argument("--edge-kick-cooldown", type=int, default=1200,
+                   help="踢隧道的机器级冷却秒数（隧道全租户共享，防反复踢）")
+    p.add_argument("--auto-suspend-grace-days", type=float, default=0,
+                   help="到期自动停机：逾期超过 N 天自动 suspend（0=关，默认；"
+                        "只停订单驱动卡且绝不碰受保护租户，续费单到账自动复机）")
     p.set_defaults(fn=cmd_watch)
 
     p = sub.add_parser("backup", help="灾备打包（活库安全快照；含授权与登录态）")
@@ -804,6 +1003,8 @@ def main(argv=None) -> int:
     p.add_argument("--backup", default="", help="备份 zip 路径（缺省=最新一份）")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--force", action="store_true", help="越过「运行中拒恢复」闸（危险）")
+    p.add_argument("--force-protected", action="store_true",
+                   help="受保护租户破玻璃（推 TG 留痕）")
     p.set_defaults(fn=cmd_restore)
 
     p = sub.add_parser("set-ai", help="注入 AI 中转配置（读 .ops\\tenant_ai_preset.yaml，保注释写 overlay）")
@@ -820,6 +1021,8 @@ def main(argv=None) -> int:
     p = sub.add_parser("unexpose", help="公网下线（删 nginx 站点；证书/隧道保留）")
     p.add_argument("instance_id")
     p.add_argument("--slug", default="")
+    p.add_argument("--force-protected", action="store_true",
+                   help="受保护租户破玻璃（推 TG 留痕）")
     p.set_defaults(fn=cmd_unexpose)
 
     args = ap.parse_args(argv)

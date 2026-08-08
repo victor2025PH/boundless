@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import time
 import zipfile
 from pathlib import Path
 
@@ -159,6 +160,53 @@ def test_suspend_flag_write_and_path(tmp_path: Path):
     assert body["instance_id"] == "zhiliao_acme"
     assert body["reason"] == "overdue"
     assert "watchdog" in body["note"]
+
+
+# ────────────────────────── 受保护租户（2026-08-07 pilot 事故沉淀）──────────────────────────
+
+def test_protected_flag_roundtrip(tmp_path: Path):
+    ob = str(tmp_path)
+    assert tl.is_protected("zhiliao_pilot", ob) is False
+    flag = tl.write_protected_flag("zhiliao_pilot", "坐席生产入口", ops_base=ob)
+    assert flag == tl.protected_flag_path("zhiliao_pilot", ob)
+    assert tl.is_protected("zhiliao_pilot", ob) is True
+    assert tl.protected_reason("zhiliao_pilot", ob) == "坐席生产入口"
+    assert tl.clear_protected_flag("zhiliao_pilot", ob) is True
+    assert tl.is_protected("zhiliao_pilot", ob) is False
+    assert tl.clear_protected_flag("zhiliao_pilot", ob) is False  # 幂等
+
+
+def test_protected_reason_survives_corrupt_flag(tmp_path: Path):
+    ob = str(tmp_path)
+    flag = tl.protected_flag_path("t1", ob)
+    flag.parent.mkdir(parents=True)
+    flag.write_text("not-json{{{", encoding="utf-8")
+    assert tl.is_protected("t1", ob) is True        # 旗在=保护在（宁可多拦）
+    assert tl.protected_reason("t1", ob) == ""      # 原因读不出但不抛
+
+
+def test_guard_not_protected_blocks_and_overrides(tmp_path: Path):
+    ob = str(tmp_path)
+    tl.guard_not_protected("t1", "suspend", ops_base=ob)  # 未保护：放行
+    tl.write_protected_flag("t1", "prod", ops_base=ob)
+    with pytest.raises(ValueError) as ei:
+        tl.guard_not_protected("t1", "suspend", ops_base=ob)
+    msg = str(ei.value)
+    assert "受保护" in msg and "--force-protected" in msg and "suspend" in msg
+    # 显式破玻璃放行
+    tl.guard_not_protected("t1", "suspend", override=True, ops_base=ob)
+    # resume 语义由调用方保证不闸——纯函数层对任意 action 一视同仁，此处只验 override 通道
+
+
+def test_is_drill_instance_namespace():
+    # 演练件三种命名位任一命中即豁免（交付即保护的反向闸）
+    assert tl.is_drill_instance("zhiliao_drill_e2e") is True
+    assert tl.is_drill_instance("zhiliao_x", customer="drill e2e") is True
+    assert tl.is_drill_instance("zhiliao_x", slug="drill-e2e") is True
+    assert tl.is_drill_instance("zhiliao_x", customer="DRILL run") is True   # 大小写不敏感
+    # 真客户不豁免
+    assert tl.is_drill_instance("zhiliao_pilot", customer="pilot", slug="pilot") is False
+    assert tl.is_drill_instance("zhiliao_acme", customer="Acme Ltd", slug="acme") is False
 
 
 def test_tenant_card_fields_and_path():
@@ -337,6 +385,57 @@ def test_watch_state_roundtrip(tmp_path: Path):
     assert tl.load_watch_state(p) == {}  # 坏文件从零（watch 状态可再生）
 
 
+# ────────────────────────── 边缘探针决策（公网入口整链）──────────────────────────
+
+def _edge(iid="t1", ok=False):
+    return tl.EdgeFact(instance_id=iid, edge_ok=ok)
+
+
+def test_edge_ok_resets_streak():
+    st = {tl.EDGE_STATE_KEY: {"t1": {"streak": 3}, "_last_kick": 100.0}}
+    decisions, edge = tl.plan_edge_actions([_edge(ok=True)], st, now=1000.0)
+    assert decisions[0]["action"] == "ok"
+    assert edge["t1"]["streak"] == 0
+    assert edge["_last_kick"] == 100.0  # 冷却戳保留
+
+
+def test_edge_first_fail_is_strike_not_action():
+    decisions, edge = tl.plan_edge_actions([_edge()], {}, now=1000.0, strike_limit=2)
+    assert decisions[0]["action"] == "strike"
+    assert edge["t1"]["streak"] == 1
+
+
+def test_edge_strike_limit_kicks_tunnel_once_per_round():
+    st = {tl.EDGE_STATE_KEY: {"t1": {"streak": 1}, "t2": {"streak": 1}}}
+    decisions, edge = tl.plan_edge_actions(
+        [_edge("t1"), _edge("t2")], st, now=1000.0, strike_limit=2)
+    acts = [d["action"] for d in decisions]
+    # 隧道全租户共享：同轮两家都到阈也只踢一次，另一家转 alert
+    assert acts.count("kick_tunnel") == 1
+    assert acts.count("alert") == 1
+    assert edge["_last_kick"] == 1000.0
+
+
+def test_edge_kick_cooldown_escalates_to_alert():
+    st = {tl.EDGE_STATE_KEY: {"t1": {"streak": 5}, "_last_kick": 900.0}}
+    decisions, edge = tl.plan_edge_actions(
+        [_edge()], st, now=1000.0, strike_limit=2, kick_cooldown_sec=1200)
+    assert decisions[0]["action"] == "alert"          # 冷却内不再踢，升级告警
+    assert edge["_last_kick"] == 900.0
+    # 冷却过了 → 允许再踢
+    decisions2, edge2 = tl.plan_edge_actions(
+        [_edge()], st, now=3000.0, strike_limit=2, kick_cooldown_sec=1200)
+    assert decisions2[0]["action"] == "kick_tunnel"
+    assert edge2["_last_kick"] == 3000.0
+
+
+def test_edge_recovery_then_new_outage_recounts():
+    # 恢复清零后再次失败：从 strike 重新数起（不是直接 kick）
+    _, edge = tl.plan_edge_actions([_edge(ok=True)], {tl.EDGE_STATE_KEY: {"t1": {"streak": 4}}}, now=1000.0)
+    decisions, _ = tl.plan_edge_actions([_edge()], {tl.EDGE_STATE_KEY: edge}, now=2000.0, strike_limit=2)
+    assert decisions[0]["action"] == "strike"
+
+
 # ────────────────────────── 备份 ──────────────────────────
 
 def test_snapshot_sqlite_live_wal(tmp_path: Path):
@@ -480,6 +579,99 @@ def test_mask_secret():
     assert tl.mask_secret("") == "***"
 
 
+# ────────────────── 多段租户预设（2026-08-08 托管能力供给）──────────────────
+
+def test_load_tenant_preset_whitelists_sections(tmp_path: Path):
+    p = tmp_path / "preset.yaml"
+    p.write_text(
+        "ai:\n  api_key: k1\n"
+        "licensing:\n  hosted_ai:\n    enabled: true\n"
+        "platform_login:\n  enabled: true\n"
+        "web_admin:\n  auth_token: LEAK-ME\n"      # 白名单外段必须被丢弃
+        "monitoring:\n  enabled: true\n",
+        encoding="utf-8")
+    preset = tl.load_tenant_preset(p)
+    assert set(preset) == {"ai", "licensing", "platform_login"}
+    assert "web_admin" not in preset and "monitoring" not in preset
+    # 缺文件/坏文件 → {}
+    assert tl.load_tenant_preset(tmp_path / "nope.yaml") == {}
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(":\n  - broken", encoding="utf-8")
+    assert tl.load_tenant_preset(bad) == {}
+
+
+def test_inject_tenant_preset_deep_write_preserves_comments(tmp_path: Path):
+    overlay = tmp_path / "config.local.yaml"
+    overlay.write_text(
+        "# 运维注释：这行绝不能丢\n"
+        "web_admin:\n"
+        "  port: 18999   # 端口注释\n",
+        encoding="utf-8")
+    preset = {
+        "licensing": {"hosted_ai": {"enabled": True}},
+        "platform_login": {
+            "enabled": True,
+            "telegram": {"credpool": {"enabled": True, "license_key": "CHATX-X-1234"}},
+        },
+    }
+    keys = tl.inject_tenant_preset(overlay, preset)
+    assert "licensing.hosted_ai.enabled" in keys
+    assert "platform_login.telegram.credpool.license_key" in keys
+    body = overlay.read_text(encoding="utf-8")
+    assert "# 运维注释：这行绝不能丢" in body and "# 端口注释" in body
+    assert "license_key: CHATX-X-1234" in body
+    # 幂等重写不重复建块
+    tl.inject_tenant_preset(overlay, preset)
+    assert overlay.read_text(encoding="utf-8").count("platform_login:") == 1
+
+
+def test_ensure_pool_license_issue_reuse_and_softfail(tmp_path: Path):
+    db = tmp_path / "matrixx.db"
+    import sqlite3
+    con = sqlite3.connect(str(db))
+    con.execute("""CREATE TABLE licenses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, license_key TEXT UNIQUE NOT NULL,
+        level TEXT, status TEXT, machine_id TEXT, expires_at TEXT)""")
+    con.commit()
+    con.close()
+    k1 = tl.ensure_pool_license("zhiliao_acme_ltd", db_path=db)
+    assert k1.startswith("CHATX-ZHILIAO-ACME-LTD-") and len(k1.split("-")[-1]) == 4
+    # 幂等：同实例复用同一张卡
+    assert tl.ensure_pool_license("zhiliao_acme_ltd", db_path=db) == k1
+    # 池库缺失 → 软失败返回 ""
+    assert tl.ensure_pool_license("zhiliao_x", db_path=tmp_path / "absent.db") == ""
+
+
+def test_resolve_preset_license_auto_and_passthrough(tmp_path: Path):
+    db = tmp_path / "matrixx.db"
+    import sqlite3
+    con = sqlite3.connect(str(db))
+    con.execute("""CREATE TABLE licenses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, license_key TEXT UNIQUE NOT NULL,
+        level TEXT, status TEXT, machine_id TEXT, expires_at TEXT)""")
+    con.commit()
+    con.close()
+
+    def mk_preset(lic):
+        return {"platform_login": {"telegram": {"credpool": {
+            "enabled": True, "license_key": lic}}}}
+
+    # AUTO → 签发并替换
+    p = mk_preset("AUTO")
+    key = tl.resolve_preset_license(p, "zhiliao_t1", db_path=db)
+    assert key and p["platform_login"]["telegram"]["credpool"]["license_key"] == key
+    # 显式卡密 → 原样保留
+    p2 = mk_preset("CHATX-FIXED-0001")
+    assert tl.resolve_preset_license(p2, "zhiliao_t1", db_path=db) == "CHATX-FIXED-0001"
+    assert p2["platform_login"]["telegram"]["credpool"]["license_key"] == "CHATX-FIXED-0001"
+    # AUTO 但池库缺失 → 键被删（free 档兜底），不留 AUTO 字面值
+    p3 = mk_preset("AUTO")
+    assert tl.resolve_preset_license(p3, "zhiliao_t1", db_path=tmp_path / "absent.db") == ""
+    assert "license_key" not in p3["platform_login"]["telegram"]["credpool"]
+    # 无 credpool 段 → 无操作
+    assert tl.resolve_preset_license({"ai": {"api_key": "k"}}, "zhiliao_t1", db_path=db) == ""
+
+
 # ────────────────────────── 公网暴露 ──────────────────────────
 
 def test_validate_slug_rules():
@@ -503,6 +695,9 @@ def test_render_nginx_site_directives():
     assert 'proxy_set_header Connection "upgrade";' in conf
     assert "client_max_body_size 50m;" in conf
     assert "proxy_set_header X-Forwarded-Proto $scheme;" in conf
+    # P5：后端不可达 → 友好页（到期被停的客户看到续费引导而非裸 502）
+    assert "error_page 502 503 504 /__tenant_down.html;" in conf
+    assert "location = /__tenant_down.html" in conf
 
 
 def test_render_nginx_site_port_mode():
@@ -512,8 +707,9 @@ def test_render_nginx_site_port_mode():
     # 端口形态复用主域证书（SAN 已含主域，零 DNS 依赖）
     assert "/etc/letsencrypt/live/bd2026.cc/fullchain.pem" in conf
     assert "proxy_pass http://127.0.0.1:18999;" in conf
-    # 反代主体与子域形态同源（SSE/WS/媒体语义一致）
+    # 反代主体与子域形态同源（SSE/WS/媒体语义一致，友好页同享）
     assert "proxy_buffering off;" in conf and "client_max_body_size 50m;" in conf
+    assert "error_page 502 503 504 /__tenant_down.html;" in conf
 
 
 def test_ensure_tunnel_port_idempotent(tmp_path: Path):
@@ -578,3 +774,170 @@ def test_build_delivery_code_contains_url_and_token():
     from src.ops import tenant_fulfillment as tf
     code = tf.build_delivery_code("https://acme.bd2026.cc", "tok123", "zhiliao_acme")
     assert "https://acme.bd2026.cc" in code and "tok123" in code and "zhiliao_acme" in code
+
+
+def test_resolve_catalog_sku_strips_hosted_marker():
+    from src.ops import tenant_fulfillment as tf
+    assert tf.resolve_catalog_sku("chatx-hosted-team") == "chatx-team"
+    assert tf.resolve_catalog_sku("chatx-team") == "chatx-team"
+    assert tf.resolve_catalog_sku("lingox-hosted-pro") == "lingox-pro"
+
+
+def test_gw_daily_chars_by_sku_tier():
+    from src.ops import tenant_fulfillment as tf
+    # entry 3×25k=75k → basic floor 100k
+    assert tf.gw_daily_chars_for_order(
+        {"sku_id": "chatx-entry", "delivery": "hosted"}) == 100_000
+    # team 10×25k=250k（= pro floor）
+    assert tf.gw_daily_chars_for_order(
+        {"sku_id": "chatx-hosted-team"}) == 250_000
+    # flagship 50×25k=1.25M（夹在 800k..1.5M）
+    assert tf.gw_daily_chars_for_order(
+        {"sku_id": "chatx-flagship", "delivery": "hosted"}) == 1_250_000
+    # lingox-team 月包 3M → 日 100k（= basic floor，3M/30=100k）
+    assert tf.gw_daily_chars_for_order(
+        {"sku_id": "lingox-team", "delivery": "hosted"}) == 100_000
+    # 未知付费托管 → 默认 200k（高于试用 50k）
+    assert tf.gw_daily_chars_for_order(
+        {"sku_id": "chatx-hosted-ultra", "delivery": "hosted"}) == 200_000
+
+
+def test_gw_budget_for_order_subject_and_none_paths():
+    from src.ops import tenant_fulfillment as tf
+    spec = tf.gw_budget_for_order(
+        {"id": "O9", "sku_id": "chatx-team", "delivery": "hosted", "period": "annual"},
+        "zhiliao_acme")
+    assert spec["subject"] == "IID:zhiliao_acme"
+    assert spec["budget"] == 250_000
+    assert "order=O9" in spec["note"] and "annual" in spec["note"]
+    assert tf.gw_budget_for_order(
+        {"sku_id": "chatx-team"}, "zhiliao_acme") is None  # 装机不提托管额度
+    assert tf.gw_budget_for_order(
+        {"sku_id": "chatx-team", "delivery": "hosted"}, "") is None
+
+
+def test_should_auto_suspend_rails():
+    """到期自动停机的安全轨：默认关/宽限/保护/订单联动缺失/非运行态 全部拒停。"""
+    now = 1_700_000_000.0
+    exp_5d_ago = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now - 5 * 86400))
+    card = {"status": "running", "expires_at": exp_5d_ago, "expiry_order": "O1"}
+
+    # 默认关（grace_days=0）
+    assert tl.should_auto_suspend(card, now, grace_days=0) == (False, "disabled")
+    # 开启 + 逾期超宽限 → 停
+    act, why = tl.should_auto_suspend(card, now, grace_days=3)
+    assert act is True and "O1" in why
+    # 宽限内不停（逾期 5 天 < 宽限 7 天）
+    act, why = tl.should_auto_suspend(card, now, grace_days=7)
+    assert act is False and why.startswith("in_grace")
+    # 受保护绝不自动停
+    assert tl.should_auto_suspend(card, now, grace_days=3, protected=True) == (
+        False, "protected")
+    # 已停不重复处置
+    assert tl.should_auto_suspend(card, now, grace_days=3, suspended=True) == (
+        False, "already_suspended")
+    # 手工卡（无 expiry_order）没有续费→复机联动，只告警不自动停
+    manual = dict(card)
+    manual.pop("expiry_order")
+    assert tl.should_auto_suspend(manual, now, grace_days=3) == (False, "no_order_link")
+    # 非运行态（已停机/启动失败）不碰
+    assert tl.should_auto_suspend(
+        {**card, "status": "suspended"}, now, grace_days=3) == (False, "not_running")
+    # 未到期不停
+    future = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now + 30 * 86400))
+    assert tl.should_auto_suspend(
+        {**card, "expires_at": future}, now, grace_days=3)[0] is False
+    # 无到期账本（试点/参考件）恒不停
+    assert tl.should_auto_suspend(
+        {"status": "running", "expiry_order": "O1"}, now, grace_days=3)[0] is False
+
+
+def test_merge_preserved_card_fields():
+    """provision 幂等重入的交付卡合并：账本/公网字段绝不被整卡重写抹除（P6 实锤）。"""
+    old = {
+        "expires_at": "2026-09-09 20:00:00", "expires_days": 32,
+        "expiry_order": "AH-1", "last_fulfill_kind": "activate",
+        "last_order_sku": "chatx-team", "ai_daily_chars": 250000,
+        "ai_budget_subject": "IID:zhiliao_x", "slug": "acme",
+        "exposed": True, "expose_mode": "subdomain", "protected": True,
+        "public_url": "https://acme.bd2026.cc",
+        "workspace_url": "https://acme.bd2026.cc/workspace/dash",
+        "login_url": "https://acme.bd2026.cc/login?next=/workspace/dash",
+        "start_here_url": "https://acme.bd2026.cc/workspace/golive",
+        "initial_password": "old-pw",
+    }
+    new = {
+        "instance_id": "zhiliao_x", "status": "running", "username": "owner",
+        "initial_password": "new-pw", "auth_token": "tok",
+        "workspace_url": "http://127.0.0.1:18999/workspace/dash",
+        "login_url": "http://127.0.0.1:18999/login?next=/workspace/dash",
+    }
+    m = tl.merge_preserved_card_fields(new, old)
+    # 账本/暴露状态全保留
+    assert m["expires_at"] == "2026-09-09 20:00:00" and m["expiry_order"] == "AH-1"
+    assert m["last_order_sku"] == "chatx-team" and m["ai_daily_chars"] == 250000
+    assert m["exposed"] is True and m["protected"] is True and m["slug"] == "acme"
+    # 公网 URL 族整组回填（不许「public 是公网、login 是 127.0.0.1」的分裂卡）
+    assert m["public_url"] == "https://acme.bd2026.cc"
+    assert m["login_url"].startswith("https://acme.bd2026.cc/")
+    # 本次 provision 的凭据/状态以新卡为准
+    assert m["initial_password"] == "new-pw" and m["status"] == "running"
+    # 首开（无旧卡）＝新卡原样
+    assert tl.merge_preserved_card_fields(new, {}) == new
+    # 旧卡未暴露过 → 不回填 URL（保留 provision 的本地 URL）
+    m2 = tl.merge_preserved_card_fields(new, {"expires_at": "2026-01-01 00:00:00"})
+    assert m2["login_url"].startswith("http://127.0.0.1")
+    assert m2["expires_at"] == "2026-01-01 00:00:00"
+
+
+def test_build_tenant_notice_levels():
+    """到期提醒载荷：expiring/expired 给载荷，ok/none 恒 None（=清文件）。"""
+    now = 1_700_000_000.0
+    fmt = lambda off: time.strftime(  # noqa: E731
+        "%Y-%m-%d %H:%M:%S", time.localtime(now + off * 86400))
+    # 剩 2 天 → expiring
+    n = tl.build_tenant_notice({"expires_at": fmt(2)}, now)
+    assert n["kind"] == "expiry" and n["level"] == "expiring"
+    assert n["days_left"] == 2.0 and n["expires_at"] == fmt(2)
+    # 逾期 → expired
+    n2 = tl.build_tenant_notice({"expires_at": fmt(-1)}, now)
+    assert n2["level"] == "expired" and n2["days_left"] == -1.0
+    # 还早 / 无账本 / 坏格式 → None
+    assert tl.build_tenant_notice({"expires_at": fmt(30)}, now) is None
+    assert tl.build_tenant_notice({}, now) is None
+    assert tl.build_tenant_notice({"expires_at": "garbage"}, now) is None
+
+
+def test_renew_order_url_mapping():
+    from src.ops import tenant_fulfillment as tf
+    assert tf.renew_order_url("chatx-hosted-team") == (
+        "https://bd2026.cc/order?plan=autochat-team&delivery=hosted")
+    assert tf.renew_order_url("chatx-flagship") == (
+        "https://bd2026.cc/order?plan=autochat-flagship&delivery=hosted")
+    assert tf.renew_order_url("lingox-pro") == (
+        "https://bd2026.cc/order?plan=translate-pro&delivery=hosted")
+    # 未知/缺 SKU → 裸下单页（绝不拼不存在的 plan）
+    assert tf.renew_order_url("") == "https://bd2026.cc/order?delivery=hosted"
+    assert tf.renew_order_url("mystery-sku") == "https://bd2026.cc/order?delivery=hosted"
+
+
+def test_stack_expires_at_and_renewal_code():
+    from src.ops import tenant_fulfillment as tf
+    # 未过期：从旧到期叠
+    now = 1_700_000_000.0  # 固定锚
+    old = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now + 10 * 86400))
+    stacked = tf.stack_expires_at(old, 32, now=now)
+    expect = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now + 42 * 86400))
+    assert stacked == expect
+    # 已过期：从 now 起算
+    past = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now - 5 * 86400))
+    stacked2 = tf.stack_expires_at(past, 32, now=now)
+    expect2 = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now + 32 * 86400))
+    assert stacked2 == expect2
+    # 续费串：有延期、无密码
+    assert tf.is_existing_hosted_tenant(
+        {"public_url": "https://a.bd2026.cc", "expires_at": old}) is True
+    assert tf.is_existing_hosted_tenant(
+        {"public_url": "https://a.bd2026.cc"}) is False  # 持单无账本≠续费
+    code = tf.build_renewal_code("https://a.bd2026.cc", "zhiliao_a", stacked, "owner")
+    assert "续费已到账" in code and stacked in code and "初始密码" not in code

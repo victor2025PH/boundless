@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.licensing.order_delivery import is_hosted_delivery, is_hosted_order
@@ -25,6 +26,15 @@ from src.licensing.order_delivery import is_hosted_delivery, is_hosted_order
 _PRODUCT_MAP = {"zhiliao": "zhiliao", "tongyi": "tongyi", "chatx": "zhiliao", "lingox": "tongyi"}
 
 _SLUG_SAFE = re.compile(r"[^a-z0-9]+")
+
+# ── 托管 AI 网关日额度（字符）──
+# 计量主体 = IID:<instance_id>；默认环境 50k/日太小，开通/续费时按套餐覆写。
+# 公式：席位 × 每席日额度，再按档位夹 floor/cap——改席位表即联动，不必另维护平行价目。
+_CHARS_PER_SEAT_DAY = 25_000
+_TIER_FLOOR = {"basic": 100_000, "pro": 250_000, "flagship": 800_000}
+_TIER_CAP = {"basic": 200_000, "pro": 500_000, "flagship": 1_500_000}
+# 付费托管但 SKU 未入权威表（未来新档）→ 高于试用默认，避免「开了却几乎不能聊」
+_DEFAULT_HOSTED_DAILY_CHARS = 200_000
 
 # 再导出：历史测试/文档 `from src.ops.tenant_fulfillment import is_hosted_*` 继续可用
 __all__ = [
@@ -35,7 +45,15 @@ __all__ = [
     "hosted_plan_args_for_order",
     "select_hostable",
     "manual_hosted_followup",
+    "period_days",
     "build_delivery_code",
+    "build_renewal_code",
+    "resolve_catalog_sku",
+    "gw_daily_chars_for_order",
+    "gw_budget_for_order",
+    "is_existing_hosted_tenant",
+    "stack_expires_at",
+    "renew_order_url",
 ]
 
 
@@ -136,6 +154,130 @@ def period_days(order: Dict[str, Any]) -> int:
                            DEFAULT_PERIOD_DAYS)
 
 
+def resolve_catalog_sku(sku_id: str) -> str:
+    """托管 SKU → 装机权威表可查的目录 SKU（``chatx-hosted-team`` → ``chatx-team``）。
+
+    剥 ``-hosted`` / ``hosted-`` 标记；装机单原样返回。查不到权威表时调用方自行回落。
+    """
+    s = str(sku_id or "").strip().lower()
+    if not s:
+        return ""
+    return s.replace("-hosted", "").replace("hosted-", "") or s
+
+
+def gw_daily_chars_for_order(order: Dict[str, Any]) -> int:
+    """托管订单 → AI 网关**日字符**额度（按套餐席位/月包推算，纯函数）。
+
+    - chatx：席位 × 25k/日，再按 plan 档夹 floor/cap；
+    - lingox：有 ``included_chars_monthly`` 时用月包÷30（不限=旗舰 cap）；
+    - 未知 SKU：``_DEFAULT_HOSTED_DAILY_CHARS``（仍高于试用 50k 默认）。
+    """
+    sku = resolve_catalog_sku(str((order or {}).get("sku_id") or ""))
+    if not sku:
+        return _DEFAULT_HOSTED_DAILY_CHARS
+    try:
+        from src.licensing.chatx_fulfillment import sku_spec
+
+        spec = sku_spec(sku)
+    except Exception:  # noqa: BLE001 - 未知/仅人工 SKU → 默认档
+        return _DEFAULT_HOSTED_DAILY_CHARS
+
+    plan = str(spec.get("plan") or "basic").lower()
+    floor = _TIER_FLOOR.get(plan, _TIER_FLOOR["basic"])
+    cap = _TIER_CAP.get(plan, _TIER_CAP["pro"])
+
+    monthly = spec.get("included_chars_monthly")
+    if monthly is not None:
+        try:
+            m = int(monthly)
+        except (TypeError, ValueError):
+            m = -1
+        if m <= 0:  # 不限字符
+            return _TIER_CAP["flagship"]
+        return max(floor, m // 30)
+
+    try:
+        seats = max(1, int(spec.get("seats") or 1))
+    except (TypeError, ValueError):
+        seats = 1
+    return min(cap, max(floor, seats * _CHARS_PER_SEAT_DAY))
+
+
+def gw_budget_for_order(order: Dict[str, Any], instance_id: str) -> Optional[Dict[str, Any]]:
+    """组装 ``POST /api/admin/gw-budget`` 载荷；非托管/无实例 → None。"""
+    iid = str(instance_id or "").strip()
+    if not iid or not is_hosted_order(order or {}):
+        return None
+    budget = gw_daily_chars_for_order(order)
+    oid = str((order or {}).get("id") or "").strip()
+    sku = str((order or {}).get("sku_id") or "").strip()
+    period = str((order or {}).get("period") or "monthly").strip() or "monthly"
+    return {
+        "subject": f"IID:{iid}",
+        "budget": int(budget),
+        "note": f"order={oid} sku={sku} period={period}",
+    }
+
+
+def is_existing_hosted_tenant(card: Dict[str, Any]) -> bool:
+    """交付卡是否已是「曾经送达过」的存量租户（续费路径判据）。
+
+    要同时有公网地址 + 到期账本（``expires_at`` 或 ``expiry_order``）——仅 expose
+    持单中的卡只有 URL、无账本，仍走首开交付（含初始密码）。
+    """
+    if not str((card or {}).get("public_url") or "").strip():
+        return False
+    return bool(
+        str((card or {}).get("expires_at") or "").strip()
+        or str((card or {}).get("expiry_order") or "").strip()
+    )
+
+
+def stack_expires_at(
+    old_expires_at: Optional[str],
+    days: int,
+    now: Optional[float] = None,
+) -> str:
+    """续费/首开共用的到期叠期：从 ``max(now, 旧到期)`` 起加 ``days`` 天。
+
+    未过期续费＝剩余时长不浪费；已过期续费＝从今天起算（不给空窗白送）。
+    旧串缺/坏格式 → 视同无账本，从 now 起算（=首开语义）。
+    """
+    try:
+        d = max(1, int(days))
+    except (TypeError, ValueError):
+        d = 32
+    base = float(time.time() if now is None else now)
+    raw = str(old_expires_at or "").strip()
+    if raw:
+        try:
+            old = time.mktime(time.strptime(raw, "%Y-%m-%d %H:%M:%S"))
+            if old > base:
+                base = old
+        except Exception:  # noqa: BLE001
+            pass
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(base + d * 86400))
+
+
+def renew_order_url(sku_id: str, site: str = "https://bd2026.cc") -> str:
+    """续费深链：SKU → 官网下单页（同档位 + hosted 预选）。
+
+    sku → offer 前缀映射与 website `lib/offer-map.ts` 的 ORDER_SKU_MAP 反向对应
+    （chatx-*→autochat-* / lingox-*→translate-*）；识别不了的 SKU 回落裸下单页
+    （客户自选档位），绝不拼出不存在的 plan 参数。
+    """
+    base = (site or "https://bd2026.cc").rstrip("/")
+    sku = resolve_catalog_sku(sku_id)
+    offer = ""
+    if sku.startswith("chatx-"):
+        offer = "autochat-" + sku[len("chatx-"):]
+    elif sku.startswith("lingox-"):
+        offer = "translate-" + sku[len("lingox-"):]
+    if offer:
+        return f"{base}/order?plan={offer}&delivery=hosted"
+    return f"{base}/order?delivery=hosted"
+
+
 def build_delivery_code(public_url: str, login_token: str, instance_id: str,
                         username: str = "owner") -> str:
     """回填给订单的 code：客户拿到的「网址 + 账号 + 初始密码 + 第一步做什么」交付串。
@@ -154,3 +296,19 @@ def build_delivery_code(public_url: str, login_token: str, instance_id: str,
     return (f"网址: {login}  |  账号: {username}  |  初始密码: {login_token}  "
             f"（打开网址登录后直达「上线自检」看板，按三步开通：配 AI → 接渠道 → 开自动回复；"
             f"建议在 设置→修改密码 自行改密。实例: {instance_id}）")
+
+
+def build_renewal_code(
+    public_url: str,
+    instance_id: str,
+    expires_at: str,
+    username: str = "owner",
+) -> str:
+    """续费回填串：告之延期到何时 + 原站登录；**绝不重发初始密码**（多半已改）。"""
+    from src.ops.tenant_lifecycle import apply_public_base
+
+    base = (public_url or "").rstrip("/")
+    login = apply_public_base(base)["login_url"] if base else "/login?next=/workspace/dash"
+    exp = str(expires_at or "").strip() or "(见工作台)"
+    return (f"续费已到账 · 有效期延至 {exp}  |  网址: {login}  |  账号: {username}  "
+            f"（请用原密码登录；忘记密码由客服重置。实例: {instance_id}）")

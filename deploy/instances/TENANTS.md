@@ -310,13 +310,71 @@ license exp，托管卡连 expires_at 字段都没有）。三件套：
    **从交付成功起算**——持单期是我方公网问题，不吃客户时长）；
 2. **巡检告警**：`tenant_ops watch` 每轮扫卡 `tl.expiry_status`（纯函数，`none|ok|expiring
    ≤3天|expired`）——expired 12h 去抖告警（文案带 suspend 命令）/ expiring 24h 催续费；
-   **首版绝不自动 suspend**（续费单↔实例关联未建，自动停有误伤收入风险）；
    **已停机（status≠running）不再催**——否则 suspend 后告警响到永远；
+   **到期自动停机（2026-08-08 P3；P4 起经守护壳默认开，宽限 3 天）**：
+   `tenant_guard_task.ps1 -Mode watch` 现默认带 `--auto-suspend-grace-days 3`
+   （`-AutoSuspendGraceDays 0` 可退回只告警）——安全轨全在纯函数
+   `tl.should_auto_suspend`：只停**订单驱动卡**（有 `expiry_order`，手工卡没有
+   「续费→复机」联动仍只告警）/ 受保护租户绝不停 / 逾期须超宽限 N 天 / 已停不重复；
+   自动停走与人工 suspend 同一套 `_suspend_core`（停进程+落旗+卡状态）+
+   `tenant_auto_suspended` 告警。**配套复机**：停机租户收到续费单 →
+   `tenant_fulfill_watch` 先 `tenant_ops resume`（清旗+拉起+卡状态——只靠
+   provision 顺带拉起会留「进程在跑、暂停旗还在」分裂态）再走可达闸门交付；
+   复机失败发 `tenant_resume_fail` 告警且持单重试。「客户付钱→服务回来」全自动；
+4. **客户侧到期横幅（2026-08-08 P4）**：watch 巡检把 expiring/expired 镜像成
+   `<data>/config/tenant_notice.json`（含按 `last_order_sku` 生成的续费深链，
+   纯函数 `tl.build_tenant_notice` + `tf.renew_order_url`；ok/无账本=删文件，
+   续费叠期时履约守护即刻删旧提醒防「续完费还显示已到期」）→ 租户实例
+   `/api/workspace/ai-runtime-status.tenant_notice` 捎带（零新增轮询/路由，读取端
+   `src/utils/tenant_notice.py` 自带 72h 陈旧守卫——watch 停摆就收横幅，不拿旧急迫度
+   吓客户）→ 工作台 `#ws-expiry` 横幅（expiring 琥珀/expired 红 + 「立即续费」链）。
+   生产 zhiliao/tongyi 与装机版无此文件 → 字段恒 null 永不显示；存量租户实例在
+   下次自然重启（resume/heal）后开始带该字段，模板侧已热更新兼容旧进程。
+   门禁：`tests/test_tenant_notice.py` + `test_tenant_lifecycle`（notice/renew_url
+   纯函数）+ `test_key_pool_routes`（路由字段 + workspace_base 接线契约）；
+5. **停机友好页（2026-08-08 P5，续费转化最后一环）**：per-tenant nginx 站点
+   `error_page 502/503/504 → /__tenant_down.html`（`_nginx_proxy_body` 共用体，
+   两种暴露形态同享；expose 每次幂等把仓库 SSOT `deploy/instances/tenant_down.html`
+   推到 VPS `/var/www/html/`）。被停/断链的租户入口从裸 502 变成「①订阅到期续费即
+   自动恢复 ②维护中 60s 自动重试」双语引导页 + 续费 CTA；**HTTP 状态刻意保持 502**
+   （监控/edge 探针仍按故障计，只有人眼变友好）。已实弹演练：drill 开通→expose→
+   suspend→公网 502 出友好页→拆除；pilot 配置已同批刷新。
+6. **付费托管额度条措辞（2026-08-08 P5）**：付费托管与免费试用同走 hosted_gateway
+   注入链（`_hosted_trial` 同为 True）→ 此前付费租户 owner 看到的是「免费试用中」。
+   pages 路由新增 `ai_hosted_paid`（`licensing.hosted_ai.enabled` 且托管注入生效）：
+   横幅/用尽文案切「按套餐供给/联系客服提额」口径（`ws.aihosted.*`），额度用尽不弹
+   试用升级窗（bind_code 话术是试用语境）；另加**低额度预警档**（剩 ≤15% 琥珀提示
+   `ws.aiquota.low`，试用/付费同享）。`.py` 改动随实例下次重启生效，旧进程回落试用
+   措辞（模板已兼容）。
+
+## ✅ 全生命周期真单演练（2026-08-08 P6）+ 抓出并修复续费误判首开
+
+**演练路径（全走生产管线**：官网 `/api/order` 下单 → admin 标 paid → 计划任务
+`TenantFulfillWatch`/`TenantSelfHeal` 零人工处置）：下单→**40s 交付**（250k 提额+
+32 天账本+SKU 落卡）→ 回拨到期 → watch **自动停机**（旗 reason=`auto_expired:<订单号>`）
+→ 公网 502 出友好页（含同档续费深链）→ 续费单 → **自动复机+叠期+续费串回填** →
+公网 200。三笔演练订单已标 cancelled（防污染营收台账）、额度覆写已清、实例全拆。
+
+**演练抓出的真 bug（已修+回归钉住）**：续费单曾被误判**首开**——把**初始密码再次
+回填**给客户、且暂停旗残留（分裂态）。根因两层：① `cmd_provision` 幂等重入时
+**整卡重写**（`build_tenant_card` 直写）抹掉 `expires_at/expiry_order/public_url` 等
+账本字段；② `run_once` 拿 provision **之后**的卡判续费——账本已被抹，判定必翻车。
+修复（防御纵深）：① provision 写卡改经 `tl.merge_preserved_card_fields`（纯函数：
+`CARD_PRESERVE_KEYS` 账本/暴露字段旧值恒胜出；URL 族仅旧卡确已暴露才整组回填，
+防「public 公网、login 却 127.0.0.1」分裂卡）；② `run_once` 增 `precard_fn` 注入
+（生产读卡文件），**续费判定/停机判定/叠期旧到期/公网回落全部以 pre-provision 卡
+为准**——「续费=本次履约之前已是交付过的租户」才是正确语义（post 卡被抹时未过期
+续费会从 now 起算＝白吞客户剩余天数）。self-test 的假 provision 现在**刻意返回被
+抹的卡**（模拟生产真行为），门禁 `test_merge_preserved_card_fields` +
+self-test 全链钉住。修复后同一租户第三单实弹复验：`[续费]` 串（无密码）+ 复机
+（旗清+running）+ 叠期 now+32d + 公网 200 全对。
 3. **看板到期列**：托管租户卡表格加「到期」列（expired 红/expiring 黄/无账本 —），
    灯升级：expired（且仍在服务）=红、expiring=黄；suspended+过期=已处置不红。
 无账本老卡（试点/参考件）恒 `none` 零告警——宁漏催不误停。
-续费 SOP（关联机制未建期）：客户续费 → 运营核对到账 → 手改卡 `expires_at` 顺延
-（或等续费单机制落地后自动顺延）。
+**续费自动叠期（2026-08-08）**：同 contact 再下一笔 `delivery=hosted` paid 单 → 守护识别
+存量卡（`public_url` + 到期账本）→ `stack_expires_at(max(now,旧到期)+period)` 写卡 +
+回填「续费已到账」串（**不重发初始密码**）+ 按套餐再提 `gw-budget`。手工 SOP 仅留作
+漏单兜底（守护挂了才手改卡）。
 
 **DNS 就绪哨兵**（`_dns_sentinel`，fulfill tick 每小时一次经 VPS 域外视角探
 `*.bd2026.cc`）：就绪即一次性 TG 告警「泛解析已生效」——管住「零持单时老板加了 DNS
@@ -341,7 +399,44 @@ offer-map/order-lines 断言 + 内容完整性门禁验证。
 ⚠ 托管履约守护 `tenant_fulfill_watch` 尚未注册计划任务——paid 托管单需手工跑一轮
 （或决策后注册，命令见上文「托管开通守护」节）。
 
-## 托管态 AI 供给：现状与两个待解问题（2026-08-06 侦察结论）
+## ✅ 托管能力供给闭环（2026-08-08，「空壳租户」根治）
+
+**背景实锤**：pilot 实测「开出来的租户是空壳」——AI 占位（copilot 全回 canned
+「您好，请稍等片刻～」+ 日志 Connection error → `YOUR-RELAY-ENDPOINT`）、渠道接不了
+（credpool 未配 + config `YOUR_API_ID` 占位 → 扫码必失败）。根治＝**开通即接线**：
+
+1. **AI 走官网托管网关**（`licensing.hosted_ai.enabled: true`）：实例启动时
+   `hosted_gateway` 自动向 bd2026.cc 换设备令牌注入 `ai.*`（117 指纹
+   `D316-8D51-7107-F1CB` 已在试用台账，签发闸直接过）；**按实例计量
+   `IID:<instance_id>`**（网关 gw_quota；提额走 `/api/admin/gw-budget` 按主体覆写）；
+   识图（hosted-vision → 网关 → 176/140 GPU）与语音中继一并接管。真云 Key 只在
+   VPS 官网进程，租户配置/导出零密钥。此前文档「服务端尚未按 instance_id 计量」
+   已过期——device-token 认 `instance_id` 于 8/6 收口，本轮实测生效。
+2. **渠道走本机中央凭据池**（`platform_login.telegram.credpool` → 127.0.0.1:8000）：
+   托管租户都在本机，凭据不出内网；**每租户专属卡密**自动签发
+   （`CHATX-<IID>-XXXX`，池侧首用绑机、独立计量）。官网侧 `POOL_TG_CREDS`
+   公网派发通道保持暗态（那是给装机版外网机器的，托管态不需要）。
+3. **预设升级为多段白名单**（`tenant_ops` + `tenant_lifecycle`）：
+   `.ops\tenant_ai_preset.yaml` 现支持 `ai` / `licensing` / `platform_login` 三段
+   （白名单外一律忽略，防机密段批量下发）；`credpool.license_key: AUTO` = 开通时
+   自动签发（幂等复用；池库缺失软失败回 free 档，绝不拦开通）。真值文件已就位。
+   门禁 `tests/test_tenant_lifecycle.py`（多段白名单/深写保注释/卡密签发幂等/
+   AUTO 解析 4 例新增，55 例全绿）。
+4. **验收实录（2026-08-08 04:5x）**：`provision --customer "drill preset" --apply`
+   → 卡密 `CHATX-ZHILIAO-DRILL-PRESET-HBD6` 自动签发 + 8 键注入 + 24s 就绪 +
+   **AI 真出话**（「我是小优…」）+ **QR ready=true 零阻塞**（modes 探针）→ 演练全清。
+   pilot 同日已补齐同款配置（专属卡密 `CHATX-PILOT-0001`）：AI 1.9s 真回复、
+   QR start 真拿到 `tg://login` 码、上线自检 AI 项 fail→ok。
+5. **履约自动提额 + 续费叠期（2026-08-08 P2）**：`tenant_fulfill_watch` 在回填成功后
+   调 `POST /api/admin/gw-budget`（主体 `IID:<instance_id>`；软失败不挡交付）。日额度纯函数
+   `tf.gw_daily_chars_for_order`：席位×25k/日再按档夹 floor/cap（entry 100k / team 250k /
+   flagship 1.25M；lingox 走月包÷30；未知付费托管 200k）。卡上镜像 `ai_daily_chars` /
+   `ai_budget_subject` / `last_fulfill_kind`。续费见上节「续费自动叠期」。
+   存量已开通租户若仍吃 50k 默认，运维一次性：
+   `POST /api/admin/gw-budget {subject:"IID:…", budget:<套餐日额>}`。
+   租户「计费口径」仍以网关 gw_quota 为权威。
+
+## 托管态 AI 供给：现状与两个待解问题（2026-08-06 侦察结论；⚠ 已被上节 2026-08-08 闭环取代，仅留档）
 
 引擎里**已有** `src/ai/hosted_gateway.py`：向官网换设备令牌注入 `ai.*`，真云 Key
 只留官网进程不下发，覆盖 AI/识图/语音/ASR/Telegram 凭据，含热重载存活（env 重放）、
@@ -388,6 +483,7 @@ schtasks /Create /TN Boundless\Boundless-tenant-backup /SC DAILY /ST 05:10 /F ^
 | 数据根 | `D:\chengjie-instances\<iid>\data` | 与生产双实例同构：config 全套 DB + sessions + logs + events/spool + ledger_outbox |
 | 交付卡 | `D:\chengjie-instances\<iid>\tenant_card.json` | 工作台 URL / 登录 token / 端口 / 状态；**开通守护（下一阶段对接 bd2026.cc 订单）读卡回填订单** |
 | 暂停旗 | `D:\chengjie-instances\.ops\suspended\<iid>.flag` | 语义对齐 cutover 的 retired.flag；**watchdog 扩展到租户时必须识别：存在即不自愈拉起** |
+| 保护旗 | `D:\chengjie-instances\.ops\protected\<iid>.flag` | **真人在用＝生产资产**（`tenant_ops protect <iid>`）：suspend/deprovision/restore/unexpose 见旗即拒，`--force-protected` 破玻璃（拦截与破玻璃均推 TG 留痕）；resume/backup/watch 自愈不受限 |
 | 导出包 | `D:\chengjie-instances\.ops\exports\<iid>_<ts>.zip` | config 全套（db/yaml/presets）；**默认排除** `license.key`（厂商凭证）/`license_quota.db`（厂商台账）/`sessions/`（登录态不外流，`--include-sessions` 显式带）/`logs/` |
 | stack 登记 | `deploy/stack.json` += `chengjie_<iid>`（enabled=false） | 端口占用登记（防后续分配冲突）；租户拉起走本 CLI，**不**走 deploy up 编排 |
 | 端口 | 产品基址 + k×100（`instance_provisioner.allocate_ports`） | 智聊系：18799(生产) → 18999 → 19099 …；避开 stack 已登记 + README 保留表 |
@@ -398,17 +494,70 @@ schtasks /Create /TN Boundless\Boundless-tenant-backup /SC DAILY /ST 05:10 /F ^
 ## 防呆边界（已由门禁钉住：`tests/test_tenant_lifecycle.py`）
 
 - **生产硬闸**：`suspend/resume/export/deprovision zhiliao|tongyi` 一律 `[拒绝]`——生产操作走 `restart_instance.ps1` 唯一入口；
+- **受保护租户闸**（2026-08-07 事故沉淀，见下方事故记录）：`protect <iid>` 落保护旗后，
+  suspend/deprovision/restore/unexpose 须 `--force-protected`；已暴露实例被 suspend 时
+  无论是否受保护都推 TG 告警（`tenant_suspended`）——入口对外变 502 的操作绝不静默；
 - **停机三重判定**：只停「持有该租户端口 + 命令行含 main.py + cwd 落该租户数据根」的进程树（比 stop_instance.ps1 的两重判定更严，杜绝误杀别的实例）；
 - **幂等重入**：provision 重跑沿用 stack 已登记的端口/数据根（中断续跑不换端口）、已有 config 绝不覆盖；
 - **运行中拒导出**（`--force` 越过）；导出默认不带登录态与授权。
+
+## 事故与机制 2026-08-07（pilot 上线首日三连断 → 保护旗 + 边缘探针）
+
+**事故**：坐席上线首日全程工作在 `https://pilot.bd2026.cc`（当日 VPS 日志 3800+ 请求）；
+17:54 隧道任务被重启（性能优化）、18:47 pilot 被当「演练件」`tenant_ops suspend`（落旗
+→ 自愈见旗跳过，**永不自动恢复**）、19:05 前后再次被停——三段公网 502 窗口合计 2h+，
+老板比机器先发现（「为什么又连接中断」）。根因不是手滑，是**「演练/退租语义的生命周期
+命令」与「真人在用的生产租户」零机制隔离** + **监控只探本地 /login、不探坐席真实走的
+公网整链**。
+
+**机制**（同日落地，门禁 `tests/test_tenant_lifecycle.py` 边缘/保护两族）：
+1. **保护旗**：`tenant_ops protect zhiliao_pilot --reason "坐席生产入口"`（已执行）；
+   危险命令见旗即拒，破玻璃 `--force-protected`，拦截/破玻璃/暴露实例被停三类事件全部
+   `emit_tenant_alert` 推 TG 留痕；`status`/`list` 显示 🔒。
+2. **边缘探针**（并入 `watch` 子命令，TenantSelfHeal 每 10min 顺带跑，零新任务）：
+   对「应在跑+未暂停+已暴露+本地健康」的租户从本机直打 `public_url/login`，覆盖
+   DNS→VPS nginx→反向隧道→本机端口 的坐席同款整链；两振确认 → `kick_tunnel` 自愈
+   （杀隧道 ssh，runner 10s 重连；机器级冷却 20min 防反复踢）→ 踢过仍不通 →
+   `tenant_edge_down` TG 告警（防抖 30min）。决策纯函数 `plan_edge_actions`，
+   状态挂 `tenant_watch_state.json` 的 `_edge` 命名空间。`--no-edge` 可关。
+3. **演练纪律**：生命周期/DR 演练一律用专用演练实例（`drill-e2e` 系），受保护租户
+   的演练需求先 `protect --off`（本身即是显式决策点）再操作，完毕恢复保护。
+4. **交付即保护**（同日追加）：`expose` 成功默认自动打保护旗（真人要用的入口不能
+   静默打断），不靠人记得跑 protect；**演练件豁免**＝id/客户名/slug 含 `drill`
+   （`is_drill_instance`，判定刻意宽松：误判成演练件只损失自动保护、可手动补，
+   反向误判会卡死演练自动化）。
+
+## 生产工作台公网入口 2026-08-07（katie.bd2026.cc，与租户体系平行）
+
+坐席要接的真实客户会话在**生产实例 zhiliao（18799）**里；泛解析 `*.bd2026.cc` 当日
+生效后按租户同款链路给生产开了独立入口（**生产不入租户管辖**，guard_not_core 依旧）：
+
+```
+坐席浏览器 → https://katie.bd2026.cc（VPS nginx prod-katie.conf, LE 证书）
+  → VPS 127.0.0.1:18799 → ssh 反向隧道（ProdTunnel 任务，专用不与租户共联）→ 本机 18799
+```
+
+三件套（`deploy/instances/`，均 ASCII-only 防 PS5.1 GBK 坑）：
+- `prod_tunnel.ps1` + 任务 **ProdTunnel**（ONSTART/SYSTEM）：专用 -R 18799 隧道——
+  租户 expose 踢 tenant_tunnel 重列端口时生产入口不陪跳（隧道隔离 doctrine 同
+  vision/tenant 之分）；pid 落 `.ops\prod_tunnel.pid`。
+- `expose_prod.ps1`：幂等建链/修链（DNS→隧道腿→certbot→nginx 站点→公网验收→
+  写 `.ops\prod_public_url.txt` 标记）；VPS 被 deploy 误清后重跑即复原。
+- `prod_edge_watchdog.ps1` + 任务 **ProdEdgeWatchdog**（每 5min/SYSTEM）：双腿探针
+  （VPS 回环 18799 = 隧道腿；本机直打公网 URL = 坐席同款整链），两振 → 重启
+  ProdTunnel 自愈（15min 冷却）→ 救不回 → notify_webhooks.json 直发 TG（恢复补报）。
+  状态 `.ops\prod_edge_watchdog.state.json`。
+
+注意：生产入口的**实例侧**监控/重启仍归 watchdog_instances / restart_instance.ps1
+（本入口只管「链路」）；租户边缘探针在 `tenant_ops watch` 内，两套互不越界。
 
 ## 已知边界（下一阶段收口）
 
 1. ~~不在自愈范围~~ **已收口（2026-08-06 watch 子命令）**：租户自愈独立于生产 watchdog（互不越界），
    计划任务注册见上文（人工决定）；`give_up` 态暂只落 stdout/日志，接 ops 告警是后续项；
 2. ~~首登看不到自检~~ **已收口（login next + master 默认 dash + expose 改写公网 URL）**；
-3. ~~AI 未配置~~ **机制已就位（set-ai / 预设自动注入）**：`.ops\tenant_ai_preset.yaml` 填真值（中转端点+Key）
-   是运营决策；未填时开通照常、AI 为占位不可用；客户端已会附带 `instance_id`，**等官网按实例计量**；
+3. ~~AI 未配置~~ **已闭环（2026-08-08，见「托管能力供给闭环」节）**：预设真值已就位
+   （hosted_ai + credpool 多段），新开通租户 AI/渠道开箱即用；按实例计量已实测生效；
 4. **公网可达性仍依赖运营**：端口形态需云安全组放行 alt_port，或 Dynadot 加 `*.bd2026.cc` A 记录后重跑 expose 升子域；
 5. ~~授权互斥 / 官网 delivery~~ **已收口（2026-08-06）**：官网订单支持 `delivery=hosted|installed`；
    装机 `fulfillment_payload_for_order` 排除 hosted；device-token 认 `instance_id` 按 `IID:` 计量；

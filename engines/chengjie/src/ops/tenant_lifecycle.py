@@ -1,4 +1,4 @@
-"""托管租户实例生命周期（provision_instance 确定性半程的后半程）。
+r"""托管租户实例生命周期（provision_instance 确定性半程的后半程）。
 
 背景（托管 SaaS 档「一客一实例」）
 ==================================
@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
+import sqlite3
 import subprocess
 import time
 import urllib.request
@@ -342,6 +344,102 @@ def expiry_status(card: Dict[str, Any], now: float) -> Tuple[str, Optional[float
     return ("ok", days)
 
 
+def should_auto_suspend(
+    card: Dict[str, Any],
+    now: float,
+    *,
+    grace_days: float,
+    protected: bool = False,
+    suspended: bool = False,
+) -> Tuple[bool, str]:
+    """到期自动停机决策（纯函数）：(该停吗, 理由/不停原因)。
+
+    2026-08-08 起自动停机成为可选项的前提＝续费闭环已建（履约守护对存量卡自动
+    叠期+复机），所以安全轨全部收在这里：
+    - ``grace_days <= 0`` ＝功能关（默认；开启是运营在计划任务上加参数的显式决策）；
+    - 只停**订单驱动**的卡（有 ``expiry_order``）——手工写 expires_at 的卡没有
+      「续费单→自动复机」联动，自动停会把 out-of-band 续费的客户停到没人管，只告警；
+    - 受保护租户（真人在用）绝不自动停，保持告警轰人工；
+    - 已停/非 running 不重复处置；
+    - 逾期天数须超过宽限（防「到期当晚客户正在续费」竞态——履约守护 5min 一轮，
+      宽限 ≥1 天足以覆盖任何正常续费时序）。
+    """
+    try:
+        g = float(grace_days)
+    except (TypeError, ValueError):
+        g = 0.0
+    if g <= 0:
+        return (False, "disabled")
+    if suspended:
+        return (False, "already_suspended")
+    if str((card or {}).get("status") or "") != "running":
+        return (False, "not_running")
+    if protected:
+        return (False, "protected")
+    order = str((card or {}).get("expiry_order") or "").strip()
+    if not order:
+        return (False, "no_order_link")
+    state, days = expiry_status(card, now)
+    if state != "expired":
+        return (False, state)
+    overdue = abs(days or 0.0)
+    if overdue < g:
+        return (False, f"in_grace {overdue:.1f}<{g:g}d")
+    return (True, f"expired {overdue:.1f}d > grace {g:g}d (order={order})")
+
+
+#: provision 重写交付卡时必须保留的运维账本/公网字段（2026-08-08 P6 真单演练实锤：
+#: 续费单触发 provision 幂等重入 → build_tenant_card 整卡重写抹掉 expires_at/
+#: expiry_order/public_url → 续费被误判首开、把初始密码再发一遍）。
+CARD_PRESERVE_KEYS = (
+    "expires_at", "expires_days", "expiry_order", "last_fulfill_kind",
+    "last_order_sku", "ai_daily_chars", "ai_budget_subject",
+    "slug", "exposed", "expose_mode", "protected",
+)
+#: 公网 URL 族：仅当旧卡确已暴露（有 public_url）才整组回填——半保留会出现
+#: 「public_url 是公网、login_url 却是 127.0.0.1」的分裂卡
+CARD_URL_KEYS = ("public_url", "workspace_url", "login_url", "start_here_url")
+
+
+def merge_preserved_card_fields(new_card: Dict[str, Any],
+                                old_card: Dict[str, Any]) -> Dict[str, Any]:
+    """provision 重入时的交付卡合并（纯函数）：新卡为基底，账本/公网字段从旧卡回填。
+
+    新卡字段（token/密码/端口/status）以本次 provision 为准；旧卡的到期账本、
+    订单关联、额度镜像、公网暴露状态是**其他环节写入的事实**，provision 无权抹除。
+    """
+    merged = dict(new_card or {})
+    old = old_card or {}
+    for k in CARD_PRESERVE_KEYS:
+        v = old.get(k)
+        if v is not None and v != "":
+            merged[k] = v  # 账本键旧值恒胜出（新卡带的只可能是模板默认，不是事实）
+    if str(old.get("public_url") or "").strip():
+        for k in CARD_URL_KEYS:
+            if old.get(k):
+                merged[k] = old[k]
+    return merged
+
+
+def build_tenant_notice(card: Dict[str, Any], now: float) -> Optional[Dict[str, Any]]:
+    """到期提醒数据（纯函数）：交付卡 → 写进租户数据区的横幅载荷；无需提醒 → None。
+
+    消费链：tenant_ops watch 每轮写/清 `<data>/config/tenant_notice.json` →
+    租户实例 `/api/workspace/ai-runtime-status` 捎带 → 工作台横幅（客户自己看到
+    「快到期了/已到期」+ 续费深链，而不是只有厂商 TG 告警）。
+    只在 expiring/expired 时给载荷；ok/none（含无账本的试点/参考件）→ None=清文件。
+    """
+    state, days = expiry_status(card, now)
+    if state not in ("expiring", "expired"):
+        return None
+    return {
+        "kind": "expiry",
+        "level": state,
+        "days_left": days,
+        "expires_at": str((card or {}).get("expires_at") or ""),
+    }
+
+
 def initial_password_unchanged(data_dir: str, token: str,
                                username: str = "admin") -> Optional[bool]:
     """指定账号是否**仍在用交付初始密码**。**只读零写入**。
@@ -553,6 +651,82 @@ def write_suspend_flag(instance_id: str, reason: str, ops_base: str = DEFAULT_OP
     return flag
 
 
+# ────────────────────────── 受保护租户（真人在用＝生产资产）──────────────────────────
+#
+# 2026-08-07 实锤事故：坐席正在 pilot.bd2026.cc 上工作，pilot 实例被当「演练试点」
+# tenant_ops suspend → 公网全 502，坐席集体「连接中断」且发不出消息，直到人工 resume。
+# 根因不是谁手滑，而是「演练/退租语义的生命周期命令」与「真人在用的生产租户」之间
+# 没有任何机制性隔离。保护旗 = 与 suspended/retired 同层的文件旗标（.ops\protected\），
+# 破坏可用性的命令（suspend/deprovision/restore/unexpose）见旗即拒，显式
+# --force-protected 才放行（并推 TG 告警留痕）；resume/backup/watch 自愈永不受限。
+
+def protected_flag_path(instance_id: str, ops_base: str = DEFAULT_OPS_BASE) -> Path:
+    return Path(ops_base) / "protected" / f"{instance_id}.flag"
+
+
+def is_protected(instance_id: str, ops_base: str = DEFAULT_OPS_BASE) -> bool:
+    return protected_flag_path(instance_id, ops_base).exists()
+
+
+def protected_reason(instance_id: str, ops_base: str = DEFAULT_OPS_BASE) -> str:
+    """读保护原因（旗标损坏/缺失回空串，绝不抛——原因只用于提示语）。"""
+    try:
+        data = json.loads(protected_flag_path(instance_id, ops_base)
+                          .read_text(encoding="utf-8-sig"))
+        return str(data.get("reason") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def write_protected_flag(instance_id: str, reason: str,
+                         ops_base: str = DEFAULT_OPS_BASE) -> Path:
+    flag = protected_flag_path(instance_id, ops_base)
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    flag.write_text(
+        json.dumps({
+            "instance_id": instance_id,
+            "reason": reason or "production tenant (humans working on it)",
+            "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "note": "受保护租户：suspend/deprovision/restore/unexpose 须 --force-protected；"
+                    "resume/backup/watch 自愈不受限",
+        }, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8")
+    return flag
+
+
+def clear_protected_flag(instance_id: str, ops_base: str = DEFAULT_OPS_BASE) -> bool:
+    flag = protected_flag_path(instance_id, ops_base)
+    if flag.exists():
+        flag.unlink()
+        return True
+    return False
+
+
+def guard_not_protected(instance_id: str, action: str, *, override: bool = False,
+                        ops_base: str = DEFAULT_OPS_BASE) -> None:
+    """受保护租户的操作闸（与 guard_not_core 同族）：override=True＝显式破玻璃放行。"""
+    if override or not is_protected(instance_id, ops_base):
+        return
+    reason = protected_reason(instance_id, ops_base)
+    raise ValueError(
+        f"{instance_id} 是受保护租户"
+        f"（{reason or 'production'}），拒绝 {action}；"
+        f"确需执行加 --force-protected（操作会推 TG 告警留痕），"
+        f"或先 tenant_ops protect {instance_id} --off")
+
+
+def is_drill_instance(instance_id: str, customer: str = "", slug: str = "") -> bool:
+    """是否演练实例（id/客户名/slug 任一含 "drill" 即算）。
+
+    用于「交付即保护」的豁免：expose 成功默认自动打保护旗（真人要用的入口不能
+    被生命周期命令静默打断），演练件（drill-e2e 系）豁免——否则 e2e 演练的
+    suspend/deprovision 步骤会撞自家的闸。判定刻意宽松（contains 而非前缀）：
+    误判成演练件的代价只是「不自动保护」（仍可手动 protect），反向误判会卡死
+    演练自动化——fail-open 朝自动化，fail-manual 朝保护。"""
+    hay = f"{instance_id} {customer} {slug}".lower()
+    return "drill" in hay
+
+
 # ────────────────────────── 看门狗（决策纯函数 + 状态）──────────────────────────
 
 @dataclass
@@ -630,6 +804,74 @@ def plan_watch_actions(
                           "reason": f"DOWN（streak={streak}）"})
         new_state[f.instance_id] = {"fail_streak": streak + 1, "last_heal": now}
     return decisions, new_state
+
+
+# ────────────────────────── 边缘探针（公网入口整链）──────────────────────────
+#
+# 本地 /login 探针只证明「实例活着」；坐席走的是 DNS → VPS nginx → ssh 反向隧道 →
+# 本机端口 这条整链，任何一腿断（隧道 ssh 掉线/VPS 侧僵尸转发/nginx 站点被清）本地
+# 探针全绿、坐席全 502——2026-08-07 pilot 事故正是「机器一路绿灯，老板先发现」。
+# 边缘探针在 watch 同轮里从本机直打 public_url，覆盖坐席同款路径。
+
+EDGE_STATE_KEY = "_edge"
+
+
+@dataclass
+class EdgeFact:
+    """边缘探针一轮的输入。调用方只喂「本地健康 + 已暴露 + 应在跑」的租户——
+    本地 DOWN 归本地自愈路径管，边缘层只回答「公网这条腿通不通」。"""
+    instance_id: str
+    edge_ok: bool             # 公网 /login 探针 200
+
+
+def plan_edge_actions(
+    facts: Sequence["EdgeFact"],
+    state: Dict[str, Any],
+    now: float,
+    *,
+    strike_limit: int = 2,
+    kick_cooldown_sec: int = 1200,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """边缘探针决策（纯函数）：(决策清单, 新边缘状态——挂 state[EDGE_STATE_KEY])。
+
+    语义（对齐 vision_tunnel_watchdog 的两振哲学）：
+    - 探通 → ok，streak 清零；
+    - 失败 < strike_limit → strike（单次失败可能是 VPS/公网抖动，不动作）；
+    - 失败 ≥ strike_limit 且踢隧道不在冷却内 → kick_tunnel（杀隧道 ssh，runner 10s
+      重连；8/1 视觉隧道僵尸转发与本次 pilot 事故都表明隧道腿是最常见断点）。
+      隧道为全租户共享：**每轮至多踢一次** + 机器级冷却（反复踢＝把所有租户一起打断）；
+    - 踢过仍失败 → alert（调用方经 emit_tenant_alert 防抖外发）。
+    """
+    st_all = dict(state.get(EDGE_STATE_KEY) or {})
+    last_kick = float(st_all.get("_last_kick") or 0.0)
+    decisions: List[Dict[str, Any]] = []
+    new_edge: Dict[str, Any] = {}
+    kicked = False
+    for f in facts:
+        streak = int((st_all.get(f.instance_id) or {}).get("streak") or 0)
+        if f.edge_ok:
+            decisions.append({"instance_id": f.instance_id, "action": "ok", "reason": ""})
+            new_edge[f.instance_id] = {"streak": 0}
+            continue
+        streak += 1
+        new_edge[f.instance_id] = {"streak": streak}
+        if streak < strike_limit:
+            decisions.append({"instance_id": f.instance_id, "action": "strike",
+                              "reason": f"公网探针失败 {streak}/{strike_limit}（先观察）"})
+            continue
+        # last_kick=0＝从未踢过：永远允许首踢（否则测试/进程冷启动会被当「冷却中」）
+        if not kicked and (not last_kick or (now - last_kick) >= kick_cooldown_sec):
+            decisions.append({"instance_id": f.instance_id, "action": "kick_tunnel",
+                              "reason": f"公网连败 streak={streak} → 踢隧道重连"})
+            kicked = True
+            continue
+        decisions.append({"instance_id": f.instance_id, "action": "alert",
+                          "reason": f"公网持续不可达（streak={streak}，隧道已踢过/冷却中仍未恢复）"})
+    if kicked:
+        new_edge["_last_kick"] = now
+    elif last_kick:
+        new_edge["_last_kick"] = last_kick
+    return decisions, new_edge
 
 
 # ────────────────────────── 备份（活库安全快照）──────────────────────────
@@ -791,6 +1033,144 @@ def inject_ai_preset(overlay_path: Path, ai_cfg: Dict[str, Any]) -> List[str]:
     return written
 
 
+# ── 多段租户预设（2026-08-08：托管能力供给随开通自动接线）──────────────────
+#
+# 背景：tenant_ai_preset.yaml 原来只认 ai: 段，而托管租户「能用」还需要
+# licensing.hosted_ai（AI 走官网网关按实例计量）与 platform_login（渠道扫码
+# 走本机凭据池）——pilot 实测两者缺席=开出来的实例是空壳（AI canned、扫不了码）。
+# 预设升级为白名单多段：ai / licensing / platform_login；其余段一律忽略
+# （防手滑把 web_admin/secret 类机密段批量灌进所有租户）。
+
+#: 预设允许注入的顶层段（白名单；顺序即注入顺序）
+PRESET_SECTIONS: tuple = ("ai", "licensing", "platform_login")
+#: credpool license_key 的自动签发哨兵值（provision 时替换为每租户专属卡密）
+LICENSE_AUTO = "AUTO"
+#: 本机中央凭据池 DB（credpool_stage serve 同一份；licenses 表见 cmd_add_license）
+CREDPOOL_DB = Path(DEFAULT_OPS_BASE) / "credpool" / "matrixx.db"
+
+
+def load_tenant_preset(path: Path) -> Dict[str, Dict[str, Any]]:
+    """读预设文件的白名单段；缺文件/坏文件返回 {}（跳过注入，不让开通失败）。"""
+    try:
+        import yaml
+        data = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+        if not isinstance(data, dict):
+            return {}
+        out: Dict[str, Dict[str, Any]] = {}
+        for sec in PRESET_SECTIONS:
+            node = data.get(sec)
+            if isinstance(node, dict) and node:
+                out[sec] = node
+        return out
+    except FileNotFoundError:
+        return {}
+    except Exception:  # noqa: BLE001 - 预设写坏了宁可不注入也不让开通失败
+        return {}
+
+
+def _preset_leaves(prefix: List[str], node: Any) -> List[tuple]:
+    """预设树 → 叶子键路径清单（dict 递归展开；标量/列表即叶子）。"""
+    if isinstance(node, dict):
+        leaves: List[tuple] = []
+        for k, v in node.items():
+            leaves.extend(_preset_leaves(prefix + [str(k)], v))
+        return leaves
+    return [(prefix, node)]
+
+
+def inject_tenant_preset(overlay_path: Path, preset: Dict[str, Dict[str, Any]]) -> List[str]:
+    """多段预设逐叶子键保注释深写进 overlay；返回 'a.b.c' 形键名清单。
+
+    与 inject_ai_preset 同一不变量：ruamel 不可用/写失败即抛错，拒绝降级整写。
+    """
+    if not preset:
+        return []
+    from src.utils.config_manager import set_yaml_key_preserving
+
+    written: List[str] = []
+    for sec in PRESET_SECTIONS:
+        node = preset.get(sec)
+        if not node:
+            continue
+        for path_parts, value in _preset_leaves([sec], node):
+            if not set_yaml_key_preserving(overlay_path, path_parts, value):
+                raise RuntimeError(
+                    f"保注释写入失败（{'.'.join(path_parts)}）：ruamel 不可用或 overlay 非法，"
+                    "拒绝降级为整写")
+            written.append(".".join(path_parts))
+    return written
+
+
+def preset_license_slot(preset: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """定位预设里 credpool 配置节点（无 platform_login/credpool 段返回 None）。"""
+    node = (preset.get("platform_login") or {}).get("telegram")
+    if not isinstance(node, dict):
+        return None
+    cp = node.get("credpool")
+    return cp if isinstance(cp, dict) else None
+
+
+def resolve_preset_license(preset: Dict[str, Dict[str, Any]], instance_id: str,
+                           *, db_path: Optional[Path] = None) -> str:
+    """预设里 ``credpool.license_key: AUTO`` → 换成该租户专属卡密（签发/复用）。
+
+    返回生效卡密；签发失败（池库缺失等）→ **删掉** license_key 键（credpool
+    按 free 档分配兜底），返回 ""。非 AUTO/未配 credpool 段 → 原样不动。
+    """
+    cp = preset_license_slot(preset)
+    if cp is None:
+        return ""
+    cur = str(cp.get("license_key") or "").strip()
+    if cur.upper() != LICENSE_AUTO:
+        return cur
+    key = ensure_pool_license(instance_id, db_path=db_path)
+    if key:
+        cp["license_key"] = key
+    else:
+        cp.pop("license_key", None)
+    return key
+
+
+def ensure_pool_license(instance_id: str, *, db_path: Optional[Path] = None,
+                        level: str = "gold") -> str:
+    """为租户在本机凭据池签发专属卡密（幂等：同实例已有即复用）。
+
+    卡密形如 ``CHATX-<IID大写>-<4位随机>``；按 ``machine_id`` 空 + 前缀匹配复用，
+    首次被实例使用时池侧自动绑机。池库缺失/写失败返回 ""——**软失败**：
+    credpool 未配 license_key 时按 free 档分配，渠道链路仍可用，绝不拦开通。
+    """
+    db = Path(db_path) if db_path else CREDPOOL_DB
+    if not db.exists():
+        return ""
+    slug = re.sub(r"[^A-Z0-9]+", "-", str(instance_id or "").upper()).strip("-")[:24]
+    if not slug:
+        return ""
+    prefix = f"CHATX-{slug}-"
+    try:
+        con = sqlite3.connect(str(db), timeout=10)
+        try:
+            con.execute("""CREATE TABLE IF NOT EXISTS licenses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, license_key TEXT UNIQUE NOT NULL,
+                level TEXT, status TEXT, machine_id TEXT, expires_at TEXT)""")
+            row = con.execute(
+                "SELECT license_key FROM licenses WHERE license_key LIKE ? "
+                "ORDER BY id LIMIT 1", (prefix + "%",)).fetchone()
+            if row:
+                return str(row[0])
+            import secrets as _secrets
+            key = prefix + "".join(
+                _secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(4))
+            con.execute(
+                "INSERT INTO licenses (license_key, level, status, machine_id, expires_at)"
+                " VALUES (?,?,?,?,?)", (key, level, "unused", "", None))
+            con.commit()
+            return key
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001 - 池库不可写=软失败（free 档兜底），不拦开通
+        return ""
+
+
 def mask_secret(v: Any) -> str:
     """输出/日志用脱敏：只露尾 4 位。"""
     s = str(v or "")
@@ -833,8 +1213,20 @@ def default_slug(instance_id: str) -> str:
 
 
 def _nginx_proxy_body(upstream_port: int) -> str:
-    """两种暴露形态共用的反代主体：SSE 关缓冲 + 长读超时、WebSocket upgrade、真实 IP/协议头。"""
+    """两种暴露形态共用的反代主体：SSE 关缓冲 + 长读超时、WebSocket upgrade、真实 IP/协议头。
+
+    后端不可达（实例停机/隧道断）→ 友好页替代裸 502（P5，2026-08-08）：到期被停的
+    客户看到的是「续费即自动恢复」引导而非死页。**HTTP 状态刻意保持 502**（不改写
+    200）——外部监控/自家 edge 探针仍按故障计，只有人眼看到的 HTML 变友好；
+    页面由 expose 幂等推送到 /var/www/html/__tenant_down.html（缺失时回落 nginx
+    默认 502 页，软性无害）。
+    """
     return f"""    client_max_body_size 50m;
+
+    error_page 502 503 504 /__tenant_down.html;
+    location = /__tenant_down.html {{
+        root /var/www/html;
+    }}
 
     location / {{
         proxy_pass http://127.0.0.1:{upstream_port};
