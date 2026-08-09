@@ -196,6 +196,35 @@ try {
         Write-Host "    发布物有 $changed 项变更 → 重启 pm2 让静态索引生效"
         Invoke-Remote "pm2 restart yuntech --update-env >/dev/null 2>&1 && sleep 4 && echo restarted" | Out-Null
       }
+
+      # [3.6/4] R2 镜像同步（下载提速 P0 · 2026-08-08）：官网 /dl 分流入口 R2 优先，
+      # 发布物必须双源一致。有 rclone+凭证就同步（幂等，只传新增/变更），缺则提示不阻断
+      # （/dl 对缺文件会自动回落本站，最多损失镜像加速，不会 404）。
+      # conf 解析（117/176 双机对齐 2026-08-10）：env RCLONE_R2_CONF → 176 路径 → 单仓 deploy\secrets
+      $r2conf = $env:RCLONE_R2_CONF
+      if (-not $r2conf) {
+        $r2conf = @(
+          'C:\模仿音色\secrets\deploy\rclone_r2.conf',
+          (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'deploy\secrets\rclone_r2.conf')
+        ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+      }
+      $rcloneCmd = (Get-Command rclone -ErrorAction SilentlyContinue).Source
+      if (-not $rcloneCmd -and (Test-Path 'C:\tools\rclone\rclone.exe')) { $rcloneCmd = 'C:\tools\rclone\rclone.exe' }
+      if ($rcloneCmd -and $r2conf) {
+        Write-Host '[3.6/4] 同步发布物到 R2 镜像 ...'
+        $pairs = @(
+          @{ src = (Join-Path $WebRoot 'public\downloads'); dst = 'r2:avatarhub/downloads' },
+          @{ src = (Join-Path $WebRoot 'public\releases');  dst = 'r2:avatarhub/releases' }
+        )
+        foreach ($p in $pairs) {
+          if (-not (Test-Path $p.src)) { continue }
+          & $rcloneCmd --config $r2conf copy $p.src $p.dst --transfers 4 --s3-chunk-size 32M --log-level ERROR
+          if ($LASTEXITCODE -ne 0) { Write-Warning "R2 同步 $($p.src) 失败（/dl 会自动回落本站，事后可手动补：rclone copy ...）" }
+          else { Write-Host "    [OK] $($p.src) → $($p.dst)" }
+        }
+      } else {
+        Write-Host '    (跳过 R2 同步：本机无 rclone 或凭证；/dl 分流对缺文件会自动回落本站)'
+      }
     }
   } finally {
     if (-not $useOpenSsh -and $script:sshSession) {

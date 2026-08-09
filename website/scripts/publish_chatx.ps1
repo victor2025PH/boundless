@@ -1,4 +1,4 @@
-# publish_chatx.ps1 - one-command atomic publish of a ChatX desktop build to bd2026.cc.
+﻿# publish_chatx.ps1 - one-command atomic publish of a ChatX desktop build to bd2026.cc.
 #
 # Codifies the release flow that was done by hand for 1.0.6 (and is easy to get wrong):
 #   1. locate the build in desktop/dist (exe + blockmap + latest.yml)
@@ -7,8 +7,12 @@
 #   3. stage into website/public/downloads + regenerate manifest.json
 #   4. ATOMIC upload order: push exe+blockmap FIRST, verify sha512 on the VPS equals local, and only
 #      THEN push the latest.yml/manifest.json pointers (never leave a pointer aimed at a missing exe)
+#   4.5 R2 mirror sync (download-speed P0, 2026-08-08): the site's /dl/<path> router prefers the
+#      Cloudflare R2 mirror (dl.bd2026.cc) and falls back to the VPS per-file; keep the mirror in
+#      lockstep so the big exe serves from the edge instead of the 15Mbps VPS pipe. Missing
+#      rclone/credentials only means slower downloads, so warn instead of failing the publish.
 #   5. pm2 restart (Next.js rebuilds its public/ static index) + public verification
-#   6. hygiene: keep the newest -Keep versions, delete older exe/blockmap locally AND on the VPS
+#   6. hygiene: keep the newest -Keep versions, delete older exe/blockmap locally, on the VPS AND on R2
 #
 # -DryRun does every read-only check and PRINTS what it would upload/restart/delete, touching nothing
 # remote. Run it first, always.
@@ -30,6 +34,20 @@ param(
 $ErrorActionPreference = "Stop"
 $DownloadsDir = Join-Path (Split-Path -Parent $PSScriptRoot) "public\downloads"
 $GenManifest  = Join-Path $PSScriptRoot "gen-chatx-manifest.ps1"
+
+# R2 mirror tooling (aligned across build hosts, 2026-08-10):
+#   conf:   env RCLONE_R2_CONF  ->  176 avatarhub secrets  ->  monorepo deploy\secrets (117)
+#   rclone: PATH  ->  C:\tools\rclone\rclone.exe (117 drop location)
+$R2Conf = $env:RCLONE_R2_CONF
+if (-not $R2Conf) {
+    $R2Conf = @(
+        'C:\模仿音色\secrets\deploy\rclone_r2.conf',
+        (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'deploy\secrets\rclone_r2.conf')
+    ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+}
+$RcloneExe = (Get-Command rclone -ErrorAction SilentlyContinue).Source
+if (-not $RcloneExe -and (Test-Path 'C:\tools\rclone\rclone.exe')) { $RcloneExe = 'C:\tools\rclone\rclone.exe' }
+$R2Ready = [bool]($RcloneExe -and $R2Conf)
 
 function Sha512B64([string]$path) {
     $sha = [System.Security.Cryptography.SHA512]::Create()
@@ -100,6 +118,24 @@ if ($DryRun) {
     Ok "pointers uploaded + pm2 restarted"
 }
 
+# -- 4.5 R2 mirror sync (download-speed P0, 2026-08-08) --------------------------
+# /dl/<path> prefers the R2 mirror; keep it in lockstep so the big exe is served from
+# Cloudflare edge instead of the 15Mbps VPS pipe. Soft-fail: /dl falls back to the VPS
+# per-file, so a missed sync means slower downloads, never a 404.
+if ($DryRun) {
+    Info "DRYRUN would rclone copy exe+blockmap+latest.yml+manifest.json -> r2:avatarhub/downloads (conf=$R2Conf rclone=$RcloneExe)"
+} elseif ($R2Ready) {
+    Info "syncing to R2 mirror ..."
+    & $RcloneExe --config $R2Conf copy $DownloadsDir "r2:avatarhub/downloads" `
+        --include "ChatX-Setup-$Version.exe" --include "ChatX-Setup-$Version.exe.blockmap" `
+        --include "latest.yml" --include "manifest.json" `
+        --transfers 4 --s3-chunk-size 32M --log-level ERROR
+    if ($LASTEXITCODE -ne 0) { Write-Warning "R2 sync failed - /dl router will fall back to VPS; re-run: rclone --config $R2Conf copy $DownloadsDir r2:avatarhub/downloads" }
+    else { Ok "R2 mirror synced (r2:avatarhub/downloads)" }
+} else {
+    Write-Warning "R2 sync skipped (rclone or rclone_r2.conf missing) - /dl router will fall back to VPS"
+}
+
 # -- 5. public verification -----------------------------------------------------
 if (-not $DryRun) {
     $ly = (& curl.exe -s -m 15 "$SiteUrl/downloads/latest.yml" | Out-String)
@@ -128,7 +164,11 @@ else {
         else {
             Remove-Item (Join-Path $DownloadsDir "ChatX-Setup-$v.exe"), (Join-Path $DownloadsDir "ChatX-Setup-$v.exe.blockmap") -Force -ErrorAction SilentlyContinue
             & ssh @sshBase $Vps "rm -f '$RemoteDir/ChatX-Setup-$v.exe' '$RemoteDir/ChatX-Setup-$v.exe.blockmap'"
-            Ok "pruned old version $v (local + VPS)"
+            if ($R2Ready) {
+                & $RcloneExe --config $R2Conf delete "r2:avatarhub/downloads" `
+                    --include "ChatX-Setup-$v.exe" --include "ChatX-Setup-$v.exe.blockmap" --log-level ERROR
+            }
+            Ok "pruned old version $v (local + VPS + R2)"
         }
     }
 }

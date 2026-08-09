@@ -85,7 +85,7 @@ export default function FilmPageEn() {
             href="/en/download"
             className="rounded-full bg-neon-blue px-6 py-3 text-sm font-semibold text-white transition hover:brightness-110"
           >
-            Start the 3-day full trial
+            Start the 14-day full trial
           </Link>
           <Link
             href="/en/order"

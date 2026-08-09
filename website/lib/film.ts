@@ -36,6 +36,6 @@ export const BRAND_FILM = {
     { label: { zh: "换脸直播", en: "Face-swap live" }, t: { zh: 54.2, en: 75 } },
     { label: { zh: "照片开口 · 多语成片", en: "Talking photo · multilingual" }, t: { zh: 76.7, en: 108.4 } },
     { label: { zh: "声音克隆 · 还能唱", en: "Voice cloning · it sings" }, t: { zh: 93.5, en: 130.1 } },
-    { label: { zh: "收尾 · 3 天试用", en: "Wrap-up · 3-day trial" }, t: { zh: 131.4, en: 171.3 } },
+    { label: { zh: "收尾 · 14 天试用", en: "Wrap-up · 14-day trial" }, t: { zh: 131.4, en: 171.3 } },
   ],
 } as const;

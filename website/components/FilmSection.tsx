@@ -37,7 +37,7 @@ export default function FilmSection() {
               href={localePath(lang, "/download")}
               className="rounded-full border border-white/15 px-5 py-2.5 text-sm text-slate-200 transition hover:border-neon-cyan/50 hover:text-white"
             >
-              {zh ? "3 天全功能试用" : "Start the 3-day full trial"}
+              {zh ? "14 天全功能试用" : "Start the 14-day full trial"}
             </Link>
           </div>
         </div>

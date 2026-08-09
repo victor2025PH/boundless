@@ -70,7 +70,8 @@ export default function FilmPlayer({ lang, compact = false }: { lang: FilmLang; 
           }}
           onTimeUpdate={(e) => {
             const el = e.currentTarget;
-            if (!el.duration) return;
+            // 深链 seek 也会触发 timeupdate：未真实开播不记进度（实测污染过一条 25% 事件）
+            if (!el.dataset.played || !el.duration) return;
             const q = Math.floor((el.currentTime / el.duration) * 4);
             const prev = Number(el.dataset.q || 0);
             if (q > prev && q < 4) {

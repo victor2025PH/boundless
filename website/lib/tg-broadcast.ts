@@ -1,4 +1,4 @@
-import { readFile } from "fs/promises";
+import { readFile, stat } from "fs/promises";
 import path from "path";
 import { TELEGRAM_CHANNEL, TELEGRAM_GROUP, BOT_URL, SITE_URL, siteUtmLink, miniappUtmLink } from "./site";
 import { buildOverviewPost } from "./catalog-posts";
@@ -163,6 +163,90 @@ export async function broadcastPhoto(opts: {
     chats.map((c) => photoTo(token, c, opts.photo, opts.caption, opts.withButton, opts.campaign ?? ""))
   );
   return { ok: results.length > 0 && results.every((r) => r.ok), results };
+}
+
+// ── 多级降压视频广播（2026-08-07）：日更 feed 此前只有「URL sendVideo→文字」两级，
+// Telegram URL 拉取上限 20MB，长教学片必然降级成纯文字帖（体验大损）。
+// 新阶梯：①本地文件 ≤49MB → multipart 上传真视频帖（bot 上限 50MB；同晨目录帖
+// multipart 图片上传已实证此运行时通路）②超限/失败 → 海报图+链接帖 ③最后才纯文字。
+const MEDIA_ROOT = process.env.MEDIA_FEED_DIR || "/var/www/media/feed";
+const TG_VIDEO_MAX_MB = 49;
+
+async function sendVideoFile(
+  token: string,
+  chat: string,
+  filePath: string,
+  caption: string,
+  keyboard: ReturnType<typeof richButtons>
+): Promise<BroadcastResult> {
+  try {
+    const buf = await readFile(filePath);
+    const form = new FormData();
+    form.append("chat_id", chat);
+    form.append("caption", caption);
+    form.append("parse_mode", "HTML");
+    form.append("supports_streaming", "true");
+    form.append("reply_markup", JSON.stringify(keyboard));
+    form.append("video", new Blob([new Uint8Array(buf)]), path.basename(filePath));
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendVideo`, {
+      method: "POST",
+      body: form,
+    });
+    const data = await res.json();
+    return {
+      chat,
+      ok: Boolean(data?.ok),
+      error: data?.ok ? undefined : data?.description,
+      messageId: data?.result?.message_id,
+    };
+  } catch (e) {
+    return { chat, ok: false, error: String(e) };
+  }
+}
+
+/** 站内 /media/feed/* 路径 → 服务器本地文件路径；外链/其它路径返回 null。 */
+function mediaLocalPath(src: string): string | null {
+  if (!src.startsWith("/media/feed/")) return null;
+  return path.join(MEDIA_ROOT, path.basename(src));
+}
+
+/** 日更/品牌视频的智能广播阶梯：multipart 真视频 → 海报+链接 → URL 视频 → 文字。 */
+export async function broadcastVideoSmart(opts: {
+  src: string; // 站内路径（/media/feed/..）或 https URL
+  videoUrl: string; // 绝对 URL（阶梯后段与文字帖用）
+  posterUrl?: string; // 海报绝对 URL（photo 帖用，Telegram 自取 ≤5MB 足够）
+  caption: string;
+  campaign?: string;
+  sitePath?: string;
+  siteLabel?: string;
+}): Promise<BroadcastResult> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return { chat: "-", ok: false, error: "no_bot_token" };
+  const chat = `@${TELEGRAM_CHANNEL}`;
+  const buttons = richButtons("channel", opts.campaign ?? "video-feed", {
+    path: opts.sitePath ?? "/videos",
+    label: opts.siteLabel ?? "🎬 更多演示",
+  });
+
+  const local = mediaLocalPath(opts.src);
+  if (local) {
+    try {
+      const sizeMB = (await stat(local)).size / 1048576;
+      if (sizeMB <= TG_VIDEO_MAX_MB) {
+        const up = await sendVideoFile(token, chat, local, opts.caption, buttons);
+        if (up.ok) return up;
+      }
+    } catch {
+      /* 本地不可读则继续走 URL 阶梯 */
+    }
+    // 超限或上传失败：海报图 + 链接（比纯文字体面一级）
+    if (opts.posterUrl) {
+      const cap = `${opts.caption}\n\n▶️ ${opts.videoUrl}`;
+      const ph = await photoTo(token, chat, opts.posterUrl, cap.slice(0, 1024), true, opts.campaign ?? "video-feed");
+      if (ph.ok) return ph;
+    }
+  }
+  return broadcastVideoToChannel(opts);
 }
 
 /** Send a video (https URL ≤20MB — Telegram fetches it) with caption + buttons to the channel.

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/admin-auth";
 import { listFeed, markFeedBroadcast, removeFeedVideo, upsertFeedVideo, type FeedVideo } from "@/lib/feed-store";
-import { broadcastVideoToChannel } from "@/lib/tg-broadcast";
+import { broadcastVideoSmart } from "@/lib/tg-broadcast";
 import { SITE_URL } from "@/lib/site";
 
 export const runtime = "nodejs";
@@ -59,7 +59,14 @@ export async function POST(req: NextRequest) {
       `🎬 <b>${esc(saved.title.zh)}</b>\n${esc(saved.desc.zh)}` +
       (saved.ai !== false ? "\n\n<i>AI 概念演示 · 实际效果以引擎实测为准</i>" : "") +
       (saved.youtube ? `\n▶️ YouTube: https://youtu.be/${esc(saved.youtube)}` : "");
-    tg = await broadcastVideoToChannel({ videoUrl: abs, caption, campaign: `feed-${id}` });
+    // 多级降压：本地 ≤49MB multipart 真视频帖 → 海报+链接 → URL 视频 → 文字
+    tg = await broadcastVideoSmart({
+      src,
+      videoUrl: abs,
+      posterUrl: saved.poster ? `${SITE_URL}${saved.poster}` : undefined,
+      caption,
+      campaign: `feed-${id}`,
+    });
     if (tg.ok && tg.messageId) await markFeedBroadcast(id, tg.messageId);
   }
 

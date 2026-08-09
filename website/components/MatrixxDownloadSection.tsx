@@ -23,6 +23,7 @@ import Reveal from "./fx/Reveal";
 import RichText from "./RichText";
 import ProductIcon from "./ProductIcon";
 import { MATRIXX, MATRIXX_RELEASE_BASE } from "@/lib/matrixxContent";
+import { dlHref } from "@/lib/mirror";
 import { parseLatestYml, formatMb } from "@/lib/downloads";
 import { track } from "@/lib/track";
 import { CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
@@ -56,7 +57,8 @@ export default function MatrixxDownloadSection({ lang: forced }: { lang?: BrandL
   const version = live?.version ?? d.version;
   const filename = live?.filename ?? d.filename;
   const sizeLabel = live?.sizeLabel || d.size[lang];
-  const url = live ? `${MATRIXX_RELEASE_BASE}/${live.filename}` : d.url;
+  // /dl 分流：508MB 大包镜像健康走 R2 边缘，否则自动回落本站 /releases/matrixx/
+  const url = dlHref(`releases/matrixx/${filename}`);
   // 构建常量里的 SHA-256 只对应它同版的安装包；服务器已发更新版时展示口径切「与最新发布一致」，
   // 绝不给新包配旧校验值（比不显示更糟）。
   const shaFresh = version === d.version;

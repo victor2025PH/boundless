@@ -22,6 +22,7 @@ import Reveal from "./fx/Reveal";
 import RichText from "./RichText";
 import ProductIcon from "./ProductIcon";
 import { CHATX } from "@/lib/chatxContent";
+import { dlHref } from "@/lib/mirror";
 import { track } from "@/lib/track";
 import { CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
 import type { BrandLang } from "@/lib/brand";
@@ -53,7 +54,8 @@ export default function ChatxDownloadSection({ lang: forced }: { lang?: BrandLan
   const filename = mf?.filename || d.filename;
   const sizeLabel = mf?.size_mb ? `${mf.size_mb} MB` : d.size[lang];
   const sha256 = mf?.sha256 || d.sha256;
-  const url = `/downloads/${filename}`;
+  // /dl 分流：476MB 大包镜像健康走 R2 边缘，否则自动回落本站 /downloads/
+  const url = dlHref(`downloads/${filename}`);
 
   useEffect(() => {
     fetch(d.manifestUrl)

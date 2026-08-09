@@ -30,6 +30,7 @@ import RichText from "./RichText";
 import { ENGINE } from "@/lib/engineContent";
 import { INSTALL_GUIDE, PRE_CHECK } from "@/lib/manualContent";
 import { RELEASE_NOTES, LATEST_VERSION, type ReleaseTag } from "@/lib/releaseNotes";
+import { dlHref } from "@/lib/mirror";
 import { track } from "@/lib/track";
 import { CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
 
@@ -182,7 +183,8 @@ export default function DownloadSection({ embedded = false }: { embedded?: boole
                   <div className="mt-5 flex-1">
                     {b.ready && b.url ? (
                       <a
-                        href={b.url}
+                        // /dl 分流：镜像健康走 R2 边缘（快 3–5 倍且不占主站带宽），否则自动回落本站
+                        href={b.filename ? dlHref(`releases/${b.filename}`) : b.url}
                         download
                         onClick={() => track("download_click", { os: b.os, ver: b.ver })}
                         className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-6 py-2.5 text-sm font-medium text-ink-950 transition hover:opacity-90"

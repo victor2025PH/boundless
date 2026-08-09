@@ -85,7 +85,7 @@ export default function FilmPage() {
             href="/download"
             className="rounded-full bg-neon-blue px-6 py-3 text-sm font-semibold text-white transition hover:brightness-110"
           >
-            3 天全功能免费试用
+            14 天全功能免费试用
           </Link>
           <Link
             href="/order"
