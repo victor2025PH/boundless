@@ -7,27 +7,67 @@
     "改机器/搬迁只改这一个文件；env_key 是该服务在 env_config.bat 里的路由变量名。",
     "字段: dir=项目目录  py=Python解释器  task=计划任务名  loadkey=/health 就绪正则(空=只看200)",
     "vram_budget: 数值为实测 GB（2026-07-05, logs/optimize_20260705）。上新/迁移服务先改这里，",
-    "  lint 过了再动手——32B 翻译模型被挤出显存(31%落CPU、每句3.6s)就是没有这道闸的事故。"
+    "  lint 过了再动手——32B 翻译模型被挤出显存(31%落CPU、每句3.6s)就是没有这道闸的事故。",
+    "mode_services（2026-08-10 P0 集群算力模式）: 分模式编制——services 是任一模式都常驻的底座，",
+    "  mode_services.<模式> 只在该模式常驻；topology_lint 对每个模式分别验收 Σ(底座+该模式) ≤ 阈值。",
+    "  模式动作/角色 SSOT 在 D:\\boundless\\deploy\\boundless-hud\\modes.json，切换执行器=hub /api/cluster/mode。"
   ],
   "hub": { "ip": "192.168.0.176", "port": 9000 },
   "vram_budget": {
     "threshold": 0.92,
     "192.168.0.176": {
+      "_note": "DHCP 漂移史: 07-23 176→141, 07-26 141→176（又漂回来了）。当时那句『建议做静态租约』没落地，于是复发一次，并让各远端 ALLOW_IPS 白名单再次过期 → 鉴权巡检误报『服务裸奔』。根治只有路由器静态租约；改完地址必须 harden_remote.ps1 -Mode deploy 重下白名单。",
+      "_note2": "2026-07-23 数字人优先编制实测：S1 上游(12.4G, 07-19 转正质量轨)此前不在编制表=配置漂移。渲染链全家+S1+本地LLM 物理超编(34G>32.6G)，十句连播实测满载门控频繁回落 256、drift p95 冲到 10s——本表按『渲染链常驻、LLM 走云端/.173(deepseek 主 + qwen14b-173 容灾)』记账；本地 LLM 只在云端与 .173 都不可用时临时回载。",
+      "_note_home_20260801": "2026-08-01 退出 SITE-DEMO：faceswap 归 .104、STT/Nemo 归 .140；本机编制只留画面链(fish+ditto+musetalk+desktop+bge≈14.2G)。出差档若再启用：faceswap/stt 收编本地并改本表，勿与数字人旗舰同开。",
+      "_note_ollama_keepalive": "2026-08-01 实锤：本机用户级环境变量 OLLAMA_KEEP_ALIVE 曾=8h——任何不带 keep_alive 的散客请求(RAG嵌入/巡检裁判落到本地14B/杂用工具)都把模型钉8小时，llm_backends.json 改 2m 管不住它们(实测 qwen14b 9.5G+hy-mt2 5.3G 复驻,总占29.5G)。已改 10m 并重启 ollama(改注册表不够,须重启进程;从 shell 代启会继承旧值,先 set 进程环境再拉)。若渲染卡再见 LLM 常驻>10min,先查这个变量再查调用方。",
+      "_note_yue_20260802": "P0-yue: funasr_stt(:7864, SenseVoiceSmall) 上岗本机=粤语专用 ASR。刻意 CPU-only(FUNASR_DEVICE=cpu; 非自回归一遍解码, CPU 约 17-20x 实时)——零显存、不挤渲染链, 下表记 0.0 只作在编登记。路由 SVC_FUNASR_STT=http://127.0.0.1:7864(本机服务, 不进 hosts 远端巡检)。升级粤语专精权重=改 FUNASR_MODEL_DIR 指新目录(2026-08-02 P1 已换 WSYue SenseVoice-s-Yue, D:\\projects\\ai_models\\SenseVoiceSmall-Yue)。",
+      "_note_dialect_20260802": "P1: dolphin_stt(:7867, Dolphin-CN-Dialect small.cn 0.4B) 上岗本机=广谱方言 ASR(川/沪/湘/豫/东北/闽南…22 方言, Apache-2.0, 原生热词)。同样 CPU-only(DOLPHIN_DEVICE=cpu)零显存, 记 0.0 在编登记。粤语刻意不走它: WSYue 公开基准 Dolphin yue MDCC CER 26.4% vs SenseVoice 6.3%——两引擎按语码分工(live_interpreter._DIALECT_STT)。路由 SVC_DOLPHIN_STT=http://127.0.0.1:7867(本机服务)。权重 D:\\projects\\ai_models\\dolphin\\small.cn(ASCII 路径铁律, sentencepiece ANSI fopen)。",
+      "_note_dual5090_20260802": "DUAL-5090 档（用户决策：两台 5090 最大算力跑 换脸直播+同声传译）：换脸主引擎收编本机 5090（faceswap_api :8000 常驻 + faceswap2 :8003 容灾副本，HUB_SUP_FACESWAP2=1），.104 引擎保温做局域网回退（env_key 已让渡，见 hosts）。同传链本就横跨两卡：本机=interpreter(:7900)+fish 配音+CPU 方言 ASR，.173=MT-LLM(qwen14b-fallback)+情感 TTS。数字人渲染链(ditto/musetalk)保留在编不裁——与换脸是场景互斥（broadcast_mode 二选一 + 负载门控）。faceswap_local 记 10.0=2026-08-02 实测整卡差值 9.9G（全增强常驻: hyperswap+GFPGAN+CodeFormer+GPEN+XSeg, enh_concurrency 3, CUDA EP），比 .104 的 5.5 账面大是因为 5090 上 CUDA context/workspace 更肥——按 P14「常驻+峰值余量照实记」惯例入账；总账 26.4G ≤ 30G。TRT 未装（health: trt_available=false），装 tensorrt-cu12==10.16.1.11 后可再提速（.104 同款先例）。生效方式：PATCH /api/config key=faceswap（hub_config.json 每次启动都赢，僵尸 env 压不住它）；切回 avatar-first=PATCH 回 .104 + deploy.env HUB_SUP_FACESWAP2=0。",
+      "_note_hostx_20260802": "HostX M1: live_director(:7910) 上岗本机=智播控场·声援执行端（换脸直播观众自动应答的纯语音出口：hub 逐句转发 TTS wav→播桌面声进 OBS 桌面捕获，麦克风 VAD 抢话仲裁）。CPU-only(facefusion env, sounddevice 仅本进程加载=hub P10 纪律不破)、零显存记 0.0 在编登记。路由 SVC_LIVE_DIRECTOR=http://127.0.0.1:7910(本机服务, 不进 hosts 远端巡检)；守护 HUB_SUP_DIRECTOR=1(同 monitor 先例)。刻意不走 VB-Cable：本机实证其他进程混不进 CABLE(见 live_interpreter._push_audio_only 注释)。",
+      "_note_sbv2_20260803": "P0 编制对账（十二视角方案 §四 缺口）：sbv2_tts(:7861, SBV2 JP-Extra 林小玲) 在开机自启栈里常驻却一直没入本表=账实不符。WDDM 驱动 per-proc 显存 [N/A]（同 .140 P14），按「常驻+峰值余量」惯例记 1.5G；入账时整卡实测 25.5G(2026-08-03 09:45, 渲染链+换脸双实例+sbv2 全在线) vs 纸面 26.4+1.5=27.9 ≤ 30.0 上限，账仍盖得住实。",
+      "_note_mode_20260810": "P0 集群算力模式（chatx 智聊 ⇄ face 换脸/直播，SSOT=D:\\boundless\\deploy\\boundless-hud\\modes.json，执行器=hub /api/cluster/mode）：ditto/musetalk 从常驻编制改为 face 模式编制；hy-mt2-7b(智聊翻译主力, /api/ps 实测 size_vram 4.9G) 为 chatx 模式编制——此前它钉驻本机却不在任何账本=账实不符。topology_lint 分模式验收：base+face=27.9 / base+chatx=23.8 ≤ 30.0。face 模式刻意不钉 qwen2.5:14b（27.9+9.5 爆预算；LLM 容灾主路在 .173）。",
       "gpu": "RTX 5090", "vram_gb": 32.6,
-      "services": { "ollama_qwen2.5_14b": 10.0, "fish_tts": 2.5,
-                    "ditto": 5.0, "musetalk_lipsync": 4.0, "desktop_misc": 1.0 }
+      "services": { "fish_tts": 2.5,
+                    "desktop_misc": 2.0, "ollama_bge_m3_embed": 0.7,
+                    "faceswap_local": 10.0, "faceswap2_standby": 2.2,
+                    "sbv2_tts_jp": 1.5,
+                    "funasr_sensevoice_stt_cpu": 0.0,
+                    "dolphin_cn_dialect_stt_cpu": 0.0,
+                    "live_director_cpu": 0.0 },
+      "mode_services": {
+        "face":  { "ditto": 5.0, "musetalk_lipsync": 4.0 },
+        "chatx": { "ollama_hy_mt2_7b": 4.9 }
+      }
+    },
+    "192.168.0.173": {
+      "_note": "2026-07-27 AM: quality track switched to IndexTTS-2 (task IndexTTS enabled NOW, :7865, ready in ~18s) cloning the anchor-voice seed (hub data/cosy_prompts/, user-approved v10 sound); measured cos-to-anchor 0.931/0.940 at 8-10s/turn vs MOSS wander 0.51/0.55 and .117-Cosy 0.878 at 50-130s. MOSS-TTSD task DISABLED (weights kept, C:\\models\\moss-ttsd). VRAM-EXCLUSIVE tenants on this 32G card -- exactly ONE of: MOSS-TTSD(~26G, task MOSS_TTSD DISABLED) | IndexTTS-2(~10G, task IndexTTS enabled NOW, C:\\models\\index-tts) | GLM stack(24G, tasks kept, stopped). Swap = schtasks /change /tn <task> /enable|/disable + /run (ssh admin@, NOT Administrator@ - port 22 resets that user); hub degrades to local fish while swapping. USE_MODELSCOPE=true forced for downloads (HF TCP-reachable but stalls). Pin a DHCP static lease on the router (SVC URLs IP-hardcoded).",
+      "_note_cosy": "2026-07-27 PM P1: Fun-CosyVoice3-0.5B ADDED as resident co-tenant (task EmotionTTS, :7852, C:\\models\\cosyvoice, uv venv py3.11 torch2.11+cu128 mirroring the proven index venv; weights tar-copied 6GB from dev box, NOT modelscope). Small (3.5G fp32) so it lives ALONGSIDE the vram-exclusive big tenants, not in their rotation. Measured on this 5090: clone RTF 0.35-0.37 zh/ja/ko, first-ja 3.7s (the .117 3060 took 278s frontend cold + RTF~5), cos-to-seed 0.886-0.898 = same band as .117 output -> true drop-in. SVC_EMOTION_TTS now points here; .117:7852 stays warm as manual fallback (flip env_config line back if this box is down). Deliberately NOT pooled with .117 (least-inflight would send every 2nd turn to the 10x slower 3060). onnxruntime is CPU build (campplus/speech_tokenizer on CPU, same as .117) - onnxruntime-gpu is a known further speedup if ever needed.",
+      "_note_llm_fallback": "2026-07-28 P1-4: ollama qwen2.5:14b(q4) ADDED as LLM failover-first target (llm_backends.json entry qwen14b-173, kind=lan, keep_alive 8h). Booked 10.5G = MEASURED after pinning num_ctx 8192 via derived model qwen14b-fallback (C:\\models\\qwen14b_fallback.modelfile). Lesson: raw qwen2.5:14b loaded at 15.3G and the 28.8G static tri-tenancy WDDM-spilled -- first cosy call after LLM load hit a 180s ReadTimeout (2026-07-28 drill); budget must leave ~5G+ for inference working sets, not just weights. Bench on this box warm: TTFT 0.11-0.14s, 214-228 chars/s ja/zh (the same model contending on .176 did ~3 chars/s). Rationale: deepseek-chat upstream sunset incident showed the fallback runs for DAYS unnoticed -- it must not contend with the .176 render chain (old fallback pinned ~9G on the hub box via boot prewarm, violating .176's own budget note2). Hub prewarm/keepwarm now target this box first; .176 local 14B demoted to cold last resort. ollama already installed (C:\\Users\\admin\\...\\Ollama, D:\\ollama\\models, listens 0.0.0.0:11434); qwen3:30b-a3b(18.6G) also on disk but must NOT be loaded alongside index+cosy (33.5G > cap).",
+      "gpu": "RTX 5090", "vram_gb": 32.6,
+      "services": { "index_tts2_fp16": 10.0, "emotion_tts_cosyvoice3_fp32": 3.5,
+                    "ollama_qwen14b_q4_llm_fallback": 10.5 }
     },
     "192.168.0.104": {
       "gpu": "RTX 4070", "vram_gb": 12.0,
       "services": { "faceswap_inswapper_hyperswap_gfpgan": 5.5 }
     },
     "192.168.0.117": {
+      "_note": "2026-07-27 PM: emotion_tts here DEMOTED to warm manual fallback (SVC_EMOTION_TTS -> .173 5090; see .173 _note_cosy). Service stays up on purpose; env_key ownership moved to .173 so topology_lint tracks the active route.",
+      "_note_seat_20260801": "zhiliao 坐席(D:\\chengjie-instances, 本表不记账的独立产品)的 ai.fallback + 口语化改写(provider=local)自 2026-08-01 起调 .173:11434 qwen14b-fallback（原误指 .176 qwen3:30b——渲染机 30B 冷载隐患，兼口语化本地档配置性死亡）。纯 HTTP 出站，不占 .117 显存；.173 停机时坐席自带熔断回落规则档。详见 口语化说话方式_文本腔根治_三视角方案_20260731.md §11。",
       "gpu": "RTX 3060", "vram_gb": 12.0,
       "services": { "emotion_tts_cosyvoice3": 3.3, "qwen3_tts_0.6b_bf16": 3.2 }
     },
     "192.168.0.140": {
+      "_note": "2026-07-24: DRIFT/OVERLOAD found during local GLM verify. This 4070(12G) ALSO hosts emotion_tts/CosyVC(:7852) which is the ONLY node with the /v1/vc voice-conversion endpoint the GLM bridge(.173) depends on (.117's emotion_tts returns 404 on /v1/vc = TTS-only). With Whisper(5.4)+Nemo(4.3)+CosyVC(3.3)+ollama(0.3)=13.3G > 12G*0.92 the card thrashes: CosyVC /v1/vc conversions Read-timeout (bridge warmkeeper vc=0ms), so GLM body audio never streams back. Fix: in GLM phone mode .140 must reserve the 4070 for CosyVC only -- GLM-4-Voice is speech-to-speech so remote Whisper/Nemo STT here is only subtitle-echo (non-critical); unload/stop them so VC owns the card.",
+      "_note_p13": "2026-07-27 P13 eviction: the REAL squatter was ollama holding qwen3-vl:8b(5.5G)+bge-m3(0.66G) pinned with keep_alive=-1 (expires_at year 2318) -- zero consumers in repo (hub embeddings use 127.0.0.1:11434, nothing references .140:11434; likely a manual experiment leftover). ollama stop both: card 11.6G -> 6.1G used, whisper+nemo+cosyvc resident together = ~6.1G with ~5G headroom, so the 07-24 thrash precondition is gone while GLM stays parked. Paper sum 13.3G is worst-case-under-load bookkeeping, not resident reality; pending ruling (user): keep all three and re-baseline budgets after a week of clean ops, OR move nemo to .104 (5.5+4.3 fits 11.04). [P14·2026-07-27] mem_watchdog.run_remote_ollama_audit now auto-polls this every 5min (HTTP LAN to .140:11434 CONFIRMED reachable from hub) and alerts on keep_alive=-1 pins / over-budget -- NO auto-stop (recurrence proves stop->repin->stop would just thrash; root-cause is a human job). First live catch on deploy: bge-m3 RE-PINNED (expires 2318-11-06, 0.62G) -- qwen3-vl(5.5G) stayed gone but bge-m3 came back, so some .140-local consumer reloads it with keep_alive=-1 (repo still has zero refs to .140:11434). 0.62G is minor (card ollama total now 0.62G vs P13's 6.2G) = no thrash risk, flagged for root-cause. Ruling (P14·2026-07-27): user chose re-baseline, see _note_p14.",
+      "_note_p14": "P14 rebaseline (measured, user chose this over move-nemo-to-.104): whole-card nvidia-smi 8058MiB/12282MiB util0%; P13 post-eviction whisper+nemo+cosyvc resident together ~6.1G. per-process used_memory is [N/A] under this WDDM driver (GPU procs enumerable: stt_server / nemotron_stt_server[nemoasr env] / emotion_tts_server / ollama-bge-m3, but no per-proc MB), so worst-case peak-stacked budgets brought to resident+peak-headroom off the whole-card measurement: stt_whisper 5.4->3.0, nemo 4.3->2.5, cosyvc/ollama_idle unchanged. sum 13.3->9.1 <= 11.04(=12*0.92) clears the paper over-provision alert; physical resident is only 8G with ample headroom. Move-nemo-to-.104 REJECTED: .104 has no nemoasr env, no nemotron weights/nemotron_stt_server.py, no D:\\faceX (from-scratch deploy) AND .104 is the realtime-faceswap production box so adding nemo would push 5.5+4.3=9.8G toward the cap. bge-m3 zombie 0.62G is an anomaly pending cleanup (P14 run_remote_ollama_audit already alerts it), not counted in the intended budget.",
+      "_note_mode_20260810": "P0 集群算力模式重记账（SSOT=modes.json，同 .176 注）：① ollama_idle 0.3 升格为 ollama_bge_m3_embed 0.7——bge-m3 已由 P13/P14 的『僵尸待清理』转正为智聊记忆/KB/语义闸门唯一嵌入主路（任一模式绝不卸载，keep_alive=-1 语义保留）；② 旧 stt_whisper_turbo_nllb 3.0 拆分 whisper 1.5 + nllb_mt_600m 1.4（NLLB 只在 face 模式常驻；chatx 经 /mt/nllb/unload 卸载腾位）；③ nemo 改 face 模式编制；④ hy-mt2-7b(智聊 MT 兜底) 入账：chatx 满血 5.5 / face 部分装载 1.6（Ollama 装载期自限填剩余显存，2026-08-10 00:20 实测部分装载 2.2/5.8G、整卡 11.5/12.0=超编在案——本次分模式记账即为其治理）。分模式验收：base(5.5)+face(5.5)=11.0 / base+chatx(5.5)=11.0 ≤ 11.04。数字按整卡实测反推（P14 惯例），首次真机演练后以 /api/ps size_vram 与 nvidia-smi 复测再校。",
       "gpu": "RTX 4070", "vram_gb": 12.0,
-      "services": { "stt_whisper_turbo_nllb": 5.4, "nemo_stt_bf16": 4.3, "ollama_idle": 0.3 }
+      "services": { "emotion_tts_cosyvoice_vc": 3.3, "stt_whisper_turbo": 1.5, "ollama_bge_m3_embed": 0.7 },
+      "mode_services": {
+        "face":  { "nemo_stt_bf16": 2.5, "nllb_mt_600m": 1.4, "ollama_hy_mt2_7b_partial": 1.6 },
+        "chatx": { "ollama_hy_mt2_7b_full": 5.5 }
+      }
     },
     "192.168.0.198": {
       "gpu": "RTX 4070", "vram_gb": 12.0,
@@ -36,32 +76,51 @@
   },
   "hosts": {
     "192.168.0.104": {
+      "_note": "2026-08-02 DUAL-5090: 换脸主路由收编本机 5090（见 .176 _note_dual5090_20260802），本机引擎保温转「局域网热备」——服务照常开机自启、不裁显存编制，主引擎故障时 PATCH /api/config key=faceswap 指回 http://192.168.0.104:8000 即回退。env_key 让渡为空（同 .117 emotion_tts_standby 先例：路由归属已移走，巡检不再按活路由核对本机）。",
       "dir": "C:\\模仿音色",
       "py": "C:\\Users\\Administrator\\Miniconda3\\envs\\facefusion\\python.exe",
       "deps_note": "2026-07-10: pip tensorrt-cu12==10.16.1.11 已装(TRT EP 依赖,重装机必备)；TRT 引擎缓存在 C:\\packs\\trt_cache\\{faceswap,auxnets}(须纯 ASCII 路径,删掉会在下次启动重建~90s)；模型 gpen_bfr_256/xseg_1/hyperswap_1a_256.onnx 在 models\\",
       "svcs": [
-        { "server": "faceswap_api.py", "name": "faceswap", "addcors": false,
-          "task": "FaceSwap_Boot", "port": 8000, "loadkey": "", "env_key": "SVC_FACESWAP" }
+        { "server": "faceswap_api.py", "name": "faceswap", "addcors": false, "vram_gb": 5.5,
+          "task": "FaceSwap_Boot", "port": 8000, "loadkey": "", "env_key": "" }
       ]
     },
     "192.168.0.117": {
       "dir": "D:\\faceX\\mfys",
       "py": "D:\\faceX\\Miniconda3\\envs\\cosytts\\python.exe",
       "svcs": [
-        { "server": "emotion_tts_server.py", "name": "emotion_tts", "addcors": true,
-          "task": "EmotionTTS_Boot", "port": 7852, "loadkey": "\"models_loaded\":\\s*true", "env_key": "SVC_EMOTION_TTS" },
-        { "server": "qwen3_tts_server.py", "name": "qwen3_tts", "addcors": true,
+        { "server": "emotion_tts_server.py", "name": "emotion_tts_standby", "addcors": true, "vram_gb": 3.3,
+          "task": "EmotionTTS_Boot", "port": 7852, "loadkey": "\"models_loaded\":\\s*true", "env_key": "" },
+        { "server": "qwen3_tts_server.py", "name": "qwen3_tts", "addcors": true, "vram_gb": 3.2,
           "task": "Qwen3TTS_Boot", "port": 7858, "loadkey": "\"model_loaded\":\\s*true", "env_key": "SVC_QWEN3_TTS" }
       ]
     },
     "192.168.0.140": {
+      "_note": "2026-08-01 HOME: STT/Nemo 主路由归还 .140（SITE-DEMO 收编已回滚）。Hub 本机不再常驻 whisper，省 ~3G 给数字人渲染链。",
       "dir": "D:\\faceX\\mfys",
       "py": "D:\\faceX\\Miniconda3\\envs\\cosytts\\python.exe",
       "svcs": [
-        { "server": "stt_server.py", "name": "stt", "addcors": true,
+        { "server": "stt_server.py", "name": "stt", "addcors": true, "vram_gb": 3.0,
           "task": "STT_Boot", "port": 7854, "loadkey": "\"loaded\":\\s*true", "env_key": "SVC_STT" },
-        { "server": "nemotron_stt_server.py", "name": "nemo_stt", "addcors": true,
+        { "server": "nemotron_stt_server.py", "name": "nemo_stt", "addcors": true, "vram_gb": 2.5,
           "task": "NemoSTT_Boot", "port": 7857, "loadkey": "\"loaded\":\\s*true", "env_key": "SVC_NEMO_STT" }
+      ]
+    },
+    "192.168.0.173": {
+      "dir": "C:\\models\\moss-ttsd",
+      "py": "C:\\models\\moss-ttsd\\.venv\\Scripts\\python.exe",
+      "ssh_user": "admin",
+      "deps_note": "2026-07-24: uv venvs (moss-ttsd py3.12 / index-tts py3.11); weights via modelscope (USE_MODELSCOPE=true). Login admin@ (key deploy_key_2025). Firewall: uv-python auto-Block rules must be removed per interpreter (bitten twice: 3.11 & pre-empted 3.12).",
+      "svcs": [
+        { "server": "moss_ttsd_server.py", "name": "moss_ttsd", "addcors": true, "vram_gb": 26.0,
+          "task": "MOSS_TTSD", "port": 7866, "loadkey": "\"model_loaded\":\\s*true", "env_key": "SVC_MOSS_TTSD",
+          "parked": "2026-07-27 显存互斥轮换位让给 IndexTTS-2(见 _note)，任务已禁用、权重保留；复用时删本字段" },
+        { "server": "index_tts_server.py", "name": "index_tts", "addcors": true, "vram_gb": 10.0,
+          "task": "IndexTTS", "port": 7865, "loadkey": "\"model_loaded\":\\s*true", "env_key": "SVC_INDEX_TTS",
+          "dir": "C:\\models\\index-tts", "py": "C:\\models\\index-tts\\.venv\\Scripts\\python.exe" },
+        { "server": "emotion_tts_server.py", "name": "emotion_tts", "addcors": true, "vram_gb": 3.5,
+          "task": "EmotionTTS", "port": 7852, "loadkey": "\"models_loaded\":\\s*true", "env_key": "SVC_EMOTION_TTS",
+          "dir": "C:\\models\\cosyvoice", "py": "C:\\models\\cosyvoice\\.venv\\Scripts\\python.exe" }
       ]
     }
   }

@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>小界 · 集群值班 AI</title>
+<style>
+  /* 官网设计令牌（website/tailwind.config.ts）+ EveBot normal 皮肤（forms/formShared.tsx SKIN.normal） */
+  :root{
+    --ink-950:#05060f; --ink-900:#0a0c1b; --ink-800:#11132a; --ink-700:#1a1d3a;
+    --cyan:#22d3ee; --blue:#3b82f6; --violet:#8b5cf6; --pink:#ec4899;
+    --ok:#2ec27e; --warn:#e8b341; --bad:#de3c46;
+    --eye:#22d3ee; /* 眼色由 JS 按官网 eyeColors 池 4s 轮换，颈/推进器/光池/胸灯同步取色 */
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:
+      radial-gradient(circle at 18% 8%, rgba(139,92,246,.20), transparent 42%),
+      radial-gradient(circle at 85% 4%, rgba(34,211,238,.16), transparent 46%),
+      var(--ink-950);
+    font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+    color:#e8ecf5; overflow:hidden; display:flex; flex-direction:column; user-select:none;
+  }
+  body::before{
+    content:""; position:fixed; inset:0; pointer-events:none; opacity:.05;
+    background-image:linear-gradient(rgba(255,255,255,.5) 1px,transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.5) 1px,transparent 1px);
+    background-size:44px 44px;
+  }
+
+  .top{display:flex;align-items:center;gap:8px;padding:10px 12px 4px}
+  .brand{font-weight:800;font-size:15px;
+    background:linear-gradient(90deg,var(--cyan),var(--violet));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .chip{font-size:11px;padding:2px 8px;border-radius:999px;
+    border:1px solid rgba(139,92,246,.55);color:#c9b8f5}
+  .spacer{flex:1}
+  .dnd{display:none;font-size:11px;padding:2px 8px;border-radius:999px;
+    background:rgba(222,60,70,.16);border:1px solid rgba(222,60,70,.6);color:#ff8d94}
+  body.quiet .dnd{display:inline-block}
+  button.icon{width:30px;height:30px;border-radius:9px;border:1px solid var(--ink-700);
+    background:rgba(17,19,42,.7);color:#cfd6e8;font-size:15px;cursor:pointer}
+  button.icon:hover{border-color:var(--violet)}
+
+  /* ===== 舞台 ===== */
+  .stage{position:relative;height:224px;flex:none;display:flex;align-items:flex-end;justify-content:center}
+  .holo{position:absolute;top:4px;left:50%;transform:translateX(-50%);max-width:92%;
+    font-size:11.5px;line-height:1.5;padding:5px 12px;border-radius:10px;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis;color:#9fe8f6;letter-spacing:.3px;
+    background:linear-gradient(180deg,rgba(34,211,238,.13),rgba(34,211,238,.05));
+    border:1px solid rgba(34,211,238,.35);
+    text-shadow:0 0 8px rgba(34,211,238,.6);transition:opacity .5s;z-index:5}
+  .holo.fade{opacity:0}
+  .holo::before{content:"▸ ";color:var(--cyan)}
+
+  /* ===== EveBot 真身（官网 1:1 几何，容器 128x176，展示放大 1.12） =====*/
+  .botWrap{position:relative;width:128px;height:176px;transform:scale(1.12);transform-origin:bottom center;cursor:pointer}
+  .bot{position:absolute;inset:0;animation:bob 2.5s ease-in-out infinite}
+  @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+  body.quiet .bot{animation-duration:4.5s}
+
+  /* 头：70.4x51.2 圆壳（radial 白→#ecfeff→#cffafe），高光斑 */
+  .head{position:absolute;left:50%;top:26px;width:70.4px;height:51.2px;margin-left:-35.2px;z-index:30;
+    border-radius:50% 50% 45% 45%;
+    background:radial-gradient(circle at 50% 10%, #ffffff 0%, #ecfeff 60%, #cffafe 100%);
+    box-shadow:inset 0 -2px 6px rgba(0,0,0,.15), 0 5px 15px rgba(0,0,0,.1);
+    display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .headHi{position:absolute;top:4px;left:25%;width:50%;height:50%;border-radius:50%;
+    background:rgba(255,255,255,.6);filter:blur(2px)}
+  /* 脸屏：88%x75% 黑屏 */
+  .face{width:88%;height:75%;margin-top:4px;background:#000;border-radius:45% 45% 50% 50%;
+    display:flex;align-items:center;justify-content:center;gap:12px;position:relative;
+    box-shadow:inset 0 0 10px rgba(255,255,255,.15);border:1px solid rgba(39,39,42,.5);overflow:hidden}
+  /* 数码眼：24 宽发光屏 + 五道横纹（中间最亮）+ 泛光 */
+  .eyes{display:flex;gap:12px;transition:transform .6s}
+  .eye{position:relative;width:24px;height:16px;border-radius:50%;overflow:hidden;
+    background:#001020;border:1px solid color-mix(in srgb, var(--eye) 25%, transparent);
+    box-shadow:0 0 5px color-mix(in srgb, var(--eye) 50%, transparent);
+    transition:height .18s, transform .18s, border-radius .18s, background-color 1s}
+  .eye .ln{position:absolute;left:0;width:100%;height:2px;background:var(--eye);
+    box-shadow:0 0 2px var(--eye);transition:background-color 1s}
+  .eye .ln:nth-child(1){top:2px;opacity:.5}.eye .ln:nth-child(2){top:5px;opacity:.75}
+  .eye .ln:nth-child(3){top:8px;opacity:1}.eye .ln:nth-child(4){top:11px;opacity:.75}
+  .eye .ln:nth-child(5){top:14px;opacity:.5}
+  .eye .glow{position:absolute;inset:0;background:var(--eye);opacity:.25;filter:blur(4px);transition:background-color 1s}
+  .eye .lid{position:absolute;inset:0;background:#000;opacity:0;transition:opacity .15s;
+    clip-path:polygon(0% 50%,100% 50%,100% 100%,0% 100%)}
+  /* 表情形变（官网 DigitalEye variants 对应） */
+  .bot.blink .eye{transform:scaleY(.1) scaleX(1.1)}
+  .bot.happy .eye{transform:scaleY(.6) scaleX(1.1);border-radius:50% 50% 20% 20%}
+  .bot.happy .eye .lid{opacity:1}
+  .bot.focused .eye{transform:scaleY(.7) scaleX(.9);border-radius:30%;height:14px}
+  .bot.scanning .eye{transform:scaleY(1.1) scaleX(.8);height:18px}
+  .bot.scanning .eye::after{content:"";position:absolute;left:0;width:100%;height:2px;
+    background:rgba(255,255,255,.5);animation:scanline 1s linear infinite}
+  @keyframes scanline{0%{top:0}50%{top:100%}100%{top:0}}
+  body.quiet .eye{background:#0a1418}
+  /* 神经颈：1px 能量束 */
+  .neck{position:absolute;left:50%;top:44px;width:1px;height:28px;margin-left:-.5px;z-index:10;
+    background:color-mix(in srgb, var(--eye) 30%, transparent);
+    box-shadow:0 0 5px var(--eye);transition:background-color 1s}
+  /* 蛋形身体：64x88，官网圆角公式与材质 */
+  .body{position:absolute;left:50%;top:66px;width:64px;height:88px;margin-left:-32px;z-index:20;
+    border-radius:30% 30% 50% 50% / 20% 20% 80% 80%;overflow:hidden;
+    background:radial-gradient(circle at 30% 50%, #ffffff 0%, #ecfeff 50%, #cffafe 100%);
+    box-shadow:inset -5px -5px 15px rgba(0,0,0,.05), inset 5px 5px 15px rgba(255,255,255,1), 0 10px 25px rgba(0,0,0,.1)}
+  .bodyGlow{position:absolute;top:0;left:5%;width:90%;height:20px;border-radius:0 0 50% 50%;
+    background:linear-gradient(to bottom, #a5f3fc, transparent);opacity:.4;filter:blur(1px)}
+  /* 胸口指示灯 + 十字准星（官网 w-8 h-8 @ top45%） */
+  .chest{position:absolute;top:45%;left:50%;width:32px;height:32px;margin:-16px 0 0 -16px;
+    display:flex;align-items:center;justify-content:center}
+  .chest .h{position:absolute;top:50%;left:0;width:100%;height:1px;background:rgba(0,0,0,.05)}
+  .chest .v{position:absolute;left:50%;top:0;height:100%;width:1px;background:rgba(0,0,0,.05)}
+  .core{width:8px;height:8px;border-radius:50%;background:var(--eye);
+    box-shadow:0 0 10px var(--eye);animation:corepulse 2s ease-in-out infinite;transition:background-color 1s}
+  @keyframes corepulse{0%,100%{opacity:1}50%{opacity:.55}}
+  .core.warn{background:var(--warn)!important;box-shadow:0 0 10px var(--warn)!important}
+  .core.down{background:var(--bad)!important;box-shadow:0 0 12px var(--bad)!important}
+  /* ===== 祥龙金鳞皮肤（官网 SKIN.loong 1:1：金瓷材质+金瞳+鹿角） ===== */
+  .antlers{display:none;position:absolute;left:50%;top:8px;width:78px;height:26px;
+    margin-left:-39px;z-index:40;pointer-events:none}
+  .antlers svg{position:absolute;top:0}
+  .antlers svg.r{right:4px;transform:scaleX(-1)}
+  .antlers svg.l{left:4px}
+  body.skin-loong .antlers{display:block}
+  body.skin-loong .head{background:radial-gradient(circle at 50% 10%, #fffdf4 0%, #ffeec2 60%, #f3d488 100%)}
+  body.skin-loong .body{background:radial-gradient(circle at 30% 50%, #fffbe8 0%, #ffedb8 55%, #f3d488 100%);
+    box-shadow:inset -5px -5px 15px rgba(160,110,20,.18), inset 5px 5px 15px rgba(255,255,255,.95), 0 10px 28px rgba(240,180,60,.35)}
+  body.skin-loong .bodyGlow{background:linear-gradient(to bottom, #f5c542, transparent)}
+  body.skin-loong .eye{background:#180f02}
+  body.skin-loong .hand .palm{background:radial-gradient(circle at 38% 30%, #fffbef 0%, #ffedbc 60%, #f0d190 100%)}
+  body.skin-loong .hand .ph{background:linear-gradient(to top,#f0d190,#fff8e4)}
+  body.skin-loong .brand{background:linear-gradient(90deg,#f5c542,#ffd75e);-webkit-background-clip:text;background-clip:text}
+  /* 花瓣臂（官网 EveArm SVG 原路径），肩位 armTop=70 armInset=19 */
+  .arm{position:absolute;top:70px;z-index:10;transition:transform .5s cubic-bezier(.34,1.56,.64,1)}
+  .arm.l{left:19px;transform-origin:16px 8px;transform:rotate(7deg)}
+  .arm.r{right:19px;transform-origin:2px 8px;transform:rotate(-7deg)}
+  .arm .sway{animation:swayL 2.5s ease-in-out infinite;transform-origin:inherit}
+  .arm.r .sway{animation-name:swayR}
+  @keyframes swayL{0%,100%{transform:rotate(1.6deg)}50%{transform:rotate(-1.6deg)}}
+  @keyframes swayR{0%,100%{transform:rotate(-1.6deg)}50%{transform:rotate(1.6deg)}}
+  .botWrap:hover .arm.l{transform:rotate(76deg) translate(-2px,-2px)}
+  .botWrap:hover .arm.r{transform:rotate(-13deg) translate(2px,1px)}
+  /* 五指手：挥手时腕摆（官网 handWrapper -76° 基角 ±摆动） */
+  .hand{position:absolute;left:4px;top:40px;transform-origin:12px 22px;opacity:0;
+    transform:rotate(-76deg) scale(.3);transition:opacity .15s, transform .3s}
+  .botWrap:hover .hand{opacity:1;animation:wristwave 1.6s ease-in-out .5s infinite}
+  @keyframes wristwave{0%,100%{transform:rotate(-76deg) scale(1)}20%{transform:rotate(-56deg) scale(1)}
+    40%{transform:rotate(-90deg) scale(1)}60%{transform:rotate(-58deg) scale(1)}80%{transform:rotate(-86deg) scale(1)}}
+  .hand .palm{position:absolute;bottom:0;left:3.5px;width:17px;height:14px;
+    border-radius:46% 46% 48% 48%;
+    background:radial-gradient(circle at 38% 30%, #ffffff 0%, #e0f2fe 60%, #cffafe 100%);
+    box-shadow:inset -1px -1.5px 3px rgba(0,0,0,.18), 0 1px 3px rgba(0,0,0,.1), 0 0 0 .5px rgba(80,110,150,.28)}
+  .hand .fg{position:absolute;bottom:11px;width:0;transform-origin:50% 100%}
+  .hand .ph{position:absolute;left:50%;background:linear-gradient(to top,#cfe6fb,#ffffff);
+    box-shadow:inset 0 -1.5px 1.5px rgba(80,110,150,.28), inset 0 1px 1px rgba(255,255,255,.12)}
+  /* 推进器：transparent→eye→white 渐变光柱 */
+  .flame{position:absolute;top:88%;left:50%;width:24px;height:48px;margin-left:-12px;z-index:1;
+    border-radius:999px;filter:blur(6px);opacity:.4;transform:scaleY(.8);transform-origin:top;
+    background:linear-gradient(to top, transparent, var(--eye), #fff);transition:background 1s}
+  body.quiet .flame{opacity:.25}
+  /* 悬浮光池：12x64 径向，呼吸与身体 2.5s 同步 */
+  .pool{position:absolute;left:50%;bottom:-8px;width:64px;height:12px;margin-left:-32px;
+    border-radius:50%;filter:blur(6px);
+    background:radial-gradient(ellipse at center, color-mix(in srgb, var(--eye) 33%, transparent) 0%,
+      color-mix(in srgb, var(--eye) 9%, transparent) 55%, transparent 75%);
+    animation:poolbr 2.5s ease-in-out infinite;transition:background 1s}
+  @keyframes poolbr{0%,100%{transform:scaleX(1);opacity:.9}50%{transform:scaleX(.82);opacity:.55}}
+
+  /* ===== 聊天卡 ===== */
+  .card{flex:1;display:flex;flex-direction:column;margin:2px 10px 10px;border-radius:16px;
+    background:linear-gradient(180deg,rgba(10,12,27,.92),rgba(17,19,42,.88));
+    border:1px solid transparent;background-clip:padding-box;position:relative;min-height:0}
+  .card::before{content:"";position:absolute;inset:-1px;border-radius:17px;z-index:-1;
+    background:linear-gradient(135deg,rgba(34,211,238,.7),rgba(139,92,246,.7),rgba(236,72,153,.5))}
+  .msgs{flex:1;overflow-y:auto;padding:10px 10px 4px;scrollbar-width:thin;
+    scrollbar-color:var(--ink-700) transparent}
+  .m{max-width:86%;margin:0 0 8px;padding:7px 11px;border-radius:12px;font-size:12.5px;
+    line-height:1.65;white-space:pre-wrap;word-break:break-word}
+  .m.bot{background:rgba(34,211,238,.10);border:1px solid rgba(34,211,238,.22);border-top-left-radius:4px}
+  .m.user{background:rgba(139,92,246,.16);border:1px solid rgba(139,92,246,.3);
+    border-top-right-radius:4px;margin-left:auto}
+  .m .src{display:block;margin-top:4px;font-size:10px;color:#8d95ad}
+  .chips{display:flex;gap:6px;padding:4px 10px 8px;flex-wrap:wrap}
+  .chips button{font-size:11px;padding:4px 10px;border-radius:999px;cursor:pointer;color:#aeb6cd;
+    background:rgba(17,19,42,.8);border:1px solid var(--ink-700)}
+  .chips button:hover{border-color:var(--cyan);color:var(--cyan)}
+  .inrow{display:flex;gap:8px;padding:0 10px 10px}
+  .inrow input{flex:1;padding:9px 12px;border-radius:11px;font-size:12.5px;color:#e8ecf5;
+    background:rgba(5,6,15,.8);border:1px solid var(--ink-700);outline:none}
+  .inrow input:focus{border-color:var(--violet);box-shadow:0 0 0 2px rgba(139,92,246,.22)}
+  .inrow button{width:64px;border-radius:11px;border:none;cursor:pointer;font-weight:700;
+    color:#04121a;background:linear-gradient(135deg,var(--cyan),var(--violet));font-size:13px}
+  .inrow button:disabled{opacity:.45;cursor:wait}
+  .think{display:inline-block;animation:think 1s linear infinite}
+  @keyframes think{50%{opacity:.25}}
+</style>
+</head>
+<body>
+  <div class="top">
+    <span class="brand">小界</span>
+    <span class="chip" id="machChip">…</span>
+    <span class="dnd">直播中 · 勿扰</span>
+    <span class="spacer"></span>
+    <button class="icon" id="muteBtn" title="语音开关">🔊</button>
+  </div>
+
+  <div class="stage">
+    <div class="holo" id="holo">正在接入集群…</div>
+    <div class="botWrap" id="botWrap" title="小界向你问好">
+      <div class="bot" id="bot">
+        <div class="arm l"><div class="sway">
+          <svg width="18" height="64" viewBox="0 0 18 64" fill="none">
+            <defs><linearGradient id="agL" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#ffffff"/><stop offset="40%" stop-color="#eef2ff"/><stop offset="100%" stop-color="#dbeafe"/>
+            </linearGradient></defs>
+            <path d="M16 2C16 2 4 10 4 28C4 50 12 60 16 62C17 62.5 18 60 18 56C18 56 18 10 16 2Z" fill="url(#agL)"/>
+            <path d="M16 2C16 2 4 10 4 28C4 50 12 60 16 62" stroke="white" stroke-width="0.5" stroke-opacity="0.8" fill="none"/>
+          </svg>
+          <div class="hand" id="hand"><div class="palm"></div></div>
+        </div></div>
+        <div class="arm r"><div class="sway">
+          <svg width="18" height="64" viewBox="0 0 18 64" fill="none" style="transform:scaleX(-1)">
+            <defs><linearGradient id="agR" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#ffffff"/><stop offset="40%" stop-color="#eef2ff"/><stop offset="100%" stop-color="#dbeafe"/>
+            </linearGradient></defs>
+            <path d="M16 2C16 2 4 10 4 28C4 50 12 60 16 62C17 62.5 18 60 18 56C18 56 18 10 16 2Z" fill="url(#agR)"/>
+            <path d="M16 2C16 2 4 10 4 28C4 50 12 60 16 62" stroke="white" stroke-width="0.5" stroke-opacity="0.8" fill="none"/>
+          </svg>
+        </div></div>
+        <div class="neck"></div>
+        <div class="antlers">
+          <svg class="l" width="26" height="28" viewBox="0 0 26 28" fill="none">
+            <path d="M20 28 C14 22 10 15 11 6 C11 6 14 8 16 12 C18 16 19 22 20 28 Z" fill="#f7dfa0" stroke="#caa14e" stroke-width="1"/>
+            <path d="M12 14 C9 11 7 8 7 4 C10 6 12 9 13 12 Z" fill="#f7dfa0" stroke="#caa14e" stroke-width="0.8"/>
+            <path d="M15 20 C13 17 11 15 9 14 C10 17 12 20 14 22 Z" fill="#f7dfa0" stroke="#caa14e" stroke-width="0.8" opacity="0.9"/>
+          </svg>
+          <svg class="r" width="26" height="28" viewBox="0 0 26 28" fill="none">
+            <path d="M20 28 C14 22 10 15 11 6 C11 6 14 8 16 12 C18 16 19 22 20 28 Z" fill="#f7dfa0" stroke="#caa14e" stroke-width="1"/>
+            <path d="M12 14 C9 11 7 8 7 4 C10 6 12 9 13 12 Z" fill="#f7dfa0" stroke="#caa14e" stroke-width="0.8"/>
+            <path d="M15 20 C13 17 11 15 9 14 C10 17 12 20 14 22 Z" fill="#f7dfa0" stroke="#caa14e" stroke-width="0.8" opacity="0.9"/>
+          </svg>
+        </div>
+        <div class="head">
+          <div class="headHi"></div>
+          <div class="face">
+            <div class="eyes" id="eyes">
+              <div class="eye"><span class="ln"></span><span class="ln"></span><span class="ln"></span><span class="ln"></span><span class="ln"></span><span class="glow"></span><span class="lid"></span></div>
+              <div class="eye"><span class="ln"></span><span class="ln"></span><span class="ln"></span><span class="ln"></span><span class="ln"></span><span class="glow"></span><span class="lid"></span></div>
+            </div>
+          </div>
+        </div>
+        <div class="body">
+          <div class="bodyGlow"></div>
+          <div class="chest"><span class="h"></span><span class="v"></span><span class="core" id="core"></span></div>
+        </div>
+        <div class="flame"></div>
+      </div>
+      <div class="pool"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="msgs" id="msgs"></div>
+    <div class="chips" id="chips">
+      <button>现在能重启 Hub 吗？</button>
+      <button>最近有什么告警？</button>
+      <button>本机现在什么状态？</button>
+      <button>哪台机显存最紧张？</button>
+    </div>
+    <div class="inrow">
+      <input id="inp" placeholder="问小界：集群状态 / 告警 / 诊断…" maxlength="500">
+      <button id="send">发送</button>
+    </div>
+  </div>
+
+<script>
+const M = new URLSearchParams(location.search).get('machine') || 'zhongshu';
+const $ = s => document.querySelector(s);
+const msgsEl = $('#msgs'), inp = $('#inp'), sendBtn = $('#send'), holo = $('#holo');
+const bot = $('#bot');
+let muted = localStorage.getItem('xj_mute') === '1';
+let ctx = null, history = [], busy = false, audioEl = null, zhName = M;
+
+/* ---- 官网五指手：HAND_FINGERS 三节指骨规格 1:1 ---- */
+(function buildHand(){
+  const FINGERS = [
+    { x:4.5, splay:-34, len:.8,  w:.9 },
+    { x:8.6, splay:-15, len:.95, w:1 },
+    { x:12,  splay:1,   len:1.06,w:1.05 },
+    { x:15.5,splay:17,  len:.93, w:1 },
+    { x:18.7,splay:41,  len:.68, w:1.2 },
+  ];
+  const hand = $('#hand');
+  for (const f of FINGERS){
+    const proxH = 9*f.len, midH = 7*f.len, distH = 6*f.len, ov = 1.4;
+    const fg = document.createElement('div');
+    fg.className = 'fg';
+    fg.style.left = f.x + 'px';
+    fg.style.height = (proxH+midH+distH-ov*2) + 'px';
+    fg.style.transform = 'rotate(' + f.splay + 'deg)';
+    const mk = (bottom,w,h) => {
+      const ph = document.createElement('span');
+      ph.className = 'ph';
+      ph.style.bottom = bottom+'px'; ph.style.width = w+'px'; ph.style.height = h+'px';
+      ph.style.marginLeft = (-w/2)+'px';
+      ph.style.borderRadius = (w/2)+'px '+(w/2)+'px '+(w/2.6)+'px '+(w/2.6)+'px';
+      return ph;
+    };
+    fg.appendChild(mk(0, 6*f.w, proxH));
+    fg.appendChild(mk(proxH-ov, 5.2*f.w, midH));
+    fg.appendChild(mk(proxH+midH-ov*2, 4.4*f.w, distH));
+    hand.appendChild(fg);
+  }
+})();
+
+/* ---- 官网眼色池 4s 轮换：眼/颈/推进器/光池/胸灯同步 ----
+   三套色池：normal 冰蓝 / loong 祥龙金瞳（偶闪青光）/ alert 告警红（demon 池借用）*/
+const POOLS = {
+  normal: ['#22d3ee','#8b5cf6','#06b6d4','#a855f7','#38bdf8'],
+  loong:  ['#f5c542','#ffd75e','#eab308','#38bdf8','#fbbf24'],
+  alert:  ['#ef4444','#f43f5e','#dc2626','#fb7185','#e11d48'],
+};
+const ARM_STOPS = {
+  normal: ['#ffffff','#eef2ff','#dbeafe'],
+  loong:  ['#fff6dc','#ffe9b0','#f0cf85'],
+};
+let skin = 'normal', alerting = false;
+let EYE_COLORS = POOLS.normal;
+let eci = 0;
+function pickPool(){
+  EYE_COLORS = alerting ? POOLS.alert : (POOLS[skin] || POOLS.normal);
+  eci = 0;
+  document.documentElement.style.setProperty('--eye', EYE_COLORS[0]);
+}
+setInterval(() => {
+  if (document.hidden) return;
+  eci = (eci+1) % EYE_COLORS.length;
+  document.documentElement.style.setProperty('--eye', EYE_COLORS[eci]);
+}, 4000);
+function applySkin(newSkin){
+  if (newSkin === skin) return;
+  skin = newSkin;
+  document.body.classList.toggle('skin-loong', skin === 'loong');
+  const stops = ARM_STOPS[skin] || ARM_STOPS.normal;
+  document.querySelectorAll('#agL stop, #agR stop').forEach((el, i) => {
+    el.setAttribute('stop-color', stops[i % 3]);
+  });
+  pickPool();
+}
+
+/* ---- 表情状态机：待机随机眨眼 / 说话 focused / 悬停 happy / 集群告警 focused+红瞳 ----
+   优先级：talking > hover > alerting > idle（全绿时每 ~3 分钟眉开眼笑一次）*/
+let talking = false;
+function syncFace(){
+  if (talking || $('#botWrap').matches(':hover')) return;
+  bot.classList.toggle('focused', alerting);
+}
+(function blinkLoop(){
+  const next = 2000 + Math.random()*3000;
+  setTimeout(() => {
+    if (!talking && !$('#botWrap').matches(':hover')){
+      bot.classList.add('blink');
+      setTimeout(() => bot.classList.remove('blink'), 150);
+    }
+    blinkLoop();
+  }, next);
+})();
+(function happyLoop(){
+  setTimeout(() => {
+    if (!talking && !alerting && !$('#botWrap').matches(':hover') &&
+        ctx && ctx.overall === 'ok'){
+      bot.classList.add('happy');
+      setTimeout(() => { bot.classList.remove('happy'); syncFace(); }, 2500);
+    }
+    happyLoop();
+  }, 150000 + Math.random()*120000);
+})();
+$('#botWrap').addEventListener('mouseenter', () => { bot.classList.remove('focused'); bot.classList.add('happy'); });
+$('#botWrap').addEventListener('mouseleave', () => { bot.classList.remove('happy'); syncFace(); });
+/* 眼神游移（窗口内鼠标跟随 + 无鼠标时随机漫游） */
+const eyes = $('#eyes');
+document.addEventListener('mousemove', e => {
+  const r = bot.getBoundingClientRect();
+  const dx = Math.max(-5, Math.min(5, (e.clientX - r.left - r.width/2) / 18));
+  const dy = Math.max(-3, Math.min(3, (e.clientY - r.top - 50) / 30));
+  eyes.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+});
+setInterval(() => {
+  if ($('#botWrap').matches(':hover')) return;
+  const dx = (Math.random()*8-4).toFixed(1), dy = (Math.random()*4-2).toFixed(1);
+  eyes.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+}, 3200);
+
+function setMute(v){ muted = v; localStorage.setItem('xj_mute', v ? '1' : '0');
+  $('#muteBtn').textContent = v ? '🔇' : '🔊'; }
+setMute(muted);
+$('#muteBtn').onclick = () => { setMute(!muted); if (muted && audioEl) audioEl.pause(); };
+
+function addMsg(role, text, src){
+  const div = document.createElement('div');
+  div.className = 'm ' + (role === 'user' ? 'user' : 'bot');
+  div.textContent = text;
+  if (src){ const s = document.createElement('span'); s.className = 'src'; s.textContent = src; div.appendChild(s); }
+  msgsEl.appendChild(div); msgsEl.scrollTop = msgsEl.scrollHeight;
+  return div;
+}
+
+/* ---- 语音：说话时 focused 眼 + 眼色速闪（本体无嘴，官网正统） ---- */
+async function speak(text){
+  if (muted || document.body.classList.contains('quiet')) return;
+  try{
+    const clean = text.replace(/[*#`>\-\[\]()]/g, '').replace(/https?:\S+/g, '').slice(0, 160);
+    const r = await fetch('/api/tts', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ text: clean }) });
+    if (!r.ok) return;
+    const blob = await r.blob();
+    if (audioEl) { audioEl.pause(); URL.revokeObjectURL(audioEl.src); }
+    audioEl = new Audio(URL.createObjectURL(blob));
+    talking = true; bot.classList.add('focused');
+    let pulse = setInterval(() => {
+      eci = (eci+1) % EYE_COLORS.length;
+      document.documentElement.style.setProperty('--eye', EYE_COLORS[eci]);
+    }, 700);
+    const done = () => { talking = false; bot.classList.remove('focused'); clearInterval(pulse); pickPool(); syncFace(); };
+    audioEl.onended = audioEl.onpause = done;
+    audioEl.play().catch(done);
+  }catch(e){}
+}
+
+async function send(text){
+  if (busy) return;
+  text = (text || inp.value).trim();
+  if (!text) return;
+  inp.value = ''; busy = true; sendBtn.disabled = true;
+  addMsg('user', text);
+  history.push({ role:'user', content:text });
+  const thinking = addMsg('bot', '');
+  thinking.innerHTML = '<span class="think">小界思考中…</span>';
+  bot.classList.add('scanning');
+  try{
+    const r = await fetch('/api/chat', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ machine: M, messages: history.slice(-8) }) });
+    const d = await r.json();
+    thinking.remove();
+    const reply = d.reply || '（没有回应）';
+    addMsg('bot', reply, d.backend && d.backend !== 'none' ? '· ' + d.backend : '');
+    history.push({ role:'assistant', content: reply });
+    if (history.length > 16) history = history.slice(-16);
+    speak(reply);
+  }catch(e){
+    thinking.remove();
+    addMsg('bot', '网络打了个喷嚏，再试一次？');
+  }
+  bot.classList.remove('scanning');
+  busy = false; sendBtn.disabled = false; inp.focus();
+}
+sendBtn.onclick = () => send();
+inp.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+$('#chips').addEventListener('click', e => { if (e.target.tagName === 'BUTTON') send(e.target.textContent); });
+$('#botWrap').addEventListener('click', () => inp.focus());
+
+/* ---- 集群上下文轮询：全息播报 / 胸灯 / 勿扰 ---- */
+const ST_ZH = { ok:'在线', degraded:'服务掉线', selfwarn:'自检告警', offline:'失联', unknown:'未知' };
+function tickerLines(c){
+  const lines = [];
+  const v = { safe:'Hub 空闲，可安全重启', wait:'Hub 有长任务在跑', danger:'直播推流中 · 全员让位' }[c.verdict];
+  if (v) lines.push(v);
+  for (const m of c.machines){
+    let t = m.zh + ' ' + (ST_ZH[m.status] || m.status);
+    if (m.vram_used_mb > 0 && m.vram_total_mb > 0){
+      const pct = Math.round(m.vram_used_mb / m.vram_total_mb * 100);
+      t += ' · 显存 ' + pct + '%';
+      if (pct >= 95) t += ' ⚠';
+    }
+    lines.push(t);
+  }
+  for (const e of (c.events || []).slice(0, 3))
+    lines.push((e.state === 'firing' ? '🔥 ' : '✅ ') + e.title);
+  return lines;
+}
+let tick = 0, lines = ['正在接入集群…'];
+setInterval(() => {
+  holo.classList.add('fade');
+  setTimeout(() => { tick = (tick + 1) % lines.length; holo.textContent = lines[tick]; holo.classList.remove('fade'); }, 480);
+}, 5200);
+
+async function refresh(){
+  try{
+    const r = await fetch('/api/context');
+    ctx = await r.json();
+    lines = tickerLines(ctx);
+    const me = (ctx.machines || []).find(x => x.id === M);
+    if (me){ zhName = me.zh; $('#machChip').textContent = me.zh + ' 机位 · ' + M; }
+    const core = $('#core');
+    core.className = 'core' + (ctx.overall === 'down' ? ' down' : ctx.overall === 'warn' ? ' warn' : '');
+    document.body.classList.toggle('quiet', !!ctx.streaming);
+    const wasAlerting = alerting;
+    alerting = !!ctx.alerting;
+    if (alerting !== wasAlerting) pickPool();
+    applySkin(ctx.skin || 'normal');
+    syncFace();
+  }catch(e){ lines = ['接不上小界服务…检查中枢 :7912']; }
+}
+refresh(); setInterval(refresh, 60000);
+
+setTimeout(async () => {
+  await refresh();
+  addMsg('bot', '我是小界 ⚡ 这里是「' + zhName + '」机位。集群状态、告警、能不能重启 Hub，随时问我。');
+}, 700);
+</script>
+</body>
+</html>

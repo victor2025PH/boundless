@@ -1,0 +1,125 @@
+{
+  "_comment": [
+    "集群算力模式 SSOT：chatx(智聊模式) ⇄ face(换脸/直播模式) · 2026-08-10 P0",
+    "谁在读：",
+    "  ① Hub 执行器 engines/avatarhub hub_routes/cluster_mode.py（POST /api/cluster/mode：闸门/执行/回滚/冷却）",
+    "  ② 壁纸板渲染器 tools/render_cluster_board.py（模式绶带 + 每机角色 chip + 预期停机端口豁免）",
+    "  ③ avatarhub tools/topology_lint.py（与 cluster_map.json vram_budget 的 mode_services 分模式对账，",
+    "     steps 里的 budget_key 必须真实存在于该机 services∪mode_services——typo 即红）",
+    "  ④ deploy_hud.ps1（哨兵 config.json 的 watch_ports 按当前模式生成，防「预期停机」误报 svcdown）",
+    "机制注记（117 侧双机实测，2026-08-10，勿走弯路）：",
+    "  · Ollama /v1/chat/completions 兼容层忽略请求级 keep_alive（176 的 0.31.1 与 140 的 0.32.4 均实测）；",
+    "    钉/卸只走原生 /api/generate：钉={model, keep_alive:'24h'}（空 prompt=只装载不生成）；卸={keep_alive:0}。",
+    "  · 140 hy-mt2 换模式必须「先卸再钉」强制重新布放——Ollama 只在装载时决定 GPU/CPU 分层，",
+    "    腾出显存后不重装它永远停在 63% CPU 的旧布放（部分装载 2.2/5.8G 实测）。",
+    "  · face 模式撤 176 钉驻后，智聊翻译按其自身路由（60s 端点冷却 + 5s 连接快败）故障转移到 140 兜底，",
+    "    可接受；残余风险=智聊冷却窗后仍可能把 hy-mt2 按需拉回 176（Ollama 无拒载 API），实测慢路超时即回 140。",
+    "  · face 模式刻意不钉 qwen2.5:14b（任务书「直播栈全开」含它）：27.9G 编制 + 9.5G = 爆 30G 预算红线，",
+    "    且 LLM 容灾主路在 .173 qwen14b-fallback（cluster_map _note_llm_fallback）——按需装载即可，缺卡时走 .173。",
+    "显存账本单一真相 = engines/avatarhub cluster_map.json vram_budget（mode_services 分模式记账）。"
+  ],
+  "version": "2026-08-10",
+  "cooldown_s": 600,
+  "allowed_machines": ["zhongshu", "tingxie"],
+  "untouchable": {
+    "yunsheng": "173 qwen14b-fallback=智聊断云兜底+口语化主路（唯一常暖 LLM）+ IndexTTS/Cosy 质量轨——两模式都不动",
+    "shengbei": "117 CosyVoice3+Qwen3TTS 热备/坐席——两模式都不动",
+    "lianbei": "104 faceswap 换脸热备——两模式都不动",
+    "kouxing": "198 musetalk 口型热备——两模式都不动"
+  },
+  "invariants": {
+    "never_unload": [
+      {"ip": "192.168.0.140", "model_prefix": "bge-m3", "why": "智聊记忆/KB/语义闸门唯一嵌入主路（keep_alive=-1 钉驻语义保留）"},
+      {"ip": "192.168.0.173", "model_prefix": "qwen14b-fallback", "why": "智聊断云兜底 + 口语化主路，唯一常暖 LLM"},
+      {"ip": "192.168.0.176", "model_prefix": "bge-m3", "why": "Hub 本机嵌入主路（RAG/巡检）"}
+    ]
+  },
+  "modes": {
+    "chatx": {
+      "zh": "智聊模式",
+      "accent": "#22D3EE",
+      "desc": "智聊翻译/视觉/嵌入优先：176 钉 hy-mt2 + 停直播栈让位；140 停 nemo/卸 NLLB 让 MT 兜底满血进显存",
+      "chips": {
+        "zhongshu": "智聊翻译主力",
+        "tingxie": "MT兜底满血",
+        "yunsheng": "LLM容灾+TTS",
+        "shengbei": "TTS热备·坐席",
+        "lianbei": "换脸热备",
+        "kouxing": "口型热备"
+      },
+      "machines": {
+        "zhongshu": {
+          "watch_ports": [9000, 8000, 7900],
+          "steps": [
+            {"id": "z1", "kind": "engine_stop", "name": "ditto", "hold": true,
+             "why": "直播栈让位：停实时数字人（挂起自愈+svc_hold 旗标，Hub 重启也不复活）"},
+            {"id": "z2", "kind": "engine_stop", "name": "lipsync", "hold": true,
+             "why": "直播栈让位：停 MuseTalk 口型"},
+            {"id": "z3", "kind": "ollama_unload", "base": "http://127.0.0.1:11434", "model": "qwen2.5:14b",
+             "why": "本地 14B 只在直播控场兜底用，智聊模式下清场（不在编制即卸）"},
+            {"id": "z4", "kind": "ollama_pin", "base": "http://127.0.0.1:11434", "model": "hy-mt2-7b-official:latest",
+             "keep_alive": "24h", "budget_key": "ollama_hy_mt2_7b",
+             "why": "钉智聊翻译主力（智聊引擎每次请求自带 24h 续期，钉驻语义与其一致）"}
+          ]
+        },
+        "tingxie": {
+          "watch_ports": [7854],
+          "steps": [
+            {"id": "t1", "kind": "schtask_stop", "task": "NemoSTT_Boot", "port": 7857,
+             "why": "停流式 STT（直播链路专用），腾 ~2.5G"},
+            {"id": "t2", "kind": "http_post", "url": "http://192.168.0.140:7854/mt/nllb/unload",
+             "expect": {"nllb_loaded": false},
+             "why": "卸 NLLB-200（多语向 NMT 兜底），腾 ~1.4G；非中英翻译需求会按需重载（有日志）"},
+            {"id": "t3", "kind": "ollama_unload", "base": "http://192.168.0.140:11434", "model": "hy-mt2-7b-official:latest",
+             "why": "先卸：强制 Ollama 重新布放（旧布放 63% 在 CPU）"},
+            {"id": "t4", "kind": "ollama_pin", "base": "http://192.168.0.140:11434", "model": "hy-mt2-7b-official:latest",
+             "keep_alive": "24h", "budget_key": "ollama_hy_mt2_7b_full",
+             "why": "再钉：满血进显存（5.8G，size_vram 以 /api/ps 复核）"}
+          ]
+        }
+      }
+    },
+    "face": {
+      "zh": "换脸/直播模式",
+      "accent": "#EC4899",
+      "desc": "直播栈优先：176 直播栈全开+撤 hy-mt2 钉驻（智聊翻译走 140 慢路兜底）；140 双 STT 常驻，MT 兜底退回部分装载",
+      "chips": {
+        "zhongshu": "直播栈全开",
+        "tingxie": "双STT在岗",
+        "yunsheng": "LLM容灾+TTS",
+        "shengbei": "TTS热备·坐席",
+        "lianbei": "换脸热备",
+        "kouxing": "口型热备"
+      },
+      "machines": {
+        "zhongshu": {
+          "watch_ports": [9000, 8000, 7900],
+          "steps": [
+            {"id": "z1", "kind": "ollama_unload", "base": "http://127.0.0.1:11434", "model": "hy-mt2-7b-official:latest",
+             "why": "撤钉驻腾 4.9G 给渲染链；智聊翻译自动故障转移到 140 兜底（可接受，最坏≈1 分钟慢路）"},
+            {"id": "z2", "kind": "engine_start", "name": "ditto", "wait_port": 8096, "wait_s": 180,
+             "budget_key": "ditto", "why": "直播栈全开：实时数字人（Ditto·512）"},
+            {"id": "z3", "kind": "engine_start", "name": "lipsync", "wait_port": 8090, "wait_s": 180,
+             "budget_key": "musetalk_lipsync", "why": "直播栈全开：MuseTalk 口型；qwen2.5:14b 刻意不钉（见头注），按需装载"}
+          ]
+        },
+        "tingxie": {
+          "watch_ports": [7854, 7857],
+          "steps": [
+            {"id": "t1", "kind": "ollama_unload", "base": "http://192.168.0.140:11434", "model": "hy-mt2-7b-official:latest",
+             "why": "先卸 hy-mt2 腾位：nemo/NLLB 回岗要 ~4G，不先卸会把新租户挤成 WDDM 换页"},
+            {"id": "t2", "kind": "schtask_start", "task": "NemoSTT_Boot", "port": 7857, "wait_s": 180,
+             "health": "http://192.168.0.140:7857/health", "loadkey": "loaded",
+             "budget_key": "nemo_stt_bf16", "why": "流式 STT 回岗（直播字幕链路优先）"},
+            {"id": "t3", "kind": "http_post", "url": "http://192.168.0.140:7854/mt/nllb/load",
+             "expect": {"nllb_loaded": true}, "budget_key": "nllb_mt_600m",
+             "why": "NLLB 多语向兜底回载（同传冷启 73s 的教训：必须是热的）"},
+            {"id": "t4", "kind": "ollama_pin", "base": "http://192.168.0.140:11434", "model": "hy-mt2-7b-official:latest",
+             "keep_alive": "24h", "budget_key": "ollama_hy_mt2_7b_partial",
+             "why": "重钉：MT 兜底退回部分装载（填剩余显存，其余权重落 CPU——face 模式的既定代价）"}
+          ]
+        }
+      }
+    }
+  }
+}
