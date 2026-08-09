@@ -760,11 +760,16 @@ def render_board(ctx: dict, base_path: Path, out_path: Path, self_id: str = "") 
     d = ImageDraw.Draw(base)
 
     # ---- v5 模式绶带：当前算力模式 + 上次切换时间（chatx 青 / face 品红 / 未初始化 中性紫） ----
+    # 低透明度色块必须画在独立层再 alpha_composite——直接 ImageDraw 会把 RGBA 原值写穿
+    # 像素，convert("RGB") 丢 alpha 后变成实心亮条（v3 白条纹事故同款，v5 首渲实锤复发）。
     mac = tuple(mode.get("accent") or NEON_VIOLET)
     rb_y, rb_h = y0 + int(54 * s), int(24 * s)
-    d.rounded_rectangle((x0 + int(18 * s), rb_y, x0 + pw - int(18 * s), rb_y + rb_h),
-                        radius=int(6 * s), fill=(*mac, 26), outline=(*mac, 110),
-                        width=max(1, int(s)))
+    _rb_layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    ImageDraw.Draw(_rb_layer).rounded_rectangle(
+        (x0 + int(18 * s), rb_y, x0 + pw - int(18 * s), rb_y + rb_h),
+        radius=int(6 * s), fill=(*mac, 26), outline=(*mac, 110), width=max(1, int(s)))
+    base.alpha_composite(_rb_layer)
+    d = ImageDraw.Draw(base)
     f_rb = font(F_BOLD, int(14 * s))
     if mode.get("switching"):
         rb_txt = f"算力模式 · 切换中 {mode.get('progress') or ''}…"
@@ -845,15 +850,19 @@ def render_board(ctx: dict, base_path: Path, out_path: Path, self_id: str = "") 
                       vals[-30:], NEON_CYAN)
             d = ImageDraw.Draw(base)
 
-        # v5 本模式角色 chip（modes.json chips[mid]，模式未初始化=无 chip 零噪音）
+        # v5 本模式角色 chip（modes.json chips[mid]，模式未初始化=无 chip 零噪音）；
+        # 低透明底同绶带纪律：独立层 alpha_composite，防实心色块写穿。
         chip = str((mode.get("chips") or {}).get(r["id"]) or "")
         if chip:
             cw = d.textlength(chip, font=f_chip)
             cx0, cy0 = x0 + int(166 * s), ry + int(20 * s)
             ch_h = int(15 * s)
-            d.rounded_rectangle((cx0, cy0, cx0 + cw + int(12 * s), cy0 + ch_h),
-                                radius=ch_h // 2, fill=(*mac, 22), outline=(*mac, 95),
-                                width=max(1, int(s)))
+            _cl = Image.new("RGBA", base.size, (0, 0, 0, 0))
+            ImageDraw.Draw(_cl).rounded_rectangle(
+                (cx0, cy0, cx0 + cw + int(12 * s), cy0 + ch_h),
+                radius=ch_h // 2, fill=(*mac, 22), outline=(*mac, 95), width=max(1, int(s)))
+            base.alpha_composite(_cl)
+            d = ImageDraw.Draw(base)
             d.text((cx0 + int(6 * s), cy0 + ch_h / 2), chip, font=f_chip,
                    fill=(206, 212, 228, 235), anchor="lm")
 
