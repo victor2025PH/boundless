@@ -1156,6 +1156,18 @@ ai:
   # 后台人设注入：full 完整 | compact 精简（减与域 system_prompt 重复）| none 不注入（仅用域提示）
   persona_block_detail: full
 
+  # ── 真人感文本层（platform/spoken_style 交付包桥接，见 src/ai/spoken_style_bridge.py）──
+  # avatarhub 线交付的「像真人说话」提示词层：说话稿自然度档位 + 意图感知篇幅 + 出口清洁。
+  # 与自有的 spoken_variant / voice_colloquial* 语义相近但作用位置不同（这层让书面主回复
+  # 本身口语化），试点期建议二选一。挂包前后效果对照见 platform/spoken_style/docs/AB_SAMPLES.md。
+  spoken_style:
+    enabled: false        # 总开关（默认关）
+    level: 2              # 自然度 0=播音 1=口语流畅 2=日常唠嗑 3=故事陪伴（故事意图自动升 3）
+    zh_only: true         # 仅当用户消息以中文为主体时注入尾注（模板是中文口语指令，勿污染外语对话）
+    role: ""              # 可选：platform/spoken_style/data/speech_prints.json 里的说话指纹角色名
+    paraling: false       # 副语言标记提示（[呼吸]→句尾停顿；语音部署才有意义）
+    emotion_tags: false   # 情绪标记协议（LLM 自报情绪 → TTS 情绪键；文字聊天保持关）
+
   # ── 文本嵌入（embedding）provider —— 记忆向量召回 + 语义去重的真实向量源 ──
   # 主对话 LLM（DeepSeek 等）多无 embedding 端点 → 需单独配嵌入源，否则 memory.vector /
   # consolidation.semantic_dedup 无向量可用（降级为纯关键词 / 仅 hash 去重）。

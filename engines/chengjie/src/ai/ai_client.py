@@ -621,7 +621,14 @@ class AIClient(LoggerMixin):
                     messages.append({"role": "assistant", "content": content})
                 else:
                     messages.append({"role": "user", "content": content})
-        messages.append({"role": "user", "content": user_message})
+        # 真人感文本层 L2：轮变尾注只进本轮送出的消息，不进历史（默认关；中文消息才注入）
+        _um_send = user_message
+        try:
+            from src.ai.spoken_style_bridge import turn_tail as _ss_turn_tail
+            _um_send = user_message + _ss_turn_tail(self.config, user_message)
+        except Exception:
+            _um_send = user_message
+        messages.append({"role": "user", "content": _um_send})
 
         request_id = (context or {}).get("request_id", "")
         if _cb_blocked:
@@ -1942,6 +1949,15 @@ class AIClient(LoggerMixin):
                 "必须如实告知客户暂无该信息，严禁编造订单状态、金额、物流进度或时间。"
             )
 
+        # 真人感文本层 L1（platform/spoken_style 桥接，默认关；ai.spoken_style.enabled）
+        try:
+            from src.ai.spoken_style_bridge import system_block as _ss_system_block
+            _ss_b = _ss_system_block(self.config)
+            if _ss_b:
+                parts.append(_ss_b)
+        except Exception:
+            pass
+
         return "\n\n".join(parts)
 
     _MAX_HISTORY_CHARS = 12000
@@ -3217,6 +3233,14 @@ class AIClient(LoggerMixin):
                 reply = written
             except Exception:
                 self.logger.debug("spoken variant split skipped", exc_info=True)
+
+        # 真人感文本层 L3：出口清洁（剥情绪/副语言标记；未启用=原样返回，零成本）
+        if reply:
+            try:
+                from src.ai.spoken_style_bridge import clean_reply_text as _ss_clean
+                reply = _ss_clean(self.config, reply)
+            except Exception:
+                pass
 
         return reply
 
