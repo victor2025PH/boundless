@@ -1164,7 +1164,10 @@ ai:
     enabled: false        # 总开关（默认关）
     level: 2              # 自然度 0=播音 1=口语流畅 2=日常唠嗑 3=故事陪伴（故事意图自动升 3）
     zh_only: true         # 仅当用户消息以中文为主体时注入尾注（模板是中文口语指令，勿污染外语对话）
-    role: ""              # 可选：platform/spoken_style/data/speech_prints.json 里的说话指纹角色名
+    role: ""              # 可选静态兜底：说话指纹角色名。留空即可——桥接会自动用本会话人设的
+                          # 口称名（resolve_spoken_name 输出）当指纹键去 platform/spoken_style/
+                          # data/speech_prints.json 分流；给常驻人设配指纹时，键必须写人设口称名
+                          # （样例见包内 speech_prints.json 的美月/秦震条目）。无指纹=通用口语层照常
     paraling: false       # 副语言标记提示（[呼吸]→句尾停顿；语音部署才有意义）
     emotion_tags: false   # 情绪标记协议（LLM 自报情绪 → TTS 情绪键；文字聊天保持关）
     rewrite: false        # L4 口语化改写：本地小模型整段重写+事实锁把关，失败原句直通。
@@ -1172,6 +1175,9 @@ ai:
                           # （文字聊天可接受再开；与 voice_colloquial_llm 只开一个）
     rewrite_llm: ""       # 改写后端（OpenAI 兼容 chat/completions；空=包缺省 .173 qwen14b）
     rewrite_model: ""     # 改写模型名（空=包缺省）
+    # 灰度观测：spoken_style_bridge.stats() 有进程内计数（L1/L2 注入、zh_only 拦截、
+    # L4 尝试/生效/直通），L4 每 20 次尝试自动打一行 INFO 汇总——直通率>30% 说明
+    # 事实锁在大量拒绝或改写后端超时，该调模型/提示词/超时了。
 
   # ── 文本嵌入（embedding）provider —— 记忆向量召回 + 语义去重的真实向量源 ──
   # 主对话 LLM（DeepSeek 等）多无 embedding 端点 → 需单独配嵌入源，否则 memory.vector /
