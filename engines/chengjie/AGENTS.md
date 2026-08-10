@@ -237,6 +237,40 @@ composer 语音区前先读）：
 ⑤ 发布纪律照旧：模板/i18n 热更新直上生产，每批 bump ui-build.txt；`.py` 改动攒批
  重启（本主线代码 2026-08-10 23:56 / 08-11 00:28 两批已装载 zhiliao）。
 
+**真人感文本层 spoken_style 主线**（2026-08-11 收编 AvatarHub 交付包 PR#21/22；包本体
+`platform/spoken_style/`（仓根），桥接 `src/ai/spoken_style_bridge.py`；L1-L3 已在 zhiliao
+灰度（overlay `ai.spoken_style: {enabled, level: 2, zh_only: true}`），L4 刻意未开）：
+```bash
+python tests/test_spoken_style_bridge.py          # 桥接契约 10 例，零依赖可直跑
+python ../../platform/spoken_style/smoke_test.py  # 包本体冒烟 26 项（异常先跑它分锅：包坏 vs 接入姿势不对）
+```
+预期：全绿。关键不变量（改 spoken_style_bridge / speech_prints.json / ai.spoken_style 前先读）：
+① **分工边界**：包本体（L1-L4 模板/事实锁判据/`colloquial_rewrite.py`/`emo_tag.py`）＝
+ AvatarHub 线，后两个文件是 avatarhub 仓**字节拷贝件勿本地改**（要改提示词走 avatarhub
+ 线同步）；指纹的角色化内容/档位缺省/灰度决策＝本线。桥接挂 ai_client 三处（L1 稳定
+ system 段 / L2 轮变尾注 / L3 出口清洁）+ L4 改写出口，包缺席/加载失败/开关关＝全链
+ no-op 绝不伤主链；**不注入包内人设卡**（chengjie 自有 persona 体系，只取正交层）。
+② **指纹键契约**：`platform/spoken_style/data/speech_prints.json` 键＝人设**口称名**
+ （`persona_manager.resolve_spoken_name` 输出**逐字一致**，含全角括号如
+ `Marcus Wei（韦明远）`）；桥接按会话人设动态分流（`context._resolved_persona_name`
+ → role 透传），配置静态 `role` 只是回落。**`profiles_runtime.yaml` 新增常驻人设必须
+ 同步加指纹条目**（漏了＝该人设只剩通用口语层没有指纹）；话少/播报型人设必须自带
+ `guide` 覆盖默认碎句风格（反例样板＝包内「秦震」条目）。未绑定人设的会话走全局
+ `ai_name`（顾嘉）条目。
+③ **zh_only 必须开**（默认开）：L2 模板是中文口语指令，非中文主体消息（han <40% 或
+ <2 字）不注入并计 `l2_skip_lang`——外语污染的直接读数；灰度验收＝外语会话出站不得
+ 出现「嘛/呢/啦」式中文语气尾。
+④ **L4（rewrite）默认关**，开启前置＝L1-L3 灰度两天读数干净 + 与 `voice_colloquial_llm`
+ **二选一**（后者改 TTS 前语音稿、L4 改文本主回复出口，叠开＝冗余+双份改写延迟；本机
+ 语音链正在用前者——见上方坐席语音主线）。开法＝overlay `ai.spoken_style.rewrite: true`
+ （后端缺省 .173 qwen14b，`rewrite_llm`/`rewrite_model` 可换任意 OpenAI 兼容端点）；
+ 开后盯 INFO「spoken_style L4 汇总」（每 20 次尝试一行），直通率 >30%＝事实锁大量拒绝
+ 或后端超时，把读数反馈 AvatarHub 线调包，**别自己改提示词**。无指纹的 role 不改写。
+⑤ **观测**：`spoken_style_bridge.stats()`（`l1_inject`/`l2_inject`/`l2_skip_lang`/
+ `l3_changed`/`l4_attempt|applied|passthrough`）→ `/api/workspace/metrics.spoken_style`
+ （drafts_routes 接线）；灰度复盘 CLI `python tools/spoken_style_obs.py`（只读：外语
+ 污染扫描 + 中文会话出站长度/语气词分布按灰度分界对比，多实例数据根自动发现）。
+
 **A 线「被吞回复」补答/回滚主线**（2026-08-09，修 198↔104 实录「回复等了 11 分钟」三连）：
 ```bash
 python -m pytest tests/test_reply_swallow_fix.py tests/test_message_dedup.py \
