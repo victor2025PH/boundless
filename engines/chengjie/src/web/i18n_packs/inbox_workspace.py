@@ -122,6 +122,13 @@ ZH = {
     "inbox.acct.open_web": "打开官方网页版",
     "inbox.acct.open_web_t": "在桌面顶部标签打开/切到该平台官方网页版（标签内扫码登录，支持页内翻译与辅助回复）",
     "inbox.acct.open_web_sent": "已在顶部标签打开网页版",
+    # P2 壳状态回推：该平台已有打开的网页版标签 → 入口语义升级 + 注入健康提示
+    "inbox.acct.open_web_switch": "切换到网页版标签",
+    "inbox.acct.web_health_t": "网页版标签注入健康：{s}",
+    "inbox.acct.web_inj_on": "注入正常",
+    "inbox.acct.web_inj_warn": "注入失配（选择器需校准）",
+    "inbox.acct.web_inj_off": "注入异常",
+    "inbox.acct.web_inj_idle": "等待注入",
     # ── 账号 rail 可发现性 + scoped 账号视角（P0，2026-07-29）──
     "inbox.acct.picker_t": "账号总览 · 共 {n} 个账号",
     "inbox.acct.scroll_left": "向左滚动账号列表",
@@ -2041,6 +2048,13 @@ EN = {
     "inbox.acct.open_web": "Open official web app",
     "inbox.acct.open_web_t": "Open/switch to this platform's official web app in the desktop tab strip (scan QR inside the tab; in-page translation & assisted replies)",
     "inbox.acct.open_web_sent": "Opened in the desktop tab strip",
+    # P2 shell state push: platform already has an open web-app tab → entry upgrades + injection health tip
+    "inbox.acct.open_web_switch": "Switch to web-app tab",
+    "inbox.acct.web_health_t": "Web-app tab injection health: {s}",
+    "inbox.acct.web_inj_on": "Injection OK",
+    "inbox.acct.web_inj_warn": "Selector mismatch (needs calibration)",
+    "inbox.acct.web_inj_off": "Injection error",
+    "inbox.acct.web_inj_idle": "Waiting for injection",
     # ── Account rail discoverability + scoped account view (P0, 2026-07-29) ──
     "inbox.acct.picker_t": "Account overview · {n} accounts",
     "inbox.acct.scroll_left": "Scroll account list left",

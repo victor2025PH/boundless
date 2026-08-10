@@ -791,7 +791,14 @@ class AIClient(LoggerMixin):
                     messages.append({"role": "assistant", "content": content})
                 else:
                     messages.append({"role": "user", "content": content})
-        messages.append({"role": "user", "content": user_message})
+        # 真人感文本层 L2：轮变尾注只进本轮送出的消息，不进历史（默认关；中文消息才注入）
+        _um_send = user_message
+        try:
+            from src.ai.spoken_style_bridge import turn_tail as _ss_turn_tail
+            _um_send = user_message + _ss_turn_tail(self.config, user_message)
+        except Exception:
+            _um_send = user_message
+        messages.append({"role": "user", "content": _um_send})
 
         request_id = (context or {}).get("request_id", "")
         # P1 本地优先：本地模型即主链，在**所有云端逻辑之前**短路（云端熔断态与它无关）。
@@ -2406,6 +2413,19 @@ class AIClient(LoggerMixin):
                 "必须如实告知客户暂无该信息，严禁编造订单状态、金额、物流进度或时间。"
             )
 
+        # 真人感文本层 L1（platform/spoken_style 桥接，默认关；ai.spoken_style.enabled）
+        # role=本会话人设口称名（上方 persona 解析已写进 context）→ 说话指纹按人设分流
+        try:
+            from src.ai.spoken_style_bridge import system_block as _ss_system_block
+            _ss_b = _ss_system_block(
+                self.config,
+                role=str((context or {}).get("_resolved_persona_name") or ""),
+            )
+            if _ss_b:
+                parts.append(_ss_b)
+        except Exception:
+            pass
+
         return "\n\n".join(parts)
 
     _MAX_HISTORY_CHARS = 12000
@@ -3949,6 +3969,29 @@ class AIClient(LoggerMixin):
                 reply = written
             except Exception:
                 self.logger.debug("spoken variant split skipped", exc_info=True)
+
+        # 真人感文本层 L3：出口清洁（剥情绪/副语言标记；未启用=原样返回，零成本）
+        if reply:
+            try:
+                from src.ai.spoken_style_bridge import clean_reply_text as _ss_clean
+                reply = _ss_clean(self.config, reply)
+            except Exception:
+                pass
+
+        # 真人感文本层 L4：口语化改写（默认关；事实锁把关，失败/超时原句直通。
+        # 放在 spoken_variant 摘取之后：即便改写生效，语音口语版哈希失配会自动
+        # 放弃暂存走既有口语化链——两层不会叠加）
+        # role=会话人设口称名（generate_reply 内 persona 解析写进了 enhanced_context，
+        # dict 同对象直传，这里读到的是本轮真实人设）→ 改写提示按人设指纹分流
+        if reply:
+            try:
+                from src.ai.spoken_style_bridge import rewrite_reply as _ss_rewrite
+                reply = await _ss_rewrite(
+                    self.config, reply,
+                    role=str(enhanced_context.get("_resolved_persona_name") or ""),
+                )
+            except Exception:
+                pass
 
         return reply
 

@@ -54,6 +54,9 @@ SHOTS = [
     ("ui_default_1440x900",    "ui",      1440, 900),   # 工作室：默认 Tab（角色库）常用桌面
     ("ui_default_1280x800",    "ui",      1280, 800),   # 工作室：小桌面
     ("ui_narrow_820x900",      "ui",      820, 900),    # 工作室：窄屏/平板（导航响应式）
+    # [2026-07-16 复牌] ui_mobile 曾因跨次双稳态（0.00%↔9.20%）摘牌数小时；P5-A 专项定位：
+    # 振荡=无头 --screenshot 抓图时机相对页面异步任务的竞速（对照实验实锤：现状参数 6 拍 2 簇，
+    # 加 --virtual-time-budget 后 6 拍 1 簇）。shot() 已加虚拟时间预算根修，本行恢复门禁。
     ("ui_mobile_390x900",      "ui",      390, 900),    # 工作室：手机单栏（v3.9 窄屏收口，锚顶栏换行/无横向溢出）
     # 阶段7：逐 Tab 覆盖——只取「跨次零抖动」的表单类 Tab（经临时副本设初始 tab）。
     # 已剔除：dashboard/stream/interp/history/logs/selfcheck（iframe/实时/流式）、
@@ -146,35 +149,44 @@ def make_state_page(state, profile=PIN_PROFILE):
     return f"/static/_regress_{state}.html" + pin, tmp
 
 
-def shot(edge, url, out, w, h):
+def shot(edge, url, out, w, h, vt_ms=0):
     if out.exists():
         out.unlink()
     # 仅保留 --force-prefers-reduced-motion：触发 reduced-motion 降级，冻结头像呼吸/光环等装饰动画。
     # 跨机差异已由「按机器指纹分目录基线」彻底解决，不再叠加渲染归一化参数——实测
     # font-render-hinting/disable-lcd-text 会扰动时序放大异步内容竞态，force-device-scale-factor=1
     # 会触发头像图二次解码竞态（headless 下 DPR 本就为 1，该参数对同机确定性无增益却有害）。
+    # [P5-A·2026-07-16] vt_ms>0 → --virtual-time-budget：--screenshot 默认 load 后立即抓帧，
+    # 页面异步任务（Alpine 托管/轮询首拍/字体回流）跑到哪一步纯看运气 → /ui 双稳态假红
+    # （ui_mobile 0.00%↔9.20% 实锤；对照实验 6 拍 2 簇 → 加虚拟时间 6 拍 1 簇）。
+    # 只给 /ui 系启用：/phone 有免提长轮询，虚拟时间会与之互锁偶发 40s 超时（实测），且其基线长期 0.00% 稳定不需要。
     cmd = [edge, "--headless=new", "--disable-gpu", "--hide-scrollbars=false",
            "--force-prefers-reduced-motion",
+           *([f"--virtual-time-budget={vt_ms}"] if vt_ms else []),
            f"--window-size={w},{h}", f"--screenshot={out}", url]
     try:
-        subprocess.run(cmd, timeout=40, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # 虚拟时间模式下 WS 心跳/轮询会拖慢虚拟时钟推进，真实耗时偶发 >40s → 放宽到 90s
+        subprocess.run(cmd, timeout=(90 if vt_ms else 40), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception as e:
         print(f"   ! edge 失败: {e}")
     time.sleep(0.4)
     return out.exists()
 
 
-def capture_settled(edge, url, out, w, h, settle_eps=0.6, tries=4):
+def capture_settled(edge, url, out, w, h, settle_eps=0.6, tries=4, vt_ms=0):
     """连续截图直到「相邻两帧基本一致」，得到稳定（已 settle）的画面。
     异步内容（角色卡/服务状态/字体回流）会让一次性截图落在不确定的加载相位上，
     导致基线或当前帧偶发抓到瞬时态。本函数确保我们存/比的都是稳定帧。
     返回 (captured_ok, settled_bool)。settled=False 表示 tries 内仍未收敛（该帧本质抖动）。"""
     prev = out.with_name(out.stem + ".prev.png")
-    if not shot(edge, url, out, w, h):
+    if not shot(edge, url, out, w, h, vt_ms):
         return False, False
     for _ in range(tries):
         shutil.copy2(out, prev)
-        if not shot(edge, url, out, w, h):
+        if not shot(edge, url, out, w, h, vt_ms):
+            # [P5-A 存量 bug 修复] shot() 开头先删旧帧，中途失败会把 out 留成"不存在"——
+            # 下游 diff_pct 直接 FileNotFoundError 崩整个回归。用上一帧回退（保底有图），判未收敛。
+            shutil.copy2(prev, out)
             break
         d = diff_pct(out, prev)
         if d is not None and d <= settle_eps:
@@ -284,7 +296,8 @@ def main():
             if tmp:
                 temps.append(tmp)
             out = CUR / f"{name}.png"
-            ok, st = capture_settled(edge, args.base + url_path, out, w, h)
+            _vt = 8000 if state.startswith("ui") else 0   # P5-A：虚拟时间只给 /ui 系（见 shot 注释）
+            ok, st = capture_settled(edge, args.base + url_path, out, w, h, vt_ms=_vt)
             settled[name] = st
             flag = "✓" if ok else "✗"
             note = "" if st else "  (未收敛/抖动)"

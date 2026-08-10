@@ -1,8 +1,10 @@
 <!DOCTYPE html>
+<!-- ⚠ 生成产物勿手改：源 = static/ui_src/ui_shell.html + static/ui_src/tabs/*.html，改源后跑 python tools/_build_ui.py（run_all_tests 内 --check 门禁拦手改漂移） -->
 <html lang="zh">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#080b10">
 <title>BOUNDLESS 控制台 · 无界科技</title>
 <link rel="icon" type="image/svg+xml" href="/static/icon.svg"/>
 <link rel="icon" type="image/png" sizes="256x256" href="/static/app-icon-256.png"/>
@@ -136,25 +138,28 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
     <!-- 授权状态徽章（档位 + 剩余天数）：独立拉 /api/license/status；点击展开续费卡片 -->
     <span class="relative inline-block" id="licWrap">
       <span id="licChip" title="授权状态加载中…"
-            class="text-[12px] px-2 py-0.5 rounded-full border border-hub-border text-hub-muted cursor-pointer select-none whitespace-nowrap">🔑 授权…</span>
+            class="text-[12px] px-2 py-0.5 rounded-full border border-hub-border text-hub-muted cursor-pointer select-none whitespace-nowrap"><svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px"><use href="/static/brand-icons.svg?v=20260716b#i-lock"/></svg> 授权…</span>
       <div id="licCard" class="hidden absolute left-0 top-full mt-1 z-50 w-64 p-3 rounded-lg bg-hub-card border border-hub-border shadow-xl text-[13px] leading-relaxed text-hub-muted"></div>
     </span>
     <!-- 交付就绪徽标：聚合授权/验真/页面/服务/水位/白标，点击展开明细，可跳 /delivery -->
     <span class="relative inline-block" id="dlvWrap">
       <span id="dlvChip" title="交付就绪自检中…"
-            class="text-[12px] px-2 py-0.5 rounded-full border border-hub-border text-hub-muted cursor-pointer select-none whitespace-nowrap">🚦 就绪…</span>
+            class="text-[12px] px-2 py-0.5 rounded-full border border-hub-border text-hub-muted cursor-pointer select-none whitespace-nowrap"><svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px"><use href="/static/brand-icons.svg?v=20260716b#i-probe"/></svg> 就绪…</span>
       <div id="dlvCard" class="hidden absolute left-0 top-full mt-1 z-50 w-72 p-3 rounded-lg bg-hub-card border border-hub-border shadow-xl text-[13px] leading-relaxed text-hub-muted"></div>
     </span>
-    <span x-show="active" x-text="'▶ '+active"
+    <!-- [P5-A·2026-07-16] header 内全部裸 x-show 元素补 x-cloak：body 的 x-cloak 揭开与子树
+         x-show 求值之间存在一个渲染窗口，这些 chips 会按"默认可见"闪现一帧，把 header 撑出
+         第三行（无头截图 1/10 踩中该帧 → ui_mobile 像素基线双稳态 9.2% 假红；真机开屏同样闪）。 -->
+    <span x-show="active" x-cloak x-text="'▶ '+active"
           class="text-hub-green text-[13px] font-semibold bg-green-900/30 px-2 py-0.5 rounded-full whitespace-nowrap"></span>
     <!-- 优雅降级提示：远端节点掉线时已自动切本机兜底，服务不中断（面向运维，措辞克制不报警） -->
-    <span x-show="degradedServices.length"
+    <span x-show="degradedServices.length" x-cloak
           :title="'远端节点掉线，已自动切到本机兜底（服务不中断）：'+degradedServices.join('、')"
           class="text-[12px] px-2 py-0.5 rounded-full border border-yellow-500/40 text-yellow-300 bg-yellow-900/20 whitespace-nowrap">
       ⚠ 本机兜底 <span x-text="degradedServices.length"></span>
     </span>
     <!-- 性能条 -->
-    <div x-show="perf.gpu_util>=0" class="hidden sm:flex items-center gap-1.5 ml-2">
+    <div x-show="perf.gpu_util>=0" x-cloak class="hidden sm:flex items-center gap-1.5 ml-2">
       <span class="text-[12px] text-hub-muted">GPU</span>
       <div class="w-16 h-1.5 bg-hub-border rounded-full overflow-hidden">
         <div class="bar h-full rounded-full"
@@ -162,14 +167,14 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
              :style="'width:'+perf.gpu_util+'%'"></div>
       </div>
       <span class="text-[12px] text-hub-muted" x-text="perf.gpu_util+'%'"></span>
-      <span x-show="perf.streaming" class="bd-chip sm ok">📹直播中</span>
-      <span x-show="rvcLive()" class="bd-chip sm accent">🎙变声中</span>
+      <span x-show="perf.streaming" x-cloak class="bd-chip sm ok">📹直播中</span>
+      <span x-show="rvcLive()" x-cloak class="bd-chip sm accent">🎙变声中</span>
       <!-- 压力等级徽章 -->
-      <span x-show="healthPressure==='yellow'" class="bd-chip sm warn dim">⚠️高负载</span>
-      <span x-show="healthPressure==='red'" class="bd-chip sm err animate-pulse">🔴过载</span>
+      <span x-show="healthPressure==='yellow'" x-cloak class="bd-chip sm warn dim">⚠️高负载</span>
+      <span x-show="healthPressure==='red'" x-cloak class="bd-chip sm err animate-pulse">🔴过载</span>
     </div>
     <!-- 看门狗/守护状态徽章（悬停看详情）。_uivr：守护进程起落=徽章出没，回归模式不渲染（确定性口径） -->
-    <div x-show="watchdog && !_uivr" class="relative group ml-1 hidden sm:block">
+    <div x-show="watchdog && !_uivr" x-cloak class="relative group ml-1 hidden sm:block">
       <span class="text-[12px] px-1.5 py-0.5 rounded-full border cursor-default"
             :class="!watchdog ? '' : (watchdog.healthy ? 'border-hub-green/50 text-hub-green' : 'border-hub-red text-hub-red animate-pulse')"
             x-text="'🛡️' + (watchdog && !watchdog.healthy ? (watchdog.fast_mode?'自愈中':'异常') : '守护')"></span>
@@ -242,15 +247,8 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
     </div>
     <!-- 分隔：工具/品牌 ｜ 产品动作，视觉分组降噪 -->
     <span class="hidden sm:block w-px h-5 bg-hub-border/60 mx-1 self-center"></span>
-    <!-- 产品闭环：后台 ↔ 对话 ↔ 看板 -->
-    <a href="/phone" target="_blank"
-       class="text-[13px] font-semibold px-2.5 py-1 rounded-full bg-hub-blue/20 text-hub-blue hover:bg-hub-blue hover:text-white transition border border-hub-blue/40 inline-flex items-center gap-1">
-      <svg class="bd-ic" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-chat"/></svg> 对话
-    </a>
-    <a href="/dashboard" target="_blank"
-       class="text-[13px] px-2.5 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition inline-flex items-center gap-1">
-      <svg class="bd-ic" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-chart"/></svg> 看板
-    </a>
+    <!-- [四视角 P1-4·2026-07-16] 顶栏减负：对话/看板已入侧栏「上线/数据与运维」组，顶栏胶囊退役去重；
+         自检(/delivery 独立页)与教程(/help)无侧栏对应，保留。 -->
     <a href="/delivery" target="_blank"
        class="text-[13px] px-2.5 py-1 rounded-full border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition hidden sm:inline-flex items-center gap-1"
        title="交付自检：授权/合规/页面/服务/白标 一键验收">
@@ -275,7 +273,7 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
       </span>
       <!-- 悬浮明细 -->
       <div class="absolute right-0 top-full mt-1 z-50 hidden group-hover:block group-focus-within:block w-64 p-2.5 rounded-lg bg-hub-card border border-hub-border text-[13px] leading-relaxed shadow-xl">
-        <div class="font-semibold text-hub-blue mb-1">🩺 服务状态</div>
+        <div class="font-semibold text-hub-blue mb-1"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-probe"/></svg> 服务状态</div>
         <!-- P2-A: 把 lipsync 原始健康翻译成"数字人口型"用户能力，静态口型/回退不再无解释 -->
         <div class="flex items-center justify-between py-0.5 mb-1 pb-1.5 border-b border-hub-border/50">
           <span class="flex items-center gap-1.5">
@@ -353,13 +351,13 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
       <span x-text="(hubAlerts().primary?1:0)+hubAlerts().extra.length"></span>
     </button>
     <!-- 运维/安全告警入口：仅运维可见，含完整修复指引（不进用户首屏横幅）；演示模式下隐藏 -->
-    <div x-show="opsAlerts.length && !demoMode" class="relative group ml-0.5">
+    <div x-show="opsAlerts.length && !demoMode" x-cloak class="relative group ml-0.5">
       <span tabindex="0" role="button" aria-label="运维与安全告警"
             class="text-[13px] font-semibold px-2 py-1 rounded-full border border-orange-500/50 text-orange-400 bg-orange-900/20 cursor-default flex items-center gap-1 focus-visible:ring-2 focus-visible:ring-orange-400/50 outline-none">
         <svg class="bd-ic" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-tools"/></svg> <span x-text="'运维 '+opsAlerts.length"></span>
       </span>
       <div class="absolute right-0 top-full mt-1 z-50 hidden group-hover:block group-focus-within:block w-72 p-2.5 rounded-lg bg-hub-card border border-orange-700/40 text-[13px] leading-relaxed shadow-xl">
-        <div class="font-semibold text-orange-400 mb-1">🔧 运维 / 安全告警</div>
+        <div class="font-semibold text-orange-400 mb-1"><svg class="bd-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-tools"/></svg> 运维 / 安全告警</div>
         <template x-for="a in opsAlerts" :key="a.key">
           <div class="py-1 border-b border-hub-border/50 last:border-0">
             <div class="font-semibold text-hub-text" x-text="a.title"></div>
@@ -372,8 +370,11 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
     </div>
   </div>
 </header>
-<!-- P14-5: WS 断连警告条（演示模式下隐藏）-->
-<div x-show="!wsConnected && !demoMode"
+<!-- P14-5: WS 断连警告条（演示模式下隐藏）。
+     x-cloak：Alpine 初始化前 x-show 元素默认可见，横幅会闪现一帧把整页顶下 ~24px
+     （2026-07-16 实锤：ui_mobile 像素基线截到瞬时帧 9.2% 假红；真实用户开屏也能看到闪条）；
+     _uivr：回归模式下 WS 握手竞速会让横幅随机入镜，一律不渲染（确定性口径） -->
+<div x-show="!wsConnected && !demoMode && !_uivr" x-cloak
      class="bg-orange-900/60 border-b border-orange-700/40 text-orange-300 text-xs text-center py-1">
   ⚠️ WebSocket 已断开，正在重连...
 </div>
@@ -443,14 +444,18 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
       <div class="mb-1.5">
         <div x-show="!sidebarCollapsed" class="text-[13px] font-semibold text-hub-muted/60 uppercase tracking-widest px-2 pt-1.5 pb-1 select-none" x-text="g"></div>
         <div x-show="sidebarCollapsed" class="h-px bg-hub-border/50 mx-2 my-1.5"></div>
-        <template x-for="t in tabs.filter(x=>x.group===g)" :key="t.id">
-          <button @click="goTab(t.id)" :title="t.label" :aria-label="t.label"
+        <template x-for="t in navTabs(g)" :key="t.id">
+          <button @click="goTab(t.id)" :title="tabTitle(t)" :aria-label="t.label"
                   :aria-current="tab===t.id ? 'page' : null"
                   :class="[tab===t.id?'bg-hub-blue/15 text-hub-blue border-hub-blue':'text-hub-muted border-transparent hover:text-hub-text hover:bg-hub-border/30',
                            sidebarCollapsed?'justify-center px-0':'px-2.5']"
                   class="sb-tab w-full flex items-center gap-2.5 py-2 rounded-lg border-l-2 text-[14px] font-semibold transition mb-0.5">
             <span class="leading-none flex items-center" x-html="icx(t.ic)"></span>
             <span x-show="!sidebarCollapsed" x-text="t.label"></span>
+            <span x-show="!sidebarCollapsed && t.href" class="ml-auto text-hub-muted/50 text-[12px]" aria-hidden="true">↗</span>
+            <span x-show="!sidebarCollapsed && tabProBadge(t)" x-cloak @click.stop="goPro(t.id)"
+                  title="PRO 版位能力 · 点击查看订购 / 升级"
+                  class="ml-auto text-[12px] leading-none font-bold px-1 py-0.5 rounded bg-hub-yellow/15 text-hub-yellow border border-hub-yellow/30 hover:bg-hub-yellow/30 cursor-pointer">PRO</span>
           </button>
         </template>
       </div>
@@ -463,16 +468,19 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
       <div class="flex items-stretch">
         <span class="self-center text-[13px] text-hub-muted/50 uppercase tracking-widest pr-1 pl-2 hidden sm:inline select-none"
               x-text="g"></span>
-        <template x-for="t in tabs.filter(x=>x.group===g)" :key="t.id">
+        <template x-for="t in navTabs(g)" :key="t.id">
           <button @click="goTab(t.id); $el.scrollIntoView({inline:'center',block:'nearest',behavior:'smooth'})"
                   :class="tab===t.id?'text-hub-blue border-hub-blue':'text-hub-muted border-transparent hover:text-hub-text'"
                   class="px-3 py-2 text-[14px] font-semibold border-b-2 transition whitespace-nowrap flex items-center gap-1"
-                  :title="t.label">
+                  :title="tabTitle(t)">
             <span class="flex items-center" x-html="icx(t.ic)"></span>
             <span class="hidden sm:inline" x-text="t.label"></span>
+            <span x-show="tabProBadge(t)" x-cloak @click.stop="goPro(t.id)"
+                  title="PRO 版位能力 · 点击查看订购 / 升级"
+                  class="text-[12px] leading-none font-bold px-1 py-0.5 rounded bg-hub-yellow/15 text-hub-yellow border border-hub-yellow/30">PRO</span>
           </button>
         </template>
-        <div x-show="g!=='运营'" class="self-center w-px h-4 bg-hub-border mx-1 shrink-0"></div>
+        <div x-show="g!==tabGroups[tabGroups.length-1]" class="self-center w-px h-4 bg-hub-border mx-1 shrink-0"></div>
       </div>
     </template>
   </nav>
@@ -741,7 +749,7 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
           <div class="flex items-center justify-center gap-1 mt-1.5 flex-wrap min-h-[18px]">
             <span x-show="p.quality_axes?.cosine>0"
                   class="text-[12px] font-semibold px-1.5 py-0.5 rounded-full"
-                  :class="p.quality_axes?.cosine>=0.6?'bg-green-900/50 text-green-300':p.quality_axes?.cosine>=0.45?'bg-yellow-900/50 text-yellow-300':'bg-red-900/40 text-red-300'"
+                  :class="p.quality_axes?.cosine>=QA.COS_OK?'bg-green-900/50 text-green-300':p.quality_axes?.cosine>=QA.COS_MID?'bg-yellow-900/50 text-yellow-300':'bg-red-900/40 text-red-300'"
                   :title="'音色相似度 '+p.quality_axes?.cosine"
                   x-text="'🎯 音色 '+Math.round((p.quality_axes?.cosine||0)*100)+'%'"></span>
             <span x-show="!p.has_voice" class="text-[12px] text-hub-muted/70 px-1.5 py-0.5 rounded-full bg-hub-border/50 cursor-help"
@@ -2032,8 +2040,10 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
             </div>
           </div>
           <div class="bd-act-row">
+            <!-- P0 三态：就绪=直接生成 / 服务离线=点击后自动启动再生成(冷启动提示) / 生成中 -->
             <button @click="runHairPreset()" :disabled="hairPresetBusy" class="bd-act amber"
-                    x-text="hairPresetBusy?'生成中(约10s)…':'🧪 生成定妆脸'"></button>
+                    :title="labSvc.hair && !labSvc.hair.up ? '发型服务(8001)未启动：点击后自动启动并继续，首次约 20-60 秒' : '离线约5-10秒，定妆结果写进角色，直播零开销'"
+                    x-text="hairPresetBusy?'生成中…':(labSvc.hair && !labSvc.hair.up ? '🧪 生成定妆脸 · 自动启动服务' : '🧪 生成定妆脸')"></button>
             <button @click="toggleHairPreset()" class="bd-act ghost"
                     title="在「原始脸 / 定妆脸」之间切换换脸源">🔁 切换 原脸/定妆</button>
           </div>
@@ -2265,8 +2275,11 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
                     title="用角色现有照片（试衣照>定妆脸>原脸）生成呼吸/眨眼级微动待机视频，替代静态照片待机"
                     x-text="idleMotionBusy?'生成中…(约20s)':'🌬️ 生成待机微动'"></button>
           </div>
-          <div x-show="!fitting.up" class="text-[13px] text-hub-muted">
-            试衣间未就绪 — 需 tryon(8002) 在线（START_EXTRAS=1 或 start_tryon_api.bat），或 Hub 更新后待重启激活（激活定妆包.bat）
+          <div x-show="!fitting.up" class="text-[13px] text-hub-muted flex items-center gap-2 flex-wrap">
+            <span>试衣间未就绪 — tryon(8002) 未启动</span>
+            <button @click="startLabSvc('tryon','试衣')" :disabled="svcStartBusy"
+                    class="bd-act sm ghost"
+                    x-text="svcStartBusy==='tryon' ? '▶ 启动中…（约 1-2 分钟）' : '▶ 一键启动试衣服务'"></button>
           </div>
           <div x-show="fitting.up" class="space-y-2">
             <div class="flex items-center gap-2 text-[12px]" x-show="fitting.clothes.length > fittingPageSize">
@@ -3078,15 +3091,19 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
         <div class="flex justify-between text-[13px] text-hub-muted"><span>-24 变男声</span><span>0</span><span>+24 变女声</span></div>
       </div>
       <!-- 高级 -->
-      <div>
+      <div :class="rvcIndexActive===false ? 'opacity-50' : ''">
         <label class="text-xs text-hub-muted" title="原名「索引影响 index_rate」：越高越贴近目标音色，但过高可能带电音/吞字；常用 0.3~0.75">音色贴合度 <span class="bd-val" x-text="rvc.indexRate.toFixed(2)"></span></label>
-        <input type="range" x-model.number="rvc.indexRate" min="0" max="1" step="0.05" class="w-full mt-2">
+        <input type="range" x-model.number="rvc.indexRate" min="0" max="1" step="0.05" class="w-full mt-2" :disabled="rvcIndexActive===false">
         <div class="flex justify-between text-[13px] text-hub-muted"><span>更自然</span><span>更像目标音色</span></div>
+        <!-- RVC-P1 诚实滑块：无 .index 检索文件时引擎强制关闭检索，此滑块实际无效——置灰并说明，不再假装有效 -->
+        <div x-show="rvcIndexActive===false" class="text-[12px] text-hub-orange mt-0.5">该模型不带 .index 检索文件，此滑块不生效（音色由模型本身决定）</div>
       </div>
       <div>
         <label class="text-xs text-hub-muted" title="原名「保护强度 protect」：保护清辅音和呼吸声不被变声糊掉，咬字更清楚；默认 0.33，咬字发糊就调大">咬字保护 <span class="bd-val" x-text="rvc.protect.toFixed(2)"></span></label>
         <input type="range" x-model.number="rvc.protect" min="0" max="0.5" step="0.01" class="w-full mt-2">
         <div class="flex justify-between text-[13px] text-hub-muted"><span>关</span><span>咬字最清楚</span></div>
+        <!-- RVC-P1 诚实滑块：实时链路(api_240604 实时推理)不支持 protect，只有录音试听/离线配音生效 -->
+        <div class="text-[12px] text-hub-muted mt-0.5">仅对下方「录音试听」和离线配音生效；实时变声暂不支持</div>
       </div>
     </div>
     <!-- 控制按钮 -->
@@ -3112,6 +3129,26 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
     <div x-show="rvcMsg" x-text="rvcMsg"
          :class="rvcOk?'text-hub-green bg-green-900/20':'text-hub-red bg-red-900/20'"
          class="text-xs text-center py-1.5 rounded-lg mt-2"></div>
+    <!-- RVC-P1 引擎真实状态行：拾音流真在跑才显示（模型/变调/推理耗时/输出电平，4s 轮询顺风车） -->
+    <div x-show="rvcStatusLine()" class="text-[12px] text-hub-muted text-center mt-1.5" x-text="rvcStatusLine()"></div>
+    <!-- RVC-P1 输出静音告警：变声在跑但输出电平持续 ≥20s 为 0（说话间隙不误报） -->
+    <div x-show="rvcSilenceWarn()" class="mt-1.5 text-[13px] bd-strip warn text-hub-orange px-2 py-1.5">
+      ⚠️ 变声在跑，但输出已持续静音——观众可能听不到。请确认：① 听/推流的是「CABLE Output」而不是麦克风监听；② 输出设备选择正确；③ 麦克风有拾到声音
+    </div>
+    <!-- RVC-P1 录 5 秒 AB 试听：不接 OBS 也能自证变声效果（走离线转换，不打断实时变声） -->
+    <div class="mt-3 pt-3 border-t border-white/5">
+      <div class="flex items-center gap-2 flex-wrap">
+        <span class="text-xs text-hub-muted" title="录 5 秒你的声音，用当前模型与滑块参数离线转换，原声/变声一键对比——确认效果再开播">效果自证：</span>
+        <button @click="rvcAb.state==='rec' ? rvcAbStop() : rvcAbRecord()" :disabled="rvcAb.busy"
+                class="bd-act sm" :class="rvcAb.state==='rec'?'red':'soft'"
+                x-text="rvcAb.state==='rec' ? ('■ 停止（'+rvcAb.sec+'/5s）') : (rvcAb.busy ? '⏳ 转换中…' : '🎤 录5秒试听')"></button>
+        <button x-show="rvcAb.rawUrl" @click="rvcAbPlay('raw')" class="bd-act sm soft"
+                x-text="rvcAb.playing==='raw'?'⏸ 原声':'▶ 原声'"></button>
+        <button x-show="rvcAb.outB64" @click="rvcAbPlay('out')" class="bd-act sm purple"
+                x-text="rvcAb.playing==='out'?'⏸ 变声':'▶ 变声'"></button>
+        <span x-show="rvcAb.busy" class="text-[12px] text-hub-muted">首次加载模型可能 10~30 秒</span>
+      </div>
+    </div>
     </div>
   </section>
 
@@ -5500,6 +5537,15 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
         <button @click="refreshServices()" class="bd-act sm ghost">↻ 重新探测</button>
       </div>
     </div>
+    <!-- [并存·2026-07-17] 安装身份自证：同机装了「安装版+源码版」时,一眼看清此界面连的是哪套/哪个端口段,
+         不用再 netstat 反查"服务是谁的"。数据取 /api/ports(base=安装根目录,offset=端口偏移)。 -->
+    <div x-show="portsInfo && portsInfo.base" class="text-[12px] text-hub-muted/80 mb-2 flex items-center gap-2 flex-wrap"
+         data-tip="本套安装身份|这个界面与下方服务属于哪个安装目录、用哪个端口段|同机装了两套(安装版+开发版)分不清连的是谁时看这里">
+      <span>📌 本套安装:</span>
+      <code class="text-hub-blue" x-text="portsInfo?.base"></code>
+      <span x-show="portsInfo?.offset" class="text-amber-400" x-text="'端口偏移 +'+portsInfo?.offset+'（并存模式）'"></span>
+      <span class="text-hub-muted/50" x-text="'控制台 :'+(portsInfo?.hub_port||'')"></span>
+    </div>
     <div x-show="!svcCatalog.length" class="text-[13px] text-hub-muted">服务目录加载中…（若一直空白，说明 Hub 版本较旧，重启 Hub 后生效）</div>
     <template x-for="grp in [{k:true,t:'核心链路（离线会影响对话/开播）'},{k:false,t:'可选增强（离线只影响对应功能）'}]" :key="grp.t">
       <div class="mb-2">
@@ -6008,8 +6054,8 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
 </main>
 </div><!-- /导航+内容 flex 包裹 -->
 
-<!-- P4: 首访上手引导气泡（右下角，可关，localStorage 记住不再弹）-->
-<div x-show="showTour" x-transition
+<!-- P4: 首访上手引导气泡（右下角，可关，localStorage 记住不再弹）。x-cloak 防未托管闪现（P5-A 同批）-->
+<div x-show="showTour" x-transition x-cloak
      class="fixed bottom-4 right-4 z-[55] w-72 bg-hub-card border border-hub-blue/40 rounded-xl shadow-2xl p-3.5">
   <div class="flex items-start justify-between mb-1.5">
     <div class="font-bold text-hub-blue text-sm">👋 30 秒上手</div>
@@ -6028,8 +6074,8 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
   </div>
 </div>
 
-<!-- ═══ 产品向导（首次 / 手动启动）═══ -->
-<div x-show="onboardShow" x-transition.opacity
+<!-- ═══ 产品向导（首次 / 手动启动）═══ x-cloak 防未托管闪现（P5-A 同批）-->
+<div x-show="onboardShow" x-transition.opacity x-cloak
      class="fixed inset-0 bg-black/85 z-[60] flex items-center justify-center p-4"
      @click.self="onboardSkip()">
   <div class="bd-modal p-5 max-w-md w-full relative">
@@ -6400,7 +6446,7 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
                 <div class="flex items-center gap-1.5">
                   <button @click="vaTrashRestoreSel()" :disabled="vaBusy==='trash:batch'"
                           class="bd-act sm soft"
-                          x-text="vaBusy==='trash:batch'?'⏳':('↩ 还原选中 ('+vaTrashSel.length+')')"></button>
+                          x-html="vaBusy==='trash:batch'?'⏳':(icx('clock')+' 还原选中 ('+vaTrashSel.length+')')"></button>
                   <button @click="vaTrashPurgeSel()" :disabled="vaBusy==='trash:batch'"
                           class="bd-act sm red"
                           x-text="'✕ 彻删选中 ('+vaTrashSel.length+')'"></button>
@@ -6454,7 +6500,7 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
                 </div>
                 <div class="flex items-center gap-1.5 shrink-0 text-[12px]">
                   <button @click="vaTrashRestore(it)" :disabled="vaBusy==='trash:'+it.name"
-                          class="bd-act sm soft">↩ 还原</button>
+                          class="bd-act sm soft"><svg class="bd-ic" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-clock"/></svg> 还原</button>
                   <button @click="vaTrashPurge(it)" :disabled="vaBusy==='trash:'+it.name" title="彻底删除（不可逆）"
                           class="bd-act sm red">✕ 彻删</button>
                 </div>
@@ -6605,7 +6651,7 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
                       :class="vpPvTpl==='custom'?'border-hub-yellow bg-hub-yellow/20 text-hub-yellow font-semibold':'border-hub-border text-hub-muted hover:text-hub-text'">✍ 自定义</button>
               <button x-show="vpNeedGen" @click="vpGenPreviews()" :disabled="vpBusy==='gen'"
                       class="ml-auto bd-act sm amber"
-                      x-text="vpBusy==='gen'?'⏳ 合成中…':(vpStaleN?'⚡ 按新台词重生成':'⚡ 补齐克隆试听')"></button>
+                      x-html="vpBusy==='gen'?'⏳ 合成中…':(icx('zap')+(vpStaleN?' 按新台词重生成':' 补齐克隆试听'))"></button>
             </div>
             <div x-show="vpPvEdit" class="flex items-center gap-1.5" x-cloak>
               <input x-model="vpPvDraft" maxlength="120" @keydown.enter="vpApplyCustomText()"
@@ -6626,7 +6672,7 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
               <button @click="vpSubs.open=!vpSubs.open; if(vpSubs.open) vpSubsLoad()"
                       class="ml-auto text-[12px] px-2 py-0.5 rounded-full border transition"
                       :class="vpSubs.open?'border-hub-blue/60 text-hub-blue':'border-hub-border text-hub-muted hover:text-hub-text'"
-                      x-text="'🔄 订阅'+(vpSubs.n?(' '+vpSubs.n):'')"></button>
+                      x-html="icx('refresh')+' 订阅'+(vpSubs.n?(' '+vpSubs.n):'')"></button>
               <button x-show="vpTrashN" @click="vpTrashOpen=!vpTrashOpen; if(vpTrashOpen) vpTrashLoad()"
                       class="text-[12px] px-2 py-0.5 rounded-full border transition"
                       :class="vpTrashOpen?'border-hub-yellow/60 text-hub-yellow':'border-hub-border text-hub-muted hover:text-hub-text'"
@@ -6734,7 +6780,7 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
                         class="bd-act sm soft ml-auto shrink-0">全部导入</button>
                 <button @click="vpSubAdd(vpCat.url)" :disabled="vpSubs.busy"
                         title="订阅后自动保持同步：对方上新自动进库，你删过的不会被塞回来"
-                        class="bd-act sm green shrink-0">🔄 订阅此清单</button>
+                        class="bd-act sm green shrink-0"><svg class="bd-ic" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-refresh"/></svg> 订阅此清单</button>
                 <button @click="vpCat.open=false" class="bd-act sm ghost shrink-0">收起</button>
               </div>
               <template x-if="!vpCat.items.length"><div class="text-[12px] text-hub-muted">清单是空的</div></template>
@@ -7422,11 +7468,11 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
                  class="flex flex-wrap items-center gap-1.5">
               <span class="text-hub-muted">包内质量评分</span>
               <span x-show="(pkgPeek.quality_axes||{}).cosine>0" class="px-1.5 py-0.5 rounded-full text-[12px]"
-                    :class="(pkgPeek.quality_axes||{}).cosine>=0.75?'bg-yellow-900/30 text-hub-yellow':((pkgPeek.quality_axes||{}).cosine>=0.6?'bg-green-900/30 text-green-300':'bg-hub-border/60 text-hub-muted')"
-                    x-text="((pkgPeek.quality_axes||{}).cosine>=0.75?'★ ':'')+'音色贴合 '+Math.round((pkgPeek.quality_axes||{}).cosine*100)+'%'"></span>
+                    :class="(pkgPeek.quality_axes||{}).cosine>=QA.GOLD?'bg-yellow-900/30 text-hub-yellow':((pkgPeek.quality_axes||{}).cosine>=QA.COS_OK?'bg-green-900/30 text-green-300':'bg-hub-border/60 text-hub-muted')"
+                    x-text="((pkgPeek.quality_axes||{}).cosine>=QA.GOLD?'★ ':'')+'音色贴合 '+Math.round((pkgPeek.quality_axes||{}).cosine*100)+'%'"></span>
               <span x-show="(pkgPeek.quality_axes||{}).naturalness>0" class="px-1.5 py-0.5 rounded-full text-[12px] bg-hub-blue/15 text-hub-blue"
                     x-text="'自然度 '+Math.round((pkgPeek.quality_axes||{}).naturalness*100)+'%'"></span>
-              <span x-show="(pkgPeek.quality_axes||{}).cosine>0 && (pkgPeek.quality_axes||{}).cosine<0.6"
+              <span x-show="(pkgPeek.quality_axes||{}).cosine>0 && (pkgPeek.quality_axes||{}).cosine<QA.COS_OK"
                     class="text-[12px] text-hub-orange">评分偏低，导入可能被质量闸门拦（可勾选强制）</span>
             </div>
             <div x-show="pkgPeek.exists" class="text-hub-orange">
@@ -7495,12 +7541,12 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
           <div class="space-y-1.5 text-[13px]">
             <div x-show="drawerP().quality_axes?.cosine>0" class="flex items-center justify-between">
               <span class="text-hub-muted">音色相似度</span>
-              <span class="font-mono font-semibold" :class="drawerP().quality_axes?.cosine>=0.6?'text-green-400':drawerP().quality_axes?.cosine>=0.45?'text-yellow-400':'text-red-400'"
+              <span class="font-mono font-semibold" :class="drawerP().quality_axes?.cosine>=QA.COS_OK?'text-green-400':drawerP().quality_axes?.cosine>=QA.COS_MID?'text-yellow-400':'text-red-400'"
                     x-text="Math.round((drawerP().quality_axes?.cosine||0)*100)+'%'"></span>
             </div>
             <div x-show="drawerP().quality_axes?.naturalness>0" class="flex items-center justify-between">
               <span class="text-hub-muted">自然度</span>
-              <span class="font-mono font-semibold" :class="drawerP().quality_axes?.naturalness>=0.85?'text-green-400':drawerP().quality_axes?.naturalness>=0.7?'text-yellow-400':'text-red-400'"
+              <span class="font-mono font-semibold" :class="drawerP().quality_axes?.naturalness>=QA.NAT_OK?'text-green-400':drawerP().quality_axes?.naturalness>=QA.NAT_MID?'text-yellow-400':'text-red-400'"
                     x-text="(drawerP().quality_axes?.naturalness||0).toFixed(2)"></span>
             </div>
             <div x-show="drawerP().voice_quality?.snr_db>0" class="flex items-center justify-between">
@@ -7512,7 +7558,7 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
         </template>
         <div x-show="!(drawerP().quality_axes?.cosine>0) && !(drawerP().voice_quality?.snr_db>0)" class="text-[13px] text-hub-muted">
           尚无音质数据 —
-          <button x-show="drawerP().has_voice" @click="probeQuality(editP.orig_name)" class="text-hub-orange hover:underline">🩺 立即体检</button>
+          <button x-show="drawerP().has_voice" @click="probeQuality(editP.orig_name)" class="text-hub-orange hover:underline"><svg class="bd-ic" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="/static/brand-icons.svg?v=20260716b#i-probe"/></svg> 立即体检</button>
           <span x-show="!drawerP().has_voice">先绑定声音后可体检</span>
         </div>
       </div>
@@ -7566,7 +7612,7 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
       <div class="grid grid-cols-2 gap-2">
         <button x-show="drawerP().has_face" @click="previewProfile(editP.orig_name)" class="bd-act soft w-full">👁 预览形象</button>
         <button x-show="drawerP().has_voice" @click="playVoicePreview(editP.orig_name)" class="bd-act soft w-full">🔊 试听语音</button>
-        <button x-show="drawerP().has_voice" @click="probeQuality(editP.orig_name)" :disabled="qpLoading===editP.orig_name" class="bd-act amber w-full" x-text="qpLoading===editP.orig_name?'⏳ 体检中…':'🩺 音质体检'"></button>
+        <button x-show="drawerP().has_voice" @click="probeQuality(editP.orig_name)" :disabled="qpLoading===editP.orig_name" class="bd-act amber w-full" x-html="qpLoading===editP.orig_name?'⏳ 体检中…':(icx('probe')+' 音质体检')"></button>
         <button @click="exportPackage(editP.orig_name)" class="bd-act ghost w-full">📦 导出配置包</button>
         <button @click="cloneProfile(editP.orig_name)" class="bd-act ghost w-full">⎘ 复制角色</button>
         <button @click="deleteProfile(editP.orig_name); editShow=false" class="bd-act red w-full">✕ 删除角色</button>
@@ -7917,7 +7963,7 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
               x-text="cableWiz.found?'完成':'稍后再装'"></button>
       <button @click="cableRecheck()" :disabled="cableWiz.busy"
               class="bd-btn bd-btn-primary text-sm"
-              x-text="cableWiz.busy?'⏳ 检测中…':'🔄 已装好，重新检测'"></button>
+              x-html="cableWiz.busy?'⏳ 检测中…':(icx('refresh')+' 已装好，重新检测')"></button>
     </div>
   </div>
 </div>
@@ -8037,6 +8083,16 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
 <script src="/static/canvas_brand.js"></script>
 <script src="/static/hub.js?v=20260716a"></script>
 <script>
+/* [P4-B·2026-07-16] 徽章/授权卡线性图标（同源 sprite，与全站同库同参；emoji 功能位公约收口）。
+   尺寸/描边写成呈现属性（铁律：CSS 缺位也不爆版）。授权与交付两个 IIFE 共用。 */
+function bdIcx(n, px){
+  px = px || 13;
+  // display:inline-block 必须内联写死：Tailwind preflight 把裸 svg 重置为 display:block，
+  // 图标会独占一行掉出胶囊（2026-07-16 实拍）；全站 .bd-ic 同理在 brand.css 里声明了 inline。
+  return '<svg width="'+px+'" height="'+px+'" fill="none" stroke="currentColor" stroke-width="1.9"'
+    + ' stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px">'
+    + '<use href="/static/brand-icons.svg?v=20260716b#i-'+n+'"/></svg>';
+}
 /* 授权徽章 + 续费卡片：独立于 Alpine，拉 /api/license/status（公开只读），每 60s 刷新。
    档位/状态中文标签由后端给（edition_label/status_label，单一真相）；点击徽章展开卡片，
    含有效期、被授权方、机器指纹（一键复制，续费时报给厂商）。*/
@@ -8053,6 +8109,9 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
     return ymd + (typeof s.days_left==='number' && s.days_left>=0 ? '（剩 '+s.days_left+' 天）' : '');
   }
   function paint(){
+    // [uivr] 授权徽章=异步加载后文字变长，390px 窄屏下顶栏换行行数随加载时机漂移（2026-07-16
+    // 实锤 ui_mobile 9.11% 假红）；回归模式保持「🔑 授权…」占位——与 dlvChip 同一确定性口径。
+    if (/[?&#]uivr=1/.test(location.href)) return;
     fetch('/api/license/status').then(function(r){return r.json();}).then(function(d){
       var el = document.getElementById('licChip'); if(!el) return;
       var s = (d && d.state) || {}; last = s;
@@ -8066,13 +8125,14 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
       var tail = (st==='expired') ? ' · 已过期'
                : (st==='mismatch') ? ' · 机器不符'
                : (dl < 0) ? ' · 永久' : ' · 剩 '+dl+' 天';
-      el.textContent = trialing ? ('⚡ 试用'+edLabel+' · 剩 '+Math.max(0,dl)+' 天') : ('🔑 ' + edLabel + tail);
+      el.innerHTML = trialing ? (bdIcx('zap') + ' ' + esc('试用'+edLabel+' · 剩 '+Math.max(0,dl)+' 天'))
+                              : (bdIcx('lock') + ' ' + esc(edLabel + tail));
       var tone = trialing ? 'border-hub-purple/60 text-hub-purple'
                : (st === 'valid' && !s.expiring_soon) ? 'border-hub-green/50 text-hub-green'
                : (st === 'expired' || st === 'mismatch') ? 'border-hub-red text-hub-red'
                : s.expiring_soon ? 'border-hub-orange/60 text-hub-orange'
                : 'border-hub-border text-hub-muted';
-      el.className = 'text-[12px] px-2 py-0.5 rounded-full border cursor-pointer select-none ' + tone;
+      el.className = 'text-[12px] px-2 py-0.5 rounded-full border cursor-pointer select-none whitespace-nowrap ' + tone;
       el.title = '授权：' + (s.message || st) + (s.enforcing ? '（强制模式）' : '（评估模式）') + ' · 点击查看详情';
       if (!document.getElementById('licCard').classList.contains('hidden')) renderCard();
       renderBanner(s);
@@ -8248,7 +8308,7 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
              : (s.status==='mismatch') ? '<div class="mt-1.5 px-2 py-1 rounded bg-hub-red/15 text-hub-red">⚠ 与本机指纹不符，请用本机指纹重新签发</div>' : '';
     var feat = s.features || {};
     card.innerHTML =
-      '<div class="font-semibold text-hub-blue mb-1.5">🔑 授权信息</div>'
+      '<div class="font-semibold text-hub-blue mb-1.5">'+bdIcx('lock')+' 授权信息</div>'
       + '<div class="flex justify-between"><span>档位</span><span class="text-hub-text">'+esc(s.edition_label||s.edition)+'</span></div>'
       + '<div class="flex justify-between"><span>状态</span><span class="text-hub-text">'+esc(s.status_label||s.status)+(s.enforcing?'（强制）':'（评估）')+'</span></div>'
       + '<div class="flex justify-between"><span>有效期</span><span class="text-hub-text">'+esc(expiry(s))+'</span></div>'
@@ -8275,44 +8335,44 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
          覆盖前后端自动备份正式授权，试完可还原）；输码/导入常驻（导入离线可用）。
          纵排各占整行——w-64 卡内并排必折行（实拍揪出），且「试用」是主推动作应单独成行抢焦点 */
       + ((s.activation_configured && !(s.trial_up&&s.trial_up.active) && !(s.status==='valid' && s.edition==='pro'))
-            ? '<button id="licTrialBtn" class="mt-2 w-full text-[13px] px-2 py-1 rounded bg-hub-purple/20 text-hub-purple border border-hub-purple/40 hover:bg-hub-purple hover:text-white transition">⚡ 一键试用旗舰版 7 天</button>' : '')
+            ? '<button id="licTrialBtn" class="mt-2 w-full text-[13px] px-2 py-1 rounded bg-hub-purple/20 text-hub-purple border border-hub-purple/40 hover:bg-hub-purple hover:text-white transition">'+bdIcx('zap')+' 一键试用旗舰版 7 天</button>' : '')
       + ((s.trial_up&&s.trial_up.prev_available)
-            ? '<button id="licTrialRestore" title="退出试用，恢复试用前备份的正式授权" class="mt-1.5 w-full text-[13px] px-2 py-1 rounded border border-hub-border text-hub-muted hover:text-hub-green hover:border-hub-green/40 transition">↩ 还原正式授权</button>' : '')
-      + '<button id="licActBtn" class="mt-1.5 w-full text-[13px] px-2 py-1 rounded border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition">🎫 输码 / 导入授权</button>'
+            ? '<button id="licTrialRestore" title="退出试用，恢复试用前备份的正式授权" class="mt-1.5 w-full text-[13px] px-2 py-1 rounded border border-hub-border text-hub-muted hover:text-hub-green hover:border-hub-green/40 transition">'+bdIcx('clock')+' 还原正式授权</button>' : '')
+      + '<button id="licActBtn" class="mt-1.5 w-full text-[13px] px-2 py-1 rounded border border-hub-border text-hub-muted hover:text-hub-blue hover:border-hub-blue/40 transition">'+bdIcx('download')+' 输码 / 导入授权</button>'
       /* 在线刷新：管理后台续费/升档后，按机器指纹拉取最新授权（只升不降）。仅已激活且配了服务器时显示 */
       + (s.refresh_configured
-            ? '<button id="licRefreshBtn" title="管理后台续费/升档后点此，按本机指纹拉取最新授权（只升不降，绝不改差）" class="mt-1.5 w-full text-[13px] px-2 py-1 rounded border border-hub-border text-hub-muted hover:text-hub-green hover:border-hub-green/40 transition">🔄 刷新授权（已续费/升档点这里）</button>' : '')
+            ? '<button id="licRefreshBtn" title="管理后台续费/升档后点此，按本机指纹拉取最新授权（只升不降，绝不改差）" class="mt-1.5 w-full text-[13px] px-2 py-1 rounded border border-hub-border text-hub-muted hover:text-hub-green hover:border-hub-green/40 transition">'+bdIcx('refresh')+' 刷新授权（已续费/升档点这里）</button>' : '')
       + actMsgHtml()
       + '<div id="licActBox" class="hidden mt-2"></div>'
-      + '<button id="licRenewBtn" class="mt-2 w-full text-[13px] px-2 py-1 rounded bg-hub-blue/20 text-hub-blue border border-hub-blue/40 hover:bg-hub-blue hover:text-white transition">🧾 生成续费申请</button>'
+      + '<button id="licRenewBtn" class="mt-2 w-full text-[13px] px-2 py-1 rounded bg-hub-blue/20 text-hub-blue border border-hub-blue/40 hover:bg-hub-blue hover:text-white transition">'+bdIcx('file')+' 生成续费申请</button>'
       + '<div id="licRenewBox" class="hidden mt-2"></div>';
     bindContactBtn('licCardContact');
     var tb = document.getElementById('licTrialBtn');
     if (tb) tb.onclick = function(e){
       e.stopPropagation();
-      tb.disabled = true; tb.textContent = '⚡ 签发中…';
+      tb.disabled = true; tb.innerHTML = bdIcx('zap')+' 签发中…';
       fetch('/api/license/trial_upgrade', {method:'POST'})
         .then(function(r){ return r.json(); })
         .then(function(d){
-          if (!applyLicResp(d, '试用升级成功')){ tb.disabled=false; tb.textContent='⚡ 一键试用旗舰版 7 天'; }
+          if (!applyLicResp(d, '试用升级成功')){ tb.disabled=false; tb.innerHTML=bdIcx('zap')+' 一键试用旗舰版 7 天'; }
         })
-        .catch(function(){ actMsg('✗ 请求失败，请确认网络后重试', false); tb.disabled=false; tb.textContent='⚡ 一键试用旗舰版 7 天'; });
+        .catch(function(){ actMsg('✗ 请求失败，请确认网络后重试', false); tb.disabled=false; tb.innerHTML=bdIcx('zap')+' 一键试用旗舰版 7 天'; });
     };
     var tr = document.getElementById('licTrialRestore');
     if (tr) tr.onclick = function(e){
       e.stopPropagation();
-      tr.disabled = true; tr.textContent = '↩ 还原中…';
+      tr.disabled = true; tr.innerHTML = bdIcx('clock')+' 还原中…';
       fetch('/api/license/trial_restore', {method:'POST'})
         .then(function(r){ return r.json(); })
         .then(function(d){
-          if (!applyLicResp(d, '已还原正式授权')){ tr.disabled=false; tr.textContent='↩ 还原正式授权'; }
+          if (!applyLicResp(d, '已还原正式授权')){ tr.disabled=false; tr.innerHTML=bdIcx('clock')+' 还原正式授权'; }
         })
-        .catch(function(){ actMsg('✗ 请求失败，请稍后重试', false); tr.disabled=false; tr.textContent='↩ 还原正式授权'; });
+        .catch(function(){ actMsg('✗ 请求失败，请稍后重试', false); tr.disabled=false; tr.innerHTML=bdIcx('clock')+' 还原正式授权'; });
     };
     var rf = document.getElementById('licRefreshBtn');
     if (rf) rf.onclick = function(e){
       e.stopPropagation();
-      rf.disabled = true; rf.textContent = '🔄 刷新中…';
+      rf.disabled = true; rf.innerHTML = bdIcx('refresh')+' 刷新中…';
       fetch('/api/license/refresh', {method:'POST'})
         .then(function(r){ return r.json(); })
         .then(function(d){
@@ -8320,9 +8380,9 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
           // 未应用（多为「已是最新」）：中性提示，不当失败报红；带回的 state 同步一下
           if (d && d.state){ last = d.state; }
           actMsg('· '+((d&&d.detail)||'已是最新，无需更新'), true);
-          rf.disabled = false; rf.textContent = '🔄 刷新授权（已续费/升档点这里）';
+          rf.disabled = false; rf.innerHTML = bdIcx('refresh')+' 刷新授权（已续费/升档点这里）';
         })
-        .catch(function(){ actMsg('✗ 请求失败，请确认网络后重试', false); rf.disabled=false; rf.textContent='🔄 刷新授权（已续费/升档点这里）'; });
+        .catch(function(){ actMsg('✗ 请求失败，请确认网络后重试', false); rf.disabled=false; rf.innerHTML=bdIcx('refresh')+' 刷新授权（已续费/升档点这里）'; });
     };
     var ab = document.getElementById('licActBtn'), abox = document.getElementById('licActBox');
     if (ab) ab.onclick = function(e){
@@ -8431,11 +8491,11 @@ button.bg-hub-blue,a.bg-hub-blue{font-weight:700!important}
       lastData = d;
       var sm = d.summary || {ok:0,warn:0,fail:0};
       var label, tone;
-      if (sm.fail > 0){ label = '🚦 未就绪 · '+sm.fail+'✗'; tone = 'border-hub-red text-hub-red'; }
-      else if (sm.warn > 0){ label = '🚦 '+sm.warn+' 警告'; tone = 'border-hub-orange/60 text-hub-orange'; }
-      else { label = '🚦 交付就绪'; tone = 'border-hub-green/50 text-hub-green'; }
-      el.textContent = label;
-      el.className = 'text-[12px] px-2 py-0.5 rounded-full border cursor-pointer select-none ' + tone;
+      if (sm.fail > 0){ label = '未就绪 · '+sm.fail+'✗'; tone = 'border-hub-red text-hub-red'; }
+      else if (sm.warn > 0){ label = sm.warn+' 警告'; tone = 'border-hub-orange/60 text-hub-orange'; }
+      else { label = '交付就绪'; tone = 'border-hub-green/50 text-hub-green'; }
+      el.innerHTML = bdIcx('probe') + ' ' + label;   // label 全为本地拼接常量+数字，无注入面
+      el.className = 'text-[12px] px-2 py-0.5 rounded-full border cursor-pointer select-none whitespace-nowrap ' + tone;
       el.title = '交付就绪：通过 '+sm.ok+' · 警告 '+sm.warn+' · 失败 '+sm.fail+' · 点击查看明细';
       if (!document.getElementById('dlvCard').classList.contains('hidden')) renderCard();
     }).catch(function(){ /* 离线保持占位 */ });

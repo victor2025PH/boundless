@@ -583,7 +583,8 @@ loadClothes();
     return HTMLResponse(content=html)
 
 if __name__ == "__main__":
+    _port = int(os.environ.get("TRYON_PORT") or app_config.port("tryon") or 8002)
     print("=" * 50)
-    print(" Virtual Try-On API  http://0.0.0.0:8002")
+    print(f" Virtual Try-On API  http://0.0.0.0:{_port}")
     print("=" * 50)
-    uvicorn.run(app, host="0.0.0.0", port=8002, log_level="warning")
+    uvicorn.run(app, host="0.0.0.0", port=_port, log_level="warning")

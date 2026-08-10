@@ -503,4 +503,6 @@ async def _startup():
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8091, log_level="info")
+    uvicorn.run(app, host="0.0.0.0",
+                port=int(os.environ.get("LATENTSYNC_PORT") or app_config.port("latentsync") or 8091),
+                log_level="info")

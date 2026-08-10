@@ -19,13 +19,47 @@ SUITE = [
     "tools/_p13_vl_shadow_test.py", "tools/_p13_attr_test.py", "tools/_p13_bed_test.py",
     # 设计令牌单源门禁(2026-07-16)：design-tokens.json ↔ brand.css ↔ launcher_theme 三方一致
     "tools/_tokens_lint.py",
+    # 窗口身份门禁(2026-07-16)：favicon 双格式 + theme-color + /favicon.ico 路由 + 窗口默认最大化
+    # （根治"应用窗口顶着 Edge 图标/浅色标题栏"实锤事故，公约见 设计规范_图标与令牌.md·三）
+    "tools/_favicon_lint.py",
+    # 控制台拼装一致性(2026-07-16 P2-1)：static/ui.html 是生成产物（源=static/ui_src/），
+    # 手改产物或改源忘重跑 _build_ui.py → 红灯
+    "tools/_build_ui.py",
     # 冻结态资源定位仿真(2026-07-16)：安装版(PyInstaller)下令牌/图标库必须从 exe 旁 static/ 读到
     # （缺 PySide6 时自动换 .venv_launcher 解释器重跑,两者皆无则 SKIP）
     "tools/_frozen_assets_test.py",
 ]
 files = [f for f in SUITE if os.path.exists(f)]
 
+# [P2-0·2026-07-16] p13 两套件依赖 numpy：用 .venv_launcher 等轻解释器跑会环境性假红。
+# 当前解释器缺 numpy 时自动换 facefusion 环境解释器（app_config 单一真相），两者皆无才如实报红。
+_NEEDS_NUMPY = {"tools/_p13_vl_shadow_test.py", "tools/_p13_bed_test.py"}
+_FF_PY = None
+
+
+def _runner_for(f: str) -> str:
+    global _FF_PY
+    if f not in _NEEDS_NUMPY:
+        return sys.executable
+    try:
+        import numpy  # noqa: F401  当前解释器自带 numpy 就不必换
+        return sys.executable
+    except Exception:
+        pass
+    if _FF_PY is None:
+        try:
+            import app_config
+            p = app_config.conda_python("facefusion")
+            _FF_PY = p if os.path.exists(p) else ""
+        except Exception:
+            _FF_PY = ""
+    return _FF_PY or sys.executable
+
+
 _re_new = re.compile(r"PASS=(\d+)\s+FAIL=(\d+)\s+SKIP=(\d+)")
+
+# 个别套件需要附加参数（_build_ui 默认动作是"拼装写盘"，套件里只做一致性校验）
+_EXTRA_ARGS = {"tools/_build_ui.py": ["--check"]}
 
 tot_pass = tot_fail = tot_skip = 0
 ng_files = []
@@ -33,7 +67,7 @@ print("=" * 60)
 print(" AvatarHub 测试汇总  (HUB_URL=%s)" % os.environ.get("HUB_URL", "<未设置=部分在线用例跳过>"))
 print("=" * 60)
 for f in files:
-    r = subprocess.run([sys.executable, f], capture_output=True, text=True,
+    r = subprocess.run([_runner_for(f), f] + _EXTRA_ARGS.get(f, []), capture_output=True, text=True,
                        encoding="utf-8", errors="replace")
     m = None
     for line in r.stdout.splitlines():
