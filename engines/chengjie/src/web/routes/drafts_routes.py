@@ -1150,6 +1150,16 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # spoken_style 真人感文本层灰度（2026-08-11，AvatarHub 交付包桥接）：
+        # l1_inject/l2_inject=注入量、l2_skip_lang=zh_only 外语拦截量（应随外语消息同步涨）、
+        # l3_changed=出口清洁真剥了东西、l4_*=改写尝试/生效/直通（直通率>30% 该反馈 AvatarHub 线）。
+        # 进程内累计（重启清零）；桥接未启用/包缺席时全 0，照常暴露便于区分「没开」和「没流量」。
+        try:
+            from src.ai.spoken_style_bridge import stats as _spoken_style_stats
+            metrics["spoken_style"] = _spoken_style_stats()
+        except Exception:
+            pass
+
         # 入站自动翻译（同步预算 + 后台补译）：sync/bg 三态、deferred、负缓存拦截 +
         # 瞬时 in-flight（后台积压/引擎宕机的工程观测；按日漏斗另见 dashboard translation_inbound）
         try:
