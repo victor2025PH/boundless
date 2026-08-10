@@ -81,6 +81,8 @@ out = await fn(reply_segment, first=True)                  # None=直通原句
 - `data/speech_prints.json` — 角色说话指纹：`print`(一句话画像) `catch`(口头禅池)
   `example`(语感范文) `guide`(可选，覆盖默认「碎句+想词」指引——话少句短/播报
   定位的角色必须自带，否则反人设；样例「秦震」就是 guide 反例样板)。
+  **chengjie 桥接的键契约**：键=人设口称名（persona_manager `resolve_spoken_name`
+  的输出）——桥接把本会话人设名透传当指纹键，给常驻人设配指纹时名字必须逐字一致。
   mtime 热加载，改了即时生效。
 
 ## 环境变量（全部可缺省）

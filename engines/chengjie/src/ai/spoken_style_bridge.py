@@ -40,6 +40,31 @@ _FAILED = False
 
 _HAN_RE = re.compile(r"[\u4e00-\u9fff]")
 
+# 灰度观测计数（进程内累计；stats() 随取随读，L4 每 20 次尝试打一行 INFO 汇总——
+# 灰度期「事实锁拒绝率高不高」不用等人翻 DEBUG 日志）
+_STATS_LOCK = threading.Lock()
+_STATS = {
+    "l1_inject": 0,        # system 段真注入次数
+    "l2_inject": 0,        # 轮变尾注真注入次数
+    "l2_skip_lang": 0,     # 因非中文主体被 zh_only 拦下的次数（外语占比的直接读数）
+    "l3_changed": 0,       # 出口清洁真剥掉了东西的次数
+    "l4_attempt": 0,       # 改写尝试
+    "l4_applied": 0,       # 改写生效
+    "l4_passthrough": 0,   # 事实锁拒绝/超时/后端失败 → 原句直通
+}
+_L4_LOG_EVERY = 20
+
+
+def _bump(key: str) -> None:
+    with _STATS_LOCK:
+        _STATS[key] = _STATS.get(key, 0) + 1
+
+
+def stats() -> dict:
+    """观测计数快照（灰度巡检用；/admin 或日志脚本随取随读）。"""
+    with _STATS_LOCK:
+        return dict(_STATS)
+
 
 def _find_platform_dir() -> Optional[Path]:
     """从本文件向上逐级找 ``platform/spoken_style/__init__.py``（telemetry 同款姿势）。"""
@@ -105,8 +130,13 @@ def _is_zh(text: str) -> bool:
     return han >= 2 and han >= len(t) * 0.4
 
 
-def system_block(config) -> str:
-    """L1：稳定 system 追加段（说话指纹/副语言/情绪协议；不含人设卡）。空串=不注入。"""
+def system_block(config, role: str = "") -> str:
+    """L1：稳定 system 追加段（说话指纹/副语言/情绪协议；不含人设卡）。空串=不注入。
+
+    ``role`` 是本会话人设的口称名（ai_client 从 context._resolved_persona_name 透传），
+    优先于配置里的静态 ai.spoken_style.role——智聊是多人设产品，说话指纹按
+    「哪个人设在说话」分流才有意义；指纹键契约=人设口称名（resolve_spoken_name 输出）。
+    """
     if not _enabled(config):
         return ""
     ss = _load()
@@ -116,13 +146,16 @@ def system_block(config) -> str:
     try:
         blocks = ss.system_blocks(
             persona_card=None,                      # chengjie 自有 persona 体系，不双注入
-            role=str(c.get("role") or ""),
+            role=str(role or c.get("role") or ""),
             laugh=False,                            # 无真笑素材一律呼吸版（假笑更毁真实感）
             emotion_tags=bool(c.get("emotion_tags", False)),
         )
         if not c.get("paraling", False):
             blocks = [b for b in blocks if not b.startswith("【副语言】")]
-        return "\n\n".join(b for b in blocks if b)
+        out = "\n\n".join(b for b in blocks if b)
+        if out:
+            _bump("l1_inject")
+        return out
     except Exception:
         logger.debug("spoken_style system_block 失败，跳过", exc_info=True)
         return ""
@@ -137,18 +170,22 @@ def turn_tail(config, user_text: str) -> str:
         return ""
     c = _cfg(config)
     if bool(c.get("zh_only", True)) and not _is_zh(user_text):
+        _bump("l2_skip_lang")
         return ""
     try:
         level = int(c.get("level", 2))
         if level >= 2 and ss.naturalness.STORY_INTENT_RE.search(user_text or ""):
             level = 3                               # 故事/陪伴意图自动升档
-        return ss.turn_tail_hint(user_text or "", level=level)
+        out = ss.turn_tail_hint(user_text or "", level=level)
+        if out:
+            _bump("l2_inject")
+        return out
     except Exception:
         logger.debug("spoken_style turn_tail 失败，跳过", exc_info=True)
         return ""
 
 
-async def rewrite_reply(config, reply: str) -> str:
+async def rewrite_reply(config, reply: str, role: str = "") -> str:
     """L4：口语化改写（本地小模型整段重写句子架构，事实锁把关；失败/超时/拒绝=原句直通）。
 
     前提（都写在 config 注释里）：ai.spoken_style.rewrite: true，且 role 在包内
@@ -156,13 +193,14 @@ async def rewrite_reply(config, reply: str) -> str:
     声学要配套是包侧拍板）。改写后端缺省 192.168.0.173 qwen14b（同 LAN 零 API 费），
     rewrite_llm / rewrite_model 可换成任何 OpenAI 兼容端点。
     非中文主体回复直接跳过（改写器是中文口语手艺）。
+    ``role`` 同 system_block：会话人设口称名优先，缺省回落配置静态 role。
     """
     if not reply or not _enabled(config):
         return reply
     c = _cfg(config)
     if not c.get("rewrite", False):
         return reply
-    role = str(c.get("role") or "")
+    role = str(role or c.get("role") or "")
     if not role or not _is_zh(reply):
         return reply
     ss = _load()
@@ -182,7 +220,15 @@ async def rewrite_reply(config, reply: str) -> str:
         fn = cr.build_rewrite_fn(role)
         if fn is None:
             return reply
+        _bump("l4_attempt")
         out = await fn(reply, first=True)
+        _bump("l4_applied" if out else "l4_passthrough")
+        with _STATS_LOCK:
+            n, ok, pt = _STATS["l4_attempt"], _STATS["l4_applied"], _STATS["l4_passthrough"]
+        if n % _L4_LOG_EVERY == 0:
+            # 直通率高于三成 = 事实锁在大量拒绝（改写模型/提示词该调了）或后端在超时
+            logger.info("spoken_style L4 汇总: 尝试 %d / 生效 %d / 直通 %d (直通率 %.0f%%)",
+                        n, ok, pt, pt * 100.0 / max(n, 1))
         return out if out else reply                  # None=事实锁/超时直通
     except Exception:
         logger.debug("spoken_style rewrite 失败，原样返回", exc_info=True)
@@ -202,6 +248,8 @@ def clean_reply_text(config, reply: str) -> str:
         return reply
     try:
         out = ss.clean_reply(reply)["text"]
+        if out and out != reply:
+            _bump("l3_changed")
         return out if out else reply                # 清洁不许清成空（兜底原句）
     except Exception:
         logger.debug("spoken_style clean_reply 失败，原样返回", exc_info=True)

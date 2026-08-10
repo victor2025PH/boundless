@@ -1950,9 +1950,13 @@ class AIClient(LoggerMixin):
             )
 
         # 真人感文本层 L1（platform/spoken_style 桥接，默认关；ai.spoken_style.enabled）
+        # role=本会话人设口称名（上方 persona 解析已写进 context）→ 说话指纹按人设分流
         try:
             from src.ai.spoken_style_bridge import system_block as _ss_system_block
-            _ss_b = _ss_system_block(self.config)
+            _ss_b = _ss_system_block(
+                self.config,
+                role=str((context or {}).get("_resolved_persona_name") or ""),
+            )
             if _ss_b:
                 parts.append(_ss_b)
         except Exception:
@@ -3245,10 +3249,15 @@ class AIClient(LoggerMixin):
         # 真人感文本层 L4：口语化改写（默认关；事实锁把关，失败/超时原句直通。
         # 放在 spoken_variant 摘取之后：即便改写生效，语音口语版哈希失配会自动
         # 放弃暂存走既有口语化链——两层不会叠加）
+        # role=会话人设口称名（generate_reply 内 persona 解析写进了 enhanced_context，
+        # dict 同对象直传，这里读到的是本轮真实人设）→ 改写提示按人设指纹分流
         if reply:
             try:
                 from src.ai.spoken_style_bridge import rewrite_reply as _ss_rewrite
-                reply = await _ss_rewrite(self.config, reply)
+                reply = await _ss_rewrite(
+                    self.config, reply,
+                    role=str(enhanced_context.get("_resolved_persona_name") or ""),
+                )
             except Exception:
                 pass
 

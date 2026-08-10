@@ -116,6 +116,63 @@ async def test_rewrite_gates_and_fact_lock():
         cr._flag_cache["v"] = None
 
 
+def test_dynamic_role_overrides_config():
+    _fresh()
+    # 会话人设口称名（参数）优先于配置静态 role：配置没配角色也能按人设分流指纹
+    # （指纹块是指纹内容不含名字字面，按两人区分性内容断言：美月=想词日语系，秦震=短句直给系）
+    got = br.system_block(_Cfg(dict(_ON)), role="美月")
+    assert got.startswith("【说话指纹】") and "そうだね" in got
+    # 参数压过配置里写死的另一个角色
+    got2 = br.system_block(_Cfg({"enabled": True, "role": "秦震"}), role="美月")
+    assert "そうだね" in got2 and "冷幽默" not in got2
+    # 查无此人=退回通用层（无指纹段，不报错）
+    assert br.system_block(_Cfg(dict(_ON)), role="查无此人") == ""
+
+
+async def test_rewrite_dynamic_role_and_stats():
+    _fresh()
+    cfg = _Cfg({"enabled": True, "rewrite": True})   # 配置不写 role，全靠会话人设
+    ss = br._load()
+    cr = ss.colloquial_rewrite
+    seen_roles = []
+
+    async def _fake(role, text, timeout, client=None):
+        seen_roles.append(role)
+        return None                                   # 模拟后端失败/拒绝 → 直通
+
+    orig = cr._llm_rewrite
+    base = br.stats()
+    try:
+        cr._llm_rewrite = _fake
+        src = "这家店人均 120 块，味道特别好。"
+        assert await br.rewrite_reply(cfg, src, role="美月") == src
+        assert seen_roles == ["美月"]                 # 动态 role 真到了改写器
+        # 无 role（配置空+参数空）→ 连尝试都不发起
+        assert await br.rewrite_reply(cfg, src) == src
+        assert seen_roles == ["美月"]
+        now = br.stats()
+        assert now["l4_attempt"] - base["l4_attempt"] == 1
+        assert now["l4_passthrough"] - base["l4_passthrough"] == 1
+        assert now["l4_applied"] == base["l4_applied"]
+    finally:
+        cr._llm_rewrite = orig
+        cr._flag_cache["t"] = 0.0
+        cr._flag_cache["v"] = None
+
+
+def test_stats_count_injections():
+    _fresh()
+    base = br.stats()
+    cfg = _Cfg(dict(_ON))
+    br.turn_tail(cfg, "你周末一般都干嘛呀")                       # l2_inject
+    br.turn_tail(cfg, "What do you usually do on weekends?")      # l2_skip_lang
+    br.system_block(cfg, role="美月")                             # l1_inject
+    br.clean_reply_text(cfg, "[轻笑]哈喽呀")                      # l3_changed
+    now = br.stats()
+    for k in ("l1_inject", "l2_inject", "l2_skip_lang", "l3_changed"):
+        assert now[k] - base[k] == 1, k
+
+
 def test_missing_package_is_permanent_noop():
     _fresh()
     br._PKG_DIR_OVERRIDE = r"Z:\no\such\dir"
